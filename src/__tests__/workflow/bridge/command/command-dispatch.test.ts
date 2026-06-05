@@ -2007,6 +2007,8 @@ describe('command-dispatch', () => {
     assert.ok(binding);
     assert.equal(getSessionWorkingDirectory(store.getSession(binding!.bridgeSessionId)), commonWorkDir);
     assert.equal(store.getSession(binding!.bridgeSessionId)?.name, '[TestBot]common-flow');
+    assert.equal(sent[0]?.address.chatId, groupAddress.chatId);
+    assert.equal(sent[0]?.replyToMessageId, undefined);
     assert.match(sent[0]?.text || '', /已创建群聊会话/);
     assert.match(sent[0]?.text || '', /common-flow/);
     assert.doesNotMatch(sent[0]?.text || '', /旧任务在运行/);
@@ -2031,6 +2033,8 @@ describe('command-dispatch', () => {
     assert.ok(namedOnlyBinding);
     assert.equal(getSessionWorkingDirectory(store.getSession(namedOnlyBinding!.bridgeSessionId)), commonWorkDir);
     assert.equal(store.getSession(namedOnlyBinding!.bridgeSessionId)?.name, '[TestBot]set');
+    assert.equal(sent.at(-1)?.address.chatId, adapter.createdGroups[1].chatId);
+    assert.equal(sent.at(-1)?.replyToMessageId, undefined);
     assert.match(sent.at(-1)?.text || '', /标题.*\[TestBot\]set/s);
 
     await handleBridgeCommand(
@@ -2052,6 +2056,7 @@ describe('command-dispatch', () => {
     const slashNameBinding = store.getChannelChat('feishu', adapter.createdGroups[2].chatId);
     assert.ok(slashNameBinding);
     assert.equal(getSessionWorkingDirectory(store.getSession(slashNameBinding!.bridgeSessionId)), apiWorkDir);
+    assert.equal(sent.at(-1)?.address.chatId, adapter.createdGroups[2].chatId);
 
     await handleBridgeCommand(
       adapter,
@@ -2072,6 +2077,7 @@ describe('command-dispatch', () => {
     assert.ok(renamedBinding);
     assert.equal(getSessionWorkingDirectory(store.getSession(renamedBinding!.bridgeSessionId)), namedWorkDir);
     assert.equal(store.getSession(renamedBinding!.bridgeSessionId)?.name, '[TestBot]RenamedSession');
+    assert.equal(sent.at(-1)?.address.chatId, adapter.createdGroups[3].chatId);
     assert.match(sent.at(-1)?.text || '', /标题.*\[TestBot\]RenamedSession/s);
     assert.match(sent.at(-1)?.text || '', /\/new \[name\] \[path\]/);
 
@@ -2090,6 +2096,7 @@ describe('command-dispatch', () => {
       },
     );
     assert.match(sent.at(-1)?.text || '', /参数过多/);
+    assert.equal(sent.at(-1)?.address.chatId, groupAddress.chatId);
   });
 
   it('opens the new-session form for bare /new and allows name-only creation from a draft session directory', async () => {
@@ -2136,6 +2143,7 @@ describe('command-dispatch', () => {
     assert.equal(adapter.createdGroups.at(-1)?.requestedName, 'unbound-child');
     const unboundCreatedBinding = store.getChannelChat('feishu', adapter.createdGroups.at(-1)?.chatId || '');
     assert.ok(unboundCreatedBinding);
+    assert.equal(sent.at(-1)?.address.chatId, adapter.createdGroups.at(-1)?.chatId);
     assert.equal(
       getSessionWorkingDirectory(store.getSession(unboundCreatedBinding!.bridgeSessionId)),
       path.resolve(DEFAULT_WORKSPACE_ROOT),
@@ -2203,6 +2211,7 @@ describe('command-dispatch', () => {
     const createdBinding = store.getChannelChat('feishu', adapter.createdGroups.at(-1)?.chatId || '');
     assert.ok(createdBinding);
     assert.equal(getSessionWorkingDirectory(store.getSession(createdBinding!.bridgeSessionId)), draftWorkDir);
+    assert.equal(sent.at(-1)?.address.chatId, adapter.createdGroups.at(-1)?.chatId);
     assert.match(sent.at(-1)?.text || '', /已创建群聊会话/);
   });
 

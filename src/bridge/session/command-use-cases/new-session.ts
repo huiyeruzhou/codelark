@@ -243,6 +243,7 @@ export async function handleNewSessionCommand(options: {
     '这是 IM 侧线程，当前只保证在 IM 中可继续；不会自动出现在 Codex Native 会话列表中。',
   ];
   return {
+    responseAddress: groupAddress,
     response: buildCommandFields(
       '已创建群聊会话',
       [
