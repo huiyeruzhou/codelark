@@ -296,6 +296,15 @@ interface StreamingCardInitialState {
   startTime: number;
 }
 
+interface PendingStreamingCardCreateState {
+  text?: string;
+  statusText?: string;
+  tasks?: TaskProgressInfo[];
+  tools?: ToolCallInfo[];
+  historyItems?: StreamingHistoryItem[];
+  historyDriven?: boolean;
+}
+
 interface RichCardUpdateState {
   cardId: string;
   messageId: string;
@@ -1862,6 +1871,8 @@ export class FeishuAdapter extends BaseChannelAdapter {
   private activeCards = new Map<string, FeishuCardState>();
   /** In-flight card creation promises per stream key — prevents duplicate creation. */
   private cardCreatePromises = new Map<string, Promise<boolean>>();
+  /** Desired stream state that arrives while the first CardKit card is still being created. */
+  private pendingCardCreateStates = new Map<string, PendingStreamingCardCreateState>();
   /** Scheduled card creation promises per stream key — coalesces retries while congested. */
   private scheduledCardCreatePromises = new Map<string, Promise<boolean>>();
   private cardCreateRetryTimers = new Map<string, ReturnType<typeof setTimeout>>();
@@ -2667,6 +2678,51 @@ export class FeishuAdapter extends BaseChannelAdapter {
     this.cardCreateRetryTimers.clear();
   }
 
+  private pendingCardCreateState(cardKey: string): PendingStreamingCardCreateState {
+    const existing = this.pendingCardCreateStates.get(cardKey);
+    if (existing) return existing;
+    const next: PendingStreamingCardCreateState = {};
+    this.pendingCardCreateStates.set(cardKey, next);
+    return next;
+  }
+
+  private applyPendingCardCreateState(cardKey: string, state: FeishuCardState): void {
+    const pending = this.pendingCardCreateStates.get(cardKey);
+    if (!pending) return;
+    this.pendingCardCreateStates.delete(cardKey);
+
+    let dirty = false;
+    if (typeof pending.text === 'string') {
+      state.pendingText = pending.text;
+      if (pending.text.trim()) state.thinking = false;
+      dirty = true;
+    }
+    if (typeof pending.statusText === 'string') {
+      state.pendingStatusText = pending.statusText || INITIAL_STREAMING_STATUS;
+      const contextUsage = extractTerminalContextUsage(state.pendingStatusText);
+      if (contextUsage) state.terminalContextUsageText = contextUsage;
+      dirty = true;
+    }
+    if (pending.tasks) {
+      state.taskItems = pending.tasks;
+      state.pendingTasksText = buildStreamingTaskContent(pending.tasks) || EMPTY_STREAMING_TASKS;
+      dirty = true;
+    }
+    if (pending.tools) {
+      state.toolCalls = pending.tools;
+      dirty = true;
+    }
+    if (pending.historyItems) {
+      state.historyItems = pending.historyItems;
+      state.historyDriven = pending.historyDriven ?? true;
+      dirty = true;
+    }
+    if (!dirty) return;
+
+    this.markStreamingDesiredDirty(state);
+    this.scheduleCardFlush(cardKey);
+  }
+
   private markCardCreateResult(cardKey: string, ok: boolean): void {
     const now = Date.now();
     if (ok) {
@@ -2674,6 +2730,7 @@ export class FeishuAdapter extends BaseChannelAdapter {
       this.cardCreateNextEarliestAt.set(cardKey, now + this.getCongestedCardIntervalMs(0));
       return;
     }
+    this.pendingCardCreateStates.delete(cardKey);
     const failures = (this.cardCreateConsecutiveFailures.get(cardKey) || 0) + 1;
     this.cardCreateConsecutiveFailures.set(cardKey, failures);
     this.cardCreateNextEarliestAt.set(cardKey, now + this.getCongestedCardIntervalMs(failures));
@@ -2802,7 +2859,7 @@ export class FeishuAdapter extends BaseChannelAdapter {
         sendMessageMs,
         'success',
       );
-      this.activeCards.set(cardKey, {
+      const state: FeishuCardState = {
         chatId,
         cardId,
         messageId,
@@ -2852,15 +2909,16 @@ export class FeishuAdapter extends BaseChannelAdapter {
         lastFullRefreshAttemptAt: now,
         lastSuccessfulFullRefreshAt: null,
         perf,
-      });
+      };
+      this.activeCards.set(cardKey, state);
 
       const latestActionRows = this.streamActionRows.get(cardKey) || [];
       if (!initialState && cardActionRowsSignature(latestActionRows) !== cardActionRowsSignature(actionRows)) {
-        const state = this.activeCards.get(cardKey);
-        if (state) {
-          state.actionRows = latestActionRows;
-          this.scheduleCardFlush(cardKey);
-        }
+        state.actionRows = latestActionRows;
+        this.scheduleCardFlush(cardKey);
+      }
+      if (!initialState) {
+        this.applyPendingCardCreateState(cardKey, state);
       }
 
       console.log(`[feishu-adapter] Streaming card created: streamKey=${cardKey}, cardId=${cardId}, msgId=${messageId}`);
@@ -4639,6 +4697,7 @@ export class FeishuAdapter extends BaseChannelAdapter {
     const cardKey = this.resolveStreamKey(chatId, streamKey);
     if (!this.activeCards.has(cardKey)) {
       // Card should have been created by onMessageStart, but create lazily if not
+      this.pendingCardCreateState(cardKey).text = fullText;
       const messageId = this.lastIncomingMessageId.get(chatId);
       this.createStreamingCard(chatId, messageId, cardKey).then((ok) => {
         if (ok) this.updateCardContent(chatId, fullText, cardKey);
@@ -4659,6 +4718,7 @@ export class FeishuAdapter extends BaseChannelAdapter {
     if (!this.supportsStructuredStreamingUi(chatId)) return;
     const cardKey = this.resolveStreamKey(chatId, streamKey);
     if (!this.activeCards.has(cardKey)) {
+      this.pendingCardCreateState(cardKey).tools = tools;
       const messageId = this.lastIncomingMessageId.get(chatId);
       this.createStreamingCard(chatId, messageId, cardKey).then((ok) => {
         if (ok) this.updateToolProgress(chatId, tools, cardKey);
@@ -4672,6 +4732,9 @@ export class FeishuAdapter extends BaseChannelAdapter {
     if (!this.supportsStructuredStreamingUi(chatId)) return;
     const cardKey = this.resolveStreamKey(chatId, streamKey);
     if (!this.activeCards.has(cardKey)) {
+      const pending = this.pendingCardCreateState(cardKey);
+      pending.historyItems = items;
+      pending.historyDriven = true;
       const messageId = this.lastIncomingMessageId.get(chatId);
       this.createStreamingCard(chatId, messageId, cardKey).then((ok) => {
         if (ok) this.updateStreamingHistory(chatId, items, cardKey);
@@ -4685,6 +4748,7 @@ export class FeishuAdapter extends BaseChannelAdapter {
     if (!this.supportsStructuredStreamingUi(chatId)) return;
     const cardKey = this.resolveStreamKey(chatId, streamKey);
     if (!this.activeCards.has(cardKey)) {
+      this.pendingCardCreateState(cardKey).tasks = tasks;
       const messageId = this.lastIncomingMessageId.get(chatId);
       this.createStreamingCard(chatId, messageId, cardKey).then((ok) => {
         if (ok) this.updateTaskProgress(chatId, tasks, cardKey);
@@ -4698,6 +4762,7 @@ export class FeishuAdapter extends BaseChannelAdapter {
     if (!this.supportsStructuredStreamingUi(chatId)) return;
     const cardKey = this.resolveStreamKey(chatId, streamKey);
     if (!this.activeCards.has(cardKey)) {
+      this.pendingCardCreateState(cardKey).statusText = statusText;
       const messageId = this.lastIncomingMessageId.get(chatId);
       this.createStreamingCard(chatId, messageId, cardKey).then((ok) => {
         if (ok) this.updateCardStatus(chatId, statusText, cardKey);
