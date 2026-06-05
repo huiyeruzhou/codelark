@@ -375,6 +375,7 @@ export async function handleBridgeCommand(
   }
 
   let response = '';
+  let responseAddress = msg.address;
   let responseRichCard: OutboundRichCard | undefined;
   let responseParseMode: 'Markdown' | 'plain' = getFeedbackParseMode(adapter.channelType);
   let auditResponse = true;
@@ -410,6 +411,7 @@ export async function handleBridgeCommand(
           markdown: responseParseMode === 'Markdown',
         });
         response = result.response;
+        responseAddress = result.responseAddress || msg.address;
         responseRichCard = result.richCard;
         threadTableCardScope = result.threadTableCardScope;
       }
@@ -435,6 +437,7 @@ export async function handleBridgeCommand(
         markdown: responseParseMode === 'Markdown',
       });
       response = result.response;
+      responseAddress = result.responseAddress || msg.address;
       responseRichCard = result.richCard;
       threadTableCardScope = result.threadTableCardScope;
       break;
@@ -469,6 +472,7 @@ export async function handleBridgeCommand(
             markdown: responseParseMode === 'Markdown',
           });
       response = result.response;
+      responseAddress = result.responseAddress || msg.address;
       responseRichCard = result.richCard;
       threadTableCardScope = result.threadTableCardScope;
       break;
@@ -486,6 +490,7 @@ export async function handleBridgeCommand(
         markdown: responseParseMode === 'Markdown',
       });
       response = result.response;
+      responseAddress = result.responseAddress || msg.address;
       responseRichCard = result.richCard;
       threadTableCardScope = result.threadTableCardScope;
       break;
@@ -897,15 +902,17 @@ export async function handleBridgeCommand(
       || (useCurrentThreadCardUpdateFallback && threadTableCardScope === 'current'
         ? getThreadTableMessageRecord(msg.address, 'current')?.messageId
         : undefined);
-    const result = await deliverBridgeNotice(adapter, msg.address, response, {
-      replyToMessageId: msg.messageId,
+    const result = await deliverBridgeNotice(adapter, responseAddress, response, {
+      replyToMessageId: responseAddress.channelType === msg.address.channelType && responseAddress.chatId === msg.address.chatId
+        ? msg.messageId
+        : undefined,
       audit: auditResponse,
       richCard: responseRichCard,
       richCardUpdateMessageId,
     });
     const threadCardMessageId = richCardUpdateMessageId || result.messageId;
     if (result.ok && threadTableCardScope && threadCardMessageId) {
-      await persistAndPinLatestThreadTableMessage(adapter, msg.address, threadTableCardScope, threadCardMessageId);
+      await persistAndPinLatestThreadTableMessage(adapter, responseAddress, threadTableCardScope, threadCardMessageId);
     }
     if (result.ok && afterDelivery) {
       afterDelivery(result.messageId);

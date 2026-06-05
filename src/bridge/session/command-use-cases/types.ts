@@ -1,4 +1,4 @@
-import type { ChannelChat, OutboundRichCard } from '../../../domain/index.js';
+import type { ChannelAddress, ChannelChat, OutboundRichCard } from '../../../domain/index.js';
 import type { ThreadCardScope } from '../../command/thread-display.js';
 
 export interface SessionCommandDeps {
@@ -13,6 +13,7 @@ export interface SessionCommandDeps {
 
 export interface SessionCommandResult {
   response: string;
+  responseAddress?: ChannelAddress;
   richCard?: OutboundRichCard;
   threadTableCardScope?: ThreadCardScope;
 }
