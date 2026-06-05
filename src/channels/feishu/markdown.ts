@@ -616,10 +616,7 @@ function buildRichCardFormControlBarElements(
   const selectColumns = (controlBar.selects || [])
     .map((select, index) => buildRichCardFormControlSelectColumn(select, index, chatId))
     .filter((column): column is Record<string, unknown> => Boolean(column));
-  const actionColumns = (controlBar.actions || [])
-    .map((button) => buildRichCardFormControlButtonColumn(button, chatId))
-    .filter((column): column is Record<string, unknown> => Boolean(column));
-  const columns = [...selectColumns, ...actionColumns];
+  const columns = selectColumns;
   if (columns.length === 0) return [];
   const elements: Array<Record<string, unknown>> = [{
     tag: 'column_set',

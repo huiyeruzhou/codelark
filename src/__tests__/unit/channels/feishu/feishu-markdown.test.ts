@@ -1051,9 +1051,14 @@ describe('buildRichCardContent', () => {
     const buttonRow = form.elements.at(-1);
     const saveButton = buttonRow.columns[0].elements[0];
     const refreshButton = buttonRow.columns[1].elements[0];
+    const buttons = form.elements
+      .flatMap((element: any) => element.columns || [])
+      .flatMap((column: any) => column.elements || [])
+      .filter((element: any) => element.tag === 'button');
     assert.equal(saveButton.form_action_type, 'submit');
     assert.equal(saveButton.behaviors[0].value.callback_data, 'clk-command::%2Fcurrent-config');
     assert.equal(refreshButton.form_action_type, undefined);
     assert.equal(refreshButton.behaviors[0].value.callback_data, 'clk-command::%2Fcurrent');
+    assert.deepEqual(buttons.map((button: any) => button.text.content), ['保存', '刷新']);
   });
 });
