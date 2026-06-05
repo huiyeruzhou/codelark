@@ -44,17 +44,17 @@
     "prepublishOnly": "npm run typecheck && npm test && npm run docs:build && npm run build && npm run pack:check"
   },
   "dependencies": {
-    "@anthropic-ai/claude-agent-sdk": "^0.3.160",
+    "@anthropic-ai/claude-agent-sdk": "^0.3.165",
     "@clack/prompts": "^1.5.1",
     "@homebridge/node-pty-prebuilt-multiarch": "^0.13.1",
-    "@larksuite/cli": "^1.0.45",
+    "@larksuite/cli": "^1.0.48",
     "@larksuiteoapi/node-sdk": "^1.66.1",
-    "@openai/codex-sdk": "^0.130.0",
+    "@openai/codex-sdk": "^0.137.0",
     "https-proxy-agent": "^9.0.0",
-    "markdown-it": "^14.1.1",
+    "markdown-it": "^14.2.0",
     "pino": "^10.3.1",
     "qrcode": "^1.5.4",
-    "ws": "^8.18.0"
+    "ws": "^8.21.0"
   },
   "devDependencies": {
     "@types/markdown-it": "^14.1.2",
