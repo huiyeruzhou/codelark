@@ -4332,6 +4332,86 @@ printf '{"ok":true,"data":{"chat_id":"oc_user_created"}}\\n'
     assert.match(refreshCardJson, /"callback_data":"clk-command:session-1:%2Fstop"/);
   });
 
+  it('applies early stream state that arrives while the thinking card is being created or sent', async () => {
+    const cardUpdateCalls: Array<Record<string, any>> = [];
+    const createBlocked = createDeferred<{ data: { card_id: string } }>();
+    const sendBlocked = createDeferred<{ data: { message_id: string } }>();
+    let sendStarted = false;
+    const adapter = new FeishuAdapter({
+      id: 'feishu-default',
+      provider: 'feishu',
+      enabled: true,
+      alias: '飞书',
+      config: {
+        appId: 'app-id',
+        appSecret: 'app-secret',
+        streamingEnabled: true,
+      },
+    });
+    (adapter as any).cardFlushBaseIntervalMs = 1;
+
+    (adapter as any).restClient = {
+      cardkit: {
+        v1: {
+          card: {
+            create: async () => createBlocked.promise,
+            update: async (payload: Record<string, any>) => {
+              cardUpdateCalls.push(payload);
+              return {};
+            },
+          },
+          cardElement: {
+            content: async () => ({}),
+            create: async () => ({}),
+          },
+        },
+      },
+      im: {
+        message: {
+          create: async () => {
+            sendStarted = true;
+            return sendBlocked.promise;
+          },
+          reply: async () => {
+            sendStarted = true;
+            return sendBlocked.promise;
+          },
+        },
+      },
+    };
+
+    const createPromise = (adapter as any).createStreamingCard('chat-1', 'reply-1', 'stream-1');
+    await Promise.resolve();
+    adapter.onStreamStatus('chat-1', '正在读取项目结构', 'stream-1');
+    adapter.onTaskEvent('chat-1', [
+      { text: '读取代码', status: 'in_progress' },
+    ], 'stream-1');
+    createBlocked.resolve({ data: { card_id: 'card-1' } });
+    await waitForCondition(() => sendStarted);
+    adapter.onStreamText('chat-1', '我会先检查相关代码。', 'stream-1');
+    adapter.onToolEvent('chat-1', [
+      { id: 'tool-1', name: 'exec_command', status: 'running', input: 'pwd' },
+    ], 'stream-1');
+    adapter.onStreamHistory('chat-1', [
+      { type: 'markdown', role: 'user', content: '先读一下代码' },
+      { type: 'tool_panel', tools: [{ id: 'tool-1', name: 'exec_command', status: 'running', input: 'pwd' }] },
+    ], 'stream-1');
+    sendBlocked.resolve({ data: { message_id: 'msg-1' } });
+
+    assert.equal(await createPromise, true);
+    const state = (adapter as any).activeCards.get('stream-1');
+    assert.ok(state?.flushInFlight);
+    await state.flushInFlight;
+
+    const refreshCardJson = String(cardUpdateCalls[0]?.data?.card?.data || '');
+    assert.match(refreshCardJson, /先读一下代码/);
+    assert.match(refreshCardJson, /正在读取项目结构/);
+    assert.match(refreshCardJson, /读取代码/);
+    assert.match(refreshCardJson, /exec_command/);
+    assert.match(refreshCardJson, /stream_tool_1/);
+    assert.equal(state.pendingText, '我会先检查相关代码。');
+  });
+
   it('renders final cards without waiting tasks or running tools after completion', async () => {
     const cardUpdateCalls: Array<Record<string, any>> = [];
     const adapter = new FeishuAdapter({
