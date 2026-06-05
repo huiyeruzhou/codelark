@@ -1,0 +1,444 @@
+import MarkdownIt from 'markdown-it';
+
+import {
+  SessionDisplayQuery,
+  buildBridgeSessionDisplaySummary,
+  buildCodexThreadDisplaySummary,
+  findVisibleBridgeSessionByCodexThread,
+  getBridgeSessionCodexThreadId,
+  getBridgeSessionDisplayTitle,
+  type SessionDisplayListPayload,
+  type SessionDisplaySummary,
+} from '../../bridge/session/display/session-display-query.js';
+import { stripLegacySessionPrefix } from '../../bridge/session/display/session-title.js';
+import type { ChannelChat } from '../../domain/channel.js';
+import type { BridgeSession, BridgeSessionUpdate } from '../../domain/session.js';
+import {
+  resolveSessionTranscriptFile,
+  type SessionTranscriptHistoryEntry,
+} from '../../bridge/session/transcript-source.js';
+import {
+  getSessionActiveRuntime,
+  getSessionClaudeModel,
+  getSessionClaudePermissionMode,
+  getSessionClaudeReasoningEffort,
+  getSessionCodexModel,
+  getSessionCodexMode,
+  getSessionCodexNetworkAccess,
+  getSessionCodexProvider,
+  getSessionCodexReasoningEffort,
+  getSessionCodexSandboxMode,
+  getSessionCodexTitle,
+  getSessionSystemPrompt,
+  getSessionWorkingDirectory,
+  mergeSessionRuntimeUpdates,
+  setSessionClaudeModelUpdate,
+  setSessionCodexModeUpdate,
+  setSessionCodexModelUpdate,
+  setSessionCodexNetworkAccessUpdate,
+  setSessionCodexProviderUpdate,
+  setSessionCodexReasoningEffortUpdate,
+  setSessionCodexSandboxModeUpdate,
+  setSessionSystemPromptUpdate,
+  setSessionWorkingDirectoryUpdate,
+} from '../../domain/session-runtime.js';
+import type { JsonFileStore } from '../../storage/json-store.js';
+import {
+  createUiSessionRegistry,
+  createUiSessionRuntimeSource,
+  defaultUiSessionCodexSource,
+  defaultUiSessionClaudeSource,
+  type UiSessionCodexSource,
+  type UiSessionClaudeSource,
+  type UiSessionRuntimeSource,
+} from './session-source.js';
+
+export type UiSessionSummary = SessionDisplaySummary;
+export type UiSessionListPayload = SessionDisplayListPayload;
+
+export interface UiSessionIdentity {
+  bridgeSessionId?: string;
+  codexThreadId?: string;
+  claudeSessionId?: string;
+  claudeCwd?: string;
+}
+
+export interface UiSessionHistoryMessage {
+  role: string;
+  kind: string;
+  content: string;
+  renderedContent: string;
+  timestamp: string;
+  rawJsonl: string;
+}
+
+const markdownRenderer = new MarkdownIt({
+  html: false,
+  linkify: true,
+  breaks: true,
+});
+
+function renderHistoryMarkdown(content: string): string {
+  return markdownRenderer.render(content || '');
+}
+
+function uiHistoryMessage(
+  role: string,
+  kind: string,
+  content: string,
+  timestamp: string,
+  rawJsonl?: string,
+): UiSessionHistoryMessage {
+  const raw = typeof rawJsonl === 'string' && rawJsonl.length > 0
+    ? rawJsonl
+    : JSON.stringify({ role, kind, content, timestamp });
+  return {
+    role,
+    kind,
+    content,
+    renderedContent: renderHistoryMarkdown(content),
+    timestamp,
+    rawJsonl: raw,
+  };
+}
+
+function uiRuntimeHistoryMessages(runtimeSource: UiSessionRuntimeSource, runtime: 'codex' | 'claude', threadId: string, cwd?: string): UiSessionHistoryMessage[] {
+  const entries = runtimeSource.readJsonlHistory(runtime, threadId, cwd);
+  return entries.map((entry) => uiHistoryMessage(entry.role, entry.kind, entry.content, entry.timestamp, entry.rawJsonl));
+}
+
+function uiTranscriptHistoryMessages(entries: SessionTranscriptHistoryEntry[]): UiSessionHistoryMessage[] {
+  return entries.map((entry) => uiHistoryMessage(entry.role, entry.kind, entry.content, entry.timestamp, entry.rawJsonl));
+}
+
+function filterUiMessagesForRuntime(
+  messages: UiSessionHistoryMessage[],
+  runtime: 'codex' | 'claude' | undefined,
+): UiSessionHistoryMessage[] {
+  if (runtime !== 'claude') return messages;
+  return messages.filter((message) => message.role !== 'user');
+}
+
+function getBridgeSessionTitle(session: BridgeSession): string {
+  return getBridgeSessionDisplayTitle(session);
+}
+
+function getStoredCodexThreadId(session: BridgeSession): string {
+  return getBridgeSessionCodexThreadId(session);
+}
+
+function bridgeSessionToSummary(session: BridgeSession): UiSessionSummary {
+  return buildBridgeSessionDisplaySummary(session);
+}
+
+function runtimeSessionToSummary(runtimeSource: UiSessionRuntimeSource, store: JsonFileStore, runtime: 'codex' | 'claude', threadId: string, cwd?: string): UiSessionSummary | null {
+  const session = runtimeSource.getThread(runtime, threadId, cwd);
+  if (!session) return null;
+  return new SessionDisplayQuery(store).localRuntimeSession(session);
+}
+
+function codexSessionToSummary(runtimeSource: UiSessionRuntimeSource, store: JsonFileStore, threadId: string): UiSessionSummary | null {
+  const session = runtimeSource.getThread('codex', threadId);
+  if (!session) return null;
+  const linked = findVisibleBridgeSessionByCodexThread(store, threadId);
+  return buildCodexThreadDisplaySummary({
+    threadId: session.threadId,
+    filePath: session.filePath,
+    cwd: session.cwd,
+    originator: session.originator,
+    source: session.source,
+    cliVersion: session.cliVersion,
+    firstSeenAt: session.firstSeenAt,
+    lastEventAt: session.lastEventAt,
+    title: session.title,
+    activeEstimate: session.activeEstimate,
+  }, linked);
+}
+
+function bindingForSessionHistory(store: JsonFileStore, session: BridgeSession): ChannelChat {
+  return store.listChannelChats().find((binding) => binding.bridgeSessionId === session.id) || {
+    id: `ui-session-${session.id}`,
+    channelType: 'ui',
+    chatId: session.id,
+    bridgeSessionId: session.id,
+    createdAt: session.created_at || '',
+    updatedAt: session.updated_at || session.created_at || '',
+  };
+}
+
+function sanitizeSessionConfig(payload: Record<string, unknown>): BridgeSessionUpdate {
+  const updates: BridgeSessionUpdate = {};
+  const runtimeUpdates: BridgeSessionUpdate[] = [];
+  const activeRuntime = payload.activeRuntime === 'claude' ? 'claude' : 'codex';
+  if (typeof payload.name === 'string') {
+    updates.name = payload.name.trim() || undefined;
+  }
+  if (typeof payload.workingDirectory === 'string') {
+    runtimeUpdates.push(setSessionWorkingDirectoryUpdate(payload.workingDirectory.trim() || process.cwd()));
+  }
+  if (typeof payload.systemPrompt === 'string') {
+    runtimeUpdates.push(setSessionSystemPromptUpdate(payload.systemPrompt.trim() || undefined));
+  }
+
+  if (activeRuntime === 'claude') {
+    if (typeof payload.claudeModel === 'string') {
+      runtimeUpdates.push(setSessionClaudeModelUpdate(payload.claudeModel.trim() || undefined));
+    }
+    if (
+      payload.claudePermissionMode === 'acceptEdits'
+      || payload.claudePermissionMode === 'bypassPermissions'
+      || payload.claudePermissionMode === 'plan'
+      || payload.claudePermissionMode === 'default'
+      || payload.claudePermissionMode === ''
+    ) {
+      runtimeUpdates.push({
+        runtime: {
+          activeRuntime: 'claude',
+          claude: { permissionMode: payload.claudePermissionMode ? payload.claudePermissionMode : undefined },
+        },
+      });
+    }
+    if (
+      payload.claudeReasoningEffort === 'low'
+      || payload.claudeReasoningEffort === 'medium'
+      || payload.claudeReasoningEffort === 'high'
+      || payload.claudeReasoningEffort === 'xhigh'
+      || payload.claudeReasoningEffort === 'max'
+      || payload.claudeReasoningEffort === ''
+    ) {
+      runtimeUpdates.push({
+        runtime: {
+          activeRuntime: 'claude',
+          claude: { reasoningEffort: payload.claudeReasoningEffort ? payload.claudeReasoningEffort : undefined },
+        },
+      });
+    }
+  } else {
+    if (typeof payload.model === 'string') {
+      runtimeUpdates.push(setSessionCodexModelUpdate(payload.model.trim() || undefined));
+    }
+    if (payload.preferredMode === 'yolo' || payload.preferredMode === 'normal' || payload.preferredMode === 'code') {
+      runtimeUpdates.push(setSessionCodexModeUpdate(payload.preferredMode === 'yolo' ? 'yolo' : 'normal'));
+    }
+    if (payload.codexProvider === 'sdk' || payload.codexProvider === 'tmux' || payload.codexProvider === 'pty' || payload.codexProvider === '') {
+      runtimeUpdates.push(setSessionCodexProviderUpdate(payload.codexProvider ? payload.codexProvider : undefined));
+    }
+    if (
+      payload.reasoningEffort === 'minimal'
+      || payload.reasoningEffort === 'low'
+      || payload.reasoningEffort === 'medium'
+      || payload.reasoningEffort === 'high'
+      || payload.reasoningEffort === 'xhigh'
+      || payload.reasoningEffort === ''
+    ) {
+      runtimeUpdates.push(setSessionCodexReasoningEffortUpdate(payload.reasoningEffort ? payload.reasoningEffort : undefined));
+    }
+    if (
+      payload.codexSandboxMode === 'read-only'
+      || payload.codexSandboxMode === 'workspace-write'
+      || payload.codexSandboxMode === 'danger-full-access'
+      || payload.codexSandboxMode === ''
+    ) {
+      runtimeUpdates.push(setSessionCodexSandboxModeUpdate(payload.codexSandboxMode ? payload.codexSandboxMode : undefined));
+    }
+    if (payload.codexNetworkAccess === true || payload.codexNetworkAccess === false) {
+      runtimeUpdates.push(setSessionCodexNetworkAccessUpdate(payload.codexNetworkAccess));
+    }
+  }
+  return mergeSessionRuntimeUpdates(updates, ...runtimeUpdates);
+}
+
+function sessionConfigPayload(session: BridgeSession) {
+  const activeRuntime = getSessionActiveRuntime(session) || 'codex';
+  return {
+    id: session.id,
+    bridgeSessionId: session.id,
+    activeRuntime,
+    name: session.name ? stripLegacySessionPrefix(session.name) : '',
+    codexTitle: getSessionCodexTitle(session) || '',
+    title: getBridgeSessionTitle(session),
+    workingDirectory: getSessionWorkingDirectory(session) || '',
+    model: getSessionCodexModel(session) || '',
+    preferredMode: getSessionCodexMode(session) === 'yolo' ? 'yolo' : 'normal',
+    codexProvider: getSessionCodexProvider(session) || '',
+    systemPrompt: getSessionSystemPrompt(session) || '',
+    reasoningEffort: getSessionCodexReasoningEffort(session) || '',
+    codexSandboxMode: getSessionCodexSandboxMode(session) || '',
+    codexNetworkAccess: getSessionCodexNetworkAccess(session),
+    claudeModel: getSessionClaudeModel(session) || '',
+    claudePermissionMode: getSessionClaudePermissionMode(session) || '',
+    claudeReasoningEffort: getSessionClaudeReasoningEffort(session) || '',
+  };
+}
+
+export class UiSessionApplication {
+  constructor(
+    private readonly store: JsonFileStore,
+    private readonly codexSource: UiSessionCodexSource = defaultUiSessionCodexSource,
+    private readonly claudeSource: UiSessionClaudeSource = defaultUiSessionClaudeSource,
+  ) {}
+
+  private createRuntimeSource(): UiSessionRuntimeSource {
+    return createUiSessionRuntimeSource(this.codexSource, this.claudeSource);
+  }
+
+  private createSessionRegistry() {
+    return createUiSessionRegistry(this.store, this.codexSource, this.claudeSource);
+  }
+
+  listSessions(limit?: number): UiSessionListPayload {
+    const runtimeSource = this.createRuntimeSource();
+    return new SessionDisplayQuery(this.store).listRuntimeSessions(runtimeSource.listSessions(), {
+      root: runtimeSource.getSessionsRoot(),
+      limit,
+    });
+  }
+
+  getHistory(identity: UiSessionIdentity): {
+    session: UiSessionSummary;
+    source: string;
+    messages: UiSessionHistoryMessage[];
+  } {
+    if (identity.bridgeSessionId) {
+      const session = this.store.getSession(identity.bridgeSessionId);
+      if (!session || session.hidden === true || session.session_type === 'draft') {
+        throw new Error('指定的 Bridge 会话不存在。');
+      }
+
+      const codexThreadId = getStoredCodexThreadId(session);
+      if (codexThreadId) {
+        const runtimeSource = this.createRuntimeSource();
+        const codexSummary = codexSessionToSummary(runtimeSource, this.store, codexThreadId);
+        return {
+          session: codexSummary || bridgeSessionToSummary(session),
+          source: 'codex',
+          messages: uiRuntimeHistoryMessages(runtimeSource, 'codex', codexThreadId),
+        };
+      }
+
+      const transcript = resolveSessionTranscriptFile(session, bindingForSessionHistory(this.store, session));
+      if (transcript) {
+        return {
+          session: bridgeSessionToSummary(session),
+          source: transcript.transcript.runtime,
+          messages: uiTranscriptHistoryMessages(transcript.source.readHistory(transcript.transcript)),
+        };
+      }
+
+      const { messages } = this.store.getMessages(session.id);
+      const activeRuntime = getSessionActiveRuntime(session);
+      return {
+        session: bridgeSessionToSummary(session),
+        source: 'bridge',
+        messages: filterUiMessagesForRuntime(
+          messages.map((message) => uiHistoryMessage(message.role, 'bridge:message', message.content, message.timestamp || '')),
+          activeRuntime,
+        ),
+      };
+    }
+
+    if (identity.codexThreadId) {
+      const runtimeSource = this.createRuntimeSource();
+      const summary = codexSessionToSummary(runtimeSource, this.store, identity.codexThreadId);
+      if (!summary) {
+        throw new Error('指定的 Codex 会话不存在。');
+      }
+
+      return {
+        session: summary,
+        source: 'codex',
+        messages: uiRuntimeHistoryMessages(runtimeSource, 'codex', identity.codexThreadId),
+      };
+    }
+
+    if (identity.claudeSessionId && identity.claudeCwd) {
+      const runtimeSource = this.createRuntimeSource();
+      const summary = runtimeSessionToSummary(runtimeSource, this.store, 'claude', identity.claudeSessionId, identity.claudeCwd);
+      if (!summary) {
+        throw new Error('指定的 Claude Code 会话不存在。');
+      }
+
+      return {
+        session: summary,
+        source: 'claude',
+        messages: uiRuntimeHistoryMessages(runtimeSource, 'claude', identity.claudeSessionId, identity.claudeCwd),
+      };
+    }
+
+    throw new Error('不支持的会话目标。');
+  }
+
+  getConfig(bridgeSessionId: string) {
+    const session = this.createSessionRegistry().getVisibleBridgeSession(bridgeSessionId);
+    return sessionConfigPayload(session);
+  }
+
+  importCodexThread(codexThreadId: string) {
+    const session = this.createSessionRegistry().materializeCodexThread(codexThreadId);
+    return {
+      bridgeSessionId: session.id,
+      session: bridgeSessionToSummary(session),
+      config: sessionConfigPayload(session),
+    };
+  }
+
+  importClaudeThread(claudeSessionId: string, cwd: string) {
+    const session = this.createSessionRegistry().materializeClaudeThread(claudeSessionId, cwd);
+    return {
+      bridgeSessionId: session.id,
+      session: bridgeSessionToSummary(session),
+      config: sessionConfigPayload(session),
+    };
+  }
+
+  renameSession(identity: UiSessionIdentity, name: string | undefined) {
+    const registry = this.createSessionRegistry();
+    const updated = identity.bridgeSessionId
+      ? registry.renameBridgeSession(identity.bridgeSessionId, name)
+      : identity.codexThreadId
+        ? registry.renameCodexThread(identity.codexThreadId, name)
+        : registry.renameClaudeThread(identity.claudeSessionId!, identity.claudeCwd!, name);
+    return sessionConfigPayload(updated);
+  }
+
+  updateConfig(bridgeSessionId: string, payload: Record<string, unknown>) {
+    const registry = this.createSessionRegistry();
+    const updates = sanitizeSessionConfig(payload);
+    const updated = registry.updateBridgeSessionConfig(bridgeSessionId, updates);
+    return sessionConfigPayload(updated);
+  }
+
+  deleteSession(identity: UiSessionIdentity): { deleted: UiSessionSummary; deletedBridgeSessionIds: string[] } {
+    if (identity.bridgeSessionId) {
+      const registry = this.createSessionRegistry();
+      const session = registry.getVisibleBridgeSession(identity.bridgeSessionId);
+      const summary = bridgeSessionToSummary(session);
+      registry.deleteBridgeSession(session.id);
+      return { deleted: summary, deletedBridgeSessionIds: [session.id] };
+    }
+
+    if (identity.codexThreadId) {
+      const runtimeSource = this.createRuntimeSource();
+      const summary = codexSessionToSummary(runtimeSource, this.store, identity.codexThreadId);
+      if (!summary) {
+        throw new Error('指定的 Codex 会话不存在。');
+      }
+
+      const result = this.createSessionRegistry().archiveCodexThread(identity.codexThreadId);
+      return { deleted: summary, deletedBridgeSessionIds: result.deletedBridgeSessionIds };
+    }
+
+    if (identity.claudeSessionId && identity.claudeCwd) {
+      const runtimeSource = this.createRuntimeSource();
+      const summary = runtimeSessionToSummary(runtimeSource, this.store, 'claude', identity.claudeSessionId, identity.claudeCwd);
+      if (!summary) {
+        throw new Error('指定的 Claude Code 会话不存在。');
+      }
+
+      const result = this.createSessionRegistry().archiveClaudeThread(identity.claudeSessionId, identity.claudeCwd);
+      return { deleted: summary, deletedBridgeSessionIds: result.deletedBridgeSessionIds };
+    }
+
+    throw new Error('不支持的会话目标。');
+  }
+}

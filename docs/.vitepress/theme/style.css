@@ -1,0 +1,30 @@
+.mermaid-diagram {
+  margin: 24px 0;
+  overflow-x: auto;
+  border: 1px solid var(--vp-c-divider);
+  border-radius: 8px;
+  background: var(--vp-c-bg-soft);
+  padding: 18px;
+}
+
+.mermaid-diagram__canvas {
+  min-width: 720px;
+}
+
+.mermaid-diagram__canvas svg {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  margin: 0 auto;
+}
+
+.mermaid-diagram__error {
+  margin: 0;
+  white-space: pre-wrap;
+}
+
+.mermaid-diagram__caption {
+  margin-top: 12px;
+  color: var(--vp-c-danger-1);
+  font-size: 13px;
+}

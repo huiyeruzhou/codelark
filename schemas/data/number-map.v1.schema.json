@@ -1,0 +1,9 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://codelark.local/schemas/data/number-map.v1.schema.json",
+  "title": "CodeLark number map store file",
+  "type": "object",
+  "additionalProperties": {
+    "type": "number"
+  }
+}

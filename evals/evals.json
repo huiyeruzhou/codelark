@@ -1,0 +1,17 @@
+{
+  "skill_name": "codelark",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "打开 codelark",
+      "expected_output": "Should trigger the optional integration, identify the 'open' action, and run codelark open or the local dist/cli.mjs open fallback.",
+      "files": []
+    },
+    {
+      "id": 2,
+      "prompt": "把当前会话共享到飞书",
+      "expected_output": "Should trigger the optional integration, identify the 'share-feishu' action, and run codelark share-feishu or the local dist/cli.mjs share-feishu fallback.",
+      "files": []
+    }
+  ]
+}

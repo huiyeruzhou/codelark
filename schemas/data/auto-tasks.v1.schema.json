@@ -1,0 +1,94 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://codelark.local/schemas/data/auto-tasks.v1.schema.json",
+  "title": "CodeLark data/auto-tasks.json",
+  "description": "Map of auto task id to /auto automation task records.",
+  "type": "object",
+  "additionalProperties": {
+    "$ref": "#/$defs/autoTask"
+  },
+  "$defs": {
+    "autoTask": {
+      "type": "object",
+      "required": [
+        "id",
+        "bridgeSessionId",
+        "channelType",
+        "chatId",
+        "createdAt",
+        "updatedAt",
+        "triggeredCount",
+        "times",
+        "status"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "kind": {
+          "enum": ["script", "interval"]
+        },
+        "bridgeSessionId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "channelType": {
+          "type": "string",
+          "minLength": 1
+        },
+        "channelProvider": {
+          "type": "string"
+        },
+        "channelAlias": {
+          "type": "string"
+        },
+        "chatId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "chatUserId": {
+          "type": "string"
+        },
+        "chatDisplayName": {
+          "type": "string"
+        },
+        "scriptPath": {
+          "type": "string",
+          "minLength": 0
+        },
+        "prompt": {
+          "type": "string"
+        },
+        "intervalSeconds": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "createdAt": {
+          "type": "string"
+        },
+        "updatedAt": {
+          "type": "string"
+        },
+        "triggeredCount": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "lastTriggeredAt": {
+          "type": "string"
+        },
+        "times": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "status": {
+          "enum": ["running", "completed", "failed"]
+        },
+        "lastError": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": true
+    }
+  }
+}

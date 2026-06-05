@@ -1,0 +1,121 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://codelark.local/schemas/manifest.json",
+  "schemaVersion": 1,
+  "packageName": "codelark",
+  "storageRoot": "~/.codelark",
+  "validationPolicy": {
+    "forbiddenThreadIdentityFields": [
+      "sdk_session_id",
+      "sdkSessionId",
+      "desktop_thread_id",
+      "desktopThreadId",
+      "thread_origin",
+      "threadOrigin",
+      "thread_id",
+      "threadId"
+    ]
+  },
+  "files": [
+    {
+      "id": "config.v1",
+      "path": "config.json",
+      "schema": "schemas/config.v1.schema.json",
+      "kind": "config",
+      "version": 1,
+      "versionField": "schemaVersion",
+      "current": true,
+      "missingFile": "create-default"
+    },
+    {
+      "id": "data.sessions.v1",
+      "path": "data/sessions.json",
+      "schema": "schemas/data/sessions.v1.schema.json",
+      "kind": "store-map",
+      "version": 1,
+      "versionField": null,
+      "current": true,
+      "missingFile": "empty-object"
+    },
+    {
+      "id": "data.channel-chats.v1",
+      "path": "data/channel-chats.json",
+      "schema": "schemas/data/channel-chats.v1.schema.json",
+      "kind": "store-map",
+      "version": 1,
+      "versionField": null,
+      "current": true,
+      "missingFile": "empty-object"
+    },
+    {
+      "id": "data.channel-default-targets.v1",
+      "path": "data/channel-default-targets.json",
+      "schema": "schemas/data/channel-default-targets.v1.schema.json",
+      "kind": "store-map",
+      "version": 1,
+      "versionField": null,
+      "current": true,
+      "missingFile": "empty-object"
+    },
+    {
+      "id": "data.messages.v1",
+      "path": "data/messages/*.json",
+      "schema": "schemas/data/messages.v1.schema.json",
+      "kind": "store-array",
+      "version": 1,
+      "versionField": null,
+      "current": true,
+      "missingFile": "empty-array"
+    },
+    {
+      "id": "data.permissions.v1",
+      "path": "data/permissions.json",
+      "schema": "schemas/data/permissions.v1.schema.json",
+      "kind": "store-map",
+      "version": 1,
+      "versionField": null,
+      "current": true,
+      "missingFile": "empty-object"
+    },
+    {
+      "id": "data.offsets.v1",
+      "path": "data/offsets.json",
+      "schema": "schemas/data/string-map.v1.schema.json",
+      "kind": "store-map",
+      "version": 1,
+      "versionField": null,
+      "current": true,
+      "missingFile": "empty-object"
+    },
+    {
+      "id": "data.dedup.v1",
+      "path": "data/dedup.json",
+      "schema": "schemas/data/number-map.v1.schema.json",
+      "kind": "store-map",
+      "version": 1,
+      "versionField": null,
+      "current": true,
+      "missingFile": "empty-object"
+    },
+    {
+      "id": "data.audit.v1",
+      "path": "data/audit.json",
+      "schema": "schemas/data/audit.v1.schema.json",
+      "kind": "store-array",
+      "version": 1,
+      "versionField": null,
+      "current": true,
+      "missingFile": "empty-array"
+    },
+    {
+      "id": "data.auto-tasks.v1",
+      "path": "data/auto-tasks.json",
+      "schema": "schemas/data/auto-tasks.v1.schema.json",
+      "kind": "store-map",
+      "version": 1,
+      "versionField": null,
+      "current": true,
+      "missingFile": "empty-object"
+    }
+  ]
+}

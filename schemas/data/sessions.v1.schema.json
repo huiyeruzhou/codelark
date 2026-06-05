@@ -1,0 +1,330 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://codelark.local/schemas/data/sessions.v1.schema.json",
+  "title": "CodeLark data/sessions.json",
+  "description": "Map of bridge session id to BridgeSession records.",
+  "type": "object",
+  "additionalProperties": {
+    "$ref": "#/$defs/bridgeSession"
+  },
+  "$defs": {
+    "bridgeSession": {
+      "type": "object",
+      "required": ["id"],
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "name": {
+          "type": "string"
+        },
+        "provider_id": {
+          "type": "string"
+        },
+        "runtime": {
+          "$ref": "#/$defs/sessionRuntime"
+        },
+        "session_type": {
+          "enum": ["normal", "draft"]
+        },
+        "hidden": {
+          "type": "boolean"
+        },
+        "parent_session_id": {
+          "type": "string"
+        },
+        "expires_at": {
+          "type": "string"
+        },
+        "runtime_status": {
+          "enum": ["idle", "running", "queued"]
+        },
+        "queued_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "last_runtime_update_at": {
+          "type": "string"
+        },
+        "health_status": {
+          "enum": [
+            "idle",
+            "running_active",
+            "waiting_tool",
+            "slow_observed",
+            "suspected_stall",
+            "suspected_stream_ui_stall",
+            "suspected_detached",
+            "completed",
+            "failed",
+            "aborted"
+          ]
+        },
+        "health_reason": {
+          "type": "string"
+        },
+        "last_progress_at": {
+          "type": "string"
+        },
+        "last_progress_type": {
+          "type": "string"
+        },
+        "active_tools_json": {
+          "type": "string"
+        },
+        "active_tool_name": {
+          "type": "string"
+        },
+        "active_tool_started_at": {
+          "type": "string"
+        },
+        "last_tool_finished_at": {
+          "type": "string"
+        },
+        "last_stream_ui_attempt_at": {
+          "type": "string"
+        },
+        "last_stream_ui_update_at": {
+          "type": "string"
+        },
+        "stream_ui_flush_started_at": {
+          "type": "string"
+        },
+        "last_stream_ui_error_at": {
+          "type": "string"
+        },
+        "last_stream_ui_error": {
+          "type": "string"
+        },
+        "stream_ui_consecutive_failures": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "mirror_status": {
+          "enum": ["inactive", "watching", "stale"]
+        },
+        "mirror_last_event_at": {
+          "type": "string"
+        },
+        "created_at": {
+          "type": "string"
+        },
+        "updated_at": {
+          "type": "string"
+        }
+      },
+      "allOf": [
+        {
+          "$ref": "#/$defs/noRetiredThreadIdentityFields"
+        },
+        {
+          "$ref": "#/$defs/noRetiredRuntimeTopLevelFields"
+        }
+      ],
+      "additionalProperties": true
+    },
+    "sessionRuntime": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/codexSessionRuntime"
+        },
+        {
+          "$ref": "#/$defs/claudeSessionRuntime"
+        }
+      ]
+    },
+    "codexSessionRuntime": {
+      "type": "object",
+      "properties": {
+        "activeRuntime": {
+          "const": "codex"
+        },
+        "codex": {
+          "type": "object",
+          "properties": {
+            "threadId": {
+              "type": "string"
+            },
+            "title": {
+              "type": "string"
+            },
+            "model": {
+              "type": "string"
+            },
+            "provider": {
+              "enum": ["sdk", "pty", "tmux"]
+            },
+            "mode": {
+              "enum": ["normal", "yolo", "code", "plan", "ask"]
+            },
+            "sandboxMode": {
+              "enum": ["read-only", "workspace-write", "danger-full-access"]
+            },
+            "networkAccess": {
+              "type": "boolean"
+            },
+            "reasoningEffort": {
+              "enum": ["minimal", "low", "medium", "high", "xhigh"]
+            }
+          },
+          "additionalProperties": true
+        },
+        "claude": {
+          "not": {}
+        },
+        "general": {
+          "$ref": "#/$defs/sessionRuntimeGeneral"
+        }
+      },
+      "additionalProperties": true
+    },
+    "claudeSessionRuntime": {
+      "type": "object",
+      "required": ["activeRuntime"],
+      "properties": {
+        "activeRuntime": {
+          "const": "claude"
+        },
+        "codex": {
+          "not": {}
+        },
+        "claude": {
+          "type": "object",
+          "properties": {
+            "sessionId": {
+              "type": "string"
+            },
+            "cwd": {
+              "type": "string"
+            },
+            "model": {
+              "type": "string"
+            },
+            "provider": {
+              "enum": ["pty", "sdk"]
+            },
+            "permissionMode": {
+              "type": "string"
+            },
+            "reasoningEffort": {
+              "enum": ["low", "medium", "high", "xhigh", "max"]
+            },
+            "idleTimeoutMinutes": {
+              "type": "integer",
+              "minimum": 1
+            }
+          },
+          "additionalProperties": true
+        },
+        "general": {
+          "$ref": "#/$defs/sessionRuntimeGeneral"
+        }
+      },
+      "additionalProperties": true
+    },
+    "sessionRuntimeGeneral": {
+      "type": "object",
+      "properties": {
+        "workingDirectory": {
+          "type": "string"
+        },
+        "systemPrompt": {
+          "type": "string"
+        },
+        "tmuxSessionName": {
+          "type": "string"
+        },
+        "captureLines": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "autoEnter": {
+          "type": "boolean"
+        },
+        "echoInput": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": true
+    },
+    "noRetiredRuntimeTopLevelFields": {
+      "not": {
+        "anyOf": [
+          {
+            "required": ["working_directory"]
+          },
+          {
+            "required": ["system_prompt"]
+          },
+          {
+            "required": ["model"]
+          },
+          {
+            "required": ["preferred_mode"]
+          },
+          {
+            "required": ["codex_thread_id"]
+          },
+          {
+            "required": ["codex_title"]
+          },
+          {
+            "required": ["reasoning_effort"]
+          },
+          {
+            "required": ["codex_provider"]
+          },
+          {
+            "required": ["codex_sandbox_mode"]
+          },
+          {
+            "required": ["codex_network_access"]
+          },
+          {
+            "required": ["tmux_session_name"]
+          },
+          {
+            "required": ["tmux_capture_lines"]
+          },
+          {
+            "required": ["tmux_auto_enter"]
+          },
+          {
+            "required": ["tmux_echo_input"]
+          }
+        ]
+      }
+    },
+    "noRetiredThreadIdentityFields": {
+      "not": {
+        "anyOf": [
+          {
+            "required": ["sdk_session_id"]
+          },
+          {
+            "required": ["sdkSessionId"]
+          },
+          {
+            "required": ["desktop_thread_id"]
+          },
+          {
+            "required": ["desktopThreadId"]
+          },
+          {
+            "required": ["thread_origin"]
+          },
+          {
+            "required": ["threadOrigin"]
+          },
+          {
+            "required": ["thread_id"]
+          },
+          {
+            "required": ["threadId"]
+          }
+        ]
+      }
+    }
+  }
+}

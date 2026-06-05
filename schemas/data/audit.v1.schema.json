@@ -1,0 +1,44 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://codelark.local/schemas/data/audit.v1.schema.json",
+  "title": "CodeLark audit log entry array",
+  "description": "Audit log entry shape. Current runtime appends entries to data/audit.jsonl and still reads legacy data/audit.json arrays.",
+  "type": "array",
+  "items": {
+    "type": "object",
+    "required": ["id", "createdAt", "channelType", "chatId", "direction", "messageId", "summary"],
+    "properties": {
+      "id": {
+        "type": "string",
+        "minLength": 1
+      },
+      "createdAt": {
+        "type": "string"
+      },
+      "channelType": {
+        "type": "string",
+        "minLength": 1
+      },
+      "channelProvider": {
+        "type": "string"
+      },
+      "channelAlias": {
+        "type": "string"
+      },
+      "chatId": {
+        "type": "string",
+        "minLength": 1
+      },
+      "direction": {
+        "enum": ["inbound", "outbound"]
+      },
+      "messageId": {
+        "type": "string"
+      },
+      "summary": {
+        "type": "string"
+      }
+    },
+    "additionalProperties": true
+  }
+}

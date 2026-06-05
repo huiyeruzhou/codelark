@@ -1,0 +1,57 @@
+# CodeLark 产品文档
+
+这是 CodeLark 的产品功能文档入口。文档按网页目录组织：每页聚焦一个主题，既面向用户理解功能，也为开发者提供源码入口。
+
+如果只想安装和启动，先看 [安装与使用指南](../guide/install-and-usage.md)。如果要理解底层身份链路，再看 [当前架构](../architecture/current.md)。
+
+## 阅读路径
+
+1. [命令体系](commands.md)：IM 命令如何按用户任务分组。
+2. [运行时与提供方](runtime-providers.md)：Codex / Claude Code 与 sdk / pty / tmux 的能力边界。
+3. [通道与 Web 工作台](channels-ui.md)：飞书、多实例配置和本地 UI。
+4. [数据、可观测性与验证](data-observability.md)：本地文件、日志、状态、真实飞书 E2E。
+5. [开发者源码地图](developer-map.md)：按功能查源码和测试。
+
+## 产品主线
+
+CodeLark 是一个运行在本机的桥接应用，把本机 Codex 和 Claude Code 会话接入飞书 IM 通道，让用户可以在聊天软件里继续本地 AI coding session、切换线程、查看状态、处理权限、接收流式卡片、回传文件，并用 Web 工作台管理通道和会话。
+
+核心链路是：
+
+```mermaid
+flowchart LR
+  im[IM 消息]
+  adapter[通道 Adapter]
+  chat[ChannelChat]
+  session[BridgeSession]
+  runtime[Codex / Claude Code Runtime]
+  response[IM 回复 / 流式卡片]
+
+  im --> adapter
+  adapter --> chat
+  chat --> session
+  session --> runtime
+  runtime --> response
+```
+
+CodeLark 自己拥有的是 `BridgeSession`、`ChannelChat`、通道配置、消息缓存和审计日志；Codex / Claude Code 自己的会话文件仍由对应工具生成和维护。
+
+## 代码入口
+
+| 主题 | 入口 |
+| --- | --- |
+| CLI 和本地服务 | [src/entrypoints/cli.ts](https://github.com/huiyeruzhou/codelark/blob/master/src/entrypoints/cli.ts)、[src/local-service/manager.ts](https://github.com/huiyeruzhou/codelark/blob/master/src/local-service/manager.ts) |
+| Bridge 主循环 | [src/entrypoints/daemon.ts](https://github.com/huiyeruzhou/codelark/blob/master/src/entrypoints/daemon.ts)、[src/bridge/host/manager.ts](https://github.com/huiyeruzhou/codelark/blob/master/src/bridge/host/manager.ts) |
+| Web 工作台 | [src/operator-ui/server.ts](https://github.com/huiyeruzhou/codelark/blob/master/src/operator-ui/server.ts)、[src/operator-ui/shell.ts](https://github.com/huiyeruzhou/codelark/blob/master/src/operator-ui/shell.ts) |
+| IM 通道抽象 | [src/channels/contracts.ts](https://github.com/huiyeruzhou/codelark/blob/master/src/channels/contracts.ts) |
+| 命令分发 | [src/bridge/command/dispatch.ts](https://github.com/huiyeruzhou/codelark/blob/master/src/bridge/command/dispatch.ts) |
+| 运行时提供方路由 | [src/runtime/codex/routing-provider.ts](https://github.com/huiyeruzhou/codelark/blob/master/src/runtime/codex/routing-provider.ts) |
+| 本地 JSON 存储 | [src/storage/json-store.ts](https://github.com/huiyeruzhou/codelark/blob/master/src/storage/json-store.ts) |
+| 配置 schema | [schemas/config.v1.schema.json](https://github.com/huiyeruzhou/codelark/blob/master/schemas/config.v1.schema.json) |
+
+## 维护原则
+
+- 功能说明先写“用户能做什么、为什么需要、什么时候用”，再写设计模块和源码入口。
+- 不把实现细节写成产品承诺。
+- 不把废弃字段当成运行时概念，例如旧 `sdk_session_id`、`desktop_thread_id`、`thread_origin`。
+- 涉及真实飞书行为时，同步检查 [真实飞书 E2E](../testing/real-feishu/) 和 [覆盖审计](../testing/coverage-audit.md)。

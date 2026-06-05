@@ -1,0 +1,12 @@
+node_modules/
+dist/
+docs/.vitepress/cache/deps/
+.npm-cache/
+*.tgz
+.env
+config.env
+.codelark
+.work
+work/
+STATUS.md
+.restart-recover-*.log

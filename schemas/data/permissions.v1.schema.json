@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://codelark.local/schemas/data/permissions.v1.schema.json",
+  "title": "CodeLark data/permissions.json",
+  "description": "Map of Codex permission request id to pending/resolved IM permission links.",
+  "type": "object",
+  "additionalProperties": {
+    "type": "object",
+    "required": ["permissionRequestId", "chatId", "messageId", "resolved", "suggestions"],
+    "properties": {
+      "permissionRequestId": {
+        "type": "string",
+        "minLength": 1
+      },
+      "chatId": {
+        "type": "string",
+        "minLength": 1
+      },
+      "messageId": {
+        "type": "string",
+        "minLength": 1
+      },
+      "sessionId": {
+        "type": "string"
+      },
+      "resolved": {
+        "type": "boolean"
+      },
+      "suggestions": {
+        "type": "string"
+      }
+    },
+    "additionalProperties": true
+  }
+}

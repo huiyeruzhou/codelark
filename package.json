@@ -1,0 +1,73 @@
+{
+  "name": "codelark",
+  "version": "0.1.0",
+  "description": "Installable CodeLark bridge with local setup UI and background service",
+  "license": "MIT",
+  "homepage": "https://github.com/huiyeruzhou/codelark#readme",
+  "bugs": {
+    "url": "https://github.com/huiyeruzhou/codelark/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/huiyeruzhou/codelark.git"
+  },
+  "type": "module",
+  "files": [
+    "dist/",
+    "agents/",
+    "schemas/",
+    "skills/",
+    "scripts/",
+    "SKILL.md",
+    "LICENSE",
+    "README.md",
+    "SECURITY.md"
+  ],
+  "bin": {
+    "codelark": "dist/cli.mjs"
+  },
+  "scripts": {
+    "postinstall": "node scripts/patch-codex-sdk-windows-hide.js",
+    "build": "node scripts/build.js",
+    "typecheck": "tsc --noEmit",
+    "dev": "tsx src/entrypoints/daemon.ts",
+    "dev:ui": "tsx src/operator-ui/server.ts",
+    "docs:dev": "vitepress dev docs --host 127.0.0.1",
+    "docs:build": "vitepress build docs",
+    "docs:preview": "vitepress preview docs --host 127.0.0.1",
+    "logs:analyze": "node scripts/analyze-bridge-log.js",
+    "real:setup-wizard:e2e": "tsx scripts/setup-wizard-real-e2e.ts",
+    "real:feishu:e2e": "tsx scripts/real-feishu-e2e.ts",
+    "run": "node dist/cli.mjs run",
+    "test": "node scripts/run-tests.js",
+    "pack:check": "node scripts/check-npm-pack.js",
+    "prepublishOnly": "npm run typecheck && npm test && npm run docs:build && npm run build && npm run pack:check"
+  },
+  "dependencies": {
+    "@anthropic-ai/claude-agent-sdk": "^0.3.160",
+    "@clack/prompts": "^1.5.1",
+    "@homebridge/node-pty-prebuilt-multiarch": "^0.13.1",
+    "@larksuite/cli": "^1.0.45",
+    "@larksuiteoapi/node-sdk": "^1.66.1",
+    "@openai/codex-sdk": "^0.130.0",
+    "https-proxy-agent": "^9.0.0",
+    "markdown-it": "^14.1.1",
+    "pino": "^10.3.1",
+    "qrcode": "^1.5.4",
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "@types/markdown-it": "^14.1.2",
+    "@types/node": "^24.12.4",
+    "@types/ws": "^8.5.0",
+    "esbuild": "^0.25.0",
+    "mermaid": "^11.15.0",
+    "tsx": "^4.21.0",
+    "typescript": "^5",
+    "vite": "^5.4.21",
+    "vitepress": "^1.6.4"
+  },
+  "engines": {
+    "node": ">=24"
+  }
+}

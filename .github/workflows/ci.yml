@@ -1,0 +1,40 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - master
+      - main
+
+jobs:
+  node24:
+    name: Node.js 24
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Test stable suites
+        run: npm test -- --unit --workflow --mock-e2e --harness
+
+      - name: Build
+        run: npm run build
+
+      - name: Build docs
+        run: npm run docs:build
+
+      - name: Check npm package contents
+        run: npm run pack:check

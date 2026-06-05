@@ -1,0 +1,4 @@
+interface:
+  display_name: "CodeLark"
+  short_description: "Help Codex send local files back to IM chats"
+  default_prompt: "Use $codelark when you need to send a generated image or file back to the current CodeLark chat."

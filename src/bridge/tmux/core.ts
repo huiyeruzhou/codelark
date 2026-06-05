@@ -1,0 +1,284 @@
+import { spawn } from 'node:child_process';
+
+export interface TmuxCommandResult {
+  code: number;
+  stdout: string;
+  stderr: string;
+}
+
+export interface TmuxSessionInfo {
+  name: string;
+  windows: string;
+  attached: string;
+  created: string;
+  activity: string;
+}
+
+export type TmuxArgv = [string, ...string[]];
+
+export type TmuxSendAction =
+  | { type: 'literal'; text: string }
+  | { type: 'key'; key: string };
+
+export interface TmuxSessionExistsResult {
+  exists: boolean;
+  command: string;
+}
+
+export interface TmuxListSessionsResult {
+  sessions: TmuxSessionInfo[];
+  command: string;
+}
+
+export interface TmuxCapturePaneResult {
+  screen: string;
+  command: string;
+}
+
+export interface TmuxSendActionsResult {
+  commands: string[];
+}
+
+export interface TmuxEnsureSessionResult {
+  existed: boolean;
+  command?: string;
+  commands: string[];
+}
+
+export interface TmuxStartDetachedSessionParams {
+  name: string;
+  cwd?: string;
+  command?: string;
+  recreate?: boolean;
+}
+
+export interface TmuxCore {
+  hasSession(name: string): Promise<TmuxSessionExistsResult>;
+  killSession(name: string, options?: { ignoreMissing?: boolean }): Promise<string>;
+  listSessions(): Promise<TmuxListSessionsResult>;
+  ensureDetachedSession(params: TmuxStartDetachedSessionParams): Promise<TmuxEnsureSessionResult>;
+  capturePane(target: string, lines: number): Promise<TmuxCapturePaneResult>;
+  sendActions(target: string, actions: TmuxSendAction[], options?: { delayMs?: number }): Promise<TmuxSendActionsResult>;
+  sendInterrupt(target: string): Promise<string>;
+  injectPromptIntoPane(targetPane: string, prompt: string): Promise<TmuxSendActionsResult>;
+  commandPreview(args: readonly string[]): string;
+}
+
+function quoteShellArg(value: string): string {
+  if (value === '') return "''";
+  if (/^[A-Za-z0-9_@%+=:,./-]+$/.test(value)) return value;
+  return `'${value.replace(/'/g, `'\\''`)}'`;
+}
+
+function tmuxCommandPreview(args: readonly string[]): string {
+  return ['tmux', ...args].map(quoteShellArg).join(' ');
+}
+
+function captureTmuxArgv(target: string, lines: number): TmuxArgv {
+  return ['capture-pane', '-t', target, '-p', '-S', `-${lines}`];
+}
+
+function buildNewSessionArgs(params: TmuxStartDetachedSessionParams): string[] {
+  const args: string[] = ['new-session', '-d', '-s', params.name];
+  if (params.cwd) args.push('-c', params.cwd);
+  if (params.command) args.push('--', params.command);
+  return args;
+}
+
+function runCommand(command: string, args: string[], stdin?: string): Promise<TmuxCommandResult> {
+  return new Promise((resolve, reject) => {
+    const child = spawn(command, args, {
+      stdio: [stdin === undefined ? 'ignore' : 'pipe', 'pipe', 'pipe'],
+      windowsHide: process.platform === 'win32',
+    });
+    let stdout = '';
+    let stderr = '';
+    child.stdout?.on('data', (chunk) => { stdout += chunk.toString(); });
+    child.stderr?.on('data', (chunk) => { stderr += chunk.toString(); });
+    child.on('error', reject);
+    child.on('close', (code) => resolve({ code: code ?? 0, stdout, stderr }));
+    if (stdin !== undefined) {
+      child.stdin?.end(stdin);
+    }
+  });
+}
+
+async function runTmux(args: string[], stdin?: string): Promise<TmuxCommandResult> {
+  const result = await runCommand('tmux', args, stdin);
+  if (result.code !== 0) {
+    throw new Error((result.stderr || result.stdout || `tmux ${args[0] || ''} failed`).trim());
+  }
+  return result;
+}
+
+function tmuxSendActionArgv(target: string, action: TmuxSendAction): TmuxArgv {
+  if (action.type === 'literal') {
+    if (action.text.startsWith('-')) {
+      return ['send-keys', '-t', target, '-l', '--', action.text];
+    }
+    return ['send-keys', '-t', target, '-l', action.text];
+  }
+  return ['send-keys', '-t', target, action.key];
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+const PASTE_LITERAL_THRESHOLD = 512;
+const PASTE_CHUNK_SIZE = 512;
+const PASTE_CHUNK_DELAY_MS = 25;
+
+function splitTextChunks(text: string, chunkSize = PASTE_CHUNK_SIZE): string[] {
+  if (!text) return [];
+  const chars = Array.from(text);
+  const chunks: string[] = [];
+  for (let offset = 0; offset < chars.length; offset += chunkSize) {
+    chunks.push(chars.slice(offset, offset + chunkSize).join(''));
+  }
+  return chunks;
+}
+
+class TmuxCliCore implements TmuxCore {
+  commandPreview(args: readonly string[]): string {
+    return tmuxCommandPreview(args);
+  }
+
+  async hasSession(name: string): Promise<TmuxSessionExistsResult> {
+    const args: TmuxArgv = ['has-session', '-t', name];
+    const result = await runCommand('tmux', args);
+    return { exists: result.code === 0, command: tmuxCommandPreview(args) };
+  }
+
+  async killSession(name: string, options: { ignoreMissing?: boolean } = {}): Promise<string> {
+    const args: TmuxArgv = ['kill-session', '-t', name];
+    const result = await runCommand('tmux', args);
+    if (result.code !== 0 && !(options.ignoreMissing && /can't find session/i.test(result.stderr))) {
+      throw new Error((result.stderr || result.stdout || 'tmux kill-session failed').trim());
+    }
+    return tmuxCommandPreview(args);
+  }
+
+  async listSessions(): Promise<TmuxListSessionsResult> {
+    const args: TmuxArgv = [
+      'list-sessions',
+      '-F',
+      '#{session_name}\t#{session_windows}\t#{session_attached}\t#{session_created}\t#{session_activity}',
+    ];
+    const result = await runCommand('tmux', args);
+    if (result.code !== 0) {
+      if (/no server running|failed to connect/i.test(result.stderr || result.stdout)) {
+        return { sessions: [], command: tmuxCommandPreview(args) };
+      }
+      throw new Error((result.stderr || result.stdout || 'tmux list-sessions failed').trim());
+    }
+    const sessions = result.stdout
+      .split(/\r?\n/)
+      .filter(Boolean)
+      .map((line) => {
+        const [name = '', windows = '', attached = '', created = '', activity = ''] = line.split('\t');
+        return { name, windows, attached, created, activity };
+      })
+      .filter((session) => session.name);
+    return { sessions, command: tmuxCommandPreview(args) };
+  }
+
+  async ensureDetachedSession(params: TmuxStartDetachedSessionParams): Promise<TmuxEnsureSessionResult> {
+    const exists = await this.hasSession(params.name);
+    const commands = [exists.command];
+    if (exists.exists && params.recreate) {
+      commands.push(await this.killSession(params.name));
+    }
+    if (!exists.exists || params.recreate) {
+      const args = buildNewSessionArgs(params);
+      await runTmux(args);
+      const command = tmuxCommandPreview(args);
+      commands.push(command);
+      return { existed: exists.exists, command, commands };
+    }
+    return { existed: exists.exists, commands };
+  }
+
+  async capturePane(target: string, lines: number): Promise<TmuxCapturePaneResult> {
+    const args = captureTmuxArgv(target, lines);
+    const result = await runTmux(args);
+    return {
+      screen: result.stdout.replace(/\s+$/g, ''),
+      command: tmuxCommandPreview(args),
+    };
+  }
+
+  async sendActions(
+    target: string,
+    actions: TmuxSendAction[],
+    options: { delayMs?: number } = {},
+  ): Promise<TmuxSendActionsResult> {
+    const commands: string[] = [];
+    for (const [index, action] of actions.entries()) {
+      if (action.type === 'literal' && Array.from(action.text).length > PASTE_LITERAL_THRESHOLD) {
+        commands.push(...(await this.pasteLiteralChunks(target, action.text)));
+      } else {
+        const args = tmuxSendActionArgv(target, action);
+        await runTmux(args);
+        commands.push(tmuxCommandPreview(args));
+      }
+      if (options.delayMs !== undefined && index < actions.length - 1) {
+        await sleep(options.delayMs);
+      }
+    }
+    return { commands };
+  }
+
+  private async pasteLiteralChunks(target: string, text: string, bufferName?: string): Promise<string[]> {
+    const commands: string[] = [];
+    const name = bufferName || `clk-paste-${process.pid}-${Date.now()}`;
+    for (const chunk of splitTextChunks(text)) {
+      const loadArgs: TmuxArgv = ['load-buffer', '-b', name, '-'];
+      await runTmux(loadArgs, chunk);
+      commands.push(tmuxCommandPreview(loadArgs));
+      const pasteArgs: TmuxArgv = ['paste-buffer', '-d', '-p', '-b', name, '-t', target];
+      await runTmux(pasteArgs);
+      commands.push(tmuxCommandPreview(pasteArgs));
+      const endArgs: TmuxArgv = ['send-keys', '-t', target, 'End'];
+      await runTmux(endArgs);
+      commands.push(tmuxCommandPreview(endArgs));
+      await sleep(PASTE_CHUNK_DELAY_MS);
+    }
+    return commands;
+  }
+
+  async sendInterrupt(target: string): Promise<string> {
+    const result = await this.sendActions(target, [{ type: 'key', key: 'C-c' }]);
+    return result.commands[0] || tmuxCommandPreview(['send-keys', '-t', target, 'C-c']);
+  }
+
+  async injectPromptIntoPane(targetPane: string, prompt: string): Promise<TmuxSendActionsResult> {
+    const commands: string[] = [];
+    const bufferName = `clk-prompt-${process.pid}-${Date.now()}`;
+    const lines = prompt.replace(/\r\n/g, '\n').replace(/\r/g, '\n').split('\n');
+    for (let i = 0; i < lines.length; i += 1) {
+      const line = lines[i] || '';
+      if (line) {
+        if (Array.from(line).length > PASTE_LITERAL_THRESHOLD) {
+          commands.push(...(await this.pasteLiteralChunks(targetPane, line, bufferName)));
+        } else {
+          const loadArgs: TmuxArgv = ['load-buffer', '-b', bufferName, '-'];
+          await runTmux(loadArgs, line);
+          commands.push(tmuxCommandPreview(loadArgs));
+          const pasteArgs: TmuxArgv = ['paste-buffer', '-d', '-p', '-b', bufferName, '-t', targetPane];
+          await runTmux(pasteArgs);
+          commands.push(tmuxCommandPreview(pasteArgs));
+        }
+      }
+      if (i < lines.length - 1) {
+        const newline = await this.sendActions(targetPane, [{ type: 'key', key: 'M-Enter' }]);
+        commands.push(...newline.commands);
+      }
+    }
+    const submit = await this.sendActions(targetPane, [{ type: 'key', key: 'Enter' }]);
+    commands.push(...submit.commands);
+    return { commands };
+  }
+}
+
+export const tmuxCore: TmuxCore = new TmuxCliCore();

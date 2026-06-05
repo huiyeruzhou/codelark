@@ -1,0 +1,102 @@
+import {
+  buildCommandFields,
+} from './presentation.js';
+import * as broker from '../permission/broker.js';
+import * as router from '../session/channel-router.js';
+import type { BridgeSession, BridgeStore } from '../../domain/index.js';
+import { sendTmuxInterrupt } from '../tmux/runtime.js';
+import { resolveEffectiveCodexProvider } from '../session/support.js';
+import { getSessionTmuxSessionName } from '../../domain/session-runtime.js';
+import type { CommandThreadDisplay } from './thread-display.js';
+import type { ChannelChat, InboundMessage } from '../../domain/index.js';
+import { sessionLooksRunning } from '../session/command-use-cases/status-guards.js';
+
+export interface StopCommandDeps {
+  getActiveTask(sessionId: string): { abortController: AbortController } | undefined;
+  forceStopSession?(sessionId: string, detail?: string): Promise<boolean>;
+  recordInteractiveHealthEnd?(sessionId: string, outcome: 'completed' | 'failed' | 'aborted', detail?: string): void;
+}
+
+function getStopTmuxInterruptTarget(session: BridgeSession | null | undefined): string | undefined {
+  if (!session) return undefined;
+  const tmuxSessionName = getSessionTmuxSessionName(session);
+  return resolveEffectiveCodexProvider(session) === 'tmux'
+    && Boolean(tmuxSessionName)
+    && sessionLooksRunning(session)
+    ? tmuxSessionName
+    : undefined;
+}
+
+export async function handleStopCommand(options: {
+  msg: InboundMessage;
+  binding: ChannelChat | null;
+  store: BridgeStore;
+  deps: StopCommandDeps;
+  threadDisplay: CommandThreadDisplay;
+  markdown: boolean;
+}): Promise<string> {
+  const binding = options.binding || router.resolve(options.msg.address);
+  const session = options.store.getSession(binding.bridgeSessionId);
+  const task = options.deps.getActiveTask(binding.bridgeSessionId);
+  const looksRunning = sessionLooksRunning(session);
+  const tmuxInterruptTarget = getStopTmuxInterruptTarget(session);
+  if (!task && tmuxInterruptTarget) {
+    const command = await sendTmuxInterrupt(tmuxInterruptTarget);
+    const detail = '用户执行 /stop，已向 Codex tmux TUI 发送 C-c。';
+    options.deps.recordInteractiveHealthEnd?.(binding.bridgeSessionId, 'aborted', detail);
+    return buildCommandFields(
+      '已发送停止按键',
+      [
+        ['Provider', 'tmux'],
+        ['tmux session', tmuxInterruptTarget],
+      ],
+      [
+        '当前会话处于 tmux Provider，且 mirror 显示任务仍在输出；`/stop` 已映射为向 Codex TUI 发送 `C-c`。',
+        `底层命令：\`${command}\``,
+      ],
+      options.markdown,
+    );
+  }
+  if (task || looksRunning) {
+    const taskName = options.threadDisplay.binding(binding).title;
+    const detail = '用户执行 /stop，已停止当前任务。';
+    if (options.deps.forceStopSession) {
+      await options.deps.forceStopSession(binding.bridgeSessionId, detail);
+    } else if (task) {
+      task.abortController.abort();
+    }
+    options.deps.recordInteractiveHealthEnd?.(binding.bridgeSessionId, 'aborted', detail);
+    return `旧会话「${taskName}」任务已停止，可继续发送消息恢复该线程。`;
+  }
+  return '当前没有正在运行的任务。';
+}
+
+export function handlePermissionCommand(options: {
+  args: string;
+  chatId: string;
+  currentBinding: ChannelChat | null;
+  store: BridgeStore;
+}): string {
+  const permParts = options.args.split(/\s+/);
+  const permAction = permParts[0];
+  const permId = permParts.slice(1).join(' ');
+  if (!permAction || !permId || !['allow', 'allow_session', 'deny'].includes(permAction)) {
+    return '用法：/perm allow|allow_session|deny <permission_id>';
+  }
+  const link = options.store.getPermissionLink(permId);
+  if (!link) {
+    return '没有找到对应权限，或该权限已处理。';
+  }
+  if (
+    options.currentBinding?.bridgeSessionId
+    && link.sessionId
+    && link.sessionId !== options.currentBinding.bridgeSessionId
+  ) {
+    return '这条权限请求不属于当前会话。请先切回对应会话，再处理该权限。';
+  }
+  const callbackData = `perm:${permAction}:${permId}`;
+  const handled = broker.handlePermissionCallback(callbackData, options.chatId);
+  return handled
+    ? `已记录权限操作：${permAction}`
+    : '没有找到对应权限，或该权限已处理。';
+}

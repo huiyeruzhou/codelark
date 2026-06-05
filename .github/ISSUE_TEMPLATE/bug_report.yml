@@ -1,0 +1,82 @@
+name: Bug report
+description: Report a reproducible CodeLark problem
+title: "[Bug]: "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting a problem. Please remove secrets, tokens, App Secret values, user IDs, and chat IDs before posting logs.
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: What happened, and what did you expect instead?
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to reproduce
+      description: Include the commands or IM messages that trigger the issue.
+      placeholder: |
+        1. Run ...
+        2. Send ...
+        3. See ...
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: Output of `codelark --version` or the npm package version.
+    validations:
+      required: true
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating system
+      options:
+        - Windows 10/11
+        - macOS
+        - Linux
+        - Other
+    validations:
+      required: true
+  - type: input
+    id: node
+    attributes:
+      label: Node.js version
+      description: Output of `node --version`; CodeLark requires Node.js 24+.
+    validations:
+      required: true
+  - type: textarea
+    id: runtime
+    attributes:
+      label: Runtime and provider
+      description: Which runtime/provider is involved?
+      placeholder: "Codex SDK / Codex pty / Codex tmux / Claude SDK / Claude pty"
+  - type: textarea
+    id: status
+    attributes:
+      label: Status output
+      description: Paste `codelark status` output after removing sensitive values.
+      render: text
+  - type: textarea
+    id: logs
+    attributes:
+      label: Recent logs
+      description: Paste the last 50 lines from `~/.codelark/logs/bridge.log` after removing sensitive values.
+      render: text
+  - type: textarea
+    id: self_check
+    attributes:
+      label: Self-check prompt
+      description: You can paste this into Codex or another AI coding assistant before submitting.
+      value: |
+        请帮我排查 CodeLark 桥接服务的问题。
+        1. 读取 ~/.codelark/logs/bridge.log 最近 50 行日志
+        2. 读取 ~/.codelark/config.env 检查配置是否正确
+        3. 如果当前仓库存在 scripts/doctor.ps1，就运行 powershell -ExecutionPolicy Bypass -File .\scripts\doctor.ps1 并分析输出
+        4. 根据日志和配置给出具体的修复建议

@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://codelark.local/schemas/data/messages.v1.schema.json",
+  "title": "CodeLark data/messages/*.json",
+  "description": "Per-session bridge message history arrays.",
+  "type": "array",
+  "items": {
+    "type": "object",
+    "required": ["role", "content"],
+    "properties": {
+      "role": {
+        "type": "string"
+      },
+      "content": {
+        "type": "string"
+      },
+      "timestamp": {
+        "type": "string"
+      }
+    },
+    "additionalProperties": true
+  }
+}

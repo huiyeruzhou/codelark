@@ -1,0 +1,161 @@
+import '../../../setup/test-setup.js';
+import { beforeEach, describe, it } from 'node:test';
+import assert from 'node:assert/strict';
+
+import { SessionRegistryService } from '../../../../bridge/session/registry.js';
+import { getSessionWorkingDirectory } from '../../../../domain/session-runtime.js';
+import { JsonFileStore } from '../../../../storage/json-store.js';
+import { makeBridgeSettings, resetBridgeTestState } from '../../../helpers/bridge/test-bridge-utils.js';
+
+describe('SessionRegistryService', () => {
+  beforeEach(() => {
+    resetBridgeTestState();
+  });
+
+  it('binds a chat to a BridgeSession using canonical service vocabulary', () => {
+    const store = new JsonFileStore(makeBridgeSettings());
+    const registry = new SessionRegistryService(store);
+    const session = store.createSession('Bridge target', 'test-model', undefined, '/tmp/bridge-target');
+
+    const binding = registry.bindChatToBridgeSession({
+      channelType: 'feishu',
+      chatId: 'chat-bridge',
+      userId: 'ou_bridge',
+      displayName: 'Bridge User',
+    }, session.id);
+
+    assert.ok(binding);
+    assert.equal(binding.bridgeSessionId, session.id);
+    assert.equal(binding.chatUserId, 'ou_bridge');
+    assert.equal(store.getSession(session.id)?.name, 'Bridge target');
+  });
+
+  it('imports a Codex thread into a BridgeSession before binding the chat', () => {
+    const store = new JsonFileStore(makeBridgeSettings());
+    const registry = new SessionRegistryService(store);
+
+    const binding = registry.importCodexThreadForChat({
+      channelType: 'feishu',
+      chatId: 'chat-codex-thread',
+      displayName: 'Thread User',
+    }, 'codex-thread-registry', {
+      workingDirectory: '/tmp/codex-thread',
+      displayName: 'Imported Codex Thread',
+    });
+    const session = store.getSession(binding.bridgeSessionId);
+
+    assert.ok(session);
+    assert.equal(session.runtime?.codex?.threadId, 'codex-thread-registry');
+    assert.equal(session.name, 'Thread User');
+    assert.equal(session.runtime?.codex?.title, 'Imported Codex Thread');
+    assert.equal(getSessionWorkingDirectory(session), '/tmp/codex-thread');
+  });
+
+  it('materializes, renames, configures, and deletes BridgeSessions by canonical id', () => {
+    const store = new JsonFileStore(makeBridgeSettings());
+    const registry = new SessionRegistryService(store, {
+      codexThreads: {
+        getThread: (codexThreadId) => ({
+          codexThreadId,
+          title: 'Local Codex Thread',
+          cwd: '/tmp/local-codex-thread',
+        }),
+      },
+      readDefaultModel: () => 'model-from-port',
+    });
+
+    const materialized = registry.materializeCodexThread('codex-thread-materialized');
+    assert.equal(materialized.runtime?.codex?.threadId, 'codex-thread-materialized');
+    assert.equal(materialized.name, '');
+    assert.equal(materialized.runtime?.codex?.title, 'Local Codex Thread');
+    assert.equal(materialized.runtime?.codex?.model, 'model-from-port');
+
+    const renamed = registry.renameBridgeSession(materialized.id, 'Renamed BridgeSession');
+    assert.equal(renamed.name, 'Renamed BridgeSession');
+
+    const configured = registry.updateBridgeSessionConfig(materialized.id, {
+      runtime: { codex: { mode: 'yolo', provider: 'tmux' } },
+    });
+    assert.equal(configured.runtime?.codex?.mode, 'yolo');
+    assert.equal(configured.runtime?.codex?.provider, 'tmux');
+
+    const deleted = registry.deleteBridgeSession(materialized.id);
+    assert.equal(deleted.deleted.id, materialized.id);
+    assert.deepEqual(deleted.deletedBridgeSessionIds, [materialized.id]);
+    assert.equal(store.getSession(materialized.id), null);
+  });
+
+  it('archives a Codex thread and deletes linked BridgeSessions', () => {
+    const store = new JsonFileStore(makeBridgeSettings());
+    let archivedThreadId = '';
+    const registry = new SessionRegistryService(store, {
+      codexThreads: {
+        getThread: (codexThreadId) => ({
+          codexThreadId,
+          title: 'Archive target',
+          cwd: '/tmp/archive-target',
+        }),
+        archiveThread: (codexThreadId) => {
+          archivedThreadId = codexThreadId;
+          return true;
+        },
+      },
+      readDefaultModel: () => 'test-model',
+    });
+    const first = registry.materializeCodexThread('codex-thread-archive');
+    const second = store.createSession('linked duplicate', 'test-model', undefined, '/tmp/archive-target');
+    store.updateSessionCodexThreadId(second.id, 'codex-thread-archive');
+
+    const result = registry.archiveCodexThread('codex-thread-archive');
+
+    assert.equal(archivedThreadId, 'codex-thread-archive');
+    assert.deepEqual(result.deletedBridgeSessionIds.sort(), [first.id, second.id].sort());
+    assert.equal(store.getSession(first.id), null);
+    assert.equal(store.getSession(second.id), null);
+  });
+
+  it('materializes and archives Claude Code sessions through the registry port', () => {
+    const store = new JsonFileStore(makeBridgeSettings());
+    const archived: Array<{ sessionId: string; cwd: string }> = [];
+    const registry = new SessionRegistryService(store, {
+      claudeThreads: {
+        getThread: (claudeSessionId, cwd) => (
+          claudeSessionId === 'claude-registry-session' && cwd === '/tmp/claude-registry'
+            ? { claudeSessionId, title: 'Local Claude Session', cwd }
+            : null
+        ),
+        archiveThread: (claudeSessionId, cwd) => {
+          archived.push({ sessionId: claudeSessionId, cwd });
+          return claudeSessionId === 'claude-registry-session' && cwd === '/tmp/claude-registry';
+        },
+      },
+      readDefaultModel: () => 'model-from-port',
+    });
+
+    const materialized = registry.materializeClaudeThread('claude-registry-session', '/tmp/claude-registry');
+    assert.equal(materialized.runtime?.activeRuntime, 'claude');
+    assert.equal(materialized.runtime?.claude?.sessionId, 'claude-registry-session');
+    assert.equal(getSessionWorkingDirectory(materialized), '/tmp/claude-registry');
+
+    const renamed = registry.renameClaudeThread('claude-registry-session', '/tmp/claude-registry', 'Renamed Claude Session');
+    assert.equal(renamed.name, 'Renamed Claude Session');
+
+    const result = registry.archiveClaudeThread('claude-registry-session', '/tmp/claude-registry');
+    assert.deepEqual(archived, [{ sessionId: 'claude-registry-session', cwd: '/tmp/claude-registry' }]);
+    assert.deepEqual(result.deletedBridgeSessionIds, [materialized.id]);
+    assert.equal(store.getSession(materialized.id), null);
+  });
+
+  it('sets channel default targets by BridgeSession id', () => {
+    const store = new JsonFileStore(makeBridgeSettings());
+    const registry = new SessionRegistryService(store);
+    const session = store.createSession('Default target', 'test-model', undefined, '/tmp/default-target');
+
+    const defaultTarget = registry.setChannelDefaultBridgeSession('feishu', session.id);
+
+    assert.equal(defaultTarget.bridgeSessionId, session.id);
+    assert.equal(defaultTarget.targetSessionId, session.id);
+    registry.removeChannelDefaultTarget('feishu');
+    assert.equal(store.getChannelDefaultTarget('feishu'), null);
+  });
+});

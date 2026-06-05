@@ -1,0 +1,159 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://codelark.local/schemas/data/channel-chats.v1.schema.json",
+  "title": "CodeLark data/channel-chats.json",
+  "description": "Map of channel chat binding id to one ChannelChat record. Each channel/chat pair has at most one record.",
+  "type": "object",
+  "additionalProperties": {
+    "$ref": "#/$defs/channelChat"
+  },
+  "$defs": {
+    "channelChat": {
+      "type": "object",
+      "required": [
+        "id",
+        "channelType",
+        "chatId",
+        "bridgeSessionId",
+        "createdAt",
+        "updatedAt"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "channelType": {
+          "type": "string",
+          "minLength": 1
+        },
+        "channelProvider": {
+          "type": "string"
+        },
+        "channelAlias": {
+          "type": "string"
+        },
+        "chatId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "chatKind": {
+          "enum": ["p2p", "group"]
+        },
+        "chatUserId": {
+          "type": "string"
+        },
+        "bridgeSessionId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "runtimeBridgeSessionIds": {
+          "type": "object",
+          "properties": {
+            "codex": {
+              "type": "string",
+              "minLength": 1
+            },
+            "claude": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "additionalProperties": false
+        },
+        "cloudDocumentChat": {
+          "type": "object",
+          "required": ["provider", "fileToken", "fileType"],
+          "properties": {
+            "provider": {
+              "const": "feishu"
+            },
+            "fileToken": {
+              "type": "string",
+              "minLength": 1
+            },
+            "fileType": {
+              "enum": ["doc", "docx", "sheet", "file"]
+            }
+          },
+          "additionalProperties": false
+        },
+        "createdAt": {
+          "type": "string"
+        },
+        "updatedAt": {
+          "type": "string"
+        },
+        "lastActivityAt": {
+          "type": "string"
+        }
+      },
+      "allOf": [
+        {
+          "$ref": "#/$defs/noLegacyBindingRuntimeFields"
+        }
+      ],
+      "additionalProperties": false
+    },
+    "noLegacyBindingRuntimeFields": {
+      "not": {
+        "anyOf": [
+          {
+            "required": ["active"]
+          },
+          {
+            "required": ["chatDisplayName"]
+          },
+          {
+            "required": ["workingDirectory"]
+          },
+          {
+            "required": ["model"]
+          },
+          {
+            "required": ["mode"]
+          },
+          {
+            "required": ["codex_thread_id"]
+          },
+          {
+            "required": ["codexThreadId"]
+          },
+          {
+            "required": ["sdk_session_id"]
+          },
+          {
+            "required": ["sdkSessionId"]
+          },
+          {
+            "required": ["desktop_thread_id"]
+          },
+          {
+            "required": ["desktopThreadId"]
+          },
+          {
+            "required": ["thread_origin"]
+          },
+          {
+            "required": ["threadOrigin"]
+          },
+          {
+            "required": ["thread_id"]
+          },
+          {
+            "required": ["threadId"]
+          },
+          {
+            "required": ["codepilotSessionId"]
+          },
+          {
+            "required": ["codepilot_session_id"]
+          },
+          {
+            "required": ["bridge_session_id"]
+          }
+        ]
+      }
+    }
+  }
+}
