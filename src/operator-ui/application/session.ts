@@ -1,5 +1,7 @@
 import MarkdownIt from 'markdown-it';
 
+import { createConfigService } from '../../configuration/service.js';
+import type { ConfigPatch } from '../../configuration/schema.js';
 import {
   SessionDisplayQuery,
   buildBridgeSessionDisplaySummary,
@@ -13,6 +15,7 @@ import {
 import { stripLegacySessionPrefix } from '../../bridge/session/display/session-title.js';
 import type { ChannelChat } from '../../domain/channel.js';
 import type { BridgeSession, BridgeSessionUpdate } from '../../domain/session.js';
+import type { ConfigPath } from '../../configuration/fields-types.js';
 import {
   resolveSessionTranscriptFile,
   type SessionTranscriptHistoryEntry,
@@ -129,6 +132,144 @@ function getStoredCodexThreadId(session: BridgeSession): string {
 
 function bridgeSessionToSummary(session: BridgeSession): UiSessionSummary {
   return buildBridgeSessionDisplaySummary(session);
+}
+
+function getSessionConfigTomlOverride<T>(session: BridgeSession, path: ConfigPath): T | undefined {
+  try {
+    const resolved = createConfigService({ migrate: false }).resolve(path, {
+      kind: 'session',
+      sessionId: session.id,
+    });
+    return resolved.source === 'session' ? resolved.value as T : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function setOrUnsetSessionConfig(
+  sessionId: string,
+  path: ConfigPath,
+  value: unknown,
+  patchForValue: (value: never) => ConfigPatch,
+): void {
+  const service = createConfigService({ migrate: false });
+  if (value === undefined || value === '') {
+    service.unset({ kind: 'session', sessionId }, path);
+    return;
+  }
+  service.set({ kind: 'session', sessionId }, patchForValue(value as never));
+}
+
+function applySessionConfigToml(bridgeSessionId: string, payload: Record<string, unknown>): void {
+  const activeRuntime = payload.activeRuntime === 'claude' ? 'claude' : 'codex';
+  if (typeof payload.workingDirectory === 'string') {
+    const workspace = payload.workingDirectory.trim() || process.cwd();
+    createConfigService({ migrate: false }).set(
+      { kind: 'session', sessionId: bridgeSessionId },
+      { session: { workspace } },
+    );
+  }
+
+  if (activeRuntime === 'claude') {
+    if (typeof payload.claudeModel === 'string') {
+      setOrUnsetSessionConfig(
+        bridgeSessionId,
+        'runtime.claude.model',
+        payload.claudeModel.trim(),
+        (model) => ({ runtime: { claude: { model } } }),
+      );
+    }
+    if (
+      payload.claudePermissionMode === 'acceptEdits'
+      || payload.claudePermissionMode === 'bypassPermissions'
+      || payload.claudePermissionMode === 'plan'
+      || payload.claudePermissionMode === 'default'
+      || payload.claudePermissionMode === ''
+    ) {
+      setOrUnsetSessionConfig(
+        bridgeSessionId,
+        'runtime.claude.yoloMode',
+        payload.claudePermissionMode === ''
+          ? ''
+          : payload.claudePermissionMode === 'bypassPermissions' ? 'on' : 'off',
+        (yoloMode) => ({ runtime: { claude: { yoloMode } } }),
+      );
+    }
+    if (
+      payload.claudeReasoningEffort === 'low'
+      || payload.claudeReasoningEffort === 'medium'
+      || payload.claudeReasoningEffort === 'high'
+      || payload.claudeReasoningEffort === 'xhigh'
+      || payload.claudeReasoningEffort === ''
+    ) {
+      setOrUnsetSessionConfig(
+        bridgeSessionId,
+        'runtime.claude.reasoningEffort',
+        payload.claudeReasoningEffort,
+        (reasoningEffort) => ({ runtime: { claude: { reasoningEffort } } }),
+      );
+    }
+    return;
+  }
+
+  if (typeof payload.model === 'string') {
+    setOrUnsetSessionConfig(
+      bridgeSessionId,
+      'runtime.codex.model',
+      payload.model.trim(),
+      (model) => ({ runtime: { codex: { model } } }),
+    );
+  }
+  if (payload.preferredMode === 'yolo' || payload.preferredMode === 'normal' || payload.preferredMode === 'code') {
+    setOrUnsetSessionConfig(
+      bridgeSessionId,
+      'runtime.codex.yoloMode',
+      payload.preferredMode === 'yolo' ? 'on' : 'off',
+      (yoloMode) => ({ runtime: { codex: { yoloMode } } }),
+    );
+  }
+  if (payload.codexProvider === 'sdk' || payload.codexProvider === 'tmux' || payload.codexProvider === 'pty' || payload.codexProvider === '') {
+    setOrUnsetSessionConfig(
+      bridgeSessionId,
+      'runtime.codex.provider',
+      payload.codexProvider,
+      (provider) => ({ runtime: { codex: { provider } } }),
+    );
+  }
+  if (
+    payload.reasoningEffort === 'minimal'
+    || payload.reasoningEffort === 'low'
+    || payload.reasoningEffort === 'medium'
+    || payload.reasoningEffort === 'high'
+    || payload.reasoningEffort === 'xhigh'
+    || payload.reasoningEffort === ''
+  ) {
+    setOrUnsetSessionConfig(
+      bridgeSessionId,
+      'runtime.codex.reasoningEffort',
+      payload.reasoningEffort,
+      (reasoningEffort) => ({ runtime: { codex: { reasoningEffort } } }),
+    );
+  }
+  if (
+    payload.codexSandboxMode === 'read-only'
+    || payload.codexSandboxMode === 'workspace-write'
+    || payload.codexSandboxMode === 'danger-full-access'
+    || payload.codexSandboxMode === ''
+  ) {
+    setOrUnsetSessionConfig(
+      bridgeSessionId,
+      'runtime.codex.sandboxMode',
+      payload.codexSandboxMode,
+      (sandboxMode) => ({ runtime: { codex: { sandboxMode } } }),
+    );
+  }
+  if (payload.codexNetworkAccess === true || payload.codexNetworkAccess === false) {
+    createConfigService({ migrate: false }).set(
+      { kind: 'session', sessionId: bridgeSessionId },
+      { runtime: { codex: { networkAccess: payload.codexNetworkAccess } } },
+    );
+  }
 }
 
 function runtimeSessionToSummary(runtimeSource: UiSessionRuntimeSource, store: JsonFileStore, runtime: 'codex' | 'claude', threadId: string, cwd?: string): UiSessionSummary | null {
@@ -250,6 +391,10 @@ function sanitizeSessionConfig(payload: Record<string, unknown>): BridgeSessionU
 
 function sessionConfigPayload(session: BridgeSession) {
   const activeRuntime = getSessionActiveRuntime(session) || 'codex';
+  const codexYoloMode = getSessionConfigTomlOverride<'off' | 'on' | 'yolo'>(session, 'runtime.codex.yoloMode');
+  const claudeYoloMode = getSessionConfigTomlOverride<'off' | 'on' | 'yolo'>(session, 'runtime.claude.yoloMode');
+  const claudePermissionMode = getSessionClaudePermissionMode(session)
+    || (claudeYoloMode === 'on' || claudeYoloMode === 'yolo' ? 'bypassPermissions' : claudeYoloMode === 'off' ? 'default' : undefined);
   return {
     id: session.id,
     bridgeSessionId: session.id,
@@ -258,16 +403,16 @@ function sessionConfigPayload(session: BridgeSession) {
     codexTitle: getSessionCodexTitle(session) || '',
     title: getBridgeSessionTitle(session),
     workingDirectory: getSessionWorkingDirectory(session) || '',
-    model: getSessionCodexModel(session) || '',
-    preferredMode: getSessionCodexMode(session) === 'yolo' ? 'yolo' : 'normal',
-    codexProvider: getSessionCodexProvider(session) || '',
+    model: getSessionConfigTomlOverride<string>(session, 'runtime.codex.model') || getSessionCodexModel(session) || '',
+    preferredMode: (codexYoloMode === 'on' || codexYoloMode === 'yolo' || getSessionCodexMode(session) === 'yolo') ? 'yolo' : 'normal',
+    codexProvider: getSessionConfigTomlOverride<string>(session, 'runtime.codex.provider') || getSessionCodexProvider(session) || '',
     systemPrompt: getSessionSystemPrompt(session) || '',
-    reasoningEffort: getSessionCodexReasoningEffort(session) || '',
-    codexSandboxMode: getSessionCodexSandboxMode(session) || '',
-    codexNetworkAccess: getSessionCodexNetworkAccess(session),
-    claudeModel: getSessionClaudeModel(session) || '',
-    claudePermissionMode: getSessionClaudePermissionMode(session) || '',
-    claudeReasoningEffort: getSessionClaudeReasoningEffort(session) || '',
+    reasoningEffort: getSessionConfigTomlOverride<string>(session, 'runtime.codex.reasoningEffort') || getSessionCodexReasoningEffort(session) || '',
+    codexSandboxMode: getSessionConfigTomlOverride<string>(session, 'runtime.codex.sandboxMode') || getSessionCodexSandboxMode(session) || '',
+    codexNetworkAccess: getSessionConfigTomlOverride<boolean>(session, 'runtime.codex.networkAccess') ?? getSessionCodexNetworkAccess(session),
+    claudeModel: getSessionConfigTomlOverride<string>(session, 'runtime.claude.model') || getSessionClaudeModel(session) || '',
+    claudePermissionMode: claudePermissionMode || '',
+    claudeReasoningEffort: getSessionConfigTomlOverride<string>(session, 'runtime.claude.reasoningEffort') || getSessionClaudeReasoningEffort(session) || '',
   };
 }
 
@@ -405,6 +550,7 @@ export class UiSessionApplication {
     const registry = this.createSessionRegistry();
     const updates = sanitizeSessionConfig(payload);
     const updated = registry.updateBridgeSessionConfig(bridgeSessionId, updates);
+    applySessionConfigToml(bridgeSessionId, payload);
     return sessionConfigPayload(updated);
   }
 
