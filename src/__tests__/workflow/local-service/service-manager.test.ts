@@ -159,6 +159,55 @@ describe('service-manager bridge startup failure messaging', () => {
 });
 
 describe('service-manager lark-cli runtime environment', () => {
+  it('loads startup preflight config from ConfigService instead of legacy env files', () => {
+    const home = process.env.CODELARK_HOME!;
+    const configTomlPath = path.join(home, 'config.toml');
+    const configEnvPath = path.join(home, 'config.env');
+    const previousToml = fs.existsSync(configTomlPath) ? fs.readFileSync(configTomlPath, 'utf-8') : null;
+    const previousEnvFile = fs.existsSync(configEnvPath) ? fs.readFileSync(configEnvPath, 'utf-8') : null;
+
+    try {
+      fs.writeFileSync(configTomlPath, [
+        'schema_version = 2',
+        '',
+        '[runtime]',
+        'provider = "claude"',
+        '',
+        '[runtime.codex]',
+        'provider = "tmux"',
+        '',
+        '[[channels]]',
+        'id = "feishu-default"',
+        'alias = "飞书"',
+        'provider = "feishu"',
+        'enabled = true',
+        '',
+        '[channels.config]',
+        'app_id = "toml-app"',
+        'app_secret = "toml-secret"',
+        '',
+      ].join('\n'));
+      fs.writeFileSync(configEnvPath, [
+        'CODELARK_RUNTIME=codex',
+        'CODELARK_DEFAULT_CODEX_PROVIDER=pty',
+        'CODELARK_FEISHU_APP_ID=legacy-app',
+        '',
+      ].join('\n'));
+
+      const config = _testOnly.loadStartupConfig();
+
+      assert.equal(config.runtime, 'claude');
+      assert.equal(config.defaultProvider, 'tmux');
+      assert.equal(config.channels?.[0]?.config.appId, 'toml-app');
+      assert.equal(config.channels?.[0]?.config.appSecret, 'toml-secret');
+    } finally {
+      if (previousToml === null) fs.rmSync(configTomlPath, { force: true });
+      else fs.writeFileSync(configTomlPath, previousToml, 'utf-8');
+      if (previousEnvFile === null) fs.rmSync(configEnvPath, { force: true });
+      else fs.writeFileSync(configEnvPath, previousEnvFile, 'utf-8');
+    }
+  });
+
   it('builds daemon env from v2 config projection and ignores legacy config.env files', () => {
     const home = process.env.CODELARK_HOME!;
     const configTomlPath = path.join(home, 'config.toml');

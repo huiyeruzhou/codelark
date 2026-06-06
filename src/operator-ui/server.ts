@@ -5,10 +5,11 @@ import path from 'node:path';
 
 import {
   CODELARK_HOME,
-  loadConfig,
   type Config,
 } from '../configuration/index.js';
+import { configV2ToLegacyConfig } from '../configuration/legacy.js';
 import { loadRuntimeSettings } from '../configuration/runtime-settings-projection.js';
+import { createConfigService } from '../configuration/service.js';
 import {
   getUiServerUrl,
   writeUiServerStatus,
@@ -87,11 +88,18 @@ function createUiStore(): JsonFileStore {
   return new JsonFileStore(loadRuntimeSettings({ codelarkHome: CODELARK_HOME }));
 }
 
+function loadUiConfig(): Config {
+  return configV2ToLegacyConfig(createConfigService({
+    codelarkHome: CODELARK_HOME,
+    migrate: false,
+  }).snapshot().config);
+}
+
 const server = http.createServer(async (request, response) => {
   try {
     const currentUrl = getUiServerUrl(port);
     const url = new URL(request.url || '/', currentUrl);
-    const config = loadConfig();
+    const config = loadUiConfig();
     const auth = getUiAuthState(request, config);
 
     if (await handleUiAuthRoute({
@@ -120,7 +128,7 @@ const server = http.createServer(async (request, response) => {
       response,
       url,
       createStore: createUiStore,
-      readConfig: loadConfig,
+      readConfig: loadUiConfig,
       buildBindingsPayload: buildUiBindingsPayload,
     })) return;
 

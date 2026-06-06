@@ -7,7 +7,6 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import {
   CODELARK_HOME,
-  loadConfig,
   type Config,
   type FeishuChannelConfig,
 } from '../configuration/index.js';
@@ -126,10 +125,9 @@ function hasConfigPatchValues(patch: ConfigPatch | undefined): boolean {
 }
 
 function loadCliEffectiveConfig(cli: ConfigPatch | undefined): Config {
-  if (!hasConfigPatchValues(cli)) return loadConfig();
   return configV2ToLegacyConfig(createConfigService({
     codelarkHome: CODELARK_HOME,
-    cli,
+    ...(hasConfigPatchValues(cli) ? { cli } : {}),
   }).snapshot().config);
 }
 

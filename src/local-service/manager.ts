@@ -5,7 +5,7 @@ import { spawn } from 'node:child_process';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 
-import { CODELARK_HOME, loadConfig } from '../configuration/index.js';
+import { CODELARK_HOME } from '../configuration/index.js';
 import type { ChannelInstance, Config, FeishuChannelConfig } from '../configuration/index.js';
 import { configV2ToLegacyConfig } from '../configuration/legacy.js';
 import { createConfigService } from '../configuration/service.js';
@@ -608,10 +608,9 @@ function hasConfigPatchValues(patch: ConfigPatch | undefined): boolean {
 }
 
 function loadStartupConfig(options: ServiceConfigOverrideOptions = {}): Config {
-  if (!hasConfigPatchValues(options.cli)) return loadConfig();
   return configV2ToLegacyConfig(createConfigService({
     codelarkHome: CODELARK_HOME,
-    cli: options.cli,
+    ...(hasConfigPatchValues(options.cli) ? { cli: options.cli } : {}),
   }).snapshot().config);
 }
 
@@ -745,7 +744,7 @@ function hasLegacyStrictLarkCliRuntime(config: Config): boolean {
   return target.app.strictMode === 'bot' || target.app.defaultAs === 'bot';
 }
 
-export function resetLegacyStrictLarkCliRuntimeForSetup(config = loadConfig()): boolean {
+export function resetLegacyStrictLarkCliRuntimeForSetup(config = loadStartupConfig()): boolean {
   // 旧版 setup 会把私有 lark-cli workspace 绑定成 bot-only。
   // 这个策略会在 OAuth 成功后继续拒绝显式 `--as user` 命令，
   // 所以下一次交互式 setup 必须从头重建隔离 runtime。
@@ -793,7 +792,7 @@ async function runBundledLarkCli(
   });
 }
 
-export async function ensureLarkCliRuntimeConfig(config = loadConfig()): Promise<{
+export async function ensureLarkCliRuntimeConfig(config = loadStartupConfig()): Promise<{
   ready: boolean;
   skipped: boolean;
   sourceConfigFile?: string;
@@ -1081,6 +1080,7 @@ export const _testOnly = {
   clearStaleBridgeInstanceLock,
   buildDaemonEnv,
   buildUiServerEnv,
+  loadStartupConfig,
   buildLarkCliRuntimeEnv,
   writeLarkCliSourceProjection,
   hasTargetLarkCliUsers,
