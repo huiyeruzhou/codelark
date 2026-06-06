@@ -2,11 +2,11 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 
 import {
   findChannelInstance,
-  loadConfig,
-  saveConfig,
   type ChannelInstance,
   type Config,
 } from '../../configuration/index.js';
+import { configV2ToLegacyConfig, legacyConfigToConfigPatch } from '../../configuration/legacy.js';
+import { createConfigService } from '../../configuration/service.js';
 import {
   channelToPayload,
   configToPayload,
@@ -71,8 +71,12 @@ function syncBindingChannelMeta(store: UiChannelRouteStore, channel: ChannelInst
   }
 }
 
-function saveHomeTomlConfig(config: Config): void {
-  saveConfig({ ...config, schemaVersion: 2 });
+function readHomeTomlConfig(): Config {
+  return configV2ToLegacyConfig(createConfigService({ migrate: false }).snapshot().config);
+}
+
+function replaceHomeTomlConfig(config: Config): void {
+  createConfigService({ migrate: false }).replace({ kind: 'home' }, legacyConfigToConfigPatch(config));
 }
 
 export async function handleUiChannelRoute(options: {
@@ -89,8 +93,8 @@ export async function handleUiChannelRoute(options: {
     response,
     url,
     createStore,
-    readConfig = loadConfig,
-    writeConfig = saveHomeTomlConfig,
+    readConfig = readHomeTomlConfig,
+    writeConfig = replaceHomeTomlConfig,
     buildBindingsPayload,
   } = options;
 

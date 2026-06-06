@@ -58,6 +58,7 @@ export interface ConfigService {
   resolve(path: ConfigPath, scope?: ConfigScope, request?: ConfigPatch): ConfigResolveResult;
   explain(path?: ConfigPath, scope?: ConfigScope): ConfigExplainEntry[];
   set(target: ConfigWriteTarget, patch: ConfigPatch): void;
+  replace(target: ConfigWriteTarget, patch: ConfigPatch): void;
   unset(target: ConfigWriteTarget, path: ConfigPath): void;
   exportRuntimeSettings(scope?: ConfigScope): Map<string, string>;
   exportProcessEnv(scope?: ConfigScope): NodeJS.ProcessEnv;
@@ -268,6 +269,10 @@ export function createConfigService(options: ConfigServiceOptions = {}): ConfigS
       const file = targetFile(target);
       const current = readTomlConfig(file)?.patch || {};
       writeTomlConfig(file, mergePatch(current, writablePatch));
+    },
+    replace(target: ConfigWriteTarget, patch: ConfigPatch): void {
+      const writablePatch = validateWritablePatch(target, patch);
+      writeTomlConfig(targetFile(target), writablePatch);
     },
     unset(target: ConfigWriteTarget, path: ConfigPath): void {
       validateWritablePath(target, path);

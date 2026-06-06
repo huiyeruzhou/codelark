@@ -178,6 +178,65 @@ describe('handleUiChannelRoute', () => {
     assert.match(body.error || '', /仍有聊天绑定/);
   });
 
+  it('deletes channels from home config.toml through the default ConfigService writer', async () => {
+    const configTomlPath = path.join(CODELARK_HOME, 'config.toml');
+    const previousToml = fs.existsSync(configTomlPath) ? fs.readFileSync(configTomlPath, 'utf-8') : null;
+    try {
+      fs.mkdirSync(CODELARK_HOME, { recursive: true });
+      fs.writeFileSync(configTomlPath, `
+schema_version = 2
+
+[runtime]
+provider = "codex"
+
+[[channels]]
+id = "feishu-default"
+alias = "飞书"
+provider = "feishu"
+enabled = true
+
+[channels.config]
+history_message_limit = 8
+app_id = "default-app"
+app_secret = "default-secret"
+
+[[channels]]
+id = "feishu-ops"
+alias = "Ops"
+provider = "feishu"
+enabled = true
+
+[channels.config]
+app_id = "ops-app"
+app_secret = "ops-secret"
+`);
+
+      const store = createMemoryStore();
+      const response = createResponse();
+      const handled = await handleUiChannelRoute({
+        request: createJsonRequest({ channelId: 'feishu-ops' }),
+        response,
+        url: new URL('http://localhost/api/channels/delete'),
+        createStore: () => store,
+        buildBindingsPayload: async () => ({ bindings: [], options: [], channelDefaults: [] }),
+      });
+
+      assert.equal(handled, true);
+      assert.equal(response.statusCodeWritten, 200);
+      const body = JSON.parse(response.body) as { ok?: boolean; config?: { channels?: Array<{ id?: string }> } };
+      assert.equal(body.ok, true);
+      assert.deepEqual(body.config?.channels?.map((channel) => channel.id), ['feishu-default']);
+      assert.equal(store.deletedDefaults.includes('feishu-ops'), true);
+      const savedToml = fs.readFileSync(configTomlPath, 'utf-8');
+      assert.match(savedToml, /feishu-default/);
+      assert.doesNotMatch(savedToml, /feishu-ops/);
+      assert.doesNotMatch(savedToml, /ops-secret/);
+    } finally {
+      if (previousToml === null) fs.rmSync(configTomlPath, { force: true });
+      else fs.writeFileSync(configTomlPath, previousToml, 'utf-8');
+    }
+  });
+
   it('ignores routes owned by other UI modules', async () => {
     const response = createResponse();
     const handled = await handleUiChannelRoute({

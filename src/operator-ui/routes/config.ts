@@ -1,6 +1,7 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 
-import { loadConfig, saveConfig } from '../../configuration/index.js';
+import { configV2ToLegacyConfig, legacyConfigToConfigPatch } from '../../configuration/legacy.js';
+import { createConfigService } from '../../configuration/service.js';
 import {
   configToPayload,
   mergeConfig,
@@ -28,15 +29,17 @@ export async function handleUiConfigRoute(options: {
   const { request, response, url } = options;
 
   if (request.method === 'GET' && url.pathname === '/api/config') {
-    json(response, 200, configToPayload(loadConfig()));
+    const service = createConfigService({ migrate: false });
+    json(response, 200, configToPayload(configV2ToLegacyConfig(service.snapshot().config)));
     return true;
   }
 
   if (request.method === 'POST' && url.pathname === '/api/config') {
     const payload = await readJsonBody<Record<string, unknown>>(request);
-    const config = mergeConfig(loadConfig(), payload);
-    saveConfig({ ...config, schemaVersion: 2 });
-    json(response, 200, { ok: true, config: configToPayload(loadConfig()) });
+    const service = createConfigService({ migrate: false });
+    const config = mergeConfig(configV2ToLegacyConfig(service.snapshot().config), payload);
+    service.replace({ kind: 'home' }, legacyConfigToConfigPatch(config));
+    json(response, 200, { ok: true, config: configToPayload(configV2ToLegacyConfig(service.snapshot().config)) });
     return true;
   }
 

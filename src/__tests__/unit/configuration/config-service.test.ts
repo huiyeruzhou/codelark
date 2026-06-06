@@ -231,7 +231,7 @@ app_secret = "home-app-secret"
     }
   });
 
-  it('writes and unsets TOML partials through the service API', () => {
+  it('writes, replaces, and unsets TOML through the service API', () => {
     const home = tempHome();
     try {
       const service = createConfigService({ codelarkHome: home, env: {} });
@@ -246,6 +246,21 @@ app_secret = "home-app-secret"
 
       service.unset({ kind: 'home' }, 'runtime.codex.reasoningEffort');
       assert.equal(service.get('runtime.codex.reasoningEffort'), 'medium');
+
+      service.replace({ kind: 'home' }, {
+        schemaVersion: 2,
+        runtime: { provider: 'claude' },
+        channels: [{
+          id: 'feishu-default',
+          alias: '飞书',
+          provider: 'feishu',
+          enabled: true,
+          config: { historyMessageLimit: 12 },
+        }],
+      });
+      assert.equal(service.get('runtime.provider'), 'claude');
+      assert.equal(service.get('channels[].config.historyMessageLimit'), 12);
+      assert.equal(service.get('bridge.uiAllowLan'), false);
     } finally {
       fs.rmSync(home, { recursive: true, force: true });
     }
