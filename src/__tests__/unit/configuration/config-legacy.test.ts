@@ -166,6 +166,22 @@ describe('legacy config compatibility adapter', () => {
     assert.equal(patch.channels?.[0]?.config?.requireMention, false);
   });
 
+  it('materializes the default channel when old global channel behavior fields are saved without channels', () => {
+    const legacy: Config = {
+      runtime: 'codex',
+      defaultMode: 'normal',
+      historyMessageLimit: 12,
+      enabledChannels: [],
+    };
+
+    const patch = configPatchSchema.parse(legacyConfigToConfigPatch(legacy));
+    assert.equal(patch.channels?.[0]?.id, 'feishu-default');
+    assert.equal(patch.channels?.[0]?.enabled, false);
+    assert.equal(patch.channels?.[0]?.config?.historyMessageLimit, 12);
+    assert.equal(patch.channels?.[0]?.config?.streamStatusIdleStartSeconds, 180);
+    assert.equal(patch.channels?.[0]?.config?.streamStatusCheckIntervalSeconds, 10);
+  });
+
   it('maps legacy Claude acceptEdits and plan permission modes to v2 yolo off', () => {
     const legacy: Config = {
       runtime: 'claude',

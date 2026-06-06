@@ -29,6 +29,27 @@ function v2ClaudeYoloMode(permissionMode: ClaudePermissionMode | undefined): Con
   return permissionMode === 'bypassPermissions' ? 'on' : 'off';
 }
 
+function hasLegacyChannelBehaviorConfig(config: Config): boolean {
+  return config.historyMessageLimit !== undefined
+    || config.streamStatusIdleStartSeconds !== undefined
+    || config.streamStatusCheckIntervalSeconds !== undefined
+    || config.enabledChannels.includes('feishu');
+}
+
+function legacyChannelsForPatch(config: Config): NonNullable<Config['channels']> {
+  if (config.channels && config.channels.length > 0) return config.channels;
+  if (!hasLegacyChannelBehaviorConfig(config)) return [];
+  return [{
+    id: 'feishu-default',
+    alias: '飞书',
+    provider: 'feishu',
+    enabled: config.enabledChannels.includes('feishu'),
+    createdAt: '',
+    updatedAt: '',
+    config: {},
+  }];
+}
+
 export function configV2ToLegacyConfig(config: ConfigV2): Config {
   const defaultChannel = config.channels.find((channel) => channel.id === 'feishu-default') || config.channels[0];
   return {
@@ -70,7 +91,7 @@ export function configV2ToLegacyConfig(config: ConfigV2): Config {
 export function legacyConfigToConfigPatch(config: Config): ConfigPatch {
   const codexYoloMode = v2CodexYoloMode(config.defaultMode);
   const claudeYoloMode = v2ClaudeYoloMode(config.claudePermissionMode);
-  const channels: NonNullable<ConfigPatch['channels']> = (config.channels || []).map((channel) => ({
+  const channels: NonNullable<ConfigPatch['channels']> = legacyChannelsForPatch(config).map((channel) => ({
     id: channel.id,
     alias: channel.alias,
     provider: channel.provider,

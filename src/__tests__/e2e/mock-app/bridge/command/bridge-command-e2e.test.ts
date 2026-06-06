@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 
 import fs from 'node:fs';
-import { loadConfig } from '../../../../../configuration/index.js';
+import { CODELARK_HOME, CONFIG_JSON_PATH, CONFIG_PATH, loadConfig } from '../../../../../configuration/index.js';
 import { _testOnlyPtyScreens } from '../../../../../runtime/codex/pty-provider.js';
 import { _testOnlyClaudePty } from '../../../../../runtime/claude/pty-provider.js';
 import { getClaudeProjectDir } from '../../../../../runtime/claude/session-jsonl.js';
@@ -474,7 +474,11 @@ describe('bridge command e2e', () => {
     store.addMessage(binding.bridgeSessionId, 'assistant', '**端到端助手回复**\n\n```ts\nconst ok = true;\n```');
 
     await _testOnly.handleMessage(adapter, inboundMessage(groupAddress, '/his limit 12', 'incoming-limit'));
+    assert.match(adapter.sent.at(-1)?.text || '', /config\.toml/);
     assert.equal(loadConfig().historyMessageLimit, 12);
+    assert.equal(fs.existsSync(path.join(CODELARK_HOME, 'config.toml')), true);
+    assert.equal(fs.existsSync(CONFIG_PATH), false);
+    assert.equal(fs.existsSync(CONFIG_JSON_PATH), false);
 
     await _testOnly.handleMessage(adapter, inboundMessage(groupAddress, '/ui off', 'incoming-ui-detail-off'));
     assert.equal('showToolCallDetails' in loadConfig(), false);

@@ -40,6 +40,8 @@ export const noopLifecycle: LifecycleHooks = {};
 
 export function resetBridgeTestState(options: { cleanCodexHome?: boolean } = {}): void {
   fs.rmSync(BRIDGE_TEST_DATA_DIR, { recursive: true, force: true });
+  fs.rmSync(path.join(CODELARK_HOME, 'config.toml'), { force: true });
+  fs.rmSync(path.join(CODELARK_HOME, 'config'), { recursive: true, force: true });
   fs.rmSync(CONFIG_PATH, { force: true });
   fs.rmSync(CONFIG_JSON_PATH, { force: true });
 

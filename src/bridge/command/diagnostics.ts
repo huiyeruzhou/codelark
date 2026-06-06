@@ -519,8 +519,8 @@ export async function handleHistoryCommand(options: {
     }
     try {
       const currentConfig = loadConfig();
-      saveConfig({ ...currentConfig, historyMessageLimit: nextLimit });
-      return `已将 /his msg 返回条数限制设置为 ${nextLimit}。`;
+      saveConfig({ ...currentConfig, schemaVersion: 2, historyMessageLimit: nextLimit });
+      return `已将 /his msg 返回条数限制设置为 ${nextLimit}，配置已保存到 ~/.codelark/config.toml。`;
     } catch (error) {
       return `修改失败：${error instanceof Error ? error.message : String(error)}`;
     }
