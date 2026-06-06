@@ -41,7 +41,7 @@ test('extracts lark-cli authorization URLs from terminal output', () => {
 test('renders a terminal QR block for lark-cli authorization URLs', async () => {
   const rendered = await renderLarkCliUrlQr('https://open.feishu.cn/auth?state=abc');
 
-  assert.match(rendered, /检测到 lark-cli 授权链接/);
+  assert.match(rendered, /检测到授权链接/);
   assert.match(rendered, /https:\/\/open\.feishu\.cn\/auth\?state=abc/);
   assert.ok(rendered.length > 100);
 });
@@ -64,6 +64,59 @@ test('real setup wizard e2e can load credentials from env file without npm secre
   assert.match(script, /CODELARK_REAL_FEISHU_TEST_APP_SECRET/);
   assert.match(script, /CTI_REAL_FEISHU_TEST_APP_ID/);
   assert.match(script, /CTI_REAL_FEISHU_TEST_APP_SECRET/);
+});
+
+test('real setup wizard wizard e2e creates credentials in an isolated home and writes the default Feishu env file', () => {
+  const scriptPath = path.join(process.cwd(), 'scripts', 'setup-wizard-real-wizard-e2e.ts');
+  const script = fs.readFileSync(scriptPath, 'utf-8');
+  const realFeishuScript = fs.readFileSync(path.join(process.cwd(), 'scripts', 'real-feishu-e2e.ts'), 'utf-8');
+  const packageJson = JSON.parse(fs.readFileSync(path.join(process.cwd(), 'package.json'), 'utf-8')) as {
+    scripts?: Record<string, string>;
+  };
+
+  assert.equal(packageJson.scripts?.['real:setup-wizard:wizard-e2e'], 'tsx scripts/setup-wizard-real-wizard-e2e.ts');
+  assert.match(script, /CODELARK_SETUP_WIZARD_REAL_E2E/);
+  assert.match(script, /@homebridge\/node-pty-prebuilt-multiarch/);
+  assert.match(script, /auth', 'status'/);
+  assert.match(script, /auth', 'check'/);
+  assert.match(script, /LARKSUITE_CLI_CONFIG_DIR/);
+  assert.match(script, /mock HOME/);
+  assert.match(script, /defaultRealFeishuTestEnvFile/);
+  assert.match(script, /writeDefaultRealFeishuTestEnvFile/);
+  assert.match(script, /CODELARK_REAL_FEISHU_TEST_APP_ID/);
+  assert.doesNotMatch(script, /Missing test app credentials/);
+  assert.doesNotMatch(script, /writePreseedConfigEnv/);
+  assert.doesNotMatch(script, /--app-id/);
+  assert.match(realFeishuScript, /defaultRealFeishuTestEnvFile/);
+  assert.match(realFeishuScript, /valueArg\(argv, '--test-env-file', defaultRealFeishuTestEnvFile\(\)\)/);
+
+  const wizardSource = fs.readFileSync(path.join(process.cwd(), 'src', 'entrypoints', 'setup-wizard.ts'), 'utf-8');
+  assert.match(wizardSource, /'auth', 'qrcode', url, '--ascii'/);
+  assert.doesNotMatch(wizardSource, /QRCode\.toString/);
+});
+
+test('setup wizard binds lark-cli runtime with user-default identity and resets legacy strict runtime', () => {
+  const managerSource = fs.readFileSync(path.join(process.cwd(), 'src', 'local-service', 'manager.ts'), 'utf-8');
+  const wizardSource = fs.readFileSync(path.join(process.cwd(), 'src', 'entrypoints', 'setup-wizard.ts'), 'utf-8');
+
+  assert.match(managerSource, /'config', 'bind', '--source', 'lark-channel', '--identity', 'user-default', '--force'/);
+  assert.doesNotMatch(managerSource, /'--identity', 'bot-only'/);
+  assert.match(managerSource, /resetLegacyStrictLarkCliRuntimeForSetup/);
+  assert.match(wizardSource, /resetLegacyStrictLarkCliRuntimeForSetup\(config\)/);
+});
+
+test('setup wizard refreshes lark-cli identity policy after user authorization', () => {
+  const wizardSource = fs.readFileSync(path.join(process.cwd(), 'src', 'entrypoints', 'setup-wizard.ts'), 'utf-8');
+  const start = wizardSource.indexOf('async function ensureCodeLarkUserAuthorization');
+  const end = wizardSource.indexOf('function existingFeishuCredentials', start);
+  const body = wizardSource.slice(start, end);
+  const firstSync = body.indexOf('ensureLarkCliRuntimeConfig(config)');
+  const login = body.indexOf("'auth',\n      'login'");
+  const secondSync = body.lastIndexOf('ensureLarkCliRuntimeConfig(config)');
+
+  assert.ok(firstSync >= 0, 'expected pre-login lark-cli runtime sync');
+  assert.ok(login > firstSync, 'expected auth login after pre-login sync');
+  assert.ok(secondSync > login, 'expected post-login lark-cli runtime sync');
 });
 
 test('recommends runtime from home directory markers', () => {

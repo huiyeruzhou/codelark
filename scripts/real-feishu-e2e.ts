@@ -26,6 +26,11 @@ const TEST_CHAT_REGISTRY_PATH = process.env.CODELARK_REAL_FEISHU_TEST_CHAT_REGIS
   || path.join(os.tmpdir(), 'codelark-real-feishu-e2e-chats.json');
 const BASIC_DIALOGUE_MODEL_PROXY_CHUNK_DELAY_MS = 120;
 
+function defaultRealFeishuTestEnvFile(): string {
+  const codelarkHome = process.env.CODELARK_HOME || path.join(os.homedir(), '.codelark');
+  return path.join(codelarkHome, 'real-feishu-e2e', 'test.env');
+}
+
 interface CliOptions {
   dryRun: boolean;
   dumpOnly: boolean;
@@ -905,13 +910,14 @@ function parseEnvLine(line: string): { key: string; value: string } | null {
 }
 
 function loadRealFeishuTestEnvFile(argv: string[]): string {
-  const envFile = valueArg(argv, '--test-env-file', '');
-  if (!envFile) return '';
+  const explicitEnvFile = valueArg(argv, '--test-env-file', '');
+  const envFile = explicitEnvFile || defaultRealFeishuTestEnvFile();
   const resolved = path.resolve(envFile);
   let content = '';
   try {
     content = fs.readFileSync(resolved, 'utf-8');
   } catch (error) {
+    if (!explicitEnvFile) return '';
     throw new Error(`Unable to read real Feishu E2E test env file: ${resolved}`);
   }
   for (const line of content.split(/\r?\n/)) {
@@ -977,7 +983,7 @@ function parseOptions(argv: string[]): CliOptions {
     keepGroup: hasFlag(argv, '--keep-group'),
     keepCodelarkHome: hasFlag(argv, '--keep-clk-home'),
     allowConcurrentApp: hasFlag(argv, '--allow-concurrent-app'),
-    testEnvFile: valueArg(argv, '--test-env-file', ''),
+    testEnvFile: valueArg(argv, '--test-env-file', defaultRealFeishuTestEnvFile()),
     runId,
     channelType: valueArg(argv, '--channel-type', 'feishu-env'),
     channelAlias: valueArg(argv, '--channel-alias', 'Real Feishu E2E'),
@@ -1033,7 +1039,7 @@ function printUsage(): void {
     '  --stop-test-bridge        Stop a previous isolated real Feishu E2E bridge for --run-root/--clk-home',
     '  --launch-bridge           Start a test-only bridge child process with an isolated CODELARK_HOME',
     '  --allow-concurrent-app    Skip same-app bridge lock; unsafe only when launching another bridge for the same app',
-    '  --test-env-file <path>     Load CODELARK_REAL_FEISHU_TEST_* values from a private test env file before parsing options',
+    `  --test-env-file <path>     Load CODELARK_REAL_FEISHU_TEST_* values from a private test env file; default ${defaultRealFeishuTestEnvFile()}`,
     '  --create-chat             Create a new Feishu group and invite the test/live bridge bot',
     '  --fake-ccr                Run true ccr/Claude Code against a local fake OpenAI-compatible backend',
     '  --fake-ccr-response <txt> Expected fake backend response text',
