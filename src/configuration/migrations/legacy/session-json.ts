@@ -55,10 +55,7 @@ function codexYoloMode(value: unknown): 'off' | 'on' | undefined {
 
 function claudeYoloMode(value: unknown): 'off' | 'on' | undefined {
   if (value === 'bypassPermissions' || value === 'on') return 'on';
-  if (value === 'default' || value === 'off') return 'off';
-  if (value === 'acceptEdits' || value === 'plan') {
-    throw new Error(`Cannot migrate legacy Claude permissionMode=${value}; confirm how it maps to runtime.claude.yoloMode first.`);
-  }
+  if (value === 'default' || value === 'acceptEdits' || value === 'plan' || value === 'off') return 'off';
   return undefined;
 }
 

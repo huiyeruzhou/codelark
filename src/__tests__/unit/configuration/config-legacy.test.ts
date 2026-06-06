@@ -135,17 +135,14 @@ describe('legacy config compatibility adapter', () => {
     assert.equal(patch.channels?.[0]?.config?.appSecret, 'app-secret');
   });
 
-  it('refuses to map legacy Claude permission modes that have no confirmed v2 semantics', () => {
+  it('maps legacy Claude acceptEdits and plan permission modes to v2 yolo off', () => {
     const legacy: Config = {
       runtime: 'claude',
       defaultMode: 'normal',
-      claudePermissionMode: 'plan',
       enabledChannels: [],
     };
 
-    assert.throws(
-      () => legacyConfigToConfigPatch(legacy),
-      /Cannot map legacy claudePermissionMode=plan/,
-    );
+    assert.equal(legacyConfigToConfigPatch({ ...legacy, claudePermissionMode: 'acceptEdits' }).runtime?.claude?.yoloMode, 'off');
+    assert.equal(legacyConfigToConfigPatch({ ...legacy, claudePermissionMode: 'plan' }).runtime?.claude?.yoloMode, 'off');
   });
 });

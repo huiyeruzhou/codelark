@@ -227,6 +227,8 @@ export const configFields = [
     processEnvKey: 'CODELARK_CLAUDE_YOLO_MODE',
     runtimeSettingsKey: 'bridge_claude_permission_mode',
     parseEnv: enumFromEnv(yoloModeSchema),
+    commandAliases: ['/mode'],
+    defaultWriteScope: 'channel',
   },
   {
     path: 'runtime.claude.provider',

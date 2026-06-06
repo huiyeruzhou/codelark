@@ -156,7 +156,7 @@ describe('config migration runner', () => {
     }
   });
 
-  it('does not apply v1 migration when legacy Claude permissionMode needs product confirmation', () => {
+  it('maps legacy home Claude permissionMode plan to yolo off', () => {
     const home = tempHome();
     try {
       const paths = resolveMigrationPaths(home);
@@ -171,18 +171,17 @@ describe('config migration runner', () => {
         channels: [],
       }));
 
-      assert.throws(
-        () => runConfigMigrations({ codelarkHome: home }),
-        /Cannot migrate legacy Claude permissionMode=plan/,
-      );
-      assert.equal(fs.existsSync(paths.homeToml), false);
-      assert.equal(fs.existsSync(paths.migrationState), false);
+      const result = runConfigMigrations({ codelarkHome: home });
+
+      assert.equal(result.changed, true);
+      assert.match(fs.readFileSync(paths.homeToml, 'utf-8'), /yolo_mode = "off"/);
+      assert.equal(fs.existsSync(paths.migrationState), true);
     } finally {
       fs.rmSync(home, { recursive: true, force: true });
     }
   });
 
-  it('does not apply v1 session migration when legacy session Claude permissionMode needs product confirmation', () => {
+  it('maps legacy session Claude permissionMode plan to yolo off', () => {
     const home = tempHome();
     try {
       const paths = resolveMigrationPaths(home);
@@ -199,12 +198,14 @@ describe('config migration runner', () => {
         },
       }));
 
-      assert.throws(
-        () => runConfigMigrations({ codelarkHome: home }),
-        /Cannot migrate legacy Claude permissionMode=plan/,
+      const result = runConfigMigrations({ codelarkHome: home });
+
+      assert.equal(result.changed, true);
+      assert.match(
+        fs.readFileSync(path.join(paths.sessionConfigDir, 'session-needs-confirmation.toml'), 'utf-8'),
+        /yolo_mode = "off"/,
       );
-      assert.equal(fs.existsSync(path.join(paths.sessionConfigDir, 'session-needs-confirmation.toml')), false);
-      assert.equal(fs.existsSync(paths.migrationState), false);
+      assert.equal(fs.existsSync(paths.migrationState), true);
     } finally {
       fs.rmSync(home, { recursive: true, force: true });
     }

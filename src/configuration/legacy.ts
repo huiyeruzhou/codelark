@@ -14,20 +14,18 @@ function legacyCodexMode(mode: ConfigV2['runtime']['codex']['yoloMode']): string
   return mode === 'on' || mode === 'yolo' ? 'yolo' : 'normal';
 }
 
-function legacyClaudePermissionMode(mode: ConfigV2['runtime']['claude']['yoloMode']): ClaudePermissionMode {
-  return mode === 'on' || mode === 'yolo' ? 'bypassPermissions' : 'default';
-}
-
 function v2CodexYoloMode(mode: string | undefined): ConfigV2['runtime']['codex']['yoloMode'] | undefined {
   if (mode === undefined) return undefined;
   return mode === 'yolo' ? 'on' : 'off';
 }
 
+function legacyClaudePermissionMode(mode: ConfigV2['runtime']['claude']['yoloMode']): ClaudePermissionMode {
+  return mode === 'on' || mode === 'yolo' ? 'bypassPermissions' : 'default';
+}
+
 function v2ClaudeYoloMode(permissionMode: ClaudePermissionMode | undefined): ConfigV2['runtime']['claude']['yoloMode'] | undefined {
   if (permissionMode === undefined) return undefined;
-  if (permissionMode === 'bypassPermissions') return 'on';
-  if (permissionMode === 'default') return 'off';
-  throw new Error(`Cannot map legacy claudePermissionMode=${permissionMode} to runtime.claude.yoloMode; confirm the v2 behavior first.`);
+  return permissionMode === 'bypassPermissions' ? 'on' : 'off';
 }
 
 export function configV2ToLegacyConfig(config: ConfigV2): Config {

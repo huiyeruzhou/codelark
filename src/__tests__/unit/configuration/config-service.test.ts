@@ -85,7 +85,7 @@ describe('ConfigService v2 foundation', () => {
     }
   });
 
-  it('fails startup migration without writing state when legacy fallback needs confirmation', () => {
+  it('maps legacy Claude acceptEdits permission mode to yolo off during startup migration', () => {
     const home = tempHome();
     try {
       writeFile(path.join(home, 'config.json'), JSON.stringify({
@@ -99,12 +99,11 @@ describe('ConfigService v2 foundation', () => {
         channels: [],
       }));
 
-      assert.throws(
-        () => createConfigService({ codelarkHome: home, env: {} }),
-        /Cannot migrate legacy Claude permissionMode=acceptEdits/,
-      );
-      assert.equal(fs.existsSync(path.join(home, 'config.toml')), false);
-      assert.equal(fs.existsSync(path.join(home, 'runtime', 'config-migrations.json')), false);
+      const service = createConfigService({ codelarkHome: home, env: {} });
+
+      assert.equal(service.get('runtime.claude.yoloMode'), 'off');
+      assert.equal(fs.existsSync(path.join(home, 'config.toml')), true);
+      assert.equal(service.migrationResult?.applied[0]?.id, 'v1');
     } finally {
       fs.rmSync(home, { recursive: true, force: true });
     }

@@ -20,7 +20,7 @@ const legacyEnvAliases = new Map<string, string>([
 function normalizeLegacyValue(newKey: string, value: string): string {
   if (newKey === 'CODELARK_CODEX_YOLO_MODE') return value === 'yolo' ? 'on' : 'off';
   if (newKey === 'CODELARK_CLAUDE_YOLO_MODE') {
-    return value === 'bypassPermissions' ? 'on' : 'off';
+    return value === 'bypassPermissions' || value === 'on' || value === 'yolo' ? 'on' : 'off';
   }
   return value;
 }

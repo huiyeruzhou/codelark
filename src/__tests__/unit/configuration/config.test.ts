@@ -167,14 +167,19 @@ describe('loadConfig/saveConfig round-trip', () => {
   let origHome: string;
   let configBackup: string | null;
   let configBackupJson: string | null;
+  let configBackupToml: string | null;
 
   beforeEach(() => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-config-test-'));
     origHome = process.env.HOME || '';
     configBackup = fs.existsSync(CONFIG_PATH) ? fs.readFileSync(CONFIG_PATH, 'utf-8') : null;
     configBackupJson = fs.existsSync(CONFIG_JSON_PATH) ? fs.readFileSync(CONFIG_JSON_PATH, 'utf-8') : null;
+    configBackupToml = fs.existsSync(path.join(path.dirname(CONFIG_JSON_PATH), 'config.toml'))
+      ? fs.readFileSync(path.join(path.dirname(CONFIG_JSON_PATH), 'config.toml'), 'utf-8')
+      : null;
     fs.rmSync(CONFIG_PATH, { force: true });
     fs.rmSync(CONFIG_JSON_PATH, { force: true });
+    fs.rmSync(path.join(path.dirname(CONFIG_JSON_PATH), 'config.toml'), { force: true });
   });
 
   afterEach(() => {
@@ -182,11 +187,15 @@ describe('loadConfig/saveConfig round-trip', () => {
     fs.rmSync(tmpDir, { recursive: true, force: true });
     fs.rmSync(CONFIG_PATH, { force: true });
     fs.rmSync(CONFIG_JSON_PATH, { force: true });
+    fs.rmSync(path.join(path.dirname(CONFIG_JSON_PATH), 'config.toml'), { force: true });
     if (configBackup !== null) {
       fs.writeFileSync(CONFIG_PATH, configBackup);
     }
     if (configBackupJson !== null) {
       fs.writeFileSync(CONFIG_JSON_PATH, configBackupJson);
+    }
+    if (configBackupToml !== null) {
+      fs.writeFileSync(path.join(path.dirname(CONFIG_JSON_PATH), 'config.toml'), configBackupToml);
     }
   });
 
@@ -198,6 +207,111 @@ describe('loadConfig/saveConfig round-trip', () => {
       defaultMode: 'normal',
     });
     assert.equal(m.get('bridge_feishu_enabled'), 'false');
+  });
+
+  it('loads existing config.toml through the v2 config service and ignores config.env', () => {
+    const envKeys = Object.keys(process.env)
+      .filter((key) => key.startsWith('CODELARK_') && key !== 'CODELARK_HOME');
+    const originalEnv = new Map(envKeys.map((key) => [key, process.env[key]]));
+    for (const key of envKeys) delete process.env[key];
+    const configTomlPath = path.join(path.dirname(CONFIG_JSON_PATH), 'config.toml');
+    try {
+      fs.mkdirSync(path.dirname(configTomlPath), { recursive: true });
+      fs.writeFileSync(configTomlPath, `
+[runtime]
+provider = "claude"
+
+[bridge]
+default_workspace = "/v2/workspace"
+
+[runtime.codex]
+model = "v2-codex-model"
+yolo_mode = "on"
+provider = "pty"
+sandbox_mode = "danger-full-access"
+network_access = false
+reasoning_effort = "high"
+
+[runtime.claude]
+model = "v2-claude-model"
+yolo_mode = "on"
+provider = "pty"
+executable = "ccr"
+idle_timeout_minutes = 11
+
+[[channels]]
+id = "feishu-default"
+alias = "飞书"
+provider = "feishu"
+enabled = true
+
+[channels.config]
+history_message_limit = 17
+stream_status_idle_start_seconds = 210
+stream_status_check_interval_seconds = 12
+app_id = "v2-app"
+app_secret = "v2-secret"
+site = "lark"
+allowed_users = ["ou_v2"]
+streaming_enabled = false
+feedback_markdown_enabled = false
+require_mention = true
+`);
+    fs.writeFileSync(CONFIG_PATH, [
+      'CODELARK_RUNTIME=codex',
+      'CODELARK_CODEX_DEFAULT_MODEL=must-not-read-env',
+      'CODELARK_FEISHU_APP_ID=must-not-read-env',
+    ].join('\n'));
+
+      const loaded = loadConfig();
+
+      assert.equal(loaded.schemaVersion, 2);
+      assert.equal(loaded.runtime, 'claude');
+      assert.equal(loaded.defaultWorkspaceRoot, '/v2/workspace');
+      assert.equal(loaded.defaultModel, 'v2-codex-model');
+      assert.equal(loaded.defaultProvider, 'pty');
+      assert.equal(loaded.defaultMode, 'yolo');
+      assert.equal(loaded.codexSandboxMode, 'danger-full-access');
+      assert.equal(loaded.codexNetworkAccess, false);
+      assert.equal(loaded.codexReasoningEffort, 'high');
+      assert.equal(loaded.claudeDefaultModel, 'v2-claude-model');
+      assert.equal(loaded.claudeProvider, 'pty');
+      assert.equal(loaded.claudeExecutable, 'ccr');
+    assert.equal(loaded.claudePermissionMode, 'bypassPermissions');
+      assert.equal(loaded.claudeIdleTimeoutMinutes, 11);
+      assert.equal(loaded.historyMessageLimit, 17);
+      assert.equal(loaded.streamStatusIdleStartSeconds, 210);
+      assert.equal(loaded.streamStatusCheckIntervalSeconds, 12);
+      assert.deepEqual(loaded.enabledChannels, ['feishu']);
+      assert.deepEqual(
+        loaded.channels?.map((channel) => ({
+          id: channel.id,
+          appId: (channel.config as { appId?: string }).appId,
+          appSecret: (channel.config as { appSecret?: string }).appSecret,
+          site: (channel.config as { site?: string }).site,
+          allowedUsers: (channel.config as { allowedUsers?: string[] }).allowedUsers,
+          streamingEnabled: (channel.config as { streamingEnabled?: boolean }).streamingEnabled,
+          feedbackMarkdownEnabled: (channel.config as { feedbackMarkdownEnabled?: boolean }).feedbackMarkdownEnabled,
+          requireMention: (channel.config as { requireMention?: boolean }).requireMention,
+        })),
+        [{
+          id: 'feishu-default',
+          appId: 'v2-app',
+          appSecret: 'v2-secret',
+          site: 'lark',
+          allowedUsers: ['ou_v2'],
+          streamingEnabled: false,
+          feedbackMarkdownEnabled: false,
+          requireMention: true,
+        }],
+      );
+      assert.equal(fs.existsSync(CONFIG_JSON_PATH), false);
+    } finally {
+      for (const [key, value] of originalEnv) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+    }
   });
 
   it('migrates legacy env config into config.json default channel instances', () => {
