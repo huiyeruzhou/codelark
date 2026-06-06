@@ -109,6 +109,53 @@ sandbox_mode = "danger-full-access"
     }
   });
 
+  it('explains values with source provenance and masks secret fields by default', () => {
+    const home = tempHome();
+    try {
+      writeFile(path.join(home, 'config.toml'), `
+[bridge]
+ui_access_token = "home-secret-token"
+
+[[channels]]
+id = "feishu-default"
+alias = "飞书"
+provider = "feishu"
+enabled = true
+
+[channels.config]
+app_secret = "home-app-secret"
+`);
+      const service = createConfigService({
+        codelarkHome: home,
+        env: {
+          CODELARK_UI_ACCESS_TOKEN: 'env-secret-token',
+          CODELARK_CODEX_REASONING_EFFORT: 'high',
+        },
+      });
+
+      assert.equal(service.resolve('bridge.uiAccessToken').value, 'env-secret-token');
+
+      const tokenExplain = service.explain('bridge.uiAccessToken')[0]!;
+      assert.equal(tokenExplain.secret, true);
+      assert.equal(tokenExplain.value, '************oken');
+      assert.equal(tokenExplain.source, 'env');
+      assert.equal(tokenExplain.env, 'CODELARK_UI_ACCESS_TOKEN');
+
+      const effortExplain = service.explain('runtime.codex.reasoningEffort')[0]!;
+      assert.equal(effortExplain.secret, undefined);
+      assert.equal(effortExplain.value, 'high');
+      assert.equal(effortExplain.source, 'env');
+
+      const appSecretExplain = service.explain('channels[].config.appSecret')[0]!;
+      assert.equal(appSecretExplain.secret, true);
+      assert.equal(appSecretExplain.value, '***********cret');
+      assert.equal(appSecretExplain.source, 'home');
+      assert.equal(appSecretExplain.file, path.join(home, 'config.toml'));
+    } finally {
+      fs.rmSync(home, { recursive: true, force: true });
+    }
+  });
+
   it('writes and unsets TOML partials through the service API', () => {
     const home = tempHome();
     try {

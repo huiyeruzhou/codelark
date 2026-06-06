@@ -116,6 +116,12 @@ function validateWritablePath(target: ConfigWriteTarget, path: ConfigPath): void
   requireWritable(writeScopeForTarget(target), path);
 }
 
+function maskSecretValue(value: unknown): unknown {
+  if (typeof value !== 'string') return value === undefined ? undefined : '****';
+  if (value.length <= 4) return '****';
+  return `${'*'.repeat(value.length - 4)}${value.slice(-4)}`;
+}
+
 export function createConfigService(options: ConfigServiceOptions = {}): ConfigService {
   const env = options.env || process.env;
   const cli = options.cli ? configPatchSchema.parse(options.cli) : undefined;
@@ -229,10 +235,12 @@ export function createConfigService(options: ConfigServiceOptions = {}): ConfigS
       const paths = path ? [path] : configFields.map((field) => field.path);
       return paths.map((entry) => {
         const field = findConfigField(entry);
+        const resolved = this.resolve(entry, scope);
         return {
           path: entry,
           secret: field?.secret,
-          ...this.resolve(entry, scope),
+          ...resolved,
+          value: field?.secret ? maskSecretValue(resolved.value) : resolved.value,
         };
       });
     },
