@@ -3206,7 +3206,7 @@ enabled = true
         }).source,
         'session',
       );
-      assert.equal(resolveEffectiveNetworkAccess(store.getSession(session.id)), false);
+      assert.equal(resolveEffectiveNetworkAccess(store.getSession(session.id)), true);
 
       await handleBridgeCommand(adapter, { address, text: '/model gpt-5.4', messageId: `incoming-${provider}-model-set` } as any, '/model gpt-5.4', deps);
       assert.equal(getSessionCodexModel(store.getSession(session.id)), 'gpt-5.4');

@@ -70,8 +70,49 @@ export function getCodexSessionByThreadIdSafe(
 }
 
 export function getWorkspaceRoot(): string {
+  return expandHomePath(getGlobalConfigValue<string>(
+    'bridge.defaultWorkspace',
+    'bridge_default_workspace_root',
+    (value) => value || undefined,
+  ) || DEFAULT_WORKSPACE_ROOT);
+}
+
+function parseLegacyBoolean(value: string | null | undefined): boolean | undefined {
+  if (!value) return undefined;
+  const normalized = value.trim().toLowerCase();
+  if (['true', '1', 'on', 'yes'].includes(normalized)) return true;
+  if (['false', '0', 'off', 'no'].includes(normalized)) return false;
+  return undefined;
+}
+
+function getGlobalConfigValue<T>(
+  path: ConfigPath,
+  legacySettingKey: string | undefined,
+  parseLegacy: (value: string) => T | undefined,
+): T | undefined {
   const { store } = getBridgeContext();
-  return store.getSetting('bridge_default_workspace_root') || DEFAULT_WORKSPACE_ROOT;
+  try {
+    const resolved = createConfigService({ migrate: false }).resolve(path);
+    if (resolved.source !== 'defaults') return resolved.value as T;
+    const legacy = legacySettingKey ? store.getSetting(legacySettingKey) : '';
+    if (legacy) {
+      const parsed = parseLegacy(legacy);
+      if (parsed !== undefined) return parsed;
+    }
+    return resolved.value as T;
+  } catch (error) {
+    console.error(`[bridge-manager] Failed to resolve global TOML config ${path}:`, error);
+    const legacy = legacySettingKey ? store.getSetting(legacySettingKey) : '';
+    return legacy ? parseLegacy(legacy) : undefined;
+  }
+}
+
+function getGlobalStringConfig(path: ConfigPath, legacySettingKey: string): string | undefined {
+  return getGlobalConfigValue<string>(path, legacySettingKey, (value) => value || undefined);
+}
+
+function getGlobalBooleanConfig(path: ConfigPath, legacySettingKey: string): boolean | undefined {
+  return getGlobalConfigValue<boolean>(path, legacySettingKey, parseLegacyBoolean);
 }
 
 function getSessionTomlOverride<T>(session: BridgeSession | null | undefined, path: ConfigPath): T | undefined {
@@ -89,25 +130,22 @@ function getSessionTomlOverride<T>(session: BridgeSession | null | undefined, pa
 }
 
 export function resolveEffectiveReasoningEffort(session: BridgeSession | null | undefined): string {
-  const { store } = getBridgeContext();
   return normalizeStoredReasoningEffort(
     getSessionTomlOverride<BridgeSessionCodexRuntimeState['reasoningEffort']>(session, 'runtime.codex.reasoningEffort')
       || getSessionCodexReasoningEffort(session)
-      || store.getSetting('bridge_codex_reasoning_effort'),
+      || getGlobalStringConfig('runtime.codex.reasoningEffort', 'bridge_codex_reasoning_effort'),
   );
 }
 
 export function resolveEffectiveSandboxMode(session?: BridgeSession | null): string {
-  const { store } = getBridgeContext();
   return normalizeSandboxMode(
     getSessionTomlOverride<BridgeSessionCodexRuntimeState['sandboxMode']>(session, 'runtime.codex.sandboxMode')
       || getSessionCodexSandboxMode(session)
-      || store.getSetting('bridge_codex_sandbox_mode'),
+      || getGlobalStringConfig('runtime.codex.sandboxMode', 'bridge_codex_sandbox_mode'),
   );
 }
 
 export function resolveEffectiveNetworkAccess(session?: BridgeSession | null): boolean {
-  const { store } = getBridgeContext();
   const tomlValue = getSessionTomlOverride<boolean>(session, 'runtime.codex.networkAccess');
   if (typeof tomlValue === 'boolean') {
     return tomlValue;
@@ -116,7 +154,7 @@ export function resolveEffectiveNetworkAccess(session?: BridgeSession | null): b
   if (typeof sessionValue === 'boolean') {
     return sessionValue;
   }
-  return (store.getSetting('bridge_codex_network_access') || '').toLowerCase() === 'true';
+  return getGlobalBooleanConfig('runtime.codex.networkAccess', 'bridge_codex_network_access') === true;
 }
 
 export function hasSessionCodexSandboxOverride(session?: BridgeSession | null): boolean {
@@ -159,12 +197,11 @@ export interface ClaudeRuntimeConfig {
 }
 
 export function resolveEffectiveClaudeProvider(session?: BridgeSession | null): ClaudeProviderChoice {
-  const { store } = getBridgeContext();
   const tomlProvider = getSessionTomlOverride<ClaudeProviderChoice>(session, 'runtime.claude.provider');
   if (tomlProvider === 'sdk' || tomlProvider === 'pty') return tomlProvider;
   const sessionProvider = getSessionClaudeProvider(session);
   if (sessionProvider === 'sdk' || sessionProvider === 'pty') return sessionProvider;
-  const configured = store.getSetting('bridge_claude_provider');
+  const configured = getGlobalStringConfig('runtime.claude.provider', 'bridge_claude_provider');
   if (configured === 'sdk' || configured === 'pty') return configured;
   return 'sdk';
 }
@@ -179,38 +216,41 @@ export function resolveEffectiveMode(
     : tomlMode === 'off'
       ? 'normal'
       : getSessionCodexMode(session);
-  return (sessionMode || getBridgeContext().store.getSetting('bridge_default_mode')) === 'yolo'
+  const globalMode = getGlobalConfigValue<'off' | 'on'>(
+    'runtime.codex.yoloMode',
+    'bridge_default_mode',
+    (value) => value === 'yolo' ? 'on' : value === 'normal' || value === 'code' ? 'off' : undefined,
+  );
+  return (sessionMode || (globalMode === 'on' ? 'yolo' : 'normal')) === 'yolo'
     ? 'yolo'
     : 'normal';
 }
 
 export function resolveEffectiveCodexProvider(session?: BridgeSession | null): SessionRuntimeCodexProvider {
-  const { store } = getBridgeContext();
   const tomlProvider = getSessionTomlOverride<SessionRuntimeCodexProvider>(session, 'runtime.codex.provider');
   if (tomlProvider === 'sdk' || tomlProvider === 'tmux' || tomlProvider === 'pty') return tomlProvider;
   const sessionProvider = getSessionCodexProvider(session);
   if (sessionProvider === 'sdk' || sessionProvider === 'tmux' || sessionProvider === 'pty') return sessionProvider;
-  const configured = store.getSetting('bridge_default_provider');
+  const configured = getGlobalStringConfig('runtime.codex.provider', 'bridge_default_provider');
   if (configured === 'sdk' || configured === 'tmux' || configured === 'pty') return configured;
   return shouldUseCodexPtyTui() ? 'pty' : shouldUseCodexTmuxTui() ? 'tmux' : 'sdk';
 }
 
 export function resolveEffectiveSkipGitRepoCheck(): boolean {
-  return (getBridgeContext().store.getSetting('bridge_codex_skip_git_repo_check') || '').toLowerCase() === 'true';
+  return getGlobalBooleanConfig('runtime.codex.skipGitRepoCheck', 'bridge_codex_skip_git_repo_check') === true;
 }
 
 export function resolveSessionRuntimeConfig(
   binding?: ChannelChat | null,
   session?: BridgeSession | null,
 ): SessionRuntimeConfig {
-  const { store } = getBridgeContext();
   const mode = resolveEffectiveMode(binding, session);
   return {
     [sessionRuntimeConfigBrand]: true,
     mode,
     model: getSessionTomlOverride<string>(session, 'runtime.codex.model')
       || getSessionCodexModel(session)
-      || store.getSetting('bridge_default_model')
+      || getGlobalStringConfig('runtime.codex.model', 'bridge_default_model')
       || '',
     codexProvider: resolveEffectiveCodexProvider(session),
     sandboxMode: mode === 'yolo' ? 'danger-full-access' : resolveEffectiveSandboxMode(session),
@@ -233,7 +273,6 @@ function parsePositiveSettingInt(value: string | null | undefined): number | und
 }
 
 export function resolveClaudeRuntimeConfig(session?: BridgeSession | null): ClaudeRuntimeConfig {
-  const { store } = getBridgeContext();
   const tomlPermissionMode = getSessionTomlOverride<ClaudePermissionMode>(session, 'runtime.claude.permissionMode');
   const tomlYoloMode = getSessionTomlOverride<'off' | 'on'>(session, 'runtime.claude.yoloMode');
   const tomlYoloPermissionMode = tomlYoloMode === 'on'
@@ -244,19 +283,23 @@ export function resolveClaudeRuntimeConfig(session?: BridgeSession | null): Clau
   return {
     runtime: 'claude',
     provider: resolveEffectiveClaudeProvider(session),
-    executable: normalizeClaudeExecutable(store.getSetting('bridge_claude_executable')) || 'claude',
+    executable: normalizeClaudeExecutable(getGlobalStringConfig('runtime.claude.executable', 'bridge_claude_executable')) || 'claude',
     model: getSessionTomlOverride<string>(session, 'runtime.claude.model')
       || getSessionClaudeModel(session)
-      || store.getSetting('bridge_claude_default_model')
+      || getGlobalStringConfig('runtime.claude.model', 'bridge_claude_default_model')
       || undefined,
     permissionMode: tomlPermissionMode
       || tomlYoloPermissionMode
       || getSessionClaudePermissionMode(session)
-      || normalizeClaudePermissionMode(store.getSetting('bridge_claude_permission_mode'))
+      || normalizeClaudePermissionMode(getGlobalStringConfig('runtime.claude.permissionMode', 'bridge_claude_permission_mode'))
       || 'default',
     reasoningEffort: getSessionTomlOverride<BridgeSessionClaudeRuntimeState['reasoningEffort']>(session, 'runtime.claude.reasoningEffort')
       || getSessionClaudeReasoningEffort(session),
-    idleTimeoutMinutes: parsePositiveSettingInt(store.getSetting('bridge_claude_idle_timeout_minutes')),
+    idleTimeoutMinutes: parsePositiveSettingInt(String(getGlobalConfigValue<number>(
+      'runtime.claude.idleTimeoutMinutes',
+      'bridge_claude_idle_timeout_minutes',
+      (value) => parsePositiveSettingInt(value),
+    ) ?? '')),
   };
 }
 
@@ -400,9 +443,12 @@ export function resetDraftSession(address: { channelType: string; chatId: string
 }
 
 export function getHistoryMessageLimit(): number {
-  const { store } = getBridgeContext();
-  const configured = Number.parseInt(store.getSetting('bridge_history_message_limit') || '', 10);
-  if (!Number.isFinite(configured) || configured <= 0) return 8;
+  const configured = getGlobalConfigValue<number>(
+    'channels[].config.historyMessageLimit',
+    'bridge_history_message_limit',
+    (value) => parsePositiveSettingInt(value),
+  );
+  if (configured === undefined || !Number.isFinite(configured) || configured <= 0) return 8;
   return Math.max(1, Math.min(20, configured));
 }
 

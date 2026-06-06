@@ -1,8 +1,11 @@
 import '../../setup/test-setup.js';
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
 
-import { resolveClaudeRuntimeConfig, resolveSessionRuntimeConfig } from '../../../bridge/session/support.js';
+import { getHistoryMessageLimit, getWorkspaceRoot, resolveClaudeRuntimeConfig, resolveSessionRuntimeConfig } from '../../../bridge/session/support.js';
+import { CODELARK_HOME } from '../../../configuration/index.js';
 import {
   clearSessionCodexNetworkAccessUpdate,
   clearSessionCodexSandboxModeUpdate,
@@ -159,6 +162,82 @@ describe('BridgeSession runtime accessors', () => {
     assert.equal(resolved.networkAccessEnabled, false);
     assert.equal(resolved.reasoningEffort, 'high');
     assert.equal(resolved.skipGitRepoCheck, true);
+  });
+
+  it('resolves global runtime fallback from home TOML before legacy store settings', () => {
+    const configTomlPath = path.join(CODELARK_HOME, 'config.toml');
+    const previousToml = fs.existsSync(configTomlPath) ? fs.readFileSync(configTomlPath, 'utf-8') : null;
+    try {
+      fs.mkdirSync(CODELARK_HOME, { recursive: true });
+      fs.writeFileSync(configTomlPath, `
+schema_version = 2
+
+[bridge]
+default_workspace = "/tmp/toml-workspace"
+
+[runtime.codex]
+model = "toml-codex"
+yolo_mode = "off"
+provider = "pty"
+skip_git_repo_check = false
+sandbox_mode = "read-only"
+network_access = true
+reasoning_effort = "high"
+
+[runtime.claude]
+model = "toml-claude"
+permission_mode = "plan"
+provider = "pty"
+executable = "ccr"
+idle_timeout_minutes = 17
+
+[[channels]]
+id = "feishu-default"
+alias = "飞书"
+provider = "feishu"
+enabled = true
+
+[channels.config]
+history_message_limit = 13
+`);
+      initBridgeTestContext({
+        settings: new Map([
+          ['bridge_default_workspace_root', '/tmp/store-workspace'],
+          ['bridge_default_model', 'store-codex'],
+          ['bridge_default_provider', 'tmux'],
+          ['bridge_codex_skip_git_repo_check', 'true'],
+          ['bridge_codex_sandbox_mode', 'danger-full-access'],
+          ['bridge_codex_network_access', 'false'],
+          ['bridge_codex_reasoning_effort', 'low'],
+          ['bridge_claude_provider', 'sdk'],
+          ['bridge_claude_executable', 'claude'],
+          ['bridge_claude_default_model', 'store-claude'],
+          ['bridge_claude_permission_mode', 'default'],
+          ['bridge_claude_idle_timeout_minutes', '5'],
+          ['bridge_history_message_limit', '4'],
+        ]),
+      });
+
+      const codex = resolveSessionRuntimeConfig(null, { id: 'session-global-toml', runtime: {} } as BridgeSession);
+      const claude = resolveClaudeRuntimeConfig({ id: 'session-global-toml-claude', runtime: { activeRuntime: 'claude' } });
+
+      assert.equal(getWorkspaceRoot(), '/tmp/toml-workspace');
+      assert.equal(codex.model, 'toml-codex');
+      assert.equal(codex.codexProvider, 'pty');
+      assert.equal(codex.sandboxMode, 'read-only');
+      assert.equal(codex.networkAccessEnabled, true);
+      assert.equal(codex.reasoningEffort, 'high');
+      assert.equal(codex.skipGitRepoCheck, false);
+      assert.equal(claude.provider, 'pty');
+      assert.equal(claude.executable, 'ccr');
+      assert.equal(claude.model, 'toml-claude');
+      assert.equal(claude.permissionMode, 'plan');
+      assert.equal(claude.idleTimeoutMinutes, 17);
+      assert.equal(getHistoryMessageLimit(), 13);
+    } finally {
+      if (previousToml === null) fs.rmSync(configTomlPath, { force: true });
+      else fs.writeFileSync(configTomlPath, previousToml, 'utf-8');
+    }
   });
 
   it('centralizes update payloads for the runtime storage schema', () => {
