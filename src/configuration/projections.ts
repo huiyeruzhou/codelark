@@ -10,6 +10,16 @@ function channelFieldValue(config: ConfigV2, fieldPath: string): unknown {
   return getConfigPath(channel, relative);
 }
 
+function runtimeSettingsValue(field: ConfigField, raw: unknown): string | undefined {
+  if (field.path === 'runtime.codex.yoloMode') {
+    return raw === 'on' || raw === 'yolo' ? 'yolo' : 'normal';
+  }
+  if (field.path === 'runtime.claude.yoloMode') {
+    return raw === 'on' || raw === 'yolo' ? 'bypassPermissions' : 'default';
+  }
+  return field.formatEnv ? field.formatEnv(raw) : valueToString(raw);
+}
+
 export function exportRuntimeSettings(config: ConfigV2): Map<string, string> {
   const settings = new Map<string, string>();
   settings.set('remote_bridge_enabled', 'true');
@@ -21,7 +31,7 @@ export function exportRuntimeSettings(config: ConfigV2): Map<string, string> {
     const raw = field.path.startsWith('channels[].')
       ? channelFieldValue(config, field.path)
       : getConfigPath(config, field.path);
-    const value = field.formatEnv ? field.formatEnv(raw) : valueToString(raw);
+    const value = runtimeSettingsValue(field, raw);
     if (value !== undefined) settings.set(field.runtimeSettingsKey, value);
   }
 

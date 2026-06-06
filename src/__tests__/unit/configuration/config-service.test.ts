@@ -243,4 +243,33 @@ app_secret = "home-app-secret"
       fs.rmSync(home, { recursive: true, force: true });
     }
   });
+
+  it('projects v2 yolo modes to legacy runtime setting values', () => {
+    const home = tempHome();
+    try {
+      writeFile(path.join(home, 'config.toml'), `
+[runtime.codex]
+yolo_mode = "on"
+
+[runtime.claude]
+yolo_mode = "off"
+`);
+      const service = createConfigService({ codelarkHome: home, env: {} });
+      let settings = service.exportRuntimeSettings();
+      assert.equal(settings.get('bridge_default_mode'), 'yolo');
+      assert.equal(settings.get('bridge_claude_permission_mode'), 'default');
+
+      service.set({ kind: 'home' }, {
+        runtime: {
+          codex: { yoloMode: 'off' },
+          claude: { yoloMode: 'on' },
+        },
+      });
+      settings = service.exportRuntimeSettings();
+      assert.equal(settings.get('bridge_default_mode'), 'normal');
+      assert.equal(settings.get('bridge_claude_permission_mode'), 'bypassPermissions');
+    } finally {
+      fs.rmSync(home, { recursive: true, force: true });
+    }
+  });
 });
