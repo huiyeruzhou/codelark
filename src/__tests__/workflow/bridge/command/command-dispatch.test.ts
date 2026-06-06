@@ -6,7 +6,7 @@ import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 
-import { CONFIG_PATH, CONFIG_JSON_PATH, CODELARK_HOME, DEFAULT_WORKSPACE_ROOT, loadConfig, saveConfig } from '../../../../configuration/index.js';
+import { CONFIG_PATH, CONFIG_JSON_PATH, CODELARK_HOME, DEFAULT_WORKSPACE_ROOT } from '../../../../configuration/index.js';
 import { createConfigService } from '../../../../configuration/service.js';
 import { JsonFileStore } from '../../../../storage/json-store.js';
 import { initBridgeContext } from '../../../../bridge/host/context.js';
@@ -3489,7 +3489,6 @@ enabled = true
       deps,
     );
     assert.match(sent.at(-1)?.text || '', /默认 Codex Provider.*tmux/s);
-    assert.equal(loadConfig().defaultProvider, 'tmux');
     assert.equal(createConfigService({ migrate: false, env: {} }).resolve('runtime.codex.provider').source, 'home');
     assert.equal(createConfigService({ migrate: false, env: {} }).get('runtime.codex.provider'), 'tmux');
 
@@ -3504,7 +3503,7 @@ enabled = true
       deps,
     );
     assert.match(sent.at(-1)?.text || '', /默认 Codex Provider.*pty/s);
-    assert.equal(loadConfig().defaultProvider, 'pty');
+    assert.equal(createConfigService({ migrate: false, env: {} }).get('runtime.codex.provider'), 'pty');
 
     await handleBridgeCommand(
       adapter,
@@ -3517,7 +3516,7 @@ enabled = true
       deps,
     );
     assert.match(sent.at(-1)?.text || '', /默认 Codex Provider.*sdk/s);
-    assert.equal(loadConfig().defaultProvider, 'sdk');
+    assert.equal(createConfigService({ migrate: false, env: {} }).get('runtime.codex.provider'), 'sdk');
 
     await handleBridgeCommand(
       adapter,
@@ -3530,7 +3529,7 @@ enabled = true
       deps,
     );
     assert.match(sent.at(-1)?.text || '', /Codex 网络访问.*off/s);
-    assert.equal(loadConfig().codexNetworkAccess, false);
+    assert.equal(createConfigService({ migrate: false, env: {} }).get('runtime.codex.networkAccess'), false);
 
     await handleBridgeCommand(
       adapter,
@@ -3544,7 +3543,7 @@ enabled = true
     );
     assert.match(sent.at(-1)?.text || '', /Codex 思考级别.*minimal/s);
     assert.match(sent.at(-1)?.text || '', /禁用 web search/);
-    assert.equal(loadConfig().codexReasoningEffort, 'minimal');
+    assert.equal(createConfigService({ migrate: false, env: {} }).get('runtime.codex.reasoningEffort'), 'minimal');
 
     await handleBridgeCommand(
       adapter,
@@ -3557,7 +3556,7 @@ enabled = true
       deps,
     );
     assert.match(sent.at(-1)?.text || '', /Claude executable.*ccr/s);
-    assert.equal(loadConfig().claudeExecutable, 'ccr');
+    assert.equal(createConfigService({ migrate: false, env: {} }).get('runtime.claude.executable'), 'ccr');
 
     await handleBridgeCommand(
       adapter,
@@ -3570,7 +3569,7 @@ enabled = true
       deps,
     );
     assert.match(sent.at(-1)?.text || '', /Claude 默认模型.*claude-sonnet-test/s);
-    assert.equal(loadConfig().claudeDefaultModel, 'claude-sonnet-test');
+    assert.equal(createConfigService({ migrate: false, env: {} }).get('runtime.claude.model'), 'claude-sonnet-test');
 
     await handleBridgeCommand(
       adapter,
@@ -3582,7 +3581,6 @@ enabled = true
       '/set historyMessageLimit 12',
       deps,
     );
-    assert.equal(loadConfig().historyMessageLimit, 12);
     assert.equal(createConfigService({ migrate: false, env: {} }).resolve('channels[].config.historyMessageLimit').source, 'home');
     assert.equal(createConfigService({ migrate: false, env: {} }).get('channels[].config.historyMessageLimit'), 12);
 
@@ -3598,7 +3596,7 @@ enabled = true
     );
     assert.match(sent.at(-1)?.text || '', /配置未更新/);
     assert.match(sent.at(-1)?.text || '', /normal 或 yolo/);
-    assert.equal(loadConfig().defaultMode, 'yolo');
+    assert.equal(createConfigService({ migrate: false, env: {} }).get('runtime.codex.yoloMode'), 'on');
 
     await handleBridgeCommand(
       adapter,
@@ -3618,25 +3616,18 @@ enabled = true
 
   it('views and updates current Feishu channel group mention requirement with /require-at', async () => {
     initTestContext({ dynamicSettings: true });
-    saveConfig({
-      schemaVersion: 2,
-      runtime: 'codex',
-      enabledChannels: ['feishu'],
-      defaultMode: 'normal',
-      channels: [
-        {
-          id: 'feishu',
-          alias: '飞书',
-          provider: 'feishu',
-          enabled: true,
-          createdAt: '2026-06-01T00:00:00.000Z',
-          updatedAt: '2026-06-01T00:00:00.000Z',
-          config: {
-            appId: 'app-id',
-            appSecret: 'app-secret',
-          },
+    createConfigService({ migrate: false, env: {} }).set({ kind: 'home' }, {
+      runtime: { provider: 'codex', codex: { yoloMode: 'off' } },
+      channels: [{
+        id: 'feishu',
+        alias: '飞书',
+        provider: 'feishu',
+        enabled: true,
+        config: {
+          appId: 'app-id',
+          appSecret: 'app-secret',
         },
-      ],
+      }],
     });
     const sent: string[] = [];
     const adapter: any = {

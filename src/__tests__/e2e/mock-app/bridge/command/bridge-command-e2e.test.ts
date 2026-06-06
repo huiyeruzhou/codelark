@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 
 import fs from 'node:fs';
-import { CODELARK_HOME, CONFIG_JSON_PATH, CONFIG_PATH, loadConfig } from '../../../../../configuration/index.js';
+import { CODELARK_HOME, CONFIG_JSON_PATH, CONFIG_PATH } from '../../../../../configuration/index.js';
 import { createConfigService } from '../../../../../configuration/service.js';
 import { _testOnlyPtyScreens } from '../../../../../runtime/codex/pty-provider.js';
 import { _testOnlyClaudePty } from '../../../../../runtime/claude/pty-provider.js';
@@ -476,7 +476,6 @@ describe('bridge command e2e', () => {
 
     await _testOnly.handleMessage(adapter, inboundMessage(groupAddress, '/his limit 12', 'incoming-limit'));
     assert.match(adapter.sent.at(-1)?.text || '', /config\.toml/);
-    assert.equal(loadConfig().historyMessageLimit, 12);
     assert.deepEqual(
       createConfigService({ migrate: false }).resolve('channels[].config.historyMessageLimit'),
       {
@@ -491,12 +490,12 @@ describe('bridge command e2e', () => {
     assert.equal(fs.existsSync(CONFIG_JSON_PATH), false);
 
     await _testOnly.handleMessage(adapter, inboundMessage(groupAddress, '/ui off', 'incoming-ui-detail-off'));
-    assert.equal('showToolCallDetails' in loadConfig(), false);
+    assert.doesNotMatch(fs.readFileSync(path.join(CODELARK_HOME, 'config.toml'), 'utf-8'), /showToolCallDetails|show_tool_call_details/);
     assert.match(adapter.sent.at(-1)?.text || '', /UI 显示设置已简化/);
     assert.match(adapter.sent.at(-1)?.text || '', /工具详情.*始终显示/s);
 
     await _testOnly.handleMessage(adapter, inboundMessage(groupAddress, '/ui on', 'incoming-ui-detail-on'));
-    assert.equal('showToolCallDetails' in loadConfig(), false);
+    assert.doesNotMatch(fs.readFileSync(path.join(CODELARK_HOME, 'config.toml'), 'utf-8'), /showToolCallDetails|show_tool_call_details/);
     assert.match(adapter.sent.at(-1)?.text || '', /工具详情.*始终显示/s);
 
     await _testOnly.handleMessage(adapter, inboundMessage(groupAddress, '/his msg', 'incoming-history-msg'));
@@ -515,7 +514,7 @@ describe('bridge command e2e', () => {
     assert.doesNotMatch(richCard?.sections[2]?.markdown || '', /^```text/);
 
     await _testOnly.handleMessage(adapter, inboundMessage(groupAddress, '/his msg 1', 'incoming-history-msg-once'));
-    assert.equal(loadConfig().historyMessageLimit, 12);
+    assert.equal(createConfigService({ migrate: false }).get('channels[].config.historyMessageLimit'), 12);
     const temporaryText = adapter.sent.at(-1)?.text || '';
     assert.match(temporaryText, /最近对话（msg）/);
     assert.match(temporaryText, /返回条数.*1 \/ 本次 1（配置 12）/s);
@@ -2341,7 +2340,7 @@ describe('bridge command e2e', () => {
     try {
       await _testOnly.handleMessage(adapter, inboundMessage(address, '/set defaultProvider tmux', 'incoming-tmux-default-set-provider'));
       assert.match(adapter.sent.at(-1)?.text || '', /默认 Codex Provider.*tmux/s);
-      assert.equal(loadConfig().defaultProvider, 'tmux');
+      assert.equal(createConfigService({ migrate: false, env: {} }).get('runtime.codex.provider'), 'tmux');
 
       await _testOnly.handleMessage(adapter, inboundMessage(address, `/new tmux-default ${workDir}`, 'incoming-tmux-default-new'));
       const newAddress = latestCreatedGroupAddress(adapter);

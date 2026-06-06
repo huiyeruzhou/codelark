@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 
-import { CONFIG_JSON_PATH, CODELARK_HOME, DEFAULT_WORKSPACE_ROOT } from '../../../configuration/index.js';
+import { CODELARK_HOME, DEFAULT_WORKSPACE_ROOT } from '../../../configuration/index.js';
 import { JsonFileStore } from '../../../storage/json-store.js';
 import { initBridgeContext } from '../../../bridge/host/context.js';
 import { resolve } from '../../../bridge/host/channel-router.js';
@@ -12,6 +12,7 @@ import { getSessionActiveRuntime, getSessionWorkingDirectory } from '../../../do
 import { writeCodexSessionJsonlFixture } from '../../helpers/bridge/test-bridge-utils.js';
 
 const DATA_DIR = path.join(CODELARK_HOME, 'data');
+const CONFIG_TOML_PATH = path.join(CODELARK_HOME, 'config.toml');
 
 function makeSettings(): Map<string, string> {
   return new Map([
@@ -41,41 +42,40 @@ describe('channel-router default targets', () => {
   let configBackup: string | null = null;
 
   beforeEach(() => {
-    configBackup = fs.existsSync(CONFIG_JSON_PATH) ? fs.readFileSync(CONFIG_JSON_PATH, 'utf-8') : null;
+    configBackup = fs.existsSync(CONFIG_TOML_PATH) ? fs.readFileSync(CONFIG_TOML_PATH, 'utf-8') : null;
     fs.rmSync(DATA_DIR, { recursive: true, force: true });
     if (process.env.CODEX_HOME) {
       fs.rmSync(path.join(process.env.CODEX_HOME, 'sessions'), { recursive: true, force: true });
       fs.rmSync(path.join(process.env.CODEX_HOME, 'archived_sessions'), { recursive: true, force: true });
       fs.rmSync(path.join(process.env.CODEX_HOME, 'session_index.jsonl'), { force: true });
     }
-    fs.rmSync(CONFIG_JSON_PATH, { force: true });
-    fs.mkdirSync(path.dirname(CONFIG_JSON_PATH), { recursive: true });
-    fs.writeFileSync(CONFIG_JSON_PATH, JSON.stringify({
-      schemaVersion: 1,
-      runtime: {
-        provider: 'codex',
-        codex: {
-          defaultMode: 'code',
-        },
-      },
-      channels: [
-        {
-          id: 'feishu-default',
-          alias: '飞书',
-          provider: 'feishu',
-          enabled: true,
-          createdAt: '2026-03-01T00:00:00.000Z',
-          updatedAt: '2026-03-01T00:00:00.000Z',
-          config: {},
-        },
-      ],
-    }, null, 2));
+    fs.rmSync(CONFIG_TOML_PATH, { force: true });
+    fs.mkdirSync(path.dirname(CONFIG_TOML_PATH), { recursive: true });
+    fs.writeFileSync(CONFIG_TOML_PATH, [
+      'schema_version = 2',
+      '',
+      '[runtime]',
+      'provider = "codex"',
+      '',
+      '[runtime.codex]',
+      'yolo_mode = "off"',
+      '',
+      '[[channels]]',
+      'id = "feishu-default"',
+      'alias = "飞书"',
+      'provider = "feishu"',
+      'enabled = true',
+      '',
+      '[channels.config]',
+      'history_message_limit = 8',
+      '',
+    ].join('\n'), 'utf-8');
   });
 
   afterEach(() => {
-    fs.rmSync(CONFIG_JSON_PATH, { force: true });
+    fs.rmSync(CONFIG_TOML_PATH, { force: true });
     if (configBackup !== null) {
-      fs.writeFileSync(CONFIG_JSON_PATH, configBackup);
+      fs.writeFileSync(CONFIG_TOML_PATH, configBackup);
     }
   });
 

@@ -2,8 +2,6 @@ import fs from 'node:fs';
 
 import { isCliOnlyCodexModel, readConfiguredCodexModel } from '../../runtime/codex/models.js';
 import {
-  loadConfig,
-  saveConfig,
   type CodexReasoningEffort,
 } from '../../configuration/index.js';
 import { createConfigService } from '../../configuration/service.js';
