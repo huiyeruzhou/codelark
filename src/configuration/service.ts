@@ -127,6 +127,32 @@ function validateWritablePath(target: ConfigWriteTarget, path: ConfigPath): void
   requireWritable(writeScopeForTarget(target), path);
 }
 
+function validateSourcePatch(source: ConfigSourceKind, patch: ConfigPatch): ConfigPatch {
+  const parsed = configPatchSchema.parse(patch);
+  if (source !== 'defaults' && source !== 'home' && parsed.channels && parsed.channels.length > 0) {
+    throw new Error(`Config source ${source} cannot define channels; configure channels only in home config.toml.`);
+  }
+  return parsed;
+}
+
+function materializeHomeChannelPatch(paths: ConfigPaths, current: ConfigPatch, patch: ConfigPatch): ConfigPatch {
+  if (!patch.channels || patch.channels.length === 0) return patch;
+  const defaults = readDefaultsConfig(paths.defaultsToml).patch;
+  const materialized: ConfigPatch = {};
+  for (const channel of patch.channels) {
+    const defaultChannel = defaults.channels?.find((entry) => entry.id === channel.id)
+      || defaults.channels?.find((entry) => entry.id === 'feishu-default');
+    const currentChannel = current.channels?.find((entry) => entry.id === channel.id);
+    if (defaultChannel) mergePatch(materialized, { channels: [{ ...defaultChannel, id: channel.id }] });
+    if (currentChannel) mergePatch(materialized, { channels: [currentChannel] });
+  }
+  mergePatch(materialized, { channels: patch.channels });
+  return {
+    ...patch,
+    channels: materialized.channels,
+  };
+}
+
 function maskSecretValue(value: unknown): unknown {
   if (typeof value !== 'string') return value === undefined ? undefined : '****';
   if (value.length <= 4) return '****';
@@ -157,7 +183,7 @@ export function createConfigService(options: ConfigServiceOptions = {}): ConfigS
   }
 
   function layer(ref: SourceRef, patch: ConfigPatch): ConfigLayer {
-    return { ref, patch: configPatchSchema.parse(patch) };
+    return { ref, patch: validateSourcePatch(ref.source, patch) };
   }
 
   function fileLayer(source: ConfigSourceKind, loaded: ReturnType<typeof readTomlConfig>): ConfigLayer | null {
@@ -234,6 +260,14 @@ export function createConfigService(options: ConfigServiceOptions = {}): ConfigS
     return sessionTomlPath(paths, target.sessionId);
   }
 
+  function writeTargetPatch(target: ConfigWriteTarget, patch: ConfigPatch, replace = false): void {
+    const file = targetFile(target);
+    const current = replace ? {} : readTomlConfig(file)?.patch || {};
+    const paths = resolveConfigPaths({ codelarkHome: options.codelarkHome, cwd: target.kind === 'local' ? target.cwd : undefined });
+    const writablePatch = target.kind === 'home' ? materializeHomeChannelPatch(paths, current, patch) : patch;
+    writeTomlConfig(file, replace ? writablePatch : mergePatch(current, writablePatch));
+  }
+
   return {
     migrationResult,
     snapshot,
@@ -266,13 +300,11 @@ export function createConfigService(options: ConfigServiceOptions = {}): ConfigS
     },
     set(target: ConfigWriteTarget, patch: ConfigPatch): void {
       const writablePatch = validateWritablePatch(target, patch);
-      const file = targetFile(target);
-      const current = readTomlConfig(file)?.patch || {};
-      writeTomlConfig(file, mergePatch(current, writablePatch));
+      writeTargetPatch(target, writablePatch);
     },
     replace(target: ConfigWriteTarget, patch: ConfigPatch): void {
       const writablePatch = validateWritablePatch(target, patch);
-      writeTomlConfig(targetFile(target), writablePatch);
+      writeTargetPatch(target, writablePatch, true);
     },
     unset(target: ConfigWriteTarget, path: ConfigPath): void {
       validateWritablePath(target, path);
@@ -285,7 +317,8 @@ export function createConfigService(options: ConfigServiceOptions = {}): ConfigS
       } else {
         unsetConfigPath(current as Record<string, unknown>, path);
       }
-      writeTomlConfig(file, current);
+      const paths = resolveConfigPaths({ codelarkHome: options.codelarkHome, cwd: target.kind === 'local' ? target.cwd : undefined });
+      writeTomlConfig(file, target.kind === 'home' ? materializeHomeChannelPatch(paths, {}, current) : current);
     },
     exportRuntimeSettings(scope?: ConfigScope): Map<string, string> {
       return exportRuntimeSettings(snapshot(scope).config);

@@ -6,8 +6,9 @@ CodeLark 需要把“默认值、全局配置、项目配置、环境变量、�
 
 必须满足：
 
-- 支持命令行覆盖和多级配置，基础优先级为 `cli > env > local > home > defaults`。
-- 支持 Channel/Session scope 的持久化覆盖，例如 `/r` 对当前飞书 Channel 或当前会话 Session 的覆盖；这类持久化配置也应使用 TOML，而不是继续散落在 BridgeSession JSON 中。
+- 支持命令行覆盖和多级配置，非通道实例字段的基础优先级为 `cli > env > local > home > defaults`。
+- 支持 Channel/Session scope 的持久化执行偏好覆盖，例如 `/r` 对当前飞书 Channel 或当前会话 Session 的覆盖；这类持久化配置也应使用 TOML，而不是继续散落在 BridgeSession JSON 中。
+- 通道实例清单和通道连接/行为配置只允许出现在 defaults 与 home `config.toml`。home 中的 `channels` 整组覆盖 defaults，local/env/cli/channel/session/request 出现 `channels` 都应校验失败。
 - 查询配置时不再在业务代码里手写 override/fallback。
 - 全局默认值有清晰收口，能直接看到当前默认配置长什么样；setup wizard 展示和写入的全局配置项也必须从同一个默认配置定义读取。
 - 启动时把旧 `config.json` 和 `config.env` 一次性迁移到 `config.toml`；迁移完成后不再支持 `config.env` 作为配置输入。
@@ -69,17 +70,17 @@ CodeLark 需要把“默认值、全局配置、项目配置、环境变量、�
 | claude | `runtime.claude.executable` | `runtime.claude.executable` | `runtime.claude.executable` | `CODELARK_CLAUDE_EXECUTABLE` | - | 否 |
 | claude | `runtime.claude.reasoningEffort` | `runtime.claude.reasoning_effort` | `runtime.claude.reasoningEffort` | `CODELARK_CLAUDE_REASONING_EFFORT` | - | Channel / Session，由 `/r` 写入 |
 | claude | `runtime.claude.idleTimeoutMinutes` | `runtime.claude.idle_timeout_minutes` | `runtime.claude.idleTimeoutMinutes` | `CODELARK_CLAUDE_IDLE_TIMEOUT_MINUTES` | - | 可考虑 Session |
-| channel | `channels[].enabled` | `channels[].enabled` | derived from `channels[].enabled` | `CODELARK_ENABLED_CHANNELS` | - | Channel policy |
-| channel | `channels[].config.historyMessageLimit` | `channels[].config.history_message_limit` | `runtime.bridge.historyMessageLimit` | `CODELARK_HISTORY_MESSAGE_LIMIT` | - | Channel |
-| channel | `channels[].config.streamStatusIdleStartSeconds` | `channels[].config.stream_status_idle_start_seconds` | `runtime.bridge.streamStatusIdleStartSeconds` | `CODELARK_STREAM_STATUS_IDLE_START_SECONDS` | - | Channel |
-| channel | `channels[].config.streamStatusCheckIntervalSeconds` | `channels[].config.stream_status_check_interval_seconds` | `runtime.bridge.streamStatusCheckIntervalSeconds` | `CODELARK_STREAM_STATUS_CHECK_INTERVAL_SECONDS` | - | Channel |
-| feishu | `channels[].config.appId` | `channels[].config.app_id` | `channels[].config.appId` | `CODELARK_FEISHU_APP_ID` | - | 否 |
-| feishu | `channels[].config.appSecret` | `channels[].config.app_secret` | `channels[].config.appSecret` | `CODELARK_FEISHU_APP_SECRET` | - | 否 |
-| feishu | `channels[].config.site` | `channels[].config.site` | `channels[].config.site` | `CODELARK_FEISHU_SITE` | `CODELARK_FEISHU_DOMAIN` | 否 |
-| feishu | `channels[].config.allowedUsers` | `channels[].config.allowed_users` | `channels[].config.allowedUsers` | `CODELARK_FEISHU_ALLOWED_USERS` | - | 否 |
-| feishu | `channels[].config.streamingEnabled` | `channels[].config.streaming_enabled` | `channels[].config.streamingEnabled` | `CODELARK_FEISHU_STREAMING_ENABLED` | - | Channel |
-| feishu | `channels[].config.feedbackMarkdownEnabled` | `channels[].config.feedback_markdown_enabled` | `channels[].config.feedbackMarkdownEnabled` | `CODELARK_FEISHU_COMMAND_MARKDOWN_ENABLED` | - | Channel |
-| feishu | `channels[].config.requireMention` | `channels[].config.require_mention` | `channels[].config.requireMention` | `CODELARK_FEISHU_REQUIRE_MENTION` | - | Channel |
+| channel | `channels[].enabled` | `channels[].enabled` | derived from `channels[].enabled` | `CODELARK_ENABLED_CHANNELS` export only | - | Home only |
+| channel | `channels[].config.historyMessageLimit` | `channels[].config.history_message_limit` | `runtime.bridge.historyMessageLimit` | `CODELARK_HISTORY_MESSAGE_LIMIT` export only | - | Home only |
+| channel | `channels[].config.streamStatusIdleStartSeconds` | `channels[].config.stream_status_idle_start_seconds` | `runtime.bridge.streamStatusIdleStartSeconds` | `CODELARK_STREAM_STATUS_IDLE_START_SECONDS` export only | - | Home only |
+| channel | `channels[].config.streamStatusCheckIntervalSeconds` | `channels[].config.stream_status_check_interval_seconds` | `runtime.bridge.streamStatusCheckIntervalSeconds` | `CODELARK_STREAM_STATUS_CHECK_INTERVAL_SECONDS` export only | - | Home only |
+| feishu | `channels[].config.appId` | `channels[].config.app_id` | `channels[].config.appId` | `CODELARK_FEISHU_APP_ID` export only | - | Home only |
+| feishu | `channels[].config.appSecret` | `channels[].config.app_secret` | `channels[].config.appSecret` | `CODELARK_FEISHU_APP_SECRET` export only | - | Home only |
+| feishu | `channels[].config.site` | `channels[].config.site` | `channels[].config.site` | `CODELARK_FEISHU_SITE` export only | `CODELARK_FEISHU_DOMAIN` migration only | Home only |
+| feishu | `channels[].config.allowedUsers` | `channels[].config.allowed_users` | `channels[].config.allowedUsers` | `CODELARK_FEISHU_ALLOWED_USERS` export only | - | Home only |
+| feishu | `channels[].config.streamingEnabled` | `channels[].config.streaming_enabled` | `channels[].config.streamingEnabled` | `CODELARK_FEISHU_STREAMING_ENABLED` export only | - | Home only |
+| feishu | `channels[].config.feedbackMarkdownEnabled` | `channels[].config.feedback_markdown_enabled` | `channels[].config.feedbackMarkdownEnabled` | `CODELARK_FEISHU_COMMAND_MARKDOWN_ENABLED` export only | - | Home only |
+| feishu | `channels[].config.requireMention` | `channels[].config.require_mention` | `channels[].config.requireMention` | `CODELARK_FEISHU_REQUIRE_MENTION` export only | - | Home only |
 
 ### 当前主要问题
 
@@ -120,9 +121,9 @@ TOML shape 边界：
 - `[session]` 放和当前对话执行上下文相关的配置：`workspace`、`tmux_session_name`、`tmux_capture_lines`、`tmux_auto_enter`、`tmux_echo_input`。
 - `tmux_session_name` 只表示用户显式配置的 tmux 绑定目标；provider 自动生成的 tmux session id 仍是运行时身份，不进入配置 merge。
 - `[bridge]` 放 Bridge 服务自身行为配置，例如默认工作区和 UI 访问控制。
-- `[channels.config]` 放通道行为配置，例如历史消息窗口和流式状态节奏。
+- `[channels.config]` 放通道连接信息和通道行为配置，例如飞书 App 凭据、历史消息窗口和流式状态节奏；只允许在 defaults/home `channels` 中出现。
 - `[runtime]` 放当前 runtime 选择；`[runtime.codex]`、`[runtime.claude]` 放 provider-specific 配置。
-- `[[channels]]` 和 `[channels.config]` 放通道实例配置；Channel scope 文件也复用同一套 TOML shape，只写需要覆盖的 section。
+- `[[channels]]` 放通道实例配置；home `channels` 是完整通道清单，整组覆盖 defaults。Channel/Session scope 文件不能包含 `[[channels]]`，只能保存执行偏好字段。
 
 ### 目标文件布局
 
@@ -155,7 +156,7 @@ src/configuration/
 | defaults | TOML | `src/configuration/defaults.toml` | 是，随包发布 | 产品默认值 |
 | home | TOML | `${CODELARK_HOME:-~/.codelark}/config.toml` | 是 | 本机全局默认 |
 | local | TOML | `.codelark/config.toml` 或 `.codelark.toml` | 是 | 当前项目/目录 |
-| channel | TOML | `${CODELARK_HOME}/config/channels/<channel-id>.toml` | 是 | 某个飞书 Channel 的持久化偏好 |
+| channel | TOML | `${CODELARK_HOME}/config/channels/<channel-id>.toml` | 是 | 某个飞书 Channel 的持久化执行偏好，不允许包含 `channels` |
 | session | TOML | `${CODELARK_HOME}/config/sessions/<session-id>.toml` | 是 | 当前对话 Session 的持久化 override |
 | env | env | `process.env.CODELARK_*` | 否 | 当前进程 |
 | cli | argv | `codelark run --set ...` | 否 | 单次 CLI 命令 |
@@ -174,11 +175,13 @@ Session effective config:
   request > session > channel > cli > env > local > home > defaults
 ```
 
+`channels` 是例外：只读取 defaults 和 home，且 home 整组覆盖 defaults。local/env/cli/channel/session/request 不能定义 `channels`，因此不存在 `channels[]` 跨层按 id merge。
+
 说明：
 
 - `Global` 表达本机默认值，包含 defaults/home/env/cli。
 - `Local` 表达当前项目/目录默认值，来自 `.codelark/config.toml` 或 `.codelark.toml`，覆盖 home，低于 env/cli。
-- `Channel` 表达当前飞书 Channel 的偏好，默认作用于当前消息所在的 Channel。
+- `Channel` 表达当前飞书 Channel 的执行偏好，默认作用于当前消息所在的 Channel；它不表达通道实例清单或飞书 App 凭据。
 - `Session` 表达当前对话 Session 的偏好，切到新 Session 后不继承，除非显式复制。
 - `/r high` 这类一参数命令默认写 Channel；`/r high session` 才写当前 Session；`/r high global` 写 Global。
 - `/model` 如果只影响当前对话，命令应显式使用 Session scope；否则一参数默认写 Channel。
@@ -186,7 +189,7 @@ Session effective config:
 
 ### v2 完整 TOML shape
 
-`defaults.toml` 必须完整展示下面这套 shape；home、local、Channel、Session TOML 使用同一套 shape 的 partial，只写需要覆盖的字段。所有已知配置项和 v1 需要迁移的配置字段都必须落到这个 shape 中，不能再出现另一套顶级 `workspace`、`tmux_session_name` 或 `runtime.general.*` TOML 结构。
+`defaults.toml` 必须完整展示下面这套 shape；home 可以保存完整 `channels` 清单并覆盖 defaults，local、Channel、Session TOML 使用同一套 shape 的非 `channels` partial，只写需要覆盖的执行偏好字段。所有已知配置项和 v1 需要迁移的配置字段都必须落到这个 shape 中，不能再出现另一套顶级 `workspace`、`tmux_session_name` 或 `runtime.general.*` TOML 结构。
 
 ```toml
 schema_version = 2
@@ -282,7 +285,7 @@ require_mention = false
 | `channels[].config.feedback_markdown_enabled` | `channels[].config.feedbackMarkdownEnabled` | `CODELARK_FEISHU_COMMAND_MARKDOWN_ENABLED` |
 | `channels[].config.require_mention` | `channels[].config.requireMention` | `CODELARK_FEISHU_REQUIRE_MENTION` |
 
-`[channels.config]` 是最近一个 `[[channels]]` array item 的子表；多个通道重复声明时，每个 `[[channels]]` 后面跟自己的 `[channels.config]`，merge 时按 `id` 合并同一个通道。
+`[channels.config]` 是最近一个 `[[channels]]` array item 的子表；通道 `id` 应在同一个文件内唯一。不同 source 之间不再按 `id` 合并通道，home `channels` 直接替换 defaults `channels`。
 
 命令行覆盖只接受 canonical path，最终也落到上面这套 TOML path；CLI 本身不定义另一套字段名。
 
@@ -292,7 +295,7 @@ require_mention = false
 | --- | --- |
 | scalar | 高优先级非空值覆盖低优先级值；允许清空的字段使用 TOML `null` 或 CLI `--unset path` |
 | object | deep merge |
-| arrays of channels | 按 `id` merge；同 `id` 覆盖字段，不同 `id` 追加 |
+| arrays of channels | 只允许 defaults/home；home 整组覆盖 defaults，不参与 local/env/cli/channel/session/request 合并 |
 | `enabledChannels` | 不再作为主字段；由 `channels[].enabled` 派生 |
 | secret | 存储原值，诊断和 UI provenance 默认 mask |
 | path | `~` 和相对路径按 source base 归一化：home 相对 CODELARK_HOME，Local 相对配置文件目录，Channel/Session 相对配置文件目录或工作区 |
@@ -327,7 +330,7 @@ require_mention = false
 - `session`：这个字段能否写入 Session TOML。
 - `env` / `cli`：这个字段能否被环境变量或命令行覆盖。
 
-`scopes` 用于校验、写入路由、UI/命令展示和 explain。它防止把不该出现在某层的字段写进去，例如 channel credentials 不应写入 Session TOML，Session-only 的 tmux/cwd 状态不应写入 Global/Local TOML。优先级仍由 source chain 决定，例如 `request > session > channel > cli > env > local > home > defaults`。换句话说，`scopes` 回答“这个字段能在哪里出现”，source chain 回答“多个来源同时出现时谁赢”。
+`scopes` 用于校验、写入路由、UI/命令展示和 explain。它防止把不该出现在某层的字段写进去，例如 `channels` 只能写 home，不能写入 Local/Channel/Session TOML 或 env/CLI/request；Session-only 的 tmux/cwd 状态不应写入 Global/Local TOML。优先级仍由 source chain 决定，例如 `request > session > channel > cli > env > local > home > defaults`，但 `channels` 只有 `home > defaults`。换句话说，`scopes` 回答“这个字段能在哪里出现”，source chain 回答“多个来源同时出现时谁赢”。
 
 latest `configFields` 应描述全局默认、env/CLI、IM 命令、Channel/Session scope、secret 和 projection 元数据；迁移来源不放在通用字段定义里。它至少承载：
 
@@ -430,13 +433,13 @@ fallback = runtime.codex.reasoningEffort from cli/env/local/home/defaults
 2026-06-07 重新评估 `node-config`、`wild-config`、`auto-config-loader` 后，结论不是“完全不用通用配置库”，而是做分层采用：
 
 - 纯静态全局配置层采用 `node-config`：`defaults + home + local/project + env + CLI baseline` 交给成熟库做加载和基础 merge。
-- CodeLark 动态配置语义仍保留在 `ConfigService`：`request > session > channel` overlay、字段级 provenance/explain、scope 写入约束、迁移、secret mask、`channels[]` 按 id 合并、runtime env/settings projection。
+- CodeLark 动态配置语义仍保留在 `ConfigService`：`request > session > channel` overlay、字段级 provenance/explain、scope 写入约束、迁移、secret mask、`channels` home-only 校验与 materialized 写入、runtime env/settings projection。
 - 也就是说，`node-config` 替代的是 `ConfigService` 底下通用的静态 source loading，不替代 `ConfigService` 这个产品语义层。
 
 | 库 | 能覆盖的部分 | 不能满足的核心需求 |
 | --- | --- | --- |
-| `config` / `node-config` | defaults、home/local/project、env、CLI baseline 的静态分层加载和基础 merge | 不直接覆盖 Channel/Session/request 动态 overlay、scope 写入约束、字段级 explain/provenance、migration state、secret mask、`channels[]` 按 id 合并和 runtime projection；这些仍由 `ConfigService` 包装实现。 |
-| `wild-config` | TOML 默认文件、自定义 config 文件、命令行 dotted override | 更像进程启动时的静态配置合并；不能表达 Channel/Session scope 的动态读写、按字段 explain、`channels[]` 按 id 合并、home/channel/session TOML 的 replace/unset 写入。 |
+| `config` / `node-config` | defaults、home/local/project、env、CLI baseline 的静态分层加载和基础 merge | 不直接覆盖 Channel/Session/request 动态 overlay、scope 写入约束、字段级 explain/provenance、migration state、secret mask、`channels` home-only policy 和 runtime projection；这些仍由 `ConfigService` 包装实现。 |
+| `wild-config` | TOML 默认文件、自定义 config 文件、命令行 dotted override | 更像进程启动时的静态配置合并；不能表达 Channel/Session scope 的动态读写、按字段 explain、home/channel/session TOML 的 replace/unset 写入。 |
 | `auto-config-loader` | package.json/rc/多格式配置文件查找与加载 | 主要解决“从哪里找配置文件”和“支持哪些格式”；不负责 CodeLark 需要的字段 schema、source priority、provenance、scoped write policy、migration state 或 runtime settings/env projection。 |
 
 因此后续实现方向调整为 hybrid：先在静态全局层引入 `node-config`，让它负责通用文件加载、环境覆盖和基础 merge；再把输出交给 `zod` 校验并进入 `ConfigService`。`ConfigService` 的手写范围应缩小到 CodeLark 特有的动态 scope 合并、provenance、写入约束、迁移和 projection。未来只有当产品需要 package.json/rc 搜索或多文件格式 local config 时，才考虑把 `auto-config-loader` 放到 local source 的文件发现层，而不是替代 `ConfigService`。

@@ -45,6 +45,10 @@ function mergeChannel(target: ConfigPatch, source: NonNullable<ConfigPatch['chan
   }
 }
 
+function replaceChannels(target: ConfigPatch, source: NonNullable<ConfigPatch['channels']>): void {
+  target.channels = clone(source);
+}
+
 export function mergePatch(target: ConfigPatch, source: ConfigPatch): ConfigPatch {
   if (source.schemaVersion !== undefined) target.schemaVersion = source.schemaVersion;
   if (source.session) target.session = { ...(target.session || {}), ...source.session };
@@ -90,7 +94,13 @@ export function mergeConfigLayers(layers: ConfigLayer[]): MergeResult {
   const provenance: ProvenanceMap = new Map();
 
   for (const layer of layers) {
-    mergePatch(merged, clone(layer.patch));
+    if ((layer.ref.source === 'defaults' || layer.ref.source === 'home') && layer.patch.channels) {
+      const { channels, ...rest } = clone(layer.patch);
+      mergePatch(merged, rest);
+      replaceChannels(merged, channels || []);
+    } else {
+      mergePatch(merged, clone(layer.patch));
+    }
     markScalarProvenance(provenance, layer);
     markChannelProvenance(provenance, layer);
   }

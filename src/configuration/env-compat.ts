@@ -33,6 +33,7 @@ export function envToConfigPatch(env: NodeJS.ProcessEnv): {
 
   for (const field of Object.values(findConfigFieldsByEnv())) {
     if (!field.envKey || !field.parseEnv) continue;
+    if (!field.scopes.includes('env')) continue;
     const raw = env[field.envKey];
     let valueSource = field.envKey;
     let rawValue = raw;

@@ -48,7 +48,7 @@ function enumFromEnv<T extends z.ZodEnum>(schema: T): (value: string) => z.infer
 
 const allScopes = ['home', 'local', 'channel', 'session', 'env', 'cli'] as const;
 const globalScopes = ['home', 'local', 'env', 'cli'] as const;
-const channelScopes = ['home', 'local', 'channel', 'env', 'cli'] as const;
+const homeOnlyScopes = ['home'] as const;
 const sessionScopes = ['home', 'local', 'channel', 'session', 'env', 'cli'] as const;
 
 export const configFields = [
@@ -284,7 +284,7 @@ export const configFields = [
   {
     path: 'channels[].enabled',
     tomlPath: 'channels[].enabled',
-    scopes: channelScopes,
+    scopes: homeOnlyScopes,
     schema: z.boolean(),
     envKey: 'CODELARK_ENABLED_CHANNELS',
     processEnvKey: 'CODELARK_ENABLED_CHANNELS',
@@ -293,7 +293,7 @@ export const configFields = [
   {
     path: 'channels[].config.historyMessageLimit',
     tomlPath: 'channels[].config.history_message_limit',
-    scopes: channelScopes,
+    scopes: homeOnlyScopes,
     schema: z.number().int().positive(),
     envKey: 'CODELARK_HISTORY_MESSAGE_LIMIT',
     processEnvKey: 'CODELARK_HISTORY_MESSAGE_LIMIT',
@@ -303,7 +303,7 @@ export const configFields = [
   {
     path: 'channels[].config.streamStatusIdleStartSeconds',
     tomlPath: 'channels[].config.stream_status_idle_start_seconds',
-    scopes: channelScopes,
+    scopes: homeOnlyScopes,
     schema: z.number().int().positive(),
     envKey: 'CODELARK_STREAM_STATUS_IDLE_START_SECONDS',
     processEnvKey: 'CODELARK_STREAM_STATUS_IDLE_START_SECONDS',
@@ -313,7 +313,7 @@ export const configFields = [
   {
     path: 'channels[].config.streamStatusCheckIntervalSeconds',
     tomlPath: 'channels[].config.stream_status_check_interval_seconds',
-    scopes: channelScopes,
+    scopes: homeOnlyScopes,
     schema: z.number().int().positive(),
     envKey: 'CODELARK_STREAM_STATUS_CHECK_INTERVAL_SECONDS',
     processEnvKey: 'CODELARK_STREAM_STATUS_CHECK_INTERVAL_SECONDS',
@@ -323,7 +323,7 @@ export const configFields = [
   {
     path: 'channels[].config.appId',
     tomlPath: 'channels[].config.app_id',
-    scopes: ['home', 'local', 'env', 'cli'],
+    scopes: homeOnlyScopes,
     schema: z.string(),
     envKey: 'CODELARK_FEISHU_APP_ID',
     processEnvKey: 'CODELARK_FEISHU_APP_ID',
@@ -333,7 +333,7 @@ export const configFields = [
   {
     path: 'channels[].config.appSecret',
     tomlPath: 'channels[].config.app_secret',
-    scopes: ['home', 'local', 'env', 'cli'],
+    scopes: homeOnlyScopes,
     schema: z.string(),
     envKey: 'CODELARK_FEISHU_APP_SECRET',
     processEnvKey: 'CODELARK_FEISHU_APP_SECRET',
@@ -344,7 +344,7 @@ export const configFields = [
   {
     path: 'channels[].config.site',
     tomlPath: 'channels[].config.site',
-    scopes: ['home', 'local', 'env', 'cli'],
+    scopes: homeOnlyScopes,
     schema: feishuSiteSchema,
     envKey: 'CODELARK_FEISHU_SITE',
     processEnvKey: 'CODELARK_FEISHU_SITE',
@@ -354,7 +354,7 @@ export const configFields = [
   {
     path: 'channels[].config.allowedUsers',
     tomlPath: 'channels[].config.allowed_users',
-    scopes: ['home', 'local', 'env', 'cli'],
+    scopes: homeOnlyScopes,
     schema: z.array(z.string()),
     envKey: 'CODELARK_FEISHU_ALLOWED_USERS',
     processEnvKey: 'CODELARK_FEISHU_ALLOWED_USERS',
@@ -365,7 +365,7 @@ export const configFields = [
   {
     path: 'channels[].config.streamingEnabled',
     tomlPath: 'channels[].config.streaming_enabled',
-    scopes: channelScopes,
+    scopes: homeOnlyScopes,
     schema: z.boolean(),
     envKey: 'CODELARK_FEISHU_STREAMING_ENABLED',
     processEnvKey: 'CODELARK_FEISHU_STREAMING_ENABLED',
@@ -375,7 +375,7 @@ export const configFields = [
   {
     path: 'channels[].config.feedbackMarkdownEnabled',
     tomlPath: 'channels[].config.feedback_markdown_enabled',
-    scopes: channelScopes,
+    scopes: homeOnlyScopes,
     schema: z.boolean(),
     envKey: 'CODELARK_FEISHU_COMMAND_MARKDOWN_ENABLED',
     processEnvKey: 'CODELARK_FEISHU_COMMAND_MARKDOWN_ENABLED',
@@ -385,7 +385,7 @@ export const configFields = [
   {
     path: 'channels[].config.requireMention',
     tomlPath: 'channels[].config.require_mention',
-    scopes: channelScopes,
+    scopes: homeOnlyScopes,
     schema: z.boolean(),
     envKey: 'CODELARK_FEISHU_REQUIRE_MENTION',
     processEnvKey: 'CODELARK_FEISHU_REQUIRE_MENTION',

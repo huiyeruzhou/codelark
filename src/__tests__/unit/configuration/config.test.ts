@@ -347,6 +347,12 @@ app_id = "old-app"
 app_secret = "old-secret"
 site = "feishu"
 history_message_limit = 8
+stream_status_idle_start_seconds = 180
+stream_status_check_interval_seconds = 10
+allowed_users = []
+streaming_enabled = true
+feedback_markdown_enabled = true
+require_mention = false
 `);
       fs.writeFileSync(CONFIG_PATH, 'CUSTOM_KEEP=1\nCODELARK_CODEX_DEFAULT_MODEL=legacy-env-model\n');
       fs.writeFileSync(CONFIG_JSON_PATH, JSON.stringify({

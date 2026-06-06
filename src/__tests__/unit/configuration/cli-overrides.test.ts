@@ -1,7 +1,7 @@
 import '../../setup/test-setup.js';
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { InvalidArgumentError } from 'commander';
+import { InvalidOptionArgumentError as InvalidArgumentError } from 'commander';
 import { parseConfigCliOverrides } from '../../../configuration/cli-overrides.js';
 
 describe('parseConfigCliOverrides', () => {
@@ -13,7 +13,6 @@ describe('parseConfigCliOverrides', () => {
       '--set', 'runtime.codex.networkAccess=false',
       '--set', 'bridge.uiAllowLan=true',
       '--set', 'session.tmuxCaptureLines=120',
-      '--set', 'channels[].config.allowedUsers=["ou_1","ou_2"]',
     ]);
 
     assert.deepEqual(parsed, {
@@ -31,28 +30,19 @@ describe('parseConfigCliOverrides', () => {
         session: {
           tmuxCaptureLines: 120,
         },
-        channels: [{
-          id: 'feishu-default',
-          config: {
-            allowedUsers: ['ou_1', 'ou_2'],
-          },
-        }],
       },
       unset: [],
     });
   });
 
-  it('parses channel enabled and unset paths', () => {
+  it('parses unset paths', () => {
     const parsed = parseConfigCliOverrides([
-      '--set', 'channels[].enabled=true',
       '--unset', 'runtime.codex.model',
       '--unset', 'session.workspace',
     ]);
 
     assert.deepEqual(parsed, {
-      patch: {
-        channels: [{ id: 'feishu-default', enabled: true }],
-      },
+      patch: {},
       unset: ['runtime.codex.model', 'session.workspace'],
     });
   });
@@ -82,6 +72,10 @@ describe('parseConfigCliOverrides', () => {
     assert.throws(
       () => parseConfigCliOverrides(['--set', 'runtime.codex.reasoningEffort=extreme']),
       InvalidArgumentError,
+    );
+    assert.throws(
+      () => parseConfigCliOverrides(['--set', 'channels[].enabled=true']),
+      /Config field channels\[\]\.enabled cannot be set from CLI/,
     );
   });
 });

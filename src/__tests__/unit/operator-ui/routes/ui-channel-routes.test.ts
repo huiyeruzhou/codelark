@@ -197,8 +197,15 @@ enabled = true
 
 [channels.config]
 history_message_limit = 8
+stream_status_idle_start_seconds = 180
+stream_status_check_interval_seconds = 10
 app_id = "default-app"
 app_secret = "default-secret"
+site = "feishu"
+allowed_users = []
+streaming_enabled = true
+feedback_markdown_enabled = true
+require_mention = false
 
 [[channels]]
 id = "feishu-ops"
@@ -207,8 +214,16 @@ provider = "feishu"
 enabled = true
 
 [channels.config]
+history_message_limit = 8
+stream_status_idle_start_seconds = 180
+stream_status_check_interval_seconds = 10
 app_id = "ops-app"
 app_secret = "ops-secret"
+site = "feishu"
+allowed_users = []
+streaming_enabled = true
+feedback_markdown_enabled = true
+require_mention = false
 `);
 
       const store = createMemoryStore();
@@ -253,8 +268,15 @@ enabled = true
 
 [channels.config]
 history_message_limit = 8
+stream_status_idle_start_seconds = 180
+stream_status_check_interval_seconds = 10
 app_id = "ops-app"
 app_secret = ""
+site = "feishu"
+allowed_users = []
+streaming_enabled = true
+feedback_markdown_enabled = true
+require_mention = false
 `);
 
       const response = createResponse();

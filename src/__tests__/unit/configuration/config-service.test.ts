@@ -172,13 +172,128 @@ sandbox_mode = "danger-full-access"
 
       const snapshot = service.snapshot();
       assert.equal(snapshot.config.runtime.codex.model, 'new-model');
-      assert.equal(snapshot.config.channels[0]?.enabled, true);
-      assert.equal(snapshot.config.channels[0]?.config.site, 'lark');
+      assert.equal(snapshot.config.channels[0]?.enabled, false);
+      assert.equal(snapshot.config.channels[0]?.config.site, 'feishu');
       assert.deepEqual(
         snapshot.warnings.map((warning) => warning.envKey).sort(),
-        ['CODELARK_CODEX_DEFAULT_MODEL', 'CODELARK_FEISHU_DOMAIN'],
+        ['CODELARK_CODEX_DEFAULT_MODEL'],
       );
       assert.equal(service.resolve('runtime.codex.model').env, 'CODELARK_CODEX_MODEL');
+    } finally {
+      fs.rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it('keeps channels home-only and rejects channel definitions from dynamic sources', () => {
+    const home = tempHome();
+    const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'codelark-config-local-'));
+    try {
+      const service = createConfigService({
+        codelarkHome: home,
+        env: {
+          CODELARK_FEISHU_APP_ID: 'env-app',
+          CODELARK_ENABLED_CHANNELS: '',
+        },
+        cli: {
+          channels: [{ id: 'feishu-default', config: { appId: 'cli-app' } }],
+        },
+        migrate: false,
+      });
+
+      assert.throws(
+        () => service.snapshot(),
+        /Config source cli cannot define channels/,
+      );
+
+      const noCli = createConfigService({
+        codelarkHome: home,
+        env: {
+          CODELARK_FEISHU_APP_ID: 'env-app',
+          CODELARK_ENABLED_CHANNELS: '',
+        },
+        migrate: false,
+      });
+      assert.equal(noCli.get('channels[].config.appId'), '');
+      assert.equal(noCli.get('channels[].enabled'), false);
+
+      writeFile(path.join(cwd, '.codelark', 'config.toml'), `
+[[channels]]
+id = "feishu-default"
+provider = "feishu"
+`);
+      assert.throws(
+        () => noCli.snapshot({ kind: 'local', cwd }),
+        /Config source local cannot define channels/,
+      );
+
+      writeFile(path.join(home, 'config', 'channels', 'feishu-default.toml'), `
+[[channels]]
+id = "feishu-default"
+provider = "feishu"
+`);
+      assert.throws(
+        () => noCli.snapshot({ kind: 'channel', channelId: 'feishu-default', provider: 'feishu' }),
+        /Config source channel cannot define channels/,
+      );
+
+      writeFile(path.join(home, 'config', 'sessions', 's-1.toml'), `
+[[channels]]
+id = "feishu-default"
+provider = "feishu"
+`);
+      assert.throws(
+        () => noCli.snapshot({ kind: 'session', sessionId: 's-1', channelId: 'feishu-default', provider: 'feishu' }),
+        /Config source channel cannot define channels/,
+      );
+
+      fs.rmSync(path.join(home, 'config', 'channels', 'feishu-default.toml'), { force: true });
+      assert.throws(
+        () => noCli.snapshot(
+          { kind: 'session', sessionId: 's-1', channelId: 'feishu-default', provider: 'feishu' },
+        ),
+        /Config source session cannot define channels/,
+      );
+
+      assert.throws(
+        () => noCli.snapshot(undefined, {
+          channels: [{ id: 'feishu-default', config: { appId: 'request-app' } }],
+        }),
+        /Config source request cannot define channels/,
+      );
+    } finally {
+      fs.rmSync(home, { recursive: true, force: true });
+      fs.rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it('replaces default channels with the home channel list', () => {
+    const home = tempHome();
+    try {
+      writeFile(path.join(home, 'config.toml'), `
+[[channels]]
+id = "feishu-home"
+alias = "Home"
+provider = "feishu"
+enabled = true
+
+[channels.config]
+history_message_limit = 12
+stream_status_idle_start_seconds = 180
+stream_status_check_interval_seconds = 10
+app_id = "home-app"
+app_secret = "home-secret"
+site = "lark"
+allowed_users = []
+streaming_enabled = true
+feedback_markdown_enabled = true
+require_mention = false
+`);
+
+      const service = createConfigService({ codelarkHome: home, env: {}, migrate: false });
+      const channels = service.snapshot().config.channels;
+      assert.deepEqual(channels.map((channel) => channel.id), ['feishu-home']);
+      assert.equal(service.get('channels[].config.appId'), 'home-app');
+      assert.equal(service.resolve('channels[].config.appId').source, 'home');
     } finally {
       fs.rmSync(home, { recursive: true, force: true });
     }
@@ -198,7 +313,16 @@ provider = "feishu"
 enabled = true
 
 [channels.config]
+history_message_limit = 8
+stream_status_idle_start_seconds = 180
+stream_status_check_interval_seconds = 10
+app_id = ""
 app_secret = "home-app-secret"
+site = "feishu"
+allowed_users = []
+streaming_enabled = true
+feedback_markdown_enabled = true
+require_mention = false
 `);
       const service = createConfigService({
         codelarkHome: home,
@@ -306,28 +430,47 @@ app_secret = "home-app-secret"
   it('projects effective config to process env and legacy runtime settings maps', () => {
     const home = tempHome();
     try {
+      writeFile(path.join(home, 'config.toml'), `
+[[channels]]
+id = "feishu-default"
+alias = "飞书"
+provider = "feishu"
+enabled = true
+
+[channels.config]
+history_message_limit = 8
+stream_status_idle_start_seconds = 180
+stream_status_check_interval_seconds = 10
+app_id = "home-app"
+app_secret = "home-secret"
+site = "feishu"
+allowed_users = []
+streaming_enabled = true
+feedback_markdown_enabled = true
+require_mention = false
+`);
       const service = createConfigService({
         codelarkHome: home,
         env: {
           CODELARK_AGENT: 'claude',
           CODELARK_CODEX_MODEL: 'gpt-test',
-          CODELARK_FEISHU_APP_ID: 'app-id',
-          CODELARK_FEISHU_APP_SECRET: 'secret',
-          CODELARK_ENABLED_CHANNELS: 'feishu',
+          CODELARK_FEISHU_APP_ID: 'env-app',
+          CODELARK_FEISHU_APP_SECRET: 'env-secret',
+          CODELARK_ENABLED_CHANNELS: '',
         },
       });
 
       const env = service.exportProcessEnv();
       assert.equal(env.CODELARK_AGENT, 'claude');
       assert.equal(env.CODELARK_CODEX_MODEL, 'gpt-test');
-      assert.equal(env.CODELARK_FEISHU_APP_ID, 'app-id');
+      assert.equal(env.CODELARK_FEISHU_APP_ID, 'home-app');
       assert.equal(env.CODELARK_ENABLED_CHANNELS, 'feishu');
 
       const settings = service.exportRuntimeSettings();
       assert.equal(settings.get('bridge_default_runtime'), 'claude');
       assert.equal(settings.get('bridge_default_model'), 'gpt-test');
       assert.equal(settings.get('default_model'), 'gpt-test');
-      assert.equal(settings.get('bridge_feishu_app_secret'), 'secret');
+      assert.equal(settings.get('bridge_feishu_app_secret'), 'home-secret');
       assert.equal(settings.get('bridge_feishu_enabled'), 'true');
     } finally {
       fs.rmSync(home, { recursive: true, force: true });

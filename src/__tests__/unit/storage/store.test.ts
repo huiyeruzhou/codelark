@@ -61,6 +61,15 @@ describe('JsonFileStore', () => {
         '',
         '[channels.config]',
         'history_message_limit = 23',
+        'stream_status_idle_start_seconds = 180',
+        'stream_status_check_interval_seconds = 10',
+        'app_id = ""',
+        'app_secret = ""',
+        'site = "feishu"',
+        'allowed_users = []',
+        'streaming_enabled = true',
+        'feedback_markdown_enabled = true',
+        'require_mention = false',
         '',
       ].join('\n'));
       fs.writeFileSync(CONFIG_PATH, [
@@ -392,6 +401,15 @@ describe('JsonFileStore', () => {
         '',
         '[channels.config]',
         'history_message_limit = 8',
+        'stream_status_idle_start_seconds = 180',
+        'stream_status_check_interval_seconds = 10',
+        'app_id = ""',
+        'app_secret = ""',
+        'site = "feishu"',
+        'allowed_users = []',
+        'streaming_enabled = true',
+        'feedback_markdown_enabled = true',
+        'require_mention = false',
         '',
       ].join('\n'));
       fs.mkdirSync(DATA_DIR, { recursive: true });

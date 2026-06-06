@@ -1,4 +1,4 @@
-import { Command, InvalidArgumentError } from 'commander';
+import { Command, InvalidOptionArgumentError as InvalidArgumentError } from 'commander';
 import { findConfigField } from './fields.js';
 import type { ConfigField, ConfigPath } from './fields-types.js';
 import { setConfigPath } from './path-access.js';
@@ -103,14 +103,14 @@ export function parseConfigCliOverrides(argv: string[]): ParsedConfigCliOverride
     .option('--unset <path>', 'unset a config value by canonical path', collect, []);
 
   program.parse(argv, { from: 'user' });
-  const options = program.opts<{ set: string[]; unset: string[] }>();
+  const options = program.opts() as { set?: string[]; unset?: string[] };
   const patch: ConfigPatch = {};
 
   for (const assignment of options.set || []) {
     parseSetAssignment(assignment, patch);
   }
 
-  const unset = (options.unset || []).map((path) => {
+  const unset = (options.unset || []).map((path: string) => {
     const trimmed = path.trim();
     requireCliField(trimmed);
     return trimmed;
