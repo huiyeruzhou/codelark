@@ -92,11 +92,13 @@ describe('JsonFileStore', () => {
     const configTomlPath = path.join(CODELARK_HOME, 'config.toml');
     const migrationStatePath = path.join(CODELARK_HOME, 'runtime', 'config-migrations.json');
     const previousToml = fs.existsSync(configTomlPath) ? fs.readFileSync(configTomlPath, 'utf-8') : null;
+    const previousEnvFile = fs.existsSync(CONFIG_PATH) ? fs.readFileSync(CONFIG_PATH, 'utf-8') : null;
     const previousState = fs.existsSync(migrationStatePath) ? fs.readFileSync(migrationStatePath, 'utf-8') : null;
 
     try {
       fs.rmSync(configTomlPath, { force: true });
       fs.rmSync(migrationStatePath, { force: true });
+      fs.writeFileSync(CONFIG_PATH, 'CODELARK_CODEX_DEFAULT_MODEL=legacy-dynamic-model\n', 'utf-8');
 
       const store = new JsonFileStore(makeSettings(), { dynamicSettings: true });
       const session = store.createSession('dynamic-refresh-session', 'model-1', undefined, '/tmp/dynamic-refresh');
@@ -107,6 +109,8 @@ describe('JsonFileStore', () => {
     } finally {
       if (previousToml === null) fs.rmSync(configTomlPath, { force: true });
       else fs.writeFileSync(configTomlPath, previousToml, 'utf-8');
+      if (previousEnvFile === null) fs.rmSync(CONFIG_PATH, { force: true });
+      else fs.writeFileSync(CONFIG_PATH, previousEnvFile, 'utf-8');
       if (previousState === null) fs.rmSync(migrationStatePath, { force: true });
       else {
         fs.mkdirSync(path.dirname(migrationStatePath), { recursive: true });

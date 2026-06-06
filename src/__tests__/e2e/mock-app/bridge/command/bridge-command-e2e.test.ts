@@ -1565,10 +1565,14 @@ describe('bridge command e2e', () => {
     process.env.CODELARK_CLAUDE_PTY_PROMPT_DELAY_MS = '0';
     process.env.CODELARK_CLAUDE_PTY_RESPONSE_QUIET_MS = '250';
     process.env.CODELARK_CLAUDE_PTY_RESPONSE_TIMEOUT_MS = '3000';
+    createConfigService({ migrate: false, env: {} }).set(
+      { kind: 'home' },
+      { runtime: { claude: { provider: 'pty' } } },
+    );
 
     const store = initBridgeTestContext({
       dynamicSettings: true,
-      settings: makeBridgeSettings({ bridge_claude_provider: 'pty' }),
+      settings: makeBridgeSettings(),
       llm: new CodexRoutingProvider(),
     });
     const adapter = new RecordingAdapter();
@@ -1654,10 +1658,14 @@ describe('bridge command e2e', () => {
     process.env.CODELARK_CLAUDE_PTY_PROMPT_DELAY_MS = '0';
     process.env.CODELARK_CLAUDE_PTY_RESPONSE_QUIET_MS = '250';
     process.env.CODELARK_CLAUDE_PTY_RESPONSE_TIMEOUT_MS = '3000';
+    createConfigService({ migrate: false, env: {} }).set(
+      { kind: 'home' },
+      { runtime: { claude: { provider: 'pty' } } },
+    );
 
     const store = initBridgeTestContext({
       dynamicSettings: true,
-      settings: makeBridgeSettings({ bridge_claude_provider: 'pty' }),
+      settings: makeBridgeSettings(),
       llm: new CodexRoutingProvider(),
     });
     const adapter = new RecordingAdapter();
