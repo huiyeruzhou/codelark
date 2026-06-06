@@ -105,7 +105,7 @@ export function runtimeChoiceToConfig(choice: RuntimeChoice): Pick<Config, 'runt
   return {
     runtime: 'claude',
     claudeExecutable: choice === 'ccr' ? 'ccr' : 'claude',
-    claudeProvider: 'sdk',
+    claudeProvider: 'tmux',
   };
 }
 
@@ -164,7 +164,7 @@ export function buildSetupConfig(
     codexNetworkAccess: current.codexNetworkAccess !== false,
     codexReasoningEffort: current.codexReasoningEffort || 'medium',
     claudeExecutable: runtimeConfig.claudeExecutable || current.claudeExecutable,
-    claudeProvider: runtimeConfig.claudeProvider || current.claudeProvider || 'sdk',
+    claudeProvider: runtimeConfig.claudeProvider || current.claudeProvider || 'tmux',
     uiAllowLan: current.uiAllowLan === true,
     channels: [
       nextFeishu,

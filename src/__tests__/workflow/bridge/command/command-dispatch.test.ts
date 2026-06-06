@@ -45,6 +45,7 @@ import {
   getSessionCodexNetworkAccess,
   getSessionCodexReasoningEffort,
   getSessionCodexSandboxMode,
+  getSessionTmuxSessionName,
   getSessionWorkingDirectory,
 } from '../../../../domain/session-runtime.js';
 import { getClaudeProjectDir, isArchivedClaudeSession } from '../../../../runtime/claude/session-jsonl.js';
@@ -1373,7 +1374,7 @@ describe('command-dispatch', () => {
     assert.equal(claudePreviewCard?.form?.selects?.some((select) => select.elementId === 'clk_network'), false);
     assert.deepEqual(
       claudePreviewCard?.form?.selects?.find((select) => select.elementId === 'clk_provider')?.options.map((option) => option.text),
-      ['pty', 'sdk'],
+      ['tmux', 'pty', 'sdk'],
     );
     assert.deepEqual(
       parseCommandCallbackData(claudePreviewCard?.form?.submitCallbackData || '')?.commandText,
@@ -2706,6 +2707,18 @@ describe('command-dispatch', () => {
       assert.ok(claudeBinding);
       assert.equal(store.getSession(claudeBinding.bridgeSessionId)?.runtime?.activeRuntime, 'claude');
 
+      await handleBridgeCommand(
+        adapter,
+        {
+          address: createdAddress,
+          text: '/p pty',
+          messageId: 'incoming-provider-claude-pty-e2e',
+        } as any,
+        '/p pty',
+        deps,
+      );
+      assert.equal(store.getSession(claudeBinding.bridgeSessionId)?.runtime?.claude?.provider, 'pty');
+
       const result = await processMessage(
         claudeBinding,
         'hello executable',
@@ -2830,6 +2843,18 @@ describe('command-dispatch', () => {
       assert.notEqual(claudeBinding.bridgeSessionId, createdBinding.bridgeSessionId);
       assert.equal(store.getSession(claudeBinding.bridgeSessionId)?.runtime?.activeRuntime, 'claude');
 
+      await handleBridgeCommand(
+        adapter,
+        {
+          address: createdAddress,
+          text: '/p pty',
+          messageId: 'incoming-provider-claude-default-pty-e2e',
+        } as any,
+        '/p pty',
+        deps,
+      );
+      assert.equal(store.getSession(claudeBinding.bridgeSessionId)?.runtime?.claude?.provider, 'pty');
+
       const result = await processMessage(
         claudeBinding,
         'hello default executable',
@@ -2937,6 +2962,64 @@ describe('command-dispatch', () => {
     assert.match(sent.at(-3)?.text || '', /Claude Code 模型/);
     assert.match(sent.at(-2)?.text || '', /Claude Code 思考级别/);
     assert.match(sent.at(-1)?.text || '', /已切换 Claude Provider/);
+  });
+
+  it('starts and binds a Claude tmux session from /provider tmux', async () => {
+    const previousEnv = {
+      PATH: process.env.PATH,
+      TMUX_FAKE_LOG: process.env.TMUX_FAKE_LOG,
+    };
+    const fakeTmux = installFakeTmux();
+    process.env.PATH = `${fakeTmux.binDir}${path.delimiter}${previousEnv.PATH || ''}`;
+    process.env.TMUX_FAKE_LOG = fakeTmux.logPath;
+    try {
+      const store = initTestContext();
+      const sent: any[] = [];
+      const adapter = createGroupCapableAdapter({ sent });
+      const address = { channelType: 'feishu', chatId: 'chat-claude-provider-tmux' } as const;
+      const session = store.createSession('claude-tmux-runtime-session', 'codex-model');
+      store.updateSession(session.id, {
+        runtime: {
+          activeRuntime: 'claude',
+          general: {
+            workingDirectory: '/tmp/claude-provider-tmux',
+          },
+        },
+      });
+      store.upsertChannelChat({
+        channelType: address.channelType,
+        chatId: address.chatId,
+        bridgeSessionId: session.id,
+      });
+
+      await handleBridgeCommand(
+        adapter,
+        { address, text: '/provider tmux', messageId: 'incoming-claude-provider-tmux' } as any,
+        '/provider tmux',
+        {
+          getActiveTask: () => undefined,
+          diagnoseSessionHealth: async () => null,
+          diagnoseAllActiveSessions: async () => [],
+          reconcileMirrorSubscriptions: async () => {},
+        },
+      );
+
+      const updated = store.getSession(session.id);
+      assert.equal(getSessionClaudeProvider(updated), 'tmux');
+      assert.equal(getSessionTmuxSessionName(updated), `claude_${session.id}`);
+      assert.match(sent.at(-1)?.text || '', /已切换 Claude Provider/);
+      assert.match(sent.at(-1)?.text || '', /tmux session/);
+      const tmuxLog = fs.readFileSync(fakeTmux.logPath, 'utf-8');
+      assert.match(tmuxLog, new RegExp(`has-session -t claude_${session.id}`));
+      assert.match(tmuxLog, /new-session -d -s/);
+      assert.doesNotMatch(tmuxLog, /codex/);
+    } finally {
+      fs.rmSync(fakeTmux.binDir, { recursive: true, force: true });
+      for (const [key, value] of Object.entries(previousEnv)) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+    }
   });
 
   it('reminds users that Codex runtime settings apply on the next request', async () => {

@@ -70,7 +70,7 @@
 
 | 命令 | 当前写入字段 | Codex 语义 | Claude Code 迁移判断 |
 | --- | --- | --- | --- |
-| `/runtime` | `runtime.activeRuntime` | `codex` 时普通消息进入 Codex routing provider | `claude` 时普通消息进入 Claude Code pty provider；不改变 `/provider` |
+| `/runtime` | `runtime.activeRuntime` | `codex` 时普通消息进入 Codex routing provider | `claude` 时普通消息默认进入 Claude Code tmux provider；不改变已记住的 `/provider` |
 | `/mode`、`/m` | `runtime.codex.mode` | `normal/yolo`，`yolo` 强制 `danger-full-access` 与 `permissionMode=never` | 可映射到 Claude permission mode，但枚举不能直接复用 |
 | `/reasoning`、`/r` | `runtime.codex.reasoningEffort` | `modelReasoningEffort` | Claude 不应 fallback 到 Codex reasoning；需要 Claude 自己的 thinking/budget 配置或不支持 |
 | `/sandbox`、`/sb` | `runtime.codex.sandboxMode` | Codex sandbox mode | Claude Code 没有同名 sandbox；不能共用 |
@@ -244,7 +244,7 @@ Accessor 边界：
 
 ## 当前优先调整点
 
-- `/provider`、`/p` 从 “CodexRuntime 参数” 移到 “Bridge 控制”，因为它选择 bridge 如何驱动当前 runtime，不是模型执行参数。Codex 支持 `sdk|pty|tmux`，Claude 支持 `pty|sdk`，切换时只修改当前 active runtime 的 provider。
+- `/provider`、`/p` 从 “CodexRuntime 参数” 移到 “Bridge 控制”，因为它选择 bridge 如何驱动当前 runtime，不是模型执行参数。Codex 和 Claude 都支持 `sdk|pty|tmux`，Claude 默认 `tmux`，切换时只修改当前 active runtime 的 provider。
 - `/set` 展示与 schema 应拆成 GlobalRuntime(Codex)、GlobalRuntime(Claude)、GlobalBridge，而不是一个扁平配置表。
 - `schemas/config.v1.schema.json` 以 `runtime.codex`、`runtime.claude`、`runtime.bridgeControl`、`runtime.bridge` 作为权威分组；旧扁平字段不再作为配置兼容输入。
 - `BridgeStore` 接口中的 `findSessionByCodexThreadId()`、`updateSessionCodexThreadId()` 是 Codex 专属 API；接 Claude 前应新增 provider-neutral accessor 或 runtime-specific registry，避免加出 `findSessionByClaudeSessionId()` 这类平行顶层接口。
@@ -252,9 +252,10 @@ Accessor 边界：
 
 ## 真实 E2E 开关
 
-真实 pty e2e 默认跳过，避免常规 `npm test` 依赖本机 CLI 登录状态。
+真实 pty/tmux e2e 默认跳过，避免常规 `npm test` 依赖本机 CLI 登录状态。
 
 - Codex pty/tmux：设置 `CODELARK_REAL_CODEX_E2E=1`，可选 `CODELARK_REAL_CODEX_E2E_MODEL=<model>`。
+- Claude Code tmux：常规单元/工作流测试 mock tmux 和 Claude JSONL；真实 tmux 验证应在安装 tmux/Claude Code 并登录后手动开启。
 - Claude Code pty：设置 `CODELARK_REAL_CLAUDE_E2E=1`，可选 `CODELARK_REAL_CLAUDE_E2E_EXECUTABLE=ccr|claude`、`CODELARK_REAL_CLAUDE_E2E_PROMPT=<prompt>`、`CODELARK_REAL_CLAUDE_E2E_EXPECT=<expected text>`。
 
-Claude Code pty e2e 会按全局 Claude executable 语义启动真实 TUI：`ccr` 对应 `ccr code`，`claude` 对应 `claude`。如果只想验证本地临时 `ccr` 配置，应设置 `/set claudeExecutable ccr` 并将目标会话切到 `/runtime claude`。Claude SDK provider 走 `@anthropic-ai/claude-agent-sdk` 原生事件路径，不使用 pty TUI，也不等同于 `ccr code`。
+Claude Code pty/tmux 会按全局 Claude executable 语义启动真实 TUI：`ccr` 对应 `ccr code`，`claude` 对应 `claude`。如果只想验证本地临时 `ccr` 配置，应设置 `/set claudeExecutable ccr` 并将目标会话切到 `/runtime claude`。Claude SDK provider 走 `@anthropic-ai/claude-agent-sdk` 原生事件路径，不使用 TUI，也不等同于 `ccr code`。

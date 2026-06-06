@@ -100,11 +100,11 @@ CODELARK_SETUP_WIZARD_REAL_E2E=1 npm run real:setup-wizard:e2e -- \
 | 测试文件 | 关注点 |
 | --- | --- |
 | `codex-provider.test.ts` | Codex SDK/SSE 事件转换、图片输入、错误事件和 provider 主路径。 |
-| `codex-routing-provider.test.ts` | Codex `sdk|pty|tmux` provider 选择和 fallback。 |
+| `codex-routing-provider.test.ts` | Codex/Claude `sdk|pty|tmux` provider 选择和 fallback，包含 Claude 默认 tmux。 |
 | `codex-cli-executable.test.ts`、`codex-models.test.ts` | Codex CLI 定位和模型列表缓存。 |
 | `codex-pty-provider.test.ts`、`codex-tmux-provider.test.ts` | Codex pty/tmux prompt 注入、启动参数、auto-enter、清理和事件输出。 |
 | `codex-session-index.test.ts`、`codex-session-mirror.test.ts` | Codex JSONL/session 索引读取、mirror cursor 对齐和事件重放。 |
-| `claude-pty-provider.test.ts`、`claude-sdk-provider.test.ts`、`claude-session-jsonl.test.ts` | Claude pty 身份发现、Claude SDK helper、Claude JSONL session 读取。 |
+| `claude-tmux-provider.test.ts`、`claude-pty-provider.test.ts`、`claude-sdk-provider.test.ts`、`claude-session-jsonl.test.ts` | Claude tmux 启动/注入/mirror SSE、Claude pty 身份发现、Claude SDK helper、Claude JSONL session 读取。 |
 | `sse-stream-decoder.test.ts` | SSE 文本流解码和事件边界。 |
 | `interactive-turn-runner.test.ts` | 一次 runtime turn 的主编排，含 stream、tool、context、goal、stop、mirror suppression 和基础对话 simulator。 |
 | `interactive-turn-sdk-conversation-engine.test.ts`、`interactive-turn-sdk-stream-events-controller.test.ts`、`interactive-turn-final-response-plan.test.ts`、`interactive-turn-terminal-finalization-controller.test.ts` | SDK conversation 内联附件/tool 展开、stream event 控制、最终回复计划和终端 provider finalization。 |

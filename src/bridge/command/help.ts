@@ -23,7 +23,7 @@ export function buildHelpCommandResponse(): string {
     '**Bridge 控制**',
     '- `//...` 向模型发送以 `/` 开头的文本',
     '- `/h` 帮助',
-    '- `/provider` 或 `/p` 查看或切换当前 runtime 的 Provider transport；Codex 可用 `sdk | pty | tmux`，Claude 可用 `pty | sdk`',
+    '- `/provider` 或 `/p` 查看或切换当前 runtime 的 Provider transport；Codex 可用 `sdk | pty | tmux`，Claude 可用 `tmux | pty | sdk` 且默认 `tmux`',
     '- `/stop` 停止当前任务',
     `- \`/t\` 默认显示当前 runtime 最近 ${DEFAULT_LOCAL_SESSION_LIST_LIMIT} 条本地会话；卡片是一张表，可用数量下拉切换 20/50/100，也可用 runtime 下拉切换 Codex/Claude`,
     `- \`/t all\` 最多显示当前 runtime 最近 ${MAX_LOCAL_SESSION_LIST_LIMIT} 条本地会话`,

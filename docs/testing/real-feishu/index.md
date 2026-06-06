@@ -133,7 +133,7 @@ CODELARK_REAL_FEISHU_TEST_SITE=feishu
 Claude/CCR 场景额外要求：
 
 - bridge 日志应出现 `Route Claude Code request`，且 executable 是 `ccr`。
-- 如果群里返回 Claude Code 欢迎页、安全提示或 trust prompt，说明 pty provider 还没有完成 onboarding，不能算 runtime 响应通过。
+- 如果群里返回 Claude Code 欢迎页、安全提示或 trust prompt，说明 Claude Code TUI provider（tmux 默认路径或显式 pty）还没有完成 onboarding，不能算 runtime 响应通过。
 - `--fake-ccr` 必须配合 `--launch-bridge` 使用；它只会给 harness 启动的隔离 bridge 写入 fake CCR 配置，不能注入已运行的 live bridge。
 
 ## lark-cli 与清理注意事项

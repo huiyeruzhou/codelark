@@ -7,6 +7,7 @@ import type {
   ClaudeProviderChoice,
   CodexReasoningEffort,
   CodexSandboxMode,
+  RuntimeProviderChoice,
 } from '../domain/session.js';
 
 export interface SSEEvent {
@@ -71,7 +72,7 @@ export interface StreamChatParams {
   claudePermissionMode?: ClaudePermissionMode;
   claudeReasoningEffort?: BridgeSessionClaudeRuntimeState['reasoningEffort'];
   codexMode?: 'normal' | 'yolo';
-  codexProvider?: 'sdk' | 'tmux' | 'pty';
+  codexProvider?: RuntimeProviderChoice;
   provider?: BridgeApiProvider;
   conversationHistory?: Array<{ role: 'user' | 'assistant'; content: string }>;
   files?: FileAttachment[];

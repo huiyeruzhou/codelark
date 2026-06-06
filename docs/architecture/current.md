@@ -44,7 +44,7 @@ flowchart LR
 | Bridge host | 维护 daemon 生命周期，并把通道、命令、turn、mirror、权限和健康检查装配在一起。 |
 | BridgeSession | 表达“当前聊天对应哪条本地工作会话”，承载 runtime 身份、工作目录和会话级设置。 |
 | Lane 调度 | 表达“这条消息要和谁互相等待”，决定控制命令、长任务、普通命令和 prompt 的并发关系。 |
-| Runtime provider | 屏蔽 Codex SDK、Codex pty、Codex tmux、Claude pty、Claude SDK 的底层差异。 |
+| Runtime provider | 屏蔽 Codex SDK、Codex pty、Codex tmux、Claude tmux、Claude pty、Claude SDK 的底层差异。 |
 | Mirror 与 Stream UI | 把本地 JSONL 变化聚合为 turn progress，并用卡片 diff 推送到 IM。 |
 
 ## 消息投递到后端

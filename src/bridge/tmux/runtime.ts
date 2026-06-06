@@ -73,9 +73,20 @@ export interface SendTmuxActionsAndCaptureResult {
 const DEFAULT_CODEX_RESUME_TMUX_READY_TIMEOUT_MS = 15_000;
 const DEFAULT_CODEX_RESUME_TMUX_READY_POLL_MS = 250;
 
+function safeTmuxSessionId(id: string, fallback: string): string {
+  return id.trim().replace(/[^A-Za-z0-9_.-]/g, '-').slice(0, 180) || fallback;
+}
+
+export function runtimeTmuxSessionName(runtime: 'codex' | 'claude', id: string): string {
+  return `${runtime}_${safeTmuxSessionId(id, runtime === 'codex' ? 'thread' : 'session')}`;
+}
+
 export function codexTmuxSessionName(threadId: string): string {
-  const safe = threadId.trim().replace(/[^A-Za-z0-9_.-]/g, '-').slice(0, 180);
-  return `codex_${safe || 'thread'}`;
+  return runtimeTmuxSessionName('codex', threadId);
+}
+
+export function claudeTmuxSessionName(sessionId: string): string {
+  return runtimeTmuxSessionName('claude', sessionId);
 }
 
 export function buildCodexResumeTmuxCommand(params: StartCodexResumeTmuxSessionParams): {

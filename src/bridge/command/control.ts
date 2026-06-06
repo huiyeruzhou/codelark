@@ -5,8 +5,8 @@ import * as broker from '../permission/broker.js';
 import * as router from '../session/channel-router.js';
 import type { BridgeSession, BridgeStore } from '../../domain/index.js';
 import { sendTmuxInterrupt } from '../tmux/runtime.js';
-import { resolveEffectiveCodexProvider } from '../session/support.js';
 import { getSessionTmuxSessionName } from '../../domain/session-runtime.js';
+import { resolveEffectiveRuntimeProvider } from '../session/support.js';
 import type { CommandThreadDisplay } from './thread-display.js';
 import type { ChannelChat, InboundMessage } from '../../domain/index.js';
 import { sessionLooksRunning } from '../session/command-use-cases/status-guards.js';
@@ -20,7 +20,7 @@ export interface StopCommandDeps {
 function getStopTmuxInterruptTarget(session: BridgeSession | null | undefined): string | undefined {
   if (!session) return undefined;
   const tmuxSessionName = getSessionTmuxSessionName(session);
-  return resolveEffectiveCodexProvider(session) === 'tmux'
+  return resolveEffectiveRuntimeProvider(session).provider === 'tmux'
     && Boolean(tmuxSessionName)
     && sessionLooksRunning(session)
     ? tmuxSessionName
@@ -42,16 +42,18 @@ export async function handleStopCommand(options: {
   const tmuxInterruptTarget = getStopTmuxInterruptTarget(session);
   if (!task && tmuxInterruptTarget) {
     const command = await sendTmuxInterrupt(tmuxInterruptTarget);
-    const detail = '用户执行 /stop，已向 Codex tmux TUI 发送 C-c。';
+    const provider = resolveEffectiveRuntimeProvider(session);
+    const detail = `用户执行 /stop，已向 ${provider.identity} TUI 发送 C-c。`;
     options.deps.recordInteractiveHealthEnd?.(binding.bridgeSessionId, 'aborted', detail);
     return buildCommandFields(
       '已发送停止按键',
       [
         ['Provider', 'tmux'],
+        ['Runtime', provider.runtime],
         ['tmux session', tmuxInterruptTarget],
       ],
       [
-        '当前会话处于 tmux Provider，且 mirror 显示任务仍在输出；`/stop` 已映射为向 Codex TUI 发送 `C-c`。',
+        `当前会话处于 ${provider.identity} Provider，且 mirror 显示任务仍在输出；\`/stop\` 已映射为向 TUI 发送 \`C-c\`。`,
         `底层命令：\`${command}\``,
       ],
       options.markdown,

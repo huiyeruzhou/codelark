@@ -80,7 +80,7 @@ export function configToPayload(config: Config) {
     codexSandboxMode: config.codexSandboxMode || 'workspace-write',
     codexNetworkAccess: config.codexNetworkAccess !== false,
     codexReasoningEffort: config.codexReasoningEffort || 'medium',
-    claudeProvider: config.claudeProvider || 'sdk',
+    claudeProvider: config.claudeProvider || 'tmux',
     claudeExecutable: config.claudeExecutable || 'claude',
     claudeDefaultModel: config.claudeDefaultModel || '',
     claudePermissionMode: config.claudePermissionMode || 'default',
@@ -164,7 +164,7 @@ export function mergeConfig(current: Config, payload: Record<string, unknown>): 
       : rawClaudeDefaultModel || undefined,
     claudeProvider: rawClaudeProvider === undefined
       ? current.claudeProvider
-      : rawClaudeProvider === 'sdk' || rawClaudeProvider === 'pty'
+      : rawClaudeProvider === 'sdk' || rawClaudeProvider === 'pty' || rawClaudeProvider === 'tmux'
         ? rawClaudeProvider
         : undefined,
     claudeExecutable: rawClaudeExecutable === 'ccr' || rawClaudeExecutable === 'claude'
