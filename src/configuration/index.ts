@@ -8,7 +8,7 @@ import {
   type RuntimeReasoningEffort,
   type RuntimeSandboxMode,
 } from "./runtime-options.js";
-import { configV2ToLegacyConfig } from "./legacy.js";
+import { configV2ToLegacyConfig, legacyConfigToConfigPatch } from "./legacy.js";
 import { createConfigService } from "./service.js";
 import { resolveConfigPaths } from "./sources.js";
 
@@ -968,6 +968,13 @@ function syncConfigFromRawEnvIfNeeded(current: ConfigFile): ConfigFile {
 }
 
 export function saveConfig(config: Config): void {
+  const v2Paths = resolveConfigPaths({ codelarkHome: CODELARK_HOME });
+  if (fs.existsSync(v2Paths.homeToml) || config.schemaVersion === 2) {
+    createConfigService({ codelarkHome: CODELARK_HOME, migrate: false })
+      .set({ kind: 'home' }, legacyConfigToConfigPatch(config));
+    return;
+  }
+
   const current = readConfigFile();
   const next = buildFileFromExpandedConfig(config, current);
 

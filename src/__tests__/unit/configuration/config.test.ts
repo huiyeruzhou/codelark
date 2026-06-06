@@ -314,6 +314,90 @@ require_mention = true
     }
   });
 
+  it('saves v2 configs back to config.toml without updating legacy config.env or config.json', () => {
+    const envKeys = Object.keys(process.env)
+      .filter((key) => key.startsWith('CODELARK_') && key !== 'CODELARK_HOME');
+    const originalEnv = new Map(envKeys.map((key) => [key, process.env[key]]));
+    for (const key of envKeys) delete process.env[key];
+    const configTomlPath = path.join(path.dirname(CONFIG_JSON_PATH), 'config.toml');
+    try {
+      fs.mkdirSync(path.dirname(configTomlPath), { recursive: true });
+      fs.writeFileSync(configTomlPath, `
+schema_version = 2
+
+[runtime]
+provider = "codex"
+
+[runtime.codex]
+model = "old-model"
+provider = "sdk"
+yolo_mode = "off"
+
+[runtime.claude]
+executable = "claude"
+
+[[channels]]
+id = "feishu-default"
+alias = "飞书"
+provider = "feishu"
+enabled = true
+
+[channels.config]
+app_id = "old-app"
+app_secret = "old-secret"
+site = "feishu"
+history_message_limit = 8
+`);
+      fs.writeFileSync(CONFIG_PATH, 'CUSTOM_KEEP=1\nCODELARK_CODEX_DEFAULT_MODEL=legacy-env-model\n');
+      fs.writeFileSync(CONFIG_JSON_PATH, JSON.stringify({
+        schemaVersion: 1,
+        runtime: { provider: 'codex', codex: { defaultModel: 'legacy-json-model' } },
+        channels: [],
+      }, null, 2));
+
+      const loaded = loadConfig();
+      saveConfig({
+        ...loaded,
+        defaultModel: 'saved-toml-model',
+        defaultProvider: 'tmux',
+        defaultMode: 'yolo',
+        historyMessageLimit: 19,
+        channels: loaded.channels?.map((channel) => ({
+          ...channel,
+          config: {
+            ...channel.config,
+            appId: 'saved-app',
+            appSecret: 'saved-secret',
+            site: 'lark',
+          },
+        })),
+      });
+
+      const reloaded = loadConfig();
+      assert.equal(reloaded.schemaVersion, 2);
+      assert.equal(reloaded.defaultModel, 'saved-toml-model');
+      assert.equal(reloaded.defaultProvider, 'tmux');
+      assert.equal(reloaded.defaultMode, 'yolo');
+      assert.equal(reloaded.historyMessageLimit, 19);
+      assert.equal((reloaded.channels?.[0]?.config as { appId?: string }).appId, 'saved-app');
+      assert.equal((reloaded.channels?.[0]?.config as { appSecret?: string }).appSecret, 'saved-secret');
+      assert.equal((reloaded.channels?.[0]?.config as { site?: string }).site, 'lark');
+      assert.equal(fs.readFileSync(CONFIG_PATH, 'utf-8'), 'CUSTOM_KEEP=1\nCODELARK_CODEX_DEFAULT_MODEL=legacy-env-model\n');
+      const legacyJson = JSON.parse(fs.readFileSync(CONFIG_JSON_PATH, 'utf-8')) as any;
+      assert.equal(legacyJson.runtime.codex.defaultModel, 'legacy-json-model');
+      const savedToml = fs.readFileSync(configTomlPath, 'utf-8');
+      assert.match(savedToml, /model = "saved-toml-model"/);
+      assert.match(savedToml, /provider = "tmux"/);
+      assert.match(savedToml, /yolo_mode = "on"/);
+      assert.match(savedToml, /app_id = "saved-app"/);
+    } finally {
+      for (const [key, value] of originalEnv) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+    }
+  });
+
   it('migrates legacy env config into config.json default channel instances', () => {
     fs.mkdirSync(path.dirname(CONFIG_PATH), { recursive: true });
     fs.writeFileSync(
