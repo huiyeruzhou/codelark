@@ -7,7 +7,7 @@ import {
   type CodexReasoningEffort,
 } from '../../configuration/index.js';
 import { createConfigService } from '../../configuration/service.js';
-import { parseSandboxMode } from '../../configuration/runtime-options.js';
+import { parseSandboxMode, type RuntimeSandboxMode } from '../../configuration/runtime-options.js';
 import * as router from '../session/channel-router.js';
 import {
   normalizeReasoningEffort,
@@ -21,6 +21,8 @@ import {
   formatDisplayedModel,
   getAvailableModelChoicesText,
   getSelectableCodexModel,
+  hasSessionCodexNetworkAccessOverride,
+  hasSessionCodexSandboxOverride,
   resolveDisplayedModel,
   resolveClaudeRuntimeConfig,
   resolveEffectiveCodexProvider,
@@ -138,6 +140,34 @@ function clearSessionClaudeReasoningToml(sessionId: string): void {
   createConfigService({ migrate: false }).unset(
     { kind: 'session', sessionId },
     'runtime.claude.reasoningEffort',
+  );
+}
+
+function setSessionCodexSandboxToml(sessionId: string, sandboxMode: RuntimeSandboxMode): void {
+  createConfigService({ migrate: false }).set(
+    { kind: 'session', sessionId },
+    { runtime: { codex: { sandboxMode } } },
+  );
+}
+
+function clearSessionCodexSandboxToml(sessionId: string): void {
+  createConfigService({ migrate: false }).unset(
+    { kind: 'session', sessionId },
+    'runtime.codex.sandboxMode',
+  );
+}
+
+function setSessionCodexNetworkAccessToml(sessionId: string, networkAccess: boolean): void {
+  createConfigService({ migrate: false }).set(
+    { kind: 'session', sessionId },
+    { runtime: { codex: { networkAccess } } },
+  );
+}
+
+function clearSessionCodexNetworkAccessToml(sessionId: string): void {
+  createConfigService({ migrate: false }).unset(
+    { kind: 'session', sessionId },
+    'runtime.codex.networkAccess',
   );
 }
 
@@ -469,7 +499,7 @@ export function handleSandboxCommand(options: {
       '当前 Codex 沙箱',
       [
         ['沙箱', resolveEffectiveSandboxMode(session)],
-        ['来源', getSessionCodexSandboxMode(session) ? '当前会话' : '全局默认'],
+        ['来源', hasSessionCodexSandboxOverride(session) ? '当前会话' : '全局默认'],
       ],
       [SANDBOX_OPTIONS_TEXT, '发送 `/sandbox workspace-write` 可切换；修改从下一轮 Codex 请求开始生效。'],
       options.markdown,
@@ -478,6 +508,7 @@ export function handleSandboxCommand(options: {
   const requestedSandbox = options.args.trim().toLowerCase();
   if (requestedSandbox === 'default' || requestedSandbox === 'reset') {
     options.store.updateSession(session.id, clearSessionCodexSandboxModeUpdate());
+    clearSessionCodexSandboxToml(session.id);
     return buildCommandFields(
       '已恢复默认 Codex 沙箱',
       [['沙箱', resolveEffectiveSandboxMode(options.store.getSession(session.id))]],
@@ -495,6 +526,7 @@ export function handleSandboxCommand(options: {
     );
   }
   options.store.updateSession(session.id, setSessionCodexSandboxModeUpdate(sandboxMode));
+  setSessionCodexSandboxToml(session.id, sandboxMode);
   return buildCommandFields(
     '已更新 Codex 沙箱',
     [['沙箱', sandboxMode]],
@@ -528,7 +560,7 @@ export function handleNetworkCommand(options: {
       '当前 Codex 网络',
       [
         ['网络', formatNetworkAccess(resolveEffectiveNetworkAccess(session))],
-        ['来源', typeof getSessionCodexNetworkAccess(session) === 'boolean' ? '当前会话' : '全局默认'],
+        ['来源', hasSessionCodexNetworkAccessOverride(session) ? '当前会话' : '全局默认'],
       ],
       [NETWORK_OPTIONS_TEXT, '这个开关会传给 `sandbox_workspace_write.network_access`；下一轮 Codex 请求生效。'],
       options.markdown,
@@ -545,6 +577,7 @@ export function handleNetworkCommand(options: {
   }
   if (networkAccess === 'default') {
     options.store.updateSession(session.id, clearSessionCodexNetworkAccessUpdate());
+    clearSessionCodexNetworkAccessToml(session.id);
     return buildCommandFields(
       '已恢复默认 Codex 网络',
       [['网络', formatNetworkAccess(resolveEffectiveNetworkAccess(options.store.getSession(session.id)))]],
@@ -553,6 +586,7 @@ export function handleNetworkCommand(options: {
     );
   }
   options.store.updateSession(session.id, setSessionCodexNetworkAccessUpdate(networkAccess));
+  setSessionCodexNetworkAccessToml(session.id, networkAccess);
   return buildCommandFields(
     '已更新 Codex 网络',
     [['网络', formatNetworkAccess(networkAccess)]],

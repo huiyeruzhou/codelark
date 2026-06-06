@@ -99,16 +99,34 @@ export function resolveEffectiveReasoningEffort(session: BridgeSession | null | 
 
 export function resolveEffectiveSandboxMode(session?: BridgeSession | null): string {
   const { store } = getBridgeContext();
-  return normalizeSandboxMode(getSessionCodexSandboxMode(session) || store.getSetting('bridge_codex_sandbox_mode'));
+  return normalizeSandboxMode(
+    getSessionTomlOverride<BridgeSessionCodexRuntimeState['sandboxMode']>(session, 'runtime.codex.sandboxMode')
+      || getSessionCodexSandboxMode(session)
+      || store.getSetting('bridge_codex_sandbox_mode'),
+  );
 }
 
 export function resolveEffectiveNetworkAccess(session?: BridgeSession | null): boolean {
   const { store } = getBridgeContext();
+  const tomlValue = getSessionTomlOverride<boolean>(session, 'runtime.codex.networkAccess');
+  if (typeof tomlValue === 'boolean') {
+    return tomlValue;
+  }
   const sessionValue = getSessionCodexNetworkAccess(session);
   if (typeof sessionValue === 'boolean') {
     return sessionValue;
   }
   return (store.getSetting('bridge_codex_network_access') || '').toLowerCase() === 'true';
+}
+
+export function hasSessionCodexSandboxOverride(session?: BridgeSession | null): boolean {
+  return getSessionTomlOverride<BridgeSessionCodexRuntimeState['sandboxMode']>(session, 'runtime.codex.sandboxMode') !== undefined
+    || getSessionCodexSandboxMode(session) !== undefined;
+}
+
+export function hasSessionCodexNetworkAccessOverride(session?: BridgeSession | null): boolean {
+  return getSessionTomlOverride<boolean>(session, 'runtime.codex.networkAccess') !== undefined
+    || typeof getSessionCodexNetworkAccess(session) === 'boolean';
 }
 
 export type SessionRuntimeCodexProvider = 'sdk' | 'tmux' | 'pty';

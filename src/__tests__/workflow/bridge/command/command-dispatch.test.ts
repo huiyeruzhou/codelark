@@ -11,7 +11,12 @@ import { createConfigService } from '../../../../configuration/service.js';
 import { JsonFileStore } from '../../../../storage/json-store.js';
 import { initBridgeContext } from '../../../../bridge/host/context.js';
 import { handleBridgeCommand } from '../../../../bridge/command/index.js';
-import { resolveClaudeRuntimeConfig, resolveEffectiveReasoningEffort } from '../../../../bridge/session/support.js';
+import {
+  resolveClaudeRuntimeConfig,
+  resolveEffectiveNetworkAccess,
+  resolveEffectiveReasoningEffort,
+  resolveEffectiveSandboxMode,
+} from '../../../../bridge/session/support.js';
 import { processMessage } from '../../../../bridge/turn/interactive/sdk-conversation-engine.js';
 import { consumeSseEvents } from '../../../../runtime/sse-stream-decoder.js';
 import { CodexRoutingProvider } from '../../../../runtime/codex/routing-provider.js';
@@ -3054,13 +3059,53 @@ describe('command-dispatch', () => {
 
       await handleBridgeCommand(adapter, { address, text: '/sandbox read-only', messageId: `incoming-${provider}-sandbox` } as any, '/sandbox read-only', deps);
       assert.equal(getSessionCodexSandboxMode(store.getSession(session.id)), 'read-only');
+      assert.equal(
+        createConfigService({ migrate: false, env: {} }).get('runtime.codex.sandboxMode', {
+          kind: 'session',
+          sessionId: session.id,
+        }),
+        'read-only',
+      );
+      store.updateSession(session.id, { runtime: { codex: { sandboxMode: undefined } } });
+      assert.equal(getSessionCodexSandboxMode(store.getSession(session.id)), undefined);
+      assert.equal(resolveEffectiveSandboxMode(store.getSession(session.id)), 'read-only');
       assert.match(sent.at(-1)?.text || '', /已更新 Codex 沙箱/);
       assert.match(sent.at(-1)?.text || '', provider === 'tmux' ? /\/p tmux/ : /\/provider pty/);
 
       await handleBridgeCommand(adapter, { address, text: '/network off', messageId: `incoming-${provider}-network` } as any, '/network off', deps);
       assert.equal(getSessionCodexNetworkAccess(store.getSession(session.id)), false);
+      assert.equal(
+        createConfigService({ migrate: false, env: {} }).get('runtime.codex.networkAccess', {
+          kind: 'session',
+          sessionId: session.id,
+        }),
+        false,
+      );
+      store.updateSession(session.id, { runtime: { codex: { networkAccess: undefined } } });
+      assert.equal(getSessionCodexNetworkAccess(store.getSession(session.id)), undefined);
+      assert.equal(resolveEffectiveNetworkAccess(store.getSession(session.id)), false);
       assert.match(sent.at(-1)?.text || '', /已更新 Codex 网络/);
       assert.match(sent.at(-1)?.text || '', /重启后的后续请求中生效/);
+
+      await handleBridgeCommand(adapter, { address, text: '/sandbox default', messageId: `incoming-${provider}-sandbox-default` } as any, '/sandbox default', deps);
+      assert.notEqual(
+        createConfigService({ migrate: false, env: {} }).resolve('runtime.codex.sandboxMode', {
+          kind: 'session',
+          sessionId: session.id,
+        }).source,
+        'session',
+      );
+      assert.equal(resolveEffectiveSandboxMode(store.getSession(session.id)), 'workspace-write');
+
+      await handleBridgeCommand(adapter, { address, text: '/network default', messageId: `incoming-${provider}-network-default` } as any, '/network default', deps);
+      assert.notEqual(
+        createConfigService({ migrate: false, env: {} }).resolve('runtime.codex.networkAccess', {
+          kind: 'session',
+          sessionId: session.id,
+        }).source,
+        'session',
+      );
+      assert.equal(resolveEffectiveNetworkAccess(store.getSession(session.id)), false);
 
       await handleBridgeCommand(adapter, { address, text: '/model default', messageId: `incoming-${provider}-model` } as any, '/model default', deps);
       assert.equal(getSessionCodexModel(store.getSession(session.id)), undefined);
