@@ -54,6 +54,10 @@ import {
   getSessionCodexNetworkAccess,
   getSessionCodexReasoningEffort,
   getSessionCodexSandboxMode,
+  getSessionTmuxAutoEnter,
+  getSessionTmuxCaptureLines,
+  getSessionTmuxEchoInput,
+  getSessionTmuxSessionName,
   getSessionWorkingDirectory,
 } from '../../../../domain/session-runtime.js';
 import { getClaudeProjectDir, isArchivedClaudeSession } from '../../../../runtime/claude/session-jsonl.js';
@@ -5095,6 +5099,15 @@ describe('command-dispatch', () => {
       assert.ok(binding);
       const session = binding ? store.getSession(binding.bridgeSessionId) : null;
       assert.equal(session?.runtime?.general?.tmuxSessionName, 'alpha');
+      assert.equal(
+        createConfigService({ migrate: false, env: {} }).get('session.tmuxSessionName', {
+          kind: 'session',
+          sessionId: binding.bridgeSessionId,
+        }),
+        'alpha',
+      );
+      store.updateSession(binding.bridgeSessionId, { runtime: { general: { tmuxSessionName: undefined } } });
+      assert.equal(getSessionTmuxSessionName(store.getSession(binding.bridgeSessionId)), 'alpha');
       assert.match(sent.at(-1) || '', /已绑定 tmux session/);
       assert.match(sent.at(-1) || '', /```sh/);
       assert.match(sent.at(-1) || '', /alpha-screen/);
@@ -5113,6 +5126,15 @@ describe('command-dispatch', () => {
       );
       const updatedSession = binding ? store.getSession(binding.bridgeSessionId) : null;
       assert.equal(updatedSession?.runtime?.general?.captureLines, 120);
+      assert.equal(
+        createConfigService({ migrate: false, env: {} }).get('session.tmuxCaptureLines', {
+          kind: 'session',
+          sessionId: binding.bridgeSessionId,
+        }),
+        120,
+      );
+      store.updateSession(binding.bridgeSessionId, { runtime: { general: { captureLines: undefined } } });
+      assert.equal(getSessionTmuxCaptureLines(store.getSession(binding.bridgeSessionId)), 120);
       assert.doesNotMatch(sent.at(-1) || '', /真实 tmux 底层命令/);
 
       await handleBridgeCommand(
@@ -5127,6 +5149,15 @@ describe('command-dispatch', () => {
       );
       const autoEnterSession = binding ? store.getSession(binding.bridgeSessionId) : null;
       assert.equal(autoEnterSession?.runtime?.general?.autoEnter, true);
+      assert.equal(
+        createConfigService({ migrate: false, env: {} }).get('session.tmuxAutoEnter', {
+          kind: 'session',
+          sessionId: binding.bridgeSessionId,
+        }),
+        true,
+      );
+      store.updateSession(binding.bridgeSessionId, { runtime: { general: { autoEnter: undefined } } });
+      assert.equal(getSessionTmuxAutoEnter(store.getSession(binding.bridgeSessionId)), true);
       assert.match(sent.at(-1) || '', /自动回车.*on/s);
 
       await handleBridgeCommand(
@@ -5141,6 +5172,15 @@ describe('command-dispatch', () => {
       );
       const echoOnSession = binding ? store.getSession(binding.bridgeSessionId) : null;
       assert.equal(echoOnSession?.runtime?.general?.echoInput, true);
+      assert.equal(
+        createConfigService({ migrate: false, env: {} }).get('session.tmuxEchoInput', {
+          kind: 'session',
+          sessionId: binding.bridgeSessionId,
+        }),
+        true,
+      );
+      store.updateSession(binding.bridgeSessionId, { runtime: { general: { echoInput: undefined } } });
+      assert.equal(getSessionTmuxEchoInput(store.getSession(binding.bridgeSessionId)), true);
       assert.match(sent.at(-1) || '', /输入回显.*on/s);
 
       await handleBridgeCommand(
@@ -5380,7 +5420,7 @@ describe('command-dispatch', () => {
       assert.match(tempLinesResponse, /展示行数.*42/s);
       assert.match(tempLinesResponse, /tmux capture-pane -t alpha -p -S -42/);
       const afterTempLinesSession = binding ? store.getSession(binding.bridgeSessionId) : null;
-      assert.equal(afterTempLinesSession?.runtime?.general?.captureLines, 120);
+      assert.equal(getSessionTmuxCaptureLines(afterTempLinesSession), 120);
 
       await handleBridgeCommand(
         adapter,
