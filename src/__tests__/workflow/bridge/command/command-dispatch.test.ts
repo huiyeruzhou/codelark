@@ -1924,6 +1924,15 @@ describe('command-dispatch', () => {
 
   it('renders /status as global bridge status without creating a session or binding for an unbound chat', async () => {
     const store = initTestContext();
+    fs.writeFileSync(HOME_CONFIG_TOML_PATH, `
+schema_version = 2
+
+[[channels]]
+id = "feishu-status"
+alias = "飞书状态通道"
+provider = "feishu"
+enabled = true
+`);
     const sent: string[] = [];
     const adapter: any = {
       channelType: 'feishu',
@@ -1953,6 +1962,8 @@ describe('command-dispatch', () => {
     assert.match(response, /全局状态/);
     assert.match(response, /Bridge/);
     assert.match(response, /Bridge PID/);
+    assert.match(response, /feishu-status/);
+    assert.match(response, /alias=飞书状态通道/);
     assert.match(response, /当前聊天.*未绑定/s);
     assert.equal(store.getChannelChat(address.channelType, address.chatId), null);
     assert.equal(store.listSessions().length, 0);

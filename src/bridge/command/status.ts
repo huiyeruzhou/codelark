@@ -1,4 +1,4 @@
-import { loadConfig } from '../../configuration/index.js';
+import { createConfigService } from '../../configuration/service.js';
 import { getBridgeStatus, getCurrentUiServerUrl, getUiServerStatus } from '../../local-service/manager.js';
 import {
   buildCommandFields,
@@ -21,7 +21,7 @@ export function buildGlobalStatusResponse(
   currentBinding: ChannelChat | null,
   markdown: boolean,
 ): string {
-  const config = loadConfig();
+  const channels = createConfigService({ migrate: false }).snapshot().config.channels;
   const bridgeStatus = getBridgeStatus();
   const uiStatus = getUiServerStatus();
   const bindings = store.listChannelChats();
@@ -29,13 +29,13 @@ export function buildGlobalStatusResponse(
   const sessions = store.listSessions();
   const runningSessions = sessions.filter((session) => session.runtime_status === 'running' || session.runtime_status === 'queued');
   const adapters = bridgeStatus.adapters || [];
-  const enabledChannels = (config.channels || []).filter((channel) => channel.enabled !== false);
+  const enabledChannels = channels.filter((channel) => channel.enabled !== false);
   const uiUrl = getCurrentUiServerUrl();
   const currentChatBindingCount = currentBinding
     ? bindings.filter((binding) => binding.channelType === currentBinding.channelType && binding.chatId === currentBinding.chatId).length
     : 0;
 
-  const channelLines = (config.channels || []).map((channel) => {
+  const channelLines = channels.map((channel) => {
     const adapter = adapters.find((item) => item.channelType === channel.id);
     return [
       channel.id,
@@ -68,7 +68,7 @@ export function buildGlobalStatusResponse(
       ['UI Server', formatGlobalRunning(uiStatus.running)],
       ['UI PID', formatPid(uiStatus.pid)],
       ['UI 地址', uiUrl || '-'],
-      ['通道', `${enabledChannels.length}/${(config.channels || []).length} enabled`],
+      ['通道', `${enabledChannels.length}/${channels.length} enabled`],
       ['Adapter', `${adapters.filter((adapter) => adapter.running).length}/${adapters.length} running`],
       ['聊天', `${activeBindings.length} bound`],
       ['会话', `${sessions.length} total, ${runningSessions.length} running/queued`],
