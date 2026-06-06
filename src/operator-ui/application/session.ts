@@ -160,6 +160,10 @@ function setOrUnsetSessionConfig(
   service.set({ kind: 'session', sessionId }, patchForValue(value as never));
 }
 
+function claudeYoloModeFromPermissionMode(permissionMode: string): 'off' | 'on' {
+  return permissionMode === 'bypassPermissions' ? 'on' : 'off';
+}
+
 function applySessionConfigToml(bridgeSessionId: string, payload: Record<string, unknown>): void {
   const activeRuntime = payload.activeRuntime === 'claude' ? 'claude' : 'codex';
   if (typeof payload.workingDirectory === 'string') {
@@ -186,14 +190,26 @@ function applySessionConfigToml(bridgeSessionId: string, payload: Record<string,
       || payload.claudePermissionMode === 'default'
       || payload.claudePermissionMode === ''
     ) {
+      const permissionMode = payload.claudePermissionMode;
       setOrUnsetSessionConfig(
         bridgeSessionId,
-        'runtime.claude.yoloMode',
-        payload.claudePermissionMode === ''
-          ? ''
-          : payload.claudePermissionMode === 'bypassPermissions' ? 'on' : 'off',
-        (yoloMode) => ({ runtime: { claude: { yoloMode } } }),
+        'runtime.claude.permissionMode',
+        permissionMode,
+        (mode) => ({
+          runtime: {
+            claude: {
+              permissionMode: mode,
+              yoloMode: claudeYoloModeFromPermissionMode(mode),
+            },
+          },
+        }),
       );
+      if (permissionMode === '') {
+        createConfigService({ migrate: false }).unset(
+          { kind: 'session', sessionId: bridgeSessionId },
+          'runtime.claude.yoloMode',
+        );
+      }
     }
     if (
       payload.claudeReasoningEffort === 'low'
@@ -393,7 +409,8 @@ function sessionConfigPayload(session: BridgeSession) {
   const activeRuntime = getSessionActiveRuntime(session) || 'codex';
   const codexYoloMode = getSessionConfigTomlOverride<'off' | 'on' | 'yolo'>(session, 'runtime.codex.yoloMode');
   const claudeYoloMode = getSessionConfigTomlOverride<'off' | 'on' | 'yolo'>(session, 'runtime.claude.yoloMode');
-  const claudePermissionMode = getSessionClaudePermissionMode(session)
+  const claudePermissionMode = getSessionConfigTomlOverride<string>(session, 'runtime.claude.permissionMode')
+    || getSessionClaudePermissionMode(session)
     || (claudeYoloMode === 'on' || claudeYoloMode === 'yolo' ? 'bypassPermissions' : claudeYoloMode === 'off' ? 'default' : undefined);
   return {
     id: session.id,

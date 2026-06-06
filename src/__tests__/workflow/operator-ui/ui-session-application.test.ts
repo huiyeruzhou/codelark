@@ -250,6 +250,7 @@ describe('UiSessionApplication', () => {
     const configService = createConfigService({ migrate: false, env: {} });
     assert.equal(configService.get('runtime.claude.model', { kind: 'session', sessionId: session.id }), 'opus');
     assert.equal(configService.get('runtime.claude.yoloMode', { kind: 'session', sessionId: session.id }), 'on');
+    assert.equal(configService.get('runtime.claude.permissionMode', { kind: 'session', sessionId: session.id }), 'bypassPermissions');
     assert.equal(configService.get('runtime.claude.reasoningEffort', { kind: 'session', sessionId: session.id }), 'high');
 
     store.updateSession(session.id, {
@@ -268,6 +269,7 @@ describe('UiSessionApplication', () => {
       claudePermissionMode: 'plan',
     });
     assert.equal(planMode.claudePermissionMode, 'plan');
+    assert.equal(configService.get('runtime.claude.permissionMode', { kind: 'session', sessionId: session.id }), 'plan');
     assert.equal(configService.get('runtime.claude.yoloMode', { kind: 'session', sessionId: session.id }), 'off');
 
     const acceptEditsMode = app.updateConfig(session.id, {
@@ -275,6 +277,7 @@ describe('UiSessionApplication', () => {
       claudePermissionMode: 'acceptEdits',
     });
     assert.equal(acceptEditsMode.claudePermissionMode, 'acceptEdits');
+    assert.equal(configService.get('runtime.claude.permissionMode', { kind: 'session', sessionId: session.id }), 'acceptEdits');
     assert.equal(configService.get('runtime.claude.yoloMode', { kind: 'session', sessionId: session.id }), 'off');
   });
 

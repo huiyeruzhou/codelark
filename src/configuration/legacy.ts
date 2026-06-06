@@ -20,13 +20,14 @@ function v2CodexYoloMode(mode: string | undefined): ConfigV2['runtime']['codex']
   return mode === 'yolo' ? 'on' : 'off';
 }
 
-function legacyClaudePermissionMode(mode: ConfigV2['runtime']['claude']['yoloMode']): ClaudePermissionMode {
-  return mode === 'on' || mode === 'yolo' ? 'bypassPermissions' : 'default';
-}
-
 function v2ClaudeYoloMode(permissionMode: ClaudePermissionMode | undefined): ConfigV2['runtime']['claude']['yoloMode'] | undefined {
   if (permissionMode === undefined) return undefined;
   return permissionMode === 'bypassPermissions' ? 'on' : 'off';
+}
+
+function legacyClaudePermissionMode(config: ConfigV2['runtime']['claude']): ClaudePermissionMode {
+  if (config.permissionMode !== 'default') return config.permissionMode;
+  return config.yoloMode === 'on' || config.yoloMode === 'yolo' ? 'bypassPermissions' : 'default';
 }
 
 function hasLegacyChannelBehaviorConfig(config: Config): boolean {
@@ -81,7 +82,7 @@ export function configV2ToLegacyConfig(config: ConfigV2): Config {
     claudeDefaultModel: config.runtime.claude.model || undefined,
     claudeProvider: config.runtime.claude.provider,
     claudeExecutable: config.runtime.claude.executable,
-    claudePermissionMode: legacyClaudePermissionMode(config.runtime.claude.yoloMode),
+    claudePermissionMode: legacyClaudePermissionMode(config.runtime.claude),
     claudeIdleTimeoutMinutes: config.runtime.claude.idleTimeoutMinutes,
     uiAllowLan: config.bridge.uiAllowLan,
     uiAccessToken: config.bridge.uiAccessToken || undefined,
@@ -137,6 +138,7 @@ export function legacyConfigToConfigPatch(config: Config): ConfigPatch {
         provider: config.claudeProvider,
         executable: config.claudeExecutable,
         yoloMode: claudeYoloMode,
+        permissionMode: config.claudePermissionMode,
         idleTimeoutMinutes: config.claudeIdleTimeoutMinutes,
       },
     },

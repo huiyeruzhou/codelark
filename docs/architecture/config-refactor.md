@@ -63,7 +63,8 @@ CodeLark 需要把“默认值、全局配置、项目配置、环境变量、�
 | codex | `runtime.codex.networkAccess` | `runtime.codex.network_access` | `runtime.codex.networkAccess` | `CODELARK_CODEX_NETWORK_ACCESS` | - | Channel / Session |
 | codex | `runtime.codex.reasoningEffort` | `runtime.codex.reasoning_effort` | `runtime.codex.reasoningEffort` | `CODELARK_CODEX_REASONING_EFFORT` | - | Channel / Session，由 `/r` 写入 |
 | claude | `runtime.claude.model` | `runtime.claude.model` | `runtime.claude.defaultModel` / `runtime.claude.model` | `CODELARK_CLAUDE_MODEL` | `CODELARK_CLAUDE_DEFAULT_MODEL` | Channel / Session |
-| claude | `runtime.claude.yoloMode` | `runtime.claude.yolo_mode` | `runtime.claude.permissionMode` | `CODELARK_CLAUDE_YOLO_MODE` | `CODELARK_CLAUDE_PERMISSION_MODE` | Channel / Session |
+| claude | `runtime.claude.yoloMode` | `runtime.claude.yolo_mode` | derived from `runtime.claude.permissionMode` for yolo compatibility | `CODELARK_CLAUDE_YOLO_MODE` | - | Channel / Session |
+| claude | `runtime.claude.permissionMode` | `runtime.claude.permission_mode` | `runtime.claude.permissionMode` | `CODELARK_CLAUDE_PERMISSION_MODE` | - | Channel / Session |
 | claude | `runtime.claude.provider` | `runtime.claude.provider` | `runtime.claude.provider` | `CODELARK_CLAUDE_PROVIDER` | - | Channel / Session |
 | claude | `runtime.claude.executable` | `runtime.claude.executable` | `runtime.claude.executable` | `CODELARK_CLAUDE_EXECUTABLE` | - | 否 |
 | claude | `runtime.claude.reasoningEffort` | `runtime.claude.reasoning_effort` | `runtime.claude.reasoningEffort` | `CODELARK_CLAUDE_REASONING_EFFORT` | - | Channel / Session，由 `/r` 写入 |
@@ -217,6 +218,7 @@ reasoning_effort = "medium"
 [runtime.claude]
 model = ""
 yolo_mode = "off"
+permission_mode = "default"
 provider = "sdk"
 executable = "claude"
 reasoning_effort = "medium"
@@ -262,7 +264,8 @@ require_mention = false
 | `runtime.codex.network_access` | `runtime.codex.networkAccess` | `CODELARK_CODEX_NETWORK_ACCESS` |
 | `runtime.codex.reasoning_effort` | `runtime.codex.reasoningEffort` | `CODELARK_CODEX_REASONING_EFFORT` |
 | `runtime.claude.model` | `runtime.claude.defaultModel`、`runtime.claude.model` | `CODELARK_CLAUDE_MODEL`，兼容 `CODELARK_CLAUDE_DEFAULT_MODEL` |
-| `runtime.claude.yolo_mode` | `runtime.claude.permissionMode` | `CODELARK_CLAUDE_YOLO_MODE`，兼容 `CODELARK_CLAUDE_PERMISSION_MODE` |
+| `runtime.claude.yolo_mode` | 由 `runtime.claude.permissionMode` 派生的 yolo 兼容值 | `CODELARK_CLAUDE_YOLO_MODE` |
+| `runtime.claude.permission_mode` | `runtime.claude.permissionMode` | `CODELARK_CLAUDE_PERMISSION_MODE` |
 | `runtime.claude.provider` | `runtime.claude.provider` | `CODELARK_CLAUDE_PROVIDER` |
 | `runtime.claude.executable` | `runtime.claude.executable` | `CODELARK_CLAUDE_EXECUTABLE` |
 | `runtime.claude.reasoning_effort` | `runtime.claude.reasoningEffort` | `CODELARK_CLAUDE_REASONING_EFFORT` |

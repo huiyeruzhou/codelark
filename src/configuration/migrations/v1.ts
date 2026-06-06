@@ -148,6 +148,14 @@ function claudeYoloMode(value: unknown, warnings: string[]): 'off' | 'on' | unde
   return undefined;
 }
 
+function claudePermissionMode(value: unknown, warnings: string[]): 'default' | 'acceptEdits' | 'bypassPermissions' | 'plan' | undefined {
+  if (value === 'default' || value === 'acceptEdits' || value === 'bypassPermissions' || value === 'plan') return value;
+  if (value === 'on') return 'bypassPermissions';
+  if (value === 'off') return 'default';
+  if (value !== undefined) warnings.push(`Ignored invalid legacy Claude permissionMode: ${String(value)}`);
+  return undefined;
+}
+
 function patchFromLegacyConfig(config: LegacyConfigFile, warnings: string[]): ConfigPatch {
   const runtime = config.runtime || {};
   const codex = runtime.codex || {};
@@ -180,6 +188,8 @@ function patchFromLegacyConfig(config: LegacyConfigFile, warnings: string[]): Co
   if (claudeModel !== undefined) claudePatch.model = claudeModel;
   const legacyClaudeMode = claudeYoloMode(claude.permissionMode, warnings);
   if (legacyClaudeMode !== undefined) claudePatch.yoloMode = legacyClaudeMode;
+  const legacyClaudePermissionMode = claudePermissionMode(claude.permissionMode, warnings);
+  if (legacyClaudePermissionMode !== undefined) claudePatch.permissionMode = legacyClaudePermissionMode;
   const legacyClaudeProvider = claudeProvider(claude.provider);
   if (legacyClaudeProvider !== undefined) claudePatch.provider = legacyClaudeProvider;
   const legacyClaudeExecutable = claudeExecutable(claude.executable);
@@ -290,7 +300,7 @@ function patchFromLegacyEnv(env: Map<string, string>, warnings: string[]): Confi
         provider: env.get('CODELARK_CLAUDE_PROVIDER'),
         executable: env.get('CODELARK_CLAUDE_EXECUTABLE'),
         defaultModel: env.get('CODELARK_CLAUDE_MODEL') ?? env.get('CODELARK_CLAUDE_DEFAULT_MODEL'),
-        permissionMode: env.get('CODELARK_CLAUDE_YOLO_MODE') ?? env.get('CODELARK_CLAUDE_PERMISSION_MODE'),
+        permissionMode: env.get('CODELARK_CLAUDE_PERMISSION_MODE') ?? env.get('CODELARK_CLAUDE_YOLO_MODE'),
         reasoningEffort: env.get('CODELARK_CLAUDE_REASONING_EFFORT'),
         idleTimeoutMinutes: env.get('CODELARK_CLAUDE_IDLE_TIMEOUT_MINUTES'),
       },

@@ -85,7 +85,7 @@ describe('ConfigService v2 foundation', () => {
     }
   });
 
-  it('maps legacy Claude acceptEdits permission mode to yolo off during startup migration', () => {
+  it('preserves legacy Claude acceptEdits permission mode during startup migration', () => {
     const home = tempHome();
     try {
       writeFile(path.join(home, 'config.json'), JSON.stringify({
@@ -101,6 +101,7 @@ describe('ConfigService v2 foundation', () => {
 
       const service = createConfigService({ codelarkHome: home, env: {} });
 
+      assert.equal(service.get('runtime.claude.permissionMode'), 'acceptEdits');
       assert.equal(service.get('runtime.claude.yoloMode'), 'off');
       assert.equal(fs.existsSync(path.join(home, 'config.toml')), true);
       assert.equal(service.migrationResult?.applied[0]?.id, 'v1');
@@ -318,7 +319,7 @@ app_secret = "home-app-secret"
     }
   });
 
-  it('projects v2 yolo modes to legacy runtime setting values', () => {
+  it('projects v2 modes to legacy runtime setting values', () => {
     const home = tempHome();
     try {
       writeFile(path.join(home, 'config.toml'), `
@@ -327,16 +328,17 @@ yolo_mode = "on"
 
 [runtime.claude]
 yolo_mode = "off"
+permission_mode = "plan"
 `);
       const service = createConfigService({ codelarkHome: home, env: {} });
       let settings = service.exportRuntimeSettings();
       assert.equal(settings.get('bridge_default_mode'), 'yolo');
-      assert.equal(settings.get('bridge_claude_permission_mode'), 'default');
+      assert.equal(settings.get('bridge_claude_permission_mode'), 'plan');
 
       service.set({ kind: 'home' }, {
         runtime: {
           codex: { yoloMode: 'off' },
-          claude: { yoloMode: 'on' },
+          claude: { yoloMode: 'on', permissionMode: 'bypassPermissions' },
         },
       });
       settings = service.exportRuntimeSettings();

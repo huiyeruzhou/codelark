@@ -30,6 +30,7 @@ function baseConfigV2(): ConfigV2 {
       claude: {
         model: 'claude-test',
         yoloMode: 'off',
+        permissionMode: 'default',
         provider: 'pty',
         executable: 'ccr',
         reasoningEffort: 'medium',
@@ -182,14 +183,16 @@ describe('legacy config compatibility adapter', () => {
     assert.equal(patch.channels?.[0]?.config?.streamStatusCheckIntervalSeconds, 10);
   });
 
-  it('maps legacy Claude acceptEdits and plan permission modes to v2 yolo off', () => {
+  it('preserves legacy Claude acceptEdits and plan permission modes in v2', () => {
     const legacy: Config = {
       runtime: 'claude',
       defaultMode: 'normal',
       enabledChannels: [],
     };
 
+    assert.equal(legacyConfigToConfigPatch({ ...legacy, claudePermissionMode: 'acceptEdits' }).runtime?.claude?.permissionMode, 'acceptEdits');
     assert.equal(legacyConfigToConfigPatch({ ...legacy, claudePermissionMode: 'acceptEdits' }).runtime?.claude?.yoloMode, 'off');
+    assert.equal(legacyConfigToConfigPatch({ ...legacy, claudePermissionMode: 'plan' }).runtime?.claude?.permissionMode, 'plan');
     assert.equal(legacyConfigToConfigPatch({ ...legacy, claudePermissionMode: 'plan' }).runtime?.claude?.yoloMode, 'off');
   });
 });

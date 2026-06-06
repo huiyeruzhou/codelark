@@ -2990,6 +2990,13 @@ describe('command-dispatch', () => {
       'on',
     );
     assert.equal(
+      createConfigService({ migrate: false, env: {} }).get('runtime.claude.permissionMode', {
+        kind: 'session',
+        sessionId: session.id,
+      }),
+      'bypassPermissions',
+    );
+    assert.equal(
       createConfigService({ migrate: false, env: {} }).get('runtime.claude.model', {
         kind: 'session',
         sessionId: session.id,

@@ -13,15 +13,11 @@ const legacyEnvAliases = new Map<string, string>([
   ['CODELARK_CODEX_DEFAULT_MODE', 'CODELARK_CODEX_YOLO_MODE'],
   ['CODELARK_DEFAULT_CODEX_PROVIDER', 'CODELARK_CODEX_PROVIDER'],
   ['CODELARK_CLAUDE_DEFAULT_MODEL', 'CODELARK_CLAUDE_MODEL'],
-  ['CODELARK_CLAUDE_PERMISSION_MODE', 'CODELARK_CLAUDE_YOLO_MODE'],
   ['CODELARK_FEISHU_DOMAIN', 'CODELARK_FEISHU_SITE'],
 ]);
 
 function normalizeLegacyValue(newKey: string, value: string): string {
   if (newKey === 'CODELARK_CODEX_YOLO_MODE') return value === 'yolo' ? 'on' : 'off';
-  if (newKey === 'CODELARK_CLAUDE_YOLO_MODE') {
-    return value === 'bypassPermissions' || value === 'on' || value === 'yolo' ? 'on' : 'off';
-  }
   return value;
 }
 
@@ -98,6 +94,7 @@ function findConfigFieldsByEnv() {
     'runtime.codex.reasoningEffort',
     'runtime.claude.model',
     'runtime.claude.yoloMode',
+    'runtime.claude.permissionMode',
     'runtime.claude.provider',
     'runtime.claude.executable',
     'runtime.claude.reasoningEffort',

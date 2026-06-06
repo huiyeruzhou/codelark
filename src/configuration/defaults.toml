@@ -27,6 +27,7 @@ reasoning_effort = "medium"
 [runtime.claude]
 model = ""
 yolo_mode = "off"
+permission_mode = "default"
 provider = "sdk"
 executable = "claude"
 reasoning_effort = "medium"

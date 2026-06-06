@@ -179,9 +179,10 @@ function setSessionCodexYoloModeToml(sessionId: string, mode: 'normal' | 'yolo')
 }
 
 function setSessionClaudeYoloModeToml(sessionId: string, mode: 'normal' | 'yolo'): void {
+  const permissionMode = mode === 'yolo' ? 'bypassPermissions' : 'default';
   createConfigService({ migrate: false }).set(
     { kind: 'session', sessionId },
-    { runtime: { claude: { yoloMode: mode === 'yolo' ? 'on' : 'off' } } },
+    { runtime: { claude: { yoloMode: mode === 'yolo' ? 'on' : 'off', permissionMode } } },
   );
 }
 

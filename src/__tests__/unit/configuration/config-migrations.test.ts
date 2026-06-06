@@ -156,7 +156,7 @@ describe('config migration runner', () => {
     }
   });
 
-  it('maps legacy home Claude permissionMode plan to yolo off', () => {
+  it('preserves legacy home Claude permissionMode plan', () => {
     const home = tempHome();
     try {
       const paths = resolveMigrationPaths(home);
@@ -174,6 +174,7 @@ describe('config migration runner', () => {
       const result = runConfigMigrations({ codelarkHome: home });
 
       assert.equal(result.changed, true);
+      assert.match(fs.readFileSync(paths.homeToml, 'utf-8'), /permission_mode = "plan"/);
       assert.match(fs.readFileSync(paths.homeToml, 'utf-8'), /yolo_mode = "off"/);
       assert.equal(fs.existsSync(paths.migrationState), true);
     } finally {
@@ -181,7 +182,7 @@ describe('config migration runner', () => {
     }
   });
 
-  it('maps legacy session Claude permissionMode plan to yolo off', () => {
+  it('preserves legacy session Claude permissionMode plan', () => {
     const home = tempHome();
     try {
       const paths = resolveMigrationPaths(home);
@@ -201,6 +202,10 @@ describe('config migration runner', () => {
       const result = runConfigMigrations({ codelarkHome: home });
 
       assert.equal(result.changed, true);
+      assert.match(
+        fs.readFileSync(path.join(paths.sessionConfigDir, 'session-needs-confirmation.toml'), 'utf-8'),
+        /permission_mode = "plan"/,
+      );
       assert.match(
         fs.readFileSync(path.join(paths.sessionConfigDir, 'session-needs-confirmation.toml'), 'utf-8'),
         /yolo_mode = "off"/,

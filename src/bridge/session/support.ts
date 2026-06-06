@@ -234,8 +234,9 @@ function parsePositiveSettingInt(value: string | null | undefined): number | und
 
 export function resolveClaudeRuntimeConfig(session?: BridgeSession | null): ClaudeRuntimeConfig {
   const { store } = getBridgeContext();
+  const tomlPermissionMode = getSessionTomlOverride<ClaudePermissionMode>(session, 'runtime.claude.permissionMode');
   const tomlYoloMode = getSessionTomlOverride<'off' | 'on'>(session, 'runtime.claude.yoloMode');
-  const tomlPermissionMode = tomlYoloMode === 'on'
+  const tomlYoloPermissionMode = tomlYoloMode === 'on'
     ? 'bypassPermissions'
     : tomlYoloMode === 'off'
       ? 'default'
@@ -249,6 +250,7 @@ export function resolveClaudeRuntimeConfig(session?: BridgeSession | null): Clau
       || store.getSetting('bridge_claude_default_model')
       || undefined,
     permissionMode: tomlPermissionMode
+      || tomlYoloPermissionMode
       || getSessionClaudePermissionMode(session)
       || normalizeClaudePermissionMode(store.getSetting('bridge_claude_permission_mode'))
       || 'default',

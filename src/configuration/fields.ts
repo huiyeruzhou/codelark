@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import {
   claudeExecutableSchema,
+  claudePermissionModeSchema,
   claudeProviderSchema,
   codexProviderSchema,
   feishuSiteSchema,
@@ -225,8 +226,19 @@ export const configFields = [
     schema: yoloModeSchema,
     envKey: 'CODELARK_CLAUDE_YOLO_MODE',
     processEnvKey: 'CODELARK_CLAUDE_YOLO_MODE',
-    runtimeSettingsKey: 'bridge_claude_permission_mode',
     parseEnv: enumFromEnv(yoloModeSchema),
+    commandAliases: ['/mode'],
+    defaultWriteScope: 'channel',
+  },
+  {
+    path: 'runtime.claude.permissionMode',
+    tomlPath: 'runtime.claude.permission_mode',
+    scopes: sessionScopes,
+    schema: claudePermissionModeSchema,
+    envKey: 'CODELARK_CLAUDE_PERMISSION_MODE',
+    processEnvKey: 'CODELARK_CLAUDE_PERMISSION_MODE',
+    runtimeSettingsKey: 'bridge_claude_permission_mode',
+    parseEnv: enumFromEnv(claudePermissionModeSchema),
     commandAliases: ['/mode'],
     defaultWriteScope: 'channel',
   },
