@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { JsonFileStore } from '../../../storage/json-store.js';
-import { CODELARK_HOME, CONFIG_JSON_PATH } from '../../../configuration/index.js';
+import { CODELARK_HOME, CONFIG_JSON_PATH, CONFIG_PATH } from '../../../configuration/index.js';
 import { getSessionSystemPrompt, getSessionWorkingDirectory } from '../../../domain/session-runtime.js';
 
 const DATA_DIR = path.join(CODELARK_HOME, 'data');
@@ -29,6 +29,63 @@ describe('JsonFileStore', () => {
     assert.equal(store.getSetting('remote_bridge_enabled'), 'true');
     assert.equal(store.getSetting('bridge_default_model'), 'test-model');
     assert.equal(store.getSetting('nonexistent'), null);
+  });
+
+  it('refreshes dynamic settings from v2 config projection instead of legacy config.env', () => {
+    const configTomlPath = path.join(CODELARK_HOME, 'config.toml');
+    const previousToml = fs.existsSync(configTomlPath) ? fs.readFileSync(configTomlPath, 'utf-8') : null;
+    const previousEnvFile = fs.existsSync(CONFIG_PATH) ? fs.readFileSync(CONFIG_PATH, 'utf-8') : null;
+    const envKeys = [
+      'CODELARK_CODEX_MODEL',
+      'CODELARK_CODEX_DEFAULT_MODEL',
+      'CODELARK_CODEX_YOLO_MODE',
+      'CODELARK_CODEX_DEFAULT_MODE',
+      'CODELARK_HISTORY_MESSAGE_LIMIT',
+    ];
+    const previousEnv = new Map(envKeys.map((key) => [key, process.env[key]]));
+
+    try {
+      for (const key of envKeys) delete process.env[key];
+      fs.writeFileSync(configTomlPath, [
+        'schema_version = 2',
+        '',
+        '[runtime.codex]',
+        'model = "toml-dynamic-model"',
+        'yolo_mode = "on"',
+        '',
+        '[[channels]]',
+        'id = "feishu-default"',
+        'alias = "飞书"',
+        'provider = "feishu"',
+        'enabled = true',
+        '',
+        '[channels.config]',
+        'history_message_limit = 23',
+        '',
+      ].join('\n'));
+      fs.writeFileSync(CONFIG_PATH, [
+        'CODELARK_CODEX_DEFAULT_MODEL=legacy-env-model',
+        'CODELARK_CODEX_DEFAULT_MODE=normal',
+        'CODELARK_HISTORY_MESSAGE_LIMIT=9',
+        '',
+      ].join('\n'));
+
+      const store = new JsonFileStore(makeSettings(), { dynamicSettings: true });
+
+      assert.equal(store.getSetting('bridge_default_model'), 'toml-dynamic-model');
+      assert.equal(store.getSetting('default_model'), 'toml-dynamic-model');
+      assert.equal(store.getSetting('bridge_default_mode'), 'yolo');
+      assert.equal(store.getSetting('bridge_history_message_limit'), '23');
+    } finally {
+      if (previousToml === null) fs.rmSync(configTomlPath, { force: true });
+      else fs.writeFileSync(configTomlPath, previousToml, 'utf-8');
+      if (previousEnvFile === null) fs.rmSync(CONFIG_PATH, { force: true });
+      else fs.writeFileSync(CONFIG_PATH, previousEnvFile, 'utf-8');
+      for (const [key, value] of previousEnv) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+    }
   });
 
   it('createSession and getSession', () => {

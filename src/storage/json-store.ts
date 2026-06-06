@@ -25,7 +25,8 @@ import type {
   BridgeSessionUpdate,
 } from '../domain/session.js';
 import type { BridgeApiProvider } from '../runtime/contracts.js';
-import { CODELARK_HOME, configToSettings, findChannelInstance, loadConfig } from '../configuration/index.js';
+import { CODELARK_HOME, findChannelInstance, loadConfig } from '../configuration/index.js';
+import { createConfigService } from '../configuration/service.js';
 import { runStartupStorageMigrations } from './migrations.js';
 import {
   getSessionActiveRuntime,
@@ -386,7 +387,7 @@ export class JsonFileStore implements BridgeStore {
   private refreshSettings(): void {
     if (!this.dynamicSettings) return;
     try {
-      const next = configToSettings(loadConfig());
+      const next = createConfigService({ codelarkHome: CODELARK_HOME }).exportRuntimeSettings();
       this.settings = new Map([
         ...this.settings,
         ...next,
