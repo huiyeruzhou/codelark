@@ -3677,8 +3677,9 @@ enabled = true
     assert.match(sent.at(-1) || '', /config\.toml/);
     assert.doesNotMatch(sent.at(-1) || '', /config\.env|config\.json/);
     assert.match(sent.at(-1) || '', /im\.message\.receive_v1/);
-    const requireOn = loadConfig().channels?.find((channel) => channel.id === 'feishu')?.config as { requireMention?: boolean } | undefined;
-    assert.equal(requireOn?.requireMention, true);
+    const requireOn = createConfigService({ migrate: false }).snapshot().config.channels
+      .find((channel) => channel.id === 'feishu')?.config.requireMention;
+    assert.equal(requireOn, true);
     assert.match(fs.readFileSync(HOME_CONFIG_TOML_PATH, 'utf-8'), /require_mention = true/);
     assert.equal(fs.existsSync(CONFIG_PATH), false);
     assert.equal(fs.existsSync(CONFIG_JSON_PATH), false);
@@ -3694,8 +3695,9 @@ enabled = true
       deps,
     );
     assert.match(sent.at(-1) || '', /off/);
-    const requireOff = loadConfig().channels?.find((channel) => channel.id === 'feishu')?.config as { requireMention?: boolean } | undefined;
-    assert.equal(requireOff?.requireMention, false);
+    const requireOff = createConfigService({ migrate: false }).snapshot().config.channels
+      .find((channel) => channel.id === 'feishu')?.config.requireMention;
+    assert.equal(requireOff, false);
     assert.match(fs.readFileSync(HOME_CONFIG_TOML_PATH, 'utf-8'), /require_mention = false/);
     assert.equal(fs.existsSync(CONFIG_PATH), false);
     assert.equal(fs.existsSync(CONFIG_JSON_PATH), false);
