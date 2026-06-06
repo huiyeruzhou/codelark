@@ -7,6 +7,7 @@ export interface ConfigLayer {
   ref: SourceRef;
   patch: ConfigPatch;
   envByPath?: Map<string, string>;
+  provenance?: ProvenanceMap;
 }
 
 export interface MergeResult {
@@ -89,6 +90,15 @@ function markChannelProvenance(provenance: ProvenanceMap, layer: ConfigLayer): v
   }
 }
 
+export function markLayerProvenance(provenance: ProvenanceMap, layer: ConfigLayer): void {
+  if (layer.provenance) {
+    for (const [path, ref] of layer.provenance) provenance.set(path, ref);
+    return;
+  }
+  markScalarProvenance(provenance, layer);
+  markChannelProvenance(provenance, layer);
+}
+
 export function mergeConfigLayers(layers: ConfigLayer[]): MergeResult {
   const merged: ConfigPatch = {};
   const provenance: ProvenanceMap = new Map();
@@ -101,8 +111,7 @@ export function mergeConfigLayers(layers: ConfigLayer[]): MergeResult {
     } else {
       mergePatch(merged, clone(layer.patch));
     }
-    markScalarProvenance(provenance, layer);
-    markChannelProvenance(provenance, layer);
+    markLayerProvenance(provenance, layer);
   }
 
   return {

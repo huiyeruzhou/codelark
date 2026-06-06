@@ -1,6 +1,6 @@
 import { configFields, findConfigField } from './fields.js';
 import type { ConfigField, ConfigPath, ConfigSourceKind, ConfigWriteScope, SourceRef } from './fields-types.js';
-import { envToConfigPatch, type EnvCompatWarning } from './env-compat.js';
+import type { EnvCompatWarning } from './env-compat.js';
 import { mergeConfigLayers, mergePatch, type ConfigLayer, type MergeResult } from './merge.js';
 import {
   runConfigMigrations,
@@ -19,6 +19,7 @@ import {
   writeTomlConfig,
   type ConfigPaths,
 } from './sources.js';
+import { loadStaticConfigBaseline, materializeHomeChannelPatch } from './static-loader.js';
 import { configPatchSchema, type ConfigPatch, type ConfigV2 } from './schema.js';
 
 export type ConfigScope =
@@ -135,53 +136,6 @@ function validateSourcePatch(source: ConfigSourceKind, patch: ConfigPatch): Conf
   return parsed;
 }
 
-function clone<T>(value: T): T {
-  return JSON.parse(JSON.stringify(value)) as T;
-}
-
-function defaultChannelTemplate(defaults: ConfigPatch, id: string): NonNullable<ConfigPatch['channels']>[number] {
-  const defaultChannel = defaults.channels?.find((entry) => entry.id === id)
-    || defaults.channels?.find((entry) => entry.id === 'feishu-default');
-  if (!defaultChannel) {
-    throw new Error('defaults.toml must define a feishu-default channel.');
-  }
-  return { ...clone(defaultChannel), id };
-}
-
-function materializeHomeChannel(
-  defaults: ConfigPatch,
-  channel: NonNullable<ConfigPatch['channels']>[number],
-): NonNullable<ConfigPatch['channels']>[number] {
-  const template = defaultChannelTemplate(defaults, channel.id);
-  return {
-    ...template,
-    ...channel,
-    id: channel.id,
-    config: {
-      ...(template.config || {}),
-      ...(channel.config || {}),
-    },
-  };
-}
-
-function materializeHomeChannelPatch(defaults: ConfigPatch, current: ConfigPatch, patch: ConfigPatch): ConfigPatch {
-  if (!patch.channels || patch.channels.length === 0) return patch;
-  const materialized: ConfigPatch = {};
-  for (const channel of patch.channels) {
-    const currentChannel = current.channels?.find((entry) => entry.id === channel.id);
-    mergePatch(materialized, { channels: [materializeHomeChannel(defaults, currentChannel || channel)] });
-  }
-  mergePatch(materialized, { channels: patch.channels });
-  return {
-    ...patch,
-    channels: materialized.channels,
-  };
-}
-
-function patchesEqual(left: ConfigPatch, right: ConfigPatch): boolean {
-  return JSON.stringify(left) === JSON.stringify(right);
-}
-
 function maskSecretValue(value: unknown): unknown {
   if (typeof value !== 'string') return value === undefined ? undefined : '****';
   if (value.length <= 4) return '****';
@@ -220,39 +174,10 @@ export function createConfigService(options: ConfigServiceOptions = {}): ConfigS
     return layer({ source, file: loaded.file }, loaded.patch);
   }
 
-  function homeLayer(paths: ConfigPaths): ConfigLayer | null {
-    const file = paths.homeToml;
-    const loaded = readTomlConfig(file);
-    if (!loaded) return null;
-    const materialized = materializeHomeChannelPatch(readDefaultsConfig(paths.defaultsToml).patch, {}, loaded.patch);
-    if (!patchesEqual(loaded.patch, materialized)) {
-      writeTomlConfig(file, materialized);
-    }
-    return layer({ source: 'home', file: loaded.file }, materialized);
-  }
-
   function buildLayers(scope?: ConfigScope, request?: ConfigPatch): { layers: ConfigLayer[]; warnings: EnvCompatWarning[] } {
     const paths = pathsFor(scope);
-    const envPatch = envToConfigPatch(env);
-    const layers: ConfigLayer[] = [
-      layer({ source: 'defaults', file: paths.defaultsToml }, readDefaultsConfig(paths.defaultsToml).patch),
-    ];
-
-    const home = homeLayer(paths);
-    if (home) layers.push(home);
-
-    if (paths.localToml) {
-      const local = fileLayer('local', readTomlConfig(paths.localToml));
-      if (local) layers.push(local);
-    }
-
-    layers.push({
-      ref: { source: 'env' },
-      patch: envPatch.patch,
-      envByPath: envPatch.envByPath,
-    });
-
-    if (cli) layers.push(layer({ source: 'cli' }, cli));
+    const baseline = loadStaticConfigBaseline(paths, env, cli);
+    const layers: ConfigLayer[] = [baseline.layer];
 
     if (scope?.kind === 'channel' || scope?.kind === 'session') {
       const channelId = scope.kind === 'channel' ? scope.channelId : scope.channelId;
@@ -271,7 +196,7 @@ export function createConfigService(options: ConfigServiceOptions = {}): ConfigS
 
     if (request) layers.push(layer({ source: 'request' }, request));
 
-    return { layers, warnings: envPatch.warnings };
+    return { layers, warnings: baseline.envPatch.warnings };
   }
 
   function snapshot(scope?: ConfigScope, request?: ConfigPatch): EffectiveConfig {

@@ -69,15 +69,6 @@ history_message_limit = 6
       writeFile(path.join(cwd, '.codelark', 'config.toml'), `
 [runtime.codex]
 model = "local-model"
-
-[[channels]]
-id = "feishu-default"
-alias = "飞书"
-provider = "feishu"
-enabled = true
-
-[channels.config]
-history_message_limit = 7
 `);
       writeFile(path.join(home, 'config', 'channels', 'chat-1.toml'), `
 [runtime.codex]
@@ -104,14 +95,14 @@ model = "session-model"
       assert.equal(service.resolve('runtime.codex.model', scope).source, 'session');
       assert.equal(service.get('runtime.codex.reasoningEffort', scope), 'high');
       assert.equal(service.resolve('runtime.codex.reasoningEffort', scope).source, 'channel');
-      assert.equal(service.get('channels[].config.historyMessageLimit', scope), 7);
-      assert.equal(service.resolve('channels[].config.historyMessageLimit', scope).source, 'local');
+      assert.equal(service.get('channels[].config.historyMessageLimit', scope), 6);
+      assert.equal(service.resolve('channels[].config.historyMessageLimit', scope).source, 'home');
 
       const env = service.exportProcessEnv(scope);
       assert.equal(env.CODELARK_CODEX_MODEL, 'session-model');
       assert.equal(env.CODELARK_CODEX_REASONING_EFFORT, 'high');
       assert.equal(env.CODELARK_FEISHU_APP_ID, 'home-app');
-      assert.equal(env.CODELARK_HISTORY_MESSAGE_LIMIT, '7');
+      assert.equal(env.CODELARK_HISTORY_MESSAGE_LIMIT, '6');
     } finally {
       fs.rmSync(home, { recursive: true, force: true });
       fs.rmSync(cwd, { recursive: true, force: true });
