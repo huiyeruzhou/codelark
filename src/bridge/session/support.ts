@@ -8,6 +8,8 @@ import {
   type CodexSessionSummary,
 } from '../../runtime/codex/session-index.js';
 import { DEFAULT_WORKSPACE_ROOT, normalizeClaudeExecutable, type ClaudeExecutable, type ClaudePermissionMode, type ClaudeProviderChoice } from '../../configuration/index.js';
+import { createConfigService } from '../../configuration/service.js';
+import type { ConfigPath } from '../../configuration/fields-types.js';
 import {
   resetDraftSession as resetDraftSessionForStore,
 } from '../session/internal-sessions.js';
@@ -37,7 +39,7 @@ import {
   getSessionWorkingDirectory,
 } from '../../domain/session-runtime.js';
 import type { ChannelChat } from '../../domain/channel.js';
-import type { BridgeSession, BridgeSessionClaudeRuntimeState } from '../../domain/session.js';
+import type { BridgeSession, BridgeSessionClaudeRuntimeState, BridgeSessionCodexRuntimeState } from '../../domain/session.js';
 import { validateWorkingDirectory } from '../../shared/security/validators.js';
 
 const AVAILABLE_CODEX_MODELS = listSelectableCodexModels();
@@ -72,10 +74,26 @@ export function getWorkspaceRoot(): string {
   return store.getSetting('bridge_default_workspace_root') || DEFAULT_WORKSPACE_ROOT;
 }
 
+function getSessionTomlOverride<T>(session: BridgeSession | null | undefined, path: ConfigPath): T | undefined {
+  if (!session?.id) return undefined;
+  try {
+    const resolved = createConfigService({ migrate: false }).resolve(path, {
+      kind: 'session',
+      sessionId: session.id,
+    });
+    return resolved.source === 'session' ? resolved.value as T : undefined;
+  } catch (error) {
+    console.error(`[bridge-manager] Failed to resolve session TOML config ${path} for ${session.id}:`, error);
+    return undefined;
+  }
+}
+
 export function resolveEffectiveReasoningEffort(session: BridgeSession | null | undefined): string {
   const { store } = getBridgeContext();
   return normalizeStoredReasoningEffort(
-    getSessionCodexReasoningEffort(session) || store.getSetting('bridge_codex_reasoning_effort'),
+    getSessionTomlOverride<BridgeSessionCodexRuntimeState['reasoningEffort']>(session, 'runtime.codex.reasoningEffort')
+      || getSessionCodexReasoningEffort(session)
+      || store.getSetting('bridge_codex_reasoning_effort'),
   );
 }
 
@@ -193,7 +211,8 @@ export function resolveClaudeRuntimeConfig(session?: BridgeSession | null): Clau
     permissionMode: getSessionClaudePermissionMode(session)
       || normalizeClaudePermissionMode(store.getSetting('bridge_claude_permission_mode'))
       || 'default',
-    reasoningEffort: getSessionClaudeReasoningEffort(session),
+    reasoningEffort: getSessionTomlOverride<BridgeSessionClaudeRuntimeState['reasoningEffort']>(session, 'runtime.claude.reasoningEffort')
+      || getSessionClaudeReasoningEffort(session),
     idleTimeoutMinutes: parsePositiveSettingInt(store.getSetting('bridge_claude_idle_timeout_minutes')),
   };
 }

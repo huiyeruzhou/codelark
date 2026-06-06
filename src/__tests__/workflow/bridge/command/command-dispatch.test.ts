@@ -7,9 +7,11 @@ import os from 'node:os';
 import path from 'node:path';
 
 import { CONFIG_PATH, CONFIG_JSON_PATH, CODELARK_HOME, DEFAULT_WORKSPACE_ROOT, loadConfig, saveConfig } from '../../../../configuration/index.js';
+import { createConfigService } from '../../../../configuration/service.js';
 import { JsonFileStore } from '../../../../storage/json-store.js';
 import { initBridgeContext } from '../../../../bridge/host/context.js';
 import { handleBridgeCommand } from '../../../../bridge/command/index.js';
+import { resolveClaudeRuntimeConfig, resolveEffectiveReasoningEffort } from '../../../../bridge/session/support.js';
 import { processMessage } from '../../../../bridge/turn/interactive/sdk-conversation-engine.js';
 import { consumeSseEvents } from '../../../../runtime/sse-stream-decoder.js';
 import { CodexRoutingProvider } from '../../../../runtime/codex/routing-provider.js';
@@ -259,8 +261,12 @@ const noopLlm = {
   },
 };
 
-function initTestContext(options: { dynamicSettings?: boolean } = {}): JsonFileStore {
-  const store = new JsonFileStore(makeSettings(), { dynamicSettings: options.dynamicSettings });
+function initTestContext(options: { dynamicSettings?: boolean; settings?: Record<string, string> } = {}): JsonFileStore {
+  const settings = new Map([
+    ...makeSettings(),
+    ...Object.entries(options.settings || {}),
+  ]);
+  const store = new JsonFileStore(settings, { dynamicSettings: options.dynamicSettings });
   initBridgeContext({
     store,
     llm: noopLlm,
@@ -403,6 +409,7 @@ sleep 0.1
 describe('command-dispatch', () => {
   beforeEach(() => {
     fs.rmSync(DATA_DIR, { recursive: true, force: true });
+    fs.rmSync(path.join(CODELARK_HOME, 'config'), { recursive: true, force: true });
     fs.rmSync(CONFIG_PATH, { force: true });
     fs.rmSync(CONFIG_JSON_PATH, { force: true });
   });
@@ -2529,7 +2536,7 @@ describe('command-dispatch', () => {
     process.env.TMUX_FAKE_LOG = fakeTmux.logPath;
 
     try {
-      const store = initTestContext();
+      const store = initTestContext({ settings: { bridge_claude_provider: 'pty' } });
       const sent: any[] = [];
       const cardTexts: Array<{ text: string; streamKey?: string }> = [];
       const cardStatuses: Array<{ text: string; streamKey?: string }> = [];
@@ -2633,7 +2640,7 @@ describe('command-dispatch', () => {
     process.env.CODELARK_CLAUDE_PTY_RESPONSE_TIMEOUT_MS = '1500';
 
     try {
-      const store = initTestContext();
+      const store = initTestContext({ settings: { bridge_claude_provider: 'pty' } });
       const routingProvider = new CodexRoutingProvider(undefined, 'tmux');
       initBridgeContext({
         store,
@@ -2768,7 +2775,7 @@ describe('command-dispatch', () => {
     process.env.CODELARK_CLAUDE_PTY_RESPONSE_TIMEOUT_MS = '1500';
 
     try {
-      const store = initTestContext();
+      const store = initTestContext({ settings: { bridge_claude_provider: 'pty' } });
       const routingProvider = new CodexRoutingProvider();
       initBridgeContext({
         store,
@@ -2933,6 +2940,16 @@ describe('command-dispatch', () => {
     assert.equal(getSessionCodexReasoningEffort(updated), undefined);
     assert.equal(getSessionCodexSandboxMode(updated), undefined);
     assert.equal(updated?.runtime?.codex, undefined);
+    assert.equal(
+      createConfigService({ migrate: false, env: {} }).get('runtime.claude.reasoningEffort', {
+        kind: 'session',
+        sessionId: session.id,
+      }),
+      'high',
+    );
+    store.updateSession(session.id, { runtime: { activeRuntime: 'claude', claude: { reasoningEffort: undefined } } });
+    assert.equal(getSessionClaudeReasoningEffort(store.getSession(session.id)), undefined);
+    assert.equal(resolveClaudeRuntimeConfig(store.getSession(session.id)).reasoningEffort, 'high');
     assert.match(sent.at(-4)?.text || '', /Claude Code 模式/);
     assert.match(sent.at(-3)?.text || '', /Claude Code 模型/);
     assert.match(sent.at(-2)?.text || '', /Claude Code 思考级别/);
@@ -3022,6 +3039,16 @@ describe('command-dispatch', () => {
 
       await handleBridgeCommand(adapter, { address, text: '/reasoning minimal', messageId: `incoming-${provider}-reasoning` } as any, '/reasoning minimal', deps);
       assert.equal(getSessionCodexReasoningEffort(store.getSession(session.id)), 'minimal');
+      assert.equal(
+        createConfigService({ migrate: false, env: {} }).get('runtime.codex.reasoningEffort', {
+          kind: 'session',
+          sessionId: session.id,
+        }),
+        'minimal',
+      );
+      store.updateSession(session.id, { runtime: { codex: { reasoningEffort: undefined } } });
+      assert.equal(getSessionCodexReasoningEffort(store.getSession(session.id)), undefined);
+      assert.equal(resolveEffectiveReasoningEffort(store.getSession(session.id)), 'minimal');
       assert.match(sent.at(-1)?.text || '', /已更新思考级别/);
       assert.match(sent.at(-1)?.text || '', /配置已保存/);
 

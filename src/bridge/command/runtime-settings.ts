@@ -6,6 +6,7 @@ import {
   saveConfig,
   type CodexReasoningEffort,
 } from '../../configuration/index.js';
+import { createConfigService } from '../../configuration/service.js';
 import { parseSandboxMode } from '../../configuration/runtime-options.js';
 import * as router from '../session/channel-router.js';
 import {
@@ -111,9 +112,33 @@ function codexRuntimeUpdateTitle(
 
 function codexReasoningToClaudeEffort(
   reasoning: CodexReasoningEffort,
-): 'low' | 'medium' | 'high' | 'xhigh' | 'max' {
+): 'low' | 'medium' | 'high' | 'xhigh' {
   if (reasoning === 'minimal') return 'low';
   return reasoning;
+}
+
+function setSessionCodexReasoningToml(sessionId: string, reasoningEffort: CodexReasoningEffort): void {
+  createConfigService({ migrate: false }).set(
+    { kind: 'session', sessionId },
+    { runtime: { codex: { reasoningEffort } } },
+  );
+}
+
+function setSessionClaudeReasoningToml(
+  sessionId: string,
+  reasoningEffort: 'low' | 'medium' | 'high' | 'xhigh',
+): void {
+  createConfigService({ migrate: false }).set(
+    { kind: 'session', sessionId },
+    { runtime: { claude: { reasoningEffort } } },
+  );
+}
+
+function clearSessionClaudeReasoningToml(sessionId: string): void {
+  createConfigService({ migrate: false }).unset(
+    { kind: 'session', sessionId },
+    'runtime.claude.reasoningEffort',
+  );
 }
 
 function parseNetworkAccessArg(raw: string): boolean | 'default' | null {
@@ -167,6 +192,7 @@ export function handleReasoningCommand(options: {
   if (options.args.trim().toLowerCase() === 'default' || options.args.trim().toLowerCase() === 'reset') {
     if (activeRuntime === 'claude') {
       options.store.updateSession(session.id, setSessionClaudeReasoningEffortUpdate(undefined));
+      clearSessionClaudeReasoningToml(session.id);
       return buildCommandFields(
         '已恢复默认 Claude Code 思考级别',
         [['级别', 'default']],
@@ -187,6 +213,7 @@ export function handleReasoningCommand(options: {
   if (activeRuntime === 'claude') {
     const effort = codexReasoningToClaudeEffort(reasoning as CodexReasoningEffort);
     options.store.updateSession(session.id, setSessionClaudeReasoningEffortUpdate(effort));
+    setSessionClaudeReasoningToml(session.id, effort);
     return buildCommandFields(
       '已更新 Claude Code 思考级别',
       [['级别', effort]],
@@ -195,6 +222,7 @@ export function handleReasoningCommand(options: {
     );
   }
   options.store.updateSession(session.id, setSessionCodexReasoningEffortUpdate(reasoning as CodexReasoningEffort));
+  setSessionCodexReasoningToml(session.id, reasoning as CodexReasoningEffort);
   const notes = [REASONING_OPTIONS_TEXT];
   const warning = minimalReasoningWebSearchWarning(reasoning);
   if (warning) notes.push(warning);
