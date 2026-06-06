@@ -71,6 +71,10 @@ function syncBindingChannelMeta(store: UiChannelRouteStore, channel: ChannelInst
   }
 }
 
+function saveHomeTomlConfig(config: Config): void {
+  saveConfig({ ...config, schemaVersion: 2 });
+}
+
 export async function handleUiChannelRoute(options: {
   request: IncomingMessage;
   response: ServerResponse;
@@ -86,7 +90,7 @@ export async function handleUiChannelRoute(options: {
     url,
     createStore,
     readConfig = loadConfig,
-    writeConfig = saveConfig,
+    writeConfig = saveHomeTomlConfig,
     buildBindingsPayload,
   } = options;
 

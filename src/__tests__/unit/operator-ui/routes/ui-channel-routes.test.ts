@@ -1,11 +1,13 @@
 import '../../../setup/test-setup.js';
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
 import { Readable } from 'node:stream';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 
 import { handleUiChannelRoute } from '../../../../operator-ui/routes/channel.js';
-import type { Config } from '../../../../configuration/index.js';
+import { CODELARK_HOME, CONFIG_JSON_PATH, CONFIG_PATH, type Config } from '../../../../configuration/index.js';
 
 function createResponse(): ServerResponse & { body: string; statusCodeWritten?: number } {
   return {
@@ -80,6 +82,67 @@ describe('handleUiChannelRoute', () => {
     const body = JSON.parse(response.body) as { ok?: boolean; channel?: { alias?: string } };
     assert.equal(body.ok, true);
     assert.equal(body.channel?.alias, 'Ops');
+  });
+
+  it('creates home config.toml for channel saves when only legacy config files exist', async () => {
+    const configTomlPath = path.join(CODELARK_HOME, 'config.toml');
+    const previousToml = fs.existsSync(configTomlPath) ? fs.readFileSync(configTomlPath, 'utf-8') : null;
+    const previousEnvFile = fs.existsSync(CONFIG_PATH) ? fs.readFileSync(CONFIG_PATH, 'utf-8') : null;
+    const previousJsonFile = fs.existsSync(CONFIG_JSON_PATH) ? fs.readFileSync(CONFIG_JSON_PATH, 'utf-8') : null;
+    const envKeys = Object.keys(process.env)
+      .filter((key) => key.startsWith('CODELARK_') && key !== 'CODELARK_HOME');
+    const previousEnv = new Map(envKeys.map((key) => [key, process.env[key]]));
+
+    try {
+      for (const key of envKeys) delete process.env[key];
+      fs.mkdirSync(CODELARK_HOME, { recursive: true });
+      fs.rmSync(configTomlPath, { force: true });
+      fs.writeFileSync(CONFIG_PATH, 'CODELARK_HISTORY_MESSAGE_LIMIT=5\n');
+      fs.writeFileSync(CONFIG_JSON_PATH, JSON.stringify({
+        schemaVersion: 1,
+        runtime: { provider: 'codex', bridge: { historyMessageLimit: 6 } },
+        channels: [],
+      }, null, 2));
+
+      const store = createMemoryStore();
+      const response = createResponse();
+      const handled = await handleUiChannelRoute({
+        request: createJsonRequest({
+          provider: 'feishu',
+          alias: 'Ops',
+          appId: 'app-id',
+          appSecret: 'secret',
+        }),
+        response,
+        url: new URL('http://localhost/api/channels/save'),
+        createStore: () => store,
+        buildBindingsPayload: async () => ({ bindings: [], options: [], channelDefaults: [] }),
+      });
+
+      assert.equal(handled, true);
+      assert.equal(response.statusCodeWritten, 200);
+      const body = JSON.parse(response.body) as { ok?: boolean; channel?: { alias?: string } };
+      assert.equal(body.ok, true);
+      assert.equal(body.channel?.alias, 'Ops');
+      assert.equal(fs.readFileSync(CONFIG_PATH, 'utf-8'), 'CODELARK_HISTORY_MESSAGE_LIMIT=5\n');
+      const legacyJson = JSON.parse(fs.readFileSync(CONFIG_JSON_PATH, 'utf-8')) as any;
+      assert.equal(legacyJson.runtime.bridge.historyMessageLimit, 6);
+      const savedToml = fs.readFileSync(configTomlPath, 'utf-8');
+      assert.match(savedToml, /alias = "Ops"/);
+      assert.match(savedToml, /app_id = "app-id"/);
+      assert.match(savedToml, /app_secret = "secret"/);
+    } finally {
+      if (previousToml === null) fs.rmSync(configTomlPath, { force: true });
+      else fs.writeFileSync(configTomlPath, previousToml, 'utf-8');
+      if (previousEnvFile === null) fs.rmSync(CONFIG_PATH, { force: true });
+      else fs.writeFileSync(CONFIG_PATH, previousEnvFile, 'utf-8');
+      if (previousJsonFile === null) fs.rmSync(CONFIG_JSON_PATH, { force: true });
+      else fs.writeFileSync(CONFIG_JSON_PATH, previousJsonFile, 'utf-8');
+      for (const [key, value] of previousEnv) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+    }
   });
 
   it('refuses to delete a channel with bindings', async () => {
