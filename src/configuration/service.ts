@@ -1,0 +1,209 @@
+import { configFields, findConfigField } from './fields.js';
+import type { ConfigPath, ConfigSourceKind, SourceRef } from './fields-types.js';
+import { envToConfigPatch, type EnvCompatWarning } from './env-compat.js';
+import { mergeConfigLayers, mergePatch, type ConfigLayer, type MergeResult } from './merge.js';
+import { getConfigPath, unsetConfigPath } from './path-access.js';
+import { exportProcessEnv, exportRuntimeSettings } from './projections.js';
+import {
+  channelTomlPath,
+  readDefaultsConfig,
+  readTomlConfig,
+  resolveConfigPaths,
+  sessionTomlPath,
+  writeTomlConfig,
+  type ConfigPaths,
+} from './sources.js';
+import { configPatchSchema, type ConfigPatch, type ConfigV2 } from './schema.js';
+
+export type ConfigScope =
+  | { kind: 'global'; cwd?: string }
+  | { kind: 'local'; cwd: string }
+  | { kind: 'channel'; channelId: string; provider: 'feishu'; cwd?: string }
+  | { kind: 'session'; sessionId: string; channelId?: string; provider?: 'feishu'; cwd?: string };
+
+export type ConfigWriteTarget =
+  | { kind: 'home' }
+  | { kind: 'local'; cwd: string }
+  | { kind: 'channel'; channelId: string; provider: 'feishu' }
+  | { kind: 'session'; sessionId: string };
+
+export interface ConfigResolveResult {
+  value: unknown;
+  source: ConfigSourceKind;
+  file?: string;
+  env?: string;
+  cli?: string;
+  scope?: ConfigScope;
+}
+
+export interface ConfigExplainEntry extends ConfigResolveResult {
+  path: ConfigPath;
+  secret?: boolean;
+}
+
+export interface EffectiveConfig extends MergeResult {
+  warnings: EnvCompatWarning[];
+}
+
+export interface ConfigService {
+  snapshot(scope?: ConfigScope, request?: ConfigPatch): EffectiveConfig;
+  get<T = unknown>(path: ConfigPath, scope?: ConfigScope, request?: ConfigPatch): T;
+  resolve(path: ConfigPath, scope?: ConfigScope, request?: ConfigPatch): ConfigResolveResult;
+  explain(path?: ConfigPath, scope?: ConfigScope): ConfigExplainEntry[];
+  set(target: ConfigWriteTarget, patch: ConfigPatch): void;
+  unset(target: ConfigWriteTarget, path: ConfigPath): void;
+  exportRuntimeSettings(scope?: ConfigScope): Map<string, string>;
+  exportProcessEnv(scope?: ConfigScope): NodeJS.ProcessEnv;
+}
+
+export interface ConfigServiceOptions {
+  codelarkHome?: string;
+  env?: NodeJS.ProcessEnv;
+  cli?: ConfigPatch;
+}
+
+export function createConfigService(options: ConfigServiceOptions = {}): ConfigService {
+  const env = options.env || process.env;
+  const cli = options.cli ? configPatchSchema.parse(options.cli) : undefined;
+
+  function pathsFor(scope?: ConfigScope): ConfigPaths {
+    return resolveConfigPaths({
+      codelarkHome: options.codelarkHome,
+      cwd: scope?.kind === 'local'
+        ? scope.cwd
+        : scope && 'cwd' in scope
+          ? scope.cwd
+          : undefined,
+    });
+  }
+
+  function layer(ref: SourceRef, patch: ConfigPatch): ConfigLayer {
+    return { ref, patch: configPatchSchema.parse(patch) };
+  }
+
+  function fileLayer(source: ConfigSourceKind, loaded: ReturnType<typeof readTomlConfig>): ConfigLayer | null {
+    if (!loaded) return null;
+    return layer({ source, file: loaded.file }, loaded.patch);
+  }
+
+  function buildLayers(scope?: ConfigScope, request?: ConfigPatch): { layers: ConfigLayer[]; warnings: EnvCompatWarning[] } {
+    const paths = pathsFor(scope);
+    const envPatch = envToConfigPatch(env);
+    const layers: ConfigLayer[] = [
+      layer({ source: 'defaults', file: paths.defaultsToml }, readDefaultsConfig(paths.defaultsToml).patch),
+    ];
+
+    const home = fileLayer('home', readTomlConfig(paths.homeToml));
+    if (home) layers.push(home);
+
+    if (paths.localToml) {
+      const local = fileLayer('local', readTomlConfig(paths.localToml));
+      if (local) layers.push(local);
+    }
+
+    layers.push({
+      ref: { source: 'env' },
+      patch: envPatch.patch,
+      envByPath: envPatch.envByPath,
+    });
+
+    if (cli) layers.push(layer({ source: 'cli' }, cli));
+
+    if (scope?.kind === 'channel' || scope?.kind === 'session') {
+      const channelId = scope.kind === 'channel' ? scope.channelId : scope.channelId;
+      if (channelId) {
+        const channelPath = channelTomlPath(paths, channelId);
+        const channel = fileLayer('channel', readTomlConfig(channelPath));
+        if (channel) layers.push(channel);
+      }
+    }
+
+    if (scope?.kind === 'session') {
+      const sessionPath = sessionTomlPath(paths, scope.sessionId);
+      const session = fileLayer('session', readTomlConfig(sessionPath));
+      if (session) layers.push(session);
+    }
+
+    if (request) layers.push(layer({ source: 'request' }, request));
+
+    return { layers, warnings: envPatch.warnings };
+  }
+
+  function snapshot(scope?: ConfigScope, request?: ConfigPatch): EffectiveConfig {
+    const built = buildLayers(scope, request);
+    const merged = mergeConfigLayers(built.layers);
+    return { ...merged, warnings: built.warnings };
+  }
+
+  function resolvedPath(path: ConfigPath, config: ConfigV2): string {
+    if (!path.startsWith('channels[].')) return path;
+    const id = config.channels.find((channel) => channel.id === 'feishu-default')?.id || config.channels[0]?.id;
+    return id ? path.replace('channels[]', `channels.${id}`) : path;
+  }
+
+  function valueFor(path: ConfigPath, config: ConfigV2): unknown {
+    if (!path.startsWith('channels[].')) return getConfigPath(config, path);
+    const channel = config.channels.find((entry) => entry.id === 'feishu-default') || config.channels[0];
+    return channel ? getConfigPath(channel, path.replace('channels[].', '')) : undefined;
+  }
+
+  function targetFile(target: ConfigWriteTarget): string {
+    const paths = resolveConfigPaths({ codelarkHome: options.codelarkHome, cwd: target.kind === 'local' ? target.cwd : undefined });
+    if (target.kind === 'home') return paths.homeToml;
+    if (target.kind === 'local') return paths.localToml!;
+    if (target.kind === 'channel') return channelTomlPath(paths, target.channelId);
+    return sessionTomlPath(paths, target.sessionId);
+  }
+
+  return {
+    snapshot,
+    get<T = unknown>(path: ConfigPath, scope?: ConfigScope, request?: ConfigPatch): T {
+      return valueFor(path, snapshot(scope, request).config) as T;
+    },
+    resolve(path: ConfigPath, scope?: ConfigScope, request?: ConfigPatch): ConfigResolveResult {
+      const effective = snapshot(scope, request);
+      const provenance = effective.provenance.get(resolvedPath(path, effective.config))
+        || effective.provenance.get(path)
+        || { source: 'defaults' as const };
+      return {
+        value: valueFor(path, effective.config),
+        ...provenance,
+        scope,
+      };
+    },
+    explain(path?: ConfigPath, scope?: ConfigScope): ConfigExplainEntry[] {
+      const paths = path ? [path] : configFields.map((field) => field.path);
+      return paths.map((entry) => {
+        const field = findConfigField(entry);
+        return {
+          path: entry,
+          secret: field?.secret,
+          ...this.resolve(entry, scope),
+        };
+      });
+    },
+    set(target: ConfigWriteTarget, patch: ConfigPatch): void {
+      const file = targetFile(target);
+      const current = readTomlConfig(file)?.patch || {};
+      writeTomlConfig(file, mergePatch(current, patch));
+    },
+    unset(target: ConfigWriteTarget, path: ConfigPath): void {
+      const file = targetFile(target);
+      const current = readTomlConfig(file)?.patch || {};
+      if (path.startsWith('channels[].')) {
+        for (const channel of current.channels || []) {
+          unsetConfigPath(channel as Record<string, unknown>, path.replace('channels[].', ''));
+        }
+      } else {
+        unsetConfigPath(current as Record<string, unknown>, path);
+      }
+      writeTomlConfig(file, current);
+    },
+    exportRuntimeSettings(scope?: ConfigScope): Map<string, string> {
+      return exportRuntimeSettings(snapshot(scope).config);
+    },
+    exportProcessEnv(scope?: ConfigScope): NodeJS.ProcessEnv {
+      return exportProcessEnv(snapshot(scope).config);
+    },
+  };
+}

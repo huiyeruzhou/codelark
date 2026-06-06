@@ -1,0 +1,162 @@
+import '../../setup/test-setup.js';
+import { describe, it } from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { createConfigService } from '../../../configuration/service.js';
+
+function tempHome(): string {
+  return fs.mkdtempSync(path.join(os.tmpdir(), 'codelark-config-v2-'));
+}
+
+function writeFile(file: string, content: string): void {
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, content, 'utf-8');
+}
+
+describe('ConfigService v2 foundation', () => {
+  it('loads defaults.toml as the complete v2 shape', () => {
+    const home = tempHome();
+    try {
+      const service = createConfigService({ codelarkHome: home, env: {} });
+      const snapshot = service.snapshot();
+
+      assert.equal(snapshot.config.schemaVersion, 2);
+      assert.equal(snapshot.config.runtime.provider, 'codex');
+      assert.equal(snapshot.config.runtime.codex.sandboxMode, 'workspace-write');
+      assert.equal(snapshot.config.runtime.claude.provider, 'sdk');
+      assert.equal(snapshot.config.bridge.defaultWorkspace, '~');
+      assert.equal(snapshot.config.session.tmuxCaptureLines, 80);
+      assert.equal(snapshot.config.channels[0]?.id, 'feishu-default');
+      assert.equal(snapshot.config.channels[0]?.config.historyMessageLimit, 8);
+    } finally {
+      fs.rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it('merges home, local, env, cli, channel, session, and request in source-chain order', () => {
+    const home = tempHome();
+    const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'codelark-config-local-'));
+    try {
+      writeFile(path.join(home, 'config.toml'), `
+[runtime.codex]
+reasoning_effort = "low"
+sandbox_mode = "read-only"
+`);
+      writeFile(path.join(cwd, '.codelark', 'config.toml'), `
+[runtime.codex]
+reasoning_effort = "medium"
+`);
+      writeFile(path.join(home, 'config', 'channels', 'ch-1.toml'), `
+[runtime.codex]
+reasoning_effort = "high"
+`);
+      writeFile(path.join(home, 'config', 'sessions', 's-1.toml'), `
+[runtime.codex]
+sandbox_mode = "danger-full-access"
+`);
+
+      const service = createConfigService({
+        codelarkHome: home,
+        env: { CODELARK_CODEX_REASONING_EFFORT: 'minimal' },
+        cli: { runtime: { codex: { reasoningEffort: 'low' } } },
+      });
+
+      const scoped = { kind: 'session', sessionId: 's-1', channelId: 'ch-1', provider: 'feishu', cwd } as const;
+      assert.equal(service.get('runtime.codex.reasoningEffort', scoped), 'high');
+      assert.equal(service.resolve('runtime.codex.reasoningEffort', scoped).source, 'channel');
+      assert.equal(service.get('runtime.codex.sandboxMode', scoped), 'danger-full-access');
+      assert.equal(service.resolve('runtime.codex.sandboxMode', scoped).source, 'session');
+
+      const requestValue = service.resolve(
+        'runtime.codex.reasoningEffort',
+        scoped,
+        { runtime: { codex: { reasoningEffort: 'xhigh' } } },
+      );
+      assert.equal(requestValue.value, 'xhigh');
+      assert.equal(requestValue.source, 'request');
+    } finally {
+      fs.rmSync(home, { recursive: true, force: true });
+      fs.rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it('supports deprecated env aliases while preferring new env keys', () => {
+    const home = tempHome();
+    try {
+      const service = createConfigService({
+        codelarkHome: home,
+        env: {
+          CODELARK_CODEX_DEFAULT_MODEL: 'legacy-model',
+          CODELARK_CODEX_MODEL: 'new-model',
+          CODELARK_FEISHU_DOMAIN: 'lark',
+          CODELARK_ENABLED_CHANNELS: 'feishu',
+        },
+      });
+
+      const snapshot = service.snapshot();
+      assert.equal(snapshot.config.runtime.codex.model, 'new-model');
+      assert.equal(snapshot.config.channels[0]?.enabled, true);
+      assert.equal(snapshot.config.channels[0]?.config.site, 'lark');
+      assert.deepEqual(
+        snapshot.warnings.map((warning) => warning.envKey).sort(),
+        ['CODELARK_CODEX_DEFAULT_MODEL', 'CODELARK_FEISHU_DOMAIN'],
+      );
+      assert.equal(service.resolve('runtime.codex.model').env, 'CODELARK_CODEX_MODEL');
+    } finally {
+      fs.rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it('writes and unsets TOML partials through the service API', () => {
+    const home = tempHome();
+    try {
+      const service = createConfigService({ codelarkHome: home, env: {} });
+      service.set({ kind: 'home' }, {
+        runtime: { codex: { reasoningEffort: 'high' } },
+        bridge: { uiAllowLan: true },
+      });
+
+      assert.equal(service.get('runtime.codex.reasoningEffort'), 'high');
+      assert.equal(service.get('bridge.uiAllowLan'), true);
+      assert.match(fs.readFileSync(path.join(home, 'config.toml'), 'utf-8'), /reasoning_effort = "high"/);
+
+      service.unset({ kind: 'home' }, 'runtime.codex.reasoningEffort');
+      assert.equal(service.get('runtime.codex.reasoningEffort'), 'medium');
+    } finally {
+      fs.rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it('projects effective config to process env and legacy runtime settings maps', () => {
+    const home = tempHome();
+    try {
+      const service = createConfigService({
+        codelarkHome: home,
+        env: {
+          CODELARK_RUNTIME: 'claude',
+          CODELARK_CODEX_MODEL: 'gpt-test',
+          CODELARK_FEISHU_APP_ID: 'app-id',
+          CODELARK_FEISHU_APP_SECRET: 'secret',
+          CODELARK_ENABLED_CHANNELS: 'feishu',
+        },
+      });
+
+      const env = service.exportProcessEnv();
+      assert.equal(env.CODELARK_RUNTIME, 'claude');
+      assert.equal(env.CODELARK_CODEX_MODEL, 'gpt-test');
+      assert.equal(env.CODELARK_FEISHU_APP_ID, 'app-id');
+      assert.equal(env.CODELARK_ENABLED_CHANNELS, 'feishu');
+
+      const settings = service.exportRuntimeSettings();
+      assert.equal(settings.get('bridge_default_runtime'), 'claude');
+      assert.equal(settings.get('bridge_default_model'), 'gpt-test');
+      assert.equal(settings.get('default_model'), 'gpt-test');
+      assert.equal(settings.get('bridge_feishu_app_secret'), 'secret');
+      assert.equal(settings.get('bridge_feishu_enabled'), 'true');
+    } finally {
+      fs.rmSync(home, { recursive: true, force: true });
+    }
+  });
+});
