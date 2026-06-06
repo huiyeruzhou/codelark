@@ -7,7 +7,9 @@ import { fileURLToPath } from 'node:url';
 
 import { CODELARK_HOME, loadConfig } from '../configuration/index.js';
 import type { ChannelInstance, Config, FeishuChannelConfig } from '../configuration/index.js';
+import { configV2ToLegacyConfig } from '../configuration/legacy.js';
 import { createConfigService } from '../configuration/service.js';
+import type { ConfigPatch } from '../configuration/schema.js';
 import {
   clearStaleBridgeInstanceLock,
   readBridgeInstanceLock,
@@ -596,7 +598,31 @@ export function getUiServerStatus(): UiServerStatus {
   };
 }
 
-function buildDaemonEnv(): NodeJS.ProcessEnv {
+interface ServiceConfigOverrideOptions {
+  cli?: ConfigPatch;
+}
+
+function hasConfigPatchValues(patch: ConfigPatch | undefined): boolean {
+  if (!patch) return false;
+  return Object.keys(patch).length > 0;
+}
+
+function loadStartupConfig(options: ServiceConfigOverrideOptions = {}): Config {
+  if (!hasConfigPatchValues(options.cli)) return loadConfig();
+  return configV2ToLegacyConfig(createConfigService({
+    codelarkHome: CODELARK_HOME,
+    cli: options.cli,
+  }).snapshot().config);
+}
+
+function buildProjectedConfigEnv(options: ServiceConfigOverrideOptions = {}): NodeJS.ProcessEnv {
+  return createConfigService({
+    codelarkHome: CODELARK_HOME,
+    ...(hasConfigPatchValues(options.cli) ? { cli: options.cli } : {}),
+  }).exportProcessEnv();
+}
+
+function buildDaemonEnv(options: ServiceConfigOverrideOptions = {}): NodeJS.ProcessEnv {
   const env = { ...process.env } as NodeJS.ProcessEnv;
   const legacyEnvPrefix = ['C', 'T', 'I'].join('');
   for (const key of Object.keys(env)) {
@@ -604,9 +630,17 @@ function buildDaemonEnv(): NodeJS.ProcessEnv {
   }
   env.CODELARK_HOME = CODELARK_HOME;
   Object.assign(env, buildLarkCliRuntimeEnv());
-  Object.assign(env, createConfigService({ codelarkHome: CODELARK_HOME }).exportProcessEnv());
+  Object.assign(env, buildProjectedConfigEnv(options));
   delete env.CLAUDECODE;
   return env;
+}
+
+function buildUiServerEnv(options: ServiceConfigOverrideOptions = {}): NodeJS.ProcessEnv {
+  return {
+    ...process.env,
+    ...buildProjectedConfigEnv(options),
+    CODELARK_HOME,
+  };
 }
 
 export function buildLarkCliRuntimeEnv(): NodeJS.ProcessEnv {
@@ -912,7 +946,7 @@ async function waitForUiServer(timeoutMs = 15_000): Promise<UiServerStatus> {
   return getUiServerStatus();
 }
 
-export async function startBridge(): Promise<BridgeStatus> {
+export async function startBridge(options: ServiceConfigOverrideOptions = {}): Promise<BridgeStatus> {
   ensureDirs();
   const current = getBridgeStatus();
   const extraAlivePids = getTrackedBridgePids(current)
@@ -922,7 +956,7 @@ export async function startBridge(): Promise<BridgeStatus> {
     await stopBridge();
   }
 
-  const config = loadConfig();
+  const config = loadStartupConfig(options);
   const preflightFailure = describeBridgeStartupPreflightFailure(config.channels);
   if (preflightFailure) {
     throw new Error(preflightFailure);
@@ -969,7 +1003,7 @@ export async function startBridge(): Promise<BridgeStatus> {
     const child = spawn(process.execPath, [daemonEntry], {
       cwd: packageRoot,
       detached: true,
-      env: buildDaemonEnv(),
+      env: buildDaemonEnv(options),
       stdio: ['ignore', stdoutFd, stderrFd],
       ...WINDOWS_HIDE,
     });
@@ -1046,6 +1080,7 @@ export const _testOnly = {
   releaseBridgeInstanceLock,
   clearStaleBridgeInstanceLock,
   buildDaemonEnv,
+  buildUiServerEnv,
   buildLarkCliRuntimeEnv,
   writeLarkCliSourceProjection,
   hasTargetLarkCliUsers,
@@ -1163,7 +1198,7 @@ export function getBridgeLogs(lines = 200): string {
   return all.slice(Math.max(0, all.length - lines)).join('\n');
 }
 
-export async function ensureUiServerRunning(): Promise<UiServerStatus> {
+export async function ensureUiServerRunning(options: ServiceConfigOverrideOptions = {}): Promise<UiServerStatus> {
   ensureDirs();
   const current = getUiServerStatus();
   if (current.running) return current;
@@ -1179,10 +1214,7 @@ export async function ensureUiServerRunning(): Promise<UiServerStatus> {
   const child = spawn(process.execPath, [serverEntry], {
     cwd: packageRoot,
     detached: true,
-    env: {
-      ...process.env,
-      CODELARK_HOME,
-    },
+    env: buildUiServerEnv(options),
     stdio: ['ignore', stdoutFd, stderrFd],
     ...WINDOWS_HIDE,
   });

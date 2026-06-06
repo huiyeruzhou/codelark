@@ -246,6 +246,61 @@ describe('service-manager lark-cli runtime environment', () => {
     }
   });
 
+  it('applies one-shot CLI config overrides to bridge and UI child env', () => {
+    const home = process.env.CODELARK_HOME!;
+    const configTomlPath = path.join(home, 'config.toml');
+    const previousToml = fs.existsSync(configTomlPath) ? fs.readFileSync(configTomlPath, 'utf-8') : null;
+
+    try {
+      fs.writeFileSync(configTomlPath, [
+        'schema_version = 2',
+        '',
+        '[runtime]',
+        'provider = "codex"',
+        '',
+        '[runtime.codex]',
+        'model = "toml-model"',
+        'provider = "sdk"',
+        'yolo_mode = "off"',
+        '',
+        '[runtime.claude]',
+        'model = "toml-claude"',
+        '',
+        '[[channels]]',
+        'id = "feishu-default"',
+        'alias = "飞书"',
+        'provider = "feishu"',
+        'enabled = true',
+        '',
+      ].join('\n'));
+
+      const cli = {
+        runtime: {
+          provider: 'claude' as const,
+          codex: {
+            model: 'cli-model',
+            provider: 'tmux' as const,
+            yoloMode: 'on' as const,
+          },
+        },
+      };
+      const daemonEnv = _testOnly.buildDaemonEnv({ cli });
+      const uiEnv = _testOnly.buildUiServerEnv({ cli });
+
+      assert.equal(daemonEnv.CODELARK_RUNTIME, 'claude');
+      assert.equal(daemonEnv.CODELARK_CODEX_MODEL, 'cli-model');
+      assert.equal(daemonEnv.CODELARK_CODEX_PROVIDER, 'tmux');
+      assert.equal(daemonEnv.CODELARK_CODEX_YOLO_MODE, 'on');
+      assert.equal(uiEnv.CODELARK_RUNTIME, 'claude');
+      assert.equal(uiEnv.CODELARK_CODEX_MODEL, 'cli-model');
+      assert.equal(uiEnv.CODELARK_CODEX_PROVIDER, 'tmux');
+      assert.equal(uiEnv.CODELARK_HOME, home);
+    } finally {
+      if (previousToml === null) fs.rmSync(configTomlPath, { force: true });
+      else fs.writeFileSync(configTomlPath, previousToml, 'utf-8');
+    }
+  });
+
   it('builds bridge-local lark-cli environment variables', () => {
     const env = _testOnly.buildLarkCliRuntimeEnv();
 

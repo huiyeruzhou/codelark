@@ -6,10 +6,15 @@ import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import {
+  CODELARK_HOME,
   loadConfig,
   type Config,
   type FeishuChannelConfig,
 } from '../configuration/index.js';
+import { parseConfigCliOverrides, type ParsedConfigCliOverrides } from '../configuration/cli-overrides.js';
+import { configV2ToLegacyConfig } from '../configuration/legacy.js';
+import { createConfigService } from '../configuration/service.js';
+import type { ConfigPatch } from '../configuration/schema.js';
 import {
   INSTALLABLE_SKILLS,
   type BridgeStatus,
@@ -53,6 +58,10 @@ interface ParsedCliCommand {
   command: CliCommand;
   args: string[];
   rawCommand?: string;
+}
+
+export interface ParsedCliInvocation extends ParsedCliCommand {
+  configOverrides: ParsedConfigCliOverrides;
 }
 
 function isInteractiveTerminal(): boolean {
@@ -111,6 +120,19 @@ function hasConfiguredFeishu(config: Config): boolean {
   }));
 }
 
+function hasConfigPatchValues(patch: ConfigPatch | undefined): boolean {
+  if (!patch) return false;
+  return Object.keys(patch).length > 0;
+}
+
+function loadCliEffectiveConfig(cli: ConfigPatch | undefined): Config {
+  if (!hasConfigPatchValues(cli)) return loadConfig();
+  return configV2ToLegacyConfig(createConfigService({
+    codelarkHome: CODELARK_HOME,
+    cli,
+  }).snapshot().config);
+}
+
 async function runInstallSkillsCommand(args: string[]): Promise<void> {
   if (args.includes('-h') || args.includes('--help')) {
     process.stdout.write(
@@ -141,9 +163,9 @@ async function runInstallSkillsCommand(args: string[]): Promise<void> {
   );
 }
 
-async function runFirstRunSetupIfNeeded(): Promise<void> {
+async function runFirstRunSetupIfNeeded(cli: ConfigPatch | undefined): Promise<void> {
   if (!isInteractiveTerminal()) return;
-  const config = loadConfig();
+  const config = loadCliEffectiveConfig(cli);
   if (hasConfiguredFeishu(config)) return;
   await runSetupWizard({ reason: 'first-run' });
 }
@@ -178,10 +200,27 @@ export function buildCliHelpText(): string {
     `  ${PRIMARY_CLI_NAME} start                   只运行后台 Bridge`,
     `  ${PRIMARY_CLI_NAME} status                  检查本地服务是否正在运行`,
     '',
+    '配置覆盖:',
+    '  --set path=value                    单次覆盖 canonical 配置项，例如 --set runtime.provider=claude',
+    '',
     '文件:',
-    '  配置: ~/.codelark/config.env',
+    '  配置: ~/.codelark/config.toml',
     '  日志: ~/.codelark/logs/',
   ].join('\n') + '\n';
+}
+
+function stripConfigOverrideArgs(argv: string[]): string[] {
+  const stripped: string[] = [];
+  for (let index = 0; index < argv.length; index += 1) {
+    const arg = argv[index];
+    if (arg === '--set' || arg === '--unset') {
+      index += 1;
+      continue;
+    }
+    if (arg.startsWith('--set=') || arg.startsWith('--unset=')) continue;
+    stripped.push(arg);
+  }
+  return stripped;
 }
 
 export function parseCliCommand(argv: string[]): ParsedCliCommand {
@@ -207,6 +246,17 @@ export function parseCliCommand(argv: string[]): ParsedCliCommand {
     default:
       return { command: 'unknown', args, rawCommand };
   }
+}
+
+export function parseCliInvocation(argv: string[]): ParsedCliInvocation {
+  const configOverrides = parseConfigCliOverrides(argv);
+  if (configOverrides.unset.length > 0) {
+    throw new Error('CLI --unset is not connected to command entrypoints yet; use --set path=value for one-time overrides.');
+  }
+  return {
+    ...parseCliCommand(stripConfigOverrideArgs(argv)),
+    configOverrides,
+  };
 }
 
 export function formatRunSuccessMessage(options: {
@@ -238,17 +288,17 @@ export function formatRunSuccessMessage(options: {
 
 export const formatOpenSuccessMessage = formatRunSuccessMessage;
 
-async function runRunCommand(options: { firstRunSetup: boolean }): Promise<void> {
+async function runRunCommand(options: { firstRunSetup: boolean; configOverrides?: ParsedConfigCliOverrides }): Promise<void> {
   if (options.firstRunSetup) {
-    await runFirstRunSetupIfNeeded();
+    await runFirstRunSetupIfNeeded(options.configOverrides?.patch);
   }
   const uiBefore = getUiServerStatus();
   const bridgeBefore = getBridgeStatus();
-  const status = await ensureUiServerRunning();
+  const status = await ensureUiServerRunning({ cli: options.configOverrides?.patch });
   const url = getUiServerUrl(status.port);
   openBrowser(url);
   try {
-    const bridge = await startBridge();
+    const bridge = await startBridge({ cli: options.configOverrides?.patch });
     process.stdout.write(formatRunSuccessMessage({
       url,
       ui: status,
@@ -272,12 +322,12 @@ async function runRunCommand(options: { firstRunSetup: boolean }): Promise<void>
 }
 
 async function main(argv = process.argv.slice(2)): Promise<void> {
-  const parsed = parseCliCommand(argv);
+  const parsed = parseCliInvocation(argv);
   const command = parsed.command;
 
   switch (command) {
     case 'default': {
-      await runRunCommand({ firstRunSetup: true });
+      await runRunCommand({ firstRunSetup: true, configOverrides: parsed.configOverrides });
       return;
     }
 
@@ -298,13 +348,13 @@ async function main(argv = process.argv.slice(2)): Promise<void> {
     }
 
     case 'start': {
-      const status = await startBridge();
+      const status = await startBridge({ cli: parsed.configOverrides.patch });
       process.stdout.write(`Bridge started. PID: ${status.pid || '-'}\n`);
       return;
     }
 
     case 'run': {
-      await runRunCommand({ firstRunSetup: true });
+      await runRunCommand({ firstRunSetup: true, configOverrides: parsed.configOverrides });
       return;
     }
 

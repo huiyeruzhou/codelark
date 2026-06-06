@@ -91,4 +91,45 @@ model = "direct-model"
       fs.rmSync(home, { recursive: true, force: true });
     }
   });
+
+  it('applies CLI config source above env and home TOML', () => {
+    const home = tempHome();
+    try {
+      writeFile(path.join(home, 'config.toml'), `
+[runtime]
+provider = "codex"
+
+[runtime.codex]
+model = "toml-model"
+provider = "sdk"
+`);
+
+      const projection = loadRuntimeSettingsProjection({
+        codelarkHome: home,
+        env: {
+          CODELARK_RUNTIME: 'codex',
+          CODELARK_CODEX_MODEL: 'env-model',
+          CODELARK_CODEX_PROVIDER: 'pty',
+        },
+        cli: {
+          runtime: {
+            provider: 'claude',
+            codex: {
+              model: 'cli-model',
+              provider: 'tmux',
+            },
+          },
+        },
+      });
+
+      assert.equal(projection.legacyConfig.runtime, 'claude');
+      assert.equal(projection.legacyConfig.defaultModel, 'cli-model');
+      assert.equal(projection.legacyConfig.defaultProvider, 'tmux');
+      assert.equal(projection.settings.get('bridge_default_runtime'), 'claude');
+      assert.equal(projection.settings.get('bridge_default_model'), 'cli-model');
+      assert.equal(projection.settings.get('bridge_default_provider'), 'tmux');
+    } finally {
+      fs.rmSync(home, { recursive: true, force: true });
+    }
+  });
 });

@@ -7,7 +7,7 @@ import path from 'node:path';
 import { describe, it } from 'node:test';
 import { pathToFileURL } from 'node:url';
 
-import { buildCliHelpText, formatRunSuccessMessage, isDirectCliRun, parseCliCommand } from '../../../entrypoints/cli.js';
+import { buildCliHelpText, formatRunSuccessMessage, isDirectCliRun, parseCliCommand, parseCliInvocation } from '../../../entrypoints/cli.js';
 
 describe('cli entrypoint', () => {
   it('parses no arguments as the default run flow', () => {
@@ -32,6 +32,33 @@ describe('cli entrypoint', () => {
     assert.deepEqual(parseCliCommand(['open']), { command: 'run', args: [], rawCommand: 'open' });
   });
 
+  it('parses config overrides before dispatching the command', () => {
+    assert.deepEqual(parseCliInvocation([
+      '--set', 'runtime.provider=claude',
+      'run',
+      '--set', 'runtime.codex.provider=tmux',
+    ]), {
+      command: 'run',
+      args: [],
+      configOverrides: {
+        patch: {
+          runtime: {
+            provider: 'claude',
+            codex: { provider: 'tmux' },
+          },
+        },
+        unset: [],
+      },
+    });
+  });
+
+  it('rejects CLI unset at command entrypoints until reset semantics are defined', () => {
+    assert.throws(
+      () => parseCliInvocation(['run', '--unset', 'runtime.codex.model']),
+      /CLI --unset is not connected to command entrypoints yet/,
+    );
+  });
+
   it('renders actionable help for common local service flows', () => {
     const help = buildCliHelpText();
 
@@ -40,7 +67,8 @@ describe('cli entrypoint', () => {
     assert.doesNotMatch(help, /codelark open\s+显式打开工作台并启动 Bridge/);
     assert.match(help, /codelark setup\s+配置或重新配置飞书\/Lark 凭据/);
     assert.match(help, /autostart install\s+安装 Windows Bridge 开机启动任务/);
-    assert.match(help, /~\/\.codelark\/config\.env/);
+    assert.match(help, /--set path=value/);
+    assert.match(help, /~\/\.codelark\/config\.toml/);
     assert.match(help, /~\/\.codelark\/logs\//);
   });
 
