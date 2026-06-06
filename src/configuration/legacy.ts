@@ -9,6 +9,7 @@ import type { ConfigPatch, ConfigV2 } from './schema.js';
 
 export const LEGACY_DEFAULT_STREAM_STATUS_IDLE_START_SECONDS = 180;
 export const LEGACY_DEFAULT_STREAM_STATUS_CHECK_INTERVAL_SECONDS = 10;
+const LEGACY_DEFAULT_HISTORY_MESSAGE_LIMIT = 8;
 
 function legacyCodexMode(mode: ConfigV2['runtime']['codex']['yoloMode']): string {
   return mode === 'on' || mode === 'yolo' ? 'yolo' : 'normal';
@@ -75,22 +76,25 @@ export function legacyConfigToConfigPatch(config: Config): ConfigPatch {
     provider: channel.provider,
     enabled: channel.enabled,
     config: {
-      appId: (channel.config as FeishuChannelConfig).appId,
-      appSecret: (channel.config as FeishuChannelConfig).appSecret,
-      site: (channel.config as FeishuChannelConfig).site,
-      allowedUsers: (channel.config as FeishuChannelConfig).allowedUsers,
-      streamingEnabled: (channel.config as FeishuChannelConfig).streamingEnabled,
-      feedbackMarkdownEnabled: (channel.config as FeishuChannelConfig).feedbackMarkdownEnabled,
-      requireMention: (channel.config as FeishuChannelConfig).requireMention,
+      historyMessageLimit: config.historyMessageLimit ?? LEGACY_DEFAULT_HISTORY_MESSAGE_LIMIT,
+      streamStatusIdleStartSeconds: config.streamStatusIdleStartSeconds ?? LEGACY_DEFAULT_STREAM_STATUS_IDLE_START_SECONDS,
+      streamStatusCheckIntervalSeconds: config.streamStatusCheckIntervalSeconds ?? LEGACY_DEFAULT_STREAM_STATUS_CHECK_INTERVAL_SECONDS,
+      appId: (channel.config as FeishuChannelConfig).appId ?? '',
+      appSecret: (channel.config as FeishuChannelConfig).appSecret ?? '',
+      site: (channel.config as FeishuChannelConfig).site ?? 'feishu',
+      allowedUsers: (channel.config as FeishuChannelConfig).allowedUsers ?? [],
+      streamingEnabled: (channel.config as FeishuChannelConfig).streamingEnabled ?? true,
+      feedbackMarkdownEnabled: (channel.config as FeishuChannelConfig).feedbackMarkdownEnabled ?? true,
+      requireMention: (channel.config as FeishuChannelConfig).requireMention ?? false,
     },
   }));
   const defaultChannel = channels.find((channel) => channel.id === 'feishu-default') || channels[0];
   if (defaultChannel) {
     defaultChannel.config = {
       ...defaultChannel.config,
-      historyMessageLimit: config.historyMessageLimit,
-      streamStatusIdleStartSeconds: config.streamStatusIdleStartSeconds,
-      streamStatusCheckIntervalSeconds: config.streamStatusCheckIntervalSeconds,
+      historyMessageLimit: config.historyMessageLimit ?? LEGACY_DEFAULT_HISTORY_MESSAGE_LIMIT,
+      streamStatusIdleStartSeconds: config.streamStatusIdleStartSeconds ?? LEGACY_DEFAULT_STREAM_STATUS_IDLE_START_SECONDS,
+      streamStatusCheckIntervalSeconds: config.streamStatusCheckIntervalSeconds ?? LEGACY_DEFAULT_STREAM_STATUS_CHECK_INTERVAL_SECONDS,
     };
   }
 

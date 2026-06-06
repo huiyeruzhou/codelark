@@ -86,6 +86,7 @@ export function handleRequireAtCommand(options: {
 
   saveConfig({
     ...current,
+    schemaVersion: 2,
     channels: nextChannels,
     enabledChannels: Array.from(new Set(nextChannels.filter((item) => item.enabled).map((item) => item.provider))),
   });
@@ -100,7 +101,7 @@ export function handleRequireAtCommand(options: {
       ['当前值', formatRequireAtMode(savedValue)],
     ],
     [
-      '配置已保存到 `~/.codelark/config.json` 与 `config.env`；运行中的 Bridge 会在下一次通道配置同步时重载该通道。',
+      '配置已保存到 `~/.codelark/config.toml`；运行中的 Bridge 会在下一次通道配置同步时重载该通道。',
       '如果关闭 @ 后群消息仍没有触发 Bridge，请检查飞书应用权限和事件订阅，尤其是“读取群组中所有消息”及 `im.message.receive_v1`。权限变更后可能需要重新发布/生效应用配置。',
     ],
     options.markdown,

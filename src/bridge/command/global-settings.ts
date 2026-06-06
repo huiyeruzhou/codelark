@@ -493,9 +493,9 @@ export function handleSetCommand(options: {
   }
 
   const nextConfig = mergeConfig(currentConfig, nextPayload);
-  saveConfig(nextConfig);
+  saveConfig({ ...nextConfig, schemaVersion: 2 });
   const savedPayload = configToPayload(loadConfig());
-  const notes = ['配置已保存到 `~/.codelark/config.env` 与 `config.json`；后续 `/new` 和对应 runtime 请求会读取新的全局默认值。'];
+  const notes = ['配置已保存到 `~/.codelark/config.toml`；后续 `/new` 和对应 runtime 请求会读取新的全局默认值。'];
   if (definition.key === 'codexReasoningEffort') {
     const warning = minimalReasoningWebSearchWarning(String(savedPayload.codexReasoningEffort || ''));
     if (warning) notes.push(warning);

@@ -60,8 +60,10 @@ import { getClaudeProjectDir, isArchivedClaudeSession } from '../../../../runtim
 import { normalizeReasoningEffort, normalizeSandboxMode } from '../../../../configuration/runtime-options.js';
 import { sseEvent } from '../../../../runtime/sse.js';
 import type { LLMProvider, StreamChatParams } from '../../../../runtime/contracts.js';
+import { resolveConfigPaths } from '../../../../configuration/sources.js';
 
 const DATA_DIR = path.join(CODELARK_HOME, 'data');
+const HOME_CONFIG_TOML_PATH = resolveConfigPaths({ codelarkHome: CODELARK_HOME }).homeToml;
 
 function createDeferred<T = void>() {
   let resolve!: (value: T | PromiseLike<T>) => void;
@@ -417,6 +419,7 @@ describe('command-dispatch', () => {
   beforeEach(() => {
     fs.rmSync(DATA_DIR, { recursive: true, force: true });
     fs.rmSync(path.join(CODELARK_HOME, 'config'), { recursive: true, force: true });
+    fs.rmSync(HOME_CONFIG_TOML_PATH, { force: true });
     fs.rmSync(CONFIG_PATH, { force: true });
     fs.rmSync(CONFIG_JSON_PATH, { force: true });
   });
@@ -3374,6 +3377,11 @@ describe('command-dispatch', () => {
     );
     assert.match(sent.at(-1)?.text || '', /已更新全局配置/);
     assert.match(sent.at(-1)?.text || '', /defaultWorkspaceRoot/);
+    assert.match(sent.at(-1)?.text || '', /config\.toml/);
+    assert.doesNotMatch(sent.at(-1)?.text || '', /config\.env|config\.json/);
+    assert.equal(fs.existsSync(HOME_CONFIG_TOML_PATH), true);
+    assert.equal(fs.existsSync(CONFIG_PATH), false);
+    assert.equal(fs.existsSync(CONFIG_JSON_PATH), false);
 
     await handleBridgeCommand(
       adapter,
@@ -3524,6 +3532,7 @@ describe('command-dispatch', () => {
   it('views and updates current Feishu channel group mention requirement with /require-at', async () => {
     initTestContext({ dynamicSettings: true });
     saveConfig({
+      schemaVersion: 2,
       runtime: 'codex',
       enabledChannels: ['feishu'],
       defaultMode: 'normal',
@@ -3584,10 +3593,14 @@ describe('command-dispatch', () => {
     );
     assert.match(sent.at(-1) || '', /已更新群聊 @bot 设置/);
     assert.match(sent.at(-1) || '', /on/);
+    assert.match(sent.at(-1) || '', /config\.toml/);
+    assert.doesNotMatch(sent.at(-1) || '', /config\.env|config\.json/);
     assert.match(sent.at(-1) || '', /im\.message\.receive_v1/);
     const requireOn = loadConfig().channels?.find((channel) => channel.id === 'feishu')?.config as { requireMention?: boolean } | undefined;
     assert.equal(requireOn?.requireMention, true);
-    assert.match(fs.readFileSync(CONFIG_PATH, 'utf-8'), /CODELARK_FEISHU_REQUIRE_MENTION=true/);
+    assert.match(fs.readFileSync(HOME_CONFIG_TOML_PATH, 'utf-8'), /require_mention = true/);
+    assert.equal(fs.existsSync(CONFIG_PATH), false);
+    assert.equal(fs.existsSync(CONFIG_JSON_PATH), false);
 
     await handleBridgeCommand(
       adapter,
@@ -3602,7 +3615,9 @@ describe('command-dispatch', () => {
     assert.match(sent.at(-1) || '', /off/);
     const requireOff = loadConfig().channels?.find((channel) => channel.id === 'feishu')?.config as { requireMention?: boolean } | undefined;
     assert.equal(requireOff?.requireMention, false);
-    assert.match(fs.readFileSync(CONFIG_PATH, 'utf-8'), /CODELARK_FEISHU_REQUIRE_MENTION=false/);
+    assert.match(fs.readFileSync(HOME_CONFIG_TOML_PATH, 'utf-8'), /require_mention = false/);
+    assert.equal(fs.existsSync(CONFIG_PATH), false);
+    assert.equal(fs.existsSync(CONFIG_JSON_PATH), false);
   });
 
   it('blocks thread switching while the current task is running unless forced', async () => {

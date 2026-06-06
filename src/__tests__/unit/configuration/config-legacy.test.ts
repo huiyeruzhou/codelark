@@ -135,6 +135,37 @@ describe('legacy config compatibility adapter', () => {
     assert.equal(patch.channels?.[0]?.config?.appSecret, 'app-secret');
   });
 
+  it('materializes partial legacy channel config into a valid v2 channel patch', () => {
+    const legacy: Config = {
+      runtime: 'codex',
+      defaultMode: 'normal',
+      enabledChannels: ['feishu'],
+      channels: [{
+        id: 'feishu',
+        alias: '飞书',
+        provider: 'feishu',
+        enabled: true,
+        createdAt: '2026-06-06T00:00:00.000Z',
+        updatedAt: '2026-06-06T00:00:00.000Z',
+        config: {
+          appId: 'app-id',
+          appSecret: 'app-secret',
+        },
+      }],
+    };
+
+    const patch = configPatchSchema.parse(legacyConfigToConfigPatch(legacy));
+    assert.equal(patch.channels?.[0]?.config?.appId, 'app-id');
+    assert.equal(patch.channels?.[0]?.config?.historyMessageLimit, 8);
+    assert.equal(patch.channels?.[0]?.config?.streamStatusIdleStartSeconds, 180);
+    assert.equal(patch.channels?.[0]?.config?.streamStatusCheckIntervalSeconds, 10);
+    assert.equal(patch.channels?.[0]?.config?.site, 'feishu');
+    assert.deepEqual(patch.channels?.[0]?.config?.allowedUsers, []);
+    assert.equal(patch.channels?.[0]?.config?.streamingEnabled, true);
+    assert.equal(patch.channels?.[0]?.config?.feedbackMarkdownEnabled, true);
+    assert.equal(patch.channels?.[0]?.config?.requireMention, false);
+  });
+
   it('maps legacy Claude acceptEdits and plan permission modes to v2 yolo off', () => {
     const legacy: Config = {
       runtime: 'claude',
