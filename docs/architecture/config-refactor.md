@@ -8,7 +8,7 @@ CodeLark 需要把“默认值、全局配置、项目配置、环境变量、�
 
 - 支持命令行覆盖和多级配置，非通道实例字段的基础优先级为 `cli > env > local > home > defaults`。
 - 支持 Channel/Session scope 的持久化执行偏好覆盖，例如 `/r` 对当前飞书 Channel 或当前会话 Session 的覆盖；这类持久化配置也应使用 TOML，而不是继续散落在 BridgeSession JSON 中。
-- 通道实例清单和通道连接/行为配置只允许出现在 defaults 与 home `config.toml`。home 中的 `channels` 整组覆盖 defaults，local/env/cli/channel/session/request 出现 `channels` 都应校验失败。
+- 通道实例清单和通道连接/行为配置只允许出现在 defaults 与 home `config.toml`。`defaults.toml` 仍是 channel 默认值的事实来源；home 中的 `channels` 整组覆盖 defaults，缺省字段由 ConfigService 从 defaults channel 模板补齐并写回 home TOML。local/env/cli/channel/session/request 出现 `channels` 都应校验失败。
 - 查询配置时不再在业务代码里手写 override/fallback。
 - 全局默认值有清晰收口，能直接看到当前默认配置长什么样；setup wizard 展示和写入的全局配置项也必须从同一个默认配置定义读取。
 - 启动时把旧 `config.json` 和 `config.env` 一次性迁移到 `config.toml`；迁移完成后不再支持 `config.env` 作为配置输入。
@@ -123,7 +123,7 @@ TOML shape 边界：
 - `[bridge]` 放 Bridge 服务自身行为配置，例如默认工作区和 UI 访问控制。
 - `[channels.config]` 放通道连接信息和通道行为配置，例如飞书 App 凭据、历史消息窗口和流式状态节奏；只允许在 defaults/home `channels` 中出现。
 - `[runtime]` 放当前 runtime 选择；`[runtime.codex]`、`[runtime.claude]` 放 provider-specific 配置。
-- `[[channels]]` 放通道实例配置；home `channels` 是完整通道清单，整组覆盖 defaults。Channel/Session scope 文件不能包含 `[[channels]]`，只能保存执行偏好字段。
+- `[[channels]]` 放通道实例配置；home `channels` 是通道清单，整组覆盖 defaults。home 中的 partial channel 会在读取时用 `defaults.toml` 中的 channel 模板补齐并写回；Channel/Session scope 文件不能包含 `[[channels]]`，只能保存执行偏好字段。
 
 ### 目标文件布局
 
@@ -175,7 +175,7 @@ Session effective config:
   request > session > channel > cli > env > local > home > defaults
 ```
 
-`channels` 是例外：只读取 defaults 和 home，且 home 整组覆盖 defaults。local/env/cli/channel/session/request 不能定义 `channels`，因此不存在 `channels[]` 跨层按 id merge。
+`channels` 是例外：只读取 defaults 和 home，且 home 整组覆盖 defaults。home partial channel 只允许通过 ConfigService 从 `defaults.toml` 模板 materialize 并写回，不通过 source-chain 做 `channels[]` 跨层按 id merge。local/env/cli/channel/session/request 不能定义 `channels`。
 
 说明：
 
@@ -285,7 +285,7 @@ require_mention = false
 | `channels[].config.feedback_markdown_enabled` | `channels[].config.feedbackMarkdownEnabled` | `CODELARK_FEISHU_COMMAND_MARKDOWN_ENABLED` |
 | `channels[].config.require_mention` | `channels[].config.requireMention` | `CODELARK_FEISHU_REQUIRE_MENTION` |
 
-`[channels.config]` 是最近一个 `[[channels]]` array item 的子表；通道 `id` 应在同一个文件内唯一。不同 source 之间不再按 `id` 合并通道，home `channels` 直接替换 defaults `channels`。
+`[channels.config]` 是最近一个 `[[channels]]` array item 的子表；通道 `id` 应在同一个文件内唯一。不同 source 之间不再按 `id` 合并通道，home `channels` 直接替换 defaults `channels`；缺省字段由 ConfigService 读取 `defaults.toml` 的模板补齐并写回 home TOML。
 
 命令行覆盖只接受 canonical path，最终也落到上面这套 TOML path；CLI 本身不定义另一套字段名。
 
@@ -295,7 +295,7 @@ require_mention = false
 | --- | --- |
 | scalar | 高优先级非空值覆盖低优先级值；允许清空的字段使用 TOML `null` 或 CLI `--unset path` |
 | object | deep merge |
-| arrays of channels | 只允许 defaults/home；home 整组覆盖 defaults，不参与 local/env/cli/channel/session/request 合并 |
+| arrays of channels | 只允许 defaults/home；home 整组覆盖 defaults，不参与 local/env/cli/channel/session/request 合并；home partial channel 由 defaults TOML 模板 materialize 后写回 |
 | `enabledChannels` | 不再作为主字段；由 `channels[].enabled` 派生 |
 | secret | 存储原值，诊断和 UI provenance 默认 mask |
 | path | `~` 和相对路径按 source base 归一化：home 相对 CODELARK_HOME，Local 相对配置文件目录，Channel/Session 相对配置文件目录或工作区 |

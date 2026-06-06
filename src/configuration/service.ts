@@ -135,22 +135,51 @@ function validateSourcePatch(source: ConfigSourceKind, patch: ConfigPatch): Conf
   return parsed;
 }
 
-function materializeHomeChannelPatch(paths: ConfigPaths, current: ConfigPatch, patch: ConfigPatch): ConfigPatch {
+function clone<T>(value: T): T {
+  return JSON.parse(JSON.stringify(value)) as T;
+}
+
+function defaultChannelTemplate(defaults: ConfigPatch, id: string): NonNullable<ConfigPatch['channels']>[number] {
+  const defaultChannel = defaults.channels?.find((entry) => entry.id === id)
+    || defaults.channels?.find((entry) => entry.id === 'feishu-default');
+  if (!defaultChannel) {
+    throw new Error('defaults.toml must define a feishu-default channel.');
+  }
+  return { ...clone(defaultChannel), id };
+}
+
+function materializeHomeChannel(
+  defaults: ConfigPatch,
+  channel: NonNullable<ConfigPatch['channels']>[number],
+): NonNullable<ConfigPatch['channels']>[number] {
+  const template = defaultChannelTemplate(defaults, channel.id);
+  return {
+    ...template,
+    ...channel,
+    id: channel.id,
+    config: {
+      ...(template.config || {}),
+      ...(channel.config || {}),
+    },
+  };
+}
+
+function materializeHomeChannelPatch(defaults: ConfigPatch, current: ConfigPatch, patch: ConfigPatch): ConfigPatch {
   if (!patch.channels || patch.channels.length === 0) return patch;
-  const defaults = readDefaultsConfig(paths.defaultsToml).patch;
   const materialized: ConfigPatch = {};
   for (const channel of patch.channels) {
-    const defaultChannel = defaults.channels?.find((entry) => entry.id === channel.id)
-      || defaults.channels?.find((entry) => entry.id === 'feishu-default');
     const currentChannel = current.channels?.find((entry) => entry.id === channel.id);
-    if (defaultChannel) mergePatch(materialized, { channels: [{ ...defaultChannel, id: channel.id }] });
-    if (currentChannel) mergePatch(materialized, { channels: [currentChannel] });
+    mergePatch(materialized, { channels: [materializeHomeChannel(defaults, currentChannel || channel)] });
   }
   mergePatch(materialized, { channels: patch.channels });
   return {
     ...patch,
     channels: materialized.channels,
   };
+}
+
+function patchesEqual(left: ConfigPatch, right: ConfigPatch): boolean {
+  return JSON.stringify(left) === JSON.stringify(right);
 }
 
 function maskSecretValue(value: unknown): unknown {
@@ -191,6 +220,17 @@ export function createConfigService(options: ConfigServiceOptions = {}): ConfigS
     return layer({ source, file: loaded.file }, loaded.patch);
   }
 
+  function homeLayer(paths: ConfigPaths): ConfigLayer | null {
+    const file = paths.homeToml;
+    const loaded = readTomlConfig(file);
+    if (!loaded) return null;
+    const materialized = materializeHomeChannelPatch(readDefaultsConfig(paths.defaultsToml).patch, {}, loaded.patch);
+    if (!patchesEqual(loaded.patch, materialized)) {
+      writeTomlConfig(file, materialized);
+    }
+    return layer({ source: 'home', file: loaded.file }, materialized);
+  }
+
   function buildLayers(scope?: ConfigScope, request?: ConfigPatch): { layers: ConfigLayer[]; warnings: EnvCompatWarning[] } {
     const paths = pathsFor(scope);
     const envPatch = envToConfigPatch(env);
@@ -198,7 +238,7 @@ export function createConfigService(options: ConfigServiceOptions = {}): ConfigS
       layer({ source: 'defaults', file: paths.defaultsToml }, readDefaultsConfig(paths.defaultsToml).patch),
     ];
 
-    const home = fileLayer('home', readTomlConfig(paths.homeToml));
+    const home = homeLayer(paths);
     if (home) layers.push(home);
 
     if (paths.localToml) {
@@ -264,7 +304,9 @@ export function createConfigService(options: ConfigServiceOptions = {}): ConfigS
     const file = targetFile(target);
     const current = replace ? {} : readTomlConfig(file)?.patch || {};
     const paths = resolveConfigPaths({ codelarkHome: options.codelarkHome, cwd: target.kind === 'local' ? target.cwd : undefined });
-    const writablePatch = target.kind === 'home' ? materializeHomeChannelPatch(paths, current, patch) : patch;
+    const writablePatch = target.kind === 'home'
+      ? materializeHomeChannelPatch(readDefaultsConfig(paths.defaultsToml).patch, current, patch)
+      : patch;
     writeTomlConfig(file, replace ? writablePatch : mergePatch(current, writablePatch));
   }
 
@@ -318,7 +360,9 @@ export function createConfigService(options: ConfigServiceOptions = {}): ConfigS
         unsetConfigPath(current as Record<string, unknown>, path);
       }
       const paths = resolveConfigPaths({ codelarkHome: options.codelarkHome, cwd: target.kind === 'local' ? target.cwd : undefined });
-      writeTomlConfig(file, target.kind === 'home' ? materializeHomeChannelPatch(paths, {}, current) : current);
+      writeTomlConfig(file, target.kind === 'home'
+        ? materializeHomeChannelPatch(readDefaultsConfig(paths.defaultsToml).patch, {}, current)
+        : current);
     },
     exportRuntimeSettings(scope?: ConfigScope): Map<string, string> {
       return exportRuntimeSettings(snapshot(scope).config);

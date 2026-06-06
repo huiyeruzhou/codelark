@@ -299,6 +299,39 @@ require_mention = false
     }
   });
 
+  it('materializes partial home channels from defaults.toml and writes them back', () => {
+    const home = tempHome();
+    const configTomlPath = path.join(home, 'config.toml');
+    try {
+      writeFile(configTomlPath, `
+[[channels]]
+id = "feishu-home"
+provider = "feishu"
+
+[channels.config]
+app_id = "home-app"
+`);
+
+      const service = createConfigService({ codelarkHome: home, env: {}, migrate: false });
+      const channel = service.snapshot().config.channels[0]!;
+      assert.equal(channel.id, 'feishu-home');
+      assert.equal(channel.alias, '飞书');
+      assert.equal(channel.enabled, false);
+      assert.equal(channel.config.appId, 'home-app');
+      assert.equal(channel.config.historyMessageLimit, 8);
+      assert.equal(channel.config.streamStatusIdleStartSeconds, 180);
+      assert.equal(channel.config.site, 'feishu');
+
+      const savedToml = fs.readFileSync(configTomlPath, 'utf-8');
+      assert.match(savedToml, /alias = "飞书"/);
+      assert.match(savedToml, /history_message_limit = 8/);
+      assert.match(savedToml, /app_id = "home-app"/);
+      assert.match(savedToml, /streaming_enabled = true/);
+    } finally {
+      fs.rmSync(home, { recursive: true, force: true });
+    }
+  });
+
   it('explains values with source provenance and masks secret fields by default', () => {
     const home = tempHome();
     try {
