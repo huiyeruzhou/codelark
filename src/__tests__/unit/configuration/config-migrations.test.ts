@@ -182,6 +182,25 @@ describe('config migration runner', () => {
     }
   });
 
+  it('archives legacy home inputs without overwriting existing migrated files', () => {
+    const home = tempHome();
+    try {
+      const paths = resolveMigrationPaths(home);
+      writeFile(paths.legacyConfigEnv, 'CODELARK_CODEX_DEFAULT_MODEL=legacy-model\n');
+      writeFile(`${paths.legacyConfigEnv}.migrated-v1`, 'previous archive\n');
+
+      const result = runConfigMigrations({ codelarkHome: home });
+
+      assert.equal(result.changed, true);
+      assert.equal(fs.existsSync(paths.homeToml), true);
+      assert.equal(fs.existsSync(paths.legacyConfigEnv), false);
+      assert.equal(fs.readFileSync(`${paths.legacyConfigEnv}.migrated-v1`, 'utf-8'), 'previous archive\n');
+      assert.equal(fs.readFileSync(`${paths.legacyConfigEnv}.migrated-v1.1`, 'utf-8'), 'CODELARK_CODEX_DEFAULT_MODEL=legacy-model\n');
+    } finally {
+      fs.rmSync(home, { recursive: true, force: true });
+    }
+  });
+
   it('preserves legacy session Claude permissionMode plan', () => {
     const home = tempHome();
     try {

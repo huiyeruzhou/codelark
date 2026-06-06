@@ -90,6 +90,10 @@ describe('v1 config migration e2e', () => {
       assert.equal(fs.existsSync(paths.homeToml), true);
       assert.equal(fs.existsSync(path.join(paths.backupDir, 'v1', 'config.json')), true);
       assert.equal(fs.existsSync(path.join(paths.backupDir, 'v1', 'config.env')), true);
+      assert.equal(fs.existsSync(paths.legacyConfigJson), false);
+      assert.equal(fs.existsSync(paths.legacyConfigEnv), false);
+      assert.equal(fs.existsSync(`${paths.legacyConfigJson}.migrated-v1`), true);
+      assert.equal(fs.existsSync(`${paths.legacyConfigEnv}.migrated-v1`), true);
 
       const service = createConfigService({ codelarkHome: home, env: {} });
       assert.equal(service.get('runtime.provider'), 'codex');

@@ -361,6 +361,22 @@ function readLegacyJson(context: MigrationContext): LegacyConfigFile | null {
   return parsed?.schemaVersion === 1 ? parsed : null;
 }
 
+function nextArchivePath(filePath: string): string {
+  const base = `${filePath}.migrated-v1`;
+  if (!fs.existsSync(base)) return base;
+  for (let index = 1; ; index += 1) {
+    const candidate = `${base}.${index}`;
+    if (!fs.existsSync(candidate)) return candidate;
+  }
+}
+
+function archiveLegacyInput(filePath: string): string | null {
+  if (!fs.existsSync(filePath)) return null;
+  const archivePath = nextArchivePath(filePath);
+  fs.renameSync(filePath, archivePath);
+  return archivePath;
+}
+
 export const v1ConfigMigration: ConfigMigration = {
   id: 'v1',
   description: 'Migrate legacy config.json/config.env and session runtime overrides to v2 TOML',
@@ -405,6 +421,10 @@ export const v1ConfigMigration: ConfigMigration = {
     if (patch) {
       context.writeTomlAtomic(context.paths.homeToml, configToTomlShape(patch));
       writtenFiles.push(context.paths.homeToml);
+      for (const file of [context.paths.legacyConfigJson, context.paths.legacyConfigEnv]) {
+        const archivePath = archiveLegacyInput(file);
+        if (archivePath) writtenFiles.push(archivePath);
+      }
     }
 
     if (shouldMigrateSessions) {
