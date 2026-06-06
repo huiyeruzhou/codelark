@@ -491,8 +491,9 @@ flowchart TD
 
 CodeLark 自有数据位于 `~/.codelark`：
 
-- `config.json`：结构化配置。
-- `config.env`：兼容旧工具的配置快照和 bootstrap 输入，不是多实例通道配置的完整来源。
+- `config.toml`：全局主配置，使用 v2 TOML shape。
+- `config/sessions/`、`config/channels/`：Session / Channel 级 TOML 覆盖，复用同一套 shape。
+- `config.json` / `config.env`：旧版 v1 迁移输入，迁移成功后归档，不再作为运行时配置来源。
 - `data/sessions.json`：BridgeSession，包含唯一的 `codex_thread_id`。
 - `data/channel-chats.json`：ChannelChat，只保存 IM chat 身份和 `bridgeSessionId`。
 - `data/channel-default-targets.json`：通道实例的默认目标。

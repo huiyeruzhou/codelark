@@ -36,7 +36,7 @@ codelark setup
 
 机器人配置方式有两种：
 
-- 使用现有 CodeLark 配置：从 `~/.codelark/config.json` 或 `config.env` 加载已有 `App ID` / `App Secret`，不会读取用户 HOME 下的 `~/.lark-cli`。
+- 使用现有 CodeLark 配置：从 `~/.codelark/config.toml` 加载已有 `App ID` / `App Secret`；首次遇到旧版 `config.json` / `config.env` 时会迁移到 TOML，不会读取用户 HOME 下的 `~/.lark-cli`。
 - 扫码创建：通过飞书/Lark 开放平台扫码创建 App，`App ID` / `App Secret` 直接来自扫码返回结果。
 - 手动引导：直接粘贴飞书开放平台里的 `App ID` 和 `App Secret`。
 
@@ -52,11 +52,12 @@ codelark setup
 向导会写入：
 
 ```text
-~/.codelark/config.json
-~/.codelark/config.env
+~/.codelark/config.toml
+~/.codelark/config/sessions/<session-id>.toml
+~/.codelark/config/channels/<channel-id>.toml
 ```
 
-`config.json` 是结构化主配置；`config.env` 主要用于兼容旧工具、快速排查和运维快照。
+`config.toml` 是全局主配置；Session 和 Channel 级持久化覆盖使用同一套 TOML shape 写入 `config/sessions/` 与 `config/channels/`。旧 `config.json` / `config.env` 只作为 v1 迁移输入，迁移成功后会归档，不再作为运行时配置来源。
 
 ## 启动
 
@@ -175,8 +176,9 @@ CodeLark 自有数据位于：
 
 常见文件：
 
-- `config.json`：结构化配置。
-- `config.env`：兼容旧工具的配置快照。
+- `config.toml`：全局主配置。
+- `config/sessions/`：当前会话级持久化覆盖，例如工作目录、模型、provider、sandbox、reasoning、tmux 显式绑定。
+- `config/channels/`：Channel 级持久化覆盖。
 - `data/sessions.json`：Bridge 会话。
 - `data/channel-chats.json`：IM chat 到 Bridge 会话的绑定。
 - `data/messages/`：Bridge 消息缓存。

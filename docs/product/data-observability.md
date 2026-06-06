@@ -6,8 +6,10 @@
 
 | 文件 | 用途 | 代码入口 |
 | --- | --- | --- |
-| `config.json` | 结构化 runtime 和通道配置 | [src/configuration/index.ts](https://github.com/huiyeruzhou/codelark/blob/master/src/configuration/index.ts)、[schemas/config.v1.schema.json](https://github.com/huiyeruzhou/codelark/blob/master/schemas/config.v1.schema.json) |
-| `config.env` | 兼容旧工具和 bootstrap 的 env 快照 | [src/configuration/index.ts](https://github.com/huiyeruzhou/codelark/blob/master/src/configuration/index.ts) |
+| `config.toml` | 全局主配置，使用 v2 TOML shape | [src/configuration/service.ts](https://github.com/huiyeruzhou/codelark/blob/master/src/configuration/service.ts)、[src/configuration/schema.ts](https://github.com/huiyeruzhou/codelark/blob/master/src/configuration/schema.ts) |
+| `config/sessions/<session-id>.toml` | Session 级持久化覆盖，例如 cwd、模型、provider、sandbox、reasoning、tmux 显式绑定 | [src/configuration/service.ts](https://github.com/huiyeruzhou/codelark/blob/master/src/configuration/service.ts)、[src/domain/session-runtime.ts](https://github.com/huiyeruzhou/codelark/blob/master/src/domain/session-runtime.ts) |
+| `config/channels/<channel-id>.toml` | Channel 级持久化覆盖，复用同一套 TOML shape | [src/configuration/service.ts](https://github.com/huiyeruzhou/codelark/blob/master/src/configuration/service.ts) |
+| `config.json` / `config.env` | v1 迁移输入；迁移成功后归档为 `.migrated-v1*`，不再作为运行时配置来源 | [src/configuration/migrations/v1.ts](https://github.com/huiyeruzhou/codelark/blob/master/src/configuration/migrations/v1.ts) |
 | `data/sessions.json` | BridgeSession | [src/storage/json-store.ts](https://github.com/huiyeruzhou/codelark/blob/master/src/storage/json-store.ts)、[schemas/data/sessions.v1.schema.json](https://github.com/huiyeruzhou/codelark/blob/master/schemas/data/sessions.v1.schema.json) |
 | `data/channel-chats.json` | ChannelChat 绑定 | [src/storage/json-store.ts](https://github.com/huiyeruzhou/codelark/blob/master/src/storage/json-store.ts)、[schemas/data/channel-chats.v1.schema.json](https://github.com/huiyeruzhou/codelark/blob/master/schemas/data/channel-chats.v1.schema.json) |
 | `data/messages/<sessionId>.json` | Bridge 消息缓存 | [src/storage/json-store.ts](https://github.com/huiyeruzhou/codelark/blob/master/src/storage/json-store.ts)、[schemas/data/messages.v1.schema.json](https://github.com/huiyeruzhou/codelark/blob/master/schemas/data/messages.v1.schema.json) |

@@ -135,7 +135,9 @@ Codex thread 可以来自不同入口：
 
 其它模块也有独立 JSON 状态文件：
 
-- `config.json`：结构化配置文件。
+- `config.toml`：全局主配置文件。
+- `config/sessions/`、`config/channels/`：Session / Channel 级 TOML 覆盖。
+- `config.json` / `config.env`：v1 迁移输入，迁移成功后归档，不再作为运行时配置来源。
 - `ui-session-meta.json`：旧 UI session 名称元数据；启动迁移会合并进 `sessions.json.name` 并删除该文件。
 - `thread-table-messages.json`：线程表格消息置顶/展示记录。
 - `runtime/status.json`、`runtime/ui-server.json`：服务运行状态。
