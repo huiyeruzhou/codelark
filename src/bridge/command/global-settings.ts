@@ -1,8 +1,6 @@
-import {
-  loadConfig,
-  saveConfig,
-} from '../../configuration/index.js';
+import { configV2ToLegacyConfig, legacyConfigToConfigPatch } from '../../configuration/legacy.js';
 import { parseSandboxMode } from '../../configuration/runtime-options.js';
+import { createConfigService } from '../../configuration/service.js';
 import {
   configToPayload,
   mergeConfig,
@@ -452,7 +450,8 @@ export function handleSetCommand(options: {
   markdown: boolean;
 }): string {
   const parsed = parseSetArgs(options.args);
-  const currentConfig = loadConfig();
+  const service = createConfigService({ migrate: false });
+  const currentConfig = configV2ToLegacyConfig(service.snapshot().config);
   const currentPayload = configToPayload(currentConfig);
 
   if (parsed.action === 'show-all') {
@@ -493,8 +492,8 @@ export function handleSetCommand(options: {
   }
 
   const nextConfig = mergeConfig(currentConfig, nextPayload);
-  saveConfig({ ...nextConfig, schemaVersion: 2 });
-  const savedPayload = configToPayload(loadConfig());
+  service.set({ kind: 'home' }, legacyConfigToConfigPatch(nextConfig));
+  const savedPayload = configToPayload(configV2ToLegacyConfig(service.snapshot().config));
   const notes = ['配置已保存到 `~/.codelark/config.toml`；后续 `/new` 和对应 runtime 请求会读取新的全局默认值。'];
   if (definition.key === 'codexReasoningEffort') {
     const warning = minimalReasoningWebSearchWarning(String(savedPayload.codexReasoningEffort || ''));

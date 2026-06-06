@@ -3463,6 +3463,8 @@ enabled = true
     assert.equal(fs.existsSync(HOME_CONFIG_TOML_PATH), true);
     assert.equal(fs.existsSync(CONFIG_PATH), false);
     assert.equal(fs.existsSync(CONFIG_JSON_PATH), false);
+    assert.equal(createConfigService({ migrate: false, env: {} }).resolve('bridge.defaultWorkspace').source, 'home');
+    assert.equal(createConfigService({ migrate: false, env: {} }).get('bridge.defaultWorkspace'), workspaceRoot);
 
     await handleBridgeCommand(
       adapter,
@@ -3488,6 +3490,8 @@ enabled = true
     );
     assert.match(sent.at(-1)?.text || '', /默认 Codex Provider.*tmux/s);
     assert.equal(loadConfig().defaultProvider, 'tmux');
+    assert.equal(createConfigService({ migrate: false, env: {} }).resolve('runtime.codex.provider').source, 'home');
+    assert.equal(createConfigService({ migrate: false, env: {} }).get('runtime.codex.provider'), 'tmux');
 
     await handleBridgeCommand(
       adapter,
@@ -3579,6 +3583,8 @@ enabled = true
       deps,
     );
     assert.equal(loadConfig().historyMessageLimit, 12);
+    assert.equal(createConfigService({ migrate: false, env: {} }).resolve('channels[].config.historyMessageLimit').source, 'home');
+    assert.equal(createConfigService({ migrate: false, env: {} }).get('channels[].config.historyMessageLimit'), 12);
 
     await handleBridgeCommand(
       adapter,

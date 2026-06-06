@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
-import { loadConfig, saveConfig } from '../../configuration/index.js';
+import { createConfigService } from '../../configuration/service.js';
 import { readConfiguredCodexModel } from '../../runtime/codex/models.js';
 import { listBindingsForChat } from '../session/registry.js';
 import {
@@ -518,8 +518,14 @@ export async function handleHistoryCommand(options: {
       ].join('\n');
     }
     try {
-      const currentConfig = loadConfig();
-      saveConfig({ ...currentConfig, schemaVersion: 2, historyMessageLimit: nextLimit });
+      createConfigService({ migrate: false }).set({ kind: 'home' }, {
+        channels: [{
+          id: 'feishu-default',
+          config: {
+            historyMessageLimit: nextLimit,
+          },
+        }],
+      });
       return `已将 /his msg 返回条数限制设置为 ${nextLimit}，配置已保存到 ~/.codelark/config.toml。`;
     } catch (error) {
       return `修改失败：${error instanceof Error ? error.message : String(error)}`;
