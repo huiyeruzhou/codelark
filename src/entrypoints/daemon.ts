@@ -14,7 +14,8 @@ import * as bridgeManager from '../bridge/host/manager.js';
 import '../channels/feishu/adapter.js';
 
 import type { LLMProvider } from '../runtime/contracts.js';
-import { loadConfig, configToSettings, CODELARK_HOME, type CodexProviderChoice } from '../configuration/index.js';
+import { CODELARK_HOME, type CodexProviderChoice } from '../configuration/index.js';
+import { loadRuntimeSettingsProjection } from '../configuration/runtime-settings-projection.js';
 import { JsonFileStore } from '../storage/json-store.js';
 import { PendingPermissions } from '../runtime/permission-gateway.js';
 import { setupLogger } from '../shared/logger.js';
@@ -120,14 +121,13 @@ async function main(): Promise<void> {
   };
 
   runStartupStorageMigrations();
-  const config = loadConfig();
+  const { settings, legacyConfig: config } = loadRuntimeSettingsProjection({ codelarkHome: CODELARK_HOME });
   setupLogger();
 
   const runId = crypto.randomUUID();
   console.log(`${LOG_PREFIX} Starting bridge (run_id: ${runId})`);
   console.log(`${LOG_PREFIX} Proxy env snapshot: ${formatProxyEnvSnapshot()}`);
 
-  const settings = configToSettings(config);
   const store = new JsonFileStore(settings, { dynamicSettings: true });
   const pendingPerms = new PendingPermissions();
   const llm = await resolveProvider(pendingPerms, config.defaultProvider);

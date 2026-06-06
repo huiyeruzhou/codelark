@@ -5,10 +5,10 @@ import path from 'node:path';
 
 import {
   CODELARK_HOME,
-  configToSettings,
   loadConfig,
   type Config,
 } from '../configuration/index.js';
+import { loadRuntimeSettings } from '../configuration/runtime-settings-projection.js';
 import {
   getUiServerUrl,
   writeUiServerStatus,
@@ -84,7 +84,7 @@ function text(response: ServerResponse, statusCode: number, body: string): void 
 }
 
 function createUiStore(): JsonFileStore {
-  return new JsonFileStore(configToSettings(loadConfig()));
+  return new JsonFileStore(loadRuntimeSettings({ codelarkHome: CODELARK_HOME }));
 }
 
 const server = http.createServer(async (request, response) => {
