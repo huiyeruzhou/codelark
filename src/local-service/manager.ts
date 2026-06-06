@@ -5,8 +5,9 @@ import { spawn } from 'node:child_process';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 
-import { CODELARK_HOME, loadConfig, loadRawConfigEnv } from '../configuration/index.js';
+import { CODELARK_HOME, loadConfig } from '../configuration/index.js';
 import type { ChannelInstance, Config, FeishuChannelConfig } from '../configuration/index.js';
+import { createConfigService } from '../configuration/service.js';
 import {
   clearStaleBridgeInstanceLock,
   readBridgeInstanceLock,
@@ -603,9 +604,7 @@ function buildDaemonEnv(): NodeJS.ProcessEnv {
   }
   env.CODELARK_HOME = CODELARK_HOME;
   Object.assign(env, buildLarkCliRuntimeEnv());
-  for (const [key, value] of loadRawConfigEnv()) {
-    env[key] = value;
-  }
+  Object.assign(env, createConfigService({ codelarkHome: CODELARK_HOME }).exportProcessEnv());
   delete env.CLAUDECODE;
   return env;
 }
@@ -1046,6 +1045,7 @@ export const _testOnly = {
   readBridgeInstanceLock,
   releaseBridgeInstanceLock,
   clearStaleBridgeInstanceLock,
+  buildDaemonEnv,
   buildLarkCliRuntimeEnv,
   writeLarkCliSourceProjection,
   hasTargetLarkCliUsers,
