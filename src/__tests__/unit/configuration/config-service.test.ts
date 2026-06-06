@@ -35,6 +35,81 @@ describe('ConfigService v2 foundation', () => {
     }
   });
 
+  it('runs startup migrations before reading home TOML and then ignores legacy config.env', () => {
+    const home = tempHome();
+    try {
+      writeFile(path.join(home, 'config.env'), [
+        'CODELARK_ENABLED_CHANNELS=feishu',
+        'CODELARK_CODEX_DEFAULT_MODEL=legacy-model',
+        'CODELARK_FEISHU_APP_ID=legacy-app',
+        'CODELARK_FEISHU_DOMAIN=lark',
+      ].join('\n'));
+
+      const service = createConfigService({
+        codelarkHome: home,
+        env: {},
+        migrationNow: () => new Date('2026-06-06T15:00:00.000Z'),
+      });
+
+      assert.equal(service.migrationResult?.changed, true);
+      assert.equal(service.migrationResult?.applied[0]?.id, 'v1');
+      assert.equal(fs.existsSync(path.join(home, 'config.toml')), true);
+      assert.equal(service.get('runtime.codex.model'), 'legacy-model');
+      assert.equal(service.get('channels[].config.appId'), 'legacy-app');
+      assert.equal(service.get('channels[].config.site'), 'lark');
+
+      writeFile(path.join(home, 'config.env'), [
+        'CODELARK_CODEX_DEFAULT_MODEL=must-not-be-read',
+        'CODELARK_FEISHU_APP_ID=must-not-be-read',
+      ].join('\n'));
+      const afterEnvEdit = createConfigService({ codelarkHome: home, env: {} });
+      assert.equal(afterEnvEdit.migrationResult?.changed, false);
+      assert.equal(afterEnvEdit.get('runtime.codex.model'), 'legacy-model');
+      assert.equal(afterEnvEdit.get('channels[].config.appId'), 'legacy-app');
+    } finally {
+      fs.rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it('can disable startup migrations for low-level source-chain tests', () => {
+    const home = tempHome();
+    try {
+      writeFile(path.join(home, 'config.env'), 'CODELARK_CODEX_DEFAULT_MODEL=legacy-model\n');
+      const service = createConfigService({ codelarkHome: home, env: {}, migrate: false });
+
+      assert.equal(service.migrationResult, undefined);
+      assert.equal(service.get('runtime.codex.model'), '');
+      assert.equal(fs.existsSync(path.join(home, 'config.toml')), false);
+    } finally {
+      fs.rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it('fails startup migration without writing state when legacy fallback needs confirmation', () => {
+    const home = tempHome();
+    try {
+      writeFile(path.join(home, 'config.json'), JSON.stringify({
+        schemaVersion: 1,
+        runtime: {
+          provider: 'claude',
+          claude: {
+            permissionMode: 'acceptEdits',
+          },
+        },
+        channels: [],
+      }));
+
+      assert.throws(
+        () => createConfigService({ codelarkHome: home, env: {} }),
+        /Cannot migrate legacy Claude permissionMode=acceptEdits/,
+      );
+      assert.equal(fs.existsSync(path.join(home, 'config.toml')), false);
+      assert.equal(fs.existsSync(path.join(home, 'runtime', 'config-migrations.json')), false);
+    } finally {
+      fs.rmSync(home, { recursive: true, force: true });
+    }
+  });
+
   it('merges home, local, env, cli, channel, session, and request in source-chain order', () => {
     const home = tempHome();
     const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'codelark-config-local-'));

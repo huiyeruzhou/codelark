@@ -2,10 +2,16 @@ import { configFields, findConfigField } from './fields.js';
 import type { ConfigField, ConfigPath, ConfigSourceKind, ConfigWriteScope, SourceRef } from './fields-types.js';
 import { envToConfigPatch, type EnvCompatWarning } from './env-compat.js';
 import { mergeConfigLayers, mergePatch, type ConfigLayer, type MergeResult } from './merge.js';
+import {
+  runConfigMigrations,
+  type ConfigMigration,
+  type RunConfigMigrationsResult,
+} from './migrations/index.js';
 import { getConfigPath, unsetConfigPath } from './path-access.js';
 import { exportProcessEnv, exportRuntimeSettings } from './projections.js';
 import {
   channelTomlPath,
+  defaultCodelarkHome,
   readDefaultsConfig,
   readTomlConfig,
   resolveConfigPaths,
@@ -46,6 +52,7 @@ export interface EffectiveConfig extends MergeResult {
 }
 
 export interface ConfigService {
+  readonly migrationResult?: RunConfigMigrationsResult;
   snapshot(scope?: ConfigScope, request?: ConfigPatch): EffectiveConfig;
   get<T = unknown>(path: ConfigPath, scope?: ConfigScope, request?: ConfigPatch): T;
   resolve(path: ConfigPath, scope?: ConfigScope, request?: ConfigPatch): ConfigResolveResult;
@@ -60,6 +67,9 @@ export interface ConfigServiceOptions {
   codelarkHome?: string;
   env?: NodeJS.ProcessEnv;
   cli?: ConfigPatch;
+  migrate?: boolean;
+  migrations?: ConfigMigration[];
+  migrationNow?: () => Date;
 }
 
 function writeScopeForTarget(target: ConfigWriteTarget): ConfigWriteScope {
@@ -123,12 +133,20 @@ function maskSecretValue(value: unknown): unknown {
 }
 
 export function createConfigService(options: ConfigServiceOptions = {}): ConfigService {
+  const codelarkHome = options.codelarkHome || defaultCodelarkHome();
+  const migrationResult = options.migrate === false
+    ? undefined
+    : runConfigMigrations({
+      codelarkHome,
+      ...(options.migrations ? { migrations: options.migrations } : {}),
+      ...(options.migrationNow ? { now: options.migrationNow } : {}),
+    });
   const env = options.env || process.env;
   const cli = options.cli ? configPatchSchema.parse(options.cli) : undefined;
 
   function pathsFor(scope?: ConfigScope): ConfigPaths {
     return resolveConfigPaths({
-      codelarkHome: options.codelarkHome,
+      codelarkHome,
       cwd: scope?.kind === 'local'
         ? scope.cwd
         : scope && 'cwd' in scope
@@ -216,6 +234,7 @@ export function createConfigService(options: ConfigServiceOptions = {}): ConfigS
   }
 
   return {
+    migrationResult,
     snapshot,
     get<T = unknown>(path: ConfigPath, scope?: ConfigScope, request?: ConfigPatch): T {
       return valueFor(path, snapshot(scope, request).config) as T;
