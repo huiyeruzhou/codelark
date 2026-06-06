@@ -1,11 +1,13 @@
 import '../../../setup/test-setup.js';
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 
 import { handleUiConfigRoute } from '../../../../operator-ui/routes/config.js';
 import { configToPayload, mergeConfig } from '../../../../operator-ui/application/config.js';
-import type { Config } from '../../../../configuration/index.js';
+import { CODELARK_HOME, CONFIG_JSON_PATH, CONFIG_PATH, type Config } from '../../../../configuration/index.js';
 
 function createResponse(): ServerResponse & { body: string; statusCodeWritten?: number } {
   return {
@@ -20,6 +22,16 @@ function createResponse(): ServerResponse & { body: string; statusCodeWritten?: 
       return this;
     },
   } as ServerResponse & { body: string; statusCodeWritten?: number };
+}
+
+function createJsonRequest(method: string, body: unknown): IncomingMessage {
+  const chunks = [Buffer.from(JSON.stringify(body))];
+  return {
+    method,
+    async *[Symbol.asyncIterator]() {
+      yield* chunks;
+    },
+  } as IncomingMessage;
 }
 
 const baseConfig: Config = {
@@ -69,6 +81,91 @@ describe('handleUiConfigRoute', () => {
     const body = JSON.parse(response.body) as { runtime?: string; availableModels?: unknown[] };
     assert.equal(body.runtime, 'codex');
     assert.ok(Array.isArray(body.availableModels));
+  });
+
+  it('posts v2 config updates through TOML without rewriting legacy env/json files', async () => {
+    const configTomlPath = path.join(CODELARK_HOME, 'config.toml');
+    const previousToml = fs.existsSync(configTomlPath) ? fs.readFileSync(configTomlPath, 'utf-8') : null;
+    const previousEnvFile = fs.existsSync(CONFIG_PATH) ? fs.readFileSync(CONFIG_PATH, 'utf-8') : null;
+    const previousJsonFile = fs.existsSync(CONFIG_JSON_PATH) ? fs.readFileSync(CONFIG_JSON_PATH, 'utf-8') : null;
+    const envKeys = Object.keys(process.env)
+      .filter((key) => key.startsWith('CODELARK_') && key !== 'CODELARK_HOME');
+    const previousEnv = new Map(envKeys.map((key) => [key, process.env[key]]));
+
+    try {
+      for (const key of envKeys) delete process.env[key];
+      fs.mkdirSync(CODELARK_HOME, { recursive: true });
+      fs.writeFileSync(configTomlPath, `
+schema_version = 2
+
+[runtime]
+provider = "codex"
+
+[runtime.codex]
+provider = "sdk"
+yolo_mode = "off"
+
+[[channels]]
+id = "feishu-default"
+alias = "飞书"
+provider = "feishu"
+enabled = true
+
+[channels.config]
+app_id = "ui-old-app"
+app_secret = "ui-old-secret"
+history_message_limit = 8
+`);
+      fs.writeFileSync(CONFIG_PATH, 'CODELARK_HISTORY_MESSAGE_LIMIT=5\n');
+      fs.writeFileSync(CONFIG_JSON_PATH, JSON.stringify({
+        schemaVersion: 1,
+        runtime: { provider: 'codex', bridge: { historyMessageLimit: 6 } },
+        channels: [],
+      }, null, 2));
+
+      const response = createResponse();
+      const handled = await handleUiConfigRoute({
+        request: createJsonRequest('POST', {
+          runtime: 'claude',
+          defaultProvider: 'tmux',
+          defaultMode: 'yolo',
+          historyMessageLimit: 14,
+          codexNetworkAccess: false,
+        }),
+        response,
+        url: new URL('http://localhost/api/config'),
+      });
+
+      assert.equal(handled, true);
+      assert.equal(response.statusCodeWritten, 200);
+      const body = JSON.parse(response.body) as { ok?: boolean; config?: Record<string, unknown> };
+      assert.equal(body.ok, true);
+      assert.equal(body.config?.runtime, 'claude');
+      assert.equal(body.config?.defaultProvider, 'tmux');
+      assert.equal(body.config?.defaultMode, 'yolo');
+      assert.equal(body.config?.historyMessageLimit, 14);
+      assert.equal(body.config?.codexNetworkAccess, false);
+      assert.equal(fs.readFileSync(CONFIG_PATH, 'utf-8'), 'CODELARK_HISTORY_MESSAGE_LIMIT=5\n');
+      const legacyJson = JSON.parse(fs.readFileSync(CONFIG_JSON_PATH, 'utf-8')) as any;
+      assert.equal(legacyJson.runtime.bridge.historyMessageLimit, 6);
+      const savedToml = fs.readFileSync(configTomlPath, 'utf-8');
+      assert.match(savedToml, /provider = "claude"/);
+      assert.match(savedToml, /provider = "tmux"/);
+      assert.match(savedToml, /yolo_mode = "on"/);
+      assert.match(savedToml, /history_message_limit = 14/);
+      assert.match(savedToml, /network_access = false/);
+    } finally {
+      if (previousToml === null) fs.rmSync(configTomlPath, { force: true });
+      else fs.writeFileSync(configTomlPath, previousToml, 'utf-8');
+      if (previousEnvFile === null) fs.rmSync(CONFIG_PATH, { force: true });
+      else fs.writeFileSync(CONFIG_PATH, previousEnvFile, 'utf-8');
+      if (previousJsonFile === null) fs.rmSync(CONFIG_JSON_PATH, { force: true });
+      else fs.writeFileSync(CONFIG_JSON_PATH, previousJsonFile, 'utf-8');
+      for (const [key, value] of previousEnv) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+    }
   });
 
   it('ignores routes owned by other UI modules', async () => {
