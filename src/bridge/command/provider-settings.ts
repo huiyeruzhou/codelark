@@ -2,6 +2,7 @@ import type {
   CodexReasoningEffort,
   CodexSandboxMode,
 } from '../../configuration/index.js';
+import { createConfigService } from '../../configuration/service.js';
 import type { BridgeStore, ChannelChat, InboundMessage } from '../../domain/index.js';
 import {
   getSessionActiveRuntime,
@@ -37,6 +38,20 @@ import * as router from '../session/channel-router.js';
 
 const CODEX_PROVIDER_OPTIONS_TEXT = '可选：`sdk`（默认 SDK 路径） `pty`（跨平台 Codex TUI 路径） `tmux`（可 attach 的 Codex TUI/tmux 路径）';
 const CLAUDE_PROVIDER_OPTIONS_TEXT = '可选：`pty`（Claude Code TUI/mirror 路径，默认） `sdk`（Claude Agent SDK 原生事件路径）';
+
+function setSessionCodexProviderToml(sessionId: string, provider: 'sdk' | 'tmux' | 'pty'): void {
+  createConfigService({ migrate: false }).set(
+    { kind: 'session', sessionId },
+    { runtime: { codex: { provider } } },
+  );
+}
+
+function setSessionClaudeProviderToml(sessionId: string, provider: 'sdk' | 'pty'): void {
+  createConfigService({ migrate: false }).set(
+    { kind: 'session', sessionId },
+    { runtime: { claude: { provider } } },
+  );
+}
 
 function parseCodexProviderArg(raw: string): 'sdk' | 'tmux' | 'pty' | null {
   const token = raw.trim().toLowerCase();
@@ -107,6 +122,7 @@ export async function handleProviderCommand(options: {
       });
     }
     options.store.updateSession(session.id, setSessionClaudeProviderUpdate(requestedProvider));
+    setSessionClaudeProviderToml(session.id, requestedProvider);
     await reconcileMirrorSubscriptionsBestEffort(options.deps, `claude provider ${requestedProvider} switch`);
     return buildCommandFields(
       '已切换 Claude Provider',
@@ -153,6 +169,7 @@ export async function handleProviderCommand(options: {
   }
   if (requestedProvider === 'sdk') {
     options.store.updateSession(session.id, setSessionCodexProviderUpdate('sdk'));
+    setSessionCodexProviderToml(session.id, 'sdk');
     await reconcileMirrorSubscriptionsBestEffort(options.deps, 'provider sdk switch');
     return buildCommandFields(
       '已切换 Codex Provider',
@@ -193,6 +210,7 @@ export async function handleProviderCommand(options: {
       setSessionCodexProviderUpdate('pty'),
       setSessionCodexThreadIdUpdate(threadId),
     ));
+    setSessionCodexProviderToml(session.id, 'pty');
     await reconcileMirrorSubscriptionsBestEffort(options.deps, 'provider pty switch');
     return buildCommandFields(
       '已切换 Codex Provider',
@@ -237,6 +255,7 @@ export async function handleProviderCommand(options: {
     autoEnter: true,
     threadId,
   }));
+  setSessionCodexProviderToml(session.id, 'tmux');
   await reconcileMirrorSubscriptionsBestEffort(options.deps, 'provider tmux switch');
   return buildCommandFields(
     '已切换 Codex Provider',

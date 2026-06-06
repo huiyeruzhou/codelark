@@ -14,6 +14,7 @@ import { handleBridgeCommand } from '../../../../bridge/command/index.js';
 import {
   resolveClaudeRuntimeConfig,
   resolveDisplayedModel,
+  resolveEffectiveCodexProvider,
   resolveEffectiveNetworkAccess,
   resolveEffectiveMode,
   resolveEffectiveReasoningEffort,
@@ -52,6 +53,7 @@ import {
   getSessionClaudeReasoningEffort,
   getSessionCodexModel,
   getSessionCodexNetworkAccess,
+  getSessionCodexProvider,
   getSessionCodexReasoningEffort,
   getSessionCodexSandboxMode,
   getSessionTmuxAutoEnter,
@@ -2633,6 +2635,16 @@ describe('command-dispatch', () => {
       assert.equal(sent.length, 1);
       assert.match(sent.at(-1)?.text || '', /已切换 Codex Provider/);
       assert.match(sent.at(-1)?.text || '', /\/tmux-screen/);
+      assert.equal(
+        createConfigService({ migrate: false, env: {} }).get('runtime.codex.provider', {
+          kind: 'session',
+          sessionId: session.id,
+        }),
+        'tmux',
+      );
+      store.updateSession(session.id, { runtime: { codex: { provider: undefined } } });
+      assert.equal(getSessionCodexProvider(store.getSession(session.id)), undefined);
+      assert.equal(resolveEffectiveCodexProvider(store.getSession(session.id)), 'tmux');
       const tmuxLog = fs.readFileSync(fakeTmux.logPath, 'utf-8');
       assert.match(tmuxLog, /has-session -t codex_existing/);
       assert.match(tmuxLog, /kill-session -t codex_existing/);
@@ -2991,17 +3003,31 @@ describe('command-dispatch', () => {
       }),
       'high',
     );
-    store.updateSession(session.id, { runtime: { activeRuntime: 'claude', claude: { model: undefined, permissionMode: undefined, reasoningEffort: undefined } } });
+    assert.equal(
+      createConfigService({ migrate: false, env: {} }).get('runtime.claude.provider', {
+        kind: 'session',
+        sessionId: session.id,
+      }),
+      'sdk',
+    );
+    store.updateSession(session.id, {
+      runtime: {
+        activeRuntime: 'claude',
+        claude: { model: undefined, permissionMode: undefined, reasoningEffort: undefined, provider: undefined },
+      },
+    });
     assert.equal(getSessionClaudeModel(store.getSession(session.id)), undefined);
     assert.equal(getSessionClaudeReasoningEffort(store.getSession(session.id)), undefined);
     assert.equal(getSessionClaudePermissionMode(store.getSession(session.id)), undefined);
+    assert.equal(getSessionClaudeProvider(store.getSession(session.id)), undefined);
     assert.deepEqual(
       {
+        provider: resolveClaudeRuntimeConfig(store.getSession(session.id)).provider,
         model: resolveClaudeRuntimeConfig(store.getSession(session.id)).model,
         permissionMode: resolveClaudeRuntimeConfig(store.getSession(session.id)).permissionMode,
         reasoningEffort: resolveClaudeRuntimeConfig(store.getSession(session.id)).reasoningEffort,
       },
-      { model: 'sonnet', permissionMode: 'bypassPermissions', reasoningEffort: 'high' },
+      { provider: 'sdk', model: 'sonnet', permissionMode: 'bypassPermissions', reasoningEffort: 'high' },
     );
     assert.match(sent.at(-4)?.text || '', /Claude Code 模式/);
     assert.match(sent.at(-3)?.text || '', /Claude Code 模型/);
@@ -3196,6 +3222,23 @@ describe('command-dispatch', () => {
       assert.equal(resolveDisplayedModel(null, store.getSession(session.id), 'fallback-model'), 'fallback-model');
       assert.match(sent.at(-1)?.text || '', /已恢复默认模型/);
       assert.match(sent.at(-1)?.text || '', /配置已保存/);
+
+      await handleBridgeCommand(adapter, { address, text: '/p sdk', messageId: `incoming-${provider}-provider-sdk` } as any, '/p sdk', {
+        ...deps,
+        reconcileMirrorSubscriptions: async () => {},
+      });
+      assert.equal(getSessionCodexProvider(store.getSession(session.id)), 'sdk');
+      assert.equal(
+        createConfigService({ migrate: false, env: {} }).get('runtime.codex.provider', {
+          kind: 'session',
+          sessionId: session.id,
+        }),
+        'sdk',
+      );
+      store.updateSession(session.id, { runtime: { codex: { provider: undefined } } });
+      assert.equal(getSessionCodexProvider(store.getSession(session.id)), undefined);
+      assert.equal(resolveEffectiveCodexProvider(store.getSession(session.id)), 'sdk');
+      assert.match(sent.at(-1)?.text || '', /已切换 Codex Provider/);
     }
   });
 

@@ -160,6 +160,8 @@ export interface ClaudeRuntimeConfig {
 
 export function resolveEffectiveClaudeProvider(session?: BridgeSession | null): ClaudeProviderChoice {
   const { store } = getBridgeContext();
+  const tomlProvider = getSessionTomlOverride<ClaudeProviderChoice>(session, 'runtime.claude.provider');
+  if (tomlProvider === 'sdk' || tomlProvider === 'pty') return tomlProvider;
   const sessionProvider = getSessionClaudeProvider(session);
   if (sessionProvider === 'sdk' || sessionProvider === 'pty') return sessionProvider;
   const configured = store.getSetting('bridge_claude_provider');
@@ -184,6 +186,8 @@ export function resolveEffectiveMode(
 
 export function resolveEffectiveCodexProvider(session?: BridgeSession | null): SessionRuntimeCodexProvider {
   const { store } = getBridgeContext();
+  const tomlProvider = getSessionTomlOverride<SessionRuntimeCodexProvider>(session, 'runtime.codex.provider');
+  if (tomlProvider === 'sdk' || tomlProvider === 'tmux' || tomlProvider === 'pty') return tomlProvider;
   const sessionProvider = getSessionCodexProvider(session);
   if (sessionProvider === 'sdk' || sessionProvider === 'tmux' || sessionProvider === 'pty') return sessionProvider;
   const configured = store.getSetting('bridge_default_provider');
