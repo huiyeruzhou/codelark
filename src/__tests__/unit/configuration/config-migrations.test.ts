@@ -155,4 +155,30 @@ describe('config migration runner', () => {
       fs.rmSync(home, { recursive: true, force: true });
     }
   });
+
+  it('does not apply v1 migration when legacy Claude permissionMode needs product confirmation', () => {
+    const home = tempHome();
+    try {
+      const paths = resolveMigrationPaths(home);
+      writeFile(paths.legacyConfigJson, JSON.stringify({
+        schemaVersion: 1,
+        runtime: {
+          provider: 'claude',
+          claude: {
+            permissionMode: 'plan',
+          },
+        },
+        channels: [],
+      }));
+
+      assert.throws(
+        () => runConfigMigrations({ codelarkHome: home }),
+        /Cannot migrate legacy Claude permissionMode=plan/,
+      );
+      assert.equal(fs.existsSync(paths.homeToml), false);
+      assert.equal(fs.existsSync(paths.migrationState), false);
+    } finally {
+      fs.rmSync(home, { recursive: true, force: true });
+    }
+  });
 });

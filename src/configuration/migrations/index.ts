@@ -9,6 +9,7 @@ import type {
   MigrationPaths,
   RunConfigMigrationsResult,
 } from './types.js';
+import { v1ConfigMigration } from './v1.js';
 
 export type {
   ConfigMigration,
@@ -31,7 +32,7 @@ const EMPTY_STATE: ConfigMigrationState = {
   applied: [],
 };
 
-export const configMigrations: ConfigMigration[] = [];
+export const configMigrations: ConfigMigration[] = [v1ConfigMigration];
 
 function atomicWriteText(filePath: string, content: string, mode?: number): void {
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
