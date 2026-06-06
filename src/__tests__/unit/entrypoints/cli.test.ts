@@ -34,7 +34,7 @@ describe('cli entrypoint', () => {
 
   it('parses config overrides before dispatching the command', () => {
     assert.deepEqual(parseCliInvocation([
-      '--set', 'runtime.provider=claude',
+      '--set', 'runtime.agent=claude',
       'run',
       '--set', 'runtime.codex.provider=tmux',
     ]), {
@@ -43,7 +43,7 @@ describe('cli entrypoint', () => {
       configOverrides: {
         patch: {
           runtime: {
-            provider: 'claude',
+            agent: 'claude',
             codex: { provider: 'tmux' },
           },
         },

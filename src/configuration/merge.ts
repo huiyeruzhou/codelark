@@ -52,7 +52,7 @@ export function mergePatch(target: ConfigPatch, source: ConfigPatch): ConfigPatc
   if (source.runtime) {
     target.runtime = {
       ...(target.runtime || {}),
-      ...(source.runtime.provider !== undefined ? { provider: source.runtime.provider } : {}),
+      ...(source.runtime.agent !== undefined ? { agent: source.runtime.agent } : {}),
       ...(source.runtime.codex ? { codex: { ...(target.runtime?.codex || {}), ...source.runtime.codex } } : {}),
       ...(source.runtime.claude ? { claude: { ...(target.runtime?.claude || {}), ...source.runtime.claude } } : {}),
     };

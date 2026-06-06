@@ -96,7 +96,7 @@ describe('v1 config migration e2e', () => {
       assert.equal(fs.existsSync(`${paths.legacyConfigEnv}.migrated-v1`), true);
 
       const service = createConfigService({ codelarkHome: home, env: {} });
-      assert.equal(service.get('runtime.provider'), 'codex');
+      assert.equal(service.get('runtime.agent'), 'codex');
       assert.equal(service.get('runtime.codex.model'), 'env-model');
       assert.equal(service.get('runtime.codex.provider'), 'tmux');
       assert.equal(service.get('runtime.codex.sandboxMode'), 'danger-full-access');
@@ -188,7 +188,7 @@ describe('v1 config migration e2e', () => {
       assert.equal(fs.existsSync(path.join(paths.sessionConfigDir, 'session-claude.toml')), true);
 
       const service = createConfigService({ codelarkHome: home, env: {} });
-      assert.equal(service.get('runtime.provider', { kind: 'session', sessionId: 'session-codex' }), 'codex');
+      assert.equal(service.get('runtime.agent', { kind: 'session', sessionId: 'session-codex' }), 'codex');
       assert.equal(service.get('session.workspace', { kind: 'session', sessionId: 'session-codex' }), '/repo/codex');
       assert.equal(service.get('session.tmuxSessionName', { kind: 'session', sessionId: 'session-codex' }), 'codex-tmux');
       assert.equal(service.get('session.tmuxCaptureLines', { kind: 'session', sessionId: 'session-codex' }), 120);
@@ -201,7 +201,7 @@ describe('v1 config migration e2e', () => {
       assert.equal(service.get('runtime.codex.networkAccess', { kind: 'session', sessionId: 'session-codex' }), false);
       assert.equal(service.get('runtime.codex.reasoningEffort', { kind: 'session', sessionId: 'session-codex' }), 'high');
 
-      assert.equal(service.get('runtime.provider', { kind: 'session', sessionId: 'session-claude' }), 'claude');
+      assert.equal(service.get('runtime.agent', { kind: 'session', sessionId: 'session-claude' }), 'claude');
       assert.equal(service.get('session.workspace', { kind: 'session', sessionId: 'session-claude' }), '/repo/claude-config');
       assert.equal(service.get('runtime.claude.model', { kind: 'session', sessionId: 'session-claude' }), 'claude-sonnet');
       assert.equal(service.get('runtime.claude.provider', { kind: 'session', sessionId: 'session-claude' }), 'pty');

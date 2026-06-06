@@ -7,8 +7,8 @@ import path from 'node:path';
 import { CODELARK_HOME, DEFAULT_WORKSPACE_ROOT } from '../../../configuration/index.js';
 import { JsonFileStore } from '../../../storage/json-store.js';
 import { initBridgeContext } from '../../../bridge/host/context.js';
-import { resolve } from '../../../bridge/host/channel-router.js';
-import { getSessionActiveRuntime, getSessionWorkingDirectory } from '../../../domain/session-runtime.js';
+import { createBinding, resolve } from '../../../bridge/host/channel-router.js';
+import { getSessionActiveRuntime, getSessionCodexModel, getSessionWorkingDirectory } from '../../../domain/session-runtime.js';
 import { writeCodexSessionJsonlFixture } from '../../helpers/bridge/test-bridge-utils.js';
 
 const DATA_DIR = path.join(CODELARK_HOME, 'data');
@@ -55,7 +55,7 @@ describe('channel-router default targets', () => {
       'schema_version = 2',
       '',
       '[runtime]',
-      'provider = "codex"',
+      'agent = "codex"',
       '',
       '[runtime.codex]',
       'yolo_mode = "off"',
@@ -164,6 +164,22 @@ describe('channel-router default targets', () => {
   });
 
   it('creates a Claude temporary session when default runtime is claude', () => {
+    fs.writeFileSync(CONFIG_TOML_PATH, [
+      'schema_version = 2',
+      '',
+      '[runtime]',
+      'agent = "claude"',
+      '',
+      '[[channels]]',
+      'id = "feishu-default"',
+      'alias = "飞书"',
+      'provider = "feishu"',
+      'enabled = true',
+      '',
+      '[channels.config]',
+      'history_message_limit = 8',
+      '',
+    ].join('\n'), 'utf-8');
     const store = new JsonFileStore(makeClaudeSettings());
     initBridgeContext({
       store,
@@ -185,5 +201,61 @@ describe('channel-router default targets', () => {
     assert.equal(session?.session_type, 'normal');
     assert.equal(session?.name, 'ou_123');
     assert.equal(getSessionWorkingDirectory(session), DEFAULT_WORKSPACE_ROOT);
+  });
+
+  it('creates default sessions from home TOML before legacy settings', () => {
+    const workspaceRoot = path.join(CODELARK_HOME, 'toml-workspace');
+    fs.mkdirSync(workspaceRoot, { recursive: true });
+    const writeToml = (runtime: 'codex' | 'claude') => fs.writeFileSync(CONFIG_TOML_PATH, [
+      'schema_version = 2',
+      '',
+      '[runtime]',
+      `agent = "${runtime}"`,
+      '',
+      '[bridge]',
+      `default_workspace = ${JSON.stringify(workspaceRoot)}`,
+      '',
+      '[runtime.codex]',
+      'model = "toml-codex-model"',
+      '',
+      '[[channels]]',
+      'id = "feishu-default"',
+      'alias = "飞书"',
+      'provider = "feishu"',
+      'enabled = true',
+      '',
+      '[channels.config]',
+      'history_message_limit = 8',
+      '',
+    ].join('\n'), 'utf-8');
+    writeToml('claude');
+    const store = new JsonFileStore(makeSettings());
+    initBridgeContext({
+      store,
+      llm: noopLlm,
+      permissions: { resolvePendingPermission: () => false },
+      lifecycle: {},
+    });
+
+    const draftBinding = resolve({
+      channelType: 'feishu-default',
+      chatId: 'oc_toml_draft',
+      userId: 'ou_toml',
+      displayName: 'TOML 默认',
+    });
+    const draftSession = store.getSession(draftBinding.bridgeSessionId);
+    assert.equal(getSessionActiveRuntime(draftSession), 'claude');
+    assert.equal(getSessionWorkingDirectory(draftSession), workspaceRoot);
+
+    writeToml('codex');
+    const codexBinding = createBinding({
+      channelType: 'feishu-default',
+      chatId: 'oc_toml_codex',
+      userId: 'ou_codex',
+      displayName: 'TOML Codex',
+    }, workspaceRoot);
+    const codexSession = store.getSession(codexBinding.bridgeSessionId);
+    assert.equal(getSessionActiveRuntime(codexSession), 'codex');
+    assert.equal(getSessionCodexModel(codexSession), 'toml-codex-model');
   });
 });

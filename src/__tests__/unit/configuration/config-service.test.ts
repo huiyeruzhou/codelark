@@ -23,7 +23,7 @@ describe('ConfigService v2 foundation', () => {
       const snapshot = service.snapshot();
 
       assert.equal(snapshot.config.schemaVersion, 2);
-      assert.equal(snapshot.config.runtime.provider, 'codex');
+      assert.equal(snapshot.config.runtime.agent, 'codex');
       assert.equal(snapshot.config.runtime.codex.sandboxMode, 'workspace-write');
       assert.equal(snapshot.config.runtime.claude.provider, 'sdk');
       assert.equal(snapshot.config.bridge.defaultWorkspace, '~');
@@ -249,7 +249,7 @@ app_secret = "home-app-secret"
 
       service.replace({ kind: 'home' }, {
         schemaVersion: 2,
-        runtime: { provider: 'claude' },
+        runtime: { agent: 'claude' },
         channels: [{
           id: 'feishu-default',
           alias: '飞书',
@@ -258,7 +258,7 @@ app_secret = "home-app-secret"
           config: { historyMessageLimit: 12 },
         }],
       });
-      assert.equal(service.get('runtime.provider'), 'claude');
+      assert.equal(service.get('runtime.agent'), 'claude');
       assert.equal(service.get('channels[].config.historyMessageLimit'), 12);
       assert.equal(service.get('bridge.uiAllowLan'), false);
     } finally {
@@ -309,7 +309,7 @@ app_secret = "home-app-secret"
       const service = createConfigService({
         codelarkHome: home,
         env: {
-          CODELARK_RUNTIME: 'claude',
+          CODELARK_AGENT: 'claude',
           CODELARK_CODEX_MODEL: 'gpt-test',
           CODELARK_FEISHU_APP_ID: 'app-id',
           CODELARK_FEISHU_APP_SECRET: 'secret',
@@ -318,7 +318,7 @@ app_secret = "home-app-secret"
       });
 
       const env = service.exportProcessEnv();
-      assert.equal(env.CODELARK_RUNTIME, 'claude');
+      assert.equal(env.CODELARK_AGENT, 'claude');
       assert.equal(env.CODELARK_CODEX_MODEL, 'gpt-test');
       assert.equal(env.CODELARK_FEISHU_APP_ID, 'app-id');
       assert.equal(env.CODELARK_ENABLED_CHANNELS, 'feishu');

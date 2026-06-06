@@ -3617,7 +3617,7 @@ enabled = true
   it('views and updates current Feishu channel group mention requirement with /require-at', async () => {
     initTestContext({ dynamicSettings: true });
     createConfigService({ migrate: false, env: {} }).set({ kind: 'home' }, {
-      runtime: { provider: 'codex', codex: { yoloMode: 'off' } },
+      runtime: { agent: 'codex', codex: { yoloMode: 'off' } },
       channels: [{
         id: 'feishu',
         alias: '飞书',

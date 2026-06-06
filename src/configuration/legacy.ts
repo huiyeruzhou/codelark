@@ -64,7 +64,7 @@ export function configV2ToLegacyConfig(config: ConfigV2): Config {
       updatedAt: '',
       config: { ...channel.config },
     })),
-    runtime: config.runtime.provider,
+    runtime: config.runtime.agent,
     enabledChannels: Array.from(new Set(
       config.channels.filter((channel) => channel.enabled).map((channel) => channel.provider),
     )),
@@ -123,7 +123,7 @@ export function legacyConfigToConfigPatch(config: Config): ConfigPatch {
   return {
     schemaVersion: 2,
     runtime: {
-      provider: config.runtime,
+      agent: config.runtime,
       codex: {
         model: config.defaultModel,
         provider: config.defaultProvider || '',

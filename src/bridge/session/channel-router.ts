@@ -10,6 +10,7 @@ import { getBridgeContext } from '../context.js';
 import { SessionRegistryService } from '../session/registry.js';
 import { getOrCreateDraftSession } from '../session/internal-sessions.js';
 import { recordBindingChange } from '../session/binding-audit.js';
+import { getGlobalStringConfig } from './global-config.js';
 
 /**
  * Resolve an inbound address to a ChannelChat.
@@ -98,8 +99,8 @@ export function createBinding(
 ): ChannelChat {
   const { store } = getBridgeContext();
   const defaultProviderId = store.getSetting('bridge_default_provider_id') || '';
-  const defaultModel = store.getSetting('bridge_default_model') || '';
-  const defaultRuntime = store.getSetting('bridge_default_runtime') === 'claude' ? 'claude' : 'codex';
+  const defaultModel = getGlobalStringConfig('runtime.codex.model', 'bridge_default_model', { store }) || '';
+  const defaultRuntime = getGlobalStringConfig('runtime.agent', 'bridge_default_runtime', { store }) === 'claude' ? 'claude' : 'codex';
   const visibleSessionName = sessionName?.trim() || address.displayName?.trim() || `Bridge: ${address.chatId}`;
   const session = workingDirectory
     ? store.createSession(

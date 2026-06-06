@@ -171,7 +171,7 @@ describe('service-manager lark-cli runtime environment', () => {
         'schema_version = 2',
         '',
         '[runtime]',
-        'provider = "claude"',
+        'agent = "claude"',
         '',
         '[runtime.codex]',
         'provider = "tmux"',
@@ -215,6 +215,7 @@ describe('service-manager lark-cli runtime environment', () => {
     const previousToml = fs.existsSync(configTomlPath) ? fs.readFileSync(configTomlPath, 'utf-8') : null;
     const previousEnvFile = fs.existsSync(configEnvPath) ? fs.readFileSync(configEnvPath, 'utf-8') : null;
     const envKeys = [
+      'CODELARK_AGENT',
       'CODELARK_RUNTIME',
       'CODELARK_CODEX_MODEL',
       'CODELARK_CODEX_DEFAULT_MODEL',
@@ -238,7 +239,7 @@ describe('service-manager lark-cli runtime environment', () => {
         'schema_version = 2',
         '',
         '[runtime]',
-        'provider = "claude"',
+        'agent = "claude"',
         '',
         '[bridge]',
         'default_workspace = "/tmp/codelark-toml-workspace"',
@@ -272,7 +273,7 @@ describe('service-manager lark-cli runtime environment', () => {
 
       assert.equal(env.CODELARK_HOME, home);
       assert.equal(env.LARK_CHANNEL_HOME, home);
-      assert.equal(env.CODELARK_RUNTIME, 'claude');
+      assert.equal(env.CODELARK_AGENT, 'claude');
       assert.equal(env.CODELARK_CODEX_MODEL, 'toml-model');
       assert.equal(env.CODELARK_CODEX_PROVIDER, 'tmux');
       assert.equal(env.CODELARK_CODEX_YOLO_MODE, 'on');
@@ -305,7 +306,7 @@ describe('service-manager lark-cli runtime environment', () => {
         'schema_version = 2',
         '',
         '[runtime]',
-        'provider = "codex"',
+        'agent = "codex"',
         '',
         '[runtime.codex]',
         'model = "toml-model"',
@@ -325,7 +326,7 @@ describe('service-manager lark-cli runtime environment', () => {
 
       const cli = {
         runtime: {
-          provider: 'claude' as const,
+          agent: 'claude' as const,
           codex: {
             model: 'cli-model',
             provider: 'tmux' as const,
@@ -336,11 +337,11 @@ describe('service-manager lark-cli runtime environment', () => {
       const daemonEnv = _testOnly.buildDaemonEnv({ cli });
       const uiEnv = _testOnly.buildUiServerEnv({ cli });
 
-      assert.equal(daemonEnv.CODELARK_RUNTIME, 'claude');
+      assert.equal(daemonEnv.CODELARK_AGENT, 'claude');
       assert.equal(daemonEnv.CODELARK_CODEX_MODEL, 'cli-model');
       assert.equal(daemonEnv.CODELARK_CODEX_PROVIDER, 'tmux');
       assert.equal(daemonEnv.CODELARK_CODEX_YOLO_MODE, 'on');
-      assert.equal(uiEnv.CODELARK_RUNTIME, 'claude');
+      assert.equal(uiEnv.CODELARK_AGENT, 'claude');
       assert.equal(uiEnv.CODELARK_CODEX_MODEL, 'cli-model');
       assert.equal(uiEnv.CODELARK_CODEX_PROVIDER, 'tmux');
       assert.equal(uiEnv.CODELARK_HOME, home);

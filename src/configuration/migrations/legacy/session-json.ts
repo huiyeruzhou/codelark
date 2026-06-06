@@ -94,7 +94,7 @@ function sandboxMode(value: unknown): 'read-only' | 'workspace-write' | 'danger-
 function hasPatchContent(patch: ConfigPatch): boolean {
   return Boolean(
     patch.session
-    || patch.runtime?.provider !== undefined
+    || patch.runtime?.agent !== undefined
     || patch.runtime?.codex
     || patch.runtime?.claude,
   );
@@ -123,7 +123,7 @@ function extractSessionPatch(sessionId: string, session: Record<string, unknown>
   const patch: ConfigPatch = {};
 
   if (runtime.activeRuntime === 'claude' || runtime.activeRuntime === 'codex') {
-    patch.runtime = { provider: runtime.activeRuntime };
+    patch.runtime = { agent: runtime.activeRuntime };
     delete runtime.activeRuntime;
   }
 

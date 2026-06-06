@@ -46,7 +46,7 @@ CodeLark 需要把“默认值、全局配置、项目配置、环境变量、�
 
 | 领域 | canonical path | TOML path | 旧 JSON / session 字段 | 新 env 键 | 兼容旧 env 键 | scoped override |
 | --- | --- | --- | --- | --- | --- | --- |
-| runtime | `runtime.provider` | `runtime.provider` | `runtime.provider` | `CODELARK_RUNTIME` | - | Session: `runtime.activeRuntime` |
+| runtime | `runtime.agent` | `runtime.agent` | `runtime.provider` / `runtime.activeRuntime` | `CODELARK_AGENT` | `CODELARK_RUNTIME` | Session: `runtime.activeRuntime` |
 | bridge | `bridge.defaultWorkspace` | `bridge.default_workspace` | `runtime.bridge.defaultWorkspaceRoot` | `CODELARK_DEFAULT_WORKSPACE_ROOT` | - | `session.workspace` 可作为 scoped override |
 | bridge | `bridge.uiAllowLan` | `bridge.ui_allow_lan` | `runtime.bridge.uiAllowLan` | `CODELARK_UI_ALLOW_LAN` | - | 否 |
 | bridge | `bridge.uiAccessToken` | `bridge.ui_access_token` | `runtime.bridge.uiAccessToken` | `CODELARK_UI_ACCESS_TOKEN` | - | 否 |
@@ -94,7 +94,7 @@ CodeLark 需要把“默认值、全局配置、项目配置、环境变量、�
 5. `config.env` 的角色含混：
    它既是旧配置输入，又是保存后的快照，还会被 `buildDaemonEnv` 注入进程环境。
 6. 命令行覆盖缺失：
-   当前 CLI 主要解析 command，不提供通用配置项 override，例如 `codelark run --set runtime.provider=claude` 或 `--codex-sandbox-mode read-only`。
+   当前 CLI 主要解析 command，不提供通用配置项 override，例如 `codelark run --set runtime.agent=claude` 或 `--codex-sandbox-mode read-only`。
 
 ## 推荐模型
 
@@ -199,7 +199,7 @@ tmux_auto_enter = true
 tmux_echo_input = false
 
 [runtime]
-provider = "codex"
+agent = "codex"
 
 [bridge]
 default_workspace = "~"
@@ -252,7 +252,7 @@ require_mention = false
 | `session.tmux_capture_lines` | `runtime.general.captureLines` | - |
 | `session.tmux_auto_enter` | `runtime.general.autoEnter` | - |
 | `session.tmux_echo_input` | `runtime.general.echoInput` | - |
-| `runtime.provider` | `runtime.provider`、`runtime.activeRuntime` | `CODELARK_RUNTIME` |
+| `runtime.agent` | `runtime.provider`、`runtime.activeRuntime` | `CODELARK_RUNTIME` |
 | `bridge.default_workspace` | `runtime.bridge.defaultWorkspaceRoot` | `CODELARK_DEFAULT_WORKSPACE_ROOT` |
 | `bridge.ui_allow_lan` | `runtime.bridge.uiAllowLan` | `CODELARK_UI_ALLOW_LAN` |
 | `bridge.ui_access_token` | `runtime.bridge.uiAccessToken` | `CODELARK_UI_ACCESS_TOKEN` |
@@ -423,6 +423,18 @@ fallback = runtime.codex.reasoningEffort from cli/env/local/home/defaults
 | `smol-toml` | TOML parse/stringify | 支持 TOML 1.1，包体小，API 聚焦，适合默认、home、local、Channel、Session TOML |
 | `zod` | 校验规则、默认值、coerce、类型推导 | 把运行时校验和 TS 类型放在同一处，替代手写 normalize 分支 |
 | `commander` | CLI command/options 解析 | 当前 CLI 是手写解析；commander 适合给 `run/start/setup` 增加 typed options、help 和 negated boolean |
+
+### 通用配置库调研结论
+
+2026-06-07 重新评估 `node-config`、`wild-config`、`auto-config-loader` 后，不建议把它们作为 CodeLark 配置核心。
+
+| 库 | 能覆盖的部分 | 不能满足的核心需求 |
+| --- | --- | --- |
+| `config` / `node-config` | 应用级默认配置、部署环境分层、env/CLI override | 它的模型围绕 app config directory 和部署环境展开；CodeLark 需要 `request > session > channel > cli > env > local > home > defaults` 的运行时 scope、字段级 provenance、scope 写入约束、legacy migration 和 secret mask。 |
+| `wild-config` | TOML 默认文件、自定义 config 文件、命令行 dotted override | 更像进程启动时的静态配置合并；不能表达 Channel/Session scope 的动态读写、按字段 explain、`channels[]` 按 id 合并、home/channel/session TOML 的 replace/unset 写入。 |
+| `auto-config-loader` | package.json/rc/多格式配置文件查找与加载 | 主要解决“从哪里找配置文件”和“支持哪些格式”；不负责 CodeLark 需要的字段 schema、source priority、provenance、scoped write policy、migration state 或 runtime settings/env projection。 |
+
+因此首版继续采用“专用 source chain + `ConfigService`”作为核心，但限制手写范围：文件解析只交给 `smol-toml`，校验和类型只交给 `zod`，CLI 参数只交给 `commander`；手写代码只保留 CodeLark 特有的 source 顺序、scope 合并、provenance、写入约束和迁移逻辑。未来只有当产品需要 package.json/rc 搜索或多格式项目配置时，才考虑把 `auto-config-loader` 放到 local source 的文件发现层，而不是替代 `ConfigService`。
 
 不建议首版引入 `cosmiconfig` 作为核心读取器。CodeLark 的优先级和 scope 是产品语义明确的 source chain，而不是通用 JS tooling 的 package.json/rc 搜索模型；local 查找自己实现更容易解释。若未来需要支持 `package.json#codelark` 或多文件格式，再评估 `cosmiconfig`。
 

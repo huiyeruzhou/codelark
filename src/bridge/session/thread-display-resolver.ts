@@ -31,6 +31,7 @@ import {
 } from '../../domain/session-runtime.js';
 import { getCodexThreadId } from '../turn/turn-classifier.js';
 import { normalizeReasoningEffort } from '../../configuration/runtime-options.js';
+import { getGlobalStringConfig } from './global-config.js';
 
 export interface ThreadDisplayInfo {
   title: string;
@@ -73,14 +74,19 @@ export class ThreadDisplayService {
     if (runtime === 'claude') {
       return {
         reasoningEffort: getSessionClaudeReasoningEffort(session) || 'default',
-        model: getSessionClaudeModel(session) || this.store.getSetting('bridge_claude_default_model') || 'default',
+        model: getSessionClaudeModel(session)
+          || getGlobalStringConfig('runtime.claude.model', 'bridge_claude_default_model', { store: this.store })
+          || 'default',
       };
     }
     return {
       reasoningEffort: normalizeReasoningEffort(
-        getSessionCodexReasoningEffort(session) || this.store.getSetting('bridge_codex_reasoning_effort'),
+        getSessionCodexReasoningEffort(session)
+          || getGlobalStringConfig('runtime.codex.reasoningEffort', 'bridge_codex_reasoning_effort', { store: this.store }),
       ),
-      model: getSessionCodexModel(session) || this.store.getSetting('bridge_default_model') || 'default',
+      model: getSessionCodexModel(session)
+        || getGlobalStringConfig('runtime.codex.model', 'bridge_default_model', { store: this.store })
+        || 'default',
     };
   }
 

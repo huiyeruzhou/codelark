@@ -26,7 +26,7 @@ describe('runtime settings projection helper', () => {
         'schema_version = 2',
         '',
         '[runtime]',
-        'provider = "claude"',
+        'agent = "claude"',
         '',
         '[runtime.codex]',
         'model = "toml-model"',
@@ -97,7 +97,7 @@ model = "direct-model"
     try {
       writeFile(path.join(home, 'config.toml'), `
 [runtime]
-provider = "codex"
+agent = "codex"
 
 [runtime.codex]
 model = "toml-model"
@@ -107,13 +107,13 @@ provider = "sdk"
       const projection = loadRuntimeSettingsProjection({
         codelarkHome: home,
         env: {
-          CODELARK_RUNTIME: 'codex',
+          CODELARK_AGENT: 'codex',
           CODELARK_CODEX_MODEL: 'env-model',
           CODELARK_CODEX_PROVIDER: 'pty',
         },
         cli: {
           runtime: {
-            provider: 'claude',
+            agent: 'claude',
             codex: {
               model: 'cli-model',
               provider: 'tmux',

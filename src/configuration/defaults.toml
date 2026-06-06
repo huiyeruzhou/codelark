@@ -8,7 +8,7 @@ tmux_auto_enter = true
 tmux_echo_input = false
 
 [runtime]
-provider = "codex"
+agent = "codex"
 
 [bridge]
 default_workspace = "~"

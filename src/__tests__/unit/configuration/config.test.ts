@@ -219,7 +219,7 @@ describe('loadConfig/saveConfig round-trip', () => {
       fs.mkdirSync(path.dirname(configTomlPath), { recursive: true });
       fs.writeFileSync(configTomlPath, `
 [runtime]
-provider = "claude"
+agent = "claude"
 
 [bridge]
 default_workspace = "/v2/workspace"

@@ -199,7 +199,7 @@ export function buildCliHelpText(): string {
     `  ${PRIMARY_CLI_NAME} status                  检查本地服务是否正在运行`,
     '',
     '配置覆盖:',
-    '  --set path=value                    单次覆盖 canonical 配置项，例如 --set runtime.provider=claude',
+    '  --set path=value                    单次覆盖 canonical 配置项，例如 --set runtime.agent=claude',
     '',
     '文件:',
     '  配置: ~/.codelark/config.toml',

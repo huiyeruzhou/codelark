@@ -17,7 +17,7 @@ function baseConfigV2(): ConfigV2 {
       tmuxEchoInput: false,
     },
     runtime: {
-      provider: 'claude',
+      agent: 'claude',
       codex: {
         model: 'gpt-test',
         yoloMode: 'on',
@@ -125,7 +125,7 @@ describe('legacy config compatibility adapter', () => {
     };
 
     const patch = configPatchSchema.parse(legacyConfigToConfigPatch(legacy));
-    assert.equal(patch.runtime?.provider, 'codex');
+    assert.equal(patch.runtime?.agent, 'codex');
     assert.equal(patch.runtime?.codex?.yoloMode, 'off');
     assert.equal(patch.runtime?.codex?.provider, 'sdk');
     assert.equal(patch.runtime?.claude?.yoloMode, 'on');

@@ -1,6 +1,6 @@
 import { z } from 'zod';
 
-export const runtimeProviderSchema = z.enum(['codex', 'claude']);
+export const runtimeAgentSchema = z.enum(['codex', 'claude']);
 export const codexProviderSchema = z.enum(['sdk', 'tmux', 'pty']);
 export const claudeProviderSchema = z.enum(['sdk', 'pty']);
 export const claudeExecutableSchema = z.enum(['claude', 'ccr']);
@@ -42,7 +42,7 @@ export const claudeConfigSchema = z.object({
 });
 
 export const runtimeConfigSchema = z.object({
-  provider: runtimeProviderSchema,
+  agent: runtimeAgentSchema,
   codex: codexConfigSchema,
   claude: claudeConfigSchema,
 });
@@ -94,7 +94,7 @@ export const configPatchSchema = z.object({
   schemaVersion: z.literal(2).optional(),
   session: sessionConfigSchema.partial().optional(),
   runtime: z.object({
-    provider: runtimeProviderSchema.optional(),
+    agent: runtimeAgentSchema.optional(),
     codex: codexConfigSchema.partial().optional(),
     claude: claudeConfigSchema.partial().optional(),
   }).optional(),
@@ -139,7 +139,7 @@ export function tomlToConfigPatch(raw: unknown): ConfigPatch {
   if (Object.keys(sessionPatch).length > 0) patch.session = sessionPatch;
 
   const runtimePatch: NonNullable<ConfigPatch['runtime']> = {};
-  if (runtime.provider !== undefined) runtimePatch.provider = runtime.provider as never;
+  if (runtime.agent !== undefined) runtimePatch.agent = runtime.agent as never;
   const codexPatch = copyDefined<NonNullable<NonNullable<ConfigPatch['runtime']>['codex']>>(codex, [
     ['model', 'model'],
     ['yoloMode', 'yolo_mode'],
@@ -213,7 +213,7 @@ export function configToTomlShape(config: ConfigPatch): Record<string, unknown> 
   }
   if (config.runtime) {
     out.runtime = {
-      ...(config.runtime.provider !== undefined ? { provider: config.runtime.provider } : {}),
+      ...(config.runtime.agent !== undefined ? { agent: config.runtime.agent } : {}),
       ...(config.runtime.codex ? { codex: {
         ...(config.runtime.codex.model !== undefined ? { model: config.runtime.codex.model } : {}),
         ...(config.runtime.codex.yoloMode !== undefined ? { yolo_mode: config.runtime.codex.yoloMode } : {}),

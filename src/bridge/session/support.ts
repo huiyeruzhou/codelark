@@ -7,7 +7,7 @@ import {
   listCodexSessions,
   type CodexSessionSummary,
 } from '../../runtime/codex/session-index.js';
-import { DEFAULT_WORKSPACE_ROOT, normalizeClaudeExecutable, type ClaudeExecutable, type ClaudePermissionMode, type ClaudeProviderChoice } from '../../configuration/index.js';
+import { normalizeClaudeExecutable, type ClaudeExecutable, type ClaudePermissionMode, type ClaudeProviderChoice } from '../../configuration/index.js';
 import { createConfigService } from '../../configuration/service.js';
 import type { ConfigPath } from '../../configuration/fields-types.js';
 import {
@@ -41,6 +41,12 @@ import {
 import type { ChannelChat } from '../../domain/channel.js';
 import type { BridgeSession, BridgeSessionClaudeRuntimeState, BridgeSessionCodexRuntimeState } from '../../domain/session.js';
 import { validateWorkingDirectory } from '../../shared/security/validators.js';
+import {
+  getGlobalBooleanConfig,
+  getGlobalConfigValue,
+  getGlobalStringConfig,
+  getGlobalWorkspaceRoot,
+} from './global-config.js';
 
 const AVAILABLE_CODEX_MODELS = listSelectableCodexModels();
 const AVAILABLE_CODEX_MODEL_MAP = new Map(AVAILABLE_CODEX_MODELS.map((model) => [model.slug, model]));
@@ -70,49 +76,7 @@ export function getCodexSessionByThreadIdSafe(
 }
 
 export function getWorkspaceRoot(): string {
-  return expandHomePath(getGlobalConfigValue<string>(
-    'bridge.defaultWorkspace',
-    'bridge_default_workspace_root',
-    (value) => value || undefined,
-  ) || DEFAULT_WORKSPACE_ROOT);
-}
-
-function parseLegacyBoolean(value: string | null | undefined): boolean | undefined {
-  if (!value) return undefined;
-  const normalized = value.trim().toLowerCase();
-  if (['true', '1', 'on', 'yes'].includes(normalized)) return true;
-  if (['false', '0', 'off', 'no'].includes(normalized)) return false;
-  return undefined;
-}
-
-function getGlobalConfigValue<T>(
-  path: ConfigPath,
-  legacySettingKey: string | undefined,
-  parseLegacy: (value: string) => T | undefined,
-): T | undefined {
-  const { store } = getBridgeContext();
-  try {
-    const resolved = createConfigService({ migrate: false }).resolve(path);
-    if (resolved.source !== 'defaults') return resolved.value as T;
-    const legacy = legacySettingKey ? store.getSetting(legacySettingKey) : '';
-    if (legacy) {
-      const parsed = parseLegacy(legacy);
-      if (parsed !== undefined) return parsed;
-    }
-    return resolved.value as T;
-  } catch (error) {
-    console.error(`[bridge-manager] Failed to resolve global TOML config ${path}:`, error);
-    const legacy = legacySettingKey ? store.getSetting(legacySettingKey) : '';
-    return legacy ? parseLegacy(legacy) : undefined;
-  }
-}
-
-function getGlobalStringConfig(path: ConfigPath, legacySettingKey: string): string | undefined {
-  return getGlobalConfigValue<string>(path, legacySettingKey, (value) => value || undefined);
-}
-
-function getGlobalBooleanConfig(path: ConfigPath, legacySettingKey: string): boolean | undefined {
-  return getGlobalConfigValue<boolean>(path, legacySettingKey, parseLegacyBoolean);
+  return getGlobalWorkspaceRoot();
 }
 
 function getSessionTomlOverride<T>(session: BridgeSession | null | undefined, path: ConfigPath): T | undefined {

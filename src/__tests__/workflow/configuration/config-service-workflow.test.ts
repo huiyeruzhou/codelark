@@ -49,7 +49,7 @@ history_message_limit = 12
     try {
       writeFile(path.join(home, 'config.toml'), `
 [runtime]
-provider = "codex"
+agent = "codex"
 
 [runtime.codex]
 model = "home-model"

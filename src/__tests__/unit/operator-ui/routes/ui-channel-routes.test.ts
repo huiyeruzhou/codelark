@@ -187,7 +187,7 @@ describe('handleUiChannelRoute', () => {
 schema_version = 2
 
 [runtime]
-provider = "codex"
+agent = "codex"
 
 [[channels]]
 id = "feishu-default"

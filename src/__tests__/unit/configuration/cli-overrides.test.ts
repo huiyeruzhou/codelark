@@ -8,7 +8,7 @@ describe('parseConfigCliOverrides', () => {
   it('parses canonical --set assignments into a config patch', () => {
     const parsed = parseConfigCliOverrides([
       'run',
-      '--set', 'runtime.provider=claude',
+      '--set', 'runtime.agent=claude',
       '--set', 'runtime.codex.reasoningEffort=high',
       '--set', 'runtime.codex.networkAccess=false',
       '--set', 'bridge.uiAllowLan=true',
@@ -19,7 +19,7 @@ describe('parseConfigCliOverrides', () => {
     assert.deepEqual(parsed, {
       patch: {
         runtime: {
-          provider: 'claude',
+          agent: 'claude',
           codex: {
             reasoningEffort: 'high',
             networkAccess: false,

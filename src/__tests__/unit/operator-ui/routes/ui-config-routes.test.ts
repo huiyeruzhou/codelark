@@ -125,7 +125,7 @@ describe('handleUiConfigRoute', () => {
       const legacyJson = JSON.parse(fs.readFileSync(CONFIG_JSON_PATH, 'utf-8')) as any;
       assert.equal(legacyJson.runtime.bridge.historyMessageLimit, 6);
       const savedToml = fs.readFileSync(configTomlPath, 'utf-8');
-      assert.match(savedToml, /provider = "claude"/);
+      assert.match(savedToml, /agent = "claude"/);
       assert.match(savedToml, /history_message_limit = 13/);
       assert.match(savedToml, /network_access = false/);
     } finally {
@@ -158,7 +158,7 @@ describe('handleUiConfigRoute', () => {
 schema_version = 2
 
 [runtime]
-provider = "codex"
+agent = "codex"
 
 [runtime.codex]
 provider = "sdk"
@@ -208,7 +208,7 @@ history_message_limit = 8
       const legacyJson = JSON.parse(fs.readFileSync(CONFIG_JSON_PATH, 'utf-8')) as any;
       assert.equal(legacyJson.runtime.bridge.historyMessageLimit, 6);
       const savedToml = fs.readFileSync(configTomlPath, 'utf-8');
-      assert.match(savedToml, /provider = "claude"/);
+      assert.match(savedToml, /agent = "claude"/);
       assert.match(savedToml, /provider = "tmux"/);
       assert.match(savedToml, /yolo_mode = "on"/);
       assert.match(savedToml, /history_message_limit = 14/);

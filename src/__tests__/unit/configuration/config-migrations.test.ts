@@ -138,7 +138,7 @@ describe('config migration runner', () => {
       const backup2 = context.backupFile(source, 'v1');
       context.writeJsonAtomic(path.join(home, 'runtime', 'written.json'), { ok: true });
       context.writeTomlAtomic(path.join(home, 'config', 'sessions', 's1.toml'), {
-        runtime: { provider: 'codex' },
+        runtime: { agent: 'codex' },
       });
 
       assert.equal(backup1, backup2);
@@ -149,7 +149,7 @@ describe('config migration runner', () => {
       );
       assert.match(
         fs.readFileSync(path.join(home, 'config', 'sessions', 's1.toml'), 'utf-8'),
-        /\[runtime\]\nprovider = "codex"/,
+        /\[runtime\]\nagent = "codex"/,
       );
     } finally {
       fs.rmSync(home, { recursive: true, force: true });

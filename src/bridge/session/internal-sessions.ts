@@ -1,9 +1,9 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
-import { DEFAULT_WORKSPACE_ROOT } from '../../configuration/index.js';
 import type { BridgeSession, BridgeStore } from '../../domain/index.js';
 import { setSessionCodexModeUpdate } from '../../domain/session-runtime.js';
+import { getGlobalStringConfig, getGlobalWorkspaceRoot } from './global-config.js';
 
 const TEMPORARY_SESSION_TTL_MS = 24 * 60 * 60 * 1000;
 const MAX_HIDDEN_TEMPORARY_SESSIONS = 64;
@@ -31,7 +31,7 @@ export function makeDraftSessionName(address: { channelType: string; chatId: str
 }
 
 function getDefaultSessionWorkingDirectory(store: BridgeStore): string {
-  const dir = store.getSetting('bridge_default_workspace_root') || DEFAULT_WORKSPACE_ROOT;
+  const dir = getGlobalWorkspaceRoot({ store });
   ensureDirectory(dir);
   return dir;
 }
@@ -85,7 +85,7 @@ export function getOrCreateDraftSession(
   const workingDirectory = getDefaultSessionWorkingDirectory(store);
   return store.createSession(
     expectedName,
-    store.getSetting('bridge_default_model') || '',
+    getGlobalStringConfig('runtime.codex.model', 'bridge_default_model', { store }) || '',
     undefined,
     workingDirectory,
     'normal',

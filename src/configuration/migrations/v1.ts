@@ -165,7 +165,7 @@ function patchFromLegacyConfig(config: LegacyConfigFile, warnings: string[]): Co
   const patch: ConfigPatch = { schemaVersion: 2 };
 
   const provider = runtimeProvider(runtime.provider);
-  if (provider) patch.runtime = { provider };
+  if (provider) patch.runtime = { agent: provider };
 
   const codexPatch: NonNullable<NonNullable<ConfigPatch['runtime']>['codex']> = {};
   const codexModel = stringValue(codex.model) ?? stringValue(codex.defaultModel);

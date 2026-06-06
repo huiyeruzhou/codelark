@@ -9,6 +9,7 @@ export interface EnvCompatWarning {
 }
 
 const legacyEnvAliases = new Map<string, string>([
+  ['CODELARK_RUNTIME', 'CODELARK_AGENT'],
   ['CODELARK_CODEX_DEFAULT_MODEL', 'CODELARK_CODEX_MODEL'],
   ['CODELARK_CODEX_DEFAULT_MODE', 'CODELARK_CODEX_YOLO_MODE'],
   ['CODELARK_DEFAULT_CODEX_PROVIDER', 'CODELARK_CODEX_PROVIDER'],
@@ -81,7 +82,7 @@ function ensureDefaultChannelPatch(patch: ConfigPatch): NonNullable<ConfigPatch[
 function findConfigFieldsByEnv() {
   const fields: Record<string, NonNullable<ReturnType<typeof findConfigField>>> = {};
   for (const key of [
-    'runtime.provider',
+    'runtime.agent',
     'bridge.defaultWorkspace',
     'bridge.uiAllowLan',
     'bridge.uiAccessToken',

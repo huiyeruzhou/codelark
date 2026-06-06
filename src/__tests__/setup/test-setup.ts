@@ -90,6 +90,7 @@ try {
 } catch {}
 
 const configEnvKeys = [
+  'CODELARK_AGENT',
   'CODELARK_RUNTIME',
   'CODELARK_DEFAULT_WORKSPACE_ROOT',
   'CODELARK_UI_ALLOW_LAN',

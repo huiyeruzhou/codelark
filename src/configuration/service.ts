@@ -90,7 +90,7 @@ function patchPaths(patch: ConfigPatch): ConfigPath[] {
   if (patch.bridge) {
     for (const key of Object.keys(patch.bridge)) paths.push(`bridge.${key}`);
   }
-  if (patch.runtime?.provider !== undefined) paths.push('runtime.provider');
+  if (patch.runtime?.agent !== undefined) paths.push('runtime.agent');
   if (patch.runtime?.codex) {
     for (const key of Object.keys(patch.runtime.codex)) paths.push(`runtime.codex.${key}`);
   }
