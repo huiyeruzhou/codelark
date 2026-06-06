@@ -304,12 +304,20 @@ async function handleMirrorTmuxSelectionPrompt(
       provider: 'tmux',
       reason: prompt.kind === 'update'
         ? 'Codex TUI is waiting at a CLI update selection prompt.'
-        : prompt.kind === 'generic'
-          ? 'Codex TUI may be waiting at an unrecognized numbered selection prompt.'
-          : 'Codex TUI is waiting at an interactive selection prompt.',
+        : prompt.kind === 'goal'
+          ? 'Codex TUI is waiting at a goal replacement selection prompt.'
+          : prompt.kind === 'generic'
+            ? 'Codex TUI may be waiting at an unrecognized numbered selection prompt.'
+            : 'Codex TUI is waiting at an interactive selection prompt.',
       inspect: '/tmux-screen 80',
       promptKind: prompt.kind,
-      defaultChoice: prompt.kind === 'update' ? 'skip' : prompt.kind === 'generic' ? 'not_selection' : 'yes_proceed',
+      defaultChoice: prompt.kind === 'update'
+        ? 'skip'
+        : prompt.kind === 'goal'
+          ? 'cancel'
+          : prompt.kind === 'generic'
+            ? 'not_selection'
+            : 'yes_proceed',
       prompt: prompt.summary,
       choices: [
         ...prompt.options.map((option) => ({

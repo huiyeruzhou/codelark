@@ -62,11 +62,13 @@ export interface CodexTuiRunContext {
   hasError: boolean;
 }
 
-export type CodexTuiSelectionPromptKind = 'update' | 'permission' | 'generic';
+export type CodexTuiSelectionPromptKind = 'update' | 'permission' | 'goal' | 'generic';
 export type CodexTuiSelectionPromptChoice =
   | 'update_now'
   | 'skip'
   | 'skip_until_next_version'
+  | 'replace_current_goal'
+  | 'cancel'
   | 'yes_proceed'
   | 'yes_always'
   | 'no'
@@ -175,6 +177,8 @@ function normalizeSelectionChoice(label: string): CodexTuiSelectionPromptChoice 
   if (/^update\s+now\b/.test(normalized)) return 'update_now';
   if (/^skip\s+until\s+next\s+version\b/.test(normalized)) return 'skip_until_next_version';
   if (/^skip\b/.test(normalized)) return 'skip';
+  if (/^replace\s+current\s+goal\b/.test(normalized)) return 'replace_current_goal';
+  if (/^cancel\b/.test(normalized)) return 'cancel';
   if (/^yes,?\s*(?:and\s+)?(?:don['’]t\s+ask\s+again|always)\b/.test(normalized)) return 'yes_always';
   if (/^yes,?\s*proceed\b/.test(normalized) || /^yes\b/.test(normalized)) return 'yes_proceed';
   if (/^no,\s*and\s+tell\s+codex\b/.test(normalized) || /^no\b/.test(normalized)) return 'no';
@@ -189,6 +193,8 @@ function isCodexTuiSelectionPromptChoice(value: string | undefined): value is Co
   return value === 'update_now'
     || value === 'skip'
     || value === 'skip_until_next_version'
+    || value === 'replace_current_goal'
+    || value === 'cancel'
     || value === 'yes_proceed'
     || value === 'yes_always'
     || value === 'no'
@@ -213,26 +219,102 @@ function inferSelectionPromptKind(
   if (hasChoice('yes_proceed') && hasChoice('no')) {
     return 'permission';
   }
+  if (hasChoice('replace_current_goal') && hasChoice('cancel')) {
+    return 'goal';
+  }
   if (options.some((option) => option.selected && option.index === 0 && option.choice === 'option_1')) {
     return 'generic';
   }
   return null;
 }
 
+type ParsedSelectionLine = {
+  rawLine: string;
+  marker: string | null;
+  number: number | null;
+  label: string;
+};
+
+function parseSelectionLine(rawLine: string): ParsedSelectionLine | null {
+  const match = rawLine.match(/^\s*([›>▸➜→*•])?\s*(?:(\d+)[.)]\s*)?(.+?)\s*$/u);
+  if (!match) return null;
+  const label = match[3].trim();
+  if (!label) return null;
+  return {
+    rawLine,
+    marker: match[1] || null,
+    number: match[2] ? Number(match[2]) : null,
+    label,
+  };
+}
+
+function isSelectedSelectionLine(line: ParsedSelectionLine): boolean {
+  return line.marker === '›'
+    || line.marker === '>'
+    || line.marker === '▸'
+    || line.marker === '➜'
+    || line.marker === '→';
+}
+
+function extractCurrentSelectionLines(lines: string[]): ParsedSelectionLine[] {
+  const parsed = lines.map(parseSelectionLine);
+  const selectedLineIndex = parsed.findLastIndex((line) => Boolean(line && isSelectedSelectionLine(line)));
+  if (selectedLineIndex < 0) return [];
+  const selected = parsed[selectedLineIndex];
+  if (!selected) return [];
+
+  let start = selectedLineIndex;
+  if (selected.number !== null) {
+    let expectedNumber = selected.number - 1;
+    for (let index = selectedLineIndex - 1; index >= 0; index -= 1) {
+      const candidate = parsed[index];
+      if (!candidate || candidate.number !== expectedNumber) break;
+      start = index;
+      expectedNumber -= 1;
+    }
+  } else {
+    for (let index = selectedLineIndex - 1; index >= 0; index -= 1) {
+      const candidate = parsed[index];
+      if (!candidate || candidate.number !== null || !normalizeSelectionChoice(candidate.label)) break;
+      start = index;
+    }
+  }
+
+  const result: ParsedSelectionLine[] = [];
+  let expectedNumber = selected.number !== null
+    ? (parsed[start]?.number ?? selected.number)
+    : null;
+  for (let index = start; index < parsed.length; index += 1) {
+    const candidate = parsed[index];
+    if (!candidate) break;
+    if (expectedNumber !== null) {
+      if (candidate.number !== expectedNumber) break;
+      expectedNumber += 1;
+    } else if (candidate.number !== null || !normalizeSelectionChoice(candidate.label)) {
+      break;
+    }
+    result.push(candidate);
+  }
+  return result;
+}
+
 export function parseCodexTuiSelectionPrompt(screenText: string): CodexTuiSelectionPrompt | null {
   const tail = stripTerminalControl(screenText).slice(-20_000);
   const options: CodexTuiUpdatePromptOption[] = [];
   const lines = tail.split('\n');
-  const hasGenericSelectionAnchor = lines.some((line) => /^\s*›\s*1[.)]\s+/u.test(line));
-  for (const rawLine of lines) {
-    const match = rawLine.match(/^\s*([›>▸➜→*•])?\s*(?:(\d+)[.)]\s*)?(.+?)\s*$/);
-    if (!match) continue;
-    const label = match[3].trim();
-    const index = match[2] ? Number(match[2]) - 1 : options.length;
-    const normalizedChoice = normalizeSelectionChoice(label);
-    const selected = Boolean(match[1]);
+  const selectionLines = extractCurrentSelectionLines(lines);
+  const hasGenericSelectionAnchor = selectionLines.some((line) => line.marker === '›' && line.number === 1);
+  const hasGoalSelectionAnchor = selectionLines.some((line) => normalizeSelectionChoice(line.label) === 'replace_current_goal');
+  for (const selectionLine of selectionLines) {
+    const label = selectionLine.label;
+    const index = selectionLine.number !== null ? selectionLine.number - 1 : options.length;
+    const rawNormalizedChoice = normalizeSelectionChoice(label);
+    const normalizedChoice = rawNormalizedChoice === 'cancel' && !hasGoalSelectionAnchor
+      ? null
+      : rawNormalizedChoice;
+    const selected = isSelectedSelectionLine(selectionLine);
     const choice = normalizedChoice || (
-      match[2] && hasGenericSelectionAnchor
+      selectionLine.number !== null && hasGenericSelectionAnchor
         ? genericSelectionChoice(index)
         : null
     );
@@ -247,12 +329,11 @@ export function parseCodexTuiSelectionPrompt(screenText: string): CodexTuiSelect
   const kind = inferSelectionPromptKind(tail, options);
   if (!kind) return null;
   const selectedOption = options.find((option) => option.selected) || options[0];
-  const summaryLines = tail
-    .split('\n')
-    .map((line) => line.trimEnd())
+  const summaryLines = selectionLines
+    .map((line) => line.rawLine.trimEnd())
     .filter((line) => (
       /Update available|Release notes|^\s*(?:Allow|Do you want|Would you like|Codex wants)/i.test(line)
-      || Boolean(line.match(/^\s*[›>▸➜→*•]?\s*(?:\d+[.)]\s*)?(?:Update now|Skip|Yes|No)\b/i))
+      || Boolean(line.match(/^\s*[›>▸➜→*•]?\s*(?:\d+[.)]\s*)?(?:Update now|Skip|Replace current goal|Cancel|Yes|No)\b/i))
       || (kind === 'generic' && Boolean(line.match(/^\s*[›>▸➜→*•]?\s*\d+[.)]\s+/u)))
     ))
     .slice(-8);
@@ -389,9 +470,11 @@ export async function requestCodexTuiSelectionConfirmation(params: {
   const kind = params.prompt?.kind || 'permission';
   const defaultChoice = params.defaultChoice || (kind === 'update'
     ? 'skip'
-    : kind === 'generic'
-      ? 'not_selection'
-      : 'yes_proceed');
+    : kind === 'goal'
+      ? 'cancel'
+      : kind === 'generic'
+        ? 'not_selection'
+        : 'yes_proceed');
   const permissionRequestId = `codex-selection:${kind}:${params.provider}:${params.bridgeSessionId}:${Date.now()}`;
   params.controller.enqueue(sseEvent('permission_request', {
     permissionRequestId,
@@ -400,9 +483,11 @@ export async function requestCodexTuiSelectionConfirmation(params: {
       provider: params.provider,
       reason: kind === 'update'
         ? 'Codex TUI is waiting at a CLI update selection prompt.'
-        : kind === 'generic'
-          ? 'Codex TUI may be waiting at an unrecognized numbered selection prompt.'
-          : 'Codex TUI is waiting at an interactive selection prompt.',
+        : kind === 'goal'
+          ? 'Codex TUI is waiting at a goal replacement selection prompt.'
+          : kind === 'generic'
+            ? 'Codex TUI may be waiting at an unrecognized numbered selection prompt.'
+            : 'Codex TUI is waiting at an interactive selection prompt.',
       inspect: params.screenCommand,
       promptKind: kind,
       defaultChoice,
