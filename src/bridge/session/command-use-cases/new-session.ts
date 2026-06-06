@@ -37,6 +37,17 @@ import { guardBindingChangeWhileRunning } from './status-guards.js';
 import { auditCommandBindingChange } from './thread-targets.js';
 import type { SessionCommandDeps, SessionCommandResult } from './types.js';
 
+type InheritedCodexProvider = ReturnType<typeof getSessionCodexProvider>;
+
+function shouldEnableTmuxAutoEnterForNewSession(
+  inheritedProvider: InheritedCodexProvider,
+  session: BridgeSession,
+): boolean {
+  if (inheritedProvider === 'tmux') return true;
+  if (inheritedProvider === 'pty') return false;
+  return resolveEffectiveCodexProvider(session) === 'tmux';
+}
+
 export async function handleNewSessionCommand(options: {
   adapter: BaseChannelAdapter;
   msg: InboundMessage;
@@ -136,7 +147,7 @@ export async function handleNewSessionCommand(options: {
       if (inheritedProvider === 'tmux' || inheritedProvider === 'pty') {
         Object.assign(updates, mergeSessionRuntimeUpdates(updates, setSessionCodexProviderUpdate(inheritedProvider)));
       }
-      if (getSessionCodexProvider({ runtime: updates.runtime }) === 'tmux' || resolveEffectiveCodexProvider(session) === 'tmux') {
+      if (shouldEnableTmuxAutoEnterForNewSession(inheritedProvider, session)) {
         Object.assign(updates, mergeSessionRuntimeUpdates(updates, setSessionTmuxAutoEnterUpdate(true)));
       }
       if (Object.keys(updates).length > 0) {
@@ -218,7 +229,7 @@ export async function handleNewSessionCommand(options: {
     if (inheritedProvider === 'tmux' || inheritedProvider === 'pty') {
       Object.assign(updates, mergeSessionRuntimeUpdates(updates, setSessionCodexProviderUpdate(inheritedProvider)));
     }
-    if (getSessionCodexProvider({ runtime: updates.runtime }) === 'tmux' || resolveEffectiveCodexProvider(session) === 'tmux') {
+    if (shouldEnableTmuxAutoEnterForNewSession(inheritedProvider, session)) {
       Object.assign(updates, mergeSessionRuntimeUpdates(updates, setSessionTmuxAutoEnterUpdate(true)));
     }
     if (Object.keys(updates).length > 0) {

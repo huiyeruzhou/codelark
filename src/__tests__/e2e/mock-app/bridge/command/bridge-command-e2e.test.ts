@@ -1554,7 +1554,7 @@ describe('bridge command e2e', () => {
 
     const store = initBridgeTestContext({
       dynamicSettings: true,
-      settings: makeBridgeSettings(),
+      settings: makeBridgeSettings({ bridge_claude_provider: 'pty' }),
       llm: new CodexRoutingProvider(),
     });
     const adapter = new RecordingAdapter();
@@ -1643,7 +1643,7 @@ describe('bridge command e2e', () => {
 
     const store = initBridgeTestContext({
       dynamicSettings: true,
-      settings: makeBridgeSettings(),
+      settings: makeBridgeSettings({ bridge_claude_provider: 'pty' }),
       llm: new CodexRoutingProvider(),
     });
     const adapter = new RecordingAdapter();

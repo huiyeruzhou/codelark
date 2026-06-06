@@ -25,7 +25,7 @@ import type {
   BridgeSessionUpdate,
 } from '../domain/session.js';
 import type { BridgeApiProvider } from '../runtime/contracts.js';
-import { CODELARK_HOME, findChannelInstance, loadConfig } from '../configuration/index.js';
+import { CODELARK_HOME, configToSettings, findChannelInstance, loadConfig } from '../configuration/index.js';
 import { loadRuntimeSettings } from '../configuration/runtime-settings-projection.js';
 import { runStartupStorageMigrations } from './migrations.js';
 import {
@@ -38,6 +38,7 @@ import {
 } from '../domain/session-runtime.js';
 
 const DATA_DIR = path.join(CODELARK_HOME, 'data');
+const CONFIG_TOML_PATH = path.join(CODELARK_HOME, 'config.toml');
 const MESSAGES_DIR = path.join(DATA_DIR, 'messages');
 const CHANNEL_CHATS_PATH = path.join(DATA_DIR, 'channel-chats.json');
 const CHANNEL_DEFAULT_TARGETS_PATH = path.join(DATA_DIR, 'channel-default-targets.json');
@@ -387,7 +388,9 @@ export class JsonFileStore implements BridgeStore {
   private refreshSettings(): void {
     if (!this.dynamicSettings) return;
     try {
-      const next = loadRuntimeSettings({ codelarkHome: CODELARK_HOME });
+      const next = fs.existsSync(CONFIG_TOML_PATH)
+        ? loadRuntimeSettings({ codelarkHome: CODELARK_HOME, migrate: false })
+        : configToSettings(loadConfig());
       this.settings = new Map([
         ...this.settings,
         ...next,

@@ -6,6 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { parse } from 'smol-toml';
 import { feishuSetupUserAuthScopeArgument } from '../src/channels/feishu/permissions.js';
 
 type FeishuSite = 'feishu' | 'lark';
@@ -215,26 +216,29 @@ function assertCodeLarkConfig(options: {
   codelarkHome: string;
   workspaceRoot: string;
 }): CreatedWizardCredentials {
+  const configTomlPath = path.join(options.codelarkHome, 'config.toml');
   const configJsonPath = path.join(options.codelarkHome, 'config.json');
   const configEnvPath = path.join(options.codelarkHome, 'config.env');
   const larkCliRuntimeConfigPath = path.join(options.codelarkHome, 'runtime', 'lark-cli', 'lark-channel', 'config.json');
-  const parsed = JSON.parse(fs.readFileSync(configJsonPath, 'utf-8')) as {
-    runtime?: { provider?: string; bridge?: { defaultWorkspaceRoot?: string } };
-    channels?: Array<{ provider?: string; enabled?: boolean; config?: { appId?: string; appSecret?: string; site?: string } }>;
+  const parsed = parse(fs.readFileSync(configTomlPath, 'utf-8')) as {
+    runtime?: { provider?: string };
+    bridge?: { default_workspace?: string };
+    channels?: Array<{ provider?: string; enabled?: boolean; config?: { app_id?: string; app_secret?: string; site?: string } }>;
   };
   const feishu = parsed.channels?.find((channel) => channel.provider === 'feishu');
 
   if (parsed.runtime?.provider !== 'codex') throw new Error(`runtime provider mismatch: ${parsed.runtime?.provider}`);
-  if (parsed.runtime?.bridge?.defaultWorkspaceRoot !== options.workspaceRoot) {
-    throw new Error(`workspace mismatch: ${parsed.runtime?.bridge?.defaultWorkspaceRoot}`);
+  if (parsed.bridge?.default_workspace !== options.workspaceRoot) {
+    throw new Error(`workspace mismatch: ${parsed.bridge?.default_workspace}`);
   }
   if (feishu?.enabled !== true) throw new Error('Feishu channel is not enabled');
-  const appId = feishu?.config?.appId?.trim();
-  const appSecret = feishu?.config?.appSecret?.trim();
+  const appId = feishu?.config?.app_id?.trim();
+  const appSecret = feishu?.config?.app_secret?.trim();
   const site = feishu?.config?.site === 'lark' ? 'lark' : 'feishu';
   if (!appId) throw new Error('CodeLark config appId missing');
   if (!appSecret) throw new Error('CodeLark config appSecret missing');
-  if (!fs.existsSync(configEnvPath)) throw new Error('config.env missing');
+  if (fs.existsSync(configEnvPath)) throw new Error('setup should not create config.env');
+  if (fs.existsSync(configJsonPath)) throw new Error('setup should not create config.json');
   if (!fs.existsSync(larkCliRuntimeConfigPath)) throw new Error('CodeLark private lark-cli runtime config missing');
   return { appId, appSecret, site };
 }

@@ -88,6 +88,33 @@ describe('JsonFileStore', () => {
     }
   });
 
+  it('does not run startup config migrations during dynamic settings refresh', () => {
+    const configTomlPath = path.join(CODELARK_HOME, 'config.toml');
+    const migrationStatePath = path.join(CODELARK_HOME, 'runtime', 'config-migrations.json');
+    const previousToml = fs.existsSync(configTomlPath) ? fs.readFileSync(configTomlPath, 'utf-8') : null;
+    const previousState = fs.existsSync(migrationStatePath) ? fs.readFileSync(migrationStatePath, 'utf-8') : null;
+
+    try {
+      fs.rmSync(configTomlPath, { force: true });
+      fs.rmSync(migrationStatePath, { force: true });
+
+      const store = new JsonFileStore(makeSettings(), { dynamicSettings: true });
+      const session = store.createSession('dynamic-refresh-session', 'model-1', undefined, '/tmp/dynamic-refresh');
+
+      assert.equal(store.getSetting('bridge_default_model'), 'test-model');
+      assert.equal(getSessionWorkingDirectory(store.getSession(session.id)), '/tmp/dynamic-refresh');
+      assert.equal(fs.existsSync(migrationStatePath), false);
+    } finally {
+      if (previousToml === null) fs.rmSync(configTomlPath, { force: true });
+      else fs.writeFileSync(configTomlPath, previousToml, 'utf-8');
+      if (previousState === null) fs.rmSync(migrationStatePath, { force: true });
+      else {
+        fs.mkdirSync(path.dirname(migrationStatePath), { recursive: true });
+        fs.writeFileSync(migrationStatePath, previousState, 'utf-8');
+      }
+    }
+  });
+
   it('createSession and getSession', () => {
     const store = new JsonFileStore(makeSettings());
     const session = store.createSession('test', 'model-1', 'system prompt', '/tmp');
