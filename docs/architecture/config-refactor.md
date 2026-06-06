@@ -420,21 +420,26 @@ fallback = runtime.codex.reasoningEffort from cli/env/local/home/defaults
 
 | 库 | 用途 | 原因 |
 | --- | --- | --- |
-| `smol-toml` | TOML parse/stringify | 支持 TOML 1.1，包体小，API 聚焦，适合默认、home、local、Channel、Session TOML |
+| `config` / `node-config` | 纯静态全局配置读取和基础层次合并 | 适合承接 defaults、home、local/project、env、CLI baseline 这类“启动时静态配置”层，减少 CodeLark 自己维护通用 source chain 的范围 |
+| `smol-toml` | TOML parse/stringify | 仍用于 Channel/Session/request 等 CodeLark 专用 TOML 读写，以及 migration 中需要精确控制的 TOML I/O |
 | `zod` | 校验规则、默认值、coerce、类型推导 | 把运行时校验和 TS 类型放在同一处，替代手写 normalize 分支 |
 | `commander` | CLI command/options 解析 | 当前 CLI 是手写解析；commander 适合给 `run/start/setup` 增加 typed options、help 和 negated boolean |
 
 ### 通用配置库调研结论
 
-2026-06-07 重新评估 `node-config`、`wild-config`、`auto-config-loader` 后，不建议把它们作为 CodeLark 配置核心。
+2026-06-07 重新评估 `node-config`、`wild-config`、`auto-config-loader` 后，结论不是“完全不用通用配置库”，而是做分层采用：
+
+- 纯静态全局配置层采用 `node-config`：`defaults + home + local/project + env + CLI baseline` 交给成熟库做加载和基础 merge。
+- CodeLark 动态配置语义仍保留在 `ConfigService`：`request > session > channel` overlay、字段级 provenance/explain、scope 写入约束、迁移、secret mask、`channels[]` 按 id 合并、runtime env/settings projection。
+- 也就是说，`node-config` 替代的是 `ConfigService` 底下通用的静态 source loading，不替代 `ConfigService` 这个产品语义层。
 
 | 库 | 能覆盖的部分 | 不能满足的核心需求 |
 | --- | --- | --- |
-| `config` / `node-config` | 应用级默认配置、部署环境分层、env/CLI override | 它的模型围绕 app config directory 和部署环境展开；CodeLark 需要 `request > session > channel > cli > env > local > home > defaults` 的运行时 scope、字段级 provenance、scope 写入约束、legacy migration 和 secret mask。 |
+| `config` / `node-config` | defaults、home/local/project、env、CLI baseline 的静态分层加载和基础 merge | 不直接覆盖 Channel/Session/request 动态 overlay、scope 写入约束、字段级 explain/provenance、migration state、secret mask、`channels[]` 按 id 合并和 runtime projection；这些仍由 `ConfigService` 包装实现。 |
 | `wild-config` | TOML 默认文件、自定义 config 文件、命令行 dotted override | 更像进程启动时的静态配置合并；不能表达 Channel/Session scope 的动态读写、按字段 explain、`channels[]` 按 id 合并、home/channel/session TOML 的 replace/unset 写入。 |
 | `auto-config-loader` | package.json/rc/多格式配置文件查找与加载 | 主要解决“从哪里找配置文件”和“支持哪些格式”；不负责 CodeLark 需要的字段 schema、source priority、provenance、scoped write policy、migration state 或 runtime settings/env projection。 |
 
-因此首版继续采用“专用 source chain + `ConfigService`”作为核心，但限制手写范围：文件解析只交给 `smol-toml`，校验和类型只交给 `zod`，CLI 参数只交给 `commander`；手写代码只保留 CodeLark 特有的 source 顺序、scope 合并、provenance、写入约束和迁移逻辑。未来只有当产品需要 package.json/rc 搜索或多格式项目配置时，才考虑把 `auto-config-loader` 放到 local source 的文件发现层，而不是替代 `ConfigService`。
+因此后续实现方向调整为 hybrid：先在静态全局层引入 `node-config`，让它负责通用文件加载、环境覆盖和基础 merge；再把输出交给 `zod` 校验并进入 `ConfigService`。`ConfigService` 的手写范围应缩小到 CodeLark 特有的动态 scope 合并、provenance、写入约束、迁移和 projection。未来只有当产品需要 package.json/rc 搜索或多文件格式 local config 时，才考虑把 `auto-config-loader` 放到 local source 的文件发现层，而不是替代 `ConfigService`。
 
 不建议首版引入 `cosmiconfig` 作为核心读取器。CodeLark 的优先级和 scope 是产品语义明确的 source chain，而不是通用 JS tooling 的 package.json/rc 搜索模型；local 查找自己实现更容易解释。若未来需要支持 `package.json#codelark` 或多文件格式，再评估 `cosmiconfig`。
 
