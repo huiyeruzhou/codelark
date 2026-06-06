@@ -171,7 +171,13 @@ export function resolveEffectiveMode(
   _binding?: ChannelChat | null,
   session?: BridgeSession | null,
 ): 'normal' | 'yolo' {
-  return (getSessionCodexMode(session) || getBridgeContext().store.getSetting('bridge_default_mode')) === 'yolo'
+  const tomlMode = getSessionTomlOverride<'off' | 'on'>(session, 'runtime.codex.yoloMode');
+  const sessionMode = tomlMode === 'on'
+    ? 'yolo'
+    : tomlMode === 'off'
+      ? 'normal'
+      : getSessionCodexMode(session);
+  return (sessionMode || getBridgeContext().store.getSetting('bridge_default_mode')) === 'yolo'
     ? 'yolo'
     : 'normal';
 }
@@ -198,7 +204,10 @@ export function resolveSessionRuntimeConfig(
   return {
     [sessionRuntimeConfigBrand]: true,
     mode,
-    model: getSessionCodexModel(session) || store.getSetting('bridge_default_model') || '',
+    model: getSessionTomlOverride<string>(session, 'runtime.codex.model')
+      || getSessionCodexModel(session)
+      || store.getSetting('bridge_default_model')
+      || '',
     codexProvider: resolveEffectiveCodexProvider(session),
     sandboxMode: mode === 'yolo' ? 'danger-full-access' : resolveEffectiveSandboxMode(session),
     networkAccessEnabled: resolveEffectiveNetworkAccess(session),
@@ -221,12 +230,22 @@ function parsePositiveSettingInt(value: string | null | undefined): number | und
 
 export function resolveClaudeRuntimeConfig(session?: BridgeSession | null): ClaudeRuntimeConfig {
   const { store } = getBridgeContext();
+  const tomlYoloMode = getSessionTomlOverride<'off' | 'on'>(session, 'runtime.claude.yoloMode');
+  const tomlPermissionMode = tomlYoloMode === 'on'
+    ? 'bypassPermissions'
+    : tomlYoloMode === 'off'
+      ? 'default'
+      : undefined;
   return {
     runtime: 'claude',
     provider: resolveEffectiveClaudeProvider(session),
     executable: normalizeClaudeExecutable(store.getSetting('bridge_claude_executable')) || 'claude',
-    model: getSessionClaudeModel(session) || store.getSetting('bridge_claude_default_model') || undefined,
-    permissionMode: getSessionClaudePermissionMode(session)
+    model: getSessionTomlOverride<string>(session, 'runtime.claude.model')
+      || getSessionClaudeModel(session)
+      || store.getSetting('bridge_claude_default_model')
+      || undefined,
+    permissionMode: tomlPermissionMode
+      || getSessionClaudePermissionMode(session)
       || normalizeClaudePermissionMode(store.getSetting('bridge_claude_permission_mode'))
       || 'default',
     reasoningEffort: getSessionTomlOverride<BridgeSessionClaudeRuntimeState['reasoningEffort']>(session, 'runtime.claude.reasoningEffort')
@@ -241,7 +260,8 @@ export function resolveDisplayedModel(
   configuredDefaultModel?: string | null,
   codexDefaultModel?: string | null,
 ): string {
-  return getSessionCodexModel(session)
+  return getSessionTomlOverride<string>(session, 'runtime.codex.model')
+    || getSessionCodexModel(session)
     || configuredDefaultModel
     || codexDefaultModel
     || 'default';

@@ -171,6 +171,48 @@ function clearSessionCodexNetworkAccessToml(sessionId: string): void {
   );
 }
 
+function setSessionCodexYoloModeToml(sessionId: string, mode: 'normal' | 'yolo'): void {
+  createConfigService({ migrate: false }).set(
+    { kind: 'session', sessionId },
+    { runtime: { codex: { yoloMode: mode === 'yolo' ? 'on' : 'off' } } },
+  );
+}
+
+function setSessionClaudeYoloModeToml(sessionId: string, mode: 'normal' | 'yolo'): void {
+  createConfigService({ migrate: false }).set(
+    { kind: 'session', sessionId },
+    { runtime: { claude: { yoloMode: mode === 'yolo' ? 'on' : 'off' } } },
+  );
+}
+
+function setSessionCodexModelToml(sessionId: string, model: string): void {
+  createConfigService({ migrate: false }).set(
+    { kind: 'session', sessionId },
+    { runtime: { codex: { model } } },
+  );
+}
+
+function clearSessionCodexModelToml(sessionId: string): void {
+  createConfigService({ migrate: false }).unset(
+    { kind: 'session', sessionId },
+    'runtime.codex.model',
+  );
+}
+
+function setSessionClaudeModelToml(sessionId: string, model: string): void {
+  createConfigService({ migrate: false }).set(
+    { kind: 'session', sessionId },
+    { runtime: { claude: { model } } },
+  );
+}
+
+function clearSessionClaudeModelToml(sessionId: string): void {
+  createConfigService({ migrate: false }).unset(
+    { kind: 'session', sessionId },
+    'runtime.claude.model',
+  );
+}
+
 function parseNetworkAccessArg(raw: string): boolean | 'default' | null {
   const token = raw.trim().toLowerCase();
   if (!token) return null;
@@ -303,6 +345,7 @@ export function handleModeCommand(options: {
     const permissionMode = requestedMode === 'yolo' ? 'bypassPermissions' : 'default';
     if (session) {
       options.store.updateSession(session.id, setSessionClaudePermissionModeUpdate(permissionMode));
+      setSessionClaudeYoloModeToml(session.id, requestedMode);
     }
     return buildCommandFields(
       '已切换 Claude Code 模式',
@@ -321,6 +364,7 @@ export function handleModeCommand(options: {
   }
   if (session) {
     options.store.updateSession(session.id, setSessionCodexModeUpdate(requestedMode));
+    setSessionCodexYoloModeToml(session.id, requestedMode);
   }
   return buildCommandFields(
     codexRuntimeUpdateTitle(session, '已切换模式'),
@@ -645,6 +689,7 @@ export function handleModelCommand(options: {
     }
     if (requestedModel === 'default') {
       options.store.updateSession(session.id, setSessionClaudeModelUpdate(undefined));
+      clearSessionClaudeModelToml(session.id);
       const updated = options.store.getSession(session.id);
       return buildCommandFields(
         '已恢复默认 Claude Code 模型',
@@ -655,6 +700,7 @@ export function handleModelCommand(options: {
     }
 
     options.store.updateSession(session.id, setSessionClaudeModelUpdate(requestedModel));
+    setSessionClaudeModelToml(session.id, requestedModel);
     return buildCommandFields(
       '已更新 Claude Code 模型',
       [['模型', requestedModel]],
@@ -692,6 +738,7 @@ export function handleModelCommand(options: {
   const requestedModel = options.args.trim();
   if (requestedModel === 'default') {
     options.store.updateSessionModel(session.id, '');
+    clearSessionCodexModelToml(session.id);
     const updatedBinding = router.resolve(options.msg.address);
     const updatedSession = options.store.getSession(updatedBinding.bridgeSessionId);
     const currentModel = resolveDisplayedModel(
@@ -722,6 +769,7 @@ export function handleModelCommand(options: {
   }
 
   options.store.updateSessionModel(session.id, selectedModel.slug);
+  setSessionCodexModelToml(session.id, selectedModel.slug);
   return buildCommandFields(
     '已更新模型',
     [['模型', formatDisplayedModel(selectedModel.slug)]],
