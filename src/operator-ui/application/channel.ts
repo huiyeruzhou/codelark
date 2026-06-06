@@ -1,6 +1,5 @@
 import {
   feishuSiteToApiBaseUrl,
-  findChannelInstance,
   isSupportedChannelProvider,
   normalizeFeishuSite,
   type ChannelInstance,
@@ -60,6 +59,10 @@ export function getFeishuDomain(channel: ChannelInstance): string {
   return feishuSiteToApiBaseUrl(getFeishuSite(channel));
 }
 
+export function findUiChannelInstance(channelId: string, config: Config): ChannelInstance | undefined {
+  return (config.channels || []).find((channel) => channel.id === channelId);
+}
+
 export function mergeChannelInstance(
   payload: Record<string, unknown>,
   current: Config,
@@ -70,7 +73,7 @@ export function mergeChannelInstance(
   }
 
   const existingId = asString(payload.id);
-  const existing = existingId ? findChannelInstance(existingId, current) : undefined;
+  const existing = existingId ? findUiChannelInstance(existingId, current) : undefined;
   const alias = normalizeChannelAlias(asString(payload.alias), provider);
   const baseChannels = (current.channels || []).map(cloneChannel);
   const takenIds = new Set(baseChannels.map((channel) => channel.id));

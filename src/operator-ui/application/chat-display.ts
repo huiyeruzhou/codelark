@@ -1,5 +1,4 @@
 import {
-  findChannelInstance,
   type ChannelInstance,
   type Config,
   type FeishuChannelConfig,
@@ -11,7 +10,7 @@ import {
   listChannelDefaultTargetSummaries,
 } from '../../bridge/session/registry.js';
 import type { JsonFileStore } from '../../storage/json-store.js';
-import { getFeishuDomain } from './channel.js';
+import { findUiChannelInstance, getFeishuDomain } from './channel.js';
 
 const FEISHU_CHAT_LABEL_TTL_MS = 5 * 60 * 1000;
 const feishuChatLabelCache = new Map<string, { label: string; userId?: string; expiresAt: number }>();
@@ -87,7 +86,7 @@ export async function resolveFeishuBindingDisplay(
   binding: BindingSummary,
   fetchImpl: FetchLike = fetch,
 ): Promise<Pick<BindingSummary, 'chatDisplayName' | 'chatUserId'>> {
-  const channel = findChannelInstance(binding.channelType, config);
+  const channel = findUiChannelInstance(binding.channelType, config);
   if (!channel || channel.provider !== 'feishu') {
     return {
       chatDisplayName: binding.chatDisplayName,

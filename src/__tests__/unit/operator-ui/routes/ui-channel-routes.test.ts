@@ -237,6 +237,46 @@ app_secret = "ops-secret"
     }
   });
 
+  it('tests channel credentials from home config.toml through the default ConfigService reader', async () => {
+    const configTomlPath = path.join(CODELARK_HOME, 'config.toml');
+    const previousToml = fs.existsSync(configTomlPath) ? fs.readFileSync(configTomlPath, 'utf-8') : null;
+    try {
+      fs.mkdirSync(CODELARK_HOME, { recursive: true });
+      fs.writeFileSync(configTomlPath, `
+schema_version = 2
+
+[[channels]]
+id = "feishu-ops"
+alias = "Ops"
+provider = "feishu"
+enabled = true
+
+[channels.config]
+history_message_limit = 8
+app_id = "ops-app"
+app_secret = ""
+`);
+
+      const response = createResponse();
+      const handled = await handleUiChannelRoute({
+        request: createJsonRequest({ channelId: 'feishu-ops' }),
+        response,
+        url: new URL('http://localhost/api/channels/test'),
+        createStore: () => createMemoryStore(),
+        buildBindingsPayload: async () => ({ bindings: [], options: [], channelDefaults: [] }),
+      });
+
+      assert.equal(handled, true);
+      assert.equal(response.statusCodeWritten, 200);
+      const body = JSON.parse(response.body) as { ok?: boolean; message?: string };
+      assert.equal(body.ok, false);
+      assert.match(body.message || '', /App ID \/ App Secret 不能为空/);
+    } finally {
+      if (previousToml === null) fs.rmSync(configTomlPath, { force: true });
+      else fs.writeFileSync(configTomlPath, previousToml, 'utf-8');
+    }
+  });
+
   it('ignores routes owned by other UI modules', async () => {
     const response = createResponse();
     const handled = await handleUiChannelRoute({

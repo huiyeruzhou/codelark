@@ -1,7 +1,6 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 
 import {
-  findChannelInstance,
   type ChannelInstance,
   type Config,
 } from '../../configuration/index.js';
@@ -13,6 +12,7 @@ import {
 } from '../application/config.js';
 import {
   deleteChannelInstance,
+  findUiChannelInstance,
   mergeChannelInstance,
   validateFeishuCredentials,
 } from '../application/channel.js';
@@ -149,7 +149,7 @@ export async function handleUiChannelRoute(options: {
       json(response, 400, { error: 'channelId 不能为空。' });
       return true;
     }
-    const channel = findChannelInstance(channelId, readConfig());
+    const channel = findUiChannelInstance(channelId, readConfig());
     if (!channel) {
       json(response, 404, { error: '指定的通道不存在。' });
       return true;
