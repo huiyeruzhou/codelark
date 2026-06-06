@@ -6444,7 +6444,9 @@ export class FeishuAdapter extends BaseChannelAdapter {
       this.botName = botData?.bot?.app_name || botData?.bot?.name || this.botName;
       this.botAvatarUrl = botData?.bot?.avatar_url || this.botAvatarUrl;
       if (!this.botOpenId) {
-        console.warn('[feishu-adapter] Could not resolve bot open_id');
+        console.warn('[feishu-adapter] Could not resolve bot open_id', {
+          preview: JSON.stringify(botData).slice(0, 1000),
+        });
       }
     } catch (err) {
       console.warn(
