@@ -181,4 +181,32 @@ describe('config migration runner', () => {
       fs.rmSync(home, { recursive: true, force: true });
     }
   });
+
+  it('does not apply v1 session migration when legacy session Claude permissionMode needs product confirmation', () => {
+    const home = tempHome();
+    try {
+      const paths = resolveMigrationPaths(home);
+      writeFile(paths.dataSessionsJson, JSON.stringify({
+        'session-needs-confirmation': {
+          id: 'session-needs-confirmation',
+          runtime: {
+            activeRuntime: 'claude',
+            claude: {
+              sessionId: 'claude-session',
+              permissionMode: 'plan',
+            },
+          },
+        },
+      }));
+
+      assert.throws(
+        () => runConfigMigrations({ codelarkHome: home }),
+        /Cannot migrate legacy Claude permissionMode=plan/,
+      );
+      assert.equal(fs.existsSync(path.join(paths.sessionConfigDir, 'session-needs-confirmation.toml')), false);
+      assert.equal(fs.existsSync(paths.migrationState), false);
+    } finally {
+      fs.rmSync(home, { recursive: true, force: true });
+    }
+  });
 });

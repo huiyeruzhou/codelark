@@ -117,4 +117,120 @@ describe('v1 config migration e2e', () => {
       fs.rmSync(home, { recursive: true, force: true });
     }
   });
+
+  it('migrates BridgeSession runtime config overrides into session TOML and prunes session JSON', () => {
+    const home = tempHome();
+    try {
+      const paths = resolveMigrationPaths(home);
+      writeFile(paths.dataSessionsJson, JSON.stringify({
+        'session-codex': {
+          id: 'session-codex',
+          name: 'Codex work',
+          runtime: {
+            activeRuntime: 'codex',
+            codex: {
+              threadId: 'thread-123',
+              title: 'Existing Codex thread',
+              model: 'gpt-5-codex',
+              mode: 'yolo',
+              provider: 'tmux',
+              sandboxMode: 'read-only',
+              networkAccess: false,
+              reasoningEffort: 'high',
+            },
+            general: {
+              workingDirectory: '/repo/codex',
+              systemPrompt: 'Do not move this into config.',
+              tmuxSessionName: 'codex-tmux',
+              captureLines: 120,
+              autoEnter: false,
+              echoInput: true,
+            },
+          },
+          health_status: 'idle',
+          created_at: '2026-06-06T10:00:00.000Z',
+        },
+        'session-claude': {
+          id: 'session-claude',
+          runtime: {
+            activeRuntime: 'claude',
+            claude: {
+              sessionId: 'claude-session-123',
+              cwd: '/repo/claude-runtime',
+              model: 'claude-sonnet',
+              provider: 'pty',
+              permissionMode: 'bypassPermissions',
+              reasoningEffort: 'xhigh',
+              idleTimeoutMinutes: 7,
+            },
+            general: {
+              workingDirectory: '/repo/claude-config',
+            },
+          },
+          runtime_status: 'idle',
+        },
+      }, null, 2));
+
+      const result = runConfigMigrations({
+        codelarkHome: home,
+        now: () => new Date('2026-06-06T14:45:00.000Z'),
+      });
+
+      assert.equal(result.changed, true);
+      assert.equal(result.applied[0]?.id, 'v1');
+      assert.equal(fs.existsSync(path.join(paths.backupDir, 'v1', 'data', 'sessions.json')), true);
+      assert.equal(fs.existsSync(path.join(paths.sessionConfigDir, 'session-codex.toml')), true);
+      assert.equal(fs.existsSync(path.join(paths.sessionConfigDir, 'session-claude.toml')), true);
+
+      const service = createConfigService({ codelarkHome: home, env: {} });
+      assert.equal(service.get('runtime.provider', { kind: 'session', sessionId: 'session-codex' }), 'codex');
+      assert.equal(service.get('session.workspace', { kind: 'session', sessionId: 'session-codex' }), '/repo/codex');
+      assert.equal(service.get('session.tmuxSessionName', { kind: 'session', sessionId: 'session-codex' }), 'codex-tmux');
+      assert.equal(service.get('session.tmuxCaptureLines', { kind: 'session', sessionId: 'session-codex' }), 120);
+      assert.equal(service.get('session.tmuxAutoEnter', { kind: 'session', sessionId: 'session-codex' }), false);
+      assert.equal(service.get('session.tmuxEchoInput', { kind: 'session', sessionId: 'session-codex' }), true);
+      assert.equal(service.get('runtime.codex.model', { kind: 'session', sessionId: 'session-codex' }), 'gpt-5-codex');
+      assert.equal(service.get('runtime.codex.yoloMode', { kind: 'session', sessionId: 'session-codex' }), 'on');
+      assert.equal(service.get('runtime.codex.provider', { kind: 'session', sessionId: 'session-codex' }), 'tmux');
+      assert.equal(service.get('runtime.codex.sandboxMode', { kind: 'session', sessionId: 'session-codex' }), 'read-only');
+      assert.equal(service.get('runtime.codex.networkAccess', { kind: 'session', sessionId: 'session-codex' }), false);
+      assert.equal(service.get('runtime.codex.reasoningEffort', { kind: 'session', sessionId: 'session-codex' }), 'high');
+
+      assert.equal(service.get('runtime.provider', { kind: 'session', sessionId: 'session-claude' }), 'claude');
+      assert.equal(service.get('session.workspace', { kind: 'session', sessionId: 'session-claude' }), '/repo/claude-config');
+      assert.equal(service.get('runtime.claude.model', { kind: 'session', sessionId: 'session-claude' }), 'claude-sonnet');
+      assert.equal(service.get('runtime.claude.provider', { kind: 'session', sessionId: 'session-claude' }), 'pty');
+      assert.equal(service.get('runtime.claude.yoloMode', { kind: 'session', sessionId: 'session-claude' }), 'on');
+      assert.equal(service.get('runtime.claude.reasoningEffort', { kind: 'session', sessionId: 'session-claude' }), 'xhigh');
+      assert.equal(service.get('runtime.claude.idleTimeoutMinutes', { kind: 'session', sessionId: 'session-claude' }), 7);
+
+      const pruned = JSON.parse(fs.readFileSync(paths.dataSessionsJson, 'utf-8')) as Record<string, {
+        health_status?: string;
+        runtime_status?: string;
+        runtime?: {
+          activeRuntime?: string;
+          codex?: Record<string, unknown>;
+          claude?: Record<string, unknown>;
+          general?: Record<string, unknown>;
+        };
+      }>;
+      assert.equal(pruned['session-codex']?.runtime?.activeRuntime, undefined);
+      assert.deepEqual(pruned['session-codex']?.runtime?.codex, {
+        threadId: 'thread-123',
+        title: 'Existing Codex thread',
+      });
+      assert.deepEqual(pruned['session-codex']?.runtime?.general, {
+        systemPrompt: 'Do not move this into config.',
+      });
+      assert.equal(pruned['session-codex']?.health_status, 'idle');
+      assert.equal(pruned['session-claude']?.runtime?.activeRuntime, undefined);
+      assert.deepEqual(pruned['session-claude']?.runtime?.claude, {
+        sessionId: 'claude-session-123',
+        cwd: '/repo/claude-runtime',
+      });
+      assert.equal(pruned['session-claude']?.runtime_status, 'idle');
+    } finally {
+      fs.rmSync(home, { recursive: true, force: true });
+    }
+  });
 });

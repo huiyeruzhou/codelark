@@ -3,6 +3,10 @@ import { configToTomlShape, type ConfigPatch } from '../schema.js';
 import { mergePatch } from '../merge.js';
 import type { ConfigMigration, MigrationContext, MigrationResult } from './types.js';
 import { parseLegacyEnvFile } from './legacy/env-file.js';
+import {
+  hasLegacySessionJsonConfig,
+  migrateLegacySessionJsonConfigToToml,
+} from './legacy/session-json.js';
 
 type LegacyRuntimeProvider = 'codex' | 'claude';
 type LegacyCodexProvider = 'sdk' | 'tmux' | 'pty';
@@ -352,34 +356,62 @@ function readLegacyJson(context: MigrationContext): LegacyConfigFile | null {
 
 export const v1ConfigMigration: ConfigMigration = {
   id: 'v1',
-  description: 'Migrate legacy config.json/config.env to config.toml',
+  description: 'Migrate legacy config.json/config.env and session runtime overrides to v2 TOML',
   fromVersion: 1,
   toVersion: 2,
   detect(context) {
-    if (fs.existsSync(context.paths.homeToml)) return false;
-    return fs.existsSync(context.paths.legacyConfigJson) || fs.existsSync(context.paths.legacyConfigEnv);
+    const needsHomeMigration = !fs.existsSync(context.paths.homeToml)
+      && (fs.existsSync(context.paths.legacyConfigJson) || fs.existsSync(context.paths.legacyConfigEnv));
+    return needsHomeMigration || hasLegacySessionJsonConfig({ codelarkHome: context.codelarkHome });
   },
   apply(context): MigrationResult {
     const warnings: string[] = [];
-    const hasJson = fs.existsSync(context.paths.legacyConfigJson);
-    const legacyJson = hasJson ? readLegacyJson(context) : null;
-    const env = readLegacyEnv(context);
-    const patch: ConfigPatch = { schemaVersion: 2 };
+    const shouldMigrateHome = !fs.existsSync(context.paths.homeToml)
+      && (fs.existsSync(context.paths.legacyConfigJson) || fs.existsSync(context.paths.legacyConfigEnv));
+    const shouldMigrateSessions = hasLegacySessionJsonConfig({ codelarkHome: context.codelarkHome });
+    const writtenFiles: string[] = [];
+    const backedUpFiles: string[] = [];
+    let patch: ConfigPatch | null = null;
 
-    if (legacyJson) mergePatch(patch, patchFromLegacyConfig(legacyJson, warnings));
-    if (shouldOverlayEnv(context, Boolean(legacyJson)) && env.size > 0) {
-      mergePatch(patch, patchFromLegacyEnv(env, warnings));
+    if (shouldMigrateHome) {
+      const hasJson = fs.existsSync(context.paths.legacyConfigJson);
+      const legacyJson = hasJson ? readLegacyJson(context) : null;
+      const env = readLegacyEnv(context);
+      patch = { schemaVersion: 2 };
+
+      if (legacyJson) mergePatch(patch, patchFromLegacyConfig(legacyJson, warnings));
+      if (shouldOverlayEnv(context, Boolean(legacyJson)) && env.size > 0) {
+        mergePatch(patch, patchFromLegacyEnv(env, warnings));
+      }
     }
 
-    const backedUpFiles = [
-      context.backupFile(context.paths.legacyConfigJson, 'v1'),
-      context.backupFile(context.paths.legacyConfigEnv, 'v1'),
-    ].filter((file): file is string => Boolean(file));
-    context.writeTomlAtomic(context.paths.homeToml, configToTomlShape(patch));
+    for (const file of [
+      shouldMigrateHome ? context.paths.legacyConfigJson : undefined,
+      shouldMigrateHome ? context.paths.legacyConfigEnv : undefined,
+      shouldMigrateSessions ? context.paths.dataSessionsJson : undefined,
+    ]) {
+      if (!file) continue;
+      const backup = context.backupFile(file, 'v1');
+      if (backup) backedUpFiles.push(backup);
+    }
+
+    if (patch) {
+      context.writeTomlAtomic(context.paths.homeToml, configToTomlShape(patch));
+      writtenFiles.push(context.paths.homeToml);
+    }
+
+    if (shouldMigrateSessions) {
+      const sessionResult = migrateLegacySessionJsonConfigToToml({
+        codelarkHome: context.codelarkHome,
+        pruneSessionJson: true,
+      });
+      writtenFiles.push(...sessionResult.writtenFiles);
+      if (sessionResult.prunedSessionsJson) writtenFiles.push(context.paths.dataSessionsJson);
+    }
 
     return {
-      changed: true,
-      writtenFiles: [context.paths.homeToml],
+      changed: writtenFiles.length > 0,
+      writtenFiles,
       backedUpFiles,
       warnings,
     };
