@@ -180,6 +180,10 @@ describe('loadConfig/saveConfig round-trip', () => {
     fs.rmSync(CONFIG_PATH, { force: true });
     fs.rmSync(CONFIG_JSON_PATH, { force: true });
     fs.rmSync(path.join(path.dirname(CONFIG_JSON_PATH), 'config.toml'), { force: true });
+    fs.rmSync(path.join(path.dirname(CONFIG_JSON_PATH), 'runtime'), { recursive: true, force: true });
+    fs.rmSync(path.join(path.dirname(CONFIG_JSON_PATH), 'backups'), { recursive: true, force: true });
+    fs.rmSync(`${CONFIG_PATH}.migrated-v1`, { force: true });
+    fs.rmSync(`${CONFIG_JSON_PATH}.migrated-v1`, { force: true });
   });
 
   afterEach(() => {
@@ -188,6 +192,10 @@ describe('loadConfig/saveConfig round-trip', () => {
     fs.rmSync(CONFIG_PATH, { force: true });
     fs.rmSync(CONFIG_JSON_PATH, { force: true });
     fs.rmSync(path.join(path.dirname(CONFIG_JSON_PATH), 'config.toml'), { force: true });
+    fs.rmSync(path.join(path.dirname(CONFIG_JSON_PATH), 'runtime'), { recursive: true, force: true });
+    fs.rmSync(path.join(path.dirname(CONFIG_JSON_PATH), 'backups'), { recursive: true, force: true });
+    fs.rmSync(`${CONFIG_PATH}.migrated-v1`, { force: true });
+    fs.rmSync(`${CONFIG_JSON_PATH}.migrated-v1`, { force: true });
     if (configBackup !== null) {
       fs.writeFileSync(CONFIG_PATH, configBackup);
     }
@@ -277,7 +285,7 @@ require_mention = true
       assert.equal(loaded.claudeDefaultModel, 'v2-claude-model');
       assert.equal(loaded.claudeProvider, 'pty');
       assert.equal(loaded.claudeExecutable, 'ccr');
-    assert.equal(loaded.claudePermissionMode, 'bypassPermissions');
+      assert.equal(loaded.claudePermissionMode, 'bypassPermissions');
       assert.equal(loaded.claudeIdleTimeoutMinutes, 11);
       assert.equal(loaded.historyMessageLimit, 17);
       assert.equal(loaded.streamStatusIdleStartSeconds, 210);
@@ -326,7 +334,7 @@ require_mention = true
 schema_version = 2
 
 [runtime]
-provider = "codex"
+agent = "codex"
 
 [runtime.codex]
 model = "old-model"
@@ -404,7 +412,7 @@ require_mention = false
     }
   });
 
-  it('migrates legacy env config into config.json default channel instances', () => {
+  it('migrates legacy config.env into home TOML and archives legacy inputs', () => {
     fs.mkdirSync(path.dirname(CONFIG_PATH), { recursive: true });
     fs.writeFileSync(
       CONFIG_PATH,
@@ -419,8 +427,17 @@ require_mention = false
     );
 
     const loaded = loadConfig();
-    assert.equal(loaded.schemaVersion, 1);
-    assert.ok(fs.existsSync(CONFIG_JSON_PATH));
+    const configTomlPath = path.join(path.dirname(CONFIG_JSON_PATH), 'config.toml');
+    const savedToml = fs.readFileSync(configTomlPath, 'utf-8');
+
+    assert.equal(loaded.schemaVersion, 2);
+    assert.equal(loaded.runtime, 'codex');
+    assert.equal(fs.existsSync(CONFIG_PATH), false);
+    assert.equal(fs.existsSync(CONFIG_JSON_PATH), false);
+    assert.equal(fs.existsSync(configTomlPath), true);
+    assert.match(savedToml, /schema_version = 2/);
+    assert.match(savedToml, /app_id = "app-id"/);
+    assert.match(savedToml, /site = "lark"/);
     assert.deepEqual(
       loaded.channels?.map((channel) => ({
         id: channel.id,
@@ -441,49 +458,7 @@ require_mention = false
     );
   });
 
-  it('accepts CODELARK config.env aliases while preserving CODELARK precedence', () => {
-    fs.mkdirSync(path.dirname(CONFIG_PATH), { recursive: true });
-    fs.writeFileSync(
-      CONFIG_PATH,
-      [
-        'CODELARK_RUNTIME=claude',
-        'CODELARK_RUNTIME=codex',
-        'CODELARK_ENABLED_CHANNELS=feishu',
-        'CODELARK_FEISHU_APP_ID=alias-app',
-        'CODELARK_FEISHU_APP_SECRET=alias-secret',
-        'CODELARK_FEISHU_SITE=lark',
-        'CODELARK_CODEX_DEFAULT_MODEL=alias-model',
-        'CODELARK_DEFAULT_CODEX_PROVIDER=tmux',
-        'CODELARK_HISTORY_MESSAGE_LIMIT=13',
-      ].join('\n'),
-    );
-
-    const loaded = loadConfig();
-    assert.equal(loaded.runtime, 'codex');
-    assert.equal(loaded.defaultModel, 'alias-model');
-    assert.equal(loaded.defaultProvider, 'tmux');
-    assert.equal(loaded.historyMessageLimit, 13);
-    assert.deepEqual(
-      loaded.channels?.map((channel) => ({
-        id: channel.id,
-        enabled: channel.enabled,
-        appId: (channel.config as { appId?: string }).appId,
-        appSecret: (channel.config as { appSecret?: string }).appSecret,
-        site: (channel.config as { site?: string }).site,
-      })),
-      [
-        {
-          id: 'feishu-default',
-          enabled: true,
-          appId: 'alias-app',
-          appSecret: 'alias-secret',
-          site: 'lark',
-        },
-      ],
-    );
-  });
-
-  it('applies a newer config.env overlay and imports unmatched channel config as a new channel', () => {
+  it('migrates legacy config.json once and ignores later config.env edits', () => {
     fs.mkdirSync(path.dirname(CONFIG_JSON_PATH), { recursive: true });
     fs.writeFileSync(
       CONFIG_JSON_PATH,
@@ -493,7 +468,7 @@ require_mention = false
           provider: 'codex',
           codex: {
             defaultModel: 'old-model',
-            defaultMode: 'normal',
+            defaultMode: 'yolo',
             sandboxMode: 'workspace-write',
           },
           bridge: {
@@ -527,36 +502,16 @@ require_mention = false
         ],
       }, null, 2),
     );
-    fs.writeFileSync(
-      CONFIG_PATH,
-      [
-        'CODELARK_CODEX_DEFAULT_MODEL=new-model',
-        'CODELARK_DEFAULT_CODEX_PROVIDER=tmux',
-        'CODELARK_HISTORY_MESSAGE_LIMIT=15',
-        'CODELARK_CODEX_SANDBOX_MODE=danger-full-access',
-        'CODELARK_FEISHU_APP_ID=env-app',
-      ].join('\n'),
-    );
-    const past = new Date(Date.now() - 10_000);
-    const future = new Date(Date.now() + 10_000);
-    fs.utimesSync(CONFIG_JSON_PATH, past, past);
-    fs.utimesSync(CONFIG_PATH, future, future);
+    const loaded = loadConfig();
+    const configTomlPath = path.join(path.dirname(CONFIG_JSON_PATH), 'config.toml');
 
-    const warnings: string[] = [];
-    const originalWarn = console.warn;
-    console.warn = (message?: unknown) => {
-      warnings.push(String(message));
-    };
-    let loaded: Config;
-    try {
-      loaded = loadConfig();
-    } finally {
-      console.warn = originalWarn;
-    }
-    assert.equal(loaded.defaultModel, 'new-model');
-    assert.equal(loaded.defaultProvider, 'tmux');
-    assert.equal(loaded.historyMessageLimit, 15);
-    assert.equal(loaded.codexSandboxMode, 'danger-full-access');
+    assert.equal(loaded.schemaVersion, 2);
+    assert.equal(loaded.defaultModel, 'old-model');
+    assert.equal(loaded.defaultMode, 'yolo');
+    assert.equal(loaded.historyMessageLimit, 8);
+    assert.equal(fs.existsSync(configTomlPath), true);
+    assert.equal(fs.existsSync(CONFIG_PATH), false);
+    assert.equal(fs.existsSync(CONFIG_JSON_PATH), false);
     assert.deepEqual(
       loaded.channels?.map((channel) => ({
         id: channel.id,
@@ -566,155 +521,22 @@ require_mention = false
       [
         { id: 'feishu-rd', enabled: true, appId: 'old-app' },
         { id: 'feishu-cs', enabled: false, appId: 'cs-app' },
-        { id: 'feishu-env', enabled: false, appId: 'env-app' },
       ],
     );
-    assert.equal(warnings.length, 2);
-    assert.match(warnings[0], /没有匹配到现有通道/);
-    assert.match(warnings[0], /feishu-env/);
-    assert.match(warnings[1], /config\.env 已更新/);
-    assert.match(warnings[1], /config\.json/);
 
-    const persisted = JSON.parse(fs.readFileSync(CONFIG_JSON_PATH, 'utf-8')) as any;
-    assert.equal('defaultModel' in persisted.runtime, false);
-    assert.equal(persisted.runtime.codex.defaultModel, 'new-model');
-    assert.equal('defaultProvider' in persisted.runtime, false);
-    assert.equal(persisted.runtime.bridgeControl.defaultCodexProvider, 'tmux');
-    assert.equal(persisted.runtime.bridge.historyMessageLimit, 15);
-    assert.equal(persisted.runtime.codex.sandboxMode, 'danger-full-access');
-    assert.equal('showToolCallDetails' in persisted.runtime, false);
-    assert.equal('showToolCallDetails' in persisted.runtime.bridge, false);
-    assert.equal(persisted.channels[0].config.appId, 'old-app');
-    assert.equal(persisted.channels[2].config.appId, 'env-app');
-  });
-
-  it('applies a newer config.env overlay over grouped runtime config', () => {
-    fs.mkdirSync(path.dirname(CONFIG_JSON_PATH), { recursive: true });
-    fs.writeFileSync(
-      CONFIG_JSON_PATH,
-      JSON.stringify({
-        schemaVersion: 1,
-        runtime: {
-          provider: 'codex',
-          codex: {
-            defaultModel: 'nested-old-model',
-            defaultMode: 'normal',
-            sandboxMode: 'workspace-write',
-            networkAccess: true,
-            reasoningEffort: 'medium',
-          },
-          bridgeControl: {
-            defaultCodexProvider: 'sdk',
-          },
-          bridge: {
-            historyMessageLimit: 8,
-          },
-        },
-        channels: [],
-      }, null, 2),
-    );
     fs.writeFileSync(
       CONFIG_PATH,
       [
-        'CODELARK_CODEX_DEFAULT_MODEL=env-model',
-        'CODELARK_DEFAULT_CODEX_PROVIDER=tmux',
-        'CODELARK_CODEX_DEFAULT_MODE=yolo',
-        'CODELARK_HISTORY_MESSAGE_LIMIT=16',
-        'CODELARK_CODEX_SANDBOX_MODE=danger-full-access',
-        'CODELARK_CODEX_NETWORK_ACCESS=false',
-        'CODELARK_CODEX_REASONING_EFFORT=high',
+        'CODELARK_CODEX_DEFAULT_MODEL=ignored-after-migration',
+        'CODELARK_FEISHU_APP_ID=ignored-after-migration',
       ].join('\n'),
     );
-    const past = new Date(Date.now() - 10_000);
-    const future = new Date(Date.now() + 10_000);
-    fs.utimesSync(CONFIG_JSON_PATH, past, past);
-    fs.utimesSync(CONFIG_PATH, future, future);
-
-    const loaded = loadConfig();
-    assert.equal(loaded.defaultModel, 'env-model');
-    assert.equal(loaded.defaultProvider, 'tmux');
-    assert.equal(loaded.defaultMode, 'yolo');
-    assert.equal(loaded.historyMessageLimit, 16);
-    assert.equal(loaded.codexSandboxMode, 'danger-full-access');
-    assert.equal(loaded.codexNetworkAccess, false);
-    assert.equal(loaded.codexReasoningEffort, 'high');
-
-    const persisted = JSON.parse(fs.readFileSync(CONFIG_JSON_PATH, 'utf-8')) as any;
-    assert.equal(persisted.runtime.codex.defaultModel, 'env-model');
-    assert.equal(persisted.runtime.codex.defaultMode, 'yolo');
-    assert.equal(persisted.runtime.codex.sandboxMode, 'danger-full-access');
-    assert.equal(persisted.runtime.codex.networkAccess, false);
-    assert.equal(persisted.runtime.codex.reasoningEffort, 'high');
-    assert.equal(persisted.runtime.bridgeControl.defaultCodexProvider, 'tmux');
-    assert.equal(persisted.runtime.bridge.historyMessageLimit, 16);
-    assert.equal('showToolCallDetails' in persisted.runtime.bridge, false);
+    const reloaded = loadConfig();
+    assert.equal(reloaded.defaultModel, 'old-model');
+    assert.equal(reloaded.channels?.[0]?.config.appId, 'old-app');
   });
 
-  it('updates an existing channel when config.env matches its channel identity', () => {
-    fs.mkdirSync(path.dirname(CONFIG_JSON_PATH), { recursive: true });
-    fs.writeFileSync(
-      CONFIG_JSON_PATH,
-      JSON.stringify({
-        schemaVersion: 1,
-        runtime: {
-          provider: 'codex',
-          codex: {
-            defaultMode: 'normal',
-          },
-        },
-        channels: [
-          {
-            id: 'feishu-rd',
-            alias: '研发飞书',
-            provider: 'feishu',
-            enabled: true,
-            createdAt: '2026-03-28T00:00:00.000Z',
-            updatedAt: '2026-03-28T00:00:00.000Z',
-            config: {
-              appId: 'same-app',
-              appSecret: 'old-secret',
-            },
-          },
-        ],
-      }, null, 2),
-    );
-    fs.writeFileSync(
-      CONFIG_PATH,
-      [
-        'CODELARK_FEISHU_APP_ID=same-app',
-        'CODELARK_FEISHU_APP_SECRET=new-secret',
-      ].join('\n'),
-    );
-    const past = new Date(Date.now() - 10_000);
-    const future = new Date(Date.now() + 10_000);
-    fs.utimesSync(CONFIG_JSON_PATH, past, past);
-    fs.utimesSync(CONFIG_PATH, future, future);
-
-    const warnings: string[] = [];
-    const originalWarn = console.warn;
-    console.warn = (message?: unknown) => {
-      warnings.push(String(message));
-    };
-    let loaded: Config;
-    try {
-      loaded = loadConfig();
-    } finally {
-      console.warn = originalWarn;
-    }
-    assert.deepEqual(
-      loaded.channels?.map((channel) => ({
-        id: channel.id,
-        appId: (channel.config as { appId?: string }).appId,
-        appSecret: (channel.config as { appSecret?: string }).appSecret,
-      })),
-      [
-        { id: 'feishu-rd', appId: 'same-app', appSecret: 'new-secret' },
-      ],
-    );
-    assert.deepEqual(warnings, ['[CodeLark] 检测到 config.env 已更新，已同步写入 config.json。']);
-  });
-
-  it('ignores a newer config.env when it still matches the generated snapshot', () => {
+  it('saveConfig creates home TOML and does not generate legacy env/json files', () => {
     const config: Config = {
       runtime: 'codex',
       defaultMode: 'normal',
@@ -746,10 +568,13 @@ require_mention = false
       ],
     };
     saveConfig(config);
-    const future = new Date(Date.now() + 10_000);
-    fs.utimesSync(CONFIG_PATH, future, future);
 
     const loaded = loadConfig();
+    const configTomlPath = path.join(path.dirname(CONFIG_JSON_PATH), 'config.toml');
+
+    assert.equal(fs.existsSync(configTomlPath), true);
+    assert.equal(fs.existsSync(CONFIG_PATH), false);
+    assert.equal(fs.existsSync(CONFIG_JSON_PATH), false);
     assert.deepEqual(
       loaded.channels?.map((channel) => ({
         id: channel.id,
@@ -763,47 +588,7 @@ require_mention = false
     );
   });
 
-  it('filters unsupported providers from config.json on load', () => {
-    fs.mkdirSync(path.dirname(CONFIG_JSON_PATH), { recursive: true });
-    fs.writeFileSync(
-      CONFIG_JSON_PATH,
-      JSON.stringify({
-        schemaVersion: 1,
-        runtime: {
-          provider: 'codex',
-          codex: {
-            defaultMode: 'normal',
-          },
-        },
-        channels: [
-          {
-            id: 'feishu-default',
-            alias: '飞书',
-            provider: 'feishu',
-            enabled: true,
-            createdAt: '2026-03-28T00:00:00.000Z',
-            updatedAt: '2026-03-28T00:00:00.000Z',
-            config: {},
-          },
-          {
-            id: 'telegram-old',
-            alias: 'Telegram',
-            provider: 'telegram',
-            enabled: true,
-            createdAt: '2026-03-28T00:00:00.000Z',
-            updatedAt: '2026-03-28T00:00:00.000Z',
-            config: {},
-          },
-        ],
-      }, null, 2),
-    );
-
-    const loaded = loadConfig();
-    assert.deepEqual(loaded.channels?.map((channel) => channel.provider), ['feishu']);
-    assert.deepEqual(loaded.enabledChannels, ['feishu']);
-  });
-
-  it('preserves custom channel instances when saving runtime settings', () => {
+  it('preserves migrated custom channel instances when saving runtime settings', () => {
     fs.mkdirSync(path.dirname(CONFIG_JSON_PATH), { recursive: true });
     fs.writeFileSync(
       CONFIG_JSON_PATH,
@@ -897,71 +682,17 @@ require_mention = false
     assert.equal(reloaded.historyMessageLimit, 12);
     assert.equal(reloaded.streamStatusIdleStartSeconds, 240);
     assert.equal(reloaded.streamStatusCheckIntervalSeconds, 15);
-    assert.doesNotMatch(fs.readFileSync(CONFIG_PATH, 'utf-8'), /CODELARK_SHOW_TOOL_CALL_DETAILS/);
-    assert.match(fs.readFileSync(CONFIG_PATH, 'utf-8'), /CODELARK_DEFAULT_CODEX_PROVIDER=sdk/);
-    assert.match(fs.readFileSync(CONFIG_PATH, 'utf-8'), /CODELARK_CLAUDE_EXECUTABLE=ccr/);
-    const persisted = JSON.parse(fs.readFileSync(CONFIG_JSON_PATH, 'utf-8')) as any;
-    assert.equal(persisted.runtime.codex.defaultMode, 'yolo');
-    assert.equal(persisted.runtime.bridgeControl.defaultCodexProvider, 'sdk');
-    assert.equal(persisted.runtime.claude.executable, 'ccr');
-    assert.equal(persisted.runtime.claude.defaultModel, 'claude-sonnet-test');
-    assert.equal(persisted.runtime.claude.permissionMode, 'acceptEdits');
-    assert.equal(persisted.runtime.bridge.historyMessageLimit, 12);
+    const savedToml = fs.readFileSync(path.join(path.dirname(CONFIG_JSON_PATH), 'config.toml'), 'utf-8');
+    assert.match(savedToml, /yolo_mode = "on"/);
+    assert.match(savedToml, /provider = "sdk"/);
+    assert.match(savedToml, /executable = "ccr"/);
+    assert.match(savedToml, /permission_mode = "acceptEdits"/);
+    assert.match(savedToml, /history_message_limit = 12/);
+    assert.equal(fs.existsSync(CONFIG_PATH), false);
+    assert.equal(fs.existsSync(CONFIG_JSON_PATH), false);
   });
 
-  it('updates managed config.env keys while preserving custom env lines', () => {
-    fs.mkdirSync(path.dirname(CONFIG_PATH), { recursive: true });
-    fs.writeFileSync(
-      CONFIG_PATH,
-      [
-        '# local shell override',
-        'CUSTOM_KEEP=1',
-        'CODELARK_RUNTIME=claude',
-        'CODELARK_FEISHU_APP_ID=old-app',
-        'CODELARK_FEISHU_APP_SECRET=old-secret',
-        'CODELARK_FEISHU_DOMAIN=lark',
-        'CODELARK_FEISHU_ALLOWED_USERS=old-user',
-        'CODELARK_RUNTIME=claude',
-        'CODELARK_FEISHU_APP_ID=alias-old-app',
-        'CODELARK_FEISHU_ALLOWED_USERS=alias-old-user',
-      ].join('\n') + '\n',
-    );
-
-    saveConfig({
-      runtime: 'codex',
-      defaultMode: 'normal',
-      enabledChannels: ['feishu'],
-      channels: [
-        {
-          id: 'feishu-default',
-          alias: '飞书',
-          provider: 'feishu',
-          enabled: true,
-          createdAt: '2026-03-28T00:00:00.000Z',
-          updatedAt: '2026-03-28T00:00:00.000Z',
-          config: {
-            appId: 'new-app',
-            appSecret: 'new-secret',
-            site: 'feishu',
-          },
-        },
-      ],
-    });
-
-    const saved = fs.readFileSync(CONFIG_PATH, 'utf-8');
-    assert.match(saved, /^# local shell override$/m);
-    assert.match(saved, /^CUSTOM_KEEP=1$/m);
-    assert.match(saved, /^CODELARK_RUNTIME=codex$/m);
-    assert.match(saved, /^CODELARK_FEISHU_APP_ID=new-app$/m);
-    assert.match(saved, /^CODELARK_FEISHU_APP_SECRET=new-secret$/m);
-    assert.match(saved, /^CODELARK_FEISHU_SITE=feishu$/m);
-    assert.doesNotMatch(saved, /^CODELARK_FEISHU_DOMAIN=/m);
-    assert.doesNotMatch(saved, /^CODELARK_FEISHU_ALLOWED_USERS=/m);
-    assert.equal(saved.match(/^CODELARK_RUNTIME=/gm)?.length, 1);
-    assert.equal(saved.match(/^CODELARK_FEISHU_APP_ID=/gm)?.length, 1);
-  });
-
-  it('round-trips claude as the default runtime through config.v1 and config.env', () => {
+  it('round-trips claude as the default runtime through home TOML', () => {
     const loaded = loadConfig();
     saveConfig({
       ...loaded,
@@ -974,9 +705,9 @@ require_mention = false
     assert.equal(reloaded.runtime, 'claude');
     assert.equal(reloaded.claudeExecutable, 'ccr');
     assert.equal(reloaded.claudeProvider, 'pty');
-    assert.match(fs.readFileSync(CONFIG_PATH, 'utf-8'), /CODELARK_RUNTIME=claude/);
     assert.equal(configToSettings(reloaded).get('bridge_default_runtime'), 'claude');
-    const persisted = JSON.parse(fs.readFileSync(CONFIG_JSON_PATH, 'utf-8')) as any;
-    assert.equal(persisted.runtime.provider, 'claude');
+    assert.match(fs.readFileSync(path.join(path.dirname(CONFIG_JSON_PATH), 'config.toml'), 'utf-8'), /agent = "claude"/);
+    assert.equal(fs.existsSync(CONFIG_PATH), false);
+    assert.equal(fs.existsSync(CONFIG_JSON_PATH), false);
   });
 });
