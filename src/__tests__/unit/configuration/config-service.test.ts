@@ -129,6 +129,43 @@ sandbox_mode = "danger-full-access"
     }
   });
 
+  it('enforces field write scopes for set and unset operations', () => {
+    const home = tempHome();
+    try {
+      const service = createConfigService({ codelarkHome: home, env: {} });
+
+      service.set(
+        { kind: 'channel', channelId: 'chat-1', provider: 'feishu' },
+        { runtime: { codex: { reasoningEffort: 'high' } } },
+      );
+      assert.equal(
+        service.get('runtime.codex.reasoningEffort', { kind: 'channel', channelId: 'chat-1', provider: 'feishu' }),
+        'high',
+      );
+
+      assert.throws(
+        () => service.set(
+          { kind: 'session', sessionId: 's-1' },
+          { bridge: { uiAllowLan: true } },
+        ),
+        /bridge\.uiAllowLan cannot be written to session scope/,
+      );
+      assert.throws(
+        () => service.set(
+          { kind: 'channel', channelId: 'chat-1', provider: 'feishu' },
+          { channels: [{ id: 'feishu-default', config: { appSecret: 'secret' } }] },
+        ),
+        /channels\[\]\.config\.appSecret cannot be written to channel scope/,
+      );
+      assert.throws(
+        () => service.unset({ kind: 'session', sessionId: 's-1' }, 'bridge.uiAllowLan'),
+        /bridge\.uiAllowLan cannot be written to session scope/,
+      );
+    } finally {
+      fs.rmSync(home, { recursive: true, force: true });
+    }
+  });
+
   it('projects effective config to process env and legacy runtime settings maps', () => {
     const home = tempHome();
     try {

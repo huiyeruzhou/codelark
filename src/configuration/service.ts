@@ -1,5 +1,5 @@
 import { configFields, findConfigField } from './fields.js';
-import type { ConfigPath, ConfigSourceKind, SourceRef } from './fields-types.js';
+import type { ConfigField, ConfigPath, ConfigSourceKind, ConfigWriteScope, SourceRef } from './fields-types.js';
 import { envToConfigPatch, type EnvCompatWarning } from './env-compat.js';
 import { mergeConfigLayers, mergePatch, type ConfigLayer, type MergeResult } from './merge.js';
 import { getConfigPath, unsetConfigPath } from './path-access.js';
@@ -60,6 +60,60 @@ export interface ConfigServiceOptions {
   codelarkHome?: string;
   env?: NodeJS.ProcessEnv;
   cli?: ConfigPatch;
+}
+
+function writeScopeForTarget(target: ConfigWriteTarget): ConfigWriteScope {
+  if (target.kind === 'home') return 'home';
+  return target.kind;
+}
+
+function channelConfigPath(key: string): ConfigPath {
+  return `channels[].config.${key}`;
+}
+
+function patchPaths(patch: ConfigPatch): ConfigPath[] {
+  const paths: ConfigPath[] = [];
+  if (patch.session) {
+    for (const key of Object.keys(patch.session)) paths.push(`session.${key}`);
+  }
+  if (patch.bridge) {
+    for (const key of Object.keys(patch.bridge)) paths.push(`bridge.${key}`);
+  }
+  if (patch.runtime?.provider !== undefined) paths.push('runtime.provider');
+  if (patch.runtime?.codex) {
+    for (const key of Object.keys(patch.runtime.codex)) paths.push(`runtime.codex.${key}`);
+  }
+  if (patch.runtime?.claude) {
+    for (const key of Object.keys(patch.runtime.claude)) paths.push(`runtime.claude.${key}`);
+  }
+  for (const channel of patch.channels || []) {
+    if (channel.enabled !== undefined) paths.push('channels[].enabled');
+    if (channel.config) {
+      for (const key of Object.keys(channel.config)) paths.push(channelConfigPath(key));
+    }
+  }
+  return paths;
+}
+
+function requireWritable(scope: ConfigWriteScope, path: ConfigPath): void {
+  const field = findConfigField(path) as ConfigField | undefined;
+  if (!field) {
+    throw new Error(`Unknown config field: ${path}`);
+  }
+  if (!field.scopes.includes(scope)) {
+    throw new Error(`Config field ${path} cannot be written to ${scope} scope.`);
+  }
+}
+
+function validateWritablePatch(target: ConfigWriteTarget, patch: ConfigPatch): ConfigPatch {
+  const parsed = configPatchSchema.parse(patch);
+  const scope = writeScopeForTarget(target);
+  for (const path of patchPaths(parsed)) requireWritable(scope, path);
+  return parsed;
+}
+
+function validateWritablePath(target: ConfigWriteTarget, path: ConfigPath): void {
+  requireWritable(writeScopeForTarget(target), path);
 }
 
 export function createConfigService(options: ConfigServiceOptions = {}): ConfigService {
@@ -183,11 +237,13 @@ export function createConfigService(options: ConfigServiceOptions = {}): ConfigS
       });
     },
     set(target: ConfigWriteTarget, patch: ConfigPatch): void {
+      const writablePatch = validateWritablePatch(target, patch);
       const file = targetFile(target);
       const current = readTomlConfig(file)?.patch || {};
-      writeTomlConfig(file, mergePatch(current, patch));
+      writeTomlConfig(file, mergePatch(current, writablePatch));
     },
     unset(target: ConfigWriteTarget, path: ConfigPath): void {
+      validateWritablePath(target, path);
       const file = targetFile(target);
       const current = readTomlConfig(file)?.patch || {};
       if (path.startsWith('channels[].')) {
