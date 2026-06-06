@@ -35,7 +35,7 @@ export async function handleUiConfigRoute(options: {
   if (request.method === 'POST' && url.pathname === '/api/config') {
     const payload = await readJsonBody<Record<string, unknown>>(request);
     const config = mergeConfig(loadConfig(), payload);
-    saveConfig(config);
+    saveConfig({ ...config, schemaVersion: 2 });
     json(response, 200, { ok: true, config: configToPayload(loadConfig()) });
     return true;
   }

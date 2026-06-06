@@ -83,6 +83,65 @@ describe('handleUiConfigRoute', () => {
     assert.ok(Array.isArray(body.availableModels));
   });
 
+  it('creates home config.toml for POST writes when only legacy config files exist', async () => {
+    const configTomlPath = path.join(CODELARK_HOME, 'config.toml');
+    const previousToml = fs.existsSync(configTomlPath) ? fs.readFileSync(configTomlPath, 'utf-8') : null;
+    const previousEnvFile = fs.existsSync(CONFIG_PATH) ? fs.readFileSync(CONFIG_PATH, 'utf-8') : null;
+    const previousJsonFile = fs.existsSync(CONFIG_JSON_PATH) ? fs.readFileSync(CONFIG_JSON_PATH, 'utf-8') : null;
+    const envKeys = Object.keys(process.env)
+      .filter((key) => key.startsWith('CODELARK_') && key !== 'CODELARK_HOME');
+    const previousEnv = new Map(envKeys.map((key) => [key, process.env[key]]));
+
+    try {
+      for (const key of envKeys) delete process.env[key];
+      fs.mkdirSync(CODELARK_HOME, { recursive: true });
+      fs.rmSync(configTomlPath, { force: true });
+      fs.writeFileSync(CONFIG_PATH, 'CODELARK_HISTORY_MESSAGE_LIMIT=5\n');
+      fs.writeFileSync(CONFIG_JSON_PATH, JSON.stringify({
+        schemaVersion: 1,
+        runtime: { provider: 'codex', bridge: { historyMessageLimit: 6 } },
+        channels: [],
+      }, null, 2));
+
+      const response = createResponse();
+      const handled = await handleUiConfigRoute({
+        request: createJsonRequest('POST', {
+          runtime: 'claude',
+          historyMessageLimit: 13,
+          codexNetworkAccess: false,
+        }),
+        response,
+        url: new URL('http://localhost/api/config'),
+      });
+
+      assert.equal(handled, true);
+      assert.equal(response.statusCodeWritten, 200);
+      const body = JSON.parse(response.body) as { ok?: boolean; config?: Record<string, unknown> };
+      assert.equal(body.ok, true);
+      assert.equal(body.config?.runtime, 'claude');
+      assert.equal(body.config?.historyMessageLimit, 13);
+      assert.equal(body.config?.codexNetworkAccess, false);
+      assert.equal(fs.readFileSync(CONFIG_PATH, 'utf-8'), 'CODELARK_HISTORY_MESSAGE_LIMIT=5\n');
+      const legacyJson = JSON.parse(fs.readFileSync(CONFIG_JSON_PATH, 'utf-8')) as any;
+      assert.equal(legacyJson.runtime.bridge.historyMessageLimit, 6);
+      const savedToml = fs.readFileSync(configTomlPath, 'utf-8');
+      assert.match(savedToml, /provider = "claude"/);
+      assert.match(savedToml, /history_message_limit = 13/);
+      assert.match(savedToml, /network_access = false/);
+    } finally {
+      if (previousToml === null) fs.rmSync(configTomlPath, { force: true });
+      else fs.writeFileSync(configTomlPath, previousToml, 'utf-8');
+      if (previousEnvFile === null) fs.rmSync(CONFIG_PATH, { force: true });
+      else fs.writeFileSync(CONFIG_PATH, previousEnvFile, 'utf-8');
+      if (previousJsonFile === null) fs.rmSync(CONFIG_JSON_PATH, { force: true });
+      else fs.writeFileSync(CONFIG_JSON_PATH, previousJsonFile, 'utf-8');
+      for (const [key, value] of previousEnv) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+    }
+  });
+
   it('posts v2 config updates through TOML without rewriting legacy env/json files', async () => {
     const configTomlPath = path.join(CODELARK_HOME, 'config.toml');
     const previousToml = fs.existsSync(configTomlPath) ? fs.readFileSync(configTomlPath, 'utf-8') : null;
