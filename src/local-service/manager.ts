@@ -706,6 +706,21 @@ function hasTargetLarkCliUsers(config: Config): boolean {
   return Boolean(structuredLarkCliUsers(target.app.users));
 }
 
+function hasLegacyStrictLarkCliRuntime(config: Config): boolean {
+  const target = readTargetLarkCliApp(config);
+  if (!target) return false;
+  return target.app.strictMode === 'bot' || target.app.defaultAs === 'bot';
+}
+
+export function resetLegacyStrictLarkCliRuntimeForSetup(config = loadConfig()): boolean {
+  // 旧版 setup 会把私有 lark-cli workspace 绑定成 bot-only。
+  // 这个策略会在 OAuth 成功后继续拒绝显式 `--as user` 命令，
+  // 所以下一次交互式 setup 必须从头重建隔离 runtime。
+  if (!hasLegacyStrictLarkCliRuntime(config)) return false;
+  fs.rmSync(larkCliRuntimeDir, { recursive: true, force: true });
+  return true;
+}
+
 function resolveLarkCliScript(): string | null {
   try {
     return require.resolve('@larksuite/cli/scripts/run.js');
@@ -764,7 +779,9 @@ export async function ensureLarkCliRuntimeConfig(config = loadConfig()): Promise
   }
 
   const env = buildLarkCliRuntimeEnv();
-  const bindArgs = ['config', 'bind', '--source', 'lark-channel', '--identity', 'bot-only'];
+  // setup 随后就会申请用户 OAuth，所以 bind 阶段使用允许用户身份的预设。
+  // 如果当前还没有 user，再在下面临时收紧到 bot，避免永久把 workspace 锁死到 bot-only。
+  const bindArgs = ['config', 'bind', '--source', 'lark-channel', '--identity', 'user-default', '--force'];
   const bind = await runBundledLarkCli(bindArgs, env);
   if (bind.code !== 0) {
     return {
@@ -777,6 +794,8 @@ export async function ensureLarkCliRuntimeConfig(config = loadConfig()): Promise
   }
 
   const hasUser = hasTargetLarkCliUsers(config);
+  // 未授权时保持保守的 bot-only 行为；一旦 user token 存在，
+  // 立刻切回 auto，这样 doc-to-chat 可以用 `--as user` 调 lark-cli。
   const identityCommands = hasUser
     ? [
         ['config', 'strict-mode', 'off'],
@@ -1030,6 +1049,8 @@ export const _testOnly = {
   buildLarkCliRuntimeEnv,
   writeLarkCliSourceProjection,
   hasTargetLarkCliUsers,
+  hasLegacyStrictLarkCliRuntime,
+  resetLegacyStrictLarkCliRuntimeForSetup,
   readTargetLarkCliApp,
   primaryBridgeAutostartTaskName,
   buildBridgeAutostartStatusScript,

@@ -251,6 +251,43 @@ describe('service-manager lark-cli runtime environment', () => {
     assert.equal(_testOnly.hasTargetLarkCliUsers(config), false);
     assert.equal(_testOnly.readTargetLarkCliApp(config)?.app.users, undefined);
   });
+
+  it('detects and resets legacy bot-only strict lark-cli runtime for setup', () => {
+    const config: Config = {
+      runtime: 'codex',
+      defaultMode: 'normal',
+      enabledChannels: ['feishu'],
+      channels: [{
+        id: 'feishu-default',
+        alias: '飞书',
+        provider: 'feishu',
+        enabled: true,
+        createdAt: '2026-06-05T00:00:00.000Z',
+        updatedAt: '2026-06-05T00:00:00.000Z',
+        config: {
+          appId: 'cli_legacy_strict',
+          appSecret: 'test-secret',
+          site: 'feishu',
+        },
+      }],
+    };
+    const targetConfigPath = path.join(process.env.CODELARK_HOME!, 'runtime', 'lark-cli', 'lark-channel', 'config.json');
+    fs.mkdirSync(path.dirname(targetConfigPath), { recursive: true });
+    fs.writeFileSync(targetConfigPath, JSON.stringify({
+      apps: [{
+        appId: 'cli_legacy_strict',
+        brand: 'feishu',
+        defaultAs: 'bot',
+        strictMode: 'bot',
+        users: [{ userOpenId: 'ou_user', userName: 'Tester' }],
+      }],
+    }), 'utf-8');
+
+    assert.equal(_testOnly.hasLegacyStrictLarkCliRuntime(config), true);
+    assert.equal(_testOnly.resetLegacyStrictLarkCliRuntimeForSetup(config), true);
+    assert.equal(fs.existsSync(targetConfigPath), false);
+    assert.equal(_testOnly.hasLegacyStrictLarkCliRuntime(config), false);
+  });
 });
 
 describe('service-manager Codex skill integration', () => {

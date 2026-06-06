@@ -37,6 +37,7 @@
     "docs:preview": "vitepress preview docs --host 127.0.0.1",
     "logs:analyze": "node scripts/analyze-bridge-log.js",
     "real:setup-wizard:e2e": "tsx scripts/setup-wizard-real-e2e.ts",
+    "real:setup-wizard:wizard-e2e": "tsx scripts/setup-wizard-real-wizard-e2e.ts",
     "real:feishu:e2e": "tsx scripts/real-feishu-e2e.ts",
     "run": "node dist/cli.mjs run",
     "test": "node scripts/run-tests.js",
@@ -53,7 +54,6 @@
     "https-proxy-agent": "^9.0.0",
     "markdown-it": "^14.1.1",
     "pino": "^10.3.1",
-    "qrcode": "^1.5.4",
     "ws": "^8.18.0"
   },
   "devDependencies": {

@@ -6,7 +6,6 @@ import path from 'node:path';
 
 import * as p from '@clack/prompts';
 import { registerApp } from '@larksuiteoapi/node-sdk';
-import QRCode from 'qrcode';
 
 import { feishuSetupUserAuthScopeArgument } from '../channels/feishu/permissions.js';
 import {
@@ -28,6 +27,7 @@ import {
   buildLarkCliRuntimeEnv,
   ensureLarkCliRuntimeConfig,
   installCodexIntegration,
+  resetLegacyStrictLarkCliRuntimeForSetup,
   type CodexIntegrationInstallResult,
   type ExternalSkillInstallResult,
 } from '../local-service/manager.js';
@@ -200,16 +200,31 @@ export function extractHttpUrlsFromText(text: string): string[] {
 }
 
 export async function renderLarkCliUrlQr(url: string): Promise<string> {
-  const qr = await QRCode.toString(url, {
-    type: 'terminal',
-    errorCorrectionLevel: 'M',
-    margin: 1,
+  const script = resolveLarkCliScript();
+  const qr = await new Promise<string>((resolve, reject) => {
+    const child = spawn(process.execPath, [script, 'auth', 'qrcode', url, '--ascii'], {
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    let stdout = '';
+    let stderr = '';
+    child.stdout?.setEncoding('utf8');
+    child.stderr?.setEncoding('utf8');
+    child.stdout?.on('data', (chunk) => { stdout += chunk; });
+    child.stderr?.on('data', (chunk) => { stderr += chunk; });
+    child.on('error', reject);
+    child.on('close', (code, signal) => {
+      if (code === 0) {
+        resolve(stdout.trimEnd());
+        return;
+      }
+      reject(new Error(`lark-cli auth qrcode 退出失败：${signal || code}${stderr ? `\n${stderr.trim()}` : ''}`));
+    });
   });
   return [
     '',
-    '检测到 lark-cli 授权链接，可扫码打开：',
+    '检测到授权链接，可扫码打开：',
     url,
-    qr.trimEnd(),
+    qr,
     '',
   ].join('\n');
 }
@@ -302,6 +317,18 @@ async function hasCodeLarkUserAuthorization(): Promise<boolean> {
 }
 
 async function ensureCodeLarkUserAuthorization(config: Config): Promise<void> {
+  // 先于常规 readiness check 清理旧 runtime。旧 bot-only runtime 可能让
+  // bot 操作看起来可用，但仍然阻止 setup 接下来要申请的用户身份。
+  const resetLegacyRuntime = resetLegacyStrictLarkCliRuntimeForSetup(config);
+  if (resetLegacyRuntime) {
+    p.note(
+      [
+        '检测到旧版 CodeLark 私有 lark-cli runtime 使用 bot-only strict policy。',
+        '已清理该隔离 runtime，本次 setup 会重新完成用户授权。',
+      ].join('\n'),
+      '飞书权限需重新授权',
+    );
+  }
   const runtime = await ensureLarkCliRuntimeConfig(config);
   if (runtime.warning) {
     throw new Error(runtime.warning);
@@ -332,6 +359,12 @@ async function ensureCodeLarkUserAuthorization(config: Config): Promise<void> {
     ],
     { env: buildLarkCliRuntimeEnv() },
   );
+  // login 会把 user 写进私有 lark-cli config。这里立即刷新 runtime policy，
+  // 让 setup 结束时 user 命令已经可用，不必等下一次 bridge start 修复 strict-mode。
+  const refreshed = await ensureLarkCliRuntimeConfig(config);
+  if (refreshed.warning) {
+    throw new Error(refreshed.warning);
+  }
 }
 
 function existingFeishuCredentials(current?: FeishuChannelConfig): FeishuCredentials | null {
@@ -386,12 +419,8 @@ async function scanNewBotCredentials(): Promise<FeishuCredentials> {
   const result = await registerApp({
     source: 'codelark',
     onQRCodeReady: async (info) => {
-      const qr = await QRCode.toString(info.url, {
-        type: 'terminal',
-        errorCorrectionLevel: 'M',
-        margin: 1,
-      });
       const minutes = Math.max(1, Math.round(info.expireIn / 60));
+      const qr = await renderLarkCliUrlQr(info.url);
       process.stdout.write([
         '',
         '请用飞书/Lark App 扫描以下二维码完成应用创建：',
