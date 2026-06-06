@@ -4,7 +4,8 @@ import type { BridgeStore } from '../../../domain/audit.js';
 import type { ChannelAddress, ChannelChat, ChannelChatMode, ChannelDefaultTarget } from '../../../domain/channel.js';
 import type { BridgeSession } from '../../../domain/session.js';
 import { recordBindingChange } from '../binding-audit.js';
-import { findChannelInstance, loadConfig, type ChannelProvider } from '../../../configuration/index.js';
+import type { ChannelProvider } from '../../../configuration/index.js';
+import { createConfigService } from '../../../configuration/service.js';
 import {
   getCodexSessionByThreadId,
   isArchivedCodexThread,
@@ -103,10 +104,19 @@ function resolveChannelMeta(channelType: string, provider?: ChannelProvider): {
   provider?: ChannelProvider;
   alias?: string;
 } {
-  const instance = findChannelInstance(channelType, loadConfig());
+  let instance: { provider?: string; alias?: string } | undefined;
+  try {
+    instance = createConfigService({ migrate: false })
+      .snapshot()
+      .config
+      .channels
+      .find((channel) => channel.id === channelType);
+  } catch {
+    instance = undefined;
+  }
   if (instance) {
     return {
-      provider: instance.provider,
+      provider: asChannelProvider(instance.provider),
       alias: instance.alias,
     };
   }
