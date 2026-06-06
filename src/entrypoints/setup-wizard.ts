@@ -105,7 +105,7 @@ export function runtimeChoiceToConfig(choice: RuntimeChoice): Pick<Config, 'runt
   return {
     runtime: 'claude',
     claudeExecutable: choice === 'ccr' ? 'ccr' : 'claude',
-    claudeProvider: 'pty',
+    claudeProvider: 'sdk',
   };
 }
 

@@ -108,6 +108,17 @@ describe('BridgeSession runtime accessors', () => {
     assert.equal(resolved.reasoningEffort, 'high');
   });
 
+  it('defaults Claude runtime provider to sdk when no session or global provider is configured', () => {
+    initBridgeTestContext({ settings: new Map() });
+
+    const resolved = resolveClaudeRuntimeConfig({
+      id: 'session-claude-runtime-default-provider',
+      runtime: { activeRuntime: 'claude' },
+    });
+
+    assert.equal(resolved.provider, 'sdk');
+  });
+
   it('resolves Codex runtime config from Codex-specific session state only', () => {
     initBridgeTestContext({
       settings: new Map([

@@ -80,7 +80,7 @@ export function configToPayload(config: Config) {
     codexSandboxMode: config.codexSandboxMode || 'workspace-write',
     codexNetworkAccess: config.codexNetworkAccess !== false,
     codexReasoningEffort: config.codexReasoningEffort || 'medium',
-    claudeProvider: config.claudeProvider || 'pty',
+    claudeProvider: config.claudeProvider || 'sdk',
     claudeExecutable: config.claudeExecutable || 'claude',
     claudeDefaultModel: config.claudeDefaultModel || '',
     claudePermissionMode: config.claudePermissionMode || 'default',

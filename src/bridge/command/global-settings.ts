@@ -264,7 +264,7 @@ const SETTING_DEFINITIONS: SettingDefinition[] = [
     aliases: ['claudeDefaultProvider'],
     label: '默认 Claude Provider',
     usage: '/set claudeProvider pty|sdk',
-    read: (payload) => payload.claudeProvider || 'pty',
+    read: (payload) => payload.claudeProvider || 'sdk',
     write(payload, rawValue) {
       const token = rawValue.trim().toLowerCase();
       if (['default', 'reset', 'unset', 'none', 'auto'].includes(token)) {
@@ -275,7 +275,7 @@ const SETTING_DEFINITIONS: SettingDefinition[] = [
         payload.claudeProvider = token;
         return { ok: true };
       }
-      return { ok: false, message: '默认 Claude Provider 必须是 pty 或 sdk，也可以用 default/auto 恢复 pty 默认。' };
+      return { ok: false, message: '默认 Claude Provider 必须是 pty 或 sdk，也可以用 default/auto 恢复 sdk 默认。' };
     },
   },
   {

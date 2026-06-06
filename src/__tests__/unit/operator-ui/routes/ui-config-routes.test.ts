@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 
 import { handleUiConfigRoute } from '../../../../operator-ui/routes/config.js';
-import { mergeConfig } from '../../../../operator-ui/application/config.js';
+import { configToPayload, mergeConfig } from '../../../../operator-ui/application/config.js';
 import type { Config } from '../../../../configuration/index.js';
 
 function createResponse(): ServerResponse & { body: string; statusCodeWritten?: number } {
@@ -47,6 +47,11 @@ describe('Ui config application', () => {
     assert.equal(merged.uiAllowLan, true);
     assert.equal(typeof merged.uiAccessToken, 'string');
     assert.ok(merged.uiAccessToken?.length);
+  });
+
+  it('defaults the Claude provider payload to sdk', () => {
+    const payload = configToPayload(baseConfig);
+    assert.equal(payload.claudeProvider, 'sdk');
   });
 });
 

@@ -128,7 +128,7 @@ export function resolveEffectiveClaudeProvider(session?: BridgeSession | null): 
   if (sessionProvider === 'sdk' || sessionProvider === 'pty') return sessionProvider;
   const configured = store.getSetting('bridge_claude_provider');
   if (configured === 'sdk' || configured === 'pty') return configured;
-  return 'pty';
+  return 'sdk';
 }
 
 export function resolveEffectiveMode(

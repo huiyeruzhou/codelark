@@ -166,7 +166,7 @@ test('builds setup config with selected credentials, runtime, and workspace', ()
 
   assert.equal(next.runtime, 'claude');
   assert.equal(next.claudeExecutable, 'ccr');
-  assert.equal(next.claudeProvider, 'pty');
+  assert.equal(next.claudeProvider, 'sdk');
   assert.equal(next.defaultWorkspaceRoot, '/work/project');
   assert.equal(next.defaultProvider, 'tmux');
   assert.equal(next.channels?.[0]?.alias, '主飞书');
