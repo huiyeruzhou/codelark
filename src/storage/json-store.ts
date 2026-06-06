@@ -25,8 +25,9 @@ import type {
   BridgeSessionUpdate,
 } from '../domain/session.js';
 import type { BridgeApiProvider } from '../runtime/contracts.js';
-import { CODELARK_HOME, configToSettings, findChannelInstance, loadConfig } from '../configuration/index.js';
+import { CODELARK_HOME, configToSettings, loadConfig } from '../configuration/index.js';
 import { loadRuntimeSettings } from '../configuration/runtime-settings-projection.js';
+import { createConfigService } from '../configuration/service.js';
 import { runStartupStorageMigrations } from './migrations.js';
 import {
   getSessionActiveRuntime,
@@ -181,8 +182,16 @@ function mergeSessionRuntime(
 }
 
 function normalizeChannelDefaultTarget(target: ChannelDefaultTarget): ChannelDefaultTarget {
-  const config = loadConfig();
-  const instance = findChannelInstance(target.channelType, config);
+  let instance: { provider?: string; alias?: string } | undefined;
+  try {
+    instance = createConfigService({ migrate: false })
+      .snapshot()
+      .config
+      .channels
+      .find((channel) => channel.id === target.channelType);
+  } catch {
+    instance = undefined;
+  }
   const channelProvider = instance?.provider || target.channelProvider;
   const channelAlias = instance?.alias || target.channelAlias || defaultAliasForProvider(channelProvider);
 

@@ -12,6 +12,37 @@ function writeFile(file: string, content: string): void {
 }
 
 describe('ConfigService v2 workflow', () => {
+  it('materializes partial custom channel TOML entries from default channel shape', () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'codelark-config-v2-home-'));
+    try {
+      writeFile(path.join(home, 'config.toml'), `
+[[channels]]
+id = "feishu-custom"
+alias = "飞书配置别名"
+provider = "feishu"
+enabled = true
+
+[channels.config]
+history_message_limit = 12
+`);
+
+      const service = createConfigService({ codelarkHome: home, env: {} });
+      const custom = service.snapshot().config.channels.find((channel) => channel.id === 'feishu-custom');
+
+      assert.ok(custom);
+      assert.equal(custom.alias, '飞书配置别名');
+      assert.equal(custom.provider, 'feishu');
+      assert.equal(custom.enabled, true);
+      assert.equal(custom.config.historyMessageLimit, 12);
+      assert.equal(custom.config.streamStatusIdleStartSeconds, 180);
+      assert.equal(custom.config.streamStatusCheckIntervalSeconds, 10);
+      assert.equal(custom.config.appId, '');
+      assert.deepEqual(custom.config.allowedUsers, []);
+    } finally {
+      fs.rmSync(home, { recursive: true, force: true });
+    }
+  });
+
   it('resolves a session execution config from real TOML source files and exports child process env', () => {
     const home = fs.mkdtempSync(path.join(os.tmpdir(), 'codelark-config-v2-home-'));
     const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'codelark-config-v2-cwd-'));

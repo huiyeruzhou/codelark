@@ -26,7 +26,10 @@ function upsertChannel(config: ConfigPatch, id: string): NonNullable<ConfigPatch
   config.channels ??= [];
   let channel = getChannel(config, id);
   if (!channel) {
-    channel = { id };
+    const defaultChannel = getChannel(config, 'feishu-default');
+    channel = defaultChannel
+      ? { ...clone(defaultChannel), id }
+      : { id };
     config.channels.push(channel);
   }
   return channel;
