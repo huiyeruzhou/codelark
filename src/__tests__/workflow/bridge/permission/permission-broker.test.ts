@@ -147,6 +147,52 @@ describe('permission-broker', () => {
     assert.match(options[2]?.callbackData || '', /:not_selection$/);
   });
 
+  it('renders Codex goal replacement selections with cancel as a known option', async () => {
+    initBridgeTestContext();
+    const adapter = new RecordingAdapter();
+    const address = { channelType: 'feishu', chatId: 'chat-codex-goal-selection' } as const;
+    const permissionRequestId = 'codex-selection:goal:tmux:session-goal:1';
+
+    await forwardPermissionRequest(
+      adapter,
+      address,
+      permissionRequestId,
+      'Codex TUI Selection Prompt',
+      {
+        provider: 'tmux',
+        inspect: '/tmux-screen 80',
+        promptKind: 'goal',
+        defaultChoice: 'cancel',
+        prompt: [
+          '› 1. Replace current goal  Set the new objective and start it now',
+          '  2. Cancel                Keep the current goal',
+        ].join('\n'),
+        choices: [
+          { choice: 'replace_current_goal', label: 'Replace current goal  Set the new objective and start it now', selected: true },
+          { choice: 'cancel', label: 'Cancel                Keep the current goal' },
+        ],
+      },
+      'session-goal',
+    );
+
+    const message = adapter.sent.at(-1);
+    const select = message?.richCard?.selects?.[0];
+    assert.doesNotMatch(message?.text || '', /goal replacement selection prompt/);
+    assert.doesNotMatch(message?.text || '', /<pre>/);
+    assert.match(message?.text || '', /› 1\. Replace current goal/);
+    const cardMarkdown = message?.richCard?.sections?.[0]?.markdown || '';
+    assert.match(cardMarkdown, /Codex tmux 可能停在 TUI 选择界面，请选择要执行的选项。/);
+    assert.match(cardMarkdown, /可以用 `\/tmux-screen 20`核实。/);
+    assert.doesNotMatch(cardMarkdown, /```text/);
+    assert.doesNotMatch(cardMarkdown, /goal replacement selection prompt/);
+    assert.deepEqual(select?.options.map((option) => option.text), [
+      'Replace current goal  Set the new objective and start it now',
+      'Cancel                Keep the current goal',
+    ]);
+    assert.match(select?.selectedCallbackData || '', /:cancel$/);
+    assert.match(select?.options[1]?.callbackData || '', /:cancel$/);
+  });
+
   it('resolves Codex TUI selection callbacks to the selected choice', async () => {
     let resolved: { id: string; behavior: string; message?: string } | null = null;
     const store = initBridgeTestContext({

@@ -38,6 +38,8 @@ export type CodexSelectionChoice =
   | 'update_now'
   | 'skip'
   | 'skip_until_next_version'
+  | 'replace_current_goal'
+  | 'cancel'
   | 'yes_proceed'
   | 'yes_always'
   | 'no'
@@ -82,12 +84,25 @@ function formatCodexTrustSummary(toolInput: Record<string, unknown>): string {
   ].filter(Boolean).join('\n');
 }
 
+function formatCodexSelectionContext(toolInput: Record<string, unknown>): string {
+  const prompt = typeof toolInput.prompt === 'string' ? toolInput.prompt.trim() : '';
+  return prompt || JSON.stringify(toolInput, null, 2);
+}
+
 function formatCodexUpdateSummary(toolInput: Record<string, unknown>): string {
   const provider = typeof toolInput.provider === 'string' ? toolInput.provider : '';
   const inspect = typeof toolInput.inspect === 'string' ? toolInput.inspect : '';
   const prompt = typeof toolInput.prompt === 'string' ? toolInput.prompt : '';
+  const promptKind = typeof toolInput.promptKind === 'string' ? toolInput.promptKind : '';
+  const firstLine = promptKind === 'goal'
+    ? 'Codex TUI appears to be waiting at a goal replacement selection prompt.'
+    : promptKind === 'generic'
+      ? 'Codex TUI appears to be waiting at a numbered selection prompt.'
+      : promptKind === 'permission'
+        ? 'Codex TUI appears to be waiting at an interactive selection prompt.'
+        : 'Codex TUI appears to be waiting at an update selection prompt.';
   return [
-    'Codex TUI appears to be waiting at an update selection prompt.',
+    firstLine,
     provider ? `Provider: ${provider}` : '',
     inspect ? `Inspect current screen: ${inspect}` : '',
     prompt ? `Prompt:\n${prompt}` : '',
@@ -99,6 +114,8 @@ function codexSelectionChoiceLabel(choice: CodexSelectionChoice): string {
     case 'update_now': return 'Update now';
     case 'skip': return 'Skip';
     case 'skip_until_next_version': return 'Skip until next version';
+    case 'replace_current_goal': return 'Replace current goal';
+    case 'cancel': return 'Cancel';
     case 'yes_proceed': return 'Yes, proceed';
     case 'yes_always': return "Yes, and don't ask again";
     case 'no': return 'No';
@@ -132,6 +149,8 @@ export function parseCodexSelectionChoiceCallbackData(callbackData: string): {
     'update_now',
     'skip',
     'skip_until_next_version',
+    'replace_current_goal',
+    'cancel',
     'yes_proceed',
     'yes_always',
     'no',
@@ -149,7 +168,7 @@ export function parseCodexSelectionChoiceCallbackData(callbackData: string): {
 
 function extractCodexSelectionChoices(
   toolInput: Record<string, unknown>,
-  fallbackKind: 'update' | 'permission' | 'generic',
+  fallbackKind: 'update' | 'permission' | 'goal' | 'generic',
 ): CodexSelectionChoice[] {
   const rawChoices = Array.isArray(toolInput.choices) ? toolInput.choices : [];
   const choices = rawChoices
@@ -160,6 +179,8 @@ function extractCodexSelectionChoices(
       choice === 'update_now'
       || choice === 'skip'
       || choice === 'skip_until_next_version'
+      || choice === 'replace_current_goal'
+      || choice === 'cancel'
       || choice === 'yes_proceed'
       || choice === 'yes_always'
       || choice === 'no'
@@ -169,9 +190,9 @@ function extractCodexSelectionChoices(
   if (choices.length > 0) return Array.from(new Set(choices));
   const promptKind = typeof toolInput.promptKind === 'string' ? toolInput.promptKind : '';
   if ((promptKind || fallbackKind) === 'generic') return ['option_1', 'not_selection'];
-  return (promptKind || fallbackKind) === 'update'
-    ? ['update_now', 'skip', 'skip_until_next_version']
-    : ['yes_proceed', 'yes_always', 'no'];
+  if ((promptKind || fallbackKind) === 'update') return ['update_now', 'skip', 'skip_until_next_version'];
+  if ((promptKind || fallbackKind) === 'goal') return ['replace_current_goal', 'cancel'];
+  return ['yes_proceed', 'yes_always', 'no'];
 }
 
 function extractCodexSelectionLabelByChoice(
@@ -193,7 +214,7 @@ function buildCodexSelectionPromptCard(
   permissionRequestId: string,
   summary: string,
   toolInput: Record<string, unknown>,
-  fallbackKind: 'update' | 'permission' | 'generic',
+  fallbackKind: 'update' | 'permission' | 'goal' | 'generic',
 ): OutboundRichCard {
   const choices = extractCodexSelectionChoices(toolInput, fallbackKind);
   const defaultChoice = typeof toolInput.defaultChoice === 'string'
@@ -207,10 +228,9 @@ function buildCodexSelectionPromptCard(
       {
         markdown: [
           'Codex tmux 可能停在 TUI 选择界面，请选择要执行的选项。',
+          '可以用 `/tmux-screen 20`核实。',
           '',
-          '```text',
           summary,
-          '```',
         ].join('\n'),
       },
     ],
@@ -337,7 +357,9 @@ export async function forwardPermissionRequest(
   // Format the input summary (truncated)
   const inputStr = isTrustPrompt
     ? formatCodexTrustSummary(toolInput)
-    : isUpdatePrompt || isSelectionPrompt
+    : isSelectionPrompt
+      ? formatCodexSelectionContext(toolInput)
+    : isUpdatePrompt
       ? formatCodexUpdateSummary(toolInput)
     : JSON.stringify(toolInput, null, 2);
   const truncatedInput = inputStr.length > 300
@@ -352,7 +374,7 @@ export async function forwardPermissionRequest(
       text: [
         `<b>Codex TUI Selection</b>`,
         ``,
-        `<pre>${escapeHtml(truncatedInput)}</pre>`,
+        escapeHtml(truncatedInput),
         ``,
         `Choose the option CodeLark should select in tmux:`,
       ].join('\n'),

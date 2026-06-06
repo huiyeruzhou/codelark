@@ -162,7 +162,7 @@ describe('codex-tmux-provider', () => {
       'skip',
       'skip_until_next_version',
     ]);
-    assert.match(prompt.summary, /Update available/);
+    assert.doesNotMatch(prompt.summary, /Update available/);
     assert.match(prompt.summary, /Skip until next version/);
   });
 
@@ -205,6 +205,60 @@ describe('codex-tmux-provider', () => {
     ]);
     assert.match(prompt.summary, /Experimental profile/);
     assert.deepEqual(buildCodexTuiSelectionChoiceActions(prompt, 'not_selection'), []);
+  });
+
+  it('parses Codex goal replacement selections from the current prompt block only', () => {
+    const screen = [
+      'Codex TUI appears to be waiting at an update selection prompt.',
+      'Provider: tmux',
+      'Inspect current screen: /tmux-screen 80',
+      'Prompt:',
+      '  4. 当前 dry-run 证明',
+      '› 1. Replace current goal  Set the new objective and start it now',
+      '  2. Cancel                Keep the current goal',
+    ].join('\n');
+
+    const prompt = parseCodexTuiSelectionPrompt(screen);
+    assert.ok(prompt);
+    assert.equal(prompt.kind, 'goal');
+    assert.equal(prompt.selectedIndex, 0);
+    assert.deepEqual(prompt.options.map((option) => option.choice), [
+      'replace_current_goal',
+      'cancel',
+    ]);
+    assert.deepEqual(prompt.options.map((option) => option.label), [
+      'Replace current goal  Set the new objective and start it now',
+      'Cancel                Keep the current goal',
+    ]);
+    assert.match(prompt.fingerprint, /^goal:0:replace_current_goal:selected:/);
+    assert.match(prompt.summary, /› 1\. Replace current goal/);
+    assert.doesNotMatch(prompt.summary, /当前 dry-run 证明/);
+
+    const samePromptWithDifferentOldList = parseCodexTuiSelectionPrompt([
+      'Prompt:',
+      '  9. stale ordered item',
+      '› 1. Replace current goal  Set the new objective and start it now',
+      '  2. Cancel                Keep the current goal',
+    ].join('\n'));
+    assert.ok(samePromptWithDifferentOldList);
+    assert.equal(samePromptWithDifferentOldList.fingerprint, prompt.fingerprint);
+  });
+
+  it('recognizes Replace current goal as a known Codex TUI selection', () => {
+    const prompt = parseCodexTuiSelectionPrompt([
+      '› 1. Replace current goal',
+      '  2. Cancel',
+    ].join('\n'));
+    assert.ok(prompt);
+    assert.equal(prompt.kind, 'goal');
+    assert.deepEqual(prompt.options.map((option) => option.choice), [
+      'replace_current_goal',
+      'cancel',
+    ]);
+    assert.deepEqual(buildCodexTuiSelectionChoiceActions(prompt, 'cancel'), [
+      { type: 'key', key: 'Down' },
+      { type: 'key', key: 'Enter' },
+    ]);
   });
 
   it('requires two unchanged selection prompt captures before reporting a stall', () => {
