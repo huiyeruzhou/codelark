@@ -17,8 +17,10 @@ import {
   getSessionCodexReasoningEffort,
   getSessionCodexSandboxMode,
   getSessionCodexThreadId,
+  getSessionRuntimeProviderIdentity,
   getSessionTmuxSessionName,
   materializeBridgeSessionRuntime,
+  setSessionClaudeTmuxProviderUpdate,
   setSessionActiveRuntimeUpdate,
   setSessionClaudeModelUpdate,
   setSessionClaudePermissionModeUpdate,
@@ -108,7 +110,39 @@ describe('BridgeSession runtime accessors', () => {
     assert.equal(resolved.reasoningEffort, 'high');
   });
 
-  it('defaults Claude runtime provider to sdk when no session or global provider is configured', () => {
+  it('uses symmetric runtime provider identities for Codex and Claude tmux', () => {
+    assert.equal(getSessionRuntimeProviderIdentity({
+      id: 'session-codex-tmux-identity',
+      runtime: { codex: { provider: 'tmux' } },
+    } as BridgeSession), 'codex:tmux');
+
+    assert.equal(getSessionRuntimeProviderIdentity({
+      id: 'session-claude-tmux-identity',
+      runtime: { activeRuntime: 'claude', claude: { provider: 'tmux' } },
+    } as BridgeSession), 'claude:tmux');
+
+    assert.deepEqual(setSessionClaudeTmuxProviderUpdate({
+      tmuxSessionName: 'claude_session',
+      autoEnter: true,
+      sessionId: 'claude-thread',
+      cwd: '/tmp/project',
+    }), {
+      runtime: {
+        activeRuntime: 'claude',
+        claude: {
+          provider: 'tmux',
+          sessionId: 'claude-thread',
+          cwd: '/tmp/project',
+        },
+        general: {
+          tmuxSessionName: 'claude_session',
+          autoEnter: true,
+        },
+      },
+    });
+  });
+
+  it('defaults Claude runtime provider to tmux when no session or global provider is configured', () => {
     initBridgeTestContext({ settings: new Map() });
 
     const resolved = resolveClaudeRuntimeConfig({
@@ -116,7 +150,7 @@ describe('BridgeSession runtime accessors', () => {
       runtime: { activeRuntime: 'claude' },
     });
 
-    assert.equal(resolved.provider, 'sdk');
+    assert.equal(resolved.provider, 'tmux');
   });
 
   it('resolves Codex runtime config from Codex-specific session state only', () => {

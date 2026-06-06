@@ -14,8 +14,9 @@ export type CodexReasoningEffort = RuntimeReasoningEffort;
 export type ChannelProvider = 'feishu';
 export type FeishuSite = 'feishu' | 'lark';
 export type RuntimeProvider = 'codex' | 'claude';
-export type CodexProviderChoice = 'sdk' | 'tmux' | 'pty';
-export type ClaudeProviderChoice = 'pty' | 'sdk';
+export type RuntimeProviderChoice = 'sdk' | 'pty' | 'tmux';
+export type CodexProviderChoice = RuntimeProviderChoice;
+export type ClaudeProviderChoice = RuntimeProviderChoice;
 export type ClaudeExecutable = 'claude' | 'ccr';
 export type ClaudePermissionMode = 'default' | 'acceptEdits' | 'bypassPermissions' | 'plan';
 
@@ -263,8 +264,8 @@ export function normalizeCodexProviderChoice(value: unknown): CodexProviderChoic
 export function normalizeClaudeProviderChoice(value: unknown): ClaudeProviderChoice | undefined {
   if (typeof value !== 'string') return undefined;
   const normalized = value.trim().toLowerCase();
-  if (normalized === 'sdk' || normalized === 'pty') return normalized;
-  return 'sdk';
+  if (normalized === 'sdk' || normalized === 'pty' || normalized === 'tmux') return normalized;
+  return 'tmux';
 }
 
 function normalizeClaudePermissionMode(value: unknown): ClaudePermissionMode | undefined {
@@ -818,6 +819,7 @@ function buildConfigEnvSnapshot(config: ConfigFile): string {
   out += formatEnvLine("CODELARK_CODEX_NETWORK_ACCESS", String(codex.networkAccess === true));
   out += formatEnvLine("CODELARK_CODEX_REASONING_EFFORT", codex.reasoningEffort);
   out += formatEnvLine("CODELARK_CLAUDE_EXECUTABLE", claude?.executable);
+  out += formatEnvLine("CODELARK_CLAUDE_PROVIDER", claude?.provider);
   out += formatEnvLine("CODELARK_CLAUDE_DEFAULT_MODEL", claude?.defaultModel);
   out += formatEnvLine("CODELARK_CLAUDE_PERMISSION_MODE", claude?.permissionMode);
   if (claude?.idleTimeoutMinutes !== undefined) {

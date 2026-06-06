@@ -763,14 +763,15 @@ describe('loadConfig/saveConfig round-trip', () => {
       ...loaded,
       runtime: 'claude',
       claudeExecutable: 'ccr',
-      claudeProvider: 'pty',
+      claudeProvider: 'tmux',
     });
 
     const reloaded = loadConfig();
     assert.equal(reloaded.runtime, 'claude');
     assert.equal(reloaded.claudeExecutable, 'ccr');
-    assert.equal(reloaded.claudeProvider, 'pty');
+    assert.equal(reloaded.claudeProvider, 'tmux');
     assert.match(fs.readFileSync(CONFIG_PATH, 'utf-8'), /CODELARK_RUNTIME=claude/);
+    assert.match(fs.readFileSync(CONFIG_PATH, 'utf-8'), /CODELARK_CLAUDE_PROVIDER=tmux/);
     assert.equal(configToSettings(reloaded).get('bridge_default_runtime'), 'claude');
     const persisted = JSON.parse(fs.readFileSync(CONFIG_JSON_PATH, 'utf-8')) as any;
     assert.equal(persisted.runtime.provider, 'claude');

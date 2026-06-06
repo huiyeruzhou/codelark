@@ -263,19 +263,19 @@ const SETTING_DEFINITIONS: SettingDefinition[] = [
     group: 'global-runtime-claude',
     aliases: ['claudeDefaultProvider'],
     label: '默认 Claude Provider',
-    usage: '/set claudeProvider pty|sdk',
-    read: (payload) => payload.claudeProvider || 'sdk',
+    usage: '/set claudeProvider tmux|pty|sdk',
+    read: (payload) => payload.claudeProvider || 'tmux',
     write(payload, rawValue) {
       const token = rawValue.trim().toLowerCase();
       if (['default', 'reset', 'unset', 'none', 'auto'].includes(token)) {
         payload.claudeProvider = '';
         return { ok: true };
       }
-      if (token === 'pty' || token === 'sdk') {
+      if (token === 'pty' || token === 'sdk' || token === 'tmux') {
         payload.claudeProvider = token;
         return { ok: true };
       }
-      return { ok: false, message: '默认 Claude Provider 必须是 pty 或 sdk，也可以用 default/auto 恢复 sdk 默认。' };
+      return { ok: false, message: '默认 Claude Provider 必须是 tmux、pty 或 sdk，也可以用 default/auto 恢复 tmux 默认。' };
     },
   },
   {

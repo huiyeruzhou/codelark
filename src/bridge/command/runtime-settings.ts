@@ -84,7 +84,7 @@ const RUNTIME_OPTIONS_TEXT = '可选：`codex`（OpenAI Codex，默认） `claud
 const REASONING_OPTIONS_TEXT = '可选：`1=minimal` `2=low` `3=medium` `4=high` `5=xhigh`';
 const SANDBOX_OPTIONS_TEXT = '可选：`read-only` `workspace-write` `danger-full-access` `default`（回到全局默认）';
 const NETWORK_OPTIONS_TEXT = '可选：`on`/`true` 开启网络，`off`/`false` 关闭网络，`default` 回到全局默认。';
-const CLAUDE_PTY_RUNTIME_UPDATE_NOTE = '已保存为当前 BridgeSession 的 Claude Code 启动配置；如果 Claude Code pty 已经启动，不会向运行中的 TUI 注入切换命令，下一条普通消息会按新参数启动或重启 Claude Code pty。';
+const CLAUDE_PTY_RUNTIME_UPDATE_NOTE = '已保存为当前 BridgeSession 的 Claude Code 启动配置；如果 Claude Code TUI 已经启动，不会向运行中的 TUI 注入切换命令，下一条普通消息会按新参数启动或重启 Claude Code TUI。';
 const CODEX_RUNTIME_UPDATE_NOTE = '修改从下一轮 Codex 请求开始生效；正在运行的任务请先 `/stop` 后重发。';
 
 function codexRuntimeUpdateNotes(session: BridgeSession | null | undefined, notes: string[] = []): string[] {
@@ -153,7 +153,7 @@ export function handleReasoningCommand(options: {
       return buildCommandFields(
         '当前 Claude Code 思考级别',
         [['级别', claudeConfig.reasoningEffort || 'default']],
-        [REASONING_OPTIONS_TEXT, '发送 `/r 4` 或 `/r high` 可保存给后续 Claude Code pty 启动；`minimal` 会映射为 Claude Code `low`。'],
+        [REASONING_OPTIONS_TEXT, '发送 `/r 4` 或 `/r high` 可保存给后续 Claude Code TUI 启动；`minimal` 会映射为 Claude Code `low`。'],
         options.markdown,
       );
     }
@@ -170,7 +170,7 @@ export function handleReasoningCommand(options: {
       return buildCommandFields(
         '已恢复默认 Claude Code 思考级别',
         [['级别', 'default']],
-        ['后续启动 Claude Code pty 时不再传 `--effort`，使用 Claude Code 默认值。', CLAUDE_PTY_RUNTIME_UPDATE_NOTE],
+        ['后续启动 Claude Code TUI 时不再传 `--effort`，使用 Claude Code 默认值。', CLAUDE_PTY_RUNTIME_UPDATE_NOTE],
         options.markdown,
       );
     }
@@ -190,7 +190,7 @@ export function handleReasoningCommand(options: {
     return buildCommandFields(
       '已更新 Claude Code 思考级别',
       [['级别', effort]],
-      [`后续启动 Claude Code pty 时会传入 \`--effort ${effort}\`。`, CLAUDE_PTY_RUNTIME_UPDATE_NOTE],
+      [`后续启动 Claude Code TUI 时会传入 \`--effort ${effort}\`。`, CLAUDE_PTY_RUNTIME_UPDATE_NOTE],
       options.markdown,
     );
   }
@@ -254,8 +254,8 @@ export function handleModeCommand(options: {
       ],
       [
         requestedMode === 'yolo'
-          ? '后续启动 Claude Code pty 时会传入 bypassPermissions 权限模式。'
-          : '后续启动 Claude Code pty 时会使用 default 权限模式。',
+          ? '后续启动 Claude Code TUI 时会传入 bypassPermissions 权限模式。'
+          : '后续启动 Claude Code TUI 时会使用 default 权限模式。',
         CLAUDE_PTY_RUNTIME_UPDATE_NOTE,
       ],
       options.markdown,
@@ -566,7 +566,7 @@ export function handleModelCommand(options: {
         [['模型', currentModel]],
         [
           '发送 `/model sonnet`、`/model opus` 或完整 Claude 模型名可切换；发送 `/model default` 可回退到全局 Claude 默认模型。',
-          '模型切换保存为后续 Claude Code pty 启动参数；不会向运行中的 TUI 注入模型切换命令。',
+          '模型切换保存为后续 Claude Code TUI 启动参数；不会向运行中的 TUI 注入模型切换命令。',
         ],
         options.markdown,
       );
@@ -587,7 +587,7 @@ export function handleModelCommand(options: {
       return buildCommandFields(
         '已恢复默认 Claude Code 模型',
         [['模型', resolveClaudeRuntimeConfig(updated).model || 'default']],
-        ['后续启动 Claude Code pty 时会跟随全局 Claude 默认模型。', CLAUDE_PTY_RUNTIME_UPDATE_NOTE],
+        ['后续启动 Claude Code TUI 时会跟随全局 Claude 默认模型。', CLAUDE_PTY_RUNTIME_UPDATE_NOTE],
         options.markdown,
       );
     }
@@ -596,7 +596,7 @@ export function handleModelCommand(options: {
     return buildCommandFields(
       '已更新 Claude Code 模型',
       [['模型', requestedModel]],
-      [`后续启动 Claude Code pty 时会传入 \`--model ${requestedModel}\`。`, CLAUDE_PTY_RUNTIME_UPDATE_NOTE],
+      [`后续启动 Claude Code TUI 时会传入 \`--model ${requestedModel}\`。`, CLAUDE_PTY_RUNTIME_UPDATE_NOTE],
       options.markdown,
     );
   }

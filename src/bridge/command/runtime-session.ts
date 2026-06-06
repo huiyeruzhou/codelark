@@ -1,10 +1,12 @@
 import { buildCommandFields } from './presentation.js';
 import type { RuntimeSettingsCommandDeps } from './runtime-bootstrap.js';
 import type { BridgeSession, BridgeStore, ChannelChat } from '../../domain/index.js';
+import type { RuntimeProviderChoice } from '../../domain/session.js';
 import {
   getSessionActiveRuntime,
   getSessionClaudeProvider,
   getSessionCodexProvider,
+  getSessionRuntimeProvider,
   getSessionSystemPrompt,
   getSessionWorkingDirectory,
 } from '../../domain/session-runtime.js';
@@ -13,6 +15,7 @@ import {
   resolveClaudeRuntimeConfig,
   resolveEffectiveClaudeProvider,
   resolveEffectiveCodexProvider,
+  resolveEffectiveRuntimeProvider,
   resolveEffectiveMode,
 } from '../session/support.js';
 import { getCodexThreadId } from '../turn/turn-classifier.js';
@@ -84,21 +87,28 @@ export function formatSessionClaudeProvider(session?: BridgeSession | null): str
     : `${effective} (全局默认)`;
 }
 
+export function formatSessionRuntimeProvider(session?: BridgeSession | null): string {
+  const effective = resolveEffectiveRuntimeProvider(session);
+  return getSessionRuntimeProvider(session)
+    ? effective.provider
+    : `${effective.provider} (全局默认)`;
+}
+
 export function isTuiProviderSession(session?: BridgeSession | null): boolean {
-  const provider = resolveEffectiveCodexProvider(session);
+  const { provider } = resolveEffectiveRuntimeProvider(session);
   return provider === 'tmux' || provider === 'pty';
 }
 
 export function buildTuiProviderRuntimeOptionBlockedResponse(commandLabel: string, provider: string, markdown: boolean): string {
   const restartNote = provider === 'tmux'
-    ? '当前是 tmux Provider；请先 `/stop`，再发送 `/p tmux` 重启 Codex TUI，让新设置从下一轮生效。若要退出 TUI Provider，可停止后发送 `/provider sdk`。'
+    ? '当前是 tmux Provider；请先 `/stop`，再发送 `/p tmux` 重启 TUI，让新设置从下一轮生效。若要退出 TUI Provider，可停止后发送 `/provider sdk`。'
     : `请先 \`/stop\`，再发送 \`/provider ${provider}\` 重启 ${provider} Provider，让新设置从下一轮生效。`;
   return buildCommandFields(
     `当前是 ${provider} Provider`,
     [['命令', commandLabel]],
     [
-      'session-level Codex runtime 设置无法影响已经启动的 Codex TUI 终端。',
-      '也可以直接在 Codex TUI 里使用内置 slash 命令调整当前运行中的终端会话。',
+      'session-level runtime 设置无法影响已经启动的 TUI 终端。',
+      '也可以直接在 TUI 里使用内置 slash 命令调整当前运行中的终端会话。',
       restartNote,
     ],
     markdown,
@@ -124,7 +134,7 @@ export function buildRuntimeSwitchWhileRunningResponse(params: {
     '请先发送 `/stop` 停止当前对话，再重新执行切换命令；已保存的常规 runtime 设置只会从下一轮请求开始生效。',
   ];
   if (params.provider === 'tmux') {
-    notes.push('tmux Provider 需要发送 `/p tmux` 重启 Codex TUI，才能确保和底层 JSONL 会话一致。');
+    notes.push('tmux Provider 需要发送 `/p tmux` 重启 TUI，才能确保和底层 JSONL 会话一致。');
   }
   return buildCommandFields(
     '请先停止当前对话',

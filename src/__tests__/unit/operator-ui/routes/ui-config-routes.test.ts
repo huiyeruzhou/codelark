@@ -49,9 +49,9 @@ describe('Ui config application', () => {
     assert.ok(merged.uiAccessToken?.length);
   });
 
-  it('defaults the Claude provider payload to sdk', () => {
+  it('defaults the Claude provider payload to tmux', () => {
     const payload = configToPayload(baseConfig);
-    assert.equal(payload.claudeProvider, 'sdk');
+    assert.equal(payload.claudeProvider, 'tmux');
   });
 });
 

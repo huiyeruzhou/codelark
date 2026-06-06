@@ -1385,6 +1385,9 @@ describe('bridge command e2e', () => {
       assert.notEqual(claudeBinding.bridgeSessionId, binding.bridgeSessionId);
       assert.equal(store.getSession(claudeBinding.bridgeSessionId)?.runtime?.activeRuntime, 'claude');
 
+      await _testOnly.handleMessage(adapter, inboundMessage(address, '/p sdk', 'incoming-provider-claude-sdk'));
+      assert.equal(store.getSession(claudeBinding.bridgeSessionId)?.runtime?.claude?.provider, 'sdk');
+
       await _testOnly.handleMessage(adapter, inboundMessage(address, 'hi', 'incoming-runtime-claude-plain'));
 
       assert.equal(calls.length, 1);
@@ -1486,6 +1489,9 @@ describe('bridge command e2e', () => {
       assert.notEqual(claudeBinding.bridgeSessionId, binding.bridgeSessionId);
       assert.equal(store.getSession(claudeBinding.bridgeSessionId)?.runtime?.activeRuntime, 'claude');
       const sentBeforePrompt = adapter.sent.length;
+
+      await _testOnly.handleMessage(adapter, inboundMessage(address, '/p pty', 'incoming-provider-claude-jsonl-pty'));
+      assert.equal(store.getSession(claudeBinding.bridgeSessionId)?.runtime?.claude?.provider, 'pty');
 
       await _testOnly.handleMessage(adapter, inboundMessage(address, 'hi from claude jsonl', 'incoming-runtime-claude-jsonl-mirror-prompt'));
       await waitForCondition(() => adapter.streamEvents.some((event) => event.kind === 'end' && event.streamKey?.startsWith('mirror:')), 3000);
@@ -1661,6 +1667,9 @@ describe('bridge command e2e', () => {
       assert.ok(claudeBinding);
       assert.notEqual(claudeBinding.bridgeSessionId, binding.bridgeSessionId);
       assert.equal(getSessionActiveRuntime(store.getSession(claudeBinding.bridgeSessionId)), 'claude');
+
+      await _testOnly.handleMessage(adapter, inboundMessage(address, '/p pty', 'incoming-provider-mock-claude-pty'));
+      assert.equal(store.getSession(claudeBinding.bridgeSessionId)?.runtime?.claude?.provider, 'pty');
 
       await _testOnly.handleMessage(adapter, inboundMessage(address, 'hello mock claude', 'incoming-mock-claude-prompt'));
       assert.match(fs.readFileSync(fakeClaude.logPath, 'utf-8'), /prompt:hello mock claude/);

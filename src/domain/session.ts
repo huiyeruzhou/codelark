@@ -2,7 +2,9 @@ import type { ChannelChatMode } from './channel.js';
 
 export type CodexSandboxMode = 'read-only' | 'workspace-write' | 'danger-full-access';
 export type CodexReasoningEffort = 'minimal' | 'low' | 'medium' | 'high' | 'xhigh';
-export type ClaudeProviderChoice = 'pty' | 'sdk';
+export type RuntimeProviderChoice = 'sdk' | 'pty' | 'tmux';
+export type ClaudeProviderChoice = RuntimeProviderChoice;
+export type RuntimeProviderIdentity = `${'codex' | 'claude'}:${RuntimeProviderChoice}`;
 export type ClaudeExecutable = 'claude' | 'ccr';
 export type ClaudePermissionMode = 'default' | 'acceptEdits' | 'bypassPermissions' | 'plan';
 
@@ -70,7 +72,7 @@ export interface BridgeSessionCodexRuntimeState {
   threadId?: string;
   title?: string;
   model?: string;
-  provider?: 'sdk' | 'tmux' | 'pty';
+  provider?: RuntimeProviderChoice;
   mode?: ChannelChatMode;
   sandboxMode?: CodexSandboxMode;
   networkAccess?: boolean;

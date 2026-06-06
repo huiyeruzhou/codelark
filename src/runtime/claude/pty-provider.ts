@@ -66,11 +66,11 @@ interface ClaudePtySession {
 
 const claudePtySessions = new Map<string, ClaudePtySession>();
 
-function sleep(ms: number): Promise<void> {
+export function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-function parsePositiveIntEnv(name: string, fallback: number, minValue: number): number {
+export function parsePositiveIntEnv(name: string, fallback: number, minValue: number): number {
   const raw = process.env[name];
   if (raw === undefined || raw.trim() === '') return fallback;
   const parsed = Number(raw);
@@ -96,7 +96,7 @@ function compactScreenText(text: string): string {
   return normalizePtyOutput(text).replace(/\s+/g, '').toLowerCase();
 }
 
-function hasClaudePtyTrustPrompt(text: string): boolean {
+export function hasClaudePtyTrustPrompt(text: string): boolean {
   const compact = compactScreenText(text);
   return compact.includes('quicksafetycheck')
     || compact.includes('yes,itrustthisfolder')
@@ -104,7 +104,7 @@ function hasClaudePtyTrustPrompt(text: string): boolean {
     || compact.includes('entertoconfirm');
 }
 
-function hasClaudePtyOnboardingPrompt(text: string): boolean {
+export function hasClaudePtyOnboardingPrompt(text: string): boolean {
   const compact = compactScreenText(text);
   const hasWelcomeContinue = (
     compact.includes('welcometoclaudecode')
@@ -119,7 +119,7 @@ function hasClaudePtyOnboardingPrompt(text: string): boolean {
   return hasWelcomeContinue || hasThemeSelection;
 }
 
-function hasClaudePtyInputPrompt(text: string): boolean {
+export function hasClaudePtyInputPrompt(text: string): boolean {
   if (hasClaudePtyOnboardingPrompt(text) || hasClaudePtyTrustPrompt(text)) return false;
   const compact = compactScreenText(text);
   return text.includes('❯') && (
@@ -158,7 +158,7 @@ async function loadPtyModule(): Promise<PtyModule> {
   }
 }
 
-function buildClaudePtyCommand(
+export function buildClaudePtyCommand(
   executable: ClaudeExecutable,
   options: {
     model?: string;
@@ -194,7 +194,7 @@ function buildClaudePtyCommand(
   };
 }
 
-function buildClaudePtyEnv(): Record<string, string> {
+export function buildClaudePtyEnv(): Record<string, string> {
   const env: Record<string, string> = {};
   for (const [key, value] of Object.entries(process.env)) {
     if (value !== undefined) env[key] = value;
@@ -217,7 +217,7 @@ async function waitForClaudePtyBuffer(
   return predicate(session.buffer);
 }
 
-function findLatestClaudeSessionJsonlUpdatedAfter(cwd: string, sinceMs: number): ClaudeSessionJsonlSummary | null {
+export function findLatestClaudeSessionJsonlUpdatedAfter(cwd: string, sinceMs: number): ClaudeSessionJsonlSummary | null {
   const candidates: Array<{ mtimeMs: number; summary: ClaudeSessionJsonlSummary }> = [];
   for (const filePath of listClaudeSessionJsonlFiles(cwd)) {
     try {
@@ -233,7 +233,7 @@ function findLatestClaudeSessionJsonlUpdatedAfter(cwd: string, sinceMs: number):
   return candidates[0]?.summary || null;
 }
 
-async function waitForClaudeSessionJsonlUpdatedAfter(cwd: string, sinceMs: number): Promise<ClaudeSessionJsonlSummary | null> {
+export async function waitForClaudeSessionJsonlUpdatedAfter(cwd: string, sinceMs: number): Promise<ClaudeSessionJsonlSummary | null> {
   const timeoutMs = parsePositiveIntEnv(
     'CODELARK_CLAUDE_PTY_JSONL_DISCOVERY_TIMEOUT_MS',
     DEFAULT_JSONL_DISCOVERY_TIMEOUT_MS,

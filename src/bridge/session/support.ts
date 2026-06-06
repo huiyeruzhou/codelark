@@ -34,10 +34,18 @@ import {
   getSessionClaudePermissionMode,
   getSessionClaudeProvider,
   getSessionClaudeReasoningEffort,
+  getSessionActiveRuntime,
   getSessionWorkingDirectory,
+  buildRuntimeProviderIdentity,
+  isRuntimeProviderChoice,
 } from '../../domain/session-runtime.js';
 import type { ChannelChat } from '../../domain/channel.js';
-import type { BridgeSession, BridgeSessionClaudeRuntimeState } from '../../domain/session.js';
+import type {
+  BridgeSession,
+  BridgeSessionClaudeRuntimeState,
+  RuntimeProviderChoice,
+  RuntimeProviderIdentity,
+} from '../../domain/session.js';
 import { validateWorkingDirectory } from '../../shared/security/validators.js';
 
 const AVAILABLE_CODEX_MODELS = listSelectableCodexModels();
@@ -93,7 +101,8 @@ export function resolveEffectiveNetworkAccess(session?: BridgeSession | null): b
   return (store.getSetting('bridge_codex_network_access') || '').toLowerCase() === 'true';
 }
 
-export type SessionRuntimeCodexProvider = 'sdk' | 'tmux' | 'pty';
+export type SessionRuntimeProvider = RuntimeProviderChoice;
+export type SessionRuntimeCodexProvider = SessionRuntimeProvider;
 
 export const sessionRuntimeConfigBrand: unique symbol = Symbol('SessionRuntimeConfig');
 
@@ -125,10 +134,10 @@ export interface ClaudeRuntimeConfig {
 export function resolveEffectiveClaudeProvider(session?: BridgeSession | null): ClaudeProviderChoice {
   const { store } = getBridgeContext();
   const sessionProvider = getSessionClaudeProvider(session);
-  if (sessionProvider === 'sdk' || sessionProvider === 'pty') return sessionProvider;
+  if (isRuntimeProviderChoice(sessionProvider)) return sessionProvider;
   const configured = store.getSetting('bridge_claude_provider');
-  if (configured === 'sdk' || configured === 'pty') return configured;
-  return 'sdk';
+  if (isRuntimeProviderChoice(configured)) return configured;
+  return 'tmux';
 }
 
 export function resolveEffectiveMode(
@@ -143,10 +152,26 @@ export function resolveEffectiveMode(
 export function resolveEffectiveCodexProvider(session?: BridgeSession | null): SessionRuntimeCodexProvider {
   const { store } = getBridgeContext();
   const sessionProvider = getSessionCodexProvider(session);
-  if (sessionProvider === 'sdk' || sessionProvider === 'tmux' || sessionProvider === 'pty') return sessionProvider;
+  if (isRuntimeProviderChoice(sessionProvider)) return sessionProvider;
   const configured = store.getSetting('bridge_default_provider');
-  if (configured === 'sdk' || configured === 'tmux' || configured === 'pty') return configured;
+  if (isRuntimeProviderChoice(configured)) return configured;
   return shouldUseCodexPtyTui() ? 'pty' : shouldUseCodexTmuxTui() ? 'tmux' : 'sdk';
+}
+
+export function resolveEffectiveRuntimeProvider(session?: BridgeSession | null): {
+  runtime: 'codex' | 'claude';
+  provider: RuntimeProviderChoice;
+  identity: RuntimeProviderIdentity;
+} {
+  const runtime = getSessionActiveRuntime(session) === 'claude' ? 'claude' : 'codex';
+  const provider = runtime === 'claude'
+    ? resolveEffectiveClaudeProvider(session)
+    : resolveEffectiveCodexProvider(session);
+  return {
+    runtime,
+    provider,
+    identity: buildRuntimeProviderIdentity(runtime, provider),
+  };
 }
 
 export function resolveEffectiveSkipGitRepoCheck(): boolean {

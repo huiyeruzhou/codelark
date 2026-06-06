@@ -21,6 +21,7 @@ CodeLark 的常见稳态由几个进程或外部运行体组成。
 | Codex SDK/exec 子进程 | `src/runtime/codex/provider.ts` | Bridge daemon 内的 Codex SDK provider | Codex 自有 `~/.codex` 数据 | 通过 Codex SDK/exec 执行 prompt，产出 SSE 风格事件。 |
 | Codex pty child | `src/runtime/codex/pty-provider.ts` | Bridge daemon 内的 pty provider | 内存中的 pty screen map、Codex JSONL | 在 daemon 内创建 pty child，注入 prompt，读取屏幕和 JSONL mirror。 |
 | Codex tmux session | `src/runtime/codex/tmux-provider.ts`、`src/bridge/tmux/*` | tmux server + Bridge daemon 编排 | tmux session、Codex JSONL | 在 tmux 中运行 Codex TUI，Bridge 通过 tmux CLI 注入输入和捕获屏幕。 |
+| Claude tmux session | `src/runtime/claude/tmux-provider.ts`、`src/bridge/tmux/*` | tmux server + Bridge daemon 编排 | tmux session、Claude JSONL | 默认 Claude Code provider；在 tmux 中运行 Claude Code TUI，Bridge 通过 tmux CLI 注入输入和捕获屏幕。 |
 | Claude pty child | `src/runtime/claude/pty-provider.ts` | Bridge daemon 内的 Claude pty provider | 内存中的 pty session map、Claude JSONL | 在 pty 中运行 Claude Code，注入 prompt，读取屏幕和 JSONL mirror。 |
 
 `codelark run` 会尝试启动 UI server 和 Bridge daemon；`codelark start` 只启动 Bridge daemon。启动 Bridge 前，`src/local-service/manager.ts` 会为当前 CodeLark 配置初始化专属 lark-cli 运行环境，并把 `LARK_CHANNEL_CONFIG` / `LARKSUITE_CLI_CONFIG_DIR` 注入 daemon。Linux 下 `scripts/daemon.sh start` 使用 `setsid` 或 `nohup` 启动 `dist/daemon.mjs`，macOS 走 launchctl，Windows 走 PowerShell supervisor。
@@ -62,7 +63,7 @@ Bridge daemon 的启动路径集中在 `src/entrypoints/daemon.ts`：
 
 - `InboundMessage` / `OutboundMessage`：通道抽象明确，平台事件不会直接流入 bridge 业务层。
 - `ChannelChat -> BridgeSession`：IM chat 不直接绑定 runtime thread，便于切换和接管。
-- `CodexRoutingProvider`：Codex SDK、Codex pty、Codex tmux、Claude pty、Claude sdk 有统一 `LLMProvider.streamChat()` 入口。
+- `CodexRoutingProvider`：Codex SDK、Codex pty、Codex tmux、Claude tmux、Claude pty、Claude sdk 有统一 `LLMProvider.streamChat()` 入口。
 - `UnifiedTurnProgressState`：SDK stream 和 mirror record 的共同语义模型。
 - `MirrorJsonlSource`：Codex 和 Claude JSONL source 共享 mirror runtime。
 - `TurnCoordinator`：active IM turn 和外部 terminal/mirror 终态之间有显式 claim 机制。
@@ -130,7 +131,7 @@ Bridge daemon 的启动路径集中在 `src/entrypoints/daemon.ts`：
 
 ### 5. Runtime provider 的进程模型没有统一生命周期视图
 
-SDK、pty、tmux、Claude pty 的实际运行体不同，但对外都叫 provider。
+SDK、pty、tmux、Claude tmux/pty 的实际运行体不同，但对外都叫 provider。
 
 风险：
 

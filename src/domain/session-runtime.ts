@@ -5,6 +5,8 @@ import type {
   BridgeSessionCodexRuntimeState,
   BridgeSessionGeneralState,
   BridgeSessionRuntimeState,
+  RuntimeProviderChoice,
+  RuntimeProviderIdentity,
 } from './session.js';
 
 export type BridgeSessionRuntimeUpdate = BridgeSessionUpdate;
@@ -35,6 +37,10 @@ function trimOrUndefined(value: string | null | undefined): string | undefined {
   return trimmed || undefined;
 }
 
+export function isRuntimeProviderChoice(value: unknown): value is RuntimeProviderChoice {
+  return value === 'sdk' || value === 'pty' || value === 'tmux';
+}
+
 export function getSessionCodexThreadId(session: SessionRuntimeLike | null | undefined): string | undefined {
   if (isClaudeRuntime(session)) return undefined;
   return trimOrUndefined(session?.runtime?.codex?.threadId);
@@ -63,7 +69,7 @@ export function getSessionCodexMode(session: SessionRuntimeLike | null | undefin
 export function getSessionCodexProvider(session: SessionRuntimeLike | null | undefined): BridgeSessionCodexRuntimeState['provider'] | undefined {
   if (isClaudeRuntime(session)) return undefined;
   const provider = session?.runtime?.codex?.provider;
-  return provider === 'sdk' || provider === 'tmux' || provider === 'pty' ? provider : undefined;
+  return isRuntimeProviderChoice(provider) ? provider : undefined;
 }
 
 export function getSessionCodexSandboxMode(session: SessionRuntimeLike | null | undefined): BridgeSessionCodexRuntimeState['sandboxMode'] | undefined {
@@ -101,7 +107,24 @@ export function getSessionClaudeModel(session: SessionRuntimeLike | null | undef
 export function getSessionClaudeProvider(session: SessionRuntimeLike | null | undefined): BridgeSessionClaudeRuntimeState['provider'] | undefined {
   if (!isClaudeRuntime(session)) return undefined;
   const provider = session?.runtime?.claude?.provider;
-  return provider === 'sdk' || provider === 'pty' ? provider : undefined;
+  return isRuntimeProviderChoice(provider) ? provider : undefined;
+}
+
+export function getSessionRuntimeProvider(session: SessionRuntimeLike | null | undefined): RuntimeProviderChoice | undefined {
+  return isClaudeRuntime(session) ? getSessionClaudeProvider(session) : getSessionCodexProvider(session);
+}
+
+export function getSessionRuntimeProviderIdentity(session: SessionRuntimeLike | null | undefined): RuntimeProviderIdentity | undefined {
+  const provider = getSessionRuntimeProvider(session);
+  if (!provider) return undefined;
+  return `${isClaudeRuntime(session) ? 'claude' : 'codex'}:${provider}`;
+}
+
+export function buildRuntimeProviderIdentity(
+  runtime: 'codex' | 'claude',
+  provider: RuntimeProviderChoice,
+): RuntimeProviderIdentity {
+  return `${runtime}:${provider}`;
 }
 
 export function getSessionClaudePermissionMode(session: SessionRuntimeLike | null | undefined): BridgeSessionClaudeRuntimeState['permissionMode'] | undefined {
@@ -205,6 +228,28 @@ export function setSessionClaudeModelUpdate(model: string | undefined): BridgeSe
 
 export function setSessionClaudeProviderUpdate(provider: BridgeSessionClaudeRuntimeState['provider'] | undefined): BridgeSessionRuntimeUpdate {
   return { runtime: { activeRuntime: 'claude', claude: { provider } } };
+}
+
+export function setSessionClaudeTmuxProviderUpdate(options: {
+  tmuxSessionName: string;
+  autoEnter?: boolean;
+  sessionId?: string;
+  cwd?: string;
+}): BridgeSessionRuntimeUpdate {
+  return {
+    runtime: {
+      activeRuntime: 'claude',
+      claude: {
+        provider: 'tmux',
+        ...(options.sessionId ? { sessionId: options.sessionId } : {}),
+        ...(options.cwd ? { cwd: options.cwd } : {}),
+      },
+      general: {
+        tmuxSessionName: options.tmuxSessionName,
+        ...(typeof options.autoEnter === 'boolean' ? { autoEnter: options.autoEnter } : {}),
+      },
+    },
+  };
 }
 
 export function setSessionClaudePermissionModeUpdate(permissionMode: BridgeSessionClaudeRuntimeState['permissionMode']): BridgeSessionRuntimeUpdate {

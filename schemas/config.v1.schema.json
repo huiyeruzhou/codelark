@@ -86,7 +86,7 @@
       "type": "object",
       "properties": {
         "provider": {
-          "enum": ["pty", "sdk"]
+          "enum": ["sdk", "pty", "tmux"]
         },
         "executable": {
           "enum": ["claude", "ccr"]
