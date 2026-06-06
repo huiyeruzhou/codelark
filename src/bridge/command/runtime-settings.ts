@@ -213,6 +213,13 @@ function clearSessionClaudeModelToml(sessionId: string): void {
   );
 }
 
+function setSessionWorkspaceToml(sessionId: string, workspace: string): void {
+  createConfigService({ migrate: false }).set(
+    { kind: 'session', sessionId },
+    { session: { workspace } },
+  );
+}
+
 function parseNetworkAccessArg(raw: string): boolean | 'default' | null {
   const token = raw.trim().toLowerCase();
   if (!token) return null;
@@ -419,6 +426,7 @@ export function handleChangeDirectoryCommand(options: {
     return `切换目录失败：${error instanceof Error ? error.message : String(error)}`;
   }
   options.store.updateSession(session.id, setSessionWorkingDirectoryUpdate(resolved.workDir));
+  setSessionWorkspaceToml(session.id, resolved.workDir);
   return buildCommandFields(
     '已切换工作目录',
     [

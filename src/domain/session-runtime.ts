@@ -6,10 +6,13 @@ import type {
   BridgeSessionGeneralState,
   BridgeSessionRuntimeState,
 } from './session.js';
+import { createConfigService } from '../configuration/service.js';
+import type { ConfigPath } from '../configuration/fields-types.js';
 
 export type BridgeSessionRuntimeUpdate = BridgeSessionUpdate;
 
 type SessionRuntimeLike = {
+  id?: string;
   runtime?: {
     activeRuntime?: BridgeSessionRuntimeState['activeRuntime'];
     codex?: Omit<Partial<BridgeSessionCodexRuntimeState>, 'threadId' | 'title' | 'model'> & {
@@ -33,6 +36,19 @@ function isClaudeRuntime(session: SessionRuntimeLike | null | undefined): boolea
 function trimOrUndefined(value: string | null | undefined): string | undefined {
   const trimmed = value?.trim();
   return trimmed || undefined;
+}
+
+function getSessionTomlOverride<T>(session: SessionRuntimeLike | null | undefined, path: ConfigPath): T | undefined {
+  if (!session?.id) return undefined;
+  try {
+    const resolved = createConfigService({ migrate: false }).resolve(path, {
+      kind: 'session',
+      sessionId: session.id,
+    });
+    return resolved.source === 'session' ? resolved.value as T : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 export function getSessionCodexThreadId(session: SessionRuntimeLike | null | undefined): string | undefined {
@@ -119,7 +135,8 @@ export function getSessionTmuxSessionName(session: SessionRuntimeLike | null | u
 }
 
 export function getSessionWorkingDirectory(session: SessionRuntimeLike | null | undefined): string | undefined {
-  return trimOrUndefined(session?.runtime?.general?.workingDirectory);
+  return trimOrUndefined(getSessionTomlOverride<string>(session, 'session.workspace'))
+    || trimOrUndefined(session?.runtime?.general?.workingDirectory);
 }
 
 export function getSessionSystemPrompt(session: SessionRuntimeLike | null | undefined): string | undefined {

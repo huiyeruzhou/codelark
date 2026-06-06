@@ -2318,6 +2318,15 @@ describe('command-dispatch', () => {
     );
 
     assert.equal(getSessionWorkingDirectory(store.getSession(session.id)), childWorkDir);
+    assert.equal(
+      createConfigService({ migrate: false, env: {} }).get('session.workspace', {
+        kind: 'session',
+        sessionId: session.id,
+      }),
+      childWorkDir,
+    );
+    store.updateSession(session.id, { runtime: { general: { workingDirectory: undefined } } });
+    assert.equal(getSessionWorkingDirectory(store.getSession(session.id)), childWorkDir);
     assert.match(sent.at(-1)?.text || '', /已切换工作目录/);
 
     await handleBridgeCommand(
@@ -2336,6 +2345,13 @@ describe('command-dispatch', () => {
     );
 
     assert.equal(getSessionWorkingDirectory(store.getSession(session.id)), os.homedir());
+    assert.equal(
+      createConfigService({ migrate: false, env: {} }).get('session.workspace', {
+        kind: 'session',
+        sessionId: session.id,
+      }),
+      os.homedir(),
+    );
   });
 
   it('switches the current chat between separate runtime BridgeSessions', async () => {
