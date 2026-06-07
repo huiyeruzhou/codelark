@@ -1,5 +1,5 @@
 import fs from 'node:fs';
-import type { ClaudeExecutable } from '../../configuration/runtime-types.js';
+import type { ClaudeExecutable } from '../options.js';
 import type { LLMProvider, StreamChatParams } from '../contracts.js';
 import { sseEvent } from '../sse.js';
 import {

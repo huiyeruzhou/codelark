@@ -6,8 +6,8 @@ import {
   type FeishuChannelConfig,
   type FeishuSite,
 } from '../../configuration/channel-types.js';
-import { normalizeChannelId } from '../../configuration/runtime-options.js';
 import { feishuSiteSchema, type ChannelConfigV2, type ConfigV2 } from '../../configuration/schema.js';
+import { normalizeChannelId } from '../../shared/channel-id.js';
 
 export type UiChannelConfigSource = {
   channels?: UiChannelInstance[];

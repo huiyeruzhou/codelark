@@ -10,7 +10,7 @@ import type {
   CodexReasoningEffort,
   CodexSandboxMode,
   RuntimeProvider,
-} from './runtime-types.js';
+} from '../runtime/options.js';
 
 export interface CodexRuntimeDefaultsConfig {
   defaultModel?: string;

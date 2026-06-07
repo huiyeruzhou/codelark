@@ -22,7 +22,7 @@ import { consumeSseEvents } from '../../../runtime/sse-stream-decoder.js';
 import {
   normalizeReasoningEffort,
   normalizeSandboxMode,
-} from '../../../configuration/runtime-options.js';
+} from '../../../runtime/options.js';
 import type {
   BridgeStore,
   BridgeSession,

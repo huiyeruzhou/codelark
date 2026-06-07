@@ -7,7 +7,7 @@ import {
   listCodexSessions,
   type CodexSessionSummary,
 } from '../../runtime/codex/session-index.js';
-import { normalizeClaudeExecutable, type ClaudeExecutable, type ClaudePermissionMode, type ClaudeProviderChoice } from '../../configuration/runtime-types.js';
+import { normalizeClaudeExecutable, type ClaudeExecutable, type ClaudePermissionMode, type ClaudeProviderChoice } from '../../runtime/options.js';
 import { createConfigService, type ConfigScope, type EffectiveConfig } from '../../configuration/service.js';
 import type { ConfigPatch } from '../../configuration/schema.js';
 import type { ConfigV2 } from '../../configuration/schema.js';
@@ -23,7 +23,7 @@ import {
 import {
   normalizeReasoningEffort as normalizeStoredReasoningEffort,
   normalizeSandboxMode,
-} from '../../configuration/runtime-options.js';
+} from '../../runtime/options.js';
 import { shouldUseCodexPtyTui } from '../../runtime/codex/pty-provider.js';
 import { shouldUseCodexTmuxTui } from '../../runtime/codex/tmux-provider.js';
 import { getBridgeContext } from '../host/context.js';

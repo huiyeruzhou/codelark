@@ -2,7 +2,7 @@ import { bootstrapLocalCodexThread } from '../../runtime/codex/thread-bootstrap.
 import type {
   CodexReasoningEffort,
   CodexSandboxMode,
-} from '../../configuration/runtime-types.js';
+} from '../../runtime/options.js';
 import type { BridgeSession, ChannelChat } from '../../domain/index.js';
 import {
   getSessionWorkingDirectory,

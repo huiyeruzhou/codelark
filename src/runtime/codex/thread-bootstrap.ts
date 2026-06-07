@@ -1,7 +1,7 @@
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 
-import type { CodexReasoningEffort, CodexSandboxMode } from '../../configuration/runtime-types.js';
+import type { CodexReasoningEffort, CodexSandboxMode } from '../options.js';
 import { resolveCodexCliExecutable } from './cli-executable.js';
 import { findSessionFileByThreadId } from './tmux-provider.js';
 

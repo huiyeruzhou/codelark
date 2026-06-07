@@ -110,6 +110,11 @@ describe('configuration module boundaries', () => {
     assert.doesNotMatch(pathsSource, /CONFIG_JSON_PATH/);
   });
 
+  it('keeps runtime option parsing out of the configuration layer', () => {
+    assert.equal(fs.existsSync(path.join(process.cwd(), 'src', 'configuration', 'runtime-options.ts')), false);
+    assert.equal(fs.existsSync(path.join(process.cwd(), 'src', 'configuration', 'runtime-types.ts')), false);
+  });
+
   it('keeps production legacy bridge setting reads limited to explicit migration-decision holdouts', () => {
     const offenders = legacyBridgeSettingReads(path.join(process.cwd(), 'src'));
     assert.deepEqual(offenders, []);

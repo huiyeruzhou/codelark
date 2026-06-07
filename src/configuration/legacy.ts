@@ -1,7 +1,5 @@
 import os from 'node:os';
-import {
-  normalizeChannelId,
-} from './runtime-options.js';
+import { normalizeChannelId } from '../shared/channel-id.js';
 import type {
   ChannelInstance,
   Config,
@@ -12,7 +10,7 @@ import {
   type ChannelProvider,
   type FeishuChannelConfig,
 } from './channel-types.js';
-import type { ClaudePermissionMode } from './runtime-types.js';
+import type { ClaudePermissionMode } from '../runtime/options.js';
 import type { ConfigPatch, ConfigV2 } from './schema.js';
 
 export const LEGACY_DEFAULT_STREAM_STATUS_IDLE_START_SECONDS = 180;

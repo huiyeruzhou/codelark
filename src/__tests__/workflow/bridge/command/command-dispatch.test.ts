@@ -67,7 +67,7 @@ import {
   getSessionWorkingDirectory,
 } from '../../../../domain/session-runtime.js';
 import { getClaudeProjectDir, isArchivedClaudeSession } from '../../../../runtime/claude/session-jsonl.js';
-import { normalizeReasoningEffort, normalizeSandboxMode } from '../../../../configuration/runtime-options.js';
+import { normalizeReasoningEffort, normalizeSandboxMode } from '../../../../runtime/options.js';
 import { sseEvent } from '../../../../runtime/sse.js';
 import type { LLMProvider, StreamChatParams } from '../../../../runtime/contracts.js';
 import { resolveConfigPaths } from '../../../../configuration/sources.js';

@@ -85,7 +85,7 @@ CODELARK_SETUP_WIZARD_REAL_E2E=1 npm run real:setup-wizard:e2e -- \
 | `help-command.test.ts` | `/help` 命令分组和用户可读帮助文本。 |
 | `bridge-adapter-runtime.test.ts` | adapter 事件进入 bridge 后按当前 runtime 路由。 |
 | `interactive-runtime.test.ts` | runtime 选择、provider 绑定和运行时上下文。 |
-| `runtime-options.test.ts` | runtime/provider 配置项的合法性、默认值和持久化表达。 |
+| `runtime/runtime-options.test.ts` | runtime/provider 选项解析和业务 fallback；配置层只提供 schema 校验后的统一值。 |
 | `session-runtime.test.ts` | `BridgeSession` 上 Codex/Claude runtime 字段的读写语义。 |
 | `session-registry.test.ts`、`session-registry-bindings.test.ts`、`session-display-query.test.ts`、`session-health-runtime.test.ts` | session 创建、聊天绑定、展示查询、健康诊断和跨 runtime 状态。 |
 | `turn-classifier.test.ts` | 普通用户消息、命令、特殊控制输入等 turn 类型识别。 |

@@ -11,7 +11,7 @@ import { feishuSetupUserAuthScopeArgument } from '../channels/feishu/permissions
 import {
   type ClaudeExecutable,
   type RuntimeProvider,
-} from '../configuration/runtime-types.js';
+} from '../runtime/options.js';
 import { CODELARK_HOME, DEFAULT_WORKSPACE_ROOT } from '../configuration/paths.js';
 import {
   normalizeFeishuSite,

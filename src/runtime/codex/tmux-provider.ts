@@ -3,7 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 
 import type { LLMProvider, StreamChatParams } from '../contracts.js';
-import type { CodexReasoningEffort, CodexSandboxMode } from '../../configuration/runtime-types.js';
+import type { CodexReasoningEffort, CodexSandboxMode } from '../options.js';
 import type { PendingPermissions } from '../permission-gateway.js';
 import {
   getCodexSessionsRoot,
@@ -14,7 +14,7 @@ import { sseEvent } from '../sse.js';
 import {
   normalizeSandboxMode,
   parseReasoningEffort,
-} from '../../configuration/runtime-options.js';
+} from '../options.js';
 import {
   buildShellSnapshotLaunchCommand,
   ensureShellSnapshot,

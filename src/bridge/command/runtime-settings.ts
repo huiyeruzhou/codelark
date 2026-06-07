@@ -3,9 +3,9 @@ import fs from 'node:fs';
 import { isCliOnlyCodexModel, readConfiguredCodexModel } from '../../runtime/codex/models.js';
 import {
   type CodexReasoningEffort,
-} from '../../configuration/runtime-types.js';
+} from '../../runtime/options.js';
 import { createConfigService } from '../../configuration/service.js';
-import { parseSandboxMode, type RuntimeSandboxMode } from '../../configuration/runtime-options.js';
+import { parseSandboxMode, type RuntimeSandboxMode } from '../../runtime/options.js';
 import * as router from '../session/channel-router.js';
 import {
   normalizeReasoningEffort,

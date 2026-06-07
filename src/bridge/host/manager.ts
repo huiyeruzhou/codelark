@@ -39,7 +39,7 @@ import {
 import {
   normalizeReasoningEffort,
   normalizeSandboxMode,
-} from '../../configuration/runtime-options.js';
+} from '../../runtime/options.js';
 import { buildDoctorPromptFromLogs } from '../diagnostics/doctor.js';
 import {
   resolveCommandAlias,

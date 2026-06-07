@@ -1,7 +1,7 @@
 import crypto from 'node:crypto';
 import os from 'node:os';
 
-import { parseSandboxMode } from '../../configuration/runtime-options.js';
+import { parseSandboxMode } from '../../runtime/options.js';
 import { createConfigService } from '../../configuration/service.js';
 import type { ConfigPatch, ConfigV2 } from '../../configuration/schema.js';
 import type { ConfigPath } from '../../configuration/fields-types.js';
