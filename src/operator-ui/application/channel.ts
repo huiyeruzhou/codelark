@@ -1,13 +1,13 @@
+import { z } from 'zod';
+
 import {
   feishuSiteToApiBaseUrl,
-  isSupportedChannelProvider,
   normalizeFeishuSite,
-  type ChannelProvider,
   type FeishuChannelConfig,
   type FeishuSite,
 } from '../../configuration/channel-types.js';
 import { normalizeChannelId } from '../../configuration/runtime-options.js';
-import type { ChannelConfigV2, ConfigV2 } from '../../configuration/schema.js';
+import { feishuSiteSchema, type ChannelConfigV2, type ConfigV2 } from '../../configuration/schema.js';
 
 export type UiChannelConfigSource = {
   channels?: UiChannelInstance[];
@@ -16,37 +16,59 @@ export type UiChannelConfigSource = {
 export type UiChannelInstance = {
   id: string;
   alias: string;
-  provider: ChannelProvider;
+  provider: 'feishu';
   enabled: boolean;
   createdAt?: string;
   updatedAt?: string;
   config: Partial<FeishuChannelConfig>;
 };
 
-function asString(value: unknown): string | undefined {
-  if (typeof value !== 'string') return undefined;
-  const trimmed = value.trim();
-  return trimmed ? trimmed : undefined;
+function trimString(schema: z.ZodString = z.string()) {
+  return z.preprocess(
+    (value) => typeof value === 'string' ? value.trim() : value,
+    schema,
+  );
 }
 
-function payloadString(payload: Record<string, unknown>, key: string, fallback: string): string {
-  if (!Object.prototype.hasOwnProperty.call(payload, key)) return fallback;
-  return typeof payload[key] === 'string' ? payload[key].trim() : fallback;
+function optionalTrimmedString() {
+  return trimString().optional();
 }
 
-function payloadCsv(payload: Record<string, unknown>, key: string, fallback: string[]): string[] {
-  if (!Object.prototype.hasOwnProperty.call(payload, key)) return fallback;
-  if (typeof payload[key] !== 'string') return fallback;
-  return payload[key].split(',').map((item) => item.trim()).filter(Boolean);
+const uiChannelPayloadSchema = z.object({
+  id: trimString(z.string().min(1)).optional(),
+  provider: z.preprocess(
+    (value) => typeof value === 'string' ? value.trim().toLowerCase() : value,
+    z.literal('feishu'),
+  ),
+  alias: optionalTrimmedString(),
+  enabled: z.boolean().optional(),
+  appId: optionalTrimmedString(),
+  appSecret: optionalTrimmedString(),
+  site: z.preprocess(
+    (value) => typeof value === 'string' ? value.trim().toLowerCase() : value,
+    feishuSiteSchema,
+  ).optional(),
+  allowedUsers: trimString()
+    .transform((value) => value.split(',').map((item) => item.trim()).filter(Boolean))
+    .optional(),
+  streamingEnabled: z.boolean().optional(),
+  feedbackMarkdownEnabled: z.boolean().optional(),
+  requireMention: z.boolean().optional(),
+}).strict();
+
+type UiChannelPayload = z.infer<typeof uiChannelPayloadSchema>;
+
+export function parseUiChannelPayload(payload: Record<string, unknown>): UiChannelPayload {
+  return uiChannelPayloadSchema.parse(payload);
 }
 
-function normalizeChannelAlias(value: string | undefined, provider: ChannelProvider): string {
+function normalizeChannelAlias(value: string | undefined): string {
   const trimmed = value?.trim();
   if (trimmed) return trimmed;
   return '飞书';
 }
 
-function buildChannelId(provider: ChannelProvider, alias: string, takenIds: Set<string>, currentId?: string): string {
+function buildChannelId(provider: 'feishu', alias: string, takenIds: Set<string>, currentId?: string): string {
   const base = normalizeChannelId(`${provider}-${alias}`);
   if (!takenIds.has(base) || base === currentId) return base;
   let suffix = 2;
@@ -86,14 +108,11 @@ export function mergeChannelInstanceV2(
   payload: Record<string, unknown>,
   current: ConfigV2,
 ): { config: ConfigV2; channel: ChannelConfigV2 } {
-  const provider = isSupportedChannelProvider(payload.provider) ? payload.provider : undefined;
-  if (!provider) {
-    throw new Error('通道提供方只能是飞书。');
-  }
-
-  const existingId = asString(payload.id);
+  const parsed = parseUiChannelPayload(payload);
+  const provider = parsed.provider;
+  const existingId = parsed.id;
   const existing = existingId ? current.channels.find((channel) => channel.id === existingId) : undefined;
-  const alias = normalizeChannelAlias(asString(payload.alias), provider);
+  const alias = normalizeChannelAlias(parsed.alias);
   const takenIds = new Set(current.channels.map((channel) => channel.id));
   const channelId = existing?.id || buildChannelId(provider, alias, takenIds);
   const template = existing?.config || defaultChannelTemplate(current);
@@ -102,26 +121,18 @@ export function mergeChannelInstanceV2(
     id: channelId,
     alias,
     provider,
-    enabled: payload.enabled !== false,
+    enabled: parsed.enabled ?? existing?.enabled ?? true,
     config: {
       ...template,
-      appId: payloadString(payload, 'appId', existing?.config.appId || ''),
-      appSecret: payloadString(payload, 'appSecret', existing?.config.appSecret || ''),
-      site: normalizeFeishuSite(payloadString(
-        payload,
-        'site',
-        payloadString(payload, 'domain', existing?.config.site || template.site),
-      )),
-      allowedUsers: payloadCsv(payload, 'allowedUsers', existing?.config.allowedUsers || template.allowedUsers),
-      streamingEnabled: Object.prototype.hasOwnProperty.call(payload, 'streamingEnabled')
-        ? payload.streamingEnabled !== false
-        : existing?.config.streamingEnabled ?? template.streamingEnabled,
-      feedbackMarkdownEnabled: Object.prototype.hasOwnProperty.call(payload, 'feedbackMarkdownEnabled')
-        ? payload.feedbackMarkdownEnabled !== false
-        : existing?.config.feedbackMarkdownEnabled ?? template.feedbackMarkdownEnabled,
-      requireMention: Object.prototype.hasOwnProperty.call(payload, 'requireMention')
-        ? payload.requireMention === true
-        : existing?.config.requireMention ?? template.requireMention,
+      appId: parsed.appId ?? existing?.config.appId ?? '',
+      appSecret: parsed.appSecret ?? existing?.config.appSecret ?? '',
+      site: parsed.site ?? existing?.config.site ?? template.site,
+      allowedUsers: parsed.allowedUsers ?? existing?.config.allowedUsers ?? template.allowedUsers,
+      streamingEnabled: parsed.streamingEnabled ?? existing?.config.streamingEnabled ?? template.streamingEnabled,
+      feedbackMarkdownEnabled: parsed.feedbackMarkdownEnabled
+        ?? existing?.config.feedbackMarkdownEnabled
+        ?? template.feedbackMarkdownEnabled,
+      requireMention: parsed.requireMention ?? existing?.config.requireMention ?? template.requireMention,
     },
   };
 

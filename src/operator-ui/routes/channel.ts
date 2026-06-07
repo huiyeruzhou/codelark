@@ -1,4 +1,5 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
+import { z } from 'zod';
 
 import type { ChannelConfigV2, ConfigV2 } from '../../configuration/schema.js';
 import { configV2ToPayload, readUiHomeConfig, replaceUiHomeConfig } from '../application/config.js';
@@ -43,6 +44,23 @@ function asString(value: unknown): string | undefined {
   if (typeof value !== 'string') return undefined;
   const trimmed = value.trim();
   return trimmed ? trimmed : undefined;
+}
+
+function channelErrorBody(error: unknown): { ok: false; error: string; issues?: Array<{ path: string; message: string }> } {
+  if (error instanceof z.ZodError) {
+    return {
+      ok: false,
+      error: '通道字段不合法。',
+      issues: error.issues.map((issue) => ({
+        path: issue.path.join('.'),
+        message: issue.message,
+      })),
+    };
+  }
+  return {
+    ok: false,
+    error: error instanceof Error ? error.message : '通道字段不合法。',
+  };
 }
 
 function channelV2ToPayload(channel: ChannelConfigV2) {
@@ -93,19 +111,34 @@ export async function handleUiChannelRoute(options: {
   } = options;
 
   if (request.method === 'POST' && url.pathname === '/api/channels/save') {
-    const payload = await readJsonBody<Record<string, unknown>>(request);
-    const current = readConfig();
-    const merged = mergeChannelInstanceV2(payload, current);
-    writeConfig(merged.config);
-    const store = createStore();
-    syncBindingChannelMeta(store, merged.channel);
-    const latest = readConfig();
-    json(response, 200, {
-      ok: true,
-      channel: channelV2ToPayload(merged.channel),
-      config: configV2ToPayload(latest),
-      ...(await buildBindingsPayload(store, latest)),
-    });
+    try {
+      const payload = await readJsonBody<Record<string, unknown>>(request);
+      const current = readConfig();
+      const merged = mergeChannelInstanceV2(payload, current);
+      writeConfig(merged.config);
+      const store = createStore();
+      syncBindingChannelMeta(store, merged.channel);
+      const latest = readConfig();
+      json(response, 200, {
+        ok: true,
+        channel: channelV2ToPayload(merged.channel),
+        config: configV2ToPayload(latest),
+        ...(await buildBindingsPayload(store, latest)),
+      });
+    } catch (error) {
+      json(response, 400, channelErrorBody(error));
+    }
+    return true;
+  }
+
+  if (request.method === 'POST' && url.pathname === '/api/channels/check') {
+    try {
+      const payload = await readJsonBody<Record<string, unknown>>(request);
+      mergeChannelInstanceV2(payload, readConfig());
+      json(response, 200, { ok: true });
+    } catch (error) {
+      json(response, 400, channelErrorBody(error));
+    }
     return true;
   }
 

@@ -141,6 +141,72 @@ describe('handleUiChannelRoute', () => {
     assert.equal(body.channel?.alias, 'Ops');
   });
 
+  it('checks channel payloads without writing config', async () => {
+    let config = baseConfigV2();
+    const response = createResponse();
+
+    const handled = await handleUiChannelRoute({
+      request: createJsonRequest({
+        provider: 'feishu',
+        alias: '',
+        enabled: true,
+        appId: 'app-id',
+        appSecret: 'secret',
+        site: 'lark',
+        allowedUsers: 'ou_1, ou_2',
+        streamingEnabled: true,
+        feedbackMarkdownEnabled: true,
+        requireMention: false,
+      }),
+      response,
+      url: new URL('http://localhost/api/channels/check'),
+      createStore: () => createMemoryStore(),
+      readConfig: () => config,
+      writeConfig: (next) => {
+        config = next;
+      },
+      buildBindingsPayload: async () => ({ bindings: [], options: [], channelDefaults: [] }),
+    });
+
+    assert.equal(handled, true);
+    assert.equal(response.statusCodeWritten, 200);
+    assert.deepEqual(JSON.parse(response.body), { ok: true });
+    assert.deepEqual(config.channels.map((channel) => channel.id), ['feishu-default']);
+  });
+
+  it('rejects invalid channel payload fields with 400', async () => {
+    let config = baseConfigV2();
+    const cases = [
+      { provider: 'slack', alias: 'Ops' },
+      { provider: 'feishu', alias: 'Ops', site: 'open.feishu.cn' },
+      { provider: 'feishu', alias: 'Ops', streamingEnabled: 'yes' },
+    ];
+
+    for (const payload of cases) {
+      const response = createResponse();
+      const handled = await handleUiChannelRoute({
+        request: createJsonRequest(payload),
+        response,
+        url: new URL('http://localhost/api/channels/save'),
+        createStore: () => createMemoryStore(),
+        readConfig: () => config,
+        writeConfig: (next) => {
+          config = next;
+        },
+        buildBindingsPayload: async () => ({ bindings: [], options: [], channelDefaults: [] }),
+      });
+
+      assert.equal(handled, true);
+      assert.equal(response.statusCodeWritten, 400);
+      const body = JSON.parse(response.body) as { ok?: boolean; error?: string; issues?: Array<{ path: string }> };
+      assert.equal(body.ok, false);
+      assert.match(body.error || '', /通道字段不合法/);
+      assert.ok((body.issues || []).length > 0);
+    }
+
+    assert.deepEqual(config.channels.map((channel) => channel.id), ['feishu-default']);
+  });
+
   it('creates home config.toml for channel saves when only legacy config files exist', async () => {
     const configTomlPath = path.join(CODELARK_HOME, 'config.toml');
     const previousToml = fs.existsSync(configTomlPath) ? fs.readFileSync(configTomlPath, 'utf-8') : null;

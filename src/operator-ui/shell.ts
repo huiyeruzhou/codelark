@@ -2645,9 +2645,14 @@ export function renderUiShellHtml(): string {
       }
 
       async function saveChannel(channel) {
+        const payload = currentChannelEditorPayload(channel);
+        await api('/api/channels/check', {
+          method: 'POST',
+          body: JSON.stringify(payload),
+        });
         const result = await api('/api/channels/save', {
           method: 'POST',
-          body: JSON.stringify(currentChannelEditorPayload(channel)),
+          body: JSON.stringify(payload),
         });
         delete state.channelEditorDrafts[channel.id];
         delete state.channelEditorDrafts[result.channel.id];
