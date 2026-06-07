@@ -23,10 +23,6 @@ import {
   setSessionActiveRuntimeUpdate,
   setSessionClaudeSessionIdUpdate,
   setSessionCodexTmuxProviderUpdate,
-  setSessionTmuxAutoEnterUpdate,
-  setSessionTmuxCaptureLinesUpdate,
-  setSessionTmuxEchoInputUpdate,
-  setSessionTmuxSessionNameUpdate,
 } from '../../../domain/session-runtime.js';
 import type { BridgeSession } from '../../../domain/index.js';
 import { initBridgeTestContext } from '../../helpers/bridge/test-bridge-utils.js';
@@ -301,10 +297,6 @@ require_mention = false
         },
       },
     });
-    assert.deepEqual(setSessionTmuxSessionNameUpdate('manual'), { runtime: { general: { tmuxSessionName: 'manual' } } });
-    assert.deepEqual(setSessionTmuxCaptureLinesUpdate(120), { runtime: { general: { captureLines: 120 } } });
-    assert.deepEqual(setSessionTmuxAutoEnterUpdate(false), { runtime: { general: { autoEnter: false } } });
-    assert.deepEqual(setSessionTmuxEchoInputUpdate(true), { runtime: { general: { echoInput: true } } });
   });
 
 });

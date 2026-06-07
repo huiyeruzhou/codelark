@@ -236,10 +236,6 @@ export function setSessionClaudeIdentityUpdate(
   return { runtime: { activeRuntime: 'claude', claude: { sessionId, cwd } } };
 }
 
-export function setSessionWorkingDirectoryUpdate(workingDirectory: string | undefined): BridgeSessionRuntimeUpdate {
-  return { runtime: { general: { workingDirectory } } };
-}
-
 export function setSessionSystemPromptUpdate(systemPrompt: string | undefined): BridgeSessionRuntimeUpdate {
   return { runtime: { general: { systemPrompt } } };
 }
@@ -259,22 +255,6 @@ export function setSessionCodexTmuxProviderUpdate(options: {
       },
     },
   };
-}
-
-export function setSessionTmuxSessionNameUpdate(tmuxSessionName: string): BridgeSessionRuntimeUpdate {
-  return { runtime: { general: { tmuxSessionName } } };
-}
-
-export function setSessionTmuxCaptureLinesUpdate(captureLines: number): BridgeSessionRuntimeUpdate {
-  return { runtime: { general: { captureLines } } };
-}
-
-export function setSessionTmuxAutoEnterUpdate(autoEnter: boolean): BridgeSessionRuntimeUpdate {
-  return { runtime: { general: { autoEnter } } };
-}
-
-export function setSessionTmuxEchoInputUpdate(echoInput: boolean): BridgeSessionRuntimeUpdate {
-  return { runtime: { general: { echoInput } } };
 }
 
 export function mergeSessionRuntimeUpdates(...updates: BridgeSessionRuntimeUpdate[]): BridgeSessionRuntimeUpdate {

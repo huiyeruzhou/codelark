@@ -35,7 +35,6 @@ import {
   mergeSessionRuntimeUpdates,
   setSessionActiveRuntimeUpdate,
   setSessionClaudeIdentityUpdate,
-  setSessionWorkingDirectoryUpdate,
 } from '../../../../domain/session-runtime.js';
 import type { OutboundMessage, OutboundRichCard, PermissionGateway, SendResult } from '../../../../domain/index.js';
 import type { LifecycleHooks, LLMProvider, StreamChatParams } from '../../../../runtime/contracts.js';
@@ -2794,7 +2793,6 @@ describe('bridge-manager channel lifecycle events', () => {
       {},
       setSessionActiveRuntimeUpdate('claude'),
       setSessionClaudeIdentityUpdate(claudeSessionId, cwd),
-      setSessionWorkingDirectoryUpdate(cwd),
     ));
     const binding = router.bindToSession(address, session.id);
     assert.ok(binding);
