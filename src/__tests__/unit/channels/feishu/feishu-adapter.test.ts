@@ -2975,6 +2975,198 @@ printf '{"ok":true,"data":{"chat_id":"oc_user_created"}}\\n'
     assert.doesNotMatch(JSON.stringify(createdCards.at(-1)), /tool_12/);
   });
 
+  it('opens a continuation card immediately when Feishu returns 200850 for a history append', async () => {
+    const createdCards: Array<Record<string, any>> = [];
+    const settingsCalls: Array<Record<string, any>> = [];
+    const cardUpdates: Array<Record<string, any>> = [];
+    const elementCreates: Array<Record<string, any>> = [];
+    const elementUpdates: Array<Record<string, any>> = [];
+    const replyCalls: Array<Record<string, any>> = [];
+    let cardIndex = 0;
+    const adapter = new FeishuAdapter({
+      id: 'feishu-default',
+      provider: 'feishu',
+      enabled: true,
+      alias: '飞书',
+      config: {
+        appId: 'app-id',
+        appSecret: 'app-secret',
+        streamingEnabled: true,
+      },
+    });
+    (adapter as any).cardFlushBaseIntervalMs = 1;
+
+    (adapter as any).restClient = {
+      cardkit: {
+        v1: {
+          card: {
+            create: async ({ data }: { data: { data: string } }) => {
+              createdCards.push(JSON.parse(data.data));
+              cardIndex += 1;
+              return { data: { card_id: `card-${cardIndex}` } };
+            },
+            settings: async (payload: Record<string, any>) => {
+              settingsCalls.push(payload);
+              return {};
+            },
+            update: async (payload: Record<string, any>) => {
+              cardUpdates.push(payload);
+              return {};
+            },
+          },
+          cardElement: {
+            content: async (payload: Record<string, any>) => {
+              elementUpdates.push(payload);
+              return {};
+            },
+            create: async (payload: Record<string, any>) => {
+              elementCreates.push(payload);
+              if (String(payload.data?.elements || '').includes('stream_txt_2')) {
+                return { code: 200850, msg: 'card payload exceeds Feishu limit' };
+              }
+              return {};
+            },
+          },
+        },
+      },
+      im: {
+        message: {
+          create: async () => ({ data: { message_id: `msg-${cardIndex}` } }),
+          reply: async (payload: Record<string, any>) => {
+            replyCalls.push(payload);
+            return { data: { message_id: `msg-${cardIndex}` } };
+          },
+        },
+      },
+    };
+
+    await (adapter as any).createStreamingCard('chat-1', 'reply-1', 'stream-1');
+    adapter.onStreamHistory('chat-1', [{
+      type: 'markdown' as const,
+      role: 'assistant' as const,
+      content: '上一轮输出',
+    }], 'stream-1');
+    await waitForCondition(() => elementUpdates.length >= 1);
+
+    adapter.onStreamHistory('chat-1', [{
+      type: 'markdown' as const,
+      role: 'assistant' as const,
+      content: '上一轮输出',
+    }, {
+      type: 'markdown' as const,
+      role: 'assistant' as const,
+      content: '当前输出会触发 200850',
+    }], 'stream-1');
+    await waitForCondition(() => createdCards.length >= 2, 1000);
+
+    assert.equal(replyCalls.length, 2);
+    assert.equal(cardUpdates.length, 0);
+    assert.ok(settingsCalls.some((call) => call.path?.card_id === 'card-1'));
+    assert.ok(elementCreates.some((create) => String(create.data?.elements || '').includes('stream_txt_2')));
+    const continuationJson = JSON.stringify(createdCards.at(-1));
+    assert.match(continuationJson, /当前输出会触发 200850/);
+    assert.doesNotMatch(continuationJson, /上一轮输出/);
+    const activeState = (adapter as any).activeCards.get('stream-1');
+    assert.equal(activeState.cardId, 'card-2');
+    assert.equal(activeState.historyItemOffset, 1);
+  });
+
+  it('opens a continuation card before Feishu rejects oversized streaming card payloads', async () => {
+    const createdCards: Array<Record<string, any>> = [];
+    const settingsCalls: Array<Record<string, any>> = [];
+    const cardUpdates: Array<Record<string, any>> = [];
+    const elementCreates: Array<Record<string, any>> = [];
+    const elementUpdates: Array<Record<string, any>> = [];
+    const replyCalls: Array<Record<string, any>> = [];
+    let cardIndex = 0;
+    const adapter = new FeishuAdapter({
+      id: 'feishu-default',
+      provider: 'feishu',
+      enabled: true,
+      alias: '飞书',
+      config: {
+        appId: 'app-id',
+        appSecret: 'app-secret',
+        streamingEnabled: true,
+      },
+    });
+    (adapter as any).cardFlushBaseIntervalMs = 1;
+
+    (adapter as any).restClient = {
+      cardkit: {
+        v1: {
+          card: {
+            create: async ({ data }: { data: { data: string } }) => {
+              createdCards.push(JSON.parse(data.data));
+              cardIndex += 1;
+              return { data: { card_id: `card-${cardIndex}` } };
+            },
+            settings: async (payload: Record<string, any>) => {
+              settingsCalls.push(payload);
+              return {};
+            },
+            update: async (payload: Record<string, any>) => {
+              cardUpdates.push(payload);
+              return {};
+            },
+          },
+          cardElement: {
+            content: async (payload: Record<string, any>) => {
+              elementUpdates.push(payload);
+              return {};
+            },
+            create: async (payload: Record<string, any>) => {
+              elementCreates.push(payload);
+              return {};
+            },
+          },
+        },
+      },
+      im: {
+        message: {
+          create: async () => ({ data: { message_id: `msg-${cardIndex}` } }),
+          reply: async (payload: Record<string, any>) => {
+            replyCalls.push(payload);
+            return { data: { message_id: `msg-${cardIndex}` } };
+          },
+        },
+      },
+    };
+
+    await (adapter as any).createStreamingCard('chat-1', 'reply-1', 'stream-1');
+    const firstLargeGroup = `上一组 ${'a'.repeat(9_500)}`;
+    const currentLargeGroup = `当前组 ${'b'.repeat(9_500)}`;
+    adapter.onStreamHistory('chat-1', [{
+      type: 'markdown' as const,
+      role: 'assistant' as const,
+      content: firstLargeGroup,
+    }], 'stream-1');
+    await waitForCondition(() => elementUpdates.length >= 1);
+
+    adapter.onStreamHistory('chat-1', [{
+      type: 'markdown' as const,
+      role: 'assistant' as const,
+      content: firstLargeGroup,
+    }, {
+      type: 'markdown' as const,
+      role: 'assistant' as const,
+      content: currentLargeGroup,
+    }], 'stream-1');
+    await waitForCondition(() => createdCards.length >= 2, 1000);
+
+    assert.equal(replyCalls.length, 2);
+    assert.equal(cardUpdates.length, 0);
+    assert.equal(elementCreates.length, 0);
+    assert.ok(settingsCalls.some((call) => call.path?.card_id === 'card-1'));
+    const continuationJson = JSON.stringify(createdCards.at(-1));
+    assert.match(continuationJson, /当前组/);
+    assert.doesNotMatch(continuationJson, /上一组/);
+    const activeState = (adapter as any).activeCards.get('stream-1');
+    assert.equal(activeState.cardId, 'card-2');
+    assert.equal(activeState.historyItemOffset, 1);
+    assert.ok(activeState.renderedComponentCount < 160);
+  });
+
   it('renders stream history from reducer items in the visible card order', async () => {
     const cardUpdates: Array<Record<string, any>> = [];
     const elementUpdates: Array<Record<string, any>> = [];

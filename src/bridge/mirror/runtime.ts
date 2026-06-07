@@ -164,6 +164,45 @@ export function createMirrorRuntime(
     });
   const clearSessionMirrorThreadId = deps.clearSessionMirrorThreadId || deps.clearSessionCodexThreadId;
 
+  function logSlowMirrorSubscriptionStage(
+    subscription: BridgeMirrorSubscription,
+    stage: string,
+    elapsedMs: number,
+    extra: Record<string, unknown> = {},
+  ): void {
+    const thresholdMs = Math.max(1, options.slowReconcileSubscriptionMs || 60_000);
+    if (elapsedMs < thresholdMs) return;
+    console.warn(`[bridge-manager] Slow ${runtimeLabel} mirror subscription reconcile stage:`, {
+      event: 'perf.mirror.subscription_stage',
+      runtime: runtimeName,
+      runtime_label: runtimeLabel,
+      stage,
+      binding_id: subscription.bindingId,
+      bindingId: subscription.bindingId,
+      session_id: subscription.sessionId ?? null,
+      sessionId: subscription.sessionId ?? null,
+      thread_id: subscription.threadId ?? null,
+      threadId: subscription.threadId ?? null,
+      duration_ms: elapsedMs,
+      elapsedMs,
+      ...extra,
+    });
+  }
+
+  async function measureMirrorSubscriptionStage<T>(
+    subscription: BridgeMirrorSubscription,
+    stage: string,
+    work: () => Promise<T>,
+    extra: Record<string, unknown> = {},
+  ): Promise<T> {
+    const startedAt = Date.now();
+    try {
+      return await work();
+    } finally {
+      logSlowMirrorSubscriptionStage(subscription, stage, Date.now() - startedAt, extra);
+    }
+  }
+
   function closeMirrorWatcher(subscription: BridgeMirrorSubscription): void {
     if (subscription.watcher) {
       try {
@@ -389,11 +428,24 @@ export function createMirrorRuntime(
     const unsuppressedRecords = deliverableRecords.length > 0
       ? deps.filterSuppressedMirrorRecords(subscription.sessionId, deliverableRecords)
       : deliverableRecords;
-    const routeResult = unsuppressedRecords.length > 0 && deps.routeRuntimeRecords
-      ? await deps.routeRuntimeRecords(runtimeName, subscription.sessionId, subscription.threadId, unsuppressedRecords)
-      : unsuppressedRecords.length > 0 && deps.routeCodexRecords
-        ? await deps.routeCodexRecords(subscription.sessionId, subscription.threadId, unsuppressedRecords)
-        : { claimed: [], unclaimed: unsuppressedRecords, terminalClaimed: false };
+    let routeResult: { claimed: BridgeMirrorRecord[]; unclaimed: BridgeMirrorRecord[]; terminalClaimed: boolean };
+    if (unsuppressedRecords.length > 0 && deps.routeRuntimeRecords) {
+      routeResult = await measureMirrorSubscriptionStage(
+        subscription,
+        'route_records',
+        () => deps.routeRuntimeRecords!(runtimeName, subscription.sessionId, subscription.threadId, unsuppressedRecords),
+        { record_count: unsuppressedRecords.length, recordCount: unsuppressedRecords.length },
+      );
+    } else if (unsuppressedRecords.length > 0 && deps.routeCodexRecords) {
+      routeResult = await measureMirrorSubscriptionStage(
+        subscription,
+        'route_records',
+        () => deps.routeCodexRecords!(subscription.sessionId, subscription.threadId, unsuppressedRecords),
+        { record_count: unsuppressedRecords.length, recordCount: unsuppressedRecords.length },
+      );
+    } else {
+      routeResult = { claimed: [], unclaimed: unsuppressedRecords, terminalClaimed: false };
+    }
     const mirrorRecords = routeResult.terminalClaimed
       ? unsuppressedRecords
       : routeResult.unclaimed;
@@ -415,7 +467,12 @@ export function createMirrorRuntime(
 
     const turnsToAttempt = selectPendingMirrorDeliveries(subscription, blocked);
     if (turnsToAttempt.length > 0) {
-      const deliveryResult = await deps.deliverMirrorTurns(subscription, turnsToAttempt);
+      const deliveryResult = await measureMirrorSubscriptionStage(
+        subscription,
+        'deliver_turns',
+        () => deps.deliverMirrorTurns(subscription, turnsToAttempt),
+        { turn_count: turnsToAttempt.length, turnCount: turnsToAttempt.length },
+      );
       if (deliveryResult.deliveredCount > 0) {
         removePendingMirrorDeliveries(subscription, turnsToAttempt.slice(0, deliveryResult.deliveredCount));
       }

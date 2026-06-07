@@ -237,11 +237,11 @@ CardKit 的 `streaming_mode` 只影响文本流式上屏的表现，不应成为
 
 如果长连接断开，bridge 收不到新的用户输入或按钮回调；如果 CardKit 刷新失败，bridge 仍可能继续执行 runtime，但用户看到的卡片会停留在旧状态。排障时需要分别看 WebSocket/事件日志和 `perf.card.sync_plan`、`cardElement.*`、`card.update:*` 日志。
 
-## 续接与组件上限
+## 续接与飞书限制
 
-飞书流式卡片有 200 个组件的限制，当前 adapter 使用 `STREAMING_CARD_COMPONENT_LIMIT=160` 作为软上限。运行中会用 `countFeishuCardComponents` 估算当前完整渲染和增量更新后的组件数。
+飞书流式卡片有 200 个组件的限制，当前 adapter 使用 `STREAMING_CARD_COMPONENT_LIMIT=160` 作为组件软上限。组件数不是唯一风险，实际 CardKit 写入还会受 payload 大小、字符数和 markdown element 数影响；因此运行中还会用 `payload_bytes`、`payload_chars`、`markdown_count` 做提前续接判断。
 
-接近或超过上限时，优先执行续接：
+接近或超过任一安全线时，优先执行续接：
 
 1. 对旧卡调用 `card.settings` 关闭 `streaming_mode`。
 2. 尝试用 `cardElement.content` 把旧卡状态区改成“已续接到下一条”。
@@ -249,7 +249,9 @@ CardKit 的 `streaming_mode` 只影响文本流式上屏的表现，不应成为
 4. continuation card 从 `historyItemOffset` 或 `toolCallOffset` 后继续渲染。
 5. 如果续接失败，再尝试 `card.update` full refresh。
 
-续接依赖 shadow 中记录的已渲染 history/tool offset。由于 shadow 不是客户端 ACK，慢 batch 或弱确认场景下要保守降级，避免 offset 跳过用户没看到的内容。
+续接依赖 shadow 中记录的已渲染 history/tool offset。offset 按“上一个已渲染文本/工具 group”后退：旧卡保留已显示的 group，新卡从当前正在更新的 history item 或 tool group 开始，避免把还没写成功的内容留在过大的旧卡里。由于 shadow 不是客户端 ACK，慢 batch 或弱确认场景下要保守降级，避免 offset 跳过用户没看到的内容。
+
+如果飞书返回 `code=200850`，adapter 会直接触发强制 continuation rollover，不再等待下一轮 full refresh。这个错误通常说明 payload 维度已触及飞书实际限制，即使 `componentCount` 仍低于组件软上限，也应该把当前 group 切到新卡。
 
 ## 底层飞书 API
 
@@ -276,6 +278,7 @@ CardKit 的 `streaming_mode` 只影响文本流式上屏的表现，不应成为
 - `Streaming card create payload`：首屏卡片 payload 摘要。
 - `Streaming sync plan`：每次 flush 的计划类型和原因。
 - `Streaming card full refresh payload`：full refresh payload 摘要。
+- `Streaming card threshold reached; opening continuation card`：组件或 payload 安全线触发续接，包含 `reason`、`component_count`、`payload_bytes`、`payload_chars`、`markdown_count`。
 - `Final card update payload`：最终卡 payload 摘要。
 - `cardElement.* failed`、`card.update streaming refresh failed`：更新失败。
 - `Streaming batch shadow downgraded`：慢 batch 或 patch 导致 shadow trust 降级。
@@ -290,4 +293,3 @@ CardKit 的 `streaming_mode` 只影响文本流式上屏的表现，不应成为
 - API 汇总：按 target 记录 `count`、`timeoutCount`、`totalMs`、`maxMs`。
 - payload：`maxPayloadBytes`、`maxComponentCount`、`finalPayloadBytes`、`finalComponentCount`。
 - finalize：`finalizeWaitMs`、`settingsMs`、`finalUpdateMs`、`backgroundFinalize`。
-
