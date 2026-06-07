@@ -34,6 +34,7 @@ import {
 } from '../../../../runtime/codex/shell-snapshot.js';
 
 const execFileAsync = promisify(execFile);
+const CODEX_TUI_CONFIRM_FOOTER = 'Press enter to confirm or esc to cancel';
 
 async function tmuxAvailable(): Promise<boolean> {
   try {
@@ -130,33 +131,47 @@ describe('codex-tmux-provider', () => {
       '› 1. Update now',
       '  2. Skip',
       '  3. Skip until next version',
+      CODEX_TUI_CONFIRM_FOOTER,
     ].join('\n');
 
     assert.equal(hasCodexTuiSelectionPrompt(screen), true);
     assert.equal(hasCodexTuiSelectionPrompt('OpenAI Codex\n› Explain this codebase'), false);
+    assert.equal(hasCodexTuiSelectionPrompt([
+      'Update available! 0.135.0 -> 0.136.0',
+      '› 1. Update now',
+      '  2. Skip',
+      '  3. Skip until next version',
+    ].join('\n')), false);
+    assert.equal(hasCodexTuiSelectionPrompt([
+      'Update available! 0.135.0 -> 0.136.0',
+      '  1. Update now',
+      '› 2. Skip',
+      '  3. Skip until next version',
+      CODEX_TUI_CONFIRM_FOOTER,
+    ].join('\n')), false);
     assert.equal(
       compactCodexTuiUpdateProgress('\x1b[32mUpdating Codex via npm\x1b[0m\r\nDone\n'),
       'Updating Codex via npm\nDone',
     );
   });
 
-  it('parses ratatui-rendered Codex update prompt choices and selected row', () => {
+  it('parses ratatui-rendered Codex update prompt choices from a prompt cursor on row one', () => {
     const screen = [
       '  ✨ Update available! 0.0.0 -> 9.9.9',
       '',
       '  Release notes: https://github.com/openai/codex/releases/latest',
       '',
-      '  1. Update now (runs `npm install -g @openai/codex@latest`)',
-      '› 2. Skip',
+      '› 1. Update now (runs `npm install -g @openai/codex@latest`)',
+      '  2. Skip',
       '  3. Skip until next version',
       '',
-      '  Press enter to continue',
+      CODEX_TUI_CONFIRM_FOOTER,
     ].join('\n');
 
     const prompt = parseCodexTuiSelectionPrompt(screen);
     assert.ok(prompt);
     assert.equal(prompt.kind, 'update');
-    assert.equal(prompt.selectedIndex, 1);
+    assert.equal(prompt.selectedIndex, 0);
     assert.deepEqual(prompt.options.map((option) => option.choice), [
       'update_now',
       'skip',
@@ -169,9 +184,10 @@ describe('codex-tmux-provider', () => {
   it('parses Codex permission selection prompts', () => {
     const screen = [
       'Codex wants to edit files.',
-      '→ Yes, proceed (y)',
-      "  Yes and don't ask again for these files (a)",
-      '  No, and tell Codex what to do differently (esc)',
+      '→ 1. Yes, proceed (y)',
+      "  2. Yes and don't ask again for these files (a)",
+      '  3. No, and tell Codex what to do differently (esc)',
+      CODEX_TUI_CONFIRM_FOOTER,
     ].join('\n');
 
     const prompt = parseCodexTuiSelectionPrompt(screen);
@@ -186,12 +202,50 @@ describe('codex-tmux-provider', () => {
     assert.match(prompt.summary, /Yes, proceed/);
   });
 
+  it('uses the lower prompt cursor when an earlier update prompt remains on screen', () => {
+    const screen = [
+      '  ✨ Update available! 0.0.0 -> 9.9.9',
+      '',
+      '  Release notes: https://github.com/openai/codex/releases/latest',
+      '',
+      '› 1. Update now (runs `npm install -g @openai/codex@latest`)',
+      '  2. Skip',
+      '  3. Skip until next version',
+      '',
+      CODEX_TUI_CONFIRM_FOOTER,
+      '',
+      'Codex wants to edit files.',
+      '› 1. Yes, proceed (y)',
+      "  2. Yes, and don't ask again for these files (a)",
+      '  3. No, and tell Codex what to do differently (esc)',
+      CODEX_TUI_CONFIRM_FOOTER,
+    ].join('\n');
+
+    const prompt = parseCodexTuiSelectionPrompt(screen);
+    assert.ok(prompt);
+    assert.equal(prompt.kind, 'permission');
+    assert.equal(prompt.selectedIndex, 0);
+    assert.deepEqual(prompt.options.map((option) => option.choice), [
+      'yes_proceed',
+      'yes_always',
+      'no',
+    ]);
+    assert.match(prompt.summary, /Yes, proceed/);
+    assert.doesNotMatch(prompt.summary, /Update now/);
+    assert.deepEqual(buildCodexTuiSelectionChoiceActions(prompt, 'no'), [
+      { type: 'key', key: 'Down' },
+      { type: 'key', key: 'Down' },
+      { type: 'key', key: 'Enter' },
+    ]);
+  });
+
   it('parses unrecognized numbered TUI selections from a highlighted first row', () => {
     const screen = [
       'Choose a profile',
       '› 1. Experimental profile',
       '  2. Default profile',
       '  3. Cancel',
+      CODEX_TUI_CONFIRM_FOOTER,
     ].join('\n');
 
     const prompt = parseCodexTuiSelectionPrompt(screen);
@@ -216,6 +270,7 @@ describe('codex-tmux-provider', () => {
       '  4. 当前 dry-run 证明',
       '› 1. Replace current goal  Set the new objective and start it now',
       '  2. Cancel                Keep the current goal',
+      CODEX_TUI_CONFIRM_FOOTER,
     ].join('\n');
 
     const prompt = parseCodexTuiSelectionPrompt(screen);
@@ -239,6 +294,7 @@ describe('codex-tmux-provider', () => {
       '  9. stale ordered item',
       '› 1. Replace current goal  Set the new objective and start it now',
       '  2. Cancel                Keep the current goal',
+      CODEX_TUI_CONFIRM_FOOTER,
     ].join('\n'));
     assert.ok(samePromptWithDifferentOldList);
     assert.equal(samePromptWithDifferentOldList.fingerprint, prompt.fingerprint);
@@ -248,6 +304,7 @@ describe('codex-tmux-provider', () => {
     const prompt = parseCodexTuiSelectionPrompt([
       '› 1. Replace current goal',
       '  2. Cancel',
+      CODEX_TUI_CONFIRM_FOOTER,
     ].join('\n'));
     assert.ok(prompt);
     assert.equal(prompt.kind, 'goal');
@@ -261,13 +318,14 @@ describe('codex-tmux-provider', () => {
     ]);
   });
 
-  it('requires two unchanged selection prompt captures before reporting a stall', () => {
+  it('requires two prompt-cursor detections before reporting a stall', () => {
     const monitor = createCodexTuiSelectionPromptMonitor();
     const screen = [
       'Update available! 0.135.0 -> 0.136.0',
       '› 1. Update now (runs `npm install -g @openai/codex`)',
       '  2. Skip',
       '  3. Skip until next version',
+      CODEX_TUI_CONFIRM_FOOTER,
     ].join('\n');
 
     assert.equal(observeStableCodexTuiSelectionPrompt(screen, monitor, 2, 100), null);
@@ -284,6 +342,7 @@ describe('codex-tmux-provider', () => {
       '› 1. Yes, proceed (y)',
       "  2. Yes, and don't ask again for these files (a)",
       '  3. No, and tell Codex what to do differently (esc)',
+      CODEX_TUI_CONFIRM_FOOTER,
     ].join('\n');
 
     assert.equal(observeStableCodexTuiSelectionPrompt(screen, monitor, 2, 100), null);
@@ -303,6 +362,7 @@ describe('codex-tmux-provider', () => {
       '› 1. Update now (runs `npm install -g @openai/codex`)',
       '  2. Skip',
       '  3. Skip until next version',
+      CODEX_TUI_CONFIRM_FOOTER,
     ].join('\n'));
     assert.ok(prompt);
 
@@ -326,6 +386,7 @@ describe('codex-tmux-provider', () => {
       '› 1. Yes, proceed (y)',
       "  2. Yes, and don't ask again for these files (a)",
       '  3. No, and tell Codex what to do differently (esc)',
+      CODEX_TUI_CONFIRM_FOOTER,
     ].join('\n'));
     assert.ok(prompt);
 
@@ -351,6 +412,7 @@ describe('codex-tmux-provider', () => {
       '› 1. Update now (runs `npm install -g @openai/codex`)',
       '  2. Skip',
       '  3. Skip until next version',
+      CODEX_TUI_CONFIRM_FOOTER,
     ].join('\n'));
     assert.ok(prompt);
     setTimeout(() => {

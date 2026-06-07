@@ -13,11 +13,14 @@ import {
 } from '../../../../runtime/codex/tmux-provider.js';
 import type { TmuxCore, TmuxSendAction } from '../../../../bridge/tmux/core.js';
 
+const CODEX_TUI_CONFIRM_FOOTER = 'Press enter to confirm or esc to cancel';
+
 const PERMISSION_SCREEN = [
   'Codex wants to edit files.',
   '› 1. Yes, proceed (y)',
   "  2. Yes, and don't ask again for these files (a)",
   '  3. No, and tell Codex what to do differently (esc)',
+  CODEX_TUI_CONFIRM_FOOTER,
 ].join('\n');
 
 const SECOND_PERMISSION_SCREEN = [
@@ -25,6 +28,7 @@ const SECOND_PERMISSION_SCREEN = [
   '› 1. Yes, proceed (y)',
   "  2. Yes, and don't ask again for this command (a)",
   '  3. No, and tell Codex what to do differently (esc)',
+  CODEX_TUI_CONFIRM_FOOTER,
 ].join('\n');
 
 const NORMAL_SCREEN = [

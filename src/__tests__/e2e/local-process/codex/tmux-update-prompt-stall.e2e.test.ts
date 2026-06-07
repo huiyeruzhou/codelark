@@ -82,7 +82,7 @@ describe('tmux Codex update prompt stall e2e', () => {
       "  '  2. Skip',",
       "  '  3. Skip until next version',",
       "  '',",
-      "  '  Press enter to continue',",
+      "  '  Press enter to confirm or esc to cancel',",
       "].join('\\n') + '\\n');",
       "fs.writeFileSync(readyPath, '1');",
       "const chunks = [];",
@@ -119,7 +119,7 @@ describe('tmux Codex update prompt stall e2e', () => {
       await new Promise((resolve) => setTimeout(resolve, 600));
       const secondCapture = await tmuxCore.capturePane(targetPane, 40);
       const prompt = observeStableCodexTuiUpdatePrompt(secondCapture.screen, monitor);
-      assert.ok(prompt, 'second unchanged capture should detect a stable update prompt');
+      assert.ok(prompt, 'second prompt-cursor capture should detect a stable update prompt');
 
       const permissions = new PendingPermissions();
       const result = await resolveStableCodexTuiUpdatePrompt({

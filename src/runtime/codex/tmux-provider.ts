@@ -98,7 +98,6 @@ export interface CodexTuiSelectionPrompt {
 export type CodexTuiUpdatePrompt = CodexTuiSelectionPrompt;
 
 export interface CodexTuiSelectionPromptMonitor {
-  lastFingerprint: string;
   stableCaptures: number;
   pending: boolean;
   firstSeenAtMs: number;
@@ -228,6 +227,16 @@ function inferSelectionPromptKind(
   return null;
 }
 
+function hasCodexTuiSelectionPromptCursor(tail: string): boolean {
+  return tail
+    .split('\n')
+    .some((line) => /^\s*[›>▸➜→]\s*1\.\s+/u.test(line));
+}
+
+function hasCodexTuiSelectionPromptFooter(tail: string): boolean {
+  return /Press\s+enter\s+to\s+confirm\s+or\s+esc\s+to\s+cancel/i.test(tail);
+}
+
 type ParsedSelectionLine = {
   rawLine: string;
   marker: string | null;
@@ -300,6 +309,9 @@ function extractCurrentSelectionLines(lines: string[]): ParsedSelectionLine[] {
 
 export function parseCodexTuiSelectionPrompt(screenText: string): CodexTuiSelectionPrompt | null {
   const tail = stripTerminalControl(screenText).slice(-20_000);
+  if (!hasCodexTuiSelectionPromptCursor(tail) || !hasCodexTuiSelectionPromptFooter(tail)) {
+    return null;
+  }
   const options: CodexTuiUpdatePromptOption[] = [];
   const lines = tail.split('\n');
   const selectionLines = extractCurrentSelectionLines(lines);
@@ -358,7 +370,6 @@ export function parseCodexTuiUpdatePrompt(screenText: string): CodexTuiUpdatePro
 
 export function createCodexTuiSelectionPromptMonitor(): CodexTuiSelectionPromptMonitor {
   return {
-    lastFingerprint: '',
     stableCaptures: 0,
     pending: false,
     firstSeenAtMs: -1,
@@ -379,17 +390,15 @@ export function observeStableCodexTuiSelectionPrompt(
 ): CodexTuiSelectionPrompt | null {
   const prompt = parseCodexTuiSelectionPrompt(screenText);
   if (!prompt) {
-    monitor.lastFingerprint = '';
     monitor.stableCaptures = 0;
     monitor.firstSeenAtMs = -1;
     return null;
   }
-  if (monitor.lastFingerprint === prompt.fingerprint) {
-    monitor.stableCaptures += 1;
-  } else {
-    monitor.lastFingerprint = prompt.fingerprint;
+  if (monitor.firstSeenAtMs < 0) {
     monitor.stableCaptures = 1;
     monitor.firstSeenAtMs = nowMs;
+  } else {
+    monitor.stableCaptures += 1;
   }
   if (monitor.pending || monitor.stableCaptures < threshold) return null;
   if (nowMs < monitor.postActionGraceUntilMs) return null;
