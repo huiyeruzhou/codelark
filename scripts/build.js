@@ -2,6 +2,7 @@ import {
   findMissingPackageJsonRuntimeDependencies,
   formatMissingRuntimeDependenciesMessage,
 } from './build-preflight.js';
+import { copyFile, mkdir } from 'node:fs/promises';
 
 const nodeMajor = Number((process.versions.node || '0').split('.')[0]);
 if (!Number.isFinite(nodeMajor) || nodeMajor < 24) {
@@ -49,5 +50,7 @@ async function build(entryPoint, outfile) {
 await build('src/entrypoints/daemon.ts', 'dist/daemon.mjs');
 await build('src/operator-ui/server.ts', 'dist/ui-server.mjs');
 await build('src/entrypoints/cli.ts', 'dist/cli.mjs');
+await mkdir('dist', { recursive: true });
+await copyFile('src/configuration/defaults.toml', 'dist/defaults.toml');
 
-console.log('Built dist/daemon.mjs, dist/ui-server.mjs, dist/cli.mjs');
+console.log('Built dist/daemon.mjs, dist/ui-server.mjs, dist/cli.mjs, dist/defaults.toml');
