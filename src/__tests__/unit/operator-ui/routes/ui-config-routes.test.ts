@@ -6,8 +6,9 @@ import path from 'node:path';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 
 import { handleUiConfigRoute } from '../../../../operator-ui/routes/config.js';
-import { configToPayload, mergeConfig } from '../../../../operator-ui/application/config.js';
-import { CODELARK_HOME, CONFIG_JSON_PATH, CONFIG_PATH, type Config } from '../../../../configuration/index.js';
+import { configV2ToPayload, mergeConfigV2HomePatch } from '../../../../operator-ui/application/config.js';
+import { CODELARK_HOME, CONFIG_JSON_PATH, CONFIG_PATH } from '../../../../configuration/index.js';
+import type { ConfigV2 } from '../../../../configuration/schema.js';
 
 function createResponse(): ServerResponse & { body: string; statusCodeWritten?: number } {
   return {
@@ -34,35 +35,125 @@ function createJsonRequest(method: string, body: unknown): IncomingMessage {
   } as IncomingMessage;
 }
 
-const baseConfig: Config = {
-  runtime: 'codex',
-  defaultMode: 'normal',
-  enabledChannels: [],
-  channels: [],
-};
+function baseConfigV2(overrides: Partial<ConfigV2> = {}): ConfigV2 {
+  return {
+    schemaVersion: 2,
+    session: {
+      workspace: '~',
+      tmuxSessionName: '',
+      tmuxCaptureLines: 80,
+      tmuxAutoEnter: true,
+      tmuxEchoInput: false,
+    },
+    runtime: {
+      agent: 'codex',
+      codex: {
+        model: '',
+        yoloMode: 'off',
+        provider: '',
+        skipGitRepoCheck: true,
+        sandboxMode: 'workspace-write',
+        networkAccess: true,
+        reasoningEffort: 'medium',
+      },
+      claude: {
+        model: '',
+        yoloMode: 'off',
+        permissionMode: 'default',
+        provider: 'sdk',
+        executable: 'claude',
+        reasoningEffort: 'medium',
+        idleTimeoutMinutes: 0,
+      },
+    },
+    bridge: {
+      defaultWorkspace: '~',
+      uiAllowLan: false,
+      uiAccessToken: '',
+    },
+    channels: [{
+      id: 'feishu-default',
+      alias: '飞书',
+      provider: 'feishu',
+      enabled: false,
+      config: {
+        historyMessageLimit: 8,
+        streamStatusIdleStartSeconds: 180,
+        streamStatusCheckIntervalSeconds: 10,
+        appId: '',
+        appSecret: '',
+        site: 'feishu',
+        allowedUsers: [],
+        streamingEnabled: true,
+        feedbackMarkdownEnabled: true,
+        requireMention: false,
+      },
+    }],
+    ...overrides,
+  };
+}
 
 describe('Ui config application', () => {
   it('preserves the current default model when an unknown model is submitted', () => {
-    const merged = mergeConfig(
-      { ...baseConfig, defaultModel: 'gpt-5.4', defaultProvider: 'tmux', claudeExecutable: 'claude' },
-      { defaultModel: 'unknown-model', historyMessageLimit: 999, claudeExecutable: 'ccr' },
-    );
+    const current = baseConfigV2({
+      runtime: {
+        ...baseConfigV2().runtime,
+        codex: { ...baseConfigV2().runtime.codex, model: 'gpt-5.4', provider: 'tmux' },
+      },
+    });
+    const patch = mergeConfigV2HomePatch(current, { defaultModel: 'unknown-model', historyMessageLimit: 999, claudeExecutable: 'ccr' });
 
-    assert.equal(merged.defaultModel, 'gpt-5.4');
-    assert.equal(merged.defaultProvider, 'tmux');
-    assert.equal(merged.claudeExecutable, 'ccr');
-    assert.equal(merged.historyMessageLimit, 20);
+    assert.equal(patch.runtime?.codex?.model, 'gpt-5.4');
+    assert.equal(patch.runtime?.codex?.provider, 'tmux');
+    assert.equal(patch.runtime?.claude?.executable, 'ccr');
+    assert.equal(patch.channels?.[0]?.config?.historyMessageLimit, 20);
   });
 
   it('creates a UI access token when LAN access is enabled', () => {
-    const merged = mergeConfig(baseConfig, { uiAllowLan: true });
-    assert.equal(merged.uiAllowLan, true);
-    assert.equal(typeof merged.uiAccessToken, 'string');
-    assert.ok(merged.uiAccessToken?.length);
+    const patch = mergeConfigV2HomePatch(baseConfigV2(), { uiAllowLan: true });
+    assert.equal(patch.bridge?.uiAllowLan, true);
+    assert.equal(typeof patch.bridge?.uiAccessToken, 'string');
+    assert.ok(patch.bridge?.uiAccessToken?.length);
+  });
+
+  it('keeps current v2 values when a partial payload omits fields', () => {
+    const current = baseConfigV2({
+      runtime: {
+        ...baseConfigV2().runtime,
+        agent: 'claude',
+        codex: {
+          ...baseConfigV2().runtime.codex,
+          sandboxMode: 'danger-full-access',
+          networkAccess: false,
+          reasoningEffort: 'high',
+          yoloMode: 'on',
+        },
+      },
+      bridge: {
+        defaultWorkspace: '/tmp/work',
+        uiAllowLan: true,
+        uiAccessToken: 'existing-token',
+      },
+    });
+    const patch = mergeConfigV2HomePatch(current, {});
+
+    assert.equal(patch.runtime?.agent, 'claude');
+    assert.equal(patch.runtime?.codex?.sandboxMode, 'danger-full-access');
+    assert.equal(patch.runtime?.codex?.networkAccess, false);
+    assert.equal(patch.runtime?.codex?.reasoningEffort, 'high');
+    assert.equal(patch.runtime?.codex?.yoloMode, 'on');
+    assert.equal(patch.bridge?.defaultWorkspace, '/tmp/work');
+    assert.equal(patch.bridge?.uiAllowLan, true);
+    assert.equal(patch.bridge?.uiAccessToken, 'existing-token');
+  });
+
+  it('does not synthesize channel timing defaults when the effective config has no channel', () => {
+    const patch = mergeConfigV2HomePatch(baseConfigV2({ channels: [] }), { historyMessageLimit: 999 });
+    assert.deepEqual(patch.channels, []);
   });
 
   it('defaults the Claude provider payload to sdk', () => {
-    const payload = configToPayload(baseConfig);
+    const payload = configV2ToPayload(baseConfigV2());
     assert.equal(payload.claudeProvider, 'sdk');
   });
 });
@@ -164,6 +255,9 @@ agent = "codex"
 provider = "sdk"
 yolo_mode = "off"
 
+[runtime.claude]
+reasoning_effort = "high"
+
 [[channels]]
 id = "feishu-default"
 alias = "飞书"
@@ -220,6 +314,7 @@ require_mention = false
       assert.match(savedToml, /yolo_mode = "on"/);
       assert.match(savedToml, /history_message_limit = 14/);
       assert.match(savedToml, /network_access = false/);
+      assert.match(savedToml, /reasoning_effort = "high"/);
     } finally {
       if (previousToml === null) fs.rmSync(configTomlPath, { force: true });
       else fs.writeFileSync(configTomlPath, previousToml, 'utf-8');
