@@ -1,5 +1,5 @@
 import { configFields, findConfigField } from './fields.js';
-import type { ConfigField, ConfigPath, ConfigSourceKind, ConfigWriteScope, SourceRef } from './fields-types.js';
+import type { ConfigField, ConfigPath, ConfigSourceKind, ConfigWriteScope, SourceRef } from './fields.js';
 import type { EnvCompatWarning } from './env-compat.js';
 import { mergeConfigLayers, mergePatch, type ConfigLayer, type MergeResult } from './merge.js';
 import {
@@ -8,7 +8,6 @@ import {
   type RunConfigMigrationsResult,
 } from './migrations/index.js';
 import { getConfigPath, unsetConfigPath } from './path-access.js';
-import { exportProcessEnv, exportRuntimeSettings } from './projections.js';
 import {
   channelTomlPath,
   defaultCodelarkHome,
@@ -17,10 +16,14 @@ import {
   resolveConfigPaths,
   sessionTomlPath,
   writeTomlConfig,
+  loadStaticConfigBaseline,
+  materializeHomeChannelPatch,
   type ConfigPaths,
 } from './sources.js';
-import { loadStaticConfigBaseline, materializeHomeChannelPatch } from './static-loader.js';
-import { configPatchSchema, type ConfigPatch, type ConfigV2 } from './schema.js';
+import { configPatchSchema, type ConfigPatch } from './schema.js';
+
+// ConfigService 是配置模块的统一调用入口：负责迁移、按 scope 构造 effective config、来源解释和 TOML 写回。
+// 它不负责把配置翻译成子进程 env、runtime settings 或通道选择，这些业务语义由调用方模块处理。
 
 export type ConfigScope =
   | { kind: 'global'; cwd?: string }
@@ -61,9 +64,6 @@ export interface ConfigService {
   set(target: ConfigWriteTarget, patch: ConfigPatch): void;
   replace(target: ConfigWriteTarget, patch: ConfigPatch): void;
   unset(target: ConfigWriteTarget, path: ConfigPath): void;
-  projectRuntimeSettings(config: ConfigV2): Map<string, string>;
-  exportRuntimeSettings(scope?: ConfigScope): Map<string, string>;
-  exportProcessEnv(scope?: ConfigScope): NodeJS.ProcessEnv;
 }
 
 export interface ConfigServiceOptions {
@@ -292,15 +292,6 @@ export function createConfigService(options: ConfigServiceOptions = {}): ConfigS
       writeTomlConfig(file, target.kind === 'home'
         ? materializeHomeChannelPatch(readDefaultsConfig(paths.defaultsToml).patch, {}, current)
         : current);
-    },
-    projectRuntimeSettings(config: ConfigV2): Map<string, string> {
-      return exportRuntimeSettings(config);
-    },
-    exportRuntimeSettings(scope?: ConfigScope): Map<string, string> {
-      return exportRuntimeSettings(snapshot(scope).config);
-    },
-    exportProcessEnv(scope?: ConfigScope): NodeJS.ProcessEnv {
-      return exportProcessEnv(snapshot(scope).config);
     },
   };
 }

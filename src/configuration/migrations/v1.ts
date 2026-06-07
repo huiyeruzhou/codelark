@@ -8,6 +8,9 @@ import {
   migrateLegacySessionJsonConfigToToml,
 } from './legacy/session-json.js';
 
+// v1 -> v2 迁移：读取 config.json/config.env 和旧 sessions.json 中的配置覆盖，写入统一 TOML。
+// 这里是旧字段语义的集中解释点，避免 legacy fallback 泄漏到运行时模块。
+
 type LegacyRuntimeProvider = 'codex' | 'claude';
 type LegacyCodexProvider = 'sdk' | 'tmux' | 'pty';
 type LegacyClaudeProvider = 'sdk' | 'pty';

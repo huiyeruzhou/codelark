@@ -1,5 +1,8 @@
 import { z } from 'zod';
 
+// 当前 v2 TOML shape 的运行时校验与 camelCase/snake_case 转换。
+// sources.ts 负责读写文件，service.ts 负责调用链路，这里只维护结构和类型。
+
 export const runtimeAgentSchema = z.enum(['codex', 'claude']);
 export const codexProviderSchema = z.enum(['sdk', 'tmux', 'pty']);
 export const claudeProviderSchema = z.enum(['sdk', 'pty']);

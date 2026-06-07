@@ -9,6 +9,7 @@ import { CODELARK_HOME } from '../configuration/paths.js';
 import type { FeishuChannelConfig } from '../channels/types.js';
 import { createConfigService } from '../configuration/service.js';
 import type { ConfigPatch, ConfigV2 } from '../configuration/schema.js';
+import { exportProcessEnv } from '../runtime/config-projections.js';
 import { normalizeFeishuSite } from '../channels/feishu/site.js';
 import {
   clearStaleBridgeInstanceLock,
@@ -634,9 +635,10 @@ export function loadStartupProjection(options: ServiceConfigOverrideOptions = {}
     codelarkHome: CODELARK_HOME,
     ...(hasConfigPatchValues(options.cli) ? { cli: options.cli } : {}),
   });
+  const config = service.snapshot().config;
   return {
-    config: service.snapshot().config,
-    env: service.exportProcessEnv(),
+    config,
+    env: exportProcessEnv(config),
   };
 }
 

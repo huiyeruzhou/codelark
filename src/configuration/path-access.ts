@@ -1,3 +1,6 @@
+// canonical path 访问工具：处理 ConfigPatch/ConfigV2 内部的点分路径读写。
+// 这里只支持对象路径，不承载 channels[] 这类字段模板的业务解释。
+
 export function getConfigPath(source: unknown, path: string): unknown {
   return path.split('.').reduce<unknown>((current, segment) => {
     if (!current || typeof current !== 'object') return undefined;

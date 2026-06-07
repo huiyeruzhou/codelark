@@ -4,7 +4,7 @@ import os from 'node:os';
 import { parseSandboxMode } from '../../runtime/options.js';
 import { createConfigService } from '../../configuration/service.js';
 import type { ConfigPatch, ConfigV2 } from '../../configuration/schema.js';
-import type { ConfigPath } from '../../configuration/fields-types.js';
+import type { ConfigPath } from '../../configuration/fields.js';
 import { normalizeReasoningEffort } from './aliases.js';
 import {
   buildCommandFields,

@@ -9,6 +9,7 @@ import {
   type ConfigServiceOptions,
 } from '../../../configuration/service.js';
 import type { ConfigV2 } from '../../../configuration/schema.js';
+import { exportRuntimeSettings } from '../../../runtime/config-projections.js';
 
 interface RuntimeSettingsProjection {
   settings: Map<string, string>;
@@ -24,17 +25,17 @@ function writeFile(file: string, content: string): void {
   fs.writeFileSync(file, content, 'utf-8');
 }
 
-function projectRuntimeSettingsFromService(options: ConfigServiceOptions = {}): RuntimeSettingsProjection {
+function runtimeSettingsFromSnapshot(options: ConfigServiceOptions = {}): RuntimeSettingsProjection {
   const service = createConfigService(options);
   const config = service.snapshot().config;
   return {
     config,
-    settings: service.projectRuntimeSettings(config),
+    settings: exportRuntimeSettings(config),
   };
 }
 
 function exportRuntimeSettingsFromService(options: ConfigServiceOptions = {}): Map<string, string> {
-  return createConfigService(options).exportRuntimeSettings();
+  return exportRuntimeSettings(createConfigService(options).snapshot().config);
 }
 
 describe('runtime settings service projection', () => {
@@ -83,7 +84,7 @@ describe('runtime settings service projection', () => {
         '',
       ].join('\n'));
 
-      const projection = projectRuntimeSettingsFromService({ codelarkHome: home, env: {} });
+      const projection = runtimeSettingsFromSnapshot({ codelarkHome: home, env: {} });
       assert.equal(projection.config.runtime.agent, 'claude');
       assert.equal(projection.config.runtime.codex.model, 'toml-model');
       assert.equal(projection.config.runtime.codex.yoloMode, 'on');
@@ -132,7 +133,7 @@ model = "home-model"
 model = "local-model"
 `);
 
-      const projection = projectRuntimeSettingsFromService({ codelarkHome: home, cwd, env: {} });
+      const projection = runtimeSettingsFromSnapshot({ codelarkHome: home, cwd, env: {} });
 
       assert.equal(projection.config.runtime.codex.model, 'local-model');
       assert.equal(projection.settings.get('bridge_default_model'), 'local-model');
@@ -155,7 +156,7 @@ model = "toml-model"
 provider = "sdk"
 `);
 
-      const projection = projectRuntimeSettingsFromService({
+      const projection = runtimeSettingsFromSnapshot({
         codelarkHome: home,
         env: {
           CODELARK_AGENT: 'codex',

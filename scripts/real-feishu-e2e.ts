@@ -9,10 +9,11 @@ import path from 'node:path';
 import { promisify } from 'node:util';
 import { WebSocketServer } from 'ws';
 
-import { feishuSiteToApiBaseUrl, type FeishuSite } from '../src/configuration/channel-types.js';
+import type { FeishuSite } from '../src/channels/types.js';
+import { feishuSiteToApiBaseUrl } from '../src/channels/feishu/site.js';
 import { createConfigService } from '../src/configuration/service.js';
 import { DEFAULT_WORKSPACE_ROOT } from '../src/configuration/paths.js';
-import type { ClaudeExecutable } from '../src/configuration/runtime-types.js';
+import type { ClaudeExecutable } from '../src/runtime/options.js';
 import type { ConfigPatch } from '../src/configuration/schema.js';
 import {
   basicDialogueStreamCardCheckpointIssues,
@@ -1292,7 +1293,7 @@ function isPidAlive(pid: unknown): boolean {
 }
 
 function listConfiguredFeishuAppIds(codelarkHome: string): string[] {
-  const config = createConfigService({ codelarkHome, env: {}, migrate: false }).snapshot().config;
+  const config = createConfigService({ codelarkHome, env: {} }).snapshot().config;
   const appIds = new Set<string>();
   for (const channel of config.channels) {
     if (channel.provider !== 'feishu') continue;

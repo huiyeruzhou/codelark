@@ -12,18 +12,19 @@ CodeLark 需要把“默认值、全局配置、项目配置、环境变量、�
 - 查询配置时不再在业务代码里手写 source 解析和跨文件 merge；业务模块通过 `ConfigService` 取得统一 effective value / source，再在自己的模块内聚合业务语义和 fallback。
 - 全局默认值有清晰收口，能直接看到当前默认配置长什么样；setup wizard 展示和写入的全局配置项也必须从同一个默认配置定义读取。
 - 启动时把旧 `config.json` 和 `config.env` 一次性迁移到 `config.toml`；迁移完成后不再支持 `config.env` 作为配置输入。
-- 仍然向 daemon/agent/lark-cli 等子进程注入环境变量，但这些环境变量由 `ConfigService.exportProcessEnv()` 从 effective config 生成，不再通过读取或维护 `config.env` 实现。
+- 仍然向 daemon/agent/lark-cli 等子进程注入环境变量，但这些环境变量由应用侧 projection 从 `ConfigService.snapshot().config` 生成，不再通过读取或维护 `config.env` 实现。
 - 使用合适的第三方库处理 TOML、运行时校验和 CLI 参数解析。
 
 ## 当前现状
 
-当前默认配置目录来自 `CODELARK_HOME`，未设置时为 `~/.codelark`。配置逻辑主要分散在：
+当前默认配置目录来自 `CODELARK_HOME`，未设置时为 `~/.codelark`。配置逻辑按功能组收口为：
 
-- `src/configuration/static-loader.ts`：用 `node-config` 解析并合并 defaults/home/local/env/cli 静态 baseline；只返回需要 materialize 的 home patch，不直接写文件。
-- `src/configuration/sources.ts`：复用 `node-config` TOML parser 读取 defaults/home/local/channel/session TOML，并提供 `ConfigService` 写入所需的持久化 I/O。
+- `src/configuration/sources.ts`：配置来源层，集中处理 defaults/home/local/channel/session TOML 路径、读写、`node-config` 静态 baseline、home channel materialize 和 source 合法性。
 - `src/configuration/merge.ts`：只保留 patch/node-config 合并和 provenance 计算；projection 选择默认 channel、值转 env string 等输出语义不从这里导出。
-- `src/configuration/service.ts`：薄 `ConfigService` 查询/写入入口，负责返回统一 effective value、source/provenance、explain 和 projection，不承载业务运行语义。
-- 配置解析库边界：生产代码只有 `src/configuration` 可以直接导入 `node-config` 或 `smol-toml`；业务模块必须通过 `ConfigService`、projection 或迁移 adapter 使用配置，并在业务模块内解释 runtime、channel、session 等语义。
+- `src/configuration/service.ts`：薄 `ConfigService` 查询/写入入口，负责返回统一 effective value、source/provenance 和 explain，不承载业务运行语义或 env/settings projection。
+- `src/configuration/fields.ts`：当前字段注册表和字段类型，集中声明 canonical path、TOML path、scope、env/CLI 映射和 secret 标记。
+- `src/runtime/config-projections.ts`：应用侧 runtime settings 与子进程 env projection；调用方先拿 `ConfigService.snapshot().config`，再在运行时边界派生具体输出。
+- 配置解析库边界：生产代码只有 `src/configuration` 可以直接导入 `node-config` 或 `smol-toml`；业务模块必须通过 `ConfigService`、应用侧 projection 或迁移 adapter 使用配置，并在业务模块内解释 runtime、channel、session 等语义。
 - `src/runtime/options.ts` / `src/shared/channel-id.ts`：运行时枚举 fallback 和 channel id slug 化是业务/共享语义，不属于 `src/configuration`。配置层提供 zod schema 和统一 value，调用方在自己的模块内决定 fallback。
 - `src/channels/feishu/site.ts`：飞书/Lark 站点归一化和 API base URL 属于 Feishu 通道语义，不属于配置层；配置层只校验 `site` 字段值。
 - `src/local-service/manager.ts` / `src/entrypoints/cli.ts`：CLI `run` 时用同一个 effective config snapshot 同时派生 UI env、Bridge preflight config 和 Bridge env projection，避免一次启动内动态 TOML reload 前后不一致。
@@ -134,15 +135,12 @@ TOML shape 边界：
 src/configuration/
   defaults.toml              # 产品默认配置，唯一默认值入口
   schema.ts                  # 当前 TOML shape 的 zod 校验、类型、coerce、默认值校验
-  fields.ts                  # latest configFields；只服务当前运行时
-  fields-types.ts            # ConfigFields / ConfigField 类型定义
+  fields.ts                  # latest configFields 和字段类型；只服务当前运行时
   paths.ts                   # CODELARK_HOME、默认工作区和 home path 展开工具；不暴露 legacy 输入文件名
-  static-loader.ts           # node-config 静态 baseline：defaults/home/local/env/cli
-  sources.ts                 # 路径解析、Channel/Session TOML 读写和持久化写入
-  merge.ts                   # node-config effective merge + provenance 内部实现
+  sources.ts                 # 配置来源：路径解析、TOML I/O、node-config 静态 baseline、Channel/Session TOML 读写
+  merge.ts                   # patch/node-config effective merge + provenance 内部实现
   service.ts                 # 薄 ConfigService 查询和写入 API，返回统一 value/source
   env-compat.ts              # 真实 process.env 的旧 env alias 兼容读取和 warning
-  projections.ts             # runtime settings、UI payload、lark-cli projection
   legacy.ts                  # legacy Config adapter 和 runtime settings projection compatibility
   legacy-types.ts            # legacy Config 类型，仅供 migration/compatibility 测试
   migrations/
@@ -157,6 +155,9 @@ src/configuration/
 
 src/channels/
   types.ts                   # Channel/Feishu 运行时配置类型和 provider 判断，属于通道业务边界
+
+src/runtime/
+  config-projections.ts      # 从统一 ConfigV2 派生 runtime settings 和子进程 env
 ```
 
 ### 目标配置来源
@@ -415,9 +416,6 @@ interface ConfigService {
   explain(path?: ConfigPath, scope?: ConfigScope): ConfigExplain[];
   set(target: ConfigWriteTarget, patch: ConfigPatch): void;
   unset(target: ConfigWriteTarget, path: ConfigPath): void;
-  projectRuntimeSettings(config: ConfigV2): Map<string, string>;
-  exportRuntimeSettings(scope?: ConfigScope): Map<string, string>;
-  exportProcessEnv(scope?: ConfigScope): NodeJS.ProcessEnv;
 }
 ```
 
@@ -587,7 +585,7 @@ interface MigrationContext {
 - 启动时执行一次性迁移：读取旧 `config.json` 和 `config.env`，生成 `config.toml`；迁移成功后不再把 `config.env` 作为输入 source，也不再维护新的 `config.env` 快照。
 - 新旧 env 键只来自真实 `process.env`，用于本次进程覆盖；旧 env 键通过 `env-compat.ts` 兼容读取并 warning，不再通过 `config.env` 文件读取。
 - daemon、operator-ui、setup wizard 先切到 global scope 查询。
-- 子进程 env 注入改为 `ConfigService.exportProcessEnv(scope)`，由 effective config 生成 `LARK_CHANNEL_CONFIG`、`bridge_*` 等环境变量；不得再通过读取 `config.env` 注入。
+- 子进程 env 注入改为应用侧 `exportProcessEnv(ConfigV2)`，由 effective config 生成 `LARK_CHANNEL_CONFIG`、`bridge_*` 等环境变量；不得再通过读取 `config.env` 注入。
 
 阶段 3：scoped 配置迁移
 
@@ -607,7 +605,7 @@ interface MigrationContext {
 阶段 5：调用方收口
 
 - `resolveSessionRuntimeConfig()` 改为调用 `ConfigService.snapshot(sessionScope)`，不再手写 session -> store settings fallback。
-- `configToSettings()` / `exportProcessEnv()` 变成 projection，不再承载默认值，也不读取 `config.env`。
+- `configToSettings()` / `exportProcessEnv()` 变成应用侧 projection，不再承载默认值，也不读取 `config.env`。
 - adapter runtime 通道实例读取从 `ConfigService.snapshot().config.channels` 获取；`bridge_channel_instances_json` 只作为 legacy projection 输出，不再作为 bridge 内部运行时配置输入。
 - 删除 expanded `Config` facade；旧 `Config` 形状只保留在 `legacy.ts` / `legacy-types.ts` 中作为 migration 和 compatibility adapter。
 - 测试从“字段函数测试”改为“configFields 驱动的多 source 覆盖矩阵”。
@@ -635,7 +633,7 @@ interface MigrationContext {
 - `/api/config/check` 覆盖合法 payload 不写文件、非法 payload 返回字段级 issues；`/api/config` 覆盖同一非法 payload 不写 home TOML。
 - BridgeSession JSON 中现有 `/r`、`/sandbox` 等持久化配置字段能迁移到 scoped TOML，且迁移前后 effective config 一致。
 - BridgeSession JSON 迁移后不再包含配置字段，只保留身份、生命周期和观测状态。
-- `exportRuntimeSettings()` 与现有 `configToSettings()` 的关键输出兼容。
+- 应用侧 `exportRuntimeSettings()` 与现有 `configToSettings()` 的关键输出兼容。
 
 ## 结论
 

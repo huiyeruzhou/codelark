@@ -5,6 +5,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { createConfigService } from '../../../configuration/service.js';
+import { exportProcessEnv } from '../../../runtime/config-projections.js';
 
 function writeFile(file: string, content: string): void {
   fs.mkdirSync(path.dirname(file), { recursive: true });
@@ -99,7 +100,7 @@ model = "session-model"
       assert.equal(channel?.config.historyMessageLimit, 6);
       assert.equal(service.snapshot(scope).provenance.get('channels.feishu-default.config.historyMessageLimit')?.source, 'home');
 
-      const env = service.exportProcessEnv(scope);
+      const env = exportProcessEnv(service.snapshot(scope).config);
       assert.equal(env.CODELARK_CODEX_MODEL, 'session-model');
       assert.equal(env.CODELARK_CODEX_REASONING_EFFORT, 'high');
       assert.equal(env.CODELARK_FEISHU_APP_ID, 'home-app');

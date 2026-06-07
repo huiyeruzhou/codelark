@@ -7,7 +7,7 @@ import type {
   BridgeSessionRuntimeState,
 } from './session.js';
 import { createConfigService } from '../configuration/service.js';
-import type { ConfigPath } from '../configuration/fields-types.js';
+import type { ConfigPath } from '../configuration/fields.js';
 
 export type BridgeSessionRuntimeUpdate = BridgeSessionUpdate;
 

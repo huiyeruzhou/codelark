@@ -15,7 +15,7 @@ import {
 import { stripLegacySessionPrefix } from '../../bridge/session/display/session-title.js';
 import type { ChannelChat } from '../../domain/channel.js';
 import type { BridgeSession, BridgeSessionUpdate } from '../../domain/session.js';
-import type { ConfigPath } from '../../configuration/fields-types.js';
+import type { ConfigPath } from '../../configuration/fields.js';
 import {
   resolveSessionTranscriptFile,
   type SessionTranscriptHistoryEntry,

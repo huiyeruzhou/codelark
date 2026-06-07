@@ -1,3 +1,5 @@
+// legacy config.env 解析器：只供 v1 migration 读取旧输入，不参与 v2 运行时配置加载。
+
 export function parseLegacyEnvFile(content: string): Map<string, string> {
   const entries = new Map<string, string>();
   for (const line of content.split(/\r?\n/)) {

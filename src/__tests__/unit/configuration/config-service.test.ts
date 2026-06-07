@@ -5,8 +5,8 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { createConfigService } from '../../../configuration/service.js';
-import { resolveConfigPaths } from '../../../configuration/sources.js';
-import { loadStaticConfigBaseline } from '../../../configuration/static-loader.js';
+import { loadStaticConfigBaseline, resolveConfigPaths } from '../../../configuration/sources.js';
+import { exportProcessEnv, exportRuntimeSettings } from '../../../runtime/config-projections.js';
 
 function tempHome(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'codelark-config-v2-'));
@@ -598,13 +598,13 @@ require_mention = false
         },
       });
 
-      const env = service.exportProcessEnv();
+      const env = exportProcessEnv(service.snapshot().config);
       assert.equal(env.CODELARK_AGENT, 'claude');
       assert.equal(env.CODELARK_CODEX_MODEL, 'gpt-test');
       assert.equal(env.CODELARK_FEISHU_APP_ID, 'home-app');
       assert.equal(env.CODELARK_ENABLED_CHANNELS, 'feishu');
 
-      const settings = service.exportRuntimeSettings();
+      const settings = exportRuntimeSettings(service.snapshot().config);
       assert.equal(settings.get('bridge_default_runtime'), 'claude');
       assert.equal(settings.get('bridge_default_model'), 'gpt-test');
       assert.equal(settings.get('default_model'), 'gpt-test');
@@ -627,7 +627,7 @@ yolo_mode = "off"
 permission_mode = "plan"
 `);
       const service = createConfigService({ codelarkHome: home, env: {} });
-      let settings = service.exportRuntimeSettings();
+      let settings = exportRuntimeSettings(service.snapshot().config);
       assert.equal(settings.get('bridge_default_mode'), 'yolo');
       assert.equal(settings.get('bridge_claude_permission_mode'), 'plan');
 
@@ -637,7 +637,7 @@ permission_mode = "plan"
           claude: { yoloMode: 'on', permissionMode: 'bypassPermissions' },
         },
       });
-      settings = service.exportRuntimeSettings();
+      settings = exportRuntimeSettings(service.snapshot().config);
       assert.equal(settings.get('bridge_default_mode'), 'normal');
       assert.equal(settings.get('bridge_claude_permission_mode'), 'bypassPermissions');
     } finally {

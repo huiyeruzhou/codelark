@@ -1,8 +1,11 @@
 import { Command, InvalidOptionArgumentError as InvalidArgumentError } from 'commander';
 import { findConfigField } from './fields.js';
-import type { ConfigField, ConfigPath } from './fields-types.js';
+import type { ConfigField, ConfigPath } from './fields.js';
 import { setConfigPath } from './path-access.js';
 import { configPatchSchema, type ConfigPatch } from './schema.js';
+
+// CLI 覆盖解析：把 `--set path=value` / `--unset path` 转成一次启动内的 ConfigPatch。
+// 这里只接受 configFields 声明为 cli scope 的字段，避免 CLI 绕过写入边界。
 
 export interface ParsedConfigCliOverrides {
   patch: ConfigPatch;

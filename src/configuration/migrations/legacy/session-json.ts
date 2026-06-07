@@ -4,6 +4,9 @@ import { mergePatch } from '../../merge.js';
 import type { ConfigPatch } from '../../schema.js';
 import { readTomlConfig, resolveConfigPaths, sessionTomlPath, writeTomlConfig } from '../../sources.js';
 
+// legacy sessions.json 配置迁移：把旧 BridgeSession runtime 覆盖搬到 session TOML。
+// 迁移后 sessions.json 只保留身份、生命周期和运行状态字段。
+
 interface PreparedSessionJsonConfigMigration {
   nextSessions: Record<string, unknown>;
   writes: Array<{ file: string; patch: ConfigPatch }>;

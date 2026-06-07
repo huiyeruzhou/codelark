@@ -1,5 +1,5 @@
 import { DEFAULT_WORKSPACE_ROOT, expandHomePath } from '../../configuration/paths.js';
-import type { ConfigPath } from '../../configuration/fields-types.js';
+import type { ConfigPath } from '../../configuration/fields.js';
 import { createConfigService } from '../../configuration/service.js';
 import type { ConfigV2 } from '../../configuration/schema.js';
 

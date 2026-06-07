@@ -73,7 +73,7 @@ function uiRouteFilesImportingConfigService(root: string): string[] {
     .map((file) => path.relative(process.cwd(), file));
 }
 
-function filesImportingConfigurationProjectionInternals(root: string): string[] {
+function filesImportingLegacyConfigurationProjection(root: string): string[] {
   const projectionImportPattern = /from\s+['"][^'"]*configuration\/projections\.js['"]/;
   return listSourceFiles(root)
     .filter((file) => !path.relative(root, file).split(path.sep).includes('__tests__'))
@@ -165,8 +165,15 @@ describe('configuration module boundaries', () => {
     assert.deepEqual(offenders, []);
   });
 
-  it('keeps projection internals behind ConfigService', () => {
-    const offenders = filesImportingConfigurationProjectionInternals(path.join(process.cwd(), 'src'));
+  it('keeps runtime projections outside the configuration service boundary', () => {
+    assert.equal(fs.existsSync(path.join(process.cwd(), 'src', 'configuration', 'projections.ts')), false);
+
+    const serviceSource = fs.readFileSync(path.join(process.cwd(), 'src', 'configuration', 'service.ts'), 'utf-8');
+    assert.doesNotMatch(serviceSource, /exportRuntimeSettings/);
+    assert.doesNotMatch(serviceSource, /exportProcessEnv/);
+    assert.doesNotMatch(serviceSource, /projectRuntimeSettings/);
+
+    const offenders = filesImportingLegacyConfigurationProjection(path.join(process.cwd(), 'src'));
     assert.deepEqual(offenders, []);
   });
 });

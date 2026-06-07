@@ -12,6 +12,9 @@ import type {
   RuntimeProvider,
 } from '../runtime/options.js';
 
+// legacy Config 类型快照：只给迁移、compatibility adapter 和旧路径测试使用。
+// 不在这里新增 v2 字段，新增配置应进入 schema.ts 与 fields.ts。
+
 export interface CodexRuntimeDefaultsConfig {
   defaultModel?: string;
   defaultMode?: string;

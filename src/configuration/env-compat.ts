@@ -1,7 +1,10 @@
 import { configFields } from './fields.js';
-import type { ConfigField } from './fields-types.js';
+import type { ConfigField } from './fields.js';
 import type { ConfigPatch } from './schema.js';
 import { setConfigPath } from './path-access.js';
+
+// 进程 env 兼容层：只把非 channel 实例字段映射成 ConfigPatch，并为旧 env key 生成 warning。
+// channel 相关 env 在 v2 中只用于 migration 或对子进程导出，不再作为运行时配置输入。
 
 export interface EnvCompatWarning {
   envKey: string;

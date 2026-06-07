@@ -1,8 +1,12 @@
+import { Load } from 'config/lib/util.js';
+import { parse } from 'smol-toml';
 import { configFields } from './fields.js';
 import { getConfigPath } from './path-access.js';
 import { configSchema, configToTomlShape, tomlToConfigPatch, type ConfigPatch, type ConfigV2 } from './schema.js';
-import { createNodeConfigLoader } from './sources.js';
-import type { ProvenanceMap, SourceRef } from './fields-types.js';
+import type { ProvenanceMap, SourceRef } from './fields.js';
+
+// 配置合并内部实现：只负责 patch merge、node-config 合并和 provenance 标记，不读取具体文件。
+// 读取来源的路径/I/O 留在 sources.ts，业务语义投影留在 runtime。
 
 export interface ConfigLayer {
   ref: SourceRef;
@@ -14,6 +18,30 @@ export interface ConfigLayer {
 export interface MergeResult {
   config: ConfigV2;
   provenance: ProvenanceMap;
+}
+
+const nodeConfigTomlParser = {
+  parse(_filename: string, content: string): unknown {
+    return parse(content);
+  },
+  getFilesOrder(): string[] {
+    return ['toml'];
+  },
+};
+
+export function createNodeConfigLoader(): InstanceType<typeof Load> {
+  return new Load({
+    configDir: '',
+    gitCrypt: true,
+    hostName: '',
+    nodeEnv: [],
+    parser: nodeConfigTomlParser as never,
+    skipConfigSources: true,
+  });
+}
+
+export function loadTomlFileWithNodeConfig(file: string): unknown | null {
+  return createNodeConfigLoader().loadFile(file);
 }
 
 function clone<T>(value: T): T {

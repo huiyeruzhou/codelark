@@ -11,7 +11,7 @@ import { normalizeClaudeExecutable, type ClaudeExecutable, type ClaudePermission
 import { createConfigService, type ConfigScope, type EffectiveConfig } from '../../configuration/service.js';
 import type { ConfigPatch } from '../../configuration/schema.js';
 import type { ConfigV2 } from '../../configuration/schema.js';
-import type { ConfigPath } from '../../configuration/fields-types.js';
+import type { ConfigPath } from '../../configuration/fields.js';
 import {
   resetDraftSession as resetDraftSessionForStore,
 } from '../session/internal-sessions.js';

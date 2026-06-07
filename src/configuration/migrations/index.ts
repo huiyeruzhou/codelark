@@ -12,6 +12,9 @@ import type {
 import { legacyConfigEnvPath, legacyConfigJsonPath } from './legacy/paths.js';
 import { v1ConfigMigration } from './v1.js';
 
+// 配置迁移执行器：启动时把旧输入一次性转成 v2 TOML，并记录迁移状态和备份。
+// 迁移完成后的运行时读取必须走 ConfigService，而不是继续读取 legacy 文件。
+
 export type {
   ConfigMigration,
   ConfigMigrationState,

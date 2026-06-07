@@ -17,6 +17,7 @@ import type { LLMProvider } from '../runtime/contracts.js';
 import { CODELARK_HOME } from '../configuration/paths.js';
 import { createConfigService } from '../configuration/service.js';
 import { JsonFileStore } from '../storage/json-store.js';
+import { exportRuntimeSettings } from '../runtime/config-projections.js';
 import { PendingPermissions } from '../runtime/permission-gateway.js';
 import type { CodexProviderChoice } from '../runtime/codex/routing-provider.js';
 import { setupLogger } from '../shared/logger.js';
@@ -124,7 +125,7 @@ async function main(): Promise<void> {
   runStartupStorageMigrations();
   const configService = createConfigService({ codelarkHome: CODELARK_HOME });
   const config = configService.snapshot().config;
-  const settings = configService.projectRuntimeSettings(config);
+  const settings = exportRuntimeSettings(config);
   setupLogger();
 
   const runId = crypto.randomUUID();

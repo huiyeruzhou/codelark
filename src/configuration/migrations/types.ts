@@ -1,3 +1,6 @@
+// migration 公共类型：描述迁移输入路径、状态文件和迁移执行结果。
+// 具体旧格式解析放在 migrations/legacy/*，避免污染当前配置 schema。
+
 export interface ConfigMigrationStateEntry {
   id: `v${number}`;
   appliedAt: string;

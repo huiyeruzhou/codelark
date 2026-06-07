@@ -1,6 +1,9 @@
 import os from 'node:os';
 import path from 'node:path';
 
+// 配置相关的全局路径常量和用户路径展开工具。
+// legacy config 输入文件路径已迁到 migrations/legacy/paths.ts，避免运行时继续依赖旧存储。
+
 export const DEFAULT_CODELARK_HOME = path.join(os.homedir(), '.codelark');
 export const DEFAULT_WORKSPACE_ROOT = os.homedir();
 

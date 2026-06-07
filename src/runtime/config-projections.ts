@@ -1,7 +1,10 @@
-import { configFields } from './fields.js';
-import { getConfigPath } from './path-access.js';
-import type { ChannelConfigV2, ConfigV2 } from './schema.js';
-import type { ConfigField } from './fields-types.js';
+import { configFields } from '../configuration/fields.js';
+import { getConfigPath } from '../configuration/path-access.js';
+import type { ChannelConfigV2, ConfigV2 } from '../configuration/schema.js';
+import type { ConfigField } from '../configuration/fields.js';
+
+// 运行时投影层：把统一 ConfigV2 派生成旧 runtime settings Map 或子进程 env。
+// 这些输出是应用边界语义，刻意放在 runtime 模块而不是 ConfigService 内。
 
 function getProjectionChannel(config: ConfigV2): ChannelConfigV2 {
   return config.channels.find((channel) => channel.id === 'feishu-default')
