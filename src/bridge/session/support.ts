@@ -7,7 +7,7 @@ import {
   listCodexSessions,
   type CodexSessionSummary,
 } from '../../runtime/codex/session-index.js';
-import { normalizeClaudeExecutable, type ClaudeExecutable, type ClaudePermissionMode, type ClaudeProviderChoice } from '../../configuration/index.js';
+import { normalizeClaudeExecutable, type ClaudeExecutable, type ClaudePermissionMode, type ClaudeProviderChoice } from '../../configuration/runtime-types.js';
 import { createConfigService } from '../../configuration/service.js';
 import type { ConfigPatch } from '../../configuration/schema.js';
 import type { ConfigPath } from '../../configuration/fields-types.js';

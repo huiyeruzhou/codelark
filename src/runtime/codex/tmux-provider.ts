@@ -3,7 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 
 import type { LLMProvider, StreamChatParams } from '../contracts.js';
-import type { CodexReasoningEffort, CodexSandboxMode } from '../../configuration/index.js';
+import type { CodexReasoningEffort, CodexSandboxMode } from '../../configuration/runtime-types.js';
 import type { PendingPermissions } from '../permission-gateway.js';
 import {
   getCodexSessionsRoot,

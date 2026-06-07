@@ -1,5 +1,5 @@
 import { bootstrapLocalCodexThread } from '../../runtime/codex/thread-bootstrap.js';
-import type { CodexReasoningEffort, CodexSandboxMode } from '../../configuration/index.js';
+import type { CodexReasoningEffort, CodexSandboxMode } from '../../configuration/runtime-types.js';
 import type { BridgeSession, ChannelChat } from '../../domain/index.js';
 import {
   getSessionWorkingDirectory,

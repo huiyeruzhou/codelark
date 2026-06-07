@@ -1,7 +1,7 @@
 import type {
   CodexReasoningEffort,
   CodexSandboxMode,
-} from '../../configuration/index.js';
+} from '../../configuration/runtime-types.js';
 import { createConfigService } from '../../configuration/service.js';
 import type { BridgeStore, ChannelChat, InboundMessage } from '../../domain/index.js';
 import {

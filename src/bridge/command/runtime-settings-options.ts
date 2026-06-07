@@ -1,4 +1,4 @@
-import type { CodexReasoningEffort } from '../../configuration/index.js';
+import type { CodexReasoningEffort } from '../../configuration/runtime-types.js';
 
 export const MODE_OPTIONS_TEXT = '可选：`normal`（普通执行，默认） `yolo`（跳过审批和沙箱）。兼容：`code` 等同于 `normal`。';
 export const RUNTIME_OPTIONS_TEXT = '可选：`codex`（OpenAI Codex，默认） `claude`（Claude Code）。`/provider` 只影响当前 runtime 的 transport，不切换 runtime。';

@@ -1,7 +1,5 @@
 import {
   normalizeChannelId,
-  type RuntimeReasoningEffort,
-  type RuntimeSandboxMode,
 } from "./runtime-options.js";
 import { configV2ToLegacyConfig, legacyConfigToConfigPatch } from "./legacy.js";
 import { createConfigService } from "./service.js";
@@ -13,6 +11,15 @@ import {
   type FeishuChannelConfig,
   type FeishuSite,
 } from "./channel-types.js";
+import type {
+  ClaudeExecutable,
+  ClaudePermissionMode,
+  ClaudeProviderChoice,
+  CodexProviderChoice,
+  CodexReasoningEffort,
+  CodexSandboxMode,
+  RuntimeProvider,
+} from "./runtime-types.js";
 import {
   CODELARK_HOME,
   CONFIG_JSON_PATH,
@@ -21,6 +28,20 @@ import {
   expandHomePath,
 } from "./paths.js";
 
+export {
+  normalizeClaudeExecutable,
+  normalizeClaudePermissionMode,
+  normalizeClaudeProviderChoice,
+  normalizeCodexProviderChoice,
+  normalizeRuntimeProvider,
+  type ClaudeExecutable,
+  type ClaudePermissionMode,
+  type ClaudeProviderChoice,
+  type CodexProviderChoice,
+  type CodexReasoningEffort,
+  type CodexSandboxMode,
+  type RuntimeProvider,
+} from "./runtime-types.js";
 export {
   feishuSiteToApiBaseUrl,
   isSupportedChannelProvider,
@@ -37,14 +58,6 @@ export {
   DEFAULT_WORKSPACE_ROOT,
   expandHomePath,
 } from "./paths.js";
-
-export type CodexSandboxMode = RuntimeSandboxMode;
-export type CodexReasoningEffort = RuntimeReasoningEffort;
-export type RuntimeProvider = 'codex' | 'claude';
-export type CodexProviderChoice = 'sdk' | 'tmux' | 'pty';
-export type ClaudeProviderChoice = 'pty' | 'sdk';
-export type ClaudeExecutable = 'claude' | 'ccr';
-export type ClaudePermissionMode = 'default' | 'acceptEdits' | 'bypassPermissions' | 'plan';
 
 export interface CodexRuntimeDefaultsConfig {
   defaultModel?: string;
@@ -144,41 +157,9 @@ function buildDefaultChannelId(provider: ChannelProvider): string {
   return `${provider}-default`;
 }
 
-export function normalizeRuntimeProvider(value: unknown): RuntimeProvider {
-  return typeof value === 'string' && value.trim().toLowerCase() === 'claude' ? 'claude' : 'codex';
-}
-
 function normalizeDefaultMode(value: unknown): string {
   if (value === 'yolo') return 'yolo';
   return 'normal';
-}
-
-export function normalizeCodexProviderChoice(value: unknown): CodexProviderChoice | undefined {
-  if (typeof value !== 'string') return undefined;
-  const normalized = value.trim().toLowerCase();
-  if (normalized === 'sdk' || normalized === 'tmux' || normalized === 'pty') return normalized;
-  return 'tmux';
-}
-
-export function normalizeClaudeProviderChoice(value: unknown): ClaudeProviderChoice | undefined {
-  if (typeof value !== 'string') return undefined;
-  const normalized = value.trim().toLowerCase();
-  if (normalized === 'sdk' || normalized === 'pty') return normalized;
-  return 'sdk';
-}
-
-function normalizeClaudePermissionMode(value: unknown): ClaudePermissionMode | undefined {
-  if (value === 'default' || value === 'acceptEdits' || value === 'bypassPermissions' || value === 'plan') {
-    return value;
-  }
-  return undefined;
-}
-
-export function normalizeClaudeExecutable(value: unknown): ClaudeExecutable | undefined {
-  if (typeof value !== 'string') return undefined;
-  const normalized = value.trim().toLowerCase();
-  if (normalized === 'claude' || normalized === 'ccr') return normalized;
-  return undefined;
 }
 
 function normalizeChannelInstances(value: unknown): ChannelInstance[] {

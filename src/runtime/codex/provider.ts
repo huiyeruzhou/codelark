@@ -16,7 +16,7 @@ import type { ThreadEvent, ThreadItem } from '@openai/codex-sdk';
 import type { LLMProvider, StreamChatParams } from '../contracts.js';
 import type { PendingPermissions } from '../permission-gateway.js';
 import { sseEvent } from '../sse.js';
-import type { CodexReasoningEffort, CodexSandboxMode } from '../../configuration/index.js';
+import type { CodexReasoningEffort, CodexSandboxMode } from '../../configuration/runtime-types.js';
 import {
   normalizeSandboxMode,
   parseReasoningEffort,
