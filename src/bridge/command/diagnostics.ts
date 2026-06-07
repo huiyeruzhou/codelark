@@ -111,7 +111,6 @@ function currentRuntimeFields(
     return [
       [currentRuntimeFieldLabel('claude', 'claudeDefaultModel'), claudeConfig.model || 'default'],
       [currentRuntimeFieldLabel('claude', 'claudeMode'), yoloMode === 'on' || yoloMode === 'yolo' ? 'yolo' : 'normal'],
-      [currentRuntimeFieldLabel('claude', 'claudePermissionMode'), claudeConfig.permissionMode || 'default'],
       [currentRuntimeFieldLabel('claude', 'claudeProvider'), claudeConfig.provider || 'tmux'],
       [currentRuntimeFieldLabel('claude', 'claudeReasoningEffort'), claudeConfig.reasoningEffort || 'default'],
       [currentRuntimeFieldLabel('claude', 'claudeIdleTimeoutMinutes'), `${claudeConfig.idleTimeoutMinutes ?? 0}`],

@@ -68,8 +68,8 @@ export {
   resolveLocalCodexThreadId,
 } from './runtime-session.js';
 
-const MODE_OPTIONS_TEXT = '可选：`normal`（普通执行，默认） `yolo`（跳过审批和沙箱）。兼容：`code` 等同于 `normal`。';
-const RUNTIME_OPTIONS_TEXT = '可选：`codex`（OpenAI Codex，默认） `claude`（Claude Code）。`/provider` 只影响当前 runtime 的 transport，不切换 runtime。';
+const MODE_OPTIONS_TEXT = '可选：`normal`（普通执行，默认） `yolo`（YOLO模式：允许 agent 无需审批绕过沙箱）。兼容：`code` 等同于 `normal`。';
+const RUNTIME_OPTIONS_TEXT = '可选：`codex`（OpenAI Codex，默认） `claude`（Claude Code）。`/provider` 选择使用何种方式运行 agent，不切换 runtime。';
 const REASONING_OPTIONS_TEXT = '可选：`1=minimal` `2=low` `3=medium` `4=high` `5=xhigh`';
 const SANDBOX_OPTIONS_TEXT = '可选：`read-only` `workspace-write` `danger-full-access` `default`（回到全局默认）';
 const NETWORK_OPTIONS_TEXT = '可选：`on`/`true` 开启网络，`off`/`false` 关闭网络，`default` 回到全局默认。';
@@ -321,7 +321,7 @@ export function handleModeCommand(options: {
         ['模式', mode],
         ['Runtime', activeRuntime],
         activeRuntime === 'claude'
-          ? ['Claude permission', resolveClaudeRuntimeConfig(session, binding).permissionMode]
+          ? ['YOLO模式', mode]
           : ['Provider', formatSessionCodexProvider(session, binding)],
       ],
       [MODE_OPTIONS_TEXT, '发送 `/m normal` 或 `/m yolo` 切换。完整命令也兼容：`/mode normal`。'],
@@ -338,7 +338,6 @@ export function handleModeCommand(options: {
     );
   }
   if (activeRuntime === 'claude') {
-    const permissionMode = requestedMode === 'yolo' ? 'bypassPermissions' : 'default';
     if (session) {
       setSessionClaudeYoloModeToml(session.id, requestedMode);
     }
@@ -346,12 +345,12 @@ export function handleModeCommand(options: {
       '已切换 Claude Code 模式',
       [
         ['模式', requestedMode],
-        ['Claude permission', permissionMode],
+        ['YOLO模式', requestedMode],
       ],
       [
         requestedMode === 'yolo'
-          ? '后续启动 Claude Code pty 时会传入 bypassPermissions 权限模式。'
-          : '后续启动 Claude Code pty 时会使用 default 权限模式。',
+          ? '后续启动 Claude Code 时允许 agent 无需审批绕过沙箱。'
+          : '后续启动 Claude Code 时使用普通审批模式。',
         CLAUDE_PTY_RUNTIME_UPDATE_NOTE,
       ],
       options.markdown,
@@ -529,7 +528,7 @@ export function handleSandboxCommand(options: {
     return buildCommandFields(
       'Claude Code 不支持 Bridge 沙箱设置',
       [['Runtime', 'claude']],
-      ['`/sandbox` 只适用于 Codex runtime；Claude Code 权限可用 `/mode normal|yolo` 或 `/set claudePermissionMode ...` 控制。'],
+      ['`/sandbox` 只适用于 Codex runtime；Claude Code 可用 `/mode normal|yolo` 控制 YOLO模式。'],
       options.markdown,
     );
   }

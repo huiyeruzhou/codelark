@@ -321,7 +321,7 @@ export function resolveClaudeRuntimeConfig(session?: BridgeSession | null, bindi
       : 'tmux',
     executable: normalizeClaudeExecutable(config.runtime.claude.executable) || 'claude',
     model: config.runtime.claude.model || undefined,
-    permissionMode: yoloRank > permissionRank
+    permissionMode: yoloPermissionMode && yoloRank >= permissionRank
       ? yoloPermissionMode || permissionMode || 'default'
       : permissionMode || yoloPermissionMode
       || 'default',

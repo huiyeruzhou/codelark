@@ -18,6 +18,7 @@ interface SettingGroupDefinition {
   key: SettingGroupKey;
   title: string;
   subtitle: string;
+  aliases?: string[];
 }
 
 interface SettingWriteOk {
@@ -40,22 +41,25 @@ export interface SettingDefinition {
 }
 
 const SETTING_DISPLAY_LABELS: Record<string, string> = {
-  runtime: '默认运行时',
+  runtime: '默认 agent',
   defaultModel: '模型',
-  defaultMode: '模式',
-  defaultProvider: 'Provider',
+  defaultMode: 'YOLO模式',
+  defaultProvider: 'Provider（运行方式）',
   codexSkipGitRepoCheck: '跳过 Git 仓库检查',
   codexSandboxMode: '文件系统权限',
   codexNetworkAccess: '网络访问',
   codexReasoningEffort: '思考级别',
   claudeDefaultModel: '模型',
-  claudeMode: '模式',
-  claudeProvider: 'Provider',
-  claudeExecutable: 'Claude 命令',
-  claudePermissionMode: '权限模式',
+  claudeMode: 'YOLO模式',
+  claudeProvider: 'Provider（运行方式）',
+  claudeExecutable: 'Claude Router',
   claudeReasoningEffort: '思考级别',
   claudeIdleTimeoutMinutes: '空闲超时（分钟）',
   defaultWorkspaceRoot: '默认工作目录',
+  tmuxSessionName: '默认 tmux session',
+  tmuxCaptureLines: 'tmux 输出行数',
+  tmuxAutoEnter: 'tmux 自动回车',
+  tmuxEchoInput: '回显 tmux 输出',
   uiAllowLan: '允许局域网访问 UI',
   uiAccessToken: 'UI 访问令牌',
   historyMessageLimit: '历史消息条数',
@@ -70,28 +74,33 @@ const SETTING_DISPLAY_LABELS: Record<string, string> = {
 const SETTING_GROUPS: SettingGroupDefinition[] = [
   {
     key: 'runtime',
-    title: '[runtime]',
-    subtitle: '全局默认 runtime。',
+    title: '通用配置',
+    subtitle: '默认 agent、工作目录和 session/tmux 默认值。',
+    aliases: ['general', 'common', '[runtime]'],
   },
   {
     key: 'runtime.codex',
-    title: '[runtime.codex]',
+    title: 'Codex',
     subtitle: 'Codex runtime 的 TOML 默认值。',
+    aliases: ['codex', '[runtime.codex]'],
   },
   {
     key: 'runtime.claude',
-    title: '[runtime.claude]',
+    title: 'Claude',
     subtitle: 'Claude Code runtime 的 TOML 默认值。',
+    aliases: ['claude', '[runtime.claude]'],
   },
   {
     key: 'bridge',
-    title: '[bridge]',
+    title: 'Bridge',
     subtitle: 'Bridge 自身行为和 UI 访问设置。',
+    aliases: ['[bridge]'],
   },
   {
     key: 'channels.feishu',
-    title: '[[channels]] feishu-default',
+    title: '通道配置（feishu-default）',
     subtitle: '默认 Feishu 通道配置，写入 home config.toml 的 channels 数组。',
+    aliases: ['channels', 'feishu', 'feishu-default', '[[channels]]', '[[channels]] feishu-default'],
   },
 ];
 
@@ -205,6 +214,66 @@ const SETTING_DEFINITIONS: SettingDefinition[] = [
     },
   },
   {
+    key: 'defaultWorkspaceRoot',
+    tomlPath: 'bridge.default_workspace',
+    group: 'runtime',
+    aliases: ['workspace', 'workspaceRoot', 'root', 'newRoot'],
+    label: 'default_workspace',
+    usage: '/set defaultWorkspaceRoot /abs/path',
+    control: 'input',
+    placeholder: '例如 ~ 或 /data00/home/me',
+    read: (config) => config.bridge.defaultWorkspace || '-',
+    write: writeStringPatch((value) => ({ bridge: { defaultWorkspace: value } }), { defaultValue: '~' }),
+  },
+  {
+    key: 'tmuxSessionName',
+    tomlPath: 'session.tmux_session_name',
+    group: 'runtime',
+    aliases: ['tmuxSession', 'sessionName'],
+    label: 'tmux_session_name',
+    usage: '/set tmuxSessionName <session>',
+    control: 'input',
+    placeholder: '留空表示不预设 tmux session',
+    read: (config) => config.session.tmuxSessionName || '-',
+    write: writeStringPatch((value) => ({ session: { tmuxSessionName: value } })),
+  },
+  {
+    key: 'tmuxCaptureLines',
+    tomlPath: 'session.tmux_capture_lines',
+    group: 'runtime',
+    aliases: ['tmuxLines', 'captureLines'],
+    label: 'tmux_capture_lines',
+    usage: '/set tmuxCaptureLines 80',
+    control: 'input',
+    placeholder: '1-500，影响 /tmux 默认截屏返回行数',
+    read: (config) => `${config.session.tmuxCaptureLines}`,
+    write: writePositiveIntPatch((value) => ({ session: { tmuxCaptureLines: value } }), 1, 500),
+  },
+  {
+    key: 'tmuxAutoEnter',
+    tomlPath: 'session.tmux_auto_enter',
+    group: 'runtime',
+    aliases: ['tmuxEnter', 'autoEnter'],
+    label: 'tmux_auto_enter',
+    usage: '/set tmuxAutoEnter on|off',
+    control: 'select',
+    options: boolOptions(),
+    read: (config) => formatBool(config.session.tmuxAutoEnter),
+    write: writeBooleanPatch((value) => ({ session: { tmuxAutoEnter: value } })),
+  },
+  {
+    key: 'tmuxEchoInput',
+    tomlPath: 'session.tmux_echo_input',
+    group: 'runtime',
+    aliases: ['tmuxEcho', 'echoInput'],
+    label: 'tmux_echo_input',
+    usage: '/set tmuxEchoInput on|off',
+    control: 'select',
+    options: boolOptions(),
+    read: (config) => formatBool(config.session.tmuxEchoInput),
+    write: writeBooleanPatch((value) => ({ session: { tmuxEchoInput: value } })),
+  },
+  {
     key: 'defaultModel',
     tomlPath: 'runtime.codex.model',
     group: 'runtime.codex',
@@ -230,7 +299,7 @@ const SETTING_DEFINITIONS: SettingDefinition[] = [
       const token = rawValue.trim().toLowerCase();
       if (token === 'normal' || token === 'code' || token === 'off') return patch({ runtime: { codex: { yoloMode: 'off' } } });
       if (token === 'yolo' || token === 'on') return patch({ runtime: { codex: { yoloMode: 'on' } } });
-      return { ok: false, message: '默认模式必须是 normal 或 yolo。' };
+      return { ok: false, message: 'YOLO 模式必须是 normal 或 yolo。' };
     },
   },
   {
@@ -247,7 +316,7 @@ const SETTING_DEFINITIONS: SettingDefinition[] = [
       const token = rawValue.trim().toLowerCase();
       if (['default', 'reset', 'unset', 'none', 'auto'].includes(token)) return patch({ runtime: { codex: { provider: '' } } });
       if (token === 'sdk' || token === 'tmux' || token === 'pty') return patch({ runtime: { codex: { provider: token } } });
-      return { ok: false, message: '默认 Codex Provider 必须是 sdk、pty 或 tmux，也可以用 default/auto 恢复自动选择。' };
+      return { ok: false, message: '默认 Codex Provider 运行方式必须是 sdk、pty 或 tmux，也可以用 default/auto 恢复自动选择。' };
     },
   },
   {
@@ -332,7 +401,7 @@ const SETTING_DEFINITIONS: SettingDefinition[] = [
       const token = rawValue.trim().toLowerCase();
       if (token === 'normal' || token === 'code' || token === 'off') return patch({ runtime: { claude: { yoloMode: 'off' } } });
       if (token === 'yolo' || token === 'on') return patch({ runtime: { claude: { yoloMode: 'on' } } });
-      return { ok: false, message: 'Claude 模式必须是 normal 或 yolo。' };
+      return { ok: false, message: 'Claude YOLO 模式必须是 normal 或 yolo。' };
     },
   },
   {
@@ -349,7 +418,7 @@ const SETTING_DEFINITIONS: SettingDefinition[] = [
       const token = rawValue.trim().toLowerCase();
       if (['default', 'reset', 'unset', 'none', 'auto'].includes(token)) return patch({ runtime: { claude: { provider: 'tmux' } } });
       if (token === 'tmux' || token === 'pty' || token === 'sdk') return patch({ runtime: { claude: { provider: token } } });
-      return { ok: false, message: '默认 Claude Provider 必须是 tmux、pty 或 sdk，也可以用 default/auto 恢复默认。' };
+      return { ok: false, message: '默认 Claude Provider 运行方式必须是 tmux、pty 或 sdk，也可以用 default/auto 恢复默认。' };
     },
   },
   {
@@ -365,25 +434,7 @@ const SETTING_DEFINITIONS: SettingDefinition[] = [
     write(rawValue) {
       const token = rawValue.trim().toLowerCase();
       if (token === 'claude' || token === 'ccr') return patch({ runtime: { claude: { executable: token } } });
-      return { ok: false, message: 'Claude executable 必须是 claude 或 ccr。' };
-    },
-  },
-  {
-    key: 'claudePermissionMode',
-    tomlPath: 'runtime.claude.permission_mode',
-    group: 'runtime.claude',
-    aliases: ['claudePermission'],
-    label: 'permission_mode',
-    usage: '/set claudePermissionMode default|acceptEdits|bypassPermissions|plan',
-    control: 'select',
-    options: [selectOption('default'), selectOption('acceptEdits'), selectOption('bypassPermissions'), selectOption('plan')],
-    read: (config) => config.runtime.claude.permissionMode || 'default',
-    write(rawValue) {
-      const token = rawValue.trim();
-      if (token === 'default' || token === 'acceptEdits' || token === 'bypassPermissions' || token === 'plan') {
-        return patch({ runtime: { claude: { permissionMode: token } } });
-      }
-      return { ok: false, message: 'Claude 权限模式必须是 default、acceptEdits、bypassPermissions 或 plan。' };
+      return { ok: false, message: 'Claude Router 必须是 claude（原生 Claude）或 ccr（CCR 环境）。' };
     },
   },
   {
@@ -410,7 +461,7 @@ const SETTING_DEFINITIONS: SettingDefinition[] = [
     label: 'idle_timeout_minutes',
     usage: '/set claudeIdleTimeoutMinutes 15',
     control: 'input',
-    placeholder: '分钟，0 表示关闭',
+    placeholder: 'Claude Code 无活动多少分钟后自动停止；0 表示关闭',
     read: (config) => `${config.runtime.claude.idleTimeoutMinutes ?? 0}`,
     write(rawValue) {
       const token = rawValue.trim();
@@ -419,18 +470,6 @@ const SETTING_DEFINITIONS: SettingDefinition[] = [
       if (parsed === null || parsed > 120) return { ok: false, message: 'Claude 空闲超时必须是 0-120 的整数分钟；0/off 表示关闭。' };
       return patch({ runtime: { claude: { idleTimeoutMinutes: parsed } } });
     },
-  },
-  {
-    key: 'defaultWorkspaceRoot',
-    tomlPath: 'bridge.default_workspace',
-    group: 'bridge',
-    aliases: ['workspace', 'workspaceRoot', 'root', 'newRoot'],
-    label: 'default_workspace',
-    usage: '/set defaultWorkspaceRoot /abs/path',
-    control: 'input',
-    placeholder: '例如 ~ 或 /data00/home/me',
-    read: (config) => config.bridge.defaultWorkspace || '-',
-    write: writeStringPatch((value) => ({ bridge: { defaultWorkspace: value } }), { defaultValue: '~' }),
   },
   {
     key: 'uiAllowLan',
@@ -585,7 +624,11 @@ function findSetting(raw: string): SettingDefinition | undefined {
 
 function findGroup(raw: string): SettingGroupDefinition | undefined {
   const token = raw.trim().toLowerCase();
-  return SETTING_GROUPS.find((group) => group.key === token || group.title.toLowerCase() === token);
+  return SETTING_GROUPS.find((group) => (
+    group.key === token
+    || group.title.toLowerCase() === token
+    || (group.aliases || []).some((alias) => alias.toLowerCase() === token)
+  ));
 }
 
 const CURRENT_RUNTIME_SETTING_KEYS: Record<'codex' | 'claude', string[]> = {
@@ -600,7 +643,6 @@ const CURRENT_RUNTIME_SETTING_KEYS: Record<'codex' | 'claude', string[]> = {
   claude: [
     'claudeDefaultModel',
     'claudeMode',
-    'claudePermissionMode',
     'claudeProvider',
     'claudeReasoningEffort',
     'claudeIdleTimeoutMinutes',
@@ -608,6 +650,14 @@ const CURRENT_RUNTIME_SETTING_KEYS: Record<'codex' | 'claude', string[]> = {
 };
 
 const SETTING_GROUP_ORDERS: Partial<Record<SettingGroupKey, string[]>> = {
+  runtime: [
+    'runtime',
+    'defaultWorkspaceRoot',
+    'tmuxSessionName',
+    'tmuxCaptureLines',
+    'tmuxAutoEnter',
+    'tmuxEchoInput',
+  ],
   'runtime.codex': [
     'defaultModel',
     'defaultMode',
@@ -620,7 +670,6 @@ const SETTING_GROUP_ORDERS: Partial<Record<SettingGroupKey, string[]>> = {
   'runtime.claude': [
     'claudeDefaultModel',
     'claudeMode',
-    'claudePermissionMode',
     'claudeProvider',
     'claudeExecutable',
     'claudeReasoningEffort',
@@ -695,9 +744,9 @@ function parseSetArgs(raw: string): ParsedSetArgs {
 function selectedGroupFromArgs(raw: string): SettingGroupKey {
   const parsed = parseSetArgs(raw);
   if (parsed.action === 'show-group') return parsed.group;
-  if (parsed.action === 'show-one') return findSetting(parsed.key)?.group || 'runtime.codex';
-  if (parsed.action === 'set') return findSetting(parsed.key)?.group || 'runtime.codex';
-  return 'runtime.codex';
+  if (parsed.action === 'show-one') return findSetting(parsed.key)?.group || 'runtime';
+  if (parsed.action === 'set') return findSetting(parsed.key)?.group || 'runtime';
+  return 'runtime';
 }
 
 export function buildSettingsFields(config: ConfigV2, definitions: SettingDefinition[]): Array<[string, string]> {
@@ -731,7 +780,7 @@ export function settingFormInput(definition: SettingDefinition, config: ConfigV2
 function buildGroupSelect(selectedGroup: SettingGroupKey): NonNullable<OutboundRichCard['selects']>[number] {
   return {
     id: 'set_group_select',
-    placeholder: 'TOML section',
+    placeholder: '配置分组',
     selectedCallbackData: buildCommandCallbackData(`/set --group ${selectedGroup}`),
     options: SETTING_GROUPS.map((group) => ({
       text: group.title,
@@ -741,11 +790,11 @@ function buildGroupSelect(selectedGroup: SettingGroupKey): NonNullable<OutboundR
 }
 
 export function buildSetCommandRichCard(
-  selectedGroup: SettingGroupKey = 'runtime.codex',
+  selectedGroup: SettingGroupKey = 'runtime',
   address?: ChannelAddress,
 ): OutboundRichCard {
   const config = createConfigService({ migrate: false }).snapshot().config;
-  const group = GROUP_BY_KEY.get(selectedGroup) || GROUP_BY_KEY.get('runtime.codex')!;
+  const group = GROUP_BY_KEY.get(selectedGroup) || GROUP_BY_KEY.get('runtime')!;
   const definitions = groupDefinitions(group.key);
   return {
     title: '全局配置',
@@ -862,7 +911,7 @@ export function handleSetFormCommand(options: {
   }
 
   const latest = service.snapshot().config;
-  const notes = ['配置已保存到 `~/.codelark/config.toml`；卡片已刷新为最新 TOML section。'];
+  const notes = ['配置已保存到 `~/.codelark/config.toml`；卡片已刷新为最新配置分组。'];
   const codexReasoning = updated.find((definition) => definition.key === 'codexReasoningEffort');
   if (codexReasoning) {
     const warning = minimalReasoningWebSearchWarning(latest.runtime.codex.reasoningEffort);
@@ -888,7 +937,7 @@ export function handleSetCommand(options: {
   const currentConfig = service.snapshot().config;
 
   if (parsed.action === 'show-all') {
-    return buildCompactSettingsResponse(currentConfig, 'runtime.codex', options.markdown);
+    return buildCompactSettingsResponse(currentConfig, 'runtime', options.markdown);
   }
 
   if (parsed.action === 'show-group') {

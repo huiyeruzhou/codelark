@@ -174,7 +174,6 @@ const CURRENT_SETTING_LEGACY_FORM_KEYS: Record<string, string[]> = {
   codexReasoningEffort: ['clk_reasoning', 'reasoning'],
   claudeDefaultModel: ['clk_model', 'model'],
   claudeMode: ['clk_mode', 'mode'],
-  claudePermissionMode: ['clk_permission_mode', 'permissionMode'],
   claudeProvider: ['clk_provider', 'provider'],
   claudeReasoningEffort: ['clk_reasoning', 'reasoning'],
   claudeIdleTimeoutMinutes: ['clk_idle_timeout_minutes', 'idleTimeoutMinutes'],
