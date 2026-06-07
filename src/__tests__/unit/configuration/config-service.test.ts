@@ -423,6 +423,33 @@ require_mention = false
     }
   });
 
+  it('keeps write targets bound to the service CODELARK_HOME snapshot', () => {
+    const home = tempHome();
+    const otherHome = tempHome();
+    const previousHome = process.env.CODELARK_HOME;
+    try {
+      process.env.CODELARK_HOME = home;
+      const service = createConfigService({ env: {}, migrate: false });
+      process.env.CODELARK_HOME = otherHome;
+
+      service.set({ kind: 'home' }, {
+        runtime: { codex: { model: 'stable-home-model' } },
+      });
+
+      assert.equal(service.get('runtime.codex.model'), 'stable-home-model');
+      assert.match(fs.readFileSync(path.join(home, 'config.toml'), 'utf-8'), /model = "stable-home-model"/);
+      assert.equal(fs.existsSync(path.join(otherHome, 'config.toml')), false);
+    } finally {
+      if (previousHome === undefined) {
+        delete process.env.CODELARK_HOME;
+      } else {
+        process.env.CODELARK_HOME = previousHome;
+      }
+      fs.rmSync(home, { recursive: true, force: true });
+      fs.rmSync(otherHome, { recursive: true, force: true });
+    }
+  });
+
   it('enforces field write scopes for set and unset operations', () => {
     const home = tempHome();
     try {

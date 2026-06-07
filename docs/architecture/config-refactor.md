@@ -23,23 +23,25 @@ CodeLark 需要把“默认值、全局配置、项目配置、环境变量、�
 - `src/configuration/sources.ts`：复用 `node-config` TOML parser 读取 defaults/home/local/channel/session TOML，并提供持久化写入。
 - `src/configuration/service.ts`：`ConfigService` 查询、写入、dynamic overlay、provenance/explain 和 projection 入口。
 - `src/configuration/legacy.ts` / `legacy-types.ts`：仅保留 legacy expanded `Config` adapter 和 migration/compatibility 测试；生产代码不应从这里读取配置。
-- `src/operator-ui/application/config.ts`：UI payload 到 `Config` 的手写 merge。
-- `src/bridge/command/global-settings.ts`：`/set` 写全局配置。
-- `src/bridge/command/runtime-settings.ts`：`/r`、`/mode`、`/sandbox`、`/network`、`/model`、`/cd` 等写当前 BridgeSession。
-- `src/domain/session-runtime.ts`：BridgeSession runtime 字段 accessor 与 patch helper。
-- `src/bridge/session/support.ts`：执行前把 session override 与全局 settings 手写合成 effective runtime config。
-- `src/storage/json-store.ts`：BridgeSession JSON 持久化。
+- `src/operator-ui/application/config.ts` / `channel.ts`：把 UI payload 转成 v2 `ConfigPatch`，通过 `ConfigService` 写回 home TOML。
+- `src/bridge/command/global-settings.ts`：`/set` 通过 `ConfigService` 读写 home TOML。
+- `src/bridge/command/runtime-settings.ts`：`/r`、`/mode`、`/sandbox`、`/network`、`/model`、`/cd` 等写 Session TOML，不再把同名配置字段写回 BridgeSession JSON。
+- `src/domain/session-runtime.ts`：BridgeSession runtime 身份/状态 accessor，以及从 Session TOML 读取显式会话配置 override 的过渡 helper。
+- `src/bridge/session/support.ts`：基于 `ConfigService.snapshot(sessionScope)` 解析 effective runtime config。
+- `src/storage/json-store.ts`：BridgeSession JSON 持久化；只保存会话身份、生命周期和运行状态，不再作为用户配置后端。
 
 ### 当前来源与存储
 
 | 当前来源或文件 | 当前角色 | 主要问题 |
 | --- | --- | --- |
-| `~/.codelark/config.json` | 结构化全局主配置 | JSON 只覆盖全局；默认值仍散落在代码中 |
-| `~/.codelark/config.env` | 旧格式输入、兼容快照、排查文件 | 同时像输入和输出，且启动时还注入 daemon env |
-| `process.env.CODELARK_*` | 进程环境变量 | 与 `config.env` 边界含混 |
-| CLI argv | command 解析 | 当前没有通用配置覆盖机制 |
-| `data/sessions.json` 中的 `BridgeSession.runtime.*` | 当前 Session 级 runtime 覆盖和运行身份混放 | `/r` 等持久化配置与 thread id、health、mirror 等运行状态混在同一个 JSON 结构里 |
-| UI payload | Web 工作台保存全局配置 | 手写字段 merge、默认值和校验 |
+| `~/.codelark/config.toml` | home 全局主配置 | 通道清单只允许在 defaults/home，home partial channel 会 materialize 并写回 |
+| `.codelark/config.toml` / `.codelark.toml` | local 项目覆盖 | 不允许定义 `channels` |
+| `${CODELARK_HOME}/config/channels/*.toml` | Channel scope 执行偏好 | 不允许定义通道实例清单或飞书凭据 |
+| `${CODELARK_HOME}/config/sessions/*.toml` | Session scope 执行偏好 | `/r`、`/mode`、`/model`、`/cd` 等会话覆盖落点 |
+| `~/.codelark/config.json` / `config.env` | v1 迁移输入 | 迁移成功后归档，不再作为运行时配置输入 |
+| 真实 `process.env.CODELARK_*` | 进程级 env 覆盖 | 只覆盖非 channel 实例字段；旧 env key 由 `env-compat.ts` 兼容并 warning |
+| CLI argv | 单次启动覆盖 | `--set path=value` 进入 cli source，不持久化 |
+| `data/sessions.json` 中的 `BridgeSession.runtime.*` | 会话身份和运行状态 | 保存 thread id、tmux runtime identity、Claude session id/cwd、health、mirror 等；不保存用户配置 override |
 
 ### 当前配置项清单
 
@@ -87,18 +89,10 @@ CodeLark 需要把“默认值、全局配置、项目配置、环境变量、�
 
 ### 当前主要问题
 
-1. 默认值分散：
-   `DEFAULT_STREAM_STATUS_*`、`DEFAULT_WORKSPACE_ROOT`、`loadConfig` 的 `empty`、`effective*` 函数、`configToPayload`、`mergeConfig` 和 `configToSettings` 都在表达默认值。
-2. 覆盖逻辑分散：
-   env overlay、UI merge、`/set`、`/r`、`resolveSessionRuntimeConfig()` 都各自知道字段如何解析、校验和 fallback。
-3. 配置和运行状态混放：
-   `BridgeSession.runtime.codex.reasoningEffort` 这类字段是持久化配置 override；`runtime.codex.threadId`、health、mirror、message counters 是运行身份或状态。它们当前都在 BridgeSession JSON 里。
-4. 查询模型不统一：
-   daemon 用 `Config` + `configToSettings`，JsonFileStore 用字符串 settings，runtime/session 又有自己的 per-session 解析，调用方经常需要自己决定 fallback。
-5. `config.env` 的角色含混：
-   它既是旧配置输入，又是保存后的快照，还会被 `buildDaemonEnv` 注入进程环境。
-6. 命令行覆盖缺失：
-   当前 CLI 主要解析 command，不提供通用配置项 override，例如 `codelark run --set runtime.agent=claude` 或 `--codex-sandbox-mode read-only`。
+1. 旧 `config.json` / `config.env` 已降级为迁移输入，但迁移 E2E 和 compatibility adapter 仍需保留，防止破坏旧用户配置升级路径。
+2. `bridge_default_provider_id`、`bridge_feishu_group_policy`、`bridge_feishu_group_allow_from` 尚无 v2 字段，属于需要产品确认的新语义，不能擅自迁移。
+3. 部分调用方仍通过短生命周期 `createConfigService({ migrate: false })` 读取动态配置；这保持了动态 reload，但后续可以考虑在应用层注入同一个 service 实例，减少重复构造。
+4. `JsonFileStore` 仍保留 legacy runtime settings projection 给旧内部接口和子进程 env 使用；这些 settings 现在是 projection 输出，不应再作为配置输入。
 
 ## 推荐模型
 
@@ -139,14 +133,14 @@ src/configuration/
   channel-types.ts           # Channel/Feishu 运行时配置类型和站点解析工具
   runtime-types.ts           # Codex/Claude runtime 配置类型和轻量 normalizer
   paths.ts                   # CODELARK_HOME、legacy 输入路径常量和 home path 展开工具
-  index.ts                   # legacy Config facade；生产代码不直接依赖
   static-loader.ts           # node-config 静态 baseline：defaults/home/local/env/cli
   sources.ts                 # 路径解析、Channel/Session TOML 读写和持久化写入
   merge.ts                   # node-config effective merge + provenance/write patch helpers
   service.ts                 # ConfigService 查询和写入 API
   env-compat.ts              # 真实 process.env 的旧 env alias 兼容读取和 warning
-  env-projection.ts          # 从 effective config 生成子进程环境变量
   projections.ts             # runtime settings、UI payload、lark-cli projection
+  legacy.ts                  # legacy Config adapter 和 runtime settings projection compatibility
+  legacy-types.ts            # legacy Config 类型，仅供 migration/compatibility 测试
   migrations/
     index.ts                 # migration registry 和 runner
     types.ts                 # MigrationContext / ConfigMigration 定义
@@ -596,7 +590,7 @@ interface MigrationContext {
 - `/set` 默认写 home TOML；后续支持 `--local` 写 local TOML。
 - `/r`、`/mode`、`/sandbox`、`/network`、`/model`、`/cd` 等命令改为 `ConfigService.set(target, patch)`，先由命令参数解析出 `ConfigWriteTarget`。
 - 上述命令切到 TOML 后，`default`/`reset` 的语义是清除对应 TOML override 并回到上层 v2/global 配置；旧 BridgeSession JSON 中残留的同名配置字段不得重新作为 runtime fallback 生效。`/provider` 也遵循同一规则：Codex/Claude provider 选择写 Session TOML，BridgeSession JSON 只保留 thread id、tmux session name、Claude session id/cwd 等运行身份。
-- UI 的全局配置页写 home；会话配置 modal 写 Session TOML；Channel policy 页写 Channel TOML。
+- UI 的全局配置页写 home；会话配置 modal 写 Session TOML；通道实例和通道连接/行为配置只写 home `channels`，Channel scope TOML 只保存执行偏好。
 - 删除 UI `mergeConfig`、runtime command patch helper 中重复的字段校验。
 
 阶段 5：调用方收口

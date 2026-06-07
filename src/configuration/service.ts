@@ -218,7 +218,7 @@ export function createConfigService(options: ConfigServiceOptions = {}): ConfigS
   }
 
   function targetFile(target: ConfigWriteTarget): string {
-    const paths = resolveConfigPaths({ codelarkHome: options.codelarkHome, cwd: target.kind === 'local' ? target.cwd : undefined });
+    const paths = resolveConfigPaths({ codelarkHome, cwd: target.kind === 'local' ? target.cwd : undefined });
     if (target.kind === 'home') return paths.homeToml;
     if (target.kind === 'local') return paths.localToml!;
     if (target.kind === 'channel') return channelTomlPath(paths, target.channelId);
@@ -228,7 +228,7 @@ export function createConfigService(options: ConfigServiceOptions = {}): ConfigS
   function writeTargetPatch(target: ConfigWriteTarget, patch: ConfigPatch, replace = false): void {
     const file = targetFile(target);
     const current = replace ? {} : readTomlConfig(file)?.patch || {};
-    const paths = resolveConfigPaths({ codelarkHome: options.codelarkHome, cwd: target.kind === 'local' ? target.cwd : undefined });
+    const paths = resolveConfigPaths({ codelarkHome, cwd: target.kind === 'local' ? target.cwd : undefined });
     const writablePatch = target.kind === 'home'
       ? materializeHomeChannelPatch(readDefaultsConfig(paths.defaultsToml).patch, current, patch)
       : patch;
@@ -284,7 +284,7 @@ export function createConfigService(options: ConfigServiceOptions = {}): ConfigS
       } else {
         unsetConfigPath(current as Record<string, unknown>, path);
       }
-      const paths = resolveConfigPaths({ codelarkHome: options.codelarkHome, cwd: target.kind === 'local' ? target.cwd : undefined });
+      const paths = resolveConfigPaths({ codelarkHome, cwd: target.kind === 'local' ? target.cwd : undefined });
       writeTomlConfig(file, target.kind === 'home'
         ? materializeHomeChannelPatch(readDefaultsConfig(paths.defaultsToml).patch, {}, current)
         : current);
