@@ -408,9 +408,10 @@ export function consumeMirrorRecords<TSubscription extends MirrorTurnStateHolder
     if (record.type === 'message' && record.role === 'user') {
       const pendingTurn = ensureMirrorTurnState(subscription, record);
       const text = record.content.trim();
-      if (text) {
-        appendMirrorUserText(pendingTurn, text);
-        applyUnifiedTurnHistoryUserText(pendingTurn, (record.userPrompt || text).trim());
+      const displayText = formatMirrorUserText(record.userPrompt || text);
+      if (displayText) {
+        appendMirrorUserText(pendingTurn, displayText);
+        applyUnifiedTurnHistoryUserText(pendingTurn, displayText);
         hooks.onStreamText?.(subscription, pendingTurn);
       }
       continue;

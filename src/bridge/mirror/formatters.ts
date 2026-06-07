@@ -50,9 +50,17 @@ const MIRROR_USER_WRAPPER_LABELS = new Map<string, string>([
 ]);
 
 const MIRROR_USER_REQUEST_MARKER = '## My request for Codex:';
+const CONTEXT_ONLY_GROUP_BLOCK_RE = /(?:^|\n)\s*<group_context\b[^>]*\bmode=(["'])context-only\1[^>]*>[\s\S]*?<\/group_context>\s*/g;
+
+function stripContextOnlyGroupBlocks(text: string): string {
+  return text
+    .replace(CONTEXT_ONLY_GROUP_BLOCK_RE, '\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
 
 export function formatMirrorUserText(text: string | null | undefined): string | null {
-  const normalized = (text || '').replace(/\r\n?/g, '\n').trim();
+  const normalized = stripContextOnlyGroupBlocks((text || '').replace(/\r\n?/g, '\n').trim());
   if (!normalized) return null;
 
   const lines = normalized.split('\n');
@@ -103,7 +111,7 @@ export function formatMirrorMessage(
     const goalBlock = formatMirrorGoalStatus(goalStatus.status, goalStatus.objective, markdown);
     if (goalBlock) sections.push(goalBlock);
   }
-  const userBlock = formatMirrorSpeakerBlock('我', userText, markdown);
+  const userBlock = formatMirrorSpeakerBlock('我', formatMirrorUserText(userText), markdown);
   if (userBlock) {
     sections.push(userBlock);
   }
