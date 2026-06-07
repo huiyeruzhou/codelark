@@ -73,6 +73,15 @@ function uiRouteFilesImportingConfigService(root: string): string[] {
     .map((file) => path.relative(process.cwd(), file));
 }
 
+function filesImportingConfigurationProjectionInternals(root: string): string[] {
+  const projectionImportPattern = /from\s+['"][^'"]*configuration\/projections\.js['"]/;
+  return listSourceFiles(root)
+    .filter((file) => !path.relative(root, file).split(path.sep).includes('__tests__'))
+    .filter((file) => !path.relative(root, file).startsWith(`configuration${path.sep}`))
+    .filter((file) => projectionImportPattern.test(fs.readFileSync(file, 'utf-8')))
+    .map((file) => path.relative(process.cwd(), file));
+}
+
 describe('configuration module boundaries', () => {
   it('keeps the legacy config facade out of production imports', () => {
     const sourceRoot = path.join(process.cwd(), 'src');
@@ -149,6 +158,11 @@ describe('configuration module boundaries', () => {
   });
   it('keeps UI route config writes behind the application layer', () => {
     const offenders = uiRouteFilesImportingConfigService(path.join(process.cwd(), 'src'));
+    assert.deepEqual(offenders, []);
+  });
+
+  it('keeps projection internals behind ConfigService', () => {
+    const offenders = filesImportingConfigurationProjectionInternals(path.join(process.cwd(), 'src'));
     assert.deepEqual(offenders, []);
   });
 });

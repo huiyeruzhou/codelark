@@ -8,7 +8,6 @@ import { fileURLToPath } from 'node:url';
 import { CODELARK_HOME } from '../configuration/paths.js';
 import type { FeishuChannelConfig } from '../channels/types.js';
 import { createConfigService } from '../configuration/service.js';
-import { exportProcessEnv } from '../configuration/projections.js';
 import type { ConfigPatch, ConfigV2 } from '../configuration/schema.js';
 import { normalizeFeishuSite } from '../channels/feishu/site.js';
 import {
@@ -631,13 +630,13 @@ interface LocalServiceConfig {
 }
 
 export function loadStartupProjection(options: ServiceConfigOverrideOptions = {}): StartupConfigProjection {
-  const config = createConfigService({
+  const service = createConfigService({
     codelarkHome: CODELARK_HOME,
     ...(hasConfigPatchValues(options.cli) ? { cli: options.cli } : {}),
-  }).snapshot().config;
+  });
   return {
-    config,
-    env: exportProcessEnv(config),
+    config: service.snapshot().config,
+    env: service.exportProcessEnv(),
   };
 }
 
