@@ -1003,7 +1003,8 @@ describe('bridge command e2e', () => {
     const binding = store.getChannelChat(address.channelType, adapter.createdGroups.at(-1)?.chatId || '');
     assert.ok(binding);
     assert.equal(getSessionWorkingDirectory(store.getSession(binding.bridgeSessionId)), workDir);
-    assert.match(adapter.sent.at(-1)?.text || '', /已创建群聊会话/);
+    assert.match(adapter.sent.at(-2)?.text || '', /已创建群聊会话/);
+    assert.match(adapter.sent.at(-1)?.text || '', /当前会话/);
   });
 
   it('opens the same named new-session form when the user sends bare /new', async () => {
@@ -1054,7 +1055,8 @@ describe('bridge command e2e', () => {
     const binding = store.getChannelChat(address.channelType, adapter.createdGroups.at(-1)?.chatId || '');
     assert.ok(binding);
     assert.equal(getSessionWorkingDirectory(store.getSession(binding.bridgeSessionId)), workDir);
-    assert.match(adapter.sent.at(-1)?.text || '', /已创建群聊会话/);
+    assert.match(adapter.sent.at(-2)?.text || '', /已创建群聊会话/);
+    assert.match(adapter.sent.at(-1)?.text || '', /当前会话/);
   });
 
   it('archives the selected Codex thread from the /t rich card', async () => {
@@ -2046,8 +2048,9 @@ provider = "tmux"
       assert.ok(newBinding);
       assert.notEqual(newBinding.id, tmuxBinding.id);
       assert.equal(store.getSession(newBinding.bridgeSessionId)?.runtime?.codex?.threadId, undefined);
-      assert.match(adapter.sent.at(-1)?.text || '', /已创建群聊会话/);
-      assert.match(adapter.sent.at(-1)?.text || '', /sayhi/);
+      assert.match(adapter.sent.at(-2)?.text || '', /已创建群聊会话/);
+      assert.match(adapter.sent.at(-2)?.text || '', /sayhi/);
+      assert.match(adapter.sent.at(-1)?.text || '', /当前会话/);
     } finally {
       process.env.PATH = oldPath;
       if (oldFakeLog === undefined) delete process.env.TMUX_FAKE_LOG;
