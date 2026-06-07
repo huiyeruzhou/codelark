@@ -82,7 +82,7 @@ flowchart TD
 
 ### 先区分三个问题
 
-`BridgeSession` 回答“这条聊天现在连着哪条工作会话”。它保存当前 runtime、provider、工作目录、模型设置、底层 Codex thread 或 Claude session 身份。一个 IM 群聊、Web 工作台入口或本地接管动作，最后都要落到某个 `BridgeSession`。
+`BridgeSession` 回答“这条聊天现在连着哪条工作会话”。它保存底层 Codex thread、Claude session、tmux provider 会话名、运行健康和消息生命周期等身份/状态；当前工作目录、模型、provider、sandbox、reasoning 等用户配置覆盖已经迁到 Session TOML。一个 IM 群聊、Web 工作台入口或本地接管动作，最后都要落到某个 `BridgeSession`，再按 scoped TOML 解析 effective runtime 配置。
 
 Lane 回答“这条消息要和谁互相等待”。同一条 lane 里的消息按顺序执行；不同 lane 里的消息，默认认为互不影响，可以同时执行。它解决的是并发边界：哪些事情必须排队，哪些事情不应该互相拖慢。
 
@@ -491,9 +491,10 @@ flowchart TD
 
 CodeLark 自有数据位于 `~/.codelark`：
 
-- `config.json`：结构化配置。
-- `config.env`：兼容旧工具的配置快照和 bootstrap 输入，不是多实例通道配置的完整来源。
-- `data/sessions.json`：BridgeSession，包含唯一的 `codex_thread_id`。
+- `config.toml`：全局主配置，使用 v2 TOML shape。
+- `config/sessions/`、`config/channels/`：Session / Channel 级 TOML 覆盖，复用同一套 shape。
+- `config.json` / `config.env`：旧版 v1 迁移输入，迁移成功后归档，不再作为运行时配置来源。
+- `data/sessions.json`：BridgeSession，只保存本地工作会话身份、运行状态和 provider runtime identity；用户配置覆盖保存在 scoped TOML。
 - `data/channel-chats.json`：ChannelChat，只保存 IM chat 身份和 `bridgeSessionId`。
 - `data/channel-default-targets.json`：通道实例的默认目标。
 - `data/messages/<sessionId>.json`：Bridge 消息缓存。

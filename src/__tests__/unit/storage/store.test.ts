@@ -4,7 +4,11 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { JsonFileStore } from '../../../storage/json-store.js';
-import { CODELARK_HOME, CONFIG_JSON_PATH } from '../../../configuration/index.js';
+import { CODELARK_HOME } from '../../../configuration/paths.js';
+import {
+  LEGACY_CONFIG_ENV_PATH as CONFIG_PATH,
+  LEGACY_CONFIG_JSON_PATH as CONFIG_JSON_PATH,
+} from '../../../configuration/migrations/legacy/paths.js';
 import { getSessionSystemPrompt, getSessionWorkingDirectory } from '../../../domain/session-runtime.js';
 
 const DATA_DIR = path.join(CODELARK_HOME, 'data');
@@ -31,11 +35,108 @@ describe('JsonFileStore', () => {
     assert.equal(store.getSetting('nonexistent'), null);
   });
 
+  it('refreshes dynamic settings from v2 config projection instead of legacy config.env', () => {
+    const configTomlPath = path.join(CODELARK_HOME, 'config.toml');
+    const previousToml = fs.existsSync(configTomlPath) ? fs.readFileSync(configTomlPath, 'utf-8') : null;
+    const previousEnvFile = fs.existsSync(CONFIG_PATH) ? fs.readFileSync(CONFIG_PATH, 'utf-8') : null;
+    const envKeys = [
+      'CODELARK_CODEX_MODEL',
+      'CODELARK_CODEX_DEFAULT_MODEL',
+      'CODELARK_CODEX_YOLO_MODE',
+      'CODELARK_CODEX_DEFAULT_MODE',
+      'CODELARK_HISTORY_MESSAGE_LIMIT',
+    ];
+    const previousEnv = new Map(envKeys.map((key) => [key, process.env[key]]));
+
+    try {
+      for (const key of envKeys) delete process.env[key];
+      fs.writeFileSync(configTomlPath, [
+        'schema_version = 2',
+        '',
+        '[runtime.codex]',
+        'model = "toml-dynamic-model"',
+        'yolo_mode = "on"',
+        '',
+        '[[channels]]',
+        'id = "feishu-default"',
+        'alias = "飞书"',
+        'provider = "feishu"',
+        'enabled = true',
+        '',
+        '[channels.config]',
+        'history_message_limit = 23',
+        'stream_status_idle_start_seconds = 180',
+        'stream_status_check_interval_seconds = 10',
+        'app_id = ""',
+        'app_secret = ""',
+        'site = "feishu"',
+        'allowed_users = []',
+        'streaming_enabled = true',
+        'feedback_markdown_enabled = true',
+        'require_mention = false',
+        '',
+      ].join('\n'));
+      fs.writeFileSync(CONFIG_PATH, [
+        'CODELARK_CODEX_DEFAULT_MODEL=legacy-env-model',
+        'CODELARK_CODEX_DEFAULT_MODE=normal',
+        'CODELARK_HISTORY_MESSAGE_LIMIT=9',
+        '',
+      ].join('\n'));
+
+      const store = new JsonFileStore(makeSettings(), { dynamicSettings: true });
+
+      assert.equal(store.getSetting('bridge_default_model'), 'toml-dynamic-model');
+      assert.equal(store.getSetting('default_model'), 'toml-dynamic-model');
+      assert.equal(store.getSetting('bridge_default_mode'), 'yolo');
+      assert.equal(store.getSetting('bridge_history_message_limit'), '23');
+    } finally {
+      if (previousToml === null) fs.rmSync(configTomlPath, { force: true });
+      else fs.writeFileSync(configTomlPath, previousToml, 'utf-8');
+      if (previousEnvFile === null) fs.rmSync(CONFIG_PATH, { force: true });
+      else fs.writeFileSync(CONFIG_PATH, previousEnvFile, 'utf-8');
+      for (const [key, value] of previousEnv) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+    }
+  });
+
+  it('does not run startup config migrations during dynamic settings refresh', () => {
+    const configTomlPath = path.join(CODELARK_HOME, 'config.toml');
+    const migrationStatePath = path.join(CODELARK_HOME, 'runtime', 'config-migrations.json');
+    const previousToml = fs.existsSync(configTomlPath) ? fs.readFileSync(configTomlPath, 'utf-8') : null;
+    const previousEnvFile = fs.existsSync(CONFIG_PATH) ? fs.readFileSync(CONFIG_PATH, 'utf-8') : null;
+    const previousState = fs.existsSync(migrationStatePath) ? fs.readFileSync(migrationStatePath, 'utf-8') : null;
+
+    try {
+      fs.rmSync(configTomlPath, { force: true });
+      fs.rmSync(migrationStatePath, { force: true });
+      fs.writeFileSync(CONFIG_PATH, 'CODELARK_CODEX_DEFAULT_MODEL=legacy-dynamic-model\n', 'utf-8');
+
+      const store = new JsonFileStore(makeSettings(), { dynamicSettings: true });
+      const session = store.createSession('dynamic-refresh-session', 'model-1', undefined, '/tmp/dynamic-refresh');
+
+      assert.equal(store.getSetting('bridge_default_model'), 'test-model');
+      assert.equal(getSessionWorkingDirectory(store.getSession(session.id)), '/tmp/dynamic-refresh');
+      assert.equal(fs.existsSync(migrationStatePath), false);
+    } finally {
+      if (previousToml === null) fs.rmSync(configTomlPath, { force: true });
+      else fs.writeFileSync(configTomlPath, previousToml, 'utf-8');
+      if (previousEnvFile === null) fs.rmSync(CONFIG_PATH, { force: true });
+      else fs.writeFileSync(CONFIG_PATH, previousEnvFile, 'utf-8');
+      if (previousState === null) fs.rmSync(migrationStatePath, { force: true });
+      else {
+        fs.mkdirSync(path.dirname(migrationStatePath), { recursive: true });
+        fs.writeFileSync(migrationStatePath, previousState, 'utf-8');
+      }
+    }
+  });
+
   it('createSession and getSession', () => {
     const store = new JsonFileStore(makeSettings());
     const session = store.createSession('test', 'model-1', 'system prompt', '/tmp');
     assert.ok(session.id);
-    assert.equal(session.runtime?.codex?.model, 'model-1');
+    assert.equal(session.runtime?.codex?.model, undefined);
     assert.equal(getSessionWorkingDirectory(session), '/tmp');
     assert.equal(getSessionSystemPrompt(session), 'system prompt');
 
@@ -43,7 +144,7 @@ describe('JsonFileStore', () => {
     assert.ok(fetched);
     assert.equal(fetched.id, session.id);
     assert.equal(fetched.name, session.name);
-    assert.equal(fetched.runtime?.codex?.model, session.runtime?.codex?.model);
+    assert.equal(fetched.runtime?.codex?.model, undefined);
     assert.equal(getSessionWorkingDirectory(fetched), getSessionWorkingDirectory(session));
     assert.equal(getSessionSystemPrompt(fetched), getSessionSystemPrompt(session));
     assert.equal(fetched.session_type, 'normal');
@@ -287,6 +388,63 @@ describe('JsonFileStore', () => {
 
     reloaded.deleteChannelDefaultTarget('feishu-default');
     assert.equal(reloaded.getChannelDefaultTarget('feishu-default'), null);
+  });
+
+  it('normalizes channel default targets from v2 TOML channel config', () => {
+    const configTomlPath = path.join(CODELARK_HOME, 'config.toml');
+    const previousToml = fs.existsSync(configTomlPath) ? fs.readFileSync(configTomlPath, 'utf-8') : null;
+    try {
+      fs.writeFileSync(configTomlPath, [
+        'schema_version = 2',
+        '',
+        '[[channels]]',
+        'id = "feishu-custom"',
+        'alias = "飞书配置别名"',
+        'provider = "feishu"',
+        'enabled = true',
+        '',
+        '[channels.config]',
+        'history_message_limit = 8',
+        'stream_status_idle_start_seconds = 180',
+        'stream_status_check_interval_seconds = 10',
+        'app_id = ""',
+        'app_secret = ""',
+        'site = "feishu"',
+        'allowed_users = []',
+        'streaming_enabled = true',
+        'feedback_markdown_enabled = true',
+        'require_mention = false',
+        '',
+      ].join('\n'));
+      fs.mkdirSync(DATA_DIR, { recursive: true });
+      fs.writeFileSync(
+        path.join(DATA_DIR, 'channel-default-targets.json'),
+        JSON.stringify({
+          stale: {
+            id: 'stale',
+            channelType: 'feishu-custom',
+            bridgeSessionId: 'sess-configured',
+            createdAt: '2026-06-07T00:00:00.000Z',
+            updatedAt: '2026-06-07T00:00:00.000Z',
+          },
+        }, null, 2),
+      );
+
+      const store = new JsonFileStore(makeSettings());
+      const target = store.getChannelDefaultTarget('feishu-custom');
+
+      assert.equal(target?.channelProvider, 'feishu');
+      assert.equal(target?.channelAlias, '飞书配置别名');
+      const persisted = JSON.parse(fs.readFileSync(path.join(DATA_DIR, 'channel-default-targets.json'), 'utf-8')) as Record<string, {
+        channelProvider?: string;
+        channelAlias?: string;
+      }>;
+      assert.equal(Object.values(persisted)[0]?.channelProvider, 'feishu');
+      assert.equal(Object.values(persisted)[0]?.channelAlias, '飞书配置别名');
+    } finally {
+      if (previousToml === null) fs.rmSync(configTomlPath, { force: true });
+      else fs.writeFileSync(configTomlPath, previousToml, 'utf-8');
+    }
   });
 
   it('normalizes singleton channel chats to default channel instances on reload', () => {
@@ -729,15 +887,15 @@ describe('JsonFileStore', () => {
     assert.equal(updated?.runtime?.codex?.threadId, 'sdk-123');
   });
 
-  it('updateSessionModel updates model', () => {
+  it('updateSessionModel does not persist runtime-reported model as config', () => {
     const store = new JsonFileStore(makeSettings());
     const session = store.createSession('test', 'model-old', undefined, '/tmp');
     store.updateSessionModel(session.id, 'model-new');
     const updated = store.getSession(session.id);
-    assert.equal(updated?.runtime?.codex?.model, 'model-new');
+    assert.equal(updated?.runtime?.codex?.model, undefined);
   });
 
-  it('createSession stores hidden metadata and reasoning effort', () => {
+  it('createSession stores hidden metadata without session config fields', () => {
     const store = new JsonFileStore(makeSettings());
     const session = store.createSession('draft', 'model', undefined, '/tmp', 'normal', {
       hidden: true,
@@ -750,9 +908,9 @@ describe('JsonFileStore', () => {
     assert.equal(fetched?.hidden, true);
     assert.equal(fetched?.session_type, 'draft');
     assert.equal(fetched?.parent_session_id, 'parent-1');
-    assert.equal(fetched?.runtime?.codex?.reasoningEffort, 'low');
+    assert.equal(fetched?.runtime?.codex?.reasoningEffort, undefined);
     assert.equal(fetched?.expires_at, '2099-01-01T00:00:00.000Z');
-    assert.equal(fetched?.runtime?.codex?.mode, 'normal');
+    assert.equal(fetched?.runtime?.codex?.mode, undefined);
   });
 
   it('materializes session runtime state from legacy top-level storage on read', () => {

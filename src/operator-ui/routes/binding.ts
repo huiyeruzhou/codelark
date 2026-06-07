@@ -1,6 +1,6 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 
-import type { Config } from '../../configuration/index.js';
+import type { ConfigV2 } from '../../configuration/schema.js';
 import type { JsonFileStore } from '../../storage/json-store.js';
 import { UiBindingApplication } from '../application/binding.js';
 
@@ -34,8 +34,8 @@ export async function handleUiBindingRoute(options: {
   response: ServerResponse;
   url: URL;
   createStore: () => JsonFileStore;
-  readConfig: () => Config;
-  buildBindingsPayload: (store: JsonFileStore, config: Config) => Promise<unknown>;
+  readConfig: () => ConfigV2;
+  buildBindingsPayload: (store: JsonFileStore, config: ConfigV2) => Promise<unknown>;
 }): Promise<boolean> {
   const { request, response, url, createStore, readConfig, buildBindingsPayload } = options;
 

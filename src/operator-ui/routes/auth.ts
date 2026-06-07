@@ -2,7 +2,7 @@ import crypto from 'node:crypto';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import os from 'node:os';
 
-import type { Config } from '../../configuration/index.js';
+import type { ConfigV2 } from '../../configuration/schema.js';
 import { accessDeniedStyles, loginStyles } from '../assets.js';
 
 const AUTH_COOKIE_NAME = 'clk_ui_auth';
@@ -11,6 +11,8 @@ export interface UiAuthState {
   localRequest: boolean;
   authenticated: boolean;
 }
+
+export type UiAuthConfig = ConfigV2;
 
 function json(response: ServerResponse, statusCode: number, body: unknown): void {
   response.writeHead(statusCode, { 'Content-Type': 'application/json; charset=utf-8' });
@@ -107,13 +109,21 @@ function getLanUrls(currentPort: number): string[] {
   return Array.from(urls).sort();
 }
 
-export function isRemoteAuthenticated(request: IncomingMessage, config: Config): boolean {
-  if (isLocalRequest(request)) return true;
-  if (config.uiAllowLan !== true) return false;
-  return timingSafeMatch(parseCookies(request).get(AUTH_COOKIE_NAME), config.uiAccessToken);
+function uiAllowLan(config: UiAuthConfig): boolean {
+  return config.bridge.uiAllowLan === true;
 }
 
-export function getUiAuthState(request: IncomingMessage, config: Config): UiAuthState {
+function uiAccessToken(config: UiAuthConfig): string {
+  return config.bridge.uiAccessToken || '';
+}
+
+export function isRemoteAuthenticated(request: IncomingMessage, config: UiAuthConfig): boolean {
+  if (isLocalRequest(request)) return true;
+  if (!uiAllowLan(config)) return false;
+  return timingSafeMatch(parseCookies(request).get(AUTH_COOKIE_NAME), uiAccessToken(config));
+}
+
+export function getUiAuthState(request: IncomingMessage, config: UiAuthConfig): UiAuthState {
   return {
     localRequest: isLocalRequest(request),
     authenticated: isRemoteAuthenticated(request, config),
@@ -123,15 +133,15 @@ export function getUiAuthState(request: IncomingMessage, config: Config): UiAuth
 export function buildUiAccessInfo(options: {
   currentPort: number;
   localUrl: string;
-  config: Config;
+  config: UiAuthConfig;
   request?: IncomingMessage;
 }) {
   const { currentPort, localUrl, config, request } = options;
   return {
-    allowLan: config.uiAllowLan === true,
+    allowLan: uiAllowLan(config),
     localUrl,
     lanUrls: getLanUrls(currentPort),
-    accessToken: config.uiAccessToken || '',
+    accessToken: uiAccessToken(config),
     requestIsLocal: request ? isLocalRequest(request) : true,
     authenticated: request ? isRemoteAuthenticated(request, config) : true,
   };
@@ -212,7 +222,7 @@ export async function handleUiAuthRoute(options: {
   request: IncomingMessage;
   response: ServerResponse;
   url: URL;
-  config: Config;
+  config: UiAuthConfig;
   currentUrl: string;
   auth: UiAuthState;
   renderHomeHtml: () => string;
@@ -231,11 +241,11 @@ export async function handleUiAuthRoute(options: {
   if (
     request.method === 'GET'
     && !auth.localRequest
-    && config.uiAllowLan === true
-    && timingSafeMatch(queryToken, config.uiAccessToken)
+    && uiAllowLan(config)
+    && timingSafeMatch(queryToken, uiAccessToken(config))
   ) {
     const redirectUrl = new URL(url.pathname || '/', currentUrl);
-    redirect(response, `${redirectUrl.pathname}${redirectUrl.search}`, makeAuthCookie(config.uiAccessToken || ''));
+    redirect(response, `${redirectUrl.pathname}${redirectUrl.search}`, makeAuthCookie(uiAccessToken(config)));
     return true;
   }
 
@@ -244,7 +254,7 @@ export async function handleUiAuthRoute(options: {
       redirect(response, '/');
       return true;
     }
-    if (config.uiAllowLan !== true) {
+    if (!uiAllowLan(config)) {
       html(response, renderUiAccessDeniedHtml());
       return true;
     }
@@ -253,19 +263,19 @@ export async function handleUiAuthRoute(options: {
   }
 
   if (request.method === 'POST' && url.pathname === '/api/auth/login') {
-    if (config.uiAllowLan !== true) {
+    if (!uiAllowLan(config)) {
       json(response, 403, { error: '当前未开启局域网访问。' });
       return true;
     }
     const payload = await readJsonBody<Record<string, unknown>>(request);
     const token = asString(payload.token);
-    if (!timingSafeMatch(token, config.uiAccessToken)) {
+    if (!timingSafeMatch(token, uiAccessToken(config))) {
       json(response, 401, { error: '访问 token 不正确。' });
       return true;
     }
     response.writeHead(200, {
       'Content-Type': 'application/json; charset=utf-8',
-      'Set-Cookie': makeAuthCookie(config.uiAccessToken || ''),
+      'Set-Cookie': makeAuthCookie(uiAccessToken(config)),
     });
     response.end(JSON.stringify({ ok: true }));
     return true;
@@ -282,7 +292,7 @@ export async function handleUiAuthRoute(options: {
 
   if (request.method === 'GET' && url.pathname === '/') {
     if (!auth.localRequest) {
-      if (config.uiAllowLan !== true) {
+      if (!uiAllowLan(config)) {
         html(response, renderUiAccessDeniedHtml());
         return true;
       }
@@ -305,13 +315,13 @@ export async function handleUiAuthRoute(options: {
 
 export function rejectUnauthorizedUiApiRequest(options: {
   response: ServerResponse;
-  config: Config;
+  config: UiAuthConfig;
   auth: UiAuthState;
 }): boolean {
   const { response, config, auth } = options;
   if (auth.localRequest) return false;
 
-  if (config.uiAllowLan !== true) {
+  if (!uiAllowLan(config)) {
     json(response, 403, { error: '当前未开启局域网访问。' });
     return true;
   }

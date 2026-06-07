@@ -1,4 +1,4 @@
-import type { CodexReasoningEffort } from '../../configuration/index.js';
+import type { CodexReasoningEffort } from '../../runtime/options.js';
 import type { RuntimeProviderChoice } from '../../domain/session.js';
 import { isRuntimeProviderChoice } from '../../domain/session-runtime.js';
 
@@ -83,13 +83,8 @@ export function parseRuntimeProviderArg(raw: string): RuntimeProviderChoice | nu
   return isRuntimeProviderChoice(token) ? token : null;
 }
 
-export function parseCodexProviderArg(raw: string): RuntimeProviderChoice | null {
-  return parseRuntimeProviderArg(raw);
-}
-
-export function parseClaudeProviderArg(raw: string): RuntimeProviderChoice | null {
-  return parseRuntimeProviderArg(raw);
-}
+export const parseCodexProviderArg = parseRuntimeProviderArg;
+export const parseClaudeProviderArg = parseRuntimeProviderArg;
 
 export function formatTmuxProviderUnavailable(error: unknown): string | null {
   const message = error instanceof Error ? error.message : String(error);

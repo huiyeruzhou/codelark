@@ -1,4 +1,4 @@
-import { getBridgeContext } from '../host/context.js';
+import { getGlobalRuntimeAgent } from '../session/global-config.js';
 
 export function buildInteractiveStreamKey(sessionId: string, messageId: string): string {
   return `im:${sessionId}:${messageId}`;
@@ -9,9 +9,7 @@ export function buildMirrorStreamKey(sessionId: string, turnId: string | null | 
 }
 
 function getMirrorAssistantRuntimeLabel(): string {
-  const { store } = getBridgeContext();
-  const runtime = (store.getSetting('bridge_runtime') || 'codex').trim().toLowerCase();
-  return runtime || 'codex';
+  return getGlobalRuntimeAgent();
 }
 
 export function buildMirrorTitle(threadTitle: string | null, markdown = false): string {

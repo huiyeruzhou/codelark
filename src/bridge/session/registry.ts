@@ -176,7 +176,7 @@ export class SessionRegistryService {
       isVisibleBridgeSession(session)
       && getSessionActiveRuntime(session) === 'claude'
       && getSessionClaudeSessionId(session) === claudeSessionId
-      && (getSessionClaudeCwd(session) === cwd || session.runtime?.general?.workingDirectory === cwd)
+      && getSessionClaudeCwd(session) === cwd
     )) || null;
   }
 
@@ -304,7 +304,7 @@ export class SessionRegistryService {
       .filter((session) => (
         getSessionActiveRuntime(session) === 'claude'
         && getSessionClaudeSessionId(session) === claudeSessionId
-        && (getSessionClaudeCwd(session) === cwd || session.runtime?.general?.workingDirectory === cwd)
+        && getSessionClaudeCwd(session) === cwd
       ));
     for (const session of linkedSessions) {
       this.store.deleteSession(session.id);

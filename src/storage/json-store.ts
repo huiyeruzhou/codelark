@@ -15,24 +15,25 @@ import type {
   UpsertChannelChatInput,
   UpsertChannelDefaultTargetInput,
 } from '../domain/audit.js';
-import type { ChannelChat, ChannelChatMode, ChannelDefaultTarget, ChannelType } from '../domain/channel.js';
+import type { ChannelChat, ChannelDefaultTarget, ChannelType } from '../domain/channel.js';
 import type { BridgeMessage } from '../domain/message.js';
 import type { PermissionLinkInput, PermissionLinkRecord } from '../domain/permission.js';
 import type {
   BridgeSession,
-  BridgeSessionCodexRuntimeState,
+  CodexReasoningEffort,
   BridgeSessionRuntimeState,
   BridgeSessionUpdate,
 } from '../domain/session.js';
 import type { BridgeApiProvider } from '../runtime/contracts.js';
-import { CODELARK_HOME, configToSettings, findChannelInstance, loadConfig } from '../configuration/index.js';
+import { CODELARK_HOME } from '../configuration/paths.js';
+import { createConfigService } from '../configuration/service.js';
+import { exportRuntimeSettings } from '../runtime/config-projections.js';
 import { runStartupStorageMigrations } from './migrations.js';
 import {
   getSessionActiveRuntime,
   getSessionClaudeSessionId,
   getSessionCodexThreadId,
   materializeBridgeSessionRuntime,
-  setSessionCodexModelUpdate,
   setSessionCodexThreadIdUpdate,
 } from '../domain/session-runtime.js';
 
@@ -97,12 +98,6 @@ function uuid(): string {
 
 function now(): string {
   return new Date().toISOString();
-}
-
-function normalizeStoredMode(mode: unknown): ChannelChatMode {
-  if (mode === 'yolo') return 'yolo';
-  if (mode === 'normal' || mode === 'code') return 'normal';
-  return 'normal';
 }
 
 function defaultAliasForProvider(provider: string | undefined): string | undefined {
@@ -179,8 +174,16 @@ function mergeSessionRuntime(
 }
 
 function normalizeChannelDefaultTarget(target: ChannelDefaultTarget): ChannelDefaultTarget {
-  const config = loadConfig();
-  const instance = findChannelInstance(target.channelType, config);
+  let instance: { provider?: string; alias?: string } | undefined;
+  try {
+    instance = createConfigService({ migrate: false })
+      .snapshot()
+      .config
+      .channels
+      .find((channel) => channel.id === target.channelType);
+  } catch {
+    instance = undefined;
+  }
   const channelProvider = instance?.provider || target.channelProvider;
   const channelAlias = instance?.alias || target.channelAlias || defaultAliasForProvider(channelProvider);
 
@@ -386,7 +389,10 @@ export class JsonFileStore implements BridgeStore {
   private refreshSettings(): void {
     if (!this.dynamicSettings) return;
     try {
-      const next = configToSettings(loadConfig());
+      const config = createConfigService({ codelarkHome: CODELARK_HOME, migrate: false })
+        .snapshot()
+        .config;
+      const next = exportRuntimeSettings(config);
       this.settings = new Map([
         ...this.settings,
         ...next,
@@ -607,12 +613,12 @@ export class JsonFileStore implements BridgeStore {
 
   createSession(
     name: string,
-    model: string,
+    _model: string,
     systemPrompt?: string,
     cwd?: string,
-    mode?: string,
+    _mode?: string,
     options?: {
-      reasoningEffort?: BridgeSessionCodexRuntimeState['reasoningEffort'];
+      reasoningEffort?: CodexReasoningEffort;
       activeRuntime?: 'codex' | 'claude';
       sessionType?: BridgeSession['session_type'];
       hidden?: boolean;
@@ -623,26 +629,16 @@ export class JsonFileStore implements BridgeStore {
     this.reloadSessions();
     const timestamp = now();
     const activeRuntime = options?.activeRuntime === 'claude' ? 'claude' : options?.activeRuntime === 'codex' ? 'codex' : undefined;
+    const workingDirectory = cwd || process.cwd();
     const session: BridgeSession = {
       id: uuid(),
       name,
       runtime: activeRuntime === 'claude' ? {
         activeRuntime: 'claude',
-        general: {
-          workingDirectory: cwd || process.cwd(),
-          ...(systemPrompt ? { systemPrompt } : {}),
-        },
+        ...(systemPrompt ? { general: { systemPrompt } } : {}),
       } : {
         ...(activeRuntime ? { activeRuntime } : {}),
-        codex: {
-          model,
-          mode: normalizeStoredMode(mode || this.getSetting('bridge_default_mode') || 'normal'),
-          ...(options?.reasoningEffort ? { reasoningEffort: options.reasoningEffort } : {}),
-        },
-        general: {
-          workingDirectory: cwd || process.cwd(),
-          ...(systemPrompt ? { systemPrompt } : {}),
-        },
+        ...(systemPrompt ? { general: { systemPrompt } } : {}),
       },
       session_type: options?.sessionType || 'normal',
       hidden: options?.hidden === true,
@@ -654,6 +650,10 @@ export class JsonFileStore implements BridgeStore {
     const materialized = materializeBridgeSessionRuntime(session);
     this.sessions.set(session.id, materialized);
     this.persistSessions();
+    createConfigService({ migrate: false }).set(
+      { kind: 'session', sessionId: session.id },
+      { session: { workspace: workingDirectory } },
+    );
     return materialized;
   }
 
@@ -794,8 +794,9 @@ export class JsonFileStore implements BridgeStore {
     this.updateSession(sessionId, setSessionCodexThreadIdUpdate(codexThreadId || undefined));
   }
 
-  updateSessionModel(sessionId: string, model: string): void {
-    this.updateSession(sessionId, setSessionCodexModelUpdate(model));
+  updateSessionModel(_sessionId: string, _model: string): void {
+    // Runtime-reported model is not session configuration. The config refactor
+    // keeps BridgeSession JSON for identity/status only.
   }
 
   syncSdkTasks(_sessionId: string, _todos: unknown): void {

@@ -4,13 +4,14 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 
-import { CONFIG_JSON_PATH, CODELARK_HOME } from '../../../../configuration/index.js';
+import { CODELARK_HOME } from '../../../../configuration/paths.js';
 import { bindStoreToCodexThread, bindStoreToSession } from '../../../../bridge/session/registry/bindings.js';
 import { ThreadDisplayService } from '../../../../bridge/session/thread-display-resolver.js';
 import { JsonFileStore } from '../../../../storage/json-store.js';
 import { writeCodexSessionJsonlFixture } from '../../../helpers/bridge/test-bridge-utils.js';
 
 const DATA_DIR = path.join(CODELARK_HOME, 'data');
+const CONFIG_TOML_PATH = path.join(CODELARK_HOME, 'config.toml');
 
 function makeSettings(): Map<string, string> {
   return new Map([
@@ -28,37 +29,24 @@ describe('session registry bindings', () => {
       fs.rmSync(path.join(process.env.CODEX_HOME, 'archived_sessions'), { recursive: true, force: true });
       fs.rmSync(path.join(process.env.CODEX_HOME, 'session_index.jsonl'), { force: true });
     }
-    fs.rmSync(CONFIG_JSON_PATH, { force: true });
-    fs.mkdirSync(path.dirname(CONFIG_JSON_PATH), { recursive: true });
-    fs.writeFileSync(CONFIG_JSON_PATH, JSON.stringify({
-      schemaVersion: 1,
-      runtime: {
-        provider: 'codex',
-        codex: {
-          defaultMode: 'code',
-        },
-      },
-      channels: [
-        {
-          id: 'feishu-default',
-          alias: '飞书',
-          provider: 'feishu',
-          enabled: true,
-          createdAt: '2026-03-01T00:00:00.000Z',
-          updatedAt: '2026-03-01T00:00:00.000Z',
-          config: {},
-        },
-        {
-          id: 'feishu-backup',
-          alias: '飞书备份',
-          provider: 'feishu',
-          enabled: true,
-          createdAt: '2026-03-01T00:00:00.000Z',
-          updatedAt: '2026-03-01T00:00:00.000Z',
-          config: {},
-        },
-      ],
-    }, null, 2));
+    fs.rmSync(path.join(CODELARK_HOME, 'config'), { recursive: true, force: true });
+    fs.rmSync(CONFIG_TOML_PATH, { force: true });
+    fs.mkdirSync(path.dirname(CONFIG_TOML_PATH), { recursive: true });
+    fs.writeFileSync(CONFIG_TOML_PATH, `
+schema_version = 2
+
+[[channels]]
+id = "feishu-default"
+alias = "飞书"
+provider = "feishu"
+enabled = true
+
+[[channels]]
+id = "feishu-backup"
+alias = "飞书备份"
+provider = "feishu"
+enabled = true
+`);
   });
 
   it('rejects binding the same session to a different chat', () => {
@@ -93,6 +81,24 @@ describe('session registry bindings', () => {
       }),
       /一个会话只能绑定一个聊天/,
     );
+  });
+
+  it('stores channel metadata from v2 TOML custom channel entries', () => {
+    fs.appendFileSync(CONFIG_TOML_PATH, `
+
+[[channels]]
+id = "feishu-custom"
+alias = "飞书自定义"
+provider = "feishu"
+enabled = true
+`);
+    const store = new JsonFileStore(makeSettings());
+    const session = store.createSession('custom', 'test-model', undefined, '/tmp/custom');
+
+    const binding = bindStoreToSession(store, 'feishu-custom', 'oc_custom', session.id);
+
+    assert.equal(binding?.channelProvider, 'feishu');
+    assert.equal(binding?.channelAlias, '飞书自定义');
   });
 
   it('stores chat display metadata when binding to an existing session', () => {

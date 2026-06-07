@@ -86,7 +86,7 @@ codelark url
 - 配置：
   - 选择默认 runtime：优先使用 `~/.codex`；检测到 `~/.claude-code-router` 会推荐 Claude Code Router；都没有时默认 Claude Code。
   - 之后选择默认工作目录，默认是运行 `codelark setup` 时的当前目录。
-  - 以上内容会保存到 `~/.codelark/config.json`，并更新 `config.env`。`config.json` 是系统实际使用的配置文件；`config.env` 方便人工配置，也可通过环境变量覆盖，系统启动时会用 env 覆盖 json。`codelark run` / `codelark start` 会再把当前配置绑定到 CodeLark 专属 lark-cli 运行目录。
+  - 以上内容会保存到 `~/.codelark/config.toml`。旧版 `config.json` / `config.env` 只作为首次启动迁移输入；迁移完成后运行时只读取 TOML 和真实进程环境变量覆盖。`codelark run` / `codelark start` 会再把当前配置绑定到 CodeLark 专属 lark-cli 运行目录。
 
 - 安装 skills：安装向导会说明并默认勾选这些 skill，也可以逐个关闭或全部取消。手动安装可运行：
 

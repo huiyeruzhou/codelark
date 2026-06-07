@@ -1,7 +1,11 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { JsonFileStore } from '../../../storage/json-store.js';
-import { CONFIG_PATH, CONFIG_JSON_PATH, CODELARK_HOME } from '../../../configuration/index.js';
+import { CODELARK_HOME } from '../../../configuration/paths.js';
+import {
+  LEGACY_CONFIG_ENV_PATH as CONFIG_PATH,
+  LEGACY_CONFIG_JSON_PATH as CONFIG_JSON_PATH,
+} from '../../../configuration/migrations/legacy/paths.js';
 import { initBridgeContext } from '../../../bridge/host/context.js';
 import { BaseChannelAdapter } from '../../../channels/contracts.js';
 import type { CreateGroupChatOptions, CreatedGroupChat } from '../../../channels/contracts.js';
@@ -15,9 +19,6 @@ export function makeBridgeSettings(overrides: Record<string, string> = {}): Map<
     ['remote_bridge_enabled', 'true'],
     ['bridge_default_model', 'test-model'],
     ['bridge_default_mode', 'code'],
-    ['bridge_channel_instances_json', JSON.stringify([
-      { id: 'feishu', provider: 'feishu', enabled: true, alias: '飞书', config: {} },
-    ])],
     ...Object.entries(overrides),
   ]);
 }
@@ -40,6 +41,8 @@ export const noopLifecycle: LifecycleHooks = {};
 
 export function resetBridgeTestState(options: { cleanCodexHome?: boolean } = {}): void {
   fs.rmSync(BRIDGE_TEST_DATA_DIR, { recursive: true, force: true });
+  fs.rmSync(path.join(CODELARK_HOME, 'config.toml'), { force: true });
+  fs.rmSync(path.join(CODELARK_HOME, 'config'), { recursive: true, force: true });
   fs.rmSync(CONFIG_PATH, { force: true });
   fs.rmSync(CONFIG_JSON_PATH, { force: true });
 

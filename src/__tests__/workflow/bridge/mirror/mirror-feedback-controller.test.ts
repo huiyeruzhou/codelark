@@ -82,11 +82,7 @@ class FakeMirrorFeishuAdapter extends BaseChannelAdapter {
 describe('mirror-feedback-controller', () => {
   it('builds mirror stream card title and tags from subscription metadata', () => {
     initBridgeContext({
-      store: new JsonFileStore(new Map([
-        ['bridge_channel_instances_json', JSON.stringify([
-          { id: 'feishu-default', provider: 'feishu', alias: 'Feishu', enabled: true, config: {} },
-        ])],
-      ])),
+      store: new JsonFileStore(new Map()),
       llm: {
         streamChat() {
           return new ReadableStream({
@@ -144,11 +140,7 @@ describe('mirror-feedback-controller', () => {
 
   it('keeps last response age visible when mirror tool progress updates the status area', () => {
     initBridgeContext({
-      store: new JsonFileStore(new Map([
-        ['bridge_channel_instances_json', JSON.stringify([
-          { id: 'feishu-default', provider: 'feishu', alias: 'Feishu', enabled: true, config: {} },
-        ])],
-      ])),
+      store: new JsonFileStore(new Map()),
       llm: {
         streamChat() {
           return new ReadableStream({
@@ -231,11 +223,7 @@ describe('mirror-feedback-controller', () => {
 
   it('passes the global tool detail setting into mirror tool rendering', () => {
     initBridgeContext({
-      store: new JsonFileStore(new Map([
-        ['bridge_channel_instances_json', JSON.stringify([
-          { id: 'feishu-default', provider: 'feishu', alias: 'Feishu', enabled: true, config: {} },
-        ])],
-      ])),
+      store: new JsonFileStore(new Map()),
       llm: {
         streamChat() {
           return new ReadableStream({
@@ -298,11 +286,7 @@ describe('mirror-feedback-controller', () => {
 
   it('shows mirror context and turn token usage in the stream status area and final card', async () => {
     initBridgeContext({
-      store: new JsonFileStore(new Map([
-        ['bridge_channel_instances_json', JSON.stringify([
-          { id: 'feishu-default', provider: 'feishu', alias: 'Feishu', enabled: true, config: {} },
-        ])],
-      ])),
+      store: new JsonFileStore(new Map()),
       llm: {
         streamChat() {
           return new ReadableStream({
@@ -377,11 +361,7 @@ describe('mirror-feedback-controller', () => {
 
   it('delivers clk ask question cards after mirror stream finalization', async () => {
     initBridgeContext({
-      store: new JsonFileStore(new Map([
-        ['bridge_channel_instances_json', JSON.stringify([
-          { id: 'feishu-default', provider: 'feishu', alias: 'Feishu', enabled: true, config: {} },
-        ])],
-      ])),
+      store: new JsonFileStore(new Map()),
       llm: {
         streamChat() {
           return new ReadableStream({
@@ -452,11 +432,7 @@ describe('mirror-feedback-controller', () => {
 
   it('preserves clk ask question cards when mirror falls back to message delivery', async () => {
     initBridgeContext({
-      store: new JsonFileStore(new Map([
-        ['bridge_channel_instances_json', JSON.stringify([
-          { id: 'feishu-default', provider: 'feishu', alias: 'Feishu', enabled: true, config: {} },
-        ])],
-      ])),
+      store: new JsonFileStore(new Map()),
       llm: {
         streamChat() {
           return new ReadableStream({

@@ -1,9 +1,13 @@
 #!/usr/bin/env bash
 set -euo pipefail
-CODELARK_HOME="${CODELARK_HOME:-${CODELARK_HOME:-$HOME/.codelark}}"
-CONFIG_FILE="$CODELARK_HOME/config.env"
+
+CODELARK_HOME="${CODELARK_HOME:-$HOME/.codelark}"
+CONFIG_TOML="$CODELARK_HOME/config.toml"
+LEGACY_CONFIG_ENV="$CODELARK_HOME/config.env"
+LEGACY_CONFIG_JSON="$CODELARK_HOME/config.json"
 PID_FILE="$CODELARK_HOME/runtime/bridge.pid"
 LOG_FILE="$CODELARK_HOME/logs/bridge.log"
+SKILL_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 
 PASS=0
 FAIL=0
@@ -20,60 +24,73 @@ check() {
   fi
 }
 
+toml_value() {
+  local key="$1"
+  awk -F= -v key="$key" '
+    $1 ~ "^[[:space:]]*" key "[[:space:]]*$" {
+      value=$2
+      sub(/^[[:space:]]*/, "", value)
+      sub(/[[:space:]]*$/, "", value)
+      gsub(/^"/, "", value)
+      gsub(/"$/, "", value)
+      print value
+      exit
+    }
+  ' "$CONFIG_TOML" 2>/dev/null || true
+}
+
+toml_bool() {
+  local key="$1"
+  toml_value "$key" | tr '[:upper:]' '[:lower:]'
+}
+
 # --- Node.js version ---
 if command -v node &>/dev/null; then
   NODE_VER=$(node -v | sed 's/v//' | cut -d. -f1)
-  if [ "$NODE_VER" -ge 20 ] 2>/dev/null; then
-    check "Node.js >= 20 (found v$(node -v | sed 's/v//'))" 0
+  if [ "$NODE_VER" -ge 24 ] 2>/dev/null; then
+    check "Node.js >= 24 (found v$(node -v | sed 's/v//'))" 0
   else
-    check "Node.js >= 20 (found v$(node -v | sed 's/v//'), need >= 20)" 1
+    check "Node.js >= 24 (found v$(node -v | sed 's/v//'), need >= 24)" 1
   fi
 else
   check "Node.js installed" 1
 fi
 
-# --- Helper: read a value from config.env ---
-get_config() { grep "^$1=" "$CONFIG_FILE" 2>/dev/null | head -1 | cut -d= -f2- | sed 's/^["'"'"']//;s/["'"'"']$//'; }
-
-# --- Read runtime setting ---
-SKILL_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-CODELARK_RUNTIME=$(get_config CODELARK_RUNTIME)
-CODELARK_RUNTIME="codex"
-echo "Runtime: $CODELARK_RUNTIME"
+# --- Runtime setting ---
+CODELARK_AGENT="$(toml_value agent)"
+CODELARK_AGENT="${CODELARK_AGENT:-codex}"
+echo "Runtime agent: $CODELARK_AGENT"
 echo ""
 
 # --- Codex checks ---
-  if command -v codex &>/dev/null; then
-    CODEX_VER=$(codex --version 2>/dev/null || echo "unknown")
-    check "Codex CLI available (${CODEX_VER})" 0
-  else
-    check "Codex CLI available (not found in PATH)" 1
-  fi
+if command -v codex &>/dev/null; then
+  CODEX_VER=$(codex --version 2>/dev/null || echo "unknown")
+  check "Codex CLI available (${CODEX_VER})" 0
+else
+  check "Codex CLI available (not found in PATH)" 1
+fi
 
-  # Check @openai/codex-sdk
-  CODEX_SDK="$SKILL_DIR/node_modules/@openai/codex-sdk"
-  if [ -d "$CODEX_SDK" ]; then
-    check "@openai/codex-sdk installed" 0
-  else
-    check "@openai/codex-sdk installed (not found — run 'npm install' in $SKILL_DIR)" 1
-  fi
+CODEX_SDK="$SKILL_DIR/node_modules/@openai/codex-sdk"
+if [ -d "$CODEX_SDK" ]; then
+  check "@openai/codex-sdk installed" 0
+else
+  check "@openai/codex-sdk installed (not found; run 'npm install' in $SKILL_DIR)" 1
+fi
 
-  # Check Codex auth: any of CODELARK_CODEX_API_KEY / CODEX_API_KEY / OPENAI_API_KEY,
-  # or `codex auth status` showing logged-in (interactive login).
-  CODEX_AUTH=1
-  if [ -n "${CODELARK_CODEX_API_KEY:-}" ] || [ -n "${CODEX_API_KEY:-}" ] || [ -n "${OPENAI_API_KEY:-}" ]; then
+CODEX_AUTH=1
+if [ -n "${CODELARK_CODEX_API_KEY:-}" ] || [ -n "${CODEX_API_KEY:-}" ] || [ -n "${OPENAI_API_KEY:-}" ]; then
+  CODEX_AUTH=0
+elif command -v codex &>/dev/null; then
+  CODEX_AUTH_OUT=$(codex auth status 2>&1 || true)
+  if echo "$CODEX_AUTH_OUT" | grep -qiE 'logged.in|authenticated'; then
     CODEX_AUTH=0
-  elif command -v codex &>/dev/null; then
-    CODEX_AUTH_OUT=$(codex auth status 2>&1 || true)
-    if echo "$CODEX_AUTH_OUT" | grep -qiE 'logged.in|authenticated'; then
-      CODEX_AUTH=0
-    fi
   fi
-  if [ "$CODEX_AUTH" = "0" ]; then
-    check "Codex auth available (API key or login)" 0
-  else
-    check "Codex auth available (set OPENAI_API_KEY or run 'codex auth login')" 1
-  fi
+fi
+if [ "$CODEX_AUTH" = "0" ]; then
+  check "Codex auth available (API key or login)" 0
+else
+  check "Codex auth available (set OPENAI_API_KEY or run 'codex auth login')" 1
+fi
 
 # --- dist/daemon.mjs freshness ---
 DAEMON_MJS="$SKILL_DIR/dist/daemon.mjs"
@@ -85,57 +102,60 @@ if [ -f "$DAEMON_MJS" ]; then
     check "dist/daemon.mjs is stale (src changed, run 'npm run build')" 1
   fi
 else
-  check "dist/daemon.mjs exists (not built — run 'npm run build')" 1
+  check "dist/daemon.mjs exists (not built; run 'npm run build')" 1
 fi
 
-# --- config.env exists ---
-if [ -f "$CONFIG_FILE" ]; then
-  check "config.env exists" 0
+# --- Config files ---
+if [ -f "$CONFIG_TOML" ]; then
+  check "config.toml exists" 0
 else
-  check "config.env exists ($CONFIG_FILE not found)" 1
-fi
-
-# --- config.env permissions ---
-if [ -f "$CONFIG_FILE" ]; then
-  PERMS=$(stat -f "%Lp" "$CONFIG_FILE" 2>/dev/null || stat -c "%a" "$CONFIG_FILE" 2>/dev/null || echo "unknown")
-  if [ "$PERMS" = "600" ]; then
-    check "config.env permissions are 600" 0
+  if [ -f "$LEGACY_CONFIG_JSON" ] || [ -f "$LEGACY_CONFIG_ENV" ]; then
+    check "config.toml exists (legacy config will migrate on next startup)" 0
   else
-    check "config.env permissions are 600 (currently $PERMS)" 1
+    check "config.toml exists ($CONFIG_TOML not found)" 1
   fi
 fi
 
-# --- Load config for channel checks ---
-if [ -f "$CONFIG_FILE" ]; then
-  CODELARK_CHANNELS=$(get_config CODELARK_ENABLED_CHANNELS)
-
-  # --- Feishu ---
-  if echo "$CODELARK_CHANNELS" | grep -q feishu; then
-    FS_APP_ID=$(get_config CODELARK_FEISHU_APP_ID)
-    FS_SECRET=$(get_config CODELARK_FEISHU_APP_SECRET)
-    FS_SITE=$(get_config CODELARK_FEISHU_SITE)
-    case "$FS_SITE" in
-      lark|*open.larksuite.com*)
-        FS_DOMAIN="https://open.larksuite.com"
-        ;;
-      *)
-        FS_DOMAIN="https://open.feishu.cn"
-        ;;
-    esac
-    if [ -n "$FS_APP_ID" ] && [ -n "$FS_SECRET" ]; then
-      FEISHU_RESULT=$(curl -s --max-time 5 -X POST "${FS_DOMAIN}/open-apis/auth/v3/tenant_access_token/internal" \
-        -H "Content-Type: application/json" \
-        -d "{\"app_id\":\"${FS_APP_ID}\",\"app_secret\":\"${FS_SECRET}\"}" 2>/dev/null || echo '{"code":1}')
-      if echo "$FEISHU_RESULT" | grep -q '"code"[[:space:]]*:[[:space:]]*0'; then
-        check "Feishu app credentials are valid" 0
-      else
-        check "Feishu app credentials are valid (token request failed)" 1
-      fi
-    else
-      check "Feishu app credentials configured" 1
-    fi
+if [ -f "$CONFIG_TOML" ]; then
+  PERMS=$(stat -f "%Lp" "$CONFIG_TOML" 2>/dev/null || stat -c "%a" "$CONFIG_TOML" 2>/dev/null || echo "unknown")
+  if [ "$PERMS" = "600" ]; then
+    check "config.toml permissions are 600" 0
+  else
+    check "config.toml permissions are 600 (currently $PERMS)" 1
   fi
+fi
 
+if [ -f "$LEGACY_CONFIG_ENV" ] || [ -f "$LEGACY_CONFIG_JSON" ]; then
+  check "legacy config.env/config.json are migration inputs only" 0
+  echo "       Legacy config files are not sourced by daemon scripts; startup migration writes config.toml."
+fi
+
+# --- Feishu credentials, best-effort from home TOML ---
+CHANNEL_ENABLED="$(toml_bool enabled)"
+if [ -f "$CONFIG_TOML" ] && [ "$CHANNEL_ENABLED" = "true" ]; then
+  FS_APP_ID="$(toml_value app_id)"
+  FS_SECRET="$(toml_value app_secret)"
+  FS_SITE="$(toml_value site)"
+  case "$FS_SITE" in
+    lark|*open.larksuite.com*)
+      FS_DOMAIN="https://open.larksuite.com"
+      ;;
+    *)
+      FS_DOMAIN="https://open.feishu.cn"
+      ;;
+  esac
+  if [ -n "$FS_APP_ID" ] && [ -n "$FS_SECRET" ]; then
+    FEISHU_RESULT=$(curl -s --max-time 5 -X POST "${FS_DOMAIN}/open-apis/auth/v3/tenant_access_token/internal" \
+      -H "Content-Type: application/json" \
+      -d "{\"app_id\":\"${FS_APP_ID}\",\"app_secret\":\"${FS_SECRET}\"}" 2>/dev/null || echo '{"code":1}')
+    if echo "$FEISHU_RESULT" | grep -q '"code"[[:space:]]*:[[:space:]]*0'; then
+      check "Feishu app credentials are valid" 0
+    else
+      check "Feishu app credentials are valid (token request failed)" 1
+    fi
+  else
+    check "Feishu app credentials configured" 1
+  fi
 fi
 
 # --- Log directory writable ---
@@ -176,10 +196,10 @@ echo "Results: $PASS passed, $FAIL failed"
 if [ "$FAIL" -gt 0 ]; then
   echo ""
   echo "Common fixes:"
-  echo "  SDK cli.js missing    → cd $SKILL_DIR && npm install"
-  echo "  dist/daemon.mjs stale → cd $SKILL_DIR && npm run build"
-  echo "  config.env missing    → run setup wizard"
-  echo "  Stale PID file        → run stop, then start"
+  echo "  SDK cli.js missing       -> cd $SKILL_DIR && npm install"
+  echo "  dist/daemon.mjs stale    -> cd $SKILL_DIR && npm run build"
+  echo "  config.toml missing      -> run setup wizard or start once to migrate legacy config"
+  echo "  Stale PID file           -> run stop, then start"
 fi
 
 [ "$FAIL" -eq 0 ] && exit 0 || exit 1

@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 
-import { CODELARK_HOME } from '../../../../configuration/index.js';
+import { CODELARK_HOME } from '../../../../configuration/paths.js';
 import { runStartupStorageMigrations } from '../../../../storage/migrations.js';
 
 const DATA_DIR = path.join(CODELARK_HOME, 'data');

@@ -36,7 +36,6 @@ $StatusFile = Join-Path $RuntimeDir 'status.json'
 $LogFile    = Join-Path (Join-Path $CodelarkHome 'logs') 'bridge.log'
 $ErrLogFile = Join-Path (Join-Path $CodelarkHome 'logs') 'bridge.stderr.log'
 $DaemonMjs  = Join-Path (Join-Path $SkillDir 'dist') 'daemon.mjs'
-$ConfigFile = Join-Path $CodelarkHome 'config.env'
 
 $ServiceName = 'CodeLarkBridge'
 
@@ -66,32 +65,6 @@ function Ensure-Built {
             Pop-Location
         }
     }
-}
-
-function Get-ConfigEnvironment {
-    $configEnv = @{}
-    if (-not (Test-Path $ConfigFile)) {
-        return $configEnv
-    }
-
-    foreach ($line in Get-Content $ConfigFile) {
-        $trimmed = $line.Trim()
-        if (-not $trimmed -or $trimmed.StartsWith('#')) { continue }
-        $eqIndex = $trimmed.IndexOf('=')
-        if ($eqIndex -lt 1) { continue }
-
-        $name = $trimmed.Substring(0, $eqIndex).Trim()
-        $value = $trimmed.Substring($eqIndex + 1).Trim()
-        if (
-            ($value.StartsWith('"') -and $value.EndsWith('"')) -or
-            ($value.StartsWith("'") -and $value.EndsWith("'"))
-        ) {
-            $value = $value.Substring(1, $value.Length - 2)
-        }
-        $configEnv[$name] = $value
-    }
-
-    return $configEnv
 }
 
 function Read-Pid {
@@ -144,7 +117,7 @@ function Show-FailureHelp {
 function Get-NodePath {
     $nodePath = (Get-Command node -ErrorAction SilentlyContinue).Source
     if (-not $nodePath) {
-        Write-Error "Node.js not found in PATH. Install Node.js >= 20."
+        Write-Error "Node.js not found in PATH. Install Node.js >= 24."
         exit 1
     }
     return $nodePath
@@ -167,7 +140,6 @@ function Install-WinSWService {
     param([string]$WinSWPath)
     $nodePath = Get-NodePath
     $xmlPath = Join-Path $SkillDir "$ServiceName.xml"
-    $configEnv = Get-ConfigEnvironment
 
     # Run as current user so the service can access ~/.codelark and Codex login state
     $currentUser = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
@@ -204,13 +176,6 @@ function Install-WinSWService {
 </service>
 "@
 
-    $extraEnvXml = ($configEnv.GetEnumerator() | ForEach-Object {
-        '  <env name="{0}" value="{1}"/>' -f $_.Key, [System.Security.SecurityElement]::Escape($_.Value)
-    }) -join "`r`n"
-    if ($extraEnvXml) {
-        $xml = $xml -replace '  <logpath>', "$extraEnvXml`r`n  <logpath>"
-    }
-
     $xml | Set-Content -Path $xmlPath -Encoding UTF8
 
     # Copy WinSW next to the XML with matching name
@@ -227,7 +192,6 @@ function Install-WinSWService {
 function Install-NSSMService {
     param([string]$NSSMPath)
     $nodePath = Get-NodePath
-    $configEnv = Get-ConfigEnvironment
 
     # Run as current user so the service can access ~/.codelark and Codex login state
     $currentUser = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
@@ -250,9 +214,6 @@ function Install-NSSMService {
         "LOCALAPPDATA=$env:LOCALAPPDATA",
         "CODELARK_HOME=$CodelarkHome"
     )
-    foreach ($entry in $configEnv.GetEnumerator()) {
-        $envArgs += "$($entry.Key)=$($entry.Value)"
-    }
     & $NSSMPath set $ServiceName AppEnvironmentExtra @envArgs
 
     Write-Host "Service '$ServiceName' installed via NSSM."
@@ -265,7 +226,6 @@ function Install-NSSMService {
 
 function Start-Fallback {
     $nodePath = Get-NodePath
-    $configEnv = Get-ConfigEnvironment
 
     # Clean env
     $envClone = [System.Collections.Hashtable]::new()
@@ -275,10 +235,6 @@ function Start-Fallback {
     # Remove CLAUDECODE
     [System.Environment]::SetEnvironmentVariable('CLAUDECODE', $null)
     [System.Environment]::SetEnvironmentVariable('CODELARK_HOME', $CodelarkHome, 'Process')
-
-    foreach ($entry in $configEnv.GetEnumerator()) {
-        [System.Environment]::SetEnvironmentVariable($entry.Key, $entry.Value, 'Process')
-    }
 
     try {
         $proc = Start-Process -FilePath $nodePath `
@@ -291,11 +247,6 @@ function Start-Fallback {
     } finally {
         foreach ($key in $envClone.Keys) {
             [System.Environment]::SetEnvironmentVariable($key, $envClone[$key], 'Process')
-        }
-        foreach ($entry in $configEnv.GetEnumerator()) {
-            if (-not $envClone.ContainsKey($entry.Key)) {
-                [System.Environment]::SetEnvironmentVariable($entry.Key, $null, 'Process')
-            }
         }
         if (-not $envClone.ContainsKey('CODELARK_HOME')) {
             [System.Environment]::SetEnvironmentVariable('CODELARK_HOME', $null, 'Process')

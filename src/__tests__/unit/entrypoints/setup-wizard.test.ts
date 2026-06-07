@@ -9,8 +9,10 @@ import test from 'node:test';
 import {
   buildSetupConfig,
   extractHttpUrlsFromText,
+  loadSetupConfig,
   recommendRuntime,
   renderLarkCliUrlQr,
+  saveSetupConfigToHomeToml,
 } from '../../../entrypoints/setup-wizard.js';
 import {
   FEISHU_REQUIRED_CALLBACKS,
@@ -19,10 +21,19 @@ import {
   feishuSetupUserAuthScopeArgument,
   feishuSetupUserAuthScopes,
 } from '../../../channels/feishu/permissions.js';
-import type { Config } from '../../../configuration/index.js';
+import type { ConfigV2 } from '../../../configuration/schema.js';
 
 function tempDir(prefix: string): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+}
+
+function baseSetupConfig(): ConfigV2 {
+  const home = tempDir('clk-setup-base-');
+  try {
+    return loadSetupConfig(home);
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true });
+  }
 }
 
 test('extracts lark-cli authorization URLs from terminal output', () => {
@@ -66,7 +77,7 @@ test('real setup wizard e2e can load credentials from env file without npm secre
   assert.match(script, /CTI_REAL_FEISHU_TEST_APP_SECRET/);
 });
 
-test('real setup wizard wizard e2e creates credentials in an isolated home and writes the default Feishu env file', () => {
+test('real setup wizard wizard e2e creates credentials in an isolated home and writes CodeLark TOML', () => {
   const scriptPath = path.join(process.cwd(), 'scripts', 'setup-wizard-real-wizard-e2e.ts');
   const script = fs.readFileSync(scriptPath, 'utf-8');
   const realFeishuScript = fs.readFileSync(path.join(process.cwd(), 'scripts', 'real-feishu-e2e.ts'), 'utf-8');
@@ -85,14 +96,18 @@ test('real setup wizard wizard e2e creates credentials in an isolated home and w
   assert.match(script, /writeDefaultRealFeishuTestEnvFile/);
   assert.match(script, /CODELARK_REAL_FEISHU_TEST_APP_ID/);
   assert.doesNotMatch(script, /Missing test app credentials/);
+  assert.match(script, /config\.toml/);
   assert.doesNotMatch(script, /writePreseedConfigEnv/);
   assert.doesNotMatch(script, /--app-id/);
+  assert.doesNotMatch(script, /config\.env missing/);
   assert.match(realFeishuScript, /defaultRealFeishuTestEnvFile/);
   assert.match(realFeishuScript, /valueArg\(argv, '--test-env-file', defaultRealFeishuTestEnvFile\(\)\)/);
 
   const wizardSource = fs.readFileSync(path.join(process.cwd(), 'src', 'entrypoints', 'setup-wizard.ts'), 'utf-8');
   assert.match(wizardSource, /'auth', 'qrcode', url, '--ascii'/);
   assert.doesNotMatch(wizardSource, /QRCode\.toString/);
+  assert.match(wizardSource, /config\.toml/);
+  assert.doesNotMatch(wizardSource, /config\.json 和 config\.env/);
 });
 
 test('setup wizard binds lark-cli runtime with user-default identity and resets legacy strict runtime', () => {
@@ -144,12 +159,7 @@ test('recommends runtime from home directory markers', () => {
 });
 
 test('builds setup config with selected credentials, runtime, and workspace', () => {
-  const current: Config = {
-    runtime: 'codex',
-    defaultMode: 'normal',
-    enabledChannels: [],
-    channels: [],
-  };
+  const current = baseSetupConfig();
 
   const next = buildSetupConfig(
     current,
@@ -164,20 +174,50 @@ test('builds setup config with selected credentials, runtime, and workspace', ()
     '/work/project',
   );
 
-  assert.equal(next.runtime, 'claude');
-  assert.equal(next.claudeExecutable, 'ccr');
-  assert.equal(next.claudeProvider, 'tmux');
-  assert.equal(next.defaultWorkspaceRoot, '/work/project');
-  assert.equal(next.defaultProvider, 'tmux');
+  assert.equal(next.runtime.agent, 'claude');
+  assert.equal(next.runtime.claude.executable, 'ccr');
+  assert.equal(next.runtime.claude.provider, 'tmux');
+  assert.equal(next.bridge.defaultWorkspace, '/work/project');
+  assert.equal(next.runtime.codex.provider, 'tmux');
   assert.equal(next.channels?.[0]?.alias, '主飞书');
-  assert.deepEqual(next.channels?.[0]?.config, {
-    appId: 'cli_demo',
-    appSecret: 'secret_demo',
-    site: 'feishu',
-    allowedUsers: ['ou_a'],
-    streamingEnabled: true,
-    feedbackMarkdownEnabled: true,
-  });
+  assert.equal(next.channels?.[0]?.config.appId, 'cli_demo');
+  assert.equal(next.channels?.[0]?.config.appSecret, 'secret_demo');
+  assert.equal(next.channels?.[0]?.config.site, 'feishu');
+  assert.deepEqual(next.channels?.[0]?.config.allowedUsers, ['ou_a']);
+  assert.equal(next.channels?.[0]?.config.streamingEnabled, true);
+  assert.equal(next.channels?.[0]?.config.feedbackMarkdownEnabled, true);
+});
+
+test('setup wizard saves first-run config to home TOML instead of legacy env/json files', () => {
+  const home = tempDir('clk-setup-config-');
+  try {
+    const current = loadSetupConfig(home);
+    const next = buildSetupConfig(
+      current,
+      {
+        appId: 'cli_demo',
+        appSecret: 'secret_demo',
+        site: 'lark',
+        alias: '主飞书',
+      },
+      'codex',
+      '/work/project',
+    );
+
+    saveSetupConfigToHomeToml(next, home);
+    const loaded = loadSetupConfig(home);
+
+    assert.equal(fs.existsSync(path.join(home, 'config.toml')), true);
+    assert.equal(fs.existsSync(path.join(home, 'config.env')), false);
+    assert.equal(fs.existsSync(path.join(home, 'config.json')), false);
+    assert.equal(loaded.runtime.agent, 'codex');
+    assert.equal(loaded.bridge.defaultWorkspace, '/work/project');
+    assert.equal(loaded.channels?.[0]?.config.appId, 'cli_demo');
+    assert.equal(loaded.channels?.[0]?.config.appSecret, 'secret_demo');
+    assert.equal(loaded.channels?.[0]?.config.site, 'lark');
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true });
+  }
 });
 
 test('documents Feishu setup permissions required by bridge and doc-to-chat', () => {

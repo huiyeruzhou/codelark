@@ -10,6 +10,43 @@ import { getBridgeContext } from '../context.js';
 import { SessionRegistryService } from '../session/registry.js';
 import { getOrCreateDraftSession } from '../session/internal-sessions.js';
 import { recordBindingChange } from '../session/binding-audit.js';
+import { createConfigService, type ConfigScope } from '../../configuration/service.js';
+import { expandHomePath } from '../../configuration/paths.js';
+import type { ConfigV2 } from '../../configuration/schema.js';
+import { getConfiguredChannelInstance } from '../../channels/adapter-runtime/channel-runtime.js';
+
+interface ChannelSessionDefaults {
+  activeRuntime: 'codex' | 'claude';
+  codexModel: string;
+  codexMode: 'normal' | 'yolo';
+  workspace: string;
+}
+
+function channelScopeForAddress(address: Pick<ChannelAddress, 'channelType' | 'channelProvider'>): ConfigScope | undefined {
+  return address.channelProvider === undefined || address.channelProvider === 'feishu'
+    ? { kind: 'channel', channelId: getConfiguredChannelInstance(address.channelType)?.id || address.channelType, provider: 'feishu' }
+    : undefined;
+}
+
+function codexModeFromConfig(config: ConfigV2): 'normal' | 'yolo' {
+  return config.runtime.codex.yoloMode === 'on' || config.runtime.codex.yoloMode === 'yolo' ? 'yolo' : 'normal';
+}
+
+function resolveChannelSessionDefaults(address: ChannelAddress): ChannelSessionDefaults {
+  const effective = createConfigService({ migrate: false }).snapshot(channelScopeForAddress(address));
+  const config = effective.config;
+  const workspaceSource = effective.provenance.get('session.workspace')?.source;
+  const workspaceValue = workspaceSource && workspaceSource !== 'defaults'
+    ? config.session.workspace
+    : config.bridge.defaultWorkspace;
+  const workspace = expandHomePath(workspaceValue || config.bridge.defaultWorkspace) || process.cwd();
+  return {
+    activeRuntime: config.runtime.agent === 'claude' ? 'claude' : 'codex',
+    codexModel: config.runtime.codex.model || '',
+    codexMode: codexModeFromConfig(config),
+    workspace,
+  };
+}
 
 /**
  * Resolve an inbound address to a ChannelChat.
@@ -47,14 +84,15 @@ export function resolve(address: ChannelAddress): ChannelChat {
     });
     return created;
   }
-  const channelDefaultTarget = store.getChannelDefaultTarget(address.channelType);
+  const defaultTargetChannelType = getConfiguredChannelInstance(address.channelType)?.id || address.channelType;
+  const channelDefaultTarget = store.getChannelDefaultTarget(defaultTargetChannelType);
   if (channelDefaultTarget) {
     try {
       const created = registry.bindChatToBridgeSession(address, channelDefaultTarget.bridgeSessionId);
       if (!created) {
         throw new Error('Session not found.');
       }
-      store.deleteChannelDefaultTarget(address.channelType);
+      store.deleteChannelDefaultTarget(defaultTargetChannelType);
       recordBindingChange(store, {
         action: 'auto_create_prebound',
         address,
@@ -64,7 +102,7 @@ export function resolve(address: ChannelAddress): ChannelChat {
       });
       return created;
     } catch (error) {
-      store.deleteChannelDefaultTarget(address.channelType);
+      store.deleteChannelDefaultTarget(defaultTargetChannelType);
       console.warn(
         `[channel-router] Failed to apply channel default target for ${address.channelType}: ${
           error instanceof Error ? error.message : String(error)
@@ -98,19 +136,23 @@ export function createBinding(
 ): ChannelChat {
   const { store } = getBridgeContext();
   const defaultProviderId = store.getSetting('bridge_default_provider_id') || '';
-  const defaultModel = store.getSetting('bridge_default_model') || '';
-  const defaultRuntime = store.getSetting('bridge_default_runtime') === 'claude' ? 'claude' : 'codex';
+  const defaults = resolveChannelSessionDefaults(address);
   const visibleSessionName = sessionName?.trim() || address.displayName?.trim() || `Bridge: ${address.chatId}`;
   const session = workingDirectory
     ? store.createSession(
         visibleSessionName,
-        defaultModel,
+        defaults.codexModel,
         undefined,
         workingDirectory,
-        undefined,
-        { activeRuntime: defaultRuntime },
+        defaults.codexMode,
+        { activeRuntime: defaults.activeRuntime },
       )
-    : getOrCreateDraftSession(store, address, { activeRuntime: defaultRuntime });
+    : getOrCreateDraftSession(store, address, {
+        activeRuntime: defaults.activeRuntime,
+        codexModel: defaults.codexModel,
+        codexMode: defaults.codexMode,
+        workingDirectory: defaults.workspace,
+      });
 
   if (defaultProviderId) {
     store.updateSessionProviderId(session.id, defaultProviderId);

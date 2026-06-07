@@ -1,15 +1,13 @@
 import type { BaseChannelAdapter } from '../../../channels/contracts.js';
-import type { BridgeSession, BridgeStore, ChannelChat, InboundMessage } from '../../../domain/index.js';
+import { createConfigService } from '../../../configuration/service.js';
+import type { BridgeStore, ChannelChat, InboundMessage } from '../../../domain/index.js';
 import {
-  getSessionCodexProvider,
   getSessionWorkingDirectory,
-  mergeSessionRuntimeUpdates,
-  setSessionCodexProviderUpdate,
-  setSessionTmuxAutoEnterUpdate,
 } from '../../../domain/session-runtime.js';
 import * as router from '../channel-router.js';
 import {
   ensureWorkingDirectoryExists,
+  getSessionCodexProviderOverride,
   resolveNewSessionWorkingDirectory,
 } from '../support.js';
 import { getSessionDisplayName } from '../display/session-title.js';
@@ -42,6 +40,20 @@ import {
   type SessionCommandDeps,
   type SessionCommandResult,
 } from './types.js';
+
+function setSessionCodexProviderToml(sessionId: string, provider: 'tmux' | 'pty'): void {
+  createConfigService({ migrate: false }).set(
+    { kind: 'session', sessionId },
+    { runtime: { codex: { provider } } },
+  );
+}
+
+function setSessionTmuxAutoEnterToml(sessionId: string, tmuxAutoEnter: boolean): void {
+  createConfigService({ migrate: false }).set(
+    { kind: 'session', sessionId },
+    { session: { tmuxAutoEnter } },
+  );
+}
 
 export async function handleClearSessionCommand(options: {
   adapter: BaseChannelAdapter;
@@ -117,18 +129,10 @@ export async function handleClearSessionCommand(options: {
   );
   let session = options.store.getSession(binding.bridgeSessionId);
   if (session) {
-    const updates: Partial<BridgeSession> = {};
-    const inheritedProvider = getSessionCodexProvider(previousSession);
+    const inheritedProvider = getSessionCodexProviderOverride(previousSession);
     if (inheritedProvider === 'tmux' || inheritedProvider === 'pty') {
-      Object.assign(updates, mergeSessionRuntimeUpdates(
-        updates,
-        setSessionCodexProviderUpdate(inheritedProvider),
-        ...(inheritedProvider === 'tmux' ? [setSessionTmuxAutoEnterUpdate(true)] : []),
-      ));
-    }
-    if (Object.keys(updates).length > 0) {
-      options.store.updateSession(session.id, updates);
-      session = options.store.getSession(session.id);
+      setSessionCodexProviderToml(session.id, inheritedProvider);
+      if (inheritedProvider === 'tmux') setSessionTmuxAutoEnterToml(session.id, true);
     }
   }
   let groupRenameStatus: string | null = null;
@@ -164,7 +168,7 @@ export async function handleClearSessionCommand(options: {
         ['群聊名称', groupRenameStatus],
         ['目录', formatCommandPath(getSessionWorkingDirectory(session) || workDir)],
         ['模式', formatSessionMode(binding, session)],
-        ['Provider', formatSessionCodexProvider(session)],
+        ['Provider', formatSessionCodexProvider(session, binding)],
       ],
       [
         previousBinding && runningReasons.length > 0

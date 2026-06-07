@@ -5,7 +5,7 @@ import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { DEFAULT_WORKSPACE_ROOT } from '../../../configuration/index.js';
+import { DEFAULT_WORKSPACE_ROOT } from '../../../configuration/paths.js';
 
 function runHarness(args: string[]): string {
   return execFileSync(
@@ -427,6 +427,7 @@ describe('unit::real-feishu-e2e-harness::session-management-command-plan', () =>
     const codelarkHome = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-real-feishu-harness-'));
     try {
       fs.writeFileSync(path.join(codelarkHome, 'config.json'), JSON.stringify({
+        schemaVersion: 1,
         channels: [{
           provider: 'feishu',
           enabled: true,
@@ -470,6 +471,7 @@ describe('unit::real-feishu-e2e-harness::session-management-command-plan', () =>
     try {
       fs.writeFileSync(path.join(codelarkHome, 'config.env'), [
         '# legacy live bridge config snapshot',
+        'CODELARK_ENABLED_CHANNELS=feishu',
         'CODELARK_FEISHU_APP_ID=cli_env_bot',
       ].join('\n'));
       const output = runHarness([
@@ -502,6 +504,7 @@ describe('unit::real-feishu-e2e-harness::session-management-command-plan', () =>
     const codelarkHome = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-real-feishu-harness-'));
     try {
       fs.writeFileSync(path.join(codelarkHome, 'config.json'), JSON.stringify({
+        schemaVersion: 1,
         channels: [{
           provider: 'feishu',
           enabled: true,

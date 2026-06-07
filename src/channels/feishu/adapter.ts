@@ -35,11 +35,11 @@ import type {
 } from '../../domain/index.js';
 import type { FileAttachment } from '../../domain/index.js';
 import type { ToolCallInfo } from '../../domain/index.js';
+import type { FeishuChannelConfig } from '../../channels/types.js';
 import {
   feishuSiteToApiBaseUrl,
   normalizeFeishuSite,
-  type FeishuChannelConfig,
-} from '../../configuration/index.js';
+} from './site.js';
 import {
   BaseChannelAdapter,
   registerAdapterFactory,
@@ -1931,10 +1931,7 @@ export class FeishuAdapter extends BaseChannelAdapter {
   }
 
   private shouldRequireMentionForGroup(): boolean {
-    if (this.channelConfig.requireMention !== undefined) {
-      return this.channelConfig.requireMention === true;
-    }
-    return getBridgeContext().store.getSetting('bridge_feishu_require_mention') === 'true';
+    return this.channelConfig.requireMention === true;
   }
 
   supportsStructuredStreamingUi(chatId: string): boolean {

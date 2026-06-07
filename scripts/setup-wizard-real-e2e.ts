@@ -108,19 +108,18 @@ async function main(): Promise<void> {
   const larkConfigPath = path.join(runtimeHome, '.lark-cli', 'config.json');
   const configEnvPath = path.join(codelarkHome, 'config.env');
   const configJsonPath = path.join(codelarkHome, 'config.json');
+  const configTomlPath = path.join(codelarkHome, 'config.toml');
 
   try {
     assertInside(os.tmpdir(), runRoot);
     fs.mkdirSync(runtimeHome, { recursive: true });
     fs.mkdirSync(codelarkHome, { recursive: true });
     fs.mkdirSync(workspaceRoot, { recursive: true });
-    fs.writeFileSync(configEnvPath, '# custom env survives setup\nCUSTOM_KEEP=1\n', { mode: 0o600 });
 
     process.env.HOME = runtimeHome;
     process.env.USERPROFILE = runtimeHome;
     process.env.CODELARK_HOME = codelarkHome;
 
-    const configuration = await import('../src/configuration/index.js');
     const setupWizard = await import('../src/entrypoints/setup-wizard.js');
 
     const credentials = {
@@ -151,10 +150,13 @@ async function main(): Promise<void> {
       throw new Error('simulated setup wizard real e2e failure after lark-cli sync');
     }
 
-    const current = configuration.loadConfig();
-    configuration.saveConfig(setupWizard.buildSetupConfig(current, credentials, 'codex', workspaceRoot));
+    const current = setupWizard.loadSetupConfig(codelarkHome);
+    setupWizard.saveSetupConfigToHomeToml(
+      setupWizard.buildSetupConfig(current, credentials, 'codex', workspaceRoot),
+      codelarkHome,
+    );
 
-    const savedConfig = configuration.loadConfig();
+    const savedConfig = setupWizard.loadSetupConfig(codelarkHome);
     const savedFeishu = savedConfig.channels?.find((channel) => channel.provider === 'feishu');
     if (savedConfig.runtime !== 'codex') throw new Error(`runtime mismatch: ${savedConfig.runtime}`);
     if (savedConfig.defaultWorkspaceRoot !== workspaceRoot) {
@@ -164,11 +166,9 @@ async function main(): Promise<void> {
     if (savedFeishu?.config.appSecret !== appSecret) throw new Error('config.v1 appSecret mismatch');
     if (savedFeishu?.config.site !== site) throw new Error('config.v1 site mismatch');
 
-    const envContent = fs.readFileSync(configEnvPath, 'utf-8');
-    if (!envContent.includes('CUSTOM_KEEP=1')) throw new Error('custom config.env line was not preserved');
-    if (!envContent.includes(`CODELARK_FEISHU_APP_ID=${appId}`)) throw new Error('config.env appId missing');
-    if (!envContent.includes(`CODELARK_FEISHU_APP_SECRET=${appSecret}`)) throw new Error('config.env appSecret missing');
-    if (!fs.existsSync(configJsonPath)) throw new Error('config.json missing');
+    if (!fs.existsSync(configTomlPath)) throw new Error('config.toml missing');
+    if (fs.existsSync(configEnvPath)) throw new Error('setup should not create config.env');
+    if (fs.existsSync(configJsonPath)) throw new Error('setup should not create config.json');
 
     const result = {
       ok: true,
@@ -178,6 +178,7 @@ async function main(): Promise<void> {
       larkConfigPath,
       configEnvPath,
       configJsonPath,
+      configTomlPath,
       larkSecretStorage: syncedEntry.secretStorage,
       cleanedRunRoot: !keepTemp,
     };

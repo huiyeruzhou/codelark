@@ -1,12 +1,8 @@
 import { buildCommandFields } from './presentation.js';
 import type { RuntimeSettingsCommandDeps } from './runtime-bootstrap.js';
 import type { BridgeSession, BridgeStore, ChannelChat } from '../../domain/index.js';
-import type { RuntimeProviderChoice } from '../../domain/session.js';
 import {
   getSessionActiveRuntime,
-  getSessionClaudeProvider,
-  getSessionCodexProvider,
-  getSessionRuntimeProvider,
   getSessionSystemPrompt,
   getSessionWorkingDirectory,
 } from '../../domain/session-runtime.js';
@@ -17,7 +13,10 @@ import {
   resolveEffectiveCodexProvider,
   resolveEffectiveRuntimeProvider,
   resolveEffectiveMode,
+  hasSessionClaudeProviderOverride,
+  hasSessionCodexProviderOverride,
 } from '../session/support.js';
+import { getGlobalStringConfig } from '../session/global-config.js';
 import { getCodexThreadId } from '../turn/turn-classifier.js';
 import { sessionLooksRunning } from './session-args.js';
 
@@ -29,7 +28,7 @@ export function formatSessionMode(binding: ChannelChat | null | undefined, sessi
 
 export function formatSessionRuntimeMode(binding: ChannelChat | null | undefined, session?: BridgeSession | null): string {
   if (getSessionActiveRuntime(session) === 'claude') {
-    return resolveClaudeRuntimeConfig(session).permissionMode === 'bypassPermissions' ? 'yolo' : 'normal';
+    return resolveClaudeRuntimeConfig(session, binding).permissionMode === 'bypassPermissions' ? 'yolo' : 'normal';
   }
   return formatSessionMode(binding, session);
 }
@@ -58,6 +57,7 @@ export function createRuntimeSessionForChat(options: {
   runtime: RuntimeName;
   baseSession: BridgeSession;
   chatId: string;
+  binding?: ChannelChat | null;
 }): BridgeSession {
   const workDir = getSessionWorkingDirectory(options.baseSession) || process.cwd();
   const systemPrompt = getSessionSystemPrompt(options.baseSession);
@@ -65,50 +65,51 @@ export function createRuntimeSessionForChat(options: {
   const baseName = rawBaseName.replace(/\s+\((?:Claude Code|Codex)\)$/u, '');
   return options.store.createSession(
     options.runtime === 'claude' ? `${baseName} (Claude Code)` : `${baseName} (Codex)`,
-    options.runtime === 'codex' ? (options.store.getSetting('bridge_default_model') || '') : '',
+    options.runtime === 'codex' ? (getGlobalStringConfig('runtime.codex.model') || '') : '',
     systemPrompt,
     workDir,
-    options.runtime === 'codex' ? resolveEffectiveMode(null, options.baseSession) : undefined,
+    options.runtime === 'codex' ? resolveEffectiveMode(options.binding, options.baseSession) : undefined,
     { activeRuntime: options.runtime },
   );
 }
 
-export function formatSessionCodexProvider(session?: BridgeSession | null): string {
-  const effective = resolveEffectiveCodexProvider(session);
-  return getSessionCodexProvider(session)
+export function formatSessionCodexProvider(session?: BridgeSession | null, binding?: ChannelChat | null): string {
+  const effective = resolveEffectiveCodexProvider(session, binding);
+  return hasSessionCodexProviderOverride(session)
     ? effective
     : `${effective} (全局默认)`;
 }
 
-export function formatSessionClaudeProvider(session?: BridgeSession | null): string {
-  const effective = resolveEffectiveClaudeProvider(session);
-  return getSessionClaudeProvider(session)
+export function formatSessionClaudeProvider(session?: BridgeSession | null, binding?: ChannelChat | null): string {
+  const effective = resolveEffectiveClaudeProvider(session, binding);
+  return hasSessionClaudeProviderOverride(session)
     ? effective
     : `${effective} (全局默认)`;
 }
 
-export function formatSessionRuntimeProvider(session?: BridgeSession | null): string {
-  const effective = resolveEffectiveRuntimeProvider(session);
-  return getSessionRuntimeProvider(session)
-    ? effective.provider
-    : `${effective.provider} (全局默认)`;
+export function formatSessionRuntimeProvider(session?: BridgeSession | null, binding?: ChannelChat | null): string {
+  const effective = resolveEffectiveRuntimeProvider(session, binding);
+  const hasOverride = effective.runtime === 'claude'
+    ? hasSessionClaudeProviderOverride(session)
+    : hasSessionCodexProviderOverride(session);
+  return hasOverride ? effective.provider : `${effective.provider} (全局默认)`;
 }
 
-export function isTuiProviderSession(session?: BridgeSession | null): boolean {
-  const { provider } = resolveEffectiveRuntimeProvider(session);
+export function isTuiProviderSession(session?: BridgeSession | null, binding?: ChannelChat | null): boolean {
+  const { provider } = resolveEffectiveRuntimeProvider(session, binding);
   return provider === 'tmux' || provider === 'pty';
 }
 
 export function buildTuiProviderRuntimeOptionBlockedResponse(commandLabel: string, provider: string, markdown: boolean): string {
   const restartNote = provider === 'tmux'
-    ? '当前是 tmux Provider；请先 `/stop`，再发送 `/p tmux` 重启 TUI，让新设置从下一轮生效。若要退出 TUI Provider，可停止后发送 `/provider sdk`。'
+    ? '当前是 tmux Provider；请先 `/stop`，再发送 `/p tmux` 重启 Codex TUI，让新设置从下一轮生效。若要退出 TUI Provider，可停止后发送 `/provider sdk`。'
     : `请先 \`/stop\`，再发送 \`/provider ${provider}\` 重启 ${provider} Provider，让新设置从下一轮生效。`;
   return buildCommandFields(
     `当前是 ${provider} Provider`,
     [['命令', commandLabel]],
     [
-      'session-level runtime 设置无法影响已经启动的 TUI 终端。',
-      '也可以直接在 TUI 里使用内置 slash 命令调整当前运行中的终端会话。',
+      'session-level Codex runtime 设置无法影响已经启动的 Codex TUI 终端。',
+      '也可以直接在 Codex TUI 里使用内置 slash 命令调整当前运行中的终端会话。',
       restartNote,
     ],
     markdown,
@@ -134,7 +135,7 @@ export function buildRuntimeSwitchWhileRunningResponse(params: {
     '请先发送 `/stop` 停止当前对话，再重新执行切换命令；已保存的常规 runtime 设置只会从下一轮请求开始生效。',
   ];
   if (params.provider === 'tmux') {
-    notes.push('tmux Provider 需要发送 `/p tmux` 重启 TUI，才能确保和底层 JSONL 会话一致。');
+    notes.push('tmux Provider 需要发送 `/p tmux` 重启 Codex TUI，才能确保和底层 JSONL 会话一致。');
   }
   return buildCommandFields(
     '请先停止当前对话',

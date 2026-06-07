@@ -115,9 +115,6 @@ case "${1:-help}" in
       exit 1
     fi
 
-    # Source config.env BEFORE clean_env so CODELARK_* flags are available.
-    [ -f "$CODELARK_HOME/config.env" ] && set -a && source "$CODELARK_HOME/config.env" && set +a
-
     clean_env
     echo "Starting bridge..."
     supervisor_start

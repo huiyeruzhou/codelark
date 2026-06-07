@@ -83,9 +83,9 @@ Codex thread 可以来自不同入口：
 字段收敛：
 
 - 一个 IM chat 只有一个 ChannelChat，一个 BridgeSession 也只保留一个聊天绑定。
-- 删除旧 `workingDirectory`、`model`、`mode`、`chatDisplayName`；这些运行时和展示字段归属 `BridgeSession`。
+- 删除旧 `workingDirectory`、`model`、`mode`、`chatDisplayName`；会话配置覆盖归属 scoped TOML，运行身份和展示状态归属 `BridgeSession`。
 - ChannelChat 不再缓存 Codex thread id。
-- 所有 thread id 读取都必须从 `store.getSession(channelChat.bridgeSessionId)?.codex_thread_id` 获取。
+- 所有 thread id 读取都必须从 `store.getSession(channelChat.bridgeSessionId)?.runtime.codex.threadId` 获取。
 
 ### IMChannel
 
@@ -135,7 +135,9 @@ Codex thread 可以来自不同入口：
 
 其它模块也有独立 JSON 状态文件：
 
-- `config.json`：结构化配置文件。
+- `config.toml`：全局主配置文件。
+- `config/sessions/`、`config/channels/`：Session / Channel 级 TOML 覆盖。
+- `config.json` / `config.env`：v1 迁移输入，迁移成功后归档，不再作为运行时配置来源。
 - `ui-session-meta.json`：旧 UI session 名称元数据；启动迁移会合并进 `sessions.json.name` 并删除该文件。
 - `thread-table-messages.json`：线程表格消息置顶/展示记录。
 - `runtime/status.json`、`runtime/ui-server.json`：服务运行状态。

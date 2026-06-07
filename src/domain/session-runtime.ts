@@ -8,10 +8,13 @@ import type {
   RuntimeProviderChoice,
   RuntimeProviderIdentity,
 } from './session.js';
+import { createConfigService } from '../configuration/service.js';
+import type { ConfigPath } from '../configuration/fields.js';
 
 export type BridgeSessionRuntimeUpdate = BridgeSessionUpdate;
 
 type SessionRuntimeLike = {
+  id?: string;
   runtime?: {
     activeRuntime?: BridgeSessionRuntimeState['activeRuntime'];
     codex?: Omit<Partial<BridgeSessionCodexRuntimeState>, 'threadId' | 'title' | 'model'> & {
@@ -41,6 +44,15 @@ export function isRuntimeProviderChoice(value: unknown): value is RuntimeProvide
   return value === 'sdk' || value === 'pty' || value === 'tmux';
 }
 
+function getSessionTomlOverride<T>(session: SessionRuntimeLike | null | undefined, path: ConfigPath): T | undefined {
+  if (!session?.id) return undefined;
+  const resolved = createConfigService({ migrate: false }).resolve(path, {
+    kind: 'session',
+    sessionId: session.id,
+  });
+  return resolved.source === 'session' ? resolved.value as T : undefined;
+}
+
 export function getSessionCodexThreadId(session: SessionRuntimeLike | null | undefined): string | undefined {
   if (isClaudeRuntime(session)) return undefined;
   return trimOrUndefined(session?.runtime?.codex?.threadId);
@@ -58,35 +70,47 @@ export function getSessionCodexTitle(session: SessionRuntimeLike | null | undefi
 
 export function getSessionCodexModel(session: SessionRuntimeLike | null | undefined): string | undefined {
   if (isClaudeRuntime(session)) return undefined;
-  return trimOrUndefined(session?.runtime?.codex?.model);
+  return trimOrUndefined(getSessionTomlOverride<string>(session, 'runtime.codex.model'));
 }
 
 export function getSessionCodexMode(session: SessionRuntimeLike | null | undefined): BridgeSessionCodexRuntimeState['mode'] | undefined {
   if (isClaudeRuntime(session)) return undefined;
-  return session?.runtime?.codex?.mode;
+  const mode = getSessionTomlOverride<'off' | 'on' | 'yolo'>(session, 'runtime.codex.yoloMode');
+  if (mode === 'on' || mode === 'yolo') return 'yolo';
+  if (mode === 'off') return 'normal';
+  return undefined;
 }
 
 export function getSessionCodexProvider(session: SessionRuntimeLike | null | undefined): BridgeSessionCodexRuntimeState['provider'] | undefined {
   if (isClaudeRuntime(session)) return undefined;
-  const provider = session?.runtime?.codex?.provider;
+  const provider = getSessionTomlOverride<string>(session, 'runtime.codex.provider');
   return isRuntimeProviderChoice(provider) ? provider : undefined;
 }
 
 export function getSessionCodexSandboxMode(session: SessionRuntimeLike | null | undefined): BridgeSessionCodexRuntimeState['sandboxMode'] | undefined {
   if (isClaudeRuntime(session)) return undefined;
-  return session?.runtime?.codex?.sandboxMode;
+  const sandboxMode = getSessionTomlOverride<string>(session, 'runtime.codex.sandboxMode');
+  return sandboxMode === 'read-only' || sandboxMode === 'workspace-write' || sandboxMode === 'danger-full-access'
+    ? sandboxMode
+    : undefined;
 }
 
 export function getSessionCodexNetworkAccess(session: SessionRuntimeLike | null | undefined): boolean | undefined {
   if (isClaudeRuntime(session)) return undefined;
-  return typeof session?.runtime?.codex?.networkAccess === 'boolean'
-    ? session.runtime.codex.networkAccess
-    : undefined;
+  const networkAccess = getSessionTomlOverride<boolean>(session, 'runtime.codex.networkAccess');
+  return typeof networkAccess === 'boolean' ? networkAccess : undefined;
 }
 
 export function getSessionCodexReasoningEffort(session: SessionRuntimeLike | null | undefined): BridgeSessionCodexRuntimeState['reasoningEffort'] | undefined {
   if (isClaudeRuntime(session)) return undefined;
-  return session?.runtime?.codex?.reasoningEffort;
+  const reasoningEffort = getSessionTomlOverride<string>(session, 'runtime.codex.reasoningEffort');
+  return reasoningEffort === 'minimal'
+    || reasoningEffort === 'low'
+    || reasoningEffort === 'medium'
+    || reasoningEffort === 'high'
+    || reasoningEffort === 'xhigh'
+    ? reasoningEffort
+    : undefined;
 }
 
 export function getSessionClaudeSessionId(session: SessionRuntimeLike | null | undefined): string | undefined {
@@ -101,12 +125,12 @@ export function getSessionClaudeCwd(session: SessionRuntimeLike | null | undefin
 
 export function getSessionClaudeModel(session: SessionRuntimeLike | null | undefined): string | undefined {
   if (!isClaudeRuntime(session)) return undefined;
-  return trimOrUndefined(session?.runtime?.claude?.model);
+  return trimOrUndefined(getSessionTomlOverride<string>(session, 'runtime.claude.model'));
 }
 
 export function getSessionClaudeProvider(session: SessionRuntimeLike | null | undefined): BridgeSessionClaudeRuntimeState['provider'] | undefined {
   if (!isClaudeRuntime(session)) return undefined;
-  const provider = session?.runtime?.claude?.provider;
+  const provider = getSessionTomlOverride<string>(session, 'runtime.claude.provider');
   return isRuntimeProviderChoice(provider) ? provider : undefined;
 }
 
@@ -115,7 +139,9 @@ export function getSessionRuntimeProvider(session: SessionRuntimeLike | null | u
 }
 
 export function getSessionRuntimeProviderIdentity(session: SessionRuntimeLike | null | undefined): RuntimeProviderIdentity | undefined {
-  const provider = getSessionRuntimeProvider(session);
+  const provider = getSessionRuntimeProvider(session)
+    || (isClaudeRuntime(session) ? session?.runtime?.claude?.provider : session?.runtime?.codex?.provider);
+  if (!isRuntimeProviderChoice(provider)) return undefined;
   if (!provider) return undefined;
   return `${isClaudeRuntime(session) ? 'claude' : 'codex'}:${provider}`;
 }
@@ -129,20 +155,37 @@ export function buildRuntimeProviderIdentity(
 
 export function getSessionClaudePermissionMode(session: SessionRuntimeLike | null | undefined): BridgeSessionClaudeRuntimeState['permissionMode'] | undefined {
   if (!isClaudeRuntime(session)) return undefined;
-  return session?.runtime?.claude?.permissionMode;
+  const permissionMode = getSessionTomlOverride<string>(session, 'runtime.claude.permissionMode');
+  return permissionMode === 'default'
+    || permissionMode === 'acceptEdits'
+    || permissionMode === 'bypassPermissions'
+    || permissionMode === 'plan'
+    ? permissionMode
+    : undefined;
 }
 
 export function getSessionClaudeReasoningEffort(session: SessionRuntimeLike | null | undefined): BridgeSessionClaudeRuntimeState['reasoningEffort'] | undefined {
   if (!isClaudeRuntime(session)) return undefined;
-  return session?.runtime?.claude?.reasoningEffort;
+  const reasoningEffort = getSessionTomlOverride<string>(session, 'runtime.claude.reasoningEffort');
+  return reasoningEffort === 'low'
+    || reasoningEffort === 'medium'
+    || reasoningEffort === 'high'
+    || reasoningEffort === 'xhigh'
+    || reasoningEffort === 'max'
+    ? reasoningEffort
+    : undefined;
 }
 
 export function getSessionTmuxSessionName(session: SessionRuntimeLike | null | undefined): string | undefined {
+  return trimOrUndefined(getSessionTomlOverride<string>(session, 'session.tmuxSessionName'));
+}
+
+export function getSessionRuntimeTmuxSessionName(session: SessionRuntimeLike | null | undefined): string | undefined {
   return trimOrUndefined(session?.runtime?.general?.tmuxSessionName);
 }
 
 export function getSessionWorkingDirectory(session: SessionRuntimeLike | null | undefined): string | undefined {
-  return trimOrUndefined(session?.runtime?.general?.workingDirectory);
+  return trimOrUndefined(getSessionTomlOverride<string>(session, 'session.workspace'));
 }
 
 export function getSessionSystemPrompt(session: SessionRuntimeLike | null | undefined): string | undefined {
@@ -150,19 +193,19 @@ export function getSessionSystemPrompt(session: SessionRuntimeLike | null | unde
 }
 
 export function getSessionTmuxCaptureLines(session: SessionRuntimeLike | null | undefined): number | undefined {
-  return session?.runtime?.general?.captureLines;
+  return getSessionTomlOverride<number>(session, 'session.tmuxCaptureLines');
 }
 
 export function getSessionTmuxAutoEnter(session: SessionRuntimeLike | null | undefined): boolean | undefined {
-  return typeof session?.runtime?.general?.autoEnter === 'boolean'
-    ? session.runtime.general.autoEnter
-    : undefined;
+  const tomlValue = getSessionTomlOverride<boolean>(session, 'session.tmuxAutoEnter');
+  if (typeof tomlValue === 'boolean') return tomlValue;
+  return undefined;
 }
 
 export function getSessionTmuxEchoInput(session: SessionRuntimeLike | null | undefined): boolean | undefined {
-  return typeof session?.runtime?.general?.echoInput === 'boolean'
-    ? session.runtime.general.echoInput
-    : undefined;
+  const tomlValue = getSessionTomlOverride<boolean>(session, 'session.tmuxEchoInput');
+  if (typeof tomlValue === 'boolean') return tomlValue;
+  return undefined;
 }
 
 export function materializeBridgeSessionRuntime(rawSession: BridgeSession): BridgeSession {
@@ -191,10 +234,6 @@ export function materializeBridgeSessionRuntime(rawSession: BridgeSession): Brid
   return materialized;
 }
 
-export function setSessionCodexModeUpdate(mode: BridgeSessionCodexRuntimeState['mode']): BridgeSessionRuntimeUpdate {
-  return { runtime: { codex: { mode } } };
-}
-
 export function setSessionActiveRuntimeUpdate(activeRuntime: BridgeSessionRuntimeState['activeRuntime']): BridgeSessionRuntimeUpdate {
   return { runtime: { activeRuntime } };
 }
@@ -205,10 +244,6 @@ export function setSessionCodexThreadIdUpdate(threadId: string | undefined): Bri
 
 export function setSessionCodexTitleUpdate(title: string | undefined): BridgeSessionRuntimeUpdate {
   return { runtime: { codex: { title } } };
-}
-
-export function setSessionCodexModelUpdate(model: string | undefined): BridgeSessionRuntimeUpdate {
-  return { runtime: { codex: { model } } };
 }
 
 export function setSessionClaudeSessionIdUpdate(sessionId: string | undefined): BridgeSessionRuntimeUpdate {
@@ -222,12 +257,25 @@ export function setSessionClaudeIdentityUpdate(
   return { runtime: { activeRuntime: 'claude', claude: { sessionId, cwd } } };
 }
 
-export function setSessionClaudeModelUpdate(model: string | undefined): BridgeSessionRuntimeUpdate {
-  return { runtime: { activeRuntime: 'claude', claude: { model } } };
+export function setSessionSystemPromptUpdate(systemPrompt: string | undefined): BridgeSessionRuntimeUpdate {
+  return { runtime: { general: { systemPrompt } } };
 }
 
-export function setSessionClaudeProviderUpdate(provider: BridgeSessionClaudeRuntimeState['provider'] | undefined): BridgeSessionRuntimeUpdate {
-  return { runtime: { activeRuntime: 'claude', claude: { provider } } };
+export function setSessionCodexTmuxProviderUpdate(options: {
+  tmuxSessionName: string;
+  autoEnter?: boolean;
+  threadId?: string;
+}): BridgeSessionRuntimeUpdate {
+  return {
+    runtime: {
+      codex: {
+        ...(options.threadId ? { threadId: options.threadId } : {}),
+      },
+      general: {
+        tmuxSessionName: options.tmuxSessionName,
+      },
+    },
+  };
 }
 
 export function setSessionClaudeTmuxProviderUpdate(options: {
@@ -250,81 +298,6 @@ export function setSessionClaudeTmuxProviderUpdate(options: {
       },
     },
   };
-}
-
-export function setSessionClaudePermissionModeUpdate(permissionMode: BridgeSessionClaudeRuntimeState['permissionMode']): BridgeSessionRuntimeUpdate {
-  return { runtime: { activeRuntime: 'claude', claude: { permissionMode } } };
-}
-
-export function setSessionClaudeReasoningEffortUpdate(reasoningEffort: BridgeSessionClaudeRuntimeState['reasoningEffort'] | undefined): BridgeSessionRuntimeUpdate {
-  return { runtime: { activeRuntime: 'claude', claude: { reasoningEffort } } };
-}
-
-export function setSessionWorkingDirectoryUpdate(workingDirectory: string | undefined): BridgeSessionRuntimeUpdate {
-  return { runtime: { general: { workingDirectory } } };
-}
-
-export function setSessionSystemPromptUpdate(systemPrompt: string | undefined): BridgeSessionRuntimeUpdate {
-  return { runtime: { general: { systemPrompt } } };
-}
-
-export function setSessionCodexReasoningEffortUpdate(reasoningEffort: BridgeSessionCodexRuntimeState['reasoningEffort']): BridgeSessionRuntimeUpdate {
-  return { runtime: { codex: { reasoningEffort } } };
-}
-
-export function setSessionCodexProviderUpdate(provider: BridgeSessionCodexRuntimeState['provider']): BridgeSessionRuntimeUpdate {
-  return { runtime: { codex: { provider } } };
-}
-
-export function setSessionCodexSandboxModeUpdate(sandboxMode: BridgeSessionCodexRuntimeState['sandboxMode']): BridgeSessionRuntimeUpdate {
-  return { runtime: { codex: { sandboxMode } } };
-}
-
-export function clearSessionCodexSandboxModeUpdate(): BridgeSessionRuntimeUpdate {
-  return { runtime: { codex: { sandboxMode: undefined } } };
-}
-
-export function setSessionCodexNetworkAccessUpdate(networkAccess: boolean): BridgeSessionRuntimeUpdate {
-  return { runtime: { codex: { networkAccess } } };
-}
-
-export function clearSessionCodexNetworkAccessUpdate(): BridgeSessionRuntimeUpdate {
-  return { runtime: { codex: { networkAccess: undefined } } };
-}
-
-export function setSessionCodexTmuxProviderUpdate(options: {
-  tmuxSessionName: string;
-  autoEnter?: boolean;
-  threadId?: string;
-}): BridgeSessionRuntimeUpdate {
-  return {
-    runtime: {
-      codex: {
-        provider: 'tmux',
-        ...(options.threadId ? { threadId: options.threadId } : {}),
-      },
-      general: {
-        tmuxSessionName: options.tmuxSessionName,
-        ...(typeof options.autoEnter === 'boolean' ? { autoEnter: options.autoEnter } : {}),
-      },
-    },
-  };
-}
-
-export function setSessionTmuxSessionNameUpdate(tmuxSessionName: string): BridgeSessionRuntimeUpdate {
-  return { runtime: { general: { tmuxSessionName } } };
-}
-
-export function setSessionTmuxCaptureLinesUpdate(captureLines: number): BridgeSessionRuntimeUpdate {
-  return { runtime: { general: { captureLines } } };
-}
-
-export function setSessionTmuxAutoEnterUpdate(autoEnter: boolean): BridgeSessionRuntimeUpdate {
-  return { runtime: { general: { autoEnter } } };
-}
-
-export function setSessionTmuxEchoInputUpdate(echoInput: boolean): BridgeSessionRuntimeUpdate {
-  return { runtime: { general: { echoInput } } };
 }
 
 export function mergeSessionRuntimeUpdates(...updates: BridgeSessionRuntimeUpdate[]): BridgeSessionRuntimeUpdate {

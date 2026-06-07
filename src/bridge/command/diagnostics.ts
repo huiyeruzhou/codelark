@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
-import { loadConfig, saveConfig } from '../../configuration/index.js';
+import { createConfigService } from '../../configuration/service.js';
 import { readConfiguredCodexModel } from '../../runtime/codex/models.js';
 import { listBindingsForChat } from '../session/registry.js';
 import {
@@ -49,6 +49,7 @@ import {
   formatSessionMode,
   resolveLocalCodexThreadId,
 } from './runtime-settings.js';
+import { getGlobalCodexModel } from '../session/global-config.js';
 import { stripLegacySessionPrefix } from '../session/display/session-title.js';
 import { resolveSessionTranscriptFile } from '../session/transcript-source.js';
 import { buildCommandCallbackData, buildThreadCardUpdateKey } from './callbacks.js';
@@ -238,16 +239,16 @@ export function handleCurrentCommand(options: {
     || (codexThreadId ? getCodexSessionByThreadIdSafe(codexThreadId, 'current codex title')?.title : '')
     || '';
   const sessionName = session.name?.trim() ? stripLegacySessionPrefix(session.name) : '';
-  const claudeConfig = activeRuntime === 'claude' ? resolveClaudeRuntimeConfig(session) : null;
-  const sandboxMode = activeRuntime === 'claude' ? '' : resolveEffectiveSandboxMode(session);
-  const networkAccess = activeRuntime === 'claude' ? undefined : resolveEffectiveNetworkAccess(session);
-  const reasoningEffort = activeRuntime === 'claude' ? '' : resolveEffectiveReasoningEffort(session);
+  const claudeConfig = activeRuntime === 'claude' ? resolveClaudeRuntimeConfig(session, binding) : null;
+  const sandboxMode = activeRuntime === 'claude' ? '' : resolveEffectiveSandboxMode(session, binding);
+  const networkAccess = activeRuntime === 'claude' ? undefined : resolveEffectiveNetworkAccess(session, binding);
+  const reasoningEffort = activeRuntime === 'claude' ? '' : resolveEffectiveReasoningEffort(session, binding);
   const currentModel = activeRuntime === 'claude'
     ? claudeConfig?.model || 'default'
     : resolveDisplayedModel(
       binding,
       session,
-      options.store.getSetting('default_model'),
+      getGlobalCodexModel(),
       readConfiguredCodexModel(),
     );
   const chatBindingCount = listBindingsForChat(options.store, options.msg.address.channelType, options.msg.address.chatId).length;
@@ -262,7 +263,7 @@ export function handleCurrentCommand(options: {
       ]
     : [
         ['模式', formatSessionMode(binding, session)],
-        ['Provider', formatSessionCodexProvider(session)],
+        ['Provider', formatSessionCodexProvider(session, binding)],
         ['当前模型', formatDisplayedModel(currentModel)],
         ['文件系统权限', sandboxMode],
         ['网络访问', formatNetworkAccess(networkAccess ?? false)],
@@ -325,10 +326,10 @@ export function buildCurrentCommandRichCard(options: {
     || (codexThreadId ? getCodexSessionByThreadIdSafe(codexThreadId, 'current card codex title')?.title : '')
     || '';
   const sessionName = session.name?.trim() ? stripLegacySessionPrefix(session.name) : '';
-  const claudeConfig = activeRuntime === 'claude' ? resolveClaudeRuntimeConfig(session) : null;
+  const claudeConfig = activeRuntime === 'claude' ? resolveClaudeRuntimeConfig(session, binding) : null;
   const currentModel = activeRuntime === 'claude'
     ? claudeConfig?.model || 'default'
-    : resolveDisplayedModel(binding, session, options.store.getSetting('default_model'), readConfiguredCodexModel());
+    : resolveDisplayedModel(binding, session, getGlobalCodexModel(), readConfiguredCodexModel());
   const statusColor = session.runtime_status === 'running' || session.runtime_status === 'queued' ? 'yellow' : 'green';
   const mirrorColor = session.mirror_status === 'watching' ? 'blue' : 'grey';
   const sessionKind = session.session_type === 'draft' ? '临时草稿线程' : '普通会话';
@@ -383,7 +384,7 @@ export function buildCurrentCommandRichCard(options: {
         elementId: 'clk_mode',
         label: 'mode',
         placeholder: formatSessionMode(binding, session),
-        selectedCallbackData: formatSessionMode(binding, session),
+      selectedCallbackData: formatSessionMode(binding, session),
         options: [
           { text: 'normal', callbackData: 'normal' },
           { text: 'yolo', callbackData: 'yolo' },
@@ -393,14 +394,14 @@ export function buildCurrentCommandRichCard(options: {
       elementId: 'clk_provider',
       label: 'provider',
       placeholder: 'sdk/pty/tmux',
-      selectedCallbackData: formatSessionCodexProvider(session),
+      selectedCallbackData: formatSessionCodexProvider(session, binding),
       options: [{ text: 'sdk', callbackData: 'sdk' }, { text: 'pty', callbackData: 'pty' }, { text: 'tmux', callbackData: 'tmux' }],
     },
     {
       elementId: 'clk_reasoning',
       label: 'reasoning',
-      placeholder: resolveEffectiveReasoningEffort(session),
-      selectedCallbackData: resolveEffectiveReasoningEffort(session),
+      placeholder: resolveEffectiveReasoningEffort(session, binding),
+      selectedCallbackData: resolveEffectiveReasoningEffort(session, binding),
       options: [
         { text: 'default', callbackData: 'default' },
         { text: 'low', callbackData: 'low' },
@@ -412,8 +413,8 @@ export function buildCurrentCommandRichCard(options: {
     {
       elementId: 'clk_sandbox',
       label: 'sandbox',
-      placeholder: resolveEffectiveSandboxMode(session),
-      selectedCallbackData: resolveEffectiveSandboxMode(session),
+      placeholder: resolveEffectiveSandboxMode(session, binding),
+      selectedCallbackData: resolveEffectiveSandboxMode(session, binding),
       options: [
         { text: 'default', callbackData: 'default' },
         { text: 'read-only', callbackData: 'read-only' },
@@ -424,8 +425,8 @@ export function buildCurrentCommandRichCard(options: {
     {
       elementId: 'clk_network',
       label: 'network',
-      placeholder: formatNetworkAccess(resolveEffectiveNetworkAccess(session)),
-      selectedCallbackData: resolveEffectiveNetworkAccess(session) ? 'on' : 'off',
+      placeholder: formatNetworkAccess(resolveEffectiveNetworkAccess(session, binding)),
+      selectedCallbackData: resolveEffectiveNetworkAccess(session, binding) ? 'on' : 'off',
       options: [
         { text: 'default', callbackData: 'default' },
         { text: 'on', callbackData: 'on' },
@@ -522,9 +523,15 @@ export async function handleHistoryCommand(options: {
       ].join('\n');
     }
     try {
-      const currentConfig = loadConfig();
-      saveConfig({ ...currentConfig, historyMessageLimit: nextLimit });
-      return `已将 /his msg 返回条数限制设置为 ${nextLimit}。`;
+      createConfigService({ migrate: false }).set({ kind: 'home' }, {
+        channels: [{
+          id: 'feishu-default',
+          config: {
+            historyMessageLimit: nextLimit,
+          },
+        }],
+      });
+      return `已将 /his msg 返回条数限制设置为 ${nextLimit}，配置已保存到 ~/.codelark/config.toml。`;
     } catch (error) {
       return `修改失败：${error instanceof Error ? error.message : String(error)}`;
     }

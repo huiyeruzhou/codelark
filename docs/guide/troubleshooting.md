@@ -11,12 +11,12 @@
 1. 运行本地 doctor 脚本，或查看工作台日志定位问题。
 2. 确认已安装 Node.js 24+：`node --version`。
 3. 确认 Codex CLI 可用：`codex --version`。
-4. 确认配置文件存在：`ls -la ~/.codelark/config.json ~/.codelark/config.env`。
+4. 确认配置文件存在：`ls -la ~/.codelark/config.toml`。
 5. 查看 `~/.codelark/logs/` 下的启动错误日志。
 
 **常见原因**：
 
-- `config.env` 缺失或内容无效。打开本地工作台并保存一份有效配置。
+- `config.toml` 缺失或内容无效。打开本地工作台并保存一份有效配置；旧版 `config.json` / `config.env` 会在启动迁移后归档。
 - Node.js 未安装或版本不正确。安装 Node.js 24+。
 - 端口或资源冲突。检查是否已有另一个 bridge 实例正在运行。
 - bridge 实例已经死亡，但是 PID 文件仍然存在。可以先尝试 `codelark stop`，仍失败时手动删除 `~/.codelark/runtime/bridge.pid` 后重新启动。

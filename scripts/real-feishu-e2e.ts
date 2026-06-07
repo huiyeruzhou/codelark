@@ -9,7 +9,12 @@ import path from 'node:path';
 import { promisify } from 'node:util';
 import { WebSocketServer } from 'ws';
 
-import { DEFAULT_WORKSPACE_ROOT, feishuSiteToApiBaseUrl, type ClaudeExecutable, type FeishuSite } from '../src/configuration/index.js';
+import type { FeishuSite } from '../src/channels/types.js';
+import { feishuSiteToApiBaseUrl } from '../src/channels/feishu/site.js';
+import { createConfigService } from '../src/configuration/service.js';
+import { DEFAULT_WORKSPACE_ROOT } from '../src/configuration/paths.js';
+import type { ClaudeExecutable } from '../src/runtime/options.js';
+import type { ConfigPatch } from '../src/configuration/schema.js';
 import {
   basicDialogueStreamCardCheckpointIssues,
   collectRealE2eDump,
@@ -1288,28 +1293,13 @@ function isPidAlive(pid: unknown): boolean {
 }
 
 function listConfiguredFeishuAppIds(codelarkHome: string): string[] {
-  const configPath = path.join(codelarkHome, 'config.json');
-  const config = readJsonIfExists<{
-    channels?: Array<{ provider?: string; enabled?: boolean; config?: { appId?: string } }>;
-  }>(configPath, {});
+  const config = createConfigService({ codelarkHome, env: {} }).snapshot().config;
   const appIds = new Set<string>();
-  for (const channel of config.channels || []) {
+  for (const channel of config.channels) {
     if (channel.provider !== 'feishu') continue;
     if (channel.enabled === false) continue;
     const appId = channel.config?.appId?.trim();
     if (appId) appIds.add(appId);
-  }
-  const envPath = path.join(codelarkHome, 'config.env');
-  try {
-    const content = fs.readFileSync(envPath, 'utf-8');
-    for (const line of content.split(/\r?\n/)) {
-      const parsed = parseEnvLine(line);
-      if (parsed?.key === 'CODELARK_FEISHU_APP_ID' && parsed.value.trim()) {
-        appIds.add(parsed.value.trim());
-      }
-    }
-  } catch {
-    // config.env is optional in v2 installs.
   }
   return [...appIds];
 }
@@ -4236,15 +4226,21 @@ function writeReport(report: unknown, outputPath: string): void {
 }
 
 function writeIsolatedBridgeConfig(options: CliOptions): void {
-  const timestamp = new Date().toISOString();
   fs.mkdirSync(options.codelarkHome, { recursive: true, mode: 0o700 });
   fs.mkdirSync(options.workDir, { recursive: true });
-  const config = {
-    schemaVersion: 1,
+  const config: ConfigPatch = {
+    schemaVersion: 2,
+    session: {
+      workspace: options.workDir,
+    },
+    bridge: {
+      defaultWorkspace: options.workDir,
+    },
     runtime: {
-      provider: 'codex',
+      agent: options.runtime,
       codex: {
-        ...(usesProxyBackedBasicDialogue(options) ? { defaultModel: options.codexModel } : {}),
+        ...(usesProxyBackedBasicDialogue(options) ? { model: options.codexModel } : {}),
+        provider: options.runtime === 'codex' ? options.provider : (process.env.CODELARK_DEFAULT_CODEX_PROVIDER || 'pty'),
         skipGitRepoCheck: true,
         sandboxMode: 'workspace-write',
         networkAccess: true,
@@ -4255,19 +4251,8 @@ function writeIsolatedBridgeConfig(options: CliOptions): void {
         executable: options.claudeExecutable,
         permissionMode: process.env.CODELARK_CLAUDE_PERMISSION_MODE || 'default',
         ...(process.env.CODELARK_CLAUDE_DEFAULT_MODEL
-          ? { defaultModel: process.env.CODELARK_CLAUDE_DEFAULT_MODEL }
+          ? { model: process.env.CODELARK_CLAUDE_DEFAULT_MODEL }
           : {}),
-      },
-      bridgeControl: {
-        defaultCodexProvider: options.runtime === 'codex'
-          ? options.provider
-          : (process.env.CODELARK_DEFAULT_CODEX_PROVIDER || 'pty'),
-      },
-      bridge: {
-        defaultWorkspaceRoot: options.workDir,
-        historyMessageLimit: 8,
-        streamStatusIdleStartSeconds: 30,
-        streamStatusCheckIntervalSeconds: 5,
       },
     },
     channels: [{
@@ -4275,23 +4260,20 @@ function writeIsolatedBridgeConfig(options: CliOptions): void {
       alias: options.channelAlias,
       provider: 'feishu',
       enabled: true,
-      createdAt: timestamp,
-      updatedAt: timestamp,
       config: {
         appId: options.testFeishuAppId,
         appSecret: options.testFeishuAppSecret,
         site: options.feishuSite,
+        historyMessageLimit: 8,
+        streamStatusIdleStartSeconds: 30,
+        streamStatusCheckIntervalSeconds: 5,
         streamingEnabled: true,
         feedbackMarkdownEnabled: true,
         requireMention: false,
       },
     }],
   };
-  fs.writeFileSync(
-    path.join(options.codelarkHome, 'config.json'),
-    JSON.stringify(config, null, 2) + '\n',
-    { mode: 0o600 },
-  );
+  createConfigService({ codelarkHome: options.codelarkHome, env: {}, migrate: false }).replace({ kind: 'home' }, config);
 }
 
 function readJsonIfExists<T>(filePath: string, fallback: T): T {

@@ -2,7 +2,7 @@
 
 ## Credential Storage
 
-CodeLark credentials are stored in `~/.codelark/config.env` and the local runtime data under `~/.codelark/`.
+CodeLark credentials are stored in `~/.codelark/config.toml` and scoped TOML files under `~/.codelark/config/`. Legacy `config.json` / `config.env` files are migration inputs only and are not runtime configuration sources after migration.
 
 This repository never stores secrets in source control.
 

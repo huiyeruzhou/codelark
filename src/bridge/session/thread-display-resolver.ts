@@ -1,5 +1,8 @@
 import type { CodexSessionSummary } from '../../runtime/codex/session-index.js';
-import { getCodexSessionByThreadIdSafe } from './support.js';
+import {
+  getCodexSessionByThreadIdSafe,
+  resolveRuntimeMetadataConfig,
+} from './support.js';
 import {
   bridgeSessionExecutionProvider,
   buildCodexThreadDisplaySummary,
@@ -21,16 +24,11 @@ import type { ChannelChat } from '../../domain/channel.js';
 import {
   getSessionActiveRuntime,
   getSessionClaudeCwd,
-  getSessionClaudeModel,
-  getSessionClaudeReasoningEffort,
   getSessionClaudeSessionId,
-  getSessionCodexModel,
-  getSessionCodexReasoningEffort,
   getSessionCodexTitle,
   getSessionWorkingDirectory,
 } from '../../domain/session-runtime.js';
 import { getCodexThreadId } from '../turn/turn-classifier.js';
-import { normalizeReasoningEffort } from '../../configuration/runtime-options.js';
 
 export interface ThreadDisplayInfo {
   title: string;
@@ -69,19 +67,9 @@ export class ThreadDisplayService {
   private runtimeMetadata(
     session: ReturnType<BridgeStore['getSession']>,
     runtime: 'codex' | 'claude' = getSessionActiveRuntime(session) === 'claude' ? 'claude' : 'codex',
+    binding?: ChannelChat | null,
   ): Pick<ThreadDisplayInfo, 'reasoningEffort' | 'model'> {
-    if (runtime === 'claude') {
-      return {
-        reasoningEffort: getSessionClaudeReasoningEffort(session) || 'default',
-        model: getSessionClaudeModel(session) || this.store.getSetting('bridge_claude_default_model') || 'default',
-      };
-    }
-    return {
-      reasoningEffort: normalizeReasoningEffort(
-        getSessionCodexReasoningEffort(session) || this.store.getSetting('bridge_codex_reasoning_effort'),
-      ),
-      model: getSessionCodexModel(session) || this.store.getSetting('bridge_default_model') || 'default',
-    };
+    return resolveRuntimeMetadataConfig(session, runtime, binding);
   }
 
   bindingThreadId(binding: ChannelChat): string {
@@ -111,7 +99,7 @@ export class ThreadDisplayService {
       fallback: getSessionDisplayName(session, sessionWorkingDirectory) || binding.bridgeSessionId.slice(0, 8),
     });
     const codexSource = codexSession ? codexSessionSource(codexSession) : undefined;
-    const runtimeMetadata = this.runtimeMetadata(session, isClaude ? 'claude' : 'codex');
+    const runtimeMetadata = this.runtimeMetadata(session, isClaude ? 'claude' : 'codex', binding);
     return {
       title: formatResolvedThreadTitle(title, options),
       threadId,

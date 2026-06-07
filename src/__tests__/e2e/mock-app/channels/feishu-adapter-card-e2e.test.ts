@@ -114,8 +114,8 @@ async function withLocalCodexEnvironment<T>(fn: (params: {
   try {
     return await fn({ proxy, workDir });
   } finally {
-    fs.rmSync(workDir, { recursive: true, force: true });
-    fs.rmSync(codexHome, { recursive: true, force: true });
+    fs.rmSync(workDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+    fs.rmSync(codexHome, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     await proxy.close().catch(() => undefined);
     for (const [key, value] of Object.entries(previousEnv)) {
       if (value === undefined) delete process.env[key];
@@ -135,22 +135,10 @@ describe('feishu adapter card e2e', () => {
     await withLocalCodexEnvironment(async ({ proxy, workDir }) => {
       const calls: RecordedFeishuMessageCall[] = [];
       const store = initBridgeTestContext({
-        dynamicSettings: true,
         settings: makeBridgeSettings({
           bridge_default_model: 'gpt-5',
+          bridge_default_provider: 'sdk',
           bridge_default_mode: 'yolo',
-          bridge_channel_instances_json: JSON.stringify([{
-            id: 'feishu',
-            provider: 'feishu',
-            alias: '飞书',
-            enabled: true,
-            config: {
-              appId: 'app-id',
-              appSecret: 'app-secret',
-              streamingEnabled: false,
-              feedbackMarkdownEnabled: true,
-            },
-          }]),
         }),
         llm: new CodexProvider(new PendingPermissions()),
       });
@@ -175,21 +163,7 @@ describe('feishu adapter card e2e', () => {
     _testOnly.resetStateForTests();
     const calls: RecordedFeishuMessageCall[] = [];
     const store = initBridgeTestContext({
-      dynamicSettings: true,
-      settings: makeBridgeSettings({
-        bridge_channel_instances_json: JSON.stringify([{
-          id: 'feishu',
-          provider: 'feishu',
-          alias: '飞书',
-          enabled: true,
-          config: {
-            appId: 'app-id',
-            appSecret: 'app-secret',
-            streamingEnabled: false,
-            feedbackMarkdownEnabled: true,
-          },
-        }]),
-      }),
+      settings: makeBridgeSettings(),
     });
     const adapter = createRecordingFeishuAdapter(calls);
     registerAdapter(adapter);

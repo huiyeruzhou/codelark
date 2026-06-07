@@ -68,16 +68,15 @@ describe('SessionRegistryService', () => {
     assert.equal(materialized.runtime?.codex?.threadId, 'codex-thread-materialized');
     assert.equal(materialized.name, '');
     assert.equal(materialized.runtime?.codex?.title, 'Local Codex Thread');
-    assert.equal(materialized.runtime?.codex?.model, 'model-from-port');
+    assert.equal(materialized.runtime?.codex?.model, undefined);
 
     const renamed = registry.renameBridgeSession(materialized.id, 'Renamed BridgeSession');
     assert.equal(renamed.name, 'Renamed BridgeSession');
 
     const configured = registry.updateBridgeSessionConfig(materialized.id, {
-      runtime: { codex: { mode: 'yolo', provider: 'tmux' } },
+      runtime: { general: { systemPrompt: 'registry prompt' } },
     });
-    assert.equal(configured.runtime?.codex?.mode, 'yolo');
-    assert.equal(configured.runtime?.codex?.provider, 'tmux');
+    assert.equal(configured.runtime?.general?.systemPrompt, 'registry prompt');
 
     const deleted = registry.deleteBridgeSession(materialized.id);
     assert.equal(deleted.deleted.id, materialized.id);

@@ -36,11 +36,10 @@
 
 - `src/domain/session.ts`
   - `ClaudeProviderChoice = 'pty' | 'sdk' | 'tmux'`。
-- `src/configuration/index.ts`
-  - `ClaudeProviderChoice` 类型。
-  - `normalizeClaudeProviderChoice()` 接受 `tmux`。
-  - `serializeConfig()` 当前没有输出 `CODELARK_CLAUDE_PROVIDER`，这里应补上，否则 UI/配置保存后 tmux 默认 provider 无法落到 env。
-  - `CONFIG_KEYS` 已包含 `CODELARK_CLAUDE_PROVIDER`，读取路径也已有，只是 normalize 不接收 tmux。
+- `src/configuration/schema.ts` / `fields.ts` / `defaults.toml`
+  - `runtime.claude.provider` 接受 `tmux`。
+  - 默认 TOML 把 Claude provider 设为 `tmux`。
+  - `CODELARK_CLAUDE_PROVIDER` 继续通过字段注册表和 runtime projection 导出，不恢复旧 `configuration/index.ts`。
 - `src/domain/session-runtime.ts`
   - `getSessionClaudeProvider()` 接受 `tmux`。
   - `setSessionClaudeProviderUpdate()` 类型自然跟随。

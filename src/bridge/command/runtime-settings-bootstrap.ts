@@ -1,12 +1,14 @@
 import { bootstrapLocalCodexThread } from '../../runtime/codex/thread-bootstrap.js';
-import type { CodexReasoningEffort, CodexSandboxMode } from '../../configuration/index.js';
+import type { CodexReasoningEffort, CodexSandboxMode } from '../../runtime/options.js';
 import type { BridgeSession, ChannelChat } from '../../domain/index.js';
 import {
-  getSessionCodexModel,
   getSessionWorkingDirectory,
 } from '../../domain/session-runtime.js';
 import type { LLMProvider, SSEEvent } from '../../runtime/contracts.js';
-import { getCodexSessionByThreadIdSafe } from '../session/support.js';
+import {
+  getCodexSessionByThreadIdSafe,
+  resolveSessionRuntimeConfig,
+} from '../session/support.js';
 
 const BOOTSTRAP_THREAD_VISIBILITY_TIMEOUT_MS = 2_000;
 const BOOTSTRAP_THREAD_VISIBILITY_POLL_MS = 50;
@@ -116,7 +118,7 @@ export async function bootstrapCodexThreadWithSdk(
 ): Promise<string> {
   const abortController = new AbortController();
   let threadId = '';
-  const model = getSessionCodexModel(params.session);
+  const model = resolveSessionRuntimeConfig(params.binding, params.session).model;
   const stream = llm.streamChat({
     prompt: 'Initialize this Codex session and wait for the next instruction.',
     sessionId: params.session.id,
@@ -145,9 +147,10 @@ export async function bootstrapCodexThreadWithSdk(
 }
 
 export async function bootstrapCodexThreadLocally(params: BootstrapCodexThreadParams): Promise<string> {
+  const runtimeConfig = resolveSessionRuntimeConfig(params.binding, params.session);
   return bootstrapLocalCodexThread({
     bridgeSessionId: params.session.id,
-    model: getSessionCodexModel(params.session) || undefined,
+    model: runtimeConfig.model || undefined,
     workingDirectory: getSessionWorkingDirectory(params.session) || undefined,
     mode: params.mode,
     sandboxMode: params.sandboxMode,

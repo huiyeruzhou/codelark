@@ -5,8 +5,8 @@ import * as broker from '../permission/broker.js';
 import * as router from '../session/channel-router.js';
 import type { BridgeSession, BridgeStore } from '../../domain/index.js';
 import { sendTmuxInterrupt } from '../tmux/runtime.js';
-import { getSessionTmuxSessionName } from '../../domain/session-runtime.js';
 import { resolveEffectiveRuntimeProvider } from '../session/support.js';
+import { getSessionRuntimeTmuxSessionName } from '../../domain/session-runtime.js';
 import type { CommandThreadDisplay } from './thread-display.js';
 import type { ChannelChat, InboundMessage } from '../../domain/index.js';
 import { sessionLooksRunning } from '../session/command-use-cases/status-guards.js';
@@ -17,10 +17,13 @@ export interface StopCommandDeps {
   recordInteractiveHealthEnd?(sessionId: string, outcome: 'completed' | 'failed' | 'aborted', detail?: string): void;
 }
 
-function getStopTmuxInterruptTarget(session: BridgeSession | null | undefined): string | undefined {
+function getStopTmuxInterruptTarget(
+  session: BridgeSession | null | undefined,
+  binding?: ChannelChat | null,
+): string | undefined {
   if (!session) return undefined;
-  const tmuxSessionName = getSessionTmuxSessionName(session);
-  return resolveEffectiveRuntimeProvider(session).provider === 'tmux'
+  const tmuxSessionName = getSessionRuntimeTmuxSessionName(session);
+  return resolveEffectiveRuntimeProvider(session, binding).provider === 'tmux'
     && Boolean(tmuxSessionName)
     && sessionLooksRunning(session)
     ? tmuxSessionName
@@ -39,21 +42,20 @@ export async function handleStopCommand(options: {
   const session = options.store.getSession(binding.bridgeSessionId);
   const task = options.deps.getActiveTask(binding.bridgeSessionId);
   const looksRunning = sessionLooksRunning(session);
-  const tmuxInterruptTarget = getStopTmuxInterruptTarget(session);
+  const tmuxInterruptTarget = getStopTmuxInterruptTarget(session, binding);
   if (!task && tmuxInterruptTarget) {
     const command = await sendTmuxInterrupt(tmuxInterruptTarget);
-    const provider = resolveEffectiveRuntimeProvider(session);
+    const provider = resolveEffectiveRuntimeProvider(session, binding);
     const detail = `用户执行 /stop，已向 ${provider.identity} TUI 发送 C-c。`;
     options.deps.recordInteractiveHealthEnd?.(binding.bridgeSessionId, 'aborted', detail);
     return buildCommandFields(
       '已发送停止按键',
       [
         ['Provider', 'tmux'],
-        ['Runtime', provider.runtime],
         ['tmux session', tmuxInterruptTarget],
       ],
       [
-        `当前会话处于 ${provider.identity} Provider，且 mirror 显示任务仍在输出；\`/stop\` 已映射为向 TUI 发送 \`C-c\`。`,
+        '当前会话处于 tmux Provider，且 mirror 显示任务仍在输出；`/stop` 已映射为向 TUI 发送 `C-c`。',
         `底层命令：\`${command}\``,
       ],
       options.markdown,

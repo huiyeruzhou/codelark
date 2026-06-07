@@ -8,6 +8,7 @@ import {
   buildRuntimeStreamTags,
   buildStreamContextTags,
 } from '../../../shared/streaming-metadata.js';
+import { getGlobalDefaultChannelConfig } from '../../session/global-config.js';
 import { classifyInteractiveTurn } from '../turn-classifier.js';
 import type { BridgeTurnClassification } from '../turn-types.js';
 
@@ -96,18 +97,23 @@ export function resolveInteractiveTurnRuntimeSettings(
   const intervalMs = parseInt(readSetting(`${prefix}interval_ms`) || '', 10) || defaults.intervalMs;
   const minDeltaChars = parseInt(readSetting(`${prefix}min_delta_chars`) || '', 10) || defaults.minDeltaChars;
   const maxChars = parseInt(readSetting(`${prefix}max_chars`) || '', 10) || defaults.maxChars;
-  const idleStartSeconds = parseInt(readSetting('bridge_stream_status_idle_start_seconds') || '', 10);
-  const heartbeatSeconds = parseInt(readSetting('bridge_stream_status_check_interval_seconds') || '', 10);
+  const channelConfig = getGlobalDefaultChannelConfig();
+  const idleStartSeconds = channelConfig?.streamStatusIdleStartSeconds;
+  const heartbeatSeconds = channelConfig?.streamStatusCheckIntervalSeconds;
   return {
     stream: { intervalMs, minDeltaChars, maxChars },
     statusTiming: {
       idleStartMs: Math.max(
         0,
-        (Number.isFinite(idleStartSeconds) && idleStartSeconds > 0 ? idleStartSeconds : STREAM_STATUS_IDLE_START_MS / 1000) * 1000,
+        (typeof idleStartSeconds === 'number' && Number.isFinite(idleStartSeconds) && idleStartSeconds > 0
+          ? idleStartSeconds
+          : STREAM_STATUS_IDLE_START_MS / 1000) * 1000,
       ),
       heartbeatMs: Math.max(
         1_000,
-        (Number.isFinite(heartbeatSeconds) && heartbeatSeconds > 0 ? heartbeatSeconds : STREAM_STATUS_HEARTBEAT_MS / 1000) * 1000,
+        (typeof heartbeatSeconds === 'number' && Number.isFinite(heartbeatSeconds) && heartbeatSeconds > 0
+          ? heartbeatSeconds
+          : STREAM_STATUS_HEARTBEAT_MS / 1000) * 1000,
       ),
     },
   };

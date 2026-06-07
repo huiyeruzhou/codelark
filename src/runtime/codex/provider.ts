@@ -16,11 +16,11 @@ import type { ThreadEvent, ThreadItem } from '@openai/codex-sdk';
 import type { LLMProvider, StreamChatParams } from '../contracts.js';
 import type { PendingPermissions } from '../permission-gateway.js';
 import { sseEvent } from '../sse.js';
-import type { CodexReasoningEffort, CodexSandboxMode } from '../../configuration/index.js';
+import type { CodexReasoningEffort, CodexSandboxMode } from '../options.js';
 import {
   normalizeSandboxMode,
   parseReasoningEffort,
-} from '../../configuration/runtime-options.js';
+} from '../options.js';
 
 /** MIME → file extension for temp image files. */
 const MIME_EXT: Record<string, string> = {

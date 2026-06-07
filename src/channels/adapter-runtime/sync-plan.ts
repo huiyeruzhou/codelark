@@ -1,4 +1,4 @@
-import { isSupportedChannelProvider, type ChannelInstance } from '../../configuration/index.js';
+import { isSupportedChannelProvider, type RuntimeChannelInstance } from '../../channels/types.js';
 import type { AdapterRuntimeInstance } from '../contracts.js';
 
 export function stableFingerprintValue(value: unknown): unknown {
@@ -26,7 +26,7 @@ export function buildAdapterConfigFingerprint(instance: AdapterRuntimeInstance):
 }
 
 export function listEnabledAdapterInstances(
-  configuredChannels: ChannelInstance[],
+  configuredChannels: RuntimeChannelInstance[],
 ): AdapterRuntimeInstance[] {
   return configuredChannels
     .filter((channel) => channel.enabled && isSupportedChannelProvider(channel.provider))

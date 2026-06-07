@@ -6,10 +6,24 @@ import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 
-import { CONFIG_PATH, CONFIG_JSON_PATH, CODELARK_HOME, DEFAULT_WORKSPACE_ROOT, loadConfig, saveConfig } from '../../../../configuration/index.js';
+import { CODELARK_HOME, DEFAULT_WORKSPACE_ROOT } from '../../../../configuration/paths.js';
+import {
+  LEGACY_CONFIG_ENV_PATH as CONFIG_PATH,
+  LEGACY_CONFIG_JSON_PATH as CONFIG_JSON_PATH,
+} from '../../../../configuration/migrations/legacy/paths.js';
+import { createConfigService } from '../../../../configuration/service.js';
 import { JsonFileStore } from '../../../../storage/json-store.js';
 import { initBridgeContext } from '../../../../bridge/host/context.js';
 import { handleBridgeCommand } from '../../../../bridge/command/index.js';
+import {
+  resolveClaudeRuntimeConfig,
+  resolveDisplayedModel,
+  resolveEffectiveCodexProvider,
+  resolveEffectiveNetworkAccess,
+  resolveEffectiveMode,
+  resolveEffectiveReasoningEffort,
+  resolveEffectiveSandboxMode,
+} from '../../../../bridge/session/support.js';
 import { processMessage } from '../../../../bridge/turn/interactive/sdk-conversation-engine.js';
 import { consumeSseEvents } from '../../../../runtime/sse-stream-decoder.js';
 import { CodexRoutingProvider } from '../../../../runtime/codex/routing-provider.js';
@@ -43,17 +57,23 @@ import {
   getSessionClaudeReasoningEffort,
   getSessionCodexModel,
   getSessionCodexNetworkAccess,
+  getSessionCodexProvider,
   getSessionCodexReasoningEffort,
   getSessionCodexSandboxMode,
+  getSessionTmuxAutoEnter,
+  getSessionTmuxCaptureLines,
+  getSessionTmuxEchoInput,
   getSessionTmuxSessionName,
   getSessionWorkingDirectory,
 } from '../../../../domain/session-runtime.js';
 import { getClaudeProjectDir, isArchivedClaudeSession } from '../../../../runtime/claude/session-jsonl.js';
-import { normalizeReasoningEffort, normalizeSandboxMode } from '../../../../configuration/runtime-options.js';
+import { normalizeReasoningEffort, normalizeSandboxMode } from '../../../../runtime/options.js';
 import { sseEvent } from '../../../../runtime/sse.js';
 import type { LLMProvider, StreamChatParams } from '../../../../runtime/contracts.js';
+import { resolveConfigPaths } from '../../../../configuration/sources.js';
 
 const DATA_DIR = path.join(CODELARK_HOME, 'data');
+const HOME_CONFIG_TOML_PATH = resolveConfigPaths({ codelarkHome: CODELARK_HOME }).homeToml;
 
 function createDeferred<T = void>() {
   let resolve!: (value: T | PromiseLike<T>) => void;
@@ -243,10 +263,6 @@ function makeSettings(): Map<string, string> {
     ['remote_bridge_enabled', 'true'],
     ['bridge_default_model', 'test-model'],
     ['bridge_default_mode', 'code'],
-    ['bridge_channel_instances_json', JSON.stringify([
-      { id: 'feishu', provider: 'feishu', enabled: true, alias: '飞书', config: {} },
-      { id: 'feishu-default', provider: 'feishu', enabled: true, alias: '飞书', config: {} },
-    ])],
   ]);
 }
 
@@ -260,8 +276,12 @@ const noopLlm = {
   },
 };
 
-function initTestContext(options: { dynamicSettings?: boolean } = {}): JsonFileStore {
-  const store = new JsonFileStore(makeSettings(), { dynamicSettings: options.dynamicSettings });
+function initTestContext(options: { dynamicSettings?: boolean; settings?: Record<string, string> } = {}): JsonFileStore {
+  const settings = new Map([
+    ...makeSettings(),
+    ...Object.entries(options.settings || {}),
+  ]);
+  const store = new JsonFileStore(settings, { dynamicSettings: options.dynamicSettings });
   initBridgeContext({
     store,
     llm: noopLlm,
@@ -404,6 +424,8 @@ sleep 0.1
 describe('command-dispatch', () => {
   beforeEach(() => {
     fs.rmSync(DATA_DIR, { recursive: true, force: true });
+    fs.rmSync(path.join(CODELARK_HOME, 'config'), { recursive: true, force: true });
+    fs.rmSync(HOME_CONFIG_TOML_PATH, { force: true });
     fs.rmSync(CONFIG_PATH, { force: true });
     fs.rmSync(CONFIG_JSON_PATH, { force: true });
   });
@@ -1212,7 +1234,7 @@ describe('command-dispatch', () => {
     const binding = store.getChannelChat(address.channelType, address.chatId);
     assert.ok(binding);
     const session = binding ? store.getSession(binding.bridgeSessionId) : null;
-    assert.equal(session?.runtime?.codex?.mode, 'normal');
+    assert.equal(session?.runtime?.codex?.mode, undefined);
     assert.equal(session?.session_type, 'normal');
     assert.equal(session?.hidden, true);
     assert.match(sent[0] || '', /已切换到临时 BridgeSession/);
@@ -1374,7 +1396,7 @@ describe('command-dispatch', () => {
     assert.equal(claudePreviewCard?.form?.selects?.some((select) => select.elementId === 'clk_network'), false);
     assert.deepEqual(
       claudePreviewCard?.form?.selects?.find((select) => select.elementId === 'clk_provider')?.options.map((option) => option.text),
-      ['tmux', 'pty', 'sdk'],
+      ['pty', 'sdk'],
     );
     assert.deepEqual(
       parseCommandCallbackData(claudePreviewCard?.form?.submitCallbackData || '')?.commandText,
@@ -1442,6 +1464,18 @@ describe('command-dispatch', () => {
         general: { workingDirectory: '/tmp/claude-history-cwd' },
       },
     });
+    createConfigService({ migrate: false, env: {} }).set(
+      { kind: 'session', sessionId: session.id },
+      {
+        runtime: {
+          claude: {
+            model: 'claude-sonnet-test',
+            permissionMode: 'plan',
+            reasoningEffort: 'high',
+          },
+        },
+      },
+    );
     const projectDir = getClaudeProjectDir('/tmp/claude-history-cwd', homeDir);
     fs.mkdirSync(projectDir, { recursive: true });
     const filePath = path.join(projectDir, `${claudeSessionId}.jsonl`);
@@ -1902,6 +1936,15 @@ describe('command-dispatch', () => {
 
   it('renders /status as global bridge status without creating a session or binding for an unbound chat', async () => {
     const store = initTestContext();
+    fs.writeFileSync(HOME_CONFIG_TOML_PATH, `
+schema_version = 2
+
+[[channels]]
+id = "feishu-status"
+alias = "飞书状态通道"
+provider = "feishu"
+enabled = true
+`);
     const sent: string[] = [];
     const adapter: any = {
       channelType: 'feishu',
@@ -1931,6 +1974,8 @@ describe('command-dispatch', () => {
     assert.match(response, /全局状态/);
     assert.match(response, /Bridge/);
     assert.match(response, /Bridge PID/);
+    assert.match(response, /feishu-status/);
+    assert.match(response, /alias=飞书状态通道/);
     assert.match(response, /当前聊天.*未绑定/s);
     assert.equal(store.getChannelChat(address.channelType, address.chatId), null);
     assert.equal(store.listSessions().length, 0);
@@ -2302,6 +2347,14 @@ describe('command-dispatch', () => {
     );
 
     assert.equal(getSessionWorkingDirectory(store.getSession(session.id)), childWorkDir);
+    assert.equal(store.getSession(session.id)?.runtime?.general?.workingDirectory, undefined);
+    assert.equal(
+      createConfigService({ migrate: false, env: {} }).get('session.workspace', {
+        kind: 'session',
+        sessionId: session.id,
+      }),
+      childWorkDir,
+    );
     assert.match(sent.at(-1)?.text || '', /已切换工作目录/);
 
     await handleBridgeCommand(
@@ -2320,6 +2373,14 @@ describe('command-dispatch', () => {
     );
 
     assert.equal(getSessionWorkingDirectory(store.getSession(session.id)), os.homedir());
+    assert.equal(store.getSession(session.id)?.runtime?.general?.workingDirectory, undefined);
+    assert.equal(
+      createConfigService({ migrate: false, env: {} }).get('session.workspace', {
+        kind: 'session',
+        sessionId: session.id,
+      }),
+      os.homedir(),
+    );
   });
 
   it('switches the current chat between separate runtime BridgeSessions', async () => {
@@ -2328,7 +2389,10 @@ describe('command-dispatch', () => {
     const adapter = createGroupCapableAdapter({ sent });
     const address = { channelType: 'feishu', chatId: 'chat-runtime-command' } as const;
     const session = store.createSession('runtime-session', 'test-model');
-    store.updateSession(session.id, { runtime: { codex: { provider: 'pty' } } });
+    createConfigService({ migrate: false, env: {} }).set(
+      { kind: 'session', sessionId: session.id },
+      { runtime: { codex: { provider: 'pty' } } },
+    );
     store.upsertChannelChat({
       channelType: address.channelType,
       chatId: address.chatId,
@@ -2359,7 +2423,14 @@ describe('command-dispatch', () => {
     assert.equal(claudeBinding.runtimeBridgeSessionIds?.codex, session.id);
     assert.equal(claudeBinding.runtimeBridgeSessionIds?.claude, claudeSession?.id);
     assert.equal(getSessionActiveRuntime(store.getSession(session.id)), undefined);
-    assert.equal(store.getSession(session.id)?.runtime?.codex?.provider, 'pty');
+    assert.equal(store.getSession(session.id)?.runtime?.codex?.provider, undefined);
+    assert.equal(
+      createConfigService({ migrate: false, env: {} }).get('runtime.codex.provider', {
+        kind: 'session',
+        sessionId: session.id,
+      }),
+      'pty',
+    );
     assert.match(sent.at(-1)?.text || '', /Runtime.*claude/s);
 
     await handleBridgeCommand(
@@ -2380,7 +2451,7 @@ describe('command-dispatch', () => {
     const codexBinding = store.getChannelChat(address.channelType, address.chatId);
     assert.equal(codexBinding?.bridgeSessionId, session.id);
     assert.equal(getSessionActiveRuntime(store.getSession(session.id)), undefined);
-    assert.equal(store.getSession(session.id)?.runtime?.codex?.provider, 'pty');
+    assert.equal(store.getSession(session.id)?.runtime?.codex?.provider, undefined);
     assert.equal(codexBinding?.runtimeBridgeSessionIds?.claude, claudeSession?.id);
   });
 
@@ -2390,7 +2461,11 @@ describe('command-dispatch', () => {
     const adapter = createGroupCapableAdapter({ sent });
     const address = { channelType: 'feishu', chatId: 'chat-runtime-next-message' } as const;
     const codexSession = store.createSession('runtime-route-session', 'test-model');
-    store.updateSession(codexSession.id, { runtime: { codex: { provider: 'tmux', threadId: 'codex-thread-before-switch' } } });
+    store.updateSession(codexSession.id, { runtime: { codex: { threadId: 'codex-thread-before-switch' } } });
+    createConfigService({ migrate: false, env: {} }).set(
+      { kind: 'session', sessionId: codexSession.id },
+      { runtime: { codex: { provider: 'tmux' } } },
+    );
     store.upsertChannelChat({
       channelType: address.channelType,
       chatId: address.chatId,
@@ -2467,10 +2542,13 @@ describe('command-dispatch', () => {
     const address = { channelType: 'feishu', chatId: 'chat-runtime-running-guard' } as const;
     const session = store.createSession('running-session', 'test-model');
     store.updateSession(session.id, {
-      runtime: { codex: { provider: 'sdk' } },
       runtime_status: 'running',
       health_status: 'running_active',
     });
+    createConfigService({ migrate: false, env: {} }).set(
+      { kind: 'session', sessionId: session.id },
+      { runtime: { codex: { provider: 'sdk' } } },
+    );
     store.upsertChannelChat({
       channelType: address.channelType,
       chatId: address.chatId,
@@ -2515,7 +2593,7 @@ describe('command-dispatch', () => {
       },
     );
 
-    assert.equal(store.getSession(session.id)?.runtime?.codex?.provider, 'sdk');
+    assert.equal(store.getSession(session.id)?.runtime?.codex?.provider, undefined);
     assert.match(sent.at(-1)?.text || '', /请先停止当前对话/);
     assert.match(sent.at(-1)?.text || '', /\/p tmux/);
   });
@@ -2530,7 +2608,7 @@ describe('command-dispatch', () => {
     process.env.TMUX_FAKE_LOG = fakeTmux.logPath;
 
     try {
-      const store = initTestContext();
+      const store = initTestContext({ settings: { bridge_claude_provider: 'pty' } });
       const sent: any[] = [];
       const cardTexts: Array<{ text: string; streamKey?: string }> = [];
       const cardStatuses: Array<{ text: string; streamKey?: string }> = [];
@@ -2597,6 +2675,16 @@ describe('command-dispatch', () => {
       assert.equal(sent.length, 1);
       assert.match(sent.at(-1)?.text || '', /已切换 Codex Provider/);
       assert.match(sent.at(-1)?.text || '', /\/tmux-screen/);
+      assert.equal(
+        createConfigService({ migrate: false, env: {} }).get('runtime.codex.provider', {
+          kind: 'session',
+          sessionId: session.id,
+        }),
+        'tmux',
+      );
+      assert.equal(store.getSession(session.id)?.runtime?.codex?.provider, undefined);
+      assert.equal(getSessionCodexProvider(store.getSession(session.id)), 'tmux');
+      assert.equal(resolveEffectiveCodexProvider(store.getSession(session.id)), 'tmux');
       const tmuxLog = fs.readFileSync(fakeTmux.logPath, 'utf-8');
       assert.match(tmuxLog, /has-session -t codex_existing/);
       assert.match(tmuxLog, /kill-session -t codex_existing/);
@@ -2634,7 +2722,10 @@ describe('command-dispatch', () => {
     process.env.CODELARK_CLAUDE_PTY_RESPONSE_TIMEOUT_MS = '1500';
 
     try {
-      const store = initTestContext();
+      const store = initTestContext({ settings: { bridge_claude_provider: 'pty' } });
+      createConfigService({ migrate: false, env: {} }).set({ kind: 'home' }, {
+        runtime: { claude: { provider: 'pty' } },
+      });
       const routingProvider = new CodexRoutingProvider(undefined, 'tmux');
       initBridgeContext({
         store,
@@ -2670,7 +2761,14 @@ describe('command-dispatch', () => {
         '/p tmux',
         deps,
       );
-      assert.equal(store.getSession(session.id)?.runtime?.codex?.provider, 'tmux');
+      assert.equal(store.getSession(session.id)?.runtime?.codex?.provider, undefined);
+      assert.equal(
+        createConfigService({ migrate: false, env: {} }).get('runtime.codex.provider', {
+          kind: 'session',
+          sessionId: session.id,
+        }),
+        'tmux',
+      );
       assert.match(fs.readFileSync(fakeTmux.logPath, 'utf-8'), /new-session|send-keys/s);
 
       await handleBridgeCommand(
@@ -2691,7 +2789,14 @@ describe('command-dispatch', () => {
       };
       const createdBinding = store.getChannelChat(createdAddress.channelType, createdAddress.chatId);
       assert.ok(createdBinding);
-      assert.equal(store.getSession(createdBinding.bridgeSessionId)?.runtime?.codex?.provider, 'tmux');
+      assert.equal(store.getSession(createdBinding.bridgeSessionId)?.runtime?.codex?.provider, undefined);
+      assert.equal(
+        createConfigService({ migrate: false, env: {} }).get('runtime.codex.provider', {
+          kind: 'session',
+          sessionId: createdBinding.bridgeSessionId,
+        }),
+        'tmux',
+      );
 
       await handleBridgeCommand(
         adapter,
@@ -2706,18 +2811,6 @@ describe('command-dispatch', () => {
       const claudeBinding = store.getChannelChat(createdAddress.channelType, createdAddress.chatId);
       assert.ok(claudeBinding);
       assert.equal(store.getSession(claudeBinding.bridgeSessionId)?.runtime?.activeRuntime, 'claude');
-
-      await handleBridgeCommand(
-        adapter,
-        {
-          address: createdAddress,
-          text: '/p pty',
-          messageId: 'incoming-provider-claude-pty-e2e',
-        } as any,
-        '/p pty',
-        deps,
-      );
-      assert.equal(store.getSession(claudeBinding.bridgeSessionId)?.runtime?.claude?.provider, 'pty');
 
       const result = await processMessage(
         claudeBinding,
@@ -2746,7 +2839,7 @@ describe('command-dispatch', () => {
       assert.doesNotMatch(claudeLog, /\bccr\b|\bcodex\b/);
       assert.match(claudeLog, /prompt:hello executable/);
       assert.equal(store.getSession(claudeBinding.bridgeSessionId)?.runtime?.codex, undefined);
-      assert.equal(store.getSession(createdBinding.bridgeSessionId)?.runtime?.codex?.provider, 'tmux');
+      assert.equal(store.getSession(createdBinding.bridgeSessionId)?.runtime?.codex?.provider, undefined);
     } finally {
       _testOnlyClaudePty.clear();
       fs.rmSync(workDir, { recursive: true, force: true });
@@ -2781,7 +2874,10 @@ describe('command-dispatch', () => {
     process.env.CODELARK_CLAUDE_PTY_RESPONSE_TIMEOUT_MS = '1500';
 
     try {
-      const store = initTestContext();
+      const store = initTestContext({ settings: { bridge_claude_provider: 'pty' } });
+      createConfigService({ migrate: false, env: {} }).set({ kind: 'home' }, {
+        runtime: { claude: { provider: 'pty' } },
+      });
       const routingProvider = new CodexRoutingProvider();
       initBridgeContext({
         store,
@@ -2842,18 +2938,6 @@ describe('command-dispatch', () => {
       assert.ok(claudeBinding);
       assert.notEqual(claudeBinding.bridgeSessionId, createdBinding.bridgeSessionId);
       assert.equal(store.getSession(claudeBinding.bridgeSessionId)?.runtime?.activeRuntime, 'claude');
-
-      await handleBridgeCommand(
-        adapter,
-        {
-          address: createdAddress,
-          text: '/p pty',
-          messageId: 'incoming-provider-claude-default-pty-e2e',
-        } as any,
-        '/p pty',
-        deps,
-      );
-      assert.equal(store.getSession(claudeBinding.bridgeSessionId)?.runtime?.claude?.provider, 'pty');
 
       const result = await processMessage(
         claudeBinding,
@@ -2958,68 +3042,58 @@ describe('command-dispatch', () => {
     assert.equal(getSessionCodexReasoningEffort(updated), undefined);
     assert.equal(getSessionCodexSandboxMode(updated), undefined);
     assert.equal(updated?.runtime?.codex, undefined);
+    assert.equal(updated?.runtime?.claude?.permissionMode, undefined);
+    assert.equal(updated?.runtime?.claude?.model, undefined);
+    assert.equal(updated?.runtime?.claude?.reasoningEffort, undefined);
+    assert.equal(updated?.runtime?.claude?.provider, undefined);
+    assert.equal(
+      createConfigService({ migrate: false, env: {} }).get('runtime.claude.yoloMode', {
+        kind: 'session',
+        sessionId: session.id,
+      }),
+      'on',
+    );
+    assert.equal(
+      createConfigService({ migrate: false, env: {} }).get('runtime.claude.permissionMode', {
+        kind: 'session',
+        sessionId: session.id,
+      }),
+      'bypassPermissions',
+    );
+    assert.equal(
+      createConfigService({ migrate: false, env: {} }).get('runtime.claude.model', {
+        kind: 'session',
+        sessionId: session.id,
+      }),
+      'sonnet',
+    );
+    assert.equal(
+      createConfigService({ migrate: false, env: {} }).get('runtime.claude.reasoningEffort', {
+        kind: 'session',
+        sessionId: session.id,
+      }),
+      'high',
+    );
+    assert.equal(
+      createConfigService({ migrate: false, env: {} }).get('runtime.claude.provider', {
+        kind: 'session',
+        sessionId: session.id,
+      }),
+      'sdk',
+    );
+    assert.deepEqual(
+      {
+        provider: resolveClaudeRuntimeConfig(store.getSession(session.id)).provider,
+        model: resolveClaudeRuntimeConfig(store.getSession(session.id)).model,
+        permissionMode: resolveClaudeRuntimeConfig(store.getSession(session.id)).permissionMode,
+        reasoningEffort: resolveClaudeRuntimeConfig(store.getSession(session.id)).reasoningEffort,
+      },
+      { provider: 'sdk', model: 'sonnet', permissionMode: 'bypassPermissions', reasoningEffort: 'high' },
+    );
     assert.match(sent.at(-4)?.text || '', /Claude Code 模式/);
     assert.match(sent.at(-3)?.text || '', /Claude Code 模型/);
     assert.match(sent.at(-2)?.text || '', /Claude Code 思考级别/);
     assert.match(sent.at(-1)?.text || '', /已切换 Claude Provider/);
-  });
-
-  it('starts and binds a Claude tmux session from /provider tmux', async () => {
-    const previousEnv = {
-      PATH: process.env.PATH,
-      TMUX_FAKE_LOG: process.env.TMUX_FAKE_LOG,
-    };
-    const fakeTmux = installFakeTmux();
-    process.env.PATH = `${fakeTmux.binDir}${path.delimiter}${previousEnv.PATH || ''}`;
-    process.env.TMUX_FAKE_LOG = fakeTmux.logPath;
-    try {
-      const store = initTestContext();
-      const sent: any[] = [];
-      const adapter = createGroupCapableAdapter({ sent });
-      const address = { channelType: 'feishu', chatId: 'chat-claude-provider-tmux' } as const;
-      const session = store.createSession('claude-tmux-runtime-session', 'codex-model');
-      store.updateSession(session.id, {
-        runtime: {
-          activeRuntime: 'claude',
-          general: {
-            workingDirectory: '/tmp/claude-provider-tmux',
-          },
-        },
-      });
-      store.upsertChannelChat({
-        channelType: address.channelType,
-        chatId: address.chatId,
-        bridgeSessionId: session.id,
-      });
-
-      await handleBridgeCommand(
-        adapter,
-        { address, text: '/provider tmux', messageId: 'incoming-claude-provider-tmux' } as any,
-        '/provider tmux',
-        {
-          getActiveTask: () => undefined,
-          diagnoseSessionHealth: async () => null,
-          diagnoseAllActiveSessions: async () => [],
-          reconcileMirrorSubscriptions: async () => {},
-        },
-      );
-
-      const updated = store.getSession(session.id);
-      assert.equal(getSessionClaudeProvider(updated), 'tmux');
-      assert.equal(getSessionTmuxSessionName(updated), `claude_${session.id}`);
-      assert.match(sent.at(-1)?.text || '', /已切换 Claude Provider/);
-      assert.match(sent.at(-1)?.text || '', /tmux session/);
-      const tmuxLog = fs.readFileSync(fakeTmux.logPath, 'utf-8');
-      assert.match(tmuxLog, new RegExp(`has-session -t claude_${session.id}`));
-      assert.match(tmuxLog, /new-session -d -s/);
-      assert.doesNotMatch(tmuxLog, /codex/);
-    } finally {
-      fs.rmSync(fakeTmux.binDir, { recursive: true, force: true });
-      for (const [key, value] of Object.entries(previousEnv)) {
-        if (value === undefined) delete process.env[key];
-        else process.env[key] = value;
-      }
-    }
   });
 
   it('reminds users that Codex runtime settings apply on the next request', async () => {
@@ -3075,7 +3149,6 @@ describe('command-dispatch', () => {
       store.updateSession(session.id, {
         runtime: {
           codex: {
-            provider,
             threadId: `thread-${provider}-runtime-deferred`,
             mode: 'normal',
             reasoningEffort: 'medium',
@@ -3085,6 +3158,10 @@ describe('command-dispatch', () => {
           },
         },
       });
+      createConfigService({ migrate: false, env: {} }).set(
+        { kind: 'session', sessionId: session.id },
+        { runtime: { codex: { provider } } },
+      );
       store.upsertChannelChat({
         channelType: address.channelType,
         chatId: address.chatId,
@@ -3097,7 +3174,15 @@ describe('command-dispatch', () => {
       };
 
       await handleBridgeCommand(adapter, { address, text: '/mode yolo', messageId: `incoming-${provider}-mode` } as any, '/mode yolo', deps);
-      assert.equal(store.getSession(session.id)?.runtime?.codex?.mode, 'yolo');
+      assert.equal(store.getSession(session.id)?.runtime?.codex?.mode, 'normal');
+      assert.equal(
+        createConfigService({ migrate: false, env: {} }).get('runtime.codex.yoloMode', {
+          kind: 'session',
+          sessionId: session.id,
+        }),
+        'on',
+      );
+      assert.equal(resolveEffectiveMode(null, store.getSession(session.id)), 'yolo');
       assert.match(sent.at(-1)?.text || '', /已切换模式/);
       assert.match(sent.at(-1)?.text || '', /配置已保存/);
       assert.match(sent.at(-1)?.text || '', /不会影响已经启动的 Codex TUI/);
@@ -3105,23 +3190,109 @@ describe('command-dispatch', () => {
 
       await handleBridgeCommand(adapter, { address, text: '/reasoning minimal', messageId: `incoming-${provider}-reasoning` } as any, '/reasoning minimal', deps);
       assert.equal(getSessionCodexReasoningEffort(store.getSession(session.id)), 'minimal');
+      assert.equal(
+        createConfigService({ migrate: false, env: {} }).get('runtime.codex.reasoningEffort', {
+          kind: 'session',
+          sessionId: session.id,
+        }),
+        'minimal',
+      );
+      assert.equal(resolveEffectiveReasoningEffort(store.getSession(session.id)), 'minimal');
       assert.match(sent.at(-1)?.text || '', /已更新思考级别/);
       assert.match(sent.at(-1)?.text || '', /配置已保存/);
 
       await handleBridgeCommand(adapter, { address, text: '/sandbox read-only', messageId: `incoming-${provider}-sandbox` } as any, '/sandbox read-only', deps);
       assert.equal(getSessionCodexSandboxMode(store.getSession(session.id)), 'read-only');
+      assert.equal(
+        createConfigService({ migrate: false, env: {} }).get('runtime.codex.sandboxMode', {
+          kind: 'session',
+          sessionId: session.id,
+        }),
+        'read-only',
+      );
+      assert.equal(resolveEffectiveSandboxMode(store.getSession(session.id)), 'read-only');
       assert.match(sent.at(-1)?.text || '', /已更新 Codex 沙箱/);
       assert.match(sent.at(-1)?.text || '', provider === 'tmux' ? /\/p tmux/ : /\/provider pty/);
 
       await handleBridgeCommand(adapter, { address, text: '/network off', messageId: `incoming-${provider}-network` } as any, '/network off', deps);
       assert.equal(getSessionCodexNetworkAccess(store.getSession(session.id)), false);
+      assert.equal(
+        createConfigService({ migrate: false, env: {} }).get('runtime.codex.networkAccess', {
+          kind: 'session',
+          sessionId: session.id,
+        }),
+        false,
+      );
+      assert.equal(resolveEffectiveNetworkAccess(store.getSession(session.id)), false);
       assert.match(sent.at(-1)?.text || '', /已更新 Codex 网络/);
       assert.match(sent.at(-1)?.text || '', /重启后的后续请求中生效/);
 
+      await handleBridgeCommand(adapter, { address, text: '/sandbox default', messageId: `incoming-${provider}-sandbox-default` } as any, '/sandbox default', deps);
+      assert.notEqual(
+        createConfigService({ migrate: false, env: {} }).resolve('runtime.codex.sandboxMode', {
+          kind: 'session',
+          sessionId: session.id,
+        }).source,
+        'session',
+      );
+      assert.equal(resolveEffectiveSandboxMode(store.getSession(session.id)), 'workspace-write');
+
+      await handleBridgeCommand(adapter, { address, text: '/network default', messageId: `incoming-${provider}-network-default` } as any, '/network default', deps);
+      assert.notEqual(
+        createConfigService({ migrate: false, env: {} }).resolve('runtime.codex.networkAccess', {
+          kind: 'session',
+          sessionId: session.id,
+        }).source,
+        'session',
+      );
+      assert.equal(resolveEffectiveNetworkAccess(store.getSession(session.id)), true);
+
+      await handleBridgeCommand(adapter, { address, text: '/model gpt-5.4', messageId: `incoming-${provider}-model-set` } as any, '/model gpt-5.4', deps);
+      assert.equal(getSessionCodexModel(store.getSession(session.id)), 'gpt-5.4');
+      assert.equal(
+        createConfigService({ migrate: false, env: {} }).get('runtime.codex.model', {
+          kind: 'session',
+          sessionId: session.id,
+        }),
+        'gpt-5.4',
+      );
+      assert.equal(resolveDisplayedModel(null, store.getSession(session.id), 'fallback-model'), 'gpt-5.4');
+      assert.match(sent.at(-1)?.text || '', /已更新模型/);
+      assert.match(sent.at(-1)?.text || '', /配置已保存/);
+
+      createConfigService({ migrate: false, env: {} }).set(
+        { kind: 'session', sessionId: session.id },
+        { runtime: { codex: { model: 'old-model' } } },
+      );
+      assert.equal(resolveDisplayedModel(null, store.getSession(session.id), 'fallback-model'), 'old-model');
       await handleBridgeCommand(adapter, { address, text: '/model default', messageId: `incoming-${provider}-model` } as any, '/model default', deps);
       assert.equal(getSessionCodexModel(store.getSession(session.id)), undefined);
+      assert.notEqual(
+        createConfigService({ migrate: false, env: {} }).resolve('runtime.codex.model', {
+          kind: 'session',
+          sessionId: session.id,
+        }).source,
+        'session',
+      );
+      assert.equal(resolveDisplayedModel(null, store.getSession(session.id), 'fallback-model'), 'fallback-model');
       assert.match(sent.at(-1)?.text || '', /已恢复默认模型/);
       assert.match(sent.at(-1)?.text || '', /配置已保存/);
+
+      await handleBridgeCommand(adapter, { address, text: '/p sdk', messageId: `incoming-${provider}-provider-sdk` } as any, '/p sdk', {
+        ...deps,
+        reconcileMirrorSubscriptions: async () => {},
+      });
+      assert.equal(getSessionCodexProvider(store.getSession(session.id)), 'sdk');
+      assert.equal(
+        createConfigService({ migrate: false, env: {} }).get('runtime.codex.provider', {
+          kind: 'session',
+          sessionId: session.id,
+        }),
+        'sdk',
+      );
+      assert.equal(store.getSession(session.id)?.runtime?.codex?.provider, undefined);
+      assert.equal(resolveEffectiveCodexProvider(store.getSession(session.id)), 'sdk');
+      assert.match(sent.at(-1)?.text || '', /已切换 Codex Provider/);
     }
   });
 
@@ -3323,6 +3494,13 @@ describe('command-dispatch', () => {
     );
     assert.match(sent.at(-1)?.text || '', /已更新全局配置/);
     assert.match(sent.at(-1)?.text || '', /defaultWorkspaceRoot/);
+    assert.match(sent.at(-1)?.text || '', /config\.toml/);
+    assert.doesNotMatch(sent.at(-1)?.text || '', /config\.env|config\.json/);
+    assert.equal(fs.existsSync(HOME_CONFIG_TOML_PATH), true);
+    assert.equal(fs.existsSync(CONFIG_PATH), false);
+    assert.equal(fs.existsSync(CONFIG_JSON_PATH), false);
+    assert.equal(createConfigService({ migrate: false, env: {} }).resolve('bridge.defaultWorkspace').source, 'home');
+    assert.equal(createConfigService({ migrate: false, env: {} }).get('bridge.defaultWorkspace'), workspaceRoot);
 
     await handleBridgeCommand(
       adapter,
@@ -3347,7 +3525,8 @@ describe('command-dispatch', () => {
       deps,
     );
     assert.match(sent.at(-1)?.text || '', /默认 Codex Provider.*tmux/s);
-    assert.equal(loadConfig().defaultProvider, 'tmux');
+    assert.equal(createConfigService({ migrate: false, env: {} }).resolve('runtime.codex.provider').source, 'home');
+    assert.equal(createConfigService({ migrate: false, env: {} }).get('runtime.codex.provider'), 'tmux');
 
     await handleBridgeCommand(
       adapter,
@@ -3360,7 +3539,7 @@ describe('command-dispatch', () => {
       deps,
     );
     assert.match(sent.at(-1)?.text || '', /默认 Codex Provider.*pty/s);
-    assert.equal(loadConfig().defaultProvider, 'pty');
+    assert.equal(createConfigService({ migrate: false, env: {} }).get('runtime.codex.provider'), 'pty');
 
     await handleBridgeCommand(
       adapter,
@@ -3373,7 +3552,21 @@ describe('command-dispatch', () => {
       deps,
     );
     assert.match(sent.at(-1)?.text || '', /默认 Codex Provider.*sdk/s);
-    assert.equal(loadConfig().defaultProvider, 'sdk');
+    assert.equal(createConfigService({ migrate: false, env: {} }).get('runtime.codex.provider'), 'sdk');
+
+    await handleBridgeCommand(
+      adapter,
+      {
+        address,
+        text: '/set defaultProvider default',
+        messageId: 'incoming-set-provider-reset',
+      } as any,
+      '/set defaultProvider default',
+      deps,
+    );
+    assert.match(sent.at(-1)?.text || '', /默认 Codex Provider.*auto/s);
+    assert.equal(createConfigService({ migrate: false, env: {} }).resolve('runtime.codex.provider').source, 'defaults');
+    assert.equal(createConfigService({ migrate: false, env: {} }).get('runtime.codex.provider'), '');
 
     await handleBridgeCommand(
       adapter,
@@ -3386,7 +3579,7 @@ describe('command-dispatch', () => {
       deps,
     );
     assert.match(sent.at(-1)?.text || '', /Codex 网络访问.*off/s);
-    assert.equal(loadConfig().codexNetworkAccess, false);
+    assert.equal(createConfigService({ migrate: false, env: {} }).get('runtime.codex.networkAccess'), false);
 
     await handleBridgeCommand(
       adapter,
@@ -3400,7 +3593,7 @@ describe('command-dispatch', () => {
     );
     assert.match(sent.at(-1)?.text || '', /Codex 思考级别.*minimal/s);
     assert.match(sent.at(-1)?.text || '', /禁用 web search/);
-    assert.equal(loadConfig().codexReasoningEffort, 'minimal');
+    assert.equal(createConfigService({ migrate: false, env: {} }).get('runtime.codex.reasoningEffort'), 'minimal');
 
     await handleBridgeCommand(
       adapter,
@@ -3413,7 +3606,7 @@ describe('command-dispatch', () => {
       deps,
     );
     assert.match(sent.at(-1)?.text || '', /Claude executable.*ccr/s);
-    assert.equal(loadConfig().claudeExecutable, 'ccr');
+    assert.equal(createConfigService({ migrate: false, env: {} }).get('runtime.claude.executable'), 'ccr');
 
     await handleBridgeCommand(
       adapter,
@@ -3426,7 +3619,7 @@ describe('command-dispatch', () => {
       deps,
     );
     assert.match(sent.at(-1)?.text || '', /Claude 默认模型.*claude-sonnet-test/s);
-    assert.equal(loadConfig().claudeDefaultModel, 'claude-sonnet-test');
+    assert.equal(createConfigService({ migrate: false, env: {} }).get('runtime.claude.model'), 'claude-sonnet-test');
 
     await handleBridgeCommand(
       adapter,
@@ -3438,7 +3631,9 @@ describe('command-dispatch', () => {
       '/set historyMessageLimit 12',
       deps,
     );
-    assert.equal(loadConfig().historyMessageLimit, 12);
+    const configAfterHistory = createConfigService({ migrate: false, env: {} }).snapshot();
+    assert.equal(configAfterHistory.provenance.get('channels.feishu-default.config.historyMessageLimit')?.source, 'home');
+    assert.equal(configAfterHistory.config.channels[0]?.config.historyMessageLimit, 12);
 
     await handleBridgeCommand(
       adapter,
@@ -3452,7 +3647,7 @@ describe('command-dispatch', () => {
     );
     assert.match(sent.at(-1)?.text || '', /配置未更新/);
     assert.match(sent.at(-1)?.text || '', /normal 或 yolo/);
-    assert.equal(loadConfig().defaultMode, 'yolo');
+    assert.equal(createConfigService({ migrate: false, env: {} }).get('runtime.codex.yoloMode'), 'on');
 
     await handleBridgeCommand(
       adapter,
@@ -3467,29 +3662,23 @@ describe('command-dispatch', () => {
     const binding = store.getChannelChat(address.channelType, adapter.createdGroups.at(-1)!.chatId);
     assert.ok(binding);
     assert.equal(getSessionWorkingDirectory(store.getSession(binding!.bridgeSessionId)), path.join(workspaceRoot, 'set-proj'));
-    assert.equal(store.getSession(binding!.bridgeSessionId)?.runtime?.codex?.mode, 'yolo');
+    assert.equal(store.getSession(binding!.bridgeSessionId)?.runtime?.codex?.mode, undefined);
   });
 
   it('views and updates current Feishu channel group mention requirement with /require-at', async () => {
     initTestContext({ dynamicSettings: true });
-    saveConfig({
-      runtime: 'codex',
-      enabledChannels: ['feishu'],
-      defaultMode: 'normal',
-      channels: [
-        {
-          id: 'feishu',
-          alias: '飞书',
-          provider: 'feishu',
-          enabled: true,
-          createdAt: '2026-06-01T00:00:00.000Z',
-          updatedAt: '2026-06-01T00:00:00.000Z',
-          config: {
-            appId: 'app-id',
-            appSecret: 'app-secret',
-          },
+    createConfigService({ migrate: false, env: {} }).set({ kind: 'home' }, {
+      runtime: { agent: 'codex', codex: { yoloMode: 'off' } },
+      channels: [{
+        id: 'feishu',
+        alias: '飞书',
+        provider: 'feishu',
+        enabled: true,
+        config: {
+          appId: 'app-id',
+          appSecret: 'app-secret',
         },
-      ],
+      }],
     });
     const sent: string[] = [];
     const adapter: any = {
@@ -3533,10 +3722,15 @@ describe('command-dispatch', () => {
     );
     assert.match(sent.at(-1) || '', /已更新群聊 @bot 设置/);
     assert.match(sent.at(-1) || '', /on/);
+    assert.match(sent.at(-1) || '', /config\.toml/);
+    assert.doesNotMatch(sent.at(-1) || '', /config\.env|config\.json/);
     assert.match(sent.at(-1) || '', /im\.message\.receive_v1/);
-    const requireOn = loadConfig().channels?.find((channel) => channel.id === 'feishu')?.config as { requireMention?: boolean } | undefined;
-    assert.equal(requireOn?.requireMention, true);
-    assert.match(fs.readFileSync(CONFIG_PATH, 'utf-8'), /CODELARK_FEISHU_REQUIRE_MENTION=true/);
+    const requireOn = createConfigService({ migrate: false }).snapshot().config.channels
+      .find((channel) => channel.id === 'feishu')?.config.requireMention;
+    assert.equal(requireOn, true);
+    assert.match(fs.readFileSync(HOME_CONFIG_TOML_PATH, 'utf-8'), /require_mention = true/);
+    assert.equal(fs.existsSync(CONFIG_PATH), false);
+    assert.equal(fs.existsSync(CONFIG_JSON_PATH), false);
 
     await handleBridgeCommand(
       adapter,
@@ -3549,9 +3743,12 @@ describe('command-dispatch', () => {
       deps,
     );
     assert.match(sent.at(-1) || '', /off/);
-    const requireOff = loadConfig().channels?.find((channel) => channel.id === 'feishu')?.config as { requireMention?: boolean } | undefined;
-    assert.equal(requireOff?.requireMention, false);
-    assert.match(fs.readFileSync(CONFIG_PATH, 'utf-8'), /CODELARK_FEISHU_REQUIRE_MENTION=false/);
+    const requireOff = createConfigService({ migrate: false }).snapshot().config.channels
+      .find((channel) => channel.id === 'feishu')?.config.requireMention;
+    assert.equal(requireOff, false);
+    assert.match(fs.readFileSync(HOME_CONFIG_TOML_PATH, 'utf-8'), /require_mention = false/);
+    assert.equal(fs.existsSync(CONFIG_PATH), false);
+    assert.equal(fs.existsSync(CONFIG_JSON_PATH), false);
   });
 
   it('blocks thread switching while the current task is running unless forced', async () => {
@@ -3607,7 +3804,7 @@ describe('command-dispatch', () => {
 
     const forcedBinding = store.getChannelChat(address.channelType, address.chatId);
     assert.notEqual(forcedBinding?.bridgeSessionId, initialBinding.bridgeSessionId);
-    assert.equal(store.getSession(forcedBinding!.bridgeSessionId)?.runtime?.codex?.mode, 'normal');
+    assert.equal(store.getSession(forcedBinding!.bridgeSessionId)?.runtime?.codex?.mode, undefined);
     assert.match(sent.at(-1) || '', /已切换到临时 BridgeSession/);
     assert.ok(readAuditSummaries().some((summary) => (
       summary.includes('Binding change: action=switch_draft')
@@ -4770,13 +4967,16 @@ describe('command-dispatch', () => {
     const binding = router.createBinding(address, 'D:\\workspace\\stop-tmux-provider');
     store.updateSession(binding.bridgeSessionId, {
       runtime: {
-        codex: { provider: 'tmux' },
         general: { tmuxSessionName: 'alpha' },
       },
       mirror_status: 'watching',
       runtime_status: 'running',
       health_status: 'running_active',
     });
+    createConfigService({ migrate: false, env: {} }).set(
+      { kind: 'session', sessionId: binding.bridgeSessionId },
+      { runtime: { codex: { provider: 'tmux' } } },
+    );
 
     try {
       await handleBridgeCommand(
@@ -5012,7 +5212,16 @@ describe('command-dispatch', () => {
       const binding = store.getChannelChat(address.channelType, address.chatId);
       assert.ok(binding);
       const session = binding ? store.getSession(binding.bridgeSessionId) : null;
-      assert.equal(session?.runtime?.general?.tmuxSessionName, 'alpha');
+      assert.equal(session?.runtime?.general?.tmuxSessionName, undefined);
+      assert.equal(
+        createConfigService({ migrate: false, env: {} }).get('session.tmuxSessionName', {
+          kind: 'session',
+          sessionId: binding.bridgeSessionId,
+        }),
+        'alpha',
+      );
+      store.updateSession(binding.bridgeSessionId, { runtime: { general: { tmuxSessionName: undefined } } });
+      assert.equal(getSessionTmuxSessionName(store.getSession(binding.bridgeSessionId)), 'alpha');
       assert.match(sent.at(-1) || '', /已绑定 tmux session/);
       assert.match(sent.at(-1) || '', /```sh/);
       assert.match(sent.at(-1) || '', /alpha-screen/);
@@ -5030,7 +5239,16 @@ describe('command-dispatch', () => {
         deps,
       );
       const updatedSession = binding ? store.getSession(binding.bridgeSessionId) : null;
-      assert.equal(updatedSession?.runtime?.general?.captureLines, 120);
+      assert.equal(updatedSession?.runtime?.general?.captureLines, undefined);
+      assert.equal(
+        createConfigService({ migrate: false, env: {} }).get('session.tmuxCaptureLines', {
+          kind: 'session',
+          sessionId: binding.bridgeSessionId,
+        }),
+        120,
+      );
+      store.updateSession(binding.bridgeSessionId, { runtime: { general: { captureLines: undefined } } });
+      assert.equal(getSessionTmuxCaptureLines(store.getSession(binding.bridgeSessionId)), 120);
       assert.doesNotMatch(sent.at(-1) || '', /真实 tmux 底层命令/);
 
       await handleBridgeCommand(
@@ -5044,7 +5262,16 @@ describe('command-dispatch', () => {
         deps,
       );
       const autoEnterSession = binding ? store.getSession(binding.bridgeSessionId) : null;
-      assert.equal(autoEnterSession?.runtime?.general?.autoEnter, true);
+      assert.equal(autoEnterSession?.runtime?.general?.autoEnter, undefined);
+      assert.equal(
+        createConfigService({ migrate: false, env: {} }).get('session.tmuxAutoEnter', {
+          kind: 'session',
+          sessionId: binding.bridgeSessionId,
+        }),
+        true,
+      );
+      store.updateSession(binding.bridgeSessionId, { runtime: { general: { autoEnter: undefined } } });
+      assert.equal(getSessionTmuxAutoEnter(store.getSession(binding.bridgeSessionId)), true);
       assert.match(sent.at(-1) || '', /自动回车.*on/s);
 
       await handleBridgeCommand(
@@ -5058,7 +5285,16 @@ describe('command-dispatch', () => {
         deps,
       );
       const echoOnSession = binding ? store.getSession(binding.bridgeSessionId) : null;
-      assert.equal(echoOnSession?.runtime?.general?.echoInput, true);
+      assert.equal(echoOnSession?.runtime?.general?.echoInput, undefined);
+      assert.equal(
+        createConfigService({ migrate: false, env: {} }).get('session.tmuxEchoInput', {
+          kind: 'session',
+          sessionId: binding.bridgeSessionId,
+        }),
+        true,
+      );
+      store.updateSession(binding.bridgeSessionId, { runtime: { general: { echoInput: undefined } } });
+      assert.equal(getSessionTmuxEchoInput(store.getSession(binding.bridgeSessionId)), true);
       assert.match(sent.at(-1) || '', /输入回显.*on/s);
 
       await handleBridgeCommand(
@@ -5086,7 +5322,14 @@ describe('command-dispatch', () => {
         deps,
       );
       const echoOffSession = binding ? store.getSession(binding.bridgeSessionId) : null;
-      assert.equal(echoOffSession?.runtime?.general?.echoInput, false);
+      assert.equal(echoOffSession?.runtime?.general?.echoInput, undefined);
+      assert.equal(
+        createConfigService({ migrate: false, env: {} }).get('session.tmuxEchoInput', {
+          kind: 'session',
+          sessionId: binding.bridgeSessionId,
+        }),
+        false,
+      );
 
       const beforeProviderForwardSent = sent.length;
       const beforeProviderForwardLog = fs.readFileSync(fakeTmux.logPath, 'utf-8');
@@ -5241,7 +5484,14 @@ describe('command-dispatch', () => {
         deps,
       );
       const autoEnterOffSession = binding ? store.getSession(binding.bridgeSessionId) : null;
-      assert.equal(autoEnterOffSession?.runtime?.general?.autoEnter, false);
+      assert.equal(autoEnterOffSession?.runtime?.general?.autoEnter, undefined);
+      assert.equal(
+        createConfigService({ migrate: false, env: {} }).get('session.tmuxAutoEnter', {
+          kind: 'session',
+          sessionId: binding.bridgeSessionId,
+        }),
+        false,
+      );
 
       const beforeAutoEnterOffLog = fs.readFileSync(fakeTmux.logPath, 'utf-8');
       await handleBridgeCommand(
@@ -5298,7 +5548,7 @@ describe('command-dispatch', () => {
       assert.match(tempLinesResponse, /展示行数.*42/s);
       assert.match(tempLinesResponse, /tmux capture-pane -t alpha -p -S -42/);
       const afterTempLinesSession = binding ? store.getSession(binding.bridgeSessionId) : null;
-      assert.equal(afterTempLinesSession?.runtime?.general?.captureLines, 120);
+      assert.equal(getSessionTmuxCaptureLines(afterTempLinesSession), 120);
 
       await handleBridgeCommand(
         adapter,
@@ -5551,6 +5801,9 @@ describe('command-dispatch', () => {
     const settings = makeSettings();
     settings.set('bridge_default_provider', 'tmux');
     const store = new JsonFileStore(settings, { dynamicSettings: true });
+    createConfigService({ migrate: false, env: {} }).set({ kind: 'home' }, {
+      runtime: { codex: { provider: 'tmux' } },
+    });
     initBridgeContext({
       store,
       llm: noopLlm,

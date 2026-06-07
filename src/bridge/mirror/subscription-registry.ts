@@ -13,7 +13,6 @@ export interface MirrorRegistrySession {
     activeRuntime?: 'codex' | 'claude';
     codex?: {
       threadId?: string | null;
-      provider?: 'sdk' | 'pty' | 'tmux' | string | null;
     };
   };
 }
@@ -57,13 +56,7 @@ export function buildMirrorSubscriptionRegistryPlan<TBinding extends MirrorRegis
   activeChannelTypes: Iterable<string>,
   existingBindingIds: Iterable<string>,
   getSession: (sessionId: string) => MirrorRegistrySession | null | undefined,
-  hasSessionMirrorSource: (session: MirrorRegistrySession | null | undefined) => boolean = (
-    (session) => {
-      if (session?.runtime?.activeRuntime === 'claude') return false;
-      if (!session?.runtime?.codex?.threadId?.trim()) return false;
-      return session.runtime.codex.provider !== 'sdk';
-    }
-  ),
+  hasSessionMirrorSource: (session: MirrorRegistrySession | null | undefined) => boolean,
   options: MirrorSubscriptionRegistryOptions = {},
 ): MirrorSubscriptionRegistryPlan<TBinding> {
   const activeChannels = new Set(activeChannelTypes);

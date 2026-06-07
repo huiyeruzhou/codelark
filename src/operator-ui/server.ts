@@ -3,12 +3,10 @@ import fs from 'node:fs';
 import net from 'node:net';
 import path from 'node:path';
 
-import {
-  CODELARK_HOME,
-  configToSettings,
-  loadConfig,
-  type Config,
-} from '../configuration/index.js';
+import { CODELARK_HOME } from '../configuration/paths.js';
+import { createConfigService } from '../configuration/service.js';
+import type { ConfigV2 } from '../configuration/schema.js';
+import { exportRuntimeSettings } from '../runtime/config-projections.js';
 import {
   getUiServerUrl,
   writeUiServerStatus,
@@ -27,6 +25,7 @@ import { handleUiBindingRoute } from './routes/binding.js';
 import { handleUiSessionRoute } from './routes/session.js';
 import { handleUiServiceRoute } from './routes/service.js';
 import { buildUiBindingsPayload } from './application/chat-display.js';
+import { readUiHomeConfig } from './application/config.js';
 
 let port = 4781;
 const serverStartTime = new Date().toISOString();
@@ -84,14 +83,19 @@ function text(response: ServerResponse, statusCode: number, body: string): void 
 }
 
 function createUiStore(): JsonFileStore {
-  return new JsonFileStore(configToSettings(loadConfig()));
+  const config = createConfigService({ codelarkHome: CODELARK_HOME }).snapshot().config;
+  return new JsonFileStore(exportRuntimeSettings(config));
+}
+
+function loadUiConfig(): ConfigV2 {
+  return readUiHomeConfig();
 }
 
 const server = http.createServer(async (request, response) => {
   try {
     const currentUrl = getUiServerUrl(port);
     const url = new URL(request.url || '/', currentUrl);
-    const config = loadConfig();
+    const config = loadUiConfig();
     const auth = getUiAuthState(request, config);
 
     if (await handleUiAuthRoute({
@@ -120,7 +124,7 @@ const server = http.createServer(async (request, response) => {
       response,
       url,
       createStore: createUiStore,
-      readConfig: loadConfig,
+      readConfig: loadUiConfig,
       buildBindingsPayload: buildUiBindingsPayload,
     })) return;
 

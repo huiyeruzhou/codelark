@@ -5,8 +5,12 @@ import { spawn } from 'node:child_process';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 
-import { CODELARK_HOME, loadConfig, loadRawConfigEnv } from '../configuration/index.js';
-import type { ChannelInstance, Config, FeishuChannelConfig } from '../configuration/index.js';
+import { CODELARK_HOME } from '../configuration/paths.js';
+import type { FeishuChannelConfig } from '../channels/types.js';
+import { createConfigService } from '../configuration/service.js';
+import type { ConfigPatch, ConfigV2 } from '../configuration/schema.js';
+import { exportProcessEnv } from '../runtime/config-projections.js';
+import { normalizeFeishuSite } from '../channels/feishu/site.js';
 import {
   clearStaleBridgeInstanceLock,
   readBridgeInstanceLock,
@@ -595,7 +599,65 @@ export function getUiServerStatus(): UiServerStatus {
   };
 }
 
-function buildDaemonEnv(): NodeJS.ProcessEnv {
+export interface StartupConfigProjection {
+  config: ConfigV2;
+  env: NodeJS.ProcessEnv;
+}
+
+export interface ServiceConfigOverrideOptions {
+  cli?: ConfigPatch;
+  startupProjection?: StartupConfigProjection;
+}
+
+function hasConfigPatchValues(patch: ConfigPatch | undefined): boolean {
+  if (!patch) return false;
+  return Object.keys(patch).length > 0;
+}
+
+type LocalServiceChannelConfig = Pick<FeishuChannelConfig, 'appId' | 'appSecret' | 'site'>;
+
+interface LocalServiceChannel {
+  id?: string;
+  alias?: string;
+  provider?: string;
+  enabled?: boolean;
+  createdAt?: string;
+  updatedAt?: string;
+  config?: LocalServiceChannelConfig;
+}
+
+interface LocalServiceConfig {
+  channels?: LocalServiceChannel[];
+}
+
+export function loadStartupProjection(options: ServiceConfigOverrideOptions = {}): StartupConfigProjection {
+  const service = createConfigService({
+    codelarkHome: CODELARK_HOME,
+    ...(hasConfigPatchValues(options.cli) ? { cli: options.cli } : {}),
+  });
+  const config = service.snapshot().config;
+  return {
+    config,
+    env: exportProcessEnv(config),
+  };
+}
+
+function startupProjectionFor(options: ServiceConfigOverrideOptions = {}): StartupConfigProjection {
+  return options.startupProjection || loadStartupProjection(options);
+}
+
+function loadStartupConfig(options: ServiceConfigOverrideOptions = {}): ConfigV2 {
+  return startupProjectionFor(options).config;
+}
+
+function buildProjectedConfigEnv(options: ServiceConfigOverrideOptions = {}): NodeJS.ProcessEnv {
+  return startupProjectionFor(options).env;
+}
+
+function buildDaemonEnv(
+  options: ServiceConfigOverrideOptions = {},
+  projectedConfigEnv = buildProjectedConfigEnv(options),
+): NodeJS.ProcessEnv {
   const env = { ...process.env } as NodeJS.ProcessEnv;
   const legacyEnvPrefix = ['C', 'T', 'I'].join('');
   for (const key of Object.keys(env)) {
@@ -603,11 +665,20 @@ function buildDaemonEnv(): NodeJS.ProcessEnv {
   }
   env.CODELARK_HOME = CODELARK_HOME;
   Object.assign(env, buildLarkCliRuntimeEnv());
-  for (const [key, value] of loadRawConfigEnv()) {
-    env[key] = value;
-  }
+  Object.assign(env, projectedConfigEnv);
   delete env.CLAUDECODE;
   return env;
+}
+
+function buildUiServerEnv(
+  options: ServiceConfigOverrideOptions = {},
+  projectedConfigEnv = buildProjectedConfigEnv(options),
+): NodeJS.ProcessEnv {
+  return {
+    ...process.env,
+    ...projectedConfigEnv,
+    CODELARK_HOME,
+  };
 }
 
 export function buildLarkCliRuntimeEnv(): NodeJS.ProcessEnv {
@@ -619,32 +690,32 @@ export function buildLarkCliRuntimeEnv(): NodeJS.ProcessEnv {
   };
 }
 
-function findPrimaryFeishuChannel(config: Config): ChannelInstance | undefined {
+function findPrimaryFeishuChannel(config: LocalServiceConfig): LocalServiceChannel | undefined {
   const channels = config.channels || [];
   return channels.find((channel) => channel.provider === 'feishu' && channel.enabled !== false)
     || channels.find((channel) => channel.provider === 'feishu');
 }
 
-function getFeishuCredentials(config: Config): Required<Pick<FeishuChannelConfig, 'appId' | 'appSecret' | 'site'>> | null {
+function getFeishuCredentials(config: LocalServiceConfig): Required<Pick<FeishuChannelConfig, 'appId' | 'appSecret' | 'site'>> | null {
   const channel = findPrimaryFeishuChannel(config);
-  const feishu = channel?.config as FeishuChannelConfig | undefined;
+  const feishu = channel?.config;
   const appId = feishu?.appId?.trim();
   const appSecret = feishu?.appSecret?.trim();
   if (!appId || !appSecret) return null;
   return {
     appId,
     appSecret,
-    site: feishu?.site || 'feishu',
+    site: normalizeFeishuSite(feishu?.site),
   };
 }
 
-function isSameFeishuApp(app: { appId?: unknown; brand?: unknown } | undefined, config: Config): boolean {
+function isSameFeishuApp(app: { appId?: unknown; brand?: unknown } | undefined, config: LocalServiceConfig): boolean {
   const credentials = getFeishuCredentials(config);
   if (!credentials || !app) return false;
   return app.appId === credentials.appId && app.brand === credentials.site;
 }
 
-function writeLarkCliSourceProjection(config: Config): string | null {
+function writeLarkCliSourceProjection(config: LocalServiceConfig): string | null {
   const credentials = getFeishuCredentials(config);
   if (!credentials) return null;
   fs.mkdirSync(larkCliSourceDir, { recursive: true, mode: 0o700 });
@@ -686,7 +757,7 @@ function structuredLarkCliUsers(users: unknown): unknown[] | null {
   return structured.length > 0 ? structured : null;
 }
 
-function readTargetLarkCliApp(config: Config): {
+function readTargetLarkCliApp(config: LocalServiceConfig): {
   raw: Record<string, unknown>;
   app: Record<string, unknown>;
 } | null {
@@ -700,19 +771,19 @@ function readTargetLarkCliApp(config: Config): {
     : null;
 }
 
-function hasTargetLarkCliUsers(config: Config): boolean {
+function hasTargetLarkCliUsers(config: LocalServiceConfig): boolean {
   const target = readTargetLarkCliApp(config);
   if (!target) return false;
   return Boolean(structuredLarkCliUsers(target.app.users));
 }
 
-function hasLegacyStrictLarkCliRuntime(config: Config): boolean {
+function hasLegacyStrictLarkCliRuntime(config: LocalServiceConfig): boolean {
   const target = readTargetLarkCliApp(config);
   if (!target) return false;
   return target.app.strictMode === 'bot' || target.app.defaultAs === 'bot';
 }
 
-export function resetLegacyStrictLarkCliRuntimeForSetup(config = loadConfig()): boolean {
+export function resetLegacyStrictLarkCliRuntimeForSetup(config: LocalServiceConfig = loadStartupConfig()): boolean {
   // 旧版 setup 会把私有 lark-cli workspace 绑定成 bot-only。
   // 这个策略会在 OAuth 成功后继续拒绝显式 `--as user` 命令，
   // 所以下一次交互式 setup 必须从头重建隔离 runtime。
@@ -760,7 +831,7 @@ async function runBundledLarkCli(
   });
 }
 
-export async function ensureLarkCliRuntimeConfig(config = loadConfig()): Promise<{
+export async function ensureLarkCliRuntimeConfig(config: LocalServiceConfig = loadStartupConfig()): Promise<{
   ready: boolean;
   skipped: boolean;
   sourceConfigFile?: string;
@@ -837,7 +908,7 @@ export async function ensureLarkCliRuntimeConfig(config = loadConfig()): Promise
   };
 }
 
-function describeBridgeStartupPreflightFailure(channels: ChannelInstance[] | undefined): string | null {
+function describeBridgeStartupPreflightFailure(channels: LocalServiceChannel[] | undefined): string | null {
   const configured = Array.isArray(channels) ? channels : [];
   if (configured.length === 0) {
     return '未配置任何通道实例。请先使用`codelark run`创建并保存至少一个飞书通道，然后再启动桥接服务。';
@@ -853,7 +924,7 @@ function describeBridgeStartupPreflightFailure(channels: ChannelInstance[] | und
 
 function describeBridgeActivationFailure(
   status: BridgeStatus,
-  channels: ChannelInstance[] | undefined,
+  channels: LocalServiceChannel[] | undefined,
 ): string | null {
   const statusReason = status.lastExitReason?.trim();
   if (statusReason) return statusReason;
@@ -913,7 +984,7 @@ async function waitForUiServer(timeoutMs = 15_000): Promise<UiServerStatus> {
   return getUiServerStatus();
 }
 
-export async function startBridge(): Promise<BridgeStatus> {
+export async function startBridge(options: ServiceConfigOverrideOptions = {}): Promise<BridgeStatus> {
   ensureDirs();
   const current = getBridgeStatus();
   const extraAlivePids = getTrackedBridgePids(current)
@@ -923,7 +994,8 @@ export async function startBridge(): Promise<BridgeStatus> {
     await stopBridge();
   }
 
-  const config = loadConfig();
+  const startup = startupProjectionFor(options);
+  const config = startup.config;
   const preflightFailure = describeBridgeStartupPreflightFailure(config.channels);
   if (preflightFailure) {
     throw new Error(preflightFailure);
@@ -970,7 +1042,7 @@ export async function startBridge(): Promise<BridgeStatus> {
     const child = spawn(process.execPath, [daemonEntry], {
       cwd: packageRoot,
       detached: true,
-      env: buildDaemonEnv(),
+      env: buildDaemonEnv(options, startup.env),
       stdio: ['ignore', stdoutFd, stderrFd],
       ...WINDOWS_HIDE,
     });
@@ -1046,6 +1118,10 @@ export const _testOnly = {
   readBridgeInstanceLock,
   releaseBridgeInstanceLock,
   clearStaleBridgeInstanceLock,
+  buildDaemonEnv,
+  buildUiServerEnv,
+  loadStartupProjection,
+  loadStartupConfig,
   buildLarkCliRuntimeEnv,
   writeLarkCliSourceProjection,
   hasTargetLarkCliUsers,
@@ -1163,7 +1239,7 @@ export function getBridgeLogs(lines = 200): string {
   return all.slice(Math.max(0, all.length - lines)).join('\n');
 }
 
-export async function ensureUiServerRunning(): Promise<UiServerStatus> {
+export async function ensureUiServerRunning(options: ServiceConfigOverrideOptions = {}): Promise<UiServerStatus> {
   ensureDirs();
   const current = getUiServerStatus();
   if (current.running) return current;
@@ -1179,10 +1255,7 @@ export async function ensureUiServerRunning(): Promise<UiServerStatus> {
   const child = spawn(process.execPath, [serverEntry], {
     cwd: packageRoot,
     detached: true,
-    env: {
-      ...process.env,
-      CODELARK_HOME,
-    },
+    env: buildUiServerEnv(options),
     stdio: ['ignore', stdoutFd, stderrFd],
     ...WINDOWS_HIDE,
   });

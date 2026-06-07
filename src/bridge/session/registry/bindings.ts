@@ -4,7 +4,8 @@ import type { BridgeStore } from '../../../domain/audit.js';
 import type { ChannelAddress, ChannelChat, ChannelChatMode, ChannelDefaultTarget } from '../../../domain/channel.js';
 import type { BridgeSession } from '../../../domain/session.js';
 import { recordBindingChange } from '../binding-audit.js';
-import { findChannelInstance, loadConfig, type ChannelProvider } from '../../../configuration/index.js';
+import type { ChannelProvider } from '../../../channels/types.js';
+import { createConfigService } from '../../../configuration/service.js';
 import {
   getCodexSessionByThreadId,
   isArchivedCodexThread,
@@ -19,13 +20,17 @@ import {
   getSessionActiveRuntime,
   getSessionClaudeCwd,
   getSessionClaudeSessionId,
-  getSessionCodexMode,
-  getSessionCodexModel,
-  getSessionCodexProvider as readSessionCodexProvider,
   getSessionCodexTitle,
   getSessionWorkingDirectory,
   setSessionCodexTitleUpdate,
 } from '../../../domain/session-runtime.js';
+import { getGlobalStringConfig } from '../global-config.js';
+import {
+  hasSessionCodexProviderOverride,
+  resolveDisplayedModel,
+  resolveEffectiveCodexProvider,
+  resolveEffectiveMode,
+} from '../support.js';
 
 export interface BindingTargetOption {
   kind: 'codex' | 'session';
@@ -103,10 +108,19 @@ function resolveChannelMeta(channelType: string, provider?: ChannelProvider): {
   provider?: ChannelProvider;
   alias?: string;
 } {
-  const instance = findChannelInstance(channelType, loadConfig());
+  let instance: { provider?: string; alias?: string } | undefined;
+  try {
+    instance = createConfigService({ migrate: false })
+      .snapshot()
+      .config
+      .channels
+      .find((channel) => channel.id === channelType);
+  } catch {
+    instance = undefined;
+  }
   if (instance) {
     return {
-      provider: instance.provider,
+      provider: asChannelProvider(instance.provider),
       alias: instance.alias,
     };
   }
@@ -202,14 +216,15 @@ function getSessionName(session: BridgeSession): string {
   return session.id.slice(0, 8);
 }
 
-function getSessionMode(store: BridgeStore, session: BridgeSession): ChannelChatMode {
-  return (getSessionCodexMode(session) || store.getSetting('bridge_default_mode')) === 'yolo'
-    ? 'yolo'
-    : 'normal';
+function getSessionMode(session: BridgeSession, binding?: ChannelChat | null): ChannelChatMode {
+  return resolveEffectiveMode(binding, session);
 }
 
-function getSessionCodexProvider(session: BridgeSession | null | undefined): 'sdk' | 'pty' | 'tmux' | 'default' {
-  return readSessionCodexProvider(session) || 'default';
+function getSessionCodexProvider(
+  session: BridgeSession | null | undefined,
+  binding?: ChannelChat | null,
+): 'sdk' | 'pty' | 'tmux' | 'default' {
+  return hasSessionCodexProviderOverride(session) ? resolveEffectiveCodexProvider(session, binding) : 'default';
 }
 
 function describeBridgeSessionTarget(
@@ -265,7 +280,7 @@ export function ensureBridgeSessionForCodexThread(
   }
 
   const workingDirectory = opts?.workingDirectory || '';
-  const model = opts?.model || store.getSetting('bridge_default_model') || '';
+  const model = opts?.model || getGlobalStringConfig('runtime.codex.model') || '';
   const baseName = opts?.name || '';
 
   const session = store.createSession(
@@ -449,9 +464,9 @@ export function listBindingSummaries(store: BridgeStore): BindingSummary[] {
       chatKind: binding.chatKind,
       chatUserId: binding.chatUserId,
       chatDisplayName: session ? getSessionName(session) : undefined,
-      mode: session ? getSessionMode(store, session) : 'normal',
-      codexProvider: getSessionCodexProvider(session),
-      model: getSessionCodexModel(session) || '',
+      mode: session ? getSessionMode(session, binding) : 'normal',
+      codexProvider: getSessionCodexProvider(session, binding),
+      model: resolveDisplayedModel(binding, session, getGlobalStringConfig('runtime.codex.model'), ''),
       workingDirectory: getSessionWorkingDirectory(session) || '',
       currentTargetLabel,
       currentSessionId: binding.bridgeSessionId,

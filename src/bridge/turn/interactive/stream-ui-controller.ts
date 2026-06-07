@@ -145,7 +145,27 @@ export function createInteractiveStreamUiController(
     streamKey: params.streamKey,
     ensureStarted: params.ensureStarted,
   };
-  const feedback = createInteractiveStreamFeedback(target);
+  const baseFeedback = createInteractiveStreamFeedback(target);
+  let hasStructuredContent = false;
+  const feedback: InteractiveStreamFeedback = {
+    ...baseFeedback,
+    pushText(text) {
+      hasStructuredContent = hasStructuredContent || Boolean(text.trim());
+      baseFeedback.pushText(text);
+    },
+    pushHistory(items) {
+      hasStructuredContent = hasStructuredContent || items.length > 0;
+      baseFeedback.pushHistory(items);
+    },
+    pushTools(tools) {
+      hasStructuredContent = hasStructuredContent || tools.length > 0;
+      baseFeedback.pushTools(tools);
+    },
+    pushTasks(tasks) {
+      hasStructuredContent = hasStructuredContent || tasks.length > 0;
+      baseFeedback.pushTasks(tasks);
+    },
+  };
   const hasStreamingCards = typeof params.adapter.onStreamText === 'function';
   const supportsPersistentStreamStatus = hasStreamingCards
     && params.adapter.provider === 'feishu'
@@ -276,6 +296,7 @@ export function createInteractiveStreamUiController(
     },
     shouldSkipTextDelivery() {
       if (!hasStreamingCards) return false;
+      if (!hasStructuredContent) return false;
       if (params.taskState.structuredStreamUiActive) return true;
       if (params.adapter.hasActiveStreamingUi?.(params.chatId, params.streamKey)) return true;
       return false;

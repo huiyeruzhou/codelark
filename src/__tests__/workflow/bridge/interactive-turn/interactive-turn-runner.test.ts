@@ -4,7 +4,9 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 
-import { CODELARK_HOME } from '../../../../configuration/index.js';
+import { CODELARK_HOME } from '../../../../configuration/paths.js';
+import { createConfigService } from '../../../../configuration/service.js';
+import type { ConfigPatch } from '../../../../configuration/schema.js';
 import { JsonFileStore } from '../../../../storage/json-store.js';
 import { getBridgeContext, initBridgeContext } from '../../../../bridge/host/context.js';
 import { BaseChannelAdapter, type StructuredStreamingUiActionButton, type StructuredStreamingUiMetadata, type StructuredStreamingUiSnapshot } from '../../../../channels/contracts.js';
@@ -23,6 +25,7 @@ import { ThreadDisplayService } from '../../../../bridge/session/thread-display-
 import { writeCodexSessionJsonlFixture } from '../../../helpers/bridge/test-bridge-utils.js';
 
 const DATA_DIR = path.join(CODELARK_HOME, 'data');
+const CONFIG_TOML_PATH = path.join(CODELARK_HOME, 'config.toml');
 
 function makeSettings(overrides: Record<string, string> = {}): Map<string, string> {
   return new Map([
@@ -48,6 +51,13 @@ function resolveTestInteractiveTurnRuntimeSettings(channelType?: string) {
   return resolveInteractiveTurnRuntimeSettings(
     channelType,
     (key) => getBridgeContext().store.getSetting(key),
+  );
+}
+
+function setSessionConfigToml(sessionId: string, patch: ConfigPatch): void {
+  createConfigService({ migrate: false, env: {} }).set(
+    { kind: 'session', sessionId },
+    patch,
   );
 }
 
@@ -280,13 +290,17 @@ class ScriptedSessionSimulator {
       runtime: runtime === 'claude'
         ? {
           activeRuntime: 'claude',
-          claude: { provider: provider === 'sdk' ? 'sdk' : 'pty' },
         }
         : {
           activeRuntime: 'codex',
-          codex: { provider: provider === 'tmux' ? 'tmux' : provider === 'pty' ? 'pty' : 'sdk' },
         },
     });
+    setSessionConfigToml(
+      sessionId,
+      runtime === 'claude'
+        ? { runtime: { claude: { provider } } }
+        : { runtime: { codex: { provider: provider === 'tmux' ? 'tmux' : provider === 'pty' ? 'pty' : 'sdk' } } },
+    );
   }
 
   async send(turn: {
@@ -441,6 +455,36 @@ describe('interactive-turn runner', () => {
       },
       lifecycle: {},
     });
+  });
+
+  it('reads stream status timing from v2 config instead of legacy settings', () => {
+    const previous = fs.existsSync(CONFIG_TOML_PATH) ? fs.readFileSync(CONFIG_TOML_PATH, 'utf-8') : null;
+    fs.writeFileSync(CONFIG_TOML_PATH, `
+schema_version = 2
+
+[[channels]]
+id = "feishu-default"
+alias = "飞书"
+provider = "feishu"
+enabled = true
+
+[channels.config]
+stream_status_idle_start_seconds = 7
+stream_status_check_interval_seconds = 3
+`, 'utf-8');
+    try {
+      const settings = resolveInteractiveTurnRuntimeSettings('feishu', (key) => {
+        if (key === 'bridge_stream_status_idle_start_seconds') return '999';
+        if (key === 'bridge_stream_status_check_interval_seconds') return '999';
+        return null;
+      });
+
+      assert.equal(settings.statusTiming.idleStartMs, 7_000);
+      assert.equal(settings.statusTiming.heartbeatMs, 3_000);
+    } finally {
+      if (previous === null) fs.rmSync(CONFIG_TOML_PATH, { force: true });
+      else fs.writeFileSync(CONFIG_TOML_PATH, previous, 'utf-8');
+    }
   });
 
   it('simulates a basic dialogue turn with controlled tool, context, and stream-card checkpoints', async () => {
@@ -695,10 +739,10 @@ describe('interactive-turn runner', () => {
       name: 'Codex Bridge Title',
       runtime: {
         activeRuntime: 'codex',
-        codex: { provider: 'sdk', model: 'gpt-test-model' },
         general: { workingDirectory: '/tmp/codex-sdk-title' },
       },
     });
+    setSessionConfigToml(sessionId, { runtime: { codex: { provider: 'sdk', model: 'gpt-test-model' } } });
     simulator.resolveDisplayInfo = (binding) => ({
       title: '',
       bridgeSessionId: binding.bridgeSessionId,
@@ -729,10 +773,10 @@ describe('interactive-turn runner', () => {
       name: 'Claude Bridge Title',
       runtime: {
         activeRuntime: 'claude',
-        claude: { provider: 'sdk', model: 'claude-sonnet-test' },
         general: { workingDirectory: '/tmp/claude-sdk-title' },
       },
     });
+    setSessionConfigToml(sessionId, { runtime: { claude: { provider: 'sdk', model: 'claude-sonnet-test' } } });
     simulator.resolveDisplayInfo = (binding) => ({
       title: '',
       bridgeSessionId: binding.bridgeSessionId,
@@ -763,10 +807,10 @@ describe('interactive-turn runner', () => {
       name: 'chat-sdk-session-title',
       runtime: {
         activeRuntime: 'codex',
-        codex: { provider: 'sdk', model: 'gpt-test-model' },
         general: { workingDirectory: 'D:\\workspace\\sdk-session-title' },
       },
     });
+    setSessionConfigToml(sessionId, { runtime: { codex: { provider: 'sdk', model: 'gpt-test-model' } } });
     simulator.resolveDisplayInfo = (binding) => (
       new ThreadDisplayService(store).binding(binding, { stripInternalPrefix: true })
     );
@@ -799,6 +843,7 @@ describe('interactive-turn runner', () => {
 
   it('shows status-only stream updates for Claude background preparation without suppressing fallback text', async () => {
     const adapter = new FakeFeishuStreamingAdapter();
+    adapter.streamEndResult = true;
     const address = {
       channelType: 'feishu-default',
       channelProvider: 'feishu',
@@ -813,6 +858,7 @@ describe('interactive-turn runner', () => {
         claude: {},
       },
     });
+    setSessionConfigToml(binding.bridgeSessionId, { runtime: { claude: { provider: 'sdk' } } });
     const taskStateMap = new Map<string, InteractiveTaskState>();
 
     await runInteractiveMessage(
@@ -880,8 +926,9 @@ describe('interactive-turn runner', () => {
 
     assert.ok(adapter.streamedStatuses.some((status) => status.includes('已为Claude Code sdk 注入 Router 环境。')));
     assert.equal(adapter.streamEnds.at(-1)?.status, 'completed');
-    assert.equal(adapter.sentMessages.at(-1)?.text, 'Claude fallback response');
-    assert.equal(adapter.streamedTexts.length, 0);
+    assert.equal(adapter.streamEnds.at(-1)?.text, 'Claude fallback response');
+    assert.equal(adapter.sentMessages.length, 0);
+    assert.deepEqual(adapter.streamedTexts, ['Claude fallback response']);
   });
 
   it('delivers Claude SDK errors as Feishu replies instead of waiting for mirror output', async () => {
@@ -897,9 +944,9 @@ describe('interactive-turn runner', () => {
     store.updateSession(binding.bridgeSessionId, {
       runtime: {
         activeRuntime: 'claude',
-        claude: { provider: 'sdk' },
       },
     });
+    setSessionConfigToml(binding.bridgeSessionId, { runtime: { claude: { provider: 'sdk' } } });
     const taskStateMap = new Map<string, InteractiveTaskState>();
 
     await runInteractiveMessage(
@@ -1463,9 +1510,9 @@ describe('interactive-turn runner', () => {
     store.updateSession(binding.bridgeSessionId, {
       runtime: {
         activeRuntime: 'codex',
-        codex: { provider: 'pty' },
       },
     });
+    setSessionConfigToml(binding.bridgeSessionId, { runtime: { codex: { provider: 'pty' } } });
 
     const taskStateMap = new Map<string, InteractiveTaskState>();
     const processStarted = createDeferred<void>();

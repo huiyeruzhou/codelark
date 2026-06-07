@@ -5,7 +5,8 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-import { CODELARK_HOME, DEFAULT_WORKSPACE_ROOT } from '../../../../configuration/index.js';
+import { CODELARK_HOME, DEFAULT_WORKSPACE_ROOT } from '../../../../configuration/paths.js';
+import { createConfigService } from '../../../../configuration/service.js';
 import { JsonFileStore } from '../../../../storage/json-store.js';
 import { getBridgeContext, initBridgeContext } from '../../../../bridge/host/context.js';
 import { _testOnly, start, stop } from '../../../../bridge/host/manager.js';
@@ -34,7 +35,6 @@ import {
   mergeSessionRuntimeUpdates,
   setSessionActiveRuntimeUpdate,
   setSessionClaudeIdentityUpdate,
-  setSessionWorkingDirectoryUpdate,
 } from '../../../../domain/session-runtime.js';
 import type { OutboundMessage, OutboundRichCard, PermissionGateway, SendResult } from '../../../../domain/index.js';
 import type { LifecycleHooks, LLMProvider, StreamChatParams } from '../../../../runtime/contracts.js';
@@ -42,6 +42,53 @@ import { writeCodexSessionJsonlFixture } from '../../../helpers/bridge/test-brid
 import { getClaudeProjectDir, isArchivedClaudeSession } from '../../../../runtime/claude/session-jsonl.js';
 
 const DATA_DIR = path.join(CODELARK_HOME, 'data');
+const CONFIG_TOML_PATH = path.join(CODELARK_HOME, 'config.toml');
+
+function writeHomeConfigToml(content: string): () => void {
+  const previous = fs.existsSync(CONFIG_TOML_PATH) ? fs.readFileSync(CONFIG_TOML_PATH, 'utf-8') : null;
+  fs.mkdirSync(CODELARK_HOME, { recursive: true });
+  fs.writeFileSync(CONFIG_TOML_PATH, content, 'utf-8');
+  return () => {
+    if (previous === null) fs.rmSync(CONFIG_TOML_PATH, { force: true });
+    else fs.writeFileSync(CONFIG_TOML_PATH, previous, 'utf-8');
+  };
+}
+
+function tomlString(value: string): string {
+  return JSON.stringify(value);
+}
+
+function tomlValue(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(tomlValue).join(', ')}]`;
+  if (typeof value === 'string') return tomlString(value);
+  if (typeof value === 'boolean' || typeof value === 'number') return String(value);
+  return tomlString(String(value ?? ''));
+}
+
+function writeHomeChannelsToml(channels: Array<{
+  id: string;
+  alias: string;
+  enabled: boolean;
+  config?: Record<string, unknown>;
+}>): void {
+  const lines = ['schema_version = 2', ''];
+  for (const channel of channels) {
+    lines.push(
+      '[[channels]]',
+      `id = ${tomlString(channel.id)}`,
+      `alias = ${tomlString(channel.alias)}`,
+      'provider = "feishu"',
+      `enabled = ${channel.enabled}`,
+      '',
+      '[channels.config]',
+    );
+    for (const [key, value] of Object.entries(channel.config || {})) {
+      lines.push(`${key} = ${tomlValue(value)}`);
+    }
+    lines.push('');
+  }
+  writeHomeConfigToml(lines.join('\n'));
+}
 
 function writeClaudeJsonlFixture(params: {
   homeDir: string;
@@ -291,41 +338,59 @@ class StartupNoticeAdapter extends BaseChannelAdapter {
 describe('bridge-manager resolveNewWorkingDirectory', () => {
   beforeEach(() => {
     fs.rmSync(DATA_DIR, { recursive: true, force: true });
+    fs.rmSync(path.join(CODELARK_HOME, 'config'), { recursive: true, force: true });
+    fs.rmSync(CONFIG_TOML_PATH, { force: true });
   });
 
   it('resolves a relative project name inside the configured workspace root', () => {
-    const settings = makeSettings();
-    settings.set('bridge_default_workspace_root', 'D:\\workspace');
-    const store = new JsonFileStore(settings);
-    initBridgeContext({
-      store,
-      llm: noopLlm,
-      permissions: noopPermissions,
-      lifecycle: noopLifecycle,
-    });
+    const restore = writeHomeConfigToml(`
+schema_version = 2
 
-    const resolved = _testOnly.resolveNewWorkingDirectory('proj1');
-    assert.deepEqual(resolved, {
-      ok: true,
-      workDir: path.resolve('D:\\workspace', 'proj1'),
-    });
+[bridge]
+default_workspace = 'D:\\workspace'
+`);
+    try {
+      const store = new JsonFileStore(makeSettings());
+      initBridgeContext({
+        store,
+        llm: noopLlm,
+        permissions: noopPermissions,
+        lifecycle: noopLifecycle,
+      });
+
+      const resolved = _testOnly.resolveNewWorkingDirectory('proj1');
+      assert.deepEqual(resolved, {
+        ok: true,
+        workDir: path.resolve('D:\\workspace', 'proj1'),
+      });
+    } finally {
+      restore();
+    }
   });
 
   it('rejects relative paths that escape the configured workspace root', () => {
-    const settings = makeSettings();
-    settings.set('bridge_default_workspace_root', 'D:\\workspace');
-    const store = new JsonFileStore(settings);
-    initBridgeContext({
-      store,
-      llm: noopLlm,
-      permissions: noopPermissions,
-      lifecycle: noopLifecycle,
-    });
+    const restore = writeHomeConfigToml(`
+schema_version = 2
 
-    const resolved = _testOnly.resolveNewWorkingDirectory('..\\evil');
-    assert.equal(resolved.ok, false);
-    if (!resolved.ok) {
-      assert.match(resolved.message, /不能使用 \.\.|越界/);
+[bridge]
+default_workspace = 'D:\\workspace'
+`);
+    try {
+      const store = new JsonFileStore(makeSettings());
+      initBridgeContext({
+        store,
+        llm: noopLlm,
+        permissions: noopPermissions,
+        lifecycle: noopLifecycle,
+      });
+
+      const resolved = _testOnly.resolveNewWorkingDirectory('..\\evil');
+      assert.equal(resolved.ok, false);
+      if (!resolved.ok) {
+        assert.match(resolved.message, /不能使用 \.\.|越界/);
+      }
+    } finally {
+      restore();
     }
   });
 
@@ -373,24 +438,36 @@ describe('bridge-manager resolveNewWorkingDirectory', () => {
   });
 
   it('treats dot-slash /new arguments as relative paths', () => {
-    const settings = makeSettings();
-    settings.set('bridge_default_workspace_root', 'D:\\workspace');
-    const store = new JsonFileStore(settings);
-    initBridgeContext({
-      store,
-      llm: noopLlm,
-      permissions: noopPermissions,
-      lifecycle: noopLifecycle,
-    });
+    const restore = writeHomeConfigToml(`
+schema_version = 2
 
-    const resolved = _testOnly.resolveNewWorkingDirectory('./hi');
-    assert.deepEqual(resolved, {
-      ok: true,
-      workDir: path.resolve('D:\\workspace', 'hi'),
-    });
+[bridge]
+default_workspace = 'D:\\workspace'
+`);
+    try {
+      const store = new JsonFileStore(makeSettings());
+      initBridgeContext({
+        store,
+        llm: noopLlm,
+        permissions: noopPermissions,
+        lifecycle: noopLifecycle,
+      });
+
+      const resolved = _testOnly.resolveNewWorkingDirectory('./hi');
+      assert.deepEqual(resolved, {
+        ok: true,
+        workDir: path.resolve('D:\\workspace', 'hi'),
+      });
+    } finally {
+      restore();
+    }
   });
 
   it('reuses the current formal session directory when /new has no args', () => {
+    createConfigService({ migrate: false, env: {} }).set(
+      { kind: 'session', sessionId: 'session-1' },
+      { session: { workspace: 'D:\\workspace\\project-a' } },
+    );
     const resolved = _testOnly.resolveNewSessionWorkingDirectory(
       '',
       {
@@ -406,7 +483,6 @@ describe('bridge-manager resolveNewWorkingDirectory', () => {
         name: 'Project A',
         runtime: {
           codex: { model: 'test-model' },
-          general: { workingDirectory: 'D:\\workspace\\project-a' },
         },
         session_type: 'normal',
       },
@@ -418,24 +494,36 @@ describe('bridge-manager resolveNewWorkingDirectory', () => {
   });
 
   it('reuses the global default directory when /new has no args and the current chat is not bound', () => {
-    const settings = makeSettings();
-    settings.set('bridge_default_workspace_root', 'D:\\workspace');
-    const store = new JsonFileStore(settings);
-    initBridgeContext({
-      store,
-      llm: noopLlm,
-      permissions: noopPermissions,
-      lifecycle: noopLifecycle,
-    });
+    const restore = writeHomeConfigToml(`
+schema_version = 2
 
-    const resolved = _testOnly.resolveNewSessionWorkingDirectory('', null, null);
-    assert.deepEqual(resolved, {
-      ok: true,
-      workDir: path.resolve('D:\\workspace'),
-    });
+[bridge]
+default_workspace = 'D:\\workspace'
+`);
+    try {
+      const store = new JsonFileStore(makeSettings());
+      initBridgeContext({
+        store,
+        llm: noopLlm,
+        permissions: noopPermissions,
+        lifecycle: noopLifecycle,
+      });
+
+      const resolved = _testOnly.resolveNewSessionWorkingDirectory('', null, null);
+      assert.deepEqual(resolved, {
+        ok: true,
+        workDir: path.resolve('D:\\workspace'),
+      });
+    } finally {
+      restore();
+    }
   });
 
   it('reuses the current draft session directory when /new has no args', () => {
+    createConfigService({ migrate: false, env: {} }).set(
+      { kind: 'session', sessionId: 'session-1' },
+      { session: { workspace: 'D:\\codelark\\runtime\\draft' } },
+    );
     const resolved = _testOnly.resolveNewSessionWorkingDirectory(
       '',
       {
@@ -451,7 +539,6 @@ describe('bridge-manager resolveNewWorkingDirectory', () => {
         name: 'Draft:feishu:chat-1',
         runtime: {
           codex: { model: 'test-model' },
-          general: { workingDirectory: 'D:\\codelark\\runtime\\draft' },
         },
         session_type: 'draft',
       },
@@ -1224,6 +1311,12 @@ describe('bridge-manager resolveCommandAlias', () => {
 
 describe('bridge-manager status formatting', () => {
   beforeEach(() => {
+    writeHomeConfigToml(`
+schema_version = 2
+
+[runtime.codex]
+model = "test-model"
+`);
     const store = new JsonFileStore(makeSettings());
     initBridgeContext({
       store,
@@ -1234,10 +1327,14 @@ describe('bridge-manager status formatting', () => {
   });
 
   it('resolves the displayed model from the most specific available source', () => {
+    createConfigService({ migrate: false, env: {} }).set(
+      { kind: 'session', sessionId: 's-model' },
+      { runtime: { codex: { model: 'session-model' } } },
+    );
     assert.equal(
       _testOnly.resolveDisplayedModel(
         { model: 'binding-model' } as never,
-        { id: 's-1', runtime: { codex: { model: 'session-model' } } },
+        { id: 's-model', runtime: { codex: { model: 'legacy-session-model' } } },
         'configured-model',
         'codex-default',
       ),
@@ -1246,23 +1343,23 @@ describe('bridge-manager status formatting', () => {
     assert.equal(
       _testOnly.resolveDisplayedModel(
         null,
-        { id: 's-1', runtime: { codex: { model: 'session-model' } } },
+        { id: 's-model', runtime: { codex: { model: 'legacy-session-model' } } },
         'configured-model',
         'codex-default',
       ),
       'session-model',
     );
     assert.equal(
-      _testOnly.resolveDisplayedModel(null, { id: 's-1', runtime: { codex: { model: '' } } }, 'configured-model', 'codex-default'),
+      _testOnly.resolveDisplayedModel(null, { id: 's-empty', runtime: { codex: { model: 'legacy-session-model' } } }, 'configured-model', 'codex-default'),
       'configured-model',
     );
     assert.equal(
-      _testOnly.resolveDisplayedModel(null, { id: 's-1', runtime: { codex: { model: '' } } }, null, 'codex-default'),
+      _testOnly.resolveDisplayedModel(null, { id: 's-empty', runtime: { codex: { model: 'legacy-session-model' } } }, null, 'codex-default'),
       'codex-default',
     );
     assert.equal(
-      _testOnly.resolveDisplayedModel(null, { id: 's-1', runtime: { codex: { model: '' } } }, null, null),
-      'default',
+      _testOnly.resolveDisplayedModel(null, { id: 's-empty', runtime: { codex: { model: 'legacy-session-model' } } }, null, null),
+      'test-model',
     );
   });
 
@@ -1300,6 +1397,22 @@ describe('bridge-manager status formatting', () => {
     const rendered = _testOnly.formatMirrorMessage('Current Thread', 'Codex prompt', 'Codex answer');
 
     assert.equal(rendered, '<Current Thread>\n\n我: Codex prompt\n\ncodex: Codex answer');
+  });
+
+  it('formats mirror assistant labels from v2 runtime agent config', () => {
+    const restore = writeHomeConfigToml(`
+schema_version = 2
+
+[runtime]
+agent = "claude"
+`);
+    try {
+      const rendered = _testOnly.formatMirrorMessage('Current Thread', 'prompt', 'answer');
+
+      assert.equal(rendered, '<Current Thread>\n\n我: prompt\n\nclaude: answer');
+    } finally {
+      restore();
+    }
   });
 
   it('returns an empty mirror message when there is no text', () => {
@@ -1556,7 +1669,7 @@ describe('bridge-manager status formatting', () => {
       assert.deepEqual(streamEvents, [
         'metadata:mirror:session-1:turn-1:本地会话:effort:medium,model:test-model,bridge_id:session-,mirror',
         'start:mirror:session-1:turn-1',
-        'text:mirror:session-1:turn-1:我: codex prompt\n\ncodex:',
+        'text:mirror:session-1:turn-1:**我:** codex prompt\n\n**codex:**',
         'status:mirror:session-1:turn-1:处理中',
       ]);
     } finally {
@@ -1621,7 +1734,7 @@ describe('bridge-manager status formatting', () => {
       assert.deepEqual(streamEvents, [
         'metadata:mirror:session-1:turn-1:本地会话:effort:medium,model:test-model,bridge_id:session-,mirror',
         'start:mirror:session-1:turn-1',
-        'text:mirror:session-1:turn-1:我:\n（基于 Review findings）\nok,当前调整已经可以收尾了吗\n\ncodex:',
+        'text:mirror:session-1:turn-1:**我:**\n（基于 Review findings）\nok,当前调整已经可以收尾了吗\n\n**codex:**',
         'status:mirror:session-1:turn-1:处理中',
       ]);
     } finally {
@@ -2680,7 +2793,6 @@ describe('bridge-manager channel lifecycle events', () => {
       {},
       setSessionActiveRuntimeUpdate('claude'),
       setSessionClaudeIdentityUpdate(claudeSessionId, cwd),
-      setSessionWorkingDirectoryUpdate(cwd),
     ));
     const binding = router.bindToSession(address, session.id);
     assert.ok(binding);
@@ -2723,6 +2835,7 @@ describe('bridge-manager channel lifecycle events', () => {
 describe('bridge-manager startup runtime cleanup', () => {
   beforeEach(() => {
     fs.rmSync(DATA_DIR, { recursive: true, force: true });
+    fs.rmSync(CONFIG_TOML_PATH, { force: true });
     const store = new JsonFileStore(makeSettings());
     initBridgeContext({
       store,
@@ -2762,16 +2875,12 @@ describe('bridge-manager startup runtime cleanup', () => {
     StartupNoticeAdapter.groupChats = new Map();
     registerAdapterFactory('feishu', (instance) => new StartupNoticeAdapter(instance as any));
 
+    writeHomeChannelsToml([{
+      id: 'startup-notice-main',
+      alias: 'Startup Notice',
+      enabled: true,
+    }]);
     const settings = makeSettings();
-    settings.set('bridge_channel_instances_json', JSON.stringify([
-      {
-        id: 'startup-notice-main',
-        provider: 'feishu',
-        alias: 'Startup Notice',
-        enabled: true,
-        config: {},
-      },
-    ]));
     const store = new JsonFileStore(settings);
     initBridgeContext({
       store,
@@ -2816,16 +2925,13 @@ describe('bridge-manager startup runtime cleanup', () => {
     StartupNoticeAdapter.groupChats = new Map();
     registerAdapterFactory('feishu', (instance) => new StartupNoticeAdapter(instance as any));
 
+    writeHomeChannelsToml([{
+      id: 'startup-notice-main',
+      alias: 'Startup Notice',
+      enabled: true,
+      config: { app_id: 'cli_test_app', site: 'feishu' },
+    }]);
     const settings = makeSettings();
-    settings.set('bridge_channel_instances_json', JSON.stringify([
-      {
-        id: 'startup-notice-main',
-        provider: 'feishu',
-        alias: 'Startup Notice',
-        enabled: true,
-        config: { appId: 'cli_test_app', site: 'feishu' },
-      },
-    ]));
     const store = new JsonFileStore(settings);
     initBridgeContext({
       store,
@@ -2872,16 +2978,12 @@ describe('bridge-manager startup runtime cleanup', () => {
     StartupNoticeAdapter.groupChats = new Map();
     registerAdapterFactory('feishu', (instance) => new StartupNoticeAdapter(instance as any));
 
+    writeHomeChannelsToml([{
+      id: 'startup-notice-main',
+      alias: 'Startup Notice',
+      enabled: true,
+    }]);
     const settings = makeSettings();
-    settings.set('bridge_channel_instances_json', JSON.stringify([
-      {
-        id: 'startup-notice-main',
-        provider: 'feishu',
-        alias: 'Startup Notice',
-        enabled: true,
-        config: {},
-      },
-    ]));
     const store = new JsonFileStore(settings);
     initBridgeContext({
       store,
@@ -2930,16 +3032,12 @@ describe('bridge-manager startup runtime cleanup', () => {
     ]);
     registerAdapterFactory('feishu', (instance) => new StartupNoticeAdapter(instance as any));
 
+    writeHomeChannelsToml([{
+      id: 'startup-notice-main',
+      alias: 'Startup Notice',
+      enabled: true,
+    }]);
     const settings = makeSettings();
-    settings.set('bridge_channel_instances_json', JSON.stringify([
-      {
-        id: 'startup-notice-main',
-        provider: 'feishu',
-        alias: 'Startup Notice',
-        enabled: true,
-        config: {},
-      },
-    ]));
     const store = new JsonFileStore(settings);
     initBridgeContext({
       store,
@@ -2987,16 +3085,12 @@ describe('bridge-manager startup runtime cleanup', () => {
     ]);
     registerAdapterFactory('feishu', (instance) => new StartupNoticeAdapter(instance as any));
 
+    writeHomeChannelsToml([{
+      id: 'startup-notice-main',
+      alias: 'Startup Notice',
+      enabled: true,
+    }]);
     const settings = makeSettings();
-    settings.set('bridge_channel_instances_json', JSON.stringify([
-      {
-        id: 'startup-notice-main',
-        provider: 'feishu',
-        alias: 'Startup Notice',
-        enabled: true,
-        config: {},
-      },
-    ]));
     const store = new JsonFileStore(settings);
     initBridgeContext({
       store,
@@ -3065,16 +3159,12 @@ describe('bridge-manager startup runtime cleanup', () => {
     ]);
     registerAdapterFactory('feishu', (instance) => new StartupNoticeAdapter(instance as any));
 
+    writeHomeChannelsToml([{
+      id: 'startup-notice-main',
+      alias: 'Startup Notice',
+      enabled: true,
+    }]);
     const settings = makeSettings();
-    settings.set('bridge_channel_instances_json', JSON.stringify([
-      {
-        id: 'startup-notice-main',
-        provider: 'feishu',
-        alias: 'Startup Notice',
-        enabled: true,
-        config: {},
-      },
-    ]));
     const store = new JsonFileStore(settings);
     initBridgeContext({
       store,
@@ -3130,16 +3220,12 @@ describe('bridge-manager startup runtime cleanup', () => {
     ]);
     registerAdapterFactory('feishu', (instance) => new StartupNoticeAdapter(instance as any));
 
+    writeHomeChannelsToml([{
+      id: 'startup-notice-main',
+      alias: 'Startup Notice',
+      enabled: true,
+    }]);
     const settings = makeSettings();
-    settings.set('bridge_channel_instances_json', JSON.stringify([
-      {
-        id: 'startup-notice-main',
-        provider: 'feishu',
-        alias: 'Startup Notice',
-        enabled: true,
-        config: {},
-      },
-    ]));
     const store = new JsonFileStore(settings);
     initBridgeContext({
       store,
@@ -3194,16 +3280,12 @@ describe('bridge-manager startup runtime cleanup', () => {
     ]);
     registerAdapterFactory('feishu', (instance) => new StartupNoticeAdapter(instance as any));
 
+    writeHomeChannelsToml([{
+      id: 'startup-notice-main',
+      alias: 'Startup Notice',
+      enabled: true,
+    }]);
     const settings = makeSettings();
-    settings.set('bridge_channel_instances_json', JSON.stringify([
-      {
-        id: 'startup-notice-main',
-        provider: 'feishu',
-        alias: 'Startup Notice',
-        enabled: true,
-        config: {},
-      },
-    ]));
     const store = new JsonFileStore(settings);
     initBridgeContext({
       store,
@@ -3267,16 +3349,12 @@ describe('bridge-manager startup runtime cleanup', () => {
     ]);
     registerAdapterFactory('feishu', (instance) => new StartupNoticeAdapter(instance as any));
 
+    writeHomeChannelsToml([{
+      id: 'startup-notice-main',
+      alias: 'Startup Notice',
+      enabled: true,
+    }]);
     const settings = makeSettings();
-    settings.set('bridge_channel_instances_json', JSON.stringify([
-      {
-        id: 'startup-notice-main',
-        provider: 'feishu',
-        alias: 'Startup Notice',
-        enabled: true,
-        config: {},
-      },
-    ]));
     const store = new JsonFileStore(settings);
     initBridgeContext({
       store,
@@ -3558,21 +3636,18 @@ describe('bridge-manager mirror subscription recovery', () => {
 describe('bridge-manager invalid adapter logging', () => {
   beforeEach(() => {
     fs.rmSync(DATA_DIR, { recursive: true, force: true });
+    fs.rmSync(CONFIG_TOML_PATH, { force: true });
     registerAdapterFactory('feishu', (instance) => new InvalidConfigAdapter(instance as any));
     _testOnly.resetStateForTests();
   });
 
   it('logs unchanged invalid adapter configs only once', async () => {
+    writeHomeChannelsToml([{
+      id: 'feishu-invalid-main',
+      alias: 'Invalid Feishu',
+      enabled: true,
+    }]);
     const settings = makeSettings();
-    settings.set('bridge_channel_instances_json', JSON.stringify([
-      {
-        id: 'feishu-invalid-main',
-        provider: 'feishu',
-        alias: 'Invalid Feishu',
-        enabled: true,
-        config: {},
-      },
-    ]));
 
     const store = new JsonFileStore(settings);
     initBridgeContext({
@@ -3639,16 +3714,12 @@ describe('bridge-manager invalid adapter logging', () => {
     ThrowStartAdapter.stopCalls = [];
     registerAdapterFactory('feishu', (instance) => new ThrowStartAdapter(instance as any));
 
+    writeHomeChannelsToml([{
+      id: 'feishu-throw-start-main',
+      alias: 'Throw Start',
+      enabled: true,
+    }]);
     const settings = makeSettings();
-    settings.set('bridge_channel_instances_json', JSON.stringify([
-      {
-        id: 'feishu-throw-start-main',
-        provider: 'feishu',
-        alias: 'Throw Start',
-        enabled: true,
-        config: {},
-      },
-    ]));
 
     const store = new JsonFileStore(settings);
     initBridgeContext({
@@ -3820,7 +3891,7 @@ describe('channel-router defaults', () => {
     });
     const session = store.getSession(binding.bridgeSessionId);
 
-    assert.equal(session?.runtime?.codex?.mode, 'normal');
+    assert.equal(session?.runtime?.codex?.mode, undefined);
     assert.equal(session?.hidden, true);
     assert.equal(session?.session_type, 'normal');
     assert.equal(session?.name, 'ou_abcdef');

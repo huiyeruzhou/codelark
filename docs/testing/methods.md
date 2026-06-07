@@ -27,7 +27,7 @@ nvm use 24
 | 类型检查 | `npm run typecheck` | 验证 TypeScript 类型和公共导入边界。 |
 | 构建验证 | `npm run build` | 验证发布构建入口和 esbuild 打包。 |
 | 文档验证 | `npm run docs:build` | 验证 VitePress 文档链接、导航和 Markdown 构建。 |
-| Setup wizard / lark-cli 真实本地 E2E | `CODELARK_SETUP_WIZARD_REAL_E2E=1 npm run real:setup-wizard:e2e -- ...` | 用真实 `lark-cli config init --app-id ... --app-secret-stdin` 在临时 `HOME` 下写入 `~/.lark-cli/config.json` 和本地加密 secret，再验证 setup wizard 能通过 lark-cli 配置回读 secret，并验证 CodeLark `config.json`/`config.env` 保存和自定义 env 行保留。默认成功和失败都会清理临时目录；只有传 `--keep-temp` 才保留。 |
+| Setup wizard / lark-cli 真实本地 E2E | `CODELARK_SETUP_WIZARD_REAL_E2E=1 npm run real:setup-wizard:e2e -- ...` | 用真实 `lark-cli config init --app-id ... --app-secret-stdin` 在临时 `HOME` 下写入 `~/.lark-cli/config.json` 和本地加密 secret，再验证 setup wizard 能通过 lark-cli 配置回读 secret，并验证 CodeLark 写入 `~/.codelark/config.toml` 且不改写 legacy `config.json` / `config.env`。默认成功和失败都会清理临时目录；只有传 `--keep-temp` 才保留。 |
 | 真实飞书场景目录 | `npm run real:feishu:e2e -- --list-scenarios` | 输出真实 E2E 场景、provider 矩阵、coverage tier 和对应本地覆盖。 |
 | 真实飞书 E2E | `CODELARK_REAL_FEISHU_E2E=1 npm run real:feishu:e2e -- ...` | 真实创建/复用飞书群、用 lark-cli 用户身份发消息，再用 lark-cli 用户身份拉取消息/群信息验证 bridge 回复、飞书 transcript、provider 输出路径和清理 gate。 |
 
@@ -85,7 +85,7 @@ CODELARK_SETUP_WIZARD_REAL_E2E=1 npm run real:setup-wizard:e2e -- \
 | `help-command.test.ts` | `/help` 命令分组和用户可读帮助文本。 |
 | `bridge-adapter-runtime.test.ts` | adapter 事件进入 bridge 后按当前 runtime 路由。 |
 | `interactive-runtime.test.ts` | runtime 选择、provider 绑定和运行时上下文。 |
-| `runtime-options.test.ts` | runtime/provider 配置项的合法性、默认值和持久化表达。 |
+| `runtime/runtime-options.test.ts` | runtime/provider 选项解析和业务 fallback；配置层只提供 schema 校验后的统一值。 |
 | `session-runtime.test.ts` | `BridgeSession` 上 Codex/Claude runtime 字段的读写语义。 |
 | `session-registry.test.ts`、`session-registry-bindings.test.ts`、`session-display-query.test.ts`、`session-health-runtime.test.ts` | session 创建、聊天绑定、展示查询、健康诊断和跨 runtime 状态。 |
 | `turn-classifier.test.ts` | 普通用户消息、命令、特殊控制输入等 turn 类型识别。 |

@@ -10,6 +10,7 @@ import type { UiSessionClaudeSource, UiSessionCodexSource } from '../../../opera
 import { JsonFileStore } from '../../../storage/json-store.js';
 import { makeBridgeSettings, resetBridgeTestState } from '../../helpers/bridge/test-bridge-utils.js';
 import { getClaudeProjectDir } from '../../../runtime/claude/session-jsonl.js';
+import { createConfigService } from '../../../configuration/service.js';
 
 function defaultEmptyCodexSource(): UiSessionCodexSource {
   return {
@@ -73,7 +74,7 @@ describe('UiSessionApplication', () => {
     assert.match(history.messages[0]?.renderedContent || '', /<strong>session<\/strong>/);
 
     const imported = app.importCodexThread(thread.threadId);
-    assert.equal(imported.config.model, 'model-from-ui-source');
+    assert.equal(imported.config.model, '');
     assert.equal(store.getSession(imported.bridgeSessionId)?.runtime?.codex?.threadId, thread.threadId);
 
     const deleted = app.deleteSession({ codexThreadId: thread.threadId });
@@ -211,13 +212,26 @@ describe('UiSessionApplication', () => {
         claude: {
           sessionId: 'claude-config-session',
           cwd: '/tmp/claude-config',
-          model: 'initial-sonnet',
-          permissionMode: 'plan',
-          reasoningEffort: 'medium',
+          model: 'legacy-sonnet',
+          permissionMode: 'acceptEdits',
+          reasoningEffort: 'low',
         },
         general: { workingDirectory: '/tmp/claude-config' },
       },
     });
+    const configService = createConfigService({ migrate: false, env: {} });
+    configService.set(
+      { kind: 'session', sessionId: session.id },
+      {
+        runtime: {
+          claude: {
+            model: 'initial-sonnet',
+            permissionMode: 'plan',
+            reasoningEffort: 'medium',
+          },
+        },
+      },
+    );
 
     const app = new UiSessionApplication(store);
     const config = app.getConfig(session.id);
@@ -242,9 +256,123 @@ describe('UiSessionApplication', () => {
     assert.equal(updated.claudeReasoningEffort, 'high');
     const stored = store.getSession(session.id);
     assert.equal(stored?.runtime?.activeRuntime, 'claude');
-    assert.equal(stored?.runtime?.claude?.model, 'opus');
-    assert.equal(stored?.runtime?.claude?.permissionMode, 'bypassPermissions');
-    assert.equal(stored?.runtime?.claude?.reasoningEffort, 'high');
+    assert.equal(stored?.runtime?.claude?.model, 'legacy-sonnet');
+    assert.equal(stored?.runtime?.claude?.permissionMode, 'acceptEdits');
+    assert.equal(stored?.runtime?.claude?.reasoningEffort, 'low');
     assert.equal(stored?.runtime?.codex, undefined);
+    assert.equal(configService.get('runtime.claude.model', { kind: 'session', sessionId: session.id }), 'opus');
+    assert.equal(configService.get('runtime.claude.yoloMode', { kind: 'session', sessionId: session.id }), 'on');
+    assert.equal(configService.get('runtime.claude.permissionMode', { kind: 'session', sessionId: session.id }), 'bypassPermissions');
+    assert.equal(configService.get('runtime.claude.reasoningEffort', { kind: 'session', sessionId: session.id }), 'high');
+
+    store.updateSession(session.id, {
+      runtime: {
+        activeRuntime: 'claude',
+        claude: { model: undefined, permissionMode: undefined, reasoningEffort: undefined },
+      },
+    });
+    const tomlBacked = app.getConfig(session.id);
+    assert.equal(tomlBacked.claudeModel, 'opus');
+    assert.equal(tomlBacked.claudePermissionMode, 'bypassPermissions');
+    assert.equal(tomlBacked.claudeReasoningEffort, 'high');
+
+    const planMode = app.updateConfig(session.id, {
+      activeRuntime: 'claude',
+      claudePermissionMode: 'plan',
+    });
+    assert.equal(planMode.claudePermissionMode, 'plan');
+    assert.equal(configService.get('runtime.claude.permissionMode', { kind: 'session', sessionId: session.id }), 'plan');
+    assert.equal(configService.get('runtime.claude.yoloMode', { kind: 'session', sessionId: session.id }), 'off');
+
+    const acceptEditsMode = app.updateConfig(session.id, {
+      activeRuntime: 'claude',
+      claudePermissionMode: 'acceptEdits',
+    });
+    assert.equal(acceptEditsMode.claudePermissionMode, 'acceptEdits');
+    assert.equal(configService.get('runtime.claude.permissionMode', { kind: 'session', sessionId: session.id }), 'acceptEdits');
+    assert.equal(configService.get('runtime.claude.yoloMode', { kind: 'session', sessionId: session.id }), 'off');
+  });
+
+  it('writes Codex UI session-level config to session TOML', () => {
+    const store = new JsonFileStore(makeBridgeSettings());
+    const session = store.createSession('Codex Config Session', 'old-model', undefined, '/tmp/codex-config');
+    const app = new UiSessionApplication(store);
+
+    const updated = app.updateConfig(session.id, {
+      activeRuntime: 'codex',
+      workingDirectory: '/tmp/codex-config-next',
+      systemPrompt: 'keep this in session json only',
+      model: 'gpt-5.4',
+      preferredMode: 'yolo',
+      codexProvider: 'pty',
+      reasoningEffort: 'high',
+      codexSandboxMode: 'read-only',
+      codexNetworkAccess: false,
+    });
+
+    assert.equal(updated.workingDirectory, '/tmp/codex-config-next');
+    assert.equal(updated.systemPrompt, 'keep this in session json only');
+    assert.equal(updated.model, 'gpt-5.4');
+    assert.equal(updated.preferredMode, 'yolo');
+    assert.equal(updated.codexProvider, 'pty');
+    assert.equal(updated.reasoningEffort, 'high');
+    assert.equal(updated.codexSandboxMode, 'read-only');
+    assert.equal(updated.codexNetworkAccess, false);
+    const stored = store.getSession(session.id);
+    assert.equal(stored?.runtime?.codex?.model, undefined);
+    assert.equal(stored?.runtime?.codex?.mode, undefined);
+    assert.equal(stored?.runtime?.codex?.provider, undefined);
+    assert.equal(stored?.runtime?.codex?.reasoningEffort, undefined);
+    assert.equal(stored?.runtime?.codex?.sandboxMode, undefined);
+    assert.equal(stored?.runtime?.codex?.networkAccess, undefined);
+    assert.equal(stored?.runtime?.general?.workingDirectory, undefined);
+
+    const configService = createConfigService({ migrate: false, env: {} });
+    assert.equal(configService.get('session.workspace', { kind: 'session', sessionId: session.id }), '/tmp/codex-config-next');
+    assert.equal(configService.get('runtime.codex.model', { kind: 'session', sessionId: session.id }), 'gpt-5.4');
+    assert.equal(configService.get('runtime.codex.yoloMode', { kind: 'session', sessionId: session.id }), 'on');
+    assert.equal(configService.get('runtime.codex.provider', { kind: 'session', sessionId: session.id }), 'pty');
+    assert.equal(configService.get('runtime.codex.reasoningEffort', { kind: 'session', sessionId: session.id }), 'high');
+    assert.equal(configService.get('runtime.codex.sandboxMode', { kind: 'session', sessionId: session.id }), 'read-only');
+    assert.equal(configService.get('runtime.codex.networkAccess', { kind: 'session', sessionId: session.id }), false);
+
+    store.updateSession(session.id, {
+      runtime: {
+        codex: {
+          model: undefined,
+          mode: undefined,
+          provider: undefined,
+          reasoningEffort: undefined,
+          sandboxMode: undefined,
+          networkAccess: undefined,
+        },
+        general: { workingDirectory: undefined },
+      },
+    });
+    const tomlBacked = app.getConfig(session.id);
+    assert.equal(tomlBacked.workingDirectory, '/tmp/codex-config-next');
+    assert.equal(tomlBacked.systemPrompt, 'keep this in session json only');
+    assert.equal(tomlBacked.model, 'gpt-5.4');
+    assert.equal(tomlBacked.preferredMode, 'yolo');
+    assert.equal(tomlBacked.codexProvider, 'pty');
+    assert.equal(tomlBacked.reasoningEffort, 'high');
+    assert.equal(tomlBacked.codexSandboxMode, 'read-only');
+    assert.equal(tomlBacked.codexNetworkAccess, false);
+
+    const reset = app.updateConfig(session.id, {
+      activeRuntime: 'codex',
+      model: '',
+      codexProvider: '',
+      reasoningEffort: '',
+      codexSandboxMode: '',
+    });
+    assert.equal(reset.model, '');
+    assert.equal(reset.codexProvider, '');
+    assert.equal(reset.reasoningEffort, '');
+    assert.equal(reset.codexSandboxMode, '');
+    assert.notEqual(configService.resolve('runtime.codex.model', { kind: 'session', sessionId: session.id }).source, 'session');
+    assert.notEqual(configService.resolve('runtime.codex.provider', { kind: 'session', sessionId: session.id }).source, 'session');
+    assert.notEqual(configService.resolve('runtime.codex.reasoningEffort', { kind: 'session', sessionId: session.id }).source, 'session');
+    assert.notEqual(configService.resolve('runtime.codex.sandboxMode', { kind: 'session', sessionId: session.id }).source, 'session');
   });
 });

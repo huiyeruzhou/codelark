@@ -1,4 +1,4 @@
-import { DEFAULT_WORKSPACE_ROOT } from '../../../configuration/index.js';
+import { DEFAULT_WORKSPACE_ROOT } from '../../../configuration/paths.js';
 import type { BridgeSession, BridgeStore, ChannelChat, InboundMessage, OutboundRichCard } from '../../../domain/index.js';
 import {
   getBridgeSessionCodexThreadId,
@@ -16,7 +16,6 @@ import {
   mergeSessionRuntimeUpdates,
   setSessionActiveRuntimeUpdate,
   setSessionClaudeIdentityUpdate,
-  setSessionWorkingDirectoryUpdate,
 } from '../../../domain/session-runtime.js';
 import { readConfiguredCodexModel } from '../../../runtime/codex/models.js';
 import { recordBindingChange, type BindingChangeAction } from '../binding-audit.js';
@@ -222,7 +221,6 @@ function materializeClaudeThread(store: BridgeStore, thread: LocalRuntimeSession
     {},
     setSessionActiveRuntimeUpdate('claude'),
     setSessionClaudeIdentityUpdate(thread.threadId, thread.cwd),
-    setSessionWorkingDirectoryUpdate(thread.cwd || DEFAULT_WORKSPACE_ROOT),
   ));
   return store.getSession(session.id) || session;
 }

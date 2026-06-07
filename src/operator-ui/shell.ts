@@ -1033,7 +1033,6 @@ export function renderUiShellHtml(): string {
           claudeDefaultModel: document.getElementById('claudeDefaultModel').value,
           claudePermissionMode: document.getElementById('claudePermissionMode').value,
           claudeIdleTimeoutMinutes: document.getElementById('claudeIdleTimeoutMinutes').value,
-          showToolCallDetails: document.getElementById('showToolCallDetails').checked,
           uiAllowLan: document.getElementById('uiAllowLan').checked,
           uiAccessToken: document.getElementById('uiAccessToken').value,
         };
@@ -2588,9 +2587,14 @@ export function renderUiShellHtml(): string {
       async function saveConfig(options) {
         const opts = options || {};
         const beforeConfig = state.config || {};
+        const payload = formPayload();
+        await api('/api/config/check', {
+          method: 'POST',
+          body: JSON.stringify(payload),
+        });
         const saved = await api('/api/config', {
           method: 'POST',
-          body: JSON.stringify(formPayload()),
+          body: JSON.stringify(payload),
         });
         fillForm(saved.config);
         if (opts.messageId) {
@@ -2654,9 +2658,14 @@ export function renderUiShellHtml(): string {
       }
 
       async function saveChannel(channel) {
+        const payload = currentChannelEditorPayload(channel);
+        await api('/api/channels/check', {
+          method: 'POST',
+          body: JSON.stringify(payload),
+        });
         const result = await api('/api/channels/save', {
           method: 'POST',
-          body: JSON.stringify(currentChannelEditorPayload(channel)),
+          body: JSON.stringify(payload),
         });
         delete state.channelEditorDrafts[channel.id];
         delete state.channelEditorDrafts[result.channel.id];

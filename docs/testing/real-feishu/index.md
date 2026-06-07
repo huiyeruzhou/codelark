@@ -29,7 +29,7 @@ CODELARK_REAL_FEISHU_E2E=1 npm run real:feishu:e2e -- \
 
 脚本会在真正清理测试群、启动临时 bridge、创建群或发送消息前先运行 `lark-cli auth status --verify` 做用户授权 preflight。真实 E2E 的触发消息和验证读取都走 `lark-cli --as user`；如果使用 `--launch-bridge`，这个检查针对隔离的 `--runtime-home`，因此该 HOME/profile 也必须完成用户登录并具备 IM 发送、读消息、读群，以及按需建群和删群权限。
 
-测试 App ID 和 Secret 放在测试专用 env 文件中，不写入正式 `~/.codelark/config.json`，也不要通过 npm 参数传递 secret，避免命令回显：
+测试 App ID 和 Secret 放在测试专用 env 文件中，不写入正式 `~/.codelark/config.toml`，也不要通过 npm 参数传递 secret，避免命令回显：
 
 ```text
 CODELARK_REAL_FEISHU_TEST_APP_ID=cli_xxx

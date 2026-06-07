@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
-import { CODELARK_HOME } from '../../configuration/index.js';
+import { CODELARK_HOME } from '../../configuration/paths.js';
 import type { AuditLogInput } from '../../domain/audit.js';
 import type { ChannelChat } from '../../domain/channel.js';
 import type { BridgeMessage } from '../../domain/message.js';

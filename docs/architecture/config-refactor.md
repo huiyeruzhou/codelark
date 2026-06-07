@@ -1,164 +1,35 @@
-# 配置系统现状与 TOML 重构方案
+# 配置系统说明
 
-## 目标
+本文说明 CodeLark 当前配置系统的结构、来源优先级、模块职责和调用方式。配置系统已经从旧的 `config.json` / `config.env` 输入迁移为统一 TOML 配置；旧文件只作为 v1 迁移输入，不再作为运行时配置来源。
 
-CodeLark 需要把“默认值、全局配置、项目配置、环境变量、命令行覆盖、Channel/Session 内持久化覆盖”统一成一套配置系统。重构目标不是只把 `~/.codelark/config.json` 换成 TOML，而是先统一 TOML 文件结构本身：所有持久化配置都使用同一套 TOML shape、来源优先级、查询 API、写入 API、来源解释和 reset 机制。
+## 总览
 
-必须满足：
+CodeLark 使用同一套 v2 TOML shape 表达默认值、全局配置、项目配置、Channel/Session 执行偏好、环境变量覆盖和 CLI 覆盖。运行时代码通过 `ConfigService` 读取统一 effective config，再在各自业务模块内解释 runtime、channel、session 等语义。
 
-- 支持命令行覆盖和多级配置，基础优先级为 `cli > env > local > home > defaults`。
-- 支持 Channel/Session scope 的持久化覆盖，例如 `/r` 对当前飞书 Channel 或当前会话 Session 的覆盖；这类持久化配置也应使用 TOML，而不是继续散落在 BridgeSession JSON 中。
-- 查询配置时不再在业务代码里手写 override/fallback。
-- 全局默认值有清晰收口，能直接看到当前默认配置长什么样；setup wizard 展示和写入的全局配置项也必须从同一个默认配置定义读取。
-- 启动时把旧 `config.json` 和 `config.env` 一次性迁移到 `config.toml`；迁移完成后不再支持 `config.env` 作为配置输入。
-- 仍然向 daemon/agent/lark-cli 等子进程注入环境变量，但这些环境变量由 `ConfigService.exportProcessEnv()` 从 effective config 生成，不再通过读取或维护 `config.env` 实现。
-- 使用合适的第三方库处理 TOML、运行时校验和 CLI 参数解析。
+核心原则：
 
-## 当前现状
+- 所有持久化配置都使用 TOML。
+- `BridgeSession` JSON 只保存会话身份、生命周期和运行状态，不作为用户配置后端。
+- 非通道实例字段的全局基础优先级为 `cli > env > local > home > defaults`。
+- Channel/Session/request 动态覆盖复用同一套 TOML shape 和合并链路。
+- `channels` 是特殊字段，只允许出现在 defaults 和 home `config.toml`。
+- 配置层保持薄边界，只负责 source 选择、schema 校验、合并、来源解释、迁移和写回约束。
+- runtime settings、子进程 env、通道选择、provider fallback 等业务语义留在调用方模块。
 
-当前默认配置目录来自 `CODELARK_HOME`，未设置时为 `~/.codelark`。配置逻辑主要分散在：
+## 配置来源
 
-- `src/configuration/index.ts`：读取 `config.json`，兼容 `config.env`，导出 expanded `Config` 与 runtime settings。
-- `src/operator-ui/application/config.ts`：UI payload 到 `Config` 的手写 merge。
-- `src/bridge/command/global-settings.ts`：`/set` 写全局配置。
-- `src/bridge/command/runtime-settings.ts`：`/r`、`/mode`、`/sandbox`、`/network`、`/model`、`/cd` 等写当前 BridgeSession。
-- `src/domain/session-runtime.ts`：BridgeSession runtime 字段 accessor 与 patch helper。
-- `src/bridge/session/support.ts`：执行前把 session override 与全局 settings 手写合成 effective runtime config。
-- `src/storage/json-store.ts`：BridgeSession JSON 持久化。
+当前默认配置目录来自 `CODELARK_HOME`，未设置时为 `~/.codelark`。
 
-### 当前来源与存储
-
-| 当前来源或文件 | 当前角色 | 主要问题 |
-| --- | --- | --- |
-| `~/.codelark/config.json` | 结构化全局主配置 | JSON 只覆盖全局；默认值仍散落在代码中 |
-| `~/.codelark/config.env` | 旧格式输入、兼容快照、排查文件 | 同时像输入和输出，且启动时还注入 daemon env |
-| `process.env.CODELARK_*` | 进程环境变量 | 与 `config.env` 边界含混 |
-| CLI argv | command 解析 | 当前没有通用配置覆盖机制 |
-| `data/sessions.json` 中的 `BridgeSession.runtime.*` | 当前 Session 级 runtime 覆盖和运行身份混放 | `/r` 等持久化配置与 thread id、health、mirror 等运行状态混在同一个 JSON 结构里 |
-| UI payload | Web 工作台保存全局配置 | 手写字段 merge、默认值和校验 |
-
-### 当前配置项清单
-
-文档和实现里需要区分两套名字：
-
-- canonical path：TypeScript API、`configFields` key、`ConfigService.get()` 和 explain 使用 camelCase，例如 `runtime.codex.yoloMode`。
-- TOML path：文件落盘按 section + snake_case 表达，例如 `runtime.codex.yolo_mode`、`session.tmux_capture_lines`。
-
-| 领域 | canonical path | TOML path | 旧 JSON / session 字段 | 新 env 键 | 兼容旧 env 键 | scoped override |
-| --- | --- | --- | --- | --- | --- | --- |
-| runtime | `runtime.provider` | `runtime.provider` | `runtime.provider` | `CODELARK_RUNTIME` | - | Session: `runtime.activeRuntime` |
-| bridge | `bridge.defaultWorkspace` | `bridge.default_workspace` | `runtime.bridge.defaultWorkspaceRoot` | `CODELARK_DEFAULT_WORKSPACE_ROOT` | - | `session.workspace` 可作为 scoped override |
-| bridge | `bridge.uiAllowLan` | `bridge.ui_allow_lan` | `runtime.bridge.uiAllowLan` | `CODELARK_UI_ALLOW_LAN` | - | 否 |
-| bridge | `bridge.uiAccessToken` | `bridge.ui_access_token` | `runtime.bridge.uiAccessToken` | `CODELARK_UI_ACCESS_TOKEN` | - | 否 |
-| session | `session.workspace` | `session.workspace` | `runtime.general.workingDirectory` | - | - | Local / Channel / Session |
-| session | `session.tmuxSessionName` | `session.tmux_session_name` | `runtime.general.tmuxSessionName` | - | - | Session |
-| session | `session.tmuxCaptureLines` | `session.tmux_capture_lines` | `runtime.general.captureLines` | - | - | Session |
-| session | `session.tmuxAutoEnter` | `session.tmux_auto_enter` | `runtime.general.autoEnter` | - | - | Session |
-| session | `session.tmuxEchoInput` | `session.tmux_echo_input` | `runtime.general.echoInput` | - | - | Session |
-| codex | `runtime.codex.model` | `runtime.codex.model` | `runtime.codex.defaultModel` / `runtime.codex.model` | `CODELARK_CODEX_MODEL` | `CODELARK_CODEX_DEFAULT_MODEL` | Channel / Session |
-| codex | `runtime.codex.yoloMode` | `runtime.codex.yolo_mode` | `runtime.codex.defaultMode` / `runtime.codex.mode` | `CODELARK_CODEX_YOLO_MODE` | `CODELARK_CODEX_DEFAULT_MODE` | Channel / Session |
-| codex | `runtime.codex.provider` | `runtime.codex.provider` | `runtime.bridgeControl.defaultCodexProvider` / `runtime.codex.provider` | `CODELARK_CODEX_PROVIDER` | `CODELARK_DEFAULT_CODEX_PROVIDER` | Channel / Session |
-| codex | `runtime.codex.skipGitRepoCheck` | `runtime.codex.skip_git_repo_check` | `runtime.codex.skipGitRepoCheck` | `CODELARK_CODEX_SKIP_GIT_REPO_CHECK` | - | 否 |
-| codex | `runtime.codex.sandboxMode` | `runtime.codex.sandbox_mode` | `runtime.codex.sandboxMode` | `CODELARK_CODEX_SANDBOX_MODE` | - | Channel / Session |
-| codex | `runtime.codex.networkAccess` | `runtime.codex.network_access` | `runtime.codex.networkAccess` | `CODELARK_CODEX_NETWORK_ACCESS` | - | Channel / Session |
-| codex | `runtime.codex.reasoningEffort` | `runtime.codex.reasoning_effort` | `runtime.codex.reasoningEffort` | `CODELARK_CODEX_REASONING_EFFORT` | - | Channel / Session，由 `/r` 写入 |
-| claude | `runtime.claude.model` | `runtime.claude.model` | `runtime.claude.defaultModel` / `runtime.claude.model` | `CODELARK_CLAUDE_MODEL` | `CODELARK_CLAUDE_DEFAULT_MODEL` | Channel / Session |
-| claude | `runtime.claude.yoloMode` | `runtime.claude.yolo_mode` | `runtime.claude.permissionMode` | `CODELARK_CLAUDE_YOLO_MODE` | `CODELARK_CLAUDE_PERMISSION_MODE` | Channel / Session |
-| claude | `runtime.claude.provider` | `runtime.claude.provider` | `runtime.claude.provider` | `CODELARK_CLAUDE_PROVIDER` | - | Channel / Session |
-| claude | `runtime.claude.executable` | `runtime.claude.executable` | `runtime.claude.executable` | `CODELARK_CLAUDE_EXECUTABLE` | - | 否 |
-| claude | `runtime.claude.reasoningEffort` | `runtime.claude.reasoning_effort` | `runtime.claude.reasoningEffort` | `CODELARK_CLAUDE_REASONING_EFFORT` | - | Channel / Session，由 `/r` 写入 |
-| claude | `runtime.claude.idleTimeoutMinutes` | `runtime.claude.idle_timeout_minutes` | `runtime.claude.idleTimeoutMinutes` | `CODELARK_CLAUDE_IDLE_TIMEOUT_MINUTES` | - | 可考虑 Session |
-| channel | `channels[].enabled` | `channels[].enabled` | derived from `channels[].enabled` | `CODELARK_ENABLED_CHANNELS` | - | Channel policy |
-| channel | `channels[].config.historyMessageLimit` | `channels[].config.history_message_limit` | `runtime.bridge.historyMessageLimit` | `CODELARK_HISTORY_MESSAGE_LIMIT` | - | Channel |
-| channel | `channels[].config.streamStatusIdleStartSeconds` | `channels[].config.stream_status_idle_start_seconds` | `runtime.bridge.streamStatusIdleStartSeconds` | `CODELARK_STREAM_STATUS_IDLE_START_SECONDS` | - | Channel |
-| channel | `channels[].config.streamStatusCheckIntervalSeconds` | `channels[].config.stream_status_check_interval_seconds` | `runtime.bridge.streamStatusCheckIntervalSeconds` | `CODELARK_STREAM_STATUS_CHECK_INTERVAL_SECONDS` | - | Channel |
-| feishu | `channels[].config.appId` | `channels[].config.app_id` | `channels[].config.appId` | `CODELARK_FEISHU_APP_ID` | - | 否 |
-| feishu | `channels[].config.appSecret` | `channels[].config.app_secret` | `channels[].config.appSecret` | `CODELARK_FEISHU_APP_SECRET` | - | 否 |
-| feishu | `channels[].config.site` | `channels[].config.site` | `channels[].config.site` | `CODELARK_FEISHU_SITE` | `CODELARK_FEISHU_DOMAIN` | 否 |
-| feishu | `channels[].config.allowedUsers` | `channels[].config.allowed_users` | `channels[].config.allowedUsers` | `CODELARK_FEISHU_ALLOWED_USERS` | - | 否 |
-| feishu | `channels[].config.streamingEnabled` | `channels[].config.streaming_enabled` | `channels[].config.streamingEnabled` | `CODELARK_FEISHU_STREAMING_ENABLED` | - | Channel |
-| feishu | `channels[].config.feedbackMarkdownEnabled` | `channels[].config.feedback_markdown_enabled` | `channels[].config.feedbackMarkdownEnabled` | `CODELARK_FEISHU_COMMAND_MARKDOWN_ENABLED` | - | Channel |
-| feishu | `channels[].config.requireMention` | `channels[].config.require_mention` | `channels[].config.requireMention` | `CODELARK_FEISHU_REQUIRE_MENTION` | - | Channel |
-
-### 当前主要问题
-
-1. 默认值分散：
-   `DEFAULT_STREAM_STATUS_*`、`DEFAULT_WORKSPACE_ROOT`、`loadConfig` 的 `empty`、`effective*` 函数、`configToPayload`、`mergeConfig` 和 `configToSettings` 都在表达默认值。
-2. 覆盖逻辑分散：
-   env overlay、UI merge、`/set`、`/r`、`resolveSessionRuntimeConfig()` 都各自知道字段如何解析、校验和 fallback。
-3. 配置和运行状态混放：
-   `BridgeSession.runtime.codex.reasoningEffort` 这类字段是持久化配置 override；`runtime.codex.threadId`、health、mirror、message counters 是运行身份或状态。它们当前都在 BridgeSession JSON 里。
-4. 查询模型不统一：
-   daemon 用 `Config` + `configToSettings`，JsonFileStore 用字符串 settings，runtime/session 又有自己的 per-session 解析，调用方经常需要自己决定 fallback。
-5. `config.env` 的角色含混：
-   它既是旧配置输入，又是保存后的快照，还会被 `buildDaemonEnv` 注入进程环境。
-6. 命令行覆盖缺失：
-   当前 CLI 主要解析 command，不提供通用配置项 override，例如 `codelark run --set runtime.provider=claude` 或 `--codex-sandbox-mode read-only`。
-
-## 推荐模型
-
-### 核心原则
-
-1. 所有持久化配置都使用 TOML。
-2. BridgeSession JSON 不再作为配置存储后端，只保存身份、生命周期、状态和索引引用。
-3. 配置系统按 scope/source 合并，而不是按“全局配置 vs session JSON”分裂。
-4. latest `configFields` 是当前配置项的唯一事实来源：canonical path、TOML path、env key、CLI option、命令别名、校验规则、scope、secret 和 projection 元数据都在这里声明；历史字段解释只放在 migration 文件里。
-5. 业务代码只能通过 `ConfigService` 读写配置，不直接拼 fallback，也不直接改 BridgeSession runtime config 字段。
-6. setup wizard、默认 TOML、UI 全局配置页和 `/set` 全局配置列表共享同一份 latest `configFields` / defaults，不允许各自维护字段清单或默认值。
-
-命名规则：
-
-- canonical path、TOML 字段和新 env 键默认使用新语义名，例如 `runtime.codex.model`、`runtime.codex.yoloMode`、`CODELARK_CODEX_MODEL`。
-- 旧 JSON path、旧 env 键只作为迁移和兼容 alias，例如 `runtime.codex.defaultModel`、`CODELARK_CODEX_DEFAULT_MODEL`。
-- 兼容 alias 的优先级低于新名字；如果新旧 env 同时存在，使用新 env，并记录 warning，提示旧 env 已弃用。
-- 对外文档、默认 TOML、CLI help、UI 字段名只展示新名字；旧名字只出现在 migration/compatibility 说明中。
-
-TOML shape 边界：
-
-- root 只放 `schema_version` 这类文件级元数据；不放 `workspace`、`tmux_session_name` 等会话字段。
-- `[session]` 放和当前对话执行上下文相关的配置：`workspace`、`tmux_session_name`、`tmux_capture_lines`、`tmux_auto_enter`、`tmux_echo_input`。
-- `tmux_session_name` 只表示用户显式配置的 tmux 绑定目标；provider 自动生成的 tmux session id 仍是运行时身份，不进入配置 merge。
-- `[bridge]` 放 Bridge 服务自身行为配置，例如默认工作区和 UI 访问控制。
-- `[channels.config]` 放通道行为配置，例如历史消息窗口和流式状态节奏。
-- `[runtime]` 放当前 runtime 选择；`[runtime.codex]`、`[runtime.claude]` 放 provider-specific 配置。
-- `[[channels]]` 和 `[channels.config]` 放通道实例配置；Channel scope 文件也复用同一套 TOML shape，只写需要覆盖的 section。
-
-### 目标文件布局
-
-```text
-src/configuration/
-  defaults.toml              # 产品默认配置，唯一默认值入口
-  schema.ts                  # 当前 TOML shape 的 zod 校验、类型、coerce、默认值校验
-  fields.ts                  # latest configFields；只服务当前运行时
-  fields-types.ts            # ConfigFields / ConfigField 类型定义
-  sources.ts                 # 读取 defaults/home/local/channel/session/env/cli/request
-  merge.ts                   # 分层 merge + provenance
-  service.ts                 # ConfigService 查询和写入 API
-  env-compat.ts              # 真实 process.env 的旧 env alias 兼容读取和 warning
-  env-projection.ts          # 从 effective config 生成子进程环境变量
-  projections.ts             # runtime settings、UI payload、lark-cli projection
-  migrations/
-    index.ts                 # migration registry 和 runner
-    types.ts                 # MigrationContext / ConfigMigration 定义
-    v1.ts                    # v1 -> v2：内含 legacy field snapshot + 跨格式 adapter
-    v2.ts                    # v2 -> v3：未来新增
-    legacy/
-      env-file.ts            # config.env parser，仅供 v1 migration 使用
-      session-json.ts        # BridgeSession JSON parser，仅供 v1 migration 使用
-```
-
-### 目标配置来源
-
-| Source | Backend | 示例路径 | 持久化 | 适用范围 |
+| Source | Backend | 示例路径 | 持久化 | 说明 |
 | --- | --- | --- | --- | --- |
-| defaults | TOML | `src/configuration/defaults.toml` | 是，随包发布 | 产品默认值 |
-| home | TOML | `${CODELARK_HOME:-~/.codelark}/config.toml` | 是 | 本机全局默认 |
-| local | TOML | `.codelark/config.toml` 或 `.codelark.toml` | 是 | 当前项目/目录 |
-| channel | TOML | `${CODELARK_HOME}/config/channels/<channel-id>.toml` | 是 | 某个飞书 Channel 的持久化偏好 |
-| session | TOML | `${CODELARK_HOME}/config/sessions/<session-id>.toml` | 是 | 当前对话 Session 的持久化 override |
-| env | env | `process.env.CODELARK_*` | 否 | 当前进程 |
-| cli | argv | `codelark run --set ...` | 否 | 单次 CLI 命令 |
-| request | in-memory patch | 单次消息或命令参数 | 否 | 单次执行 |
+| defaults | TOML | `src/configuration/defaults.toml` | 是，随包发布 | 产品默认值和默认 channel 模板 |
+| home | TOML | `${CODELARK_HOME}/config.toml` | 是 | 本机全局配置 |
+| local | TOML | `.codelark/config.toml` 或 `.codelark.toml` | 是 | 当前项目/目录配置 |
+| channel | TOML | `${CODELARK_HOME}/config/channels/<channel-id>.toml` | 是 | 某个 Channel 的执行偏好 |
+| session | TOML | `${CODELARK_HOME}/config/sessions/<session-id>.toml` | 是 | 当前会话的执行偏好 |
+| env | env | `process.env.CODELARK_*` | 否 | 当前进程覆盖 |
+| cli | argv | `codelark run --set path=value` | 否 | 单次 CLI 覆盖 |
+| request | in-memory patch | 单次消息或命令参数 | 否 | 单次请求覆盖 |
 
 优先级：
 
@@ -173,19 +44,11 @@ Session effective config:
   request > session > channel > cli > env > local > home > defaults
 ```
 
-说明：
+`channels` 不参与上面的逐层合并。它只读取 defaults 和 home：home `channels` 整组覆盖 defaults；home 中的 partial channel 会通过 defaults channel 模板补齐并写回 home TOML。local/env/cli/channel/session/request 定义 `channels` 都会被拒绝。
 
-- `Global` 表达本机默认值，包含 defaults/home/env/cli。
-- `Local` 表达当前项目/目录默认值，来自 `.codelark/config.toml` 或 `.codelark.toml`，覆盖 home，低于 env/cli。
-- `Channel` 表达当前飞书 Channel 的偏好，默认作用于当前消息所在的 Channel。
-- `Session` 表达当前对话 Session 的偏好，切到新 Session 后不继承，除非显式复制。
-- `/r high` 这类一参数命令默认写 Channel；`/r high session` 才写当前 Session；`/r high global` 写 Global。
-- `/model` 如果只影响当前对话，命令应显式使用 Session scope；否则一参数默认写 Channel。
-- `/cd` 需要按命令语义拆分：设置 Channel 默认工作区时写 Channel；设置当前 Session cwd identity 时写 Session。
+## TOML Shape
 
-### v2 完整 TOML shape
-
-`defaults.toml` 必须完整展示下面这套 shape；home、local、Channel、Session TOML 使用同一套 shape 的 partial，只写需要覆盖的字段。所有已知配置项和 v1 需要迁移的配置字段都必须落到这个 shape 中，不能再出现另一套顶级 `workspace`、`tmux_session_name` 或 `runtime.general.*` TOML 结构。
+`defaults.toml` 展示完整 v2 shape。home 可以保存完整 `channels` 清单并覆盖 defaults。local、Channel、Session TOML 使用同一套 shape 的非 `channels` partial，只写需要覆盖的执行偏好字段。
 
 ```toml
 schema_version = 2
@@ -198,7 +61,7 @@ tmux_auto_enter = true
 tmux_echo_input = false
 
 [runtime]
-provider = "codex"
+agent = "codex"
 
 [bridge]
 default_workspace = "~"
@@ -217,7 +80,8 @@ reasoning_effort = "medium"
 [runtime.claude]
 model = ""
 yolo_mode = "off"
-provider = "sdk"
+permission_mode = "default"
+provider = "tmux"
 executable = "claude"
 reasoning_effort = "medium"
 idle_timeout_minutes = 0
@@ -241,130 +105,57 @@ feedback_markdown_enabled = true
 require_mention = false
 ```
 
-迁移落点以这套 shape 为准：
+命名规则：
 
-| v2 TOML path | 旧持久化字段 | 旧 env 输入 |
-| --- | --- | --- |
-| `session.workspace` | `runtime.general.workingDirectory` | - |
-| `session.tmux_session_name` | `runtime.general.tmuxSessionName` | - |
-| `session.tmux_capture_lines` | `runtime.general.captureLines` | - |
-| `session.tmux_auto_enter` | `runtime.general.autoEnter` | - |
-| `session.tmux_echo_input` | `runtime.general.echoInput` | - |
-| `runtime.provider` | `runtime.provider`、`runtime.activeRuntime` | `CODELARK_RUNTIME` |
-| `bridge.default_workspace` | `runtime.bridge.defaultWorkspaceRoot` | `CODELARK_DEFAULT_WORKSPACE_ROOT` |
-| `bridge.ui_allow_lan` | `runtime.bridge.uiAllowLan` | `CODELARK_UI_ALLOW_LAN` |
-| `bridge.ui_access_token` | `runtime.bridge.uiAccessToken` | `CODELARK_UI_ACCESS_TOKEN` |
-| `runtime.codex.model` | `runtime.codex.defaultModel`、`runtime.codex.model` | `CODELARK_CODEX_MODEL`，兼容 `CODELARK_CODEX_DEFAULT_MODEL` |
-| `runtime.codex.yolo_mode` | `runtime.codex.defaultMode`、`runtime.codex.mode` | `CODELARK_CODEX_YOLO_MODE`，兼容 `CODELARK_CODEX_DEFAULT_MODE` |
-| `runtime.codex.provider` | `runtime.bridgeControl.defaultCodexProvider`、`runtime.codex.provider` | `CODELARK_CODEX_PROVIDER`，兼容 `CODELARK_DEFAULT_CODEX_PROVIDER` |
-| `runtime.codex.skip_git_repo_check` | `runtime.codex.skipGitRepoCheck` | `CODELARK_CODEX_SKIP_GIT_REPO_CHECK` |
-| `runtime.codex.sandbox_mode` | `runtime.codex.sandboxMode` | `CODELARK_CODEX_SANDBOX_MODE` |
-| `runtime.codex.network_access` | `runtime.codex.networkAccess` | `CODELARK_CODEX_NETWORK_ACCESS` |
-| `runtime.codex.reasoning_effort` | `runtime.codex.reasoningEffort` | `CODELARK_CODEX_REASONING_EFFORT` |
-| `runtime.claude.model` | `runtime.claude.defaultModel`、`runtime.claude.model` | `CODELARK_CLAUDE_MODEL`，兼容 `CODELARK_CLAUDE_DEFAULT_MODEL` |
-| `runtime.claude.yolo_mode` | `runtime.claude.permissionMode` | `CODELARK_CLAUDE_YOLO_MODE`，兼容 `CODELARK_CLAUDE_PERMISSION_MODE` |
-| `runtime.claude.provider` | `runtime.claude.provider` | `CODELARK_CLAUDE_PROVIDER` |
-| `runtime.claude.executable` | `runtime.claude.executable` | `CODELARK_CLAUDE_EXECUTABLE` |
-| `runtime.claude.reasoning_effort` | `runtime.claude.reasoningEffort` | `CODELARK_CLAUDE_REASONING_EFFORT` |
-| `runtime.claude.idle_timeout_minutes` | `runtime.claude.idleTimeoutMinutes` | `CODELARK_CLAUDE_IDLE_TIMEOUT_MINUTES` |
-| `channels[].enabled` | `channels[].enabled`、旧 `enabledChannels` 派生 | `CODELARK_ENABLED_CHANNELS` |
-| `channels[].config.history_message_limit` | `runtime.bridge.historyMessageLimit` | `CODELARK_HISTORY_MESSAGE_LIMIT` |
-| `channels[].config.stream_status_idle_start_seconds` | `runtime.bridge.streamStatusIdleStartSeconds` | `CODELARK_STREAM_STATUS_IDLE_START_SECONDS` |
-| `channels[].config.stream_status_check_interval_seconds` | `runtime.bridge.streamStatusCheckIntervalSeconds` | `CODELARK_STREAM_STATUS_CHECK_INTERVAL_SECONDS` |
-| `channels[].config.app_id` | `channels[].config.appId` | `CODELARK_FEISHU_APP_ID` |
-| `channels[].config.app_secret` | `channels[].config.appSecret` | `CODELARK_FEISHU_APP_SECRET` |
-| `channels[].config.site` | `channels[].config.site` | `CODELARK_FEISHU_SITE`，兼容 `CODELARK_FEISHU_DOMAIN` |
-| `channels[].config.allowed_users` | `channels[].config.allowedUsers` | `CODELARK_FEISHU_ALLOWED_USERS` |
-| `channels[].config.streaming_enabled` | `channels[].config.streamingEnabled` | `CODELARK_FEISHU_STREAMING_ENABLED` |
-| `channels[].config.feedback_markdown_enabled` | `channels[].config.feedbackMarkdownEnabled` | `CODELARK_FEISHU_COMMAND_MARKDOWN_ENABLED` |
-| `channels[].config.require_mention` | `channels[].config.requireMention` | `CODELARK_FEISHU_REQUIRE_MENTION` |
+- TypeScript API、`configFields`、`ConfigService.get()` 和 explain 使用 canonical path，例如 `runtime.codex.yoloMode`。
+- TOML 落盘使用 section + snake_case，例如 `runtime.codex.yolo_mode`、`session.tmux_capture_lines`。
+- `channels[]` 是字段模板路径，只用于字段注册和写入校验；读取具体通道时，调用方先取 `snapshot().config.channels`，再自行选择 channel。
+- 旧 JSON path 和旧 env key 只出现在 migration/compatibility 说明与测试中。
 
-`[channels.config]` 是最近一个 `[[channels]]` array item 的子表；多个通道重复声明时，每个 `[[channels]]` 后面跟自己的 `[channels.config]`，merge 时按 `id` 合并同一个通道。
+## 模块职责
 
-命令行覆盖只接受 canonical path，最终也落到上面这套 TOML path；CLI 本身不定义另一套字段名。
+配置模块按功能组组织，避免把一组功能拆成过细文件：
 
-### 合并规则
+```text
+src/configuration/
+  defaults.toml              # 产品默认配置，唯一默认值入口
+  schema.ts                  # v2 TOML shape 的 zod schema、类型和 camel/snake 转换
+  fields.ts                  # 当前字段注册表：path、scope、env/CLI 映射、secret、projection metadata
+  paths.ts                   # CODELARK_HOME、默认工作区和 home path 展开；不暴露 legacy 输入路径
+  sources.ts                 # defaults/home/local/channel/session TOML 路径、I/O、静态 baseline、home channel materialize
+  merge.ts                   # patch/node-config 合并和 provenance 计算
+  service.ts                 # ConfigService 查询、写入、replace、unset、explain 和迁移入口
+  env-compat.ts              # 真实 process.env 旧 env alias 兼容和 warning
+  cli-overrides.ts           # CLI --set/--unset 解析和 scope 校验
+  path-access.ts             # canonical dot path 读写工具
+  legacy.ts                  # legacy Config adapter 和 compatibility projection
+  legacy-types.ts            # legacy Config 类型快照
+  migrations/
+    index.ts                 # migration registry 和 runner
+    types.ts                 # migration 公共类型
+    v1.ts                    # v1 -> v2 跨格式迁移
+    legacy/
+      env-file.ts            # config.env parser，仅供 v1 migration
+      paths.ts               # config.env/config.json legacy 输入路径，仅供 migration/tests
+      session-json.ts        # BridgeSession JSON 配置字段迁移
 
-| 类型 | 规则 |
-| --- | --- |
-| scalar | 高优先级非空值覆盖低优先级值；允许清空的字段使用 TOML `null` 或 CLI `--unset path` |
-| object | deep merge |
-| arrays of channels | 按 `id` merge；同 `id` 覆盖字段，不同 `id` 追加 |
-| `enabledChannels` | 不再作为主字段；由 `channels[].enabled` 派生 |
-| secret | 存储原值，诊断和 UI provenance 默认 mask |
-| path | `~` 和相对路径按 source base 归一化：home 相对 CODELARK_HOME，Local 相对配置文件目录，Channel/Session 相对配置文件目录或工作区 |
-| identity fields | Codex thread id、Claude session id、run status、health、mirror 等不进入配置 merge |
+src/runtime/
+  config-projections.ts      # 从 ConfigV2 派生 runtime settings 和子进程 env
+```
 
-## configFields 与迁移字段快照
+文件级职责边界：
 
-运行时代码只保留一份 latest `configFields`。它描述当前版本的配置字段，服务 `ConfigService`、setup wizard、UI、CLI、IM 命令、env overlay、projection 和 explain。
+- `schema.ts` 只维护当前 TOML shape，不读写文件，不解释业务 fallback。
+- `fields.ts` 是当前配置字段的事实来源，不承载旧字段迁移规则。
+- `sources.ts` 处理配置文件发现、读写、静态 baseline 和 source 合法性，不解释 runtime/channel/session 业务语义。
+- `merge.ts` 只负责合并和 provenance，不读取具体文件，不导出 projection helper。
+- `service.ts` 是配置模块统一入口，负责构造 effective config、解释来源、执行迁移和写回。
+- `legacy.ts` / `legacy-types.ts` 只服务 migration、compatibility adapter 和旧路径测试，生产代码不应从这里读取配置。
+- `runtime/config-projections.ts` 是应用侧投影层，把 `ConfigV2` 转成 legacy runtime settings Map 或子进程 env。
 
-历史版本字段解释只存在于 migration 中。否则常规配置模块会背上所有历史格式包袱，也容易让业务代码误用旧字段定义。migration 如果需要解释旧版本字段，应该在对应脚本里定义 migration-local field snapshot / adapter。
+## ConfigService API
 
-对应到上面的目标文件布局：
-
-- `fields.ts` 描述当前版本 TOML 字段、Global/Local/Channel/Session scopes、新 env 键和命令写入规则。
-- `env-compat.ts` 只处理真实 `process.env` 中旧 env 键到新 env 键的运行时兼容和 warning，不读取 `config.env` 文件。
-- `migrations/v1.ts` 自己描述 v1 legacy 字段如何解释，并定义 v1 JSON / `config.env` / BridgeSession JSON 到 v2 TOML 的跨格式映射。
-- 后续 v2 -> v3 时新增 `migrations/v2.ts`。如果它需要解释 v2 旧字段，就在 `migrations/v2.ts` 内冻结 v2 field snapshot，不在常规 `fields.ts` 旁边新增 `fields/v2.ts`。
-
-关键边界：
-
-- latest `configFields` 是当前运行时配置字段定义，不是所有历史格式的全局兼容表。
-- runtime env alias compatibility 是 `env-compat.ts` 的 adapter，不是 `configFields` 元数据；`configFields` 只声明新 env 键。
-- migration-local field snapshot 和 legacy parser 是迁移脚本的私有输入解释器，不对业务代码导出。
-- v1 -> v2 比较特殊：它跨越 `config.json`、`config.env`、BridgeSession JSON 和 v2 TOML，文件格式、命名规则、scope 语义都变了。这些跨格式知识必须写在 `migrations/v1.ts` 的 migration adapter 中，不能沉淀成 latest `configFields` 的 `legacyConfigPath`、`legacySessionPath` 等通用属性。
-- v2 以后如果都是 TOML shape 演进，migration 可以在脚本内冻结 source/target 字段快照做 rename、scope 拆分和默认值变更；但这些快照仍只属于对应 migration 文件。
-
-`scopes` 的意义不是“字段来源优先级”，而是字段允许出现和允许写入的位置：
-
-- `home`：这个字段能否写入 Global TOML。
-- `local`：这个字段能否写入 Local TOML。
-- `channel`：这个字段能否写入 Channel TOML。
-- `session`：这个字段能否写入 Session TOML。
-- `env` / `cli`：这个字段能否被环境变量或命令行覆盖。
-
-`scopes` 用于校验、写入路由、UI/命令展示和 explain。它防止把不该出现在某层的字段写进去，例如 channel credentials 不应写入 Session TOML，Session-only 的 tmux/cwd 状态不应写入 Global/Local TOML。优先级仍由 source chain 决定，例如 `request > session > channel > cli > env > local > home > defaults`。换句话说，`scopes` 回答“这个字段能在哪里出现”，source chain 回答“多个来源同时出现时谁赢”。
-
-latest `configFields` 应描述全局默认、env/CLI、IM 命令、Channel/Session scope、secret 和 projection 元数据；迁移来源不放在通用字段定义里。它至少承载：
-
-- canonical path。
-- TOML path。
-- 字段允许的 scopes：home、local、channel、session、env、cli。
-- 新 env key 和 parse 函数；旧 env alias 由 `env-compat.ts` 处理。
-- CLI option 和 parse 函数。
-- IM command alias 和默认写入 scope。
-- zod 校验规则。
-- 默认值是否可见、是否 secret。
-- 导出给 legacy `JsonFileStore` / 子进程 env 的 key。
-
-这样新增当前字段只需要改 defaults、校验规则和 latest `configFields`，不需要同步改 env overlay、UI merge、`/set`、`/r`、runtime resolver、settings export 等多处逻辑；历史字段解释和跨格式映射只存在于对应 migration。
-
-## 配置命令体系
-
-IM 配置命令按 `Global / Local / Channel / Session` 四层组织：
-
-| Scope | 含义 | 默认写入位置 | 示例 |
-| --- | --- | --- | --- |
-| Global | 本机默认配置 | home TOML，由 `/set` 或 CLI 管理 | `/set runtime.codex.model gpt-5.1` |
-| Local | 当前项目/目录默认配置 | `.codelark/config.toml` 或 `.codelark.toml` | `/set --local runtime.codex.provider tmux` |
-| Channel | 当前飞书 Channel 的默认偏好 | `config/channels/<channel-id>.toml` | `/r high` |
-| Session | 当前对话 Session 的临时/持续偏好 | `config/sessions/<session-id>.toml` | `/r high session` |
-
-命令参数规则：
-
-- 不加参数：只展示当前有效值、来源和用法，不修改配置。
-- 一个参数：默认写 Channel scope。例如 `/r high` 写当前飞书 Channel 的 `runtime.codex.reasoningEffort=high`。
-- 两个参数：第二个参数指定作用范围，允许 `global`、`local`、`channel`、`session`。例如 `/r high session` 只写当前 Session，`/r high local` 写当前项目 Local TOML，`/r high global` 写 Global。
-- `--local`：对 `/set` 这类全局配置命令显式选择 Local 写入目标；不带 `--local` 时 `/set` 写 home TOML。
-- `default` / `reset`：按指定 scope 删除该层覆盖值，让配置回落到下一层 source。
-- 命令返回必须包含最终值和来源，例如 `reasoning_effort=high source=channel file=...`。
-
-`/r`、`/model`、`/mode`、`/sandbox`、`/network`、`/cd` 等命令都按上述规则解析目标 scope；命令实现不能各自定义一套字段名或 TOML shape。
-
-## 查询与写入 API
-
-业务代码只依赖 `ConfigService`，不直接拼默认值，也不直接改 BridgeSession runtime config 字段。
+业务代码通过 `ConfigService` 获取统一 effective value/source，并在自己的模块内聚合业务语义。业务代码不应绕过 `ConfigService` 读取 TOML/JSON，也不应把用户配置 override 写回 BridgeSession runtime config 字段。
 
 ```ts
 type ConfigScope =
@@ -381,222 +172,171 @@ type ConfigWriteTarget =
 
 interface ConfigService {
   snapshot(scope?: ConfigScope, request?: ConfigPatch): EffectiveConfig;
-  get<TPath extends ConfigPath>(
-    path: TPath,
-    scope?: ConfigScope,
-    request?: ConfigPatch,
-  ): ConfigValue<TPath>;
-  resolve<TPath extends ConfigPath>(path: TPath, scope?: ConfigScope, request?: ConfigPatch): {
-    value: ConfigValue<TPath>;
-    source: 'defaults' | 'home' | 'local' | 'env' | 'cli' | 'channel' | 'session' | 'request';
-    file?: string;
-    env?: string;
-    cli?: string;
-    scope?: ConfigScope;
-  };
-  explain(path?: ConfigPath, scope?: ConfigScope): ConfigExplain[];
+  get<T = unknown>(path: ConfigPath, scope?: ConfigScope, request?: ConfigPatch): T;
+  resolve(path: ConfigPath, scope?: ConfigScope, request?: ConfigPatch): ConfigResolveResult;
+  explain(path?: ConfigPath, scope?: ConfigScope): ConfigExplainEntry[];
   set(target: ConfigWriteTarget, patch: ConfigPatch): void;
+  replace(target: ConfigWriteTarget, patch: ConfigPatch): void;
   unset(target: ConfigWriteTarget, path: ConfigPath): void;
-  exportRuntimeSettings(scope?: ConfigScope): Map<string, string>;
-  exportProcessEnv(scope?: ConfigScope): NodeJS.ProcessEnv;
 }
 ```
 
-读操作使用 `ConfigScope`，写操作使用 `ConfigWriteTarget`。这两个类型故意分开：`global` 是读取本机默认 effective config 的 scope；`local` 是带 cwd 的项目 effective config；写 Global/Local 时必须选择 `home` 或 `local`，因此 `/set` 默认写 `{ kind: 'home' }`，`/set --local` 写 `{ kind: 'local', cwd }`。
+读写类型故意分开：
 
-`/r high` 的 explain 应能显示：
-
-```text
-runtime.codex.reasoningEffort = high
-source = channel | session
-file = ~/.codelark/config/channels/feishu-default.toml
-fallback = runtime.codex.reasoningEffort from cli/env/local/home/defaults
-```
-
-## 第三方库选择
-
-| 库 | 用途 | 原因 |
-| --- | --- | --- |
-| `smol-toml` | TOML parse/stringify | 支持 TOML 1.1，包体小，API 聚焦，适合默认、home、local、Channel、Session TOML |
-| `zod` | 校验规则、默认值、coerce、类型推导 | 把运行时校验和 TS 类型放在同一处，替代手写 normalize 分支 |
-| `commander` | CLI command/options 解析 | 当前 CLI 是手写解析；commander 适合给 `run/start/setup` 增加 typed options、help 和 negated boolean |
-
-不建议首版引入 `cosmiconfig` 作为核心读取器。CodeLark 的优先级和 scope 是产品语义明确的 source chain，而不是通用 JS tooling 的 package.json/rc 搜索模型；local 查找自己实现更容易解释。若未来需要支持 `package.json#codelark` 或多文件格式，再评估 `cosmiconfig`。
-
-## 迁移路径
-
-迁移不是一次性脚本，而是长期版本化基础设施。之后每次配置结构升级都必须新增一条 migration，并在启动时按顺序执行，不能把迁移逻辑散落在 `loadConfig()` 或业务路径里。
-
-### 迁移脚本布局
-
-迁移脚本使用前文目标文件布局里的 `src/configuration/migrations/` 目录。迁移文件按“源配置版本”命名：`v1.ts` 表示把 v1 数据迁移到 v2；后续如果 v2 要升级到 v3，新增 `v2.ts`。同一个版本升级内的多个动作不要拆成多个 migration 文件，而是在一个版本文件里按步骤组织，避免一次升级散落成许多小脚本。
-
-运行状态写在：
-
-```text
-${CODELARK_HOME}/runtime/config-migrations.json
-```
+- `ConfigScope` 描述读取时参与合并的来源。
+- `ConfigWriteTarget` 描述写入落点。
+- `global` 是读取本机默认 effective config 的 scope；写全局配置时必须选择 `{ kind: 'home' }`。
+- `local` 读取和写入都需要明确 cwd。
 
 示例：
 
-```json
-{
-  "schemaVersion": 1,
-  "applied": [
-    {
-      "id": "v1",
-      "appliedAt": "2026-06-06T12:00:00.000Z",
-      "fromVersion": 1,
-      "toVersion": 2
-    }
-  ]
-}
+```ts
+const service = createConfigService({ migrate: false });
+
+const effective = service.snapshot({
+  kind: 'session',
+  sessionId,
+  channelId: 'feishu-default',
+  provider: 'feishu',
+});
+
+const model = service.get<string>('runtime.codex.model', {
+  kind: 'channel',
+  channelId: 'feishu-default',
+  provider: 'feishu',
+});
+
+service.set(
+  { kind: 'session', sessionId },
+  { runtime: { codex: { reasoningEffort: 'high' } } },
+);
 ```
 
-### Migration 接口
+## 字段和 Scope
+
+`configFields` 集中描述当前字段：
+
+- canonical path
+- TOML path
+- 可写 scope
+- env key / CLI option
+- command alias
+- secret 标记
+- runtime settings / process env projection metadata
+- env parse/format 函数
+
+常见字段组：
+
+| 领域 | 示例 canonical path | TOML path | 主要 scope |
+| --- | --- | --- | --- |
+| runtime | `runtime.agent` | `runtime.agent` | home/local/env/cli/channel/session/request |
+| bridge | `bridge.defaultWorkspace` | `bridge.default_workspace` | home/local/env/cli |
+| session | `session.workspace` | `session.workspace` | local/channel/session/request |
+| codex | `runtime.codex.provider` | `runtime.codex.provider` | home/local/env/cli/channel/session/request |
+| claude | `runtime.claude.provider` | `runtime.claude.provider` | home/local/env/cli/channel/session/request |
+| channel | `channels[].config.appId` | `channels[].config.app_id` | home |
+
+`scopes` 回答“这个字段能出现在哪里”，source chain 回答“多个来源同时出现时谁赢”。例如：
+
+- `channels` 只能写 home，不能写 local/channel/session/env/cli/request。
+- `session.tmuxSessionName` 这类执行上下文字段不应写成全局默认。
+- `/r`、`/mode`、`/sandbox`、`/network`、`/model` 默认写当前会话或当前 channel 的 scoped TOML，不写 BridgeSession JSON。
+
+## Channel 配置边界
+
+Channel 有两类概念，不能混用：
+
+- 通道实例清单和通道连接/行为配置：保存在 defaults/home `channels`，例如 Feishu app id、secret、site、allowed users、streaming 行为。
+- 某个 Channel 的执行偏好：保存在 `${CODELARK_HOME}/config/channels/<channel-id>.toml`，例如 runtime、model、workspace。
+
+业务代码读取通道实例时应先调用 `ConfigService.snapshot().config.channels`，再在业务模块内按 channel id、provider fallback、UI 默认项或 default target 选择具体实例。配置层不把 `channels[]` 隐式解析成 `feishu-default`。
+
+`CODELARK_FEISHU_*` 和 `CODELARK_ENABLED_CHANNELS` 这类 channel env key 只用于：
+
+- v1 migration 输入。
+- 向子进程导出的 projection。
+
+v2 运行时不会把这些真实 env key 合成为默认 channel patch；出现时只产生 export-only warning。
+
+## Runtime Projection
+
+运行时投影不在 `ConfigService` 中实现，而在 `src/runtime/config-projections.ts` 中实现：
+
+- `exportRuntimeSettings(config)`：把 `ConfigV2` 转成 legacy runtime settings Map。
+- `exportProcessEnv(config)`：把 `ConfigV2` 转成子进程 env。
+
+调用方负责先拿到同一个 snapshot，再派生投影，避免一次启动内多次动态读取 TOML 造成不一致：
 
 ```ts
-interface ConfigMigration {
-  id: `v${number}`;
-  description: string;
-  fromVersion: number;
-  toVersion: number;
-  detect(context: MigrationContext): boolean;
-  apply(context: MigrationContext): MigrationResult;
-}
-
-interface MigrationContext {
-  codelarkHome: string;
-  paths: {
-    legacyConfigJson: string;
-    legacyConfigEnv: string;
-    homeToml: string;
-    dataSessionsJson: string;
-    channelConfigDir: string;
-    sessionConfigDir: string;
-    migrationState: string;
-    backupDir: string;
-  };
-  readToml(path: string): unknown;
-  writeTomlAtomic(path: string, value: unknown): void;
-  readJson<T>(path: string): T | null;
-  writeJsonAtomic(path: string, value: unknown): void;
-}
+const service = createConfigService({ migrate: true });
+const { config } = service.snapshot();
+const settings = exportRuntimeSettings(config);
+const env = exportProcessEnv(config);
 ```
 
-约束：
+## 迁移和兼容
 
-- migration 必须幂等：重复执行不能改变已迁移结果。
-- migration 必须先写备份，再写目标文件。备份目录为 `${CODELARK_HOME}/backups/config-migrations/<migration-id>/`。
-- migration 不删除旧文件，默认重命名为 `.migrated` 或写入 backup；真正清理单独做 housekeeping。
-- migration 只处理持久化文件，不读取动态 `process.env` 作为迁移输入。
-- 迁移失败时启动应失败并提示用户查看 backup，而不是半迁移继续运行。
-- 迁移成功后，运行时只读取新 TOML；旧 `config.env` 和 `config.json` 不再参与配置加载。
+启动时 `ConfigService` 默认执行配置迁移。迁移状态和备份由 `src/configuration/migrations/` 维护。
 
-### v1 -> v2 迁移内容
+v1 迁移输入：
 
-`src/configuration/migrations/v1.ts` 负责把当前 v1 数据整体迁到 v2 TOML 配置体系。它内部按步骤执行：
+- `${CODELARK_HOME}/config.json`
+- `${CODELARK_HOME}/config.env`
+- `${CODELARK_HOME}/data/sessions.json`
 
-1. 全局配置迁移：
+迁移输出：
 
-- 输入：`~/.codelark/config.json`、`~/.codelark/config.env`。
-- 输出：`~/.codelark/config.toml`。
-- 行为：
-  - `config.json` 是主要输入。
-  - 如果只存在 `config.env`，按 legacy env parser 生成 home TOML。
-  - 如果两者都存在，按当前兼容逻辑保留有效值，但最终只写一个 `config.toml`。
-  - 字段改名时写入新 TOML 字段，例如 `runtime.codex.defaultModel -> runtime.codex.model`，`CODELARK_CODEX_DEFAULT_MODEL -> runtime.codex.model`。
-  - 旧 env key 仅作为迁移输入；迁移后不再读取 `config.env`。
+- `${CODELARK_HOME}/config.toml`
+- `${CODELARK_HOME}/config/sessions/<session-id>.toml`
+- 必要时写入 `${CODELARK_HOME}/config/channels/<channel-id>.toml`
 
-2. Session 配置迁移：
+迁移完成后：
 
-- 输入：`data/sessions.json`。
-- 输出：`config/sessions/<session-id>.toml` 和精简后的 `data/sessions.json`。
-- 行为：
-  - 抽取 `runtime.codex.model/yoloMode/provider/sandboxMode/networkAccess/reasoningEffort`。
-  - 抽取 `runtime.claude.model/yoloMode/provider/reasoningEffort/idleTimeoutMinutes`。
-  - 抽取被判定为配置的 `runtime.general.workingDirectory/tmuxSessionName/captureLines/autoEnter/echoInput`，分别写入 `[session]` 下的 `workspace/tmux_session_name/tmux_capture_lines/tmux_auto_enter/tmux_echo_input`；`runtime.general.systemPrompt` 不再迁移到配置。
-  - 保留身份字段：Codex thread id、Claude session id、created/updated、health、mirror、runtime status 等。
-  - 默认迁移到 Session scope，保持现有 BridgeSession 语义。
+- 旧 `config.json` / `config.env` 会归档，不再作为运行时输入。
+- 旧 BridgeSession JSON 中的配置字段会迁到 Session TOML。
+- BridgeSession JSON 只保留 thread id、tmux runtime identity、Claude session id/cwd、health、mirror 等身份和状态字段。
+- 真实 `process.env` 中的旧 env alias 仍由 `env-compat.ts` 兼容读取并 warning；新 env key 优先。
 
-3. Channel 配置迁移：
+仍然保留的 legacy holdout：
 
-- 输入：现有 channel defaults、bindings 或未来的 channel policy 字段。
-- 输出：`config/channels/<channel-id>.toml`。
-- 行为：
-  - 将 Feishu Channel 级配置写入 Channel TOML。
-  - 如果产品决定 `/r` 一参数默认 Channel，则新写入从一开始进入 Channel TOML；旧 Session TOML 不自动合并到 Channel，避免扩大影响面。
+- `bridge_default_provider_id`
+- `bridge_feishu_group_policy`
+- `bridge_feishu_group_allow_from`
+- `bridge_auto_start`
 
-4. Env alias 诊断：
+这些旧 settings 尚无明确 v2 字段或产品归属，当前通过边界测试显式 allowlist，避免继续新增旧配置输入。
 
-- 输入：真实 `process.env`，只做诊断，不写配置。
-- 输出：env compatibility overlay、启动 warning / doctor report。
-- 行为：
-  - 如果存在 `CODELARK_CODEX_DEFAULT_MODEL` 等旧 env，提示迁移到 `CODELARK_CODEX_MODEL`。
-  - 如果新旧 env 同时存在，使用新 env 并 warning。
-  - 不读取 `config.env`。
+## 业务调用约定
 
-阶段 1：模型落地
+入口和业务模块按以下方式使用配置：
 
-- 新增 `defaults.toml`。
-- 新增 `schema.ts` 和 latest `fields.ts`，覆盖现有全局字段和 session override 字段。
-- 明确配置字段与身份/状态字段边界：配置字段迁到 TOML；BridgeSession JSON 保留 id/name、Codex thread id、Claude session id、created/updated、health、mirror、message/runtime status 等。
-- setup wizard 改为从 latest `configFields` / defaults 生成全局配置项，用户留空时不写 home TOML，运行时回落到 `defaults.toml`。
+- CLI `run`：创建一个 `ConfigService`，用同一个 effective config snapshot 派生 UI env、Bridge preflight config 和 Bridge env projection。
+- setup wizard：读取 defaults/latest fields 展示默认项，写入 home TOML，不生成 legacy env/json。
+- operator UI：route 层不直接导入 `ConfigService` 写配置；application 层把 payload 转成 `ConfigPatch` 并写 TOML。
+- `/set`：写 home TOML。
+- `/r`、`/mode`、`/sandbox`、`/network`、`/model`、`/cd`：写 Channel/Session TOML。
+- runtime 执行：通过 `ConfigService.snapshot(channel/session scope)` 读取 effective runtime config。
+- channel adapter runtime：从 `snapshot().config.channels` 读取通道实例清单，业务层决定 provider/id fallback。
+- storage：`JsonFileStore` 保存会话身份和运行状态；legacy runtime settings 是 projection 输出，不作为配置输入。
 
-阶段 2：读取链路替换
+## 测试边界
 
-- 实现 `sources.ts`，读取 defaults/home/local/channel/session/env/cli/request。
-- 保留旧 `loadConfig` API，但内部改为读取 global `ConfigService.snapshot()`。
-- 启动时执行一次性迁移：读取旧 `config.json` 和 `config.env`，生成 `config.toml`；迁移成功后不再把 `config.env` 作为输入 source，也不再维护新的 `config.env` 快照。
-- 新旧 env 键只来自真实 `process.env`，用于本次进程覆盖；旧 env 键通过 `env-compat.ts` 兼容读取并 warning，不再通过 `config.env` 文件读取。
-- daemon、operator-ui、setup wizard 先切到 global scope 查询。
-- 子进程 env 注入改为 `ConfigService.exportProcessEnv(scope)`，由 effective config 生成 `LARK_CHANNEL_CONFIG`、`bridge_*` 等环境变量；不得再通过读取 `config.env` 注入。
+配置系统需要持续覆盖以下边界：
 
-阶段 3：scoped 配置迁移
+- `defaults.toml` 可 parse，并通过 zod 校验。
+- home/local/env/cli/channel/session/request 的覆盖顺序正确。
+- `channels` 只能来自 defaults/home；其他 source 定义 `channels` 会失败。
+- partial home channel 会从 defaults 模板 materialize 并写回。
+- secret 字段在 explain 和 UI payload 中 mask。
+- 旧 `config.json` / `config.env` 能迁移到 `config.toml`，迁移后运行时不读取 `config.env`。
+- BridgeSession JSON 中的旧配置字段能迁移到 scoped TOML。
+- `ConfigService` 不承载 runtime env/settings projection。
+- `src/configuration` 外的生产代码不直接导入 `node-config` 或 `smol-toml`。
+- 旧 facade、旧 projection、旧 runtime-options/channel-types 文件不被恢复。
 
-- 从现有 BridgeSession JSON 抽取配置字段，写入 `config/sessions/<id>.toml`，迁移后 effective config 必须不变。
-- 默认保持现有语义：旧 BridgeSession runtime 字段先迁到 Session scope，不擅自变成 Channel scope。
-- 如果产品确认某些字段应成为 Channel 默认值，再提供显式迁移：`Session TOML -> Channel TOML`。
-- 迁移后 BridgeSession JSON 中删除这些配置字段，避免双写和来源歧义。
+当前边界测试主要在：
 
-阶段 4：写入链路替换
-
-- `/set` 默认写 home TOML；后续支持 `--local` 写 local TOML。
-- `/r`、`/mode`、`/sandbox`、`/network`、`/model`、`/cd` 等命令改为 `ConfigService.set(target, patch)`，先由命令参数解析出 `ConfigWriteTarget`。
-- UI 的全局配置页写 home；会话配置 modal 写 Session TOML；Channel policy 页写 Channel TOML。
-- 删除 UI `mergeConfig`、runtime command patch helper 中重复的字段校验。
-
-阶段 5：调用方收口
-
-- `resolveSessionRuntimeConfig()` 改为调用 `ConfigService.snapshot(sessionScope)`，不再手写 session -> store settings fallback。
-- `configToSettings()` / `exportProcessEnv()` 变成 projection，不再承载默认值，也不读取 `config.env`。
-- 删除 expanded `Config` 兼容字段，或者只保留在 `legacy.ts` 中作为旧 API 适配。
-- 测试从“字段函数测试”改为“configFields 驱动的多 source 覆盖矩阵”。
-
-## 测试计划
-
-必须覆盖：
-
-- `defaults.toml` 可以 parse，并通过 zod 校验。
-- home TOML 覆盖 defaults。
-- local TOML 覆盖 home。
-- env 覆盖 local。
-- CLI 覆盖 env。
-- Channel TOML 覆盖 CLI/env/local/home/defaults。
-- Session TOML 覆盖 Channel TOML。
-- request patch 覆盖 Session TOML。
-- `unset` 或 TOML `null` 能清空允许清空的字段。
-- channel array 按 `id` merge，不会因为 env 覆盖误改另一个飞书通道。
-- secret 字段在 `explain()` 和 UI payload 中 mask。
-- 启动迁移能把旧 `config.json` 和 `config.env` 转成 `config.toml`，迁移后归档或重命名旧输入文件，并且运行时不再读取 `config.env`。
-- 子进程环境变量由 effective config projection 生成，不依赖 `config.env` 文件。
-- 旧 env alias 仍可从真实 `process.env` 读取，例如 `CODELARK_CODEX_DEFAULT_MODEL`，但新 env `CODELARK_CODEX_MODEL` 优先。
-- `config.env` 迁移保持现有用户可用，不破坏旧 `CODELARK_FEISHU_DOMAIN`。
-- setup wizard、UI 全局配置页、`/set` 全局配置列表和 `defaults.toml` 使用同一份 latest `configFields` / defaults；留空字段回落到同一个默认值。
-- BridgeSession JSON 中现有 `/r`、`/sandbox` 等持久化配置字段能迁移到 scoped TOML，且迁移前后 effective config 一致。
-- BridgeSession JSON 迁移后不再包含配置字段，只保留身份、生命周期和观测状态。
-- `exportRuntimeSettings()` 与现有 `configToSettings()` 的关键输出兼容。
-
-## 结论
-
-推荐把配置系统重构为“所有持久化配置使用同一套 TOML shape + zod 校验 + latest configFields + migration-local legacy adapters + Global/Local/Channel/Session source merge + ConfigService 查询/写入”的模型。`BridgeSession` 不应继续作为配置后端；它保留会话身份和运行状态，配置 override 迁移到 Channel/Session scoped TOML。这样默认值和当前对话 override 都有统一表达，覆盖关系可解释，业务代码查询配置不再手写 fallback，CLI/env/local/home/Channel/Session/request 的优先级也能被测试矩阵直接验证。
+- `src/__tests__/unit/configuration/config-boundary.test.ts`
+- `src/__tests__/unit/configuration/config-service.test.ts`
+- `src/__tests__/unit/configuration/runtime-settings-service.test.ts`
+- `src/__tests__/e2e/mock-app/configuration/config-v1-migration.test.ts`

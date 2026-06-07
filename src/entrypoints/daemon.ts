@@ -14,9 +14,12 @@ import * as bridgeManager from '../bridge/host/manager.js';
 import '../channels/feishu/adapter.js';
 
 import type { LLMProvider } from '../runtime/contracts.js';
-import { loadConfig, configToSettings, CODELARK_HOME, type CodexProviderChoice } from '../configuration/index.js';
+import { CODELARK_HOME } from '../configuration/paths.js';
+import { createConfigService } from '../configuration/service.js';
 import { JsonFileStore } from '../storage/json-store.js';
+import { exportRuntimeSettings } from '../runtime/config-projections.js';
 import { PendingPermissions } from '../runtime/permission-gateway.js';
+import type { CodexProviderChoice } from '../runtime/codex/routing-provider.js';
 import { setupLogger } from '../shared/logger.js';
 import { releaseBridgeInstanceLock, tryAcquireBridgeInstanceLock } from '../local-service/instance-lock.js';
 import { runStartupStorageMigrations } from '../storage/migrations.js';
@@ -120,19 +123,21 @@ async function main(): Promise<void> {
   };
 
   runStartupStorageMigrations();
-  const config = loadConfig();
+  const configService = createConfigService({ codelarkHome: CODELARK_HOME });
+  const config = configService.snapshot().config;
+  const settings = exportRuntimeSettings(config);
   setupLogger();
 
   const runId = crypto.randomUUID();
   console.log(`${LOG_PREFIX} Starting bridge (run_id: ${runId})`);
   console.log(`${LOG_PREFIX} Proxy env snapshot: ${formatProxyEnvSnapshot()}`);
 
-  const settings = configToSettings(config);
   const store = new JsonFileStore(settings, { dynamicSettings: true });
   const pendingPerms = new PendingPermissions();
-  const llm = await resolveProvider(pendingPerms, config.defaultProvider);
-  console.log(`${LOG_PREFIX} Runtime: ${config.runtime}`);
-  console.log(`${LOG_PREFIX} Default Codex provider: ${config.defaultProvider || 'auto'}`);
+  const defaultCodexProvider = config.runtime.codex.provider || undefined;
+  const llm = await resolveProvider(pendingPerms, defaultCodexProvider as CodexProviderChoice | undefined);
+  console.log(`${LOG_PREFIX} Runtime: ${config.runtime.agent}`);
+  console.log(`${LOG_PREFIX} Default Codex provider: ${defaultCodexProvider || 'auto'}`);
 
   const gateway = {
     resolvePendingPermission: (id: string, resolution: { behavior: 'allow' | 'deny'; message?: string }) =>

@@ -1,8 +1,4 @@
-import {
-  loadConfig,
-  saveConfig,
-  type FeishuChannelConfig,
-} from '../../configuration/index.js';
+import { createConfigService } from '../../configuration/service.js';
 import type { InboundMessage } from '../../domain/index.js';
 import { buildCommandFields } from './presentation.js';
 
@@ -38,8 +34,8 @@ export function handleRequireAtCommand(options: {
     );
   }
 
-  const current = loadConfig();
-  const channel = (current.channels || []).find((item) => item.id === options.msg.address.channelType);
+  const service = createConfigService({ migrate: false });
+  const channel = service.snapshot().config.channels.find((item) => item.id === options.msg.address.channelType);
   if (!channel) {
     return buildCommandFields(
       '群聊 @bot 设置未更新',
@@ -57,8 +53,7 @@ export function handleRequireAtCommand(options: {
     );
   }
 
-  const feishuConfig = channel.config as FeishuChannelConfig;
-  const currentValue = feishuConfig.requireMention === true;
+  const currentValue = channel.config.requireMention === true;
   if (parsed === 'show') {
     return buildCommandFields(
       '群聊 @bot 设置',
@@ -71,27 +66,16 @@ export function handleRequireAtCommand(options: {
     );
   }
 
-  const now = new Date().toISOString();
-  const nextChannels = (current.channels || []).map((item) => {
-    if (item.id !== channel.id) return item;
-    return {
-      ...item,
-      updatedAt: now,
+  service.set({ kind: 'home' }, {
+    channels: [{
+      id: channel.id,
       config: {
-        ...item.config,
         requireMention: parsed,
       },
-    };
+    }],
   });
-
-  saveConfig({
-    ...current,
-    channels: nextChannels,
-    enabledChannels: Array.from(new Set(nextChannels.filter((item) => item.enabled).map((item) => item.provider))),
-  });
-  const savedChannel = loadConfig().channels?.find((item) => item.id === channel.id);
-  const savedConfig = savedChannel?.config as FeishuChannelConfig | undefined;
-  const savedValue = savedConfig?.requireMention === true;
+  const savedChannel = service.snapshot().config.channels.find((item) => item.id === channel.id);
+  const savedValue = savedChannel?.config.requireMention === true;
 
   return buildCommandFields(
     '已更新群聊 @bot 设置',
@@ -100,7 +84,7 @@ export function handleRequireAtCommand(options: {
       ['当前值', formatRequireAtMode(savedValue)],
     ],
     [
-      '配置已保存到 `~/.codelark/config.json` 与 `config.env`；运行中的 Bridge 会在下一次通道配置同步时重载该通道。',
+      '配置已保存到 `~/.codelark/config.toml`；运行中的 Bridge 会在下一次通道配置同步时重载该通道。',
       '如果关闭 @ 后群消息仍没有触发 Bridge，请检查飞书应用权限和事件订阅，尤其是“读取群组中所有消息”及 `im.message.receive_v1`。权限变更后可能需要重新发布/生效应用配置。',
     ],
     options.markdown,

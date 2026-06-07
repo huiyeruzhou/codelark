@@ -5,7 +5,13 @@ import {
   buildMirrorSubscriptionRegistryPlan,
   getMirrorRegistryBindingActivityTier,
   isMirrorRegistryBindingActive,
+  type MirrorRegistrySession,
 } from '../../../../bridge/mirror/subscription-registry.js';
+
+function hasCodexThreadMirrorSource(session: MirrorRegistrySession | null | undefined): boolean {
+  return session?.runtime?.activeRuntime !== 'claude'
+    && Boolean(session?.runtime?.codex?.threadId?.trim());
+}
 
 describe('mirror-subscription-registry', () => {
   it('keeps channel chats that have a running channel and resolve to a Codex thread', () => {
@@ -46,16 +52,17 @@ describe('mirror-subscription-registry', () => {
           return {};
         }
         if (sessionId === 'session-2') {
-          return { runtime: { codex: { threadId: 'thread-2', provider: 'pty' } } };
+          return { runtime: { codex: { threadId: 'thread-2' } } };
         }
         if (sessionId === 'session-3') {
-          return { runtime: { codex: { threadId: 'thread-3', provider: 'tmux' } } };
+          return { runtime: { codex: { threadId: 'thread-3' } } };
         }
         if (sessionId === 'session-5') {
           return { runtime: { codex: { threadId: '' } } };
         }
         return null;
       },
+      hasCodexThreadMirrorSource,
     );
 
     assert.deepEqual(
@@ -77,13 +84,14 @@ describe('mirror-subscription-registry', () => {
       ['feishu-default'],
       ['binding-1', 'binding-2', 'binding-3'],
       () => ({ runtime: { codex: { threadId: 'thread-1' } } }),
+      hasCodexThreadMirrorSource,
     );
 
     assert.deepEqual(plan.upsertBindings.map((binding) => binding.id), ['binding-1']);
     assert.deepEqual(plan.removeBindingIds, ['binding-2', 'binding-3']);
   });
 
-  it('does not create mirror subscriptions for Codex SDK sessions', () => {
+  it('delegates Codex SDK suppression to the caller policy', () => {
     const plan = buildMirrorSubscriptionRegistryPlan(
       [
         {
@@ -101,13 +109,15 @@ describe('mirror-subscription-registry', () => {
       ['sdk-binding'],
       (sessionId) => {
         if (sessionId === 'sdk-session') {
-          return { runtime: { codex: { threadId: 'sdk-thread', provider: 'sdk' } } };
+          return { runtime: { codex: { threadId: 'sdk-thread' } } };
         }
         if (sessionId === 'legacy-session') {
           return { runtime: { codex: { threadId: 'legacy-thread' } } };
         }
         return null;
       },
+      (session) => hasCodexThreadMirrorSource(session)
+        && session?.runtime?.codex?.threadId !== 'sdk-thread',
     );
 
     assert.deepEqual(plan.upsertBindings.map((binding) => binding.id), ['legacy-binding']);
@@ -132,7 +142,8 @@ describe('mirror-subscription-registry', () => {
       ],
       ['feishu-default'],
       ['doc-binding'],
-      () => ({ runtime: { codex: { threadId: 'thread-1', provider: 'pty' } } }),
+      () => ({ runtime: { codex: { threadId: 'thread-1' } } }),
+      hasCodexThreadMirrorSource,
     );
 
     assert.deepEqual(plan.upsertBindings.map((binding) => binding.id), ['group-binding']);
@@ -160,8 +171,8 @@ describe('mirror-subscription-registry', () => {
       [hotBinding, coldBinding],
       ['feishu-default'],
       ['hot-binding', 'cold-binding'],
-      () => ({ runtime: { codex: { threadId: 'thread-1', provider: 'pty' } } }),
-      undefined,
+      () => ({ runtime: { codex: { threadId: 'thread-1' } } }),
+      hasCodexThreadMirrorSource,
       { activeBindingWindowMs: 30 * 60_000, nowMs },
     );
 

@@ -7,7 +7,11 @@ import {
   listCodexSessions,
   type CodexSessionSummary,
 } from '../../runtime/codex/session-index.js';
-import { DEFAULT_WORKSPACE_ROOT, normalizeClaudeExecutable, type ClaudeExecutable, type ClaudePermissionMode, type ClaudeProviderChoice } from '../../configuration/index.js';
+import { normalizeClaudeExecutable, type ClaudeExecutable, type ClaudePermissionMode, type ClaudeProviderChoice } from '../../runtime/options.js';
+import { createConfigService, type ConfigScope, type EffectiveConfig } from '../../configuration/service.js';
+import type { ConfigPatch } from '../../configuration/schema.js';
+import type { ConfigV2 } from '../../configuration/schema.js';
+import type { ConfigPath } from '../../configuration/fields.js';
 import {
   resetDraftSession as resetDraftSessionForStore,
 } from '../session/internal-sessions.js';
@@ -19,34 +23,28 @@ import {
 import {
   normalizeReasoningEffort as normalizeStoredReasoningEffort,
   normalizeSandboxMode,
-} from '../../configuration/runtime-options.js';
+} from '../../runtime/options.js';
 import { shouldUseCodexPtyTui } from '../../runtime/codex/pty-provider.js';
 import { shouldUseCodexTmuxTui } from '../../runtime/codex/tmux-provider.js';
 import { getBridgeContext } from '../host/context.js';
 import {
-  getSessionCodexModel,
-  getSessionCodexMode,
-  getSessionCodexNetworkAccess,
-  getSessionCodexProvider,
-  getSessionCodexReasoningEffort,
-  getSessionCodexSandboxMode,
-  getSessionClaudeModel,
-  getSessionClaudePermissionMode,
-  getSessionClaudeProvider,
-  getSessionClaudeReasoningEffort,
-  getSessionActiveRuntime,
-  getSessionWorkingDirectory,
   buildRuntimeProviderIdentity,
-  isRuntimeProviderChoice,
+  getSessionWorkingDirectory,
 } from '../../domain/session-runtime.js';
 import type { ChannelChat } from '../../domain/channel.js';
 import type {
   BridgeSession,
   BridgeSessionClaudeRuntimeState,
+  BridgeSessionCodexRuntimeState,
   RuntimeProviderChoice,
   RuntimeProviderIdentity,
 } from '../../domain/session.js';
 import { validateWorkingDirectory } from '../../shared/security/validators.js';
+import {
+  getGlobalStringConfig,
+  getGlobalWorkspaceRoot,
+} from './global-config.js';
+import { getConfiguredChannelInstance } from '../../channels/adapter-runtime/channel-runtime.js';
 
 const AVAILABLE_CODEX_MODELS = listSelectableCodexModels();
 const AVAILABLE_CODEX_MODEL_MAP = new Map(AVAILABLE_CODEX_MODELS.map((model) => [model.slug, model]));
@@ -76,29 +74,83 @@ export function getCodexSessionByThreadIdSafe(
 }
 
 export function getWorkspaceRoot(): string {
-  const { store } = getBridgeContext();
-  return store.getSetting('bridge_default_workspace_root') || DEFAULT_WORKSPACE_ROOT;
+  return getGlobalWorkspaceRoot();
 }
 
-export function resolveEffectiveReasoningEffort(session: BridgeSession | null | undefined): string {
-  const { store } = getBridgeContext();
-  return normalizeStoredReasoningEffort(
-    getSessionCodexReasoningEffort(session) || store.getSetting('bridge_codex_reasoning_effort'),
-  );
+function getSessionTomlOverride<T>(session: BridgeSession | null | undefined, path: ConfigPath): T | undefined {
+  if (!session?.id) return undefined;
+  const resolved = createConfigService({ migrate: false }).resolve(path, {
+    kind: 'session',
+    sessionId: session.id,
+  });
+  return resolved.source === 'session' ? resolved.value as T : undefined;
 }
 
-export function resolveEffectiveSandboxMode(session?: BridgeSession | null): string {
-  const { store } = getBridgeContext();
-  return normalizeSandboxMode(getSessionCodexSandboxMode(session) || store.getSetting('bridge_codex_sandbox_mode'));
+function scopedConfigForRuntime(
+  binding?: ChannelChat | null,
+  session?: BridgeSession | null,
+): { effective: EffectiveConfig; config: ConfigV2; scope?: ConfigScope } {
+  const channelId = binding?.channelType && (binding.channelProvider === undefined || binding.channelProvider === 'feishu')
+    ? getConfiguredChannelInstance(binding.channelType)?.id || binding.channelType
+    : undefined;
+  const scope: ConfigScope | undefined = session?.id
+    ? {
+        kind: 'session',
+        sessionId: session.id,
+        ...(channelId ? { channelId, provider: 'feishu' as const } : {}),
+      }
+    : channelId
+      ? { kind: 'channel', channelId, provider: 'feishu' as const }
+      : undefined;
+  const effective = createConfigService({ migrate: false }).snapshot(scope);
+  return { effective, config: effective.config, scope };
 }
 
-export function resolveEffectiveNetworkAccess(session?: BridgeSession | null): boolean {
-  const { store } = getBridgeContext();
-  const sessionValue = getSessionCodexNetworkAccess(session);
-  if (typeof sessionValue === 'boolean') {
-    return sessionValue;
+function sourceRank(source: string | undefined): number {
+  switch (source) {
+    case 'request': return 7;
+    case 'session': return 6;
+    case 'channel': return 5;
+    case 'cli': return 4;
+    case 'env': return 3;
+    case 'local': return 2;
+    case 'home': return 1;
+    case 'defaults':
+    default: return 0;
   }
-  return (store.getSetting('bridge_codex_network_access') || '').toLowerCase() === 'true';
+}
+
+function hasKeys(value: object): boolean {
+  return Object.keys(value).length > 0;
+}
+
+export function resolveEffectiveReasoningEffort(
+  session: BridgeSession | null | undefined,
+  binding?: ChannelChat | null,
+): string {
+  return normalizeStoredReasoningEffort(scopedConfigForRuntime(binding, session).config.runtime.codex.reasoningEffort);
+}
+
+export function resolveEffectiveSandboxMode(
+  session?: BridgeSession | null,
+  binding?: ChannelChat | null,
+): string {
+  return normalizeSandboxMode(scopedConfigForRuntime(binding, session).config.runtime.codex.sandboxMode);
+}
+
+export function resolveEffectiveNetworkAccess(
+  session?: BridgeSession | null,
+  binding?: ChannelChat | null,
+): boolean {
+  return scopedConfigForRuntime(binding, session).config.runtime.codex.networkAccess === true;
+}
+
+export function hasSessionCodexSandboxOverride(session?: BridgeSession | null): boolean {
+  return getSessionTomlOverride<BridgeSessionCodexRuntimeState['sandboxMode']>(session, 'runtime.codex.sandboxMode') !== undefined;
+}
+
+export function hasSessionCodexNetworkAccessOverride(session?: BridgeSession | null): boolean {
+  return getSessionTomlOverride<boolean>(session, 'runtime.codex.networkAccess') !== undefined;
 }
 
 export type SessionRuntimeProvider = RuntimeProviderChoice;
@@ -131,42 +183,70 @@ export interface ClaudeRuntimeConfig {
   idleTimeoutMinutes?: number;
 }
 
-export function resolveEffectiveClaudeProvider(session?: BridgeSession | null): ClaudeProviderChoice {
-  const { store } = getBridgeContext();
-  const sessionProvider = getSessionClaudeProvider(session);
-  if (isRuntimeProviderChoice(sessionProvider)) return sessionProvider;
-  const configured = store.getSetting('bridge_claude_provider');
-  if (isRuntimeProviderChoice(configured)) return configured;
+export interface RuntimeMetadataConfig {
+  reasoningEffort: string;
+  model: string;
+}
+
+export function resolveEffectiveClaudeProvider(
+  session?: BridgeSession | null,
+  binding?: ChannelChat | null,
+): ClaudeProviderChoice {
+  const configured = scopedConfigForRuntime(binding, session).config.runtime.claude.provider;
+  if (configured === 'sdk' || configured === 'pty' || configured === 'tmux') return configured;
   return 'tmux';
 }
 
-export function resolveEffectiveMode(
-  _binding?: ChannelChat | null,
-  session?: BridgeSession | null,
-): 'normal' | 'yolo' {
-  return (getSessionCodexMode(session) || getBridgeContext().store.getSetting('bridge_default_mode')) === 'yolo'
-    ? 'yolo'
-    : 'normal';
+export function getSessionClaudeProviderOverride(session?: BridgeSession | null): ClaudeProviderChoice | undefined {
+  const tomlProvider = getSessionTomlOverride<ClaudeProviderChoice>(session, 'runtime.claude.provider');
+  return tomlProvider === 'sdk' || tomlProvider === 'pty' || tomlProvider === 'tmux' ? tomlProvider : undefined;
 }
 
-export function resolveEffectiveCodexProvider(session?: BridgeSession | null): SessionRuntimeCodexProvider {
-  const { store } = getBridgeContext();
-  const sessionProvider = getSessionCodexProvider(session);
-  if (isRuntimeProviderChoice(sessionProvider)) return sessionProvider;
-  const configured = store.getSetting('bridge_default_provider');
-  if (isRuntimeProviderChoice(configured)) return configured;
+export function hasSessionClaudeProviderOverride(session?: BridgeSession | null): boolean {
+  return getSessionClaudeProviderOverride(session) !== undefined;
+}
+
+export function resolveEffectiveMode(
+  binding?: ChannelChat | null,
+  session?: BridgeSession | null,
+): 'normal' | 'yolo' {
+  const mode = scopedConfigForRuntime(binding, session).config.runtime.codex.yoloMode;
+  return mode === 'on' || mode === 'yolo' ? 'yolo' : 'normal';
+}
+
+export function resolveEffectiveCodexProvider(
+  session?: BridgeSession | null,
+  binding?: ChannelChat | null,
+): SessionRuntimeCodexProvider {
+  const configured = scopedConfigForRuntime(binding, session).config.runtime.codex.provider;
+  if (configured === 'sdk' || configured === 'tmux' || configured === 'pty') return configured;
   return shouldUseCodexPtyTui() ? 'pty' : shouldUseCodexTmuxTui() ? 'tmux' : 'sdk';
 }
 
-export function resolveEffectiveRuntimeProvider(session?: BridgeSession | null): {
+export function getSessionCodexProviderOverride(session?: BridgeSession | null): SessionRuntimeCodexProvider | undefined {
+  const tomlProvider = getSessionTomlOverride<SessionRuntimeCodexProvider>(session, 'runtime.codex.provider');
+  return tomlProvider === 'sdk' || tomlProvider === 'tmux' || tomlProvider === 'pty' ? tomlProvider : undefined;
+}
+
+export function hasSessionCodexProviderOverride(session?: BridgeSession | null): boolean {
+  return getSessionCodexProviderOverride(session) !== undefined;
+}
+
+export interface EffectiveRuntimeProvider {
   runtime: 'codex' | 'claude';
   provider: RuntimeProviderChoice;
   identity: RuntimeProviderIdentity;
-} {
-  const runtime = getSessionActiveRuntime(session) === 'claude' ? 'claude' : 'codex';
+}
+
+export function resolveEffectiveRuntimeProvider(
+  session?: BridgeSession | null,
+  binding?: ChannelChat | null,
+): EffectiveRuntimeProvider {
+  const configuredRuntime = scopedConfigForRuntime(binding, session).config.runtime.agent;
+  const runtime = session?.runtime?.activeRuntime === 'claude' ? 'claude' : configuredRuntime;
   const provider = runtime === 'claude'
-    ? resolveEffectiveClaudeProvider(session)
-    : resolveEffectiveCodexProvider(session);
+    ? resolveEffectiveClaudeProvider(session, binding)
+    : resolveEffectiveCodexProvider(session, binding);
   return {
     runtime,
     provider,
@@ -175,24 +255,29 @@ export function resolveEffectiveRuntimeProvider(session?: BridgeSession | null):
 }
 
 export function resolveEffectiveSkipGitRepoCheck(): boolean {
-  return (getBridgeContext().store.getSetting('bridge_codex_skip_git_repo_check') || '').toLowerCase() === 'true';
+  return scopedConfigForRuntime().config.runtime.codex.skipGitRepoCheck === true;
 }
 
 export function resolveSessionRuntimeConfig(
   binding?: ChannelChat | null,
   session?: BridgeSession | null,
 ): SessionRuntimeConfig {
-  const { store } = getBridgeContext();
-  const mode = resolveEffectiveMode(binding, session);
+  const { config } = scopedConfigForRuntime(binding, session);
+  const yoloMode = config.runtime.codex.yoloMode;
+  const mode: 'normal' | 'yolo' = yoloMode === 'on' || yoloMode === 'yolo' ? 'yolo' : 'normal';
+  const configuredProvider = config.runtime.codex.provider;
+  const codexProvider = configuredProvider === 'sdk' || configuredProvider === 'tmux' || configuredProvider === 'pty'
+    ? configuredProvider
+    : shouldUseCodexPtyTui() ? 'pty' : shouldUseCodexTmuxTui() ? 'tmux' : 'sdk';
   return {
     [sessionRuntimeConfigBrand]: true,
     mode,
-    model: getSessionCodexModel(session) || store.getSetting('bridge_default_model') || '',
-    codexProvider: resolveEffectiveCodexProvider(session),
-    sandboxMode: mode === 'yolo' ? 'danger-full-access' : resolveEffectiveSandboxMode(session),
-    networkAccessEnabled: resolveEffectiveNetworkAccess(session),
-    reasoningEffort: resolveEffectiveReasoningEffort(session),
-    skipGitRepoCheck: resolveEffectiveSkipGitRepoCheck(),
+    model: config.runtime.codex.model || '',
+    codexProvider,
+    sandboxMode: mode === 'yolo' ? 'danger-full-access' : normalizeSandboxMode(config.runtime.codex.sandboxMode),
+    networkAccessEnabled: config.runtime.codex.networkAccess === true,
+    reasoningEffort: normalizeStoredReasoningEffort(config.runtime.codex.reasoningEffort),
+    skipGitRepoCheck: config.runtime.codex.skipGitRepoCheck === true,
   };
 }
 
@@ -208,30 +293,93 @@ function parsePositiveSettingInt(value: string | null | undefined): number | und
   return undefined;
 }
 
-export function resolveClaudeRuntimeConfig(session?: BridgeSession | null): ClaudeRuntimeConfig {
-  const { store } = getBridgeContext();
+function normalizeClaudeReasoningEffort(value: string | null | undefined): BridgeSessionClaudeRuntimeState['reasoningEffort'] | undefined {
+  return value === 'low'
+    || value === 'medium'
+    || value === 'high'
+    || value === 'xhigh'
+    || value === 'max'
+    ? value
+    : undefined;
+}
+
+export function resolveClaudeRuntimeConfig(session?: BridgeSession | null, binding?: ChannelChat | null): ClaudeRuntimeConfig {
+  const { effective, config } = scopedConfigForRuntime(binding, session);
+  const permissionMode = normalizeClaudePermissionMode(config.runtime.claude.permissionMode);
+  const permissionRank = sourceRank(effective.provenance.get('runtime.claude.permissionMode')?.source);
+  const yoloRank = sourceRank(effective.provenance.get('runtime.claude.yoloMode')?.source);
+  const yoloPermissionMode = config.runtime.claude.yoloMode === 'on'
+    ? 'bypassPermissions'
+    : config.runtime.claude.yoloMode === 'off'
+      ? 'default'
+      : undefined;
+  const configuredProvider = config.runtime.claude.provider;
   return {
     runtime: 'claude',
-    provider: resolveEffectiveClaudeProvider(session),
-    executable: normalizeClaudeExecutable(store.getSetting('bridge_claude_executable')) || 'claude',
-    model: getSessionClaudeModel(session) || store.getSetting('bridge_claude_default_model') || undefined,
-    permissionMode: getSessionClaudePermissionMode(session)
-      || normalizeClaudePermissionMode(store.getSetting('bridge_claude_permission_mode'))
+    provider: configuredProvider === 'sdk' || configuredProvider === 'pty' || configuredProvider === 'tmux'
+      ? configuredProvider
+      : 'tmux',
+    executable: normalizeClaudeExecutable(config.runtime.claude.executable) || 'claude',
+    model: config.runtime.claude.model || undefined,
+    permissionMode: yoloRank > permissionRank
+      ? yoloPermissionMode || permissionMode || 'default'
+      : permissionMode || yoloPermissionMode
       || 'default',
-    reasoningEffort: getSessionClaudeReasoningEffort(session),
-    idleTimeoutMinutes: parsePositiveSettingInt(store.getSetting('bridge_claude_idle_timeout_minutes')),
+    reasoningEffort: normalizeClaudeReasoningEffort(config.runtime.claude.reasoningEffort),
+    idleTimeoutMinutes: parsePositiveSettingInt(String(config.runtime.claude.idleTimeoutMinutes ?? '')),
   };
 }
 
+export function resolveRuntimeMetadataConfig(
+  session: BridgeSession | null | undefined,
+  runtime: 'codex' | 'claude' = session?.runtime?.activeRuntime === 'claude' ? 'claude' : 'codex',
+  binding?: ChannelChat | null,
+): RuntimeMetadataConfig {
+  if (runtime === 'claude') {
+    const claudeConfig = resolveClaudeRuntimeConfig(session, binding);
+    return {
+      reasoningEffort: claudeConfig.reasoningEffort || 'default',
+      model: claudeConfig.model || 'default',
+    };
+  }
+  return {
+    reasoningEffort: normalizeStoredReasoningEffort(resolveEffectiveReasoningEffort(session, binding)),
+    model: resolveDisplayedModel(binding, session),
+  };
+}
+
+export function sessionCodexRuntimeOverridePatch(session: BridgeSession | null | undefined): ConfigPatch {
+  const codex: NonNullable<NonNullable<ConfigPatch['runtime']>['codex']> = {};
+  const model = getSessionTomlOverride<string>(session, 'runtime.codex.model');
+  if (model !== undefined) codex.model = model;
+  const yoloMode = getSessionTomlOverride<'off' | 'on' | 'yolo'>(session, 'runtime.codex.yoloMode');
+  if (yoloMode !== undefined) codex.yoloMode = yoloMode;
+  const provider = getSessionCodexProviderOverride(session);
+  if (provider !== undefined) codex.provider = provider;
+  const sandboxMode = getSessionTomlOverride<BridgeSessionCodexRuntimeState['sandboxMode']>(session, 'runtime.codex.sandboxMode');
+  if (sandboxMode !== undefined) codex.sandboxMode = sandboxMode;
+  const networkAccess = getSessionTomlOverride<boolean>(session, 'runtime.codex.networkAccess');
+  if (networkAccess !== undefined) codex.networkAccess = networkAccess;
+  const reasoningEffort = getSessionTomlOverride<BridgeSessionCodexRuntimeState['reasoningEffort']>(session, 'runtime.codex.reasoningEffort');
+  if (reasoningEffort !== undefined) codex.reasoningEffort = reasoningEffort;
+  return hasKeys(codex) ? { runtime: { codex } } : {};
+}
+
 export function resolveDisplayedModel(
-  _binding: ChannelChat | null | undefined,
+  binding: ChannelChat | null | undefined,
   session: BridgeSession | null | undefined,
   configuredDefaultModel?: string | null,
   codexDefaultModel?: string | null,
 ): string {
-  return getSessionCodexModel(session)
-    || configuredDefaultModel
+  const { effective, config } = scopedConfigForRuntime(binding, session);
+  const scopedModel = config.runtime.codex.model;
+  const modelSource = effective.provenance.get('runtime.codex.model')?.source;
+  if (scopedModel && (modelSource === 'session' || modelSource === 'channel' || modelSource === 'request')) {
+    return scopedModel;
+  }
+  return configuredDefaultModel
     || codexDefaultModel
+    || scopedModel
     || 'default';
 }
 
@@ -362,9 +510,8 @@ export function resetDraftSession(address: { channelType: string; chatId: string
 }
 
 export function getHistoryMessageLimit(): number {
-  const { store } = getBridgeContext();
-  const configured = Number.parseInt(store.getSetting('bridge_history_message_limit') || '', 10);
-  if (!Number.isFinite(configured) || configured <= 0) return 8;
+  const configured = scopedConfigForRuntime().config.channels[0]?.config.historyMessageLimit;
+  if (configured === undefined || !Number.isFinite(configured) || configured <= 0) return 8;
   return Math.max(1, Math.min(20, configured));
 }
 

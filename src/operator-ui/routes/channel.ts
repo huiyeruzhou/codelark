@@ -1,19 +1,12 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
+import { z } from 'zod';
 
+import type { ChannelConfigV2, ConfigV2 } from '../../configuration/schema.js';
+import { configV2ToPayload, readUiHomeConfig, replaceUiHomeConfig } from '../application/config.js';
 import {
-  findChannelInstance,
-  loadConfig,
-  saveConfig,
-  type ChannelInstance,
-  type Config,
-} from '../../configuration/index.js';
-import {
-  channelToPayload,
-  configToPayload,
-} from '../application/config.js';
-import {
-  deleteChannelInstance,
-  mergeChannelInstance,
+  deleteChannelInstanceV2,
+  findUiChannelInstance,
+  mergeChannelInstanceV2,
   validateFeishuCredentials,
 } from '../application/channel.js';
 
@@ -53,7 +46,34 @@ function asString(value: unknown): string | undefined {
   return trimmed ? trimmed : undefined;
 }
 
-function syncBindingChannelMeta(store: UiChannelRouteStore, channel: ChannelInstance): void {
+function channelErrorBody(error: unknown): { ok: false; error: string; issues?: Array<{ path: string; message: string }> } {
+  if (error instanceof z.ZodError) {
+    return {
+      ok: false,
+      error: '通道字段不合法。',
+      issues: error.issues.map((issue) => ({
+        path: issue.path.join('.'),
+        message: issue.message,
+      })),
+    };
+  }
+  return {
+    ok: false,
+    error: error instanceof Error ? error.message : '通道字段不合法。',
+  };
+}
+
+function channelV2ToPayload(channel: ChannelConfigV2) {
+  return {
+    id: channel.id,
+    alias: channel.alias,
+    provider: channel.provider,
+    enabled: channel.enabled,
+    config: { ...channel.config },
+  };
+}
+
+function syncBindingChannelMeta(store: UiChannelRouteStore, channel: ChannelConfigV2): void {
   for (const binding of store.listChannelChats(channel.id) as Array<{ id: string }>) {
     store.updateChannelChat(binding.id, {
       channelProvider: channel.provider,
@@ -76,34 +96,49 @@ export async function handleUiChannelRoute(options: {
   response: ServerResponse;
   url: URL;
   createStore: () => UiChannelRouteStore;
-  readConfig?: () => Config;
-  writeConfig?: (config: Config) => void;
-  buildBindingsPayload: (store: UiChannelRouteStore, config: Config) => Promise<Record<string, unknown>>;
+  readConfig?: () => ConfigV2;
+  writeConfig?: (config: ConfigV2) => void;
+  buildBindingsPayload: (store: UiChannelRouteStore, config: ConfigV2) => Promise<Record<string, unknown>>;
 }): Promise<boolean> {
   const {
     request,
     response,
     url,
     createStore,
-    readConfig = loadConfig,
-    writeConfig = saveConfig,
+    readConfig = readUiHomeConfig,
+    writeConfig = replaceUiHomeConfig,
     buildBindingsPayload,
   } = options;
 
   if (request.method === 'POST' && url.pathname === '/api/channels/save') {
-    const payload = await readJsonBody<Record<string, unknown>>(request);
-    const current = readConfig();
-    const merged = mergeChannelInstance(payload, current);
-    writeConfig(merged.config);
-    const store = createStore();
-    syncBindingChannelMeta(store, merged.channel);
-    const latest = readConfig();
-    json(response, 200, {
-      ok: true,
-      channel: channelToPayload(merged.channel),
-      config: configToPayload(latest),
-      ...(await buildBindingsPayload(store, latest)),
-    });
+    try {
+      const payload = await readJsonBody<Record<string, unknown>>(request);
+      const current = readConfig();
+      const merged = mergeChannelInstanceV2(payload, current);
+      writeConfig(merged.config);
+      const store = createStore();
+      syncBindingChannelMeta(store, merged.channel);
+      const latest = readConfig();
+      json(response, 200, {
+        ok: true,
+        channel: channelV2ToPayload(merged.channel),
+        config: configV2ToPayload(latest),
+        ...(await buildBindingsPayload(store, latest)),
+      });
+    } catch (error) {
+      json(response, 400, channelErrorBody(error));
+    }
+    return true;
+  }
+
+  if (request.method === 'POST' && url.pathname === '/api/channels/check') {
+    try {
+      const payload = await readJsonBody<Record<string, unknown>>(request);
+      mergeChannelInstanceV2(payload, readConfig());
+      json(response, 200, { ok: true });
+    } catch (error) {
+      json(response, 400, channelErrorBody(error));
+    }
     return true;
   }
 
@@ -122,13 +157,13 @@ export async function handleUiChannelRoute(options: {
       return true;
     }
 
-    const next = deleteChannelInstance(readConfig(), channelId);
+    const next = deleteChannelInstanceV2(readConfig(), channelId);
     writeConfig(next);
     store.deleteChannelDefaultTarget(channelId);
     const latest = readConfig();
     json(response, 200, {
       ok: true,
-      config: configToPayload(latest),
+      config: configV2ToPayload(latest),
       ...(await buildBindingsPayload(store, latest)),
     });
     return true;
@@ -141,7 +176,7 @@ export async function handleUiChannelRoute(options: {
       json(response, 400, { error: 'channelId 不能为空。' });
       return true;
     }
-    const channel = findChannelInstance(channelId, readConfig());
+    const channel = findUiChannelInstance(channelId, readConfig());
     if (!channel) {
       json(response, 404, { error: '指定的通道不存在。' });
       return true;

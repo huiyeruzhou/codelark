@@ -1,9 +1,9 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
-import { DEFAULT_WORKSPACE_ROOT } from '../../configuration/index.js';
 import type { BridgeSession, BridgeStore } from '../../domain/index.js';
-import { setSessionCodexModeUpdate } from '../../domain/session-runtime.js';
+import { createConfigService } from '../../configuration/service.js';
+import { getGlobalStringConfig, getGlobalWorkspaceRoot } from './global-config.js';
 
 const TEMPORARY_SESSION_TTL_MS = 24 * 60 * 60 * 1000;
 const MAX_HIDDEN_TEMPORARY_SESSIONS = 64;
@@ -31,7 +31,7 @@ export function makeDraftSessionName(address: { channelType: string; chatId: str
 }
 
 function getDefaultSessionWorkingDirectory(store: BridgeStore): string {
-  const dir = store.getSetting('bridge_default_workspace_root') || DEFAULT_WORKSPACE_ROOT;
+  const dir = getGlobalWorkspaceRoot();
   ensureDirectory(dir);
   return dir;
 }
@@ -63,7 +63,12 @@ export function cleanupHiddenSessions(store: BridgeStore): void {
 export function getOrCreateDraftSession(
   store: BridgeStore,
   address: { channelType: string; chatId: string; userId?: string },
-  options?: { activeRuntime?: 'codex' | 'claude' },
+  options?: {
+    activeRuntime?: 'codex' | 'claude';
+    codexModel?: string;
+    codexMode?: 'normal' | 'yolo';
+    workingDirectory?: string;
+  },
 ): BridgeSession {
   cleanupHiddenSessions(store);
   const expectedName = makeDraftSessionName(address);
@@ -76,19 +81,19 @@ export function getOrCreateDraftSession(
 
   if (existing) {
     store.updateSession(existing.id, {
-      ...setSessionCodexModeUpdate('normal'),
       expires_at: new Date(Date.now() + TEMPORARY_SESSION_TTL_MS).toISOString(),
     });
     return store.getSession(existing.id) || existing;
   }
 
-  const workingDirectory = getDefaultSessionWorkingDirectory(store);
-  return store.createSession(
+  const workingDirectory = options?.workingDirectory || getDefaultSessionWorkingDirectory(store);
+  ensureDirectory(workingDirectory);
+  const session = store.createSession(
     expectedName,
-    store.getSetting('bridge_default_model') || '',
+    options?.codexModel ?? (getGlobalStringConfig('runtime.codex.model') || ''),
     undefined,
     workingDirectory,
-    'normal',
+    options?.codexMode || 'normal',
     {
       hidden: true,
       sessionType: 'normal',
@@ -97,6 +102,13 @@ export function getOrCreateDraftSession(
       activeRuntime: options?.activeRuntime,
     },
   );
+  if (options?.activeRuntime !== 'claude') {
+    createConfigService({ migrate: false }).set(
+      { kind: 'session', sessionId: session.id },
+      { runtime: { codex: { reasoningEffort: 'low' } } },
+    );
+  }
+  return session;
 }
 
 export function resetDraftSession(

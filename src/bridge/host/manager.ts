@@ -16,7 +16,8 @@ import type {
 } from '../../domain/index.js';
 import type { BaseChannelAdapter } from '../../channels/contracts.js';
 import type { BridgeSession, BridgeStore, PermissionLinkRecord } from '../../domain/index.js';
-import type { ChannelInstance, FeishuChannelConfig } from '../../configuration/index.js';
+import type { FeishuChannelConfig } from '../../channels/types.js';
+import { feishuSiteToApiBaseUrl } from '../../channels/feishu/site.js';
 import { inspect } from 'node:util';
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 // Side-effect import: triggers self-registration of all adapter factories
@@ -39,7 +40,7 @@ import {
 import {
   normalizeReasoningEffort,
   normalizeSandboxMode,
-} from '../../configuration/runtime-options.js';
+} from '../../runtime/options.js';
 import { buildDoctorPromptFromLogs } from '../diagnostics/doctor.js';
 import {
   resolveCommandAlias,
@@ -98,6 +99,7 @@ import {
 } from '../../channels/adapter-runtime/runtime.js';
 import {
   formatBindingChatLabel,
+  listConfiguredChannelInstances,
 } from '../../channels/adapter-runtime/channel-runtime.js';
 import {
   getBridgeSessionCodexThreadId,
@@ -105,33 +107,29 @@ import {
 import {
   formatDisplayedModel,
   getCodexSessionByThreadIdSafe,
+  getSessionCodexProviderOverride,
   resolveDisplayedModel,
+  resolveEffectiveClaudeProvider,
   resolveEffectiveCodexProvider,
   resolveEffectiveRuntimeProvider,
   resolveNewWorkingDirectory,
   resolveNewSessionWorkingDirectory,
+  resolveRuntimeMetadataConfig,
+  sessionCodexRuntimeOverridePatch,
 } from '../session/support.js';
+import { createConfigService } from '../../configuration/service.js';
 import {
-  getSessionTmuxSessionName,
-  getSessionClaudeModel,
-  getSessionClaudeReasoningEffort,
-  getSessionCodexModel,
-  getSessionCodexMode,
-  getSessionCodexNetworkAccess,
-  getSessionCodexProvider,
-  getSessionCodexReasoningEffort,
-  getSessionCodexSandboxMode,
+  getGlobalDefaultChannelConfig,
+} from '../session/global-config.js';
+import {
+  getSessionRuntimeTmuxSessionName,
+  getSessionCodexThreadId,
   getSessionClaudeCwd,
-  getSessionClaudeProvider,
   getSessionClaudeSessionId,
   getSessionActiveRuntime,
   getSessionSystemPrompt,
   getSessionWorkingDirectory,
   setSessionClaudeIdentityUpdate,
-  setSessionCodexNetworkAccessUpdate,
-  setSessionCodexProviderUpdate,
-  setSessionCodexReasoningEffortUpdate,
-  setSessionCodexSandboxModeUpdate,
   setSessionCodexTitleUpdate,
 } from '../../domain/session-runtime.js';
 import {
@@ -382,7 +380,7 @@ async function recoverMirrorTmuxSelectionPromptFromCallback(
   if (getSessionActiveRuntime(session) === 'claude' || resolveEffectiveCodexProvider(session) !== 'tmux') {
     return { ok: false, notice: `Codex TUI Selection 已记录，但目标会话 ${sessionId} 当前不是 Codex tmux。` };
   }
-  const tmuxSessionName = getSessionTmuxSessionName(session);
+  const tmuxSessionName = getSessionRuntimeTmuxSessionName(session);
   if (!tmuxSessionName) {
     return { ok: false, notice: `Codex TUI Selection 已记录，但目标会话 ${sessionId} 没有 tmux session。` };
   }
@@ -437,7 +435,7 @@ async function probeMirrorTmuxSelectionPrompt(subscription: BridgeMirrorSubscrip
   const session = getBridgeContext().store.getSession(subscription.sessionId);
   if (!session || getSessionActiveRuntime(session) === 'claude') return;
   if (resolveEffectiveCodexProvider(session) !== 'tmux') return;
-  const tmuxSessionName = getSessionTmuxSessionName(session);
+  const tmuxSessionName = getSessionRuntimeTmuxSessionName(session);
   if (!tmuxSessionName) return;
   const targetPane = `${tmuxSessionName}:0.0`;
   let capture;
@@ -574,26 +572,15 @@ function formatStartupChannelChatIssue(issue: StartupChannelChatCheckIssue): str
   return `- ${issue.title} (${channel}, chat=${issue.chatId}, session=${shortSession})${detail}`;
 }
 
-function parseConfiguredChannelsFromSettings(raw: string | null): ChannelInstance[] {
-  if (!raw) return [];
-  try {
-    const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) ? parsed as ChannelInstance[] : [];
-  } catch {
-    return [];
-  }
-}
-
 function feishuEventSubscriptionUrl(appId: string, site: FeishuChannelConfig['site'] | undefined): string {
-  const base = site === 'lark' ? 'https://open.larksuite.com' : 'https://open.feishu.cn';
+  const base = feishuSiteToApiBaseUrl(site);
   return `${base}/app/${encodeURIComponent(appId)}/event?tab=callback`;
 }
 
 function collectStartupFeishuSetupNotices(
   state: BridgeManagerState,
-  store: ReturnType<typeof getBridgeContext>['store'],
 ): StartupFeishuSetupNotice[] {
-  return parseConfiguredChannelsFromSettings(store.getSetting('bridge_channel_instances_json'))
+  return listConfiguredChannelInstances()
     .filter((channel) => channel.enabled && channel.provider === 'feishu')
     .filter((channel) => state.adapters.get(channel.id)?.isRunning())
     .flatMap((channel): StartupFeishuSetupNotice[] => {
@@ -932,17 +919,21 @@ function getMirrorStructuredStreamStatusConfig(): {
   idleStartMs: number;
   heartbeatMs: number;
 } {
-  const { store } = getBridgeContext();
-  const idleStartSeconds = parseInt(store.getSetting('bridge_stream_status_idle_start_seconds') || '', 10);
-  const heartbeatSeconds = parseInt(store.getSetting('bridge_stream_status_check_interval_seconds') || '', 10);
+  const channelConfig = getGlobalDefaultChannelConfig();
+  const idleStartSeconds = channelConfig?.streamStatusIdleStartSeconds;
+  const heartbeatSeconds = channelConfig?.streamStatusCheckIntervalSeconds;
   return {
     idleStartMs: Math.max(
       0,
-      (Number.isFinite(idleStartSeconds) && idleStartSeconds > 0 ? idleStartSeconds : MIRROR_STREAM_STATUS_IDLE_START_MS / 1000) * 1000,
+      (typeof idleStartSeconds === 'number' && Number.isFinite(idleStartSeconds) && idleStartSeconds > 0
+        ? idleStartSeconds
+        : MIRROR_STREAM_STATUS_IDLE_START_MS / 1000) * 1000,
     ),
     heartbeatMs: Math.max(
       1_000,
-      (Number.isFinite(heartbeatSeconds) && heartbeatSeconds > 0 ? heartbeatSeconds : MIRROR_STREAM_STATUS_HEARTBEAT_MS / 1000) * 1000,
+      (typeof heartbeatSeconds === 'number' && Number.isFinite(heartbeatSeconds) && heartbeatSeconds > 0
+        ? heartbeatSeconds
+        : MIRROR_STREAM_STATUS_HEARTBEAT_MS / 1000) * 1000,
     ),
   };
 }
@@ -958,18 +949,7 @@ function getMirrorThreadTitle(threadId: string, sessionId?: string): string | nu
 function getMirrorRuntimeTags(_threadId: string, sessionId?: string): string[] {
   const { store } = getBridgeContext();
   const session = sessionId ? store.getSession(sessionId) : null;
-  if (getSessionActiveRuntime(session) === 'claude') {
-    return buildRuntimeStreamTags({
-      reasoningEffort: getSessionClaudeReasoningEffort(session) || 'default',
-      model: getSessionClaudeModel(session) || store.getSetting('bridge_claude_default_model') || 'default',
-    });
-  }
-  return buildRuntimeStreamTags({
-    reasoningEffort: normalizeReasoningEffort(
-      getSessionCodexReasoningEffort(session) || store.getSetting('bridge_codex_reasoning_effort'),
-    ),
-    model: getSessionCodexModel(session) || store.getSetting('bridge_default_model') || 'default',
-  });
+  return buildRuntimeStreamTags(resolveRuntimeMetadataConfig(session));
 }
 
 const MIRROR_FEEDBACK = createMirrorFeedbackController({
@@ -1069,6 +1049,11 @@ const MIRROR_RUNTIME = createMirrorRuntime(getState, {
     getBridgeContext().store.updateSessionCodexThreadId(sessionId, '');
   },
   getCodexSessionByThreadIdSafe,
+  hasSessionMirrorSource: (session) => Boolean(
+    getSessionActiveRuntime(session) !== 'claude'
+    && getSessionCodexThreadId(session)
+    && getSessionCodexProviderOverride(session as BridgeSession | null | undefined) !== 'sdk',
+  ),
   syncMirrorSessionStateSafe,
   filterSuppressedMirrorRecords,
   observeSessionHealthRecords: (sessionId, threadId, records) => {
@@ -1164,7 +1149,7 @@ function shouldRouteTerminalAppendInline(msg: InboundMessage): boolean {
   if (!binding || !INTERACTIVE_RUNTIME.getActiveTask(binding.bridgeSessionId)) return false;
   const session = getBridgeContext().store.getSession(binding.bridgeSessionId);
   if (!session) return false;
-  const runtimeProvider = resolveEffectiveRuntimeProvider(session);
+  const runtimeProvider = resolveEffectiveRuntimeProvider(session, binding);
   return runtimeProvider.provider === 'tmux' || runtimeProvider.provider === 'pty';
 }
 
@@ -1733,7 +1718,7 @@ async function deliverStartupNotifications(channelChatCheck: StartupChannelChatC
   const adapter = state.adapters.get(target.address.channelType);
   if (!adapter?.isRunning()) return;
 
-  const feishuSetupNotices = collectStartupFeishuSetupNotices(state, store);
+  const feishuSetupNotices = collectStartupFeishuSetupNotices(state);
   logStartupFeishuSetupNotices(feishuSetupNotices);
   const baseStatusText = buildGlobalStatusResponse(store, target.binding, true);
   const statusText = buildStartupNoticeStatusText(
@@ -2172,30 +2157,26 @@ function createAutoRunSession(
 ): BridgeSession {
   const store = getBridgeContext().store;
   const name = `Auto: ${(prompt || task.id).replace(/\s+/g, ' ').trim().slice(0, 48)} #${triggeredCount}`;
-  const parentCodexProvider = getSessionCodexProvider(parentSession);
-  const parentSandboxMode = getSessionCodexSandboxMode(parentSession);
-  const parentNetworkAccess = getSessionCodexNetworkAccess(parentSession);
-  const parentReasoningEffort = getSessionCodexReasoningEffort(parentSession);
+  const parentRuntimePatch = sessionCodexRuntimeOverridePatch(parentSession);
   const session = store.createSession(
     name,
-    getSessionCodexModel(parentSession) || '',
+    '',
     getSessionSystemPrompt(parentSession),
     getSessionWorkingDirectory(parentSession),
-    getSessionCodexMode(parentSession) || 'normal',
+    'normal',
     {
-      reasoningEffort: parentReasoningEffort,
       parentSessionId: parentSession.id,
     },
   );
   store.updateSession(session.id, {
     provider_id: parentSession.provider_id,
-    ...(parentCodexProvider ? setSessionCodexProviderUpdate(parentCodexProvider) : {}),
-    ...(parentSandboxMode ? setSessionCodexSandboxModeUpdate(parentSandboxMode) : {}),
-    ...(typeof parentNetworkAccess === 'boolean'
-      ? setSessionCodexNetworkAccessUpdate(parentNetworkAccess)
-      : {}),
-    ...(parentReasoningEffort ? setSessionCodexReasoningEffortUpdate(parentReasoningEffort) : {}),
   }, { touch: false });
+  if (parentRuntimePatch.runtime?.codex) {
+    createConfigService({ migrate: false }).set(
+      { kind: 'session', sessionId: session.id },
+      parentRuntimePatch,
+    );
+  }
   return store.getSession(session.id) || session;
 }
 
@@ -2955,7 +2936,7 @@ async function handleMessage(
   const tmuxProviderBinding = store.getChannelChat(msg.address.channelType, msg.address.chatId);
   const tmuxProviderSession = tmuxProviderBinding ? store.getSession(tmuxProviderBinding.bridgeSessionId) : null;
   const tmuxProviderRuntime = tmuxProviderSession
-    ? resolveEffectiveRuntimeProvider(tmuxProviderSession)
+    ? resolveEffectiveRuntimeProvider(tmuxProviderSession, tmuxProviderBinding)
     : null;
   if (
     tmuxProviderSession
@@ -2974,7 +2955,7 @@ async function handleMessage(
       return;
     }
     if (hasAttachments) {
-      await deliverBridgeNotice(adapter, msg.address, `当前处于 ${tmuxProviderRuntime.identity} Provider，普通附件不会自动转发到 TUI。请先发送 \`/provider sdk\`，或在 TUI 内自行读取本地文件。`, {
+      await deliverBridgeNotice(adapter, msg.address, '当前处于 tmux Provider，普通附件不会自动转发到 TUI。请先发送 `/provider sdk`，或在 TUI 内自行读取本地文件。', {
         replyToMessageId: msg.messageId,
       });
       ack();
@@ -3067,8 +3048,12 @@ async function handleMessage(
 
   const terminalAppendBinding = store.getChannelChat(msg.address.channelType, msg.address.chatId);
   const terminalAppendSession = terminalAppendBinding ? store.getSession(terminalAppendBinding.bridgeSessionId) : null;
-  const terminalAppendRuntimeProvider = terminalAppendSession
-    ? resolveEffectiveRuntimeProvider(terminalAppendSession)
+  const terminalAppendActiveRuntime = getSessionActiveRuntime(terminalAppendSession) || 'codex';
+  const terminalAppendCodexProvider = terminalAppendSession
+    ? resolveEffectiveCodexProvider(terminalAppendSession, terminalAppendBinding)
+    : null;
+  const terminalAppendClaudeProvider = terminalAppendSession
+    ? resolveEffectiveClaudeProvider(terminalAppendSession, terminalAppendBinding)
     : null;
   if (
     terminalAppendBinding
@@ -3077,7 +3062,10 @@ async function handleMessage(
     && !hasAttachments
     && !isBridgeCommandText(rawText)
     && rawText.trim()
-    && terminalAppendRuntimeProvider?.provider === 'pty'
+    && (
+      (terminalAppendActiveRuntime !== 'claude' && terminalAppendCodexProvider === 'pty')
+      || (terminalAppendActiveRuntime === 'claude' && terminalAppendClaudeProvider === 'pty')
+    )
   ) {
     const promptText = appendModelContextText(
       modelText,
@@ -3095,7 +3083,7 @@ async function handleMessage(
         summary: `[TRUNCATED] terminal provider append input truncated from ${promptText.length} chars`,
       });
     }
-    const appended = terminalAppendRuntimeProvider?.runtime === 'claude'
+    const appended = terminalAppendActiveRuntime === 'claude'
       ? await injectPromptIntoClaudePtySession(terminalAppendBinding.bridgeSessionId, text)
       : await injectPromptIntoActivePty(terminalAppendBinding.bridgeSessionId, text);
     store.insertAuditLog({
@@ -3105,8 +3093,8 @@ async function handleMessage(
       messageId: msg.messageId,
       summary: [
         appended ? 'terminal append input delivered' : 'terminal append input receiver missing',
-        `runtime=${terminalAppendRuntimeProvider?.runtime || 'unknown'}`,
-        `provider=${terminalAppendRuntimeProvider?.provider || 'unknown'}`,
+        `runtime=${terminalAppendActiveRuntime === 'claude' ? 'claude' : 'codex'}`,
+        `provider=${terminalAppendActiveRuntime === 'claude' ? terminalAppendClaudeProvider : terminalAppendCodexProvider}`,
         `session=${terminalAppendBinding.bridgeSessionId}`,
         `chars=${text.length}`,
       ].join(' '),

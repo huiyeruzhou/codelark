@@ -12,7 +12,7 @@ import {
   isCodexIntegrationInstalled,
 } from '../../../local-service/manager.js';
 import { tryAcquireBridgeInstanceLock } from '../../../local-service/instance-lock.js';
-import type { Config } from '../../../configuration/index.js';
+import type { Config } from '../../../configuration/legacy-types.js';
 
 describe('buildDeferredGlobalNpmUninstallLaunch', () => {
   it('uses npm.cmd on Windows launchers', () => {
@@ -159,6 +159,246 @@ describe('service-manager bridge startup failure messaging', () => {
 });
 
 describe('service-manager lark-cli runtime environment', () => {
+  it('loads startup preflight config from ConfigService instead of legacy env files', () => {
+    const home = process.env.CODELARK_HOME!;
+    const configTomlPath = path.join(home, 'config.toml');
+    const configEnvPath = path.join(home, 'config.env');
+    const previousToml = fs.existsSync(configTomlPath) ? fs.readFileSync(configTomlPath, 'utf-8') : null;
+    const previousEnvFile = fs.existsSync(configEnvPath) ? fs.readFileSync(configEnvPath, 'utf-8') : null;
+
+    try {
+      fs.writeFileSync(configTomlPath, [
+        'schema_version = 2',
+        '',
+        '[runtime]',
+        'agent = "claude"',
+        '',
+        '[runtime.codex]',
+        'provider = "tmux"',
+        '',
+        '[[channels]]',
+        'id = "feishu-default"',
+        'alias = "飞书"',
+        'provider = "feishu"',
+        'enabled = true',
+        '',
+        '[channels.config]',
+        'app_id = "toml-app"',
+        'app_secret = "toml-secret"',
+        '',
+      ].join('\n'));
+      fs.writeFileSync(configEnvPath, [
+        'CODELARK_RUNTIME=codex',
+        'CODELARK_DEFAULT_CODEX_PROVIDER=pty',
+        'CODELARK_FEISHU_APP_ID=legacy-app',
+        '',
+      ].join('\n'));
+
+      const config = _testOnly.loadStartupConfig();
+
+      assert.equal(config.runtime.agent, 'claude');
+      assert.equal(config.runtime.codex.provider, 'tmux');
+      assert.equal(config.channels?.[0]?.config.appId, 'toml-app');
+      assert.equal(config.channels?.[0]?.config.appSecret, 'toml-secret');
+    } finally {
+      if (previousToml === null) fs.rmSync(configTomlPath, { force: true });
+      else fs.writeFileSync(configTomlPath, previousToml, 'utf-8');
+      if (previousEnvFile === null) fs.rmSync(configEnvPath, { force: true });
+      else fs.writeFileSync(configEnvPath, previousEnvFile, 'utf-8');
+    }
+  });
+
+  it('builds daemon env from v2 config projection and ignores legacy config.env files', () => {
+    const home = process.env.CODELARK_HOME!;
+    const configTomlPath = path.join(home, 'config.toml');
+    const configEnvPath = path.join(home, 'config.env');
+    const previousToml = fs.existsSync(configTomlPath) ? fs.readFileSync(configTomlPath, 'utf-8') : null;
+    const previousEnvFile = fs.existsSync(configEnvPath) ? fs.readFileSync(configEnvPath, 'utf-8') : null;
+    const envKeys = [
+      'CODELARK_AGENT',
+      'CODELARK_RUNTIME',
+      'CODELARK_CODEX_MODEL',
+      'CODELARK_CODEX_DEFAULT_MODEL',
+      'CODELARK_CODEX_PROVIDER',
+      'CODELARK_DEFAULT_CODEX_PROVIDER',
+      'CODELARK_CODEX_YOLO_MODE',
+      'CODELARK_CODEX_DEFAULT_MODE',
+      'CODELARK_FEISHU_APP_ID',
+      'CODELARK_FEISHU_APP_SECRET',
+      'CODELARK_FEISHU_SITE',
+      'CODELARK_DEFAULT_WORKSPACE_ROOT',
+      'CODELARK_ENABLED_CHANNELS',
+      'CLAUDECODE',
+    ];
+    const previousEnv = new Map(envKeys.map((key) => [key, process.env[key]]));
+
+    try {
+      for (const key of envKeys) delete process.env[key];
+      process.env.CLAUDECODE = 'legacy-flag';
+      fs.writeFileSync(configTomlPath, [
+        'schema_version = 2',
+        '',
+        '[runtime]',
+        'agent = "claude"',
+        '',
+        '[bridge]',
+        'default_workspace = "/tmp/codelark-toml-workspace"',
+        '',
+        '[runtime.codex]',
+        'model = "toml-model"',
+        'provider = "tmux"',
+        'yolo_mode = "on"',
+        '',
+        '[[channels]]',
+        'id = "feishu-default"',
+        'alias = "飞书"',
+        'provider = "feishu"',
+        'enabled = true',
+        '',
+        '[channels.config]',
+        'app_id = "toml-app"',
+        'app_secret = "toml-secret"',
+        'site = "lark"',
+        '',
+      ].join('\n'));
+      fs.writeFileSync(configEnvPath, [
+        'CODELARK_RUNTIME=codex',
+        'CODELARK_CODEX_DEFAULT_MODEL=legacy-env-model',
+        'CODELARK_FEISHU_APP_ID=legacy-app',
+        'CODELARK_DEFAULT_WORKSPACE_ROOT=/tmp/legacy-env-workspace',
+        '',
+      ].join('\n'));
+
+      const env = _testOnly.buildDaemonEnv();
+
+      assert.equal(env.CODELARK_HOME, home);
+      assert.equal(env.LARK_CHANNEL_HOME, home);
+      assert.equal(env.CODELARK_AGENT, 'claude');
+      assert.equal(env.CODELARK_CODEX_MODEL, 'toml-model');
+      assert.equal(env.CODELARK_CODEX_PROVIDER, 'tmux');
+      assert.equal(env.CODELARK_CODEX_YOLO_MODE, 'on');
+      assert.equal(env.CODELARK_DEFAULT_WORKSPACE_ROOT, '/tmp/codelark-toml-workspace');
+      assert.equal(env.CODELARK_FEISHU_APP_ID, 'toml-app');
+      assert.equal(env.CODELARK_FEISHU_APP_SECRET, 'toml-secret');
+      assert.equal(env.CODELARK_FEISHU_SITE, 'lark');
+      assert.equal(env.CODELARK_ENABLED_CHANNELS, 'feishu');
+      assert.equal(env.CODELARK_CODEX_DEFAULT_MODEL, undefined);
+      assert.equal(env.CLAUDECODE, undefined);
+    } finally {
+      if (previousToml === null) fs.rmSync(configTomlPath, { force: true });
+      else fs.writeFileSync(configTomlPath, previousToml, 'utf-8');
+      if (previousEnvFile === null) fs.rmSync(configEnvPath, { force: true });
+      else fs.writeFileSync(configEnvPath, previousEnvFile, 'utf-8');
+      for (const [key, value] of previousEnv) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+    }
+  });
+
+  it('applies one-shot CLI config overrides to bridge and UI child env', () => {
+    const home = process.env.CODELARK_HOME!;
+    const configTomlPath = path.join(home, 'config.toml');
+    const previousToml = fs.existsSync(configTomlPath) ? fs.readFileSync(configTomlPath, 'utf-8') : null;
+
+    try {
+      fs.writeFileSync(configTomlPath, [
+        'schema_version = 2',
+        '',
+        '[runtime]',
+        'agent = "codex"',
+        '',
+        '[runtime.codex]',
+        'model = "toml-model"',
+        'provider = "sdk"',
+        'yolo_mode = "off"',
+        '',
+        '[runtime.claude]',
+        'model = "toml-claude"',
+        '',
+        '[[channels]]',
+        'id = "feishu-default"',
+        'alias = "飞书"',
+        'provider = "feishu"',
+        'enabled = true',
+        '',
+      ].join('\n'));
+
+      const cli = {
+        runtime: {
+          agent: 'claude' as const,
+          codex: {
+            model: 'cli-model',
+            provider: 'tmux' as const,
+            yoloMode: 'on' as const,
+          },
+        },
+      };
+      const daemonEnv = _testOnly.buildDaemonEnv({ cli });
+      const uiEnv = _testOnly.buildUiServerEnv({ cli });
+
+      assert.equal(daemonEnv.CODELARK_AGENT, 'claude');
+      assert.equal(daemonEnv.CODELARK_CODEX_MODEL, 'cli-model');
+      assert.equal(daemonEnv.CODELARK_CODEX_PROVIDER, 'tmux');
+      assert.equal(daemonEnv.CODELARK_CODEX_YOLO_MODE, 'on');
+      assert.equal(uiEnv.CODELARK_AGENT, 'claude');
+      assert.equal(uiEnv.CODELARK_CODEX_MODEL, 'cli-model');
+      assert.equal(uiEnv.CODELARK_CODEX_PROVIDER, 'tmux');
+      assert.equal(uiEnv.CODELARK_HOME, home);
+    } finally {
+      if (previousToml === null) fs.rmSync(configTomlPath, { force: true });
+      else fs.writeFileSync(configTomlPath, previousToml, 'utf-8');
+    }
+  });
+
+  it('can reuse one startup projection for preflight config and daemon env', () => {
+    const home = process.env.CODELARK_HOME!;
+    const configTomlPath = path.join(home, 'config.toml');
+    const previousToml = fs.existsSync(configTomlPath) ? fs.readFileSync(configTomlPath, 'utf-8') : null;
+
+    try {
+      fs.writeFileSync(configTomlPath, [
+        'schema_version = 2',
+        '',
+        '[runtime.codex]',
+        'model = "first-model"',
+        '',
+        '[[channels]]',
+        'id = "feishu-default"',
+        'alias = "飞书"',
+        'provider = "feishu"',
+        'enabled = true',
+        '',
+      ].join('\n'));
+
+      const projection = _testOnly.loadStartupProjection();
+
+      fs.writeFileSync(configTomlPath, [
+        'schema_version = 2',
+        '',
+        '[runtime.codex]',
+        'model = "second-model"',
+        '',
+        '[[channels]]',
+        'id = "feishu-default"',
+        'alias = "飞书"',
+        'provider = "feishu"',
+        'enabled = true',
+        '',
+      ].join('\n'));
+
+      const daemonEnv = _testOnly.buildDaemonEnv({ startupProjection: projection });
+      const uiEnv = _testOnly.buildUiServerEnv({ startupProjection: projection });
+
+      assert.equal(projection.config.runtime.codex.model, 'first-model');
+      assert.equal(daemonEnv.CODELARK_CODEX_MODEL, 'first-model');
+      assert.equal(uiEnv.CODELARK_CODEX_MODEL, 'first-model');
+    } finally {
+      if (previousToml === null) fs.rmSync(configTomlPath, { force: true });
+      else fs.writeFileSync(configTomlPath, previousToml, 'utf-8');
+    }
+  });
+
   it('builds bridge-local lark-cli environment variables', () => {
     const env = _testOnly.buildLarkCliRuntimeEnv();
 

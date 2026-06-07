@@ -1,17 +1,15 @@
 import type { BaseChannelAdapter } from '../../../channels/contracts.js';
 import { deliverBridgeNotice } from '../../../channels/delivery/feedback.js';
-import { DEFAULT_WORKSPACE_ROOT } from '../../../configuration/index.js';
+import { DEFAULT_WORKSPACE_ROOT } from '../../../configuration/paths.js';
+import { createConfigService } from '../../../configuration/service.js';
 import type { BridgeSession, BridgeStore, ChannelChat, InboundMessage } from '../../../domain/index.js';
 import {
-  getSessionCodexProvider,
   getSessionWorkingDirectory,
-  mergeSessionRuntimeUpdates,
-  setSessionCodexProviderUpdate,
-  setSessionTmuxAutoEnterUpdate,
 } from '../../../domain/session-runtime.js';
 import * as router from '../channel-router.js';
 import {
   ensureWorkingDirectoryExists,
+  getSessionCodexProviderOverride,
   getWorkspaceRoot,
   resolveEffectiveCodexProvider,
   resolveNewSessionWorkingDirectory,
@@ -36,6 +34,32 @@ import {
 import { guardBindingChangeWhileRunning } from './status-guards.js';
 import { auditCommandBindingChange } from './thread-targets.js';
 import type { SessionCommandDeps, SessionCommandResult } from './types.js';
+
+type InheritedCodexProvider = ReturnType<typeof getSessionCodexProviderOverride>;
+
+function setSessionCodexProviderToml(sessionId: string, provider: Exclude<InheritedCodexProvider, undefined>): void {
+  createConfigService({ migrate: false }).set(
+    { kind: 'session', sessionId },
+    { runtime: { codex: { provider } } },
+  );
+}
+
+function setSessionTmuxAutoEnterToml(sessionId: string, tmuxAutoEnter: boolean): void {
+  createConfigService({ migrate: false }).set(
+    { kind: 'session', sessionId },
+    { session: { tmuxAutoEnter } },
+  );
+}
+
+function shouldEnableTmuxAutoEnterForNewSession(
+  inheritedProvider: InheritedCodexProvider,
+  session: BridgeSession,
+  binding?: ChannelChat | null,
+): boolean {
+  if (inheritedProvider === 'tmux') return true;
+  if (inheritedProvider === 'pty') return false;
+  return resolveEffectiveCodexProvider(session, binding) === 'tmux';
+}
 
 export async function handleNewSessionCommand(options: {
   adapter: BaseChannelAdapter;
@@ -131,17 +155,12 @@ export async function handleNewSessionCommand(options: {
     });
     let session = options.store.getSession(binding.bridgeSessionId);
     if (session) {
-      const updates: Partial<BridgeSession> = {};
-      const inheritedProvider = getSessionCodexProvider(currentSession);
+      const inheritedProvider = getSessionCodexProviderOverride(currentSession);
       if (inheritedProvider === 'tmux' || inheritedProvider === 'pty') {
-        Object.assign(updates, mergeSessionRuntimeUpdates(updates, setSessionCodexProviderUpdate(inheritedProvider)));
+        setSessionCodexProviderToml(session.id, inheritedProvider);
       }
-      if (getSessionCodexProvider({ runtime: updates.runtime }) === 'tmux' || resolveEffectiveCodexProvider(session) === 'tmux') {
-        Object.assign(updates, mergeSessionRuntimeUpdates(updates, setSessionTmuxAutoEnterUpdate(true)));
-      }
-      if (Object.keys(updates).length > 0) {
-        options.store.updateSession(session.id, updates);
-        session = options.store.getSession(session.id);
+      if (shouldEnableTmuxAutoEnterForNewSession(inheritedProvider, session, binding)) {
+        setSessionTmuxAutoEnterToml(session.id, true);
       }
     }
 
@@ -213,17 +232,12 @@ export async function handleNewSessionCommand(options: {
   const binding = router.createBinding(groupAddress, workDir, groupChat.name || newSessionName);
   let session = options.store.getSession(binding.bridgeSessionId);
   if (session) {
-    const updates: Partial<BridgeSession> = {};
-    const inheritedProvider = getSessionCodexProvider(currentSession);
+    const inheritedProvider = getSessionCodexProviderOverride(currentSession);
     if (inheritedProvider === 'tmux' || inheritedProvider === 'pty') {
-      Object.assign(updates, mergeSessionRuntimeUpdates(updates, setSessionCodexProviderUpdate(inheritedProvider)));
+      setSessionCodexProviderToml(session.id, inheritedProvider);
     }
-    if (getSessionCodexProvider({ runtime: updates.runtime }) === 'tmux' || resolveEffectiveCodexProvider(session) === 'tmux') {
-      Object.assign(updates, mergeSessionRuntimeUpdates(updates, setSessionTmuxAutoEnterUpdate(true)));
-    }
-    if (Object.keys(updates).length > 0) {
-      options.store.updateSession(session.id, updates);
-      session = options.store.getSession(session.id);
+    if (shouldEnableTmuxAutoEnterForNewSession(inheritedProvider, session, binding)) {
+      setSessionTmuxAutoEnterToml(session.id, true);
     }
   }
   auditCommandBindingChange(
@@ -252,7 +266,7 @@ export async function handleNewSessionCommand(options: {
         ['标题', session ? getSessionDisplayName(session, getSessionWorkingDirectory(session)) : options.threadDisplay.binding(binding).title],
         ['目录', formatCommandPath(getSessionWorkingDirectory(session) || workDir)],
         ['模式', formatSessionMode(binding, session)],
-        ['Provider', formatSessionCodexProvider(session)],
+        ['Provider', formatSessionCodexProvider(session, binding)],
       ],
       notes,
       options.markdown,

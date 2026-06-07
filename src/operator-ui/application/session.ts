@@ -1,5 +1,7 @@
 import MarkdownIt from 'markdown-it';
 
+import { createConfigService } from '../../configuration/service.js';
+import type { ConfigPatch } from '../../configuration/schema.js';
 import {
   SessionDisplayQuery,
   buildBridgeSessionDisplaySummary,
@@ -13,34 +15,18 @@ import {
 import { stripLegacySessionPrefix } from '../../bridge/session/display/session-title.js';
 import type { ChannelChat } from '../../domain/channel.js';
 import type { BridgeSession, BridgeSessionUpdate } from '../../domain/session.js';
+import type { ConfigPath } from '../../configuration/fields.js';
 import {
   resolveSessionTranscriptFile,
   type SessionTranscriptHistoryEntry,
 } from '../../bridge/session/transcript-source.js';
 import {
   getSessionActiveRuntime,
-  getSessionClaudeModel,
-  getSessionClaudePermissionMode,
-  getSessionClaudeReasoningEffort,
-  getSessionCodexModel,
-  getSessionCodexMode,
-  getSessionCodexNetworkAccess,
-  getSessionCodexProvider,
-  getSessionCodexReasoningEffort,
-  getSessionCodexSandboxMode,
   getSessionCodexTitle,
   getSessionSystemPrompt,
   getSessionWorkingDirectory,
   mergeSessionRuntimeUpdates,
-  setSessionClaudeModelUpdate,
-  setSessionCodexModeUpdate,
-  setSessionCodexModelUpdate,
-  setSessionCodexNetworkAccessUpdate,
-  setSessionCodexProviderUpdate,
-  setSessionCodexReasoningEffortUpdate,
-  setSessionCodexSandboxModeUpdate,
   setSessionSystemPromptUpdate,
-  setSessionWorkingDirectoryUpdate,
 } from '../../domain/session-runtime.js';
 import type { JsonFileStore } from '../../storage/json-store.js';
 import {
@@ -131,6 +117,160 @@ function bridgeSessionToSummary(session: BridgeSession): UiSessionSummary {
   return buildBridgeSessionDisplaySummary(session);
 }
 
+function getSessionConfigTomlOverride<T>(session: BridgeSession, path: ConfigPath): T | undefined {
+  try {
+    const resolved = createConfigService({ migrate: false }).resolve(path, {
+      kind: 'session',
+      sessionId: session.id,
+    });
+    return resolved.source === 'session' ? resolved.value as T : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function setOrUnsetSessionConfig(
+  sessionId: string,
+  path: ConfigPath,
+  value: unknown,
+  patchForValue: (value: never) => ConfigPatch,
+): void {
+  const service = createConfigService({ migrate: false });
+  if (value === undefined || value === '') {
+    service.unset({ kind: 'session', sessionId }, path);
+    return;
+  }
+  service.set({ kind: 'session', sessionId }, patchForValue(value as never));
+}
+
+function claudeYoloModeFromPermissionMode(permissionMode: string): 'off' | 'on' {
+  return permissionMode === 'bypassPermissions' ? 'on' : 'off';
+}
+
+function applySessionConfigToml(bridgeSessionId: string, payload: Record<string, unknown>): void {
+  const activeRuntime = payload.activeRuntime === 'claude' ? 'claude' : 'codex';
+  if (typeof payload.workingDirectory === 'string') {
+    const workspace = payload.workingDirectory.trim() || process.cwd();
+    createConfigService({ migrate: false }).set(
+      { kind: 'session', sessionId: bridgeSessionId },
+      { session: { workspace } },
+    );
+  }
+
+  if (activeRuntime === 'claude') {
+    if (typeof payload.claudeModel === 'string') {
+      setOrUnsetSessionConfig(
+        bridgeSessionId,
+        'runtime.claude.model',
+        payload.claudeModel.trim(),
+        (model) => ({ runtime: { claude: { model } } }),
+      );
+    }
+    if (
+      payload.claudePermissionMode === 'acceptEdits'
+      || payload.claudePermissionMode === 'bypassPermissions'
+      || payload.claudePermissionMode === 'plan'
+      || payload.claudePermissionMode === 'default'
+      || payload.claudePermissionMode === ''
+    ) {
+      const permissionMode = payload.claudePermissionMode;
+      setOrUnsetSessionConfig(
+        bridgeSessionId,
+        'runtime.claude.permissionMode',
+        permissionMode,
+        (mode) => ({
+          runtime: {
+            claude: {
+              permissionMode: mode,
+              yoloMode: claudeYoloModeFromPermissionMode(mode),
+            },
+          },
+        }),
+      );
+      if (permissionMode === '') {
+        createConfigService({ migrate: false }).unset(
+          { kind: 'session', sessionId: bridgeSessionId },
+          'runtime.claude.yoloMode',
+        );
+      }
+    }
+    if (
+      payload.claudeReasoningEffort === 'low'
+      || payload.claudeReasoningEffort === 'medium'
+      || payload.claudeReasoningEffort === 'high'
+      || payload.claudeReasoningEffort === 'xhigh'
+      || payload.claudeReasoningEffort === ''
+    ) {
+      setOrUnsetSessionConfig(
+        bridgeSessionId,
+        'runtime.claude.reasoningEffort',
+        payload.claudeReasoningEffort,
+        (reasoningEffort) => ({ runtime: { claude: { reasoningEffort } } }),
+      );
+    }
+    return;
+  }
+
+  if (typeof payload.model === 'string') {
+    setOrUnsetSessionConfig(
+      bridgeSessionId,
+      'runtime.codex.model',
+      payload.model.trim(),
+      (model) => ({ runtime: { codex: { model } } }),
+    );
+  }
+  if (payload.preferredMode === 'yolo' || payload.preferredMode === 'normal' || payload.preferredMode === 'code') {
+    setOrUnsetSessionConfig(
+      bridgeSessionId,
+      'runtime.codex.yoloMode',
+      payload.preferredMode === 'yolo' ? 'on' : 'off',
+      (yoloMode) => ({ runtime: { codex: { yoloMode } } }),
+    );
+  }
+  if (payload.codexProvider === 'sdk' || payload.codexProvider === 'tmux' || payload.codexProvider === 'pty' || payload.codexProvider === '') {
+    setOrUnsetSessionConfig(
+      bridgeSessionId,
+      'runtime.codex.provider',
+      payload.codexProvider,
+      (provider) => ({ runtime: { codex: { provider } } }),
+    );
+  }
+  if (
+    payload.reasoningEffort === 'minimal'
+    || payload.reasoningEffort === 'low'
+    || payload.reasoningEffort === 'medium'
+    || payload.reasoningEffort === 'high'
+    || payload.reasoningEffort === 'xhigh'
+    || payload.reasoningEffort === ''
+  ) {
+    setOrUnsetSessionConfig(
+      bridgeSessionId,
+      'runtime.codex.reasoningEffort',
+      payload.reasoningEffort,
+      (reasoningEffort) => ({ runtime: { codex: { reasoningEffort } } }),
+    );
+  }
+  if (
+    payload.codexSandboxMode === 'read-only'
+    || payload.codexSandboxMode === 'workspace-write'
+    || payload.codexSandboxMode === 'danger-full-access'
+    || payload.codexSandboxMode === ''
+  ) {
+    setOrUnsetSessionConfig(
+      bridgeSessionId,
+      'runtime.codex.sandboxMode',
+      payload.codexSandboxMode,
+      (sandboxMode) => ({ runtime: { codex: { sandboxMode } } }),
+    );
+  }
+  if (payload.codexNetworkAccess === true || payload.codexNetworkAccess === false) {
+    createConfigService({ migrate: false }).set(
+      { kind: 'session', sessionId: bridgeSessionId },
+      { runtime: { codex: { networkAccess: payload.codexNetworkAccess } } },
+    );
+  }
+}
+
 function runtimeSessionToSummary(runtimeSource: UiSessionRuntimeSource, store: JsonFileStore, runtime: 'codex' | 'claude', threadId: string, cwd?: string): UiSessionSummary | null {
   const session = runtimeSource.getThread(runtime, threadId, cwd);
   if (!session) return null;
@@ -173,83 +313,19 @@ function sanitizeSessionConfig(payload: Record<string, unknown>): BridgeSessionU
   if (typeof payload.name === 'string') {
     updates.name = payload.name.trim() || undefined;
   }
-  if (typeof payload.workingDirectory === 'string') {
-    runtimeUpdates.push(setSessionWorkingDirectoryUpdate(payload.workingDirectory.trim() || process.cwd()));
-  }
+  runtimeUpdates.push({ runtime: { activeRuntime } });
   if (typeof payload.systemPrompt === 'string') {
     runtimeUpdates.push(setSessionSystemPromptUpdate(payload.systemPrompt.trim() || undefined));
-  }
-
-  if (activeRuntime === 'claude') {
-    if (typeof payload.claudeModel === 'string') {
-      runtimeUpdates.push(setSessionClaudeModelUpdate(payload.claudeModel.trim() || undefined));
-    }
-    if (
-      payload.claudePermissionMode === 'acceptEdits'
-      || payload.claudePermissionMode === 'bypassPermissions'
-      || payload.claudePermissionMode === 'plan'
-      || payload.claudePermissionMode === 'default'
-      || payload.claudePermissionMode === ''
-    ) {
-      runtimeUpdates.push({
-        runtime: {
-          activeRuntime: 'claude',
-          claude: { permissionMode: payload.claudePermissionMode ? payload.claudePermissionMode : undefined },
-        },
-      });
-    }
-    if (
-      payload.claudeReasoningEffort === 'low'
-      || payload.claudeReasoningEffort === 'medium'
-      || payload.claudeReasoningEffort === 'high'
-      || payload.claudeReasoningEffort === 'xhigh'
-      || payload.claudeReasoningEffort === 'max'
-      || payload.claudeReasoningEffort === ''
-    ) {
-      runtimeUpdates.push({
-        runtime: {
-          activeRuntime: 'claude',
-          claude: { reasoningEffort: payload.claudeReasoningEffort ? payload.claudeReasoningEffort : undefined },
-        },
-      });
-    }
-  } else {
-    if (typeof payload.model === 'string') {
-      runtimeUpdates.push(setSessionCodexModelUpdate(payload.model.trim() || undefined));
-    }
-    if (payload.preferredMode === 'yolo' || payload.preferredMode === 'normal' || payload.preferredMode === 'code') {
-      runtimeUpdates.push(setSessionCodexModeUpdate(payload.preferredMode === 'yolo' ? 'yolo' : 'normal'));
-    }
-    if (payload.codexProvider === 'sdk' || payload.codexProvider === 'tmux' || payload.codexProvider === 'pty' || payload.codexProvider === '') {
-      runtimeUpdates.push(setSessionCodexProviderUpdate(payload.codexProvider ? payload.codexProvider : undefined));
-    }
-    if (
-      payload.reasoningEffort === 'minimal'
-      || payload.reasoningEffort === 'low'
-      || payload.reasoningEffort === 'medium'
-      || payload.reasoningEffort === 'high'
-      || payload.reasoningEffort === 'xhigh'
-      || payload.reasoningEffort === ''
-    ) {
-      runtimeUpdates.push(setSessionCodexReasoningEffortUpdate(payload.reasoningEffort ? payload.reasoningEffort : undefined));
-    }
-    if (
-      payload.codexSandboxMode === 'read-only'
-      || payload.codexSandboxMode === 'workspace-write'
-      || payload.codexSandboxMode === 'danger-full-access'
-      || payload.codexSandboxMode === ''
-    ) {
-      runtimeUpdates.push(setSessionCodexSandboxModeUpdate(payload.codexSandboxMode ? payload.codexSandboxMode : undefined));
-    }
-    if (payload.codexNetworkAccess === true || payload.codexNetworkAccess === false) {
-      runtimeUpdates.push(setSessionCodexNetworkAccessUpdate(payload.codexNetworkAccess));
-    }
   }
   return mergeSessionRuntimeUpdates(updates, ...runtimeUpdates);
 }
 
 function sessionConfigPayload(session: BridgeSession) {
   const activeRuntime = getSessionActiveRuntime(session) || 'codex';
+  const codexYoloMode = getSessionConfigTomlOverride<'off' | 'on' | 'yolo'>(session, 'runtime.codex.yoloMode');
+  const claudeYoloMode = getSessionConfigTomlOverride<'off' | 'on' | 'yolo'>(session, 'runtime.claude.yoloMode');
+  const claudePermissionMode = getSessionConfigTomlOverride<string>(session, 'runtime.claude.permissionMode')
+    || (claudeYoloMode === 'on' || claudeYoloMode === 'yolo' ? 'bypassPermissions' : claudeYoloMode === 'off' ? 'default' : undefined);
   return {
     id: session.id,
     bridgeSessionId: session.id,
@@ -258,16 +334,16 @@ function sessionConfigPayload(session: BridgeSession) {
     codexTitle: getSessionCodexTitle(session) || '',
     title: getBridgeSessionTitle(session),
     workingDirectory: getSessionWorkingDirectory(session) || '',
-    model: getSessionCodexModel(session) || '',
-    preferredMode: getSessionCodexMode(session) === 'yolo' ? 'yolo' : 'normal',
-    codexProvider: getSessionCodexProvider(session) || '',
+    model: getSessionConfigTomlOverride<string>(session, 'runtime.codex.model') || '',
+    preferredMode: (codexYoloMode === 'on' || codexYoloMode === 'yolo') ? 'yolo' : 'normal',
+    codexProvider: getSessionConfigTomlOverride<string>(session, 'runtime.codex.provider') || '',
     systemPrompt: getSessionSystemPrompt(session) || '',
-    reasoningEffort: getSessionCodexReasoningEffort(session) || '',
-    codexSandboxMode: getSessionCodexSandboxMode(session) || '',
-    codexNetworkAccess: getSessionCodexNetworkAccess(session),
-    claudeModel: getSessionClaudeModel(session) || '',
-    claudePermissionMode: getSessionClaudePermissionMode(session) || '',
-    claudeReasoningEffort: getSessionClaudeReasoningEffort(session) || '',
+    reasoningEffort: getSessionConfigTomlOverride<string>(session, 'runtime.codex.reasoningEffort') || '',
+    codexSandboxMode: getSessionConfigTomlOverride<string>(session, 'runtime.codex.sandboxMode') || '',
+    codexNetworkAccess: getSessionConfigTomlOverride<boolean>(session, 'runtime.codex.networkAccess'),
+    claudeModel: getSessionConfigTomlOverride<string>(session, 'runtime.claude.model') || '',
+    claudePermissionMode: claudePermissionMode || '',
+    claudeReasoningEffort: getSessionConfigTomlOverride<string>(session, 'runtime.claude.reasoningEffort') || '',
   };
 }
 
@@ -405,6 +481,7 @@ export class UiSessionApplication {
     const registry = this.createSessionRegistry();
     const updates = sanitizeSessionConfig(payload);
     const updated = registry.updateBridgeSessionConfig(bridgeSessionId, updates);
+    applySessionConfigToml(bridgeSessionId, payload);
     return sessionConfigPayload(updated);
   }
 
