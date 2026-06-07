@@ -244,7 +244,7 @@ export function parseCliCommand(argv: string[]): ParsedCliCommand {
 export function parseCliInvocation(argv: string[]): ParsedCliInvocation {
   const configOverrides = parseConfigCliOverrides(argv);
   if (configOverrides.unset.length > 0) {
-    throw new Error('CLI --unset is not connected to command entrypoints yet; use --set path=value for one-time overrides.');
+    throw new Error('CLI --unset 暂未接入命令入口；如需单次覆盖，请使用 --set path=value。');
   }
   return {
     ...parseCliCommand(stripConfigOverrideArgs(argv)),

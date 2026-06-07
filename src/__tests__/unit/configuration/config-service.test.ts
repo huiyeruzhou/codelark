@@ -223,7 +223,7 @@ model = "scoped-local-model"
       );
       assert.match(
         snapshot.warnings.find((warning) => warning.envKey === 'CODELARK_FEISHU_DOMAIN')?.message || '',
-        /export-only/,
+        /只用于导出给子进程/,
       );
       assert.equal(service.resolve('runtime.codex.model').env, 'CODELARK_CODEX_MODEL');
     } finally {
@@ -231,7 +231,7 @@ model = "scoped-local-model"
     }
   });
 
-  it('keeps channels home-only and rejects channel definitions from dynamic sources', () => {
+  it('keeps channels home-only and warns when local channel definitions are ignored', () => {
     const home = tempHome();
     const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'codelark-config-local-'));
     try {
@@ -249,7 +249,7 @@ model = "scoped-local-model"
 
       assert.throws(
         () => service.snapshot(),
-        /Config source cli cannot define channels/,
+        /配置来源 cli 不能定义 channels/,
       );
 
       const noCli = createConfigService({
@@ -268,9 +268,12 @@ model = "scoped-local-model"
 id = "feishu-default"
 provider = "feishu"
 `);
-      assert.throws(
-        () => noCli.snapshot({ kind: 'local', cwd }),
-        /Config source local cannot define channels/,
+      const localSnapshot = noCli.snapshot({ kind: 'local', cwd });
+      assert.equal(localSnapshot.config.channels[0]?.id, 'feishu-default');
+      assert.equal(localSnapshot.config.channels[0]?.enabled, false);
+      assert.equal(
+        localSnapshot.warnings.find((warning) => warning.source === 'local' && warning.path === 'channels')?.message,
+        `项目级配置 ${path.join(cwd, '.codelark', 'config.toml')} 中的 channels 不会生效；通道配置只能写入 ~/.codelark/config.toml，已忽略该字段。`,
       );
 
       writeFile(path.join(home, 'config', 'channels', 'feishu-default.toml'), `
@@ -280,7 +283,7 @@ provider = "feishu"
 `);
       assert.throws(
         () => noCli.snapshot({ kind: 'channel', channelId: 'feishu-default', provider: 'feishu' }),
-        /Config source channel cannot define channels/,
+        /配置来源 channel 不能定义 channels/,
       );
 
       writeFile(path.join(home, 'config', 'sessions', 's-1.toml'), `
@@ -290,7 +293,7 @@ provider = "feishu"
 `);
       assert.throws(
         () => noCli.snapshot({ kind: 'session', sessionId: 's-1', channelId: 'feishu-default', provider: 'feishu' }),
-        /Config source channel cannot define channels/,
+        /配置来源 channel 不能定义 channels/,
       );
 
       fs.rmSync(path.join(home, 'config', 'channels', 'feishu-default.toml'), { force: true });
@@ -298,14 +301,14 @@ provider = "feishu"
         () => noCli.snapshot(
           { kind: 'session', sessionId: 's-1', channelId: 'feishu-default', provider: 'feishu' },
         ),
-        /Config source session cannot define channels/,
+        /配置来源 session 不能定义 channels/,
       );
 
       assert.throws(
         () => noCli.snapshot(undefined, {
           channels: [{ id: 'feishu-default', config: { appId: 'request-app' } }],
         }),
-        /Config source request cannot define channels/,
+        /配置来源 request 不能定义 channels/,
       );
     } finally {
       fs.rmSync(home, { recursive: true, force: true });
@@ -343,7 +346,7 @@ require_mention = false
       assert.equal(service.snapshot().provenance.get('channels.feishu-home.config.appId')?.source, 'home');
       assert.throws(
         () => service.get('channels[].config.appId'),
-        /field pattern, not a concrete value path/,
+        /字段模板，不是具体值路径/,
       );
     } finally {
       fs.rmSync(home, { recursive: true, force: true });
@@ -457,7 +460,7 @@ require_mention = false
 
       assert.throws(
         () => service.explain('channels[].config.appSecret'),
-        /field pattern, not a concrete value path/,
+        /字段模板，不是具体值路径/,
       );
       assert.equal(firstChannel(service).config.appSecret, 'home-app-secret');
       assert.equal(service.snapshot().provenance.get('channels.feishu-default.config.appSecret')?.source, 'home');
@@ -547,18 +550,18 @@ require_mention = false
           { kind: 'session', sessionId: 's-1' },
           { bridge: { uiAllowLan: true } },
         ),
-        /bridge\.uiAllowLan cannot be written to session scope/,
+        /bridge\.uiAllowLan 不能写入 session 作用域/,
       );
       assert.throws(
         () => service.set(
           { kind: 'channel', channelId: 'chat-1', provider: 'feishu' },
           { channels: [{ id: 'feishu-default', config: { appSecret: 'secret' } }] },
         ),
-        /channels\[\]\.config\.appSecret cannot be written to channel scope/,
+        /channels\[\]\.config\.appSecret 不能写入 channel 作用域/,
       );
       assert.throws(
         () => service.unset({ kind: 'session', sessionId: 's-1' }, 'bridge.uiAllowLan'),
-        /bridge\.uiAllowLan cannot be written to session scope/,
+        /bridge\.uiAllowLan 不能写入 session 作用域/,
       );
     } finally {
       fs.rmSync(home, { recursive: true, force: true });

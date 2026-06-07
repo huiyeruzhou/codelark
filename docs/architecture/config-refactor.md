@@ -14,7 +14,7 @@ CodeLark 使用同一套 v2 TOML shape 表达默认值、全局配置、项目�
 - Channel/Session/request 动态覆盖复用同一套 TOML shape 和合并链路。
 - `channels` 是特殊字段，只允许出现在 defaults 和 home `config.toml`。
 - 配置层保持薄边界，只负责 source 选择、schema 校验、合并、来源解释、迁移和写回约束。
-- runtime settings、子进程 env、通道选择、provider fallback 等业务语义留在调用方模块。
+- runtime settings、子进程 env、通道选择、provider 回退等业务语义留在调用方模块。
 
 ## 配置来源
 
@@ -44,11 +44,11 @@ Session effective config:
   request > session > channel > cli > env > local > home > defaults
 ```
 
-`channels` 不参与上面的逐层合并。它只读取 defaults 和 home：home `channels` 整组覆盖 defaults；home 中的 partial channel 会通过 defaults channel 模板补齐并写回 home TOML。local/env/cli/channel/session/request 定义 `channels` 都会被拒绝。
+`channels` 不参与上面的逐层合并。它只读取 defaults 和 home：home `channels` 整组覆盖 defaults；home 中的 partial channel 会通过 defaults channel 模板补齐并写回 home TOML。local 定义 `channels` 时只产生 warning 并忽略该字段，避免项目级配置误伤启动；env/cli/channel/session/request 定义 `channels` 仍会被拒绝。
 
 ## TOML Shape
 
-`defaults.toml` 展示完整 v2 shape。home 可以保存完整 `channels` 清单并覆盖 defaults。local、Channel、Session TOML 使用同一套 shape 的非 `channels` partial，只写需要覆盖的执行偏好字段。
+`defaults.toml` 展示完整 v2 shape。home 可以保存完整 `channels` 清单并覆盖 defaults。local、Channel、Session TOML 使用同一套 shape 的非 `channels` partial，只写需要覆盖的执行偏好字段；local TOML 中误写的 `channels` 会被忽略并在 `snapshot().warnings` 中提示不会生效。
 
 ```toml
 schema_version = 2
@@ -145,7 +145,7 @@ src/runtime/
 
 文件级职责边界：
 
-- `schema.ts` 只维护当前 TOML shape，不读写文件，不解释业务 fallback。
+- `schema.ts` 只维护当前 TOML shape，不读写文件，不解释业务回退。
 - `fields.ts` 是当前配置字段的事实来源，不承载旧字段迁移规则。
 - `sources.ts` 处理配置文件发现、读写、静态 baseline 和 source 合法性，不解释 runtime/channel/session 业务语义。
 - `merge.ts` 只负责合并和 provenance，不读取具体文件，不导出 projection helper。
@@ -238,7 +238,7 @@ service.set(
 
 `scopes` 回答“这个字段能出现在哪里”，source chain 回答“多个来源同时出现时谁赢”。例如：
 
-- `channels` 只能写 home，不能写 local/channel/session/env/cli/request。
+- `channels` 只能写 home；local 里误写的 `channels` 会 warning 后忽略，channel/session/env/cli/request 中的 `channels` 会被拒绝。
 - `session.tmuxSessionName` 这类执行上下文字段不应写成全局默认。
 - `/r`、`/mode`、`/sandbox`、`/network`、`/model` 默认写当前会话或当前 channel 的 scoped TOML，不写 BridgeSession JSON。
 
@@ -249,14 +249,14 @@ Channel 有两类概念，不能混用：
 - 通道实例清单和通道连接/行为配置：保存在 defaults/home `channels`，例如 Feishu app id、secret、site、allowed users、streaming 行为。
 - 某个 Channel 的执行偏好：保存在 `${CODELARK_HOME}/config/channels/<channel-id>.toml`，例如 runtime、model、workspace。
 
-业务代码读取通道实例时应先调用 `ConfigService.snapshot().config.channels`，再在业务模块内按 channel id、provider fallback、UI 默认项或 default target 选择具体实例。配置层不把 `channels[]` 隐式解析成 `feishu-default`。
+业务代码读取通道实例时应先调用 `ConfigService.snapshot().config.channels`，再在业务模块内按 channel id、provider 回退、UI 默认项或 default target 选择具体实例。配置层不把 `channels[]` 隐式解析成 `feishu-default`。
 
 `CODELARK_FEISHU_*` 和 `CODELARK_ENABLED_CHANNELS` 这类 channel env key 只用于：
 
 - v1 migration 输入。
 - 向子进程导出的 projection。
 
-v2 运行时不会把这些真实 env key 合成为默认 channel patch；出现时只产生 export-only warning。
+v2 运行时不会把这些真实 env key 合成为默认 channel patch；出现时只产生“仅导出给子进程”的 warning。
 
 ## Runtime Projection
 
@@ -316,7 +316,7 @@ v1 迁移输入：
 - `/set`：写 home TOML。
 - `/r`、`/mode`、`/sandbox`、`/network`、`/model`、`/cd`：写 Channel/Session TOML。
 - runtime 执行：通过 `ConfigService.snapshot(channel/session scope)` 读取 effective runtime config。
-- channel adapter runtime：从 `snapshot().config.channels` 读取通道实例清单，业务层决定 provider/id fallback。
+- channel adapter runtime：从 `snapshot().config.channels` 读取通道实例清单，业务层决定 provider/id 回退。
 - storage：`JsonFileStore` 保存会话身份和运行状态；legacy runtime settings 是 projection 输出，不作为配置输入。
 
 ## 测试边界

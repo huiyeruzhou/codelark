@@ -108,7 +108,7 @@ describe('Ui config application', () => {
 
     assert.throws(
       () => mergeConfigV2HomePatch(current, { defaultModel: 'unknown-model', historyMessageLimit: 999, claudeExecutable: 'ccr' }),
-      /Unknown Codex model|History message limit/,
+      /未知 Codex 模型|历史消息条数必须在 1 到 20 之间/,
     );
   });
 

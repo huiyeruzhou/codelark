@@ -55,7 +55,7 @@ describe('cli entrypoint', () => {
   it('rejects CLI unset at command entrypoints until reset semantics are defined', () => {
     assert.throws(
       () => parseCliInvocation(['run', '--unset', 'runtime.codex.model']),
-      /CLI --unset is not connected to command entrypoints yet/,
+      /CLI --unset 暂未接入命令入口/,
     );
   });
 

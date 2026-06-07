@@ -60,12 +60,12 @@ const SETTING_GROUPS: SettingGroupDefinition[] = [
   {
     key: 'global-runtime-codex',
     title: 'GlobalRuntime / Codex',
-    description: 'Codex 模型执行默认值，只 fallback 到 Codex runtime。',
+    description: 'Codex 模型执行默认值，只作为 Codex runtime 的回退配置。',
   },
   {
     key: 'global-runtime-claude',
     title: 'GlobalRuntime / Claude',
-    description: 'Claude Code 默认值，只 fallback 到 Claude runtime。',
+    description: 'Claude Code 默认值，只作为 Claude runtime 的回退配置。',
   },
   {
     key: 'bridge-control',
@@ -114,7 +114,7 @@ function defaultChannelId(config: ConfigV2): string {
 
 function defaultChannelConfig(config: ConfigV2): ConfigV2['channels'][number]['config'] {
   const channel = config.channels.find((entry) => entry.id === defaultChannelId(config)) || config.channels[0];
-  if (!channel) throw new Error('Effective config must include at least one channel from defaults.toml.');
+  if (!channel) throw new Error('生效配置必须至少包含一个来自 defaults.toml 的通道。');
   return channel.config;
 }
 
@@ -523,7 +523,7 @@ function buildUsageNotes(): string[] {
   return [
     '发送 `/set <key> <value>` 或 `/set <key>=<value>` 修改配置；配置保存方式与 UI 设置页相同。',
     '示例：`/set defaultWorkspaceRoot ~`、`/set defaultRuntime claude`、`/set defaultProvider tmux`、`/set codexNetworkAccess off`。',
-    'Codex 与 Claude Code 的 GlobalRuntime 默认值互相独立，不会互相 fallback。',
+    'Codex 与 Claude Code 的 GlobalRuntime 默认值互相独立，不会互相回退。',
     `可用 key：${SETTING_DEFINITIONS.map((definition) => definition.key).join(', ')}`,
   ];
 }
