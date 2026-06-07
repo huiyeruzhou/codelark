@@ -1,6 +1,6 @@
 import { configFields } from './fields.js';
-import { getConfigPath, setConfigPath } from './path-access.js';
-import { configSchema, configToTomlShape, tomlToConfigPatch, type ChannelConfigV2, type ConfigPatch, type ConfigV2 } from './schema.js';
+import { getConfigPath } from './path-access.js';
+import { configSchema, configToTomlShape, tomlToConfigPatch, type ConfigPatch, type ConfigV2 } from './schema.js';
 import { createNodeConfigLoader } from './sources.js';
 import type { ProvenanceMap, SourceRef } from './fields-types.js';
 
@@ -115,20 +115,4 @@ export function mergeConfigLayers(layers: ConfigLayer[]): MergeResult {
     config: configSchema.parse(mergePatchesWithNodeConfig(layers)),
     provenance,
   };
-}
-
-export function getDefaultChannel(config: ConfigV2): ChannelConfigV2 {
-  return config.channels.find((channel) => channel.id === 'feishu-default')
-    || config.channels[0]!;
-}
-
-export function valueToString(value: unknown): string | undefined {
-  if (value === undefined || value === null || value === '') return undefined;
-  if (Array.isArray(value)) return value.join(',');
-  return String(value);
-}
-
-export function setPatchPath(patch: ConfigPatch, path: string, value: unknown): ConfigPatch {
-  setConfigPath(patch as Record<string, unknown>, path, value);
-  return patch;
 }

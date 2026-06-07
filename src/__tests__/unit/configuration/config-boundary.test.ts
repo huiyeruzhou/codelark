@@ -115,8 +115,10 @@ describe('configuration module boundaries', () => {
     assert.equal(fs.existsSync(path.join(process.cwd(), 'src', 'configuration', 'runtime-types.ts')), false);
   });
 
-  it('keeps Feishu site behavior out of the configuration layer', () => {
-    const channelTypesSource = fs.readFileSync(path.join(process.cwd(), 'src', 'configuration', 'channel-types.ts'), 'utf-8');
+  it('keeps channel runtime types out of the configuration layer', () => {
+    assert.equal(fs.existsSync(path.join(process.cwd(), 'src', 'configuration', 'channel-types.ts')), false);
+
+    const channelTypesSource = fs.readFileSync(path.join(process.cwd(), 'src', 'channels', 'types.ts'), 'utf-8');
     assert.doesNotMatch(channelTypesSource, /normalizeFeishuSite/);
     assert.doesNotMatch(channelTypesSource, /feishuSiteToApiBaseUrl/);
     assert.doesNotMatch(channelTypesSource, /open\.larksuite\.com/);
@@ -127,6 +129,13 @@ describe('configuration module boundaries', () => {
     const envSource = fs.readFileSync(path.join(process.cwd(), 'src', 'configuration', 'env-compat.ts'), 'utf-8');
     assert.doesNotMatch(cliSource, /defaultChannelPatch/);
     assert.doesNotMatch(envSource, /ensureDefaultChannelPatch/);
+  });
+
+  it('keeps merge exports limited to source merge mechanics', () => {
+    const mergeSource = fs.readFileSync(path.join(process.cwd(), 'src', 'configuration', 'merge.ts'), 'utf-8');
+    assert.doesNotMatch(mergeSource, /export function getDefaultChannel/);
+    assert.doesNotMatch(mergeSource, /export function valueToString/);
+    assert.doesNotMatch(mergeSource, /export function setPatchPath/);
   });
 
   it('keeps production legacy bridge setting reads limited to explicit migration-decision holdouts', () => {

@@ -9,7 +9,7 @@ import {
   isSupportedChannelProvider,
   type ChannelProvider,
   type FeishuChannelConfig,
-} from './channel-types.js';
+} from '../channels/types.js';
 import type { ClaudePermissionMode } from '../runtime/options.js';
 import type { ConfigPatch, ConfigV2 } from './schema.js';
 

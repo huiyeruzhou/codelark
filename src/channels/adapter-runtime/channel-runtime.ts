@@ -1,4 +1,4 @@
-import { isSupportedChannelProvider, type ChannelProvider, type RuntimeChannelInstance } from '../../configuration/channel-types.js';
+import { isSupportedChannelProvider, type ChannelProvider, type RuntimeChannelInstance } from '../../channels/types.js';
 import { createConfigService } from '../../configuration/service.js';
 import { markdownToPlainText } from '../../shared/markdown/plain.js';
 import { formatBindingChatLabel as formatBindingChatLabelBase } from '../../bridge/session/display/channel-label.js';

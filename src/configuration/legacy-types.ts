@@ -1,7 +1,7 @@
 import type {
   ChannelProvider,
   FeishuChannelConfig,
-} from './channel-types.js';
+} from '../channels/types.js';
 import type {
   ClaudeExecutable,
   ClaudePermissionMode,
@@ -84,4 +84,3 @@ export interface Config {
   channels?: ChannelInstance[];
   enabledChannels: string[];
 }
-

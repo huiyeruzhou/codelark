@@ -4,7 +4,7 @@ import type { BridgeStore } from '../../../domain/audit.js';
 import type { ChannelAddress, ChannelChat, ChannelChatMode, ChannelDefaultTarget } from '../../../domain/channel.js';
 import type { BridgeSession } from '../../../domain/session.js';
 import { recordBindingChange } from '../binding-audit.js';
-import type { ChannelProvider } from '../../../configuration/channel-types.js';
+import type { ChannelProvider } from '../../../channels/types.js';
 import { createConfigService } from '../../../configuration/service.js';
 import {
   getCodexSessionByThreadId,

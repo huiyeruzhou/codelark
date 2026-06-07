@@ -1,11 +1,21 @@
 import { configFields } from './fields.js';
 import { getConfigPath } from './path-access.js';
-import { getDefaultChannel, valueToString } from './merge.js';
-import type { ConfigV2 } from './schema.js';
+import type { ChannelConfigV2, ConfigV2 } from './schema.js';
 import type { ConfigField } from './fields-types.js';
 
+function getProjectionChannel(config: ConfigV2): ChannelConfigV2 {
+  return config.channels.find((channel) => channel.id === 'feishu-default')
+    || config.channels[0]!;
+}
+
+function valueToString(value: unknown): string | undefined {
+  if (value === undefined || value === null || value === '') return undefined;
+  if (Array.isArray(value)) return value.join(',');
+  return String(value);
+}
+
 function channelFieldValue(config: ConfigV2, fieldPath: string): unknown {
-  const channel = getDefaultChannel(config);
+  const channel = getProjectionChannel(config);
   const relative = fieldPath.replace('channels[].', '');
   return getConfigPath(channel, relative);
 }
@@ -21,7 +31,7 @@ export function exportRuntimeSettings(config: ConfigV2): Map<string, string> {
   const settings = new Map<string, string>();
   settings.set('remote_bridge_enabled', 'true');
   settings.set('bridge_channel_instances_json', JSON.stringify(config.channels));
-  settings.set('bridge_feishu_enabled', getDefaultChannel(config).enabled ? 'true' : 'false');
+  settings.set('bridge_feishu_enabled', getProjectionChannel(config).enabled ? 'true' : 'false');
 
   for (const field of configFields as readonly ConfigField[]) {
     if (!field.runtimeSettingsKey) continue;

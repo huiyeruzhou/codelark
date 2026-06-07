@@ -16,7 +16,7 @@ import type {
 } from '../../domain/index.js';
 import type { BaseChannelAdapter } from '../../channels/contracts.js';
 import type { BridgeSession, BridgeStore, PermissionLinkRecord } from '../../domain/index.js';
-import type { FeishuChannelConfig } from '../../configuration/channel-types.js';
+import type { FeishuChannelConfig } from '../../channels/types.js';
 import { feishuSiteToApiBaseUrl } from '../../channels/feishu/site.js';
 import { inspect } from 'node:util';
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';

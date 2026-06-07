@@ -21,6 +21,7 @@ CodeLark 需要把“默认值、全局配置、项目配置、环境变量、�
 
 - `src/configuration/static-loader.ts`：用 `node-config` 解析并合并 defaults/home/local/env/cli 静态 baseline；只返回需要 materialize 的 home patch，不直接写文件。
 - `src/configuration/sources.ts`：复用 `node-config` TOML parser 读取 defaults/home/local/channel/session TOML，并提供 `ConfigService` 写入所需的持久化 I/O。
+- `src/configuration/merge.ts`：只保留 patch/node-config 合并和 provenance 计算；projection 选择默认 channel、值转 env string 等输出语义不从这里导出。
 - `src/configuration/service.ts`：薄 `ConfigService` 查询/写入入口，负责返回统一 effective value、source/provenance、explain 和 projection，不承载业务运行语义。
 - 配置解析库边界：生产代码只有 `src/configuration` 可以直接导入 `node-config` 或 `smol-toml`；业务模块必须通过 `ConfigService`、projection 或迁移 adapter 使用配置，并在业务模块内解释 runtime、channel、session 等语义。
 - `src/runtime/options.ts` / `src/shared/channel-id.ts`：运行时枚举 fallback 和 channel id slug 化是业务/共享语义，不属于 `src/configuration`。配置层提供 zod schema 和统一 value，调用方在自己的模块内决定 fallback。
@@ -135,7 +136,6 @@ src/configuration/
   schema.ts                  # 当前 TOML shape 的 zod 校验、类型、coerce、默认值校验
   fields.ts                  # latest configFields；只服务当前运行时
   fields-types.ts            # ConfigFields / ConfigField 类型定义
-  channel-types.ts           # Channel/Feishu 运行时配置类型和站点解析工具
   paths.ts                   # CODELARK_HOME、默认工作区和 home path 展开工具；不暴露 legacy 输入文件名
   static-loader.ts           # node-config 静态 baseline：defaults/home/local/env/cli
   sources.ts                 # 路径解析、Channel/Session TOML 读写和持久化写入
@@ -154,6 +154,9 @@ src/configuration/
       env-file.ts            # config.env parser，仅供 v1 migration 使用
       paths.ts               # config.env/config.json legacy 输入路径，仅供 migration/tests 使用
       session-json.ts        # BridgeSession JSON parser，仅供 v1 migration 使用
+
+src/channels/
+  types.ts                   # Channel/Feishu 运行时配置类型和 provider 判断，属于通道业务边界
 ```
 
 ### 目标配置来源

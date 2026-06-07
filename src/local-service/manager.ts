@@ -6,7 +6,7 @@ import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 
 import { CODELARK_HOME } from '../configuration/paths.js';
-import type { FeishuChannelConfig } from '../configuration/channel-types.js';
+import type { FeishuChannelConfig } from '../channels/types.js';
 import { createConfigService } from '../configuration/service.js';
 import { exportProcessEnv } from '../configuration/projections.js';
 import type { ConfigPatch, ConfigV2 } from '../configuration/schema.js';

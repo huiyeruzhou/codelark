@@ -3,7 +3,7 @@ import { z } from 'zod';
 import type {
   FeishuChannelConfig,
   FeishuSite,
-} from '../../configuration/channel-types.js';
+} from '../../channels/types.js';
 import { feishuSiteSchema, type ChannelConfigV2, type ConfigV2 } from '../../configuration/schema.js';
 import {
   feishuSiteToApiBaseUrl,
