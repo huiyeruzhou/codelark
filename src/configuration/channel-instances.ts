@@ -51,6 +51,13 @@ export function getConfiguredChannelInstance(
     || null;
 }
 
+export function resolveConfiguredChannelScopeId(
+  channelTypeOrProvider: string,
+  serviceOrOptions: ConfigSource = {},
+): string {
+  return getConfiguredChannelInstance(channelTypeOrProvider, serviceOrOptions)?.id || channelTypeOrProvider;
+}
+
 export function resolveConfiguredChannelMeta(
   channelType: string,
   fallbackProvider?: string,

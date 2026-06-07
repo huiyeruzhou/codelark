@@ -8,6 +8,7 @@ import { createConfigService } from '../../../configuration/service.js';
 import {
   getConfiguredChannelInstance,
   listConfiguredChannelInstances,
+  resolveConfiguredChannelScopeId,
   resolveConfiguredChannelMeta,
 } from '../../../configuration/channel-instances.js';
 import {
@@ -427,6 +428,7 @@ require_mention = true
       assert.deepEqual(channels.map((channel) => channel.id), ['custom-feishu']);
       assert.equal(getConfiguredChannelInstance('custom-feishu', service)?.alias, 'Custom Feishu');
       assert.equal(getConfiguredChannelInstance('feishu', service)?.id, 'custom-feishu');
+      assert.equal(resolveConfiguredChannelScopeId('feishu', service), 'custom-feishu');
       assert.deepEqual(resolveConfiguredChannelMeta('custom-feishu', undefined, service), {
         provider: 'feishu',
         alias: 'Custom Feishu',
