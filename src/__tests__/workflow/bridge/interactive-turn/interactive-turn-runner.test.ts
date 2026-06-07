@@ -23,6 +23,7 @@ import { ThreadDisplayService } from '../../../../bridge/session/thread-display-
 import { writeCodexSessionJsonlFixture } from '../../../helpers/bridge/test-bridge-utils.js';
 
 const DATA_DIR = path.join(CODELARK_HOME, 'data');
+const CONFIG_TOML_PATH = path.join(CODELARK_HOME, 'config.toml');
 
 function makeSettings(overrides: Record<string, string> = {}): Map<string, string> {
   return new Map([
@@ -441,6 +442,36 @@ describe('interactive-turn runner', () => {
       },
       lifecycle: {},
     });
+  });
+
+  it('reads stream status timing from v2 config instead of legacy settings', () => {
+    const previous = fs.existsSync(CONFIG_TOML_PATH) ? fs.readFileSync(CONFIG_TOML_PATH, 'utf-8') : null;
+    fs.writeFileSync(CONFIG_TOML_PATH, `
+schema_version = 2
+
+[[channels]]
+id = "feishu-default"
+alias = "飞书"
+provider = "feishu"
+enabled = true
+
+[channels.config]
+stream_status_idle_start_seconds = 7
+stream_status_check_interval_seconds = 3
+`, 'utf-8');
+    try {
+      const settings = resolveInteractiveTurnRuntimeSettings('feishu', (key) => {
+        if (key === 'bridge_stream_status_idle_start_seconds') return '999';
+        if (key === 'bridge_stream_status_check_interval_seconds') return '999';
+        return null;
+      });
+
+      assert.equal(settings.statusTiming.idleStartMs, 7_000);
+      assert.equal(settings.statusTiming.heartbeatMs, 3_000);
+    } finally {
+      if (previous === null) fs.rmSync(CONFIG_TOML_PATH, { force: true });
+      else fs.writeFileSync(CONFIG_TOML_PATH, previous, 'utf-8');
+    }
   });
 
   it('simulates a basic dialogue turn with controlled tool, context, and stream-card checkpoints', async () => {
