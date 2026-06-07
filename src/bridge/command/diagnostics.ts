@@ -240,9 +240,9 @@ export function handleCurrentCommand(options: {
     || '';
   const sessionName = session.name?.trim() ? stripLegacySessionPrefix(session.name) : '';
   const claudeConfig = activeRuntime === 'claude' ? resolveClaudeRuntimeConfig(session, binding) : null;
-  const sandboxMode = activeRuntime === 'claude' ? '' : resolveEffectiveSandboxMode(session);
-  const networkAccess = activeRuntime === 'claude' ? undefined : resolveEffectiveNetworkAccess(session);
-  const reasoningEffort = activeRuntime === 'claude' ? '' : resolveEffectiveReasoningEffort(session);
+  const sandboxMode = activeRuntime === 'claude' ? '' : resolveEffectiveSandboxMode(session, binding);
+  const networkAccess = activeRuntime === 'claude' ? undefined : resolveEffectiveNetworkAccess(session, binding);
+  const reasoningEffort = activeRuntime === 'claude' ? '' : resolveEffectiveReasoningEffort(session, binding);
   const currentModel = activeRuntime === 'claude'
     ? claudeConfig?.model || 'default'
     : resolveDisplayedModel(
@@ -263,7 +263,7 @@ export function handleCurrentCommand(options: {
       ]
     : [
         ['模式', formatSessionMode(binding, session)],
-        ['Provider', formatSessionCodexProvider(session)],
+        ['Provider', formatSessionCodexProvider(session, binding)],
         ['当前模型', formatDisplayedModel(currentModel)],
         ['文件系统权限', sandboxMode],
         ['网络访问', formatNetworkAccess(networkAccess ?? false)],
@@ -380,7 +380,7 @@ export function buildCurrentCommandRichCard(options: {
         elementId: 'clk_mode',
         label: 'mode',
         placeholder: formatSessionMode(binding, session),
-        selectedCallbackData: formatSessionMode(binding, session),
+      selectedCallbackData: formatSessionMode(binding, session),
         options: [
           { text: 'normal', callbackData: 'normal' },
           { text: 'yolo', callbackData: 'yolo' },
@@ -390,14 +390,14 @@ export function buildCurrentCommandRichCard(options: {
       elementId: 'clk_provider',
       label: 'provider',
       placeholder: 'sdk/pty/tmux',
-      selectedCallbackData: formatSessionCodexProvider(session),
+      selectedCallbackData: formatSessionCodexProvider(session, binding),
       options: [{ text: 'sdk', callbackData: 'sdk' }, { text: 'pty', callbackData: 'pty' }, { text: 'tmux', callbackData: 'tmux' }],
     },
     {
       elementId: 'clk_reasoning',
       label: 'reasoning',
-      placeholder: resolveEffectiveReasoningEffort(session),
-      selectedCallbackData: resolveEffectiveReasoningEffort(session),
+      placeholder: resolveEffectiveReasoningEffort(session, binding),
+      selectedCallbackData: resolveEffectiveReasoningEffort(session, binding),
       options: [
         { text: 'default', callbackData: 'default' },
         { text: 'low', callbackData: 'low' },
@@ -409,8 +409,8 @@ export function buildCurrentCommandRichCard(options: {
     {
       elementId: 'clk_sandbox',
       label: 'sandbox',
-      placeholder: resolveEffectiveSandboxMode(session),
-      selectedCallbackData: resolveEffectiveSandboxMode(session),
+      placeholder: resolveEffectiveSandboxMode(session, binding),
+      selectedCallbackData: resolveEffectiveSandboxMode(session, binding),
       options: [
         { text: 'default', callbackData: 'default' },
         { text: 'read-only', callbackData: 'read-only' },
@@ -421,8 +421,8 @@ export function buildCurrentCommandRichCard(options: {
     {
       elementId: 'clk_network',
       label: 'network',
-      placeholder: formatNetworkAccess(resolveEffectiveNetworkAccess(session)),
-      selectedCallbackData: resolveEffectiveNetworkAccess(session) ? 'on' : 'off',
+      placeholder: formatNetworkAccess(resolveEffectiveNetworkAccess(session, binding)),
+      selectedCallbackData: resolveEffectiveNetworkAccess(session, binding) ? 'on' : 'off',
       options: [
         { text: 'default', callbackData: 'default' },
         { text: 'on', callbackData: 'on' },

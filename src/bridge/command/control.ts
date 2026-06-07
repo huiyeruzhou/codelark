@@ -17,10 +17,13 @@ export interface StopCommandDeps {
   recordInteractiveHealthEnd?(sessionId: string, outcome: 'completed' | 'failed' | 'aborted', detail?: string): void;
 }
 
-function getStopTmuxInterruptTarget(session: BridgeSession | null | undefined): string | undefined {
+function getStopTmuxInterruptTarget(
+  session: BridgeSession | null | undefined,
+  binding?: ChannelChat | null,
+): string | undefined {
   if (!session) return undefined;
   const tmuxSessionName = getSessionRuntimeTmuxSessionName(session);
-  return resolveEffectiveCodexProvider(session) === 'tmux'
+  return resolveEffectiveCodexProvider(session, binding) === 'tmux'
     && Boolean(tmuxSessionName)
     && sessionLooksRunning(session)
     ? tmuxSessionName
@@ -39,7 +42,7 @@ export async function handleStopCommand(options: {
   const session = options.store.getSession(binding.bridgeSessionId);
   const task = options.deps.getActiveTask(binding.bridgeSessionId);
   const looksRunning = sessionLooksRunning(session);
-  const tmuxInterruptTarget = getStopTmuxInterruptTarget(session);
+  const tmuxInterruptTarget = getStopTmuxInterruptTarget(session, binding);
   if (!task && tmuxInterruptTarget) {
     const command = await sendTmuxInterrupt(tmuxInterruptTarget);
     const detail = '用户执行 /stop，已向 Codex tmux TUI 发送 C-c。';

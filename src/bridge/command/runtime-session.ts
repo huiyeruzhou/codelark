@@ -56,6 +56,7 @@ export function createRuntimeSessionForChat(options: {
   runtime: RuntimeName;
   baseSession: BridgeSession;
   chatId: string;
+  binding?: ChannelChat | null;
 }): BridgeSession {
   const workDir = getSessionWorkingDirectory(options.baseSession) || process.cwd();
   const systemPrompt = getSessionSystemPrompt(options.baseSession);
@@ -66,27 +67,27 @@ export function createRuntimeSessionForChat(options: {
     options.runtime === 'codex' ? (getGlobalStringConfig('runtime.codex.model') || '') : '',
     systemPrompt,
     workDir,
-    options.runtime === 'codex' ? resolveEffectiveMode(null, options.baseSession) : undefined,
+    options.runtime === 'codex' ? resolveEffectiveMode(options.binding, options.baseSession) : undefined,
     { activeRuntime: options.runtime },
   );
 }
 
-export function formatSessionCodexProvider(session?: BridgeSession | null): string {
-  const effective = resolveEffectiveCodexProvider(session);
+export function formatSessionCodexProvider(session?: BridgeSession | null, binding?: ChannelChat | null): string {
+  const effective = resolveEffectiveCodexProvider(session, binding);
   return hasSessionCodexProviderOverride(session)
     ? effective
     : `${effective} (全局默认)`;
 }
 
-export function formatSessionClaudeProvider(session?: BridgeSession | null): string {
-  const effective = resolveEffectiveClaudeProvider(session);
+export function formatSessionClaudeProvider(session?: BridgeSession | null, binding?: ChannelChat | null): string {
+  const effective = resolveEffectiveClaudeProvider(session, binding);
   return hasSessionClaudeProviderOverride(session)
     ? effective
     : `${effective} (全局默认)`;
 }
 
-export function isTuiProviderSession(session?: BridgeSession | null): boolean {
-  const provider = resolveEffectiveCodexProvider(session);
+export function isTuiProviderSession(session?: BridgeSession | null, binding?: ChannelChat | null): boolean {
+  const provider = resolveEffectiveCodexProvider(session, binding);
   return provider === 'tmux' || provider === 'pty';
 }
 

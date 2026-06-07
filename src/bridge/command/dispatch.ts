@@ -229,7 +229,7 @@ async function handleCurrentConfigFormCommand(options: {
   const provider = normalizeFormString(formValue.clk_provider || formValue.provider);
   const currentProvider = activeRuntime === 'claude'
     ? (claudeConfig?.provider || 'pty')
-    : resolveEffectiveCodexProvider(session);
+    : resolveEffectiveCodexProvider(session, binding);
   if (provider && provider !== currentProvider) {
     responses.push(await handleProviderCommand({
       msg: options.msg,
@@ -244,7 +244,7 @@ async function handleCurrentConfigFormCommand(options: {
   const reasoning = normalizeFormString(formValue.clk_reasoning || formValue.reasoning);
   const currentReasoning = activeRuntime === 'claude'
     ? (claudeConfig?.reasoningEffort || 'default')
-    : resolveEffectiveReasoningEffort(session);
+    : resolveEffectiveReasoningEffort(session, binding);
   if (reasoning && reasoning !== currentReasoning) {
     responses.push(handleReasoningCommand({
       args: reasoning,
@@ -256,7 +256,7 @@ async function handleCurrentConfigFormCommand(options: {
 
   if (activeRuntime === 'codex') {
     const sandbox = normalizeFormString(formValue.clk_sandbox || formValue.sandbox);
-    if (sandbox && sandbox !== resolveEffectiveSandboxMode(session)) {
+    if (sandbox && sandbox !== resolveEffectiveSandboxMode(session, binding)) {
       responses.push(handleSandboxCommand({
         msg: options.msg,
         args: sandbox,
@@ -266,7 +266,7 @@ async function handleCurrentConfigFormCommand(options: {
       }));
     }
     const network = normalizeFormString(formValue.clk_network || formValue.network);
-    const currentNetwork = resolveEffectiveNetworkAccess(session) ? 'on' : 'off';
+    const currentNetwork = resolveEffectiveNetworkAccess(session, binding) ? 'on' : 'off';
     if (network && network !== currentNetwork) {
       responses.push(handleNetworkCommand({
         msg: options.msg,

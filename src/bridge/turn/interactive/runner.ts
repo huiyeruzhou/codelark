@@ -242,12 +242,12 @@ export async function runInteractiveMessage(
   const resolveDisplayInfo = deps.resolveInteractiveTurnDisplayInfo ?? ((targetBinding) => {
     if (targetBinding.id === binding.id && initialSession) {
       const isClaude = getSessionActiveRuntime(initialSession) === 'claude';
-      const metadata = resolveRuntimeMetadataConfig(initialSession, isClaude ? 'claude' : 'codex');
+      const metadata = resolveRuntimeMetadataConfig(initialSession, isClaude ? 'claude' : 'codex', binding);
       return {
         title: getBridgeSessionDisplayTitle(initialSession),
         bridgeSessionId: initialSession.id,
         threadId: getSessionCodexThreadId(initialSession) || '',
-        executionProvider: resolveEffectiveCodexProvider(initialSession),
+        executionProvider: resolveEffectiveCodexProvider(initialSession, binding),
         creatorKind: 'bridge',
         reasoningEffort: metadata.reasoningEffort,
         model: metadata.model,
@@ -257,8 +257,8 @@ export async function runInteractiveMessage(
   });
   const runtimeSettings = deps.resolveInteractiveTurnRuntimeSettings(adapter.provider);
   const activeRuntime = getSessionActiveRuntime(initialSession) || 'codex';
-  const isClaudeMirrorTurn = activeRuntime === 'claude' && resolveEffectiveClaudeProvider(initialSession) !== 'sdk';
-  const codexProvider = resolveEffectiveCodexProvider(initialSession);
+  const isClaudeMirrorTurn = activeRuntime === 'claude' && resolveEffectiveClaudeProvider(initialSession, binding) !== 'sdk';
+  const codexProvider = resolveEffectiveCodexProvider(initialSession, binding);
   const isCodexMirrorTurn = activeRuntime === 'codex' && (codexProvider === 'pty' || codexProvider === 'tmux');
   const isRuntimeMirrorTurn = isClaudeMirrorTurn || isCodexMirrorTurn;
   let observedCodexThreadId = codexThreadId || '';

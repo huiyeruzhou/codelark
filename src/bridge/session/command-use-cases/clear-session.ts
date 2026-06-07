@@ -168,7 +168,7 @@ export async function handleClearSessionCommand(options: {
         ['群聊名称', groupRenameStatus],
         ['目录', formatCommandPath(getSessionWorkingDirectory(session) || workDir)],
         ['模式', formatSessionMode(binding, session)],
-        ['Provider', formatSessionCodexProvider(session)],
+        ['Provider', formatSessionCodexProvider(session, binding)],
       ],
       [
         previousBinding && runningReasons.length > 0

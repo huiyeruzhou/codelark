@@ -1359,7 +1359,7 @@ model = "test-model"
     );
     assert.equal(
       _testOnly.resolveDisplayedModel(null, { id: 's-empty', runtime: { codex: { model: 'legacy-session-model' } } }, null, null),
-      'default',
+      'test-model',
     );
   });
 

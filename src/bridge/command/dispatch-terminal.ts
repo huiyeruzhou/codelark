@@ -164,6 +164,7 @@ async function handlePtyScreenDispatchCommand(params: TerminalDispatchParams): P
   const response = await handlePtyScreenCommand({
     args,
     session,
+    binding,
     markdown,
     screenMonitor: {
       key: `${msg.address.channelType}:${msg.address.chatId}:${binding.bridgeSessionId}`,

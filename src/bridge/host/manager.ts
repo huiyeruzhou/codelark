@@ -1148,10 +1148,10 @@ function shouldRouteTerminalAppendInline(msg: InboundMessage): boolean {
   if (!session) return false;
   const activeRuntime = getSessionActiveRuntime(session) || 'codex';
   if (activeRuntime === 'claude') {
-    return resolveEffectiveClaudeProvider(session) === 'pty';
+    return resolveEffectiveClaudeProvider(session, binding) === 'pty';
   }
-  return resolveEffectiveCodexProvider(session) === 'tmux'
-    || resolveEffectiveCodexProvider(session) === 'pty';
+  return resolveEffectiveCodexProvider(session, binding) === 'tmux'
+    || resolveEffectiveCodexProvider(session, binding) === 'pty';
 }
 
 function resolveInboundCommandText(rawText: string): string {
@@ -2938,7 +2938,7 @@ async function handleMessage(
   const tmuxProviderSession = tmuxProviderBinding ? store.getSession(tmuxProviderBinding.bridgeSessionId) : null;
   const tmuxProviderActiveRuntime = getSessionActiveRuntime(tmuxProviderSession) || 'codex';
   const tmuxProviderEffectiveProvider = tmuxProviderSession
-    ? resolveEffectiveCodexProvider(tmuxProviderSession)
+    ? resolveEffectiveCodexProvider(tmuxProviderSession, tmuxProviderBinding)
     : null;
   if (
     tmuxProviderSession
@@ -3053,10 +3053,10 @@ async function handleMessage(
   const terminalAppendSession = terminalAppendBinding ? store.getSession(terminalAppendBinding.bridgeSessionId) : null;
   const terminalAppendActiveRuntime = getSessionActiveRuntime(terminalAppendSession) || 'codex';
   const terminalAppendCodexProvider = terminalAppendSession
-    ? resolveEffectiveCodexProvider(terminalAppendSession)
+    ? resolveEffectiveCodexProvider(terminalAppendSession, terminalAppendBinding)
     : null;
   const terminalAppendClaudeProvider = terminalAppendSession
-    ? resolveEffectiveClaudeProvider(terminalAppendSession)
+    ? resolveEffectiveClaudeProvider(terminalAppendSession, terminalAppendBinding)
     : null;
   if (
     terminalAppendBinding

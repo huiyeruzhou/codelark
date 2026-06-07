@@ -54,10 +54,11 @@ function setSessionTmuxAutoEnterToml(sessionId: string, tmuxAutoEnter: boolean):
 function shouldEnableTmuxAutoEnterForNewSession(
   inheritedProvider: InheritedCodexProvider,
   session: BridgeSession,
+  binding?: ChannelChat | null,
 ): boolean {
   if (inheritedProvider === 'tmux') return true;
   if (inheritedProvider === 'pty') return false;
-  return resolveEffectiveCodexProvider(session) === 'tmux';
+  return resolveEffectiveCodexProvider(session, binding) === 'tmux';
 }
 
 export async function handleNewSessionCommand(options: {
@@ -158,7 +159,7 @@ export async function handleNewSessionCommand(options: {
       if (inheritedProvider === 'tmux' || inheritedProvider === 'pty') {
         setSessionCodexProviderToml(session.id, inheritedProvider);
       }
-      if (shouldEnableTmuxAutoEnterForNewSession(inheritedProvider, session)) {
+      if (shouldEnableTmuxAutoEnterForNewSession(inheritedProvider, session, binding)) {
         setSessionTmuxAutoEnterToml(session.id, true);
       }
     }
@@ -235,7 +236,7 @@ export async function handleNewSessionCommand(options: {
     if (inheritedProvider === 'tmux' || inheritedProvider === 'pty') {
       setSessionCodexProviderToml(session.id, inheritedProvider);
     }
-    if (shouldEnableTmuxAutoEnterForNewSession(inheritedProvider, session)) {
+    if (shouldEnableTmuxAutoEnterForNewSession(inheritedProvider, session, binding)) {
       setSessionTmuxAutoEnterToml(session.id, true);
     }
   }
@@ -265,7 +266,7 @@ export async function handleNewSessionCommand(options: {
         ['标题', session ? getSessionDisplayName(session, getSessionWorkingDirectory(session)) : options.threadDisplay.binding(binding).title],
         ['目录', formatCommandPath(getSessionWorkingDirectory(session) || workDir)],
         ['模式', formatSessionMode(binding, session)],
-        ['Provider', formatSessionCodexProvider(session)],
+        ['Provider', formatSessionCodexProvider(session, binding)],
       ],
       notes,
       options.markdown,

@@ -76,10 +76,14 @@ const NETWORK_OPTIONS_TEXT = '可选：`on`/`true` 开启网络，`off`/`false` 
 const CLAUDE_PTY_RUNTIME_UPDATE_NOTE = '已保存为当前会话的 Claude Code 启动配置；如果 Claude Code pty 已经启动，不会向运行中的 TUI 注入切换命令，下一条普通消息会按新参数启动或重启 Claude Code pty。';
 const CODEX_RUNTIME_UPDATE_NOTE = '修改从下一轮 Codex 请求开始生效；正在运行的任务请先 `/stop` 后重发。';
 
-function codexRuntimeUpdateNotes(session: BridgeSession | null | undefined, notes: string[] = []): string[] {
+function codexRuntimeUpdateNotes(
+  session: BridgeSession | null | undefined,
+  binding?: ChannelChat | null,
+  notes: string[] = [],
+): string[] {
   const result = [...notes, CODEX_RUNTIME_UPDATE_NOTE];
-  if (!isTuiProviderSession(session)) return result;
-  const provider = resolveEffectiveCodexProvider(session);
+  if (!isTuiProviderSession(session, binding)) return result;
+  const provider = resolveEffectiveCodexProvider(session, binding);
   result.push(
     '当前是 Codex TUI Provider：配置已保存到当前会话，但不会影响已经启动的 Codex TUI 终端。',
     provider === 'tmux'
@@ -91,10 +95,11 @@ function codexRuntimeUpdateNotes(session: BridgeSession | null | undefined, note
 
 function codexRuntimeUpdateTitle(
   session: BridgeSession | null | undefined,
+  binding: ChannelChat | null | undefined,
   baseTitle: string,
 ): string {
-  if (!isTuiProviderSession(session)) return baseTitle;
-  const provider = resolveEffectiveCodexProvider(session);
+  if (!isTuiProviderSession(session, binding)) return baseTitle;
+  const provider = resolveEffectiveCodexProvider(session, binding);
   return `${baseTitle}，请输入/p ${provider}重启生效`;
 }
 
@@ -250,7 +255,7 @@ export function handleReasoningCommand(options: {
     }
     return buildCommandFields(
       '当前思考级别',
-      [['级别', formatReasoningEffort(resolveEffectiveReasoningEffort(session))]],
+      [['级别', formatReasoningEffort(resolveEffectiveReasoningEffort(session, options.binding))]],
       [REASONING_OPTIONS_TEXT, '发送 `/r 4` 或 `/r high` 可切换。'],
       options.markdown,
     );
@@ -289,7 +294,7 @@ export function handleReasoningCommand(options: {
   const notes = [REASONING_OPTIONS_TEXT];
   const warning = minimalReasoningWebSearchWarning(reasoning);
   if (warning) notes.push(warning);
-  const updateNotes = codexRuntimeUpdateNotes(session, notes);
+  const updateNotes = codexRuntimeUpdateNotes(session, options.binding, notes);
   return buildCommandFields(
     '已更新思考级别',
     [['级别', formatReasoningEffort(reasoning)]],
@@ -317,7 +322,7 @@ export function handleModeCommand(options: {
         ['Runtime', activeRuntime],
         activeRuntime === 'claude'
           ? ['Claude permission', resolveClaudeRuntimeConfig(session, binding).permissionMode]
-          : ['Provider', formatSessionCodexProvider(session)],
+          : ['Provider', formatSessionCodexProvider(session, binding)],
       ],
       [MODE_OPTIONS_TEXT, '发送 `/m normal` 或 `/m yolo` 切换。完整命令也兼容：`/mode normal`。'],
       options.markdown,
@@ -356,12 +361,12 @@ export function handleModeCommand(options: {
     setSessionCodexYoloModeToml(session.id, requestedMode);
   }
   return buildCommandFields(
-    codexRuntimeUpdateTitle(session, '已切换模式'),
+    codexRuntimeUpdateTitle(session, binding, '已切换模式'),
     [
       ['模式', requestedMode],
-      ['Provider', formatSessionCodexProvider(session)],
+      ['Provider', formatSessionCodexProvider(session, binding)],
     ],
-    codexRuntimeUpdateNotes(session, [MODE_OPTIONS_TEXT]),
+    codexRuntimeUpdateNotes(session, binding, [MODE_OPTIONS_TEXT]),
     options.markdown,
   );
 }
@@ -479,6 +484,7 @@ export function handleRuntimeCommand(options: {
       runtime: targetRuntime,
       baseSession: session,
       chatId: options.msg.address.chatId,
+      binding,
     });
     createdNewSession = true;
   }
@@ -531,7 +537,7 @@ export function handleSandboxCommand(options: {
     return buildCommandFields(
       '当前 Codex 沙箱',
       [
-        ['沙箱', resolveEffectiveSandboxMode(session)],
+        ['沙箱', resolveEffectiveSandboxMode(session, binding)],
         ['来源', hasSessionCodexSandboxOverride(session) ? '当前会话' : '全局默认'],
       ],
       [SANDBOX_OPTIONS_TEXT, '发送 `/sandbox workspace-write` 可切换；修改从下一轮 Codex 请求开始生效。'],
@@ -543,8 +549,8 @@ export function handleSandboxCommand(options: {
     clearSessionCodexSandboxToml(session.id);
     return buildCommandFields(
       '已恢复默认 Codex 沙箱',
-      [['沙箱', resolveEffectiveSandboxMode(options.store.getSession(session.id))]],
-      codexRuntimeUpdateNotes(options.store.getSession(session.id), ['当前会话将继续使用 Web 配置里的全局默认值。']),
+      [['沙箱', resolveEffectiveSandboxMode(options.store.getSession(session.id), binding)]],
+      codexRuntimeUpdateNotes(options.store.getSession(session.id), binding, ['当前会话将继续使用 Web 配置里的全局默认值。']),
       options.markdown,
     );
   }
@@ -561,7 +567,7 @@ export function handleSandboxCommand(options: {
   return buildCommandFields(
     '已更新 Codex 沙箱',
     [['沙箱', sandboxMode]],
-    codexRuntimeUpdateNotes(options.store.getSession(session.id)),
+    codexRuntimeUpdateNotes(options.store.getSession(session.id), binding),
     options.markdown,
   );
 }
@@ -590,7 +596,7 @@ export function handleNetworkCommand(options: {
     return buildCommandFields(
       '当前 Codex 网络',
       [
-        ['网络', formatNetworkAccess(resolveEffectiveNetworkAccess(session))],
+        ['网络', formatNetworkAccess(resolveEffectiveNetworkAccess(session, binding))],
         ['来源', hasSessionCodexNetworkAccessOverride(session) ? '当前会话' : '全局默认'],
       ],
       [NETWORK_OPTIONS_TEXT, '这个开关会传给 `sandbox_workspace_write.network_access`；下一轮 Codex 请求生效。'],
@@ -610,8 +616,8 @@ export function handleNetworkCommand(options: {
     clearSessionCodexNetworkAccessToml(session.id);
     return buildCommandFields(
       '已恢复默认 Codex 网络',
-      [['网络', formatNetworkAccess(resolveEffectiveNetworkAccess(options.store.getSession(session.id)))]],
-      codexRuntimeUpdateNotes(options.store.getSession(session.id), ['当前会话将继续使用 Web 配置里的全局默认值。']),
+      [['网络', formatNetworkAccess(resolveEffectiveNetworkAccess(options.store.getSession(session.id), binding))]],
+      codexRuntimeUpdateNotes(options.store.getSession(session.id), binding, ['当前会话将继续使用 Web 配置里的全局默认值。']),
       options.markdown,
     );
   }
@@ -619,7 +625,7 @@ export function handleNetworkCommand(options: {
   return buildCommandFields(
     '已更新 Codex 网络',
     [['网络', formatNetworkAccess(networkAccess)]],
-    codexRuntimeUpdateNotes(options.store.getSession(session.id)),
+    codexRuntimeUpdateNotes(options.store.getSession(session.id), binding),
     options.markdown,
   );
 }
@@ -732,7 +738,7 @@ export function handleModelCommand(options: {
     return buildCommandFields(
       '已恢复默认模型',
       [['模型', formatDisplayedModel(currentModel)]],
-      codexRuntimeUpdateNotes(updatedSession, ['后续从 IM 发起的 Codex CLI 请求会跟随默认模型。']),
+      codexRuntimeUpdateNotes(updatedSession, updatedBinding, ['后续从 IM 发起的 Codex CLI 请求会跟随默认模型。']),
       options.markdown,
     );
   }
@@ -756,7 +762,7 @@ export function handleModelCommand(options: {
     [['模型', formatDisplayedModel(selectedModel.slug)]],
     [
       '后续从 IM 发起的 Codex CLI 请求会使用这个模型。',
-      ...codexRuntimeUpdateNotes(options.store.getSession(session.id)),
+      ...codexRuntimeUpdateNotes(options.store.getSession(session.id), binding),
       ...(isCliOnlyCodexModel(selectedModel)
         ? ['这是仅 IM/CLI 模型，只能在 IM -> Codex CLI 调用中使用，Codex Native 不支持。']
         : []),

@@ -216,12 +216,15 @@ function getSessionName(session: BridgeSession): string {
   return session.id.slice(0, 8);
 }
 
-function getSessionMode(session: BridgeSession): ChannelChatMode {
-  return resolveEffectiveMode(null, session);
+function getSessionMode(session: BridgeSession, binding?: ChannelChat | null): ChannelChatMode {
+  return resolveEffectiveMode(binding, session);
 }
 
-function getSessionCodexProvider(session: BridgeSession | null | undefined): 'sdk' | 'pty' | 'tmux' | 'default' {
-  return hasSessionCodexProviderOverride(session) ? resolveEffectiveCodexProvider(session) : 'default';
+function getSessionCodexProvider(
+  session: BridgeSession | null | undefined,
+  binding?: ChannelChat | null,
+): 'sdk' | 'pty' | 'tmux' | 'default' {
+  return hasSessionCodexProviderOverride(session) ? resolveEffectiveCodexProvider(session, binding) : 'default';
 }
 
 function describeBridgeSessionTarget(
@@ -461,9 +464,9 @@ export function listBindingSummaries(store: BridgeStore): BindingSummary[] {
       chatKind: binding.chatKind,
       chatUserId: binding.chatUserId,
       chatDisplayName: session ? getSessionName(session) : undefined,
-      mode: session ? getSessionMode(session) : 'normal',
-      codexProvider: getSessionCodexProvider(session),
-      model: resolveDisplayedModel(null, session, getGlobalStringConfig('runtime.codex.model'), ''),
+      mode: session ? getSessionMode(session, binding) : 'normal',
+      codexProvider: getSessionCodexProvider(session, binding),
+      model: resolveDisplayedModel(binding, session, getGlobalStringConfig('runtime.codex.model'), ''),
       workingDirectory: getSessionWorkingDirectory(session) || '',
       currentTargetLabel,
       currentSessionId: binding.bridgeSessionId,

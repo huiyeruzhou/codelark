@@ -67,8 +67,9 @@ export class ThreadDisplayService {
   private runtimeMetadata(
     session: ReturnType<BridgeStore['getSession']>,
     runtime: 'codex' | 'claude' = getSessionActiveRuntime(session) === 'claude' ? 'claude' : 'codex',
+    binding?: ChannelChat | null,
   ): Pick<ThreadDisplayInfo, 'reasoningEffort' | 'model'> {
-    return resolveRuntimeMetadataConfig(session, runtime);
+    return resolveRuntimeMetadataConfig(session, runtime, binding);
   }
 
   bindingThreadId(binding: ChannelChat): string {
@@ -98,7 +99,7 @@ export class ThreadDisplayService {
       fallback: getSessionDisplayName(session, sessionWorkingDirectory) || binding.bridgeSessionId.slice(0, 8),
     });
     const codexSource = codexSession ? codexSessionSource(codexSession) : undefined;
-    const runtimeMetadata = this.runtimeMetadata(session, isClaude ? 'claude' : 'codex');
+    const runtimeMetadata = this.runtimeMetadata(session, isClaude ? 'claude' : 'codex', binding);
     return {
       title: formatResolvedThreadTitle(title, options),
       threadId,

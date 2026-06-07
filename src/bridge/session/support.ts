@@ -34,8 +34,6 @@ import type { ChannelChat } from '../../domain/channel.js';
 import type { BridgeSession, BridgeSessionClaudeRuntimeState, BridgeSessionCodexRuntimeState } from '../../domain/session.js';
 import { validateWorkingDirectory } from '../../shared/security/validators.js';
 import {
-  getGlobalBooleanConfig,
-  getGlobalConfigValue,
   getGlobalStringConfig,
   getGlobalWorkspaceRoot,
 } from './global-config.js';
@@ -129,26 +127,25 @@ function hasKeys(value: object): boolean {
   return Object.keys(value).length > 0;
 }
 
-export function resolveEffectiveReasoningEffort(session: BridgeSession | null | undefined): string {
-  return normalizeStoredReasoningEffort(
-    getSessionTomlOverride<BridgeSessionCodexRuntimeState['reasoningEffort']>(session, 'runtime.codex.reasoningEffort')
-      || getGlobalStringConfig('runtime.codex.reasoningEffort'),
-  );
+export function resolveEffectiveReasoningEffort(
+  session: BridgeSession | null | undefined,
+  binding?: ChannelChat | null,
+): string {
+  return normalizeStoredReasoningEffort(scopedConfigForRuntime(binding, session).config.runtime.codex.reasoningEffort);
 }
 
-export function resolveEffectiveSandboxMode(session?: BridgeSession | null): string {
-  return normalizeSandboxMode(
-    getSessionTomlOverride<BridgeSessionCodexRuntimeState['sandboxMode']>(session, 'runtime.codex.sandboxMode')
-      || getGlobalStringConfig('runtime.codex.sandboxMode'),
-  );
+export function resolveEffectiveSandboxMode(
+  session?: BridgeSession | null,
+  binding?: ChannelChat | null,
+): string {
+  return normalizeSandboxMode(scopedConfigForRuntime(binding, session).config.runtime.codex.sandboxMode);
 }
 
-export function resolveEffectiveNetworkAccess(session?: BridgeSession | null): boolean {
-  const tomlValue = getSessionTomlOverride<boolean>(session, 'runtime.codex.networkAccess');
-  if (typeof tomlValue === 'boolean') {
-    return tomlValue;
-  }
-  return getGlobalBooleanConfig('runtime.codex.networkAccess') === true;
+export function resolveEffectiveNetworkAccess(
+  session?: BridgeSession | null,
+  binding?: ChannelChat | null,
+): boolean {
+  return scopedConfigForRuntime(binding, session).config.runtime.codex.networkAccess === true;
 }
 
 export function hasSessionCodexSandboxOverride(session?: BridgeSession | null): boolean {
@@ -193,10 +190,11 @@ export interface RuntimeMetadataConfig {
   model: string;
 }
 
-export function resolveEffectiveClaudeProvider(session?: BridgeSession | null): ClaudeProviderChoice {
-  const tomlProvider = getSessionClaudeProviderOverride(session);
-  if (tomlProvider === 'sdk' || tomlProvider === 'pty') return tomlProvider;
-  const configured = getGlobalStringConfig('runtime.claude.provider');
+export function resolveEffectiveClaudeProvider(
+  session?: BridgeSession | null,
+  binding?: ChannelChat | null,
+): ClaudeProviderChoice {
+  const configured = scopedConfigForRuntime(binding, session).config.runtime.claude.provider;
   if (configured === 'sdk' || configured === 'pty') return configured;
   return 'sdk';
 }
@@ -211,25 +209,18 @@ export function hasSessionClaudeProviderOverride(session?: BridgeSession | null)
 }
 
 export function resolveEffectiveMode(
-  _binding?: ChannelChat | null,
+  binding?: ChannelChat | null,
   session?: BridgeSession | null,
 ): 'normal' | 'yolo' {
-  const tomlMode = getSessionTomlOverride<'off' | 'on'>(session, 'runtime.codex.yoloMode');
-  const sessionMode = tomlMode === 'on'
-    ? 'yolo'
-    : tomlMode === 'off'
-      ? 'normal'
-      : undefined;
-  const globalMode = getGlobalConfigValue<'off' | 'on'>('runtime.codex.yoloMode');
-  return (sessionMode || (globalMode === 'on' ? 'yolo' : 'normal')) === 'yolo'
-    ? 'yolo'
-    : 'normal';
+  const mode = scopedConfigForRuntime(binding, session).config.runtime.codex.yoloMode;
+  return mode === 'on' || mode === 'yolo' ? 'yolo' : 'normal';
 }
 
-export function resolveEffectiveCodexProvider(session?: BridgeSession | null): SessionRuntimeCodexProvider {
-  const tomlProvider = getSessionCodexProviderOverride(session);
-  if (tomlProvider === 'sdk' || tomlProvider === 'tmux' || tomlProvider === 'pty') return tomlProvider;
-  const configured = getGlobalStringConfig('runtime.codex.provider');
+export function resolveEffectiveCodexProvider(
+  session?: BridgeSession | null,
+  binding?: ChannelChat | null,
+): SessionRuntimeCodexProvider {
+  const configured = scopedConfigForRuntime(binding, session).config.runtime.codex.provider;
   if (configured === 'sdk' || configured === 'tmux' || configured === 'pty') return configured;
   return shouldUseCodexPtyTui() ? 'pty' : shouldUseCodexTmuxTui() ? 'tmux' : 'sdk';
 }
@@ -244,7 +235,7 @@ export function hasSessionCodexProviderOverride(session?: BridgeSession | null):
 }
 
 export function resolveEffectiveSkipGitRepoCheck(): boolean {
-  return getGlobalBooleanConfig('runtime.codex.skipGitRepoCheck') === true;
+  return scopedConfigForRuntime().config.runtime.codex.skipGitRepoCheck === true;
 }
 
 export function resolveSessionRuntimeConfig(
@@ -320,17 +311,18 @@ export function resolveClaudeRuntimeConfig(session?: BridgeSession | null, bindi
 export function resolveRuntimeMetadataConfig(
   session: BridgeSession | null | undefined,
   runtime: 'codex' | 'claude' = session?.runtime?.activeRuntime === 'claude' ? 'claude' : 'codex',
+  binding?: ChannelChat | null,
 ): RuntimeMetadataConfig {
   if (runtime === 'claude') {
-    const claudeConfig = resolveClaudeRuntimeConfig(session);
+    const claudeConfig = resolveClaudeRuntimeConfig(session, binding);
     return {
       reasoningEffort: claudeConfig.reasoningEffort || 'default',
       model: claudeConfig.model || 'default',
     };
   }
   return {
-    reasoningEffort: normalizeStoredReasoningEffort(resolveEffectiveReasoningEffort(session)),
-    model: resolveDisplayedModel(null, session, getGlobalStringConfig('runtime.codex.model')),
+    reasoningEffort: normalizeStoredReasoningEffort(resolveEffectiveReasoningEffort(session, binding)),
+    model: resolveDisplayedModel(binding, session),
   };
 }
 
@@ -352,14 +344,20 @@ export function sessionCodexRuntimeOverridePatch(session: BridgeSession | null |
 }
 
 export function resolveDisplayedModel(
-  _binding: ChannelChat | null | undefined,
+  binding: ChannelChat | null | undefined,
   session: BridgeSession | null | undefined,
   configuredDefaultModel?: string | null,
   codexDefaultModel?: string | null,
 ): string {
-  return getSessionTomlOverride<string>(session, 'runtime.codex.model')
-    || configuredDefaultModel
+  const { effective, config } = scopedConfigForRuntime(binding, session);
+  const scopedModel = config.runtime.codex.model;
+  const modelSource = effective.provenance.get('runtime.codex.model')?.source;
+  if (scopedModel && (modelSource === 'session' || modelSource === 'channel' || modelSource === 'request')) {
+    return scopedModel;
+  }
+  return configuredDefaultModel
     || codexDefaultModel
+    || scopedModel
     || 'default';
 }
 
@@ -490,7 +488,7 @@ export function resetDraftSession(address: { channelType: string; chatId: string
 }
 
 export function getHistoryMessageLimit(): number {
-  const configured = getGlobalConfigValue<number>('channels[].config.historyMessageLimit');
+  const configured = scopedConfigForRuntime().config.channels[0]?.config.historyMessageLimit;
   if (configured === undefined || !Number.isFinite(configured) || configured <= 0) return 8;
   return Math.max(1, Math.min(20, configured));
 }

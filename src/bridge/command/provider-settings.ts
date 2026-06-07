@@ -99,10 +99,10 @@ export async function handleProviderCommand(options: {
         '当前 Claude Provider',
         [
           ['Runtime', 'claude'],
-          ['Provider', formatSessionClaudeProvider(session)],
+          ['Provider', formatSessionClaudeProvider(session, binding)],
           ['Claude executable', resolveClaudeRuntimeConfig(session, binding)?.executable || 'claude'],
           ['记住的 Codex BridgeSession', codexSession?.id || '-'],
-          ['记住的 Codex Provider', codexSession ? formatSessionCodexProvider(codexSession) : '-'],
+          ['记住的 Codex Provider', codexSession ? formatSessionCodexProvider(codexSession, binding) : '-'],
         ],
         [CLAUDE_PROVIDER_OPTIONS_TEXT, '发送 `/provider pty|sdk` 或 `/p pty|sdk` 切换；修改从下一轮 Claude 请求开始生效。'],
         options.markdown,
@@ -117,7 +117,7 @@ export async function handleProviderCommand(options: {
         options.markdown,
       );
     }
-    if (requestedProvider !== resolveEffectiveClaudeProvider(session)
+    if (requestedProvider !== resolveEffectiveClaudeProvider(session, binding)
       && sessionHasActiveRuntimeTurn(options.deps, session)) {
       return buildRuntimeSwitchWhileRunningResponse({
         commandLabel: '`/provider`',
@@ -147,7 +147,7 @@ export async function handleProviderCommand(options: {
       '当前 Codex Provider',
       [
         ['模式', formatSessionMode(binding, session)],
-        ['Provider', formatSessionCodexProvider(session)],
+        ['Provider', formatSessionCodexProvider(session, binding)],
       ],
       [CODEX_PROVIDER_OPTIONS_TEXT, '发送 `/provider sdk|pty|tmux` 或 `/p sdk|pty|tmux` 切换；修改从下一轮 Codex 请求开始生效。'],
       options.markdown,
@@ -162,7 +162,7 @@ export async function handleProviderCommand(options: {
       options.markdown,
     );
   }
-  const currentProvider = resolveEffectiveCodexProvider(session);
+  const currentProvider = resolveEffectiveCodexProvider(session, binding);
   if ((requestedProvider !== currentProvider || requestedProvider === 'tmux') && sessionHasActiveRuntimeTurn(options.deps, session)) {
     return buildRuntimeSwitchWhileRunningResponse({
       commandLabel: '`/provider`',

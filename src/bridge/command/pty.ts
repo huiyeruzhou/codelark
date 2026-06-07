@@ -1,4 +1,4 @@
-import type { BridgeSession } from '../../domain/index.js';
+import type { BridgeSession, ChannelChat } from '../../domain/index.js';
 import type { StructuredStreamingUiActionButton } from '../../channels/contracts.js';
 import { resolveEffectiveCodexProvider } from '../session/support.js';
 import {
@@ -34,6 +34,7 @@ interface PtyScreenMonitor {
 export interface HandlePtyScreenCommandParams {
   args: string;
   session: BridgeSession;
+  binding?: ChannelChat | null;
   markdown: boolean;
   screenMonitor?: {
     key: string;
@@ -197,7 +198,7 @@ export async function handlePtyScreenCommand(params: HandlePtyScreenCommandParam
   }
 
   const runtime = getSessionActiveRuntime(params.session) || 'codex';
-  if (runtime !== 'claude' && resolveEffectiveCodexProvider(params.session) !== 'pty') {
+  if (runtime !== 'claude' && resolveEffectiveCodexProvider(params.session, params.binding) !== 'pty') {
     return '当前会话不是 pty Provider。请先发送 `/provider pty`，或继续使用 `/tmux-screen` 查看 tmux Provider。';
   }
 

@@ -444,7 +444,7 @@ async function ensureCodexTmuxSessionForProvider(
 ): Promise<{ target: string | undefined; commands: string[]; recovered: boolean; error?: string }> {
   const { store, binding, session } = params;
   const configuredTarget = getSessionTmuxSessionName(session) || '';
-  if (resolveEffectiveCodexProvider(session) !== 'tmux') {
+  if (resolveEffectiveCodexProvider(session, binding) !== 'tmux') {
     return { target: configuredTarget || undefined, commands: [], recovered: false };
   }
 

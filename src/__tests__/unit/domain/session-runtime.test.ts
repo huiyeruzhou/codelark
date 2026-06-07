@@ -4,7 +4,17 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 
-import { getHistoryMessageLimit, getWorkspaceRoot, resolveClaudeRuntimeConfig, resolveSessionRuntimeConfig } from '../../../bridge/session/support.js';
+import {
+  getHistoryMessageLimit,
+  getWorkspaceRoot,
+  resolveClaudeRuntimeConfig,
+  resolveDisplayedModel,
+  resolveEffectiveCodexProvider,
+  resolveEffectiveNetworkAccess,
+  resolveEffectiveReasoningEffort,
+  resolveEffectiveSandboxMode,
+  resolveSessionRuntimeConfig,
+} from '../../../bridge/session/support.js';
 import { CODELARK_HOME } from '../../../configuration/paths.js';
 import {
   getSessionActiveRuntime,
@@ -320,6 +330,11 @@ reasoning_effort = "low"
     assert.equal(codex.sandboxMode, 'read-only');
     assert.equal(codex.networkAccessEnabled, false);
     assert.equal(codex.reasoningEffort, 'low');
+    assert.equal(resolveDisplayedModel(binding, session), 'session-codex');
+    assert.equal(resolveEffectiveCodexProvider(session, binding), 'pty');
+    assert.equal(resolveEffectiveSandboxMode(session, binding), 'read-only');
+    assert.equal(resolveEffectiveNetworkAccess(session, binding), false);
+    assert.equal(resolveEffectiveReasoningEffort(session, binding), 'low');
     assert.equal(claude.model, 'channel-claude');
     assert.equal(claude.provider, 'pty');
     assert.equal(claude.permissionMode, 'plan');
