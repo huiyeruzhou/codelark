@@ -5,11 +5,10 @@ import { spawn } from 'node:child_process';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 
-import { CODELARK_HOME } from '../configuration/index.js';
-import type { ChannelInstance, Config, FeishuChannelConfig } from '../configuration/index.js';
-import { configV2ToLegacyConfig } from '../configuration/legacy.js';
+import { CODELARK_HOME, normalizeFeishuSite } from '../configuration/index.js';
+import type { FeishuChannelConfig } from '../configuration/index.js';
 import { createConfigService } from '../configuration/service.js';
-import type { ConfigPatch } from '../configuration/schema.js';
+import type { ConfigPatch, ConfigV2 } from '../configuration/schema.js';
 import {
   clearStaleBridgeInstanceLock,
   readBridgeInstanceLock,
@@ -607,11 +606,27 @@ function hasConfigPatchValues(patch: ConfigPatch | undefined): boolean {
   return Object.keys(patch).length > 0;
 }
 
-function loadStartupConfig(options: ServiceConfigOverrideOptions = {}): Config {
-  return configV2ToLegacyConfig(createConfigService({
+type LocalServiceChannelConfig = Pick<FeishuChannelConfig, 'appId' | 'appSecret' | 'site'>;
+
+interface LocalServiceChannel {
+  id?: string;
+  alias?: string;
+  provider?: string;
+  enabled?: boolean;
+  createdAt?: string;
+  updatedAt?: string;
+  config?: LocalServiceChannelConfig;
+}
+
+interface LocalServiceConfig {
+  channels?: LocalServiceChannel[];
+}
+
+function loadStartupConfig(options: ServiceConfigOverrideOptions = {}): ConfigV2 {
+  return createConfigService({
     codelarkHome: CODELARK_HOME,
     ...(hasConfigPatchValues(options.cli) ? { cli: options.cli } : {}),
-  }).snapshot().config);
+  }).snapshot().config;
 }
 
 function buildProjectedConfigEnv(options: ServiceConfigOverrideOptions = {}): NodeJS.ProcessEnv {
@@ -651,32 +666,32 @@ export function buildLarkCliRuntimeEnv(): NodeJS.ProcessEnv {
   };
 }
 
-function findPrimaryFeishuChannel(config: Config): ChannelInstance | undefined {
+function findPrimaryFeishuChannel(config: LocalServiceConfig): LocalServiceChannel | undefined {
   const channels = config.channels || [];
   return channels.find((channel) => channel.provider === 'feishu' && channel.enabled !== false)
     || channels.find((channel) => channel.provider === 'feishu');
 }
 
-function getFeishuCredentials(config: Config): Required<Pick<FeishuChannelConfig, 'appId' | 'appSecret' | 'site'>> | null {
+function getFeishuCredentials(config: LocalServiceConfig): Required<Pick<FeishuChannelConfig, 'appId' | 'appSecret' | 'site'>> | null {
   const channel = findPrimaryFeishuChannel(config);
-  const feishu = channel?.config as FeishuChannelConfig | undefined;
+  const feishu = channel?.config;
   const appId = feishu?.appId?.trim();
   const appSecret = feishu?.appSecret?.trim();
   if (!appId || !appSecret) return null;
   return {
     appId,
     appSecret,
-    site: feishu?.site || 'feishu',
+    site: normalizeFeishuSite(feishu?.site),
   };
 }
 
-function isSameFeishuApp(app: { appId?: unknown; brand?: unknown } | undefined, config: Config): boolean {
+function isSameFeishuApp(app: { appId?: unknown; brand?: unknown } | undefined, config: LocalServiceConfig): boolean {
   const credentials = getFeishuCredentials(config);
   if (!credentials || !app) return false;
   return app.appId === credentials.appId && app.brand === credentials.site;
 }
 
-function writeLarkCliSourceProjection(config: Config): string | null {
+function writeLarkCliSourceProjection(config: LocalServiceConfig): string | null {
   const credentials = getFeishuCredentials(config);
   if (!credentials) return null;
   fs.mkdirSync(larkCliSourceDir, { recursive: true, mode: 0o700 });
@@ -718,7 +733,7 @@ function structuredLarkCliUsers(users: unknown): unknown[] | null {
   return structured.length > 0 ? structured : null;
 }
 
-function readTargetLarkCliApp(config: Config): {
+function readTargetLarkCliApp(config: LocalServiceConfig): {
   raw: Record<string, unknown>;
   app: Record<string, unknown>;
 } | null {
@@ -732,19 +747,19 @@ function readTargetLarkCliApp(config: Config): {
     : null;
 }
 
-function hasTargetLarkCliUsers(config: Config): boolean {
+function hasTargetLarkCliUsers(config: LocalServiceConfig): boolean {
   const target = readTargetLarkCliApp(config);
   if (!target) return false;
   return Boolean(structuredLarkCliUsers(target.app.users));
 }
 
-function hasLegacyStrictLarkCliRuntime(config: Config): boolean {
+function hasLegacyStrictLarkCliRuntime(config: LocalServiceConfig): boolean {
   const target = readTargetLarkCliApp(config);
   if (!target) return false;
   return target.app.strictMode === 'bot' || target.app.defaultAs === 'bot';
 }
 
-export function resetLegacyStrictLarkCliRuntimeForSetup(config = loadStartupConfig()): boolean {
+export function resetLegacyStrictLarkCliRuntimeForSetup(config: LocalServiceConfig = loadStartupConfig()): boolean {
   // 旧版 setup 会把私有 lark-cli workspace 绑定成 bot-only。
   // 这个策略会在 OAuth 成功后继续拒绝显式 `--as user` 命令，
   // 所以下一次交互式 setup 必须从头重建隔离 runtime。
@@ -792,7 +807,7 @@ async function runBundledLarkCli(
   });
 }
 
-export async function ensureLarkCliRuntimeConfig(config = loadStartupConfig()): Promise<{
+export async function ensureLarkCliRuntimeConfig(config: LocalServiceConfig = loadStartupConfig()): Promise<{
   ready: boolean;
   skipped: boolean;
   sourceConfigFile?: string;
@@ -869,7 +884,7 @@ export async function ensureLarkCliRuntimeConfig(config = loadStartupConfig()): 
   };
 }
 
-function describeBridgeStartupPreflightFailure(channels: ChannelInstance[] | undefined): string | null {
+function describeBridgeStartupPreflightFailure(channels: LocalServiceChannel[] | undefined): string | null {
   const configured = Array.isArray(channels) ? channels : [];
   if (configured.length === 0) {
     return '未配置任何通道实例。请先使用`codelark run`创建并保存至少一个飞书通道，然后再启动桥接服务。';
@@ -885,7 +900,7 @@ function describeBridgeStartupPreflightFailure(channels: ChannelInstance[] | und
 
 function describeBridgeActivationFailure(
   status: BridgeStatus,
-  channels: ChannelInstance[] | undefined,
+  channels: LocalServiceChannel[] | undefined,
 ): string | null {
   const statusReason = status.lastExitReason?.trim();
   if (statusReason) return statusReason;

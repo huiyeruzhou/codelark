@@ -196,8 +196,8 @@ describe('service-manager lark-cli runtime environment', () => {
 
       const config = _testOnly.loadStartupConfig();
 
-      assert.equal(config.runtime, 'claude');
-      assert.equal(config.defaultProvider, 'tmux');
+      assert.equal(config.runtime.agent, 'claude');
+      assert.equal(config.runtime.codex.provider, 'tmux');
       assert.equal(config.channels?.[0]?.config.appId, 'toml-app');
       assert.equal(config.channels?.[0]?.config.appSecret, 'toml-secret');
     } finally {
