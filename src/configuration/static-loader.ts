@@ -1,19 +1,8 @@
-import { parse } from 'smol-toml';
-import { Load } from 'config/lib/util.js';
 import { envToConfigPatch } from './env-compat.js';
 import type { ConfigSourceKind, ProvenanceMap, SourceRef } from './fields-types.js';
 import { markLayerProvenance, mergePatch, type ConfigLayer } from './merge.js';
 import { configToTomlShape, tomlToConfigPatch, type ConfigPatch } from './schema.js';
-import { writeTomlConfig, type ConfigPaths, type SourceLoadResult } from './sources.js';
-
-const nodeConfigTomlParser = {
-  parse(_filename: string, content: string): unknown {
-    return parse(content);
-  },
-  getFilesOrder(): string[] {
-    return ['toml'];
-  },
-};
+import { createNodeConfigLoader, readTomlConfig, writeTomlConfig, type ConfigPaths, type SourceLoadResult } from './sources.js';
 
 export interface StaticConfigBaseline {
   layer: ConfigLayer;
@@ -74,35 +63,15 @@ function validateStaticSource(source: ConfigSourceKind, patch: ConfigPatch): voi
 }
 
 function loadWithNodeConfig(sources: ConfigLayer[]): ConfigPatch {
-  const load = new Load({
-    configDir: '',
-    gitCrypt: true,
-    hostName: '',
-    nodeEnv: [],
-    parser: nodeConfigTomlParser as never,
-    skipConfigSources: true,
-  });
+  const load = createNodeConfigLoader();
   for (const source of sources) {
     load.addConfig(source.ref.file || source.ref.source, configToTomlShape(source.patch));
   }
   return tomlToConfigPatch(load.config);
 }
 
-function readTomlConfigWithNodeConfig(file: string): SourceLoadResult | null {
-  const load = new Load({
-    configDir: '',
-    gitCrypt: true,
-    hostName: '',
-    nodeEnv: [],
-    parser: nodeConfigTomlParser as never,
-    skipConfigSources: true,
-  });
-  const parsed = load.loadFile(file);
-  return parsed === null ? null : { file, patch: tomlToConfigPatch(parsed) };
-}
-
 function readDefaultsWithNodeConfig(file: string): SourceLoadResult {
-  const loaded = readTomlConfigWithNodeConfig(file);
+  const loaded = readTomlConfig(file);
   if (!loaded) throw new Error(`Missing defaults TOML: ${file}`);
   return loaded;
 }
@@ -124,7 +93,7 @@ export function loadStaticConfigBaseline(paths: ConfigPaths, env: NodeJS.Process
     staticLayer({ source: 'defaults', file: paths.defaultsToml }, defaults),
   ];
 
-  const home = readTomlConfigWithNodeConfig(paths.homeToml);
+  const home = readTomlConfig(paths.homeToml);
   if (home) {
     const materialized = materializeHomeChannelPatch(defaults, {}, home.patch);
     if (!patchesEqual(home.patch, materialized)) writeTomlConfig(home.file, materialized);
@@ -132,7 +101,7 @@ export function loadStaticConfigBaseline(paths: ConfigPaths, env: NodeJS.Process
   }
 
   if (paths.localToml) {
-    const local = readTomlConfigWithNodeConfig(paths.localToml);
+    const local = readTomlConfig(paths.localToml);
     if (local) sources.push(staticLayer({ source: 'local', file: local.file }, local.patch));
   }
 

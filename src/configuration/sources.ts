@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { Load } from 'config/lib/util.js';
 import { parse, stringify } from 'smol-toml';
 import { configPatchSchema, configToTomlShape, tomlToConfigPatch, type ConfigPatch } from './schema.js';
 
@@ -16,6 +17,30 @@ export interface ConfigPaths {
 export interface SourceLoadResult {
   patch: ConfigPatch;
   file: string;
+}
+
+const nodeConfigTomlParser = {
+  parse(_filename: string, content: string): unknown {
+    return parse(content);
+  },
+  getFilesOrder(): string[] {
+    return ['toml'];
+  },
+};
+
+export function createNodeConfigLoader(): InstanceType<typeof Load> {
+  return new Load({
+    configDir: '',
+    gitCrypt: true,
+    hostName: '',
+    nodeEnv: [],
+    parser: nodeConfigTomlParser as never,
+    skipConfigSources: true,
+  });
+}
+
+export function loadTomlFileWithNodeConfig(file: string): unknown | null {
+  return createNodeConfigLoader().loadFile(file);
 }
 
 export function defaultCodelarkHome(): string {
@@ -46,13 +71,8 @@ export function findLocalConfig(cwd: string | undefined): string | undefined {
 }
 
 export function readTomlConfig(file: string): SourceLoadResult | null {
-  try {
-    const content = fs.readFileSync(file, 'utf-8');
-    return { file, patch: tomlToConfigPatch(parse(content)) };
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
-    throw error;
-  }
+  const parsed = loadTomlFileWithNodeConfig(file);
+  return parsed === null ? null : { file, patch: tomlToConfigPatch(parsed) };
 }
 
 export function readDefaultsConfig(file: string): SourceLoadResult {
