@@ -1,6 +1,8 @@
 import '../../../setup/test-setup.js';
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
 
 import {
   processMessage,
@@ -24,6 +26,7 @@ import {
 } from '../../../helpers/bridge/test-bridge-utils.js';
 import type { BridgeStore } from '../../../../domain/index.js';
 import type { LLMProvider, StreamChatParams } from '../../../../runtime/contracts.js';
+import { CODELARK_HOME } from '../../../../configuration/index.js';
 
 function toolOnlyLlm(): LLMProvider {
   return {
@@ -160,6 +163,8 @@ describe('buildInlineToolBlock', () => {
 describe('interactive-turn sdk-conversation-engine tool expansion', () => {
   it('routes active Claude runtime turns with Claude-specific settings', async () => {
     resetBridgeTestState();
+    const configTomlPath = path.join(CODELARK_HOME, 'config.toml');
+    const previousToml = fs.existsSync(configTomlPath) ? fs.readFileSync(configTomlPath, 'utf-8') : null;
     const calls: StreamChatParams[] = [];
     const llm: LLMProvider = {
       streamChat(params: StreamChatParams): ReadableStream<string> {
@@ -173,53 +178,63 @@ describe('interactive-turn sdk-conversation-engine tool expansion', () => {
         });
       },
     };
-    const store = initBridgeTestContext({
-      settings: makeBridgeSettings({
-        bridge_claude_executable: 'ccr',
-        bridge_claude_default_model: 'claude-sonnet-test',
-        bridge_claude_permission_mode: 'plan',
-      }),
-      llm,
-    });
-    const session = store.createSession('claude-runtime-test', 'codex-model', undefined, '', 'normal');
-    store.updateSession(session.id, {
-      runtime: {
-        activeRuntime: 'claude',
-      },
-    });
-    const binding = store.upsertChannelChat({
-      channelType: 'feishu',
-      chatId: 'chat-claude-runtime',
-      bridgeSessionId: session.id,
-    });
+    try {
+      fs.mkdirSync(CODELARK_HOME, { recursive: true });
+      fs.writeFileSync(configTomlPath, `
+schema_version = 2
 
-    const result = await processMessage(
-      binding,
-      'hello claude',
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      createTestSdkConversationRuntime(store, llm),
-    );
+[runtime.claude]
+executable = "ccr"
+model = "claude-sonnet-test"
+permission_mode = "plan"
+`);
+      const store = initBridgeTestContext({
+        settings: makeBridgeSettings(),
+        llm,
+      });
+      const session = store.createSession('claude-runtime-test', 'codex-model', undefined, '', 'normal');
+      store.updateSession(session.id, {
+        runtime: {
+          activeRuntime: 'claude',
+        },
+      });
+      const binding = store.upsertChannelChat({
+        channelType: 'feishu',
+        chatId: 'chat-claude-runtime',
+        bridgeSessionId: session.id,
+      });
 
-    assert.equal(result.responseText, 'claude reply');
-    assert.equal(calls.length, 1);
-    assert.equal(calls[0]?.runtime, 'claude');
-    assert.equal(calls[0]?.claudeExecutable, 'ccr');
-    assert.equal(calls[0]?.claudeSessionId, undefined);
-    assert.equal(calls[0]?.model, 'claude-sonnet-test');
-    assert.equal(calls[0]?.claudePermissionMode, 'plan');
-    assert.equal(calls[0]?.codexProvider, 'sdk');
-    assert.equal(calls[0]?.systemPrompt, undefined);
-    const updatedSession = store.getSession(session.id);
-    assert.equal(updatedSession?.runtime?.claude?.sessionId, 'claude-session-1');
-    assert.equal(updatedSession?.runtime?.codex?.threadId, undefined);
+      const result = await processMessage(
+        binding,
+        'hello claude',
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        createTestSdkConversationRuntime(store, llm),
+      );
+
+      assert.equal(result.responseText, 'claude reply');
+      assert.equal(calls.length, 1);
+      assert.equal(calls[0]?.runtime, 'claude');
+      assert.equal(calls[0]?.claudeExecutable, 'ccr');
+      assert.equal(calls[0]?.claudeSessionId, undefined);
+      assert.equal(calls[0]?.model, 'claude-sonnet-test');
+      assert.equal(calls[0]?.claudePermissionMode, 'plan');
+      assert.equal(calls[0]?.codexProvider, 'sdk');
+      assert.equal(calls[0]?.systemPrompt, undefined);
+      const updatedSession = store.getSession(session.id);
+      assert.equal(updatedSession?.runtime?.claude?.sessionId, 'claude-session-1');
+      assert.equal(updatedSession?.runtime?.codex?.threadId, undefined);
+    } finally {
+      if (previousToml === null) fs.rmSync(configTomlPath, { force: true });
+      else fs.writeFileSync(configTomlPath, previousToml, 'utf-8');
+    }
   });
 
   it('passes only the configured session system prompt to SDK providers', async () => {

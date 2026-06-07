@@ -4,7 +4,6 @@ import {
 } from '../../configuration/index.js';
 import type { ConfigPath } from '../../configuration/fields-types.js';
 import { createConfigService } from '../../configuration/service.js';
-import { getBridgeContext } from '../host/context.js';
 
 export interface LegacySettingReader {
   getSetting(key: string): string | null | undefined;
@@ -22,36 +21,18 @@ export function parseLegacyBoolean(value: string | null | undefined): boolean | 
   return undefined;
 }
 
-function readLegacySetting(key: string | undefined, options?: GlobalConfigFallbackOptions): string {
-  if (!key) return '';
-  const explicit = options?.store?.getSetting(key);
-  if (explicit) return explicit;
-  try {
-    return getBridgeContext().store.getSetting(key) || '';
-  } catch {
-    return '';
-  }
-}
-
 export function getGlobalConfigValue<T>(
   path: ConfigPath,
-  legacySettingKey: string | undefined,
-  parseLegacy: (value: string) => T | undefined,
-  options?: GlobalConfigFallbackOptions,
+  _legacySettingKey: string | undefined,
+  _parseLegacy: (value: string) => T | undefined,
+  _options?: GlobalConfigFallbackOptions,
 ): T | undefined {
   try {
     const resolved = createConfigService({ migrate: false }).resolve(path);
-    if (resolved.source !== 'defaults') return resolved.value as T;
-    const legacy = readLegacySetting(legacySettingKey, options);
-    if (legacy) {
-      const parsed = parseLegacy(legacy);
-      if (parsed !== undefined) return parsed;
-    }
     return resolved.value as T;
   } catch (error) {
     console.error(`[bridge-manager] Failed to resolve global TOML config ${path}:`, error);
-    const legacy = readLegacySetting(legacySettingKey, options);
-    return legacy ? parseLegacy(legacy) : undefined;
+    return undefined;
   }
 }
 

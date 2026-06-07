@@ -44,6 +44,11 @@ interface ControlledLlmCall extends RecordedLlmCall {
   controller: ReadableStreamDefaultController<string>;
 }
 
+function writeHomeConfigToml(content: string): void {
+  fs.mkdirSync(CODELARK_HOME, { recursive: true });
+  fs.writeFileSync(path.join(CODELARK_HOME, 'config.toml'), content, 'utf-8');
+}
+
 function writeClaudeJsonlFixture(params: {
   homeDir: string;
   cwd: string;
@@ -1211,6 +1216,12 @@ describe('bridge command e2e', () => {
   });
 
   it('starts tmux provider with current permissions and routes tmux-provider messages through the bridge entrypoint', async () => {
+    writeHomeConfigToml(`
+schema_version = 2
+
+[runtime.codex]
+model = "test-model"
+`);
     const store = initBridgeTestContext({
       dynamicSettings: true,
       settings: makeBridgeSettings(),
@@ -1376,10 +1387,16 @@ describe('bridge command e2e', () => {
   });
 
   it('does not let the Codex tmux provider intercept plain messages after switching to Claude runtime', async () => {
+    writeHomeConfigToml(`
+schema_version = 2
+
+[runtime.codex]
+provider = "tmux"
+`);
     const calls: RecordedLlmCall[] = [];
     const store = initBridgeTestContext({
       dynamicSettings: true,
-      settings: makeBridgeSettings({ bridge_default_provider: 'tmux' }),
+      settings: makeBridgeSettings(),
       llm: createRecordingLlm(calls),
     });
     const adapter = new RecordingAdapter();
@@ -2536,9 +2553,15 @@ describe('bridge command e2e', () => {
   });
 
   it('renders the effective default provider in command echoes through the bridge entrypoint', async () => {
+    writeHomeConfigToml(`
+schema_version = 2
+
+[runtime.codex]
+provider = "tmux"
+`);
     const store = initBridgeTestContext({
       dynamicSettings: true,
-      settings: makeBridgeSettings({ bridge_default_provider: 'tmux' }),
+      settings: makeBridgeSettings(),
     });
     const adapter = new RecordingAdapter();
     const address = { channelType: 'feishu', chatId: 'chat-runtime-default-provider-e2e' } as const;

@@ -42,6 +42,17 @@ import { writeCodexSessionJsonlFixture } from '../../../helpers/bridge/test-brid
 import { getClaudeProjectDir, isArchivedClaudeSession } from '../../../../runtime/claude/session-jsonl.js';
 
 const DATA_DIR = path.join(CODELARK_HOME, 'data');
+const CONFIG_TOML_PATH = path.join(CODELARK_HOME, 'config.toml');
+
+function writeHomeConfigToml(content: string): () => void {
+  const previous = fs.existsSync(CONFIG_TOML_PATH) ? fs.readFileSync(CONFIG_TOML_PATH, 'utf-8') : null;
+  fs.mkdirSync(CODELARK_HOME, { recursive: true });
+  fs.writeFileSync(CONFIG_TOML_PATH, content, 'utf-8');
+  return () => {
+    if (previous === null) fs.rmSync(CONFIG_TOML_PATH, { force: true });
+    else fs.writeFileSync(CONFIG_TOML_PATH, previous, 'utf-8');
+  };
+}
 
 function writeClaudeJsonlFixture(params: {
   homeDir: string;
@@ -291,41 +302,58 @@ class StartupNoticeAdapter extends BaseChannelAdapter {
 describe('bridge-manager resolveNewWorkingDirectory', () => {
   beforeEach(() => {
     fs.rmSync(DATA_DIR, { recursive: true, force: true });
+    fs.rmSync(CONFIG_TOML_PATH, { force: true });
   });
 
   it('resolves a relative project name inside the configured workspace root', () => {
-    const settings = makeSettings();
-    settings.set('bridge_default_workspace_root', 'D:\\workspace');
-    const store = new JsonFileStore(settings);
-    initBridgeContext({
-      store,
-      llm: noopLlm,
-      permissions: noopPermissions,
-      lifecycle: noopLifecycle,
-    });
+    const restore = writeHomeConfigToml(`
+schema_version = 2
 
-    const resolved = _testOnly.resolveNewWorkingDirectory('proj1');
-    assert.deepEqual(resolved, {
-      ok: true,
-      workDir: path.resolve('D:\\workspace', 'proj1'),
-    });
+[bridge]
+default_workspace = 'D:\\workspace'
+`);
+    try {
+      const store = new JsonFileStore(makeSettings());
+      initBridgeContext({
+        store,
+        llm: noopLlm,
+        permissions: noopPermissions,
+        lifecycle: noopLifecycle,
+      });
+
+      const resolved = _testOnly.resolveNewWorkingDirectory('proj1');
+      assert.deepEqual(resolved, {
+        ok: true,
+        workDir: path.resolve('D:\\workspace', 'proj1'),
+      });
+    } finally {
+      restore();
+    }
   });
 
   it('rejects relative paths that escape the configured workspace root', () => {
-    const settings = makeSettings();
-    settings.set('bridge_default_workspace_root', 'D:\\workspace');
-    const store = new JsonFileStore(settings);
-    initBridgeContext({
-      store,
-      llm: noopLlm,
-      permissions: noopPermissions,
-      lifecycle: noopLifecycle,
-    });
+    const restore = writeHomeConfigToml(`
+schema_version = 2
 
-    const resolved = _testOnly.resolveNewWorkingDirectory('..\\evil');
-    assert.equal(resolved.ok, false);
-    if (!resolved.ok) {
-      assert.match(resolved.message, /不能使用 \.\.|越界/);
+[bridge]
+default_workspace = 'D:\\workspace'
+`);
+    try {
+      const store = new JsonFileStore(makeSettings());
+      initBridgeContext({
+        store,
+        llm: noopLlm,
+        permissions: noopPermissions,
+        lifecycle: noopLifecycle,
+      });
+
+      const resolved = _testOnly.resolveNewWorkingDirectory('..\\evil');
+      assert.equal(resolved.ok, false);
+      if (!resolved.ok) {
+        assert.match(resolved.message, /不能使用 \.\.|越界/);
+      }
+    } finally {
+      restore();
     }
   });
 
@@ -373,21 +401,29 @@ describe('bridge-manager resolveNewWorkingDirectory', () => {
   });
 
   it('treats dot-slash /new arguments as relative paths', () => {
-    const settings = makeSettings();
-    settings.set('bridge_default_workspace_root', 'D:\\workspace');
-    const store = new JsonFileStore(settings);
-    initBridgeContext({
-      store,
-      llm: noopLlm,
-      permissions: noopPermissions,
-      lifecycle: noopLifecycle,
-    });
+    const restore = writeHomeConfigToml(`
+schema_version = 2
 
-    const resolved = _testOnly.resolveNewWorkingDirectory('./hi');
-    assert.deepEqual(resolved, {
-      ok: true,
-      workDir: path.resolve('D:\\workspace', 'hi'),
-    });
+[bridge]
+default_workspace = 'D:\\workspace'
+`);
+    try {
+      const store = new JsonFileStore(makeSettings());
+      initBridgeContext({
+        store,
+        llm: noopLlm,
+        permissions: noopPermissions,
+        lifecycle: noopLifecycle,
+      });
+
+      const resolved = _testOnly.resolveNewWorkingDirectory('./hi');
+      assert.deepEqual(resolved, {
+        ok: true,
+        workDir: path.resolve('D:\\workspace', 'hi'),
+      });
+    } finally {
+      restore();
+    }
   });
 
   it('reuses the current formal session directory when /new has no args', () => {
@@ -418,21 +454,29 @@ describe('bridge-manager resolveNewWorkingDirectory', () => {
   });
 
   it('reuses the global default directory when /new has no args and the current chat is not bound', () => {
-    const settings = makeSettings();
-    settings.set('bridge_default_workspace_root', 'D:\\workspace');
-    const store = new JsonFileStore(settings);
-    initBridgeContext({
-      store,
-      llm: noopLlm,
-      permissions: noopPermissions,
-      lifecycle: noopLifecycle,
-    });
+    const restore = writeHomeConfigToml(`
+schema_version = 2
 
-    const resolved = _testOnly.resolveNewSessionWorkingDirectory('', null, null);
-    assert.deepEqual(resolved, {
-      ok: true,
-      workDir: path.resolve('D:\\workspace'),
-    });
+[bridge]
+default_workspace = 'D:\\workspace'
+`);
+    try {
+      const store = new JsonFileStore(makeSettings());
+      initBridgeContext({
+        store,
+        llm: noopLlm,
+        permissions: noopPermissions,
+        lifecycle: noopLifecycle,
+      });
+
+      const resolved = _testOnly.resolveNewSessionWorkingDirectory('', null, null);
+      assert.deepEqual(resolved, {
+        ok: true,
+        workDir: path.resolve('D:\\workspace'),
+      });
+    } finally {
+      restore();
+    }
   });
 
   it('reuses the current draft session directory when /new has no args', () => {

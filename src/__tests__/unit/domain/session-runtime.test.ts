@@ -40,6 +40,8 @@ import {
 import type { BridgeSession } from '../../../domain/index.js';
 import { initBridgeTestContext } from '../../helpers/bridge/test-bridge-utils.js';
 
+const configTomlPath = path.join(CODELARK_HOME, 'config.toml');
+
 describe('BridgeSession runtime accessors', () => {
   it('keeps Claude and Codex runtime containers mutually exclusive', () => {
     const session = materializeBridgeSessionRuntime({
@@ -80,35 +82,44 @@ describe('BridgeSession runtime accessors', () => {
   });
 
   it('resolves Claude runtime config from Claude-specific provider state', () => {
-    initBridgeTestContext({
-      settings: new Map([
-        ['bridge_claude_provider', 'sdk'],
-        ['bridge_claude_executable', 'ccr'],
-        ['bridge_claude_default_model', 'claude-global'],
-        ['bridge_claude_permission_mode', 'default'],
-      ]),
-    });
+    const previousToml = fs.existsSync(configTomlPath) ? fs.readFileSync(configTomlPath, 'utf-8') : null;
+    try {
+      fs.mkdirSync(CODELARK_HOME, { recursive: true });
+      fs.writeFileSync(configTomlPath, `
+schema_version = 2
 
-    const session: BridgeSession = {
-      id: 'session-claude-runtime-config',
-      runtime: {
-        activeRuntime: 'claude',
-        claude: {
-          provider: 'pty',
-          model: 'claude-session',
-          permissionMode: 'plan',
-          reasoningEffort: 'high',
+[runtime.claude]
+provider = "sdk"
+executable = "ccr"
+model = "claude-global"
+permission_mode = "default"
+`);
+      initBridgeTestContext({ settings: new Map() });
+
+      const session: BridgeSession = {
+        id: 'session-claude-runtime-config',
+        runtime: {
+          activeRuntime: 'claude',
+          claude: {
+            provider: 'pty',
+            model: 'claude-session',
+            permissionMode: 'plan',
+            reasoningEffort: 'high',
+          },
         },
-      },
-    };
+      };
 
-    const resolved = resolveClaudeRuntimeConfig(session);
+      const resolved = resolveClaudeRuntimeConfig(session);
 
-    assert.equal(resolved.provider, 'pty');
-    assert.equal(resolved.executable, 'ccr');
-    assert.equal(resolved.model, 'claude-session');
-    assert.equal(resolved.permissionMode, 'plan');
-    assert.equal(resolved.reasoningEffort, 'high');
+      assert.equal(resolved.provider, 'pty');
+      assert.equal(resolved.executable, 'ccr');
+      assert.equal(resolved.model, 'claude-session');
+      assert.equal(resolved.permissionMode, 'plan');
+      assert.equal(resolved.reasoningEffort, 'high');
+    } finally {
+      if (previousToml === null) fs.rmSync(configTomlPath, { force: true });
+      else fs.writeFileSync(configTomlPath, previousToml, 'utf-8');
+    }
   });
 
   it('defaults Claude runtime provider to sdk when no session or global provider is configured', () => {
@@ -165,7 +176,6 @@ describe('BridgeSession runtime accessors', () => {
   });
 
   it('resolves global runtime fallback from home TOML before legacy store settings', () => {
-    const configTomlPath = path.join(CODELARK_HOME, 'config.toml');
     const previousToml = fs.existsSync(configTomlPath) ? fs.readFileSync(configTomlPath, 'utf-8') : null;
     try {
       fs.mkdirSync(CODELARK_HOME, { recursive: true });
@@ -243,6 +253,40 @@ require_mention = false
       assert.equal(claude.permissionMode, 'plan');
       assert.equal(claude.idleTimeoutMinutes, 17);
       assert.equal(getHistoryMessageLimit(), 13);
+    } finally {
+      if (previousToml === null) fs.rmSync(configTomlPath, { force: true });
+      else fs.writeFileSync(configTomlPath, previousToml, 'utf-8');
+    }
+  });
+
+  it('does not read global runtime fallback from legacy store settings', () => {
+    const previousToml = fs.existsSync(configTomlPath) ? fs.readFileSync(configTomlPath, 'utf-8') : null;
+    try {
+      fs.rmSync(configTomlPath, { force: true });
+      initBridgeTestContext({
+        settings: new Map([
+          ['bridge_default_workspace_root', '/tmp/store-workspace'],
+          ['bridge_default_model', 'store-codex'],
+          ['bridge_default_provider', 'tmux'],
+          ['bridge_codex_sandbox_mode', 'danger-full-access'],
+          ['bridge_codex_network_access', 'false'],
+          ['bridge_codex_reasoning_effort', 'low'],
+          ['bridge_claude_executable', 'ccr'],
+          ['bridge_history_message_limit', '4'],
+        ]),
+      });
+
+      const codex = resolveSessionRuntimeConfig(null, { id: 'session-global-store-ignored', runtime: {} } as BridgeSession);
+      const claude = resolveClaudeRuntimeConfig({ id: 'session-global-store-ignored-claude', runtime: { activeRuntime: 'claude' } });
+
+      assert.equal(getWorkspaceRoot(), process.env.HOME);
+      assert.equal(codex.model, '');
+      assert.equal(codex.codexProvider, 'sdk');
+      assert.equal(codex.sandboxMode, 'workspace-write');
+      assert.equal(codex.networkAccessEnabled, true);
+      assert.equal(codex.reasoningEffort, 'medium');
+      assert.equal(claude.executable, 'claude');
+      assert.equal(getHistoryMessageLimit(), 8);
     } finally {
       if (previousToml === null) fs.rmSync(configTomlPath, { force: true });
       else fs.writeFileSync(configTomlPath, previousToml, 'utf-8');
