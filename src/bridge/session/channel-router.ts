@@ -11,7 +11,6 @@ import { SessionRegistryService } from '../session/registry.js';
 import { getOrCreateDraftSession } from '../session/internal-sessions.js';
 import { recordBindingChange } from '../session/binding-audit.js';
 import { createConfigService, type ConfigScope } from '../../configuration/service.js';
-import { getEffectiveConfigSource } from '../../configuration/source-values.js';
 import { expandHomePath } from '../../configuration/paths.js';
 import type { ConfigV2 } from '../../configuration/schema.js';
 
@@ -35,7 +34,7 @@ function codexModeFromConfig(config: ConfigV2): 'normal' | 'yolo' {
 function resolveChannelSessionDefaults(address: ChannelAddress): ChannelSessionDefaults {
   const effective = createConfigService({ migrate: false }).snapshot(channelScopeForAddress(address));
   const config = effective.config;
-  const workspaceSource = getEffectiveConfigSource(effective, 'session.workspace');
+  const workspaceSource = effective.provenance.get('session.workspace')?.source;
   const workspaceValue = workspaceSource && workspaceSource !== 'defaults'
     ? config.session.workspace
     : config.bridge.defaultWorkspace;

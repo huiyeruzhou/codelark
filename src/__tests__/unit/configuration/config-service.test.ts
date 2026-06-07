@@ -5,13 +5,6 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { createConfigService } from '../../../configuration/service.js';
-import {
-  configSourceRank,
-  getConfigValueFromSource,
-  getEffectiveConfigSource,
-  getSessionConfigOverride,
-  isEffectiveConfigSource,
-} from '../../../configuration/source-values.js';
 import { resolveConfigPaths } from '../../../configuration/sources.js';
 import { loadStaticConfigBaseline } from '../../../configuration/static-loader.js';
 
@@ -163,48 +156,6 @@ sandbox_mode = "danger-full-access"
     } finally {
       fs.rmSync(home, { recursive: true, force: true });
       fs.rmSync(cwd, { recursive: true, force: true });
-    }
-  });
-
-  it('reads source-specific override values without treating fallback layers as session config', () => {
-    const home = tempHome();
-    try {
-      writeFile(path.join(home, 'config.toml'), `
-[runtime.codex]
-model = "home-model"
-reasoning_effort = "low"
-`);
-      writeFile(path.join(home, 'config', 'sessions', 's-1.toml'), `
-[runtime.codex]
-reasoning_effort = "high"
-`);
-
-      const service = createConfigService({
-        codelarkHome: home,
-        env: { CODELARK_CODEX_MODEL: 'env-model' },
-        migrate: false,
-      });
-      const scope = { kind: 'session', sessionId: 's-1' } as const;
-
-      assert.equal(
-        getConfigValueFromSource<string>(service, 'runtime.codex.model', 'session', scope),
-        undefined,
-      );
-      assert.equal(
-        getSessionConfigOverride<string>('s-1', 'runtime.codex.model', service),
-        undefined,
-      );
-      assert.equal(
-        getSessionConfigOverride<string>('s-1', 'runtime.codex.reasoningEffort', service),
-        'high',
-      );
-      assert.equal(service.get('runtime.codex.model', scope), 'env-model');
-      const effective = service.snapshot(scope);
-      assert.equal(getEffectiveConfigSource(effective, 'runtime.codex.reasoningEffort'), 'session');
-      assert.equal(isEffectiveConfigSource(effective, 'runtime.codex.reasoningEffort', ['session']), true);
-      assert.equal(configSourceRank('session') > configSourceRank('env'), true);
-    } finally {
-      fs.rmSync(home, { recursive: true, force: true });
     }
   });
 

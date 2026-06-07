@@ -9,7 +9,6 @@ import {
 } from '../../runtime/codex/session-index.js';
 import { normalizeClaudeExecutable, type ClaudeExecutable, type ClaudePermissionMode, type ClaudeProviderChoice } from '../../configuration/runtime-types.js';
 import { createConfigService, type ConfigScope, type EffectiveConfig } from '../../configuration/service.js';
-import { configSourceRank, getEffectiveConfigSource, getSessionConfigOverride, isEffectiveConfigSource } from '../../configuration/source-values.js';
 import type { ConfigPatch } from '../../configuration/schema.js';
 import type { ConfigV2 } from '../../configuration/schema.js';
 import type { ConfigPath } from '../../configuration/fields-types.js';
@@ -71,23 +70,15 @@ export function getWorkspaceRoot(): string {
 }
 
 function getSessionTomlOverride<T>(session: BridgeSession | null | undefined, path: ConfigPath): T | undefined {
+  if (!session?.id) return undefined;
   try {
-    return getSessionConfigOverride<T>(session?.id, path);
+    const resolved = createConfigService({ migrate: false }).resolve(path, {
+      kind: 'session',
+      sessionId: session.id,
+    });
+    return resolved.source === 'session' ? resolved.value as T : undefined;
   } catch (error) {
-    console.error(`[bridge-manager] Failed to resolve session TOML config ${path} for ${session?.id || 'unknown'}:`, error);
-    return undefined;
-  }
-}
-
-function getSessionTomlOverrideWithService<T>(
-  session: BridgeSession | null | undefined,
-  path: ConfigPath,
-  service: ReturnType<typeof createConfigService>,
-): T | undefined {
-  try {
-    return getSessionConfigOverride<T>(session?.id, path, service);
-  } catch (error) {
-    console.error(`[bridge-manager] Failed to resolve session TOML config ${path} for ${session?.id || 'unknown'}:`, error);
+    console.error(`[bridge-manager] Failed to resolve session TOML config ${path} for ${session.id}:`, error);
     return undefined;
   }
 }
@@ -115,6 +106,20 @@ function scopedConfigForRuntime(
     console.error('[bridge-manager] Failed to resolve scoped runtime config:', error);
     const effective = createConfigService({ migrate: false }).snapshot();
     return { effective, config: effective.config, scope: undefined };
+  }
+}
+
+function sourceRank(source: string | undefined): number {
+  switch (source) {
+    case 'request': return 7;
+    case 'session': return 6;
+    case 'channel': return 5;
+    case 'cli': return 4;
+    case 'env': return 3;
+    case 'local': return 2;
+    case 'home': return 1;
+    case 'defaults':
+    default: return 0;
   }
 }
 
@@ -281,8 +286,8 @@ function normalizeClaudeReasoningEffort(value: string | null | undefined): Bridg
 export function resolveClaudeRuntimeConfig(session?: BridgeSession | null, binding?: ChannelChat | null): ClaudeRuntimeConfig {
   const { effective, config } = scopedConfigForRuntime(binding, session);
   const permissionMode = normalizeClaudePermissionMode(config.runtime.claude.permissionMode);
-  const permissionRank = configSourceRank(getEffectiveConfigSource(effective, 'runtime.claude.permissionMode'));
-  const yoloRank = configSourceRank(getEffectiveConfigSource(effective, 'runtime.claude.yoloMode'));
+  const permissionRank = sourceRank(effective.provenance.get('runtime.claude.permissionMode')?.source);
+  const yoloRank = sourceRank(effective.provenance.get('runtime.claude.yoloMode')?.source);
   const yoloPermissionMode = config.runtime.claude.yoloMode === 'on'
     ? 'bypassPermissions'
     : config.runtime.claude.yoloMode === 'off'
@@ -322,20 +327,18 @@ export function resolveRuntimeMetadataConfig(
 }
 
 export function sessionCodexRuntimeOverridePatch(session: BridgeSession | null | undefined): ConfigPatch {
-  const service = createConfigService({ migrate: false });
-  const getOverride = <T>(path: ConfigPath): T | undefined => getSessionTomlOverrideWithService<T>(session, path, service);
   const codex: NonNullable<NonNullable<ConfigPatch['runtime']>['codex']> = {};
-  const model = getOverride<string>('runtime.codex.model');
+  const model = getSessionTomlOverride<string>(session, 'runtime.codex.model');
   if (model !== undefined) codex.model = model;
-  const yoloMode = getOverride<'off' | 'on' | 'yolo'>('runtime.codex.yoloMode');
+  const yoloMode = getSessionTomlOverride<'off' | 'on' | 'yolo'>(session, 'runtime.codex.yoloMode');
   if (yoloMode !== undefined) codex.yoloMode = yoloMode;
-  const provider = getOverride<SessionRuntimeCodexProvider>('runtime.codex.provider');
-  if (provider === 'sdk' || provider === 'tmux' || provider === 'pty') codex.provider = provider;
-  const sandboxMode = getOverride<BridgeSessionCodexRuntimeState['sandboxMode']>('runtime.codex.sandboxMode');
+  const provider = getSessionCodexProviderOverride(session);
+  if (provider !== undefined) codex.provider = provider;
+  const sandboxMode = getSessionTomlOverride<BridgeSessionCodexRuntimeState['sandboxMode']>(session, 'runtime.codex.sandboxMode');
   if (sandboxMode !== undefined) codex.sandboxMode = sandboxMode;
-  const networkAccess = getOverride<boolean>('runtime.codex.networkAccess');
+  const networkAccess = getSessionTomlOverride<boolean>(session, 'runtime.codex.networkAccess');
   if (networkAccess !== undefined) codex.networkAccess = networkAccess;
-  const reasoningEffort = getOverride<BridgeSessionCodexRuntimeState['reasoningEffort']>('runtime.codex.reasoningEffort');
+  const reasoningEffort = getSessionTomlOverride<BridgeSessionCodexRuntimeState['reasoningEffort']>(session, 'runtime.codex.reasoningEffort');
   if (reasoningEffort !== undefined) codex.reasoningEffort = reasoningEffort;
   return hasKeys(codex) ? { runtime: { codex } } : {};
 }
@@ -348,7 +351,8 @@ export function resolveDisplayedModel(
 ): string {
   const { effective, config } = scopedConfigForRuntime(binding, session);
   const scopedModel = config.runtime.codex.model;
-  if (scopedModel && isEffectiveConfigSource(effective, 'runtime.codex.model', ['session', 'channel', 'request'])) {
+  const modelSource = effective.provenance.get('runtime.codex.model')?.source;
+  if (scopedModel && (modelSource === 'session' || modelSource === 'channel' || modelSource === 'request')) {
     return scopedModel;
   }
   return configuredDefaultModel

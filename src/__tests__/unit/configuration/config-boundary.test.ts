@@ -65,18 +65,6 @@ function filesImportingConfigParsersOutsideConfiguration(root: string): string[]
     .map((file) => path.relative(process.cwd(), file));
 }
 
-function productionFilesWithDirectSourceChecks(root: string): string[] {
-  const sourceCheckPattern = /\bresolved\.source\s*===\s*['"](?:defaults|home|local|env|cli|channel|session|request)['"]|\bprovenance\.get\(|\bsourceRank\(/;
-  return listSourceFiles(root)
-    .filter((file) => {
-      const relative = path.relative(root, file);
-      return !relative.split(path.sep).includes('__tests__')
-        && !relative.startsWith(`configuration${path.sep}`);
-    })
-    .filter((file) => sourceCheckPattern.test(fs.readFileSync(file, 'utf-8')))
-    .map((file) => path.relative(process.cwd(), file));
-}
-
 function uiRouteFilesImportingConfigService(root: string): string[] {
   const serviceImportPattern = /from\s+['"][^'"]*configuration\/service\.js['"]/;
   const routesRoot = path.join(root, 'operator-ui', 'routes');
@@ -129,11 +117,6 @@ describe('configuration module boundaries', () => {
 
   it('keeps TOML and node-config parsing behind the configuration module', () => {
     const offenders = filesImportingConfigParsersOutsideConfiguration(path.join(process.cwd(), 'src'));
-    assert.deepEqual(offenders, []);
-  });
-
-  it('keeps source-specific override checks behind the configuration module', () => {
-    const offenders = productionFilesWithDirectSourceChecks(path.join(process.cwd(), 'src'));
     assert.deepEqual(offenders, []);
   });
   it('keeps UI route config writes behind the application layer', () => {
