@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { inspect } from 'node:util';
 import pino, { type DestinationStream, type Logger } from 'pino';
-import { CODELARK_HOME } from '../configuration/index.js';
+import { CODELARK_HOME } from '../configuration/paths.js';
 
 const MASK_PATTERNS: RegExp[] = [
   /(?:token|secret|password|api_key)["']?\s*[:=]\s*["']?([^\s"',]+)/gi,

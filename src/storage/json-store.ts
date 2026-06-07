@@ -25,7 +25,7 @@ import type {
   BridgeSessionUpdate,
 } from '../domain/session.js';
 import type { BridgeApiProvider } from '../runtime/contracts.js';
-import { CODELARK_HOME } from '../configuration/index.js';
+import { CODELARK_HOME } from '../configuration/paths.js';
 import { loadRuntimeSettings } from '../configuration/runtime-settings-projection.js';
 import { createConfigService } from '../configuration/service.js';
 import { runStartupStorageMigrations } from './migrations.js';

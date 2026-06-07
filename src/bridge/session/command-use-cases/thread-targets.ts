@@ -1,4 +1,4 @@
-import { DEFAULT_WORKSPACE_ROOT } from '../../../configuration/index.js';
+import { DEFAULT_WORKSPACE_ROOT } from '../../../configuration/paths.js';
 import type { BridgeSession, BridgeStore, ChannelChat, InboundMessage, OutboundRichCard } from '../../../domain/index.js';
 import {
   getBridgeSessionCodexThreadId,

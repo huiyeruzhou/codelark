@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import net from 'node:net';
 import path from 'node:path';
 
-import { CODELARK_HOME } from '../configuration/index.js';
+import { CODELARK_HOME } from '../configuration/paths.js';
 import { loadRuntimeSettings } from '../configuration/runtime-settings-projection.js';
 import { createConfigService } from '../configuration/service.js';
 import type { ConfigV2 } from '../configuration/schema.js';

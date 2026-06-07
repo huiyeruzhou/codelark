@@ -1,9 +1,9 @@
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Load } from 'config/lib/util.js';
 import { parse, stringify } from 'smol-toml';
+import { DEFAULT_CODELARK_HOME } from './paths.js';
 import { configPatchSchema, configToTomlShape, tomlToConfigPatch, type ConfigPatch } from './schema.js';
 
 export interface ConfigPaths {
@@ -44,7 +44,7 @@ export function loadTomlFileWithNodeConfig(file: string): unknown | null {
 }
 
 export function defaultCodelarkHome(): string {
-  return process.env.CODELARK_HOME || path.join(os.homedir(), '.codelark');
+  return process.env.CODELARK_HOME || DEFAULT_CODELARK_HOME;
 }
 
 export function resolveConfigPaths(options: {

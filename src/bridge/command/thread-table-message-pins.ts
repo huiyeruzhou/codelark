@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
-import { CODELARK_HOME } from '../../configuration/index.js';
+import { CODELARK_HOME } from '../../configuration/paths.js';
 import type { BaseChannelAdapter } from '../../channels/contracts.js';
 import type { ChannelAddress } from '../../domain/index.js';
 import type { ThreadCardScope } from './presentation.js';

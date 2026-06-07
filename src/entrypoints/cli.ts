@@ -5,9 +5,7 @@ import { stdin as input, stdout as output } from 'node:process';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
-import {
-  CODELARK_HOME,
-} from '../configuration/index.js';
+import { CODELARK_HOME } from '../configuration/paths.js';
 import { parseConfigCliOverrides, type ParsedConfigCliOverrides } from '../configuration/cli-overrides.js';
 import { createConfigService } from '../configuration/service.js';
 import type { ConfigPatch, ConfigV2 } from '../configuration/schema.js';

@@ -1,5 +1,3 @@
-import os from "node:os";
-import path from "node:path";
 import {
   normalizeChannelId,
   type RuntimeReasoningEffort,
@@ -15,6 +13,13 @@ import {
   type FeishuChannelConfig,
   type FeishuSite,
 } from "./channel-types.js";
+import {
+  CODELARK_HOME,
+  CONFIG_JSON_PATH,
+  CONFIG_PATH,
+  DEFAULT_WORKSPACE_ROOT,
+  expandHomePath,
+} from "./paths.js";
 
 export {
   feishuSiteToApiBaseUrl,
@@ -24,6 +29,14 @@ export {
   type FeishuChannelConfig,
   type FeishuSite,
 } from "./channel-types.js";
+export {
+  CODELARK_HOME,
+  CONFIG_JSON_PATH,
+  CONFIG_PATH,
+  DEFAULT_CODELARK_HOME,
+  DEFAULT_WORKSPACE_ROOT,
+  expandHomePath,
+} from "./paths.js";
 
 export type CodexSandboxMode = RuntimeSandboxMode;
 export type CodexReasoningEffort = RuntimeReasoningEffort;
@@ -116,23 +129,8 @@ export interface Config {
   enabledChannels: string[];
 }
 
-const DEFAULT_CODELARK_HOME = path.join(os.homedir(), ".codelark");
-export const DEFAULT_WORKSPACE_ROOT = os.homedir();
-
-export const CODELARK_HOME = process.env.CODELARK_HOME || DEFAULT_CODELARK_HOME;
-export const CONFIG_PATH = path.join(CODELARK_HOME, "config.env");
-export const CONFIG_JSON_PATH = path.join(CODELARK_HOME, "config.json");
 const DEFAULT_STREAM_STATUS_IDLE_START_SECONDS = 180;
 const DEFAULT_STREAM_STATUS_CHECK_INTERVAL_SECONDS = 10;
-
-export function expandHomePath(value: string | undefined): string | undefined {
-  if (!value) return value;
-  if (value === "~") return os.homedir();
-  if (value.startsWith("~/") || value.startsWith("~\\")) {
-    return path.join(os.homedir(), value.slice(2));
-  }
-  return value;
-}
 
 function nowIso(): string {
   return new Date().toISOString();

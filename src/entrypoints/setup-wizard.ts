@@ -9,11 +9,10 @@ import { registerApp } from '@larksuiteoapi/node-sdk';
 
 import { feishuSetupUserAuthScopeArgument } from '../channels/feishu/permissions.js';
 import {
-  CODELARK_HOME,
-  DEFAULT_WORKSPACE_ROOT,
   type ClaudeExecutable,
   type RuntimeProvider,
 } from '../configuration/index.js';
+import { CODELARK_HOME, DEFAULT_WORKSPACE_ROOT } from '../configuration/paths.js';
 import {
   normalizeFeishuSite,
   type FeishuChannelConfig,

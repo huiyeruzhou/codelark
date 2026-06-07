@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
-import { CODELARK_HOME } from '../configuration/index.js';
+import { CODELARK_HOME } from '../configuration/paths.js';
 import type { ChannelAddress } from '../domain/channel.js';
 
 const STARTUP_TARGET_PATH = path.join(CODELARK_HOME, 'data', 'startup-notice-target.json');

@@ -1,6 +1,6 @@
 import type { BaseChannelAdapter } from '../../../channels/contracts.js';
 import { deliverBridgeNotice } from '../../../channels/delivery/feedback.js';
-import { DEFAULT_WORKSPACE_ROOT } from '../../../configuration/index.js';
+import { DEFAULT_WORKSPACE_ROOT } from '../../../configuration/paths.js';
 import { createConfigService } from '../../../configuration/service.js';
 import type { BridgeSession, BridgeStore, ChannelChat, InboundMessage } from '../../../domain/index.js';
 import {

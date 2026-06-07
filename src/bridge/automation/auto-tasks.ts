@@ -4,7 +4,7 @@ import os from 'node:os';
 import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 
-import { CODELARK_HOME } from '../../configuration/index.js';
+import { CODELARK_HOME } from '../../configuration/paths.js';
 import type { ChannelAddress } from '../../domain/channel.js';
 import { getCodexHome } from '../../runtime/codex/session-index/paths.js';
 

@@ -5,7 +5,7 @@ import { spawn } from 'node:child_process';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 
-import { CODELARK_HOME } from '../configuration/index.js';
+import { CODELARK_HOME } from '../configuration/paths.js';
 import { normalizeFeishuSite, type FeishuChannelConfig } from '../configuration/channel-types.js';
 import { createConfigService } from '../configuration/service.js';
 import type { ConfigPatch, ConfigV2 } from '../configuration/schema.js';

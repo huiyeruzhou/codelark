@@ -1,7 +1,4 @@
-import {
-  DEFAULT_WORKSPACE_ROOT,
-  expandHomePath,
-} from '../../configuration/index.js';
+import { DEFAULT_WORKSPACE_ROOT, expandHomePath } from '../../configuration/paths.js';
 import type { ConfigPath } from '../../configuration/fields-types.js';
 import { createConfigService } from '../../configuration/service.js';
 

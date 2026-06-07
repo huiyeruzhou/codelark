@@ -14,10 +14,11 @@ import * as bridgeManager from '../bridge/host/manager.js';
 import '../channels/feishu/adapter.js';
 
 import type { LLMProvider } from '../runtime/contracts.js';
-import { CODELARK_HOME, type CodexProviderChoice } from '../configuration/index.js';
+import { CODELARK_HOME } from '../configuration/paths.js';
 import { loadRuntimeSettingsProjection } from '../configuration/runtime-settings-projection.js';
 import { JsonFileStore } from '../storage/json-store.js';
 import { PendingPermissions } from '../runtime/permission-gateway.js';
+import type { CodexProviderChoice } from '../runtime/codex/routing-provider.js';
 import { setupLogger } from '../shared/logger.js';
 import { releaseBridgeInstanceLock, tryAcquireBridgeInstanceLock } from '../local-service/instance-lock.js';
 import { runStartupStorageMigrations } from '../storage/migrations.js';
