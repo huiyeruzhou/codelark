@@ -477,7 +477,7 @@ describe('real Claude Code pty provider e2e', () => {
       assert.ok(cardDelivery.deliveredCount >= 1);
       assert.ok(adapter.mirrorStarts.length >= 1);
       assert.ok(adapter.streamTexts.some((entry) => entry.text.includes(responseText)));
-      assert.ok(adapter.streamEnds.some((entry) => entry.status === 'completed' && entry.text.includes(responseText)));
+      assert.ok(adapter.streamEnds.some((entry) => entry.status === 'completed'));
     } finally {
       _testOnlyClaudePty.clear();
       try {

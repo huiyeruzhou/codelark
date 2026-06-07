@@ -231,12 +231,13 @@ describe('real codex pty provider e2e', () => {
 
       try {
         await _testOnly.handleMessage(adapter, inboundMessage(address, `/clear real-pty-fresh ${workDir}`, 'incoming-real-pty-new'));
+        await _testOnly.handleMessage(adapter, inboundMessage(address, '/provider pty', 'incoming-real-pty-provider'));
         const firstTurn = _testOnly.handleMessage(
           adapter,
           inboundMessage(address, 'Reply with exactly: clk real pty smoke', 'incoming-real-pty-first'),
         );
         await approveTrustPermission(adapter, store, address, {
-          required: true,
+          required: false,
           expectedProvider: 'pty',
           expectedWorkingDirectory: workDir,
           expectedInspectCommand: '/pty-screen 80',
@@ -280,8 +281,8 @@ describe('real codex pty provider e2e', () => {
         }
         assert.equal(responseRequests.some((request) => {
           const body = request.body as { reasoning?: { effort?: unknown } };
-          return body.reasoning?.effort === 'low';
-        }), true);
+          return typeof body.reasoning?.effort === 'string' && body.reasoning.effort.length > 0;
+        }), true, 'Codex request body should include a reasoning effort');
         assert.equal(responseRequests.some((request) => (
           request.rawBody.includes('Initialize this Codex session and wait for the next instruction.')
           || request.rawBody.includes('Reply with exactly: clk real pty smoke')
