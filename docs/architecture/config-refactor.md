@@ -594,6 +594,7 @@ interface MigrationContext {
 
 - `resolveSessionRuntimeConfig()` 改为调用 `ConfigService.snapshot(sessionScope)`，不再手写 session -> store settings fallback。
 - `configToSettings()` / `exportProcessEnv()` 变成 projection，不再承载默认值，也不读取 `config.env`。
+- adapter runtime 通道实例读取从 `ConfigService.snapshot().config.channels` 获取；`bridge_channel_instances_json` 只作为 legacy projection 输出，不再作为 bridge 内部运行时配置输入。
 - 删除 expanded `Config` 兼容字段，或者只保留在 `legacy.ts` 中作为旧 API 适配。
 - 测试从“字段函数测试”改为“configFields 驱动的多 source 覆盖矩阵”。
 
@@ -610,7 +611,7 @@ interface MigrationContext {
 - Session TOML 覆盖 Channel TOML。
 - request patch 覆盖 Session TOML。
 - `unset` 或 TOML `null` 能清空允许清空的字段。
-- channel array 按 `id` merge，不会因为 env 覆盖误改另一个飞书通道。
+- home `channels` 整组覆盖 defaults，partial home channel 会从 defaults 模板补齐并写回；local/env/cli/channel/session/request 定义 `channels` 必须失败。
 - secret 字段在 `explain()` 和 UI payload 中 mask。
 - 启动迁移能把旧 `config.json` 和 `config.env` 转成 `config.toml`，迁移后归档或重命名旧输入文件，并且运行时不再读取 `config.env`。
 - 子进程环境变量由 effective config projection 生成，不依赖 `config.env` 文件。

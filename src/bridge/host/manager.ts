@@ -16,7 +16,7 @@ import type {
 } from '../../domain/index.js';
 import type { BaseChannelAdapter } from '../../channels/contracts.js';
 import type { BridgeSession, BridgeStore, PermissionLinkRecord } from '../../domain/index.js';
-import type { ChannelInstance, FeishuChannelConfig } from '../../configuration/index.js';
+import type { FeishuChannelConfig } from '../../configuration/index.js';
 import { inspect } from 'node:util';
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 // Side-effect import: triggers self-registration of all adapter factories
@@ -98,6 +98,7 @@ import {
 } from '../../channels/adapter-runtime/runtime.js';
 import {
   formatBindingChatLabel,
+  listConfiguredChannelInstances,
 } from '../../channels/adapter-runtime/channel-runtime.js';
 import {
   getBridgeSessionCodexThreadId,
@@ -577,16 +578,6 @@ function formatStartupChannelChatIssue(issue: StartupChannelChatCheckIssue): str
   return `- ${issue.title} (${channel}, chat=${issue.chatId}, session=${shortSession})${detail}`;
 }
 
-function parseConfiguredChannelsFromSettings(raw: string | null): ChannelInstance[] {
-  if (!raw) return [];
-  try {
-    const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) ? parsed as ChannelInstance[] : [];
-  } catch {
-    return [];
-  }
-}
-
 function feishuEventSubscriptionUrl(appId: string, site: FeishuChannelConfig['site'] | undefined): string {
   const base = site === 'lark' ? 'https://open.larksuite.com' : 'https://open.feishu.cn';
   return `${base}/app/${encodeURIComponent(appId)}/event?tab=callback`;
@@ -594,9 +585,8 @@ function feishuEventSubscriptionUrl(appId: string, site: FeishuChannelConfig['si
 
 function collectStartupFeishuSetupNotices(
   state: BridgeManagerState,
-  store: ReturnType<typeof getBridgeContext>['store'],
 ): StartupFeishuSetupNotice[] {
-  return parseConfiguredChannelsFromSettings(store.getSetting('bridge_channel_instances_json'))
+  return listConfiguredChannelInstances()
     .filter((channel) => channel.enabled && channel.provider === 'feishu')
     .filter((channel) => state.adapters.get(channel.id)?.isRunning())
     .flatMap((channel): StartupFeishuSetupNotice[] => {
@@ -1743,7 +1733,7 @@ async function deliverStartupNotifications(channelChatCheck: StartupChannelChatC
   const adapter = state.adapters.get(target.address.channelType);
   if (!adapter?.isRunning()) return;
 
-  const feishuSetupNotices = collectStartupFeishuSetupNotices(state, store);
+  const feishuSetupNotices = collectStartupFeishuSetupNotices(state);
   logStartupFeishuSetupNotices(feishuSetupNotices);
   const baseStatusText = buildGlobalStatusResponse(store, target.binding, true);
   const statusText = buildStartupNoticeStatusText(

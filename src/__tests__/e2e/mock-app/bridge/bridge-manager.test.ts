@@ -54,6 +54,42 @@ function writeHomeConfigToml(content: string): () => void {
   };
 }
 
+function tomlString(value: string): string {
+  return JSON.stringify(value);
+}
+
+function tomlValue(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(tomlValue).join(', ')}]`;
+  if (typeof value === 'string') return tomlString(value);
+  if (typeof value === 'boolean' || typeof value === 'number') return String(value);
+  return tomlString(String(value ?? ''));
+}
+
+function writeHomeChannelsToml(channels: Array<{
+  id: string;
+  alias: string;
+  enabled: boolean;
+  config?: Record<string, unknown>;
+}>): void {
+  const lines = ['schema_version = 2', ''];
+  for (const channel of channels) {
+    lines.push(
+      '[[channels]]',
+      `id = ${tomlString(channel.id)}`,
+      `alias = ${tomlString(channel.alias)}`,
+      'provider = "feishu"',
+      `enabled = ${channel.enabled}`,
+      '',
+      '[channels.config]',
+    );
+    for (const [key, value] of Object.entries(channel.config || {})) {
+      lines.push(`${key} = ${tomlValue(value)}`);
+    }
+    lines.push('');
+  }
+  writeHomeConfigToml(lines.join('\n'));
+}
+
 function writeClaudeJsonlFixture(params: {
   homeDir: string;
   cwd: string;
@@ -2789,6 +2825,7 @@ describe('bridge-manager channel lifecycle events', () => {
 describe('bridge-manager startup runtime cleanup', () => {
   beforeEach(() => {
     fs.rmSync(DATA_DIR, { recursive: true, force: true });
+    fs.rmSync(CONFIG_TOML_PATH, { force: true });
     const store = new JsonFileStore(makeSettings());
     initBridgeContext({
       store,
@@ -2828,16 +2865,12 @@ describe('bridge-manager startup runtime cleanup', () => {
     StartupNoticeAdapter.groupChats = new Map();
     registerAdapterFactory('feishu', (instance) => new StartupNoticeAdapter(instance as any));
 
+    writeHomeChannelsToml([{
+      id: 'startup-notice-main',
+      alias: 'Startup Notice',
+      enabled: true,
+    }]);
     const settings = makeSettings();
-    settings.set('bridge_channel_instances_json', JSON.stringify([
-      {
-        id: 'startup-notice-main',
-        provider: 'feishu',
-        alias: 'Startup Notice',
-        enabled: true,
-        config: {},
-      },
-    ]));
     const store = new JsonFileStore(settings);
     initBridgeContext({
       store,
@@ -2882,16 +2915,13 @@ describe('bridge-manager startup runtime cleanup', () => {
     StartupNoticeAdapter.groupChats = new Map();
     registerAdapterFactory('feishu', (instance) => new StartupNoticeAdapter(instance as any));
 
+    writeHomeChannelsToml([{
+      id: 'startup-notice-main',
+      alias: 'Startup Notice',
+      enabled: true,
+      config: { app_id: 'cli_test_app', site: 'feishu' },
+    }]);
     const settings = makeSettings();
-    settings.set('bridge_channel_instances_json', JSON.stringify([
-      {
-        id: 'startup-notice-main',
-        provider: 'feishu',
-        alias: 'Startup Notice',
-        enabled: true,
-        config: { appId: 'cli_test_app', site: 'feishu' },
-      },
-    ]));
     const store = new JsonFileStore(settings);
     initBridgeContext({
       store,
@@ -2938,16 +2968,12 @@ describe('bridge-manager startup runtime cleanup', () => {
     StartupNoticeAdapter.groupChats = new Map();
     registerAdapterFactory('feishu', (instance) => new StartupNoticeAdapter(instance as any));
 
+    writeHomeChannelsToml([{
+      id: 'startup-notice-main',
+      alias: 'Startup Notice',
+      enabled: true,
+    }]);
     const settings = makeSettings();
-    settings.set('bridge_channel_instances_json', JSON.stringify([
-      {
-        id: 'startup-notice-main',
-        provider: 'feishu',
-        alias: 'Startup Notice',
-        enabled: true,
-        config: {},
-      },
-    ]));
     const store = new JsonFileStore(settings);
     initBridgeContext({
       store,
@@ -2996,16 +3022,12 @@ describe('bridge-manager startup runtime cleanup', () => {
     ]);
     registerAdapterFactory('feishu', (instance) => new StartupNoticeAdapter(instance as any));
 
+    writeHomeChannelsToml([{
+      id: 'startup-notice-main',
+      alias: 'Startup Notice',
+      enabled: true,
+    }]);
     const settings = makeSettings();
-    settings.set('bridge_channel_instances_json', JSON.stringify([
-      {
-        id: 'startup-notice-main',
-        provider: 'feishu',
-        alias: 'Startup Notice',
-        enabled: true,
-        config: {},
-      },
-    ]));
     const store = new JsonFileStore(settings);
     initBridgeContext({
       store,
@@ -3053,16 +3075,12 @@ describe('bridge-manager startup runtime cleanup', () => {
     ]);
     registerAdapterFactory('feishu', (instance) => new StartupNoticeAdapter(instance as any));
 
+    writeHomeChannelsToml([{
+      id: 'startup-notice-main',
+      alias: 'Startup Notice',
+      enabled: true,
+    }]);
     const settings = makeSettings();
-    settings.set('bridge_channel_instances_json', JSON.stringify([
-      {
-        id: 'startup-notice-main',
-        provider: 'feishu',
-        alias: 'Startup Notice',
-        enabled: true,
-        config: {},
-      },
-    ]));
     const store = new JsonFileStore(settings);
     initBridgeContext({
       store,
@@ -3131,16 +3149,12 @@ describe('bridge-manager startup runtime cleanup', () => {
     ]);
     registerAdapterFactory('feishu', (instance) => new StartupNoticeAdapter(instance as any));
 
+    writeHomeChannelsToml([{
+      id: 'startup-notice-main',
+      alias: 'Startup Notice',
+      enabled: true,
+    }]);
     const settings = makeSettings();
-    settings.set('bridge_channel_instances_json', JSON.stringify([
-      {
-        id: 'startup-notice-main',
-        provider: 'feishu',
-        alias: 'Startup Notice',
-        enabled: true,
-        config: {},
-      },
-    ]));
     const store = new JsonFileStore(settings);
     initBridgeContext({
       store,
@@ -3196,16 +3210,12 @@ describe('bridge-manager startup runtime cleanup', () => {
     ]);
     registerAdapterFactory('feishu', (instance) => new StartupNoticeAdapter(instance as any));
 
+    writeHomeChannelsToml([{
+      id: 'startup-notice-main',
+      alias: 'Startup Notice',
+      enabled: true,
+    }]);
     const settings = makeSettings();
-    settings.set('bridge_channel_instances_json', JSON.stringify([
-      {
-        id: 'startup-notice-main',
-        provider: 'feishu',
-        alias: 'Startup Notice',
-        enabled: true,
-        config: {},
-      },
-    ]));
     const store = new JsonFileStore(settings);
     initBridgeContext({
       store,
@@ -3260,16 +3270,12 @@ describe('bridge-manager startup runtime cleanup', () => {
     ]);
     registerAdapterFactory('feishu', (instance) => new StartupNoticeAdapter(instance as any));
 
+    writeHomeChannelsToml([{
+      id: 'startup-notice-main',
+      alias: 'Startup Notice',
+      enabled: true,
+    }]);
     const settings = makeSettings();
-    settings.set('bridge_channel_instances_json', JSON.stringify([
-      {
-        id: 'startup-notice-main',
-        provider: 'feishu',
-        alias: 'Startup Notice',
-        enabled: true,
-        config: {},
-      },
-    ]));
     const store = new JsonFileStore(settings);
     initBridgeContext({
       store,
@@ -3333,16 +3339,12 @@ describe('bridge-manager startup runtime cleanup', () => {
     ]);
     registerAdapterFactory('feishu', (instance) => new StartupNoticeAdapter(instance as any));
 
+    writeHomeChannelsToml([{
+      id: 'startup-notice-main',
+      alias: 'Startup Notice',
+      enabled: true,
+    }]);
     const settings = makeSettings();
-    settings.set('bridge_channel_instances_json', JSON.stringify([
-      {
-        id: 'startup-notice-main',
-        provider: 'feishu',
-        alias: 'Startup Notice',
-        enabled: true,
-        config: {},
-      },
-    ]));
     const store = new JsonFileStore(settings);
     initBridgeContext({
       store,
@@ -3624,21 +3626,18 @@ describe('bridge-manager mirror subscription recovery', () => {
 describe('bridge-manager invalid adapter logging', () => {
   beforeEach(() => {
     fs.rmSync(DATA_DIR, { recursive: true, force: true });
+    fs.rmSync(CONFIG_TOML_PATH, { force: true });
     registerAdapterFactory('feishu', (instance) => new InvalidConfigAdapter(instance as any));
     _testOnly.resetStateForTests();
   });
 
   it('logs unchanged invalid adapter configs only once', async () => {
+    writeHomeChannelsToml([{
+      id: 'feishu-invalid-main',
+      alias: 'Invalid Feishu',
+      enabled: true,
+    }]);
     const settings = makeSettings();
-    settings.set('bridge_channel_instances_json', JSON.stringify([
-      {
-        id: 'feishu-invalid-main',
-        provider: 'feishu',
-        alias: 'Invalid Feishu',
-        enabled: true,
-        config: {},
-      },
-    ]));
 
     const store = new JsonFileStore(settings);
     initBridgeContext({
@@ -3705,16 +3704,12 @@ describe('bridge-manager invalid adapter logging', () => {
     ThrowStartAdapter.stopCalls = [];
     registerAdapterFactory('feishu', (instance) => new ThrowStartAdapter(instance as any));
 
+    writeHomeChannelsToml([{
+      id: 'feishu-throw-start-main',
+      alias: 'Throw Start',
+      enabled: true,
+    }]);
     const settings = makeSettings();
-    settings.set('bridge_channel_instances_json', JSON.stringify([
-      {
-        id: 'feishu-throw-start-main',
-        provider: 'feishu',
-        alias: 'Throw Start',
-        enabled: true,
-        config: {},
-      },
-    ]));
 
     const store = new JsonFileStore(settings);
     initBridgeContext({
