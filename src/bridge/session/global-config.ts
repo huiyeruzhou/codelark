@@ -34,3 +34,11 @@ export function getGlobalWorkspaceRoot(): string {
     'bridge.defaultWorkspace',
   ) || DEFAULT_WORKSPACE_ROOT) || DEFAULT_WORKSPACE_ROOT;
 }
+
+export function getGlobalRuntimeAgent(): 'codex' | 'claude' {
+  return getGlobalStringConfig('runtime.agent') === 'claude' ? 'claude' : 'codex';
+}
+
+export function getGlobalCodexModel(): string | undefined {
+  return getGlobalStringConfig('runtime.codex.model');
+}

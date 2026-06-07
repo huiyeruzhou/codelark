@@ -1352,6 +1352,22 @@ model = "test-model"
     assert.equal(rendered, '<Current Thread>\n\n我: Codex prompt\n\ncodex: Codex answer');
   });
 
+  it('formats mirror assistant labels from v2 runtime agent config', () => {
+    const restore = writeHomeConfigToml(`
+schema_version = 2
+
+[runtime]
+agent = "claude"
+`);
+    try {
+      const rendered = _testOnly.formatMirrorMessage('Current Thread', 'prompt', 'answer');
+
+      assert.equal(rendered, '<Current Thread>\n\n我: prompt\n\nclaude: answer');
+    } finally {
+      restore();
+    }
+  });
+
   it('returns an empty mirror message when there is no text', () => {
     const rendered = _testOnly.formatMirrorMessage('Current Thread', '', '');
 

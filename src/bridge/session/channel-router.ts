@@ -10,7 +10,7 @@ import { getBridgeContext } from '../context.js';
 import { SessionRegistryService } from '../session/registry.js';
 import { getOrCreateDraftSession } from '../session/internal-sessions.js';
 import { recordBindingChange } from '../session/binding-audit.js';
-import { getGlobalStringConfig } from './global-config.js';
+import { getGlobalConfigValue, getGlobalStringConfig } from './global-config.js';
 
 /**
  * Resolve an inbound address to a ChannelChat.
@@ -101,6 +101,7 @@ export function createBinding(
   const defaultProviderId = store.getSetting('bridge_default_provider_id') || '';
   const defaultModel = getGlobalStringConfig('runtime.codex.model') || '';
   const defaultRuntime = getGlobalStringConfig('runtime.agent') === 'claude' ? 'claude' : 'codex';
+  const defaultMode = getGlobalConfigValue<'off' | 'on'>('runtime.codex.yoloMode') === 'on' ? 'yolo' : 'normal';
   const visibleSessionName = sessionName?.trim() || address.displayName?.trim() || `Bridge: ${address.chatId}`;
   const session = workingDirectory
     ? store.createSession(
@@ -108,7 +109,7 @@ export function createBinding(
         defaultModel,
         undefined,
         workingDirectory,
-        undefined,
+        defaultMode,
         { activeRuntime: defaultRuntime },
       )
     : getOrCreateDraftSession(store, address, { activeRuntime: defaultRuntime });

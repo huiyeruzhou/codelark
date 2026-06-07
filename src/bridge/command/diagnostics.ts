@@ -49,6 +49,7 @@ import {
   formatSessionMode,
   resolveLocalCodexThreadId,
 } from './runtime-settings.js';
+import { getGlobalCodexModel } from '../session/global-config.js';
 import { stripLegacySessionPrefix } from '../session/display/session-title.js';
 import { resolveSessionTranscriptFile } from '../session/transcript-source.js';
 import { buildCommandCallbackData, buildThreadCardUpdateKey } from './callbacks.js';
@@ -247,7 +248,7 @@ export function handleCurrentCommand(options: {
     : resolveDisplayedModel(
       binding,
       session,
-      options.store.getSetting('default_model'),
+      getGlobalCodexModel(),
       readConfiguredCodexModel(),
     );
   const chatBindingCount = listBindingsForChat(options.store, options.msg.address.channelType, options.msg.address.chatId).length;
@@ -328,7 +329,7 @@ export function buildCurrentCommandRichCard(options: {
   const claudeConfig = activeRuntime === 'claude' ? resolveClaudeRuntimeConfig(session) : null;
   const currentModel = activeRuntime === 'claude'
     ? claudeConfig?.model || 'default'
-    : resolveDisplayedModel(binding, session, options.store.getSetting('default_model'), readConfiguredCodexModel());
+    : resolveDisplayedModel(binding, session, getGlobalCodexModel(), readConfiguredCodexModel());
   const statusColor = session.runtime_status === 'running' || session.runtime_status === 'queued' ? 'yellow' : 'green';
   const mirrorColor = session.mirror_status === 'watching' ? 'blue' : 'grey';
   const sessionKind = session.session_type === 'draft' ? '临时草稿线程' : '普通会话';

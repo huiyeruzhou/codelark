@@ -60,6 +60,7 @@ import {
   CommandThreadDisplay,
   type ThreadCardScope,
 } from './thread-display.js';
+import { getGlobalCodexModel } from '../session/global-config.js';
 import {
   buildNewSessionFormCard,
 } from './presentation.js';
@@ -200,7 +201,7 @@ async function handleCurrentConfigFormCommand(options: {
   const model = normalizeFormString(formValue.clk_model || formValue.model);
   const currentModel = activeRuntime === 'claude'
     ? claudeConfig?.model || 'default'
-    : resolveDisplayedModel(binding, session, options.store.getSetting('default_model'), readConfiguredCodexModel());
+    : resolveDisplayedModel(binding, session, getGlobalCodexModel(), readConfiguredCodexModel());
   if (model && model !== currentModel) {
     responses.push(handleModelCommand({
       msg: options.msg,

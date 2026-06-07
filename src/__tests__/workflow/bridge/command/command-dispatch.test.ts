@@ -2694,6 +2694,9 @@ enabled = true
 
     try {
       const store = initTestContext({ settings: { bridge_claude_provider: 'pty' } });
+      createConfigService({ migrate: false, env: {} }).set({ kind: 'home' }, {
+        runtime: { claude: { provider: 'pty' } },
+      });
       const routingProvider = new CodexRoutingProvider(undefined, 'tmux');
       initBridgeContext({
         store,
@@ -2829,6 +2832,9 @@ enabled = true
 
     try {
       const store = initTestContext({ settings: { bridge_claude_provider: 'pty' } });
+      createConfigService({ migrate: false, env: {} }).set({ kind: 'home' }, {
+        runtime: { claude: { provider: 'pty' } },
+      });
       const routingProvider = new CodexRoutingProvider();
       initBridgeContext({
         store,
@@ -5747,6 +5753,9 @@ enabled = true
     const settings = makeSettings();
     settings.set('bridge_default_provider', 'tmux');
     const store = new JsonFileStore(settings, { dynamicSettings: true });
+    createConfigService({ migrate: false, env: {} }).set({ kind: 'home' }, {
+      runtime: { codex: { provider: 'tmux' } },
+    });
     initBridgeContext({
       store,
       llm: noopLlm,

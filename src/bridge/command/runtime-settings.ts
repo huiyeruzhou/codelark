@@ -49,6 +49,7 @@ import {
   setSessionCodexSandboxModeUpdate,
   setSessionWorkingDirectoryUpdate,
 } from '../../domain/session-runtime.js';
+import { getGlobalCodexModel } from '../session/global-config.js';
 import type { ChannelChat, InboundMessage } from '../../domain/index.js';
 import {
   buildRuntimeSwitchWhileRunningResponse,
@@ -721,7 +722,7 @@ export function handleModelCommand(options: {
     const currentModel = resolveDisplayedModel(
       binding,
       session,
-      options.store.getSetting('default_model'),
+      getGlobalCodexModel(),
       readConfiguredCodexModel(),
     );
     return buildCommandFields(
@@ -751,7 +752,7 @@ export function handleModelCommand(options: {
     const currentModel = resolveDisplayedModel(
       updatedBinding,
       updatedSession,
-      options.store.getSetting('default_model'),
+      getGlobalCodexModel(),
       readConfiguredCodexModel(),
     );
     return buildCommandFields(
