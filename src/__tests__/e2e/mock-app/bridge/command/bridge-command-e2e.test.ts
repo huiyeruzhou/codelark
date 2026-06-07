@@ -520,15 +520,12 @@ describe('bridge command e2e', () => {
 
     await _testOnly.handleMessage(adapter, inboundMessage(groupAddress, '/his limit 12', 'incoming-limit'));
     assert.match(adapter.sent.at(-1)?.text || '', /config\.toml/);
-    assert.deepEqual(
-      createConfigService({ migrate: false }).resolve('channels[].config.historyMessageLimit'),
-      {
-        value: 12,
-        source: 'home',
-        file: path.join(CODELARK_HOME, 'config.toml'),
-        scope: undefined,
-      },
-    );
+    const configAfterLimit = createConfigService({ migrate: false }).snapshot();
+    assert.equal(configAfterLimit.config.channels[0]?.config.historyMessageLimit, 12);
+    assert.deepEqual(configAfterLimit.provenance.get('channels.feishu-default.config.historyMessageLimit'), {
+      source: 'home',
+      file: path.join(CODELARK_HOME, 'config.toml'),
+    });
     assert.equal(fs.existsSync(path.join(CODELARK_HOME, 'config.toml')), true);
     assert.equal(fs.existsSync(CONFIG_PATH), false);
     assert.equal(fs.existsSync(CONFIG_JSON_PATH), false);
@@ -558,7 +555,7 @@ describe('bridge command e2e', () => {
     assert.doesNotMatch(richCard?.sections[2]?.markdown || '', /^```text/);
 
     await _testOnly.handleMessage(adapter, inboundMessage(groupAddress, '/his msg 1', 'incoming-history-msg-once'));
-    assert.equal(createConfigService({ migrate: false }).get('channels[].config.historyMessageLimit'), 12);
+    assert.equal(createConfigService({ migrate: false }).snapshot().config.channels[0]?.config.historyMessageLimit, 12);
     const temporaryText = adapter.sent.at(-1)?.text || '';
     assert.match(temporaryText, /最近对话（msg）/);
     assert.match(temporaryText, /返回条数.*1 \/ 本次 1（配置 12）/s);

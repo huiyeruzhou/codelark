@@ -8,7 +8,7 @@ import {
   buildRuntimeStreamTags,
   buildStreamContextTags,
 } from '../../../shared/streaming-metadata.js';
-import { getGlobalConfigValue } from '../../session/global-config.js';
+import { getGlobalDefaultChannelConfig } from '../../session/global-config.js';
 import { classifyInteractiveTurn } from '../turn-classifier.js';
 import type { BridgeTurnClassification } from '../turn-types.js';
 
@@ -97,8 +97,9 @@ export function resolveInteractiveTurnRuntimeSettings(
   const intervalMs = parseInt(readSetting(`${prefix}interval_ms`) || '', 10) || defaults.intervalMs;
   const minDeltaChars = parseInt(readSetting(`${prefix}min_delta_chars`) || '', 10) || defaults.minDeltaChars;
   const maxChars = parseInt(readSetting(`${prefix}max_chars`) || '', 10) || defaults.maxChars;
-  const idleStartSeconds = getGlobalConfigValue<number>('channels[].config.streamStatusIdleStartSeconds');
-  const heartbeatSeconds = getGlobalConfigValue<number>('channels[].config.streamStatusCheckIntervalSeconds');
+  const channelConfig = getGlobalDefaultChannelConfig();
+  const idleStartSeconds = channelConfig?.streamStatusIdleStartSeconds;
+  const heartbeatSeconds = channelConfig?.streamStatusCheckIntervalSeconds;
   return {
     stream: { intervalMs, minDeltaChars, maxChars },
     statusTiming: {

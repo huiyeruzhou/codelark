@@ -17,6 +17,12 @@ function writeFile(file: string, content: string): void {
   fs.writeFileSync(file, content, 'utf-8');
 }
 
+function firstChannel(service: ReturnType<typeof createConfigService>) {
+  const channel = service.snapshot().config.channels[0];
+  assert.ok(channel);
+  return channel;
+}
+
 describe('ConfigService v2 foundation', () => {
   it('loads defaults.toml as the complete v2 shape', () => {
     const home = tempHome();
@@ -57,8 +63,8 @@ describe('ConfigService v2 foundation', () => {
       assert.equal(service.migrationResult?.applied[0]?.id, 'v1');
       assert.equal(fs.existsSync(path.join(home, 'config.toml')), true);
       assert.equal(service.get('runtime.codex.model'), 'legacy-model');
-      assert.equal(service.get('channels[].config.appId'), 'legacy-app');
-      assert.equal(service.get('channels[].config.site'), 'lark');
+      assert.equal(firstChannel(service).config.appId, 'legacy-app');
+      assert.equal(firstChannel(service).config.site, 'lark');
 
       writeFile(path.join(home, 'config.env'), [
         'CODELARK_CODEX_DEFAULT_MODEL=must-not-be-read',
@@ -67,7 +73,7 @@ describe('ConfigService v2 foundation', () => {
       const afterEnvEdit = createConfigService({ codelarkHome: home, env: {} });
       assert.equal(afterEnvEdit.migrationResult?.changed, false);
       assert.equal(afterEnvEdit.get('runtime.codex.model'), 'legacy-model');
-      assert.equal(afterEnvEdit.get('channels[].config.appId'), 'legacy-app');
+      assert.equal(firstChannel(afterEnvEdit).config.appId, 'legacy-app');
     } finally {
       fs.rmSync(home, { recursive: true, force: true });
     }
@@ -254,8 +260,8 @@ model = "scoped-local-model"
         },
         migrate: false,
       });
-      assert.equal(noCli.get('channels[].config.appId'), '');
-      assert.equal(noCli.get('channels[].enabled'), false);
+      assert.equal(firstChannel(noCli).config.appId, '');
+      assert.equal(firstChannel(noCli).enabled, false);
 
       writeFile(path.join(cwd, '.codelark', 'config.toml'), `
 [[channels]]
@@ -333,8 +339,12 @@ require_mention = false
       const service = createConfigService({ codelarkHome: home, env: {}, migrate: false });
       const channels = service.snapshot().config.channels;
       assert.deepEqual(channels.map((channel) => channel.id), ['feishu-home']);
-      assert.equal(service.get('channels[].config.appId'), 'home-app');
-      assert.equal(service.resolve('channels[].config.appId').source, 'home');
+      assert.equal(channels[0]?.config.appId, 'home-app');
+      assert.equal(service.snapshot().provenance.get('channels.feishu-home.config.appId')?.source, 'home');
+      assert.throws(
+        () => service.get('channels[].config.appId'),
+        /field pattern, not a concrete value path/,
+      );
     } finally {
       fs.rmSync(home, { recursive: true, force: true });
     }
@@ -392,7 +402,7 @@ app_id = "home-app"
       assert.doesNotMatch(fs.readFileSync(configTomlPath, 'utf-8'), /history_message_limit = 8/);
 
       const service = createConfigService({ codelarkHome: home, env: {}, migrate: false });
-      assert.equal(service.get('channels[].config.historyMessageLimit'), 8);
+      assert.equal(firstChannel(service).config.historyMessageLimit, 8);
       assert.match(fs.readFileSync(configTomlPath, 'utf-8'), /history_message_limit = 8/);
     } finally {
       fs.rmSync(home, { recursive: true, force: true });
@@ -445,11 +455,12 @@ require_mention = false
       assert.equal(effortExplain.value, 'high');
       assert.equal(effortExplain.source, 'env');
 
-      const appSecretExplain = service.explain('channels[].config.appSecret')[0]!;
-      assert.equal(appSecretExplain.secret, true);
-      assert.equal(appSecretExplain.value, '***********cret');
-      assert.equal(appSecretExplain.source, 'home');
-      assert.equal(appSecretExplain.file, path.join(home, 'config.toml'));
+      assert.throws(
+        () => service.explain('channels[].config.appSecret'),
+        /field pattern, not a concrete value path/,
+      );
+      assert.equal(firstChannel(service).config.appSecret, 'home-app-secret');
+      assert.equal(service.snapshot().provenance.get('channels.feishu-default.config.appSecret')?.source, 'home');
     } finally {
       fs.rmSync(home, { recursive: true, force: true });
     }
@@ -483,7 +494,7 @@ require_mention = false
         }],
       });
       assert.equal(service.get('runtime.agent'), 'claude');
-      assert.equal(service.get('channels[].config.historyMessageLimit'), 12);
+      assert.equal(firstChannel(service).config.historyMessageLimit, 12);
       assert.equal(service.get('bridge.uiAllowLan'), false);
     } finally {
       fs.rmSync(home, { recursive: true, force: true });

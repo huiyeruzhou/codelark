@@ -210,18 +210,6 @@ export function createConfigService(options: ConfigServiceOptions = {}): ConfigS
     return { ...merged, warnings: built.warnings };
   }
 
-  function resolvedPath(path: ConfigPath, config: ConfigV2): string {
-    if (!path.startsWith('channels[].')) return path;
-    const id = config.channels.find((channel) => channel.id === 'feishu-default')?.id || config.channels[0]?.id;
-    return id ? path.replace('channels[]', `channels.${id}`) : path;
-  }
-
-  function valueFor(path: ConfigPath, config: ConfigV2): unknown {
-    if (!path.startsWith('channels[].')) return getConfigPath(config, path);
-    const channel = config.channels.find((entry) => entry.id === 'feishu-default') || config.channels[0];
-    return channel ? getConfigPath(channel, path.replace('channels[].', '')) : undefined;
-  }
-
   function targetFile(target: ConfigWriteTarget): string {
     const paths = resolveConfigPaths({ codelarkHome, cwd: target.kind === 'local' ? target.cwd : undefined });
     if (target.kind === 'home') return paths.homeToml;
@@ -244,21 +232,31 @@ export function createConfigService(options: ConfigServiceOptions = {}): ConfigS
     migrationResult,
     snapshot,
     get<T = unknown>(path: ConfigPath, scope?: ConfigScope, request?: ConfigPatch): T {
-      return valueFor(path, snapshot(scope, request).config) as T;
+      if (path.startsWith('channels[].')) {
+        throw new Error(
+          `Config path ${path} is a field pattern, not a concrete value path; read snapshot().config.channels and select the channel in the caller.`,
+        );
+      }
+      return getConfigPath(snapshot(scope, request).config, path) as T;
     },
     resolve(path: ConfigPath, scope?: ConfigScope, request?: ConfigPatch): ConfigResolveResult {
+      if (path.startsWith('channels[].')) {
+        throw new Error(
+          `Config path ${path} is a field pattern, not a concrete value path; read snapshot().config.channels and select the channel in the caller.`,
+        );
+      }
       const effective = snapshot(scope, request);
-      const provenance = effective.provenance.get(resolvedPath(path, effective.config))
-        || effective.provenance.get(path)
-        || { source: 'defaults' as const };
+      const provenance = effective.provenance.get(path) || { source: 'defaults' as const };
       return {
-        value: valueFor(path, effective.config),
+        value: getConfigPath(effective.config, path),
         ...provenance,
         scope,
       };
     },
     explain(path?: ConfigPath, scope?: ConfigScope): ConfigExplainEntry[] {
-      const paths = path ? [path] : configFields.map((field) => field.path);
+      const paths = path
+        ? [path]
+        : configFields.map((field) => field.path).filter((entry) => !entry.startsWith('channels[].'));
       return paths.map((entry) => {
         const field = findConfigField(entry);
         const resolved = this.resolve(entry, scope);

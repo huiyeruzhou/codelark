@@ -117,7 +117,7 @@ import {
 } from '../session/support.js';
 import { createConfigService } from '../../configuration/service.js';
 import {
-  getGlobalConfigValue,
+  getGlobalDefaultChannelConfig,
 } from '../session/global-config.js';
 import {
   getSessionRuntimeTmuxSessionName,
@@ -917,8 +917,9 @@ function getMirrorStructuredStreamStatusConfig(): {
   idleStartMs: number;
   heartbeatMs: number;
 } {
-  const idleStartSeconds = getGlobalConfigValue<number>('channels[].config.streamStatusIdleStartSeconds');
-  const heartbeatSeconds = getGlobalConfigValue<number>('channels[].config.streamStatusCheckIntervalSeconds');
+  const channelConfig = getGlobalDefaultChannelConfig();
+  const idleStartSeconds = channelConfig?.streamStatusIdleStartSeconds;
+  const heartbeatSeconds = channelConfig?.streamStatusCheckIntervalSeconds;
   return {
     idleStartMs: Math.max(
       0,

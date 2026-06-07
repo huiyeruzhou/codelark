@@ -50,7 +50,7 @@ CodeLark 需要把“默认值、全局配置、项目配置、环境变量、�
 
 文档和实现里需要区分两套名字：
 
-- canonical path：TypeScript API、`configFields` key、`ConfigService.get()` 和 explain 使用 camelCase，例如 `runtime.codex.yoloMode`。
+- canonical path：TypeScript API、`configFields` key、`ConfigService.get()` 和 explain 使用 camelCase，例如 `runtime.codex.yoloMode`；`channels[]` 只作为字段模板路径，不作为 `get/resolve/explain` 的默认通道取值入口。
 - TOML path：文件落盘按 section + snake_case 表达，例如 `runtime.codex.yolo_mode`、`session.tmux_capture_lines`。
 
 | 领域 | canonical path | TOML path | 旧 JSON / session 字段 | 新 env 键 | 兼容旧 env 键 | scoped override |
@@ -181,7 +181,7 @@ Session effective config:
   request > session > channel > cli > env > local > home > defaults
 ```
 
-`channels` 是例外：只读取 defaults 和 home，且 home 整组覆盖 defaults。home partial channel 只允许通过 ConfigService 从 `defaults.toml` 模板 materialize 并写回，不通过 source-chain 做 `channels[]` 跨层按 id merge。local/env/cli/channel/session/request 不能定义 `channels`。
+`channels` 是例外：只读取 defaults 和 home，且 home 整组覆盖 defaults。home partial channel 只允许通过 ConfigService 从 `defaults.toml` 模板 materialize 并写回，不通过 source-chain 做 `channels[]` 跨层按 id merge。local/env/cli/channel/session/request 不能定义 `channels`。业务读取 channel 实例时必须先拿 `ConfigService.snapshot().config.channels`，再在调用方按 channel id、provider fallback 或 UI 默认项选择具体实例；配置层不把 `channels[]` 隐式解析成 `feishu-default`。
 
 说明：
 

@@ -1,6 +1,7 @@
 import { DEFAULT_WORKSPACE_ROOT, expandHomePath } from '../../configuration/paths.js';
 import type { ConfigPath } from '../../configuration/fields-types.js';
 import { createConfigService } from '../../configuration/service.js';
+import type { ConfigV2 } from '../../configuration/schema.js';
 
 export function getGlobalConfigValue<T>(
   path: ConfigPath,
@@ -38,4 +39,14 @@ export function getGlobalRuntimeAgent(): 'codex' | 'claude' {
 
 export function getGlobalCodexModel(): string | undefined {
   return getGlobalStringConfig('runtime.codex.model');
+}
+
+export function getGlobalDefaultChannelConfig(): ConfigV2['channels'][number]['config'] | undefined {
+  try {
+    const config = createConfigService({ migrate: false }).snapshot().config;
+    return (config.channels.find((channel) => channel.id === 'feishu-default') || config.channels[0])?.config;
+  } catch (error) {
+    console.error('[bridge-manager] Failed to resolve global TOML channel config:', error);
+    return undefined;
+  }
 }

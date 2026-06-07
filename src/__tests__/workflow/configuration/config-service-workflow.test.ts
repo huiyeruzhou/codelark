@@ -95,8 +95,9 @@ model = "session-model"
       assert.equal(service.resolve('runtime.codex.model', scope).source, 'session');
       assert.equal(service.get('runtime.codex.reasoningEffort', scope), 'high');
       assert.equal(service.resolve('runtime.codex.reasoningEffort', scope).source, 'channel');
-      assert.equal(service.get('channels[].config.historyMessageLimit', scope), 6);
-      assert.equal(service.resolve('channels[].config.historyMessageLimit', scope).source, 'home');
+      const channel = service.snapshot(scope).config.channels[0];
+      assert.equal(channel?.config.historyMessageLimit, 6);
+      assert.equal(service.snapshot(scope).provenance.get('channels.feishu-default.config.historyMessageLimit')?.source, 'home');
 
       const env = service.exportProcessEnv(scope);
       assert.equal(env.CODELARK_CODEX_MODEL, 'session-model');

@@ -3631,8 +3631,9 @@ enabled = true
       '/set historyMessageLimit 12',
       deps,
     );
-    assert.equal(createConfigService({ migrate: false, env: {} }).resolve('channels[].config.historyMessageLimit').source, 'home');
-    assert.equal(createConfigService({ migrate: false, env: {} }).get('channels[].config.historyMessageLimit'), 12);
+    const configAfterHistory = createConfigService({ migrate: false, env: {} }).snapshot();
+    assert.equal(configAfterHistory.provenance.get('channels.feishu-default.config.historyMessageLimit')?.source, 'home');
+    assert.equal(configAfterHistory.config.channels[0]?.config.historyMessageLimit, 12);
 
     await handleBridgeCommand(
       adapter,

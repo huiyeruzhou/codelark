@@ -105,11 +105,12 @@ describe('v1 config migration e2e', () => {
       assert.equal(service.get('runtime.claude.permissionMode'), 'bypassPermissions');
       assert.equal(service.get('runtime.claude.reasoningEffort'), 'high');
       assert.equal(service.get('runtime.claude.idleTimeoutMinutes'), 5);
-      assert.equal(service.get('channels[].config.historyMessageLimit'), 15);
-      assert.equal(service.get('channels[].config.appId'), 'env-app');
-      assert.equal(service.get('channels[].config.appSecret'), 'env-secret');
-      assert.equal(service.get('channels[].config.site'), 'lark');
-      assert.deepEqual(service.get('channels[].config.allowedUsers'), ['env-user-1', 'env-user-2']);
+      const channel = service.snapshot().config.channels.find((entry) => entry.id === 'feishu-default');
+      assert.equal(channel?.config.historyMessageLimit, 15);
+      assert.equal(channel?.config.appId, 'env-app');
+      assert.equal(channel?.config.appSecret, 'env-secret');
+      assert.equal(channel?.config.site, 'lark');
+      assert.deepEqual(channel?.config.allowedUsers, ['env-user-1', 'env-user-2']);
 
       writeFile(paths.legacyConfigEnv, [
         'CODELARK_CODEX_DEFAULT_MODEL=must-not-be-read',
@@ -117,7 +118,10 @@ describe('v1 config migration e2e', () => {
       ].join('\n'));
       const afterEnvEdit = createConfigService({ codelarkHome: home, env: {} });
       assert.equal(afterEnvEdit.get('runtime.codex.model'), 'env-model');
-      assert.equal(afterEnvEdit.get('channels[].config.appId'), 'env-app');
+      assert.equal(
+        afterEnvEdit.snapshot().config.channels.find((entry) => entry.id === 'feishu-default')?.config.appId,
+        'env-app',
+      );
     } finally {
       fs.rmSync(home, { recursive: true, force: true });
     }
