@@ -8,7 +8,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
 
-import type { ClaudeExecutable } from '../../../../configuration/index.js';
+import type { ClaudeExecutable } from '../../../../configuration/runtime-types.js';
 import { _testOnlyClaudePty, ClaudePtyProvider } from '../../../../runtime/claude/pty-provider.js';
 import {
   commandAvailable,

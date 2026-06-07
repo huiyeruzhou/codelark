@@ -5,7 +5,7 @@ import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { DEFAULT_WORKSPACE_ROOT } from '../../../configuration/index.js';
+import { DEFAULT_WORKSPACE_ROOT } from '../../../configuration/paths.js';
 
 function runHarness(args: string[]): string {
   return execFileSync(

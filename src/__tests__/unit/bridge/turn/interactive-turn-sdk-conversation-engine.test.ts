@@ -26,7 +26,7 @@ import {
 } from '../../../helpers/bridge/test-bridge-utils.js';
 import type { BridgeStore } from '../../../../domain/index.js';
 import type { LLMProvider, StreamChatParams } from '../../../../runtime/contracts.js';
-import { CODELARK_HOME } from '../../../../configuration/index.js';
+import { CODELARK_HOME } from '../../../../configuration/paths.js';
 
 function toolOnlyLlm(): LLMProvider {
   return {

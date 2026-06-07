@@ -6,7 +6,7 @@ import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 
-import { CONFIG_PATH, CONFIG_JSON_PATH, CODELARK_HOME, DEFAULT_WORKSPACE_ROOT } from '../../../../configuration/index.js';
+import { CONFIG_PATH, CONFIG_JSON_PATH, CODELARK_HOME, DEFAULT_WORKSPACE_ROOT } from '../../../../configuration/paths.js';
 import { createConfigService } from '../../../../configuration/service.js';
 import { JsonFileStore } from '../../../../storage/json-store.js';
 import { initBridgeContext } from '../../../../bridge/host/context.js';

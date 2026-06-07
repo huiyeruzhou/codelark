@@ -5,7 +5,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 import { getHistoryMessageLimit, getWorkspaceRoot, resolveClaudeRuntimeConfig, resolveSessionRuntimeConfig } from '../../../bridge/session/support.js';
-import { CODELARK_HOME } from '../../../configuration/index.js';
+import { CODELARK_HOME } from '../../../configuration/paths.js';
 import {
   getSessionActiveRuntime,
   getSessionClaudeModel,

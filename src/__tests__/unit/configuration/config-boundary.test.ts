@@ -30,6 +30,23 @@ describe('configuration module boundaries', () => {
     assert.deepEqual(offenders, []);
   });
 
+  it('keeps non-facade tests from importing the legacy config facade', () => {
+    const sourceRoot = path.join(process.cwd(), 'src');
+    const allowed = new Set([
+      path.join('src', '__tests__', 'unit', 'configuration', 'config.test.ts'),
+    ]);
+    const offenders = listSourceFiles(sourceRoot)
+      .filter((file) => path.relative(sourceRoot, file).startsWith(`__tests__${path.sep}`))
+      .filter((file) => !allowed.has(path.relative(process.cwd(), file)))
+      .filter((file) => {
+        const source = fs.readFileSync(file, 'utf-8');
+        return /from\s+['"][^'"]*configuration\/index\.js['"]/.test(source);
+      })
+      .map((file) => path.relative(process.cwd(), file));
+
+    assert.deepEqual(offenders, []);
+  });
+
   it('keeps legacy adapter modules independent from the facade re-export', () => {
     const legacySource = fs.readFileSync(path.join(process.cwd(), 'src', 'configuration', 'legacy.ts'), 'utf-8');
     assert.equal(/from\s+['"]\.\/index\.js['"]/.test(legacySource), false);

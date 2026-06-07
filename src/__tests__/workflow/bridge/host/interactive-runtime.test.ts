@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 
-import { CODELARK_HOME } from '../../../../configuration/index.js';
+import { CODELARK_HOME } from '../../../../configuration/paths.js';
 import { JsonFileStore } from '../../../../storage/json-store.js';
 import { initBridgeContext } from '../../../../bridge/host/context.js';
 import { createInteractiveRuntime } from '../../../../bridge/host/interactive-runtime.js';

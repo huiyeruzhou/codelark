@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 
-import { CODELARK_HOME } from '../../../../configuration/index.js';
+import { CODELARK_HOME } from '../../../../configuration/paths.js';
 import { createConfigService } from '../../../../configuration/service.js';
 import type { ConfigPatch } from '../../../../configuration/schema.js';
 import { JsonFileStore } from '../../../../storage/json-store.js';

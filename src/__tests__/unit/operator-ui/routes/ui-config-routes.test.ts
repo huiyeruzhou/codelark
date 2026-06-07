@@ -7,7 +7,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 
 import { handleUiConfigRoute } from '../../../../operator-ui/routes/config.js';
 import { configV2ToPayload, mergeConfigV2HomePatch } from '../../../../operator-ui/application/config.js';
-import { CODELARK_HOME, CONFIG_JSON_PATH, CONFIG_PATH } from '../../../../configuration/index.js';
+import { CODELARK_HOME, CONFIG_JSON_PATH, CONFIG_PATH } from '../../../../configuration/paths.js';
 import type { ConfigV2 } from '../../../../configuration/schema.js';
 
 function createResponse(): ServerResponse & { body: string; statusCodeWritten?: number } {

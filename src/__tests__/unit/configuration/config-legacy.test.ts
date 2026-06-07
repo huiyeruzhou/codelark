@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import os from 'node:os';
 import { configV2ToLegacyConfig, legacyConfigToConfigPatch } from '../../../configuration/legacy.js';
 import { configPatchSchema, type ConfigV2 } from '../../../configuration/schema.js';
-import type { Config } from '../../../configuration/index.js';
+import type { Config } from '../../../configuration/legacy-types.js';
 
 function baseConfigV2(): ConfigV2 {
   return {

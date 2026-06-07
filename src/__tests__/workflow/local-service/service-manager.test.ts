@@ -12,7 +12,7 @@ import {
   isCodexIntegrationInstalled,
 } from '../../../local-service/manager.js';
 import { tryAcquireBridgeInstanceLock } from '../../../local-service/instance-lock.js';
-import type { Config } from '../../../configuration/index.js';
+import type { Config } from '../../../configuration/legacy-types.js';
 
 describe('buildDeferredGlobalNpmUninstallLaunch', () => {
   it('uses npm.cmd on Windows launchers', () => {

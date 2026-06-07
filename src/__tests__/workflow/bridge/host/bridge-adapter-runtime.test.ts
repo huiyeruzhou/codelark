@@ -5,7 +5,7 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 
 import { createAdapterRuntime } from '../../../../channels/adapter-runtime/runtime.js';
-import { CODELARK_HOME } from '../../../../configuration/index.js';
+import { CODELARK_HOME } from '../../../../configuration/paths.js';
 
 async function waitForCondition(fn: () => boolean, timeoutMs = 200): Promise<void> {
   const attempts = Math.max(1, Math.ceil(timeoutMs / 5));
