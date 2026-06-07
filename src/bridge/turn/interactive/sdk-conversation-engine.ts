@@ -180,7 +180,7 @@ export async function processMessage(
     const workDir = getSessionWorkingDirectory(session) || '';
     const activeRuntime = getSessionActiveRuntime(session) || 'codex';
     const runtimeConfig = resolveSessionRuntimeConfig(binding, session);
-    const claudeRuntimeConfig = activeRuntime === 'claude' ? resolveClaudeRuntimeConfig(session) : null;
+    const claudeRuntimeConfig = activeRuntime === 'claude' ? resolveClaudeRuntimeConfig(session, binding) : null;
 
     const { savedContent, llmFiles, persistedFileMeta } = prepareSdkMessageAttachments({ text, files, workDir });
     store.addMessage(sessionId, 'user', savedContent);

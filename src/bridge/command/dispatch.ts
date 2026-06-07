@@ -175,7 +175,7 @@ async function handleCurrentConfigFormCommand(options: {
     }
   }
 
-  const claudeConfig = activeRuntime === 'claude' ? resolveClaudeRuntimeConfig(session) : null;
+  const claudeConfig = activeRuntime === 'claude' ? resolveClaudeRuntimeConfig(session, binding) : null;
   const name = normalizeFormString(formValue.clk_name || formValue.name);
   if (name && name !== (session.name || '').trim()) {
     const parsed = validateThreadName(name);

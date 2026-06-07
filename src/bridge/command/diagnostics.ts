@@ -239,7 +239,7 @@ export function handleCurrentCommand(options: {
     || (codexThreadId ? getCodexSessionByThreadIdSafe(codexThreadId, 'current codex title')?.title : '')
     || '';
   const sessionName = session.name?.trim() ? stripLegacySessionPrefix(session.name) : '';
-  const claudeConfig = activeRuntime === 'claude' ? resolveClaudeRuntimeConfig(session) : null;
+  const claudeConfig = activeRuntime === 'claude' ? resolveClaudeRuntimeConfig(session, binding) : null;
   const sandboxMode = activeRuntime === 'claude' ? '' : resolveEffectiveSandboxMode(session);
   const networkAccess = activeRuntime === 'claude' ? undefined : resolveEffectiveNetworkAccess(session);
   const reasoningEffort = activeRuntime === 'claude' ? '' : resolveEffectiveReasoningEffort(session);
@@ -326,7 +326,7 @@ export function buildCurrentCommandRichCard(options: {
     || (codexThreadId ? getCodexSessionByThreadIdSafe(codexThreadId, 'current card codex title')?.title : '')
     || '';
   const sessionName = session.name?.trim() ? stripLegacySessionPrefix(session.name) : '';
-  const claudeConfig = activeRuntime === 'claude' ? resolveClaudeRuntimeConfig(session) : null;
+  const claudeConfig = activeRuntime === 'claude' ? resolveClaudeRuntimeConfig(session, binding) : null;
   const currentModel = activeRuntime === 'claude'
     ? claudeConfig?.model || 'default'
     : resolveDisplayedModel(binding, session, getGlobalCodexModel(), readConfiguredCodexModel());

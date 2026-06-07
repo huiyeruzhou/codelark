@@ -240,7 +240,7 @@ export function handleReasoningCommand(options: {
   const activeRuntime = getSessionActiveRuntime(session) || 'codex';
   if (!options.args) {
     if (activeRuntime === 'claude') {
-      const claudeConfig = resolveClaudeRuntimeConfig(session);
+      const claudeConfig = resolveClaudeRuntimeConfig(session, options.binding);
       return buildCommandFields(
         '当前 Claude Code 思考级别',
         [['级别', claudeConfig.reasoningEffort || 'default']],
@@ -316,7 +316,7 @@ export function handleModeCommand(options: {
         ['模式', mode],
         ['Runtime', activeRuntime],
         activeRuntime === 'claude'
-          ? ['Claude permission', resolveClaudeRuntimeConfig(session).permissionMode]
+          ? ['Claude permission', resolveClaudeRuntimeConfig(session, binding).permissionMode]
           : ['Provider', formatSessionCodexProvider(session)],
       ],
       [MODE_OPTIONS_TEXT, '发送 `/m normal` 或 `/m yolo` 切换。完整命令也兼容：`/mode normal`。'],
@@ -651,7 +651,7 @@ export function handleModelCommand(options: {
   const activeRuntime = getSessionActiveRuntime(session) || 'codex';
   if (activeRuntime === 'claude') {
     if (!options.args) {
-      const currentModel = getSessionClaudeModel(session) || resolveClaudeRuntimeConfig(session).model || 'default';
+      const currentModel = getSessionClaudeModel(session) || resolveClaudeRuntimeConfig(session, binding).model || 'default';
       return buildCommandFields(
         '当前 Claude Code 模型',
         [['模型', currentModel]],
@@ -677,7 +677,7 @@ export function handleModelCommand(options: {
       const updated = options.store.getSession(session.id);
       return buildCommandFields(
         '已恢复默认 Claude Code 模型',
-        [['模型', resolveClaudeRuntimeConfig(updated).model || 'default']],
+        [['模型', resolveClaudeRuntimeConfig(updated, binding).model || 'default']],
         ['后续启动 Claude Code pty 时会跟随全局 Claude 默认模型。', CLAUDE_PTY_RUNTIME_UPDATE_NOTE],
         options.markdown,
       );

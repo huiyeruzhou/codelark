@@ -27,7 +27,7 @@ export function formatSessionMode(binding: ChannelChat | null | undefined, sessi
 
 export function formatSessionRuntimeMode(binding: ChannelChat | null | undefined, session?: BridgeSession | null): string {
   if (getSessionActiveRuntime(session) === 'claude') {
-    return resolveClaudeRuntimeConfig(session).permissionMode === 'bypassPermissions' ? 'yolo' : 'normal';
+    return resolveClaudeRuntimeConfig(session, binding).permissionMode === 'bypassPermissions' ? 'yolo' : 'normal';
   }
   return formatSessionMode(binding, session);
 }

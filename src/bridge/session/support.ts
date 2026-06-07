@@ -8,8 +8,9 @@ import {
   type CodexSessionSummary,
 } from '../../runtime/codex/session-index.js';
 import { normalizeClaudeExecutable, type ClaudeExecutable, type ClaudePermissionMode, type ClaudeProviderChoice } from '../../configuration/runtime-types.js';
-import { createConfigService } from '../../configuration/service.js';
+import { createConfigService, type ConfigScope, type EffectiveConfig } from '../../configuration/service.js';
 import type { ConfigPatch } from '../../configuration/schema.js';
+import type { ConfigV2 } from '../../configuration/schema.js';
 import type { ConfigPath } from '../../configuration/fields-types.js';
 import {
   resetDraftSession as resetDraftSessionForStore,
@@ -81,6 +82,46 @@ function getSessionTomlOverride<T>(session: BridgeSession | null | undefined, pa
   } catch (error) {
     console.error(`[bridge-manager] Failed to resolve session TOML config ${path} for ${session.id}:`, error);
     return undefined;
+  }
+}
+
+function scopedConfigForRuntime(
+  binding?: ChannelChat | null,
+  session?: BridgeSession | null,
+): { effective: EffectiveConfig; config: ConfigV2; scope?: ConfigScope } {
+  const channelId = binding?.channelProvider === undefined || binding.channelProvider === 'feishu'
+    ? binding?.channelType
+    : undefined;
+  const scope: ConfigScope | undefined = session?.id
+    ? {
+        kind: 'session',
+        sessionId: session.id,
+        ...(channelId ? { channelId, provider: 'feishu' as const } : {}),
+      }
+    : channelId
+      ? { kind: 'channel', channelId, provider: 'feishu' as const }
+      : undefined;
+  try {
+    const effective = createConfigService({ migrate: false }).snapshot(scope);
+    return { effective, config: effective.config, scope };
+  } catch (error) {
+    console.error('[bridge-manager] Failed to resolve scoped runtime config:', error);
+    const effective = createConfigService({ migrate: false }).snapshot();
+    return { effective, config: effective.config, scope: undefined };
+  }
+}
+
+function sourceRank(source: string | undefined): number {
+  switch (source) {
+    case 'request': return 7;
+    case 'session': return 6;
+    case 'channel': return 5;
+    case 'cli': return 4;
+    case 'env': return 3;
+    case 'local': return 2;
+    case 'home': return 1;
+    case 'defaults':
+    default: return 0;
   }
 }
 
@@ -210,18 +251,22 @@ export function resolveSessionRuntimeConfig(
   binding?: ChannelChat | null,
   session?: BridgeSession | null,
 ): SessionRuntimeConfig {
-  const mode = resolveEffectiveMode(binding, session);
+  const { config } = scopedConfigForRuntime(binding, session);
+  const yoloMode = config.runtime.codex.yoloMode;
+  const mode: 'normal' | 'yolo' = yoloMode === 'on' || yoloMode === 'yolo' ? 'yolo' : 'normal';
+  const configuredProvider = config.runtime.codex.provider;
+  const codexProvider = configuredProvider === 'sdk' || configuredProvider === 'tmux' || configuredProvider === 'pty'
+    ? configuredProvider
+    : shouldUseCodexPtyTui() ? 'pty' : shouldUseCodexTmuxTui() ? 'tmux' : 'sdk';
   return {
     [sessionRuntimeConfigBrand]: true,
     mode,
-    model: getSessionTomlOverride<string>(session, 'runtime.codex.model')
-      || getGlobalStringConfig('runtime.codex.model')
-      || '',
-    codexProvider: resolveEffectiveCodexProvider(session),
-    sandboxMode: mode === 'yolo' ? 'danger-full-access' : resolveEffectiveSandboxMode(session),
-    networkAccessEnabled: resolveEffectiveNetworkAccess(session),
-    reasoningEffort: resolveEffectiveReasoningEffort(session),
-    skipGitRepoCheck: resolveEffectiveSkipGitRepoCheck(),
+    model: config.runtime.codex.model || '',
+    codexProvider,
+    sandboxMode: mode === 'yolo' ? 'danger-full-access' : normalizeSandboxMode(config.runtime.codex.sandboxMode),
+    networkAccessEnabled: config.runtime.codex.networkAccess === true,
+    reasoningEffort: normalizeStoredReasoningEffort(config.runtime.codex.reasoningEffort),
+    skipGitRepoCheck: config.runtime.codex.skipGitRepoCheck === true,
   };
 }
 
@@ -237,27 +282,38 @@ function parsePositiveSettingInt(value: string | null | undefined): number | und
   return undefined;
 }
 
-export function resolveClaudeRuntimeConfig(session?: BridgeSession | null): ClaudeRuntimeConfig {
-  const tomlPermissionMode = getSessionTomlOverride<ClaudePermissionMode>(session, 'runtime.claude.permissionMode');
-  const tomlYoloMode = getSessionTomlOverride<'off' | 'on'>(session, 'runtime.claude.yoloMode');
-  const tomlYoloPermissionMode = tomlYoloMode === 'on'
+function normalizeClaudeReasoningEffort(value: string | null | undefined): BridgeSessionClaudeRuntimeState['reasoningEffort'] | undefined {
+  return value === 'low'
+    || value === 'medium'
+    || value === 'high'
+    || value === 'xhigh'
+    || value === 'max'
+    ? value
+    : undefined;
+}
+
+export function resolveClaudeRuntimeConfig(session?: BridgeSession | null, binding?: ChannelChat | null): ClaudeRuntimeConfig {
+  const { effective, config } = scopedConfigForRuntime(binding, session);
+  const permissionMode = normalizeClaudePermissionMode(config.runtime.claude.permissionMode);
+  const permissionRank = sourceRank(effective.provenance.get('runtime.claude.permissionMode')?.source);
+  const yoloRank = sourceRank(effective.provenance.get('runtime.claude.yoloMode')?.source);
+  const yoloPermissionMode = config.runtime.claude.yoloMode === 'on'
     ? 'bypassPermissions'
-    : tomlYoloMode === 'off'
+    : config.runtime.claude.yoloMode === 'off'
       ? 'default'
       : undefined;
+  const configuredProvider = config.runtime.claude.provider;
   return {
     runtime: 'claude',
-    provider: resolveEffectiveClaudeProvider(session),
-    executable: normalizeClaudeExecutable(getGlobalStringConfig('runtime.claude.executable')) || 'claude',
-    model: getSessionTomlOverride<string>(session, 'runtime.claude.model')
-      || getGlobalStringConfig('runtime.claude.model')
-      || undefined,
-    permissionMode: tomlPermissionMode
-      || tomlYoloPermissionMode
-      || normalizeClaudePermissionMode(getGlobalStringConfig('runtime.claude.permissionMode'))
+    provider: configuredProvider === 'sdk' || configuredProvider === 'pty' ? configuredProvider : 'sdk',
+    executable: normalizeClaudeExecutable(config.runtime.claude.executable) || 'claude',
+    model: config.runtime.claude.model || undefined,
+    permissionMode: yoloRank > permissionRank
+      ? yoloPermissionMode || permissionMode || 'default'
+      : permissionMode || yoloPermissionMode
       || 'default',
-    reasoningEffort: getSessionTomlOverride<BridgeSessionClaudeRuntimeState['reasoningEffort']>(session, 'runtime.claude.reasoningEffort'),
-    idleTimeoutMinutes: parsePositiveSettingInt(String(getGlobalConfigValue<number>('runtime.claude.idleTimeoutMinutes') ?? '')),
+    reasoningEffort: normalizeClaudeReasoningEffort(config.runtime.claude.reasoningEffort),
+    idleTimeoutMinutes: parsePositiveSettingInt(String(config.runtime.claude.idleTimeoutMinutes ?? '')),
   };
 }
 

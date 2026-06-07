@@ -100,7 +100,7 @@ export async function handleProviderCommand(options: {
         [
           ['Runtime', 'claude'],
           ['Provider', formatSessionClaudeProvider(session)],
-          ['Claude executable', resolveClaudeRuntimeConfig(session)?.executable || 'claude'],
+          ['Claude executable', resolveClaudeRuntimeConfig(session, binding)?.executable || 'claude'],
           ['记住的 Codex BridgeSession', codexSession?.id || '-'],
           ['记住的 Codex Provider', codexSession ? formatSessionCodexProvider(codexSession) : '-'],
         ],

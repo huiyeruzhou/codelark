@@ -102,7 +102,7 @@ permission_mode = "default"
       assert.equal(resolved.executable, 'ccr');
       assert.equal(resolved.model, 'claude-global');
       assert.equal(resolved.permissionMode, 'default');
-      assert.equal(resolved.reasoningEffort, undefined);
+      assert.equal(resolved.reasoningEffort, 'medium');
     } finally {
       if (previousToml === null) fs.rmSync(configTomlPath, { force: true });
       else fs.writeFileSync(configTomlPath, previousToml, 'utf-8');
@@ -278,6 +278,70 @@ require_mention = false
       if (previousToml === null) fs.rmSync(configTomlPath, { force: true });
       else fs.writeFileSync(configTomlPath, previousToml, 'utf-8');
     }
+  });
+
+  it('resolves effective runtime config with channel and session TOML overlays', () => {
+    const channelTomlPath = path.join(CODELARK_HOME, 'config', 'channels', 'feishu-default.toml');
+    const sessionTomlPath = path.join(CODELARK_HOME, 'config', 'sessions', 'session-scoped-runtime.toml');
+    fs.mkdirSync(path.dirname(channelTomlPath), { recursive: true });
+    fs.mkdirSync(path.dirname(sessionTomlPath), { recursive: true });
+    fs.writeFileSync(channelTomlPath, `
+[runtime.codex]
+model = "channel-codex"
+provider = "pty"
+sandbox_mode = "read-only"
+network_access = false
+reasoning_effort = "high"
+
+[runtime.claude]
+model = "channel-claude"
+provider = "pty"
+permission_mode = "plan"
+reasoning_effort = "xhigh"
+`);
+    fs.writeFileSync(sessionTomlPath, `
+[runtime.codex]
+model = "session-codex"
+reasoning_effort = "low"
+`);
+
+    const binding = {
+      channelType: 'feishu-default',
+      channelProvider: 'feishu',
+      bridgeSessionId: 'session-scoped-runtime',
+    } as any;
+    const session = { id: 'session-scoped-runtime', runtime: { activeRuntime: 'claude' } } as BridgeSession;
+
+    const codex = resolveSessionRuntimeConfig(binding, session);
+    const claude = resolveClaudeRuntimeConfig(session, binding);
+
+    assert.equal(codex.model, 'session-codex');
+    assert.equal(codex.codexProvider, 'pty');
+    assert.equal(codex.sandboxMode, 'read-only');
+    assert.equal(codex.networkAccessEnabled, false);
+    assert.equal(codex.reasoningEffort, 'low');
+    assert.equal(claude.model, 'channel-claude');
+    assert.equal(claude.provider, 'pty');
+    assert.equal(claude.permissionMode, 'plan');
+    assert.equal(claude.reasoningEffort, 'xhigh');
+  });
+
+  it('lets higher-priority Claude yoloMode compatibility override default permissionMode', () => {
+    const channelTomlPath = path.join(CODELARK_HOME, 'config', 'channels', 'feishu-yolo.toml');
+    fs.mkdirSync(path.dirname(channelTomlPath), { recursive: true });
+    fs.writeFileSync(channelTomlPath, `
+[runtime.claude]
+yolo_mode = "on"
+`);
+
+    const binding = {
+      channelType: 'feishu-yolo',
+      channelProvider: 'feishu',
+      bridgeSessionId: 'session-claude-yolo',
+    } as any;
+    const session = { id: 'session-claude-yolo', runtime: { activeRuntime: 'claude' } } as BridgeSession;
+
+    assert.equal(resolveClaudeRuntimeConfig(session, binding).permissionMode, 'bypassPermissions');
   });
 
   it('centralizes update payloads for the runtime storage schema', () => {
