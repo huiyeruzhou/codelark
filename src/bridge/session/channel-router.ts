@@ -14,7 +14,6 @@ import { createConfigService, type ConfigScope } from '../../configuration/servi
 import { getEffectiveConfigSource } from '../../configuration/source-values.js';
 import { expandHomePath } from '../../configuration/paths.js';
 import type { ConfigV2 } from '../../configuration/schema.js';
-import { resolveConfiguredChannelScopeId } from '../../configuration/channel-instances.js';
 
 interface ChannelSessionDefaults {
   activeRuntime: 'codex' | 'claude';
@@ -25,7 +24,7 @@ interface ChannelSessionDefaults {
 
 function channelScopeForAddress(address: Pick<ChannelAddress, 'channelType' | 'channelProvider'>): ConfigScope | undefined {
   return address.channelProvider === undefined || address.channelProvider === 'feishu'
-    ? { kind: 'channel', channelId: resolveConfiguredChannelScopeId(address.channelType), provider: 'feishu' }
+    ? { kind: 'channel', channelId: address.channelType, provider: 'feishu' }
     : undefined;
 }
 
@@ -85,15 +84,14 @@ export function resolve(address: ChannelAddress): ChannelChat {
     });
     return created;
   }
-  const defaultTargetChannelType = resolveConfiguredChannelScopeId(address.channelType);
-  const channelDefaultTarget = store.getChannelDefaultTarget(defaultTargetChannelType);
+  const channelDefaultTarget = store.getChannelDefaultTarget(address.channelType);
   if (channelDefaultTarget) {
     try {
       const created = registry.bindChatToBridgeSession(address, channelDefaultTarget.bridgeSessionId);
       if (!created) {
         throw new Error('Session not found.');
       }
-      store.deleteChannelDefaultTarget(defaultTargetChannelType);
+      store.deleteChannelDefaultTarget(address.channelType);
       recordBindingChange(store, {
         action: 'auto_create_prebound',
         address,
@@ -103,7 +101,7 @@ export function resolve(address: ChannelAddress): ChannelChat {
       });
       return created;
     } catch (error) {
-      store.deleteChannelDefaultTarget(defaultTargetChannelType);
+      store.deleteChannelDefaultTarget(address.channelType);
       console.warn(
         `[channel-router] Failed to apply channel default target for ${address.channelType}: ${
           error instanceof Error ? error.message : String(error)

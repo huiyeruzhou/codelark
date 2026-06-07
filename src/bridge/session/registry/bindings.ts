@@ -5,10 +5,7 @@ import type { ChannelAddress, ChannelChat, ChannelChatMode, ChannelDefaultTarget
 import type { BridgeSession } from '../../../domain/session.js';
 import { recordBindingChange } from '../binding-audit.js';
 import type { ChannelProvider } from '../../../configuration/channel-types.js';
-import {
-  asChannelProvider,
-  resolveConfiguredChannelMeta,
-} from '../../../configuration/channel-instances.js';
+import { createConfigService } from '../../../configuration/service.js';
 import {
   getCodexSessionByThreadId,
   isArchivedCodexThread,
@@ -103,18 +100,34 @@ function compareBindingsForChatList(a: ChannelChat, b: ChannelChat): number {
   return 0;
 }
 
+function asChannelProvider(value: string | undefined): ChannelProvider | undefined {
+  return value === 'feishu' ? value : undefined;
+}
+
 function resolveChannelMeta(channelType: string, provider?: ChannelProvider): {
   provider?: ChannelProvider;
   alias?: string;
 } {
+  let instance: { provider?: string; alias?: string } | undefined;
   try {
-    return resolveConfiguredChannelMeta(channelType, provider);
+    instance = createConfigService({ migrate: false })
+      .snapshot()
+      .config
+      .channels
+      .find((channel) => channel.id === channelType);
   } catch {
+    instance = undefined;
+  }
+  if (instance) {
     return {
-      provider,
-      alias: channelType,
+      provider: asChannelProvider(instance.provider),
+      alias: instance.alias,
     };
   }
+  return {
+    provider,
+    alias: channelType,
+  };
 }
 
 function formatChannelLabel(binding: Pick<ChannelChat, 'channelType' | 'channelProvider' | 'channelAlias'>): string {

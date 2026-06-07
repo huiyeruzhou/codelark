@@ -1,4 +1,4 @@
-import { listConfiguredChannelInstances } from '../../configuration/channel-instances.js';
+import { createConfigService } from '../../configuration/service.js';
 import { getBridgeStatus, getCurrentUiServerUrl, getUiServerStatus } from '../../local-service/manager.js';
 import {
   buildCommandFields,
@@ -21,7 +21,7 @@ export function buildGlobalStatusResponse(
   currentBinding: ChannelChat | null,
   markdown: boolean,
 ): string {
-  const channels = listConfiguredChannelInstances();
+  const channels = createConfigService({ migrate: false }).snapshot().config.channels;
   const bridgeStatus = getBridgeStatus();
   const uiStatus = getUiServerStatus();
   const bindings = store.listChannelChats();

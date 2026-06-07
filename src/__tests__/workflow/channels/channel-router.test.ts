@@ -111,35 +111,6 @@ describe('channel-router default targets', () => {
     assert.equal(store.getChannelDefaultTarget('feishu-default'), null);
   });
 
-  it('routes legacy provider channelType through the configured default target channel id', () => {
-    const store = new JsonFileStore(makeSettings());
-    initBridgeContext({
-      store,
-      llm: noopLlm,
-      permissions: { resolvePendingPermission: () => false },
-      lifecycle: {},
-    });
-
-    const session = store.createSession('prebound legacy provider', 'test-model', undefined, '/tmp/prebound-legacy-provider');
-    store.upsertChannelDefaultTarget({
-      channelType: 'feishu-default',
-      channelProvider: 'feishu',
-      channelAlias: '飞书',
-      bridgeSessionId: session.id,
-    });
-
-    const binding = resolve({
-      channelType: 'feishu',
-      channelProvider: 'feishu',
-      chatId: 'oc_prebound_legacy_provider',
-      userId: 'ou_legacy_provider',
-      displayName: 'Legacy Provider',
-    });
-
-    assert.equal(binding.bridgeSessionId, session.id);
-    assert.equal(store.getChannelDefaultTarget('feishu-default'), null);
-  });
-
   it('routes the next new chat to a materialized Codex default target', () => {
     const store = new JsonFileStore(makeSettings());
     initBridgeContext({
@@ -367,17 +338,5 @@ describe('channel-router default targets', () => {
     assert.equal(getSessionActiveRuntime(visibleSession), 'claude');
     assert.equal(getSessionWorkingDirectory(visibleSession), explicitWorkspace);
     assert.equal(resolveSessionRuntimeConfig(visibleBinding, visibleSession).model, 'channel-codex-model');
-
-    const legacyProviderBinding = resolve({
-      channelType: 'feishu',
-      channelProvider: 'feishu',
-      chatId: 'oc_channel_defaults_legacy_provider',
-      userId: 'ou_legacy',
-      displayName: 'Legacy Provider',
-    });
-    const legacyProviderSession = store.getSession(legacyProviderBinding.bridgeSessionId);
-    assert.equal(getSessionActiveRuntime(legacyProviderSession), 'claude');
-    assert.equal(getSessionWorkingDirectory(legacyProviderSession), channelWorkspace);
-    assert.equal(resolveSessionRuntimeConfig(legacyProviderBinding, legacyProviderSession).model, 'channel-codex-model');
   });
 });

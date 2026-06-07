@@ -23,8 +23,6 @@ CodeLark 需要把“默认值、全局配置、项目配置、环境变量、�
 - `src/configuration/sources.ts`：复用 `node-config` TOML parser 读取 defaults/home/local/channel/session TOML，并提供 `ConfigService` 写入所需的持久化 I/O。
 - `src/configuration/service.ts`：`ConfigService` 查询、写入、dynamic overlay、provenance/explain 和 projection 入口。
 - `src/configuration/source-values.ts`：封装“只读取某个 source 的显式 override”、读取 effective path source 和比较 source 优先级这类 provenance 判断，业务代码不能各自手写 fallback/source 检查。
-- `src/configuration/channel-instances.ts`：封装 configured channel list、provider/id fallback 和 channel metadata lookup，业务代码不直接读 `snapshot().config.channels`。
-- `src/configuration/session-writes.ts`：封装 Session TOML 写回 helper，业务命令和 UI 保存只提交 patch/path，不直接构造 session-scope `ConfigService.set/unset`。
 - 配置解析库边界：生产代码只有 `src/configuration` 可以直接导入 `node-config` 或 `smol-toml`；业务模块必须通过 `ConfigService`、projection 或迁移 adapter 使用配置。
 - `src/local-service/manager.ts` / `src/entrypoints/cli.ts`：CLI `run` 时用同一个 effective config snapshot 同时派生 UI env、Bridge preflight config 和 Bridge env projection，避免一次启动内动态 TOML reload 前后不一致。
 - `src/configuration/legacy.ts` / `legacy-types.ts`：仅保留 legacy expanded `Config` adapter 和 migration/compatibility 测试；生产代码不应从这里读取配置。
@@ -97,7 +95,7 @@ CodeLark 需要把“默认值、全局配置、项目配置、环境变量、�
 
 1. 旧 `config.json` / `config.env` 已降级为迁移输入，但迁移 E2E 和 compatibility adapter 仍需保留，防止破坏旧用户配置升级路径。
 2. `bridge_default_provider_id`、`bridge_feishu_group_policy`、`bridge_feishu_group_allow_from`、`bridge_auto_start` 尚无 v2 字段或明确归属，属于需要产品确认的新语义，不能擅自迁移；边界测试只允许这些 legacy settings 继续作为待决 holdout。
-3. 部分全局/状态查询调用方仍通过短生命周期 `createConfigService({ migrate: false })` 读取动态配置；这保持了动态 reload，但后续可以考虑在应用层注入同一个 service 实例，减少重复构造。Session 写回、configured channel lookup 和 provenance/source 判断已经收口到配置模块 helper。
+3. 部分调用方仍通过短生命周期 `createConfigService({ migrate: false })` 读取动态配置；这保持了动态 reload，但后续可以考虑在应用层注入同一个 service 实例，减少重复构造。
 4. `JsonFileStore` 仍保留 legacy runtime settings projection 给旧内部接口和子进程 env 使用；这些 settings 现在是 projection 输出，不应再作为配置输入。
 
 ## 推荐模型
@@ -136,7 +134,6 @@ src/configuration/
   schema.ts                  # 当前 TOML shape 的 zod 校验、类型、coerce、默认值校验
   fields.ts                  # latest configFields；只服务当前运行时
   fields-types.ts            # ConfigFields / ConfigField 类型定义
-  channel-instances.ts       # configured channels 动态读取、provider/id fallback 和 metadata lookup
   channel-types.ts           # Channel/Feishu 运行时配置类型和站点解析工具
   runtime-types.ts           # Codex/Claude runtime 配置类型和轻量 normalizer
   paths.ts                   # CODELARK_HOME、默认工作区和 home path 展开工具；不暴露 legacy 输入文件名
@@ -145,7 +142,6 @@ src/configuration/
   merge.ts                   # node-config effective merge + provenance/write patch helpers
   service.ts                 # ConfigService 查询和写入 API
   source-values.ts           # source/path provenance 查询和显式 override 读取，避免业务代码手写 source rank/fallback
-  session-writes.ts          # Session TOML set/unset 写回 helper
   env-compat.ts              # 真实 process.env 的旧 env alias 兼容读取和 warning
   projections.ts             # runtime settings、UI payload、lark-cli projection
   legacy.ts                  # legacy Config adapter 和 runtime settings projection compatibility
@@ -607,7 +603,7 @@ interface MigrationContext {
 
 - `resolveSessionRuntimeConfig()` 改为调用 `ConfigService.snapshot(sessionScope)`，不再手写 session -> store settings fallback。
 - `configToSettings()` / `exportProcessEnv()` 变成 projection，不再承载默认值，也不读取 `config.env`。
-- adapter runtime 通道实例读取通过 `configuration/channel-instances.ts` 获取 v2 configured channels；`bridge_channel_instances_json` 只作为 legacy projection 输出，不再作为 bridge 内部运行时配置输入。
+- adapter runtime 通道实例读取从 `ConfigService.snapshot().config.channels` 获取；`bridge_channel_instances_json` 只作为 legacy projection 输出，不再作为 bridge 内部运行时配置输入。
 - 删除 expanded `Config` facade；旧 `Config` 形状只保留在 `legacy.ts` / `legacy-types.ts` 中作为 migration 和 compatibility adapter。
 - 测试从“字段函数测试”改为“configFields 驱动的多 source 覆盖矩阵”。
 

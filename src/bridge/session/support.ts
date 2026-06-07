@@ -10,7 +10,6 @@ import {
 import { normalizeClaudeExecutable, type ClaudeExecutable, type ClaudePermissionMode, type ClaudeProviderChoice } from '../../configuration/runtime-types.js';
 import { createConfigService, type ConfigScope, type EffectiveConfig } from '../../configuration/service.js';
 import { configSourceRank, getEffectiveConfigSource, getSessionConfigOverride, isEffectiveConfigSource } from '../../configuration/source-values.js';
-import { resolveConfiguredChannelScopeId } from '../../configuration/channel-instances.js';
 import type { ConfigPatch } from '../../configuration/schema.js';
 import type { ConfigV2 } from '../../configuration/schema.js';
 import type { ConfigPath } from '../../configuration/fields-types.js';
@@ -97,8 +96,8 @@ function scopedConfigForRuntime(
   binding?: ChannelChat | null,
   session?: BridgeSession | null,
 ): { effective: EffectiveConfig; config: ConfigV2; scope?: ConfigScope } {
-  const channelId = binding?.channelType && (binding.channelProvider === undefined || binding.channelProvider === 'feishu')
-    ? resolveConfiguredChannelScopeId(binding.channelType)
+  const channelId = binding?.channelProvider === undefined || binding.channelProvider === 'feishu'
+    ? binding?.channelType
     : undefined;
   const scope: ConfigScope | undefined = session?.id
     ? {
