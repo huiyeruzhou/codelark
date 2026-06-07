@@ -20,12 +20,13 @@ import {
   type TmuxSendAction,
   type TmuxSessionInfo,
 } from '../tmux/runtime.js';
-import { resolveEffectiveCodexProvider, resolveSessionRuntimeConfig } from '../session/support.js';
+import { resolveEffectiveRuntimeProvider, resolveSessionRuntimeConfig } from '../session/support.js';
 import { getCodexThreadId } from '../turn/turn-classifier.js';
 import {
   getSessionTmuxAutoEnter,
   getSessionTmuxCaptureLines,
   getSessionTmuxEchoInput,
+  getSessionRuntimeTmuxSessionName,
   getSessionTmuxSessionName,
   getSessionWorkingDirectory,
   setSessionCodexTmuxProviderUpdate,
@@ -443,9 +444,29 @@ async function ensureCodexTmuxSessionForProvider(
   params: Pick<HandleTmuxBridgeCommandParams, 'store' | 'binding' | 'session' | 'autoRecoverProviderSession' | 'reconcileMirrorSubscriptions' | 'notifyBackgroundOperation'>,
 ): Promise<{ target: string | undefined; commands: string[]; recovered: boolean; error?: string }> {
   const { store, binding, session } = params;
-  const configuredTarget = getSessionTmuxSessionName(session) || '';
-  if (resolveEffectiveCodexProvider(session, binding) !== 'tmux') {
+  const configuredTarget = getSessionRuntimeTmuxSessionName(session) || getSessionTmuxSessionName(session) || '';
+  const runtimeProvider = resolveEffectiveRuntimeProvider(session, binding);
+  if (runtimeProvider.provider !== 'tmux') {
     return { target: configuredTarget || undefined, commands: [], recovered: false };
+  }
+  if (runtimeProvider.runtime === 'claude') {
+    if (!configuredTarget) {
+      return {
+        target: undefined,
+        commands: [],
+        recovered: false,
+        error: 'Claude tmux Provider 缺少 tmux session。请先发送 `/provider tmux` 初始化当前 Claude Code tmux 绑定。',
+      };
+    }
+    const exists = await hasTmuxSession(configuredTarget);
+    return exists.exists
+      ? { target: configuredTarget, commands: [exists.command], recovered: false }
+      : {
+          target: configuredTarget,
+          commands: [exists.command],
+          recovered: false,
+          error: `tmux session 不存在：${configuredTarget}。请先发送 \`/provider tmux\` 重新初始化 Claude Code tmux，或发送 \`/tmux-new ${configuredTarget}\` 手动创建。`,
+        };
   }
 
   let threadId = getCodexThreadId(session, binding);

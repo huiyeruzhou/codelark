@@ -78,7 +78,7 @@ codelark run
 
 - 群聊如果太多，先尝试解散不再使用的群聊并重启 bridge。
 - 如果不是 `yolo` mode，可能是 agent 卡在权限确认上。可以先用 `/` 查看当前 mode，再按任务风险决定是否用 `/mode yolo` 或 `/m yolo` 切换。
-- 如果当前是 Codex tmux/pty 路径，可以使用 `/tmux-screen` 或 `/pty-screen` 查看终端状态。
+- 如果当前是 tmux/pty provider 路径，可以使用 `/tmux-screen` 或 `/pty-screen` 查看终端状态；Claude Code 默认 tmux 路径用 `/tmux-screen`。
 - 如果卡片已经进入终态但没有追加新的纯文本消息，先看卡片上是否已有最终内容和终态 reaction；当前实现会在最终更新失败但已有卡片内容时保留卡片，避免重复发送 fallback 文本。
 
 ## 飞书流式卡片不可用

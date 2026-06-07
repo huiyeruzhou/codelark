@@ -111,6 +111,7 @@ import {
   resolveDisplayedModel,
   resolveEffectiveClaudeProvider,
   resolveEffectiveCodexProvider,
+  resolveEffectiveRuntimeProvider,
   resolveNewWorkingDirectory,
   resolveNewSessionWorkingDirectory,
   resolveRuntimeMetadataConfig,
@@ -1148,12 +1149,8 @@ function shouldRouteTerminalAppendInline(msg: InboundMessage): boolean {
   if (!binding || !INTERACTIVE_RUNTIME.getActiveTask(binding.bridgeSessionId)) return false;
   const session = getBridgeContext().store.getSession(binding.bridgeSessionId);
   if (!session) return false;
-  const activeRuntime = getSessionActiveRuntime(session) || 'codex';
-  if (activeRuntime === 'claude') {
-    return resolveEffectiveClaudeProvider(session, binding) === 'pty';
-  }
-  return resolveEffectiveCodexProvider(session, binding) === 'tmux'
-    || resolveEffectiveCodexProvider(session, binding) === 'pty';
+  const runtimeProvider = resolveEffectiveRuntimeProvider(session, binding);
+  return runtimeProvider.provider === 'tmux' || runtimeProvider.provider === 'pty';
 }
 
 function resolveInboundCommandText(rawText: string): string {
@@ -2938,14 +2935,12 @@ async function handleMessage(
 
   const tmuxProviderBinding = store.getChannelChat(msg.address.channelType, msg.address.chatId);
   const tmuxProviderSession = tmuxProviderBinding ? store.getSession(tmuxProviderBinding.bridgeSessionId) : null;
-  const tmuxProviderActiveRuntime = getSessionActiveRuntime(tmuxProviderSession) || 'codex';
-  const tmuxProviderEffectiveProvider = tmuxProviderSession
-    ? resolveEffectiveCodexProvider(tmuxProviderSession, tmuxProviderBinding)
+  const tmuxProviderRuntime = tmuxProviderSession
+    ? resolveEffectiveRuntimeProvider(tmuxProviderSession, tmuxProviderBinding)
     : null;
   if (
     tmuxProviderSession
-    && tmuxProviderActiveRuntime !== 'claude'
-    && tmuxProviderEffectiveProvider === 'tmux'
+    && tmuxProviderRuntime?.provider === 'tmux'
   ) {
     const tmuxProviderChat = tmuxProviderBinding;
     if (!tmuxProviderChat) {
@@ -2960,7 +2955,7 @@ async function handleMessage(
       return;
     }
     if (hasAttachments) {
-      await deliverBridgeNotice(adapter, msg.address, '当前处于 tmux Provider，普通附件不会自动转发到 Codex TUI。请先发送 `/provider sdk`，或在 Codex TUI 内自行读取本地文件。', {
+      await deliverBridgeNotice(adapter, msg.address, '当前处于 tmux Provider，普通附件不会自动转发到 TUI。请先发送 `/provider sdk`，或在 TUI 内自行读取本地文件。', {
         replyToMessageId: msg.messageId,
       });
       ack();
@@ -3024,7 +3019,7 @@ async function handleMessage(
         });
         SESSION_HEALTH_RUNTIME.recordInteractiveStart(
           tmuxProviderBridgeSessionId,
-          '已向 Codex tmux TUI 注入消息，等待 mirror 同步当前 turn。',
+          `已向 ${tmuxProviderRuntime.identity} TUI 注入消息，等待 mirror 同步当前 turn。`,
         );
         store.insertAuditLog({
           channelType: adapter.channelType,
@@ -3033,7 +3028,7 @@ async function handleMessage(
           messageId: msg.messageId,
           summary: [
             'terminal append input delivered',
-            'runtime=codex',
+            `runtime=${tmuxProviderRuntime.runtime}`,
             'provider=tmux',
             `session=${tmuxProviderBinding?.bridgeSessionId || ''}`,
             `chars=${text.length}`,

@@ -126,7 +126,7 @@ export function configV2ToPayload(config: ConfigV2) {
     codexSandboxMode: config.runtime.codex.sandboxMode || 'workspace-write',
     codexNetworkAccess: config.runtime.codex.networkAccess !== false,
     codexReasoningEffort: config.runtime.codex.reasoningEffort || 'medium',
-    claudeProvider: config.runtime.claude.provider || 'sdk',
+    claudeProvider: config.runtime.claude.provider || 'tmux',
     claudeExecutable: config.runtime.claude.executable || 'claude',
     claudeDefaultModel: config.runtime.claude.model || '',
     claudePermissionMode: config.runtime.claude.permissionMode || 'default',

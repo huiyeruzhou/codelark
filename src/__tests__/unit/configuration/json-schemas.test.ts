@@ -85,6 +85,7 @@ describe('published JSON schemas', () => {
     assert.equal(parsed.$defs.runtime.properties.defaultModel, undefined);
     assert.equal(parsed.$defs.runtime.properties.defaultProvider, undefined);
     assert.equal(parsed.$defs.runtime.properties.historyMessageLimit, undefined);
+    assert.deepEqual(parsed.$defs.claudeRuntimeDefaults.properties.provider.enum, ['sdk', 'pty', 'tmux']);
     assert.deepEqual(parsed.$defs.claudeRuntimeDefaults.properties.executable.enum, ['claude', 'ccr']);
     assert.equal(parsed.$defs.codexRuntimeDefaults.properties.executable, undefined);
     assert.deepEqual(parsed.$defs.bridgeControlConfig.properties.defaultCodexProvider.enum, ['sdk', 'pty', 'tmux']);
@@ -102,6 +103,7 @@ describe('published JSON schemas', () => {
     assert.deepEqual(sessionsSchema.$defs.claudeSessionRuntime.required, ['activeRuntime']);
     assert.equal(sessionsSchema.$defs.claudeSessionRuntime.properties.activeRuntime.const, 'claude');
     assert.deepEqual(sessionsSchema.$defs.claudeSessionRuntime.properties.codex, { not: {} });
+    assert.deepEqual(sessionsSchema.$defs.claudeSessionRuntime.properties.claude.properties.provider.enum, ['sdk', 'pty', 'tmux']);
     assert.equal(sessionsSchema.$defs.sessionRuntimeGeneral.properties.tmuxSessionName.type, 'string');
     assert.ok(JSON.stringify(sessionsSchema.$defs.noRetiredRuntimeTopLevelFields).includes('codex_thread_id'));
   });

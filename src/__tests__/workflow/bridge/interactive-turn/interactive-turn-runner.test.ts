@@ -298,7 +298,7 @@ class ScriptedSessionSimulator {
     setSessionConfigToml(
       sessionId,
       runtime === 'claude'
-        ? { runtime: { claude: { provider: provider === 'sdk' ? 'sdk' : 'pty' } } }
+        ? { runtime: { claude: { provider } } }
         : { runtime: { codex: { provider: provider === 'tmux' ? 'tmux' : provider === 'pty' ? 'pty' : 'sdk' } } },
     );
   }

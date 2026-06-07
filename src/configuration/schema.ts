@@ -5,7 +5,7 @@ import { z } from 'zod';
 
 export const runtimeAgentSchema = z.enum(['codex', 'claude']);
 export const codexProviderSchema = z.enum(['sdk', 'tmux', 'pty']);
-export const claudeProviderSchema = z.enum(['sdk', 'pty']);
+export const claudeProviderSchema = z.enum(['sdk', 'pty', 'tmux']);
 export const claudeExecutableSchema = z.enum(['claude', 'ccr']);
 export const yoloModeSchema = z.enum(['off', 'on', 'yolo']);
 export const claudePermissionModeSchema = z.enum(['default', 'acceptEdits', 'bypassPermissions', 'plan']);

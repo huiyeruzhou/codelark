@@ -357,9 +357,13 @@ export function buildCurrentCommandRichCard(options: {
       {
         elementId: 'clk_provider',
         label: 'provider',
-        placeholder: 'pty/sdk',
-        selectedCallbackData: claudeConfig?.provider || 'pty',
-        options: [{ text: 'pty', callbackData: 'pty' }, { text: 'sdk', callbackData: 'sdk' }],
+        placeholder: 'tmux/pty/sdk',
+        selectedCallbackData: claudeConfig?.provider || 'tmux',
+        options: [
+          { text: 'tmux', callbackData: 'tmux' },
+          { text: 'pty', callbackData: 'pty' },
+          { text: 'sdk', callbackData: 'sdk' },
+        ],
       },
       {
         elementId: 'clk_reasoning',

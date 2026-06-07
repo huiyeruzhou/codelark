@@ -28,10 +28,17 @@ import { shouldUseCodexPtyTui } from '../../runtime/codex/pty-provider.js';
 import { shouldUseCodexTmuxTui } from '../../runtime/codex/tmux-provider.js';
 import { getBridgeContext } from '../host/context.js';
 import {
+  buildRuntimeProviderIdentity,
   getSessionWorkingDirectory,
 } from '../../domain/session-runtime.js';
 import type { ChannelChat } from '../../domain/channel.js';
-import type { BridgeSession, BridgeSessionClaudeRuntimeState, BridgeSessionCodexRuntimeState } from '../../domain/session.js';
+import type {
+  BridgeSession,
+  BridgeSessionClaudeRuntimeState,
+  BridgeSessionCodexRuntimeState,
+  RuntimeProviderChoice,
+  RuntimeProviderIdentity,
+} from '../../domain/session.js';
 import { validateWorkingDirectory } from '../../shared/security/validators.js';
 import {
   getGlobalStringConfig,
@@ -146,7 +153,8 @@ export function hasSessionCodexNetworkAccessOverride(session?: BridgeSession | n
   return getSessionTomlOverride<boolean>(session, 'runtime.codex.networkAccess') !== undefined;
 }
 
-export type SessionRuntimeCodexProvider = 'sdk' | 'tmux' | 'pty';
+export type SessionRuntimeProvider = RuntimeProviderChoice;
+export type SessionRuntimeCodexProvider = SessionRuntimeProvider;
 
 export const sessionRuntimeConfigBrand: unique symbol = Symbol('SessionRuntimeConfig');
 
@@ -185,13 +193,13 @@ export function resolveEffectiveClaudeProvider(
   binding?: ChannelChat | null,
 ): ClaudeProviderChoice {
   const configured = scopedConfigForRuntime(binding, session).config.runtime.claude.provider;
-  if (configured === 'sdk' || configured === 'pty') return configured;
-  return 'sdk';
+  if (configured === 'sdk' || configured === 'pty' || configured === 'tmux') return configured;
+  return 'tmux';
 }
 
 export function getSessionClaudeProviderOverride(session?: BridgeSession | null): ClaudeProviderChoice | undefined {
   const tomlProvider = getSessionTomlOverride<ClaudeProviderChoice>(session, 'runtime.claude.provider');
-  return tomlProvider === 'sdk' || tomlProvider === 'pty' ? tomlProvider : undefined;
+  return tomlProvider === 'sdk' || tomlProvider === 'pty' || tomlProvider === 'tmux' ? tomlProvider : undefined;
 }
 
 export function hasSessionClaudeProviderOverride(session?: BridgeSession | null): boolean {
@@ -222,6 +230,28 @@ export function getSessionCodexProviderOverride(session?: BridgeSession | null):
 
 export function hasSessionCodexProviderOverride(session?: BridgeSession | null): boolean {
   return getSessionCodexProviderOverride(session) !== undefined;
+}
+
+export interface EffectiveRuntimeProvider {
+  runtime: 'codex' | 'claude';
+  provider: RuntimeProviderChoice;
+  identity: RuntimeProviderIdentity;
+}
+
+export function resolveEffectiveRuntimeProvider(
+  session?: BridgeSession | null,
+  binding?: ChannelChat | null,
+): EffectiveRuntimeProvider {
+  const configuredRuntime = scopedConfigForRuntime(binding, session).config.runtime.agent;
+  const runtime = session?.runtime?.activeRuntime === 'claude' ? 'claude' : configuredRuntime;
+  const provider = runtime === 'claude'
+    ? resolveEffectiveClaudeProvider(session, binding)
+    : resolveEffectiveCodexProvider(session, binding);
+  return {
+    runtime,
+    provider,
+    identity: buildRuntimeProviderIdentity(runtime, provider),
+  };
 }
 
 export function resolveEffectiveSkipGitRepoCheck(): boolean {
@@ -286,7 +316,9 @@ export function resolveClaudeRuntimeConfig(session?: BridgeSession | null, bindi
   const configuredProvider = config.runtime.claude.provider;
   return {
     runtime: 'claude',
-    provider: configuredProvider === 'sdk' || configuredProvider === 'pty' ? configuredProvider : 'sdk',
+    provider: configuredProvider === 'sdk' || configuredProvider === 'pty' || configuredProvider === 'tmux'
+      ? configuredProvider
+      : 'tmux',
     executable: normalizeClaudeExecutable(config.runtime.claude.executable) || 'claude',
     model: config.runtime.claude.model || undefined,
     permissionMode: yoloRank > permissionRank

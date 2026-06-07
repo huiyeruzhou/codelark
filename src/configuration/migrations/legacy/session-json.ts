@@ -86,8 +86,8 @@ function codexProvider(value: unknown): 'sdk' | 'tmux' | 'pty' | undefined {
   return value === 'sdk' || value === 'tmux' || value === 'pty' ? value : undefined;
 }
 
-function claudeProvider(value: unknown): 'sdk' | 'pty' | undefined {
-  return value === 'sdk' || value === 'pty' ? value : undefined;
+function claudeProvider(value: unknown): 'sdk' | 'pty' | 'tmux' | undefined {
+  return value === 'sdk' || value === 'pty' || value === 'tmux' ? value : undefined;
 }
 
 function sandboxMode(value: unknown): 'read-only' | 'workspace-write' | 'danger-full-access' | undefined {

@@ -11,6 +11,7 @@ import {
   resolveClaudeRuntimeConfig,
   resolveEffectiveClaudeProvider,
   resolveEffectiveCodexProvider,
+  resolveEffectiveRuntimeProvider,
   resolveEffectiveMode,
   hasSessionClaudeProviderOverride,
   hasSessionCodexProviderOverride,
@@ -86,8 +87,16 @@ export function formatSessionClaudeProvider(session?: BridgeSession | null, bind
     : `${effective} (全局默认)`;
 }
 
+export function formatSessionRuntimeProvider(session?: BridgeSession | null, binding?: ChannelChat | null): string {
+  const effective = resolveEffectiveRuntimeProvider(session, binding);
+  const hasOverride = effective.runtime === 'claude'
+    ? hasSessionClaudeProviderOverride(session)
+    : hasSessionCodexProviderOverride(session);
+  return hasOverride ? effective.provider : `${effective.provider} (全局默认)`;
+}
+
 export function isTuiProviderSession(session?: BridgeSession | null, binding?: ChannelChat | null): boolean {
-  const provider = resolveEffectiveCodexProvider(session, binding);
+  const { provider } = resolveEffectiveRuntimeProvider(session, binding);
   return provider === 'tmux' || provider === 'pty';
 }
 

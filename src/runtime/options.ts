@@ -10,7 +10,7 @@ export type CodexSandboxMode = RuntimeSandboxMode;
 export type CodexReasoningEffort = RuntimeReasoningEffort;
 export type RuntimeProvider = 'codex' | 'claude';
 export type CodexProviderChoice = 'sdk' | 'tmux' | 'pty';
-export type ClaudeProviderChoice = 'pty' | 'sdk';
+export type ClaudeProviderChoice = 'pty' | 'sdk' | 'tmux';
 export type ClaudeExecutable = 'claude' | 'ccr';
 export type ClaudePermissionMode = 'default' | 'acceptEdits' | 'bypassPermissions' | 'plan';
 
@@ -50,8 +50,8 @@ export function normalizeCodexProviderChoice(value: unknown): CodexProviderChoic
 export function normalizeClaudeProviderChoice(value: unknown): ClaudeProviderChoice | undefined {
   if (typeof value !== 'string') return undefined;
   const normalized = value.trim().toLowerCase();
-  if (normalized === 'sdk' || normalized === 'pty') return normalized;
-  return 'sdk';
+  if (normalized === 'sdk' || normalized === 'pty' || normalized === 'tmux') return normalized;
+  return 'tmux';
 }
 
 export function normalizeClaudePermissionMode(value: unknown): ClaudePermissionMode | undefined {

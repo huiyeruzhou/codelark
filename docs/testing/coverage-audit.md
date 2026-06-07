@@ -2,7 +2,7 @@
 
 本文把当前用户可见的 bridge 功能映射到本地测试覆盖和真实飞书 E2E 证据。真实飞书场景组织、当前证据和报告 gate 统一维护在 [真实飞书 E2E](real-feishu/)。
 
-真实飞书 E2E 不应逐条镜像单元测试，而应通过基础对话 suite 和功能 suite 覆盖高风险、客户端可见的工作流，并在一次运行中收集多项相关断言。诊断、终端和会话控制命令 suite 应按 runtime（`codex` 和 `claude`）检查，而不是按完整 provider 矩阵检查；只有 tmux 专属命令需要额外的 `codex-tmux` provider 路径。
+真实飞书 E2E 不应逐条镜像单元测试，而应通过基础对话 suite 和功能 suite 覆盖高风险、客户端可见的工作流，并在一次运行中收集多项相关断言。诊断、终端和会话控制命令 suite 应按 runtime（`codex` 和 `claude`）检查，而不是按完整 provider 矩阵检查；tmux 专属命令需覆盖 Codex tmux 和 Claude 默认 tmux 路径。
 
 真实飞书 harness 现在暴露 `coverageTier` 来描述测试结构。`mandatory-suite` 用于最高优先级长流程；`representative-suite` 用于在选定 provider 上验证功能丰富的工作流；`runtime-compressed-command-check` 用于命令密集型检查；`legacy-transitional-evidence` 用于较旧但仍有诊断价值的拆分 full-matrix 场景，这类场景不应继续驱动新扩张。
 
@@ -10,14 +10,14 @@
 
 | 区域 | 用户可见行为 | 本地覆盖 | 真实飞书覆盖 |
 | --- | --- | --- | --- |
-| Runtime 路由 | 普通 IM 消息进入选定 runtime；slash 命令仍在 bridge 内联处理。 | `bridge-adapter-runtime.test.ts`、`interactive-turn-runner.test.ts`、`session-runtime.test.ts` | `message-only`、`runtime-message` 覆盖 codex-sdk/codex-pty/codex-tmux/claude-pty/claude-sdk |
-| Provider 选择 | `/provider` 和 `/p` 切换 Codex `sdk|pty|tmux` 与 Claude `pty|sdk`。 | `command-dispatch.test.ts`、`bridge-command-e2e.test.ts`、`codex-routing-provider.test.ts` | `runtime-message`、`command-state`、`session-management` provider 矩阵 |
+| Runtime 路由 | 普通 IM 消息进入选定 runtime；Claude 默认走 tmux，slash 命令仍在 bridge 内联处理。 | `bridge-adapter-runtime.test.ts`、`interactive-turn-runner.test.ts`、`session-runtime.test.ts` | `message-only`、`runtime-message` 覆盖 codex-sdk/codex-pty/codex-tmux/claude-pty/claude-sdk；Claude tmux 作为默认路径需补 canonical 证据 |
+| Provider 选择 | `/provider` 和 `/p` 切换 Codex/Claude `sdk|pty|tmux`。 | `command-dispatch.test.ts`、`bridge-command-e2e.test.ts`、`codex-routing-provider.test.ts`、`claude-tmux-provider.test.ts` | `runtime-message`、`command-state`、`session-management` provider 矩阵 |
 | Session 生命周期 | `/new`、`/t`、`/current`、`/cd`、`/clear`、`/his`、`/check`、重命名和归档流程。 | `feishu-markdown.test.ts` 覆盖 `/t` CardKit 表格结构；`command-dispatch.test.ts` 覆盖 `/t` 默认 20、50/100、Codex/Claude runtime 下拉、用户输入轮数、接管确认、running 拒绝和 Claude archive；`bridge-command-e2e.test.ts` 覆盖 mock app `/t` 卡片按钮链；`bridge-manager.test.ts` 覆盖群删除 Codex/Claude 归档。 | `session-management` harness 已把 `/t` 纳入命令级飞书文本断言；当前 codex-pty 和 codex-tmux 已有语义 canonical 证据，但这些报告早于 `/t` 单表卡片，codex-sdk/claude-pty/claude-sdk 也仍需重跑。拆分历史场景在 Codex mirror provider 上有可用历史 canonical 证据；`history-suite::codex-tmux` 现在是 `/his` default/raw/msg/limit/json/file、长截断和 B 群空历史隔离的首选代表性 provider 证据。 |
 | Runtime 配置 | `/model`、`/mode`、`/sandbox`、`/network`、`/reasoning`、全局 `/set`。 | `command-dispatch.test.ts`、`bridge-command-e2e.test.ts`、`config.test.ts` | `command-state` 覆盖 runtime 设置并带命令级飞书文本断言；`session-management` 覆盖 `/set` |
 | 自动任务 | `/auto` 创建/列表/删除和 auto card 回调。 | `bridge-command-e2e.test.ts`、`command-dispatch.test.ts` | `command-state` provider 矩阵通过真实飞书消息覆盖创建/列表/删除，并断言 created/list/deleted 文本 |
 | Require-at 策略 | `/require-at on/off` 和非 mention 群消息过滤。 | `command-dispatch.test.ts`、`feishu-adapter.test.ts`、`bridge-command-e2e.test.ts` | `require-at-toggle` runtime-neutral 报告 |
 | 流式和 mirror 交付 | SDK provider 使用直接 `im:` 卡片；pty/tmux provider 使用 `mirror:` 交付，且不重复最终文本；悬挂 mirror identity 按 runtime 清理。 | `interactive-turn-runner.test.ts`、`mirror-runtime.test.ts`、`turn-coordinator.test.ts`、`bridge-manager.test.ts` | `message-only`、`runtime-message`、`command-state`、`session-management` provider gate |
-| Claude Code 集成 | Claude pty onboarding/trust setup、CCR 激活、Claude JSONL 身份、Claude SDK query 路径。 | `claude-pty-provider.test.ts`、`claude-sdk-provider.test.ts`、`real-claude-pty-provider.e2e.test.ts`、`claude-session-jsonl.test.ts` | Claude pty 报告使用真实 `ccr code` + fake backend；Claude SDK 报告使用 CCR-backed SDK env + fake backend |
+| Claude Code 集成 | Claude tmux 默认 provider、Claude pty onboarding/trust setup、CCR 激活、Claude JSONL 身份、Claude SDK query 路径。 | `claude-tmux-provider.test.ts`、`claude-pty-provider.test.ts`、`claude-sdk-provider.test.ts`、`real-claude-pty-provider.e2e.test.ts`、`claude-session-jsonl.test.ts` | Claude pty 报告使用真实 `ccr code` + fake backend；Claude SDK 报告使用 CCR-backed SDK env + fake backend；Claude tmux 真实飞书证据待补 |
 | Codex 终端 provider | Codex pty/tmux 启动、prompt 注入、JSONL mirror 和清理。 | `codex-tmux-provider.test.ts`、`real-codex-pty-provider.e2e.test.ts`、`real-codex-tmux-provider.e2e.test.ts`、`bridge-command-e2e.test.ts` | Codex pty/tmux 报告要求 `mirror:` 输出和 tmux 清理 |
 | 飞书 adapter | 消息发送、卡片更新/完成、reply threading、Markdown/card 渲染、事件过滤。 | `feishu-adapter.test.ts`、`feishu-adapter-card-e2e.test.ts`、`plain-markdown.test.ts`、`delivery-pipeline.test.ts` | 所有真实飞书报告都要求逐消息 `reply_to`；`card-forms` 覆盖 `/new-form` 作为 `interactive` CardKit 表单回复，并带 callback_data 前缀证据；`agent-question-forms` 覆盖模型生成的 `<clk-ask>` 问题表单和 `clk-agent-question` callback 前缀证据；`markdown-rendering::codex-pty` 和 `markdown-rendering::codex-tmux` 有最终 Markdown 表格/代码块结构的 canonical 飞书原始内容证据；表单场景尚未触发真实 submit callback 事件 |
 | 诊断和清理 | 真实 E2E dump、bridge 日志、测试群创建/清理、测试 tmux 清理、过期锁处理。 | `real-feishu-e2e-harness.test.ts`、`service-manager.test.ts` | 每个成功真实飞书报告都 gate 群清理；`--create-chat` fallback 现在会推断或要求 bot app id，确保 lark-cli user 创建的群仍邀请 bridge bot；tmux 报告 gate 测试 tmux 清理 |

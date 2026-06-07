@@ -81,7 +81,7 @@ function setSessionCodexProviderToml(sessionId: string, provider: 'sdk' | 'pty' 
   );
 }
 
-function setSessionClaudeProviderToml(sessionId: string, provider: 'sdk' | 'pty'): void {
+function setSessionClaudeProviderToml(sessionId: string, provider: 'sdk' | 'pty' | 'tmux'): void {
   createConfigService({ migrate: false, env: {} }).set(
     { kind: 'session', sessionId },
     { runtime: { claude: { provider } } },
@@ -1489,6 +1489,9 @@ provider = "tmux"
       assert.notEqual(claudeBinding.bridgeSessionId, binding.bridgeSessionId);
       assert.equal(store.getSession(claudeBinding.bridgeSessionId)?.runtime?.activeRuntime, 'claude');
 
+      await _testOnly.handleMessage(adapter, inboundMessage(address, '/p sdk', 'incoming-provider-claude-sdk'));
+      assert.equal(getSessionClaudeProviderToml(claudeBinding.bridgeSessionId), 'sdk');
+
       await _testOnly.handleMessage(adapter, inboundMessage(address, 'hi', 'incoming-runtime-claude-plain'));
 
       assert.equal(calls.length, 1);
@@ -1591,6 +1594,9 @@ provider = "tmux"
       assert.equal(store.getSession(claudeBinding.bridgeSessionId)?.runtime?.activeRuntime, 'claude');
       setSessionClaudeProviderToml(claudeBinding.bridgeSessionId, 'pty');
       const sentBeforePrompt = adapter.sent.length;
+
+      await _testOnly.handleMessage(adapter, inboundMessage(address, '/p pty', 'incoming-provider-claude-jsonl-pty'));
+      assert.equal(getSessionClaudeProviderToml(claudeBinding.bridgeSessionId), 'pty');
 
       await _testOnly.handleMessage(adapter, inboundMessage(address, 'hi from claude jsonl', 'incoming-runtime-claude-jsonl-mirror-prompt'));
       await waitForCondition(() => adapter.streamEvents.some((event) => event.kind === 'end' && event.streamKey?.startsWith('mirror:')), 3000);
@@ -1780,6 +1786,9 @@ provider = "tmux"
       assert.ok(claudeBinding);
       assert.notEqual(claudeBinding.bridgeSessionId, binding.bridgeSessionId);
       assert.equal(getSessionActiveRuntime(store.getSession(claudeBinding.bridgeSessionId)), 'claude');
+
+      await _testOnly.handleMessage(adapter, inboundMessage(address, '/p pty', 'incoming-provider-mock-claude-pty'));
+      assert.equal(getSessionClaudeProviderToml(claudeBinding.bridgeSessionId), 'pty');
 
       await _testOnly.handleMessage(adapter, inboundMessage(address, 'hello mock claude', 'incoming-mock-claude-prompt'));
       assert.match(fs.readFileSync(fakeClaude.logPath, 'utf-8'), /prompt:hello mock claude/);

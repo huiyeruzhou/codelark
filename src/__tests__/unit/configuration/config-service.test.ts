@@ -33,7 +33,7 @@ describe('ConfigService v2 foundation', () => {
       assert.equal(snapshot.config.schemaVersion, 2);
       assert.equal(snapshot.config.runtime.agent, 'codex');
       assert.equal(snapshot.config.runtime.codex.sandboxMode, 'workspace-write');
-      assert.equal(snapshot.config.runtime.claude.provider, 'sdk');
+      assert.equal(snapshot.config.runtime.claude.provider, 'tmux');
       assert.equal(snapshot.config.bridge.defaultWorkspace, '~');
       assert.equal(snapshot.config.session.tmuxCaptureLines, 80);
       assert.equal(snapshot.config.channels[0]?.id, 'feishu-default');

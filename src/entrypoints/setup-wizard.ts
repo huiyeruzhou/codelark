@@ -105,7 +105,7 @@ export function runtimeChoiceToConfig(choice: RuntimeChoice): NonNullable<Config
     agent: 'claude',
     claude: {
       executable: choice === 'ccr' ? 'ccr' : 'claude',
-      provider: 'sdk',
+      provider: 'tmux',
     },
   };
 }

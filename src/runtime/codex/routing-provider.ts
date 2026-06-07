@@ -1,16 +1,18 @@
 import type { LLMProvider, StreamChatParams } from '../contracts.js';
 import type { PendingPermissions } from '../permission-gateway.js';
+import type { RuntimeProviderChoice } from '../../domain/session.js';
+import { isRuntimeProviderChoice } from '../../domain/session-runtime.js';
 import { ClaudePtyProvider } from '../../runtime/claude/pty-provider.js';
 import { ClaudeSdkProvider } from '../../runtime/claude/sdk-provider.js';
+import { ClaudeTmuxProvider } from '../../runtime/claude/tmux-provider.js';
 import { CodexProvider } from './provider.js';
 import { CodexPtyProvider, shouldUseCodexPtyTui } from './pty-provider.js';
 import { CodexTmuxProvider, shouldUseCodexTmuxTui } from './tmux-provider.js';
 
-export type CodexProviderChoice = 'sdk' | 'tmux' | 'pty';
+export type CodexProviderChoice = RuntimeProviderChoice;
 
 function normalizeProviderChoice(value: unknown): CodexProviderChoice | null {
-  if (value === 'sdk' || value === 'tmux' || value === 'pty') return value;
-  return null;
+  return isRuntimeProviderChoice(value) ? value : null;
 }
 
 export class CodexRoutingProvider implements LLMProvider {
@@ -19,6 +21,7 @@ export class CodexRoutingProvider implements LLMProvider {
   private readonly ptyProvider: LLMProvider;
   private readonly claudePtyProvider: LLMProvider;
   private readonly claudeSdkProvider: LLMProvider;
+  private readonly claudeTmuxProvider: LLMProvider;
   private readonly defaultProvider: CodexProviderChoice;
 
   constructor(pendingPerms?: PendingPermissions, defaultProvider?: CodexProviderChoice) {
@@ -27,22 +30,23 @@ export class CodexRoutingProvider implements LLMProvider {
     this.ptyProvider = new CodexPtyProvider(pendingPerms);
     this.claudePtyProvider = new ClaudePtyProvider();
     this.claudeSdkProvider = new ClaudeSdkProvider();
+    this.claudeTmuxProvider = new ClaudeTmuxProvider();
     this.defaultProvider = defaultProvider
       || (shouldUseCodexPtyTui() ? 'pty' : shouldUseCodexTmuxTui() ? 'tmux' : 'sdk');
   }
 
   streamChat(params: StreamChatParams): ReadableStream<string> {
     if (params.runtime === 'claude') {
-      const claudeProvider = params.claudeProvider === 'sdk' ? 'sdk' : 'pty';
+      const claudeProvider = normalizeProviderChoice(params.claudeProvider) || 'tmux';
       console.log('[codex-routing-provider] Route Claude Code request:', {
         bridge_session_id: params.sessionId,
         runtime: params.runtime || null,
         executable: params.claudeExecutable || 'claude',
         provider: claudeProvider,
       });
-      return claudeProvider === 'sdk'
-        ? this.claudeSdkProvider.streamChat(params)
-        : this.claudePtyProvider.streamChat(params);
+      if (claudeProvider === 'tmux') return this.claudeTmuxProvider.streamChat(params);
+      if (claudeProvider === 'pty') return this.claudePtyProvider.streamChat(params);
+      return this.claudeSdkProvider.streamChat(params);
     }
     const choice = normalizeProviderChoice(params.codexProvider) || this.defaultProvider;
     console.log('[codex-routing-provider] Route Codex request:', {

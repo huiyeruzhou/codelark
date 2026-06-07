@@ -228,7 +228,7 @@ async function handleCurrentConfigFormCommand(options: {
 
   const provider = normalizeFormString(formValue.clk_provider || formValue.provider);
   const currentProvider = activeRuntime === 'claude'
-    ? (claudeConfig?.provider || 'pty')
+    ? (claudeConfig?.provider || 'tmux')
     : resolveEffectiveCodexProvider(session, binding);
   if (provider && provider !== currentProvider) {
     responses.push(await handleProviderCommand({

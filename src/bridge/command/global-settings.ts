@@ -338,14 +338,14 @@ const SETTING_DEFINITIONS: SettingDefinition[] = [
     group: 'global-runtime-claude',
     aliases: ['claudeDefaultProvider'],
     label: '默认 Claude Provider',
-    usage: '/set claudeProvider pty|sdk',
-    read: (payload) => payload.claudeProvider || 'sdk',
+    usage: '/set claudeProvider tmux|pty|sdk',
+    read: (payload) => payload.claudeProvider || 'tmux',
     write(rawValue) {
       const token = rawValue.trim().toLowerCase();
       if (['default', 'reset', 'unset', 'none', 'auto'].includes(token)) {
         return unsetOp('runtime.claude.provider');
       }
-      if (token === 'pty' || token === 'sdk') {
+      if (token === 'tmux' || token === 'pty' || token === 'sdk') {
         return setOp({ runtime: { claude: { provider: token } } });
       }
       return { ok: false, message: '默认 Claude Provider 必须是 pty 或 sdk，也可以用 default/auto 恢复 sdk 默认。' };

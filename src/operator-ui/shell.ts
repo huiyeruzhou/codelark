@@ -260,6 +260,15 @@ export function renderUiShellHtml(): string {
                     </select>
                   </label>
                   <label>
+                    <span class="field-title">默认 Claude Provider <span class="help-tip" tabindex="0" data-tip="控制 Bridge 默认用 tmux、pty 还是 SDK 驱动 Claude Code；当前会话仍可用 /p 单独切换。">?</span></span>
+                    <select id="claudeProvider">
+                      <option value="">auto</option>
+                      <option value="sdk">sdk</option>
+                      <option value="pty">pty</option>
+                      <option value="tmux">tmux</option>
+                    </select>
+                  </label>
+                  <label>
                     <span class="field-title">Claude 默认模型 <span class="help-tip" tabindex="0" data-tip="只作为 Claude Code runtime 的默认模型；不会 fallback 到 Codex 默认模型。">?</span></span>
                     <input id="claudeDefaultModel" placeholder="留空则跟随 Claude Code 默认" />
                   </label>
@@ -412,13 +421,13 @@ export function renderUiShellHtml(): string {
                 <div class="command-list">
                   <div class="command-list-head"><div>命令</div><div>原始命令</div><div>说明</div></div>
                   <div class="command-item"><div class="command-col-command"><code>/m</code></div><div class="command-col-original"><code>/mode</code></div><div class="command-col-desc">查看当前模式；可选 <code>normal</code>、<code>yolo</code>，<code>code</code> 会映射为 <code>normal</code>。</div></div>
-                  <div class="command-item"><div class="command-col-command"><code>/provider</code></div><div class="command-col-original"><code>/provider</code></div><div class="command-col-desc">查看或切换当前 IM 会话使用的 Codex Provider；可选 <code>sdk</code>、<code>pty</code>、<code>tmux</code>。</div></div>
+                  <div class="command-item"><div class="command-col-command"><code>/provider</code></div><div class="command-col-original"><code>/provider</code></div><div class="command-col-desc">查看或切换当前 IM 会话 active runtime 的 Provider；Codex 和 Claude 都可选 <code>sdk</code>、<code>pty</code>、<code>tmux</code>，Claude 默认 <code>tmux</code>。</div></div>
                   <div class="command-item"><div class="command-col-command"><code>/r</code></div><div class="command-col-original"><code>/reasoning</code></div><div class="command-col-desc">查看当前思考级别；可选 <code>1=minimal</code>、<code>2=low</code>、<code>3=medium</code>、<code>4=high</code>、<code>5=xhigh</code>。</div></div>
                   <div class="command-item"><div class="command-col-command"><code>/sb</code></div><div class="command-col-original"><code>/sandbox</code></div><div class="command-col-desc">查看或切换当前 IM 会话的 Codex 沙箱；可选 <code>read-only</code>、<code>workspace-write</code>、<code>danger-full-access</code>、<code>default</code>。</div></div>
                   <div class="command-item"><div class="command-col-command"><code>/net</code></div><div class="command-col-original"><code>/network</code></div><div class="command-col-desc">查看或切换当前 IM 会话的网络访问；可选 <code>on</code>、<code>off</code>、<code>default</code>。</div></div>
                   <div class="command-item"><div class="command-col-command"><code>/ui on|off</code></div><div class="command-col-original">—</div><div class="command-col-desc">查看或切换工具输入输出显示；关闭后只保留工具名、状态和正文。</div></div>
                   <div class="command-item"><div class="command-col-command"><code>/require-at on|off</code></div><div class="command-col-original"><code>/require-at</code></div><div class="command-col-desc">查看或切换当前飞书通道是否要求群聊 @bot；默认 <code>off</code>，即群聊不 @bot 也会接收。</div></div>
-                  <div class="command-item"><div class="command-col-command"><code>/model [slug|default]</code></div><div class="command-col-original"><code>/model [slug|default]</code></div><div class="command-col-desc">查看或切换当前 IM 会话使用的模型；Codex 共享 thread 只允许查看，Claude Code 会保存为后续 pty 启动参数。</div></div>
+                  <div class="command-item"><div class="command-col-command"><code>/model [slug|default]</code></div><div class="command-col-original"><code>/model [slug|default]</code></div><div class="command-col-desc">查看或切换当前 IM 会话使用的模型；Codex 共享 thread 只允许查看，Claude Code 会保存为后续 TUI 启动参数。</div></div>
                   <div class="command-item"><div class="command-col-command"><code>/tmux-attach &lt;session&gt;</code></div><div class="command-col-original"><code>/tmux-attach &lt;session&gt;</code></div><div class="command-col-desc">把当前 IM 会话绑定到一个远程 tmux session。</div></div>
                   <div class="command-item"><div class="command-col-command"><code>/tmux-new [session]</code></div><div class="command-col-original"><code>/tmux-new [session]</code></div><div class="command-col-desc">新建并绑定 tmux session；如果已存在，会提示并直接绑定。</div></div>
                   <div class="command-item"><div class="command-col-command"><code>/tmux-status</code></div><div class="command-col-original"><code>/tmux-status</code></div><div class="command-col-desc">查看当前 tmux 绑定和自动截屏行数。</div></div>
@@ -1020,6 +1029,7 @@ export function renderUiShellHtml(): string {
           codexNetworkAccess: document.getElementById('codexNetworkAccess').checked,
           codexReasoningEffort: document.getElementById('codexReasoningEffort').value,
           claudeExecutable: document.getElementById('claudeExecutable').value,
+          claudeProvider: document.getElementById('claudeProvider').value,
           claudeDefaultModel: document.getElementById('claudeDefaultModel').value,
           claudePermissionMode: document.getElementById('claudePermissionMode').value,
           claudeIdleTimeoutMinutes: document.getElementById('claudeIdleTimeoutMinutes').value,
@@ -1321,6 +1331,7 @@ export function renderUiShellHtml(): string {
         codexNetworkAccess: 'Codex 网络访问',
         codexReasoningEffort: 'Codex 思考级别',
         claudeExecutable: 'Claude executable',
+        claudeProvider: '默认 Claude Provider',
         claudeDefaultModel: 'Claude 默认模型',
         claudePermissionMode: 'Claude 权限模式',
         claudeIdleTimeoutMinutes: 'Claude 空闲超时',
@@ -1348,6 +1359,7 @@ export function renderUiShellHtml(): string {
         'codexNetworkAccess',
         'codexReasoningEffort',
         'claudeExecutable',
+        'claudeProvider',
         'claudeDefaultModel',
         'claudePermissionMode',
         'claudeIdleTimeoutMinutes',
@@ -2044,6 +2056,7 @@ export function renderUiShellHtml(): string {
         document.getElementById('codexNetworkAccess').checked = config.codexNetworkAccess !== false;
         document.getElementById('codexReasoningEffort').value = config.codexReasoningEffort || 'medium';
         document.getElementById('claudeExecutable').value = config.claudeExecutable || 'claude';
+        document.getElementById('claudeProvider').value = config.claudeProvider || '';
         document.getElementById('claudeDefaultModel').value = config.claudeDefaultModel || '';
         document.getElementById('claudePermissionMode').value = config.claudePermissionMode || 'default';
         document.getElementById('claudeIdleTimeoutMinutes').value = String(config.claudeIdleTimeoutMinutes || 0);
