@@ -5,12 +5,18 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import {
-  loadRuntimeSettings,
-  loadRuntimeSettingsProjection,
-} from '../../../configuration/runtime-settings-projection.js';
+  createConfigService,
+  type ConfigServiceOptions,
+} from '../../../configuration/service.js';
+import type { ConfigV2 } from '../../../configuration/schema.js';
+
+interface RuntimeSettingsProjection {
+  settings: Map<string, string>;
+  config: ConfigV2;
+}
 
 function tempHome(): string {
-  return fs.mkdtempSync(path.join(os.tmpdir(), 'codelark-runtime-settings-projection-'));
+  return fs.mkdtempSync(path.join(os.tmpdir(), 'codelark-runtime-settings-service-'));
 }
 
 function writeFile(file: string, content: string): void {
@@ -18,7 +24,20 @@ function writeFile(file: string, content: string): void {
   fs.writeFileSync(file, content, 'utf-8');
 }
 
-describe('runtime settings projection helper', () => {
+function projectRuntimeSettingsFromService(options: ConfigServiceOptions = {}): RuntimeSettingsProjection {
+  const service = createConfigService(options);
+  const config = service.snapshot().config;
+  return {
+    config,
+    settings: service.projectRuntimeSettings(config),
+  };
+}
+
+function exportRuntimeSettingsFromService(options: ConfigServiceOptions = {}): Map<string, string> {
+  return createConfigService(options).exportRuntimeSettings();
+}
+
+describe('runtime settings service projection', () => {
   it('projects initial runtime settings from ConfigService and ignores legacy config.env', () => {
     const home = tempHome();
     try {
@@ -64,7 +83,7 @@ describe('runtime settings projection helper', () => {
         '',
       ].join('\n'));
 
-      const projection = loadRuntimeSettingsProjection({ codelarkHome: home, env: {} });
+      const projection = projectRuntimeSettingsFromService({ codelarkHome: home, env: {} });
       assert.equal(projection.config.runtime.agent, 'claude');
       assert.equal(projection.config.runtime.codex.model, 'toml-model');
       assert.equal(projection.config.runtime.codex.yoloMode, 'on');
@@ -93,7 +112,7 @@ describe('runtime settings projection helper', () => {
 model = "direct-model"
 `);
 
-      const settings = loadRuntimeSettings({ codelarkHome: home, env: {} });
+      const settings = exportRuntimeSettingsFromService({ codelarkHome: home, env: {} });
       assert.equal(settings.get('bridge_default_model'), 'direct-model');
     } finally {
       fs.rmSync(home, { recursive: true, force: true });
@@ -113,7 +132,7 @@ model = "home-model"
 model = "local-model"
 `);
 
-      const projection = loadRuntimeSettingsProjection({ codelarkHome: home, cwd, env: {} });
+      const projection = projectRuntimeSettingsFromService({ codelarkHome: home, cwd, env: {} });
 
       assert.equal(projection.config.runtime.codex.model, 'local-model');
       assert.equal(projection.settings.get('bridge_default_model'), 'local-model');
@@ -136,7 +155,7 @@ model = "toml-model"
 provider = "sdk"
 `);
 
-      const projection = loadRuntimeSettingsProjection({
+      const projection = projectRuntimeSettingsFromService({
         codelarkHome: home,
         env: {
           CODELARK_AGENT: 'codex',

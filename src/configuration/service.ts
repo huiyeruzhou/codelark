@@ -61,6 +61,7 @@ export interface ConfigService {
   set(target: ConfigWriteTarget, patch: ConfigPatch): void;
   replace(target: ConfigWriteTarget, patch: ConfigPatch): void;
   unset(target: ConfigWriteTarget, path: ConfigPath): void;
+  projectRuntimeSettings(config: ConfigV2): Map<string, string>;
   exportRuntimeSettings(scope?: ConfigScope): Map<string, string>;
   exportProcessEnv(scope?: ConfigScope): NodeJS.ProcessEnv;
 }
@@ -291,6 +292,9 @@ export function createConfigService(options: ConfigServiceOptions = {}): ConfigS
       writeTomlConfig(file, target.kind === 'home'
         ? materializeHomeChannelPatch(readDefaultsConfig(paths.defaultsToml).patch, {}, current)
         : current);
+    },
+    projectRuntimeSettings(config: ConfigV2): Map<string, string> {
+      return exportRuntimeSettings(config);
     },
     exportRuntimeSettings(scope?: ConfigScope): Map<string, string> {
       return exportRuntimeSettings(snapshot(scope).config);

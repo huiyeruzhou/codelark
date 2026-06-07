@@ -4,7 +4,7 @@ import net from 'node:net';
 import path from 'node:path';
 
 import { CODELARK_HOME } from '../configuration/paths.js';
-import { loadRuntimeSettings } from '../configuration/runtime-settings-projection.js';
+import { createConfigService } from '../configuration/service.js';
 import type { ConfigV2 } from '../configuration/schema.js';
 import {
   getUiServerUrl,
@@ -82,7 +82,7 @@ function text(response: ServerResponse, statusCode: number, body: string): void 
 }
 
 function createUiStore(): JsonFileStore {
-  return new JsonFileStore(loadRuntimeSettings({ codelarkHome: CODELARK_HOME }));
+  return new JsonFileStore(createConfigService({ codelarkHome: CODELARK_HOME }).exportRuntimeSettings());
 }
 
 function loadUiConfig(): ConfigV2 {

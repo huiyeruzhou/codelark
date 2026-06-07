@@ -15,7 +15,7 @@ import '../channels/feishu/adapter.js';
 
 import type { LLMProvider } from '../runtime/contracts.js';
 import { CODELARK_HOME } from '../configuration/paths.js';
-import { loadRuntimeSettingsProjection } from '../configuration/runtime-settings-projection.js';
+import { createConfigService } from '../configuration/service.js';
 import { JsonFileStore } from '../storage/json-store.js';
 import { PendingPermissions } from '../runtime/permission-gateway.js';
 import type { CodexProviderChoice } from '../runtime/codex/routing-provider.js';
@@ -122,7 +122,9 @@ async function main(): Promise<void> {
   };
 
   runStartupStorageMigrations();
-  const { settings, config } = loadRuntimeSettingsProjection({ codelarkHome: CODELARK_HOME });
+  const configService = createConfigService({ codelarkHome: CODELARK_HOME });
+  const config = configService.snapshot().config;
+  const settings = configService.projectRuntimeSettings(config);
   setupLogger();
 
   const runId = crypto.randomUUID();

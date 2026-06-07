@@ -124,6 +124,10 @@ describe('configuration module boundaries', () => {
     assert.equal(fs.existsSync(path.join(process.cwd(), 'src', 'configuration', 'runtime-types.ts')), false);
   });
 
+  it('keeps application-side runtime settings loading out of the configuration layer', () => {
+    assert.equal(fs.existsSync(path.join(process.cwd(), 'src', 'configuration', 'runtime-settings-projection.ts')), false);
+  });
+
   it('keeps channel runtime types out of the configuration layer', () => {
     assert.equal(fs.existsSync(path.join(process.cwd(), 'src', 'configuration', 'channel-types.ts')), false);
 

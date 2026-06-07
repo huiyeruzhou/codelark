@@ -415,6 +415,7 @@ interface ConfigService {
   explain(path?: ConfigPath, scope?: ConfigScope): ConfigExplain[];
   set(target: ConfigWriteTarget, patch: ConfigPatch): void;
   unset(target: ConfigWriteTarget, path: ConfigPath): void;
+  projectRuntimeSettings(config: ConfigV2): Map<string, string>;
   exportRuntimeSettings(scope?: ConfigScope): Map<string, string>;
   exportProcessEnv(scope?: ConfigScope): NodeJS.ProcessEnv;
 }
@@ -627,7 +628,7 @@ interface MigrationContext {
 - home `channels` 整组覆盖 defaults，partial home channel 会从 defaults 模板补齐并写回；local/env/cli/channel/session/request 定义 `channels` 必须失败。
 - secret 字段在 `explain()` 和 UI payload 中 mask。
 - 启动迁移能把旧 `config.json` 和 `config.env` 转成 `config.toml`，迁移后归档或重命名旧输入文件，并且运行时不再读取 `config.env`。
-- 子进程环境变量由 effective config projection 生成，不依赖 `config.env` 文件。
+- 子进程环境变量和 runtime settings 由应用侧创建 `ConfigService` 后从 effective config projection 生成，不依赖 `config.env` 文件；配置层不再提供会替应用创建 service 的 runtime settings loading helper。
 - 旧 env alias 仍可从真实 `process.env` 读取，例如 `CODELARK_CODEX_DEFAULT_MODEL`，但新 env `CODELARK_CODEX_MODEL` 优先。
 - `config.env` 迁移保持现有用户可用，不破坏旧 `CODELARK_FEISHU_DOMAIN`。
 - setup wizard、UI 全局配置页、`/set` 全局配置列表和 `defaults.toml` 使用同一份 latest `configFields` / defaults；留空字段回落到同一个默认值。
