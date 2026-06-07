@@ -146,6 +146,8 @@ export function createMirrorRuntime(
   const runtimeName: BridgeTurnRuntime = mirrorSource.runtime === 'claude' ? 'claude' : 'codex';
   const getSessionMirrorThreadId = deps.getSessionMirrorThreadId
     || ((session: MirrorRuntimeSession) => getSessionCodexThreadId(session));
+  const hasSessionMirrorSource = deps.hasSessionMirrorSource
+    || ((session: MirrorRuntimeSession | null | undefined) => Boolean(getSessionCodexThreadId(session)));
   const getSessionMirrorCwd = deps.getSessionMirrorCwd
     || ((_session: MirrorRuntimeSession) => undefined);
   const getMirrorSourceSummary = deps.getMirrorSourceSummary
@@ -299,7 +301,7 @@ export function createMirrorRuntime(
       state.adapters.keys(),
       state.mirrorSubscriptions.keys(),
       deps.getSession,
-      deps.hasSessionMirrorSource,
+      hasSessionMirrorSource,
       {
         activeBindingWindowMs: options.activeBindingWindowMs,
         nowMs: Date.now(),
