@@ -77,6 +77,18 @@ function productionFilesWithDirectSourceChecks(root: string): string[] {
     .map((file) => path.relative(process.cwd(), file));
 }
 
+function productionFilesWithDirectSessionWrites(root: string): string[] {
+  const directSessionWritePattern = /createConfigService\([^)]*\)\.(?:set|unset)\(\s*\{\s*kind:\s*['"]session['"]/s;
+  return listSourceFiles(root)
+    .filter((file) => {
+      const relative = path.relative(root, file);
+      return !relative.split(path.sep).includes('__tests__')
+        && !relative.startsWith(`configuration${path.sep}`);
+    })
+    .filter((file) => directSessionWritePattern.test(fs.readFileSync(file, 'utf-8')))
+    .map((file) => path.relative(process.cwd(), file));
+}
+
 describe('configuration module boundaries', () => {
   it('keeps the legacy config facade out of production imports', () => {
     const sourceRoot = path.join(process.cwd(), 'src');
@@ -126,6 +138,11 @@ describe('configuration module boundaries', () => {
 
   it('keeps source-specific override checks behind the configuration module', () => {
     const offenders = productionFilesWithDirectSourceChecks(path.join(process.cwd(), 'src'));
+    assert.deepEqual(offenders, []);
+  });
+
+  it('keeps session config writeback behind configuration helpers', () => {
+    const offenders = productionFilesWithDirectSessionWrites(path.join(process.cwd(), 'src'));
     assert.deepEqual(offenders, []);
   });
 });

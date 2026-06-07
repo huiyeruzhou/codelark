@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 import type { BridgeSession, BridgeStore } from '../../domain/index.js';
-import { createConfigService } from '../../configuration/service.js';
+import { setSessionConfigPatch } from '../../configuration/session-writes.js';
 import { getGlobalStringConfig, getGlobalWorkspaceRoot } from './global-config.js';
 
 const TEMPORARY_SESSION_TTL_MS = 24 * 60 * 60 * 1000;
@@ -103,10 +103,7 @@ export function getOrCreateDraftSession(
     },
   );
   if (options?.activeRuntime !== 'claude') {
-    createConfigService({ migrate: false }).set(
-      { kind: 'session', sessionId: session.id },
-      { runtime: { codex: { reasoningEffort: 'low' } } },
-    );
+    setSessionConfigPatch(session.id, { runtime: { codex: { reasoningEffort: 'low' } } });
   }
   return session;
 }

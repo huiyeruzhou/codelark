@@ -1,5 +1,5 @@
 import type { BaseChannelAdapter } from '../../../channels/contracts.js';
-import { createConfigService } from '../../../configuration/service.js';
+import { setSessionConfigPatch } from '../../../configuration/session-writes.js';
 import type { BridgeStore, ChannelChat, InboundMessage } from '../../../domain/index.js';
 import {
   getSessionWorkingDirectory,
@@ -42,17 +42,11 @@ import {
 } from './types.js';
 
 function setSessionCodexProviderToml(sessionId: string, provider: 'tmux' | 'pty'): void {
-  createConfigService({ migrate: false }).set(
-    { kind: 'session', sessionId },
-    { runtime: { codex: { provider } } },
-  );
+  setSessionConfigPatch(sessionId, { runtime: { codex: { provider } } });
 }
 
 function setSessionTmuxAutoEnterToml(sessionId: string, tmuxAutoEnter: boolean): void {
-  createConfigService({ migrate: false }).set(
-    { kind: 'session', sessionId },
-    { session: { tmuxAutoEnter } },
-  );
+  setSessionConfigPatch(sessionId, { session: { tmuxAutoEnter } });
 }
 
 export async function handleClearSessionCommand(options: {

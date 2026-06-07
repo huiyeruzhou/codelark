@@ -1,7 +1,7 @@
 import type { BridgeSession, BridgeStore } from '../../domain/index.js';
 import type { ChannelChat, OutboundRichCard } from '../../domain/index.js';
 import type { StructuredStreamingUiActionButton } from '../../channels/contracts.js';
-import { createConfigService } from '../../configuration/service.js';
+import { setSessionConfigPatch } from '../../configuration/session-writes.js';
 import { buildCommandCallbackData } from './callbacks.js';
 import { buildCommandFields } from './presentation.js';
 import { buildFencedCodeBlock } from '../../shared/markdown/fence.js';
@@ -62,31 +62,19 @@ const SEND_ACTION_DELAY_MS = 500;
 const CAPTURE_AFTER_SEND_DELAY_MS = 250;
 
 function setSessionTmuxSessionNameToml(sessionId: string, tmuxSessionName: string): void {
-  createConfigService({ migrate: false }).set(
-    { kind: 'session', sessionId },
-    { session: { tmuxSessionName } },
-  );
+  setSessionConfigPatch(sessionId, { session: { tmuxSessionName } });
 }
 
 function setSessionTmuxCaptureLinesToml(sessionId: string, tmuxCaptureLines: number): void {
-  createConfigService({ migrate: false }).set(
-    { kind: 'session', sessionId },
-    { session: { tmuxCaptureLines } },
-  );
+  setSessionConfigPatch(sessionId, { session: { tmuxCaptureLines } });
 }
 
 function setSessionTmuxAutoEnterToml(sessionId: string, tmuxAutoEnter: boolean): void {
-  createConfigService({ migrate: false }).set(
-    { kind: 'session', sessionId },
-    { session: { tmuxAutoEnter } },
-  );
+  setSessionConfigPatch(sessionId, { session: { tmuxAutoEnter } });
 }
 
 function setSessionTmuxEchoInputToml(sessionId: string, tmuxEchoInput: boolean): void {
-  createConfigService({ migrate: false }).set(
-    { kind: 'session', sessionId },
-    { session: { tmuxEchoInput } },
-  );
+  setSessionConfigPatch(sessionId, { session: { tmuxEchoInput } });
 }
 
 function buildTmuxSwitchSelect(

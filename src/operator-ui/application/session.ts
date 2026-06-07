@@ -1,6 +1,11 @@
 import MarkdownIt from 'markdown-it';
 
 import { createConfigService } from '../../configuration/service.js';
+import {
+  setOrUnsetSessionConfigPath,
+  setSessionConfigPatch,
+  unsetSessionConfigPath,
+} from '../../configuration/session-writes.js';
 import { getSessionConfigOverride } from '../../configuration/source-values.js';
 import type { ConfigPatch } from '../../configuration/schema.js';
 import {
@@ -135,12 +140,7 @@ function setOrUnsetSessionConfig(
   value: unknown,
   patchForValue: (value: never) => ConfigPatch,
 ): void {
-  const service = createConfigService({ migrate: false });
-  if (value === undefined || value === '') {
-    service.unset({ kind: 'session', sessionId }, path);
-    return;
-  }
-  service.set({ kind: 'session', sessionId }, patchForValue(value as never));
+  setOrUnsetSessionConfigPath(sessionId, path, value, patchForValue);
 }
 
 function claudeYoloModeFromPermissionMode(permissionMode: string): 'off' | 'on' {
@@ -151,10 +151,7 @@ function applySessionConfigToml(bridgeSessionId: string, payload: Record<string,
   const activeRuntime = payload.activeRuntime === 'claude' ? 'claude' : 'codex';
   if (typeof payload.workingDirectory === 'string') {
     const workspace = payload.workingDirectory.trim() || process.cwd();
-    createConfigService({ migrate: false }).set(
-      { kind: 'session', sessionId: bridgeSessionId },
-      { session: { workspace } },
-    );
+    setSessionConfigPatch(bridgeSessionId, { session: { workspace } });
   }
 
   if (activeRuntime === 'claude') {
@@ -188,10 +185,7 @@ function applySessionConfigToml(bridgeSessionId: string, payload: Record<string,
         }),
       );
       if (permissionMode === '') {
-        createConfigService({ migrate: false }).unset(
-          { kind: 'session', sessionId: bridgeSessionId },
-          'runtime.claude.yoloMode',
-        );
+        unsetSessionConfigPath(bridgeSessionId, 'runtime.claude.yoloMode');
       }
     }
     if (
@@ -264,10 +258,7 @@ function applySessionConfigToml(bridgeSessionId: string, payload: Record<string,
     );
   }
   if (payload.codexNetworkAccess === true || payload.codexNetworkAccess === false) {
-    createConfigService({ migrate: false }).set(
-      { kind: 'session', sessionId: bridgeSessionId },
-      { runtime: { codex: { networkAccess: payload.codexNetworkAccess } } },
-    );
+    setSessionConfigPatch(bridgeSessionId, { runtime: { codex: { networkAccess: payload.codexNetworkAccess } } });
   }
 }
 

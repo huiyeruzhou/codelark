@@ -28,6 +28,7 @@ import type { BridgeApiProvider } from '../runtime/contracts.js';
 import { CODELARK_HOME } from '../configuration/paths.js';
 import { loadRuntimeSettings } from '../configuration/runtime-settings-projection.js';
 import { createConfigService } from '../configuration/service.js';
+import { setSessionConfigPatch } from '../configuration/session-writes.js';
 import { runStartupStorageMigrations } from './migrations.js';
 import {
   getSessionActiveRuntime,
@@ -647,10 +648,7 @@ export class JsonFileStore implements BridgeStore {
     const materialized = materializeBridgeSessionRuntime(session);
     this.sessions.set(session.id, materialized);
     this.persistSessions();
-    createConfigService({ migrate: false }).set(
-      { kind: 'session', sessionId: session.id },
-      { session: { workspace: workingDirectory } },
-    );
+    setSessionConfigPatch(session.id, { session: { workspace: workingDirectory } });
     return materialized;
   }
 

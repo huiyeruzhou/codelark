@@ -6,6 +6,11 @@ import os from 'node:os';
 import path from 'node:path';
 import { createConfigService } from '../../../configuration/service.js';
 import {
+  setOrUnsetSessionConfigPath,
+  setSessionConfigPatch,
+  unsetSessionConfigPath,
+} from '../../../configuration/session-writes.js';
+import {
   configSourceRank,
   getConfigValueFromSource,
   getEffectiveConfigSource,
@@ -597,6 +602,51 @@ require_mention = false
       assert.throws(
         () => service.unset({ kind: 'session', sessionId: 's-1' }, 'bridge.uiAllowLan'),
         /bridge\.uiAllowLan cannot be written to session scope/,
+      );
+    } finally {
+      fs.rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it('writes session-scoped config through the shared writeback helpers', () => {
+    const home = tempHome();
+    try {
+      const service = createConfigService({ codelarkHome: home, env: {}, migrate: false });
+
+      setSessionConfigPatch('session-helper-1', { runtime: { codex: { model: 'session-model' } } }, service);
+      assert.equal(
+        service.get('runtime.codex.model', { kind: 'session', sessionId: 'session-helper-1' }),
+        'session-model',
+      );
+
+      setOrUnsetSessionConfigPath(
+        'session-helper-1',
+        'runtime.codex.model',
+        'helper-model',
+        (model) => ({ runtime: { codex: { model } } }),
+        service,
+      );
+      assert.equal(
+        service.get('runtime.codex.model', { kind: 'session', sessionId: 'session-helper-1' }),
+        'helper-model',
+      );
+
+      setOrUnsetSessionConfigPath(
+        'session-helper-1',
+        'runtime.codex.model',
+        '',
+        (model) => ({ runtime: { codex: { model } } }),
+        service,
+      );
+      assert.equal(
+        service.resolve('runtime.codex.model', { kind: 'session', sessionId: 'session-helper-1' }).source,
+        'defaults',
+      );
+      setSessionConfigPatch('session-helper-1', { runtime: { codex: { reasoningEffort: 'high' } } }, service);
+      unsetSessionConfigPath('session-helper-1', 'runtime.codex.reasoningEffort', service);
+      assert.equal(
+        service.resolve('runtime.codex.reasoningEffort', { kind: 'session', sessionId: 'session-helper-1' }).source,
+        'defaults',
       );
     } finally {
       fs.rmSync(home, { recursive: true, force: true });
