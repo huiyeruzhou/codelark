@@ -83,9 +83,9 @@ Codex thread 可以来自不同入口：
 字段收敛：
 
 - 一个 IM chat 只有一个 ChannelChat，一个 BridgeSession 也只保留一个聊天绑定。
-- 删除旧 `workingDirectory`、`model`、`mode`、`chatDisplayName`；这些运行时和展示字段归属 `BridgeSession`。
+- 删除旧 `workingDirectory`、`model`、`mode`、`chatDisplayName`；会话配置覆盖归属 scoped TOML，运行身份和展示状态归属 `BridgeSession`。
 - ChannelChat 不再缓存 Codex thread id。
-- 所有 thread id 读取都必须从 `store.getSession(channelChat.bridgeSessionId)?.codex_thread_id` 获取。
+- 所有 thread id 读取都必须从 `store.getSession(channelChat.bridgeSessionId)?.runtime.codex.threadId` 获取。
 
 ### IMChannel
 

@@ -29,4 +29,9 @@ describe('configuration module boundaries', () => {
 
     assert.deepEqual(offenders, []);
   });
+
+  it('keeps legacy adapter modules independent from the facade re-export', () => {
+    const legacySource = fs.readFileSync(path.join(process.cwd(), 'src', 'configuration', 'legacy.ts'), 'utf-8');
+    assert.equal(/from\s+['"]\.\/index\.js['"]/.test(legacySource), false);
+  });
 });
