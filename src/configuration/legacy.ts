@@ -3,8 +3,8 @@ import type {
   ChannelInstance,
   ClaudePermissionMode,
   Config,
-  FeishuChannelConfig,
 } from './index.js';
+import type { FeishuChannelConfig } from './channel-types.js';
 import type { ConfigPatch, ConfigV2 } from './schema.js';
 
 export const LEGACY_DEFAULT_STREAM_STATUS_IDLE_START_SECONDS = 180;

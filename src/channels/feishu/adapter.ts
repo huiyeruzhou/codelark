@@ -39,7 +39,7 @@ import {
   feishuSiteToApiBaseUrl,
   normalizeFeishuSite,
   type FeishuChannelConfig,
-} from '../../configuration/index.js';
+} from '../../configuration/channel-types.js';
 import {
   BaseChannelAdapter,
   registerAdapterFactory,

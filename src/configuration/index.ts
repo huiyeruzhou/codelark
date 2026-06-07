@@ -7,20 +7,31 @@ import {
 } from "./runtime-options.js";
 import { configV2ToLegacyConfig, legacyConfigToConfigPatch } from "./legacy.js";
 import { createConfigService } from "./service.js";
+import {
+  feishuSiteToApiBaseUrl,
+  isSupportedChannelProvider,
+  normalizeFeishuSite,
+  type ChannelProvider,
+  type FeishuChannelConfig,
+  type FeishuSite,
+} from "./channel-types.js";
+
+export {
+  feishuSiteToApiBaseUrl,
+  isSupportedChannelProvider,
+  normalizeFeishuSite,
+  type ChannelProvider,
+  type FeishuChannelConfig,
+  type FeishuSite,
+} from "./channel-types.js";
 
 export type CodexSandboxMode = RuntimeSandboxMode;
 export type CodexReasoningEffort = RuntimeReasoningEffort;
-export type ChannelProvider = 'feishu';
-export type FeishuSite = 'feishu' | 'lark';
 export type RuntimeProvider = 'codex' | 'claude';
 export type CodexProviderChoice = 'sdk' | 'tmux' | 'pty';
 export type ClaudeProviderChoice = 'pty' | 'sdk';
 export type ClaudeExecutable = 'claude' | 'ccr';
 export type ClaudePermissionMode = 'default' | 'acceptEdits' | 'bypassPermissions' | 'plan';
-
-export function isSupportedChannelProvider(value: unknown): value is ChannelProvider {
-  return value === 'feishu';
-}
 
 export interface CodexRuntimeDefaultsConfig {
   defaultModel?: string;
@@ -58,16 +69,6 @@ export interface RuntimeConfig {
   claude?: ClaudeRuntimeDefaultsConfig;
   bridgeControl?: BridgeControlConfig;
   bridge?: GlobalBridgeConfig;
-}
-
-export interface FeishuChannelConfig {
-  appId?: string;
-  appSecret?: string;
-  site?: FeishuSite;
-  allowedUsers?: string[];
-  streamingEnabled?: boolean;
-  feedbackMarkdownEnabled?: boolean;
-  requireMention?: boolean;
 }
 
 export interface ChannelInstance {
@@ -131,21 +132,6 @@ export function expandHomePath(value: string | undefined): string | undefined {
     return path.join(os.homedir(), value.slice(2));
   }
   return value;
-}
-
-export function normalizeFeishuSite(value: string | undefined): FeishuSite {
-  const normalized = (value || '').trim().replace(/\/+$/, '').toLowerCase();
-  if (!normalized) return 'feishu';
-  if (normalized === 'lark') return 'lark';
-  if (normalized === 'feishu') return 'feishu';
-  if (normalized.includes('open.larksuite.com')) return 'lark';
-  return 'feishu';
-}
-
-export function feishuSiteToApiBaseUrl(site: FeishuSite | string | undefined): string {
-  return normalizeFeishuSite(site) === 'lark'
-    ? 'https://open.larksuite.com'
-    : 'https://open.feishu.cn';
 }
 
 function nowIso(): string {

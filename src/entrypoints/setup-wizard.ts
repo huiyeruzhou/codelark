@@ -11,12 +11,14 @@ import { feishuSetupUserAuthScopeArgument } from '../channels/feishu/permissions
 import {
   CODELARK_HOME,
   DEFAULT_WORKSPACE_ROOT,
-  normalizeFeishuSite,
   type ClaudeExecutable,
-  type FeishuChannelConfig,
-  type FeishuSite,
   type RuntimeProvider,
 } from '../configuration/index.js';
+import {
+  normalizeFeishuSite,
+  type FeishuChannelConfig,
+  type FeishuSite,
+} from '../configuration/channel-types.js';
 import { createConfigService } from '../configuration/service.js';
 import type { ConfigPatch, ConfigV2 } from '../configuration/schema.js';
 import {

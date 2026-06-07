@@ -1,23 +1,20 @@
-import { isSupportedChannelProvider, type ChannelInstance, type ChannelProvider } from '../../configuration/index.js';
+import { isSupportedChannelProvider, type ChannelProvider, type RuntimeChannelInstance } from '../../configuration/channel-types.js';
 import { createConfigService } from '../../configuration/service.js';
-import type { ChannelConfigV2 } from '../../configuration/schema.js';
 import { markdownToPlainText } from '../../shared/markdown/plain.js';
 import { formatBindingChatLabel as formatBindingChatLabelBase } from '../../bridge/session/display/channel-label.js';
 import type { ChannelChat } from '../../domain/index.js';
 
-function toRuntimeChannelInstance(channel: ChannelConfigV2): ChannelInstance {
+function toRuntimeChannelInstance(channel: RuntimeChannelInstance): RuntimeChannelInstance {
   return {
     id: channel.id,
     alias: channel.alias,
     provider: channel.provider,
     enabled: channel.enabled,
-    createdAt: '',
-    updatedAt: '',
-    config: { ...channel.config } as ChannelInstance['config'],
+    config: { ...channel.config },
   };
 }
 
-export function listConfiguredChannelInstances(): ChannelInstance[] {
+export function listConfiguredChannelInstances(): RuntimeChannelInstance[] {
   try {
     return createConfigService({ migrate: false }).snapshot().config.channels
       .filter((channel) => isSupportedChannelProvider(channel.provider))
@@ -28,7 +25,7 @@ export function listConfiguredChannelInstances(): ChannelInstance[] {
   }
 }
 
-export function getConfiguredChannelInstance(channelType: string): ChannelInstance | null {
+export function getConfiguredChannelInstance(channelType: string): RuntimeChannelInstance | null {
   return listConfiguredChannelInstances().find((channel) => channel.id === channelType) || null;
 }
 
@@ -44,7 +41,7 @@ export function getChannelProviderKey(channelType: string): string {
 export function isFeedbackMarkdownEnabled(channelType: string): boolean {
   const instance = getConfiguredChannelInstance(channelType);
   if (instance?.provider === 'feishu') {
-    return (instance.config as ChannelInstance['config'] & { feedbackMarkdownEnabled?: boolean }).feedbackMarkdownEnabled !== false;
+    return instance.config.feedbackMarkdownEnabled !== false;
   }
   return false;
 }

@@ -5,7 +5,7 @@ import {
   type ChannelProvider,
   type FeishuChannelConfig,
   type FeishuSite,
-} from '../../configuration/index.js';
+} from '../../configuration/channel-types.js';
 import { normalizeChannelId } from '../../configuration/runtime-options.js';
 import type { ChannelConfigV2, ConfigV2 } from '../../configuration/schema.js';
 

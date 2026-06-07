@@ -1,4 +1,4 @@
-import { type FeishuChannelConfig } from '../../configuration/index.js';
+import { type FeishuChannelConfig } from '../../configuration/channel-types.js';
 import type { ConfigV2 } from '../../configuration/schema.js';
 import {
   type BindingSummary,
