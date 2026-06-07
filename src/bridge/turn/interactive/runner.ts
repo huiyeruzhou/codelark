@@ -38,17 +38,14 @@ import {
 import { getBridgeSessionDisplayTitle } from '../../session/display/session-display-query.js';
 import {
   getSessionActiveRuntime,
-  getSessionClaudeModel,
-  getSessionCodexModel,
-  getSessionCodexReasoningEffort,
   getSessionCodexThreadId,
-  getSessionClaudeReasoningEffort,
   getSessionClaudeSessionId,
   getSessionWorkingDirectory,
 } from '../../../domain/session-runtime.js';
 import {
   resolveEffectiveClaudeProvider,
   resolveEffectiveCodexProvider,
+  resolveRuntimeMetadataConfig,
 } from '../../session/support.js';
 import { maskSecrets } from '../../../shared/logger.js';
 import { sanitizeInput } from '../../../shared/security/validators.js';
@@ -245,18 +242,15 @@ export async function runInteractiveMessage(
   const resolveDisplayInfo = deps.resolveInteractiveTurnDisplayInfo ?? ((targetBinding) => {
     if (targetBinding.id === binding.id && initialSession) {
       const isClaude = getSessionActiveRuntime(initialSession) === 'claude';
+      const metadata = resolveRuntimeMetadataConfig(initialSession, isClaude ? 'claude' : 'codex');
       return {
         title: getBridgeSessionDisplayTitle(initialSession),
         bridgeSessionId: initialSession.id,
         threadId: getSessionCodexThreadId(initialSession) || '',
         executionProvider: resolveEffectiveCodexProvider(initialSession),
         creatorKind: 'bridge',
-        reasoningEffort: isClaude
-          ? getSessionClaudeReasoningEffort(initialSession) || 'default'
-          : getSessionCodexReasoningEffort(initialSession) || 'medium',
-        model: isClaude
-          ? getSessionClaudeModel(initialSession) || 'default'
-          : getSessionCodexModel(initialSession) || 'default',
+        reasoningEffort: metadata.reasoningEffort,
+        model: metadata.model,
       };
     }
     return buildFallbackInteractiveTurnDisplayInfo(targetBinding);
@@ -468,9 +462,6 @@ export async function runInteractiveMessage(
     return streamUi.finalizeOnce(status, responseText);
   };
 
-  const shouldSkipTextDelivery = (): boolean => {
-    return streamUi.shouldSkipTextDelivery();
-  };
   const endMessageUiOnce = () => {
     if (taskState.uiEnded) return;
     if (messageStartCalled) {
@@ -616,6 +607,7 @@ export async function runInteractiveMessage(
         }),
       });
       const mirrorWillDeliverFinal = isRuntimeMirrorTurn && runtimeMirrorActivated;
+      const skipTextDeliveryForExistingCard = !isRuntimeMirrorTurn && streamUi.shouldSkipTextDelivery();
       if (!mirrorWillDeliverFinal) {
         sdkStreamEvents.pushFinalCardText(finalResponsePlan.cardText);
       }
@@ -631,7 +623,7 @@ export async function runInteractiveMessage(
           replyToMessageId: msg.messageId,
           deliverResponse: deps.deliverResponse,
         }, finalResponsePlan.deliveryResponse, {
-          skipText: (!isRuntimeMirrorTurn && shouldSkipTextDelivery()) || (
+          skipText: skipTextDeliveryForExistingCard || (
             finalResponsePlan.skipTextWhenCardFinalized && cardFinalized
           ),
         });
@@ -683,6 +675,7 @@ export async function runInteractiveMessage(
         workingDirectory: getSessionWorkingDirectory(initialSession) || null,
       }),
     });
+    const skipTextDeliveryForExistingCard = !isRuntimeMirrorTurn && streamUi.shouldSkipTextDelivery();
     if (useInteractiveStreamUi && streamUi.hasStreamingCards) {
       sdkStreamEvents.pushFinalCardText(finalResponsePlan.cardText);
       cardFinalized = await finalizeStreamUiOnce(
@@ -699,7 +692,7 @@ export async function runInteractiveMessage(
         replyToMessageId: msg.messageId,
         deliverResponse: deps.deliverResponse,
       }, finalResponsePlan.deliveryResponse, {
-        skipText: (!isRuntimeMirrorTurn && shouldSkipTextDelivery()) || (
+        skipText: skipTextDeliveryForExistingCard || (
           finalResponsePlan.skipTextWhenCardFinalized && cardFinalized
         ),
       });

@@ -20,14 +20,17 @@ import {
   getSessionActiveRuntime,
   getSessionClaudeCwd,
   getSessionClaudeSessionId,
-  getSessionCodexMode,
-  getSessionCodexModel,
   getSessionCodexTitle,
   getSessionWorkingDirectory,
   setSessionCodexTitleUpdate,
 } from '../../../domain/session-runtime.js';
-import { getGlobalConfigValue, getGlobalStringConfig } from '../global-config.js';
-import { resolveEffectiveCodexProvider } from '../support.js';
+import { getGlobalStringConfig } from '../global-config.js';
+import {
+  hasSessionCodexProviderOverride,
+  resolveDisplayedModel,
+  resolveEffectiveCodexProvider,
+  resolveEffectiveMode,
+} from '../support.js';
 
 export interface BindingTargetOption {
   kind: 'codex' | 'session';
@@ -213,16 +216,12 @@ function getSessionName(session: BridgeSession): string {
   return session.id.slice(0, 8);
 }
 
-function getSessionMode(store: BridgeStore, session: BridgeSession): ChannelChatMode {
-  const sessionMode = getSessionCodexMode(session);
-  const globalMode = getGlobalConfigValue<'off' | 'on'>('runtime.codex.yoloMode');
-  return (sessionMode || (globalMode === 'on' ? 'yolo' : 'normal')) === 'yolo'
-    ? 'yolo'
-    : 'normal';
+function getSessionMode(session: BridgeSession): ChannelChatMode {
+  return resolveEffectiveMode(null, session);
 }
 
 function getSessionCodexProvider(session: BridgeSession | null | undefined): 'sdk' | 'pty' | 'tmux' | 'default' {
-  return resolveEffectiveCodexProvider(session);
+  return hasSessionCodexProviderOverride(session) ? resolveEffectiveCodexProvider(session) : 'default';
 }
 
 function describeBridgeSessionTarget(
@@ -462,9 +461,9 @@ export function listBindingSummaries(store: BridgeStore): BindingSummary[] {
       chatKind: binding.chatKind,
       chatUserId: binding.chatUserId,
       chatDisplayName: session ? getSessionName(session) : undefined,
-      mode: session ? getSessionMode(store, session) : 'normal',
+      mode: session ? getSessionMode(session) : 'normal',
       codexProvider: getSessionCodexProvider(session),
-      model: getSessionCodexModel(session) || '',
+      model: resolveDisplayedModel(null, session, getGlobalStringConfig('runtime.codex.model'), ''),
       workingDirectory: getSessionWorkingDirectory(session) || '',
       currentTargetLabel,
       currentSessionId: binding.bridgeSessionId,

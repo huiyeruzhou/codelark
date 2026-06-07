@@ -32,10 +32,9 @@ describe('SessionDisplayQuery', () => {
   it('builds UI-compatible summaries with canonical identity, CodexSource, and Creator fields', () => {
     const store = new JsonFileStore(makeBridgeSettings());
     const linked = store.createSession('Desktop: Linked workspace', 'test-model', undefined, '/repo/linked');
-    store.updateSession(linked.id, { runtime: { codex: { mode: 'yolo' } } });
     createConfigService({ migrate: false, env: {} }).set(
       { kind: 'session', sessionId: linked.id },
-      { runtime: { codex: { provider: 'tmux' } } },
+      { runtime: { codex: { provider: 'tmux', yoloMode: 'on' } } },
     );
     store.updateSessionCodexThreadId(linked.id, 'thread-linked');
     const bridgeOnly = store.createSession('Bridge only', 'test-model', undefined, '/repo/bridge');

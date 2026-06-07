@@ -1,5 +1,8 @@
 import type { CodexSessionSummary } from '../../runtime/codex/session-index.js';
-import { getCodexSessionByThreadIdSafe } from './support.js';
+import {
+  getCodexSessionByThreadIdSafe,
+  resolveRuntimeMetadataConfig,
+} from './support.js';
 import {
   bridgeSessionExecutionProvider,
   buildCodexThreadDisplaySummary,
@@ -21,17 +24,11 @@ import type { ChannelChat } from '../../domain/channel.js';
 import {
   getSessionActiveRuntime,
   getSessionClaudeCwd,
-  getSessionClaudeModel,
-  getSessionClaudeReasoningEffort,
   getSessionClaudeSessionId,
-  getSessionCodexModel,
-  getSessionCodexReasoningEffort,
   getSessionCodexTitle,
   getSessionWorkingDirectory,
 } from '../../domain/session-runtime.js';
 import { getCodexThreadId } from '../turn/turn-classifier.js';
-import { normalizeReasoningEffort } from '../../configuration/runtime-options.js';
-import { getGlobalStringConfig } from './global-config.js';
 
 export interface ThreadDisplayInfo {
   title: string;
@@ -71,23 +68,7 @@ export class ThreadDisplayService {
     session: ReturnType<BridgeStore['getSession']>,
     runtime: 'codex' | 'claude' = getSessionActiveRuntime(session) === 'claude' ? 'claude' : 'codex',
   ): Pick<ThreadDisplayInfo, 'reasoningEffort' | 'model'> {
-    if (runtime === 'claude') {
-      return {
-        reasoningEffort: getSessionClaudeReasoningEffort(session) || 'default',
-        model: getSessionClaudeModel(session)
-          || getGlobalStringConfig('runtime.claude.model')
-          || 'default',
-      };
-    }
-    return {
-      reasoningEffort: normalizeReasoningEffort(
-        getSessionCodexReasoningEffort(session)
-          || getGlobalStringConfig('runtime.codex.reasoningEffort'),
-      ),
-      model: getSessionCodexModel(session)
-        || getGlobalStringConfig('runtime.codex.model')
-        || 'default',
-    };
+    return resolveRuntimeMetadataConfig(session, runtime);
   }
 
   bindingThreadId(binding: ChannelChat): string {

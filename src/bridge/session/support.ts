@@ -9,6 +9,7 @@ import {
 } from '../../runtime/codex/session-index.js';
 import { normalizeClaudeExecutable, type ClaudeExecutable, type ClaudePermissionMode, type ClaudeProviderChoice } from '../../configuration/index.js';
 import { createConfigService } from '../../configuration/service.js';
+import type { ConfigPatch } from '../../configuration/schema.js';
 import type { ConfigPath } from '../../configuration/fields-types.js';
 import {
   resetDraftSession as resetDraftSessionForStore,
@@ -83,6 +84,10 @@ function getSessionTomlOverride<T>(session: BridgeSession | null | undefined, pa
   }
 }
 
+function hasKeys(value: object): boolean {
+  return Object.keys(value).length > 0;
+}
+
 export function resolveEffectiveReasoningEffort(session: BridgeSession | null | undefined): string {
   return normalizeStoredReasoningEffort(
     getSessionTomlOverride<BridgeSessionCodexRuntimeState['reasoningEffort']>(session, 'runtime.codex.reasoningEffort')
@@ -140,6 +145,11 @@ export interface ClaudeRuntimeConfig {
   permissionMode: ClaudePermissionMode;
   reasoningEffort?: BridgeSessionClaudeRuntimeState['reasoningEffort'];
   idleTimeoutMinutes?: number;
+}
+
+export interface RuntimeMetadataConfig {
+  reasoningEffort: string;
+  model: string;
 }
 
 export function resolveEffectiveClaudeProvider(session?: BridgeSession | null): ClaudeProviderChoice {
@@ -249,6 +259,40 @@ export function resolveClaudeRuntimeConfig(session?: BridgeSession | null): Clau
     reasoningEffort: getSessionTomlOverride<BridgeSessionClaudeRuntimeState['reasoningEffort']>(session, 'runtime.claude.reasoningEffort'),
     idleTimeoutMinutes: parsePositiveSettingInt(String(getGlobalConfigValue<number>('runtime.claude.idleTimeoutMinutes') ?? '')),
   };
+}
+
+export function resolveRuntimeMetadataConfig(
+  session: BridgeSession | null | undefined,
+  runtime: 'codex' | 'claude' = session?.runtime?.activeRuntime === 'claude' ? 'claude' : 'codex',
+): RuntimeMetadataConfig {
+  if (runtime === 'claude') {
+    const claudeConfig = resolveClaudeRuntimeConfig(session);
+    return {
+      reasoningEffort: claudeConfig.reasoningEffort || 'default',
+      model: claudeConfig.model || 'default',
+    };
+  }
+  return {
+    reasoningEffort: normalizeStoredReasoningEffort(resolveEffectiveReasoningEffort(session)),
+    model: resolveDisplayedModel(null, session, getGlobalStringConfig('runtime.codex.model')),
+  };
+}
+
+export function sessionCodexRuntimeOverridePatch(session: BridgeSession | null | undefined): ConfigPatch {
+  const codex: NonNullable<NonNullable<ConfigPatch['runtime']>['codex']> = {};
+  const model = getSessionTomlOverride<string>(session, 'runtime.codex.model');
+  if (model !== undefined) codex.model = model;
+  const yoloMode = getSessionTomlOverride<'off' | 'on' | 'yolo'>(session, 'runtime.codex.yoloMode');
+  if (yoloMode !== undefined) codex.yoloMode = yoloMode;
+  const provider = getSessionCodexProviderOverride(session);
+  if (provider !== undefined) codex.provider = provider;
+  const sandboxMode = getSessionTomlOverride<BridgeSessionCodexRuntimeState['sandboxMode']>(session, 'runtime.codex.sandboxMode');
+  if (sandboxMode !== undefined) codex.sandboxMode = sandboxMode;
+  const networkAccess = getSessionTomlOverride<boolean>(session, 'runtime.codex.networkAccess');
+  if (networkAccess !== undefined) codex.networkAccess = networkAccess;
+  const reasoningEffort = getSessionTomlOverride<BridgeSessionCodexRuntimeState['reasoningEffort']>(session, 'runtime.codex.reasoningEffort');
+  if (reasoningEffort !== undefined) codex.reasoningEffort = reasoningEffort;
+  return hasKeys(codex) ? { runtime: { codex } } : {};
 }
 
 export function resolveDisplayedModel(

@@ -5,6 +5,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 import { CODELARK_HOME } from '../../../../configuration/index.js';
+import { createConfigService } from '../../../../configuration/service.js';
+import type { ConfigPatch } from '../../../../configuration/schema.js';
 import { JsonFileStore } from '../../../../storage/json-store.js';
 import { getBridgeContext, initBridgeContext } from '../../../../bridge/host/context.js';
 import { BaseChannelAdapter, type StructuredStreamingUiActionButton, type StructuredStreamingUiMetadata, type StructuredStreamingUiSnapshot } from '../../../../channels/contracts.js';
@@ -49,6 +51,13 @@ function resolveTestInteractiveTurnRuntimeSettings(channelType?: string) {
   return resolveInteractiveTurnRuntimeSettings(
     channelType,
     (key) => getBridgeContext().store.getSetting(key),
+  );
+}
+
+function setSessionConfigToml(sessionId: string, patch: ConfigPatch): void {
+  createConfigService({ migrate: false, env: {} }).set(
+    { kind: 'session', sessionId },
+    patch,
   );
 }
 
@@ -281,13 +290,17 @@ class ScriptedSessionSimulator {
       runtime: runtime === 'claude'
         ? {
           activeRuntime: 'claude',
-          claude: { provider: provider === 'sdk' ? 'sdk' : 'pty' },
         }
         : {
           activeRuntime: 'codex',
-          codex: { provider: provider === 'tmux' ? 'tmux' : provider === 'pty' ? 'pty' : 'sdk' },
         },
     });
+    setSessionConfigToml(
+      sessionId,
+      runtime === 'claude'
+        ? { runtime: { claude: { provider: provider === 'sdk' ? 'sdk' : 'pty' } } }
+        : { runtime: { codex: { provider: provider === 'tmux' ? 'tmux' : provider === 'pty' ? 'pty' : 'sdk' } } },
+    );
   }
 
   async send(turn: {
@@ -726,10 +739,10 @@ stream_status_check_interval_seconds = 3
       name: 'Codex Bridge Title',
       runtime: {
         activeRuntime: 'codex',
-        codex: { provider: 'sdk', model: 'gpt-test-model' },
         general: { workingDirectory: '/tmp/codex-sdk-title' },
       },
     });
+    setSessionConfigToml(sessionId, { runtime: { codex: { provider: 'sdk', model: 'gpt-test-model' } } });
     simulator.resolveDisplayInfo = (binding) => ({
       title: '',
       bridgeSessionId: binding.bridgeSessionId,
@@ -760,10 +773,10 @@ stream_status_check_interval_seconds = 3
       name: 'Claude Bridge Title',
       runtime: {
         activeRuntime: 'claude',
-        claude: { provider: 'sdk', model: 'claude-sonnet-test' },
         general: { workingDirectory: '/tmp/claude-sdk-title' },
       },
     });
+    setSessionConfigToml(sessionId, { runtime: { claude: { provider: 'sdk', model: 'claude-sonnet-test' } } });
     simulator.resolveDisplayInfo = (binding) => ({
       title: '',
       bridgeSessionId: binding.bridgeSessionId,
@@ -794,10 +807,10 @@ stream_status_check_interval_seconds = 3
       name: 'chat-sdk-session-title',
       runtime: {
         activeRuntime: 'codex',
-        codex: { provider: 'sdk', model: 'gpt-test-model' },
         general: { workingDirectory: 'D:\\workspace\\sdk-session-title' },
       },
     });
+    setSessionConfigToml(sessionId, { runtime: { codex: { provider: 'sdk', model: 'gpt-test-model' } } });
     simulator.resolveDisplayInfo = (binding) => (
       new ThreadDisplayService(store).binding(binding, { stripInternalPrefix: true })
     );
@@ -830,6 +843,7 @@ stream_status_check_interval_seconds = 3
 
   it('shows status-only stream updates for Claude background preparation without suppressing fallback text', async () => {
     const adapter = new FakeFeishuStreamingAdapter();
+    adapter.streamEndResult = true;
     const address = {
       channelType: 'feishu-default',
       channelProvider: 'feishu',
@@ -844,6 +858,7 @@ stream_status_check_interval_seconds = 3
         claude: {},
       },
     });
+    setSessionConfigToml(binding.bridgeSessionId, { runtime: { claude: { provider: 'sdk' } } });
     const taskStateMap = new Map<string, InteractiveTaskState>();
 
     await runInteractiveMessage(
@@ -911,8 +926,9 @@ stream_status_check_interval_seconds = 3
 
     assert.ok(adapter.streamedStatuses.some((status) => status.includes('已为Claude Code sdk 注入 Router 环境。')));
     assert.equal(adapter.streamEnds.at(-1)?.status, 'completed');
-    assert.equal(adapter.sentMessages.at(-1)?.text, 'Claude fallback response');
-    assert.equal(adapter.streamedTexts.length, 0);
+    assert.equal(adapter.streamEnds.at(-1)?.text, 'Claude fallback response');
+    assert.equal(adapter.sentMessages.length, 0);
+    assert.deepEqual(adapter.streamedTexts, ['Claude fallback response']);
   });
 
   it('delivers Claude SDK errors as Feishu replies instead of waiting for mirror output', async () => {
@@ -928,9 +944,9 @@ stream_status_check_interval_seconds = 3
     store.updateSession(binding.bridgeSessionId, {
       runtime: {
         activeRuntime: 'claude',
-        claude: { provider: 'sdk' },
       },
     });
+    setSessionConfigToml(binding.bridgeSessionId, { runtime: { claude: { provider: 'sdk' } } });
     const taskStateMap = new Map<string, InteractiveTaskState>();
 
     await runInteractiveMessage(
@@ -1494,9 +1510,9 @@ stream_status_check_interval_seconds = 3
     store.updateSession(binding.bridgeSessionId, {
       runtime: {
         activeRuntime: 'codex',
-        codex: { provider: 'pty' },
       },
     });
+    setSessionConfigToml(binding.bridgeSessionId, { runtime: { codex: { provider: 'pty' } } });
 
     const taskStateMap = new Map<string, InteractiveTaskState>();
     const processStarted = createDeferred<void>();

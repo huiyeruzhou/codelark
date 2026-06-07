@@ -112,21 +112,15 @@ import {
   resolveEffectiveCodexProvider,
   resolveNewWorkingDirectory,
   resolveNewSessionWorkingDirectory,
+  resolveRuntimeMetadataConfig,
+  sessionCodexRuntimeOverridePatch,
 } from '../session/support.js';
 import { createConfigService } from '../../configuration/service.js';
 import {
   getGlobalConfigValue,
-  getGlobalStringConfig,
 } from '../session/global-config.js';
 import {
   getSessionTmuxSessionName,
-  getSessionClaudeModel,
-  getSessionClaudeReasoningEffort,
-  getSessionCodexModel,
-  getSessionCodexMode,
-  getSessionCodexNetworkAccess,
-  getSessionCodexReasoningEffort,
-  getSessionCodexSandboxMode,
   getSessionCodexThreadId,
   getSessionClaudeCwd,
   getSessionClaudeSessionId,
@@ -134,9 +128,6 @@ import {
   getSessionSystemPrompt,
   getSessionWorkingDirectory,
   setSessionClaudeIdentityUpdate,
-  setSessionCodexNetworkAccessUpdate,
-  setSessionCodexReasoningEffortUpdate,
-  setSessionCodexSandboxModeUpdate,
   setSessionCodexTitleUpdate,
 } from '../../domain/session-runtime.js';
 import {
@@ -955,18 +946,7 @@ function getMirrorThreadTitle(threadId: string, sessionId?: string): string | nu
 function getMirrorRuntimeTags(_threadId: string, sessionId?: string): string[] {
   const { store } = getBridgeContext();
   const session = sessionId ? store.getSession(sessionId) : null;
-  if (getSessionActiveRuntime(session) === 'claude') {
-    return buildRuntimeStreamTags({
-      reasoningEffort: getSessionClaudeReasoningEffort(session) || 'default',
-      model: getSessionClaudeModel(session) || getGlobalStringConfig('runtime.claude.model') || 'default',
-    });
-  }
-  return buildRuntimeStreamTags({
-    reasoningEffort: normalizeReasoningEffort(
-      getSessionCodexReasoningEffort(session) || getGlobalStringConfig('runtime.codex.reasoningEffort'),
-    ),
-    model: getSessionCodexModel(session) || getGlobalStringConfig('runtime.codex.model') || 'default',
-  });
+  return buildRuntimeStreamTags(resolveRuntimeMetadataConfig(session));
 }
 
 const MIRROR_FEEDBACK = createMirrorFeedbackController({
@@ -2178,33 +2158,24 @@ function createAutoRunSession(
 ): BridgeSession {
   const store = getBridgeContext().store;
   const name = `Auto: ${(prompt || task.id).replace(/\s+/g, ' ').trim().slice(0, 48)} #${triggeredCount}`;
-  const parentCodexProvider = getSessionCodexProviderOverride(parentSession);
-  const parentSandboxMode = getSessionCodexSandboxMode(parentSession);
-  const parentNetworkAccess = getSessionCodexNetworkAccess(parentSession);
-  const parentReasoningEffort = getSessionCodexReasoningEffort(parentSession);
+  const parentRuntimePatch = sessionCodexRuntimeOverridePatch(parentSession);
   const session = store.createSession(
     name,
-    getSessionCodexModel(parentSession) || '',
+    '',
     getSessionSystemPrompt(parentSession),
     getSessionWorkingDirectory(parentSession),
-    getSessionCodexMode(parentSession) || 'normal',
+    'normal',
     {
-      reasoningEffort: parentReasoningEffort,
       parentSessionId: parentSession.id,
     },
   );
   store.updateSession(session.id, {
     provider_id: parentSession.provider_id,
-    ...(parentSandboxMode ? setSessionCodexSandboxModeUpdate(parentSandboxMode) : {}),
-    ...(typeof parentNetworkAccess === 'boolean'
-      ? setSessionCodexNetworkAccessUpdate(parentNetworkAccess)
-      : {}),
-    ...(parentReasoningEffort ? setSessionCodexReasoningEffortUpdate(parentReasoningEffort) : {}),
   }, { touch: false });
-  if (parentCodexProvider) {
+  if (parentRuntimePatch.runtime?.codex) {
     createConfigService({ migrate: false }).set(
       { kind: 'session', sessionId: session.id },
-      { runtime: { codex: { provider: parentCodexProvider } } },
+      parentRuntimePatch,
     );
   }
   return store.getSession(session.id) || session;

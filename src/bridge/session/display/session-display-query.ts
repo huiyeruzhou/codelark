@@ -13,13 +13,16 @@ import type { ChannelChat } from '../../../domain/channel.js';
 import {
   getSessionCodexThreadId,
   getSessionCodexTitle,
-  getSessionCodexMode,
   getSessionClaudeCwd,
   getSessionClaudeSessionId,
   getSessionActiveRuntime,
   getSessionWorkingDirectory,
 } from '../../../domain/session-runtime.js';
-import { resolveEffectiveCodexProvider } from '../support.js';
+import {
+  hasSessionCodexProviderOverride,
+  resolveEffectiveCodexProvider,
+  resolveEffectiveMode,
+} from '../support.js';
 
 export interface SessionDisplaySummary {
   kind: 'bridge' | 'codex' | 'claude';
@@ -103,11 +106,11 @@ function getBridgeSessionDisplayTitleWithCodexFallback(session: BridgeSession, c
 }
 
 export function bridgeSessionMode(session: BridgeSession | null | undefined): string {
-  return getSessionCodexMode(session) === 'yolo' ? 'yolo' : 'normal';
+  return resolveEffectiveMode(null, session);
 }
 
 export function bridgeSessionExecutionProvider(session: BridgeSession | null | undefined): string {
-  return resolveEffectiveCodexProvider(session);
+  return hasSessionCodexProviderOverride(session) ? resolveEffectiveCodexProvider(session) : 'default';
 }
 
 export function findVisibleBridgeSessionByCodexThread(
