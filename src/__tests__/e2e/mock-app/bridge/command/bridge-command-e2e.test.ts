@@ -1798,8 +1798,8 @@ provider = "tmux"
       await _testOnly.handleMessage(adapter, inboundMessage(address, '/', 'incoming-runtime-codex-status-after-claude'));
       const statusText = adapter.sent.at(-1)?.text || '';
       assert.match(statusText, /当前会话/);
-      assert.match(statusText, /runtime:\s*Codex/i);
-      assert.doesNotMatch(statusText, /runtime:\s*Claude/i);
+      assert.match(statusText, /runtime(?:\*\*)?：Codex/i);
+      assert.doesNotMatch(statusText, /runtime(?:\*\*)?：Claude/i);
     } finally {
       _testOnlyClaudePty.clear();
       fs.rmSync(workDir, { recursive: true, force: true });
@@ -2031,7 +2031,7 @@ provider = "tmux"
       await _testOnly.handleMessage(adapter, inboundMessage(address, '//clear', 'incoming-runtime-clear-blocked'));
       const clearLog = fs.readFileSync(fakeTmux.logPath, 'utf-8').slice(beforeClearLog.length);
       assert.equal(clearLog, '');
-      assert.match(adapter.sent.at(-1)?.text || '', /不能通过 \/\/clear 清空上下文/);
+      assert.match(adapter.sent.at(-1)?.text || '', /不能通过 `?\/\/clear`? 清空上下文/);
       assert.match(adapter.sent.at(-1)?.text || '', /手动创建新会话/);
 
       await _testOnly.handleMessage(adapter, inboundMessage(address, '/new sayhi ./sayhi', 'incoming-runtime-new-sayhi'));

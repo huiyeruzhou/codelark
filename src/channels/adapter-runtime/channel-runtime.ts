@@ -26,7 +26,10 @@ export function listConfiguredChannelInstances(): RuntimeChannelInstance[] {
 }
 
 export function getConfiguredChannelInstance(channelType: string): RuntimeChannelInstance | null {
-  return listConfiguredChannelInstances().find((channel) => channel.id === channelType) || null;
+  const instances = listConfiguredChannelInstances();
+  return instances.find((channel) => channel.id === channelType)
+    || instances.find((channel) => channel.provider === channelType)
+    || null;
 }
 
 export function inferChannelProvider(channelType: string): ChannelProvider | undefined {

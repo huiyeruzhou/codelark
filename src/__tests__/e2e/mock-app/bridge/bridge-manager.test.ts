@@ -1669,7 +1669,7 @@ agent = "claude"
       assert.deepEqual(streamEvents, [
         'metadata:mirror:session-1:turn-1:本地会话:effort:medium,model:test-model,bridge_id:session-,mirror',
         'start:mirror:session-1:turn-1',
-        'text:mirror:session-1:turn-1:我: codex prompt\n\ncodex:',
+        'text:mirror:session-1:turn-1:**我:** codex prompt\n\n**codex:**',
         'status:mirror:session-1:turn-1:处理中',
       ]);
     } finally {
@@ -1734,7 +1734,7 @@ agent = "claude"
       assert.deepEqual(streamEvents, [
         'metadata:mirror:session-1:turn-1:本地会话:effort:medium,model:test-model,bridge_id:session-,mirror',
         'start:mirror:session-1:turn-1',
-        'text:mirror:session-1:turn-1:我:\n（基于 Review findings）\nok,当前调整已经可以收尾了吗\n\ncodex:',
+        'text:mirror:session-1:turn-1:**我:**\n（基于 Review findings）\nok,当前调整已经可以收尾了吗\n\n**codex:**',
         'status:mirror:session-1:turn-1:处理中',
       ]);
     } finally {
