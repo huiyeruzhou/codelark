@@ -279,6 +279,20 @@ interface StreamingCardRenderResult {
   tools: ToolCallInfo[];
 }
 
+interface StreamingCardPayloadStats {
+  payloadBytes: number;
+  payloadChars: number;
+  markdownCount: number;
+}
+
+interface StreamingCardRolloverOffsets {
+  historyItemOffset: number;
+  toolCallOffset: number;
+  reason: string;
+  componentCount?: number;
+  payload?: StreamingCardPayloadStats;
+}
+
 interface StreamingCardInitialState {
   content: string;
   tasksText: string;
@@ -323,6 +337,9 @@ const CARD_FULL_REFRESH_INTERVAL_MS = 5 * 60_000;
 const CARD_SLOW_BATCH_REFRESH_THRESHOLD_MS = 5_000;
 const STREAMING_CARD_COMPONENT_LIMIT = 160;
 const STREAMING_CARD_DIRECT_REFRESH_COMPONENT_THRESHOLD = 20;
+const STREAMING_CARD_PAYLOAD_BYTES_LIMIT = 18_000;
+const STREAMING_CARD_PAYLOAD_CHARS_LIMIT = 18_000;
+const STREAMING_CARD_MARKDOWN_COUNT_LIMIT = 150;
 const RICH_CARD_DEFAULT_UPDATE_TTL_MS = 60_000;
 const INITIAL_STREAMING_STATUS = '处理中';
 const EMPTY_STREAMING_TASKS = '';
@@ -903,6 +920,41 @@ function isFeishuCardElementLimitError(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error || '');
   return /(?:code=|code:\s*)3003(?:05|15)\b/.test(message)
     || /\belement exceeds the limit\b/i.test(message);
+}
+
+function isFeishuCardPayloadLimitError(error: unknown): boolean {
+  const code = error && typeof error === 'object'
+    ? (error as Record<string, unknown>).code
+    : undefined;
+  if (code === 200850 || code === '200850') return true;
+  const message = error instanceof Error ? error.message : String(error || '');
+  return /(?:code=|code:\s*)200850\b/.test(message);
+}
+
+function countCardMarkdownElements(value: unknown): number {
+  if (!value || typeof value !== 'object') return 0;
+  if (Array.isArray(value)) {
+    return value.reduce<number>((count, item) => count + countCardMarkdownElements(item), 0);
+  }
+  const record = value as Record<string, unknown>;
+  const selfCount = record.tag === 'markdown' ? 1 : 0;
+  return Object.values(record).reduce<number>((count, child) => count + countCardMarkdownElements(child), selfCount);
+}
+
+function measureStreamingCardPayload(body: Record<string, unknown>): StreamingCardPayloadStats {
+  const json = JSON.stringify(body);
+  return {
+    payloadBytes: Buffer.byteLength(json, 'utf8'),
+    payloadChars: json.length,
+    markdownCount: countCardMarkdownElements(body),
+  };
+}
+
+function describeStreamingCardPayloadPressure(payload: StreamingCardPayloadStats): string | null {
+  if (payload.payloadBytes >= STREAMING_CARD_PAYLOAD_BYTES_LIMIT) return 'payload_bytes';
+  if (payload.payloadChars >= STREAMING_CARD_PAYLOAD_CHARS_LIMIT) return 'payload_chars';
+  if (payload.markdownCount >= STREAMING_CARD_MARKDOWN_COUNT_LIMIT) return 'markdown_count';
+  return null;
 }
 
 function buildStreamingCardBody(
@@ -3080,7 +3132,7 @@ export class FeishuAdapter extends BaseChannelAdapter {
     statusText: string,
     actionRows: FeishuCardActionButton[][],
     metadata: StructuredStreamingUiMetadata,
-  ): { historyItemOffset: number; toolCallOffset: number } | null {
+  ): StreamingCardRolloverOffsets | null {
     const fullRender = this.currentStreamingCardRender(
       state,
       content,
@@ -3090,12 +3142,24 @@ export class FeishuAdapter extends BaseChannelAdapter {
       metadata,
       Number.MAX_SAFE_INTEGER,
     );
-    if (fullRender.componentCount < STREAMING_CARD_COMPONENT_LIMIT) return null;
+    const payload = measureStreamingCardPayload(fullRender.body);
+    const payloadReason = describeStreamingCardPayloadPressure(payload);
+    if (fullRender.componentCount < STREAMING_CARD_COMPONENT_LIMIT && !payloadReason) return null;
+
+    const reason = fullRender.componentCount >= STREAMING_CARD_COMPONENT_LIMIT
+      ? 'component_count'
+      : payloadReason!;
     if (state.historyDriven && state.historyItems.length > 0) {
       const renderedAbsoluteCount = state.historyItemOffset + Math.max(1, state.renderedHistoryElementIds.length);
       const nextOffset = Math.min(renderedAbsoluteCount, Math.max(0, state.historyItems.length - 1));
       if (nextOffset > state.historyItemOffset) {
-        return { historyItemOffset: nextOffset, toolCallOffset: state.toolCallOffset };
+        return {
+          historyItemOffset: nextOffset,
+          toolCallOffset: state.toolCallOffset,
+          reason,
+          componentCount: fullRender.componentCount,
+          payload,
+        };
       }
     }
 
@@ -3106,7 +3170,13 @@ export class FeishuAdapter extends BaseChannelAdapter {
       const nextOffset = renderedToolCount < state.toolCalls.length
         ? Math.min(state.toolCallOffset + renderedToolCount, Math.max(0, state.toolCalls.length - 1))
         : state.toolCallOffset;
-      return { historyItemOffset: state.historyItemOffset, toolCallOffset: nextOffset };
+      return {
+        historyItemOffset: state.historyItemOffset,
+        toolCallOffset: nextOffset,
+        reason,
+        componentCount: fullRender.componentCount,
+        payload,
+      };
     }
 
     return null;
@@ -3148,6 +3218,7 @@ export class FeishuAdapter extends BaseChannelAdapter {
     statusText: string,
     actionRows: FeishuCardActionButton[][],
     metadata: StructuredStreamingUiMetadata,
+    reason = 'component_count',
   ): Promise<boolean> {
     const cardkit = (this.restClient as any)?.cardkit?.v1;
     if (!cardkit?.card?.settings) return false;
@@ -3200,18 +3271,51 @@ export class FeishuAdapter extends BaseChannelAdapter {
       flushCarry,
     );
     if (created) {
-      console.log('[feishu-adapter] Streaming card rolled over after component threshold:', {
+      console.log('[feishu-adapter] Streaming card rolled over after threshold:', {
         streamKey,
         previousCardId: state.cardId,
         nextIndex: nextInitialState.continuationIndex,
         historyItemOffset: offsets.historyItemOffset,
         toolCallOffset: offsets.toolCallOffset,
+        reason,
       });
       return true;
     }
 
     this.activeCards.set(streamKey, state);
     return false;
+  }
+
+  private async forceStreamingCardContinuationRollover(
+    streamKey: string,
+    state: FeishuCardState,
+    content: string,
+    tasksText: string,
+    statusText: string,
+    actionRows: FeishuCardActionButton[][],
+    metadata: StructuredStreamingUiMetadata,
+    reason: string,
+  ): Promise<boolean> {
+    // 飞书 200850/payload 限制不是组件数问题；从“上一个已渲染 group”后续接，保留当前正在更新的 group。
+    const offsets = this.streamingCardContinuationOffsets(state);
+    console.log('[feishu-adapter] Streaming card forcing continuation rollover:', {
+      streamKey,
+      cardId: state.cardId,
+      reason,
+      historyItemOffset: offsets.historyItemOffset,
+      toolCallOffset: offsets.toolCallOffset,
+    });
+    return this.rolloverStreamingCard(
+      streamKey,
+      state,
+      offsets,
+      content,
+      tasksText,
+      statusText,
+      actionRows,
+      metadata,
+      reason,
+    );
   }
 
   private async finalizeRolloverSourceCard(
@@ -3260,6 +3364,7 @@ export class FeishuAdapter extends BaseChannelAdapter {
       statusText,
       actionRows,
       metadata,
+      'saturated_card',
     );
     if (rolled) return true;
     return this.flushFullCardRefresh(streamKey, state, content, tasksText, statusText, actionRows, metadata, desiredRevision);
@@ -3530,6 +3635,26 @@ export class FeishuAdapter extends BaseChannelAdapter {
       snapshot.metadata,
     );
     if (rolloverOffsets) {
+      console.log('[feishu-adapter] Streaming card threshold reached; opening continuation card:', {
+        streamKey,
+        cardId: state.cardId,
+        reason: rolloverOffsets.reason,
+        componentCount: rolloverOffsets.componentCount,
+        component_count: rolloverOffsets.componentCount,
+        payloadBytes: rolloverOffsets.payload?.payloadBytes,
+        payload_bytes: rolloverOffsets.payload?.payloadBytes,
+        payloadChars: rolloverOffsets.payload?.payloadChars,
+        payload_chars: rolloverOffsets.payload?.payloadChars,
+        markdownCount: rolloverOffsets.payload?.markdownCount,
+        markdown_count: rolloverOffsets.payload?.markdownCount,
+        limit: STREAMING_CARD_COMPONENT_LIMIT,
+        payloadBytesLimit: STREAMING_CARD_PAYLOAD_BYTES_LIMIT,
+        payload_bytes_limit: STREAMING_CARD_PAYLOAD_BYTES_LIMIT,
+        payloadCharsLimit: STREAMING_CARD_PAYLOAD_CHARS_LIMIT,
+        payload_chars_limit: STREAMING_CARD_PAYLOAD_CHARS_LIMIT,
+        markdownCountLimit: STREAMING_CARD_MARKDOWN_COUNT_LIMIT,
+        markdown_count_limit: STREAMING_CARD_MARKDOWN_COUNT_LIMIT,
+      });
       const rolled = await this.rolloverStreamingCard(
         streamKey,
         state,
@@ -3539,6 +3664,7 @@ export class FeishuAdapter extends BaseChannelAdapter {
         snapshot.statusText,
         snapshot.actionRows,
         snapshot.metadata,
+        rolloverOffsets.reason,
       );
       if (rolled) return;
     }
@@ -3773,6 +3899,25 @@ export class FeishuAdapter extends BaseChannelAdapter {
               onError: (err) => {
                 const current = this.activeCards.get(streamKey);
                 if (!current || current.cardId !== cardId) return;
+                if (isFeishuCardPayloadLimitError(err)) {
+                  void this.forceStreamingCardContinuationRollover(
+                    streamKey,
+                    current,
+                    plan.snapshot.rawContent,
+                    plan.snapshot.tasksText,
+                    plan.snapshot.statusText,
+                    plan.snapshot.actionRows,
+                    plan.snapshot.metadata,
+                    'feishu_200850',
+                  ).then((rolled) => {
+                    if (rolled) return;
+                    const latest = this.activeCards.get(streamKey);
+                    if (!latest || latest.cardId !== cardId) return;
+                    this.markCardFlushFailure(latest, err);
+                    this.markCardFlushQueued(latest);
+                  });
+                  return;
+                }
                 this.markCardFlushFailure(current, err);
                 console.warn(
                   `[feishu-adapter] cardElement.${update.kind} failed for ${update.elementId}:`,
@@ -3847,7 +3992,19 @@ export class FeishuAdapter extends BaseChannelAdapter {
           break;
         }
       } catch (err) {
-        if (isFeishuCardElementLimitError(err)) {
+        if (isFeishuCardPayloadLimitError(err)) {
+          const rolled = await this.forceStreamingCardContinuationRollover(
+            streamKey,
+            state,
+            plan.snapshot.rawContent,
+            plan.snapshot.tasksText,
+            plan.snapshot.statusText,
+            plan.snapshot.actionRows,
+            plan.snapshot.metadata,
+            'feishu_200850',
+          );
+          if (rolled) return;
+        } else if (isFeishuCardElementLimitError(err)) {
           const reset = await this.resetSaturatedStreamingCard(
             streamKey,
             state,
@@ -4521,6 +4678,19 @@ export class FeishuAdapter extends BaseChannelAdapter {
       this.markCardFlushSuccess(state);
       return true;
     } catch (err) {
+      if (isFeishuCardPayloadLimitError(err)) {
+        const rolled = await this.forceStreamingCardContinuationRollover(
+          streamKey,
+          state,
+          content,
+          tasksText,
+          statusText,
+          actionRows,
+          metadata,
+          'feishu_200850',
+        );
+        if (rolled) return true;
+      }
       this.markCardFlushFailure(state, err);
       console.warn(
         '[feishu-adapter] card.update streaming refresh failed:',

@@ -711,4 +711,122 @@ describe('mirror-runtime pending deliveries', () => {
     assert.equal(session.runtime.claude.sessionId, undefined);
     assert.equal(state.mirrorSubscriptions.size, 0);
   });
+
+  it('logs slow mirror reconcile stages around downstream routing and delivery waits', async () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-mirror-runtime-'));
+    const filePath = path.join(tempRoot, 'rollout.jsonl');
+    fs.writeFileSync(filePath, '', 'utf-8');
+
+    const bindings = [{
+      id: 'binding-1',
+      channelType: 'feishu-default',
+      chatId: 'chat-1',
+      bridgeSessionId: 'session-1',
+      active: true,
+    }];
+    const session = {
+      id: 'session-1',
+      runtime: { codex: { threadId: 'thread-1' } },
+      mirror_last_event_at: null,
+    };
+    const state = {
+      running: true,
+      adapters: new Map([
+        ['feishu-default', { channelType: 'feishu-default', provider: 'feishu', isRunning: () => false }],
+      ]),
+      mirrorSubscriptions: new Map(),
+      mirrorWakeTimer: null,
+      mirrorSyncInFlight: false,
+      activeTasks: new Map(),
+    };
+    const warnCalls: unknown[][] = [];
+    const originalWarn = console.warn;
+    console.warn = (...args: unknown[]) => {
+      warnCalls.push(args);
+    };
+
+    runtime = createMirrorRuntime(() => state as never, {
+      watchDebounceMs: 0,
+      danglingThreadRetryLimit: 3,
+      failureSuspendThreshold: 3,
+      failureSuspendMs: 60_000,
+      slowReconcileSubscriptionMs: 1,
+    }, {
+      nowIso: () => '2026-04-21T10:00:00.000Z',
+      describeUnknownError: (error) => (error instanceof Error ? error.message : String(error)),
+      listChannelChats: () => bindings,
+      getSession: (sessionId) => (sessionId === session.id ? session : null),
+      clearSessionCodexThreadId: () => {},
+      getCodexSessionByThreadIdSafe: (threadId) => (
+        threadId === 'thread-1'
+          ? {
+              id: threadId,
+              filePath,
+            } as never
+          : null
+      ),
+      syncMirrorSessionStateSafe: () => {},
+      filterSuppressedMirrorRecords: (_sessionId, records) => records,
+      observeSessionHealthRecords: () => {},
+      routeCodexRecords: async (_sessionId, _threadId, records) => {
+        await new Promise((resolve) => setTimeout(resolve, 5));
+        return { claimed: [], unclaimed: records, terminalClaimed: false };
+      },
+      consumeMirrorRecords: (subscription, records) => consumeMirrorRecords(subscription, records),
+      flushTimedOutMirrorTurn: (subscription) => flushTimedOutMirrorTurn(subscription, MIRROR_TEST_BUFFER_TIMEOUT_MS, Date.now()),
+      hasPendingMirrorWork: (subscription) => hasPendingMirrorWork(subscription),
+      consumeBufferedMirrorTurns: (subscription) => consumeBufferedMirrorTurns(subscription, MIRROR_TEST_BUFFER_TIMEOUT_MS, Date.now()),
+      stopMirrorStreaming: () => {},
+      deliverMirrorTurns: async (_subscription, turns) => {
+        await new Promise((resolve) => setTimeout(resolve, 5));
+        return { deliveredCount: turns.length };
+      },
+    });
+
+    try {
+      await runtime.reconcileMirrorSubscriptions();
+      fs.appendFileSync(filePath, [
+        JSON.stringify({
+          timestamp: '2026-04-21T10:00:01.000Z',
+          type: 'event_msg',
+          payload: {
+            type: 'task_started',
+            turn_id: 'turn-1',
+          },
+        }),
+        JSON.stringify({
+          timestamp: '2026-04-21T10:00:02.000Z',
+          type: 'response_item',
+          payload: {
+            type: 'message',
+            role: 'assistant',
+            content: [{ type: 'output_text', text: 'final answer' }],
+          },
+        }),
+        JSON.stringify({
+          timestamp: '2026-04-21T10:00:03.000Z',
+          type: 'event_msg',
+          payload: {
+            type: 'task_complete',
+            turn_id: 'turn-1',
+            last_agent_message: 'final answer',
+          },
+        }),
+      ].join('\n') + '\n', 'utf-8');
+      await runtime.reconcileMirrorSubscriptions();
+    } finally {
+      console.warn = originalWarn;
+      fs.rmSync(tempRoot, { recursive: true, force: true });
+    }
+
+    const stageSummaries = warnCalls
+      .map((entry) => entry[1])
+      .filter((entry): entry is Record<string, unknown> => (
+        Boolean(entry)
+        && typeof entry === 'object'
+        && (entry as Record<string, unknown>).event === 'perf.mirror.subscription_stage'
+      ));
+    assert.ok(stageSummaries.some((entry) => entry.stage === 'route_records'));
+    assert.ok(stageSummaries.some((entry) => entry.stage === 'deliver_turns'));
+  });
 });
