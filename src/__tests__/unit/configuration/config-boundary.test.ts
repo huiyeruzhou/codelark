@@ -58,4 +58,13 @@ describe('configuration module boundaries', () => {
     const legacySource = fs.readFileSync(path.join(process.cwd(), 'src', 'configuration', 'legacy.ts'), 'utf-8');
     assert.equal(/from\s+['"]\.\/index\.js['"]/.test(legacySource), false);
   });
+
+  it('keeps current config paths from exposing legacy input files', () => {
+    const pathsSource = fs.readFileSync(path.join(process.cwd(), 'src', 'configuration', 'paths.ts'), 'utf-8');
+
+    assert.doesNotMatch(pathsSource, /config\.env/);
+    assert.doesNotMatch(pathsSource, /config\.json/);
+    assert.doesNotMatch(pathsSource, /CONFIG_PATH/);
+    assert.doesNotMatch(pathsSource, /CONFIG_JSON_PATH/);
+  });
 });

@@ -4,7 +4,11 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { JsonFileStore } from '../../../storage/json-store.js';
-import { CODELARK_HOME, CONFIG_JSON_PATH, CONFIG_PATH } from '../../../configuration/paths.js';
+import { CODELARK_HOME } from '../../../configuration/paths.js';
+import {
+  LEGACY_CONFIG_ENV_PATH as CONFIG_PATH,
+  LEGACY_CONFIG_JSON_PATH as CONFIG_JSON_PATH,
+} from '../../../configuration/migrations/legacy/paths.js';
 import { getSessionSystemPrompt, getSessionWorkingDirectory } from '../../../domain/session-runtime.js';
 
 const DATA_DIR = path.join(CODELARK_HOME, 'data');

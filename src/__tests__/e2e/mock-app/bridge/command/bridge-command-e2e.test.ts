@@ -5,7 +5,11 @@ import os from 'node:os';
 import path from 'node:path';
 
 import fs from 'node:fs';
-import { CODELARK_HOME, CONFIG_JSON_PATH, CONFIG_PATH } from '../../../../../configuration/paths.js';
+import { CODELARK_HOME } from '../../../../../configuration/paths.js';
+import {
+  LEGACY_CONFIG_ENV_PATH as CONFIG_PATH,
+  LEGACY_CONFIG_JSON_PATH as CONFIG_JSON_PATH,
+} from '../../../../../configuration/migrations/legacy/paths.js';
 import { createConfigService } from '../../../../../configuration/service.js';
 import { _testOnlyPtyScreens } from '../../../../../runtime/codex/pty-provider.js';
 import { _testOnlyClaudePty } from '../../../../../runtime/claude/pty-provider.js';

@@ -1,7 +1,11 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { JsonFileStore } from '../../../storage/json-store.js';
-import { CONFIG_PATH, CONFIG_JSON_PATH, CODELARK_HOME } from '../../../configuration/paths.js';
+import { CODELARK_HOME } from '../../../configuration/paths.js';
+import {
+  LEGACY_CONFIG_ENV_PATH as CONFIG_PATH,
+  LEGACY_CONFIG_JSON_PATH as CONFIG_JSON_PATH,
+} from '../../../configuration/migrations/legacy/paths.js';
 import { initBridgeContext } from '../../../bridge/host/context.js';
 import { BaseChannelAdapter } from '../../../channels/contracts.js';
 import type { CreateGroupChatOptions, CreatedGroupChat } from '../../../channels/contracts.js';

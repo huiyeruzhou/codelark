@@ -6,7 +6,11 @@ import os from 'node:os';
 import path from 'node:path';
 import { configToSettings, configV2ToLegacyConfig, legacyConfigToConfigPatch } from '../../../configuration/legacy.js';
 import type { Config } from '../../../configuration/legacy-types.js';
-import { CODELARK_HOME, CONFIG_JSON_PATH, CONFIG_PATH } from '../../../configuration/paths.js';
+import { CODELARK_HOME } from '../../../configuration/paths.js';
+import {
+  LEGACY_CONFIG_ENV_PATH as CONFIG_PATH,
+  LEGACY_CONFIG_JSON_PATH as CONFIG_JSON_PATH,
+} from '../../../configuration/migrations/legacy/paths.js';
 import { createConfigService } from '../../../configuration/service.js';
 
 function loadLegacyConfig(): Config {

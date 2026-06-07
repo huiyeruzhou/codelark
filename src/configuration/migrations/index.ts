@@ -9,6 +9,7 @@ import type {
   MigrationPaths,
   RunConfigMigrationsResult,
 } from './types.js';
+import { legacyConfigEnvPath, legacyConfigJsonPath } from './legacy/paths.js';
 import { v1ConfigMigration } from './v1.js';
 
 export type {
@@ -75,8 +76,8 @@ function normalizeState(value: unknown): ConfigMigrationState {
 
 export function resolveMigrationPaths(codelarkHome: string): MigrationPaths {
   return {
-    legacyConfigJson: path.join(codelarkHome, 'config.json'),
-    legacyConfigEnv: path.join(codelarkHome, 'config.env'),
+    legacyConfigJson: legacyConfigJsonPath(codelarkHome),
+    legacyConfigEnv: legacyConfigEnvPath(codelarkHome),
     homeToml: path.join(codelarkHome, 'config.toml'),
     dataSessionsJson: path.join(codelarkHome, 'data', 'sessions.json'),
     channelConfigDir: path.join(codelarkHome, 'config', 'channels'),
