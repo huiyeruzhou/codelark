@@ -52,7 +52,7 @@ Claude 的 `executable` 影响 `tmux` 和 `pty` 提供方；Claude SDK 提供方
 
 SDK 提供方通常直接把结构化事件交给 IM turn。pty / tmux 提供方更接近真实终端使用，会依赖本地 JSONL mirror 把最终输出同步到 IM。
 
-tmux Provider 的普通文本会先转发到 tmux 中的当前 runtime TUI。Codex tmux 如需自动预创建 `codex_thread_id` 或恢复缺失的 tmux session，启动进度会更新到同一张 Provider 卡片；Claude tmux 会启动或复用 Claude Code TUI，并通过 Claude JSONL mirror 同步输出。输入成功转发后，原用户消息会短暂添加 `Typing` reaction，直到 mirror stream 启动并开始同步本地 JSONL 输出。
+tmux Provider 的普通文本会先转发到 tmux 中的当前 runtime TUI。Codex tmux 如需自动预创建 `codex_thread_id` 或恢复缺失的 tmux session，启动进度会更新到同一张 Provider 卡片；Claude tmux 会启动或复用 Claude Code TUI，并通过 Claude JSONL mirror 同步输出。显式发送 `/p tmux` 时，Codex 和 Claude 都会先销毁同名 tmux session 再重启，确保新的 TUI 启动参数生效。输入成功转发后，原用户消息会短暂添加 `Typing` reaction，直到 mirror stream 启动并开始同步本地 JSONL 输出。
 
 相关模块：
 

@@ -63,6 +63,7 @@ import {
   getSessionTmuxAutoEnter,
   getSessionTmuxCaptureLines,
   getSessionTmuxEchoInput,
+  getSessionRuntimeTmuxSessionName,
   getSessionTmuxSessionName,
   getSessionWorkingDirectory,
 } from '../../../../domain/session-runtime.js';
@@ -359,6 +360,9 @@ case "$1" in
   has-session)
     target="$3"
     if [[ "$target" == "alpha" || "$target" == "beta" || "$target" == "codex_existing" ]]; then
+      exit 0
+    fi
+    if [[ ",$TMUX_FAKE_EXISTING_SESSIONS," == *",$target,"* ]]; then
       exit 0
     fi
     exit 1
@@ -1396,7 +1400,7 @@ describe('command-dispatch', () => {
     assert.equal(claudePreviewCard?.form?.selects?.some((select) => select.elementId === 'clk_network'), false);
     assert.deepEqual(
       claudePreviewCard?.form?.selects?.find((select) => select.elementId === 'clk_provider')?.options.map((option) => option.text),
-      ['pty', 'sdk'],
+      ['tmux', 'pty', 'sdk'],
     );
     assert.deepEqual(
       parseCommandCallbackData(claudePreviewCard?.form?.submitCallbackData || '')?.commandText,
@@ -2694,6 +2698,73 @@ enabled = true
       if (previousEnv.TMUX_FAKE_LOG === undefined) delete process.env.TMUX_FAKE_LOG;
       else process.env.TMUX_FAKE_LOG = previousEnv.TMUX_FAKE_LOG;
       fs.rmSync(fakeTmux.binDir, { recursive: true, force: true });
+    }
+  });
+
+  it('recreates an existing Claude tmux session on /p tmux', async () => {
+    const previousEnv = {
+      PATH: process.env.PATH,
+      TMUX_FAKE_LOG: process.env.TMUX_FAKE_LOG,
+      TMUX_FAKE_EXISTING_SESSIONS: process.env.TMUX_FAKE_EXISTING_SESSIONS,
+    };
+    const fakeTmux = installFakeTmux();
+    const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-claude-provider-tmux-'));
+    process.env.PATH = `${fakeTmux.binDir}${path.delimiter}${previousEnv.PATH || ''}`;
+    process.env.TMUX_FAKE_LOG = fakeTmux.logPath;
+
+    try {
+      const store = initTestContext({ settings: { bridge_claude_provider: 'sdk' } });
+      const sent: any[] = [];
+      const adapter = createGroupCapableAdapter({ sent });
+      const address = { channelType: 'feishu', chatId: 'chat-claude-provider-tmux' } as const;
+      const session = store.createSession('existing', 'test-model', undefined, workDir, 'normal');
+      store.updateSession(session.id, { runtime: { activeRuntime: 'claude' } });
+      const tmuxSessionName = `claude_${session.id}`;
+      process.env.TMUX_FAKE_EXISTING_SESSIONS = tmuxSessionName;
+      store.upsertChannelChat({
+        channelType: address.channelType,
+        chatId: address.chatId,
+        bridgeSessionId: session.id,
+      });
+
+      await handleBridgeCommand(
+        adapter,
+        {
+          address,
+          text: '/p tmux',
+          messageId: 'incoming-claude-provider-tmux',
+        } as any,
+        '/p tmux',
+        {
+          getActiveTask: () => undefined,
+          diagnoseSessionHealth: async () => null,
+          diagnoseAllActiveSessions: async () => [],
+          reconcileMirrorSubscriptions: async () => {},
+        },
+      );
+
+      assert.match(sent.at(-1)?.text || '', /已切换 Claude Provider/);
+      assert.match(sent.at(-1)?.text || '', /同名 tmux session 已存在/);
+      assert.equal(
+        createConfigService({ migrate: false, env: {} }).get('runtime.claude.provider', {
+          kind: 'session',
+          sessionId: session.id,
+        }),
+        'tmux',
+      );
+      assert.equal(getSessionRuntimeTmuxSessionName(store.getSession(session.id)), tmuxSessionName);
+      const tmuxLog = fs.readFileSync(fakeTmux.logPath, 'utf-8');
+      assert.match(tmuxLog, new RegExp(`has-session -t ${tmuxSessionName}`));
+      assert.match(tmuxLog, new RegExp(`kill-session -t ${tmuxSessionName}`));
+      assert.match(tmuxLog, new RegExp(`new-session -d -s ${tmuxSessionName}`));
+    } finally {
+      process.env.PATH = previousEnv.PATH;
+      if (previousEnv.TMUX_FAKE_LOG === undefined) delete process.env.TMUX_FAKE_LOG;
+      else process.env.TMUX_FAKE_LOG = previousEnv.TMUX_FAKE_LOG;
+      if (previousEnv.TMUX_FAKE_EXISTING_SESSIONS === undefined) delete process.env.TMUX_FAKE_EXISTING_SESSIONS;
+      else process.env.TMUX_FAKE_EXISTING_SESSIONS = previousEnv.TMUX_FAKE_EXISTING_SESSIONS;
+      fs.rmSync(fakeTmux.binDir, { recursive: true, force: true });
+      fs.rmSync(workDir, { recursive: true, force: true });
     }
   });
 

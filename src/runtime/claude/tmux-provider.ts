@@ -23,7 +23,7 @@ import {
   buildShellSnapshotLaunchCommand,
   ensureShellSnapshot,
 } from '../codex/shell-snapshot.js';
-import { tmuxCore, type TmuxCore } from '../../bridge/tmux/core.js';
+import { tmuxCore, type TmuxCore, type TmuxEnsureSessionResult } from '../../bridge/tmux/core.js';
 import { claudeTmuxSessionName } from '../../bridge/tmux/runtime.js';
 
 const DEFAULT_CLAUDE_TMUX_PROMPT_DELAY_MS = 1_000;
@@ -89,7 +89,8 @@ async function launchClaudeTmuxSession(params: {
   streamParams: StreamChatParams;
   controller?: ReadableStreamDefaultController<string>;
   core?: TmuxCore;
-}): Promise<void> {
+  recreate?: boolean;
+}): Promise<TmuxEnsureSessionResult> {
   const core = params.core || tmuxCore;
   const streamParams = params.streamParams;
   const executable = streamParams.claudeExecutable || 'claude';
@@ -116,11 +117,11 @@ async function launchClaudeTmuxSession(params: {
     cwd,
     executable,
   });
-  await core.ensureDetachedSession({
+  return await core.ensureDetachedSession({
     name: params.sessionName,
     cwd,
     command: shellCommand,
-    recreate: false,
+    recreate: params.recreate === true,
   });
 }
 
@@ -134,10 +135,10 @@ export async function startClaudeTmuxSession(params: {
   reasoningEffort?: StreamChatParams['claudeReasoningEffort'];
   core?: TmuxCore;
 }): Promise<{ sessionName: string; commands: string[]; existed: boolean }> {
-  const before = await (params.core || tmuxCore).hasSession(params.sessionName);
-  await launchClaudeTmuxSession({
+  const started = await launchClaudeTmuxSession({
     sessionName: params.sessionName,
     core: params.core,
+    recreate: true,
     streamParams: {
       prompt: '',
       sessionId: params.bridgeSessionId,
@@ -151,8 +152,8 @@ export async function startClaudeTmuxSession(params: {
   });
   return {
     sessionName: params.sessionName,
-    existed: before.exists,
-    commands: [before.command],
+    existed: started.existed,
+    commands: started.commands,
   };
 }
 
