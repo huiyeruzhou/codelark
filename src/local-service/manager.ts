@@ -744,6 +744,10 @@ function writeLarkCliSourceProjection(config: LocalServiceConfig): string | null
   return larkCliSourceConfigFile;
 }
 
+function isLarkCliKeychainFailure(output: string): boolean {
+  return /keychain (?:Get |Set |access |unavailable|not initialized|is corrupted)|use file: reference in config to bypass keychain/i.test(output);
+}
+
 function readJsonObject(filePath: string): Record<string, unknown> | null {
   try {
     const parsed = JSON.parse(fs.readFileSync(filePath, 'utf-8')) as unknown;
@@ -767,12 +771,53 @@ function readTargetLarkCliApp(config: LocalServiceConfig): {
 } | null {
   const raw = readJsonObject(larkCliTargetConfigFile);
   const apps = Array.isArray(raw?.apps) ? raw.apps : [];
-  const app = apps.find((candidate) => (
+  const matches = apps.filter((candidate) => (
     candidate && typeof candidate === 'object' && isSameFeishuApp(candidate as { appId?: unknown; brand?: unknown }, config)
   ));
+  const app = matches.find((candidate) => (
+    candidate && typeof candidate === 'object' && structuredLarkCliUsers((candidate as Record<string, unknown>).users)
+  )) || matches.find((candidate) => (
+    candidate && typeof candidate === 'object'
+    && (candidate as Record<string, unknown>).strictMode !== 'bot'
+    && (candidate as Record<string, unknown>).defaultAs !== 'bot'
+  )) || matches[0];
   return raw && app && typeof app === 'object'
     ? { raw, app: app as Record<string, unknown> }
     : null;
+}
+
+function writePlainLarkCliTargetProjection(config: LocalServiceConfig): boolean {
+  const credentials = getFeishuCredentials(config);
+  if (!credentials) return false;
+  fs.mkdirSync(path.dirname(larkCliTargetConfigFile), { recursive: true, mode: 0o700 });
+  try {
+    fs.chmodSync(larkCliRuntimeDir, 0o700);
+    fs.chmodSync(path.dirname(larkCliTargetConfigFile), 0o700);
+  } catch {
+    // Best-effort hardening; Windows and some file systems may ignore chmod.
+  }
+
+  const raw = readJsonObject(larkCliTargetConfigFile) || {};
+  const existingApps = Array.isArray(raw.apps) ? raw.apps : [];
+  const existing = readTargetLarkCliApp(config)?.app;
+  const replacement: Record<string, unknown> = {
+    ...(existing || {}),
+    appId: credentials.appId,
+    appSecret: credentials.appSecret,
+    brand: credentials.site,
+  };
+  const apps = [
+    ...existingApps.filter((candidate) => !(
+      candidate && typeof candidate === 'object'
+      && isSameFeishuApp(candidate as { appId?: unknown; brand?: unknown }, config)
+    )),
+    replacement,
+  ];
+  const next = { ...raw, apps };
+  const tmpPath = `${larkCliTargetConfigFile}.tmp`;
+  fs.writeFileSync(tmpPath, `${JSON.stringify(next, null, 2)}\n`, { mode: 0o600 });
+  fs.renameSync(tmpPath, larkCliTargetConfigFile);
+  return true;
 }
 
 function hasTargetLarkCliUsers(config: LocalServiceConfig): boolean {
@@ -808,6 +853,18 @@ function larkCliIdentityPolicyCommands(hasUser: boolean, options: LarkCliRuntime
         ['config', 'strict-mode', 'bot'],
         ['config', 'default-as', 'bot'],
       ];
+}
+
+export async function applyLarkCliRuntimeIdentityPolicy(
+  hasUser: boolean,
+  options: LarkCliRuntimeConfigOptions = {},
+): Promise<string | undefined> {
+  const env = buildLarkCliRuntimeEnv();
+  for (const args of larkCliIdentityPolicyCommands(hasUser, options)) {
+    const result = await runBundledLarkCli(args, env);
+    if (result.code !== 0) return formatLarkCliFailure(args, result);
+  }
+  return undefined;
 }
 
 function resolveLarkCliScript(): string | null {
@@ -876,26 +933,27 @@ export async function ensureLarkCliRuntimeConfig(
   const bindArgs = ['config', 'bind', '--source', 'lark-channel', '--identity', 'user-default', '--force'];
   const bind = await runBundledLarkCli(bindArgs, env);
   if (bind.code !== 0) {
-    return {
-      ready: false,
-      skipped: false,
-      sourceConfigFile,
-      configDir: larkCliRuntimeDir,
-      warning: formatLarkCliFailure(bindArgs, bind),
-    };
-  }
-
-  for (const args of larkCliIdentityPolicyCommands(hasTargetLarkCliUsers(config), options)) {
-    const result = await runBundledLarkCli(args, env);
-    if (result.code !== 0) {
+    const warning = formatLarkCliFailure(bindArgs, bind);
+    if (!isLarkCliKeychainFailure(warning) || !writePlainLarkCliTargetProjection(config)) {
       return {
         ready: false,
         skipped: false,
         sourceConfigFile,
         configDir: larkCliRuntimeDir,
-        warning: formatLarkCliFailure(args, result),
+        warning,
       };
     }
+  }
+
+  const policyWarning = await applyLarkCliRuntimeIdentityPolicy(hasTargetLarkCliUsers(config), options);
+  if (policyWarning) {
+    return {
+      ready: false,
+      skipped: false,
+      sourceConfigFile,
+      configDir: larkCliRuntimeDir,
+      warning: policyWarning,
+    };
   }
 
   const verify = await runBundledLarkCli(['config', 'show'], env);
@@ -1133,8 +1191,11 @@ export const _testOnly = {
   buildUiServerEnv,
   loadStartupProjection,
   loadStartupConfig,
+  applyLarkCliRuntimeIdentityPolicy,
   buildLarkCliRuntimeEnv,
+  isLarkCliKeychainFailure,
   writeLarkCliSourceProjection,
+  writePlainLarkCliTargetProjection,
   hasTargetLarkCliUsers,
   hasLegacyStrictLarkCliRuntime,
   larkCliIdentityPolicyCommands,

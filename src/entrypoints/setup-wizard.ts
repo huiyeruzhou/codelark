@@ -23,6 +23,7 @@ import type { ConfigPatch, ConfigV2 } from '../configuration/schema.js';
 import {
   INSTALLABLE_SKILLS,
   OFFICIAL_LARK_DOC_SKILL,
+  applyLarkCliRuntimeIdentityPolicy,
   buildLarkCliRuntimeEnv,
   ensureLarkCliRuntimeConfig,
   installCodexIntegration,
@@ -359,6 +360,11 @@ async function ensureCodeLarkUserAuthorization(config: ConfigV2): Promise<void> 
     return;
   }
 
+  const preLoginPolicyWarning = await applyLarkCliRuntimeIdentityPolicy(true);
+  if (preLoginPolicyWarning) {
+    throw new Error(preLoginPolicyWarning);
+  }
+
   p.note(
     [
       '接下来会打开 CodeLark 当前飞书应用的用户授权扫码流程。',
@@ -378,10 +384,19 @@ async function ensureCodeLarkUserAuthorization(config: ConfigV2): Promise<void> 
     { env: buildLarkCliRuntimeEnv() },
   );
   // login 会把 user 写进私有 lark-cli config。这里立即刷新 runtime policy，
-  // 让 setup 结束时 user 命令已经可用，不必等下一次 bridge start 修复 strict-mode。
-  const refreshed = await ensureLarkCliRuntimeConfig(config);
-  if (refreshed.warning) {
-    throw new Error(refreshed.warning);
+  // 但不要再次 bind --force；重复绑定同一个 app 可能覆盖刚写入的 user。
+  const policyWarning = await applyLarkCliRuntimeIdentityPolicy(true);
+  if (policyWarning) {
+    throw new Error(policyWarning);
+  }
+  if (!(await hasCodeLarkUserAuthorization())) {
+    throw new Error(
+      [
+        '飞书用户授权流程已结束，但 CodeLark 私有 lark-cli runtime 仍未通过权限检查。',
+        '这通常表示重复授权同一个 bot 后本地 runtime 未写入 user，或当前进程无法读取 lark-cli keychain。',
+        '请重新运行 setup；如果仍失败，请先在交互式终端运行 lark-cli config keychain-downgrade 后再重试。',
+      ].join('\n'),
+    );
   }
 }
 
