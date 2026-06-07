@@ -60,7 +60,10 @@ export function resolveConfigPaths(options: {
 }
 
 export function findLocalConfig(cwd: string | undefined): string | undefined {
+  if (process.env.CODELARK_DISABLE_LOCAL_CONFIG === '1') return undefined;
   if (!cwd) return undefined;
+  const disabledCwd = process.env.CODELARK_DISABLE_LOCAL_CONFIG_CWD || process.env.CLK_TEST_DISABLE_LOCAL_CONFIG_CWD;
+  if (disabledCwd && path.resolve(cwd) === path.resolve(disabledCwd)) return undefined;
   const direct = path.join(cwd, '.codelark', 'config.toml');
   if (fs.existsSync(direct)) return direct;
   const dotfile = path.join(cwd, '.codelark.toml');

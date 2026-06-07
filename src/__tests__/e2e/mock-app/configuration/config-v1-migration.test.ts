@@ -447,6 +447,7 @@ describe('v1 config migration e2e', () => {
         streamingEnabled: true,
         feedbackMarkdownEnabled: true,
         requireMention: false,
+        groupAuthorized: false,
       });
 
       const runtimeService = createConfigService({ codelarkHome: CODELARK_HOME, env: {}, migrate: false });

@@ -54,7 +54,11 @@ import {
 } from './runtime-settings.js';
 import { readConfiguredCodexModel } from '../../runtime/codex/models.js';
 import { handleRequireAtCommand } from './require-at.js';
-import { handleSetCommand } from './global-settings.js';
+import {
+  buildSetCommandRichCard,
+  handleSetCommand,
+  handleSetFormCommand,
+} from './global-settings.js';
 import { buildGlobalStatusResponse } from './status.js';
 import {
   CommandThreadDisplay,
@@ -662,10 +666,23 @@ export async function handleBridgeCommand(
     }
 
     case '/set': {
-      response = handleSetCommand({
-        args,
-        markdown: responseParseMode === 'Markdown',
-      });
+      const formValue = extractCardActionFormValue(msg.raw);
+      if (formValue) {
+        const result = handleSetFormCommand({
+          formValue,
+          markdown: responseParseMode === 'Markdown',
+        });
+        response = result.response;
+        responseRichCard = result.richCard;
+      } else {
+        response = handleSetCommand({
+          args,
+          markdown: responseParseMode === 'Markdown',
+        });
+        if (!args.trim()) {
+          responseRichCard = buildSetCommandRichCard();
+        }
+      }
       break;
     }
 

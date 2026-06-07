@@ -70,7 +70,7 @@ export function buildHelpCommandResponse(): string {
     '',
     '**GlobalRuntime 配置**',
     '- `/set` 查看分组后的全局配置；GlobalRuntime 分为 Codex 与 Claude Code，各自只回退到自己的默认值',
-    '- `/set defaultRuntime codex|claude` 修改新建会话默认 runtime',
+    '- `/set runtime codex|claude` 修改新建会话默认 runtime（兼容旧名 `defaultRuntime`）',
     '- `/set defaultModel|defaultMode|codexSandboxMode|codexNetworkAccess|codexReasoningEffort ...` 修改 Codex 默认值',
     '- `/set claudeProvider|claudeExecutable|claudeDefaultModel|claudePermissionMode|claudeIdleTimeoutMinutes ...` 修改 Claude Code 默认值',
     '',
