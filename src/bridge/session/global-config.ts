@@ -6,13 +6,8 @@ import type { ConfigV2 } from '../../configuration/schema.js';
 export function getGlobalConfigValue<T>(
   path: ConfigPath,
 ): T | undefined {
-  try {
-    const resolved = createConfigService({ migrate: false }).resolve(path);
-    return resolved.value as T;
-  } catch (error) {
-    console.error(`[bridge-manager] Failed to resolve global TOML config ${path}:`, error);
-    return undefined;
-  }
+  const resolved = createConfigService({ migrate: false }).resolve(path);
+  return resolved.value as T;
 }
 
 export function getGlobalStringConfig(
@@ -42,11 +37,6 @@ export function getGlobalCodexModel(): string | undefined {
 }
 
 export function getGlobalDefaultChannelConfig(): ConfigV2['channels'][number]['config'] | undefined {
-  try {
-    const config = createConfigService({ migrate: false }).snapshot().config;
-    return (config.channels.find((channel) => channel.id === 'feishu-default') || config.channels[0])?.config;
-  } catch (error) {
-    console.error('[bridge-manager] Failed to resolve global TOML channel config:', error);
-    return undefined;
-  }
+  const config = createConfigService({ migrate: false }).snapshot().config;
+  return (config.channels.find((channel) => channel.id === 'feishu-default') || config.channels[0])?.config;
 }

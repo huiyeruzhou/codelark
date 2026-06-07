@@ -72,16 +72,11 @@ export function getWorkspaceRoot(): string {
 
 function getSessionTomlOverride<T>(session: BridgeSession | null | undefined, path: ConfigPath): T | undefined {
   if (!session?.id) return undefined;
-  try {
-    const resolved = createConfigService({ migrate: false }).resolve(path, {
-      kind: 'session',
-      sessionId: session.id,
-    });
-    return resolved.source === 'session' ? resolved.value as T : undefined;
-  } catch (error) {
-    console.error(`[bridge-manager] Failed to resolve session TOML config ${path} for ${session.id}:`, error);
-    return undefined;
-  }
+  const resolved = createConfigService({ migrate: false }).resolve(path, {
+    kind: 'session',
+    sessionId: session.id,
+  });
+  return resolved.source === 'session' ? resolved.value as T : undefined;
 }
 
 function scopedConfigForRuntime(
@@ -100,14 +95,8 @@ function scopedConfigForRuntime(
     : channelId
       ? { kind: 'channel', channelId, provider: 'feishu' as const }
       : undefined;
-  try {
-    const effective = createConfigService({ migrate: false }).snapshot(scope);
-    return { effective, config: effective.config, scope };
-  } catch (error) {
-    console.error('[bridge-manager] Failed to resolve scoped runtime config:', error);
-    const effective = createConfigService({ migrate: false }).snapshot();
-    return { effective, config: effective.config, scope: undefined };
-  }
+  const effective = createConfigService({ migrate: false }).snapshot(scope);
+  return { effective, config: effective.config, scope };
 }
 
 function sourceRank(source: string | undefined): number {
