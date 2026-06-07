@@ -1,7 +1,7 @@
 import type { BaseChannelAdapter } from '../../../channels/contracts.js';
 import { deliverBridgeNotice } from '../../../channels/delivery/feedback.js';
 import { DEFAULT_WORKSPACE_ROOT } from '../../../configuration/paths.js';
-import { setSessionConfigPatch } from '../../../configuration/session-writes.js';
+import { createConfigService } from '../../../configuration/service.js';
 import type { BridgeSession, BridgeStore, ChannelChat, InboundMessage } from '../../../domain/index.js';
 import {
   getSessionWorkingDirectory,
@@ -38,11 +38,17 @@ import type { SessionCommandDeps, SessionCommandResult } from './types.js';
 type InheritedCodexProvider = ReturnType<typeof getSessionCodexProviderOverride>;
 
 function setSessionCodexProviderToml(sessionId: string, provider: Exclude<InheritedCodexProvider, undefined>): void {
-  setSessionConfigPatch(sessionId, { runtime: { codex: { provider } } });
+  createConfigService({ migrate: false }).set(
+    { kind: 'session', sessionId },
+    { runtime: { codex: { provider } } },
+  );
 }
 
 function setSessionTmuxAutoEnterToml(sessionId: string, tmuxAutoEnter: boolean): void {
-  setSessionConfigPatch(sessionId, { session: { tmuxAutoEnter } });
+  createConfigService({ migrate: false }).set(
+    { kind: 'session', sessionId },
+    { session: { tmuxAutoEnter } },
+  );
 }
 
 function shouldEnableTmuxAutoEnterForNewSession(

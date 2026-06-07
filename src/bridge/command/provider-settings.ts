@@ -2,7 +2,7 @@ import type {
   CodexReasoningEffort,
   CodexSandboxMode,
 } from '../../configuration/runtime-types.js';
-import { setSessionConfigPatch } from '../../configuration/session-writes.js';
+import { createConfigService } from '../../configuration/service.js';
 import type { BridgeStore, ChannelChat, InboundMessage } from '../../domain/index.js';
 import {
   getSessionActiveRuntime,
@@ -38,15 +38,24 @@ const CODEX_PROVIDER_OPTIONS_TEXT = '可选：`sdk`（默认 SDK 路径） `pty`
 const CLAUDE_PROVIDER_OPTIONS_TEXT = '可选：`pty`（Claude Code TUI/mirror 路径，默认） `sdk`（Claude Agent SDK 原生事件路径）';
 
 function setSessionCodexProviderToml(sessionId: string, provider: 'sdk' | 'tmux' | 'pty'): void {
-  setSessionConfigPatch(sessionId, { runtime: { codex: { provider } } });
+  createConfigService({ migrate: false }).set(
+    { kind: 'session', sessionId },
+    { runtime: { codex: { provider } } },
+  );
 }
 
 function setSessionClaudeProviderToml(sessionId: string, provider: 'sdk' | 'pty'): void {
-  setSessionConfigPatch(sessionId, { runtime: { claude: { provider } } });
+  createConfigService({ migrate: false }).set(
+    { kind: 'session', sessionId },
+    { runtime: { claude: { provider } } },
+  );
 }
 
 function setSessionTmuxAutoEnterToml(sessionId: string, tmuxAutoEnter: boolean): void {
-  setSessionConfigPatch(sessionId, { session: { tmuxAutoEnter } });
+  createConfigService({ migrate: false }).set(
+    { kind: 'session', sessionId },
+    { session: { tmuxAutoEnter } },
+  );
 }
 
 function parseCodexProviderArg(raw: string): 'sdk' | 'tmux' | 'pty' | null {

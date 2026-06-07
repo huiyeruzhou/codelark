@@ -4,7 +4,7 @@ import { isCliOnlyCodexModel, readConfiguredCodexModel } from '../../runtime/cod
 import {
   type CodexReasoningEffort,
 } from '../../configuration/runtime-types.js';
-import { setSessionConfigPatch, unsetSessionConfigPath } from '../../configuration/session-writes.js';
+import { createConfigService } from '../../configuration/service.js';
 import { parseSandboxMode, type RuntimeSandboxMode } from '../../configuration/runtime-options.js';
 import * as router from '../session/channel-router.js';
 import {
@@ -111,63 +111,105 @@ function codexReasoningToClaudeEffort(
 }
 
 function setSessionCodexReasoningToml(sessionId: string, reasoningEffort: CodexReasoningEffort): void {
-  setSessionConfigPatch(sessionId, { runtime: { codex: { reasoningEffort } } });
+  createConfigService({ migrate: false }).set(
+    { kind: 'session', sessionId },
+    { runtime: { codex: { reasoningEffort } } },
+  );
 }
 
 function setSessionClaudeReasoningToml(
   sessionId: string,
   reasoningEffort: 'low' | 'medium' | 'high' | 'xhigh',
 ): void {
-  setSessionConfigPatch(sessionId, { runtime: { claude: { reasoningEffort } } });
+  createConfigService({ migrate: false }).set(
+    { kind: 'session', sessionId },
+    { runtime: { claude: { reasoningEffort } } },
+  );
 }
 
 function clearSessionClaudeReasoningToml(sessionId: string): void {
-  unsetSessionConfigPath(sessionId, 'runtime.claude.reasoningEffort');
+  createConfigService({ migrate: false }).unset(
+    { kind: 'session', sessionId },
+    'runtime.claude.reasoningEffort',
+  );
 }
 
 function setSessionCodexSandboxToml(sessionId: string, sandboxMode: RuntimeSandboxMode): void {
-  setSessionConfigPatch(sessionId, { runtime: { codex: { sandboxMode } } });
+  createConfigService({ migrate: false }).set(
+    { kind: 'session', sessionId },
+    { runtime: { codex: { sandboxMode } } },
+  );
 }
 
 function clearSessionCodexSandboxToml(sessionId: string): void {
-  unsetSessionConfigPath(sessionId, 'runtime.codex.sandboxMode');
+  createConfigService({ migrate: false }).unset(
+    { kind: 'session', sessionId },
+    'runtime.codex.sandboxMode',
+  );
 }
 
 function setSessionCodexNetworkAccessToml(sessionId: string, networkAccess: boolean): void {
-  setSessionConfigPatch(sessionId, { runtime: { codex: { networkAccess } } });
+  createConfigService({ migrate: false }).set(
+    { kind: 'session', sessionId },
+    { runtime: { codex: { networkAccess } } },
+  );
 }
 
 function clearSessionCodexNetworkAccessToml(sessionId: string): void {
-  unsetSessionConfigPath(sessionId, 'runtime.codex.networkAccess');
+  createConfigService({ migrate: false }).unset(
+    { kind: 'session', sessionId },
+    'runtime.codex.networkAccess',
+  );
 }
 
 function setSessionCodexYoloModeToml(sessionId: string, mode: 'normal' | 'yolo'): void {
-  setSessionConfigPatch(sessionId, { runtime: { codex: { yoloMode: mode === 'yolo' ? 'on' : 'off' } } });
+  createConfigService({ migrate: false }).set(
+    { kind: 'session', sessionId },
+    { runtime: { codex: { yoloMode: mode === 'yolo' ? 'on' : 'off' } } },
+  );
 }
 
 function setSessionClaudeYoloModeToml(sessionId: string, mode: 'normal' | 'yolo'): void {
   const permissionMode = mode === 'yolo' ? 'bypassPermissions' : 'default';
-  setSessionConfigPatch(sessionId, { runtime: { claude: { yoloMode: mode === 'yolo' ? 'on' : 'off', permissionMode } } });
+  createConfigService({ migrate: false }).set(
+    { kind: 'session', sessionId },
+    { runtime: { claude: { yoloMode: mode === 'yolo' ? 'on' : 'off', permissionMode } } },
+  );
 }
 
 function setSessionCodexModelToml(sessionId: string, model: string): void {
-  setSessionConfigPatch(sessionId, { runtime: { codex: { model } } });
+  createConfigService({ migrate: false }).set(
+    { kind: 'session', sessionId },
+    { runtime: { codex: { model } } },
+  );
 }
 
 function clearSessionCodexModelToml(sessionId: string): void {
-  unsetSessionConfigPath(sessionId, 'runtime.codex.model');
+  createConfigService({ migrate: false }).unset(
+    { kind: 'session', sessionId },
+    'runtime.codex.model',
+  );
 }
 
 function setSessionClaudeModelToml(sessionId: string, model: string): void {
-  setSessionConfigPatch(sessionId, { runtime: { claude: { model } } });
+  createConfigService({ migrate: false }).set(
+    { kind: 'session', sessionId },
+    { runtime: { claude: { model } } },
+  );
 }
 
 function clearSessionClaudeModelToml(sessionId: string): void {
-  unsetSessionConfigPath(sessionId, 'runtime.claude.model');
+  createConfigService({ migrate: false }).unset(
+    { kind: 'session', sessionId },
+    'runtime.claude.model',
+  );
 }
 
 function setSessionWorkspaceToml(sessionId: string, workspace: string): void {
-  setSessionConfigPatch(sessionId, { session: { workspace } });
+  createConfigService({ migrate: false }).set(
+    { kind: 'session', sessionId },
+    { session: { workspace } },
+  );
 }
 
 function parseNetworkAccessArg(raw: string): boolean | 'default' | null {

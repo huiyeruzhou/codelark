@@ -115,7 +115,7 @@ import {
   resolveRuntimeMetadataConfig,
   sessionCodexRuntimeOverridePatch,
 } from '../session/support.js';
-import { setSessionConfigPatch } from '../../configuration/session-writes.js';
+import { createConfigService } from '../../configuration/service.js';
 import {
   getGlobalConfigValue,
 } from '../session/global-config.js';
@@ -2173,7 +2173,10 @@ function createAutoRunSession(
     provider_id: parentSession.provider_id,
   }, { touch: false });
   if (parentRuntimePatch.runtime?.codex) {
-    setSessionConfigPatch(session.id, parentRuntimePatch);
+    createConfigService({ migrate: false }).set(
+      { kind: 'session', sessionId: session.id },
+      parentRuntimePatch,
+    );
   }
   return store.getSession(session.id) || session;
 }
