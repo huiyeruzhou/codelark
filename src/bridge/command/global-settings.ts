@@ -1,10 +1,6 @@
 import { parseSandboxMode } from '../../runtime/options.js';
 import { createConfigService } from '../../configuration/service.js';
-import type { ConfigV2 } from '../../configuration/schema.js';
-import {
-  configV2ToPayload,
-  mergeConfigV2HomePatch,
-} from '../../operator-ui/application/config.js';
+import type { ChannelConfigV2, ConfigPatch, ConfigV2 } from '../../configuration/schema.js';
 import { normalizeReasoningEffort } from './aliases.js';
 import { buildCommandCallbackData } from './callbacks.js';
 import {
@@ -14,68 +10,71 @@ import {
 } from './presentation.js';
 import type { OutboundRichCard } from '../../domain/index.js';
 
-interface ConfigPayload {
-  runtime: string;
-  defaultWorkspaceRoot: string;
-  defaultModel: string;
-  defaultProvider: string;
-  defaultMode: string;
-  historyMessageLimit?: number;
-  streamStatusIdleStartSeconds?: number;
-  streamStatusCheckIntervalSeconds?: number;
-  codexSkipGitRepoCheck: boolean;
-  codexSandboxMode: string;
-  codexNetworkAccess: boolean;
-  codexReasoningEffort: string;
-  claudeProvider: string;
-  claudeExecutable: string;
-  claudeDefaultModel: string;
-  claudePermissionMode: string;
-  claudeIdleTimeoutMinutes: number;
-  uiAllowLan: boolean;
-  uiAccessToken: string;
-}
-
-type SettingGroupKey = 'global-runtime-codex' | 'global-runtime-claude' | 'bridge-control' | 'global-bridge';
+type SettingGroupKey = 'runtime' | 'runtime.codex' | 'runtime.claude' | 'bridge' | 'channels.feishu';
+type SettingControl = 'select' | 'input';
 
 interface SettingGroupDefinition {
   key: SettingGroupKey;
   title: string;
-  description: string;
+  subtitle: string;
+}
+
+interface SettingWriteOk {
+  ok: true;
+  patch: ConfigPatch;
 }
 
 interface SettingDefinition {
   key: string;
+  tomlPath: string;
   group: SettingGroupKey;
   aliases: string[];
   label: string;
   usage: string;
-  read(payload: ConfigPayload): string;
-  write(rawValue: string, current: ConfigV2): { ok: true; payload: Record<string, unknown> } | { ok: false; message: string };
+  control: SettingControl;
+  placeholder?: string;
+  options?: Array<{ text: string; callbackData: string }>;
+  read(config: ConfigV2): string;
+  write(rawValue: string, current: ConfigV2): SettingWriteOk | { ok: false; message: string };
 }
 
 const SETTING_GROUPS: SettingGroupDefinition[] = [
   {
-    key: 'global-runtime-codex',
-    title: 'GlobalRuntime / Codex',
-    description: 'Codex 模型执行默认值，只作为 Codex runtime 的回退配置。',
+    key: 'runtime',
+    title: '[runtime]',
+    subtitle: '全局默认 runtime。',
   },
   {
-    key: 'global-runtime-claude',
-    title: 'GlobalRuntime / Claude',
-    description: 'Claude Code 默认值，只作为 Claude runtime 的回退配置。',
+    key: 'runtime.codex',
+    title: '[runtime.codex]',
+    subtitle: 'Codex runtime 的 TOML 默认值。',
   },
   {
-    key: 'bridge-control',
-    title: 'Bridge 控制',
-    description: 'Bridge 如何驱动 runtime 或创建会话；不是模型执行参数。',
+    key: 'runtime.claude',
+    title: '[runtime.claude]',
+    subtitle: 'Claude Code runtime 的 TOML 默认值。',
   },
   {
-    key: 'global-bridge',
-    title: 'GlobalBridge',
-    description: 'Bridge 自身的工作区、历史、反馈展示和 UI 服务配置。',
+    key: 'bridge',
+    title: '[bridge]',
+    subtitle: 'Bridge 自身行为和 UI 访问设置。',
+  },
+  {
+    key: 'channels.feishu',
+    title: '[[channels]] feishu-default',
+    subtitle: '默认 Feishu 通道配置，写入 home config.toml 的 channels 数组。',
   },
 ];
+
+const GROUP_BY_KEY = new Map(SETTING_GROUPS.map((group) => [group.key, group]));
+
+function selectOption(text: string, value = text): { text: string; callbackData: string } {
+  return { text, callbackData: value };
+}
+
+function boolOptions(): Array<{ text: string; callbackData: string }> {
+  return [selectOption('on'), selectOption('off')];
+}
 
 function parseBoolean(raw: string): boolean | null {
   const token = raw.trim().toLowerCase();
@@ -90,293 +89,445 @@ function parsePositiveInt(raw: string): number | null {
   return Math.floor(parsed);
 }
 
-function maskToken(value: string): string {
-  if (!value) return '-';
-  if (value.length <= 6) return '******';
-  return `${'*'.repeat(Math.max(6, value.length - 4))}${value.slice(-4)}`;
+function parseNonNegativeInt(raw: string): number | null {
+  const parsed = Number(raw.trim());
+  if (!Number.isFinite(parsed) || parsed < 0) return null;
+  return Math.floor(parsed);
 }
 
 function formatBool(value: boolean): string {
   return value ? 'on' : 'off';
 }
 
-function configToPayload(config: ConfigV2): ConfigPayload {
-  return configV2ToPayload(config);
+function maskToken(value: string): string {
+  if (!value) return '-';
+  if (value.length <= 6) return '******';
+  return `${'*'.repeat(Math.max(6, value.length - 4))}${value.slice(-4)}`;
 }
 
-function uiPayload(payload: Record<string, unknown>): { ok: true; payload: Record<string, unknown> } {
-  return { ok: true, payload };
+function defaultFeishuChannel(config: ConfigV2): ChannelConfigV2 {
+  return config.channels.find((channel) => channel.id === 'feishu-default')
+    || config.channels.find((channel) => channel.provider === 'feishu')
+    || config.channels[0]!;
+}
+
+function channelId(config: ConfigV2): string {
+  return defaultFeishuChannel(config)?.id || 'feishu-default';
+}
+
+function patch(patchValue: ConfigPatch): SettingWriteOk {
+  return { ok: true, patch: patchValue };
+}
+
+function patchChannelConfig(current: ConfigV2, config: NonNullable<NonNullable<ConfigPatch['channels']>[number]['config']>): SettingWriteOk {
+  return patch({ channels: [{ id: channelId(current), config }] });
 }
 
 function writeStringPatch(
-  key: string,
+  buildPatch: (value: string) => ConfigPatch,
   options: { defaultValue?: string } = {},
 ) {
-  return (rawValue: string): { ok: true; payload: Record<string, unknown> } => {
+  return (rawValue: string): SettingWriteOk => {
     const value = rawValue.trim();
     if (['default', 'reset', 'unset', 'none'].includes(value.toLowerCase())) {
-      return uiPayload({ [key]: options.defaultValue ?? '' });
+      return patch(buildPatch(options.defaultValue ?? ''));
     }
-    return uiPayload({ [key]: value });
+    return patch(buildPatch(value));
   };
 }
 
-function writeBooleanPatch(key: string) {
-  return (rawValue: string): { ok: true; payload: Record<string, unknown> } | { ok: false; message: string } => {
+function writeBooleanPatch(buildPatch: (value: boolean) => ConfigPatch) {
+  return (rawValue: string): SettingWriteOk | { ok: false; message: string } => {
     const parsed = parseBoolean(rawValue);
     if (parsed === null) return { ok: false, message: '值必须是 on/off、true/false 或 1/0。' };
-    return uiPayload({ [key]: parsed });
+    return patch(buildPatch(parsed));
   };
 }
 
-function writePositiveIntPatch(key: string, min: number, max?: number) {
-  return (rawValue: string): { ok: true; payload: Record<string, unknown> } | { ok: false; message: string } => {
+function writePositiveIntPatch(
+  buildPatch: (value: number) => ConfigPatch,
+  min: number,
+  max?: number,
+) {
+  return (rawValue: string): SettingWriteOk | { ok: false; message: string } => {
     const parsed = parsePositiveInt(rawValue);
     if (parsed === null || parsed < min || (max !== undefined && parsed > max)) {
       return { ok: false, message: max === undefined ? `值必须是大于等于 ${min} 的整数。` : `值必须是 ${min}-${max} 的整数。` };
     }
-    return uiPayload({ [key]: parsed });
+    return patch(buildPatch(parsed));
   };
 }
 
 const SETTING_DEFINITIONS: SettingDefinition[] = [
   {
     key: 'runtime',
-    group: 'global-runtime-codex',
-    aliases: ['defaultRuntime'],
-    label: 'Runtime',
+    tomlPath: 'runtime.agent',
+    group: 'runtime',
+    aliases: ['defaultRuntime', 'agent'],
+    label: 'agent',
     usage: '/set runtime codex|claude',
-    read: (payload) => payload.runtime || 'codex',
+    control: 'select',
+    options: [selectOption('codex'), selectOption('claude')],
+    read: (config) => config.runtime.agent,
     write(rawValue) {
       const token = rawValue.trim().toLowerCase();
-      if (token === 'codex' || token === 'claude') {
-        return uiPayload({ runtime: token });
-      }
+      if (token === 'codex' || token === 'claude') return patch({ runtime: { agent: token } });
       return { ok: false, message: 'Runtime 必须是 codex 或 claude。' };
     },
   },
   {
-    key: 'defaultWorkspaceRoot',
-    group: 'global-bridge',
-    aliases: ['workspace', 'workspaceRoot', 'root', 'newRoot'],
-    label: '/new 相对路径根目录',
-    usage: '/set defaultWorkspaceRoot /abs/path',
-    read: (payload) => payload.defaultWorkspaceRoot || '-',
-    write: writeStringPatch('defaultWorkspaceRoot'),
-  },
-  {
     key: 'defaultModel',
-    group: 'global-runtime-codex',
-    aliases: ['model'],
-    label: 'Codex 默认模型',
+    tomlPath: 'runtime.codex.model',
+    group: 'runtime.codex',
+    aliases: ['model', 'codexModel'],
+    label: 'model',
     usage: '/set defaultModel gpt-5 或 /set defaultModel default',
-    read: (payload) => payload.defaultModel || '-',
-    write: writeStringPatch('defaultModel'),
-  },
-  {
-    key: 'defaultProvider',
-    group: 'bridge-control',
-    aliases: ['provider', 'codexProvider', 'defualtProvider'],
-    label: '默认 Codex Provider',
-    usage: '/set defaultProvider sdk|pty|tmux',
-    read: (payload) => payload.defaultProvider || 'auto',
-    write(rawValue) {
-      const token = rawValue.trim().toLowerCase();
-      if (['default', 'reset', 'unset', 'none', 'auto'].includes(token)) {
-        return uiPayload({ defaultProvider: '' });
-      }
-      if (token === 'sdk' || token === 'tmux' || token === 'pty') {
-        return uiPayload({ defaultProvider: token });
-      }
-      return { ok: false, message: '默认 Codex Provider 必须是 sdk、pty 或 tmux，也可以用 default/auto 恢复自动选择。' };
-    },
+    control: 'input',
+    placeholder: '留空则跟随 Codex 默认',
+    read: (config) => config.runtime.codex.model || '-',
+    write: writeStringPatch((value) => ({ runtime: { codex: { model: value } } })),
   },
   {
     key: 'defaultMode',
-    group: 'global-runtime-codex',
-    aliases: ['mode'],
-    label: 'Codex 默认模式',
+    tomlPath: 'runtime.codex.yolo_mode',
+    group: 'runtime.codex',
+    aliases: ['mode', 'codexMode'],
+    label: 'yolo_mode',
     usage: '/set defaultMode normal|yolo',
-    read: (payload) => payload.defaultMode || 'normal',
+    control: 'select',
+    options: [selectOption('normal'), selectOption('yolo')],
+    read: (config) => config.runtime.codex.yoloMode === 'on' || config.runtime.codex.yoloMode === 'yolo' ? 'yolo' : 'normal',
     write(rawValue) {
       const token = rawValue.trim().toLowerCase();
-      if (token === 'normal' || token === 'code') {
-        return uiPayload({ defaultMode: 'normal' });
-      }
-      if (token === 'yolo') {
-        return uiPayload({ defaultMode: 'yolo' });
-      }
+      if (token === 'normal' || token === 'code' || token === 'off') return patch({ runtime: { codex: { yoloMode: 'off' } } });
+      if (token === 'yolo' || token === 'on') return patch({ runtime: { codex: { yoloMode: 'on' } } });
       return { ok: false, message: '默认模式必须是 normal 或 yolo。' };
     },
   },
   {
-    key: 'historyMessageLimit',
-    group: 'global-bridge',
-    aliases: ['history', 'hisLimit'],
-    label: '/his 返回条数',
-    usage: '/set historyMessageLimit 8',
-    read: (payload) => `${payload.historyMessageLimit ?? '-'}`,
-    write: writePositiveIntPatch('historyMessageLimit', 1, 20),
-  },
-  {
-    key: 'streamStatusIdleStartSeconds',
-    group: 'global-bridge',
-    aliases: ['streamIdle', 'idleStart'],
-    label: '长任务提示延迟',
-    usage: '/set streamStatusIdleStartSeconds 180',
-    read: (payload) => `${payload.streamStatusIdleStartSeconds ?? '-'}`,
-    write: writePositiveIntPatch('streamStatusIdleStartSeconds', 1),
-  },
-  {
-    key: 'streamStatusCheckIntervalSeconds',
-    group: 'global-bridge',
-    aliases: ['streamCheck', 'statusInterval'],
-    label: '长任务提示刷新间隔',
-    usage: '/set streamStatusCheckIntervalSeconds 10',
-    read: (payload) => `${payload.streamStatusCheckIntervalSeconds ?? '-'}`,
-    write: writePositiveIntPatch('streamStatusCheckIntervalSeconds', 1),
+    key: 'defaultProvider',
+    tomlPath: 'runtime.codex.provider',
+    group: 'runtime.codex',
+    aliases: ['provider', 'codexProvider', 'defualtProvider'],
+    label: 'provider',
+    usage: '/set defaultProvider sdk|pty|tmux|default',
+    control: 'select',
+    options: [selectOption('auto', ''), selectOption('sdk'), selectOption('pty'), selectOption('tmux')],
+    read: (config) => config.runtime.codex.provider || 'auto',
+    write(rawValue) {
+      const token = rawValue.trim().toLowerCase();
+      if (['default', 'reset', 'unset', 'none', 'auto'].includes(token)) return patch({ runtime: { codex: { provider: '' } } });
+      if (token === 'sdk' || token === 'tmux' || token === 'pty') return patch({ runtime: { codex: { provider: token } } });
+      return { ok: false, message: '默认 Codex Provider 必须是 sdk、pty 或 tmux，也可以用 default/auto 恢复自动选择。' };
+    },
   },
   {
     key: 'codexSkipGitRepoCheck',
-    group: 'global-runtime-codex',
+    tomlPath: 'runtime.codex.skip_git_repo_check',
+    group: 'runtime.codex',
     aliases: ['skipGitRepoCheck', 'skipGitCheck'],
-    label: '允许在未信任 Git 目录运行 Codex',
+    label: 'skip_git_repo_check',
     usage: '/set codexSkipGitRepoCheck on|off',
-    read: (payload) => formatBool(payload.codexSkipGitRepoCheck),
-    write: writeBooleanPatch('codexSkipGitRepoCheck'),
+    control: 'select',
+    options: boolOptions(),
+    read: (config) => formatBool(config.runtime.codex.skipGitRepoCheck),
+    write: writeBooleanPatch((value) => ({ runtime: { codex: { skipGitRepoCheck: value } } })),
   },
   {
     key: 'codexSandboxMode',
-    group: 'global-runtime-codex',
+    tomlPath: 'runtime.codex.sandbox_mode',
+    group: 'runtime.codex',
     aliases: ['sandbox', 'sandboxMode'],
-    label: 'Codex 文件系统权限',
+    label: 'sandbox_mode',
     usage: '/set codexSandboxMode read-only|workspace-write|danger-full-access',
-    read: (payload) => payload.codexSandboxMode,
+    control: 'select',
+    options: [selectOption('workspace-write'), selectOption('read-only'), selectOption('danger-full-access')],
+    read: (config) => config.runtime.codex.sandboxMode,
     write(rawValue) {
       const parsed = parseSandboxMode(rawValue.trim());
       if (!parsed) return { ok: false, message: 'sandbox 必须是 read-only、workspace-write 或 danger-full-access。' };
-      return uiPayload({ codexSandboxMode: parsed });
+      return patch({ runtime: { codex: { sandboxMode: parsed } } });
     },
   },
   {
     key: 'codexNetworkAccess',
-    group: 'global-runtime-codex',
+    tomlPath: 'runtime.codex.network_access',
+    group: 'runtime.codex',
     aliases: ['network', 'networkAccess', 'net'],
-    label: 'Codex 网络访问',
+    label: 'network_access',
     usage: '/set codexNetworkAccess on|off',
-    read: (payload) => formatBool(payload.codexNetworkAccess),
-    write: writeBooleanPatch('codexNetworkAccess'),
+    control: 'select',
+    options: boolOptions(),
+    read: (config) => formatBool(config.runtime.codex.networkAccess),
+    write: writeBooleanPatch((value) => ({ runtime: { codex: { networkAccess: value } } })),
   },
   {
     key: 'codexReasoningEffort',
-    group: 'global-runtime-codex',
+    tomlPath: 'runtime.codex.reasoning_effort',
+    group: 'runtime.codex',
     aliases: ['reasoning', 'reasoningEffort'],
-    label: 'Codex 思考级别',
+    label: 'reasoning_effort',
     usage: '/set codexReasoningEffort minimal|low|medium|high|xhigh',
-    read: (payload) => formatReasoningEffort(payload.codexReasoningEffort),
+    control: 'select',
+    options: [selectOption('medium'), selectOption('minimal'), selectOption('low'), selectOption('high'), selectOption('xhigh')],
+    read: (config) => formatReasoningEffort(config.runtime.codex.reasoningEffort),
     write(rawValue) {
       const parsed = normalizeReasoningEffort(rawValue);
       if (!parsed) return { ok: false, message: 'reasoning 必须是 minimal、low、medium、high、xhigh 或 1-5。' };
-      return uiPayload({ codexReasoningEffort: parsed });
+      return patch({ runtime: { codex: { reasoningEffort: parsed } } });
     },
   },
   {
+    key: 'claudeDefaultModel',
+    tomlPath: 'runtime.claude.model',
+    group: 'runtime.claude',
+    aliases: ['claudeModel'],
+    label: 'model',
+    usage: '/set claudeDefaultModel sonnet 或 /set claudeDefaultModel default',
+    control: 'input',
+    placeholder: '留空则跟随 Claude Code 默认',
+    read: (config) => config.runtime.claude.model || '-',
+    write: writeStringPatch((value) => ({ runtime: { claude: { model: value } } })),
+  },
+  {
     key: 'claudeProvider',
-    group: 'global-runtime-claude',
+    tomlPath: 'runtime.claude.provider',
+    group: 'runtime.claude',
     aliases: ['claudeDefaultProvider'],
-    label: '默认 Claude Provider',
+    label: 'provider',
     usage: '/set claudeProvider tmux|pty|sdk',
-    read: (payload) => payload.claudeProvider || 'tmux',
+    control: 'select',
+    options: [selectOption('tmux'), selectOption('pty'), selectOption('sdk')],
+    read: (config) => config.runtime.claude.provider || 'tmux',
     write(rawValue) {
       const token = rawValue.trim().toLowerCase();
-      if (['default', 'reset', 'unset', 'none', 'auto'].includes(token)) {
-        return uiPayload({ claudeProvider: 'tmux' });
-      }
-      if (token === 'tmux' || token === 'pty' || token === 'sdk') {
-        return uiPayload({ claudeProvider: token });
-      }
+      if (['default', 'reset', 'unset', 'none', 'auto'].includes(token)) return patch({ runtime: { claude: { provider: 'tmux' } } });
+      if (token === 'tmux' || token === 'pty' || token === 'sdk') return patch({ runtime: { claude: { provider: token } } });
       return { ok: false, message: '默认 Claude Provider 必须是 tmux、pty 或 sdk，也可以用 default/auto 恢复默认。' };
     },
   },
   {
     key: 'claudeExecutable',
-    group: 'global-runtime-claude',
+    tomlPath: 'runtime.claude.executable',
+    group: 'runtime.claude',
     aliases: ['claudeExec'],
-    label: 'Claude executable',
+    label: 'executable',
     usage: '/set claudeExecutable claude|ccr',
-    read: (payload) => payload.claudeExecutable || 'claude',
+    control: 'select',
+    options: [selectOption('claude'), selectOption('ccr')],
+    read: (config) => config.runtime.claude.executable || 'claude',
     write(rawValue) {
       const token = rawValue.trim().toLowerCase();
-      if (token === 'claude' || token === 'ccr') {
-        return uiPayload({ claudeExecutable: token });
-      }
+      if (token === 'claude' || token === 'ccr') return patch({ runtime: { claude: { executable: token } } });
       return { ok: false, message: 'Claude executable 必须是 claude 或 ccr。' };
     },
   },
   {
-    key: 'claudeDefaultModel',
-    group: 'global-runtime-claude',
-    aliases: ['claudeModel'],
-    label: 'Claude 默认模型',
-    usage: '/set claudeDefaultModel sonnet 或 /set claudeDefaultModel default',
-    read: (payload) => payload.claudeDefaultModel || '-',
-    write: writeStringPatch('claudeDefaultModel'),
-  },
-  {
     key: 'claudePermissionMode',
-    group: 'global-runtime-claude',
+    tomlPath: 'runtime.claude.permission_mode',
+    group: 'runtime.claude',
     aliases: ['claudePermission'],
-    label: 'Claude 权限模式',
+    label: 'permission_mode',
     usage: '/set claudePermissionMode default|acceptEdits|bypassPermissions|plan',
-    read: (payload) => payload.claudePermissionMode || 'default',
+    control: 'select',
+    options: [selectOption('default'), selectOption('acceptEdits'), selectOption('bypassPermissions'), selectOption('plan')],
+    read: (config) => config.runtime.claude.permissionMode || 'default',
     write(rawValue) {
       const token = rawValue.trim();
       if (token === 'default' || token === 'acceptEdits' || token === 'bypassPermissions' || token === 'plan') {
-        return uiPayload({ claudePermissionMode: token });
+        return patch({ runtime: { claude: { permissionMode: token } } });
       }
       return { ok: false, message: 'Claude 权限模式必须是 default、acceptEdits、bypassPermissions 或 plan。' };
     },
   },
   {
-    key: 'claudeIdleTimeoutMinutes',
-    group: 'global-runtime-claude',
-    aliases: ['claudeTimeout', 'claudeIdleTimeout'],
-    label: 'Claude 空闲超时分钟',
-    usage: '/set claudeIdleTimeoutMinutes 15',
-    read: (payload) => `${payload.claudeIdleTimeoutMinutes ?? 0}`,
+    key: 'claudeReasoningEffort',
+    tomlPath: 'runtime.claude.reasoning_effort',
+    group: 'runtime.claude',
+    aliases: ['claudeReasoning', 'claudeReasoningEffort'],
+    label: 'reasoning_effort',
+    usage: '/set claudeReasoningEffort minimal|low|medium|high|xhigh',
+    control: 'select',
+    options: [selectOption('medium'), selectOption('minimal'), selectOption('low'), selectOption('high'), selectOption('xhigh')],
+    read: (config) => formatReasoningEffort(config.runtime.claude.reasoningEffort),
     write(rawValue) {
-      const token = rawValue.trim();
-      if (token === 'off' || token === '0') {
-        return uiPayload({ claudeIdleTimeoutMinutes: 0 });
-      }
-      const parsed = parsePositiveInt(rawValue);
-      if (parsed === null || parsed > 120) return { ok: false, message: 'Claude 空闲超时必须是 0-120 的整数分钟；0/off 表示关闭。' };
-      return uiPayload({ claudeIdleTimeoutMinutes: parsed });
+      const parsed = normalizeReasoningEffort(rawValue);
+      if (!parsed) return { ok: false, message: 'reasoning 必须是 minimal、low、medium、high、xhigh 或 1-5。' };
+      return patch({ runtime: { claude: { reasoningEffort: parsed } } });
     },
   },
   {
+    key: 'claudeIdleTimeoutMinutes',
+    tomlPath: 'runtime.claude.idle_timeout_minutes',
+    group: 'runtime.claude',
+    aliases: ['claudeTimeout', 'claudeIdleTimeout'],
+    label: 'idle_timeout_minutes',
+    usage: '/set claudeIdleTimeoutMinutes 15',
+    control: 'input',
+    placeholder: '分钟，0 表示关闭',
+    read: (config) => `${config.runtime.claude.idleTimeoutMinutes ?? 0}`,
+    write(rawValue) {
+      const token = rawValue.trim();
+      if (token === 'off') return patch({ runtime: { claude: { idleTimeoutMinutes: 0 } } });
+      const parsed = parseNonNegativeInt(rawValue);
+      if (parsed === null || parsed > 120) return { ok: false, message: 'Claude 空闲超时必须是 0-120 的整数分钟；0/off 表示关闭。' };
+      return patch({ runtime: { claude: { idleTimeoutMinutes: parsed } } });
+    },
+  },
+  {
+    key: 'defaultWorkspaceRoot',
+    tomlPath: 'bridge.default_workspace',
+    group: 'bridge',
+    aliases: ['workspace', 'workspaceRoot', 'root', 'newRoot'],
+    label: 'default_workspace',
+    usage: '/set defaultWorkspaceRoot /abs/path',
+    control: 'input',
+    placeholder: '例如 ~ 或 /data00/home/me',
+    read: (config) => config.bridge.defaultWorkspace || '-',
+    write: writeStringPatch((value) => ({ bridge: { defaultWorkspace: value } }), { defaultValue: '~' }),
+  },
+  {
     key: 'uiAllowLan',
-    group: 'global-bridge',
+    tomlPath: 'bridge.ui_allow_lan',
+    group: 'bridge',
     aliases: ['allowLan', 'uiLan'],
-    label: 'UI 允许 LAN 访问',
+    label: 'ui_allow_lan',
     usage: '/set uiAllowLan on|off',
-    read: (payload) => formatBool(payload.uiAllowLan),
-    write: writeBooleanPatch('uiAllowLan'),
+    control: 'select',
+    options: boolOptions(),
+    read: (config) => formatBool(config.bridge.uiAllowLan),
+    write: writeBooleanPatch((value) => ({ bridge: { uiAllowLan: value } })),
   },
   {
     key: 'uiAccessToken',
-    group: 'global-bridge',
+    tomlPath: 'bridge.ui_access_token',
+    group: 'bridge',
     aliases: ['accessToken', 'uiToken'],
-    label: 'UI 访问 token',
+    label: 'ui_access_token',
     usage: '/set uiAccessToken <token>',
-    read: (payload) => maskToken(payload.uiAccessToken || ''),
-    write: writeStringPatch('uiAccessToken'),
+    control: 'input',
+    placeholder: '开启 LAN 后可留空自动生成',
+    read: (config) => maskToken(config.bridge.uiAccessToken || ''),
+    write: writeStringPatch((value) => ({ bridge: { uiAccessToken: value } })),
+  },
+  {
+    key: 'historyMessageLimit',
+    tomlPath: 'channels[].config.history_message_limit',
+    group: 'channels.feishu',
+    aliases: ['history', 'hisLimit'],
+    label: 'history_message_limit',
+    usage: '/set historyMessageLimit 8',
+    control: 'input',
+    placeholder: '1-20',
+    read: (config) => `${defaultFeishuChannel(config)?.config.historyMessageLimit ?? '-'}`,
+    write(rawValue, current) {
+      const parsed = parsePositiveInt(rawValue);
+      if (parsed === null || parsed > 20) return { ok: false, message: '值必须是 1-20 的整数。' };
+      return patchChannelConfig(current, { historyMessageLimit: parsed });
+    },
+  },
+  {
+    key: 'streamStatusIdleStartSeconds',
+    tomlPath: 'channels[].config.stream_status_idle_start_seconds',
+    group: 'channels.feishu',
+    aliases: ['streamIdle', 'idleStart'],
+    label: 'stream_status_idle_start_seconds',
+    usage: '/set streamStatusIdleStartSeconds 180',
+    control: 'input',
+    placeholder: '秒',
+    read: (config) => `${defaultFeishuChannel(config)?.config.streamStatusIdleStartSeconds ?? '-'}`,
+    write(rawValue, current) {
+      const parsed = parsePositiveInt(rawValue);
+      if (parsed === null) return { ok: false, message: '值必须是大于等于 1 的整数。' };
+      return patchChannelConfig(current, { streamStatusIdleStartSeconds: parsed });
+    },
+  },
+  {
+    key: 'streamStatusCheckIntervalSeconds',
+    tomlPath: 'channels[].config.stream_status_check_interval_seconds',
+    group: 'channels.feishu',
+    aliases: ['streamCheck', 'statusInterval'],
+    label: 'stream_status_check_interval_seconds',
+    usage: '/set streamStatusCheckIntervalSeconds 10',
+    control: 'input',
+    placeholder: '秒',
+    read: (config) => `${defaultFeishuChannel(config)?.config.streamStatusCheckIntervalSeconds ?? '-'}`,
+    write(rawValue, current) {
+      const parsed = parsePositiveInt(rawValue);
+      if (parsed === null) return { ok: false, message: '值必须是大于等于 1 的整数。' };
+      return patchChannelConfig(current, { streamStatusCheckIntervalSeconds: parsed });
+    },
+  },
+  {
+    key: 'streamingEnabled',
+    tomlPath: 'channels[].config.streaming_enabled',
+    group: 'channels.feishu',
+    aliases: ['streaming'],
+    label: 'streaming_enabled',
+    usage: '/set streamingEnabled on|off',
+    control: 'select',
+    options: boolOptions(),
+    read: (config) => formatBool(defaultFeishuChannel(config)?.config.streamingEnabled ?? true),
+    write(rawValue, current) {
+      const parsed = parseBoolean(rawValue);
+      if (parsed === null) return { ok: false, message: '值必须是 on/off、true/false 或 1/0。' };
+      return patchChannelConfig(current, { streamingEnabled: parsed });
+    },
+  },
+  {
+    key: 'feedbackMarkdownEnabled',
+    tomlPath: 'channels[].config.feedback_markdown_enabled',
+    group: 'channels.feishu',
+    aliases: ['markdown', 'commandMarkdown'],
+    label: 'feedback_markdown_enabled',
+    usage: '/set feedbackMarkdownEnabled on|off',
+    control: 'select',
+    options: boolOptions(),
+    read: (config) => formatBool(defaultFeishuChannel(config)?.config.feedbackMarkdownEnabled ?? true),
+    write(rawValue, current) {
+      const parsed = parseBoolean(rawValue);
+      if (parsed === null) return { ok: false, message: '值必须是 on/off、true/false 或 1/0。' };
+      return patchChannelConfig(current, { feedbackMarkdownEnabled: parsed });
+    },
+  },
+  {
+    key: 'requireMention',
+    tomlPath: 'channels[].config.require_mention',
+    group: 'channels.feishu',
+    aliases: ['requireAt', 'mention'],
+    label: 'require_mention',
+    usage: '/set requireMention on|off',
+    control: 'select',
+    options: boolOptions(),
+    read: (config) => formatBool(defaultFeishuChannel(config)?.config.requireMention ?? false),
+    write(rawValue, current) {
+      const parsed = parseBoolean(rawValue);
+      if (parsed === null) return { ok: false, message: '值必须是 on/off、true/false 或 1/0。' };
+      return patchChannelConfig(current, { requireMention: parsed });
+    },
+  },
+  {
+    key: 'groupAuthorized',
+    tomlPath: 'channels[].config.group_authorized',
+    group: 'channels.feishu',
+    aliases: ['authorized'],
+    label: 'group_authorized',
+    usage: '/set groupAuthorized on|off',
+    control: 'select',
+    options: boolOptions(),
+    read: (config) => formatBool(defaultFeishuChannel(config)?.config.groupAuthorized ?? false),
+    write(rawValue, current) {
+      const parsed = parseBoolean(rawValue);
+      if (parsed === null) return { ok: false, message: '值必须是 on/off、true/false 或 1/0。' };
+      return patchChannelConfig(current, { groupAuthorized: parsed });
+    },
   },
 ];
 
 const SETTING_BY_NAME = new Map<string, SettingDefinition>();
 for (const definition of SETTING_DEFINITIONS) {
   SETTING_BY_NAME.set(definition.key.toLowerCase(), definition);
+  SETTING_BY_NAME.set(definition.tomlPath.toLowerCase(), definition);
   for (const alias of definition.aliases) {
     SETTING_BY_NAME.set(alias.toLowerCase(), definition);
   }
@@ -386,12 +537,33 @@ function findSetting(raw: string): SettingDefinition | undefined {
   return SETTING_BY_NAME.get(raw.trim().toLowerCase());
 }
 
-function parseSetArgs(raw: string): { action: 'show-all' } | { action: 'show-one'; key: string } | { action: 'set'; key: string; value: string } {
+function findGroup(raw: string): SettingGroupDefinition | undefined {
+  const token = raw.trim().toLowerCase();
+  return SETTING_GROUPS.find((group) => group.key === token || group.title.toLowerCase() === token);
+}
+
+function groupDefinitions(groupKey: SettingGroupKey): SettingDefinition[] {
+  return SETTING_DEFINITIONS.filter((definition) => definition.group === groupKey);
+}
+
+type ParsedSetArgs =
+  | { action: 'show-all' }
+  | { action: 'show-group'; group: SettingGroupKey }
+  | { action: 'show-one'; key: string }
+  | { action: 'set'; key: string; value: string };
+
+function parseSetArgs(raw: string): ParsedSetArgs {
   const trimmed = raw.trim();
   if (!trimmed) return { action: 'show-all' };
 
+  const groupMatch = trimmed.match(/^--group(?:=|\s+)(\S+)$/);
+  if (groupMatch) {
+    const group = findGroup(groupMatch[1]);
+    return group ? { action: 'show-group', group: group.key } : { action: 'show-one', key: groupMatch[1] };
+  }
+
   const eqIndex = trimmed.indexOf('=');
-  if (eqIndex > 0) {
+  if (eqIndex > 0 && !trimmed.startsWith('--group=')) {
     return {
       action: 'set',
       key: trimmed.slice(0, eqIndex).trim(),
@@ -403,155 +575,102 @@ function parseSetArgs(raw: string): { action: 'show-all' } | { action: 'show-one
   if (!match) return { action: 'show-all' };
   const key = match[1];
   const value = match[2]?.trim();
-  return value ? { action: 'set', key, value } : { action: 'show-one', key };
+  if (value) return { action: 'set', key, value };
+  const group = findGroup(key);
+  return group && !findSetting(key) ? { action: 'show-group', group: group.key } : { action: 'show-one', key };
 }
 
-function buildSettingsFields(payload: ConfigPayload, definitions: SettingDefinition[] = SETTING_DEFINITIONS): Array<[string, string]> {
+function selectedGroupFromArgs(raw: string): SettingGroupKey {
+  const parsed = parseSetArgs(raw);
+  if (parsed.action === 'show-group') return parsed.group;
+  if (parsed.action === 'show-one') return findSetting(parsed.key)?.group || 'runtime.codex';
+  if (parsed.action === 'set') return findSetting(parsed.key)?.group || 'runtime.codex';
+  return 'runtime.codex';
+}
+
+function buildSettingsFields(config: ConfigV2, definitions: SettingDefinition[]): Array<[string, string]> {
   return definitions.map((definition) => [
-    `${definition.label} (${definition.key})`,
-    definition.read(payload),
+    `${definition.label} (${definition.tomlPath})`,
+    definition.read(config),
   ]);
 }
 
-function selectOption(text: string, value = text): { text: string; callbackData: string } {
-  return { text, callbackData: value };
-}
-
-function formSelect(
-  elementId: string,
-  label: string,
-  selectedValue: string,
-  options: Array<{ text: string; callbackData: string }>,
-): NonNullable<NonNullable<OutboundRichCard['form']>['selects']>[number] {
+function formSelect(definition: SettingDefinition, config: ConfigV2): NonNullable<NonNullable<OutboundRichCard['form']>['selects']>[number] {
+  const value = definition.read(config);
   return {
-    elementId,
-    label,
-    placeholder: selectedValue || 'auto',
-    selectedCallbackData: selectedValue,
-    options,
+    elementId: definition.key,
+    label: definition.label,
+    placeholder: value,
+    selectedCallbackData: value === 'auto' ? '' : value,
+    options: definition.options || [],
   };
 }
 
-function formInput(
-  elementId: string,
-  label: string,
-  placeholder: string,
-  defaultValue: string | number | undefined,
-): NonNullable<NonNullable<OutboundRichCard['form']>['extraInputs']>[number] {
+function formInput(definition: SettingDefinition, config: ConfigV2): NonNullable<NonNullable<OutboundRichCard['form']>['extraInputs']>[number] {
+  const value = definition.read(config);
   return {
-    elementId,
-    label,
-    placeholder,
-    defaultValue: defaultValue === undefined ? '' : String(defaultValue),
+    elementId: definition.key,
+    label: definition.label,
+    placeholder: definition.placeholder || definition.tomlPath,
+    defaultValue: value === '-' ? '' : value,
   };
 }
 
-export function buildSetCommandRichCard(): OutboundRichCard {
-  const payload = configToPayload(createConfigService({ migrate: false }).snapshot().config);
+function buildGroupSelect(selectedGroup: SettingGroupKey): NonNullable<OutboundRichCard['selects']>[number] {
+  return {
+    id: 'set_group_select',
+    placeholder: 'TOML section',
+    selectedCallbackData: buildCommandCallbackData(`/set --group ${selectedGroup}`),
+    options: SETTING_GROUPS.map((group) => ({
+      text: group.title,
+      callbackData: buildCommandCallbackData(`/set --group ${group.key}`),
+    })),
+  };
+}
+
+export function buildSetCommandRichCard(selectedGroup: SettingGroupKey = 'runtime.codex'): OutboundRichCard {
+  const config = createConfigService({ migrate: false }).snapshot().config;
+  const group = GROUP_BY_KEY.get(selectedGroup) || GROUP_BY_KEY.get('runtime.codex')!;
+  const definitions = groupDefinitions(group.key);
   return {
     title: '全局配置',
-    subtitle: '保存后写入 ~/.codelark/config.toml（home level），字段与 Web 配置页一致。',
+    subtitle: `写入 ~/.codelark/config.toml · ${group.title}`,
     template: 'blue',
-    tags: ['home level', 'config'],
+    tags: ['home', 'toml'],
     tagColor: 'blue',
-    sections: SETTING_GROUPS.map((group) => ({
-      title: group.title,
-      fields: buildSettingsFields(
-        payload,
-        SETTING_DEFINITIONS.filter((definition) => definition.group === group.key),
-      ),
-    })),
+    selects: [buildGroupSelect(group.key)],
+    sections: [],
     form: {
       optionElementId: 'clk_set_option',
-      inputElementId: 'defaultWorkspaceRoot',
-      inputLabel: '/new 相对路径根目录',
-      inputPlaceholder: '留空时使用 ~',
-      inputDefaultValue: payload.defaultWorkspaceRoot || '',
       layout: 'two_column',
+      selects: definitions.filter((definition) => definition.control === 'select').map((definition) => formSelect(definition, config)),
+      extraInputs: definitions.filter((definition) => definition.control === 'input').map((definition) => formInput(definition, config)),
       controlBar: {
         actions: [
-          { text: '刷新', callbackData: buildCommandCallbackData('/set') },
+          { text: '刷新', callbackData: buildCommandCallbackData(`/set --group ${group.key}`) },
         ],
       },
-      selects: [
-        formSelect('runtime', 'Runtime', payload.runtime || 'codex', [selectOption('codex'), selectOption('claude')]),
-        formSelect('defaultMode', 'Codex 默认模式', payload.defaultMode || 'normal', [selectOption('normal'), selectOption('yolo')]),
-        formSelect('defaultProvider', '默认 Codex Provider', payload.defaultProvider || '', [selectOption('auto', ''), selectOption('sdk'), selectOption('pty'), selectOption('tmux')]),
-        formSelect('codexSandboxMode', 'Codex 文件系统权限', payload.codexSandboxMode || 'workspace-write', [selectOption('workspace-write'), selectOption('read-only'), selectOption('danger-full-access')]),
-        formSelect('codexReasoningEffort', 'Codex 思考级别', payload.codexReasoningEffort || 'medium', [selectOption('medium'), selectOption('minimal'), selectOption('low'), selectOption('high'), selectOption('xhigh')]),
-        formSelect('codexNetworkAccess', 'Codex 网络访问', payload.codexNetworkAccess ? 'on' : 'off', [selectOption('on'), selectOption('off')]),
-        formSelect('codexSkipGitRepoCheck', '允许未信任 Git 目录', payload.codexSkipGitRepoCheck ? 'on' : 'off', [selectOption('on'), selectOption('off')]),
-        formSelect('claudeExecutable', 'Claude executable', payload.claudeExecutable || 'claude', [selectOption('claude'), selectOption('ccr')]),
-        formSelect('claudeProvider', '默认 Claude Provider', payload.claudeProvider || 'tmux', [selectOption('tmux'), selectOption('pty'), selectOption('sdk')]),
-        formSelect('claudePermissionMode', 'Claude 权限模式', payload.claudePermissionMode || 'default', [selectOption('default'), selectOption('acceptEdits'), selectOption('bypassPermissions'), selectOption('plan')]),
-        formSelect('uiAllowLan', '允许局域网访问 Web 控制台', payload.uiAllowLan ? 'on' : 'off', [selectOption('on'), selectOption('off')]),
-      ],
-      extraInputs: [
-        formInput('defaultModel', 'Codex 默认模型', '留空则跟随 Codex 默认', payload.defaultModel),
-        formInput('historyMessageLimit', '/his 返回条数', '1-20', payload.historyMessageLimit),
-        formInput('streamStatusIdleStartSeconds', '长任务提示延迟', '秒，默认 180', payload.streamStatusIdleStartSeconds),
-        formInput('streamStatusCheckIntervalSeconds', '长任务提示刷新间隔', '秒，默认 10', payload.streamStatusCheckIntervalSeconds),
-        formInput('claudeDefaultModel', 'Claude 默认模型', '留空则跟随 Claude Code 默认', payload.claudeDefaultModel),
-        formInput('claudeIdleTimeoutMinutes', 'Claude 空闲超时', '分钟，0 表示关闭', payload.claudeIdleTimeoutMinutes),
-        formInput('uiAccessToken', '局域网访问 token', '开启 LAN 后可留空自动生成', payload.uiAccessToken),
-      ],
       submitText: '保存',
-      submitCallbackData: buildCommandCallbackData('/set'),
+      submitCallbackData: buildCommandCallbackData(`/set --group ${group.key}`),
       options: [],
     },
-    footer: [
-      '也可发送 `/set <key> <value>` 修改单项配置；旧名 `defaultRuntime` 仍兼容。',
-    ],
   };
 }
 
-function buildGroupedSettingsResponse(payload: ConfigPayload, markdown: boolean): string {
-  const sections = SETTING_GROUPS
-    .map((group) => {
-      const definitions = SETTING_DEFINITIONS.filter((definition) => definition.group === group.key);
-      return {
-        group,
-        fields: buildSettingsFields(payload, definitions),
-      };
-    })
-    .filter((section) => section.fields.length > 0);
-
-  if (markdown) {
-    const lines = ['**全局配置**', ''];
-    for (const section of sections) {
-      lines.push(`**${section.group.title}**`);
-      lines.push(`_${section.group.description}_`);
-      for (const [label, value] of section.fields) {
-        lines.push(`- **${label}**：${value}`);
-      }
-      lines.push('');
-    }
-    lines.push('**说明**');
-    for (const note of buildUsageNotes()) {
-      lines.push(`- ${note}`);
-    }
-    return lines.join('\n').trim();
-  }
-
-  const lines = ['全局配置', ''];
-  for (const section of sections) {
-    lines.push(section.group.title);
-    lines.push(section.group.description);
-    for (const [label, value] of section.fields) {
-      lines.push(`${label}: ${value}`);
-    }
-    lines.push('');
-  }
-  lines.push(...buildUsageNotes());
-  return lines.join('\n').trim();
+function buildCompactSettingsResponse(config: ConfigV2, groupKey: SettingGroupKey, markdown: boolean): string {
+  const group = GROUP_BY_KEY.get(groupKey)!;
+  return buildCommandFields(
+    `全局配置：${group.title}`,
+    buildSettingsFields(config, groupDefinitions(group.key)),
+    [],
+    markdown,
+  );
 }
 
 function buildUsageNotes(): string[] {
   return [
-    '发送 `/set <key> <value>` 或 `/set <key>=<value>` 修改配置；默认写入 home level，配置保存方式与 UI 设置页相同。',
-    '示例：`/set defaultWorkspaceRoot ~`、`/set runtime claude`、`/set defaultProvider tmux`、`/set codexNetworkAccess off`。',
-    'Codex 与 Claude Code 的 GlobalRuntime 默认值互相独立，不会互相回退。',
-    `可用 key：${SETTING_DEFINITIONS.map((definition) => definition.key).join(', ')}`,
+    '发送 `/set` 打开 TOML 配置卡片；卡片顶部下拉切换 section。',
+    '发送 `/set <key> <value>` 或 `/set <toml.path> <value>` 修改单项配置。',
   ];
 }
 
@@ -570,96 +689,75 @@ function formatConfigWriteError(error: unknown): string {
   return error instanceof Error ? error.message : '配置字段不合法。';
 }
 
-const SET_FORM_FIELD_KEYS = [
-  'runtime',
-  'defaultMode',
-  'defaultProvider',
-  'codexSandboxMode',
-  'codexReasoningEffort',
-  'codexNetworkAccess',
-  'codexSkipGitRepoCheck',
-  'claudeExecutable',
-  'claudeProvider',
-  'claudePermissionMode',
-  'uiAllowLan',
-  'defaultWorkspaceRoot',
-  'defaultModel',
-  'historyMessageLimit',
-  'streamStatusIdleStartSeconds',
-  'streamStatusCheckIntervalSeconds',
-  'claudeDefaultModel',
-  'claudeIdleTimeoutMinutes',
-  'uiAccessToken',
-] as const;
-
 function formValueString(formValue: Record<string, unknown>, key: string): string | undefined {
   const value = formValue[key];
   return typeof value === 'string' ? value.trim() : undefined;
 }
 
 export function handleSetFormCommand(options: {
+  args: string;
   formValue: Record<string, unknown>;
   markdown: boolean;
 }): { response: string; richCard: OutboundRichCard } {
   const service = createConfigService({ migrate: false });
+  const selectedGroup = selectedGroupFromArgs(options.args);
   let currentConfig = service.snapshot().config;
-  const combinedPayload: Record<string, unknown> = {};
+  const definitions = groupDefinitions(selectedGroup);
+  const updated: SettingDefinition[] = [];
 
-  for (const key of SET_FORM_FIELD_KEYS) {
-    const rawValue = formValueString(options.formValue, key);
+  for (const definition of definitions) {
+    const rawValue = formValueString(options.formValue, definition.key);
     if (rawValue === undefined) continue;
-    const definition = findSetting(key);
-    if (!definition) continue;
+    const currentValue = definition.read(currentConfig);
+    const normalizedCurrent = currentValue === 'auto' ? '' : currentValue;
+    if (rawValue === normalizedCurrent) continue;
     const written = definition.write(rawValue, currentConfig);
     if (!written.ok) {
       return {
         response: buildCommandFields(
           '配置未更新',
           [
-            ['配置项', definition.key],
+            ['TOML path', definition.tomlPath],
             ['输入值', rawValue],
           ],
           [written.message, `用法：\`${definition.usage}\``],
           options.markdown,
         ),
-        richCard: buildSetCommandRichCard(),
+        richCard: buildSetCommandRichCard(selectedGroup),
       };
     }
-    Object.assign(combinedPayload, written.payload);
+    try {
+      service.set({ kind: 'home' }, written.patch);
+      currentConfig = service.snapshot().config;
+      updated.push(definition);
+    } catch (error) {
+      return {
+        response: buildCommandFields(
+          '配置未更新',
+          [['TOML path', definition.tomlPath]],
+          [formatConfigWriteError(error), '请刷新 `/set` 卡片后重试。'],
+          options.markdown,
+        ),
+        richCard: buildSetCommandRichCard(selectedGroup),
+      };
+    }
   }
 
-  try {
-    service.replace({ kind: 'home' }, mergeConfigV2HomePatch(currentConfig, combinedPayload));
-    currentConfig = service.snapshot().config;
-  } catch (error) {
-    return {
-      response: buildCommandFields(
-        '配置未更新',
-        [],
-        [formatConfigWriteError(error), '请刷新 `/set` 卡片后重试。'],
-        options.markdown,
-      ),
-      richCard: buildSetCommandRichCard(),
-    };
+  const latest = service.snapshot().config;
+  const notes = ['配置已保存到 `~/.codelark/config.toml`；卡片已刷新为最新 TOML section。'];
+  const codexReasoning = updated.find((definition) => definition.key === 'codexReasoningEffort');
+  if (codexReasoning) {
+    const warning = minimalReasoningWebSearchWarning(latest.runtime.codex.reasoningEffort);
+    if (warning) notes.push(warning);
   }
-
-  const savedPayload = configToPayload(currentConfig);
-  const notes = ['配置已保存到 `~/.codelark/config.toml`（home level）；卡片已刷新为最新值。'];
-  const warning = minimalReasoningWebSearchWarning(String(savedPayload.codexReasoningEffort || ''));
-  if (warning) notes.push(warning);
   return {
     response: buildCommandFields(
-      '已保存全局配置',
-      [
-        ['Runtime', savedPayload.runtime],
-        ['默认 Codex Provider', savedPayload.defaultProvider || 'auto'],
-        ['Codex 网络访问', formatBool(savedPayload.codexNetworkAccess)],
-        ['/new 相对路径根目录', savedPayload.defaultWorkspaceRoot || '-'],
-      ],
+      updated.length > 0 ? '已保存全局配置' : '全局配置未变化',
+      updated.length > 0 ? buildSettingsFields(latest, updated) : [],
       notes,
       options.markdown,
     ),
-    richCard: buildSetCommandRichCard(),
+    richCard: buildSetCommandRichCard(selectedGroup),
   };
 }
 
@@ -670,10 +768,13 @@ export function handleSetCommand(options: {
   const parsed = parseSetArgs(options.args);
   const service = createConfigService({ migrate: false });
   const currentConfig = service.snapshot().config;
-  const currentPayload = configToPayload(currentConfig);
 
   if (parsed.action === 'show-all') {
-    return buildGroupedSettingsResponse(currentPayload, options.markdown);
+    return buildCompactSettingsResponse(currentConfig, 'runtime.codex', options.markdown);
+  }
+
+  if (parsed.action === 'show-group') {
+    return buildCompactSettingsResponse(currentConfig, parsed.group, options.markdown);
   }
 
   const definition = findSetting(parsed.key);
@@ -688,8 +789,8 @@ export function handleSetCommand(options: {
 
   if (parsed.action === 'show-one') {
     return buildCommandFields(
-      `全局配置：${SETTING_GROUPS.find((group) => group.key === definition.group)?.title || definition.group}`,
-      buildSettingsFields(currentPayload, [definition]),
+      `全局配置：${GROUP_BY_KEY.get(definition.group)?.title || definition.group}`,
+      buildSettingsFields(currentConfig, [definition]),
       [`用法：\`${definition.usage}\``],
       options.markdown,
     );
@@ -700,7 +801,7 @@ export function handleSetCommand(options: {
     return buildCommandFields(
       '配置未更新',
       [
-        ['配置项', definition.key],
+        ['TOML path', definition.tomlPath],
         ['输入值', parsed.value],
       ],
       [written.message, `用法：\`${definition.usage}\``],
@@ -709,28 +810,33 @@ export function handleSetCommand(options: {
   }
 
   try {
-    service.replace({ kind: 'home' }, mergeConfigV2HomePatch(currentConfig, written.payload));
+    service.set({ kind: 'home' }, written.patch);
   } catch (error) {
     return buildCommandFields(
       '配置未更新',
       [
-        ['配置项', definition.key],
+        ['TOML path', definition.tomlPath],
         ['输入值', parsed.value],
       ],
       [formatConfigWriteError(error), `用法：\`${definition.usage}\``],
       options.markdown,
     );
   }
-  const savedPayload = configToPayload(service.snapshot().config);
-  const notes = ['配置已保存到 `~/.codelark/config.toml`；后续 `/new` 和对应 runtime 请求会读取新的全局默认值。'];
+
+  const savedConfig = service.snapshot().config;
+  const notes = ['配置已保存到 `~/.codelark/config.toml`；后续请求会读取新的 TOML 默认值。'];
   if (definition.key === 'codexReasoningEffort') {
-    const warning = minimalReasoningWebSearchWarning(String(savedPayload.codexReasoningEffort || ''));
+    const warning = minimalReasoningWebSearchWarning(savedConfig.runtime.codex.reasoningEffort);
     if (warning) notes.push(warning);
   }
   return buildCommandFields(
     '已更新全局配置',
-    buildSettingsFields(savedPayload, [definition]),
+    buildSettingsFields(savedConfig, [definition]),
     notes,
     options.markdown,
   );
+}
+
+export function setCommandSelectedGroup(args: string): SettingGroupKey {
+  return selectedGroupFromArgs(args);
 }

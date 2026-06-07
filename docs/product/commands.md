@@ -18,7 +18,7 @@ IM 命令从用户视角分为五组。命令入口是 [src/bridge/command/dispa
 - 发送 `//...`：把以 `/` 开头的内容作为模型 prompt，而不是 bridge 命令。
 - 未绑定会话时，普通文本会进入临时草稿线程；正式接管用 `/t`。
 - 修改当前会话参数优先用 `/runtime`、`/provider`、`/model`、`/cd` 等会话级命令。
-- 修改全局默认值用 `/set` 或 Web 工作台配置页。
+- 修改全局默认值用 `/set`；卡片按 TOML section 写入 `~/.codelark/config.toml`。
 - `/doctor` 可不带参数；也可使用 `/doctor bridge_id:d3c20e05 2026-06-04 17:48` 或 `/doctor d3c20e05 2026-06-04 17:48`，让当前会话读取结构化 JSONL `bridge.log` 时优先用目标 id 和时间点搜索，并优先检查 `level=ERROR/WARN`、`event`、`msg`、`chat`、`lane` 等字段。
 
 ## 设计模块

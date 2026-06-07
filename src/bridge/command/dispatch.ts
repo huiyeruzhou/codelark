@@ -58,6 +58,7 @@ import {
   buildSetCommandRichCard,
   handleSetCommand,
   handleSetFormCommand,
+  setCommandSelectedGroup,
 } from './global-settings.js';
 import { buildGlobalStatusResponse } from './status.js';
 import {
@@ -707,6 +708,7 @@ export async function handleBridgeCommand(
       const formValue = extractCardActionFormValue(msg.raw);
       if (formValue) {
         const result = handleSetFormCommand({
+          args,
           formValue,
           markdown: responseParseMode === 'Markdown',
         });
@@ -717,8 +719,8 @@ export async function handleBridgeCommand(
           args,
           markdown: responseParseMode === 'Markdown',
         });
-        if (!args.trim()) {
-          responseRichCard = buildSetCommandRichCard();
+        if (!args.trim() || args.trim().startsWith('--group')) {
+          responseRichCard = buildSetCommandRichCard(setCommandSelectedGroup(args));
         }
       }
       break;

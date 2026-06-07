@@ -119,27 +119,28 @@ interface GlobalRuntimeConfig {
 
 当前 key 归属建议：
 
-| 当前 `/set` key | 新归属 | 说明 |
+| 当前 `/set` key | TOML 归属 | 说明 |
 | --- | --- | --- |
-| `defaultModel` | `runtime.codex.defaultModel`，新增 `runtime.claude.defaultModel` | 不能再作为跨 runtime 通用 fallback |
-| `defaultMode` | `runtime.codex.defaultMode`，Claude 只做显式映射 | 不同 runtime 权限语义不同 |
-| `codexSkipGitRepoCheck` | `runtime.codex.skipGitRepoCheck` | Codex 专属 |
-| `codexSandboxMode` | `runtime.codex.sandboxMode` | Codex 专属 |
-| `codexNetworkAccess` | `runtime.codex.networkAccess` | Codex 专属 |
-| `codexReasoningEffort` | `runtime.codex.reasoningEffort` | Codex 专属 |
-| `defaultProvider` | Bridge 控制默认值 | `sdk/tmux` 是 Codex provider transport，不是模型默认值 |
+| `runtime` | `runtime.agent` | 选择新会话默认 agent |
+| `defaultModel` | `runtime.codex.model` | Codex 专属 |
+| `defaultMode` | `runtime.codex.yolo_mode` | Codex 专属 |
+| `codexSkipGitRepoCheck` | `runtime.codex.skip_git_repo_check` | Codex 专属 |
+| `codexSandboxMode` | `runtime.codex.sandbox_mode` | Codex 专属 |
+| `codexNetworkAccess` | `runtime.codex.network_access` | Codex 专属 |
+| `codexReasoningEffort` | `runtime.codex.reasoning_effort` | Codex 专属 |
+| `defaultProvider` | `runtime.codex.provider` | `sdk/pty/tmux` 是 Codex provider transport |
 | `claudeExecutable` | `runtime.claude.executable` | 只允许 `claude` 或 `ccr`；这是 Claude Code 启动命令，不是 provider |
 
 ### 全局 Bridge 配置
 
 这些配置属于 bridge 自身，不属于任何 runtime 的模型执行参数。
 
-| 配置或命令 | 新归属 | 说明 |
+| 配置或命令 | TOML 归属 | 说明 |
 | --- | --- | --- |
-| `defaultWorkspaceRoot` | `bridge.sessionCreation.defaultWorkspaceRoot` | 影响 `/new <relative>`，不是 provider 参数 |
-| `historyMessageLimit` | `bridge.history.defaultLimit` | 影响 `/history` 展示 |
-| `streamStatusIdleStartSeconds` | `bridge.feedback.streamStatusIdleStartSeconds` | 运行观测 |
-| `streamStatusCheckIntervalSeconds` | `bridge.feedback.streamStatusCheckIntervalSeconds` | 运行观测 |
+| `defaultWorkspaceRoot` | `bridge.default_workspace` | 影响 `/new <relative>`，不是 provider 参数 |
+| `historyMessageLimit` | `channels[].config.history_message_limit` | 影响 `/history` 展示 |
+| `streamStatusIdleStartSeconds` | `channels[].config.stream_status_idle_start_seconds` | 运行观测 |
+| `streamStatusCheckIntervalSeconds` | `channels[].config.stream_status_check_interval_seconds` | 运行观测 |
 | `/ui` | 固定显示策略 | 工具详情始终显示 |
 | `uiAllowLan`、`uiAccessToken` | `bridge.ui` | UI server |
 | Feishu / Weixin channel config | `channels[]` | 通道连接、访问控制、消息呈现 |
@@ -234,7 +235,7 @@ Accessor 边界：
 ## 当前优先调整点
 
 - `/provider`、`/p` 从 “CodexRuntime 参数” 移到 “Bridge 控制”，因为它选择 bridge 如何驱动当前 runtime，不是模型执行参数。Codex 和 Claude 都支持 `sdk|pty|tmux`，Claude 默认 `tmux`，切换时只修改当前 active runtime 的 provider。
-- `/set` 展示与 schema 应拆成 GlobalRuntime(Codex)、GlobalRuntime(Claude)、GlobalBridge，而不是一个扁平配置表。
+- `/set` 展示与写入遵循 TOML section：顶部下拉切换 `[runtime]`、`[runtime.codex]`、`[runtime.claude]`、`[bridge]` 和默认 Feishu `[[channels]]`，表单只保存当前 section。
 - `schemas/config.v1.schema.json` 以 `runtime.codex`、`runtime.claude`、`runtime.bridgeControl`、`runtime.bridge` 作为权威分组；旧扁平字段不再作为配置兼容输入。
 - `BridgeStore` 接口中的 `findSessionByCodexThreadId()`、`updateSessionCodexThreadId()` 是 Codex 专属 API；接 Claude 前应新增 provider-neutral accessor 或 runtime-specific registry，避免加出 `findSessionByClaudeSessionId()` 这类平行顶层接口。
 - Claude Code 接入前，不要把 `BridgeSession.runtime.codex.model` 当通用字段使用；应使用 `runtime.codex.model` 与 `runtime.claude.model` 两个 runtime-specific 字段。
