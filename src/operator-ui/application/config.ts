@@ -74,7 +74,7 @@ const uiConfigPayloadSchema = z.object({
   defaultWorkspaceRoot: optionalString(),
   defaultModel: optionalString().refine(
     (value) => value === undefined || value === '' || availableCodexModelSlugs.has(value),
-    { message: 'Unknown Codex model.' },
+    { message: '未知 Codex 模型。' },
   ),
   defaultProvider: z.preprocess(
     (value) => typeof value === 'string' ? value.trim().toLowerCase() : value,
@@ -83,7 +83,7 @@ const uiConfigPayloadSchema = z.object({
   defaultMode: z.enum(['normal', 'yolo']).optional(),
   historyMessageLimit: optionalPositiveInteger().refine(
     (value) => value === undefined || value <= 20,
-    { message: 'History message limit must be between 1 and 20.' },
+    { message: '历史消息条数必须在 1 到 20 之间。' },
   ),
   streamStatusIdleStartSeconds: optionalPositiveInteger(),
   streamStatusCheckIntervalSeconds: optionalPositiveInteger(),

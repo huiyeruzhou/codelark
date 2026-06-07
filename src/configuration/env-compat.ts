@@ -7,8 +7,11 @@ import { setConfigPath } from './path-access.js';
 // channel 相关 env 在 v2 中只用于 migration 或对子进程导出，不再作为运行时配置输入。
 
 export interface EnvCompatWarning {
-  envKey: string;
-  aliasFor: string;
+  envKey?: string;
+  aliasFor?: string;
+  source?: string;
+  file?: string;
+  path?: string;
   message: string;
 }
 
@@ -37,7 +40,7 @@ function channelEnvKeyWarnings(env: NodeJS.ProcessEnv): EnvCompatWarning[] {
     warnings.push({
       envKey: key,
       aliasFor: legacyEnvAliases.get(key) || key,
-      message: `${key} is export-only in config v2; configure channel settings in ~/.codelark/config.toml.`,
+      message: `${key} 在配置 v2 中只用于导出给子进程；通道配置请写入 ~/.codelark/config.toml。`,
     });
   }
   return warnings;
@@ -70,7 +73,7 @@ export function envToConfigPatch(env: NodeJS.ProcessEnv): {
       warnings.push({
         envKey: alias,
         aliasFor: newKey,
-        message: `${alias} is deprecated; use ${newKey}.`,
+        message: `${alias} 已废弃，请改用 ${newKey}。`,
       });
       if (rawValue === undefined) {
         rawValue = normalizeLegacyValue(newKey, aliasValue);

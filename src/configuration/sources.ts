@@ -3,6 +3,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { stringify } from 'smol-toml';
 import { envToConfigPatch } from './env-compat.js';
+import type { EnvCompatWarning } from './env-compat.js';
 import type { ConfigSourceKind, ProvenanceMap, SourceRef } from './fields.js';
 import {
   loadTomlFileWithNodeConfig,
@@ -33,6 +34,7 @@ export interface SourceLoadResult {
 export interface StaticConfigBaseline {
   layer: ConfigLayer;
   envPatch: ReturnType<typeof envToConfigPatch>;
+  warnings: EnvCompatWarning[];
   homeWriteback?: {
     file: string;
     patch: ConfigPatch;
@@ -73,7 +75,7 @@ export function readTomlConfig(file: string): SourceLoadResult | null {
 
 export function readDefaultsConfig(file: string): SourceLoadResult {
   const loaded = readTomlConfig(file);
-  if (!loaded) throw new Error(`Missing defaults TOML: ${file}`);
+  if (!loaded) throw new Error(`缺少默认配置 TOML：${file}`);
   return loaded;
 }
 
@@ -101,7 +103,7 @@ function defaultChannelTemplate(defaults: ConfigPatch, id: string): NonNullable<
   const defaultChannel = defaults.channels?.find((entry) => entry.id === id)
     || defaults.channels?.find((entry) => entry.id === 'feishu-default');
   if (!defaultChannel) {
-    throw new Error('defaults.toml must define a feishu-default channel.');
+    throw new Error('defaults.toml 必须定义 feishu-default 通道。');
   }
   return { ...clone(defaultChannel), id };
 }
@@ -140,10 +142,24 @@ function patchesEqual(left: ConfigPatch, right: ConfigPatch): boolean {
   return JSON.stringify(left) === JSON.stringify(right);
 }
 
-function validateStaticSource(source: ConfigSourceKind, patch: ConfigPatch): void {
+function sanitizeStaticSource(ref: SourceRef, patch: ConfigPatch): { patch: ConfigPatch; warnings: EnvCompatWarning[] } {
+  const source = ref.source;
   if (source !== 'defaults' && source !== 'home' && patch.channels && patch.channels.length > 0) {
-    throw new Error(`Config source ${source} cannot define channels; configure channels only in home config.toml.`);
+    if (source === 'local') {
+      const { channels: _ignoredChannels, ...withoutChannels } = patch;
+      return {
+        patch: withoutChannels,
+        warnings: [{
+          source,
+          file: ref.file,
+          path: 'channels',
+          message: `项目级配置 ${ref.file || 'local'} 中的 channels 不会生效；通道配置只能写入 ~/.codelark/config.toml，已忽略该字段。`,
+        }],
+      };
+    }
+    throw new Error(`配置来源 ${source} 不能定义 channels；通道配置只能写入 home config.toml。`);
   }
+  return { patch, warnings: [] };
 }
 
 function staticProvenance(sources: ConfigLayer[]): ProvenanceMap {
@@ -152,16 +168,23 @@ function staticProvenance(sources: ConfigLayer[]): ProvenanceMap {
   return provenance;
 }
 
-function staticLayer(ref: SourceRef, patch: ConfigPatch, envByPath?: Map<string, string>): ConfigLayer {
-  validateStaticSource(ref.source, patch);
-  return { ref, patch, ...(envByPath ? { envByPath } : {}) };
+function staticLayer(ref: SourceRef, patch: ConfigPatch, envByPath?: Map<string, string>): {
+  layer: ConfigLayer;
+  warnings: EnvCompatWarning[];
+} {
+  const sanitized = sanitizeStaticSource(ref, patch);
+  return {
+    layer: { ref, patch: sanitized.patch, ...(envByPath ? { envByPath } : {}) },
+    warnings: sanitized.warnings,
+  };
 }
 
 export function loadStaticConfigBaseline(paths: ConfigPaths, env: NodeJS.ProcessEnv, cli?: ConfigPatch): StaticConfigBaseline {
   const defaults = readDefaultsConfig(paths.defaultsToml).patch;
-  const sources: ConfigLayer[] = [
-    staticLayer({ source: 'defaults', file: paths.defaultsToml }, defaults),
-  ];
+  const warnings: EnvCompatWarning[] = [];
+  const defaultsLayer = staticLayer({ source: 'defaults', file: paths.defaultsToml }, defaults);
+  warnings.push(...defaultsLayer.warnings);
+  const sources: ConfigLayer[] = [defaultsLayer.layer];
 
   const home = readTomlConfig(paths.homeToml);
   let homeWriteback: StaticConfigBaseline['homeWriteback'];
@@ -170,17 +193,30 @@ export function loadStaticConfigBaseline(paths: ConfigPaths, env: NodeJS.Process
     if (!patchesEqual(home.patch, materialized)) {
       homeWriteback = { file: home.file, patch: materialized };
     }
-    sources.push(staticLayer({ source: 'home', file: home.file }, materialized));
+    const homeLayer = staticLayer({ source: 'home', file: home.file }, materialized);
+    warnings.push(...homeLayer.warnings);
+    sources.push(homeLayer.layer);
   }
 
   if (paths.localToml) {
     const local = readTomlConfig(paths.localToml);
-    if (local) sources.push(staticLayer({ source: 'local', file: local.file }, local.patch));
+    if (local) {
+      const localLayer = staticLayer({ source: 'local', file: local.file }, local.patch);
+      warnings.push(...localLayer.warnings);
+      sources.push(localLayer.layer);
+    }
   }
 
   const envPatch = envToConfigPatch(env);
-  sources.push(staticLayer({ source: 'env' }, envPatch.patch, envPatch.envByPath));
-  if (cli) sources.push(staticLayer({ source: 'cli' }, cli));
+  warnings.push(...envPatch.warnings);
+  const envLayer = staticLayer({ source: 'env' }, envPatch.patch, envPatch.envByPath);
+  warnings.push(...envLayer.warnings);
+  sources.push(envLayer.layer);
+  if (cli) {
+    const cliLayer = staticLayer({ source: 'cli' }, cli);
+    warnings.push(...cliLayer.warnings);
+    sources.push(cliLayer.layer);
+  }
 
   return {
     layer: {
@@ -189,6 +225,7 @@ export function loadStaticConfigBaseline(paths: ConfigPaths, env: NodeJS.Process
       provenance: staticProvenance(sources),
     },
     envPatch,
+    warnings,
     ...(homeWriteback ? { homeWriteback } : {}),
   };
 }

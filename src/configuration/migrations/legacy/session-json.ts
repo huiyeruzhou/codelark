@@ -77,7 +77,7 @@ function reasoningEffort(value: unknown): 'minimal' | 'low' | 'medium' | 'high' 
 function claudeReasoningEffort(value: unknown): 'low' | 'medium' | 'high' | 'xhigh' | undefined {
   if (value === 'low' || value === 'medium' || value === 'high' || value === 'xhigh') return value;
   if (value === 'max') {
-    throw new Error('Cannot migrate legacy Claude reasoningEffort=max; confirm how it maps to runtime.claude.reasoningEffort first.');
+    throw new Error('无法迁移旧版 Claude reasoningEffort=max；请先确认它应如何映射到 runtime.claude.reasoningEffort。');
   }
   return undefined;
 }

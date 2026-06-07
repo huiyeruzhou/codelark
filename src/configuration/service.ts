@@ -112,10 +112,10 @@ function patchPaths(patch: ConfigPatch): ConfigPath[] {
 function requireWritable(scope: ConfigWriteScope, path: ConfigPath): void {
   const field = findConfigField(path) as ConfigField | undefined;
   if (!field) {
-    throw new Error(`Unknown config field: ${path}`);
+    throw new Error(`未知配置字段：${path}`);
   }
   if (!field.scopes.includes(scope)) {
-    throw new Error(`Config field ${path} cannot be written to ${scope} scope.`);
+    throw new Error(`配置字段 ${path} 不能写入 ${scope} 作用域。`);
   }
 }
 
@@ -133,7 +133,11 @@ function validateWritablePath(target: ConfigWriteTarget, path: ConfigPath): void
 function validateSourcePatch(source: ConfigSourceKind, patch: ConfigPatch): ConfigPatch {
   const parsed = configPatchSchema.parse(patch);
   if (source !== 'defaults' && source !== 'home' && parsed.channels && parsed.channels.length > 0) {
-    throw new Error(`Config source ${source} cannot define channels; configure channels only in home config.toml.`);
+    if (source === 'local') {
+      const { channels: _ignoredChannels, ...withoutChannels } = parsed;
+      return withoutChannels;
+    }
+    throw new Error(`配置来源 ${source} 不能定义 channels；通道配置只能写入 home config.toml。`);
   }
   return parsed;
 }
@@ -202,7 +206,7 @@ export function createConfigService(options: ConfigServiceOptions = {}): ConfigS
 
     if (request) layers.push(layer({ source: 'request' }, request));
 
-    return { layers, warnings: baseline.envPatch.warnings };
+    return { layers, warnings: baseline.warnings };
   }
 
   function snapshot(scope?: ConfigScope, request?: ConfigPatch): EffectiveConfig {
@@ -235,7 +239,7 @@ export function createConfigService(options: ConfigServiceOptions = {}): ConfigS
     get<T = unknown>(path: ConfigPath, scope?: ConfigScope, request?: ConfigPatch): T {
       if (path.startsWith('channels[].')) {
         throw new Error(
-          `Config path ${path} is a field pattern, not a concrete value path; read snapshot().config.channels and select the channel in the caller.`,
+          `配置路径 ${path} 是字段模板，不是具体值路径；请读取 snapshot().config.channels 后在调用方选择具体通道。`,
         );
       }
       return getConfigPath(snapshot(scope, request).config, path) as T;
@@ -243,7 +247,7 @@ export function createConfigService(options: ConfigServiceOptions = {}): ConfigS
     resolve(path: ConfigPath, scope?: ConfigScope, request?: ConfigPatch): ConfigResolveResult {
       if (path.startsWith('channels[].')) {
         throw new Error(
-          `Config path ${path} is a field pattern, not a concrete value path; read snapshot().config.channels and select the channel in the caller.`,
+          `配置路径 ${path} 是字段模板，不是具体值路径；请读取 snapshot().config.channels 后在调用方选择具体通道。`,
         );
       }
       const effective = snapshot(scope, request);

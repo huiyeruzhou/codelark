@@ -69,7 +69,7 @@ export function buildHelpCommandResponse(): string {
     '- `/cd <path>` 替换当前会话工作目录；支持绝对路径、相对路径和 `~`',
     '',
     '**GlobalRuntime 配置**',
-    '- `/set` 查看分组后的全局配置；GlobalRuntime 分为 Codex 与 Claude Code，各自只 fallback 到自己的默认值',
+    '- `/set` 查看分组后的全局配置；GlobalRuntime 分为 Codex 与 Claude Code，各自只回退到自己的默认值',
     '- `/set defaultRuntime codex|claude` 修改新建会话默认 runtime',
     '- `/set defaultModel|defaultMode|codexSandboxMode|codexNetworkAccess|codexReasoningEffort ...` 修改 Codex 默认值',
     '- `/set claudeProvider|claudeExecutable|claudeDefaultModel|claudePermissionMode|claudeIdleTimeoutMinutes ...` 修改 Claude Code 默认值',

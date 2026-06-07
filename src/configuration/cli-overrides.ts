@@ -19,10 +19,10 @@ function collect(value: string, previous: string[]): string[] {
 function requireCliField(path: string): ConfigField {
   const field = findConfigField(path) as ConfigField | undefined;
   if (!field) {
-    throw new InvalidArgumentError(`Unknown config field: ${path}`);
+    throw new InvalidArgumentError(`未知配置字段：${path}`);
   }
   if (!field.scopes.includes('cli')) {
-    throw new InvalidArgumentError(`Config field ${path} cannot be set from CLI.`);
+    throw new InvalidArgumentError(`配置字段 ${path} 不能通过 CLI 设置。`);
   }
   return field;
 }
@@ -58,7 +58,7 @@ function parseValue(field: ConfigField, raw: string): unknown {
     const parsed = field.schema.safeParse(candidate);
     if (parsed.success) return parsed.data;
   }
-  throw new InvalidArgumentError(`Invalid value for ${field.path}: ${raw}`);
+  throw new InvalidArgumentError(`配置字段 ${field.path} 的值不合法：${raw}`);
 }
 
 function setPatchValue(patch: ConfigPatch, path: ConfigPath, value: unknown): void {
@@ -68,7 +68,7 @@ function setPatchValue(patch: ConfigPatch, path: ConfigPath, value: unknown): vo
 function parseSetAssignment(assignment: string, patch: ConfigPatch): void {
   const eqIdx = assignment.indexOf('=');
   if (eqIdx <= 0) {
-    throw new InvalidArgumentError(`Expected --set path=value, received: ${assignment}`);
+    throw new InvalidArgumentError(`--set 需要使用 path=value 格式，实际收到：${assignment}`);
   }
   const path = assignment.slice(0, eqIdx).trim();
   const raw = assignment.slice(eqIdx + 1);
@@ -82,8 +82,8 @@ export function parseConfigCliOverrides(argv: string[]): ParsedConfigCliOverride
     .exitOverride()
     .allowUnknownOption(true)
     .allowExcessArguments(true)
-    .option('--set <path=value>', 'override a config value by canonical path', collect, [])
-    .option('--unset <path>', 'unset a config value by canonical path', collect, []);
+    .option('--set <path=value>', '按 canonical path 临时覆盖配置值', collect, [])
+    .option('--unset <path>', '按 canonical path 临时清除配置值', collect, []);
 
   program.parse(argv, { from: 'user' });
   const options = program.opts() as { set?: string[]; unset?: string[] };

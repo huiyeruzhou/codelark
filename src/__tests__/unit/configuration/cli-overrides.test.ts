@@ -63,11 +63,11 @@ describe('parseConfigCliOverrides', () => {
   it('rejects unknown fields, malformed assignments, and invalid values', () => {
     assert.throws(
       () => parseConfigCliOverrides(['--set', 'runtime.codex.unknown=value']),
-      /Unknown config field: runtime\.codex\.unknown/,
+      /未知配置字段：runtime\.codex\.unknown/,
     );
     assert.throws(
       () => parseConfigCliOverrides(['--set', 'runtime.codex.model']),
-      /Expected --set path=value/,
+      /--set 需要使用 path=value 格式/,
     );
     assert.throws(
       () => parseConfigCliOverrides(['--set', 'runtime.codex.reasoningEffort=extreme']),
@@ -75,7 +75,7 @@ describe('parseConfigCliOverrides', () => {
     );
     assert.throws(
       () => parseConfigCliOverrides(['--set', 'channels[].enabled=true']),
-      /Config field channels\[\]\.enabled cannot be set from CLI/,
+      /配置字段 channels\[\]\.enabled 不能通过 CLI 设置/,
     );
   });
 });

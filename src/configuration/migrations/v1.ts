@@ -9,7 +9,7 @@ import {
 } from './legacy/session-json.js';
 
 // v1 -> v2 迁移：读取 config.json/config.env 和旧 sessions.json 中的配置覆盖，写入统一 TOML。
-// 这里是旧字段语义的集中解释点，避免 legacy fallback 泄漏到运行时模块。
+// 这里是旧字段语义的集中解释点，避免 legacy 回退逻辑泄漏到运行时模块。
 
 type LegacyRuntimeProvider = 'codex' | 'claude';
 type LegacyCodexProvider = 'sdk' | 'tmux' | 'pty';
@@ -147,7 +147,7 @@ function codexYoloMode(value: unknown): 'off' | 'on' | undefined {
 function claudeYoloMode(value: unknown, warnings: string[]): 'off' | 'on' | undefined {
   if (value === 'bypassPermissions' || value === 'on') return 'on';
   if (value === 'default' || value === 'acceptEdits' || value === 'plan' || value === 'off') return 'off';
-  if (value !== undefined) warnings.push(`Ignored invalid legacy Claude permissionMode: ${String(value)}`);
+  if (value !== undefined) warnings.push(`已忽略不合法的旧版 Claude permissionMode：${String(value)}`);
   return undefined;
 }
 
@@ -155,7 +155,7 @@ function claudePermissionMode(value: unknown, warnings: string[]): 'default' | '
   if (value === 'default' || value === 'acceptEdits' || value === 'bypassPermissions' || value === 'plan') return value;
   if (value === 'on') return 'bypassPermissions';
   if (value === 'off') return 'default';
-  if (value !== undefined) warnings.push(`Ignored invalid legacy Claude permissionMode: ${String(value)}`);
+  if (value !== undefined) warnings.push(`已忽略不合法的旧版 Claude permissionMode：${String(value)}`);
   return undefined;
 }
 
@@ -382,7 +382,7 @@ function archiveLegacyInput(filePath: string): string | null {
 
 export const v1ConfigMigration: ConfigMigration = {
   id: 'v1',
-  description: 'Migrate legacy config.json/config.env and session runtime overrides to v2 TOML',
+  description: '迁移旧版 config.json/config.env 和会话 runtime 覆盖到 v2 TOML',
   fromVersion: 1,
   toVersion: 2,
   detect(context) {

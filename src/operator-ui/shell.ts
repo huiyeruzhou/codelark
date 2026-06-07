@@ -269,7 +269,7 @@ export function renderUiShellHtml(): string {
                     </select>
                   </label>
                   <label>
-                    <span class="field-title">Claude 默认模型 <span class="help-tip" tabindex="0" data-tip="只作为 Claude Code runtime 的默认模型；不会 fallback 到 Codex 默认模型。">?</span></span>
+                    <span class="field-title">Claude 默认模型 <span class="help-tip" tabindex="0" data-tip="只作为 Claude Code runtime 的默认模型；不会回退到 Codex 默认模型。">?</span></span>
                     <input id="claudeDefaultModel" placeholder="留空则跟随 Claude Code 默认" />
                   </label>
                   <label>
