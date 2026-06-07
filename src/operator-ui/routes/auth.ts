@@ -2,7 +2,6 @@ import crypto from 'node:crypto';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import os from 'node:os';
 
-import type { Config } from '../../configuration/index.js';
 import type { ConfigV2 } from '../../configuration/schema.js';
 import { accessDeniedStyles, loginStyles } from '../assets.js';
 
@@ -13,7 +12,7 @@ export interface UiAuthState {
   authenticated: boolean;
 }
 
-export type UiAuthConfig = Pick<Config, 'uiAllowLan' | 'uiAccessToken'> | ConfigV2;
+export type UiAuthConfig = ConfigV2;
 
 function json(response: ServerResponse, statusCode: number, body: unknown): void {
   response.writeHead(statusCode, { 'Content-Type': 'application/json; charset=utf-8' });
@@ -111,11 +110,11 @@ function getLanUrls(currentPort: number): string[] {
 }
 
 function uiAllowLan(config: UiAuthConfig): boolean {
-  return 'bridge' in config ? config.bridge.uiAllowLan === true : config.uiAllowLan === true;
+  return config.bridge.uiAllowLan === true;
 }
 
 function uiAccessToken(config: UiAuthConfig): string {
-  return ('bridge' in config ? config.bridge.uiAccessToken : config.uiAccessToken) || '';
+  return config.bridge.uiAccessToken || '';
 }
 
 export function isRemoteAuthenticated(request: IncomingMessage, config: UiAuthConfig): boolean {

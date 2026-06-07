@@ -1,11 +1,8 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 
-import type { Config } from '../../configuration/index.js';
 import type { ConfigV2 } from '../../configuration/schema.js';
 import type { JsonFileStore } from '../../storage/json-store.js';
 import { UiBindingApplication } from '../application/binding.js';
-
-type UiBindingConfig = Config | ConfigV2;
 
 function json(response: ServerResponse, statusCode: number, body: unknown): void {
   response.writeHead(statusCode, { 'Content-Type': 'application/json; charset=utf-8' });
@@ -37,8 +34,8 @@ export async function handleUiBindingRoute(options: {
   response: ServerResponse;
   url: URL;
   createStore: () => JsonFileStore;
-  readConfig: () => UiBindingConfig;
-  buildBindingsPayload: (store: JsonFileStore, config: UiBindingConfig) => Promise<unknown>;
+  readConfig: () => ConfigV2;
+  buildBindingsPayload: (store: JsonFileStore, config: ConfigV2) => Promise<unknown>;
 }): Promise<boolean> {
   const { request, response, url, createStore, readConfig, buildBindingsPayload } = options;
 

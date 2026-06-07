@@ -1,7 +1,4 @@
-import {
-  type Config,
-  type FeishuChannelConfig,
-} from '../../configuration/index.js';
+import { type FeishuChannelConfig } from '../../configuration/index.js';
 import type { ConfigV2 } from '../../configuration/schema.js';
 import {
   type BindingSummary,
@@ -178,7 +175,7 @@ export async function resolveFeishuBindingDisplay(
 
 export async function buildUiBindingsPayload(
   store: JsonFileStore,
-  config: Config | ConfigV2,
+  config: ConfigV2,
   options: { fetchImpl?: FetchLike } = {},
 ) {
   const bindings = listBindingSummaries(store);
