@@ -7,13 +7,10 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import {
   CODELARK_HOME,
-  type Config,
-  type FeishuChannelConfig,
 } from '../configuration/index.js';
 import { parseConfigCliOverrides, type ParsedConfigCliOverrides } from '../configuration/cli-overrides.js';
-import { configV2ToLegacyConfig } from '../configuration/legacy.js';
 import { createConfigService } from '../configuration/service.js';
-import type { ConfigPatch } from '../configuration/schema.js';
+import type { ConfigPatch, ConfigV2 } from '../configuration/schema.js';
 import {
   INSTALLABLE_SKILLS,
   type BridgeStatus,
@@ -111,11 +108,10 @@ async function promptHidden(question: string): Promise<string> {
   });
 }
 
-function hasConfiguredFeishu(config: Config): boolean {
-  return Boolean((config.channels || []).some((channel) => {
+function hasConfiguredFeishu(config: ConfigV2): boolean {
+  return Boolean(config.channels.some((channel) => {
     if (channel.provider !== 'feishu' || channel.enabled === false) return false;
-    const feishu = channel.config as FeishuChannelConfig;
-    return Boolean(feishu.appId && feishu.appSecret);
+    return Boolean(channel.config.appId && channel.config.appSecret);
   }));
 }
 
@@ -124,11 +120,11 @@ function hasConfigPatchValues(patch: ConfigPatch | undefined): boolean {
   return Object.keys(patch).length > 0;
 }
 
-function loadCliEffectiveConfig(cli: ConfigPatch | undefined): Config {
-  return configV2ToLegacyConfig(createConfigService({
+function loadCliEffectiveConfig(cli: ConfigPatch | undefined): ConfigV2 {
+  return createConfigService({
     codelarkHome: CODELARK_HOME,
     ...(hasConfigPatchValues(cli) ? { cli } : {}),
-  }).snapshot().config);
+  }).snapshot().config;
 }
 
 async function runInstallSkillsCommand(args: string[]): Promise<void> {
