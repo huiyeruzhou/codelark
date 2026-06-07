@@ -1321,23 +1321,51 @@ model = "test-model"
       assert.match(adapter.sent.at(-1)?.text || '', /配置已保存/);
       assert.match(adapter.sent.at(-1)?.text || '', /不会影响已经启动的 Codex TUI/);
       assert.match(adapter.sent.at(-1)?.text || '', /\/p tmux/);
-      assert.equal(store.getSession(binding.bridgeSessionId)?.runtime?.codex?.mode, 'yolo');
+      assert.equal(store.getSession(binding.bridgeSessionId)?.runtime?.codex?.mode, 'normal');
+      assert.equal(
+        createConfigService({ migrate: false, env: {} }).get('runtime.codex.yoloMode', {
+          kind: 'session',
+          sessionId: binding.bridgeSessionId,
+        }),
+        'on',
+      );
 
       await _testOnly.handleMessage(adapter, inboundMessage(address, '/net off', 'incoming-runtime-defer-network'));
       assert.match(adapter.sent.at(-1)?.text || '', /已更新 Codex 网络/);
       assert.match(adapter.sent.at(-1)?.text || '', /重启后的后续请求中生效/);
-      assert.equal(store.getSession(binding.bridgeSessionId)?.runtime?.codex?.networkAccess, false);
+      assert.notEqual(store.getSession(binding.bridgeSessionId)?.runtime?.codex?.networkAccess, false);
+      assert.equal(
+        createConfigService({ migrate: false, env: {} }).get('runtime.codex.networkAccess', {
+          kind: 'session',
+          sessionId: binding.bridgeSessionId,
+        }),
+        false,
+      );
 
       await _testOnly.handleMessage(adapter, inboundMessage(address, '/r minimal', 'incoming-runtime-defer-reasoning'));
       assert.match(adapter.sent.at(-1)?.text || '', /已更新思考级别/);
       assert.match(adapter.sent.at(-1)?.text || '', /配置已保存/);
-      assert.equal(store.getSession(binding.bridgeSessionId)?.runtime?.codex?.reasoningEffort, 'minimal');
+      assert.notEqual(store.getSession(binding.bridgeSessionId)?.runtime?.codex?.reasoningEffort, 'minimal');
+      assert.equal(
+        createConfigService({ migrate: false, env: {} }).get('runtime.codex.reasoningEffort', {
+          kind: 'session',
+          sessionId: binding.bridgeSessionId,
+        }),
+        'minimal',
+      );
 
       store.updateSession(binding.bridgeSessionId, { runtime: { codex: { model: 'old-model' } } });
       await _testOnly.handleMessage(adapter, inboundMessage(address, '/model default', 'incoming-runtime-defer-model'));
       assert.match(adapter.sent.at(-1)?.text || '', /已恢复默认模型/);
       assert.match(adapter.sent.at(-1)?.text || '', /配置已保存/);
-      assert.equal(store.getSession(binding.bridgeSessionId)?.runtime?.codex?.model || undefined, undefined);
+      assert.equal(store.getSession(binding.bridgeSessionId)?.runtime?.codex?.model, 'old-model');
+      assert.notEqual(
+        createConfigService({ migrate: false, env: {} }).resolve('runtime.codex.model', {
+          kind: 'session',
+          sessionId: binding.bridgeSessionId,
+        }).source,
+        'session',
+      );
 
       const beforeStopLog = fs.readFileSync(fakeTmux.logPath, 'utf-8');
       await _testOnly.handleMessage(adapter, inboundMessage(address, '/stop', 'incoming-runtime-stop-tmux-mid-turn'));
@@ -1350,7 +1378,14 @@ model = "test-model"
       assert.equal(store.getSession(binding.bridgeSessionId)?.runtime?.codex?.provider, 'sdk');
 
       await _testOnly.handleMessage(adapter, inboundMessage(address, '/m yolo', 'incoming-runtime-mode-yolo'));
-      assert.equal(store.getSession(binding.bridgeSessionId)?.runtime?.codex?.mode, 'yolo');
+      assert.equal(store.getSession(binding.bridgeSessionId)?.runtime?.codex?.mode, 'normal');
+      assert.equal(
+        createConfigService({ migrate: false, env: {} }).get('runtime.codex.yoloMode', {
+          kind: 'session',
+          sessionId: binding.bridgeSessionId,
+        }),
+        'on',
+      );
 
       const yoloThreadId = '019e46bc-f466-71d3-a186-a2ce89051959';
       const yoloTmuxSession = `codex_${yoloThreadId}`;
@@ -1837,18 +1872,39 @@ provider = "tmux"
       assert.match(adapter.sent.at(-1)?.text || '', /已切换模式，请输入\/p pty重启生效/);
       assert.match(adapter.sent.at(-1)?.text || '', /配置已保存/);
       assert.match(adapter.sent.at(-1)?.text || '', /\/provider pty/);
-      assert.equal(store.getSession(binding.bridgeSessionId)?.runtime?.codex?.mode, 'yolo');
+      assert.equal(store.getSession(binding.bridgeSessionId)?.runtime?.codex?.mode, 'normal');
+      assert.equal(
+        createConfigService({ migrate: false, env: {} }).get('runtime.codex.yoloMode', {
+          kind: 'session',
+          sessionId: binding.bridgeSessionId,
+        }),
+        'on',
+      );
 
       await _testOnly.handleMessage(adapter, inboundMessage(address, '/net off', 'incoming-runtime-pty-defer-network'));
       assert.match(adapter.sent.at(-1)?.text || '', /已更新 Codex 网络/);
       assert.match(adapter.sent.at(-1)?.text || '', /不会影响已经启动的 Codex TUI/);
-      assert.equal(store.getSession(binding.bridgeSessionId)?.runtime?.codex?.networkAccess, false);
+      assert.notEqual(store.getSession(binding.bridgeSessionId)?.runtime?.codex?.networkAccess, false);
+      assert.equal(
+        createConfigService({ migrate: false, env: {} }).get('runtime.codex.networkAccess', {
+          kind: 'session',
+          sessionId: binding.bridgeSessionId,
+        }),
+        false,
+      );
 
       await _testOnly.handleMessage(adapter, inboundMessage(address, '/p sdk', 'incoming-runtime-pty-provider-sdk'));
       assert.equal(store.getSession(binding.bridgeSessionId)?.runtime?.codex?.provider, 'sdk');
 
       await _testOnly.handleMessage(adapter, inboundMessage(address, '/m yolo', 'incoming-runtime-pty-mode-yolo'));
-      assert.equal(store.getSession(binding.bridgeSessionId)?.runtime?.codex?.mode, 'yolo');
+      assert.equal(store.getSession(binding.bridgeSessionId)?.runtime?.codex?.mode, 'normal');
+      assert.equal(
+        createConfigService({ migrate: false, env: {} }).get('runtime.codex.yoloMode', {
+          kind: 'session',
+          sessionId: binding.bridgeSessionId,
+        }),
+        'on',
+      );
       store.updateSessionCodexThreadId(binding.bridgeSessionId, '');
       await _testOnly.handleMessage(adapter, inboundMessage(address, '/provider pty', 'incoming-runtime-provider-pty-yolo'));
       assert.equal(store.getSession(binding.bridgeSessionId)?.runtime?.codex?.provider, 'pty');

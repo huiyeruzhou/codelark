@@ -81,7 +81,7 @@ describe('BridgeSession runtime accessors', () => {
     assert.equal(getSessionTmuxSessionName(session), 'nested-tmux');
   });
 
-  it('resolves Claude runtime config from Claude-specific provider state', () => {
+  it('resolves Claude provider identity from JSON but config fields from v2', () => {
     const previousToml = fs.existsSync(configTomlPath) ? fs.readFileSync(configTomlPath, 'utf-8') : null;
     try {
       fs.mkdirSync(CODELARK_HOME, { recursive: true });
@@ -113,9 +113,9 @@ permission_mode = "default"
 
       assert.equal(resolved.provider, 'pty');
       assert.equal(resolved.executable, 'ccr');
-      assert.equal(resolved.model, 'claude-session');
-      assert.equal(resolved.permissionMode, 'plan');
-      assert.equal(resolved.reasoningEffort, 'high');
+      assert.equal(resolved.model, 'claude-global');
+      assert.equal(resolved.permissionMode, 'default');
+      assert.equal(resolved.reasoningEffort, undefined);
     } finally {
       if (previousToml === null) fs.rmSync(configTomlPath, { force: true });
       else fs.writeFileSync(configTomlPath, previousToml, 'utf-8');
@@ -133,7 +133,7 @@ permission_mode = "default"
     assert.equal(resolved.provider, 'sdk');
   });
 
-  it('resolves Codex runtime config from Codex-specific session state only', () => {
+  it('resolves Codex provider identity from JSON but config fields from v2', () => {
     initBridgeTestContext({
       settings: new Map([
         ['remote_bridge_enabled', 'true'],
@@ -166,12 +166,12 @@ permission_mode = "default"
 
     const resolved = resolveSessionRuntimeConfig(null, session);
 
-    assert.equal(resolved.model, 'codex-session');
-    assert.equal(resolved.mode, 'yolo');
+    assert.equal(resolved.model, '');
+    assert.equal(resolved.mode, 'normal');
     assert.equal(resolved.codexProvider, 'tmux');
-    assert.equal(resolved.sandboxMode, 'danger-full-access');
-    assert.equal(resolved.networkAccessEnabled, false);
-    assert.equal(resolved.reasoningEffort, 'high');
+    assert.equal(resolved.sandboxMode, 'workspace-write');
+    assert.equal(resolved.networkAccessEnabled, true);
+    assert.equal(resolved.reasoningEffort, 'medium');
     assert.equal(resolved.skipGitRepoCheck, true);
   });
 

@@ -26,16 +26,8 @@ import { shouldUseCodexPtyTui } from '../../runtime/codex/pty-provider.js';
 import { shouldUseCodexTmuxTui } from '../../runtime/codex/tmux-provider.js';
 import { getBridgeContext } from '../host/context.js';
 import {
-  getSessionCodexModel,
-  getSessionCodexMode,
-  getSessionCodexNetworkAccess,
   getSessionCodexProvider,
-  getSessionCodexReasoningEffort,
-  getSessionCodexSandboxMode,
-  getSessionClaudeModel,
-  getSessionClaudePermissionMode,
   getSessionClaudeProvider,
-  getSessionClaudeReasoningEffort,
   getSessionWorkingDirectory,
 } from '../../domain/session-runtime.js';
 import type { ChannelChat } from '../../domain/channel.js';
@@ -96,7 +88,6 @@ function getSessionTomlOverride<T>(session: BridgeSession | null | undefined, pa
 export function resolveEffectiveReasoningEffort(session: BridgeSession | null | undefined): string {
   return normalizeStoredReasoningEffort(
     getSessionTomlOverride<BridgeSessionCodexRuntimeState['reasoningEffort']>(session, 'runtime.codex.reasoningEffort')
-      || getSessionCodexReasoningEffort(session)
       || getGlobalStringConfig('runtime.codex.reasoningEffort'),
   );
 }
@@ -104,7 +95,6 @@ export function resolveEffectiveReasoningEffort(session: BridgeSession | null | 
 export function resolveEffectiveSandboxMode(session?: BridgeSession | null): string {
   return normalizeSandboxMode(
     getSessionTomlOverride<BridgeSessionCodexRuntimeState['sandboxMode']>(session, 'runtime.codex.sandboxMode')
-      || getSessionCodexSandboxMode(session)
       || getGlobalStringConfig('runtime.codex.sandboxMode'),
   );
 }
@@ -114,21 +104,15 @@ export function resolveEffectiveNetworkAccess(session?: BridgeSession | null): b
   if (typeof tomlValue === 'boolean') {
     return tomlValue;
   }
-  const sessionValue = getSessionCodexNetworkAccess(session);
-  if (typeof sessionValue === 'boolean') {
-    return sessionValue;
-  }
   return getGlobalBooleanConfig('runtime.codex.networkAccess') === true;
 }
 
 export function hasSessionCodexSandboxOverride(session?: BridgeSession | null): boolean {
-  return getSessionTomlOverride<BridgeSessionCodexRuntimeState['sandboxMode']>(session, 'runtime.codex.sandboxMode') !== undefined
-    || getSessionCodexSandboxMode(session) !== undefined;
+  return getSessionTomlOverride<BridgeSessionCodexRuntimeState['sandboxMode']>(session, 'runtime.codex.sandboxMode') !== undefined;
 }
 
 export function hasSessionCodexNetworkAccessOverride(session?: BridgeSession | null): boolean {
-  return getSessionTomlOverride<boolean>(session, 'runtime.codex.networkAccess') !== undefined
-    || typeof getSessionCodexNetworkAccess(session) === 'boolean';
+  return getSessionTomlOverride<boolean>(session, 'runtime.codex.networkAccess') !== undefined;
 }
 
 export type SessionRuntimeCodexProvider = 'sdk' | 'tmux' | 'pty';
@@ -179,7 +163,7 @@ export function resolveEffectiveMode(
     ? 'yolo'
     : tomlMode === 'off'
       ? 'normal'
-      : getSessionCodexMode(session);
+      : undefined;
   const globalMode = getGlobalConfigValue<'off' | 'on'>('runtime.codex.yoloMode');
   return (sessionMode || (globalMode === 'on' ? 'yolo' : 'normal')) === 'yolo'
     ? 'yolo'
@@ -209,7 +193,6 @@ export function resolveSessionRuntimeConfig(
     [sessionRuntimeConfigBrand]: true,
     mode,
     model: getSessionTomlOverride<string>(session, 'runtime.codex.model')
-      || getSessionCodexModel(session)
       || getGlobalStringConfig('runtime.codex.model')
       || '',
     codexProvider: resolveEffectiveCodexProvider(session),
@@ -245,16 +228,13 @@ export function resolveClaudeRuntimeConfig(session?: BridgeSession | null): Clau
     provider: resolveEffectiveClaudeProvider(session),
     executable: normalizeClaudeExecutable(getGlobalStringConfig('runtime.claude.executable')) || 'claude',
     model: getSessionTomlOverride<string>(session, 'runtime.claude.model')
-      || getSessionClaudeModel(session)
       || getGlobalStringConfig('runtime.claude.model')
       || undefined,
     permissionMode: tomlPermissionMode
       || tomlYoloPermissionMode
-      || getSessionClaudePermissionMode(session)
       || normalizeClaudePermissionMode(getGlobalStringConfig('runtime.claude.permissionMode'))
       || 'default',
-    reasoningEffort: getSessionTomlOverride<BridgeSessionClaudeRuntimeState['reasoningEffort']>(session, 'runtime.claude.reasoningEffort')
-      || getSessionClaudeReasoningEffort(session),
+    reasoningEffort: getSessionTomlOverride<BridgeSessionClaudeRuntimeState['reasoningEffort']>(session, 'runtime.claude.reasoningEffort'),
     idleTimeoutMinutes: parsePositiveSettingInt(String(getGlobalConfigValue<number>('runtime.claude.idleTimeoutMinutes') ?? '')),
   };
 }
@@ -266,7 +246,6 @@ export function resolveDisplayedModel(
   codexDefaultModel?: string | null,
 ): string {
   return getSessionTomlOverride<string>(session, 'runtime.codex.model')
-    || getSessionCodexModel(session)
     || configuredDefaultModel
     || codexDefaultModel
     || 'default';

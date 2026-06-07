@@ -32,22 +32,9 @@ import {
 import type { BridgeSession, BridgeStore } from '../../domain/index.js';
 import { parseMode } from '../../shared/security/validators.js';
 import {
-  clearSessionCodexNetworkAccessUpdate,
-  clearSessionCodexSandboxModeUpdate,
   getSessionActiveRuntime,
   getSessionClaudeModel,
-  getSessionCodexNetworkAccess,
-  getSessionCodexModel,
-  getSessionCodexSandboxMode,
   getSessionWorkingDirectory,
-  setSessionClaudeModelUpdate,
-  setSessionClaudePermissionModeUpdate,
-  setSessionClaudeReasoningEffortUpdate,
-  setSessionCodexModeUpdate,
-  setSessionCodexNetworkAccessUpdate,
-  setSessionCodexReasoningEffortUpdate,
-  setSessionCodexSandboxModeUpdate,
-  setSessionWorkingDirectoryUpdate,
 } from '../../domain/session-runtime.js';
 import { getGlobalCodexModel } from '../session/global-config.js';
 import type { ChannelChat, InboundMessage } from '../../domain/index.js';
@@ -86,7 +73,7 @@ const RUNTIME_OPTIONS_TEXT = '可选：`codex`（OpenAI Codex，默认） `claud
 const REASONING_OPTIONS_TEXT = '可选：`1=minimal` `2=low` `3=medium` `4=high` `5=xhigh`';
 const SANDBOX_OPTIONS_TEXT = '可选：`read-only` `workspace-write` `danger-full-access` `default`（回到全局默认）';
 const NETWORK_OPTIONS_TEXT = '可选：`on`/`true` 开启网络，`off`/`false` 关闭网络，`default` 回到全局默认。';
-const CLAUDE_PTY_RUNTIME_UPDATE_NOTE = '已保存为当前 BridgeSession 的 Claude Code 启动配置；如果 Claude Code pty 已经启动，不会向运行中的 TUI 注入切换命令，下一条普通消息会按新参数启动或重启 Claude Code pty。';
+const CLAUDE_PTY_RUNTIME_UPDATE_NOTE = '已保存为当前会话的 Claude Code 启动配置；如果 Claude Code pty 已经启动，不会向运行中的 TUI 注入切换命令，下一条普通消息会按新参数启动或重启 Claude Code pty。';
 const CODEX_RUNTIME_UPDATE_NOTE = '修改从下一轮 Codex 请求开始生效；正在运行的任务请先 `/stop` 后重发。';
 
 function codexRuntimeUpdateNotes(session: BridgeSession | null | undefined, notes: string[] = []): string[] {
@@ -94,7 +81,7 @@ function codexRuntimeUpdateNotes(session: BridgeSession | null | undefined, note
   if (!isTuiProviderSession(session)) return result;
   const provider = resolveEffectiveCodexProvider(session);
   result.push(
-    '当前是 Codex TUI Provider：配置已保存到当前 BridgeSession，但不会影响已经启动的 Codex TUI 终端。',
+    '当前是 Codex TUI Provider：配置已保存到当前会话，但不会影响已经启动的 Codex TUI 终端。',
     provider === 'tmux'
       ? '请先 `/stop`，再发送 `/p tmux` 重启 Codex TUI；新设置会在重启后的后续请求中生效。'
       : '请先 `/stop`，再发送 `/provider pty` 重启 Codex pty Provider；新设置会在重启后的后续请求中生效。',
@@ -270,7 +257,6 @@ export function handleReasoningCommand(options: {
   }
   if (options.args.trim().toLowerCase() === 'default' || options.args.trim().toLowerCase() === 'reset') {
     if (activeRuntime === 'claude') {
-      options.store.updateSession(session.id, setSessionClaudeReasoningEffortUpdate(undefined));
       clearSessionClaudeReasoningToml(session.id);
       return buildCommandFields(
         '已恢复默认 Claude Code 思考级别',
@@ -291,7 +277,6 @@ export function handleReasoningCommand(options: {
   }
   if (activeRuntime === 'claude') {
     const effort = codexReasoningToClaudeEffort(reasoning as CodexReasoningEffort);
-    options.store.updateSession(session.id, setSessionClaudeReasoningEffortUpdate(effort));
     setSessionClaudeReasoningToml(session.id, effort);
     return buildCommandFields(
       '已更新 Claude Code 思考级别',
@@ -300,7 +285,6 @@ export function handleReasoningCommand(options: {
       options.markdown,
     );
   }
-  options.store.updateSession(session.id, setSessionCodexReasoningEffortUpdate(reasoning as CodexReasoningEffort));
   setSessionCodexReasoningToml(session.id, reasoning as CodexReasoningEffort);
   const notes = [REASONING_OPTIONS_TEXT];
   const warning = minimalReasoningWebSearchWarning(reasoning);
@@ -351,7 +335,6 @@ export function handleModeCommand(options: {
   if (activeRuntime === 'claude') {
     const permissionMode = requestedMode === 'yolo' ? 'bypassPermissions' : 'default';
     if (session) {
-      options.store.updateSession(session.id, setSessionClaudePermissionModeUpdate(permissionMode));
       setSessionClaudeYoloModeToml(session.id, requestedMode);
     }
     return buildCommandFields(
@@ -370,7 +353,6 @@ export function handleModeCommand(options: {
     );
   }
   if (session) {
-    options.store.updateSession(session.id, setSessionCodexModeUpdate(requestedMode));
     setSessionCodexYoloModeToml(session.id, requestedMode);
   }
   return buildCommandFields(
@@ -425,7 +407,6 @@ export function handleChangeDirectoryCommand(options: {
   } catch (error) {
     return `切换目录失败：${error instanceof Error ? error.message : String(error)}`;
   }
-  options.store.updateSession(session.id, setSessionWorkingDirectoryUpdate(resolved.workDir));
   setSessionWorkspaceToml(session.id, resolved.workDir);
   return buildCommandFields(
     '已切换工作目录',
@@ -559,7 +540,6 @@ export function handleSandboxCommand(options: {
   }
   const requestedSandbox = options.args.trim().toLowerCase();
   if (requestedSandbox === 'default' || requestedSandbox === 'reset') {
-    options.store.updateSession(session.id, clearSessionCodexSandboxModeUpdate());
     clearSessionCodexSandboxToml(session.id);
     return buildCommandFields(
       '已恢复默认 Codex 沙箱',
@@ -577,7 +557,6 @@ export function handleSandboxCommand(options: {
       options.markdown,
     );
   }
-  options.store.updateSession(session.id, setSessionCodexSandboxModeUpdate(sandboxMode));
   setSessionCodexSandboxToml(session.id, sandboxMode);
   return buildCommandFields(
     '已更新 Codex 沙箱',
@@ -628,7 +607,6 @@ export function handleNetworkCommand(options: {
     );
   }
   if (networkAccess === 'default') {
-    options.store.updateSession(session.id, clearSessionCodexNetworkAccessUpdate());
     clearSessionCodexNetworkAccessToml(session.id);
     return buildCommandFields(
       '已恢复默认 Codex 网络',
@@ -637,7 +615,6 @@ export function handleNetworkCommand(options: {
       options.markdown,
     );
   }
-  options.store.updateSession(session.id, setSessionCodexNetworkAccessUpdate(networkAccess));
   setSessionCodexNetworkAccessToml(session.id, networkAccess);
   return buildCommandFields(
     '已更新 Codex 网络',
@@ -696,7 +673,6 @@ export function handleModelCommand(options: {
       );
     }
     if (requestedModel === 'default') {
-      options.store.updateSession(session.id, setSessionClaudeModelUpdate(undefined));
       clearSessionClaudeModelToml(session.id);
       const updated = options.store.getSession(session.id);
       return buildCommandFields(
@@ -707,7 +683,6 @@ export function handleModelCommand(options: {
       );
     }
 
-    options.store.updateSession(session.id, setSessionClaudeModelUpdate(requestedModel));
     setSessionClaudeModelToml(session.id, requestedModel);
     return buildCommandFields(
       '已更新 Claude Code 模型',
@@ -745,7 +720,6 @@ export function handleModelCommand(options: {
 
   const requestedModel = options.args.trim();
   if (requestedModel === 'default') {
-    options.store.updateSessionModel(session.id, '');
     clearSessionCodexModelToml(session.id);
     const updatedBinding = router.resolve(options.msg.address);
     const updatedSession = options.store.getSession(updatedBinding.bridgeSessionId);
@@ -776,7 +750,6 @@ export function handleModelCommand(options: {
     );
   }
 
-  options.store.updateSessionModel(session.id, selectedModel.slug);
   setSessionCodexModelToml(session.id, selectedModel.slug);
   return buildCommandFields(
     '已更新模型',

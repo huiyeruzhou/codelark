@@ -6,6 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 
 import { CODELARK_HOME, DEFAULT_WORKSPACE_ROOT } from '../../../../configuration/index.js';
+import { createConfigService } from '../../../../configuration/service.js';
 import { JsonFileStore } from '../../../../storage/json-store.js';
 import { getBridgeContext, initBridgeContext } from '../../../../bridge/host/context.js';
 import { _testOnly, start, stop } from '../../../../bridge/host/manager.js';
@@ -1320,10 +1321,14 @@ model = "test-model"
   });
 
   it('resolves the displayed model from the most specific available source', () => {
+    createConfigService({ migrate: false, env: {} }).set(
+      { kind: 'session', sessionId: 's-model' },
+      { runtime: { codex: { model: 'session-model' } } },
+    );
     assert.equal(
       _testOnly.resolveDisplayedModel(
         { model: 'binding-model' } as never,
-        { id: 's-1', runtime: { codex: { model: 'session-model' } } },
+        { id: 's-model', runtime: { codex: { model: 'legacy-session-model' } } },
         'configured-model',
         'codex-default',
       ),
@@ -1332,22 +1337,22 @@ model = "test-model"
     assert.equal(
       _testOnly.resolveDisplayedModel(
         null,
-        { id: 's-1', runtime: { codex: { model: 'session-model' } } },
+        { id: 's-model', runtime: { codex: { model: 'legacy-session-model' } } },
         'configured-model',
         'codex-default',
       ),
       'session-model',
     );
     assert.equal(
-      _testOnly.resolveDisplayedModel(null, { id: 's-1', runtime: { codex: { model: '' } } }, 'configured-model', 'codex-default'),
+      _testOnly.resolveDisplayedModel(null, { id: 's-empty', runtime: { codex: { model: 'legacy-session-model' } } }, 'configured-model', 'codex-default'),
       'configured-model',
     );
     assert.equal(
-      _testOnly.resolveDisplayedModel(null, { id: 's-1', runtime: { codex: { model: '' } } }, null, 'codex-default'),
+      _testOnly.resolveDisplayedModel(null, { id: 's-empty', runtime: { codex: { model: 'legacy-session-model' } } }, null, 'codex-default'),
       'codex-default',
     );
     assert.equal(
-      _testOnly.resolveDisplayedModel(null, { id: 's-1', runtime: { codex: { model: '' } } }, null, null),
+      _testOnly.resolveDisplayedModel(null, { id: 's-empty', runtime: { codex: { model: 'legacy-session-model' } } }, null, null),
       'default',
     );
   });
