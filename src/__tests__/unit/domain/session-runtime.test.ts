@@ -67,9 +67,9 @@ describe('BridgeSession runtime accessors', () => {
 
     assert.equal(getSessionActiveRuntime(session), 'claude');
     assert.equal(getSessionClaudeSessionId(session), 'claude-session');
-    assert.equal(getSessionClaudeModel(session), 'claude-model');
-    assert.equal(getSessionClaudeProvider(session), 'sdk');
-    assert.equal(getSessionClaudePermissionMode(session), 'plan');
+    assert.equal(getSessionClaudeModel(session), undefined);
+    assert.equal(getSessionClaudeProvider(session), undefined);
+    assert.equal(getSessionClaudePermissionMode(session), undefined);
     assert.equal(session.runtime?.codex, undefined);
     assert.equal(getSessionCodexThreadId(session), undefined);
     assert.equal(getSessionCodexModel(session), undefined);

@@ -2682,8 +2682,8 @@ enabled = true
         }),
         'tmux',
       );
-      store.updateSession(session.id, { runtime: { codex: { provider: undefined } } });
-      assert.equal(getSessionCodexProvider(store.getSession(session.id)), undefined);
+      assert.equal(store.getSession(session.id)?.runtime?.codex?.provider, undefined);
+      assert.equal(getSessionCodexProvider(store.getSession(session.id)), 'tmux');
       assert.equal(resolveEffectiveCodexProvider(store.getSession(session.id)), 'tmux');
       const tmuxLog = fs.readFileSync(fakeTmux.logPath, 'utf-8');
       assert.match(tmuxLog, /has-session -t codex_existing/);
@@ -3034,14 +3034,18 @@ enabled = true
     );
 
     const updated = store.getSession(session.id);
-    assert.equal(getSessionClaudePermissionMode(updated), undefined);
-    assert.equal(getSessionClaudeModel(updated), undefined);
-    assert.equal(getSessionClaudeReasoningEffort(updated), undefined);
-    assert.equal(getSessionClaudeProvider(updated), undefined);
+    assert.equal(getSessionClaudePermissionMode(updated), 'bypassPermissions');
+    assert.equal(getSessionClaudeModel(updated), 'sonnet');
+    assert.equal(getSessionClaudeReasoningEffort(updated), 'high');
+    assert.equal(getSessionClaudeProvider(updated), 'sdk');
     assert.equal(getSessionCodexModel(updated), undefined);
     assert.equal(getSessionCodexReasoningEffort(updated), undefined);
     assert.equal(getSessionCodexSandboxMode(updated), undefined);
     assert.equal(updated?.runtime?.codex, undefined);
+    assert.equal(updated?.runtime?.claude?.permissionMode, undefined);
+    assert.equal(updated?.runtime?.claude?.model, undefined);
+    assert.equal(updated?.runtime?.claude?.reasoningEffort, undefined);
+    assert.equal(updated?.runtime?.claude?.provider, undefined);
     assert.equal(
       createConfigService({ migrate: false, env: {} }).get('runtime.claude.yoloMode', {
         kind: 'session',
@@ -3185,7 +3189,7 @@ enabled = true
       assert.doesNotMatch(sent.at(-1)?.text || '', /无法影响/);
 
       await handleBridgeCommand(adapter, { address, text: '/reasoning minimal', messageId: `incoming-${provider}-reasoning` } as any, '/reasoning minimal', deps);
-      assert.equal(getSessionCodexReasoningEffort(store.getSession(session.id)), 'medium');
+      assert.equal(getSessionCodexReasoningEffort(store.getSession(session.id)), 'minimal');
       assert.equal(
         createConfigService({ migrate: false, env: {} }).get('runtime.codex.reasoningEffort', {
           kind: 'session',
@@ -3198,7 +3202,7 @@ enabled = true
       assert.match(sent.at(-1)?.text || '', /配置已保存/);
 
       await handleBridgeCommand(adapter, { address, text: '/sandbox read-only', messageId: `incoming-${provider}-sandbox` } as any, '/sandbox read-only', deps);
-      assert.equal(getSessionCodexSandboxMode(store.getSession(session.id)), 'workspace-write');
+      assert.equal(getSessionCodexSandboxMode(store.getSession(session.id)), 'read-only');
       assert.equal(
         createConfigService({ migrate: false, env: {} }).get('runtime.codex.sandboxMode', {
           kind: 'session',
@@ -3211,7 +3215,7 @@ enabled = true
       assert.match(sent.at(-1)?.text || '', provider === 'tmux' ? /\/p tmux/ : /\/provider pty/);
 
       await handleBridgeCommand(adapter, { address, text: '/network off', messageId: `incoming-${provider}-network` } as any, '/network off', deps);
-      assert.equal(getSessionCodexNetworkAccess(store.getSession(session.id)), true);
+      assert.equal(getSessionCodexNetworkAccess(store.getSession(session.id)), false);
       assert.equal(
         createConfigService({ migrate: false, env: {} }).get('runtime.codex.networkAccess', {
           kind: 'session',
@@ -3244,7 +3248,7 @@ enabled = true
       assert.equal(resolveEffectiveNetworkAccess(store.getSession(session.id)), true);
 
       await handleBridgeCommand(adapter, { address, text: '/model gpt-5.4', messageId: `incoming-${provider}-model-set` } as any, '/model gpt-5.4', deps);
-      assert.equal(getSessionCodexModel(store.getSession(session.id)), 'old-model');
+      assert.equal(getSessionCodexModel(store.getSession(session.id)), 'gpt-5.4');
       assert.equal(
         createConfigService({ migrate: false, env: {} }).get('runtime.codex.model', {
           kind: 'session',
@@ -3262,7 +3266,7 @@ enabled = true
       );
       assert.equal(resolveDisplayedModel(null, store.getSession(session.id), 'fallback-model'), 'old-model');
       await handleBridgeCommand(adapter, { address, text: '/model default', messageId: `incoming-${provider}-model` } as any, '/model default', deps);
-      assert.equal(getSessionCodexModel(store.getSession(session.id)), 'old-model');
+      assert.equal(getSessionCodexModel(store.getSession(session.id)), undefined);
       assert.notEqual(
         createConfigService({ migrate: false, env: {} }).resolve('runtime.codex.model', {
           kind: 'session',
@@ -3278,7 +3282,7 @@ enabled = true
         ...deps,
         reconcileMirrorSubscriptions: async () => {},
       });
-      assert.equal(getSessionCodexProvider(store.getSession(session.id)), undefined);
+      assert.equal(getSessionCodexProvider(store.getSession(session.id)), 'sdk');
       assert.equal(
         createConfigService({ migrate: false, env: {} }).get('runtime.codex.provider', {
           kind: 'session',
@@ -3286,8 +3290,7 @@ enabled = true
         }),
         'sdk',
       );
-      store.updateSession(session.id, { runtime: { codex: { provider: undefined } } });
-      assert.equal(getSessionCodexProvider(store.getSession(session.id)), undefined);
+      assert.equal(store.getSession(session.id)?.runtime?.codex?.provider, undefined);
       assert.equal(resolveEffectiveCodexProvider(store.getSession(session.id)), 'sdk');
       assert.match(sent.at(-1)?.text || '', /已切换 Codex Provider/);
     }

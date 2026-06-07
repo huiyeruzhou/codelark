@@ -8,7 +8,8 @@ import { CODELARK_HOME, DEFAULT_WORKSPACE_ROOT } from '../../../configuration/in
 import { JsonFileStore } from '../../../storage/json-store.js';
 import { initBridgeContext } from '../../../bridge/host/context.js';
 import { createBinding, resolve } from '../../../bridge/host/channel-router.js';
-import { getSessionActiveRuntime, getSessionCodexModel, getSessionWorkingDirectory } from '../../../domain/session-runtime.js';
+import { resolveSessionRuntimeConfig } from '../../../bridge/session/support.js';
+import { getSessionActiveRuntime, getSessionWorkingDirectory } from '../../../domain/session-runtime.js';
 import { writeCodexSessionJsonlFixture } from '../../helpers/bridge/test-bridge-utils.js';
 
 const DATA_DIR = path.join(CODELARK_HOME, 'data');
@@ -256,6 +257,6 @@ describe('channel-router default targets', () => {
     }, workspaceRoot);
     const codexSession = store.getSession(codexBinding.bridgeSessionId);
     assert.equal(getSessionActiveRuntime(codexSession), 'codex');
-    assert.equal(getSessionCodexModel(codexSession), 'toml-codex-model');
+    assert.equal(resolveSessionRuntimeConfig(codexBinding, codexSession).model, 'toml-codex-model');
   });
 });
