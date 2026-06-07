@@ -348,7 +348,7 @@ const SETTING_DEFINITIONS: SettingDefinition[] = [
       if (token === 'tmux' || token === 'pty' || token === 'sdk') {
         return setOp({ runtime: { claude: { provider: token } } });
       }
-      return { ok: false, message: '默认 Claude Provider 必须是 pty 或 sdk，也可以用 default/auto 恢复 sdk 默认。' };
+      return { ok: false, message: '默认 Claude Provider 必须是 tmux、pty 或 sdk，也可以用 default/auto 恢复默认。' };
     },
   },
   {

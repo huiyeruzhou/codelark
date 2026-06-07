@@ -1,11 +1,20 @@
 import '../../../setup/test-setup.js';
-import { describe, it } from 'node:test';
+import { afterEach, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { CODELARK_HOME } from '../../../../configuration/paths.js';
 import { createConfigService } from '../../../../configuration/service.js';
 import { resolveMigrationPaths, runConfigMigrations } from '../../../../configuration/migrations/index.js';
+import { exportRuntimeSettings } from '../../../../runtime/config-projections.js';
+import { JsonFileStore } from '../../../../storage/json-store.js';
+import { initBridgeContext } from '../../../../bridge/host/context.js';
+import { _testOnly, start, stop } from '../../../../bridge/host/manager.js';
+import { BaseChannelAdapter, registerAdapterFactory } from '../../../../channels/contracts.js';
+import type { OutboundMessage, PermissionGateway, SendResult } from '../../../../domain/index.js';
+import type { LifecycleHooks, LLMProvider, StreamChatParams } from '../../../../runtime/contracts.js';
+import type { RuntimeChannelInstance } from '../../../../channels/types.js';
 
 function tempHome(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'codelark-config-v1-e2e-'));
@@ -16,7 +25,101 @@ function writeFile(file: string, content: string): void {
   fs.writeFileSync(file, content, 'utf-8');
 }
 
+const noopLlm: LLMProvider = {
+  streamChat(_params: StreamChatParams): ReadableStream<string> {
+    return new ReadableStream({
+      start(controller) {
+        controller.close();
+      },
+    });
+  },
+};
+
+const noopPermissions: PermissionGateway = {
+  resolvePendingPermission: () => false,
+};
+
+const noopLifecycle: LifecycleHooks = {};
+
+class MigratedConfigAdapter extends BaseChannelAdapter {
+  static startedInstances: RuntimeChannelInstance[] = [];
+  static stoppedInstances: string[] = [];
+
+  readonly channelType: string;
+  readonly provider: string;
+  private running = false;
+  private waiters: Array<(msg: null) => void> = [];
+
+  constructor(private readonly instance: RuntimeChannelInstance) {
+    super();
+    this.channelType = instance.id;
+    this.provider = instance.provider;
+    Object.defineProperty(this, 'alias', {
+      value: instance.alias,
+      configurable: true,
+      enumerable: true,
+      writable: false,
+    });
+  }
+
+  async start(): Promise<void> {
+    this.running = true;
+    MigratedConfigAdapter.startedInstances.push(this.instance);
+  }
+
+  async stop(): Promise<void> {
+    this.running = false;
+    MigratedConfigAdapter.stoppedInstances.push(this.channelType);
+    for (const resolve of this.waiters.splice(0)) {
+      resolve(null);
+    }
+  }
+
+  isRunning(): boolean {
+    return this.running;
+  }
+
+  consumeOne(): Promise<null> {
+    if (!this.running) return Promise.resolve(null);
+    return new Promise((resolve) => {
+      this.waiters.push(resolve);
+    });
+  }
+
+  async send(_message: OutboundMessage): Promise<SendResult> {
+    return { ok: true, messageId: 'migrated-config-adapter-message' };
+  }
+
+  validateConfig(): string | null {
+    const config = this.instance.config as { appId?: string; appSecret?: string };
+    return config.appId && config.appSecret ? null : 'missing migrated app credentials';
+  }
+
+  isAuthorized(): boolean {
+    return true;
+  }
+}
+
+function cleanCodelarkHomeConfig(home: string): void {
+  const paths = resolveMigrationPaths(home);
+  fs.rmSync(paths.homeToml, { force: true });
+  fs.rmSync(paths.legacyConfigJson, { force: true });
+  fs.rmSync(paths.legacyConfigEnv, { force: true });
+  fs.rmSync(`${paths.legacyConfigJson}.migrated-v1`, { force: true });
+  fs.rmSync(`${paths.legacyConfigEnv}.migrated-v1`, { force: true });
+  fs.rmSync(paths.dataSessionsJson, { force: true });
+  fs.rmSync(path.dirname(paths.dataSessionsJson), { recursive: true, force: true });
+  fs.rmSync(path.join(home, 'config'), { recursive: true, force: true });
+  fs.rmSync(path.join(home, 'runtime', 'config-migrations.json'), { force: true });
+  fs.rmSync(paths.backupDir, { recursive: true, force: true });
+}
+
 describe('v1 config migration e2e', () => {
+  afterEach(async () => {
+    await stop();
+    _testOnly.resetStateForTests();
+  });
+
   it('migrates config.json plus newer config.env into config.toml and ignores later config.env edits', () => {
     const home = tempHome();
     try {
@@ -241,6 +344,137 @@ describe('v1 config migration e2e', () => {
       assert.equal(pruned['session-claude']?.runtime_status, 'idle');
     } finally {
       fs.rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it('starts the bridge from v2 config after migrating legacy v1 files', async () => {
+    cleanCodelarkHomeConfig(CODELARK_HOME);
+    MigratedConfigAdapter.startedInstances = [];
+    MigratedConfigAdapter.stoppedInstances = [];
+    registerAdapterFactory('feishu', (instance) => new MigratedConfigAdapter(instance as RuntimeChannelInstance));
+
+    const paths = resolveMigrationPaths(CODELARK_HOME);
+    const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'codelark-v1-v2-runtime-workspace-'));
+    try {
+      writeFile(paths.legacyConfigJson, JSON.stringify({
+        schemaVersion: 1,
+        runtime: {
+          provider: 'claude',
+          codex: {
+            defaultModel: 'legacy-json-model',
+            defaultMode: 'normal',
+            sandboxMode: 'workspace-write',
+            networkAccess: false,
+            reasoningEffort: 'medium',
+          },
+          bridgeControl: {
+            defaultCodexProvider: 'sdk',
+          },
+          bridge: {
+            defaultWorkspaceRoot: workspace,
+            historyMessageLimit: 7,
+            streamStatusIdleStartSeconds: 90,
+            streamStatusCheckIntervalSeconds: 5,
+          },
+        },
+        channels: [{
+          id: 'feishu-default',
+          alias: 'Legacy Feishu',
+          provider: 'feishu',
+          enabled: true,
+          config: {
+            appId: 'json-app',
+            appSecret: 'json-secret',
+            site: 'feishu',
+            allowedUsers: ['json-user'],
+            streamingEnabled: false,
+            feedbackMarkdownEnabled: false,
+            requireMention: true,
+          },
+        }],
+      }, null, 2));
+      writeFile(paths.legacyConfigEnv, [
+        'CODELARK_RUNTIME=codex',
+        'CODELARK_ENABLED_CHANNELS=feishu',
+        'CODELARK_CODEX_DEFAULT_MODEL=env-runtime-model',
+        'CODELARK_DEFAULT_CODEX_PROVIDER=tmux',
+        'CODELARK_CODEX_NETWORK_ACCESS=true',
+        'CODELARK_HISTORY_MESSAGE_LIMIT=11',
+        'CODELARK_STREAM_STATUS_IDLE_START_SECONDS=120',
+        'CODELARK_STREAM_STATUS_CHECK_INTERVAL_SECONDS=12',
+        'CODELARK_FEISHU_APP_ID=env-runtime-app',
+        'CODELARK_FEISHU_APP_SECRET=env-runtime-secret',
+        'CODELARK_FEISHU_SITE=lark',
+        'CODELARK_FEISHU_ALLOWED_USERS=env-user-1,env-user-2',
+        'CODELARK_FEISHU_STREAMING_ENABLED=true',
+        'CODELARK_FEISHU_COMMAND_MARKDOWN_ENABLED=true',
+        'CODELARK_FEISHU_REQUIRE_MENTION=false',
+      ].join('\n'));
+
+      const service = createConfigService({
+        codelarkHome: CODELARK_HOME,
+        env: {},
+        migrationNow: () => new Date('2026-06-07T14:55:00.000Z'),
+      });
+      assert.equal(service.migrationResult?.changed, true);
+      assert.equal(service.migrationResult?.applied[0]?.id, 'v1');
+      assert.equal(fs.existsSync(paths.homeToml), true);
+      assert.equal(fs.existsSync(paths.legacyConfigJson), false);
+      assert.equal(fs.existsSync(paths.legacyConfigEnv), false);
+
+      initBridgeContext({
+        store: new JsonFileStore(exportRuntimeSettings(service.snapshot().config), { dynamicSettings: true }),
+        llm: noopLlm,
+        permissions: noopPermissions,
+        lifecycle: noopLifecycle,
+      });
+
+      await start();
+
+      assert.equal(MigratedConfigAdapter.startedInstances.length, 1);
+      const instance = MigratedConfigAdapter.startedInstances[0]!;
+      assert.equal(instance.id, 'feishu-default');
+      assert.equal(instance.alias, '飞书');
+      assert.equal(instance.enabled, true);
+      assert.deepEqual(instance.config, {
+        historyMessageLimit: 11,
+        streamStatusIdleStartSeconds: 120,
+        streamStatusCheckIntervalSeconds: 12,
+        appId: 'env-runtime-app',
+        appSecret: 'env-runtime-secret',
+        site: 'lark',
+        allowedUsers: ['env-user-1', 'env-user-2'],
+        streamingEnabled: true,
+        feedbackMarkdownEnabled: true,
+        requireMention: false,
+      });
+
+      const runtimeService = createConfigService({ codelarkHome: CODELARK_HOME, env: {}, migrate: false });
+      assert.equal(runtimeService.get('runtime.agent'), 'codex');
+      assert.equal(runtimeService.get('runtime.codex.model'), 'env-runtime-model');
+      assert.equal(runtimeService.get('runtime.codex.provider'), 'tmux');
+      assert.equal(runtimeService.get('runtime.codex.networkAccess'), true);
+      assert.equal(runtimeService.get('bridge.defaultWorkspace'), workspace);
+
+      writeFile(paths.legacyConfigEnv, [
+        'CODELARK_CODEX_DEFAULT_MODEL=must-not-affect-running-v2',
+        'CODELARK_FEISHU_APP_ID=must-not-affect-running-v2',
+      ].join('\n'));
+      await stop();
+      _testOnly.resetStateForTests();
+      await start();
+
+      assert.equal(MigratedConfigAdapter.startedInstances.length, 2);
+      assert.equal(MigratedConfigAdapter.startedInstances[1]?.config.appId, 'env-runtime-app');
+      assert.equal(
+        createConfigService({ codelarkHome: CODELARK_HOME, env: {}, migrate: false }).get('runtime.codex.model'),
+        'env-runtime-model',
+      );
+    } finally {
+      await stop();
+      _testOnly.resetStateForTests();
+      cleanCodelarkHomeConfig(CODELARK_HOME);
+      fs.rmSync(workspace, { recursive: true, force: true });
     }
   });
 });

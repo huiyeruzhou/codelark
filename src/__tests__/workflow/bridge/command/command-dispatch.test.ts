@@ -1396,7 +1396,7 @@ describe('command-dispatch', () => {
     assert.equal(claudePreviewCard?.form?.selects?.some((select) => select.elementId === 'clk_network'), false);
     assert.deepEqual(
       claudePreviewCard?.form?.selects?.find((select) => select.elementId === 'clk_provider')?.options.map((option) => option.text),
-      ['pty', 'sdk'],
+      ['tmux', 'pty', 'sdk'],
     );
     assert.deepEqual(
       parseCommandCallbackData(claudePreviewCard?.form?.submitCallbackData || '')?.commandText,
