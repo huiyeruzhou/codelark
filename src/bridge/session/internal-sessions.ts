@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 import type { BridgeSession, BridgeStore } from '../../domain/index.js';
-import { setSessionCodexModeUpdate } from '../../domain/session-runtime.js';
+import { createConfigService } from '../../configuration/service.js';
 import { getGlobalStringConfig, getGlobalWorkspaceRoot } from './global-config.js';
 
 const TEMPORARY_SESSION_TTL_MS = 24 * 60 * 60 * 1000;
@@ -76,14 +76,13 @@ export function getOrCreateDraftSession(
 
   if (existing) {
     store.updateSession(existing.id, {
-      ...setSessionCodexModeUpdate('normal'),
       expires_at: new Date(Date.now() + TEMPORARY_SESSION_TTL_MS).toISOString(),
     });
     return store.getSession(existing.id) || existing;
   }
 
   const workingDirectory = getDefaultSessionWorkingDirectory(store);
-  return store.createSession(
+  const session = store.createSession(
     expectedName,
     getGlobalStringConfig('runtime.codex.model') || '',
     undefined,
@@ -97,6 +96,13 @@ export function getOrCreateDraftSession(
       activeRuntime: options?.activeRuntime,
     },
   );
+  if (options?.activeRuntime !== 'claude') {
+    createConfigService({ migrate: false }).set(
+      { kind: 'session', sessionId: session.id },
+      { runtime: { codex: { reasoningEffort: 'low' } } },
+    );
+  }
+  return session;
 }
 
 export function resetDraftSession(

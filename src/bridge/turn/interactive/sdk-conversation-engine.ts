@@ -45,7 +45,6 @@ import {
   getSessionCodexThreadId,
   getSessionSystemPrompt,
   getSessionWorkingDirectory,
-  setSessionClaudeModelUpdate,
   setSessionClaudeSessionIdUpdate,
   setSessionClaudeIdentityUpdate,
 } from '../../../domain/session-runtime.js';
@@ -482,12 +481,8 @@ async function consumeStream(
                 });
               }
             }
-            if (statusData.model) {
-              if (activeRuntime === 'claude') {
-                store.updateSession(sessionId, setSessionClaudeModelUpdate(statusData.model));
-              } else {
-                store.updateSessionModel(sessionId, statusData.model);
-              }
+            if (statusData.model && activeRuntime !== 'claude') {
+              store.updateSessionModel(sessionId, statusData.model);
             }
             if (typeof statusData.reasoning === 'string' && onStatusNote) {
               try { onStatusNote(statusData.reasoning); } catch { /* non-critical */ }
@@ -543,12 +538,8 @@ async function consumeStream(
           try {
             const resultData = JSON.parse(event.data);
             if (resultData.usage) tokenUsage = resultData.usage;
-            if (resultData.model) {
-              if (activeRuntime === 'claude') {
-                store.updateSession(sessionId, setSessionClaudeModelUpdate(resultData.model));
-              } else {
-                store.updateSessionModel(sessionId, resultData.model);
-              }
+            if (resultData.model && activeRuntime !== 'claude') {
+              store.updateSessionModel(sessionId, resultData.model);
             }
             if (resultData.usage && onContextUsage) {
               const contextUsage = parseContextUsageInfo({ last_token_usage: resultData.usage });

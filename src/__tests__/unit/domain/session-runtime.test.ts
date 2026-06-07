@@ -7,8 +7,6 @@ import path from 'node:path';
 import { getHistoryMessageLimit, getWorkspaceRoot, resolveClaudeRuntimeConfig, resolveSessionRuntimeConfig } from '../../../bridge/session/support.js';
 import { CODELARK_HOME } from '../../../configuration/index.js';
 import {
-  clearSessionCodexNetworkAccessUpdate,
-  clearSessionCodexSandboxModeUpdate,
   getSessionActiveRuntime,
   getSessionClaudeModel,
   getSessionClaudePermissionMode,
@@ -23,13 +21,7 @@ import {
   getSessionTmuxSessionName,
   materializeBridgeSessionRuntime,
   setSessionActiveRuntimeUpdate,
-  setSessionClaudeModelUpdate,
-  setSessionClaudePermissionModeUpdate,
   setSessionClaudeSessionIdUpdate,
-  setSessionCodexModeUpdate,
-  setSessionCodexNetworkAccessUpdate,
-  setSessionCodexReasoningEffortUpdate,
-  setSessionCodexSandboxModeUpdate,
   setSessionCodexTmuxProviderUpdate,
   setSessionTmuxAutoEnterUpdate,
   setSessionTmuxCaptureLinesUpdate,
@@ -295,14 +287,6 @@ require_mention = false
   it('centralizes update payloads for the runtime storage schema', () => {
     assert.deepEqual(setSessionActiveRuntimeUpdate('claude'), { runtime: { activeRuntime: 'claude' } });
     assert.deepEqual(setSessionClaudeSessionIdUpdate('claude-1'), { runtime: { activeRuntime: 'claude', claude: { sessionId: 'claude-1' } } });
-    assert.deepEqual(setSessionClaudeModelUpdate('sonnet'), { runtime: { activeRuntime: 'claude', claude: { model: 'sonnet' } } });
-    assert.deepEqual(setSessionClaudePermissionModeUpdate('bypassPermissions'), { runtime: { activeRuntime: 'claude', claude: { permissionMode: 'bypassPermissions' } } });
-    assert.deepEqual(setSessionCodexModeUpdate('yolo'), { runtime: { codex: { mode: 'yolo' } } });
-    assert.deepEqual(setSessionCodexReasoningEffortUpdate('high'), { runtime: { codex: { reasoningEffort: 'high' } } });
-    assert.deepEqual(setSessionCodexSandboxModeUpdate('read-only'), { runtime: { codex: { sandboxMode: 'read-only' } } });
-    assert.deepEqual(clearSessionCodexSandboxModeUpdate(), { runtime: { codex: { sandboxMode: undefined } } });
-    assert.deepEqual(setSessionCodexNetworkAccessUpdate(false), { runtime: { codex: { networkAccess: false } } });
-    assert.deepEqual(clearSessionCodexNetworkAccessUpdate(), { runtime: { codex: { networkAccess: undefined } } });
     assert.deepEqual(setSessionCodexTmuxProviderUpdate({
       tmuxSessionName: 'clk-thread',
       autoEnter: true,

@@ -216,10 +216,6 @@ export function materializeBridgeSessionRuntime(rawSession: BridgeSession): Brid
   return materialized;
 }
 
-export function setSessionCodexModeUpdate(mode: BridgeSessionCodexRuntimeState['mode']): BridgeSessionRuntimeUpdate {
-  return { runtime: { codex: { mode } } };
-}
-
 export function setSessionActiveRuntimeUpdate(activeRuntime: BridgeSessionRuntimeState['activeRuntime']): BridgeSessionRuntimeUpdate {
   return { runtime: { activeRuntime } };
 }
@@ -230,10 +226,6 @@ export function setSessionCodexThreadIdUpdate(threadId: string | undefined): Bri
 
 export function setSessionCodexTitleUpdate(title: string | undefined): BridgeSessionRuntimeUpdate {
   return { runtime: { codex: { title } } };
-}
-
-export function setSessionCodexModelUpdate(model: string | undefined): BridgeSessionRuntimeUpdate {
-  return { runtime: { codex: { model } } };
 }
 
 export function setSessionClaudeSessionIdUpdate(sessionId: string | undefined): BridgeSessionRuntimeUpdate {
@@ -247,44 +239,12 @@ export function setSessionClaudeIdentityUpdate(
   return { runtime: { activeRuntime: 'claude', claude: { sessionId, cwd } } };
 }
 
-export function setSessionClaudeModelUpdate(model: string | undefined): BridgeSessionRuntimeUpdate {
-  return { runtime: { activeRuntime: 'claude', claude: { model } } };
-}
-
-export function setSessionClaudePermissionModeUpdate(permissionMode: BridgeSessionClaudeRuntimeState['permissionMode']): BridgeSessionRuntimeUpdate {
-  return { runtime: { activeRuntime: 'claude', claude: { permissionMode } } };
-}
-
-export function setSessionClaudeReasoningEffortUpdate(reasoningEffort: BridgeSessionClaudeRuntimeState['reasoningEffort'] | undefined): BridgeSessionRuntimeUpdate {
-  return { runtime: { activeRuntime: 'claude', claude: { reasoningEffort } } };
-}
-
 export function setSessionWorkingDirectoryUpdate(workingDirectory: string | undefined): BridgeSessionRuntimeUpdate {
   return { runtime: { general: { workingDirectory } } };
 }
 
 export function setSessionSystemPromptUpdate(systemPrompt: string | undefined): BridgeSessionRuntimeUpdate {
   return { runtime: { general: { systemPrompt } } };
-}
-
-export function setSessionCodexReasoningEffortUpdate(reasoningEffort: BridgeSessionCodexRuntimeState['reasoningEffort']): BridgeSessionRuntimeUpdate {
-  return { runtime: { codex: { reasoningEffort } } };
-}
-
-export function setSessionCodexSandboxModeUpdate(sandboxMode: BridgeSessionCodexRuntimeState['sandboxMode']): BridgeSessionRuntimeUpdate {
-  return { runtime: { codex: { sandboxMode } } };
-}
-
-export function clearSessionCodexSandboxModeUpdate(): BridgeSessionRuntimeUpdate {
-  return { runtime: { codex: { sandboxMode: undefined } } };
-}
-
-export function setSessionCodexNetworkAccessUpdate(networkAccess: boolean): BridgeSessionRuntimeUpdate {
-  return { runtime: { codex: { networkAccess } } };
-}
-
-export function clearSessionCodexNetworkAccessUpdate(): BridgeSessionRuntimeUpdate {
-  return { runtime: { codex: { networkAccess: undefined } } };
 }
 
 export function setSessionCodexTmuxProviderUpdate(options: {

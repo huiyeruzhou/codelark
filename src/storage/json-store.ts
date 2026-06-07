@@ -15,12 +15,12 @@ import type {
   UpsertChannelChatInput,
   UpsertChannelDefaultTargetInput,
 } from '../domain/audit.js';
-import type { ChannelChat, ChannelChatMode, ChannelDefaultTarget, ChannelType } from '../domain/channel.js';
+import type { ChannelChat, ChannelDefaultTarget, ChannelType } from '../domain/channel.js';
 import type { BridgeMessage } from '../domain/message.js';
 import type { PermissionLinkInput, PermissionLinkRecord } from '../domain/permission.js';
 import type {
   BridgeSession,
-  BridgeSessionCodexRuntimeState,
+  CodexReasoningEffort,
   BridgeSessionRuntimeState,
   BridgeSessionUpdate,
 } from '../domain/session.js';
@@ -34,7 +34,6 @@ import {
   getSessionClaudeSessionId,
   getSessionCodexThreadId,
   materializeBridgeSessionRuntime,
-  setSessionCodexModelUpdate,
   setSessionCodexThreadIdUpdate,
 } from '../domain/session-runtime.js';
 
@@ -99,12 +98,6 @@ function uuid(): string {
 
 function now(): string {
   return new Date().toISOString();
-}
-
-function normalizeStoredMode(mode: unknown): ChannelChatMode {
-  if (mode === 'yolo') return 'yolo';
-  if (mode === 'normal' || mode === 'code') return 'normal';
-  return 'normal';
 }
 
 function defaultAliasForProvider(provider: string | undefined): string | undefined {
@@ -617,12 +610,12 @@ export class JsonFileStore implements BridgeStore {
 
   createSession(
     name: string,
-    model: string,
+    _model: string,
     systemPrompt?: string,
     cwd?: string,
-    mode?: string,
+    _mode?: string,
     options?: {
-      reasoningEffort?: BridgeSessionCodexRuntimeState['reasoningEffort'];
+      reasoningEffort?: CodexReasoningEffort;
       activeRuntime?: 'codex' | 'claude';
       sessionType?: BridgeSession['session_type'];
       hidden?: boolean;
@@ -644,11 +637,6 @@ export class JsonFileStore implements BridgeStore {
         },
       } : {
         ...(activeRuntime ? { activeRuntime } : {}),
-        codex: {
-          model,
-          mode: normalizeStoredMode(mode || 'normal'),
-          ...(options?.reasoningEffort ? { reasoningEffort: options.reasoningEffort } : {}),
-        },
         general: {
           workingDirectory: cwd || process.cwd(),
           ...(systemPrompt ? { systemPrompt } : {}),
@@ -804,8 +792,9 @@ export class JsonFileStore implements BridgeStore {
     this.updateSession(sessionId, setSessionCodexThreadIdUpdate(codexThreadId || undefined));
   }
 
-  updateSessionModel(sessionId: string, model: string): void {
-    this.updateSession(sessionId, setSessionCodexModelUpdate(model));
+  updateSessionModel(_sessionId: string, _model: string): void {
+    // Runtime-reported model is not session configuration. The config refactor
+    // keeps BridgeSession JSON for identity/status only.
   }
 
   syncSdkTasks(_sessionId: string, _todos: unknown): void {

@@ -319,8 +319,8 @@ describe('UiSessionApplication', () => {
     assert.equal(updated.codexSandboxMode, 'read-only');
     assert.equal(updated.codexNetworkAccess, false);
     const stored = store.getSession(session.id);
-    assert.equal(stored?.runtime?.codex?.model, 'old-model');
-    assert.equal(stored?.runtime?.codex?.mode, 'normal');
+    assert.equal(stored?.runtime?.codex?.model, undefined);
+    assert.equal(stored?.runtime?.codex?.mode, undefined);
     assert.equal(stored?.runtime?.codex?.provider, undefined);
     assert.equal(stored?.runtime?.codex?.reasoningEffort, undefined);
     assert.equal(stored?.runtime?.codex?.sandboxMode, undefined);

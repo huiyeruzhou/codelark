@@ -1234,7 +1234,7 @@ describe('command-dispatch', () => {
     const binding = store.getChannelChat(address.channelType, address.chatId);
     assert.ok(binding);
     const session = binding ? store.getSession(binding.bridgeSessionId) : null;
-    assert.equal(session?.runtime?.codex?.mode, 'normal');
+    assert.equal(session?.runtime?.codex?.mode, undefined);
     assert.equal(session?.session_type, 'normal');
     assert.equal(session?.hidden, true);
     assert.match(sent[0] || '', /已切换到临时 BridgeSession/);
@@ -3661,7 +3661,7 @@ enabled = true
     const binding = store.getChannelChat(address.channelType, adapter.createdGroups.at(-1)!.chatId);
     assert.ok(binding);
     assert.equal(getSessionWorkingDirectory(store.getSession(binding!.bridgeSessionId)), path.join(workspaceRoot, 'set-proj'));
-    assert.equal(store.getSession(binding!.bridgeSessionId)?.runtime?.codex?.mode, 'yolo');
+    assert.equal(store.getSession(binding!.bridgeSessionId)?.runtime?.codex?.mode, undefined);
   });
 
   it('views and updates current Feishu channel group mention requirement with /require-at', async () => {
@@ -3803,7 +3803,7 @@ enabled = true
 
     const forcedBinding = store.getChannelChat(address.channelType, address.chatId);
     assert.notEqual(forcedBinding?.bridgeSessionId, initialBinding.bridgeSessionId);
-    assert.equal(store.getSession(forcedBinding!.bridgeSessionId)?.runtime?.codex?.mode, 'normal');
+    assert.equal(store.getSession(forcedBinding!.bridgeSessionId)?.runtime?.codex?.mode, undefined);
     assert.match(sent.at(-1) || '', /已切换到临时 BridgeSession/);
     assert.ok(readAuditSummaries().some((summary) => (
       summary.includes('Binding change: action=switch_draft')

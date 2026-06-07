@@ -3886,7 +3886,7 @@ describe('channel-router defaults', () => {
     });
     const session = store.getSession(binding.bridgeSessionId);
 
-    assert.equal(session?.runtime?.codex?.mode, 'normal');
+    assert.equal(session?.runtime?.codex?.mode, undefined);
     assert.equal(session?.hidden, true);
     assert.equal(session?.session_type, 'normal');
     assert.equal(session?.name, 'ou_abcdef');

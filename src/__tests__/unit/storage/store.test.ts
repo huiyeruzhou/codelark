@@ -132,7 +132,7 @@ describe('JsonFileStore', () => {
     const store = new JsonFileStore(makeSettings());
     const session = store.createSession('test', 'model-1', 'system prompt', '/tmp');
     assert.ok(session.id);
-    assert.equal(session.runtime?.codex?.model, 'model-1');
+    assert.equal(session.runtime?.codex?.model, undefined);
     assert.equal(getSessionWorkingDirectory(session), '/tmp');
     assert.equal(getSessionSystemPrompt(session), 'system prompt');
 
@@ -140,7 +140,7 @@ describe('JsonFileStore', () => {
     assert.ok(fetched);
     assert.equal(fetched.id, session.id);
     assert.equal(fetched.name, session.name);
-    assert.equal(fetched.runtime?.codex?.model, session.runtime?.codex?.model);
+    assert.equal(fetched.runtime?.codex?.model, undefined);
     assert.equal(getSessionWorkingDirectory(fetched), getSessionWorkingDirectory(session));
     assert.equal(getSessionSystemPrompt(fetched), getSessionSystemPrompt(session));
     assert.equal(fetched.session_type, 'normal');
@@ -883,15 +883,15 @@ describe('JsonFileStore', () => {
     assert.equal(updated?.runtime?.codex?.threadId, 'sdk-123');
   });
 
-  it('updateSessionModel updates model', () => {
+  it('updateSessionModel does not persist runtime-reported model as config', () => {
     const store = new JsonFileStore(makeSettings());
     const session = store.createSession('test', 'model-old', undefined, '/tmp');
     store.updateSessionModel(session.id, 'model-new');
     const updated = store.getSession(session.id);
-    assert.equal(updated?.runtime?.codex?.model, 'model-new');
+    assert.equal(updated?.runtime?.codex?.model, undefined);
   });
 
-  it('createSession stores hidden metadata and reasoning effort', () => {
+  it('createSession stores hidden metadata without session config fields', () => {
     const store = new JsonFileStore(makeSettings());
     const session = store.createSession('draft', 'model', undefined, '/tmp', 'normal', {
       hidden: true,
@@ -904,9 +904,9 @@ describe('JsonFileStore', () => {
     assert.equal(fetched?.hidden, true);
     assert.equal(fetched?.session_type, 'draft');
     assert.equal(fetched?.parent_session_id, 'parent-1');
-    assert.equal(fetched?.runtime?.codex?.reasoningEffort, 'low');
+    assert.equal(fetched?.runtime?.codex?.reasoningEffort, undefined);
     assert.equal(fetched?.expires_at, '2099-01-01T00:00:00.000Z');
-    assert.equal(fetched?.runtime?.codex?.mode, 'normal');
+    assert.equal(fetched?.runtime?.codex?.mode, undefined);
   });
 
   it('materializes session runtime state from legacy top-level storage on read', () => {

@@ -42,7 +42,6 @@ import {
   getSessionWorkingDirectory,
   materializeBridgeSessionRuntime,
   setSessionCodexThreadIdUpdate,
-  setSessionCodexModelUpdate,
 } from '../../../domain/session-runtime.js';
 import type { ChannelChat, ChannelDefaultTarget, ChannelType } from '../../../domain/channel.js';
 
@@ -134,12 +133,13 @@ class InMemoryStore implements BridgeStore {
 
   createSession(
     name: string,
-    model: string,
+    _model: string,
     _sp?: string,
     cwd?: string,
     _mode?: string,
     options?: {
       reasoningEffort?: BridgeSessionCodexRuntimeState['reasoningEffort'];
+      activeRuntime?: 'codex' | 'claude';
       sessionType?: BridgeSession['session_type'];
       hidden?: boolean;
       parentSessionId?: string;
@@ -150,12 +150,13 @@ class InMemoryStore implements BridgeStore {
     const session: BridgeSession = {
       id: `session-${this.nextId++}`,
       name,
-      runtime: {
-        codex: {
-          model,
-          mode: _mode === 'yolo' ? 'yolo' : 'normal',
-          ...(options?.reasoningEffort ? { reasoningEffort: options.reasoningEffort } : {}),
+      runtime: options?.activeRuntime === 'claude' ? {
+        activeRuntime: 'claude',
+        general: {
+          workingDirectory: cwd || '/tmp',
         },
+      } : {
+        ...(options?.activeRuntime === 'codex' ? { activeRuntime: 'codex' as const } : {}),
         general: {
           workingDirectory: cwd || '/tmp',
         },
@@ -207,8 +208,8 @@ class InMemoryStore implements BridgeStore {
       this.updateSession(sessionId, setSessionCodexThreadIdUpdate(codexThreadId || undefined));
     }
   }
-  updateSessionModel(sessionId: string, model: string) {
-    this.updateSession(sessionId, setSessionCodexModelUpdate(model));
+  updateSessionModel(_sessionId: string, _model: string) {
+    // Runtime-reported model is no longer persisted as session config.
   }
   syncSdkTasks() {}
   getProvider() { return undefined; }

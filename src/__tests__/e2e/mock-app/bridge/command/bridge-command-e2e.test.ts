@@ -1350,7 +1350,7 @@ model = "test-model"
       assert.match(adapter.sent.at(-1)?.text || '', /配置已保存/);
       assert.match(adapter.sent.at(-1)?.text || '', /不会影响已经启动的 Codex TUI/);
       assert.match(adapter.sent.at(-1)?.text || '', /\/p tmux/);
-      assert.equal(store.getSession(binding.bridgeSessionId)?.runtime?.codex?.mode, 'normal');
+      assert.equal(store.getSession(binding.bridgeSessionId)?.runtime?.codex?.mode, undefined);
       assert.equal(
         createConfigService({ migrate: false, env: {} }).get('runtime.codex.yoloMode', {
           kind: 'session',
@@ -1408,7 +1408,7 @@ model = "test-model"
       assert.equal(getSessionCodexProviderToml(binding.bridgeSessionId), 'sdk');
 
       await _testOnly.handleMessage(adapter, inboundMessage(address, '/m yolo', 'incoming-runtime-mode-yolo'));
-      assert.equal(store.getSession(binding.bridgeSessionId)?.runtime?.codex?.mode, 'normal');
+      assert.equal(store.getSession(binding.bridgeSessionId)?.runtime?.codex?.mode, undefined);
       assert.equal(
         createConfigService({ migrate: false, env: {} }).get('runtime.codex.yoloMode', {
           kind: 'session',
@@ -1910,7 +1910,7 @@ provider = "tmux"
       assert.match(adapter.sent.at(-1)?.text || '', /已切换模式，请输入\/p pty重启生效/);
       assert.match(adapter.sent.at(-1)?.text || '', /配置已保存/);
       assert.match(adapter.sent.at(-1)?.text || '', /\/provider pty/);
-      assert.equal(store.getSession(binding.bridgeSessionId)?.runtime?.codex?.mode, 'normal');
+      assert.equal(store.getSession(binding.bridgeSessionId)?.runtime?.codex?.mode, undefined);
       assert.equal(
         createConfigService({ migrate: false, env: {} }).get('runtime.codex.yoloMode', {
           kind: 'session',
@@ -1936,7 +1936,7 @@ provider = "tmux"
       assert.equal(getSessionCodexProviderToml(binding.bridgeSessionId), 'sdk');
 
       await _testOnly.handleMessage(adapter, inboundMessage(address, '/m yolo', 'incoming-runtime-pty-mode-yolo'));
-      assert.equal(store.getSession(binding.bridgeSessionId)?.runtime?.codex?.mode, 'normal');
+      assert.equal(store.getSession(binding.bridgeSessionId)?.runtime?.codex?.mode, undefined);
       assert.equal(
         createConfigService({ migrate: false, env: {} }).get('runtime.codex.yoloMode', {
           kind: 'session',
