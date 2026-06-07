@@ -19,7 +19,10 @@ CodeLark 需要把“默认值、全局配置、项目配置、环境变量、�
 
 当前默认配置目录来自 `CODELARK_HOME`，未设置时为 `~/.codelark`。配置逻辑主要分散在：
 
-- `src/configuration/index.ts`：读取 `config.json`，兼容 `config.env`，导出 expanded `Config` 与 runtime settings。
+- `src/configuration/static-loader.ts`：用 `node-config` 合并 defaults/home/local/env/cli 静态 baseline。
+- `src/configuration/sources.ts`：复用 `node-config` TOML parser 读取 defaults/home/local/channel/session TOML，并提供持久化写入。
+- `src/configuration/service.ts`：`ConfigService` 查询、写入、dynamic overlay、provenance/explain 和 projection 入口。
+- `src/configuration/index.ts`：仅作为 legacy expanded `Config` facade；生产代码不应从这里读取配置类型、路径常量或运行时类型。
 - `src/operator-ui/application/config.ts`：UI payload 到 `Config` 的手写 merge。
 - `src/bridge/command/global-settings.ts`：`/set` 写全局配置。
 - `src/bridge/command/runtime-settings.ts`：`/r`、`/mode`、`/sandbox`、`/network`、`/model`、`/cd` 等写当前 BridgeSession。
@@ -133,6 +136,10 @@ src/configuration/
   schema.ts                  # 当前 TOML shape 的 zod 校验、类型、coerce、默认值校验
   fields.ts                  # latest configFields；只服务当前运行时
   fields-types.ts            # ConfigFields / ConfigField 类型定义
+  channel-types.ts           # Channel/Feishu 运行时配置类型和站点解析工具
+  runtime-types.ts           # Codex/Claude runtime 配置类型和轻量 normalizer
+  paths.ts                   # CODELARK_HOME、legacy 输入路径常量和 home path 展开工具
+  index.ts                   # legacy Config facade；生产代码不直接依赖
   static-loader.ts           # node-config 静态 baseline：defaults/home/local/env/cli
   sources.ts                 # 路径解析、Channel/Session TOML 读写和持久化写入
   merge.ts                   # node-config effective merge + provenance/write patch helpers
