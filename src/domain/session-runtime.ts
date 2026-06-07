@@ -6,8 +6,8 @@ import type {
   BridgeSessionGeneralState,
   BridgeSessionRuntimeState,
 } from './session.js';
-import { createConfigService } from '../configuration/service.js';
 import type { ConfigPath } from '../configuration/fields-types.js';
+import { getSessionConfigOverride } from '../configuration/source-values.js';
 
 export type BridgeSessionRuntimeUpdate = BridgeSessionUpdate;
 
@@ -39,13 +39,8 @@ function trimOrUndefined(value: string | null | undefined): string | undefined {
 }
 
 function getSessionTomlOverride<T>(session: SessionRuntimeLike | null | undefined, path: ConfigPath): T | undefined {
-  if (!session?.id) return undefined;
   try {
-    const resolved = createConfigService({ migrate: false }).resolve(path, {
-      kind: 'session',
-      sessionId: session.id,
-    });
-    return resolved.source === 'session' ? resolved.value as T : undefined;
+    return getSessionConfigOverride<T>(session?.id, path);
   } catch {
     return undefined;
   }

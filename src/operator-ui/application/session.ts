@@ -1,6 +1,7 @@
 import MarkdownIt from 'markdown-it';
 
 import { createConfigService } from '../../configuration/service.js';
+import { getSessionConfigOverride } from '../../configuration/source-values.js';
 import type { ConfigPatch } from '../../configuration/schema.js';
 import {
   SessionDisplayQuery,
@@ -24,7 +25,6 @@ import {
   getSessionActiveRuntime,
   getSessionCodexTitle,
   getSessionSystemPrompt,
-  getSessionWorkingDirectory,
   mergeSessionRuntimeUpdates,
   setSessionSystemPromptUpdate,
 } from '../../domain/session-runtime.js';
@@ -117,13 +117,13 @@ function bridgeSessionToSummary(session: BridgeSession): UiSessionSummary {
   return buildBridgeSessionDisplaySummary(session);
 }
 
-function getSessionConfigTomlOverride<T>(session: BridgeSession, path: ConfigPath): T | undefined {
+function getSessionConfigTomlOverride<T>(
+  session: BridgeSession,
+  path: ConfigPath,
+  service = createConfigService({ migrate: false }),
+): T | undefined {
   try {
-    const resolved = createConfigService({ migrate: false }).resolve(path, {
-      kind: 'session',
-      sessionId: session.id,
-    });
-    return resolved.source === 'session' ? resolved.value as T : undefined;
+    return getSessionConfigOverride<T>(session.id, path, service);
   } catch {
     return undefined;
   }
@@ -321,10 +321,12 @@ function sanitizeSessionConfig(payload: Record<string, unknown>): BridgeSessionU
 }
 
 function sessionConfigPayload(session: BridgeSession) {
+  const service = createConfigService({ migrate: false });
+  const getOverride = <T>(path: ConfigPath): T | undefined => getSessionConfigTomlOverride<T>(session, path, service);
   const activeRuntime = getSessionActiveRuntime(session) || 'codex';
-  const codexYoloMode = getSessionConfigTomlOverride<'off' | 'on' | 'yolo'>(session, 'runtime.codex.yoloMode');
-  const claudeYoloMode = getSessionConfigTomlOverride<'off' | 'on' | 'yolo'>(session, 'runtime.claude.yoloMode');
-  const claudePermissionMode = getSessionConfigTomlOverride<string>(session, 'runtime.claude.permissionMode')
+  const codexYoloMode = getOverride<'off' | 'on' | 'yolo'>('runtime.codex.yoloMode');
+  const claudeYoloMode = getOverride<'off' | 'on' | 'yolo'>('runtime.claude.yoloMode');
+  const claudePermissionMode = getOverride<string>('runtime.claude.permissionMode')
     || (claudeYoloMode === 'on' || claudeYoloMode === 'yolo' ? 'bypassPermissions' : claudeYoloMode === 'off' ? 'default' : undefined);
   return {
     id: session.id,
@@ -333,17 +335,17 @@ function sessionConfigPayload(session: BridgeSession) {
     name: session.name ? stripLegacySessionPrefix(session.name) : '',
     codexTitle: getSessionCodexTitle(session) || '',
     title: getBridgeSessionTitle(session),
-    workingDirectory: getSessionWorkingDirectory(session) || '',
-    model: getSessionConfigTomlOverride<string>(session, 'runtime.codex.model') || '',
+    workingDirectory: getOverride<string>('session.workspace') || '',
+    model: getOverride<string>('runtime.codex.model') || '',
     preferredMode: (codexYoloMode === 'on' || codexYoloMode === 'yolo') ? 'yolo' : 'normal',
-    codexProvider: getSessionConfigTomlOverride<string>(session, 'runtime.codex.provider') || '',
+    codexProvider: getOverride<string>('runtime.codex.provider') || '',
     systemPrompt: getSessionSystemPrompt(session) || '',
-    reasoningEffort: getSessionConfigTomlOverride<string>(session, 'runtime.codex.reasoningEffort') || '',
-    codexSandboxMode: getSessionConfigTomlOverride<string>(session, 'runtime.codex.sandboxMode') || '',
-    codexNetworkAccess: getSessionConfigTomlOverride<boolean>(session, 'runtime.codex.networkAccess'),
-    claudeModel: getSessionConfigTomlOverride<string>(session, 'runtime.claude.model') || '',
+    reasoningEffort: getOverride<string>('runtime.codex.reasoningEffort') || '',
+    codexSandboxMode: getOverride<string>('runtime.codex.sandboxMode') || '',
+    codexNetworkAccess: getOverride<boolean>('runtime.codex.networkAccess'),
+    claudeModel: getOverride<string>('runtime.claude.model') || '',
     claudePermissionMode: claudePermissionMode || '',
-    claudeReasoningEffort: getSessionConfigTomlOverride<string>(session, 'runtime.claude.reasoningEffort') || '',
+    claudeReasoningEffort: getOverride<string>('runtime.claude.reasoningEffort') || '',
   };
 }
 

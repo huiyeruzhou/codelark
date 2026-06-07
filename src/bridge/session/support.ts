@@ -9,6 +9,7 @@ import {
 } from '../../runtime/codex/session-index.js';
 import { normalizeClaudeExecutable, type ClaudeExecutable, type ClaudePermissionMode, type ClaudeProviderChoice } from '../../configuration/runtime-types.js';
 import { createConfigService, type ConfigScope, type EffectiveConfig } from '../../configuration/service.js';
+import { getSessionConfigOverride } from '../../configuration/source-values.js';
 import type { ConfigPatch } from '../../configuration/schema.js';
 import type { ConfigV2 } from '../../configuration/schema.js';
 import type { ConfigPath } from '../../configuration/fields-types.js';
@@ -70,15 +71,23 @@ export function getWorkspaceRoot(): string {
 }
 
 function getSessionTomlOverride<T>(session: BridgeSession | null | undefined, path: ConfigPath): T | undefined {
-  if (!session?.id) return undefined;
   try {
-    const resolved = createConfigService({ migrate: false }).resolve(path, {
-      kind: 'session',
-      sessionId: session.id,
-    });
-    return resolved.source === 'session' ? resolved.value as T : undefined;
+    return getSessionConfigOverride<T>(session?.id, path);
   } catch (error) {
-    console.error(`[bridge-manager] Failed to resolve session TOML config ${path} for ${session.id}:`, error);
+    console.error(`[bridge-manager] Failed to resolve session TOML config ${path} for ${session?.id || 'unknown'}:`, error);
+    return undefined;
+  }
+}
+
+function getSessionTomlOverrideWithService<T>(
+  session: BridgeSession | null | undefined,
+  path: ConfigPath,
+  service: ReturnType<typeof createConfigService>,
+): T | undefined {
+  try {
+    return getSessionConfigOverride<T>(session?.id, path, service);
+  } catch (error) {
+    console.error(`[bridge-manager] Failed to resolve session TOML config ${path} for ${session?.id || 'unknown'}:`, error);
     return undefined;
   }
 }
@@ -327,18 +336,20 @@ export function resolveRuntimeMetadataConfig(
 }
 
 export function sessionCodexRuntimeOverridePatch(session: BridgeSession | null | undefined): ConfigPatch {
+  const service = createConfigService({ migrate: false });
+  const getOverride = <T>(path: ConfigPath): T | undefined => getSessionTomlOverrideWithService<T>(session, path, service);
   const codex: NonNullable<NonNullable<ConfigPatch['runtime']>['codex']> = {};
-  const model = getSessionTomlOverride<string>(session, 'runtime.codex.model');
+  const model = getOverride<string>('runtime.codex.model');
   if (model !== undefined) codex.model = model;
-  const yoloMode = getSessionTomlOverride<'off' | 'on' | 'yolo'>(session, 'runtime.codex.yoloMode');
+  const yoloMode = getOverride<'off' | 'on' | 'yolo'>('runtime.codex.yoloMode');
   if (yoloMode !== undefined) codex.yoloMode = yoloMode;
-  const provider = getSessionCodexProviderOverride(session);
-  if (provider !== undefined) codex.provider = provider;
-  const sandboxMode = getSessionTomlOverride<BridgeSessionCodexRuntimeState['sandboxMode']>(session, 'runtime.codex.sandboxMode');
+  const provider = getOverride<SessionRuntimeCodexProvider>('runtime.codex.provider');
+  if (provider === 'sdk' || provider === 'tmux' || provider === 'pty') codex.provider = provider;
+  const sandboxMode = getOverride<BridgeSessionCodexRuntimeState['sandboxMode']>('runtime.codex.sandboxMode');
   if (sandboxMode !== undefined) codex.sandboxMode = sandboxMode;
-  const networkAccess = getSessionTomlOverride<boolean>(session, 'runtime.codex.networkAccess');
+  const networkAccess = getOverride<boolean>('runtime.codex.networkAccess');
   if (networkAccess !== undefined) codex.networkAccess = networkAccess;
-  const reasoningEffort = getSessionTomlOverride<BridgeSessionCodexRuntimeState['reasoningEffort']>(session, 'runtime.codex.reasoningEffort');
+  const reasoningEffort = getOverride<BridgeSessionCodexRuntimeState['reasoningEffort']>('runtime.codex.reasoningEffort');
   if (reasoningEffort !== undefined) codex.reasoningEffort = reasoningEffort;
   return hasKeys(codex) ? { runtime: { codex } } : {};
 }
