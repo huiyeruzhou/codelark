@@ -13,7 +13,7 @@ export {
 } from '../callbacks/agent-question.js';
 
 export type AutoTaskCardAction = 'rm' | 'set1';
-export type ThreadCardScope = 'global' | 'bound' | 'auto' | 'current';
+export type ThreadCardScope = 'global' | 'bound' | 'auto' | 'current' | 'set';
 export type ThreadCardAction = 'switch' | 'archive';
 
 export interface ParsedCommandCallback {

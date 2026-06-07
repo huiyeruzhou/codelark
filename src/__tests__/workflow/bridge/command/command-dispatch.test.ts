@@ -1350,14 +1350,22 @@ describe('command-dispatch', () => {
     assert.deepEqual(card?.sections?.[0]?.fields?.map(([label]) => label), ['类型', '运行状态', '共享镜像']);
     assert.equal(card?.sections?.[0]?.fields?.some(([label]) => label === '目录'), false);
     assert.deepEqual(card?.form?.selects?.map((select) => select.elementId), [
-      'clk_mode',
-      'clk_provider',
-      'clk_reasoning',
-      'clk_sandbox',
-      'clk_network',
+      'defaultMode',
+      'defaultProvider',
+      'codexSandboxMode',
+      'codexNetworkAccess',
+      'codexReasoningEffort',
+    ]);
+    assert.deepEqual(card?.form?.selects?.map((select) => select.label), [
+      '模式 (runtime.codex.yolo_mode)',
+      'Provider (runtime.codex.provider)',
+      '文件系统权限 (runtime.codex.sandbox_mode)',
+      '网络访问 (runtime.codex.network_access)',
+      '思考级别 (runtime.codex.reasoning_effort)',
     ]);
     assert.equal(card?.form?.extraInputs?.find((input) => input.elementId === 'clk_cwd')?.defaultValue, '/tmp/current-card');
-    assert.equal(card?.form?.selects?.some((select) => select.elementId === 'clk_sandbox'), true);
+    assert.equal(card?.form?.extraInputs?.some((input) => input.elementId === 'defaultModel'), true);
+    assert.equal(card?.form?.selects?.some((select) => select.elementId === 'codexSandboxMode'), true);
     assert.equal(getThreadTableMessageRecord(address, 'current')?.messageId, 'reply-1');
     assert.deepEqual(pinned, ['reply-1']);
     assert.deepEqual(unpinned, []);
@@ -1387,11 +1395,22 @@ describe('command-dispatch', () => {
     assert.equal(sent.at(-1)?.richCardUpdateMessageId, 'reply-2');
     assert.equal(sent.at(-1)?.richCard?.selects?.[0]?.selectedCallbackData, buildCommandCallbackData('/current-runtime claude'));
     assert.deepEqual(sent.at(-1)?.richCard?.form?.selects?.map((select: any) => select.elementId), [
-      'clk_mode',
-      'clk_provider',
-      'clk_reasoning',
+      'claudeMode',
+      'claudePermissionMode',
+      'claudeProvider',
+      'claudeReasoningEffort',
     ]);
-    assert.equal(sent.at(-1)?.richCard?.form?.selects?.some((select: any) => select.elementId === 'clk_sandbox'), false);
+    assert.deepEqual(sent.at(-1)?.richCard?.form?.selects?.map((select: any) => select.label), [
+      '模式 (runtime.claude.yolo_mode)',
+      '权限模式 (runtime.claude.permission_mode)',
+      'Provider (runtime.claude.provider)',
+      '思考级别 (runtime.claude.reasoning_effort)',
+    ]);
+    assert.equal(
+      sent.at(-1)?.richCard?.form?.extraInputs?.some((input: any) => input.elementId === 'claudeIdleTimeoutMinutes'),
+      true,
+    );
+    assert.equal(sent.at(-1)?.richCard?.form?.selects?.some((select: any) => select.elementId === 'codexSandboxMode'), false);
     assert.equal(getThreadTableMessageRecord(address, 'current')?.messageId, 'reply-2');
 
     await handleBridgeCommand(adapter, { address, text: '/current runtime claude', messageId: 'incoming-current-card-claude-preview' } as any, '/current runtime claude', deps);
@@ -1399,10 +1418,10 @@ describe('command-dispatch', () => {
     assert.equal(sent.at(-1)?.richCardUpdateMessageId, 'reply-2');
     assert.equal(claudePreviewCard?.tags?.[0], 'claude');
     assert.equal(claudePreviewCard?.selects?.[0]?.selectedCallbackData, buildCommandCallbackData('/current-runtime claude'));
-    assert.equal(claudePreviewCard?.form?.selects?.some((select) => select.elementId === 'clk_sandbox'), false);
-    assert.equal(claudePreviewCard?.form?.selects?.some((select) => select.elementId === 'clk_network'), false);
+    assert.equal(claudePreviewCard?.form?.selects?.some((select) => select.elementId === 'codexSandboxMode'), false);
+    assert.equal(claudePreviewCard?.form?.selects?.some((select) => select.elementId === 'codexNetworkAccess'), false);
     assert.deepEqual(
-      claudePreviewCard?.form?.selects?.find((select) => select.elementId === 'clk_provider')?.options.map((option) => option.text),
+      claudePreviewCard?.form?.selects?.find((select) => select.elementId === 'claudeProvider')?.options.map((option) => option.text),
       ['tmux', 'pty', 'sdk'],
     );
     assert.deepEqual(
@@ -1423,10 +1442,12 @@ describe('command-dispatch', () => {
               form_value: {
                 clk_name: '重命名 Current',
                 clk_cwd: '/tmp/current-card',
-                clk_model: 'test-model',
-                clk_mode: 'normal',
-                clk_provider: 'pty',
-                clk_reasoning: 'medium',
+                claudeDefaultModel: 'test-model',
+                claudeMode: 'yolo',
+                claudePermissionMode: 'plan',
+                claudeProvider: 'pty',
+                claudeReasoningEffort: 'medium',
+                claudeIdleTimeoutMinutes: '15',
               },
             },
           },
@@ -1437,6 +1458,26 @@ describe('command-dispatch', () => {
     );
 
     assert.equal(store.getSession(claudeBinding.bridgeSessionId)?.name, '重命名 Current');
+    assert.equal(createConfigService({ migrate: false, env: {} }).get('runtime.claude.permissionMode', {
+      kind: 'session',
+      sessionId: claudeBinding.bridgeSessionId,
+    }), 'plan');
+    assert.equal(createConfigService({ migrate: false, env: {} }).get('runtime.claude.yoloMode', {
+      kind: 'session',
+      sessionId: claudeBinding.bridgeSessionId,
+    }), 'on');
+    assert.equal(createConfigService({ migrate: false, env: {} }).get('runtime.claude.provider', {
+      kind: 'session',
+      sessionId: claudeBinding.bridgeSessionId,
+    }), 'pty');
+    assert.equal(createConfigService({ migrate: false, env: {} }).get('runtime.claude.model', {
+      kind: 'session',
+      sessionId: claudeBinding.bridgeSessionId,
+    }), 'test-model');
+    assert.equal(createConfigService({ migrate: false, env: {} }).get('runtime.claude.idleTimeoutMinutes', {
+      kind: 'session',
+      sessionId: claudeBinding.bridgeSessionId,
+    }), 15);
     assert.deepEqual(adapter.renamedGroups, [{ chatId: 'chat-current-card', name: '重命名 Current' }]);
     assert.equal(sent.at(-1)?.richCard?.form?.inputDefaultValue, '重命名 Current');
     assert.equal(sent.at(-1)?.richCardUpdateMessageId, 'reply-2');
@@ -1543,10 +1584,11 @@ describe('command-dispatch', () => {
 
       assert.match(sent.at(-1)?.text || '', /runtime.*Claude Code/s);
       assert.match(sent.at(-1)?.text || '', /claude_session_id.*claude-history-session/s);
-      assert.match(sent.at(-1)?.text || '', /Claude permission.*plan/s);
-      assert.match(sent.at(-1)?.text || '', /当前模型.*claude-sonnet-test/s);
+      assert.match(sent.at(-1)?.text || '', /权限模式 .*runtime\.claude\.permission_mode.*plan/s);
+      assert.match(sent.at(-1)?.text || '', /模型 .*runtime\.claude\.model.*claude-sonnet-test/s);
+      assert.match(sent.at(-1)?.text || '', /Provider .*runtime\.claude\.provider/s);
       assert.match(sent.at(-1)?.text || '', /思考级别.*high/s);
-      assert.doesNotMatch(sent.at(-1)?.text || '', /codex-thread-id|Provider.*sdk|Provider.*tmux|文件系统权限|网络访问/s);
+      assert.doesNotMatch(sent.at(-1)?.text || '', /codex-thread-id|文件系统权限|网络访问/s);
       assert.equal(sent.at(-1)?.richCard?.template, 'green');
       assert.deepEqual(sent.at(-1)?.richCard?.tags, ['claude', 'claude-h...ession']);
       assert.equal(sent.at(-1)?.richCard?.selects?.[0]?.id, 'current_runtime_select');
@@ -1556,9 +1598,10 @@ describe('command-dispatch', () => {
       assert.equal(sent.at(-1)?.richCard?.form?.controlBar?.selects, undefined);
       assert.deepEqual(sent.at(-1)?.richCard?.form?.controlBar?.actions?.map((action) => action.text), ['刷新']);
       assert.deepEqual(sent.at(-1)?.richCard?.form?.selects?.map((select) => select.elementId), [
-        'clk_mode',
-        'clk_provider',
-        'clk_reasoning',
+        'claudeMode',
+        'claudePermissionMode',
+        'claudeProvider',
+        'claudeReasoningEffort',
       ]);
 
       await handleBridgeCommand(
@@ -3563,6 +3606,8 @@ enabled = true
     assert.doesNotMatch(sent.at(-1)?.text || '', /channels/);
     assert.equal(sent.at(-1)?.richCard?.title, '全局配置');
     assert.equal(sent.at(-1)?.richCard?.subtitle, '写入 ~/.codelark/config.toml · [runtime.codex]');
+    assert.equal(sent.at(-1)?.richCard?.updateKey, `thread-card:set:${address.channelType}:${address.chatId}`);
+    assert.equal(sent.at(-1)?.richCardUpdateMessageId, undefined);
     assert.equal(sent.at(-1)?.richCard?.form?.submitCallbackData, buildCommandCallbackData('/set --group runtime.codex'));
     assert.equal(sent.at(-1)?.richCard?.form?.layout, 'two_column');
     assert.deepEqual(sent.at(-1)?.richCard?.footer, undefined);
@@ -3576,9 +3621,18 @@ enabled = true
       ['defaultMode', 'defaultProvider', 'codexSkipGitRepoCheck', 'codexSandboxMode'],
     );
     assert.deepEqual(
+      sent.at(-1)?.richCard?.form?.selects?.map((select: any) => select.label).slice(0, 2),
+      ['模式 (runtime.codex.yolo_mode)', 'Provider (runtime.codex.provider)'],
+    );
+    assert.deepEqual(
       sent.at(-1)?.richCard?.form?.extraInputs?.map((input: any) => input.elementId),
       ['defaultModel'],
     );
+    assert.deepEqual(
+      sent.at(-1)?.richCard?.form?.extraInputs?.map((input: any) => input.label),
+      ['模型 (runtime.codex.model)'],
+    );
+    assert.equal(getThreadTableMessageRecord(address, 'set')?.messageId, 'reply-1');
     assert.equal(store.getChannelChat(address.channelType, address.chatId), null);
     assert.equal(store.listSessions().length, 0);
 
@@ -3606,6 +3660,7 @@ enabled = true
     assert.match(sent.at(-1)?.text || '', /已保存全局配置/);
     assert.equal(sent.at(-1)?.richCardUpdateMessageId, 'reply-1');
     assert.equal(sent.at(-1)?.richCard?.title, '全局配置');
+    assert.equal(getThreadTableMessageRecord(address, 'set')?.messageId, 'reply-1');
     assert.equal(createConfigService({ migrate: false, env: {} }).get('runtime.codex.provider'), 'tmux');
     assert.equal(createConfigService({ migrate: false, env: {} }).get('runtime.codex.networkAccess'), false);
 
@@ -3620,8 +3675,11 @@ enabled = true
       deps,
     );
     assert.match(sent.at(-1)?.text || '', /\[runtime\]/);
+    assert.equal(sent.at(-1)?.richCardUpdateMessageId, 'reply-1');
     assert.equal(sent.at(-1)?.richCard?.subtitle, '写入 ~/.codelark/config.toml · [runtime]');
     assert.deepEqual(sent.at(-1)?.richCard?.form?.selects?.map((select: any) => select.elementId), ['runtime']);
+    assert.deepEqual(sent.at(-1)?.richCard?.form?.selects?.map((select: any) => select.label), ['默认运行时 (runtime.agent)']);
+    assert.equal(getThreadTableMessageRecord(address, 'set')?.messageId, 'reply-1');
 
     await handleBridgeCommand(
       adapter,

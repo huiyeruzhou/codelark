@@ -11,12 +11,6 @@ import {
   getFeedbackParseMode,
 } from '../../channels/adapter-runtime/channel-runtime.js';
 import {
-  resolveClaudeRuntimeConfig,
-  resolveEffectiveCodexProvider,
-  resolveEffectiveNetworkAccess,
-  resolveEffectiveReasoningEffort,
-  resolveEffectiveSandboxMode,
-  resolveDisplayedModel,
   getWorkspaceRoot,
 } from '../session/support.js';
 import {
@@ -50,29 +44,31 @@ import {
   handleRuntimeCommand,
   handleSandboxCommand,
   handleUiCommand,
-  formatSessionMode,
 } from './runtime-settings.js';
-import { readConfiguredCodexModel } from '../../runtime/codex/models.js';
 import { handleRequireAtCommand } from './require-at.js';
 import {
+  buildSettingsFields,
   buildSetCommandRichCard,
   handleSetCommand,
   handleSetFormCommand,
+  runtimeSettingDefinitions,
   setCommandSelectedGroup,
+  type SettingDefinition,
 } from './global-settings.js';
 import { buildGlobalStatusResponse } from './status.js';
 import {
   CommandThreadDisplay,
   type ThreadCardScope,
 } from './thread-display.js';
-import { getGlobalCodexModel } from '../session/global-config.js';
 import {
   buildNewSessionFormCard,
 } from './presentation.js';
 import {
   getThreadTableMessageRecord,
   persistAndPinLatestThreadTableMessage,
+  saveThreadTableMessageRecord,
 } from './thread-table-message-pins.js';
+import { createConfigService } from '../../configuration/service.js';
 import { getSessionActiveRuntime, getSessionWorkingDirectory } from '../../domain/session-runtime.js';
 import {
   handleAutoCommand,
@@ -169,6 +165,45 @@ async function deliverCurrentCommandAfterNewSession(options: {
   }
 }
 
+const CURRENT_SETTING_LEGACY_FORM_KEYS: Record<string, string[]> = {
+  defaultModel: ['clk_model', 'model'],
+  defaultMode: ['clk_mode', 'mode'],
+  defaultProvider: ['clk_provider', 'provider'],
+  codexSandboxMode: ['clk_sandbox', 'sandbox'],
+  codexNetworkAccess: ['clk_network', 'network'],
+  codexReasoningEffort: ['clk_reasoning', 'reasoning'],
+  claudeDefaultModel: ['clk_model', 'model'],
+  claudeMode: ['clk_mode', 'mode'],
+  claudePermissionMode: ['clk_permission_mode', 'permissionMode'],
+  claudeProvider: ['clk_provider', 'provider'],
+  claudeReasoningEffort: ['clk_reasoning', 'reasoning'],
+  claudeIdleTimeoutMinutes: ['clk_idle_timeout_minutes', 'idleTimeoutMinutes'],
+};
+
+function currentSettingFormValue(formValue: Record<string, unknown>, settingKey: string): string | undefined {
+  const keys = [settingKey, ...(CURRENT_SETTING_LEGACY_FORM_KEYS[settingKey] || [])];
+  for (const key of keys) {
+    const value = normalizeFormString(formValue[key]);
+    if (value !== undefined) return value;
+  }
+  return undefined;
+}
+
+function formatCurrentConfigWriteError(error: unknown): string {
+  const issues = error && typeof error === 'object' && Array.isArray((error as { issues?: unknown[] }).issues)
+    ? (error as { issues: Array<{ path?: unknown[]; message?: string }> }).issues
+    : [];
+  if (issues.length > 0) {
+    return issues
+      .map((issue) => {
+        const path = Array.isArray(issue.path) && issue.path.length > 0 ? `${issue.path.join('.')}: ` : '';
+        return `${path}${issue.message || '配置字段不合法。'}`;
+      })
+      .join('\n');
+  }
+  return error instanceof Error ? error.message : '配置字段不合法。';
+}
+
 async function handleCurrentConfigFormCommand(options: {
   adapter: BaseChannelAdapter;
   msg: InboundMessage;
@@ -216,7 +251,7 @@ async function handleCurrentConfigFormCommand(options: {
     }
   }
 
-  const claudeConfig = activeRuntime === 'claude' ? resolveClaudeRuntimeConfig(session, binding) : null;
+  const sessionConfigService = createConfigService({ migrate: false });
   const name = normalizeFormString(formValue.clk_name || formValue.name);
   if (name && name !== (session.name || '').trim()) {
     const parsed = validateThreadName(name);
@@ -239,89 +274,36 @@ async function handleCurrentConfigFormCommand(options: {
     }));
   }
 
-  const model = normalizeFormString(formValue.clk_model || formValue.model);
-  const currentModel = activeRuntime === 'claude'
-    ? claudeConfig?.model || 'default'
-    : resolveDisplayedModel(binding, session, getGlobalCodexModel(), readConfiguredCodexModel());
-  if (model && model !== currentModel) {
-    responses.push(handleModelCommand({
-      msg: options.msg,
-      args: model,
-      currentBinding: binding,
-      store: options.store,
-      markdown: options.markdown,
-    }));
-  }
-
-  const mode = normalizeFormString(formValue.clk_mode || formValue.mode);
-  const currentMode = activeRuntime === 'claude'
-    ? (claudeConfig?.permissionMode === 'bypassPermissions' ? 'yolo' : 'normal')
-    : formatSessionMode(binding, session);
-  if (mode && mode !== currentMode) {
-    responses.push(handleModeCommand({
-      msg: options.msg,
-      args: mode,
-      currentBinding: binding,
-      store: options.store,
-      markdown: options.markdown,
-    }));
-  }
-
-  const provider = normalizeFormString(formValue.clk_provider || formValue.provider);
-  const currentProvider = activeRuntime === 'claude'
-    ? (claudeConfig?.provider || 'tmux')
-    : resolveEffectiveCodexProvider(session, binding);
-  if (provider && provider !== currentProvider) {
-    responses.push(await handleProviderCommand({
-      msg: options.msg,
-      args: provider,
-      currentBinding: binding,
-      store: options.store,
-      deps: options.deps,
-      markdown: options.markdown,
-    }));
-  }
-
-  const reasoning = normalizeFormString(formValue.clk_reasoning || formValue.reasoning);
-  const currentReasoning = activeRuntime === 'claude'
-    ? (claudeConfig?.reasoningEffort || 'default')
-    : resolveEffectiveReasoningEffort(session, binding);
-  if (reasoning && reasoning !== currentReasoning) {
-    responses.push(handleReasoningCommand({
-      args: reasoning,
-      binding,
-      store: options.store,
-      markdown: options.markdown,
-    }));
-  }
-
-  if (activeRuntime === 'codex') {
-    const sandbox = normalizeFormString(formValue.clk_sandbox || formValue.sandbox);
-    if (sandbox && sandbox !== resolveEffectiveSandboxMode(session, binding)) {
-      responses.push(handleSandboxCommand({
-        msg: options.msg,
-        args: sandbox,
-        currentBinding: binding,
-        store: options.store,
-        markdown: options.markdown,
-      }));
+  let currentConfig = sessionConfigService.snapshot({ kind: 'session', sessionId: session.id }).config;
+  const updatedSettings: SettingDefinition[] = [];
+  for (const definition of runtimeSettingDefinitions(activeRuntime, { sessionWritableOnly: true })) {
+    const rawValue = currentSettingFormValue(formValue, definition.key);
+    if (rawValue === undefined) continue;
+    const currentValue = definition.read(currentConfig);
+    const normalizedCurrent = currentValue === '-' || currentValue === 'auto' ? '' : currentValue;
+    if (rawValue === normalizedCurrent) continue;
+    const written = definition.write(rawValue, currentConfig);
+    if (!written.ok) {
+      return { response: `${definition.tomlPath} 未更新：${written.message}\n\n用法：${definition.usage}` };
     }
-    const network = normalizeFormString(formValue.clk_network || formValue.network);
-    const currentNetwork = resolveEffectiveNetworkAccess(session, binding) ? 'on' : 'off';
-    if (network && network !== currentNetwork) {
-      responses.push(handleNetworkCommand({
-        msg: options.msg,
-        args: network,
-        currentBinding: binding,
-        store: options.store,
-        markdown: options.markdown,
-      }));
+    try {
+      sessionConfigService.set({ kind: 'session', sessionId: session.id }, written.patch);
+      currentConfig = sessionConfigService.snapshot({ kind: 'session', sessionId: session.id }).config;
+      updatedSettings.push(definition);
+    } catch (error) {
+      return { response: `${definition.tomlPath} 未更新：${formatCurrentConfigWriteError(error)}` };
     }
   }
 
   const refreshedBinding = options.store.getChannelChat(options.msg.address.channelType, options.msg.address.chatId) || binding;
   return {
-    response: responses.length > 0 ? ['已保存当前会话配置。', ...responses].join('\n\n') : '没有检测到需要保存的配置变更。',
+    response: responses.length > 0 || updatedSettings.length > 0
+      ? [
+          '已保存当前会话配置。',
+          ...responses,
+          ...(updatedSettings.length > 0 ? [buildSettingsFields(currentConfig, updatedSettings).map(([label, value]) => `${label}: ${value}`).join('\n')] : []),
+        ].filter(Boolean).join('\n\n')
+      : '没有检测到需要保存的配置变更。',
     richCard: buildCurrentCommandRichCard({
       msg: options.msg,
       binding: refreshedBinding,
@@ -422,6 +404,7 @@ export async function handleBridgeCommand(
   let responseParseMode: 'Markdown' | 'plain' = getFeedbackParseMode(adapter.channelType);
   let auditResponse = true;
   let threadTableCardScope: ThreadCardScope | undefined;
+  let setConfigCard = false;
   let afterDelivery: ((messageId?: string) => Promise<void> | void) | undefined;
   let useCurrentThreadCardUpdateFallback = false;
   let postDeliveryCurrentAddress: ChannelAddress | undefined;
@@ -711,16 +694,19 @@ export async function handleBridgeCommand(
           args,
           formValue,
           markdown: responseParseMode === 'Markdown',
+          address: msg.address,
         });
         response = result.response;
         responseRichCard = result.richCard;
+        setConfigCard = true;
       } else {
         response = handleSetCommand({
           args,
           markdown: responseParseMode === 'Markdown',
         });
         if (!args.trim() || args.trim().startsWith('--group')) {
-          responseRichCard = buildSetCommandRichCard(setCommandSelectedGroup(args));
+          responseRichCard = buildSetCommandRichCard(setCommandSelectedGroup(args), msg.address);
+          setConfigCard = true;
         }
       }
       break;
@@ -960,6 +946,8 @@ export async function handleBridgeCommand(
     const richCardUpdateMessageId = msg.callbackMessageId
       || (useCurrentThreadCardUpdateFallback && threadTableCardScope === 'current'
         ? getThreadTableMessageRecord(msg.address, 'current')?.messageId
+        : setConfigCard
+          ? getThreadTableMessageRecord(msg.address, 'set')?.messageId
         : undefined);
     const result = await deliverBridgeNotice(adapter, responseAddress, response, {
       replyToMessageId: responseAddress.channelType === msg.address.channelType && responseAddress.chatId === msg.address.chatId
@@ -970,7 +958,9 @@ export async function handleBridgeCommand(
       richCardUpdateMessageId,
     });
     const threadCardMessageId = richCardUpdateMessageId || result.messageId;
-    if (result.ok && threadTableCardScope && threadCardMessageId) {
+    if (result.ok && setConfigCard && threadCardMessageId) {
+      saveThreadTableMessageRecord(responseAddress, 'set', threadCardMessageId);
+    } else if (result.ok && threadTableCardScope && threadCardMessageId) {
       await persistAndPinLatestThreadTableMessage(adapter, responseAddress, threadTableCardScope, threadCardMessageId);
     }
     if (result.ok && afterDelivery) {

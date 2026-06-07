@@ -2,7 +2,6 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 import { createConfigService } from '../../configuration/service.js';
-import { readConfiguredCodexModel } from '../../runtime/codex/models.js';
 import { listBindingsForChat } from '../session/registry.js';
 import {
   buildCommandFields,
@@ -37,8 +36,8 @@ import {
   formatDisplayedModel,
   getCodexSessionByThreadIdSafe,
   getHistoryMessageLimit,
-  resolveDisplayedModel,
   resolveClaudeRuntimeConfig,
+  resolveDisplayedModel,
   resolveEffectiveNetworkAccess,
   resolveEffectiveReasoningEffort,
   resolveEffectiveSandboxMode,
@@ -53,6 +52,13 @@ import { getGlobalCodexModel } from '../session/global-config.js';
 import { stripLegacySessionPrefix } from '../session/display/session-title.js';
 import { resolveSessionTranscriptFile } from '../session/transcript-source.js';
 import { buildCommandCallbackData, buildThreadCardUpdateKey } from './callbacks.js';
+import {
+  runtimeSettingDefinitions,
+  settingFormLabel,
+  settingFormInput,
+  settingFormSelect,
+} from './global-settings.js';
+import { readConfiguredCodexModel } from '../../runtime/codex/models.js';
 
 function parseHistoryLimitArg(raw: string): number | null {
   const token = raw.trim();
@@ -85,6 +91,47 @@ function currentThreadTagValue(threadId: string): string {
 
 function formatHistoryLimitLabel(limit: number, configuredLimit: number): string {
   return limit === configuredLimit ? `配置 ${configuredLimit}` : `本次 ${limit}（配置 ${configuredLimit}）`;
+}
+
+function currentRuntimeFieldLabel(runtime: 'codex' | 'claude', settingKey: string): string {
+  const definition = runtimeSettingDefinitions(runtime, { sessionWritableOnly: true })
+    .find((entry) => entry.key === settingKey);
+  return definition ? settingFormLabel(definition) : settingKey;
+}
+
+function currentRuntimeFields(
+  runtime: 'codex' | 'claude',
+  binding: ChannelChat,
+  session: BridgeSession,
+): Array<[string, string]> {
+  if (runtime === 'claude') {
+    const claudeConfig = resolveClaudeRuntimeConfig(session, binding);
+    const yoloMode = createConfigService({ migrate: false })
+      .get<'off' | 'on' | 'yolo'>('runtime.claude.yoloMode', { kind: 'session', sessionId: session.id });
+    return [
+      [currentRuntimeFieldLabel('claude', 'claudeDefaultModel'), claudeConfig.model || 'default'],
+      [currentRuntimeFieldLabel('claude', 'claudeMode'), yoloMode === 'on' || yoloMode === 'yolo' ? 'yolo' : 'normal'],
+      [currentRuntimeFieldLabel('claude', 'claudePermissionMode'), claudeConfig.permissionMode || 'default'],
+      [currentRuntimeFieldLabel('claude', 'claudeProvider'), claudeConfig.provider || 'tmux'],
+      [currentRuntimeFieldLabel('claude', 'claudeReasoningEffort'), claudeConfig.reasoningEffort || 'default'],
+      [currentRuntimeFieldLabel('claude', 'claudeIdleTimeoutMinutes'), `${claudeConfig.idleTimeoutMinutes ?? 0}`],
+    ];
+  }
+
+  const currentModel = resolveDisplayedModel(
+    binding,
+    session,
+    getGlobalCodexModel(),
+    readConfiguredCodexModel(),
+  );
+  return [
+    [currentRuntimeFieldLabel('codex', 'defaultModel'), formatDisplayedModel(currentModel)],
+    [currentRuntimeFieldLabel('codex', 'defaultMode'), formatSessionMode(binding, session)],
+    [currentRuntimeFieldLabel('codex', 'defaultProvider'), formatSessionCodexProvider(session, binding)],
+    [currentRuntimeFieldLabel('codex', 'codexSandboxMode'), resolveEffectiveSandboxMode(session, binding)],
+    [currentRuntimeFieldLabel('codex', 'codexNetworkAccess'), formatNetworkAccess(resolveEffectiveNetworkAccess(session, binding))],
+    [currentRuntimeFieldLabel('codex', 'codexReasoningEffort'), formatReasoningEffort(resolveEffectiveReasoningEffort(session, binding))],
+  ];
 }
 
 export interface DiagnosticsCommandDeps {
@@ -239,36 +286,11 @@ export function handleCurrentCommand(options: {
     || (codexThreadId ? getCodexSessionByThreadIdSafe(codexThreadId, 'current codex title')?.title : '')
     || '';
   const sessionName = session.name?.trim() ? stripLegacySessionPrefix(session.name) : '';
-  const claudeConfig = activeRuntime === 'claude' ? resolveClaudeRuntimeConfig(session, binding) : null;
-  const sandboxMode = activeRuntime === 'claude' ? '' : resolveEffectiveSandboxMode(session, binding);
-  const networkAccess = activeRuntime === 'claude' ? undefined : resolveEffectiveNetworkAccess(session, binding);
-  const reasoningEffort = activeRuntime === 'claude' ? '' : resolveEffectiveReasoningEffort(session, binding);
-  const currentModel = activeRuntime === 'claude'
-    ? claudeConfig?.model || 'default'
-    : resolveDisplayedModel(
-      binding,
-      session,
-      getGlobalCodexModel(),
-      readConfiguredCodexModel(),
-    );
   const chatBindingCount = listBindingsForChat(options.store, options.msg.address.channelType, options.msg.address.chatId).length;
   const sessionKind = session?.session_type === 'draft'
     ? '临时草稿线程'
     : '普通会话';
-  const runtimeFields: Array<[string, string]> = activeRuntime === 'claude'
-    ? [
-        ['Claude permission', claudeConfig?.permissionMode || 'default'],
-        ['当前模型', currentModel],
-        ['思考级别', claudeConfig?.reasoningEffort || 'default'],
-      ]
-    : [
-        ['模式', formatSessionMode(binding, session)],
-        ['Provider', formatSessionCodexProvider(session, binding)],
-        ['当前模型', formatDisplayedModel(currentModel)],
-        ['文件系统权限', sandboxMode],
-        ['网络访问', formatNetworkAccess(networkAccess ?? false)],
-        ['思考级别', formatReasoningEffort(reasoningEffort)],
-      ];
+  const runtimeFields = currentRuntimeFields(activeRuntime, binding, session);
   return buildCommandFields(
     options.previewRuntime ? `当前会话（配置 ${activeRuntime === 'claude' ? 'Claude Code' : 'Codex'}）` : '当前会话',
     [
@@ -326,10 +348,14 @@ export function buildCurrentCommandRichCard(options: {
     || (codexThreadId ? getCodexSessionByThreadIdSafe(codexThreadId, 'current card codex title')?.title : '')
     || '';
   const sessionName = session.name?.trim() ? stripLegacySessionPrefix(session.name) : '';
-  const claudeConfig = activeRuntime === 'claude' ? resolveClaudeRuntimeConfig(session, binding) : null;
-  const currentModel = activeRuntime === 'claude'
-    ? claudeConfig?.model || 'default'
-    : resolveDisplayedModel(binding, session, getGlobalCodexModel(), readConfiguredCodexModel());
+  const runtimeConfig = createConfigService({ migrate: false }).snapshot({ kind: 'session', sessionId: session.id }).config;
+  const runtimeDefinitions = runtimeSettingDefinitions(activeRuntime, { sessionWritableOnly: true });
+  const formSelects = runtimeDefinitions
+    .filter((definition) => definition.control === 'select')
+    .map((definition) => settingFormSelect(definition, runtimeConfig));
+  const runtimeInputs = runtimeDefinitions
+    .filter((definition) => definition.control === 'input')
+    .map((definition) => settingFormInput(definition, runtimeConfig));
   const statusColor = session.runtime_status === 'running' || session.runtime_status === 'queued' ? 'yellow' : 'green';
   const mirrorColor = session.mirror_status === 'watching' ? 'blue' : 'grey';
   const sessionKind = session.session_type === 'draft' ? '临时草稿线程' : '普通会话';
@@ -342,99 +368,6 @@ export function buildCurrentCommandRichCard(options: {
       { text: 'Claude Code', callbackData: buildCommandCallbackData('/current-runtime claude') },
     ],
   };
-  const formSelects: NonNullable<NonNullable<OutboundRichCard['form']>['selects']> = activeRuntime === 'claude'
-    ? [
-      {
-        elementId: 'clk_mode',
-        label: 'permission',
-        placeholder: claudeConfig?.permissionMode || 'default',
-        selectedCallbackData: claudeConfig?.permissionMode === 'bypassPermissions' ? 'yolo' : 'normal',
-        options: [
-          { text: 'normal', callbackData: 'normal' },
-          { text: 'yolo', callbackData: 'yolo' },
-        ],
-      },
-      {
-        elementId: 'clk_provider',
-        label: 'provider',
-        placeholder: 'tmux/pty/sdk',
-        selectedCallbackData: claudeConfig?.provider || 'tmux',
-        options: [
-          { text: 'tmux', callbackData: 'tmux' },
-          { text: 'pty', callbackData: 'pty' },
-          { text: 'sdk', callbackData: 'sdk' },
-        ],
-      },
-      {
-        elementId: 'clk_reasoning',
-        label: 'reasoning',
-        placeholder: claudeConfig?.reasoningEffort || 'default',
-        selectedCallbackData: claudeConfig?.reasoningEffort || '',
-        options: [
-          { text: 'default', callbackData: 'default' },
-          { text: 'low', callbackData: 'low' },
-          { text: 'medium', callbackData: 'medium' },
-          { text: 'high', callbackData: 'high' },
-          { text: 'xhigh', callbackData: 'xhigh' },
-        ],
-      },
-    ]
-    : [
-      {
-        elementId: 'clk_mode',
-        label: 'mode',
-        placeholder: formatSessionMode(binding, session),
-      selectedCallbackData: formatSessionMode(binding, session),
-        options: [
-          { text: 'normal', callbackData: 'normal' },
-          { text: 'yolo', callbackData: 'yolo' },
-        ],
-      },
-    {
-      elementId: 'clk_provider',
-      label: 'provider',
-      placeholder: 'sdk/pty/tmux',
-      selectedCallbackData: formatSessionCodexProvider(session, binding),
-      options: [{ text: 'sdk', callbackData: 'sdk' }, { text: 'pty', callbackData: 'pty' }, { text: 'tmux', callbackData: 'tmux' }],
-    },
-    {
-      elementId: 'clk_reasoning',
-      label: 'reasoning',
-      placeholder: resolveEffectiveReasoningEffort(session, binding),
-      selectedCallbackData: resolveEffectiveReasoningEffort(session, binding),
-      options: [
-        { text: 'default', callbackData: 'default' },
-        { text: 'low', callbackData: 'low' },
-        { text: 'medium', callbackData: 'medium' },
-        { text: 'high', callbackData: 'high' },
-        { text: 'xhigh', callbackData: 'xhigh' },
-      ],
-    },
-    {
-      elementId: 'clk_sandbox',
-      label: 'sandbox',
-      placeholder: resolveEffectiveSandboxMode(session, binding),
-      selectedCallbackData: resolveEffectiveSandboxMode(session, binding),
-      options: [
-        { text: 'default', callbackData: 'default' },
-        { text: 'read-only', callbackData: 'read-only' },
-        { text: 'workspace-write', callbackData: 'workspace-write' },
-        { text: 'danger-full-access', callbackData: 'danger-full-access' },
-      ],
-    },
-    {
-      elementId: 'clk_network',
-      label: 'network',
-      placeholder: formatNetworkAccess(resolveEffectiveNetworkAccess(session, binding)),
-      selectedCallbackData: resolveEffectiveNetworkAccess(session, binding) ? 'on' : 'off',
-      options: [
-        { text: 'default', callbackData: 'default' },
-        { text: 'on', callbackData: 'on' },
-        { text: 'off', callbackData: 'off' },
-      ],
-    },
-  ];
-
   return {
     title: `${runtimeLabel} ${activeRuntime === 'claude' ? threadInfo.title : codexTitle || threadInfo.title}`,
     subtitle: runtimeThreadId ? `${activeRuntime}_thread_id: ${runtimeThreadId}` : `${runtimeLabel} thread id 未绑定`,
@@ -454,7 +387,7 @@ export function buildCurrentCommandRichCard(options: {
     form: {
       optionElementId: 'clk_current_option',
       inputElementId: 'clk_name',
-      inputLabel: 'name',
+      inputLabel: '会话名',
       inputPlaceholder: '等同 /t rename；留空表示不修改',
       inputDefaultValue: sessionName,
       layout: 'two_column',
@@ -467,16 +400,11 @@ export function buildCurrentCommandRichCard(options: {
       extraInputs: [
         {
           elementId: 'clk_cwd',
-          label: 'cwd',
+          label: '工作目录 (session.workspace)',
           placeholder: '等同 /cd；留空表示不修改',
           defaultValue: getSessionWorkingDirectory(session) || '',
         },
-        {
-          elementId: 'clk_model',
-          label: 'model',
-          placeholder: '等同 /model；留空表示不修改',
-          defaultValue: currentModel === 'default' ? '' : currentModel,
-        },
+        ...runtimeInputs,
       ],
       submitText: '保存',
       submitCallbackData: buildCommandCallbackData(`/current-config ${activeRuntime}`),

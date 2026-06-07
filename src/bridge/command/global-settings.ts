@@ -2,15 +2,16 @@ import { parseSandboxMode } from '../../runtime/options.js';
 import { createConfigService } from '../../configuration/service.js';
 import type { ChannelConfigV2, ConfigPatch, ConfigV2 } from '../../configuration/schema.js';
 import { normalizeReasoningEffort } from './aliases.js';
-import { buildCommandCallbackData } from './callbacks.js';
+import { buildCommandCallbackData, buildThreadCardUpdateKey } from './callbacks.js';
 import {
   buildCommandFields,
   formatReasoningEffort,
   minimalReasoningWebSearchWarning,
 } from './presentation.js';
 import type { OutboundRichCard } from '../../domain/index.js';
+import type { ChannelAddress } from '../../domain/index.js';
 
-type SettingGroupKey = 'runtime' | 'runtime.codex' | 'runtime.claude' | 'bridge' | 'channels.feishu';
+export type SettingGroupKey = 'runtime' | 'runtime.codex' | 'runtime.claude' | 'bridge' | 'channels.feishu';
 type SettingControl = 'select' | 'input';
 
 interface SettingGroupDefinition {
@@ -24,7 +25,7 @@ interface SettingWriteOk {
   patch: ConfigPatch;
 }
 
-interface SettingDefinition {
+export interface SettingDefinition {
   key: string;
   tomlPath: string;
   group: SettingGroupKey;
@@ -37,6 +38,34 @@ interface SettingDefinition {
   read(config: ConfigV2): string;
   write(rawValue: string, current: ConfigV2): SettingWriteOk | { ok: false; message: string };
 }
+
+const SETTING_DISPLAY_LABELS: Record<string, string> = {
+  runtime: '默认运行时',
+  defaultModel: '模型',
+  defaultMode: '模式',
+  defaultProvider: 'Provider',
+  codexSkipGitRepoCheck: '跳过 Git 仓库检查',
+  codexSandboxMode: '文件系统权限',
+  codexNetworkAccess: '网络访问',
+  codexReasoningEffort: '思考级别',
+  claudeDefaultModel: '模型',
+  claudeMode: '模式',
+  claudeProvider: 'Provider',
+  claudeExecutable: 'Claude 命令',
+  claudePermissionMode: '权限模式',
+  claudeReasoningEffort: '思考级别',
+  claudeIdleTimeoutMinutes: '空闲超时（分钟）',
+  defaultWorkspaceRoot: '默认工作目录',
+  uiAllowLan: '允许局域网访问 UI',
+  uiAccessToken: 'UI 访问令牌',
+  historyMessageLimit: '历史消息条数',
+  streamStatusIdleStartSeconds: '流式状态空闲提示秒数',
+  streamStatusCheckIntervalSeconds: '流式状态检查间隔秒数',
+  streamingEnabled: '启用流式反馈',
+  feedbackMarkdownEnabled: '启用 Markdown 反馈',
+  requireMention: '群聊需要 @bot',
+  groupAuthorized: '群聊已授权',
+};
 
 const SETTING_GROUPS: SettingGroupDefinition[] = [
   {
@@ -288,6 +317,23 @@ const SETTING_DEFINITIONS: SettingDefinition[] = [
     placeholder: '留空则跟随 Claude Code 默认',
     read: (config) => config.runtime.claude.model || '-',
     write: writeStringPatch((value) => ({ runtime: { claude: { model: value } } })),
+  },
+  {
+    key: 'claudeMode',
+    tomlPath: 'runtime.claude.yolo_mode',
+    group: 'runtime.claude',
+    aliases: ['claudeYoloMode', 'claudeMode'],
+    label: 'yolo_mode',
+    usage: '/set claudeMode normal|yolo',
+    control: 'select',
+    options: [selectOption('normal'), selectOption('yolo')],
+    read: (config) => config.runtime.claude.yoloMode === 'on' || config.runtime.claude.yoloMode === 'yolo' ? 'yolo' : 'normal',
+    write(rawValue) {
+      const token = rawValue.trim().toLowerCase();
+      if (token === 'normal' || token === 'code' || token === 'off') return patch({ runtime: { claude: { yoloMode: 'off' } } });
+      if (token === 'yolo' || token === 'on') return patch({ runtime: { claude: { yoloMode: 'on' } } });
+      return { ok: false, message: 'Claude 模式必须是 normal 或 yolo。' };
+    },
   },
   {
     key: 'claudeProvider',
@@ -542,8 +588,74 @@ function findGroup(raw: string): SettingGroupDefinition | undefined {
   return SETTING_GROUPS.find((group) => group.key === token || group.title.toLowerCase() === token);
 }
 
+const CURRENT_RUNTIME_SETTING_KEYS: Record<'codex' | 'claude', string[]> = {
+  codex: [
+    'defaultModel',
+    'defaultMode',
+    'defaultProvider',
+    'codexSandboxMode',
+    'codexNetworkAccess',
+    'codexReasoningEffort',
+  ],
+  claude: [
+    'claudeDefaultModel',
+    'claudeMode',
+    'claudePermissionMode',
+    'claudeProvider',
+    'claudeReasoningEffort',
+    'claudeIdleTimeoutMinutes',
+  ],
+};
+
+const SETTING_GROUP_ORDERS: Partial<Record<SettingGroupKey, string[]>> = {
+  'runtime.codex': [
+    'defaultModel',
+    'defaultMode',
+    'defaultProvider',
+    'codexSkipGitRepoCheck',
+    'codexSandboxMode',
+    'codexNetworkAccess',
+    'codexReasoningEffort',
+  ],
+  'runtime.claude': [
+    'claudeDefaultModel',
+    'claudeMode',
+    'claudePermissionMode',
+    'claudeProvider',
+    'claudeExecutable',
+    'claudeReasoningEffort',
+    'claudeIdleTimeoutMinutes',
+  ],
+};
+
 function groupDefinitions(groupKey: SettingGroupKey): SettingDefinition[] {
-  return SETTING_DEFINITIONS.filter((definition) => definition.group === groupKey);
+  const definitions = SETTING_DEFINITIONS.filter((definition) => definition.group === groupKey);
+  const order = SETTING_GROUP_ORDERS[groupKey];
+  if (!order) return definitions;
+  const rank = new Map(order.map((key, index) => [key, index]));
+  return [...definitions].sort((a, b) => (rank.get(a.key) ?? Number.MAX_SAFE_INTEGER) - (rank.get(b.key) ?? Number.MAX_SAFE_INTEGER));
+}
+
+export function runtimeSettingDefinitions(
+  runtime: 'codex' | 'claude',
+  options: { sessionWritableOnly?: boolean } = {},
+): SettingDefinition[] {
+  const definitions = groupDefinitions(runtime === 'claude' ? 'runtime.claude' : 'runtime.codex');
+  if (!options.sessionWritableOnly) return definitions;
+  const allowed = new Set(CURRENT_RUNTIME_SETTING_KEYS[runtime]);
+  return definitions.filter((definition) => allowed.has(definition.key));
+}
+
+export function settingDisplayLabel(definition: Pick<SettingDefinition, 'key' | 'label'>): string {
+  return SETTING_DISPLAY_LABELS[definition.key] || definition.label;
+}
+
+export function settingFormLabel(definition: Pick<SettingDefinition, 'key' | 'label' | 'tomlPath'>): string {
+  return `${settingDisplayLabel(definition)} (${definition.tomlPath})`;
+}
+
+export function findSettingDefinition(raw: string): SettingDefinition | undefined {
+  return findSetting(raw);
 }
 
 type ParsedSetArgs =
@@ -588,29 +700,29 @@ function selectedGroupFromArgs(raw: string): SettingGroupKey {
   return 'runtime.codex';
 }
 
-function buildSettingsFields(config: ConfigV2, definitions: SettingDefinition[]): Array<[string, string]> {
+export function buildSettingsFields(config: ConfigV2, definitions: SettingDefinition[]): Array<[string, string]> {
   return definitions.map((definition) => [
-    `${definition.label} (${definition.tomlPath})`,
+    settingFormLabel(definition),
     definition.read(config),
   ]);
 }
 
-function formSelect(definition: SettingDefinition, config: ConfigV2): NonNullable<NonNullable<OutboundRichCard['form']>['selects']>[number] {
+export function settingFormSelect(definition: SettingDefinition, config: ConfigV2): NonNullable<NonNullable<OutboundRichCard['form']>['selects']>[number] {
   const value = definition.read(config);
   return {
     elementId: definition.key,
-    label: definition.label,
+    label: settingFormLabel(definition),
     placeholder: value,
     selectedCallbackData: value === 'auto' ? '' : value,
     options: definition.options || [],
   };
 }
 
-function formInput(definition: SettingDefinition, config: ConfigV2): NonNullable<NonNullable<OutboundRichCard['form']>['extraInputs']>[number] {
+export function settingFormInput(definition: SettingDefinition, config: ConfigV2): NonNullable<NonNullable<OutboundRichCard['form']>['extraInputs']>[number] {
   const value = definition.read(config);
   return {
     elementId: definition.key,
-    label: definition.label,
+    label: settingFormLabel(definition),
     placeholder: definition.placeholder || definition.tomlPath,
     defaultValue: value === '-' ? '' : value,
   };
@@ -628,7 +740,10 @@ function buildGroupSelect(selectedGroup: SettingGroupKey): NonNullable<OutboundR
   };
 }
 
-export function buildSetCommandRichCard(selectedGroup: SettingGroupKey = 'runtime.codex'): OutboundRichCard {
+export function buildSetCommandRichCard(
+  selectedGroup: SettingGroupKey = 'runtime.codex',
+  address?: ChannelAddress,
+): OutboundRichCard {
   const config = createConfigService({ migrate: false }).snapshot().config;
   const group = GROUP_BY_KEY.get(selectedGroup) || GROUP_BY_KEY.get('runtime.codex')!;
   const definitions = groupDefinitions(group.key);
@@ -636,6 +751,8 @@ export function buildSetCommandRichCard(selectedGroup: SettingGroupKey = 'runtim
     title: '全局配置',
     subtitle: `写入 ~/.codelark/config.toml · ${group.title}`,
     template: 'blue',
+    updateKey: address ? buildThreadCardUpdateKey('set', address.channelType, address.chatId) : undefined,
+    updateTtlMs: address ? null : undefined,
     tags: ['home', 'toml'],
     tagColor: 'blue',
     selects: [buildGroupSelect(group.key)],
@@ -643,8 +760,8 @@ export function buildSetCommandRichCard(selectedGroup: SettingGroupKey = 'runtim
     form: {
       optionElementId: 'clk_set_option',
       layout: 'two_column',
-      selects: definitions.filter((definition) => definition.control === 'select').map((definition) => formSelect(definition, config)),
-      extraInputs: definitions.filter((definition) => definition.control === 'input').map((definition) => formInput(definition, config)),
+      selects: definitions.filter((definition) => definition.control === 'select').map((definition) => settingFormSelect(definition, config)),
+      extraInputs: definitions.filter((definition) => definition.control === 'input').map((definition) => settingFormInput(definition, config)),
       controlBar: {
         actions: [
           { text: '刷新', callbackData: buildCommandCallbackData(`/set --group ${group.key}`) },
@@ -698,6 +815,7 @@ export function handleSetFormCommand(options: {
   args: string;
   formValue: Record<string, unknown>;
   markdown: boolean;
+  address?: ChannelAddress;
 }): { response: string; richCard: OutboundRichCard } {
   const service = createConfigService({ migrate: false });
   const selectedGroup = selectedGroupFromArgs(options.args);
@@ -723,7 +841,7 @@ export function handleSetFormCommand(options: {
           [written.message, `用法：\`${definition.usage}\``],
           options.markdown,
         ),
-        richCard: buildSetCommandRichCard(selectedGroup),
+        richCard: buildSetCommandRichCard(selectedGroup, options.address),
       };
     }
     try {
@@ -738,7 +856,7 @@ export function handleSetFormCommand(options: {
           [formatConfigWriteError(error), '请刷新 `/set` 卡片后重试。'],
           options.markdown,
         ),
-        richCard: buildSetCommandRichCard(selectedGroup),
+        richCard: buildSetCommandRichCard(selectedGroup, options.address),
       };
     }
   }
@@ -757,7 +875,7 @@ export function handleSetFormCommand(options: {
       notes,
       options.markdown,
     ),
-    richCard: buildSetCommandRichCard(selectedGroup),
+    richCard: buildSetCommandRichCard(selectedGroup, options.address),
   };
 }
 
