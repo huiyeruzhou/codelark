@@ -1,12 +1,14 @@
 import { z } from 'zod';
 
+import type {
+  FeishuChannelConfig,
+  FeishuSite,
+} from '../../configuration/channel-types.js';
+import { feishuSiteSchema, type ChannelConfigV2, type ConfigV2 } from '../../configuration/schema.js';
 import {
   feishuSiteToApiBaseUrl,
   normalizeFeishuSite,
-  type FeishuChannelConfig,
-  type FeishuSite,
-} from '../../configuration/channel-types.js';
-import { feishuSiteSchema, type ChannelConfigV2, type ConfigV2 } from '../../configuration/schema.js';
+} from '../../channels/feishu/site.js';
 import { normalizeChannelId } from '../../shared/channel-id.js';
 
 export type UiChannelConfigSource = {

@@ -14,10 +14,10 @@ import {
 } from '../runtime/options.js';
 import { CODELARK_HOME, DEFAULT_WORKSPACE_ROOT } from '../configuration/paths.js';
 import {
-  normalizeFeishuSite,
   type FeishuChannelConfig,
   type FeishuSite,
 } from '../configuration/channel-types.js';
+import { normalizeFeishuSite } from '../channels/feishu/site.js';
 import { createConfigService } from '../configuration/service.js';
 import type { ConfigPatch, ConfigV2 } from '../configuration/schema.js';
 import {

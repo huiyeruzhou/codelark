@@ -115,6 +115,13 @@ describe('configuration module boundaries', () => {
     assert.equal(fs.existsSync(path.join(process.cwd(), 'src', 'configuration', 'runtime-types.ts')), false);
   });
 
+  it('keeps Feishu site behavior out of the configuration layer', () => {
+    const channelTypesSource = fs.readFileSync(path.join(process.cwd(), 'src', 'configuration', 'channel-types.ts'), 'utf-8');
+    assert.doesNotMatch(channelTypesSource, /normalizeFeishuSite/);
+    assert.doesNotMatch(channelTypesSource, /feishuSiteToApiBaseUrl/);
+    assert.doesNotMatch(channelTypesSource, /open\.larksuite\.com/);
+  });
+
   it('keeps production legacy bridge setting reads limited to explicit migration-decision holdouts', () => {
     const offenders = legacyBridgeSettingReads(path.join(process.cwd(), 'src'));
     assert.deepEqual(offenders, []);

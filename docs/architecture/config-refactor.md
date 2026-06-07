@@ -24,6 +24,7 @@ CodeLark 需要把“默认值、全局配置、项目配置、环境变量、�
 - `src/configuration/service.ts`：薄 `ConfigService` 查询/写入入口，负责返回统一 effective value、source/provenance、explain 和 projection，不承载业务运行语义。
 - 配置解析库边界：生产代码只有 `src/configuration` 可以直接导入 `node-config` 或 `smol-toml`；业务模块必须通过 `ConfigService`、projection 或迁移 adapter 使用配置，并在业务模块内解释 runtime、channel、session 等语义。
 - `src/runtime/options.ts` / `src/shared/channel-id.ts`：运行时枚举 fallback 和 channel id slug 化是业务/共享语义，不属于 `src/configuration`。配置层提供 zod schema 和统一 value，调用方在自己的模块内决定 fallback。
+- `src/channels/feishu/site.ts`：飞书/Lark 站点归一化和 API base URL 属于 Feishu 通道语义，不属于配置层；配置层只校验 `site` 字段值。
 - `src/local-service/manager.ts` / `src/entrypoints/cli.ts`：CLI `run` 时用同一个 effective config snapshot 同时派生 UI env、Bridge preflight config 和 Bridge env projection，避免一次启动内动态 TOML reload 前后不一致。
 - `src/configuration/legacy.ts` / `legacy-types.ts`：仅保留 legacy expanded `Config` adapter 和 migration/compatibility 测试；生产代码不应从这里读取配置。
 - `src/operator-ui/application/config.ts` / `channel.ts`：把 UI payload 转成 v2 `ConfigPatch`，通过 `ConfigService` 写回 home TOML；全局配置页的 `/api/config/check` 和通道配置页的 `/api/channels/check` 都复用同一套 zod payload schema 做只校验不写入的前端检查，非法字段返回 400，不再静默 fallback 成旧值。

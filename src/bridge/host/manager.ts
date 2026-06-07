@@ -17,6 +17,7 @@ import type {
 import type { BaseChannelAdapter } from '../../channels/contracts.js';
 import type { BridgeSession, BridgeStore, PermissionLinkRecord } from '../../domain/index.js';
 import type { FeishuChannelConfig } from '../../configuration/channel-types.js';
+import { feishuSiteToApiBaseUrl } from '../../channels/feishu/site.js';
 import { inspect } from 'node:util';
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 // Side-effect import: triggers self-registration of all adapter factories
@@ -571,7 +572,7 @@ function formatStartupChannelChatIssue(issue: StartupChannelChatCheckIssue): str
 }
 
 function feishuEventSubscriptionUrl(appId: string, site: FeishuChannelConfig['site'] | undefined): string {
-  const base = site === 'lark' ? 'https://open.larksuite.com' : 'https://open.feishu.cn';
+  const base = feishuSiteToApiBaseUrl(site);
   return `${base}/app/${encodeURIComponent(appId)}/event?tab=callback`;
 }
 
