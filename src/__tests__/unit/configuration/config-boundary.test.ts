@@ -53,6 +53,18 @@ function legacyBridgeSettingReads(root: string): string[] {
     });
 }
 
+function filesImportingConfigParsersOutsideConfiguration(root: string): string[] {
+  const parserImportPattern = /from\s+['"](?:config(?:\/lib\/util\.js)?|smol-toml)['"]|require\(\s*['"](?:config(?:\/lib\/util\.js)?|smol-toml)['"]\s*\)/;
+  return listSourceFiles(root)
+    .filter((file) => {
+      const relative = path.relative(root, file);
+      return !relative.split(path.sep).includes('__tests__')
+        && !relative.startsWith(`configuration${path.sep}`);
+    })
+    .filter((file) => parserImportPattern.test(fs.readFileSync(file, 'utf-8')))
+    .map((file) => path.relative(process.cwd(), file));
+}
+
 describe('configuration module boundaries', () => {
   it('keeps the legacy config facade out of production imports', () => {
     const sourceRoot = path.join(process.cwd(), 'src');
@@ -92,6 +104,11 @@ describe('configuration module boundaries', () => {
 
   it('keeps production legacy bridge setting reads limited to explicit migration-decision holdouts', () => {
     const offenders = legacyBridgeSettingReads(path.join(process.cwd(), 'src'));
+    assert.deepEqual(offenders, []);
+  });
+
+  it('keeps TOML and node-config parsing behind the configuration module', () => {
+    const offenders = filesImportingConfigParsersOutsideConfiguration(path.join(process.cwd(), 'src'));
     assert.deepEqual(offenders, []);
   });
 });
