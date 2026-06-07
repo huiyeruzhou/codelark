@@ -1698,6 +1698,78 @@ printf '{"ok":true,"data":{"chat_id":"oc_user_created"}}\\n'
     assert.equal(await adapter.consumeOne(), null);
   });
 
+  it('marks unmentioned group messages as context-only in context mode', async () => {
+    initBridgeTestContext();
+    const adapter = new FeishuAdapter({
+      id: 'feishu-default',
+      provider: 'feishu',
+      enabled: true,
+      alias: '飞书',
+      config: {
+        requireMention: 'context',
+      },
+    });
+
+    await (adapter as any).processIncomingEvent({
+      sender: {
+        sender_type: 'user',
+        sender_id: { open_id: 'user-1' },
+      },
+      message: {
+        message_id: 'msg-group-context-only',
+        chat_id: 'oc_group_1',
+        chat_type: 'group',
+        message_type: 'text',
+        content: '{"text":"background context"}',
+        create_time: '1780209968114',
+      },
+    });
+
+    const inbound = await adapter.consumeOne();
+    assert.ok(inbound);
+    assert.equal(inbound.text, 'background context');
+    assert.equal(inbound.contextOnly, true);
+  });
+
+  it('does not mark mentioned group messages as context-only in context mode', async () => {
+    initBridgeTestContext();
+    const adapter = new FeishuAdapter({
+      id: 'feishu-default',
+      provider: 'feishu',
+      enabled: true,
+      alias: '飞书',
+      config: {
+        requireMention: 'context',
+      },
+    });
+    (adapter as any).botIds.add('bot-open-id');
+
+    await (adapter as any).processIncomingEvent({
+      sender: {
+        sender_type: 'user',
+        sender_id: { open_id: 'user-1' },
+      },
+      message: {
+        message_id: 'msg-group-context-mentioned',
+        chat_id: 'oc_group_1',
+        chat_type: 'group',
+        message_type: 'text',
+        content: '{"text":"@_user_1 please answer"}',
+        create_time: '1780209968114',
+        mentions: [{
+          key: '@_user_1',
+          id: { open_id: 'bot-open-id' },
+          name: 'bot',
+        }],
+      },
+    });
+
+    const inbound = await adapter.consumeOne();
+    assert.ok(inbound);
+    assert.equal(inbound.text, 'please answer');
+    assert.equal(inbound.contextOnly, undefined);
+  });
+
   it('passes an HTTPS proxy agent to the Feishu WS client options', () => {
     const httpInstance = {} as any;
     const options = _testOnly.buildWsClientOptions(

@@ -38,7 +38,7 @@ export function buildHelpCommandResponse(): string {
     '- `/t 0 reset` 重置临时 BridgeSession',
     '- `/n` 打开新建 IM 群聊会话表单；`/new <name> [path]` 直接创建，未指定路径时继承当前会话目录，包括临时 BridgeSession 目录，未绑定时使用全局默认工作目录；在飞书云文档评论里 @bot 后使用 `/new [群名]` 会把这份云文档切到群聊聊天模式；名称或路径包含空格时，请使用英文双引号 `"` 或英文单引号 `\'`',
     '- `/clear [name] [path]` 在当前聊天上下文创建新对话并绑定过去；名称或路径包含空格时，请使用英文双引号 `"` 或英文单引号 `\'`；可用 `/t` 附回旧对话；当前任务或 tmux TUI 追加输入运行中会先询问是否终止',
-    '- `/require-at` 查看飞书群聊 @bot 要求；`/require-at on|off` 切换当前飞书通道是否要求群聊 @bot',
+    '- `/require-at` 查看飞书群聊 @bot 策略；`/require-at on|off|context` 切换：只响应 @、所有群消息都响应、或非 @ 只作为上下文',
     '- 直接发文本：继续当前会话；未绑定时进入临时 BridgeSession',
     '- `/perm allow|allow_session|deny <id>` 或 `1 / 2 / 3` 处理权限',
     '',

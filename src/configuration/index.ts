@@ -68,7 +68,7 @@ export interface FeishuChannelConfig {
   allowedUsers?: string[];
   streamingEnabled?: boolean;
   feedbackMarkdownEnabled?: boolean;
-  requireMention?: boolean;
+  requireMention?: boolean | 'context';
 }
 
 export interface ChannelInstance {
@@ -191,6 +191,13 @@ export function normalizeFeishuSite(value: string | undefined): FeishuSite {
   if (normalized === 'feishu') return 'feishu';
   if (normalized.includes('open.larksuite.com')) return 'lark';
   return 'feishu';
+}
+
+export function parseFeishuRequireMentionMode(value: unknown): boolean | 'context' {
+  if (value === true || value === false || value === 'context') return value;
+  const normalized = String(value ?? '').trim().toLowerCase();
+  if (normalized === 'context' || normalized === 'ctx' || normalized === 'listen') return 'context';
+  return normalized === 'true' || normalized === 'on' || normalized === '1' || normalized === 'yes';
 }
 
 export function feishuSiteToApiBaseUrl(site: FeishuSite | string | undefined): string {
@@ -404,7 +411,7 @@ function migrateLegacyEnvToConfig(env: Map<string, string>): ConfigFile {
           ? env.get("CODELARK_FEISHU_COMMAND_MARKDOWN_ENABLED") === "true"
           : true,
         requireMention: env.has("CODELARK_FEISHU_REQUIRE_MENTION")
-          ? env.get("CODELARK_FEISHU_REQUIRE_MENTION") === "true"
+          ? parseFeishuRequireMentionMode(env.get("CODELARK_FEISHU_REQUIRE_MENTION"))
           : false,
       },
     });
@@ -633,7 +640,7 @@ function applyChannelEnvOverlay(channels: ChannelInstance[], env: Map<string, st
       config.feedbackMarkdownEnabled = env.get("CODELARK_FEISHU_COMMAND_MARKDOWN_ENABLED") === "true";
     }
     if (env.has("CODELARK_FEISHU_REQUIRE_MENTION")) {
-      config.requireMention = env.get("CODELARK_FEISHU_REQUIRE_MENTION") === "true";
+      config.requireMention = parseFeishuRequireMentionMode(env.get("CODELARK_FEISHU_REQUIRE_MENTION"));
     }
     channel.config = config;
     channel.updatedAt = nowIso();
@@ -1085,7 +1092,7 @@ export function configToSettings(config: Config): Map<string, string> {
   );
   m.set(
     "bridge_feishu_require_mention",
-    feishuConfig?.requireMention === true ? "true" : "false",
+    feishuConfig?.requireMention === 'context' ? "context" : feishuConfig?.requireMention === true ? "true" : "false",
   );
 
   return m;

@@ -24,6 +24,7 @@ export interface InboundMessage {
   callbackMessageId?: string;
   raw?: unknown;
   contextText?: string;
+  contextOnly?: boolean;
   updateId?: number;
   attachments?: FileAttachment[];
   channelEvent?: InboundChannelEvent;

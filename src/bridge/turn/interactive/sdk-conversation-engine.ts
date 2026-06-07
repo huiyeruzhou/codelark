@@ -210,10 +210,12 @@ export async function processMessage(
 
     // Load conversation history for context
     const { messages: recentMsgs } = store.getMessages(sessionId, { limit: 50 });
-    const historyMsgs = recentMsgs.slice(0, -1).map(m => ({
-      role: m.role as 'user' | 'assistant',
-      content: m.content,
-    }));
+    const historyMsgs = recentMsgs.slice(0, -1)
+      .filter(m => m.role === 'user' || m.role === 'assistant')
+      .map(m => ({
+        role: m.role as 'user' | 'assistant',
+        content: m.content,
+      }));
 
     const abortController = new AbortController();
     if (abortSignal) {

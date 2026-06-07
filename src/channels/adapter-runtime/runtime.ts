@@ -139,6 +139,7 @@ export function createAdapterRuntime(
   function classifyMessage(msg: InboundMessage): { category: AdapterMessageCategory; bypassSessionLock: boolean } {
     if (msg.channelEvent) return { category: 'channel-event', bypassSessionLock: true };
     if (msg.callbackData) return { category: 'callback', bypassSessionLock: true };
+    if (msg.contextOnly) return { category: 'regular', bypassSessionLock: true };
     if (deps.isCommandMessage?.(msg)) return { category: 'command', bypassSessionLock: true };
     if (deps.isNumericPermissionShortcut(msg.address.channelType, msg.text.trim(), msg.address.chatId)) {
       return { category: 'permission-shortcut', bypassSessionLock: true };

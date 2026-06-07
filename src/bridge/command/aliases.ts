@@ -48,6 +48,8 @@ export function resolveCommandAlias(rawCommand: string, args: string): string {
       return '/history';
     case '/hotupdate':
       return '/hot-update';
+    case '/require_at':
+      return '/require-at';
     case '/tmux-keys':
       return '/tmux-key';
     default:
@@ -87,6 +89,7 @@ const KNOWN_BRIDGE_COMMANDS = new Set([
   '/network',
   '/ui',
   '/require-at',
+  '/require_at',
   '/model',
   '/status',
   '/current',

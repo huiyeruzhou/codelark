@@ -3,6 +3,7 @@ import {
   findChannelInstance,
   isSupportedChannelProvider,
   normalizeFeishuSite,
+  parseFeishuRequireMentionMode,
   type ChannelInstance,
   type ChannelProvider,
   type Config,
@@ -84,7 +85,7 @@ export function mergeChannelInstance(
     allowedUsers: parseCsv(payload.allowedUsers),
     streamingEnabled: payload.streamingEnabled !== false,
     feedbackMarkdownEnabled: payload.feedbackMarkdownEnabled !== false,
-    requireMention: payload.requireMention === true,
+    requireMention: parseFeishuRequireMentionMode(payload.requireMention),
   };
 
   const nextChannel: ChannelInstance = {

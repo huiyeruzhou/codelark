@@ -40,6 +40,9 @@ describe('bridge-adapter-runtime', () => {
       isCommandMessage: (msg) => msg.text === '/status',
       isNumericPermissionShortcut: () => false,
       resolveSessionIdForMessage: (msg) => `session:${msg.address.chatId}`,
+      getSessionLane: (msg) => msg.contextOnly
+        ? { sessionId: `session:${msg.address.chatId}`, jobKind: 'context-only', blocksConversation: false }
+        : null,
     });
 
     let runningRegular = true;
@@ -94,6 +97,35 @@ describe('bridge-adapter-runtime', () => {
 
     assert.deepEqual(handled, ['/status']);
     assert.deepEqual(locked, []);
+
+    handled.length = 0;
+    locked.length = 0;
+
+    let runningContextOnlyCommand = true;
+    let contextOnlyCommandConsumed = false;
+    const contextOnlyCommandAdapter = {
+      channelType: 'feishu-default',
+      provider: 'feishu',
+      isRunning: () => runningContextOnlyCommand || !contextOnlyCommandConsumed,
+      consumeOne: async () => {
+        if (contextOnlyCommandConsumed) return null;
+        contextOnlyCommandConsumed = true;
+        runningContextOnlyCommand = false;
+        return {
+          messageId: 'msg-context-only-command',
+          address: { channelType: 'feishu-default', chatId: 'chat-context-only-command' },
+          text: '/status',
+          timestamp: Date.now(),
+          contextOnly: true,
+        };
+      },
+    };
+
+    runtime.runAdapterLoop(contextOnlyCommandAdapter as never);
+    await new Promise((resolve) => setTimeout(resolve, 30));
+
+    assert.deepEqual(handled, ['/status']);
+    assert.deepEqual(locked, ['session:chat-context-only-command']);
 
     handled.length = 0;
     locked.length = 0;

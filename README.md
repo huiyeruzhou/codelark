@@ -165,7 +165,7 @@ codelark install-skills
 - `/r <1-5>`：切换思考级别。
 - `/mode <normal|yolo>`：切换运行模式，自动映射到 Codex 和 Claude Code 的对应模式。
 - `/model <模型名>`：切换当前 IM 会话模型。
-- `/require-at`：查看当前飞书通道的群聊 @bot 要求；`/require-at on|off` 可切换是否必须 @bot。
+- `/require-at`：查看当前飞书通道的群聊 @bot 策略；`/require-at on|off|context` 可切换为只响应 @、所有群消息都响应、或非 @ 只作为上下文。
 - `/set`：查看全局配置，然后用 `/set <key> <value>` 修改。
 
 ### 对话与诊断

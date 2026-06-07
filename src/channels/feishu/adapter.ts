@@ -38,6 +38,7 @@ import type { ToolCallInfo } from '../../domain/index.js';
 import {
   feishuSiteToApiBaseUrl,
   normalizeFeishuSite,
+  parseFeishuRequireMentionMode,
   type FeishuChannelConfig,
 } from '../../configuration/index.js';
 import {
@@ -1930,11 +1931,11 @@ export class FeishuAdapter extends BaseChannelAdapter {
     return this.channelConfig.streamingEnabled !== false;
   }
 
-  private shouldRequireMentionForGroup(): boolean {
+  private groupMentionMode(): boolean | 'context' {
     if (this.channelConfig.requireMention !== undefined) {
-      return this.channelConfig.requireMention === true;
+      return parseFeishuRequireMentionMode(this.channelConfig.requireMention);
     }
-    return getBridgeContext().store.getSetting('bridge_feishu_require_mention') === 'true';
+    return parseFeishuRequireMentionMode(getBridgeContext().store.getSetting('bridge_feishu_require_mention'));
   }
 
   supportsStructuredStreamingUi(chatId: string): boolean {
@@ -5576,6 +5577,7 @@ export class FeishuAdapter extends BaseChannelAdapter {
       || sender.sender_id?.union_id
       || '';
     const isGroup = msg.chat_type === 'group';
+    let contextOnly = false;
 
     // Authorization check
     if (!this.isAuthorized(userId, chatId)) {
@@ -5604,8 +5606,9 @@ export class FeishuAdapter extends BaseChannelAdapter {
       }
 
       // Require @mention check
-      const requireMention = this.shouldRequireMentionForGroup();
-      if (requireMention && !this.isBotMentioned(msg.mentions)) {
+      const mentionMode = this.groupMentionMode();
+      const botMentioned = this.isBotMentioned(msg.mentions);
+      if (mentionMode === true && !botMentioned) {
         console.log('[feishu-adapter] Group message ignored (bot not @mentioned), chatId:', chatId, 'msgId:', msg.message_id);
         try {
           getBridgeContext().store.insertAuditLog({
@@ -5619,6 +5622,9 @@ export class FeishuAdapter extends BaseChannelAdapter {
           });
         } catch { /* best effort */ }
         return;
+      }
+      if (mentionMode === 'context' && !botMentioned) {
+        contextOnly = true;
       }
     }
 
@@ -5757,21 +5763,23 @@ export class FeishuAdapter extends BaseChannelAdapter {
       }
     }
 
-    const inbound: InboundMessage = {
-      messageId: msg.message_id,
-      address,
-      text: text.trim(),
-      timestamp,
-      attachments: attachments.length > 0 ? attachments : undefined,
-      contextText,
-    };
+	    const inbound: InboundMessage = {
+	      messageId: msg.message_id,
+	      address,
+	      text: text.trim(),
+	      timestamp,
+	      attachments: attachments.length > 0 ? attachments : undefined,
+	      contextText,
+	      contextOnly: contextOnly || undefined,
+	    };
 
     // Audit log
     try {
-      const summary = attachments.length > 0
-        ? `[${attachments.length} attachment(s)] ${text.slice(0, 150)}`
-        : text.slice(0, 200);
-      getBridgeContext().store.insertAuditLog({
+	      const summaryText = attachments.length > 0
+	        ? `[${attachments.length} attachment(s)] ${text.slice(0, 150)}`
+	        : text.slice(0, 200);
+	      const summary = contextOnly ? `[CONTEXT_ONLY] ${summaryText}` : summaryText;
+	      getBridgeContext().store.insertAuditLog({
         channelType: this.channelType,
         channelProvider: this.provider,
         channelAlias: this.alias,

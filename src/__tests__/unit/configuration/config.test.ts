@@ -85,6 +85,26 @@ describe('configToSettings', () => {
     assert.equal(m.get('bridge_feishu_require_mention'), 'false');
   });
 
+  it('maps Feishu context-only group mention mode', () => {
+    const m = configToSettings({
+      ...base,
+      channels: [
+        {
+          id: 'feishu-default',
+          alias: '飞书',
+          provider: 'feishu',
+          enabled: true,
+          createdAt: '2026-03-28T00:00:00.000Z',
+          updatedAt: '2026-03-28T00:00:00.000Z',
+          config: {
+            requireMention: 'context',
+          },
+        },
+      ],
+    });
+    assert.equal(m.get('bridge_feishu_require_mention'), 'context');
+  });
+
   it('maps runtime defaults and scalar overrides', () => {
     const m = configToSettings(base);
     assert.equal(m.get('remote_bridge_enabled'), 'true');

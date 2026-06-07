@@ -417,7 +417,7 @@ export function renderUiShellHtml(): string {
                   <div class="command-item"><div class="command-col-command"><code>/sb</code></div><div class="command-col-original"><code>/sandbox</code></div><div class="command-col-desc">查看或切换当前 IM 会话的 Codex 沙箱；可选 <code>read-only</code>、<code>workspace-write</code>、<code>danger-full-access</code>、<code>default</code>。</div></div>
                   <div class="command-item"><div class="command-col-command"><code>/net</code></div><div class="command-col-original"><code>/network</code></div><div class="command-col-desc">查看或切换当前 IM 会话的网络访问；可选 <code>on</code>、<code>off</code>、<code>default</code>。</div></div>
                   <div class="command-item"><div class="command-col-command"><code>/ui on|off</code></div><div class="command-col-original">—</div><div class="command-col-desc">查看或切换工具输入输出显示；关闭后只保留工具名、状态和正文。</div></div>
-                  <div class="command-item"><div class="command-col-command"><code>/require-at on|off</code></div><div class="command-col-original"><code>/require-at</code></div><div class="command-col-desc">查看或切换当前飞书通道是否要求群聊 @bot；默认 <code>off</code>，即群聊不 @bot 也会接收。</div></div>
+                  <div class="command-item"><div class="command-col-command"><code>/require-at on|off|context</code></div><div class="command-col-original"><code>/require-at</code></div><div class="command-col-desc">查看或切换当前飞书通道群聊 @bot 策略；<code>context</code> 表示非 @ 消息只进入上下文，不触发回复。</div></div>
                   <div class="command-item"><div class="command-col-command"><code>/model [slug|default]</code></div><div class="command-col-original"><code>/model [slug|default]</code></div><div class="command-col-desc">查看或切换当前 IM 会话使用的模型；Codex 共享 thread 只允许查看，Claude Code 会保存为后续 pty 启动参数。</div></div>
                   <div class="command-item"><div class="command-col-command"><code>/tmux-attach &lt;session&gt;</code></div><div class="command-col-original"><code>/tmux-attach &lt;session&gt;</code></div><div class="command-col-desc">把当前 IM 会话绑定到一个远程 tmux session。</div></div>
                   <div class="command-item"><div class="command-col-command"><code>/tmux-new [session]</code></div><div class="command-col-original"><code>/tmux-new [session]</code></div><div class="command-col-desc">新建并绑定 tmux session；如果已存在，会提示并直接绑定。</div></div>
@@ -1276,7 +1276,7 @@ export function renderUiShellHtml(): string {
             feedbackMarkdownEnabled: typeof draft.feedbackMarkdownEnabled === 'boolean'
               ? draft.feedbackMarkdownEnabled
               : (channel.config || {}).feedbackMarkdownEnabled,
-            requireMention: typeof draft.requireMention === 'boolean'
+            requireMention: draft.requireMention === true || draft.requireMention === false || draft.requireMention === 'context'
               ? draft.requireMention
               : (channel.config || {}).requireMention,
           });
@@ -1905,6 +1905,7 @@ export function renderUiShellHtml(): string {
         const adapter = getAdapterStatus(channel.id);
         const statusText = formatChannelRuntimeLabel(channel);
         const feishu = channel.config || {};
+        const requireMentionMode = feishu.requireMention === 'context' ? 'context' : (feishu.requireMention === true ? 'true' : 'false');
         const bindingsHtml = renderChannelChatsV2(channel);
         const bindingCount = bindingEntriesForChannel(channel.id).length;
         const detailsHtml = ''
@@ -1927,7 +1928,13 @@ export function renderUiShellHtml(): string {
             +   '<div class="checkbox-row">'
             +     '<label class="checkbox"><input id="channelStreamingEnabled" type="checkbox"' + (feishu.streamingEnabled !== false ? ' checked' : '') + ' /> 启用飞书流式响应卡片</label>'
             +     '<label class="checkbox"><input id="channelFeedbackMarkdownEnabled" type="checkbox"' + (feishu.feedbackMarkdownEnabled !== false ? ' checked' : '') + ' /> 反馈使用markdown</label>'
-            +     '<label class="checkbox"><input id="channelRequireMention" type="checkbox"' + (feishu.requireMention === true ? ' checked' : '') + ' /> 群聊需要 @bot 才接收消息</label>'
+            +   '</div>'
+            +   '<div class="field-row">'
+            +     '<label>群聊消息处理<select id="channelRequireMentionMode">'
+            +       '<option value="true"' + (requireMentionMode === 'true' ? ' selected' : '') + '>只响应 @bot</option>'
+            +       '<option value="context"' + (requireMentionMode === 'context' ? ' selected' : '') + '>@bot 回复，非 @ 仅作上下文</option>'
+            +       '<option value="false"' + (requireMentionMode === 'false' ? ' selected' : '') + '>所有群消息都响应</option>'
+            +     '</select></label>'
             +   '</div>'
             + '</div>';
 
@@ -2629,7 +2636,7 @@ export function renderUiShellHtml(): string {
         payload.allowedUsers = document.getElementById('channelAllowedUsers').value;
         payload.streamingEnabled = document.getElementById('channelStreamingEnabled').checked;
         payload.feedbackMarkdownEnabled = document.getElementById('channelFeedbackMarkdownEnabled').checked;
-        payload.requireMention = document.getElementById('channelRequireMention').checked;
+        payload.requireMention = document.getElementById('channelRequireMentionMode').value;
         return payload;
       }
 

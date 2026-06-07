@@ -3469,6 +3469,22 @@ describe('command-dispatch', () => {
     const requireOff = loadConfig().channels?.find((channel) => channel.id === 'feishu')?.config as { requireMention?: boolean } | undefined;
     assert.equal(requireOff?.requireMention, false);
     assert.match(fs.readFileSync(CONFIG_PATH, 'utf-8'), /CODELARK_FEISHU_REQUIRE_MENTION=false/);
+
+    await handleBridgeCommand(
+      adapter,
+      {
+        address,
+        text: '/require_at context',
+        messageId: 'incoming-mention-context',
+      } as any,
+      '/require_at context',
+      deps,
+    );
+    assert.match(sent.at(-1) || '', /context/);
+    assert.match(sent.at(-1) || '', /非 @ 消息会写入当前群绑定会话的上下文/);
+    const requireContext = loadConfig().channels?.find((channel) => channel.id === 'feishu')?.config as { requireMention?: boolean | 'context' } | undefined;
+    assert.equal(requireContext?.requireMention, 'context');
+    assert.match(fs.readFileSync(CONFIG_PATH, 'utf-8'), /CODELARK_FEISHU_REQUIRE_MENTION=context/);
   });
 
   it('blocks thread switching while the current task is running unless forced', async () => {

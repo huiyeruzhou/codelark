@@ -82,6 +82,34 @@ describe('handleUiChannelRoute', () => {
     assert.equal(body.channel?.alias, 'Ops');
   });
 
+  it('saves context-only group mention mode through the channel route', async () => {
+    let config = { ...baseConfig };
+    const store = createMemoryStore();
+    const response = createResponse();
+
+    const handled = await handleUiChannelRoute({
+      request: createJsonRequest({
+        provider: 'feishu',
+        alias: 'Ops',
+        appId: 'app-id',
+        appSecret: 'secret',
+        requireMention: 'context',
+      }),
+      response,
+      url: new URL('http://localhost/api/channels/save'),
+      createStore: () => store,
+      readConfig: () => config,
+      writeConfig: (next) => {
+        config = next;
+      },
+      buildBindingsPayload: async () => ({ bindings: [], options: [], channelDefaults: [] }),
+    });
+
+    assert.equal(handled, true);
+    assert.equal(response.statusCodeWritten, 200);
+    assert.equal(config.channels?.[0]?.config.requireMention, 'context');
+  });
+
   it('refuses to delete a channel with bindings', async () => {
     const config = {
       ...baseConfig,
