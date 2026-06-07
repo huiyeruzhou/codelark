@@ -2043,17 +2043,8 @@ export class FeishuAdapter extends BaseChannelAdapter {
           markdown: [
             '如果您从默认向导中新建机器人，该机器人可能没有权限获取群聊中的所有消息（只能收到 @ 机器人的消息）。',
             '',
-            `请参考下图在[开发者后台](${this.developerAuthUrl()})中授予机器人该权限，如您已经授权，请点击下方按钮。`,
+            `请**复制下方的代码块**并参考图片在[开发者后台](${this.developerAuthUrl()})中授予机器人该权限，如您已经授权，请点击下方按钮。`,
           ].join('\n'),
-          ...(imageKey
-            ? {
-                image: {
-                  imageKey,
-                  alt: '飞书群聊消息权限授权参考图',
-                  mode: 'fit_horizontal' as const,
-                },
-              }
-            : {}),
         },
         {
           title: '需要授予的权限',
@@ -2062,6 +2053,15 @@ export class FeishuAdapter extends BaseChannelAdapter {
             text: scopeJson,
           },
         },
+        ...(imageKey
+          ? [{
+              image: {
+                imageKey,
+                alt: '飞书群聊消息权限授权参考图',
+                mode: 'fit_horizontal' as const,
+              },
+            }]
+          : []),
       ],
       actions: [[{
         text: '我已授权',

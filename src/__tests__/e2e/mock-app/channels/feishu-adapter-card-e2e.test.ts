@@ -197,10 +197,21 @@ describe('feishu adapter card e2e', () => {
       assert.equal(createdGroups.length, 2);
       const firstPassCards = findGroupAuthorizationCardPayloads(calls);
       assert.equal(firstPassCards.length, 2);
-      assert.match(JSON.stringify(firstPassCards[0].content), /群聊消息权限确认/);
-      assert.match(JSON.stringify(firstPassCards[0].content), /im:message\.group_msg/);
-      assert.match(JSON.stringify(firstPassCards[0].content), /https:\/\/open\.feishu\.cn\/app\/app-id\/auth/);
-      assert.match(JSON.stringify(firstPassCards[0].content), /我已授权/);
+      const firstCardJson = JSON.stringify(firstPassCards[0].content);
+      assert.match(firstCardJson, /群聊消息权限确认/);
+      assert.match(firstCardJson, /请\*\*复制下方的代码块\*\*并参考图片/);
+      assert.doesNotMatch(firstCardJson, /请参考下图/);
+      assert.match(firstCardJson, /im:message\.group_msg/);
+      assert.match(firstCardJson, /https:\/\/open\.feishu\.cn\/app\/app-id\/auth/);
+      assert.match(firstCardJson, /我已授权/);
+      assert.ok(
+        firstCardJson.indexOf('请**复制下方的代码块**并参考图片') < firstCardJson.indexOf('im:message.group_msg'),
+        'copy instruction should appear before the permission JSON block',
+      );
+      assert.ok(
+        firstCardJson.indexOf('im:message.group_msg') < firstCardJson.indexOf('group-auth-image-key'),
+        'permission JSON block should appear before the reference image',
+      );
       const imageElements = findCardElementsByTag(firstPassCards[0].content, 'img');
       assert.equal(imageElements.length, 1);
       assert.equal(imageElements[0].img_key, 'group-auth-image-key');
