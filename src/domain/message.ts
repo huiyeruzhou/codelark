@@ -87,6 +87,12 @@ export interface OutboundRichCardSection {
   title?: string;
   text?: string;
   markdown?: string;
+  image?: {
+    imageKey: string;
+    alt?: string;
+    mode?: 'fit_horizontal' | 'crop_center';
+    preview?: boolean;
+  };
   fields?: Array<[string, string | null | undefined]>;
   code?: {
     text: string;

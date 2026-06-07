@@ -89,6 +89,20 @@ function findGroupAuthorizationCardPayloads(calls: RecordedFeishuMessageCall[]):
   });
 }
 
+function findCardElementsByTag(root: unknown, tag: string): Array<Record<string, any>> {
+  if (!root || typeof root !== 'object') return [];
+  const value = root as Record<string, any>;
+  const matches = value.tag === tag ? [value] : [];
+  for (const child of Object.values(value)) {
+    if (Array.isArray(child)) {
+      for (const item of child) matches.push(...findCardElementsByTag(item, tag));
+    } else if (child && typeof child === 'object') {
+      matches.push(...findCardElementsByTag(child, tag));
+    }
+  }
+  return matches;
+}
+
 function assertCodelarkAskFormPayload(payload: Record<string, any>): void {
   assert.equal(payload.form.name, 'clk_form');
   assert.equal(payload.form.elements.some((element: any) => element.tag === 'select_static' && element.name === 'clk_choice'), true);
@@ -144,11 +158,24 @@ describe('feishu adapter card e2e', () => {
     resetBridgeTestState({ cleanCodexHome: true });
     _testOnly.resetStateForTests();
     const calls: RecordedFeishuMessageCall[] = [];
+    const fetchCalls: Array<{ url: string; init?: RequestInit }> = [];
     const createdGroups: Array<{ chatId: string; name: string }> = [];
     const store = initBridgeTestContext({
       settings: makeBridgeSettings(),
     });
     const adapter = createRecordingFeishuAdapter(calls);
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+      const url = String(input);
+      fetchCalls.push({ url, init });
+      if (url.includes('/tenant_access_token/internal')) {
+        return Response.json({ code: 0, tenant_access_token: 'tenant-token', expire: 7200 });
+      }
+      if (url.includes('/open-apis/im/v1/images')) {
+        return Response.json({ code: 0, data: { image_key: 'group-auth-image-key' } });
+      }
+      throw new Error(`unexpected fetch: ${url}`);
+    }) as typeof fetch;
     (adapter as any).createGroupChat = async (options: { name: string }) => {
       const group = {
         chatId: `chat-auth-group-${createdGroups.length + 1}`,
@@ -174,6 +201,19 @@ describe('feishu adapter card e2e', () => {
       assert.match(JSON.stringify(firstPassCards[0].content), /im:message\.group_msg/);
       assert.match(JSON.stringify(firstPassCards[0].content), /https:\/\/open\.feishu\.cn\/app\/app-id\/auth/);
       assert.match(JSON.stringify(firstPassCards[0].content), /我已授权/);
+      const imageElements = findCardElementsByTag(firstPassCards[0].content, 'img');
+      assert.equal(imageElements.length, 1);
+      assert.equal(imageElements[0].img_key, 'group-auth-image-key');
+      assert.equal(imageElements[0].mode, 'fit_horizontal');
+      assert.equal(imageElements[0].alt?.content, '飞书群聊消息权限授权参考图');
+      const imageUploads = fetchCalls.filter((call) => call.url.includes('/open-apis/im/v1/images'));
+      assert.equal(imageUploads.length, 1);
+      assert.equal(imageUploads[0].init?.method, 'POST');
+      assert.ok(imageUploads[0].init?.body instanceof FormData);
+      const form = imageUploads[0].init.body as FormData;
+      assert.equal(form.get('image_type'), 'message');
+      assert.ok(form.get('image') instanceof File);
+      assert.equal((form.get('image') as File).name, 'codelark-group-authorization.png');
 
       const callbackResult = await (adapter as any).handleCardAction({
         action: { value: { callback_data: FEISHU_GROUP_AUTHORIZED_CALLBACK_DATA } },
@@ -198,6 +238,7 @@ describe('feishu adapter card e2e', () => {
       const thirdBinding = store.getChannelChat('feishu', createdGroups[2]!.chatId);
       assert.ok(thirdBinding);
     } finally {
+      globalThis.fetch = originalFetch;
       fs.rmSync(workDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
       _testOnly.resetStateForTests();
     }

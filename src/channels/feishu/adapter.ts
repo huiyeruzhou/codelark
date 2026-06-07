@@ -41,6 +41,7 @@ import {
   feishuSiteToApiBaseUrl,
   normalizeFeishuSite,
 } from './site.js';
+import groupAuthorizationImageDataUrl from './assets/group-authorization-image.js';
 import {
   BaseChannelAdapter,
   registerAdapterFactory,
@@ -89,6 +90,7 @@ const execFileAsync = promisify(execFile);
 const ERROR_EMOJI = 'WAIL';
 export const FEISHU_GROUP_AUTHORIZED_CALLBACK_DATA = 'clk-feishu-group-authorized';
 const FEISHU_GROUP_MESSAGE_SCOPE = 'im:message.group_msg';
+const GROUP_AUTHORIZATION_IMAGE_FILE_NAME = 'codelark-group-authorization.png';
 
 /** State for an active CardKit v2 streaming card. */
 interface FeishuCardState {
@@ -1905,6 +1907,15 @@ function inferImageFileName(url: string, contentType: string): string {
   return `avatar.${ext}`;
 }
 
+function dataUrlToImageBlob(dataUrl: string): Blob {
+  const match = /^data:([^;,]+);base64,(.*)$/s.exec(dataUrl);
+  if (!match) throw new Error('Invalid embedded group authorization image data URL.');
+  const [, contentType, base64] = match;
+  const data = Buffer.from(base64, 'base64');
+  if (data.length === 0) throw new Error('Embedded group authorization image is empty.');
+  return new Blob([data], { type: contentType || 'image/png' });
+}
+
 export class FeishuAdapter extends BaseChannelAdapter {
   readonly channelType: ChannelType;
   readonly provider = 'feishu';
@@ -1940,6 +1951,7 @@ export class FeishuAdapter extends BaseChannelAdapter {
   private pendingStreamMetadata = new Map<string, StructuredStreamingUiMetadata>();
   /** Recently sent rich command cards that can be updated in-place. */
   private richCardUpdates = new Map<string, RichCardUpdateState>();
+  private groupAuthorizationImageKeyPromise: Promise<string | null> | null = null;
   /** Cached tenant token for upload APIs. */
   private tenantTokenCache:
     | { token: string; expiresAt: number; appId: string; appSecret: string; domain: string }
@@ -2001,8 +2013,28 @@ export class FeishuAdapter extends BaseChannelAdapter {
       : 'https://open.feishu.cn/app/';
   }
 
-  private buildGroupAuthorizationCard(): NonNullable<OutboundMessage['richCard']> {
+  private async getGroupAuthorizationImageKey(): Promise<string | null> {
+    if (!this.groupAuthorizationImageKeyPromise) {
+      this.groupAuthorizationImageKeyPromise = (async () => {
+        try {
+          const image = dataUrlToImageBlob(groupAuthorizationImageDataUrl);
+          return await this.uploadImageBlob('message', image, GROUP_AUTHORIZATION_IMAGE_FILE_NAME);
+        } catch (error) {
+          this.groupAuthorizationImageKeyPromise = null;
+          console.warn(
+            '[feishu-adapter] Failed to upload group authorization reference image:',
+            error instanceof Error ? error.message : error,
+          );
+          return null;
+        }
+      })();
+    }
+    return this.groupAuthorizationImageKeyPromise;
+  }
+
+  private async buildGroupAuthorizationCard(): Promise<NonNullable<OutboundMessage['richCard']>> {
     const scopeJson = JSON.stringify({ scopes: { tenant: [FEISHU_GROUP_MESSAGE_SCOPE] } }, null, 2);
+    const imageKey = await this.getGroupAuthorizationImageKey();
     return {
       title: '群聊消息权限确认',
       template: 'orange',
@@ -2012,9 +2044,16 @@ export class FeishuAdapter extends BaseChannelAdapter {
             '如果您从默认向导中新建机器人，该机器人可能没有权限获取群聊中的所有消息（只能收到 @ 机器人的消息）。',
             '',
             `请参考下图在[开发者后台](${this.developerAuthUrl()})中授予机器人该权限，如您已经授权，请点击下方按钮。`,
-            '',
-            '参考图：Image #1',
           ].join('\n'),
+          ...(imageKey
+            ? {
+                image: {
+                  imageKey,
+                  alt: '飞书群聊消息权限授权参考图',
+                  mode: 'fit_horizontal' as const,
+                },
+              }
+            : {}),
         },
         {
           title: '需要授予的权限',
@@ -2389,7 +2428,7 @@ export class FeishuAdapter extends BaseChannelAdapter {
     const result = await this.send({
       address,
       text: '群聊消息权限确认',
-      richCard: this.buildGroupAuthorizationCard(),
+      richCard: await this.buildGroupAuthorizationCard(),
     });
     if (!result.ok) {
       console.warn('[feishu-adapter] Failed to send group authorization card:', result.error || result.httpStatus);

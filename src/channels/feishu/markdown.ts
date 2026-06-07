@@ -824,6 +824,19 @@ function buildRichCardSectionElements(
     }
   }
 
+  if (section.image?.imageKey.trim()) {
+    elements.push({
+      tag: 'img',
+      img_key: section.image.imageKey.trim(),
+      alt: {
+        tag: 'plain_text',
+        content: compactCardText(section.image.alt || '图片', 80),
+      },
+      mode: section.image.mode || 'fit_horizontal',
+      preview: section.image.preview !== false,
+    });
+  }
+
   const restActions = buildCardActionElements(restActionRows, chatId);
   if (restActions.length > 0) {
     elements.push(...restActions);
