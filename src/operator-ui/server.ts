@@ -3,13 +3,10 @@ import fs from 'node:fs';
 import net from 'node:net';
 import path from 'node:path';
 
-import {
-  CODELARK_HOME,
-  type Config,
-} from '../configuration/index.js';
-import { configV2ToLegacyConfig } from '../configuration/legacy.js';
+import { CODELARK_HOME } from '../configuration/index.js';
 import { loadRuntimeSettings } from '../configuration/runtime-settings-projection.js';
 import { createConfigService } from '../configuration/service.js';
+import type { ConfigV2 } from '../configuration/schema.js';
 import {
   getUiServerUrl,
   writeUiServerStatus,
@@ -88,11 +85,11 @@ function createUiStore(): JsonFileStore {
   return new JsonFileStore(loadRuntimeSettings({ codelarkHome: CODELARK_HOME }));
 }
 
-function loadUiConfig(): Config {
-  return configV2ToLegacyConfig(createConfigService({
+function loadUiConfig(): ConfigV2 {
+  return createConfigService({
     codelarkHome: CODELARK_HOME,
     migrate: false,
-  }).snapshot().config);
+  }).snapshot().config;
 }
 
 const server = http.createServer(async (request, response) => {

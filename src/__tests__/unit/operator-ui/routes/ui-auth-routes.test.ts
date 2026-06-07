@@ -6,6 +6,7 @@ import { Readable } from 'node:stream';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 
 import type { Config } from '../../../../configuration/index.js';
+import type { ConfigV2 } from '../../../../configuration/schema.js';
 import {
   buildUiAccessInfo,
   getUiAuthState,
@@ -59,6 +60,47 @@ const baseConfig: Config = {
   uiAllowLan: true,
   uiAccessToken: 'secret-token',
 };
+
+function baseConfigV2(overrides: Partial<ConfigV2> = {}): ConfigV2 {
+  return {
+    schemaVersion: 2,
+    session: {
+      workspace: '~',
+      tmuxSessionName: '',
+      tmuxCaptureLines: 80,
+      tmuxAutoEnter: true,
+      tmuxEchoInput: false,
+    },
+    runtime: {
+      agent: 'codex',
+      codex: {
+        model: '',
+        yoloMode: 'off',
+        provider: '',
+        skipGitRepoCheck: true,
+        sandboxMode: 'workspace-write',
+        networkAccess: true,
+        reasoningEffort: 'medium',
+      },
+      claude: {
+        model: '',
+        yoloMode: 'off',
+        permissionMode: 'default',
+        provider: 'sdk',
+        executable: 'claude',
+        reasoningEffort: 'medium',
+        idleTimeoutMinutes: 0,
+      },
+    },
+    bridge: {
+      defaultWorkspace: '~',
+      uiAllowLan: true,
+      uiAccessToken: 'secret-token',
+    },
+    channels: [],
+    ...overrides,
+  };
+}
 
 const originalNetworkInterfaces = os.networkInterfaces;
 
@@ -158,6 +200,31 @@ describe('UI auth routes', () => {
 
     assert.equal(rejected, true);
     assert.equal(response.statusCodeWritten, 401);
+  });
+
+  it('authenticates remote UI requests from v2 bridge config', async () => {
+    const request = createRequest({
+      remoteAddress: '192.168.1.10',
+      cookie: 'clk_ui_auth=secret-token',
+    });
+    const response = createResponse();
+    const config = baseConfigV2();
+
+    const auth = getUiAuthState(request, config);
+    const handled = await handleUiAuthRoute({
+      request,
+      response,
+      url: new URL('http://localhost/'),
+      config,
+      currentUrl: 'http://localhost',
+      auth,
+      renderHomeHtml: () => '<main>home</main>',
+    });
+
+    assert.equal(auth.authenticated, true);
+    assert.equal(handled, true);
+    assert.equal(response.statusCodeWritten, 200);
+    assert.equal(response.body, '<main>home</main>');
   });
 
   it('builds UI access info from auth state and local URLs', () => {
