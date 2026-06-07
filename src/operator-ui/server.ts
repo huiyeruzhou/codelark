@@ -5,7 +5,6 @@ import path from 'node:path';
 
 import { CODELARK_HOME } from '../configuration/paths.js';
 import { loadRuntimeSettings } from '../configuration/runtime-settings-projection.js';
-import { createConfigService } from '../configuration/service.js';
 import type { ConfigV2 } from '../configuration/schema.js';
 import {
   getUiServerUrl,
@@ -25,6 +24,7 @@ import { handleUiBindingRoute } from './routes/binding.js';
 import { handleUiSessionRoute } from './routes/session.js';
 import { handleUiServiceRoute } from './routes/service.js';
 import { buildUiBindingsPayload } from './application/chat-display.js';
+import { readUiHomeConfig } from './application/config.js';
 
 let port = 4781;
 const serverStartTime = new Date().toISOString();
@@ -86,10 +86,7 @@ function createUiStore(): JsonFileStore {
 }
 
 function loadUiConfig(): ConfigV2 {
-  return createConfigService({
-    codelarkHome: CODELARK_HOME,
-    migrate: false,
-  }).snapshot().config;
+  return readUiHomeConfig();
 }
 
 const server = http.createServer(async (request, response) => {

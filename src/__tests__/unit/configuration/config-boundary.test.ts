@@ -101,6 +101,14 @@ function productionFilesReadingChannelSnapshots(root: string): string[] {
     .map((file) => path.relative(process.cwd(), file));
 }
 
+function uiRouteFilesImportingConfigService(root: string): string[] {
+  const serviceImportPattern = /from\s+['"][^'"]*configuration\/service\.js['"]/;
+  const routesRoot = path.join(root, 'operator-ui', 'routes');
+  return listSourceFiles(routesRoot)
+    .filter((file) => serviceImportPattern.test(fs.readFileSync(file, 'utf-8')))
+    .map((file) => path.relative(process.cwd(), file));
+}
+
 describe('configuration module boundaries', () => {
   it('keeps the legacy config facade out of production imports', () => {
     const sourceRoot = path.join(process.cwd(), 'src');
@@ -160,6 +168,11 @@ describe('configuration module boundaries', () => {
 
   it('keeps configured channel snapshot lookups behind configuration helpers', () => {
     const offenders = productionFilesReadingChannelSnapshots(path.join(process.cwd(), 'src'));
+    assert.deepEqual(offenders, []);
+  });
+
+  it('keeps UI route config writes behind the application layer', () => {
+    const offenders = uiRouteFilesImportingConfigService(path.join(process.cwd(), 'src'));
     assert.deepEqual(offenders, []);
   });
 });

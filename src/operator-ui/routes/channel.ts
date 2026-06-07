@@ -1,8 +1,7 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 
-import { createConfigService } from '../../configuration/service.js';
-import type { ChannelConfigV2, ConfigPatch, ConfigV2 } from '../../configuration/schema.js';
-import { configV2ToPayload } from '../application/config.js';
+import type { ChannelConfigV2, ConfigV2 } from '../../configuration/schema.js';
+import { configV2ToPayload, readUiHomeConfig, replaceUiHomeConfig } from '../application/config.js';
 import {
   deleteChannelInstanceV2,
   findUiChannelInstance,
@@ -74,23 +73,6 @@ function syncBindingChannelMeta(store: UiChannelRouteStore, channel: ChannelConf
   }
 }
 
-function readHomeTomlConfig(): ConfigV2 {
-  return createConfigService({ migrate: false }).snapshot().config;
-}
-
-function homeWritableConfigPatch(config: ConfigV2): ConfigPatch {
-  return {
-    schemaVersion: config.schemaVersion,
-    runtime: config.runtime,
-    bridge: config.bridge,
-    channels: config.channels,
-  };
-}
-
-function replaceHomeTomlConfig(config: ConfigV2): void {
-  createConfigService({ migrate: false }).replace({ kind: 'home' }, homeWritableConfigPatch(config));
-}
-
 export async function handleUiChannelRoute(options: {
   request: IncomingMessage;
   response: ServerResponse;
@@ -105,8 +87,8 @@ export async function handleUiChannelRoute(options: {
     response,
     url,
     createStore,
-    readConfig = readHomeTomlConfig,
-    writeConfig = replaceHomeTomlConfig,
+    readConfig = readUiHomeConfig,
+    writeConfig = replaceUiHomeConfig,
     buildBindingsPayload,
   } = options;
 

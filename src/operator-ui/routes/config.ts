@@ -1,9 +1,9 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 
-import { createConfigService } from '../../configuration/service.js';
 import {
   configV2ToPayload,
-  mergeConfigV2HomePatch,
+  readUiHomeConfig,
+  saveUiConfigPayload,
 } from '../application/config.js';
 
 function json(response: ServerResponse, statusCode: number, body: unknown): void {
@@ -28,16 +28,13 @@ export async function handleUiConfigRoute(options: {
   const { request, response, url } = options;
 
   if (request.method === 'GET' && url.pathname === '/api/config') {
-    const service = createConfigService({ migrate: false });
-    json(response, 200, configV2ToPayload(service.snapshot().config));
+    json(response, 200, configV2ToPayload(readUiHomeConfig()));
     return true;
   }
 
   if (request.method === 'POST' && url.pathname === '/api/config') {
     const payload = await readJsonBody<Record<string, unknown>>(request);
-    const service = createConfigService({ migrate: false });
-    service.replace({ kind: 'home' }, mergeConfigV2HomePatch(service.snapshot().config, payload));
-    json(response, 200, { ok: true, config: configV2ToPayload(service.snapshot().config) });
+    json(response, 200, { ok: true, config: configV2ToPayload(saveUiConfigPayload(payload)) });
     return true;
   }
 

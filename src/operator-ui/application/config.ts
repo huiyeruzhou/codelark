@@ -1,6 +1,7 @@
 import crypto from 'node:crypto';
 import os from 'node:os';
 
+import { createConfigService } from '../../configuration/service.js';
 import type { ConfigPatch, ConfigV2 } from '../../configuration/schema.js';
 import { listSelectableCodexModels, readConfiguredCodexModel } from '../../runtime/codex/models.js';
 
@@ -217,4 +218,27 @@ export function mergeConfigV2HomePatch(current: ConfigV2, payload: Record<string
       },
     })),
   };
+}
+
+export function homeWritableConfigPatch(config: ConfigV2): ConfigPatch {
+  return {
+    schemaVersion: config.schemaVersion,
+    runtime: config.runtime,
+    bridge: config.bridge,
+    channels: config.channels,
+  };
+}
+
+export function readUiHomeConfig(): ConfigV2 {
+  return createConfigService({ migrate: false }).snapshot().config;
+}
+
+export function replaceUiHomeConfig(config: ConfigV2): void {
+  createConfigService({ migrate: false }).replace({ kind: 'home' }, homeWritableConfigPatch(config));
+}
+
+export function saveUiConfigPayload(payload: Record<string, unknown>): ConfigV2 {
+  const service = createConfigService({ migrate: false });
+  service.replace({ kind: 'home' }, mergeConfigV2HomePatch(service.snapshot().config, payload));
+  return service.snapshot().config;
 }
