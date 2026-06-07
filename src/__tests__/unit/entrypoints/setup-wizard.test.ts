@@ -21,10 +21,19 @@ import {
   feishuSetupUserAuthScopeArgument,
   feishuSetupUserAuthScopes,
 } from '../../../channels/feishu/permissions.js';
-import type { Config } from '../../../configuration/index.js';
+import type { ConfigV2 } from '../../../configuration/schema.js';
 
 function tempDir(prefix: string): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+}
+
+function baseSetupConfig(): ConfigV2 {
+  const home = tempDir('clk-setup-base-');
+  try {
+    return loadSetupConfig(home);
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true });
+  }
 }
 
 test('extracts lark-cli authorization URLs from terminal output', () => {
@@ -150,12 +159,7 @@ test('recommends runtime from home directory markers', () => {
 });
 
 test('builds setup config with selected credentials, runtime, and workspace', () => {
-  const current: Config = {
-    runtime: 'codex',
-    defaultMode: 'normal',
-    enabledChannels: [],
-    channels: [],
-  };
+  const current = baseSetupConfig();
 
   const next = buildSetupConfig(
     current,
@@ -170,31 +174,24 @@ test('builds setup config with selected credentials, runtime, and workspace', ()
     '/work/project',
   );
 
-  assert.equal(next.runtime, 'claude');
-  assert.equal(next.claudeExecutable, 'ccr');
-  assert.equal(next.claudeProvider, 'sdk');
-  assert.equal(next.defaultWorkspaceRoot, '/work/project');
-  assert.equal(next.defaultProvider, 'tmux');
+  assert.equal(next.runtime.agent, 'claude');
+  assert.equal(next.runtime.claude.executable, 'ccr');
+  assert.equal(next.runtime.claude.provider, 'sdk');
+  assert.equal(next.bridge.defaultWorkspace, '/work/project');
+  assert.equal(next.runtime.codex.provider, 'tmux');
   assert.equal(next.channels?.[0]?.alias, '主飞书');
-  assert.deepEqual(next.channels?.[0]?.config, {
-    appId: 'cli_demo',
-    appSecret: 'secret_demo',
-    site: 'feishu',
-    allowedUsers: ['ou_a'],
-    streamingEnabled: true,
-    feedbackMarkdownEnabled: true,
-  });
+  assert.equal(next.channels?.[0]?.config.appId, 'cli_demo');
+  assert.equal(next.channels?.[0]?.config.appSecret, 'secret_demo');
+  assert.equal(next.channels?.[0]?.config.site, 'feishu');
+  assert.deepEqual(next.channels?.[0]?.config.allowedUsers, ['ou_a']);
+  assert.equal(next.channels?.[0]?.config.streamingEnabled, true);
+  assert.equal(next.channels?.[0]?.config.feedbackMarkdownEnabled, true);
 });
 
 test('setup wizard saves first-run config to home TOML instead of legacy env/json files', () => {
   const home = tempDir('clk-setup-config-');
   try {
-    const current: Config = {
-      runtime: 'codex',
-      defaultMode: 'normal',
-      enabledChannels: [],
-      channels: [],
-    };
+    const current = loadSetupConfig(home);
     const next = buildSetupConfig(
       current,
       {
@@ -213,8 +210,8 @@ test('setup wizard saves first-run config to home TOML instead of legacy env/jso
     assert.equal(fs.existsSync(path.join(home, 'config.toml')), true);
     assert.equal(fs.existsSync(path.join(home, 'config.env')), false);
     assert.equal(fs.existsSync(path.join(home, 'config.json')), false);
-    assert.equal(loaded.runtime, 'codex');
-    assert.equal(loaded.defaultWorkspaceRoot, '/work/project');
+    assert.equal(loaded.runtime.agent, 'codex');
+    assert.equal(loaded.bridge.defaultWorkspace, '/work/project');
     assert.equal(loaded.channels?.[0]?.config.appId, 'cli_demo');
     assert.equal(loaded.channels?.[0]?.config.appSecret, 'secret_demo');
     assert.equal(loaded.channels?.[0]?.config.site, 'lark');

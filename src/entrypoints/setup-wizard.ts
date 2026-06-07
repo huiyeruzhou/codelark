@@ -12,15 +12,13 @@ import {
   CODELARK_HOME,
   DEFAULT_WORKSPACE_ROOT,
   normalizeFeishuSite,
-  type ChannelInstance,
   type ClaudeExecutable,
-  type Config,
   type FeishuChannelConfig,
   type FeishuSite,
   type RuntimeProvider,
 } from '../configuration/index.js';
-import { configV2ToLegacyConfig, legacyConfigToConfigPatch } from '../configuration/legacy.js';
 import { createConfigService } from '../configuration/service.js';
+import type { ConfigPatch, ConfigV2 } from '../configuration/schema.js';
 import {
   INSTALLABLE_SKILLS,
   OFFICIAL_LARK_DOC_SKILL,
@@ -100,12 +98,14 @@ export function recommendRuntime(homeDir = os.homedir()): RuntimeRecommendation 
   };
 }
 
-export function runtimeChoiceToConfig(choice: RuntimeChoice): Pick<Config, 'runtime' | 'claudeExecutable' | 'claudeProvider'> {
-  if (choice === 'codex') return { runtime: 'codex' };
+export function runtimeChoiceToConfig(choice: RuntimeChoice): NonNullable<ConfigPatch['runtime']> {
+  if (choice === 'codex') return { agent: 'codex' };
   return {
-    runtime: 'claude',
-    claudeExecutable: choice === 'ccr' ? 'ccr' : 'claude',
-    claudeProvider: 'sdk',
+    agent: 'claude',
+    claude: {
+      executable: choice === 'ccr' ? 'ccr' : 'claude',
+      provider: 'sdk',
+    },
   };
 }
 
@@ -119,23 +119,22 @@ function splitAllowedUsers(value: string): string[] | undefined {
   return users.length > 0 ? users : undefined;
 }
 
-function buildFeishuChannel(config: Config, credentials: FeishuCredentials): ChannelInstance {
+function buildFeishuChannel(config: ConfigV2, credentials: FeishuCredentials): ConfigV2['channels'][number] {
   const existing = (config.channels || []).find((channel) => channel.provider === 'feishu');
-  const timestamp = new Date().toISOString();
-  const existingConfig = (existing?.config || {}) as FeishuChannelConfig;
+  if (!existing) {
+    throw new Error('Setup config is missing the Feishu channel template from defaults.toml.');
+  }
   return {
-    id: existing?.id || 'feishu-default',
-    alias: credentials.alias || existing?.alias || '飞书',
+    id: existing.id,
+    alias: credentials.alias || existing.alias || '飞书',
     provider: 'feishu',
     enabled: true,
-    createdAt: existing?.createdAt || timestamp,
-    updatedAt: timestamp,
     config: {
-      ...existingConfig,
+      ...existing.config,
       appId: credentials.appId,
       appSecret: credentials.appSecret,
       site: credentials.site,
-      allowedUsers: credentials.allowedUsers,
+      allowedUsers: credentials.allowedUsers ?? existing.config.allowedUsers,
       streamingEnabled: true,
       feedbackMarkdownEnabled: true,
     },
@@ -143,29 +142,31 @@ function buildFeishuChannel(config: Config, credentials: FeishuCredentials): Cha
 }
 
 export function buildSetupConfig(
-  current: Config,
+  current: ConfigV2,
   credentials: FeishuCredentials,
   runtimeChoice: RuntimeChoice,
   workspaceRoot: string,
-): Config {
+): ConfigV2 {
   const nextFeishu = buildFeishuChannel(current, credentials);
   const runtimeConfig = runtimeChoiceToConfig(runtimeChoice);
   return {
     ...current,
-    ...runtimeConfig,
-    defaultWorkspaceRoot: workspaceRoot,
-    defaultProvider: current.defaultProvider || 'tmux',
-    defaultMode: current.defaultMode || 'normal',
-    historyMessageLimit: current.historyMessageLimit || 8,
-    streamStatusIdleStartSeconds: current.streamStatusIdleStartSeconds || 60,
-    streamStatusCheckIntervalSeconds: current.streamStatusCheckIntervalSeconds || 5,
-    codexSkipGitRepoCheck: current.codexSkipGitRepoCheck !== false,
-    codexSandboxMode: current.codexSandboxMode || 'workspace-write',
-    codexNetworkAccess: current.codexNetworkAccess !== false,
-    codexReasoningEffort: current.codexReasoningEffort || 'medium',
-    claudeExecutable: runtimeConfig.claudeExecutable || current.claudeExecutable,
-    claudeProvider: runtimeConfig.claudeProvider || current.claudeProvider || 'sdk',
-    uiAllowLan: current.uiAllowLan === true,
+    runtime: {
+      ...current.runtime,
+      ...runtimeConfig,
+      codex: {
+        ...current.runtime.codex,
+        provider: current.runtime.codex.provider || 'tmux',
+      },
+      claude: {
+        ...current.runtime.claude,
+        ...(runtimeConfig.claude || {}),
+      },
+    },
+    bridge: {
+      ...current.bridge,
+      defaultWorkspace: workspaceRoot,
+    },
     channels: [
       nextFeishu,
       ...(current.channels || []).filter((channel) => channel.id !== nextFeishu.id),
@@ -173,13 +174,22 @@ export function buildSetupConfig(
   };
 }
 
-export function loadSetupConfig(codelarkHome = CODELARK_HOME): Config {
-  return configV2ToLegacyConfig(createConfigService({ codelarkHome, env: {} }).snapshot().config);
+export function loadSetupConfig(codelarkHome = CODELARK_HOME): ConfigV2 {
+  return createConfigService({ codelarkHome, env: {} }).snapshot().config;
 }
 
-export function saveSetupConfigToHomeToml(config: Config, codelarkHome = CODELARK_HOME): void {
+function homeWritableSetupPatch(config: ConfigV2): ConfigPatch {
+  return {
+    schemaVersion: config.schemaVersion,
+    runtime: config.runtime,
+    bridge: config.bridge,
+    channels: config.channels,
+  };
+}
+
+export function saveSetupConfigToHomeToml(config: ConfigV2, codelarkHome = CODELARK_HOME): void {
   createConfigService({ codelarkHome, migrate: false })
-    .set({ kind: 'home' }, legacyConfigToConfigPatch(config));
+    .replace({ kind: 'home' }, homeWritableSetupPatch(config));
 }
 
 function resolveLarkCliScript(): string {
@@ -325,7 +335,7 @@ async function hasCodeLarkUserAuthorization(): Promise<boolean> {
   }
 }
 
-async function ensureCodeLarkUserAuthorization(config: Config): Promise<void> {
+async function ensureCodeLarkUserAuthorization(config: ConfigV2): Promise<void> {
   // 先于常规 readiness check 清理旧 runtime。旧 bot-only runtime 可能让
   // bot 操作看起来可用，但仍然阻止 setup 接下来要申请的用户身份。
   const resetLegacyRuntime = resetLegacyStrictLarkCliRuntimeForSetup(config);
