@@ -22,7 +22,7 @@ CodeLark 需要把“默认值、全局配置、项目配置、环境变量、�
 - `src/configuration/static-loader.ts`：用 `node-config` 解析并合并 defaults/home/local/env/cli 静态 baseline；只返回需要 materialize 的 home patch，不直接写文件。
 - `src/configuration/sources.ts`：复用 `node-config` TOML parser 读取 defaults/home/local/channel/session TOML，并提供 `ConfigService` 写入所需的持久化 I/O。
 - `src/configuration/service.ts`：`ConfigService` 查询、写入、dynamic overlay、provenance/explain 和 projection 入口。
-- `src/configuration/source-values.ts`：封装“只读取某个 source 的显式 override”这种 provenance 判断，业务代码不能各自手写 fallback/source 检查。
+- `src/configuration/source-values.ts`：封装“只读取某个 source 的显式 override”、读取 effective path source 和比较 source 优先级这类 provenance 判断，业务代码不能各自手写 fallback/source 检查。
 - 配置解析库边界：生产代码只有 `src/configuration` 可以直接导入 `node-config` 或 `smol-toml`；业务模块必须通过 `ConfigService`、projection 或迁移 adapter 使用配置。
 - `src/local-service/manager.ts` / `src/entrypoints/cli.ts`：CLI `run` 时用同一个 effective config snapshot 同时派生 UI env、Bridge preflight config 和 Bridge env projection，避免一次启动内动态 TOML reload 前后不一致。
 - `src/configuration/legacy.ts` / `legacy-types.ts`：仅保留 legacy expanded `Config` adapter 和 migration/compatibility 测试；生产代码不应从这里读取配置。
@@ -141,7 +141,7 @@ src/configuration/
   sources.ts                 # 路径解析、Channel/Session TOML 读写和持久化写入
   merge.ts                   # node-config effective merge + provenance/write patch helpers
   service.ts                 # ConfigService 查询和写入 API
-  source-values.ts           # 按 source 读取显式 override，避免业务代码手写 provenance fallback
+  source-values.ts           # source/path provenance 查询和显式 override 读取，避免业务代码手写 source rank/fallback
   env-compat.ts              # 真实 process.env 的旧 env alias 兼容读取和 warning
   projections.ts             # runtime settings、UI payload、lark-cli projection
   legacy.ts                  # legacy Config adapter 和 runtime settings projection compatibility

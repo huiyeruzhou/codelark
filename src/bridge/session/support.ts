@@ -9,7 +9,7 @@ import {
 } from '../../runtime/codex/session-index.js';
 import { normalizeClaudeExecutable, type ClaudeExecutable, type ClaudePermissionMode, type ClaudeProviderChoice } from '../../configuration/runtime-types.js';
 import { createConfigService, type ConfigScope, type EffectiveConfig } from '../../configuration/service.js';
-import { getSessionConfigOverride } from '../../configuration/source-values.js';
+import { configSourceRank, getEffectiveConfigSource, getSessionConfigOverride, isEffectiveConfigSource } from '../../configuration/source-values.js';
 import type { ConfigPatch } from '../../configuration/schema.js';
 import type { ConfigV2 } from '../../configuration/schema.js';
 import type { ConfigPath } from '../../configuration/fields-types.js';
@@ -115,20 +115,6 @@ function scopedConfigForRuntime(
     console.error('[bridge-manager] Failed to resolve scoped runtime config:', error);
     const effective = createConfigService({ migrate: false }).snapshot();
     return { effective, config: effective.config, scope: undefined };
-  }
-}
-
-function sourceRank(source: string | undefined): number {
-  switch (source) {
-    case 'request': return 7;
-    case 'session': return 6;
-    case 'channel': return 5;
-    case 'cli': return 4;
-    case 'env': return 3;
-    case 'local': return 2;
-    case 'home': return 1;
-    case 'defaults':
-    default: return 0;
   }
 }
 
@@ -295,8 +281,8 @@ function normalizeClaudeReasoningEffort(value: string | null | undefined): Bridg
 export function resolveClaudeRuntimeConfig(session?: BridgeSession | null, binding?: ChannelChat | null): ClaudeRuntimeConfig {
   const { effective, config } = scopedConfigForRuntime(binding, session);
   const permissionMode = normalizeClaudePermissionMode(config.runtime.claude.permissionMode);
-  const permissionRank = sourceRank(effective.provenance.get('runtime.claude.permissionMode')?.source);
-  const yoloRank = sourceRank(effective.provenance.get('runtime.claude.yoloMode')?.source);
+  const permissionRank = configSourceRank(getEffectiveConfigSource(effective, 'runtime.claude.permissionMode'));
+  const yoloRank = configSourceRank(getEffectiveConfigSource(effective, 'runtime.claude.yoloMode'));
   const yoloPermissionMode = config.runtime.claude.yoloMode === 'on'
     ? 'bypassPermissions'
     : config.runtime.claude.yoloMode === 'off'
@@ -362,8 +348,7 @@ export function resolveDisplayedModel(
 ): string {
   const { effective, config } = scopedConfigForRuntime(binding, session);
   const scopedModel = config.runtime.codex.model;
-  const modelSource = effective.provenance.get('runtime.codex.model')?.source;
-  if (scopedModel && (modelSource === 'session' || modelSource === 'channel' || modelSource === 'request')) {
+  if (scopedModel && isEffectiveConfigSource(effective, 'runtime.codex.model', ['session', 'channel', 'request'])) {
     return scopedModel;
   }
   return configuredDefaultModel

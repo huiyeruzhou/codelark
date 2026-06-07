@@ -66,7 +66,7 @@ function filesImportingConfigParsersOutsideConfiguration(root: string): string[]
 }
 
 function productionFilesWithDirectSourceChecks(root: string): string[] {
-  const sourceCheckPattern = /\bresolved\.source\s*===\s*['"](?:defaults|home|local|env|cli|channel|session|request)['"]/;
+  const sourceCheckPattern = /\bresolved\.source\s*===\s*['"](?:defaults|home|local|env|cli|channel|session|request)['"]|\bprovenance\.get\(|\bsourceRank\(/;
   return listSourceFiles(root)
     .filter((file) => {
       const relative = path.relative(root, file);

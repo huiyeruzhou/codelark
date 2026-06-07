@@ -5,7 +5,13 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { createConfigService } from '../../../configuration/service.js';
-import { getConfigValueFromSource, getSessionConfigOverride } from '../../../configuration/source-values.js';
+import {
+  configSourceRank,
+  getConfigValueFromSource,
+  getEffectiveConfigSource,
+  getSessionConfigOverride,
+  isEffectiveConfigSource,
+} from '../../../configuration/source-values.js';
 import { resolveConfigPaths } from '../../../configuration/sources.js';
 import { loadStaticConfigBaseline } from '../../../configuration/static-loader.js';
 
@@ -193,6 +199,10 @@ reasoning_effort = "high"
         'high',
       );
       assert.equal(service.get('runtime.codex.model', scope), 'env-model');
+      const effective = service.snapshot(scope);
+      assert.equal(getEffectiveConfigSource(effective, 'runtime.codex.reasoningEffort'), 'session');
+      assert.equal(isEffectiveConfigSource(effective, 'runtime.codex.reasoningEffort', ['session']), true);
+      assert.equal(configSourceRank('session') > configSourceRank('env'), true);
     } finally {
       fs.rmSync(home, { recursive: true, force: true });
     }
