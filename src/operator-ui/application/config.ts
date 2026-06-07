@@ -1,11 +1,6 @@
 import crypto from 'node:crypto';
 import os from 'node:os';
 
-import {
-  isSupportedChannelProvider,
-  type ChannelInstance,
-  type Config,
-} from '../../configuration/index.js';
 import type { ConfigPatch, ConfigV2 } from '../../configuration/schema.js';
 import { listSelectableCodexModels, readConfiguredCodexModel } from '../../runtime/codex/models.js';
 
@@ -56,47 +51,6 @@ function hasPayloadKey(payload: Record<string, unknown>, key: string): boolean {
 
 function generateAccessToken(): string {
   return crypto.randomBytes(18).toString('base64url');
-}
-
-export function channelToPayload(channel: ChannelInstance) {
-  return {
-    id: channel.id,
-    alias: channel.alias,
-    provider: channel.provider,
-    enabled: channel.enabled,
-    createdAt: channel.createdAt,
-    updatedAt: channel.updatedAt,
-    config: { ...channel.config },
-  };
-}
-
-export function configToPayload(config: Config) {
-  return {
-    runtime: config.runtime,
-    defaultWorkspaceRoot: config.defaultWorkspaceRoot || '',
-    defaultModel: config.defaultModel || '',
-    defaultProvider: config.defaultProvider || '',
-    codexDefaultModel: readConfiguredCodexModel() || '',
-    availableModels: availableCodexModels,
-    defaultMode: config.defaultMode,
-    historyMessageLimit: config.historyMessageLimit ?? 8,
-    streamStatusIdleStartSeconds: config.streamStatusIdleStartSeconds ?? 180,
-    streamStatusCheckIntervalSeconds: config.streamStatusCheckIntervalSeconds ?? 10,
-    codexSkipGitRepoCheck: config.codexSkipGitRepoCheck === true,
-    codexSandboxMode: config.codexSandboxMode || 'workspace-write',
-    codexNetworkAccess: config.codexNetworkAccess !== false,
-    codexReasoningEffort: config.codexReasoningEffort || 'medium',
-    claudeProvider: config.claudeProvider || 'sdk',
-    claudeExecutable: config.claudeExecutable || 'claude',
-    claudeDefaultModel: config.claudeDefaultModel || '',
-    claudePermissionMode: config.claudePermissionMode || 'default',
-    claudeIdleTimeoutMinutes: config.claudeIdleTimeoutMinutes ?? 0,
-    uiAllowLan: config.uiAllowLan === true,
-    uiAccessToken: config.uiAccessToken || '',
-    channels: (config.channels || [])
-      .filter((channel) => isSupportedChannelProvider(channel.provider))
-      .map(channelToPayload),
-  };
 }
 
 function defaultUiChannel(config: ConfigV2): ConfigV2['channels'][number] | undefined {
@@ -262,97 +216,5 @@ export function mergeConfigV2HomePatch(current: ConfigV2, payload: Record<string
         ...(streamStatusCheckIntervalSeconds !== undefined ? { streamStatusCheckIntervalSeconds } : {}),
       },
     })),
-  };
-}
-
-export function mergeConfig(current: Config, payload: Record<string, unknown>): Config {
-  const rawDefaultModel = typeof payload.defaultModel === 'string'
-    ? payload.defaultModel.trim()
-    : undefined;
-  const rawDefaultProvider = typeof payload.defaultProvider === 'string'
-    ? payload.defaultProvider.trim().toLowerCase()
-    : undefined;
-  const rawRuntime = typeof payload.runtime === 'string'
-    ? payload.runtime.trim().toLowerCase()
-    : undefined;
-  const rawClaudeDefaultModel = typeof payload.claudeDefaultModel === 'string'
-    ? payload.claudeDefaultModel.trim()
-    : undefined;
-  const rawClaudeProvider = typeof payload.claudeProvider === 'string'
-    ? payload.claudeProvider.trim().toLowerCase()
-    : undefined;
-  const rawClaudeExecutable = typeof payload.claudeExecutable === 'string'
-    ? payload.claudeExecutable.trim().toLowerCase()
-    : undefined;
-  const rawClaudePermissionMode = typeof payload.claudePermissionMode === 'string'
-    ? payload.claudePermissionMode.trim()
-    : undefined;
-  const uiAllowLan = payload.uiAllowLan === true;
-  const requestedUiAccessToken = asString(payload.uiAccessToken);
-  const uiAccessToken = requestedUiAccessToken
-    || current.uiAccessToken
-    || (uiAllowLan ? generateAccessToken() : undefined);
-
-  return {
-    ...current,
-    runtime: rawRuntime === 'claude' ? 'claude' : 'codex',
-    enabledChannels: current.enabledChannels,
-    defaultWorkspaceRoot: asString(payload.defaultWorkspaceRoot),
-    defaultModel: rawDefaultModel === undefined
-      ? current.defaultModel
-      : rawDefaultModel === ''
-        ? undefined
-        : availableCodexModelSlugs.has(rawDefaultModel)
-          ? rawDefaultModel
-          : current.defaultModel,
-    defaultProvider: rawDefaultProvider === undefined
-      ? current.defaultProvider
-      : rawDefaultProvider === 'sdk' || rawDefaultProvider === 'tmux' || rawDefaultProvider === 'pty'
-        ? rawDefaultProvider
-        : undefined,
-    defaultMode: payload.defaultMode === 'yolo' ? 'yolo' : 'normal',
-    historyMessageLimit: clampHistoryMessageLimit(payload.historyMessageLimit, current.historyMessageLimit || 8),
-    streamStatusIdleStartSeconds: asPositiveInt(payload.streamStatusIdleStartSeconds)
-      || current.streamStatusIdleStartSeconds
-      || 180,
-    streamStatusCheckIntervalSeconds: asPositiveInt(payload.streamStatusCheckIntervalSeconds)
-      || current.streamStatusCheckIntervalSeconds
-      || 10,
-    codexSkipGitRepoCheck: payload.codexSkipGitRepoCheck === true,
-    codexSandboxMode: payload.codexSandboxMode === 'read-only'
-      || payload.codexSandboxMode === 'workspace-write'
-      || payload.codexSandboxMode === 'danger-full-access'
-      ? payload.codexSandboxMode
-      : 'workspace-write',
-    codexNetworkAccess: payload.codexNetworkAccess !== false,
-    codexReasoningEffort: payload.codexReasoningEffort === 'minimal'
-      || payload.codexReasoningEffort === 'low'
-      || payload.codexReasoningEffort === 'high'
-      || payload.codexReasoningEffort === 'xhigh'
-      ? payload.codexReasoningEffort
-      : 'medium',
-    claudeDefaultModel: rawClaudeDefaultModel === undefined
-      ? current.claudeDefaultModel
-      : rawClaudeDefaultModel || undefined,
-    claudeProvider: rawClaudeProvider === undefined
-      ? current.claudeProvider
-      : rawClaudeProvider === 'sdk' || rawClaudeProvider === 'pty'
-        ? rawClaudeProvider
-        : undefined,
-    claudeExecutable: rawClaudeExecutable === 'ccr' || rawClaudeExecutable === 'claude'
-      ? rawClaudeExecutable
-      : current.claudeExecutable,
-    claudePermissionMode: rawClaudePermissionMode === 'acceptEdits'
-      || rawClaudePermissionMode === 'bypassPermissions'
-      || rawClaudePermissionMode === 'plan'
-      || rawClaudePermissionMode === 'default'
-      ? rawClaudePermissionMode
-      : current.claudePermissionMode,
-    claudeIdleTimeoutMinutes: asNonNegativeInt(payload.claudeIdleTimeoutMinutes)
-      ?? current.claudeIdleTimeoutMinutes
-      ?? 0,
-    uiAllowLan,
-    uiAccessToken,
-    channels: current.channels,
   };
 }

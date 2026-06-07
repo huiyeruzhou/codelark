@@ -2,9 +2,7 @@ import {
   feishuSiteToApiBaseUrl,
   isSupportedChannelProvider,
   normalizeFeishuSite,
-  type ChannelInstance,
   type ChannelProvider,
-  type Config,
   type FeishuChannelConfig,
   type FeishuSite,
 } from '../../configuration/index.js';
@@ -36,12 +34,6 @@ function payloadString(payload: Record<string, unknown>, key: string, fallback: 
   return typeof payload[key] === 'string' ? payload[key].trim() : fallback;
 }
 
-function parseCsv(value: unknown): string[] | undefined {
-  const text = asString(value);
-  if (!text) return undefined;
-  return text.split(',').map((item) => item.trim()).filter(Boolean);
-}
-
 function payloadCsv(payload: Record<string, unknown>, key: string, fallback: string[]): string[] {
   if (!Object.prototype.hasOwnProperty.call(payload, key)) return fallback;
   if (typeof payload[key] !== 'string') return fallback;
@@ -64,14 +56,7 @@ function buildChannelId(provider: ChannelProvider, alias: string, takenIds: Set<
   return `${base}-${suffix}`;
 }
 
-function cloneChannel(channel: ChannelInstance): ChannelInstance {
-  return {
-    ...channel,
-    config: { ...channel.config } as ChannelInstance['config'],
-  };
-}
-
-export function getChannelLabel(channel: Pick<ChannelInstance, 'alias' | 'provider'>): string {
+export function getChannelLabel(channel: Pick<UiChannelInstance, 'alias' | 'provider'>): string {
   const providerLabel = '飞书';
   return channel.alias?.trim() ? `${channel.alias} · ${providerLabel}` : providerLabel;
 }
@@ -87,71 +72,6 @@ export function getFeishuDomain(channel: UiChannelInstance): string {
 
 export function findUiChannelInstance(channelId: string, config: UiChannelConfigSource): UiChannelInstance | undefined {
   return (config.channels || []).find((channel) => channel.id === channelId);
-}
-
-export function mergeChannelInstance(
-  payload: Record<string, unknown>,
-  current: Config,
-): { config: Config; channel: ChannelInstance } {
-  const provider = isSupportedChannelProvider(payload.provider) ? payload.provider : undefined;
-  if (!provider) {
-    throw new Error('通道提供方只能是飞书。');
-  }
-
-  const existingId = asString(payload.id);
-  const existing = existingId ? findUiChannelInstance(existingId, current) : undefined;
-  const alias = normalizeChannelAlias(asString(payload.alias), provider);
-  const baseChannels = (current.channels || []).map(cloneChannel);
-  const takenIds = new Set(baseChannels.map((channel) => channel.id));
-  const channelId = existing?.id || buildChannelId(provider, alias, takenIds);
-  const now = new Date().toISOString();
-
-  const nextConfig: FeishuChannelConfig = {
-    appId: asString(payload.appId),
-    appSecret: asString(payload.appSecret),
-    site: normalizeFeishuSite(asString(payload.site) || asString(payload.domain)),
-    allowedUsers: parseCsv(payload.allowedUsers),
-    streamingEnabled: payload.streamingEnabled !== false,
-    feedbackMarkdownEnabled: payload.feedbackMarkdownEnabled !== false,
-    requireMention: payload.requireMention === true,
-  };
-
-  const nextChannel: ChannelInstance = {
-    id: channelId,
-    alias,
-    provider,
-    enabled: payload.enabled !== false,
-    createdAt: existing?.createdAt || now,
-    updatedAt: now,
-    config: nextConfig,
-  };
-
-  const nextChannels = existing
-    ? baseChannels.map((channel) => channel.id === existing.id ? nextChannel : channel)
-    : [...baseChannels, nextChannel];
-
-  return {
-    config: {
-      ...current,
-      channels: nextChannels,
-      enabledChannels: Array.from(new Set(nextChannels.filter((channel) => channel.enabled).map((channel) => channel.provider))),
-    },
-    channel: nextChannel,
-  };
-}
-
-export function deleteChannelInstance(current: Config, channelId: string): Config {
-  const channels = current.channels || [];
-  const nextChannels = channels.filter((channel) => channel.id !== channelId);
-  if (nextChannels.length === channels.length) {
-    throw new Error('指定的通道不存在。');
-  }
-
-  return {
-    ...current,
-    channels: nextChannels,
-    enabledChannels: Array.from(new Set(nextChannels.filter((channel) => channel.enabled).map((channel) => channel.provider))),
-  };
 }
 
 function defaultChannelTemplate(current: ConfigV2): ChannelConfigV2['config'] {
