@@ -213,7 +213,11 @@ model = "scoped-local-model"
       assert.equal(snapshot.config.channels[0]?.config.site, 'feishu');
       assert.deepEqual(
         snapshot.warnings.map((warning) => warning.envKey).sort(),
-        ['CODELARK_CODEX_DEFAULT_MODEL'],
+        ['CODELARK_CODEX_DEFAULT_MODEL', 'CODELARK_ENABLED_CHANNELS', 'CODELARK_FEISHU_DOMAIN'],
+      );
+      assert.match(
+        snapshot.warnings.find((warning) => warning.envKey === 'CODELARK_FEISHU_DOMAIN')?.message || '',
+        /export-only/,
       );
       assert.equal(service.resolve('runtime.codex.model').env, 'CODELARK_CODEX_MODEL');
     } finally {

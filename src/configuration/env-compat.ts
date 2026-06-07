@@ -1,4 +1,5 @@
-import { findConfigField } from './fields.js';
+import { configFields } from './fields.js';
+import type { ConfigField } from './fields-types.js';
 import type { ConfigPatch } from './schema.js';
 import { setConfigPath } from './path-access.js';
 
@@ -17,6 +18,28 @@ const legacyEnvAliases = new Map<string, string>([
   ['CODELARK_FEISHU_DOMAIN', 'CODELARK_FEISHU_SITE'],
 ]);
 
+function channelEnvKeyWarnings(env: NodeJS.ProcessEnv): EnvCompatWarning[] {
+  const warnings: EnvCompatWarning[] = [];
+  const channelKeys = new Set(
+    (configFields as readonly ConfigField[])
+      .filter((field) => field.path.startsWith('channels[].') && field.envKey)
+      .map((field) => field.envKey!),
+  );
+  for (const [alias, newKey] of legacyEnvAliases) {
+    if (channelKeys.has(newKey)) channelKeys.add(alias);
+  }
+
+  for (const key of channelKeys) {
+    if (env[key] === undefined) continue;
+    warnings.push({
+      envKey: key,
+      aliasFor: legacyEnvAliases.get(key) || key,
+      message: `${key} is export-only in config v2; configure channel settings in ~/.codelark/config.toml.`,
+    });
+  }
+  return warnings;
+}
+
 function normalizeLegacyValue(newKey: string, value: string): string {
   if (newKey === 'CODELARK_CODEX_YOLO_MODE') return value === 'yolo' ? 'on' : 'off';
   return value;
@@ -28,7 +51,7 @@ export function envToConfigPatch(env: NodeJS.ProcessEnv): {
   envByPath: Map<string, string>;
 } {
   const patch: ConfigPatch = {};
-  const warnings: EnvCompatWarning[] = [];
+  const warnings: EnvCompatWarning[] = channelEnvKeyWarnings(env);
   const envByPath = new Map<string, string>();
 
   for (const field of Object.values(findConfigFieldsByEnv())) {
@@ -81,40 +104,9 @@ function ensureDefaultChannelPatch(patch: ConfigPatch): NonNullable<ConfigPatch[
 }
 
 function findConfigFieldsByEnv() {
-  const fields: Record<string, NonNullable<ReturnType<typeof findConfigField>>> = {};
-  for (const key of [
-    'runtime.agent',
-    'bridge.defaultWorkspace',
-    'bridge.uiAllowLan',
-    'bridge.uiAccessToken',
-    'runtime.codex.model',
-    'runtime.codex.yoloMode',
-    'runtime.codex.provider',
-    'runtime.codex.skipGitRepoCheck',
-    'runtime.codex.sandboxMode',
-    'runtime.codex.networkAccess',
-    'runtime.codex.reasoningEffort',
-    'runtime.claude.model',
-    'runtime.claude.yoloMode',
-    'runtime.claude.permissionMode',
-    'runtime.claude.provider',
-    'runtime.claude.executable',
-    'runtime.claude.reasoningEffort',
-    'runtime.claude.idleTimeoutMinutes',
-    'channels[].enabled',
-    'channels[].config.historyMessageLimit',
-    'channels[].config.streamStatusIdleStartSeconds',
-    'channels[].config.streamStatusCheckIntervalSeconds',
-    'channels[].config.appId',
-    'channels[].config.appSecret',
-    'channels[].config.site',
-    'channels[].config.allowedUsers',
-    'channels[].config.streamingEnabled',
-    'channels[].config.feedbackMarkdownEnabled',
-    'channels[].config.requireMention',
-  ]) {
-    const field = findConfigField(key);
-    if (field) fields[key] = field;
+  const fields: Record<string, ConfigField> = {};
+  for (const field of configFields as readonly ConfigField[]) {
+    if (field.envKey) fields[field.path] = field;
   }
   return fields;
 }

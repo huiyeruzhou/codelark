@@ -436,7 +436,7 @@ fallback = runtime.codex.reasoningEffort from cli/env/local/home/defaults
 
 2026-06-07 重新评估 `node-config`、`wild-config`、`auto-config-loader` 后，结论不是“完全不用通用配置库”，而是做分层采用：
 
-- 静态全局配置层采用 `node-config`：`defaults + home + local/project + env + CLI baseline` 交给成熟库做加载和基础 merge。实现上使用 `config/lib/util` 的 `Load`，按 CodeLark 已解析出的 `CODELARK_HOME` 和 `cwd` 动态路径装载/合并 TOML shape，避免依赖全局 singleton 或污染 `process.env`。
+- 静态全局配置层采用 `node-config`：`defaults + home + local/project + env + CLI baseline` 交给成熟库做加载和基础 merge。实现上使用 `config/lib/util` 的 `Load`，按 CodeLark 已解析出的 `CODELARK_HOME` 和 `cwd` 动态路径装载/合并 TOML shape，避免依赖全局 singleton 或污染 `process.env`。其中 `CODELARK_FEISHU_*` / `CODELARK_ENABLED_CHANNELS` 等 channel env 是 projection-only：运行时配置输入忽略它们并给出 warning，真正的 channel 配置只来自 defaults/home TOML 或 v1 migration。
 - Channel/Session/request 动态 overlay 也复用同一个 `Load.addConfig()` 合并入口：`ConfigService` 负责选择哪些 scoped TOML/request patch 参与本次 snapshot、执行 home materialize 写回，并保留字段级 provenance/explain。
 - CodeLark 产品语义仍保留在 `ConfigService`：source 选择、scope 写入约束、迁移、secret mask、`channels` home-only 校验与 materialized 写入、runtime env/settings projection。
 - 也就是说，`node-config` 替代的是通用的 TOML shape 解析和覆盖合并；`ConfigService` 保留的是 CodeLark 的产品边界、动态 source 选择、写回和 explain/projection 语义。
