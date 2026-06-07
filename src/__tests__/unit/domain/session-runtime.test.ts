@@ -339,6 +339,14 @@ reasoning_effort = "low"
     assert.equal(claude.provider, 'pty');
     assert.equal(claude.permissionMode, 'plan');
     assert.equal(claude.reasoningEffort, 'xhigh');
+
+    const legacyProviderBinding = {
+      ...binding,
+      channelType: 'feishu',
+    };
+    assert.equal(resolveEffectiveCodexProvider(session, legacyProviderBinding), 'pty');
+    assert.equal(resolveEffectiveSandboxMode(session, legacyProviderBinding), 'read-only');
+    assert.equal(resolveClaudeRuntimeConfig(session, legacyProviderBinding).model, 'channel-claude');
   });
 
   it('lets higher-priority Claude yoloMode compatibility override default permissionMode', () => {

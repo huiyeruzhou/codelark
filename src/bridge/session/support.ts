@@ -37,6 +37,7 @@ import {
   getGlobalStringConfig,
   getGlobalWorkspaceRoot,
 } from './global-config.js';
+import { getConfiguredChannelInstance } from '../../channels/adapter-runtime/channel-runtime.js';
 
 const AVAILABLE_CODEX_MODELS = listSelectableCodexModels();
 const AVAILABLE_CODEX_MODEL_MAP = new Map(AVAILABLE_CODEX_MODELS.map((model) => [model.slug, model]));
@@ -87,8 +88,8 @@ function scopedConfigForRuntime(
   binding?: ChannelChat | null,
   session?: BridgeSession | null,
 ): { effective: EffectiveConfig; config: ConfigV2; scope?: ConfigScope } {
-  const channelId = binding?.channelProvider === undefined || binding.channelProvider === 'feishu'
-    ? binding?.channelType
+  const channelId = binding?.channelType && (binding.channelProvider === undefined || binding.channelProvider === 'feishu')
+    ? getConfiguredChannelInstance(binding.channelType)?.id || binding.channelType
     : undefined;
   const scope: ConfigScope | undefined = session?.id
     ? {
