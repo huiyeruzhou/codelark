@@ -1,24 +1,15 @@
-import { isSupportedChannelProvider, type ChannelProvider, type RuntimeChannelInstance } from '../../configuration/channel-types.js';
-import { createConfigService } from '../../configuration/service.js';
+import type { ChannelProvider, RuntimeChannelInstance } from '../../configuration/channel-types.js';
+import {
+  getConfiguredChannelInstance as getConfiguredChannelInstanceBase,
+  listConfiguredChannelInstances as listConfiguredChannelInstancesBase,
+} from '../../configuration/channel-instances.js';
 import { markdownToPlainText } from '../../shared/markdown/plain.js';
 import { formatBindingChatLabel as formatBindingChatLabelBase } from '../../bridge/session/display/channel-label.js';
 import type { ChannelChat } from '../../domain/index.js';
 
-function toRuntimeChannelInstance(channel: RuntimeChannelInstance): RuntimeChannelInstance {
-  return {
-    id: channel.id,
-    alias: channel.alias,
-    provider: channel.provider,
-    enabled: channel.enabled,
-    config: { ...channel.config },
-  };
-}
-
 export function listConfiguredChannelInstances(): RuntimeChannelInstance[] {
   try {
-    return createConfigService({ migrate: false }).snapshot().config.channels
-      .filter((channel) => isSupportedChannelProvider(channel.provider))
-      .map(toRuntimeChannelInstance);
+    return listConfiguredChannelInstancesBase();
   } catch (error) {
     console.error('[channel-runtime] Failed to read configured channels from v2 config:', error);
     return [];
@@ -26,10 +17,12 @@ export function listConfiguredChannelInstances(): RuntimeChannelInstance[] {
 }
 
 export function getConfiguredChannelInstance(channelType: string): RuntimeChannelInstance | null {
-  const instances = listConfiguredChannelInstances();
-  return instances.find((channel) => channel.id === channelType)
-    || instances.find((channel) => channel.provider === channelType)
-    || null;
+  try {
+    return getConfiguredChannelInstanceBase(channelType);
+  } catch (error) {
+    console.error(`[channel-runtime] Failed to read configured channel ${channelType} from v2 config:`, error);
+    return null;
+  }
 }
 
 export function inferChannelProvider(channelType: string): ChannelProvider | undefined {

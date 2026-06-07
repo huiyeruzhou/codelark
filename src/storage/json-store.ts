@@ -25,9 +25,12 @@ import type {
   BridgeSessionUpdate,
 } from '../domain/session.js';
 import type { BridgeApiProvider } from '../runtime/contracts.js';
+import {
+  defaultAliasForChannelProvider,
+  getConfiguredChannelInstance,
+} from '../configuration/channel-instances.js';
 import { CODELARK_HOME } from '../configuration/paths.js';
 import { loadRuntimeSettings } from '../configuration/runtime-settings-projection.js';
-import { createConfigService } from '../configuration/service.js';
 import { setSessionConfigPatch } from '../configuration/session-writes.js';
 import { runStartupStorageMigrations } from './migrations.js';
 import {
@@ -101,11 +104,6 @@ function now(): string {
   return new Date().toISOString();
 }
 
-function defaultAliasForProvider(provider: string | undefined): string | undefined {
-  if (provider === 'feishu') return '飞书';
-  return undefined;
-}
-
 function normalizeChatKind(value: unknown): ChannelChat['chatKind'] | undefined {
   return value === 'p2p' || value === 'group' ? value : undefined;
 }
@@ -177,16 +175,12 @@ function mergeSessionRuntime(
 function normalizeChannelDefaultTarget(target: ChannelDefaultTarget): ChannelDefaultTarget {
   let instance: { provider?: string; alias?: string } | undefined;
   try {
-    instance = createConfigService({ migrate: false })
-      .snapshot()
-      .config
-      .channels
-      .find((channel) => channel.id === target.channelType);
+    instance = getConfiguredChannelInstance(target.channelType) || undefined;
   } catch {
     instance = undefined;
   }
   const channelProvider = instance?.provider || target.channelProvider;
-  const channelAlias = instance?.alias || target.channelAlias || defaultAliasForProvider(channelProvider);
+  const channelAlias = instance?.alias || target.channelAlias || defaultAliasForChannelProvider(channelProvider);
 
   return {
     ...target,

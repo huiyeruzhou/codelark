@@ -1,3 +1,4 @@
+import { getConfiguredChannelInstance } from '../../configuration/channel-instances.js';
 import { createConfigService } from '../../configuration/service.js';
 import type { InboundMessage } from '../../domain/index.js';
 import { buildCommandFields } from './presentation.js';
@@ -35,7 +36,7 @@ export function handleRequireAtCommand(options: {
   }
 
   const service = createConfigService({ migrate: false });
-  const channel = service.snapshot().config.channels.find((item) => item.id === options.msg.address.channelType);
+  const channel = getConfiguredChannelInstance(options.msg.address.channelType, service);
   if (!channel) {
     return buildCommandFields(
       '群聊 @bot 设置未更新',
@@ -74,7 +75,7 @@ export function handleRequireAtCommand(options: {
       },
     }],
   });
-  const savedChannel = service.snapshot().config.channels.find((item) => item.id === channel.id);
+  const savedChannel = getConfiguredChannelInstance(channel.id, service);
   const savedValue = savedChannel?.config.requireMention === true;
 
   return buildCommandFields(

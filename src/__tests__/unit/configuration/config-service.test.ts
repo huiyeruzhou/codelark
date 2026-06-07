@@ -6,6 +6,11 @@ import os from 'node:os';
 import path from 'node:path';
 import { createConfigService } from '../../../configuration/service.js';
 import {
+  getConfiguredChannelInstance,
+  listConfiguredChannelInstances,
+  resolveConfiguredChannelMeta,
+} from '../../../configuration/channel-instances.js';
+import {
   setOrUnsetSessionConfigPath,
   setSessionConfigPatch,
   unsetSessionConfigPath,
@@ -389,6 +394,47 @@ require_mention = false
       assert.deepEqual(channels.map((channel) => channel.id), ['feishu-home']);
       assert.equal(service.get('channels[].config.appId'), 'home-app');
       assert.equal(service.resolve('channels[].config.appId').source, 'home');
+    } finally {
+      fs.rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it('reads configured channel instances through the shared channel lookup helpers', () => {
+    const home = tempHome();
+    try {
+      writeFile(path.join(home, 'config.toml'), `
+[[channels]]
+id = "custom-feishu"
+alias = "Custom Feishu"
+provider = "feishu"
+enabled = true
+
+[channels.config]
+history_message_limit = 9
+stream_status_idle_start_seconds = 180
+stream_status_check_interval_seconds = 10
+app_id = "app"
+app_secret = "secret"
+site = "feishu"
+allowed_users = []
+streaming_enabled = true
+feedback_markdown_enabled = false
+require_mention = true
+`);
+      const service = createConfigService({ codelarkHome: home, env: {}, migrate: false });
+
+      const channels = listConfiguredChannelInstances(service);
+      assert.deepEqual(channels.map((channel) => channel.id), ['custom-feishu']);
+      assert.equal(getConfiguredChannelInstance('custom-feishu', service)?.alias, 'Custom Feishu');
+      assert.equal(getConfiguredChannelInstance('feishu', service)?.id, 'custom-feishu');
+      assert.deepEqual(resolveConfiguredChannelMeta('custom-feishu', undefined, service), {
+        provider: 'feishu',
+        alias: 'Custom Feishu',
+      });
+      assert.deepEqual(resolveConfiguredChannelMeta('unknown-channel', 'feishu', service), {
+        provider: 'feishu',
+        alias: 'unknown-channel',
+      });
     } finally {
       fs.rmSync(home, { recursive: true, force: true });
     }
