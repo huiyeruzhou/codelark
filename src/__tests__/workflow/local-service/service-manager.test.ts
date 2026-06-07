@@ -505,6 +505,97 @@ describe('service-manager lark-cli runtime environment', () => {
     assert.equal(_testOnly.readTargetLarkCliApp(config)?.app.users, undefined);
   });
 
+  it('prefers the lark-cli app entry that contains users when duplicate app records exist', () => {
+    const config: Config = {
+      runtime: 'codex',
+      defaultMode: 'normal',
+      enabledChannels: ['feishu'],
+      channels: [{
+        id: 'feishu-default',
+        alias: '飞书',
+        provider: 'feishu',
+        enabled: true,
+        createdAt: '2026-06-05T00:00:00.000Z',
+        updatedAt: '2026-06-05T00:00:00.000Z',
+        config: {
+          appId: 'cli_duplicate_app',
+          appSecret: 'test-secret',
+          site: 'feishu',
+        },
+      }],
+    };
+    const targetConfigPath = path.join(process.env.CODELARK_HOME!, 'runtime', 'lark-cli', 'lark-channel', 'config.json');
+    fs.mkdirSync(path.dirname(targetConfigPath), { recursive: true });
+    fs.writeFileSync(targetConfigPath, JSON.stringify({
+      apps: [
+        {
+          appId: 'cli_duplicate_app',
+          brand: 'feishu',
+          defaultAs: 'bot',
+          strictMode: 'bot',
+        },
+        {
+          appId: 'cli_duplicate_app',
+          brand: 'feishu',
+          defaultAs: 'auto',
+          strictMode: 'off',
+          users: [{ userOpenId: 'ou_user', userName: 'Tester' }],
+        },
+      ],
+    }), 'utf-8');
+
+    assert.equal(_testOnly.hasTargetLarkCliUsers(config), true);
+    assert.equal(_testOnly.hasLegacyStrictLarkCliRuntime(config), false);
+    assert.equal((_testOnly.readTargetLarkCliApp(config)?.app.users as unknown[] | undefined)?.length, 1);
+  });
+
+  it('can rewrite the bridge-local lark-cli target with a plain app secret when keychain is unavailable', () => {
+    const config: Config = {
+      runtime: 'codex',
+      defaultMode: 'normal',
+      enabledChannels: ['feishu'],
+      channels: [{
+        id: 'feishu-default',
+        alias: '飞书',
+        provider: 'feishu',
+        enabled: true,
+        createdAt: '2026-06-05T00:00:00.000Z',
+        updatedAt: '2026-06-05T00:00:00.000Z',
+        config: {
+          appId: 'cli_keychain_blocked',
+          appSecret: 'plain-secret',
+          site: 'feishu',
+        },
+      }],
+    };
+    const targetConfigPath = path.join(process.env.CODELARK_HOME!, 'runtime', 'lark-cli', 'lark-channel', 'config.json');
+    fs.mkdirSync(path.dirname(targetConfigPath), { recursive: true });
+    fs.writeFileSync(targetConfigPath, JSON.stringify({
+      apps: [{
+        appId: 'cli_keychain_blocked',
+        appSecret: {
+          source: 'keychain',
+          id: 'appsecret_cli_keychain_blocked',
+        },
+        brand: 'feishu',
+        defaultAs: 'bot',
+        strictMode: 'bot',
+      }],
+    }), 'utf-8');
+
+    assert.equal(_testOnly.isLarkCliKeychainFailure('keychain Set failed: use file: reference in config to bypass keychain'), true);
+    assert.equal(_testOnly.writePlainLarkCliTargetProjection(config), true);
+
+    const parsed = JSON.parse(fs.readFileSync(targetConfigPath, 'utf-8'));
+    assert.deepEqual(parsed.apps, [{
+      appId: 'cli_keychain_blocked',
+      appSecret: 'plain-secret',
+      brand: 'feishu',
+      defaultAs: 'bot',
+      strictMode: 'bot',
+    }]);
+  });
+
   it('detects and resets legacy bot-only strict lark-cli runtime for setup', () => {
     const config: Config = {
       runtime: 'codex',

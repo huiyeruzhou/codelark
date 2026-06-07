@@ -128,11 +128,16 @@ test('setup wizard refreshes lark-cli identity policy after user authorization',
   const body = wizardSource.slice(start, end);
   const firstSync = body.indexOf('ensureLarkCliRuntimeConfig(config, { allowUserAuthorization: true })');
   const login = body.indexOf("'auth',\n      'login'");
-  const secondSync = body.lastIndexOf('ensureLarkCliRuntimeConfig(config)');
+  const preLoginPolicyRefresh = body.indexOf('const preLoginPolicyWarning = await applyLarkCliRuntimeIdentityPolicy(true)');
+  const policyRefresh = body.lastIndexOf('applyLarkCliRuntimeIdentityPolicy(true)');
+  const postLoginCheck = body.lastIndexOf('hasCodeLarkUserAuthorization()');
 
   assert.ok(firstSync >= 0, 'expected pre-login lark-cli runtime sync');
+  assert.ok(preLoginPolicyRefresh > firstSync, 'expected pre-login identity policy refresh');
   assert.ok(login > firstSync, 'expected auth login after pre-login sync');
-  assert.ok(secondSync > login, 'expected post-login lark-cli runtime sync');
+  assert.ok(policyRefresh > login, 'expected post-login identity policy refresh');
+  assert.ok(postLoginCheck > policyRefresh, 'expected post-login auth check');
+  assert.doesNotMatch(body.slice(login), /ensureLarkCliRuntimeConfig\(config\)/);
 });
 
 test('recommends runtime from home directory markers', () => {
