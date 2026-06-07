@@ -626,21 +626,16 @@ export class JsonFileStore implements BridgeStore {
     this.reloadSessions();
     const timestamp = now();
     const activeRuntime = options?.activeRuntime === 'claude' ? 'claude' : options?.activeRuntime === 'codex' ? 'codex' : undefined;
+    const workingDirectory = cwd || process.cwd();
     const session: BridgeSession = {
       id: uuid(),
       name,
       runtime: activeRuntime === 'claude' ? {
         activeRuntime: 'claude',
-        general: {
-          workingDirectory: cwd || process.cwd(),
-          ...(systemPrompt ? { systemPrompt } : {}),
-        },
+        ...(systemPrompt ? { general: { systemPrompt } } : {}),
       } : {
         ...(activeRuntime ? { activeRuntime } : {}),
-        general: {
-          workingDirectory: cwd || process.cwd(),
-          ...(systemPrompt ? { systemPrompt } : {}),
-        },
+        ...(systemPrompt ? { general: { systemPrompt } } : {}),
       },
       session_type: options?.sessionType || 'normal',
       hidden: options?.hidden === true,
@@ -652,6 +647,10 @@ export class JsonFileStore implements BridgeStore {
     const materialized = materializeBridgeSessionRuntime(session);
     this.sessions.set(session.id, materialized);
     this.persistSessions();
+    createConfigService({ migrate: false }).set(
+      { kind: 'session', sessionId: session.id },
+      { session: { workspace: workingDirectory } },
+    );
     return materialized;
   }
 

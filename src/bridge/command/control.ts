@@ -6,7 +6,7 @@ import * as router from '../session/channel-router.js';
 import type { BridgeSession, BridgeStore } from '../../domain/index.js';
 import { sendTmuxInterrupt } from '../tmux/runtime.js';
 import { resolveEffectiveCodexProvider } from '../session/support.js';
-import { getSessionTmuxSessionName } from '../../domain/session-runtime.js';
+import { getSessionRuntimeTmuxSessionName } from '../../domain/session-runtime.js';
 import type { CommandThreadDisplay } from './thread-display.js';
 import type { ChannelChat, InboundMessage } from '../../domain/index.js';
 import { sessionLooksRunning } from '../session/command-use-cases/status-guards.js';
@@ -19,7 +19,7 @@ export interface StopCommandDeps {
 
 function getStopTmuxInterruptTarget(session: BridgeSession | null | undefined): string | undefined {
   if (!session) return undefined;
-  const tmuxSessionName = getSessionTmuxSessionName(session);
+  const tmuxSessionName = getSessionRuntimeTmuxSessionName(session);
   return resolveEffectiveCodexProvider(session) === 'tmux'
     && Boolean(tmuxSessionName)
     && sessionLooksRunning(session)

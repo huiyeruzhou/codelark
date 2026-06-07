@@ -156,13 +156,15 @@ export function getSessionClaudeReasoningEffort(session: SessionRuntimeLike | nu
 }
 
 export function getSessionTmuxSessionName(session: SessionRuntimeLike | null | undefined): string | undefined {
-  return trimOrUndefined(getSessionTomlOverride<string>(session, 'session.tmuxSessionName'))
-    || trimOrUndefined(session?.runtime?.general?.tmuxSessionName);
+  return trimOrUndefined(getSessionTomlOverride<string>(session, 'session.tmuxSessionName'));
+}
+
+export function getSessionRuntimeTmuxSessionName(session: SessionRuntimeLike | null | undefined): string | undefined {
+  return trimOrUndefined(session?.runtime?.general?.tmuxSessionName);
 }
 
 export function getSessionWorkingDirectory(session: SessionRuntimeLike | null | undefined): string | undefined {
-  return trimOrUndefined(getSessionTomlOverride<string>(session, 'session.workspace'))
-    || trimOrUndefined(session?.runtime?.general?.workingDirectory);
+  return trimOrUndefined(getSessionTomlOverride<string>(session, 'session.workspace'));
 }
 
 export function getSessionSystemPrompt(session: SessionRuntimeLike | null | undefined): string | undefined {
@@ -170,24 +172,19 @@ export function getSessionSystemPrompt(session: SessionRuntimeLike | null | unde
 }
 
 export function getSessionTmuxCaptureLines(session: SessionRuntimeLike | null | undefined): number | undefined {
-  return getSessionTomlOverride<number>(session, 'session.tmuxCaptureLines')
-    ?? session?.runtime?.general?.captureLines;
+  return getSessionTomlOverride<number>(session, 'session.tmuxCaptureLines');
 }
 
 export function getSessionTmuxAutoEnter(session: SessionRuntimeLike | null | undefined): boolean | undefined {
   const tomlValue = getSessionTomlOverride<boolean>(session, 'session.tmuxAutoEnter');
   if (typeof tomlValue === 'boolean') return tomlValue;
-  return typeof session?.runtime?.general?.autoEnter === 'boolean'
-    ? session.runtime.general.autoEnter
-    : undefined;
+  return undefined;
 }
 
 export function getSessionTmuxEchoInput(session: SessionRuntimeLike | null | undefined): boolean | undefined {
   const tomlValue = getSessionTomlOverride<boolean>(session, 'session.tmuxEchoInput');
   if (typeof tomlValue === 'boolean') return tomlValue;
-  return typeof session?.runtime?.general?.echoInput === 'boolean'
-    ? session.runtime.general.echoInput
-    : undefined;
+  return undefined;
 }
 
 export function materializeBridgeSessionRuntime(rawSession: BridgeSession): BridgeSession {
@@ -259,7 +256,6 @@ export function setSessionCodexTmuxProviderUpdate(options: {
       },
       general: {
         tmuxSessionName: options.tmuxSessionName,
-        ...(typeof options.autoEnter === 'boolean' ? { autoEnter: options.autoEnter } : {}),
       },
     },
   };

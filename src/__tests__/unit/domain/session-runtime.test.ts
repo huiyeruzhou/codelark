@@ -69,7 +69,7 @@ describe('BridgeSession runtime accessors', () => {
     assert.equal(getSessionCodexSandboxMode(session), undefined);
     assert.equal(getSessionCodexNetworkAccess(session), undefined);
     assert.equal(getSessionCodexReasoningEffort(session), undefined);
-    assert.equal(getSessionTmuxSessionName(session), 'nested-tmux');
+    assert.equal(getSessionTmuxSessionName(session), undefined);
   });
 
   it('ignores stale Claude provider JSON and resolves config fields from v2', () => {
@@ -298,7 +298,6 @@ require_mention = false
         },
         general: {
           tmuxSessionName: 'clk-thread',
-          autoEnter: true,
         },
       },
     });

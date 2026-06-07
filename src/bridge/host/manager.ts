@@ -120,7 +120,7 @@ import {
   getGlobalConfigValue,
 } from '../session/global-config.js';
 import {
-  getSessionTmuxSessionName,
+  getSessionRuntimeTmuxSessionName,
   getSessionCodexThreadId,
   getSessionClaudeCwd,
   getSessionClaudeSessionId,
@@ -378,7 +378,7 @@ async function recoverMirrorTmuxSelectionPromptFromCallback(
   if (getSessionActiveRuntime(session) === 'claude' || resolveEffectiveCodexProvider(session) !== 'tmux') {
     return { ok: false, notice: `Codex TUI Selection 已记录，但目标会话 ${sessionId} 当前不是 Codex tmux。` };
   }
-  const tmuxSessionName = getSessionTmuxSessionName(session);
+  const tmuxSessionName = getSessionRuntimeTmuxSessionName(session);
   if (!tmuxSessionName) {
     return { ok: false, notice: `Codex TUI Selection 已记录，但目标会话 ${sessionId} 没有 tmux session。` };
   }
@@ -433,7 +433,7 @@ async function probeMirrorTmuxSelectionPrompt(subscription: BridgeMirrorSubscrip
   const session = getBridgeContext().store.getSession(subscription.sessionId);
   if (!session || getSessionActiveRuntime(session) === 'claude') return;
   if (resolveEffectiveCodexProvider(session) !== 'tmux') return;
-  const tmuxSessionName = getSessionTmuxSessionName(session);
+  const tmuxSessionName = getSessionRuntimeTmuxSessionName(session);
   if (!tmuxSessionName) return;
   const targetPane = `${tmuxSessionName}:0.0`;
   let capture;

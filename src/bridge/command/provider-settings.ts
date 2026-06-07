@@ -51,6 +51,13 @@ function setSessionClaudeProviderToml(sessionId: string, provider: 'sdk' | 'pty'
   );
 }
 
+function setSessionTmuxAutoEnterToml(sessionId: string, tmuxAutoEnter: boolean): void {
+  createConfigService({ migrate: false }).set(
+    { kind: 'session', sessionId },
+    { session: { tmuxAutoEnter } },
+  );
+}
+
 function parseCodexProviderArg(raw: string): 'sdk' | 'tmux' | 'pty' | null {
   const token = raw.trim().toLowerCase();
   if (token === 'sdk' || token === 'tmux' || token === 'pty') return token;
@@ -251,6 +258,7 @@ export async function handleProviderCommand(options: {
     threadId,
   }));
   setSessionCodexProviderToml(session.id, 'tmux');
+  setSessionTmuxAutoEnterToml(session.id, true);
   await reconcileMirrorSubscriptionsBestEffort(options.deps, 'provider tmux switch');
   return buildCommandFields(
     '已切换 Codex Provider',

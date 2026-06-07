@@ -325,7 +325,7 @@ describe('UiSessionApplication', () => {
     assert.equal(stored?.runtime?.codex?.reasoningEffort, undefined);
     assert.equal(stored?.runtime?.codex?.sandboxMode, undefined);
     assert.equal(stored?.runtime?.codex?.networkAccess, undefined);
-    assert.equal(stored?.runtime?.general?.workingDirectory, '/tmp/codex-config');
+    assert.equal(stored?.runtime?.general?.workingDirectory, undefined);
 
     const configService = createConfigService({ migrate: false, env: {} });
     assert.equal(configService.get('session.workspace', { kind: 'session', sessionId: session.id }), '/tmp/codex-config-next');

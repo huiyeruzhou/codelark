@@ -63,6 +63,13 @@ function getSessionClaudeProviderToml(sessionId: string): unknown {
   });
 }
 
+function getSessionTmuxAutoEnterToml(sessionId: string): unknown {
+  return createConfigService({ migrate: false, env: {} }).get('session.tmuxAutoEnter', {
+    kind: 'session',
+    sessionId,
+  });
+}
+
 function setSessionCodexProviderToml(sessionId: string, provider: 'sdk' | 'pty' | 'tmux'): void {
   createConfigService({ migrate: false, env: {} }).set(
     { kind: 'session', sessionId },
@@ -1291,7 +1298,8 @@ model = "test-model"
       assert.equal(tmuxSession?.runtime?.codex?.provider, undefined);
       assert.equal(getSessionCodexProviderToml(binding.bridgeSessionId), 'tmux');
       assert.equal(tmuxSession?.runtime?.general?.tmuxSessionName, normalTmuxSession);
-      assert.equal(tmuxSession?.runtime?.general?.autoEnter, true);
+      assert.equal(tmuxSession?.runtime?.general?.autoEnter, undefined);
+      assert.equal(getSessionTmuxAutoEnterToml(binding.bridgeSessionId), true);
       assert.equal(tmuxSession?.runtime?.codex?.threadId, normalThreadId);
 
       const startLog = fs.readFileSync(fakeTmux.logPath, 'utf-8');
@@ -2006,7 +2014,8 @@ provider = "tmux"
       assert.equal(getSessionCodexProviderToml(tmuxBinding.bridgeSessionId), 'tmux');
       assert.match(tmuxThreadId, /^019e[0-9a-f-]+$/);
       assert.equal(tmuxSession?.runtime?.general?.tmuxSessionName, tmuxSessionName);
-      assert.equal(tmuxSession?.runtime?.general?.autoEnter, true);
+      assert.equal(tmuxSession?.runtime?.general?.autoEnter, undefined);
+      assert.equal(getSessionTmuxAutoEnterToml(tmuxBinding.bridgeSessionId), true);
       assert.equal(llmCalls.length, 0);
 
       const startLog = fs.readFileSync(fakeTmux.logPath, 'utf-8');
@@ -2327,7 +2336,8 @@ provider = "tmux"
       const newSession = store.getSession(newBinding.bridgeSessionId);
       assert.equal(newSession?.runtime?.codex?.provider, undefined);
       assert.equal(getSessionCodexProviderToml(newBinding.bridgeSessionId), 'tmux');
-      assert.equal(newSession?.runtime?.general?.autoEnter, true);
+      assert.equal(newSession?.runtime?.general?.autoEnter, undefined);
+      assert.equal(getSessionTmuxAutoEnterToml(newBinding.bridgeSessionId), true);
       assert.equal(newSession?.runtime?.codex?.threadId, undefined);
       assert.match(adapter.sent.at(-1)?.text || '', /Provider.*tmux/s);
 
@@ -2482,7 +2492,8 @@ provider = "tmux"
       assert.match(actualThreadId, /^019e[0-9a-f-]+$/);
       assert.equal(actualSessionPath ? fs.existsSync(actualSessionPath) : false, true);
       assert.equal(store.getSession(binding.bridgeSessionId)?.runtime?.general?.tmuxSessionName, tmuxSession);
-      assert.equal(store.getSession(binding.bridgeSessionId)?.runtime?.general?.autoEnter, true);
+      assert.equal(store.getSession(binding.bridgeSessionId)?.runtime?.general?.autoEnter, undefined);
+      assert.equal(getSessionTmuxAutoEnterToml(binding.bridgeSessionId), true);
       assert.match(firstMessageLog, new RegExp(`has-session -t ${tmuxSession}`));
       assert.match(firstMessageLog, new RegExp(`new-session -d -s ${tmuxSession}`));
       assert.match(firstMessageLog, new RegExp(`resume ${actualThreadId}`));

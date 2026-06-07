@@ -2347,7 +2347,7 @@ enabled = true
     );
 
     assert.equal(getSessionWorkingDirectory(store.getSession(session.id)), childWorkDir);
-    assert.equal(store.getSession(session.id)?.runtime?.general?.workingDirectory, initialWorkDir);
+    assert.equal(store.getSession(session.id)?.runtime?.general?.workingDirectory, undefined);
     assert.equal(
       createConfigService({ migrate: false, env: {} }).get('session.workspace', {
         kind: 'session',
@@ -2373,7 +2373,7 @@ enabled = true
     );
 
     assert.equal(getSessionWorkingDirectory(store.getSession(session.id)), os.homedir());
-    assert.equal(store.getSession(session.id)?.runtime?.general?.workingDirectory, initialWorkDir);
+    assert.equal(store.getSession(session.id)?.runtime?.general?.workingDirectory, undefined);
     assert.equal(
       createConfigService({ migrate: false, env: {} }).get('session.workspace', {
         kind: 'session',
@@ -5211,7 +5211,7 @@ enabled = true
       const binding = store.getChannelChat(address.channelType, address.chatId);
       assert.ok(binding);
       const session = binding ? store.getSession(binding.bridgeSessionId) : null;
-      assert.equal(session?.runtime?.general?.tmuxSessionName, 'alpha');
+      assert.equal(session?.runtime?.general?.tmuxSessionName, undefined);
       assert.equal(
         createConfigService({ migrate: false, env: {} }).get('session.tmuxSessionName', {
           kind: 'session',
@@ -5238,7 +5238,7 @@ enabled = true
         deps,
       );
       const updatedSession = binding ? store.getSession(binding.bridgeSessionId) : null;
-      assert.equal(updatedSession?.runtime?.general?.captureLines, 120);
+      assert.equal(updatedSession?.runtime?.general?.captureLines, undefined);
       assert.equal(
         createConfigService({ migrate: false, env: {} }).get('session.tmuxCaptureLines', {
           kind: 'session',
@@ -5261,7 +5261,7 @@ enabled = true
         deps,
       );
       const autoEnterSession = binding ? store.getSession(binding.bridgeSessionId) : null;
-      assert.equal(autoEnterSession?.runtime?.general?.autoEnter, true);
+      assert.equal(autoEnterSession?.runtime?.general?.autoEnter, undefined);
       assert.equal(
         createConfigService({ migrate: false, env: {} }).get('session.tmuxAutoEnter', {
           kind: 'session',
@@ -5284,7 +5284,7 @@ enabled = true
         deps,
       );
       const echoOnSession = binding ? store.getSession(binding.bridgeSessionId) : null;
-      assert.equal(echoOnSession?.runtime?.general?.echoInput, true);
+      assert.equal(echoOnSession?.runtime?.general?.echoInput, undefined);
       assert.equal(
         createConfigService({ migrate: false, env: {} }).get('session.tmuxEchoInput', {
           kind: 'session',
@@ -5321,7 +5321,14 @@ enabled = true
         deps,
       );
       const echoOffSession = binding ? store.getSession(binding.bridgeSessionId) : null;
-      assert.equal(echoOffSession?.runtime?.general?.echoInput, false);
+      assert.equal(echoOffSession?.runtime?.general?.echoInput, undefined);
+      assert.equal(
+        createConfigService({ migrate: false, env: {} }).get('session.tmuxEchoInput', {
+          kind: 'session',
+          sessionId: binding.bridgeSessionId,
+        }),
+        false,
+      );
 
       const beforeProviderForwardSent = sent.length;
       const beforeProviderForwardLog = fs.readFileSync(fakeTmux.logPath, 'utf-8');
@@ -5476,7 +5483,14 @@ enabled = true
         deps,
       );
       const autoEnterOffSession = binding ? store.getSession(binding.bridgeSessionId) : null;
-      assert.equal(autoEnterOffSession?.runtime?.general?.autoEnter, false);
+      assert.equal(autoEnterOffSession?.runtime?.general?.autoEnter, undefined);
+      assert.equal(
+        createConfigService({ migrate: false, env: {} }).get('session.tmuxAutoEnter', {
+          kind: 'session',
+          sessionId: binding.bridgeSessionId,
+        }),
+        false,
+      );
 
       const beforeAutoEnterOffLog = fs.readFileSync(fakeTmux.logPath, 'utf-8');
       await handleBridgeCommand(

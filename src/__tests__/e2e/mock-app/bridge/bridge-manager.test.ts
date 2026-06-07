@@ -339,6 +339,7 @@ class StartupNoticeAdapter extends BaseChannelAdapter {
 describe('bridge-manager resolveNewWorkingDirectory', () => {
   beforeEach(() => {
     fs.rmSync(DATA_DIR, { recursive: true, force: true });
+    fs.rmSync(path.join(CODELARK_HOME, 'config'), { recursive: true, force: true });
     fs.rmSync(CONFIG_TOML_PATH, { force: true });
   });
 
@@ -464,6 +465,10 @@ default_workspace = 'D:\\workspace'
   });
 
   it('reuses the current formal session directory when /new has no args', () => {
+    createConfigService({ migrate: false, env: {} }).set(
+      { kind: 'session', sessionId: 'session-1' },
+      { session: { workspace: 'D:\\workspace\\project-a' } },
+    );
     const resolved = _testOnly.resolveNewSessionWorkingDirectory(
       '',
       {
@@ -479,7 +484,6 @@ default_workspace = 'D:\\workspace'
         name: 'Project A',
         runtime: {
           codex: { model: 'test-model' },
-          general: { workingDirectory: 'D:\\workspace\\project-a' },
         },
         session_type: 'normal',
       },
@@ -517,6 +521,10 @@ default_workspace = 'D:\\workspace'
   });
 
   it('reuses the current draft session directory when /new has no args', () => {
+    createConfigService({ migrate: false, env: {} }).set(
+      { kind: 'session', sessionId: 'session-1' },
+      { session: { workspace: 'D:\\codelark\\runtime\\draft' } },
+    );
     const resolved = _testOnly.resolveNewSessionWorkingDirectory(
       '',
       {
@@ -532,7 +540,6 @@ default_workspace = 'D:\\workspace'
         name: 'Draft:feishu:chat-1',
         runtime: {
           codex: { model: 'test-model' },
-          general: { workingDirectory: 'D:\\codelark\\runtime\\draft' },
         },
         session_type: 'draft',
       },
