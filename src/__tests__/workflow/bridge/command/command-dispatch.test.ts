@@ -3522,6 +3522,20 @@ enabled = true
       adapter,
       {
         address,
+        text: '/set defaultProvider default',
+        messageId: 'incoming-set-provider-reset',
+      } as any,
+      '/set defaultProvider default',
+      deps,
+    );
+    assert.match(sent.at(-1)?.text || '', /默认 Codex Provider.*auto/s);
+    assert.equal(createConfigService({ migrate: false, env: {} }).resolve('runtime.codex.provider').source, 'defaults');
+    assert.equal(createConfigService({ migrate: false, env: {} }).get('runtime.codex.provider'), '');
+
+    await handleBridgeCommand(
+      adapter,
+      {
+        address,
         text: '/set codexNetworkAccess off',
         messageId: 'incoming-set-network',
       } as any,
