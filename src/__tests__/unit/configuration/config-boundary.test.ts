@@ -122,6 +122,13 @@ describe('configuration module boundaries', () => {
     assert.doesNotMatch(channelTypesSource, /open\.larksuite\.com/);
   });
 
+  it('does not synthesize channel patches from env or CLI overlays', () => {
+    const cliSource = fs.readFileSync(path.join(process.cwd(), 'src', 'configuration', 'cli-overrides.ts'), 'utf-8');
+    const envSource = fs.readFileSync(path.join(process.cwd(), 'src', 'configuration', 'env-compat.ts'), 'utf-8');
+    assert.doesNotMatch(cliSource, /defaultChannelPatch/);
+    assert.doesNotMatch(envSource, /ensureDefaultChannelPatch/);
+  });
+
   it('keeps production legacy bridge setting reads limited to explicit migration-decision holdouts', () => {
     const offenders = legacyBridgeSettingReads(path.join(process.cwd(), 'src'));
     assert.deepEqual(offenders, []);

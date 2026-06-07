@@ -77,30 +77,11 @@ export function envToConfigPatch(env: NodeJS.ProcessEnv): {
     if (rawValue === undefined) continue;
     const parsed = field.parseEnv(rawValue);
     if (parsed === undefined) continue;
-    if (field.path === 'channels[].enabled') {
-      const channel = ensureDefaultChannelPatch(patch);
-      channel.enabled = Array.isArray(parsed) && parsed.includes('feishu');
-    } else if (field.path.startsWith('channels[].')) {
-      const channel = ensureDefaultChannelPatch(patch);
-      channel.config ??= {};
-      setConfigPath(channel, field.path.replace('channels[].', ''), parsed);
-    } else {
-      setConfigPath(patch, field.path, parsed);
-    }
+    setConfigPath(patch, field.path, parsed);
     envByPath.set(field.path, valueSource);
   }
 
   return { patch, warnings, envByPath };
-}
-
-function ensureDefaultChannelPatch(patch: ConfigPatch): NonNullable<ConfigPatch['channels']>[number] {
-  patch.channels ??= [];
-  let channel = patch.channels.find((entry) => entry.id === 'feishu-default');
-  if (!channel) {
-    channel = { id: 'feishu-default' };
-    patch.channels.push(channel);
-  }
-  return channel;
 }
 
 function findConfigFieldsByEnv() {

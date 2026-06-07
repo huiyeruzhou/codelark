@@ -58,27 +58,7 @@ function parseValue(field: ConfigField, raw: string): unknown {
   throw new InvalidArgumentError(`Invalid value for ${field.path}: ${raw}`);
 }
 
-function defaultChannelPatch(patch: ConfigPatch): NonNullable<ConfigPatch['channels']>[number] {
-  patch.channels ??= [];
-  let channel = patch.channels.find((entry) => entry.id === 'feishu-default');
-  if (!channel) {
-    channel = { id: 'feishu-default' };
-    patch.channels.push(channel);
-  }
-  return channel;
-}
-
 function setPatchValue(patch: ConfigPatch, path: ConfigPath, value: unknown): void {
-  if (path === 'channels[].enabled') {
-    defaultChannelPatch(patch).enabled = Boolean(value);
-    return;
-  }
-  if (path.startsWith('channels[].')) {
-    const channel = defaultChannelPatch(patch);
-    channel.config ??= {};
-    setConfigPath(channel as Record<string, unknown>, path.replace('channels[].', ''), value);
-    return;
-  }
   setConfigPath(patch as Record<string, unknown>, path, value);
 }
 

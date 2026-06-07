@@ -184,6 +184,8 @@ Session effective config:
 
 `channels` 是例外：只读取 defaults 和 home，且 home 整组覆盖 defaults。home partial channel 只允许通过 ConfigService 从 `defaults.toml` 模板 materialize 并写回，不通过 source-chain 做 `channels[]` 跨层按 id merge。local/env/cli/channel/session/request 不能定义 `channels`。业务读取 channel 实例时必须先拿 `ConfigService.snapshot().config.channels`，再在调用方按 channel id、provider fallback 或 UI 默认项选择具体实例；配置层不把 `channels[]` 隐式解析成 `feishu-default`。
 
+`CODELARK_FEISHU_*` 与 `CODELARK_ENABLED_CHANNELS` 这类 channel env key 只作为向子进程导出的 projection 和 v1 migration 输入。v2 运行时读取真实 env 或 CLI `--set` 时不会把这些 key 合成为默认 channel patch；出现时只给出 export-only warning 或直接拒绝 CLI 写入。
+
 说明：
 
 - `Global` 表达本机默认值，包含 defaults/home/env/cli。
