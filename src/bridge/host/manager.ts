@@ -3290,6 +3290,7 @@ async function handleMessage(
       resolveInteractiveTurnDisplayInfo: (binding) => displayService.binding(binding, { stripInternalPrefix: true }),
       listInteractiveTurnBindings: (channelType) => store.listChannelChats(channelType),
       codexTerminalFinalizationTimeoutMs: DESKTOP_TERMINAL_FINALIZATION_TIMEOUT_MS,
+      displayText: modelText,
     });
   } finally {
     ack();

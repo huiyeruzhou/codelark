@@ -219,6 +219,7 @@ export interface RunInteractiveMessageDeps {
   streamStatusIdleDetectionStartMs?: number;
   streamStatusHeartbeatMs?: number;
   codexTerminalFinalizationTimeoutMs?: number;
+  displayText?: string;
 }
 
 export async function runInteractiveMessage(
@@ -513,8 +514,9 @@ export async function runInteractiveMessage(
 
   try {
     const promptText = text || (attachments && attachments.length > 0 ? DEFAULT_ATTACHMENT_PROMPT : '');
-    if (useInteractiveStreamUi && promptText.trim()) {
-      applyUnifiedTurnHistoryUserText(streamState, promptText);
+    const displayText = deps.displayText ?? promptText;
+    if (useInteractiveStreamUi && displayText.trim()) {
+      applyUnifiedTurnHistoryUserText(streamState, displayText);
       streamUi.feedback.pushHistory(streamState.historyItems);
     }
 
