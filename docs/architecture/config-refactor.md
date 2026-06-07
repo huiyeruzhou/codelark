@@ -24,6 +24,7 @@ CodeLark 需要把“默认值、全局配置、项目配置、环境变量、�
 - `src/configuration/service.ts`：`ConfigService` 查询、写入、dynamic overlay、provenance/explain 和 projection 入口。
 - `src/configuration/source-values.ts`：封装“只读取某个 source 的显式 override”、读取 effective path source 和比较 source 优先级这类 provenance 判断，业务代码不能各自手写 fallback/source 检查。
 - `src/configuration/channel-instances.ts`：封装 configured channel list、provider/id fallback 和 channel metadata lookup，业务代码不直接读 `snapshot().config.channels`。
+- `src/configuration/session-values.ts`：封装 Session TOML 显式 override 的读取、规范化和旧 UI/domain getter 过渡，业务代码不直接调用低层 source override helper。
 - `src/configuration/session-writes.ts`：封装 Session TOML 写回 helper，业务命令和 UI 保存只提交 patch/path，不直接构造 session-scope `ConfigService.set/unset`。
 - 配置解析库边界：生产代码只有 `src/configuration` 可以直接导入 `node-config` 或 `smol-toml`；业务模块必须通过 `ConfigService`、projection 或迁移 adapter 使用配置。
 - `src/local-service/manager.ts` / `src/entrypoints/cli.ts`：CLI `run` 时用同一个 effective config snapshot 同时派生 UI env、Bridge preflight config 和 Bridge env projection，避免一次启动内动态 TOML reload 前后不一致。
@@ -145,6 +146,7 @@ src/configuration/
   merge.ts                   # node-config effective merge + provenance/write patch helpers
   service.ts                 # ConfigService 查询和写入 API
   source-values.ts           # source/path provenance 查询和显式 override 读取，避免业务代码手写 source rank/fallback
+  session-values.ts          # Session TOML 显式 override 读取和规范化 helper
   session-writes.ts          # Session TOML set/unset 写回 helper
   env-compat.ts              # 真实 process.env 的旧 env alias 兼容读取和 warning
   projections.ts             # runtime settings、UI payload、lark-cli projection

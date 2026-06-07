@@ -6,8 +6,23 @@ import type {
   BridgeSessionGeneralState,
   BridgeSessionRuntimeState,
 } from './session.js';
-import type { ConfigPath } from '../configuration/fields-types.js';
-import { getSessionConfigOverride } from '../configuration/source-values.js';
+export {
+  getSessionClaudeModel,
+  getSessionClaudePermissionMode,
+  getSessionClaudeProvider,
+  getSessionClaudeReasoningEffort,
+  getSessionCodexMode,
+  getSessionCodexModel,
+  getSessionCodexNetworkAccess,
+  getSessionCodexProvider,
+  getSessionCodexReasoningEffort,
+  getSessionCodexSandboxMode,
+  getSessionTmuxAutoEnter,
+  getSessionTmuxCaptureLines,
+  getSessionTmuxEchoInput,
+  getSessionTmuxSessionName,
+  getSessionWorkingDirectory,
+} from '../configuration/session-values.js';
 
 export type BridgeSessionRuntimeUpdate = BridgeSessionUpdate;
 
@@ -38,14 +53,6 @@ function trimOrUndefined(value: string | null | undefined): string | undefined {
   return trimmed || undefined;
 }
 
-function getSessionTomlOverride<T>(session: SessionRuntimeLike | null | undefined, path: ConfigPath): T | undefined {
-  try {
-    return getSessionConfigOverride<T>(session?.id, path);
-  } catch {
-    return undefined;
-  }
-}
-
 export function getSessionCodexThreadId(session: SessionRuntimeLike | null | undefined): string | undefined {
   if (isClaudeRuntime(session)) return undefined;
   return trimOrUndefined(session?.runtime?.codex?.threadId);
@@ -61,51 +68,6 @@ export function getSessionCodexTitle(session: SessionRuntimeLike | null | undefi
   return trimOrUndefined(session?.runtime?.codex?.title);
 }
 
-export function getSessionCodexModel(session: SessionRuntimeLike | null | undefined): string | undefined {
-  if (isClaudeRuntime(session)) return undefined;
-  return trimOrUndefined(getSessionTomlOverride<string>(session, 'runtime.codex.model'));
-}
-
-export function getSessionCodexMode(session: SessionRuntimeLike | null | undefined): BridgeSessionCodexRuntimeState['mode'] | undefined {
-  if (isClaudeRuntime(session)) return undefined;
-  const mode = getSessionTomlOverride<'off' | 'on' | 'yolo'>(session, 'runtime.codex.yoloMode');
-  if (mode === 'on' || mode === 'yolo') return 'yolo';
-  if (mode === 'off') return 'normal';
-  return undefined;
-}
-
-export function getSessionCodexProvider(session: SessionRuntimeLike | null | undefined): BridgeSessionCodexRuntimeState['provider'] | undefined {
-  if (isClaudeRuntime(session)) return undefined;
-  const provider = getSessionTomlOverride<string>(session, 'runtime.codex.provider');
-  return provider === 'sdk' || provider === 'tmux' || provider === 'pty' ? provider : undefined;
-}
-
-export function getSessionCodexSandboxMode(session: SessionRuntimeLike | null | undefined): BridgeSessionCodexRuntimeState['sandboxMode'] | undefined {
-  if (isClaudeRuntime(session)) return undefined;
-  const sandboxMode = getSessionTomlOverride<string>(session, 'runtime.codex.sandboxMode');
-  return sandboxMode === 'read-only' || sandboxMode === 'workspace-write' || sandboxMode === 'danger-full-access'
-    ? sandboxMode
-    : undefined;
-}
-
-export function getSessionCodexNetworkAccess(session: SessionRuntimeLike | null | undefined): boolean | undefined {
-  if (isClaudeRuntime(session)) return undefined;
-  const networkAccess = getSessionTomlOverride<boolean>(session, 'runtime.codex.networkAccess');
-  return typeof networkAccess === 'boolean' ? networkAccess : undefined;
-}
-
-export function getSessionCodexReasoningEffort(session: SessionRuntimeLike | null | undefined): BridgeSessionCodexRuntimeState['reasoningEffort'] | undefined {
-  if (isClaudeRuntime(session)) return undefined;
-  const reasoningEffort = getSessionTomlOverride<string>(session, 'runtime.codex.reasoningEffort');
-  return reasoningEffort === 'minimal'
-    || reasoningEffort === 'low'
-    || reasoningEffort === 'medium'
-    || reasoningEffort === 'high'
-    || reasoningEffort === 'xhigh'
-    ? reasoningEffort
-    : undefined;
-}
-
 export function getSessionClaudeSessionId(session: SessionRuntimeLike | null | undefined): string | undefined {
   if (!isClaudeRuntime(session)) return undefined;
   return trimOrUndefined(session?.runtime?.claude?.sessionId);
@@ -116,70 +78,12 @@ export function getSessionClaudeCwd(session: SessionRuntimeLike | null | undefin
   return trimOrUndefined(session?.runtime?.claude?.cwd);
 }
 
-export function getSessionClaudeModel(session: SessionRuntimeLike | null | undefined): string | undefined {
-  if (!isClaudeRuntime(session)) return undefined;
-  return trimOrUndefined(getSessionTomlOverride<string>(session, 'runtime.claude.model'));
-}
-
-export function getSessionClaudeProvider(session: SessionRuntimeLike | null | undefined): BridgeSessionClaudeRuntimeState['provider'] | undefined {
-  if (!isClaudeRuntime(session)) return undefined;
-  const provider = getSessionTomlOverride<string>(session, 'runtime.claude.provider');
-  return provider === 'sdk' || provider === 'pty' ? provider : undefined;
-}
-
-export function getSessionClaudePermissionMode(session: SessionRuntimeLike | null | undefined): BridgeSessionClaudeRuntimeState['permissionMode'] | undefined {
-  if (!isClaudeRuntime(session)) return undefined;
-  const permissionMode = getSessionTomlOverride<string>(session, 'runtime.claude.permissionMode');
-  return permissionMode === 'default'
-    || permissionMode === 'acceptEdits'
-    || permissionMode === 'bypassPermissions'
-    || permissionMode === 'plan'
-    ? permissionMode
-    : undefined;
-}
-
-export function getSessionClaudeReasoningEffort(session: SessionRuntimeLike | null | undefined): BridgeSessionClaudeRuntimeState['reasoningEffort'] | undefined {
-  if (!isClaudeRuntime(session)) return undefined;
-  const reasoningEffort = getSessionTomlOverride<string>(session, 'runtime.claude.reasoningEffort');
-  return reasoningEffort === 'low'
-    || reasoningEffort === 'medium'
-    || reasoningEffort === 'high'
-    || reasoningEffort === 'xhigh'
-    || reasoningEffort === 'max'
-    ? reasoningEffort
-    : undefined;
-}
-
-export function getSessionTmuxSessionName(session: SessionRuntimeLike | null | undefined): string | undefined {
-  return trimOrUndefined(getSessionTomlOverride<string>(session, 'session.tmuxSessionName'));
-}
-
 export function getSessionRuntimeTmuxSessionName(session: SessionRuntimeLike | null | undefined): string | undefined {
   return trimOrUndefined(session?.runtime?.general?.tmuxSessionName);
 }
 
-export function getSessionWorkingDirectory(session: SessionRuntimeLike | null | undefined): string | undefined {
-  return trimOrUndefined(getSessionTomlOverride<string>(session, 'session.workspace'));
-}
-
 export function getSessionSystemPrompt(session: SessionRuntimeLike | null | undefined): string | undefined {
   return trimOrUndefined(session?.runtime?.general?.systemPrompt);
-}
-
-export function getSessionTmuxCaptureLines(session: SessionRuntimeLike | null | undefined): number | undefined {
-  return getSessionTomlOverride<number>(session, 'session.tmuxCaptureLines');
-}
-
-export function getSessionTmuxAutoEnter(session: SessionRuntimeLike | null | undefined): boolean | undefined {
-  const tomlValue = getSessionTomlOverride<boolean>(session, 'session.tmuxAutoEnter');
-  if (typeof tomlValue === 'boolean') return tomlValue;
-  return undefined;
-}
-
-export function getSessionTmuxEchoInput(session: SessionRuntimeLike | null | undefined): boolean | undefined {
-  const tomlValue = getSessionTomlOverride<boolean>(session, 'session.tmuxEchoInput');
-  if (typeof tomlValue === 'boolean') return tomlValue;
-  return undefined;
 }
 
 export function materializeBridgeSessionRuntime(rawSession: BridgeSession): BridgeSession {

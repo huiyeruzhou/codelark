@@ -9,11 +9,10 @@ import {
 } from '../../runtime/codex/session-index.js';
 import { normalizeClaudeExecutable, type ClaudeExecutable, type ClaudePermissionMode, type ClaudeProviderChoice } from '../../configuration/runtime-types.js';
 import { createConfigService, type ConfigScope, type EffectiveConfig } from '../../configuration/service.js';
-import { configSourceRank, getEffectiveConfigSource, getSessionConfigOverride, isEffectiveConfigSource } from '../../configuration/source-values.js';
+import { configSourceRank, getEffectiveConfigSource, isEffectiveConfigSource } from '../../configuration/source-values.js';
 import { resolveConfiguredChannelScopeId } from '../../configuration/channel-instances.js';
 import type { ConfigPatch } from '../../configuration/schema.js';
 import type { ConfigV2 } from '../../configuration/schema.js';
-import type { ConfigPath } from '../../configuration/fields-types.js';
 import {
   resetDraftSession as resetDraftSessionForStore,
 } from '../session/internal-sessions.js';
@@ -32,8 +31,15 @@ import { getBridgeContext } from '../host/context.js';
 import {
   getSessionWorkingDirectory,
 } from '../../domain/session-runtime.js';
+import {
+  getSessionClaudeProviderOverride as getSessionClaudeProviderConfigOverride,
+  getSessionCodexProviderOverride as getSessionCodexProviderConfigOverride,
+  hasSessionCodexNetworkAccessOverride as hasSessionCodexNetworkAccessConfigOverride,
+  hasSessionCodexSandboxOverride as hasSessionCodexSandboxConfigOverride,
+  sessionCodexRuntimeOverridePatch as sessionCodexRuntimeConfigOverridePatch,
+} from '../../configuration/session-values.js';
 import type { ChannelChat } from '../../domain/channel.js';
-import type { BridgeSession, BridgeSessionClaudeRuntimeState, BridgeSessionCodexRuntimeState } from '../../domain/session.js';
+import type { BridgeSession, BridgeSessionClaudeRuntimeState } from '../../domain/session.js';
 import { validateWorkingDirectory } from '../../shared/security/validators.js';
 import {
   getGlobalStringConfig,
@@ -71,28 +77,6 @@ export function getWorkspaceRoot(): string {
   return getGlobalWorkspaceRoot();
 }
 
-function getSessionTomlOverride<T>(session: BridgeSession | null | undefined, path: ConfigPath): T | undefined {
-  try {
-    return getSessionConfigOverride<T>(session?.id, path);
-  } catch (error) {
-    console.error(`[bridge-manager] Failed to resolve session TOML config ${path} for ${session?.id || 'unknown'}:`, error);
-    return undefined;
-  }
-}
-
-function getSessionTomlOverrideWithService<T>(
-  session: BridgeSession | null | undefined,
-  path: ConfigPath,
-  service: ReturnType<typeof createConfigService>,
-): T | undefined {
-  try {
-    return getSessionConfigOverride<T>(session?.id, path, service);
-  } catch (error) {
-    console.error(`[bridge-manager] Failed to resolve session TOML config ${path} for ${session?.id || 'unknown'}:`, error);
-    return undefined;
-  }
-}
-
 function scopedConfigForRuntime(
   binding?: ChannelChat | null,
   session?: BridgeSession | null,
@@ -119,10 +103,6 @@ function scopedConfigForRuntime(
   }
 }
 
-function hasKeys(value: object): boolean {
-  return Object.keys(value).length > 0;
-}
-
 export function resolveEffectiveReasoningEffort(
   session: BridgeSession | null | undefined,
   binding?: ChannelChat | null,
@@ -145,11 +125,11 @@ export function resolveEffectiveNetworkAccess(
 }
 
 export function hasSessionCodexSandboxOverride(session?: BridgeSession | null): boolean {
-  return getSessionTomlOverride<BridgeSessionCodexRuntimeState['sandboxMode']>(session, 'runtime.codex.sandboxMode') !== undefined;
+  return hasSessionCodexSandboxConfigOverride(session);
 }
 
 export function hasSessionCodexNetworkAccessOverride(session?: BridgeSession | null): boolean {
-  return getSessionTomlOverride<boolean>(session, 'runtime.codex.networkAccess') !== undefined;
+  return hasSessionCodexNetworkAccessConfigOverride(session);
 }
 
 export type SessionRuntimeCodexProvider = 'sdk' | 'tmux' | 'pty';
@@ -196,8 +176,7 @@ export function resolveEffectiveClaudeProvider(
 }
 
 export function getSessionClaudeProviderOverride(session?: BridgeSession | null): ClaudeProviderChoice | undefined {
-  const tomlProvider = getSessionTomlOverride<ClaudeProviderChoice>(session, 'runtime.claude.provider');
-  return tomlProvider === 'sdk' || tomlProvider === 'pty' ? tomlProvider : undefined;
+  return getSessionClaudeProviderConfigOverride(session);
 }
 
 export function hasSessionClaudeProviderOverride(session?: BridgeSession | null): boolean {
@@ -222,8 +201,7 @@ export function resolveEffectiveCodexProvider(
 }
 
 export function getSessionCodexProviderOverride(session?: BridgeSession | null): SessionRuntimeCodexProvider | undefined {
-  const tomlProvider = getSessionTomlOverride<SessionRuntimeCodexProvider>(session, 'runtime.codex.provider');
-  return tomlProvider === 'sdk' || tomlProvider === 'tmux' || tomlProvider === 'pty' ? tomlProvider : undefined;
+  return getSessionCodexProviderConfigOverride(session);
 }
 
 export function hasSessionCodexProviderOverride(session?: BridgeSession | null): boolean {
@@ -324,21 +302,7 @@ export function resolveRuntimeMetadataConfig(
 
 export function sessionCodexRuntimeOverridePatch(session: BridgeSession | null | undefined): ConfigPatch {
   const service = createConfigService({ migrate: false });
-  const getOverride = <T>(path: ConfigPath): T | undefined => getSessionTomlOverrideWithService<T>(session, path, service);
-  const codex: NonNullable<NonNullable<ConfigPatch['runtime']>['codex']> = {};
-  const model = getOverride<string>('runtime.codex.model');
-  if (model !== undefined) codex.model = model;
-  const yoloMode = getOverride<'off' | 'on' | 'yolo'>('runtime.codex.yoloMode');
-  if (yoloMode !== undefined) codex.yoloMode = yoloMode;
-  const provider = getOverride<SessionRuntimeCodexProvider>('runtime.codex.provider');
-  if (provider === 'sdk' || provider === 'tmux' || provider === 'pty') codex.provider = provider;
-  const sandboxMode = getOverride<BridgeSessionCodexRuntimeState['sandboxMode']>('runtime.codex.sandboxMode');
-  if (sandboxMode !== undefined) codex.sandboxMode = sandboxMode;
-  const networkAccess = getOverride<boolean>('runtime.codex.networkAccess');
-  if (networkAccess !== undefined) codex.networkAccess = networkAccess;
-  const reasoningEffort = getOverride<BridgeSessionCodexRuntimeState['reasoningEffort']>('runtime.codex.reasoningEffort');
-  if (reasoningEffort !== undefined) codex.reasoningEffort = reasoningEffort;
-  return hasKeys(codex) ? { runtime: { codex } } : {};
+  return sessionCodexRuntimeConfigOverridePatch(session, service);
 }
 
 export function resolveDisplayedModel(
