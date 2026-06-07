@@ -381,7 +381,7 @@ export async function handleBridgeCommand(
   let responseParseMode: 'Markdown' | 'plain' = getFeedbackParseMode(adapter.channelType);
   let auditResponse = true;
   let threadTableCardScope: ThreadCardScope | undefined;
-  let afterDelivery: ((messageId?: string) => void) | undefined;
+  let afterDelivery: ((messageId?: string) => Promise<void> | void) | undefined;
   let useCurrentThreadCardUpdateFallback = false;
   const currentBinding = deps.scopedBinding || store.getChannelChat(msg.address.channelType, msg.address.chatId);
   const shouldApplyDefaultTargetForCommand = !new Set(['/status', '/threads', '/t', '/set']).has(command);
@@ -415,6 +415,7 @@ export async function handleBridgeCommand(
         responseAddress = result.responseAddress || msg.address;
         responseRichCard = result.richCard;
         threadTableCardScope = result.threadTableCardScope;
+        afterDelivery = result.afterDelivery;
       }
       break;
     }
@@ -916,7 +917,7 @@ export async function handleBridgeCommand(
       await persistAndPinLatestThreadTableMessage(adapter, responseAddress, threadTableCardScope, threadCardMessageId);
     }
     if (result.ok && afterDelivery) {
-      afterDelivery(result.messageId);
+      await afterDelivery(result.messageId);
     }
   }
 }

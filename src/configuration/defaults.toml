@@ -50,3 +50,4 @@ allowed_users = []
 streaming_enabled = true
 feedback_markdown_enabled = true
 require_mention = false
+group_authorized = false

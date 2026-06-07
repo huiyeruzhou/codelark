@@ -67,6 +67,7 @@ export const channelBehaviorConfigSchema = z.object({
   streamingEnabled: z.boolean(),
   feedbackMarkdownEnabled: z.boolean(),
   requireMention: z.boolean(),
+  groupAuthorized: z.boolean(),
 });
 
 export const channelConfigSchema = z.object({
@@ -194,6 +195,7 @@ export function tomlToConfigPatch(raw: unknown): ConfigPatch {
           ['streamingEnabled', 'streaming_enabled'],
           ['feedbackMarkdownEnabled', 'feedback_markdown_enabled'],
           ['requireMention', 'require_mention'],
+          ['groupAuthorized', 'group_authorized'],
         ]),
       };
     }) as ConfigPatch['channels'];
@@ -261,6 +263,7 @@ export function configToTomlShape(config: ConfigPatch): Record<string, unknown> 
         ...(channel.config.streamingEnabled !== undefined ? { streaming_enabled: channel.config.streamingEnabled } : {}),
         ...(channel.config.feedbackMarkdownEnabled !== undefined ? { feedback_markdown_enabled: channel.config.feedbackMarkdownEnabled } : {}),
         ...(channel.config.requireMention !== undefined ? { require_mention: channel.config.requireMention } : {}),
+        ...(channel.config.groupAuthorized !== undefined ? { group_authorized: channel.config.groupAuthorized } : {}),
       } } : {}),
     }));
   }

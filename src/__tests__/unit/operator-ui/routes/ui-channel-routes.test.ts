@@ -87,6 +87,7 @@ function baseConfigV2(overrides: Partial<ConfigV2> = {}): ConfigV2 {
         streamingEnabled: true,
         feedbackMarkdownEnabled: true,
         requireMention: false,
+        groupAuthorized: false,
       },
     }],
     ...overrides,
@@ -286,6 +287,7 @@ describe('handleUiChannelRoute', () => {
           streamingEnabled: true,
           feedbackMarkdownEnabled: true,
           requireMention: false,
+          groupAuthorized: false,
         },
       }],
     });

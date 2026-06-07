@@ -58,6 +58,7 @@ function baseConfigV2(): ConfigV2 {
         streamingEnabled: false,
         feedbackMarkdownEnabled: true,
         requireMention: true,
+        groupAuthorized: false,
       },
     }],
   };

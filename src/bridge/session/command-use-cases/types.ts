@@ -16,6 +16,7 @@ export interface SessionCommandResult {
   responseAddress?: ChannelAddress;
   richCard?: OutboundRichCard;
   threadTableCardScope?: ThreadCardScope;
+  afterDelivery?: (messageId?: string) => Promise<void> | void;
 }
 
 export async function reconcileMirrorSubscriptionsBestEffort(

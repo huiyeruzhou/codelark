@@ -195,6 +195,7 @@ export async function handleNewSessionCommand(options: {
         ['请到已创建的群聊继续聊天；后续云文档评论不会再接入 bot 对话。'],
         options.markdown,
       ),
+      afterDelivery: () => options.adapter.notifyGroupChatCreated?.(groupAddress, groupChat),
     };
   }
 
@@ -271,5 +272,6 @@ export async function handleNewSessionCommand(options: {
       notes,
       options.markdown,
     ),
+    afterDelivery: () => options.adapter.notifyGroupChatCreated?.(groupAddress, groupChat),
   };
 }

@@ -1,4 +1,5 @@
 import type {
+  ChannelAddress,
   ChannelChatKind,
   ChannelType,
   CloudDocumentAddress,
@@ -79,6 +80,7 @@ export abstract class BaseChannelAdapter {
 
   sendCloudDocumentReply?(_target: CloudDocumentAddress, _text: string): Promise<SendResult>;
   createGroupChat?(_options: CreateGroupChatOptions): Promise<CreatedGroupChat>;
+  notifyGroupChatCreated?(_address: ChannelAddress, _group: CreatedGroupChat): Promise<void>;
   renameGroupChat?(_chatId: string, _name: string): Promise<GroupChatInfo>;
   getGroupChatInfo?(_chatId: string): Promise<GroupChatInfo | null>;
   pinMessage?(_chatId: string, _messageId: string): Promise<SendResult>;
