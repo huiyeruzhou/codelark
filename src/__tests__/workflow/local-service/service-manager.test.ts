@@ -399,6 +399,19 @@ describe('service-manager lark-cli runtime environment', () => {
     }
   });
 
+  it('keeps startup config migration before the already-running bridge fast path', () => {
+    const managerSource = fs.readFileSync(path.join(process.cwd(), 'src', 'local-service', 'manager.ts'), 'utf-8');
+    const start = managerSource.indexOf('export async function startBridge');
+    const body = managerSource.slice(start, managerSource.indexOf('export async function stopBridge', start));
+
+    assert.ok(body.indexOf('const startup = startupProjectionFor(options)') >= 0);
+    assert.ok(body.indexOf('const current = getBridgeStatus()') >= 0);
+    assert.ok(
+      body.indexOf('const startup = startupProjectionFor(options)') < body.indexOf('const current = getBridgeStatus()'),
+      'expected config migration snapshot before current-running return path',
+    );
+  });
+
   it('builds bridge-local lark-cli environment variables', () => {
     const env = _testOnly.buildLarkCliRuntimeEnv();
 
@@ -527,6 +540,21 @@ describe('service-manager lark-cli runtime environment', () => {
     assert.equal(_testOnly.resetLegacyStrictLarkCliRuntimeForSetup(config), true);
     assert.equal(fs.existsSync(targetConfigPath), false);
     assert.equal(_testOnly.hasLegacyStrictLarkCliRuntime(config), false);
+  });
+
+  it('allows setup user authorization before a user token exists', () => {
+    assert.deepEqual(_testOnly.larkCliIdentityPolicyCommands(false, { allowUserAuthorization: true }), [
+      ['config', 'strict-mode', 'off'],
+      ['config', 'default-as', 'auto'],
+    ]);
+    assert.deepEqual(_testOnly.larkCliIdentityPolicyCommands(false), [
+      ['config', 'strict-mode', 'bot'],
+      ['config', 'default-as', 'bot'],
+    ]);
+    assert.deepEqual(_testOnly.larkCliIdentityPolicyCommands(true), [
+      ['config', 'strict-mode', 'off'],
+      ['config', 'default-as', 'auto'],
+    ]);
   });
 });
 

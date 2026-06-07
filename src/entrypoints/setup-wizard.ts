@@ -242,8 +242,6 @@ export async function renderLarkCliUrlQr(url: string): Promise<string> {
   });
   return [
     '',
-    '检测到授权链接，可扫码打开：',
-    url,
     qr,
     '',
   ].join('\n');
@@ -349,7 +347,7 @@ async function ensureCodeLarkUserAuthorization(config: ConfigV2): Promise<void> 
       '飞书权限需重新授权',
     );
   }
-  const runtime = await ensureLarkCliRuntimeConfig(config);
+  const runtime = await ensureLarkCliRuntimeConfig(config, { allowUserAuthorization: true });
   if (runtime.warning) {
     throw new Error(runtime.warning);
   }

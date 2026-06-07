@@ -609,6 +609,10 @@ export interface ServiceConfigOverrideOptions {
   startupProjection?: StartupConfigProjection;
 }
 
+export interface LarkCliRuntimeConfigOptions {
+  allowUserAuthorization?: boolean;
+}
+
 function hasConfigPatchValues(patch: ConfigPatch | undefined): boolean {
   if (!patch) return false;
   return Object.keys(patch).length > 0;
@@ -792,6 +796,20 @@ export function resetLegacyStrictLarkCliRuntimeForSetup(config: LocalServiceConf
   return true;
 }
 
+function larkCliIdentityPolicyCommands(hasUser: boolean, options: LarkCliRuntimeConfigOptions = {}): string[][] {
+  // Setup must be able to run `auth login` before any user token exists.
+  // Bridge startup keeps the pre-authorization runtime bot-only unless a user is already present.
+  return hasUser || options.allowUserAuthorization
+    ? [
+        ['config', 'strict-mode', 'off'],
+        ['config', 'default-as', 'auto'],
+      ]
+    : [
+        ['config', 'strict-mode', 'bot'],
+        ['config', 'default-as', 'bot'],
+      ];
+}
+
 function resolveLarkCliScript(): string | null {
   try {
     return require.resolve('@larksuite/cli/scripts/run.js');
@@ -831,7 +849,10 @@ async function runBundledLarkCli(
   });
 }
 
-export async function ensureLarkCliRuntimeConfig(config: LocalServiceConfig = loadStartupConfig()): Promise<{
+export async function ensureLarkCliRuntimeConfig(
+  config: LocalServiceConfig = loadStartupConfig(),
+  options: LarkCliRuntimeConfigOptions = {},
+): Promise<{
   ready: boolean;
   skipped: boolean;
   sourceConfigFile?: string;
@@ -864,19 +885,7 @@ export async function ensureLarkCliRuntimeConfig(config: LocalServiceConfig = lo
     };
   }
 
-  const hasUser = hasTargetLarkCliUsers(config);
-  // 未授权时保持保守的 bot-only 行为；一旦 user token 存在，
-  // 立刻切回 auto，这样 doc-to-chat 可以用 `--as user` 调 lark-cli。
-  const identityCommands = hasUser
-    ? [
-        ['config', 'strict-mode', 'off'],
-        ['config', 'default-as', 'auto'],
-      ]
-    : [
-        ['config', 'strict-mode', 'bot'],
-        ['config', 'default-as', 'bot'],
-      ];
-  for (const args of identityCommands) {
+  for (const args of larkCliIdentityPolicyCommands(hasTargetLarkCliUsers(config), options)) {
     const result = await runBundledLarkCli(args, env);
     if (result.code !== 0) {
       return {
@@ -986,6 +995,10 @@ async function waitForUiServer(timeoutMs = 15_000): Promise<UiServerStatus> {
 
 export async function startBridge(options: ServiceConfigOverrideOptions = {}): Promise<BridgeStatus> {
   ensureDirs();
+  // Creating the startup projection runs config migrations. Do this before
+  // the already-running fast path so `codelark start` still upgrades legacy config.
+  const startup = startupProjectionFor(options);
+  const config = startup.config;
   const current = getBridgeStatus();
   const extraAlivePids = getTrackedBridgePids(current)
     .filter((pid) => pid !== current.pid && isProcessAlive(pid));
@@ -994,8 +1007,6 @@ export async function startBridge(options: ServiceConfigOverrideOptions = {}): P
     await stopBridge();
   }
 
-  const startup = startupProjectionFor(options);
-  const config = startup.config;
   const preflightFailure = describeBridgeStartupPreflightFailure(config.channels);
   if (preflightFailure) {
     throw new Error(preflightFailure);
@@ -1126,6 +1137,7 @@ export const _testOnly = {
   writeLarkCliSourceProjection,
   hasTargetLarkCliUsers,
   hasLegacyStrictLarkCliRuntime,
+  larkCliIdentityPolicyCommands,
   resetLegacyStrictLarkCliRuntimeForSetup,
   readTargetLarkCliApp,
   primaryBridgeAutostartTaskName,

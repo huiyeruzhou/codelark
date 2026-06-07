@@ -34,10 +34,22 @@ const files = packEntries.flatMap((entry) => entry.files?.map((file) => file.pat
 const forbiddenMatches = files.filter((file) =>
   forbiddenFiles.has(file) || forbiddenPrefixes.some((prefix) => file.startsWith(prefix)),
 );
+const requiredFiles = new Set([
+  'dist/defaults.toml',
+]);
+const missingRequiredFiles = [...requiredFiles].filter((file) => !files.includes(file));
 
 if (forbiddenMatches.length > 0) {
   console.error('Unexpected files would be included in the npm package:');
   for (const file of forbiddenMatches) {
+    console.error(`- ${file}`);
+  }
+  process.exit(1);
+}
+
+if (missingRequiredFiles.length > 0) {
+  console.error('Required files are missing from the npm package:');
+  for (const file of missingRequiredFiles) {
     console.error(`- ${file}`);
   }
   process.exit(1);

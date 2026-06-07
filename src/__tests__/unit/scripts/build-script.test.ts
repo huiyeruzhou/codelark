@@ -33,6 +33,15 @@ describe('build script', () => {
     );
   });
 
+  it('copies configuration defaults into dist for bundled runtime lookup', () => {
+    const buildSource = fs.readFileSync(path.join(process.cwd(), 'scripts', 'build.js'), 'utf-8');
+    const packCheckSource = fs.readFileSync(path.join(process.cwd(), 'scripts', 'check-npm-pack.js'), 'utf-8');
+
+    assert.match(buildSource, /copyFile\('src\/configuration\/defaults\.toml', 'dist\/defaults\.toml'\)/);
+    assert.match(buildSource, /dist\/defaults\.toml/);
+    assert.match(packCheckSource, /dist\/defaults\.toml/);
+  });
+
   it('reports missing package.json runtime dependencies by installed package directory', async () => {
     const tempDir = await mkdtemp(path.join(tmpdir(), 'codelark-build-preflight-'));
 

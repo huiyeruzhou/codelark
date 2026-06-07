@@ -52,8 +52,8 @@ test('extracts lark-cli authorization URLs from terminal output', () => {
 test('renders a terminal QR block for lark-cli authorization URLs', async () => {
   const rendered = await renderLarkCliUrlQr('https://open.feishu.cn/auth?state=abc');
 
-  assert.match(rendered, /检测到授权链接/);
-  assert.match(rendered, /https:\/\/open\.feishu\.cn\/auth\?state=abc/);
+  assert.doesNotMatch(rendered, /检测到授权链接/);
+  assert.doesNotMatch(rendered, /https:\/\/open\.feishu\.cn\/auth\?state=abc/);
   assert.ok(rendered.length > 100);
 });
 
@@ -118,6 +118,7 @@ test('setup wizard binds lark-cli runtime with user-default identity and resets 
   assert.doesNotMatch(managerSource, /'--identity', 'bot-only'/);
   assert.match(managerSource, /resetLegacyStrictLarkCliRuntimeForSetup/);
   assert.match(wizardSource, /resetLegacyStrictLarkCliRuntimeForSetup\(config\)/);
+  assert.match(wizardSource, /ensureLarkCliRuntimeConfig\(config, \{ allowUserAuthorization: true \}\)/);
 });
 
 test('setup wizard refreshes lark-cli identity policy after user authorization', () => {
@@ -125,7 +126,7 @@ test('setup wizard refreshes lark-cli identity policy after user authorization',
   const start = wizardSource.indexOf('async function ensureCodeLarkUserAuthorization');
   const end = wizardSource.indexOf('function existingFeishuCredentials', start);
   const body = wizardSource.slice(start, end);
-  const firstSync = body.indexOf('ensureLarkCliRuntimeConfig(config)');
+  const firstSync = body.indexOf('ensureLarkCliRuntimeConfig(config, { allowUserAuthorization: true })');
   const login = body.indexOf("'auth',\n      'login'");
   const secondSync = body.lastIndexOf('ensureLarkCliRuntimeConfig(config)');
 
