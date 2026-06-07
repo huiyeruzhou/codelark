@@ -449,7 +449,6 @@ export function buildCurrentCommandRichCard(options: {
         ['类型', currentTag(sessionKind)],
         ['运行状态', currentTag(formatRuntimeStatus(session), statusColor)],
         ['共享镜像', currentTag(formatMirrorStatus(session), mirrorColor)],
-        ['目录', formatCommandPath(getSessionWorkingDirectory(session))],
       ],
     }],
     form: {

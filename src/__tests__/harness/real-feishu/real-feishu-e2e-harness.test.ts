@@ -701,8 +701,8 @@ describe('unit::real-feishu-e2e-harness::session-management-command-plan', () =>
     assert.deepEqual(expectationAt(parsed.commandReplyExpectations, '/runtime codex', 0).expectedTexts, ['Runtime', 'codex']);
     assert.deepEqual(expectationAt(parsed.commandReplyExpectations, '/p sdk', 0).expectedTexts, ['Codex Provider', 'sdk']);
     assert.deepEqual(expectationAt(parsed.commandReplyExpectations, '/help').expectedTexts, ['命令速览', 'Bridge 控制', 'SessionRuntime 配置']);
-    assert.deepEqual(expectationAt(parsed.commandReplyExpectations, '/set').expectedTexts, ['全局配置', 'GlobalRuntime / Codex', 'GlobalRuntime / Claude', 'Bridge 控制']);
-    assert.deepEqual(expectationAt(parsed.commandReplyExpectations, '/set claudeProvider pty').expectedTexts, ['已更新全局配置', '默认 Claude Provider', 'pty']);
+    assert.deepEqual(expectationAt(parsed.commandReplyExpectations, '/set').expectedTexts, ['全局配置', '[runtime.codex]', 'runtime.codex.provider']);
+    assert.deepEqual(expectationAt(parsed.commandReplyExpectations, '/set claudeProvider pty').expectedTexts, ['已更新全局配置', 'runtime.claude.provider', 'pty']);
     assert.deepEqual(expectationAt(parsed.commandReplyExpectations, `/new mgmt-unit-session-management ${DEFAULT_WORKSPACE_ROOT}`).expectedTexts, ['已创建群聊会话', 'mgmt-unit-session-management', DEFAULT_WORKSPACE_ROOT]);
     assert.deepEqual(expectationAt(parsed.commandReplyExpectations, '/runtime codex', 1).expectedTexts, ['Runtime', 'codex']);
     assert.deepEqual(expectationAt(parsed.commandReplyExpectations, '/p sdk', 1).expectedTexts, ['Codex Provider', 'sdk']);
@@ -766,7 +766,7 @@ describe('unit::real-feishu-e2e-harness::session-management-command-plan', () =>
     assert.equal(parsed.commandReplyExpectations.length, parsed.commands.length);
     assert.deepEqual(expectationAt(parsed.commandReplyExpectations, '/runtime claude', 0).expectedTexts, ['Runtime', 'claude']);
     assert.deepEqual(expectationAt(parsed.commandReplyExpectations, '/p sdk', 0).expectedTexts, ['Claude Provider', 'sdk']);
-    assert.deepEqual(expectationAt(parsed.commandReplyExpectations, '/set claudeProvider sdk').expectedTexts, ['已更新全局配置', '默认 Claude Provider', 'sdk']);
+    assert.deepEqual(expectationAt(parsed.commandReplyExpectations, '/set claudeProvider sdk').expectedTexts, ['已更新全局配置', 'runtime.claude.provider', 'sdk']);
     assert.deepEqual(expectationAt(parsed.commandReplyExpectations, `/new mgmt-unit-session-management-claude-sdk ${DEFAULT_WORKSPACE_ROOT}`).expectedTexts, ['已创建群聊会话', 'mgmt-unit-session-management-claude-sdk', DEFAULT_WORKSPACE_ROOT]);
     assert.deepEqual(expectationAt(parsed.commandReplyExpectations, '/runtime claude', 1).expectedTexts, ['Runtime', 'claude']);
     assert.deepEqual(expectationAt(parsed.commandReplyExpectations, '/p sdk', 1).expectedTexts, ['Claude Provider', 'sdk']);

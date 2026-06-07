@@ -2479,7 +2479,7 @@ provider = "tmux"
 
     try {
       await _testOnly.handleMessage(adapter, inboundMessage(address, '/set defaultProvider tmux', 'incoming-tmux-default-set-provider'));
-      assert.match(adapter.sent.at(-1)?.text || '', /默认 Codex Provider.*tmux/s);
+      assert.match(adapter.sent.at(-1)?.text || '', /runtime\.codex\.provider.*tmux/s);
       assert.equal(createConfigService({ migrate: false, env: {} }).get('runtime.codex.provider'), 'tmux');
 
       await _testOnly.handleMessage(adapter, inboundMessage(address, `/new tmux-default ${workDir}`, 'incoming-tmux-default-new'));

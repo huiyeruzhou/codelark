@@ -144,9 +144,9 @@ export interface OutboundRichCard {
   sections: OutboundRichCardSection[];
   form?: {
     optionElementId: string;
-    inputElementId: string;
-    inputLabel: string;
-    inputPlaceholder: string;
+    inputElementId?: string;
+    inputLabel?: string;
+    inputPlaceholder?: string;
     inputDefaultValue?: string;
     layout?: 'single' | 'two_column';
     selects?: Array<{

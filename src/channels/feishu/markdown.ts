@@ -659,13 +659,15 @@ function buildRichCardFormElements(
       options: selectOptions,
     }));
   }
-  fieldGroups.push(buildRichCardFormLabeledField(form.inputLabel, {
-    tag: 'input',
-    name: form.inputElementId || 'clk_input',
-    placeholder: { tag: 'plain_text', content: compactCardText(form.inputPlaceholder || '可留空', 120) },
-    default_value: compactCardText(form.inputDefaultValue || '', 500),
-    input_type: 'text',
-  }));
+  if (form.inputLabel) {
+    fieldGroups.push(buildRichCardFormLabeledField(form.inputLabel, {
+      tag: 'input',
+      name: form.inputElementId || 'clk_input',
+      placeholder: { tag: 'plain_text', content: compactCardText(form.inputPlaceholder || '可留空', 120) },
+      default_value: compactCardText(form.inputDefaultValue || '', 500),
+      input_type: 'text',
+    }));
+  }
   for (const extraInput of form.extraInputs || []) {
     fieldGroups.push(buildRichCardFormLabeledField(extraInput.label, {
       tag: 'input',

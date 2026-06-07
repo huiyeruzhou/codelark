@@ -3425,9 +3425,9 @@ function sessionManagementExpectedTexts(options: CliOptions, text: string): stri
     ];
   }
   if (command === '/help') return ['命令速览', 'Bridge 控制', 'SessionRuntime 配置'];
-  if (command === '/set') return ['全局配置', 'GlobalRuntime / Codex', 'GlobalRuntime / Claude', 'Bridge 控制'];
+  if (command === '/set') return ['全局配置', '[runtime.codex]', 'runtime.codex.provider'];
   if (command === `/set claudeProvider ${options.runtime === 'claude' ? options.provider : 'pty'}`) {
-    return ['已更新全局配置', '默认 Claude Provider', options.runtime === 'claude' ? options.provider : 'pty'];
+    return ['已更新全局配置', 'runtime.claude.provider', options.runtime === 'claude' ? options.provider : 'pty'];
   }
   if (command === `/new mgmt-${options.runId} ${options.workDir}`) {
     return ['已创建群聊会话', `mgmt-${options.runId}`, options.workDir];
