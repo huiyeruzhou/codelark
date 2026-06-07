@@ -14,7 +14,7 @@
 - GlobalRuntime / Bridge 配置命令：`src/bridge/command/global-settings.ts`
 - 配置结构与 env 映射：`src/configuration/schema.ts`、`src/configuration/fields.ts`、`src/configuration/projections.ts`
 - 配置读取/覆盖：`src/configuration/static-loader.ts`、`src/configuration/service.ts`
-- Legacy 配置 facade：`src/configuration/index.ts`，只保留给旧 `Config` adapter 和兼容测试，生产代码不直接依赖
+- Legacy 配置 adapter：`src/configuration/legacy.ts` / `legacy-types.ts`，只保留给 migration 和 compatibility 测试，生产代码不直接依赖
 - BridgeSession 类型：`src/domain/session.ts / src/runtime/contracts.ts`
 - JSON 存储：`src/storage/json-store.ts`
 

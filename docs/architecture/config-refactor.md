@@ -22,7 +22,7 @@ CodeLark 需要把“默认值、全局配置、项目配置、环境变量、�
 - `src/configuration/static-loader.ts`：用 `node-config` 合并 defaults/home/local/env/cli 静态 baseline。
 - `src/configuration/sources.ts`：复用 `node-config` TOML parser 读取 defaults/home/local/channel/session TOML，并提供持久化写入。
 - `src/configuration/service.ts`：`ConfigService` 查询、写入、dynamic overlay、provenance/explain 和 projection 入口。
-- `src/configuration/index.ts`：仅作为 legacy expanded `Config` facade；生产代码不应从这里读取配置类型、路径常量或运行时类型。
+- `src/configuration/legacy.ts` / `legacy-types.ts`：仅保留 legacy expanded `Config` adapter 和 migration/compatibility 测试；生产代码不应从这里读取配置。
 - `src/operator-ui/application/config.ts`：UI payload 到 `Config` 的手写 merge。
 - `src/bridge/command/global-settings.ts`：`/set` 写全局配置。
 - `src/bridge/command/runtime-settings.ts`：`/r`、`/mode`、`/sandbox`、`/network`、`/model`、`/cd` 等写当前 BridgeSession。
@@ -578,7 +578,7 @@ interface MigrationContext {
 阶段 2：读取链路替换
 
 - 实现 `sources.ts`，读取 defaults/home/local/channel/session/env/cli/request。
-- 保留旧 `loadConfig` API，但内部改为读取 global `ConfigService.snapshot()`。
+- 删除旧 `loadConfig/saveConfig` facade；仍需要验证旧配置语义时，测试直接通过 `ConfigService.snapshot()` 与 `legacy.ts` adapter 组合覆盖。
 - 启动时执行一次性迁移：读取旧 `config.json` 和 `config.env`，生成 `config.toml`；迁移成功后不再把 `config.env` 作为输入 source，也不再维护新的 `config.env` 快照。
 - 新旧 env 键只来自真实 `process.env`，用于本次进程覆盖；旧 env 键通过 `env-compat.ts` 兼容读取并 warning，不再通过 `config.env` 文件读取。
 - daemon、operator-ui、setup wizard 先切到 global scope 查询。
@@ -604,7 +604,7 @@ interface MigrationContext {
 - `resolveSessionRuntimeConfig()` 改为调用 `ConfigService.snapshot(sessionScope)`，不再手写 session -> store settings fallback。
 - `configToSettings()` / `exportProcessEnv()` 变成 projection，不再承载默认值，也不读取 `config.env`。
 - adapter runtime 通道实例读取从 `ConfigService.snapshot().config.channels` 获取；`bridge_channel_instances_json` 只作为 legacy projection 输出，不再作为 bridge 内部运行时配置输入。
-- 删除 expanded `Config` 兼容字段，或者只保留在 `legacy.ts` 中作为旧 API 适配。
+- 删除 expanded `Config` facade；旧 `Config` 形状只保留在 `legacy.ts` / `legacy-types.ts` 中作为 migration 和 compatibility adapter。
 - 测试从“字段函数测试”改为“configFields 驱动的多 source 覆盖矩阵”。
 
 ## 测试计划

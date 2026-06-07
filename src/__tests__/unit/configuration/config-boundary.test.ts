@@ -36,7 +36,6 @@ describe('configuration module boundaries', () => {
     const sourceRoot = path.join(process.cwd(), 'src');
     const offenders = filesImportingLegacyFacade(sourceRoot, {
       skipTests: true,
-      allowed: new Set([path.join('src', 'configuration', 'index.ts')]),
     });
 
     assert.deepEqual(offenders, []);
@@ -44,10 +43,7 @@ describe('configuration module boundaries', () => {
 
   it('keeps non-facade tests from importing the legacy config facade', () => {
     const sourceRoot = path.join(process.cwd(), 'src');
-    const allowed = new Set([
-      path.join('src', '__tests__', 'unit', 'configuration', 'config.test.ts'),
-    ]);
-    const offenders = filesImportingLegacyFacade(path.join(sourceRoot, '__tests__'), { allowed });
+    const offenders = filesImportingLegacyFacade(path.join(sourceRoot, '__tests__'));
 
     assert.deepEqual(offenders, []);
   });

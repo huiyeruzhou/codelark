@@ -4,26 +4,21 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import {
-  CONFIG_PATH,
-  CONFIG_JSON_PATH,
-  loadConfig,
-  maskSecret,
-  saveConfig,
-  configToSettings,
-  type Config,
-} from '../../../configuration/index.js';
+import { configToSettings, configV2ToLegacyConfig, legacyConfigToConfigPatch } from '../../../configuration/legacy.js';
+import type { Config } from '../../../configuration/legacy-types.js';
+import { CODELARK_HOME, CONFIG_JSON_PATH, CONFIG_PATH } from '../../../configuration/paths.js';
+import { createConfigService } from '../../../configuration/service.js';
 
-describe('maskSecret', () => {
-  it('masks short values and preserves the last four characters for longer values', () => {
-    assert.equal(maskSecret(''), '****');
-    assert.equal(maskSecret('abc'), '****');
-    assert.equal(maskSecret('abcd'), '****');
-    assert.equal(maskSecret('12345'), '*2345');
-    assert.equal(maskSecret('12345678'), '****5678');
-    assert.equal(maskSecret('secret-token-abcd'), '*************abcd');
-  });
-});
+function loadLegacyConfig(): Config {
+  return configV2ToLegacyConfig(
+    createConfigService({ codelarkHome: CODELARK_HOME }).snapshot().config,
+  );
+}
+
+function saveLegacyConfig(config: Config): void {
+  createConfigService({ codelarkHome: CODELARK_HOME })
+    .set({ kind: 'home' }, legacyConfigToConfigPatch(config));
+}
 
 // ── configToSettings ──
 
@@ -160,9 +155,9 @@ describe('configToSettings', () => {
   });
 });
 
-// ── Config file parsing (loadConfig/saveConfig round-trip) ──
+// ── Config file parsing (legacy adapter round-trip) ──
 
-describe('loadConfig/saveConfig round-trip', () => {
+describe('legacy config adapter round-trip', () => {
   let tmpDir: string;
   let origHome: string;
   let configBackup: string | null;
@@ -271,7 +266,7 @@ require_mention = true
       'CODELARK_FEISHU_APP_ID=must-not-read-env',
     ].join('\n'));
 
-      const loaded = loadConfig();
+      const loaded = loadLegacyConfig();
 
       assert.equal(loaded.schemaVersion, 2);
       assert.equal(loaded.runtime, 'claude');
@@ -369,8 +364,8 @@ require_mention = false
         channels: [],
       }, null, 2));
 
-      const loaded = loadConfig();
-      saveConfig({
+      const loaded = loadLegacyConfig();
+      saveLegacyConfig({
         ...loaded,
         defaultModel: 'saved-toml-model',
         defaultProvider: 'tmux',
@@ -387,7 +382,7 @@ require_mention = false
         })),
       });
 
-      const reloaded = loadConfig();
+      const reloaded = loadLegacyConfig();
       assert.equal(reloaded.schemaVersion, 2);
       assert.equal(reloaded.defaultModel, 'saved-toml-model');
       assert.equal(reloaded.defaultProvider, 'tmux');
@@ -426,7 +421,7 @@ require_mention = false
       ].join('\n'),
     );
 
-    const loaded = loadConfig();
+    const loaded = loadLegacyConfig();
     const configTomlPath = path.join(path.dirname(CONFIG_JSON_PATH), 'config.toml');
     const savedToml = fs.readFileSync(configTomlPath, 'utf-8');
 
@@ -502,7 +497,7 @@ require_mention = false
         ],
       }, null, 2),
     );
-    const loaded = loadConfig();
+    const loaded = loadLegacyConfig();
     const configTomlPath = path.join(path.dirname(CONFIG_JSON_PATH), 'config.toml');
 
     assert.equal(loaded.schemaVersion, 2);
@@ -531,7 +526,7 @@ require_mention = false
         'CODELARK_FEISHU_APP_ID=ignored-after-migration',
       ].join('\n'),
     );
-    const reloaded = loadConfig();
+    const reloaded = loadLegacyConfig();
     assert.equal(reloaded.defaultModel, 'old-model');
     assert.equal(reloaded.channels?.[0]?.config.appId, 'old-app');
   });
@@ -567,9 +562,9 @@ require_mention = false
         },
       ],
     };
-    saveConfig(config);
+    saveLegacyConfig(config);
 
-    const loaded = loadConfig();
+    const loaded = loadLegacyConfig();
     const configTomlPath = path.join(path.dirname(CONFIG_JSON_PATH), 'config.toml');
 
     assert.equal(fs.existsSync(configTomlPath), true);
@@ -636,8 +631,8 @@ require_mention = false
       }, null, 2),
     );
 
-    const loaded = loadConfig();
-    saveConfig({
+    const loaded = loadLegacyConfig();
+    saveLegacyConfig({
       ...loaded,
       defaultMode: 'yolo',
       defaultProvider: 'sdk',
@@ -650,7 +645,7 @@ require_mention = false
       streamStatusCheckIntervalSeconds: 15,
     });
 
-    const reloaded = loadConfig();
+    const reloaded = loadLegacyConfig();
     assert.deepEqual(
       reloaded.channels?.map((channel) => ({
         id: channel.id,
@@ -693,15 +688,15 @@ require_mention = false
   });
 
   it('round-trips claude as the default runtime through home TOML', () => {
-    const loaded = loadConfig();
-    saveConfig({
+    const loaded = loadLegacyConfig();
+    saveLegacyConfig({
       ...loaded,
       runtime: 'claude',
       claudeExecutable: 'ccr',
       claudeProvider: 'pty',
     });
 
-    const reloaded = loadConfig();
+    const reloaded = loadLegacyConfig();
     assert.equal(reloaded.runtime, 'claude');
     assert.equal(reloaded.claudeExecutable, 'ccr');
     assert.equal(reloaded.claudeProvider, 'pty');
