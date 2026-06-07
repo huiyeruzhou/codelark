@@ -198,6 +198,9 @@ function formatOnOff(value: boolean): string {
 function formatTmuxError(error: unknown): string {
   const message = error instanceof Error ? error.message : String(error);
   if (/ENOENT/.test(message)) {
+    if (/\bcodex\b/i.test(message)) {
+      return '没有找到 `codex` 命令，请安装 OpenAI Codex CLI，或设置 `CODELARK_CODEX_CLI_PATH` 指向可执行文件。';
+    }
     return process.platform === 'win32'
       ? '没有找到 tmux 兼容命令。Windows 上请安装 psmux 并确认兼容的 `tmux` 命令在 PATH 中。'
       : '没有找到 `tmux` 命令，请先安装 tmux 并确认它在 PATH 中。';

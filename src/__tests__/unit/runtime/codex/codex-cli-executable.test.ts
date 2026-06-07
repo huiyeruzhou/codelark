@@ -1,6 +1,9 @@
 import '../../../setup/test-setup.js';
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 
 import {
   isNodeModulesBinPath,
@@ -47,6 +50,35 @@ describe('codex-cli-executable', () => {
       }),
       '/custom/codex',
     );
+  });
+
+  it('falls back to the bundled OpenAI VS Code extension Codex binary', () => {
+    const extensionsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-codex-ext-'));
+    const olderCodex = path.join(extensionsDir, 'openai.chatgpt-26.602.30954-linux-x64', 'bin', 'linux-x86_64', 'codex');
+    const newerCodex = path.join(extensionsDir, 'openai.chatgpt-26.602.40724-linux-x64', 'bin', 'linux-x86_64', 'codex');
+    fs.mkdirSync(path.dirname(olderCodex), { recursive: true });
+    fs.mkdirSync(path.dirname(newerCodex), { recursive: true });
+    fs.writeFileSync(olderCodex, '#!/usr/bin/env sh\nexit 0\n', 'utf-8');
+    fs.writeFileSync(newerCodex, '#!/usr/bin/env sh\nexit 0\n', 'utf-8');
+    fs.chmodSync(olderCodex, 0o755);
+    fs.chmodSync(newerCodex, 0o755);
+
+    try {
+      assert.equal(
+        resolveCodexCliExecutable({
+          env: {
+            VSCODE_EXTENSIONS: extensionsDir,
+            PATH: '/usr/local/bin:/usr/bin',
+          },
+          platform: 'linux',
+          arch: 'x64',
+          fileExists: (filePath) => filePath === olderCodex || filePath === newerCodex,
+        }),
+        newerCodex,
+      );
+    } finally {
+      fs.rmSync(extensionsDir, { recursive: true, force: true });
+    }
   });
 
   it('reads process.env when called without arguments', () => {

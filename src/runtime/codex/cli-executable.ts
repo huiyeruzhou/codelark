@@ -6,6 +6,7 @@ import path from 'node:path';
 export interface ResolveCodexCliExecutableOptions {
   env?: NodeJS.ProcessEnv;
   platform?: NodeJS.Platform;
+  arch?: NodeJS.Architecture;
   fileExists?: (filePath: string) => boolean;
 }
 
@@ -89,6 +90,62 @@ function pathDelimiterForPlatform(platform: NodeJS.Platform): string {
 
 function pathModuleForPlatform(platform: NodeJS.Platform): typeof path.win32 | typeof path.posix {
   return platform === 'win32' ? path.win32 : path.posix;
+}
+
+function codexExecutableNameForPlatform(platform: NodeJS.Platform): string {
+  return platform === 'win32' ? 'codex.exe' : 'codex';
+}
+
+function codexExtensionPlatformDirs(platform: NodeJS.Platform, arch: NodeJS.Architecture): string[] {
+  if (platform === 'linux') {
+    if (arch === 'arm64') return ['linux-aarch64', 'linux-arm64'];
+    return ['linux-x86_64', 'linux-x64'];
+  }
+  if (platform === 'darwin') {
+    if (arch === 'arm64') return ['darwin-arm64', 'macos-arm64'];
+    return ['darwin-x64', 'darwin-x86_64', 'macos-x64'];
+  }
+  if (platform === 'win32') {
+    if (arch === 'arm64') return ['win32-arm64', 'windows-arm64'];
+    return ['win32-x64', 'windows-x64'];
+  }
+  return [];
+}
+
+function compareExtensionVersions(left: string, right: string): number {
+  return left.localeCompare(right, undefined, { numeric: true, sensitivity: 'base' });
+}
+
+function findOpenAiCodexExtensionExecutable(
+  env: NodeJS.ProcessEnv,
+  platform: NodeJS.Platform,
+  arch: NodeJS.Architecture,
+  fileExists: (filePath: string) => boolean,
+): string | null {
+  const roots = [
+    env.VSCODE_EXTENSIONS,
+    env.VSCODE_EXTENSIONS_DIR,
+    env.HOME ? path.join(env.HOME, '.vscode-server', 'extensions') : '',
+    env.HOME ? path.join(env.HOME, '.vscode-server-insiders', 'extensions') : '',
+    env.HOME ? path.join(env.HOME, '.vscode', 'extensions') : '',
+  ].filter(Boolean) as string[];
+  const executableName = codexExecutableNameForPlatform(platform);
+  const platformDirs = codexExtensionPlatformDirs(platform, arch);
+  const candidates: string[] = [];
+  for (const root of roots) {
+    let entries: string[];
+    try {
+      entries = fs.readdirSync(root);
+    } catch {
+      continue;
+    }
+    for (const entry of entries.filter((name) => /^openai\.chatgpt-/i.test(name)).sort(compareExtensionVersions).reverse()) {
+      for (const platformDir of platformDirs) {
+        candidates.push(path.join(root, entry, 'bin', platformDir, executableName));
+      }
+    }
+  }
+  return candidates.find(fileExists) || null;
 }
 
 function executableNames(command: string, platform: NodeJS.Platform): string[] {
@@ -179,6 +236,11 @@ export function resolveCliExecutable(options: ResolveCliExecutableOptions): stri
       if (resolvedWrapper) return resolvedWrapper;
       return candidate;
     }
+  }
+
+  if (options.command === 'codex') {
+    const extensionExecutable = findOpenAiCodexExtensionExecutable(env, platform, options.arch || process.arch, fileExists);
+    if (extensionExecutable) return extensionExecutable;
   }
 
   return names[0] || options.command;

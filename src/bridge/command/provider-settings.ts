@@ -53,6 +53,9 @@ function parseClaudeProviderArg(raw: string): 'sdk' | 'pty' | null {
 function formatTmuxProviderUnavailable(error: unknown): string | null {
   const message = error instanceof Error ? error.message : String(error);
   if (!/ENOENT|not found|cannot find|没有找到/i.test(message)) return null;
+  if (/\bcodex\b/i.test(message)) {
+    return '没有找到 `codex` 命令。请安装 OpenAI Codex CLI，或设置 `CODELARK_CODEX_CLI_PATH` 指向可执行文件；也可以先使用 `/provider sdk`。';
+  }
   return process.platform === 'win32'
     ? '没有找到 tmux 兼容命令。Windows 上请安装 psmux 并确认兼容的 `tmux` 命令在 PATH 中；也可以先使用 `/provider pty`。'
     : '没有找到 `tmux` 命令。请先安装 tmux 并确认它在 PATH 中；也可以先使用 `/provider pty`。';
