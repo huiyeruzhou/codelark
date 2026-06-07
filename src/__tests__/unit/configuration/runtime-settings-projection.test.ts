@@ -65,10 +65,10 @@ describe('runtime settings projection helper', () => {
       ].join('\n'));
 
       const projection = loadRuntimeSettingsProjection({ codelarkHome: home, env: {} });
-      assert.equal(projection.legacyConfig.runtime, 'claude');
-      assert.equal(projection.legacyConfig.defaultModel, 'toml-model');
-      assert.equal(projection.legacyConfig.defaultMode, 'yolo');
-      assert.equal(projection.legacyConfig.claudePermissionMode, 'default');
+      assert.equal(projection.config.runtime.agent, 'claude');
+      assert.equal(projection.config.runtime.codex.model, 'toml-model');
+      assert.equal(projection.config.runtime.codex.yoloMode, 'on');
+      assert.equal(projection.config.runtime.claude.permissionMode, 'default');
 
       assert.equal(projection.settings.get('bridge_default_runtime'), 'claude');
       assert.equal(projection.settings.get('bridge_default_model'), 'toml-model');
@@ -130,9 +130,9 @@ provider = "sdk"
         },
       });
 
-      assert.equal(projection.legacyConfig.runtime, 'claude');
-      assert.equal(projection.legacyConfig.defaultModel, 'cli-model');
-      assert.equal(projection.legacyConfig.defaultProvider, 'tmux');
+      assert.equal(projection.config.runtime.agent, 'claude');
+      assert.equal(projection.config.runtime.codex.model, 'cli-model');
+      assert.equal(projection.config.runtime.codex.provider, 'tmux');
       assert.equal(projection.settings.get('bridge_default_runtime'), 'claude');
       assert.equal(projection.settings.get('bridge_default_model'), 'cli-model');
       assert.equal(projection.settings.get('bridge_default_provider'), 'tmux');

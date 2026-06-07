@@ -1,10 +1,9 @@
-import { configV2ToLegacyConfig } from './legacy.js';
 import { createConfigService, type ConfigServiceOptions } from './service.js';
-import type { Config } from './index.js';
+import type { ConfigV2 } from './schema.js';
 
 export interface RuntimeSettingsProjection {
   settings: Map<string, string>;
-  legacyConfig: Config;
+  config: ConfigV2;
 }
 
 export function loadRuntimeSettingsProjection(
@@ -14,7 +13,7 @@ export function loadRuntimeSettingsProjection(
   const effective = service.snapshot().config;
   return {
     settings: service.exportRuntimeSettings(),
-    legacyConfig: configV2ToLegacyConfig(effective),
+    config: effective,
   };
 }
 

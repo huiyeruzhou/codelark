@@ -121,7 +121,7 @@ async function main(): Promise<void> {
   };
 
   runStartupStorageMigrations();
-  const { settings, legacyConfig: config } = loadRuntimeSettingsProjection({ codelarkHome: CODELARK_HOME });
+  const { settings, config } = loadRuntimeSettingsProjection({ codelarkHome: CODELARK_HOME });
   setupLogger();
 
   const runId = crypto.randomUUID();
@@ -130,9 +130,10 @@ async function main(): Promise<void> {
 
   const store = new JsonFileStore(settings, { dynamicSettings: true });
   const pendingPerms = new PendingPermissions();
-  const llm = await resolveProvider(pendingPerms, config.defaultProvider);
-  console.log(`${LOG_PREFIX} Runtime: ${config.runtime}`);
-  console.log(`${LOG_PREFIX} Default Codex provider: ${config.defaultProvider || 'auto'}`);
+  const defaultCodexProvider = config.runtime.codex.provider || undefined;
+  const llm = await resolveProvider(pendingPerms, defaultCodexProvider as CodexProviderChoice | undefined);
+  console.log(`${LOG_PREFIX} Runtime: ${config.runtime.agent}`);
+  console.log(`${LOG_PREFIX} Default Codex provider: ${defaultCodexProvider || 'auto'}`);
 
   const gateway = {
     resolvePendingPermission: (id: string, resolution: { behavior: 'allow' | 'deny'; message?: string }) =>
