@@ -1268,6 +1268,12 @@ describe('bridge-manager resolveCommandAlias', () => {
 
 describe('bridge-manager status formatting', () => {
   beforeEach(() => {
+    writeHomeConfigToml(`
+schema_version = 2
+
+[runtime.codex]
+model = "test-model"
+`);
     const store = new JsonFileStore(makeSettings());
     initBridgeContext({
       store,

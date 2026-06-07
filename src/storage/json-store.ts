@@ -646,7 +646,7 @@ export class JsonFileStore implements BridgeStore {
         ...(activeRuntime ? { activeRuntime } : {}),
         codex: {
           model,
-          mode: normalizeStoredMode(mode || this.getSetting('bridge_default_mode') || 'normal'),
+          mode: normalizeStoredMode(mode || 'normal'),
           ...(options?.reasoningEffort ? { reasoningEffort: options.reasoningEffort } : {}),
         },
         general: {

@@ -99,8 +99,8 @@ export function createBinding(
 ): ChannelChat {
   const { store } = getBridgeContext();
   const defaultProviderId = store.getSetting('bridge_default_provider_id') || '';
-  const defaultModel = getGlobalStringConfig('runtime.codex.model', 'bridge_default_model', { store }) || '';
-  const defaultRuntime = getGlobalStringConfig('runtime.agent', 'bridge_default_runtime', { store }) === 'claude' ? 'claude' : 'codex';
+  const defaultModel = getGlobalStringConfig('runtime.codex.model') || '';
+  const defaultRuntime = getGlobalStringConfig('runtime.agent') === 'claude' ? 'claude' : 'codex';
   const visibleSessionName = sessionName?.trim() || address.displayName?.trim() || `Bridge: ${address.chatId}`;
   const session = workingDirectory
     ? store.createSession(

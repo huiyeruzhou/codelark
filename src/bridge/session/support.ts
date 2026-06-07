@@ -97,7 +97,7 @@ export function resolveEffectiveReasoningEffort(session: BridgeSession | null | 
   return normalizeStoredReasoningEffort(
     getSessionTomlOverride<BridgeSessionCodexRuntimeState['reasoningEffort']>(session, 'runtime.codex.reasoningEffort')
       || getSessionCodexReasoningEffort(session)
-      || getGlobalStringConfig('runtime.codex.reasoningEffort', 'bridge_codex_reasoning_effort'),
+      || getGlobalStringConfig('runtime.codex.reasoningEffort'),
   );
 }
 
@@ -105,7 +105,7 @@ export function resolveEffectiveSandboxMode(session?: BridgeSession | null): str
   return normalizeSandboxMode(
     getSessionTomlOverride<BridgeSessionCodexRuntimeState['sandboxMode']>(session, 'runtime.codex.sandboxMode')
       || getSessionCodexSandboxMode(session)
-      || getGlobalStringConfig('runtime.codex.sandboxMode', 'bridge_codex_sandbox_mode'),
+      || getGlobalStringConfig('runtime.codex.sandboxMode'),
   );
 }
 
@@ -118,7 +118,7 @@ export function resolveEffectiveNetworkAccess(session?: BridgeSession | null): b
   if (typeof sessionValue === 'boolean') {
     return sessionValue;
   }
-  return getGlobalBooleanConfig('runtime.codex.networkAccess', 'bridge_codex_network_access') === true;
+  return getGlobalBooleanConfig('runtime.codex.networkAccess') === true;
 }
 
 export function hasSessionCodexSandboxOverride(session?: BridgeSession | null): boolean {
@@ -165,7 +165,7 @@ export function resolveEffectiveClaudeProvider(session?: BridgeSession | null): 
   if (tomlProvider === 'sdk' || tomlProvider === 'pty') return tomlProvider;
   const sessionProvider = getSessionClaudeProvider(session);
   if (sessionProvider === 'sdk' || sessionProvider === 'pty') return sessionProvider;
-  const configured = getGlobalStringConfig('runtime.claude.provider', 'bridge_claude_provider');
+  const configured = getGlobalStringConfig('runtime.claude.provider');
   if (configured === 'sdk' || configured === 'pty') return configured;
   return 'sdk';
 }
@@ -180,11 +180,7 @@ export function resolveEffectiveMode(
     : tomlMode === 'off'
       ? 'normal'
       : getSessionCodexMode(session);
-  const globalMode = getGlobalConfigValue<'off' | 'on'>(
-    'runtime.codex.yoloMode',
-    'bridge_default_mode',
-    (value) => value === 'yolo' ? 'on' : value === 'normal' || value === 'code' ? 'off' : undefined,
-  );
+  const globalMode = getGlobalConfigValue<'off' | 'on'>('runtime.codex.yoloMode');
   return (sessionMode || (globalMode === 'on' ? 'yolo' : 'normal')) === 'yolo'
     ? 'yolo'
     : 'normal';
@@ -195,13 +191,13 @@ export function resolveEffectiveCodexProvider(session?: BridgeSession | null): S
   if (tomlProvider === 'sdk' || tomlProvider === 'tmux' || tomlProvider === 'pty') return tomlProvider;
   const sessionProvider = getSessionCodexProvider(session);
   if (sessionProvider === 'sdk' || sessionProvider === 'tmux' || sessionProvider === 'pty') return sessionProvider;
-  const configured = getGlobalStringConfig('runtime.codex.provider', 'bridge_default_provider');
+  const configured = getGlobalStringConfig('runtime.codex.provider');
   if (configured === 'sdk' || configured === 'tmux' || configured === 'pty') return configured;
   return shouldUseCodexPtyTui() ? 'pty' : shouldUseCodexTmuxTui() ? 'tmux' : 'sdk';
 }
 
 export function resolveEffectiveSkipGitRepoCheck(): boolean {
-  return getGlobalBooleanConfig('runtime.codex.skipGitRepoCheck', 'bridge_codex_skip_git_repo_check') === true;
+  return getGlobalBooleanConfig('runtime.codex.skipGitRepoCheck') === true;
 }
 
 export function resolveSessionRuntimeConfig(
@@ -214,7 +210,7 @@ export function resolveSessionRuntimeConfig(
     mode,
     model: getSessionTomlOverride<string>(session, 'runtime.codex.model')
       || getSessionCodexModel(session)
-      || getGlobalStringConfig('runtime.codex.model', 'bridge_default_model')
+      || getGlobalStringConfig('runtime.codex.model')
       || '',
     codexProvider: resolveEffectiveCodexProvider(session),
     sandboxMode: mode === 'yolo' ? 'danger-full-access' : resolveEffectiveSandboxMode(session),
@@ -247,23 +243,19 @@ export function resolveClaudeRuntimeConfig(session?: BridgeSession | null): Clau
   return {
     runtime: 'claude',
     provider: resolveEffectiveClaudeProvider(session),
-    executable: normalizeClaudeExecutable(getGlobalStringConfig('runtime.claude.executable', 'bridge_claude_executable')) || 'claude',
+    executable: normalizeClaudeExecutable(getGlobalStringConfig('runtime.claude.executable')) || 'claude',
     model: getSessionTomlOverride<string>(session, 'runtime.claude.model')
       || getSessionClaudeModel(session)
-      || getGlobalStringConfig('runtime.claude.model', 'bridge_claude_default_model')
+      || getGlobalStringConfig('runtime.claude.model')
       || undefined,
     permissionMode: tomlPermissionMode
       || tomlYoloPermissionMode
       || getSessionClaudePermissionMode(session)
-      || normalizeClaudePermissionMode(getGlobalStringConfig('runtime.claude.permissionMode', 'bridge_claude_permission_mode'))
+      || normalizeClaudePermissionMode(getGlobalStringConfig('runtime.claude.permissionMode'))
       || 'default',
     reasoningEffort: getSessionTomlOverride<BridgeSessionClaudeRuntimeState['reasoningEffort']>(session, 'runtime.claude.reasoningEffort')
       || getSessionClaudeReasoningEffort(session),
-    idleTimeoutMinutes: parsePositiveSettingInt(String(getGlobalConfigValue<number>(
-      'runtime.claude.idleTimeoutMinutes',
-      'bridge_claude_idle_timeout_minutes',
-      (value) => parsePositiveSettingInt(value),
-    ) ?? '')),
+    idleTimeoutMinutes: parsePositiveSettingInt(String(getGlobalConfigValue<number>('runtime.claude.idleTimeoutMinutes') ?? '')),
   };
 }
 
@@ -407,11 +399,7 @@ export function resetDraftSession(address: { channelType: string; chatId: string
 }
 
 export function getHistoryMessageLimit(): number {
-  const configured = getGlobalConfigValue<number>(
-    'channels[].config.historyMessageLimit',
-    'bridge_history_message_limit',
-    (value) => parsePositiveSettingInt(value),
-  );
+  const configured = getGlobalConfigValue<number>('channels[].config.historyMessageLimit');
   if (configured === undefined || !Number.isFinite(configured) || configured <= 0) return 8;
   return Math.max(1, Math.min(20, configured));
 }

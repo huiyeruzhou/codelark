@@ -215,12 +215,7 @@ function getSessionName(session: BridgeSession): string {
 
 function getSessionMode(store: BridgeStore, session: BridgeSession): ChannelChatMode {
   const sessionMode = getSessionCodexMode(session);
-  const globalMode = getGlobalConfigValue<'off' | 'on'>(
-    'runtime.codex.yoloMode',
-    'bridge_default_mode',
-    (value) => value === 'yolo' ? 'on' : value === 'normal' || value === 'code' ? 'off' : undefined,
-    { store },
-  );
+  const globalMode = getGlobalConfigValue<'off' | 'on'>('runtime.codex.yoloMode');
   return (sessionMode || (globalMode === 'on' ? 'yolo' : 'normal')) === 'yolo'
     ? 'yolo'
     : 'normal';
@@ -283,7 +278,7 @@ export function ensureBridgeSessionForCodexThread(
   }
 
   const workingDirectory = opts?.workingDirectory || '';
-  const model = opts?.model || getGlobalStringConfig('runtime.codex.model', 'bridge_default_model', { store }) || '';
+  const model = opts?.model || getGlobalStringConfig('runtime.codex.model') || '';
   const baseName = opts?.name || '';
 
   const session = store.createSession(

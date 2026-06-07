@@ -111,6 +111,10 @@ import {
   resolveNewSessionWorkingDirectory,
 } from '../session/support.js';
 import {
+  getGlobalConfigValue,
+  getGlobalStringConfig,
+} from '../session/global-config.js';
+import {
   getSessionTmuxSessionName,
   getSessionClaudeModel,
   getSessionClaudeReasoningEffort,
@@ -931,17 +935,20 @@ function getMirrorStructuredStreamStatusConfig(): {
   idleStartMs: number;
   heartbeatMs: number;
 } {
-  const { store } = getBridgeContext();
-  const idleStartSeconds = parseInt(store.getSetting('bridge_stream_status_idle_start_seconds') || '', 10);
-  const heartbeatSeconds = parseInt(store.getSetting('bridge_stream_status_check_interval_seconds') || '', 10);
+  const idleStartSeconds = getGlobalConfigValue<number>('channels[].config.streamStatusIdleStartSeconds');
+  const heartbeatSeconds = getGlobalConfigValue<number>('channels[].config.streamStatusCheckIntervalSeconds');
   return {
     idleStartMs: Math.max(
       0,
-      (Number.isFinite(idleStartSeconds) && idleStartSeconds > 0 ? idleStartSeconds : MIRROR_STREAM_STATUS_IDLE_START_MS / 1000) * 1000,
+      (typeof idleStartSeconds === 'number' && Number.isFinite(idleStartSeconds) && idleStartSeconds > 0
+        ? idleStartSeconds
+        : MIRROR_STREAM_STATUS_IDLE_START_MS / 1000) * 1000,
     ),
     heartbeatMs: Math.max(
       1_000,
-      (Number.isFinite(heartbeatSeconds) && heartbeatSeconds > 0 ? heartbeatSeconds : MIRROR_STREAM_STATUS_HEARTBEAT_MS / 1000) * 1000,
+      (typeof heartbeatSeconds === 'number' && Number.isFinite(heartbeatSeconds) && heartbeatSeconds > 0
+        ? heartbeatSeconds
+        : MIRROR_STREAM_STATUS_HEARTBEAT_MS / 1000) * 1000,
     ),
   };
 }
@@ -960,14 +967,14 @@ function getMirrorRuntimeTags(_threadId: string, sessionId?: string): string[] {
   if (getSessionActiveRuntime(session) === 'claude') {
     return buildRuntimeStreamTags({
       reasoningEffort: getSessionClaudeReasoningEffort(session) || 'default',
-      model: getSessionClaudeModel(session) || store.getSetting('bridge_claude_default_model') || 'default',
+      model: getSessionClaudeModel(session) || getGlobalStringConfig('runtime.claude.model') || 'default',
     });
   }
   return buildRuntimeStreamTags({
     reasoningEffort: normalizeReasoningEffort(
-      getSessionCodexReasoningEffort(session) || store.getSetting('bridge_codex_reasoning_effort'),
+      getSessionCodexReasoningEffort(session) || getGlobalStringConfig('runtime.codex.reasoningEffort'),
     ),
-    model: getSessionCodexModel(session) || store.getSetting('bridge_default_model') || 'default',
+    model: getSessionCodexModel(session) || getGlobalStringConfig('runtime.codex.model') || 'default',
   });
 }
 

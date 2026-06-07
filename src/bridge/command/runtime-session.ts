@@ -15,6 +15,7 @@ import {
   resolveEffectiveCodexProvider,
   resolveEffectiveMode,
 } from '../session/support.js';
+import { getGlobalStringConfig } from '../session/global-config.js';
 import { getCodexThreadId } from '../turn/turn-classifier.js';
 import { sessionLooksRunning } from './session-args.js';
 
@@ -62,7 +63,7 @@ export function createRuntimeSessionForChat(options: {
   const baseName = rawBaseName.replace(/\s+\((?:Claude Code|Codex)\)$/u, '');
   return options.store.createSession(
     options.runtime === 'claude' ? `${baseName} (Claude Code)` : `${baseName} (Codex)`,
-    options.runtime === 'codex' ? (options.store.getSetting('bridge_default_model') || '') : '',
+    options.runtime === 'codex' ? (getGlobalStringConfig('runtime.codex.model') || '') : '',
     systemPrompt,
     workDir,
     options.runtime === 'codex' ? resolveEffectiveMode(null, options.baseSession) : undefined,

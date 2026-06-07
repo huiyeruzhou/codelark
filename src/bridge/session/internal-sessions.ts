@@ -31,7 +31,7 @@ export function makeDraftSessionName(address: { channelType: string; chatId: str
 }
 
 function getDefaultSessionWorkingDirectory(store: BridgeStore): string {
-  const dir = getGlobalWorkspaceRoot({ store });
+  const dir = getGlobalWorkspaceRoot();
   ensureDirectory(dir);
   return dir;
 }
@@ -85,7 +85,7 @@ export function getOrCreateDraftSession(
   const workingDirectory = getDefaultSessionWorkingDirectory(store);
   return store.createSession(
     expectedName,
-    getGlobalStringConfig('runtime.codex.model', 'bridge_default_model', { store }) || '',
+    getGlobalStringConfig('runtime.codex.model') || '',
     undefined,
     workingDirectory,
     'normal',

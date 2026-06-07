@@ -5,27 +5,8 @@ import {
 import type { ConfigPath } from '../../configuration/fields-types.js';
 import { createConfigService } from '../../configuration/service.js';
 
-export interface LegacySettingReader {
-  getSetting(key: string): string | null | undefined;
-}
-
-export interface GlobalConfigFallbackOptions {
-  store?: LegacySettingReader;
-}
-
-export function parseLegacyBoolean(value: string | null | undefined): boolean | undefined {
-  if (!value) return undefined;
-  const normalized = value.trim().toLowerCase();
-  if (['true', '1', 'on', 'yes'].includes(normalized)) return true;
-  if (['false', '0', 'off', 'no'].includes(normalized)) return false;
-  return undefined;
-}
-
 export function getGlobalConfigValue<T>(
   path: ConfigPath,
-  _legacySettingKey: string | undefined,
-  _parseLegacy: (value: string) => T | undefined,
-  _options?: GlobalConfigFallbackOptions,
 ): T | undefined {
   try {
     const resolved = createConfigService({ migrate: false }).resolve(path);
@@ -38,25 +19,18 @@ export function getGlobalConfigValue<T>(
 
 export function getGlobalStringConfig(
   path: ConfigPath,
-  legacySettingKey: string,
-  options?: GlobalConfigFallbackOptions,
 ): string | undefined {
-  return getGlobalConfigValue<string>(path, legacySettingKey, (value) => value || undefined, options);
+  return getGlobalConfigValue<string>(path) || undefined;
 }
 
 export function getGlobalBooleanConfig(
   path: ConfigPath,
-  legacySettingKey: string,
-  options?: GlobalConfigFallbackOptions,
 ): boolean | undefined {
-  return getGlobalConfigValue<boolean>(path, legacySettingKey, parseLegacyBoolean, options);
+  return getGlobalConfigValue<boolean>(path);
 }
 
-export function getGlobalWorkspaceRoot(options?: GlobalConfigFallbackOptions): string {
+export function getGlobalWorkspaceRoot(): string {
   return expandHomePath(getGlobalConfigValue<string>(
     'bridge.defaultWorkspace',
-    'bridge_default_workspace_root',
-    (value) => value || undefined,
-    options,
   ) || DEFAULT_WORKSPACE_ROOT) || DEFAULT_WORKSPACE_ROOT;
 }

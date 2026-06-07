@@ -75,17 +75,17 @@ export class ThreadDisplayService {
       return {
         reasoningEffort: getSessionClaudeReasoningEffort(session) || 'default',
         model: getSessionClaudeModel(session)
-          || getGlobalStringConfig('runtime.claude.model', 'bridge_claude_default_model', { store: this.store })
+          || getGlobalStringConfig('runtime.claude.model')
           || 'default',
       };
     }
     return {
       reasoningEffort: normalizeReasoningEffort(
         getSessionCodexReasoningEffort(session)
-          || getGlobalStringConfig('runtime.codex.reasoningEffort', 'bridge_codex_reasoning_effort', { store: this.store }),
+          || getGlobalStringConfig('runtime.codex.reasoningEffort'),
       ),
       model: getSessionCodexModel(session)
-        || getGlobalStringConfig('runtime.codex.model', 'bridge_default_model', { store: this.store })
+        || getGlobalStringConfig('runtime.codex.model')
         || 'default',
     };
   }
