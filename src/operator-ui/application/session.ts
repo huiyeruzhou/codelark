@@ -22,28 +22,11 @@ import {
 } from '../../bridge/session/transcript-source.js';
 import {
   getSessionActiveRuntime,
-  getSessionClaudeModel,
-  getSessionClaudePermissionMode,
-  getSessionClaudeReasoningEffort,
-  getSessionCodexModel,
-  getSessionCodexMode,
-  getSessionCodexNetworkAccess,
-  getSessionCodexProvider,
-  getSessionCodexReasoningEffort,
-  getSessionCodexSandboxMode,
   getSessionCodexTitle,
   getSessionSystemPrompt,
   getSessionWorkingDirectory,
   mergeSessionRuntimeUpdates,
-  setSessionClaudeModelUpdate,
-  setSessionCodexModeUpdate,
-  setSessionCodexModelUpdate,
-  setSessionCodexNetworkAccessUpdate,
-  setSessionCodexProviderUpdate,
-  setSessionCodexReasoningEffortUpdate,
-  setSessionCodexSandboxModeUpdate,
   setSessionSystemPromptUpdate,
-  setSessionWorkingDirectoryUpdate,
 } from '../../domain/session-runtime.js';
 import type { JsonFileStore } from '../../storage/json-store.js';
 import {
@@ -330,77 +313,9 @@ function sanitizeSessionConfig(payload: Record<string, unknown>): BridgeSessionU
   if (typeof payload.name === 'string') {
     updates.name = payload.name.trim() || undefined;
   }
-  if (typeof payload.workingDirectory === 'string') {
-    runtimeUpdates.push(setSessionWorkingDirectoryUpdate(payload.workingDirectory.trim() || process.cwd()));
-  }
+  runtimeUpdates.push({ runtime: { activeRuntime } });
   if (typeof payload.systemPrompt === 'string') {
     runtimeUpdates.push(setSessionSystemPromptUpdate(payload.systemPrompt.trim() || undefined));
-  }
-
-  if (activeRuntime === 'claude') {
-    if (typeof payload.claudeModel === 'string') {
-      runtimeUpdates.push(setSessionClaudeModelUpdate(payload.claudeModel.trim() || undefined));
-    }
-    if (
-      payload.claudePermissionMode === 'acceptEdits'
-      || payload.claudePermissionMode === 'bypassPermissions'
-      || payload.claudePermissionMode === 'plan'
-      || payload.claudePermissionMode === 'default'
-      || payload.claudePermissionMode === ''
-    ) {
-      runtimeUpdates.push({
-        runtime: {
-          activeRuntime: 'claude',
-          claude: { permissionMode: payload.claudePermissionMode ? payload.claudePermissionMode : undefined },
-        },
-      });
-    }
-    if (
-      payload.claudeReasoningEffort === 'low'
-      || payload.claudeReasoningEffort === 'medium'
-      || payload.claudeReasoningEffort === 'high'
-      || payload.claudeReasoningEffort === 'xhigh'
-      || payload.claudeReasoningEffort === 'max'
-      || payload.claudeReasoningEffort === ''
-    ) {
-      runtimeUpdates.push({
-        runtime: {
-          activeRuntime: 'claude',
-          claude: { reasoningEffort: payload.claudeReasoningEffort ? payload.claudeReasoningEffort : undefined },
-        },
-      });
-    }
-  } else {
-    if (typeof payload.model === 'string') {
-      runtimeUpdates.push(setSessionCodexModelUpdate(payload.model.trim() || undefined));
-    }
-    if (payload.preferredMode === 'yolo' || payload.preferredMode === 'normal' || payload.preferredMode === 'code') {
-      runtimeUpdates.push(setSessionCodexModeUpdate(payload.preferredMode === 'yolo' ? 'yolo' : 'normal'));
-    }
-    if (payload.codexProvider === 'sdk' || payload.codexProvider === 'tmux' || payload.codexProvider === 'pty' || payload.codexProvider === '') {
-      runtimeUpdates.push(setSessionCodexProviderUpdate(payload.codexProvider ? payload.codexProvider : undefined));
-    }
-    if (
-      payload.reasoningEffort === 'minimal'
-      || payload.reasoningEffort === 'low'
-      || payload.reasoningEffort === 'medium'
-      || payload.reasoningEffort === 'high'
-      || payload.reasoningEffort === 'xhigh'
-      || payload.reasoningEffort === ''
-    ) {
-      runtimeUpdates.push(setSessionCodexReasoningEffortUpdate(payload.reasoningEffort ? payload.reasoningEffort : undefined));
-    }
-    if (
-      payload.codexSandboxMode === 'read-only'
-      || payload.codexSandboxMode === 'workspace-write'
-      || payload.codexSandboxMode === 'danger-full-access'
-      || payload.codexSandboxMode === ''
-    ) {
-      runtimeUpdates.push(setSessionCodexSandboxModeUpdate(payload.codexSandboxMode ? payload.codexSandboxMode : undefined));
-    }
-    if (payload.codexNetworkAccess === true || payload.codexNetworkAccess === false) {
-      runtimeUpdates.push(setSessionCodexNetworkAccessUpdate(payload.codexNetworkAccess));
-    }
   }
   return mergeSessionRuntimeUpdates(updates, ...runtimeUpdates);
 }
@@ -410,7 +325,6 @@ function sessionConfigPayload(session: BridgeSession) {
   const codexYoloMode = getSessionConfigTomlOverride<'off' | 'on' | 'yolo'>(session, 'runtime.codex.yoloMode');
   const claudeYoloMode = getSessionConfigTomlOverride<'off' | 'on' | 'yolo'>(session, 'runtime.claude.yoloMode');
   const claudePermissionMode = getSessionConfigTomlOverride<string>(session, 'runtime.claude.permissionMode')
-    || getSessionClaudePermissionMode(session)
     || (claudeYoloMode === 'on' || claudeYoloMode === 'yolo' ? 'bypassPermissions' : claudeYoloMode === 'off' ? 'default' : undefined);
   return {
     id: session.id,
@@ -420,16 +334,16 @@ function sessionConfigPayload(session: BridgeSession) {
     codexTitle: getSessionCodexTitle(session) || '',
     title: getBridgeSessionTitle(session),
     workingDirectory: getSessionWorkingDirectory(session) || '',
-    model: getSessionConfigTomlOverride<string>(session, 'runtime.codex.model') || getSessionCodexModel(session) || '',
-    preferredMode: (codexYoloMode === 'on' || codexYoloMode === 'yolo' || getSessionCodexMode(session) === 'yolo') ? 'yolo' : 'normal',
-    codexProvider: getSessionConfigTomlOverride<string>(session, 'runtime.codex.provider') || getSessionCodexProvider(session) || '',
+    model: getSessionConfigTomlOverride<string>(session, 'runtime.codex.model') || '',
+    preferredMode: (codexYoloMode === 'on' || codexYoloMode === 'yolo') ? 'yolo' : 'normal',
+    codexProvider: getSessionConfigTomlOverride<string>(session, 'runtime.codex.provider') || '',
     systemPrompt: getSessionSystemPrompt(session) || '',
-    reasoningEffort: getSessionConfigTomlOverride<string>(session, 'runtime.codex.reasoningEffort') || getSessionCodexReasoningEffort(session) || '',
-    codexSandboxMode: getSessionConfigTomlOverride<string>(session, 'runtime.codex.sandboxMode') || getSessionCodexSandboxMode(session) || '',
-    codexNetworkAccess: getSessionConfigTomlOverride<boolean>(session, 'runtime.codex.networkAccess') ?? getSessionCodexNetworkAccess(session),
-    claudeModel: getSessionConfigTomlOverride<string>(session, 'runtime.claude.model') || getSessionClaudeModel(session) || '',
+    reasoningEffort: getSessionConfigTomlOverride<string>(session, 'runtime.codex.reasoningEffort') || '',
+    codexSandboxMode: getSessionConfigTomlOverride<string>(session, 'runtime.codex.sandboxMode') || '',
+    codexNetworkAccess: getSessionConfigTomlOverride<boolean>(session, 'runtime.codex.networkAccess'),
+    claudeModel: getSessionConfigTomlOverride<string>(session, 'runtime.claude.model') || '',
     claudePermissionMode: claudePermissionMode || '',
-    claudeReasoningEffort: getSessionConfigTomlOverride<string>(session, 'runtime.claude.reasoningEffort') || getSessionClaudeReasoningEffort(session) || '',
+    claudeReasoningEffort: getSessionConfigTomlOverride<string>(session, 'runtime.claude.reasoningEffort') || '',
   };
 }
 

@@ -74,7 +74,7 @@ describe('UiSessionApplication', () => {
     assert.match(history.messages[0]?.renderedContent || '', /<strong>session<\/strong>/);
 
     const imported = app.importCodexThread(thread.threadId);
-    assert.equal(imported.config.model, 'model-from-ui-source');
+    assert.equal(imported.config.model, '');
     assert.equal(store.getSession(imported.bridgeSessionId)?.runtime?.codex?.threadId, thread.threadId);
 
     const deleted = app.deleteSession({ codexThreadId: thread.threadId });
@@ -212,13 +212,26 @@ describe('UiSessionApplication', () => {
         claude: {
           sessionId: 'claude-config-session',
           cwd: '/tmp/claude-config',
-          model: 'initial-sonnet',
-          permissionMode: 'plan',
-          reasoningEffort: 'medium',
+          model: 'legacy-sonnet',
+          permissionMode: 'acceptEdits',
+          reasoningEffort: 'low',
         },
         general: { workingDirectory: '/tmp/claude-config' },
       },
     });
+    const configService = createConfigService({ migrate: false, env: {} });
+    configService.set(
+      { kind: 'session', sessionId: session.id },
+      {
+        runtime: {
+          claude: {
+            model: 'initial-sonnet',
+            permissionMode: 'plan',
+            reasoningEffort: 'medium',
+          },
+        },
+      },
+    );
 
     const app = new UiSessionApplication(store);
     const config = app.getConfig(session.id);
@@ -243,11 +256,10 @@ describe('UiSessionApplication', () => {
     assert.equal(updated.claudeReasoningEffort, 'high');
     const stored = store.getSession(session.id);
     assert.equal(stored?.runtime?.activeRuntime, 'claude');
-    assert.equal(stored?.runtime?.claude?.model, 'opus');
-    assert.equal(stored?.runtime?.claude?.permissionMode, 'bypassPermissions');
-    assert.equal(stored?.runtime?.claude?.reasoningEffort, 'high');
+    assert.equal(stored?.runtime?.claude?.model, 'legacy-sonnet');
+    assert.equal(stored?.runtime?.claude?.permissionMode, 'acceptEdits');
+    assert.equal(stored?.runtime?.claude?.reasoningEffort, 'low');
     assert.equal(stored?.runtime?.codex, undefined);
-    const configService = createConfigService({ migrate: false, env: {} });
     assert.equal(configService.get('runtime.claude.model', { kind: 'session', sessionId: session.id }), 'opus');
     assert.equal(configService.get('runtime.claude.yoloMode', { kind: 'session', sessionId: session.id }), 'on');
     assert.equal(configService.get('runtime.claude.permissionMode', { kind: 'session', sessionId: session.id }), 'bypassPermissions');
@@ -306,6 +318,14 @@ describe('UiSessionApplication', () => {
     assert.equal(updated.reasoningEffort, 'high');
     assert.equal(updated.codexSandboxMode, 'read-only');
     assert.equal(updated.codexNetworkAccess, false);
+    const stored = store.getSession(session.id);
+    assert.equal(stored?.runtime?.codex?.model, 'old-model');
+    assert.equal(stored?.runtime?.codex?.mode, 'normal');
+    assert.equal(stored?.runtime?.codex?.provider, undefined);
+    assert.equal(stored?.runtime?.codex?.reasoningEffort, undefined);
+    assert.equal(stored?.runtime?.codex?.sandboxMode, undefined);
+    assert.equal(stored?.runtime?.codex?.networkAccess, undefined);
+    assert.equal(stored?.runtime?.general?.workingDirectory, '/tmp/codex-config');
 
     const configService = createConfigService({ migrate: false, env: {} });
     assert.equal(configService.get('session.workspace', { kind: 'session', sessionId: session.id }), '/tmp/codex-config-next');
