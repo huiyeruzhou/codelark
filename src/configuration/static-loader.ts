@@ -1,8 +1,8 @@
 import { envToConfigPatch } from './env-compat.js';
 import type { ConfigSourceKind, ProvenanceMap, SourceRef } from './fields-types.js';
-import { markLayerProvenance, mergePatch, type ConfigLayer } from './merge.js';
-import { configToTomlShape, tomlToConfigPatch, type ConfigPatch } from './schema.js';
-import { createNodeConfigLoader, readTomlConfig, writeTomlConfig, type ConfigPaths, type SourceLoadResult } from './sources.js';
+import { markLayerProvenance, mergePatch, mergePatchesWithNodeConfig, type ConfigLayer } from './merge.js';
+import type { ConfigPatch } from './schema.js';
+import { readTomlConfig, writeTomlConfig, type ConfigPaths, type SourceLoadResult } from './sources.js';
 
 export interface StaticConfigBaseline {
   layer: ConfigLayer;
@@ -62,14 +62,6 @@ function validateStaticSource(source: ConfigSourceKind, patch: ConfigPatch): voi
   }
 }
 
-function loadWithNodeConfig(sources: ConfigLayer[]): ConfigPatch {
-  const load = createNodeConfigLoader();
-  for (const source of sources) {
-    load.addConfig(source.ref.file || source.ref.source, configToTomlShape(source.patch));
-  }
-  return tomlToConfigPatch(load.config);
-}
-
 function readDefaultsWithNodeConfig(file: string): SourceLoadResult {
   const loaded = readTomlConfig(file);
   if (!loaded) throw new Error(`Missing defaults TOML: ${file}`);
@@ -112,7 +104,7 @@ export function loadStaticConfigBaseline(paths: ConfigPaths, env: NodeJS.Process
   return {
     layer: {
       ref: { source: 'defaults', file: paths.defaultsToml },
-      patch: loadWithNodeConfig(sources),
+      patch: mergePatchesWithNodeConfig(sources),
       provenance: staticProvenance(sources),
     },
     envPatch,

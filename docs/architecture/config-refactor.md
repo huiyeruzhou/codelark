@@ -135,7 +135,7 @@ src/configuration/
   fields-types.ts            # ConfigFields / ConfigField 类型定义
   static-loader.ts           # node-config 静态 baseline：defaults/home/local/env/cli
   sources.ts                 # 路径解析、Channel/Session TOML 读写和持久化写入
-  merge.ts                   # 动态 overlay merge + provenance
+  merge.ts                   # node-config effective merge + provenance/write patch helpers
   service.ts                 # ConfigService 查询和写入 API
   env-compat.ts              # 真实 process.env 的旧 env alias 兼容读取和 warning
   env-projection.ts          # 从 effective config 生成子进程环境变量
@@ -433,17 +433,18 @@ fallback = runtime.codex.reasoningEffort from cli/env/local/home/defaults
 
 2026-06-07 重新评估 `node-config`、`wild-config`、`auto-config-loader` 后，结论不是“完全不用通用配置库”，而是做分层采用：
 
-- 纯静态全局配置层采用 `node-config`：`defaults + home + local/project + env + CLI baseline` 交给成熟库做加载和基础 merge。实现上使用 `config/lib/util` 的 `Load`，按 CodeLark 已解析出的动态路径装载/合并 TOML shape，避免依赖全局 singleton 或污染 `process.env`。
-- CodeLark 动态配置语义仍保留在 `ConfigService`：`request > session > channel` overlay、字段级 provenance/explain、scope 写入约束、迁移、secret mask、`channels` home-only 校验与 materialized 写入、runtime env/settings projection。
-- 也就是说，`node-config` 替代的是 `ConfigService` 底下通用的静态 source loading，不替代 `ConfigService` 这个产品语义层。
+- 静态全局配置层采用 `node-config`：`defaults + home + local/project + env + CLI baseline` 交给成熟库做加载和基础 merge。实现上使用 `config/lib/util` 的 `Load`，按 CodeLark 已解析出的动态路径装载/合并 TOML shape，避免依赖全局 singleton 或污染 `process.env`。
+- Channel/Session/request 动态 overlay 也复用同一个 `Load.addConfig()` 合并入口：`ConfigService` 负责选择哪些 scoped TOML/request patch 参与本次 snapshot，并保留字段级 provenance/explain。
+- CodeLark 产品语义仍保留在 `ConfigService`：source 选择、scope 写入约束、迁移、secret mask、`channels` home-only 校验与 materialized 写入、runtime env/settings projection。
+- 也就是说，`node-config` 替代的是通用的 TOML shape 解析和覆盖合并；`ConfigService` 保留的是 CodeLark 的产品边界、动态 source 选择和写回语义。
 
 | 库 | 能覆盖的部分 | 不能满足的核心需求 |
 | --- | --- | --- |
-| `config` / `node-config` | defaults、home/local/project、env、CLI baseline 的静态分层加载和基础 merge；可通过 `Load` 对不同 CODELARK_HOME/cwd 动态创建独立 loader | 不直接承担 Channel/Session/request 动态 overlay、scope 写入约束、migration state、secret mask、`channels` home-only policy 和 runtime projection；这些仍由 `ConfigService` 包装实现。字段级 provenance 由 ConfigService 基于 node-config source 输入保留。 |
+| `config` / `node-config` | defaults、home/local/project、env、CLI baseline 的静态分层加载和基础 merge；可通过 `Load` 对不同 CODELARK_HOME/cwd 动态创建独立 loader；也可对 ConfigService 选择出的 channel/session/request patch 做同一套 in-memory merge | 不直接承担 source 选择、scope 写入约束、migration state、secret mask、`channels` home-only policy 和 runtime projection；这些仍由 `ConfigService` 包装实现。字段级 provenance 由 ConfigService 基于 node-config source 输入保留。 |
 | `wild-config` | TOML 默认文件、自定义 config 文件、命令行 dotted override | 更像进程启动时的静态配置合并；不能表达 Channel/Session scope 的动态读写、按字段 explain、home/channel/session TOML 的 replace/unset 写入。 |
 | `auto-config-loader` | package.json/rc/多格式配置文件查找与加载 | 主要解决“从哪里找配置文件”和“支持哪些格式”；不负责 CodeLark 需要的字段 schema、source priority、provenance、scoped write policy、migration state 或 runtime settings/env projection。 |
 
-因此实现方向调整为 hybrid：静态全局层引入 `node-config`，让它负责通用文件加载、环境覆盖和基础 merge；再把输出交给 `zod` 校验并进入 `ConfigService`。`ConfigService` 的手写范围应缩小到 CodeLark 特有的动态 scope 合并、provenance、写入约束、迁移和 projection。未来只有当产品需要 package.json/rc 搜索或多文件格式 local config 时，才考虑把 `auto-config-loader` 放到 local source 的文件发现层，而不是替代 `ConfigService`。
+因此实现方向调整为 hybrid：引入 `node-config`，让它负责通用 TOML shape 解析和 source patch 覆盖合并；再把输出交给 `zod` 校验并进入 `ConfigService`。`ConfigService` 的手写范围应缩小到 CodeLark 特有的 source 选择、provenance、写入约束、迁移和 projection。未来只有当产品需要 package.json/rc 搜索或多文件格式 local config 时，才考虑把 `auto-config-loader` 放到 local source 的文件发现层，而不是替代 `ConfigService`。
 
 不建议首版引入 `cosmiconfig` 作为核心读取器。CodeLark 的优先级和 scope 是产品语义明确的 source chain，而不是通用 JS tooling 的 package.json/rc 搜索模型；local 查找自己实现更容易解释。若未来需要支持 `package.json#codelark` 或多文件格式，再评估 `cosmiconfig`。
 

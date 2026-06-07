@@ -1,6 +1,7 @@
 import { configFields } from './fields.js';
 import { getConfigPath, setConfigPath } from './path-access.js';
-import { configSchema, type ChannelConfigV2, type ConfigPatch, type ConfigV2 } from './schema.js';
+import { configSchema, configToTomlShape, tomlToConfigPatch, type ChannelConfigV2, type ConfigPatch, type ConfigV2 } from './schema.js';
+import { createNodeConfigLoader } from './sources.js';
 import type { ProvenanceMap, SourceRef } from './fields-types.js';
 
 export interface ConfigLayer {
@@ -44,10 +45,6 @@ function mergeChannel(target: ConfigPatch, source: NonNullable<ConfigPatch['chan
   if (source.config) {
     channel.config = { ...(channel.config || {}), ...source.config };
   }
-}
-
-function replaceChannels(target: ConfigPatch, source: NonNullable<ConfigPatch['channels']>): void {
-  target.channels = clone(source);
 }
 
 export function mergePatch(target: ConfigPatch, source: ConfigPatch): ConfigPatch {
@@ -99,23 +96,23 @@ export function markLayerProvenance(provenance: ProvenanceMap, layer: ConfigLaye
   markChannelProvenance(provenance, layer);
 }
 
+export function mergePatchesWithNodeConfig(layers: ConfigLayer[]): ConfigPatch {
+  const load = createNodeConfigLoader();
+  for (const layer of layers) {
+    load.addConfig(layer.ref.file || layer.ref.source, configToTomlShape(layer.patch));
+  }
+  return tomlToConfigPatch(load.config);
+}
+
 export function mergeConfigLayers(layers: ConfigLayer[]): MergeResult {
-  const merged: ConfigPatch = {};
   const provenance: ProvenanceMap = new Map();
 
   for (const layer of layers) {
-    if ((layer.ref.source === 'defaults' || layer.ref.source === 'home') && layer.patch.channels) {
-      const { channels, ...rest } = clone(layer.patch);
-      mergePatch(merged, rest);
-      replaceChannels(merged, channels || []);
-    } else {
-      mergePatch(merged, clone(layer.patch));
-    }
     markLayerProvenance(provenance, layer);
   }
 
   return {
-    config: configSchema.parse(merged),
+    config: configSchema.parse(mergePatchesWithNodeConfig(layers)),
     provenance,
   };
 }
