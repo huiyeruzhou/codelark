@@ -49,7 +49,7 @@ import {
   formatSessionMode,
   resolveLocalCodexThreadId,
 } from './runtime-settings.js';
-import { getGlobalCodexModel } from '../../configuration/global-values.js';
+import { getGlobalCodexModel } from '../session/global-config.js';
 import { stripLegacySessionPrefix } from '../session/display/session-title.js';
 import { resolveSessionTranscriptFile } from '../session/transcript-source.js';
 import { buildCommandCallbackData, buildThreadCardUpdateKey } from './callbacks.js';

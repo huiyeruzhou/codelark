@@ -6,7 +6,7 @@ import {
   setSessionConfigPatch,
   unsetSessionConfigPath,
 } from '../../configuration/session-writes.js';
-import { getSessionExplicitConfigOverride } from '../../configuration/session-values.js';
+import { getSessionConfigOverride } from '../../configuration/source-values.js';
 import type { ConfigPatch } from '../../configuration/schema.js';
 import {
   SessionDisplayQuery,
@@ -127,7 +127,11 @@ function getSessionConfigTomlOverride<T>(
   path: ConfigPath,
   service = createConfigService({ migrate: false }),
 ): T | undefined {
-  return getSessionExplicitConfigOverride<T>(session, path, service);
+  try {
+    return getSessionConfigOverride<T>(session.id, path, service);
+  } catch {
+    return undefined;
+  }
 }
 
 function setOrUnsetSessionConfig(

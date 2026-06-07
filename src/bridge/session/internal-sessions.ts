@@ -3,7 +3,7 @@ import path from 'node:path';
 
 import type { BridgeSession, BridgeStore } from '../../domain/index.js';
 import { setSessionConfigPatch } from '../../configuration/session-writes.js';
-import { getGlobalStringConfig, getGlobalWorkspaceRoot } from '../../configuration/global-values.js';
+import { getGlobalStringConfig, getGlobalWorkspaceRoot } from './global-config.js';
 
 const TEMPORARY_SESSION_TTL_MS = 24 * 60 * 60 * 1000;
 const MAX_HIDDEN_TEMPORARY_SESSIONS = 64;

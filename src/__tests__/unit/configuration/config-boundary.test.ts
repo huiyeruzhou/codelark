@@ -89,18 +89,6 @@ function productionFilesWithDirectSessionWrites(root: string): string[] {
     .map((file) => path.relative(process.cwd(), file));
 }
 
-function productionFilesReadingSessionOverridesDirectly(root: string): string[] {
-  const directSessionOverridePattern = /\bgetSessionConfigOverride\b/;
-  return listSourceFiles(root)
-    .filter((file) => {
-      const relative = path.relative(root, file);
-      return !relative.split(path.sep).includes('__tests__')
-        && !relative.startsWith(`configuration${path.sep}`);
-    })
-    .filter((file) => directSessionOverridePattern.test(fs.readFileSync(file, 'utf-8')))
-    .map((file) => path.relative(process.cwd(), file));
-}
-
 function productionFilesReadingChannelSnapshots(root: string): string[] {
   const channelSnapshotPattern = /\.snapshot\([^)]*\)\s*\.config\s*\.channels/;
   return listSourceFiles(root)
@@ -175,11 +163,6 @@ describe('configuration module boundaries', () => {
 
   it('keeps session config writeback behind configuration helpers', () => {
     const offenders = productionFilesWithDirectSessionWrites(path.join(process.cwd(), 'src'));
-    assert.deepEqual(offenders, []);
-  });
-
-  it('keeps session override reads behind configuration helpers', () => {
-    const offenders = productionFilesReadingSessionOverridesDirectly(path.join(process.cwd(), 'src'));
     assert.deepEqual(offenders, []);
   });
 

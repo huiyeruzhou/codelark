@@ -1,4 +1,4 @@
-import { getGlobalRuntimeAgent } from '../../configuration/global-values.js';
+import { getGlobalRuntimeAgent } from '../session/global-config.js';
 
 export function buildInteractiveStreamKey(sessionId: string, messageId: string): string {
   return `im:${sessionId}:${messageId}`;

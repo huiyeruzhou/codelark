@@ -15,7 +15,7 @@ import {
   hasSessionClaudeProviderOverride,
   hasSessionCodexProviderOverride,
 } from '../session/support.js';
-import { getGlobalStringConfig } from '../../configuration/global-values.js';
+import { getGlobalStringConfig } from '../session/global-config.js';
 import { getCodexThreadId } from '../turn/turn-classifier.js';
 import { sessionLooksRunning } from './session-args.js';
 
