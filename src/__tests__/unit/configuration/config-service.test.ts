@@ -157,6 +157,41 @@ sandbox_mode = "danger-full-access"
     }
   });
 
+  it('uses the service cwd as the local source for unscoped snapshots', () => {
+    const home = tempHome();
+    const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'codelark-config-local-default-'));
+    const otherCwd = fs.mkdtempSync(path.join(os.tmpdir(), 'codelark-config-local-scope-'));
+    try {
+      writeFile(path.join(home, 'config.toml'), `
+[runtime.codex]
+model = "home-model"
+reasoning_effort = "low"
+`);
+      writeFile(path.join(cwd, '.codelark', 'config.toml'), `
+[runtime.codex]
+model = "local-model"
+`);
+      writeFile(path.join(otherCwd, '.codelark.toml'), `
+[runtime.codex]
+model = "scoped-local-model"
+`);
+
+      const service = createConfigService({ codelarkHome: home, cwd, env: {}, migrate: false });
+
+      assert.equal(service.get('runtime.codex.model'), 'local-model');
+      assert.equal(service.resolve('runtime.codex.model').source, 'local');
+      assert.equal(service.get('runtime.codex.reasoningEffort'), 'low');
+
+      const scoped = { kind: 'local', cwd: otherCwd } as const;
+      assert.equal(service.get('runtime.codex.model', scoped), 'scoped-local-model');
+      assert.equal(service.resolve('runtime.codex.model', scoped).source, 'local');
+    } finally {
+      fs.rmSync(home, { recursive: true, force: true });
+      fs.rmSync(cwd, { recursive: true, force: true });
+      fs.rmSync(otherCwd, { recursive: true, force: true });
+    }
+  });
+
   it('supports deprecated env aliases while preferring new env keys', () => {
     const home = tempHome();
     try {

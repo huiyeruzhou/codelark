@@ -67,6 +67,7 @@ export interface ConfigService {
 
 export interface ConfigServiceOptions {
   codelarkHome?: string;
+  cwd?: string;
   env?: NodeJS.ProcessEnv;
   cli?: ConfigPatch;
   migrate?: boolean;
@@ -144,6 +145,7 @@ function maskSecretValue(value: unknown): unknown {
 
 export function createConfigService(options: ConfigServiceOptions = {}): ConfigService {
   const codelarkHome = options.codelarkHome || defaultCodelarkHome();
+  const cwd = options.cwd || process.cwd();
   const migrationResult = options.migrate === false
     ? undefined
     : runConfigMigrations({
@@ -161,7 +163,7 @@ export function createConfigService(options: ConfigServiceOptions = {}): ConfigS
         ? scope.cwd
         : scope && 'cwd' in scope
           ? scope.cwd
-          : undefined,
+          : cwd,
     });
   }
 

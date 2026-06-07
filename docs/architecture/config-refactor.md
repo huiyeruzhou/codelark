@@ -184,7 +184,7 @@ Session effective config:
 说明：
 
 - `Global` 表达本机默认值，包含 defaults/home/env/cli。
-- `Local` 表达当前项目/目录默认值，来自 `.codelark/config.toml` 或 `.codelark.toml`，覆盖 home，低于 env/cli。
+- `Local` 表达当前项目/目录默认值，来自 `ConfigServiceOptions.cwd` 对应目录下的 `.codelark/config.toml` 或 `.codelark.toml`；未显式传 `cwd` 时使用服务创建时的 `process.cwd()`，覆盖 home，低于 env/cli。
 - `Channel` 表达当前飞书 Channel 的执行偏好，默认作用于当前消息所在的 Channel；它不表达通道实例清单或飞书 App 凭据。
 - `Session` 表达当前对话 Session 的偏好，切到新 Session 后不继承，除非显式复制。
 - `/r high` 这类一参数命令默认写 Channel；`/r high session` 才写当前 Session；`/r high global` 写 Global。
@@ -436,7 +436,7 @@ fallback = runtime.codex.reasoningEffort from cli/env/local/home/defaults
 
 2026-06-07 重新评估 `node-config`、`wild-config`、`auto-config-loader` 后，结论不是“完全不用通用配置库”，而是做分层采用：
 
-- 静态全局配置层采用 `node-config`：`defaults + home + local/project + env + CLI baseline` 交给成熟库做加载和基础 merge。实现上使用 `config/lib/util` 的 `Load`，按 CodeLark 已解析出的动态路径装载/合并 TOML shape，避免依赖全局 singleton 或污染 `process.env`。
+- 静态全局配置层采用 `node-config`：`defaults + home + local/project + env + CLI baseline` 交给成熟库做加载和基础 merge。实现上使用 `config/lib/util` 的 `Load`，按 CodeLark 已解析出的 `CODELARK_HOME` 和 `cwd` 动态路径装载/合并 TOML shape，避免依赖全局 singleton 或污染 `process.env`。
 - Channel/Session/request 动态 overlay 也复用同一个 `Load.addConfig()` 合并入口：`ConfigService` 负责选择哪些 scoped TOML/request patch 参与本次 snapshot，并保留字段级 provenance/explain。
 - CodeLark 产品语义仍保留在 `ConfigService`：source 选择、scope 写入约束、迁移、secret mask、`channels` home-only 校验与 materialized 写入、runtime env/settings projection。
 - 也就是说，`node-config` 替代的是通用的 TOML shape 解析和覆盖合并；`ConfigService` 保留的是 CodeLark 的产品边界、动态 source 选择和写回语义。

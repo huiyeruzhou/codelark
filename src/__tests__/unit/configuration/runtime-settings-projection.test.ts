@@ -100,6 +100,29 @@ model = "direct-model"
     }
   });
 
+  it('projects local TOML from the service cwd into runtime settings', () => {
+    const home = tempHome();
+    const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'codelark-runtime-settings-local-'));
+    try {
+      writeFile(path.join(home, 'config.toml'), `
+[runtime.codex]
+model = "home-model"
+`);
+      writeFile(path.join(cwd, '.codelark', 'config.toml'), `
+[runtime.codex]
+model = "local-model"
+`);
+
+      const projection = loadRuntimeSettingsProjection({ codelarkHome: home, cwd, env: {} });
+
+      assert.equal(projection.config.runtime.codex.model, 'local-model');
+      assert.equal(projection.settings.get('bridge_default_model'), 'local-model');
+    } finally {
+      fs.rmSync(home, { recursive: true, force: true });
+      fs.rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+
   it('applies CLI config source above env and home TOML', () => {
     const home = tempHome();
     try {
