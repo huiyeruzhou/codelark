@@ -60,7 +60,7 @@
 | `/clear` | 当前聊天切到新的 BridgeSession | 创建/切换 binding，必要时终止当前任务 |
 | `/t`、`/thread`、`/threads` | 列表、接管、切换、归档本地 Codex thread 和 Bridge session | 写 `ChannelChat.bridgeSessionId`；接管 Codex 时写 `BridgeSession.runtime.codex.threadId/title` |
 | `/t rename` | 重命名当前 BridgeSession，部分通道同步群名 | 写 `BridgeSession.name` |
-| `/provider`、`/p` | 在 Codex SDK provider 与 Codex TUI pty/tmux provider 间切换 | 写 `BridgeSession.runtime.codex.provider`，tmux 时还写 `runtime.general.tmuxSessionName/autoEnter`，必要时预创建 `runtime.codex.threadId`；应归为 Bridge provider 控制，不是 Codex 模型参数 |
+| `/provider`、`/p` | 在 Codex SDK provider 与 Codex TUI pty/tmux provider 间切换 | 写 Session TOML 的 `runtime.codex.provider` / `runtime.claude.provider`；tmux 时仍把 `runtime.general.tmuxSessionName/autoEnter` 和必要的 `runtime.codex.threadId` 作为运行身份写 BridgeSession JSON |
 | `/stop` | 停止当前运行任务 | 触发 bridge 任务控制；tmux provider 下映射为 tmux interrupt |
 | `/perm` | 权限审批回调 | 读写 permission link 状态 |
 
@@ -83,7 +83,7 @@
 | --- | --- | --- |
 | `mode` | `session.runtime.codex.mode` -> `bridge_default_mode` | 可保持 session 通用，但各 runtime 需要各自映射 |
 | `model` | `session.runtime.codex.model` -> `bridge_default_model` | 需要拆为 Codex/Claude 各自 model，不能互相 fallback |
-| `codexProvider` | `session.runtime.codex.provider` -> `bridge_default_provider` -> tmux 环境探测 -> `sdk` | 属于 Bridge provider 控制，应从模型 RuntimeDefaults 中移出 |
+| `codexProvider` | Session TOML `runtime.codex.provider` -> v2 global `runtime.codex.provider` -> tmux/pty 环境探测 -> `sdk` | 旧 BridgeSession JSON `runtime.codex.provider` 只作为迁移输入，不再作为运行时 fallback |
 | `sandboxMode` | `mode=yolo` 强制；否则 `session.runtime.codex.sandboxMode` -> `bridge_codex_sandbox_mode` | Codex 专属 |
 | `networkAccessEnabled` | `session.runtime.codex.networkAccess` -> `bridge_codex_network_access` | Codex 专属 |
 | `reasoningEffort` | `session.runtime.codex.reasoningEffort` -> `bridge_codex_reasoning_effort` | Codex 专属 |
@@ -158,7 +158,7 @@ interface GlobalRuntimeConfig {
 
 - `runtime.codex.threadId`：Codex thread/resume identity。
 - `runtime.codex.title`：从本地 Codex thread 读取的原始标题。
-- `runtime.codex.provider`：Codex SDK 与 Codex TUI/tmux 的 transport 选择。
+- `runtime.codex.provider`：旧 JSON 中的 Codex transport 选择只作为迁移输入；当前 transport 选择由 scoped TOML `runtime.codex.provider` 表达。
 - `runtime.codex.sandboxMode`、`runtime.codex.networkAccess`：Codex 执行参数。
 - `runtime.codex.reasoningEffort`：Codex `modelReasoningEffort`。
 - `runtime.general.tmuxSessionName/autoEnter/echoInput/captureLines`：bridge 终端控制状态；其中一部分被 Codex TUI provider 复用。
@@ -198,7 +198,7 @@ Codex 与 ClaudeCode 可以共享：
 
 - `runtime.codex.threadId` 与 Claude `sessionId`。前者可跨 Codex native index 查找和归档，后者必须绑定 cwd 才可 resume。
 - `runtime.codex.model` 与 `runtime.claude.model`。Codex 与 Claude 的模型名空间不同，只能 fallback 到各自 runtime 默认值。
-- `runtime.codex.provider`。它是 Codex SDK/tmux transport，不是全局 runtime provider。
+- `runtime.codex.provider`。它是 Codex SDK/pty/tmux transport 配置，运行时读取 scoped TOML，不再读取 BridgeSession JSON 同名字段。
 - `runtime.codex.sandboxMode/networkAccess/reasoningEffort`。Claude 需要自己的 permission/thinking/timeout 配置。
 
 当前 `BridgeSession` 权威存储结构：

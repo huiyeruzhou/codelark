@@ -1,15 +1,15 @@
 import type { BaseChannelAdapter } from '../../../channels/contracts.js';
+import { createConfigService } from '../../../configuration/service.js';
 import type { BridgeSession, BridgeStore, ChannelChat, InboundMessage } from '../../../domain/index.js';
 import {
-  getSessionCodexProvider,
   getSessionWorkingDirectory,
   mergeSessionRuntimeUpdates,
-  setSessionCodexProviderUpdate,
   setSessionTmuxAutoEnterUpdate,
 } from '../../../domain/session-runtime.js';
 import * as router from '../channel-router.js';
 import {
   ensureWorkingDirectoryExists,
+  getSessionCodexProviderOverride,
   resolveNewSessionWorkingDirectory,
 } from '../support.js';
 import { getSessionDisplayName } from '../display/session-title.js';
@@ -42,6 +42,13 @@ import {
   type SessionCommandDeps,
   type SessionCommandResult,
 } from './types.js';
+
+function setSessionCodexProviderToml(sessionId: string, provider: 'tmux' | 'pty'): void {
+  createConfigService({ migrate: false }).set(
+    { kind: 'session', sessionId },
+    { runtime: { codex: { provider } } },
+  );
+}
 
 export async function handleClearSessionCommand(options: {
   adapter: BaseChannelAdapter;
@@ -118,11 +125,11 @@ export async function handleClearSessionCommand(options: {
   let session = options.store.getSession(binding.bridgeSessionId);
   if (session) {
     const updates: Partial<BridgeSession> = {};
-    const inheritedProvider = getSessionCodexProvider(previousSession);
+    const inheritedProvider = getSessionCodexProviderOverride(previousSession);
     if (inheritedProvider === 'tmux' || inheritedProvider === 'pty') {
+      setSessionCodexProviderToml(session.id, inheritedProvider);
       Object.assign(updates, mergeSessionRuntimeUpdates(
         updates,
-        setSessionCodexProviderUpdate(inheritedProvider),
         ...(inheritedProvider === 'tmux' ? [setSessionTmuxAutoEnterUpdate(true)] : []),
       ));
     }

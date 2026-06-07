@@ -49,6 +49,34 @@ function writeHomeConfigToml(content: string): void {
   fs.writeFileSync(path.join(CODELARK_HOME, 'config.toml'), content, 'utf-8');
 }
 
+function getSessionCodexProviderToml(sessionId: string): unknown {
+  return createConfigService({ migrate: false, env: {} }).get('runtime.codex.provider', {
+    kind: 'session',
+    sessionId,
+  });
+}
+
+function getSessionClaudeProviderToml(sessionId: string): unknown {
+  return createConfigService({ migrate: false, env: {} }).get('runtime.claude.provider', {
+    kind: 'session',
+    sessionId,
+  });
+}
+
+function setSessionCodexProviderToml(sessionId: string, provider: 'sdk' | 'pty' | 'tmux'): void {
+  createConfigService({ migrate: false, env: {} }).set(
+    { kind: 'session', sessionId },
+    { runtime: { codex: { provider } } },
+  );
+}
+
+function setSessionClaudeProviderToml(sessionId: string, provider: 'sdk' | 'pty'): void {
+  createConfigService({ migrate: false, env: {} }).set(
+    { kind: 'session', sessionId },
+    { runtime: { claude: { provider } } },
+  );
+}
+
 function writeClaudeJsonlFixture(params: {
   homeDir: string;
   cwd: string;
@@ -1260,7 +1288,8 @@ model = "test-model"
       assert.match(providerMessages, /已切换 Codex Provider/);
 
       const tmuxSession = store.getSession(binding.bridgeSessionId);
-      assert.equal(tmuxSession?.runtime?.codex?.provider, 'tmux');
+      assert.equal(tmuxSession?.runtime?.codex?.provider, undefined);
+      assert.equal(getSessionCodexProviderToml(binding.bridgeSessionId), 'tmux');
       assert.equal(tmuxSession?.runtime?.general?.tmuxSessionName, normalTmuxSession);
       assert.equal(tmuxSession?.runtime?.general?.autoEnter, true);
       assert.equal(tmuxSession?.runtime?.codex?.threadId, normalThreadId);
@@ -1375,7 +1404,8 @@ model = "test-model"
       assert.equal(store.getSession(binding.bridgeSessionId)?.health_status, 'aborted');
 
       await _testOnly.handleMessage(adapter, inboundMessage(address, '/p sdk', 'incoming-runtime-provider-sdk'));
-      assert.equal(store.getSession(binding.bridgeSessionId)?.runtime?.codex?.provider, 'sdk');
+      assert.equal(store.getSession(binding.bridgeSessionId)?.runtime?.codex?.provider, undefined);
+      assert.equal(getSessionCodexProviderToml(binding.bridgeSessionId), 'sdk');
 
       await _testOnly.handleMessage(adapter, inboundMessage(address, '/m yolo', 'incoming-runtime-mode-yolo'));
       assert.equal(store.getSession(binding.bridgeSessionId)?.runtime?.codex?.mode, 'normal');
@@ -1550,6 +1580,7 @@ provider = "tmux"
       assert.ok(claudeBinding);
       assert.notEqual(claudeBinding.bridgeSessionId, binding.bridgeSessionId);
       assert.equal(store.getSession(claudeBinding.bridgeSessionId)?.runtime?.activeRuntime, 'claude');
+      setSessionClaudeProviderToml(claudeBinding.bridgeSessionId, 'pty');
       const sentBeforePrompt = adapter.sent.length;
 
       await _testOnly.handleMessage(adapter, inboundMessage(address, 'hi from claude jsonl', 'incoming-runtime-claude-jsonl-mirror-prompt'));
@@ -1640,7 +1671,8 @@ provider = "tmux"
       store.updateSessionCodexThreadId(binding.bridgeSessionId, threadId);
 
       await _testOnly.handleMessage(adapter, inboundMessage(address, '/p tmux', 'incoming-runtime-p-tmux-before-claude'));
-      assert.equal(store.getSession(binding.bridgeSessionId)?.runtime?.codex?.provider, 'tmux');
+      assert.equal(store.getSession(binding.bridgeSessionId)?.runtime?.codex?.provider, undefined);
+      assert.equal(getSessionCodexProviderToml(binding.bridgeSessionId), 'tmux');
       assert.match(fs.readFileSync(fakeTmux.logPath, 'utf-8'), new RegExp(`new-session -d -s ${tmuxSession}`));
 
       await _testOnly.handleMessage(adapter, inboundMessage(address, '/runtime claude', 'incoming-runtime-claude-after-p-tmux'));
@@ -1652,15 +1684,19 @@ provider = "tmux"
 
       await _testOnly.handleMessage(adapter, inboundMessage(address, '/p sdk', 'incoming-provider-while-claude'));
       assert.match(adapter.sent.at(-1)?.text || '', /已切换 Claude Provider/);
-      assert.equal(store.getSession(claudeBinding.bridgeSessionId)?.runtime?.claude?.provider, 'sdk');
+      assert.equal(store.getSession(claudeBinding.bridgeSessionId)?.runtime?.claude?.provider, undefined);
+      assert.equal(getSessionClaudeProviderToml(claudeBinding.bridgeSessionId), 'sdk');
       assert.equal(store.getSession(claudeBinding.bridgeSessionId)?.runtime?.codex, undefined);
-      assert.equal(store.getSession(binding.bridgeSessionId)?.runtime?.codex?.provider, 'tmux');
+      assert.equal(store.getSession(binding.bridgeSessionId)?.runtime?.codex?.provider, undefined);
+      assert.equal(getSessionCodexProviderToml(binding.bridgeSessionId), 'tmux');
 
       await _testOnly.handleMessage(adapter, inboundMessage(address, '/p pty', 'incoming-provider-claude-back-to-pty'));
       assert.match(adapter.sent.at(-1)?.text || '', /已切换 Claude Provider/);
-      assert.equal(store.getSession(claudeBinding.bridgeSessionId)?.runtime?.claude?.provider, 'pty');
+      assert.equal(store.getSession(claudeBinding.bridgeSessionId)?.runtime?.claude?.provider, undefined);
+      assert.equal(getSessionClaudeProviderToml(claudeBinding.bridgeSessionId), 'pty');
       assert.equal(store.getSession(claudeBinding.bridgeSessionId)?.runtime?.codex, undefined);
-      assert.equal(store.getSession(binding.bridgeSessionId)?.runtime?.codex?.provider, 'tmux');
+      assert.equal(store.getSession(binding.bridgeSessionId)?.runtime?.codex?.provider, undefined);
+      assert.equal(getSessionCodexProviderToml(binding.bridgeSessionId), 'tmux');
 
       const tmuxLogBeforeClaudePrompt = fs.readFileSync(fakeTmux.logPath, 'utf-8');
       await _testOnly.handleMessage(adapter, inboundMessage(address, 'hello claude real entrypoint', 'incoming-runtime-claude-plain-after-p-tmux'));
@@ -1678,7 +1714,8 @@ provider = "tmux"
       assert.match(ptyScreenText, /Provider\s+pty|Provider.*pty/s);
       assert.match(ptyScreenText, /FAKE_CLAUDE_RESPONSE:hello claude real entrypoint/);
       assert.doesNotMatch(ptyScreenText, /当前会话不是 pty Provider/);
-      assert.equal(store.getSession(binding.bridgeSessionId)?.runtime?.codex?.provider, 'tmux');
+      assert.equal(store.getSession(binding.bridgeSessionId)?.runtime?.codex?.provider, undefined);
+      assert.equal(getSessionCodexProviderToml(binding.bridgeSessionId), 'tmux');
     } finally {
       _testOnlyClaudePty.clear();
       fs.rmSync(workDir, { recursive: true, force: true });
@@ -1822,7 +1859,8 @@ provider = "tmux"
 
       const ptySession = store.getSession(binding.bridgeSessionId);
       const ptyThreadId = ptySession?.runtime?.codex?.threadId || '';
-      assert.equal(ptySession?.runtime?.codex?.provider, 'pty');
+      assert.equal(ptySession?.runtime?.codex?.provider, undefined);
+      assert.equal(getSessionCodexProviderToml(binding.bridgeSessionId), 'pty');
       assert.match(ptyThreadId, /^019e[0-9a-f-]+$/);
       assert.equal(ptySession?.runtime?.general?.tmuxSessionName, undefined);
       assert.equal(ptySession?.runtime?.general?.autoEnter, undefined);
@@ -1894,7 +1932,8 @@ provider = "tmux"
       );
 
       await _testOnly.handleMessage(adapter, inboundMessage(address, '/p sdk', 'incoming-runtime-pty-provider-sdk'));
-      assert.equal(store.getSession(binding.bridgeSessionId)?.runtime?.codex?.provider, 'sdk');
+      assert.equal(store.getSession(binding.bridgeSessionId)?.runtime?.codex?.provider, undefined);
+      assert.equal(getSessionCodexProviderToml(binding.bridgeSessionId), 'sdk');
 
       await _testOnly.handleMessage(adapter, inboundMessage(address, '/m yolo', 'incoming-runtime-pty-mode-yolo'));
       assert.equal(store.getSession(binding.bridgeSessionId)?.runtime?.codex?.mode, 'normal');
@@ -1907,7 +1946,8 @@ provider = "tmux"
       );
       store.updateSessionCodexThreadId(binding.bridgeSessionId, '');
       await _testOnly.handleMessage(adapter, inboundMessage(address, '/provider pty', 'incoming-runtime-provider-pty-yolo'));
-      assert.equal(store.getSession(binding.bridgeSessionId)?.runtime?.codex?.provider, 'pty');
+      assert.equal(store.getSession(binding.bridgeSessionId)?.runtime?.codex?.provider, undefined);
+      assert.equal(getSessionCodexProviderToml(binding.bridgeSessionId), 'pty');
       assert.match(store.getSession(binding.bridgeSessionId)?.runtime?.codex?.threadId || '', /^019e[0-9a-f-]+$/);
 
       await _testOnly.handleMessage(adapter, inboundMessage(address, '/', 'incoming-runtime-pty-status'));
@@ -1962,7 +2002,8 @@ provider = "tmux"
       const tmuxSession = store.getSession(tmuxBinding.bridgeSessionId);
       const tmuxThreadId = tmuxSession?.runtime?.codex?.threadId || '';
       const tmuxSessionName = `codex_${tmuxThreadId}`;
-      assert.equal(tmuxSession?.runtime?.codex?.provider, 'tmux');
+      assert.equal(tmuxSession?.runtime?.codex?.provider, undefined);
+      assert.equal(getSessionCodexProviderToml(tmuxBinding.bridgeSessionId), 'tmux');
       assert.match(tmuxThreadId, /^019e[0-9a-f-]+$/);
       assert.equal(tmuxSession?.runtime?.general?.tmuxSessionName, tmuxSessionName);
       assert.equal(tmuxSession?.runtime?.general?.autoEnter, true);
@@ -2031,7 +2072,8 @@ provider = "tmux"
     assert.ok(ptyBinding);
     const ptySession = store.getSession(ptyBinding.bridgeSessionId);
     const ptyThreadId = ptySession?.runtime?.codex?.threadId || '';
-    assert.equal(ptySession?.runtime?.codex?.provider, 'pty');
+    assert.equal(ptySession?.runtime?.codex?.provider, undefined);
+    assert.equal(getSessionCodexProviderToml(ptyBinding.bridgeSessionId), 'pty');
     assert.match(ptyThreadId, /^019e[0-9a-f-]+$/);
     assert.equal(llmCalls.length, 0);
     assert.match(adapter.sent.at(-1)?.text || '', new RegExp(`codex_thread_id.*${ptyThreadId}`, 's'));
@@ -2044,7 +2086,8 @@ provider = "tmux"
     const newBinding = store.getChannelChat(newAddress.channelType, newAddress.chatId);
     assert.ok(newBinding);
     assert.notEqual(newBinding.id, ptyBinding.id);
-    assert.equal(store.getSession(newBinding.bridgeSessionId)?.runtime?.codex?.provider, 'pty');
+    assert.equal(store.getSession(newBinding.bridgeSessionId)?.runtime?.codex?.provider, undefined);
+    assert.equal(getSessionCodexProviderToml(newBinding.bridgeSessionId), 'pty');
     assert.equal(store.getSession(newBinding.bridgeSessionId)?.runtime?.codex?.threadId, undefined);
     assert.match(adapter.sent.at(-1)?.text || '', /Provider.*pty/s);
   });
@@ -2070,11 +2113,11 @@ provider = "tmux"
       store.updateSession(binding.bridgeSessionId, {
         runtime: {
           codex: {
-            provider: 'pty',
             threadId: 'thread-inline-pty',
           },
         },
       });
+      setSessionCodexProviderToml(binding.bridgeSessionId, 'pty');
 
       const firstTurn = _testOnly.handleMessage(adapter, inboundMessage(address, 'first pty turn', 'incoming-pty-inline-first'));
       await waitForCondition(() => calls.length === 1);
@@ -2134,11 +2177,11 @@ provider = "tmux"
       store.updateSession(binding.bridgeSessionId, {
         runtime: {
           codex: {
-            provider: 'pty',
             threadId: 'thread-inline-pty-missing',
           },
         },
       });
+      setSessionCodexProviderToml(binding.bridgeSessionId, 'pty');
 
       const firstTurn = _testOnly.handleMessage(adapter, inboundMessage(address, 'first pty turn', 'incoming-pty-missing-first'));
       await waitForCondition(() => calls.length === 1);
@@ -2184,12 +2227,12 @@ provider = "tmux"
         runtime: {
           activeRuntime: 'claude',
           claude: {
-            provider: 'pty',
             sessionId: 'claude-inline-jsonl-session',
             cwd: workDir,
           },
         },
       });
+      setSessionClaudeProviderToml(binding.bridgeSessionId, 'pty');
 
       const firstTurn = _testOnly.handleMessage(adapter, inboundMessage(address, 'first claude pty turn', 'incoming-claude-pty-inline-first'));
       await waitForCondition(() => calls.length === 1);
@@ -2273,7 +2316,8 @@ provider = "tmux"
       await _testOnly.handleMessage(adapter, inboundMessage(address, '/p tmux', 'incoming-new-after-tmux-provider'));
       const tmuxBinding = store.getChannelChat(address.channelType, address.chatId);
       assert.ok(tmuxBinding);
-      assert.equal(store.getSession(tmuxBinding.bridgeSessionId)?.runtime?.codex?.provider, 'tmux');
+      assert.equal(store.getSession(tmuxBinding.bridgeSessionId)?.runtime?.codex?.provider, undefined);
+      assert.equal(getSessionCodexProviderToml(tmuxBinding.bridgeSessionId), 'tmux');
 
       await _testOnly.handleMessage(adapter, inboundMessage(address, `/new tmux-next ${workDir}`, 'incoming-new-after-tmux-new'));
       const newAddress = latestCreatedGroupAddress(adapter);
@@ -2281,7 +2325,8 @@ provider = "tmux"
       assert.ok(newBinding);
       assert.notEqual(newBinding.id, tmuxBinding.id);
       const newSession = store.getSession(newBinding.bridgeSessionId);
-      assert.equal(newSession?.runtime?.codex?.provider, 'tmux');
+      assert.equal(newSession?.runtime?.codex?.provider, undefined);
+      assert.equal(getSessionCodexProviderToml(newBinding.bridgeSessionId), 'tmux');
       assert.equal(newSession?.runtime?.general?.autoEnter, true);
       assert.equal(newSession?.runtime?.codex?.threadId, undefined);
       assert.match(adapter.sent.at(-1)?.text || '', /Provider.*tmux/s);
@@ -2347,7 +2392,8 @@ provider = "tmux"
       await _testOnly.handleMessage(adapter, inboundMessage(address, '/p pty', 'incoming-new-after-pty-provider'));
       const ptyBinding = store.getChannelChat(address.channelType, address.chatId);
       assert.ok(ptyBinding);
-      assert.equal(store.getSession(ptyBinding.bridgeSessionId)?.runtime?.codex?.provider, 'pty');
+      assert.equal(store.getSession(ptyBinding.bridgeSessionId)?.runtime?.codex?.provider, undefined);
+      assert.equal(getSessionCodexProviderToml(ptyBinding.bridgeSessionId), 'pty');
 
       await _testOnly.handleMessage(adapter, inboundMessage(address, `/new pty-next ${workDir}`, 'incoming-new-after-pty-new'));
       const newAddress = latestCreatedGroupAddress(adapter);
@@ -2355,7 +2401,8 @@ provider = "tmux"
       assert.ok(newBinding);
       assert.notEqual(newBinding.id, ptyBinding.id);
       const newSession = store.getSession(newBinding.bridgeSessionId);
-      assert.equal(newSession?.runtime?.codex?.provider, 'pty');
+      assert.equal(newSession?.runtime?.codex?.provider, undefined);
+      assert.equal(getSessionCodexProviderToml(newBinding.bridgeSessionId), 'pty');
       assert.equal(newSession?.runtime?.general?.autoEnter, undefined);
       assert.equal(newSession?.runtime?.codex?.threadId, undefined);
       assert.match(adapter.sent.at(-1)?.text || '', /Provider.*pty/s);

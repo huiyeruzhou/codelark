@@ -25,7 +25,6 @@ import {
   setSessionActiveRuntimeUpdate,
   setSessionClaudeModelUpdate,
   setSessionClaudePermissionModeUpdate,
-  setSessionClaudeProviderUpdate,
   setSessionClaudeSessionIdUpdate,
   setSessionCodexModeUpdate,
   setSessionCodexNetworkAccessUpdate,
@@ -81,7 +80,7 @@ describe('BridgeSession runtime accessors', () => {
     assert.equal(getSessionTmuxSessionName(session), 'nested-tmux');
   });
 
-  it('resolves Claude provider identity from JSON but config fields from v2', () => {
+  it('ignores stale Claude provider JSON and resolves config fields from v2', () => {
     const previousToml = fs.existsSync(configTomlPath) ? fs.readFileSync(configTomlPath, 'utf-8') : null;
     try {
       fs.mkdirSync(CODELARK_HOME, { recursive: true });
@@ -111,7 +110,7 @@ permission_mode = "default"
 
       const resolved = resolveClaudeRuntimeConfig(session);
 
-      assert.equal(resolved.provider, 'pty');
+      assert.equal(resolved.provider, 'sdk');
       assert.equal(resolved.executable, 'ccr');
       assert.equal(resolved.model, 'claude-global');
       assert.equal(resolved.permissionMode, 'default');
@@ -133,7 +132,7 @@ permission_mode = "default"
     assert.equal(resolved.provider, 'sdk');
   });
 
-  it('resolves Codex provider identity from JSON but config fields from v2', () => {
+  it('ignores stale Codex provider JSON and resolves config fields from v2', () => {
     initBridgeTestContext({
       settings: new Map([
         ['remote_bridge_enabled', 'true'],
@@ -168,7 +167,7 @@ permission_mode = "default"
 
     assert.equal(resolved.model, '');
     assert.equal(resolved.mode, 'normal');
-    assert.equal(resolved.codexProvider, 'tmux');
+    assert.equal(resolved.codexProvider, 'sdk');
     assert.equal(resolved.sandboxMode, 'workspace-write');
     assert.equal(resolved.networkAccessEnabled, true);
     assert.equal(resolved.reasoningEffort, 'medium');
@@ -297,7 +296,6 @@ require_mention = false
     assert.deepEqual(setSessionActiveRuntimeUpdate('claude'), { runtime: { activeRuntime: 'claude' } });
     assert.deepEqual(setSessionClaudeSessionIdUpdate('claude-1'), { runtime: { activeRuntime: 'claude', claude: { sessionId: 'claude-1' } } });
     assert.deepEqual(setSessionClaudeModelUpdate('sonnet'), { runtime: { activeRuntime: 'claude', claude: { model: 'sonnet' } } });
-    assert.deepEqual(setSessionClaudeProviderUpdate('sdk'), { runtime: { activeRuntime: 'claude', claude: { provider: 'sdk' } } });
     assert.deepEqual(setSessionClaudePermissionModeUpdate('bypassPermissions'), { runtime: { activeRuntime: 'claude', claude: { permissionMode: 'bypassPermissions' } } });
     assert.deepEqual(setSessionCodexModeUpdate('yolo'), { runtime: { codex: { mode: 'yolo' } } });
     assert.deepEqual(setSessionCodexReasoningEffortUpdate('high'), { runtime: { codex: { reasoningEffort: 'high' } } });
@@ -312,7 +310,6 @@ require_mention = false
     }), {
       runtime: {
         codex: {
-          provider: 'tmux',
           threadId: 'thread-1',
         },
         general: {

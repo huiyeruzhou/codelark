@@ -226,10 +226,6 @@ export function setSessionClaudeModelUpdate(model: string | undefined): BridgeSe
   return { runtime: { activeRuntime: 'claude', claude: { model } } };
 }
 
-export function setSessionClaudeProviderUpdate(provider: BridgeSessionClaudeRuntimeState['provider'] | undefined): BridgeSessionRuntimeUpdate {
-  return { runtime: { activeRuntime: 'claude', claude: { provider } } };
-}
-
 export function setSessionClaudePermissionModeUpdate(permissionMode: BridgeSessionClaudeRuntimeState['permissionMode']): BridgeSessionRuntimeUpdate {
   return { runtime: { activeRuntime: 'claude', claude: { permissionMode } } };
 }
@@ -248,10 +244,6 @@ export function setSessionSystemPromptUpdate(systemPrompt: string | undefined): 
 
 export function setSessionCodexReasoningEffortUpdate(reasoningEffort: BridgeSessionCodexRuntimeState['reasoningEffort']): BridgeSessionRuntimeUpdate {
   return { runtime: { codex: { reasoningEffort } } };
-}
-
-export function setSessionCodexProviderUpdate(provider: BridgeSessionCodexRuntimeState['provider']): BridgeSessionRuntimeUpdate {
-  return { runtime: { codex: { provider } } };
 }
 
 export function setSessionCodexSandboxModeUpdate(sandboxMode: BridgeSessionCodexRuntimeState['sandboxMode']): BridgeSessionRuntimeUpdate {
@@ -278,7 +270,6 @@ export function setSessionCodexTmuxProviderUpdate(options: {
   return {
     runtime: {
       codex: {
-        provider: 'tmux',
         ...(options.threadId ? { threadId: options.threadId } : {}),
       },
       general: {

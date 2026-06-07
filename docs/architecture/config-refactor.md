@@ -587,7 +587,7 @@ interface MigrationContext {
 
 - `/set` 默认写 home TOML；后续支持 `--local` 写 local TOML。
 - `/r`、`/mode`、`/sandbox`、`/network`、`/model`、`/cd` 等命令改为 `ConfigService.set(target, patch)`，先由命令参数解析出 `ConfigWriteTarget`。
-- 上述命令切到 TOML 后，`default`/`reset` 的语义是清除对应 TOML override 并回到上层 v2/global 配置；旧 BridgeSession JSON 中残留的同名配置字段不得重新作为 runtime fallback 生效。
+- 上述命令切到 TOML 后，`default`/`reset` 的语义是清除对应 TOML override 并回到上层 v2/global 配置；旧 BridgeSession JSON 中残留的同名配置字段不得重新作为 runtime fallback 生效。`/provider` 也遵循同一规则：Codex/Claude provider 选择写 Session TOML，BridgeSession JSON 只保留 thread id、tmux session name、Claude session id/cwd 等运行身份。
 - UI 的全局配置页写 home；会话配置 modal 写 Session TOML；Channel policy 页写 Channel TOML。
 - 删除 UI `mergeConfig`、runtime command patch helper 中重复的字段校验。
 

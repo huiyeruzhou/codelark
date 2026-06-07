@@ -11,7 +11,6 @@ import {
 } from './session-creator.js';
 import type { ChannelChat } from '../../../domain/channel.js';
 import {
-  getSessionCodexProvider,
   getSessionCodexThreadId,
   getSessionCodexTitle,
   getSessionCodexMode,
@@ -20,6 +19,7 @@ import {
   getSessionActiveRuntime,
   getSessionWorkingDirectory,
 } from '../../../domain/session-runtime.js';
+import { resolveEffectiveCodexProvider } from '../support.js';
 
 export interface SessionDisplaySummary {
   kind: 'bridge' | 'codex' | 'claude';
@@ -107,7 +107,7 @@ export function bridgeSessionMode(session: BridgeSession | null | undefined): st
 }
 
 export function bridgeSessionExecutionProvider(session: BridgeSession | null | undefined): string {
-  return getSessionCodexProvider(session) || 'default';
+  return resolveEffectiveCodexProvider(session);
 }
 
 export function findVisibleBridgeSessionByCodexThread(

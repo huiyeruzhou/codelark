@@ -26,8 +26,6 @@ import { shouldUseCodexPtyTui } from '../../runtime/codex/pty-provider.js';
 import { shouldUseCodexTmuxTui } from '../../runtime/codex/tmux-provider.js';
 import { getBridgeContext } from '../host/context.js';
 import {
-  getSessionCodexProvider,
-  getSessionClaudeProvider,
   getSessionWorkingDirectory,
 } from '../../domain/session-runtime.js';
 import type { ChannelChat } from '../../domain/channel.js';
@@ -145,13 +143,20 @@ export interface ClaudeRuntimeConfig {
 }
 
 export function resolveEffectiveClaudeProvider(session?: BridgeSession | null): ClaudeProviderChoice {
-  const tomlProvider = getSessionTomlOverride<ClaudeProviderChoice>(session, 'runtime.claude.provider');
+  const tomlProvider = getSessionClaudeProviderOverride(session);
   if (tomlProvider === 'sdk' || tomlProvider === 'pty') return tomlProvider;
-  const sessionProvider = getSessionClaudeProvider(session);
-  if (sessionProvider === 'sdk' || sessionProvider === 'pty') return sessionProvider;
   const configured = getGlobalStringConfig('runtime.claude.provider');
   if (configured === 'sdk' || configured === 'pty') return configured;
   return 'sdk';
+}
+
+export function getSessionClaudeProviderOverride(session?: BridgeSession | null): ClaudeProviderChoice | undefined {
+  const tomlProvider = getSessionTomlOverride<ClaudeProviderChoice>(session, 'runtime.claude.provider');
+  return tomlProvider === 'sdk' || tomlProvider === 'pty' ? tomlProvider : undefined;
+}
+
+export function hasSessionClaudeProviderOverride(session?: BridgeSession | null): boolean {
+  return getSessionClaudeProviderOverride(session) !== undefined;
 }
 
 export function resolveEffectiveMode(
@@ -171,13 +176,20 @@ export function resolveEffectiveMode(
 }
 
 export function resolveEffectiveCodexProvider(session?: BridgeSession | null): SessionRuntimeCodexProvider {
-  const tomlProvider = getSessionTomlOverride<SessionRuntimeCodexProvider>(session, 'runtime.codex.provider');
+  const tomlProvider = getSessionCodexProviderOverride(session);
   if (tomlProvider === 'sdk' || tomlProvider === 'tmux' || tomlProvider === 'pty') return tomlProvider;
-  const sessionProvider = getSessionCodexProvider(session);
-  if (sessionProvider === 'sdk' || sessionProvider === 'tmux' || sessionProvider === 'pty') return sessionProvider;
   const configured = getGlobalStringConfig('runtime.codex.provider');
   if (configured === 'sdk' || configured === 'tmux' || configured === 'pty') return configured;
   return shouldUseCodexPtyTui() ? 'pty' : shouldUseCodexTmuxTui() ? 'tmux' : 'sdk';
+}
+
+export function getSessionCodexProviderOverride(session?: BridgeSession | null): SessionRuntimeCodexProvider | undefined {
+  const tomlProvider = getSessionTomlOverride<SessionRuntimeCodexProvider>(session, 'runtime.codex.provider');
+  return tomlProvider === 'sdk' || tomlProvider === 'tmux' || tomlProvider === 'pty' ? tomlProvider : undefined;
+}
+
+export function hasSessionCodexProviderOverride(session?: BridgeSession | null): boolean {
+  return getSessionCodexProviderOverride(session) !== undefined;
 }
 
 export function resolveEffectiveSkipGitRepoCheck(): boolean {

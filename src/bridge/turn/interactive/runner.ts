@@ -39,15 +39,17 @@ import { getBridgeSessionDisplayTitle } from '../../session/display/session-disp
 import {
   getSessionActiveRuntime,
   getSessionClaudeModel,
-  getSessionCodexProvider,
   getSessionCodexModel,
   getSessionCodexReasoningEffort,
   getSessionCodexThreadId,
-  getSessionClaudeProvider,
   getSessionClaudeReasoningEffort,
   getSessionClaudeSessionId,
   getSessionWorkingDirectory,
 } from '../../../domain/session-runtime.js';
+import {
+  resolveEffectiveClaudeProvider,
+  resolveEffectiveCodexProvider,
+} from '../../session/support.js';
 import { maskSecrets } from '../../../shared/logger.js';
 import { sanitizeInput } from '../../../shared/security/validators.js';
 
@@ -247,7 +249,7 @@ export async function runInteractiveMessage(
         title: getBridgeSessionDisplayTitle(initialSession),
         bridgeSessionId: initialSession.id,
         threadId: getSessionCodexThreadId(initialSession) || '',
-        executionProvider: getSessionCodexProvider(initialSession) || 'default',
+        executionProvider: resolveEffectiveCodexProvider(initialSession),
         creatorKind: 'bridge',
         reasoningEffort: isClaude
           ? getSessionClaudeReasoningEffort(initialSession) || 'default'
@@ -261,8 +263,8 @@ export async function runInteractiveMessage(
   });
   const runtimeSettings = deps.resolveInteractiveTurnRuntimeSettings(adapter.provider);
   const activeRuntime = getSessionActiveRuntime(initialSession) || 'codex';
-  const isClaudeMirrorTurn = activeRuntime === 'claude' && getSessionClaudeProvider(initialSession) !== 'sdk';
-  const codexProvider = getSessionCodexProvider(initialSession);
+  const isClaudeMirrorTurn = activeRuntime === 'claude' && resolveEffectiveClaudeProvider(initialSession) !== 'sdk';
+  const codexProvider = resolveEffectiveCodexProvider(initialSession);
   const isCodexMirrorTurn = activeRuntime === 'codex' && (codexProvider === 'pty' || codexProvider === 'tmux');
   const isRuntimeMirrorTurn = isClaudeMirrorTurn || isCodexMirrorTurn;
   let observedCodexThreadId = codexThreadId || '';

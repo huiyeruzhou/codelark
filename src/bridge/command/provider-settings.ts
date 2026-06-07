@@ -8,8 +8,6 @@ import {
   getSessionActiveRuntime,
   getSessionWorkingDirectory,
   mergeSessionRuntimeUpdates,
-  setSessionClaudeProviderUpdate,
-  setSessionCodexProviderUpdate,
   setSessionCodexThreadIdUpdate,
   setSessionCodexTmuxProviderUpdate,
 } from '../../domain/session-runtime.js';
@@ -121,7 +119,6 @@ export async function handleProviderCommand(options: {
         markdown: options.markdown,
       });
     }
-    options.store.updateSession(session.id, setSessionClaudeProviderUpdate(requestedProvider));
     setSessionClaudeProviderToml(session.id, requestedProvider);
     await reconcileMirrorSubscriptionsBestEffort(options.deps, `claude provider ${requestedProvider} switch`);
     return buildCommandFields(
@@ -168,7 +165,6 @@ export async function handleProviderCommand(options: {
     });
   }
   if (requestedProvider === 'sdk') {
-    options.store.updateSession(session.id, setSessionCodexProviderUpdate('sdk'));
     setSessionCodexProviderToml(session.id, 'sdk');
     await reconcileMirrorSubscriptionsBestEffort(options.deps, 'provider sdk switch');
     return buildCommandFields(
@@ -207,7 +203,6 @@ export async function handleProviderCommand(options: {
   }
   if (requestedProvider === 'pty') {
     options.store.updateSession(session.id, mergeSessionRuntimeUpdates(
-      setSessionCodexProviderUpdate('pty'),
       setSessionCodexThreadIdUpdate(threadId),
     ));
     setSessionCodexProviderToml(session.id, 'pty');

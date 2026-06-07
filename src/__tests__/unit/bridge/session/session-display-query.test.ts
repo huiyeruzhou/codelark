@@ -5,6 +5,7 @@ import assert from 'node:assert/strict';
 import type { CodexSessionSummary } from '../../../../runtime/codex/session-index.js';
 import type { LocalRuntimeSessionSummary } from '../../../../bridge/session/local-runtime-session.js';
 import { SessionDisplayQuery } from '../../../../bridge/session/display/session-display-query.js';
+import { createConfigService } from '../../../../configuration/service.js';
 import { JsonFileStore } from '../../../../storage/json-store.js';
 import { makeBridgeSettings, resetBridgeTestState } from '../../../helpers/bridge/test-bridge-utils.js';
 
@@ -31,7 +32,11 @@ describe('SessionDisplayQuery', () => {
   it('builds UI-compatible summaries with canonical identity, CodexSource, and Creator fields', () => {
     const store = new JsonFileStore(makeBridgeSettings());
     const linked = store.createSession('Desktop: Linked workspace', 'test-model', undefined, '/repo/linked');
-    store.updateSession(linked.id, { runtime: { codex: { provider: 'tmux', mode: 'yolo' } } });
+    store.updateSession(linked.id, { runtime: { codex: { mode: 'yolo' } } });
+    createConfigService({ migrate: false, env: {} }).set(
+      { kind: 'session', sessionId: linked.id },
+      { runtime: { codex: { provider: 'tmux' } } },
+    );
     store.updateSessionCodexThreadId(linked.id, 'thread-linked');
     const bridgeOnly = store.createSession('Bridge only', 'test-model', undefined, '/repo/bridge');
 

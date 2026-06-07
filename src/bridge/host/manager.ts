@@ -106,11 +106,14 @@ import {
 import {
   formatDisplayedModel,
   getCodexSessionByThreadIdSafe,
+  getSessionCodexProviderOverride,
   resolveDisplayedModel,
+  resolveEffectiveClaudeProvider,
   resolveEffectiveCodexProvider,
   resolveNewWorkingDirectory,
   resolveNewSessionWorkingDirectory,
 } from '../session/support.js';
+import { createConfigService } from '../../configuration/service.js';
 import {
   getGlobalConfigValue,
   getGlobalStringConfig,
@@ -122,18 +125,16 @@ import {
   getSessionCodexModel,
   getSessionCodexMode,
   getSessionCodexNetworkAccess,
-  getSessionCodexProvider,
   getSessionCodexReasoningEffort,
   getSessionCodexSandboxMode,
+  getSessionCodexThreadId,
   getSessionClaudeCwd,
-  getSessionClaudeProvider,
   getSessionClaudeSessionId,
   getSessionActiveRuntime,
   getSessionSystemPrompt,
   getSessionWorkingDirectory,
   setSessionClaudeIdentityUpdate,
   setSessionCodexNetworkAccessUpdate,
-  setSessionCodexProviderUpdate,
   setSessionCodexReasoningEffortUpdate,
   setSessionCodexSandboxModeUpdate,
   setSessionCodexTitleUpdate,
@@ -1065,6 +1066,11 @@ const MIRROR_RUNTIME = createMirrorRuntime(getState, {
     getBridgeContext().store.updateSessionCodexThreadId(sessionId, '');
   },
   getCodexSessionByThreadIdSafe,
+  hasSessionMirrorSource: (session) => Boolean(
+    getSessionActiveRuntime(session) !== 'claude'
+    && getSessionCodexThreadId(session)
+    && getSessionCodexProviderOverride(session as BridgeSession | null | undefined) !== 'sdk',
+  ),
   syncMirrorSessionStateSafe,
   filterSuppressedMirrorRecords,
   observeSessionHealthRecords: (sessionId, threadId, records) => {
@@ -1162,7 +1168,7 @@ function shouldRouteTerminalAppendInline(msg: InboundMessage): boolean {
   if (!session) return false;
   const activeRuntime = getSessionActiveRuntime(session) || 'codex';
   if (activeRuntime === 'claude') {
-    return (getSessionClaudeProvider(session) || 'pty') === 'pty';
+    return resolveEffectiveClaudeProvider(session) === 'pty';
   }
   return resolveEffectiveCodexProvider(session) === 'tmux'
     || resolveEffectiveCodexProvider(session) === 'pty';
@@ -2172,7 +2178,7 @@ function createAutoRunSession(
 ): BridgeSession {
   const store = getBridgeContext().store;
   const name = `Auto: ${(prompt || task.id).replace(/\s+/g, ' ').trim().slice(0, 48)} #${triggeredCount}`;
-  const parentCodexProvider = getSessionCodexProvider(parentSession);
+  const parentCodexProvider = getSessionCodexProviderOverride(parentSession);
   const parentSandboxMode = getSessionCodexSandboxMode(parentSession);
   const parentNetworkAccess = getSessionCodexNetworkAccess(parentSession);
   const parentReasoningEffort = getSessionCodexReasoningEffort(parentSession);
@@ -2189,13 +2195,18 @@ function createAutoRunSession(
   );
   store.updateSession(session.id, {
     provider_id: parentSession.provider_id,
-    ...(parentCodexProvider ? setSessionCodexProviderUpdate(parentCodexProvider) : {}),
     ...(parentSandboxMode ? setSessionCodexSandboxModeUpdate(parentSandboxMode) : {}),
     ...(typeof parentNetworkAccess === 'boolean'
       ? setSessionCodexNetworkAccessUpdate(parentNetworkAccess)
       : {}),
     ...(parentReasoningEffort ? setSessionCodexReasoningEffortUpdate(parentReasoningEffort) : {}),
   }, { touch: false });
+  if (parentCodexProvider) {
+    createConfigService({ migrate: false }).set(
+      { kind: 'session', sessionId: session.id },
+      { runtime: { codex: { provider: parentCodexProvider } } },
+    );
+  }
   return store.getSession(session.id) || session;
 }
 
@@ -3074,7 +3085,7 @@ async function handleMessage(
     ? resolveEffectiveCodexProvider(terminalAppendSession)
     : null;
   const terminalAppendClaudeProvider = terminalAppendSession
-    ? (getSessionClaudeProvider(terminalAppendSession) || 'pty')
+    ? resolveEffectiveClaudeProvider(terminalAppendSession)
     : null;
   if (
     terminalAppendBinding

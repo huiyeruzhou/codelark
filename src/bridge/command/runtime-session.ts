@@ -3,8 +3,6 @@ import type { RuntimeSettingsCommandDeps } from './runtime-bootstrap.js';
 import type { BridgeSession, BridgeStore, ChannelChat } from '../../domain/index.js';
 import {
   getSessionActiveRuntime,
-  getSessionClaudeProvider,
-  getSessionCodexProvider,
   getSessionSystemPrompt,
   getSessionWorkingDirectory,
 } from '../../domain/session-runtime.js';
@@ -14,6 +12,8 @@ import {
   resolveEffectiveClaudeProvider,
   resolveEffectiveCodexProvider,
   resolveEffectiveMode,
+  hasSessionClaudeProviderOverride,
+  hasSessionCodexProviderOverride,
 } from '../session/support.js';
 import { getGlobalStringConfig } from '../session/global-config.js';
 import { getCodexThreadId } from '../turn/turn-classifier.js';
@@ -73,14 +73,14 @@ export function createRuntimeSessionForChat(options: {
 
 export function formatSessionCodexProvider(session?: BridgeSession | null): string {
   const effective = resolveEffectiveCodexProvider(session);
-  return getSessionCodexProvider(session)
+  return hasSessionCodexProviderOverride(session)
     ? effective
     : `${effective} (全局默认)`;
 }
 
 export function formatSessionClaudeProvider(session?: BridgeSession | null): string {
   const effective = resolveEffectiveClaudeProvider(session);
-  return getSessionClaudeProvider(session)
+  return hasSessionClaudeProviderOverride(session)
     ? effective
     : `${effective} (全局默认)`;
 }

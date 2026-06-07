@@ -22,12 +22,12 @@ import {
   getSessionClaudeSessionId,
   getSessionCodexMode,
   getSessionCodexModel,
-  getSessionCodexProvider as readSessionCodexProvider,
   getSessionCodexTitle,
   getSessionWorkingDirectory,
   setSessionCodexTitleUpdate,
 } from '../../../domain/session-runtime.js';
 import { getGlobalConfigValue, getGlobalStringConfig } from '../global-config.js';
+import { resolveEffectiveCodexProvider } from '../support.js';
 
 export interface BindingTargetOption {
   kind: 'codex' | 'session';
@@ -222,7 +222,7 @@ function getSessionMode(store: BridgeStore, session: BridgeSession): ChannelChat
 }
 
 function getSessionCodexProvider(session: BridgeSession | null | undefined): 'sdk' | 'pty' | 'tmux' | 'default' {
-  return readSessionCodexProvider(session) || 'default';
+  return resolveEffectiveCodexProvider(session);
 }
 
 function describeBridgeSessionTarget(
