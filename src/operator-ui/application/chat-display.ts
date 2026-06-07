@@ -1,8 +1,8 @@
 import {
-  type ChannelInstance,
   type Config,
   type FeishuChannelConfig,
 } from '../../configuration/index.js';
+import type { ConfigV2 } from '../../configuration/schema.js';
 import {
   type BindingSummary,
   listBindingSummaries,
@@ -10,7 +10,7 @@ import {
   listChannelDefaultTargetSummaries,
 } from '../../bridge/session/registry.js';
 import type { JsonFileStore } from '../../storage/json-store.js';
-import { findUiChannelInstance, getFeishuDomain } from './channel.js';
+import { findUiChannelInstance, getFeishuDomain, type UiChannelConfigSource, type UiChannelInstance } from './channel.js';
 
 const FEISHU_CHAT_LABEL_TTL_MS = 5 * 60 * 1000;
 const feishuChatLabelCache = new Map<string, { label: string; userId?: string; expiresAt: number }>();
@@ -30,7 +30,7 @@ function asString(value: unknown): string | undefined {
   return trimmed ? trimmed : undefined;
 }
 
-function getFeishuTokenCacheKey(channel: ChannelInstance): string {
+function getFeishuTokenCacheKey(channel: UiChannelInstance): string {
   const feishu = channel.config as FeishuChannelConfig;
   return [
     channel.id,
@@ -41,7 +41,7 @@ function getFeishuTokenCacheKey(channel: ChannelInstance): string {
 }
 
 async function getFeishuTenantAccessToken(
-  channel: ChannelInstance,
+  channel: UiChannelInstance,
   fetchImpl: FetchLike,
 ): Promise<string | null> {
   const feishu = channel.config as FeishuChannelConfig;
@@ -82,7 +82,7 @@ async function getFeishuTenantAccessToken(
 }
 
 export async function resolveFeishuBindingDisplay(
-  config: Config,
+  config: UiChannelConfigSource,
   binding: BindingSummary,
   fetchImpl: FetchLike = fetch,
 ): Promise<Pick<BindingSummary, 'chatDisplayName' | 'chatUserId'>> {
@@ -178,7 +178,7 @@ export async function resolveFeishuBindingDisplay(
 
 export async function buildUiBindingsPayload(
   store: JsonFileStore,
-  config: Config,
+  config: Config | ConfigV2,
   options: { fetchImpl?: FetchLike } = {},
 ) {
   const bindings = listBindingSummaries(store);

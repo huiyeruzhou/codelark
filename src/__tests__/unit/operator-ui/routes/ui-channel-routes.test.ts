@@ -7,7 +7,8 @@ import { Readable } from 'node:stream';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 
 import { handleUiChannelRoute } from '../../../../operator-ui/routes/channel.js';
-import { CODELARK_HOME, CONFIG_JSON_PATH, CONFIG_PATH, type Config } from '../../../../configuration/index.js';
+import { CODELARK_HOME, CONFIG_JSON_PATH, CONFIG_PATH } from '../../../../configuration/index.js';
+import type { ConfigV2 } from '../../../../configuration/schema.js';
 
 function createResponse(): ServerResponse & { body: string; statusCodeWritten?: number } {
   return {
@@ -30,12 +31,63 @@ function createJsonRequest(body: unknown): IncomingMessage {
   }) as IncomingMessage;
 }
 
-const baseConfig: Config = {
-  runtime: 'codex',
-  defaultMode: 'normal',
-  enabledChannels: [],
-  channels: [],
-};
+function baseConfigV2(overrides: Partial<ConfigV2> = {}): ConfigV2 {
+  return {
+    schemaVersion: 2,
+    session: {
+      workspace: '~',
+      tmuxSessionName: '',
+      tmuxCaptureLines: 80,
+      tmuxAutoEnter: true,
+      tmuxEchoInput: false,
+    },
+    runtime: {
+      agent: 'codex',
+      codex: {
+        model: '',
+        yoloMode: 'off',
+        provider: '',
+        skipGitRepoCheck: true,
+        sandboxMode: 'workspace-write',
+        networkAccess: true,
+        reasoningEffort: 'medium',
+      },
+      claude: {
+        model: '',
+        yoloMode: 'off',
+        permissionMode: 'default',
+        provider: 'sdk',
+        executable: 'claude',
+        reasoningEffort: 'medium',
+        idleTimeoutMinutes: 0,
+      },
+    },
+    bridge: {
+      defaultWorkspace: '~',
+      uiAllowLan: false,
+      uiAccessToken: '',
+    },
+    channels: [{
+      id: 'feishu-default',
+      alias: '飞书',
+      provider: 'feishu',
+      enabled: false,
+      config: {
+        historyMessageLimit: 8,
+        streamStatusIdleStartSeconds: 180,
+        streamStatusCheckIntervalSeconds: 10,
+        appId: '',
+        appSecret: '',
+        site: 'feishu',
+        allowedUsers: [],
+        streamingEnabled: true,
+        feedbackMarkdownEnabled: true,
+        requireMention: false,
+      },
+    }],
+    ...overrides,
+  };
+}
 
 function createMemoryStore(bindings: unknown[] = []) {
   const deletedDefaults: string[] = [];
@@ -53,7 +105,7 @@ function createMemoryStore(bindings: unknown[] = []) {
 
 describe('handleUiChannelRoute', () => {
   it('saves channel config through the channel route', async () => {
-    let config = { ...baseConfig };
+    let config = baseConfigV2();
     const store = createMemoryStore();
     const response = createResponse();
 
@@ -76,9 +128,10 @@ describe('handleUiChannelRoute', () => {
 
     assert.equal(handled, true);
     assert.equal(response.statusCodeWritten, 200);
-    assert.equal(config.channels?.length, 1);
-    assert.equal(config.channels?.[0]?.provider, 'feishu');
-    assert.equal(config.channels?.[0]?.alias, 'Ops');
+    const savedChannel = config.channels.find((channel) => channel.alias === 'Ops');
+    assert.equal(config.channels.length, 2);
+    assert.equal(savedChannel?.provider, 'feishu');
+    assert.equal(savedChannel?.config.historyMessageLimit, 8);
     const body = JSON.parse(response.body) as { ok?: boolean; channel?: { alias?: string } };
     assert.equal(body.ok, true);
     assert.equal(body.channel?.alias, 'Ops');
@@ -146,19 +199,26 @@ describe('handleUiChannelRoute', () => {
   });
 
   it('refuses to delete a channel with bindings', async () => {
-    const config = {
-      ...baseConfig,
-      enabledChannels: ['feishu'],
+    const config = baseConfigV2({
       channels: [{
         id: 'feishu-ops',
         alias: 'Ops',
         provider: 'feishu' as const,
         enabled: true,
-        createdAt: '2026-05-30T00:00:00.000Z',
-        updatedAt: '2026-05-30T00:00:00.000Z',
-        config: {},
+        config: {
+          historyMessageLimit: 8,
+          streamStatusIdleStartSeconds: 180,
+          streamStatusCheckIntervalSeconds: 10,
+          appId: '',
+          appSecret: '',
+          site: 'feishu',
+          allowedUsers: [],
+          streamingEnabled: true,
+          feedbackMarkdownEnabled: true,
+          requireMention: false,
+        },
       }],
-    };
+    });
     const store = createMemoryStore([{ id: 'binding-1' }]);
     const response = createResponse();
 
@@ -306,7 +366,7 @@ require_mention = false
       response,
       url: new URL('http://localhost/api/config'),
       createStore: () => createMemoryStore(),
-      readConfig: () => baseConfig,
+      readConfig: () => baseConfigV2(),
       writeConfig: () => undefined,
       buildBindingsPayload: async () => ({}),
     });

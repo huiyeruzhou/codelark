@@ -1,19 +1,12 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 
-import {
-  type ChannelInstance,
-  type Config,
-} from '../../configuration/index.js';
-import { configV2ToLegacyConfig, legacyConfigToConfigPatch } from '../../configuration/legacy.js';
 import { createConfigService } from '../../configuration/service.js';
+import type { ChannelConfigV2, ConfigPatch, ConfigV2 } from '../../configuration/schema.js';
+import { configV2ToPayload } from '../application/config.js';
 import {
-  channelToPayload,
-  configToPayload,
-} from '../application/config.js';
-import {
-  deleteChannelInstance,
+  deleteChannelInstanceV2,
   findUiChannelInstance,
-  mergeChannelInstance,
+  mergeChannelInstanceV2,
   validateFeishuCredentials,
 } from '../application/channel.js';
 
@@ -53,7 +46,17 @@ function asString(value: unknown): string | undefined {
   return trimmed ? trimmed : undefined;
 }
 
-function syncBindingChannelMeta(store: UiChannelRouteStore, channel: ChannelInstance): void {
+function channelV2ToPayload(channel: ChannelConfigV2) {
+  return {
+    id: channel.id,
+    alias: channel.alias,
+    provider: channel.provider,
+    enabled: channel.enabled,
+    config: { ...channel.config },
+  };
+}
+
+function syncBindingChannelMeta(store: UiChannelRouteStore, channel: ChannelConfigV2): void {
   for (const binding of store.listChannelChats(channel.id) as Array<{ id: string }>) {
     store.updateChannelChat(binding.id, {
       channelProvider: channel.provider,
@@ -71,12 +74,21 @@ function syncBindingChannelMeta(store: UiChannelRouteStore, channel: ChannelInst
   }
 }
 
-function readHomeTomlConfig(): Config {
-  return configV2ToLegacyConfig(createConfigService({ migrate: false }).snapshot().config);
+function readHomeTomlConfig(): ConfigV2 {
+  return createConfigService({ migrate: false }).snapshot().config;
 }
 
-function replaceHomeTomlConfig(config: Config): void {
-  createConfigService({ migrate: false }).replace({ kind: 'home' }, legacyConfigToConfigPatch(config));
+function homeWritableConfigPatch(config: ConfigV2): ConfigPatch {
+  return {
+    schemaVersion: config.schemaVersion,
+    runtime: config.runtime,
+    bridge: config.bridge,
+    channels: config.channels,
+  };
+}
+
+function replaceHomeTomlConfig(config: ConfigV2): void {
+  createConfigService({ migrate: false }).replace({ kind: 'home' }, homeWritableConfigPatch(config));
 }
 
 export async function handleUiChannelRoute(options: {
@@ -84,9 +96,9 @@ export async function handleUiChannelRoute(options: {
   response: ServerResponse;
   url: URL;
   createStore: () => UiChannelRouteStore;
-  readConfig?: () => Config;
-  writeConfig?: (config: Config) => void;
-  buildBindingsPayload: (store: UiChannelRouteStore, config: Config) => Promise<Record<string, unknown>>;
+  readConfig?: () => ConfigV2;
+  writeConfig?: (config: ConfigV2) => void;
+  buildBindingsPayload: (store: UiChannelRouteStore, config: ConfigV2) => Promise<Record<string, unknown>>;
 }): Promise<boolean> {
   const {
     request,
@@ -101,15 +113,15 @@ export async function handleUiChannelRoute(options: {
   if (request.method === 'POST' && url.pathname === '/api/channels/save') {
     const payload = await readJsonBody<Record<string, unknown>>(request);
     const current = readConfig();
-    const merged = mergeChannelInstance(payload, current);
+    const merged = mergeChannelInstanceV2(payload, current);
     writeConfig(merged.config);
     const store = createStore();
     syncBindingChannelMeta(store, merged.channel);
     const latest = readConfig();
     json(response, 200, {
       ok: true,
-      channel: channelToPayload(merged.channel),
-      config: configToPayload(latest),
+      channel: channelV2ToPayload(merged.channel),
+      config: configV2ToPayload(latest),
       ...(await buildBindingsPayload(store, latest)),
     });
     return true;
@@ -130,13 +142,13 @@ export async function handleUiChannelRoute(options: {
       return true;
     }
 
-    const next = deleteChannelInstance(readConfig(), channelId);
+    const next = deleteChannelInstanceV2(readConfig(), channelId);
     writeConfig(next);
     store.deleteChannelDefaultTarget(channelId);
     const latest = readConfig();
     json(response, 200, {
       ok: true,
-      config: configToPayload(latest),
+      config: configV2ToPayload(latest),
       ...(await buildBindingsPayload(store, latest)),
     });
     return true;
