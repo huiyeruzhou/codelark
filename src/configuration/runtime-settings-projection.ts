@@ -1,4 +1,5 @@
 import { createConfigService, type ConfigServiceOptions } from './service.js';
+import { exportRuntimeSettings } from './projections.js';
 import type { ConfigV2 } from './schema.js';
 
 export interface RuntimeSettingsProjection {
@@ -12,7 +13,7 @@ export function loadRuntimeSettingsProjection(
   const service = createConfigService(options);
   const effective = service.snapshot().config;
   return {
-    settings: service.exportRuntimeSettings(),
+    settings: exportRuntimeSettings(effective),
     config: effective,
   };
 }

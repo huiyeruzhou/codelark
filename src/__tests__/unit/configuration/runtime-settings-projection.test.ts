@@ -117,6 +117,7 @@ model = "local-model"
 
       assert.equal(projection.config.runtime.codex.model, 'local-model');
       assert.equal(projection.settings.get('bridge_default_model'), 'local-model');
+      assert.equal(projection.settings.get('bridge_default_model'), projection.config.runtime.codex.model);
     } finally {
       fs.rmSync(home, { recursive: true, force: true });
       fs.rmSync(cwd, { recursive: true, force: true });
