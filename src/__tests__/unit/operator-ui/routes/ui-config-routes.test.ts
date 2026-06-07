@@ -98,19 +98,18 @@ function baseConfigV2(overrides: Partial<ConfigV2> = {}): ConfigV2 {
 }
 
 describe('Ui config application', () => {
-  it('preserves the current default model when an unknown model is submitted', () => {
+  it('rejects invalid UI config fields instead of silently falling back', () => {
     const current = baseConfigV2({
       runtime: {
         ...baseConfigV2().runtime,
         codex: { ...baseConfigV2().runtime.codex, model: 'gpt-5.4', provider: 'tmux' },
       },
     });
-    const patch = mergeConfigV2HomePatch(current, { defaultModel: 'unknown-model', historyMessageLimit: 999, claudeExecutable: 'ccr' });
 
-    assert.equal(patch.runtime?.codex?.model, 'gpt-5.4');
-    assert.equal(patch.runtime?.codex?.provider, 'tmux');
-    assert.equal(patch.runtime?.claude?.executable, 'ccr');
-    assert.equal(patch.channels?.[0]?.config?.historyMessageLimit, 20);
+    assert.throws(
+      () => mergeConfigV2HomePatch(current, { defaultModel: 'unknown-model', historyMessageLimit: 999, claudeExecutable: 'ccr' }),
+      /Unknown Codex model|History message limit/,
+    );
   });
 
   it('creates a UI access token when LAN access is enabled', () => {
@@ -152,7 +151,7 @@ describe('Ui config application', () => {
   });
 
   it('does not synthesize channel timing defaults when the effective config has no channel', () => {
-    const patch = mergeConfigV2HomePatch(baseConfigV2({ channels: [] }), { historyMessageLimit: 999 });
+    const patch = mergeConfigV2HomePatch(baseConfigV2({ channels: [] }), { historyMessageLimit: 19 });
     assert.deepEqual(patch.channels, []);
   });
 
@@ -234,6 +233,82 @@ describe('handleUiConfigRoute', () => {
         if (value === undefined) delete process.env[key];
         else process.env[key] = value;
       }
+    }
+  });
+
+  it('checks config payloads without writing config.toml', async () => {
+    const configTomlPath = path.join(CODELARK_HOME, 'config.toml');
+    const previousToml = fs.existsSync(configTomlPath) ? fs.readFileSync(configTomlPath, 'utf-8') : null;
+    try {
+      fs.mkdirSync(CODELARK_HOME, { recursive: true });
+      fs.rmSync(configTomlPath, { force: true });
+
+      const okResponse = createResponse();
+      const okHandled = await handleUiConfigRoute({
+        request: createJsonRequest('POST', {
+          runtime: 'claude',
+          historyMessageLimit: 13,
+          codexNetworkAccess: false,
+        }),
+        response: okResponse,
+        url: new URL('http://localhost/api/config/check'),
+      });
+
+      assert.equal(okHandled, true);
+      assert.equal(okResponse.statusCodeWritten, 200);
+      assert.deepEqual(JSON.parse(okResponse.body), { ok: true });
+      assert.equal(fs.existsSync(configTomlPath), false);
+
+      const badResponse = createResponse();
+      const badHandled = await handleUiConfigRoute({
+        request: createJsonRequest('POST', {
+          historyMessageLimit: 21,
+          showToolCallDetails: false,
+        }),
+        response: badResponse,
+        url: new URL('http://localhost/api/config/check'),
+      });
+
+      assert.equal(badHandled, true);
+      assert.equal(badResponse.statusCodeWritten, 400);
+      const badBody = JSON.parse(badResponse.body) as { ok?: boolean; error?: string; issues?: Array<{ path: string }> };
+      assert.equal(badBody.ok, false);
+      assert.match(badBody.error || '', /配置字段不合法/);
+      assert.ok(badBody.issues?.some((issue) => issue.path === 'historyMessageLimit'));
+      assert.ok(badBody.issues?.some((issue) => issue.path === ''));
+      assert.equal(fs.existsSync(configTomlPath), false);
+    } finally {
+      if (previousToml === null) fs.rmSync(configTomlPath, { force: true });
+      else fs.writeFileSync(configTomlPath, previousToml, 'utf-8');
+    }
+  });
+
+  it('rejects invalid POST writes without rewriting home config', async () => {
+    const configTomlPath = path.join(CODELARK_HOME, 'config.toml');
+    const previousToml = fs.existsSync(configTomlPath) ? fs.readFileSync(configTomlPath, 'utf-8') : null;
+    try {
+      fs.mkdirSync(CODELARK_HOME, { recursive: true });
+      fs.writeFileSync(configTomlPath, `
+schema_version = 2
+
+[runtime]
+agent = "codex"
+`);
+
+      const response = createResponse();
+      const handled = await handleUiConfigRoute({
+        request: createJsonRequest('POST', { codexSandboxMode: 'invalid' }),
+        response,
+        url: new URL('http://localhost/api/config'),
+      });
+
+      assert.equal(handled, true);
+      assert.equal(response.statusCodeWritten, 400);
+      assert.match(JSON.parse(response.body).error || '', /配置字段不合法/);
+      assert.equal(fs.readFileSync(configTomlPath, 'utf-8').includes('invalid'), false);
+    } finally {
+      if (previousToml === null) fs.rmSync(configTomlPath, { force: true });
+      else fs.writeFileSync(configTomlPath, previousToml, 'utf-8');
     }
   });
 

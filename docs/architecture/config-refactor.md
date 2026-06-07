@@ -25,7 +25,7 @@ CodeLark 需要把“默认值、全局配置、项目配置、环境变量、�
 - 配置解析库边界：生产代码只有 `src/configuration` 可以直接导入 `node-config` 或 `smol-toml`；业务模块必须通过 `ConfigService`、projection 或迁移 adapter 使用配置，并在业务模块内解释 runtime、channel、session 等语义。
 - `src/local-service/manager.ts` / `src/entrypoints/cli.ts`：CLI `run` 时用同一个 effective config snapshot 同时派生 UI env、Bridge preflight config 和 Bridge env projection，避免一次启动内动态 TOML reload 前后不一致。
 - `src/configuration/legacy.ts` / `legacy-types.ts`：仅保留 legacy expanded `Config` adapter 和 migration/compatibility 测试；生产代码不应从这里读取配置。
-- `src/operator-ui/application/config.ts` / `channel.ts`：把 UI payload 转成 v2 `ConfigPatch`，通过 `ConfigService` 写回 home TOML。
+- `src/operator-ui/application/config.ts` / `channel.ts`：把 UI payload 转成 v2 `ConfigPatch`，通过 `ConfigService` 写回 home TOML；全局配置页的 `/api/config/check` 复用同一套 zod payload schema 做只校验不写入的前端检查，非法字段返回 400，不再静默 fallback 成旧值。
 - `src/bridge/command/global-settings.ts`：`/set` 通过 `ConfigService` 读写 home TOML。
 - `src/bridge/command/runtime-settings.ts`：`/r`、`/mode`、`/sandbox`、`/network`、`/model`、`/cd` 等写 Session TOML，不再把同名配置字段写回 BridgeSession JSON。
 - `src/domain/session-runtime.ts`：BridgeSession runtime 身份/状态 accessor，以及从 Session TOML 读取显式会话配置 override 的过渡 helper。
@@ -595,7 +595,7 @@ interface MigrationContext {
 - `/r`、`/mode`、`/sandbox`、`/network`、`/model`、`/cd` 等命令改为 `ConfigService.set(target, patch)`，先由命令参数解析出 `ConfigWriteTarget`。
 - 上述命令切到 TOML 后，`default`/`reset` 的语义是清除对应 TOML override 并回到上层 v2/global 配置；旧 BridgeSession JSON 中残留的同名配置字段不得重新作为 runtime fallback 生效。`/provider` 也遵循同一规则：Codex/Claude provider 选择写 Session TOML，BridgeSession JSON 只保留 thread id、tmux session name、Claude session id/cwd 等运行身份。
 - UI 的全局配置页写 home；会话配置 modal 写 Session TOML；通道实例和通道连接/行为配置只写 home `channels`，Channel scope TOML 只保存执行偏好。
-- 删除 UI、runtime command 中重复的字段校验；但 payload 解释、命令语义和 fallback 决策留在应用/业务模块内，不下沉到配置层 helper。
+- 删除 UI、runtime command 中重复的字段校验；但 payload 解释、命令语义和 fallback 决策留在应用/业务模块内，不下沉到配置层 helper。UI 全局配置保存前先调用 `/api/config/check`，该接口只运行 zod payload schema 和写入 patch 构造，不写 TOML；非法枚举、越界数字、未知字段直接 400。
 
 阶段 5：调用方收口
 
@@ -625,6 +625,7 @@ interface MigrationContext {
 - 旧 env alias 仍可从真实 `process.env` 读取，例如 `CODELARK_CODEX_DEFAULT_MODEL`，但新 env `CODELARK_CODEX_MODEL` 优先。
 - `config.env` 迁移保持现有用户可用，不破坏旧 `CODELARK_FEISHU_DOMAIN`。
 - setup wizard、UI 全局配置页、`/set` 全局配置列表和 `defaults.toml` 使用同一份 latest `configFields` / defaults；留空字段回落到同一个默认值。
+- `/api/config/check` 覆盖合法 payload 不写文件、非法 payload 返回字段级 issues；`/api/config` 覆盖同一非法 payload 不写 home TOML。
 - BridgeSession JSON 中现有 `/r`、`/sandbox` 等持久化配置字段能迁移到 scoped TOML，且迁移前后 effective config 一致。
 - BridgeSession JSON 迁移后不再包含配置字段，只保留身份、生命周期和观测状态。
 - `exportRuntimeSettings()` 与现有 `configToSettings()` 的关键输出兼容。

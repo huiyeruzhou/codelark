@@ -1,6 +1,8 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
+import { z } from 'zod';
 
 import {
+  checkUiConfigPayload,
   configV2ToPayload,
   readUiHomeConfig,
   saveUiConfigPayload,
@@ -20,6 +22,23 @@ async function readJsonBody<T>(request: IncomingMessage): Promise<T> {
   return raw ? JSON.parse(raw) as T : {} as T;
 }
 
+function configErrorBody(error: unknown): { ok: false; error: string; issues?: Array<{ path: string; message: string }> } {
+  if (error instanceof z.ZodError) {
+    return {
+      ok: false,
+      error: '配置字段不合法。',
+      issues: error.issues.map((issue) => ({
+        path: issue.path.join('.'),
+        message: issue.message,
+      })),
+    };
+  }
+  return {
+    ok: false,
+    error: error instanceof Error ? error.message : '配置字段不合法。',
+  };
+}
+
 export async function handleUiConfigRoute(options: {
   request: IncomingMessage;
   response: ServerResponse;
@@ -33,8 +52,23 @@ export async function handleUiConfigRoute(options: {
   }
 
   if (request.method === 'POST' && url.pathname === '/api/config') {
-    const payload = await readJsonBody<Record<string, unknown>>(request);
-    json(response, 200, { ok: true, config: configV2ToPayload(saveUiConfigPayload(payload)) });
+    try {
+      const payload = await readJsonBody<Record<string, unknown>>(request);
+      json(response, 200, { ok: true, config: configV2ToPayload(saveUiConfigPayload(payload)) });
+    } catch (error) {
+      json(response, 400, configErrorBody(error));
+    }
+    return true;
+  }
+
+  if (request.method === 'POST' && url.pathname === '/api/config/check') {
+    try {
+      const payload = await readJsonBody<Record<string, unknown>>(request);
+      checkUiConfigPayload(payload);
+      json(response, 200, { ok: true });
+    } catch (error) {
+      json(response, 400, configErrorBody(error));
+    }
     return true;
   }
 

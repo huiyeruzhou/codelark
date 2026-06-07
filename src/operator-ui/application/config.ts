@@ -1,50 +1,23 @@
 import crypto from 'node:crypto';
 import os from 'node:os';
+import { z } from 'zod';
 
 import { createConfigService } from '../../configuration/service.js';
-import type { ConfigPatch, ConfigV2 } from '../../configuration/schema.js';
+import {
+  claudeExecutableSchema,
+  claudePermissionModeSchema,
+  claudeProviderSchema,
+  codexProviderSchema,
+  reasoningEffortSchema,
+  runtimeAgentSchema,
+  sandboxModeSchema,
+  type ConfigPatch,
+  type ConfigV2,
+} from '../../configuration/schema.js';
 import { listSelectableCodexModels, readConfiguredCodexModel } from '../../runtime/codex/models.js';
 
 const availableCodexModels = listSelectableCodexModels();
 const availableCodexModelSlugs = new Set(availableCodexModels.map((model) => model.slug));
-
-function asString(value: unknown): string | undefined {
-  if (typeof value !== 'string') return undefined;
-  const trimmed = value.trim();
-  return trimmed ? trimmed : undefined;
-}
-
-function asPositiveInt(value: unknown): number | undefined {
-  if (typeof value === 'number' && Number.isFinite(value) && value > 0) {
-    return Math.floor(value);
-  }
-  if (typeof value === 'string') {
-    const parsed = Number(value.trim());
-    if (Number.isFinite(parsed) && parsed > 0) {
-      return Math.floor(parsed);
-    }
-  }
-  return undefined;
-}
-
-function asNonNegativeInt(value: unknown): number | undefined {
-  if (typeof value === 'number' && Number.isFinite(value) && value >= 0) {
-    return Math.floor(value);
-  }
-  if (typeof value === 'string') {
-    const parsed = Number(value.trim());
-    if (Number.isFinite(parsed) && parsed >= 0) {
-      return Math.floor(parsed);
-    }
-  }
-  return undefined;
-}
-
-function clampHistoryMessageLimit(value: unknown, fallback: number): number {
-  const parsed = asPositiveInt(value);
-  const base = parsed ?? fallback;
-  return Math.min(Math.max(base, 1), 20);
-}
 
 function hasPayloadKey(payload: Record<string, unknown>, key: string): boolean {
   return Object.prototype.hasOwnProperty.call(payload, key);
@@ -66,6 +39,74 @@ function v2ChannelToPayload(channel: ConfigV2['channels'][number]) {
     enabled: channel.enabled,
     config: { ...channel.config },
   };
+}
+
+function optionalString() {
+  return z.preprocess(
+    (value) => typeof value === 'string' ? value.trim() : value,
+    z.string(),
+  ).optional();
+}
+
+function optionalEnum<T extends z.ZodEnum>(schema: T) {
+  return z.preprocess(
+    (value) => typeof value === 'string' ? value.trim().toLowerCase() : value,
+    schema,
+  ).optional();
+}
+
+function optionalPositiveInteger() {
+  return z.preprocess(
+    (value) => typeof value === 'string' ? Number(value.trim()) : value,
+    z.number().int().positive(),
+  ).optional();
+}
+
+function optionalNonNegativeInteger() {
+  return z.preprocess(
+    (value) => typeof value === 'string' ? Number(value.trim()) : value,
+    z.number().int().nonnegative(),
+  ).optional();
+}
+
+const uiConfigPayloadSchema = z.object({
+  runtime: optionalEnum(runtimeAgentSchema),
+  defaultWorkspaceRoot: optionalString(),
+  defaultModel: optionalString().refine(
+    (value) => value === undefined || value === '' || availableCodexModelSlugs.has(value),
+    { message: 'Unknown Codex model.' },
+  ),
+  defaultProvider: z.preprocess(
+    (value) => typeof value === 'string' ? value.trim().toLowerCase() : value,
+    z.union([codexProviderSchema, z.literal('')]),
+  ).optional(),
+  defaultMode: z.enum(['normal', 'yolo']).optional(),
+  historyMessageLimit: optionalPositiveInteger().refine(
+    (value) => value === undefined || value <= 20,
+    { message: 'History message limit must be between 1 and 20.' },
+  ),
+  streamStatusIdleStartSeconds: optionalPositiveInteger(),
+  streamStatusCheckIntervalSeconds: optionalPositiveInteger(),
+  codexSkipGitRepoCheck: z.boolean().optional(),
+  codexSandboxMode: optionalEnum(sandboxModeSchema),
+  codexNetworkAccess: z.boolean().optional(),
+  codexReasoningEffort: optionalEnum(reasoningEffortSchema),
+  claudeProvider: optionalEnum(claudeProviderSchema),
+  claudeExecutable: optionalEnum(claudeExecutableSchema),
+  claudeDefaultModel: optionalString(),
+  claudePermissionMode: z.preprocess(
+    (value) => typeof value === 'string' ? value.trim() : value,
+    claudePermissionModeSchema,
+  ).optional(),
+  claudeIdleTimeoutMinutes: optionalNonNegativeInteger(),
+  uiAllowLan: z.boolean().optional(),
+  uiAccessToken: optionalString(),
+}).strict();
+
+type UiConfigPayload = z.infer<typeof uiConfigPayloadSchema>;
+
+export function parseUiConfigPayload(payload: Record<string, unknown>): UiConfigPayload {
+  return uiConfigPayloadSchema.parse(payload);
 }
 
 export function configV2ToPayload(config: ConfigV2) {
@@ -97,113 +138,68 @@ export function configV2ToPayload(config: ConfigV2) {
 }
 
 export function mergeConfigV2HomePatch(current: ConfigV2, payload: Record<string, unknown>): ConfigPatch {
-  const rawDefaultModel = typeof payload.defaultModel === 'string'
-    ? payload.defaultModel.trim()
-    : undefined;
-  const rawDefaultProvider = typeof payload.defaultProvider === 'string'
-    ? payload.defaultProvider.trim().toLowerCase()
-    : undefined;
-  const rawRuntime = typeof payload.runtime === 'string'
-    ? payload.runtime.trim().toLowerCase()
-    : undefined;
-  const rawClaudeDefaultModel = typeof payload.claudeDefaultModel === 'string'
-    ? payload.claudeDefaultModel.trim()
-    : undefined;
-  const rawClaudeProvider = typeof payload.claudeProvider === 'string'
-    ? payload.claudeProvider.trim().toLowerCase()
-    : undefined;
-  const rawClaudeExecutable = typeof payload.claudeExecutable === 'string'
-    ? payload.claudeExecutable.trim().toLowerCase()
-    : undefined;
-  const rawClaudePermissionMode = typeof payload.claudePermissionMode === 'string'
-    ? payload.claudePermissionMode.trim()
-    : undefined;
+  const parsed = parseUiConfigPayload(payload);
   const uiAllowLan = hasPayloadKey(payload, 'uiAllowLan')
-    ? payload.uiAllowLan === true
+    ? parsed.uiAllowLan === true
     : current.bridge.uiAllowLan;
-  const requestedUiAccessToken = asString(payload.uiAccessToken);
+  const requestedUiAccessToken = parsed.uiAccessToken || undefined;
   const uiAccessToken = requestedUiAccessToken
     || current.bridge.uiAccessToken
     || (uiAllowLan ? generateAccessToken() : '');
-  const claudePermissionMode = rawClaudePermissionMode === 'acceptEdits'
-    || rawClaudePermissionMode === 'bypassPermissions'
-    || rawClaudePermissionMode === 'plan'
-    || rawClaudePermissionMode === 'default'
-    ? rawClaudePermissionMode
-    : current.runtime.claude.permissionMode;
+  const claudePermissionMode = parsed.claudePermissionMode ?? current.runtime.claude.permissionMode;
   const currentChannel = defaultUiChannel(current);
   const historyMessageLimit = currentChannel
-    ? clampHistoryMessageLimit(payload.historyMessageLimit, currentChannel.config.historyMessageLimit)
+    ? parsed.historyMessageLimit ?? currentChannel.config.historyMessageLimit
     : undefined;
-  const streamStatusIdleStartSeconds = asPositiveInt(payload.streamStatusIdleStartSeconds)
-    || currentChannel?.config.streamStatusIdleStartSeconds;
-  const streamStatusCheckIntervalSeconds = asPositiveInt(payload.streamStatusCheckIntervalSeconds)
-    || currentChannel?.config.streamStatusCheckIntervalSeconds;
+  const streamStatusIdleStartSeconds = parsed.streamStatusIdleStartSeconds
+    ?? currentChannel?.config.streamStatusIdleStartSeconds;
+  const streamStatusCheckIntervalSeconds = parsed.streamStatusCheckIntervalSeconds
+    ?? currentChannel?.config.streamStatusCheckIntervalSeconds;
 
   return {
     schemaVersion: 2,
     runtime: {
-      agent: rawRuntime === 'claude' || rawRuntime === 'codex'
-        ? rawRuntime
-        : current.runtime.agent,
+      agent: parsed.runtime ?? current.runtime.agent,
       codex: {
-        model: rawDefaultModel === undefined
+        model: parsed.defaultModel === undefined
           ? current.runtime.codex.model
-          : rawDefaultModel === ''
+          : parsed.defaultModel === ''
             ? ''
-            : availableCodexModelSlugs.has(rawDefaultModel)
-              ? rawDefaultModel
-              : current.runtime.codex.model,
-        provider: rawDefaultProvider === undefined
+            : parsed.defaultModel,
+        provider: parsed.defaultProvider === undefined
           ? current.runtime.codex.provider
-          : rawDefaultProvider === 'sdk' || rawDefaultProvider === 'tmux' || rawDefaultProvider === 'pty'
-            ? rawDefaultProvider
-            : current.runtime.codex.provider,
+          : parsed.defaultProvider,
         yoloMode: hasPayloadKey(payload, 'defaultMode')
-          ? payload.defaultMode === 'yolo' ? 'on' : 'off'
+          ? parsed.defaultMode === 'yolo' ? 'on' : 'off'
           : current.runtime.codex.yoloMode,
         skipGitRepoCheck: hasPayloadKey(payload, 'codexSkipGitRepoCheck')
-          ? payload.codexSkipGitRepoCheck === true
+          ? parsed.codexSkipGitRepoCheck === true
           : current.runtime.codex.skipGitRepoCheck,
-        sandboxMode: payload.codexSandboxMode === 'read-only'
-          || payload.codexSandboxMode === 'workspace-write'
-          || payload.codexSandboxMode === 'danger-full-access'
-          ? payload.codexSandboxMode
-          : current.runtime.codex.sandboxMode,
+        sandboxMode: parsed.codexSandboxMode ?? current.runtime.codex.sandboxMode,
         networkAccess: hasPayloadKey(payload, 'codexNetworkAccess')
-          ? payload.codexNetworkAccess !== false
+          ? parsed.codexNetworkAccess !== false
           : current.runtime.codex.networkAccess,
-        reasoningEffort: payload.codexReasoningEffort === 'minimal'
-          || payload.codexReasoningEffort === 'low'
-          || payload.codexReasoningEffort === 'medium'
-          || payload.codexReasoningEffort === 'high'
-          || payload.codexReasoningEffort === 'xhigh'
-          ? payload.codexReasoningEffort
-          : current.runtime.codex.reasoningEffort,
+        reasoningEffort: parsed.codexReasoningEffort ?? current.runtime.codex.reasoningEffort,
       },
       claude: {
-        model: rawClaudeDefaultModel === undefined
+        model: parsed.claudeDefaultModel === undefined
           ? current.runtime.claude.model
-          : rawClaudeDefaultModel || '',
-        provider: rawClaudeProvider === undefined
+          : parsed.claudeDefaultModel || '',
+        provider: parsed.claudeProvider === undefined
           ? current.runtime.claude.provider
-          : rawClaudeProvider === 'sdk' || rawClaudeProvider === 'pty'
-            ? rawClaudeProvider
-            : 'sdk',
-        executable: rawClaudeExecutable === 'ccr' || rawClaudeExecutable === 'claude'
-          ? rawClaudeExecutable
-          : current.runtime.claude.executable,
+          : parsed.claudeProvider,
+        executable: parsed.claudeExecutable ?? current.runtime.claude.executable,
         permissionMode: claudePermissionMode,
         yoloMode: claudePermissionMode === 'bypassPermissions' ? 'on' : 'off',
         reasoningEffort: current.runtime.claude.reasoningEffort,
-        idleTimeoutMinutes: asNonNegativeInt(payload.claudeIdleTimeoutMinutes)
+        idleTimeoutMinutes: parsed.claudeIdleTimeoutMinutes
           ?? current.runtime.claude.idleTimeoutMinutes
           ?? 0,
       },
     },
     bridge: {
       defaultWorkspace: hasPayloadKey(payload, 'defaultWorkspaceRoot')
-        ? asString(payload.defaultWorkspaceRoot) || '~'
+        ? parsed.defaultWorkspaceRoot || '~'
         : current.bridge.defaultWorkspace,
       uiAllowLan,
       uiAccessToken,
@@ -218,6 +214,11 @@ export function mergeConfigV2HomePatch(current: ConfigV2, payload: Record<string
       },
     })),
   };
+}
+
+export function checkUiConfigPayload(payload: Record<string, unknown>): void {
+  const service = createConfigService({ migrate: false });
+  mergeConfigV2HomePatch(service.snapshot().config, payload);
 }
 
 export function homeWritableConfigPatch(config: ConfigV2): ConfigPatch {
