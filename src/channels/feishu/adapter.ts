@@ -23,6 +23,7 @@ import { promisify } from 'node:util';
 import * as lark from '@larksuiteoapi/node-sdk';
 import { HttpsProxyAgent } from 'https-proxy-agent';
 import type {
+  ChannelAddress,
   ChannelChatKind,
   ChannelType,
   CloudDocumentAddress,
@@ -51,6 +52,7 @@ import {
   type StructuredStreamingUiSnapshot,
 } from '../contracts.js';
 import { getBridgeContext } from '../../bridge/host/context.js';
+import { createConfigService } from '../../configuration/service.js';
 import {
   htmlToFeishuMarkdown,
   preprocessFeishuMarkdown,
@@ -85,6 +87,8 @@ const COMPLETED_EMOJI = 'DONE';
 const execFileAsync = promisify(execFile);
 /** Feishu emoji type for failed tasks. */
 const ERROR_EMOJI = 'WAIL';
+export const FEISHU_GROUP_AUTHORIZED_CALLBACK_DATA = 'clk-feishu-group-authorized';
+const FEISHU_GROUP_MESSAGE_SCOPE = 'im:message.group_msg';
 
 /** State for an active CardKit v2 streaming card. */
 interface FeishuCardState {
@@ -1934,6 +1938,62 @@ export class FeishuAdapter extends BaseChannelAdapter {
     return this.channelConfig.requireMention === true;
   }
 
+  private isGroupAuthorized(): boolean {
+    return this.channelConfig.groupAuthorized === true;
+  }
+
+  private developerAuthUrl(): string {
+    const appId = this.appId || this.botOpenId || '';
+    return appId
+      ? `https://open.feishu.cn/app/${encodeURIComponent(appId)}/auth`
+      : 'https://open.feishu.cn/app/';
+  }
+
+  private buildGroupAuthorizationCard(): NonNullable<OutboundMessage['richCard']> {
+    const scopeJson = JSON.stringify({ scopes: { tenant: [FEISHU_GROUP_MESSAGE_SCOPE] } }, null, 2);
+    return {
+      title: '群聊消息权限确认',
+      template: 'orange',
+      sections: [
+        {
+          markdown: [
+            '如果您从默认向导中新建机器人，该机器人可能没有权限获取群聊中的所有消息（只能收到 @ 机器人的消息）。',
+            '',
+            `请参考下图在[开发者后台](${this.developerAuthUrl()})中授予机器人该权限，如您已经授权，请点击下方按钮。`,
+            '',
+            '参考图：Image #1',
+          ].join('\n'),
+        },
+        {
+          title: '需要授予的权限',
+          code: {
+            language: 'json',
+            text: scopeJson,
+          },
+        },
+      ],
+      actions: [[{
+        text: '我已授权',
+        callbackData: FEISHU_GROUP_AUTHORIZED_CALLBACK_DATA,
+        type: 'primary',
+      }]],
+    };
+  }
+
+  private persistGroupAuthorized(): void {
+    this.channelConfig.groupAuthorized = true;
+    createConfigService({ migrate: false }).set(
+      { kind: 'home' },
+      {
+        channels: [{
+          id: this.channelType,
+          provider: 'feishu',
+          config: { groupAuthorized: true },
+        }],
+      },
+    );
+  }
+
   supportsStructuredStreamingUi(chatId: string): boolean {
     return this.isStreamingEnabled() && !this.isCloudDocumentChatId(chatId);
   }
@@ -2272,6 +2332,18 @@ export class FeishuAdapter extends BaseChannelAdapter {
     };
   }
 
+  async notifyGroupChatCreated(address: ChannelAddress, _group: CreatedGroupChat): Promise<void> {
+    if (this.isGroupAuthorized()) return;
+    const result = await this.send({
+      address,
+      text: '群聊消息权限确认',
+      richCard: this.buildGroupAuthorizationCard(),
+    });
+    if (!result.ok) {
+      console.warn('[feishu-adapter] Failed to send group authorization card:', result.error || result.httpStatus);
+    }
+  }
+
   private async createGroupChatAsLarkCliUser(options: CreateGroupChatOptions): Promise<CreatedGroupChat> {
     const requestedName = options.name.trim();
     if (!requestedName) throw new Error('Group name is required.');
@@ -2566,6 +2638,26 @@ export class FeishuAdapter extends BaseChannelAdapter {
       });
 
       if (!chatId) return FALLBACK_TOAST;
+
+      if (String(callbackData).trim() === FEISHU_GROUP_AUTHORIZED_CALLBACK_DATA) {
+        try {
+          this.persistGroupAuthorized();
+          return {
+            toast: {
+              type: 'success' as const,
+              content: '已记录授权状态',
+            },
+          };
+        } catch (error) {
+          console.error('[feishu-adapter] Failed to persist group authorization state:', error instanceof Error ? error.message : error);
+          return {
+            toast: {
+              type: 'warning' as const,
+              content: '授权状态保存失败，请稍后重试',
+            },
+          };
+        }
+      }
 
       const callbackMsg: import('../../domain/index.js').InboundMessage = {
         messageId: messageId || `card_action_${Date.now()}`,

@@ -184,6 +184,7 @@ export function legacyConfigToConfigPatch(config: Config): ConfigPatch {
       streamingEnabled: (channel.config as FeishuChannelConfig).streamingEnabled ?? true,
       feedbackMarkdownEnabled: (channel.config as FeishuChannelConfig).feedbackMarkdownEnabled ?? true,
       requireMention: (channel.config as FeishuChannelConfig).requireMention ?? false,
+      groupAuthorized: (channel.config as FeishuChannelConfig).groupAuthorized ?? false,
     },
   }));
   const defaultChannel = channels.find((channel) => channel.id === 'feishu-default') || channels[0];

@@ -431,6 +431,12 @@ export const configFields = [
     runtimeSettingsKey: 'bridge_feishu_require_mention',
     parseEnv: boolFromEnv,
   },
+  {
+    path: 'channels[].config.groupAuthorized',
+    tomlPath: 'channels[].config.group_authorized',
+    scopes: homeOnlyScopes,
+    schema: z.boolean(),
+  },
 ] as const satisfies readonly ConfigField[];
 
 export type KnownConfigPath = typeof configFields[number]['path'];

@@ -9,6 +9,7 @@ export interface FeishuChannelConfig {
   streamingEnabled?: boolean;
   feedbackMarkdownEnabled?: boolean;
   requireMention?: boolean;
+  groupAuthorized?: boolean;
 }
 
 export interface RuntimeChannelInstance {

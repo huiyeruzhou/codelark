@@ -6,8 +6,12 @@ import os from 'node:os';
 import path from 'node:path';
 
 import { CodexProvider } from '../../../../runtime/codex/provider.js';
-import { FeishuAdapter } from '../../../../channels/feishu/adapter.js';
+import {
+  FEISHU_GROUP_AUTHORIZED_CALLBACK_DATA,
+  FeishuAdapter,
+} from '../../../../channels/feishu/adapter.js';
 import { _testOnly, registerAdapter } from '../../../../bridge/host/manager.js';
+import { createConfigService } from '../../../../configuration/service.js';
 import { PendingPermissions } from '../../../../runtime/permission-gateway.js';
 import {
   initBridgeTestContext,
@@ -75,6 +79,16 @@ function findInteractiveFormPayload(calls: RecordedFeishuMessageCall[]): Record<
   assert.fail(`expected an interactive CardKit form, got ${JSON.stringify(calls)}`);
 }
 
+function findGroupAuthorizationCardPayloads(calls: RecordedFeishuMessageCall[]): Array<Record<string, any>> {
+  return calls.flatMap((call) => {
+    if (call.payload?.data?.msg_type !== 'interactive') return [];
+    const content = JSON.parse(call.payload.data.content || '{}');
+    return JSON.stringify(content).includes(FEISHU_GROUP_AUTHORIZED_CALLBACK_DATA)
+      ? [{ call, content }]
+      : [];
+  });
+}
+
 function assertCodelarkAskFormPayload(payload: Record<string, any>): void {
   assert.equal(payload.form.name, 'clk_form');
   assert.equal(payload.form.elements.some((element: any) => element.tag === 'select_static' && element.name === 'clk_choice'), true);
@@ -126,6 +140,69 @@ async function withLocalCodexEnvironment<T>(fn: (params: {
 }
 
 describe('feishu adapter card e2e', () => {
+  it('prompts for group message authorization after /new until the callback persists authorization', async () => {
+    resetBridgeTestState({ cleanCodexHome: true });
+    _testOnly.resetStateForTests();
+    const calls: RecordedFeishuMessageCall[] = [];
+    const createdGroups: Array<{ chatId: string; name: string }> = [];
+    const store = initBridgeTestContext({
+      settings: makeBridgeSettings(),
+    });
+    const adapter = createRecordingFeishuAdapter(calls);
+    (adapter as any).createGroupChat = async (options: { name: string }) => {
+      const group = {
+        chatId: `chat-auth-group-${createdGroups.length + 1}`,
+        chatKind: 'group' as const,
+        name: `[TestBot]${options.name}`,
+      };
+      createdGroups.push(group);
+      return group;
+    };
+    registerAdapter(adapter);
+    (globalThis as unknown as Record<string, any>).__bridge_manager__.running = true;
+    const sourceAddress = { channelType: 'feishu', chatId: 'chat-auth-source', userId: 'ou-auth-user' } as const;
+    const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-group-auth-work-'));
+
+    try {
+      await _testOnly.handleMessage(adapter, inboundMessage(sourceAddress, `/new auth-one ${workDir}`, 'incoming-auth-new-1'));
+      await _testOnly.handleMessage(adapter, inboundMessage(sourceAddress, `/new auth-two ${workDir}`, 'incoming-auth-new-2'));
+
+      assert.equal(createdGroups.length, 2);
+      const firstPassCards = findGroupAuthorizationCardPayloads(calls);
+      assert.equal(firstPassCards.length, 2);
+      assert.match(JSON.stringify(firstPassCards[0].content), /群聊消息权限确认/);
+      assert.match(JSON.stringify(firstPassCards[0].content), /im:message\.group_msg/);
+      assert.match(JSON.stringify(firstPassCards[0].content), /https:\/\/open\.feishu\.cn\/app\/app-id\/auth/);
+      assert.match(JSON.stringify(firstPassCards[0].content), /我已授权/);
+
+      const callbackResult = await (adapter as any).handleCardAction({
+        action: { value: { callback_data: FEISHU_GROUP_AUTHORIZED_CALLBACK_DATA } },
+        context: {
+          open_chat_id: createdGroups[0]!.chatId,
+          open_message_id: 'auth-card-message-1',
+        },
+        operator: { open_id: 'ou-auth-user' },
+      });
+      assert.equal(callbackResult?.toast?.type, 'success');
+      assert.equal((adapter as any).channelConfig.groupAuthorized, true);
+      assert.equal(
+        createConfigService({ migrate: false }).snapshot().config.channels
+          .find((channel) => channel.id === 'feishu')?.config.groupAuthorized,
+        true,
+      );
+
+      await _testOnly.handleMessage(adapter, inboundMessage(sourceAddress, `/new auth-three ${workDir}`, 'incoming-auth-new-3'));
+
+      assert.equal(createdGroups.length, 3);
+      assert.equal(findGroupAuthorizationCardPayloads(calls).length, 2);
+      const thirdBinding = store.getChannelChat('feishu', createdGroups[2]!.chatId);
+      assert.ok(thirdBinding);
+    } finally {
+      fs.rmSync(workDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+      _testOnly.resetStateForTests();
+    }
+  });
+
   it('delivers SDK clk-ask forms through real CodexProvider and FeishuAdapter.send', { timeout: 90_000 }, async (t: TestContext) => {
     if (!(await commandAvailable('codex', ['--version']))) {
       t.skip('codex CLI is not available');

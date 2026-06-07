@@ -67,6 +67,7 @@ interface LegacyConfigFile {
       streamingEnabled?: unknown;
       feedbackMarkdownEnabled?: unknown;
       requireMention?: unknown;
+      groupAuthorized?: unknown;
     };
   }>;
 }
@@ -237,6 +238,8 @@ function patchFromLegacyConfig(config: LegacyConfigFile, warnings: string[]): Co
     if (feedbackMarkdownEnabled !== undefined) behavior.feedbackMarkdownEnabled = feedbackMarkdownEnabled;
     const requireMention = boolValue(channelConfig.requireMention);
     if (requireMention !== undefined) behavior.requireMention = requireMention;
+    const groupAuthorized = boolValue(channelConfig.groupAuthorized);
+    if (groupAuthorized !== undefined) behavior.groupAuthorized = groupAuthorized;
     return [{
       id: stringValue(channel.id) || 'feishu-default',
       alias: stringValue(channel.alias) || '飞书',
@@ -253,6 +256,7 @@ function patchFromLegacyConfig(config: LegacyConfigFile, warnings: string[]): Co
         streamingEnabled: true,
         feedbackMarkdownEnabled: true,
         requireMention: false,
+        groupAuthorized: false,
         ...behavior,
       },
     }];
