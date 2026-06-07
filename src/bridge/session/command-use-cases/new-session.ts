@@ -196,6 +196,7 @@ export async function handleNewSessionCommand(options: {
         options.markdown,
       ),
       afterDelivery: () => options.adapter.notifyGroupChatCreated?.(groupAddress, groupChat),
+      postDeliveryCurrentAddress: groupAddress,
     };
   }
 
@@ -273,5 +274,6 @@ export async function handleNewSessionCommand(options: {
       options.markdown,
     ),
     afterDelivery: () => options.adapter.notifyGroupChatCreated?.(groupAddress, groupChat),
+    postDeliveryCurrentAddress: groupAddress,
   };
 }

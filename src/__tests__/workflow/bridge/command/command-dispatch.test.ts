@@ -2062,6 +2062,10 @@ enabled = true
     assert.match(sent[0]?.text || '', /已创建群聊会话/);
     assert.match(sent[0]?.text || '', /common-flow/);
     assert.doesNotMatch(sent[0]?.text || '', /旧任务在运行/);
+    assert.equal(sent[1]?.address.chatId, groupAddress.chatId);
+    assert.equal(sent[1]?.replyToMessageId, undefined);
+    assert.match(sent[1]?.text || '', /当前会话/);
+    assert.equal(sent[1]?.richCard?.updateKey, 'thread-card:current:feishu:created-group-1');
 
     await handleBridgeCommand(
       adapter,
@@ -2085,7 +2089,9 @@ enabled = true
     assert.equal(store.getSession(namedOnlyBinding!.bridgeSessionId)?.name, '[TestBot]set');
     assert.equal(sent.at(-1)?.address.chatId, adapter.createdGroups[1].chatId);
     assert.equal(sent.at(-1)?.replyToMessageId, undefined);
+    assert.match(sent.at(-2)?.text || '', /已创建群聊会话/);
     assert.match(sent.at(-1)?.text || '', /标题.*\[TestBot\]set/s);
+    assert.match(sent.at(-1)?.text || '', /当前会话/);
 
     await handleBridgeCommand(
       adapter,
@@ -2129,7 +2135,7 @@ enabled = true
     assert.equal(store.getSession(renamedBinding!.bridgeSessionId)?.name, '[TestBot]RenamedSession');
     assert.equal(sent.at(-1)?.address.chatId, adapter.createdGroups[3].chatId);
     assert.match(sent.at(-1)?.text || '', /标题.*\[TestBot\]RenamedSession/s);
-    assert.match(sent.at(-1)?.text || '', /\/new \[name\] \[path\]/);
+    assert.match(sent.at(-2)?.text || '', /\/new \[name\] \[path\]/);
 
     await handleBridgeCommand(
       adapter,
@@ -2194,6 +2200,7 @@ enabled = true
     const unboundCreatedBinding = store.getChannelChat('feishu', adapter.createdGroups.at(-1)?.chatId || '');
     assert.ok(unboundCreatedBinding);
     assert.equal(sent.at(-1)?.address.chatId, adapter.createdGroups.at(-1)?.chatId);
+    assert.match(sent.at(-1)?.text || '', /当前会话/);
     assert.equal(
       getSessionWorkingDirectory(store.getSession(unboundCreatedBinding!.bridgeSessionId)),
       path.resolve(DEFAULT_WORKSPACE_ROOT),
@@ -2262,7 +2269,8 @@ enabled = true
     assert.ok(createdBinding);
     assert.equal(getSessionWorkingDirectory(store.getSession(createdBinding!.bridgeSessionId)), draftWorkDir);
     assert.equal(sent.at(-1)?.address.chatId, adapter.createdGroups.at(-1)?.chatId);
-    assert.match(sent.at(-1)?.text || '', /已创建群聊会话/);
+    assert.match(sent.at(-2)?.text || '', /已创建群聊会话/);
+    assert.match(sent.at(-1)?.text || '', /当前会话/);
   });
 
   it('creates a group-backed cloud document chat with /new from a document comment', async () => {
@@ -2315,6 +2323,8 @@ enabled = true
     });
     assert.equal(sent[0]?.address.chatId, groupChatId);
     assert.match(sent[0]?.text || '', /已绑定为云文档聊天入口/);
+    assert.equal(sent[1]?.address.chatId, groupChatId);
+    assert.match(sent[1]?.text || '', /当前会话/);
     assert.equal(commentReplies.length, 1);
     assert.match(commentReplies[0], /已开启云文档群聊模式/);
     assert.match(commentReplies[0], new RegExp(groupChatId));

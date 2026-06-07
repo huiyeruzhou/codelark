@@ -3808,8 +3808,9 @@ describe('bridge-manager new session handling', () => {
     assert.ok(newGroupBinding);
     assert.notEqual(newGroupBinding.bridgeSessionId, binding.bridgeSessionId);
     assert.equal(state.activeTasks.get(binding.bridgeSessionId)?.id, 'task-old');
-    assert.equal(sent.length, 1);
+    assert.equal(sent.length, 2);
     assert.match(sent[0], /旧任务在运行，它不会被终止/);
+    assert.match(sent[1], /当前会话/);
   });
 
   it('does not write an old task Codex thread id back onto the current binding after /new', () => {

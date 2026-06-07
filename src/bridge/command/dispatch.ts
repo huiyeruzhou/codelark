@@ -5,7 +5,7 @@ import { getBridgeContext } from '../host/context.js';
 import { deliverBridgeNotice } from '../../channels/delivery/feedback.js';
 import * as router from '../session/channel-router.js';
 import type { BaseChannelAdapter, StructuredStreamingUiActionButton } from '../../channels/contracts.js';
-import type { ChannelChat, InboundMessage, OutboundRichCard } from '../../domain/index.js';
+import type { ChannelAddress, ChannelChat, InboundMessage, OutboundRichCard } from '../../domain/index.js';
 import { isDangerousInput } from '../../shared/security/validators.js';
 import {
   getFeedbackParseMode,
@@ -130,6 +130,42 @@ export interface BridgeCommandDispatchDeps {
   shellRunner?: ShellCommandRunner;
   tmuxProviderAutoForward?: boolean;
   onTmuxProviderAutoForwarded?: () => Promise<void> | void;
+}
+
+async function deliverCurrentCommandAfterNewSession(options: {
+  adapter: BaseChannelAdapter;
+  address: ChannelAddress;
+  store: ReturnType<typeof getBridgeContext>['store'];
+  threadDisplay: CommandThreadDisplay;
+  markdown: boolean;
+}): Promise<void> {
+  const binding = options.store.getChannelChat(options.address.channelType, options.address.chatId);
+  const msg = {
+    address: options.address,
+    text: '/current',
+    messageId: `post-new-current:${options.address.channelType}:${options.address.chatId}`,
+    timestamp: Date.now(),
+  } satisfies InboundMessage;
+  const response = handleCurrentCommand({
+    msg,
+    binding,
+    store: options.store,
+    threadDisplay: options.threadDisplay,
+    markdown: options.markdown,
+  });
+  const richCard = buildCurrentCommandRichCard({
+    msg,
+    binding,
+    store: options.store,
+    threadDisplay: options.threadDisplay,
+  });
+  const result = await deliverBridgeNotice(options.adapter, options.address, response, {
+    audit: true,
+    richCard,
+  });
+  if (result.ok && result.messageId) {
+    await persistAndPinLatestThreadTableMessage(options.adapter, options.address, 'current', result.messageId);
+  }
 }
 
 async function handleCurrentConfigFormCommand(options: {
@@ -387,6 +423,7 @@ export async function handleBridgeCommand(
   let threadTableCardScope: ThreadCardScope | undefined;
   let afterDelivery: ((messageId?: string) => Promise<void> | void) | undefined;
   let useCurrentThreadCardUpdateFallback = false;
+  let postDeliveryCurrentAddress: ChannelAddress | undefined;
   const currentBinding = deps.scopedBinding || store.getChannelChat(msg.address.channelType, msg.address.chatId);
   const shouldApplyDefaultTargetForCommand = !new Set(['/status', '/threads', '/t', '/set']).has(command);
   const commandBinding = !shouldApplyDefaultTargetForCommand
@@ -420,6 +457,7 @@ export async function handleBridgeCommand(
         responseRichCard = result.richCard;
         threadTableCardScope = result.threadTableCardScope;
         afterDelivery = result.afterDelivery;
+        postDeliveryCurrentAddress = result.postDeliveryCurrentAddress;
       }
       break;
     }
@@ -935,6 +973,15 @@ export async function handleBridgeCommand(
     }
     if (result.ok && afterDelivery) {
       await afterDelivery(result.messageId);
+    }
+    if (result.ok && postDeliveryCurrentAddress) {
+      await deliverCurrentCommandAfterNewSession({
+        adapter,
+        address: postDeliveryCurrentAddress,
+        store,
+        threadDisplay,
+        markdown: responseParseMode === 'Markdown',
+      });
     }
   }
 }
