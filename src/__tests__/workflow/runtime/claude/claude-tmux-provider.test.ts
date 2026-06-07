@@ -7,7 +7,11 @@ import path from 'node:path';
 
 import { tmuxCore, type TmuxCore } from '../../../../bridge/tmux/core.js';
 import { getClaudeProjectDir } from '../../../../runtime/claude/session-jsonl.js';
-import { _testOnlyClaudeTmux, streamClaudeTmuxTui } from '../../../../runtime/claude/tmux-provider.js';
+import {
+  _testOnlyClaudeTmux,
+  startClaudeTmuxSession,
+  streamClaudeTmuxTui,
+} from '../../../../runtime/claude/tmux-provider.js';
 
 interface ParsedSse {
   type: string;
@@ -60,6 +64,62 @@ function patchTmuxCore(patch: Partial<TmuxCore>): () => void {
 describe('claude-tmux-provider', () => {
   it('uses symmetric Claude tmux session names', () => {
     assert.equal(_testOnlyClaudeTmux.tmuxSessionName('claude/session 1'), 'claude_claude-session-1');
+  });
+
+  it('recreates an existing Claude tmux session when explicitly started', async () => {
+    const calls: Array<{ name: string; recreate?: boolean }> = [];
+    const fakeCore: TmuxCore = {
+      async hasSession(name: string) {
+        return { exists: true, command: `tmux has-session -t ${name}` };
+      },
+      async ensureDetachedSession(params) {
+        calls.push({ name: params.name, recreate: params.recreate });
+        return {
+          existed: true,
+          command: `tmux new-session -d -s ${params.name}`,
+          commands: [
+            `tmux has-session -t ${params.name}`,
+            `tmux kill-session -t ${params.name}`,
+            `tmux new-session -d -s ${params.name}`,
+          ],
+        };
+      },
+      async killSession(name: string) {
+        return `tmux kill-session -t ${name}`;
+      },
+      async listSessions() {
+        return { sessions: [], command: 'tmux list-sessions' };
+      },
+      async capturePane(target: string) {
+        return { screen: '', command: `tmux capture-pane -t ${target}` };
+      },
+      async sendActions() {
+        return { commands: [] };
+      },
+      async sendInterrupt(target: string) {
+        return `tmux send-keys -t ${target} C-c`;
+      },
+      async injectPromptIntoPane() {
+        return { commands: [] };
+      },
+      commandPreview(args: readonly string[]) {
+        return ['tmux', ...args].join(' ');
+      },
+    };
+
+    const result = await startClaudeTmuxSession({
+      sessionName: 'claude_existing',
+      bridgeSessionId: 'bridge-session-existing',
+      core: fakeCore,
+    });
+
+    assert.deepEqual(calls, [{ name: 'claude_existing', recreate: true }]);
+    assert.equal(result.existed, true);
+    assert.deepEqual(result.commands, [
+      'tmux has-session -t claude_existing',
+      'tmux kill-session -t claude_existing',
+      'tmux new-session -d -s claude_existing',
+    ]);
   });
 
   it('streams a Claude tmux turn through JSONL mirror records', async () => {

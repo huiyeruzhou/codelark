@@ -125,12 +125,13 @@ export async function handleProviderCommand(options: {
         markdown: options.markdown,
       });
     }
+    let claudeTmuxStartResult: Awaited<ReturnType<typeof startClaudeTmuxSession>> | null = null;
     if (requestedProvider === 'tmux') {
       const tmuxSessionName = claudeTmuxSessionName(getSessionClaudeSessionId(session) || session.id);
       const claudeConfig = resolveClaudeRuntimeConfig(session, binding);
       try {
         await options.deps.notifyBackgroundOperation?.(`正在启动 tmux 后台会话 \`${tmuxSessionName}\` 并运行 Claude Code TUI。`);
-        await startClaudeTmuxSession({
+        claudeTmuxStartResult = await startClaudeTmuxSession({
           sessionName: tmuxSessionName,
           bridgeSessionId: session.id,
           workingDirectory: getSessionWorkingDirectory(session),
@@ -163,6 +164,14 @@ export async function handleProviderCommand(options: {
       ],
       [
         claudeProviderSwitchNote(requestedProvider),
+        ...(requestedProvider === 'tmux'
+          ? [
+            claudeTmuxStartResult?.existed
+              ? '同名 tmux session 已存在，已先销毁并重新启动 Claude Code TUI。'
+              : '已启动 Claude Code TUI。',
+            '这是 `/p tmux` 的标准行为：每次都会强制重新加载同名 tmux session，确保新的 TUI 启动参数生效。',
+          ]
+          : []),
       ],
       options.markdown,
     );

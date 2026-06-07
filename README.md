@@ -175,7 +175,7 @@ codelark install-skills
 - `/tmux-screen`：诊断 Codex 的运行情况。
   - `<enter>`：向 Codex 对话发送回车。
   - `<C-c>`：向 Codex 对话发送终止。
-- `/p tmux`：重启 Codex 会话。
+- `/p tmux`：重启当前 runtime 的 tmux Provider 会话（Codex / Claude Code）。
 - `/his [N]`：把当前线程最近消息渲染成卡片发送。
 - `/his json`：直接发送原始 Codex / Claude Code session JSONL 文件，不做二次包装或后处理。
 - `/stop`：停止当前任务；tmux Provider 中已有运行中 TUI turn 时会向 tmux 发送 `<C-c>`。
