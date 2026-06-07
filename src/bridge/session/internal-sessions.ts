@@ -63,7 +63,12 @@ export function cleanupHiddenSessions(store: BridgeStore): void {
 export function getOrCreateDraftSession(
   store: BridgeStore,
   address: { channelType: string; chatId: string; userId?: string },
-  options?: { activeRuntime?: 'codex' | 'claude' },
+  options?: {
+    activeRuntime?: 'codex' | 'claude';
+    codexModel?: string;
+    codexMode?: 'normal' | 'yolo';
+    workingDirectory?: string;
+  },
 ): BridgeSession {
   cleanupHiddenSessions(store);
   const expectedName = makeDraftSessionName(address);
@@ -81,13 +86,14 @@ export function getOrCreateDraftSession(
     return store.getSession(existing.id) || existing;
   }
 
-  const workingDirectory = getDefaultSessionWorkingDirectory(store);
+  const workingDirectory = options?.workingDirectory || getDefaultSessionWorkingDirectory(store);
+  ensureDirectory(workingDirectory);
   const session = store.createSession(
     expectedName,
-    getGlobalStringConfig('runtime.codex.model') || '',
+    options?.codexModel ?? (getGlobalStringConfig('runtime.codex.model') || ''),
     undefined,
     workingDirectory,
-    'normal',
+    options?.codexMode || 'normal',
     {
       hidden: true,
       sessionType: 'normal',

@@ -27,6 +27,7 @@ CodeLark 需要把“默认值、全局配置、项目配置、环境变量、�
 - `src/bridge/command/global-settings.ts`：`/set` 通过 `ConfigService` 读写 home TOML。
 - `src/bridge/command/runtime-settings.ts`：`/r`、`/mode`、`/sandbox`、`/network`、`/model`、`/cd` 等写 Session TOML，不再把同名配置字段写回 BridgeSession JSON。
 - `src/domain/session-runtime.ts`：BridgeSession runtime 身份/状态 accessor，以及从 Session TOML 读取显式会话配置 override 的过渡 helper。
+- `src/bridge/session/channel-router.ts`：新建 IM draft/visible session 时从 Channel scoped `ConfigService.snapshot()` 读取 runtime、model、mode 和 workspace 默认值。
 - `src/bridge/session/support.ts`：基于 `ConfigService.snapshot(channel/session scope)` 解析 effective runtime config；运行时执行和展示路径不再自行拼 session/global fallback，Channel/Session TOML 动态覆盖复用同一套 node-config merge。
 - `src/storage/json-store.ts`：BridgeSession JSON 持久化；只保存会话身份、生命周期和运行状态，不再作为用户配置后端。
 

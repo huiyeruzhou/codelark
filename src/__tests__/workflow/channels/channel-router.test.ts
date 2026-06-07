@@ -14,6 +14,7 @@ import { writeCodexSessionJsonlFixture } from '../../helpers/bridge/test-bridge-
 
 const DATA_DIR = path.join(CODELARK_HOME, 'data');
 const CONFIG_TOML_PATH = path.join(CODELARK_HOME, 'config.toml');
+const SCOPED_CONFIG_DIR = path.join(CODELARK_HOME, 'config');
 
 function makeSettings(): Map<string, string> {
   return new Map([
@@ -50,6 +51,7 @@ describe('channel-router default targets', () => {
       fs.rmSync(path.join(process.env.CODEX_HOME, 'archived_sessions'), { recursive: true, force: true });
       fs.rmSync(path.join(process.env.CODEX_HOME, 'session_index.jsonl'), { force: true });
     }
+    fs.rmSync(SCOPED_CONFIG_DIR, { recursive: true, force: true });
     fs.rmSync(CONFIG_TOML_PATH, { force: true });
     fs.mkdirSync(path.dirname(CONFIG_TOML_PATH), { recursive: true });
     fs.writeFileSync(CONFIG_TOML_PATH, [
@@ -258,5 +260,83 @@ describe('channel-router default targets', () => {
     const codexSession = store.getSession(codexBinding.bridgeSessionId);
     assert.equal(getSessionActiveRuntime(codexSession), 'codex');
     assert.equal(resolveSessionRuntimeConfig(codexBinding, codexSession).model, 'toml-codex-model');
+  });
+
+  it('creates new chat sessions from channel scoped runtime defaults', () => {
+    const homeWorkspace = path.join(CODELARK_HOME, 'home-workspace');
+    const channelWorkspace = path.join(CODELARK_HOME, 'channel-workspace');
+    fs.mkdirSync(homeWorkspace, { recursive: true });
+    fs.mkdirSync(channelWorkspace, { recursive: true });
+    fs.writeFileSync(CONFIG_TOML_PATH, [
+      'schema_version = 2',
+      '',
+      '[runtime]',
+      'agent = "codex"',
+      '',
+      '[bridge]',
+      `default_workspace = ${JSON.stringify(homeWorkspace)}`,
+      '',
+      '[runtime.codex]',
+      'model = "home-codex-model"',
+      'yolo_mode = "off"',
+      '',
+      '[[channels]]',
+      'id = "feishu-default"',
+      'alias = "飞书"',
+      'provider = "feishu"',
+      'enabled = true',
+      '',
+      '[channels.config]',
+      'history_message_limit = 8',
+      '',
+    ].join('\n'), 'utf-8');
+    const channelTomlPath = path.join(SCOPED_CONFIG_DIR, 'channels', 'feishu-default.toml');
+    fs.mkdirSync(path.dirname(channelTomlPath), { recursive: true });
+    fs.writeFileSync(channelTomlPath, [
+      '[session]',
+      `workspace = ${JSON.stringify(channelWorkspace)}`,
+      '',
+      '[runtime]',
+      'agent = "claude"',
+      '',
+      '[runtime.codex]',
+      'model = "channel-codex-model"',
+      'yolo_mode = "on"',
+      '',
+    ].join('\n'), 'utf-8');
+    const store = new JsonFileStore(makeSettings());
+    initBridgeContext({
+      store,
+      llm: noopLlm,
+      permissions: { resolvePendingPermission: () => false },
+      lifecycle: {},
+    });
+
+    const draftBinding = resolve({
+      channelType: 'feishu-default',
+      channelProvider: 'feishu',
+      chatId: 'oc_channel_defaults_draft',
+      userId: 'ou_channel',
+      displayName: 'Channel Defaults',
+    });
+    const draftSession = store.getSession(draftBinding.bridgeSessionId);
+    assert.equal(getSessionActiveRuntime(draftSession), 'claude');
+    assert.equal(getSessionWorkingDirectory(draftSession), channelWorkspace);
+    assert.equal(resolveSessionRuntimeConfig(draftBinding, draftSession).model, 'channel-codex-model');
+    assert.equal(resolveSessionRuntimeConfig(draftBinding, draftSession).mode, 'yolo');
+
+    const explicitWorkspace = path.join(CODELARK_HOME, 'explicit-workspace');
+    fs.mkdirSync(explicitWorkspace, { recursive: true });
+    const visibleBinding = createBinding({
+      channelType: 'feishu-default',
+      channelProvider: 'feishu',
+      chatId: 'oc_channel_defaults_visible',
+      userId: 'ou_visible',
+      displayName: 'Channel Visible',
+    }, explicitWorkspace);
+    const visibleSession = store.getSession(visibleBinding.bridgeSessionId);
+    assert.equal(getSessionActiveRuntime(visibleSession), 'claude');
+    assert.equal(getSessionWorkingDirectory(visibleSession), explicitWorkspace);
+    assert.equal(resolveSessionRuntimeConfig(visibleBinding, visibleSession).model, 'channel-codex-model');
   });
 });
