@@ -351,6 +351,54 @@ describe('service-manager lark-cli runtime environment', () => {
     }
   });
 
+  it('can reuse one startup projection for preflight config and daemon env', () => {
+    const home = process.env.CODELARK_HOME!;
+    const configTomlPath = path.join(home, 'config.toml');
+    const previousToml = fs.existsSync(configTomlPath) ? fs.readFileSync(configTomlPath, 'utf-8') : null;
+
+    try {
+      fs.writeFileSync(configTomlPath, [
+        'schema_version = 2',
+        '',
+        '[runtime.codex]',
+        'model = "first-model"',
+        '',
+        '[[channels]]',
+        'id = "feishu-default"',
+        'alias = "飞书"',
+        'provider = "feishu"',
+        'enabled = true',
+        '',
+      ].join('\n'));
+
+      const projection = _testOnly.loadStartupProjection();
+
+      fs.writeFileSync(configTomlPath, [
+        'schema_version = 2',
+        '',
+        '[runtime.codex]',
+        'model = "second-model"',
+        '',
+        '[[channels]]',
+        'id = "feishu-default"',
+        'alias = "飞书"',
+        'provider = "feishu"',
+        'enabled = true',
+        '',
+      ].join('\n'));
+
+      const daemonEnv = _testOnly.buildDaemonEnv({ startupProjection: projection });
+      const uiEnv = _testOnly.buildUiServerEnv({ startupProjection: projection });
+
+      assert.equal(projection.config.runtime.codex.model, 'first-model');
+      assert.equal(daemonEnv.CODELARK_CODEX_MODEL, 'first-model');
+      assert.equal(uiEnv.CODELARK_CODEX_MODEL, 'first-model');
+    } finally {
+      if (previousToml === null) fs.rmSync(configTomlPath, { force: true });
+      else fs.writeFileSync(configTomlPath, previousToml, 'utf-8');
+    }
+  });
+
   it('builds bridge-local lark-cli environment variables', () => {
     const env = _testOnly.buildLarkCliRuntimeEnv();
 

@@ -23,6 +23,7 @@ import {
   type UiServerStatus,
   installBridgeAutostart,
   uninstallBridgeAutostart,
+  loadStartupProjection,
   openBrowser,
   startBridge,
   stopBridge,
@@ -284,13 +285,15 @@ async function runRunCommand(options: { firstRunSetup: boolean; configOverrides?
   if (options.firstRunSetup) {
     await runFirstRunSetupIfNeeded(options.configOverrides?.patch);
   }
+  const serviceOptions = { cli: options.configOverrides?.patch };
+  const startupProjection = loadStartupProjection(serviceOptions);
   const uiBefore = getUiServerStatus();
   const bridgeBefore = getBridgeStatus();
-  const status = await ensureUiServerRunning({ cli: options.configOverrides?.patch });
+  const status = await ensureUiServerRunning({ ...serviceOptions, startupProjection });
   const url = getUiServerUrl(status.port);
   openBrowser(url);
   try {
-    const bridge = await startBridge({ cli: options.configOverrides?.patch });
+    const bridge = await startBridge({ ...serviceOptions, startupProjection });
     process.stdout.write(formatRunSuccessMessage({
       url,
       ui: status,

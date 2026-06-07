@@ -8,6 +8,7 @@ import { fileURLToPath } from 'node:url';
 import { CODELARK_HOME } from '../configuration/paths.js';
 import { normalizeFeishuSite, type FeishuChannelConfig } from '../configuration/channel-types.js';
 import { createConfigService } from '../configuration/service.js';
+import { exportProcessEnv } from '../configuration/projections.js';
 import type { ConfigPatch, ConfigV2 } from '../configuration/schema.js';
 import {
   clearStaleBridgeInstanceLock,
@@ -597,8 +598,14 @@ export function getUiServerStatus(): UiServerStatus {
   };
 }
 
-interface ServiceConfigOverrideOptions {
+export interface StartupConfigProjection {
+  config: ConfigV2;
+  env: NodeJS.ProcessEnv;
+}
+
+export interface ServiceConfigOverrideOptions {
   cli?: ConfigPatch;
+  startupProjection?: StartupConfigProjection;
 }
 
 function hasConfigPatchValues(patch: ConfigPatch | undefined): boolean {
@@ -622,21 +629,33 @@ interface LocalServiceConfig {
   channels?: LocalServiceChannel[];
 }
 
-function loadStartupConfig(options: ServiceConfigOverrideOptions = {}): ConfigV2 {
-  return createConfigService({
+export function loadStartupProjection(options: ServiceConfigOverrideOptions = {}): StartupConfigProjection {
+  const config = createConfigService({
     codelarkHome: CODELARK_HOME,
     ...(hasConfigPatchValues(options.cli) ? { cli: options.cli } : {}),
   }).snapshot().config;
+  return {
+    config,
+    env: exportProcessEnv(config),
+  };
+}
+
+function startupProjectionFor(options: ServiceConfigOverrideOptions = {}): StartupConfigProjection {
+  return options.startupProjection || loadStartupProjection(options);
+}
+
+function loadStartupConfig(options: ServiceConfigOverrideOptions = {}): ConfigV2 {
+  return startupProjectionFor(options).config;
 }
 
 function buildProjectedConfigEnv(options: ServiceConfigOverrideOptions = {}): NodeJS.ProcessEnv {
-  return createConfigService({
-    codelarkHome: CODELARK_HOME,
-    ...(hasConfigPatchValues(options.cli) ? { cli: options.cli } : {}),
-  }).exportProcessEnv();
+  return startupProjectionFor(options).env;
 }
 
-function buildDaemonEnv(options: ServiceConfigOverrideOptions = {}): NodeJS.ProcessEnv {
+function buildDaemonEnv(
+  options: ServiceConfigOverrideOptions = {},
+  projectedConfigEnv = buildProjectedConfigEnv(options),
+): NodeJS.ProcessEnv {
   const env = { ...process.env } as NodeJS.ProcessEnv;
   const legacyEnvPrefix = ['C', 'T', 'I'].join('');
   for (const key of Object.keys(env)) {
@@ -644,15 +663,18 @@ function buildDaemonEnv(options: ServiceConfigOverrideOptions = {}): NodeJS.Proc
   }
   env.CODELARK_HOME = CODELARK_HOME;
   Object.assign(env, buildLarkCliRuntimeEnv());
-  Object.assign(env, buildProjectedConfigEnv(options));
+  Object.assign(env, projectedConfigEnv);
   delete env.CLAUDECODE;
   return env;
 }
 
-function buildUiServerEnv(options: ServiceConfigOverrideOptions = {}): NodeJS.ProcessEnv {
+function buildUiServerEnv(
+  options: ServiceConfigOverrideOptions = {},
+  projectedConfigEnv = buildProjectedConfigEnv(options),
+): NodeJS.ProcessEnv {
   return {
     ...process.env,
-    ...buildProjectedConfigEnv(options),
+    ...projectedConfigEnv,
     CODELARK_HOME,
   };
 }
@@ -970,7 +992,8 @@ export async function startBridge(options: ServiceConfigOverrideOptions = {}): P
     await stopBridge();
   }
 
-  const config = loadStartupConfig(options);
+  const startup = startupProjectionFor(options);
+  const config = startup.config;
   const preflightFailure = describeBridgeStartupPreflightFailure(config.channels);
   if (preflightFailure) {
     throw new Error(preflightFailure);
@@ -1017,7 +1040,7 @@ export async function startBridge(options: ServiceConfigOverrideOptions = {}): P
     const child = spawn(process.execPath, [daemonEntry], {
       cwd: packageRoot,
       detached: true,
-      env: buildDaemonEnv(options),
+      env: buildDaemonEnv(options, startup.env),
       stdio: ['ignore', stdoutFd, stderrFd],
       ...WINDOWS_HIDE,
     });
@@ -1095,6 +1118,7 @@ export const _testOnly = {
   clearStaleBridgeInstanceLock,
   buildDaemonEnv,
   buildUiServerEnv,
+  loadStartupProjection,
   loadStartupConfig,
   buildLarkCliRuntimeEnv,
   writeLarkCliSourceProjection,
