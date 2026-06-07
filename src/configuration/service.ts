@@ -179,6 +179,9 @@ export function createConfigService(options: ConfigServiceOptions = {}): ConfigS
   function buildLayers(scope?: ConfigScope, request?: ConfigPatch): { layers: ConfigLayer[]; warnings: EnvCompatWarning[] } {
     const paths = pathsFor(scope);
     const baseline = loadStaticConfigBaseline(paths, env, cli);
+    if (baseline.homeWriteback) {
+      writeTomlConfig(baseline.homeWriteback.file, baseline.homeWriteback.patch);
+    }
     const layers: ConfigLayer[] = [baseline.layer];
 
     if (scope?.kind === 'channel' || scope?.kind === 'session') {

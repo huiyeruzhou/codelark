@@ -19,8 +19,8 @@ CodeLark 需要把“默认值、全局配置、项目配置、环境变量、�
 
 当前默认配置目录来自 `CODELARK_HOME`，未设置时为 `~/.codelark`。配置逻辑主要分散在：
 
-- `src/configuration/static-loader.ts`：用 `node-config` 合并 defaults/home/local/env/cli 静态 baseline。
-- `src/configuration/sources.ts`：复用 `node-config` TOML parser 读取 defaults/home/local/channel/session TOML，并提供持久化写入。
+- `src/configuration/static-loader.ts`：用 `node-config` 解析并合并 defaults/home/local/env/cli 静态 baseline；只返回需要 materialize 的 home patch，不直接写文件。
+- `src/configuration/sources.ts`：复用 `node-config` TOML parser 读取 defaults/home/local/channel/session TOML，并提供 `ConfigService` 写入所需的持久化 I/O。
 - `src/configuration/service.ts`：`ConfigService` 查询、写入、dynamic overlay、provenance/explain 和 projection 入口。
 - `src/configuration/legacy.ts` / `legacy-types.ts`：仅保留 legacy expanded `Config` adapter 和 migration/compatibility 测试；生产代码不应从这里读取配置。
 - `src/operator-ui/application/config.ts` / `channel.ts`：把 UI payload 转成 v2 `ConfigPatch`，通过 `ConfigService` 写回 home TOML。
@@ -437,9 +437,9 @@ fallback = runtime.codex.reasoningEffort from cli/env/local/home/defaults
 2026-06-07 重新评估 `node-config`、`wild-config`、`auto-config-loader` 后，结论不是“完全不用通用配置库”，而是做分层采用：
 
 - 静态全局配置层采用 `node-config`：`defaults + home + local/project + env + CLI baseline` 交给成熟库做加载和基础 merge。实现上使用 `config/lib/util` 的 `Load`，按 CodeLark 已解析出的 `CODELARK_HOME` 和 `cwd` 动态路径装载/合并 TOML shape，避免依赖全局 singleton 或污染 `process.env`。
-- Channel/Session/request 动态 overlay 也复用同一个 `Load.addConfig()` 合并入口：`ConfigService` 负责选择哪些 scoped TOML/request patch 参与本次 snapshot，并保留字段级 provenance/explain。
+- Channel/Session/request 动态 overlay 也复用同一个 `Load.addConfig()` 合并入口：`ConfigService` 负责选择哪些 scoped TOML/request patch 参与本次 snapshot、执行 home materialize 写回，并保留字段级 provenance/explain。
 - CodeLark 产品语义仍保留在 `ConfigService`：source 选择、scope 写入约束、迁移、secret mask、`channels` home-only 校验与 materialized 写入、runtime env/settings projection。
-- 也就是说，`node-config` 替代的是通用的 TOML shape 解析和覆盖合并；`ConfigService` 保留的是 CodeLark 的产品边界、动态 source 选择和写回语义。
+- 也就是说，`node-config` 替代的是通用的 TOML shape 解析和覆盖合并；`ConfigService` 保留的是 CodeLark 的产品边界、动态 source 选择、写回和 explain/projection 语义。
 
 | 库 | 能覆盖的部分 | 不能满足的核心需求 |
 | --- | --- | --- |

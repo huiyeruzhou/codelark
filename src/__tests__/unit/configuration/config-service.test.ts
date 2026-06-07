@@ -5,6 +5,8 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { createConfigService } from '../../../configuration/service.js';
+import { resolveConfigPaths } from '../../../configuration/sources.js';
+import { loadStaticConfigBaseline } from '../../../configuration/static-loader.js';
 
 function tempHome(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'codelark-config-v2-'));
@@ -362,6 +364,32 @@ app_id = "home-app"
       assert.match(savedToml, /history_message_limit = 8/);
       assert.match(savedToml, /app_id = "home-app"/);
       assert.match(savedToml, /streaming_enabled = true/);
+    } finally {
+      fs.rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it('keeps static node-config loading side-effect free and lets the service write back materialized home channels', () => {
+    const home = tempHome();
+    const configTomlPath = path.join(home, 'config.toml');
+    try {
+      writeFile(configTomlPath, `
+[[channels]]
+id = "feishu-home"
+provider = "feishu"
+
+[channels.config]
+app_id = "home-app"
+`);
+
+      const baseline = loadStaticConfigBaseline(resolveConfigPaths({ codelarkHome: home }), {}, undefined);
+      assert.equal(baseline.layer.patch.channels?.[0]?.config?.historyMessageLimit, 8);
+      assert.equal(baseline.homeWriteback?.file, configTomlPath);
+      assert.doesNotMatch(fs.readFileSync(configTomlPath, 'utf-8'), /history_message_limit = 8/);
+
+      const service = createConfigService({ codelarkHome: home, env: {}, migrate: false });
+      assert.equal(service.get('channels[].config.historyMessageLimit'), 8);
+      assert.match(fs.readFileSync(configTomlPath, 'utf-8'), /history_message_limit = 8/);
     } finally {
       fs.rmSync(home, { recursive: true, force: true });
     }

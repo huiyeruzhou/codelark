@@ -2,11 +2,15 @@ import { envToConfigPatch } from './env-compat.js';
 import type { ConfigSourceKind, ProvenanceMap, SourceRef } from './fields-types.js';
 import { markLayerProvenance, mergePatch, mergePatchesWithNodeConfig, type ConfigLayer } from './merge.js';
 import type { ConfigPatch } from './schema.js';
-import { readTomlConfig, writeTomlConfig, type ConfigPaths, type SourceLoadResult } from './sources.js';
+import { readTomlConfig, type ConfigPaths, type SourceLoadResult } from './sources.js';
 
 export interface StaticConfigBaseline {
   layer: ConfigLayer;
   envPatch: ReturnType<typeof envToConfigPatch>;
+  homeWriteback?: {
+    file: string;
+    patch: ConfigPatch;
+  };
 }
 
 function clone<T>(value: T): T {
@@ -86,9 +90,12 @@ export function loadStaticConfigBaseline(paths: ConfigPaths, env: NodeJS.Process
   ];
 
   const home = readTomlConfig(paths.homeToml);
+  let homeWriteback: StaticConfigBaseline['homeWriteback'];
   if (home) {
     const materialized = materializeHomeChannelPatch(defaults, {}, home.patch);
-    if (!patchesEqual(home.patch, materialized)) writeTomlConfig(home.file, materialized);
+    if (!patchesEqual(home.patch, materialized)) {
+      homeWriteback = { file: home.file, patch: materialized };
+    }
     sources.push(staticLayer({ source: 'home', file: home.file }, materialized));
   }
 
@@ -108,5 +115,6 @@ export function loadStaticConfigBaseline(paths: ConfigPaths, env: NodeJS.Process
       provenance: staticProvenance(sources),
     },
     envPatch,
+    ...(homeWriteback ? { homeWriteback } : {}),
   };
 }
