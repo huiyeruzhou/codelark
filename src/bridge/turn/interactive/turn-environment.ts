@@ -8,7 +8,7 @@ import {
   buildRuntimeStreamTags,
   buildStreamContextTags,
 } from '../../../shared/streaming-metadata.js';
-import { getGlobalConfigValue } from '../../session/global-config.js';
+import { getGlobalConfigValue } from '../../../configuration/global-values.js';
 import { classifyInteractiveTurn } from '../turn-classifier.js';
 import type { BridgeTurnClassification } from '../turn-types.js';
 

@@ -44,7 +44,7 @@ import { validateWorkingDirectory } from '../../shared/security/validators.js';
 import {
   getGlobalStringConfig,
   getGlobalWorkspaceRoot,
-} from './global-config.js';
+} from '../../configuration/global-values.js';
 
 const AVAILABLE_CODEX_MODELS = listSelectableCodexModels();
 const AVAILABLE_CODEX_MODEL_MAP = new Map(AVAILABLE_CODEX_MODELS.map((model) => [model.slug, model]));

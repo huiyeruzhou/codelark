@@ -1,28 +1,22 @@
-import { DEFAULT_WORKSPACE_ROOT, expandHomePath } from '../../configuration/paths.js';
-import type { ConfigPath } from '../../configuration/fields-types.js';
-import { createConfigService } from '../../configuration/service.js';
+import type { ConfigPath } from './fields-types.js';
+import { DEFAULT_WORKSPACE_ROOT, expandHomePath } from './paths.js';
+import { createConfigService } from './service.js';
 
-export function getGlobalConfigValue<T>(
-  path: ConfigPath,
-): T | undefined {
+export function getGlobalConfigValue<T>(path: ConfigPath): T | undefined {
   try {
     const resolved = createConfigService({ migrate: false }).resolve(path);
     return resolved.value as T;
   } catch (error) {
-    console.error(`[bridge-manager] Failed to resolve global TOML config ${path}:`, error);
+    console.error(`[config] Failed to resolve global TOML config ${path}:`, error);
     return undefined;
   }
 }
 
-export function getGlobalStringConfig(
-  path: ConfigPath,
-): string | undefined {
+export function getGlobalStringConfig(path: ConfigPath): string | undefined {
   return getGlobalConfigValue<string>(path) || undefined;
 }
 
-export function getGlobalBooleanConfig(
-  path: ConfigPath,
-): boolean | undefined {
+export function getGlobalBooleanConfig(path: ConfigPath): boolean | undefined {
   return getGlobalConfigValue<boolean>(path);
 }
 

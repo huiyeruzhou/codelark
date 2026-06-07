@@ -24,6 +24,8 @@ CodeLark 需要把“默认值、全局配置、项目配置、环境变量、�
 - `src/configuration/service.ts`：`ConfigService` 查询、写入、dynamic overlay、provenance/explain 和 projection 入口。
 - `src/configuration/source-values.ts`：封装“只读取某个 source 的显式 override”、读取 effective path source 和比较 source 优先级这类 provenance 判断，业务代码不能各自手写 fallback/source 检查。
 - `src/configuration/channel-instances.ts`：封装 configured channel list、provider/id fallback 和 channel metadata lookup，业务代码不直接读 `snapshot().config.channels`。
+- `src/configuration/channel-session-defaults.ts`：封装 IM Channel 新建会话默认 runtime/model/mode/workspace 解析，bridge router 不直接拼 scoped config。
+- `src/configuration/global-values.ts`：封装 Global effective config 的轻量读取和默认 workspace/runtime/codex model helper，bridge 业务模块不直接构造全局 `ConfigService`。
 - `src/configuration/session-values.ts`：封装 Session TOML 显式 override 的读取、规范化和旧 UI/domain getter 过渡，业务代码不直接调用低层 source override helper。
 - `src/configuration/session-writes.ts`：封装 Session TOML 写回 helper，业务命令和 UI 保存只提交 patch/path，不直接构造 session-scope `ConfigService.set/unset`。
 - 配置解析库边界：生产代码只有 `src/configuration` 可以直接导入 `node-config` 或 `smol-toml`；业务模块必须通过 `ConfigService`、projection 或迁移 adapter 使用配置。
@@ -138,7 +140,9 @@ src/configuration/
   fields.ts                  # latest configFields；只服务当前运行时
   fields-types.ts            # ConfigFields / ConfigField 类型定义
   channel-instances.ts       # configured channels 动态读取、provider/id fallback 和 metadata lookup
+  channel-session-defaults.ts # IM Channel 新会话默认 runtime/model/mode/workspace 解析
   channel-types.ts           # Channel/Feishu 运行时配置类型和站点解析工具
+  global-values.ts           # Global effective config 轻量读取和默认 workspace/runtime helper
   runtime-types.ts           # Codex/Claude runtime 配置类型和轻量 normalizer
   paths.ts                   # CODELARK_HOME、默认工作区和 home path 展开工具；不暴露 legacy 输入文件名
   static-loader.ts           # node-config 静态 baseline：defaults/home/local/env/cli

@@ -60,7 +60,7 @@ import {
   CommandThreadDisplay,
   type ThreadCardScope,
 } from './thread-display.js';
-import { getGlobalCodexModel } from '../session/global-config.js';
+import { getGlobalCodexModel } from '../../configuration/global-values.js';
 import {
   buildNewSessionFormCard,
 } from './presentation.js';

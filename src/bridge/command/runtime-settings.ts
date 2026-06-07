@@ -36,7 +36,7 @@ import {
   getSessionClaudeModel,
   getSessionWorkingDirectory,
 } from '../../domain/session-runtime.js';
-import { getGlobalCodexModel } from '../session/global-config.js';
+import { getGlobalCodexModel } from '../../configuration/global-values.js';
 import type { ChannelChat, InboundMessage } from '../../domain/index.js';
 import {
   buildRuntimeSwitchWhileRunningResponse,

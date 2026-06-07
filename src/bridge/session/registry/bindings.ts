@@ -27,7 +27,7 @@ import {
   getSessionWorkingDirectory,
   setSessionCodexTitleUpdate,
 } from '../../../domain/session-runtime.js';
-import { getGlobalStringConfig } from '../global-config.js';
+import { getGlobalStringConfig } from '../../../configuration/global-values.js';
 import {
   hasSessionCodexProviderOverride,
   resolveDisplayedModel,

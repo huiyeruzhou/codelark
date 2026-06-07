@@ -118,7 +118,7 @@ import {
 import { setSessionConfigPatch } from '../../configuration/session-writes.js';
 import {
   getGlobalConfigValue,
-} from '../session/global-config.js';
+} from '../../configuration/global-values.js';
 import {
   getSessionRuntimeTmuxSessionName,
   getSessionCodexThreadId,
