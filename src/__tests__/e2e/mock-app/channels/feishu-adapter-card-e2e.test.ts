@@ -139,18 +139,6 @@ describe('feishu adapter card e2e', () => {
           bridge_default_model: 'gpt-5',
           bridge_default_provider: 'sdk',
           bridge_default_mode: 'yolo',
-          bridge_channel_instances_json: JSON.stringify([{
-            id: 'feishu',
-            provider: 'feishu',
-            alias: '飞书',
-            enabled: true,
-            config: {
-              appId: 'app-id',
-              appSecret: 'app-secret',
-              streamingEnabled: false,
-              feedbackMarkdownEnabled: true,
-            },
-          }]),
         }),
         llm: new CodexProvider(new PendingPermissions()),
       });
@@ -175,20 +163,7 @@ describe('feishu adapter card e2e', () => {
     _testOnly.resetStateForTests();
     const calls: RecordedFeishuMessageCall[] = [];
     const store = initBridgeTestContext({
-      settings: makeBridgeSettings({
-        bridge_channel_instances_json: JSON.stringify([{
-          id: 'feishu',
-          provider: 'feishu',
-          alias: '飞书',
-          enabled: true,
-          config: {
-            appId: 'app-id',
-            appSecret: 'app-secret',
-            streamingEnabled: false,
-            feedbackMarkdownEnabled: true,
-          },
-        }]),
-      }),
+      settings: makeBridgeSettings(),
     });
     const adapter = createRecordingFeishuAdapter(calls);
     registerAdapter(adapter);

@@ -15,9 +15,6 @@ export function makeBridgeSettings(overrides: Record<string, string> = {}): Map<
     ['remote_bridge_enabled', 'true'],
     ['bridge_default_model', 'test-model'],
     ['bridge_default_mode', 'code'],
-    ['bridge_channel_instances_json', JSON.stringify([
-      { id: 'feishu', provider: 'feishu', enabled: true, alias: '飞书', config: {} },
-    ])],
     ...Object.entries(overrides),
   ]);
 }

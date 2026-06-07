@@ -16,16 +16,28 @@ function listSourceFiles(dir: string): string[] {
   });
 }
 
+function filesImportingLegacyFacade(root: string, options: { skipTests?: boolean; allowed?: Set<string> } = {}): string[] {
+  const allowed = options.allowed || new Set<string>();
+  return listSourceFiles(root)
+    .filter((file) => {
+      if (options.skipTests && path.relative(root, file).split(path.sep).includes('__tests__')) return false;
+      return true;
+    })
+    .filter((file) => !allowed.has(path.relative(process.cwd(), file)))
+    .filter((file) => {
+      const source = fs.readFileSync(file, 'utf-8');
+      return /from\s+['"][^'"]*configuration\/index\.js['"]/.test(source);
+    })
+    .map((file) => path.relative(process.cwd(), file));
+}
+
 describe('configuration module boundaries', () => {
   it('keeps the legacy config facade out of production imports', () => {
     const sourceRoot = path.join(process.cwd(), 'src');
-    const offenders = listSourceFiles(sourceRoot)
-      .filter((file) => path.relative(sourceRoot, file) !== path.join('configuration', 'index.ts'))
-      .filter((file) => {
-        const source = fs.readFileSync(file, 'utf-8');
-        return /from\s+['"][^'"]*configuration\/index\.js['"]/.test(source);
-      })
-      .map((file) => path.relative(process.cwd(), file));
+    const offenders = filesImportingLegacyFacade(sourceRoot, {
+      skipTests: true,
+      allowed: new Set([path.join('src', 'configuration', 'index.ts')]),
+    });
 
     assert.deepEqual(offenders, []);
   });
@@ -35,15 +47,14 @@ describe('configuration module boundaries', () => {
     const allowed = new Set([
       path.join('src', '__tests__', 'unit', 'configuration', 'config.test.ts'),
     ]);
-    const offenders = listSourceFiles(sourceRoot)
-      .filter((file) => path.relative(sourceRoot, file).startsWith(`__tests__${path.sep}`))
-      .filter((file) => !allowed.has(path.relative(process.cwd(), file)))
-      .filter((file) => {
-        const source = fs.readFileSync(file, 'utf-8');
-        return /from\s+['"][^'"]*configuration\/index\.js['"]/.test(source);
-      })
-      .map((file) => path.relative(process.cwd(), file));
+    const offenders = filesImportingLegacyFacade(path.join(sourceRoot, '__tests__'), { allowed });
 
+    assert.deepEqual(offenders, []);
+  });
+
+  it('keeps scripts from importing the legacy config facade', () => {
+    const scriptsRoot = path.join(process.cwd(), 'scripts');
+    const offenders = filesImportingLegacyFacade(scriptsRoot);
     assert.deepEqual(offenders, []);
   });
 

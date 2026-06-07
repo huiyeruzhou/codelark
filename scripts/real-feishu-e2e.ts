@@ -9,7 +9,9 @@ import path from 'node:path';
 import { promisify } from 'node:util';
 import { WebSocketServer } from 'ws';
 
-import { DEFAULT_WORKSPACE_ROOT, feishuSiteToApiBaseUrl, type ClaudeExecutable, type FeishuSite } from '../src/configuration/index.js';
+import { feishuSiteToApiBaseUrl, type FeishuSite } from '../src/configuration/channel-types.js';
+import { DEFAULT_WORKSPACE_ROOT } from '../src/configuration/paths.js';
+import type { ClaudeExecutable } from '../src/configuration/runtime-types.js';
 import {
   basicDialogueStreamCardCheckpointIssues,
   collectRealE2eDump,

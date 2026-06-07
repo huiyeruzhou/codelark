@@ -259,10 +259,6 @@ function makeSettings(): Map<string, string> {
     ['remote_bridge_enabled', 'true'],
     ['bridge_default_model', 'test-model'],
     ['bridge_default_mode', 'code'],
-    ['bridge_channel_instances_json', JSON.stringify([
-      { id: 'feishu', provider: 'feishu', enabled: true, alias: '飞书', config: {} },
-      { id: 'feishu-default', provider: 'feishu', enabled: true, alias: '飞书', config: {} },
-    ])],
   ]);
 }
 
