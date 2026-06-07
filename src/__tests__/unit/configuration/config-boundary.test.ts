@@ -31,6 +31,28 @@ function filesImportingLegacyFacade(root: string, options: { skipTests?: boolean
     .map((file) => path.relative(process.cwd(), file));
 }
 
+function legacyBridgeSettingReads(root: string): string[] {
+  const allowed = new Set([
+    'bridge_auto_start',
+    'bridge_default_provider_id',
+    'bridge_feishu_group_allow_from',
+    'bridge_feishu_group_policy',
+  ]);
+  const settingPattern = /getSetting\(\s*['"](bridge_[^'"]+)['"]\s*\)/g;
+  return listSourceFiles(root)
+    .filter((file) => !path.relative(root, file).split(path.sep).includes('__tests__'))
+    .flatMap((file) => {
+      const relative = path.relative(process.cwd(), file);
+      const source = fs.readFileSync(file, 'utf-8');
+      const offenders: string[] = [];
+      for (const match of source.matchAll(settingPattern)) {
+        const setting = match[1]!;
+        if (!allowed.has(setting)) offenders.push(`${relative}: ${setting}`);
+      }
+      return offenders;
+    });
+}
+
 describe('configuration module boundaries', () => {
   it('keeps the legacy config facade out of production imports', () => {
     const sourceRoot = path.join(process.cwd(), 'src');
@@ -66,5 +88,10 @@ describe('configuration module boundaries', () => {
     assert.doesNotMatch(pathsSource, /config\.json/);
     assert.doesNotMatch(pathsSource, /CONFIG_PATH/);
     assert.doesNotMatch(pathsSource, /CONFIG_JSON_PATH/);
+  });
+
+  it('keeps production legacy bridge setting reads limited to explicit migration-decision holdouts', () => {
+    const offenders = legacyBridgeSettingReads(path.join(process.cwd(), 'src'));
+    assert.deepEqual(offenders, []);
   });
 });

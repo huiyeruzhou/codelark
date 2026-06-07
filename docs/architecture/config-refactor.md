@@ -91,7 +91,7 @@ CodeLark 需要把“默认值、全局配置、项目配置、环境变量、�
 ### 当前主要问题
 
 1. 旧 `config.json` / `config.env` 已降级为迁移输入，但迁移 E2E 和 compatibility adapter 仍需保留，防止破坏旧用户配置升级路径。
-2. `bridge_default_provider_id`、`bridge_feishu_group_policy`、`bridge_feishu_group_allow_from` 尚无 v2 字段，属于需要产品确认的新语义，不能擅自迁移。
+2. `bridge_default_provider_id`、`bridge_feishu_group_policy`、`bridge_feishu_group_allow_from`、`bridge_auto_start` 尚无 v2 字段或明确归属，属于需要产品确认的新语义，不能擅自迁移；边界测试只允许这些 legacy settings 继续作为待决 holdout。
 3. 部分调用方仍通过短生命周期 `createConfigService({ migrate: false })` 读取动态配置；这保持了动态 reload，但后续可以考虑在应用层注入同一个 service 实例，减少重复构造。
 4. `JsonFileStore` 仍保留 legacy runtime settings projection 给旧内部接口和子进程 env 使用；这些 settings 现在是 projection 输出，不应再作为配置输入。
 
@@ -133,7 +133,7 @@ src/configuration/
   fields-types.ts            # ConfigFields / ConfigField 类型定义
   channel-types.ts           # Channel/Feishu 运行时配置类型和站点解析工具
   runtime-types.ts           # Codex/Claude runtime 配置类型和轻量 normalizer
-  paths.ts                   # CODELARK_HOME、legacy 输入路径常量和 home path 展开工具
+  paths.ts                   # CODELARK_HOME、默认工作区和 home path 展开工具；不暴露 legacy 输入文件名
   static-loader.ts           # node-config 静态 baseline：defaults/home/local/env/cli
   sources.ts                 # 路径解析、Channel/Session TOML 读写和持久化写入
   merge.ts                   # node-config effective merge + provenance/write patch helpers
@@ -149,6 +149,7 @@ src/configuration/
     v2.ts                    # v2 -> v3：未来新增
     legacy/
       env-file.ts            # config.env parser，仅供 v1 migration 使用
+      paths.ts               # config.env/config.json legacy 输入路径，仅供 migration/tests 使用
       session-json.ts        # BridgeSession JSON parser，仅供 v1 migration 使用
 ```
 
