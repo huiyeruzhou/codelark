@@ -1396,7 +1396,7 @@ describe('command-dispatch', () => {
     assert.equal(claudePreviewCard?.form?.selects?.some((select) => select.elementId === 'clk_network'), false);
     assert.deepEqual(
       claudePreviewCard?.form?.selects?.find((select) => select.elementId === 'clk_provider')?.options.map((option) => option.text),
-      ['pty', 'sdk'],
+      ['tmux', 'pty', 'sdk'],
     );
     assert.deepEqual(
       parseCommandCallbackData(claudePreviewCard?.form?.submitCallbackData || '')?.commandText,
@@ -3475,12 +3475,54 @@ enabled = true
     assert.match(sent.at(-1)?.text || '', /GlobalRuntime \/ Claude/);
     assert.match(sent.at(-1)?.text || '', /Bridge 控制/);
     assert.match(sent.at(-1)?.text || '', /GlobalBridge/);
+    assert.match(sent.at(-1)?.text || '', /Runtime \(runtime\)/);
     assert.match(sent.at(-1)?.text || '', /defaultWorkspaceRoot/);
     assert.match(sent.at(-1)?.text || '', /defaultProvider/);
     assert.match(sent.at(-1)?.text || '', /codexNetworkAccess/);
     assert.doesNotMatch(sent.at(-1)?.text || '', /channels/);
+    assert.equal(sent.at(-1)?.richCard?.title, '全局配置');
+    assert.equal(sent.at(-1)?.richCard?.form?.submitCallbackData, buildCommandCallbackData('/set'));
+    assert.equal(sent.at(-1)?.richCard?.form?.layout, 'two_column');
+    assert.ok(sent.at(-1)?.richCard?.sections?.some((section: any) => section.title === 'GlobalRuntime / Codex'));
+    assert.ok(sent.at(-1)?.richCard?.sections?.some((section: any) => section.title === 'GlobalBridge'));
+    assert.deepEqual(
+      sent.at(-1)?.richCard?.form?.selects?.map((select: any) => select.elementId).slice(0, 4),
+      ['runtime', 'defaultMode', 'defaultProvider', 'codexSandboxMode'],
+    );
     assert.equal(store.getChannelChat(address.channelType, address.chatId), null);
     assert.equal(store.listSessions().length, 0);
+
+    await handleBridgeCommand(
+      adapter,
+      {
+        address,
+        text: '/set',
+        messageId: 'incoming-set-form',
+        callbackMessageId: 'reply-1',
+        raw: {
+          event: {
+            action: {
+              form_value: {
+                runtime: 'claude',
+                defaultProvider: 'tmux',
+                codexNetworkAccess: 'off',
+                historyMessageLimit: '11',
+              },
+            },
+          },
+        },
+      } as any,
+      '/set',
+      deps,
+    );
+    assert.match(sent.at(-1)?.text || '', /已保存全局配置/);
+    assert.equal(sent.at(-1)?.richCardUpdateMessageId, 'reply-1');
+    assert.equal(sent.at(-1)?.richCard?.title, '全局配置');
+    assert.equal(createConfigService({ migrate: false, env: {} }).resolve('runtime.agent').source, 'home');
+    assert.equal(createConfigService({ migrate: false, env: {} }).get('runtime.agent'), 'claude');
+    assert.equal(createConfigService({ migrate: false, env: {} }).get('runtime.codex.provider'), 'tmux');
+    assert.equal(createConfigService({ migrate: false, env: {} }).get('runtime.codex.networkAccess'), false);
+    assert.equal(createConfigService({ migrate: false, env: {} }).snapshot().config.channels[0]?.config.historyMessageLimit, 11);
 
     await handleBridgeCommand(
       adapter,
@@ -3501,6 +3543,20 @@ enabled = true
     assert.equal(fs.existsSync(CONFIG_JSON_PATH), false);
     assert.equal(createConfigService({ migrate: false, env: {} }).resolve('bridge.defaultWorkspace').source, 'home');
     assert.equal(createConfigService({ migrate: false, env: {} }).get('bridge.defaultWorkspace'), workspaceRoot);
+
+    await handleBridgeCommand(
+      adapter,
+      {
+        address,
+        text: '/set runtime claude',
+        messageId: 'incoming-set-runtime',
+      } as any,
+      '/set runtime claude',
+      deps,
+    );
+    assert.match(sent.at(-1)?.text || '', /Runtime.*claude/s);
+    assert.equal(createConfigService({ migrate: false, env: {} }).resolve('runtime.agent').source, 'home');
+    assert.equal(createConfigService({ migrate: false, env: {} }).get('runtime.agent'), 'claude');
 
     await handleBridgeCommand(
       adapter,
@@ -3565,7 +3621,7 @@ enabled = true
       deps,
     );
     assert.match(sent.at(-1)?.text || '', /默认 Codex Provider.*auto/s);
-    assert.equal(createConfigService({ migrate: false, env: {} }).resolve('runtime.codex.provider').source, 'defaults');
+    assert.equal(createConfigService({ migrate: false, env: {} }).resolve('runtime.codex.provider').source, 'home');
     assert.equal(createConfigService({ migrate: false, env: {} }).get('runtime.codex.provider'), '');
 
     await handleBridgeCommand(

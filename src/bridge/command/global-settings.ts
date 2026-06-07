@@ -1,26 +1,28 @@
-import crypto from 'node:crypto';
-import os from 'node:os';
-
 import { parseSandboxMode } from '../../runtime/options.js';
 import { createConfigService } from '../../configuration/service.js';
-import type { ConfigPatch, ConfigV2 } from '../../configuration/schema.js';
-import type { ConfigPath } from '../../configuration/fields.js';
+import type { ConfigV2 } from '../../configuration/schema.js';
+import {
+  configV2ToPayload,
+  mergeConfigV2HomePatch,
+} from '../../operator-ui/application/config.js';
 import { normalizeReasoningEffort } from './aliases.js';
+import { buildCommandCallbackData } from './callbacks.js';
 import {
   buildCommandFields,
   formatReasoningEffort,
   minimalReasoningWebSearchWarning,
 } from './presentation.js';
+import type { OutboundRichCard } from '../../domain/index.js';
 
 interface ConfigPayload {
-  runtime: 'codex' | 'claude';
+  runtime: string;
   defaultWorkspaceRoot: string;
   defaultModel: string;
   defaultProvider: string;
-  defaultMode: 'normal' | 'yolo';
-  historyMessageLimit: number;
-  streamStatusIdleStartSeconds: number;
-  streamStatusCheckIntervalSeconds: number;
+  defaultMode: string;
+  historyMessageLimit?: number;
+  streamStatusIdleStartSeconds?: number;
+  streamStatusCheckIntervalSeconds?: number;
   codexSkipGitRepoCheck: boolean;
   codexSandboxMode: string;
   codexNetworkAccess: boolean;
@@ -49,12 +51,8 @@ interface SettingDefinition {
   label: string;
   usage: string;
   read(payload: ConfigPayload): string;
-  write(rawValue: string, current: ConfigV2): { ok: true; ops: ConfigWriteOperation[] } | { ok: false; message: string };
+  write(rawValue: string, current: ConfigV2): { ok: true; payload: Record<string, unknown> } | { ok: false; message: string };
 }
-
-type ConfigWriteOperation =
-  | { kind: 'set'; patch: ConfigPatch }
-  | { kind: 'unset'; path: ConfigPath };
 
 const SETTING_GROUPS: SettingGroupDefinition[] = [
   {
@@ -102,97 +100,61 @@ function formatBool(value: boolean): string {
   return value ? 'on' : 'off';
 }
 
-function generateAccessToken(): string {
-  return crypto.randomBytes(18).toString('base64url');
-}
-
-function defaultChannelId(config: ConfigV2): string {
-  return config.channels.find((channel) => channel.id === 'feishu-default')?.id
-    || config.channels[0]?.id
-    || 'feishu-default';
-}
-
-function defaultChannelConfig(config: ConfigV2): ConfigV2['channels'][number]['config'] {
-  const channel = config.channels.find((entry) => entry.id === defaultChannelId(config)) || config.channels[0];
-  if (!channel) throw new Error('Effective config must include at least one channel from defaults.toml.');
-  return channel.config;
-}
-
-function channelConfigPatch(config: ConfigV2, patch: NonNullable<NonNullable<ConfigPatch['channels']>[number]['config']>): ConfigPatch {
-  return {
-    channels: [{
-      id: defaultChannelId(config),
-      provider: 'feishu',
-      config: patch,
-    }],
-  };
-}
-
 function configToPayload(config: ConfigV2): ConfigPayload {
-  const channel = defaultChannelConfig(config);
-  return {
-    runtime: config.runtime.agent,
-    defaultWorkspaceRoot: config.bridge.defaultWorkspace === '~' ? os.homedir() : config.bridge.defaultWorkspace,
-    defaultModel: config.runtime.codex.model || '',
-    defaultProvider: config.runtime.codex.provider || '',
-    defaultMode: config.runtime.codex.yoloMode === 'on' || config.runtime.codex.yoloMode === 'yolo' ? 'yolo' : 'normal',
-    historyMessageLimit: channel.historyMessageLimit,
-    streamStatusIdleStartSeconds: channel.streamStatusIdleStartSeconds,
-    streamStatusCheckIntervalSeconds: channel.streamStatusCheckIntervalSeconds,
-    codexSkipGitRepoCheck: config.runtime.codex.skipGitRepoCheck,
-    codexSandboxMode: config.runtime.codex.sandboxMode,
-    codexNetworkAccess: config.runtime.codex.networkAccess,
-    codexReasoningEffort: config.runtime.codex.reasoningEffort,
-    claudeProvider: config.runtime.claude.provider,
-    claudeExecutable: config.runtime.claude.executable,
-    claudeDefaultModel: config.runtime.claude.model || '',
-    claudePermissionMode: config.runtime.claude.permissionMode,
-    claudeIdleTimeoutMinutes: config.runtime.claude.idleTimeoutMinutes,
-    uiAllowLan: config.bridge.uiAllowLan,
-    uiAccessToken: config.bridge.uiAccessToken || '',
-  };
+  return configV2ToPayload(config);
 }
 
-function setOp(patch: ConfigPatch): { ok: true; ops: ConfigWriteOperation[] } {
-  return { ok: true, ops: [{ kind: 'set', patch }] };
-}
-
-function unsetOp(path: ConfigPath): { ok: true; ops: ConfigWriteOperation[] } {
-  return { ok: true, ops: [{ kind: 'unset', path }] };
+function uiPayload(payload: Record<string, unknown>): { ok: true; payload: Record<string, unknown> } {
+  return { ok: true, payload };
 }
 
 function writeStringPatch(
-  apply: (value: string) => ConfigPatch,
-  options: { defaultPath?: ConfigPath } = {},
+  key: string,
+  options: { defaultValue?: string } = {},
 ) {
-  return (rawValue: string): { ok: true; ops: ConfigWriteOperation[] } => {
+  return (rawValue: string): { ok: true; payload: Record<string, unknown> } => {
     const value = rawValue.trim();
-    if (options.defaultPath && ['default', 'reset', 'unset', 'none'].includes(value.toLowerCase())) {
-      return unsetOp(options.defaultPath);
+    if (['default', 'reset', 'unset', 'none'].includes(value.toLowerCase())) {
+      return uiPayload({ [key]: options.defaultValue ?? '' });
     }
-    return setOp(apply(value));
+    return uiPayload({ [key]: value });
   };
 }
 
-function writeBooleanPatch(apply: (value: boolean, current: ConfigV2) => ConfigPatch) {
-  return (rawValue: string, current: ConfigV2): { ok: true; ops: ConfigWriteOperation[] } | { ok: false; message: string } => {
+function writeBooleanPatch(key: string) {
+  return (rawValue: string): { ok: true; payload: Record<string, unknown> } | { ok: false; message: string } => {
     const parsed = parseBoolean(rawValue);
     if (parsed === null) return { ok: false, message: '值必须是 on/off、true/false 或 1/0。' };
-    return setOp(apply(parsed, current));
+    return uiPayload({ [key]: parsed });
   };
 }
 
-function writePositiveIntPatch(apply: (value: number, current: ConfigV2) => ConfigPatch, min: number, max?: number) {
-  return (rawValue: string, current: ConfigV2): { ok: true; ops: ConfigWriteOperation[] } | { ok: false; message: string } => {
+function writePositiveIntPatch(key: string, min: number, max?: number) {
+  return (rawValue: string): { ok: true; payload: Record<string, unknown> } | { ok: false; message: string } => {
     const parsed = parsePositiveInt(rawValue);
     if (parsed === null || parsed < min || (max !== undefined && parsed > max)) {
       return { ok: false, message: max === undefined ? `值必须是大于等于 ${min} 的整数。` : `值必须是 ${min}-${max} 的整数。` };
     }
-    return setOp(apply(parsed, current));
+    return uiPayload({ [key]: parsed });
   };
 }
 
 const SETTING_DEFINITIONS: SettingDefinition[] = [
+  {
+    key: 'runtime',
+    group: 'global-runtime-codex',
+    aliases: ['defaultRuntime'],
+    label: 'Runtime',
+    usage: '/set runtime codex|claude',
+    read: (payload) => payload.runtime || 'codex',
+    write(rawValue) {
+      const token = rawValue.trim().toLowerCase();
+      if (token === 'codex' || token === 'claude') {
+        return uiPayload({ runtime: token });
+      }
+      return { ok: false, message: 'Runtime 必须是 codex 或 claude。' };
+    },
+  },
   {
     key: 'defaultWorkspaceRoot',
     group: 'global-bridge',
@@ -200,7 +162,7 @@ const SETTING_DEFINITIONS: SettingDefinition[] = [
     label: '/new 相对路径根目录',
     usage: '/set defaultWorkspaceRoot /abs/path',
     read: (payload) => payload.defaultWorkspaceRoot || '-',
-    write: writeStringPatch((value) => ({ bridge: { defaultWorkspace: value } }), { defaultPath: 'bridge.defaultWorkspace' }),
+    write: writeStringPatch('defaultWorkspaceRoot'),
   },
   {
     key: 'defaultModel',
@@ -209,7 +171,7 @@ const SETTING_DEFINITIONS: SettingDefinition[] = [
     label: 'Codex 默认模型',
     usage: '/set defaultModel gpt-5 或 /set defaultModel default',
     read: (payload) => payload.defaultModel || '-',
-    write: writeStringPatch((value) => ({ runtime: { codex: { model: value } } }), { defaultPath: 'runtime.codex.model' }),
+    write: writeStringPatch('defaultModel'),
   },
   {
     key: 'defaultProvider',
@@ -221,27 +183,12 @@ const SETTING_DEFINITIONS: SettingDefinition[] = [
     write(rawValue) {
       const token = rawValue.trim().toLowerCase();
       if (['default', 'reset', 'unset', 'none', 'auto'].includes(token)) {
-        return unsetOp('runtime.codex.provider');
+        return uiPayload({ defaultProvider: '' });
       }
       if (token === 'sdk' || token === 'tmux' || token === 'pty') {
-        return setOp({ runtime: { codex: { provider: token } } });
+        return uiPayload({ defaultProvider: token });
       }
       return { ok: false, message: '默认 Codex Provider 必须是 sdk、pty 或 tmux，也可以用 default/auto 恢复自动选择。' };
-    },
-  },
-  {
-    key: 'defaultRuntime',
-    group: 'bridge-control',
-    aliases: ['runtime'],
-    label: '默认 Runtime',
-    usage: '/set defaultRuntime codex|claude',
-    read: (payload) => payload.runtime || 'codex',
-    write(rawValue) {
-      const token = rawValue.trim().toLowerCase();
-      if (token === 'codex' || token === 'claude') {
-        return setOp({ runtime: { agent: token } });
-      }
-      return { ok: false, message: '默认 Runtime 必须是 codex 或 claude。' };
     },
   },
   {
@@ -254,10 +201,10 @@ const SETTING_DEFINITIONS: SettingDefinition[] = [
     write(rawValue) {
       const token = rawValue.trim().toLowerCase();
       if (token === 'normal' || token === 'code') {
-        return setOp({ runtime: { codex: { yoloMode: 'off' } } });
+        return uiPayload({ defaultMode: 'normal' });
       }
       if (token === 'yolo') {
-        return setOp({ runtime: { codex: { yoloMode: 'on' } } });
+        return uiPayload({ defaultMode: 'yolo' });
       }
       return { ok: false, message: '默认模式必须是 normal 或 yolo。' };
     },
@@ -266,37 +213,37 @@ const SETTING_DEFINITIONS: SettingDefinition[] = [
     key: 'historyMessageLimit',
     group: 'global-bridge',
     aliases: ['history', 'hisLimit'],
-    label: '历史消息条数',
+    label: '/his 返回条数',
     usage: '/set historyMessageLimit 8',
-    read: (payload) => `${payload.historyMessageLimit}`,
-    write: writePositiveIntPatch((value, current) => channelConfigPatch(current, { historyMessageLimit: value }), 1, 20),
+    read: (payload) => `${payload.historyMessageLimit ?? '-'}`,
+    write: writePositiveIntPatch('historyMessageLimit', 1, 20),
   },
   {
     key: 'streamStatusIdleStartSeconds',
     group: 'global-bridge',
     aliases: ['streamIdle', 'idleStart'],
-    label: '流式状态启动秒数',
+    label: '长任务提示延迟',
     usage: '/set streamStatusIdleStartSeconds 180',
-    read: (payload) => `${payload.streamStatusIdleStartSeconds}`,
-    write: writePositiveIntPatch((value, current) => channelConfigPatch(current, { streamStatusIdleStartSeconds: value }), 1),
+    read: (payload) => `${payload.streamStatusIdleStartSeconds ?? '-'}`,
+    write: writePositiveIntPatch('streamStatusIdleStartSeconds', 1),
   },
   {
     key: 'streamStatusCheckIntervalSeconds',
     group: 'global-bridge',
     aliases: ['streamCheck', 'statusInterval'],
-    label: '流式状态检查间隔秒数',
+    label: '长任务提示刷新间隔',
     usage: '/set streamStatusCheckIntervalSeconds 10',
-    read: (payload) => `${payload.streamStatusCheckIntervalSeconds}`,
-    write: writePositiveIntPatch((value, current) => channelConfigPatch(current, { streamStatusCheckIntervalSeconds: value }), 1),
+    read: (payload) => `${payload.streamStatusCheckIntervalSeconds ?? '-'}`,
+    write: writePositiveIntPatch('streamStatusCheckIntervalSeconds', 1),
   },
   {
     key: 'codexSkipGitRepoCheck',
     group: 'global-runtime-codex',
     aliases: ['skipGitRepoCheck', 'skipGitCheck'],
-    label: '跳过 Git 仓库检查',
+    label: '允许在未信任 Git 目录运行 Codex',
     usage: '/set codexSkipGitRepoCheck on|off',
     read: (payload) => formatBool(payload.codexSkipGitRepoCheck),
-    write: writeBooleanPatch((value) => ({ runtime: { codex: { skipGitRepoCheck: value } } })),
+    write: writeBooleanPatch('codexSkipGitRepoCheck'),
   },
   {
     key: 'codexSandboxMode',
@@ -308,7 +255,7 @@ const SETTING_DEFINITIONS: SettingDefinition[] = [
     write(rawValue) {
       const parsed = parseSandboxMode(rawValue.trim());
       if (!parsed) return { ok: false, message: 'sandbox 必须是 read-only、workspace-write 或 danger-full-access。' };
-      return setOp({ runtime: { codex: { sandboxMode: parsed } } });
+      return uiPayload({ codexSandboxMode: parsed });
     },
   },
   {
@@ -318,7 +265,7 @@ const SETTING_DEFINITIONS: SettingDefinition[] = [
     label: 'Codex 网络访问',
     usage: '/set codexNetworkAccess on|off',
     read: (payload) => formatBool(payload.codexNetworkAccess),
-    write: writeBooleanPatch((value) => ({ runtime: { codex: { networkAccess: value } } })),
+    write: writeBooleanPatch('codexNetworkAccess'),
   },
   {
     key: 'codexReasoningEffort',
@@ -330,7 +277,7 @@ const SETTING_DEFINITIONS: SettingDefinition[] = [
     write(rawValue) {
       const parsed = normalizeReasoningEffort(rawValue);
       if (!parsed) return { ok: false, message: 'reasoning 必须是 minimal、low、medium、high、xhigh 或 1-5。' };
-      return setOp({ runtime: { codex: { reasoningEffort: parsed } } });
+      return uiPayload({ codexReasoningEffort: parsed });
     },
   },
   {
@@ -343,12 +290,12 @@ const SETTING_DEFINITIONS: SettingDefinition[] = [
     write(rawValue) {
       const token = rawValue.trim().toLowerCase();
       if (['default', 'reset', 'unset', 'none', 'auto'].includes(token)) {
-        return unsetOp('runtime.claude.provider');
+        return uiPayload({ claudeProvider: 'tmux' });
       }
       if (token === 'tmux' || token === 'pty' || token === 'sdk') {
-        return setOp({ runtime: { claude: { provider: token } } });
+        return uiPayload({ claudeProvider: token });
       }
-      return { ok: false, message: '默认 Claude Provider 必须是 pty 或 sdk，也可以用 default/auto 恢复 sdk 默认。' };
+      return { ok: false, message: '默认 Claude Provider 必须是 tmux、pty 或 sdk，也可以用 default/auto 恢复 tmux 默认。' };
     },
   },
   {
@@ -361,7 +308,7 @@ const SETTING_DEFINITIONS: SettingDefinition[] = [
     write(rawValue) {
       const token = rawValue.trim().toLowerCase();
       if (token === 'claude' || token === 'ccr') {
-        return setOp({ runtime: { claude: { executable: token } } });
+        return uiPayload({ claudeExecutable: token });
       }
       return { ok: false, message: 'Claude executable 必须是 claude 或 ccr。' };
     },
@@ -373,7 +320,7 @@ const SETTING_DEFINITIONS: SettingDefinition[] = [
     label: 'Claude 默认模型',
     usage: '/set claudeDefaultModel sonnet 或 /set claudeDefaultModel default',
     read: (payload) => payload.claudeDefaultModel || '-',
-    write: writeStringPatch((value) => ({ runtime: { claude: { model: value } } }), { defaultPath: 'runtime.claude.model' }),
+    write: writeStringPatch('claudeDefaultModel'),
   },
   {
     key: 'claudePermissionMode',
@@ -385,14 +332,7 @@ const SETTING_DEFINITIONS: SettingDefinition[] = [
     write(rawValue) {
       const token = rawValue.trim();
       if (token === 'default' || token === 'acceptEdits' || token === 'bypassPermissions' || token === 'plan') {
-        return setOp({
-          runtime: {
-            claude: {
-              permissionMode: token,
-              yoloMode: token === 'bypassPermissions' ? 'on' : 'off',
-            },
-          },
-        });
+        return uiPayload({ claudePermissionMode: token });
       }
       return { ok: false, message: 'Claude 权限模式必须是 default、acceptEdits、bypassPermissions 或 plan。' };
     },
@@ -407,11 +347,11 @@ const SETTING_DEFINITIONS: SettingDefinition[] = [
     write(rawValue) {
       const token = rawValue.trim();
       if (token === 'off' || token === '0') {
-        return setOp({ runtime: { claude: { idleTimeoutMinutes: 0 } } });
+        return uiPayload({ claudeIdleTimeoutMinutes: 0 });
       }
       const parsed = parsePositiveInt(rawValue);
       if (parsed === null || parsed > 120) return { ok: false, message: 'Claude 空闲超时必须是 0-120 的整数分钟；0/off 表示关闭。' };
-      return setOp({ runtime: { claude: { idleTimeoutMinutes: parsed } } });
+      return uiPayload({ claudeIdleTimeoutMinutes: parsed });
     },
   },
   {
@@ -421,12 +361,7 @@ const SETTING_DEFINITIONS: SettingDefinition[] = [
     label: 'UI 允许 LAN 访问',
     usage: '/set uiAllowLan on|off',
     read: (payload) => formatBool(payload.uiAllowLan),
-    write: writeBooleanPatch((value, current) => ({
-      bridge: {
-        uiAllowLan: value,
-        ...(value && !current.bridge.uiAccessToken ? { uiAccessToken: generateAccessToken() } : {}),
-      },
-    })),
+    write: writeBooleanPatch('uiAllowLan'),
   },
   {
     key: 'uiAccessToken',
@@ -435,7 +370,7 @@ const SETTING_DEFINITIONS: SettingDefinition[] = [
     label: 'UI 访问 token',
     usage: '/set uiAccessToken <token>',
     read: (payload) => maskToken(payload.uiAccessToken || ''),
-    write: writeStringPatch((value) => ({ bridge: { uiAccessToken: value } })),
+    write: writeStringPatch('uiAccessToken'),
   },
 ];
 
@@ -476,6 +411,98 @@ function buildSettingsFields(payload: ConfigPayload, definitions: SettingDefinit
     `${definition.label} (${definition.key})`,
     definition.read(payload),
   ]);
+}
+
+function selectOption(text: string, value = text): { text: string; callbackData: string } {
+  return { text, callbackData: value };
+}
+
+function formSelect(
+  elementId: string,
+  label: string,
+  selectedValue: string,
+  options: Array<{ text: string; callbackData: string }>,
+): NonNullable<NonNullable<OutboundRichCard['form']>['selects']>[number] {
+  return {
+    elementId,
+    label,
+    placeholder: selectedValue || 'auto',
+    selectedCallbackData: selectedValue,
+    options,
+  };
+}
+
+function formInput(
+  elementId: string,
+  label: string,
+  placeholder: string,
+  defaultValue: string | number | undefined,
+): NonNullable<NonNullable<OutboundRichCard['form']>['extraInputs']>[number] {
+  return {
+    elementId,
+    label,
+    placeholder,
+    defaultValue: defaultValue === undefined ? '' : String(defaultValue),
+  };
+}
+
+export function buildSetCommandRichCard(): OutboundRichCard {
+  const payload = configToPayload(createConfigService({ migrate: false }).snapshot().config);
+  return {
+    title: '全局配置',
+    subtitle: '保存后写入 ~/.codelark/config.toml（home level），字段与 Web 配置页一致。',
+    template: 'blue',
+    tags: ['home level', 'config'],
+    tagColor: 'blue',
+    sections: SETTING_GROUPS.map((group) => ({
+      title: group.title,
+      fields: buildSettingsFields(
+        payload,
+        SETTING_DEFINITIONS.filter((definition) => definition.group === group.key),
+      ),
+    })),
+    form: {
+      optionElementId: 'clk_set_option',
+      inputElementId: 'defaultWorkspaceRoot',
+      inputLabel: '/new 相对路径根目录',
+      inputPlaceholder: '留空时使用 ~',
+      inputDefaultValue: payload.defaultWorkspaceRoot || '',
+      layout: 'two_column',
+      controlBar: {
+        actions: [
+          { text: '刷新', callbackData: buildCommandCallbackData('/set') },
+        ],
+      },
+      selects: [
+        formSelect('runtime', 'Runtime', payload.runtime || 'codex', [selectOption('codex'), selectOption('claude')]),
+        formSelect('defaultMode', 'Codex 默认模式', payload.defaultMode || 'normal', [selectOption('normal'), selectOption('yolo')]),
+        formSelect('defaultProvider', '默认 Codex Provider', payload.defaultProvider || '', [selectOption('auto', ''), selectOption('sdk'), selectOption('pty'), selectOption('tmux')]),
+        formSelect('codexSandboxMode', 'Codex 文件系统权限', payload.codexSandboxMode || 'workspace-write', [selectOption('workspace-write'), selectOption('read-only'), selectOption('danger-full-access')]),
+        formSelect('codexReasoningEffort', 'Codex 思考级别', payload.codexReasoningEffort || 'medium', [selectOption('medium'), selectOption('minimal'), selectOption('low'), selectOption('high'), selectOption('xhigh')]),
+        formSelect('codexNetworkAccess', 'Codex 网络访问', payload.codexNetworkAccess ? 'on' : 'off', [selectOption('on'), selectOption('off')]),
+        formSelect('codexSkipGitRepoCheck', '允许未信任 Git 目录', payload.codexSkipGitRepoCheck ? 'on' : 'off', [selectOption('on'), selectOption('off')]),
+        formSelect('claudeExecutable', 'Claude executable', payload.claudeExecutable || 'claude', [selectOption('claude'), selectOption('ccr')]),
+        formSelect('claudeProvider', '默认 Claude Provider', payload.claudeProvider || 'tmux', [selectOption('tmux'), selectOption('pty'), selectOption('sdk')]),
+        formSelect('claudePermissionMode', 'Claude 权限模式', payload.claudePermissionMode || 'default', [selectOption('default'), selectOption('acceptEdits'), selectOption('bypassPermissions'), selectOption('plan')]),
+        formSelect('uiAllowLan', '允许局域网访问 Web 控制台', payload.uiAllowLan ? 'on' : 'off', [selectOption('on'), selectOption('off')]),
+      ],
+      extraInputs: [
+        formInput('defaultModel', 'Codex 默认模型', '留空则跟随 Codex 默认', payload.defaultModel),
+        formInput('historyMessageLimit', '/his 返回条数', '1-20', payload.historyMessageLimit),
+        formInput('streamStatusIdleStartSeconds', '长任务提示延迟', '秒，默认 180', payload.streamStatusIdleStartSeconds),
+        formInput('streamStatusCheckIntervalSeconds', '长任务提示刷新间隔', '秒，默认 10', payload.streamStatusCheckIntervalSeconds),
+        formInput('claudeDefaultModel', 'Claude 默认模型', '留空则跟随 Claude Code 默认', payload.claudeDefaultModel),
+        formInput('claudeIdleTimeoutMinutes', 'Claude 空闲超时', '分钟，0 表示关闭', payload.claudeIdleTimeoutMinutes),
+        formInput('uiAccessToken', '局域网访问 token', '开启 LAN 后可留空自动生成', payload.uiAccessToken),
+      ],
+      submitText: '保存',
+      submitCallbackData: buildCommandCallbackData('/set'),
+      options: [],
+    },
+    footer: [
+      '也可发送 `/set <key> <value>` 修改单项配置；旧名 `defaultRuntime` 仍兼容。',
+    ],
+  };
 }
 
 function buildGroupedSettingsResponse(payload: ConfigPayload, markdown: boolean): string {
@@ -521,11 +548,119 @@ function buildGroupedSettingsResponse(payload: ConfigPayload, markdown: boolean)
 
 function buildUsageNotes(): string[] {
   return [
-    '发送 `/set <key> <value>` 或 `/set <key>=<value>` 修改配置；配置保存方式与 UI 设置页相同。',
-    '示例：`/set defaultWorkspaceRoot ~`、`/set defaultRuntime claude`、`/set defaultProvider tmux`、`/set codexNetworkAccess off`。',
+    '发送 `/set <key> <value>` 或 `/set <key>=<value>` 修改配置；默认写入 home level，配置保存方式与 UI 设置页相同。',
+    '示例：`/set defaultWorkspaceRoot ~`、`/set runtime claude`、`/set defaultProvider tmux`、`/set codexNetworkAccess off`。',
     'Codex 与 Claude Code 的 GlobalRuntime 默认值互相独立，不会互相 fallback。',
     `可用 key：${SETTING_DEFINITIONS.map((definition) => definition.key).join(', ')}`,
   ];
+}
+
+function formatConfigWriteError(error: unknown): string {
+  const issues = error && typeof error === 'object' && Array.isArray((error as { issues?: unknown[] }).issues)
+    ? (error as { issues: Array<{ path?: unknown[]; message?: string }> }).issues
+    : [];
+  if (issues.length > 0) {
+    return issues
+      .map((issue) => {
+        const path = Array.isArray(issue.path) && issue.path.length > 0 ? `${issue.path.join('.')}: ` : '';
+        return `${path}${issue.message || '配置字段不合法。'}`;
+      })
+      .join('\n');
+  }
+  return error instanceof Error ? error.message : '配置字段不合法。';
+}
+
+const SET_FORM_FIELD_KEYS = [
+  'runtime',
+  'defaultMode',
+  'defaultProvider',
+  'codexSandboxMode',
+  'codexReasoningEffort',
+  'codexNetworkAccess',
+  'codexSkipGitRepoCheck',
+  'claudeExecutable',
+  'claudeProvider',
+  'claudePermissionMode',
+  'uiAllowLan',
+  'defaultWorkspaceRoot',
+  'defaultModel',
+  'historyMessageLimit',
+  'streamStatusIdleStartSeconds',
+  'streamStatusCheckIntervalSeconds',
+  'claudeDefaultModel',
+  'claudeIdleTimeoutMinutes',
+  'uiAccessToken',
+] as const;
+
+function formValueString(formValue: Record<string, unknown>, key: string): string | undefined {
+  const value = formValue[key];
+  return typeof value === 'string' ? value.trim() : undefined;
+}
+
+export function handleSetFormCommand(options: {
+  formValue: Record<string, unknown>;
+  markdown: boolean;
+}): { response: string; richCard: OutboundRichCard } {
+  const service = createConfigService({ migrate: false });
+  let currentConfig = service.snapshot().config;
+  const combinedPayload: Record<string, unknown> = {};
+
+  for (const key of SET_FORM_FIELD_KEYS) {
+    const rawValue = formValueString(options.formValue, key);
+    if (rawValue === undefined) continue;
+    const definition = findSetting(key);
+    if (!definition) continue;
+    const written = definition.write(rawValue, currentConfig);
+    if (!written.ok) {
+      return {
+        response: buildCommandFields(
+          '配置未更新',
+          [
+            ['配置项', definition.key],
+            ['输入值', rawValue],
+          ],
+          [written.message, `用法：\`${definition.usage}\``],
+          options.markdown,
+        ),
+        richCard: buildSetCommandRichCard(),
+      };
+    }
+    Object.assign(combinedPayload, written.payload);
+  }
+
+  try {
+    service.replace({ kind: 'home' }, mergeConfigV2HomePatch(currentConfig, combinedPayload));
+    currentConfig = service.snapshot().config;
+  } catch (error) {
+    return {
+      response: buildCommandFields(
+        '配置未更新',
+        [],
+        [formatConfigWriteError(error), '请刷新 `/set` 卡片后重试。'],
+        options.markdown,
+      ),
+      richCard: buildSetCommandRichCard(),
+    };
+  }
+
+  const savedPayload = configToPayload(currentConfig);
+  const notes = ['配置已保存到 `~/.codelark/config.toml`（home level）；卡片已刷新为最新值。'];
+  const warning = minimalReasoningWebSearchWarning(String(savedPayload.codexReasoningEffort || ''));
+  if (warning) notes.push(warning);
+  return {
+    response: buildCommandFields(
+      '已保存全局配置',
+      [
+        ['Runtime', savedPayload.runtime],
+        ['默认 Codex Provider', savedPayload.defaultProvider || 'auto'],
+        ['Codex 网络访问', formatBool(savedPayload.codexNetworkAccess)],
+        ['/new 相对路径根目录', savedPayload.defaultWorkspaceRoot || '-'],
+      ],
+      notes,
+      options.markdown,
+    ),
+    richCard: buildSetCommandRichCard(),
+  };
 }
 
 export function handleSetCommand(options: {
@@ -573,9 +708,18 @@ export function handleSetCommand(options: {
     );
   }
 
-  for (const op of written.ops) {
-    if (op.kind === 'set') service.set({ kind: 'home' }, op.patch);
-    else service.unset({ kind: 'home' }, op.path);
+  try {
+    service.replace({ kind: 'home' }, mergeConfigV2HomePatch(currentConfig, written.payload));
+  } catch (error) {
+    return buildCommandFields(
+      '配置未更新',
+      [
+        ['配置项', definition.key],
+        ['输入值', parsed.value],
+      ],
+      [formatConfigWriteError(error), `用法：\`${definition.usage}\``],
+      options.markdown,
+    );
   }
   const savedPayload = configToPayload(service.snapshot().config);
   const notes = ['配置已保存到 `~/.codelark/config.toml`；后续 `/new` 和对应 runtime 请求会读取新的全局默认值。'];
