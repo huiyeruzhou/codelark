@@ -8,6 +8,7 @@ import test from 'node:test';
 
 import {
   buildSetupConfig,
+  buildTmuxInstallGuidance,
   extractHttpUrlsFromText,
   loadSetupConfig,
   recommendRuntime,
@@ -224,6 +225,40 @@ test('setup wizard saves first-run config to home TOML instead of legacy env/jso
   } finally {
     fs.rmSync(home, { recursive: true, force: true });
   }
+});
+
+test('builds setup config with sdk providers when tmux install is declined', () => {
+  const current = baseSetupConfig();
+
+  const next = buildSetupConfig(
+    current,
+    {
+      appId: 'cli_demo',
+      appSecret: 'secret_demo',
+      site: 'feishu',
+    },
+    'claude',
+    '/work/project',
+    { tmuxAvailable: false },
+  );
+
+  assert.equal(next.runtime.agent, 'claude');
+  assert.equal(next.runtime.codex.provider, 'sdk');
+  assert.equal(next.runtime.claude.provider, 'sdk');
+});
+
+test('builds platform-specific tmux installation guidance', () => {
+  const linux = buildTmuxInstallGuidance('linux');
+  assert.match(linux.command, /sudo apt update && sudo apt install -y tmux/);
+  assert.match(linux.lines.join('\n'), /Linux 安装命令/);
+
+  const macos = buildTmuxInstallGuidance('darwin');
+  assert.equal(macos.command, 'brew install tmux');
+  assert.match(macos.lines.join('\n'), /macOS 安装命令/);
+
+  const windows = buildTmuxInstallGuidance('win32');
+  assert.match(windows.command, /winget install --id marlocarlo\.psmux/);
+  assert.match(windows.lines.join('\n'), /psmux/);
 });
 
 test('documents Feishu setup permissions required by bridge and doc-to-chat', () => {

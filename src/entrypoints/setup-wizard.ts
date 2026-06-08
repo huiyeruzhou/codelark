@@ -57,6 +57,7 @@ export interface RuntimeRecommendation {
 type SetupMode = 'existing' | 'qr' | 'manual';
 type RuntimeChoice = 'codex' | 'ccr' | 'claude';
 type LarkCliRunOptions = { homeDir?: string; input?: string; inheritStdio?: boolean; env?: NodeJS.ProcessEnv };
+type TmuxPrerequisiteResult = 'available' | 'installed' | 'sdk-fallback';
 
 function assertInteractiveTerminal(): void {
   if (!process.stdin.isTTY || !process.stdout.isTTY) {
@@ -148,9 +149,11 @@ export function buildSetupConfig(
   credentials: FeishuCredentials,
   runtimeChoice: RuntimeChoice,
   workspaceRoot: string,
+  options: { tmuxAvailable?: boolean } = {},
 ): ConfigV2 {
   const nextFeishu = buildFeishuChannel(current, credentials);
   const runtimeConfig = runtimeChoiceToConfig(runtimeChoice);
+  const tmuxAvailable = options.tmuxAvailable !== false;
   return {
     ...current,
     runtime: {
@@ -158,11 +161,14 @@ export function buildSetupConfig(
       ...runtimeConfig,
       codex: {
         ...current.runtime.codex,
-        provider: current.runtime.codex.provider || 'tmux',
+        provider: tmuxAvailable ? (current.runtime.codex.provider || 'tmux') : 'sdk',
       },
       claude: {
         ...current.runtime.claude,
         ...(runtimeConfig.claude || {}),
+        provider: tmuxAvailable
+          ? (runtimeConfig.claude?.provider || current.runtime.claude.provider || 'tmux')
+          : 'sdk',
       },
     },
     bridge: {
@@ -208,6 +214,133 @@ function stripAnsi(text: string): string {
 
 function trimUrlPunctuation(url: string): string {
   return url.replace(/[),.;\]}，。；）】]+$/u, '');
+}
+
+export interface TmuxInstallGuidance {
+  title: string;
+  lines: string[];
+  command: string;
+  commandDisplay: string;
+}
+
+export function buildTmuxInstallGuidance(platform: NodeJS.Platform = process.platform): TmuxInstallGuidance {
+  if (platform === 'darwin') {
+    return {
+      title: 'tmux 未安装',
+      lines: [
+        'CodeLark 默认使用 tmux provider，需要本机 PATH 中存在 tmux 命令。',
+        'macOS 安装命令：',
+        'brew install tmux',
+        '安装完成后向导会再次检测 tmux 是否可用。',
+      ],
+      command: 'brew install tmux',
+      commandDisplay: 'brew install tmux',
+    };
+  }
+  if (platform === 'win32') {
+    return {
+      title: 'tmux 未安装',
+      lines: [
+        'CodeLark 默认使用 tmux provider，需要本机 PATH 中存在 tmux 命令。',
+        'Windows 请安装 psmux，它会提供兼容的 tmux.exe 命令：',
+        'winget install --id marlocarlo.psmux --accept-package-agreements --accept-source-agreements',
+        '安装完成后向导会再次检测 tmux 是否可用；如果 PATH 尚未刷新，请重新打开 PowerShell / Windows Terminal 后再运行 codelark setup。',
+      ],
+      command: 'winget install --id marlocarlo.psmux --accept-package-agreements --accept-source-agreements',
+      commandDisplay: 'winget install --id marlocarlo.psmux --accept-package-agreements --accept-source-agreements',
+    };
+  }
+  if (platform === 'linux') {
+    return {
+      title: 'tmux 未安装',
+      lines: [
+        'CodeLark 默认使用 tmux provider，需要本机 PATH 中存在 tmux 命令。',
+        'Linux 安装命令：',
+        'sudo apt update && sudo apt install -y tmux',
+        '安装完成后向导会再次检测 tmux 是否可用。',
+      ],
+      command: 'sudo apt update && sudo apt install -y tmux',
+      commandDisplay: 'sudo apt update && sudo apt install -y tmux',
+    };
+  }
+  return {
+    title: 'tmux 未安装',
+    lines: [
+      'CodeLark 默认使用 tmux provider，需要本机 PATH 中存在 tmux 命令。',
+      '请使用当前系统的包管理器安装 tmux，并确认 tmux -V 可以正常执行。',
+      '安装完成后请重新打开终端，再运行 codelark setup。',
+    ],
+    command: '',
+    commandDisplay: '请手动安装 tmux',
+  };
+}
+
+export async function isTmuxCommandAvailable(): Promise<boolean> {
+  return new Promise<boolean>((resolve) => {
+    const child = spawn('tmux', ['-V'], {
+      stdio: 'ignore',
+      shell: process.platform === 'win32',
+    });
+    child.on('error', () => resolve(false));
+    child.on('exit', (code) => resolve(code === 0));
+  });
+}
+
+async function runTmuxInstallCommand(guidance: TmuxInstallGuidance): Promise<void> {
+  if (!guidance.command) {
+    throw new Error(guidance.lines.join('\n'));
+  }
+  await new Promise<void>((resolve, reject) => {
+    const child = spawn(guidance.command, {
+      stdio: 'inherit',
+      shell: true,
+    });
+    child.on('error', reject);
+    child.on('exit', (code, signal) => {
+      if (code === 0) {
+        resolve();
+        return;
+      }
+      reject(new Error(`tmux 安装命令退出失败：${signal || code}`));
+    });
+  });
+}
+
+async function promptTmuxPrerequisite(): Promise<TmuxPrerequisiteResult> {
+  if (await isTmuxCommandAvailable()) return 'available';
+
+  const guidance = buildTmuxInstallGuidance();
+  p.note([
+    ...guidance.lines,
+    '',
+    `即将执行：${guidance.commandDisplay}`,
+  ].join('\n'), guidance.title);
+  const shouldInstall = cancelIfNeeded(await p.confirm({
+    message: '未检测到 tmux，是否现在自动安装？',
+    initialValue: true,
+  }));
+  if (!shouldInstall) {
+    p.note(
+      [
+        '本次向导将继续完成配置，但不会默认使用 tmux provider。',
+        '将写入 defaultProvider=sdk，并把 Claude 默认 provider 写为 sdk。',
+        '之后安装 tmux 后，可通过 IM 命令 `/provider tmux` 或配置文件切回 tmux。',
+      ].join('\n'),
+      '改用 SDK provider',
+    );
+    return 'sdk-fallback';
+  }
+
+  p.note(`开始执行：${guidance.commandDisplay}`, '安装 tmux');
+  await runTmuxInstallCommand(guidance);
+  if (await isTmuxCommandAvailable()) {
+    p.note('tmux 已安装并可执行。', 'tmux 已就绪');
+    return 'installed';
+  }
+  throw new Error([
+    'tmux 安装命令已执行，但当前终端仍检测不到 tmux。',
+    '请重新打开终端后运行 `tmux -V` 检查 PATH，再重新运行 `codelark setup`。',
+  ].join('\n'));
 }
 
 export function extractHttpUrlsFromText(text: string): string[] {
@@ -636,6 +769,7 @@ export async function runSetupWizard(options: SetupOptions = {}): Promise<void> 
   const cwd = path.resolve(options.cwd || process.cwd());
 
   p.intro(options.reason === 'first-run' ? 'CodeLark 首次配置' : 'CodeLark 配置向导');
+  const tmuxPrerequisite = await promptTmuxPrerequisite();
 
   const mode = await selectSetupMode(Boolean(existingCredentials));
   const credentials = mode === 'existing'
@@ -657,7 +791,9 @@ export async function runSetupWizard(options: SetupOptions = {}): Promise<void> 
     return;
   }
 
-  const next = buildSetupConfig(current, credentials, runtimeChoice, workspaceRoot);
+  const next = buildSetupConfig(current, credentials, runtimeChoice, workspaceRoot, {
+    tmuxAvailable: tmuxPrerequisite !== 'sdk-fallback',
+  });
   saveSetupConfigToHomeToml(next);
   try {
     await ensureCodeLarkUserAuthorization(next);
