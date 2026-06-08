@@ -167,6 +167,7 @@ export interface OutboundRichCard {
       actions?: OutboundCardActionButton[];
       dividerAfter?: boolean;
     };
+    actionDividerBefore?: boolean;
     extraInputs?: Array<{
       elementId: string;
       label: string;

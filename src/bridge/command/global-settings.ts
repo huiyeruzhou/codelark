@@ -310,7 +310,7 @@ const SETTING_DEFINITIONS: SettingDefinition[] = [
     label: 'provider',
     usage: '/set defaultProvider sdk|pty|tmux|default',
     control: 'select',
-    options: [selectOption('auto', ''), selectOption('sdk'), selectOption('pty'), selectOption('tmux')],
+    options: [selectOption('sdk'), selectOption('pty'), selectOption('tmux')],
     read: (config) => config.runtime.codex.provider || 'auto',
     write(rawValue) {
       const token = rawValue.trim().toLowerCase();
@@ -339,7 +339,7 @@ const SETTING_DEFINITIONS: SettingDefinition[] = [
     label: 'sandbox_mode',
     usage: '/set codexSandboxMode read-only|workspace-write|danger-full-access',
     control: 'select',
-    options: [selectOption('workspace-write'), selectOption('read-only'), selectOption('danger-full-access')],
+    options: [selectOption('workspace-write'), selectOption('read-only')],
     read: (config) => config.runtime.codex.sandboxMode,
     write(rawValue) {
       const parsed = parseSandboxMode(rawValue.trim());
@@ -703,6 +703,10 @@ export function settingFormLabel(definition: Pick<SettingDefinition, 'key' | 'la
   return `${settingDisplayLabel(definition)} (${definition.tomlPath})`;
 }
 
+function settingPanelLabel(definition: Pick<SettingDefinition, 'key' | 'label'>): string {
+  return settingDisplayLabel(definition);
+}
+
 export function findSettingDefinition(raw: string): SettingDefinition | undefined {
   return findSetting(raw);
 }
@@ -767,6 +771,13 @@ export function settingFormSelect(definition: SettingDefinition, config: ConfigV
   };
 }
 
+function settingPanelSelect(definition: SettingDefinition, config: ConfigV2): NonNullable<NonNullable<OutboundRichCard['form']>['selects']>[number] {
+  return {
+    ...settingFormSelect(definition, config),
+    label: settingPanelLabel(definition),
+  };
+}
+
 export function settingFormInput(definition: SettingDefinition, config: ConfigV2): NonNullable<NonNullable<OutboundRichCard['form']>['extraInputs']>[number] {
   const value = definition.read(config);
   return {
@@ -774,6 +785,13 @@ export function settingFormInput(definition: SettingDefinition, config: ConfigV2
     label: settingFormLabel(definition),
     placeholder: definition.placeholder || definition.tomlPath,
     defaultValue: value === '-' ? '' : value,
+  };
+}
+
+function settingPanelInput(definition: SettingDefinition, config: ConfigV2): NonNullable<NonNullable<OutboundRichCard['form']>['extraInputs']>[number] {
+  return {
+    ...settingFormInput(definition, config),
+    label: settingPanelLabel(definition),
   };
 }
 
@@ -809,17 +827,22 @@ export function buildSetCommandRichCard(
     form: {
       optionElementId: 'clk_set_option',
       layout: 'two_column',
-      selects: definitions.filter((definition) => definition.control === 'select').map((definition) => settingFormSelect(definition, config)),
-      extraInputs: definitions.filter((definition) => definition.control === 'input').map((definition) => settingFormInput(definition, config)),
+      selects: definitions.filter((definition) => definition.control === 'select').map((definition) => settingPanelSelect(definition, config)),
+      extraInputs: definitions.filter((definition) => definition.control === 'input').map((definition) => settingPanelInput(definition, config)),
       controlBar: {
         actions: [
           { text: '刷新', callbackData: buildCommandCallbackData(`/set --group ${group.key}`) },
         ],
       },
+      actionDividerBefore: true,
       submitText: '保存',
       submitCallbackData: buildCommandCallbackData(`/set --group ${group.key}`),
       options: [],
     },
+    footer: [
+      'YOLO模式：允许 agent 无需审批绕过沙箱。',
+      'Provider：选择使用何种方式运行 agent，例如 tmux、pty 或 sdk。',
+    ],
   };
 }
 

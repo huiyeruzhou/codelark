@@ -718,6 +718,9 @@ function buildRichCardFormElements(
       .filter((button) => !button.submit)
       .map((button) => buildRichCardFormControlButtonColumn(button, chatId))
       .filter((column): column is Record<string, unknown> => Boolean(column));
+    if (form.actionDividerBefore && formElements.length > 0) {
+      formElements.push({ tag: 'hr' });
+    }
     formElements.push({
       tag: 'column_set',
       flex_mode: 'none',
