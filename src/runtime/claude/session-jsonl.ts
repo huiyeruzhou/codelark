@@ -640,12 +640,12 @@ export function readClaudeSessionMirrorRecordDeltaByFilePath(
   };
 }
 
-export function createClaudeMirrorJsonlSource(homeDir = getDefaultClaudeHome()): MirrorJsonlSource {
+export function createClaudeMirrorJsonlSource(homeDir?: string): MirrorJsonlSource {
   return {
     runtime: 'claude',
     findByThreadId(threadId: string, cwd?: string): MirrorJsonlSourceSummary | null {
       if (!cwd) return null;
-      const summary = getClaudeSessionJsonlById(threadId, cwd, homeDir);
+      const summary = getClaudeSessionJsonlById(threadId, cwd, homeDir || getDefaultClaudeHome());
       return summary
         ? {
           threadId: summary.sessionId,

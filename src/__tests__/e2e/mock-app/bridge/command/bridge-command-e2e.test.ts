@@ -366,6 +366,43 @@ function appendCodexMirrorTurn(filePath: string, params: {
   ].map((line) => JSON.stringify(line)).join('\n') + '\n', 'utf-8');
 }
 
+function appendClaudeMirrorTurn(params: {
+  homeDir: string;
+  cwd: string;
+  sessionId: string;
+  timestampPrefix: string;
+  userText: string;
+  assistantText: string;
+}): string {
+  const projectDir = getClaudeProjectDir(params.cwd, params.homeDir);
+  fs.mkdirSync(projectDir, { recursive: true });
+  const filePath = path.join(projectDir, `${params.sessionId}.jsonl`);
+  fs.appendFileSync(filePath, [
+    {
+      type: 'user',
+      uuid: `${params.sessionId}-user`,
+      sessionId: params.sessionId,
+      cwd: params.cwd,
+      timestamp: `${params.timestampPrefix}:01.000Z`,
+      message: { role: 'user', content: params.userText },
+    },
+    {
+      type: 'assistant',
+      uuid: `${params.sessionId}-assistant`,
+      parentUuid: `${params.sessionId}-user`,
+      sessionId: params.sessionId,
+      cwd: params.cwd,
+      timestamp: `${params.timestampPrefix}:02.000Z`,
+      message: {
+        role: 'assistant',
+        content: [{ type: 'text', text: params.assistantText }],
+        stop_reason: 'end_turn',
+      },
+    },
+  ].map((line) => JSON.stringify(line)).join('\n') + '\n', 'utf-8');
+  return filePath;
+}
+
 function installFakeTmux(): { binDir: string; logPath: string; statePath: string } {
   const binDir = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-e2e-fake-tmux-'));
   const logPath = path.join(binDir, 'tmux.log');
@@ -1561,6 +1598,117 @@ provider = "tmux"
       if (oldFakeState === undefined) delete process.env.TMUX_FAKE_STATE;
       else process.env.TMUX_FAKE_STATE = oldFakeState;
       fs.rmSync(workDir, { recursive: true, force: true });
+      fs.rmSync(fakeTmux.binDir, { recursive: true, force: true });
+    }
+  });
+
+  it('starts Claude tmux mirror after a plain auto-forwarded message discovers the JSONL session', async () => {
+    const calls: RecordedLlmCall[] = [];
+    const store = initBridgeTestContext({
+      dynamicSettings: true,
+      settings: makeBridgeSettings(),
+      llm: createRecordingLlm(calls),
+    });
+    const fakeTmux = installFakeTmux();
+    const claudeHome = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-runtime-claude-tmux-mirror-home-'));
+    const oldPath = process.env.PATH || '';
+    const oldFakeLog = process.env.TMUX_FAKE_LOG;
+    const oldFakeState = process.env.TMUX_FAKE_STATE;
+    const oldClaudeHome = process.env.CODELARK_CLAUDE_HOME;
+    const oldDiscoveryTimeout = process.env.CODELARK_CLAUDE_PTY_JSONL_DISCOVERY_TIMEOUT_MS;
+    process.env.PATH = `${fakeTmux.binDir}${path.delimiter}${oldPath}`;
+    process.env.TMUX_FAKE_LOG = fakeTmux.logPath;
+    process.env.TMUX_FAKE_STATE = fakeTmux.statePath;
+    process.env.CODELARK_CLAUDE_HOME = claudeHome;
+    process.env.CODELARK_CLAUDE_PTY_JSONL_DISCOVERY_TIMEOUT_MS = '1000';
+
+    const adapter = new StreamingRecordingAdapter();
+    registerAdapter(adapter);
+    const bridgeState = (globalThis as unknown as Record<string, any>).__bridge_manager__;
+    bridgeState.running = true;
+    const address = { channelType: 'feishu', chatId: 'chat-runtime-claude-tmux-mirror-forward' } as const;
+    const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-runtime-claude-tmux-mirror-forward-'));
+    const tmuxSessionName = 'claude_bridge_session';
+    const claudeSessionId = 'claude-tmux-jsonl-session';
+    let transcriptPath = '';
+
+    try {
+      const { binding } = createExistingChannelChat(store, address, {
+        workDir,
+        name: 'runtime-claude-tmux-mirror',
+      });
+      fs.writeFileSync(fakeTmux.statePath, `${tmuxSessionName}\n`, 'utf-8');
+      store.updateSession(binding.bridgeSessionId, {
+        runtime: {
+          activeRuntime: 'claude',
+          general: { tmuxSessionName },
+        },
+      });
+      setSessionClaudeProviderToml(binding.bridgeSessionId, 'tmux');
+
+      await _testOnly.handleMessage(adapter, inboundMessage(address, 'hello claude tmux mirror', 'incoming-claude-tmux-mirror-plain'));
+      transcriptPath = appendClaudeMirrorTurn({
+        homeDir: claudeHome,
+        cwd: workDir,
+        sessionId: claudeSessionId,
+        timestampPrefix: '2026-06-02T05:00',
+        userText: 'hello claude tmux mirror',
+        assistantText: 'Claude tmux mirror response',
+      });
+
+      await waitForCondition(() => adapter.streamEvents.some((event) => (
+        event.kind === 'end'
+        && event.streamKey?.startsWith('mirror:')
+        && /Claude tmux mirror response/.test(event.text || '')
+      )), 3000).catch((error) => {
+        const session = store.getSession(binding.bridgeSessionId);
+        assert.fail([
+          error instanceof Error ? error.message : String(error),
+          `claudeSessionId=${session?.runtime?.claude?.sessionId || ''}`,
+          `claudeCwd=${session?.runtime?.claude?.cwd || ''}`,
+          `mirrorStatus=${session?.mirror_status || ''}`,
+          `claudeMirrorSubscriptions=${JSON.stringify(Array.from((bridgeState.claudeMirrorSubscriptions as Map<string, any>)?.values?.() || []).map((subscription) => ({
+            bindingId: subscription.bindingId,
+            status: subscription.status,
+            filePath: subscription.filePath,
+            fileOffset: subscription.fileOffset,
+            fileSize: subscription.fileSize,
+            dirty: subscription.dirty,
+            pendingTurn: subscription.pendingTurn,
+            pendingDeliveries: subscription.pendingDeliveries,
+          })))}`,
+          `streamEvents=${JSON.stringify(adapter.streamEvents)}`,
+          `sent=${JSON.stringify(adapter.sent.map((message) => ({ text: message.text, richCard: message.richCard?.title })))}`,
+          `transcriptExists=${fs.existsSync(transcriptPath)}`,
+        ].join('\n'));
+      });
+
+      assert.equal(calls.length, 0);
+      const session = store.getSession(binding.bridgeSessionId);
+      assert.equal(session?.runtime?.claude?.sessionId, claudeSessionId);
+      assert.equal(session?.runtime?.claude?.cwd, workDir);
+      assert.equal(session?.mirror_status, 'watching');
+      const tmuxLog = fs.readFileSync(fakeTmux.logPath, 'utf-8');
+      assert.match(tmuxLog, new RegExp(`send-keys -t ${tmuxSessionName} -l hello claude tmux mirror`));
+      assert.ok(adapter.streamEvents.some((event) => event.kind === 'mirror_start' && event.streamKey?.startsWith('mirror:')));
+      assert.ok(adapter.streamEvents.some((event) => (
+        event.kind === 'text'
+        && event.streamKey?.startsWith('mirror:')
+        && /Claude tmux mirror response/.test(event.text || '')
+      )));
+    } finally {
+      process.env.PATH = oldPath;
+      if (oldFakeLog === undefined) delete process.env.TMUX_FAKE_LOG;
+      else process.env.TMUX_FAKE_LOG = oldFakeLog;
+      if (oldFakeState === undefined) delete process.env.TMUX_FAKE_STATE;
+      else process.env.TMUX_FAKE_STATE = oldFakeState;
+      if (oldClaudeHome === undefined) delete process.env.CODELARK_CLAUDE_HOME;
+      else process.env.CODELARK_CLAUDE_HOME = oldClaudeHome;
+      if (oldDiscoveryTimeout === undefined) delete process.env.CODELARK_CLAUDE_PTY_JSONL_DISCOVERY_TIMEOUT_MS;
+      else process.env.CODELARK_CLAUDE_PTY_JSONL_DISCOVERY_TIMEOUT_MS = oldDiscoveryTimeout;
+      fs.rmSync(workDir, { recursive: true, force: true });
+      fs.rmSync(claudeHome, { recursive: true, force: true });
+      if (transcriptPath) fs.rmSync(transcriptPath, { force: true });
       fs.rmSync(fakeTmux.binDir, { recursive: true, force: true });
     }
   });
