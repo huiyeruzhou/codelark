@@ -655,6 +655,7 @@ describe('loadConfig/saveConfig round-trip', () => {
       claudeExecutable: 'ccr',
       claudeDefaultModel: 'claude-sonnet-test',
       claudePermissionMode: 'acceptEdits',
+      claudeReasoningEffort: 'max',
       claudeIdleTimeoutMinutes: 15,
       historyMessageLimit: 12,
       streamStatusIdleStartSeconds: 240,
@@ -689,6 +690,7 @@ describe('loadConfig/saveConfig round-trip', () => {
     assert.equal(reloaded.claudeExecutable, 'ccr');
     assert.equal(reloaded.claudeDefaultModel, 'claude-sonnet-test');
     assert.equal(reloaded.claudePermissionMode, 'acceptEdits');
+    assert.equal(reloaded.claudeReasoningEffort, 'max');
     assert.equal(reloaded.claudeIdleTimeoutMinutes, 15);
     assert.equal(reloaded.historyMessageLimit, 12);
     assert.equal(reloaded.streamStatusIdleStartSeconds, 240);
@@ -696,12 +698,14 @@ describe('loadConfig/saveConfig round-trip', () => {
     assert.doesNotMatch(fs.readFileSync(CONFIG_PATH, 'utf-8'), /CODELARK_SHOW_TOOL_CALL_DETAILS/);
     assert.match(fs.readFileSync(CONFIG_PATH, 'utf-8'), /CODELARK_DEFAULT_CODEX_PROVIDER=sdk/);
     assert.match(fs.readFileSync(CONFIG_PATH, 'utf-8'), /CODELARK_CLAUDE_EXECUTABLE=ccr/);
+    assert.match(fs.readFileSync(CONFIG_PATH, 'utf-8'), /CODELARK_CLAUDE_REASONING_EFFORT=max/);
     const persisted = JSON.parse(fs.readFileSync(CONFIG_JSON_PATH, 'utf-8')) as any;
     assert.equal(persisted.runtime.codex.defaultMode, 'yolo');
     assert.equal(persisted.runtime.bridgeControl.defaultCodexProvider, 'sdk');
     assert.equal(persisted.runtime.claude.executable, 'ccr');
     assert.equal(persisted.runtime.claude.defaultModel, 'claude-sonnet-test');
     assert.equal(persisted.runtime.claude.permissionMode, 'acceptEdits');
+    assert.equal(persisted.runtime.claude.reasoningEffort, 'max');
     assert.equal(persisted.runtime.bridge.historyMessageLimit, 12);
   });
 
@@ -763,15 +767,19 @@ describe('loadConfig/saveConfig round-trip', () => {
       ...loaded,
       runtime: 'claude',
       claudeExecutable: 'ccr',
-      claudeProvider: 'pty',
+      claudeProvider: 'tmux',
+      claudeReasoningEffort: 'high',
     });
 
     const reloaded = loadConfig();
     assert.equal(reloaded.runtime, 'claude');
     assert.equal(reloaded.claudeExecutable, 'ccr');
-    assert.equal(reloaded.claudeProvider, 'pty');
+    assert.equal(reloaded.claudeProvider, 'tmux');
+    assert.equal(reloaded.claudeReasoningEffort, 'high');
     assert.match(fs.readFileSync(CONFIG_PATH, 'utf-8'), /CODELARK_RUNTIME=claude/);
     assert.equal(configToSettings(reloaded).get('bridge_default_runtime'), 'claude');
+    assert.equal(configToSettings(reloaded).get('bridge_claude_provider'), 'tmux');
+    assert.equal(configToSettings(reloaded).get('bridge_claude_reasoning_effort'), 'high');
     const persisted = JSON.parse(fs.readFileSync(CONFIG_JSON_PATH, 'utf-8')) as any;
     assert.equal(persisted.runtime.provider, 'claude');
   });

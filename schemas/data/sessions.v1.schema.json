@@ -202,7 +202,7 @@
               "type": "string"
             },
             "provider": {
-              "enum": ["pty", "sdk"]
+              "enum": ["pty", "tmux", "sdk"]
             },
             "permissionMode": {
               "type": "string"

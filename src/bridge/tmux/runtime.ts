@@ -5,6 +5,8 @@ import {
   parsePositiveIntEnv,
 } from '../../runtime/codex/tmux-provider.js';
 import { resolveCodexCliExecutable } from '../../runtime/codex/cli-executable.js';
+import type { ClaudeExecutable } from '../../configuration/index.js';
+import { buildClaudePtyCommand } from '../../runtime/claude/pty-provider.js';
 import type { StreamChatParams } from '../../runtime/contracts.js';
 import {
   tmuxCore,
@@ -37,6 +39,26 @@ export interface StartCodexResumeTmuxSessionResult {
   existed: boolean;
   sessionName: string;
   codexCommand: string;
+  tmuxCommand: string;
+  commands: string[];
+  ready: boolean;
+}
+
+export interface StartClaudeTmuxSessionParams {
+  sessionName: string;
+  bridgeSessionId: string;
+  workingDirectory?: string;
+  executable?: ClaudeExecutable;
+  model?: string;
+  permissionMode?: string;
+  reasoningEffort?: StreamChatParams['claudeReasoningEffort'];
+  recreate?: boolean;
+}
+
+export interface StartClaudeTmuxSessionResult {
+  existed: boolean;
+  sessionName: string;
+  claudeCommand: string;
   tmuxCommand: string;
   commands: string[];
   ready: boolean;
@@ -76,6 +98,34 @@ const DEFAULT_CODEX_RESUME_TMUX_READY_POLL_MS = 250;
 export function codexTmuxSessionName(threadId: string): string {
   const safe = threadId.trim().replace(/[^A-Za-z0-9_.-]/g, '-').slice(0, 180);
   return `codex_${safe || 'thread'}`;
+}
+
+export function claudeTmuxSessionName(sessionId: string): string {
+  const safe = sessionId.trim().replace(/[^A-Za-z0-9_.-]/g, '-').slice(0, 180);
+  return `claude_${safe || 'session'}`;
+}
+
+function shellQuote(value: string): string {
+  if (/^[A-Za-z0-9_@%+=:,./-]+$/.test(value)) return value;
+  return `'${value.replace(/'/g, "'\\''")}'`;
+}
+
+export function buildClaudeTmuxCommand(params: StartClaudeTmuxSessionParams): {
+  tmuxArgs: string[];
+  claudeCommand: string;
+} {
+  const { command, args } = buildClaudePtyCommand(params.executable || 'claude', {
+    model: params.model,
+    permissionMode: params.permissionMode,
+    reasoningEffort: params.reasoningEffort,
+  });
+  const claudeCommand = [command, ...args].map(shellQuote).join(' ');
+  const tmuxArgs = ['new-session', '-d', '-s', params.sessionName];
+  if (params.workingDirectory) {
+    tmuxArgs.push('-c', params.workingDirectory);
+  }
+  tmuxArgs.push('--', claudeCommand);
+  return { tmuxArgs, claudeCommand };
 }
 
 export function buildCodexResumeTmuxCommand(params: StartCodexResumeTmuxSessionParams): {
@@ -176,6 +226,81 @@ export async function startCodexResumeTmuxSession(
     existed: started.existed,
     sessionName: params.sessionName,
     codexCommand,
+    tmuxCommand: started.command || '',
+    commands: [...started.commands, ...ready.commands],
+    ready: ready.ready,
+  };
+}
+
+export function hasClaudeTmuxReadyPrompt(screenText: string): boolean {
+  const normalized = screenText
+    .replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, '')
+    .replace(/\r\n/g, '\n')
+    .replace(/\r/g, '\n')
+    .slice(-20_000);
+  const compact = normalized.replace(/\s+/g, '').toLowerCase();
+  return /Claude\s+Code/i.test(normalized)
+    && (
+      normalized.includes('❯')
+      || compact.includes('forshortcuts')
+      || compact.includes('/effort')
+    );
+}
+
+export async function waitForClaudeTmuxReady(
+  sessionName: string,
+  core: TmuxCore = tmuxCore,
+): Promise<{ ready: boolean; commands: string[] }> {
+  const timeoutMs = parsePositiveIntEnv(
+    'CODELARK_CLAUDE_TMUX_READY_TIMEOUT_MS',
+    DEFAULT_CODEX_RESUME_TMUX_READY_TIMEOUT_MS,
+    0,
+  );
+  const pollMs = parsePositiveIntEnv(
+    'CODELARK_CLAUDE_TMUX_READY_POLL_MS',
+    DEFAULT_CODEX_RESUME_TMUX_READY_POLL_MS,
+    50,
+  );
+  if (timeoutMs <= 0) return { ready: true, commands: [] };
+
+  const deadline = Date.now() + timeoutMs;
+  const commands: string[] = [];
+  while (Date.now() <= deadline) {
+    try {
+      const capture = await core.capturePane(sessionName, 80);
+      commands.push(capture.command);
+      if (hasClaudeTmuxReadyPrompt(capture.screen)) {
+        return { ready: true, commands };
+      }
+    } catch {
+      // The pane can be briefly unavailable immediately after tmux creates it.
+    }
+    await sleep(pollMs);
+  }
+
+  console.warn('[claude-tmux-runtime] Timed out waiting for Claude tmux to become ready:', {
+    tmux_session: sessionName,
+    timeout_ms: timeoutMs,
+  });
+  return { ready: false, commands };
+}
+
+export async function startClaudeTmuxSession(
+  params: StartClaudeTmuxSessionParams,
+  core: TmuxCore = tmuxCore,
+): Promise<StartClaudeTmuxSessionResult> {
+  const { claudeCommand } = buildClaudeTmuxCommand(params);
+  const started = await core.ensureDetachedSession({
+    name: params.sessionName,
+    cwd: params.workingDirectory,
+    command: claudeCommand,
+    recreate: params.recreate === true,
+  });
+  const ready = await waitForClaudeTmuxReady(params.sessionName, core);
+  return {
+    existed: started.existed,
+    sessionName: params.sessionName,
+    claudeCommand,
     tmuxCommand: started.command || '',
     commands: [...started.commands, ...ready.commands],
     ready: ready.ready,

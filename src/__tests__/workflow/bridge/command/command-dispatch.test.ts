@@ -1311,6 +1311,7 @@ describe('command-dispatch', () => {
     assert.equal(card?.updateKey, `thread-card:current:${address.channelType}:${address.chatId}`);
     assert.equal(card?.updateTtlMs, null);
     assert.deepEqual(card?.tags, ['codex', '019e7d66...card01']);
+    assert.match(card?.footer?.[0] || '', /当前 agent.*<text_tag color='orange'>Codex<\/text_tag>/);
     assert.match(card?.title || '', /Codex Card title/);
     assert.equal(card?.selects?.[0]?.id, 'current_runtime_select');
     assert.deepEqual(card?.selects?.[0]?.options.map((option) => option.text), ['Codex', 'Claude Code']);
@@ -1368,12 +1369,21 @@ describe('command-dispatch', () => {
     const claudePreviewCard = sent.at(-1)?.richCard as OutboundRichCard | undefined;
     assert.equal(sent.at(-1)?.richCardUpdateMessageId, 'reply-2');
     assert.equal(claudePreviewCard?.tags?.[0], 'claude');
+    assert.match(claudePreviewCard?.footer?.[0] || '', /当前 agent.*<text_tag color='orange'>Claude Code<\/text_tag>/);
     assert.equal(claudePreviewCard?.selects?.[0]?.selectedCallbackData, buildCommandCallbackData('/current-runtime claude'));
     assert.equal(claudePreviewCard?.form?.selects?.some((select) => select.elementId === 'clk_sandbox'), false);
     assert.equal(claudePreviewCard?.form?.selects?.some((select) => select.elementId === 'clk_network'), false);
     assert.deepEqual(
       claudePreviewCard?.form?.selects?.find((select) => select.elementId === 'clk_provider')?.options.map((option) => option.text),
-      ['pty', 'sdk'],
+      ['pty', 'tmux', 'sdk'],
+    );
+    assert.deepEqual(
+      card?.form?.selects?.find((select) => select.elementId === 'clk_reasoning')?.options.map((option) => option.text),
+      ['default', 'minimal', 'low', 'medium', 'high', 'xhigh'],
+    );
+    assert.deepEqual(
+      claudePreviewCard?.form?.selects?.find((select) => select.elementId === 'clk_reasoning')?.options.map((option) => option.text),
+      ['default', 'low', 'medium', 'high', 'xhigh', 'max'],
     );
     assert.deepEqual(
       parseCommandCallbackData(claudePreviewCard?.form?.submitCallbackData || '')?.commandText,
@@ -1507,6 +1517,7 @@ describe('command-dispatch', () => {
       assert.doesNotMatch(sent.at(-1)?.text || '', /codex-thread-id|Provider.*sdk|Provider.*tmux|文件系统权限|网络访问/s);
       assert.equal(sent.at(-1)?.richCard?.template, 'green');
       assert.deepEqual(sent.at(-1)?.richCard?.tags, ['claude', 'claude-h...ession']);
+      assert.match(sent.at(-1)?.richCard?.footer?.[0] || '', /当前 agent.*<text_tag color='orange'>Claude Code<\/text_tag>/);
       assert.equal(sent.at(-1)?.richCard?.selects?.[0]?.id, 'current_runtime_select');
       assert.equal(sent.at(-1)?.richCard?.selects?.[0]?.selectedCallbackData, buildCommandCallbackData('/current-runtime claude'));
       assert.equal(sent.at(-1)?.richCard?.form?.layout, 'two_column');
@@ -3318,6 +3329,19 @@ describe('command-dispatch', () => {
     assert.match(sent.at(-1)?.text || '', /Codex 思考级别.*minimal/s);
     assert.match(sent.at(-1)?.text || '', /禁用 web search/);
     assert.equal(loadConfig().codexReasoningEffort, 'minimal');
+
+    await handleBridgeCommand(
+      adapter,
+      {
+        address,
+        text: '/set claudeReasoningEffort max',
+        messageId: 'incoming-set-claude-reasoning',
+      } as any,
+      '/set claudeReasoningEffort max',
+      deps,
+    );
+    assert.match(sent.at(-1)?.text || '', /Claude 思考级别.*max/s);
+    assert.equal(loadConfig().claudeReasoningEffort, 'max');
 
     await handleBridgeCommand(
       adapter,

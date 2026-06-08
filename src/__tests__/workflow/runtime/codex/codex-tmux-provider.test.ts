@@ -630,14 +630,42 @@ describe('codex-tmux-provider', () => {
     const sessionName = `clk-test-long-${process.pid}-${Date.now()}`;
     const readyPath = path.join(tempDir, 'ready');
     const outputPath = path.join(tempDir, 'output.txt');
-    const scriptPath = path.join(tempDir, 'capture-readline.sh');
+    const scriptPath = path.join(tempDir, 'capture-raw-input.mjs');
     const longPrompt = `clk-long-start ${Array.from({ length: 720 }, (_, index) => `token${String(index).padStart(4, '0')}`).join(' ')} clk-long-end`;
 
     fs.writeFileSync(scriptPath, [
-      '#!/usr/bin/env bash',
-      `printf 1 > ${shellQuote(readyPath)}`,
-      'IFS= read -e -r line',
-      `printf '%s' "$line" > ${shellQuote(outputPath)}`,
+      "import fs from 'node:fs';",
+      '',
+      'const [, , readyPath, outputPath] = process.argv;',
+      'let received = "";',
+      'let done = false;',
+      '',
+      'function finish() {',
+      '  if (done) return;',
+      '  done = true;',
+      '  fs.writeFileSync(outputPath, received, "utf-8");',
+      '  process.exit(0);',
+      '}',
+      '',
+      'process.stdin.setEncoding("utf-8");',
+      'process.stdin.setRawMode?.(true);',
+      'process.stdin.resume();',
+      'fs.writeFileSync(readyPath, "1", "utf-8");',
+      '',
+      'const timeout = setTimeout(() => process.exit(2), 10000);',
+      'timeout.unref?.();',
+      '',
+      'process.stdin.on("data", (chunk) => {',
+      '  const text = String(chunk);',
+      '  const newlineIndex = text.search(/[\\r\\n]/);',
+      '  if (newlineIndex >= 0) {',
+      '    received += text.slice(0, newlineIndex);',
+      '    clearTimeout(timeout);',
+      '    finish();',
+      '    return;',
+      '  }',
+      '  received += text;',
+      '});',
       '',
     ].join('\n'), 'utf-8');
     fs.chmodSync(scriptPath, 0o755);
@@ -649,14 +677,14 @@ describe('codex-tmux-provider', () => {
         '-s',
         sessionName,
         '--',
-        shellQuote(scriptPath),
+        `${shellQuote(process.execPath)} ${shellQuote(scriptPath)} ${shellQuote(readyPath)} ${shellQuote(outputPath)}`,
       ]);
 
       assert.equal(await waitForFile(readyPath), true, 'capture process should become ready');
       await injectPromptIntoTmuxPane(`${sessionName}:0.0`, longPrompt);
       assert.equal(await waitForFile(outputPath, 12_000), true, 'capture process should write received bytes');
 
-      const received = fs.readFileSync(outputPath, 'utf-8');
+      const received = fs.readFileSync(outputPath, 'utf-8').replace(/\x1B\[4~/g, '');
       assert.equal(received, longPrompt);
     } finally {
       await execFileAsync('tmux', ['kill-session', '-t', sessionName]).catch(() => undefined);

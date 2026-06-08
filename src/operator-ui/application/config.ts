@@ -84,6 +84,7 @@ export function configToPayload(config: Config) {
     claudeExecutable: config.claudeExecutable || 'claude',
     claudeDefaultModel: config.claudeDefaultModel || '',
     claudePermissionMode: config.claudePermissionMode || 'default',
+    claudeReasoningEffort: config.claudeReasoningEffort || '',
     claudeIdleTimeoutMinutes: config.claudeIdleTimeoutMinutes ?? 0,
     uiAllowLan: config.uiAllowLan === true,
     uiAccessToken: config.uiAccessToken || '',
@@ -114,6 +115,9 @@ export function mergeConfig(current: Config, payload: Record<string, unknown>): 
     : undefined;
   const rawClaudePermissionMode = typeof payload.claudePermissionMode === 'string'
     ? payload.claudePermissionMode.trim()
+    : undefined;
+  const rawClaudeReasoningEffort = typeof payload.claudeReasoningEffort === 'string'
+    ? payload.claudeReasoningEffort.trim()
     : undefined;
   const uiAllowLan = payload.uiAllowLan === true;
   const requestedUiAccessToken = asString(payload.uiAccessToken);
@@ -164,7 +168,7 @@ export function mergeConfig(current: Config, payload: Record<string, unknown>): 
       : rawClaudeDefaultModel || undefined,
     claudeProvider: rawClaudeProvider === undefined
       ? current.claudeProvider
-      : rawClaudeProvider === 'sdk' || rawClaudeProvider === 'pty'
+      : rawClaudeProvider === 'sdk' || rawClaudeProvider === 'pty' || rawClaudeProvider === 'tmux'
         ? rawClaudeProvider
         : undefined,
     claudeExecutable: rawClaudeExecutable === 'ccr' || rawClaudeExecutable === 'claude'
@@ -176,6 +180,15 @@ export function mergeConfig(current: Config, payload: Record<string, unknown>): 
       || rawClaudePermissionMode === 'default'
       ? rawClaudePermissionMode
       : current.claudePermissionMode,
+    claudeReasoningEffort: rawClaudeReasoningEffort === undefined
+      ? current.claudeReasoningEffort
+      : rawClaudeReasoningEffort === 'low'
+        || rawClaudeReasoningEffort === 'medium'
+        || rawClaudeReasoningEffort === 'high'
+        || rawClaudeReasoningEffort === 'xhigh'
+        || rawClaudeReasoningEffort === 'max'
+        ? rawClaudeReasoningEffort
+        : undefined,
     claudeIdleTimeoutMinutes: asNonNegativeInt(payload.claudeIdleTimeoutMinutes)
       ?? current.claudeIdleTimeoutMinutes
       ?? 0,

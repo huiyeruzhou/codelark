@@ -244,7 +244,7 @@ Accessor 边界：
 
 ## 当前优先调整点
 
-- `/provider`、`/p` 从 “CodexRuntime 参数” 移到 “Bridge 控制”，因为它选择 bridge 如何驱动当前 runtime，不是模型执行参数。Codex 支持 `sdk|pty|tmux`，Claude 支持 `pty|sdk`，切换时只修改当前 active runtime 的 provider。
+- `/provider`、`/p` 从 “CodexRuntime 参数” 移到 “Bridge 控制”，因为它选择 bridge 如何驱动当前 runtime，不是模型执行参数。Codex 支持 `sdk|pty|tmux`，Claude 支持 `pty|tmux|sdk`，切换时只修改当前 active runtime 的 provider。
 - `/set` 展示与 schema 应拆成 GlobalRuntime(Codex)、GlobalRuntime(Claude)、GlobalBridge，而不是一个扁平配置表。
 - `schemas/config.v1.schema.json` 以 `runtime.codex`、`runtime.claude`、`runtime.bridgeControl`、`runtime.bridge` 作为权威分组；旧扁平字段不再作为配置兼容输入。
 - `BridgeStore` 接口中的 `findSessionByCodexThreadId()`、`updateSessionCodexThreadId()` 是 Codex 专属 API；接 Claude 前应新增 provider-neutral accessor 或 runtime-specific registry，避免加出 `findSessionByClaudeSessionId()` 这类平行顶层接口。

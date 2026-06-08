@@ -74,7 +74,7 @@ function buildHistoryUsage(): string {
   ].join('\n');
 }
 
-function currentTag(value: string, color: 'green' | 'blue' | 'yellow' | 'red' | 'grey' = 'green'): string {
+function currentTag(value: string, color: 'green' | 'blue' | 'yellow' | 'red' | 'grey' | 'orange' = 'green'): string {
   return `<text_tag color='${color}'>${value}</text_tag>`;
 }
 
@@ -356,9 +356,9 @@ export function buildCurrentCommandRichCard(options: {
       {
         elementId: 'clk_provider',
         label: 'provider',
-        placeholder: 'pty/sdk',
+        placeholder: 'pty/tmux/sdk',
         selectedCallbackData: claudeConfig?.provider || 'pty',
-        options: [{ text: 'pty', callbackData: 'pty' }, { text: 'sdk', callbackData: 'sdk' }],
+        options: [{ text: 'pty', callbackData: 'pty' }, { text: 'tmux', callbackData: 'tmux' }, { text: 'sdk', callbackData: 'sdk' }],
       },
       {
         elementId: 'clk_reasoning',
@@ -371,6 +371,7 @@ export function buildCurrentCommandRichCard(options: {
           { text: 'medium', callbackData: 'medium' },
           { text: 'high', callbackData: 'high' },
           { text: 'xhigh', callbackData: 'xhigh' },
+          { text: 'max', callbackData: 'max' },
         ],
       },
     ]
@@ -399,6 +400,7 @@ export function buildCurrentCommandRichCard(options: {
       selectedCallbackData: resolveEffectiveReasoningEffort(session),
       options: [
         { text: 'default', callbackData: 'default' },
+        { text: 'minimal', callbackData: 'minimal' },
         { text: 'low', callbackData: 'low' },
         { text: 'medium', callbackData: 'medium' },
         { text: 'high', callbackData: 'high' },
@@ -478,7 +480,10 @@ export function buildCurrentCommandRichCard(options: {
       submitCallbackData: buildCommandCallbackData(`/current-config ${activeRuntime}`),
       options: [],
     },
-    footer: ['顶部 runtime 下拉会立即切换运行时并刷新卡片；配置栏保存后只更新当前 runtime 的配置项。'],
+    footer: [
+      `当前 agent：${currentTag(runtimeLabel, 'orange')}`,
+      '顶部 runtime 下拉会立即切换运行时并刷新卡片；配置栏保存后只更新当前 runtime 的配置项。',
+    ],
   };
 }
 

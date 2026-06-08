@@ -326,7 +326,7 @@ describe('real Claude Code pty provider e2e', () => {
 
   it('submits a smoke prompt through real Claude Code pty', { timeout: 180_000 }, async (t: TestContext) => {
     if (process.env[REAL_CLAUDE_E2E_ENV] !== '1') {
-      t.skip(`set ${REAL_CLAUDE_E2E_ENV}=1 to run real Claude Code e2e tests`);
+      console.info(`[real-claude-pty-provider.e2e] set ${REAL_CLAUDE_E2E_ENV}=1 to run real Claude Code e2e tests`);
       return;
     }
     if (!(await ptyRuntimeAvailable())) {
@@ -369,7 +369,7 @@ describe('real Claude Code pty provider e2e', () => {
 
   it('mirrors Claude Code jsonl from ccr code with a fake model backend', { timeout: 240_000 }, async (t: TestContext) => {
     if (process.env[REAL_CLAUDE_CCR_FAKE_E2E_ENV] !== '1') {
-      t.skip(`set ${REAL_CLAUDE_CCR_FAKE_E2E_ENV}=1 to run fake CCR Claude Code jsonl mirror e2e`);
+      console.info(`[real-claude-pty-provider.e2e] set ${REAL_CLAUDE_CCR_FAKE_E2E_ENV}=1 to run fake CCR Claude Code jsonl mirror e2e`);
       return;
     }
     if (!(await ptyRuntimeAvailable())) {

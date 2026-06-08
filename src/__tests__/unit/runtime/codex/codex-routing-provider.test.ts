@@ -56,6 +56,12 @@ describe('CodexRoutingProvider', () => {
         return streamWithText('claude-sdk-stream');
       },
     };
+    provider.claudeTmuxProvider = {
+      streamChat() {
+        routed.push('claude-tmux');
+        return streamWithText('claude-tmux-stream');
+      },
+    };
 
     const sdkOutput = await readStream(provider.streamChat({
       prompt: 'hello',
@@ -90,14 +96,22 @@ describe('CodexRoutingProvider', () => {
       claudeProvider: 'sdk',
       claudeExecutable: 'ccr',
     }));
+    const claudeTmuxOutput = await readStream(provider.streamChat({
+      prompt: 'hello',
+      sessionId: 'session-claude-tmux',
+      runtime: 'claude',
+      claudeProvider: 'tmux',
+      claudeExecutable: 'ccr',
+    }));
 
-    assert.deepEqual(routed, ['sdk', 'tmux', 'pty', 'sdk', 'claude-pty', 'claude-sdk']);
+    assert.deepEqual(routed, ['sdk', 'tmux', 'pty', 'sdk', 'claude-pty', 'claude-sdk', 'claude-tmux']);
     assert.equal(sdkOutput, 'sdk-stream');
     assert.equal(tmuxOutput, 'tmux-stream');
     assert.equal(ptyOutput, 'pty-stream');
     assert.equal(defaultOutput, 'sdk-stream');
     assert.equal(claudeOutput, 'claude-pty-stream');
     assert.equal(claudeSdkOutput, 'claude-sdk-stream');
+    assert.equal(claudeTmuxOutput, 'claude-tmux-stream');
   });
 
   it('builds Claude Code pty commands from the global Claude executable', () => {

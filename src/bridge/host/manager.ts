@@ -105,6 +105,7 @@ import {
 import {
   formatDisplayedModel,
   getCodexSessionByThreadIdSafe,
+  resolveEffectiveClaudeProvider,
   resolveDisplayedModel,
   resolveEffectiveCodexProvider,
   resolveNewWorkingDirectory,
@@ -2951,11 +2952,12 @@ async function handleMessage(
   const tmuxProviderSession = tmuxProviderBinding ? store.getSession(tmuxProviderBinding.bridgeSessionId) : null;
   const tmuxProviderActiveRuntime = getSessionActiveRuntime(tmuxProviderSession) || 'codex';
   const tmuxProviderEffectiveProvider = tmuxProviderSession
-    ? resolveEffectiveCodexProvider(tmuxProviderSession)
+    ? tmuxProviderActiveRuntime === 'claude'
+      ? resolveEffectiveClaudeProvider(tmuxProviderSession)
+      : resolveEffectiveCodexProvider(tmuxProviderSession)
     : null;
   if (
     tmuxProviderSession
-    && tmuxProviderActiveRuntime !== 'claude'
     && tmuxProviderEffectiveProvider === 'tmux'
   ) {
     const tmuxProviderChat = tmuxProviderBinding;
@@ -2971,7 +2973,7 @@ async function handleMessage(
       return;
     }
     if (hasAttachments) {
-      await deliverBridgeNotice(adapter, msg.address, '当前处于 tmux Provider，普通附件不会自动转发到 Codex TUI。请先发送 `/provider sdk`，或在 Codex TUI 内自行读取本地文件。', {
+      await deliverBridgeNotice(adapter, msg.address, '当前处于 tmux Provider，普通附件不会自动转发到终端 TUI。请先发送 `/provider sdk`，或在 TUI 内自行读取本地文件。', {
         replyToMessageId: msg.messageId,
       });
       ack();
@@ -3035,7 +3037,9 @@ async function handleMessage(
         });
         SESSION_HEALTH_RUNTIME.recordInteractiveStart(
           tmuxProviderBridgeSessionId,
-          '已向 Codex tmux TUI 注入消息，等待 mirror 同步当前 turn。',
+          tmuxProviderActiveRuntime === 'claude'
+            ? '已向 Claude tmux TUI 注入消息，等待 mirror 同步当前 turn。'
+            : '已向 Codex tmux TUI 注入消息，等待 mirror 同步当前 turn。',
         );
         store.insertAuditLog({
           channelType: adapter.channelType,
@@ -3044,7 +3048,7 @@ async function handleMessage(
           messageId: msg.messageId,
           summary: [
             'terminal append input delivered',
-            'runtime=codex',
+            `runtime=${tmuxProviderActiveRuntime}`,
             'provider=tmux',
             `session=${tmuxProviderBinding?.bridgeSessionId || ''}`,
             `chars=${text.length}`,

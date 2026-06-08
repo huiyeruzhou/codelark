@@ -2,7 +2,7 @@ import type { ChannelChatMode } from './channel.js';
 
 export type CodexSandboxMode = 'read-only' | 'workspace-write' | 'danger-full-access';
 export type CodexReasoningEffort = 'minimal' | 'low' | 'medium' | 'high' | 'xhigh';
-export type ClaudeProviderChoice = 'pty' | 'sdk';
+export type ClaudeProviderChoice = 'pty' | 'sdk' | 'tmux';
 export type ClaudeExecutable = 'claude' | 'ccr';
 export type ClaudePermissionMode = 'default' | 'acceptEdits' | 'bypassPermissions' | 'plan';
 

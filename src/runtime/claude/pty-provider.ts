@@ -158,7 +158,7 @@ async function loadPtyModule(): Promise<PtyModule> {
   }
 }
 
-function buildClaudePtyCommand(
+export function buildClaudePtyCommand(
   executable: ClaudeExecutable,
   options: {
     model?: string;
@@ -217,7 +217,7 @@ async function waitForClaudePtyBuffer(
   return predicate(session.buffer);
 }
 
-function findLatestClaudeSessionJsonlUpdatedAfter(cwd: string, sinceMs: number): ClaudeSessionJsonlSummary | null {
+export function findLatestClaudeSessionJsonlUpdatedAfter(cwd: string, sinceMs: number): ClaudeSessionJsonlSummary | null {
   const candidates: Array<{ mtimeMs: number; summary: ClaudeSessionJsonlSummary }> = [];
   for (const filePath of listClaudeSessionJsonlFiles(cwd)) {
     try {

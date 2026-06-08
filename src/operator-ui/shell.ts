@@ -264,12 +264,32 @@ export function renderUiShellHtml(): string {
                     <input id="claudeDefaultModel" placeholder="留空则跟随 Claude Code 默认" />
                   </label>
                   <label>
+                    <span class="field-title">Claude Provider <span class="help-tip" tabindex="0" data-tip="选择 Claude Code runtime 的默认驱动方式。">?</span></span>
+                    <select id="claudeProvider">
+                      <option value="">default</option>
+                      <option value="pty">pty</option>
+                      <option value="tmux">tmux</option>
+                      <option value="sdk">sdk</option>
+                    </select>
+                  </label>
+                  <label>
                     <span class="field-title">Claude 权限模式 <span class="help-tip" tabindex="0" data-tip="只影响后续 Claude Code runtime；不会改变 Codex sandbox/network 配置。">?</span></span>
                     <select id="claudePermissionMode">
                       <option value="default">default</option>
                       <option value="acceptEdits">acceptEdits</option>
                       <option value="bypassPermissions">bypassPermissions</option>
                       <option value="plan">plan</option>
+                    </select>
+                  </label>
+                  <label>
+                    <span class="field-title">Claude 思考级别 <span class="help-tip" tabindex="0" data-tip="设置 Claude Code 默认 effort；留空使用 Claude Code 默认值。">?</span></span>
+                    <select id="claudeReasoningEffort">
+                      <option value="">default</option>
+                      <option value="low">low</option>
+                      <option value="medium">medium</option>
+                      <option value="high">high</option>
+                      <option value="xhigh">xhigh</option>
+                      <option value="max">max</option>
                     </select>
                   </label>
                   <label>
@@ -1020,8 +1040,10 @@ export function renderUiShellHtml(): string {
           codexNetworkAccess: document.getElementById('codexNetworkAccess').checked,
           codexReasoningEffort: document.getElementById('codexReasoningEffort').value,
           claudeExecutable: document.getElementById('claudeExecutable').value,
+          claudeProvider: document.getElementById('claudeProvider').value,
           claudeDefaultModel: document.getElementById('claudeDefaultModel').value,
           claudePermissionMode: document.getElementById('claudePermissionMode').value,
+          claudeReasoningEffort: document.getElementById('claudeReasoningEffort').value,
           claudeIdleTimeoutMinutes: document.getElementById('claudeIdleTimeoutMinutes').value,
           showToolCallDetails: document.getElementById('showToolCallDetails').checked,
           uiAllowLan: document.getElementById('uiAllowLan').checked,
@@ -1322,8 +1344,10 @@ export function renderUiShellHtml(): string {
         codexNetworkAccess: 'Codex 网络访问',
         codexReasoningEffort: 'Codex 思考级别',
         claudeExecutable: 'Claude executable',
+        claudeProvider: 'Claude Provider',
         claudeDefaultModel: 'Claude 默认模型',
         claudePermissionMode: 'Claude 权限模式',
+        claudeReasoningEffort: 'Claude 思考级别',
         claudeIdleTimeoutMinutes: 'Claude 空闲超时',
         showToolCallDetails: '显示工具输入输出',
         uiAllowLan: '允许局域网访问 Web 控制台',
@@ -1349,8 +1373,10 @@ export function renderUiShellHtml(): string {
         'codexNetworkAccess',
         'codexReasoningEffort',
         'claudeExecutable',
+        'claudeProvider',
         'claudeDefaultModel',
         'claudePermissionMode',
+        'claudeReasoningEffort',
         'claudeIdleTimeoutMinutes',
         'showToolCallDetails',
         'uiAllowLan',
@@ -2045,8 +2071,10 @@ export function renderUiShellHtml(): string {
         document.getElementById('codexNetworkAccess').checked = config.codexNetworkAccess !== false;
         document.getElementById('codexReasoningEffort').value = config.codexReasoningEffort || 'medium';
         document.getElementById('claudeExecutable').value = config.claudeExecutable || 'claude';
+        document.getElementById('claudeProvider').value = config.claudeProvider || '';
         document.getElementById('claudeDefaultModel').value = config.claudeDefaultModel || '';
         document.getElementById('claudePermissionMode').value = config.claudePermissionMode || 'default';
+        document.getElementById('claudeReasoningEffort').value = config.claudeReasoningEffort || '';
         document.getElementById('claudeIdleTimeoutMinutes').value = String(config.claudeIdleTimeoutMinutes || 0);
         document.getElementById('showToolCallDetails').checked = config.showToolCallDetails !== false;
         document.getElementById('uiAllowLan').checked = config.uiAllowLan === true;

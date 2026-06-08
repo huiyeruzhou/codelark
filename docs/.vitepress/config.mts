@@ -59,6 +59,7 @@ export default defineConfig({
           { text: '入口', link: '/architecture/' },
           { text: '当前架构', link: '/architecture/current' },
           { text: '生命周期与解耦评估', link: '/architecture/lifecycle-and-decoupling-audit' },
+          { text: 'tmux Runtime 生命周期', link: '/architecture/tmux-runtime-lifecycle' },
           { text: '后端状态', link: '/architecture/backend-status' },
           { text: '运行时命令作用域', link: '/architecture/runtime-command-scope' },
           { text: 'JSON Schemas', link: '/architecture/json-schemas' },

@@ -174,6 +174,13 @@ export function handleReasoningCommand(options: {
         options.markdown,
       );
     }
+    options.store.updateSession(session.id, setSessionCodexReasoningEffortUpdate(undefined));
+    return buildCommandFields(
+      '已恢复默认思考级别',
+      [['级别', formatReasoningEffort(resolveEffectiveReasoningEffort(options.store.getSession(session.id)))]],
+      ['当前 BridgeSession 已清除 Codex reasoning 覆盖值，后续请求会跟随全局 Codex 默认值。', CODEX_RUNTIME_UPDATE_NOTE],
+      options.markdown,
+    );
   }
   const reasoning = normalizeReasoningEffort(options.args);
   if (!reasoning) {

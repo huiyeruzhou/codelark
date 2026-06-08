@@ -125,9 +125,9 @@ export interface ClaudeRuntimeConfig {
 export function resolveEffectiveClaudeProvider(session?: BridgeSession | null): ClaudeProviderChoice {
   const { store } = getBridgeContext();
   const sessionProvider = getSessionClaudeProvider(session);
-  if (sessionProvider === 'sdk' || sessionProvider === 'pty') return sessionProvider;
+  if (sessionProvider === 'sdk' || sessionProvider === 'pty' || sessionProvider === 'tmux') return sessionProvider;
   const configured = store.getSetting('bridge_claude_provider');
-  if (configured === 'sdk' || configured === 'pty') return configured;
+  if (configured === 'sdk' || configured === 'pty' || configured === 'tmux') return configured;
   return 'pty';
 }
 
@@ -176,6 +176,13 @@ function normalizeClaudePermissionMode(value: string | null | undefined): Claude
   return undefined;
 }
 
+function normalizeClaudeReasoningEffort(
+  value: string | null | undefined,
+): BridgeSessionClaudeRuntimeState['reasoningEffort'] | undefined {
+  if (value === 'low' || value === 'medium' || value === 'high' || value === 'xhigh' || value === 'max') return value;
+  return undefined;
+}
+
 function parsePositiveSettingInt(value: string | null | undefined): number | undefined {
   if (!value) return undefined;
   const parsed = Number(value);
@@ -193,7 +200,8 @@ export function resolveClaudeRuntimeConfig(session?: BridgeSession | null): Clau
     permissionMode: getSessionClaudePermissionMode(session)
       || normalizeClaudePermissionMode(store.getSetting('bridge_claude_permission_mode'))
       || 'default',
-    reasoningEffort: getSessionClaudeReasoningEffort(session),
+    reasoningEffort: getSessionClaudeReasoningEffort(session)
+      || normalizeClaudeReasoningEffort(store.getSetting('bridge_claude_reasoning_effort')),
     idleTimeoutMinutes: parsePositiveSettingInt(store.getSetting('bridge_claude_idle_timeout_minutes')),
   };
 }

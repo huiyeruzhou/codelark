@@ -11,8 +11,9 @@ import {
   setSessionCodexProviderUpdate,
   setSessionCodexThreadIdUpdate,
   setSessionCodexTmuxProviderUpdate,
+  setSessionTmuxSessionNameUpdate,
 } from '../../domain/session-runtime.js';
-import { codexTmuxSessionName, startCodexResumeTmuxSession } from '../tmux/runtime.js';
+import { claudeTmuxSessionName, codexTmuxSessionName, startClaudeTmuxSession, startCodexResumeTmuxSession } from '../tmux/runtime.js';
 import { getCodexThreadId } from '../turn/turn-classifier.js';
 import {
   resolveEffectiveClaudeProvider,
@@ -36,7 +37,7 @@ import {
 import * as router from '../session/channel-router.js';
 
 const CODEX_PROVIDER_OPTIONS_TEXT = '可选：`sdk`（默认 SDK 路径） `pty`（跨平台 Codex TUI 路径） `tmux`（可 attach 的 Codex TUI/tmux 路径）';
-const CLAUDE_PROVIDER_OPTIONS_TEXT = '可选：`pty`（Claude Code TUI/mirror 路径，默认） `sdk`（Claude Agent SDK 原生事件路径）';
+const CLAUDE_PROVIDER_OPTIONS_TEXT = '可选：`pty`（Claude Code TUI/mirror 路径，默认） `tmux`（可 attach 的 Claude Code TUI/tmux 路径） `sdk`（Claude Agent SDK 原生事件路径）';
 
 function parseCodexProviderArg(raw: string): 'sdk' | 'tmux' | 'pty' | null {
   const token = raw.trim().toLowerCase();
@@ -44,9 +45,9 @@ function parseCodexProviderArg(raw: string): 'sdk' | 'tmux' | 'pty' | null {
   return null;
 }
 
-function parseClaudeProviderArg(raw: string): 'sdk' | 'pty' | null {
+function parseClaudeProviderArg(raw: string): 'sdk' | 'pty' | 'tmux' | null {
   const token = raw.trim().toLowerCase();
-  if (token === 'sdk' || token === 'pty') return token;
+  if (token === 'sdk' || token === 'pty' || token === 'tmux') return token;
   return null;
 }
 
@@ -84,7 +85,7 @@ export async function handleProviderCommand(options: {
           ['记住的 Codex BridgeSession', codexSession?.id || '-'],
           ['记住的 Codex Provider', codexSession ? formatSessionCodexProvider(codexSession) : '-'],
         ],
-        [CLAUDE_PROVIDER_OPTIONS_TEXT, '发送 `/provider pty|sdk` 或 `/p pty|sdk` 切换；修改从下一轮 Claude 请求开始生效。'],
+        [CLAUDE_PROVIDER_OPTIONS_TEXT, '发送 `/provider pty|tmux|sdk` 或 `/p pty|tmux|sdk` 切换；修改从下一轮 Claude 请求开始生效。'],
         options.markdown,
       );
     }
@@ -92,7 +93,7 @@ export async function handleProviderCommand(options: {
     if (!requestedProvider) {
       return buildCommandFields(
         'Claude Provider 用法',
-        [['命令', '`/provider pty|sdk` 或 `/p pty|sdk`']],
+        [['命令', '`/provider pty|tmux|sdk` 或 `/p pty|tmux|sdk`']],
         [CLAUDE_PROVIDER_OPTIONS_TEXT],
         options.markdown,
       );
@@ -105,6 +106,50 @@ export async function handleProviderCommand(options: {
         provider: requestedProvider,
         markdown: options.markdown,
       });
+    }
+    if (requestedProvider === 'tmux') {
+      const claudeConfig = resolveClaudeRuntimeConfig(session);
+      const tmuxSessionName = claudeTmuxSessionName(session.id);
+      let startResult: Awaited<ReturnType<typeof startClaudeTmuxSession>>;
+      try {
+        await options.deps.notifyBackgroundOperation?.(`正在启动 Claude Code tmux 后台会话 \`${tmuxSessionName}\`。`);
+        startResult = await startClaudeTmuxSession({
+          sessionName: tmuxSessionName,
+          bridgeSessionId: session.id,
+          workingDirectory: getSessionWorkingDirectory(session),
+          executable: claudeConfig.executable,
+          model: claudeConfig.model,
+          permissionMode: claudeConfig.permissionMode,
+          reasoningEffort: claudeConfig.reasoningEffort,
+          recreate: true,
+        });
+      } catch (error) {
+        const unavailable = formatTmuxProviderUnavailable(error);
+        if (unavailable) return unavailable;
+        throw error;
+      }
+      options.store.updateSession(session.id, mergeSessionRuntimeUpdates(
+        setSessionClaudeProviderUpdate('tmux'),
+        setSessionTmuxSessionNameUpdate(tmuxSessionName),
+      ));
+      await reconcileMirrorSubscriptionsBestEffort(options.deps, 'claude provider tmux switch');
+      return buildCommandFields(
+        '已切换 Claude Provider',
+        [
+          ['Runtime', 'claude'],
+          ['Provider', 'tmux'],
+          ['tmux session', tmuxSessionName],
+          ['ready', startResult.ready ? 'yes' : 'timeout'],
+        ],
+        [
+          startResult.existed
+            ? '同名 tmux session 已存在，已先销毁并重新启动 Claude Code TUI。'
+            : '已启动 Claude Code TUI tmux session。',
+          '之后普通消息会发送到这个 tmux session；回复由 Claude JSONL mirror 与屏幕快照同步。',
+          '可发送 `/tmux-screen` 查看当前 tmux 屏幕；如果需要应用新的 Claude 启动参数，请先 `/stop`，再重新发送 `/p tmux`。',
+        ],
+        options.markdown,
+      );
     }
     options.store.updateSession(session.id, setSessionClaudeProviderUpdate(requestedProvider));
     await reconcileMirrorSubscriptionsBestEffort(options.deps, `claude provider ${requestedProvider} switch`);

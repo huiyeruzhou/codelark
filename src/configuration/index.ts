@@ -15,9 +15,10 @@ export type ChannelProvider = 'feishu';
 export type FeishuSite = 'feishu' | 'lark';
 export type RuntimeProvider = 'codex' | 'claude';
 export type CodexProviderChoice = 'sdk' | 'tmux' | 'pty';
-export type ClaudeProviderChoice = 'pty' | 'sdk';
+export type ClaudeProviderChoice = 'pty' | 'sdk' | 'tmux';
 export type ClaudeExecutable = 'claude' | 'ccr';
 export type ClaudePermissionMode = 'default' | 'acceptEdits' | 'bypassPermissions' | 'plan';
+export type ClaudeReasoningEffort = 'low' | 'medium' | 'high' | 'xhigh' | 'max';
 
 export function isSupportedChannelProvider(value: unknown): value is ChannelProvider {
   return value === 'feishu';
@@ -37,6 +38,7 @@ export interface ClaudeRuntimeDefaultsConfig {
   executable?: ClaudeExecutable;
   defaultModel?: string;
   permissionMode?: ClaudePermissionMode;
+  reasoningEffort?: ClaudeReasoningEffort;
   idleTimeoutMinutes?: number;
 }
 
@@ -108,6 +110,7 @@ export interface Config {
   claudeProvider?: ClaudeProviderChoice;
   claudeExecutable?: ClaudeExecutable;
   claudePermissionMode?: ClaudePermissionMode;
+  claudeReasoningEffort?: ClaudeReasoningEffort;
   claudeIdleTimeoutMinutes?: number;
   uiAllowLan?: boolean;
   uiAccessToken?: string;
@@ -263,12 +266,19 @@ export function normalizeCodexProviderChoice(value: unknown): CodexProviderChoic
 export function normalizeClaudeProviderChoice(value: unknown): ClaudeProviderChoice | undefined {
   if (typeof value !== 'string') return undefined;
   const normalized = value.trim().toLowerCase();
-  if (normalized === 'sdk' || normalized === 'pty') return normalized;
+  if (normalized === 'sdk' || normalized === 'pty' || normalized === 'tmux') return normalized;
   return 'sdk';
 }
 
 function normalizeClaudePermissionMode(value: unknown): ClaudePermissionMode | undefined {
   if (value === 'default' || value === 'acceptEdits' || value === 'bypassPermissions' || value === 'plan') {
+    return value;
+  }
+  return undefined;
+}
+
+function normalizeClaudeReasoningEffort(value: unknown): ClaudeReasoningEffort | undefined {
+  if (value === 'low' || value === 'medium' || value === 'high' || value === 'xhigh' || value === 'max') {
     return value;
   }
   return undefined;
@@ -318,11 +328,12 @@ function effectiveClaudeRuntime(runtime: RuntimeConfig): ClaudeRuntimeDefaultsCo
     executable: normalizeClaudeExecutable(runtime.claude.executable),
     defaultModel: runtime.claude.defaultModel,
     permissionMode: normalizeClaudePermissionMode(runtime.claude.permissionMode),
+    reasoningEffort: normalizeClaudeReasoningEffort(runtime.claude.reasoningEffort),
     idleTimeoutMinutes: runtime.claude.idleTimeoutMinutes && runtime.claude.idleTimeoutMinutes > 0
       ? Math.floor(runtime.claude.idleTimeoutMinutes)
       : undefined,
   };
-  if (!claude.provider && !claude.executable && !claude.defaultModel && !claude.permissionMode && claude.idleTimeoutMinutes === undefined) {
+  if (!claude.provider && !claude.executable && !claude.defaultModel && !claude.permissionMode && !claude.reasoningEffort && claude.idleTimeoutMinutes === undefined) {
     return undefined;
   }
   return claude;
@@ -444,6 +455,7 @@ function migrateLegacyEnvToConfig(env: Map<string, string>): ConfigFile {
         provider: normalizeClaudeProviderChoice(env.get("CODELARK_CLAUDE_PROVIDER")),
         defaultModel: env.get("CODELARK_CLAUDE_DEFAULT_MODEL") || undefined,
         permissionMode: normalizeClaudePermissionMode(env.get("CODELARK_CLAUDE_PERMISSION_MODE")),
+        reasoningEffort: normalizeClaudeReasoningEffort(env.get("CODELARK_CLAUDE_REASONING_EFFORT")),
         idleTimeoutMinutes: parseNonNegativeInt(env.get("CODELARK_CLAUDE_IDLE_TIMEOUT_MINUTES")),
       },
     }),
@@ -570,6 +582,10 @@ function applyRuntimeEnvOverlay(runtime: RuntimeConfig, env: Map<string, string>
     const value = normalizeClaudePermissionMode(env.get("CODELARK_CLAUDE_PERMISSION_MODE"));
     next.claude = { ...(next.claude || {}), permissionMode: value };
   }
+  if (env.has("CODELARK_CLAUDE_REASONING_EFFORT")) {
+    const value = normalizeClaudeReasoningEffort(env.get("CODELARK_CLAUDE_REASONING_EFFORT"));
+    next.claude = { ...(next.claude || {}), reasoningEffort: value };
+  }
   if (env.has("CODELARK_CLAUDE_IDLE_TIMEOUT_MINUTES")) {
     const value = parseNonNegativeInt(env.get("CODELARK_CLAUDE_IDLE_TIMEOUT_MINUTES")) ?? next.claude?.idleTimeoutMinutes;
     next.claude = { ...(next.claude || {}), idleTimeoutMinutes: value };
@@ -691,6 +707,7 @@ function expandConfig(file: ConfigFile): Config {
     claudeProvider: claude?.provider,
     claudeExecutable: claude?.executable,
     claudePermissionMode: claude?.permissionMode,
+    claudeReasoningEffort: claude?.reasoningEffort,
     claudeIdleTimeoutMinutes: claude?.idleTimeoutMinutes,
     uiAllowLan: bridge.uiAllowLan === true,
     uiAccessToken: bridge.uiAccessToken || undefined,
@@ -711,6 +728,7 @@ function buildFileFromExpandedConfig(config: Config, current?: ConfigFile | null
     executable: config.claudeExecutable,
     defaultModel: config.claudeDefaultModel,
     permissionMode: config.claudePermissionMode,
+    reasoningEffort: config.claudeReasoningEffort,
     idleTimeoutMinutes: config.claudeIdleTimeoutMinutes,
   };
   return {
@@ -818,8 +836,10 @@ function buildConfigEnvSnapshot(config: ConfigFile): string {
   out += formatEnvLine("CODELARK_CODEX_NETWORK_ACCESS", String(codex.networkAccess === true));
   out += formatEnvLine("CODELARK_CODEX_REASONING_EFFORT", codex.reasoningEffort);
   out += formatEnvLine("CODELARK_CLAUDE_EXECUTABLE", claude?.executable);
+  out += formatEnvLine("CODELARK_CLAUDE_PROVIDER", claude?.provider);
   out += formatEnvLine("CODELARK_CLAUDE_DEFAULT_MODEL", claude?.defaultModel);
   out += formatEnvLine("CODELARK_CLAUDE_PERMISSION_MODE", claude?.permissionMode);
+  out += formatEnvLine("CODELARK_CLAUDE_REASONING_EFFORT", claude?.reasoningEffort);
   if (claude?.idleTimeoutMinutes !== undefined) {
     out += formatEnvLine("CODELARK_CLAUDE_IDLE_TIMEOUT_MINUTES", String(claude.idleTimeoutMinutes));
   }
@@ -865,6 +885,7 @@ const CONFIG_ENV_MANAGED_KEYS = new Set([
   "CODELARK_CLAUDE_EXECUTABLE",
   "CODELARK_CLAUDE_DEFAULT_MODEL",
   "CODELARK_CLAUDE_PERMISSION_MODE",
+  "CODELARK_CLAUDE_REASONING_EFFORT",
   "CODELARK_CLAUDE_IDLE_TIMEOUT_MINUTES",
   "CODELARK_SHOW_TOOL_CALL_DETAILS",
   "CODELARK_UI_ALLOW_LAN",
@@ -1058,6 +1079,9 @@ export function configToSettings(config: Config): Map<string, string> {
   }
   if (config.claudePermissionMode) {
     m.set("bridge_claude_permission_mode", config.claudePermissionMode);
+  }
+  if (config.claudeReasoningEffort) {
+    m.set("bridge_claude_reasoning_effort", config.claudeReasoningEffort);
   }
   if (config.claudeIdleTimeoutMinutes !== undefined) {
     m.set("bridge_claude_idle_timeout_minutes", String(config.claudeIdleTimeoutMinutes));

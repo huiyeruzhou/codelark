@@ -86,7 +86,7 @@
       "type": "object",
       "properties": {
         "provider": {
-          "enum": ["pty", "sdk"]
+          "enum": ["pty", "tmux", "sdk"]
         },
         "executable": {
           "enum": ["claude", "ccr"]
@@ -96,6 +96,9 @@
         },
         "permissionMode": {
           "enum": ["default", "acceptEdits", "bypassPermissions", "plan"]
+        },
+        "reasoningEffort": {
+          "enum": ["low", "medium", "high", "xhigh", "max"]
         },
         "idleTimeoutMinutes": {
           "type": "integer",

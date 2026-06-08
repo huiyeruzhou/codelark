@@ -101,7 +101,7 @@ export function getSessionClaudeModel(session: SessionRuntimeLike | null | undef
 export function getSessionClaudeProvider(session: SessionRuntimeLike | null | undefined): BridgeSessionClaudeRuntimeState['provider'] | undefined {
   if (!isClaudeRuntime(session)) return undefined;
   const provider = session?.runtime?.claude?.provider;
-  return provider === 'sdk' || provider === 'pty' ? provider : undefined;
+  return provider === 'sdk' || provider === 'pty' || provider === 'tmux' ? provider : undefined;
 }
 
 export function getSessionClaudePermissionMode(session: SessionRuntimeLike | null | undefined): BridgeSessionClaudeRuntimeState['permissionMode'] | undefined {
@@ -223,7 +223,7 @@ export function setSessionSystemPromptUpdate(systemPrompt: string | undefined): 
   return { runtime: { general: { systemPrompt } } };
 }
 
-export function setSessionCodexReasoningEffortUpdate(reasoningEffort: BridgeSessionCodexRuntimeState['reasoningEffort']): BridgeSessionRuntimeUpdate {
+export function setSessionCodexReasoningEffortUpdate(reasoningEffort: BridgeSessionCodexRuntimeState['reasoningEffort'] | undefined): BridgeSessionRuntimeUpdate {
   return { runtime: { codex: { reasoningEffort } } };
 }
 

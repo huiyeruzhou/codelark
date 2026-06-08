@@ -1399,6 +1399,63 @@ describe('bridge command e2e', () => {
     }
   });
 
+  it('routes plain messages into Claude tmux when the active Claude provider is tmux', async () => {
+    const calls: RecordedLlmCall[] = [];
+    const store = initBridgeTestContext({
+      dynamicSettings: true,
+      settings: makeBridgeSettings(),
+      llm: createRecordingLlm(calls),
+    });
+    const fakeTmux = installFakeTmux();
+    const oldPath = process.env.PATH || '';
+    const oldFakeLog = process.env.TMUX_FAKE_LOG;
+    const oldFakeState = process.env.TMUX_FAKE_STATE;
+    process.env.PATH = `${fakeTmux.binDir}${path.delimiter}${oldPath}`;
+    process.env.TMUX_FAKE_LOG = fakeTmux.logPath;
+    process.env.TMUX_FAKE_STATE = fakeTmux.statePath;
+
+    const adapter = new RecordingAdapter();
+    const address = { channelType: 'feishu', chatId: 'chat-runtime-claude-tmux-forward' } as const;
+    const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-runtime-claude-tmux-forward-'));
+    const tmuxSessionName = 'claude_bridge_session';
+
+    try {
+      const { binding } = createExistingChannelChat(store, address, {
+        workDir,
+        name: 'runtime-claude-tmux',
+      });
+      fs.writeFileSync(fakeTmux.statePath, `${tmuxSessionName}\n`, 'utf-8');
+      store.updateSession(binding.bridgeSessionId, {
+        runtime: {
+          activeRuntime: 'claude',
+          claude: { provider: 'tmux' },
+          general: { tmuxSessionName },
+        },
+      });
+
+      await _testOnly.handleMessage(adapter, inboundMessage(address, 'hello claude tmux', 'incoming-claude-tmux-plain'));
+
+      assert.equal(calls.length, 0);
+      const tmuxLog = fs.readFileSync(fakeTmux.logPath, 'utf-8');
+      assert.match(tmuxLog, new RegExp(`send-keys -t ${tmuxSessionName} -l hello claude tmux`));
+      assert.match(tmuxLog, new RegExp(`send-keys -t ${tmuxSessionName} Enter`));
+      assert.ok(readAuditSummaries().some((summary) => (
+        summary.includes('terminal append input delivered')
+          && summary.includes('runtime=claude')
+          && summary.includes('provider=tmux')
+      )));
+      assert.equal(store.getSession(binding.bridgeSessionId)?.health_status, 'running_active');
+    } finally {
+      process.env.PATH = oldPath;
+      if (oldFakeLog === undefined) delete process.env.TMUX_FAKE_LOG;
+      else process.env.TMUX_FAKE_LOG = oldFakeLog;
+      if (oldFakeState === undefined) delete process.env.TMUX_FAKE_STATE;
+      else process.env.TMUX_FAKE_STATE = oldFakeState;
+      fs.rmSync(workDir, { recursive: true, force: true });
+      fs.rmSync(fakeTmux.binDir, { recursive: true, force: true });
+    }
+  });
+
   it('streams Claude proxy JSONL through mirror cards without direct final text', async () => {
     const claudeSessionId = 'claude-proxy-jsonl-session';
     const calls: RecordedLlmCall[] = [];

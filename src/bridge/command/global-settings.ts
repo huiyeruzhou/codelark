@@ -263,7 +263,7 @@ const SETTING_DEFINITIONS: SettingDefinition[] = [
     group: 'global-runtime-claude',
     aliases: ['claudeDefaultProvider'],
     label: '默认 Claude Provider',
-    usage: '/set claudeProvider pty|sdk',
+    usage: '/set claudeProvider pty|tmux|sdk',
     read: (payload) => payload.claudeProvider || 'pty',
     write(payload, rawValue) {
       const token = rawValue.trim().toLowerCase();
@@ -271,11 +271,11 @@ const SETTING_DEFINITIONS: SettingDefinition[] = [
         payload.claudeProvider = '';
         return { ok: true };
       }
-      if (token === 'pty' || token === 'sdk') {
+      if (token === 'pty' || token === 'tmux' || token === 'sdk') {
         payload.claudeProvider = token;
         return { ok: true };
       }
-      return { ok: false, message: '默认 Claude Provider 必须是 pty 或 sdk，也可以用 default/auto 恢复 pty 默认。' };
+      return { ok: false, message: '默认 Claude Provider 必须是 pty、tmux 或 sdk，也可以用 default/auto 恢复 pty 默认。' };
     },
   },
   {
@@ -317,6 +317,26 @@ const SETTING_DEFINITIONS: SettingDefinition[] = [
         return { ok: true };
       }
       return { ok: false, message: 'Claude 权限模式必须是 default、acceptEdits、bypassPermissions 或 plan。' };
+    },
+  },
+  {
+    key: 'claudeReasoningEffort',
+    group: 'global-runtime-claude',
+    aliases: ['claudeReasoning', 'claudeEffort'],
+    label: 'Claude 思考级别',
+    usage: '/set claudeReasoningEffort default|low|medium|high|xhigh|max',
+    read: (payload) => payload.claudeReasoningEffort || 'default',
+    write(payload, rawValue) {
+      const token = rawValue.trim().toLowerCase();
+      if (['default', 'reset', 'unset', 'none'].includes(token)) {
+        payload.claudeReasoningEffort = '';
+        return { ok: true };
+      }
+      if (token === 'low' || token === 'medium' || token === 'high' || token === 'xhigh' || token === 'max') {
+        payload.claudeReasoningEffort = token;
+        return { ok: true };
+      }
+      return { ok: false, message: 'Claude reasoning 必须是 default、low、medium、high、xhigh 或 max。' };
     },
   },
   {
