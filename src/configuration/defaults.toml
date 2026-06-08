@@ -3,9 +3,9 @@ schema_version = 2
 [session]
 workspace = "~"
 tmux_session_name = ""
-tmux_capture_lines = 80
+tmux_capture_lines = 10
 tmux_auto_enter = true
-tmux_echo_input = false
+tmux_echo_input = true
 
 [runtime]
 agent = "codex"
@@ -18,7 +18,7 @@ ui_access_token = ""
 [runtime.codex]
 model = ""
 yolo_mode = "off"
-provider = ""
+provider = "tmux"
 skip_git_repo_check = true
 sandbox_mode = "workspace-write"
 network_access = true

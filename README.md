@@ -57,6 +57,23 @@
 
 ### 安装
 
+- 推荐使用tmux驱动coding agent
+  - MacOS
+  ```sh
+  # 安装Homebrew
+  /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+  # 安装tmu
+  brew install tmux
+  ```
+  - Linux
+  ```sh
+  sudo apt install tmux
+  ```
+  - Windows
+  ```sh
+  winget install psmux
+  ``` 
+
 > 如果你通过环境变量配置模型、代理或 API Key，需要在启动 `codelark` 前 export。
 
 ```bash
@@ -69,30 +86,21 @@ npm install -g codelark
 codelark run
 ```
 
-`codelark run` 会在启动 bridge 前为当前 CodeLark 配置初始化专属 lark-cli 运行环境：把飞书/Lark App 配置投影到 `~/.codelark/runtime/lark-cli-source/config.json`，绑定到 `~/.codelark/runtime/lark-cli/`，并把 `LARK_CHANNEL_CONFIG` 与 `LARKSUITE_CLI_CONFIG_DIR` 注入 bridge/agent 进程。如果默认 lark-cli 配置里已有同 App 的用户授权，启动时会复制到专属目录并切换为 user-default。这样 bridge 内部和 agent 调用 `lark-cli` 时会使用 CodeLark 当前配置，而不是误读默认用户 HOME 下的其他 lark-cli 配置。
+## 常用命令
+- `/`：修改当前对话的配置，比如yolo模式、thinking_effort、model等
+- `/set`：修改全局默认配置
+- `//...`：向模型发送以 `/` 开头的文本，例如 `//status` 会作为 `/status` 发给模型。
+  - 特别常用：`//goal`！
+- `/tmux-screen`：显示coding agent的TUI界面，遇到卡死不动的问题排查用。
+- `<enter>`, `<C-c>`, `<esc>`: 向tmux Provider 发送控制键。
+- `/p tmux`：重启当前 runtime 的 tmux Provider 会话
+- `/p sdk`: 改为使用sdk提供coding agent服务。
+- `/stop`：停止当前任务
+- `/t`：查看最近本地 Codex / Claude Code 会话。
+- `/t rename <名称>`：重命名当前线程；群聊通道会同步修改群聊名称，真实群名会自动带 `[botname]` 前缀。
+- `/new`：发送创建表单，填写名称和工作目录后创建新的 IM 群聊会话。
+- `/clear [名称] [路径]`：在当前聊天上下文创建新的对话并绑定过去，之后仍可用 `/t` 找回旧对话。
 
-默认工作台地址是 `http://127.0.0.1:4781`，端口被占用时会自动切到可用端口。查看当前状态和地址：
-
-```bash
-codelark status
-codelark url
-```
-
-`setup` 向导的主要工作是：
-
-- 飞书鉴权：
-  - 默认引导：使用 `lark-cli` 扫码创建或导入机器人配置。
-  - 手动引导：直接粘贴飞书 `App ID` 和 `App Secret`。
-- 配置：
-  - 选择默认 runtime：优先使用 `~/.codex`；检测到 `~/.claude-code-router` 会推荐 Claude Code Router；都没有时默认 Claude Code。
-  - 之后选择默认工作目录，默认是运行 `codelark setup` 时的当前目录。
-  - 以上内容会保存到 `~/.codelark/config.toml`。旧版 `config.json` / `config.env` 只作为首次启动迁移输入；迁移完成后运行时只读取 TOML 和真实进程环境变量覆盖。`codelark run` / `codelark start` 会再把当前配置绑定到 CodeLark 专属 lark-cli 运行目录。
-
-- 安装 skills：安装向导会说明并默认勾选这些 skill，也可以逐个关闭或全部取消。手动安装可运行：
-
-```bash
-codelark install-skills
-```
 
 ## 典型使用方式
 
@@ -103,22 +111,6 @@ codelark install-skills
 
 ```text
 /t
-```
-
-`/t` 默认显示最近 20 条本地 Codex / Claude Code 会话。需要更多时发送：
-
-```text
-/t all
-```
-
-查看最多 100 条本地 Codex / Claude Code 会话。
-再通过：
-
-```text
-/t 1
-```
-
-切到对应线程。
 
 ### 2. 继续对话
 
@@ -135,9 +127,7 @@ codelark install-skills
 /new
 ```
 
-会发送创建表单，让你填写群聊名称和工作目录。表单会默认带出当前会话的工作目录；临时草稿线程也有自己的工作目录，可以直接作为默认目录。当前聊天还没有绑定会话时，会使用全局默认工作目录。
-
-也可以用纯文本直接指定名称，或同时指定名称和目录：
+会发送创建表单，让你填写群聊名称和工作目录。表单会默认带出当前会话的工作目录也可以用纯文本直接指定名称，或同时指定名称和目录：
 
 ```text
 /new my-thread
@@ -149,36 +139,7 @@ codelark install-skills
 
 `/clear [名称] [路径]` 会在当前聊天上下文创建一个新的对话，并把当前聊天绑定过去；名称或路径包含空格时，请使用英文双引号 `"` 或英文单引号 `'`。之后可用 `/t` 重新附加到之前的对话。若当前 SDK 任务、共享镜像状态或 tmux TUI 追加输入仍显示运行中，会先询问是否终止旧对话；确认后再切换。群聊通道会同步重命名群聊，真实群名会自动带 `[botname]` 前缀。
 
-## 常用命令
 
-### 会话
-
-- `/t`：查看最近 20 条本地 Codex / Claude Code 会话。
-  - 表格标记：绿色表示当前聊天绑定；灰色表示其他聊天已绑定。
-- `/t rename <名称>`：重命名当前线程；群聊通道会同步修改群聊名称，真实群名会自动带 `[botname]` 前缀。
-- `/new`：发送创建表单，填写名称和工作目录后创建新的 IM 群聊会话。
-- `/clear [名称] [路径]`：在当前聊天上下文创建新的对话并绑定过去，之后仍可用 `/t` 找回旧对话。
-
-### 运行设置
-
-- `/`：查看/配置当前聊天，包括模型、模式、思考级别、共享镜像状态。
-- `/r <1-5>`：切换思考级别。
-- `/mode <normal|yolo>`：切换运行模式，自动映射到 Codex 和 Claude Code 的对应模式。
-- `/model <模型名>`：切换当前 IM 会话模型。
-- `/require-at`：查看当前飞书通道的群聊 @bot 要求；`/require-at on|off` 可切换是否必须 @bot。
-- `/set`：查看全局配置，然后用 `/set <key> <value>` 修改。
-
-### 对话与诊断
-
-- `//...`：向模型发送以 `/` 开头的文本，例如 `//status` 会作为 `/status` 发给模型。
-  - 特别常用：`//goal`！
-- `/tmux-screen`：诊断 Codex 的运行情况。
-  - `<enter>`：向 Codex 对话发送回车。
-  - `<C-c>`：向 Codex 对话发送终止。
-- `/p tmux`：重启当前 runtime 的 tmux Provider 会话（Codex / Claude Code）。
-- `/his [N]`：把当前线程最近消息渲染成卡片发送。
-- `/his json`：直接发送原始 Codex / Claude Code session JSONL 文件，不做二次包装或后处理。
-- `/stop`：停止当前任务；tmux Provider 中已有运行中 TUI turn 时会向 tmux 发送 `<C-c>`。
 
 ## 社区
 

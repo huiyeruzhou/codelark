@@ -10,3 +10,9 @@ config.env
 work/
 STATUS.md
 .restart-recover-*.log
+.claude
+.codex
+.claude-code-router
+.lark-channel
+.lark-cli
+.codelark*
