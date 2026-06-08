@@ -3591,7 +3591,11 @@ enabled = true
     assert.equal(sent.at(-1)?.richCardUpdateMessageId, undefined);
     assert.equal(sent.at(-1)?.richCard?.form?.submitCallbackData, buildCommandCallbackData('/set --group runtime'));
     assert.equal(sent.at(-1)?.richCard?.form?.layout, 'two_column');
-    assert.deepEqual(sent.at(-1)?.richCard?.footer, undefined);
+    assert.equal(sent.at(-1)?.richCard?.form?.actionDividerBefore, true);
+    assert.deepEqual(sent.at(-1)?.richCard?.footer, [
+      'YOLO模式：允许 agent 无需审批绕过沙箱。',
+      'Provider：选择使用何种方式运行 agent，例如 tmux、pty 或 sdk。',
+    ]);
     assert.deepEqual(
       sent.at(-1)?.richCard?.selects?.[0]?.options.map((option: any) => option.text),
       ['通用配置', 'Codex', 'Claude', 'Bridge', '通道配置（feishu-default）'],
@@ -3603,7 +3607,7 @@ enabled = true
     );
     assert.deepEqual(
       sent.at(-1)?.richCard?.form?.selects?.map((select: any) => select.label),
-      ['默认 agent (runtime.agent)', 'tmux 自动回车 (session.tmux_auto_enter)', '回显 tmux 输出 (session.tmux_echo_input)'],
+      ['默认 agent', 'tmux 自动回车', '回显 tmux 输出'],
     );
     assert.deepEqual(
       sent.at(-1)?.richCard?.form?.extraInputs?.map((input: any) => input.elementId),
@@ -3611,7 +3615,7 @@ enabled = true
     );
     assert.deepEqual(
       sent.at(-1)?.richCard?.form?.extraInputs?.map((input: any) => input.label),
-      ['默认工作目录 (bridge.default_workspace)', '默认 tmux session (session.tmux_session_name)', 'tmux 输出行数 (session.tmux_capture_lines)'],
+      ['默认工作目录', '默认 tmux session', 'tmux 输出行数'],
     );
     assert.equal(getThreadTableMessageRecord(address, 'set')?.messageId, 'reply-1');
     assert.equal(store.getChannelChat(address.channelType, address.chatId), null);
@@ -3639,7 +3643,15 @@ enabled = true
     );
     assert.deepEqual(
       sent.at(-1)?.richCard?.form?.selects?.map((select: any) => select.label).slice(0, 2),
-      ['YOLO模式 (runtime.codex.yolo_mode)', 'Provider（运行方式） (runtime.codex.provider)'],
+      ['YOLO模式', 'Provider（运行方式）'],
+    );
+    assert.deepEqual(
+      sent.at(-1)?.richCard?.form?.selects?.find((select: any) => select.elementId === 'defaultProvider')?.options.map((option: any) => option.text),
+      ['sdk', 'pty', 'tmux'],
+    );
+    assert.deepEqual(
+      sent.at(-1)?.richCard?.form?.selects?.find((select: any) => select.elementId === 'codexSandboxMode')?.options.map((option: any) => option.text),
+      ['workspace-write', 'read-only'],
     );
     assert.deepEqual(
       sent.at(-1)?.richCard?.form?.extraInputs?.map((input: any) => input.elementId),
@@ -3689,9 +3701,9 @@ enabled = true
     assert.equal(sent.at(-1)?.richCard?.subtitle, '写入 ~/.codelark/config.toml · 通用配置');
     assert.deepEqual(sent.at(-1)?.richCard?.form?.selects?.map((select: any) => select.elementId), ['runtime', 'tmuxAutoEnter', 'tmuxEchoInput']);
     assert.deepEqual(sent.at(-1)?.richCard?.form?.selects?.map((select: any) => select.label), [
-      '默认 agent (runtime.agent)',
-      'tmux 自动回车 (session.tmux_auto_enter)',
-      '回显 tmux 输出 (session.tmux_echo_input)',
+      '默认 agent',
+      'tmux 自动回车',
+      '回显 tmux 输出',
     ]);
     assert.equal(getThreadTableMessageRecord(address, 'set')?.messageId, 'reply-1');
 
