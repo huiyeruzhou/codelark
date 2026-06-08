@@ -213,7 +213,6 @@ describe('UiSessionApplication', () => {
           sessionId: 'claude-config-session',
           cwd: '/tmp/claude-config',
           model: 'legacy-sonnet',
-          permissionMode: 'acceptEdits',
           reasoningEffort: 'low',
         },
         general: { workingDirectory: '/tmp/claude-config' },
@@ -226,7 +225,6 @@ describe('UiSessionApplication', () => {
         runtime: {
           claude: {
             model: 'initial-sonnet',
-            permissionMode: 'plan',
             reasoningEffort: 'medium',
           },
         },
@@ -237,13 +235,11 @@ describe('UiSessionApplication', () => {
     const config = app.getConfig(session.id);
     assert.equal(config.activeRuntime, 'claude');
     assert.equal(config.claudeModel, 'initial-sonnet');
-    assert.equal(config.claudePermissionMode, 'plan');
     assert.equal(config.claudeReasoningEffort, 'medium');
 
     const updated = app.updateConfig(session.id, {
       activeRuntime: 'claude',
       claudeModel: 'opus',
-      claudePermissionMode: 'bypassPermissions',
       claudeReasoningEffort: 'high',
       model: 'should-not-write-codex',
       preferredMode: 'yolo',
@@ -252,45 +248,25 @@ describe('UiSessionApplication', () => {
 
     assert.equal(updated.activeRuntime, 'claude');
     assert.equal(updated.claudeModel, 'opus');
-    assert.equal(updated.claudePermissionMode, 'bypassPermissions');
     assert.equal(updated.claudeReasoningEffort, 'high');
     const stored = store.getSession(session.id);
     assert.equal(stored?.runtime?.activeRuntime, 'claude');
     assert.equal(stored?.runtime?.claude?.model, 'legacy-sonnet');
-    assert.equal(stored?.runtime?.claude?.permissionMode, 'acceptEdits');
     assert.equal(stored?.runtime?.claude?.reasoningEffort, 'low');
     assert.equal(stored?.runtime?.codex, undefined);
     assert.equal(configService.get('runtime.claude.model', { kind: 'session', sessionId: session.id }), 'opus');
-    assert.equal(configService.get('runtime.claude.yoloMode', { kind: 'session', sessionId: session.id }), 'on');
-    assert.equal(configService.get('runtime.claude.permissionMode', { kind: 'session', sessionId: session.id }), 'bypassPermissions');
+    assert.equal(configService.get('runtime.claude.yoloMode', { kind: 'session', sessionId: session.id }), 'off');
     assert.equal(configService.get('runtime.claude.reasoningEffort', { kind: 'session', sessionId: session.id }), 'high');
 
     store.updateSession(session.id, {
       runtime: {
         activeRuntime: 'claude',
-        claude: { model: undefined, permissionMode: undefined, reasoningEffort: undefined },
+        claude: { model: undefined, reasoningEffort: undefined },
       },
     });
     const tomlBacked = app.getConfig(session.id);
     assert.equal(tomlBacked.claudeModel, 'opus');
-    assert.equal(tomlBacked.claudePermissionMode, 'bypassPermissions');
     assert.equal(tomlBacked.claudeReasoningEffort, 'high');
-
-    const planMode = app.updateConfig(session.id, {
-      activeRuntime: 'claude',
-      claudePermissionMode: 'plan',
-    });
-    assert.equal(planMode.claudePermissionMode, 'plan');
-    assert.equal(configService.get('runtime.claude.permissionMode', { kind: 'session', sessionId: session.id }), 'plan');
-    assert.equal(configService.get('runtime.claude.yoloMode', { kind: 'session', sessionId: session.id }), 'off');
-
-    const acceptEditsMode = app.updateConfig(session.id, {
-      activeRuntime: 'claude',
-      claudePermissionMode: 'acceptEdits',
-    });
-    assert.equal(acceptEditsMode.claudePermissionMode, 'acceptEdits');
-    assert.equal(configService.get('runtime.claude.permissionMode', { kind: 'session', sessionId: session.id }), 'acceptEdits');
-    assert.equal(configService.get('runtime.claude.yoloMode', { kind: 'session', sessionId: session.id }), 'off');
   });
 
   it('writes Codex UI session-level config to session TOML', () => {

@@ -5,7 +5,6 @@ import { z } from 'zod';
 import { createConfigService } from '../../configuration/service.js';
 import {
   claudeExecutableSchema,
-  claudePermissionModeSchema,
   claudeProviderSchema,
   codexProviderSchema,
   reasoningEffortSchema,
@@ -94,10 +93,6 @@ const uiConfigPayloadSchema = z.object({
   claudeProvider: optionalEnum(claudeProviderSchema),
   claudeExecutable: optionalEnum(claudeExecutableSchema),
   claudeDefaultModel: optionalString(),
-  claudePermissionMode: z.preprocess(
-    (value) => typeof value === 'string' ? value.trim() : value,
-    claudePermissionModeSchema,
-  ).optional(),
   claudeIdleTimeoutMinutes: optionalNonNegativeInteger(),
   uiAllowLan: z.boolean().optional(),
   uiAccessToken: optionalString(),
@@ -129,7 +124,6 @@ export function configV2ToPayload(config: ConfigV2) {
     claudeProvider: config.runtime.claude.provider || 'tmux',
     claudeExecutable: config.runtime.claude.executable || 'claude',
     claudeDefaultModel: config.runtime.claude.model || '',
-    claudePermissionMode: config.runtime.claude.permissionMode || 'default',
     claudeIdleTimeoutMinutes: config.runtime.claude.idleTimeoutMinutes ?? 0,
     uiAllowLan: config.bridge.uiAllowLan === true,
     uiAccessToken: config.bridge.uiAccessToken || '',
@@ -146,7 +140,6 @@ export function mergeConfigV2HomePatch(current: ConfigV2, payload: Record<string
   const uiAccessToken = requestedUiAccessToken
     || current.bridge.uiAccessToken
     || (uiAllowLan ? generateAccessToken() : '');
-  const claudePermissionMode = parsed.claudePermissionMode ?? current.runtime.claude.permissionMode;
   const currentChannel = defaultUiChannel(current);
   const historyMessageLimit = currentChannel
     ? parsed.historyMessageLimit ?? currentChannel.config.historyMessageLimit
@@ -189,8 +182,7 @@ export function mergeConfigV2HomePatch(current: ConfigV2, payload: Record<string
           ? current.runtime.claude.provider
           : parsed.claudeProvider,
         executable: parsed.claudeExecutable ?? current.runtime.claude.executable,
-        permissionMode: claudePermissionMode,
-        yoloMode: claudePermissionMode === 'bypassPermissions' ? 'on' : 'off',
+        yoloMode: current.runtime.claude.yoloMode,
         reasoningEffort: current.runtime.claude.reasoningEffort,
         idleTimeoutMinutes: parsed.claudeIdleTimeoutMinutes
           ?? current.runtime.claude.idleTimeoutMinutes

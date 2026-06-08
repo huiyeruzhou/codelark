@@ -10,7 +10,6 @@ import {
   type ChannelProvider,
   type FeishuChannelConfig,
 } from '../channels/types.js';
-import type { ClaudePermissionMode } from '../runtime/options.js';
 import type { ConfigPatch, ConfigV2 } from './schema.js';
 
 // legacy adapter：只负责 v1 Config 与 v2 ConfigPatch/ConfigV2 的兼容转换。
@@ -27,16 +26,6 @@ function legacyCodexMode(mode: ConfigV2['runtime']['codex']['yoloMode']): string
 function v2CodexYoloMode(mode: string | undefined): ConfigV2['runtime']['codex']['yoloMode'] | undefined {
   if (mode === undefined) return undefined;
   return mode === 'yolo' ? 'on' : 'off';
-}
-
-function v2ClaudeYoloMode(permissionMode: ClaudePermissionMode | undefined): ConfigV2['runtime']['claude']['yoloMode'] | undefined {
-  if (permissionMode === undefined) return undefined;
-  return permissionMode === 'bypassPermissions' ? 'on' : 'off';
-}
-
-function legacyClaudePermissionMode(config: ConfigV2['runtime']['claude']): ClaudePermissionMode {
-  if (config.permissionMode !== 'default') return config.permissionMode;
-  return config.yoloMode === 'on' || config.yoloMode === 'yolo' ? 'bypassPermissions' : 'default';
 }
 
 function hasLegacyChannelBehaviorConfig(config: Config): boolean {
@@ -158,7 +147,6 @@ export function configV2ToLegacyConfig(config: ConfigV2): Config {
     claudeDefaultModel: config.runtime.claude.model || undefined,
     claudeProvider: config.runtime.claude.provider,
     claudeExecutable: config.runtime.claude.executable,
-    claudePermissionMode: legacyClaudePermissionMode(config.runtime.claude),
     claudeIdleTimeoutMinutes: config.runtime.claude.idleTimeoutMinutes,
     uiAllowLan: config.bridge.uiAllowLan,
     uiAccessToken: config.bridge.uiAccessToken || undefined,
@@ -167,7 +155,6 @@ export function configV2ToLegacyConfig(config: ConfigV2): Config {
 
 export function legacyConfigToConfigPatch(config: Config): ConfigPatch {
   const codexYoloMode = v2CodexYoloMode(config.defaultMode);
-  const claudeYoloMode = v2ClaudeYoloMode(config.claudePermissionMode);
   const channels: NonNullable<ConfigPatch['channels']> = legacyChannelsForPatch(config).map((channel) => ({
     id: channel.id,
     alias: channel.alias,
@@ -214,8 +201,6 @@ export function legacyConfigToConfigPatch(config: Config): ConfigPatch {
         model: config.claudeDefaultModel,
         provider: config.claudeProvider,
         executable: config.claudeExecutable,
-        yoloMode: claudeYoloMode,
-        permissionMode: config.claudePermissionMode,
         idleTimeoutMinutes: config.claudeIdleTimeoutMinutes,
       },
     },
@@ -300,9 +285,6 @@ export function configToSettings(config: Config): Map<string, string> {
   }
   if (config.claudeDefaultModel) {
     m.set('bridge_claude_default_model', config.claudeDefaultModel);
-  }
-  if (config.claudePermissionMode) {
-    m.set('bridge_claude_permission_mode', config.claudePermissionMode);
   }
   if (config.claudeIdleTimeoutMinutes !== undefined) {
     m.set('bridge_claude_idle_timeout_minutes', String(config.claudeIdleTimeoutMinutes));

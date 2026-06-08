@@ -73,7 +73,7 @@
 | 命令 | 当前写入字段 | Codex 语义 | Claude Code 迁移判断 |
 | --- | --- | --- | --- |
 | `/runtime` | `runtime.activeRuntime` | `codex` 时普通消息进入 Codex routing provider | `claude` 时普通消息默认进入 Claude Code tmux provider；不改变已记住的 `/provider` |
-| `/mode`、`/m` | `runtime.codex.mode` | `normal/yolo`，`yolo` 强制 `danger-full-access` 与 `permissionMode=never` | 可映射到 Claude permission mode，但枚举不能直接复用 |
+| `/mode`、`/m` | `runtime.codex.mode` / `runtime.claude.yoloMode` | Codex `yolo` 强制 `danger-full-access` 与 `permissionMode=never` | Claude Code 只保留 YOLO 开关，运行时由 `yolo_mode` 推导 CLI/SDK permission 参数 |
 | `/reasoning`、`/r` | `runtime.codex.reasoningEffort` | `modelReasoningEffort` | Claude 不应 fallback 到 Codex reasoning；需要 Claude 自己的 thinking/budget 配置或不支持 |
 | `/sandbox`、`/sb` | `runtime.codex.sandboxMode` | Codex sandbox mode | Claude Code 没有同名 sandbox；不能共用 |
 | `/network`、`/net` | `runtime.codex.networkAccess` | Codex network access | Claude Code 网络通常由工具权限/环境决定，不能共用 |
@@ -111,7 +111,7 @@ interface GlobalRuntimeConfig {
   claude: {
     executable?: 'claude' | 'ccr';
     defaultModel?: string;
-    permissionMode?: 'default' | 'acceptEdits' | 'bypassPermissions' | 'plan';
+    yoloMode?: 'off' | 'on';
     idleTimeoutMinutes?: number;
   };
 }
@@ -200,7 +200,7 @@ Codex 与 ClaudeCode 可以共享：
 - `runtime.codex.threadId` 与 Claude `sessionId`。前者可跨 Codex native index 查找和归档，后者必须绑定 cwd 才可 resume。
 - `runtime.codex.model` 与 `runtime.claude.model`。Codex 与 Claude 的模型名空间不同，只能 fallback 到各自 runtime 默认值。
 - `runtime.codex.provider`。它是 Codex SDK/pty/tmux transport 配置，运行时读取 scoped TOML，不再读取 BridgeSession JSON 同名字段。
-- `runtime.codex.sandboxMode/networkAccess/reasoningEffort`。Claude 需要自己的 permission/thinking/timeout 配置。
+- `runtime.codex.sandboxMode/networkAccess/reasoningEffort`。Claude 只保留自己的 YOLO、thinking 和 idle timeout 配置；不再暴露独立 `permission_mode` 配置。
 
 当前 `BridgeSession` 权威存储结构：
 

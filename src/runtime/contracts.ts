@@ -3,12 +3,12 @@ import type { ContextUsageInfo, CodexToolDetail, TaskProgressInfo } from '../dom
 import type {
   BridgeSessionClaudeRuntimeState,
   ClaudeExecutable,
-  ClaudePermissionMode,
   ClaudeProviderChoice,
   CodexReasoningEffort,
   CodexSandboxMode,
   RuntimeProviderChoice,
 } from '../domain/session.js';
+import type { ClaudePermissionMode } from './options.js';
 
 export interface SSEEvent {
   type: SSEEventType;

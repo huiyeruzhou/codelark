@@ -204,8 +204,7 @@ describe('v1 config migration e2e', () => {
       assert.equal(service.get('runtime.codex.provider'), 'tmux');
       assert.equal(service.get('runtime.codex.sandboxMode'), 'danger-full-access');
       assert.equal(service.get('runtime.claude.model'), 'claude-json');
-      assert.equal(service.get('runtime.claude.yoloMode'), 'on');
-      assert.equal(service.get('runtime.claude.permissionMode'), 'bypassPermissions');
+      assert.equal(service.get('runtime.claude.yoloMode'), 'off');
       assert.equal(service.get('runtime.claude.reasoningEffort'), 'high');
       assert.equal(service.get('runtime.claude.idleTimeoutMinutes'), 5);
       const channel = service.snapshot().config.channels.find((entry) => entry.id === 'feishu-default');
@@ -312,8 +311,7 @@ describe('v1 config migration e2e', () => {
       assert.equal(service.get('session.workspace', { kind: 'session', sessionId: 'session-claude' }), '/repo/claude-config');
       assert.equal(service.get('runtime.claude.model', { kind: 'session', sessionId: 'session-claude' }), 'claude-sonnet');
       assert.equal(service.get('runtime.claude.provider', { kind: 'session', sessionId: 'session-claude' }), 'pty');
-      assert.equal(service.get('runtime.claude.yoloMode', { kind: 'session', sessionId: 'session-claude' }), 'on');
-      assert.equal(service.get('runtime.claude.permissionMode', { kind: 'session', sessionId: 'session-claude' }), 'bypassPermissions');
+      assert.equal(service.get('runtime.claude.yoloMode', { kind: 'session', sessionId: 'session-claude' }), 'off');
       assert.equal(service.get('runtime.claude.reasoningEffort', { kind: 'session', sessionId: 'session-claude' }), 'xhigh');
       assert.equal(service.get('runtime.claude.idleTimeoutMinutes', { kind: 'session', sessionId: 'session-claude' }), 7);
 

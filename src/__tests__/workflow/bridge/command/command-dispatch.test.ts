@@ -52,7 +52,6 @@ import { consumeStartupNoticeTarget } from '../../../../bridge/host/startup-noti
 import {
   getSessionActiveRuntime,
   getSessionClaudeModel,
-  getSessionClaudePermissionMode,
   getSessionClaudeProvider,
   getSessionClaudeReasoningEffort,
   getSessionCodexModel,
@@ -1357,8 +1356,8 @@ describe('command-dispatch', () => {
       'codexReasoningEffort',
     ]);
     assert.deepEqual(card?.form?.selects?.map((select) => select.label), [
-      '模式 (runtime.codex.yolo_mode)',
-      'Provider (runtime.codex.provider)',
+      'YOLO模式 (runtime.codex.yolo_mode)',
+      'Provider（运行方式） (runtime.codex.provider)',
       '文件系统权限 (runtime.codex.sandbox_mode)',
       '网络访问 (runtime.codex.network_access)',
       '思考级别 (runtime.codex.reasoning_effort)',
@@ -1396,14 +1395,12 @@ describe('command-dispatch', () => {
     assert.equal(sent.at(-1)?.richCard?.selects?.[0]?.selectedCallbackData, buildCommandCallbackData('/current-runtime claude'));
     assert.deepEqual(sent.at(-1)?.richCard?.form?.selects?.map((select: any) => select.elementId), [
       'claudeMode',
-      'claudePermissionMode',
       'claudeProvider',
       'claudeReasoningEffort',
     ]);
     assert.deepEqual(sent.at(-1)?.richCard?.form?.selects?.map((select: any) => select.label), [
-      '模式 (runtime.claude.yolo_mode)',
-      '权限模式 (runtime.claude.permission_mode)',
-      'Provider (runtime.claude.provider)',
+      'YOLO模式 (runtime.claude.yolo_mode)',
+      'Provider（运行方式） (runtime.claude.provider)',
       '思考级别 (runtime.claude.reasoning_effort)',
     ]);
     assert.equal(
@@ -1444,7 +1441,6 @@ describe('command-dispatch', () => {
                 clk_cwd: '/tmp/current-card',
                 claudeDefaultModel: 'test-model',
                 claudeMode: 'yolo',
-                claudePermissionMode: 'plan',
                 claudeProvider: 'pty',
                 claudeReasoningEffort: 'medium',
                 claudeIdleTimeoutMinutes: '15',
@@ -1458,14 +1454,11 @@ describe('command-dispatch', () => {
     );
 
     assert.equal(store.getSession(claudeBinding.bridgeSessionId)?.name, '重命名 Current');
-    assert.equal(createConfigService({ migrate: false, env: {} }).get('runtime.claude.permissionMode', {
-      kind: 'session',
-      sessionId: claudeBinding.bridgeSessionId,
-    }), 'plan');
     assert.equal(createConfigService({ migrate: false, env: {} }).get('runtime.claude.yoloMode', {
       kind: 'session',
       sessionId: claudeBinding.bridgeSessionId,
     }), 'on');
+    assert.equal(resolveClaudeRuntimeConfig(store.getSession(claudeBinding.bridgeSessionId), claudeBinding).permissionMode, 'bypassPermissions');
     assert.equal(createConfigService({ migrate: false, env: {} }).get('runtime.claude.provider', {
       kind: 'session',
       sessionId: claudeBinding.bridgeSessionId,
@@ -1508,7 +1501,7 @@ describe('command-dispatch', () => {
     store.updateSession(session.id, {
       runtime: {
         activeRuntime: 'claude',
-        claude: { sessionId: claudeSessionId, cwd: '/tmp/claude-history-cwd', model: 'claude-sonnet-test', permissionMode: 'plan', reasoningEffort: 'high' },
+        claude: { sessionId: claudeSessionId, cwd: '/tmp/claude-history-cwd', model: 'claude-sonnet-test', reasoningEffort: 'high' },
         general: { workingDirectory: '/tmp/claude-history-cwd' },
       },
     });
@@ -1518,7 +1511,6 @@ describe('command-dispatch', () => {
         runtime: {
           claude: {
             model: 'claude-sonnet-test',
-            permissionMode: 'plan',
             reasoningEffort: 'high',
           },
         },
@@ -1584,11 +1576,10 @@ describe('command-dispatch', () => {
 
       assert.match(sent.at(-1)?.text || '', /runtime.*Claude Code/s);
       assert.match(sent.at(-1)?.text || '', /claude_session_id.*claude-history-session/s);
-      assert.match(sent.at(-1)?.text || '', /权限模式 .*runtime\.claude\.permission_mode.*plan/s);
       assert.match(sent.at(-1)?.text || '', /模型 .*runtime\.claude\.model.*claude-sonnet-test/s);
-      assert.match(sent.at(-1)?.text || '', /Provider .*runtime\.claude\.provider/s);
+      assert.match(sent.at(-1)?.text || '', /Provider（运行方式） .*runtime\.claude\.provider/s);
       assert.match(sent.at(-1)?.text || '', /思考级别.*high/s);
-      assert.doesNotMatch(sent.at(-1)?.text || '', /codex-thread-id|文件系统权限|网络访问/s);
+      assert.doesNotMatch(sent.at(-1)?.text || '', /codex-thread-id|文件系统权限|网络访问|permission_mode|权限模式/s);
       assert.equal(sent.at(-1)?.richCard?.template, 'green');
       assert.deepEqual(sent.at(-1)?.richCard?.tags, ['claude', 'claude-h...ession']);
       assert.equal(sent.at(-1)?.richCard?.selects?.[0]?.id, 'current_runtime_select');
@@ -1599,7 +1590,6 @@ describe('command-dispatch', () => {
       assert.deepEqual(sent.at(-1)?.richCard?.form?.controlBar?.actions?.map((action) => action.text), ['刷新']);
       assert.deepEqual(sent.at(-1)?.richCard?.form?.selects?.map((select) => select.elementId), [
         'claudeMode',
-        'claudePermissionMode',
         'claudeProvider',
         'claudeReasoningEffort',
       ]);
@@ -3161,7 +3151,6 @@ enabled = true
     );
 
     const updated = store.getSession(session.id);
-    assert.equal(getSessionClaudePermissionMode(updated), 'bypassPermissions');
     assert.equal(getSessionClaudeModel(updated), 'sonnet');
     assert.equal(getSessionClaudeReasoningEffort(updated), 'high');
     assert.equal(getSessionClaudeProvider(updated), 'sdk');
@@ -3169,7 +3158,6 @@ enabled = true
     assert.equal(getSessionCodexReasoningEffort(updated), undefined);
     assert.equal(getSessionCodexSandboxMode(updated), undefined);
     assert.equal(updated?.runtime?.codex, undefined);
-    assert.equal(updated?.runtime?.claude?.permissionMode, undefined);
     assert.equal(updated?.runtime?.claude?.model, undefined);
     assert.equal(updated?.runtime?.claude?.reasoningEffort, undefined);
     assert.equal(updated?.runtime?.claude?.provider, undefined);
@@ -3179,13 +3167,6 @@ enabled = true
         sessionId: session.id,
       }),
       'on',
-    );
-    assert.equal(
-      createConfigService({ migrate: false, env: {} }).get('runtime.claude.permissionMode', {
-        kind: 'session',
-        sessionId: session.id,
-      }),
-      'bypassPermissions',
     );
     assert.equal(
       createConfigService({ migrate: false, env: {} }).get('runtime.claude.model', {
@@ -3598,43 +3579,72 @@ enabled = true
       deps,
     );
     assert.match(sent.at(-1)?.text || '', /全局配置/);
-    assert.match(sent.at(-1)?.text || '', /\[runtime\.codex\]/);
-    assert.match(sent.at(-1)?.text || '', /runtime\.codex\.provider/);
-    assert.match(sent.at(-1)?.text || '', /runtime\.codex\.network_access/);
+    assert.match(sent.at(-1)?.text || '', /通用配置/);
+    assert.match(sent.at(-1)?.text || '', /runtime\.agent/);
+    assert.match(sent.at(-1)?.text || '', /session\.tmux_capture_lines/);
     assert.doesNotMatch(sent.at(-1)?.text || '', /GlobalRuntime \/ Codex/);
-    assert.doesNotMatch(sent.at(-1)?.text || '', /defaultWorkspaceRoot/);
+    assert.doesNotMatch(sent.at(-1)?.text || '', /runtime\.codex\.provider/);
     assert.doesNotMatch(sent.at(-1)?.text || '', /channels/);
     assert.equal(sent.at(-1)?.richCard?.title, '全局配置');
-    assert.equal(sent.at(-1)?.richCard?.subtitle, '写入 ~/.codelark/config.toml · [runtime.codex]');
+    assert.equal(sent.at(-1)?.richCard?.subtitle, '写入 ~/.codelark/config.toml · 通用配置');
     assert.equal(sent.at(-1)?.richCard?.updateKey, `thread-card:set:${address.channelType}:${address.chatId}`);
     assert.equal(sent.at(-1)?.richCardUpdateMessageId, undefined);
-    assert.equal(sent.at(-1)?.richCard?.form?.submitCallbackData, buildCommandCallbackData('/set --group runtime.codex'));
+    assert.equal(sent.at(-1)?.richCard?.form?.submitCallbackData, buildCommandCallbackData('/set --group runtime'));
     assert.equal(sent.at(-1)?.richCard?.form?.layout, 'two_column');
     assert.deepEqual(sent.at(-1)?.richCard?.footer, undefined);
     assert.deepEqual(
       sent.at(-1)?.richCard?.selects?.[0]?.options.map((option: any) => option.text),
-      ['[runtime]', '[runtime.codex]', '[runtime.claude]', '[bridge]', '[[channels]] feishu-default'],
+      ['通用配置', 'Codex', 'Claude', 'Bridge', '通道配置（feishu-default）'],
     );
     assert.deepEqual(sent.at(-1)?.richCard?.sections, []);
+    assert.deepEqual(
+      sent.at(-1)?.richCard?.form?.selects?.map((select: any) => select.elementId),
+      ['runtime', 'tmuxAutoEnter', 'tmuxEchoInput'],
+    );
+    assert.deepEqual(
+      sent.at(-1)?.richCard?.form?.selects?.map((select: any) => select.label),
+      ['默认 agent (runtime.agent)', 'tmux 自动回车 (session.tmux_auto_enter)', '回显 tmux 输出 (session.tmux_echo_input)'],
+    );
+    assert.deepEqual(
+      sent.at(-1)?.richCard?.form?.extraInputs?.map((input: any) => input.elementId),
+      ['defaultWorkspaceRoot', 'tmuxSessionName', 'tmuxCaptureLines'],
+    );
+    assert.deepEqual(
+      sent.at(-1)?.richCard?.form?.extraInputs?.map((input: any) => input.label),
+      ['默认工作目录 (bridge.default_workspace)', '默认 tmux session (session.tmux_session_name)', 'tmux 输出行数 (session.tmux_capture_lines)'],
+    );
+    assert.equal(getThreadTableMessageRecord(address, 'set')?.messageId, 'reply-1');
+    assert.equal(store.getChannelChat(address.channelType, address.chatId), null);
+    assert.equal(store.listSessions().length, 0);
+
+    await handleBridgeCommand(
+      adapter,
+      {
+        address,
+        text: '/set --group codex',
+        messageId: 'incoming-set-codex-card',
+      } as any,
+      '/set --group codex',
+      deps,
+    );
+    assert.match(sent.at(-1)?.text || '', /Codex/);
+    assert.match(sent.at(-1)?.text || '', /runtime\.codex\.provider/);
+    assert.match(sent.at(-1)?.text || '', /runtime\.codex\.network_access/);
+    assert.equal(sent.at(-1)?.richCardUpdateMessageId, 'reply-1');
+    assert.equal(sent.at(-1)?.richCard?.subtitle, '写入 ~/.codelark/config.toml · Codex');
+    assert.equal(sent.at(-1)?.richCard?.form?.submitCallbackData, buildCommandCallbackData('/set --group runtime.codex'));
     assert.deepEqual(
       sent.at(-1)?.richCard?.form?.selects?.map((select: any) => select.elementId).slice(0, 4),
       ['defaultMode', 'defaultProvider', 'codexSkipGitRepoCheck', 'codexSandboxMode'],
     );
     assert.deepEqual(
       sent.at(-1)?.richCard?.form?.selects?.map((select: any) => select.label).slice(0, 2),
-      ['模式 (runtime.codex.yolo_mode)', 'Provider (runtime.codex.provider)'],
+      ['YOLO模式 (runtime.codex.yolo_mode)', 'Provider（运行方式） (runtime.codex.provider)'],
     );
     assert.deepEqual(
       sent.at(-1)?.richCard?.form?.extraInputs?.map((input: any) => input.elementId),
       ['defaultModel'],
     );
-    assert.deepEqual(
-      sent.at(-1)?.richCard?.form?.extraInputs?.map((input: any) => input.label),
-      ['模型 (runtime.codex.model)'],
-    );
-    assert.equal(getThreadTableMessageRecord(address, 'set')?.messageId, 'reply-1');
-    assert.equal(store.getChannelChat(address.channelType, address.chatId), null);
-    assert.equal(store.listSessions().length, 0);
 
     await handleBridgeCommand(
       adapter,
@@ -3674,11 +3684,15 @@ enabled = true
       '/set --group runtime',
       deps,
     );
-    assert.match(sent.at(-1)?.text || '', /\[runtime\]/);
+    assert.match(sent.at(-1)?.text || '', /通用配置/);
     assert.equal(sent.at(-1)?.richCardUpdateMessageId, 'reply-1');
-    assert.equal(sent.at(-1)?.richCard?.subtitle, '写入 ~/.codelark/config.toml · [runtime]');
-    assert.deepEqual(sent.at(-1)?.richCard?.form?.selects?.map((select: any) => select.elementId), ['runtime']);
-    assert.deepEqual(sent.at(-1)?.richCard?.form?.selects?.map((select: any) => select.label), ['默认运行时 (runtime.agent)']);
+    assert.equal(sent.at(-1)?.richCard?.subtitle, '写入 ~/.codelark/config.toml · 通用配置');
+    assert.deepEqual(sent.at(-1)?.richCard?.form?.selects?.map((select: any) => select.elementId), ['runtime', 'tmuxAutoEnter', 'tmuxEchoInput']);
+    assert.deepEqual(sent.at(-1)?.richCard?.form?.selects?.map((select: any) => select.label), [
+      '默认 agent (runtime.agent)',
+      'tmux 自动回车 (session.tmux_auto_enter)',
+      '回显 tmux 输出 (session.tmux_echo_input)',
+    ]);
     assert.equal(getThreadTableMessageRecord(address, 'set')?.messageId, 'reply-1');
 
     await handleBridgeCommand(
@@ -3714,7 +3728,7 @@ enabled = true
       '/set --group channels.feishu',
       deps,
     );
-    assert.match(sent.at(-1)?.text || '', /\[\[channels\]\] feishu-default/);
+    assert.match(sent.at(-1)?.text || '', /通道配置（feishu-default）/);
     assert.deepEqual(
       sent.at(-1)?.richCard?.form?.extraInputs?.map((input: any) => input.elementId).slice(0, 3),
       ['historyMessageLimit', 'streamStatusIdleStartSeconds', 'streamStatusCheckIntervalSeconds'],

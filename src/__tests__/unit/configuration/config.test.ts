@@ -284,7 +284,6 @@ require_mention = true
       assert.equal(loaded.claudeDefaultModel, 'v2-claude-model');
       assert.equal(loaded.claudeProvider, 'pty');
       assert.equal(loaded.claudeExecutable, 'ccr');
-      assert.equal(loaded.claudePermissionMode, 'bypassPermissions');
       assert.equal(loaded.claudeIdleTimeoutMinutes, 11);
       assert.equal(loaded.historyMessageLimit, 17);
       assert.equal(loaded.streamStatusIdleStartSeconds, 210);
@@ -642,7 +641,6 @@ require_mention = false
       defaultProvider: 'sdk',
       claudeExecutable: 'ccr',
       claudeDefaultModel: 'claude-sonnet-test',
-      claudePermissionMode: 'acceptEdits',
       claudeIdleTimeoutMinutes: 15,
       historyMessageLimit: 12,
       streamStatusIdleStartSeconds: 240,
@@ -676,7 +674,6 @@ require_mention = false
     assert.equal(reloaded.defaultProvider, 'sdk');
     assert.equal(reloaded.claudeExecutable, 'ccr');
     assert.equal(reloaded.claudeDefaultModel, 'claude-sonnet-test');
-    assert.equal(reloaded.claudePermissionMode, 'acceptEdits');
     assert.equal(reloaded.claudeIdleTimeoutMinutes, 15);
     assert.equal(reloaded.historyMessageLimit, 12);
     assert.equal(reloaded.streamStatusIdleStartSeconds, 240);
@@ -685,7 +682,7 @@ require_mention = false
     assert.match(savedToml, /yolo_mode = "on"/);
     assert.match(savedToml, /provider = "sdk"/);
     assert.match(savedToml, /executable = "ccr"/);
-    assert.match(savedToml, /permission_mode = "acceptEdits"/);
+    assert.doesNotMatch(savedToml, /permission_mode/);
     assert.match(savedToml, /history_message_limit = 12/);
     assert.equal(fs.existsSync(CONFIG_PATH), false);
     assert.equal(fs.existsSync(CONFIG_JSON_PATH), false);

@@ -6,7 +6,6 @@ export type RuntimeProviderChoice = 'sdk' | 'pty' | 'tmux';
 export type ClaudeProviderChoice = RuntimeProviderChoice;
 export type RuntimeProviderIdentity = `${'codex' | 'claude'}:${RuntimeProviderChoice}`;
 export type ClaudeExecutable = 'claude' | 'ccr';
-export type ClaudePermissionMode = 'default' | 'acceptEdits' | 'bypassPermissions' | 'plan';
 
 export type BridgeSessionHealthStatus =
   | 'idle'
@@ -84,7 +83,6 @@ export interface BridgeSessionClaudeRuntimeState {
   cwd?: string;
   model?: string;
   provider?: ClaudeProviderChoice;
-  permissionMode?: ClaudePermissionMode;
   reasoningEffort?: 'low' | 'medium' | 'high' | 'xhigh' | 'max';
   idleTimeoutMinutes?: number;
 }

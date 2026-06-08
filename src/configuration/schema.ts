@@ -8,7 +8,6 @@ export const codexProviderSchema = z.enum(['sdk', 'tmux', 'pty']);
 export const claudeProviderSchema = z.enum(['sdk', 'pty', 'tmux']);
 export const claudeExecutableSchema = z.enum(['claude', 'ccr']);
 export const yoloModeSchema = z.enum(['off', 'on', 'yolo']);
-export const claudePermissionModeSchema = z.enum(['default', 'acceptEdits', 'bypassPermissions', 'plan']);
 export const sandboxModeSchema = z.enum(['read-only', 'workspace-write', 'danger-full-access']);
 export const reasoningEffortSchema = z.enum(['minimal', 'low', 'medium', 'high', 'xhigh']);
 export const feishuSiteSchema = z.enum(['feishu', 'lark']);
@@ -37,7 +36,6 @@ export const codexConfigSchema = z.object({
 export const claudeConfigSchema = z.object({
   model: z.string(),
   yoloMode: yoloModeSchema,
-  permissionMode: claudePermissionModeSchema,
   provider: claudeProviderSchema,
   executable: claudeExecutableSchema,
   reasoningEffort: reasoningEffortSchema,
@@ -157,7 +155,6 @@ export function tomlToConfigPatch(raw: unknown): ConfigPatch {
   const claudePatch = copyDefined<NonNullable<NonNullable<ConfigPatch['runtime']>['claude']>>(claude, [
     ['model', 'model'],
     ['yoloMode', 'yolo_mode'],
-    ['permissionMode', 'permission_mode'],
     ['provider', 'provider'],
     ['executable', 'executable'],
     ['reasoningEffort', 'reasoning_effort'],
@@ -231,7 +228,6 @@ export function configToTomlShape(config: ConfigPatch): Record<string, unknown> 
       ...(config.runtime.claude ? { claude: {
         ...(config.runtime.claude.model !== undefined ? { model: config.runtime.claude.model } : {}),
         ...(config.runtime.claude.yoloMode !== undefined ? { yolo_mode: config.runtime.claude.yoloMode } : {}),
-        ...(config.runtime.claude.permissionMode !== undefined ? { permission_mode: config.runtime.claude.permissionMode } : {}),
         ...(config.runtime.claude.provider !== undefined ? { provider: config.runtime.claude.provider } : {}),
         ...(config.runtime.claude.executable !== undefined ? { executable: config.runtime.claude.executable } : {}),
         ...(config.runtime.claude.reasoningEffort !== undefined ? { reasoning_effort: config.runtime.claude.reasoningEffort } : {}),
