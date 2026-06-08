@@ -244,6 +244,11 @@ type ParsedSelectionLine = {
   label: string;
 };
 
+type ParsedSelectionBlock = {
+  lines: ParsedSelectionLine[];
+  startIndex: number;
+};
+
 function parseSelectionLine(rawLine: string): ParsedSelectionLine | null {
   const match = rawLine.match(/^\s*([›>▸➜→*•])?\s*(?:(\d+)[.)]\s*)?(.+?)\s*$/u);
   if (!match) return null;
@@ -265,12 +270,12 @@ function isSelectedSelectionLine(line: ParsedSelectionLine): boolean {
     || line.marker === '→';
 }
 
-function extractCurrentSelectionLines(lines: string[]): ParsedSelectionLine[] {
+function extractCurrentSelectionBlock(lines: string[]): ParsedSelectionBlock {
   const parsed = lines.map(parseSelectionLine);
   const selectedLineIndex = parsed.findLastIndex((line) => Boolean(line && isSelectedSelectionLine(line)));
-  if (selectedLineIndex < 0) return [];
+  if (selectedLineIndex < 0) return { lines: [], startIndex: -1 };
   const selected = parsed[selectedLineIndex];
-  if (!selected) return [];
+  if (!selected) return { lines: [], startIndex: -1 };
 
   let start = selectedLineIndex;
   if (selected.number !== null) {
@@ -304,7 +309,15 @@ function extractCurrentSelectionLines(lines: string[]): ParsedSelectionLine[] {
     }
     result.push(candidate);
   }
-  return result;
+  return { lines: result, startIndex: result.length > 0 ? start : -1 };
+}
+
+function trimBlankSummaryEdges(lines: string[]): string[] {
+  let start = 0;
+  let end = lines.length;
+  while (start < end && lines[start].trim() === '') start += 1;
+  while (end > start && lines[end - 1].trim() === '') end -= 1;
+  return lines.slice(start, end);
 }
 
 export function parseCodexTuiSelectionPrompt(screenText: string): CodexTuiSelectionPrompt | null {
@@ -314,7 +327,8 @@ export function parseCodexTuiSelectionPrompt(screenText: string): CodexTuiSelect
   }
   const options: CodexTuiUpdatePromptOption[] = [];
   const lines = tail.split('\n');
-  const selectionLines = extractCurrentSelectionLines(lines);
+  const selectionBlock = extractCurrentSelectionBlock(lines);
+  const selectionLines = selectionBlock.lines;
   const hasGenericSelectionAnchor = selectionLines.some((line) => line.marker === '›' && line.number === 1);
   const hasGoalSelectionAnchor = selectionLines.some((line) => normalizeSelectionChoice(line.label) === 'replace_current_goal');
   for (const selectionLine of selectionLines) {
@@ -341,6 +355,11 @@ export function parseCodexTuiSelectionPrompt(screenText: string): CodexTuiSelect
   const kind = inferSelectionPromptKind(tail, options);
   if (!kind) return null;
   const selectedOption = options.find((option) => option.selected) || options[0];
+  const summaryContextLines = selectionBlock.startIndex > 0
+    ? lines
+      .slice(Math.max(0, selectionBlock.startIndex - 3), selectionBlock.startIndex)
+      .map((line) => line.trimEnd())
+    : [];
   const summaryLines = selectionLines
     .map((line) => line.rawLine.trimEnd())
     .filter((line) => (
@@ -349,6 +368,8 @@ export function parseCodexTuiSelectionPrompt(screenText: string): CodexTuiSelect
       || (kind === 'generic' && Boolean(line.match(/^\s*[›>▸➜→*•]?\s*\d+[.)]\s+/u)))
     ))
     .slice(-8);
+  const summary = trimBlankSummaryEdges([...summaryContextLines, ...summaryLines]).join('\n')
+    || options.map((option) => option.label).join('\n');
   const fingerprint = options
     .slice()
     .sort((left, right) => left.index - right.index)
@@ -359,7 +380,7 @@ export function parseCodexTuiSelectionPrompt(screenText: string): CodexTuiSelect
     options,
     selectedIndex: selectedOption.index,
     fingerprint,
-    summary: summaryLines.join('\n') || options.map((option) => option.label).join('\n'),
+    summary,
   };
 }
 

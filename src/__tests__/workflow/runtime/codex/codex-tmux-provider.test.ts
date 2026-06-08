@@ -202,6 +202,36 @@ describe('codex-tmux-provider', () => {
     assert.match(prompt.summary, /Yes, proceed/);
   });
 
+  it('adds the three lines before the current selection block to the displayed summary only', () => {
+    const screen = [
+      'older update output that should not be included',
+      'Confirm action',
+      'Codex wants to edit files.',
+      'Only approve this if you trust the change.',
+      '› 1. Yes, proceed (y)',
+      "  2. Yes, and don't ask again for these files (a)",
+      '  3. No, and tell Codex what to do differently (esc)',
+      CODEX_TUI_CONFIRM_FOOTER,
+    ].join('\n');
+
+    const prompt = parseCodexTuiSelectionPrompt(screen);
+    assert.ok(prompt);
+    assert.equal(prompt.kind, 'permission');
+    assert.deepEqual(prompt.options.map((option) => option.choice), [
+      'yes_proceed',
+      'yes_always',
+      'no',
+    ]);
+    assert.equal(prompt.summary, [
+      'Confirm action',
+      'Codex wants to edit files.',
+      'Only approve this if you trust the change.',
+      '› 1. Yes, proceed (y)',
+      "  2. Yes, and don't ask again for these files (a)",
+      '  3. No, and tell Codex what to do differently (esc)',
+    ].join('\n'));
+  });
+
   it('detects a stable lower prompt while upper update output keeps changing', () => {
     const lowerPrompt = [
       '',
@@ -288,7 +318,8 @@ describe('codex-tmux-provider', () => {
     ]);
     assert.match(prompt.fingerprint, /^goal:0:replace_current_goal:selected:/);
     assert.match(prompt.summary, /› 1\. Replace current goal/);
-    assert.doesNotMatch(prompt.summary, /当前 dry-run 证明/);
+    assert.match(prompt.summary, /当前 dry-run 证明/);
+    assert.doesNotMatch(prompt.summary, /Codex TUI appears to be waiting/);
 
     const samePromptWithDifferentOldList = parseCodexTuiSelectionPrompt([
       'Prompt:',
@@ -299,6 +330,7 @@ describe('codex-tmux-provider', () => {
     ].join('\n'));
     assert.ok(samePromptWithDifferentOldList);
     assert.equal(samePromptWithDifferentOldList.fingerprint, prompt.fingerprint);
+    assert.match(samePromptWithDifferentOldList.summary, /9\. stale ordered item/);
   });
 
   it('recognizes Replace current goal as a known Codex TUI selection', () => {
