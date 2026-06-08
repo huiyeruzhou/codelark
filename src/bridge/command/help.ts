@@ -72,7 +72,7 @@ export function buildHelpCommandResponse(): string {
     '- `/set` 打开 TOML 配置卡片；顶部下拉切换「通用配置 / Codex / Claude / Bridge / 通道配置（feishu-default）」',
     '- `/set runtime codex|claude` 修改默认 agent `runtime.agent`（兼容旧名 `defaultRuntime`）',
     '- `/set defaultModel|defaultMode|codexSandboxMode|codexNetworkAccess|codexReasoningEffort ...` 修改 Codex 配置',
-    '- `/set claudeProvider|claudeExecutable|claudeDefaultModel|claudeIdleTimeoutMinutes ...` 修改 Claude 配置；Claude Router 可选 `claude` 或 `ccr`',
+    '- `/set claudeProvider|claudeExecutable|claudeDefaultModel|claudeReasoningEffort|claudeIdleTimeoutMinutes ...` 修改 Claude 配置；Claude 可用 `pty | tmux | sdk`，Claude Router 可选 `claude` 或 `ccr`',
     '',
     '**GlobalBridge 配置**',
     '- `/set defaultWorkspaceRoot|tmuxCaptureLines|tmuxEchoInput ...` 修改通用配置；`/set uiAllowLan|uiAccessToken ...` 修改 Bridge；`/set historyMessageLimit ...` 修改通道配置',

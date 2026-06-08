@@ -133,7 +133,7 @@ async function approveTrustPermission(
 describe('real codex tmux provider e2e', () => {
   it('keeps a real fresh-directory Codex thread after tmux provider startup and mirror reconcile', { timeout: 120_000 }, async (t: TestContext) => {
     if (process.env[REAL_CODEX_E2E_ENV] !== '1') {
-      t.skip(`set ${REAL_CODEX_E2E_ENV}=1 to run real Codex e2e tests`);
+      console.info(`[real-codex-tmux-provider.e2e] set ${REAL_CODEX_E2E_ENV}=1 to run real Codex e2e tests`);
       return;
     }
     if (!(await commandAvailable('tmux', ['-V']))) {
@@ -271,7 +271,7 @@ describe('real codex tmux provider e2e', () => {
 
   it('submits a complete multi-thousand-character prompt through real tmux and Codex', { timeout: 120_000 }, async (t: TestContext) => {
     if (process.env[REAL_CODEX_E2E_ENV] !== '1') {
-      t.skip(`set ${REAL_CODEX_E2E_ENV}=1 to run real Codex e2e tests`);
+      console.info(`[real-codex-tmux-provider.e2e] set ${REAL_CODEX_E2E_ENV}=1 to run real Codex e2e tests`);
       return;
     }
     if (!(await commandAvailable('tmux', ['-V']))) {

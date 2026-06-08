@@ -61,11 +61,8 @@ function reasoningEffort(value: unknown): 'minimal' | 'low' | 'medium' | 'high' 
   return undefined;
 }
 
-function claudeReasoningEffort(value: unknown): 'low' | 'medium' | 'high' | 'xhigh' | undefined {
-  if (value === 'low' || value === 'medium' || value === 'high' || value === 'xhigh') return value;
-  if (value === 'max') {
-    throw new Error('无法迁移旧版 Claude reasoningEffort=max；请先确认它应如何映射到 runtime.claude.reasoningEffort。');
-  }
+function claudeReasoningEffort(value: unknown): 'low' | 'medium' | 'high' | 'xhigh' | 'max' | undefined {
+  if (value === 'low' || value === 'medium' || value === 'high' || value === 'xhigh' || value === 'max') return value;
   return undefined;
 }
 

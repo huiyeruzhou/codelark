@@ -13,10 +13,11 @@ import {
 
 type LegacyRuntimeProvider = 'codex' | 'claude';
 type LegacyCodexProvider = 'sdk' | 'tmux' | 'pty';
-type LegacyClaudeProvider = 'sdk' | 'pty';
+type LegacyClaudeProvider = 'sdk' | 'pty' | 'tmux';
 type LegacyClaudeExecutable = 'claude' | 'ccr';
 type LegacyFeishuSite = 'feishu' | 'lark';
 type LegacyReasoningEffort = 'minimal' | 'low' | 'medium' | 'high' | 'xhigh';
+type LegacyClaudeReasoningEffort = 'low' | 'medium' | 'high' | 'xhigh' | 'max';
 type LegacySandboxMode = 'read-only' | 'workspace-write' | 'danger-full-access';
 
 interface LegacyConfigFile {
@@ -112,7 +113,7 @@ function codexProvider(value: unknown): LegacyCodexProvider | undefined {
 }
 
 function claudeProvider(value: unknown): LegacyClaudeProvider | undefined {
-  return value === 'sdk' || value === 'pty' ? value : undefined;
+  return value === 'sdk' || value === 'pty' || value === 'tmux' ? value : undefined;
 }
 
 function claudeExecutable(value: unknown): LegacyClaudeExecutable | undefined {
@@ -127,6 +128,12 @@ function sandboxMode(value: unknown): LegacySandboxMode | undefined {
 
 function reasoningEffort(value: unknown): LegacyReasoningEffort | undefined {
   return value === 'minimal' || value === 'low' || value === 'medium' || value === 'high' || value === 'xhigh'
+    ? value
+    : undefined;
+}
+
+function claudeReasoningEffort(value: unknown): LegacyClaudeReasoningEffort | undefined {
+  return value === 'low' || value === 'medium' || value === 'high' || value === 'xhigh' || value === 'max'
     ? value
     : undefined;
 }
@@ -188,7 +195,7 @@ function patchFromLegacyConfig(config: LegacyConfigFile, warnings: string[]): Co
   if (legacyClaudeProvider !== undefined) claudePatch.provider = legacyClaudeProvider;
   const legacyClaudeExecutable = claudeExecutable(claude.executable);
   if (legacyClaudeExecutable !== undefined) claudePatch.executable = legacyClaudeExecutable;
-  const claudeEffort = reasoningEffort(claude.reasoningEffort);
+  const claudeEffort = claudeReasoningEffort(claude.reasoningEffort);
   if (claudeEffort !== undefined) claudePatch.reasoningEffort = claudeEffort;
   const idleTimeoutMinutes = nonNegativeIntValue(claude.idleTimeoutMinutes);
   if (idleTimeoutMinutes !== undefined) claudePatch.idleTimeoutMinutes = idleTimeoutMinutes;

@@ -97,6 +97,9 @@
         "permissionMode": {
           "enum": ["default", "acceptEdits", "bypassPermissions", "plan"]
         },
+        "reasoningEffort": {
+          "enum": ["low", "medium", "high", "xhigh", "max"]
+        },
         "idleTimeoutMinutes": {
           "type": "integer",
           "minimum": 0

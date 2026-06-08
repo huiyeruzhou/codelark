@@ -10,6 +10,7 @@ export const claudeExecutableSchema = z.enum(['claude', 'ccr']);
 export const yoloModeSchema = z.enum(['off', 'on', 'yolo']);
 export const sandboxModeSchema = z.enum(['read-only', 'workspace-write', 'danger-full-access']);
 export const reasoningEffortSchema = z.enum(['minimal', 'low', 'medium', 'high', 'xhigh']);
+export const claudeReasoningEffortSchema = z.enum(['low', 'medium', 'high', 'xhigh', 'max']);
 export const feishuSiteSchema = z.enum(['feishu', 'lark']);
 
 const positiveIntegerSchema = z.number().int().positive();
@@ -38,7 +39,7 @@ export const claudeConfigSchema = z.object({
   yoloMode: yoloModeSchema,
   provider: claudeProviderSchema,
   executable: claudeExecutableSchema,
-  reasoningEffort: reasoningEffortSchema,
+  reasoningEffort: claudeReasoningEffortSchema,
   idleTimeoutMinutes: nonNegativeIntegerSchema,
 });
 

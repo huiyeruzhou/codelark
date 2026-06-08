@@ -6,6 +6,7 @@ import { createConfigService } from '../../configuration/service.js';
 import {
   claudeExecutableSchema,
   claudeProviderSchema,
+  claudeReasoningEffortSchema,
   codexProviderSchema,
   reasoningEffortSchema,
   runtimeAgentSchema,
@@ -91,6 +92,7 @@ const uiConfigPayloadSchema = z.object({
   codexNetworkAccess: z.boolean().optional(),
   codexReasoningEffort: optionalEnum(reasoningEffortSchema),
   claudeProvider: optionalEnum(claudeProviderSchema),
+  claudeReasoningEffort: optionalEnum(claudeReasoningEffortSchema),
   claudeExecutable: optionalEnum(claudeExecutableSchema),
   claudeDefaultModel: optionalString(),
   claudeIdleTimeoutMinutes: optionalNonNegativeInteger(),
@@ -124,6 +126,7 @@ export function configV2ToPayload(config: ConfigV2) {
     claudeProvider: config.runtime.claude.provider || 'tmux',
     claudeExecutable: config.runtime.claude.executable || 'claude',
     claudeDefaultModel: config.runtime.claude.model || '',
+    claudeReasoningEffort: config.runtime.claude.reasoningEffort || 'medium',
     claudeIdleTimeoutMinutes: config.runtime.claude.idleTimeoutMinutes ?? 0,
     uiAllowLan: config.bridge.uiAllowLan === true,
     uiAccessToken: config.bridge.uiAccessToken || '',
@@ -183,7 +186,7 @@ export function mergeConfigV2HomePatch(current: ConfigV2, payload: Record<string
           : parsed.claudeProvider,
         executable: parsed.claudeExecutable ?? current.runtime.claude.executable,
         yoloMode: current.runtime.claude.yoloMode,
-        reasoningEffort: current.runtime.claude.reasoningEffort,
+        reasoningEffort: parsed.claudeReasoningEffort ?? current.runtime.claude.reasoningEffort,
         idleTimeoutMinutes: parsed.claudeIdleTimeoutMinutes
           ?? current.runtime.claude.idleTimeoutMinutes
           ?? 0,

@@ -1,4 +1,4 @@
-import { parseSandboxMode } from '../../runtime/options.js';
+import { parseClaudeReasoningEffort, parseSandboxMode } from '../../runtime/options.js';
 import { createConfigService } from '../../configuration/service.js';
 import type { ChannelConfigV2, ConfigPatch, ConfigV2 } from '../../configuration/schema.js';
 import { normalizeReasoningEffort } from './aliases.js';
@@ -108,6 +108,10 @@ const GROUP_BY_KEY = new Map(SETTING_GROUPS.map((group) => [group.key, group]));
 
 function selectOption(text: string, value = text): { text: string; callbackData: string } {
   return { text, callbackData: value };
+}
+
+function formatClaudeReasoningEffort(value: string | null | undefined): string {
+  return parseClaudeReasoningEffort(value || '') || 'medium';
 }
 
 function boolOptions(): Array<{ text: string; callbackData: string }> {
@@ -443,13 +447,13 @@ const SETTING_DEFINITIONS: SettingDefinition[] = [
     group: 'runtime.claude',
     aliases: ['claudeReasoning', 'claudeReasoningEffort'],
     label: 'reasoning_effort',
-    usage: '/set claudeReasoningEffort minimal|low|medium|high|xhigh',
+    usage: '/set claudeReasoningEffort low|medium|high|xhigh|max',
     control: 'select',
-    options: [selectOption('medium'), selectOption('minimal'), selectOption('low'), selectOption('high'), selectOption('xhigh')],
-    read: (config) => formatReasoningEffort(config.runtime.claude.reasoningEffort),
+    options: [selectOption('medium'), selectOption('low'), selectOption('high'), selectOption('xhigh'), selectOption('max')],
+    read: (config) => formatClaudeReasoningEffort(config.runtime.claude.reasoningEffort),
     write(rawValue) {
-      const parsed = normalizeReasoningEffort(rawValue);
-      if (!parsed) return { ok: false, message: 'reasoning 必须是 minimal、low、medium、high、xhigh 或 1-5。' };
+      const parsed = parseClaudeReasoningEffort(rawValue);
+      if (!parsed) return { ok: false, message: 'Claude reasoning 必须是 low、medium、high、xhigh 或 max。' };
       return patch({ runtime: { claude: { reasoningEffort: parsed } } });
     },
   },

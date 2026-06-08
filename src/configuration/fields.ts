@@ -2,6 +2,7 @@ import { z } from 'zod';
 import {
   claudeExecutableSchema,
   claudeProviderSchema,
+  claudeReasoningEffortSchema,
   codexProviderSchema,
   feishuSiteSchema,
   reasoningEffortSchema,
@@ -292,10 +293,10 @@ export const configFields = [
     path: 'runtime.claude.reasoningEffort',
     tomlPath: 'runtime.claude.reasoning_effort',
     scopes: sessionScopes,
-    schema: reasoningEffortSchema,
+    schema: claudeReasoningEffortSchema,
     envKey: 'CODELARK_CLAUDE_REASONING_EFFORT',
     processEnvKey: 'CODELARK_CLAUDE_REASONING_EFFORT',
-    parseEnv: enumFromEnv(reasoningEffortSchema),
+    parseEnv: enumFromEnv(claudeReasoningEffortSchema),
   },
   {
     path: 'runtime.claude.idleTimeoutMinutes',

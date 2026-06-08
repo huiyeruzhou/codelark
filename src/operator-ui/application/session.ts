@@ -167,6 +167,7 @@ function applySessionConfigToml(bridgeSessionId: string, payload: Record<string,
       || payload.claudeReasoningEffort === 'medium'
       || payload.claudeReasoningEffort === 'high'
       || payload.claudeReasoningEffort === 'xhigh'
+      || payload.claudeReasoningEffort === 'max'
       || payload.claudeReasoningEffort === ''
     ) {
       setOrUnsetSessionConfig(

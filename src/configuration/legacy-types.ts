@@ -5,6 +5,7 @@ import type {
 import type {
   ClaudeExecutable,
   ClaudeProviderChoice,
+  ClaudeReasoningEffort,
   CodexProviderChoice,
   CodexReasoningEffort,
   CodexSandboxMode,
@@ -27,6 +28,7 @@ export interface ClaudeRuntimeDefaultsConfig {
   provider?: ClaudeProviderChoice;
   executable?: ClaudeExecutable;
   defaultModel?: string;
+  reasoningEffort?: ClaudeReasoningEffort;
   idleTimeoutMinutes?: number;
 }
 

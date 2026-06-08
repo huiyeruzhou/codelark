@@ -1365,6 +1365,11 @@ describe('command-dispatch', () => {
     assert.equal(card?.form?.extraInputs?.find((input) => input.elementId === 'clk_cwd')?.defaultValue, '/tmp/current-card');
     assert.equal(card?.form?.extraInputs?.some((input) => input.elementId === 'defaultModel'), true);
     assert.equal(card?.form?.selects?.some((select) => select.elementId === 'codexSandboxMode'), true);
+    assert.match(card?.footer?.[0] || '', /当前 agent.*<text_tag color='orange'>Codex<\/text_tag>/);
+    assert.deepEqual(
+      card?.form?.selects?.find((select) => select.elementId === 'codexReasoningEffort')?.options.map((option) => option.text),
+      ['medium', 'minimal', 'low', 'high', 'xhigh'],
+    );
     assert.equal(getThreadTableMessageRecord(address, 'current')?.messageId, 'reply-1');
     assert.deepEqual(pinned, ['reply-1']);
     assert.deepEqual(unpinned, []);
@@ -1414,12 +1419,17 @@ describe('command-dispatch', () => {
     const claudePreviewCard = sent.at(-1)?.richCard as OutboundRichCard | undefined;
     assert.equal(sent.at(-1)?.richCardUpdateMessageId, 'reply-2');
     assert.equal(claudePreviewCard?.tags?.[0], 'claude');
+    assert.match(claudePreviewCard?.footer?.[0] || '', /当前 agent.*<text_tag color='orange'>Claude Code<\/text_tag>/);
     assert.equal(claudePreviewCard?.selects?.[0]?.selectedCallbackData, buildCommandCallbackData('/current-runtime claude'));
     assert.equal(claudePreviewCard?.form?.selects?.some((select) => select.elementId === 'codexSandboxMode'), false);
     assert.equal(claudePreviewCard?.form?.selects?.some((select) => select.elementId === 'codexNetworkAccess'), false);
     assert.deepEqual(
       claudePreviewCard?.form?.selects?.find((select) => select.elementId === 'claudeProvider')?.options.map((option) => option.text),
       ['tmux', 'pty', 'sdk'],
+    );
+    assert.deepEqual(
+      claudePreviewCard?.form?.selects?.find((select) => select.elementId === 'claudeReasoningEffort')?.options.map((option) => option.text),
+      ['medium', 'low', 'high', 'xhigh', 'max'],
     );
     assert.deepEqual(
       parseCommandCallbackData(claudePreviewCard?.form?.submitCallbackData || '')?.commandText,
@@ -3920,6 +3930,19 @@ enabled = true
     );
     assert.match(sent.at(-1)?.text || '', /runtime\.claude\.model.*claude-sonnet-test/s);
     assert.equal(createConfigService({ migrate: false, env: {} }).get('runtime.claude.model'), 'claude-sonnet-test');
+
+    await handleBridgeCommand(
+      adapter,
+      {
+        address,
+        text: '/set claudeReasoningEffort max',
+        messageId: 'incoming-set-claude-reasoning-max',
+      } as any,
+      '/set claudeReasoningEffort max',
+      deps,
+    );
+    assert.match(sent.at(-1)?.text || '', /runtime\.claude\.reasoning_effort.*max/s);
+    assert.equal(createConfigService({ migrate: false, env: {} }).get('runtime.claude.reasoningEffort'), 'max');
 
     await handleBridgeCommand(
       adapter,

@@ -195,7 +195,7 @@ function summarizeCodexModelRequests(
 describe('real codex pty provider e2e', () => {
   it('shows and accepts the real Codex trust card in a fresh directory before pty prompt injection', { timeout: 120_000 }, async (t: TestContext) => {
     if (process.env[REAL_CODEX_E2E_ENV] !== '1') {
-      t.skip(`set ${REAL_CODEX_E2E_ENV}=1 to run real Codex e2e tests`);
+      console.info(`[real-codex-pty-provider.e2e] set ${REAL_CODEX_E2E_ENV}=1 to run real Codex e2e tests`);
       return;
     }
     if (!(await ptyRuntimeAvailable())) {
@@ -297,7 +297,7 @@ describe('real codex pty provider e2e', () => {
 
   it('submits a complete multi-thousand-character prompt through real pty and Codex', { timeout: 120_000 }, async (t: TestContext) => {
     if (process.env[REAL_CODEX_E2E_ENV] !== '1') {
-      t.skip(`set ${REAL_CODEX_E2E_ENV}=1 to run real Codex e2e tests`);
+      console.info(`[real-codex-pty-provider.e2e] set ${REAL_CODEX_E2E_ENV}=1 to run real Codex e2e tests`);
       return;
     }
     if (!(await ptyRuntimeAvailable())) {

@@ -2,6 +2,8 @@ import fs from 'node:fs';
 
 import { isCliOnlyCodexModel, readConfiguredCodexModel } from '../../runtime/codex/models.js';
 import {
+  parseClaudeReasoningEffort,
+  type ClaudeReasoningEffort,
   type CodexReasoningEffort,
 } from '../../runtime/options.js';
 import { createConfigService } from '../../configuration/service.js';
@@ -71,6 +73,7 @@ export {
 const MODE_OPTIONS_TEXT = '可选：`normal`（普通执行，默认） `yolo`（YOLO模式：允许 agent 无需审批绕过沙箱）。兼容：`code` 等同于 `normal`。';
 const RUNTIME_OPTIONS_TEXT = '可选：`codex`（OpenAI Codex，默认） `claude`（Claude Code）。`/provider` 选择使用何种方式运行 agent，不切换 runtime。';
 const REASONING_OPTIONS_TEXT = '可选：`1=minimal` `2=low` `3=medium` `4=high` `5=xhigh`';
+const CLAUDE_REASONING_OPTIONS_TEXT = '可选：`low` `medium` `high` `xhigh` `max`；`minimal` 会映射为 Claude Code `low`。';
 const SANDBOX_OPTIONS_TEXT = '可选：`read-only` `workspace-write` `danger-full-access` `default`（回到全局默认）';
 const NETWORK_OPTIONS_TEXT = '可选：`on`/`true` 开启网络，`off`/`false` 关闭网络，`default` 回到全局默认。';
 const CLAUDE_PTY_RUNTIME_UPDATE_NOTE = '已保存为当前会话的 Claude Code 启动配置；如果 Claude Code pty 已经启动，不会向运行中的 TUI 注入切换命令，下一条普通消息会按新参数启动或重启 Claude Code pty。';
@@ -105,9 +108,15 @@ function codexRuntimeUpdateTitle(
 
 function codexReasoningToClaudeEffort(
   reasoning: CodexReasoningEffort,
-): 'low' | 'medium' | 'high' | 'xhigh' {
+): ClaudeReasoningEffort {
   if (reasoning === 'minimal') return 'low';
   return reasoning;
+}
+
+function parseClaudeReasoningCommandArg(raw: string): ClaudeReasoningEffort | undefined {
+  const normalized = raw.trim().toLowerCase();
+  if (normalized === 'minimal' || normalized === '1') return 'low';
+  return parseClaudeReasoningEffort(normalized);
 }
 
 function setSessionCodexReasoningToml(sessionId: string, reasoningEffort: CodexReasoningEffort): void {
@@ -117,9 +126,16 @@ function setSessionCodexReasoningToml(sessionId: string, reasoningEffort: CodexR
   );
 }
 
+function clearSessionCodexReasoningToml(sessionId: string): void {
+  createConfigService({ migrate: false }).unset(
+    { kind: 'session', sessionId },
+    'runtime.codex.reasoningEffort',
+  );
+}
+
 function setSessionClaudeReasoningToml(
   sessionId: string,
-  reasoningEffort: 'low' | 'medium' | 'high' | 'xhigh',
+  reasoningEffort: ClaudeReasoningEffort,
 ): void {
   createConfigService({ migrate: false }).set(
     { kind: 'session', sessionId },
@@ -248,7 +264,7 @@ export function handleReasoningCommand(options: {
       return buildCommandFields(
         '当前 Claude Code 思考级别',
         [['级别', claudeConfig.reasoningEffort || 'default']],
-        [REASONING_OPTIONS_TEXT, '发送 `/r 4` 或 `/r high` 可保存给后续 Claude Code pty 启动；`minimal` 会映射为 Claude Code `low`。'],
+        [CLAUDE_REASONING_OPTIONS_TEXT, '发送 `/r max` 或 `/r high` 可保存给后续 Claude Code pty/tmux 启动。'],
         options.markdown,
       );
     }
@@ -269,18 +285,28 @@ export function handleReasoningCommand(options: {
         options.markdown,
       );
     }
+    clearSessionCodexReasoningToml(session.id);
+    return buildCommandFields(
+      '已恢复默认思考级别',
+      [['级别', formatReasoningEffort(resolveEffectiveReasoningEffort(options.store.getSession(session.id)))]],
+      ['当前 BridgeSession 已清除 Codex reasoning 覆盖值，后续请求会跟随全局 Codex 默认值。', CODEX_RUNTIME_UPDATE_NOTE],
+      options.markdown,
+    );
   }
   const reasoning = normalizeReasoningEffort(options.args);
-  if (!reasoning) {
+  const claudeReasoning = activeRuntime === 'claude'
+    ? parseClaudeReasoningCommandArg(options.args)
+    : undefined;
+  if (!reasoning && !claudeReasoning) {
     return buildCommandFields(
       '思考级别用法',
-      [['命令', '`/reasoning minimal|low|medium|high|xhigh`']],
-      ['也支持完整命令：`/reasoning 1|2|3|4|5`', REASONING_OPTIONS_TEXT],
+      [['命令', activeRuntime === 'claude' ? '`/reasoning low|medium|high|xhigh|max`' : '`/reasoning minimal|low|medium|high|xhigh`']],
+      ['Codex 也支持：`/reasoning 1|2|3|4|5`', activeRuntime === 'claude' ? CLAUDE_REASONING_OPTIONS_TEXT : REASONING_OPTIONS_TEXT],
       options.markdown,
     );
   }
   if (activeRuntime === 'claude') {
-    const effort = codexReasoningToClaudeEffort(reasoning as CodexReasoningEffort);
+    const effort = claudeReasoning || codexReasoningToClaudeEffort(reasoning as CodexReasoningEffort);
     setSessionClaudeReasoningToml(session.id, effort);
     return buildCommandFields(
       '已更新 Claude Code 思考级别',
@@ -289,14 +315,15 @@ export function handleReasoningCommand(options: {
       options.markdown,
     );
   }
-  setSessionCodexReasoningToml(session.id, reasoning as CodexReasoningEffort);
+  const codexReasoning = reasoning as CodexReasoningEffort;
+  setSessionCodexReasoningToml(session.id, codexReasoning);
   const notes = [REASONING_OPTIONS_TEXT];
-  const warning = minimalReasoningWebSearchWarning(reasoning);
+  const warning = minimalReasoningWebSearchWarning(codexReasoning);
   if (warning) notes.push(warning);
   const updateNotes = codexRuntimeUpdateNotes(session, options.binding, notes);
   return buildCommandFields(
     '已更新思考级别',
-    [['级别', formatReasoningEffort(reasoning)]],
+    [['级别', formatReasoningEffort(codexReasoning)]],
     updateNotes,
     options.markdown,
   );

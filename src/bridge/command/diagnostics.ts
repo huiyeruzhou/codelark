@@ -81,7 +81,7 @@ function buildHistoryUsage(): string {
   ].join('\n');
 }
 
-function currentTag(value: string, color: 'green' | 'blue' | 'yellow' | 'red' | 'grey' = 'green'): string {
+function currentTag(value: string, color: 'green' | 'blue' | 'yellow' | 'red' | 'grey' | 'orange' = 'green'): string {
   return `<text_tag color='${color}'>${value}</text_tag>`;
 }
 
@@ -409,7 +409,10 @@ export function buildCurrentCommandRichCard(options: {
       submitCallbackData: buildCommandCallbackData(`/current-config ${activeRuntime}`),
       options: [],
     },
-    footer: ['顶部 runtime 下拉会立即切换运行时并刷新卡片；配置栏保存后只更新当前 runtime 的配置项。'],
+    footer: [
+      `当前 agent：${currentTag(runtimeLabel, 'orange')}`,
+      '顶部 runtime 下拉会立即切换运行时并刷新卡片；配置栏保存后只更新当前 runtime 的配置项。',
+    ],
   };
 }
 

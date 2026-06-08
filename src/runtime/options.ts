@@ -1,4 +1,5 @@
 import {
+  claudeReasoningEffortSchema,
   reasoningEffortSchema,
   sandboxModeSchema,
 } from '../configuration/schema.js';
@@ -6,6 +7,7 @@ import type { z } from 'zod';
 
 export type RuntimeSandboxMode = z.infer<typeof sandboxModeSchema>;
 export type RuntimeReasoningEffort = z.infer<typeof reasoningEffortSchema>;
+export type ClaudeReasoningEffort = z.infer<typeof claudeReasoningEffortSchema>;
 export type CodexSandboxMode = RuntimeSandboxMode;
 export type CodexReasoningEffort = RuntimeReasoningEffort;
 export type RuntimeProvider = 'codex' | 'claude';
@@ -27,6 +29,10 @@ export function normalizeSandboxMode(
 
 export function parseReasoningEffort(value: string | null | undefined): RuntimeReasoningEffort | undefined {
   return reasoningEffortSchema.safeParse(value).data;
+}
+
+export function parseClaudeReasoningEffort(value: string | null | undefined): ClaudeReasoningEffort | undefined {
+  return claudeReasoningEffortSchema.safeParse(value).data;
 }
 
 export function normalizeReasoningEffort(
