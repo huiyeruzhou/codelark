@@ -150,13 +150,16 @@ export interface OutboundRichCard {
   sections: OutboundRichCardSection[];
   form?: {
     optionElementId: string;
+    optionFormName?: string;
     inputElementId?: string;
+    inputFormName?: string;
     inputLabel?: string;
     inputPlaceholder?: string;
     inputDefaultValue?: string;
     layout?: 'single' | 'two_column';
     selects?: Array<{
       elementId: string;
+      formName?: string;
       label?: string;
       placeholder?: string;
       selectedCallbackData?: string;
@@ -170,6 +173,7 @@ export interface OutboundRichCard {
     actionDividerBefore?: boolean;
     extraInputs?: Array<{
       elementId: string;
+      formName?: string;
       label: string;
       placeholder: string;
       defaultValue?: string;

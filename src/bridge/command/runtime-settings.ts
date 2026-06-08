@@ -73,7 +73,7 @@ export {
 const MODE_OPTIONS_TEXT = '可选：`normal`（普通执行，默认） `yolo`（YOLO模式：允许 agent 无需审批绕过沙箱）。兼容：`code` 等同于 `normal`。';
 const RUNTIME_OPTIONS_TEXT = '可选：`codex`（OpenAI Codex，默认） `claude`（Claude Code）。`/provider` 选择使用何种方式运行 agent，不切换 runtime。';
 const REASONING_OPTIONS_TEXT = '可选：`1=minimal` `2=low` `3=medium` `4=high` `5=xhigh`';
-const CLAUDE_REASONING_OPTIONS_TEXT = '可选：`low` `medium` `high` `xhigh` `max`；`minimal` 会映射为 Claude Code `low`。';
+const CLAUDE_REASONING_OPTIONS_TEXT = '可选：`1=low` `2=medium` `3=high` `4=xhigh` `5=max`；`m` 等同于 `max`，`minimal` 会映射为 Claude Code `low`。';
 const SANDBOX_OPTIONS_TEXT = '可选：`read-only` `workspace-write` `danger-full-access` `default`（回到全局默认）';
 const NETWORK_OPTIONS_TEXT = '可选：`on`/`true` 开启网络，`off`/`false` 关闭网络，`default` 回到全局默认。';
 const CLAUDE_PTY_RUNTIME_UPDATE_NOTE = '已保存为当前会话的 Claude Code 启动配置；如果 Claude Code pty 已经启动，不会向运行中的 TUI 注入切换命令，下一条普通消息会按新参数启动或重启 Claude Code pty。';
@@ -115,7 +115,7 @@ function codexReasoningToClaudeEffort(
 
 function parseClaudeReasoningCommandArg(raw: string): ClaudeReasoningEffort | undefined {
   const normalized = raw.trim().toLowerCase();
-  if (normalized === 'minimal' || normalized === '1') return 'low';
+  if (normalized === 'minimal') return 'low';
   return parseClaudeReasoningEffort(normalized);
 }
 
@@ -300,7 +300,7 @@ export function handleReasoningCommand(options: {
   if (!reasoning && !claudeReasoning) {
     return buildCommandFields(
       '思考级别用法',
-      [['命令', activeRuntime === 'claude' ? '`/reasoning low|medium|high|xhigh|max`' : '`/reasoning minimal|low|medium|high|xhigh`']],
+      [['命令', activeRuntime === 'claude' ? '`/reasoning low|medium|high|xhigh|max|m`' : '`/reasoning minimal|low|medium|high|xhigh`']],
       ['Codex 也支持：`/reasoning 1|2|3|4|5`', activeRuntime === 'claude' ? CLAUDE_REASONING_OPTIONS_TEXT : REASONING_OPTIONS_TEXT],
       options.markdown,
     );

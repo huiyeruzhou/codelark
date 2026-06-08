@@ -6,6 +6,7 @@ import { describe, it } from 'node:test';
 import {
   normalizeReasoningEffort,
   normalizeSandboxMode,
+  parseClaudeReasoningEffort,
   parseReasoningEffort,
   parseSandboxMode,
 } from '../../../runtime/options.js';
@@ -29,5 +30,16 @@ describe('runtime-options', () => {
     assert.equal(parseReasoningEffort('invalid'), undefined);
     assert.equal(normalizeReasoningEffort('invalid'), 'medium');
     assert.equal(normalizeReasoningEffort(undefined, 'low'), 'low');
+  });
+
+  it('parses Claude reasoning efforts and shorthand aliases', () => {
+    assert.equal(parseClaudeReasoningEffort('low'), 'low');
+    assert.equal(parseClaudeReasoningEffort('medium'), 'medium');
+    assert.equal(parseClaudeReasoningEffort('high'), 'high');
+    assert.equal(parseClaudeReasoningEffort('xhigh'), 'xhigh');
+    assert.equal(parseClaudeReasoningEffort('max'), 'max');
+    assert.equal(parseClaudeReasoningEffort('m'), 'max');
+    assert.equal(parseClaudeReasoningEffort('5'), 'max');
+    assert.equal(parseClaudeReasoningEffort('invalid'), undefined);
   });
 });

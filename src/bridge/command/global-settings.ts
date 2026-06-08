@@ -71,6 +71,37 @@ const SETTING_DISPLAY_LABELS: Record<string, string> = {
   groupAuthorized: '群聊已授权',
 };
 
+const SETTING_FORM_NAMES: Record<string, string> = {
+  runtime: 'rt',
+  defaultWorkspaceRoot: 'ws_root',
+  tmuxSessionName: 'tmux_sess',
+  tmuxCaptureLines: 'tmux_lines',
+  tmuxAutoEnter: 'tmux_enter',
+  tmuxEchoInput: 'tmux_echo',
+  defaultModel: 'cdx_model',
+  defaultMode: 'cdx_mode',
+  defaultProvider: 'cdx_provider',
+  codexSkipGitRepoCheck: 'cdx_skip_git',
+  codexSandboxMode: 'cdx_sandbox',
+  codexNetworkAccess: 'cdx_network',
+  codexReasoningEffort: 'cdx_rsn_eft',
+  claudeDefaultModel: 'cld_model',
+  claudeMode: 'cld_mode',
+  claudeProvider: 'cld_provider',
+  claudeExecutable: 'cld_exec',
+  claudeReasoningEffort: 'cld_rsn_eft',
+  claudeIdleTimeoutMinutes: 'cld_idle_min',
+  uiAllowLan: 'ui_lan',
+  uiAccessToken: 'ui_token',
+  historyMessageLimit: 'hist_limit',
+  streamStatusIdleStartSeconds: 'stream_idle_sec',
+  streamStatusCheckIntervalSeconds: 'stream_check_sec',
+  streamingEnabled: 'streaming',
+  feedbackMarkdownEnabled: 'fb_md',
+  requireMention: 'req_mention',
+  groupAuthorized: 'grp_auth',
+};
+
 const SETTING_GROUPS: SettingGroupDefinition[] = [
   {
     key: 'runtime',
@@ -447,7 +478,7 @@ const SETTING_DEFINITIONS: SettingDefinition[] = [
     group: 'runtime.claude',
     aliases: ['claudeReasoning', 'claudeReasoningEffort'],
     label: 'reasoning_effort',
-    usage: '/set claudeReasoningEffort low|medium|high|xhigh|max',
+    usage: '/set claudeReasoningEffort low|medium|high|xhigh|max|m',
     control: 'select',
     options: [selectOption('medium'), selectOption('low'), selectOption('high'), selectOption('xhigh'), selectOption('max')],
     read: (config) => formatClaudeReasoningEffort(config.runtime.claude.reasoningEffort),
@@ -707,6 +738,10 @@ export function settingFormLabel(definition: Pick<SettingDefinition, 'key' | 'la
   return `${settingDisplayLabel(definition)} (${definition.tomlPath})`;
 }
 
+export function settingFormName(definition: Pick<SettingDefinition, 'key'>): string {
+  return SETTING_FORM_NAMES[definition.key] || definition.key;
+}
+
 function settingPanelLabel(definition: Pick<SettingDefinition, 'key' | 'label'>): string {
   return settingDisplayLabel(definition);
 }
@@ -768,6 +803,7 @@ export function settingFormSelect(definition: SettingDefinition, config: ConfigV
   const value = definition.read(config);
   return {
     elementId: definition.key,
+    formName: settingFormName(definition),
     label: settingFormLabel(definition),
     placeholder: value,
     selectedCallbackData: value === 'auto' ? '' : value,
@@ -786,6 +822,7 @@ export function settingFormInput(definition: SettingDefinition, config: ConfigV2
   const value = definition.read(config);
   return {
     elementId: definition.key,
+    formName: settingFormName(definition),
     label: settingFormLabel(definition),
     placeholder: definition.placeholder || definition.tomlPath,
     defaultValue: value === '-' ? '' : value,
@@ -882,9 +919,12 @@ function formatConfigWriteError(error: unknown): string {
   return error instanceof Error ? error.message : '配置字段不合法。';
 }
 
-function formValueString(formValue: Record<string, unknown>, key: string): string | undefined {
-  const value = formValue[key];
-  return typeof value === 'string' ? value.trim() : undefined;
+function formValueString(formValue: Record<string, unknown>, definition: SettingDefinition): string | undefined {
+  for (const candidate of [settingFormName(definition), definition.key]) {
+    const value = formValue[candidate];
+    if (typeof value === 'string') return value.trim();
+  }
+  return undefined;
 }
 
 export function handleSetFormCommand(options: {
@@ -900,7 +940,7 @@ export function handleSetFormCommand(options: {
   const updated: SettingDefinition[] = [];
 
   for (const definition of definitions) {
-    const rawValue = formValueString(options.formValue, definition.key);
+    const rawValue = formValueString(options.formValue, definition);
     if (rawValue === undefined) continue;
     const currentValue = definition.read(currentConfig);
     const normalizedCurrent = currentValue === 'auto' ? '' : currentValue;

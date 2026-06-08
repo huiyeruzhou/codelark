@@ -484,7 +484,14 @@ function normalizeSelectElementId(id: string | undefined, index: number): string
   const normalized = String(id || `command_select_${index + 1}`)
     .replace(/[^A-Za-z0-9_]/g, '_')
     .replace(/^[^A-Za-z]+/, '');
-  return (normalized || `command_select_${index + 1}`).slice(0, 20);
+  return normalized || `command_select_${index + 1}`;
+}
+
+function normalizeFormFieldName(name: string | undefined, fallback: string): string {
+  const normalized = String(name || fallback)
+    .replace(/[^A-Za-z0-9_]/g, '_')
+    .replace(/^[^A-Za-z]+/, '');
+  return normalized || fallback;
 }
 
 function buildRichCardSelectElement(
@@ -638,7 +645,7 @@ function buildRichCardFormElements(
   if (options.length > 0) {
     fieldGroups.push([{
       tag: 'select_static',
-      name: normalizeSelectElementId(form.optionElementId, 0),
+      name: normalizeFormFieldName(form.optionFormName, form.optionElementId || 'clk_choice'),
       placeholder: { tag: 'plain_text', content: '请选择' },
       type: 'default',
       width: 'fill',
@@ -651,7 +658,7 @@ function buildRichCardFormElements(
     const selectedValue = String(select.selectedCallbackData || '').trim();
     fieldGroups.push(buildRichCardFormLabeledField(select.label, {
       tag: 'select_static',
-      name: normalizeSelectElementId(select.elementId, fieldGroups.length),
+      name: normalizeFormFieldName(select.formName, select.elementId),
       placeholder: { tag: 'plain_text', content: compactCardText(select.placeholder || '保持当前值', 120) },
       type: 'default',
       width: 'fill',
@@ -662,7 +669,7 @@ function buildRichCardFormElements(
   if (form.inputLabel) {
     fieldGroups.push(buildRichCardFormLabeledField(form.inputLabel, {
       tag: 'input',
-      name: form.inputElementId || 'clk_input',
+      name: normalizeFormFieldName(form.inputFormName, form.inputElementId || 'clk_input'),
       placeholder: { tag: 'plain_text', content: compactCardText(form.inputPlaceholder || '可留空', 120) },
       default_value: compactCardText(form.inputDefaultValue || '', 500),
       input_type: 'text',
@@ -671,7 +678,7 @@ function buildRichCardFormElements(
   for (const extraInput of form.extraInputs || []) {
     fieldGroups.push(buildRichCardFormLabeledField(extraInput.label, {
       tag: 'input',
-      name: extraInput.elementId || 'clk_extra_input',
+      name: normalizeFormFieldName(extraInput.formName, extraInput.elementId || 'clk_extra_input'),
       placeholder: { tag: 'plain_text', content: compactCardText(extraInput.placeholder || '可留空', 120) },
       default_value: compactCardText(extraInput.defaultValue || '', 500),
       input_type: 'text',

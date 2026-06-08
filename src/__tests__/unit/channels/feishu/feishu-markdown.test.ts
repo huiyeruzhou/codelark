@@ -994,6 +994,19 @@ describe('buildRichCardContent', () => {
           label: '工作目录',
           placeholder: '项目目录',
           defaultValue: '/repo/current',
+        }, {
+          elementId: 'claudeIdleTimeoutMinutes',
+          formName: 'cld_idle_min',
+          label: 'Claude 空闲超时',
+          placeholder: '分钟',
+          defaultValue: '15',
+        }],
+        selects: [{
+          elementId: 'claudeReasoningEffort',
+          formName: 'cld_rsn_eft',
+          label: 'Claude reasoning',
+          selectedCallbackData: 'max',
+          options: [{ text: 'max', callbackData: 'max' }],
         }],
         submitText: '提交',
         submitCallbackData: 'clk-agent-question:payload',
@@ -1009,6 +1022,8 @@ describe('buildRichCardContent', () => {
     const select = form.elements.find((element: any) => element.tag === 'select_static');
     const input = form.elements.find((element: any) => element.tag === 'input');
     const pathInput = form.elements.find((element: any) => element.tag === 'input' && element.name === 'clk_path');
+    const reasoningSelect = JSON.stringify(form).includes('"name":"cld_rsn_eft"');
+    const idleInput = form.elements.find((element: any) => element.tag === 'input' && element.name === 'cld_idle_min');
     const submitColumnSet = form.elements.find((element: any) =>
       element.tag === 'column_set'
       && JSON.stringify(element).includes('clk-agent-question:payload'),
@@ -1021,6 +1036,9 @@ describe('buildRichCardContent', () => {
     assert.equal(input.name, 'clk_input');
     assert.equal(input.default_value, '默认补充');
     assert.equal(pathInput.default_value, '/repo/current');
+    assert.equal(reasoningSelect, true);
+    assert.equal(idleInput.default_value, '15');
+    assert.doesNotMatch(JSON.stringify(form), /claudeReasoningEffor|claudeIdleTimeoutMin/);
     assert.equal(submitColumnSet.columns[0].elements[0].form_action_type, 'submit');
     assert.equal(submitColumnSet.columns[0].elements[0].behaviors[0].value.callback_data, 'clk-agent-question:payload');
     assert.equal(submitColumnSet.columns[0].elements[0].behaviors[0].value.chatId, 'chat-1');
