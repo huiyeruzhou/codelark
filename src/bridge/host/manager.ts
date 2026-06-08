@@ -28,7 +28,10 @@ import { getBridgeContext } from './context.js';
 import type { BridgeMirrorRecord } from '../../runtime/contracts.js';
 import { archiveCodexSession } from '../../runtime/codex/session-index.js';
 import { injectPromptIntoActivePty } from '../../runtime/codex/pty-provider.js';
-import { injectPromptIntoClaudePtySession } from '../../runtime/claude/pty-provider.js';
+import {
+  injectPromptIntoClaudePtySession,
+  waitForClaudeSessionJsonlUpdatedAfter,
+} from '../../runtime/claude/pty-provider.js';
 import {
   archiveClaudeSessionJsonl,
   createClaudeMirrorJsonlSource,
@@ -526,6 +529,56 @@ async function probeTmuxSelectionPromptForTarget(
     await new Promise((resolve) => setTimeout(resolve, intervalMs));
   }
   return false;
+}
+
+function primeClaudeMirrorInitialDelivery(sessionId: string): void {
+  const state = getState();
+  for (const subscription of state.claudeMirrorSubscriptions.values()) {
+    if (subscription.sessionId !== sessionId) continue;
+    subscription.cursor = { initialized: true, lastEventCount: 0 };
+    subscription.dirty = true;
+    subscription.fileOffset = 0;
+    subscription.fileSize = null;
+    subscription.fileMtimeMs = null;
+    subscription.fileIdentity = null;
+    subscription.trailingText = '';
+    subscription.activeMirrorTurnId = null;
+    subscription.activeSpecialCallIds.clear();
+    subscription.bufferedRecords = [];
+    subscription.pendingTurn = null;
+    subscription.pendingDeliveries = [];
+  }
+}
+
+async function reconcileClaudeTmuxMirrorAfterAutoForward(
+  sessionId: string,
+  startedAtMs: number,
+): Promise<void> {
+  const store = getBridgeContext().store;
+  let session = store.getSession(sessionId);
+  if (!session || getSessionActiveRuntime(session) !== 'claude') return;
+  if (resolveEffectiveClaudeProvider(session) !== 'tmux') return;
+  const cwd = getSessionClaudeCwd(session) || getSessionWorkingDirectory(session);
+  if (!cwd) return;
+
+  let discoveredNewClaudeSession = false;
+  if (!getSessionClaudeSessionId(session)) {
+    const discovered = await waitForClaudeSessionJsonlUpdatedAfter(cwd, startedAtMs);
+    if (!discovered?.sessionId) return;
+    store.updateSession(sessionId, setSessionClaudeIdentityUpdate(
+      discovered.sessionId,
+      discovered.cwd || cwd,
+    ));
+    discoveredNewClaudeSession = true;
+    session = store.getSession(sessionId);
+    if (!session || getSessionActiveRuntime(session) !== 'claude') return;
+  }
+
+  await reconcileMirrorSubscriptions();
+  if (discoveredNewClaudeSession) {
+    primeClaudeMirrorInitialDelivery(sessionId);
+    await reconcileMirrorSubscriptions();
+  }
 }
 
 // ── Streaming preview helpers ──────────────────────────────────
@@ -3061,6 +3114,7 @@ async function handleMessage(
     }
     if (text) {
       const tmuxProviderBridgeSessionId = tmuxProviderChat.bridgeSessionId;
+      const tmuxProviderForwardStartedAtMs = Date.now();
       const reactionKey = tmuxAutoForwardReactionKey(
         msg.address.channelType,
         msg.address.chatId,
@@ -3087,6 +3141,14 @@ async function handleMessage(
           tmuxProviderBridgeSessionId,
           `已向 ${tmuxProviderRuntime.identity} TUI 注入消息，等待 mirror 同步当前 turn。`,
         );
+        if (tmuxProviderRuntime.runtime === 'claude') {
+          void reconcileClaudeTmuxMirrorAfterAutoForward(
+            tmuxProviderBridgeSessionId,
+            tmuxProviderForwardStartedAtMs,
+          ).catch((error) => {
+            console.warn('[bridge-manager] Claude tmux provider mirror reconcile after auto-forward failed:', describeUnknownError(error));
+          });
+        }
         void probeTmuxSelectionPromptForTarget({
           channelType: msg.address.channelType,
           chatId: msg.address.chatId,
