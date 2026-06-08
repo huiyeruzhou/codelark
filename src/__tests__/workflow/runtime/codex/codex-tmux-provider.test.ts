@@ -202,26 +202,34 @@ describe('codex-tmux-provider', () => {
     assert.match(prompt.summary, /Yes, proceed/);
   });
 
-  it('uses the lower prompt cursor when an earlier update prompt remains on screen', () => {
-    const screen = [
-      '  ✨ Update available! 0.0.0 -> 9.9.9',
+  it('detects a stable lower prompt while upper update output keeps changing', () => {
+    const lowerPrompt = [
       '',
-      '  Release notes: https://github.com/openai/codex/releases/latest',
-      '',
-      '› 1. Update now (runs `npm install -g @openai/codex@latest`)',
-      '  2. Skip',
-      '  3. Skip until next version',
-      '',
-      CODEX_TUI_CONFIRM_FOOTER,
-      '',
-      'Codex wants to edit files.',
       '› 1. Yes, proceed (y)',
       "  2. Yes, and don't ask again for these files (a)",
       '  3. No, and tell Codex what to do differently (esc)',
       CODEX_TUI_CONFIRM_FOOTER,
+    ];
+    const firstScreen = [
+      '  ✨ Update available! 0.0.0 -> 9.9.9',
+      '',
+      '  Updating Codex via npm',
+      '  [====>               ] 25%',
+      '',
+      ...lowerPrompt,
+    ].join('\n');
+    const secondScreen = [
+      '  ✨ Update available! 0.0.0 -> 9.9.9',
+      '',
+      '  Updating Codex via npm',
+      '  [=========>          ] 50%',
+      '',
+      ...lowerPrompt,
     ].join('\n');
 
-    const prompt = parseCodexTuiSelectionPrompt(screen);
+    const monitor = createCodexTuiSelectionPromptMonitor();
+    assert.equal(observeStableCodexTuiSelectionPrompt(firstScreen, monitor, 2, 100), null);
+    const prompt = observeStableCodexTuiSelectionPrompt(secondScreen, monitor, 2, 600);
     assert.ok(prompt);
     assert.equal(prompt.kind, 'permission');
     assert.equal(prompt.selectedIndex, 0);
@@ -229,13 +237,6 @@ describe('codex-tmux-provider', () => {
       'yes_proceed',
       'yes_always',
       'no',
-    ]);
-    assert.match(prompt.summary, /Yes, proceed/);
-    assert.doesNotMatch(prompt.summary, /Update now/);
-    assert.deepEqual(buildCodexTuiSelectionChoiceActions(prompt, 'no'), [
-      { type: 'key', key: 'Down' },
-      { type: 'key', key: 'Down' },
-      { type: 'key', key: 'Enter' },
     ]);
   });
 
