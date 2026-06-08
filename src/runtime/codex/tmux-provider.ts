@@ -234,7 +234,9 @@ function hasCodexTuiSelectionPromptCursor(tail: string): boolean {
 }
 
 function hasCodexTuiSelectionPromptFooter(tail: string): boolean {
-  return /Press\s+enter\s+to\s+confirm\s+or\s+esc\s+to\s+cancel/i.test(tail);
+  return tail
+    .split('\n')
+    .some((line) => /Press\s+enter\s+to\s+confirm/i.test(line) && /\besc\b/i.test(line));
 }
 
 type ParsedSelectionLine = {

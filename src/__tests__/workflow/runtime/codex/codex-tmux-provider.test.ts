@@ -35,6 +35,7 @@ import {
 
 const execFileAsync = promisify(execFile);
 const CODEX_TUI_CONFIRM_FOOTER = 'Press enter to confirm or esc to cancel';
+const CODEX_TUI_GO_BACK_FOOTER = 'Press enter to confirm or esc to go back';
 
 async function tmuxAvailable(): Promise<boolean> {
   try {
@@ -267,6 +268,44 @@ describe('codex-tmux-provider', () => {
       'yes_proceed',
       'yes_always',
       'no',
+    ]);
+  });
+
+  it('detects a stable lower goal prompt with a go-back footer while upper output keeps changing', () => {
+    const lowerPrompt = [
+      'Replace goal?',
+      'New objective: 在worktree/tmux下，整理当前codex tmux运行时的全生命周期逻辑，',
+      '',
+      '› 1. Replace current goal  Set the new objective and start it now',
+      '  2. Cancel                Keep the current goal',
+      '',
+      CODEX_TUI_GO_BACK_FOOTER,
+    ];
+    const firstScreen = [
+      '• Edited src/domain/session.ts (+1 -1)',
+      '    4  export type CodexReasoningEffort = ...',
+      '    5 -export type ClaudeProviderChoice = \'pty\' | \'sdk\';',
+      '    5 +export type ClaudeProviderChoice = \'pty\' | \'sdk\' | \'tmux\';',
+      '',
+      ...lowerPrompt,
+    ].join('\n');
+    const secondScreen = [
+      '• Edited src/runtime/claude/tmux-provider.ts (+22 -0)',
+      '    1 +import { tmuxCore } from ...',
+      '    2 +export function streamClaudeTmuxProvider(...)',
+      '    3 +  // output above keeps moving',
+      '',
+      ...lowerPrompt,
+    ].join('\n');
+
+    const monitor = createCodexTuiSelectionPromptMonitor();
+    assert.equal(observeStableCodexTuiSelectionPrompt(firstScreen, monitor, 2, 100), null);
+    const prompt = observeStableCodexTuiSelectionPrompt(secondScreen, monitor, 2, 600);
+    assert.ok(prompt);
+    assert.equal(prompt.kind, 'goal');
+    assert.deepEqual(prompt.options.map((option) => option.choice), [
+      'replace_current_goal',
+      'cancel',
     ]);
   });
 
