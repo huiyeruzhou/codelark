@@ -127,7 +127,7 @@ function sleep(ms: number): Promise<void> {
 
 const PASTE_LITERAL_THRESHOLD = 512;
 const PASTE_CHUNK_SIZE = 512;
-const PASTE_CHUNK_DELAY_MS = 25;
+const PASTE_CHUNK_DELAY_MS = 75;
 
 function splitTextChunks(text: string, chunkSize = PASTE_CHUNK_SIZE): string[] {
   if (!text) return [];
