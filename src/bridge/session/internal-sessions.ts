@@ -26,8 +26,19 @@ function userIdShortName(userId: string | undefined): string | null {
   return normalized ? `ou_${normalized.slice(0, 6)}` : null;
 }
 
-export function makeDraftSessionName(address: { channelType: string; chatId: string; userId?: string }): string {
-  return userIdShortName(address.userId) || userIdShortName(address.chatId) || `ou_${address.chatId.slice(0, 6)}`;
+function chatIdShortName(chatId: string | undefined): string | null {
+  const trimmed = chatId?.trim();
+  if (!trimmed) return null;
+  const body = trimmed.startsWith('oc_') ? trimmed.slice(3) : trimmed;
+  const normalized = body.replace(/[^a-zA-Z0-9]/g, '');
+  return normalized ? `oc_${normalized.slice(0, 12)}` : null;
+}
+
+export function makeDraftSessionName(address: { channelType: string; chatId: string; chatKind?: string; userId?: string }): string {
+  if (address.chatKind === 'group') {
+    return chatIdShortName(address.chatId) || userIdShortName(address.userId) || `oc_${address.chatId.slice(0, 12)}`;
+  }
+  return userIdShortName(address.userId) || chatIdShortName(address.chatId) || `oc_${address.chatId.slice(0, 12)}`;
 }
 
 function getDefaultSessionWorkingDirectory(store: BridgeStore): string {
@@ -38,6 +49,17 @@ function getDefaultSessionWorkingDirectory(store: BridgeStore): string {
 
 function isHiddenTemporarySession(session: BridgeSession): boolean {
   return session.hidden === true && !session.runtime?.codex?.threadId && !session.runtime?.claude?.sessionId;
+}
+
+function sessionHasBindingOutsideAddress(
+  store: BridgeStore,
+  sessionId: string,
+  address: { channelType: string; chatId: string },
+): boolean {
+  return store.listChannelChats().some((binding) =>
+    binding.bridgeSessionId === sessionId
+    && (binding.channelType !== address.channelType || binding.chatId !== address.chatId)
+  );
 }
 
 export function cleanupHiddenSessions(store: BridgeStore): void {
@@ -72,6 +94,7 @@ export function getOrCreateDraftSession(
     && session.session_type !== 'draft'
     && session.name === expectedName
     && !isSessionExpired(session)
+    && !sessionHasBindingOutsideAddress(store, session.id, address)
   );
 
   if (existing) {
@@ -105,7 +128,11 @@ export function resetDraftSession(
 ): BridgeSession {
   const expectedName = makeDraftSessionName(address);
   for (const session of store.listSessions()) {
-    if (isHiddenTemporarySession(session) && session.name === expectedName) {
+    if (
+      isHiddenTemporarySession(session)
+      && session.name === expectedName
+      && !sessionHasBindingOutsideAddress(store, session.id, address)
+    ) {
       store.deleteSession(session.id);
     }
   }

@@ -8,6 +8,7 @@ import { CONFIG_JSON_PATH, CODELARK_HOME, DEFAULT_WORKSPACE_ROOT } from '../../.
 import { JsonFileStore } from '../../../storage/json-store.js';
 import { initBridgeContext } from '../../../bridge/host/context.js';
 import { resolve } from '../../../bridge/host/channel-router.js';
+import { resetDraftSession } from '../../../bridge/session/internal-sessions.js';
 import { getSessionActiveRuntime, getSessionWorkingDirectory } from '../../../domain/session-runtime.js';
 import { writeCodexSessionJsonlFixture } from '../../helpers/bridge/test-bridge-utils.js';
 
@@ -185,5 +186,84 @@ describe('channel-router default targets', () => {
     assert.equal(session?.session_type, 'normal');
     assert.equal(session?.name, 'ou_123');
     assert.equal(getSessionWorkingDirectory(session), DEFAULT_WORKSPACE_ROOT);
+  });
+
+  it('names group draft sessions from the chat id', () => {
+    const store = new JsonFileStore(makeSettings());
+    initBridgeContext({
+      store,
+      llm: noopLlm,
+      permissions: { resolvePendingPermission: () => false },
+      lifecycle: {},
+    });
+
+    const binding = resolve({
+      channelType: 'feishu-default',
+      chatId: 'oc_abcdef1234567890',
+      chatKind: 'group',
+      userId: 'ou_1234567890',
+      displayName: '迟浩瀚',
+    });
+
+    assert.equal(store.getSession(binding.bridgeSessionId)?.name, 'oc_abcdef123456');
+  });
+
+  it('does not reuse a hidden temporary session already bound to another chat', () => {
+    const store = new JsonFileStore(makeSettings());
+    initBridgeContext({
+      store,
+      llm: noopLlm,
+      permissions: { resolvePendingPermission: () => false },
+      lifecycle: {},
+    });
+
+    const firstBinding = resolve({
+      channelType: 'feishu-default',
+      chatId: 'oc_group_one',
+      chatKind: 'group',
+      userId: 'ou_same_user',
+      displayName: '迟浩瀚',
+    });
+    const secondBinding = resolve({
+      channelType: 'feishu-default',
+      chatId: 'oc_group_two',
+      chatKind: 'group',
+      userId: 'ou_same_user',
+      displayName: '迟浩瀚',
+    });
+
+    assert.notEqual(secondBinding.bridgeSessionId, firstBinding.bridgeSessionId);
+    assert.equal(store.getSession(firstBinding.bridgeSessionId)?.hidden, true);
+    assert.equal(store.getSession(secondBinding.bridgeSessionId)?.hidden, true);
+    assert.equal(store.getSession(firstBinding.bridgeSessionId)?.name, 'oc_groupone');
+    assert.equal(store.getSession(secondBinding.bridgeSessionId)?.name, 'oc_grouptwo');
+  });
+
+  it('does not reset a hidden temporary session bound to another chat', () => {
+    const store = new JsonFileStore(makeSettings());
+    initBridgeContext({
+      store,
+      llm: noopLlm,
+      permissions: { resolvePendingPermission: () => false },
+      lifecycle: {},
+    });
+
+    const firstBinding = resolve({
+      channelType: 'feishu-default',
+      chatId: 'oc_reset_group_one',
+      chatKind: 'group',
+      userId: 'ou_same_user',
+      displayName: '迟浩瀚',
+    });
+    const resetSession = resetDraftSession(store, {
+      channelType: 'feishu-default',
+      chatId: 'oc_reset_group_two',
+      userId: 'ou_same_user',
+    });
+
+    assert.notEqual(resetSession.id, firstBinding.bridgeSessionId);
+    assert.ok(store.getSession(firstBinding.bridgeSessionId));
+    assert.equal(store.getSession(firstBinding.bridgeSessionId)?.hidden, true);
+    assert.equal(store.getSession(resetSession.id)?.hidden, true);
   });
 });
