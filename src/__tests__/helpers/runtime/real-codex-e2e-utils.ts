@@ -23,6 +23,10 @@ export interface LocalResponsesProxy {
   close(): Promise<void>;
 }
 
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 export async function commandAvailable(command: string, args: string[]): Promise<boolean> {
   try {
     await execFileAsync(command, args);
@@ -33,13 +37,13 @@ export async function commandAvailable(command: string, args: string[]): Promise
 }
 
 export async function waitForCondition(
-  condition: () => boolean,
+  condition: () => boolean | Promise<boolean>,
   timeoutMs: number,
   intervalMs = 250,
 ): Promise<boolean> {
   const startedAt = Date.now();
   while (Date.now() - startedAt < timeoutMs) {
-    if (condition()) return true;
+    if (await condition()) return true;
     await new Promise((resolve) => setTimeout(resolve, intervalMs));
   }
   return condition();
@@ -197,8 +201,10 @@ function createChatCompletionsEventStreamPayload(model: string, responseText: st
 
 export async function startLocalResponsesProxy(options: {
   responseText?: string;
+  responseDelayMs?: number;
 } = {}): Promise<LocalResponsesProxy> {
   const responseText = options.responseText ?? 'clk local proxy response';
+  const responseDelayMs = Math.max(0, options.responseDelayMs ?? 0);
   const requests: RecordedResponsesRequest[] = [];
   const server = http.createServer((req, res) => {
     let rawBody = '';
@@ -215,12 +221,13 @@ export async function startLocalResponsesProxy(options: {
           body = rawBody;
         }
       }
-      requests.push({
+      const recordedRequest = {
         method: req.method || '',
         url: req.url || '',
         body,
         rawBody,
-      });
+      };
+      requests.push(recordedRequest);
 
       if (req.method === 'POST' && req.url?.includes('/responses')) {
         const model = typeof body === 'object'
@@ -228,12 +235,15 @@ export async function startLocalResponsesProxy(options: {
           && typeof (body as { model?: unknown }).model === 'string'
           ? (body as { model: string }).model
           : 'gpt-5';
-        res.writeHead(200, {
-          'content-type': 'text/event-stream',
-          'cache-control': 'no-cache',
-          connection: 'keep-alive',
-        });
-        res.end(createResponsesEventStreamPayload(model, responseText));
+        void (async () => {
+          if (responseDelayMs > 0) await sleep(responseDelayMs);
+          res.writeHead(200, {
+            'content-type': 'text/event-stream',
+            'cache-control': 'no-cache',
+            connection: 'keep-alive',
+          });
+          res.end(createResponsesEventStreamPayload(model, responseText));
+        })();
         return;
       }
 
@@ -247,27 +257,33 @@ export async function startLocalResponsesProxy(options: {
           && body !== null
           && (body as { stream?: unknown }).stream === true;
         if (wantsStream) {
-          res.writeHead(200, {
-            'content-type': 'text/event-stream',
-            'cache-control': 'no-cache',
-            connection: 'keep-alive',
-          });
-          res.end(createChatCompletionsEventStreamPayload(model, responseText));
+          void (async () => {
+            if (responseDelayMs > 0) await sleep(responseDelayMs);
+            res.writeHead(200, {
+              'content-type': 'text/event-stream',
+              'cache-control': 'no-cache',
+              connection: 'keep-alive',
+            });
+            res.end(createChatCompletionsEventStreamPayload(model, responseText));
+          })();
           return;
         }
-        res.writeHead(200, { 'content-type': 'application/json' });
-        res.end(JSON.stringify({
-          id: `chatcmpl_clk_${Date.now()}`,
-          object: 'chat.completion',
-          created: Math.floor(Date.now() / 1000),
-          model,
-          choices: [{
-            index: 0,
-            message: { role: 'assistant', content: responseText },
-            finish_reason: 'stop',
-          }],
-          usage: { prompt_tokens: 1, completion_tokens: 4, total_tokens: 5 },
-        }));
+        void (async () => {
+          if (responseDelayMs > 0) await sleep(responseDelayMs);
+          res.writeHead(200, { 'content-type': 'application/json' });
+          res.end(JSON.stringify({
+            id: `chatcmpl_clk_${Date.now()}`,
+            object: 'chat.completion',
+            created: Math.floor(Date.now() / 1000),
+            model,
+            choices: [{
+              index: 0,
+              message: { role: 'assistant', content: responseText },
+              finish_reason: 'stop',
+            }],
+            usage: { prompt_tokens: 1, completion_tokens: 4, total_tokens: 5 },
+          }));
+        })();
         return;
       }
 

@@ -198,6 +198,8 @@ const MIRROR_STREAM_STATUS_IDLE_START_MS = 180_000;
 const MIRROR_STREAM_STATUS_HEARTBEAT_MS = 10_000;
 const MIRROR_TMUX_SELECTION_PROBE_IDLE_MS = 40_000;
 const MIRROR_TMUX_SELECTION_PROBE_INTERVAL_MS = 10_000;
+const TMUX_AUTO_FORWARD_SELECTION_PROBE_TIMEOUT_MS = 5_000;
+const TMUX_AUTO_FORWARD_SELECTION_PROBE_INTERVAL_MS = 300;
 const TMUX_SCREEN_STOP_CALLBACK_PREFIX = 'tmux-screen:stop:';
 const PTY_SCREEN_STOP_CALLBACK_PREFIX = 'pty-screen:stop:';
 const TMUX_AUTO_FORWARD_TYPING_REACTION = 'Typing';
@@ -241,6 +243,13 @@ interface PendingTmuxAutoForwardReaction {
 const pendingTmuxAutoForwardReactions = new Map<string, PendingTmuxAutoForwardReaction>();
 const tmuxSelectionPromptMonitors = new Map<string, CodexTuiSelectionPromptMonitor>();
 const tmuxSelectionPromptLastProbeAt = new Map<string, number>();
+
+interface TmuxSelectionPromptTarget {
+  channelType: string;
+  chatId: string;
+  sessionId: string;
+  threadId?: string;
+}
 
 function tmuxAutoForwardReactionKey(channelType: string, chatId: string, sessionId: string): string {
   return `${channelType}:${chatId}:${sessionId}`;
@@ -286,17 +295,17 @@ function getTmuxSelectionPromptMonitor(sessionId: string): CodexTuiSelectionProm
   return monitor;
 }
 
-async function handleMirrorTmuxSelectionPrompt(
-  subscription: BridgeMirrorSubscription,
+async function handleTmuxSelectionPromptForTarget(
+  target: TmuxSelectionPromptTarget,
   prompt: NonNullable<ReturnType<typeof observeStableCodexTuiSelectionPrompt>>,
   targetPane: string,
 ): Promise<void> {
-  const adapter = getState().adapters.get(subscription.channelType);
+  const adapter = getState().adapters.get(target.channelType);
   if (!adapter || !adapter.isRunning()) return;
-  const permissionRequestId = `codex-selection:${prompt.kind}:mirror:${subscription.sessionId}:${Date.now()}`;
+  const permissionRequestId = `codex-selection:${prompt.kind}:mirror:${target.sessionId}:${Date.now()}`;
   await broker.forwardPermissionRequest(
     adapter,
-    { channelType: subscription.channelType, chatId: subscription.chatId },
+    { channelType: target.channelType, chatId: target.chatId },
     permissionRequestId,
     'Codex TUI Selection Prompt',
     {
@@ -327,14 +336,14 @@ async function handleMirrorTmuxSelectionPrompt(
         ...(prompt.kind === 'generic' ? [{ choice: 'not_selection', label: '这不是TUI选择' }] : []),
       ],
     },
-    subscription.sessionId,
+    target.sessionId,
     [],
   );
   const choice = await broker.waitForCodexTuiSelectionPermission(permissionRequestId);
   if (!choice) {
     console.warn('[bridge-manager] Codex TUI selection prompt timed out:', {
-      session_id: subscription.sessionId,
-      thread_id: subscription.threadId,
+      session_id: target.sessionId,
+      thread_id: target.threadId,
       prompt_kind: prompt.kind,
     });
     return;
@@ -342,8 +351,8 @@ async function handleMirrorTmuxSelectionPrompt(
   const actions = buildCodexTuiSelectionChoiceActions(prompt, choice);
   if (choice === 'not_selection' || actions.length === 0) {
     console.log('[bridge-manager] Codex TUI generic selection dismissed from mirror probe:', {
-      session_id: subscription.sessionId,
-      thread_id: subscription.threadId,
+      session_id: target.sessionId,
+      thread_id: target.threadId,
       prompt_kind: prompt.kind,
       choice,
     });
@@ -351,12 +360,25 @@ async function handleMirrorTmuxSelectionPrompt(
   }
   const result = await tmuxCore.sendActions(targetPane, actions);
   console.log('[bridge-manager] Codex TUI selection prompt resolved from mirror probe:', {
-    session_id: subscription.sessionId,
-    thread_id: subscription.threadId,
+    session_id: target.sessionId,
+    thread_id: target.threadId,
     prompt_kind: prompt.kind,
     choice,
     commands: result.commands,
   });
+}
+
+async function handleMirrorTmuxSelectionPrompt(
+  subscription: BridgeMirrorSubscription,
+  prompt: NonNullable<ReturnType<typeof observeStableCodexTuiSelectionPrompt>>,
+  targetPane: string,
+): Promise<void> {
+  await handleTmuxSelectionPromptForTarget({
+    channelType: subscription.channelType,
+    chatId: subscription.chatId,
+    sessionId: subscription.sessionId,
+    threadId: subscription.threadId,
+  }, prompt, targetPane);
 }
 
 function parseMirrorCodexSelectionSessionId(permissionRequestId: string): string | null {
@@ -460,6 +482,50 @@ async function probeMirrorTmuxSelectionPrompt(subscription: BridgeMirrorSubscrip
     .finally(() => {
       markCodexTuiSelectionPromptActionSent(monitor);
     });
+}
+
+async function probeTmuxSelectionPromptForTarget(
+  target: TmuxSelectionPromptTarget,
+  options: { timeoutMs?: number; intervalMs?: number } = {},
+): Promise<boolean> {
+  const session = getBridgeContext().store.getSession(target.sessionId);
+  if (!session || getSessionActiveRuntime(session) === 'claude') return false;
+  if (resolveEffectiveCodexProvider(session) !== 'tmux') return false;
+  const tmuxSessionName = getSessionRuntimeTmuxSessionName(session);
+  if (!tmuxSessionName) return false;
+  const targetPane = `${tmuxSessionName}:0.0`;
+  const monitor = getTmuxSelectionPromptMonitor(target.sessionId);
+  const timeoutMs = options.timeoutMs ?? TMUX_AUTO_FORWARD_SELECTION_PROBE_TIMEOUT_MS;
+  const intervalMs = options.intervalMs ?? TMUX_AUTO_FORWARD_SELECTION_PROBE_INTERVAL_MS;
+  const deadline = Date.now() + timeoutMs;
+
+  while (Date.now() <= deadline) {
+    let capture;
+    try {
+      capture = await tmuxCore.capturePane(targetPane, 80);
+    } catch (error) {
+      console.warn('[bridge-manager] Tmux selection prompt probe failed:', {
+        session_id: target.sessionId,
+        tmux_session: tmuxSessionName,
+        error: describeUnknownError(error),
+      });
+      return false;
+    }
+    const prompt = observeStableCodexTuiSelectionPrompt(capture.screen, monitor);
+    if (prompt) {
+      monitor.pending = true;
+      void handleTmuxSelectionPromptForTarget(target, prompt, targetPane)
+        .catch((error) => {
+          console.error('[bridge-manager] Tmux selection prompt handling failed:', describeUnknownError(error));
+        })
+        .finally(() => {
+          markCodexTuiSelectionPromptActionSent(monitor);
+        });
+      return true;
+    }
+    await new Promise((resolve) => setTimeout(resolve, intervalMs));
+  }
+  return false;
 }
 
 // ── Streaming preview helpers ──────────────────────────────────
@@ -3021,6 +3087,14 @@ async function handleMessage(
           tmuxProviderBridgeSessionId,
           `已向 ${tmuxProviderRuntime.identity} TUI 注入消息，等待 mirror 同步当前 turn。`,
         );
+        void probeTmuxSelectionPromptForTarget({
+          channelType: msg.address.channelType,
+          chatId: msg.address.chatId,
+          sessionId: tmuxProviderBridgeSessionId,
+          threadId: getSessionCodexThreadId(tmuxProviderSession) || undefined,
+        }).catch((error) => {
+          console.warn('[bridge-manager] Tmux provider auto-forward selection probe failed:', describeUnknownError(error));
+        });
         store.insertAuditLog({
           channelType: adapter.channelType,
           chatId: msg.address.chatId,

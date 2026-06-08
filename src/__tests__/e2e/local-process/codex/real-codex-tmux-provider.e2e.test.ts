@@ -10,6 +10,7 @@ import { promisify } from 'node:util';
 import { CodexRoutingProvider } from '../../../../runtime/codex/routing-provider.js';
 import { getCodexSessionByThreadIdSafe } from '../../../../bridge/session/support.js';
 import type { BridgeStore } from '../../../../domain/index.js';
+import type { OutboundMessage } from '../../../../domain/index.js';
 import { _testOnly, registerAdapter } from '../../../../bridge/host/manager.js';
 import { PendingPermissions } from '../../../../runtime/permission-gateway.js';
 import {
@@ -64,6 +65,18 @@ function findTrustPermission(adapter: RecordingAdapter): {
       buttonTexts: message.inlineButtons?.flat().map((item) => item.text) || [],
       permissionRequestId: button.callbackData.slice('perm:allow:'.length),
     };
+  }
+  return null;
+}
+
+function findCodexTuiSelectionMessage(adapter: RecordingAdapter): { message: OutboundMessage; messageId: string } | null {
+  for (const [index, message] of adapter.sent.entries()) {
+    if (
+      /Codex TUI Selection/.test(message.text)
+      || message.richCard?.title === 'Codex TUI Selection'
+    ) {
+      return { message, messageId: `reply-${index + 1}` };
+    }
   }
   return null;
 }
@@ -366,4 +379,166 @@ describe('real codex tmux provider e2e', () => {
       _testOnly.resetStateForTests();
     }
   });
+
+  it('forwards a Codex goal replacement selection promptly after tmux auto-forwarded goals', { timeout: 120_000 }, async (t: TestContext) => {
+    if (process.env[REAL_CODEX_E2E_ENV] !== '1') {
+      t.skip(`set ${REAL_CODEX_E2E_ENV}=1 to run real Codex e2e tests`);
+      return;
+    }
+    if (!(await commandAvailable('tmux', ['-V']))) {
+      t.skip('tmux is not available');
+      return;
+    }
+    if (!(await commandAvailable('codex', ['--version']))) {
+      t.skip('codex CLI is not available');
+      return;
+    }
+
+    const previousEnv = {
+      CODEX_HOME: process.env.CODEX_HOME,
+      CODELARK_CODEX_BASE_URL: process.env.CODELARK_CODEX_BASE_URL,
+      CODELARK_CODEX_API_KEY: process.env.CODELARK_CODEX_API_KEY,
+      CODEX_API_KEY: process.env.CODEX_API_KEY,
+      OPENAI_API_KEY: process.env.OPENAI_API_KEY,
+      CODELARK_CODEX_SKIP_GIT_REPO_CHECK: process.env.CODELARK_CODEX_SKIP_GIT_REPO_CHECK,
+    };
+    const codexHome = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-real-codex-home-goal-selection-'));
+    const proxy = await startLocalResponsesProxy({
+      responseText: 'clk delayed goal response',
+      responseDelayMs: 2_500,
+    });
+    process.env.CODEX_HOME = codexHome;
+    process.env.CODELARK_CODEX_BASE_URL = proxy.baseUrl;
+    process.env.CODELARK_CODEX_API_KEY = 'clk-local-proxy-key';
+    process.env.CODEX_API_KEY = 'clk-local-proxy-key';
+    process.env.OPENAI_API_KEY = 'clk-local-proxy-key';
+    process.env.CODELARK_CODEX_SKIP_GIT_REPO_CHECK = 'true';
+
+    resetBridgeTestState({ cleanCodexHome: true });
+    seedCodexApiKeyAuth(codexHome, 'clk-local-proxy-key');
+    _testOnly.resetStateForTests();
+
+    const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-real-tmux-goal-selection-'));
+    const model = process.env[REAL_CODEX_E2E_MODEL_ENV] || 'gpt-5.4';
+    const settings = makeBridgeSettings({
+      bridge_default_provider: 'tmux',
+      bridge_default_model: model,
+      bridge_codex_reasoning_effort: 'low',
+    });
+    const pendingPerms = new PendingPermissions();
+    const store = initBridgeTestContext({
+      settings,
+      llm: new CodexRoutingProvider(pendingPerms, 'tmux'),
+      permissions: {
+        resolvePendingPermission: (id, resolution) => pendingPerms.resolve(id, resolution),
+      },
+    });
+    const adapter = new RecordingAdapter();
+    registerAdapter(adapter);
+    (globalThis as unknown as Record<string, any>).__bridge_manager__.running = true;
+    const address = { channelType: 'feishu', chatId: `chat-real-tmux-goal-selection-${process.pid}-${Date.now()}` } as const;
+    let tmuxSessionName = '';
+    let generatedThreadId = '';
+    let generatedThreadFilePath = '';
+
+    try {
+      await _testOnly.handleMessage(adapter, inboundMessage(address, `/clear real-tmux-goal-selection ${workDir}`, 'incoming-goal-selection-new'));
+      await _testOnly.handleMessage(adapter, inboundMessage(address, '/provider tmux', 'incoming-goal-selection-provider'));
+
+      const binding = store.getChannelChat(address.channelType, address.chatId);
+      assert.ok(binding);
+      let session = store.getSession(binding.bridgeSessionId);
+      generatedThreadId = session?.runtime?.codex?.threadId?.trim() || '';
+      tmuxSessionName = session?.runtime?.general?.tmuxSessionName || '';
+      assert.match(generatedThreadId, /^[0-9a-f-]{20,}$/i);
+      assert.equal(tmuxSessionName, `codex_${generatedThreadId}`);
+
+      await execFileAsync('tmux', ['has-session', '-t', tmuxSessionName]);
+
+      const requestsBeforeFirstGoal = proxy.requests.length;
+      await _testOnly.handleMessage(adapter, inboundMessage(address, '//goal goala', 'incoming-goal-selection-a'));
+      const sawFirstGoalRequest = await waitForCondition(
+        () => proxy.requests.length > requestsBeforeFirstGoal
+          && proxy.requests.some((request) => request.url.includes('/responses')),
+        20_000,
+        250,
+      );
+      if (!sawFirstGoalRequest) {
+        const capture = await execFileAsync('tmux', ['capture-pane', '-t', tmuxSessionName, '-p', '-S', '-80'])
+          .catch((error) => ({ stdout: String(error), stderr: '' }));
+        assert.fail([
+          'local Responses proxy should receive the first //goal prompt before the replacement prompt is sent',
+          `responses requests: ${proxy.requests.filter((request) => request.url.includes('/responses')).length}`,
+          `screen: ${capture.stdout.slice(-2000)}`,
+        ].join('\n'));
+      }
+      const sawActiveGoalScreen = await waitForCondition(
+        async () => {
+          const capture = await execFileAsync('tmux', ['capture-pane', '-t', tmuxSessionName, '-p', '-S', '-80'])
+            .catch(() => ({ stdout: '', stderr: '' }));
+          return /Pursuing goal|Goal Active|goala/i.test(capture.stdout);
+        },
+        8_000,
+        250,
+      );
+      assert.equal(sawActiveGoalScreen, true, 'tmux screen should show the first goal is active before sending the replacement goal');
+
+      await _testOnly.handleMessage(adapter, inboundMessage(address, '//goal b', 'incoming-goal-selection-b'));
+      const sawSelection = await waitForCondition(
+        () => Boolean(findCodexTuiSelectionMessage(adapter)),
+        12_000,
+        250,
+      );
+      if (!sawSelection) {
+        const capture = await execFileAsync('tmux', ['capture-pane', '-t', tmuxSessionName, '-p', '-S', '-100'])
+          .catch((error) => ({ stdout: String(error), stderr: '' }));
+        assert.fail([
+          'Codex TUI Selection should be forwarded promptly after the second //goal prompt',
+          `responses requests: ${proxy.requests.filter((request) => request.url.includes('/responses')).length}`,
+          `screen: ${capture.stdout.slice(-3000)}`,
+        ].join('\n'));
+      }
+
+      const selection = findCodexTuiSelectionMessage(adapter);
+      assert.ok(selection);
+      assert.match(selection.message.text, /Codex TUI Selection/);
+      assert.equal(selection.message.richCard?.title, 'Codex TUI Selection');
+      const selectOptions = selection.message.richCard?.selects?.flatMap((select) => select.options.map((option) => option.text)) || [];
+      assert.equal(selectOptions.some((text) => /Replace current goal/i.test(text)), true);
+      assert.equal(selectOptions.some((text) => /^Cancel\b/i.test(text)), true);
+      const cancelCallbackData = selection.message.richCard?.selects
+        ?.flatMap((select) => select.options)
+        .find((option) => /^Cancel\b/i.test(option.text))
+        ?.callbackData;
+      assert.ok(cancelCallbackData, 'selection card should include a Cancel callback');
+      await _testOnly.handleMessage(adapter, {
+        ...inboundMessage(address, '', 'incoming-goal-selection-cancel'),
+        callbackData: cancelCallbackData,
+        callbackMessageId: selection.messageId,
+      });
+      await new Promise((resolve) => setTimeout(resolve, 5_500));
+
+      session = store.getSession(binding.bridgeSessionId);
+      generatedThreadFilePath = generatedThreadId
+        ? getCodexSessionByThreadIdSafe(generatedThreadId, 'real tmux goal selection cleanup lookup')?.filePath || ''
+        : '';
+      assert.equal(session?.runtime?.codex?.threadId, generatedThreadId);
+    } finally {
+      if (tmuxSessionName) {
+        await execFileAsync('tmux', ['kill-session', '-t', tmuxSessionName]).catch(() => undefined);
+      }
+      if (generatedThreadId) {
+        cleanupCodexThreadArtifacts(generatedThreadId, generatedThreadFilePath);
+      }
+      fs.rmSync(workDir, { recursive: true, force: true });
+      fs.rmSync(codexHome, { recursive: true, force: true });
+      await proxy.close().catch(() => undefined);
+      for (const [key, value] of Object.entries(previousEnv)) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+      _testOnly.resetStateForTests();
+    }
+  });
+
 });
