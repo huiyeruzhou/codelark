@@ -56,19 +56,6 @@ function codexYoloMode(value: unknown): 'off' | 'on' | undefined {
   return undefined;
 }
 
-function claudeYoloMode(value: unknown): 'off' | 'on' | undefined {
-  if (value === 'bypassPermissions' || value === 'on') return 'on';
-  if (value === 'default' || value === 'acceptEdits' || value === 'plan' || value === 'off') return 'off';
-  return undefined;
-}
-
-function claudePermissionMode(value: unknown): 'default' | 'acceptEdits' | 'bypassPermissions' | 'plan' | undefined {
-  if (value === 'default' || value === 'acceptEdits' || value === 'bypassPermissions' || value === 'plan') return value;
-  if (value === 'on') return 'bypassPermissions';
-  if (value === 'off') return 'default';
-  return undefined;
-}
-
 function reasoningEffort(value: unknown): 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | undefined {
   if (value === 'minimal' || value === 'low' || value === 'medium' || value === 'high' || value === 'xhigh') return value;
   return undefined;
@@ -196,13 +183,7 @@ function extractSessionPatch(sessionId: string, session: Record<string, unknown>
     claudePatch.model = claudeModel;
     delete claude.model;
   }
-  const yoloMode = claudeYoloMode(claude.permissionMode);
-  const permissionMode = claudePermissionMode(claude.permissionMode);
-  if (yoloMode !== undefined || permissionMode !== undefined) {
-    if (yoloMode !== undefined) claudePatch.yoloMode = yoloMode;
-    if (permissionMode !== undefined) claudePatch.permissionMode = permissionMode;
-    delete claude.permissionMode;
-  }
+  delete claude.permissionMode;
   const runtimeClaudeProvider = claudeProvider(claude.provider);
   if (runtimeClaudeProvider !== undefined) {
     claudePatch.provider = runtimeClaudeProvider;

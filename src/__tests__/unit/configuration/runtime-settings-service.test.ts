@@ -88,7 +88,6 @@ describe('runtime settings service projection', () => {
       assert.equal(projection.config.runtime.agent, 'claude');
       assert.equal(projection.config.runtime.codex.model, 'toml-model');
       assert.equal(projection.config.runtime.codex.yoloMode, 'on');
-      assert.equal(projection.config.runtime.claude.permissionMode, 'default');
 
       assert.equal(projection.settings.get('bridge_default_runtime'), 'claude');
       assert.equal(projection.settings.get('bridge_default_model'), 'toml-model');
@@ -96,7 +95,7 @@ describe('runtime settings service projection', () => {
       assert.equal(projection.settings.get('bridge_default_provider'), 'pty');
       assert.equal(projection.settings.get('bridge_default_mode'), 'yolo');
       assert.equal(projection.settings.get('bridge_claude_default_model'), 'toml-claude');
-      assert.equal(projection.settings.get('bridge_claude_permission_mode'), 'default');
+      assert.equal(projection.settings.has('bridge_claude_permission_mode'), false);
       assert.equal(projection.settings.get('bridge_history_message_limit'), '19');
       assert.equal(projection.settings.get('bridge_feishu_enabled'), 'true');
       assert.equal(projection.settings.get('bridge_feishu_app_id'), 'toml-app');

@@ -41,11 +41,7 @@ export function exportRuntimeSettings(config: ConfigV2): Map<string, string> {
     const raw = field.path.startsWith('channels[].')
       ? channelFieldValue(config, field.path)
       : getConfigPath(config, field.path);
-    const value = field.path === 'runtime.claude.permissionMode'
-      && raw === 'default'
-      && (config.runtime.claude.yoloMode === 'on' || config.runtime.claude.yoloMode === 'yolo')
-      ? 'bypassPermissions'
-      : runtimeSettingsValue(field, raw);
+    const value = runtimeSettingsValue(field, raw);
     if (value !== undefined) settings.set(field.runtimeSettingsKey, value);
   }
 
@@ -68,11 +64,7 @@ export function exportProcessEnv(config: ConfigV2): NodeJS.ProcessEnv {
     const raw = field.path.startsWith('channels[].')
       ? channelFieldValue(config, field.path)
       : getConfigPath(config, field.path);
-    const value = field.path === 'runtime.claude.permissionMode'
-      && raw === 'default'
-      && (config.runtime.claude.yoloMode === 'on' || config.runtime.claude.yoloMode === 'yolo')
-      ? 'bypassPermissions'
-      : field.formatEnv ? field.formatEnv(raw) : valueToString(raw);
+    const value = field.formatEnv ? field.formatEnv(raw) : valueToString(raw);
     if (value !== undefined) env[field.processEnvKey] = value;
   }
   return env;

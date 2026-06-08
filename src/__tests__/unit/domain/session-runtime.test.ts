@@ -19,7 +19,6 @@ import { CODELARK_HOME } from '../../../configuration/paths.js';
 import {
   getSessionActiveRuntime,
   getSessionClaudeModel,
-  getSessionClaudePermissionMode,
   getSessionClaudeProvider,
   getSessionClaudeSessionId,
   getSessionCodexModel,
@@ -59,7 +58,6 @@ describe('BridgeSession runtime accessors', () => {
           sessionId: ' claude-session ',
           model: 'claude-model',
           provider: 'sdk',
-          permissionMode: 'plan',
         },
         general: { tmuxSessionName: 'nested-tmux' },
       },
@@ -69,7 +67,6 @@ describe('BridgeSession runtime accessors', () => {
     assert.equal(getSessionClaudeSessionId(session), 'claude-session');
     assert.equal(getSessionClaudeModel(session), undefined);
     assert.equal(getSessionClaudeProvider(session), undefined);
-    assert.equal(getSessionClaudePermissionMode(session), undefined);
     assert.equal(session.runtime?.codex, undefined);
     assert.equal(getSessionCodexThreadId(session), undefined);
     assert.equal(getSessionCodexModel(session), undefined);
@@ -91,7 +88,6 @@ schema_version = 2
 provider = "sdk"
 executable = "ccr"
 model = "claude-global"
-permission_mode = "default"
 `);
       initBridgeTestContext({ settings: new Map() });
 
@@ -102,7 +98,6 @@ permission_mode = "default"
           claude: {
             provider: 'pty',
             model: 'claude-session',
-            permissionMode: 'plan',
             reasoningEffort: 'high',
           },
         },
@@ -227,7 +222,7 @@ reasoning_effort = "high"
 
 [runtime.claude]
 model = "toml-claude"
-permission_mode = "plan"
+yolo_mode = "on"
 provider = "pty"
 executable = "ccr"
 idle_timeout_minutes = 17
@@ -262,7 +257,6 @@ require_mention = false
           ['bridge_claude_provider', 'sdk'],
           ['bridge_claude_executable', 'claude'],
           ['bridge_claude_default_model', 'store-claude'],
-          ['bridge_claude_permission_mode', 'default'],
           ['bridge_claude_idle_timeout_minutes', '5'],
           ['bridge_history_message_limit', '4'],
         ]),
@@ -281,7 +275,7 @@ require_mention = false
       assert.equal(claude.provider, 'pty');
       assert.equal(claude.executable, 'ccr');
       assert.equal(claude.model, 'toml-claude');
-      assert.equal(claude.permissionMode, 'plan');
+      assert.equal(claude.permissionMode, 'bypassPermissions');
       assert.equal(claude.idleTimeoutMinutes, 17);
       assert.equal(getHistoryMessageLimit(), 13);
     } finally {
@@ -340,7 +334,7 @@ reasoning_effort = "high"
 [runtime.claude]
 model = "channel-claude"
 provider = "pty"
-permission_mode = "plan"
+yolo_mode = "on"
 reasoning_effort = "xhigh"
 `);
     fs.writeFileSync(sessionTomlPath, `
@@ -371,7 +365,7 @@ reasoning_effort = "low"
     assert.equal(resolveEffectiveReasoningEffort(session, binding), 'low');
     assert.equal(claude.model, 'channel-claude');
     assert.equal(claude.provider, 'pty');
-    assert.equal(claude.permissionMode, 'plan');
+    assert.equal(claude.permissionMode, 'bypassPermissions');
     assert.equal(claude.reasoningEffort, 'xhigh');
 
     const legacyProviderBinding = {
@@ -383,7 +377,7 @@ reasoning_effort = "low"
     assert.equal(resolveClaudeRuntimeConfig(session, legacyProviderBinding).model, 'channel-claude');
   });
 
-  it('lets higher-priority Claude yoloMode compatibility override default permissionMode', () => {
+  it('derives Claude permission mode from scoped yoloMode', () => {
     const channelTomlPath = path.join(CODELARK_HOME, 'config', 'channels', 'feishu-yolo.toml');
     fs.mkdirSync(path.dirname(channelTomlPath), { recursive: true });
     fs.writeFileSync(channelTomlPath, `

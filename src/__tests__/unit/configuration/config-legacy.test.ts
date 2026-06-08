@@ -30,7 +30,6 @@ function baseConfigV2(): ConfigV2 {
       claude: {
         model: 'claude-test',
         yoloMode: 'off',
-        permissionMode: 'default',
         provider: 'pty',
         executable: 'ccr',
         reasoningEffort: 'medium',
@@ -78,7 +77,6 @@ describe('legacy config compatibility adapter', () => {
     assert.equal(legacy.codexNetworkAccess, false);
     assert.equal(legacy.codexReasoningEffort, 'high');
     assert.equal(legacy.claudeDefaultModel, 'claude-test');
-    assert.equal(legacy.claudePermissionMode, 'default');
     assert.equal(legacy.historyMessageLimit, 12);
     assert.equal(legacy.channels?.[0]?.config.appId, 'app-id');
     assert.deepEqual(legacy.enabledChannels, ['feishu']);
@@ -101,7 +99,6 @@ describe('legacy config compatibility adapter', () => {
       claudeDefaultModel: 'claude-test',
       claudeProvider: 'sdk',
       claudeExecutable: 'claude',
-      claudePermissionMode: 'bypassPermissions',
       claudeIdleTimeoutMinutes: 0,
       uiAllowLan: false,
       uiAccessToken: 'token',
@@ -129,7 +126,6 @@ describe('legacy config compatibility adapter', () => {
     assert.equal(patch.runtime?.agent, 'codex');
     assert.equal(patch.runtime?.codex?.yoloMode, 'off');
     assert.equal(patch.runtime?.codex?.provider, 'sdk');
-    assert.equal(patch.runtime?.claude?.yoloMode, 'on');
     assert.equal(patch.bridge?.defaultWorkspace, '/workspace');
     assert.equal(patch.channels?.[0]?.config?.historyMessageLimit, 10);
     assert.equal(patch.channels?.[0]?.config?.streamStatusIdleStartSeconds, 300);
@@ -184,16 +180,4 @@ describe('legacy config compatibility adapter', () => {
     assert.equal(patch.channels?.[0]?.config?.streamStatusCheckIntervalSeconds, 10);
   });
 
-  it('preserves legacy Claude acceptEdits and plan permission modes in v2', () => {
-    const legacy: Config = {
-      runtime: 'claude',
-      defaultMode: 'normal',
-      enabledChannels: [],
-    };
-
-    assert.equal(legacyConfigToConfigPatch({ ...legacy, claudePermissionMode: 'acceptEdits' }).runtime?.claude?.permissionMode, 'acceptEdits');
-    assert.equal(legacyConfigToConfigPatch({ ...legacy, claudePermissionMode: 'acceptEdits' }).runtime?.claude?.yoloMode, 'off');
-    assert.equal(legacyConfigToConfigPatch({ ...legacy, claudePermissionMode: 'plan' }).runtime?.claude?.permissionMode, 'plan');
-    assert.equal(legacyConfigToConfigPatch({ ...legacy, claudePermissionMode: 'plan' }).runtime?.claude?.yoloMode, 'off');
-  });
 });

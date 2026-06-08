@@ -4,7 +4,6 @@ import type {
 } from '../channels/types.js';
 import type {
   ClaudeExecutable,
-  ClaudePermissionMode,
   ClaudeProviderChoice,
   CodexProviderChoice,
   CodexReasoningEffort,
@@ -28,7 +27,6 @@ export interface ClaudeRuntimeDefaultsConfig {
   provider?: ClaudeProviderChoice;
   executable?: ClaudeExecutable;
   defaultModel?: string;
-  permissionMode?: ClaudePermissionMode;
   idleTimeoutMinutes?: number;
 }
 
@@ -79,7 +77,6 @@ export interface Config {
   claudeDefaultModel?: string;
   claudeProvider?: ClaudeProviderChoice;
   claudeExecutable?: ClaudeExecutable;
-  claudePermissionMode?: ClaudePermissionMode;
   claudeIdleTimeoutMinutes?: number;
   uiAllowLan?: boolean;
   uiAccessToken?: string;

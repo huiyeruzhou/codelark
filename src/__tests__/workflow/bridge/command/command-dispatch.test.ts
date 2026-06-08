@@ -52,7 +52,6 @@ import { consumeStartupNoticeTarget } from '../../../../bridge/host/startup-noti
 import {
   getSessionActiveRuntime,
   getSessionClaudeModel,
-  getSessionClaudePermissionMode,
   getSessionClaudeProvider,
   getSessionClaudeReasoningEffort,
   getSessionCodexModel,
@@ -1455,10 +1454,6 @@ describe('command-dispatch', () => {
     );
 
     assert.equal(store.getSession(claudeBinding.bridgeSessionId)?.name, '重命名 Current');
-    assert.equal(createConfigService({ migrate: false, env: {} }).get('runtime.claude.permissionMode', {
-      kind: 'session',
-      sessionId: claudeBinding.bridgeSessionId,
-    }), 'default');
     assert.equal(createConfigService({ migrate: false, env: {} }).get('runtime.claude.yoloMode', {
       kind: 'session',
       sessionId: claudeBinding.bridgeSessionId,
@@ -1506,7 +1501,7 @@ describe('command-dispatch', () => {
     store.updateSession(session.id, {
       runtime: {
         activeRuntime: 'claude',
-        claude: { sessionId: claudeSessionId, cwd: '/tmp/claude-history-cwd', model: 'claude-sonnet-test', permissionMode: 'plan', reasoningEffort: 'high' },
+        claude: { sessionId: claudeSessionId, cwd: '/tmp/claude-history-cwd', model: 'claude-sonnet-test', reasoningEffort: 'high' },
         general: { workingDirectory: '/tmp/claude-history-cwd' },
       },
     });
@@ -1516,7 +1511,6 @@ describe('command-dispatch', () => {
         runtime: {
           claude: {
             model: 'claude-sonnet-test',
-            permissionMode: 'plan',
             reasoningEffort: 'high',
           },
         },
@@ -3157,7 +3151,6 @@ enabled = true
     );
 
     const updated = store.getSession(session.id);
-    assert.equal(getSessionClaudePermissionMode(updated), 'bypassPermissions');
     assert.equal(getSessionClaudeModel(updated), 'sonnet');
     assert.equal(getSessionClaudeReasoningEffort(updated), 'high');
     assert.equal(getSessionClaudeProvider(updated), 'sdk');
@@ -3165,7 +3158,6 @@ enabled = true
     assert.equal(getSessionCodexReasoningEffort(updated), undefined);
     assert.equal(getSessionCodexSandboxMode(updated), undefined);
     assert.equal(updated?.runtime?.codex, undefined);
-    assert.equal(updated?.runtime?.claude?.permissionMode, undefined);
     assert.equal(updated?.runtime?.claude?.model, undefined);
     assert.equal(updated?.runtime?.claude?.reasoningEffort, undefined);
     assert.equal(updated?.runtime?.claude?.provider, undefined);
@@ -3175,13 +3167,6 @@ enabled = true
         sessionId: session.id,
       }),
       'on',
-    );
-    assert.equal(
-      createConfigService({ migrate: false, env: {} }).get('runtime.claude.permissionMode', {
-        kind: 'session',
-        sessionId: session.id,
-      }),
-      'bypassPermissions',
     );
     assert.equal(
       createConfigService({ migrate: false, env: {} }).get('runtime.claude.model', {

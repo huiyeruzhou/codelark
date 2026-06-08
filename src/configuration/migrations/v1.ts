@@ -38,7 +38,7 @@ interface LegacyConfigFile {
       executable?: unknown;
       defaultModel?: unknown;
       model?: unknown;
-      permissionMode?: unknown;
+      yoloMode?: unknown;
       reasoningEffort?: unknown;
       idleTimeoutMinutes?: unknown;
     };
@@ -146,17 +146,9 @@ function codexYoloMode(value: unknown): 'off' | 'on' | undefined {
 }
 
 function claudeYoloMode(value: unknown, warnings: string[]): 'off' | 'on' | undefined {
-  if (value === 'bypassPermissions' || value === 'on') return 'on';
-  if (value === 'default' || value === 'acceptEdits' || value === 'plan' || value === 'off') return 'off';
-  if (value !== undefined) warnings.push(`已忽略不合法的旧版 Claude permissionMode：${String(value)}`);
-  return undefined;
-}
-
-function claudePermissionMode(value: unknown, warnings: string[]): 'default' | 'acceptEdits' | 'bypassPermissions' | 'plan' | undefined {
-  if (value === 'default' || value === 'acceptEdits' || value === 'bypassPermissions' || value === 'plan') return value;
-  if (value === 'on') return 'bypassPermissions';
-  if (value === 'off') return 'default';
-  if (value !== undefined) warnings.push(`已忽略不合法的旧版 Claude permissionMode：${String(value)}`);
+  if (value === 'yolo' || value === 'on') return 'on';
+  if (value === 'normal' || value === 'off') return 'off';
+  if (value !== undefined) warnings.push(`已忽略不合法的旧版 Claude yoloMode：${String(value)}`);
   return undefined;
 }
 
@@ -190,10 +182,8 @@ function patchFromLegacyConfig(config: LegacyConfigFile, warnings: string[]): Co
   const claudePatch: NonNullable<NonNullable<ConfigPatch['runtime']>['claude']> = {};
   const claudeModel = stringValue(claude.model) ?? stringValue(claude.defaultModel);
   if (claudeModel !== undefined) claudePatch.model = claudeModel;
-  const legacyClaudeMode = claudeYoloMode(claude.permissionMode, warnings);
+  const legacyClaudeMode = claudeYoloMode(claude.yoloMode, warnings);
   if (legacyClaudeMode !== undefined) claudePatch.yoloMode = legacyClaudeMode;
-  const legacyClaudePermissionMode = claudePermissionMode(claude.permissionMode, warnings);
-  if (legacyClaudePermissionMode !== undefined) claudePatch.permissionMode = legacyClaudePermissionMode;
   const legacyClaudeProvider = claudeProvider(claude.provider);
   if (legacyClaudeProvider !== undefined) claudePatch.provider = legacyClaudeProvider;
   const legacyClaudeExecutable = claudeExecutable(claude.executable);
@@ -307,7 +297,7 @@ function patchFromLegacyEnv(env: Map<string, string>, warnings: string[]): Confi
         provider: env.get('CODELARK_CLAUDE_PROVIDER'),
         executable: env.get('CODELARK_CLAUDE_EXECUTABLE'),
         defaultModel: env.get('CODELARK_CLAUDE_MODEL') ?? env.get('CODELARK_CLAUDE_DEFAULT_MODEL'),
-        permissionMode: env.get('CODELARK_CLAUDE_PERMISSION_MODE') ?? env.get('CODELARK_CLAUDE_YOLO_MODE'),
+        yoloMode: env.get('CODELARK_CLAUDE_YOLO_MODE'),
         reasoningEffort: env.get('CODELARK_CLAUDE_REASONING_EFFORT'),
         idleTimeoutMinutes: env.get('CODELARK_CLAUDE_IDLE_TIMEOUT_MINUTES'),
       },

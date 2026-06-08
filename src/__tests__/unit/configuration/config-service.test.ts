@@ -93,7 +93,7 @@ describe('ConfigService v2 foundation', () => {
     }
   });
 
-  it('preserves legacy Claude acceptEdits permission mode during startup migration', () => {
+  it('ignores legacy Claude permission mode during startup migration', () => {
     const home = tempHome();
     try {
       writeFile(path.join(home, 'config.json'), JSON.stringify({
@@ -109,9 +109,9 @@ describe('ConfigService v2 foundation', () => {
 
       const service = createConfigService({ codelarkHome: home, env: {} });
 
-      assert.equal(service.get('runtime.claude.permissionMode'), 'acceptEdits');
       assert.equal(service.get('runtime.claude.yoloMode'), 'off');
       assert.equal(fs.existsSync(path.join(home, 'config.toml')), true);
+      assert.doesNotMatch(fs.readFileSync(path.join(home, 'config.toml'), 'utf-8'), /permission_mode/);
       assert.equal(service.migrationResult?.applied[0]?.id, 'v1');
     } finally {
       fs.rmSync(home, { recursive: true, force: true });
@@ -618,7 +618,7 @@ require_mention = false
     }
   });
 
-  it('projects v2 modes to legacy runtime setting values', () => {
+  it('projects v2 modes to legacy runtime setting values without Claude permission mode', () => {
     const home = tempHome();
     try {
       writeFile(path.join(home, 'config.toml'), `
@@ -626,23 +626,22 @@ require_mention = false
 yolo_mode = "on"
 
 [runtime.claude]
-yolo_mode = "off"
-permission_mode = "plan"
+yolo_mode = "on"
 `);
       const service = createConfigService({ codelarkHome: home, env: {} });
       let settings = exportRuntimeSettings(service.snapshot().config);
       assert.equal(settings.get('bridge_default_mode'), 'yolo');
-      assert.equal(settings.get('bridge_claude_permission_mode'), 'plan');
+      assert.equal(settings.has('bridge_claude_permission_mode'), false);
 
       service.set({ kind: 'home' }, {
         runtime: {
           codex: { yoloMode: 'off' },
-          claude: { yoloMode: 'on', permissionMode: 'bypassPermissions' },
+          claude: { yoloMode: 'off' },
         },
       });
       settings = exportRuntimeSettings(service.snapshot().config);
       assert.equal(settings.get('bridge_default_mode'), 'normal');
-      assert.equal(settings.get('bridge_claude_permission_mode'), 'bypassPermissions');
+      assert.equal(settings.has('bridge_claude_permission_mode'), false);
     } finally {
       fs.rmSync(home, { recursive: true, force: true });
     }

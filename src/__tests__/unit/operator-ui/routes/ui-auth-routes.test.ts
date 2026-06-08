@@ -75,7 +75,6 @@ function baseConfigV2(overrides: Partial<ConfigV2> = {}): ConfigV2 {
       claude: {
         model: '',
         yoloMode: 'off',
-        permissionMode: 'default',
         provider: 'sdk',
         executable: 'claude',
         reasoningEffort: 'medium',

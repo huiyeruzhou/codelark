@@ -80,7 +80,6 @@ reasoning_effort = "medium"
 [runtime.claude]
 model = ""
 yolo_mode = "off"
-permission_mode = "default"
 provider = "tmux"
 executable = "claude"
 reasoning_effort = "medium"

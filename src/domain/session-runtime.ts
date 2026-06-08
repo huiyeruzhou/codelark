@@ -153,17 +153,6 @@ export function buildRuntimeProviderIdentity(
   return `${runtime}:${provider}`;
 }
 
-export function getSessionClaudePermissionMode(session: SessionRuntimeLike | null | undefined): BridgeSessionClaudeRuntimeState['permissionMode'] | undefined {
-  if (!isClaudeRuntime(session)) return undefined;
-  const permissionMode = getSessionTomlOverride<string>(session, 'runtime.claude.permissionMode');
-  return permissionMode === 'default'
-    || permissionMode === 'acceptEdits'
-    || permissionMode === 'bypassPermissions'
-    || permissionMode === 'plan'
-    ? permissionMode
-    : undefined;
-}
-
 export function getSessionClaudeReasoningEffort(session: SessionRuntimeLike | null | undefined): BridgeSessionClaudeRuntimeState['reasoningEffort'] | undefined {
   if (!isClaudeRuntime(session)) return undefined;
   const reasoningEffort = getSessionTomlOverride<string>(session, 'runtime.claude.reasoningEffort');

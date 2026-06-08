@@ -273,15 +273,6 @@ export function renderUiShellHtml(): string {
                     <input id="claudeDefaultModel" placeholder="留空则跟随 Claude Code 默认" />
                   </label>
                   <label>
-                    <span class="field-title">Claude 权限模式 <span class="help-tip" tabindex="0" data-tip="只影响后续 Claude Code runtime；不会改变 Codex sandbox/network 配置。">?</span></span>
-                    <select id="claudePermissionMode">
-                      <option value="default">default</option>
-                      <option value="acceptEdits">acceptEdits</option>
-                      <option value="bypassPermissions">bypassPermissions</option>
-                      <option value="plan">plan</option>
-                    </select>
-                  </label>
-                  <label>
                     <span class="field-title">Claude 空闲超时（分钟） <span class="help-tip" tabindex="0" data-tip="0 表示不启用全局空闲超时；后续会话级设置可以覆盖。">?</span></span>
                     <input id="claudeIdleTimeoutMinutes" type="number" min="0" max="120" value="0" />
                   </label>
@@ -586,7 +577,6 @@ export function renderUiShellHtml(): string {
           </div>
           <div class="field-row triple" id="sessionConfigClaudeBlock" hidden>
             <label>Claude 模型<input id="sessionConfigClaudeModel" placeholder="留空跟随全局 Claude 默认模型" /></label>
-            <label>Claude 权限模式<select id="sessionConfigClaudePermission"><option value="">跟随全局</option><option value="default">default</option><option value="acceptEdits">acceptEdits</option><option value="plan">plan</option><option value="bypassPermissions">bypassPermissions</option></select></label>
             <label>Claude 思考级别<select id="sessionConfigClaudeReasoning"><option value="">跟随全局</option><option value="low">low</option><option value="medium">medium</option><option value="high">high</option><option value="xhigh">xhigh</option><option value="max">max</option></select></label>
           </div>
           <label>系统提示<textarea id="sessionConfigPrompt" placeholder="留空则不覆盖系统提示"></textarea></label>
@@ -1031,7 +1021,6 @@ export function renderUiShellHtml(): string {
           claudeExecutable: document.getElementById('claudeExecutable').value,
           claudeProvider: document.getElementById('claudeProvider').value,
           claudeDefaultModel: document.getElementById('claudeDefaultModel').value,
-          claudePermissionMode: document.getElementById('claudePermissionMode').value,
           claudeIdleTimeoutMinutes: document.getElementById('claudeIdleTimeoutMinutes').value,
           uiAllowLan: document.getElementById('uiAllowLan').checked,
           uiAccessToken: document.getElementById('uiAccessToken').value,
@@ -1333,7 +1322,6 @@ export function renderUiShellHtml(): string {
         claudeExecutable: 'Claude executable',
         claudeProvider: '默认 Claude Provider',
         claudeDefaultModel: 'Claude 默认模型',
-        claudePermissionMode: 'Claude 权限模式',
         claudeIdleTimeoutMinutes: 'Claude 空闲超时',
         showToolCallDetails: '显示工具输入输出',
         uiAllowLan: '允许局域网访问 Web 控制台',
@@ -1361,7 +1349,6 @@ export function renderUiShellHtml(): string {
         'claudeExecutable',
         'claudeProvider',
         'claudeDefaultModel',
-        'claudePermissionMode',
         'claudeIdleTimeoutMinutes',
         'showToolCallDetails',
         'uiAllowLan',
@@ -2058,7 +2045,6 @@ export function renderUiShellHtml(): string {
         document.getElementById('claudeExecutable').value = config.claudeExecutable || 'claude';
         document.getElementById('claudeProvider').value = config.claudeProvider || '';
         document.getElementById('claudeDefaultModel').value = config.claudeDefaultModel || '';
-        document.getElementById('claudePermissionMode').value = config.claudePermissionMode || 'default';
         document.getElementById('claudeIdleTimeoutMinutes').value = String(config.claudeIdleTimeoutMinutes || 0);
         document.getElementById('showToolCallDetails').checked = config.showToolCallDetails !== false;
         document.getElementById('uiAllowLan').checked = config.uiAllowLan === true;
@@ -2526,7 +2512,6 @@ export function renderUiShellHtml(): string {
           ? ((state.config || {}).codexNetworkAccess !== false)
           : config.codexNetworkAccess !== false;
         document.getElementById('sessionConfigClaudeModel').value = config.claudeModel || '';
-        document.getElementById('sessionConfigClaudePermission').value = config.claudePermissionMode || '';
         document.getElementById('sessionConfigClaudeReasoning').value = config.claudeReasoningEffort || '';
         document.getElementById('sessionConfigPrompt').value = config.systemPrompt || '';
       }
@@ -2544,7 +2529,6 @@ export function renderUiShellHtml(): string {
           codexSandboxMode: document.getElementById('sessionConfigSandbox').value,
           codexNetworkAccess: document.getElementById('sessionConfigNetwork').checked,
           claudeModel: document.getElementById('sessionConfigClaudeModel').value,
-          claudePermissionMode: document.getElementById('sessionConfigClaudePermission').value,
           claudeReasoningEffort: document.getElementById('sessionConfigClaudeReasoning').value,
           systemPrompt: document.getElementById('sessionConfigPrompt').value,
         };

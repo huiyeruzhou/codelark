@@ -106,20 +106,6 @@ function scopedConfigForRuntime(
   return { effective, config: effective.config, scope };
 }
 
-function sourceRank(source: string | undefined): number {
-  switch (source) {
-    case 'request': return 7;
-    case 'session': return 6;
-    case 'channel': return 5;
-    case 'cli': return 4;
-    case 'env': return 3;
-    case 'local': return 2;
-    case 'home': return 1;
-    case 'defaults':
-    default: return 0;
-  }
-}
-
 function hasKeys(value: object): boolean {
   return Object.keys(value).length > 0;
 }
@@ -281,11 +267,6 @@ export function resolveSessionRuntimeConfig(
   };
 }
 
-function normalizeClaudePermissionMode(value: string | null | undefined): ClaudePermissionMode | undefined {
-  if (value === 'acceptEdits' || value === 'bypassPermissions' || value === 'plan' || value === 'default') return value;
-  return undefined;
-}
-
 function parsePositiveSettingInt(value: string | null | undefined): number | undefined {
   if (!value) return undefined;
   const parsed = Number(value);
@@ -304,15 +285,12 @@ function normalizeClaudeReasoningEffort(value: string | null | undefined): Bridg
 }
 
 export function resolveClaudeRuntimeConfig(session?: BridgeSession | null, binding?: ChannelChat | null): ClaudeRuntimeConfig {
-  const { effective, config } = scopedConfigForRuntime(binding, session);
-  const permissionMode = normalizeClaudePermissionMode(config.runtime.claude.permissionMode);
-  const permissionRank = sourceRank(effective.provenance.get('runtime.claude.permissionMode')?.source);
-  const yoloRank = sourceRank(effective.provenance.get('runtime.claude.yoloMode')?.source);
+  const { config } = scopedConfigForRuntime(binding, session);
   const yoloPermissionMode = config.runtime.claude.yoloMode === 'on'
     ? 'bypassPermissions'
-    : config.runtime.claude.yoloMode === 'off'
-      ? 'default'
-      : undefined;
+    : config.runtime.claude.yoloMode === 'yolo'
+      ? 'bypassPermissions'
+      : 'default';
   const configuredProvider = config.runtime.claude.provider;
   return {
     runtime: 'claude',
@@ -321,10 +299,7 @@ export function resolveClaudeRuntimeConfig(session?: BridgeSession | null, bindi
       : 'tmux',
     executable: normalizeClaudeExecutable(config.runtime.claude.executable) || 'claude',
     model: config.runtime.claude.model || undefined,
-    permissionMode: yoloPermissionMode && yoloRank >= permissionRank
-      ? yoloPermissionMode || permissionMode || 'default'
-      : permissionMode || yoloPermissionMode
-      || 'default',
+    permissionMode: yoloPermissionMode,
     reasoningEffort: normalizeClaudeReasoningEffort(config.runtime.claude.reasoningEffort),
     idleTimeoutMinutes: parsePositiveSettingInt(String(config.runtime.claude.idleTimeoutMinutes ?? '')),
   };
