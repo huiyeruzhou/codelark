@@ -141,7 +141,7 @@ import {
   parseCodexTuiSelectionPrompt,
   type CodexTuiSelectionPromptMonitor,
 } from '../../runtime/codex/tmux-provider.js';
-import { tmuxCore } from '../tmux/runtime.js';
+import { codexTmuxSessionName, tmuxCore } from '../tmux/runtime.js';
 import { buildRuntimeStreamTags } from '../../shared/streaming-metadata.js';
 import { ThreadDisplayService } from '../session/thread-display-resolver.js';
 import {
@@ -1653,6 +1653,7 @@ async function checkStartupChannelChatCandidate(
     const session = store.getSession(binding.bridgeSessionId);
     const bindingsBeforeArchive = store.listChannelChats()
       .filter((candidateBinding) => candidateBinding.bridgeSessionId === binding.bridgeSessionId);
+    const tmuxSessionNames = collectLifecycleManagedTmuxSessionNames(store, binding);
     const threadId = session ? getBridgeSessionCodexThreadId(session) : null;
     let detail = 'provider chat not found';
     if (threadId) {
@@ -1668,6 +1669,16 @@ async function checkStartupChannelChatCandidate(
       store.deleteSession(session.id);
     } else {
       store.deleteChannelChat(binding.id);
+    }
+    const tmuxCleanupResults = await cleanupLifecycleManagedTmuxSessions(tmuxSessionNames);
+    const tmuxCleanedCount = tmuxCleanupResults.filter((item) => !item.error).length;
+    const tmuxFailedCount = tmuxCleanupResults.filter((item) => item.error).length;
+    if (tmuxCleanupResults.length > 0) {
+      detail = [
+        detail,
+        tmuxCleanedCount > 0 ? `cleaned tmux ${tmuxCleanedCount}` : '',
+        tmuxFailedCount > 0 ? `tmux cleanup failed ${tmuxFailedCount}` : '',
+      ].filter(Boolean).join('; ');
     }
     for (const removed of bindingsBeforeArchive.length > 0 ? bindingsBeforeArchive : [binding]) {
       handleBindingRemovedForAutoTasks(removed);
@@ -2393,6 +2404,48 @@ function archiveLifecycleBindingSession(
   }
 }
 
+function collectLifecycleManagedTmuxSessionNames(store: BridgeStore, binding: ChannelChat): string[] {
+  const session = store.getSession(binding.bridgeSessionId);
+  if (!session || getSessionActiveRuntime(session) === 'claude') return [];
+  const codexThreadId = getBridgeSessionCodexThreadId(session);
+  if (!codexThreadId) return [];
+
+  const expectedTmuxSessionName = codexTmuxSessionName(codexThreadId);
+  const sessions = store.listSessions()
+    .filter((candidate) => getBridgeSessionCodexThreadId(candidate) === codexThreadId);
+  const tmuxSessionNames = new Set<string>();
+  for (const candidate of sessions.length > 0 ? sessions : [session]) {
+    if (getSessionActiveRuntime(candidate) === 'claude') continue;
+    const tmuxSessionName = getSessionTmuxSessionName(candidate);
+    if (tmuxSessionName === expectedTmuxSessionName) {
+      tmuxSessionNames.add(tmuxSessionName);
+    }
+  }
+  return Array.from(tmuxSessionNames);
+}
+
+async function cleanupLifecycleManagedTmuxSessions(tmuxSessionNames: string[]): Promise<Array<{
+  sessionName: string;
+  command?: string;
+  error?: string;
+}>> {
+  const results: Array<{ sessionName: string; command?: string; error?: string }> = [];
+  for (const sessionName of tmuxSessionNames) {
+    try {
+      const command = await tmuxCore.killSession(sessionName, { ignoreMissing: true });
+      results.push({ sessionName, command });
+    } catch (error) {
+      const message = describeUnknownError(error);
+      console.warn('[bridge-manager] Failed to clean up lifecycle tmux session:', {
+        tmux_session: sessionName,
+        error: message,
+      });
+      results.push({ sessionName, error: message });
+    }
+  }
+  return results;
+}
+
 async function handleChannelLifecycleEvent(msg: InboundMessage): Promise<void> {
   const event = msg.channelEvent;
   if (!event || event.type !== 'chat_removed') return;
@@ -2412,7 +2465,9 @@ async function handleChannelLifecycleEvent(msg: InboundMessage): Promise<void> {
 
   const bindingsBeforeArchive = store.listChannelChats()
     .filter((item) => item.bridgeSessionId === binding.bridgeSessionId);
+  const tmuxSessionNames = collectLifecycleManagedTmuxSessionNames(store, binding);
   const archiveResult = archiveLifecycleBindingSession(store, binding);
+  const tmuxCleanupResults = await cleanupLifecycleManagedTmuxSessions(tmuxSessionNames);
   for (const removedBinding of bindingsBeforeArchive) {
     handleBindingRemovedForAutoTasks(removedBinding);
   }
@@ -2433,6 +2488,8 @@ async function handleChannelLifecycleEvent(msg: InboundMessage): Promise<void> {
         archiveResult.claudeSessionId ? `claude_session=${archiveResult.claudeSessionId}` : '',
         archiveResult.claudeCwd ? `claude_cwd=${archiveResult.claudeCwd}` : '',
         `deleted_sessions=${archiveResult.deletedBridgeSessionIds.length}`,
+        tmuxCleanupResults.length > 0 ? `tmux_cleaned=${tmuxCleanupResults.filter((item) => !item.error).length}` : '',
+        tmuxCleanupResults.some((item) => item.error) ? `tmux_cleanup_failed=${tmuxCleanupResults.filter((item) => item.error).length}` : '',
       ].filter(Boolean).join('; '),
     });
   } catch { /* best effort */ }
@@ -2451,6 +2508,7 @@ async function handleChannelLifecycleEvent(msg: InboundMessage): Promise<void> {
     claudeSessionId: archiveResult.claudeSessionId,
     claudeCwd: archiveResult.claudeCwd,
     deletedBridgeSessionIds: archiveResult.deletedBridgeSessionIds,
+    tmuxCleanupResults,
   });
 }
 

@@ -35,12 +35,14 @@ import {
   mergeSessionRuntimeUpdates,
   setSessionActiveRuntimeUpdate,
   setSessionClaudeIdentityUpdate,
+  setSessionCodexTmuxProviderUpdate,
   setSessionWorkingDirectoryUpdate,
 } from '../../../../domain/session-runtime.js';
 import type { OutboundMessage, OutboundRichCard, PermissionGateway, SendResult, StreamingHistoryItem } from '../../../../domain/index.js';
 import type { LifecycleHooks, LLMProvider, StreamChatParams } from '../../../../runtime/contracts.js';
 import { writeCodexSessionJsonlFixture } from '../../../helpers/bridge/test-bridge-utils.js';
 import { getClaudeProjectDir, isArchivedClaudeSession } from '../../../../runtime/claude/session-jsonl.js';
+import { codexTmuxSessionName, tmuxCore } from '../../../../bridge/tmux/runtime.js';
 
 const DATA_DIR = path.join(CODELARK_HOME, 'data');
 
@@ -2903,6 +2905,130 @@ describe('bridge-manager channel lifecycle events', () => {
     assert.match(audit.at(-1)?.summary || '', new RegExp(`thread=${threadId}`));
   });
 
+  it('kills the managed Codex tmux session when a removed chat has a local thread', async () => {
+    const store = getBridgeContext().store;
+    fs.rmSync(path.join(process.env.CODEX_HOME!, 'sessions'), { recursive: true, force: true });
+    fs.rmSync(path.join(process.env.CODEX_HOME!, 'archived_sessions'), { recursive: true, force: true });
+    fs.rmSync(path.join(process.env.CODEX_HOME!, 'session_index.jsonl'), { force: true });
+
+    const adapter = new StartupNoticeAdapter({
+      id: 'feishu-main',
+      provider: 'feishu',
+      alias: 'Feishu Main',
+    });
+    const address = {
+      channelType: 'feishu-main',
+      channelProvider: 'feishu',
+      channelAlias: 'Feishu Main',
+      chatId: 'oc_removed_codex_tmux',
+      chatKind: 'group' as const,
+    };
+    const threadId = '019e7d66-0000-7000-8000-00000000c0df';
+    writeCodexSessionJsonlFixture({
+      threadId,
+      workDir: '/tmp/lifecycle-archive-codex-tmux',
+    });
+    const binding = router.bindToCodexThread(address, threadId, {
+      workingDirectory: '/tmp/lifecycle-archive-codex-tmux',
+      codexTitle: 'Lifecycle Archive Codex Tmux',
+    });
+    assert.ok(binding);
+    const tmuxSessionName = codexTmuxSessionName(threadId);
+    store.updateSession(binding.bridgeSessionId, setSessionCodexTmuxProviderUpdate({
+      tmuxSessionName,
+      threadId,
+    }));
+
+    const originalKillSession = tmuxCore.killSession;
+    const killed: Array<{ name: string; ignoreMissing?: boolean }> = [];
+    tmuxCore.killSession = async (name, options = {}) => {
+      killed.push({ name, ignoreMissing: options.ignoreMissing });
+      return `tmux kill-session -t ${name}`;
+    };
+
+    try {
+      await _testOnly.handleMessage(adapter, {
+        messageId: 'im.chat.disbanded_v1:evt-removed-codex-tmux',
+        address,
+        text: '',
+        timestamp: Date.now(),
+        channelEvent: {
+          type: 'chat_removed',
+          reason: 'chat_disbanded',
+          eventType: 'im.chat.disbanded_v1',
+        },
+      });
+    } finally {
+      tmuxCore.killSession = originalKillSession;
+    }
+
+    assert.deepEqual(killed, [{ name: tmuxSessionName, ignoreMissing: true }]);
+    const audit = fs.readFileSync(path.join(DATA_DIR, 'audit.jsonl'), 'utf-8')
+      .split(/\r?\n/)
+      .filter((line) => line.trim())
+      .map((line) => JSON.parse(line) as { summary?: string });
+    assert.match(audit.at(-1)?.summary || '', /tmux_cleaned=1/);
+  });
+
+  it('does not kill manually named tmux sessions when a removed chat has a local thread', async () => {
+    const store = getBridgeContext().store;
+    fs.rmSync(path.join(process.env.CODEX_HOME!, 'sessions'), { recursive: true, force: true });
+    fs.rmSync(path.join(process.env.CODEX_HOME!, 'archived_sessions'), { recursive: true, force: true });
+    fs.rmSync(path.join(process.env.CODEX_HOME!, 'session_index.jsonl'), { force: true });
+
+    const adapter = new StartupNoticeAdapter({
+      id: 'feishu-main',
+      provider: 'feishu',
+      alias: 'Feishu Main',
+    });
+    const address = {
+      channelType: 'feishu-main',
+      channelProvider: 'feishu',
+      channelAlias: 'Feishu Main',
+      chatId: 'oc_removed_manual_tmux',
+      chatKind: 'group' as const,
+    };
+    const threadId = '019e7d66-0000-7000-8000-00000000c0e0';
+    writeCodexSessionJsonlFixture({
+      threadId,
+      workDir: '/tmp/lifecycle-archive-manual-tmux',
+    });
+    const binding = router.bindToCodexThread(address, threadId, {
+      workingDirectory: '/tmp/lifecycle-archive-manual-tmux',
+      codexTitle: 'Lifecycle Archive Manual Tmux',
+    });
+    assert.ok(binding);
+    store.updateSession(binding.bridgeSessionId, setSessionCodexTmuxProviderUpdate({
+      tmuxSessionName: 'manual-user-tmux',
+      threadId,
+    }));
+
+    const originalKillSession = tmuxCore.killSession;
+    const killed: string[] = [];
+    tmuxCore.killSession = async (name) => {
+      killed.push(name);
+      return `tmux kill-session -t ${name}`;
+    };
+
+    try {
+      await _testOnly.handleMessage(adapter, {
+        messageId: 'im.chat.disbanded_v1:evt-removed-manual-tmux',
+        address,
+        text: '',
+        timestamp: Date.now(),
+        channelEvent: {
+          type: 'chat_removed',
+          reason: 'chat_disbanded',
+          eventType: 'im.chat.disbanded_v1',
+        },
+      });
+    } finally {
+      tmuxCore.killSession = originalKillSession;
+    }
+
+    assert.deepEqual(killed, []);
+  });
+
   it('archives the linked Claude Code JSONL session when a group chat is disbanded', async () => {
     const store = getBridgeContext().store;
     const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'codelark-lifecycle-claude-home-'));
@@ -3298,6 +3424,88 @@ describe('bridge-manager startup runtime cleanup', () => {
     assert.match(notice.richCard?.sections.map((section) => section.markdown || '').join('\n') || '', /Missing Group/);
     assert.doesNotMatch(notice.richCard?.sections[0]?.markdown || '', /启动检查/);
     assert.equal(notice.richCard?.sections.filter((section) => section.title === '启动检查').length, 1);
+  });
+
+  it('kills managed Codex tmux sessions when missing provider chats are archived on startup', async () => {
+    StartupNoticeAdapter.sentMessages = [];
+    StartupNoticeAdapter.groupChats = new Map([
+      ['chat-alive', { chatId: 'chat-alive', chatKind: 'p2p', name: 'Alive DM' }],
+      ['chat-missing-tmux', null],
+    ]);
+    registerAdapterFactory('feishu', (instance) => new StartupNoticeAdapter(instance as any));
+
+    const settings = makeSettings();
+    settings.set('bridge_channel_instances_json', JSON.stringify([
+      {
+        id: 'startup-notice-main',
+        provider: 'feishu',
+        alias: 'Startup Notice',
+        enabled: true,
+        config: {},
+      },
+    ]));
+    const store = new JsonFileStore(settings);
+    initBridgeContext({
+      store,
+      llm: noopLlm,
+      permissions: noopPermissions,
+      lifecycle: noopLifecycle,
+    });
+    _testOnly.resetStateForTests();
+    router.createBinding({
+      channelType: 'startup-notice-main',
+      channelProvider: 'feishu',
+      channelAlias: 'Startup Notice',
+      chatId: 'chat-alive',
+      chatKind: 'p2p',
+      userId: 'user-alive',
+      displayName: 'Alive DM',
+    }, 'D:\\workspace\\alive');
+    const threadId = '019e7d66-0000-7000-8000-00000000c0e1';
+    writeCodexSessionJsonlFixture({
+      threadId,
+      workDir: '/tmp/startup-missing-codex-tmux',
+    });
+    const missingBinding = router.bindToCodexThread({
+      channelType: 'startup-notice-main',
+      channelProvider: 'feishu',
+      channelAlias: 'Startup Notice',
+      chatId: 'chat-missing-tmux',
+      chatKind: 'group',
+      userId: 'user-missing',
+      displayName: 'Missing Tmux Group',
+    }, threadId, {
+      workingDirectory: '/tmp/startup-missing-codex-tmux',
+      codexTitle: 'Startup Missing Codex Tmux',
+    });
+    assert.ok(missingBinding);
+    const tmuxSessionName = codexTmuxSessionName(threadId);
+    store.updateSession(missingBinding.bridgeSessionId, setSessionCodexTmuxProviderUpdate({
+      tmuxSessionName,
+      threadId,
+    }));
+
+    const originalKillSession = tmuxCore.killSession;
+    const killed: Array<{ name: string; ignoreMissing?: boolean }> = [];
+    tmuxCore.killSession = async (name, options = {}) => {
+      killed.push({ name, ignoreMissing: options.ignoreMissing });
+      return `tmux kill-session -t ${name}`;
+    };
+
+    try {
+      await start();
+      for (let i = 0; i < 20 && StartupNoticeAdapter.sentMessages.length === 0; i += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 5));
+      }
+    } finally {
+      await stop();
+      tmuxCore.killSession = originalKillSession;
+    }
+
+    assert.deepEqual(killed, [{ name: tmuxSessionName, ignoreMissing: true }]);
+    assert.equal(store.getChannelChat('startup-notice-main', 'chat-missing-tmux'), null);
+    assert.equal(store.getSession(missingBinding.bridgeSessionId), null);
+    assert.match(StartupNoticeAdapter.sentMessages[0]?.text || '', /cleaned tmux 1/);
   });
 
   it('checks startup channel chats concurrently instead of waiting for each chat serially', async () => {
