@@ -14,6 +14,7 @@ codelark run
 
 - 本机已经可以运行 `codelark`。
 - 本机已有可用的 Codex 登录态、Claude Code 登录态或对应 API 凭据。
+- 本机 PATH 中已有 `tmux` 命令；如果没有，`codelark setup` 会提示确认并自动安装。Linux 使用 `sudo apt update && sudo apt install -y tmux`，macOS 使用 `brew install tmux`，Windows 使用 `winget install --id marlocarlo.psmux --accept-package-agreements --accept-source-agreements` 安装 psmux（提供 `tmux.exe`）。
 - 已创建飞书/Lark 自建应用并拿到 `App ID` / `App Secret`，或允许向导通过开放平台扫码创建机器人配置。
 - 飞书应用已启用机器人、权限、事件订阅和长连接。详细步骤见 [平台配置指南](platform-setup.md)。
 
@@ -27,12 +28,15 @@ codelark setup
 
 向导会依次完成：
 
-1. 选择飞书机器人配置方式。
-2. 复用 `~/.codelark` 已有配置、扫码创建新 App，或粘贴 `App ID` / `App Secret`。
-3. 按本机环境推荐默认 runtime。
-4. 选择默认工作目录。
-5. 可选设置飞书用户 open_id 白名单。
-6. 可选安装 CodeLark skills 和官方 `lark-doc` skill。本地 CodeLark skills 会先安装；官方 `lark-doc` 通过 `npx skills add ...` 单独安装，失败时不会影响本地 skills 可用。
+1. 检查 `tmux` 是否可用；缺失时先提示用户确认，再按当前系统自动安装。
+2. 选择飞书机器人配置方式。
+3. 复用 `~/.codelark` 已有配置、扫码创建新 App，或粘贴 `App ID` / `App Secret`。
+4. 按本机环境推荐默认 runtime。
+5. 选择默认工作目录。
+6. 可选设置飞书用户 open_id 白名单。
+7. 可选安装 CodeLark skills 和官方 `lark-doc` skill。本地 CodeLark skills 会先安装；官方 `lark-doc` 通过 `npx skills add ...` 单独安装，失败时不会影响本地 skills 可用。
+
+如果用户拒绝在向导中安装 tmux，向导仍会继续保存配置，但会把默认 provider 改为 SDK：`defaultProvider=sdk`，并把 Claude 默认 provider 写为 `claudeProvider=sdk`。之后安装 tmux 后，可以在 IM 中使用 `/provider tmux` 切回 tmux provider。
 
 机器人配置方式有两种：
 
