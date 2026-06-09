@@ -99,7 +99,7 @@ async function handleTmuxDispatchCommand(params: TerminalDispatchParams): Promis
     binding,
     session,
     markdown,
-    autoRecoverProviderSession: deps.tmuxProviderAutoForward === true,
+    autoRecoverProviderSession: deps.tmuxProviderAutoForward === true || (command === '/tmux' && args.trim().length > 0),
     suppressSuccessfulResponse: deps.tmuxProviderAutoForward === true && command === '/tmux',
     tmuxProviderAutoForward: deps.tmuxProviderAutoForward,
     onTmuxProviderAutoForwarded: deps.onTmuxProviderAutoForwarded,
