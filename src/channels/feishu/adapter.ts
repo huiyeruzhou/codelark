@@ -2698,8 +2698,16 @@ export class FeishuAdapter extends BaseChannelAdapter {
         : value.callback_data;
 
       // Extract chat/user context
-      const chatId = event?.context?.open_chat_id || value.chatId || '';
-      const messageId = event?.context?.open_message_id || event?.open_message_id || '';
+      const chatId = event?.context?.open_chat_id || event?.context?.chat_id || value.chatId || '';
+      const messageId = event?.context?.open_message_id
+        || event?.context?.message_id
+        || event?.open_message_id
+        || event?.message_id
+        || event?.action?.open_message_id
+        || event?.action?.message_id
+        || value.open_message_id
+        || value.message_id
+        || '';
       const userId = event?.operator?.open_id || event?.open_id || '';
 
       console.log('[feishu-adapter] Card action trigger received:', {

@@ -1280,6 +1280,25 @@ describe('bridge command e2e', () => {
     assert.equal(adapter.sent.at(-1)?.richCard?.selects?.[0]?.selectedCallbackData, 'clk-command::%2Fcurrent-runtime%20codex');
 
     await _testOnly.handleMessage(adapter, {
+      ...inboundMessage(address, '', 'incoming-current-refresh-raw-message-id'),
+      callbackData: buildCommandCallbackData('/current'),
+      raw: {
+        event: {
+          context: {
+            message_id: 'reply-2',
+          },
+          action: {
+            value: {
+              callback_data: buildCommandCallbackData('/current'),
+            },
+          },
+        },
+      },
+    });
+    assert.equal(adapter.sent.at(-1)?.richCardUpdateMessageId, 'reply-2');
+    assert.equal(adapter.sent.at(-1)?.richCard?.selects?.[0]?.selectedCallbackData, 'clk-command::%2Fcurrent-runtime%20codex');
+
+    await _testOnly.handleMessage(adapter, {
       ...inboundMessage(address, '', 'incoming-current-runtime-select-claude'),
       callbackData: buildCommandCallbackData('/current-runtime claude'),
       callbackMessageId: 'reply-2',

@@ -125,7 +125,6 @@ function extractCardActionMessageId(raw: unknown): string {
 function richCardUpdateMessageIdForCommand(msg: InboundMessage): string | undefined {
   const explicit = msg.callbackMessageId?.trim();
   if (explicit) return explicit;
-  if (!msg.callbackData && !extractCardActionFormValue(msg.raw)) return undefined;
   return extractCardActionMessageId(msg.raw) || undefined;
 }
 

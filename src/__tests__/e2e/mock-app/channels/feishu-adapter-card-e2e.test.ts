@@ -155,6 +155,35 @@ async function withLocalCodexEnvironment<T>(fn: (params: {
 }
 
 describe('feishu adapter card e2e', () => {
+  it('normalizes card action message ids from Feishu context variants', async () => {
+    const calls: RecordedFeishuMessageCall[] = [];
+    const adapter = createRecordingFeishuAdapter(calls);
+    const inbound: any[] = [];
+    (adapter as any).enqueueInboundMessage = (message: any) => {
+      inbound.push(message);
+    };
+
+    const result = await (adapter as any).handleCardAction({
+      action: {
+        tag: 'button',
+        value: {
+          callback_data: 'clk-command::%2Fcurrent',
+          chatId: 'chat-current-action',
+        },
+      },
+      context: {
+        message_id: 'card-message-from-context',
+      },
+      operator: { open_id: 'ou-current-user' },
+    });
+
+    assert.equal(result?.toast?.type, 'info');
+    assert.equal(inbound.length, 1);
+    assert.equal(inbound[0].callbackData, 'clk-command::%2Fcurrent');
+    assert.equal(inbound[0].callbackMessageId, 'card-message-from-context');
+    assert.equal(inbound[0].messageId, 'card-message-from-context');
+  });
+
   it('prompts for group message authorization after /new until the callback persists authorization', async () => {
     resetBridgeTestState({ cleanCodexHome: true });
     _testOnly.resetStateForTests();
