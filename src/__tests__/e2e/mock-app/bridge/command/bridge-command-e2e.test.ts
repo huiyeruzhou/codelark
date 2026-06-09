@@ -779,6 +779,7 @@ describe('bridge command e2e', () => {
     assert.ok(binding);
     await _testOnly.reconcileMirrorSubscriptions();
     assert.ok(bridgeState.mirrorSubscriptions.has(binding.id));
+    setSessionCodexProviderToml(binding.bridgeSessionId, 'sdk');
 
     await _testOnly.handleMessage(adapter, inboundMessage(address, `/auto-script new ${scriptPath} 1`, 'incoming-auto-sdk-mirror-new'));
     await waitForCondition(() => calls.length === 1, 3000);
@@ -1257,6 +1258,36 @@ describe('bridge command e2e', () => {
     fs.rmSync(workDir, { recursive: true, force: true });
   });
 
+  it('renames only the active runtime BridgeSession after runtime switches', async () => {
+    const store = initBridgeTestContext({ dynamicSettings: true });
+    const adapter = new RecordingAdapter();
+    const address = { channelType: 'feishu', chatId: 'chat-runtime-rename-active' } as const;
+    const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-runtime-rename-active-'));
+    const { binding } = createExistingChannelChat(store, address, {
+      workDir,
+      name: 'Codex 原标题',
+    });
+
+    try {
+      await _testOnly.handleMessage(adapter, inboundMessage(address, '/runtime claude', 'incoming-runtime-rename-claude'));
+      const claudeBinding = store.getChannelChat(address.channelType, address.chatId);
+      assert.ok(claudeBinding);
+      assert.notEqual(claudeBinding.bridgeSessionId, binding.bridgeSessionId);
+
+      await _testOnly.handleMessage(adapter, inboundMessage(address, '/t rename Claude 标题', 'incoming-runtime-rename-title'));
+      assert.equal(store.getSession(claudeBinding.bridgeSessionId)?.name, 'Claude 标题');
+      assert.equal(store.getSession(binding.bridgeSessionId)?.name, 'Codex 原标题');
+
+      await _testOnly.handleMessage(adapter, inboundMessage(address, '/runtime codex', 'incoming-runtime-rename-codex'));
+      const codexBinding = store.getChannelChat(address.channelType, address.chatId);
+      assert.ok(codexBinding);
+      assert.equal(codexBinding.bridgeSessionId, binding.bridgeSessionId);
+      assert.equal(store.getSession(codexBinding.bridgeSessionId)?.name, 'Codex 原标题');
+    } finally {
+      fs.rmSync(workDir, { recursive: true, force: true });
+    }
+  });
+
   it('accepts a text confirmation after /clear sees a running session', async () => {
     const store = initBridgeTestContext({ dynamicSettings: true });
     const adapter = new RecordingAdapter();
@@ -1288,6 +1319,63 @@ describe('bridge command e2e', () => {
     assert.match(adapter.sent.at(-1)?.text || '', /在当前聊天上下文创建一个新的对话/);
     assert.match(adapter.sent.at(-1)?.text || '', /\/t.*重新附加到之前的对话/s);
     assert.doesNotMatch(adapter.sent.at(-1)?.text || '', /会创建一个新的群聊/);
+  });
+
+  it('keeps the active runtime and remembered alternate runtime when /clear follows a runtime switch', async () => {
+    writeHomeConfigToml(`
+schema_version = 2
+
+[runtime.codex]
+provider = "sdk"
+
+[runtime.claude]
+provider = "sdk"
+`);
+    const store = initBridgeTestContext({
+      dynamicSettings: true,
+      settings: makeBridgeSettings(),
+    });
+    const adapter = new RecordingAdapter();
+    const address = { channelType: 'feishu', chatId: 'chat-clear-runtime-switch' } as const;
+    const oldWorkDir = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-clear-runtime-old-'));
+    const newWorkDir = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-clear-runtime-new-'));
+    const { binding: codexBinding } = createExistingChannelChat(store, address, {
+      workDir: oldWorkDir,
+      name: 'Codex 保留',
+    });
+
+    try {
+      await _testOnly.handleMessage(adapter, inboundMessage(address, '/runtime claude', 'incoming-clear-runtime-claude'));
+      const oldClaudeBinding = store.getChannelChat(address.channelType, address.chatId);
+      assert.ok(oldClaudeBinding);
+      assert.notEqual(oldClaudeBinding.bridgeSessionId, codexBinding.bridgeSessionId);
+      const oldClaudeSessionId = oldClaudeBinding.bridgeSessionId;
+      setSessionClaudeProviderToml(oldClaudeBinding.bridgeSessionId, 'tmux');
+
+      await _testOnly.handleMessage(adapter, inboundMessage(address, `/clear Claude新上下文 ${newWorkDir}`, 'incoming-clear-runtime'));
+      const newClaudeBinding = store.getChannelChat(address.channelType, address.chatId);
+      assert.ok(newClaudeBinding);
+      assert.notEqual(newClaudeBinding.bridgeSessionId, oldClaudeSessionId);
+      assert.equal(newClaudeBinding.runtimeBridgeSessionIds?.codex, codexBinding.bridgeSessionId);
+      assert.equal(newClaudeBinding.runtimeBridgeSessionIds?.claude, newClaudeBinding.bridgeSessionId);
+      const newClaudeSession = store.getSession(newClaudeBinding.bridgeSessionId);
+      assert.equal(getSessionActiveRuntime(newClaudeSession), 'claude');
+      assert.equal(newClaudeSession?.name, 'Claude新上下文');
+      assert.equal(getSessionWorkingDirectory(newClaudeSession), newWorkDir);
+      assert.equal(getSessionClaudeProviderToml(newClaudeBinding.bridgeSessionId), 'tmux');
+      assert.equal(getSessionTmuxAutoEnterToml(newClaudeBinding.bridgeSessionId), true);
+      assert.match(adapter.sent.at(-1)?.text || '', /Runtime.*claude|模式.*normal/s);
+      assert.match(adapter.sent.at(-1)?.text || '', /Provider.*tmux/s);
+
+      await _testOnly.handleMessage(adapter, inboundMessage(address, '/runtime codex', 'incoming-clear-runtime-codex'));
+      const restoredCodexBinding = store.getChannelChat(address.channelType, address.chatId);
+      assert.ok(restoredCodexBinding);
+      assert.equal(restoredCodexBinding.bridgeSessionId, codexBinding.bridgeSessionId);
+      assert.equal(store.getSession(restoredCodexBinding.bridgeSessionId)?.name, 'Codex 保留');
+    } finally {
+      fs.rmSync(oldWorkDir, { recursive: true, force: true });
+      fs.rmSync(newWorkDir, { recursive: true, force: true });
+    }
   });
 
   it('starts tmux provider with current permissions and routes tmux-provider messages through the bridge entrypoint', async () => {
@@ -1598,6 +1686,99 @@ provider = "tmux"
       if (oldFakeState === undefined) delete process.env.TMUX_FAKE_STATE;
       else process.env.TMUX_FAKE_STATE = oldFakeState;
       fs.rmSync(workDir, { recursive: true, force: true });
+      fs.rmSync(fakeTmux.binDir, { recursive: true, force: true });
+    }
+  });
+
+  it('auto-initializes a Claude tmux provider binding on the first plain message', async () => {
+    const calls: RecordedLlmCall[] = [];
+    const store = initBridgeTestContext({
+      dynamicSettings: true,
+      settings: makeBridgeSettings(),
+      llm: createRecordingLlm(calls),
+    });
+    const fakeTmux = installFakeTmux();
+    const claudeHome = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-runtime-claude-tmux-auto-home-'));
+    const oldPath = process.env.PATH || '';
+    const oldFakeLog = process.env.TMUX_FAKE_LOG;
+    const oldFakeState = process.env.TMUX_FAKE_STATE;
+    const oldClaudeHome = process.env.CODELARK_CLAUDE_HOME;
+    const oldDiscoveryTimeout = process.env.CODELARK_CLAUDE_PTY_JSONL_DISCOVERY_TIMEOUT_MS;
+    process.env.PATH = `${fakeTmux.binDir}${path.delimiter}${oldPath}`;
+    process.env.TMUX_FAKE_LOG = fakeTmux.logPath;
+    process.env.TMUX_FAKE_STATE = fakeTmux.statePath;
+    process.env.CODELARK_CLAUDE_HOME = claudeHome;
+    process.env.CODELARK_CLAUDE_PTY_JSONL_DISCOVERY_TIMEOUT_MS = '1000';
+
+    const adapter = new StreamingRecordingAdapter();
+    registerAdapter(adapter);
+    const bridgeState = (globalThis as unknown as Record<string, any>).__bridge_manager__;
+    bridgeState.running = true;
+    const address = { channelType: 'feishu', chatId: 'chat-runtime-claude-tmux-auto-init' } as const;
+    const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-runtime-claude-tmux-auto-init-'));
+    const claudeSessionId = 'claude-tmux-auto-jsonl-session';
+    let transcriptPath = '';
+
+    try {
+      const { binding } = createExistingChannelChat(store, address, {
+        workDir,
+        name: 'runtime-claude-tmux-auto-init',
+      });
+      store.updateSession(binding.bridgeSessionId, {
+        runtime: {
+          activeRuntime: 'claude',
+        },
+      });
+      setSessionClaudeProviderToml(binding.bridgeSessionId, 'tmux');
+
+      await _testOnly.handleMessage(adapter, inboundMessage(address, 'first claude tmux', 'incoming-claude-tmux-auto-init-plain'));
+      transcriptPath = appendClaudeMirrorTurn({
+        homeDir: claudeHome,
+        cwd: workDir,
+        sessionId: claudeSessionId,
+        timestampPrefix: '2026-06-02T05:10',
+        userText: 'first claude tmux',
+        assistantText: 'Claude tmux auto response',
+      });
+
+      await waitForCondition(() => adapter.streamEvents.some((event) => (
+        event.kind === 'end'
+        && event.streamKey?.startsWith('mirror:')
+        && /Claude tmux auto response/.test(event.text || '')
+      )), 3000);
+
+      assert.equal(calls.length, 0);
+      const expectedTmuxSessionName = `claude_${binding.bridgeSessionId}`;
+      const session = store.getSession(binding.bridgeSessionId);
+      assert.equal(session?.runtime?.general?.tmuxSessionName, expectedTmuxSessionName);
+      assert.equal(session?.runtime?.claude?.provider, 'tmux');
+      assert.equal(session?.runtime?.claude?.sessionId, claudeSessionId);
+      assert.equal(session?.runtime?.claude?.cwd, workDir);
+      assert.equal(getSessionTmuxAutoEnterToml(binding.bridgeSessionId), true);
+      assert.equal(session?.mirror_status, 'watching');
+      const tmuxLog = fs.readFileSync(fakeTmux.logPath, 'utf-8');
+      assert.match(tmuxLog, new RegExp(`has-session -t ${expectedTmuxSessionName}`));
+      assert.match(tmuxLog, new RegExp(`new-session -d -s ${expectedTmuxSessionName}`));
+      assert.match(tmuxLog, new RegExp(`send-keys -t ${expectedTmuxSessionName} -l first claude tmux`));
+      assert.match(tmuxLog, new RegExp(`send-keys -t ${expectedTmuxSessionName} Enter`));
+      assert.ok(adapter.streamEvents.some((event) => (
+        event.kind === 'text'
+        && event.streamKey?.startsWith('mirror:')
+        && /Claude tmux auto response/.test(event.text || '')
+      )));
+    } finally {
+      process.env.PATH = oldPath;
+      if (oldFakeLog === undefined) delete process.env.TMUX_FAKE_LOG;
+      else process.env.TMUX_FAKE_LOG = oldFakeLog;
+      if (oldFakeState === undefined) delete process.env.TMUX_FAKE_STATE;
+      else process.env.TMUX_FAKE_STATE = oldFakeState;
+      if (oldClaudeHome === undefined) delete process.env.CODELARK_CLAUDE_HOME;
+      else process.env.CODELARK_CLAUDE_HOME = oldClaudeHome;
+      if (oldDiscoveryTimeout === undefined) delete process.env.CODELARK_CLAUDE_PTY_JSONL_DISCOVERY_TIMEOUT_MS;
+      else process.env.CODELARK_CLAUDE_PTY_JSONL_DISCOVERY_TIMEOUT_MS = oldDiscoveryTimeout;
+      fs.rmSync(workDir, { recursive: true, force: true });
+      fs.rmSync(claudeHome, { recursive: true, force: true });
+      if (transcriptPath) fs.rmSync(transcriptPath, { force: true });
       fs.rmSync(fakeTmux.binDir, { recursive: true, force: true });
     }
   });

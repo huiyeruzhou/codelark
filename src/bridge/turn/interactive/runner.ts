@@ -261,6 +261,7 @@ export async function runInteractiveMessage(
   const codexProvider = resolveEffectiveCodexProvider(initialSession, binding);
   const isCodexMirrorTurn = activeRuntime === 'codex' && (codexProvider === 'pty' || codexProvider === 'tmux');
   const isRuntimeMirrorTurn = isClaudeMirrorTurn || isCodexMirrorTurn;
+  const initialCodexThreadId = getSessionCodexThreadId(initialSession) || codexThreadId || '';
   let observedCodexThreadId = codexThreadId || '';
   const useInteractiveStreamUi = !isRuntimeMirrorTurn;
   const useStatusStreamUi = useInteractiveStreamUi || isRuntimeMirrorTurn;
@@ -541,7 +542,7 @@ export async function runInteractiveMessage(
         if (isCodexMirrorTurn || turnClassification.kind === 'im_codex_reuse') {
           externalTerminal.expectCodexTerminalFinal();
         }
-        if (codexThreadId) {
+        if (initialCodexThreadId) {
           ensureMirrorSuppression(preparedPrompt);
         }
       },

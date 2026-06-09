@@ -2,11 +2,14 @@ import type { BaseChannelAdapter } from '../../../channels/contracts.js';
 import { createConfigService } from '../../../configuration/service.js';
 import type { BridgeStore, ChannelChat, InboundMessage } from '../../../domain/index.js';
 import {
+  getSessionActiveRuntime,
   getSessionWorkingDirectory,
+  setSessionActiveRuntimeUpdate,
 } from '../../../domain/session-runtime.js';
 import * as router from '../channel-router.js';
 import {
   ensureWorkingDirectoryExists,
+  getSessionClaudeProviderOverride,
   getSessionCodexProviderOverride,
   resolveNewSessionWorkingDirectory,
 } from '../support.js';
@@ -16,9 +19,9 @@ import {
   formatCommandPath,
 } from '../../command/presentation.js';
 import {
-  formatSessionCodexProvider,
-  formatSessionMode,
-} from '../../command/runtime-settings.js';
+  formatSessionRuntimeMode,
+  formatSessionRuntimeProvider,
+} from '../../command/runtime-session.js';
 import {
   clearPendingClearConfirmation,
   registerPendingClearConfirmation,
@@ -41,10 +44,17 @@ import {
   type SessionCommandResult,
 } from './types.js';
 
-function setSessionCodexProviderToml(sessionId: string, provider: 'tmux' | 'pty'): void {
+function setSessionCodexProviderToml(sessionId: string, provider: 'sdk' | 'tmux' | 'pty'): void {
   createConfigService({ migrate: false }).set(
     { kind: 'session', sessionId },
     { runtime: { codex: { provider } } },
+  );
+}
+
+function setSessionClaudeProviderToml(sessionId: string, provider: 'sdk' | 'tmux' | 'pty'): void {
+  createConfigService({ migrate: false }).set(
+    { kind: 'session', sessionId },
+    { runtime: { claude: { provider } } },
   );
 }
 
@@ -53,6 +63,38 @@ function setSessionTmuxAutoEnterToml(sessionId: string, tmuxAutoEnter: boolean):
     { kind: 'session', sessionId },
     { session: { tmuxAutoEnter } },
   );
+}
+
+function preserveClearRuntimeBinding(options: {
+  store: BridgeStore;
+  previousBinding: ChannelChat | null;
+  previousSession: ReturnType<BridgeStore['getSession']>;
+  newBinding: ChannelChat;
+}): ChannelChat {
+  const activeRuntime = getSessionActiveRuntime(options.previousSession) || 'codex';
+  const newSession = options.store.getSession(options.newBinding.bridgeSessionId);
+  if (newSession && getSessionActiveRuntime(newSession) !== activeRuntime) {
+    options.store.updateSession(newSession.id, setSessionActiveRuntimeUpdate(activeRuntime), { touch: false });
+  }
+  const runtimeBridgeSessionIds = {
+    ...options.previousBinding?.runtimeBridgeSessionIds,
+    [activeRuntime]: options.newBinding.bridgeSessionId,
+  };
+  options.store.updateChannelChat(options.newBinding.id, { runtimeBridgeSessionIds });
+  return options.store.getChannelChat(options.newBinding.channelType, options.newBinding.chatId) || options.newBinding;
+}
+
+function inheritClearRuntimeProvider(sessionId: string, previousSession: ReturnType<BridgeStore['getSession']>): void {
+  const activeRuntime = getSessionActiveRuntime(previousSession) || 'codex';
+  if (activeRuntime === 'claude') {
+    const inheritedProvider = getSessionClaudeProviderOverride(previousSession);
+    if (inheritedProvider) setSessionClaudeProviderToml(sessionId, inheritedProvider);
+    if (inheritedProvider === 'tmux') setSessionTmuxAutoEnterToml(sessionId, true);
+    return;
+  }
+  const inheritedProvider = getSessionCodexProviderOverride(previousSession);
+  if (inheritedProvider) setSessionCodexProviderToml(sessionId, inheritedProvider);
+  if (inheritedProvider === 'tmux') setSessionTmuxAutoEnterToml(sessionId, true);
 }
 
 export async function handleClearSessionCommand(options: {
@@ -119,7 +161,7 @@ export async function handleClearSessionCommand(options: {
   sessionName = validatedName.name;
 
   ensureWorkingDirectoryExists(workDir);
-  const binding = router.createBinding(
+  let binding = router.createBinding(
     {
       ...options.msg.address,
       displayName: sessionName,
@@ -127,13 +169,16 @@ export async function handleClearSessionCommand(options: {
     workDir,
     sessionName,
   );
+  binding = preserveClearRuntimeBinding({
+    store: options.store,
+    previousBinding,
+    previousSession,
+    newBinding: binding,
+  });
   let session = options.store.getSession(binding.bridgeSessionId);
   if (session) {
-    const inheritedProvider = getSessionCodexProviderOverride(previousSession);
-    if (inheritedProvider === 'tmux' || inheritedProvider === 'pty') {
-      setSessionCodexProviderToml(session.id, inheritedProvider);
-      if (inheritedProvider === 'tmux') setSessionTmuxAutoEnterToml(session.id, true);
-    }
+    inheritClearRuntimeProvider(session.id, previousSession);
+    session = options.store.getSession(binding.bridgeSessionId);
   }
   let groupRenameStatus: string | null = null;
   const shouldRenameGroup = options.msg.address.chatKind === 'group' || previousBinding?.chatKind === 'group';
@@ -167,8 +212,8 @@ export async function handleClearSessionCommand(options: {
         ['新标题', session ? getSessionDisplayName(session, getSessionWorkingDirectory(session)) : sessionName],
         ['群聊名称', groupRenameStatus],
         ['目录', formatCommandPath(getSessionWorkingDirectory(session) || workDir)],
-        ['模式', formatSessionMode(binding, session)],
-        ['Provider', formatSessionCodexProvider(session, binding)],
+        ['模式', formatSessionRuntimeMode(binding, session)],
+        ['Provider', formatSessionRuntimeProvider(session, binding)],
       ],
       [
         previousBinding && runningReasons.length > 0

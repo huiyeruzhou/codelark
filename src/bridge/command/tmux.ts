@@ -7,6 +7,7 @@ import { buildCommandFields } from './presentation.js';
 import { buildFencedCodeBlock } from '../../shared/markdown/fence.js';
 import { sanitizeInput } from '../../shared/security/validators.js';
 import {
+  claudeTmuxSessionName,
   codexTmuxSessionName,
   startCodexResumeTmuxSession,
   attachTmuxSession,
@@ -20,15 +21,18 @@ import {
   type TmuxSendAction,
   type TmuxSessionInfo,
 } from '../tmux/runtime.js';
-import { resolveEffectiveRuntimeProvider, resolveSessionRuntimeConfig } from '../session/support.js';
+import { startClaudeTmuxSession } from '../../runtime/claude/tmux-provider.js';
+import { resolveClaudeRuntimeConfig, resolveEffectiveRuntimeProvider, resolveSessionRuntimeConfig } from '../session/support.js';
 import { getCodexThreadId } from '../turn/turn-classifier.js';
 import {
+  getSessionClaudeSessionId,
   getSessionTmuxAutoEnter,
   getSessionTmuxCaptureLines,
   getSessionTmuxEchoInput,
   getSessionRuntimeTmuxSessionName,
   getSessionTmuxSessionName,
   getSessionWorkingDirectory,
+  setSessionClaudeTmuxProviderUpdate,
   setSessionCodexTmuxProviderUpdate,
 } from '../../domain/session-runtime.js';
 import {
@@ -80,6 +84,13 @@ function setSessionTmuxAutoEnterToml(sessionId: string, tmuxAutoEnter: boolean):
   createConfigService({ migrate: false }).set(
     { kind: 'session', sessionId },
     { session: { tmuxAutoEnter } },
+  );
+}
+
+function setSessionClaudeProviderToml(sessionId: string, provider: 'sdk' | 'pty' | 'tmux'): void {
+  createConfigService({ migrate: false }).set(
+    { kind: 'session', sessionId },
+    { runtime: { claude: { provider } } },
   );
 }
 
@@ -450,7 +461,8 @@ async function ensureCodexTmuxSessionForProvider(
     return { target: configuredTarget || undefined, commands: [], recovered: false };
   }
   if (runtimeProvider.runtime === 'claude') {
-    if (!configuredTarget) {
+    const target = configuredTarget || claudeTmuxSessionName(getSessionClaudeSessionId(session) || session.id);
+    if (!configuredTarget && params.autoRecoverProviderSession !== true) {
       return {
         target: undefined,
         commands: [],
@@ -458,15 +470,50 @@ async function ensureCodexTmuxSessionForProvider(
         error: 'Claude tmux Provider 缺少 tmux session。请先发送 `/provider tmux` 初始化当前 Claude Code tmux 绑定。',
       };
     }
-    const exists = await hasTmuxSession(configuredTarget);
-    return exists.exists
-      ? { target: configuredTarget, commands: [exists.command], recovered: false }
-      : {
-          target: configuredTarget,
-          commands: [exists.command],
-          recovered: false,
-          error: `tmux session 不存在：${configuredTarget}。请先发送 \`/provider tmux\` 重新初始化 Claude Code tmux，或发送 \`/tmux-new ${configuredTarget}\` 手动创建。`,
-        };
+    const exists = await hasTmuxSession(target);
+    if (exists.exists) {
+      if (!configuredTarget) {
+        store.updateSession(session.id, setSessionClaudeTmuxProviderUpdate({
+          tmuxSessionName: target,
+          autoEnter: getProviderAutoEnter(session),
+        }));
+        setSessionClaudeProviderToml(session.id, 'tmux');
+        setSessionTmuxAutoEnterToml(session.id, getProviderAutoEnter(session));
+        await params.reconcileMirrorSubscriptions?.();
+      }
+      return { target, commands: [exists.command], recovered: false };
+    }
+    if (params.autoRecoverProviderSession !== true) {
+      return {
+        target,
+        commands: [exists.command],
+        recovered: false,
+        error: `tmux session 不存在：${target}。请先发送 \`/provider tmux\` 重新初始化 Claude Code tmux，或发送 \`/tmux-new ${target}\` 手动创建。`,
+      };
+    }
+    const claudeConfig = resolveClaudeRuntimeConfig(session, binding);
+    await params.notifyBackgroundOperation?.(
+      configuredTarget
+        ? `tmux session \`${target}\` 不存在，正在后台重新启动 Claude Code TUI。`
+        : `Claude tmux Provider 缺少 tmux session，正在后台启动 Claude Code TUI \`${target}\`。`,
+    );
+    const started = await startClaudeTmuxSession({
+      sessionName: target,
+      bridgeSessionId: session.id,
+      workingDirectory: getSessionWorkingDirectory(session),
+      executable: claudeConfig.executable,
+      model: claudeConfig.model,
+      permissionMode: claudeConfig.permissionMode,
+      reasoningEffort: claudeConfig.reasoningEffort,
+    });
+    store.updateSession(session.id, setSessionClaudeTmuxProviderUpdate({
+      tmuxSessionName: target,
+      autoEnter: getProviderAutoEnter(session),
+    }));
+    setSessionClaudeProviderToml(session.id, 'tmux');
+    setSessionTmuxAutoEnterToml(session.id, getProviderAutoEnter(session));
+    await params.reconcileMirrorSubscriptions?.();
+    return { target, commands: [exists.command, ...started.commands], recovered: true };
   }
 
   let threadId = getCodexThreadId(session, binding);
