@@ -411,7 +411,6 @@ export async function handleBridgeCommand(
   let threadTableCardScope: ThreadCardScope | undefined;
   let setConfigCard = false;
   let afterDelivery: ((messageId?: string) => Promise<void> | void) | undefined;
-  let useCurrentThreadCardUpdateFallback = false;
   let postDeliveryCurrentAddress: ChannelAddress | undefined;
   const currentBinding = deps.scopedBinding || store.getChannelChat(msg.address.channelType, msg.address.chatId);
   const shouldApplyDefaultTargetForCommand = !new Set(['/status', '/threads', '/t', '/set']).has(command);
@@ -764,7 +763,6 @@ export async function handleBridgeCommand(
     case '/current': {
       auditResponse = false;
       const previewRuntime = parseCurrentRuntimeArg(args);
-      useCurrentThreadCardUpdateFallback = !!previewRuntime;
       response = handleCurrentCommand({
         msg,
         binding: commandBinding,
@@ -948,12 +946,7 @@ export async function handleBridgeCommand(
   }
 
   if (response) {
-    const richCardUpdateMessageId = msg.callbackMessageId
-      || (useCurrentThreadCardUpdateFallback && threadTableCardScope === 'current'
-        ? getThreadTableMessageRecord(msg.address, 'current')?.messageId
-        : setConfigCard
-          ? getThreadTableMessageRecord(msg.address, 'set')?.messageId
-        : undefined);
+    const richCardUpdateMessageId = msg.callbackMessageId;
     const result = await deliverBridgeNotice(adapter, responseAddress, response, {
       replyToMessageId: responseAddress.channelType === msg.address.channelType && responseAddress.chatId === msg.address.chatId
         ? msg.messageId
