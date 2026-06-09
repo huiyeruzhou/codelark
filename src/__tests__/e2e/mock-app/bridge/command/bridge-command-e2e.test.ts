@@ -17,6 +17,7 @@ import { getClaudeProjectDir } from '../../../../../runtime/claude/session-jsonl
 import { CodexRoutingProvider } from '../../../../../runtime/codex/routing-provider.js';
 import { findSessionFileByThreadId } from '../../../../../runtime/codex/tmux-provider.js';
 import { _testOnly, registerAdapter } from '../../../../../bridge/host/manager.js';
+import { createMirrorSubscription } from '../../../../../bridge/mirror/subscription-state.js';
 import { listAutoTasks } from '../../../../../bridge/automation/auto-tasks.js';
 import { getSessionActiveRuntime, getSessionWorkingDirectory } from '../../../../../domain/session-runtime.js';
 import type { LLMProvider, StreamChatParams } from '../../../../../runtime/contracts.js';
@@ -453,6 +454,10 @@ case "$1" in
     exit 0
     ;;
   capture-pane)
+    if [[ -n "\${TMUX_FAKE_CAPTURE_TEXT:-}" ]]; then
+      printf '%b' "$TMUX_FAKE_CAPTURE_TEXT"
+      exit 0
+    fi
     target=""
     prev=""
     for arg in "$@"; do
@@ -490,6 +495,15 @@ esac
   fs.chmodSync(tmuxPath, 0o755);
   return { binDir, logPath, statePath };
 }
+
+const CODEX_GOAL_SELECTION_SCREEN = [
+  'A task is already running.',
+  'Do you want to replace the current goal?',
+  '› 1. Replace current goal',
+  '  2. Cancel',
+  'Press enter to confirm or esc to cancel',
+  '',
+].join('\\n');
 
 function installFailingCodexCli(): { binDir: string; executable: string } {
   const binDir = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-e2e-failing-codex-'));
@@ -1238,6 +1252,194 @@ describe('bridge command e2e', () => {
     assert.equal(String(listMessage?.richCard?.tableBlocks?.[0]?.table.rows?.[0]?.title || '').replace(/\*/g, ''), '统一后的标题');
     assert.equal(listMessage?.richCard?.tableBlocks?.[0]?.selects?.[0]?.options?.[0]?.text, '1. 统一后的标题');
 
+  });
+
+  it('creates a new Claude /current card from text commands and refreshes that new card in place', async () => {
+    const store = initBridgeTestContext({ dynamicSettings: true });
+    const adapter = new RecordingAdapter();
+    const address = { channelType: 'feishu', chatId: 'chat-current-claude-refresh-target', chatKind: 'group' as const } as const;
+    createExistingChannelChat(store, address, {
+      workDir: '/tmp/current-claude-refresh-target',
+      name: 'Current Claude Refresh Target',
+    });
+
+    await _testOnly.handleMessage(adapter, inboundMessage(address, '/current', 'incoming-current-initial'));
+    assert.equal(adapter.sent.at(-1)?.richCard?.updateKey, `thread-card:current:${address.channelType}:${address.chatId}`);
+    assert.equal(adapter.sent.at(-1)?.richCardUpdateMessageId, undefined);
+
+    await _testOnly.handleMessage(adapter, inboundMessage(address, '/current runtime claude', 'incoming-current-claude-new-card'));
+    assert.equal(adapter.sent.at(-1)?.richCard?.selects?.[0]?.selectedCallbackData, 'clk-command::%2Fcurrent-runtime%20claude');
+    assert.equal(adapter.sent.at(-1)?.richCardUpdateMessageId, undefined);
+
+    await _testOnly.handleMessage(adapter, {
+      ...inboundMessage(address, '/current', 'incoming-current-claude-refresh-callback'),
+      callbackMessageId: 'reply-2',
+    });
+    assert.equal(adapter.sent.at(-1)?.richCardUpdateMessageId, 'reply-2');
+    assert.equal(adapter.sent.at(-1)?.richCard?.selects?.[0]?.selectedCallbackData, 'clk-command::%2Fcurrent-runtime%20codex');
+  });
+
+  it('creates a new Claude /set card from text commands and refreshes that new card in place', async () => {
+    initBridgeTestContext({ dynamicSettings: true });
+    const adapter = new RecordingAdapter();
+    const address = { channelType: 'feishu', chatId: 'chat-set-claude-refresh-target', chatKind: 'group' as const } as const;
+
+    await _testOnly.handleMessage(adapter, inboundMessage(address, '/set', 'incoming-set-initial'));
+    assert.equal(adapter.sent.at(-1)?.richCard?.updateKey, `thread-card:set:${address.channelType}:${address.chatId}`);
+    assert.equal(adapter.sent.at(-1)?.richCardUpdateMessageId, undefined);
+
+    await _testOnly.handleMessage(adapter, inboundMessage(address, '/set --group runtime.claude', 'incoming-set-claude-new-card'));
+    assert.equal(adapter.sent.at(-1)?.richCard?.subtitle, '写入 ~/.codelark/config.toml · Claude');
+    assert.equal(adapter.sent.at(-1)?.richCardUpdateMessageId, undefined);
+
+    await _testOnly.handleMessage(adapter, {
+      ...inboundMessage(address, '/set --group runtime.claude', 'incoming-set-claude-refresh-callback'),
+      callbackMessageId: 'reply-2',
+    });
+    assert.equal(adapter.sent.at(-1)?.richCardUpdateMessageId, 'reply-2');
+    assert.equal(adapter.sent.at(-1)?.richCard?.subtitle, '写入 ~/.codelark/config.toml · Claude');
+
+    await _testOnly.handleMessage(adapter, {
+      ...inboundMessage(address, '/set --group runtime.claude', 'incoming-set-claude-submit-callback'),
+      callbackMessageId: 'reply-2',
+      raw: {
+        event: {
+          action: {
+            form_value: {
+              cld_rsn_eft: 'max',
+            },
+          },
+        },
+      },
+    });
+    assert.equal(adapter.sent.at(-1)?.richCardUpdateMessageId, 'reply-2');
+    assert.equal(createConfigService({ migrate: false, env: {} }).get('runtime.claude.reasoningEffort'), 'max');
+  });
+
+  it('rechecks Codex tmux goal selection in a high-frequency window after each button answer', async () => {
+    const store = initBridgeTestContext({ dynamicSettings: true });
+    const adapter = new RecordingAdapter();
+    registerAdapter(adapter);
+    const bridgeState = (globalThis as unknown as Record<string, any>).__bridge_manager__;
+    bridgeState.running = true;
+    const fakeTmux = installFakeTmux();
+    const oldPath = process.env.PATH;
+    const oldLog = process.env.TMUX_FAKE_LOG;
+    const oldState = process.env.TMUX_FAKE_STATE;
+    const oldCapture = process.env.TMUX_FAKE_CAPTURE_TEXT;
+    process.env.PATH = `${fakeTmux.binDir}${path.delimiter}${oldPath || ''}`;
+    process.env.TMUX_FAKE_LOG = fakeTmux.logPath;
+    process.env.TMUX_FAKE_STATE = fakeTmux.statePath;
+    process.env.TMUX_FAKE_CAPTURE_TEXT = CODEX_GOAL_SELECTION_SCREEN;
+    const address = { channelType: 'feishu', chatId: 'chat-tmux-goal-selection-recheck' } as const;
+    const { binding } = createExistingChannelChat(store, address, {
+      workDir: '/tmp/tmux-goal-selection-recheck',
+      name: 'tmux goal selection recheck',
+    });
+    const threadId = '019eac19-1111-7111-8111-111111111111';
+    writeCodexSessionJsonlFixture({
+      threadId,
+      workDir: '/tmp/tmux-goal-selection-recheck',
+      lines: [{
+        timestamp: '2026-06-09T00:00:00.000Z',
+        type: 'session_meta',
+        payload: {
+          id: threadId,
+          timestamp: '2026-06-09T00:00:00.000Z',
+          cwd: '/tmp/tmux-goal-selection-recheck',
+          originator: 'Codex CLI',
+        },
+      }],
+    });
+    store.updateSession(binding.bridgeSessionId, {
+      runtime: {
+        activeRuntime: 'codex',
+        codex: {
+          threadId,
+        },
+        general: {
+          workingDirectory: '/tmp/tmux-goal-selection-recheck',
+          tmuxSessionName: `codex_${threadId}`,
+        },
+      },
+    });
+    setSessionCodexProviderToml(binding.bridgeSessionId, 'tmux');
+    fs.writeFileSync(fakeTmux.statePath, `codex_${threadId}\n`, 'utf-8');
+    const subscription = createMirrorSubscription({
+      bindingId: binding.id,
+      sessionId: binding.bridgeSessionId,
+      channelType: address.channelType,
+      chatId: address.chatId,
+      threadId,
+      filePath: null,
+      lastDeliveredAt: null,
+    });
+    subscription.pendingTurn = {
+      turnId: 'turn-goal-selection-a',
+      startedAt: new Date().toISOString(),
+      lastActivityAt: new Date().toISOString(),
+    } as any;
+    bridgeState.mirrorSubscriptions.set(binding.id, subscription);
+
+    try {
+      const answerLatestGoalSelection = async (label: string): Promise<void> => {
+        await waitForCondition(() => store.listPendingPermissionLinksByChat(address.chatId).length > 0, 2_000);
+        const link = store.listPendingPermissionLinksByChat(address.chatId).at(-1);
+        assert.ok(link, label);
+        assert.match(link.permissionRequestId, /codex-selection:goal:mirror:/);
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        await _testOnly.handleMessage(adapter, {
+          ...inboundMessage(address, '', `incoming-goal-selection-${label}`),
+          callbackData: `codex-tui-selection-choice:${encodeURIComponent(link.permissionRequestId)}:cancel`,
+          callbackMessageId: link.messageId,
+        });
+      };
+
+      await _testOnly.reconcileMirrorSubscriptions();
+      await answerLatestGoalSelection('a');
+
+      subscription.pendingTurn = {
+        turnId: 'turn-goal-selection-b',
+        startedAt: new Date().toISOString(),
+        lastActivityAt: new Date().toISOString(),
+      } as any;
+      await new Promise((resolve) => setTimeout(resolve, 2_100));
+      await waitForCondition(() => store.listPendingPermissionLinksByChat(address.chatId).length > 0, 2_000);
+      await answerLatestGoalSelection('b');
+
+      subscription.pendingTurn = {
+        turnId: 'turn-goal-selection-c',
+        startedAt: new Date().toISOString(),
+        lastActivityAt: new Date().toISOString(),
+      } as any;
+      await new Promise((resolve) => setTimeout(resolve, 2_100));
+      await waitForCondition(() => store.listPendingPermissionLinksByChat(address.chatId).length > 0, 2_000);
+      await answerLatestGoalSelection('c');
+
+      assert.equal(
+        store.listPendingPermissionLinksByChat(address.chatId).length,
+        0,
+      );
+      await waitForCondition(() => {
+        const log = fs.readFileSync(fakeTmux.logPath, 'utf-8');
+        return (log.match(/send-keys -t codex_019eac19-1111-7111-8111-111111111111:0\.0 Enter/g) || []).length >= 3;
+      }, 2_000);
+      const tmuxLog = fs.readFileSync(fakeTmux.logPath, 'utf-8');
+      assert.match(tmuxLog, /send-keys -t codex_019eac19-1111-7111-8111-111111111111:0.0 Down/);
+      assert.equal((tmuxLog.match(/send-keys -t codex_019eac19-1111-7111-8111-111111111111:0\.0 Enter/g) || []).length, 3);
+    } finally {
+      _testOnly.resetStateForTests();
+      bridgeState.mirrorSubscriptions.delete(binding.id);
+      process.env.TMUX_FAKE_CAPTURE_TEXT = 'OpenAI Codex\\n› ready\\n';
+      process.env.PATH = oldPath;
+      if (oldLog === undefined) delete process.env.TMUX_FAKE_LOG;
+      else process.env.TMUX_FAKE_LOG = oldLog;
+      if (oldState === undefined) delete process.env.TMUX_FAKE_STATE;
+      else process.env.TMUX_FAKE_STATE = oldState;
+      if (oldCapture === undefined) delete process.env.TMUX_FAKE_CAPTURE_TEXT;
+      else process.env.TMUX_FAKE_CAPTURE_TEXT = oldCapture;
+      fs.rmSync(fakeTmux.binDir, { recursive: true, force: true });
+    }
   });
 
   it('syncs /t rename to the current group chat name', async () => {
