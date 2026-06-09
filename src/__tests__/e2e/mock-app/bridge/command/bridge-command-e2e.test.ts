@@ -19,6 +19,7 @@ import { findSessionFileByThreadId } from '../../../../../runtime/codex/tmux-pro
 import { _testOnly, registerAdapter } from '../../../../../bridge/host/manager.js';
 import { createMirrorSubscription } from '../../../../../bridge/mirror/subscription-state.js';
 import { listAutoTasks } from '../../../../../bridge/automation/auto-tasks.js';
+import { buildCommandCallbackData } from '../../../../../bridge/command/callbacks.js';
 import { getSessionActiveRuntime, getSessionWorkingDirectory } from '../../../../../domain/session-runtime.js';
 import type { LLMProvider, StreamChatParams } from '../../../../../runtime/contracts.js';
 import {
@@ -1277,6 +1278,22 @@ describe('bridge command e2e', () => {
     });
     assert.equal(adapter.sent.at(-1)?.richCardUpdateMessageId, 'reply-2');
     assert.equal(adapter.sent.at(-1)?.richCard?.selects?.[0]?.selectedCallbackData, 'clk-command::%2Fcurrent-runtime%20codex');
+
+    await _testOnly.handleMessage(adapter, {
+      ...inboundMessage(address, '', 'incoming-current-runtime-select-claude'),
+      callbackData: buildCommandCallbackData('/current-runtime claude'),
+      callbackMessageId: 'reply-2',
+    });
+    assert.equal(adapter.sent.at(-1)?.richCardUpdateMessageId, 'reply-2');
+    assert.equal(adapter.sent.at(-1)?.richCard?.selects?.[0]?.selectedCallbackData, 'clk-command::%2Fcurrent-runtime%20claude');
+
+    await _testOnly.handleMessage(adapter, {
+      ...inboundMessage(address, '', 'incoming-current-runtime-select-codex'),
+      callbackData: buildCommandCallbackData('/current-runtime codex'),
+      callbackMessageId: 'reply-2',
+    });
+    assert.equal(adapter.sent.at(-1)?.richCardUpdateMessageId, 'reply-2');
+    assert.equal(adapter.sent.at(-1)?.richCard?.selects?.[0]?.selectedCallbackData, 'clk-command::%2Fcurrent-runtime%20codex');
   });
 
   it('creates a new Claude /set card from text commands and refreshes that new card in place', async () => {
@@ -1300,7 +1317,24 @@ describe('bridge command e2e', () => {
     assert.equal(adapter.sent.at(-1)?.richCard?.subtitle, '写入 ~/.codelark/config.toml · Claude');
 
     await _testOnly.handleMessage(adapter, {
-      ...inboundMessage(address, '/set --group runtime.claude', 'incoming-set-claude-submit-callback'),
+      ...inboundMessage(address, '', 'incoming-set-group-select-codex'),
+      callbackData: buildCommandCallbackData('/set --group runtime.codex'),
+      callbackMessageId: 'reply-2',
+    });
+    assert.equal(adapter.sent.at(-1)?.richCardUpdateMessageId, 'reply-2');
+    assert.equal(adapter.sent.at(-1)?.richCard?.subtitle, '写入 ~/.codelark/config.toml · Codex');
+
+    await _testOnly.handleMessage(adapter, {
+      ...inboundMessage(address, '', 'incoming-set-group-select-claude'),
+      callbackData: buildCommandCallbackData('/set --group runtime.claude'),
+      callbackMessageId: 'reply-2',
+    });
+    assert.equal(adapter.sent.at(-1)?.richCardUpdateMessageId, 'reply-2');
+    assert.equal(adapter.sent.at(-1)?.richCard?.subtitle, '写入 ~/.codelark/config.toml · Claude');
+
+    await _testOnly.handleMessage(adapter, {
+      ...inboundMessage(address, '', 'incoming-set-claude-submit-callback'),
+      callbackData: buildCommandCallbackData('/set --group runtime.claude'),
       callbackMessageId: 'reply-2',
       raw: {
         event: {
