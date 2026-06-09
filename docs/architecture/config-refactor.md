@@ -55,7 +55,6 @@ schema_version = 2
 
 [session]
 workspace = "~"
-tmux_session_name = ""
 tmux_capture_lines = 80
 tmux_auto_enter = true
 tmux_echo_input = false

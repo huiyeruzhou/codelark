@@ -120,11 +120,6 @@ function extractSessionPatch(sessionId: string, session: Record<string, unknown>
     sessionPatch.workspace = workspace;
     delete general.workingDirectory;
   }
-  const tmuxSessionName = readString(general, 'tmuxSessionName');
-  if (tmuxSessionName !== undefined) {
-    sessionPatch.tmuxSessionName = tmuxSessionName;
-    delete general.tmuxSessionName;
-  }
   const tmuxCaptureLines = readPositiveInteger(general, 'captureLines');
   if (tmuxCaptureLines !== undefined) {
     sessionPatch.tmuxCaptureLines = tmuxCaptureLines;

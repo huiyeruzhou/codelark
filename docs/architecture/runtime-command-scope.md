@@ -30,12 +30,12 @@
 
 ### 终端工具
 
-这些命令提供远程终端或文件查看能力，属于 bridge 的操作面。它们读取当前 effective `session.workspace` / tmux session 配置；这些值来自 scoped TOML，不应被当成 GlobalRuntime 配置。
+这些命令提供远程终端或文件查看能力，属于 bridge 的操作面。它们读取当前 effective `session.workspace`、tmux 行数/发送偏好，以及当前 BridgeSession 绑定的 tmux session identity；偏好来自 scoped TOML，tmux session identity 来自后端会话存储。
 
 | 命令 | 当前职责 | 存储交互 |
 | --- | --- | --- |
 | `/shell` | 在当前会话目录通过 `codex sandbox` 执行 shell command | 读取 effective `session.workspace`；自己的 sandbox 参数来自命令实现，不写 `/sandbox` 配置 |
-| `/tmux*` | 远程控制任意 tmux session，包括 attach/switch/new/status/screen/set | 用户配置写 Session TOML 的 `session.tmux*`；provider 自动生成的 tmux session name 作为运行身份保留在 BridgeSession JSON |
+| `/tmux*` | 远程控制任意 tmux session，包括 attach/switch/new/status/screen/set | `/tmux-set` 的行数/发送偏好写 Session TOML；`/tmux-attach`、`/tmux-new` 和 provider 自动生成的 tmux session name 作为运行身份保留在 BridgeSession JSON |
 | `/cat` | 查看当前工作目录下文件内容 | 读取 effective `session.workspace` |
 | `/file` | 把本地文件回传到 IM | 读取 effective `session.workspace` 和通道发送能力 |
 
@@ -163,7 +163,7 @@ interface GlobalRuntimeConfig {
 - `runtime.codex.title`：从本地 Codex thread 读取的原始标题。
 - `runtime.codex.provider`：旧 JSON 中的 Codex transport 选择只作为迁移输入；当前 transport 选择由 scoped TOML `runtime.codex.provider` 表达。
 - 旧 `runtime.codex.sandboxMode/networkAccess/reasoningEffort/provider/model/mode`：只作为迁移输入；当前执行参数读取 scoped TOML。
-- `runtime.general.tmuxSessionName`：仅作为 provider 自动生成 tmux session identity 保留；用户 tmux 配置读取 scoped TOML。
+- `runtime.general.tmuxSessionName`：provider 自动生成或 `/tmux-attach`/`/tmux-new` 手动绑定的 tmux session identity，由后端 BridgeSession 存储持久化；不再作为用户 TOML 配置项。
 
 ### Codex 当前语义
 

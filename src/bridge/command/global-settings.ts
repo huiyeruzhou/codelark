@@ -56,7 +56,6 @@ const SETTING_DISPLAY_LABELS: Record<string, string> = {
   claudeReasoningEffort: '思考级别',
   claudeIdleTimeoutMinutes: '空闲超时（分钟）',
   defaultWorkspaceRoot: '默认工作目录',
-  tmuxSessionName: '默认 tmux session',
   tmuxCaptureLines: 'tmux 输出行数',
   tmuxAutoEnter: 'tmux 自动回车',
   tmuxEchoInput: '回显 tmux 输出',
@@ -74,7 +73,6 @@ const SETTING_DISPLAY_LABELS: Record<string, string> = {
 const SETTING_FORM_NAMES: Record<string, string> = {
   runtime: 'rt',
   defaultWorkspaceRoot: 'ws_root',
-  tmuxSessionName: 'tmux_sess',
   tmuxCaptureLines: 'tmux_lines',
   tmuxAutoEnter: 'tmux_enter',
   tmuxEchoInput: 'tmux_echo',
@@ -259,18 +257,6 @@ const SETTING_DEFINITIONS: SettingDefinition[] = [
     placeholder: '例如 ~ 或 /data00/home/me',
     read: (config) => config.bridge.defaultWorkspace || '-',
     write: writeStringPatch((value) => ({ bridge: { defaultWorkspace: value } }), { defaultValue: '~' }),
-  },
-  {
-    key: 'tmuxSessionName',
-    tomlPath: 'session.tmux_session_name',
-    group: 'runtime',
-    aliases: ['tmuxSession', 'sessionName'],
-    label: 'tmux_session_name',
-    usage: '/set tmuxSessionName <session>',
-    control: 'input',
-    placeholder: '留空表示不预设 tmux session',
-    read: (config) => config.session.tmuxSessionName || '-',
-    write: writeStringPatch((value) => ({ session: { tmuxSessionName: value } })),
   },
   {
     key: 'tmuxCaptureLines',
@@ -688,7 +674,6 @@ const SETTING_GROUP_ORDERS: Partial<Record<SettingGroupKey, string[]>> = {
   runtime: [
     'runtime',
     'defaultWorkspaceRoot',
-    'tmuxSessionName',
     'tmuxCaptureLines',
     'tmuxAutoEnter',
     'tmuxEchoInput',

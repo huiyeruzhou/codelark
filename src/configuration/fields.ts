@@ -101,12 +101,6 @@ export const configFields = [
     defaultWriteScope: 'channel',
   },
   {
-    path: 'session.tmuxSessionName',
-    tomlPath: 'session.tmux_session_name',
-    scopes: ['session', 'cli'],
-    schema: z.string(),
-  },
-  {
     path: 'session.tmuxCaptureLines',
     tomlPath: 'session.tmux_capture_lines',
     scopes: ['session', 'cli'],

@@ -3671,15 +3671,15 @@ enabled = true
     );
     assert.deepEqual(
       sent.at(-1)?.richCard?.form?.extraInputs?.map((input: any) => input.elementId),
-      ['defaultWorkspaceRoot', 'tmuxSessionName', 'tmuxCaptureLines'],
+      ['defaultWorkspaceRoot', 'tmuxCaptureLines'],
     );
     assert.deepEqual(
       sent.at(-1)?.richCard?.form?.extraInputs?.map((input: any) => input.formName),
-      ['ws_root', 'tmux_sess', 'tmux_lines'],
+      ['ws_root', 'tmux_lines'],
     );
     assert.deepEqual(
       sent.at(-1)?.richCard?.form?.extraInputs?.map((input: any) => input.label),
-      ['默认工作目录', '默认 tmux session', 'tmux 输出行数'],
+      ['默认工作目录', 'tmux 输出行数'],
     );
     assert.equal(getThreadTableMessageRecord(address, 'set')?.messageId, 'reply-1');
     assert.equal(store.getChannelChat(address.channelType, address.chatId), null);
@@ -5684,15 +5684,7 @@ enabled = true
       const binding = store.getChannelChat(address.channelType, address.chatId);
       assert.ok(binding);
       const session = binding ? store.getSession(binding.bridgeSessionId) : null;
-      assert.equal(session?.runtime?.general?.tmuxSessionName, undefined);
-      assert.equal(
-        createConfigService({ migrate: false, env: {} }).get('session.tmuxSessionName', {
-          kind: 'session',
-          sessionId: binding.bridgeSessionId,
-        }),
-        'alpha',
-      );
-      store.updateSession(binding.bridgeSessionId, { runtime: { general: { tmuxSessionName: undefined } } });
+      assert.equal(session?.runtime?.general?.tmuxSessionName, 'alpha');
       assert.equal(getSessionTmuxSessionName(store.getSession(binding.bridgeSessionId)), 'alpha');
       assert.match(sent.at(-1) || '', /已绑定 tmux session/);
       assert.match(sent.at(-1) || '', /```sh/);
