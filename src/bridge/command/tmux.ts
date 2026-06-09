@@ -455,7 +455,10 @@ async function ensureCodexTmuxSessionForProvider(
   params: Pick<HandleTmuxBridgeCommandParams, 'store' | 'binding' | 'session' | 'autoRecoverProviderSession' | 'reconcileMirrorSubscriptions' | 'notifyBackgroundOperation'>,
 ): Promise<{ target: string | undefined; commands: string[]; recovered: boolean; error?: string }> {
   const { store, binding, session } = params;
-  const configuredTarget = getSessionRuntimeTmuxSessionName(session) || getSessionTmuxSessionName(session) || '';
+  const runtimeTarget = getSessionRuntimeTmuxSessionName(session) || '';
+  const manualTarget = getSessionTmuxSessionName(session) || '';
+  const configuredTarget = runtimeTarget || manualTarget;
+  const hasManualOnlyTarget = !runtimeTarget && Boolean(manualTarget);
   const runtimeProvider = resolveEffectiveRuntimeProvider(session, binding);
   if (runtimeProvider.provider !== 'tmux') {
     return { target: configuredTarget || undefined, commands: [], recovered: false };
@@ -483,7 +486,7 @@ async function ensureCodexTmuxSessionForProvider(
       }
       return { target, commands: [exists.command], recovered: false };
     }
-    if (params.autoRecoverProviderSession !== true) {
+    if (params.autoRecoverProviderSession !== true || hasManualOnlyTarget) {
       return {
         target,
         commands: [exists.command],
@@ -557,7 +560,7 @@ async function ensureCodexTmuxSessionForProvider(
     return { target, commands: [exists.command], recovered: false };
   }
 
-  if (params.autoRecoverProviderSession !== true) {
+  if (params.autoRecoverProviderSession !== true || hasManualOnlyTarget) {
     return {
       target,
       commands: [exists.command],

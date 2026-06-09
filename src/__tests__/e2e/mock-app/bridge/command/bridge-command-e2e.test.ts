@@ -3169,9 +3169,14 @@ provider = "tmux"
       const beforeManualMissingLog = fs.readFileSync(fakeTmux.logPath, 'utf-8');
       await _testOnly.handleMessage(adapter, inboundMessage(newAddress, '/tmux manual missing', 'incoming-tmux-default-manual-missing'));
       const manualMissingLog = fs.readFileSync(fakeTmux.logPath, 'utf-8').slice(beforeManualMissingLog.length);
-      assert.match(adapter.sent.at(-1)?.text || '', /tmux session 不存在|tmux Provider 缺少 codex_thread_id/);
-      assert.doesNotMatch(manualMissingLog, new RegExp(`new-session -d -s ${tmuxSession}`));
+      assert.doesNotMatch(adapter.sent.at(-1)?.text || '', /tmux session 不存在|tmux Provider 缺少 codex_thread_id/);
+      assert.match(manualMissingLog, new RegExp(`has-session -t ${tmuxSession}`));
+      assert.match(manualMissingLog, new RegExp(`new-session -d -s ${tmuxSession}`));
+      assert.match(manualMissingLog, new RegExp(`resume ${actualThreadId}`));
+      assert.match(manualMissingLog, new RegExp(`send-keys -t ${tmuxSession} -l manual missing`));
+      assert.match(manualMissingLog, new RegExp(`send-keys -t ${tmuxSession} Enter`));
 
+      fs.writeFileSync(fakeTmux.statePath, '', 'utf-8');
       const beforeRecoveredMessageLog = fs.readFileSync(fakeTmux.logPath, 'utf-8');
       const beforeSecondReactionCount = streamingAdapter.reactions.length;
       await _testOnly.handleMessage(adapter, inboundMessage(newAddress, '第二条', 'incoming-tmux-default-second'));

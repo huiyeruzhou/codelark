@@ -6269,7 +6269,7 @@ enabled = true
     }
   });
 
-  it('does not recover missing tmux provider sessions for manual /tmux commands', async () => {
+  it('recovers missing tmux provider sessions for explicit /tmux commands', async () => {
     const settings = makeSettings();
     settings.set('bridge_default_provider', 'tmux');
     const store = new JsonFileStore(settings, { dynamicSettings: true });
@@ -6323,14 +6323,16 @@ enabled = true
         '/tmux hi manual',
         deps,
       );
-      assert.match(sent.at(-1) || '', /tmux session 不存在/);
+      assert.doesNotMatch(sent.at(-1) || '', /tmux session 不存在/);
       let log = fs.readFileSync(fakeTmux.logPath, 'utf-8');
       assert.match(log, new RegExp(`has-session -t ${tmuxSession}`));
-      assert.doesNotMatch(log, new RegExp(`new-session -d -s ${tmuxSession}`));
-      assert.doesNotMatch(log, new RegExp(`send-keys -t ${tmuxSession}`));
+      assert.match(log, new RegExp(`new-session -d -s ${tmuxSession}`));
+      assert.match(log, new RegExp(`resume ${threadId}`));
+      assert.match(log, new RegExp(`send-keys -t ${tmuxSession} -l hi manual`));
+      assert.match(log, new RegExp(`send-keys -t ${tmuxSession} Enter`));
 
       assert.equal(store.getSession(binding.bridgeSessionId)?.runtime?.codex?.provider, undefined);
-      assert.equal(store.getSession(binding.bridgeSessionId)?.runtime?.general?.tmuxSessionName, undefined);
+      assert.equal(store.getSession(binding.bridgeSessionId)?.runtime?.general?.tmuxSessionName, tmuxSession);
     } finally {
       process.env.PATH = oldPath;
       if (oldFakeLog === undefined) delete process.env.TMUX_FAKE_LOG;
