@@ -48,8 +48,6 @@ class RecordingStreamingAdapter extends RecordingAdapter {
 
 const execFileAsync = promisify(execFile);
 
-const REAL_CLAUDE_E2E_ENV = 'CODELARK_REAL_CLAUDE_E2E';
-const REAL_CLAUDE_CCR_FAKE_E2E_ENV = 'CODELARK_REAL_CLAUDE_CCR_FAKE_E2E';
 const REAL_CLAUDE_EXECUTABLE_ENV = 'CODELARK_REAL_CLAUDE_E2E_EXECUTABLE';
 const REAL_CLAUDE_PROMPT_ENV = 'CODELARK_REAL_CLAUDE_E2E_PROMPT';
 const REAL_CLAUDE_EXPECT_ENV = 'CODELARK_REAL_CLAUDE_E2E_EXPECT';
@@ -117,10 +115,33 @@ function copyHostClaudeRuntimeConfig(sourceHome: string, targetHome: string, ccr
   );
 }
 
-async function withRealClaudeEnvironment<T>(fn: (workDir: string) => Promise<T>): Promise<T> {
+function writeClaudeCodeOnboardingState(homeDir: string): void {
+  const statePath = path.join(homeDir, '.claude.json');
+  const existing = fs.existsSync(statePath)
+    ? JSON.parse(fs.readFileSync(statePath, 'utf-8')) as Record<string, unknown>
+    : {};
+  const existingIdeState = existing.hasIdeOnboardingBeenShown && typeof existing.hasIdeOnboardingBeenShown === 'object'
+    ? existing.hasIdeOnboardingBeenShown as Record<string, unknown>
+    : {};
+  fs.writeFileSync(statePath, `${JSON.stringify({
+    ...existing,
+    numStartups: typeof existing.numStartups === 'number' ? existing.numStartups : 1,
+    installMethod: typeof existing.installMethod === 'string' ? existing.installMethod : 'npm',
+    theme: typeof existing.theme === 'string' ? existing.theme : 'light',
+    hasCompletedOnboarding: true,
+    lastOnboardingVersion: typeof existing.lastOnboardingVersion === 'string' ? existing.lastOnboardingVersion : '2.0.0',
+    hasIdeOnboardingBeenShown: {
+      ...existingIdeState,
+      vscode: true,
+    },
+  }, null, 2)}\n`, { mode: 0o600 });
+}
+
+async function withRealClaudeEnvironment<T>(fn: (workDir: string, homeDir: string) => Promise<T>): Promise<T> {
   const previousEnv = {
     HOME: process.env.HOME,
     USERPROFILE: process.env.USERPROFILE,
+    CODELARK_CLAUDE_CCR_START_TIMEOUT_MS: process.env.CODELARK_CLAUDE_CCR_START_TIMEOUT_MS,
     CODELARK_CLAUDE_PTY_PROMPT_DELAY_MS: process.env.CODELARK_CLAUDE_PTY_PROMPT_DELAY_MS,
     CODELARK_CLAUDE_PTY_RESPONSE_QUIET_MS: process.env.CODELARK_CLAUDE_PTY_RESPONSE_QUIET_MS,
     CODELARK_CLAUDE_PTY_RESPONSE_TIMEOUT_MS: process.env.CODELARK_CLAUDE_PTY_RESPONSE_TIMEOUT_MS,
@@ -131,17 +152,24 @@ async function withRealClaudeEnvironment<T>(fn: (workDir: string) => Promise<T>)
   if (originalHome) {
     copyHostClaudeRuntimeConfig(originalHome, homeDir, await reserveLocalPort());
   }
+  writeClaudeCodeOnboardingState(homeDir);
   process.env.HOME = homeDir;
   process.env.USERPROFILE = homeDir;
+  process.env.CODELARK_CLAUDE_CCR_START_TIMEOUT_MS = process.env.CODELARK_CLAUDE_CCR_START_TIMEOUT_MS || '30000';
   process.env.CODELARK_CLAUDE_PTY_PROMPT_DELAY_MS = process.env.CODELARK_CLAUDE_PTY_PROMPT_DELAY_MS || '1200';
   process.env.CODELARK_CLAUDE_PTY_RESPONSE_QUIET_MS = process.env.CODELARK_CLAUDE_PTY_RESPONSE_QUIET_MS || '2000';
   process.env.CODELARK_CLAUDE_PTY_RESPONSE_TIMEOUT_MS = process.env.CODELARK_CLAUDE_PTY_RESPONSE_TIMEOUT_MS || '120000';
   _testOnlyClaudePty.clear();
 
   try {
-    return await fn(workDir);
+    return await fn(workDir, homeDir);
   } finally {
     _testOnlyClaudePty.clear();
+    try {
+      await execFileAsync('ccr', ['stop'], { env: { ...process.env, HOME: homeDir } });
+    } catch {
+      // The isolated router may not have been started, or ccr may be unavailable.
+    }
     fs.rmSync(homeDir, { recursive: true, force: true });
     fs.rmSync(workDir, { recursive: true, force: true });
     for (const [key, value] of Object.entries(previousEnv)) {
@@ -231,6 +259,35 @@ process.exit(2);
     fs.chmodSync(executablePath, 0o755);
   }
   return executablePath;
+}
+
+function writeFakeCcrModelConfig(options: {
+  homeDir: string;
+  port: number;
+  proxyBaseUrl: string;
+}): void {
+  const ccrDir = path.join(options.homeDir, '.claude-code-router');
+  fs.mkdirSync(ccrDir, { recursive: true });
+  fs.writeFileSync(path.join(ccrDir, 'config.json'), JSON.stringify({
+    LOG: false,
+    HOST: '127.0.0.1',
+    PORT: options.port,
+    API_TIMEOUT_MS: '120000',
+    Providers: [{
+      name: 'clk-fake',
+      api_base_url: `${options.proxyBaseUrl}/chat/completions`,
+      api_key: 'clk-fake-key',
+      models: ['clk-fake-claude'],
+      transformer: { use: ['openrouter'] },
+    }],
+    Router: {
+      default: 'clk-fake,clk-fake-claude',
+      background: 'clk-fake,clk-fake-claude',
+      think: 'clk-fake,clk-fake-claude',
+      longContext: 'clk-fake,clk-fake-claude',
+      webSearch: 'clk-fake,clk-fake-claude',
+    },
+  }, null, 2), 'utf-8');
 }
 
 function readJsonLines<T>(filePath: string): T[] {
@@ -325,10 +382,6 @@ describe('real Claude Code pty provider e2e', () => {
   });
 
   it('submits a smoke prompt through real Claude Code pty', { timeout: 180_000 }, async (t: TestContext) => {
-    if (process.env[REAL_CLAUDE_E2E_ENV] !== '1') {
-      console.info(`[real-claude-pty-provider.e2e] set ${REAL_CLAUDE_E2E_ENV}=1 to run real Claude Code e2e tests`);
-      return;
-    }
     if (!(await ptyRuntimeAvailable())) {
       t.skip('node pty runtime is not available');
       return;
@@ -343,18 +396,34 @@ describe('real Claude Code pty provider e2e', () => {
       return;
     }
 
-    await withRealClaudeEnvironment(async (workDir) => {
+    await withRealClaudeEnvironment(async (workDir, homeDir) => {
       const expected = process.env[REAL_CLAUDE_EXPECT_ENV] || REAL_CLAUDE_MARKER;
       const prompt = process.env[REAL_CLAUDE_PROMPT_ENV]
         || `Reply with exactly: ${expected}`;
-      const provider = new ClaudePtyProvider();
-      const output = await readStream(provider.streamChat({
-        prompt,
-        sessionId: `real-claude-pty-${process.pid}-${Date.now()}`,
-        runtime: 'claude',
-        claudeExecutable: executable,
-        workingDirectory: workDir,
-      }));
+      const proxy = executable === 'ccr'
+        ? await startLocalResponsesProxy({ responseText: expected })
+        : null;
+      if (proxy) {
+        writeFakeCcrModelConfig({
+          homeDir,
+          port: await reserveLocalPort(),
+          proxyBaseUrl: proxy.baseUrl,
+        });
+      }
+
+      let output = '';
+      try {
+        const provider = new ClaudePtyProvider();
+        output = await readStream(provider.streamChat({
+          prompt,
+          sessionId: `real-claude-pty-${process.pid}-${Date.now()}`,
+          runtime: 'claude',
+          claudeExecutable: executable,
+          workingDirectory: workDir,
+        }));
+      } finally {
+        await proxy?.close();
+      }
 
       const expectedPattern = new RegExp(expected.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
       const expectedTailPattern = new RegExp(expected.slice(1).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
@@ -368,10 +437,6 @@ describe('real Claude Code pty provider e2e', () => {
   });
 
   it('mirrors Claude Code jsonl from ccr code with a fake model backend', { timeout: 240_000 }, async (t: TestContext) => {
-    if (process.env[REAL_CLAUDE_CCR_FAKE_E2E_ENV] !== '1') {
-      console.info(`[real-claude-pty-provider.e2e] set ${REAL_CLAUDE_CCR_FAKE_E2E_ENV}=1 to run fake CCR Claude Code jsonl mirror e2e`);
-      return;
-    }
     if (!(await ptyRuntimeAvailable())) {
       t.skip('node pty runtime is not available');
       return;
@@ -398,30 +463,14 @@ describe('real Claude Code pty provider e2e', () => {
     process.env.CODELARK_CLAUDE_PTY_RESPONSE_QUIET_MS = process.env.CODELARK_CLAUDE_PTY_RESPONSE_QUIET_MS || '2000';
     process.env.CODELARK_CLAUDE_PTY_RESPONSE_TIMEOUT_MS = process.env.CODELARK_CLAUDE_PTY_RESPONSE_TIMEOUT_MS || '120000';
     _testOnlyClaudePty.clear();
+    writeClaudeCodeOnboardingState(homeDir);
 
     try {
-      const ccrDir = path.join(homeDir, '.claude-code-router');
-      fs.mkdirSync(ccrDir, { recursive: true });
-      fs.writeFileSync(path.join(ccrDir, 'config.json'), JSON.stringify({
-        LOG: false,
-        HOST: '127.0.0.1',
-        PORT: ccrPort,
-        API_TIMEOUT_MS: '120000',
-        Providers: [{
-          name: 'clk-fake',
-          api_base_url: `${proxy.baseUrl}/chat/completions`,
-          api_key: 'clk-fake-key',
-          models: ['clk-fake-claude'],
-          transformer: { use: ['openrouter'] },
-        }],
-        Router: {
-          default: 'clk-fake,clk-fake-claude',
-          background: 'clk-fake,clk-fake-claude',
-          think: 'clk-fake,clk-fake-claude',
-          longContext: 'clk-fake,clk-fake-claude',
-          webSearch: 'clk-fake,clk-fake-claude',
-        },
-      }, null, 2), 'utf-8');
+      writeFakeCcrModelConfig({
+        homeDir,
+        port: ccrPort,
+        proxyBaseUrl: proxy.baseUrl,
+      });
 
       const provider = new ClaudePtyProvider();
       const prompt = `Reply with exactly: ${responseText}`;

@@ -69,7 +69,7 @@ export function buildHelpCommandResponse(): string {
     '- `/cd <path>` 替换当前会话工作目录；支持绝对路径、相对路径和 `~`',
     '',
     '**GlobalRuntime 配置**',
-    '- `/set` 打开 TOML 配置卡片；顶部下拉切换「通用配置 / Codex / Claude / Bridge / 通道配置（feishu-default）」',
+    '- `/set` 打开 TOML 配置卡片；顶部下拉切换「通用配置 / [runtime.codex] Codex / [runtime.claude] Claude / Bridge / 通道配置（feishu-default）」',
     '- `/set runtime codex|claude` 修改默认 agent `runtime.agent`（兼容旧名 `defaultRuntime`）',
     '- `/set defaultModel|defaultMode|codexSandboxMode|codexNetworkAccess|codexReasoningEffort ...` 修改 Codex 配置',
     '- `/set claudeProvider|claudeExecutable|claudeDefaultModel|claudeReasoningEffort|claudeIdleTimeoutMinutes ...` 修改 Claude 配置；Claude 可用 `pty | tmux | sdk`，Claude Router 可选 `claude` 或 `ccr`',

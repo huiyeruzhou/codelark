@@ -27,6 +27,7 @@ function printUsage(): void {
     '  --app-secret <secret>   App Secret for the isolated smoke app; prefer env file/env vars to avoid npm echo',
     '  --site <feishu|lark>    Site brand; default feishu',
     '  --keep-temp             Keep temporary root for diagnosis; default cleans it in success and failure paths',
+    '  --skip-lark-cli-bind    Test-only: write the private lark-cli runtime projection without invoking macOS Keychain',
     '  --simulate-failure-after-sync  Test cleanup on a post-lark-cli failure',
     '  --help                  Show this help',
     '',
@@ -67,6 +68,38 @@ function assertInside(parentPath: string, childPath: string): void {
   throw new Error(`Path escaped temp root: ${child}`);
 }
 
+function writeJsonFile(filePath: string, value: unknown): void {
+  fs.mkdirSync(path.dirname(filePath), { recursive: true, mode: 0o700 });
+  const tmpPath = `${filePath}.tmp`;
+  fs.writeFileSync(tmpPath, `${JSON.stringify(value, null, 2)}\n`, { mode: 0o600 });
+  fs.renameSync(tmpPath, filePath);
+}
+
+function writeTestLarkCliRuntimeProjection(options: {
+  sourcePath: string;
+  runtimePath: string;
+  appId: string;
+  appSecret: string;
+  site: FeishuSite;
+}): void {
+  writeJsonFile(options.sourcePath, {
+    accounts: {
+      app: {
+        id: options.appId,
+        secret: options.appSecret,
+        tenant: options.site,
+      },
+    },
+  });
+  writeJsonFile(options.runtimePath, {
+    apps: [{
+      appId: options.appId,
+      appSecret: options.appSecret,
+      brand: options.site,
+    }],
+  });
+}
+
 async function main(): Promise<void> {
   const argv = process.argv.slice(2);
   if (hasFlag(argv, '--help')) {
@@ -85,6 +118,7 @@ async function main(): Promise<void> {
     path.join(os.tmpdir(), `clk-setup-wizard-real-e2e-${Date.now()}`),
   ));
   const keepTemp = hasFlag(argv, '--keep-temp');
+  const skipLarkCliBind = hasFlag(argv, '--skip-lark-cli-bind');
   const appId = valueArg(
     argv,
     '--app-id',
@@ -105,7 +139,8 @@ async function main(): Promise<void> {
   const runtimeHome = path.join(runRoot, 'home');
   const codelarkHome = path.join(runRoot, 'clk-home');
   const workspaceRoot = path.join(runRoot, 'workspace');
-  const larkConfigPath = path.join(runtimeHome, '.lark-cli', 'config.json');
+  const larkSourceConfigPath = path.join(codelarkHome, 'runtime', 'lark-cli-source', 'config.json');
+  const larkRuntimeConfigPath = path.join(codelarkHome, 'runtime', 'lark-cli', 'lark-channel', 'config.json');
   const configEnvPath = path.join(codelarkHome, 'config.env');
   const configJsonPath = path.join(codelarkHome, 'config.json');
   const configTomlPath = path.join(codelarkHome, 'config.toml');
@@ -129,27 +164,6 @@ async function main(): Promise<void> {
       alias: 'codelark',
     };
 
-    await setupWizard.syncLarkCliCredentials(credentials, runtimeHome);
-    const entriesAfterSync = setupWizard.readLarkCliAppEntries(larkConfigPath);
-    const syncedEntry = entriesAfterSync.find((entry) => entry.appId === appId);
-    if (!syncedEntry) throw new Error(`lark-cli config missing synced app ${appId}`);
-    if (syncedEntry.brand !== site) throw new Error(`lark-cli brand mismatch: ${syncedEntry.brand}`);
-    if (syncedEntry.appSecret) {
-      throw new Error('real lark-cli e2e expected lark-cli to avoid plaintext appSecret in this environment');
-    }
-    if (syncedEntry.secretStorage !== 'keychain') {
-      throw new Error(`expected keychain/local encrypted lark-cli secret storage, got ${syncedEntry.secretStorage}`);
-    }
-    const importableApps = setupWizard.readLarkCliApps(larkConfigPath);
-    const importableApp = importableApps.find((entry) => entry.appId === appId);
-    if (!importableApp) throw new Error(`CodeLark could not import synced lark-cli app ${appId}`);
-    if (importableApp.appSecret !== appSecret) {
-      throw new Error('CodeLark did not recover App Secret from lark-cli local encrypted storage');
-    }
-    if (hasFlag(argv, '--simulate-failure-after-sync')) {
-      throw new Error('simulated setup wizard real e2e failure after lark-cli sync');
-    }
-
     const current = setupWizard.loadSetupConfig(codelarkHome);
     setupWizard.saveSetupConfigToHomeToml(
       setupWizard.buildSetupConfig(current, credentials, 'codex', workspaceRoot),
@@ -157,29 +171,49 @@ async function main(): Promise<void> {
     );
 
     const savedConfig = setupWizard.loadSetupConfig(codelarkHome);
-    const savedFeishu = savedConfig.channels?.find((channel) => channel.provider === 'feishu');
-    if (savedConfig.runtime !== 'codex') throw new Error(`runtime mismatch: ${savedConfig.runtime}`);
-    if (savedConfig.defaultWorkspaceRoot !== workspaceRoot) {
-      throw new Error(`workspace mismatch: ${savedConfig.defaultWorkspaceRoot}`);
+    if (skipLarkCliBind) {
+      writeTestLarkCliRuntimeProjection({
+        sourcePath: larkSourceConfigPath,
+        runtimePath: larkRuntimeConfigPath,
+        appId,
+        appSecret,
+        site,
+      });
+    } else {
+      const localService = await import('../src/local-service/manager.js');
+      const larkRuntime = await localService.ensureLarkCliRuntimeConfig(savedConfig, { allowUserAuthorization: true });
+      if (larkRuntime.warning) throw new Error(larkRuntime.warning);
+      if (!larkRuntime.ready) throw new Error('CodeLark private lark-cli runtime was not initialized');
     }
-    if (savedFeishu?.config.appId !== appId) throw new Error('config.v1 appId mismatch');
-    if (savedFeishu?.config.appSecret !== appSecret) throw new Error('config.v1 appSecret mismatch');
-    if (savedFeishu?.config.site !== site) throw new Error('config.v1 site mismatch');
+    if (hasFlag(argv, '--simulate-failure-after-sync')) {
+      throw new Error('simulated setup wizard real e2e failure after lark-cli sync');
+    }
+
+    const savedFeishu = savedConfig.channels?.find((channel) => channel.provider === 'feishu');
+    if (savedConfig.runtime.agent !== 'codex') throw new Error(`runtime mismatch: ${savedConfig.runtime.agent}`);
+    if (savedConfig.bridge.defaultWorkspace !== workspaceRoot) {
+      throw new Error(`workspace mismatch: ${savedConfig.bridge.defaultWorkspace}`);
+    }
+    if (savedFeishu?.config.appId !== appId) throw new Error('config appId mismatch');
+    if (savedFeishu?.config.appSecret !== appSecret) throw new Error('config appSecret mismatch');
+    if (savedFeishu?.config.site !== site) throw new Error('config site mismatch');
 
     if (!fs.existsSync(configTomlPath)) throw new Error('config.toml missing');
     if (fs.existsSync(configEnvPath)) throw new Error('setup should not create config.env');
     if (fs.existsSync(configJsonPath)) throw new Error('setup should not create config.json');
+    if (!fs.existsSync(larkSourceConfigPath)) throw new Error('CodeLark lark-cli source config missing');
+    if (!fs.existsSync(larkRuntimeConfigPath)) throw new Error('CodeLark private lark-cli runtime config missing');
 
     const result = {
       ok: true,
       runRoot,
       runtimeHome,
       codelarkHome,
-      larkConfigPath,
+      larkSourceConfigPath,
+      larkRuntimeConfigPath,
       configEnvPath,
       configJsonPath,
       configTomlPath,
-      larkSecretStorage: syncedEntry.secretStorage,
       cleanedRunRoot: !keepTemp,
     };
     process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);

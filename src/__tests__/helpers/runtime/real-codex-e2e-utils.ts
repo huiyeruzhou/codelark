@@ -327,6 +327,7 @@ export async function startLocalResponsesProxy(options: {
         if (!dataLine || dataLine === 'data: [DONE]') continue;
         ws.send(dataLine.slice('data: '.length));
       }
+      ws.close(1000, 'done');
     });
   });
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
@@ -336,6 +337,9 @@ export async function startLocalResponsesProxy(options: {
     baseUrl: `http://127.0.0.1:${address.port}/v1`,
     requests,
     close: () => new Promise((resolve, reject) => {
+      for (const client of wss.clients) {
+        client.terminate();
+      }
       wss.close(() => {
         server.close((error) => {
           if (error) reject(error);

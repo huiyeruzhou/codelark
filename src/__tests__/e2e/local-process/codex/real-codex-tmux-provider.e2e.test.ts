@@ -29,7 +29,6 @@ import {
 } from '../../../helpers/runtime/real-codex-e2e-utils.js';
 
 const execFileAsync = promisify(execFile);
-const REAL_CODEX_E2E_ENV = 'CODELARK_REAL_CODEX_E2E';
 const REAL_CODEX_E2E_MODEL_ENV = 'CODELARK_REAL_CODEX_E2E_MODEL';
 
 function createLongPrompt(): string {
@@ -132,10 +131,6 @@ async function approveTrustPermission(
 
 describe('real codex tmux provider e2e', () => {
   it('keeps a real fresh-directory Codex thread after tmux provider startup and mirror reconcile', { timeout: 120_000 }, async (t: TestContext) => {
-    if (process.env[REAL_CODEX_E2E_ENV] !== '1') {
-      console.info(`[real-codex-tmux-provider.e2e] set ${REAL_CODEX_E2E_ENV}=1 to run real Codex e2e tests`);
-      return;
-    }
     if (!(await commandAvailable('tmux', ['-V']))) {
       t.skip('tmux is not available');
       return;
@@ -270,10 +265,6 @@ describe('real codex tmux provider e2e', () => {
   });
 
   it('submits a complete multi-thousand-character prompt through real tmux and Codex', { timeout: 120_000 }, async (t: TestContext) => {
-    if (process.env[REAL_CODEX_E2E_ENV] !== '1') {
-      console.info(`[real-codex-tmux-provider.e2e] set ${REAL_CODEX_E2E_ENV}=1 to run real Codex e2e tests`);
-      return;
-    }
     if (!(await commandAvailable('tmux', ['-V']))) {
       t.skip('tmux is not available');
       return;
@@ -381,10 +372,6 @@ describe('real codex tmux provider e2e', () => {
   });
 
   it('forwards a Codex goal replacement selection promptly after tmux auto-forwarded goals', { timeout: 120_000 }, async (t: TestContext) => {
-    if (process.env[REAL_CODEX_E2E_ENV] !== '1') {
-      t.skip(`set ${REAL_CODEX_E2E_ENV}=1 to run real Codex e2e tests`);
-      return;
-    }
     if (!(await commandAvailable('tmux', ['-V']))) {
       t.skip('tmux is not available');
       return;

@@ -161,7 +161,7 @@ describe('buildInlineToolBlock', () => {
 });
 
 describe('interactive-turn sdk-conversation-engine tool expansion', () => {
-  it('routes active Claude runtime turns with Claude-specific settings', async () => {
+  it('routes active Claude runtime turns with Claude-specific settings from yolo mode', async () => {
     resetBridgeTestState();
     const configTomlPath = path.join(CODELARK_HOME, 'config.toml');
     const previousToml = fs.existsSync(configTomlPath) ? fs.readFileSync(configTomlPath, 'utf-8') : null;
@@ -186,6 +186,7 @@ schema_version = 2
 [runtime.claude]
 executable = "ccr"
 model = "claude-sonnet-test"
+yolo_mode = "on"
 permission_mode = "plan"
 `);
       const store = initBridgeTestContext({
@@ -225,8 +226,8 @@ permission_mode = "plan"
       assert.equal(calls[0]?.claudeExecutable, 'ccr');
       assert.equal(calls[0]?.claudeSessionId, undefined);
       assert.equal(calls[0]?.model, 'claude-sonnet-test');
-      assert.equal(calls[0]?.claudePermissionMode, 'plan');
-      assert.equal(calls[0]?.codexProvider, 'sdk');
+      assert.equal(calls[0]?.claudePermissionMode, 'bypassPermissions');
+      assert.equal(calls[0]?.codexProvider, 'tmux');
       assert.equal(calls[0]?.systemPrompt, undefined);
       const updatedSession = store.getSession(session.id);
       assert.equal(updatedSession?.runtime?.claude?.sessionId, 'claude-session-1');

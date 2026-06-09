@@ -438,6 +438,10 @@ class ScriptedSessionSimulator {
 describe('interactive-turn runner', () => {
   beforeEach(() => {
     fs.rmSync(DATA_DIR, { recursive: true, force: true });
+    createConfigService({ migrate: false, env: {} }).set(
+      { kind: 'home' },
+      { runtime: { codex: { provider: 'sdk' } } },
+    );
     const store = new JsonFileStore(makeSettings());
     initBridgeContext({
       store,

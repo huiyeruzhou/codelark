@@ -145,6 +145,7 @@ async function withLocalCodexEnvironment<T>(fn: (params: {
     fs.rmSync(workDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     fs.rmSync(codexHome, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     await proxy.close().catch(() => undefined);
+    resetBridgeTestState({ cleanCodexHome: true });
     for (const [key, value] of Object.entries(previousEnv)) {
       if (value === undefined) delete process.env[key];
       else process.env[key] = value;
@@ -263,6 +264,10 @@ describe('feishu adapter card e2e', () => {
 
     await withLocalCodexEnvironment(async ({ proxy, workDir }) => {
       const calls: RecordedFeishuMessageCall[] = [];
+      createConfigService({ migrate: false, env: {} }).set(
+        { kind: 'home' },
+        { runtime: { codex: { model: 'gpt-5', provider: 'sdk', yoloMode: 'on' } } },
+      );
       const store = initBridgeTestContext({
         settings: makeBridgeSettings({
           bridge_default_model: 'gpt-5',

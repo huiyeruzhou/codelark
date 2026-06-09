@@ -160,7 +160,13 @@ describe('codex-pty-provider', () => {
       _testOnlyPtyScreens.register({ sessionId: 'bridge-session-update' });
       _testOnlyPtyScreens.append(
         'bridge-session-update',
-        'Update available! 0.135.0 -> 0.136.0\n› 1. Update now\n  2. Skip\n  3. Skip until next version',
+        [
+          'Update available! 0.135.0 -> 0.136.0',
+          '› 1. Update now',
+          '  2. Skip',
+          '  3. Skip until next version',
+          'Press enter to confirm · Esc to skip',
+        ].join('\n'),
       );
       setTimeout(() => {
         assert.equal(permissionRequests.length, 1);

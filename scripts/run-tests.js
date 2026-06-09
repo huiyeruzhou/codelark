@@ -44,7 +44,45 @@ if (testFiles.length === 0) {
   process.exit(1);
 }
 
-const child = spawn(
+let child;
+let cleaned = false;
+
+function cleanup() {
+  if (cleaned) return;
+  cleaned = true;
+  try {
+    fs.rmSync(tempHome, { recursive: true, force: true });
+  } catch {
+    // ignore
+  }
+}
+
+function terminateChild(signal = 'SIGTERM') {
+  if (!child?.pid) return;
+  try {
+    if (process.platform !== 'win32') {
+      process.kill(-child.pid, signal);
+      return;
+    }
+  } catch {
+    // fall back to killing the direct child below
+  }
+  try {
+    child.kill(signal);
+  } catch {
+    // ignore
+  }
+}
+
+for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP']) {
+  process.on(signal, () => {
+    terminateChild(signal);
+    cleanup();
+    process.exit(1);
+  });
+}
+
+child = spawn(
   process.execPath,
   [
     '--test',
@@ -56,6 +94,7 @@ const child = spawn(
   ],
   {
     stdio: 'inherit',
+    detached: process.platform !== 'win32',
     env: {
       ...process.env,
       HOME: runtimeHome,
@@ -68,11 +107,8 @@ const child = spawn(
 );
 
 child.on('exit', (code, signal) => {
-  try {
-    fs.rmSync(tempHome, { recursive: true, force: true });
-  } catch {
-    // ignore
-  }
+  terminateChild('SIGTERM');
+  cleanup();
 
   if (signal) {
     process.kill(process.pid, signal);
