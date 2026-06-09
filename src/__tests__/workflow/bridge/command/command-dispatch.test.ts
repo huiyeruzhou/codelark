@@ -1403,6 +1403,11 @@ describe('command-dispatch', () => {
       'claudeProvider',
       'claudeReasoningEffort',
     ]);
+    assert.deepEqual(sent.at(-1)?.richCard?.form?.selects?.map((select: any) => select.formName), [
+      'cld_mode',
+      'cld_provider',
+      'cld_rsn_eft',
+    ]);
     assert.deepEqual(sent.at(-1)?.richCard?.form?.selects?.map((select: any) => select.label), [
       'YOLO模式 (runtime.claude.yolo_mode)',
       'Provider（运行方式） (runtime.claude.provider)',
@@ -1410,6 +1415,10 @@ describe('command-dispatch', () => {
     ]);
     assert.equal(
       sent.at(-1)?.richCard?.form?.extraInputs?.some((input: any) => input.elementId === 'claudeIdleTimeoutMinutes'),
+      true,
+    );
+    assert.equal(
+      sent.at(-1)?.richCard?.form?.extraInputs?.some((input: any) => input.formName === 'cld_idle_min'),
       true,
     );
     assert.equal(sent.at(-1)?.richCard?.form?.selects?.some((select: any) => select.elementId === 'codexSandboxMode'), false);
@@ -1452,8 +1461,8 @@ describe('command-dispatch', () => {
                 claudeDefaultModel: 'test-model',
                 claudeMode: 'yolo',
                 claudeProvider: 'pty',
-                claudeReasoningEffort: 'medium',
-                claudeIdleTimeoutMinutes: '15',
+                cld_rsn_eft: 'max',
+                cld_idle_min: '15',
               },
             },
           },
@@ -1477,6 +1486,10 @@ describe('command-dispatch', () => {
       kind: 'session',
       sessionId: claudeBinding.bridgeSessionId,
     }), 'test-model');
+    assert.equal(createConfigService({ migrate: false, env: {} }).get('runtime.claude.reasoningEffort', {
+      kind: 'session',
+      sessionId: claudeBinding.bridgeSessionId,
+    }), 'max');
     assert.equal(createConfigService({ migrate: false, env: {} }).get('runtime.claude.idleTimeoutMinutes', {
       kind: 'session',
       sessionId: claudeBinding.bridgeSessionId,
@@ -1602,6 +1615,11 @@ describe('command-dispatch', () => {
         'claudeMode',
         'claudeProvider',
         'claudeReasoningEffort',
+      ]);
+      assert.deepEqual(sent.at(-1)?.richCard?.form?.selects?.map((select) => select.formName), [
+        'cld_mode',
+        'cld_provider',
+        'cld_rsn_eft',
       ]);
 
       await handleBridgeCommand(
@@ -3620,8 +3638,16 @@ enabled = true
       ['默认 agent', 'tmux 自动回车', '回显 tmux 输出'],
     );
     assert.deepEqual(
+      sent.at(-1)?.richCard?.form?.selects?.map((select: any) => select.formName),
+      ['rt', 'tmux_enter', 'tmux_echo'],
+    );
+    assert.deepEqual(
       sent.at(-1)?.richCard?.form?.extraInputs?.map((input: any) => input.elementId),
       ['defaultWorkspaceRoot', 'tmuxSessionName', 'tmuxCaptureLines'],
+    );
+    assert.deepEqual(
+      sent.at(-1)?.richCard?.form?.extraInputs?.map((input: any) => input.formName),
+      ['ws_root', 'tmux_sess', 'tmux_lines'],
     );
     assert.deepEqual(
       sent.at(-1)?.richCard?.form?.extraInputs?.map((input: any) => input.label),
@@ -3652,6 +3678,10 @@ enabled = true
       ['defaultMode', 'defaultProvider', 'codexSkipGitRepoCheck', 'codexSandboxMode'],
     );
     assert.deepEqual(
+      sent.at(-1)?.richCard?.form?.selects?.map((select: any) => select.formName).slice(0, 4),
+      ['cdx_mode', 'cdx_provider', 'cdx_skip_git', 'cdx_sandbox'],
+    );
+    assert.deepEqual(
       sent.at(-1)?.richCard?.form?.selects?.map((select: any) => select.label).slice(0, 2),
       ['YOLO模式', 'Provider（运行方式）'],
     );
@@ -3667,6 +3697,10 @@ enabled = true
       sent.at(-1)?.richCard?.form?.extraInputs?.map((input: any) => input.elementId),
       ['defaultModel'],
     );
+    assert.deepEqual(
+      sent.at(-1)?.richCard?.form?.extraInputs?.map((input: any) => input.formName),
+      ['cdx_model'],
+    );
 
     await handleBridgeCommand(
       adapter,
@@ -3679,8 +3713,8 @@ enabled = true
           event: {
             action: {
               form_value: {
-                defaultProvider: 'tmux',
-                codexNetworkAccess: 'off',
+                cdx_provider: 'tmux',
+                cdx_network: 'off',
               },
             },
           },
@@ -3728,7 +3762,7 @@ enabled = true
           event: {
             action: {
               form_value: {
-                runtime: 'claude',
+                rt: 'claude',
               },
             },
           },
@@ -3739,6 +3773,54 @@ enabled = true
     );
     assert.equal(createConfigService({ migrate: false, env: {} }).resolve('runtime.agent').source, 'home');
     assert.equal(createConfigService({ migrate: false, env: {} }).get('runtime.agent'), 'claude');
+
+    await handleBridgeCommand(
+      adapter,
+      {
+        address,
+        text: '/set --group runtime.claude',
+        messageId: 'incoming-set-claude-card',
+      } as any,
+      '/set --group runtime.claude',
+      deps,
+    );
+    assert.match(sent.at(-1)?.text || '', /Claude/);
+    assert.equal(sent.at(-1)?.richCardUpdateMessageId, 'reply-runtime-card');
+    assert.deepEqual(
+      sent.at(-1)?.richCard?.form?.selects?.map((select: any) => select.elementId),
+      ['claudeMode', 'claudeProvider', 'claudeExecutable', 'claudeReasoningEffort'],
+    );
+    assert.deepEqual(
+      sent.at(-1)?.richCard?.form?.selects?.map((select: any) => select.formName),
+      ['cld_mode', 'cld_provider', 'cld_exec', 'cld_rsn_eft'],
+    );
+    assert.deepEqual(
+      sent.at(-1)?.richCard?.form?.extraInputs?.map((input: any) => input.formName),
+      ['cld_model', 'cld_idle_min'],
+    );
+
+    await handleBridgeCommand(
+      adapter,
+      {
+        address,
+        text: '/set',
+        messageId: 'incoming-set-claude-form',
+        callbackMessageId: 'reply-claude-card',
+        raw: {
+          event: {
+            action: {
+              form_value: {
+                cld_rsn_eft: 'max',
+              },
+            },
+          },
+        },
+      } as any,
+      '/set --group runtime.claude',
+      deps,
+    );
+    assert.match(sent.at(-1)?.text || '', /已保存全局配置/);
+    assert.equal(createConfigService({ migrate: false, env: {} }).get('runtime.claude.reasoningEffort'), 'max');
 
     await handleBridgeCommand(
       adapter,
@@ -3755,6 +3837,10 @@ enabled = true
       sent.at(-1)?.richCard?.form?.extraInputs?.map((input: any) => input.elementId).slice(0, 3),
       ['historyMessageLimit', 'streamStatusIdleStartSeconds', 'streamStatusCheckIntervalSeconds'],
     );
+    assert.deepEqual(
+      sent.at(-1)?.richCard?.form?.extraInputs?.map((input: any) => input.formName).slice(0, 3),
+      ['hist_limit', 'stream_idle_sec', 'stream_check_sec'],
+    );
 
     await handleBridgeCommand(
       adapter,
@@ -3767,7 +3853,7 @@ enabled = true
           event: {
             action: {
               form_value: {
-                historyMessageLimit: '11',
+                hist_limit: '11',
               },
             },
           },
@@ -3935,10 +4021,10 @@ enabled = true
       adapter,
       {
         address,
-        text: '/set claudeReasoningEffort max',
-        messageId: 'incoming-set-claude-reasoning-max',
+        text: '/set claudeReasoningEffort m',
+        messageId: 'incoming-set-claude-reasoning-m',
       } as any,
-      '/set claudeReasoningEffort max',
+      '/set claudeReasoningEffort m',
       deps,
     );
     assert.match(sent.at(-1)?.text || '', /runtime\.claude\.reasoning_effort.*max/s);

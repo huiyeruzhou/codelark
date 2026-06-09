@@ -32,7 +32,13 @@ export function parseReasoningEffort(value: string | null | undefined): RuntimeR
 }
 
 export function parseClaudeReasoningEffort(value: string | null | undefined): ClaudeReasoningEffort | undefined {
-  return claudeReasoningEffortSchema.safeParse(value).data;
+  const normalized = value?.trim().toLowerCase();
+  if (normalized === '1') return 'low';
+  if (normalized === '2') return 'medium';
+  if (normalized === '3') return 'high';
+  if (normalized === '4') return 'xhigh';
+  if (normalized === '5' || normalized === 'm') return 'max';
+  return claudeReasoningEffortSchema.safeParse(normalized).data;
 }
 
 export function normalizeReasoningEffort(

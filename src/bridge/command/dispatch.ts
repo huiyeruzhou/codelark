@@ -53,6 +53,7 @@ import {
   handleSetFormCommand,
   runtimeSettingDefinitions,
   setCommandSelectedGroup,
+  settingFormName,
   type SettingDefinition,
 } from './global-settings.js';
 import { buildGlobalStatusResponse } from './status.js';
@@ -179,11 +180,16 @@ const CURRENT_SETTING_LEGACY_FORM_KEYS: Record<string, string[]> = {
   claudeIdleTimeoutMinutes: ['clk_idle_timeout_minutes', 'idleTimeoutMinutes'],
 };
 
-function currentSettingFormValue(formValue: Record<string, unknown>, settingKey: string): string | undefined {
-  const keys = [settingKey, ...(CURRENT_SETTING_LEGACY_FORM_KEYS[settingKey] || [])];
+function currentSettingFormValue(formValue: Record<string, unknown>, definition: SettingDefinition): string | undefined {
+  const settingKey = definition.key;
+  const keys = [
+    settingFormName(definition),
+    settingKey,
+    ...(CURRENT_SETTING_LEGACY_FORM_KEYS[settingKey] || []),
+  ];
   for (const key of keys) {
-    const value = normalizeFormString(formValue[key]);
-    if (value !== undefined) return value;
+    const rawValue = formValue[key];
+    if (typeof rawValue === 'string') return rawValue.trim();
   }
   return undefined;
 }
@@ -276,7 +282,7 @@ async function handleCurrentConfigFormCommand(options: {
   let currentConfig = sessionConfigService.snapshot({ kind: 'session', sessionId: session.id }).config;
   const updatedSettings: SettingDefinition[] = [];
   for (const definition of runtimeSettingDefinitions(activeRuntime, { sessionWritableOnly: true })) {
-    const rawValue = currentSettingFormValue(formValue, definition.key);
+    const rawValue = currentSettingFormValue(formValue, definition);
     if (rawValue === undefined) continue;
     const currentValue = definition.read(currentConfig);
     const normalizedCurrent = currentValue === '-' || currentValue === 'auto' ? '' : currentValue;
