@@ -1426,7 +1426,8 @@ describe('command-dispatch', () => {
 
     await handleBridgeCommand(adapter, { address, text: '/current runtime claude', messageId: 'incoming-current-card-claude-preview' } as any, '/current runtime claude', deps);
     const claudePreviewCard = sent.at(-1)?.richCard as OutboundRichCard | undefined;
-    assert.equal(sent.at(-1)?.richCardUpdateMessageId, 'reply-2');
+    assert.equal(sent.at(-1)?.richCardUpdateMessageId, undefined);
+    assert.equal(getThreadTableMessageRecord(address, 'current')?.messageId, 'reply-4');
     assert.equal(claudePreviewCard?.tags?.[0], 'claude');
     assert.match(claudePreviewCard?.footer?.[0] || '', /当前 agent.*<text_tag color='orange'>Claude Code<\/text_tag>/);
     assert.equal(claudePreviewCard?.selects?.[0]?.selectedCallbackData, buildCommandCallbackData('/current-runtime claude'));
@@ -1451,9 +1452,11 @@ describe('command-dispatch', () => {
         address,
         text: '/current-config',
         messageId: 'incoming-current-card-submit',
-        callbackMessageId: 'reply-2',
         raw: {
           event: {
+            context: {
+              open_message_id: 'reply-4',
+            },
             action: {
               form_value: {
                 clk_name: '重命名 Current',
@@ -1496,8 +1499,33 @@ describe('command-dispatch', () => {
     }), 15);
     assert.deepEqual(adapter.renamedGroups, [{ chatId: 'chat-current-card', name: '重命名 Current' }]);
     assert.equal(sent.at(-1)?.richCard?.form?.inputDefaultValue, '重命名 Current');
-    assert.equal(sent.at(-1)?.richCardUpdateMessageId, 'reply-2');
-    assert.equal(getThreadTableMessageRecord(address, 'current')?.messageId, 'reply-2');
+    assert.equal(sent.at(-1)?.richCardUpdateMessageId, 'reply-4');
+    assert.equal(getThreadTableMessageRecord(address, 'current')?.messageId, 'reply-4');
+
+    await handleBridgeCommand(
+      adapter,
+      {
+        address,
+        text: '/current-runtime',
+        messageId: 'incoming-current-card-runtime-codex',
+        callbackData: buildCommandCallbackData('/current-runtime codex'),
+        raw: {
+          event: {
+            context: {
+              open_message_id: 'reply-4',
+            },
+          },
+        },
+      } as any,
+      '/current-runtime codex',
+      deps,
+    );
+    const codexBinding = store.getChannelChat(address.channelType, address.chatId);
+    assert.ok(codexBinding);
+    assert.equal(getSessionActiveRuntime(store.getSession(codexBinding.bridgeSessionId)), 'codex');
+    assert.equal(sent.at(-1)?.richCardUpdateMessageId, 'reply-4');
+    assert.equal(sent.at(-1)?.richCard?.selects?.[0]?.selectedCallbackData, buildCommandCallbackData('/current-runtime codex'));
+    assert.equal(getThreadTableMessageRecord(address, 'current')?.messageId, 'reply-4');
   });
 
   it('reads Claude Code JSONL for /t, /current, and /his on Claude runtime sessions', async () => {
@@ -3670,7 +3698,7 @@ enabled = true
     assert.match(sent.at(-1)?.text || '', /Codex/);
     assert.match(sent.at(-1)?.text || '', /runtime\.codex\.provider/);
     assert.match(sent.at(-1)?.text || '', /runtime\.codex\.network_access/);
-    assert.equal(sent.at(-1)?.richCardUpdateMessageId, 'reply-1');
+    assert.equal(sent.at(-1)?.richCardUpdateMessageId, undefined);
     assert.equal(sent.at(-1)?.richCard?.subtitle, '写入 ~/.codelark/config.toml · Codex');
     assert.equal(sent.at(-1)?.richCard?.form?.submitCallbackData, buildCommandCallbackData('/set --group runtime.codex'));
     assert.deepEqual(
@@ -3708,9 +3736,12 @@ enabled = true
         address,
         text: '/set',
         messageId: 'incoming-set-form',
-        callbackMessageId: 'reply-1',
+        callbackData: buildCommandCallbackData('/set --group runtime.codex'),
         raw: {
           event: {
+            context: {
+              open_message_id: 'reply-2',
+            },
             action: {
               form_value: {
                 cdx_provider: 'tmux',
@@ -3724,9 +3755,9 @@ enabled = true
       deps,
     );
     assert.match(sent.at(-1)?.text || '', /已保存全局配置/);
-    assert.equal(sent.at(-1)?.richCardUpdateMessageId, 'reply-1');
+    assert.equal(sent.at(-1)?.richCardUpdateMessageId, 'reply-2');
     assert.equal(sent.at(-1)?.richCard?.title, '全局配置');
-    assert.equal(getThreadTableMessageRecord(address, 'set')?.messageId, 'reply-1');
+    assert.equal(getThreadTableMessageRecord(address, 'set')?.messageId, 'reply-2');
     assert.equal(createConfigService({ migrate: false, env: {} }).get('runtime.codex.provider'), 'tmux');
     assert.equal(createConfigService({ migrate: false, env: {} }).get('runtime.codex.networkAccess'), false);
 
@@ -3741,7 +3772,7 @@ enabled = true
       deps,
     );
     assert.match(sent.at(-1)?.text || '', /通用配置/);
-    assert.equal(sent.at(-1)?.richCardUpdateMessageId, 'reply-1');
+    assert.equal(sent.at(-1)?.richCardUpdateMessageId, undefined);
     assert.equal(sent.at(-1)?.richCard?.subtitle, '写入 ~/.codelark/config.toml · 通用配置');
     assert.deepEqual(sent.at(-1)?.richCard?.form?.selects?.map((select: any) => select.elementId), ['runtime', 'tmuxAutoEnter', 'tmuxEchoInput']);
     assert.deepEqual(sent.at(-1)?.richCard?.form?.selects?.map((select: any) => select.label), [
@@ -3749,7 +3780,30 @@ enabled = true
       'tmux 自动回车',
       '回显 tmux 输出',
     ]);
-    assert.equal(getThreadTableMessageRecord(address, 'set')?.messageId, 'reply-1');
+    assert.equal(getThreadTableMessageRecord(address, 'set')?.messageId, 'reply-4');
+
+    await handleBridgeCommand(
+      adapter,
+      {
+        address,
+        text: '/set --group runtime.claude',
+        messageId: 'incoming-set-runtime-select-claude',
+        callbackData: buildCommandCallbackData('/set --group runtime.claude'),
+        raw: {
+          event: {
+            context: {
+              open_message_id: 'reply-4',
+            },
+          },
+        },
+      } as any,
+      '/set --group runtime.claude',
+      deps,
+    );
+    assert.match(sent.at(-1)?.text || '', /Claude/);
+    assert.equal(sent.at(-1)?.richCardUpdateMessageId, 'reply-4');
+    assert.equal(sent.at(-1)?.richCard?.subtitle, '写入 ~/.codelark/config.toml · Claude');
+    assert.equal(getThreadTableMessageRecord(address, 'set')?.messageId, 'reply-4');
 
     await handleBridgeCommand(
       adapter,
@@ -3757,9 +3811,12 @@ enabled = true
         address,
         text: '/set',
         messageId: 'incoming-set-runtime-form',
-        callbackMessageId: 'reply-runtime-card',
+        callbackData: buildCommandCallbackData('/set --group runtime'),
         raw: {
           event: {
+            context: {
+              open_message_id: 'reply-4',
+            },
             action: {
               form_value: {
                 rt: 'claude',
@@ -3773,6 +3830,7 @@ enabled = true
     );
     assert.equal(createConfigService({ migrate: false, env: {} }).resolve('runtime.agent').source, 'home');
     assert.equal(createConfigService({ migrate: false, env: {} }).get('runtime.agent'), 'claude');
+    assert.equal(sent.at(-1)?.richCardUpdateMessageId, 'reply-4');
 
     await handleBridgeCommand(
       adapter,
@@ -3785,7 +3843,7 @@ enabled = true
       deps,
     );
     assert.match(sent.at(-1)?.text || '', /Claude/);
-    assert.equal(sent.at(-1)?.richCardUpdateMessageId, 'reply-runtime-card');
+    assert.equal(sent.at(-1)?.richCardUpdateMessageId, undefined);
     assert.deepEqual(
       sent.at(-1)?.richCard?.form?.selects?.map((select: any) => select.elementId),
       ['claudeMode', 'claudeProvider', 'claudeExecutable', 'claudeReasoningEffort'],
@@ -3805,9 +3863,12 @@ enabled = true
         address,
         text: '/set',
         messageId: 'incoming-set-claude-form',
-        callbackMessageId: 'reply-claude-card',
+        callbackData: buildCommandCallbackData('/set --group runtime.claude'),
         raw: {
           event: {
+            context: {
+              open_message_id: 'reply-7',
+            },
             action: {
               form_value: {
                 cld_rsn_eft: 'max',
@@ -3820,6 +3881,8 @@ enabled = true
       deps,
     );
     assert.match(sent.at(-1)?.text || '', /已保存全局配置/);
+    assert.equal(sent.at(-1)?.richCardUpdateMessageId, 'reply-7');
+    assert.equal(getThreadTableMessageRecord(address, 'set')?.messageId, 'reply-7');
     assert.equal(createConfigService({ migrate: false, env: {} }).get('runtime.claude.reasoningEffort'), 'max');
 
     await handleBridgeCommand(

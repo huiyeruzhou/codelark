@@ -101,6 +101,34 @@ function extractCardActionFormValue(raw: unknown): Record<string, unknown> | nul
   return formValue && typeof formValue === 'object' ? formValue as Record<string, unknown> : null;
 }
 
+function extractCardActionMessageId(raw: unknown): string {
+  const root = raw && typeof raw === 'object' ? raw as Record<string, any> : {};
+  const event = root.event && typeof root.event === 'object' ? root.event as Record<string, any> : root;
+  const context = event.context && typeof event.context === 'object' ? event.context as Record<string, any> : {};
+  const action = event.action && typeof event.action === 'object' ? event.action as Record<string, any> : {};
+  const candidates = [
+    context.open_message_id,
+    context.message_id,
+    event.open_message_id,
+    event.message_id,
+    root.open_message_id,
+    root.message_id,
+    action.open_message_id,
+    action.message_id,
+  ];
+  for (const candidate of candidates) {
+    if (typeof candidate === 'string' && candidate.trim()) return candidate.trim();
+  }
+  return '';
+}
+
+function richCardUpdateMessageIdForCommand(msg: InboundMessage): string | undefined {
+  const explicit = msg.callbackMessageId?.trim();
+  if (explicit) return explicit;
+  if (!msg.callbackData && !extractCardActionFormValue(msg.raw)) return undefined;
+  return extractCardActionMessageId(msg.raw) || undefined;
+}
+
 function normalizeFormString(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
 }
@@ -946,7 +974,7 @@ export async function handleBridgeCommand(
   }
 
   if (response) {
-    const richCardUpdateMessageId = msg.callbackMessageId;
+    const richCardUpdateMessageId = richCardUpdateMessageIdForCommand(msg);
     const result = await deliverBridgeNotice(adapter, responseAddress, response, {
       replyToMessageId: responseAddress.channelType === msg.address.channelType && responseAddress.chatId === msg.address.chatId
         ? msg.messageId
