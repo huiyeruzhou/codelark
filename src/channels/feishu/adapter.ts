@@ -5489,7 +5489,7 @@ export class FeishuAdapter extends BaseChannelAdapter {
               cardId: recoveredCardId,
               messageId: updateMessageId,
               lastInteractionAt: now,
-              sequence: now,
+              sequence: Math.floor(now / 1000),
             };
           }
         } catch (err) {

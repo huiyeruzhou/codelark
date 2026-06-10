@@ -4855,6 +4855,9 @@ printf '{"ok":true,"data":{"chat_id":"oc_user_created"}}\\n'
     assert.deepEqual(idConvertCalls[0]?.data, { message_id: 'card-message-1' });
     assert.equal(cardUpdateCalls.length, 1);
     assert.deepEqual(cardUpdateCalls[0]?.path, { card_id: 'card-recovered' });
+    assert.equal(Number.isInteger(cardUpdateCalls[0]?.data?.sequence), true);
+    assert.equal(cardUpdateCalls[0]?.data?.sequence > 0, true);
+    assert.equal(cardUpdateCalls[0]?.data?.sequence <= 2_147_483_647, true);
     assert.equal(messageCreateCalls.length, 0);
     assert.equal(messageReplyCalls.length, 0);
   });

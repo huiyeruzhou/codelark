@@ -359,7 +359,7 @@ export function buildCurrentCommandRichCard(options: {
   const mirrorColor = session.mirror_status === 'watching' ? 'blue' : 'grey';
   const sessionKind = session.session_type === 'draft' ? '临时草稿线程' : '普通会话';
   const runtimeSelect: NonNullable<OutboundRichCard['selects']>[number] = {
-    id: 'current_runtime_select',
+    id: 'cur_runtime',
     placeholder: 'runtime',
     selectedCallbackData: buildCommandCallbackData(`/current-runtime ${activeRuntime}`),
     options: [

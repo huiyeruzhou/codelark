@@ -1371,7 +1371,7 @@ describe('command-dispatch', () => {
     assert.equal(card?.updateTtlMs, null);
     assert.deepEqual(card?.tags, ['codex', '019e7d66...card01']);
     assert.match(card?.title || '', /Codex Card title/);
-    assert.equal(card?.selects?.[0]?.id, 'current_runtime_select');
+    assert.equal(card?.selects?.[0]?.id, 'cur_runtime');
     assert.deepEqual(card?.selects?.[0]?.options.map((option) => option.text), ['Codex', 'Claude Code']);
     assert.equal(parseCommandCallbackData(card?.selects?.[0]?.selectedCallbackData || '')?.commandText, '/current-runtime codex');
     assert.equal(card?.form?.layout, 'two_column');
@@ -1666,7 +1666,7 @@ describe('command-dispatch', () => {
       assert.doesNotMatch(sent.at(-1)?.text || '', /codex-thread-id|文件系统权限|网络访问|permission_mode|权限模式/s);
       assert.equal(sent.at(-1)?.richCard?.template, 'green');
       assert.deepEqual(sent.at(-1)?.richCard?.tags, ['claude', 'claude-h...ession']);
-      assert.equal(sent.at(-1)?.richCard?.selects?.[0]?.id, 'current_runtime_select');
+      assert.equal(sent.at(-1)?.richCard?.selects?.[0]?.id, 'cur_runtime');
       assert.equal(sent.at(-1)?.richCard?.selects?.[0]?.selectedCallbackData, buildCommandCallbackData('/current-runtime claude'));
       assert.equal(sent.at(-1)?.richCard?.form?.layout, 'two_column');
       assert.equal(sent.at(-1)?.richCard?.form?.inputElementId, 'clk_name');
