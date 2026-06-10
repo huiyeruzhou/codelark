@@ -93,4 +93,44 @@ describe('codex tmux runtime', () => {
     );
     assert.ok(commands.some((command) => /kill-session -t codex_fail/.test(command)));
   });
+  it('reports an alive Codex tmux session that never reaches the idle input prompt', async () => {
+    const previousTimeout = process.env.CODELARK_CODEX_RESUME_TMUX_READY_TIMEOUT_MS;
+    const previousPoll = process.env.CODELARK_CODEX_RESUME_TMUX_READY_POLL_MS;
+    process.env.CODELARK_CODEX_RESUME_TMUX_READY_TIMEOUT_MS = '10';
+    process.env.CODELARK_CODEX_RESUME_TMUX_READY_POLL_MS = '50';
+    const core: TmuxCore = {
+      commandPreview: (args) => ['tmux', ...args].join(' '),
+      hasSession: async (name) => ({ exists: true, command: `tmux has-session -t ${name}` }),
+      killSession: async (name) => `tmux kill-session -t ${name}`,
+      listSessions: async () => ({ sessions: [], command: 'tmux list-sessions' }),
+      ensureDetachedSession: async () => ({ existed: false, command: 'tmux new-session -d -s codex_busy', commands: ['tmux new-session -d -s codex_busy'] }),
+      capturePane: async () => ({ screen: 'OpenAI Codex\nworking on previous turn...', command: 'tmux capture-pane -t codex_busy -p -S -80' }),
+      sendActions: async () => ({ commands: [] }),
+      sendInterrupt: async () => 'tmux send-keys -t codex_busy C-c',
+      injectPromptIntoPane: async () => ({ commands: [] }),
+    };
+
+    try {
+      await assert.rejects(
+        () => startCodexResumeTmuxSession({
+          sessionName: 'codex_busy',
+          threadId: 'busy-thread',
+          bridgeSessionId: 'bridge-busy',
+          workingDirectory: '/tmp',
+        }, core),
+        (error) => {
+          assert.ok(error instanceof CodexResumeTmuxLaunchError);
+          assert.equal(error.details.sessionExists, true);
+          assert.match(error.details.reason, /idle input prompt/);
+          assert.match(error.details.lastScreen || '', /working on previous turn/);
+          return true;
+        },
+      );
+    } finally {
+      if (previousTimeout === undefined) delete process.env.CODELARK_CODEX_RESUME_TMUX_READY_TIMEOUT_MS;
+      else process.env.CODELARK_CODEX_RESUME_TMUX_READY_TIMEOUT_MS = previousTimeout;
+      if (previousPoll === undefined) delete process.env.CODELARK_CODEX_RESUME_TMUX_READY_POLL_MS;
+      else process.env.CODELARK_CODEX_RESUME_TMUX_READY_POLL_MS = previousPoll;
+    }
+  });
 });

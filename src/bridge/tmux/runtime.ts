@@ -335,7 +335,7 @@ export async function startCodexResumeTmuxSession(
       ? 'tmux session disappeared after new-session; the Codex TUI process likely exited immediately'
       : ready.lastError
         ? `ready probe failed: ${ready.lastError}`
-        : 'ready prompt was not detected before timeout';
+        : 'Codex TUI started but did not show the idle input prompt before timeout';
     const details: CodexResumeTmuxLaunchFailureDetails = {
       sessionName: params.sessionName,
       threadId: params.threadId,
