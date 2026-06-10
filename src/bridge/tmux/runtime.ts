@@ -306,6 +306,29 @@ export async function waitForCodexResumeTmuxReady(
   return { ready: false, commands, lastScreen, lastError, sessionExists, sessionExistsCommand };
 }
 
+async function checkCodexResumeTmuxStarted(
+  sessionName: string,
+  core: TmuxCore = tmuxCore,
+): Promise<CodexResumeTmuxReadinessResult> {
+  const commands: string[] = [];
+  try {
+    const exists = await core.hasSession(sessionName);
+    commands.push(exists.command);
+    return {
+      ready: exists.exists,
+      commands,
+      sessionExists: exists.exists,
+      sessionExistsCommand: exists.command,
+    };
+  } catch (error) {
+    return {
+      ready: false,
+      commands,
+      lastError: `session existence check failed: ${describeUnknownError(error)}`,
+    };
+  }
+}
+
 export async function startCodexResumeTmuxSession(
   params: StartCodexResumeTmuxSessionParams,
   core: TmuxCore = tmuxCore,
@@ -318,8 +341,8 @@ export async function startCodexResumeTmuxSession(
     command: codexCommand,
     recreate: true,
   });
-  const ready = await waitForCodexResumeTmuxReady(params.sessionName, core);
-  if (!ready.ready) {
+  const startedCheck = await checkCodexResumeTmuxStarted(params.sessionName, core);
+  if (!startedCheck.ready) {
     let killCommand: string | undefined;
     try {
       killCommand = await core.killSession(params.sessionName, { ignoreMissing: true });
@@ -331,22 +354,22 @@ export async function startCodexResumeTmuxSession(
     }
     const launchOutput = readRecentFile(launchLogPath);
     cleanupLaunchLog(launchLogPath);
-    const reason = ready.sessionExists === false
+    const reason = startedCheck.sessionExists === false
       ? 'tmux session disappeared after new-session; the Codex TUI process likely exited immediately'
-      : ready.lastError
-        ? `ready probe failed: ${ready.lastError}`
-        : 'Codex TUI started but did not show the idle input prompt before timeout';
+      : startedCheck.lastError
+        ? `tmux launch check failed: ${startedCheck.lastError}`
+        : 'tmux session did not survive after new-session';
     const details: CodexResumeTmuxLaunchFailureDetails = {
       sessionName: params.sessionName,
       threadId: params.threadId,
       bridgeSessionId: params.bridgeSessionId,
       workingDirectory: params.workingDirectory,
       reason,
-      commands: [...started.commands, ...ready.commands, ...(killCommand ? [killCommand] : [])],
-      lastScreen: screenExcerpt(ready.lastScreen),
-      lastError: ready.lastError,
-      sessionExists: ready.sessionExists,
-      sessionExistsCommand: ready.sessionExistsCommand,
+      commands: [...started.commands, ...startedCheck.commands, ...(killCommand ? [killCommand] : [])],
+      lastScreen: screenExcerpt(startedCheck.lastScreen),
+      lastError: startedCheck.lastError,
+      sessionExists: startedCheck.sessionExists,
+      sessionExistsCommand: startedCheck.sessionExistsCommand,
       killCommand,
       launchLogPath,
       launchOutput: screenExcerpt(launchOutput),
@@ -373,8 +396,8 @@ export async function startCodexResumeTmuxSession(
     sessionName: params.sessionName,
     codexCommand,
     tmuxCommand: started.command || '',
-    commands: [...started.commands, ...ready.commands],
-    ready: ready.ready,
+    commands: [...started.commands, ...startedCheck.commands],
+    ready: true,
     launchLogPath,
   };
 }

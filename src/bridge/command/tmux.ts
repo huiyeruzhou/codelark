@@ -566,7 +566,7 @@ async function ensureCodexTmuxSessionForProvider(
       target,
       commands: [exists.command],
       recovered: false,
-      error: `tmux session 不存在：${target}。请先发送 \`/provider tmux\` 重新启动 Codex TUI，或发送 \`/tmux-new ${target}\` 手动创建。`,
+      error: `tmux session 不存在：${target}。请先发送 \`/provider tmux\` 重新启动 Codex TUI。`,
     };
   }
 

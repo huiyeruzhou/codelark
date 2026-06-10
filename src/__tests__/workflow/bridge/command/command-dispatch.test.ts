@@ -2737,14 +2737,12 @@ enabled = true
     assert.match(sent.at(-1)?.text || '', /\/p tmux/);
   });
 
-  it('does not persist tmux provider state when the launched Codex tmux never becomes ready', async () => {
+  it('does not persist tmux provider state when the launched Codex tmux exits immediately', async () => {
     const previousEnv = {
       PATH: process.env.PATH,
       TMUX_FAKE_LOG: process.env.TMUX_FAKE_LOG,
       TMUX_FAKE_READY_AFTER_CAPTURES: process.env.TMUX_FAKE_READY_AFTER_CAPTURES,
       TMUX_FAKE_LAUNCH_STDERR: process.env.TMUX_FAKE_LAUNCH_STDERR,
-      CODELARK_CODEX_RESUME_TMUX_READY_TIMEOUT_MS: process.env.CODELARK_CODEX_RESUME_TMUX_READY_TIMEOUT_MS,
-      CODELARK_CODEX_RESUME_TMUX_READY_POLL_MS: process.env.CODELARK_CODEX_RESUME_TMUX_READY_POLL_MS,
     };
     const fakeTmux = installFakeTmux();
     const previousConsoleError = console.error;
@@ -2754,8 +2752,6 @@ enabled = true
     process.env.TMUX_FAKE_LOG = fakeTmux.logPath;
     process.env.TMUX_FAKE_READY_AFTER_CAPTURES = '999';
     process.env.TMUX_FAKE_LAUNCH_STDERR = 'bash: codex: command not found\n[codelark] process exited with status 127\n';
-    process.env.CODELARK_CODEX_RESUME_TMUX_READY_TIMEOUT_MS = '100';
-    process.env.CODELARK_CODEX_RESUME_TMUX_READY_POLL_MS = '50';
     console.error = (...args: any[]) => { errorLogs.push(args); };
     console.warn = () => {};
 
@@ -2827,12 +2823,69 @@ enabled = true
       else process.env.TMUX_FAKE_READY_AFTER_CAPTURES = previousEnv.TMUX_FAKE_READY_AFTER_CAPTURES;
       if (previousEnv.TMUX_FAKE_LAUNCH_STDERR === undefined) delete process.env.TMUX_FAKE_LAUNCH_STDERR;
       else process.env.TMUX_FAKE_LAUNCH_STDERR = previousEnv.TMUX_FAKE_LAUNCH_STDERR;
-      if (previousEnv.CODELARK_CODEX_RESUME_TMUX_READY_TIMEOUT_MS === undefined) delete process.env.CODELARK_CODEX_RESUME_TMUX_READY_TIMEOUT_MS;
-      else process.env.CODELARK_CODEX_RESUME_TMUX_READY_TIMEOUT_MS = previousEnv.CODELARK_CODEX_RESUME_TMUX_READY_TIMEOUT_MS;
-      if (previousEnv.CODELARK_CODEX_RESUME_TMUX_READY_POLL_MS === undefined) delete process.env.CODELARK_CODEX_RESUME_TMUX_READY_POLL_MS;
-      else process.env.CODELARK_CODEX_RESUME_TMUX_READY_POLL_MS = previousEnv.CODELARK_CODEX_RESUME_TMUX_READY_POLL_MS;
       console.error = previousConsoleError;
       console.warn = previousConsoleWarn;
+      fs.rmSync(fakeTmux.binDir, { recursive: true, force: true });
+    }
+  });
+
+  it('omits manual tmux-new guidance when a Codex provider tmux session is missing', async () => {
+    const store = initTestContext({ settings: { bridge_claude_provider: 'pty' } });
+    const fakeTmux = installFakeTmux();
+    const previousEnv = {
+      PATH: process.env.PATH,
+      TMUX_FAKE_LOG: process.env.TMUX_FAKE_LOG,
+    };
+    process.env.PATH = `${fakeTmux.binDir}${path.delimiter}${previousEnv.PATH || ''}`;
+    process.env.TMUX_FAKE_LOG = fakeTmux.logPath;
+
+    try {
+      const sent: any[] = [];
+      const adapter = createGroupCapableAdapter({ sent });
+      const address = { channelType: 'feishu', chatId: 'chat-provider-tmux-missing-screen' } as const;
+      const session = store.createSession('tmux-missing-session', 'test-model', undefined, os.tmpdir(), 'normal');
+      const tmuxSessionName = 'codex_missing-thread';
+      store.updateSession(session.id, {
+        runtime: {
+          general: { tmuxSessionName },
+          codex: { threadId: 'missing-thread' },
+        },
+      });
+      createConfigService({ migrate: false, env: {} }).set(
+        { kind: 'session', sessionId: session.id },
+        { runtime: { codex: { provider: 'tmux' } } },
+      );
+      store.upsertChannelChat({
+        channelType: address.channelType,
+        chatId: address.chatId,
+        bridgeSessionId: session.id,
+      });
+
+      await handleBridgeCommand(
+        adapter,
+        {
+          address,
+          text: '/tmux-screen',
+          messageId: 'incoming-provider-tmux-missing-screen',
+        } as any,
+        '/tmux-screen',
+        {
+          getActiveTask: () => undefined,
+          diagnoseSessionHealth: async () => null,
+          diagnoseAllActiveSessions: async () => [],
+          reconcileMirrorSubscriptions: async () => {},
+        },
+      );
+
+      const responseText = sent.at(-1)?.text || '';
+      assert.match(responseText, new RegExp(`tmux session 不存在：${tmuxSessionName}`));
+      assert.match(responseText, /请先发送 `\/provider tmux` 重新启动 Codex TUI。/);
+      assert.doesNotMatch(responseText, /\/tmux-new/);
+      assert.doesNotMatch(responseText, /手动创建/);
+    } finally {
+      process.env.PATH = previousEnv.PATH;
+      if (previousEnv.TMUX_FAKE_LOG === undefined) delete process.env.TMUX_FAKE_LOG;
+      else process.env.TMUX_FAKE_LOG = previousEnv.TMUX_FAKE_LOG;
       fs.rmSync(fakeTmux.binDir, { recursive: true, force: true });
     }
   });
