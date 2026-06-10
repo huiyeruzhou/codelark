@@ -357,7 +357,7 @@ function shouldOverlayEnv(context: MigrationContext, hasJson: boolean): boolean 
   if (!hasJson) return true;
   const envMtime = fs.statSync(context.paths.legacyConfigEnv).mtimeMs;
   const jsonMtime = fs.statSync(context.paths.legacyConfigJson).mtimeMs;
-  return envMtime > jsonMtime;
+  return envMtime >= jsonMtime;
 }
 
 function readLegacyJson(context: MigrationContext): LegacyConfigFile | null {

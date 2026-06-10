@@ -346,41 +346,63 @@ function createGroupCapableAdapter(options: {
 function installFakeTmux(): { binDir: string; logPath: string } {
   const binDir = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-fake-tmux-'));
   const logPath = path.join(binDir, 'tmux.log');
+  const statePath = path.join(binDir, 'tmux.sessions');
   const tmuxPath = path.join(binDir, 'tmux');
   fs.writeFileSync(logPath, '', 'utf-8');
+  fs.writeFileSync(statePath, '', 'utf-8');
   fs.writeFileSync(tmuxPath, `#!/usr/bin/env bash
-printf '%s\\n' "$*" >> "$TMUX_FAKE_LOG"
-case "$1" in
-  list-sessions)
-    printf 'alpha\\t1\\t0\\t0\\t0\\n'
-    printf 'beta\\t2\\t1\\t0\\t0\\n'
-    exit 0
-    ;;
-  has-session)
-    target="$3"
-    if [[ "$target" == "alpha" || "$target" == "beta" || "$target" == "codex_existing" ]]; then
-      exit 0
-    fi
-    if [[ ",$TMUX_FAKE_EXISTING_SESSIONS," == *",$target,"* ]]; then
-      exit 0
-    fi
-    exit 1
-    ;;
-  kill-session)
-    exit 0
-    ;;
-  new-session)
-    if [[ -n "\${TMUX_FAKE_LAUNCH_STDERR:-}" ]]; then
-      command_text="\${*: -1}"
-      log_path="\${command_text#* 2> }"
-      log_path="\${log_path%%;*}"
-      log_path="\${log_path%'}"
-      log_path="\${log_path#'}"
-      mkdir -p "$(dirname "$log_path")"
-      printf '%b' "$TMUX_FAKE_LAUNCH_STDERR" > "$log_path"
-    fi
-    exit 0
-    ;;
+	printf '%s\\n' "$*" >> "$TMUX_FAKE_LOG"
+	state_file="${statePath}"
+	target_exists() {
+	  local target="$1"
+	  if [[ "$target" == "alpha" || "$target" == "beta" || "$target" == "codex_existing" ]]; then
+	    return 0
+	  fi
+	  if [[ ",$TMUX_FAKE_EXISTING_SESSIONS," == *",$target,"* ]]; then
+	    return 0
+	  fi
+	  if [[ -f "$state_file" ]] && grep -Fxq -- "$target" "$state_file"; then
+	    return 0
+	  fi
+	  return 1
+	}
+	case "$1" in
+	  list-sessions)
+	    printf 'alpha\\t1\\t0\\t0\\t0\\n'
+	    printf 'beta\\t2\\t1\\t0\\t0\\n'
+	    exit 0
+	    ;;
+	  has-session)
+	    target="$3"
+	    target_exists "$target"
+	    exit $?
+	    ;;
+	  kill-session)
+	    exit 0
+	    ;;
+	  new-session)
+	    target=""
+	    prev=""
+	    for arg in "$@"; do
+	      if [[ "$prev" == "-s" ]]; then
+	        target="$arg"
+	        break
+	      fi
+	      prev="$arg"
+	    done
+	    if [[ -n "\${TMUX_FAKE_LAUNCH_STDERR:-}" ]]; then
+	      command_text="\${*: -1}"
+	      log_path="\${command_text#* 2> }"
+	      log_path="\${log_path%%;*}"
+	      log_path="\${log_path%'}"
+	      log_path="\${log_path#'}"
+	      mkdir -p "$(dirname "$log_path")"
+	      printf '%b' "$TMUX_FAKE_LAUNCH_STDERR" > "$log_path"
+	    elif [[ -n "$target" ]]; then
+	      printf '%s\\n' "$target" >> "$state_file"
+	    fi
+	    exit 0
+	    ;;
   send-keys)
     previous=''
     for arg in "$@"; do
@@ -405,14 +427,18 @@ case "$1" in
     fi
     target=""
     prev=""
-    for arg in "$@"; do
-      if [[ "$prev" == "-t" ]]; then
-        target="$arg"
-        break
-      fi
-      prev="$arg"
-    done
-    ready_after="\${TMUX_FAKE_READY_AFTER_CAPTURES:-0}"
+	    for arg in "$@"; do
+	      if [[ "$prev" == "-t" ]]; then
+	        target="$arg"
+	        break
+	      fi
+	      prev="$arg"
+	    done
+	    if ! target_exists "$target"; then
+	      printf "can't find pane %s\\n" "$target" >&2
+	      exit 1
+	    fi
+	    ready_after="\${TMUX_FAKE_READY_AFTER_CAPTURES:-0}"
     safe_target="\${target//[^A-Za-z0-9_.-]/_}"
     count_file="$TMUX_FAKE_LOG.\${safe_target:-default}.captures"
     count=0

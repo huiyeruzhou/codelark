@@ -15,6 +15,7 @@ import {
 } from './session-jsonl.js';
 
 const DEFAULT_PROMPT_DELAY_MS = 1_000;
+const DEFAULT_SUBMIT_DELAY_MS = 75;
 const DEFAULT_TRUST_PROMPT_TIMEOUT_MS = 5_000;
 const DEFAULT_AFTER_TRUST_DELAY_MS = 2_500;
 const DEFAULT_INPUT_READY_TIMEOUT_MS = 10_000;
@@ -316,6 +317,8 @@ async function writePrompt(child: PtyProcess, prompt: string): Promise<void> {
       await sleep(25);
     }
   }
+  const submitDelayMs = parsePositiveIntEnv('CODELARK_CLAUDE_PTY_SUBMIT_DELAY_MS', DEFAULT_SUBMIT_DELAY_MS, 0);
+  if (submitDelayMs > 0) await sleep(submitDelayMs);
   child.write('\r');
 }
 
@@ -482,7 +485,8 @@ export function streamClaudePtyTui(params: StreamChatParams): ReadableStream<str
             }));
           }
           const screen = await waitForQuietScreen(session);
-          const claudeJsonlSession = findLatestClaudeSessionJsonlUpdatedAfter(session.cwd, promptStartedAtMs);
+          const claudeJsonlSession = findLatestClaudeSessionJsonlUpdatedAfter(session.cwd, promptStartedAtMs)
+            || await waitForClaudeSessionJsonlUpdatedAfter(session.cwd, promptStartedAtMs);
           controller.enqueue(sseEvent('text', screen || '(Claude Code TUI has not produced visible output yet.)'));
           controller.enqueue(sseEvent('result', {
             ...(claudeJsonlSession?.sessionId || params.claudeSessionId

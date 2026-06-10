@@ -3,10 +3,15 @@ import os from 'node:os';
 import path from 'node:path';
 
 import {
+  buildCodexTuiSelectionChoiceActions,
   buildCodexTuiArgs,
   buildCodexTuiEnv,
   buildCodexTuiShellCommand,
+  parseCodexTuiSelectionPrompt,
   parsePositiveIntEnv,
+  type CodexTuiSelectionPrompt,
+  type CodexTuiSelectionPromptChoice,
+  type CodexTuiSelectionPromptKind,
 } from '../../runtime/codex/tmux-provider.js';
 import { resolveCodexCliExecutable } from '../../runtime/codex/cli-executable.js';
 import type { StreamChatParams } from '../../runtime/contracts.js';
@@ -54,6 +59,9 @@ export interface CodexResumeTmuxReadinessResult {
   lastError?: string;
   sessionExists?: boolean;
   sessionExistsCommand?: string;
+  selectionPromptKind?: CodexTuiSelectionPromptKind;
+  selectionPromptChoice?: CodexTuiSelectionPromptChoice;
+  selectionPromptSummary?: string;
 }
 
 export interface CodexResumeTmuxLaunchFailureDetails {
@@ -67,6 +75,9 @@ export interface CodexResumeTmuxLaunchFailureDetails {
   lastError?: string;
   sessionExists?: boolean;
   sessionExistsCommand?: string;
+  selectionPromptKind?: CodexTuiSelectionPromptKind;
+  selectionPromptChoice?: CodexTuiSelectionPromptChoice;
+  selectionPromptSummary?: string;
   killCommand?: string;
   launchLogPath?: string;
   launchOutput?: string;
@@ -218,6 +229,7 @@ function screenExcerpt(screen: string | undefined): string | undefined {
 }
 
 export function hasCodexResumeTmuxReadyPrompt(screenText: string): boolean {
+  if (parseCodexTuiSelectionPrompt(screenText)) return false;
   const normalized = screenText
     .replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, '')
     .replace(/\r\n/g, '\n')
@@ -226,6 +238,14 @@ export function hasCodexResumeTmuxReadyPrompt(screenText: string): boolean {
   if (!normalized.trim()) return false;
   return /OpenAI\s+Codex|Codex\s+TUI|codex/i.test(normalized)
     && /(?:^|\n)\s*[›>]\s*(?:[^\n]*)?(?:$|\n)|\?\s+for\s+shortcuts|What\s+would\s+you\s+like/i.test(normalized);
+}
+
+function defaultCodexResumeStartupSelectionChoice(
+  prompt: CodexTuiSelectionPrompt,
+): CodexTuiSelectionPromptChoice | null {
+  if (prompt.kind === 'update') return 'skip';
+  if (prompt.kind === 'goal') return 'cancel';
+  return null;
 }
 
 export async function waitForCodexResumeTmuxReady(
@@ -250,14 +270,52 @@ export async function waitForCodexResumeTmuxReady(
   let lastError: string | undefined;
   let sessionExists: boolean | undefined;
   let sessionExistsCommand: string | undefined;
+  let selectionPromptKind: CodexTuiSelectionPromptKind | undefined;
+  let selectionPromptChoice: CodexTuiSelectionPromptChoice | undefined;
+  let selectionPromptSummary: string | undefined;
+  const handledSelectionFingerprints = new Set<string>();
   while (Date.now() <= deadline) {
     try {
       const capture = await core.capturePane(sessionName, 80);
       commands.push(capture.command);
       lastScreen = capture.screen;
       lastError = undefined;
+      const selectionPrompt = parseCodexTuiSelectionPrompt(capture.screen);
+      if (selectionPrompt) {
+        selectionPromptKind = selectionPrompt.kind;
+        selectionPromptSummary = selectionPrompt.summary;
+        const choice = defaultCodexResumeStartupSelectionChoice(selectionPrompt);
+        if (!choice) {
+          return {
+            ready: false,
+            commands,
+            lastScreen,
+            sessionExists: true,
+            selectionPromptKind,
+            selectionPromptSummary,
+          };
+        }
+        selectionPromptChoice = choice;
+        if (!handledSelectionFingerprints.has(selectionPrompt.fingerprint)) {
+          handledSelectionFingerprints.add(selectionPrompt.fingerprint);
+          const actions = buildCodexTuiSelectionChoiceActions(selectionPrompt, choice);
+          if (actions.length > 0) {
+            const sent = await core.sendActions(sessionName, actions);
+            commands.push(...sent.commands);
+          }
+        }
+        await sleep(pollMs);
+        continue;
+      }
       if (hasCodexResumeTmuxReadyPrompt(capture.screen)) {
-        return { ready: true, commands, lastScreen };
+        return {
+          ready: true,
+          commands,
+          lastScreen,
+          ...(selectionPromptKind ? { selectionPromptKind } : {}),
+          ...(selectionPromptChoice ? { selectionPromptChoice } : {}),
+          ...(selectionPromptSummary ? { selectionPromptSummary } : {}),
+        };
       }
     } catch (error) {
       lastError = describeUnknownError(error);
@@ -302,31 +360,21 @@ export async function waitForCodexResumeTmuxReady(
     session_exists: sessionExists,
     last_error: lastError,
     last_screen_excerpt: screenExcerpt(lastScreen),
+    selection_prompt_kind: selectionPromptKind,
+    selection_prompt_choice: selectionPromptChoice,
+    selection_prompt_summary: screenExcerpt(selectionPromptSummary),
   });
-  return { ready: false, commands, lastScreen, lastError, sessionExists, sessionExistsCommand };
-}
-
-async function checkCodexResumeTmuxStarted(
-  sessionName: string,
-  core: TmuxCore = tmuxCore,
-): Promise<CodexResumeTmuxReadinessResult> {
-  const commands: string[] = [];
-  try {
-    const exists = await core.hasSession(sessionName);
-    commands.push(exists.command);
-    return {
-      ready: exists.exists,
-      commands,
-      sessionExists: exists.exists,
-      sessionExistsCommand: exists.command,
-    };
-  } catch (error) {
-    return {
-      ready: false,
-      commands,
-      lastError: `session existence check failed: ${describeUnknownError(error)}`,
-    };
-  }
+  return {
+    ready: false,
+    commands,
+    lastScreen,
+    lastError,
+    sessionExists,
+    sessionExistsCommand,
+    selectionPromptKind,
+    selectionPromptChoice,
+    selectionPromptSummary,
+  };
 }
 
 export async function startCodexResumeTmuxSession(
@@ -341,7 +389,7 @@ export async function startCodexResumeTmuxSession(
     command: codexCommand,
     recreate: true,
   });
-  const startedCheck = await checkCodexResumeTmuxStarted(params.sessionName, core);
+  const startedCheck = await waitForCodexResumeTmuxReady(params.sessionName, core);
   if (!startedCheck.ready) {
     let killCommand: string | undefined;
     try {
@@ -356,6 +404,8 @@ export async function startCodexResumeTmuxSession(
     cleanupLaunchLog(launchLogPath);
     const reason = startedCheck.sessionExists === false
       ? 'tmux session disappeared after new-session; the Codex TUI process likely exited immediately'
+      : startedCheck.selectionPromptKind
+        ? `Codex TUI is waiting at a ${startedCheck.selectionPromptKind} selection prompt during startup`
       : startedCheck.lastError
         ? `tmux launch check failed: ${startedCheck.lastError}`
         : 'tmux session did not survive after new-session';
@@ -370,6 +420,9 @@ export async function startCodexResumeTmuxSession(
       lastError: startedCheck.lastError,
       sessionExists: startedCheck.sessionExists,
       sessionExistsCommand: startedCheck.sessionExistsCommand,
+      selectionPromptKind: startedCheck.selectionPromptKind,
+      selectionPromptChoice: startedCheck.selectionPromptChoice,
+      selectionPromptSummary: screenExcerpt(startedCheck.selectionPromptSummary),
       killCommand,
       launchLogPath,
       launchOutput: screenExcerpt(launchOutput),
@@ -383,6 +436,9 @@ export async function startCodexResumeTmuxSession(
       session_exists: details.sessionExists,
       last_error: details.lastError,
       last_screen_excerpt: details.lastScreen,
+      selection_prompt_kind: details.selectionPromptKind,
+      selection_prompt_choice: details.selectionPromptChoice,
+      selection_prompt_summary: details.selectionPromptSummary,
       launch_log_path: details.launchLogPath,
       launch_output_excerpt: details.launchOutput,
       commands: details.commands,
