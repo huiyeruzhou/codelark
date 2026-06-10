@@ -3,9 +3,11 @@ import { createConfigService } from '../../../configuration/service.js';
 import type { BridgeStore, ChannelChat, InboundMessage } from '../../../domain/index.js';
 import {
   getSessionActiveRuntime,
+  getSessionRuntimeTmuxSessionName,
   getSessionWorkingDirectory,
   setSessionActiveRuntimeUpdate,
 } from '../../../domain/session-runtime.js';
+import { cleanupRuntimeTmuxSession } from '../../tmux/runtime.js';
 import * as router from '../channel-router.js';
 import {
   ensureWorkingDirectoryExists,
@@ -151,6 +153,23 @@ export async function handleClearSessionCommand(options: {
     }
     options.deps.recordInteractiveHealthEnd?.(previousBinding.bridgeSessionId, 'aborted', detail);
   }
+  const previousRuntimeTmuxSessionName = getSessionRuntimeTmuxSessionName(previousSession);
+  let cleanedTmuxSessionName: string | null = null;
+  if (previousRuntimeTmuxSessionName) {
+    const cleanup = await cleanupRuntimeTmuxSession({
+      runtime: getSessionActiveRuntime(previousSession) || 'codex',
+      sessionName: previousRuntimeTmuxSessionName,
+    });
+    if (cleanup.error) {
+      console.warn('[clear-session] Failed to clean up previous runtime tmux session:', {
+        bridge_session_id: previousSession?.id,
+        tmux_session: previousRuntimeTmuxSessionName,
+        error: cleanup.error,
+      });
+    } else if (cleanup.killed) {
+      cleanedTmuxSessionName = previousRuntimeTmuxSessionName;
+    }
+  }
 
   const resolved = resolveNewSessionWorkingDirectory(parsed.pathArgs, previousBinding, previousSession);
   if (!resolved.ok) return { response: resolved.message };
@@ -219,6 +238,7 @@ export async function handleClearSessionCommand(options: {
         previousBinding && runningReasons.length > 0
           ? '旧任务已按确认请求终止；当前聊天已切到新的 BridgeSession。'
           : '当前聊天已切到新的 BridgeSession。',
+        ...(cleanedTmuxSessionName ? [`已清理旧 tmux Provider session：${cleanedTmuxSessionName}`] : []),
         CLEAR_SESSION_ARG_RULE_NOTE,
       ],
       options.markdown,

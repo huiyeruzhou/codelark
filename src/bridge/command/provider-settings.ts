@@ -18,9 +18,8 @@ import {
   CodexResumeTmuxLaunchError,
   claudeTmuxSessionName,
   codexTmuxSessionName,
-  startCodexResumeTmuxSession,
+  startRuntimeTmuxSession,
 } from '../tmux/runtime.js';
-import { startClaudeTmuxSession } from '../../runtime/claude/tmux-provider.js';
 import { getCodexThreadId } from '../turn/turn-classifier.js';
 import {
   resolveEffectiveClaudeProvider,
@@ -189,13 +188,14 @@ export async function handleProviderCommand(options: {
         markdown: options.markdown,
       });
     }
-    let claudeTmuxStartResult: Awaited<ReturnType<typeof startClaudeTmuxSession>> | null = null;
+    let claudeTmuxStartResult: { existed: boolean } | null = null;
     if (requestedProvider === 'tmux') {
       const tmuxSessionName = claudeTmuxSessionName(getSessionClaudeSessionId(session) || session.id);
       const claudeConfig = resolveClaudeRuntimeConfig(session, binding);
       try {
         await options.deps.notifyBackgroundOperation?.(`正在启动 tmux 后台会话 \`${tmuxSessionName}\` 并运行 Claude Code TUI。`);
-        claudeTmuxStartResult = await startClaudeTmuxSession({
+        claudeTmuxStartResult = await startRuntimeTmuxSession({
+          runtime: 'claude',
           sessionName: tmuxSessionName,
           bridgeSessionId: session.id,
           workingDirectory: getSessionWorkingDirectory(session),
@@ -203,6 +203,7 @@ export async function handleProviderCommand(options: {
           model: claudeConfig.model,
           permissionMode: claudeConfig.permissionMode,
           reasoningEffort: claudeConfig.reasoningEffort,
+          recreate: true,
         });
       } catch (error) {
         const unavailable = formatTmuxProviderUnavailable(error);
@@ -329,10 +330,11 @@ export async function handleProviderCommand(options: {
     );
   }
   const tmuxSessionName = codexTmuxSessionName(threadId);
-  let startResult: Awaited<ReturnType<typeof startCodexResumeTmuxSession>>;
+  let startResult: { existed: boolean };
   try {
     await options.deps.notifyBackgroundOperation?.(`正在启动 tmux 后台会话 \`${tmuxSessionName}\` 并 resume 当前 Codex thread。`);
-    startResult = await startCodexResumeTmuxSession({
+    startResult = await startRuntimeTmuxSession({
+      runtime: 'codex',
       sessionName: tmuxSessionName,
       threadId,
       bridgeSessionId: session.id,

@@ -1,8 +1,13 @@
 import type { BaseChannelAdapter } from '../../../channels/contracts.js';
-import type { BridgeStore, ChannelChat, InboundMessage } from '../../../domain/index.js';
-import { getSessionWorkingDirectory } from '../../../domain/session-runtime.js';
+import type { BridgeSession, BridgeStore, ChannelChat, InboundMessage } from '../../../domain/index.js';
+import {
+  getSessionActiveRuntime,
+  getSessionRuntimeTmuxSessionName,
+  getSessionWorkingDirectory,
+} from '../../../domain/session-runtime.js';
 import type { SessionRegistryService } from '../registry.js';
 import { getBridgeSessionDisplayTitle } from '../display/session-display-query.js';
+import { cleanupRuntimeTmuxSession } from '../../tmux/runtime.js';
 import * as router from '../channel-router.js';
 import { clearPendingTakeoverConfirmation } from '../../command/takeover-confirmations.js';
 import {
@@ -36,6 +41,23 @@ import {
   type SessionCommandDeps,
   type SessionCommandResult,
 } from './types.js';
+
+async function cleanupBridgeSessionRuntimeTmuxBestEffort(session: BridgeSession | null | undefined, reason: string): Promise<void> {
+  const sessionName = getSessionRuntimeTmuxSessionName(session);
+  if (!sessionName) return;
+  const cleanup = await cleanupRuntimeTmuxSession({
+    runtime: getSessionActiveRuntime(session) || 'codex',
+    sessionName,
+  });
+  if (cleanup.error) {
+    console.warn('[thread-binding] Failed to clean up runtime tmux session:', {
+      reason,
+      bridge_session_id: session?.id,
+      tmux_session: sessionName,
+      error: cleanup.error,
+    });
+  }
+}
 
 export async function handleThreadBindingCommand(options: {
   adapter: BaseChannelAdapter;
@@ -162,6 +184,7 @@ export async function handleThreadBindingCommand(options: {
           const bindingsBeforeArchive = options.store.listChannelChats()
             .filter((binding) => binding.bridgeSessionId === session.id);
           try {
+            await cleanupBridgeSessionRuntimeTmuxBestEffort(session, 'bridge archive by binding');
             createCommandSessionRegistry(options.store).deleteBridgeSession(session.id);
           } catch (error) {
             return { response: toUserVisibleBindingError(error, '归档 Bridge 会话失败。') };
@@ -203,6 +226,7 @@ export async function handleThreadBindingCommand(options: {
         const bindingsBeforeArchive = options.store.listChannelChats()
           .filter((binding) => binding.bridgeSessionId === selected.bridgeSession!.id);
         try {
+          await cleanupBridgeSessionRuntimeTmuxBestEffort(selected.bridgeSession, 'bridge archive by selected bridge session');
           createCommandSessionRegistry(options.store).deleteBridgeSession(selected.bridgeSession.id);
         } catch (error) {
           return { response: toUserVisibleBindingError(error, '归档 Bridge 会话失败。') };
@@ -238,6 +262,7 @@ export async function handleThreadBindingCommand(options: {
           const bindingsBeforeArchive = options.store.listChannelChats()
             .filter((binding) => binding.bridgeSessionId === bridgeOnlyMatch.session!.id);
           try {
+            await cleanupBridgeSessionRuntimeTmuxBestEffort(bridgeOnlyMatch.session, 'bridge archive by token');
             createCommandSessionRegistry(options.store).deleteBridgeSession(bridgeOnlyMatch.session.id);
           } catch (error) {
             return { response: toUserVisibleBindingError(error, '归档 Bridge 会话失败。') };
@@ -302,6 +327,7 @@ export async function handleThreadBindingCommand(options: {
         .filter((binding) => binding.bridgeSessionId === bridgeSessionBeforeArchive?.id);
       let result: ReturnType<SessionRegistryService['archiveClaudeThread']>;
       try {
+        await cleanupBridgeSessionRuntimeTmuxBestEffort(bridgeSessionBeforeArchive, 'claude archive');
         result = createCommandSessionRegistry(options.store).archiveClaudeThread(threadId, cwd);
       } catch (error) {
         return { response: toUserVisibleBindingError(error, '归档本地 Claude Code 会话失败。') };
@@ -338,6 +364,7 @@ export async function handleThreadBindingCommand(options: {
 
     let result: ReturnType<SessionRegistryService['archiveCodexThread']>;
     try {
+      await cleanupBridgeSessionRuntimeTmuxBestEffort(bridgeSessionBeforeArchive, 'codex archive');
       result = createCommandSessionRegistry(options.store).archiveCodexThread(threadId);
     } catch (error) {
       return { response: toUserVisibleBindingError(error, '归档本地 Codex 会话失败。') };
