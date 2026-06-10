@@ -85,6 +85,7 @@ import {
   type ShellCommandRunner,
 } from './shell.js';
 import type { AutoTaskCardAction } from './callbacks.js';
+import { parseCommandCallbackData } from './callbacks.js';
 import {
   handleTerminalDispatchCommand,
   isTerminalRawInputCommand,
@@ -122,10 +123,23 @@ function extractCardActionMessageId(raw: unknown): string {
   return '';
 }
 
+function fallbackThreadCardScopeForCallback(msg: InboundMessage): ThreadCardScope | undefined {
+  const callbackData = typeof msg.callbackData === 'string' ? msg.callbackData : '';
+  const parsed = callbackData ? parseCommandCallbackData(callbackData) : undefined;
+  const commandText = parsed && 'commandText' in parsed ? parsed.commandText : '';
+  if (commandText.startsWith('/current')) return 'current';
+  if (commandText.startsWith('/set')) return 'set';
+  return undefined;
+}
+
 function richCardUpdateMessageIdForCommand(msg: InboundMessage): string | undefined {
   const explicit = msg.callbackMessageId?.trim();
   if (explicit) return explicit;
-  return extractCardActionMessageId(msg.raw) || undefined;
+  const extracted = extractCardActionMessageId(msg.raw);
+  if (extracted) return extracted;
+  const scope = fallbackThreadCardScopeForCallback(msg);
+  if (!scope) return undefined;
+  return getThreadTableMessageRecord(msg.address, scope)?.messageId || undefined;
 }
 
 function normalizeFormString(value: unknown): string {

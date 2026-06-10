@@ -1369,6 +1369,88 @@ describe('bridge command e2e', () => {
     assert.equal(createConfigService({ migrate: false, env: {} }).get('runtime.claude.reasoningEffort'), 'max');
   });
 
+  it('keeps /set and /current card callbacks in place when Feishu omits card message ids', async () => {
+    const previousAgent = process.env.CODELARK_AGENT;
+    process.env.CODELARK_AGENT = 'codex';
+    try {
+      const store = initBridgeTestContext({ dynamicSettings: true });
+      const adapter = new RecordingAdapter();
+      const setAddress = { channelType: 'feishu', chatId: 'chat-set-missing-message-id', chatKind: 'group' as const } as const;
+
+      await _testOnly.handleMessage(adapter, inboundMessage(setAddress, '/set', 'incoming-set-missing-id-initial'));
+      assert.equal(adapter.sent.at(-1)?.richCard?.updateKey, `thread-card:set:${setAddress.channelType}:${setAddress.chatId}`);
+      assert.equal(adapter.sent.at(-1)?.richCardUpdateMessageId, undefined);
+
+      await _testOnly.handleMessage(adapter, {
+        ...inboundMessage(setAddress, '', 'incoming-set-missing-id-submit'),
+        callbackData: buildCommandCallbackData('/set --group runtime'),
+        raw: {
+          event: {
+            action: {
+              form_value: {
+                rt: 'claude',
+              },
+            },
+          },
+        },
+      });
+
+      const runtimeSelect = adapter.sent.at(-1)?.richCard?.form?.selects?.find((select: any) => select.elementId === 'runtime');
+      assert.equal(adapter.sent.at(-1)?.richCardUpdateMessageId, 'reply-1');
+      assert.equal(runtimeSelect?.selectedCallbackData, 'claude');
+      assert.equal(createConfigService({ migrate: false, env: {} }).get('runtime.agent'), 'claude');
+      assert.equal(createConfigService({ migrate: false }).get('runtime.agent'), 'codex');
+
+      const currentAddress = { channelType: 'feishu', chatId: 'chat-current-missing-message-id', chatKind: 'group' as const } as const;
+      createExistingChannelChat(store, currentAddress, {
+        workDir: '/tmp/current-missing-message-id',
+        name: 'Current Missing Message Id',
+      });
+
+      await _testOnly.handleMessage(adapter, inboundMessage(currentAddress, '/current', 'incoming-current-missing-id-initial'));
+      assert.equal(adapter.sent.at(-1)?.richCard?.updateKey, `thread-card:current:${currentAddress.channelType}:${currentAddress.chatId}`);
+      assert.equal(adapter.sent.at(-1)?.richCardUpdateMessageId, undefined);
+
+      await _testOnly.handleMessage(adapter, {
+        ...inboundMessage(currentAddress, '', 'incoming-current-missing-id-refresh'),
+        callbackData: buildCommandCallbackData('/current'),
+        raw: {
+          event: {
+            action: {
+              value: {
+                callback_data: buildCommandCallbackData('/current'),
+              },
+            },
+          },
+        },
+      });
+      assert.equal(adapter.sent.at(-1)?.richCardUpdateMessageId, 'reply-3');
+
+      await _testOnly.handleMessage(adapter, {
+        ...inboundMessage(currentAddress, '', 'incoming-current-missing-id-submit'),
+        callbackData: buildCommandCallbackData('/current-config codex'),
+        raw: {
+          event: {
+            action: {
+              form_value: {
+                clk_name: 'Current Missing Message Id Updated',
+              },
+            },
+          },
+        },
+      });
+      assert.equal(adapter.sent.at(-1)?.richCardUpdateMessageId, 'reply-3');
+      assert.match(adapter.sent.at(-1)?.text || '', /已保存当前会话配置/);
+      assert.equal(adapter.sent.at(-1)?.richCard?.form?.inputDefaultValue, 'Current Missing Message Id Updated');
+    } finally {
+      if (previousAgent === undefined) {
+        delete process.env.CODELARK_AGENT;
+      } else {
+        process.env.CODELARK_AGENT = previousAgent;
+      }
+    }
+  });
+
   it('rechecks Codex tmux goal selection in a high-frequency window after each button answer', async () => {
     const store = initBridgeTestContext({ dynamicSettings: true });
     const adapter = new RecordingAdapter();

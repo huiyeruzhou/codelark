@@ -135,6 +135,10 @@ const SETTING_GROUPS: SettingGroupDefinition[] = [
 
 const GROUP_BY_KEY = new Map(SETTING_GROUPS.map((group) => [group.key, group]));
 
+function createHomeTomlConfigService() {
+  return createConfigService({ migrate: false, env: {} });
+}
+
 function selectOption(text: string, value = text): { text: string; callbackData: string } {
   return { text, callbackData: value };
 }
@@ -837,7 +841,7 @@ export function buildSetCommandRichCard(
   selectedGroup: SettingGroupKey = 'runtime',
   address?: ChannelAddress,
 ): OutboundRichCard {
-  const config = createConfigService({ migrate: false }).snapshot().config;
+  const config = createHomeTomlConfigService().snapshot().config;
   const group = GROUP_BY_KEY.get(selectedGroup) || GROUP_BY_KEY.get('runtime')!;
   const definitions = groupDefinitions(group.key);
   return {
@@ -918,7 +922,7 @@ export function handleSetFormCommand(options: {
   markdown: boolean;
   address?: ChannelAddress;
 }): { response: string; richCard: OutboundRichCard } {
-  const service = createConfigService({ migrate: false });
+  const service = createHomeTomlConfigService();
   const selectedGroup = selectedGroupFromArgs(options.args);
   let currentConfig = service.snapshot().config;
   const definitions = groupDefinitions(selectedGroup);
@@ -985,7 +989,7 @@ export function handleSetCommand(options: {
   markdown: boolean;
 }): string {
   const parsed = parseSetArgs(options.args);
-  const service = createConfigService({ migrate: false });
+  const service = createHomeTomlConfigService();
   const currentConfig = service.snapshot().config;
 
   if (parsed.action === 'show-all') {

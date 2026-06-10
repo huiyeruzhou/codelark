@@ -2874,7 +2874,7 @@ async function handleMessage(
       }
       await handleCommand(
         adapter,
-        { ...msg, text: commandText, callbackData: undefined },
+        { ...msg, text: commandText },
         commandText,
         {
           scopedBinding,
