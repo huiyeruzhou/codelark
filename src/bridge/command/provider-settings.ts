@@ -14,7 +14,12 @@ import {
   setSessionCodexThreadIdUpdate,
   setSessionCodexTmuxProviderUpdate,
 } from '../../domain/session-runtime.js';
-import { claudeTmuxSessionName, codexTmuxSessionName, startCodexResumeTmuxSession } from '../tmux/runtime.js';
+import {
+  CodexResumeTmuxLaunchError,
+  claudeTmuxSessionName,
+  codexTmuxSessionName,
+  startCodexResumeTmuxSession,
+} from '../tmux/runtime.js';
 import { startClaudeTmuxSession } from '../../runtime/claude/tmux-provider.js';
 import { getCodexThreadId } from '../turn/turn-classifier.js';
 import {
@@ -75,6 +80,42 @@ function claudeProviderSwitchNote(provider: RuntimeProviderChoice): string {
     case 'pty':
       return '之后的普通消息会使用 Claude Code pty/mirror 路径；SDK/tmux session 不会自动关闭。';
   }
+}
+
+function truncateForCommandResponse(value: string | undefined, limit = 500): string | undefined {
+  if (!value) return undefined;
+  const normalized = value.replace(/\s+$/g, '').replace(/\r?\n/g, ' / ');
+  return normalized.length > limit ? `${normalized.slice(0, limit)}...` : normalized;
+}
+
+function formatCodexTmuxLaunchFailure(
+  error: CodexResumeTmuxLaunchError,
+  currentProvider: RuntimeProviderChoice,
+  markdown: boolean,
+): string {
+  const details = error.details;
+  const recentCommands = details.commands.slice(-6).join(' ; ');
+  return buildCommandFields(
+    'Codex tmux 启动失败',
+    [
+      ['Runtime', 'codex'],
+      ['Provider', `未切换（仍为 ${currentProvider}）`],
+      ['tmux session', details.sessionName],
+      ['codex_thread_id', details.threadId],
+      ['cwd', details.workingDirectory],
+      ['失败原因', details.reason],
+      ['tmux session 仍存在', details.sessionExists === undefined ? undefined : details.sessionExists ? 'yes' : 'no'],
+      ['最后错误', details.lastError],
+      ['最后屏幕', truncateForCommandResponse(details.lastScreen)],
+      ['清理命令', details.killCommand],
+      ['诊断命令', truncateForCommandResponse(recentCommands, 900)],
+    ],
+    [
+      '没有写入 `runtime.codex.provider=tmux`，也没有把当前会话绑定到这个 tmux session。',
+      '请根据失败原因检查 Codex CLI 是否能在本机 TUI 模式启动；修复后重新发送 `/p tmux`。',
+    ],
+    markdown,
+  );
 }
 
 export async function handleProviderCommand(options: {
@@ -282,6 +323,9 @@ export async function handleProviderCommand(options: {
       permissionMode: mode === 'yolo' ? 'never' : 'acceptEdits',
     });
   } catch (error) {
+    if (error instanceof CodexResumeTmuxLaunchError) {
+      return formatCodexTmuxLaunchFailure(error, currentProvider, options.markdown);
+    }
     const unavailable = formatTmuxProviderUnavailable(error);
     if (unavailable) return unavailable;
     throw error;

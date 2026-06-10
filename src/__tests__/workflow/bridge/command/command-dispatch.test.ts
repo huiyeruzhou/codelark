@@ -390,7 +390,31 @@ case "$1" in
     exit 0
     ;;
   capture-pane)
-    printf 'alpha-screen\\nOpenAI Codex\\n› \\n'
+    if [[ -n "\${TMUX_FAKE_CAPTURE_TEXT:-}" ]]; then
+      printf '%b' "$TMUX_FAKE_CAPTURE_TEXT"
+      exit 0
+    fi
+    target=""
+    prev=""
+    for arg in "$@"; do
+      if [[ "$prev" == "-t" ]]; then
+        target="$arg"
+        break
+      fi
+      prev="$arg"
+    done
+    ready_after="\${TMUX_FAKE_READY_AFTER_CAPTURES:-0}"
+    safe_target="\${target//[^A-Za-z0-9_.-]/_}"
+    count_file="$TMUX_FAKE_LOG.\${safe_target:-default}.captures"
+    count=0
+    [[ -f "$count_file" ]] && count="$(cat "$count_file" 2>/dev/null || printf '0')"
+    count=$((count + 1))
+    printf '%s\n' "$count" > "$count_file"
+    if [[ "$count" -le "$ready_after" ]]; then
+      printf 'alpha-screen\nCodex starting...\n'
+    else
+      printf 'alpha-screen\nOpenAI Codex\n› \n'
+    fi
     exit 0
     ;;
   *)
@@ -2702,6 +2726,95 @@ enabled = true
     assert.equal(store.getSession(session.id)?.runtime?.codex?.provider, undefined);
     assert.match(sent.at(-1)?.text || '', /请先停止当前对话/);
     assert.match(sent.at(-1)?.text || '', /\/p tmux/);
+  });
+
+  it('does not persist tmux provider state when the launched Codex tmux never becomes ready', async () => {
+    const previousEnv = {
+      PATH: process.env.PATH,
+      TMUX_FAKE_LOG: process.env.TMUX_FAKE_LOG,
+      TMUX_FAKE_READY_AFTER_CAPTURES: process.env.TMUX_FAKE_READY_AFTER_CAPTURES,
+      CODELARK_CODEX_RESUME_TMUX_READY_TIMEOUT_MS: process.env.CODELARK_CODEX_RESUME_TMUX_READY_TIMEOUT_MS,
+      CODELARK_CODEX_RESUME_TMUX_READY_POLL_MS: process.env.CODELARK_CODEX_RESUME_TMUX_READY_POLL_MS,
+    };
+    const fakeTmux = installFakeTmux();
+    const previousConsoleError = console.error;
+    const previousConsoleWarn = console.warn;
+    const errorLogs: any[][] = [];
+    process.env.PATH = `${fakeTmux.binDir}${path.delimiter}${previousEnv.PATH || ''}`;
+    process.env.TMUX_FAKE_LOG = fakeTmux.logPath;
+    process.env.TMUX_FAKE_READY_AFTER_CAPTURES = '999';
+    process.env.CODELARK_CODEX_RESUME_TMUX_READY_TIMEOUT_MS = '100';
+    process.env.CODELARK_CODEX_RESUME_TMUX_READY_POLL_MS = '50';
+    console.error = (...args: any[]) => { errorLogs.push(args); };
+    console.warn = () => {};
+
+    try {
+      const store = initTestContext({ settings: { bridge_claude_provider: 'pty' } });
+      const sent: any[] = [];
+      const adapter = createGroupCapableAdapter({ sent });
+      const address = { channelType: 'feishu', chatId: 'chat-provider-tmux-not-ready' } as const;
+      const session = store.createSession('tmux-not-ready-session', 'test-model', undefined, os.tmpdir(), 'normal');
+      store.upsertChannelChat({
+        channelType: address.channelType,
+        chatId: address.chatId,
+        bridgeSessionId: session.id,
+      });
+
+      await handleBridgeCommand(
+        adapter,
+        {
+          address,
+          text: '/p tmux',
+          messageId: 'incoming-provider-tmux-not-ready',
+        } as any,
+        '/p tmux',
+        {
+          getActiveTask: () => undefined,
+          diagnoseSessionHealth: async () => null,
+          diagnoseAllActiveSessions: async () => [],
+          reconcileMirrorSubscriptions: async () => {},
+          bootstrapCodexThread: async () => 'not-ready-thread',
+        },
+      );
+
+      const responseText = sent.at(-1)?.text || '';
+      assert.match(responseText, /Codex tmux 启动失败/);
+      assert.match(responseText, /Provider.*未切换/);
+      assert.match(responseText, /tmux session.*codex_not-ready-thread/);
+      assert.match(responseText, /失败原因.*tmux session disappeared after new-session/);
+      assert.match(responseText, /没有写入 `runtime.codex.provider=tmux`/);
+      assert.equal(
+        errorLogs.some((args) => args[0] === '[codex-tmux-runtime] Codex resume tmux launch failed:'
+          && args[1]?.tmux_session === 'codex_not-ready-thread'
+          && /tmux session disappeared/.test(args[1]?.reason || '')),
+        true,
+      );
+      assert.notEqual(
+        createConfigService({ migrate: false, env: {} }).resolve('runtime.codex.provider', {
+          kind: 'session',
+          sessionId: session.id,
+        }).source,
+        'session',
+      );
+      assert.equal(getSessionCodexProvider(store.getSession(session.id)), undefined);
+      assert.equal(store.getSession(session.id)?.runtime?.general?.tmuxSessionName, undefined);
+      const tmuxLog = fs.readFileSync(fakeTmux.logPath, 'utf-8');
+      assert.match(tmuxLog, /new-session -d -s codex_not-ready-thread/);
+      assert.match(tmuxLog, /kill-session -t codex_not-ready-thread/);
+    } finally {
+      process.env.PATH = previousEnv.PATH;
+      if (previousEnv.TMUX_FAKE_LOG === undefined) delete process.env.TMUX_FAKE_LOG;
+      else process.env.TMUX_FAKE_LOG = previousEnv.TMUX_FAKE_LOG;
+      if (previousEnv.TMUX_FAKE_READY_AFTER_CAPTURES === undefined) delete process.env.TMUX_FAKE_READY_AFTER_CAPTURES;
+      else process.env.TMUX_FAKE_READY_AFTER_CAPTURES = previousEnv.TMUX_FAKE_READY_AFTER_CAPTURES;
+      if (previousEnv.CODELARK_CODEX_RESUME_TMUX_READY_TIMEOUT_MS === undefined) delete process.env.CODELARK_CODEX_RESUME_TMUX_READY_TIMEOUT_MS;
+      else process.env.CODELARK_CODEX_RESUME_TMUX_READY_TIMEOUT_MS = previousEnv.CODELARK_CODEX_RESUME_TMUX_READY_TIMEOUT_MS;
+      if (previousEnv.CODELARK_CODEX_RESUME_TMUX_READY_POLL_MS === undefined) delete process.env.CODELARK_CODEX_RESUME_TMUX_READY_POLL_MS;
+      else process.env.CODELARK_CODEX_RESUME_TMUX_READY_POLL_MS = previousEnv.CODELARK_CODEX_RESUME_TMUX_READY_POLL_MS;
+      console.error = previousConsoleError;
+      console.warn = previousConsoleWarn;
+      fs.rmSync(fakeTmux.binDir, { recursive: true, force: true });
+    }
   });
 
   it('starts tmux provider with only a reaction and final text', async () => {
