@@ -33,13 +33,25 @@ test('buildStreamContextTags emits bridge identity and stream mode tags', () => 
   ]);
 });
 
-test('buildRuntimeStreamTags emits effort and model tags first-class', () => {
+test('buildRuntimeStreamTags emits runtime, effort, and model tags first-class', () => {
   assert.deepEqual(buildRuntimeStreamTags({
+    runtime: 'codex',
     reasoningEffort: 'high',
     model: 'gpt-5-codex',
   }), [
+    'codex',
     'effort:high',
     'model:gpt-5-codex',
+  ]);
+
+  assert.deepEqual(buildRuntimeStreamTags({
+    runtime: 'claude',
+    reasoningEffort: 'max',
+    model: 'claude-sonnet-test',
+  }), [
+    'claude',
+    'effort:max',
+    'model:claude-sonnet-test',
   ]);
 });
 
