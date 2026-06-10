@@ -8,7 +8,9 @@ import {
   CodexResumeTmuxLaunchError,
   hasCodexResumeTmuxReadyPrompt,
   startCodexResumeTmuxSession,
+  waitForCodexResumeTmuxReady,
   type TmuxCore,
+  type TmuxSendAction,
 } from '../../../../bridge/tmux/runtime.js';
 
 describe('codex tmux runtime', () => {
@@ -27,6 +29,18 @@ describe('codex tmux runtime', () => {
     ].join('\n');
 
     assert.equal(hasCodexResumeTmuxReadyPrompt(screen), true);
+  });
+
+  it('does not treat a Codex TUI selection prompt as a resumed idle prompt', () => {
+    const screen = [
+      'Codex wants to edit files.',
+      '› 1. Yes, proceed (y)',
+      "  2. Yes, and don't ask again for these files (a)",
+      '  3. No, and tell Codex what to do differently (esc)',
+      'Press enter to confirm or esc to cancel',
+    ].join('\n');
+
+    assert.equal(hasCodexResumeTmuxReadyPrompt(screen), false);
   });
 
   it('passes the requested model when launching a resumed Codex tmux session', () => {
@@ -83,7 +97,7 @@ describe('codex tmux runtime', () => {
       (error) => {
         assert.ok(error instanceof CodexResumeTmuxLaunchError);
         assert.equal(error.details.sessionExists, false);
-        assert.equal(error.details.lastError, undefined);
+        assert.match(error.details.lastError || '', /can't find pane: codex_fail/);
         assert.match(error.details.launchOutput || '', /codex: command not found/);
         assert.match(error.details.launchOutput || '', /status 127/);
         assert.equal(error.details.launchLogPath, launchLogPath);
@@ -93,15 +107,22 @@ describe('codex tmux runtime', () => {
     );
     assert.ok(commands.some((command) => /kill-session -t codex_fail/.test(command)));
   });
-  it('accepts an alive Codex tmux session without waiting for the idle input prompt', async () => {
+  it('waits for a resumed Codex TUI prompt before accepting a launched session', async () => {
+    let captureCount = 0;
     const core: TmuxCore = {
       commandPreview: (args) => ['tmux', ...args].join(' '),
       hasSession: async (name) => ({ exists: true, command: `tmux has-session -t ${name}` }),
       killSession: async (name) => `tmux kill-session -t ${name}`,
       listSessions: async () => ({ sessions: [], command: 'tmux list-sessions' }),
       ensureDetachedSession: async () => ({ existed: false, command: 'tmux new-session -d -s codex_busy', commands: ['tmux new-session -d -s codex_busy'] }),
-      capturePane: async () => {
-        throw new Error('start should not wait for an idle prompt');
+      capturePane: async (name) => {
+        captureCount += 1;
+        return {
+          command: `tmux capture-pane -t ${name} -p -S -80`,
+          screen: captureCount === 1
+            ? 'OpenAI Codex\nStarting up...'
+            : 'OpenAI Codex\n\n› ',
+        };
       },
       sendActions: async () => ({ commands: [] }),
       sendInterrupt: async () => 'tmux send-keys -t codex_busy C-c',
@@ -118,7 +139,102 @@ describe('codex tmux runtime', () => {
     assert.equal(result.ready, true);
     assert.deepEqual(result.commands, [
       'tmux new-session -d -s codex_busy',
-      'tmux has-session -t codex_busy',
+      'tmux capture-pane -t codex_busy -p -S -80',
+      'tmux capture-pane -t codex_busy -p -S -80',
     ]);
+    assert.equal(captureCount, 2);
+  });
+
+  it('clears a startup goal selection before accepting a launched session as ready', async () => {
+    let captureCount = 0;
+    const sentActions: Array<{ target: string; actions: TmuxSendAction[] }> = [];
+    const core: TmuxCore = {
+      commandPreview: (args) => ['tmux', ...args].join(' '),
+      hasSession: async (name) => ({ exists: true, command: `tmux has-session -t ${name}` }),
+      killSession: async (name) => `tmux kill-session -t ${name}`,
+      listSessions: async () => ({ sessions: [], command: 'tmux list-sessions' }),
+      ensureDetachedSession: async () => ({ existed: false, command: 'tmux new-session -d -s codex_goal', commands: ['tmux new-session -d -s codex_goal'] }),
+      capturePane: async (name) => {
+        captureCount += 1;
+        return {
+          command: `tmux capture-pane -t ${name} -p -S -80`,
+          screen: captureCount === 1
+            ? [
+              'A task is already running.',
+              'Do you want to replace the current goal?',
+              '› 1. Replace current goal',
+              '  2. Cancel',
+              'Press enter to confirm or esc to cancel',
+            ].join('\n')
+            : 'OpenAI Codex\n\n› ',
+        };
+      },
+      sendActions: async (target, actions) => {
+        sentActions.push({ target, actions });
+        return { commands: actions.map((action) => action.type === 'key' ? `tmux send-keys -t ${target} ${action.key}` : `tmux send-keys -t ${target} -l ${action.text}`) };
+      },
+      sendInterrupt: async () => 'tmux send-keys -t codex_goal C-c',
+      injectPromptIntoPane: async () => ({ commands: [] }),
+    };
+
+    const result = await startCodexResumeTmuxSession({
+      sessionName: 'codex_goal',
+      threadId: 'goal-thread',
+      bridgeSessionId: 'bridge-goal',
+      workingDirectory: '/tmp',
+    }, core);
+
+    assert.equal(result.ready, true);
+    assert.equal(captureCount, 2);
+    assert.deepEqual(sentActions, [{
+      target: 'codex_goal',
+      actions: [
+        { type: 'key', key: 'Down' },
+        { type: 'key', key: 'Enter' },
+      ],
+    }]);
+    assert.equal(result.commands.includes('tmux send-keys -t codex_goal Down'), true);
+    assert.equal(result.commands.includes('tmux send-keys -t codex_goal Enter'), true);
+  });
+
+  it('reports unsupported startup selection prompts without waiting for the full ready timeout', async () => {
+    const oldTimeout = process.env.CODELARK_CODEX_RESUME_TMUX_READY_TIMEOUT_MS;
+    try {
+      process.env.CODELARK_CODEX_RESUME_TMUX_READY_TIMEOUT_MS = '5000';
+      const core: TmuxCore = {
+        commandPreview: (args) => ['tmux', ...args].join(' '),
+        hasSession: async (name) => ({ exists: true, command: `tmux has-session -t ${name}` }),
+        killSession: async (name) => `tmux kill-session -t ${name}`,
+        listSessions: async () => ({ sessions: [], command: 'tmux list-sessions' }),
+        ensureDetachedSession: async () => ({ existed: false, command: 'tmux new-session -d -s codex_permission', commands: ['tmux new-session -d -s codex_permission'] }),
+        capturePane: async (name) => ({
+          command: `tmux capture-pane -t ${name} -p -S -80`,
+          screen: [
+            'Codex wants to edit files.',
+            '› 1. Yes, proceed (y)',
+            "  2. Yes, and don't ask again for these files (a)",
+            '  3. No, and tell Codex what to do differently (esc)',
+            'Press enter to confirm or esc to cancel',
+          ].join('\n'),
+        }),
+        sendActions: async () => {
+          throw new Error('permission prompt should not be auto-confirmed');
+        },
+        sendInterrupt: async () => 'tmux send-keys -t codex_permission C-c',
+        injectPromptIntoPane: async () => ({ commands: [] }),
+      };
+
+      const startedAt = Date.now();
+      const result = await waitForCodexResumeTmuxReady('codex_permission', core);
+
+      assert.equal(result.ready, false);
+      assert.equal(result.selectionPromptKind, 'permission');
+      assert.equal(result.selectionPromptChoice, undefined);
+      assert.match(result.selectionPromptSummary || '', /Yes, proceed/);
+      assert.equal(Date.now() - startedAt < 1_000, true);
+    } finally {
+      if (oldTimeout === undefined) delete process.env.CODELARK_CODEX_RESUME_TMUX_READY_TIMEOUT_MS;
+      else process.env.CODELARK_CODEX_RESUME_TMUX_READY_TIMEOUT_MS = oldTimeout;
+    }
   });
 });

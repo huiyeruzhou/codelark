@@ -448,6 +448,8 @@ describe('real Claude Code pty provider e2e', () => {
 
     const previousEnv = {
       HOME: process.env.HOME,
+      USERPROFILE: process.env.USERPROFILE,
+      CODELARK_CLAUDE_HOME: process.env.CODELARK_CLAUDE_HOME,
       CODELARK_CLAUDE_PTY_PROMPT_DELAY_MS: process.env.CODELARK_CLAUDE_PTY_PROMPT_DELAY_MS,
       CODELARK_CLAUDE_PTY_RESPONSE_QUIET_MS: process.env.CODELARK_CLAUDE_PTY_RESPONSE_QUIET_MS,
       CODELARK_CLAUDE_PTY_RESPONSE_TIMEOUT_MS: process.env.CODELARK_CLAUDE_PTY_RESPONSE_TIMEOUT_MS,
@@ -459,6 +461,8 @@ describe('real Claude Code pty provider e2e', () => {
     const ccrPort = await reserveLocalPort();
 
     process.env.HOME = homeDir;
+    process.env.USERPROFILE = homeDir;
+    process.env.CODELARK_CLAUDE_HOME = homeDir;
     process.env.CODELARK_CLAUDE_PTY_PROMPT_DELAY_MS = process.env.CODELARK_CLAUDE_PTY_PROMPT_DELAY_MS || '1200';
     process.env.CODELARK_CLAUDE_PTY_RESPONSE_QUIET_MS = process.env.CODELARK_CLAUDE_PTY_RESPONSE_QUIET_MS || '2000';
     process.env.CODELARK_CLAUDE_PTY_RESPONSE_TIMEOUT_MS = process.env.CODELARK_CLAUDE_PTY_RESPONSE_TIMEOUT_MS || '120000';

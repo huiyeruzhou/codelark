@@ -10,6 +10,7 @@ import {
   runConfigMigrations,
   type ConfigMigration,
 } from '../../../configuration/migrations/index.js';
+import { createConfigService } from '../../../configuration/service.js';
 
 function tempHome(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'codelark-config-migrations-'));
@@ -195,6 +196,53 @@ describe('config migration runner', () => {
       assert.equal(fs.existsSync(paths.legacyConfigEnv), false);
       assert.equal(fs.readFileSync(`${paths.legacyConfigEnv}.migrated-v1`, 'utf-8'), 'previous archive\n');
       assert.equal(fs.readFileSync(`${paths.legacyConfigEnv}.migrated-v1.1`, 'utf-8'), 'CODELARK_CODEX_DEFAULT_MODEL=legacy-model\n');
+    } finally {
+      fs.rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it('overlays legacy config.env when its mtime ties config.json', () => {
+    const home = tempHome();
+    try {
+      const paths = resolveMigrationPaths(home);
+      writeFile(paths.legacyConfigJson, JSON.stringify({
+        schemaVersion: 1,
+        runtime: {
+          provider: 'claude',
+          codex: { defaultModel: 'json-model' },
+        },
+        channels: [{
+          id: 'feishu-default',
+          alias: 'Legacy Feishu',
+          provider: 'feishu',
+          enabled: true,
+          config: {
+            appId: 'json-app',
+            appSecret: 'json-secret',
+          },
+        }],
+      }, null, 2));
+      writeFile(paths.legacyConfigEnv, [
+        'CODELARK_RUNTIME=codex',
+        'CODELARK_ENABLED_CHANNELS=feishu',
+        'CODELARK_CODEX_DEFAULT_MODEL=env-model',
+        'CODELARK_FEISHU_APP_ID=env-app',
+        'CODELARK_FEISHU_APP_SECRET=env-secret',
+      ].join('\n'));
+      const tied = new Date('2026-06-06T14:00:00.000Z');
+      fs.utimesSync(paths.legacyConfigJson, tied, tied);
+      fs.utimesSync(paths.legacyConfigEnv, tied, tied);
+
+      const result = runConfigMigrations({ codelarkHome: home });
+      const config = createConfigService({ codelarkHome: home, env: {}, migrate: false }).snapshot().config;
+      const channel = config.channels.find((entry) => entry.id === 'feishu-default');
+
+      assert.equal(result.changed, true);
+      assert.equal(config.runtime.agent, 'codex');
+      assert.equal(config.runtime.codex.model, 'env-model');
+      assert.equal(channel?.alias, '飞书');
+      assert.equal(channel?.config.appId, 'env-app');
+      assert.equal(channel?.config.appSecret, 'env-secret');
     } finally {
       fs.rmSync(home, { recursive: true, force: true });
     }
