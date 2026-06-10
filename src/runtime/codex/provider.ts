@@ -63,7 +63,7 @@ function isYoloMode(params: StreamChatParams): boolean {
 
 /** Allow Codex to run outside a trusted Git repository when explicitly enabled. */
 function shouldSkipGitRepoCheck(params: StreamChatParams): boolean {
-  return params.skipGitRepoCheck === true || process.env.CODELARK_CODEX_SKIP_GIT_REPO_CHECK === 'true';
+  return params.skipGitRepoCheck === true;
 }
 
 function normalizeCodexErrorMessage(message: string | null | undefined): string {

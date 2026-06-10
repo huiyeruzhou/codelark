@@ -597,6 +597,7 @@ describe('codex-tmux-provider', () => {
         modelReasoningEffort: 'high',
         workingDirectory: '/tmp/work',
         permissionMode: 'acceptEdits',
+        skipGitRepoCheck: true,
       }, ['/tmp/a.png']);
 
       assert.deepEqual(args.slice(0, 6), [
@@ -626,6 +627,25 @@ describe('codex-tmux-provider', () => {
       else process.env.CODELARK_CODEX_BASE_URL = oldBaseUrl;
       if (oldApiKey === undefined) delete process.env.CODELARK_CODEX_API_KEY;
       else process.env.CODELARK_CODEX_API_KEY = oldApiKey;
+    }
+  });
+
+  it('uses only resolved skipGitRepoCheck params instead of reading env directly', () => {
+    const oldSkipGit = process.env.CODELARK_CODEX_SKIP_GIT_REPO_CHECK;
+    try {
+      process.env.CODELARK_CODEX_SKIP_GIT_REPO_CHECK = 'true';
+
+      const args = buildCodexTuiArgs({
+        prompt: 'hello',
+        sessionId: 'bridge-session',
+        sandboxMode: 'workspace-write',
+        permissionMode: 'acceptEdits',
+      }, []);
+
+      assert.equal(args.includes('skip_git_repo_check=true'), false);
+    } finally {
+      if (oldSkipGit === undefined) delete process.env.CODELARK_CODEX_SKIP_GIT_REPO_CHECK;
+      else process.env.CODELARK_CODEX_SKIP_GIT_REPO_CHECK = oldSkipGit;
     }
   });
 

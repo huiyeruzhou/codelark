@@ -667,7 +667,7 @@ describe('CodexProvider', () => {
     assert.equal(capturedStartOptions?.model, 'gpt-5-codex');
   });
 
-  it('passes skipGitRepoCheck only when CODELARK_CODEX_SKIP_GIT_REPO_CHECK=true', async () => {
+  it('passes skipGitRepoCheck only from resolved params instead of reading env directly', async () => {
     const old = process.env.CODELARK_CODEX_SKIP_GIT_REPO_CHECK;
     process.env.CODELARK_CODEX_SKIP_GIT_REPO_CHECK = 'true';
     try {
@@ -696,6 +696,15 @@ describe('CodexProvider', () => {
         sessionId: 'skip-git-check-session',
       });
       await collectStream(stream);
+
+      assert.equal(capturedStartOptions?.skipGitRepoCheck, undefined);
+
+      const streamWithResolvedParam = provider.streamChat({
+        prompt: 'hello',
+        sessionId: 'skip-git-check-session-param',
+        skipGitRepoCheck: true,
+      });
+      await collectStream(streamWithResolvedParam);
 
       assert.equal(capturedStartOptions?.skipGitRepoCheck, true);
     } finally {

@@ -656,7 +656,7 @@ function isYoloMode(params: StreamChatParams): boolean {
 }
 
 function shouldSkipGitRepoCheck(params: StreamChatParams): boolean {
-  return params.skipGitRepoCheck === true || process.env.CODELARK_CODEX_SKIP_GIT_REPO_CHECK === 'true';
+  return params.skipGitRepoCheck === true;
 }
 
 export function buildCodexTuiArgs(params: StreamChatParams, imagePaths: string[]): string[] {
