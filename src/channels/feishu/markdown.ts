@@ -79,6 +79,30 @@ export const DEFAULT_FEISHU_TOOL_CALL_CARD_STYLE: FeishuToolCallCardStyle = {
   },
 };
 
+const FEISHU_TOOL_DETAIL_CARD_LIMIT = 2_400;
+const FEISHU_TOOL_LONG_OUTPUT_CARD_LIMIT = 2_400;
+
+interface TruncatedCardText {
+  text: string;
+  originalLength: number;
+  truncated: boolean;
+}
+
+function truncateCardPayloadText(value: string, maxLength: number): TruncatedCardText {
+  const text = String(value || '').trim();
+  const safeLimit = Math.max(0, maxLength);
+  if (text.length <= safeLimit) {
+    return { text, originalLength: text.length, truncated: false };
+  }
+  const suffix = '\n\n...(truncated for card preview)';
+  const sliceLength = Math.max(0, safeLimit - suffix.length);
+  return {
+    text: `${text.slice(0, sliceLength).trimEnd()}${suffix}`,
+    originalLength: text.length,
+    truncated: true,
+  };
+}
+
 function resolveTitleTagColor(
   tag: string,
   defaultColor: NonNullable<StructuredStreamingUiMetadata['tagColor']>,
@@ -1205,7 +1229,10 @@ function buildToolProgressPanelTitle(block: ToolProgressBlock): string {
 
 function buildToolProgressPanelDetailElements(block: ToolProgressBlock, outputElementId: string): Array<Record<string, unknown>> {
   const elements: Array<Record<string, unknown>> = [];
-  const detail = buildToolDetailWithoutLongOutput(block);
+  const detail = truncateCardPayloadText(
+    buildToolDetailWithoutLongOutput(block),
+    FEISHU_TOOL_DETAIL_CARD_LIMIT,
+  ).text;
   if (detail) {
     elements.push({
       tag: 'markdown',
@@ -1223,20 +1250,21 @@ function buildToolProgressPanelDetailElements(block: ToolProgressBlock, outputEl
   }
   const longExecOutput = getLongExecOutput(block.tool);
   if (longExecOutput) {
+    const output = truncateCardPayloadText(longExecOutput, FEISHU_TOOL_LONG_OUTPUT_CARD_LIMIT);
     elements.push({
       tag: 'collapsible_panel',
       expanded: false,
       header: {
         title: {
           tag: 'markdown',
-          content: `输出 · ${longExecOutput.length} chars`,
+          content: `输出 · ${output.originalLength} chars${output.truncated ? ' · truncated' : ''}`,
           text_size: DEFAULT_FEISHU_TOOL_CALL_CARD_STYLE.longOutputPanel.titleTextSize,
         },
         template: toolOutputPanelTemplate(block.tool.status),
       },
       elements: [{
         tag: 'markdown',
-        content: preprocessFeishuMarkdown(buildFencedCodeBlock(longExecOutput, 'text')),
+        content: preprocessFeishuMarkdown(buildFencedCodeBlock(output.text, 'text')),
         text_align: 'left',
         text_size: DEFAULT_FEISHU_TOOL_CALL_CARD_STYLE.longOutputPanel.detailTextSize,
       }],
