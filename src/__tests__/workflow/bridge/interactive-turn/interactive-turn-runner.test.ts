@@ -699,6 +699,7 @@ stream_status_check_interval_seconds = 3
       title: 'Project A',
       bridgeSessionId: 'bridge-session-123456789',
       threadId: 'codex-thread-123456789',
+      runtime: 'codex',
       executionProvider: 'tmux',
       creatorKind: 'vscode',
       reasoningEffort: 'high',
@@ -707,6 +708,7 @@ stream_status_check_interval_seconds = 3
 
     assert.equal(metadata.title, 'Project A');
     assert.deepEqual(metadata.tags, [
+      'codex',
       'effort:high',
       'model:gpt-5-codex',
       'bridge_id:bridge-s',
@@ -732,7 +734,7 @@ stream_status_check_interval_seconds = 3
     }));
 
     assert.equal(metadata.title, 'bridge-s');
-    assert.deepEqual(metadata.tags, ['bridge_id:bridge-s', 'sdk']);
+    assert.deepEqual(metadata.tags, ['codex', 'bridge_id:bridge-s', 'sdk']);
   });
 
   it('uses the BridgeSession name for Codex SDK stream card metadata without a thread title', async () => {
@@ -751,6 +753,7 @@ stream_status_check_interval_seconds = 3
       title: '',
       bridgeSessionId: binding.bridgeSessionId,
       threadId: '',
+      runtime: 'codex',
       executionProvider: 'sdk',
       creatorKind: 'bridge',
       reasoningEffort: 'medium',
@@ -785,6 +788,7 @@ stream_status_check_interval_seconds = 3
       title: '',
       bridgeSessionId: binding.bridgeSessionId,
       threadId: '',
+      runtime: 'claude',
       executionProvider: 'sdk',
       creatorKind: 'bridge',
       reasoningEffort: 'default',
@@ -801,6 +805,8 @@ stream_status_check_interval_seconds = 3
     });
 
     assert.equal(simulator.adapter.streamMetadata[0]?.title, 'Claude Bridge Title');
+    assert.match((simulator.adapter.streamMetadata[0]?.tags || []).join(' '), /\bclaude\b/);
+    assert.doesNotMatch((simulator.adapter.streamMetadata[0]?.tags || []).join(' '), /\bcodex\b/);
   });
 
   it('uses the bridge session title for SDK stream cards before a Codex thread title exists', async () => {
