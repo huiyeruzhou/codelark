@@ -9,19 +9,20 @@ import { sanitizeInput } from '../../shared/security/validators.js';
 import {
   claudeTmuxSessionName,
   codexTmuxSessionName,
-  startCodexResumeTmuxSession,
   attachTmuxSession,
-  captureTmuxScreen,
   createOrAttachTmuxSession,
   hasTmuxSession,
+  inspectRuntimeTmuxSession,
   listTmuxSessions,
   sendTmuxActions,
   sendTmuxActionsAndCapture,
+  startRuntimeTmuxSession,
+  type RuntimeTmuxKind,
+  type RuntimeTmuxSelectionPrompt,
   type StartCodexResumeTmuxSessionParams,
   type TmuxSendAction,
   type TmuxSessionInfo,
 } from '../tmux/runtime.js';
-import { startClaudeTmuxSession } from '../../runtime/claude/tmux-provider.js';
 import { resolveClaudeRuntimeConfig, resolveEffectiveRuntimeProvider, resolveSessionRuntimeConfig } from '../session/support.js';
 import { getCodexThreadId } from '../turn/turn-classifier.js';
 import {
@@ -149,6 +150,7 @@ interface TmuxScreenMonitor {
   timer: ReturnType<typeof setTimeout>;
   target: string;
   lines: number;
+  runtime?: RuntimeTmuxKind;
   intervalSeconds: number;
   markdown: boolean;
   deliver: (text: string) => Promise<void>;
@@ -424,7 +426,12 @@ function buildTmuxScreenResponse(
   screen: string,
   lines: number,
   markdown: boolean,
-  options?: { intervalSeconds?: number; monitorStarted?: boolean; commands?: string[] },
+  options?: {
+    intervalSeconds?: number;
+    monitorStarted?: boolean;
+    commands?: string[];
+    selectionPrompt?: RuntimeTmuxSelectionPrompt;
+  },
 ): string {
   const { text, truncated } = sanitizeInput(screen || '(empty)', 24_000);
   const screenBlock = markdown ? buildFencedCodeBlock(text, 'sh') : text;
@@ -434,6 +441,9 @@ function buildTmuxScreenResponse(
     notes.push(options.monitorStarted
       ? `已开启定时刷新：每 ${options.intervalSeconds} 秒刷新一次；发送 \`/tmux-screen stop\` 停止。`
       : `定时刷新：每 ${options.intervalSeconds} 秒。`);
+  }
+  if (options?.selectionPrompt) {
+    notes.push(`检测到 ${formatRuntimeTmuxSelectionPrompt(options.selectionPrompt)}。`);
   }
   const response = [
     buildCommandFields(
@@ -450,6 +460,16 @@ function buildTmuxScreenResponse(
     screenBlock + suffix,
   ].join('\n').trim();
   return appendTmuxCommandPreview(response, options?.commands || [], markdown);
+}
+
+function formatRuntimeTmuxSelectionPrompt(selectionPrompt: RuntimeTmuxSelectionPrompt): string {
+  if (selectionPrompt.runtime === 'codex') {
+    const action = selectionPrompt.defaultChoice
+      ? `默认动作：${selectionPrompt.defaultChoice}`
+      : '需要用户选择';
+    return `Codex ${selectionPrompt.kind} selection prompt（${action}）`;
+  }
+  return `Claude ${selectionPrompt.kind} prompt（默认动作：Enter）`;
 }
 
 async function ensureCodexTmuxSessionForProvider(
@@ -501,7 +521,8 @@ async function ensureCodexTmuxSessionForProvider(
         ? `tmux session \`${target}\` 不存在，正在后台重新启动 Claude Code TUI。`
         : `Claude tmux Provider 缺少 tmux session，正在后台启动 Claude Code TUI \`${target}\`。`,
     );
-    const started = await startClaudeTmuxSession({
+    const started = await startRuntimeTmuxSession({
+      runtime: 'claude',
       sessionName: target,
       bridgeSessionId: session.id,
       workingDirectory: getSessionWorkingDirectory(session),
@@ -509,6 +530,7 @@ async function ensureCodexTmuxSessionForProvider(
       model: claudeConfig.model,
       permissionMode: claudeConfig.permissionMode,
       reasoningEffort: claudeConfig.reasoningEffort,
+      recreate: true,
     });
     store.updateSession(session.id, setSessionClaudeTmuxProviderUpdate({
       tmuxSessionName: target,
@@ -581,7 +603,8 @@ async function ensureCodexTmuxSessionForProvider(
 
   const runtimeConfig = resolveSessionRuntimeConfig(binding, session);
   await params.notifyBackgroundOperation?.(`tmux session \`${target}\` 不存在，正在后台重新启动 Codex TUI。`);
-  const started = await startCodexResumeTmuxSession({
+  const started = await startRuntimeTmuxSession({
+    runtime: 'codex',
     sessionName: target,
     threadId,
     bridgeSessionId: session.id,
@@ -655,6 +678,7 @@ function startTmuxScreenMonitor(params: {
   key: string;
   target: string;
   lines: number;
+  runtime?: RuntimeTmuxKind;
   intervalSeconds: number;
   markdown: boolean;
   deliver: (text: string) => Promise<void>;
@@ -688,16 +712,25 @@ function startTmuxScreenMonitor(params: {
       }
       monitor.busy = true;
       try {
-        const capture = await captureTmuxScreen(monitor.target, monitor.lines);
+        const inspected = await inspectRuntimeTmuxSession({
+          sessionName: monitor.target,
+          lines: monitor.lines,
+          runtime: monitor.runtime,
+        });
         if (monitor.stopped) return;
+        if (!inspected.exists) {
+          throw new Error(`tmux session 不存在：${monitor.target}`);
+        }
+        const inspectCommands = [inspected.existsCommand, inspected.captureCommand || ''].filter(Boolean);
         const text = buildTmuxScreenResponse(
           monitor.target,
-          capture.screen,
+          inspected.screen || '',
           monitor.lines,
           monitor.markdown,
           {
             intervalSeconds: monitor.intervalSeconds,
-            commands: monitor.card ? [] : [capture.command],
+            commands: monitor.card ? [] : inspectCommands,
+            selectionPrompt: inspected.selectionPrompt,
           },
         );
         if (monitor.card) {
@@ -779,14 +812,28 @@ export async function handleTmuxBridgeCommand(params: HandleTmuxBridgeCommandPar
         return 'tmux 未绑定。先发送 `/tmux-switch` 查看 session，或 `/tmux-attach <session>` / `/tmux-new <session>` 绑定。';
       }
       const lines = parsed.lines ?? getCaptureLines(session);
-      const capture = await captureTmuxScreen(captureTarget, lines);
+      const runtimeProvider = resolveEffectiveRuntimeProvider(session, binding);
+      const inspected = await inspectRuntimeTmuxSession({
+        runtime: runtimeProvider.runtime,
+        sessionName: captureTarget,
+        lines,
+      });
+      if (!inspected.exists) {
+        return appendTmuxCommandPreview(
+          `tmux session 不存在：${captureTarget}`,
+          [...ensured.commands, inspected.existsCommand],
+          markdown,
+        );
+      }
       if (parsed.intervalSeconds) {
-        if (!params.screenMonitor) return appendTmuxCommandPreview('当前环境不支持 tmux 屏幕定时刷新。', [capture.command], markdown);
+        const inspectCommands = [inspected.existsCommand, inspected.captureCommand || ''].filter(Boolean);
+        if (!params.screenMonitor) return appendTmuxCommandPreview('当前环境不支持 tmux 屏幕定时刷新。', inspectCommands, markdown);
         const card = params.screenMonitor.card;
-        const initialText = buildTmuxScreenResponse(captureTarget, capture.screen, lines, markdown, {
+        const initialText = buildTmuxScreenResponse(captureTarget, inspected.screen || '', lines, markdown, {
           intervalSeconds: parsed.intervalSeconds,
           monitorStarted: true,
-          commands: card ? [] : [...ensured.commands, capture.command],
+          commands: card ? [] : [...ensured.commands, ...inspectCommands],
+          selectionPrompt: inspected.selectionPrompt,
         });
         if (card) {
           if (params.screenMonitor.stopCallbackData) {
@@ -798,6 +845,7 @@ export async function handleTmuxBridgeCommand(params: HandleTmuxBridgeCommandPar
           key: params.screenMonitor.key,
           target: captureTarget,
           lines,
+          runtime: runtimeProvider.runtime,
           intervalSeconds: parsed.intervalSeconds,
           markdown,
           deliver: params.screenMonitor.deliver,
@@ -806,10 +854,11 @@ export async function handleTmuxBridgeCommand(params: HandleTmuxBridgeCommandPar
         });
         if (card) return '';
       }
-      return buildTmuxScreenResponse(captureTarget, capture.screen, lines, markdown, {
+      return buildTmuxScreenResponse(captureTarget, inspected.screen || '', lines, markdown, {
         intervalSeconds: parsed.intervalSeconds,
         monitorStarted: Boolean(parsed.intervalSeconds),
-        commands: [...ensured.commands, capture.command],
+        commands: [...ensured.commands, inspected.existsCommand, inspected.captureCommand || ''].filter(Boolean),
+        selectionPrompt: inspected.selectionPrompt,
       });
     }
 
@@ -881,6 +930,9 @@ export async function handleTmuxBridgeCommand(params: HandleTmuxBridgeCommandPar
           ['tmux session', name],
           ['Bridge session', binding.bridgeSessionId],
           ['展示行数', `${lines}`],
+          ...(attached.selectionPrompt
+            ? [['Selection', formatRuntimeTmuxSelectionPrompt(attached.selectionPrompt)] as [string, string]]
+            : []),
         ],
         attached.screen || '',
         lines,

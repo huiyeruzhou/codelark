@@ -5832,6 +5832,76 @@ enabled = true
     assert.match(String(sent.at(-1)?.text || ''), /已发送文件/);
   });
 
+  it('reports tmux selection prompts through shared attach and screen inspection', async () => {
+    initTestContext();
+    const fakeTmux = installFakeTmux();
+    const oldPath = process.env.PATH || '';
+    const oldFakeLog = process.env.TMUX_FAKE_LOG;
+    const oldCaptureText = process.env.TMUX_FAKE_CAPTURE_TEXT;
+    process.env.PATH = `${fakeTmux.binDir}${path.delimiter}${oldPath}`;
+    process.env.TMUX_FAKE_LOG = fakeTmux.logPath;
+    process.env.TMUX_FAKE_CAPTURE_TEXT = [
+      'A task is already running.',
+      'Do you want to replace the current goal?',
+      '› 1. Replace current goal',
+      '  2. Cancel',
+      'Press enter to confirm or esc to cancel',
+    ].join('\n');
+
+    try {
+      const sent: string[] = [];
+      const adapter: any = {
+        channelType: 'feishu',
+        send: async (message: { text: string }) => {
+          sent.push(message.text);
+          return { ok: true, messageId: `reply-tmux-selection-${sent.length}` };
+        },
+      };
+      const address = { channelType: 'feishu', chatId: 'chat-tmux-selection' } as const;
+      const deps = {
+        getActiveTask: () => undefined,
+        diagnoseSessionHealth: async () => null,
+        diagnoseAllActiveSessions: async () => [],
+      };
+
+      await handleBridgeCommand(
+        adapter,
+        {
+          address,
+          text: '/tmux-attach alpha',
+          messageId: 'incoming-tmux-selection-attach',
+        } as any,
+        '/tmux-attach alpha',
+        deps,
+      );
+      assert.match(sent.at(-1) || '', /已绑定 tmux session/);
+      assert.match(sent.at(-1) || '', /Selection.*Codex goal selection prompt/s);
+      assert.match(sent.at(-1) || '', /默认动作：cancel/);
+
+      await handleBridgeCommand(
+        adapter,
+        {
+          address,
+          text: '/tmux-screen',
+          messageId: 'incoming-tmux-selection-screen',
+        } as any,
+        '/tmux-screen',
+        deps,
+      );
+      assert.match(sent.at(-1) || '', /tmux 当前屏幕状态/);
+      assert.match(sent.at(-1) || '', /检测到 Codex goal selection prompt/);
+      assert.match(sent.at(-1) || '', /tmux has-session -t alpha/);
+      assert.match(sent.at(-1) || '', /tmux capture-pane -t alpha -p -S -0/);
+    } finally {
+      process.env.PATH = oldPath;
+      if (oldFakeLog === undefined) delete process.env.TMUX_FAKE_LOG;
+      else process.env.TMUX_FAKE_LOG = oldFakeLog;
+      if (oldCaptureText === undefined) delete process.env.TMUX_FAKE_CAPTURE_TEXT;
+      else process.env.TMUX_FAKE_CAPTURE_TEXT = oldCaptureText;
+      fs.rmSync(fakeTmux.binDir, { recursive: true, force: true });
+    }
+  });
+
   it('binds a tmux session, sends literal text and tmux-key special keys, and returns a capture', async () => {
     const store = initTestContext();
     const fakeTmux = installFakeTmux();

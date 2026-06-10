@@ -41,7 +41,17 @@ flowchart TD
 | `injectPromptIntoPane` | 多行 prompt 使用 paste-buffer + `M-Enter`，最后 `Enter` 提交。 |
 | `sendInterrupt` | `/stop` 或 abort 时发送 `C-c`。 |
 
-`src/bridge/tmux/runtime.ts` 是 runtime 级公共层：Codex 侧提供 `startCodexResumeTmuxSession`，并提供 `runtimeTmuxSessionName` / `codexTmuxSessionName` / `claudeTmuxSessionName` 这些跨 runtime 的 session name 规范。Claude 侧的 `startClaudeTmuxSession` 位于 `src/runtime/claude/tmux-provider.ts`，同样复用 `tmuxCore.ensureDetachedSession` 和 `claudeTmuxSessionName`，但 ready/setup 检测保留在 Claude provider 内。
+`src/bridge/tmux/runtime.ts` 是 runtime 级公共层，Codex 和 Claude 共用这些生命周期入口：
+
+| API | 职责 |
+| --- | --- |
+| `runtimeTmuxSessionName` / `codexTmuxSessionName` / `claudeTmuxSessionName` | 统一 provider-owned tmux session 命名。 |
+| `startRuntimeTmuxSession` | 以 `runtime=codex|claude` 创建或重建 tmux provider session；Codex 执行 `codex resume <threadId>`，Claude 执行 Claude Code TUI。 |
+| `waitForRuntimeTmuxReady` | 统一屏幕 ready 检测和 startup selection 处理；Codex 支持 update/goal 默认处理，Claude 支持 onboarding/trust 确认。 |
+| `inspectRuntimeTmuxSession` | 统一检查 session 存在性、抓屏，并返回当前屏幕上的 selection prompt。 |
+| `cleanupRuntimeTmuxSession` | 统一 best-effort 清理 provider-owned tmux session，供 `/clear` 和 `/t archive` 等生命周期操作调用。 |
+
+Codex 保留 `startCodexResumeTmuxSession` 和 `waitForCodexResumeTmuxReady` 作为兼容包装；Claude 的 `startClaudeTmuxSession` 也由 `src/bridge/tmux/runtime.ts` 提供，`src/runtime/claude/tmux-provider.ts` 只负责 prompt 注入、JSONL discovery 和 SSE/mirror 转换。
 
 ## Codex tmux 生命周期
 
@@ -55,7 +65,7 @@ Codex tmux 还有一条隐式初始化路径：如果当前聊天的有效 Codex
 
 ### 2. TUI 启动和 ready 检测
 
-`buildCodexResumeTmuxCommand` 构造 Codex TUI shell command。`waitForCodexResumeTmuxReady` 周期性 `capturePane`，直到看到 Codex TUI ready prompt，或者达到 `CODELARK_CODEX_RESUME_TMUX_READY_TIMEOUT_MS`。超时不会阻断 provider 切换，但会在日志里记录，便于排查 TUI 启动慢或卡在交互提示。
+`buildCodexResumeTmuxCommand` 构造 Codex TUI shell command。`waitForCodexResumeTmuxReady` 现在委托给 `waitForRuntimeTmuxReady(runtime='codex')` 周期性 `capturePane`，直到看到 Codex TUI ready prompt，或者达到 `CODELARK_CODEX_RESUME_TMUX_READY_TIMEOUT_MS`。如果启动时停在 update 或 replace-goal selection，shared readiness 会按默认选择跳过或取消；权限类 selection 会被返回为启动失败原因，避免误把 selection prompt 当作 idle prompt。
 
 ### 3. 普通消息转发
 
@@ -81,8 +91,8 @@ Claude Code 现在提供与 Codex tmux 对齐的 provider：
 | 阶段 | Claude tmux 实现 |
 | --- | --- |
 | provider 选择 | `/provider tmux` 写入 `BridgeSession.runtime.claude.provider=tmux`，并记录 `general.tmuxSessionName`。 |
-| 启动命令 | `buildClaudeTmuxCommand` 复用 Claude pty 的 CLI 参数构造，支持 `claude` / `ccr code`、model、permission mode 和 `--effort`。 |
-| tmux session | `claudeTmuxSessionName(session.id)` 生成稳定 session 名，`startClaudeTmuxSession` 创建或重建 detached session。 |
+| 启动命令 | shared `startClaudeTmuxSession` 复用 Claude pty 的 CLI 参数构造，支持 `claude` / `ccr code`、model、permission mode 和 `--effort`。 |
+| tmux session | `claudeTmuxSessionName(session.id)` 生成稳定 session 名，`startRuntimeTmuxSession(runtime='claude')` 创建或重建 detached session。 |
 | prompt 注入 | `ClaudeTmuxProvider` 使用 `tmuxCore.injectPromptIntoPane` 注入普通消息。 |
 | 会话身份 | provider 通过 Claude JSONL discovery 获取 `session_id`、cwd 和 transcript path，并在 SSE `result` 中回传。 |
 | 输出同步 | Claude pty/tmux 都依赖 `src/runtime/claude/session-jsonl.ts` 读取 Claude Code JSONL；SDK provider 继续走原生事件。 |
@@ -105,9 +115,10 @@ Claude tmux 也必须支持和 Codex 相同的普通消息隐式初始化/恢复
 | 首轮 mirror | Codex thread 已知，mirror 可按 thread 找 JSONL。 | 首轮普通消息后等待 Claude JSONL，写回 `session_id/cwd`，再 prime 首个 turn。 | 已对齐到“首轮也必须可投递”，实现手段不同。 |
 | mirror suppression | SDK turn 复用已有 Codex JSONL thread 时建立 suppression，避免 SDK final 和 mirror final 重复。 | Claude SDK provider 不订阅 tmux/pty mirror；pty/tmux 由 Claude JSONL mirror 负责最终投递。 | Codex SDK/mirror 混合路径已覆盖；Claude 按 provider 分流。 |
 | 健康状态 | auto-forward 后记录 interactive start，等待 mirror terminal 更新。 | auto-forward 后记录 interactive start，等待 Claude mirror terminal 更新。 | 已对齐。 |
-| TUI 特殊提示 | Codex 处理 trust、update、goal/permission 选择。 | Claude 处理 onboarding/trust/input prompt。 | 不做 1:1 复制，按 CLI 实际提示语义分别处理。 |
+| TUI 特殊提示 | shared readiness 检测 Codex update/goal/permission/generic selection；provider turn 内仍处理 trust 和用户确认。 | shared readiness 检测 Claude onboarding/trust/input prompt。 | 已共享检测入口；按 CLI 实际提示语义分别处理默认动作。 |
 | `/stop` / abort | tmux/pty provider 发送中断，interactive runtime 释放状态。 | tmux/pty provider 发送中断，interactive runtime 释放状态。 | 共用终端控制和 runtime health 语义。 |
-| `/clear` after runtime switch | 只替换当前 Codex BridgeSession，保留同一聊天记住的 Claude BridgeSession 映射。 | 只替换当前 Claude BridgeSession，保留同一聊天记住的 Codex BridgeSession 映射。 | 已对齐；新 session 继承当前 active runtime 和当前 runtime 的 provider override，避免清空后静默切回另一个 runtime。 |
+| `/clear` after runtime switch | 只替换当前 Codex BridgeSession，保留同一聊天记住的 Claude BridgeSession 映射；清理旧 Codex provider-owned tmux session。 | 只替换当前 Claude BridgeSession，保留同一聊天记住的 Codex BridgeSession 映射；清理旧 Claude provider-owned tmux session。 | 已对齐；新 session 继承当前 active runtime 和当前 runtime 的 provider override，避免清空后静默切回另一个 runtime。 |
+| `/t archive` cleanup | 归档/删除 BridgeSession 前清理记录在 runtime state 中的 Codex tmux session。 | 归档/删除 BridgeSession 前清理记录在 runtime state 中的 Claude tmux session。 | 已对齐；只清理 provider-owned session，不清理手动 `/tmux-attach` 目标。 |
 | `/t rename` after runtime switch | 重命名当前聊天当前 Codex BridgeSession。 | 重命名当前聊天当前 Claude BridgeSession。 | 已对齐；切回另一个 runtime 时不会污染另一个 BridgeSession 的标题。 |
 
 ## 回归覆盖
@@ -123,6 +134,7 @@ Claude tmux 也必须支持和 Codex 相同的普通消息隐式初始化/恢复
 | SDK final 与已有 Codex mirror 订阅共存时建立 suppression，避免重复 final。 | `delivers /auto SDK final output for a still-bound session without duplicate mirror output` |
 | `/clear` 在 Claude runtime 下运行时保持 Claude runtime/provider，并保留同聊天 Codex runtime 映射。 | `keeps the active runtime and remembered alternate runtime when /clear follows a runtime switch` |
 | `/t rename` 在 runtime 切换后只修改当前 runtime 的 BridgeSession 标题。 | `renames only the active runtime BridgeSession after runtime switches` |
+| `/tmux-attach` 和 `/tmux-screen` 查看当前屏幕时通过 shared inspect 报告 selection prompt。 | `reports tmux selection prompts through shared attach and screen inspection` |
 
 ## 命令和配置入口
 
@@ -133,7 +145,8 @@ Claude tmux 也必须支持和 Codex 相同的普通消息隐式初始化/恢复
 | 普通消息 + tmux provider | 对当前 runtime 的 tmux provider 自动注入 TUI；Codex 可自动 bootstrap thread 并启动 `codex_<threadId>`，Claude 可自动启动或恢复 `claude_<BridgeSessionId 或 session_id>`。 |
 | `/tmux-screen` | 查看当前绑定的 tmux 屏幕。 |
 | `/stop` | 对运行中的 tmux/pty provider 发送中断。 |
-| `/clear` | 清空当前聊天当前 runtime 的 BridgeSession；如果同一聊天记住了另一个 runtime 的 BridgeSession，映射会保留，之后 `/runtime <other>` 可以切回。 |
+| `/clear` | 清空当前聊天当前 runtime 的 BridgeSession；如果同一聊天记住了另一个 runtime 的 BridgeSession，映射会保留，之后 `/runtime <other>` 可以切回；旧 runtime tmux provider session 会 best-effort 清理。 |
+| `/t archive ...` | 归档本地 Codex/Claude 会话或删除 Bridge-only 会话；如果目标 BridgeSession 记录了 runtime tmux provider session，会 best-effort 清理。 |
 | `/t rename <name>` | 重命名当前聊天当前 runtime 绑定的 BridgeSession；不会改写同一聊天里另一个 runtime 的 BridgeSession 标题。 |
 | `/current` | 当前会话配置卡片，支持 provider、model、mode、reasoning 等会话级覆盖。 |
 | `/set codexReasoningEffort ...` | 设置 Codex 全局 reasoning 默认值。 |
@@ -143,7 +156,7 @@ Claude tmux 也必须支持和 Codex 相同的普通消息隐式初始化/恢复
 ## 维护边界
 
 - tmux 命令拼装、长文本 paste、屏幕抓取和特殊键发送必须继续留在 `src/bridge/tmux/core.ts`，不要在 provider 内重复 shell 拼接。
-- Codex 和 Claude 各自的 CLI 参数构造可以不同，但 tmux session 生命周期应通过 `src/bridge/tmux/runtime.ts` 暴露的 runtime API。
+- Codex 和 Claude 各自的 CLI 参数构造可以不同，但 provider-owned tmux session 的创建、ready/selection 检测、查看和清理应通过 `src/bridge/tmux/runtime.ts` 暴露的 runtime API。
 - 普通消息 auto-forward 和显式 `/tmux <...>` 的自动初始化逻辑集中在 `src/bridge/command/tmux.ts`：Codex 和 Claude 都应只在 `autoRecoverProviderSession=true` 时启动或重建 provider-owned tmux session；`/tmux-screen` 和 `/tmux-attach` 不负责 provider 恢复。
 - JSONL mirror 是 pty/tmux provider 的权威输出来源；屏幕抓取主要用于 ready 检测、人工诊断和短期兜底。
 - 卡顿检测应继续消费统一的 `BridgeSession` 运行状态和 mirror 进度，而不是让 provider 自己决定最终健康状态。

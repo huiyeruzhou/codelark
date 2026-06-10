@@ -6,8 +6,11 @@ import fs from 'node:fs';
 import {
   buildCodexResumeTmuxCommand,
   CodexResumeTmuxLaunchError,
+  cleanupRuntimeTmuxSession,
   hasCodexResumeTmuxReadyPrompt,
+  inspectRuntimeTmuxSession,
   startCodexResumeTmuxSession,
+  waitForRuntimeTmuxReady,
   waitForCodexResumeTmuxReady,
   type TmuxCore,
   type TmuxSendAction,
@@ -236,5 +239,134 @@ describe('codex tmux runtime', () => {
       if (oldTimeout === undefined) delete process.env.CODELARK_CODEX_RESUME_TMUX_READY_TIMEOUT_MS;
       else process.env.CODELARK_CODEX_RESUME_TMUX_READY_TIMEOUT_MS = oldTimeout;
     }
+  });
+
+  it('uses the shared runtime readiness loop to confirm Claude trust prompts', async () => {
+    const oldTimeout = process.env.CODELARK_CLAUDE_TMUX_READY_TIMEOUT_MS;
+    const oldPoll = process.env.CODELARK_CLAUDE_TMUX_READY_POLL_MS;
+    try {
+      process.env.CODELARK_CLAUDE_TMUX_READY_TIMEOUT_MS = '5000';
+      process.env.CODELARK_CLAUDE_TMUX_READY_POLL_MS = '50';
+      let captureCount = 0;
+      const prompts: string[] = [];
+      const sentActions: Array<{ target: string; actions: TmuxSendAction[] }> = [];
+      const core: TmuxCore = {
+        commandPreview: (args) => ['tmux', ...args].join(' '),
+        hasSession: async (name) => ({ exists: true, command: `tmux has-session -t ${name}` }),
+        killSession: async (name) => `tmux kill-session -t ${name}`,
+        listSessions: async () => ({ sessions: [], command: 'tmux list-sessions' }),
+        ensureDetachedSession: async () => ({ existed: false, command: 'tmux new-session -d -s claude_trust', commands: ['tmux new-session -d -s claude_trust'] }),
+        capturePane: async (target) => {
+          captureCount += 1;
+          return {
+            command: `tmux capture-pane -t ${target} -p -S -80`,
+            screen: captureCount === 1
+              ? [
+                'Quick safety check',
+                'Yes, I trust this folder',
+                'Enter to confirm',
+              ].join('\n')
+              : [
+                'Claude Code v2.1.160',
+                '❯ ',
+                '? for shortcuts',
+              ].join('\n'),
+          };
+        },
+        sendActions: async (target, actions) => {
+          sentActions.push({ target, actions });
+          return { commands: actions.map((action) => action.type === 'key' ? `tmux send-keys -t ${target} ${action.key}` : `tmux send-keys -t ${target} -l ${action.text}`) };
+        },
+        sendInterrupt: async () => 'tmux send-keys -t claude_trust C-c',
+        injectPromptIntoPane: async () => ({ commands: [] }),
+      };
+
+      const result = await waitForRuntimeTmuxReady({
+        runtime: 'claude',
+        sessionName: 'claude_trust',
+        target: 'claude_trust:0.0',
+        core,
+        afterSelectionDelayMs: 0,
+        onSelectionPrompt: (selectionPrompt) => {
+          prompts.push(selectionPrompt.kind);
+        },
+      });
+
+      assert.equal(result.ready, true);
+      assert.deepEqual(prompts, ['trust']);
+      assert.deepEqual(sentActions, [{
+        target: 'claude_trust:0.0',
+        actions: [{ type: 'key', key: 'Enter' }],
+      }]);
+      assert.equal(result.commands.includes('tmux send-keys -t claude_trust:0.0 Enter'), true);
+    } finally {
+      if (oldTimeout === undefined) delete process.env.CODELARK_CLAUDE_TMUX_READY_TIMEOUT_MS;
+      else process.env.CODELARK_CLAUDE_TMUX_READY_TIMEOUT_MS = oldTimeout;
+      if (oldPoll === undefined) delete process.env.CODELARK_CLAUDE_TMUX_READY_POLL_MS;
+      else process.env.CODELARK_CLAUDE_TMUX_READY_POLL_MS = oldPoll;
+    }
+  });
+
+  it('inspects runtime tmux sessions and reports selection prompts', async () => {
+    const core: TmuxCore = {
+      commandPreview: (args) => ['tmux', ...args].join(' '),
+      hasSession: async (name) => ({ exists: true, command: `tmux has-session -t ${name}` }),
+      killSession: async (name) => `tmux kill-session -t ${name}`,
+      listSessions: async () => ({ sessions: [], command: 'tmux list-sessions' }),
+      ensureDetachedSession: async () => ({ existed: false, commands: [] }),
+      capturePane: async (target, lines) => ({
+        command: `tmux capture-pane -t ${target} -p -S -${lines}`,
+        screen: [
+          'A task is already running.',
+          'Do you want to replace the current goal?',
+          '› 1. Replace current goal',
+          '  2. Cancel',
+          'Press enter to confirm or esc to cancel',
+        ].join('\n'),
+      }),
+      sendActions: async () => ({ commands: [] }),
+      sendInterrupt: async () => 'tmux send-keys C-c',
+      injectPromptIntoPane: async () => ({ commands: [] }),
+    };
+
+    const inspected = await inspectRuntimeTmuxSession({
+      runtime: 'codex',
+      sessionName: 'codex_goal',
+      lines: 80,
+      core,
+    });
+
+    assert.equal(inspected.exists, true);
+    assert.equal(inspected.selectionPrompt?.runtime, 'codex');
+    assert.equal(inspected.selectionPrompt?.kind, 'goal');
+    assert.equal(inspected.selectionPrompt?.defaultChoice, 'cancel');
+  });
+
+  it('cleans up runtime tmux sessions through the shared cleanup helper', async () => {
+    const killed: string[] = [];
+    const core: TmuxCore = {
+      commandPreview: (args) => ['tmux', ...args].join(' '),
+      hasSession: async (name) => ({ exists: true, command: `tmux has-session -t ${name}` }),
+      killSession: async (name) => {
+        killed.push(name);
+        return `tmux kill-session -t ${name}`;
+      },
+      listSessions: async () => ({ sessions: [], command: 'tmux list-sessions' }),
+      ensureDetachedSession: async () => ({ existed: false, commands: [] }),
+      capturePane: async () => ({ screen: '', command: 'tmux capture-pane' }),
+      sendActions: async () => ({ commands: [] }),
+      sendInterrupt: async () => 'tmux send-keys C-c',
+      injectPromptIntoPane: async () => ({ commands: [] }),
+    };
+
+    const cleanup = await cleanupRuntimeTmuxSession({
+      runtime: 'claude',
+      sessionName: 'claude_old',
+      core,
+    });
+
+    assert.equal(cleanup.killed, true);
+    assert.deepEqual(killed, ['claude_old']);
+    assert.deepEqual(cleanup.commands, ['tmux kill-session -t claude_old']);
   });
 });

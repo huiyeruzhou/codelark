@@ -14,6 +14,18 @@ import {
   type CodexTuiSelectionPromptKind,
 } from '../../runtime/codex/tmux-provider.js';
 import { resolveCodexCliExecutable } from '../../runtime/codex/cli-executable.js';
+import {
+  buildClaudePtyCommand,
+  buildClaudePtyEnv,
+  hasClaudePtyInputPrompt,
+  hasClaudePtyOnboardingPrompt,
+  hasClaudePtyTrustPrompt,
+} from '../../runtime/claude/pty-provider.js';
+import { prepareClaudeCodeRouterEnv } from '../../runtime/claude/code-router.js';
+import {
+  buildShellSnapshotLaunchCommand,
+  ensureShellSnapshot,
+} from '../../runtime/codex/shell-snapshot.js';
 import type { StreamChatParams } from '../../runtime/contracts.js';
 import {
   tmuxCore,
@@ -50,6 +62,51 @@ export interface StartCodexResumeTmuxSessionResult {
   commands: string[];
   ready: boolean;
   launchLogPath?: string;
+}
+
+export type RuntimeTmuxKind = 'codex' | 'claude';
+
+export type RuntimeTmuxSelectionPrompt =
+  | {
+      runtime: 'codex';
+      kind: CodexTuiSelectionPromptKind;
+      prompt: CodexTuiSelectionPrompt;
+      defaultChoice: CodexTuiSelectionPromptChoice | null;
+      summary: string;
+    }
+  | {
+      runtime: 'claude';
+      kind: 'onboarding' | 'trust';
+      defaultChoice: 'confirm';
+      summary: string;
+    };
+
+export interface RuntimeTmuxReadinessResult {
+  ready: boolean;
+  runtime: RuntimeTmuxKind;
+  commands: string[];
+  lastScreen?: string;
+  lastError?: string;
+  sessionExists?: boolean;
+  sessionExistsCommand?: string;
+  selectionPrompt?: RuntimeTmuxSelectionPrompt;
+}
+
+export interface InspectRuntimeTmuxSessionResult {
+  exists: boolean;
+  runtime?: RuntimeTmuxKind;
+  sessionName: string;
+  existsCommand: string;
+  screen?: string;
+  captureCommand?: string;
+  selectionPrompt?: RuntimeTmuxSelectionPrompt;
+}
+
+export interface CleanupRuntimeTmuxSessionResult {
+  sessionName?: string;
+  commands: string[];
+  killed: boolean;
+  error?: string;
 }
 
 export interface CodexResumeTmuxReadinessResult {
@@ -99,6 +156,7 @@ export interface AttachTmuxSessionResult {
   existsCommand: string;
   screen?: string;
   captureCommand?: string;
+  selectionPrompt?: RuntimeTmuxSelectionPrompt;
 }
 
 export interface CreateOrAttachTmuxSessionResult {
@@ -121,9 +179,43 @@ export interface SendTmuxActionsAndCaptureResult {
   commands: string[];
 }
 
+export interface StartClaudeTmuxSessionParams {
+  sessionName: string;
+  bridgeSessionId: string;
+  workingDirectory?: string;
+  executable?: StreamChatParams['claudeExecutable'];
+  model?: string;
+  permissionMode?: StreamChatParams['claudePermissionMode'];
+  reasoningEffort?: StreamChatParams['claudeReasoningEffort'];
+  controller?: ReadableStreamDefaultController<string>;
+  core?: TmuxCore;
+  recreate?: boolean;
+  waitReady?: boolean;
+}
+
+export interface StartClaudeTmuxSessionResult {
+  sessionName: string;
+  commands: string[];
+  existed: boolean;
+  ready: boolean;
+}
+
+export type StartRuntimeTmuxSessionParams =
+  | ({ runtime: 'codex'; core?: TmuxCore } & StartCodexResumeTmuxSessionParams)
+  | ({ runtime: 'claude' } & StartClaudeTmuxSessionParams);
+
+export type StartRuntimeTmuxSessionResult =
+  | ({ runtime: 'codex' } & StartCodexResumeTmuxSessionResult)
+  | ({ runtime: 'claude' } & StartClaudeTmuxSessionResult);
+
+// 这里统一的是 provider-owned tmux session 生命周期，而不是强行抽象 CLI 语义。
+// Codex 需要 resume thread，Claude 需要等待 JSONL 发现 session id；保留这些差异能让上层共享创建/查看/清理行为，同时避免 provider 暴露多余接口。
+
 const DEFAULT_CODEX_RESUME_TMUX_READY_TIMEOUT_MS = 15_000;
 const DEFAULT_CODEX_RESUME_TMUX_READY_POLL_MS = 250;
 const CODEX_TMUX_LAUNCH_LOG_LINES = 80;
+const DEFAULT_CLAUDE_TMUX_READY_TIMEOUT_MS = 10_000;
+const DEFAULT_CLAUDE_TMUX_READY_POLL_MS = 250;
 
 function posixShellQuote(value: string): string {
   if (/^[A-Za-z0-9_@%+=:,./-]+$/.test(value)) return value;
@@ -228,6 +320,51 @@ function screenExcerpt(screen: string | undefined): string | undefined {
   return screen.replace(/\s+$/g, '').slice(-2_000);
 }
 
+function summarizeClaudeSelection(kind: 'onboarding' | 'trust'): string {
+  return kind === 'onboarding'
+    ? 'Claude Code is waiting at an onboarding prompt.'
+    : 'Claude Code is waiting at a workspace trust prompt.';
+}
+
+function detectRuntimeTmuxSelectionPrompt(
+  runtime: RuntimeTmuxKind,
+  screenText: string,
+): RuntimeTmuxSelectionPrompt | undefined {
+  if (runtime === 'codex') {
+    const prompt = parseCodexTuiSelectionPrompt(screenText);
+    if (!prompt) return undefined;
+    return {
+      runtime: 'codex',
+      kind: prompt.kind,
+      prompt,
+      defaultChoice: defaultCodexResumeStartupSelectionChoice(prompt),
+      summary: prompt.summary,
+    };
+  }
+  if (hasClaudePtyOnboardingPrompt(screenText)) {
+    return {
+      runtime: 'claude',
+      kind: 'onboarding',
+      defaultChoice: 'confirm',
+      summary: summarizeClaudeSelection('onboarding'),
+    };
+  }
+  if (hasClaudePtyTrustPrompt(screenText)) {
+    return {
+      runtime: 'claude',
+      kind: 'trust',
+      defaultChoice: 'confirm',
+      summary: summarizeClaudeSelection('trust'),
+    };
+  }
+  return undefined;
+}
+
+function detectAnyRuntimeTmuxSelectionPrompt(screenText: string): RuntimeTmuxSelectionPrompt | undefined {
+  return detectRuntimeTmuxSelectionPrompt('codex', screenText)
+    || detectRuntimeTmuxSelectionPrompt('claude', screenText);
+}
+
 export function hasCodexResumeTmuxReadyPrompt(screenText: string): boolean {
   if (parseCodexTuiSelectionPrompt(screenText)) return false;
   const normalized = screenText
@@ -248,21 +385,75 @@ function defaultCodexResumeStartupSelectionChoice(
   return null;
 }
 
-export async function waitForCodexResumeTmuxReady(
-  sessionName: string,
-  core: TmuxCore = tmuxCore,
-): Promise<CodexResumeTmuxReadinessResult> {
-  const timeoutMs = parsePositiveIntEnv(
-    'CODELARK_CODEX_RESUME_TMUX_READY_TIMEOUT_MS',
-    DEFAULT_CODEX_RESUME_TMUX_READY_TIMEOUT_MS,
+function hasRuntimeTmuxReadyPrompt(runtime: RuntimeTmuxKind, screenText: string): boolean {
+  return runtime === 'codex'
+    ? hasCodexResumeTmuxReadyPrompt(screenText)
+    : hasClaudePtyInputPrompt(screenText);
+}
+
+function runtimeReadyTimeoutMs(runtime: RuntimeTmuxKind): number {
+  if (runtime === 'codex') {
+    return parsePositiveIntEnv(
+      'CODELARK_CODEX_RESUME_TMUX_READY_TIMEOUT_MS',
+      DEFAULT_CODEX_RESUME_TMUX_READY_TIMEOUT_MS,
+      0,
+    );
+  }
+  return parsePositiveIntEnv(
+    'CODELARK_CLAUDE_TMUX_READY_TIMEOUT_MS',
+    DEFAULT_CLAUDE_TMUX_READY_TIMEOUT_MS,
     0,
   );
-  const pollMs = parsePositiveIntEnv(
-    'CODELARK_CODEX_RESUME_TMUX_READY_POLL_MS',
-    DEFAULT_CODEX_RESUME_TMUX_READY_POLL_MS,
+}
+
+function runtimeReadyPollMs(runtime: RuntimeTmuxKind): number {
+  if (runtime === 'codex') {
+    return parsePositiveIntEnv(
+      'CODELARK_CODEX_RESUME_TMUX_READY_POLL_MS',
+      DEFAULT_CODEX_RESUME_TMUX_READY_POLL_MS,
+      50,
+    );
+  }
+  return parsePositiveIntEnv(
+    'CODELARK_CLAUDE_TMUX_READY_POLL_MS',
+    DEFAULT_CLAUDE_TMUX_READY_POLL_MS,
     50,
   );
-  if (timeoutMs <= 0) return { ready: true, commands: [] };
+}
+
+function codexReadinessFromRuntimeResult(result: RuntimeTmuxReadinessResult): CodexResumeTmuxReadinessResult {
+  const selectionPrompt = result.selectionPrompt?.runtime === 'codex'
+    ? result.selectionPrompt
+    : undefined;
+  return {
+    ready: result.ready,
+    commands: result.commands,
+    lastScreen: result.lastScreen,
+    lastError: result.lastError,
+    sessionExists: result.sessionExists,
+    sessionExistsCommand: result.sessionExistsCommand,
+    selectionPromptKind: selectionPrompt?.kind,
+    selectionPromptChoice: selectionPrompt?.defaultChoice || undefined,
+    selectionPromptSummary: selectionPrompt?.summary,
+  };
+}
+
+export async function waitForRuntimeTmuxReady(params: {
+  runtime: RuntimeTmuxKind;
+  sessionName: string;
+  target?: string;
+  core?: TmuxCore;
+  autoResolveSelection?: boolean;
+  afterSelectionDelayMs?: number;
+  onSelectionPrompt?: (selectionPrompt: RuntimeTmuxSelectionPrompt) => void | Promise<void>;
+}): Promise<RuntimeTmuxReadinessResult> {
+  const core = params.core || tmuxCore;
+  const captureTarget = params.target || params.sessionName;
+  const timeoutMs = runtimeReadyTimeoutMs(params.runtime);
+  const pollMs = runtimeReadyPollMs(params.runtime);
+  if (timeoutMs <= 0) {
+    return { ready: true, runtime: params.runtime, commands: [] };
+  }
 
   const deadline = Date.now() + timeoutMs;
   const commands: string[] = [];
@@ -270,68 +461,73 @@ export async function waitForCodexResumeTmuxReady(
   let lastError: string | undefined;
   let sessionExists: boolean | undefined;
   let sessionExistsCommand: string | undefined;
-  let selectionPromptKind: CodexTuiSelectionPromptKind | undefined;
-  let selectionPromptChoice: CodexTuiSelectionPromptChoice | undefined;
-  let selectionPromptSummary: string | undefined;
+  let selectionPrompt: RuntimeTmuxSelectionPrompt | undefined;
   const handledSelectionFingerprints = new Set<string>();
   while (Date.now() <= deadline) {
     try {
-      const capture = await core.capturePane(sessionName, 80);
+      const capture = await core.capturePane(captureTarget, 80);
       commands.push(capture.command);
       lastScreen = capture.screen;
       lastError = undefined;
-      const selectionPrompt = parseCodexTuiSelectionPrompt(capture.screen);
+      selectionPrompt = detectRuntimeTmuxSelectionPrompt(params.runtime, capture.screen);
       if (selectionPrompt) {
-        selectionPromptKind = selectionPrompt.kind;
-        selectionPromptSummary = selectionPrompt.summary;
-        const choice = defaultCodexResumeStartupSelectionChoice(selectionPrompt);
-        if (!choice) {
+        if (params.autoResolveSelection === false || selectionPrompt.defaultChoice === null) {
           return {
             ready: false,
+            runtime: params.runtime,
             commands,
             lastScreen,
             sessionExists: true,
-            selectionPromptKind,
-            selectionPromptSummary,
+            selectionPrompt,
           };
         }
-        selectionPromptChoice = choice;
-        if (!handledSelectionFingerprints.has(selectionPrompt.fingerprint)) {
-          handledSelectionFingerprints.add(selectionPrompt.fingerprint);
-          const actions = buildCodexTuiSelectionChoiceActions(selectionPrompt, choice);
+        const fingerprint = selectionPrompt.runtime === 'codex'
+          ? selectionPrompt.prompt.fingerprint
+          : `${selectionPrompt.runtime}:${selectionPrompt.kind}`;
+        if (!handledSelectionFingerprints.has(fingerprint)) {
+          handledSelectionFingerprints.add(fingerprint);
+          await params.onSelectionPrompt?.(selectionPrompt);
+          const actions = selectionPrompt.runtime === 'codex'
+            ? buildCodexTuiSelectionChoiceActions(selectionPrompt.prompt, selectionPrompt.defaultChoice)
+            : [{ type: 'key' as const, key: 'Enter' }];
           if (actions.length > 0) {
-            const sent = await core.sendActions(sessionName, actions);
+            const sent = await core.sendActions(captureTarget, actions);
             commands.push(...sent.commands);
           }
         }
-        await sleep(pollMs);
+        if (params.afterSelectionDelayMs && params.afterSelectionDelayMs > 0) {
+          await sleep(params.afterSelectionDelayMs);
+        } else {
+          await sleep(pollMs);
+        }
         continue;
       }
-      if (hasCodexResumeTmuxReadyPrompt(capture.screen)) {
+      if (hasRuntimeTmuxReadyPrompt(params.runtime, capture.screen)) {
         return {
           ready: true,
+          runtime: params.runtime,
           commands,
           lastScreen,
-          ...(selectionPromptKind ? { selectionPromptKind } : {}),
-          ...(selectionPromptChoice ? { selectionPromptChoice } : {}),
-          ...(selectionPromptSummary ? { selectionPromptSummary } : {}),
+          ...(selectionPrompt ? { selectionPrompt } : {}),
         };
       }
     } catch (error) {
       lastError = describeUnknownError(error);
       try {
-        const exists = await core.hasSession(sessionName);
+        const exists = await core.hasSession(params.sessionName);
         commands.push(exists.command);
         sessionExists = exists.exists;
         sessionExistsCommand = exists.command;
         if (!exists.exists) {
           return {
             ready: false,
+            runtime: params.runtime,
             commands,
             lastScreen,
             lastError,
             sessionExists,
             sessionExistsCommand,
+            ...(selectionPrompt ? { selectionPrompt } : {}),
           };
         }
       } catch (existsError) {
@@ -343,7 +539,7 @@ export async function waitForCodexResumeTmuxReady(
 
   if (sessionExists === undefined) {
     try {
-      const exists = await core.hasSession(sessionName);
+      const exists = await core.hasSession(params.sessionName);
       commands.push(exists.command);
       sessionExists = exists.exists;
       sessionExistsCommand = exists.command;
@@ -354,27 +550,44 @@ export async function waitForCodexResumeTmuxReady(
     }
   }
 
-  console.warn('[codex-tmux-runtime] Timed out waiting for resumed Codex tmux to become ready:', {
-    tmux_session: sessionName,
+  console.warn('[tmux-runtime] Timed out waiting for runtime tmux session to become ready:', {
+    runtime: params.runtime,
+    tmux_session: params.sessionName,
+    capture_target: captureTarget,
     timeout_ms: timeoutMs,
     session_exists: sessionExists,
     last_error: lastError,
     last_screen_excerpt: screenExcerpt(lastScreen),
-    selection_prompt_kind: selectionPromptKind,
-    selection_prompt_choice: selectionPromptChoice,
-    selection_prompt_summary: screenExcerpt(selectionPromptSummary),
+    selection_prompt: selectionPrompt
+      ? {
+        runtime: selectionPrompt.runtime,
+        kind: selectionPrompt.kind,
+        default_choice: selectionPrompt.defaultChoice,
+        summary: screenExcerpt(selectionPrompt.summary),
+      }
+      : undefined,
   });
   return {
     ready: false,
+    runtime: params.runtime,
     commands,
     lastScreen,
     lastError,
     sessionExists,
     sessionExistsCommand,
-    selectionPromptKind,
-    selectionPromptChoice,
-    selectionPromptSummary,
+    ...(selectionPrompt ? { selectionPrompt } : {}),
   };
+}
+
+export async function waitForCodexResumeTmuxReady(
+  sessionName: string,
+  core: TmuxCore = tmuxCore,
+): Promise<CodexResumeTmuxReadinessResult> {
+  return codexReadinessFromRuntimeResult(await waitForRuntimeTmuxReady({
+    runtime: 'codex',
+    sessionName,
+    core,
+  }));
 }
 
 export async function startCodexResumeTmuxSession(
@@ -458,6 +671,76 @@ export async function startCodexResumeTmuxSession(
   };
 }
 
+function commandPreview(command: string, args: string[]): string {
+  return [command, ...args].map(posixShellQuote).join(' ');
+}
+
+function buildClaudeTmuxShellCommand(command: string, args: string[], env: Record<string, string>): string {
+  const snapshot = ensureShellSnapshot(env);
+  return buildShellSnapshotLaunchCommand(command, args, snapshot);
+}
+
+export async function startClaudeTmuxSession(
+  params: StartClaudeTmuxSessionParams,
+): Promise<StartClaudeTmuxSessionResult> {
+  const core = params.core || tmuxCore;
+  const executable = params.executable || 'claude';
+  const cwd = params.workingDirectory || process.cwd();
+  const baseEnv = buildClaudePtyEnv();
+  const { command, args } = buildClaudePtyCommand(executable, {
+    model: params.model?.trim() || undefined,
+    permissionMode: params.permissionMode?.trim() || undefined,
+    reasoningEffort: params.reasoningEffort?.trim() || undefined,
+    env: baseEnv,
+  });
+  const env = executable === 'ccr'
+    ? await prepareClaudeCodeRouterEnv(command, baseEnv, {
+      controller: params.controller,
+      logPrefix: '[claude-tmux]',
+    })
+    : baseEnv;
+  const shellCommand = buildClaudeTmuxShellCommand(command, args, env);
+
+  console.log('[claude-tmux] Claude Code TUI start:', {
+    bridge_session_id: params.bridgeSessionId,
+    tmux_session: params.sessionName,
+    command: commandPreview(command, args),
+    cwd,
+    executable,
+  });
+  const started = await core.ensureDetachedSession({
+    name: params.sessionName,
+    cwd,
+    command: shellCommand,
+    recreate: params.recreate !== false,
+  });
+  const readiness = params.waitReady
+    ? await waitForRuntimeTmuxReady({
+      runtime: 'claude',
+      sessionName: params.sessionName,
+      core,
+    })
+    : null;
+  return {
+    sessionName: params.sessionName,
+    existed: started.existed,
+    commands: [...started.commands, ...(readiness?.commands || [])],
+    ready: readiness?.ready ?? true,
+  };
+}
+
+export async function startRuntimeTmuxSession(
+  params: StartRuntimeTmuxSessionParams,
+): Promise<StartRuntimeTmuxSessionResult> {
+  if (params.runtime === 'codex') {
+    const { runtime: _runtime, core, ...codexParams } = params;
+    const started = await startCodexResumeTmuxSession(codexParams, core);
+    return { runtime: 'codex', ...started };
+  }
+  const started = await startClaudeTmuxSession(params);
+  return { runtime: 'claude', ...started };
+}
+
 export async function listTmuxSessions(core: TmuxCore = tmuxCore) {
   return core.listSessions();
 }
@@ -482,22 +765,76 @@ export async function attachTmuxSession(
   lines: number,
   core: TmuxCore = tmuxCore,
 ): Promise<AttachTmuxSessionResult> {
-  const exists = await core.hasSession(name);
-  if (!exists.exists) {
+  const inspected = await inspectRuntimeTmuxSession({ sessionName: name, lines, core });
+  if (!inspected.exists) {
     return {
       exists: false,
       sessionName: name,
-      existsCommand: exists.command,
+      existsCommand: inspected.existsCommand,
     };
   }
-  const capture = await core.capturePane(name, lines);
   return {
     exists: true,
     sessionName: name,
+    existsCommand: inspected.existsCommand,
+    screen: inspected.screen,
+    captureCommand: inspected.captureCommand,
+    selectionPrompt: inspected.selectionPrompt,
+  };
+}
+
+export async function inspectRuntimeTmuxSession(params: {
+  sessionName: string;
+  lines: number;
+  runtime?: RuntimeTmuxKind;
+  core?: TmuxCore;
+}): Promise<InspectRuntimeTmuxSessionResult> {
+  const core = params.core || tmuxCore;
+  const exists = await core.hasSession(params.sessionName);
+  if (!exists.exists) {
+    return {
+      exists: false,
+      runtime: params.runtime,
+      sessionName: params.sessionName,
+      existsCommand: exists.command,
+    };
+  }
+  const capture = await core.capturePane(params.sessionName, params.lines);
+  const selectionPrompt = params.runtime
+    ? detectRuntimeTmuxSelectionPrompt(params.runtime, capture.screen)
+    : detectAnyRuntimeTmuxSelectionPrompt(capture.screen);
+  return {
+    exists: true,
+    runtime: selectionPrompt?.runtime || params.runtime,
+    sessionName: params.sessionName,
     existsCommand: exists.command,
     screen: capture.screen,
     captureCommand: capture.command,
+    ...(selectionPrompt ? { selectionPrompt } : {}),
   };
+}
+
+export async function cleanupRuntimeTmuxSession(params: {
+  sessionName?: string;
+  runtime?: RuntimeTmuxKind;
+  core?: TmuxCore;
+  ignoreMissing?: boolean;
+}): Promise<CleanupRuntimeTmuxSessionResult> {
+  const commands: string[] = [];
+  if (!params.sessionName) return { commands, killed: false };
+  const core = params.core || tmuxCore;
+  try {
+    const command = await core.killSession(params.sessionName, { ignoreMissing: params.ignoreMissing !== false });
+    commands.push(command);
+    return { sessionName: params.sessionName, commands, killed: true };
+  } catch (error) {
+    return {
+      sessionName: params.sessionName,
+      commands,
+      killed: false,
+      error: describeUnknownError(error),
+    };
+  }
 }
 
 export async function createOrAttachTmuxSession(

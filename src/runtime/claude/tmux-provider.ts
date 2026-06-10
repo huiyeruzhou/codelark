@@ -5,12 +5,7 @@ import type { BridgeMirrorRecord } from '../contracts.js';
 import { sseEvent } from '../sse.js';
 import { prepareClaudeCodeRouterEnv } from './code-router.js';
 import {
-  buildClaudePtyCommand,
-  buildClaudePtyEnv,
   findLatestClaudeSessionJsonlUpdatedAfter,
-  hasClaudePtyInputPrompt,
-  hasClaudePtyOnboardingPrompt,
-  hasClaudePtyTrustPrompt,
   parsePositiveIntEnv,
   sleep,
   waitForClaudeSessionJsonlUpdatedAfter,
@@ -20,15 +15,17 @@ import {
   readClaudeSessionMirrorRecordDeltaByFilePath,
 } from './session-jsonl.js';
 import {
-  buildShellSnapshotLaunchCommand,
-  ensureShellSnapshot,
-} from '../codex/shell-snapshot.js';
-import { tmuxCore, type TmuxCore, type TmuxEnsureSessionResult } from '../../bridge/tmux/core.js';
-import { claudeTmuxSessionName } from '../../bridge/tmux/runtime.js';
+  claudeTmuxSessionName,
+  startClaudeTmuxSession,
+  startRuntimeTmuxSession,
+  waitForRuntimeTmuxReady,
+} from '../../bridge/tmux/runtime.js';
+import { tmuxCore } from '../../bridge/tmux/core.js';
+
+export { startClaudeTmuxSession };
 
 const DEFAULT_CLAUDE_TMUX_PROMPT_DELAY_MS = 1_000;
 const DEFAULT_CLAUDE_TMUX_AFTER_SETUP_DELAY_MS = 2_500;
-const DEFAULT_CLAUDE_TMUX_INPUT_READY_TIMEOUT_MS = 10_000;
 const DEFAULT_CLAUDE_TMUX_POLL_INTERVAL_MS = 500;
 const DEFAULT_CLAUDE_TMUX_SESSION_FILE_TIMEOUT_MS = 30_000;
 
@@ -57,15 +54,6 @@ interface ClaudeTmuxRunContext {
   hasError: boolean;
 }
 
-function shellQuote(value: string): string {
-  if (/^[A-Za-z0-9_@%+=:,./-]+$/.test(value)) return value;
-  return `'${value.replace(/'/g, "'\\''")}'`;
-}
-
-function commandPreview(command: string, args: string[]): string {
-  return [command, ...args].map(shellQuote).join(' ');
-}
-
 function snapshotClaudeSessionFiles(cwd: string): SessionFileSnapshot {
   const snapshot: SessionFileSnapshot = new Map();
   for (const filePath of listClaudeSessionJsonlFiles(cwd)) {
@@ -79,110 +67,23 @@ function snapshotClaudeSessionFiles(cwd: string): SessionFileSnapshot {
   return snapshot;
 }
 
-function buildClaudeTmuxShellCommand(command: string, args: string[], env: Record<string, string>): string {
-  const snapshot = ensureShellSnapshot(env);
-  return buildShellSnapshotLaunchCommand(command, args, snapshot);
-}
-
-async function launchClaudeTmuxSession(params: {
-  sessionName: string;
-  streamParams: StreamChatParams;
-  controller?: ReadableStreamDefaultController<string>;
-  core?: TmuxCore;
-  recreate?: boolean;
-}): Promise<TmuxEnsureSessionResult> {
-  const core = params.core || tmuxCore;
-  const streamParams = params.streamParams;
-  const executable = streamParams.claudeExecutable || 'claude';
-  const cwd = streamParams.workingDirectory || process.cwd();
-  const baseEnv = buildClaudePtyEnv();
-  const { command, args } = buildClaudePtyCommand(executable, {
-    model: streamParams.model?.trim() || undefined,
-    permissionMode: streamParams.claudePermissionMode?.trim() || undefined,
-    reasoningEffort: streamParams.claudeReasoningEffort?.trim() || undefined,
-    env: baseEnv,
-  });
-  const env = executable === 'ccr'
-    ? await prepareClaudeCodeRouterEnv(command, baseEnv, {
-      controller: params.controller,
-      logPrefix: '[claude-tmux]',
-    })
-    : baseEnv;
-  const shellCommand = buildClaudeTmuxShellCommand(command, args, env);
-
-  console.log('[claude-tmux] Claude Code TUI start:', {
-    bridge_session_id: streamParams.sessionId,
-    tmux_session: params.sessionName,
-    command: commandPreview(command, args),
-    cwd,
-    executable,
-  });
-  return await core.ensureDetachedSession({
-    name: params.sessionName,
-    cwd,
-    command: shellCommand,
-    recreate: params.recreate === true,
-  });
-}
-
-export async function startClaudeTmuxSession(params: {
-  sessionName: string;
-  bridgeSessionId: string;
-  workingDirectory?: string;
-  executable?: StreamChatParams['claudeExecutable'];
-  model?: string;
-  permissionMode?: StreamChatParams['claudePermissionMode'];
-  reasoningEffort?: StreamChatParams['claudeReasoningEffort'];
-  core?: TmuxCore;
-}): Promise<{ sessionName: string; commands: string[]; existed: boolean }> {
-  const started = await launchClaudeTmuxSession({
-    sessionName: params.sessionName,
-    core: params.core,
-    recreate: true,
-    streamParams: {
-      prompt: '',
-      sessionId: params.bridgeSessionId,
-      runtime: 'claude',
-      claudeExecutable: params.executable,
-      model: params.model,
-      claudePermissionMode: params.permissionMode,
-      claudeReasoningEffort: params.reasoningEffort,
-      workingDirectory: params.workingDirectory,
-    },
-  });
-  return {
-    sessionName: params.sessionName,
-    existed: started.existed,
-    commands: started.commands,
-  };
-}
-
-async function prepareClaudeTmuxForPrompt(targetPane: string, controller: ReadableStreamDefaultController<string>): Promise<void> {
-  const inputReadyTimeoutMs = parsePositiveIntEnv(
-    'CODELARK_CLAUDE_TMUX_INPUT_READY_TIMEOUT_MS',
-    DEFAULT_CLAUDE_TMUX_INPUT_READY_TIMEOUT_MS,
-    0,
-  );
+async function prepareClaudeTmuxForPrompt(sessionName: string, targetPane: string, controller: ReadableStreamDefaultController<string>): Promise<void> {
   const afterSetupDelayMs = parsePositiveIntEnv(
     'CODELARK_CLAUDE_TMUX_AFTER_SETUP_DELAY_MS',
     DEFAULT_CLAUDE_TMUX_AFTER_SETUP_DELAY_MS,
     0,
   );
-  const deadline = Date.now() + inputReadyTimeoutMs;
-
-  for (let attempt = 0; attempt < 6; attempt += 1) {
-    const capture = await tmuxCore.capturePane(targetPane, 80).catch(() => ({ screen: '', command: '/tmux-screen 80' }));
-    if (hasClaudePtyInputPrompt(capture.screen)) return;
-    if (hasClaudePtyOnboardingPrompt(capture.screen) || hasClaudePtyTrustPrompt(capture.screen)) {
-      const kind = hasClaudePtyOnboardingPrompt(capture.screen) ? 'onboarding' : 'trust';
-      controller.enqueue(sseEvent('status', { reasoning: `Claude tmux 检测到 ${kind} 提示，正在发送 Enter 继续。` }));
-      await tmuxCore.sendActions(targetPane, [{ type: 'key', key: 'Enter' }]);
-      if (afterSetupDelayMs > 0) await sleep(afterSetupDelayMs);
-      continue;
-    }
-    if (Date.now() >= deadline || inputReadyTimeoutMs <= 0) return;
-    await sleep(250);
-  }
+  await waitForRuntimeTmuxReady({
+    runtime: 'claude',
+    sessionName,
+    target: targetPane,
+    afterSelectionDelayMs: afterSetupDelayMs,
+    onSelectionPrompt: (selectionPrompt) => {
+      controller.enqueue(sseEvent('status', {
+        reasoning: `Claude tmux 检测到 ${selectionPrompt.kind} 提示，正在发送 Enter 继续。`,
+      }));
+    },
+  });
 }
 
 function recordToolName(record: BridgeMirrorRecord): string {
@@ -369,10 +270,21 @@ export function streamClaudeTmuxTui(params: StreamChatParams): ReadableStream<st
         try {
           params.abortController?.signal.addEventListener('abort', abortListener, { once: true });
           controller.enqueue(sseEvent('status', { reasoning: '正在启动或复用 Claude tmux。' }));
-          await launchClaudeTmuxSession({ sessionName, streamParams: params, controller });
+          await startRuntimeTmuxSession({
+            runtime: 'claude',
+            sessionName,
+            bridgeSessionId: params.sessionId,
+            workingDirectory: params.workingDirectory,
+            executable: params.claudeExecutable,
+            model: params.model,
+            permissionMode: params.claudePermissionMode,
+            reasoningEffort: params.claudeReasoningEffort,
+            controller,
+            recreate: false,
+          });
           const promptDelayMs = parsePositiveIntEnv('CODELARK_CLAUDE_TMUX_PROMPT_DELAY_MS', DEFAULT_CLAUDE_TMUX_PROMPT_DELAY_MS, 0);
           if (promptDelayMs > 0) await sleep(promptDelayMs);
-          await prepareClaudeTmuxForPrompt(targetPane, controller);
+          await prepareClaudeTmuxForPrompt(sessionName, targetPane, controller);
           controller.enqueue(sseEvent('status', { reasoning: '正在把本次消息发送到 Claude tmux。' }));
           await tmuxCore.injectPromptIntoPane(targetPane, params.prompt);
           const startedClaudeJsonlSession = await waitForClaudeSessionJsonlUpdatedAfter(cwd, startedAtMs);
