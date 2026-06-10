@@ -136,6 +136,34 @@ function sameRuntimeBridgeSessionIds(
     && (left?.claude || '') === (right?.claude || '');
 }
 
+function runtimeBridgeSessionIdsForActiveSession(
+  value: ChannelChat['runtimeBridgeSessionIds'],
+  activeRuntime: 'codex' | 'claude',
+  bridgeSessionId: string,
+): ChannelChat['runtimeBridgeSessionIds'] {
+  const normalized = {
+    ...normalizeRuntimeBridgeSessionIds(value),
+    [activeRuntime]: bridgeSessionId,
+  };
+  const inactiveRuntime = activeRuntime === 'claude' ? 'codex' : 'claude';
+  if (normalized[inactiveRuntime] === bridgeSessionId) {
+    delete normalized[inactiveRuntime];
+  }
+  return normalizeRuntimeBridgeSessionIds(normalized);
+}
+
+function normalizeRuntimeBridgeSessionIdsForBinding(
+  binding: ChannelChat,
+  sessions: Map<string, BridgeSession>,
+): ChannelChat['runtimeBridgeSessionIds'] {
+  const normalized = normalizeRuntimeBridgeSessionIds(binding.runtimeBridgeSessionIds);
+  if (!normalized?.codex || normalized.codex !== normalized.claude) return normalized;
+
+  const mappedSession = sessions.get(normalized.codex);
+  const activeRuntime = getSessionActiveRuntime(mappedSession) || 'codex';
+  return runtimeBridgeSessionIdsForActiveSession(normalized, activeRuntime, normalized.codex);
+}
+
 function mergeSessionRuntime(
   sessionRuntime: BridgeSession['runtime'],
   updatesRuntime: BridgeSessionUpdate['runtime'],
@@ -299,13 +327,23 @@ export class JsonFileStore implements BridgeStore {
       CHANNEL_CHATS_PATH,
       {},
     );
-    this.bindings = new Map(Object.entries(bindings).map(([id, binding]) => [
-      id,
-      {
-        ...binding,
-        runtimeBridgeSessionIds: normalizeRuntimeBridgeSessionIds(binding.runtimeBridgeSessionIds),
-      },
-    ]));
+    let changed = false;
+    this.bindings = new Map(Object.entries(bindings).map(([id, binding]) => {
+      const runtimeBridgeSessionIds = normalizeRuntimeBridgeSessionIdsForBinding(binding, this.sessions);
+      if (!sameRuntimeBridgeSessionIds(runtimeBridgeSessionIds, binding.runtimeBridgeSessionIds)) {
+        changed = true;
+      }
+      return [
+        id,
+        {
+          ...binding,
+          runtimeBridgeSessionIds,
+        },
+      ];
+    }));
+    if (changed) {
+      this.persistBindings();
+    }
   }
 
   private reloadChannelDefaultTargets(): void {
@@ -452,11 +490,10 @@ export class JsonFileStore implements BridgeStore {
     if (existing) {
       const previousBridgeSessionId = existing.bridgeSessionId;
       const chatKind = normalizeChatKind(data.chatKind) ?? existing.chatKind;
-      const runtimeBridgeSessionIds = {
+      const runtimeBridgeSessionIds = runtimeBridgeSessionIdsForActiveSession({
         ...existing.runtimeBridgeSessionIds,
         ...normalizeRuntimeBridgeSessionIds(data.runtimeBridgeSessionIds),
-        [activeRuntime]: data.bridgeSessionId,
-      };
+      }, activeRuntime, data.bridgeSessionId);
       const updated: ChannelChat = {
         ...existing,
         bridgeSessionId: data.bridgeSessionId,
@@ -478,10 +515,11 @@ export class JsonFileStore implements BridgeStore {
     }
     const timestamp = now();
     const chatKind = normalizeChatKind(data.chatKind);
-    const runtimeBridgeSessionIds = {
-      ...normalizeRuntimeBridgeSessionIds(data.runtimeBridgeSessionIds),
-      [activeRuntime]: data.bridgeSessionId,
-    };
+    const runtimeBridgeSessionIds = runtimeBridgeSessionIdsForActiveSession(
+      normalizeRuntimeBridgeSessionIds(data.runtimeBridgeSessionIds),
+      activeRuntime,
+      data.bridgeSessionId,
+    );
     const binding: ChannelChat = {
       id: uuid(),
       channelType: data.channelType,

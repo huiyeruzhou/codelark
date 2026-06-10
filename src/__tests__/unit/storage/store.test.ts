@@ -4,12 +4,17 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { JsonFileStore } from '../../../storage/json-store.js';
+import type { ChannelChat } from '../../../domain/channel.js';
 import { CODELARK_HOME } from '../../../configuration/paths.js';
 import {
   LEGACY_CONFIG_ENV_PATH as CONFIG_PATH,
   LEGACY_CONFIG_JSON_PATH as CONFIG_JSON_PATH,
 } from '../../../configuration/migrations/legacy/paths.js';
-import { getSessionSystemPrompt, getSessionWorkingDirectory } from '../../../domain/session-runtime.js';
+import {
+  getSessionSystemPrompt,
+  getSessionWorkingDirectory,
+  setSessionActiveRuntimeUpdate,
+} from '../../../domain/session-runtime.js';
 
 const DATA_DIR = path.join(CODELARK_HOME, 'data');
 
@@ -994,5 +999,62 @@ describe('JsonFileStore', () => {
     assert.equal(updated?.bridgeSessionId, claudeSession.id);
     assert.equal(updated?.runtimeBridgeSessionIds?.codex, undefined);
     assert.equal(updated?.runtimeBridgeSessionIds?.claude, claudeSession.id);
+  });
+
+  it('does not let one BridgeSession occupy both runtime slots on repeated upsert', () => {
+    const store = new JsonFileStore(makeSettings());
+    const session = store.createSession('runtime-flip', 'model', undefined, '/tmp/runtime-flip');
+    const first = store.upsertChannelChat({
+      channelType: 'feishu-default',
+      chatId: 'runtime-flip',
+      bridgeSessionId: session.id,
+    });
+    assert.equal(first.runtimeBridgeSessionIds?.codex, session.id);
+
+    store.updateSession(session.id, setSessionActiveRuntimeUpdate('claude'), { touch: false });
+    const second = store.upsertChannelChat({
+      channelType: 'feishu-default',
+      chatId: 'runtime-flip',
+      bridgeSessionId: session.id,
+    });
+
+    assert.equal(second.runtimeBridgeSessionIds?.codex, undefined);
+    assert.equal(second.runtimeBridgeSessionIds?.claude, session.id);
+  });
+
+  it('repairs persisted bindings where one BridgeSession occupies both runtime slots', () => {
+    const store = new JsonFileStore(makeSettings());
+    const claudeSession = store.createSession('persisted-claude', '', undefined, '/tmp/persisted-claude', undefined, {
+      activeRuntime: 'claude',
+    });
+    const timestamp = '2026-06-10T08:15:39.532Z';
+    fs.writeFileSync(
+      path.join(DATA_DIR, 'channel-chats.json'),
+      JSON.stringify({
+        dirty: {
+          id: 'dirty',
+          channelType: 'feishu-default',
+          chatId: 'persisted-runtime-map',
+          bridgeSessionId: claudeSession.id,
+          runtimeBridgeSessionIds: {
+            codex: claudeSession.id,
+            claude: claudeSession.id,
+          },
+          createdAt: timestamp,
+          updatedAt: timestamp,
+        },
+      }, null, 2),
+      'utf-8',
+    );
+
+    const reloaded = new JsonFileStore(makeSettings());
+    const repaired = reloaded.getChannelChat('feishu-default', 'persisted-runtime-map');
+
+    assert.equal(repaired?.runtimeBridgeSessionIds?.codex, undefined);
+    assert.equal(repaired?.runtimeBridgeSessionIds?.claude, claudeSession.id);
+
+    const persisted = JSON.parse(fs.readFileSync(path.join(DATA_DIR, 'channel-chats.json'), 'utf-8')) as Record<string, ChannelChat>;
+    assert.equal(persisted.dirty.runtimeBridgeSessionIds?.codex, undefined);
+    assert.equal(persisted.dirty.runtimeBridgeSessionIds?.claude, claudeSession.id);
   });
 });

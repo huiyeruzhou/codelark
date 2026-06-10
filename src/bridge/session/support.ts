@@ -29,6 +29,7 @@ import { shouldUseCodexTmuxTui } from '../../runtime/codex/tmux-provider.js';
 import { getBridgeContext } from '../host/context.js';
 import {
   buildRuntimeProviderIdentity,
+  getSessionActiveRuntime,
   getSessionWorkingDirectory,
 } from '../../domain/session-runtime.js';
 import type { ChannelChat } from '../../domain/channel.js';
@@ -229,7 +230,7 @@ export function resolveEffectiveRuntimeProvider(
   binding?: ChannelChat | null,
 ): EffectiveRuntimeProvider {
   const configuredRuntime = scopedConfigForRuntime(binding, session).config.runtime.agent;
-  const runtime = session?.runtime?.activeRuntime === 'claude' ? 'claude' : configuredRuntime;
+  const runtime = getSessionActiveRuntime(session) || configuredRuntime;
   const provider = runtime === 'claude'
     ? resolveEffectiveClaudeProvider(session, binding)
     : resolveEffectiveCodexProvider(session, binding);

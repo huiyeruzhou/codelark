@@ -12,6 +12,7 @@ import {
   resolveEffectiveCodexProvider,
   resolveEffectiveNetworkAccess,
   resolveEffectiveReasoningEffort,
+  resolveEffectiveRuntimeProvider,
   resolveEffectiveSandboxMode,
   resolveSessionRuntimeConfig,
 } from '../../../bridge/session/support.js';
@@ -375,6 +376,39 @@ reasoning_effort = "low"
     assert.equal(resolveEffectiveCodexProvider(session, legacyProviderBinding), 'pty');
     assert.equal(resolveEffectiveSandboxMode(session, legacyProviderBinding), 'read-only');
     assert.equal(resolveClaudeRuntimeConfig(session, legacyProviderBinding).model, 'channel-claude');
+  });
+
+  it('honors explicit Codex activeRuntime over a Claude default runtime config', () => {
+    const previousToml = fs.existsSync(configTomlPath) ? fs.readFileSync(configTomlPath, 'utf-8') : null;
+    try {
+      fs.mkdirSync(CODELARK_HOME, { recursive: true });
+      fs.writeFileSync(configTomlPath, `
+schema_version = 2
+
+[runtime]
+agent = "claude"
+
+[runtime.codex]
+provider = "pty"
+
+[runtime.claude]
+provider = "tmux"
+`);
+      initBridgeTestContext({ settings: new Map() });
+
+      const session = {
+        id: 'session-explicit-codex-runtime',
+        runtime: { activeRuntime: 'codex' },
+      } as BridgeSession;
+
+      const effective = resolveEffectiveRuntimeProvider(session);
+
+      assert.equal(effective.runtime, 'codex');
+      assert.equal(effective.provider, 'pty');
+    } finally {
+      if (previousToml === null) fs.rmSync(configTomlPath, { force: true });
+      else fs.writeFileSync(configTomlPath, previousToml, 'utf-8');
+    }
   });
 
   it('derives Claude permission mode from scoped yoloMode', () => {
