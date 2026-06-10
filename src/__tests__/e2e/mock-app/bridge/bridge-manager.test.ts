@@ -35,7 +35,9 @@ import {
   mergeSessionRuntimeUpdates,
   setSessionActiveRuntimeUpdate,
   setSessionClaudeIdentityUpdate,
+  setSessionClaudeTmuxProviderUpdate,
 } from '../../../../domain/session-runtime.js';
+import { tmuxCore, type TmuxCore } from '../../../../bridge/tmux/runtime.js';
 import type { OutboundMessage, OutboundRichCard, PermissionGateway, SendResult } from '../../../../domain/index.js';
 import type { LifecycleHooks, LLMProvider, StreamChatParams } from '../../../../runtime/contracts.js';
 import { writeCodexSessionJsonlFixture } from '../../../helpers/bridge/test-bridge-utils.js';
@@ -51,6 +53,19 @@ function writeHomeConfigToml(content: string): () => void {
   return () => {
     if (previous === null) fs.rmSync(CONFIG_TOML_PATH, { force: true });
     else fs.writeFileSync(CONFIG_TOML_PATH, previous, 'utf-8');
+  };
+}
+
+function patchTmuxCore(patch: Partial<TmuxCore>): () => void {
+  const previous = new Map<keyof TmuxCore, TmuxCore[keyof TmuxCore]>();
+  for (const [key, value] of Object.entries(patch) as Array<[keyof TmuxCore, TmuxCore[keyof TmuxCore]]>) {
+    previous.set(key, tmuxCore[key]);
+    (tmuxCore as any)[key] = value;
+  }
+  return () => {
+    for (const [key, value] of previous) {
+      (tmuxCore as any)[key] = value;
+    }
   };
 }
 
@@ -2782,6 +2797,14 @@ describe('bridge-manager channel lifecycle events', () => {
     };
     const claudeSessionId = '019e7d66-0000-7000-8000-00000000c1a0';
     const cwd = '/tmp/lifecycle-archive-claude';
+    const tmuxSessionName = 'claude_lifecycle_archive';
+    const killedTmuxSessions: string[] = [];
+    const restoreTmuxCore = patchTmuxCore({
+      async killSession(name: string) {
+        killedTmuxSessions.push(name);
+        return `tmux kill-session -t ${name}`;
+      },
+    });
     writeClaudeJsonlFixture({
       homeDir,
       cwd,
@@ -2793,6 +2816,12 @@ describe('bridge-manager channel lifecycle events', () => {
       {},
       setSessionActiveRuntimeUpdate('claude'),
       setSessionClaudeIdentityUpdate(claudeSessionId, cwd),
+      setSessionClaudeTmuxProviderUpdate({
+        sessionId: claudeSessionId,
+        cwd,
+        tmuxSessionName,
+        autoEnter: true,
+      }),
     ));
     const binding = router.bindToSession(address, session.id);
     assert.ok(binding);
@@ -2814,6 +2843,7 @@ describe('bridge-manager channel lifecycle events', () => {
       assert.equal(store.getChannelChat(address.channelType, address.chatId), null);
       assert.equal(store.getSession(binding.bridgeSessionId), null);
       assert.equal(store.listChannelChats().some((item) => item.id === binding.id), false);
+      assert.deepEqual(killedTmuxSessions, [tmuxSessionName]);
       const audit = fs.readFileSync(path.join(DATA_DIR, 'audit.jsonl'), 'utf-8')
         .split(/\r?\n/)
         .filter((line) => line.trim())
@@ -2821,7 +2851,10 @@ describe('bridge-manager channel lifecycle events', () => {
       assert.match(audit.at(-1)?.summary || '', /ChannelChat archived: chat disbanded/);
       assert.match(audit.at(-1)?.summary || '', /action=claude_archive/);
       assert.match(audit.at(-1)?.summary || '', new RegExp(`claude_session=${claudeSessionId}`));
+      assert.match(audit.at(-1)?.summary || '', new RegExp(`tmux_sessions=${tmuxSessionName}`));
+      assert.match(audit.at(-1)?.summary || '', new RegExp(`tmux_cleanup=tmux kill-session -t ${tmuxSessionName}`));
     } finally {
+      restoreTmuxCore();
       if (previousClaudeHome === undefined) {
         delete process.env.CODELARK_CLAUDE_HOME;
       } else {
