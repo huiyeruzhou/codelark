@@ -64,6 +64,7 @@ export interface InteractiveTurnDisplayInfo {
   title: string;
   bridgeSessionId?: string | null;
   threadId?: string | null;
+  runtime?: 'codex' | 'claude' | null;
   executionProvider?: string | null;
   creatorKind?: string | null;
   reasoningEffort?: string | null;
@@ -157,6 +158,7 @@ export function buildFallbackInteractiveTurnDisplayInfo(binding: ChannelChat): I
     title,
     bridgeSessionId: binding.bridgeSessionId,
     threadId: '',
+    runtime: 'codex',
     executionProvider: 'default',
     creatorKind: 'bridge',
   };
@@ -173,6 +175,7 @@ export function buildInteractiveStreamCardMetadata(
     title,
     tags: [
       ...buildRuntimeStreamTags({
+        runtime: display.runtime || fallback.runtime,
         reasoningEffort: display.reasoningEffort,
         model: display.model,
       }),

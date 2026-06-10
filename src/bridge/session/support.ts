@@ -171,6 +171,7 @@ export interface ClaudeRuntimeConfig {
 }
 
 export interface RuntimeMetadataConfig {
+  runtime: 'codex' | 'claude';
   reasoningEffort: string;
   model: string;
 }
@@ -314,11 +315,13 @@ export function resolveRuntimeMetadataConfig(
   if (runtime === 'claude') {
     const claudeConfig = resolveClaudeRuntimeConfig(session, binding);
     return {
+      runtime: 'claude',
       reasoningEffort: claudeConfig.reasoningEffort || 'default',
       model: claudeConfig.model || 'default',
     };
   }
   return {
+    runtime: 'codex',
     reasoningEffort: normalizeStoredReasoningEffort(resolveEffectiveReasoningEffort(session, binding)),
     model: resolveDisplayedModel(binding, session),
   };
