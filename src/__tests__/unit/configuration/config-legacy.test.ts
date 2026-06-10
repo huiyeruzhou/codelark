@@ -11,7 +11,6 @@ function baseConfigV2(): ConfigV2 {
     schemaVersion: 2,
     session: {
       workspace: '~',
-      tmuxSessionName: '',
       tmuxCaptureLines: 80,
       tmuxAutoEnter: true,
       tmuxEchoInput: false,

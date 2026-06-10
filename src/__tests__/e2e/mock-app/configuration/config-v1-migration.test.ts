@@ -296,7 +296,6 @@ describe('v1 config migration e2e', () => {
       const service = createConfigService({ codelarkHome: home, env: {} });
       assert.equal(service.get('runtime.agent', { kind: 'session', sessionId: 'session-codex' }), 'codex');
       assert.equal(service.get('session.workspace', { kind: 'session', sessionId: 'session-codex' }), '/repo/codex');
-      assert.equal(service.get('session.tmuxSessionName', { kind: 'session', sessionId: 'session-codex' }), 'codex-tmux');
       assert.equal(service.get('session.tmuxCaptureLines', { kind: 'session', sessionId: 'session-codex' }), 120);
       assert.equal(service.get('session.tmuxAutoEnter', { kind: 'session', sessionId: 'session-codex' }), false);
       assert.equal(service.get('session.tmuxEchoInput', { kind: 'session', sessionId: 'session-codex' }), true);
@@ -332,6 +331,7 @@ describe('v1 config migration e2e', () => {
       });
       assert.deepEqual(pruned['session-codex']?.runtime?.general, {
         systemPrompt: 'Do not move this into config.',
+        tmuxSessionName: 'codex-tmux',
       });
       assert.equal(pruned['session-codex']?.health_status, 'idle');
       assert.equal(pruned['session-claude']?.runtime?.activeRuntime, undefined);

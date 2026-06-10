@@ -166,7 +166,7 @@ export function getSessionClaudeReasoningEffort(session: SessionRuntimeLike | nu
 }
 
 export function getSessionTmuxSessionName(session: SessionRuntimeLike | null | undefined): string | undefined {
-  return trimOrUndefined(getSessionTomlOverride<string>(session, 'session.tmuxSessionName'));
+  return getSessionRuntimeTmuxSessionName(session);
 }
 
 export function getSessionRuntimeTmuxSessionName(session: SessionRuntimeLike | null | undefined): string | undefined {

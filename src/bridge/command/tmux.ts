@@ -66,11 +66,12 @@ export {
 const SEND_ACTION_DELAY_MS = 500;
 const CAPTURE_AFTER_SEND_DELAY_MS = 250;
 
-function setSessionTmuxSessionNameToml(sessionId: string, tmuxSessionName: string): void {
-  createConfigService({ migrate: false }).set(
-    { kind: 'session', sessionId },
-    { session: { tmuxSessionName } },
-  );
+function setSessionTmuxSessionName(store: BridgeStore, sessionId: string, tmuxSessionName: string): void {
+  store.updateSession(sessionId, {
+    runtime: {
+      general: { tmuxSessionName },
+    },
+  });
 }
 
 function setSessionTmuxCaptureLinesToml(sessionId: string, tmuxCaptureLines: number): void {
@@ -872,7 +873,7 @@ export async function handleTmuxBridgeCommand(params: HandleTmuxBridgeCommandPar
           markdown,
         );
       }
-      setSessionTmuxSessionNameToml(session.id, name);
+      setSessionTmuxSessionName(store, session.id, name);
       const lines = getCaptureLines(session);
       return buildTmuxAttachResponse(
         '已绑定 tmux session',
@@ -893,7 +894,7 @@ export async function handleTmuxBridgeCommand(params: HandleTmuxBridgeCommandPar
       const name = validateTmuxSessionName(requestedName);
       if (!name) return '用法：/tmux-new [session]';
       const cwd = getSessionWorkingDirectory(session) || process.cwd();
-      setSessionTmuxSessionNameToml(session.id, name);
+      setSessionTmuxSessionName(store, session.id, name);
       const lines = getCaptureLines(session);
       const ensured = await createOrAttachTmuxSession({ name, cwd, lines });
       return buildTmuxAttachResponse(
