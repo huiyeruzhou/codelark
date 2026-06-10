@@ -88,36 +88,57 @@ function truncateForCommandResponse(value: string | undefined, limit = 500): str
   return normalized.length > limit ? `${normalized.slice(0, limit)}...` : normalized;
 }
 
+function truncateBlockForCommandResponse(value: string | undefined, limit = 1_500): string | undefined {
+  if (!value) return undefined;
+  const normalized = value.replace(/\s+$/g, '');
+  return normalized.length > limit ? `${normalized.slice(0, limit)}...` : normalized;
+}
+
+function fencedBlock(value: string | undefined, language = ''): string | undefined {
+  const body = truncateBlockForCommandResponse(value);
+  if (!body) return undefined;
+  return `\`\`\`${language}\n${body.replace(/\`\`\`/g, '\`\`\u200b\`')}\n\`\`\``;
+}
+
 function formatCodexTmuxLaunchFailure(
   error: CodexResumeTmuxLaunchError,
   currentProvider: RuntimeProviderChoice,
   markdown: boolean,
 ): string {
   const details = error.details;
-  const recentCommands = details.commands.slice(-6).join(' ; ');
-  return buildCommandFields(
-    'Codex tmux 启动失败',
-    [
-      ['Runtime', 'codex'],
-      ['Provider', `未切换（仍为 ${currentProvider}）`],
-      ['tmux session', details.sessionName],
-      ['codex_thread_id', details.threadId],
-      ['cwd', details.workingDirectory],
-      ['失败原因', details.reason],
-      ['tmux session 仍存在', details.sessionExists === undefined ? undefined : details.sessionExists ? 'yes' : 'no'],
-      ['最后错误', details.lastError],
-      ['原进程输出', truncateForCommandResponse(details.launchOutput, 900)],
-      ['launch log', details.launchLogPath],
-      ['最后屏幕', truncateForCommandResponse(details.lastScreen)],
-      ['清理命令', details.killCommand],
-      ['诊断命令', truncateForCommandResponse(recentCommands, 900)],
-    ],
-    [
-      '没有写入 `runtime.codex.provider=tmux`，也没有把当前会话绑定到这个 tmux session。',
-      '请根据失败原因检查 Codex CLI 是否能在本机 TUI 模式启动；修复后重新发送 `/p tmux`。',
-    ],
-    markdown,
-  );
+  const diagnosticCommands = details.commands
+    .filter((command) => command !== details.killCommand)
+    .slice(-6)
+    .join(' ; ');
+  const fields: Array<[string, string | null | undefined]> = [
+    ['Runtime', 'codex'],
+    ['Provider', `未切换（仍为 ${currentProvider}）`],
+    ['tmux session', details.sessionName],
+    ['tmux session 仍存在', details.sessionExists === undefined ? undefined : details.sessionExists ? 'yes' : 'no'],
+    ['codex_thread_id', details.threadId],
+    ['cwd', details.workingDirectory],
+    ['失败原因', details.reason],
+    ['最后错误', details.lastError],
+    ['最后屏幕', truncateForCommandResponse(details.lastScreen)],
+  ];
+  const base = buildCommandFields('Codex tmux 启动失败', fields, [], markdown);
+  const sections = [base];
+  const launchOutput = fencedBlock(details.launchOutput, 'text');
+  if (launchOutput) sections.push(markdown ? `**原进程输出**\n${launchOutput}` : `原进程输出\n${launchOutput}`);
+  const diagnosticCommand = fencedBlock(diagnosticCommands, 'bash');
+  if (diagnosticCommand) sections.push(markdown ? `**诊断命令**\n${diagnosticCommand}` : `诊断命令\n${diagnosticCommand}`);
+  sections.push(markdown
+    ? [
+      '**说明**',
+      '- 没有写入 `runtime.codex.provider=tmux`，也没有把当前会话绑定到这个 tmux session。',
+      '- 请根据失败原因检查 Codex CLI 是否能在本机 TUI 模式启动；修复后重新发送 `/p tmux`。',
+    ].join('\n')
+    : [
+      '说明',
+      '- 没有写入 `runtime.codex.provider=tmux`，也没有把当前会话绑定到这个 tmux session。',
+      '- 请根据失败原因检查 Codex CLI 是否能在本机 TUI 模式启动；修复后重新发送 `/p tmux`。',
+    ].join('\n'));
+  return sections.filter(Boolean).join('\n\n');
 }
 
 export async function handleProviderCommand(options: {

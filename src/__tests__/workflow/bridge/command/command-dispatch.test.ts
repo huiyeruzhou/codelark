@@ -2793,9 +2793,12 @@ enabled = true
       assert.match(responseText, /Provider.*未切换/);
       assert.match(responseText, /tmux session.*codex_not-ready-thread/);
       assert.match(responseText, /失败原因.*tmux session disappeared after new-session/);
-      assert.match(responseText, /原进程输出.*codex: command not found/);
-      assert.match(responseText, /原进程输出.*status 127/);
-      assert.match(responseText, /launch log.*codex-tmux-launch-codex_not-ready-thread\.log/);
+      assert.match(responseText, /原进程输出\*\*\s*```text[\s\S]*codex: command not found/);
+      assert.match(responseText, /原进程输出\*\*\s*```text[\s\S]*status 127/);
+      assert.match(responseText, /诊断命令\*\*\s*```bash[\s\S]*tmux new-session/);
+      assert.doesNotMatch(responseText, /launch log/);
+      assert.doesNotMatch(responseText, /清理命令/);
+      assert.doesNotMatch(responseText, /```bash[\s\S]*kill-session/);
       assert.match(responseText, /没有写入 `runtime.codex.provider=tmux`/);
       assert.equal(
         errorLogs.some((args) => args[0] === '[codex-tmux-runtime] Codex resume tmux launch failed:'

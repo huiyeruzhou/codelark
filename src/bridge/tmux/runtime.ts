@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 
 import {
@@ -9,7 +10,6 @@ import {
 } from '../../runtime/codex/tmux-provider.js';
 import { resolveCodexCliExecutable } from '../../runtime/codex/cli-executable.js';
 import type { StreamChatParams } from '../../runtime/contracts.js';
-import { CODELARK_HOME } from '../../configuration/paths.js';
 import {
   tmuxCore,
   type TmuxCore,
@@ -121,7 +121,7 @@ function posixShellQuote(value: string): string {
 
 function codexLaunchLogPath(sessionName: string): string {
   const safeName = safeTmuxSessionId(sessionName, 'codex').slice(0, 120);
-  return path.join(CODELARK_HOME, 'logs', `codex-tmux-launch-${safeName}.log`);
+  return path.join(os.tmpdir(), `codelark-codex-tmux-${process.pid}-${safeName}.log`);
 }
 
 function prepareLaunchLog(filePath: string): void {
@@ -149,6 +149,11 @@ function readRecentFile(filePath: string | undefined, lines = CODEX_TMUX_LAUNCH_
   } catch {
     return undefined;
   }
+}
+
+function cleanupLaunchLog(filePath: string | undefined): void {
+  if (!filePath) return;
+  try { fs.rmSync(filePath, { force: true }); } catch { /* best effort cleanup */ }
 }
 
 function safeTmuxSessionId(id: string, fallback: string): string {
@@ -325,6 +330,7 @@ export async function startCodexResumeTmuxSession(
       });
     }
     const launchOutput = readRecentFile(launchLogPath);
+    cleanupLaunchLog(launchLogPath);
     const reason = ready.sessionExists === false
       ? 'tmux session disappeared after new-session; the Codex TUI process likely exited immediately'
       : ready.lastError
@@ -361,6 +367,7 @@ export async function startCodexResumeTmuxSession(
     });
     throw new CodexResumeTmuxLaunchError(details);
   }
+  cleanupLaunchLog(launchLogPath);
   return {
     existed: started.existed,
     sessionName: params.sessionName,

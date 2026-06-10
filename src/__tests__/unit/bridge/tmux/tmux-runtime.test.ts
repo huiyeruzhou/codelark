@@ -2,7 +2,6 @@ import '../../../setup/test-setup.js';
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
-import path from 'node:path';
 
 import {
   buildCodexResumeTmuxCommand,
@@ -44,7 +43,7 @@ describe('codex tmux runtime', () => {
     assert.match(codexCommand, /resume 019e8d75-4f82-7df3-b15a-901980812307/);
   });
   it('includes the Codex process stderr when a tmux launch exits before pane capture', async () => {
-    const launchLogPath = path.join(process.env.CODELARK_HOME!, 'logs', 'codex-tmux-launch-codex_fail.log');
+    let launchLogPath = '';
     const commands: string[] = [];
     const core: TmuxCore = {
       commandPreview: (args) => ['tmux', ...args].join(' '),
@@ -61,6 +60,8 @@ describe('codex tmux runtime', () => {
       listSessions: async () => ({ sessions: [], command: 'tmux list-sessions' }),
       ensureDetachedSession: async ({ command }) => {
         assert.match(command || '', /2> /);
+        launchLogPath = (command || '').match(/ 2> ([^;]+)/)?.[1] || '';
+        assert.match(launchLogPath, /codelark-codex-tmux-.*-codex_fail\.log$/);
         fs.writeFileSync(launchLogPath, 'bash: codex: command not found\n[codelark] process exited with status 127\n', 'utf-8');
         return { existed: false, command: 'tmux new-session -d -s codex_fail', commands: ['tmux new-session -d -s codex_fail'] };
       },
@@ -86,6 +87,7 @@ describe('codex tmux runtime', () => {
         assert.match(error.details.launchOutput || '', /codex: command not found/);
         assert.match(error.details.launchOutput || '', /status 127/);
         assert.equal(error.details.launchLogPath, launchLogPath);
+        assert.equal(fs.existsSync(launchLogPath), false);
         return true;
       },
     );
