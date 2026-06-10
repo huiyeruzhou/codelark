@@ -348,6 +348,28 @@ describe('buildToolProgressMarkdown', () => {
     assert.ok(content.includes('mcp: `server/read`'));
   });
 
+  it('caps long tool detail text in Feishu card panels', () => {
+    const longOutput = 'read-output-line\n'.repeat(600);
+    const elements = buildStreamingToolsElements([
+      {
+        id: 'tool-long-generic',
+        name: 'Read',
+        status: 'complete',
+        detail: {
+          kind: 'generic',
+          output: longOutput,
+        },
+      },
+    ]);
+
+    const content = JSON.stringify(elements);
+    assert.match(content, /truncated for card preview/);
+    assert.ok(
+      Buffer.byteLength(content, 'utf8') < Buffer.byteLength(longOutput, 'utf8'),
+      'card panel should not embed the full generic tool output',
+    );
+  });
+
   it('marks non-zero exec exits with warning and collapses long output in a nested panel', () => {
     const longOutput = 'error line\n'.repeat(500);
     const rendered = buildToolProgressMarkdown([
@@ -387,9 +409,10 @@ describe('buildToolProgressMarkdown', () => {
     assert.equal(panel.tag, 'collapsible_panel');
     assert.equal(panel.header.title.content, '⚠️ `exec_command` · 异常 · exit 1');
     assert.equal(panel.elements[1].tag, 'collapsible_panel');
-    assert.match(panel.elements[1].header.title.content, /输出 · \d+ chars/);
+    assert.match(panel.elements[1].header.title.content, /输出 · \d+ chars · truncated/);
     assert.doesNotMatch(JSON.stringify(panel.elements[0]), /error line/);
     assert.match(JSON.stringify(panel.elements[1]), /error line/);
+    assert.match(JSON.stringify(panel.elements[1]), /truncated for card preview/);
   });
 });
 
