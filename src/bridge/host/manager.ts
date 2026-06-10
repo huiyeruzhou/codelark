@@ -428,8 +428,12 @@ async function recoverMirrorTmuxSelectionPromptFromCallback(
   if (!session) {
     return { ok: false, notice: `Codex TUI Selection 已记录，但找不到目标会话 ${sessionId}。` };
   }
-  if (getSessionActiveRuntime(session) === 'claude' || resolveEffectiveCodexProvider(session) !== 'tmux') {
-    return { ok: false, notice: `Codex TUI Selection 已记录，但目标会话 ${sessionId} 当前不是 Codex tmux。` };
+  const activeRuntime = getSessionActiveRuntime(session);
+  const isTmuxRuntime = activeRuntime === 'claude'
+    ? resolveEffectiveClaudeProvider(session) === 'tmux'
+    : resolveEffectiveCodexProvider(session) === 'tmux';
+  if (!isTmuxRuntime) {
+    return { ok: false, notice: `Codex TUI Selection 已记录，但目标会话 ${sessionId} 当前不是 tmux runtime。` };
   }
   const tmuxSessionName = getSessionRuntimeTmuxSessionName(session);
   if (!tmuxSessionName) {
@@ -484,8 +488,12 @@ async function probeMirrorTmuxSelectionPrompt(subscription: BridgeMirrorSubscrip
   if (!shouldProbeMirrorTmuxSelectionPrompt(subscription, nowMs)) return;
   tmuxSelectionPromptLastProbeAt.set(subscription.sessionId, nowMs);
   const session = getBridgeContext().store.getSession(subscription.sessionId);
-  if (!session || getSessionActiveRuntime(session) === 'claude') return;
-  if (resolveEffectiveCodexProvider(session) !== 'tmux') return;
+  if (!session) return;
+  const activeRuntime = getSessionActiveRuntime(session);
+  const isTmuxRuntime = activeRuntime === 'claude'
+    ? resolveEffectiveClaudeProvider(session) === 'tmux'
+    : resolveEffectiveCodexProvider(session) === 'tmux';
+  if (!isTmuxRuntime) return;
   const tmuxSessionName = getSessionRuntimeTmuxSessionName(session);
   if (!tmuxSessionName) return;
   const targetPane = `${tmuxSessionName}:0.0`;
@@ -527,8 +535,12 @@ async function probeTmuxSelectionPromptForTarget(
   options: { timeoutMs?: number; intervalMs?: number } = {},
 ): Promise<boolean> {
   const session = getBridgeContext().store.getSession(target.sessionId);
-  if (!session || getSessionActiveRuntime(session) === 'claude') return false;
-  if (resolveEffectiveCodexProvider(session) !== 'tmux') return false;
+  if (!session) return false;
+  const activeRuntime = getSessionActiveRuntime(session);
+  const isTmuxRuntime = activeRuntime === 'claude'
+    ? resolveEffectiveClaudeProvider(session) === 'tmux'
+    : resolveEffectiveCodexProvider(session) === 'tmux';
+  if (!isTmuxRuntime) return false;
   const tmuxSessionName = getSessionRuntimeTmuxSessionName(session);
   if (!tmuxSessionName) return false;
   const targetPane = `${tmuxSessionName}:0.0`;
@@ -1284,7 +1296,10 @@ async function reconcileMirrorSubscriptions(): Promise<void> {
   await CLAUDE_MIRROR_RUNTIME.reconcileMirrorSubscriptions();
   const nowMs = Date.now();
   await Promise.allSettled(
-    Array.from(getState().mirrorSubscriptions.values()).map((subscription) =>
+    [
+      ...Array.from(getState().mirrorSubscriptions.values()),
+      ...Array.from(getState().claudeMirrorSubscriptions.values()),
+    ].map((subscription) =>
       probeMirrorTmuxSelectionPrompt(subscription, nowMs),
     ),
   );

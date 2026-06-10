@@ -31,6 +31,14 @@ const SECOND_PERMISSION_SCREEN = [
   CODEX_TUI_CONFIRM_FOOTER,
 ].join('\n');
 
+const CLAUDE_PERMISSION_SCREEN = [
+  'Do you want to create STATUS.md?',
+  '❯ 1. Yes',
+  '  2. Yes, allow all edits in card-refresh-and-ccr-tmux-fix/ during this session',
+  '     (shift+tab)',
+  '   3. No',
+].join('\n');
+
 const NORMAL_SCREEN = [
   'OpenAI Codex',
   '› Explain this codebase',
@@ -55,7 +63,7 @@ function createMockPromptRuntime() {
           if (outer.type !== 'permission_request') return;
           const body = JSON.parse(outer.data || '{}') as { permissionRequestId?: string; toolName?: string };
           assert.equal(body.toolName, 'Codex TUI Selection Prompt');
-          assert.match(body.permissionRequestId || '', /^codex-selection:permission:tmux:bridge-session-mock-e2e:/);
+          assert.match(body.permissionRequestId || '', new RegExp(`^codex-selection:${prompt.kind}:tmux:bridge-session-mock-e2e:`));
           permissionRequestIds.push(body.permissionRequestId || '');
         },
       } as ReadableStreamDefaultController<string>,
@@ -136,6 +144,36 @@ describe('codex tui selection prompt mock e2e', () => {
     assert.equal(secondResult.choice, 'yes_always');
     assert.deepEqual(runtime.sentActions, [
       [{ type: 'key', key: 'Enter' }],
+      [{ type: 'key', key: 'Down' }, { type: 'key', key: 'Enter' }],
+    ]);
+  });
+
+  it('uses the same stable-capture and post-action grace timing for Claude Code numbered selections', async () => {
+    const monitor = createCodexTuiSelectionPromptMonitor();
+    const runtime = createMockPromptRuntime();
+
+    assert.equal(observeStableCodexTuiSelectionPrompt(CLAUDE_PERMISSION_SCREEN, monitor, 2, 0), null);
+    assert.equal(observeStableCodexTuiSelectionPrompt(CLAUDE_PERMISSION_SCREEN, monitor, 2, 499), null);
+    const firstPrompt = observeStableCodexTuiSelectionPrompt(CLAUDE_PERMISSION_SCREEN, monitor, 2, 600);
+    assert.ok(firstPrompt);
+    assert.equal(firstPrompt.kind, 'generic');
+    assert.deepEqual(firstPrompt.options.map((option) => option.choice), [
+      'option_1',
+      'option_2',
+      'option_3',
+    ]);
+
+    monitor.pending = true;
+    const firstHandled = runtime.handlePrompt(firstPrompt);
+    await runtime.reply(0, 'option_2');
+    await firstHandled;
+    markCodexTuiSelectionPromptActionSent(monitor, 600);
+
+    assert.equal(observeStableCodexTuiSelectionPrompt(CLAUDE_PERMISSION_SCREEN, monitor, 2, 2_599), null);
+    const secondPrompt = observeStableCodexTuiSelectionPrompt(CLAUDE_PERMISSION_SCREEN, monitor, 2, 2_600);
+    assert.ok(secondPrompt);
+    assert.equal(runtime.permissionRequestIds.length, 1);
+    assert.deepEqual(runtime.sentActions, [
       [{ type: 'key', key: 'Down' }, { type: 'key', key: 'Enter' }],
     ]);
   });

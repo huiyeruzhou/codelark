@@ -203,6 +203,38 @@ describe('codex-tmux-provider', () => {
     assert.match(prompt.summary, /Yes, proceed/);
   });
 
+  it('parses Claude Code permission selections from a highlighted first row without a footer', () => {
+    const screen = [
+      'Do you want to create STATUS.md?',
+      '❯ 1. Yes',
+      '  2. Yes, allow all edits in card-refresh-and-ccr-tmux-fix/ during this session',
+      '     (shift+tab)',
+      '   3. No',
+    ].join('\n');
+
+    const prompt = parseCodexTuiSelectionPrompt(screen);
+    assert.ok(prompt);
+    assert.equal(prompt.kind, 'generic');
+    assert.equal(prompt.selectedIndex, 0);
+    assert.deepEqual(prompt.options.map((option) => option.choice), [
+      'option_1',
+      'option_2',
+      'option_3',
+    ]);
+    assert.deepEqual(prompt.options.map((option) => option.label), [
+      'Yes',
+      'Yes, allow all edits in card-refresh-and-ccr-tmux-fix/ during this session',
+      'No',
+    ]);
+    assert.deepEqual(buildCodexTuiSelectionChoiceActions(prompt, 'option_2'), [
+      { type: 'key', key: 'Down' },
+      { type: 'key', key: 'Enter' },
+    ]);
+    assert.match(prompt.summary, /Do you want to create STATUS\.md/);
+    assert.match(prompt.summary, /❯ 1\. Yes/);
+    assert.match(prompt.summary, /3\. No/);
+  });
+
   it('adds the three lines before the current selection block to the displayed summary only', () => {
     const screen = [
       'older update output that should not be included',

@@ -230,7 +230,13 @@ function inferSelectionPromptKind(
 function hasCodexTuiSelectionPromptCursor(tail: string): boolean {
   return tail
     .split('\n')
-    .some((line) => /^\s*[›>▸➜→]\s*1\.\s+/u.test(line));
+    .some((line) => /^\s*[›❯>▸➜→]\s*1\.\s+/u.test(line));
+}
+
+function hasClaudeCodeTuiSelectionPromptCursor(tail: string): boolean {
+  return tail
+    .split('\n')
+    .some((line) => /^\s*❯\s*1\.\s+/u.test(line));
 }
 
 function hasCodexTuiSelectionPromptFooter(tail: string): boolean {
@@ -252,7 +258,7 @@ type ParsedSelectionBlock = {
 };
 
 function parseSelectionLine(rawLine: string): ParsedSelectionLine | null {
-  const match = rawLine.match(/^\s*([›>▸➜→*•])?\s*(?:(\d+)[.)]\s*)?(.+?)\s*$/u);
+  const match = rawLine.match(/^\s*([›❯>▸➜→*•])?\s*(?:(\d+)[.)]\s*)?(.+?)\s*$/u);
   if (!match) return null;
   const label = match[3].trim();
   if (!label) return null;
@@ -266,6 +272,7 @@ function parseSelectionLine(rawLine: string): ParsedSelectionLine | null {
 
 function isSelectedSelectionLine(line: ParsedSelectionLine): boolean {
   return line.marker === '›'
+    || line.marker === '❯'
     || line.marker === '>'
     || line.marker === '▸'
     || line.marker === '➜'
@@ -304,7 +311,12 @@ function extractCurrentSelectionBlock(lines: string[]): ParsedSelectionBlock {
     const candidate = parsed[index];
     if (!candidate) break;
     if (expectedNumber !== null) {
-      if (candidate.number !== expectedNumber) break;
+      if (candidate.number !== expectedNumber) {
+        if (candidate.number === null && candidate.marker === null && /^\s+/.test(candidate.rawLine)) {
+          continue;
+        }
+        break;
+      }
       expectedNumber += 1;
     } else if (candidate.number !== null || !normalizeSelectionChoice(candidate.label)) {
       break;
@@ -324,20 +336,26 @@ function trimBlankSummaryEdges(lines: string[]): string[] {
 
 export function parseCodexTuiSelectionPrompt(screenText: string): CodexTuiSelectionPrompt | null {
   const tail = stripTerminalControl(screenText).slice(-20_000);
-  if (!hasCodexTuiSelectionPromptCursor(tail) || !hasCodexTuiSelectionPromptFooter(tail)) {
+  if (!hasCodexTuiSelectionPromptCursor(tail)) {
+    return null;
+  }
+  if (!hasCodexTuiSelectionPromptFooter(tail) && !hasClaudeCodeTuiSelectionPromptCursor(tail)) {
     return null;
   }
   const options: CodexTuiUpdatePromptOption[] = [];
   const lines = tail.split('\n');
   const selectionBlock = extractCurrentSelectionBlock(lines);
   const selectionLines = selectionBlock.lines;
-  const hasGenericSelectionAnchor = selectionLines.some((line) => line.marker === '›' && line.number === 1);
+  const hasGenericSelectionAnchor = selectionLines.some((line) => (line.marker === '›' || line.marker === '❯') && line.number === 1);
+  const forceGenericSelection = selectionLines.some((line) => line.marker === '❯' && line.number === 1);
   const hasGoalSelectionAnchor = selectionLines.some((line) => normalizeSelectionChoice(line.label) === 'replace_current_goal');
   for (const selectionLine of selectionLines) {
     const label = selectionLine.label;
     const index = selectionLine.number !== null ? selectionLine.number - 1 : options.length;
     const rawNormalizedChoice = normalizeSelectionChoice(label);
-    const normalizedChoice = rawNormalizedChoice === 'cancel' && !hasGoalSelectionAnchor
+    const normalizedChoice = forceGenericSelection
+      ? null
+      : rawNormalizedChoice === 'cancel' && !hasGoalSelectionAnchor
       ? null
       : rawNormalizedChoice;
     const selected = isSelectedSelectionLine(selectionLine);
@@ -366,8 +384,8 @@ export function parseCodexTuiSelectionPrompt(screenText: string): CodexTuiSelect
     .map((line) => line.rawLine.trimEnd())
     .filter((line) => (
       /Update available|Release notes|^\s*(?:Allow|Do you want|Would you like|Codex wants)/i.test(line)
-      || Boolean(line.match(/^\s*[›>▸➜→*•]?\s*(?:\d+[.)]\s*)?(?:Update now|Skip|Replace current goal|Cancel|Yes|No)\b/i))
-      || (kind === 'generic' && Boolean(line.match(/^\s*[›>▸➜→*•]?\s*\d+[.)]\s+/u)))
+      || Boolean(line.match(/^\s*[›❯>▸➜→*•]?\s*(?:\d+[.)]\s*)?(?:Update now|Skip|Replace current goal|Cancel|Yes|No)\b/i))
+      || (kind === 'generic' && Boolean(line.match(/^\s*[›❯>▸➜→*•]?\s*\d+[.)]\s+/u)))
     ))
     .slice(-8);
   const summary = trimBlankSummaryEdges([...summaryContextLines, ...summaryLines]).join('\n')
