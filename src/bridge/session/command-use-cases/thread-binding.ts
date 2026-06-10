@@ -16,7 +16,6 @@ import {
 import type { CommandThreadDisplay } from '../../command/thread-display.js';
 import { validateThreadName } from './args.js';
 import {
-  archiveCommandClaudeThread,
   listCommandLocalRuntimeSessions,
 } from './source.js';
 import {
@@ -297,19 +296,15 @@ export async function handleThreadBindingCommand(options: {
     }
     if (target.runtime === 'claude') {
       const cwd = target.cwd;
-      const archived = archiveCommandClaudeThread(threadId, cwd);
-      if (!archived) {
-        return { response: '归档本地 Claude Code 会话失败：没有找到对应的 JSONL 会话文件。' };
-      }
-      const bridgeSessionBeforeArchive = findBridgeSessionByClaudeIdentity(options.store, archived.threadId, archived.cwd);
+      if (!cwd) return { response: '归档本地 Claude Code 会话失败：缺少 cwd。' };
+      const bridgeSessionBeforeArchive = findBridgeSessionByClaudeIdentity(options.store, threadId, cwd);
       const bindingsBeforeArchive = options.store.listChannelChats()
         .filter((binding) => binding.bridgeSessionId === bridgeSessionBeforeArchive?.id);
-      if (bridgeSessionBeforeArchive) {
-        try {
-          createCommandSessionRegistry(options.store).deleteBridgeSession(bridgeSessionBeforeArchive.id);
-        } catch (error) {
-          return { response: toUserVisibleBindingError(error, '归档本地 Claude Code 会话失败。') };
-        }
+      let result: ReturnType<SessionRegistryService['archiveClaudeThread']>;
+      try {
+        result = createCommandSessionRegistry(options.store).archiveClaudeThread(threadId, cwd);
+      } catch (error) {
+        return { response: toUserVisibleBindingError(error, '归档本地 Claude Code 会话失败。') };
       }
       for (const binding of bindingsBeforeArchive) {
         options.deps.onBindingRemoved?.(binding);
@@ -321,11 +316,11 @@ export async function handleThreadBindingCommand(options: {
         response: buildCommandFields(
           '已归档本地 Claude Code 会话',
           [
-            ['标题', target.title || archived.title || threadId.slice(0, 8)],
+            ['标题', target.title || threadId.slice(0, 8)],
             ['session_id', threadId],
-            ['目录', formatCommandPath(archived.cwd)],
+            ['目录', formatCommandPath(result.cwd)],
             ['解除绑定', `${bindingsBeforeArchive.length}`],
-            ['清理 Bridge 会话', bridgeSessionBeforeArchive ? '1' : '0'],
+            ['清理 Bridge 会话', `${result.deletedBridgeSessionIds.length}`],
             ['当前', activeAfterArchive ? options.threadDisplay.binding(activeAfterArchive).title : '未绑定'],
           ],
           activeAfterArchive

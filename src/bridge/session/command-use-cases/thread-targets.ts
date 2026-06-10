@@ -32,6 +32,7 @@ import {
   type ThreadCardScope,
 } from '../../command/thread-display.js';
 import {
+  archiveCommandClaudeThread,
   archiveCommandCodexThread,
   getCommandLocalRuntimeThreadByIdSafe,
   getCommandCodexThreadByIdSafe,
@@ -176,6 +177,10 @@ export function createCommandSessionRegistry(store: BridgeStore): SessionRegistr
           : null;
       },
       archiveThread: (codexThreadId) => Boolean(archiveCommandCodexThread(codexThreadId)),
+    },
+    claudeThreads: {
+      getThread: () => null,
+      archiveThread: (claudeSessionId, cwd) => Boolean(archiveCommandClaudeThread(claudeSessionId, cwd)),
     },
     readDefaultModel: () => readConfiguredCodexModel(),
     defaultWorkingDirectory: () => DEFAULT_WORKSPACE_ROOT,

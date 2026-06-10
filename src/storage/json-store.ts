@@ -410,6 +410,14 @@ export class JsonFileStore implements BridgeStore {
     );
   }
 
+  private deleteSessionConfig(sessionId: string): void {
+    try {
+      createConfigService({ migrate: false }).remove({ kind: 'session', sessionId });
+    } catch {
+      // Config cleanup is best effort; deleting the BridgeSession is authoritative.
+    }
+  }
+
   private loadMessages(sessionId: string): BridgeMessage[] {
     if (this.messages.has(sessionId)) {
       return this.messages.get(sessionId)!;
@@ -473,6 +481,7 @@ export class JsonFileStore implements BridgeStore {
     } catch {
       // best effort
     }
+    this.deleteSessionConfig(sessionId);
     return true;
   }
 
@@ -747,6 +756,7 @@ export class JsonFileStore implements BridgeStore {
     } catch {
       // best effort
     }
+    this.deleteSessionConfig(sessionId);
     this.persistSessions();
     this.persistBindings();
   }

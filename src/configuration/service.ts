@@ -1,3 +1,5 @@
+import fs from 'node:fs';
+
 import { configFields, findConfigField } from './fields.js';
 import type { ConfigField, ConfigPath, ConfigSourceKind, ConfigWriteScope, SourceRef } from './fields.js';
 import type { EnvCompatWarning } from './env-compat.js';
@@ -64,6 +66,7 @@ export interface ConfigService {
   set(target: ConfigWriteTarget, patch: ConfigPatch): void;
   replace(target: ConfigWriteTarget, patch: ConfigPatch): void;
   unset(target: ConfigWriteTarget, path: ConfigPath): void;
+  remove(target: Exclude<ConfigWriteTarget, { kind: 'home' }>): void;
 }
 
 export interface ConfigServiceOptions {
@@ -296,6 +299,9 @@ export function createConfigService(options: ConfigServiceOptions = {}): ConfigS
       writeTomlConfig(file, target.kind === 'home'
         ? materializeHomeChannelPatch(readDefaultsConfig(paths.defaultsToml).patch, {}, current)
         : current);
+    },
+    remove(target: Exclude<ConfigWriteTarget, { kind: 'home' }>): void {
+      fs.rmSync(targetFile(target), { force: true });
     },
   };
 }

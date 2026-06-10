@@ -3083,6 +3083,9 @@ describe('bridge-manager startup runtime cleanup', () => {
       ['chat-alive', { chatId: 'chat-alive', chatKind: 'p2p', name: 'Alive DM' }],
       ['chat-missing', null],
     ]);
+    const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'codelark-startup-claude-home-'));
+    const previousClaudeHome = process.env.CODELARK_CLAUDE_HOME;
+    process.env.CODELARK_CLAUDE_HOME = homeDir;
     registerAdapterFactory('feishu', (instance) => new StartupNoticeAdapter(instance as any));
 
     writeHomeChannelsToml([{
@@ -3108,7 +3111,21 @@ describe('bridge-manager startup runtime cleanup', () => {
       userId: 'user-alive',
       displayName: 'Alive DM',
     }, 'D:\\workspace\\alive');
-    const missingBinding = router.createBinding({
+    const claudeSessionId = '019e7d66-0000-7000-8000-00000000cafe';
+    const claudeCwd = '/tmp/startup-missing-claude';
+    writeClaudeJsonlFixture({
+      homeDir,
+      cwd: claudeCwd,
+      sessionId: claudeSessionId,
+      text: 'startup missing claude',
+    });
+    const missingSession = store.createSession('Missing Group', 'default', undefined, claudeCwd, 'normal');
+    store.updateSession(missingSession.id, mergeSessionRuntimeUpdates(
+      {},
+      setSessionActiveRuntimeUpdate('claude'),
+      setSessionClaudeIdentityUpdate(claudeSessionId, claudeCwd),
+    ));
+    const missingBinding = router.bindToSession({
       channelType: 'startup-notice-main',
       channelProvider: 'feishu',
       channelAlias: 'Startup Notice',
@@ -3116,28 +3133,39 @@ describe('bridge-manager startup runtime cleanup', () => {
       chatKind: 'group',
       userId: 'user-missing',
       displayName: 'Missing Group',
-    }, 'D:\\workspace\\missing');
+    }, missingSession.id);
+    assert.ok(missingBinding);
 
     try {
-      await start();
-      for (let i = 0; i < 20 && StartupNoticeAdapter.sentMessages.length === 0; i += 1) {
-        await new Promise((resolve) => setTimeout(resolve, 5));
+      try {
+        await start();
+        for (let i = 0; i < 20 && StartupNoticeAdapter.sentMessages.length === 0; i += 1) {
+          await new Promise((resolve) => setTimeout(resolve, 5));
+        }
+      } finally {
+        await stop();
       }
-    } finally {
-      await stop();
-    }
 
-    assert.equal(StartupNoticeAdapter.sentMessages.length, 1);
-    const notice = StartupNoticeAdapter.sentMessages[0];
-    assert.equal(notice.address.chatId, 'chat-alive');
-    assert.match(notice.text, /有一个群聊已不在，因此已对这个对话做了归档/);
-    assert.match(notice.text, /Missing Group/);
-    assert.equal(store.getChannelChat('startup-notice-main', 'chat-alive')?.id, aliveBinding.id);
-    assert.equal(store.getChannelChat('startup-notice-main', 'chat-missing'), null);
-    assert.equal(store.getSession(missingBinding.bridgeSessionId), null);
-    assert.match(notice.richCard?.sections.map((section) => section.markdown || '').join('\n') || '', /Missing Group/);
-    assert.doesNotMatch(notice.richCard?.sections[0]?.markdown || '', /启动检查/);
-    assert.equal(notice.richCard?.sections.filter((section) => section.title === '启动检查').length, 1);
+      assert.equal(StartupNoticeAdapter.sentMessages.length, 1);
+      const notice = StartupNoticeAdapter.sentMessages[0];
+      assert.equal(notice.address.chatId, 'chat-alive');
+      assert.match(notice.text, /有一个群聊已不在，因此已对这个对话做了归档/);
+      assert.match(notice.text, /Missing Group/);
+      assert.equal(store.getChannelChat('startup-notice-main', 'chat-alive')?.id, aliveBinding.id);
+      assert.equal(store.getChannelChat('startup-notice-main', 'chat-missing'), null);
+      assert.equal(store.getSession(missingBinding.bridgeSessionId), null);
+      assert.equal(isArchivedClaudeSession(claudeSessionId, claudeCwd), true);
+      assert.match(notice.richCard?.sections.map((section) => section.markdown || '').join('\n') || '', /Missing Group/);
+      assert.doesNotMatch(notice.richCard?.sections[0]?.markdown || '', /启动检查/);
+      assert.equal(notice.richCard?.sections.filter((section) => section.title === '启动检查').length, 1);
+    } finally {
+      if (previousClaudeHome === undefined) {
+        delete process.env.CODELARK_CLAUDE_HOME;
+      } else {
+        process.env.CODELARK_CLAUDE_HOME = previousClaudeHome;
+      }
+      fs.rmSync(homeDir, { recursive: true, force: true });
+    }
   });
 
   it('checks startup channel chats concurrently instead of waiting for each chat serially', async () => {

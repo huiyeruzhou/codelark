@@ -1804,25 +1804,10 @@ async function checkStartupChannelChatCandidate(
       return {};
     }
 
-    const session = store.getSession(binding.bridgeSessionId);
     const bindingsBeforeArchive = store.listChannelChats()
       .filter((candidateBinding) => candidateBinding.bridgeSessionId === binding.bridgeSessionId);
-    const threadId = session ? getBridgeSessionCodexThreadId(session) : null;
-    let detail = 'provider chat not found';
-    if (threadId) {
-      try {
-        archiveCodexSession(threadId);
-        detail = `archived Codex thread ${threadId.slice(0, 8)}`;
-      } catch (error) {
-        detail = `Codex archive skipped: ${error instanceof Error ? error.message : String(error)}`;
-      }
-    }
-
-    if (session) {
-      store.deleteSession(session.id);
-    } else {
-      store.deleteChannelChat(binding.id);
-    }
+    const archived = archiveLifecycleBindingSession(store, binding);
+    const detail = formatLifecycleArchiveDetail(archived);
     for (const removed of bindingsBeforeArchive.length > 0 ? bindingsBeforeArchive : [binding]) {
       handleBindingRemovedForAutoTasks(removed);
     }
@@ -2011,6 +1996,25 @@ function buildStartupNoticeRichCard(
     template: STARTUP_NOTICE_CARD_TEMPLATE,
     sections,
   };
+}
+
+function formatLifecycleArchiveDetail(result: ReturnType<typeof archiveLifecycleBindingSession>): string {
+  switch (result.action) {
+    case 'codex_archive':
+      return result.codexThreadId
+        ? `archived Codex thread ${result.codexThreadId.slice(0, 8)}`
+        : 'archived Codex thread';
+    case 'claude_archive':
+      return result.claudeSessionId
+        ? `archived Claude session ${result.claudeSessionId.slice(0, 8)}`
+        : 'archived Claude session';
+    case 'bridge_delete':
+      return 'deleted BridgeSession';
+    case 'binding_delete':
+      return 'deleted stale binding';
+    case 'delete_after_archive_failure':
+      return `archive skipped: ${result.error instanceof Error ? result.error.message : String(result.error)}`;
+  }
 }
 
 function startPersistedAutoTasks(): void {

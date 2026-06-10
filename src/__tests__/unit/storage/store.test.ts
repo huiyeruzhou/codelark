@@ -17,6 +17,11 @@ import {
 } from '../../../domain/session-runtime.js';
 
 const DATA_DIR = path.join(CODELARK_HOME, 'data');
+const SESSION_CONFIG_DIR = path.join(CODELARK_HOME, 'config', 'sessions');
+
+function sessionConfigPath(sessionId: string): string {
+  return path.join(SESSION_CONFIG_DIR, `${sessionId}.toml`);
+}
 
 // We construct the store with a settings map directly
 function makeSettings(): Map<string, string> {
@@ -31,6 +36,7 @@ describe('JsonFileStore', () => {
   beforeEach(() => {
     // Clean data dir before each test for isolation
     fs.rmSync(DATA_DIR, { recursive: true, force: true });
+    fs.rmSync(SESSION_CONFIG_DIR, { recursive: true, force: true });
   });
 
   it('getSetting returns values from settings map', () => {
@@ -285,6 +291,7 @@ describe('JsonFileStore', () => {
     });
     const target = store.createSession('target', 'model', undefined, '/tmp/target');
     store.addMessage(draft.id, 'user', 'draft message');
+    assert.equal(fs.existsSync(sessionConfigPath(draft.id)), true);
 
     const first = store.upsertChannelChat({
       channelType: 'feishu-default',
@@ -301,6 +308,7 @@ describe('JsonFileStore', () => {
     assert.equal(store.getChannelChat('feishu-default', 'draft-cleanup')?.bridgeSessionId, target.id);
     assert.equal(store.getSession(draft.id), null);
     assert.deepEqual(store.getMessages(draft.id).messages, []);
+    assert.equal(fs.existsSync(sessionConfigPath(draft.id)), false);
   });
 
   it('getChannelChat returns null for missing', () => {
@@ -971,10 +979,12 @@ describe('JsonFileStore', () => {
       bridgeSessionId: session.id,
     });
     store.addMessage(session.id, 'user', 'hello');
+    assert.equal(fs.existsSync(sessionConfigPath(session.id)), true);
     store.deleteSession(session.id);
     assert.equal(store.getSession(session.id), null);
     assert.equal(store.getChannelChat('feishu-default', 'delete-me'), null);
     assert.deepEqual(store.getMessages(session.id).messages, []);
+    assert.equal(fs.existsSync(sessionConfigPath(session.id)), false);
   });
 
   it('deleteSession only removes the deleted runtime mapping from surviving bindings', () => {
