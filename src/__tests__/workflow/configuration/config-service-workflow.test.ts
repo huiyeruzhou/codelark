@@ -5,7 +5,6 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { createConfigService } from '../../../configuration/service.js';
-import { exportProcessEnv } from '../../../runtime/config-projections.js';
 
 function writeFile(file: string, content: string): void {
   fs.mkdirSync(path.dirname(file), { recursive: true });
@@ -44,7 +43,7 @@ history_message_limit = 12
     }
   });
 
-  it('resolves a session execution config from real TOML source files and exports child process env', () => {
+  it('resolves a session execution config from real TOML source files', () => {
     const home = fs.mkdtempSync(path.join(os.tmpdir(), 'codelark-config-v2-home-'));
     const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'codelark-config-v2-cwd-'));
     try {
@@ -99,12 +98,6 @@ model = "session-model"
       const channel = service.snapshot(scope).config.channels[0];
       assert.equal(channel?.config.historyMessageLimit, 6);
       assert.equal(service.snapshot(scope).provenance.get('channels.feishu-default.config.historyMessageLimit')?.source, 'home');
-
-      const env = exportProcessEnv(service.snapshot(scope).config);
-      assert.equal(env.CODELARK_CODEX_MODEL, 'session-model');
-      assert.equal(env.CODELARK_CODEX_REASONING_EFFORT, 'high');
-      assert.equal(env.CODELARK_FEISHU_APP_ID, 'home-app');
-      assert.equal(env.CODELARK_HISTORY_MESSAGE_LIMIT, '6');
     } finally {
       fs.rmSync(home, { recursive: true, force: true });
       fs.rmSync(cwd, { recursive: true, force: true });

@@ -1,9 +1,15 @@
+import '../../../setup/test-setup.js';
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
 
 import {
   buildCodexResumeTmuxCommand,
+  CodexResumeTmuxLaunchError,
   hasCodexResumeTmuxReadyPrompt,
+  startCodexResumeTmuxSession,
+  type TmuxCore,
 } from '../../../../bridge/tmux/runtime.js';
 
 describe('codex tmux runtime', () => {
@@ -36,5 +42,53 @@ describe('codex tmux runtime', () => {
 
     assert.match(codexCommand, /--model gpt-5\.4/);
     assert.match(codexCommand, /resume 019e8d75-4f82-7df3-b15a-901980812307/);
+  });
+  it('includes the Codex process stderr when a tmux launch exits before pane capture', async () => {
+    const launchLogPath = path.join(process.env.CODELARK_HOME!, 'logs', 'codex-tmux-launch-codex_fail.log');
+    const commands: string[] = [];
+    const core: TmuxCore = {
+      commandPreview: (args) => ['tmux', ...args].join(' '),
+      hasSession: async (name) => {
+        const command = `tmux has-session -t ${name}`;
+        commands.push(command);
+        return { exists: false, command };
+      },
+      killSession: async (name) => {
+        const command = `tmux kill-session -t ${name}`;
+        commands.push(command);
+        return command;
+      },
+      listSessions: async () => ({ sessions: [], command: 'tmux list-sessions' }),
+      ensureDetachedSession: async ({ command }) => {
+        assert.match(command || '', /2> /);
+        fs.writeFileSync(launchLogPath, 'bash: codex: command not found\n[codelark] process exited with status 127\n', 'utf-8');
+        return { existed: false, command: 'tmux new-session -d -s codex_fail', commands: ['tmux new-session -d -s codex_fail'] };
+      },
+      capturePane: async () => {
+        throw new Error("can't find pane: codex_fail");
+      },
+      sendActions: async () => ({ commands: [] }),
+      sendInterrupt: async () => 'tmux send-keys -t codex_fail C-c',
+      injectPromptIntoPane: async () => ({ commands: [] }),
+    };
+
+    await assert.rejects(
+      () => startCodexResumeTmuxSession({
+        sessionName: 'codex_fail',
+        threadId: 'fail-thread',
+        bridgeSessionId: 'bridge-fail',
+        workingDirectory: '/tmp',
+      }, core),
+      (error) => {
+        assert.ok(error instanceof CodexResumeTmuxLaunchError);
+        assert.equal(error.details.sessionExists, false);
+        assert.match(error.details.lastError || '', /can't find pane: codex_fail/);
+        assert.match(error.details.launchOutput || '', /codex: command not found/);
+        assert.match(error.details.launchOutput || '', /status 127/);
+        assert.equal(error.details.launchLogPath, launchLogPath);
+        return true;
+      },
+    );
+    assert.ok(commands.some((command) => /kill-session -t codex_fail/.test(command)));
   });
 });

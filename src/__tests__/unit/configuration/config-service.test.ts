@@ -6,7 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { createConfigService } from '../../../configuration/service.js';
 import { loadStaticConfigBaseline, resolveConfigPaths } from '../../../configuration/sources.js';
-import { exportProcessEnv, exportRuntimeSettings } from '../../../runtime/config-projections.js';
+import { exportRuntimeSettings } from '../../../runtime/config-projections.js';
 
 function tempHome(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'codelark-config-v2-'));
@@ -568,7 +568,7 @@ require_mention = false
     }
   });
 
-  it('projects effective config to process env and legacy runtime settings maps', () => {
+  it('projects effective config to legacy runtime settings maps', () => {
     const home = tempHome();
     try {
       writeFile(path.join(home, 'config.toml'), `
@@ -601,11 +601,6 @@ require_mention = false
         },
       });
 
-      const env = exportProcessEnv(service.snapshot().config);
-      assert.equal(env.CODELARK_AGENT, 'claude');
-      assert.equal(env.CODELARK_CODEX_MODEL, 'gpt-test');
-      assert.equal(env.CODELARK_FEISHU_APP_ID, 'home-app');
-      assert.equal(env.CODELARK_ENABLED_CHANNELS, 'feishu');
 
       const settings = exportRuntimeSettings(service.snapshot().config);
       assert.equal(settings.get('bridge_default_runtime'), 'claude');

@@ -106,6 +106,8 @@ function formatCodexTmuxLaunchFailure(
       ['失败原因', details.reason],
       ['tmux session 仍存在', details.sessionExists === undefined ? undefined : details.sessionExists ? 'yes' : 'no'],
       ['最后错误', details.lastError],
+      ['原进程输出', truncateForCommandResponse(details.launchOutput, 900)],
+      ['launch log', details.launchLogPath],
       ['最后屏幕', truncateForCommandResponse(details.lastScreen)],
       ['清理命令', details.killCommand],
       ['诊断命令', truncateForCommandResponse(recentCommands, 900)],

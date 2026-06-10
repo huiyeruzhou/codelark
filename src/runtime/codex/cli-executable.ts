@@ -2,11 +2,13 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 export interface ResolveCodexCliExecutableOptions {
   env?: NodeJS.ProcessEnv;
   platform?: NodeJS.Platform;
   fileExists?: (filePath: string) => boolean;
+  packageSearchRoots?: string[];
 }
 
 export interface ResolveCliExecutableOptions extends ResolveCodexCliExecutableOptions {
@@ -100,6 +102,41 @@ function executableNames(command: string, platform: NodeJS.Platform): string[] {
   return [`${trimmed}.cmd`, `${trimmed}.exe`, trimmed];
 }
 
+function packageLocalSearchRoots(): string[] {
+  const roots = [process.cwd()];
+  try {
+    roots.push(path.dirname(fileURLToPath(import.meta.url)));
+  } catch {
+    // process.cwd() is still a useful fallback.
+  }
+  return roots;
+}
+
+function findPackageLocalExecutable(
+  command: string,
+  platform: NodeJS.Platform,
+  roots: string[],
+  fileExists: (filePath: string) => boolean,
+): string | null {
+  const pathModule = pathModuleForPlatform(platform);
+  const names = executableNames(command, platform);
+  const seen = new Set<string>();
+  for (const root of roots) {
+    let current = pathModule.resolve(root);
+    while (!seen.has(current)) {
+      seen.add(current);
+      for (const name of names) {
+        const candidate = pathModule.join(current, 'node_modules', '.bin', name);
+        if (fileExists(candidate)) return candidate;
+      }
+      const parent = pathModule.dirname(current);
+      if (parent === current) break;
+      current = parent;
+    }
+  }
+  return null;
+}
+
 function resolveHomeRelativeCodexWrapper(
   command: string,
   filePath: string,
@@ -180,6 +217,14 @@ export function resolveCliExecutable(options: ResolveCliExecutableOptions): stri
       return candidate;
     }
   }
+
+  const packageLocal = findPackageLocalExecutable(
+    options.command,
+    platform,
+    options.packageSearchRoots || packageLocalSearchRoots(),
+    fileExists,
+  );
+  if (packageLocal) return packageLocal;
 
   return names[0] || options.command;
 }

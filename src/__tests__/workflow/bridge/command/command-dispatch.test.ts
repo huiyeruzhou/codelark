@@ -370,6 +370,15 @@ case "$1" in
     exit 0
     ;;
   new-session)
+    if [[ -n "\${TMUX_FAKE_LAUNCH_STDERR:-}" ]]; then
+      command_text="\${*: -1}"
+      log_path="\${command_text#* 2> }"
+      log_path="\${log_path%%;*}"
+      log_path="\${log_path%'}"
+      log_path="\${log_path#'}"
+      mkdir -p "$(dirname "$log_path")"
+      printf '%b' "$TMUX_FAKE_LAUNCH_STDERR" > "$log_path"
+    fi
     exit 0
     ;;
   send-keys)
@@ -2733,6 +2742,7 @@ enabled = true
       PATH: process.env.PATH,
       TMUX_FAKE_LOG: process.env.TMUX_FAKE_LOG,
       TMUX_FAKE_READY_AFTER_CAPTURES: process.env.TMUX_FAKE_READY_AFTER_CAPTURES,
+      TMUX_FAKE_LAUNCH_STDERR: process.env.TMUX_FAKE_LAUNCH_STDERR,
       CODELARK_CODEX_RESUME_TMUX_READY_TIMEOUT_MS: process.env.CODELARK_CODEX_RESUME_TMUX_READY_TIMEOUT_MS,
       CODELARK_CODEX_RESUME_TMUX_READY_POLL_MS: process.env.CODELARK_CODEX_RESUME_TMUX_READY_POLL_MS,
     };
@@ -2743,6 +2753,7 @@ enabled = true
     process.env.PATH = `${fakeTmux.binDir}${path.delimiter}${previousEnv.PATH || ''}`;
     process.env.TMUX_FAKE_LOG = fakeTmux.logPath;
     process.env.TMUX_FAKE_READY_AFTER_CAPTURES = '999';
+    process.env.TMUX_FAKE_LAUNCH_STDERR = 'bash: codex: command not found\n[codelark] process exited with status 127\n';
     process.env.CODELARK_CODEX_RESUME_TMUX_READY_TIMEOUT_MS = '100';
     process.env.CODELARK_CODEX_RESUME_TMUX_READY_POLL_MS = '50';
     console.error = (...args: any[]) => { errorLogs.push(args); };
@@ -2782,11 +2793,15 @@ enabled = true
       assert.match(responseText, /Provider.*未切换/);
       assert.match(responseText, /tmux session.*codex_not-ready-thread/);
       assert.match(responseText, /失败原因.*tmux session disappeared after new-session/);
+      assert.match(responseText, /原进程输出.*codex: command not found/);
+      assert.match(responseText, /原进程输出.*status 127/);
+      assert.match(responseText, /launch log.*codex-tmux-launch-codex_not-ready-thread\.log/);
       assert.match(responseText, /没有写入 `runtime.codex.provider=tmux`/);
       assert.equal(
         errorLogs.some((args) => args[0] === '[codex-tmux-runtime] Codex resume tmux launch failed:'
           && args[1]?.tmux_session === 'codex_not-ready-thread'
-          && /tmux session disappeared/.test(args[1]?.reason || '')),
+          && /tmux session disappeared/.test(args[1]?.reason || '')
+          && /codex: command not found/.test(args[1]?.launch_output_excerpt || '')),
         true,
       );
       assert.notEqual(
@@ -2807,6 +2822,8 @@ enabled = true
       else process.env.TMUX_FAKE_LOG = previousEnv.TMUX_FAKE_LOG;
       if (previousEnv.TMUX_FAKE_READY_AFTER_CAPTURES === undefined) delete process.env.TMUX_FAKE_READY_AFTER_CAPTURES;
       else process.env.TMUX_FAKE_READY_AFTER_CAPTURES = previousEnv.TMUX_FAKE_READY_AFTER_CAPTURES;
+      if (previousEnv.TMUX_FAKE_LAUNCH_STDERR === undefined) delete process.env.TMUX_FAKE_LAUNCH_STDERR;
+      else process.env.TMUX_FAKE_LAUNCH_STDERR = previousEnv.TMUX_FAKE_LAUNCH_STDERR;
       if (previousEnv.CODELARK_CODEX_RESUME_TMUX_READY_TIMEOUT_MS === undefined) delete process.env.CODELARK_CODEX_RESUME_TMUX_READY_TIMEOUT_MS;
       else process.env.CODELARK_CODEX_RESUME_TMUX_READY_TIMEOUT_MS = previousEnv.CODELARK_CODEX_RESUME_TMUX_READY_TIMEOUT_MS;
       if (previousEnv.CODELARK_CODEX_RESUME_TMUX_READY_POLL_MS === undefined) delete process.env.CODELARK_CODEX_RESUME_TMUX_READY_POLL_MS;

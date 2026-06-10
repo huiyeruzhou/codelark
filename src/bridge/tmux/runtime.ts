@@ -1,3 +1,6 @@
+import fs from 'node:fs';
+import path from 'node:path';
+
 import {
   buildCodexTuiArgs,
   buildCodexTuiEnv,
@@ -6,6 +9,7 @@ import {
 } from '../../runtime/codex/tmux-provider.js';
 import { resolveCodexCliExecutable } from '../../runtime/codex/cli-executable.js';
 import type { StreamChatParams } from '../../runtime/contracts.js';
+import { CODELARK_HOME } from '../../configuration/paths.js';
 import {
   tmuxCore,
   type TmuxCore,
@@ -40,6 +44,7 @@ export interface StartCodexResumeTmuxSessionResult {
   tmuxCommand: string;
   commands: string[];
   ready: boolean;
+  launchLogPath?: string;
 }
 
 export interface CodexResumeTmuxReadinessResult {
@@ -63,6 +68,8 @@ export interface CodexResumeTmuxLaunchFailureDetails {
   sessionExists?: boolean;
   sessionExistsCommand?: string;
   killCommand?: string;
+  launchLogPath?: string;
+  launchOutput?: string;
 }
 
 export class CodexResumeTmuxLaunchError extends Error {
@@ -105,6 +112,44 @@ export interface SendTmuxActionsAndCaptureResult {
 
 const DEFAULT_CODEX_RESUME_TMUX_READY_TIMEOUT_MS = 15_000;
 const DEFAULT_CODEX_RESUME_TMUX_READY_POLL_MS = 250;
+const CODEX_TMUX_LAUNCH_LOG_LINES = 80;
+
+function posixShellQuote(value: string): string {
+  if (/^[A-Za-z0-9_@%+=:,./-]+$/.test(value)) return value;
+  return '\'' + value.replace(/'/g, "'\\''") + '\'';
+}
+
+function codexLaunchLogPath(sessionName: string): string {
+  const safeName = safeTmuxSessionId(sessionName, 'codex').slice(0, 120);
+  return path.join(CODELARK_HOME, 'logs', `codex-tmux-launch-${safeName}.log`);
+}
+
+function prepareLaunchLog(filePath: string): void {
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  try { fs.rmSync(filePath, { force: true }); } catch { /* best effort cleanup */ }
+}
+
+function withStderrLaunchLog(command: string, launchLogPath: string): string {
+  const quotedLogPath = posixShellQuote(launchLogPath);
+  return [
+    `${command} 2> ${quotedLogPath}`,
+    'status=$?',
+    `if [ "$status" -ne 0 ]; then printf '%s\n' "[codelark] process exited with status $status" >> ${quotedLogPath}; fi`,
+    'exit "$status"',
+  ].join('; ');
+}
+
+function readRecentFile(filePath: string | undefined, lines = CODEX_TMUX_LAUNCH_LOG_LINES): string | undefined {
+  if (!filePath) return undefined;
+  try {
+    const content = fs.readFileSync(filePath, 'utf-8').replace(/\s+$/g, '');
+    if (!content) return undefined;
+    const split = content.split(/\r?\n/);
+    return split.slice(Math.max(0, split.length - lines)).join('\n');
+  } catch {
+    return undefined;
+  }
+}
 
 function safeTmuxSessionId(id: string, fallback: string): string {
   return id.trim().replace(/[^A-Za-z0-9_.-]/g, '-').slice(0, 180) || fallback;
@@ -125,6 +170,7 @@ export function claudeTmuxSessionName(sessionId: string): string {
 export function buildCodexResumeTmuxCommand(params: StartCodexResumeTmuxSessionParams): {
   tmuxArgs: string[];
   codexCommand: string;
+  launchLogPath: string;
 } {
   const codexArgs = buildCodexTuiArgs({
     prompt: '',
@@ -142,13 +188,15 @@ export function buildCodexResumeTmuxCommand(params: StartCodexResumeTmuxSessionP
   }, []);
   const env = buildCodexTuiEnv();
   const executable = resolveCodexCliExecutable({ env });
-  const codexCommand = buildCodexTuiShellCommand(executable, codexArgs, env);
+  const rawCodexCommand = buildCodexTuiShellCommand(executable, codexArgs, env);
+  const launchLogPath = codexLaunchLogPath(params.sessionName);
+  const codexCommand = withStderrLaunchLog(rawCodexCommand, launchLogPath);
   const tmuxArgs = ['new-session', '-d', '-s', params.sessionName];
   if (params.workingDirectory) {
     tmuxArgs.push('-c', params.workingDirectory);
   }
   tmuxArgs.push('--', codexCommand);
-  return { tmuxArgs, codexCommand };
+  return { tmuxArgs, codexCommand, launchLogPath };
 }
 
 function sleep(ms: number): Promise<void> {
@@ -257,7 +305,8 @@ export async function startCodexResumeTmuxSession(
   params: StartCodexResumeTmuxSessionParams,
   core: TmuxCore = tmuxCore,
 ): Promise<StartCodexResumeTmuxSessionResult> {
-  const { codexCommand } = buildCodexResumeTmuxCommand(params);
+  const { codexCommand, launchLogPath } = buildCodexResumeTmuxCommand(params);
+  prepareLaunchLog(launchLogPath);
   const started = await core.ensureDetachedSession({
     name: params.sessionName,
     cwd: params.workingDirectory,
@@ -275,6 +324,7 @@ export async function startCodexResumeTmuxSession(
         error: describeUnknownError(error),
       });
     }
+    const launchOutput = readRecentFile(launchLogPath);
     const reason = ready.sessionExists === false
       ? 'tmux session disappeared after new-session; the Codex TUI process likely exited immediately'
       : ready.lastError
@@ -292,6 +342,8 @@ export async function startCodexResumeTmuxSession(
       sessionExists: ready.sessionExists,
       sessionExistsCommand: ready.sessionExistsCommand,
       killCommand,
+      launchLogPath,
+      launchOutput: screenExcerpt(launchOutput),
     };
     console.error('[codex-tmux-runtime] Codex resume tmux launch failed:', {
       tmux_session: details.sessionName,
@@ -302,6 +354,8 @@ export async function startCodexResumeTmuxSession(
       session_exists: details.sessionExists,
       last_error: details.lastError,
       last_screen_excerpt: details.lastScreen,
+      launch_log_path: details.launchLogPath,
+      launch_output_excerpt: details.launchOutput,
       commands: details.commands,
       kill_command: details.killCommand,
     });
@@ -314,6 +368,7 @@ export async function startCodexResumeTmuxSession(
     tmuxCommand: started.command || '',
     commands: [...started.commands, ...ready.commands],
     ready: ready.ready,
+    launchLogPath,
   };
 }
 

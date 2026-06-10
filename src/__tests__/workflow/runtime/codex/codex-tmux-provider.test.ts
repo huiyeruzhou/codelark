@@ -10,6 +10,7 @@ import { promisify } from 'node:util';
 import {
   buildCodexTuiShellCommand,
   buildCodexTuiArgs,
+  buildCodexTuiEnv,
   buildCodexTuiSelectionChoiceActions,
   compactCodexTuiUpdateProgress,
   createCodexTuiSelectionPromptMonitor,
@@ -68,6 +69,23 @@ describe('codex-tmux-provider', () => {
     assert.equal(isTruthyEnv('on'), true);
     assert.equal(isTruthyEnv('false'), false);
     assert.equal(isTruthyEnv(undefined), false);
+  });
+
+  it('builds the Codex TUI env by inheriting source env without legacy key translation', () => {
+    const env = buildCodexTuiEnv({
+      PATH: '/usr/bin:/bin',
+      HOME: '/Users/tester',
+      CODELARK_CODEX_API_KEY: 'legacy-key',
+      LARK_CHANNEL_HOME: '/Users/tester/.codelark',
+      OPENAI_API_KEY: 'official-key',
+    });
+
+    assert.equal(env.PATH, '/usr/bin:/bin');
+    assert.equal(env.HOME, '/Users/tester');
+    assert.equal(env.OPENAI_API_KEY, 'official-key');
+    assert.equal(env.CODELARK_CODEX_API_KEY, 'legacy-key');
+    assert.equal(env.LARK_CHANNEL_HOME, '/Users/tester/.codelark');
+    assert.equal(env.CODEX_API_KEY, undefined);
   });
 
   it('uses env fallbacks when optional integer values are unset or empty', () => {
@@ -580,11 +598,11 @@ describe('codex-tmux-provider', () => {
   it('builds TUI args for resume without the exec-only skip-git flag', () => {
     const oldSkipGit = process.env.CODELARK_CODEX_SKIP_GIT_REPO_CHECK;
     const oldBaseUrl = process.env.CODELARK_CODEX_BASE_URL;
-    const oldApiKey = process.env.CODELARK_CODEX_API_KEY;
+    const oldOpenAiApiKey = process.env.OPENAI_API_KEY;
     try {
       process.env.CODELARK_CODEX_SKIP_GIT_REPO_CHECK = 'true';
       process.env.CODELARK_CODEX_BASE_URL = 'https://codex.example.test/v1';
-      process.env.CODELARK_CODEX_API_KEY = 'test-key';
+      process.env.OPENAI_API_KEY = 'test-key';
 
       const args = buildCodexTuiArgs({
         prompt: 'hello',
@@ -625,8 +643,8 @@ describe('codex-tmux-provider', () => {
       else process.env.CODELARK_CODEX_SKIP_GIT_REPO_CHECK = oldSkipGit;
       if (oldBaseUrl === undefined) delete process.env.CODELARK_CODEX_BASE_URL;
       else process.env.CODELARK_CODEX_BASE_URL = oldBaseUrl;
-      if (oldApiKey === undefined) delete process.env.CODELARK_CODEX_API_KEY;
-      else process.env.CODELARK_CODEX_API_KEY = oldApiKey;
+      if (oldOpenAiApiKey === undefined) delete process.env.OPENAI_API_KEY;
+      else process.env.OPENAI_API_KEY = oldOpenAiApiKey;
     }
   });
 

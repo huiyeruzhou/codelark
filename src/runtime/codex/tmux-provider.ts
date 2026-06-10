@@ -622,16 +622,10 @@ function tmuxSessionName(sessionId: string): string {
   return `clk-${process.pid}-${Date.now()}-${safe}`;
 }
 
-export function buildCodexTuiEnv(): Record<string, string> {
+export function buildCodexTuiEnv(sourceEnv: NodeJS.ProcessEnv = process.env): Record<string, string> {
   const env: Record<string, string> = {};
-  for (const [key, value] of Object.entries(process.env)) {
+  for (const [key, value] of Object.entries(sourceEnv)) {
     if (value !== undefined) env[key] = value;
-  }
-  if (env.CODELARK_CODEX_API_KEY && !env.CODEX_API_KEY) {
-    env.CODEX_API_KEY = env.CODELARK_CODEX_API_KEY;
-  }
-  if ((env.CODEX_API_KEY || env.CODELARK_CODEX_API_KEY) && !env.OPENAI_API_KEY) {
-    env.OPENAI_API_KEY = env.CODEX_API_KEY || env.CODELARK_CODEX_API_KEY;
   }
   return env;
 }
@@ -687,7 +681,7 @@ export function buildCodexTuiArgs(params: StreamChatParams, imagePaths: string[]
   if (process.env.CODELARK_CODEX_BASE_URL) {
     args.push('--config', `openai_base_url="${process.env.CODELARK_CODEX_BASE_URL}"`);
   }
-  if (process.env.CODELARK_CODEX_API_KEY || process.env.CODEX_API_KEY || process.env.OPENAI_API_KEY) {
+  if (process.env.CODEX_API_KEY || process.env.OPENAI_API_KEY) {
     args.push('--config', 'preferred_auth_method="apikey"');
   }
   for (const imagePath of imagePaths) {

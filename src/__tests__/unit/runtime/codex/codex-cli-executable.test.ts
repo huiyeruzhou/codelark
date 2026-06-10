@@ -35,6 +35,35 @@ describe('codex-cli-executable', () => {
     );
   });
 
+  it('falls back to package-local node_modules when Codex is missing from PATH', () => {
+    assert.equal(
+      resolveCodexCliExecutable({
+        env: { PATH: '/usr/bin:/bin' },
+        platform: 'linux',
+        packageSearchRoots: ['/repo/apps/codelark/dist/runtime/codex'],
+        fileExists: (filePath) => filePath === '/repo/apps/codelark/node_modules/.bin/codex',
+      }),
+      '/repo/apps/codelark/node_modules/.bin/codex',
+    );
+  });
+
+  it('does not override a global Codex CLI with the package-local fallback', () => {
+    const existing = new Set([
+      '/home/user/.local/bin/codex',
+      '/repo/apps/codelark/node_modules/.bin/codex',
+    ]);
+
+    assert.equal(
+      resolveCodexCliExecutable({
+        env: { PATH: '/home/user/.local/bin' },
+        platform: 'linux',
+        packageSearchRoots: ['/repo/apps/codelark/dist/runtime/codex'],
+        fileExists: (filePath) => existing.has(filePath),
+      }),
+      '/home/user/.local/bin/codex',
+    );
+  });
+
   it('uses CODELARK_CODEX_CLI_PATH as an explicit override', () => {
     assert.equal(
       resolveCodexCliExecutable({

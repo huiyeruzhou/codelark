@@ -49,23 +49,3 @@ export function exportRuntimeSettings(config: ConfigV2): Map<string, string> {
   if (codexModel) settings.set('default_model', codexModel);
   return settings;
 }
-
-export function exportProcessEnv(config: ConfigV2): NodeJS.ProcessEnv {
-  const env: NodeJS.ProcessEnv = {};
-  for (const field of configFields as readonly ConfigField[]) {
-    if (!field.processEnvKey) continue;
-    if (field.path === 'channels[].enabled') {
-      env[field.processEnvKey] = config.channels
-        .filter((channel) => channel.enabled)
-        .map((channel) => channel.provider)
-        .join(',');
-      continue;
-    }
-    const raw = field.path.startsWith('channels[].')
-      ? channelFieldValue(config, field.path)
-      : getConfigPath(config, field.path);
-    const value = field.formatEnv ? field.formatEnv(raw) : valueToString(raw);
-    if (value !== undefined) env[field.processEnvKey] = value;
-  }
-  return env;
-}

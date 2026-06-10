@@ -9,7 +9,6 @@ import { CODELARK_HOME } from '../configuration/paths.js';
 import type { FeishuChannelConfig } from '../channels/types.js';
 import { createConfigService } from '../configuration/service.js';
 import type { ConfigPatch, ConfigV2 } from '../configuration/schema.js';
-import { exportProcessEnv } from '../runtime/config-projections.js';
 import { normalizeFeishuSite } from '../channels/feishu/site.js';
 import {
   clearStaleBridgeInstanceLock,
@@ -601,7 +600,6 @@ export function getUiServerStatus(): UiServerStatus {
 
 export interface StartupConfigProjection {
   config: ConfigV2;
-  env: NodeJS.ProcessEnv;
 }
 
 export interface ServiceConfigOverrideOptions {
@@ -639,10 +637,8 @@ export function loadStartupProjection(options: ServiceConfigOverrideOptions = {}
     codelarkHome: CODELARK_HOME,
     ...(hasConfigPatchValues(options.cli) ? { cli: options.cli } : {}),
   });
-  const config = service.snapshot().config;
   return {
-    config,
-    env: exportProcessEnv(config),
+    config: service.snapshot().config,
   };
 }
 
@@ -654,35 +650,22 @@ function loadStartupConfig(options: ServiceConfigOverrideOptions = {}): ConfigV2
   return startupProjectionFor(options).config;
 }
 
-function buildProjectedConfigEnv(options: ServiceConfigOverrideOptions = {}): NodeJS.ProcessEnv {
-  return startupProjectionFor(options).env;
-}
-
 function buildDaemonEnv(
-  options: ServiceConfigOverrideOptions = {},
-  projectedConfigEnv = buildProjectedConfigEnv(options),
+  _options: ServiceConfigOverrideOptions = {},
 ): NodeJS.ProcessEnv {
   const env = { ...process.env } as NodeJS.ProcessEnv;
   const legacyEnvPrefix = ['C', 'T', 'I'].join('');
   for (const key of Object.keys(env)) {
     if (key === `${legacyEnvPrefix}_HOME` || key.startsWith(`${legacyEnvPrefix}_`)) delete env[key];
   }
-  env.CODELARK_HOME = CODELARK_HOME;
-  Object.assign(env, buildLarkCliRuntimeEnv());
-  Object.assign(env, projectedConfigEnv);
   delete env.CLAUDECODE;
   return env;
 }
 
 function buildUiServerEnv(
-  options: ServiceConfigOverrideOptions = {},
-  projectedConfigEnv = buildProjectedConfigEnv(options),
+  _options: ServiceConfigOverrideOptions = {},
 ): NodeJS.ProcessEnv {
-  return {
-    ...process.env,
-    ...projectedConfigEnv,
-    CODELARK_HOME,
-  };
+  return { ...process.env } as NodeJS.ProcessEnv;
 }
 
 export function buildLarkCliRuntimeEnv(): NodeJS.ProcessEnv {
@@ -1111,7 +1094,7 @@ export async function startBridge(options: ServiceConfigOverrideOptions = {}): P
     const child = spawn(process.execPath, [daemonEntry], {
       cwd: packageRoot,
       detached: true,
-      env: buildDaemonEnv(options, startup.env),
+      env: buildDaemonEnv(options),
       stdio: ['ignore', stdoutFd, stderrFd],
       ...WINDOWS_HIDE,
     });
