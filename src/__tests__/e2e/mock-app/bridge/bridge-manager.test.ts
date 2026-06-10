@@ -1667,7 +1667,7 @@ agent = "claude"
 
       assert.equal(subscription.pendingTurn?.streamStarted, true);
       assert.deepEqual(streamEvents, [
-        'metadata:mirror:session-1:turn-1:本地会话:effort:medium,model:test-model,bridge_id:session-,mirror',
+        'metadata:mirror:session-1:turn-1:本地会话:codex,effort:medium,model:test-model,bridge_id:session-,mirror',
         'start:mirror:session-1:turn-1',
         'text:mirror:session-1:turn-1:**我:** codex prompt\n\n**codex:**',
         'status:mirror:session-1:turn-1:处理中',
@@ -1732,7 +1732,7 @@ agent = "claude"
 
       assert.equal(subscription.pendingTurn?.userText, '（基于 Review findings）\nok,当前调整已经可以收尾了吗');
       assert.deepEqual(streamEvents, [
-        'metadata:mirror:session-1:turn-1:本地会话:effort:medium,model:test-model,bridge_id:session-,mirror',
+        'metadata:mirror:session-1:turn-1:本地会话:codex,effort:medium,model:test-model,bridge_id:session-,mirror',
         'start:mirror:session-1:turn-1',
         'text:mirror:session-1:turn-1:**我:**\n（基于 Review findings）\nok,当前调整已经可以收尾了吗\n\n**codex:**',
         'status:mirror:session-1:turn-1:处理中',

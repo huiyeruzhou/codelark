@@ -247,6 +247,7 @@ export async function runInteractiveMessage(
         title: getBridgeSessionDisplayTitle(initialSession),
         bridgeSessionId: initialSession.id,
         threadId: getSessionCodexThreadId(initialSession) || '',
+        runtime: isClaude ? 'claude' : 'codex',
         executionProvider: resolveEffectiveCodexProvider(initialSession, binding),
         creatorKind: 'bridge',
         reasoningEffort: metadata.reasoningEffort,

@@ -689,7 +689,7 @@ describe('buildFinalCardJson', () => {
       'completed',
       [],
       'chat-1',
-      { title: '当前线程', tags: ['effort:medium', 'model:default', 'bridge_id:abc12345', 'sdk', 'mirror'] },
+      { title: '当前线程', tags: ['codex', 'effort:medium', 'model:default', 'bridge_id:abc12345', 'sdk', 'mirror'] },
     );
 
     const parsed = JSON.parse(cardJson) as any;
@@ -700,7 +700,7 @@ describe('buildFinalCardJson', () => {
     assert.equal(parsed.header.text_tag_list[2].text.content, 'mirror');
     assert.equal(parsed.body.elements[0].tag, 'markdown');
     assert.equal(parsed.body.elements[0].element_id, 'runtime_meta_tags');
-    assert.equal(parsed.body.elements[0].content, "<text_tag color='green'>effort:medium</text_tag> <text_tag color='turquoise'>model:default</text_tag>");
+    assert.equal(parsed.body.elements[0].content, "<text_tag color='orange'>codex</text_tag> <text_tag color='green'>effort:medium</text_tag> <text_tag color='turquoise'>model:default</text_tag>");
     assertFeishuElementIdsAreValid(parsed);
   });
 
