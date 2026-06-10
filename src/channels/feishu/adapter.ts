@@ -4262,7 +4262,7 @@ export class FeishuAdapter extends BaseChannelAdapter {
   ): Promise<boolean> {
     const cardKey = this.resolveStreamKey(chatId, streamKey);
     // Wait for in-flight card creation to complete before finalizing
-    const pending = this.cardCreatePromises.get(cardKey);
+    const pending = this.cardCreatePromises.get(cardKey) || this.scheduledCardCreatePromises.get(cardKey);
     if (pending) {
       try { await pending; } catch { /* creation failed — no card to finalize */ }
     }
@@ -4510,14 +4510,28 @@ export class FeishuAdapter extends BaseChannelAdapter {
     streamKey?: string,
   ): Promise<boolean> {
     const cardKey = this.resolveStreamKey(chatId, streamKey);
-    if (!this.activeCards.has(cardKey)) {
-      if (this.cardCreatePromises.has(cardKey) || this.scheduledCardCreatePromises.has(cardKey)) {
-        console.warn('[feishu-adapter] Streaming card finalization skipped because card creation is still pending; falling back to text delivery:', {
+
+    // Wait for any pending card creation to complete before finalizing
+    const createPromise = this.cardCreatePromises.get(cardKey) || this.scheduledCardCreatePromises.get(cardKey);
+    if (createPromise) {
+      console.log('[feishu-adapter] Waiting for pending card creation before finalization:', {
+        streamKey: cardKey,
+        chatId,
+        hasActiveCard: this.activeCards.has(cardKey),
+      });
+      try {
+        await createPromise;
+      } catch (err) {
+        console.warn('[feishu-adapter] Card creation failed before finalization; falling back to text delivery:', {
           streamKey: cardKey,
           chatId,
+          error: err instanceof Error ? err.message : String(err),
         });
         return false;
       }
+    }
+
+    if (!this.activeCards.has(cardKey)) {
       return this.finalizeCard(chatId, status, responseText, cardKey);
     }
 
