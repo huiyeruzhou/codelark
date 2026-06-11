@@ -1612,6 +1612,7 @@ printf '{"ok":true,"data":{"chat_id":"oc_user_created"}}\\n'
         message: {
           get: async (payload: Record<string, any>) => {
             getCalls.push(payload);
+            const isFullCardRequest = payload?.params?.card_msg_content_type === 'user_card_content';
             return {
               data: {
                 items: [
@@ -1619,18 +1620,20 @@ printf '{"ok":true,"data":{"chat_id":"oc_user_created"}}\\n'
                     message_id: 'card-parent-1',
                     msg_type: 'interactive',
                     body: {
-                      content: JSON.stringify({
-                        data: {
-                          user_dsl: {
-                            schema: '2.0',
-                            body: {
-                              elements: [
-                                { tag: 'markdown', content: '发布窗口：今晚 22:00' },
-                              ],
+                      content: isFullCardRequest
+                        ? JSON.stringify({
+                            data: {
+                              user_dsl: {
+                                schema: '2.0',
+                                body: {
+                                  elements: [
+                                    { tag: 'markdown', content: '发布窗口：今晚 22:00' },
+                                  ],
+                                },
+                              },
                             },
-                          },
-                        },
-                      }),
+                          })
+                        : JSON.stringify({ text: '发布窗口预览' }),
                     },
                   },
                 ],
@@ -1661,9 +1664,11 @@ printf '{"ok":true,"data":{"chat_id":"oc_user_created"}}\\n'
     assert.ok(inbound);
     assert.equal(inbound.text, '按这个窗口发');
     assert.equal(getCalls[0]?.path?.message_id, 'card-parent-1');
+    assert.equal(getCalls[0]?.params?.card_msg_content_type, 'user_card_content');
     assert.match(inbound.contextText || '', /<quoted_message platform="feishu" message_id="card-parent-1" message_type="interactive">/);
     assert.match(inbound.contextText || '', /<interactive_card>/);
     assert.match(inbound.contextText || '', /发布窗口：今晚 22:00/);
+    assert.doesNotMatch(inbound.contextText || '', /发布窗口预览/);
     assert.match(inbound.contextText || '', /<\/interactive_card>/);
     assert.match(inbound.contextText || '', /<\/quoted_message>/);
   });
