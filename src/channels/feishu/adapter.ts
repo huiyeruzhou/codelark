@@ -1722,6 +1722,8 @@ const POST_ELEMENT_FIELDS: Record<string, Set<string>> = {
   text: new Set(['tag', 'text', 'style', 'un_escape']),
 };
 
+const FEISHU_FULL_CARD_MESSAGE_CONTENT_TYPE = 'user_card_content';
+
 function describeUnsupportedPostElementFields(element: Record<string, unknown>, index: number): string[] {
   const tag = typeof element.tag === 'string' ? element.tag : '';
   const knownFields = tag ? POST_ELEMENT_FIELDS[tag] : undefined;
@@ -2183,7 +2185,10 @@ export class FeishuAdapter extends BaseChannelAdapter {
         data?: { items?: FeishuFetchedMessageItem[] };
       }>(messageId, 'im.message.get:quoted-message', () => getter({
         path: { message_id: messageId },
-        params: { user_id_type: 'open_id' },
+        params: {
+          user_id_type: 'open_id',
+          card_msg_content_type: FEISHU_FULL_CARD_MESSAGE_CONTENT_TYPE,
+        },
       }));
       return res?.data?.items?.[0] || null;
     } catch (error) {
