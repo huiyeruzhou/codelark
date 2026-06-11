@@ -330,7 +330,7 @@ export async function handleProviderCommand(options: {
     );
   }
   const tmuxSessionName = codexTmuxSessionName(threadId);
-  let startResult: { existed: boolean };
+  let startResult: { existed: boolean; selectionPrompts?: unknown[] };
   try {
     await options.deps.notifyBackgroundOperation?.(`正在启动 tmux 后台会话 \`${tmuxSessionName}\` 并 resume 当前 Codex thread。`);
     startResult = await startRuntimeTmuxSession({
@@ -346,6 +346,13 @@ export async function handleProviderCommand(options: {
       skipGitRepoCheck,
       codexMode: mode === 'yolo' ? 'yolo' : 'normal',
       permissionMode: mode === 'yolo' ? 'never' : 'acceptEdits',
+      onSelectionPrompt: async (selectionPrompt) => {
+        if (selectionPrompt.runtime !== 'codex') return undefined;
+        return options.deps.requestCodexTuiSelection?.(selectionPrompt, {
+          sessionId: session.id,
+          replyToMessageId: options.msg.messageId,
+        });
+      },
     });
   } catch (error) {
     if (error instanceof CodexResumeTmuxLaunchError) {
@@ -378,6 +385,9 @@ export async function handleProviderCommand(options: {
         : didBootstrapThread
           ? '已在本地预创建 Codex thread，并启动 Codex TUI resume 当前 thread。'
           : '已启动 Codex TUI 并 resume 当前 thread。',
+      ...(startResult.selectionPrompts && startResult.selectionPrompts.length > 0
+        ? ['启动阶段检测到 Codex TUI 选择提示，已通过 IM 选择框确认后继续。']
+        : []),
       '这是 `/p tmux` 的标准行为：每次都会强制重新加载同名 tmux session，确保和底层 Codex JSONL 会话一致。',
       '之后普通消息会发送到这个 tmux session；回复由 mirror 机制从 Codex session JSONL 自动同步。',
       '可发送 `/tmux-screen` 查看当前 tmux 屏幕；如果需要应用新的 tmux/TUI 启动参数，请先 `/stop`，再重新发送 `/p tmux`。',
