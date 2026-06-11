@@ -52,6 +52,9 @@ export interface StartCodexResumeTmuxSessionParams {
   skipGitRepoCheck?: boolean;
   codexMode?: StreamChatParams['codexMode'];
   permissionMode?: string;
+  onSelectionPrompt?: (
+    selectionPrompt: RuntimeTmuxSelectionPrompt,
+  ) => CodexTuiSelectionPromptChoice | null | void | Promise<CodexTuiSelectionPromptChoice | null | void>;
 }
 
 export interface StartCodexResumeTmuxSessionResult {
@@ -62,6 +65,7 @@ export interface StartCodexResumeTmuxSessionResult {
   commands: string[];
   ready: boolean;
   launchLogPath?: string;
+  selectionPrompts?: RuntimeTmuxSelectionPrompt[];
 }
 
 export type RuntimeTmuxKind = 'codex' | 'claude';
@@ -119,6 +123,7 @@ export interface CodexResumeTmuxReadinessResult {
   selectionPromptKind?: CodexTuiSelectionPromptKind;
   selectionPromptChoice?: CodexTuiSelectionPromptChoice;
   selectionPromptSummary?: string;
+  selectionPrompts?: RuntimeTmuxSelectionPrompt[];
 }
 
 export interface CodexResumeTmuxLaunchFailureDetails {
@@ -421,7 +426,10 @@ function runtimeReadyPollMs(runtime: RuntimeTmuxKind): number {
   );
 }
 
-function codexReadinessFromRuntimeResult(result: RuntimeTmuxReadinessResult): CodexResumeTmuxReadinessResult {
+function codexReadinessFromRuntimeResult(
+  result: RuntimeTmuxReadinessResult,
+  selectionPrompts: RuntimeTmuxSelectionPrompt[] = [],
+): CodexResumeTmuxReadinessResult {
   const selectionPrompt = result.selectionPrompt?.runtime === 'codex'
     ? result.selectionPrompt
     : undefined;
@@ -435,6 +443,7 @@ function codexReadinessFromRuntimeResult(result: RuntimeTmuxReadinessResult): Co
     selectionPromptKind: selectionPrompt?.kind,
     selectionPromptChoice: selectionPrompt?.defaultChoice || undefined,
     selectionPromptSummary: selectionPrompt?.summary,
+    ...(selectionPrompts.length > 0 ? { selectionPrompts } : {}),
   };
 }
 
@@ -445,7 +454,9 @@ export async function waitForRuntimeTmuxReady(params: {
   core?: TmuxCore;
   autoResolveSelection?: boolean;
   afterSelectionDelayMs?: number;
-  onSelectionPrompt?: (selectionPrompt: RuntimeTmuxSelectionPrompt) => void | Promise<void>;
+  onSelectionPrompt?: (
+    selectionPrompt: RuntimeTmuxSelectionPrompt,
+  ) => CodexTuiSelectionPromptChoice | null | void | Promise<CodexTuiSelectionPromptChoice | null | void>;
 }): Promise<RuntimeTmuxReadinessResult> {
   const core = params.core || tmuxCore;
   const captureTarget = params.target || params.sessionName;
@@ -471,6 +482,17 @@ export async function waitForRuntimeTmuxReady(params: {
       lastError = undefined;
       selectionPrompt = detectRuntimeTmuxSelectionPrompt(params.runtime, capture.screen);
       if (selectionPrompt) {
+        console.log('[tmux-runtime] Runtime tmux selection prompt detected during readiness check:', {
+          event: 'tmux.runtime.selection.detected',
+          runtime: params.runtime,
+          tmux_session: params.sessionName,
+          capture_target: captureTarget,
+          prompt_runtime: selectionPrompt.runtime,
+          prompt_kind: selectionPrompt.kind,
+          default_choice: selectionPrompt.defaultChoice,
+          prompt_summary: screenExcerpt(selectionPrompt.summary),
+          has_selection_handler: typeof params.onSelectionPrompt === 'function',
+        });
         if (params.autoResolveSelection === false || selectionPrompt.defaultChoice === null) {
           return {
             ready: false,
@@ -486,13 +508,53 @@ export async function waitForRuntimeTmuxReady(params: {
           : `${selectionPrompt.runtime}:${selectionPrompt.kind}`;
         if (!handledSelectionFingerprints.has(fingerprint)) {
           handledSelectionFingerprints.add(fingerprint);
-          await params.onSelectionPrompt?.(selectionPrompt);
+          const requestedChoice = await params.onSelectionPrompt?.(selectionPrompt);
+          const resolvedChoice = selectionPrompt.runtime === 'codex'
+            ? requestedChoice || selectionPrompt.defaultChoice || 'not_selection'
+            : 'confirm';
           const actions = selectionPrompt.runtime === 'codex'
-            ? buildCodexTuiSelectionChoiceActions(selectionPrompt.prompt, selectionPrompt.defaultChoice)
+            ? buildCodexTuiSelectionChoiceActions(
+              selectionPrompt.prompt,
+              requestedChoice || selectionPrompt.defaultChoice || 'not_selection',
+            )
             : [{ type: 'key' as const, key: 'Enter' }];
+          if (!params.onSelectionPrompt) {
+            console.warn('[tmux-runtime] Runtime tmux selection prompt has no IM handler; falling back to default choice:', {
+              event: 'tmux.runtime.selection.no_handler',
+              runtime: params.runtime,
+              tmux_session: params.sessionName,
+              capture_target: captureTarget,
+              prompt_runtime: selectionPrompt.runtime,
+              prompt_kind: selectionPrompt.kind,
+              default_choice: selectionPrompt.defaultChoice,
+              resolved_choice: resolvedChoice,
+              prompt_summary: screenExcerpt(selectionPrompt.summary),
+            });
+          } else {
+            console.log('[tmux-runtime] Runtime tmux selection prompt choice resolved:', {
+              event: 'tmux.runtime.selection.choice',
+              runtime: params.runtime,
+              tmux_session: params.sessionName,
+              capture_target: captureTarget,
+              prompt_runtime: selectionPrompt.runtime,
+              prompt_kind: selectionPrompt.kind,
+              requested_choice: requestedChoice || null,
+              resolved_choice: resolvedChoice,
+            });
+          }
           if (actions.length > 0) {
             const sent = await core.sendActions(captureTarget, actions);
             commands.push(...sent.commands);
+            console.log('[tmux-runtime] Runtime tmux selection prompt actions sent:', {
+              event: 'tmux.runtime.selection.actions_sent',
+              runtime: params.runtime,
+              tmux_session: params.sessionName,
+              capture_target: captureTarget,
+              prompt_runtime: selectionPrompt.runtime,
+              prompt_kind: selectionPrompt.kind,
+              action_count: actions.length,
+              commands: sent.commands,
+            });
           }
         }
         if (params.afterSelectionDelayMs && params.afterSelectionDelayMs > 0) {
@@ -582,12 +644,26 @@ export async function waitForRuntimeTmuxReady(params: {
 export async function waitForCodexResumeTmuxReady(
   sessionName: string,
   core: TmuxCore = tmuxCore,
+  options: {
+    onSelectionPrompt?: (
+      selectionPrompt: RuntimeTmuxSelectionPrompt,
+    ) => CodexTuiSelectionPromptChoice | null | void | Promise<CodexTuiSelectionPromptChoice | null | void>;
+    autoResolveSelection?: boolean;
+    afterSelectionDelayMs?: number;
+  } = {},
 ): Promise<CodexResumeTmuxReadinessResult> {
+  const selectionPrompts: RuntimeTmuxSelectionPrompt[] = [];
   return codexReadinessFromRuntimeResult(await waitForRuntimeTmuxReady({
     runtime: 'codex',
     sessionName,
     core,
-  }));
+    autoResolveSelection: options.autoResolveSelection,
+    afterSelectionDelayMs: options.afterSelectionDelayMs,
+    onSelectionPrompt: async (selectionPrompt) => {
+      selectionPrompts.push(selectionPrompt);
+      return options.onSelectionPrompt?.(selectionPrompt);
+    },
+  }), selectionPrompts);
 }
 
 export async function startCodexResumeTmuxSession(
@@ -602,7 +678,9 @@ export async function startCodexResumeTmuxSession(
     command: codexCommand,
     recreate: true,
   });
-  const startedCheck = await waitForCodexResumeTmuxReady(params.sessionName, core);
+  const startedCheck = await waitForCodexResumeTmuxReady(params.sessionName, core, {
+    onSelectionPrompt: params.onSelectionPrompt,
+  });
   if (!startedCheck.ready) {
     let killCommand: string | undefined;
     try {
@@ -668,6 +746,9 @@ export async function startCodexResumeTmuxSession(
     commands: [...started.commands, ...startedCheck.commands],
     ready: true,
     launchLogPath,
+    ...(startedCheck.selectionPrompts && startedCheck.selectionPrompts.length > 0
+      ? { selectionPrompts: startedCheck.selectionPrompts }
+      : {}),
   };
 }
 

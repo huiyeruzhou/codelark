@@ -31,6 +31,7 @@ import { _testOnlyCodexThreadBootstrap } from '../../../../runtime/codex/thread-
 import { _testOnlyClaudePty } from '../../../../runtime/claude/pty-provider.js';
 import { _testOnlyTmuxScreenMonitors } from '../../../../bridge/command/tmux.js';
 import { buildCommandCallbackData, parseCommandCallbackData } from '../../../../bridge/command/callbacks.js';
+import { handlePermissionCallback } from '../../../../bridge/permission/broker.js';
 import * as router from '../../../../bridge/host/channel-router.js';
 import {
   flushThreadTablePinJobs,
@@ -445,6 +446,10 @@ function installFakeTmux(): { binDir: string; logPath: string } {
     [[ -f "$count_file" ]] && count="$(cat "$count_file" 2>/dev/null || printf '0')"
     count=$((count + 1))
     printf '%s\n' "$count" > "$count_file"
+    if [[ "\${TMUX_FAKE_CAPTURE_UPDATE_PROMPT_ONCE:-}" == "1" && "$count" -eq 1 ]]; then
+      printf '%b' 'Update available! 0.0.0 -> 9.9.9\nRelease notes: https://github.com/openai/codex/releases/latest\n› 1. Update now\n  2. Skip\n  3. Skip until next version\nPress enter to confirm or esc to cancel\n'
+      exit 0
+    fi
     if [[ "$count" -le "$ready_after" ]]; then
       printf 'alpha-screen\nCodex starting...\n'
     else
@@ -459,6 +464,58 @@ esac
 `, 'utf-8');
   fs.chmodSync(tmuxPath, 0o755);
   return { binDir, logPath };
+}
+
+function installFakeCodexThreadBootstrap(): { binDir: string; codexPath: string; logPath: string } {
+  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-fake-codex-bootstrap-'));
+  const logPath = path.join(binDir, 'codex-bootstrap.log');
+  const scriptPath = path.join(binDir, 'codex-bootstrap.cjs');
+  const codexPath = path.join(binDir, 'codex');
+  fs.writeFileSync(logPath, '', 'utf-8');
+  fs.writeFileSync(scriptPath, `#!/usr/bin/env node
+const fs = require('node:fs');
+const path = require('node:path');
+
+const args = process.argv.slice(2);
+fs.appendFileSync(${JSON.stringify(logPath)}, args.join(' ') + '\\n');
+if (args[0] !== 'exec' || !args.includes('--json')) {
+  process.stderr.write('unexpected fake codex command\\n');
+  process.exit(2);
+}
+
+const threadId = process.env.TMUX_FAKE_BOOTSTRAP_THREAD_ID || '019e824e-10ef-7430-985d-4349ce6a15f9';
+const codexHome = process.env.CODEX_HOME;
+if (!codexHome) {
+  process.stderr.write('CODEX_HOME is required\\n');
+  process.exit(1);
+}
+const cdIndex = args.indexOf('--cd');
+const cwd = cdIndex >= 0 ? args[cdIndex + 1] : process.cwd();
+const sessionDir = path.join(codexHome, 'sessions', '2026', '06', '12');
+fs.mkdirSync(sessionDir, { recursive: true });
+const sessionFile = path.join(sessionDir, 'rollout-2026-06-12T15-45-00-' + threadId + '.jsonl');
+fs.writeFileSync(sessionFile, JSON.stringify({
+  type: 'session_meta',
+  payload: {
+    id: threadId,
+    cwd,
+    originator: 'codelark-test',
+    source: 'exec',
+  },
+}) + '\\n' + JSON.stringify({
+  type: 'event_msg',
+  payload: {
+    type: 'user_message',
+    message: 'CodeLark local thread bootstrap. This request is expected to fail before reaching a model.',
+  },
+}) + '\\n', 'utf-8');
+process.stdout.write(JSON.stringify({ type: 'thread.started', thread_id: threadId }) + '\\n');
+setTimeout(() => process.exit(0), 50);
+`, 'utf-8');
+  fs.chmodSync(scriptPath, 0o755);
+  fs.writeFileSync(codexPath, `#!/usr/bin/env sh\nexec "${process.execPath}" "${scriptPath}" "$@"\n`, 'utf-8');
+  fs.chmodSync(codexPath, 0o755);
+  return { binDir, codexPath, logPath };
 }
 
 function installFakeClaudeExecutable(): { binDir: string; logPath: string } {
@@ -3011,6 +3068,98 @@ enabled = true
       process.env.PATH = previousEnv.PATH;
       if (previousEnv.TMUX_FAKE_LOG === undefined) delete process.env.TMUX_FAKE_LOG;
       else process.env.TMUX_FAKE_LOG = previousEnv.TMUX_FAKE_LOG;
+      fs.rmSync(fakeTmux.binDir, { recursive: true, force: true });
+    }
+  });
+
+  it('shows a full IM selection card when /p tmux hits a Codex startup update prompt', async () => {
+    const previousEnv = {
+      PATH: process.env.PATH,
+      TMUX_FAKE_LOG: process.env.TMUX_FAKE_LOG,
+      TMUX_FAKE_CAPTURE_UPDATE_PROMPT_ONCE: process.env.TMUX_FAKE_CAPTURE_UPDATE_PROMPT_ONCE,
+    };
+    const fakeTmux = installFakeTmux();
+    process.env.PATH = `${fakeTmux.binDir}${path.delimiter}${previousEnv.PATH || ''}`;
+    process.env.TMUX_FAKE_LOG = fakeTmux.logPath;
+    process.env.TMUX_FAKE_CAPTURE_UPDATE_PROMPT_ONCE = '1';
+
+    try {
+      const store = initTestContext({ settings: { bridge_claude_provider: 'pty' } });
+      const sent: any[] = [];
+      const reactions: Array<{ action: 'add' | 'remove'; messageId: string; emojiType?: string; reactionId?: string }> = [];
+      const adapter: any = {
+        ...createGroupCapableAdapter({ sent }),
+        send: async (message: any) => {
+          const messageId = `reply-${sent.length + 1}`;
+          sent.push({ ...message, messageId });
+          if (message.richCard?.title === 'Codex TUI Selection') {
+            const callbackData = message.richCard.selects?.[0]?.options?.find(
+              (option: { callbackData?: string }) => option.callbackData?.endsWith(':skip_until_next_version'),
+            )?.callbackData;
+            assert.ok(callbackData, 'selection card should include skip_until_next_version callback');
+            setTimeout(() => {
+              assert.equal(handlePermissionCallback(callbackData, address.chatId, messageId), true);
+            }, 0);
+          }
+          return { ok: true, messageId };
+        },
+        addMessageReaction: async (messageId: string, emojiType: string) => {
+          reactions.push({ action: 'add', messageId, emojiType, reactionId: 'reaction-typing' });
+          return 'reaction-typing';
+        },
+        removeMessageReaction: async (messageId: string, reactionId: string, emojiType?: string) => {
+          reactions.push({ action: 'remove', messageId, emojiType, reactionId });
+        },
+      };
+      const address = { channelType: 'feishu', chatId: 'chat-provider-tmux-update-prompt' } as const;
+      const session = store.createSession('tmux-update-prompt-session', 'test-model', undefined, os.tmpdir(), 'normal');
+      store.upsertChannelChat({
+        channelType: address.channelType,
+        chatId: address.chatId,
+        bridgeSessionId: session.id,
+      });
+
+      await handleBridgeCommand(
+        adapter,
+        {
+          address,
+          text: '/p tmux',
+          messageId: 'incoming-provider-tmux-update-prompt',
+        } as any,
+        '/p tmux',
+        {
+          getActiveTask: () => undefined,
+          diagnoseSessionHealth: async () => null,
+          diagnoseAllActiveSessions: async () => [],
+          reconcileMirrorSubscriptions: async () => {},
+          bootstrapCodexThread: async () => 'update-prompt-thread',
+        },
+      );
+
+      assert.deepEqual(reactions.map((reaction) => reaction.action), ['add', 'remove']);
+      assert.equal(sent.length, 2);
+      assert.equal(sent[0]?.richCard?.title, 'Codex TUI Selection');
+      assert.equal(sent[0]?.richCard?.selects?.[0]?.id, 'clk_codex_tui_selection');
+      assert.deepEqual(sent[0]?.richCard?.selects?.[0]?.options.map((option: any) => option.text), [
+        'Update now',
+        'Skip',
+        'Skip until next version',
+      ]);
+      assert.match(sent[0]?.text || '', /Choose the option CodeLark should select in tmux/);
+      assert.match(sent.at(-1)?.text || '', /已切换 Codex Provider/);
+      assert.match(sent.at(-1)?.text || '', /启动阶段检测到 Codex TUI 选择提示/);
+      assert.equal(getSessionCodexProvider(store.getSession(session.id)), 'tmux');
+
+      const tmuxLog = fs.readFileSync(fakeTmux.logPath, 'utf-8');
+      assert.match(tmuxLog, /new-session -d -s codex_update-prompt-thread/);
+      assert.equal((tmuxLog.match(/send-keys -t codex_update-prompt-thread Down/g) || []).length, 2);
+      assert.match(tmuxLog, /send-keys -t codex_update-prompt-thread Enter/);
+    } finally {
+      process.env.PATH = previousEnv.PATH;
+      if (previousEnv.TMUX_FAKE_LOG === undefined) delete process.env.TMUX_FAKE_LOG;
+      else process.env.TMUX_FAKE_LOG = previousEnv.TMUX_FAKE_LOG;
+      if (previousEnv.TMUX_FAKE_CAPTURE_UPDATE_PROMPT_ONCE === undefined) delete process.env.TMUX_FAKE_CAPTURE_UPDATE_PROMPT_ONCE;
+      else process.env.TMUX_FAKE_CAPTURE_UPDATE_PROMPT_ONCE = previousEnv.TMUX_FAKE_CAPTURE_UPDATE_PROMPT_ONCE;
       fs.rmSync(fakeTmux.binDir, { recursive: true, force: true });
     }
   });
@@ -6612,6 +6761,308 @@ enabled = true
       if (oldFakeLog === undefined) delete process.env.TMUX_FAKE_LOG;
       else process.env.TMUX_FAKE_LOG = oldFakeLog;
       fs.rmSync(fakeTmux.binDir, { recursive: true, force: true });
+    }
+  });
+
+  it('shows a full IM selection card when recovering a missing tmux provider session hits a Codex startup update prompt', async () => {
+    const settings = makeSettings();
+    settings.set('bridge_default_provider', 'tmux');
+    const store = new JsonFileStore(settings, { dynamicSettings: true });
+    createConfigService({ migrate: false, env: {} }).set({ kind: 'home' }, {
+      runtime: { codex: { provider: 'tmux' } },
+    });
+    initBridgeContext({
+      store,
+      llm: noopLlm,
+      permissions: { resolvePendingPermission: () => false },
+      lifecycle: {},
+    });
+    const fakeTmux = installFakeTmux();
+    const oldEnv = {
+      PATH: process.env.PATH || '',
+      TMUX_FAKE_LOG: process.env.TMUX_FAKE_LOG,
+      TMUX_FAKE_CAPTURE_UPDATE_PROMPT_ONCE: process.env.TMUX_FAKE_CAPTURE_UPDATE_PROMPT_ONCE,
+    };
+    process.env.PATH = `${fakeTmux.binDir}${path.delimiter}${oldEnv.PATH}`;
+    process.env.TMUX_FAKE_LOG = fakeTmux.logPath;
+    process.env.TMUX_FAKE_CAPTURE_UPDATE_PROMPT_ONCE = '1';
+
+    try {
+      const sent: any[] = [];
+      const adapter: any = {
+        channelType: 'feishu',
+        send: async (message: any) => {
+          const messageId = `reply-tmux-recover-selection-${sent.length + 1}`;
+          sent.push({ ...message, messageId });
+          if (message.richCard?.title === 'Codex TUI Selection') {
+            const callbackData = message.richCard.selects?.[0]?.options?.find(
+              (option: { callbackData?: string }) => option.callbackData?.endsWith(':skip_until_next_version'),
+            )?.callbackData;
+            assert.ok(callbackData, 'selection card should include skip_until_next_version callback');
+            setTimeout(() => {
+              assert.equal(handlePermissionCallback(callbackData, address.chatId, messageId), true);
+            }, 0);
+          }
+          return { ok: true, messageId };
+        },
+      };
+      const address = { channelType: 'feishu', chatId: 'chat-tmux-provider-recover-selection' } as const;
+      const deps = {
+        getActiveTask: () => undefined,
+        diagnoseSessionHealth: async () => null,
+        diagnoseAllActiveSessions: async () => [],
+      };
+      const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-tmux-provider-recover-selection-'));
+
+      const binding = router.createBinding(address, workDir);
+      assert.ok(binding);
+      const threadId = '019e824e-10ef-7430-985d-4349ce6a15f9';
+      const tmuxSession = `codex_${threadId}`;
+      store.updateSessionCodexThreadId(binding.bridgeSessionId, threadId);
+
+      await handleBridgeCommand(
+        adapter,
+        {
+          address,
+          text: '/tmux hi after update',
+          messageId: 'incoming-tmux-recover-selection',
+        } as any,
+        '/tmux hi after update',
+        deps,
+      );
+
+      const selectionMessage = sent.find((message) => message.richCard?.title === 'Codex TUI Selection');
+      assert.ok(selectionMessage, 'expected a Codex TUI Selection rich card during tmux recovery');
+      assert.equal(selectionMessage.richCard?.selects?.[0]?.id, 'clk_codex_tui_selection');
+      assert.deepEqual(selectionMessage.richCard?.selects?.[0]?.options.map((option: any) => option.text), [
+        'Update now',
+        'Skip',
+        'Skip until next version',
+      ]);
+      assert.match(selectionMessage.text || '', /Choose the option CodeLark should select in tmux/);
+      assert.match(sent.at(-1)?.text || '', /hi after update/);
+
+      const log = fs.readFileSync(fakeTmux.logPath, 'utf-8');
+      assert.match(log, new RegExp(`has-session -t ${tmuxSession}`));
+      assert.match(log, new RegExp(`new-session -d -s ${tmuxSession}`));
+      assert.equal((log.match(new RegExp(`send-keys -t ${tmuxSession} Down`, 'g')) || []).length, 2);
+      assert.match(log, new RegExp(`send-keys -t ${tmuxSession} Enter`));
+      assert.match(log, new RegExp(`send-keys -t ${tmuxSession} -l hi after update`));
+    } finally {
+      process.env.PATH = oldEnv.PATH;
+      if (oldEnv.TMUX_FAKE_LOG === undefined) delete process.env.TMUX_FAKE_LOG;
+      else process.env.TMUX_FAKE_LOG = oldEnv.TMUX_FAKE_LOG;
+      if (oldEnv.TMUX_FAKE_CAPTURE_UPDATE_PROMPT_ONCE === undefined) delete process.env.TMUX_FAKE_CAPTURE_UPDATE_PROMPT_ONCE;
+      else process.env.TMUX_FAKE_CAPTURE_UPDATE_PROMPT_ONCE = oldEnv.TMUX_FAKE_CAPTURE_UPDATE_PROMPT_ONCE;
+      fs.rmSync(fakeTmux.binDir, { recursive: true, force: true });
+    }
+  });
+
+  it('shows a full IM selection card when provider tmux auto-forward startup hits a Codex update prompt', async () => {
+    const settings = makeSettings();
+    settings.set('bridge_default_provider', 'tmux');
+    const store = new JsonFileStore(settings, { dynamicSettings: true });
+    createConfigService({ migrate: false, env: {} }).set({ kind: 'home' }, {
+      runtime: { codex: { provider: 'tmux' } },
+    });
+    initBridgeContext({
+      store,
+      llm: noopLlm,
+      permissions: { resolvePendingPermission: () => false },
+      lifecycle: {},
+    });
+    const fakeTmux = installFakeTmux();
+    const oldEnv = {
+      PATH: process.env.PATH || '',
+      TMUX_FAKE_LOG: process.env.TMUX_FAKE_LOG,
+      TMUX_FAKE_CAPTURE_UPDATE_PROMPT_ONCE: process.env.TMUX_FAKE_CAPTURE_UPDATE_PROMPT_ONCE,
+    };
+    process.env.PATH = `${fakeTmux.binDir}${path.delimiter}${oldEnv.PATH}`;
+    process.env.TMUX_FAKE_LOG = fakeTmux.logPath;
+    process.env.TMUX_FAKE_CAPTURE_UPDATE_PROMPT_ONCE = '1';
+
+    try {
+      const sent: any[] = [];
+      let autoForwarded = false;
+      const adapter: any = {
+        channelType: 'feishu',
+        send: async (message: any) => {
+          const messageId = `reply-tmux-auto-forward-selection-${sent.length + 1}`;
+          sent.push({ ...message, messageId });
+          if (message.richCard?.title === 'Codex TUI Selection') {
+            const callbackData = message.richCard.selects?.[0]?.options?.find(
+              (option: { callbackData?: string }) => option.callbackData?.endsWith(':skip_until_next_version'),
+            )?.callbackData;
+            assert.ok(callbackData, 'selection card should include skip_until_next_version callback');
+            setTimeout(() => {
+              assert.equal(handlePermissionCallback(callbackData, address.chatId, messageId), true);
+            }, 0);
+          }
+          return { ok: true, messageId };
+        },
+      };
+      const address = { channelType: 'feishu', chatId: 'chat-tmux-provider-auto-forward-selection' } as const;
+      const deps = {
+        getActiveTask: () => undefined,
+        diagnoseSessionHealth: async () => null,
+        diagnoseAllActiveSessions: async () => [],
+        tmuxProviderAutoForward: true,
+        onTmuxProviderAutoForwarded: () => {
+          autoForwarded = true;
+        },
+      };
+      const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-tmux-provider-auto-forward-selection-'));
+
+      const binding = router.createBinding(address, workDir);
+      assert.ok(binding);
+      const threadId = '019e824e-10ef-7430-985d-4349ce6a15f9';
+      const tmuxSession = `codex_${threadId}`;
+      store.updateSessionCodexThreadId(binding.bridgeSessionId, threadId);
+
+      await handleBridgeCommand(
+        adapter,
+        {
+          address,
+          text: '/tmux first forwarded message',
+          messageId: 'incoming-tmux-auto-forward-selection',
+        } as any,
+        '/tmux first forwarded message',
+        deps,
+      );
+
+      const selectionMessage = sent.find((message) => message.richCard?.title === 'Codex TUI Selection');
+      assert.ok(selectionMessage, 'expected a Codex TUI Selection rich card during provider auto-forward startup');
+      assert.match(selectionMessage.text || '', /Choose the option CodeLark should select in tmux/);
+      assert.equal(sent.length, 1, 'provider auto-forward should suppress the normal /tmux success response');
+      assert.equal(autoForwarded, true);
+
+      const log = fs.readFileSync(fakeTmux.logPath, 'utf-8');
+      assert.match(log, new RegExp(`has-session -t ${tmuxSession}`));
+      assert.match(log, new RegExp(`new-session -d -s ${tmuxSession}`));
+      assert.equal((log.match(new RegExp(`send-keys -t ${tmuxSession} Down`, 'g')) || []).length, 2);
+      assert.match(log, new RegExp(`send-keys -t ${tmuxSession} Enter`));
+      assert.match(log, new RegExp(`send-keys -t ${tmuxSession} -l first forwarded message`));
+    } finally {
+      process.env.PATH = oldEnv.PATH;
+      if (oldEnv.TMUX_FAKE_LOG === undefined) delete process.env.TMUX_FAKE_LOG;
+      else process.env.TMUX_FAKE_LOG = oldEnv.TMUX_FAKE_LOG;
+      if (oldEnv.TMUX_FAKE_CAPTURE_UPDATE_PROMPT_ONCE === undefined) delete process.env.TMUX_FAKE_CAPTURE_UPDATE_PROMPT_ONCE;
+      else process.env.TMUX_FAKE_CAPTURE_UPDATE_PROMPT_ONCE = oldEnv.TMUX_FAKE_CAPTURE_UPDATE_PROMPT_ONCE;
+      fs.rmSync(fakeTmux.binDir, { recursive: true, force: true });
+    }
+  });
+
+  it('bootstraps a missing Codex thread before showing the provider tmux auto-forward startup selection card', async () => {
+    const settings = makeSettings();
+    settings.set('bridge_default_provider', 'tmux');
+    const store = new JsonFileStore(settings, { dynamicSettings: true });
+    createConfigService({ migrate: false, env: {} }).set({ kind: 'home' }, {
+      runtime: { codex: { provider: 'tmux' } },
+    });
+    initBridgeContext({
+      store,
+      llm: noopLlm,
+      permissions: { resolvePendingPermission: () => false },
+      lifecycle: {},
+    });
+    const fakeTmux = installFakeTmux();
+    const fakeCodex = installFakeCodexThreadBootstrap();
+    const fakeCodexHome = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-fake-codex-home-'));
+    const oldEnv = {
+      PATH: process.env.PATH || '',
+      TMUX_FAKE_LOG: process.env.TMUX_FAKE_LOG,
+      TMUX_FAKE_CAPTURE_UPDATE_PROMPT_ONCE: process.env.TMUX_FAKE_CAPTURE_UPDATE_PROMPT_ONCE,
+      TMUX_FAKE_BOOTSTRAP_THREAD_ID: process.env.TMUX_FAKE_BOOTSTRAP_THREAD_ID,
+      CODEX_HOME: process.env.CODEX_HOME,
+      CODELARK_CODEX_CLI_PATH: process.env.CODELARK_CODEX_CLI_PATH,
+    };
+    const threadId = '019e824e-10ef-7430-985d-4349ce6a15f9';
+    process.env.PATH = `${fakeTmux.binDir}${path.delimiter}${fakeCodex.binDir}${path.delimiter}${oldEnv.PATH}`;
+    process.env.TMUX_FAKE_LOG = fakeTmux.logPath;
+    process.env.TMUX_FAKE_CAPTURE_UPDATE_PROMPT_ONCE = '1';
+    process.env.TMUX_FAKE_BOOTSTRAP_THREAD_ID = threadId;
+    process.env.CODEX_HOME = fakeCodexHome;
+    process.env.CODELARK_CODEX_CLI_PATH = fakeCodex.codexPath;
+
+    try {
+      const sent: any[] = [];
+      let autoForwarded = false;
+      const adapter: any = {
+        channelType: 'feishu',
+        send: async (message: any) => {
+          const messageId = `reply-tmux-bootstrap-auto-forward-selection-${sent.length + 1}`;
+          sent.push({ ...message, messageId });
+          if (message.richCard?.title === 'Codex TUI Selection') {
+            const callbackData = message.richCard.selects?.[0]?.options?.find(
+              (option: { callbackData?: string }) => option.callbackData?.endsWith(':skip_until_next_version'),
+            )?.callbackData;
+            assert.ok(callbackData, 'selection card should include skip_until_next_version callback');
+            setTimeout(() => {
+              assert.equal(handlePermissionCallback(callbackData, address.chatId, messageId), true);
+            }, 0);
+          }
+          return { ok: true, messageId };
+        },
+      };
+      const address = { channelType: 'feishu', chatId: 'chat-tmux-provider-bootstrap-auto-forward-selection' } as const;
+      const deps = {
+        getActiveTask: () => undefined,
+        diagnoseSessionHealth: async () => null,
+        diagnoseAllActiveSessions: async () => [],
+        tmuxProviderAutoForward: true,
+        onTmuxProviderAutoForwarded: () => {
+          autoForwarded = true;
+        },
+      };
+      const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-tmux-provider-bootstrap-auto-forward-selection-'));
+
+      const binding = router.createBinding(address, workDir);
+      assert.ok(binding);
+      assert.equal(store.getSession(binding.bridgeSessionId)?.runtime?.codex?.threadId, undefined);
+
+      await handleBridgeCommand(
+        adapter,
+        {
+          address,
+          text: '/tmux first message needs bootstrap',
+          messageId: 'incoming-tmux-bootstrap-auto-forward-selection',
+        } as any,
+        '/tmux first message needs bootstrap',
+        deps,
+      );
+
+      const selectionMessage = sent.find((message) => message.richCard?.title === 'Codex TUI Selection');
+      assert.ok(selectionMessage, 'expected a Codex TUI Selection rich card during bootstrap provider startup');
+      assert.equal(sent.length, 1, 'provider auto-forward should suppress bootstrap and normal /tmux success responses');
+      assert.equal(autoForwarded, true);
+      assert.equal(store.getSession(binding.bridgeSessionId)?.runtime?.codex?.threadId, threadId);
+
+      const tmuxSession = `codex_${threadId}`;
+      const tmuxLog = fs.readFileSync(fakeTmux.logPath, 'utf-8');
+      assert.match(tmuxLog, new RegExp(`has-session -t ${tmuxSession}`));
+      assert.match(tmuxLog, new RegExp(`new-session -d -s ${tmuxSession}`));
+      assert.equal((tmuxLog.match(new RegExp(`send-keys -t ${tmuxSession} Down`, 'g')) || []).length, 2);
+      assert.match(tmuxLog, new RegExp(`send-keys -t ${tmuxSession} Enter`));
+      assert.match(tmuxLog, new RegExp(`send-keys -t ${tmuxSession} -l first message needs bootstrap`));
+
+      const codexLog = fs.readFileSync(fakeCodex.logPath, 'utf-8');
+      assert.match(codexLog, /exec --json/);
+      assert.match(codexLog, /CodeLark local thread bootstrap/);
+    } finally {
+      process.env.PATH = oldEnv.PATH;
+      if (oldEnv.TMUX_FAKE_LOG === undefined) delete process.env.TMUX_FAKE_LOG;
+      else process.env.TMUX_FAKE_LOG = oldEnv.TMUX_FAKE_LOG;
+      if (oldEnv.TMUX_FAKE_CAPTURE_UPDATE_PROMPT_ONCE === undefined) delete process.env.TMUX_FAKE_CAPTURE_UPDATE_PROMPT_ONCE;
+      else process.env.TMUX_FAKE_CAPTURE_UPDATE_PROMPT_ONCE = oldEnv.TMUX_FAKE_CAPTURE_UPDATE_PROMPT_ONCE;
+      if (oldEnv.TMUX_FAKE_BOOTSTRAP_THREAD_ID === undefined) delete process.env.TMUX_FAKE_BOOTSTRAP_THREAD_ID;
+      else process.env.TMUX_FAKE_BOOTSTRAP_THREAD_ID = oldEnv.TMUX_FAKE_BOOTSTRAP_THREAD_ID;
+      if (oldEnv.CODEX_HOME === undefined) delete process.env.CODEX_HOME;
+      else process.env.CODEX_HOME = oldEnv.CODEX_HOME;
+      if (oldEnv.CODELARK_CODEX_CLI_PATH === undefined) delete process.env.CODELARK_CODEX_CLI_PATH;
+      else process.env.CODELARK_CODEX_CLI_PATH = oldEnv.CODELARK_CODEX_CLI_PATH;
+      fs.rmSync(fakeTmux.binDir, { recursive: true, force: true });
+      fs.rmSync(fakeCodex.binDir, { recursive: true, force: true });
+      fs.rmSync(fakeCodexHome, { recursive: true, force: true });
     }
   });
 

@@ -91,6 +91,7 @@ import {
   isTerminalRawInputCommand,
 } from './dispatch-terminal.js';
 import { validateThreadName } from '../session/command-use-cases/args.js';
+import { requestCodexTuiSelectionViaPermissionBroker } from './codex-tui-selection.js';
 
 const PROVIDER_TMUX_LOADING_REACTION = 'Typing';
 
@@ -671,13 +672,24 @@ export async function handleBridgeCommand(
           deps: {
             ...deps,
             getActiveTask: deps.getActiveTask,
-            notifyBackgroundOperation: async (message: string) => {
-              if (isTmuxProviderStart) {
+            notifyBackgroundOperation: async (message: string, noticeOptions?: { force?: boolean }) => {
+              if (isTmuxProviderStart && noticeOptions?.force !== true) {
                 return;
               }
               await deliverBridgeNotice(adapter, msg.address, message, {
                 replyToMessageId: msg.messageId,
                 audit: false,
+              });
+            },
+            requestCodexTuiSelection: async (selectionPrompt, requestOptions) => {
+              return requestCodexTuiSelectionViaPermissionBroker({
+                adapter,
+                msg,
+                selectionPrompt,
+                sessionId: requestOptions.sessionId,
+                requestScope: 'provider-startup',
+                reasonContext: 'during /p tmux startup',
+                replyToMessageId: requestOptions.replyToMessageId,
               });
             },
           },
