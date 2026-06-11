@@ -3,6 +3,9 @@ import type {
   CodexReasoningEffort,
   CodexSandboxMode,
 } from '../../runtime/options.js';
+import type {
+  CodexTuiSelectionPromptChoice,
+} from '../../runtime/codex/tmux-provider.js';
 import type { BridgeSession, ChannelChat } from '../../domain/index.js';
 import {
   getSessionWorkingDirectory,
@@ -12,6 +15,9 @@ import {
   getCodexSessionByThreadIdSafe,
   resolveSessionRuntimeConfig,
 } from '../session/support.js';
+import type {
+  RuntimeTmuxSelectionPrompt,
+} from '../tmux/runtime.js';
 
 const BOOTSTRAP_THREAD_VISIBILITY_TIMEOUT_MS = 2_000;
 const BOOTSTRAP_THREAD_VISIBILITY_POLL_MS = 50;
@@ -19,7 +25,14 @@ const BOOTSTRAP_THREAD_VISIBILITY_POLL_MS = 50;
 export interface RuntimeSettingsCommandDeps {
   reconcileMirrorSubscriptions?(): Promise<void>;
   bootstrapCodexThread?(params: BootstrapCodexThreadParams): Promise<string>;
-  notifyBackgroundOperation?(message: string): Promise<void> | void;
+  notifyBackgroundOperation?(message: string, options?: { force?: boolean }): Promise<void> | void;
+  requestCodexTuiSelection?(
+    selectionPrompt: RuntimeTmuxSelectionPrompt,
+    options: {
+      sessionId: string;
+      replyToMessageId?: string;
+    },
+  ): Promise<CodexTuiSelectionPromptChoice | null>;
   getActiveTask?(sessionId: string): { abortController: AbortController } | undefined;
 }
 

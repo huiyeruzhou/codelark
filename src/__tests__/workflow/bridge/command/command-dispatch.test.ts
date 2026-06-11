@@ -31,6 +31,7 @@ import { _testOnlyCodexThreadBootstrap } from '../../../../runtime/codex/thread-
 import { _testOnlyClaudePty } from '../../../../runtime/claude/pty-provider.js';
 import { _testOnlyTmuxScreenMonitors } from '../../../../bridge/command/tmux.js';
 import { buildCommandCallbackData, parseCommandCallbackData } from '../../../../bridge/command/callbacks.js';
+import { handlePermissionCallback } from '../../../../bridge/permission/broker.js';
 import * as router from '../../../../bridge/host/channel-router.js';
 import {
   flushThreadTablePinJobs,
@@ -445,6 +446,10 @@ function installFakeTmux(): { binDir: string; logPath: string } {
     [[ -f "$count_file" ]] && count="$(cat "$count_file" 2>/dev/null || printf '0')"
     count=$((count + 1))
     printf '%s\n' "$count" > "$count_file"
+    if [[ "\${TMUX_FAKE_CAPTURE_UPDATE_PROMPT_ONCE:-}" == "1" && "$count" -eq 1 ]]; then
+      printf '%b' 'Update available! 0.0.0 -> 9.9.9\nRelease notes: https://github.com/openai/codex/releases/latest\n› 1. Update now\n  2. Skip\n  3. Skip until next version\nPress enter to confirm or esc to cancel\n'
+      exit 0
+    fi
     if [[ "$count" -le "$ready_after" ]]; then
       printf 'alpha-screen\nCodex starting...\n'
     else
@@ -3011,6 +3016,98 @@ enabled = true
       process.env.PATH = previousEnv.PATH;
       if (previousEnv.TMUX_FAKE_LOG === undefined) delete process.env.TMUX_FAKE_LOG;
       else process.env.TMUX_FAKE_LOG = previousEnv.TMUX_FAKE_LOG;
+      fs.rmSync(fakeTmux.binDir, { recursive: true, force: true });
+    }
+  });
+
+  it('shows a full IM selection card when /p tmux hits a Codex startup update prompt', async () => {
+    const previousEnv = {
+      PATH: process.env.PATH,
+      TMUX_FAKE_LOG: process.env.TMUX_FAKE_LOG,
+      TMUX_FAKE_CAPTURE_UPDATE_PROMPT_ONCE: process.env.TMUX_FAKE_CAPTURE_UPDATE_PROMPT_ONCE,
+    };
+    const fakeTmux = installFakeTmux();
+    process.env.PATH = `${fakeTmux.binDir}${path.delimiter}${previousEnv.PATH || ''}`;
+    process.env.TMUX_FAKE_LOG = fakeTmux.logPath;
+    process.env.TMUX_FAKE_CAPTURE_UPDATE_PROMPT_ONCE = '1';
+
+    try {
+      const store = initTestContext({ settings: { bridge_claude_provider: 'pty' } });
+      const sent: any[] = [];
+      const reactions: Array<{ action: 'add' | 'remove'; messageId: string; emojiType?: string; reactionId?: string }> = [];
+      const adapter: any = {
+        ...createGroupCapableAdapter({ sent }),
+        send: async (message: any) => {
+          const messageId = `reply-${sent.length + 1}`;
+          sent.push({ ...message, messageId });
+          if (message.richCard?.title === 'Codex TUI Selection') {
+            const callbackData = message.richCard.selects?.[0]?.options?.find(
+              (option: { callbackData?: string }) => option.callbackData?.endsWith(':skip_until_next_version'),
+            )?.callbackData;
+            assert.ok(callbackData, 'selection card should include skip_until_next_version callback');
+            setTimeout(() => {
+              assert.equal(handlePermissionCallback(callbackData, address.chatId, messageId), true);
+            }, 0);
+          }
+          return { ok: true, messageId };
+        },
+        addMessageReaction: async (messageId: string, emojiType: string) => {
+          reactions.push({ action: 'add', messageId, emojiType, reactionId: 'reaction-typing' });
+          return 'reaction-typing';
+        },
+        removeMessageReaction: async (messageId: string, reactionId: string, emojiType?: string) => {
+          reactions.push({ action: 'remove', messageId, emojiType, reactionId });
+        },
+      };
+      const address = { channelType: 'feishu', chatId: 'chat-provider-tmux-update-prompt' } as const;
+      const session = store.createSession('tmux-update-prompt-session', 'test-model', undefined, os.tmpdir(), 'normal');
+      store.upsertChannelChat({
+        channelType: address.channelType,
+        chatId: address.chatId,
+        bridgeSessionId: session.id,
+      });
+
+      await handleBridgeCommand(
+        adapter,
+        {
+          address,
+          text: '/p tmux',
+          messageId: 'incoming-provider-tmux-update-prompt',
+        } as any,
+        '/p tmux',
+        {
+          getActiveTask: () => undefined,
+          diagnoseSessionHealth: async () => null,
+          diagnoseAllActiveSessions: async () => [],
+          reconcileMirrorSubscriptions: async () => {},
+          bootstrapCodexThread: async () => 'update-prompt-thread',
+        },
+      );
+
+      assert.deepEqual(reactions.map((reaction) => reaction.action), ['add', 'remove']);
+      assert.equal(sent.length, 2);
+      assert.equal(sent[0]?.richCard?.title, 'Codex TUI Selection');
+      assert.equal(sent[0]?.richCard?.selects?.[0]?.id, 'clk_codex_tui_selection');
+      assert.deepEqual(sent[0]?.richCard?.selects?.[0]?.options.map((option: any) => option.text), [
+        'Update now',
+        'Skip',
+        'Skip until next version',
+      ]);
+      assert.match(sent[0]?.text || '', /Choose the option CodeLark should select in tmux/);
+      assert.match(sent.at(-1)?.text || '', /已切换 Codex Provider/);
+      assert.match(sent.at(-1)?.text || '', /启动阶段检测到 Codex TUI 选择提示/);
+      assert.equal(getSessionCodexProvider(store.getSession(session.id)), 'tmux');
+
+      const tmuxLog = fs.readFileSync(fakeTmux.logPath, 'utf-8');
+      assert.match(tmuxLog, /new-session -d -s codex_update-prompt-thread/);
+      assert.equal((tmuxLog.match(/send-keys -t codex_update-prompt-thread Down/g) || []).length, 2);
+      assert.match(tmuxLog, /send-keys -t codex_update-prompt-thread Enter/);
+    } finally {
+      process.env.PATH = previousEnv.PATH;
+      if (previousEnv.TMUX_FAKE_LOG === undefined) delete process.env.TMUX_FAKE_LOG;
+      else process.env.TMUX_FAKE_LOG = previousEnv.TMUX_FAKE_LOG;
+      if (previousEnv.TMUX_FAKE_CAPTURE_UPDATE_PROMPT_ONCE === undefined) delete process.env.TMUX_FAKE_CAPTURE_UPDATE_PROMPT_ONCE;
+      else process.env.TMUX_FAKE_CAPTURE_UPDATE_PROMPT_ONCE = previousEnv.TMUX_FAKE_CAPTURE_UPDATE_PROMPT_ONCE;
       fs.rmSync(fakeTmux.binDir, { recursive: true, force: true });
     }
   });
