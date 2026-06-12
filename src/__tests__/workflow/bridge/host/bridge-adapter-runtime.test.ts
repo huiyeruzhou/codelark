@@ -590,6 +590,7 @@ describe('bridge-adapter-runtime', () => {
             laneKind: 'job',
             jobKind: 'command:tmux-screen',
             waitForConversationBarrier: false,
+            blocksConversation: false,
           };
         }
         if (msg.text === '/stop') {
@@ -668,6 +669,100 @@ describe('bridge-adapter-runtime', () => {
     assert.equal(started[1], 'msg-screen');
     assert.equal(started[2], 'msg-stop');
     assert.ok(started.indexOf('msg-runtime') > started.indexOf('msg-regular'));
+  });
+
+  it('does not let screen monitor jobs block later conversation barriers', async () => {
+    const state = {
+      adapters: new Map(),
+      adapterMeta: new Map(),
+      invalidAdapters: new Map(),
+      loopAborts: new Map(),
+      running: true,
+    };
+    const started: string[] = [];
+    let releaseFirstRegular!: () => void;
+    let releaseScreen!: () => void;
+    const firstRegularDone = new Promise<void>((resolve) => {
+      releaseFirstRegular = resolve;
+    });
+    const screenDone = new Promise<void>((resolve) => {
+      releaseScreen = resolve;
+    });
+
+    const runtime = createAdapterRuntime(() => state, {
+      notifyAdapterSetChanged: () => {},
+      handleMessage: async (_adapter, msg) => {
+        started.push(msg.messageId);
+        if (msg.messageId === 'msg-regular-1') {
+          await firstRegularDone;
+        }
+        if (msg.messageId === 'msg-screen') {
+          await screenDone;
+        }
+      },
+      processWithSessionLock: async (_sessionId, fn) => { await fn(); },
+      isCommandMessage: (msg) => msg.text.startsWith('/'),
+      isNumericPermissionShortcut: () => false,
+      resolveSessionIdForMessage: () => 'bridge-session-a',
+      getImmediateLane: (msg) => (msg.text.startsWith('/tmux-screen')
+        ? {
+          laneKey: `job:tmux-screen:${msg.address.channelType}:${msg.address.chatId}:${msg.messageId}`,
+          laneKind: 'job',
+          jobKind: 'command:tmux-screen',
+          waitForConversationBarrier: false,
+          blocksConversation: false,
+        }
+        : null),
+      getSessionLane: (_msg, category) => (category === 'regular'
+        ? {
+          sessionId: 'bridge-session-a',
+          jobKind: 'interactive-turn:tmux-provider-auto-forward',
+          blocksConversation: true,
+        }
+        : null),
+    });
+
+    let running = true;
+    const messages = [
+      {
+        messageId: 'msg-regular-1',
+        address: { channelType: 'feishu-default', chatId: 'chat-a' },
+        text: 'first',
+        timestamp: Date.now(),
+      },
+      {
+        messageId: 'msg-screen',
+        address: { channelType: 'feishu-default', chatId: 'chat-a' },
+        text: '/tmux-screen',
+        timestamp: Date.now(),
+      },
+      {
+        messageId: 'msg-regular-2',
+        address: { channelType: 'feishu-default', chatId: 'chat-a' },
+        text: 'second',
+        timestamp: Date.now(),
+      },
+    ];
+    const adapter = {
+      channelType: 'feishu-default',
+      provider: 'feishu',
+      isRunning: () => running || messages.length > 0,
+      consumeOne: async () => {
+        const next = messages.shift() || null;
+        if (messages.length === 0) running = false;
+        return next;
+      },
+    };
+
+    runtime.runAdapterLoop(adapter as never);
+    await waitForCondition(() => started.includes('msg-screen'));
+    assert.deepEqual(started, ['msg-regular-1', 'msg-screen']);
+
+    releaseFirstRegular();
+    await waitForCondition(() => started.includes('msg-regular-2'));
+    assert.deepEqual(started, ['msg-regular-1', 'msg-screen', 'msg-regular-2']);
+
+    releaseScreen();
   });
 
   it('waits for prior same-chat command jobs before running a conversation barrier', async () => {

@@ -1666,6 +1666,7 @@ function adapterImmediateLane(msg: InboundMessage, category: 'channel-event' | '
       laneKind: 'job',
       jobKind: `command:${resolvedCommand.slice(1)}`,
       waitForConversationBarrier: !isScreenMonitor,
+      blocksConversation: !isScreenMonitor,
     };
   }
   return null;
