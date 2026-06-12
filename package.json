@@ -62,13 +62,13 @@
   },
   "devDependencies": {
     "@types/markdown-it": "^14.1.2",
-    "@types/node": "^24.12.4",
+    "@types/node": "^25.9.3",
     "@types/ws": "^8.5.0",
-    "esbuild": "^0.25.0",
+    "esbuild": "^0.28.1",
     "mermaid": "^11.15.0",
     "tsx": "^4.21.0",
-    "typescript": "^5",
-    "vite": "^5.4.21",
+    "typescript": "^6",
+    "vite": "^8.0.16",
     "vitepress": "^1.6.4"
   },
   "engines": {
