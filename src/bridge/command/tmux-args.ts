@@ -1,7 +1,7 @@
 import type { TmuxSendAction } from '../tmux/runtime.js';
 
-export const DEFAULT_CAPTURE_LINES = 0;
-const MIN_CAPTURE_LINES = 0;
+export const DEFAULT_CAPTURE_LINES = 20;
+const MIN_CAPTURE_LINES = 1;
 const MAX_CAPTURE_LINES = 500;
 const MIN_SCREEN_INTERVAL_SECONDS = 3;
 
@@ -17,6 +17,13 @@ export function normalizeCaptureLines(value: unknown): number {
     : Number(String(value || '').trim());
   if (!Number.isFinite(parsed)) return DEFAULT_CAPTURE_LINES;
   return Math.min(MAX_CAPTURE_LINES, Math.max(MIN_CAPTURE_LINES, Math.floor(parsed)));
+}
+
+function parseCaptureLineLimit(raw: string): number | null {
+  if (!/^\d+$/.test(raw)) return null;
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed) || parsed < MIN_CAPTURE_LINES) return null;
+  return normalizeCaptureLines(parsed);
 }
 
 export function validateTmuxSessionName(raw: string): string | null {
@@ -141,8 +148,8 @@ export function parseTmuxSetArgs(args: string): { key: 'lines'; value: number } 
   if (parts.length !== 2) return null;
   const key = parts[0].toLowerCase();
   if (['lines', 'line', 'rows', 'row', 'capture-lines', 'capture'].includes(key)) {
-    if (!/^\d+$/.test(parts[1])) return null;
-    return { key: 'lines', value: normalizeCaptureLines(parts[1]) };
+    const value = parseCaptureLineLimit(parts[1]);
+    return value === null ? null : { key: 'lines', value };
   }
   if (['enter', 'auto-enter', 'autoenter', 'submit'].includes(key)) {
     const value = parseOnOff(parts[1]);
@@ -176,14 +183,16 @@ export function parseTmuxScreenArgs(args: string): TmuxScreenArgs | null {
     const token = parts[0].toLowerCase();
     const interval = parseIntervalSeconds(token);
     if (interval) return { action: 'show', intervalSeconds: interval };
-    if (/^\d+$/.test(token)) return { action: 'show', lines: normalizeCaptureLines(token) };
+    const parsedLines = parseCaptureLineLimit(token);
+    if (parsedLines !== null) return { action: 'show', lines: parsedLines };
     return null;
   }
 
   if (parts.length !== 2) return null;
   const [lineToken, intervalToken] = parts.map((part) => part.toLowerCase());
-  if (!/^\d+$/.test(lineToken)) return null;
-  lines = normalizeCaptureLines(lineToken);
+  const parsedLines = parseCaptureLineLimit(lineToken);
+  if (parsedLines === null) return null;
+  lines = parsedLines;
   intervalSeconds = parseIntervalSeconds(intervalToken) ?? undefined;
   if (!intervalSeconds) return null;
 

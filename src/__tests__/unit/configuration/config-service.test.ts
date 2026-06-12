@@ -35,7 +35,7 @@ describe('ConfigService v2 foundation', () => {
       assert.equal(snapshot.config.runtime.codex.sandboxMode, 'workspace-write');
       assert.equal(snapshot.config.runtime.claude.provider, 'tmux');
       assert.equal(snapshot.config.bridge.defaultWorkspace, '~');
-      assert.equal(snapshot.config.session.tmuxCaptureLines, 10);
+      assert.equal(snapshot.config.session.tmuxCaptureLines, 20);
       assert.equal(snapshot.config.channels[0]?.id, 'feishu-default');
       assert.equal(snapshot.config.channels[0]?.config.historyMessageLimit, 8);
     } finally {

@@ -13,9 +13,10 @@ import {
 describe('tmux command args', () => {
   it('normalizes capture line limits and validates session names', () => {
     assert.equal(normalizeCaptureLines('42'), 42);
-    assert.equal(normalizeCaptureLines('-1'), 0);
+    assert.equal(normalizeCaptureLines('-1'), 1);
+    assert.equal(normalizeCaptureLines('0'), 1);
     assert.equal(normalizeCaptureLines('999'), 500);
-    assert.equal(normalizeCaptureLines('bad'), 0);
+    assert.equal(normalizeCaptureLines('bad'), 20);
 
     assert.equal(validateTmuxSessionName(' alpha '), 'alpha');
     assert.equal(validateTmuxSessionName(''), null);
@@ -28,9 +29,12 @@ describe('tmux command args', () => {
     assert.deepEqual(parseTmuxScreenArgs('120'), { action: 'show', lines: 120 });
     assert.deepEqual(parseTmuxScreenArgs('5s'), { action: 'show', intervalSeconds: 5 });
     assert.deepEqual(parseTmuxScreenArgs('120 1s'), { action: 'show', lines: 120, intervalSeconds: 3 });
+    assert.equal(parseTmuxScreenArgs('0'), null);
+    assert.equal(parseTmuxScreenArgs('0 5s'), null);
     assert.equal(parseTmuxScreenArgs('lines 120 every 5s'), null);
 
     assert.deepEqual(parseTmuxSetArgs('lines 999'), { key: 'lines', value: 500 });
+    assert.equal(parseTmuxSetArgs('lines 0'), null);
     assert.deepEqual(parseTmuxSetArgs('enter off'), { key: 'enter', value: false });
     assert.deepEqual(parseTmuxSetArgs('echo yes'), { key: 'echo', value: true });
     assert.equal(parseTmuxSetArgs('echo maybe'), null);

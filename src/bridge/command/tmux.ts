@@ -382,7 +382,7 @@ function tmuxCommandFamilyHelp(): string[] {
     '`/tmux-attach <session>`：把当前 IM 会话绑定到指定 tmux session。',
     '`/tmux-new [session]`：新建并绑定 tmux session；如果已存在，会提示并直接绑定。',
     '`/tmux-status`：查看当前绑定到哪个 tmux session，以及当前展示行数。',
-    '`/tmux-set lines <0-500>`：设置 `/tmux ...` 自动截屏返回的行数，默认 0。',
+    '`/tmux-set lines <1-500>`：设置 `/tmux ...` 自动截屏返回的行数，默认 20。',
     '`/tmux-set enter on|off`：设置 `/tmux ...` 每次发送后是否自动补一个 Enter。',
     '`/tmux-set echo on|off`：设置 `/tmux ...` 发送后是否在回复里回显输入内容。',
     '`/tmux-screen [lines] [seconds]s`：查看当前绑定 tmux session 的屏幕状态；`lines` 只对本次/本轮定时生效。',
@@ -1016,7 +1016,7 @@ export async function handleTmuxBridgeCommand(params: HandleTmuxBridgeCommandPar
       if (!parsed) {
         return buildCommandFields(
           'tmux 设置用法',
-          [['命令', '`/tmux-set lines <0-500>`、`/tmux-set enter on|off` 或 `/tmux-set echo on|off`']],
+          [['命令', '`/tmux-set lines <1-500>`、`/tmux-set enter on|off` 或 `/tmux-set echo on|off`']],
           [
             `当前展示行数：${getCaptureLines(session)}`,
             `当前自动回车：${formatOnOff(getAutoEnter(session))}`,

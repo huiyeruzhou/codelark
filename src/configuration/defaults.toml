@@ -2,7 +2,7 @@ schema_version = 2
 
 [session]
 workspace = "~"
-tmux_capture_lines = 10
+tmux_capture_lines = 20
 tmux_auto_enter = true
 tmux_echo_input = true
 

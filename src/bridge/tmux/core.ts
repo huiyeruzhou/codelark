@@ -75,7 +75,26 @@ function tmuxCommandPreview(args: readonly string[]): string {
 }
 
 function captureTmuxArgv(target: string, lines: number): TmuxArgv {
-  return ['capture-pane', '-t', target, '-p', '-S', `-${lines}`];
+  return ['capture-pane', '-t', target, '-p', '-S', lines === 0 ? '0' : `-${lines}`];
+}
+
+function paneHeightTmuxArgv(target: string): TmuxArgv {
+  return ['display-message', '-p', '-t', target, '#{pane_height}'];
+}
+
+function parsePaneHeight(value: string): number {
+  const parsed = Number.parseInt(value.trim(), 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
+}
+
+function captureStartOffset(lines: number, paneHeight: number): number {
+  return Math.max(lines - paneHeight, 0);
+}
+
+function trimCapturedScreen(screen: string, lines: number): string {
+  const trimmed = screen.replace(/\s+$/g, '');
+  if (!trimmed) return '';
+  return trimmed.split(/\r?\n/).slice(-lines).join('\n');
 }
 
 function buildNewSessionArgs(params: TmuxStartDetachedSessionParams): string[] {
@@ -200,11 +219,14 @@ class TmuxCliCore implements TmuxCore {
   }
 
   async capturePane(target: string, lines: number): Promise<TmuxCapturePaneResult> {
-    const args = captureTmuxArgv(target, lines);
+    const heightArgs = paneHeightTmuxArgv(target);
+    const heightResult = await runTmux(heightArgs);
+    const startOffset = captureStartOffset(lines, parsePaneHeight(heightResult.stdout));
+    const args = captureTmuxArgv(target, startOffset);
     const result = await runTmux(args);
     return {
-      screen: result.stdout.replace(/\s+$/g, ''),
-      command: tmuxCommandPreview(args),
+      screen: trimCapturedScreen(result.stdout, lines),
+      command: [tmuxCommandPreview(heightArgs), tmuxCommandPreview(args)].join('\n'),
     };
   }
 

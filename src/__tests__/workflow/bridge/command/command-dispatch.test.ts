@@ -6056,7 +6056,7 @@ enabled = true
       assert.match(sent.at(-1) || '', /tmux 当前屏幕状态/);
       assert.match(sent.at(-1) || '', /检测到 Codex goal selection prompt/);
       assert.match(sent.at(-1) || '', /tmux has-session -t alpha/);
-      assert.match(sent.at(-1) || '', /tmux capture-pane -t alpha -p -S -0/);
+      assert.match(sent.at(-1) || '', /tmux capture-pane -t alpha -p -S -20/);
     } finally {
       process.env.PATH = oldPath;
       if (oldFakeLog === undefined) delete process.env.TMUX_FAKE_LOG;
@@ -6137,7 +6137,7 @@ enabled = true
       assert.match(sent.at(-1) || '', /```sh/);
       assert.match(sent.at(-1) || '', /alpha-screen/);
       assert.match(sent.at(-1) || '', /tmux has-session -t alpha/);
-      assert.match(sent.at(-1) || '', /tmux capture-pane -t alpha -p -S -0/);
+      assert.match(sent.at(-1) || '', /tmux capture-pane -t alpha -p -S -20/);
 
       await handleBridgeCommand(
         adapter,
