@@ -36,7 +36,7 @@ codelark setup
 6. 可选设置飞书用户 open_id 白名单。
 7. 可选安装 CodeLark skills 和官方 `lark-doc` skill。本地 CodeLark skills 会先安装；官方 `lark-doc` 通过 `npx skills add ...` 单独安装，失败时不会影响本地 skills 可用。
 
-如果用户拒绝在向导中安装 tmux，向导仍会继续保存配置，但会把默认 provider 改为 SDK：`defaultProvider=sdk`，并把 Claude 默认 provider 写为 `claudeProvider=sdk`。之后安装 tmux 后，可以在 IM 中使用 `/provider tmux` 切回 tmux provider。
+如果用户拒绝在向导中安装 tmux，向导仍会继续保存配置，但会把默认 provider 改为 SDK：`runtime.codex.provider = "sdk"`，并把 Claude 默认 provider 写为 `runtime.claude.provider = "sdk"`。之后安装 tmux 后，可以在 IM 中使用 `/provider tmux` 切回 tmux provider。
 
 机器人配置方式有两种：
 

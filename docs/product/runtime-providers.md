@@ -37,17 +37,17 @@ Claude 的 `executable` 影响 `tmux` 和 `pty` 提供方；Claude SDK 提供方
 
 | 主题 | 模块 |
 | --- | --- |
-| 提供方路由 | [src/runtime/codex/routing-provider.ts](https://github.com/huiyeruzhou/codelark/blob/master/src/runtime/codex/routing-provider.ts) |
-| Codex SDK | [src/runtime/codex/provider.ts](https://github.com/huiyeruzhou/codelark/blob/master/src/runtime/codex/provider.ts) |
-| Codex pty | [src/runtime/codex/pty-provider.ts](https://github.com/huiyeruzhou/codelark/blob/master/src/runtime/codex/pty-provider.ts) |
-| Codex tmux | [src/runtime/codex/tmux-provider.ts](https://github.com/huiyeruzhou/codelark/blob/master/src/runtime/codex/tmux-provider.ts) |
-| Claude tmux | [src/runtime/claude/tmux-provider.ts](https://github.com/huiyeruzhou/codelark/blob/master/src/runtime/claude/tmux-provider.ts) |
-| tmux session 生命周期 | [src/bridge/tmux/runtime.ts](https://github.com/huiyeruzhou/codelark/blob/master/src/bridge/tmux/runtime.ts) |
-| Claude pty | [src/runtime/claude/pty-provider.ts](https://github.com/huiyeruzhou/codelark/blob/master/src/runtime/claude/pty-provider.ts) |
-| Claude SDK | [src/runtime/claude/sdk-provider.ts](https://github.com/huiyeruzhou/codelark/blob/master/src/runtime/claude/sdk-provider.ts) |
-| Claude Code Router | [src/runtime/claude/code-router.ts](https://github.com/huiyeruzhou/codelark/blob/master/src/runtime/claude/code-router.ts) |
-| 会话运行时设置 | [src/domain/session-runtime.ts](https://github.com/huiyeruzhou/codelark/blob/master/src/domain/session-runtime.ts) |
-| 交互 turn | [src/bridge/turn/interactive/runner.ts](https://github.com/huiyeruzhou/codelark/blob/master/src/bridge/turn/interactive/runner.ts) |
+| 提供方路由 | [src/runtime/codex/routing-provider.ts](https://github.com/huiyeruzhou/codelark/blob/main/src/runtime/codex/routing-provider.ts) |
+| Codex SDK | [src/runtime/codex/provider.ts](https://github.com/huiyeruzhou/codelark/blob/main/src/runtime/codex/provider.ts) |
+| Codex pty | [src/runtime/codex/pty-provider.ts](https://github.com/huiyeruzhou/codelark/blob/main/src/runtime/codex/pty-provider.ts) |
+| Codex tmux | [src/runtime/codex/tmux-provider.ts](https://github.com/huiyeruzhou/codelark/blob/main/src/runtime/codex/tmux-provider.ts) |
+| Claude tmux | [src/runtime/claude/tmux-provider.ts](https://github.com/huiyeruzhou/codelark/blob/main/src/runtime/claude/tmux-provider.ts) |
+| tmux session 生命周期 | [src/bridge/tmux/runtime.ts](https://github.com/huiyeruzhou/codelark/blob/main/src/bridge/tmux/runtime.ts) |
+| Claude pty | [src/runtime/claude/pty-provider.ts](https://github.com/huiyeruzhou/codelark/blob/main/src/runtime/claude/pty-provider.ts) |
+| Claude SDK | [src/runtime/claude/sdk-provider.ts](https://github.com/huiyeruzhou/codelark/blob/main/src/runtime/claude/sdk-provider.ts) |
+| Claude Code Router | [src/runtime/claude/code-router.ts](https://github.com/huiyeruzhou/codelark/blob/main/src/runtime/claude/code-router.ts) |
+| 会话运行时设置 | [src/domain/session-runtime.ts](https://github.com/huiyeruzhou/codelark/blob/main/src/domain/session-runtime.ts) |
+| 交互 turn | [src/bridge/turn/interactive/runner.ts](https://github.com/huiyeruzhou/codelark/blob/main/src/bridge/turn/interactive/runner.ts) |
 
 ## 镜像与 SDK 输出差异
 
@@ -57,7 +57,7 @@ tmux Provider 的普通文本会先转发到 tmux 中的当前 runtime TUI。Cod
 
 相关模块：
 
-- mirror 订阅：[src/bridge/mirror/subscription-registry.ts](https://github.com/huiyeruzhou/codelark/blob/master/src/bridge/mirror/subscription-registry.ts)
-- mirror 运行时：[src/bridge/mirror/runtime.ts](https://github.com/huiyeruzhou/codelark/blob/master/src/bridge/mirror/runtime.ts)
-- mirror turn 合并：[src/bridge/mirror/turns.ts](https://github.com/huiyeruzhou/codelark/blob/master/src/bridge/mirror/turns.ts)
-- mirror 反馈：[src/bridge/mirror/feedback-controller.ts](https://github.com/huiyeruzhou/codelark/blob/master/src/bridge/mirror/feedback-controller.ts)
+- mirror 订阅：[src/bridge/mirror/subscription-registry.ts](https://github.com/huiyeruzhou/codelark/blob/main/src/bridge/mirror/subscription-registry.ts)
+- mirror 运行时：[src/bridge/mirror/runtime.ts](https://github.com/huiyeruzhou/codelark/blob/main/src/bridge/mirror/runtime.ts)
+- mirror turn 合并：[src/bridge/mirror/turns.ts](https://github.com/huiyeruzhou/codelark/blob/main/src/bridge/mirror/turns.ts)
+- mirror 反馈：[src/bridge/mirror/feedback-controller.ts](https://github.com/huiyeruzhou/codelark/blob/main/src/bridge/mirror/feedback-controller.ts)

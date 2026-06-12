@@ -1,6 +1,6 @@
 # 命令体系
 
-IM 命令从用户视角分为五组。命令入口是 [src/bridge/command/dispatch.ts](https://github.com/huiyeruzhou/codelark/blob/master/src/bridge/command/dispatch.ts)，具体处理按工作流拆在 [src/bridge/command/](https://github.com/huiyeruzhou/codelark/blob/master/src/bridge/command/) 下；会话、绑定、线程接管和归档的业务规则归 [src/bridge/session/](https://github.com/huiyeruzhou/codelark/blob/master/src/bridge/session/) 所有，command 层主要负责 slash 解析、用户文案、卡片和 delivery。
+IM 命令从用户视角分为五组。命令入口是 [src/bridge/command/dispatch.ts](https://github.com/huiyeruzhou/codelark/blob/main/src/bridge/command/dispatch.ts)，具体处理按工作流拆在 [src/bridge/command/](https://github.com/huiyeruzhou/codelark/blob/main/src/bridge/command/) 下；会话、绑定、线程接管和归档的业务规则归 [src/bridge/session/](https://github.com/huiyeruzhou/codelark/blob/main/src/bridge/session/) 所有，command 层主要负责 slash 解析、用户文案、卡片和 delivery。
 
 | 分组 | 典型命令 | 功能 |
 | --- | --- | --- |
@@ -25,22 +25,22 @@ IM 命令从用户视角分为五组。命令入口是 [src/bridge/command/dispa
 
 | 命令主题 | 模块 |
 | --- | --- |
-| 帮助 | [src/bridge/command/help.ts](https://github.com/huiyeruzhou/codelark/blob/master/src/bridge/command/help.ts) |
-| 会话和线程 | [src/bridge/session/](https://github.com/huiyeruzhou/codelark/blob/master/src/bridge/session/)；slash 聚合入口在 [src/bridge/command/session-thread.ts](https://github.com/huiyeruzhou/codelark/blob/master/src/bridge/command/session-thread.ts) |
-| runtime 设置 | [src/bridge/command/runtime-settings.ts](https://github.com/huiyeruzhou/codelark/blob/master/src/bridge/command/runtime-settings.ts)、[src/bridge/command/provider-settings.ts](https://github.com/huiyeruzhou/codelark/blob/master/src/bridge/command/provider-settings.ts)、[src/bridge/command/runtime-bootstrap.ts](https://github.com/huiyeruzhou/codelark/blob/master/src/bridge/command/runtime-bootstrap.ts)、[src/bridge/command/runtime-session.ts](https://github.com/huiyeruzhou/codelark/blob/master/src/bridge/command/runtime-session.ts) |
-| 全局设置 | [src/bridge/command/global-settings.ts](https://github.com/huiyeruzhou/codelark/blob/master/src/bridge/command/global-settings.ts) |
-| 状态 | [src/bridge/command/status.ts](https://github.com/huiyeruzhou/codelark/blob/master/src/bridge/command/status.ts) |
-| 诊断和历史 | [src/bridge/command/diagnostics.ts](https://github.com/huiyeruzhou/codelark/blob/master/src/bridge/command/diagnostics.ts) |
-| 控制和权限 | [src/bridge/command/control.ts](https://github.com/huiyeruzhou/codelark/blob/master/src/bridge/command/control.ts) |
-| tmux | [src/bridge/command/tmux.ts](https://github.com/huiyeruzhou/codelark/blob/master/src/bridge/command/tmux.ts)、[src/bridge/command/tmux-args.ts](https://github.com/huiyeruzhou/codelark/blob/master/src/bridge/command/tmux-args.ts) |
-| pty 屏幕 | [src/bridge/command/pty.ts](https://github.com/huiyeruzhou/codelark/blob/master/src/bridge/command/pty.ts) |
-| shell | [src/bridge/command/shell.ts](https://github.com/huiyeruzhou/codelark/blob/master/src/bridge/command/shell.ts) |
-| 自动任务 | [src/bridge/command/auto.ts](https://github.com/huiyeruzhou/codelark/blob/master/src/bridge/command/auto.ts) |
-| 热更新 | [src/bridge/command/hot-update.ts](https://github.com/huiyeruzhou/codelark/blob/master/src/bridge/command/hot-update.ts) |
-| 展示格式 | [src/bridge/command/presentation/](https://github.com/huiyeruzhou/codelark/blob/master/src/bridge/command/presentation/) |
+| 帮助 | [src/bridge/command/help.ts](https://github.com/huiyeruzhou/codelark/blob/main/src/bridge/command/help.ts) |
+| 会话和线程 | [src/bridge/session/](https://github.com/huiyeruzhou/codelark/blob/main/src/bridge/session/)；slash 聚合入口在 [src/bridge/command/session-thread.ts](https://github.com/huiyeruzhou/codelark/blob/main/src/bridge/command/session-thread.ts) |
+| runtime 设置 | [src/bridge/command/runtime-settings.ts](https://github.com/huiyeruzhou/codelark/blob/main/src/bridge/command/runtime-settings.ts)、[src/bridge/command/provider-settings.ts](https://github.com/huiyeruzhou/codelark/blob/main/src/bridge/command/provider-settings.ts)、[src/bridge/command/runtime-bootstrap.ts](https://github.com/huiyeruzhou/codelark/blob/main/src/bridge/command/runtime-bootstrap.ts)、[src/bridge/command/runtime-session.ts](https://github.com/huiyeruzhou/codelark/blob/main/src/bridge/command/runtime-session.ts) |
+| 全局设置 | [src/bridge/command/global-settings.ts](https://github.com/huiyeruzhou/codelark/blob/main/src/bridge/command/global-settings.ts) |
+| 状态 | [src/bridge/command/status.ts](https://github.com/huiyeruzhou/codelark/blob/main/src/bridge/command/status.ts) |
+| 诊断和历史 | [src/bridge/command/diagnostics.ts](https://github.com/huiyeruzhou/codelark/blob/main/src/bridge/command/diagnostics.ts) |
+| 控制和权限 | [src/bridge/command/control.ts](https://github.com/huiyeruzhou/codelark/blob/main/src/bridge/command/control.ts) |
+| tmux | [src/bridge/command/tmux.ts](https://github.com/huiyeruzhou/codelark/blob/main/src/bridge/command/tmux.ts)、[src/bridge/command/tmux-args.ts](https://github.com/huiyeruzhou/codelark/blob/main/src/bridge/command/tmux-args.ts) |
+| pty 屏幕 | [src/bridge/command/pty.ts](https://github.com/huiyeruzhou/codelark/blob/main/src/bridge/command/pty.ts) |
+| shell | [src/bridge/command/shell.ts](https://github.com/huiyeruzhou/codelark/blob/main/src/bridge/command/shell.ts) |
+| 自动任务 | [src/bridge/command/auto.ts](https://github.com/huiyeruzhou/codelark/blob/main/src/bridge/command/auto.ts) |
+| 热更新 | [src/bridge/command/hot-update.ts](https://github.com/huiyeruzhou/codelark/blob/main/src/bridge/command/hot-update.ts) |
+| 展示格式 | [src/bridge/command/presentation/](https://github.com/huiyeruzhou/codelark/blob/main/src/bridge/command/presentation/) |
 
 ## 命令展示
 
-IM 内 `/h` 的文案由 [src/bridge/command/help.ts](https://github.com/huiyeruzhou/codelark/blob/master/src/bridge/command/help.ts) 生成。Web 工作台“命令说明”页面在 [src/operator-ui/shell.ts](https://github.com/huiyeruzhou/codelark/blob/master/src/operator-ui/shell.ts) 中渲染。新增命令时需要同步这两处用户入口。
+IM 内 `/h` 的文案由 [src/bridge/command/help.ts](https://github.com/huiyeruzhou/codelark/blob/main/src/bridge/command/help.ts) 生成。Web 工作台“命令说明”页面在 [src/operator-ui/shell.ts](https://github.com/huiyeruzhou/codelark/blob/main/src/operator-ui/shell.ts) 中渲染。新增命令时需要同步这两处用户入口。
 
-模块边界：生产代码中只有 `bridge/host` 直接调用 `bridge/command`；通道、turn、runtime 等横向 owner 不直接 import command，command 也不反向 import `bridge/host/*`。跨 turn 和 command 共用的 agent question 回调协议位于 [src/bridge/callbacks/agent-question.ts](https://github.com/huiyeruzhou/codelark/blob/master/src/bridge/callbacks/agent-question.ts)。命令需要的聊天绑定和 startup target 共享入口分别是 [src/bridge/session/channel-router.ts](https://github.com/huiyeruzhou/codelark/blob/master/src/bridge/session/channel-router.ts) 和 [src/bridge/startup-notice-target.ts](https://github.com/huiyeruzhou/codelark/blob/master/src/bridge/startup-notice-target.ts)。
+模块边界：生产代码中只有 `bridge/host` 直接调用 `bridge/command`；通道、turn、runtime 等横向 owner 不直接 import command，command 也不反向 import `bridge/host/*`。跨 turn 和 command 共用的 agent question 回调协议位于 [src/bridge/callbacks/agent-question.ts](https://github.com/huiyeruzhou/codelark/blob/main/src/bridge/callbacks/agent-question.ts)。命令需要的聊天绑定和 startup target 共享入口分别是 [src/bridge/session/channel-router.ts](https://github.com/huiyeruzhou/codelark/blob/main/src/bridge/session/channel-router.ts) 和 [src/bridge/startup-notice-target.ts](https://github.com/huiyeruzhou/codelark/blob/main/src/bridge/startup-notice-target.ts)。
