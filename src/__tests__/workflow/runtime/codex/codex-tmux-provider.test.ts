@@ -36,6 +36,7 @@ import {
 
 const execFileAsync = promisify(execFile);
 const CODEX_TUI_CONFIRM_FOOTER = 'Press enter to confirm or esc to cancel';
+const CODEX_TUI_CONTINUE_FOOTER = 'Press enter to continue';
 const CODEX_TUI_GO_BACK_FOOTER = 'Press enter to confirm or esc to go back';
 
 async function tmuxAvailable(): Promise<boolean> {
@@ -168,6 +169,13 @@ describe('codex-tmux-provider', () => {
       '  3. Skip until next version',
       CODEX_TUI_CONFIRM_FOOTER,
     ].join('\n')), false);
+    assert.equal(hasCodexTuiSelectionPrompt([
+      'Update available! 0.135.0 -> 0.136.0',
+      '› 1. Update now',
+      '  2. Skip',
+      '  3. Skip until next version',
+      CODEX_TUI_CONTINUE_FOOTER,
+    ].join('\n')), true);
     assert.equal(
       compactCodexTuiUpdateProgress('\x1b[32mUpdating Codex via npm\x1b[0m\r\nDone\n'),
       'Updating Codex via npm\nDone',
@@ -198,6 +206,26 @@ describe('codex-tmux-provider', () => {
     ]);
     assert.doesNotMatch(prompt.summary, /Update available/);
     assert.match(prompt.summary, /Skip until next version/);
+  });
+
+  it('parses Codex update prompts that use the continue footer', () => {
+    const screen = [
+      'Update available! 0.135.0 -> 0.136.0',
+      'Release notes: https://github.com/openai/codex/releases/latest',
+      '› 1. Update now',
+      '  2. Skip',
+      '  3. Skip until next version',
+      CODEX_TUI_CONTINUE_FOOTER,
+    ].join('\n');
+
+    const prompt = parseCodexTuiSelectionPrompt(screen);
+    assert.ok(prompt);
+    assert.equal(prompt.kind, 'update');
+    assert.deepEqual(prompt.options.map((option) => option.choice), [
+      'update_now',
+      'skip',
+      'skip_until_next_version',
+    ]);
   });
 
   it('parses Codex permission selection prompts', () => {

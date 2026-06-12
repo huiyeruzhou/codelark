@@ -607,6 +607,10 @@ describe('bridge-manager resolveCommandAlias', () => {
     });
     const address = { channelType: 'feishu', chatId: 'chat-runtime-barrier' } as const;
     const binding = router.createBinding(address, '/tmp/runtime-barrier');
+    createConfigService({ migrate: false, env: {} }).set(
+      { kind: 'session', sessionId: binding.bridgeSessionId },
+      { runtime: { codex: { provider: 'sdk' } } },
+    );
     const inbound = (text: string, callbackData?: string) => ({
       address,
       text,
@@ -640,6 +644,25 @@ describe('bridge-manager resolveCommandAlias', () => {
       jobKind: 'command:tmux',
       blocksConversation: false,
     });
+    assert.equal(_testOnly.adapterSessionLane(inbound('普通消息') as any, 'regular'), null);
+
+    const tmuxAddress = { channelType: 'feishu', chatId: 'chat-tmux-regular-barrier' } as const;
+    const tmuxBinding = router.createBinding(tmuxAddress, '/tmp/tmux-regular-barrier');
+    createConfigService({ migrate: false, env: {} }).set(
+      { kind: 'session', sessionId: tmuxBinding.bridgeSessionId },
+      { runtime: { codex: { provider: 'tmux' } } },
+    );
+    assert.deepEqual(_testOnly.adapterSessionLane({
+      address: tmuxAddress,
+      text: '普通消息',
+      messageId: 'msg-tmux-regular',
+      timestamp: Date.now(),
+    } as any, 'regular'), {
+      sessionId: tmuxBinding.bridgeSessionId,
+      jobKind: 'interactive-turn:tmux-provider-auto-forward',
+      blocksConversation: true,
+    });
+
     assert.equal(_testOnly.adapterSessionLane(inbound('/t') as any, 'command'), null);
     assert.equal(_testOnly.adapterSessionLane(inbound('/t ls') as any, 'command'), null);
 

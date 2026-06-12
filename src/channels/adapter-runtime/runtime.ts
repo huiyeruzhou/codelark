@@ -692,6 +692,12 @@ export function createAdapterRuntime(
               }
             }
           } else {
+            const sessionLane = deps.getSessionLane?.(msg, classification.category);
+            if (sessionLane) {
+              const current = scheduleSessionLockedMessage(adapter, msg, classification.category, sessionLane);
+              trackConversationJob(chatLaneKey(msg), current);
+              continue;
+            }
             const sessionId = deps.resolveSessionIdForMessage(msg);
             scheduleSessionLockedMessage(
               adapter,
