@@ -116,10 +116,11 @@ async function handleTmuxDispatchCommand(params: TerminalDispatchParams): Promis
         reasonContext: deps.tmuxProviderAutoForward === true
           ? 'while starting or recovering the tmux provider session before forwarding a user message'
           : 'during /tmux startup or recovery',
+        autoForwardRecovery: requestOptions.autoForwardRecovery,
       });
     },
-    notifyBackgroundOperation: async (message: string) => {
-      if (deps.tmuxProviderAutoForward === true && command === '/tmux') {
+    notifyBackgroundOperation: async (message: string, noticeOptions?: { force?: boolean }) => {
+      if (deps.tmuxProviderAutoForward === true && command === '/tmux' && noticeOptions?.force !== true) {
         return;
       }
       await deliverBridgeNotice(adapter, msg.address, message, {

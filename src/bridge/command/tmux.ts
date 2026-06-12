@@ -149,9 +149,15 @@ export interface HandleTmuxBridgeCommandParams {
   reconcileMirrorSubscriptions?: () => Promise<void>;
   requestCodexTuiSelection?: (
     selectionPrompt: RuntimeTmuxSelectionPrompt,
-    options: { sessionId: string },
+    options: {
+      sessionId: string;
+      autoForwardRecovery?: {
+        target: string;
+        actions: TmuxSendAction[];
+      };
+    },
   ) => Promise<CodexTuiSelectionPromptChoice | null>;
-  notifyBackgroundOperation?: (message: string) => Promise<void> | void;
+  notifyBackgroundOperation?: (message: string, options?: { force?: boolean }) => Promise<void> | void;
 }
 
 interface TmuxScreenMonitor {
@@ -529,7 +535,9 @@ function formatRuntimeTmuxSelectionPrompt(selectionPrompt: RuntimeTmuxSelectionP
 }
 
 async function ensureCodexTmuxSessionForProvider(
-  params: Pick<HandleTmuxBridgeCommandParams, 'store' | 'binding' | 'session' | 'autoRecoverProviderSession' | 'tmuxProviderAutoForward' | 'reconcileMirrorSubscriptions' | 'requestCodexTuiSelection' | 'notifyBackgroundOperation'>,
+  params: Pick<HandleTmuxBridgeCommandParams, 'store' | 'binding' | 'session' | 'autoRecoverProviderSession' | 'tmuxProviderAutoForward' | 'reconcileMirrorSubscriptions' | 'requestCodexTuiSelection' | 'notifyBackgroundOperation'> & {
+    pendingAutoForwardActions?: TmuxSendAction[];
+  },
 ): Promise<{ target: string | undefined; commands: string[]; recovered: boolean; error?: string }> {
   const { store, binding, session } = params;
   const runtimeTarget = getSessionRuntimeTmuxSessionName(session) || '';
@@ -683,7 +691,12 @@ async function ensureCodexTmuxSessionForProvider(
       const readiness = await waitForCodexResumeTmuxReady(target, undefined, {
         onSelectionPrompt: async (selectionPrompt) => {
           if (selectionPrompt.runtime !== 'codex') return undefined;
-          return params.requestCodexTuiSelection?.(selectionPrompt, { sessionId: session.id });
+          return params.requestCodexTuiSelection?.(selectionPrompt, {
+            sessionId: session.id,
+            ...(params.tmuxProviderAutoForward === true && params.pendingAutoForwardActions
+              ? { autoForwardRecovery: { target, actions: params.pendingAutoForwardActions } }
+              : {}),
+          });
         },
       });
       commands.push(...readiness.commands);
@@ -755,8 +768,14 @@ async function ensureCodexTmuxSessionForProvider(
     permissionMode: runtimeConfig.mode === 'yolo' ? 'never' : 'acceptEdits',
     onSelectionPrompt: async (selectionPrompt) => {
       if (selectionPrompt.runtime !== 'codex') return undefined;
-      return params.requestCodexTuiSelection?.(selectionPrompt, { sessionId: session.id });
+      return params.requestCodexTuiSelection?.(selectionPrompt, {
+        sessionId: session.id,
+        ...(params.tmuxProviderAutoForward === true && params.pendingAutoForwardActions
+          ? { autoForwardRecovery: { target, actions: params.pendingAutoForwardActions } }
+          : {}),
+      });
     },
+    onStatus: (message, options) => params.notifyBackgroundOperation?.(message, options),
   });
   console.log('[tmux-command] Recovered missing Codex tmux provider session:', {
     event: 'tmux.provider.recover.done',
@@ -1116,17 +1135,6 @@ export async function handleTmuxBridgeCommand(params: HandleTmuxBridgeCommandPar
       if (!args.trim()) {
         return buildTmuxOverviewResponse(session, markdown);
       }
-      const ensured = await ensureCodexTmuxSessionForProvider(params);
-      const target = ensured.target || getSessionTmuxSessionName(session);
-      if (ensured.error) return ensured.error;
-      if (!target) {
-        return buildCommandFields(
-          'tmux 未绑定',
-          [],
-          ['先发送 `/tmux-switch` 查看 session，或 `/tmux-attach <session>` / `/tmux-new <session>` 绑定。'],
-          markdown,
-        );
-      }
       const keySequenceActions = command === '/tmux' ? parseTmuxKeySequence(args) : null;
       if (command === '/tmux' && !keySequenceActions && isPureSpecialKeySyntax(args)) {
         const invalid = parseTmuxSendActions(args);
@@ -1149,8 +1157,26 @@ export async function handleTmuxBridgeCommand(params: HandleTmuxBridgeCommandPar
         );
       }
       const actions = parsed.actions || [];
+      const pendingAutoForwardActions = params.tmuxProviderAutoForward === true && command === '/tmux'
+        ? (keySequenceActions ? actions : applyAutoEnter(actions, session, true))
+        : undefined;
+      const ensured = await ensureCodexTmuxSessionForProvider({
+        ...params,
+        pendingAutoForwardActions,
+      });
+      const target = ensured.target || getSessionTmuxSessionName(session);
+      if (ensured.error) return ensured.error;
+      if (!target) {
+        return buildCommandFields(
+          'tmux 未绑定',
+          [],
+          ['先发送 `/tmux-switch` 查看 session，或 `/tmux-attach <session>` / `/tmux-new <session>` 绑定。'],
+          markdown,
+        );
+      }
+      const effectiveSession = store.getSession(session.id) || session;
       const actionsToSend = command === '/tmux' && !keySequenceActions
-        ? applyAutoEnter(actions, session, params.tmuxProviderAutoForward === true)
+        ? applyAutoEnter(actions, effectiveSession, params.tmuxProviderAutoForward === true)
         : actions;
       if (params.suppressSuccessfulResponse === true) {
         await sendTmuxActions(target, actionsToSend, { delayMs: SEND_ACTION_DELAY_MS });

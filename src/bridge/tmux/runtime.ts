@@ -56,6 +56,7 @@ export interface StartCodexResumeTmuxSessionParams {
   onSelectionPrompt?: (
     selectionPrompt: RuntimeTmuxSelectionPrompt,
   ) => CodexTuiSelectionPromptChoice | null | void | Promise<CodexTuiSelectionPromptChoice | null | void>;
+  onStatus?: (message: string, options?: { force?: boolean }) => Promise<void> | void;
 }
 
 export interface StartCodexResumeTmuxSessionResult {
@@ -67,6 +68,7 @@ export interface StartCodexResumeTmuxSessionResult {
   ready: boolean;
   launchLogPath?: string;
   selectionPrompts?: RuntimeTmuxSelectionPrompt[];
+  updateRestartCount?: number;
 }
 
 export type RuntimeTmuxKind = 'codex' | 'claude';
@@ -458,6 +460,72 @@ function codexReadinessFromRuntimeResult(
   };
 }
 
+export type RuntimeTmuxReadinessStateKind =
+  | 'starting'
+  | 'polling'
+  | 'suspended'
+  | 'waiting_selection'
+  | 'selection_resolved'
+  | 'ready'
+  | 'missing'
+  | 'timeout';
+
+export interface RuntimeTmuxReadinessTransition {
+  runtime: RuntimeTmuxKind;
+  sessionName: string;
+  captureTarget: string;
+  from: RuntimeTmuxReadinessStateKind;
+  to: RuntimeTmuxReadinessStateKind;
+  reason: string;
+  entryAction: string;
+  timeoutMs: number;
+  details?: Record<string, unknown>;
+}
+
+interface RuntimeTmuxReadinessMachine {
+  runtime: RuntimeTmuxKind;
+  sessionName: string;
+  captureTarget: string;
+  timeoutMs: number;
+  state: RuntimeTmuxReadinessStateKind;
+  onStateTransition?: (transition: RuntimeTmuxReadinessTransition) => void;
+}
+
+const runtimeTmuxReadinessEntryActions: Record<RuntimeTmuxReadinessStateKind, string> = {
+  starting: 'Initialize the readiness deadline and command trace.',
+  polling: 'Capture the tmux pane and classify the current TUI screen.',
+  suspended: 'Stop readiness because the TUI is blocked on an unresolved selection.',
+  waiting_selection: 'Wait for the selection handler and exclude that wait from the readiness timeout.',
+  selection_resolved: 'Send the resolved selection actions to tmux and reset the readiness window.',
+  ready: 'Return control to the caller so queued input can be forwarded.',
+  missing: 'Return a not-ready result because the provider-owned tmux session disappeared.',
+  timeout: 'Perform a final session check and return a not-ready timeout result.',
+};
+
+function transitionRuntimeTmuxReadiness(
+  machine: RuntimeTmuxReadinessMachine,
+  next: RuntimeTmuxReadinessStateKind,
+  reason: string,
+  details: Record<string, unknown> = {},
+): void {
+  const previous = machine.state;
+  if (previous === next) return;
+  machine.state = next;
+  const entryAction = runtimeTmuxReadinessEntryActions[next];
+  const transition: RuntimeTmuxReadinessTransition = {
+    runtime: machine.runtime,
+    sessionName: machine.sessionName,
+    captureTarget: machine.captureTarget,
+    from: previous,
+    to: next,
+    reason,
+    entryAction,
+    timeoutMs: machine.timeoutMs,
+    ...(Object.keys(details).length > 0 ? { details } : {}),
+  };
+  machine.onStateTransition?.(transition);
+}
+
 export async function waitForRuntimeTmuxReady(params: {
   runtime: RuntimeTmuxKind;
   sessionName: string;
@@ -468,12 +536,22 @@ export async function waitForRuntimeTmuxReady(params: {
   onSelectionPrompt?: (
     selectionPrompt: RuntimeTmuxSelectionPrompt,
   ) => CodexTuiSelectionPromptChoice | null | void | Promise<CodexTuiSelectionPromptChoice | null | void>;
+  onStateTransition?: (transition: RuntimeTmuxReadinessTransition) => void;
 }): Promise<RuntimeTmuxReadinessResult> {
   const core = params.core || tmuxCore;
   const captureTarget = params.target || params.sessionName;
   const timeoutMs = runtimeReadyTimeoutMs(params.runtime);
   const pollMs = runtimeReadyPollMs(params.runtime);
+  const machine: RuntimeTmuxReadinessMachine = {
+    runtime: params.runtime,
+    sessionName: params.sessionName,
+    captureTarget,
+    timeoutMs,
+    state: 'starting',
+    ...(params.onStateTransition ? { onStateTransition: params.onStateTransition } : {}),
+  };
   if (timeoutMs <= 0) {
+    transitionRuntimeTmuxReadiness(machine, 'ready', 'readiness timeout disabled');
     return { ready: true, runtime: params.runtime, commands: [] };
   }
 
@@ -485,6 +563,7 @@ export async function waitForRuntimeTmuxReady(params: {
   let sessionExistsCommand: string | undefined;
   let selectionPrompt: RuntimeTmuxSelectionPrompt | undefined;
   const handledSelectionFingerprints = new Set<string>();
+  transitionRuntimeTmuxReadiness(machine, 'polling', 'readiness check started');
   while (Date.now() <= deadline) {
     try {
       const capture = await core.capturePane(captureTarget, 80);
@@ -509,6 +588,11 @@ export async function waitForRuntimeTmuxReady(params: {
           || (selectionPrompt.runtime === 'codex' && typeof params.onSelectionPrompt !== 'function')
           || (selectionPrompt.defaultChoice === null && typeof params.onSelectionPrompt !== 'function')
         ) {
+          transitionRuntimeTmuxReadiness(machine, 'suspended', 'selection prompt requires external resolution', {
+            prompt_runtime: selectionPrompt.runtime,
+            prompt_kind: selectionPrompt.kind,
+            default_choice: selectionPrompt.defaultChoice,
+          });
           return {
             ready: false,
             runtime: params.runtime,
@@ -523,6 +607,11 @@ export async function waitForRuntimeTmuxReady(params: {
           : `${selectionPrompt.runtime}:${selectionPrompt.kind}`;
         if (!handledSelectionFingerprints.has(fingerprint)) {
           handledSelectionFingerprints.add(fingerprint);
+          transitionRuntimeTmuxReadiness(machine, 'waiting_selection', 'selection prompt handed to resolver', {
+            prompt_runtime: selectionPrompt.runtime,
+            prompt_kind: selectionPrompt.kind,
+            default_choice: selectionPrompt.defaultChoice,
+          });
           const selectionWaitStartedAt = Date.now();
           const requestedChoice = await params.onSelectionPrompt?.(selectionPrompt);
           const selectionWaitMs = Math.max(0, Date.now() - selectionWaitStartedAt);
@@ -532,6 +621,10 @@ export async function waitForRuntimeTmuxReady(params: {
           if (selectionPrompt.runtime === 'codex') {
             resolvedChoice = requestedChoice || null;
             if (!resolvedChoice) {
+              transitionRuntimeTmuxReadiness(machine, 'suspended', 'selection resolver returned no choice', {
+                prompt_runtime: selectionPrompt.runtime,
+                prompt_kind: selectionPrompt.kind,
+              });
               return {
                 ready: false,
                 runtime: params.runtime,
@@ -571,6 +664,13 @@ export async function waitForRuntimeTmuxReady(params: {
               selection_wait_ms: selectionWaitMs,
             });
           }
+          transitionRuntimeTmuxReadiness(machine, 'selection_resolved', 'selection choice resolved', {
+            prompt_runtime: selectionPrompt.runtime,
+            prompt_kind: selectionPrompt.kind,
+            resolved_choice: resolvedChoice,
+            action_count: actions.length,
+            selection_wait_ms: selectionWaitMs,
+          });
           if (actions.length > 0) {
             const sent = await core.sendActions(captureTarget, actions);
             commands.push(...sent.commands);
@@ -587,6 +687,7 @@ export async function waitForRuntimeTmuxReady(params: {
               commands: sent.commands,
             });
           }
+          transitionRuntimeTmuxReadiness(machine, 'polling', 'selection actions sent; waiting for ready prompt');
         }
         if (params.afterSelectionDelayMs && params.afterSelectionDelayMs > 0) {
           await sleep(params.afterSelectionDelayMs);
@@ -596,6 +697,7 @@ export async function waitForRuntimeTmuxReady(params: {
         continue;
       }
       if (hasRuntimeTmuxReadyPrompt(params.runtime, capture.screen)) {
+        transitionRuntimeTmuxReadiness(machine, 'ready', 'ready prompt detected');
         return {
           ready: true,
           runtime: params.runtime,
@@ -612,6 +714,9 @@ export async function waitForRuntimeTmuxReady(params: {
         sessionExists = exists.exists;
         sessionExistsCommand = exists.command;
         if (!exists.exists) {
+          transitionRuntimeTmuxReadiness(machine, 'missing', 'capture failed and tmux session no longer exists', {
+            last_error: lastError,
+          });
           return {
             ready: false,
             runtime: params.runtime,
@@ -630,6 +735,7 @@ export async function waitForRuntimeTmuxReady(params: {
     await sleep(pollMs);
   }
 
+  transitionRuntimeTmuxReadiness(machine, 'timeout', 'readiness deadline reached');
   if (sessionExists === undefined) {
     try {
       const exists = await core.hasSession(params.sessionName);
@@ -681,6 +787,7 @@ export async function waitForCodexResumeTmuxReady(
     ) => CodexTuiSelectionPromptChoice | null | void | Promise<CodexTuiSelectionPromptChoice | null | void>;
     autoResolveSelection?: boolean;
     afterSelectionDelayMs?: number;
+    onStateTransition?: (transition: RuntimeTmuxReadinessTransition) => void;
   } = {},
 ): Promise<CodexResumeTmuxReadinessResult> {
   const selectionPrompts: RuntimeTmuxSelectionPrompt[] = [];
@@ -690,6 +797,7 @@ export async function waitForCodexResumeTmuxReady(
     core,
     autoResolveSelection: options.autoResolveSelection,
     afterSelectionDelayMs: options.afterSelectionDelayMs,
+    onStateTransition: options.onStateTransition,
     onSelectionPrompt: async (selectionPrompt) => {
       selectionPrompts.push(selectionPrompt);
       return options.onSelectionPrompt?.(selectionPrompt);
@@ -703,16 +811,66 @@ export async function startCodexResumeTmuxSession(
 ): Promise<StartCodexResumeTmuxSessionResult> {
   const { codexCommand, launchLogPath } = buildCodexResumeTmuxCommand(params);
   prepareLaunchLog(launchLogPath);
-  const started = await core.ensureDetachedSession({
-    name: params.sessionName,
-    cwd: params.workingDirectory,
-    command: codexCommand,
-    recreate: true,
-  });
-  const startedCheck = await waitForCodexResumeTmuxReady(params.sessionName, core, {
-    onSelectionPrompt: params.onSelectionPrompt,
-  });
-  if (!startedCheck.ready) {
+  const commands: string[] = [];
+  const selectionPrompts: RuntimeTmuxSelectionPrompt[] = [];
+  let updateRestartCount = 0;
+  let finalStarted: Awaited<ReturnType<TmuxCore['ensureDetachedSession']>> | null = null;
+
+  for (let attempt = 0; attempt <= 1; attempt += 1) {
+    let selectedStartupUpdateNow = false;
+    const started = await core.ensureDetachedSession({
+      name: params.sessionName,
+      cwd: params.workingDirectory,
+      command: codexCommand,
+      recreate: true,
+    });
+    finalStarted = started;
+    commands.push(...started.commands);
+    const startedCheck = await waitForCodexResumeTmuxReady(params.sessionName, core, {
+      onSelectionPrompt: async (selectionPrompt) => {
+        const choice = await params.onSelectionPrompt?.(selectionPrompt);
+        if (
+          selectionPrompt.runtime === 'codex'
+          && selectionPrompt.kind === 'update'
+          && choice === 'update_now'
+        ) {
+          selectedStartupUpdateNow = true;
+        }
+        return choice;
+      },
+    });
+    commands.push(...startedCheck.commands);
+    if (startedCheck.selectionPrompts) selectionPrompts.push(...startedCheck.selectionPrompts);
+    if (startedCheck.ready) {
+      cleanupLaunchLog(launchLogPath);
+      return {
+        existed: started.existed,
+        sessionName: params.sessionName,
+        codexCommand,
+        tmuxCommand: started.command || '',
+        commands,
+        ready: true,
+        launchLogPath,
+        ...(selectionPrompts.length > 0 ? { selectionPrompts } : {}),
+        ...(updateRestartCount > 0 ? { updateRestartCount } : {}),
+      };
+    }
+
+    if (
+      selectedStartupUpdateNow
+      && startedCheck.sessionExists === false
+      && attempt === 0
+    ) {
+      updateRestartCount += 1;
+      console.log('[codex-tmux-runtime] Codex tmux exited after startup update selection; relaunching once:', {
+        tmux_session: params.sessionName,
+        thread_id: params.threadId,
+        bridge_session_id: params.bridgeSessionId,
+      });
+      await params.onStatus?.('Codex CLI 更新流程已结束，正在重新启动 Codex tmux。', { force: true });
+      continue;
+    }
+
     let killCommand: string | undefined;
     try {
       killCommand = await core.killSession(params.sessionName, { ignoreMissing: true });
@@ -737,7 +895,7 @@ export async function startCodexResumeTmuxSession(
       bridgeSessionId: params.bridgeSessionId,
       workingDirectory: params.workingDirectory,
       reason,
-      commands: [...started.commands, ...startedCheck.commands, ...(killCommand ? [killCommand] : [])],
+      commands: [...commands, ...(killCommand ? [killCommand] : [])],
       lastScreen: screenExcerpt(startedCheck.lastScreen),
       lastError: startedCheck.lastError,
       sessionExists: startedCheck.sessionExists,
@@ -768,19 +926,18 @@ export async function startCodexResumeTmuxSession(
     });
     throw new CodexResumeTmuxLaunchError(details);
   }
+
   cleanupLaunchLog(launchLogPath);
-  return {
-    existed: started.existed,
+  throw new CodexResumeTmuxLaunchError({
     sessionName: params.sessionName,
-    codexCommand,
-    tmuxCommand: started.command || '',
-    commands: [...started.commands, ...startedCheck.commands],
-    ready: true,
+    threadId: params.threadId,
+    bridgeSessionId: params.bridgeSessionId,
+    workingDirectory: params.workingDirectory,
+    reason: 'tmux launch retry loop ended without a readiness result',
+    commands,
     launchLogPath,
-    ...(startedCheck.selectionPrompts && startedCheck.selectionPrompts.length > 0
-      ? { selectionPrompts: startedCheck.selectionPrompts }
-      : {}),
-  };
+    ...(finalStarted?.command ? { lastError: finalStarted.command } : {}),
+  });
 }
 
 function commandPreview(command: string, args: string[]): string {

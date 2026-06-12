@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { formatConsoleLogArgs, formatLogArg, maskSecrets, maskStructuredLogLine } from '../../../shared/logger.js';
 
 describe('maskSecrets', () => {
-  it('masks supported secret patterns', () => {
+  it('masks supported secret patterns while preserving non-secret text and suffixes', () => {
     const cases = [
       ['token=secret123456789', 'secret123456789'],
       ['secret=my-secret-value', 'my-secret-value'],
@@ -20,16 +20,11 @@ describe('maskSecrets', () => {
       assert.notEqual(result, input);
       assert.ok(!result.includes(leaked), `${leaked} should be masked`);
     }
-  });
 
-  it('leaves normal text unchanged', () => {
     const input = 'Starting bridge on port 8080';
     assert.equal(maskSecrets(input), input);
-  });
 
-  it('preserves last 4 chars of masked values', () => {
-    const input = 'token=abcdefghijklmnop';
-    const result = maskSecrets(input);
+    const result = maskSecrets('token=abcdefghijklmnop');
     assert.ok(result.includes('mnop'));
   });
 });

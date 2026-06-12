@@ -9,7 +9,7 @@ describe('PendingPermissions', () => {
     const promise = pp.waitFor('req-1');
     assert.equal(pp.size, 1);
 
-    pp.resolve('req-1', { behavior: 'allow' });
+    assert.equal(pp.resolve('req-1', { behavior: 'allow' }), true);
     const result = await promise;
     assert.equal(result.behavior, 'allow');
     assert.equal(pp.size, 0);
@@ -30,12 +30,6 @@ describe('PendingPermissions', () => {
     assert.equal(pp.resolve('unknown', { behavior: 'allow' }), false);
   });
 
-  it('resolve returns true for known id', async () => {
-    const pp = new PendingPermissions();
-    pp.waitFor('req-3');
-    assert.equal(pp.resolve('req-3', { behavior: 'allow' }), true);
-  });
-
   it('denyAll resolves all pending', async () => {
     const pp = new PendingPermissions();
     const p1 = pp.waitFor('req-a');
@@ -46,15 +40,9 @@ describe('PendingPermissions', () => {
     const [r1, r2] = await Promise.all([p1, p2]);
     assert.equal(r1.behavior, 'deny');
     assert.equal(r2.behavior, 'deny');
+    assert.equal(r1.message, 'Bridge shutting down');
+    assert.equal(r2.message, 'Bridge shutting down');
     assert.equal(pp.size, 0);
-  });
-
-  it('denyAll message says bridge shutting down', async () => {
-    const pp = new PendingPermissions();
-    const p = pp.waitFor('req-c');
-    pp.denyAll();
-    const result = await p;
-    assert.equal(result.message, 'Bridge shutting down');
   });
 
   it('timeout auto-denies after expiry', async () => {

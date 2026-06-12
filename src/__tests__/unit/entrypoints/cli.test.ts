@@ -10,24 +10,15 @@ import { pathToFileURL } from 'node:url';
 import { buildCliHelpText, formatRunSuccessMessage, isDirectCliRun, parseCliCommand, parseCliInvocation } from '../../../entrypoints/cli.js';
 
 describe('cli entrypoint', () => {
-  it('parses no arguments as the default run flow', () => {
+  it('parses default, help, run/open, and nested autostart commands', () => {
     assert.deepEqual(parseCliCommand([]), { command: 'default', args: [] });
-  });
-
-  it('parses help aliases', () => {
     assert.deepEqual(parseCliCommand(['help']), { command: 'help', args: [] });
     assert.deepEqual(parseCliCommand(['--help']), { command: 'help', args: [] });
     assert.deepEqual(parseCliCommand(['-h']), { command: 'help', args: [] });
-  });
-
-  it('preserves autostart subcommands for nested dispatch', () => {
     assert.deepEqual(parseCliCommand(['autostart', 'install']), {
       command: 'autostart',
       args: ['install'],
     });
-  });
-
-  it('parses run and keeps open as a compatibility alias', () => {
     assert.deepEqual(parseCliCommand(['run']), { command: 'run', args: [] });
     assert.deepEqual(parseCliCommand(['open']), { command: 'run', args: [], rawCommand: 'open' });
   });

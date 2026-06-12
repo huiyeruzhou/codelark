@@ -694,37 +694,17 @@ describe('JsonFileStore', () => {
 
   // ── Session Locking ──
 
-  it('acquireSessionLock succeeds on first call', () => {
-    const store = new JsonFileStore(makeSettings());
-    assert.ok(store.acquireSessionLock('sess', 'lock1', 'owner1', 60));
-  });
-
-  it('acquireSessionLock fails when held by another', () => {
+  it('enforces session lock ownership, re-entry, release, and expiry', async () => {
     const store = new JsonFileStore(makeSettings());
     assert.ok(store.acquireSessionLock('sess', 'lock1', 'owner1', 60));
     assert.equal(store.acquireSessionLock('sess', 'lock2', 'owner2', 60), false);
-  });
-
-  it('acquireSessionLock succeeds with same lockId', () => {
-    const store = new JsonFileStore(makeSettings());
     assert.ok(store.acquireSessionLock('sess', 'lock1', 'owner1', 60));
-    assert.ok(store.acquireSessionLock('sess', 'lock1', 'owner1', 60));
-  });
-
-  it('releaseSessionLock allows re-acquire', () => {
-    const store = new JsonFileStore(makeSettings());
-    store.acquireSessionLock('sess', 'lock1', 'owner1', 60);
     store.releaseSessionLock('sess', 'lock1');
     assert.ok(store.acquireSessionLock('sess', 'lock2', 'owner2', 60));
-  });
 
-  it('expired lock can be re-acquired', async () => {
-    const store = new JsonFileStore(makeSettings());
-    // Acquire with very short TTL
-    store.acquireSessionLock('sess', 'lock1', 'owner1', 0);
-    // Should be expired immediately
+    store.acquireSessionLock('expired', 'lock1', 'owner1', 0);
     await new Promise((r) => setTimeout(r, 10));
-    assert.ok(store.acquireSessionLock('sess', 'lock2', 'owner2', 60));
+    assert.ok(store.acquireSessionLock('expired', 'lock2', 'owner2', 60));
   });
 
   // ── Permission Links ──

@@ -148,7 +148,11 @@ import {
 import {
   cleanupRuntimeTmuxSession,
   tmuxCore,
+  waitForCodexResumeTmuxReady,
+  waitForRuntimeTmuxReady,
+  type TmuxSendAction,
 } from '../tmux/runtime.js';
+import type { TmuxAutoForwardRecoveryPayload } from '../command/codex-tui-selection.js';
 import { buildRuntimeStreamTags } from '../../shared/streaming-metadata.js';
 import { ThreadDisplayService } from '../session/thread-display-resolver.js';
 import {
@@ -689,6 +693,112 @@ async function recoverMirrorTmuxSelectionPromptFromCallback(
       error: describeUnknownError(error),
     });
     return { ok: false, notice: `Codex TUI Selection 已记录，但发送 tmux 按键失败：${describeUnknownError(error)}` };
+  }
+}
+
+function isTmuxSendAction(value: unknown): value is TmuxSendAction {
+  if (!value || typeof value !== 'object') return false;
+  const action = value as Record<string, unknown>;
+  if (action.type === 'literal') return typeof action.text === 'string';
+  if (action.type === 'key') return typeof action.key === 'string' && action.key.length > 0;
+  return false;
+}
+
+function parseTmuxAutoForwardRecovery(link: PermissionLinkRecord): TmuxAutoForwardRecoveryPayload | null {
+  if (!link.suggestions) return null;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(link.suggestions);
+  } catch {
+    return null;
+  }
+  const candidates = Array.isArray(parsed) ? parsed : [parsed];
+  for (const candidate of candidates) {
+    if (!candidate || typeof candidate !== 'object') continue;
+    const payload = candidate as Record<string, unknown>;
+    if (payload.kind !== 'tmux-provider-auto-forward') continue;
+    if (payload.version !== 1) continue;
+    if (typeof payload.target !== 'string' || !payload.target.trim()) continue;
+    if (!Array.isArray(payload.actions) || !payload.actions.every(isTmuxSendAction)) continue;
+    return {
+      kind: 'tmux-provider-auto-forward',
+      version: 1,
+      target: payload.target,
+      actions: payload.actions,
+    };
+  }
+  return null;
+}
+
+function tmuxSessionNameFromTarget(target: string): string {
+  const trimmed = target.trim();
+  const colonIndex = trimmed.indexOf(':');
+  return colonIndex >= 0 ? trimmed.slice(0, colonIndex) : trimmed;
+}
+
+async function recoverTmuxProviderAutoForwardFromSelectionCallback(
+  claim: broker.CodexSelectionCallbackClaim,
+): Promise<{ ok: boolean; notice: string; attempted: boolean }> {
+  const recovery = parseTmuxAutoForwardRecovery(claim.link);
+  if (!recovery) return { ok: false, notice: '', attempted: false };
+  if (claim.choice === 'not_selection') {
+    return { ok: true, notice: 'Codex TUI Selection 已记录为误判，未恢复 auto-forward 消息。', attempted: true };
+  }
+
+  try {
+    const sessionName = tmuxSessionNameFromTarget(recovery.target);
+    let handledSelection = false;
+    const ready = await waitForRuntimeTmuxReady({
+      runtime: 'codex',
+      sessionName,
+      target: recovery.target,
+      core: tmuxCore,
+      onSelectionPrompt: (selectionPrompt) => {
+        if (selectionPrompt.runtime !== 'codex') return null;
+        handledSelection = true;
+        return claim.choice;
+      },
+    });
+    if (!ready.ready) {
+      const prompt = ready.selectionPrompt?.runtime === 'codex' ? ready.selectionPrompt : undefined;
+      const reason = prompt
+        ? `Codex TUI 仍停在 ${prompt.kind} selection prompt`
+        : ready.lastError || 'Codex TUI 未在超时时间内进入可输入状态';
+      return {
+        ok: false,
+        attempted: true,
+        notice: handledSelection
+          ? `Codex TUI Selection 已发送到 tmux，但 ${reason}，未恢复 auto-forward 消息。`
+          : `Codex TUI Selection 已记录，但 ${reason}，未恢复 auto-forward 消息。`,
+      };
+    }
+    if (!handledSelection) {
+      return {
+        ok: false,
+        attempted: true,
+        notice: `Codex TUI Selection 已记录，但 ${recovery.target} 当前屏幕没有可识别的 TUI 选择提示；未恢复 auto-forward 消息。`,
+      };
+    }
+    await tmuxCore.sendActions(recovery.target, recovery.actions);
+    console.log('[bridge-manager] Recovered tmux provider auto-forward from Codex TUI selection callback:', {
+      permission_request_id: claim.permissionRequestId,
+      session_id: claim.link.sessionId,
+      target: recovery.target,
+      action_count: recovery.actions.length,
+    });
+    return { ok: true, attempted: true, notice: 'Codex TUI Selection 已恢复，并已继续转发原始消息。' };
+  } catch (error) {
+    console.warn('[bridge-manager] Recovering tmux provider auto-forward failed:', {
+      permission_request_id: claim.permissionRequestId,
+      session_id: claim.link.sessionId,
+      target: recovery.target,
+      error: describeUnknownError(error),
+    });
+    return {
+      ok: false,
+      attempted: true,
+      notice: `Codex TUI Selection 已记录，但恢复 auto-forward 失败：${describeUnknownError(error)}`,
+    };
   }
 }
 
@@ -3252,10 +3362,16 @@ async function handleMessage(
       msg.callbackMessageId,
     );
     if (codexSelectionClaim !== undefined) {
-      if (codexSelectionClaim?.handledBy === 'orphan'
-        && parseMirrorCodexSelectionSessionId(codexSelectionClaim.permissionRequestId)) {
-        const recovery = await recoverMirrorTmuxSelectionPromptFromCallback(codexSelectionClaim, adapter);
-        await deliverBridgeNotice(adapter, msg.address, recovery.notice);
+      if (codexSelectionClaim?.handledBy === 'orphan') {
+        const autoForwardRecovery = await recoverTmuxProviderAutoForwardFromSelectionCallback(codexSelectionClaim);
+        if (autoForwardRecovery.attempted) {
+          await deliverBridgeNotice(adapter, msg.address, autoForwardRecovery.notice);
+        } else if (parseMirrorCodexSelectionSessionId(codexSelectionClaim.permissionRequestId)) {
+          const recovery = await recoverMirrorTmuxSelectionPromptFromCallback(codexSelectionClaim, adapter);
+          await deliverBridgeNotice(adapter, msg.address, recovery.notice);
+        } else {
+          await deliverBridgeNotice(adapter, msg.address, 'Permission response recorded.');
+        }
       } else if (codexSelectionClaim) {
         const mirrorSessionId = parseMirrorCodexSelectionSessionId(codexSelectionClaim.permissionRequestId);
         if (mirrorSessionId) {

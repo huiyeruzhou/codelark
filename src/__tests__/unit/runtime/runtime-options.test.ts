@@ -12,16 +12,14 @@ import {
 } from '../../../runtime/options.js';
 
 describe('runtime-options', () => {
-  it('parses sandbox modes through the shared zod schema and applies fallback', () => {
+  it('parses runtime option enums and fallbacks through the shared schemas', () => {
     assert.equal(parseSandboxMode('read-only'), 'read-only');
     assert.equal(parseSandboxMode('workspace-write'), 'workspace-write');
     assert.equal(parseSandboxMode('danger-full-access'), 'danger-full-access');
     assert.equal(parseSandboxMode('invalid'), undefined);
     assert.equal(normalizeSandboxMode('invalid'), 'workspace-write');
     assert.equal(normalizeSandboxMode(undefined, 'read-only'), 'read-only');
-  });
 
-  it('parses reasoning efforts through the shared zod schema and applies fallback', () => {
     assert.equal(parseReasoningEffort('minimal'), 'minimal');
     assert.equal(parseReasoningEffort('low'), 'low');
     assert.equal(parseReasoningEffort('medium'), 'medium');
@@ -30,9 +28,7 @@ describe('runtime-options', () => {
     assert.equal(parseReasoningEffort('invalid'), undefined);
     assert.equal(normalizeReasoningEffort('invalid'), 'medium');
     assert.equal(normalizeReasoningEffort(undefined, 'low'), 'low');
-  });
 
-  it('parses Claude reasoning efforts and shorthand aliases', () => {
     assert.equal(parseClaudeReasoningEffort('low'), 'low');
     assert.equal(parseClaudeReasoningEffort('medium'), 'medium');
     assert.equal(parseClaudeReasoningEffort('high'), 'high');

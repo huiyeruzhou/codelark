@@ -28,7 +28,7 @@ const statusContext = {
 };
 
 describe('handleUiServiceRoute', () => {
-  it('handles bridge log requests', async () => {
+  it('handles owned service routes and ignores routes owned by other UI modules', async () => {
     const response = createResponse();
     const handled = await handleUiServiceRoute({
       request: { method: 'GET' } as IncomingMessage,
@@ -40,18 +40,16 @@ describe('handleUiServiceRoute', () => {
     assert.equal(handled, true);
     assert.equal(response.statusCodeWritten, 200);
     assert.deepEqual(JSON.parse(response.body), { logs: '' });
-  });
 
-  it('ignores routes owned by other UI modules', async () => {
-    const response = createResponse();
-    const handled = await handleUiServiceRoute({
+    const configResponse = createResponse();
+    const configHandled = await handleUiServiceRoute({
       request: { method: 'GET' } as IncomingMessage,
-      response,
+      response: configResponse,
       url: new URL('http://localhost/api/config'),
       statusContext,
     });
 
-    assert.equal(handled, false);
-    assert.equal(response.body, '');
+    assert.equal(configHandled, false);
+    assert.equal(configResponse.body, '');
   });
 });

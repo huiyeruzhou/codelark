@@ -108,9 +108,6 @@ describe('outbound-artifacts', () => {
     ].join('\n'));
 
     assert.equal(full, '先说明一下结果。\n\n补充说明');
-  });
-
-  it('tracks which channels support outbound artifacts', () => {
     assert.equal(supportsOutboundArtifacts('feishu'), true);
     assert.equal(supportsOutboundArtifacts('unknown'), false);
   });

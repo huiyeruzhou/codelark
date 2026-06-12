@@ -12,6 +12,7 @@ import {
   startCodexResumeTmuxSession,
   waitForRuntimeTmuxReady,
   waitForCodexResumeTmuxReady,
+  type RuntimeTmuxReadinessTransition,
   type TmuxCore,
   type TmuxSendAction,
 } from '../../../../bridge/tmux/runtime.js';
@@ -288,6 +289,66 @@ describe('codex tmux runtime', () => {
     }]);
     assert.equal(result.commands.includes('tmux send-keys -t codex_permission_handler Down'), true);
     assert.equal(result.commands.includes('tmux send-keys -t codex_permission_handler Enter'), true);
+  });
+
+  it('reports readiness state transitions around startup selection recovery', async () => {
+    let captureCount = 0;
+    const transitions: RuntimeTmuxReadinessTransition[] = [];
+    const core: TmuxCore = {
+      commandPreview: (args) => ['tmux', ...args].join(' '),
+      hasSession: async (name) => ({ exists: true, command: `tmux has-session -t ${name}` }),
+      killSession: async (name) => `tmux kill-session -t ${name}`,
+      listSessions: async () => ({ sessions: [], command: 'tmux list-sessions' }),
+      ensureDetachedSession: async () => ({ existed: false, command: 'tmux new-session -d -s codex_stateful', commands: ['tmux new-session -d -s codex_stateful'] }),
+      capturePane: async (name) => {
+        captureCount += 1;
+        return {
+          command: `tmux capture-pane -t ${name} -p -S -80`,
+          screen: captureCount === 1
+            ? [
+              'Update available! 0.0.0 -> 9.9.9',
+              'Release notes: https://github.com/openai/codex/releases/latest',
+              '› 1. Update now',
+              '  2. Skip',
+              '  3. Skip until next version',
+              'Press enter to continue',
+            ].join('\n')
+            : 'OpenAI Codex\n\n› ',
+        };
+      },
+      sendActions: async (target, actions) => ({
+        commands: actions.map((action) => action.type === 'key'
+          ? `tmux send-keys -t ${target} ${action.key}`
+          : `tmux send-keys -t ${target} -l ${action.text}`),
+      }),
+      sendInterrupt: async () => 'tmux send-keys -t codex_stateful C-c',
+      injectPromptIntoPane: async () => ({ commands: [] }),
+    };
+
+    const result = await waitForRuntimeTmuxReady({
+      runtime: 'codex',
+      sessionName: 'codex_stateful',
+      core,
+      onStateTransition: (transition) => transitions.push(transition),
+      onSelectionPrompt: () => 'skip_until_next_version',
+    });
+
+    assert.equal(result.ready, true);
+    assert.deepEqual(transitions.map((transition) => [transition.from, transition.to]), [
+      ['starting', 'polling'],
+      ['polling', 'waiting_selection'],
+      ['waiting_selection', 'selection_resolved'],
+      ['selection_resolved', 'polling'],
+      ['polling', 'ready'],
+    ]);
+    assert.equal(
+      transitions.find((transition) => transition.to === 'waiting_selection')?.entryAction,
+      'Wait for the selection handler and exclude that wait from the readiness timeout.',
+    );
+    assert.equal(
+      transitions.find((transition) => transition.to === 'ready')?.entryAction,
+      'Return control to the caller so queued input can be forwarded.',
+    );
   });
 
   it('does not count IM selection wait time against runtime readiness timeout', async () => {

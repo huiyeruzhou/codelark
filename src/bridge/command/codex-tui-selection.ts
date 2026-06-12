@@ -8,8 +8,16 @@ import {
 } from '../../runtime/codex/tmux-provider.js';
 import type {
   RuntimeTmuxSelectionPrompt,
+  TmuxSendAction,
 } from '../tmux/runtime.js';
 import * as permissionBroker from '../permission/broker.js';
+
+export interface TmuxAutoForwardRecoveryPayload {
+  kind: 'tmux-provider-auto-forward';
+  version: 1;
+  target: string;
+  actions: TmuxSendAction[];
+}
 
 function defaultChoiceForSelectionPrompt(
   selectionPrompt: Extract<RuntimeTmuxSelectionPrompt, { runtime: 'codex' }>,
@@ -48,6 +56,10 @@ export async function requestCodexTuiSelectionViaPermissionBroker(params: {
   reasonContext: string;
   inspectCommand?: string;
   replyToMessageId?: string;
+  autoForwardRecovery?: {
+    target: string;
+    actions: TmuxSendAction[];
+  };
 }): Promise<CodexTuiSelectionPromptChoice | null> {
   if (params.selectionPrompt.runtime !== 'codex') return null;
   const selectionPrompt = params.selectionPrompt;
@@ -88,7 +100,14 @@ export async function requestCodexTuiSelectionViaPermissionBroker(params: {
       ],
     },
     params.sessionId,
-    [],
+    params.autoForwardRecovery
+      ? [{
+          kind: 'tmux-provider-auto-forward',
+          version: 1,
+          target: params.autoForwardRecovery.target,
+          actions: params.autoForwardRecovery.actions,
+        } satisfies TmuxAutoForwardRecoveryPayload]
+      : [],
     replyToMessageId,
   );
   console.log('[bridge-command] Codex TUI selection prompt forwarded to IM:', {

@@ -331,7 +331,7 @@ export async function handleProviderCommand(options: {
     );
   }
   const tmuxSessionName = codexTmuxSessionName(threadId);
-  let startResult: { existed: boolean; selectionPrompts?: unknown[] };
+  let startResult: { existed: boolean; selectionPrompts?: unknown[]; updateRestartCount?: number };
   try {
     await options.deps.notifyBackgroundOperation?.(`正在启动 tmux 后台会话 \`${tmuxSessionName}\` 并 resume 当前 Codex thread。`);
     startResult = await startRuntimeTmuxSession({
@@ -354,6 +354,7 @@ export async function handleProviderCommand(options: {
           replyToMessageId: options.msg.messageId,
         });
       },
+      onStatus: options.deps.notifyBackgroundOperation,
     });
   } catch (error) {
     if (error instanceof CodexResumeTmuxLaunchError) {
@@ -388,6 +389,9 @@ export async function handleProviderCommand(options: {
           : '已启动 Codex TUI 并 resume 当前 thread。',
       ...(startResult.selectionPrompts && startResult.selectionPrompts.length > 0
         ? ['启动阶段检测到 Codex TUI 选择提示，已通过 IM 选择框确认后继续。']
+        : []),
+      ...(startResult.updateRestartCount && startResult.updateRestartCount > 0
+        ? ['选择 Codex CLI 更新后 TUI 已退出，CodeLark 已重新启动 tmux 并继续完成 Provider 切换。']
         : []),
       '这是 `/p tmux` 的标准行为：每次都会强制重新加载同名 tmux session，确保和底层 Codex JSONL 会话一致。',
       '之后普通消息会发送到这个 tmux session；回复由 mirror 机制从 Codex session JSONL 自动同步。',

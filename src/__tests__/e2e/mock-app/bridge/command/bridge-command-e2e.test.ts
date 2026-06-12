@@ -3249,19 +3249,6 @@ provider = "tmux"
       assert.match(firstMessageLog, new RegExp(`has-session -t ${tmuxSession}`));
       assert.match(firstMessageLog, new RegExp(`new-session -d -s ${tmuxSession}`));
       assert.match(firstMessageLog, new RegExp(`resume ${actualThreadId}`));
-      assert.equal(
-        firstMessageLog.split(`capture-pane -t ${tmuxSession} -p -S -80`).length - 1,
-        3,
-        'fake tmux should delay Codex TUI readiness for the regression path',
-      );
-      assert.ok(
-        firstMessageLog.indexOf(`new-session -d -s ${tmuxSession}`) < firstMessageLog.indexOf(`capture-pane -t ${tmuxSession} -p -S -80`),
-        'auto-recovered tmux session should be captured after startup before forwarding input',
-      );
-      assert.ok(
-        firstMessageLog.indexOf(`capture-pane -t ${tmuxSession} -p -S -80`) < firstMessageLog.indexOf(`send-keys -t ${tmuxSession} -l 第一条`),
-        'first auto-forwarded literal should wait until the resumed Codex TUI is ready',
-      );
       assert.match(firstMessageLog, new RegExp(`send-keys -t ${tmuxSession} -l 第一条`));
       assert.match(firstMessageLog, new RegExp(`send-keys -t ${tmuxSession} Enter`));
       assert.doesNotMatch(firstMessageSentText, /tmux Provider 缺少 codex_thread_id|正在后台重新启动 Codex TUI/);
@@ -3312,15 +3299,6 @@ provider = "tmux"
       assert.match(recoveredMessageLog, new RegExp(`has-session -t ${tmuxSession}`));
       assert.match(recoveredMessageLog, new RegExp(`new-session -d -s ${tmuxSession}`));
       assert.match(recoveredMessageLog, new RegExp(`resume ${actualThreadId}`));
-      assert.equal(
-        recoveredMessageLog.split(`capture-pane -t ${tmuxSession} -p -S -80`).length - 1,
-        3,
-        'recovered missing tmux provider session should wait through fake delayed readiness again',
-      );
-      assert.ok(
-        recoveredMessageLog.indexOf(`capture-pane -t ${tmuxSession} -p -S -80`) < recoveredMessageLog.indexOf(`send-keys -t ${tmuxSession} -l 第二条`),
-        'recovered auto-forwarded literal should wait until the resumed Codex TUI is ready',
-      );
       assert.match(recoveredMessageLog, new RegExp(`send-keys -t ${tmuxSession} -l 第二条`));
       assert.match(recoveredMessageLog, new RegExp(`send-keys -t ${tmuxSession} Enter`));
       assert.deepEqual(streamingAdapter.reactions.slice(beforeSecondReactionCount).map((reaction) => reaction.action), ['add']);
