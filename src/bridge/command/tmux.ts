@@ -10,6 +10,7 @@ import {
   claudeTmuxSessionName,
   codexTmuxSessionName,
   attachTmuxSession,
+  CodexResumeTmuxLaunchError,
   createOrAttachTmuxSession,
   hasTmuxSession,
   inspectRuntimeTmuxSession,
@@ -227,7 +228,55 @@ function formatOnOff(value: boolean): string {
   return value ? 'on' : 'off';
 }
 
-function formatTmuxError(error: unknown): string {
+function truncateTmuxErrorBlock(value: string | undefined, limit = 1_500): string | undefined {
+  if (!value) return undefined;
+  const normalized = value.replace(/\s+$/g, '');
+  return normalized.length > limit ? `${normalized.slice(0, limit)}...` : normalized;
+}
+
+function formatCodexTmuxLaunchFailure(error: CodexResumeTmuxLaunchError, markdown: boolean): string {
+  const details = error.details;
+  const diagnosticCommands = details.commands
+    .filter((command) => command !== details.killCommand)
+    .slice(-6)
+    .join('\n');
+  const sections = [
+    buildCommandFields(
+      'Codex tmux 启动失败',
+      [
+        ['tmux session', details.sessionName],
+        ['tmux session 仍存在', details.sessionExists === undefined ? undefined : details.sessionExists ? 'yes' : 'no'],
+        ['codex_thread_id', details.threadId],
+        ['cwd', details.workingDirectory],
+        ['失败原因', details.reason],
+        ['最后错误', details.lastError],
+        ['最后屏幕', truncateTmuxErrorBlock(details.lastScreen, 500)],
+      ],
+      [
+        '未发送本次 tmux 输入，也没有更新 tmux Provider 绑定。',
+        '请根据原进程输出修复 Codex TUI 启动问题；修复后重新发送原消息或 `/p tmux`。',
+      ],
+      markdown,
+    ),
+  ];
+  const launchOutput = truncateTmuxErrorBlock(details.launchOutput);
+  if (launchOutput) {
+    sections.push(markdown
+      ? `**原进程输出**\n${buildFencedCodeBlock(launchOutput, 'text')}`
+      : `原进程输出\n${launchOutput}`);
+  }
+  if (diagnosticCommands) {
+    sections.push(markdown
+      ? `**诊断命令**\n${buildFencedCodeBlock(diagnosticCommands, 'sh')}`
+      : `诊断命令\n${diagnosticCommands}`);
+  }
+  return sections.join('\n\n');
+}
+
+function formatTmuxError(error: unknown, markdown = false): string {
+  if (error instanceof CodexResumeTmuxLaunchError) {
+    return formatCodexTmuxLaunchFailure(error, markdown);
+  }
   const message = error instanceof Error ? error.message : String(error);
   if (/ENOENT/.test(message)) {
     return process.platform === 'win32'
@@ -809,7 +858,7 @@ function startTmuxScreenMonitor(params: {
         }
       } catch (error) {
         if (monitor.stopped) return;
-        const text = formatTmuxError(error);
+        const text = formatTmuxError(error, monitor.markdown);
         if (monitor.card) {
           monitor.card.update(text, `tmux ${monitor.target} · refresh failed`);
         } else {
@@ -1096,6 +1145,6 @@ export async function handleTmuxBridgeCommand(params: HandleTmuxBridgeCommandPar
 
     return `未知 tmux 命令：${command}`;
   } catch (error) {
-    return formatTmuxError(error);
+    return formatTmuxError(error, markdown);
   }
 }

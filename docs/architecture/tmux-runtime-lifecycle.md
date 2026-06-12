@@ -65,7 +65,7 @@ Codex tmux 还有一条隐式初始化路径：如果当前聊天的有效 Codex
 
 ### 2. TUI 启动和 ready 检测
 
-`buildCodexResumeTmuxCommand` 构造 Codex TUI shell command。`waitForCodexResumeTmuxReady` 现在委托给 `waitForRuntimeTmuxReady(runtime='codex')` 周期性 `capturePane`，直到看到 Codex TUI ready prompt，或者达到 `CODELARK_CODEX_RESUME_TMUX_READY_TIMEOUT_MS`。如果启动时停在 update 或 replace-goal selection，shared readiness 会按默认选择跳过或取消；权限类或 generic selection 在存在 IM selection handler 时会先发卡并等待用户回调，回调发送对应按键后继续 ready 检测。没有默认选择且没有 handler 时才返回启动失败，避免误把 selection prompt 当作 idle prompt。
+`buildCodexResumeTmuxCommand` 构造 Codex TUI shell command。`waitForCodexResumeTmuxReady` 现在委托给 `waitForRuntimeTmuxReady(runtime='codex')` 周期性 `capturePane`，直到看到 Codex TUI ready prompt，或者达到 `CODELARK_CODEX_RESUME_TMUX_READY_TIMEOUT_MS`。如果启动时停在 update 或 replace-goal selection，shared readiness 会按默认选择跳过或取消；权限类或 generic selection 在存在 IM selection handler 时会先发卡并等待用户回调，回调发送对应按键后继续 ready 检测。Codex/Claude 公共的终端控制字符清理和 Enter footer 检测集中在 `src/runtime/tui-screen.ts`；Codex TUI 的 Enter footer 检测统一支持 `Press enter to confirm ... esc ...` 和 `Press enter to continue`，但 selection parser 仍要求屏幕中存在选择游标和可解析选项，避免把普通 TUI 输出误判成 selection。没有默认选择且没有 handler 时才返回启动失败，避免误把 selection prompt 当作 idle prompt。
 
 ### 3. 普通消息转发
 
