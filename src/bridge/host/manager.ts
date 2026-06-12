@@ -207,6 +207,8 @@ const MIRROR_TMUX_SELECTION_PROBE_FOLLOWUP_WINDOW_MS = 5_000;
 const MIRROR_TMUX_SELECTION_PROBE_FOLLOWUP_INTERVAL_MS = 300;
 const TMUX_AUTO_FORWARD_SELECTION_PROBE_TIMEOUT_MS = 5_000;
 const TMUX_AUTO_FORWARD_SELECTION_PROBE_INTERVAL_MS = 300;
+const TMUX_PROVIDER_EXIT_PROBE_DELAY_MS = 1_500;
+const TMUX_PROVIDER_EXIT_NOTICE_COOLDOWN_MS = 60_000;
 const TMUX_SCREEN_STOP_CALLBACK_PREFIX = 'tmux-screen:stop:';
 const PTY_SCREEN_STOP_CALLBACK_PREFIX = 'pty-screen:stop:';
 const TMUX_AUTO_FORWARD_TYPING_REACTION = 'Typing';
@@ -248,6 +250,8 @@ interface PendingTmuxAutoForwardReaction {
 }
 
 const pendingTmuxAutoForwardReactions = new Map<string, PendingTmuxAutoForwardReaction>();
+const pendingTmuxProviderExitProbeTimers = new Map<string, ReturnType<typeof setTimeout>>();
+const tmuxProviderExitNoticeLastSentAt = new Map<string, number>();
 const tmuxSelectionPromptMonitors = new Map<string, CodexTuiSelectionPromptMonitor>();
 const tmuxSelectionPromptLastProbeAt = new Map<string, number>();
 const tmuxSelectionPromptFollowupUntil = new Map<string, number>();
@@ -263,7 +267,22 @@ function tmuxAutoForwardReactionKey(channelType: string, chatId: string, session
   return `${channelType}:${chatId}:${sessionId}`;
 }
 
+function tmuxProviderExitProbeDelayMs(): number {
+  const raw = process.env.CODELARK_TMUX_PROVIDER_EXIT_PROBE_DELAY_MS;
+  if (raw === undefined || raw.trim() === '') return TMUX_PROVIDER_EXIT_PROBE_DELAY_MS;
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) && parsed >= 0 ? Math.floor(parsed) : TMUX_PROVIDER_EXIT_PROBE_DELAY_MS;
+}
+
+function clearPendingTmuxProviderExitProbe(key: string): void {
+  const timer = pendingTmuxProviderExitProbeTimers.get(key);
+  if (!timer) return;
+  clearTimeout(timer);
+  pendingTmuxProviderExitProbeTimers.delete(key);
+}
+
 async function clearPendingTmuxAutoForwardReaction(key: string): Promise<void> {
+  clearPendingTmuxProviderExitProbe(key);
   const pending = pendingTmuxAutoForwardReactions.get(key);
   if (!pending) return;
   pendingTmuxAutoForwardReactions.delete(key);
@@ -274,6 +293,108 @@ async function clearPendingTmuxAutoForwardReaction(key: string): Promise<void> {
   } catch (error) {
     console.warn('[bridge-manager] Failed to remove tmux auto-forward typing reaction:', describeUnknownError(error));
   }
+}
+
+async function markPendingTmuxAutoForwardReaction(
+  adapter: BaseChannelAdapter,
+  msg: InboundMessage,
+  key: string,
+  sessionId: string,
+): Promise<void> {
+  if (!msg.messageId || typeof adapter.addMessageReaction !== 'function') return;
+  try {
+    await clearPendingTmuxAutoForwardReaction(key);
+    const reactionId = await adapter.addMessageReaction(msg.messageId, TMUX_AUTO_FORWARD_TYPING_REACTION);
+    if (!reactionId) return;
+    pendingTmuxAutoForwardReactions.set(key, {
+      channelType: msg.address.channelType,
+      chatId: msg.address.chatId,
+      sessionId,
+      messageId: msg.messageId,
+      reactionId,
+    });
+  } catch (error) {
+    console.warn('[bridge-manager] Failed to add tmux auto-forward typing reaction:', describeUnknownError(error));
+  }
+}
+
+function scheduleTmuxProviderExitProbe(params: {
+  adapter: BaseChannelAdapter;
+  msg: InboundMessage;
+  sessionId: string;
+  reactionKey: string;
+  startedAtMs: number;
+}): void {
+  clearPendingTmuxProviderExitProbe(params.reactionKey);
+  const timer = setTimeout(() => {
+    pendingTmuxProviderExitProbeTimers.delete(params.reactionKey);
+    void probeTmuxProviderExitAfterAutoForward(params).catch((error) => {
+      console.warn('[bridge-manager] Tmux provider exit probe failed:', describeUnknownError(error));
+    });
+  }, tmuxProviderExitProbeDelayMs());
+  timer.unref?.();
+  pendingTmuxProviderExitProbeTimers.set(params.reactionKey, timer);
+}
+
+async function probeTmuxProviderExitAfterAutoForward(params: {
+  adapter: BaseChannelAdapter;
+  msg: InboundMessage;
+  sessionId: string;
+  reactionKey: string;
+  startedAtMs: number;
+}): Promise<void> {
+  if (!params.adapter.isRunning()) return;
+  const { store } = getBridgeContext();
+  const binding = store.getChannelChat(params.msg.address.channelType, params.msg.address.chatId);
+  if (!binding || binding.bridgeSessionId !== params.sessionId) return;
+  const session = store.getSession(params.sessionId);
+  if (!session) return;
+  const runtimeProvider = resolveEffectiveRuntimeProvider(session, binding);
+  if (runtimeProvider.provider !== 'tmux') return;
+  const tmuxSessionName = getSessionRuntimeTmuxSessionName(session);
+  if (!tmuxSessionName) return;
+  const exists = await tmuxCore.hasSession(tmuxSessionName);
+  if (exists.exists) return;
+
+  const noticeKey = `${params.msg.address.channelType}:${params.msg.address.chatId}:${params.sessionId}:${tmuxSessionName}`;
+  const nowMs = Date.now();
+  const lastSentAt = tmuxProviderExitNoticeLastSentAt.get(noticeKey) || 0;
+  if (nowMs - lastSentAt < TMUX_PROVIDER_EXIT_NOTICE_COOLDOWN_MS) return;
+  tmuxProviderExitNoticeLastSentAt.set(noticeKey, nowMs);
+
+  await clearPendingTmuxAutoForwardReaction(params.reactionKey);
+  const runtimeLabel = runtimeProvider.runtime === 'claude' ? 'Claude' : 'Codex';
+  const elapsedMs = Math.max(0, nowMs - params.startedAtMs);
+  SESSION_HEALTH_RUNTIME.recordInteractiveEnd(
+    params.sessionId,
+    'failed',
+    `${runtimeLabel} tmux Provider session ${tmuxSessionName} disappeared ${elapsedMs}ms after auto-forward input; mirror will not produce this turn.`,
+  );
+  console.warn('[bridge-manager] Tmux provider session disappeared after auto-forward input:', {
+    event: 'tmux.provider.post_forward_session_missing',
+    runtime: runtimeProvider.runtime,
+    session_id: params.sessionId,
+    tmux_session: tmuxSessionName,
+    elapsed_ms: elapsedMs,
+    command: exists.command,
+  });
+  await deliverBridgeNotice(
+    params.adapter,
+    params.msg.address,
+    [
+      `${runtimeLabel} tmux Provider 会话已退出：\`${tmuxSessionName}\``,
+      '',
+      '刚才的消息已发送到 tmux，但 session 随后消失，mirror 不会同步这轮回复。',
+      '请先发送 `/p tmux` 重新启动 TUI；也可以发送 `/tmux-screen 80` 查看当前绑定状态。',
+      '',
+      `诊断命令：\`${exists.command}\``,
+    ].join('\n'),
+    {
+      sessionId: params.sessionId,
+      replyToMessageId: params.msg.messageId,
+      audit: true,
+    },
+  );
 }
 
 function shouldProbeMirrorTmuxSelectionPrompt(
@@ -3271,26 +3392,26 @@ async function handleMessage(
         tmuxProviderBridgeSessionId,
       );
       try {
+        await markPendingTmuxAutoForwardReaction(
+          adapter,
+          msg,
+          reactionKey,
+          tmuxProviderBridgeSessionId,
+        );
         await handleCommand(adapter, msg, `/tmux ${text}`, {
           tmuxProviderAutoForward: true,
-          onTmuxProviderAutoForwarded: async () => {
-            if (!msg.messageId || typeof adapter.addMessageReaction !== 'function') return;
-            await clearPendingTmuxAutoForwardReaction(reactionKey);
-            const reactionId = await adapter.addMessageReaction(msg.messageId, TMUX_AUTO_FORWARD_TYPING_REACTION);
-            if (!reactionId) return;
-            pendingTmuxAutoForwardReactions.set(reactionKey, {
-              channelType: msg.address.channelType,
-              chatId: msg.address.chatId,
-              sessionId: tmuxProviderBridgeSessionId,
-              messageId: msg.messageId,
-              reactionId,
-            });
-          },
         });
         SESSION_HEALTH_RUNTIME.recordInteractiveStart(
           tmuxProviderBridgeSessionId,
           `已向 ${tmuxProviderRuntime.identity} TUI 注入消息，等待 mirror 同步当前 turn。`,
         );
+        scheduleTmuxProviderExitProbe({
+          adapter,
+          msg,
+          sessionId: tmuxProviderBridgeSessionId,
+          reactionKey,
+          startedAtMs: tmuxProviderForwardStartedAtMs,
+        });
         if (tmuxProviderRuntime.runtime === 'claude') {
           void reconcileClaudeTmuxMirrorAfterAutoForward(
             tmuxProviderBridgeSessionId,
@@ -3597,6 +3718,11 @@ function resetStateForTests(): void {
   state.loopAborts.clear();
   state.activeTasks.clear();
   stopAllAutoTasks();
+  for (const timer of pendingTmuxProviderExitProbeTimers.values()) {
+    clearTimeout(timer);
+  }
+  pendingTmuxProviderExitProbeTimers.clear();
+  tmuxProviderExitNoticeLastSentAt.clear();
   pendingTmuxAutoForwardReactions.clear();
   tmuxSelectionPromptMonitors.clear();
   tmuxSelectionPromptLastProbeAt.clear();

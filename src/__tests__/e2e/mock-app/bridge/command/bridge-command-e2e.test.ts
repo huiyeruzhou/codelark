@@ -452,6 +452,22 @@ case "$1" in
     exit 0
     ;;
   send-keys)
+    if [[ "\${TMUX_FAKE_EXIT_AFTER_SEND:-}" == "1" ]]; then
+      target=""
+      prev=""
+      for arg in "$@"; do
+        if [[ "$prev" == "-t" ]]; then
+          target="$arg"
+          break
+        fi
+        prev="$arg"
+      done
+      if [[ -n "$target" ]]; then
+        tmp="\${state}.tmp"
+        grep -Fxv -- "$target" "$state" > "$tmp" 2>/dev/null || true
+        mv "$tmp" "$state"
+      fi
+    fi
     exit 0
     ;;
   capture-pane)
@@ -3323,6 +3339,62 @@ provider = "tmux"
       else process.env.TMUX_FAKE_LOG = oldFakeLog;
       if (oldFakeState === undefined) delete process.env.TMUX_FAKE_STATE;
       else process.env.TMUX_FAKE_STATE = oldFakeState;
+      fs.rmSync(fakeTmux.binDir, { recursive: true, force: true });
+    }
+  });
+
+  it('notifies the chat when a tmux provider session exits right after auto-forwarded input', async () => {
+    const store = initBridgeTestContext({ dynamicSettings: true });
+    const fakeTmux = installFakeTmux();
+    const oldPath = process.env.PATH || '';
+    const oldFakeLog = process.env.TMUX_FAKE_LOG;
+    const oldFakeState = process.env.TMUX_FAKE_STATE;
+    const oldExitAfterSend = process.env.TMUX_FAKE_EXIT_AFTER_SEND;
+    const oldExitProbeDelay = process.env.CODELARK_TMUX_PROVIDER_EXIT_PROBE_DELAY_MS;
+    process.env.PATH = `${fakeTmux.binDir}${path.delimiter}${oldPath}`;
+    process.env.TMUX_FAKE_LOG = fakeTmux.logPath;
+    process.env.TMUX_FAKE_STATE = fakeTmux.statePath;
+    process.env.TMUX_FAKE_EXIT_AFTER_SEND = '1';
+    process.env.CODELARK_TMUX_PROVIDER_EXIT_PROBE_DELAY_MS = '0';
+
+    const adapter = new StreamingRecordingAdapter();
+    registerAdapter(adapter);
+    const bridgeState = (globalThis as unknown as Record<string, any>).__bridge_manager__;
+    bridgeState.running = true;
+    const address = { channelType: 'feishu', chatId: 'chat-runtime-tmux-exit-notice-e2e' } as const;
+    const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-runtime-tmux-exit-notice-'));
+
+    try {
+      await _testOnly.handleMessage(adapter, inboundMessage(address, '/set defaultProvider tmux', 'incoming-tmux-exit-set-provider'));
+      await _testOnly.handleMessage(adapter, inboundMessage(address, `/new tmux-exit ${workDir}`, 'incoming-tmux-exit-new'));
+      const newAddress = latestCreatedGroupAddress(adapter);
+      const binding = store.getChannelChat(newAddress.channelType, newAddress.chatId);
+      assert.ok(binding);
+
+      const beforeSentCount = adapter.sent.length;
+      await _testOnly.handleMessage(adapter, inboundMessage(newAddress, '会退出的一条', 'incoming-tmux-exit-first'));
+      await waitForCondition(() => adapter.sent.slice(beforeSentCount).some((message) => /tmux Provider 会话已退出/.test(message.text || '')));
+      const noticeText = adapter.sent.slice(beforeSentCount).map((message) => message.text || '').join('\n\n');
+      const tmuxSession = store.getSession(binding.bridgeSessionId)?.runtime?.general?.tmuxSessionName || '';
+      assert.match(tmuxSession, /^codex_/);
+      assert.match(noticeText, new RegExp(`Codex tmux Provider 会话已退出：\`${tmuxSession}\``));
+      assert.match(noticeText, /刚才的消息已发送到 tmux，但 session 随后消失/);
+      assert.match(noticeText, /mirror 不会同步这轮回复/);
+      assert.match(noticeText, /\/p tmux/);
+      assert.deepEqual(adapter.reactions.map((reaction) => reaction.action), ['add', 'remove']);
+      assert.equal(store.getSession(binding.bridgeSessionId)?.health_status, 'failed');
+      assert.match(store.getSession(binding.bridgeSessionId)?.health_reason || '', /disappeared .* after auto-forward input/);
+    } finally {
+      process.env.PATH = oldPath;
+      if (oldFakeLog === undefined) delete process.env.TMUX_FAKE_LOG;
+      else process.env.TMUX_FAKE_LOG = oldFakeLog;
+      if (oldFakeState === undefined) delete process.env.TMUX_FAKE_STATE;
+      else process.env.TMUX_FAKE_STATE = oldFakeState;
+      if (oldExitAfterSend === undefined) delete process.env.TMUX_FAKE_EXIT_AFTER_SEND;
+      else process.env.TMUX_FAKE_EXIT_AFTER_SEND = oldExitAfterSend;
+      if (oldExitProbeDelay === undefined) delete process.env.CODELARK_TMUX_PROVIDER_EXIT_PROBE_DELAY_MS;
+      else process.env.CODELARK_TMUX_PROVIDER_EXIT_PROBE_DELAY_MS = oldExitProbeDelay;
+      fs.rmSync(workDir, { recursive: true, force: true });
       fs.rmSync(fakeTmux.binDir, { recursive: true, force: true });
     }
   });
