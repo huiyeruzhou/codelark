@@ -450,6 +450,10 @@ function installFakeTmux(): { binDir: string; logPath: string } {
       printf '%b' 'Update available! 0.0.0 -> 9.9.9\nRelease notes: https://github.com/openai/codex/releases/latest\n› 1. Update now\n  2. Skip\n  3. Skip until next version\nPress enter to confirm or esc to cancel\n'
       exit 0
     fi
+    if [[ "\${TMUX_FAKE_CAPTURE_PERMISSION_PROMPT_ONCE:-}" == "1" && "$count" -eq 1 ]]; then
+      printf '%b' 'Codex wants to edit files.\n› 1. Yes, proceed (y)\n  2. Yes, always allow these files (a)\n  3. No, and tell Codex what to do differently (esc)\nPress enter to confirm or esc to cancel\n'
+      exit 0
+    fi
     if [[ "$count" -le "$ready_after" ]]; then
       printf 'alpha-screen\nCodex starting...\n'
     else
@@ -6240,9 +6244,13 @@ enabled = true
       );
       assert.equal(sent.length, beforeProviderForwardSent);
       const providerForwardLogDelta = fs.readFileSync(fakeTmux.logPath, 'utf-8').slice(beforeProviderForwardLog.length);
+      assert.match(providerForwardLogDelta, /capture-pane -t alpha -p -S -80/);
       assert.match(providerForwardLogDelta, /send-keys -t alpha -l provider hidden/);
       assert.match(providerForwardLogDelta, /send-keys -t alpha Enter/);
-      assert.doesNotMatch(providerForwardLogDelta, /capture-pane/);
+      assert.ok(
+        providerForwardLogDelta.indexOf('capture-pane -t alpha -p -S -80') < providerForwardLogDelta.indexOf('send-keys -t alpha -l provider hidden'),
+        'provider auto-forward should inspect readiness before sending literal input',
+      );
 
       await handleBridgeCommand(
         adapter,
@@ -6948,6 +6956,108 @@ enabled = true
       else process.env.TMUX_FAKE_LOG = oldEnv.TMUX_FAKE_LOG;
       if (oldEnv.TMUX_FAKE_CAPTURE_UPDATE_PROMPT_ONCE === undefined) delete process.env.TMUX_FAKE_CAPTURE_UPDATE_PROMPT_ONCE;
       else process.env.TMUX_FAKE_CAPTURE_UPDATE_PROMPT_ONCE = oldEnv.TMUX_FAKE_CAPTURE_UPDATE_PROMPT_ONCE;
+      fs.rmSync(fakeTmux.binDir, { recursive: true, force: true });
+    }
+  });
+
+  it('waits for a no-default Codex permission selection before provider tmux auto-forward input', async () => {
+    const settings = makeSettings();
+    settings.set('bridge_default_provider', 'tmux');
+    const store = new JsonFileStore(settings, { dynamicSettings: true });
+    createConfigService({ migrate: false, env: {} }).set({ kind: 'home' }, {
+      runtime: { codex: { provider: 'tmux' } },
+    });
+    initBridgeContext({
+      store,
+      llm: noopLlm,
+      permissions: { resolvePendingPermission: () => false },
+      lifecycle: {},
+    });
+    const fakeTmux = installFakeTmux();
+    const oldEnv = {
+      PATH: process.env.PATH || '',
+      TMUX_FAKE_LOG: process.env.TMUX_FAKE_LOG,
+      TMUX_FAKE_CAPTURE_PERMISSION_PROMPT_ONCE: process.env.TMUX_FAKE_CAPTURE_PERMISSION_PROMPT_ONCE,
+    };
+    process.env.PATH = `${fakeTmux.binDir}${path.delimiter}${oldEnv.PATH}`;
+    process.env.TMUX_FAKE_LOG = fakeTmux.logPath;
+    process.env.TMUX_FAKE_CAPTURE_PERMISSION_PROMPT_ONCE = '1';
+
+    try {
+      const sent: any[] = [];
+      let autoForwarded = false;
+      const adapter: any = {
+        channelType: 'feishu',
+        send: async (message: any) => {
+          const messageId = `reply-tmux-auto-forward-permission-selection-${sent.length + 1}`;
+          sent.push({ ...message, messageId });
+          if (message.richCard?.title === 'Codex TUI Selection') {
+            const callbackData = message.richCard.selects?.[0]?.options?.find(
+              (option: { callbackData?: string }) => option.callbackData?.endsWith(':yes_always'),
+            )?.callbackData;
+            assert.ok(callbackData, 'selection card should include yes_always callback');
+            setTimeout(() => {
+              assert.equal(handlePermissionCallback(callbackData, address.chatId, messageId), true);
+            }, 0);
+          }
+          return { ok: true, messageId };
+        },
+      };
+      const address = { channelType: 'feishu', chatId: 'chat-tmux-provider-auto-forward-permission-selection' } as const;
+      const deps = {
+        getActiveTask: () => undefined,
+        diagnoseSessionHealth: async () => null,
+        diagnoseAllActiveSessions: async () => [],
+        tmuxProviderAutoForward: true,
+        onTmuxProviderAutoForwarded: () => {
+          autoForwarded = true;
+        },
+      };
+      const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-tmux-provider-auto-forward-permission-selection-'));
+
+      const binding = router.createBinding(address, workDir);
+      assert.ok(binding);
+      const threadId = '019e824e-10ef-7430-985d-4349ce6a15f9';
+      const tmuxSession = `codex_${threadId}`;
+      store.updateSessionCodexThreadId(binding.bridgeSessionId, threadId);
+
+      await handleBridgeCommand(
+        adapter,
+        {
+          address,
+          text: '/tmux forwarded after permission',
+          messageId: 'incoming-tmux-auto-forward-permission-selection',
+        } as any,
+        '/tmux forwarded after permission',
+        deps,
+      );
+
+      const selectionMessage = sent.find((message) => message.richCard?.title === 'Codex TUI Selection');
+      assert.ok(selectionMessage, 'expected a Codex TUI Selection rich card during provider auto-forward startup');
+      assert.equal(selectionMessage.richCard?.selects?.[0]?.id, 'clk_codex_tui_selection');
+      assert.deepEqual(selectionMessage.richCard?.selects?.[0]?.options.map((option: any) => option.text), [
+        'Yes, proceed (y)',
+        'Yes, always allow these files (a)',
+        'No, and tell Codex what to do differently (esc)',
+      ]);
+      assert.equal(sent.length, 1, 'provider auto-forward should suppress the normal /tmux success response');
+      assert.equal(autoForwarded, true);
+
+      const log = fs.readFileSync(fakeTmux.logPath, 'utf-8');
+      const firstCaptureIndex = log.indexOf(`capture-pane -t ${tmuxSession} -p -S -80`);
+      const downIndex = log.indexOf(`send-keys -t ${tmuxSession} Down`);
+      const enterIndex = log.indexOf(`send-keys -t ${tmuxSession} Enter`, downIndex);
+      const literalIndex = log.indexOf(`send-keys -t ${tmuxSession} -l forwarded after permission`);
+      assert.ok(firstCaptureIndex >= 0, 'auto-forward startup should capture readiness before sending input');
+      assert.ok(downIndex > firstCaptureIndex, 'permission choice should be sent after the readiness capture');
+      assert.ok(enterIndex > downIndex, 'permission selection should be confirmed before forwarding input');
+      assert.ok(literalIndex > enterIndex, 'auto-forwarded literal should be sent after the permission selection is resolved');
+    } finally {
+      process.env.PATH = oldEnv.PATH;
+      if (oldEnv.TMUX_FAKE_LOG === undefined) delete process.env.TMUX_FAKE_LOG;
+      else process.env.TMUX_FAKE_LOG = oldEnv.TMUX_FAKE_LOG;
+      if (oldEnv.TMUX_FAKE_CAPTURE_PERMISSION_PROMPT_ONCE === undefined) delete process.env.TMUX_FAKE_CAPTURE_PERMISSION_PROMPT_ONCE;
+      else process.env.TMUX_FAKE_CAPTURE_PERMISSION_PROMPT_ONCE = oldEnv.TMUX_FAKE_CAPTURE_PERMISSION_PROMPT_ONCE;
       fs.rmSync(fakeTmux.binDir, { recursive: true, force: true });
     }
   });
