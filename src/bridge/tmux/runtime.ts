@@ -493,7 +493,10 @@ export async function waitForRuntimeTmuxReady(params: {
           prompt_summary: screenExcerpt(selectionPrompt.summary),
           has_selection_handler: typeof params.onSelectionPrompt === 'function',
         });
-        if (params.autoResolveSelection === false || selectionPrompt.defaultChoice === null) {
+        if (
+          params.autoResolveSelection === false
+          || (selectionPrompt.defaultChoice === null && typeof params.onSelectionPrompt !== 'function')
+        ) {
           return {
             ready: false,
             runtime: params.runtime,
@@ -509,15 +512,25 @@ export async function waitForRuntimeTmuxReady(params: {
         if (!handledSelectionFingerprints.has(fingerprint)) {
           handledSelectionFingerprints.add(fingerprint);
           const requestedChoice = await params.onSelectionPrompt?.(selectionPrompt);
-          const resolvedChoice = selectionPrompt.runtime === 'codex'
-            ? requestedChoice || selectionPrompt.defaultChoice || 'not_selection'
-            : 'confirm';
-          const actions = selectionPrompt.runtime === 'codex'
-            ? buildCodexTuiSelectionChoiceActions(
-              selectionPrompt.prompt,
-              requestedChoice || selectionPrompt.defaultChoice || 'not_selection',
-            )
-            : [{ type: 'key' as const, key: 'Enter' }];
+          let resolvedChoice: CodexTuiSelectionPromptChoice | 'confirm' | null = null;
+          let actions: TmuxSendAction[] = [];
+          if (selectionPrompt.runtime === 'codex') {
+            resolvedChoice = requestedChoice || selectionPrompt.defaultChoice;
+            if (!resolvedChoice) {
+              return {
+                ready: false,
+                runtime: params.runtime,
+                commands,
+                lastScreen,
+                sessionExists: true,
+                selectionPrompt,
+              };
+            }
+            actions = buildCodexTuiSelectionChoiceActions(selectionPrompt.prompt, resolvedChoice);
+          } else {
+            resolvedChoice = 'confirm';
+            actions = [{ type: 'key' as const, key: 'Enter' }];
+          }
           if (!params.onSelectionPrompt) {
             console.warn('[tmux-runtime] Runtime tmux selection prompt has no IM handler; falling back to default choice:', {
               event: 'tmux.runtime.selection.no_handler',

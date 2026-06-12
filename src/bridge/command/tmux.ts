@@ -17,6 +17,7 @@ import {
   sendTmuxActions,
   sendTmuxActionsAndCapture,
   startRuntimeTmuxSession,
+  waitForCodexResumeTmuxReady,
   type RuntimeTmuxKind,
   type RuntimeTmuxSelectionPrompt,
   type StartCodexResumeTmuxSessionParams,
@@ -478,7 +479,7 @@ function formatRuntimeTmuxSelectionPrompt(selectionPrompt: RuntimeTmuxSelectionP
 }
 
 async function ensureCodexTmuxSessionForProvider(
-  params: Pick<HandleTmuxBridgeCommandParams, 'store' | 'binding' | 'session' | 'autoRecoverProviderSession' | 'reconcileMirrorSubscriptions' | 'requestCodexTuiSelection' | 'notifyBackgroundOperation'>,
+  params: Pick<HandleTmuxBridgeCommandParams, 'store' | 'binding' | 'session' | 'autoRecoverProviderSession' | 'tmuxProviderAutoForward' | 'reconcileMirrorSubscriptions' | 'requestCodexTuiSelection' | 'notifyBackgroundOperation'>,
 ): Promise<{ target: string | undefined; commands: string[]; recovered: boolean; error?: string }> {
   const { store, binding, session } = params;
   const runtimeTarget = getSessionRuntimeTmuxSessionName(session) || '';
@@ -576,6 +577,7 @@ async function ensureCodexTmuxSessionForProvider(
 
   const exists = await hasTmuxSession(target);
   if (exists.exists) {
+    const commands = [exists.command];
     if (!configuredTarget || !getCodexThreadId(session, binding)) {
       store.updateSession(session.id, setSessionCodexTmuxProviderUpdate({
         tmuxSessionName: target,
@@ -585,7 +587,49 @@ async function ensureCodexTmuxSessionForProvider(
       setSessionTmuxAutoEnterToml(session.id, getProviderAutoEnter(session));
       await params.reconcileMirrorSubscriptions?.();
     }
-    return { target, commands: [exists.command], recovered: false };
+    if (
+      params.tmuxProviderAutoForward === true
+      && session.runtime_status !== 'running'
+      && session.runtime_status !== 'queued'
+    ) {
+      console.log('[tmux-command] Waiting for existing Codex tmux provider session before auto-forward:', {
+        event: 'tmux.provider.existing.wait_ready',
+        bridge_session_id: session.id,
+        tmux_session: target,
+        thread_id: threadId,
+        runtime_status: session.runtime_status || 'idle',
+        has_selection_handler: typeof params.requestCodexTuiSelection === 'function',
+      });
+      const readiness = await waitForCodexResumeTmuxReady(target, undefined, {
+        onSelectionPrompt: async (selectionPrompt) => {
+          if (selectionPrompt.runtime !== 'codex') return undefined;
+          return params.requestCodexTuiSelection?.(selectionPrompt, { sessionId: session.id });
+        },
+      });
+      commands.push(...readiness.commands);
+      console.log('[tmux-command] Existing Codex tmux provider readiness before auto-forward resolved:', {
+        event: 'tmux.provider.existing.ready',
+        bridge_session_id: session.id,
+        tmux_session: target,
+        thread_id: threadId,
+        ready: readiness.ready,
+        selection_prompt_count: readiness.selectionPrompts?.length || 0,
+      });
+      if (!readiness.ready) {
+        const reason = readiness.selectionPromptKind
+          ? `Codex TUI 仍停在 ${readiness.selectionPromptKind} selection prompt`
+          : readiness.lastError
+            ? `tmux readiness 检查失败：${readiness.lastError}`
+            : 'Codex TUI 未在超时时间内进入可输入状态';
+        return {
+          target,
+          commands,
+          recovered: false,
+          error: `${reason}，未发送 auto-forward 消息。请用 \`/tmux-screen 80\` 检查。`,
+        };
+      }
+    }
+    return { target, commands, recovered: false };
   }
 
   if (params.autoRecoverProviderSession !== true || hasManualOnlyTarget) {

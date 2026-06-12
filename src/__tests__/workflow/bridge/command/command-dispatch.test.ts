@@ -6952,6 +6952,114 @@ enabled = true
     }
   });
 
+  it('waits for an existing Codex tmux provider session selection before auto-forwarding input', async () => {
+    const settings = makeSettings();
+    const store = new JsonFileStore(settings, { dynamicSettings: true });
+    initBridgeContext({
+      store,
+      llm: noopLlm,
+      permissions: { resolvePendingPermission: () => false },
+      lifecycle: {},
+    });
+    const fakeTmux = installFakeTmux();
+    const oldEnv = {
+      PATH: process.env.PATH || '',
+      TMUX_FAKE_LOG: process.env.TMUX_FAKE_LOG,
+      TMUX_FAKE_CAPTURE_UPDATE_PROMPT_ONCE: process.env.TMUX_FAKE_CAPTURE_UPDATE_PROMPT_ONCE,
+      TMUX_FAKE_EXISTING_SESSIONS: process.env.TMUX_FAKE_EXISTING_SESSIONS,
+    };
+    const threadId = '019e824e-10ef-7430-985d-4349ce6a15f9';
+    const tmuxSession = `codex_${threadId}`;
+    process.env.PATH = `${fakeTmux.binDir}${path.delimiter}${oldEnv.PATH}`;
+    process.env.TMUX_FAKE_LOG = fakeTmux.logPath;
+    process.env.TMUX_FAKE_CAPTURE_UPDATE_PROMPT_ONCE = '1';
+    process.env.TMUX_FAKE_EXISTING_SESSIONS = tmuxSession;
+
+    try {
+      const sent: any[] = [];
+      let autoForwarded = false;
+      const adapter: any = {
+        channelType: 'feishu',
+        send: async (message: any) => {
+          const messageId = `reply-tmux-existing-auto-forward-selection-${sent.length + 1}`;
+          sent.push({ ...message, messageId });
+          if (message.richCard?.title === 'Codex TUI Selection') {
+            const callbackData = message.richCard.selects?.[0]?.options?.find(
+              (option: { callbackData?: string }) => option.callbackData?.endsWith(':skip_until_next_version'),
+            )?.callbackData;
+            assert.ok(callbackData, 'selection card should include skip_until_next_version callback');
+            setTimeout(() => {
+              assert.equal(handlePermissionCallback(callbackData, address.chatId, messageId), true);
+            }, 0);
+          }
+          return { ok: true, messageId };
+        },
+      };
+      const address = { channelType: 'feishu', chatId: 'chat-tmux-provider-existing-auto-forward-selection' } as const;
+      const deps = {
+        getActiveTask: () => undefined,
+        diagnoseSessionHealth: async () => null,
+        diagnoseAllActiveSessions: async () => [],
+        tmuxProviderAutoForward: true,
+        onTmuxProviderAutoForwarded: () => {
+          autoForwarded = true;
+        },
+      };
+      const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-tmux-provider-existing-auto-forward-selection-'));
+
+      const binding = router.createBinding(address, workDir);
+      assert.ok(binding);
+      store.updateSessionCodexThreadId(binding.bridgeSessionId, threadId);
+      store.updateSession(binding.bridgeSessionId, {
+        runtime: {
+          general: { tmuxSessionName: tmuxSession },
+        },
+      });
+      createConfigService({ migrate: false, env: {} }).set(
+        { kind: 'session', sessionId: binding.bridgeSessionId },
+        { runtime: { codex: { provider: 'tmux' } } },
+      );
+
+      await handleBridgeCommand(
+        adapter,
+        {
+          address,
+          text: '/tmux existing forwarded message',
+          messageId: 'incoming-tmux-existing-auto-forward-selection',
+        } as any,
+        '/tmux existing forwarded message',
+        deps,
+      );
+
+      const selectionMessage = sent.find((message) => message.richCard?.title === 'Codex TUI Selection');
+      assert.ok(selectionMessage, 'expected a Codex TUI Selection rich card for the existing provider session');
+      assert.equal(sent.length, 1, 'provider auto-forward should suppress the normal /tmux success response');
+      assert.equal(autoForwarded, true);
+
+      const log = fs.readFileSync(fakeTmux.logPath, 'utf-8');
+      const hasSessionIndex = log.indexOf(`has-session -t ${tmuxSession}`);
+      const firstCaptureIndex = log.indexOf(`capture-pane -t ${tmuxSession} -p -S -80`);
+      const firstDownIndex = log.indexOf(`send-keys -t ${tmuxSession} Down`);
+      const enterIndex = log.indexOf(`send-keys -t ${tmuxSession} Enter`, firstDownIndex);
+      const literalIndex = log.indexOf(`send-keys -t ${tmuxSession} -l existing forwarded message`);
+      assert.ok(hasSessionIndex >= 0, 'existing tmux session should be checked');
+      assert.ok(firstCaptureIndex > hasSessionIndex, 'existing provider auto-forward should capture before sending input');
+      assert.equal((log.match(new RegExp(`send-keys -t ${tmuxSession} Down`, 'g')) || []).length, 2);
+      assert.ok(firstDownIndex > firstCaptureIndex, 'selection choice should be sent after the readiness capture');
+      assert.ok(enterIndex > firstDownIndex, 'selection should be confirmed before forwarding input');
+      assert.ok(literalIndex > enterIndex, 'auto-forwarded literal should be sent after the selection is resolved');
+    } finally {
+      process.env.PATH = oldEnv.PATH;
+      if (oldEnv.TMUX_FAKE_LOG === undefined) delete process.env.TMUX_FAKE_LOG;
+      else process.env.TMUX_FAKE_LOG = oldEnv.TMUX_FAKE_LOG;
+      if (oldEnv.TMUX_FAKE_CAPTURE_UPDATE_PROMPT_ONCE === undefined) delete process.env.TMUX_FAKE_CAPTURE_UPDATE_PROMPT_ONCE;
+      else process.env.TMUX_FAKE_CAPTURE_UPDATE_PROMPT_ONCE = oldEnv.TMUX_FAKE_CAPTURE_UPDATE_PROMPT_ONCE;
+      if (oldEnv.TMUX_FAKE_EXISTING_SESSIONS === undefined) delete process.env.TMUX_FAKE_EXISTING_SESSIONS;
+      else process.env.TMUX_FAKE_EXISTING_SESSIONS = oldEnv.TMUX_FAKE_EXISTING_SESSIONS;
+      fs.rmSync(fakeTmux.binDir, { recursive: true, force: true });
+    }
+  });
+
   it('bootstraps a missing Codex thread before showing the provider tmux auto-forward startup selection card', async () => {
     const settings = makeSettings();
     settings.set('bridge_default_provider', 'tmux');
