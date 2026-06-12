@@ -3368,15 +3368,6 @@ export class FeishuAdapter extends BaseChannelAdapter {
     if (!cardkit?.card?.settings) return false;
 
     try {
-      state.sequence += 1;
-      const settingsResult = await this.withFeishuRequestTimeout(streamKey, 'card.settings:rollover', () => cardkit.card.settings({
-        path: { card_id: state.cardId },
-        data: {
-          settings: JSON.stringify({ streaming_mode: false }),
-          sequence: state.sequence,
-        },
-      }));
-      assertFeishuApiOk(settingsResult, 'card.settings:rollover');
       await this.finalizeRolloverSourceCard(streamKey, state);
     } catch (error) {
       this.markCardFlushFailure(state, error);
@@ -3466,25 +3457,46 @@ export class FeishuAdapter extends BaseChannelAdapter {
     streamKey: string,
     state: FeishuCardState,
   ): Promise<void> {
-    const cardElement = (this.restClient as any)?.cardkit?.v1?.cardElement;
-    if (typeof cardElement?.content !== 'function') return;
+    const cardkit = (this.restClient as any)?.cardkit?.v1;
     const statusText = [
       '已续接到下一条',
       formatElapsed(Date.now() - state.startTime),
       resolveTerminalContextUsage(state),
     ].filter(Boolean).join(' · ');
+    if (typeof cardkit?.cardElement?.content === 'function') {
+      try {
+        state.sequence += 1;
+        const result = await this.withFeishuRequestTimeout(streamKey, 'cardElement.content:streaming_status:rollover', () => cardkit.cardElement.content({
+          path: { card_id: state.cardId, element_id: 'streaming_status' },
+          data: { content: statusText, sequence: state.sequence },
+        }));
+        assertFeishuApiOk(result, 'cardElement.content:streaming_status:rollover');
+        state.renderedStatusText = statusText;
+        this.markCardFlushSuccess(state);
+      } catch (error) {
+        this.markCardFlushFailure(state, error);
+        console.warn('[feishu-adapter] Failed to update saturated streaming card status before rollover:', error instanceof Error ? error.message : error);
+      }
+    }
+
+    if (typeof cardkit?.card?.settings !== 'function') {
+      throw new Error('card.settings is unavailable');
+    }
     try {
       state.sequence += 1;
-      const result = await this.withFeishuRequestTimeout(streamKey, 'cardElement.content:streaming_status:rollover', () => cardElement.content({
-        path: { card_id: state.cardId, element_id: 'streaming_status' },
-        data: { content: statusText, sequence: state.sequence },
+      const settingsResult = await this.withFeishuRequestTimeout(streamKey, 'card.settings:rollover', () => cardkit.card.settings({
+        path: { card_id: state.cardId },
+        data: {
+          settings: JSON.stringify({ streaming_mode: false }),
+          sequence: state.sequence,
+        },
       }));
-      assertFeishuApiOk(result, 'cardElement.content:streaming_status:rollover');
-      state.renderedStatusText = statusText;
+      assertFeishuApiOk(settingsResult, 'card.settings:rollover');
       this.markCardFlushSuccess(state);
     } catch (error) {
       this.markCardFlushFailure(state, error);
-      console.warn('[feishu-adapter] Failed to finalize saturated streaming card status before rollover:', error instanceof Error ? error.message : error);
+      console.warn('[feishu-adapter] Failed to finalize saturated streaming card before rollover:', error instanceof Error ? error.message : error);
+      throw error;
     }
   }
 
