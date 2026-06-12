@@ -21,6 +21,10 @@ import {
 } from './shell-snapshot.js';
 import { resolveCodexCliExecutable } from './cli-executable.js';
 import { tmuxCore, type TmuxCore, type TmuxSendAction } from '../../bridge/tmux/core.js';
+import {
+  hasTuiEnterActionFooter,
+  normalizeTerminalScreenText,
+} from '../tui-screen.js';
 
 const DEFAULT_TMUX_PROMPT_DELAY_MS = 1_200;
 const DEFAULT_TMUX_AFTER_TRUST_DELAY_MS = 1_000;
@@ -153,7 +157,7 @@ function commandPreview(command: string, args: string[]): string {
 export function hasCodexTuiTrustPrompt(screenText: string): boolean {
   const tail = screenText.slice(-20_000);
   return /Do\s+you\s+trust\s+the\s+contents\s+of\s+this\s+directory\?/i.test(tail)
-    || /Press\s+enter\s+to\s+continue/i.test(tail);
+    || hasTuiEnterActionFooter(tail);
 }
 
 export function hasCodexTuiSelectionPrompt(screenText: string): boolean {
@@ -162,13 +166,6 @@ export function hasCodexTuiSelectionPrompt(screenText: string): boolean {
 
 export function hasCodexTuiUpdatePrompt(screenText: string): boolean {
   return parseCodexTuiSelectionPrompt(screenText)?.kind === 'update';
-}
-
-function stripTerminalControl(text: string): string {
-  return text
-    .replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, '')
-    .replace(/\r\n/g, '\n')
-    .replace(/\r/g, '\n');
 }
 
 function normalizeSelectionChoice(label: string): CodexTuiSelectionPromptChoice | null {
@@ -237,12 +234,6 @@ function hasClaudeCodeTuiSelectionPromptCursor(tail: string): boolean {
   return tail
     .split('\n')
     .some((line) => /^\s*❯\s*1\.\s+/u.test(line));
-}
-
-function hasCodexTuiSelectionPromptFooter(tail: string): boolean {
-  return tail
-    .split('\n')
-    .some((line) => /Press\s+enter\s+to\s+confirm/i.test(line) && /\besc\b/i.test(line));
 }
 
 type ParsedSelectionLine = {
@@ -335,11 +326,11 @@ function trimBlankSummaryEdges(lines: string[]): string[] {
 }
 
 export function parseCodexTuiSelectionPrompt(screenText: string): CodexTuiSelectionPrompt | null {
-  const tail = stripTerminalControl(screenText).slice(-20_000);
+  const tail = normalizeTerminalScreenText(screenText).slice(-20_000);
   if (!hasCodexTuiSelectionPromptCursor(tail)) {
     return null;
   }
-  if (!hasCodexTuiSelectionPromptFooter(tail) && !hasClaudeCodeTuiSelectionPromptCursor(tail)) {
+  if (!hasTuiEnterActionFooter(tail, { requireEscapeForConfirm: true }) && !hasClaudeCodeTuiSelectionPromptCursor(tail)) {
     return null;
   }
   const options: CodexTuiUpdatePromptOption[] = [];

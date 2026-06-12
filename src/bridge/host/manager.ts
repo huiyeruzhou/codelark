@@ -1465,6 +1465,20 @@ function adapterImmediateLane(msg: InboundMessage, category: 'channel-event' | '
 }
 
 function adapterSessionLane(msg: InboundMessage, category: 'channel-event' | 'callback' | 'command' | 'permission-shortcut' | 'bypass' | 'regular'): { sessionId: string; jobKind: string; blocksConversation?: boolean } | null {
+  if (category === 'regular') {
+    const binding = getBridgeContext().store.getChannelChat(msg.address.channelType, msg.address.chatId);
+    if (!binding) return null;
+    const session = getBridgeContext().store.getSession(binding.bridgeSessionId);
+    if (!session) return null;
+    const runtimeProvider = resolveEffectiveRuntimeProvider(session, binding);
+    if (runtimeProvider.provider !== 'tmux') return null;
+    return {
+      sessionId: binding.bridgeSessionId,
+      jobKind: 'interactive-turn:tmux-provider-auto-forward',
+      blocksConversation: true,
+    };
+  }
+
   if (category === 'command') {
     const lane = sessionMutatingCommandLane(msg.text);
     if (!lane) return null;

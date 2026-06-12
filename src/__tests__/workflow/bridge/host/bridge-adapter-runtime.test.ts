@@ -557,6 +557,118 @@ describe('bridge-adapter-runtime', () => {
     assert.ok(started.indexOf('msg-status') > started.indexOf('msg-runtime'));
   });
 
+  it('lets regular messages opt into a conversation barrier without blocking controls', async () => {
+    const state = {
+      adapters: new Map(),
+      adapterMeta: new Map(),
+      invalidAdapters: new Map(),
+      loopAborts: new Map(),
+      running: true,
+    };
+    const started: string[] = [];
+    let releaseRegular!: () => void;
+    const regularDone = new Promise<void>((resolve) => {
+      releaseRegular = resolve;
+    });
+
+    const runtime = createAdapterRuntime(() => state, {
+      notifyAdapterSetChanged: () => {},
+      handleMessage: async (_adapter, msg) => {
+        started.push(msg.messageId);
+        if (msg.messageId === 'msg-regular') {
+          await regularDone;
+        }
+      },
+      processWithSessionLock: async (_sessionId, fn) => { await fn(); },
+      isCommandMessage: (msg) => msg.text.startsWith('/'),
+      isNumericPermissionShortcut: () => false,
+      resolveSessionIdForMessage: () => 'bridge-session-a',
+      getImmediateLane: (msg) => {
+        if (msg.text.startsWith('/tmux-screen')) {
+          return {
+            laneKey: `job:tmux-screen:${msg.address.channelType}:${msg.address.chatId}:${msg.messageId}`,
+            laneKind: 'job',
+            jobKind: 'command:tmux-screen',
+          };
+        }
+        if (msg.text === '/stop') {
+          return {
+            laneKey: `control:${msg.address.channelType}:${msg.address.chatId}:${msg.messageId}`,
+            laneKind: 'control',
+            jobKind: 'control:command',
+          };
+        }
+        return null;
+      },
+      getSessionLane: (msg, category) => {
+        if (category === 'regular') {
+          return {
+            sessionId: 'bridge-session-a',
+            jobKind: 'interactive-turn:tmux-provider-auto-forward',
+            blocksConversation: true,
+          };
+        }
+        if (msg.text.startsWith('/runtime')) {
+          return {
+            sessionId: 'bridge-session-a',
+            jobKind: 'command:runtime',
+            blocksConversation: true,
+          };
+        }
+        return null;
+      },
+    });
+
+    let running = true;
+    const messages = [
+      {
+        messageId: 'msg-regular',
+        address: { channelType: 'feishu-default', chatId: 'chat-a' },
+        text: 'hello tmux',
+        timestamp: Date.now(),
+      },
+      {
+        messageId: 'msg-screen',
+        address: { channelType: 'feishu-default', chatId: 'chat-a' },
+        text: '/tmux-screen',
+        timestamp: Date.now(),
+      },
+      {
+        messageId: 'msg-runtime',
+        address: { channelType: 'feishu-default', chatId: 'chat-a' },
+        text: '/runtime codex',
+        timestamp: Date.now(),
+      },
+      {
+        messageId: 'msg-stop',
+        address: { channelType: 'feishu-default', chatId: 'chat-a' },
+        text: '/stop',
+        timestamp: Date.now(),
+      },
+    ];
+    const adapter = {
+      channelType: 'feishu-default',
+      provider: 'feishu',
+      isRunning: () => running || messages.length > 0,
+      consumeOne: async () => {
+        const next = messages.shift() || null;
+        if (messages.length === 0) running = false;
+        return next;
+      },
+    };
+
+    runtime.runAdapterLoop(adapter as never);
+    await waitForCondition(() => started.includes('msg-stop'));
+    assert.deepEqual(started, ['msg-regular', 'msg-stop']);
+
+    releaseRegular();
+    await waitForCondition(() => started.includes('msg-screen') && started.includes('msg-runtime'));
+    assert.equal(started[0], 'msg-regular');
+    assert.equal(started[1], 'msg-stop');
+    assert.ok(started.indexOf('msg-screen') > started.indexOf('msg-regular'));
+    assert.ok(started.indexOf('msg-runtime') > started.indexOf('msg-regular'));
+  });
+
   it('waits for prior same-chat command jobs before running a conversation barrier', async () => {
     const state = {
       adapters: new Map(),
