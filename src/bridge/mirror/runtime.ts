@@ -575,11 +575,13 @@ export function createMirrorRuntime(
           });
         },
         logBatchSummary: (summary) => {
-          if (summary.total === 0 || summary.elapsedMs < 1_000) return;
+          const hasProblem = summary.failed > 0 || summary.suspended > 0;
+          if (summary.total === 0 || (!hasProblem && summary.elapsedMs < 5_000)) return;
           console.log(`[bridge-manager] ${runtimeLabel} mirror reconcile batch summary:`, {
             event: 'perf.mirror.batch',
             runtime: runtimeName,
             runtime_label: runtimeLabel,
+            status: hasProblem ? 'attention' : 'slow',
             total: summary.total,
             processed: summary.processed,
             suspended: summary.suspended,

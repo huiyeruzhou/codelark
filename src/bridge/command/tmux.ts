@@ -50,6 +50,7 @@ import {
   parseTmuxSetArgs,
   validateTmuxSessionName,
 } from './tmux-args.js';
+import type { CodexTuiSelectionPromptChoice } from '../../runtime/codex/tmux-provider.js';
 export {
   buildCodexResumeTmuxCommand,
   captureTmuxScreen,
@@ -143,6 +144,10 @@ export interface HandleTmuxBridgeCommandParams {
   tmuxProviderAutoForward?: boolean;
   onTmuxProviderAutoForwarded?: () => Promise<void> | void;
   reconcileMirrorSubscriptions?: () => Promise<void>;
+  requestCodexTuiSelection?: (
+    selectionPrompt: RuntimeTmuxSelectionPrompt,
+    options: { sessionId: string },
+  ) => Promise<CodexTuiSelectionPromptChoice | null>;
   notifyBackgroundOperation?: (message: string) => Promise<void> | void;
 }
 
@@ -473,7 +478,7 @@ function formatRuntimeTmuxSelectionPrompt(selectionPrompt: RuntimeTmuxSelectionP
 }
 
 async function ensureCodexTmuxSessionForProvider(
-  params: Pick<HandleTmuxBridgeCommandParams, 'store' | 'binding' | 'session' | 'autoRecoverProviderSession' | 'reconcileMirrorSubscriptions' | 'notifyBackgroundOperation'>,
+  params: Pick<HandleTmuxBridgeCommandParams, 'store' | 'binding' | 'session' | 'autoRecoverProviderSession' | 'reconcileMirrorSubscriptions' | 'requestCodexTuiSelection' | 'notifyBackgroundOperation'>,
 ): Promise<{ target: string | undefined; commands: string[]; recovered: boolean; error?: string }> {
   const { store, binding, session } = params;
   const runtimeTarget = getSessionRuntimeTmuxSessionName(session) || '';
@@ -603,6 +608,14 @@ async function ensureCodexTmuxSessionForProvider(
 
   const runtimeConfig = resolveSessionRuntimeConfig(binding, session);
   await params.notifyBackgroundOperation?.(`tmux session \`${target}\` 不存在，正在后台重新启动 Codex TUI。`);
+  console.log('[tmux-command] Recovering missing Codex tmux provider session:', {
+    event: 'tmux.provider.recover.start',
+    bridge_session_id: session.id,
+    tmux_session: target,
+    thread_id: threadId,
+    cwd: getSessionWorkingDirectory(session),
+    has_selection_handler: typeof params.requestCodexTuiSelection === 'function',
+  });
   const started = await startRuntimeTmuxSession({
     runtime: 'codex',
     sessionName: target,
@@ -616,6 +629,18 @@ async function ensureCodexTmuxSessionForProvider(
     skipGitRepoCheck: runtimeConfig.skipGitRepoCheck,
     codexMode: runtimeConfig.mode === 'yolo' ? 'yolo' : 'normal',
     permissionMode: runtimeConfig.mode === 'yolo' ? 'never' : 'acceptEdits',
+    onSelectionPrompt: async (selectionPrompt) => {
+      if (selectionPrompt.runtime !== 'codex') return undefined;
+      return params.requestCodexTuiSelection?.(selectionPrompt, { sessionId: session.id });
+    },
+  });
+  console.log('[tmux-command] Recovered missing Codex tmux provider session:', {
+    event: 'tmux.provider.recover.done',
+    bridge_session_id: session.id,
+    tmux_session: target,
+    thread_id: threadId,
+    ready: started.ready,
+    selection_prompt_count: started.runtime === 'codex' ? started.selectionPrompts?.length || 0 : 0,
   });
   store.updateSession(session.id, setSessionCodexTmuxProviderUpdate({
     tmuxSessionName: target,

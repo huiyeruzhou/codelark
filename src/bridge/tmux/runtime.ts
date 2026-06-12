@@ -482,6 +482,17 @@ export async function waitForRuntimeTmuxReady(params: {
       lastError = undefined;
       selectionPrompt = detectRuntimeTmuxSelectionPrompt(params.runtime, capture.screen);
       if (selectionPrompt) {
+        console.log('[tmux-runtime] Runtime tmux selection prompt detected during readiness check:', {
+          event: 'tmux.runtime.selection.detected',
+          runtime: params.runtime,
+          tmux_session: params.sessionName,
+          capture_target: captureTarget,
+          prompt_runtime: selectionPrompt.runtime,
+          prompt_kind: selectionPrompt.kind,
+          default_choice: selectionPrompt.defaultChoice,
+          prompt_summary: screenExcerpt(selectionPrompt.summary),
+          has_selection_handler: typeof params.onSelectionPrompt === 'function',
+        });
         if (params.autoResolveSelection === false || selectionPrompt.defaultChoice === null) {
           return {
             ready: false,
@@ -498,15 +509,52 @@ export async function waitForRuntimeTmuxReady(params: {
         if (!handledSelectionFingerprints.has(fingerprint)) {
           handledSelectionFingerprints.add(fingerprint);
           const requestedChoice = await params.onSelectionPrompt?.(selectionPrompt);
+          const resolvedChoice = selectionPrompt.runtime === 'codex'
+            ? requestedChoice || selectionPrompt.defaultChoice || 'not_selection'
+            : 'confirm';
           const actions = selectionPrompt.runtime === 'codex'
             ? buildCodexTuiSelectionChoiceActions(
               selectionPrompt.prompt,
               requestedChoice || selectionPrompt.defaultChoice || 'not_selection',
             )
             : [{ type: 'key' as const, key: 'Enter' }];
+          if (!params.onSelectionPrompt) {
+            console.warn('[tmux-runtime] Runtime tmux selection prompt has no IM handler; falling back to default choice:', {
+              event: 'tmux.runtime.selection.no_handler',
+              runtime: params.runtime,
+              tmux_session: params.sessionName,
+              capture_target: captureTarget,
+              prompt_runtime: selectionPrompt.runtime,
+              prompt_kind: selectionPrompt.kind,
+              default_choice: selectionPrompt.defaultChoice,
+              resolved_choice: resolvedChoice,
+              prompt_summary: screenExcerpt(selectionPrompt.summary),
+            });
+          } else {
+            console.log('[tmux-runtime] Runtime tmux selection prompt choice resolved:', {
+              event: 'tmux.runtime.selection.choice',
+              runtime: params.runtime,
+              tmux_session: params.sessionName,
+              capture_target: captureTarget,
+              prompt_runtime: selectionPrompt.runtime,
+              prompt_kind: selectionPrompt.kind,
+              requested_choice: requestedChoice || null,
+              resolved_choice: resolvedChoice,
+            });
+          }
           if (actions.length > 0) {
             const sent = await core.sendActions(captureTarget, actions);
             commands.push(...sent.commands);
+            console.log('[tmux-runtime] Runtime tmux selection prompt actions sent:', {
+              event: 'tmux.runtime.selection.actions_sent',
+              runtime: params.runtime,
+              tmux_session: params.sessionName,
+              capture_target: captureTarget,
+              prompt_runtime: selectionPrompt.runtime,
+              prompt_kind: selectionPrompt.kind,
+              action_count: actions.length,
+              commands: sent.commands,
+            });
           }
         }
         if (params.afterSelectionDelayMs && params.afterSelectionDelayMs > 0) {

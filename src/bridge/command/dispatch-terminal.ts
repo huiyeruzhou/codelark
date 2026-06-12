@@ -12,6 +12,7 @@ import {
 import { handlePtyScreenCommand } from './pty.js';
 import { handleShellCommand, type ShellCommandRunner } from './shell.js';
 import { handleTmuxBridgeCommand } from './tmux.js';
+import { requestCodexTuiSelectionViaPermissionBroker } from './codex-tui-selection.js';
 
 const TMUX_SCREEN_STOP_CALLBACK_PREFIX = 'tmux-screen:stop:';
 const PTY_SCREEN_STOP_CALLBACK_PREFIX = 'pty-screen:stop:';
@@ -104,6 +105,18 @@ async function handleTmuxDispatchCommand(params: TerminalDispatchParams): Promis
     tmuxProviderAutoForward: deps.tmuxProviderAutoForward,
     onTmuxProviderAutoForwarded: deps.onTmuxProviderAutoForwarded,
     reconcileMirrorSubscriptions: deps.reconcileMirrorSubscriptions,
+    requestCodexTuiSelection: async (selectionPrompt, requestOptions) => {
+      return requestCodexTuiSelectionViaPermissionBroker({
+        adapter,
+        msg,
+        selectionPrompt,
+        sessionId: requestOptions.sessionId,
+        requestScope: deps.tmuxProviderAutoForward === true ? 'provider-auto-forward-startup' : 'tmux-command-startup',
+        reasonContext: deps.tmuxProviderAutoForward === true
+          ? 'while starting or recovering the tmux provider session before forwarding a user message'
+          : 'during /tmux startup or recovery',
+      });
+    },
     notifyBackgroundOperation: async (message: string) => {
       if (deps.tmuxProviderAutoForward === true && command === '/tmux') {
         return;
