@@ -349,7 +349,9 @@ const STREAMING_CARD_MARKDOWN_COUNT_LIMIT = 150;
 const RICH_CARD_DEFAULT_UPDATE_TTL_MS = 60_000;
 const INITIAL_STREAMING_STATUS = '处理中';
 const EMPTY_STREAMING_TASKS = '';
-const CARD_LOG_PREVIEW_MAX = 240;
+const CARD_LOG_PREVIEW_MAX = 800;
+const CARD_LOG_MARKDOWN_PREVIEW_MAX = 500;
+const CARD_LOG_MARKDOWN_PREVIEW_LIMIT = 12;
 
 type EnvLike = Record<string, string | undefined>;
 type FeishuProxyTarget = {
@@ -693,10 +695,10 @@ function collectCardJsonDiagnostics(value: unknown, stats: {
   if (typeof record.name === 'string') stats.names.push(record.name);
   if (record.tag === 'markdown') {
     stats.markdownCount += 1;
-    if (typeof record.content === 'string' && stats.markdownPreviews.length < 6) {
+    if (typeof record.content === 'string' && stats.markdownPreviews.length < CARD_LOG_MARKDOWN_PREVIEW_LIMIT) {
       stats.markdownPreviews.push({
         elementId: typeof record.element_id === 'string' ? record.element_id : undefined,
-        preview: truncateForCardLog(record.content, 100),
+        preview: truncateForCardLog(record.content, CARD_LOG_MARKDOWN_PREVIEW_MAX),
       });
     }
   }
@@ -3562,6 +3564,15 @@ export class FeishuAdapter extends BaseChannelAdapter {
   }
 
   private logStreamingSyncPlan(streamKey: string, state: FeishuCardState, plan: StreamingSyncPlan): void {
+    const importantElementIds = plan.diagnostics.incrementalElementIds.filter((elementId) => (
+      elementId !== 'streaming_status'
+      && elementId !== 'streaming_tasks'
+    ));
+    const shouldLog = plan.kind === 'fullRefresh'
+      || plan.diagnostics.containsUserTextUpdate
+      || importantElementIds.length > 0
+      || plan.diagnostics.incrementalActionKinds.some((kind) => kind !== 'content');
+    if (!shouldLog) return;
     console.log('[feishu-adapter] Streaming sync plan:', {
       event: 'perf.card.sync_plan',
       streamKey,
@@ -3586,6 +3597,8 @@ export class FeishuAdapter extends BaseChannelAdapter {
       incremental_action_kinds: plan.diagnostics.incrementalActionKinds,
       incrementalElementIds: plan.diagnostics.incrementalElementIds,
       incremental_element_ids: plan.diagnostics.incrementalElementIds,
+      importantElementIds,
+      important_element_ids: importantElementIds,
       desiredComponentCount: plan.diagnostics.desiredComponentCount,
       desired_component_count: plan.diagnostics.desiredComponentCount,
       directRefreshThreshold: plan.diagnostics.directRefreshThreshold,

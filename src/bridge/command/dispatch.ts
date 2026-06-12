@@ -91,7 +91,7 @@ import {
   isTerminalRawInputCommand,
 } from './dispatch-terminal.js';
 import { validateThreadName } from '../session/command-use-cases/args.js';
-import * as permissionBroker from '../permission/broker.js';
+import { requestCodexTuiSelectionViaPermissionBroker } from './codex-tui-selection.js';
 
 const PROVIDER_TMUX_LOADING_REACTION = 'Typing';
 
@@ -682,47 +682,15 @@ export async function handleBridgeCommand(
               });
             },
             requestCodexTuiSelection: async (selectionPrompt, requestOptions) => {
-              if (selectionPrompt.runtime !== 'codex') return null;
-              const permissionRequestId = `codex-selection:${selectionPrompt.kind}:startup:${requestOptions.sessionId}:${Date.now()}`;
-              const choicePromise = permissionBroker.waitForCodexTuiSelectionPermission(permissionRequestId);
-              await permissionBroker.forwardPermissionRequest(
+              return requestCodexTuiSelectionViaPermissionBroker({
                 adapter,
-                msg.address,
-                permissionRequestId,
-                'Codex TUI Selection Prompt',
-                {
-                  provider: 'tmux',
-                  reason: selectionPrompt.kind === 'update'
-                    ? 'Codex TUI is waiting at a CLI update selection prompt during /p tmux startup.'
-                    : selectionPrompt.kind === 'goal'
-                      ? 'Codex TUI is waiting at a goal replacement selection prompt during /p tmux startup.'
-                      : selectionPrompt.kind === 'generic'
-                        ? 'Codex TUI may be waiting at an unrecognized numbered selection prompt during /p tmux startup.'
-                        : 'Codex TUI is waiting at an interactive selection prompt during /p tmux startup.',
-                  inspect: '/tmux-screen 80',
-                  promptKind: selectionPrompt.kind,
-                  defaultChoice: selectionPrompt.kind === 'update'
-                    ? 'skip'
-                    : selectionPrompt.kind === 'goal'
-                      ? 'cancel'
-                      : selectionPrompt.kind === 'generic'
-                        ? 'not_selection'
-                        : 'yes_proceed',
-                  prompt: selectionPrompt.summary,
-                  choices: [
-                    ...selectionPrompt.prompt.options.map((option) => ({
-                      choice: option.choice,
-                      label: option.label,
-                      selected: option.selected,
-                    })),
-                    ...(selectionPrompt.kind === 'generic' ? [{ choice: 'not_selection', label: '这不是TUI选择' }] : []),
-                  ],
-                },
-                requestOptions.sessionId,
-                [],
-                requestOptions.replyToMessageId,
-              );
-              return choicePromise;
+                msg,
+                selectionPrompt,
+                sessionId: requestOptions.sessionId,
+                requestScope: 'provider-startup',
+                reasonContext: 'during /p tmux startup',
+                replyToMessageId: requestOptions.replyToMessageId,
+              });
             },
           },
           markdown: responseParseMode === 'Markdown',
