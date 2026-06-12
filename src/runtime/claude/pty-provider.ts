@@ -13,6 +13,12 @@ import {
   summarizeClaudeSessionJsonl,
   type ClaudeSessionJsonlSummary,
 } from './session-jsonl.js';
+import {
+  compactTerminalScreenText,
+  hasTuiEnterConfirmFooter,
+  hasTuiEnterContinueFooter,
+  normalizeTerminalScreenText,
+} from '../tui-screen.js';
 
 const DEFAULT_PROMPT_DELAY_MS = 1_000;
 const DEFAULT_SUBMIT_DELAY_MS = 75;
@@ -79,22 +85,12 @@ export function parsePositiveIntEnv(name: string, fallback: number, minValue: nu
   return fallback;
 }
 
-function stripAnsi(text: string): string {
-  return text
-    .replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, '')
-    .replace(/\x1b\][^\x07]*(?:\x07|\x1b\\)/g, '')
-    .replace(/\x1b[PX^_].*?\x1b\\/gs, '')
-    .replace(/\x1b[@-_]/g, '');
-}
-
 function normalizePtyOutput(text: string): string {
-  return stripAnsi(text)
-    .replace(/\r\n/g, '\n')
-    .replace(/\r/g, '\n');
+  return normalizeTerminalScreenText(text);
 }
 
 function compactScreenText(text: string): string {
-  return normalizePtyOutput(text).replace(/\s+/g, '').toLowerCase();
+  return compactTerminalScreenText(text);
 }
 
 export function hasClaudePtyTrustPrompt(text: string): boolean {
@@ -102,7 +98,7 @@ export function hasClaudePtyTrustPrompt(text: string): boolean {
   return compact.includes('quicksafetycheck')
     || compact.includes('yes,itrustthisfolder')
     || compact.includes('claudecode\'llbeabletoread,edit,andexecutefileshere')
-    || compact.includes('entertoconfirm');
+    || hasTuiEnterConfirmFooter(text);
 }
 
 export function hasClaudePtyOnboardingPrompt(text: string): boolean {
@@ -112,8 +108,7 @@ export function hasClaudePtyOnboardingPrompt(text: string): boolean {
     || compact.includes('securitynotes:')
     || compact.includes('securitynotes')
   ) && (
-    compact.includes('pressentertocontinue')
-    || compact.includes('entertocontinue')
+    hasTuiEnterContinueFooter(text)
   );
   const hasThemeSelection = compact.includes('syntaxtheme')
     && (compact.includes('darkmode') || compact.includes('lightmode') || compact.includes('colorblind'));
