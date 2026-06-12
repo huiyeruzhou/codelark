@@ -53,7 +53,7 @@
 - `src/operator-ui/shell.ts`
   - 全局配置下拉框和帮助文案增加 Claude tmux。
 - `src/entrypoints/setup-wizard.ts`
-  - Claude runtime 选择现在默认写入 `claudeProvider='tmux'`，后续可在 IM 或 UI 中切到 `pty` / `sdk`。
+  - Claude runtime 选择现在默认写入 `runtime.claude.provider='tmux'`，后续可在 IM 或 UI 中切到 `pty` / `sdk`。
 
 ### 2. Claude tmux provider 实现
 

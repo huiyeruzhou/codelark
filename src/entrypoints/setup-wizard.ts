@@ -323,7 +323,7 @@ async function promptTmuxPrerequisite(): Promise<TmuxPrerequisiteResult> {
     p.note(
       [
         '本次向导将继续完成配置，但不会默认使用 tmux provider。',
-        '将写入 defaultProvider=sdk，并把 Claude 默认 provider 写为 sdk。',
+        '将写入 runtime.codex.provider=sdk，并把 Claude 默认 provider 写为 runtime.claude.provider=sdk。',
         '之后安装 tmux 后，可通过 IM 命令 `/provider tmux` 或配置文件切回 tmux。',
       ].join('\n'),
       '改用 SDK provider',

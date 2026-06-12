@@ -57,12 +57,12 @@
 
 ### 安装
 
-- 推荐使用tmux驱动coding agent
-  - MacOS
+- 推荐使用 tmux provider 驱动本地 agent
+  - macOS
   ```sh
   # 安装Homebrew
   /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
-  # 安装tmu
+  # 安装 tmux
   brew install tmux
   ```
   - Linux
@@ -71,7 +71,7 @@
   ```
   - Windows
   ```sh
-  winget install psmux
+  winget install --id marlocarlo.psmux
   ``` 
 
 > 如果你通过环境变量配置模型、代理或 API Key，需要在启动 `codelark` 前 export。
@@ -87,14 +87,14 @@ codelark run
 ```
 
 ## 常用命令
-- `/`：修改当前对话的配置，比如yolo模式、thinking_effort、model等
+- `/`：查看当前聊天/会话诊断；修改当前会话配置可用 `/provider`、`/model`、`/mode`、`/reasoning` 等。
 - `/set`：修改全局默认配置
 - `//...`：向模型发送以 `/` 开头的文本，例如 `//status` 会作为 `/status` 发给模型。
   - 特别常用：`//goal`！
-- `/tmux-screen`：显示coding agent的TUI界面，遇到卡死不动的问题排查用。
-- `<enter>`, `<C-c>`, `<esc>`: 向tmux Provider 发送控制键。
+- `/tmux-screen`：显示本地 agent 的 TUI 界面，遇到卡住不动的问题排查用。
+- `<enter>`、`<C-c>`、`<esc>`：向 tmux Provider 发送控制键。
 - `/p tmux`：重启当前 runtime 的 tmux Provider 会话
-- `/p sdk`: 改为使用sdk提供coding agent服务。
+- `/p sdk`：改为使用 SDK provider 提供 agent 服务。
 - `/stop`：停止当前任务
 - `/t`：查看最近本地 Codex / Claude Code 会话。
 - `/t rename <名称>`：重命名当前线程；群聊通道会同步修改群聊名称，真实群名会自动带 `[botname]` 前缀。
@@ -111,6 +111,7 @@ codelark run
 
 ```text
 /t
+```
 
 ### 2. 继续对话
 

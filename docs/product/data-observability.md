@@ -6,16 +6,16 @@
 
 | 文件 | 用途 | 代码入口 |
 | --- | --- | --- |
-| `config.toml` | 全局主配置，使用 v2 TOML shape | [src/configuration/service.ts](https://github.com/huiyeruzhou/codelark/blob/master/src/configuration/service.ts)、[src/configuration/schema.ts](https://github.com/huiyeruzhou/codelark/blob/master/src/configuration/schema.ts) |
-| `config/sessions/<session-id>.toml` | Session 级持久化覆盖，例如 cwd、模型、provider、sandbox、reasoning、tmux 显式绑定 | [src/configuration/service.ts](https://github.com/huiyeruzhou/codelark/blob/master/src/configuration/service.ts)、[src/domain/session-runtime.ts](https://github.com/huiyeruzhou/codelark/blob/master/src/domain/session-runtime.ts) |
-| `config/channels/<channel-id>.toml` | Channel 级持久化覆盖，复用同一套 TOML shape | [src/configuration/service.ts](https://github.com/huiyeruzhou/codelark/blob/master/src/configuration/service.ts) |
-| `config.json` / `config.env` | v1 迁移输入；迁移成功后归档为 `.migrated-v1*`，不再作为运行时配置来源 | [src/configuration/migrations/v1.ts](https://github.com/huiyeruzhou/codelark/blob/master/src/configuration/migrations/v1.ts) |
-| `data/sessions.json` | BridgeSession | [src/storage/json-store.ts](https://github.com/huiyeruzhou/codelark/blob/master/src/storage/json-store.ts)、[schemas/data/sessions.v1.schema.json](https://github.com/huiyeruzhou/codelark/blob/master/schemas/data/sessions.v1.schema.json) |
-| `data/channel-chats.json` | ChannelChat 绑定 | [src/storage/json-store.ts](https://github.com/huiyeruzhou/codelark/blob/master/src/storage/json-store.ts)、[schemas/data/channel-chats.v1.schema.json](https://github.com/huiyeruzhou/codelark/blob/master/schemas/data/channel-chats.v1.schema.json) |
-| `data/messages/<sessionId>.json` | Bridge 消息缓存 | [src/storage/json-store.ts](https://github.com/huiyeruzhou/codelark/blob/master/src/storage/json-store.ts)、[schemas/data/messages.v1.schema.json](https://github.com/huiyeruzhou/codelark/blob/master/schemas/data/messages.v1.schema.json) |
-| `data/audit.jsonl` | 审计日志，当前新记录按 JSONL 追加；旧 `data/audit.json` 仍会被读取 | [src/storage/json-store.ts](https://github.com/huiyeruzhou/codelark/blob/master/src/storage/json-store.ts)、[schemas/data/audit.v1.schema.json](https://github.com/huiyeruzhou/codelark/blob/master/schemas/data/audit.v1.schema.json) |
-| `runtime/status.json` | Bridge 运行状态 | [src/entrypoints/daemon.ts](https://github.com/huiyeruzhou/codelark/blob/master/src/entrypoints/daemon.ts)、[src/local-service/manager.ts](https://github.com/huiyeruzhou/codelark/blob/master/src/local-service/manager.ts) |
-| `runtime/ui-server.json` | UI 运行状态 | [src/operator-ui/server.ts](https://github.com/huiyeruzhou/codelark/blob/master/src/operator-ui/server.ts)、[src/local-service/manager.ts](https://github.com/huiyeruzhou/codelark/blob/master/src/local-service/manager.ts) |
+| `config.toml` | 全局主配置，使用 v2 TOML shape | [src/configuration/service.ts](https://github.com/huiyeruzhou/codelark/blob/main/src/configuration/service.ts)、[src/configuration/schema.ts](https://github.com/huiyeruzhou/codelark/blob/main/src/configuration/schema.ts) |
+| `config/sessions/<session-id>.toml` | Session 级持久化覆盖，例如 cwd、模型、provider、sandbox、reasoning、tmux 显式绑定 | [src/configuration/service.ts](https://github.com/huiyeruzhou/codelark/blob/main/src/configuration/service.ts)、[src/domain/session-runtime.ts](https://github.com/huiyeruzhou/codelark/blob/main/src/domain/session-runtime.ts) |
+| `config/channels/<channel-id>.toml` | Channel 级持久化覆盖，复用同一套 TOML shape | [src/configuration/service.ts](https://github.com/huiyeruzhou/codelark/blob/main/src/configuration/service.ts) |
+| `config.json` / `config.env` | v1 迁移输入；迁移成功后归档为 `.migrated-v1*`，不再作为运行时配置来源 | [src/configuration/migrations/v1.ts](https://github.com/huiyeruzhou/codelark/blob/main/src/configuration/migrations/v1.ts) |
+| `data/sessions.json` | BridgeSession | [src/storage/json-store.ts](https://github.com/huiyeruzhou/codelark/blob/main/src/storage/json-store.ts)、[schemas/data/sessions.v1.schema.json](https://github.com/huiyeruzhou/codelark/blob/main/schemas/data/sessions.v1.schema.json) |
+| `data/channel-chats.json` | ChannelChat 绑定 | [src/storage/json-store.ts](https://github.com/huiyeruzhou/codelark/blob/main/src/storage/json-store.ts)、[schemas/data/channel-chats.v1.schema.json](https://github.com/huiyeruzhou/codelark/blob/main/schemas/data/channel-chats.v1.schema.json) |
+| `data/messages/<sessionId>.json` | Bridge 消息缓存 | [src/storage/json-store.ts](https://github.com/huiyeruzhou/codelark/blob/main/src/storage/json-store.ts)、[schemas/data/messages.v1.schema.json](https://github.com/huiyeruzhou/codelark/blob/main/schemas/data/messages.v1.schema.json) |
+| `data/audit.jsonl` | 审计日志，当前新记录按 JSONL 追加；旧 `data/audit.json` 仍会被读取 | [src/storage/json-store.ts](https://github.com/huiyeruzhou/codelark/blob/main/src/storage/json-store.ts)、[schemas/data/audit.v1.schema.json](https://github.com/huiyeruzhou/codelark/blob/main/schemas/data/audit.v1.schema.json) |
+| `runtime/status.json` | Bridge 运行状态 | [src/entrypoints/daemon.ts](https://github.com/huiyeruzhou/codelark/blob/main/src/entrypoints/daemon.ts)、[src/local-service/manager.ts](https://github.com/huiyeruzhou/codelark/blob/main/src/local-service/manager.ts) |
+| `runtime/ui-server.json` | UI 运行状态 | [src/operator-ui/server.ts](https://github.com/huiyeruzhou/codelark/blob/main/src/operator-ui/server.ts)、[src/local-service/manager.ts](https://github.com/huiyeruzhou/codelark/blob/main/src/local-service/manager.ts) |
 
 Codex 自有数据仍在 `~/.codex`；CodeLark 只读索引和镜像。Claude Code 自有 JSONL 也由 Claude Code 生成；bridge 只保存可继续定位它的 runtime 身份。
 
@@ -45,17 +45,17 @@ CodeLark 的可观测性来自四层：
 
 设计模块：
 
-- 状态命令：[src/bridge/command/status.ts](https://github.com/huiyeruzhou/codelark/blob/master/src/bridge/command/status.ts)
-- 诊断命令：[src/bridge/command/diagnostics.ts](https://github.com/huiyeruzhou/codelark/blob/master/src/bridge/command/diagnostics.ts)
-- 健康检查：[src/bridge/health/runtime.ts](https://github.com/huiyeruzhou/codelark/blob/master/src/bridge/health/runtime.ts)
-- transcript source：[src/bridge/session/transcript-source.ts](https://github.com/huiyeruzhou/codelark/blob/master/src/bridge/session/transcript-source.ts)
-- Doctor 脚本：[scripts/doctor.sh](https://github.com/huiyeruzhou/codelark/blob/master/scripts/doctor.sh)、[scripts/doctor.ps1](https://github.com/huiyeruzhou/codelark/blob/master/scripts/doctor.ps1)
+- 状态命令：[src/bridge/command/status.ts](https://github.com/huiyeruzhou/codelark/blob/main/src/bridge/command/status.ts)
+- 诊断命令：[src/bridge/command/diagnostics.ts](https://github.com/huiyeruzhou/codelark/blob/main/src/bridge/command/diagnostics.ts)
+- 健康检查：[src/bridge/health/runtime.ts](https://github.com/huiyeruzhou/codelark/blob/main/src/bridge/health/runtime.ts)
+- transcript source：[src/bridge/session/transcript-source.ts](https://github.com/huiyeruzhou/codelark/blob/main/src/bridge/session/transcript-source.ts)
+- Doctor 脚本：[scripts/doctor.sh](https://github.com/huiyeruzhou/codelark/blob/main/scripts/doctor.sh)、[scripts/doctor.ps1](https://github.com/huiyeruzhou/codelark/blob/main/scripts/doctor.ps1)
 
 ## 验证入口
 
-- 普通单元/集成测试：[scripts/run-tests.js](https://github.com/huiyeruzhou/codelark/blob/master/scripts/run-tests.js)
+- 普通单元/集成测试：[scripts/run-tests.js](https://github.com/huiyeruzhou/codelark/blob/main/scripts/run-tests.js)
 - 类型检查：`npm run typecheck`
-- 真实飞书 E2E harness：[scripts/real-feishu-e2e.ts](https://github.com/huiyeruzhou/codelark/blob/master/scripts/real-feishu-e2e.ts)
+- 真实飞书 E2E harness：[scripts/real-feishu-e2e.ts](https://github.com/huiyeruzhou/codelark/blob/main/scripts/real-feishu-e2e.ts)
 - 覆盖审计文档：[docs/testing/coverage-audit.md](../testing/coverage-audit.md)
 - 真实飞书 E2E：[docs/testing/real-feishu/index.md](../testing/real-feishu/)
 

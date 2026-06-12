@@ -40,14 +40,14 @@ CodeLark 自己拥有的是 `BridgeSession`、`ChannelChat`、通道配置、消
 
 | 主题 | 入口 |
 | --- | --- |
-| CLI 和本地服务 | [src/entrypoints/cli.ts](https://github.com/huiyeruzhou/codelark/blob/master/src/entrypoints/cli.ts)、[src/local-service/manager.ts](https://github.com/huiyeruzhou/codelark/blob/master/src/local-service/manager.ts) |
-| Bridge 主循环 | [src/entrypoints/daemon.ts](https://github.com/huiyeruzhou/codelark/blob/master/src/entrypoints/daemon.ts)、[src/bridge/host/manager.ts](https://github.com/huiyeruzhou/codelark/blob/master/src/bridge/host/manager.ts) |
-| Web 工作台 | [src/operator-ui/server.ts](https://github.com/huiyeruzhou/codelark/blob/master/src/operator-ui/server.ts)、[src/operator-ui/shell.ts](https://github.com/huiyeruzhou/codelark/blob/master/src/operator-ui/shell.ts) |
-| IM 通道抽象 | [src/channels/contracts.ts](https://github.com/huiyeruzhou/codelark/blob/master/src/channels/contracts.ts) |
-| 命令分发 | [src/bridge/command/dispatch.ts](https://github.com/huiyeruzhou/codelark/blob/master/src/bridge/command/dispatch.ts) |
-| 运行时提供方路由 | [src/runtime/codex/routing-provider.ts](https://github.com/huiyeruzhou/codelark/blob/master/src/runtime/codex/routing-provider.ts) |
-| 本地 JSON 存储 | [src/storage/json-store.ts](https://github.com/huiyeruzhou/codelark/blob/master/src/storage/json-store.ts) |
-| 配置 schema | [schemas/config.v1.schema.json](https://github.com/huiyeruzhou/codelark/blob/master/schemas/config.v1.schema.json) |
+| CLI 和本地服务 | [src/entrypoints/cli.ts](https://github.com/huiyeruzhou/codelark/blob/main/src/entrypoints/cli.ts)、[src/local-service/manager.ts](https://github.com/huiyeruzhou/codelark/blob/main/src/local-service/manager.ts) |
+| Bridge 主循环 | [src/entrypoints/daemon.ts](https://github.com/huiyeruzhou/codelark/blob/main/src/entrypoints/daemon.ts)、[src/bridge/host/manager.ts](https://github.com/huiyeruzhou/codelark/blob/main/src/bridge/host/manager.ts) |
+| Web 工作台 | [src/operator-ui/server.ts](https://github.com/huiyeruzhou/codelark/blob/main/src/operator-ui/server.ts)、[src/operator-ui/shell.ts](https://github.com/huiyeruzhou/codelark/blob/main/src/operator-ui/shell.ts) |
+| IM 通道抽象 | [src/channels/contracts.ts](https://github.com/huiyeruzhou/codelark/blob/main/src/channels/contracts.ts) |
+| 命令分发 | [src/bridge/command/dispatch.ts](https://github.com/huiyeruzhou/codelark/blob/main/src/bridge/command/dispatch.ts) |
+| 运行时提供方路由 | [src/runtime/codex/routing-provider.ts](https://github.com/huiyeruzhou/codelark/blob/main/src/runtime/codex/routing-provider.ts) |
+| 本地 JSON 存储 | [src/storage/json-store.ts](https://github.com/huiyeruzhou/codelark/blob/main/src/storage/json-store.ts) |
+| 配置 schema | [schemas/config.v1.schema.json](https://github.com/huiyeruzhou/codelark/blob/main/schemas/config.v1.schema.json) |
 
 ## 维护原则
 

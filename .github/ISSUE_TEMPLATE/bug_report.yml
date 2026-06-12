@@ -77,6 +77,6 @@ body:
       value: |
         请帮我排查 CodeLark 桥接服务的问题。
         1. 读取 ~/.codelark/logs/bridge.log 最近 50 行日志
-        2. 读取 ~/.codelark/config.env 检查配置是否正确
+        2. 读取 ~/.codelark/config.toml 检查配置是否正确
         3. 如果当前仓库存在 scripts/doctor.ps1，就运行 powershell -ExecutionPolicy Bypass -File .\scripts\doctor.ps1 并分析输出
         4. 根据日志和配置给出具体的修复建议

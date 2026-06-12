@@ -16,7 +16,7 @@
 | 云文档聊天入口 | 支持 |
 | `/require-at` | 支持 |
 
-通道能力不是写死在命令层，而是通过 [BaseChannelAdapter](https://github.com/huiyeruzhou/codelark/blob/master/src/channels/contracts.ts) 的可选方法表达。命令层会优先使用平台能力，不支持时给出退化提示。
+通道能力不是写死在命令层，而是通过 [BaseChannelAdapter](https://github.com/huiyeruzhou/codelark/blob/main/src/channels/contracts.ts) 的可选方法表达。命令层会优先使用平台能力，不支持时给出退化提示。
 
 ## 飞书流式卡片和交互卡片
 
@@ -28,11 +28,11 @@
 
 设计模块：
 
-- rich card 类型：[src/domain/index.ts](https://github.com/huiyeruzhou/codelark/blob/master/src/domain/index.ts)
-- 飞书 Markdown / CardKit 渲染：[src/channels/feishu/markdown.ts](https://github.com/huiyeruzhou/codelark/blob/master/src/channels/feishu/markdown.ts)
-- 流式反馈控制：[src/channels/delivery/stream-feedback.ts](https://github.com/huiyeruzhou/codelark/blob/master/src/channels/delivery/stream-feedback.ts)
-- 工具详情：[src/shared/progress/tool-call-details.ts](https://github.com/huiyeruzhou/codelark/blob/master/src/shared/progress/tool-call-details.ts)
-- 飞书 adapter：[src/channels/feishu/adapter.ts](https://github.com/huiyeruzhou/codelark/blob/master/src/channels/feishu/adapter.ts)
+- rich card 类型：[src/domain/index.ts](https://github.com/huiyeruzhou/codelark/blob/main/src/domain/index.ts)
+- 飞书 Markdown / CardKit 渲染：[src/channels/feishu/markdown.ts](https://github.com/huiyeruzhou/codelark/blob/main/src/channels/feishu/markdown.ts)
+- 流式反馈控制：[src/channels/delivery/stream-feedback.ts](https://github.com/huiyeruzhou/codelark/blob/main/src/channels/delivery/stream-feedback.ts)
+- 工具详情：[src/shared/progress/tool-call-details.ts](https://github.com/huiyeruzhou/codelark/blob/main/src/shared/progress/tool-call-details.ts)
+- 飞书 adapter：[src/channels/feishu/adapter.ts](https://github.com/huiyeruzhou/codelark/blob/main/src/channels/feishu/adapter.ts)
 
 ## 云文档聊天入口
 
@@ -44,10 +44,10 @@
 
 设计模块：
 
-- 云文档地址类型：[src/domain/index.ts](https://github.com/huiyeruzhou/codelark/blob/master/src/domain/index.ts)
-- 通道回复抽象：[src/channels/contracts.ts](https://github.com/huiyeruzhou/codelark/blob/master/src/channels/contracts.ts)
-- 飞书评论事件和回复：[src/channels/feishu/adapter.ts](https://github.com/huiyeruzhou/codelark/blob/master/src/channels/feishu/adapter.ts)
-- 交付管线：[src/bridge/turn/delivery-pipeline.ts](https://github.com/huiyeruzhou/codelark/blob/master/src/bridge/turn/delivery-pipeline.ts)
+- 云文档地址类型：[src/domain/index.ts](https://github.com/huiyeruzhou/codelark/blob/main/src/domain/index.ts)
+- 通道回复抽象：[src/channels/contracts.ts](https://github.com/huiyeruzhou/codelark/blob/main/src/channels/contracts.ts)
+- 飞书评论事件和回复：[src/channels/feishu/adapter.ts](https://github.com/huiyeruzhou/codelark/blob/main/src/channels/feishu/adapter.ts)
+- 交付管线：[src/bridge/turn/delivery-pipeline.ts](https://github.com/huiyeruzhou/codelark/blob/main/src/bridge/turn/delivery-pipeline.ts)
 - 飞书权限说明：[docs/guide/install-and-usage.md](../guide/install-and-usage.md)
 
 ## Web 工作台
@@ -65,9 +65,9 @@
 
 设计模块：
 
-- UI server：[src/operator-ui/server.ts](https://github.com/huiyeruzhou/codelark/blob/master/src/operator-ui/server.ts)
-- UI 页面 shell：[src/operator-ui/shell.ts](https://github.com/huiyeruzhou/codelark/blob/master/src/operator-ui/shell.ts)
-- UI auth：[src/operator-ui/routes/auth.ts](https://github.com/huiyeruzhou/codelark/blob/master/src/operator-ui/routes/auth.ts)
-- UI session 应用层：[src/operator-ui/application/session.ts](https://github.com/huiyeruzhou/codelark/blob/master/src/operator-ui/application/session.ts)
-- UI config 应用层：[src/operator-ui/application/config.ts](https://github.com/huiyeruzhou/codelark/blob/master/src/operator-ui/application/config.ts)
-- UI channel 应用层：[src/operator-ui/application/channel.ts](https://github.com/huiyeruzhou/codelark/blob/master/src/operator-ui/application/channel.ts)
+- UI server：[src/operator-ui/server.ts](https://github.com/huiyeruzhou/codelark/blob/main/src/operator-ui/server.ts)
+- UI 页面 shell：[src/operator-ui/shell.ts](https://github.com/huiyeruzhou/codelark/blob/main/src/operator-ui/shell.ts)
+- UI auth：[src/operator-ui/routes/auth.ts](https://github.com/huiyeruzhou/codelark/blob/main/src/operator-ui/routes/auth.ts)
+- UI session 应用层：[src/operator-ui/application/session.ts](https://github.com/huiyeruzhou/codelark/blob/main/src/operator-ui/application/session.ts)
+- UI config 应用层：[src/operator-ui/application/config.ts](https://github.com/huiyeruzhou/codelark/blob/main/src/operator-ui/application/config.ts)
+- UI channel 应用层：[src/operator-ui/application/channel.ts](https://github.com/huiyeruzhou/codelark/blob/main/src/operator-ui/application/channel.ts)
