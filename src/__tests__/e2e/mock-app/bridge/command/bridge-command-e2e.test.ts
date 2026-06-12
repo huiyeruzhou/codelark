@@ -3278,6 +3278,21 @@ provider = "tmux"
       assert.match(manualMissingLog, new RegExp(`send-keys -t ${tmuxSession} Enter`));
 
       fs.writeFileSync(fakeTmux.statePath, '', 'utf-8');
+      const beforeScreenMissingLog = fs.readFileSync(fakeTmux.logPath, 'utf-8');
+      await _testOnly.handleMessage(adapter, inboundMessage(newAddress, '/tmux-screen 20', 'incoming-tmux-default-screen-missing'));
+      const screenMissingLog = fs.readFileSync(fakeTmux.logPath, 'utf-8').slice(beforeScreenMissingLog.length);
+      assert.doesNotMatch(adapter.sent.at(-1)?.text || '', /tmux session 不存在|tmux Provider 缺少 codex_thread_id/);
+      assert.match(adapter.sent.at(-1)?.text || '', /tmux 当前屏幕状态/);
+      assert.match(screenMissingLog, new RegExp(`has-session -t ${tmuxSession}`));
+      assert.match(screenMissingLog, new RegExp(`new-session -d -s ${tmuxSession}`));
+      assert.match(screenMissingLog, new RegExp(`resume ${actualThreadId}`));
+      assert.ok(
+        screenMissingLog.indexOf(`new-session -d -s ${tmuxSession}`) < screenMissingLog.indexOf(`capture-pane -t ${tmuxSession} -p -S -80`),
+        '/tmux-screen should recover the missing provider session before inspecting it',
+      );
+      assert.match(screenMissingLog, new RegExp(`capture-pane -t ${tmuxSession} -p -S -20`));
+
+      fs.writeFileSync(fakeTmux.statePath, '', 'utf-8');
       const beforeRecoveredMessageLog = fs.readFileSync(fakeTmux.logPath, 'utf-8');
       const beforeSecondReactionCount = streamingAdapter.reactions.length;
       await _testOnly.handleMessage(adapter, inboundMessage(newAddress, '第二条', 'incoming-tmux-default-second'));
