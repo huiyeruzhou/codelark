@@ -292,6 +292,52 @@ describe('permission-broker', () => {
     assert.equal(store.getPermissionLink(permissionRequestId)?.resolved, true);
   });
 
+  it('resolves Codex TUI selection callbacks that arrive before the permission link is recorded', async () => {
+    const store = initBridgeTestContext();
+    const address = { channelType: 'feishu', chatId: 'chat-codex-selection-early-callback' } as const;
+    const permissionRequestId = 'codex-selection:permission:provider-auto-forward-startup:session-early:1';
+    class EarlyCallbackAdapter extends RecordingAdapter {
+      async send(message: Parameters<RecordingAdapter['send']>[0]): ReturnType<RecordingAdapter['send']> {
+        const result = await super.send(message);
+        const callbackData = message.richCard?.selects?.[0]?.options.find((option) => (
+          option.callbackData.endsWith(':yes_proceed')
+        ))?.callbackData;
+        if (callbackData) {
+          assert.equal(handlePermissionCallback(callbackData, address.chatId, result.messageId), true);
+        }
+        return result;
+      }
+    }
+    const adapter = new EarlyCallbackAdapter();
+    const choice = waitForCodexTuiSelectionPermission(permissionRequestId);
+
+    await forwardPermissionRequest(
+      adapter,
+      address,
+      permissionRequestId,
+      'Codex TUI Selection Prompt',
+      {
+        provider: 'tmux',
+        inspect: '/tmux-screen 80',
+        promptKind: 'permission',
+        defaultChoice: 'yes_proceed',
+        prompt: [
+          'Do you trust the contents of this directory?',
+          '› 1. Yes, continue',
+          '  2. No, quit',
+        ].join('\n'),
+        choices: [
+          { choice: 'yes_proceed', label: 'Yes, continue', selected: true },
+          { choice: 'no', label: 'No, quit', selected: false },
+        ],
+      },
+      'session-early',
+    );
+
+    assert.equal(await choice, 'yes_proceed');
+    assert.equal(store.getPermissionLink(permissionRequestId)?.resolved, true);
+  });
+
   it('classifies mirror Codex TUI selection callbacks with no live waiter as orphaned', async () => {
     const store = initBridgeTestContext();
     const adapter = new RecordingAdapter();

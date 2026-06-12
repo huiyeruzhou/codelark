@@ -97,7 +97,7 @@ Lane 可以理解成“等待关系的名字”。调度层会给每条消息一
 当前主要有四类 lane：
 
 - `control:*`：控制通道。`/stop`、权限快捷回复、screen stop callback 走这里。它们的价值是“马上生效”，所以不等普通对话和长任务。
-- `job:*`：长 I/O 通道。`/shell`、`/tmux-screen`、`/pty-screen` 走这里。它们可能跑很久，所以不占住同一 session 的 prompt 队伍；但如果同一聊天前面刚发了会话配置变更，它会先等配置变更完成。
+- `job:*`：长 I/O 通道。`/shell`、`/tmux-screen`、`/pty-screen` 走这里。它们可能跑很久，所以不占住同一 session 的 prompt 队伍；其中 `/tmux-screen`、`/pty-screen` 是监控命令，不等待普通 conversation barrier，避免排在卡住的普通对话后面；`/shell` 等普通 job 仍会先等同一聊天前面的会话配置变更或普通 prompt barrier 完成。
 - `chat:<channel>:<chat>`：聊天通道。只读命令、普通 callback、状态查询这类不改 session 状态的交互走这里。`channel` 和 `chat` 的作用是把不同平台、不同群聊或私聊隔开：A 群的状态查询不会挡住 B 群，飞书群聊也不会和别的通道混在一起。
 - `session:<session_id>`：工作会话通道。普通 prompt、会话配置变更、会切换绑定的 callback 走这里。它按 `BridgeSession.id` 区分，而不是按群聊区分，因为多个入口可能绑定同一条本地工作会话；只要它们操作的是同一个 session，就必须保持同一份上下文和配置的顺序。
 

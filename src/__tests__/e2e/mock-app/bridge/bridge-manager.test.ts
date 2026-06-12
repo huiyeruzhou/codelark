@@ -684,6 +684,19 @@ describe('bridge-manager resolveCommandAlias', () => {
     );
     assert.equal(_testOnly.adapterImmediateLane(inbound('/stop') as any, 'command')?.laneKind, 'control');
     assert.equal(_testOnly.adapterImmediateLane(inbound('/shell git status') as any, 'command')?.laneKind, 'job');
+    assert.deepEqual(_testOnly.adapterImmediateLane(inbound('/tmux-screen') as any, 'command'), {
+      laneKey: `job:tmux-screen:${address.channelType}:${address.chatId}:msg-/tmux-screen`,
+      laneKind: 'job',
+      jobKind: 'command:tmux-screen',
+      waitForConversationBarrier: false,
+    });
+    assert.deepEqual(_testOnly.adapterImmediateLane(inbound('/pty-screen') as any, 'command'), {
+      laneKey: `job:pty-screen:${address.channelType}:${address.chatId}:msg-/pty-screen`,
+      laneKind: 'job',
+      jobKind: 'command:pty-screen',
+      waitForConversationBarrier: false,
+    });
+    assert.equal(_testOnly.adapterImmediateLane(inbound('/shell git status') as any, 'command')?.waitForConversationBarrier, true);
   });
 
   it('parses local runtime session list requests', () => {

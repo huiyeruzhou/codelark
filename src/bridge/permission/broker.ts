@@ -58,12 +58,21 @@ type CodexSelectionWaiter = {
   timer: NodeJS.Timeout;
 };
 
+type PendingCodexSelectionCallback = {
+  choice: CodexSelectionChoice;
+  chatId: string;
+  callbackMessageId?: string;
+  resolvedAt: number;
+};
+
 const codexSelectionWaiters = new Map<string, CodexSelectionWaiter>();
+const codexSelectionPendingCallbacks = new Map<string, PendingCodexSelectionCallback>();
 const codexSelectionActiveByKey = new Map<string, { permissionRequestId: string; expiresAt: number }>();
 const codexSelectionAliasesByPrimary = new Map<string, Set<string>>();
 const codexSelectionPrimaryByAlias = new Map<string, string>();
 const codexSelectionKeyByRequestId = new Map<string, string>();
 const CODEX_SELECTION_ACTIVE_TTL_MS = 5 * 60 * 1000;
+const CODEX_SELECTION_PENDING_CALLBACK_TTL_MS = 5 * 60 * 1000;
 
 function isCodexTrustPermission(permissionRequestId: string, toolName: string): boolean {
   return toolName === CODEX_TRUST_TOOL_NAME || permissionRequestId.startsWith('codex-trust:');
@@ -154,6 +163,11 @@ function codexSelectionActiveKey(
 }
 
 function cleanupCodexSelectionActive(now = Date.now()): void {
+  for (const [permissionRequestId, pending] of codexSelectionPendingCallbacks) {
+    if (now - pending.resolvedAt > CODEX_SELECTION_PENDING_CALLBACK_TTL_MS) {
+      codexSelectionPendingCallbacks.delete(permissionRequestId);
+    }
+  }
   for (const [key, active] of codexSelectionActiveByKey) {
     if (active.expiresAt > now) continue;
     codexSelectionActiveByKey.delete(key);
@@ -364,6 +378,18 @@ function resolveCodexSelectionWaiter(permissionRequestId: string, choice: CodexS
   return true;
 }
 
+function resolveCodexSelectionChoice(permissionRequestId: string, choice: CodexSelectionChoice): boolean {
+  const waiterResolved = resolveCodexSelectionWaiter(permissionRequestId, choice);
+  const aliases = codexSelectionAliasesByPrimary.get(permissionRequestId);
+  if (aliases) {
+    for (const alias of aliases) {
+      resolveCodexSelectionWaiter(alias, choice);
+    }
+  }
+  releaseCodexSelectionActive(permissionRequestId);
+  return waiterResolved;
+}
+
 export function claimCodexSelectionCallback(
   callbackData: string,
   callbackChatId: string,
@@ -377,6 +403,35 @@ export function claimCodexSelectionCallback(
   const { permissionRequestId, choice } = codexSelectionChoice;
   const link = store.getPermissionLink(permissionRequestId);
   if (!link) {
+    cleanupCodexSelectionActive();
+    if (codexSelectionWaiters.has(permissionRequestId)) {
+      const waiterResolved = resolveCodexSelectionChoice(permissionRequestId, choice);
+      codexSelectionPendingCallbacks.set(permissionRequestId, {
+        choice,
+        chatId: callbackChatId,
+        ...(callbackMessageId ? { callbackMessageId } : {}),
+        resolvedAt: Date.now(),
+      });
+      if (waiterResolved) {
+        permissions.resolvePendingPermission(permissionRequestId, {
+          behavior: 'allow',
+          message: choice,
+        });
+      }
+      console.warn(`[permission-broker] Codex selection callback resolved before permission link was recorded for ${permissionRequestId}`);
+      return {
+        permissionRequestId,
+        choice,
+        link: {
+          permissionRequestId,
+          chatId: callbackChatId,
+          messageId: callbackMessageId || '',
+          resolved: true,
+          suggestions: '',
+        },
+        handledBy: waiterResolved ? 'waiter' : 'orphan',
+      };
+    }
     console.warn(`[permission-broker] No permission link found for ${permissionRequestId}`);
     return null;
   }
@@ -400,14 +455,7 @@ export function claimCodexSelectionCallback(
   }
   if (!claimed) return null;
 
-  const waiterResolved = resolveCodexSelectionWaiter(permissionRequestId, choice);
-  const aliases = codexSelectionAliasesByPrimary.get(permissionRequestId);
-  if (aliases) {
-    for (const alias of aliases) {
-      resolveCodexSelectionWaiter(alias, choice);
-    }
-  }
-  releaseCodexSelectionActive(permissionRequestId);
+  const waiterResolved = resolveCodexSelectionChoice(permissionRequestId, choice);
   if (waiterResolved) {
     permissions.resolvePendingPermission(permissionRequestId, {
       behavior: 'allow',
@@ -560,6 +608,15 @@ export async function forwardPermissionRequest(
         toolName,
         suggestions: suggestions ? JSON.stringify(suggestions) : '',
       });
+      const pending = codexSelectionPendingCallbacks.get(permissionRequestId);
+      if (
+        pending
+        && pending.chatId === address.chatId
+        && (!pending.callbackMessageId || pending.callbackMessageId === result.messageId)
+      ) {
+        store.markPermissionLinkResolved(permissionRequestId);
+        codexSelectionPendingCallbacks.delete(permissionRequestId);
+      }
     } catch { /* best effort */ }
   } else if (isSelectionPrompt) {
     releaseCodexSelectionActive(permissionRequestId);

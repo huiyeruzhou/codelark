@@ -589,6 +589,7 @@ describe('bridge-adapter-runtime', () => {
             laneKey: `job:tmux-screen:${msg.address.channelType}:${msg.address.chatId}:${msg.messageId}`,
             laneKind: 'job',
             jobKind: 'command:tmux-screen',
+            waitForConversationBarrier: false,
           };
         }
         if (msg.text === '/stop') {
@@ -658,14 +659,14 @@ describe('bridge-adapter-runtime', () => {
     };
 
     runtime.runAdapterLoop(adapter as never);
-    await waitForCondition(() => started.includes('msg-stop'));
-    assert.deepEqual(started, ['msg-regular', 'msg-stop']);
+    await waitForCondition(() => started.includes('msg-screen') && started.includes('msg-stop'));
+    assert.deepEqual(started, ['msg-regular', 'msg-screen', 'msg-stop']);
 
     releaseRegular();
-    await waitForCondition(() => started.includes('msg-screen') && started.includes('msg-runtime'));
+    await waitForCondition(() => started.includes('msg-runtime'));
     assert.equal(started[0], 'msg-regular');
-    assert.equal(started[1], 'msg-stop');
-    assert.ok(started.indexOf('msg-screen') > started.indexOf('msg-regular'));
+    assert.equal(started[1], 'msg-screen');
+    assert.equal(started[2], 'msg-stop');
     assert.ok(started.indexOf('msg-runtime') > started.indexOf('msg-regular'));
   });
 

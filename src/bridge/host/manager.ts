@@ -98,6 +98,7 @@ import {
 } from '../../channels/adapter-runtime/sync-plan.js';
 import {
   createAdapterRuntime,
+  type AdapterImmediateLane,
   type BridgeAdapterRuntimeState,
 } from '../../channels/adapter-runtime/runtime.js';
 import {
@@ -391,14 +392,7 @@ async function probeTmuxProviderExitAfterAutoForward(params: {
   await deliverBridgeNotice(
     params.adapter,
     params.msg.address,
-    [
-      `${runtimeLabel} tmux Provider 会话已退出：\`${tmuxSessionName}\``,
-      '',
-      '刚才的消息已发送到 tmux，但 session 随后消失，mirror 不会同步这轮回复。',
-      '请先发送 `/p tmux` 重新启动 TUI；也可以发送 `/tmux-screen 80` 查看当前绑定状态。',
-      '',
-      `诊断命令：\`${exists.command}\``,
-    ].join('\n'),
+    `${runtimeLabel} tmux Provider 会话已退出：\`${tmuxSessionName}\`。请发送 \`/p tmux\` 重新启动 TUI。`,
     {
       sessionId: params.sessionId,
       replyToMessageId: params.msg.messageId,
@@ -427,15 +421,7 @@ async function notifyTmuxSelectionUpdateExit(params: {
   await deliverBridgeNotice(
     params.adapter,
     { channelType: params.target.channelType, chatId: params.target.chatId },
-    [
-      `Codex tmux Provider 会话已退出：\`${params.tmuxSessionName}\``,
-      '',
-      `刚才已向 tmux 发送 TUI 选择：\`${params.choice}\`。`,
-      '如果这是 Codex CLI 升级，升级流程可能已经让原 TUI 进程退出；CodeLark 当前没有可同步的 tmux session。',
-      '请发送 `/p tmux` 重新启动 TUI 后继续。',
-      '',
-      `诊断命令：\`${params.existsCommand}\``,
-    ].join('\n'),
+    `Codex tmux Provider 会话已退出：\`${params.tmuxSessionName}\`。请发送 \`/p tmux\` 重新启动 TUI。`,
     {
       sessionId: params.target.sessionId,
       audit: true,
@@ -1650,7 +1636,7 @@ function sessionMutatingCallbackLane(callbackData: string): { jobKind: string; s
   return null;
 }
 
-function adapterImmediateLane(msg: InboundMessage, category: 'channel-event' | 'callback' | 'command' | 'permission-shortcut' | 'bypass' | 'regular'): { laneKey: string; laneKind: 'control' | 'job'; jobKind: string } | null {
+function adapterImmediateLane(msg: InboundMessage, category: 'channel-event' | 'callback' | 'command' | 'permission-shortcut' | 'bypass' | 'regular'): AdapterImmediateLane | null {
   if (category === 'channel-event' || category === 'permission-shortcut') {
     return {
       laneKey: `control:${msg.address.channelType}:${msg.address.chatId}:${msg.messageId || msg.updateId || 'event'}`,
@@ -1674,10 +1660,12 @@ function adapterImmediateLane(msg: InboundMessage, category: 'channel-event' | '
   }
   if (category === 'command' && isReadOnlyOrLongIoCommandText(msg.text)) {
     const resolvedCommand = resolveInboundCommandText(msg.text);
+    const isScreenMonitor = resolvedCommand === '/tmux-screen' || resolvedCommand === '/pty-screen';
     return {
       laneKey: `job:${resolvedCommand.slice(1)}:${msg.address.channelType}:${msg.address.chatId}:${msg.messageId || 'command'}`,
       laneKind: 'job',
       jobKind: `command:${resolvedCommand.slice(1)}`,
+      waitForConversationBarrier: !isScreenMonitor,
     };
   }
   return null;
