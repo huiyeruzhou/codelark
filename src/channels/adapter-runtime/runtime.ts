@@ -64,6 +64,7 @@ export interface AdapterImmediateLane {
   laneKind: 'control' | 'job';
   jobKind: string;
   waitForConversationBarrier?: boolean;
+  blocksConversation?: boolean;
 }
 
 export interface AdapterSessionLane {
@@ -668,7 +669,7 @@ export function createAdapterRuntime(
                   ? currentConversationBarrier(chatKey)
                   : undefined,
               );
-              if (immediateLane.laneKind !== 'control') {
+              if (immediateLane.laneKind !== 'control' && immediateLane.blocksConversation !== false) {
                 trackConversationJob(chatKey, current);
               }
             } else {
