@@ -241,6 +241,59 @@ describe('codex tmux runtime', () => {
     }
   });
 
+  it('uses the IM selection handler for startup prompts without a default choice', async () => {
+    let captureCount = 0;
+    const prompts: string[] = [];
+    const sentActions: Array<{ target: string; actions: TmuxSendAction[] }> = [];
+    const core: TmuxCore = {
+      commandPreview: (args) => ['tmux', ...args].join(' '),
+      hasSession: async (name) => ({ exists: true, command: `tmux has-session -t ${name}` }),
+      killSession: async (name) => `tmux kill-session -t ${name}`,
+      listSessions: async () => ({ sessions: [], command: 'tmux list-sessions' }),
+      ensureDetachedSession: async () => ({ existed: false, command: 'tmux new-session -d -s codex_permission_handler', commands: ['tmux new-session -d -s codex_permission_handler'] }),
+      capturePane: async (name) => {
+        captureCount += 1;
+        return {
+          command: `tmux capture-pane -t ${name} -p -S -80`,
+          screen: captureCount === 1
+            ? [
+              'Codex wants to edit files.',
+              '› 1. Yes, proceed (y)',
+              "  2. Yes, and don't ask again for these files (a)",
+              '  3. No, and tell Codex what to do differently (esc)',
+              'Press enter to confirm or esc to cancel',
+            ].join('\n')
+            : 'OpenAI Codex\n\n› ',
+        };
+      },
+      sendActions: async (target, actions) => {
+        sentActions.push({ target, actions });
+        return { commands: actions.map((action) => action.type === 'key' ? `tmux send-keys -t ${target} ${action.key}` : `tmux send-keys -t ${target} -l ${action.text}`) };
+      },
+      sendInterrupt: async () => 'tmux send-keys -t codex_permission_handler C-c',
+      injectPromptIntoPane: async () => ({ commands: [] }),
+    };
+
+    const result = await waitForCodexResumeTmuxReady('codex_permission_handler', core, {
+      onSelectionPrompt: (selectionPrompt) => {
+        prompts.push(selectionPrompt.kind);
+        return 'yes_always';
+      },
+    });
+
+    assert.equal(result.ready, true);
+    assert.deepEqual(prompts, ['permission']);
+    assert.deepEqual(sentActions, [{
+      target: 'codex_permission_handler',
+      actions: [
+        { type: 'key', key: 'Down' },
+        { type: 'key', key: 'Enter' },
+      ],
+    }]);
+    assert.equal(result.commands.includes('tmux send-keys -t codex_permission_handler Down'), true);
+    assert.equal(result.commands.includes('tmux send-keys -t codex_permission_handler Enter'), true);
+  });
+
   it('uses the shared runtime readiness loop to confirm Claude trust prompts', async () => {
     const oldTimeout = process.env.CODELARK_CLAUDE_TMUX_READY_TIMEOUT_MS;
     const oldPoll = process.env.CODELARK_CLAUDE_TMUX_READY_POLL_MS;
