@@ -52,6 +52,32 @@ function cloudDocumentCommentEvent(eventId: string, event: Record<string, any>) 
 }
 
 describe('feishu-adapter structured streaming regions', () => {
+  it('extracts selected callback data from select_static object options', () => {
+    const callbackData = 'codex-tui-selection-choice:codex-selection%3Aupdate%3Atmux%3Asession%3A1:skip';
+
+    assert.equal(_testOnly.extractFeishuCardActionCallbackData({
+      action: {
+        tag: 'select_static',
+        value: { select_id: 'clk_codex_tui_selection' },
+        option: {
+          text: { tag: 'plain_text', content: 'Skip' },
+          value: callbackData,
+        },
+      },
+    }), callbackData);
+
+    assert.equal(_testOnly.extractFeishuCardActionCallbackData({
+      action: {
+        tag: 'select_static',
+        value: { select_id: 'clk_codex_tui_selection' },
+        option: {
+          text: { tag: 'plain_text', content: 'Skip until next version' },
+          value: { value: 'nested-choice' },
+        },
+      },
+    }), 'nested-choice');
+  });
+
   it('returns null for chat info only when Feishu reports the chat is gone', async () => {
     initBridgeTestContext();
     const adapter = new FeishuAdapter({

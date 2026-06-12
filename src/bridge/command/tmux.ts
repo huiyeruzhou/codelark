@@ -18,6 +18,7 @@ import {
   sendTmuxActions,
   sendTmuxActionsAndCapture,
   startRuntimeTmuxSession,
+  waitForRuntimeTmuxReady,
   waitForCodexResumeTmuxReady,
   type RuntimeTmuxKind,
   type RuntimeTmuxSelectionPrompt,
@@ -560,6 +561,35 @@ async function ensureCodexTmuxSessionForProvider(
         setSessionTmuxAutoEnterToml(session.id, getProviderAutoEnter(session));
         await params.reconcileMirrorSubscriptions?.();
       }
+      if (
+        params.tmuxProviderAutoForward === true
+        && session.runtime_status !== 'running'
+        && session.runtime_status !== 'queued'
+      ) {
+        console.log('[tmux-command] Waiting for existing Claude tmux provider session before auto-forward:', {
+          event: 'tmux.provider.claude.existing.wait_ready',
+          bridge_session_id: session.id,
+          tmux_session: target,
+          runtime_status: session.runtime_status || 'idle',
+        });
+        const readiness = await waitForRuntimeTmuxReady({
+          runtime: 'claude',
+          sessionName: target,
+          target: `${target}:0.0`,
+        });
+        if (!readiness.ready) {
+          const reason = readiness.lastError
+            ? `Claude tmux readiness 检查失败：${readiness.lastError}`
+            : 'Claude Code TUI 未在超时时间内进入可输入状态';
+          return {
+            target,
+            commands: [exists.command, ...readiness.commands],
+            recovered: false,
+            error: `${reason}，未发送 auto-forward 消息。请用 \`/tmux-screen 80\` 检查。`,
+          };
+        }
+        return { target, commands: [exists.command, ...readiness.commands], recovered: false };
+      }
       return { target, commands: [exists.command], recovered: false };
     }
     if (params.autoRecoverProviderSession !== true || hasManualOnlyTarget) {
@@ -586,6 +616,7 @@ async function ensureCodexTmuxSessionForProvider(
       permissionMode: claudeConfig.permissionMode,
       reasoningEffort: claudeConfig.reasoningEffort,
       recreate: true,
+      waitReady: true,
     });
     store.updateSession(session.id, setSessionClaudeTmuxProviderUpdate({
       tmuxSessionName: target,
@@ -938,7 +969,7 @@ export async function handleTmuxBridgeCommand(params: HandleTmuxBridgeCommandPar
       });
       if (!inspected.exists) {
         return appendTmuxCommandPreview(
-          `tmux session 不存在：${captureTarget}`,
+          `tmux session 不存在：${captureTarget}。如果这是当前 tmux Provider，请发送 \`/p tmux\` 重新启动 TUI。`,
           [...ensured.commands, inspected.existsCommand],
           markdown,
         );

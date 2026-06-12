@@ -107,10 +107,67 @@ describe('permission-broker', () => {
       'Skip until next version',
     ]);
     assert.match(
+      message.richCard?.selects?.[0]?.selectedCallbackData || '',
+      /^codex-tui-selection-choice:codex-selection%3Aupdate%3Atmux%3Asession-2%3A1:update_now$/,
+    );
+    assert.match(
       message.richCard?.selects?.[0]?.options[2]?.callbackData || '',
       /^codex-tui-selection-choice:codex-selection%3Aupdate%3Atmux%3Asession-2%3A1:skip_until_next_version$/,
     );
     assert.equal(store.getPermissionLink(permissionRequestId)?.messageId, 'reply-1');
+  });
+
+  it('suppresses duplicate Codex TUI selection cards while resolving all waiters', async () => {
+    initBridgeTestContext();
+    const adapter = new RecordingAdapter();
+    const address = { channelType: 'feishu', chatId: 'chat-codex-selection-dedup' } as const;
+    const firstPermissionRequestId = 'codex-selection:update:provider-auto-forward-startup:session-2:1';
+    const duplicatePermissionRequestId = 'codex-selection:update:mirror:session-2:2';
+    const toolInput = {
+      provider: 'tmux',
+      inspect: '/tmux-screen 80',
+      promptKind: 'update',
+      defaultChoice: 'update_now',
+      prompt: [
+        'Update available! 0.135.0 -> 0.136.0',
+        '› 1. Update now',
+        '  2. Skip',
+        '  3. Skip until next version',
+      ].join('\n'),
+      choices: [
+        { choice: 'update_now', label: 'Update now', selected: true },
+        { choice: 'skip', label: 'Skip', selected: false },
+        { choice: 'skip_until_next_version', label: 'Skip until next version', selected: false },
+      ],
+    };
+
+    const firstChoice = waitForCodexTuiSelectionPermission(firstPermissionRequestId);
+    await forwardPermissionRequest(
+      adapter,
+      address,
+      firstPermissionRequestId,
+      'Codex TUI Selection Prompt',
+      toolInput,
+      'session-2',
+    );
+    const duplicateChoice = waitForCodexTuiSelectionPermission(duplicatePermissionRequestId);
+    await forwardPermissionRequest(
+      adapter,
+      address,
+      duplicatePermissionRequestId,
+      'Codex TUI Selection Prompt',
+      toolInput,
+      'session-2',
+    );
+
+    assert.equal(adapter.sent.length, 1);
+    const callbackData = adapter.sent[0]?.richCard?.selects?.[0]?.options.find((option) => (
+      option.callbackData.endsWith(':skip')
+    ))?.callbackData;
+    assert.ok(callbackData);
+    assert.equal(handlePermissionCallback(callbackData, address.chatId, 'reply-1'), true);
+    assert.equal(await firstChoice, 'skip');
+    assert.equal(await duplicateChoice, 'skip');
   });
 
   it('renders generic Codex TUI selections with a not-selection escape option', async () => {
@@ -162,7 +219,6 @@ describe('permission-broker', () => {
         provider: 'tmux',
         inspect: '/tmux-screen 80',
         promptKind: 'goal',
-        defaultChoice: 'cancel',
         prompt: [
           '› 1. Replace current goal  Set the new objective and start it now',
           '  2. Cancel                Keep the current goal',
@@ -189,7 +245,7 @@ describe('permission-broker', () => {
       'Replace current goal  Set the new objective and start it now',
       'Cancel                Keep the current goal',
     ]);
-    assert.match(select?.selectedCallbackData || '', /:cancel$/);
+    assert.match(select?.selectedCallbackData || '', /:replace_current_goal$/);
     assert.match(select?.options[1]?.callbackData || '', /:cancel$/);
   });
 

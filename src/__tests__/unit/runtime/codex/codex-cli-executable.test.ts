@@ -24,26 +24,26 @@ describe('codex-cli-executable', () => {
     );
   });
 
-  it('falls back to node_modules only when it is the only Codex CLI on PATH', () => {
-    assert.equal(
-      resolveCodexCliExecutable({
+  it('rejects node_modules even when it is the only Codex CLI on PATH', () => {
+    assert.throws(
+      () => resolveCodexCliExecutable({
         env: { PATH: '/repo/node_modules/.bin' },
         platform: 'linux',
         fileExists: (filePath) => filePath === '/repo/node_modules/.bin/codex',
       }),
-      '/repo/node_modules/.bin/codex',
+      /must be installed globally.*node_modules\/\.bin\/codex/,
     );
   });
 
-  it('falls back to package-local node_modules when Codex is missing from PATH', () => {
-    assert.equal(
-      resolveCodexCliExecutable({
+  it('rejects package-local node_modules when Codex is missing from PATH', () => {
+    assert.throws(
+      () => resolveCodexCliExecutable({
         env: { PATH: '/usr/bin:/bin' },
         platform: 'linux',
         packageSearchRoots: ['/repo/apps/codelark/dist/runtime/codex'],
         fileExists: (filePath) => filePath === '/repo/apps/codelark/node_modules/.bin/codex',
       }),
-      '/repo/apps/codelark/node_modules/.bin/codex',
+      /Refused local candidates: \/repo\/apps\/codelark\/node_modules\/\.bin\/codex/,
     );
   });
 
@@ -75,6 +75,20 @@ describe('codex-cli-executable', () => {
         fileExists: () => false,
       }),
       '/custom/codex',
+    );
+  });
+
+  it('rejects CODELARK_CODEX_CLI_PATH when it points at node_modules', () => {
+    assert.throws(
+      () => resolveCodexCliExecutable({
+        env: {
+          CODELARK_CODEX_CLI_PATH: '/repo/node_modules/.bin/codex',
+          PATH: '/home/user/.local/bin',
+        },
+        platform: 'linux',
+        fileExists: () => true,
+      }),
+      /Refused local candidates: \/repo\/node_modules\/\.bin\/codex/,
     );
   });
 

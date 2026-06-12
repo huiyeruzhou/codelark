@@ -14,6 +14,7 @@ export interface ResolveCodexCliExecutableOptions {
 export interface ResolveCliExecutableOptions extends ResolveCodexCliExecutableOptions {
   command: string;
   overrideEnvVar?: string;
+  requireGlobal?: boolean;
 }
 
 function defaultExecutableExists(filePath: string): boolean {
@@ -182,17 +183,34 @@ export function resolveCodexCliExecutable(
     ...normalizeResolveOptions(options),
     command: 'codex',
     overrideEnvVar: 'CODELARK_CODEX_CLI_PATH',
+    requireGlobal: true,
   });
+}
+
+function buildGlobalExecutableRequiredError(command: string, rejectedCandidates: string[]): Error {
+  const uniqueCandidates = Array.from(new Set(rejectedCandidates));
+  const details = uniqueCandidates.length > 0
+    ? ` Refused local candidates: ${uniqueCandidates.join(', ')}.`
+    : '';
+  return new Error(
+    `${command} CLI must be installed globally and available on PATH; CodeLark will not use node_modules/.bin/${command}.${details}`,
+  );
 }
 
 export function resolveCliExecutable(options: ResolveCliExecutableOptions): string {
   const env = options.env || process.env;
   const override = options.overrideEnvVar ? env[options.overrideEnvVar]?.trim() : '';
-  if (override) return override;
 
   const platform = options.platform || process.platform;
   const fileExists = options.fileExists || defaultExecutableExists;
   const pathModule = pathModuleForPlatform(platform);
+  if (override) {
+    if (options.requireGlobal && isNodeModulesBinPath(pathModule.dirname(override))) {
+      throw buildGlobalExecutableRequiredError(options.command, [override]);
+    }
+    return override;
+  }
+
   const pathValue = env.PATH || '';
   const entries = pathValue.split(pathDelimiterForPlatform(platform)).filter(Boolean);
   const names = executableNames(options.command, platform);
@@ -208,10 +226,15 @@ export function resolveCliExecutable(options: ResolveCliExecutableOptions): stri
     }
   }
 
+  const rejectedNodeModulesCandidates: string[] = [];
   for (const dir of entries) {
     for (const name of names) {
       const candidate = pathModule.join(dir, name);
       if (!fileExists(candidate)) continue;
+      if (options.requireGlobal && isNodeModulesBinPath(dir)) {
+        rejectedNodeModulesCandidates.push(candidate);
+        continue;
+      }
       const resolvedWrapper = resolveHomeRelativeCodexWrapper(options.command, candidate, env, fileExists);
       if (resolvedWrapper) return resolvedWrapper;
       return candidate;
@@ -224,6 +247,12 @@ export function resolveCliExecutable(options: ResolveCliExecutableOptions): stri
     options.packageSearchRoots || packageLocalSearchRoots(),
     fileExists,
   );
+  if (options.requireGlobal && packageLocal) {
+    rejectedNodeModulesCandidates.push(packageLocal);
+  }
+  if (options.requireGlobal) {
+    throw buildGlobalExecutableRequiredError(options.command, rejectedNodeModulesCandidates);
+  }
   if (packageLocal) return packageLocal;
 
   return names[0] || options.command;
