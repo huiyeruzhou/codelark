@@ -7,6 +7,7 @@ import {
   buildCodexTuiArgs,
   buildCodexTuiEnv,
   buildCodexTuiShellCommand,
+  getCodexTuiSelectionPromptUiDefaultChoice,
   parseCodexTuiSelectionPrompt,
   parsePositiveIntEnv,
   type CodexTuiSelectionPrompt,
@@ -372,28 +373,38 @@ function detectAnyRuntimeTmuxSelectionPrompt(screenText: string): RuntimeTmuxSel
 
 export function hasCodexResumeTmuxReadyPrompt(screenText: string): boolean {
   if (parseCodexTuiSelectionPrompt(screenText)) return false;
-  const normalized = screenText
-    .replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, '')
-    .replace(/\r\n/g, '\n')
-    .replace(/\r/g, '\n')
-    .slice(-20_000);
+  const normalized = normalizeRuntimeTmuxScreenText(screenText);
   if (!normalized.trim()) return false;
   return /OpenAI\s+Codex|Codex\s+TUI|codex/i.test(normalized)
     && /(?:^|\n)\s*[›>]\s*(?:[^\n]*)?(?:$|\n)|\?\s+for\s+shortcuts|What\s+would\s+you\s+like/i.test(normalized);
 }
 
+function normalizeRuntimeTmuxScreenText(screenText: string): string {
+  return screenText
+    .replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, '')
+    .replace(/\r\n/g, '\n')
+    .replace(/\r/g, '\n')
+    .slice(-20_000);
+}
+
+function hasGenericRuntimeTmuxReadyPrompt(screenText: string): boolean {
+  if (detectAnyRuntimeTmuxSelectionPrompt(screenText)) return false;
+  const normalized = normalizeRuntimeTmuxScreenText(screenText);
+  if (!normalized.trim()) return false;
+  return /Claude\s+Code|OpenAI\s+Codex|Codex\s+TUI|\?\s+for\s+shortcuts|What\s+would\s+you\s+like/i.test(normalized)
+    && /(?:^|\n)\s*[›❯>]\s*(?:[^\n]*)?(?:$|\n)|\?\s+for\s+shortcuts|What\s+would\s+you\s+like/i.test(normalized);
+}
+
 function defaultCodexResumeStartupSelectionChoice(
   prompt: CodexTuiSelectionPrompt,
 ): CodexTuiSelectionPromptChoice | null {
-  if (prompt.kind === 'update') return 'skip';
-  if (prompt.kind === 'goal') return 'cancel';
-  return null;
+  return getCodexTuiSelectionPromptUiDefaultChoice(prompt);
 }
 
 function hasRuntimeTmuxReadyPrompt(runtime: RuntimeTmuxKind, screenText: string): boolean {
   return runtime === 'codex'
     ? hasCodexResumeTmuxReadyPrompt(screenText)
-    : hasClaudePtyInputPrompt(screenText);
+    : hasClaudePtyInputPrompt(screenText) || hasGenericRuntimeTmuxReadyPrompt(screenText);
 }
 
 function runtimeReadyTimeoutMs(runtime: RuntimeTmuxKind): number {
@@ -495,6 +506,7 @@ export async function waitForRuntimeTmuxReady(params: {
         });
         if (
           params.autoResolveSelection === false
+          || (selectionPrompt.runtime === 'codex' && typeof params.onSelectionPrompt !== 'function')
           || (selectionPrompt.defaultChoice === null && typeof params.onSelectionPrompt !== 'function')
         ) {
           return {
@@ -515,7 +527,7 @@ export async function waitForRuntimeTmuxReady(params: {
           let resolvedChoice: CodexTuiSelectionPromptChoice | 'confirm' | null = null;
           let actions: TmuxSendAction[] = [];
           if (selectionPrompt.runtime === 'codex') {
-            resolvedChoice = requestedChoice || selectionPrompt.defaultChoice;
+            resolvedChoice = requestedChoice || null;
             if (!resolvedChoice) {
               return {
                 ready: false,

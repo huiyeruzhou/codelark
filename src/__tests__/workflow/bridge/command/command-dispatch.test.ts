@@ -6041,7 +6041,7 @@ enabled = true
       );
       assert.match(sent.at(-1) || '', /已绑定 tmux session/);
       assert.match(sent.at(-1) || '', /Selection.*Codex goal selection prompt/s);
-      assert.match(sent.at(-1) || '', /默认动作：cancel/);
+      assert.match(sent.at(-1) || '', /默认动作：replace_current_goal/);
 
       await handleBridgeCommand(
         adapter,

@@ -1434,6 +1434,29 @@ function summarizeCardActionRows(actionRows: FeishuCardActionButton[][]): {
   };
 }
 
+function extractSelectStaticOptionValue(option: unknown): string {
+  if (typeof option === 'string') return option;
+  if (!option || typeof option !== 'object') return '';
+  const record = option as Record<string, unknown>;
+  if (typeof record.value === 'string') return record.value;
+  if (record.value && typeof record.value === 'object') {
+    const nested = record.value as Record<string, unknown>;
+    if (typeof nested.value === 'string') return nested.value;
+    if (typeof nested.callback_data === 'string') return nested.callback_data;
+  }
+  if (typeof record.callback_data === 'string') return record.callback_data;
+  return '';
+}
+
+function extractFeishuCardActionCallbackData(event: any): string {
+  const value = event?.action?.value ?? {};
+  const actionTag = event?.action?.tag;
+  const optionValue = extractSelectStaticOptionValue(event?.action?.option);
+  return actionTag === 'select_static' && optionValue
+    ? optionValue
+    : value.callback_data || '';
+}
+
 /** Shape of the SDK's im.message.receive_v1 event data. */
 type FeishuMessageEventData = {
   sender: {
@@ -2699,10 +2722,7 @@ export class FeishuAdapter extends BaseChannelAdapter {
       const event = data as any;
       const value = event?.action?.value ?? {};
       const actionTag = event?.action?.tag;
-      const optionValue = typeof event?.action?.option === 'string' ? event.action.option : '';
-      const callbackData = actionTag === 'select_static' && optionValue
-        ? optionValue
-        : value.callback_data;
+      const callbackData = extractFeishuCardActionCallbackData(event);
 
       // Extract chat/user context
       const chatId = event?.context?.open_chat_id || event?.context?.chat_id || value.chatId || '';
@@ -6959,6 +6979,8 @@ export const _testOnly = {
   maskProxyUrl,
   formatInteractiveCardPromptBlock,
   formatQuotedMessageContext,
+  extractFeishuCardActionCallbackData,
+  extractSelectStaticOptionValue,
   parseFeishuPostContent,
   shouldBypassProxy,
   withHttpProxyOptions,

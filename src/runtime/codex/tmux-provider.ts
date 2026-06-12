@@ -400,6 +400,15 @@ export function parseCodexTuiUpdatePrompt(screenText: string): CodexTuiUpdatePro
   return prompt?.kind === 'update' ? prompt : null;
 }
 
+export function getCodexTuiSelectionPromptUiDefaultChoice(
+  prompt: CodexTuiSelectionPrompt,
+): CodexTuiSelectionPromptChoice | null {
+  const selected = prompt.options.find((option) => option.selected);
+  if (selected) return selected.choice;
+  const first = prompt.options.slice().sort((left, right) => left.index - right.index)[0];
+  return first?.choice || null;
+}
+
 export function createCodexTuiSelectionPromptMonitor(): CodexTuiSelectionPromptMonitor {
   return {
     stableCaptures: 0,
@@ -510,9 +519,9 @@ export async function requestCodexTuiSelectionConfirmation(params: {
 }): Promise<CodexTuiSelectionPromptChoice> {
   const kind = params.prompt?.kind || 'permission';
   const defaultChoice = params.defaultChoice || (kind === 'update'
-    ? 'skip'
+    ? params.prompt ? getCodexTuiSelectionPromptUiDefaultChoice(params.prompt) || 'skip' : 'skip'
     : kind === 'goal'
-      ? 'cancel'
+      ? params.prompt ? getCodexTuiSelectionPromptUiDefaultChoice(params.prompt) || 'replace_current_goal' : 'replace_current_goal'
       : kind === 'generic'
         ? 'not_selection'
         : 'yes_proceed');

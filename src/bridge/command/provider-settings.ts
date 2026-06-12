@@ -204,6 +204,7 @@ export async function handleProviderCommand(options: {
           permissionMode: claudeConfig.permissionMode,
           reasoningEffort: claudeConfig.reasoningEffort,
           recreate: true,
+          waitReady: true,
         });
       } catch (error) {
         const unavailable = formatTmuxProviderUnavailable(error);

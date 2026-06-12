@@ -148,7 +148,7 @@ describe('codex tmux runtime', () => {
     assert.equal(captureCount, 2);
   });
 
-  it('clears a startup goal selection before accepting a launched session as ready', async () => {
+  it('requires a selection handler instead of auto-cancelling a startup goal selection', async () => {
     let captureCount = 0;
     const sentActions: Array<{ target: string; actions: TmuxSendAction[] }> = [];
     const core: TmuxCore = {
@@ -180,24 +180,20 @@ describe('codex tmux runtime', () => {
       injectPromptIntoPane: async () => ({ commands: [] }),
     };
 
-    const result = await startCodexResumeTmuxSession({
+    await assert.rejects(() => startCodexResumeTmuxSession({
       sessionName: 'codex_goal',
       threadId: 'goal-thread',
       bridgeSessionId: 'bridge-goal',
       workingDirectory: '/tmp',
-    }, core);
+    }, core), (error) => {
+      assert.ok(error instanceof CodexResumeTmuxLaunchError);
+      assert.equal(error.details.selectionPromptKind, 'goal');
+      assert.equal(error.details.selectionPromptChoice, 'replace_current_goal');
+      return true;
+    });
 
-    assert.equal(result.ready, true);
-    assert.equal(captureCount, 2);
-    assert.deepEqual(sentActions, [{
-      target: 'codex_goal',
-      actions: [
-        { type: 'key', key: 'Down' },
-        { type: 'key', key: 'Enter' },
-      ],
-    }]);
-    assert.equal(result.commands.includes('tmux send-keys -t codex_goal Down'), true);
-    assert.equal(result.commands.includes('tmux send-keys -t codex_goal Enter'), true);
+    assert.equal(captureCount, 1);
+    assert.deepEqual(sentActions, []);
   });
 
   it('reports unsupported startup selection prompts without waiting for the full ready timeout', async () => {
@@ -232,7 +228,7 @@ describe('codex tmux runtime', () => {
 
       assert.equal(result.ready, false);
       assert.equal(result.selectionPromptKind, 'permission');
-      assert.equal(result.selectionPromptChoice, undefined);
+      assert.equal(result.selectionPromptChoice, 'yes_proceed');
       assert.match(result.selectionPromptSummary || '', /Yes, proceed/);
       assert.equal(Date.now() - startedAt < 1_000, true);
     } finally {
@@ -392,7 +388,7 @@ describe('codex tmux runtime', () => {
     assert.equal(inspected.exists, true);
     assert.equal(inspected.selectionPrompt?.runtime, 'codex');
     assert.equal(inspected.selectionPrompt?.kind, 'goal');
-    assert.equal(inspected.selectionPrompt?.defaultChoice, 'cancel');
+    assert.equal(inspected.selectionPrompt?.defaultChoice, 'replace_current_goal');
   });
 
   it('cleans up runtime tmux sessions through the shared cleanup helper', async () => {

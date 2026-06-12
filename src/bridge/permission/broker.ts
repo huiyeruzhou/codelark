@@ -54,11 +54,16 @@ export type CodexSelectionCallbackClaim = {
 };
 
 type CodexSelectionWaiter = {
-  resolve: (choice: CodexSelectionChoice) => void;
+  resolve: (choice: CodexSelectionChoice | null) => void;
   timer: NodeJS.Timeout;
 };
 
 const codexSelectionWaiters = new Map<string, CodexSelectionWaiter>();
+const codexSelectionActiveByKey = new Map<string, { permissionRequestId: string; expiresAt: number }>();
+const codexSelectionAliasesByPrimary = new Map<string, Set<string>>();
+const codexSelectionPrimaryByAlias = new Map<string, string>();
+const codexSelectionKeyByRequestId = new Map<string, string>();
+const CODEX_SELECTION_ACTIVE_TTL_MS = 5 * 60 * 1000;
 
 function isCodexTrustPermission(permissionRequestId: string, toolName: string): boolean {
   return toolName === CODEX_TRUST_TOOL_NAME || permissionRequestId.startsWith('codex-trust:');
@@ -129,6 +134,83 @@ function codexSelectionChoiceLabel(choice: CodexSelectionChoice): string {
 
 function buildCodexSelectionChoiceCallbackData(permissionRequestId: string, choice: CodexSelectionChoice): string {
   return `${CODEX_SELECTION_CALLBACK_PREFIX}${encodeURIComponent(permissionRequestId)}:${choice}`;
+}
+
+function codexSelectionActiveKey(
+  address: ChannelAddress,
+  sessionId: string | undefined,
+  toolInput: Record<string, unknown>,
+): string {
+  const promptKind = typeof toolInput.promptKind === 'string' ? toolInput.promptKind : '';
+  const prompt = typeof toolInput.prompt === 'string' ? toolInput.prompt : '';
+  const inspect = typeof toolInput.inspect === 'string' ? toolInput.inspect : '';
+  return [
+    address.channelType,
+    address.chatId,
+    sessionId || '',
+    promptKind,
+    prompt || inspect,
+  ].join('\n');
+}
+
+function cleanupCodexSelectionActive(now = Date.now()): void {
+  for (const [key, active] of codexSelectionActiveByKey) {
+    if (active.expiresAt > now) continue;
+    codexSelectionActiveByKey.delete(key);
+    codexSelectionKeyByRequestId.delete(active.permissionRequestId);
+    const aliases = codexSelectionAliasesByPrimary.get(active.permissionRequestId);
+    if (aliases) {
+      for (const alias of aliases) codexSelectionPrimaryByAlias.delete(alias);
+    }
+    codexSelectionAliasesByPrimary.delete(active.permissionRequestId);
+  }
+}
+
+function claimCodexSelectionActiveForward(params: {
+  address: ChannelAddress;
+  sessionId?: string;
+  permissionRequestId: string;
+  toolInput: Record<string, unknown>;
+}): { primary: boolean; primaryPermissionRequestId: string } {
+  const now = Date.now();
+  cleanupCodexSelectionActive(now);
+  const key = codexSelectionActiveKey(params.address, params.sessionId, params.toolInput);
+  const existing = codexSelectionActiveByKey.get(key);
+  if (existing && existing.permissionRequestId !== params.permissionRequestId) {
+    let aliases = codexSelectionAliasesByPrimary.get(existing.permissionRequestId);
+    if (!aliases) {
+      aliases = new Set<string>();
+      codexSelectionAliasesByPrimary.set(existing.permissionRequestId, aliases);
+    }
+    aliases.add(params.permissionRequestId);
+    codexSelectionPrimaryByAlias.set(params.permissionRequestId, existing.permissionRequestId);
+    return { primary: false, primaryPermissionRequestId: existing.permissionRequestId };
+  }
+  codexSelectionActiveByKey.set(key, {
+    permissionRequestId: params.permissionRequestId,
+    expiresAt: now + CODEX_SELECTION_ACTIVE_TTL_MS,
+  });
+  codexSelectionKeyByRequestId.set(params.permissionRequestId, key);
+  return { primary: true, primaryPermissionRequestId: params.permissionRequestId };
+}
+
+function releaseCodexSelectionActive(permissionRequestId: string): void {
+  const aliasPrimary = codexSelectionPrimaryByAlias.get(permissionRequestId);
+  if (aliasPrimary) {
+    codexSelectionPrimaryByAlias.delete(permissionRequestId);
+    codexSelectionAliasesByPrimary.get(aliasPrimary)?.delete(permissionRequestId);
+    return;
+  }
+  const primary = permissionRequestId;
+  const key = codexSelectionKeyByRequestId.get(primary);
+  if (key) codexSelectionActiveByKey.delete(key);
+  codexSelectionKeyByRequestId.delete(primary);
+  const aliases = codexSelectionAliasesByPrimary.get(primary);
+  if (aliases) {
+    for (const alias of aliases) codexSelectionPrimaryByAlias.delete(alias);
+  }
+  codexSelectionAliasesByPrimary.delete(primary);
+  codexSelectionPrimaryByAlias.delete(permissionRequestId);
 }
 
 export function parseCodexSelectionChoiceCallbackData(callbackData: string): {
@@ -256,10 +338,30 @@ export function waitForCodexTuiSelectionPermission(
   return new Promise((resolve) => {
     const timer = setTimeout(() => {
       codexSelectionWaiters.delete(permissionRequestId);
+      const aliases = codexSelectionAliasesByPrimary.get(permissionRequestId);
+      if (aliases) {
+        for (const alias of aliases) {
+          const aliasWaiter = codexSelectionWaiters.get(alias);
+          if (!aliasWaiter) continue;
+          clearTimeout(aliasWaiter.timer);
+          codexSelectionWaiters.delete(alias);
+          aliasWaiter.resolve(null);
+        }
+      }
+      releaseCodexSelectionActive(permissionRequestId);
       resolve(null);
     }, timeoutMs);
     codexSelectionWaiters.set(permissionRequestId, { resolve, timer });
   });
+}
+
+function resolveCodexSelectionWaiter(permissionRequestId: string, choice: CodexSelectionChoice): boolean {
+  const waiter = codexSelectionWaiters.get(permissionRequestId);
+  if (!waiter) return false;
+  clearTimeout(waiter.timer);
+  codexSelectionWaiters.delete(permissionRequestId);
+  waiter.resolve(choice);
+  return true;
 }
 
 export function claimCodexSelectionCallback(
@@ -298,11 +400,15 @@ export function claimCodexSelectionCallback(
   }
   if (!claimed) return null;
 
-  const waiter = codexSelectionWaiters.get(permissionRequestId);
-  if (waiter) {
-    clearTimeout(waiter.timer);
-    codexSelectionWaiters.delete(permissionRequestId);
-    waiter.resolve(choice);
+  const waiterResolved = resolveCodexSelectionWaiter(permissionRequestId, choice);
+  const aliases = codexSelectionAliasesByPrimary.get(permissionRequestId);
+  if (aliases) {
+    for (const alias of aliases) {
+      resolveCodexSelectionWaiter(alias, choice);
+    }
+  }
+  releaseCodexSelectionActive(permissionRequestId);
+  if (waiterResolved) {
     permissions.resolvePendingPermission(permissionRequestId, {
       behavior: 'allow',
       message: choice,
@@ -354,6 +460,18 @@ export async function forwardPermissionRequest(
   const isTrustPrompt = isCodexTrustPermission(permissionRequestId, toolName);
   const isUpdatePrompt = isCodexUpdatePermission(permissionRequestId, toolName);
   const isSelectionPrompt = isCodexSelectionPermission(permissionRequestId, toolName);
+  if (isSelectionPrompt) {
+    const active = claimCodexSelectionActiveForward({
+      address,
+      sessionId,
+      permissionRequestId,
+      toolInput,
+    });
+    if (!active.primary) {
+      console.warn(`[permission-broker] Duplicate Codex TUI selection forward suppressed for ${permissionRequestId}; primary=${active.primaryPermissionRequestId}`);
+      return;
+    }
+  }
   // Format the input summary (truncated)
   const inputStr = isTrustPrompt
     ? formatCodexTrustSummary(toolInput)
@@ -443,6 +561,8 @@ export async function forwardPermissionRequest(
         suggestions: suggestions ? JSON.stringify(suggestions) : '',
       });
     } catch { /* best effort */ }
+  } else if (isSelectionPrompt) {
+    releaseCodexSelectionActive(permissionRequestId);
   }
 }
 

@@ -3,6 +3,9 @@ import type { InboundMessage } from '../../domain/index.js';
 import type {
   CodexTuiSelectionPromptChoice,
 } from '../../runtime/codex/tmux-provider.js';
+import {
+  getCodexTuiSelectionPromptUiDefaultChoice,
+} from '../../runtime/codex/tmux-provider.js';
 import type {
   RuntimeTmuxSelectionPrompt,
 } from '../tmux/runtime.js';
@@ -11,8 +14,10 @@ import * as permissionBroker from '../permission/broker.js';
 function defaultChoiceForSelectionPrompt(
   selectionPrompt: Extract<RuntimeTmuxSelectionPrompt, { runtime: 'codex' }>,
 ): CodexTuiSelectionPromptChoice {
-  if (selectionPrompt.kind === 'update') return 'skip';
-  if (selectionPrompt.kind === 'goal') return 'cancel';
+  const uiDefault = getCodexTuiSelectionPromptUiDefaultChoice(selectionPrompt.prompt);
+  if (uiDefault) return uiDefault;
+  if (selectionPrompt.kind === 'update') return 'update_now';
+  if (selectionPrompt.kind === 'goal') return 'replace_current_goal';
   if (selectionPrompt.kind === 'generic') return 'not_selection';
   return 'yes_proceed';
 }
