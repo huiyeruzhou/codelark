@@ -3281,16 +3281,12 @@ provider = "tmux"
       const beforeScreenMissingLog = fs.readFileSync(fakeTmux.logPath, 'utf-8');
       await _testOnly.handleMessage(adapter, inboundMessage(newAddress, '/tmux-screen 20', 'incoming-tmux-default-screen-missing'));
       const screenMissingLog = fs.readFileSync(fakeTmux.logPath, 'utf-8').slice(beforeScreenMissingLog.length);
-      assert.doesNotMatch(adapter.sent.at(-1)?.text || '', /tmux session 不存在|tmux Provider 缺少 codex_thread_id/);
-      assert.match(adapter.sent.at(-1)?.text || '', /tmux 当前屏幕状态/);
+      assert.match(adapter.sent.at(-1)?.text || '', new RegExp(`tmux session 不存在：${tmuxSession}`));
+      assert.match(adapter.sent.at(-1)?.text || '', /请先发送 `\/provider tmux` 重新启动 Codex TUI。/);
       assert.match(screenMissingLog, new RegExp(`has-session -t ${tmuxSession}`));
-      assert.match(screenMissingLog, new RegExp(`new-session -d -s ${tmuxSession}`));
-      assert.match(screenMissingLog, new RegExp(`resume ${actualThreadId}`));
-      assert.ok(
-        screenMissingLog.indexOf(`new-session -d -s ${tmuxSession}`) < screenMissingLog.indexOf(`capture-pane -t ${tmuxSession} -p -S -80`),
-        '/tmux-screen should recover the missing provider session before inspecting it',
-      );
-      assert.match(screenMissingLog, new RegExp(`capture-pane -t ${tmuxSession} -p -S -20`));
+      assert.doesNotMatch(screenMissingLog, new RegExp(`new-session -d -s ${tmuxSession}`));
+      assert.doesNotMatch(screenMissingLog, new RegExp(`resume ${actualThreadId}`));
+      assert.doesNotMatch(screenMissingLog, new RegExp(`capture-pane -t ${tmuxSession} -p -S -20`));
 
       fs.writeFileSync(fakeTmux.statePath, '', 'utf-8');
       const beforeRecoveredMessageLog = fs.readFileSync(fakeTmux.logPath, 'utf-8');
