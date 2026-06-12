@@ -477,7 +477,7 @@ export async function waitForRuntimeTmuxReady(params: {
     return { ready: true, runtime: params.runtime, commands: [] };
   }
 
-  const deadline = Date.now() + timeoutMs;
+  let deadline = Date.now() + timeoutMs;
   const commands: string[] = [];
   let lastScreen: string | undefined;
   let lastError: string | undefined;
@@ -523,7 +523,10 @@ export async function waitForRuntimeTmuxReady(params: {
           : `${selectionPrompt.runtime}:${selectionPrompt.kind}`;
         if (!handledSelectionFingerprints.has(fingerprint)) {
           handledSelectionFingerprints.add(fingerprint);
+          const selectionWaitStartedAt = Date.now();
           const requestedChoice = await params.onSelectionPrompt?.(selectionPrompt);
+          const selectionWaitMs = Math.max(0, Date.now() - selectionWaitStartedAt);
+          deadline += selectionWaitMs;
           let resolvedChoice: CodexTuiSelectionPromptChoice | 'confirm' | null = null;
           let actions: TmuxSendAction[] = [];
           if (selectionPrompt.runtime === 'codex') {
@@ -565,11 +568,13 @@ export async function waitForRuntimeTmuxReady(params: {
               prompt_kind: selectionPrompt.kind,
               requested_choice: requestedChoice || null,
               resolved_choice: resolvedChoice,
+              selection_wait_ms: selectionWaitMs,
             });
           }
           if (actions.length > 0) {
             const sent = await core.sendActions(captureTarget, actions);
             commands.push(...sent.commands);
+            deadline = Date.now() + timeoutMs;
             console.log('[tmux-runtime] Runtime tmux selection prompt actions sent:', {
               event: 'tmux.runtime.selection.actions_sent',
               runtime: params.runtime,
@@ -578,6 +583,7 @@ export async function waitForRuntimeTmuxReady(params: {
               prompt_runtime: selectionPrompt.runtime,
               prompt_kind: selectionPrompt.kind,
               action_count: actions.length,
+              ready_timeout_reset_ms: timeoutMs,
               commands: sent.commands,
             });
           }

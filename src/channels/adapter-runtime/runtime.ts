@@ -63,6 +63,7 @@ export interface AdapterImmediateLane {
   laneKey: string;
   laneKind: 'control' | 'job';
   jobKind: string;
+  waitForConversationBarrier?: boolean;
 }
 
 export interface AdapterSessionLane {
@@ -663,7 +664,9 @@ export function createAdapterRuntime(
                   jobKind: immediateLane.jobKind,
                 },
                 () => deps.handleMessage(adapter, msg),
-                immediateLane.laneKind === 'job' ? currentConversationBarrier(chatKey) : undefined,
+                immediateLane.laneKind === 'job' && immediateLane.waitForConversationBarrier !== false
+                  ? currentConversationBarrier(chatKey)
+                  : undefined,
               );
               if (immediateLane.laneKind !== 'control') {
                 trackConversationJob(chatKey, current);

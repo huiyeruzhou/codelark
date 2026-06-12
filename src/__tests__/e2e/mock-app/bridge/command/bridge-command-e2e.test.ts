@@ -3378,9 +3378,9 @@ provider = "tmux"
       const tmuxSession = store.getSession(binding.bridgeSessionId)?.runtime?.general?.tmuxSessionName || '';
       assert.match(tmuxSession, /^codex_/);
       assert.match(noticeText, new RegExp(`Codex tmux Provider 会话已退出：\`${tmuxSession}\``));
-      assert.match(noticeText, /刚才的消息已发送到 tmux，但 session 随后消失/);
-      assert.match(noticeText, /mirror 不会同步这轮回复/);
       assert.match(noticeText, /\/p tmux/);
+      assert.doesNotMatch(noticeText, /\/tmux-screen/);
+      assert.doesNotMatch(noticeText, /诊断命令/);
       assert.deepEqual(adapter.reactions.map((reaction) => reaction.action), ['add', 'remove']);
       assert.equal(store.getSession(binding.bridgeSessionId)?.health_status, 'failed');
       assert.match(store.getSession(binding.bridgeSessionId)?.health_reason || '', /disappeared .* after auto-forward input/);

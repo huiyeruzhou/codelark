@@ -290,6 +290,66 @@ describe('codex tmux runtime', () => {
     assert.equal(result.commands.includes('tmux send-keys -t codex_permission_handler Enter'), true);
   });
 
+  it('does not count IM selection wait time against runtime readiness timeout', async () => {
+    const oldTimeout = process.env.CODELARK_CODEX_RESUME_TMUX_READY_TIMEOUT_MS;
+    const oldPoll = process.env.CODELARK_CODEX_RESUME_TMUX_READY_POLL_MS;
+    try {
+      process.env.CODELARK_CODEX_RESUME_TMUX_READY_TIMEOUT_MS = '120';
+      process.env.CODELARK_CODEX_RESUME_TMUX_READY_POLL_MS = '50';
+      let captureCount = 0;
+      const sentActions: Array<{ target: string; actions: TmuxSendAction[] }> = [];
+      const core: TmuxCore = {
+        commandPreview: (args) => ['tmux', ...args].join(' '),
+        hasSession: async (name) => ({ exists: true, command: `tmux has-session -t ${name}` }),
+        killSession: async (name) => `tmux kill-session -t ${name}`,
+        listSessions: async () => ({ sessions: [], command: 'tmux list-sessions' }),
+        ensureDetachedSession: async () => ({ existed: false, command: 'tmux new-session -d -s codex_slow_selection', commands: ['tmux new-session -d -s codex_slow_selection'] }),
+        capturePane: async (name) => {
+          captureCount += 1;
+          return {
+            command: `tmux capture-pane -t ${name} -p -S -80`,
+            screen: captureCount === 1
+              ? [
+                'Do you trust the contents of this directory?',
+                '› 1. Yes, continue',
+                '  2. No, quit',
+                'Press enter to confirm or esc to cancel',
+              ].join('\n')
+              : 'OpenAI Codex\n\n› ',
+          };
+        },
+        sendActions: async (target, actions) => {
+          sentActions.push({ target, actions });
+          return { commands: actions.map((action) => action.type === 'key' ? `tmux send-keys -t ${target} ${action.key}` : `tmux send-keys -t ${target} -l ${action.text}`) };
+        },
+        sendInterrupt: async () => 'tmux send-keys -t codex_slow_selection C-c',
+        injectPromptIntoPane: async () => ({ commands: [] }),
+      };
+
+      const result = await waitForRuntimeTmuxReady({
+        runtime: 'codex',
+        sessionName: 'codex_slow_selection',
+        core,
+        onSelectionPrompt: async () => {
+          await new Promise((resolve) => setTimeout(resolve, 160));
+          return 'yes_proceed' as const;
+        },
+      });
+
+      assert.equal(result.ready, true);
+      assert.equal(captureCount >= 2, true);
+      assert.deepEqual(sentActions, [{
+        target: 'codex_slow_selection',
+        actions: [{ type: 'key', key: 'Enter' }],
+      }]);
+    } finally {
+      if (oldTimeout === undefined) delete process.env.CODELARK_CODEX_RESUME_TMUX_READY_TIMEOUT_MS;
+      else process.env.CODELARK_CODEX_RESUME_TMUX_READY_TIMEOUT_MS = oldTimeout;
+      if (oldPoll === undefined) delete process.env.CODELARK_CODEX_RESUME_TMUX_READY_POLL_MS;
+      else process.env.CODELARK_CODEX_RESUME_TMUX_READY_POLL_MS = oldPoll;
+    }
+  });
+
   it('uses the shared runtime readiness loop to confirm Claude trust prompts', async () => {
     const oldTimeout = process.env.CODELARK_CLAUDE_TMUX_READY_TIMEOUT_MS;
     const oldPoll = process.env.CODELARK_CLAUDE_TMUX_READY_POLL_MS;
