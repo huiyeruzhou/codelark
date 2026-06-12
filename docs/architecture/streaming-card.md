@@ -243,8 +243,8 @@ CardKit 的 `streaming_mode` 只影响文本流式上屏的表现，不应成为
 
 接近或超过任一安全线时，优先执行续接：
 
-1. 对旧卡调用 `card.settings` 关闭 `streaming_mode`。
-2. 尝试用 `cardElement.content` 把旧卡状态区改成“已续接到下一条”。
+1. 尝试用 `cardElement.content` 把旧卡状态区改成“已续接到下一条”。
+2. 对旧卡调用 `card.settings` 关闭 `streaming_mode`，让 finalize 成为旧卡续接前的最后一次 CardKit 写入。
 3. 用相同 stream key 创建 continuation card。
 4. continuation card 从 `historyItemOffset` 或 `toolCallOffset` 后继续渲染。
 5. 如果续接失败，再尝试 `card.update` full refresh。
@@ -265,10 +265,10 @@ CardKit 的 `streaming_mode` 只影响文本流式上屏的表现，不应成为
 | 局部 patch     | `cardkit.v1.cardElement.patch`   | `card_id`、`element_id`、`partial_element`、`sequence`                                                   | 更新工具面板等结构的一部分                                |
 | 批量更新         | `cardkit.v1.card.batchUpdate`    | `actions`、`sequence`                                                                                  | 合并 `add_elements` 和 `partial_update_element` |
 | 整卡刷新         | `cardkit.v1.card.update`         | `card={type:"card_json",data:<card json>}`、`sequence`                                                 | full refresh 或最终定稿                           |
-| 关闭流式         | `cardkit.v1.card.settings`       | `settings={"streaming_mode":false}`、`sequence`                                                        | 定稿或续接前关闭 streaming mode                      |
+| 关闭流式         | `cardkit.v1.card.settings`       | `settings={"streaming_mode":false}`、`sequence`                                                        | 定稿；续接状态写入后关闭 streaming mode             |
 | 终态 reaction  | `im.messageReaction.create`      | `message_id`、emoji type                                                                               | completed/error 结果提示                         |
 
-所有 CardKit 更新都依赖递增的 `sequence`。关闭 streaming mode 本身也占用一个 sequence，因此 finalize 和 rollover 都会在 `card.settings` 后继续递增 sequence 再更新卡片。
+所有 CardKit 更新都依赖递增的 `sequence`。关闭 streaming mode 本身也占用一个 sequence；普通 finalize 会先关闭 streaming mode 再写最终普通卡，rollover 会先写“已续接到下一条”状态，再用 `card.settings` 作为旧卡的最后一次写入。
 
 ## 日志与性能观测
 

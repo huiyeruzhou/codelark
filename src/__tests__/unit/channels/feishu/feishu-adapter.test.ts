@@ -2460,6 +2460,7 @@ printf '{"ok":true,"data":{"chat_id":"oc_user_created"}}\\n'
     const batchUpdates: Array<Record<string, any>> = [];
     const cardUpdates: Array<Record<string, any>> = [];
     const replyCalls: Array<Record<string, any>> = [];
+    const operations: Array<{ kind: string; cardId?: string; elementId?: string; content?: string }> = [];
     let cardIndex = 0;
     const adapter = new FeishuAdapter({
       id: 'feishu-default',
@@ -2481,10 +2482,12 @@ printf '{"ok":true,"data":{"chat_id":"oc_user_created"}}\\n'
             create: async ({ data }: { data: { data: string } }) => {
               createdCards.push(JSON.parse(data.data));
               cardIndex += 1;
+              operations.push({ kind: 'card.create', cardId: `card-${cardIndex}` });
               return { data: { card_id: `card-${cardIndex}` } };
             },
             settings: async (payload: Record<string, any>) => {
               settingsCalls.push(payload);
+              operations.push({ kind: 'card.settings', cardId: payload.path?.card_id });
               return {};
             },
             update: async (payload: Record<string, any>) => {
@@ -2497,7 +2500,15 @@ printf '{"ok":true,"data":{"chat_id":"oc_user_created"}}\\n'
             },
           },
           cardElement: {
-            content: async () => ({}),
+            content: async (payload: Record<string, any>) => {
+              operations.push({
+                kind: 'cardElement.content',
+                cardId: payload.path?.card_id,
+                elementId: payload.path?.element_id,
+                content: payload.data?.content,
+              });
+              return {};
+            },
             create: async () => ({}),
           },
         },
@@ -2534,6 +2545,19 @@ printf '{"ok":true,"data":{"chat_id":"oc_user_created"}}\\n'
     assert.equal(replyCalls.length, 2);
     assert.ok(settingsCalls.some((call) => call.path?.card_id === 'card-1'));
     assert.equal(cardUpdates.length, 0);
+    const rolloverSettingsCall = settingsCalls.find((call) => call.path?.card_id === 'card-1');
+    assert.deepEqual(JSON.parse(rolloverSettingsCall?.data?.settings || '{}'), { streaming_mode: false });
+    const rolloverStatusIndex = operations.findIndex((operation) =>
+      operation.kind === 'cardElement.content'
+      && operation.cardId === 'card-1'
+      && operation.elementId === 'streaming_status'
+      && String(operation.content || '').includes('已续接到下一条'));
+    const rolloverFinalizeIndex = operations.findIndex((operation, index) =>
+      index > rolloverStatusIndex
+      && operation.kind === 'card.settings'
+      && operation.cardId === 'card-1');
+    assert.ok(rolloverStatusIndex >= 0);
+    assert.ok(rolloverFinalizeIndex > rolloverStatusIndex);
     const continuationCard = createdCards.at(-1) || {};
     assert.ok(_testOnly.countFeishuCardComponents(continuationCard) <= 160);
     const continuationJson = JSON.stringify(continuationCard);
