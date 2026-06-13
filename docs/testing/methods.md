@@ -72,6 +72,12 @@ CODELARK_SETUP_WIZARD_REAL_E2E=1 npm run real:setup-wizard:e2e -- \
 
 真实飞书 E2E 的最低验收标准是“先真实发，再以用户身份真实读”。测试必须用 `lark-cli --as user` 或等价 user 身份发送触发消息，然后再用 `lark-cli --as user` 拉取群消息、成员/群信息或云文档评论来断言结果。只检查本地 store、bridge 日志、mock adapter 调用或 bot 身份响应不能单独称为真实端到端通过。
 
+## 维护粒度
+
+测试应按语义边界组织，而不是按单个返回值、单个 enum 值或单个默认值机械拆分。纯逻辑测试可以用一个表驱动或矩阵用例覆盖同一解析器/格式化器的一组等价输入；只有错误路径、兼容格式、外部协议边界、异步状态转换、持久化迁移和用户可见回归应拆成独立用例，方便 fast-fail 定位。
+
+fake 测试也要遵守真实职责边界。`fake tmux` 只模拟 tmux transport：session/pane 存在性、`capture-pane`、`send-keys` 和进程退出；Codex TUI 的 update prompt、permission prompt、delayed-ready、选择后退出或进入正常输入界面由 `fake Codex TUI` 模拟。真实进程 E2E 覆盖 happy path 后，不应保留只重复 happy path 的 fake 断言；但 orphan callback、启动失败、update 后重启、bootstrap 后选择、已有 session 卡在选择页这类真实 E2E 不稳定或不应真实触发的分支仍应保留 fake/workflow 覆盖。
+
 ## 语义分类
 
 ### 用户对话、命令和会话体验

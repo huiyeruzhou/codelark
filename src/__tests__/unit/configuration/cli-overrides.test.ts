@@ -5,14 +5,20 @@ import { InvalidOptionArgumentError as InvalidArgumentError } from 'commander';
 import { parseConfigCliOverrides } from '../../../configuration/cli-overrides.js';
 
 describe('parseConfigCliOverrides', () => {
-  it('parses canonical --set assignments into a config patch', () => {
+  it('parses --set and --unset overrides while ignoring unrelated command arguments', () => {
     const parsed = parseConfigCliOverrides([
+      'start',
+      '--verbose',
       'run',
       '--set', 'runtime.agent=claude',
       '--set', 'runtime.codex.reasoningEffort=high',
       '--set', 'runtime.codex.networkAccess=false',
+      '--set', 'runtime.codex.sandboxMode=read-only',
       '--set', 'bridge.uiAllowLan=true',
       '--set', 'session.tmuxCaptureLines=120',
+      '--unset', 'runtime.codex.model',
+      '--unset', 'session.workspace',
+      'extra-arg',
     ]);
 
     assert.deepEqual(parsed, {
@@ -22,6 +28,7 @@ describe('parseConfigCliOverrides', () => {
           codex: {
             reasoningEffort: 'high',
             networkAccess: false,
+            sandboxMode: 'read-only',
           },
         },
         bridge: {
@@ -31,32 +38,7 @@ describe('parseConfigCliOverrides', () => {
           tmuxCaptureLines: 120,
         },
       },
-      unset: [],
-    });
-  });
-
-  it('parses unset paths', () => {
-    const parsed = parseConfigCliOverrides([
-      '--unset', 'runtime.codex.model',
-      '--unset', 'session.workspace',
-    ]);
-
-    assert.deepEqual(parsed, {
-      patch: {},
       unset: ['runtime.codex.model', 'session.workspace'],
-    });
-  });
-
-  it('ignores unrelated command arguments while collecting config options', () => {
-    const parsed = parseConfigCliOverrides([
-      'start',
-      '--verbose',
-      '--set', 'runtime.codex.sandboxMode=read-only',
-      'extra-arg',
-    ]);
-
-    assert.deepEqual(parsed.patch, {
-      runtime: { codex: { sandboxMode: 'read-only' } },
     });
   });
 

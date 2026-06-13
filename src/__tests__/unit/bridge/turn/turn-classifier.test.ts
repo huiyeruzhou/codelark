@@ -33,7 +33,7 @@ function session(overrides: Partial<BridgeSession> = {}): BridgeSession {
 }
 
 describe('turn-classifier', () => {
-  it('classifies pure IM SDK sessions even when a codex thread id exists', () => {
+  it('classifies sessions whose Codex thread is not locally visible as pure IM SDK', () => {
     const currentSession = session({
       runtime: { codex: { threadId: 'codex-thread-1' } },
     });
@@ -63,22 +63,6 @@ describe('turn-classifier', () => {
     assert.equal(result.reason, 'codex_thread');
     assert.equal(result.codexThreadId, 'codex-thread-1');
     assert.equal(result.codexThreadAvailable, true);
-  });
-
-  it('treats sessions with missing local Codex thread files as plain SDK turns', () => {
-    const currentSession = session({
-      runtime: { codex: { threadId: 'codex-missing' } },
-    });
-    const result = classifyInteractiveTurn(
-      binding(),
-      currentSession,
-      () => false,
-    );
-
-    assert.equal(result.kind, 'im_sdk');
-    assert.equal(result.reason, 'bridge_thread');
-    assert.equal(result.codexThreadId, 'codex-missing');
-    assert.equal(result.codexThreadAvailable, false);
   });
 
   it('does not read legacy thread fields from bindings or session fallbacks', () => {

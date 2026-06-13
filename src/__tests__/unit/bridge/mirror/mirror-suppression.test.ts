@@ -24,146 +24,36 @@ function mirrorRecord(
 }
 
 describe('mirror-suppression terminal record handling', () => {
-  it('should not show terminal record multiple times when in ignoredTurnIds', () => {
-    // This test verifies the fix for the bug where terminal records (task_complete/task_aborted)
-    // had their ignored status cleared on first encounter, causing them to be shown again
-    // when the mirror file was re-read.
-
-    // The bug scenario: after SDK abort or timeout, the turnId is marked as ignored.
-    // When terminal record arrives, it would clear the ignored status (bug).
-    // On next mirror read, the same terminal record would be shown again (duplicate).
-
-    const store: MirrorSuppressionStore = {
-      suppressions: new Map(),
-      ignoredTurnIds: new Map(),
-    };
-
+  it('keeps ignored terminal turns suppressed across repeated mirror reads', () => {
     const config: MirrorSuppressionConfig = {
       suppressionWindowMs: 5000,
       promptMatchGraceMs: 3000,
     };
-
-    const sessionId = 'session-1';
-    const nowMs = Date.now();
-
-    // Simulate: turnId was marked as ignored (e.g., after SDK abort/timeout)
-    // This happens via markIgnoredMirrorTurn in abortMirrorSuppression
-    store.ignoredTurnIds.set(sessionId, new Map([['turn-1', nowMs + 60000]]));
-
-    const taskComplete = mirrorRecord({
-      type: 'task_complete',
-      turnId: 'turn-1',
-      timestamp: '2026-06-04T09:59:03.000Z',
-    });
-
-    // First encounter: filter the terminal record
-    const firstFiltered = filterSuppressedMirrorRecords(store, sessionId, [taskComplete], config, nowMs);
-
-    // Should be suppressed (in ignored list)
-    assert.equal(firstFiltered.length, 0, 'First pass: should be suppressed');
-
-    // BUG CHECK: Without fix, ignored status would be cleared now
-    // With fix, it should still be in ignored list
-    const ignoredAfterFirst = store.ignoredTurnIds.get(sessionId);
-    assert.ok(ignoredAfterFirst, 'Ignored turns map should still exist');
-    assert.equal(
-      ignoredAfterFirst.has('turn-1'),
-      true,
-      'turn-1 should STILL be in ignored list (BUG: was cleared without fix)',
-    );
-
-    // Second encounter: re-reading mirror file with same terminal record
-    const secondFiltered = filterSuppressedMirrorRecords(store, sessionId, [taskComplete], config, nowMs);
-
-    // Should still be suppressed
-    assert.equal(
-      secondFiltered.length,
-      0,
-      'Second pass: should still be suppressed (BUG: would show duplicate without fix)',
-    );
-  });
-
-  it('should keep ignored status for terminal records across multiple reads', () => {
-    const store: MirrorSuppressionStore = {
-      suppressions: new Map(),
-      ignoredTurnIds: new Map(),
-    };
-
-    const config: MirrorSuppressionConfig = {
-      suppressionWindowMs: 5000,
-      promptMatchGraceMs: 3000,
-    };
-
     const sessionId = 'session-1';
 
-    // Manually mark a turn as ignored (simulating it was already processed)
-    store.ignoredTurnIds.set(sessionId, new Map([['turn-1', Date.now() + 60000]]));
+    for (const type of ['task_complete', 'task_aborted'] as const) {
+      const store: MirrorSuppressionStore = {
+        suppressions: new Map(),
+        ignoredTurnIds: new Map(),
+      };
+      store.ignoredTurnIds.set(sessionId, new Map([['turn-1', Date.now() + 60000]]));
 
-    const taskComplete = mirrorRecord({
-      type: 'task_complete',
-      turnId: 'turn-1',
-      timestamp: '2026-06-04T09:59:03.000Z',
-    });
+      const terminalRecord = mirrorRecord({
+        type,
+        turnId: 'turn-1',
+        timestamp: '2026-06-04T09:59:03.000Z',
+      });
 
-    // First encounter with terminal record
-    const firstFiltered = filterSuppressedMirrorRecords(store, sessionId, [taskComplete], config);
-    assert.equal(firstFiltered.length, 0, 'First encounter: should be suppressed');
-
-    // Verify turn is still in ignored list
-    const ignoredTurns = store.ignoredTurnIds.get(sessionId);
-    assert.ok(ignoredTurns, 'Ignored turns map should exist');
-    assert.equal(ignoredTurns.has('turn-1'), true, 'turn-1 should still be in ignored list');
-
-    // Second encounter with same terminal record (simulating re-read)
-    const secondFiltered = filterSuppressedMirrorRecords(store, sessionId, [taskComplete], config);
-    assert.equal(
-      secondFiltered.length,
-      0,
-      'Second encounter: should still be suppressed (BUG: would be 1 without fix)',
-    );
-
-    // Third encounter - verify it remains suppressed
-    const thirdFiltered = filterSuppressedMirrorRecords(store, sessionId, [taskComplete], config);
-    assert.equal(thirdFiltered.length, 0, 'Third encounter: should still be suppressed');
-  });
-
-  it('should suppress task_aborted records consistently like task_complete', () => {
-    const store: MirrorSuppressionStore = {
-      suppressions: new Map(),
-      ignoredTurnIds: new Map(),
-    };
-
-    const config: MirrorSuppressionConfig = {
-      suppressionWindowMs: 5000,
-      promptMatchGraceMs: 3000,
-    };
-
-    const sessionId = 'session-1';
-
-    // Mark turn as ignored
-    store.ignoredTurnIds.set(sessionId, new Map([['turn-1', Date.now() + 60000]]));
-
-    const taskAborted = mirrorRecord({
-      type: 'task_aborted',
-      turnId: 'turn-1',
-      timestamp: '2026-06-04T09:59:03.000Z',
-    });
-
-    // First pass
-    const firstFiltered = filterSuppressedMirrorRecords(store, sessionId, [taskAborted], config);
-    assert.equal(firstFiltered.length, 0, 'First pass: task_aborted should be suppressed');
-
-    // Verify still in ignored list
-    const ignoredTurns = store.ignoredTurnIds.get(sessionId);
-    assert.equal(ignoredTurns?.has('turn-1'), true, 'turn-1 should remain in ignored list');
-
-    // Second pass - simulate re-read
-    const secondFiltered = filterSuppressedMirrorRecords(store, sessionId, [taskAborted], config);
-    assert.equal(
-      secondFiltered.length,
-      0,
-      'Second pass: task_aborted should still be suppressed (BUG: would show without fix)',
-    );
+      for (const pass of [1, 2, 3]) {
+        const filtered = filterSuppressedMirrorRecords(store, sessionId, [terminalRecord], config);
+        assert.equal(filtered.length, 0, `${type} pass ${pass} should stay suppressed`);
+        assert.equal(
+          store.ignoredTurnIds.get(sessionId)?.has('turn-1'),
+          true,
+          `${type} should keep turn-1 in the ignored list`,
+        );
+      }
+    }
   });
 });
 

@@ -34,31 +34,4 @@ describe('claude-code-router status messages', () => {
       );
     }
   });
-
-  it('documents the condensed status sequence', () => {
-    const caseRouterStarted = ['已为Claude Code sdk 注入 Router 环境。'];
-    const caseRouterAlreadyRunning = ['已为Claude Code sdk 注入 Router 环境。'];
-
-    assert.deepEqual(
-      caseRouterStarted,
-      ['已为Claude Code sdk 注入 Router 环境。'],
-      'Starting CCR should still end with one user-facing status',
-    );
-    assert.deepEqual(
-      caseRouterAlreadyRunning,
-      ['已为Claude Code sdk 注入 Router 环境。'],
-      'Already-running CCR should emit the same one user-facing status',
-    );
-  });
-});
-
-describe('claude-code-router status message formatting', () => {
-  it('keeps the final visible CCR status concise', () => {
-    const messages = ['已为Claude Code sdk 注入 Router 环境。'];
-    const subsequentContent = '已运行 11秒，↑22k ↓0.0k';
-
-    assert.equal(messages.length, 1);
-    assert.equal(messages[0], '已为Claude Code sdk 注入 Router 环境。');
-    assert.equal(subsequentContent, '已运行 11秒，↑22k ↓0.0k');
-  });
 });

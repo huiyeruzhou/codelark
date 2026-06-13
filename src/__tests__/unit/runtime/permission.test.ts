@@ -4,30 +4,21 @@ import assert from 'node:assert/strict';
 import { PendingPermissions } from '../../../runtime/permission-gateway.js';
 
 describe('PendingPermissions', () => {
-  it('waitFor resolves on allow', async () => {
+  it('waitFor resolves explicit decisions and reports unknown ids', async () => {
     const pp = new PendingPermissions();
-    const promise = pp.waitFor('req-1');
-    assert.equal(pp.size, 1);
+    const allowPromise = pp.waitFor('req-1');
+    const denyPromise = pp.waitFor('req-2');
+    assert.equal(pp.size, 2);
 
     assert.equal(pp.resolve('req-1', { behavior: 'allow' }), true);
-    const result = await promise;
-    assert.equal(result.behavior, 'allow');
-    assert.equal(pp.size, 0);
-  });
-
-  it('waitFor resolves on deny', async () => {
-    const pp = new PendingPermissions();
-    const promise = pp.waitFor('req-2');
-
-    pp.resolve('req-2', { behavior: 'deny', message: 'Not allowed' });
-    const result = await promise;
-    assert.equal(result.behavior, 'deny');
-    assert.equal(result.message, 'Not allowed');
-  });
-
-  it('resolve returns false for unknown id', () => {
-    const pp = new PendingPermissions();
+    assert.equal(pp.resolve('req-2', { behavior: 'deny', message: 'Not allowed' }), true);
     assert.equal(pp.resolve('unknown', { behavior: 'allow' }), false);
+
+    const [allowResult, denyResult] = await Promise.all([allowPromise, denyPromise]);
+    assert.equal(allowResult.behavior, 'allow');
+    assert.equal(denyResult.behavior, 'deny');
+    assert.equal(denyResult.message, 'Not allowed');
+    assert.equal(pp.size, 0);
   });
 
   it('denyAll resolves all pending', async () => {

@@ -14,12 +14,9 @@ import {
 } from '../../../../runtime/codex/models.js';
 
 describe('listCachedCodexModels', () => {
-  it('returns an empty list when the cache file is missing', () => {
+  it('returns empty for missing cache files and parses cached models', () => {
     const missing = path.join(os.tmpdir(), `codex-models-missing-${Date.now()}.json`);
     assert.deepEqual(listCachedCodexModels(missing), []);
-  });
-
-  it('parses and deduplicates cached models', () => {
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-models-test-'));
     const cachePath = path.join(tmpDir, 'models_cache.json');
     try {

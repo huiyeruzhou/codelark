@@ -34,10 +34,6 @@ function runtimeSettingsFromSnapshot(options: ConfigServiceOptions = {}): Runtim
   };
 }
 
-function exportRuntimeSettingsFromService(options: ConfigServiceOptions = {}): Map<string, string> {
-  return exportRuntimeSettings(createConfigService(options).snapshot().config);
-}
-
 describe('runtime settings service projection', () => {
   it('projects initial runtime settings from ConfigService and ignores legacy config.env', () => {
     const home = tempHome();
@@ -99,21 +95,6 @@ describe('runtime settings service projection', () => {
       assert.equal(projection.settings.get('bridge_history_message_limit'), '19');
       assert.equal(projection.settings.get('bridge_feishu_enabled'), 'true');
       assert.equal(projection.settings.get('bridge_feishu_app_id'), 'toml-app');
-    } finally {
-      fs.rmSync(home, { recursive: true, force: true });
-    }
-  });
-
-  it('returns settings directly for store and UI callers', () => {
-    const home = tempHome();
-    try {
-      writeFile(path.join(home, 'config.toml'), `
-[runtime.codex]
-model = "direct-model"
-`);
-
-      const settings = exportRuntimeSettingsFromService({ codelarkHome: home, env: {} });
-      assert.equal(settings.get('bridge_default_model'), 'direct-model');
     } finally {
       fs.rmSync(home, { recursive: true, force: true });
     }

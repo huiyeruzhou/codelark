@@ -7,7 +7,7 @@ import {
   formatStreamTagLabel,
 } from '../../../shared/streaming-metadata.js';
 
-test('buildStreamContextTags emits bridge identity and stream mode tags', () => {
+test('builds and formats streaming metadata tags', () => {
   assert.deepEqual(buildStreamContextTags({
     bindingId: 'binding-123456789',
     bridgeSessionId: 'bridge-session-123456789',
@@ -31,9 +31,7 @@ test('buildStreamContextTags emits bridge identity and stream mode tags', () => 
     'bridge_id:bridge-s',
     'mirror',
   ]);
-});
 
-test('buildRuntimeStreamTags emits runtime, effort, and model tags first-class', () => {
   assert.deepEqual(buildRuntimeStreamTags({
     runtime: 'codex',
     reasoningEffort: 'high',
@@ -53,9 +51,7 @@ test('buildRuntimeStreamTags emits runtime, effort, and model tags first-class',
     'effort:max',
     'model:claude-sonnet-test',
   ]);
-});
 
-test('formatStreamTagLabel strips only runtime tag prefixes', () => {
   assert.equal(formatStreamTagLabel('effort:medium'), 'medium');
   assert.equal(formatStreamTagLabel('reasoning:medium'), 'medium');
   assert.equal(formatStreamTagLabel('model:default'), 'default');

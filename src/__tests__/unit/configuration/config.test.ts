@@ -86,9 +86,11 @@ describe('configToSettings', () => {
 
   it('maps runtime defaults and scalar overrides', () => {
     const m = configToSettings(base);
+    assert.equal(m.get('bridge_feishu_enabled'), 'false');
     assert.equal(m.get('remote_bridge_enabled'), 'true');
     assert.equal(m.has('bridge_default_model'), false);
     assert.equal(m.has('default_model'), false);
+    assert.equal(m.has('bridge_feishu_app_id'), false);
     assert.equal(m.get('bridge_default_mode'), 'normal');
     assert.equal(m.get('bridge_history_message_limit'), '8');
     assert.equal(m.get('bridge_stream_status_idle_start_seconds'), '180');
@@ -122,11 +124,6 @@ describe('configToSettings', () => {
     assert.equal(configured.get('bridge_codex_network_access'), 'true');
     assert.equal(configured.get('bridge_codex_reasoning_effort'), 'xhigh');
     assert.equal(configured.get('bridge_default_mode'), 'yolo');
-  });
-
-  it('omits optional fields when not set', () => {
-    const m = configToSettings(base);
-    assert.equal(m.has('bridge_feishu_app_id'), false);
   });
 
   it('omits unsupported channel providers from runtime settings', () => {
@@ -204,16 +201,6 @@ describe('legacy config adapter round-trip', () => {
     if (configBackupToml !== null) {
       fs.writeFileSync(path.join(path.dirname(CONFIG_JSON_PATH), 'config.toml'), configBackupToml);
     }
-  });
-
-  it('configToSettings returns correct defaults', () => {
-    const m = configToSettings({
-      runtime: 'codex',
-      channels: [],
-      enabledChannels: [],
-      defaultMode: 'normal',
-    });
-    assert.equal(m.get('bridge_feishu_enabled'), 'false');
   });
 
   it('loads existing config.toml through the v2 config service and ignores config.env', () => {

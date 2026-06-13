@@ -64,7 +64,7 @@ describe('codex-cli-executable', () => {
     );
   });
 
-  it('uses CODELARK_CODEX_CLI_PATH as an explicit override', () => {
+  it('honors explicit Codex CLI overrides while still rejecting node_modules paths', () => {
     assert.equal(
       resolveCodexCliExecutable({
         env: {
@@ -76,9 +76,6 @@ describe('codex-cli-executable', () => {
       }),
       '/custom/codex',
     );
-  });
-
-  it('rejects CODELARK_CODEX_CLI_PATH when it points at node_modules', () => {
     assert.throws(
       () => resolveCodexCliExecutable({
         env: {
@@ -90,9 +87,7 @@ describe('codex-cli-executable', () => {
       }),
       /Refused local candidates: \/repo\/node_modules\/\.bin\/codex/,
     );
-  });
 
-  it('reads process.env when called without arguments', () => {
     const oldOverride = process.env.CODELARK_CODEX_CLI_PATH;
     try {
       process.env.CODELARK_CODEX_CLI_PATH = '/env/codex';

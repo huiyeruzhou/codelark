@@ -14,29 +14,19 @@ import {
 } from '../../../../scripts/build-preflight.js';
 
 describe('build script', () => {
-  it('keeps published bundles strictly on the Node.js 24 runtime target', () => {
-    const source = fs.readFileSync(path.join(process.cwd(), 'scripts', 'build.js'), 'utf-8');
-
-    assert.match(source, /nodeMajor\s*<\s*24/);
-    assert.match(source, /requires Node\.js 24 or newer/);
-    assert.match(source, /target:\s*'node24'/);
-    assert.doesNotMatch(source, /target:\s*'node20'/);
-  });
-
-  it('checks package.json runtime dependencies before esbuild runs', () => {
-    const source = fs.readFileSync(path.join(process.cwd(), 'scripts', 'build.js'), 'utf-8');
-
-    assert.match(source, /findMissingPackageJsonRuntimeDependencies/);
-    assert.match(source, /await import\('esbuild'\)/);
-    assert.ok(
-      source.indexOf('findMissingPackageJsonRuntimeDependencies') < source.indexOf("await import('esbuild')"),
-    );
-  });
-
-  it('copies configuration defaults into dist for bundled runtime lookup', () => {
+  it('keeps build runtime checks and bundled defaults in the publish path', () => {
     const buildSource = fs.readFileSync(path.join(process.cwd(), 'scripts', 'build.js'), 'utf-8');
     const packCheckSource = fs.readFileSync(path.join(process.cwd(), 'scripts', 'check-npm-pack.js'), 'utf-8');
 
+    assert.match(buildSource, /nodeMajor\s*<\s*24/);
+    assert.match(buildSource, /requires Node\.js 24 or newer/);
+    assert.match(buildSource, /target:\s*'node24'/);
+    assert.doesNotMatch(buildSource, /target:\s*'node20'/);
+    assert.match(buildSource, /findMissingPackageJsonRuntimeDependencies/);
+    assert.match(buildSource, /await import\('esbuild'\)/);
+    assert.ok(
+      buildSource.indexOf('findMissingPackageJsonRuntimeDependencies') < buildSource.indexOf("await import('esbuild')"),
+    );
     assert.match(buildSource, /copyFile\('src\/configuration\/defaults\.toml', 'dist\/defaults\.toml'\)/);
     assert.match(buildSource, /dist\/defaults\.toml/);
     assert.match(packCheckSource, /dist\/defaults\.toml/);
