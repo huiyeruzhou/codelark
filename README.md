@@ -8,6 +8,7 @@
 
 - 代码仓库：https://github.com/huiyeruzhou/codelark
 - 文档站：https://huiyeruzhou.github.io/site/codelark/
+- 当前 npm 版本：`codelark@0.1.1`
 
 ## 核心能力
 
@@ -85,6 +86,12 @@ npx -y codelark@latest run
 npm install -g codelark
 codelark run
 ```
+
+## v0.1.1
+
+`0.1.1` 改进了 tmux provider 的启动恢复和输入透传：Codex 启动弹窗、update prompt、delayed ready 和 `Working` 输入行都会被端到端验证并正确处理。`/tmux-screen` 的行数配置现在表示最终希望看到的行数，而不是直接传给 tmux 的额外历史行数。
+
+完整发布说明见 [Release Notes](docs/guide/release-notes.md)。
 
 ## 常用命令
 - `/`：查看当前聊天/会话诊断；修改当前会话配置可用 `/provider`、`/model`、`/mode`、`/reasoning` 等。

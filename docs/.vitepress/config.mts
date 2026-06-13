@@ -37,6 +37,7 @@ export default defineConfig({
         items: [
           { text: '入口', link: '/guide/' },
           { text: '安装与使用指南', link: '/guide/install-and-usage' },
+          { text: 'Release Notes', link: '/guide/release-notes' },
           { text: '会话、Provider 与配置工作流', link: '/guide/session-workflows' },
           { text: '平台配置指南', link: '/guide/platform-setup' },
           { text: '云文档与交互卡片', link: '/guide/cloud-docs-and-cards' },
