@@ -23,6 +23,10 @@ description: 在 CodeLark 中需要向 IM 用户发起结构化确认、选择�
 
 CodeLark 会把最终回复里的 `<clk-ask>` 块转换成飞书/Lark 问题卡片。用户提交后的结果会作为下一条用户消息回到同一个 bridge session。
 
+## 生效时机
+
+`<clk-ask>` 必须放在 assistant 的 completed/final 回复里，CodeLark 才会解析成问题卡片。不要把 `<clk-ask>` 放在工作过程消息、commentary/intermediate update、流式状态更新或工具调用说明里；这些路径只会进入 streaming card，不会生成弹窗。
+
 ## 输出格式
 
 在一个 `<clk-ask>` 块里输出合法 JSON。不要把 JSON 放进 markdown 代码块。
@@ -47,6 +51,7 @@ CodeLark 会把最终回复里的 `<clk-ask>` 块转换成飞书/Lark 问题卡�
 ## 规则
 
 - 只有在确实需要用户输入才能继续时才使用。
+- 必须把 `<clk-ask>` 放在 completed/final 回复中；不要放在工作过程消息或流式更新中。
 - 普通说明放在 `<clk-ask>` 块外。
 - 只是在总结、写代码、汇报已完成工作时，不要发问题卡片。
 - `options` 要短，并且互斥；最多展示 8 个选项。
