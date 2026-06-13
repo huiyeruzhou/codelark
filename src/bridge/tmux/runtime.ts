@@ -377,8 +377,7 @@ export function hasCodexResumeTmuxReadyPrompt(screenText: string): boolean {
   if (parseCodexTuiSelectionPrompt(screenText)) return false;
   const normalized = normalizeRuntimeTmuxScreenText(screenText);
   if (!normalized.trim()) return false;
-  return /OpenAI\s+Codex|Codex\s+TUI|codex/i.test(normalized)
-    && /(?:^|\n)\s*[›>]\s*(?:[^\n]*)?(?:$|\n)|\?\s+for\s+shortcuts|What\s+would\s+you\s+like/i.test(normalized);
+  return /(?:^|\n)\s*[›>]\s*(?:[^\n]*)?(?:$|\n)|\?\s+for\s+shortcuts|What\s+would\s+you\s+like/i.test(normalized);
 }
 
 function normalizeRuntimeTmuxScreenText(screenText: string): string {

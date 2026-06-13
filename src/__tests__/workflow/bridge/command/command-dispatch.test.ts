@@ -872,6 +872,26 @@ function seedFakeCodexUpdatePrompt(
   ].join('\n'), 'utf-8');
 }
 
+function seedFakeCodexWorkingInputScreen(
+  fakeCodex: { stateDir: string },
+  target: string,
+): void {
+  const safeTarget = target.replace(/[^A-Za-z0-9_.-]/g, '_');
+  fs.mkdirSync(fakeCodex.stateDir, { recursive: true });
+  fs.writeFileSync(path.join(fakeCodex.stateDir, `${safeTarget}.json`), JSON.stringify({ kind: 'ready', downs: 0 }), 'utf-8');
+  fs.writeFileSync(path.join(fakeCodex.stateDir, `${safeTarget}.screen`), [
+    '└ (no output)',
+    '',
+    '• Working (2m 54s • esc to interrupt)',
+    '',
+    '',
+    '› Implement {feature}',
+    '',
+    '  model-name medium · /workspace/project      Pursuing goal (6h 30m)',
+    '',
+  ].join('\n'), 'utf-8');
+}
+
 function installFakeCodexThreadBootstrap(): { binDir: string; codexPath: string; logPath: string } {
   const binDir = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-fake-codex-bootstrap-'));
   const logPath = path.join(binDir, 'codex-bootstrap.log');
@@ -7947,6 +7967,90 @@ enabled = true
       assert.ok(firstDownIndex > firstCaptureIndex, 'selection choice should be sent after the readiness capture');
       assert.ok(enterIndex > firstDownIndex, 'selection should be confirmed before forwarding input');
       assert.ok(literalIndex > enterIndex, 'auto-forwarded literal should be sent after the selection is resolved');
+    } finally {
+      restoreProcessEnv(oldEnv);
+      fs.rmSync(fakeTmux.binDir, { recursive: true, force: true });
+      fs.rmSync(fakeCodex.binDir, { recursive: true, force: true });
+    }
+  });
+
+  it('auto-forwards into an existing Codex tmux provider screen that is working but already has an input line', async () => {
+    const settings = makeSettings();
+    const store = new JsonFileStore(settings, { dynamicSettings: true });
+    initBridgeContext({
+      store,
+      llm: noopLlm,
+      permissions: { resolvePendingPermission: () => false },
+      lifecycle: {},
+    });
+    const fakeTmux = installFakeTmux();
+    const fakeCodex = installFakeCodexTui();
+    const oldEnv = captureProcessEnv(['PATH', 'TMUX_FAKE_LOG', 'TMUX_FAKE_EXISTING_SESSIONS', ...FAKE_CODEX_TUI_ENV_KEYS]);
+    const threadId = '019e824e-10ef-7430-985d-4349ce6a15f9';
+    const tmuxSession = `codex_${threadId}`;
+    process.env.PATH = `${fakeTmux.binDir}${path.delimiter}${oldEnv.PATH}`;
+    process.env.TMUX_FAKE_LOG = fakeTmux.logPath;
+    process.env.TMUX_FAKE_EXISTING_SESSIONS = tmuxSession;
+    configureFakeCodexTuiEnv(fakeCodex, {});
+    seedFakeCodexWorkingInputScreen(fakeCodex, tmuxSession);
+
+    try {
+      const sent: any[] = [];
+      let autoForwarded = false;
+      const adapter: any = {
+        channelType: 'feishu',
+        send: async (message: any) => {
+          sent.push(message);
+          return { ok: true, messageId: `reply-tmux-working-ready-${sent.length}` };
+        },
+      };
+      const address = { channelType: 'feishu', chatId: 'chat-tmux-provider-working-ready' } as const;
+      const deps = {
+        getActiveTask: () => undefined,
+        diagnoseSessionHealth: async () => null,
+        diagnoseAllActiveSessions: async () => [],
+        tmuxProviderAutoForward: true,
+        onTmuxProviderAutoForwarded: () => {
+          autoForwarded = true;
+        },
+      };
+      const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-tmux-provider-working-ready-'));
+
+      const binding = router.createBinding(address, workDir);
+      assert.ok(binding);
+      store.updateSessionCodexThreadId(binding.bridgeSessionId, threadId);
+      store.updateSession(binding.bridgeSessionId, {
+        runtime: {
+          general: { tmuxSessionName: tmuxSession },
+        },
+      });
+      createConfigService({ migrate: false, env: {} }).set(
+        { kind: 'session', sessionId: binding.bridgeSessionId },
+        { runtime: { codex: { provider: 'tmux' } } },
+      );
+
+      await handleBridgeCommand(
+        adapter,
+        {
+          address,
+          text: '/tmux follow up while working',
+          messageId: 'incoming-tmux-working-ready',
+        } as any,
+        '/tmux follow up while working',
+        deps,
+      );
+
+      assert.equal(sent.length, 0, 'provider auto-forward should not send a selection or success response');
+      assert.equal(autoForwarded, true);
+
+      const log = fs.readFileSync(fakeTmux.logPath, 'utf-8');
+      const hasSessionIndex = log.indexOf(`has-session -t ${tmuxSession}`);
+      const captureIndex = log.indexOf(`capture-pane -t ${tmuxSession} -p -S -80`);
+      const literalIndex = log.indexOf(`send-keys -t ${tmuxSession} -l follow up while working`);
+      assert.ok(hasSessionIndex >= 0, 'existing tmux session should be checked');
+      assert.ok(captureIndex > hasSessionIndex, 'readiness should inspect the existing Codex screen');
+      assert.ok(literalIndex > captureIndex, 'follow-up input should be forwarded after the working screen is accepted as ready');
+      assert.doesNotMatch(log, new RegExp(`send-keys -t ${tmuxSession} Down`));
     } finally {
       restoreProcessEnv(oldEnv);
       fs.rmSync(fakeTmux.binDir, { recursive: true, force: true });

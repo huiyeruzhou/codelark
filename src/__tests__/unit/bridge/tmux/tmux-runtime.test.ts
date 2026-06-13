@@ -35,6 +35,21 @@ describe('codex tmux runtime', () => {
     assert.equal(hasCodexResumeTmuxReadyPrompt(screen), true);
   });
 
+  it('treats a working Codex TUI screen with an input line as ready for follow-up input', () => {
+    const screen = [
+      '└ (no output)',
+      '',
+      '• Working (2m 54s • esc to interrupt)',
+      '',
+      '',
+      '› Implement {feature}',
+      '',
+      '  model-name medium · /workspace/project      Pursuing goal (6h 30m)',
+    ].join('\n');
+
+    assert.equal(hasCodexResumeTmuxReadyPrompt(screen), true);
+  });
+
   it('does not treat a Codex TUI selection prompt as a resumed idle prompt', () => {
     const screen = [
       'Codex wants to edit files.',
