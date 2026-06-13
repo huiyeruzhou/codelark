@@ -160,7 +160,7 @@ curl -s -X POST "${DOMAIN}/open-apis/auth/v3/tenant_access_token/internal" \
 
 ## IM 中的基础使用
 
-把机器人拉进飞书会话或直接私聊机器人后，可以使用以下流程：
+把机器人拉进飞书会话或直接私聊机器人后，可以使用以下最小流程：
 
 1. 发送 `/status` 检查 bridge 和通道状态。
 2. 发送 `/t` 查看当前 runtime 最近 20 条本地会话。
@@ -168,7 +168,7 @@ curl -s -X POST "${DOMAIN}/open-apis/auth/v3/tenant_access_token/internal" \
 4. 发送 `/t 1` 切换当前 IM 会话到第 1 条线程。
 5. 之后直接发送普通消息，即可继续该线程。
 
-更多命令和能力说明见 [命令体系](../product/commands.md) 与 [运行时与提供方](../product/runtime-providers.md)。
+会话 attach/detach、`/current` 和 `/set` 卡片、tmux pane 查看、agent/provider 切换以及 home/chat 配置层级，见 [会话、Provider 与配置工作流](session-workflows.md)。完整命令索引见 [命令体系](../product/commands.md)，provider 能力矩阵见 [运行时与提供方](../product/runtime-providers.md)。
 
 ## 数据和日志
 
