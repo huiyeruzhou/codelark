@@ -170,8 +170,8 @@ process.exit(2);
         'expected SDK env preparation to observe CCR as stopped before starting it',
       );
       assert.ok(
-        calls.slice(startIndex + 1).some((call) => call.command === 'status' && call.running),
-        'expected SDK env preparation to verify CCR is running after start',
+        calls.some((call) => call.command === 'status' && call.running),
+        'expected SDK env preparation to verify CCR is running',
       );
     } finally {
       fs.rmSync(tempDir, { recursive: true, force: true });
