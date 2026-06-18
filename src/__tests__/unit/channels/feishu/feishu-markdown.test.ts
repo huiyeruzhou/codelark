@@ -21,6 +21,7 @@ import {
 import {
   buildCodexToolDetailFromInput,
   buildCodexToolDetailFromOutput,
+  EXEC_COMMAND_RENDER_OUTPUT_CHAR_LIMIT,
   mergeCodexToolDetail,
 } from '../../../../shared/progress/tool-call-details.js';
 import { buildFencedCodeBlock } from '../../../../shared/markdown/fence.js';
@@ -138,6 +139,7 @@ describe('buildToolProgressMarkdown', () => {
     assert.match(rendered, /❌ `apply_patch`（异常）/);
     assert.match(rendered, /````diff\n\*\*\* Begin Patch/);
     assert.match(rendered, /\n\+```bash\n\+echo nested\n\+```\n/);
+    assert.doesNotMatch(rendered, /patch failed/);
   });
 
   it('normalizes terminal tool state so final cards do not show running tools', () => {
@@ -170,7 +172,7 @@ describe('buildToolProgressMarkdown', () => {
       },
     ]);
 
-    assert.match(rendered, /workdir: `\/tmp\/project`/);
+    assert.doesNotMatch(rendered, /workdir:/);
     assert.match(rendered, /```bash\nnpm test\n```/);
     assert.match(rendered, /#### ✅ `Bash`（完成 · 1\.2s）/);
     assert.doesNotMatch(rendered, /Success in 1\.2s\./);
@@ -205,16 +207,69 @@ describe('buildToolProgressMarkdown', () => {
       },
     ]);
 
-    assert.match(rendered, /workdir: `\/repo\/a`/);
+    assert.doesNotMatch(rendered, /workdir:/);
     assert.match(rendered, /#### ✅ `exec_command`（完成 · 125ms）/);
     assert.match(rendered, /```bash\nprintf "hello\\n"\n```/);
     assert.match(rendered, /```text\nhello\n```/);
     assert.doesNotMatch(rendered, /Chunk ID|Original token count|Wall time|Process exited/);
   });
 
+  it('renders aggregated exec_command output in Feishu tool panels with a 1000 char cap', () => {
+    const longOutput = `${'x'.repeat(EXEC_COMMAND_RENDER_OUTPUT_CHAR_LIMIT)}tail`;
+    const detail = buildCodexToolDetailFromOutput('exec_command', {
+      output: 'raw envelope output should not render',
+      stdout: 'stdout fallback should not win',
+      stderr: 'stderr fallback should not win',
+      aggregated_output: longOutput,
+    });
+    const tools = [{
+      id: 'tool-output-fallback',
+      name: 'exec_command',
+      status: 'complete' as const,
+      output: 'raw tool output should not render',
+      detail: mergeCodexToolDetail(
+        buildCodexToolDetailFromInput('exec_command', { cmd: 'cat large.log', workdir: '/repo/a' }),
+        detail,
+      ),
+    }];
+
+    const markdown = buildToolProgressMarkdown(tools);
+    assert.match(markdown, /```text\n/);
+    assert.match(markdown, /\.\.\.\(truncated to 1000 chars\)/);
+    assert.doesNotMatch(markdown, /tail/);
+    assert.doesNotMatch(markdown, /raw envelope output|raw tool output|stdout fallback|stderr fallback|workdir:/);
+
+    const cardJson = JSON.stringify(buildStreamingToolsElements(tools));
+    assert.match(cardJson, /cat large\.log/);
+    assert.match(cardJson, /\.\.\.\(truncated to 1000 chars\)/);
+    assert.doesNotMatch(cardJson, /tail/);
+    assert.doesNotMatch(cardJson, /raw envelope output|raw tool output|stdout fallback|stderr fallback|workdir:/);
+  });
+
+  it('falls back to stdout and stderr when aggregated exec output is missing', () => {
+    const detail = buildCodexToolDetailFromOutput('exec_command', {
+      output: 'raw output should not render',
+      stdout: 'stdout line',
+      stderr: 'stderr line',
+    });
+
+    const rendered = buildToolProgressMarkdown([{
+      id: 'tool-stdout-stderr',
+      name: 'exec_command',
+      status: 'complete',
+      detail,
+    }]);
+
+    assert.match(rendered, /```text\nstdout line\nstderr line\n```/);
+    assert.doesNotMatch(rendered, /raw output should not render/);
+  });
+
   it('uses diff fences for apply_patch when the patch arrives inside an input object', () => {
+    const patchWorkdir = '/workspace/project';
+    const absolutePath = `${patchWorkdir}/src/a.ts`;
     const detail = buildCodexToolDetailFromInput('apply_patch', {
-      diff: '*** Begin Patch\n*** Update File: a.ts\n@@\n-old\n+new\n*** End Patch',
+      working_dir: patchWorkdir,
+      diff: `*** Begin Patch\n*** Update File: ${absolutePath}\n@@\n-old\n+new\n*** End Patch`,
     });
 
     const rendered = buildToolProgressMarkdown([
@@ -226,8 +281,10 @@ describe('buildToolProgressMarkdown', () => {
       },
     ]);
 
-    assert.match(rendered, /- update: `a\.ts`/);
-    assert.match(rendered, /```diff\n\*\*\* Begin Patch/);
+    assert.match(rendered, /- update: `src\/a\.ts`/);
+    assert.match(rendered, /```diff\n\*\*\* Begin Patch\n\*\*\* Update File: src\/a\.ts/);
+    assert.doesNotMatch(rendered, new RegExp(absolutePath.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+    assert.doesNotMatch(rendered, /workspace\/project/);
     assert.doesNotMatch(rendered, /```json/);
   });
 
@@ -340,11 +397,12 @@ describe('buildToolProgressMarkdown', () => {
     assert.ok(String(elements[2].element_id).length <= 20);
     assert.equal((elements[0].elements as any[])[0].text_size, 'notation');
     const content = JSON.stringify(elements);
-    assert.ok(content.includes('workdir: `/repo/a`'));
+    assert.ok(!content.includes('workdir: `/repo/a`'));
     assert.ok(!content.includes('Success in 12ms.'));
     assert.doesNotMatch(content, /exit code 0|exit 0/);
     assert.ok(content.includes('aggregated output\\nline 2'));
     assert.ok(content.includes('update: `src/a.ts`'));
+    assert.ok(!content.includes('patch failed'));
     assert.ok(content.includes('mcp: `server/read`'));
   });
 

@@ -30,6 +30,7 @@ export type CodexToolDetail =
       kind: 'patch_apply';
       patchText?: string;
       files?: Array<{ path: string; action: string; toPath?: string }>;
+      workdir?: string;
       output?: string;
       rawOutput?: string;
     }

@@ -41,7 +41,7 @@ function buildFallbackToolDetailMarkdown(tool: ToolCallInfo): string {
       const language = isBashTool ? 'bash' : isPatchTool ? 'diff' : 'json';
       details.push(`输入：\n${buildFencedCodeBlock(tool.input.trim(), language)}`);
     }
-    if (tool.output && tool.output.trim()) {
+    if (!isPatchTool && tool.output && tool.output.trim()) {
       details.push(`输出：\n${buildFencedCodeBlock(tool.output.trim(), 'text')}`);
     }
   }

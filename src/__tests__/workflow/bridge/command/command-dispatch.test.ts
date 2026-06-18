@@ -2769,7 +2769,14 @@ enabled = true
     assert.equal(store.getSession(renamedBinding!.bridgeSessionId)?.name, '[TestBot]RenamedSession');
     assert.equal(sent.at(-1)?.address.chatId, adapter.createdGroups[3].chatId);
     assert.match(sent.at(-1)?.text || '', /标题.*\[TestBot\]RenamedSession/s);
-    assert.match(sent.at(-2)?.text || '', /\/new \[name\] \[path\]/);
+    const newSessionNotice = sent.at(-2)?.text || '';
+    assert.match(newSessionNotice, /`\/`：查看\/修改当前工作区配置/);
+    assert.match(newSessionNotice, /`\/set`：查看\/修改全局配置/);
+    assert.match(newSessionNotice, /`\/new`：新建对话/);
+    assert.match(newSessionNotice, /`\/p tmux`：重启当前对话，不会丢失上下文/);
+    assert.match(newSessionNotice, /`\/tmux-screen`：查看当前 tmux 的屏幕界面/);
+    assert.doesNotMatch(newSessionNotice, /\/new \[name\] \[path\]/);
+    assert.doesNotMatch(newSessionNotice, /Codex Native 会话列表/);
 
     await handleBridgeCommand(
       adapter,

@@ -26,7 +26,6 @@ import {
 import type { CommandThreadDisplay } from '../../command/thread-display.js';
 import {
   deriveNewGroupName,
-  NEW_SESSION_ARG_RULE_NOTE,
   parseForceFlag,
   parseNewSessionArgs,
   validateNewSessionName,
@@ -60,6 +59,14 @@ function shouldEnableTmuxAutoEnterForNewSession(
   if (inheritedProvider === 'pty') return false;
   return resolveEffectiveCodexProvider(session, binding) === 'tmux';
 }
+
+const NEW_SESSION_KEY_COMMAND_NOTES = [
+  '`/`：查看/修改当前工作区配置。',
+  '`/set`：查看/修改全局配置。',
+  '`/new`：新建对话。',
+  '`/p tmux`：重启当前对话，不会丢失上下文，可用于尝试修复卡顿。',
+  '`/tmux-screen`：查看当前 tmux 的屏幕界面，卡住时可以用来 debug。',
+];
 
 export async function handleNewSessionCommand(options: {
   adapter: BaseChannelAdapter;
@@ -251,12 +258,11 @@ export async function handleNewSessionCommand(options: {
     parsedArgs.force ? 'forced' : undefined,
   );
   const notes = [
-    parsedArgs.args.trim() ? '接下来直接发送文本即可继续。' : '已在当前工作目录下新建一个线程。接下来直接发送文本即可继续。',
-    NEW_SESSION_ARG_RULE_NOTE,
+    '接下来直接发送文本即可继续。',
+    ...NEW_SESSION_KEY_COMMAND_NOTES,
     ...(parsedArgs.force
       ? ['如果当前聊天里已有旧任务在运行，它不会被终止，仍会在后台继续执行并可能稍后回消息。']
       : []),
-    '这是 IM 侧线程，当前只保证在 IM 中可继续；不会自动出现在 Codex Native 会话列表中。',
   ];
   return {
     responseAddress: groupAddress,

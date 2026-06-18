@@ -7,7 +7,15 @@ import path from 'node:path';
 import { describe, it } from 'node:test';
 import { pathToFileURL } from 'node:url';
 
-import { buildCliHelpText, formatRunSuccessMessage, isDirectCliRun, parseCliCommand, parseCliInvocation } from '../../../entrypoints/cli.js';
+import {
+  buildCliHelpText,
+  formatRunSuccessMessage,
+  formatRunningBridgePrompt,
+  isDirectCliRun,
+  parseCliCommand,
+  parseCliInvocation,
+  resolveRunningBridgeStartAction,
+} from '../../../entrypoints/cli.js';
 
 describe('cli entrypoint', () => {
   it('parses default, help, run/open, and nested autostart commands', () => {
@@ -88,6 +96,35 @@ describe('cli entrypoint', () => {
     assert.match(text, /Bridge：正在运行，已确认进程存活（已在运行，PID 222）/);
     assert.match(text, /工作台：http:\/\/127\.0\.0\.1:17373/);
     assert.match(text, /现在应该可以在飞书\/Lark 里给机器人发消息并看到回复/);
+  });
+
+  it('asks interactive start/run callers whether to restart an already-running Bridge', async () => {
+    const running = { running: true, pid: 222 };
+    assert.equal(formatRunningBridgePrompt('start', running), 'Bridge 已经在运行（PID 222）。是否先停止已有实例并重新执行 codelark start？');
+
+    const restart = await resolveRunningBridgeStartAction({
+      command: 'start',
+      status: running,
+      prompt: async (question) => {
+        assert.equal(question, 'Bridge 已经在运行（PID 222）。是否先停止已有实例并重新执行 codelark start？');
+        return true;
+      },
+    });
+    assert.equal(restart, 'restart');
+
+    assert.equal(await resolveRunningBridgeStartAction({
+      command: 'run',
+      status: running,
+      interactive: false,
+    }), 'reuse');
+
+    assert.equal(await resolveRunningBridgeStartAction({
+      command: 'run',
+      status: { running: false },
+      prompt: async () => {
+        throw new Error('prompt should not run when Bridge is stopped');
+      },
+    }), 'start');
   });
 
   it('treats npm bin symlinks as direct CLI runs', () => {
