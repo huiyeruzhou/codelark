@@ -87,6 +87,7 @@ const runtimeDir = path.join(CODELARK_HOME, 'runtime');
 const logsDir = path.join(CODELARK_HOME, 'logs');
 const larkCliRuntimeDir = path.join(runtimeDir, 'lark-cli');
 const larkCliSourceDir = path.join(runtimeDir, 'lark-cli-source');
+const larkCliBinDir = path.join(runtimeDir, 'bin');
 const larkCliSourceConfigFile = path.join(larkCliSourceDir, 'config.json');
 const larkCliTargetConfigFile = path.join(larkCliRuntimeDir, 'lark-channel', 'config.json');
 const bridgePidFile = path.join(runtimeDir, 'bridge.pid');
@@ -108,6 +109,7 @@ function ensureDirs(): void {
   fs.mkdirSync(runtimeDir, { recursive: true });
   fs.mkdirSync(logsDir, { recursive: true });
   fs.mkdirSync(larkCliRuntimeDir, { recursive: true });
+  fs.mkdirSync(larkCliBinDir, { recursive: true });
 }
 
 function readJsonFile<T>(filePath: string, fallback: T): T {
@@ -659,6 +661,9 @@ function buildDaemonEnv(
     if (key === `${legacyEnvPrefix}_HOME` || key.startsWith(`${legacyEnvPrefix}_`)) delete env[key];
   }
   delete env.CLAUDECODE;
+  Object.assign(env, buildLarkCliRuntimeEnv());
+  const shimDir = ensureLarkCliShim();
+  env.PATH = prependPathEntry(env.PATH, shimDir);
   return env;
 }
 
@@ -675,6 +680,54 @@ export function buildLarkCliRuntimeEnv(): NodeJS.ProcessEnv {
     LARK_CHANNEL_CONFIG: larkCliSourceConfigFile,
     LARKSUITE_CLI_CONFIG_DIR: larkCliRuntimeDir,
   };
+}
+
+function prependPathEntry(pathValue: string | undefined, entry: string): string {
+  const delimiter = path.delimiter;
+  const parts = (pathValue || '').split(delimiter).filter(Boolean);
+  const withoutEntry = parts.filter((part) => path.resolve(part) !== path.resolve(entry));
+  return [entry, ...withoutEntry].join(delimiter);
+}
+
+function shellSingleQuote(value: string): string {
+  return `'${value.replace(/'/g, "'\\''")}'`;
+}
+
+function ensureLarkCliShim(): string {
+  ensureDirs();
+  const script = resolveLarkCliScript();
+  if (!script) return larkCliBinDir;
+
+  if (process.platform === 'win32') {
+    const cmdPath = path.join(larkCliBinDir, 'lark-cli.cmd');
+    fs.writeFileSync(
+      cmdPath,
+      [
+        '@echo off',
+        `"${process.execPath}" "${script}" %*`,
+        '',
+      ].join('\r\n'),
+      'utf-8',
+    );
+    return larkCliBinDir;
+  }
+
+  const shimPath = path.join(larkCliBinDir, 'lark-cli');
+  fs.writeFileSync(
+    shimPath,
+    [
+      '#!/bin/sh',
+      `exec ${shellSingleQuote(process.execPath)} ${shellSingleQuote(script)} "$@"`,
+      '',
+    ].join('\n'),
+    { encoding: 'utf-8', mode: 0o755 },
+  );
+  try {
+    fs.chmodSync(shimPath, 0o755);
+  } catch {
+    // Best effort for filesystems that ignore chmod.
+  }
+  return larkCliBinDir;
 }
 
 function findPrimaryFeishuChannel(config: LocalServiceConfig): LocalServiceChannel | undefined {
@@ -825,17 +878,16 @@ export function resetLegacyStrictLarkCliRuntimeForSetup(config: LocalServiceConf
 }
 
 function larkCliIdentityPolicyCommands(hasUser: boolean, options: LarkCliRuntimeConfigOptions = {}): string[][] {
-  // Setup must be able to run `auth login` before any user token exists.
-  // Bridge startup keeps the pre-authorization runtime bot-only unless a user is already present.
-  return hasUser || options.allowUserAuthorization
-    ? [
-        ['config', 'strict-mode', 'off'],
-        ['config', 'default-as', 'auto'],
-      ]
-    : [
-        ['config', 'strict-mode', 'bot'],
-        ['config', 'default-as', 'bot'],
-      ];
+  void hasUser;
+  void options;
+  // Setup explicitly asks the user to authorize CodeLark's private lark-cli
+  // runtime. Bridge startup must preserve that user-capable policy; when no
+  // user token exists, lark-cli should report that naturally instead of strict
+  // mode rejecting --as user before auth can be diagnosed.
+  return [
+    ['config', 'strict-mode', 'off'],
+    ['config', 'default-as', 'auto'],
+  ];
 }
 
 export async function applyLarkCliRuntimeIdentityPolicy(
@@ -1176,7 +1228,9 @@ export const _testOnly = {
   loadStartupConfig,
   applyLarkCliRuntimeIdentityPolicy,
   buildLarkCliRuntimeEnv,
+  ensureLarkCliShim,
   isLarkCliKeychainFailure,
+  prependPathEntry,
   writeLarkCliSourceProjection,
   writePlainLarkCliTargetProjection,
   hasTargetLarkCliUsers,

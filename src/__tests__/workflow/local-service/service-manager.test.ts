@@ -208,7 +208,7 @@ describe('service-manager lark-cli runtime environment', () => {
     }
   });
 
-  it('builds daemon env by inheriting process env without projecting config values', () => {
+  it('builds daemon env by inheriting process env without projecting config values and with CodeLark lark-cli runtime', () => {
     const home = process.env.CODELARK_HOME!;
     const configTomlPath = path.join(home, 'config.toml');
     const configEnvPath = path.join(home, 'config.env');
@@ -266,8 +266,19 @@ describe('service-manager lark-cli runtime environment', () => {
       assert.equal(env.CODELARK_CODEX_PROVIDER, undefined);
       assert.equal(env.CODELARK_FEISHU_APP_ID, undefined);
       assert.equal(env.CODELARK_ENABLED_CHANNELS, undefined);
-      assert.equal(env.LARK_CHANNEL_HOME, undefined);
-      assert.equal(env.LARKSUITE_CLI_CONFIG_DIR, undefined);
+      assert.equal(env.LARK_CHANNEL, '1');
+      assert.equal(env.LARK_CHANNEL_HOME, process.env.CODELARK_HOME);
+      assert.equal(
+        env.LARK_CHANNEL_CONFIG,
+        path.join(process.env.CODELARK_HOME!, 'runtime', 'lark-cli-source', 'config.json'),
+      );
+      assert.equal(
+        env.LARKSUITE_CLI_CONFIG_DIR,
+        path.join(process.env.CODELARK_HOME!, 'runtime', 'lark-cli'),
+      );
+      const firstPath = (env.PATH || '').split(path.delimiter).filter(Boolean)[0];
+      assert.equal(firstPath, path.join(process.env.CODELARK_HOME!, 'runtime', 'bin'));
+      assert.equal(fs.existsSync(path.join(firstPath, process.platform === 'win32' ? 'lark-cli.cmd' : 'lark-cli')), true);
       assert.equal(env.CLAUDECODE, undefined);
     } finally {
       if (previousToml === null) fs.rmSync(configTomlPath, { force: true });
@@ -388,6 +399,15 @@ describe('service-manager lark-cli runtime environment', () => {
       env.LARKSUITE_CLI_CONFIG_DIR,
       path.join(process.env.CODELARK_HOME!, 'runtime', 'lark-cli'),
     );
+  });
+
+  it('prepends the CodeLark lark-cli shim directory without duplicating PATH entries', () => {
+    const shimDir = _testOnly.ensureLarkCliShim();
+    const existingPath = ['/usr/bin', shimDir, '/bin'].join(path.delimiter);
+    const nextPath = _testOnly.prependPathEntry(existingPath, shimDir);
+
+    assert.equal(nextPath, [shimDir, '/usr/bin', '/bin'].join(path.delimiter));
+    assert.equal(fs.existsSync(path.join(shimDir, process.platform === 'win32' ? 'lark-cli.cmd' : 'lark-cli')), true);
   });
 
   it('writes a lark-cli source projection from the configured Feishu channel', () => {
@@ -596,14 +616,14 @@ describe('service-manager lark-cli runtime environment', () => {
     assert.equal(_testOnly.hasLegacyStrictLarkCliRuntime(config), false);
   });
 
-  it('allows setup user authorization before a user token exists', () => {
+  it('keeps the private lark-cli runtime user-capable before and after user authorization', () => {
     assert.deepEqual(_testOnly.larkCliIdentityPolicyCommands(false, { allowUserAuthorization: true }), [
       ['config', 'strict-mode', 'off'],
       ['config', 'default-as', 'auto'],
     ]);
     assert.deepEqual(_testOnly.larkCliIdentityPolicyCommands(false), [
-      ['config', 'strict-mode', 'bot'],
-      ['config', 'default-as', 'bot'],
+      ['config', 'strict-mode', 'off'],
+      ['config', 'default-as', 'auto'],
     ]);
     assert.deepEqual(_testOnly.larkCliIdentityPolicyCommands(true), [
       ['config', 'strict-mode', 'off'],

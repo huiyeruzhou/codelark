@@ -2,6 +2,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { spawn } from 'node:child_process';
 
 type FeishuSite = 'feishu' | 'lark';
 
@@ -73,6 +74,44 @@ function writeJsonFile(filePath: string, value: unknown): void {
   const tmpPath = `${filePath}.tmp`;
   fs.writeFileSync(tmpPath, `${JSON.stringify(value, null, 2)}\n`, { mode: 0o600 });
   fs.renameSync(tmpPath, filePath);
+}
+
+function runCommand(
+  command: string,
+  args: string[],
+  options: {
+    cwd?: string;
+    env?: NodeJS.ProcessEnv;
+    timeoutMs?: number;
+  } = {},
+): Promise<{ code: number; stdout: string; stderr: string }> {
+  return new Promise((resolve, reject) => {
+    const child = spawn(command, args, {
+      cwd: options.cwd,
+      env: options.env,
+      stdio: ['ignore', 'pipe', 'pipe'],
+      windowsHide: process.platform === 'win32',
+    });
+    let stdout = '';
+    let stderr = '';
+    const timeout = setTimeout(() => {
+      child.kill('SIGTERM');
+      reject(new Error(`${command} ${args.join(' ')} timed out after ${options.timeoutMs}ms\n${stdout}\n${stderr}`));
+    }, options.timeoutMs || 15_000);
+
+    child.stdout.setEncoding('utf8');
+    child.stderr.setEncoding('utf8');
+    child.stdout.on('data', (chunk) => { stdout += chunk; });
+    child.stderr.on('data', (chunk) => { stderr += chunk; });
+    child.on('error', (error) => {
+      clearTimeout(timeout);
+      reject(error);
+    });
+    child.on('close', (code) => {
+      clearTimeout(timeout);
+      resolve({ code: code ?? 1, stdout, stderr });
+    });
+  });
 }
 
 function writeTestLarkCliRuntimeProjection(options: {
@@ -171,6 +210,7 @@ async function main(): Promise<void> {
     );
 
     const savedConfig = setupWizard.loadSetupConfig(codelarkHome);
+    const localService = await import('../src/local-service/manager.js');
     if (skipLarkCliBind) {
       writeTestLarkCliRuntimeProjection({
         sourcePath: larkSourceConfigPath,
@@ -180,11 +220,12 @@ async function main(): Promise<void> {
         site,
       });
     } else {
-      const localService = await import('../src/local-service/manager.js');
       const larkRuntime = await localService.ensureLarkCliRuntimeConfig(savedConfig, { allowUserAuthorization: true });
       if (larkRuntime.warning) throw new Error(larkRuntime.warning);
       if (!larkRuntime.ready) throw new Error('CodeLark private lark-cli runtime was not initialized');
     }
+    const policyWarning = await localService.applyLarkCliRuntimeIdentityPolicy(true);
+    if (policyWarning) throw new Error(policyWarning);
     if (hasFlag(argv, '--simulate-failure-after-sync')) {
       throw new Error('simulated setup wizard real e2e failure after lark-cli sync');
     }
@@ -204,6 +245,43 @@ async function main(): Promise<void> {
     if (!fs.existsSync(larkSourceConfigPath)) throw new Error('CodeLark lark-cli source config missing');
     if (!fs.existsSync(larkRuntimeConfigPath)) throw new Error('CodeLark private lark-cli runtime config missing');
 
+    const daemonEnv = localService._testOnly.buildDaemonEnv();
+    const expectedLarkConfigDir = path.join(codelarkHome, 'runtime', 'lark-cli');
+    const expectedLarkConfig = path.join(codelarkHome, 'runtime', 'lark-cli-source', 'config.json');
+    const expectedShimDir = path.join(codelarkHome, 'runtime', 'bin');
+    const expectedShimPath = path.join(expectedShimDir, process.platform === 'win32' ? 'lark-cli.cmd' : 'lark-cli');
+    if (daemonEnv.LARK_CHANNEL_HOME !== codelarkHome) {
+      throw new Error(`daemon env LARK_CHANNEL_HOME mismatch: ${daemonEnv.LARK_CHANNEL_HOME}`);
+    }
+    if (daemonEnv.LARK_CHANNEL_CONFIG !== expectedLarkConfig) {
+      throw new Error(`daemon env LARK_CHANNEL_CONFIG mismatch: ${daemonEnv.LARK_CHANNEL_CONFIG}`);
+    }
+    if (daemonEnv.LARKSUITE_CLI_CONFIG_DIR !== expectedLarkConfigDir) {
+      throw new Error(`daemon env LARKSUITE_CLI_CONFIG_DIR mismatch: ${daemonEnv.LARKSUITE_CLI_CONFIG_DIR}`);
+    }
+    const daemonPathHead = (daemonEnv.PATH || '').split(path.delimiter).filter(Boolean)[0];
+    if (daemonPathHead !== expectedShimDir) {
+      throw new Error(`daemon env PATH should start with ${expectedShimDir}, got ${daemonPathHead || '<empty>'}`);
+    }
+    if (!fs.existsSync(expectedShimPath)) {
+      throw new Error(`CodeLark lark-cli shim missing: ${expectedShimPath}`);
+    }
+    const larkCliVersion = await runCommand('lark-cli', ['--version'], {
+      cwd: workspaceRoot,
+      env: daemonEnv,
+      timeoutMs: 15_000,
+    });
+    if (larkCliVersion.code !== 0) {
+      throw new Error(`CodeLark lark-cli shim failed: ${larkCliVersion.stderr || larkCliVersion.stdout}`);
+    }
+    const targetRuntime = JSON.parse(fs.readFileSync(larkRuntimeConfigPath, 'utf-8'));
+    const targetApp = Array.isArray(targetRuntime.apps)
+      ? targetRuntime.apps.find((app: { appId?: unknown; brand?: unknown }) => app.appId === appId && app.brand === site)
+      : null;
+    if (targetApp?.strictMode === 'bot' || targetApp?.defaultAs === 'bot') {
+      throw new Error(`CodeLark private lark-cli runtime is still bot-only: ${JSON.stringify(targetApp)}`);
+    }
+
     const result = {
       ok: true,
       runRoot,
@@ -214,6 +292,9 @@ async function main(): Promise<void> {
       configEnvPath,
       configJsonPath,
       configTomlPath,
+      daemonLarkCliConfigDir: daemonEnv.LARKSUITE_CLI_CONFIG_DIR,
+      daemonPathHead,
+      larkCliShimPath: expectedShimPath,
       cleanedRunRoot: !keepTemp,
     };
     process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);

@@ -144,11 +144,22 @@ test('setup wizard real script runs in an isolated local e2e home and cleans its
   });
 
   assert.equal(result.code, 0, result.stderr);
-  const parsed = JSON.parse(result.stdout) as { ok?: boolean; cleanedRunRoot?: boolean; configTomlPath?: string };
+  const parsed = JSON.parse(result.stdout) as {
+    ok?: boolean;
+    cleanedRunRoot?: boolean;
+    codelarkHome?: string;
+    configTomlPath?: string;
+    daemonLarkCliConfigDir?: string;
+    daemonPathHead?: string;
+    larkCliShimPath?: string;
+  };
   assert.equal(parsed.ok, true);
   assert.equal(parsed.cleanedRunRoot, true);
   assert.equal(fs.existsSync(runRoot), false);
   assert.match(parsed.configTomlPath || '', /config\.toml$/);
+  assert.equal(parsed.daemonLarkCliConfigDir, path.join(parsed.codelarkHome || '', 'runtime', 'lark-cli'));
+  assert.equal(parsed.daemonPathHead, path.join(parsed.codelarkHome || '', 'runtime', 'bin'));
+  assert.match(parsed.larkCliShimPath || '', /lark-cli(?:\.cmd)?$/);
 });
 
 test('setup wizard real script cleans its run root after a post-sync failure', async () => {
