@@ -86,7 +86,7 @@ fake 测试也要遵守真实职责边界。`fake tmux` 只模拟 tmux transport
 
 | 测试文件 | 关注点 |
 | --- | --- |
-| `bridge-command-e2e.test.ts` | 命令级本地 workflow：普通消息、`/new`、`/his`、auto、runtime/provider、表单卡片、历史附件等用户可见行为。 |
+| `bridge-command-e2e.test.ts` | 命令级本地 workflow：普通消息、`/new`、`/his`、`/every`、runtime/provider、表单卡片、历史附件等用户可见行为。 |
 | `command-dispatch.test.ts` | slash command 解析、runtime/provider 设置、状态命令、require-at、Claude history JSONL 等分派语义。 |
 | `help-command.test.ts` | `/help` 命令分组和用户可读帮助文本。 |
 | `bridge-adapter-runtime.test.ts` | adapter 事件进入 bridge 后按当前 runtime 路由。 |
@@ -188,7 +188,7 @@ npm run real:feishu:e2e -- --list-scenarios
 | --- | --- | --- |
 | provider 路径是否健康 | `message-only` 或 `runtime-message` | 只证明消息能到达 runtime 并回到飞书，不证明复杂功能。 |
 | 同一会话多 provider 基础对话 | `basic-dialogue-suite` | 最高优先级长流程，按 `codex-sdk -> claude-sdk -> codex-tmux -> claude-pty -> codex-pty` 覆盖代表路径。 |
-| 命令状态和配置 | `command-state` | 覆盖 `/status`、runtime/provider 设置、require-at、auto 等语义文本。 |
+| 命令状态和配置 | `command-state` | 覆盖 `/status`、runtime/provider 设置、require-at、`/every` 等语义文本。 |
 | 会话生命周期 | `session-management` | 覆盖 `/help`、`/set`、`/new`、`/cd`、`/current`、`/check`、`/t`、最终 prompt 和 `/his`。 |
 | 历史功能簇 | `history-suite` | 代表 provider 合并验证 `/his` 默认/raw/msg/limit/json/file、长截断和跨群空历史隔离。 |
 | mention 策略 | `require-at-toggle` | runtime-neutral，专门验证非 mention 群消息过滤。 |

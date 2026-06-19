@@ -39,7 +39,7 @@ import {
   getThreadTableMessageRecord,
   persistAndPinLatestThreadTableMessage,
 } from '../../../../bridge/command/thread-table-message-pins.js';
-import { listAutoTasks } from '../../../../bridge/automation/auto-tasks.js';
+import { listEveryTasks } from '../../../../bridge/automation/every-tasks.js';
 import {
   buildCodexSandboxArgs,
   detectCodexSandboxCliStyleFromHelp,
@@ -5588,7 +5588,7 @@ enabled = true
     fs.rmSync(path.join(process.env.CODEX_HOME!, 'archived_sessions'), { recursive: true, force: true });
   });
 
-  it('deprecates /t ls and renders actionable rich cards for empty /t and /auto ls tables', async () => {
+  it('deprecates /t ls and renders actionable rich cards for empty /t and /every tables', async () => {
     initTestContext();
     fs.rmSync(path.join(process.env.CODEX_HOME!, 'sessions'), { recursive: true, force: true });
     fs.rmSync(path.join(process.env.CODEX_HOME!, 'session_index.jsonl'), { force: true });
@@ -5648,16 +5648,16 @@ enabled = true
       [['接管', '归档', '新建'], ['解绑', '刷新']],
     );
 
-    const autoAddress = { channelType: 'feishu', chatId: 'chat-empty-auto' } as const;
-    router.createBinding(autoAddress, 'D:\\workspace\\empty-auto');
+    const everyAddress = { channelType: 'feishu', chatId: 'chat-empty-every' } as const;
+    router.createBinding(everyAddress, 'D:\\workspace\\empty-every');
     await handleBridgeCommand(
       adapter,
       {
-        address: autoAddress,
-        text: '/auto ls',
-        messageId: 'incoming-empty-auto-ls',
+        address: everyAddress,
+        text: '/every',
+        messageId: 'incoming-empty-every',
       } as any,
-      '/auto ls',
+      '/every',
       {
         getActiveTask: () => undefined,
         diagnoseSessionHealth: async () => null,
@@ -5665,11 +5665,12 @@ enabled = true
       },
     );
 
-    assert.equal(richCards.at(-1)?.title, '当前聊天自动化任务（0）');
+    assert.equal(richCards.at(-1)?.title, '当前聊天 /every 定时输入（0）');
     assert.equal(richCards.at(-1)?.template, 'green');
     assert.equal(richCards.at(-1)?.table?.rows.length, 0);
     assert.equal(richCards.at(-1)?.selects, undefined);
-    assert.deepEqual(richCards.at(-1)?.actions?.flat().map((action) => action.text), ['安装skill', '刷新']);
+    assert.deepEqual(richCards.at(-1)?.actions?.flat().map((action) => action.text), ['新建', '刷新']);
+    assert.match(richCards.at(-1)?.footer?.join('\n') || '', /\/every 10m/);
   });
 
   it('shows another chat bridge_id in the /t global list', async () => {
@@ -5945,7 +5946,7 @@ enabled = true
 
   });
 
-  it('creates, lists, and removes /auto tasks on the current bridge session', async () => {
+  it('creates, lists, and removes /every tasks on the current bridge session', async () => {
     const store = initTestContext();
     const sent: string[] = [];
     const richCards: OutboundRichCard[] = [];
@@ -5959,144 +5960,106 @@ enabled = true
         sent.push(message.text);
         if (message.richCard) richCards.push(message.richCard);
         richCardUpdateMessageIds.push(message.richCardUpdateMessageId);
-        return { ok: true, messageId: `reply-auto-${sent.length}` };
+        return { ok: true, messageId: `reply-every-${sent.length}` };
       },
     };
-    const address = { channelType: 'feishu', chatId: 'chat-auto' } as const;
-    const firstSession = store.createSession('auto-first', 'test-model', undefined, 'D:\\workspace\\auto-first');
-    const second = router.createBinding(address, 'D:\\workspace\\auto-second');
+    const address = { channelType: 'feishu', chatId: 'chat-every' } as const;
+    const firstSession = store.createSession('every-first', 'test-model', undefined, 'D:\\workspace\\every-first');
+    const second = router.createBinding(address, 'D:\\workspace\\every-second');
     store.updateSession(firstSession.id, { last_progress_at: '2026-06-01T08:00:00.000Z' }, { touch: false });
     store.updateSession(second.bridgeSessionId, { last_progress_at: '2026-06-01T09:00:00.000Z' }, { touch: false });
-    const scriptDir = path.join(process.env.CODEX_HOME!, 'auto-scripts');
-    fs.mkdirSync(scriptDir, { recursive: true });
-    const scriptPath = path.join(scriptDir, `clk-auto-${Date.now()}.sh`);
-    fs.writeFileSync(scriptPath, '#!/usr/bin/env bash\nprintf "check progress\\n"\n', 'utf-8');
-    fs.chmodSync(scriptPath, 0o755);
 
     const deps = {
       getActiveTask: () => undefined,
       diagnoseSessionHealth: async () => null,
       diagnoseAllActiveSessions: async () => [],
-      startAutoTask: (taskId: string) => { started.push(taskId); },
-      stopAutoTask: (taskId: string) => { stopped.push(taskId); },
+      startEveryTask: (taskId: string) => { started.push(taskId); },
+      stopEveryTask: (taskId: string) => { stopped.push(taskId); },
     };
 
     await handleBridgeCommand(
       adapter,
       {
         address,
-        text: `/auto-script new ${scriptPath} 3`,
-        messageId: 'incoming-auto-new',
+        text: '/every 10m check progress',
+        messageId: 'incoming-every-new',
       } as any,
-      `/auto-script new ${scriptPath} 3`,
+      '/every 10m check progress',
       deps,
     );
 
-    const secondTasks = listAutoTasks({ bridgeSessionId: second.bridgeSessionId, includeCompleted: true });
+    const secondTasks = listEveryTasks({ channelType: address.channelType, chatId: address.chatId });
     assert.equal(secondTasks.length, 1);
     assert.equal(secondTasks[0].bridgeSessionId, second.bridgeSessionId);
-    assert.equal((secondTasks[0] as any).bindingId, undefined);
+    assert.equal(secondTasks[0].intervalSeconds, 600);
+    assert.equal(secondTasks[0].prompt, 'check progress');
     assert.deepEqual(started, [secondTasks[0].id]);
-    assert.match(sent.at(-1) || '', /已创建自动化任务/);
+    assert.match(sent.at(-1) || '', /已创建 \/every 定时输入/);
 
     await handleBridgeCommand(
       adapter,
       {
         address,
-        text: '/auto ls',
-        messageId: 'incoming-auto-ls',
+        text: '/every',
+        messageId: 'incoming-every-ls',
       } as any,
-      '/auto ls',
+      '/every',
       deps,
     );
 
-    assert.match(sent.at(-1) || '', /当前聊天自动化任务/);
+    assert.match(sent.at(-1) || '', /当前聊天 \/every 定时输入/);
     assert.match(sent.at(-1) || '', /session runtime-id/);
     assert.equal(richCards.at(-1)?.template, 'green');
-    assert.equal(richCards.at(-1)?.title, '当前聊天自动化任务（1）');
-    assert.equal(richCards.at(-1)?.updateKey, `thread-card:auto:${address.channelType}:${address.chatId}`);
+    assert.equal(richCards.at(-1)?.title, '当前聊天 /every 定时输入（1）');
+    assert.equal(richCards.at(-1)?.updateKey, `thread-card:every:${address.channelType}:${address.chatId}`);
     assert.equal(richCards.at(-1)?.updateTtlMs, null);
     assert.equal(richCardUpdateMessageIds.at(-1), undefined);
-    assert.equal(getThreadTableMessageRecord(address, 'auto')?.messageId, 'reply-auto-2');
+    assert.equal(getThreadTableMessageRecord(address, 'every')?.messageId, 'reply-every-2');
     assert.deepEqual(richCards.at(-1)?.table?.columns.map((column) => column.name), [
       'index',
       'session_title',
-      'task',
-      'trigger_timing',
+      'interval',
+      'prompt',
       'created_at',
       'triggered_count',
       'last_triggered_at',
-      'times',
+      'status',
       'runtime_id',
       'command',
     ]);
+    assert.deepEqual(richCards.at(-1)?.actions?.flat().map((action) => action.text), ['新建', '取消', '刷新']);
+    assert.match(richCards.at(-1)?.footer?.join('\n') || '', /下拉框用于选择要取消的任务/);
 
+    await handleBridgeCommand(
+      adapter,
+      {
+        address,
+        text: '/every no 1',
+        messageId: 'incoming-every-rm',
+      } as any,
+      '/every no 1',
+      deps,
+    );
+
+    assert.equal(listEveryTasks({ channelType: address.channelType, chatId: address.chatId }).length, 0);
+    assert.deepEqual(stopped, [secondTasks[0].id]);
+    assert.match(sent.at(-1) || '', /已取消 \/every 定时输入/);
+
+    store.updateSession(firstSession.id, { name: 'every-first' });
     await handleBridgeCommand(
       adapter,
       {
         address,
         text: `/t ${firstSession.id}`,
-        messageId: 'incoming-auto-switch',
+        messageId: 'incoming-every-switch',
       } as any,
       `/t ${firstSession.id}`,
       deps,
     );
     assert.equal(store.getChannelChat(address.channelType, address.chatId)?.bridgeSessionId, firstSession.id);
-
-    await handleBridgeCommand(
-      adapter,
-      {
-        address,
-        text: '/auto ls',
-        messageId: 'incoming-auto-ls-first',
-      } as any,
-      '/auto ls',
-      deps,
-    );
-    assert.match(sent.at(-1) || '', /当前聊天自动化任务/);
-    assert.equal(richCardUpdateMessageIds.at(-1), undefined);
-    assert.equal(getThreadTableMessageRecord(address, 'auto')?.messageId, 'reply-auto-4');
-
-    await handleBridgeCommand(
-      adapter,
-      {
-        address,
-        text: '/auto set 1 2',
-        messageId: 'incoming-auto-set',
-      } as any,
-      '/auto set 1 2',
-      deps,
-    );
-    assert.match(sent.at(-1) || '', /已更新自动化任务次数/);
-    assert.equal(listAutoTasks({ bridgeSessionId: second.bridgeSessionId, includeCompleted: true })[0].times, 2);
-
-    await handleBridgeCommand(
-      adapter,
-      {
-        address,
-        text: `/t ${second.bridgeSessionId}`,
-        messageId: 'incoming-auto-switch-back',
-      } as any,
-      `/t ${second.bridgeSessionId}`,
-      deps,
-    );
-    await handleBridgeCommand(
-      adapter,
-      {
-        address,
-        text: '/auto rm 1',
-        messageId: 'incoming-auto-rm',
-      } as any,
-      '/auto rm 1',
-      deps,
-    );
-
-    assert.equal(listAutoTasks({ bridgeSessionId: second.bridgeSessionId, includeCompleted: true }).length, 0);
-    assert.deepEqual(stopped, [secondTasks[0].id]);
-    assert.match(sent.at(-1) || '', /已删除自动化任务/);
   });
 
-  it('renders /auto task runtime identity for Claude sessions', async () => {
+  it('creates /every from the interactive form card', async () => {
     const store = initTestContext();
     const sent: string[] = [];
     const richCards: OutboundRichCard[] = [];
@@ -6107,45 +6070,109 @@ enabled = true
       send: async (message: { text: string; richCard?: OutboundRichCard }) => {
         sent.push(message.text);
         if (message.richCard) richCards.push(message.richCard);
-        return { ok: true, messageId: `reply-auto-claude-${sent.length}` };
+        return { ok: true, messageId: `reply-every-form-${sent.length}` };
       },
     };
-    const address = { channelType: 'feishu', chatId: 'chat-auto-claude' } as const;
-    const binding = router.createBinding(address, '/tmp/auto-claude');
-    const claudeSessionId = 'dddddddd-dddd-4ddd-8ddd-dddddddddddd';
-    store.updateSession(binding.bridgeSessionId, {
-      runtime: {
-        activeRuntime: 'claude',
-        claude: { sessionId: claudeSessionId, cwd: '/tmp/auto-claude' },
-        general: { workingDirectory: '/tmp/auto-claude' },
-      },
-    });
-    const scriptDir = path.join(process.env.CODEX_HOME!, 'auto-scripts');
-    fs.mkdirSync(scriptDir, { recursive: true });
-    const scriptPath = path.join(scriptDir, `clk-auto-claude-${Date.now()}.sh`);
-    fs.writeFileSync(scriptPath, '#!/usr/bin/env bash\nprintf "check claude\\n"\n', 'utf-8');
-    fs.chmodSync(scriptPath, 0o755);
+    const address = { channelType: 'feishu', chatId: 'chat-every-form' } as const;
+    const binding = router.createBinding(address, '/tmp/every-form');
     const deps = {
       getActiveTask: () => undefined,
       diagnoseSessionHealth: async () => null,
       diagnoseAllActiveSessions: async () => [],
-      startAutoTask: (taskId: string) => { started.push(taskId); },
+      startEveryTask: (taskId: string) => { started.push(taskId); },
     };
 
     await handleBridgeCommand(
       adapter,
       {
         address,
-        text: `/auto-script new ${scriptPath} 2`,
-        messageId: 'incoming-auto-claude-new',
+        text: '/every-form',
+        messageId: 'incoming-every-form-open',
       } as any,
-      `/auto-script new ${scriptPath} 2`,
+      '/every-form',
+      deps,
+    );
+
+    assert.equal(richCards.at(-1)?.title, '新建 /every 定时输入');
+    assert.equal(richCards.at(-1)?.form?.inputElementId, 'clk_every_interval');
+    assert.equal(richCards.at(-1)?.form?.inputFormName, 'every_interval');
+    assert.equal(richCards.at(-1)?.form?.extraInputs?.[0]?.formName, 'every_prompt');
+    assert.equal(parseCommandCallbackData(richCards.at(-1)?.form?.submitCallbackData || '')?.commandText, '/every');
+
+    await handleBridgeCommand(
+      adapter,
+      {
+        address,
+        text: '/every',
+        messageId: 'incoming-every-form-submit',
+        raw: {
+          event: {
+            action: {
+              form_value: {
+                every_interval: '30s',
+                every_prompt: 'form prompt',
+              },
+            },
+          },
+        },
+      } as any,
+      '/every',
+      deps,
+    );
+
+    const tasks = listEveryTasks({ bridgeSessionId: binding.bridgeSessionId });
+    assert.equal(tasks.length, 1);
+    assert.equal(tasks[0].intervalSeconds, 30);
+    assert.equal(tasks[0].prompt, 'form prompt');
+    assert.deepEqual(started, [tasks[0].id]);
+    assert.match(sent.at(-1) || '', /已创建 \/every 定时输入/);
+  });
+
+  it('renders /every task runtime identity for Claude sessions', async () => {
+    const store = initTestContext();
+    const sent: string[] = [];
+    const richCards: OutboundRichCard[] = [];
+    const started: string[] = [];
+    const adapter: any = {
+      channelType: 'feishu',
+      provider: 'feishu',
+      send: async (message: { text: string; richCard?: OutboundRichCard }) => {
+        sent.push(message.text);
+        if (message.richCard) richCards.push(message.richCard);
+        return { ok: true, messageId: `reply-every-claude-${sent.length}` };
+      },
+    };
+    const address = { channelType: 'feishu', chatId: 'chat-every-claude' } as const;
+    const binding = router.createBinding(address, '/tmp/every-claude');
+    const claudeSessionId = 'dddddddd-dddd-4ddd-8ddd-dddddddddddd';
+    store.updateSession(binding.bridgeSessionId, {
+      runtime: {
+        activeRuntime: 'claude',
+        claude: { sessionId: claudeSessionId, cwd: '/tmp/every-claude' },
+        general: { workingDirectory: '/tmp/every-claude' },
+      },
+    });
+    const deps = {
+      getActiveTask: () => undefined,
+      diagnoseSessionHealth: async () => null,
+      diagnoseAllActiveSessions: async () => [],
+      startEveryTask: (taskId: string) => { started.push(taskId); },
+    };
+
+    await handleBridgeCommand(
+      adapter,
+      {
+        address,
+        text: '/every 2h check claude',
+        messageId: 'incoming-every-claude-new',
+      } as any,
+      '/every 2h check claude',
       deps,
     );
 
     assert.match(sent.at(-1) || '', /session runtime-id/);
     assert.match(sent.at(-1) || '', new RegExp(claudeSessionId));
-    const tasks = listAutoTasks({ bridgeSessionId: binding.bridgeSessionId, includeCompleted: true });
+    const tasks = listEveryTasks({ bridgeSessionId: binding.bridgeSessionId });
     assert.equal(tasks.length, 1);
     assert.deepEqual(started, [tasks[0].id]);
 
@@ -6153,51 +6180,16 @@ enabled = true
       adapter,
       {
         address,
-        text: '/auto ls',
-        messageId: 'incoming-auto-claude-ls',
+        text: '/every',
+        messageId: 'incoming-every-claude-ls',
       } as any,
-      '/auto ls',
+      '/every',
       deps,
     );
 
     assert.match(sent.at(-1) || '', /session runtime-id/);
     assert.match(sent.at(-1) || '', new RegExp(claudeSessionId));
     assert.equal(richCards.at(-1)?.table?.columns.some((column) => column.name === 'runtime_id'), true);
-  });
-
-  it('rejects /auto scripts outside Codex home', async () => {
-    initTestContext();
-    const sent: string[] = [];
-    const adapter: any = {
-      channelType: 'feishu',
-      provider: 'feishu',
-      send: async (message: { text: string }) => {
-        sent.push(message.text);
-        return { ok: true, messageId: `reply-auto-outside-${sent.length}` };
-      },
-    };
-    const address = { channelType: 'feishu', chatId: 'chat-auto-outside' } as const;
-    router.createBinding(address, 'D:\\workspace\\auto-outside');
-    const scriptPath = path.join(os.tmpdir(), `clk-auto-outside-${Date.now()}.sh`);
-    fs.writeFileSync(scriptPath, '#!/usr/bin/env bash\nprintf "check progress\\n"\n', 'utf-8');
-    fs.chmodSync(scriptPath, 0o755);
-
-    await handleBridgeCommand(
-      adapter,
-      {
-        address,
-        text: `/auto-script new ${scriptPath} 1`,
-        messageId: 'incoming-auto-outside-new',
-      } as any,
-      `/auto-script new ${scriptPath} 1`,
-      {
-        getActiveTask: () => undefined,
-        diagnoseSessionHealth: async () => null,
-        diagnoseAllActiveSessions: async () => [],
-      },
-    );
-
-    assert.match(sent.at(-1) || '', /自动化脚本必须位于 Codex home 下/);
   });
 
   it('maps /stop to C-c for a running tmux provider mirror turn', async () => {

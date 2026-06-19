@@ -1,9 +1,10 @@
 const COMMAND_CALLBACK_PREFIX = 'clk-command:';
 export const THREAD_SELECT_CALLBACK_PREFIX = 'clk-thread-select:';
 export const THREAD_SELECT_ACTION_CALLBACK_PREFIX = 'clk-thread-action:';
-export const AUTO_TASK_SELECT_CALLBACK_PREFIX = 'clk-auto-select:';
-export const AUTO_TASK_ACTION_CALLBACK_PREFIX = 'clk-auto-action:';
+export const EVERY_TASK_SELECT_CALLBACK_PREFIX = 'clk-every-select:';
+export const EVERY_TASK_ACTION_CALLBACK_PREFIX = 'clk-every-action:';
 export const NEW_SESSION_FORM_COMMAND = '/new-form';
+export const EVERY_TASK_FORM_COMMAND = '/every-form';
 
 export {
   AGENT_QUESTION_CALLBACK_PREFIX,
@@ -12,8 +13,8 @@ export {
   type AgentQuestionCallbackPayload,
 } from '../callbacks/agent-question.js';
 
-export type AutoTaskCardAction = 'rm' | 'set1';
-export type ThreadCardScope = 'global' | 'bound' | 'auto' | 'current' | 'set';
+export type EveryTaskCardAction = 'no';
+export type ThreadCardScope = 'global' | 'bound' | 'every' | 'current' | 'set';
 export type ThreadCardAction = 'switch' | 'archive';
 
 export interface ParsedCommandCallback {
@@ -56,6 +57,6 @@ export function buildThreadActionCallbackData(scope: ThreadCardScope, action: Th
   return `${THREAD_SELECT_ACTION_CALLBACK_PREFIX}${scope}:${action}`;
 }
 
-export function buildAutoTaskActionCallbackData(action: AutoTaskCardAction): string {
-  return `${AUTO_TASK_ACTION_CALLBACK_PREFIX}${action}`;
+export function buildEveryTaskActionCallbackData(action: EveryTaskCardAction): string {
+  return `${EVERY_TASK_ACTION_CALLBACK_PREFIX}${action}`;
 }

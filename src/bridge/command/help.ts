@@ -79,11 +79,7 @@ export function buildHelpCommandResponse(): string {
     '- `/ui` 查看当前 UI 显示策略；工具详情始终显示',
     '',
     '**自动化**',
-    '- `/auto <时间> <prompt>` 创建定时自动任务；时间支持 s/m/h/d，默认 s；每次触发都会启动新的 session',
-    '- `/auto ls` 查看当前聊天的自动化任务表',
-    '- `/auto rm <序号>` 删除自动化任务',
-    '- `/auto set <序号> <times>` 重置脚本任务触发次数；`0` 表示暂停',
-    '- `/auto-script new <scriptpath> <times>` 创建脚本自动化任务；脚本退出时 stdout 会作为下一轮当前 session runtime prompt',
-    '- `/auto-script skill install|uninstall` 安装或删除自动脚本创建 skill',
+    '- `/every <数字><s|m|h|d> <prompt>` 创建定时输入；每次触发都会复用创建时绑定的当前会话',
+    '- `/every` 查看当前聊天的定时输入表，`/every no <序号>` 取消',
   ].join('\n');
 }

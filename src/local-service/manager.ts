@@ -1422,12 +1422,6 @@ export const BUNDLED_CODEX_SKILLS: BundledCodexSkill[] = [
     description: '让 Codex 在需要用户确认或选择时显式输出 CodeLark 问题卡片。',
     sourceDir: path.join(packageRoot, 'skills', 'codelark-question'),
   },
-  {
-    name: 'codelark-auto',
-    label: '自动脚本',
-    description: '让 Codex 创建可供 /auto-script 使用的本地自动化脚本。',
-    sourceDir: path.join(packageRoot, 'skills', 'codelark-auto'),
-  },
 ];
 
 export interface ExternalSkillDefinition {
@@ -1458,7 +1452,6 @@ export const INSTALLABLE_SKILLS = [
 const REQUIRED_CODEX_SKILL_NAMES = [
   PRIMARY_CODEX_SKILL_NAME,
   'codelark-question',
-  'codelark-auto',
 ] as const;
 
 function codexHomeDir(): string {

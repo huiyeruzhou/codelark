@@ -579,9 +579,9 @@ describe('unit::real-feishu-e2e-harness::session-management-command-plan', () =>
       '/sandbox',
       '/network',
       '/reasoning',
-      '/auto 3600 e2e seed unit-command-state',
-      '/auto ls',
-      '/auto rm 1',
+      '/every 1h e2e seed unit-command-state',
+      '/every',
+      '/every no 1',
     ]);
     assert.equal(parsed.commandReplyExpectations.length, parsed.commands.length);
     assert.deepEqual(expectationByCommand.get('/status')?.expectedTexts, ['全局状态', 'Bridge', '当前聊天']);
@@ -595,9 +595,9 @@ describe('unit::real-feishu-e2e-harness::session-management-command-plan', () =>
     assert.deepEqual(expectationByCommand.get('/sandbox')?.expectedTexts, ['当前 Codex 沙箱']);
     assert.deepEqual(expectationByCommand.get('/network')?.expectedTexts, ['当前 Codex 网络']);
     assert.deepEqual(expectationByCommand.get('/reasoning')?.expectedTexts, ['当前思考级别']);
-    assert.deepEqual(expectationByCommand.get('/auto 3600 e2e seed unit-command-state')?.expectedTexts, ['已创建定时自动任务', 'e2e seed unit-command-state']);
-    assert.deepEqual(expectationByCommand.get('/auto ls')?.expectedTexts, ['当前聊天自动化任务']);
-    assert.deepEqual(expectationByCommand.get('/auto rm 1')?.expectedTexts, ['已删除自动化任务']);
+    assert.deepEqual(expectationByCommand.get('/every 1h e2e seed unit-command-state')?.expectedTexts, ['已创建 /every 定时输入', 'e2e seed unit-command-state']);
+    assert.deepEqual(expectationByCommand.get('/every')?.expectedTexts, ['当前聊天 /every 定时输入']);
+    assert.deepEqual(expectationByCommand.get('/every no 1')?.expectedTexts, ['已取消 /every 定时输入']);
     assert.ok(parsed.commandReplyExpectations.every((item) => item.reason === 'command-state reply must include the expected command-specific status text'));
   });
 

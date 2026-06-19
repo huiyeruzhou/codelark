@@ -51,7 +51,7 @@ bridge 会把 IM 平台消息暴露给 LLM。主要风险包括：
 - 通道类型、chat ID、方向、message ID 和截断后的摘要。
 - 被拦截的危险输入会带 `[BLOCKED]` 前缀。
 - 被截断的输入会带 `[TRUNCATED]` 前缀。
-- 也可以用于auto-skills分析
+- 也可以用于后台任务分析
 
 ### 传输安全
 

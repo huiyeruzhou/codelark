@@ -365,7 +365,7 @@ const SCENARIOS: ScenarioDefinition[] = [
   {
     name: 'command-state',
     testNamePrefix: 'real-feishu::command-state',
-    description: '覆盖配置命令、当前会话命令、自动任务状态，然后发送 runtime prompt。',
+    description: '覆盖配置命令、当前会话命令、/every 定时输入状态，然后发送 runtime prompt。',
     unitCoverage: [
       'unit::command-dispatch::status-and-settings',
       'unit::command-dispatch::require-at',
@@ -379,7 +379,7 @@ const SCENARIOS: ScenarioDefinition[] = [
       'e2e::require-at-off',
       'e2e::runtime-switch',
       'e2e::session-state-commands',
-      'e2e::auto-task-create-list-remove',
+      'e2e::every-task-create-list-remove',
       'e2e::runtime-response',
     ],
     providerCoverage: 'runtime-parameterized',
@@ -396,9 +396,9 @@ const SCENARIOS: ScenarioDefinition[] = [
       '/sandbox',
       '/network',
       '/reasoning',
-      `/auto 3600 e2e seed ${options.runId}`,
-      '/auto ls',
-      '/auto rm 1',
+      `/every 1h e2e seed ${options.runId}`,
+      '/every',
+      '/every no 1',
     ],
   },
   {
@@ -3407,11 +3407,11 @@ function commandStateExpectedTexts(options: CliOptions, text: string): string[] 
   if (command === '/reasoning') {
     return [options.runtime === 'claude' ? '当前 Claude Code 思考级别' : '当前思考级别'];
   }
-  if (command === `/auto 3600 e2e seed ${options.runId}`) {
-    return ['已创建定时自动任务', `e2e seed ${options.runId}`];
+  if (command === `/every 1h e2e seed ${options.runId}`) {
+    return ['已创建 /every 定时输入', `e2e seed ${options.runId}`];
   }
-  if (command === '/auto ls') return ['当前聊天自动化任务'];
-  if (command === '/auto rm 1') return ['已删除自动化任务'];
+  if (command === '/every') return ['当前聊天 /every 定时输入'];
+  if (command === '/every no 1') return ['已取消 /every 定时输入'];
   return [];
 }
 

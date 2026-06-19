@@ -634,7 +634,6 @@ describe('service-manager Codex skill integration', () => {
       const names = result.skills.map((skill) => skill.name).sort();
       assert.deepEqual(names, [
         'codelark',
-        'codelark-auto',
         'codelark-question',
       ]);
       assert.deepEqual(result.externalSkills.map((skill) => skill.name), ['lark-doc']);

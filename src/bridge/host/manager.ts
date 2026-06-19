@@ -19,7 +19,6 @@ import type { BridgeSession, BridgeStore, PermissionLinkRecord } from '../../dom
 import type { FeishuChannelConfig } from '../../channels/types.js';
 import { feishuSiteToApiBaseUrl } from '../../channels/feishu/site.js';
 import { inspect } from 'node:util';
-import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 // Side-effect import: triggers self-registration of all adapter factories
 import '../../channels/feishu/adapter.js';
 import * as router from './channel-router.js';
@@ -59,9 +58,9 @@ import {
   buildCommandCallbackData,
   parseAgentQuestionCallbackData,
   parseCommandCallbackData,
-  AUTO_TASK_ACTION_CALLBACK_PREFIX,
-  AUTO_TASK_SELECT_CALLBACK_PREFIX,
-  type AutoTaskCardAction,
+  EVERY_TASK_ACTION_CALLBACK_PREFIX,
+  EVERY_TASK_SELECT_CALLBACK_PREFIX,
+  type EveryTaskCardAction,
   type ThreadCardAction,
   THREAD_SELECT_ACTION_CALLBACK_PREFIX,
   THREAD_SELECT_CALLBACK_PREFIX,
@@ -163,12 +162,12 @@ import {
   resolveInteractiveTurnRuntimeSettings,
 } from '../turn/interactive/turn-environment.js';
 import {
-  getAutoTask,
-  listAutoTasks,
-  pauseAutoTasksForSession,
-  updateAutoTask,
-  type AutoTask,
-} from '../automation/auto-tasks.js';
+  getEveryTask,
+  listEveryTasks,
+  pauseEveryTasksForSession,
+  updateEveryTask,
+  type EveryTask,
+} from '../automation/every-tasks.js';
 import {
   createInteractiveRuntime,
   type BridgeInteractiveRuntimeState,
@@ -225,7 +224,7 @@ const TMUX_AUTO_FORWARD_TYPING_REACTION = 'Typing';
 const MIRROR_TURN_BUFFER_TIMEOUT_MS = 10 * 60_000;
 const STARTUP_NOTICE_TITLE = 'Bridge 已启动';
 const STARTUP_NOTICE_CARD_TEMPLATE = 'turquoise';
-const AUTO_SCRIPT_OUTPUT_LIMIT = 64_000;
+const BACKGROUND_INPUT_LIMIT = 64_000;
 const SESSION_CONFIG_BARRIER_COMMANDS = new Set([
   '/clear',
   '/current-config',
@@ -1154,16 +1153,15 @@ interface BridgeManagerState extends BridgeAdapterRuntimeState, BridgeInteractiv
   mirrorSuppressUntil: Map<string, MirrorSuppressionState[]>;
   mirrorIgnoredTurnIds: Map<string, Map<string, number>>;
   threadCardSelections: Map<string, string>;
-  autoTaskSelections: Map<string, string>;
-  autoTaskRuntimes: Map<string, AutoTaskRuntimeState>;
+  everyTaskSelections: Map<string, string>;
+  everyTaskRuntimes: Map<string, EveryTaskRuntimeState>;
   autoStartChecked: boolean;
 }
 
-interface AutoTaskRuntimeState {
+interface EveryTaskRuntimeState {
   abortController: AbortController;
   bridgeSessionId: string;
-  activeBridgeSessionId?: string;
-  child: ChildProcessWithoutNullStreams | null;
+  activeTrigger: boolean;
 }
 
 function getState(): BridgeManagerState {
@@ -1188,8 +1186,8 @@ function getState(): BridgeManagerState {
       mirrorSuppressUntil: new Map(),
       mirrorIgnoredTurnIds: new Map(),
       threadCardSelections: new Map(),
-      autoTaskSelections: new Map(),
-      autoTaskRuntimes: new Map(),
+      everyTaskSelections: new Map(),
+      everyTaskRuntimes: new Map(),
       queuedCounts: new Map(),
       sessionLocks: new Map(),
       autoStartChecked: false,
@@ -1220,11 +1218,11 @@ function getState(): BridgeManagerState {
   if (!g[GLOBAL_KEY].threadCardSelections) {
     g[GLOBAL_KEY].threadCardSelections = new Map();
   }
-  if (!g[GLOBAL_KEY].autoTaskSelections) {
-    g[GLOBAL_KEY].autoTaskSelections = new Map();
+  if (!g[GLOBAL_KEY].everyTaskSelections) {
+    g[GLOBAL_KEY].everyTaskSelections = new Map();
   }
-  if (!g[GLOBAL_KEY].autoTaskRuntimes) {
-    g[GLOBAL_KEY].autoTaskRuntimes = new Map();
+  if (!g[GLOBAL_KEY].everyTaskRuntimes) {
+    g[GLOBAL_KEY].everyTaskRuntimes = new Map();
   }
   if (!Object.prototype.hasOwnProperty.call(g[GLOBAL_KEY], 'mirrorSyncInFlight')) {
     g[GLOBAL_KEY].mirrorSyncInFlight = false;
@@ -1899,7 +1897,7 @@ export async function start(): Promise<void> {
   void reconcileMirrorSubscriptions().catch((err) => {
     console.error('[bridge-manager] Initial mirror reconcile failed:', describeUnknownError(err));
   });
-  startPersistedAutoTasks();
+  startPersistedEveryTasks();
 
   console.log(`[bridge-manager] Bridge started with ${startedCount} adapter(s)`);
   void runStartupNotificationFlow().catch((err) => {
@@ -1947,7 +1945,7 @@ export async function stop(): Promise<void> {
     task.abortController.abort();
   }
   state.activeTasks.clear();
-  stopAllAutoTasks();
+  stopAllEveryTasks();
   state.mirrorSuppressUntil.clear();
   state.mirrorIgnoredTurnIds.clear();
   INTERACTIVE_RUNTIME.resetSessionExecutor();
@@ -2144,7 +2142,7 @@ async function checkStartupChannelChatCandidate(
     const archived = await archiveLifecycleBindingSession(store, binding);
     const detail = formatLifecycleArchiveDetail(archived);
     for (const removed of bindingsBeforeArchive.length > 0 ? bindingsBeforeArchive : [binding]) {
-      handleBindingRemovedForAutoTasks(removed);
+      handleBindingRemovedForEveryTasks(removed);
     }
     return {
       archivedMissingChat: {
@@ -2352,148 +2350,98 @@ function formatLifecycleArchiveDetail(result: Awaited<ReturnType<typeof archiveL
   }
 }
 
-function startPersistedAutoTasks(): void {
-  const tasks = listAutoTasks({ includeCompleted: false })
-    .filter((task) => task.status === 'running' && shouldStartAutoTask(task));
+function startPersistedEveryTasks(): void {
+  const tasks = listEveryTasks()
+    .filter((task) => task.status === 'running');
   for (const task of tasks) {
-    startAutoTask(task.id);
+    startEveryTask(task.id);
   }
 }
 
-function isIntervalAutoTask(task: AutoTask): boolean {
-  return task.kind === 'interval';
-}
-
-function shouldStartAutoTask(task: AutoTask): boolean {
-  return isIntervalAutoTask(task) || task.triggeredCount < task.times;
-}
-
-function startAutoTask(taskId: string): void {
+function startEveryTask(taskId: string): void {
   const state = getState();
-  if (state.autoTaskRuntimes.has(taskId)) return;
-  const task = getAutoTask(taskId);
-  if (!task || task.status !== 'running' || !shouldStartAutoTask(task)) return;
+  if (state.everyTaskRuntimes.has(taskId)) return;
+  const task = getEveryTask(taskId);
+  if (!task || task.status !== 'running') return;
 
   const abortController = new AbortController();
-  state.autoTaskRuntimes.set(taskId, {
+  state.everyTaskRuntimes.set(taskId, {
     abortController,
     bridgeSessionId: task.bridgeSessionId,
-    child: null,
+    activeTrigger: false,
   });
-  void runAutoTaskLoop(taskId, abortController).finally(() => {
-    state.autoTaskRuntimes.delete(taskId);
+  void runEveryTaskLoop(taskId, abortController).finally(() => {
+    state.everyTaskRuntimes.delete(taskId);
   });
 }
 
-function stopAutoTask(taskId: string): void {
-  const runtime = getState().autoTaskRuntimes.get(taskId);
+function stopEveryTask(taskId: string): void {
+  const runtime = getState().everyTaskRuntimes.get(taskId);
   if (!runtime) return;
   runtime.abortController.abort();
-  runtime.child?.kill();
+  if (!runtime.activeTrigger) return;
   void INTERACTIVE_RUNTIME.forceStopSession(
-    runtime.activeBridgeSessionId || runtime.bridgeSessionId,
-    '自动化任务已删除，正在中止后台触发。',
+    runtime.bridgeSessionId,
+    '/every 定时输入已取消，正在中止后台触发。',
   ).catch((error) => {
-    console.error('[bridge-manager] Failed to stop auto task interactive turn:', describeUnknownError(error));
+    console.error('[bridge-manager] Failed to stop /every interactive turn:', describeUnknownError(error));
   });
 }
 
-function stopAllAutoTasks(): void {
-  for (const taskId of Array.from(getState().autoTaskRuntimes.keys())) {
-    stopAutoTask(taskId);
+function stopAllEveryTasks(): void {
+  for (const taskId of Array.from(getState().everyTaskRuntimes.keys())) {
+    stopEveryTask(taskId);
   }
-  getState().autoTaskRuntimes.clear();
+  getState().everyTaskRuntimes.clear();
 }
 
-async function runAutoTaskLoop(taskId: string, abortController: AbortController): Promise<void> {
+async function runEveryTaskLoop(taskId: string, abortController: AbortController): Promise<void> {
   while (!abortController.signal.aborted) {
-    const task = getAutoTask(taskId);
+    const task = getEveryTask(taskId);
     if (!task || task.status !== 'running') return;
-    if (!isIntervalAutoTask(task) && task.triggeredCount >= task.times) {
-      updateAutoTask(task.id, { status: 'completed' });
-      return;
-    }
-
-    const session = getBridgeContext().store.getSession(task.bridgeSessionId);
-    if (!session) {
-      updateAutoTask(task.id, {
-        status: 'failed',
-        lastError: `Bridge session 不存在：${task.bridgeSessionId}`,
-      });
-      return;
-    }
-    const runtimeLabel = getSessionActiveRuntime(session) === 'claude' ? 'Claude Code' : 'Codex';
-
-    const rawPrompt = isIntervalAutoTask(task)
-      ? await waitForIntervalAutoPrompt(task, abortController)
-      : await runScriptAutoPrompt(task, session, abortController);
+    await abortableDelay(Math.max(1, task.intervalSeconds) * 1000, abortController.signal);
     if (abortController.signal.aborted) return;
-    if (getAutoTask(task.id)?.status === 'failed') return;
-    if (!rawPrompt) {
-      updateAutoTask(task.id, { status: 'failed', lastError: `脚本没有输出 stdout，无法构造 ${runtimeLabel} prompt。` });
-      await deliverAutoTaskNotice(task, isIntervalAutoTask(task) ? '自动化任务 prompt 为空。' : `自动化脚本没有输出 stdout，无法构造 ${runtimeLabel} prompt。`);
+
+    const freshTask = getEveryTask(taskId);
+    if (!freshTask || freshTask.status !== 'running') return;
+    const session = getBridgeContext().store.getSession(freshTask.bridgeSessionId);
+    if (!session) {
+      updateEveryTask(freshTask.id, {
+        status: 'failed',
+        lastError: `Bridge session 不存在：${freshTask.bridgeSessionId}`,
+      });
+      await deliverEveryTaskNotice(freshTask, `定时输入失败：Bridge session 不存在：${freshTask.bridgeSessionId}`);
       return;
     }
 
-    const { text: prompt, truncated } = sanitizeInput(rawPrompt, AUTO_SCRIPT_OUTPUT_LIMIT);
-    const nextTriggeredCount = task.triggeredCount + 1;
-    updateAutoTask(task.id, {
+    const { text: prompt, truncated } = sanitizeInput(freshTask.prompt, BACKGROUND_INPUT_LIMIT);
+    if (!prompt) {
+      updateEveryTask(freshTask.id, { status: 'failed', lastError: 'prompt 为空。' });
+      await deliverEveryTaskNotice(freshTask, '定时输入失败：prompt 为空。');
+      return;
+    }
+    const nextTriggeredCount = freshTask.triggeredCount + 1;
+    updateEveryTask(freshTask.id, {
       triggeredCount: nextTriggeredCount,
       lastTriggeredAt: nowIso(),
-      lastError: truncated ? `脚本 stdout 过长，已截断后发送给 ${runtimeLabel}。` : undefined,
+      lastError: truncated ? 'prompt 过长，已截断后发送。' : undefined,
     });
 
+    const runtime = getState().everyTaskRuntimes.get(taskId);
+    if (runtime) runtime.activeTrigger = true;
     try {
-      await runAutoTaskPrompt(task, session, prompt, nextTriggeredCount, abortController);
+      await runEveryTaskPrompt(freshTask, session, prompt, nextTriggeredCount, abortController);
     } catch (error) {
       if (abortController.signal.aborted) return;
       const detail = describeUnknownError(error);
-      updateAutoTask(task.id, { status: 'failed', lastError: detail });
-      await deliverAutoTaskNotice(task, `自动化任务触发 ${runtimeLabel} 失败：\n\n${detail}`);
+      updateEveryTask(freshTask.id, { status: 'failed', lastError: detail });
+      await deliverEveryTaskNotice(freshTask, `定时输入触发失败：\n\n${detail}`);
       return;
-    }
-
-    if (abortController.signal.aborted) return;
-    if (!isIntervalAutoTask(task) && nextTriggeredCount >= task.times) {
-      updateAutoTask(task.id, { status: 'completed' });
-      return;
+    } finally {
+      const afterRuntime = getState().everyTaskRuntimes.get(taskId);
+      if (afterRuntime) afterRuntime.activeTrigger = false;
     }
   }
-}
-
-async function waitForIntervalAutoPrompt(task: AutoTask, abortController: AbortController): Promise<string> {
-  const intervalMs = Math.max(1, task.intervalSeconds || 1) * 1000;
-  await abortableDelay(intervalMs, abortController.signal);
-  return task.prompt || '';
-}
-
-async function runScriptAutoPrompt(
-  task: AutoTask,
-  session: BridgeSession,
-  abortController: AbortController,
-): Promise<string> {
-  let scriptResult: AutoScriptRunResult;
-  try {
-    scriptResult = await runAutoScript(task, session, abortController);
-  } catch (error) {
-    if (abortController.signal.aborted) return '';
-    const detail = describeUnknownError(error);
-    updateAutoTask(task.id, { status: 'failed', lastError: detail });
-    await deliverAutoTaskNotice(task, `自动化脚本执行失败：\n\n${detail}`);
-    return '';
-  }
-
-  if (abortController.signal.aborted) return '';
-  if (scriptResult.exitCode !== 0) {
-    const detail = [
-      `exit_code: ${scriptResult.exitCode}`,
-      scriptResult.stderr.trim() ? `stderr:\n${scriptResult.stderr.trim()}` : null,
-    ].filter(Boolean).join('\n\n');
-    updateAutoTask(task.id, { status: 'failed', lastError: detail });
-    await deliverAutoTaskNotice(task, `自动化脚本执行失败：\n\n${detail}`);
-    return '';
-  }
-  return scriptResult.stdout.trim();
 }
 
 function abortableDelay(ms: number, signal: AbortSignal): Promise<void> {
@@ -2508,66 +2456,8 @@ function abortableDelay(ms: number, signal: AbortSignal): Promise<void> {
   });
 }
 
-interface AutoScriptRunResult {
-  stdout: string;
-  stderr: string;
-  exitCode: number | null;
-}
-
-async function runAutoScript(
-  task: AutoTask,
-  session: BridgeSession,
-  abortController: AbortController,
-): Promise<AutoScriptRunResult> {
-  return await new Promise((resolve, reject) => {
-    const runtime = getState().autoTaskRuntimes.get(task.id);
-    if (!task.scriptPath) {
-      reject(new Error('脚本路径为空。'));
-      return;
-    }
-    const child = spawn(task.scriptPath, [], {
-      cwd: getSessionWorkingDirectory(session) || process.cwd(),
-      env: process.env,
-      windowsHide: true,
-    });
-    if (runtime) runtime.child = child;
-
-    let stdout = '';
-    let stderr = '';
-    const onAbort = () => {
-      child.kill();
-    };
-    const cleanup = () => {
-      abortController.signal.removeEventListener('abort', onAbort);
-      if (runtime) runtime.child = null;
-    };
-    const appendLimited = (current: string, chunk: Buffer): string => (
-      (current + chunk.toString('utf-8')).slice(-AUTO_SCRIPT_OUTPUT_LIMIT)
-    );
-    child.stdout.on('data', (chunk: Buffer) => {
-      stdout = appendLimited(stdout, chunk);
-    });
-    child.stderr.on('data', (chunk: Buffer) => {
-      stderr = appendLimited(stderr, chunk);
-    });
-    child.on('error', (error) => {
-      cleanup();
-      reject(error);
-    });
-    child.on('close', (code) => {
-      cleanup();
-      resolve({ stdout, stderr, exitCode: code });
-    });
-
-    abortController.signal.addEventListener('abort', onAbort, { once: true });
-    if (abortController.signal.aborted) {
-      onAbort();
-    }
-  });
-}
-
-async function runAutoTaskPrompt(
-  task: AutoTask,
+async function runEveryTaskPrompt(
+  task: EveryTask,
   session: BridgeSession,
   prompt: string,
   triggeredCount: number,
@@ -2575,27 +2465,31 @@ async function runAutoTaskPrompt(
 ): Promise<void> {
   const adapter = getState().adapters.get(task.channelType);
   if (!adapter?.isRunning()) {
-    updateAutoTask(task.id, {
+    updateEveryTask(task.id, {
       status: 'failed',
       lastError: `通道未运行：${task.channelType}`,
     });
     return;
   }
 
-  const address = autoTaskAddress(task);
-  const runSession = isIntervalAutoTask(task)
-    ? createAutoRunSession(task, session, prompt, triggeredCount)
-    : session;
-  const runtime = getState().autoTaskRuntimes.get(task.id);
-  if (runtime) runtime.activeBridgeSessionId = runSession.id;
-  const syntheticBinding = buildAutoTaskBinding(task, runSession);
-  const messageId = `auto:${task.id}:${triggeredCount}`;
+  const address = everyTaskAddress(task);
+  const syntheticBinding = buildEveryTaskBinding(task, session);
+  const messageId = `every:${task.id}:${triggeredCount}`;
   const msg: InboundMessage = {
     address,
     text: prompt,
     messageId,
     timestamp: Date.now(),
   };
+  const effectiveRuntimeProvider = resolveEffectiveRuntimeProvider(session, syntheticBinding);
+  if (effectiveRuntimeProvider?.provider === 'tmux') {
+    await handleCommand(adapter, msg, `/tmux ${prompt}`, {
+      scopedBinding: syntheticBinding,
+      tmuxProviderAutoForward: true,
+    });
+    return;
+  }
+
   const displayService = new ThreadDisplayService(getBridgeContext().store);
 
   await runInteractiveMessage(adapter, msg, prompt, undefined, {
@@ -2634,7 +2528,7 @@ async function runAutoTaskPrompt(
       resolveInteractiveTurnEnvironmentBase(address, targetMessageId, {
         resolveBinding: () => syntheticBinding,
         getBridgeSession: (sessionId) => getBridgeContext().store.getSession(sessionId),
-        codexThreadExists: () => false,
+        codexThreadExists: (threadId) => Boolean(getCodexSessionByThreadIdSafe(threadId, '/every interactive turn classify')),
       })
     ),
     resolveInteractiveTurnRuntimeSettings: (channelType) => resolveInteractiveTurnRuntimeSettings(
@@ -2651,48 +2545,16 @@ async function runAutoTaskPrompt(
 
   if (abortController.signal.aborted) {
     await INTERACTIVE_RUNTIME.forceStopSession(
-      runSession.id,
-      '自动化任务已中止。',
+      session.id,
+      '/every 定时输入已中止。',
     );
   }
-  if (runtime) runtime.activeBridgeSessionId = undefined;
 }
 
-function createAutoRunSession(
-  task: AutoTask,
-  parentSession: BridgeSession,
-  prompt: string,
-  triggeredCount: number,
-): BridgeSession {
-  const store = getBridgeContext().store;
-  const name = `Auto: ${(prompt || task.id).replace(/\s+/g, ' ').trim().slice(0, 48)} #${triggeredCount}`;
-  const parentRuntimePatch = sessionCodexRuntimeOverridePatch(parentSession);
-  const session = store.createSession(
-    name,
-    '',
-    getSessionSystemPrompt(parentSession),
-    getSessionWorkingDirectory(parentSession),
-    'normal',
-    {
-      parentSessionId: parentSession.id,
-    },
-  );
-  store.updateSession(session.id, {
-    provider_id: parentSession.provider_id,
-  }, { touch: false });
-  if (parentRuntimePatch.runtime?.codex) {
-    createConfigService({ migrate: false }).set(
-      { kind: 'session', sessionId: session.id },
-      parentRuntimePatch,
-    );
-  }
-  return store.getSession(session.id) || session;
-}
-
-function buildAutoTaskBinding(task: AutoTask, session: BridgeSession): ChannelChat {
+function buildEveryTaskBinding(task: EveryTask, session: BridgeSession): ChannelChat {
   const timestamp = nowIso();
   return {
-    id: `auto:${task.id}`,
+    id: `every:${task.id}`,
     channelType: task.channelType,
     channelProvider: task.channelProvider,
     channelAlias: task.channelAlias,
@@ -2704,7 +2566,7 @@ function buildAutoTaskBinding(task: AutoTask, session: BridgeSession): ChannelCh
   };
 }
 
-function autoTaskAddress(task: AutoTask): ChannelAddress {
+function everyTaskAddress(task: EveryTask): ChannelAddress {
   return {
     channelType: task.channelType,
     channelProvider: task.channelProvider,
@@ -2715,19 +2577,19 @@ function autoTaskAddress(task: AutoTask): ChannelAddress {
   };
 }
 
-async function deliverAutoTaskNotice(task: AutoTask, text: string): Promise<void> {
+async function deliverEveryTaskNotice(task: EveryTask, text: string): Promise<void> {
   const adapter = getState().adapters.get(task.channelType);
   if (!adapter?.isRunning()) return;
-  await deliverBridgeNotice(adapter, autoTaskAddress(task), text, {
+  await deliverBridgeNotice(adapter, everyTaskAddress(task), text, {
     sessionId: task.bridgeSessionId,
     audit: true,
   });
 }
 
-function handleBindingRemovedForAutoTasks(binding: ChannelChat): void {
-  const paused = pauseAutoTasksForSession(binding.bridgeSessionId);
-  for (const task of paused) {
-    stopAutoTask(task.id);
+function handleBindingRemovedForEveryTasks(binding: ChannelChat): void {
+  const everyPaused = pauseEveryTasksForSession(binding.bridgeSessionId);
+  for (const task of everyPaused) {
+    stopEveryTask(task.id);
   }
 }
 
@@ -2786,7 +2648,7 @@ function threadSelectionKey(msg: InboundMessage): string {
   ].join(':');
 }
 
-function autoTaskSelectionKey(msg: InboundMessage): string {
+function everyTaskSelectionKey(msg: InboundMessage): string {
   return [
     msg.address.channelType,
     msg.address.chatId,
@@ -2971,7 +2833,7 @@ async function handleChannelLifecycleEvent(msg: InboundMessage): Promise<void> {
     .filter((item) => item.bridgeSessionId === binding.bridgeSessionId);
   const archiveResult = await archiveLifecycleBindingSession(store, binding);
   for (const removedBinding of bindingsBeforeArchive) {
-    handleBindingRemovedForAutoTasks(removedBinding);
+    handleBindingRemovedForEveryTasks(removedBinding);
   }
   try {
     store.insertAuditLog({
@@ -3082,19 +2944,19 @@ function parseThreadSelectCallback(callbackData: string): string | null | undefi
   }
 }
 
-function parseAutoTaskSelectCallback(callbackData: string): string | null | undefined {
-  if (!callbackData.startsWith(AUTO_TASK_SELECT_CALLBACK_PREFIX)) return undefined;
+function parseEveryTaskSelectCallback(callbackData: string): string | null | undefined {
+  if (!callbackData.startsWith(EVERY_TASK_SELECT_CALLBACK_PREFIX)) return undefined;
   try {
-    return decodeURIComponent(callbackData.slice(AUTO_TASK_SELECT_CALLBACK_PREFIX.length)).trim() || null;
+    return decodeURIComponent(callbackData.slice(EVERY_TASK_SELECT_CALLBACK_PREFIX.length)).trim() || null;
   } catch {
     return null;
   }
 }
 
-function parseAutoTaskActionCallback(callbackData: string): AutoTaskCardAction | null | undefined {
-  if (!callbackData.startsWith(AUTO_TASK_ACTION_CALLBACK_PREFIX)) return undefined;
-  const raw = callbackData.slice(AUTO_TASK_ACTION_CALLBACK_PREFIX.length).trim();
-  return raw === 'rm' || raw === 'set1' ? raw : null;
+function parseEveryTaskActionCallback(callbackData: string): EveryTaskCardAction | null | undefined {
+  if (!callbackData.startsWith(EVERY_TASK_ACTION_CALLBACK_PREFIX)) return undefined;
+  const raw = callbackData.slice(EVERY_TASK_ACTION_CALLBACK_PREFIX.length).trim();
+  return raw === 'no' ? raw : null;
 }
 
 function parseThreadSelectActionCallback(callbackData: string): {
@@ -3170,37 +3032,37 @@ async function handleMessage(
 
   // Handle callback queries (permission buttons and interactive command cards)
   if (msg.callbackData) {
-    const selectedAutoTaskId = parseAutoTaskSelectCallback(msg.callbackData);
-    if (selectedAutoTaskId !== undefined) {
-      if (!selectedAutoTaskId) {
+    const selectedEveryTaskId = parseEveryTaskSelectCallback(msg.callbackData);
+    if (selectedEveryTaskId !== undefined) {
+      if (!selectedEveryTaskId) {
         await deliverBridgeNotice(adapter, msg.address, '这个下拉选项无效，请刷新后重试。');
       } else {
-        getState().autoTaskSelections.set(autoTaskSelectionKey(msg), selectedAutoTaskId);
+        getState().everyTaskSelections.set(everyTaskSelectionKey(msg), selectedEveryTaskId);
         await adapter.answerCallback?.(msg.messageId, '已选择');
       }
       ack();
       return;
     }
 
-    const autoTaskAction = parseAutoTaskActionCallback(msg.callbackData);
-    if (autoTaskAction !== undefined) {
-      if (!autoTaskAction) {
+    const everyTaskAction = parseEveryTaskActionCallback(msg.callbackData);
+    if (everyTaskAction !== undefined) {
+      if (!everyTaskAction) {
         await deliverBridgeNotice(adapter, msg.address, '这个按钮的操作无效，请刷新后重试。');
         ack();
         return;
       }
-      const taskId = getState().autoTaskSelections.get(autoTaskSelectionKey(msg));
+      const taskId = getState().everyTaskSelections.get(everyTaskSelectionKey(msg));
       if (!taskId) {
-        await deliverBridgeNotice(adapter, msg.address, '请先在下拉列表中选择一个自动化任务，再点击操作按钮。');
+        await deliverBridgeNotice(adapter, msg.address, '请先在下拉列表中选择一个 /every，再点击操作按钮。');
         ack();
         return;
       }
-      const commandText = autoTaskAction === 'set1' ? '/auto set' : '/auto rm';
+      const commandText = '/every no';
       await handleCommand(
         adapter,
         { ...msg, text: commandText, callbackData: undefined },
         commandText,
-        { selectedAutoTaskId: taskId, selectedAutoTaskAction: autoTaskAction },
+        { selectedEveryTaskId: taskId, selectedEveryTaskAction: everyTaskAction },
       );
       ack();
       return;
@@ -3827,8 +3689,8 @@ async function handleCommand(
     scopedBinding?: ChannelChat | null;
     threadCardRefreshScope?: 'global' | 'bound' | null;
     threadCardSelectedId?: string | null;
-    selectedAutoTaskId?: string | null;
-    selectedAutoTaskAction?: AutoTaskCardAction | null;
+    selectedEveryTaskId?: string | null;
+    selectedEveryTaskAction?: EveryTaskCardAction | null;
     tmuxProviderAutoForward?: boolean;
     onTmuxProviderAutoForwarded?: () => Promise<void> | void;
   } = {},
@@ -3843,13 +3705,13 @@ async function handleCommand(
     scopedBinding: options.scopedBinding,
     threadCardRefreshScope: options.threadCardRefreshScope,
     threadCardSelectedId: options.threadCardSelectedId,
-    selectedAutoTaskId: options.selectedAutoTaskId,
-    selectedAutoTaskAction: options.selectedAutoTaskAction,
+    selectedEveryTaskId: options.selectedEveryTaskId,
+    selectedEveryTaskAction: options.selectedEveryTaskAction,
     tmuxProviderAutoForward: options.tmuxProviderAutoForward,
     onTmuxProviderAutoForwarded: options.onTmuxProviderAutoForwarded,
-    startAutoTask,
-    stopAutoTask,
-    onBindingRemoved: handleBindingRemovedForAutoTasks,
+    startEveryTask,
+    stopEveryTask,
+    onBindingRemoved: handleBindingRemovedForEveryTasks,
   });
 }
 
@@ -3920,7 +3782,7 @@ function resetStateForTests(): void {
   ADAPTER_RUNTIME.clearWarningCache();
   state.loopAborts.clear();
   state.activeTasks.clear();
-  stopAllAutoTasks();
+  stopAllEveryTasks();
   for (const timer of pendingTmuxProviderExitProbeTimers.values()) {
     clearTimeout(timer);
   }
@@ -3931,7 +3793,7 @@ function resetStateForTests(): void {
   tmuxSelectionPromptMonitors.clear();
   tmuxSelectionPromptLastProbeAt.clear();
   tmuxSelectionPromptFollowupUntil.clear();
-  state.autoTaskSelections.clear();
+  state.everyTaskSelections.clear();
   clearMirrorSubscriptions();
   state.mirrorSuppressUntil.clear();
   state.mirrorIgnoredTurnIds.clear();

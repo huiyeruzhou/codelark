@@ -8,7 +8,6 @@ set -euo pipefail
 # If no skill name is provided, all default skills are installed. Supported names:
 #   codelark              IM attachment send-back skill
 #   codelark-question     explicit question-card skill
-#   codelark-auto         /auto-script helper skill
 #   lark-doc              official Lark document skill from larksuite/cli
 #
 # --link only symlinks the primary package skill for local development.
@@ -34,7 +33,7 @@ for arg in "$@"; do
 done
 
 if [ "${#REQUESTED_SKILLS[@]}" -eq 0 ]; then
-  REQUESTED_SKILLS=(codelark codelark-question codelark-auto lark-doc)
+  REQUESTED_SKILLS=(codelark codelark-question lark-doc)
 fi
 
 echo "Installing CodeLark skills..."
@@ -46,7 +45,7 @@ mkdir -p "$CODEX_SKILLS_DIR"
 
 skill_source_dir() {
   case "$1" in
-    codelark|codelark-auto|codelark-question)
+    codelark|codelark-question)
       printf '%s\n' "$SOURCE_DIR/skills/$1"
       ;;
     lark-doc)
@@ -54,7 +53,7 @@ skill_source_dir() {
       ;;
     *)
       echo "Error: unknown skill '$1'" >&2
-      echo "Supported skills: codelark codelark-question codelark-auto lark-doc" >&2
+      echo "Supported skills: codelark codelark-question lark-doc" >&2
       exit 1
       ;;
   esac

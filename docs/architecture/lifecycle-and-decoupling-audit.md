@@ -82,7 +82,7 @@ Bridge daemon 的启动路径集中在 `src/entrypoints/daemon.ts`：
 - mirror runtime 装配
 - session health runtime 装配
 - startup notice
-- auto task
+- every task
 - tmux/pty 运行中特例
 - stop/cleanup
 
@@ -157,7 +157,7 @@ SDK、pty、tmux、Claude tmux/pty 的实际运行体不同，但对外都叫 pr
 
 - `bridge/host/manager.ts` 不再直接包含普通消息的完整路由细节。
 - adapter loop 和 `handleMessage()` 可独立单测。
-- mirror、health、auto task 的装配入口仍在应用层，但业务逻辑不留在应用层。
+- mirror、health、every task 的装配入口仍在应用层，但业务逻辑不留在应用层。
 
 ### 优先级 P1：拆 Feishu adapter 的四个角色
 

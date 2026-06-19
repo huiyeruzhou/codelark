@@ -457,7 +457,7 @@ flowchart TD
 - runtime 设置命令：`src/bridge/command/runtime-settings.ts`
 - provider 切换命令：`src/bridge/command/provider-settings.ts`
 - 终端与本地工具命令：`src/bridge/command/tmux.ts`、`src/bridge/command/pty.ts`、`src/bridge/command/shell.ts`
-- 自动任务命令：`src/bridge/command/auto.ts`
+- 定时输入命令：`src/bridge/command/every.ts`
 - 命令展示：`src/bridge/command/presentation/`
 - 共享 callback 协议：`src/bridge/callbacks/`
 - 全局 context 与会话绑定：`src/bridge/context.ts`、`src/bridge/session/channel-router.ts`、`src/bridge/startup-notice-target.ts`

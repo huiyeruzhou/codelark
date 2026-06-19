@@ -8,7 +8,7 @@ IM 命令从用户视角分为五组。命令入口是 [src/bridge/command/dispa
 | runtime 设置 | `/runtime`、`/provider`、`/model`、`/mode`、`/reasoning`、`/sandbox`、`/network`、`/cd` | 修改当前会话的运行参数 |
 | 状态和诊断 | `/`、`/status`、`/check`、`/doctor`、`/his` | 查看状态、健康检查、历史和排障 |
 | 终端和文件 | `/shell`、`/tmux-*`、`/pty-screen`、`/cat`、`/file` | 执行命令、观察终端、发送文件 |
-| 自动化和管理 | `/auto`、`/auto-script`、`/require-at`、`/ui`、`/set`、`/hot-update` | 定时任务、通道策略、显示和全局设置 |
+| 自动化和管理 | `/every`、`/require-at`、`/ui`、`/set`、`/hot-update` | 定时输入、通道策略、显示和全局设置 |
 
 从本机 `audit.jsonl` 的实际使用看，高频命令集中在 `/provider`、`/clear`、`/t`、`/mode`、`/tmux-screen`、`/new`、`/runtime`、`/pty-screen`、`/set` 和 `/hot-update`。这说明新用户文档应优先讲清楚“接管会话、清理/新建会话、切 provider、观察终端屏幕、调整配置”这些路径，再补完整命令索引。
 
@@ -35,7 +35,7 @@ IM 命令从用户视角分为五组。命令入口是 [src/bridge/command/dispa
 | tmux | [src/bridge/command/tmux.ts](https://github.com/huiyeruzhou/codelark/blob/main/src/bridge/command/tmux.ts)、[src/bridge/command/tmux-args.ts](https://github.com/huiyeruzhou/codelark/blob/main/src/bridge/command/tmux-args.ts) |
 | pty 屏幕 | [src/bridge/command/pty.ts](https://github.com/huiyeruzhou/codelark/blob/main/src/bridge/command/pty.ts) |
 | shell | [src/bridge/command/shell.ts](https://github.com/huiyeruzhou/codelark/blob/main/src/bridge/command/shell.ts) |
-| 自动任务 | [src/bridge/command/auto.ts](https://github.com/huiyeruzhou/codelark/blob/main/src/bridge/command/auto.ts) |
+| 定时输入 | [src/bridge/command/every.ts](https://github.com/huiyeruzhou/codelark/blob/main/src/bridge/command/every.ts) |
 | 热更新 | [src/bridge/command/hot-update.ts](https://github.com/huiyeruzhou/codelark/blob/main/src/bridge/command/hot-update.ts) |
 | 展示格式 | [src/bridge/command/presentation/](https://github.com/huiyeruzhou/codelark/blob/main/src/bridge/command/presentation/) |
 

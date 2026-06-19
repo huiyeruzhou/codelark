@@ -72,8 +72,11 @@ import {
 import { createConfigService } from '../../configuration/service.js';
 import { getSessionActiveRuntime, getSessionWorkingDirectory } from '../../domain/session-runtime.js';
 import {
-  handleAutoCommand,
-} from './auto.js';
+  handleEveryCommand,
+} from './every.js';
+import {
+  buildEveryTaskFormCard,
+} from './presentation/every.js';
 import { clearPendingClearConfirmation } from './clear-confirmations.js';
 import {
   handleHotUpdateCommand,
@@ -84,8 +87,8 @@ import { saveStartupNoticeTarget } from '../host/startup-notice-target.js';
 import {
   type ShellCommandRunner,
 } from './shell.js';
-import type { AutoTaskCardAction } from './callbacks.js';
-import { parseCommandCallbackData } from './callbacks.js';
+import type { EveryTaskCardAction } from './callbacks.js';
+import { EVERY_TASK_FORM_COMMAND, parseCommandCallbackData } from './callbacks.js';
 import {
   handleTerminalDispatchCommand,
   isTerminalRawInputCommand,
@@ -130,6 +133,7 @@ function fallbackThreadCardScopeForCallback(msg: InboundMessage): ThreadCardScop
   const commandText = parsed && 'commandText' in parsed ? parsed.commandText : '';
   if (commandText.startsWith('/current')) return 'current';
   if (commandText.startsWith('/set')) return 'set';
+  if (commandText.startsWith('/every')) return 'every';
   return undefined;
 }
 
@@ -158,10 +162,10 @@ export interface BridgeCommandDispatchDeps {
   scopedBinding?: ChannelChat | null;
   threadCardRefreshScope?: ThreadCardScope | null;
   threadCardSelectedId?: string | null;
-  selectedAutoTaskId?: string | null;
-  selectedAutoTaskAction?: AutoTaskCardAction | null;
-  startAutoTask?(taskId: string): void;
-  stopAutoTask?(taskId: string): void;
+  selectedEveryTaskId?: string | null;
+  selectedEveryTaskAction?: EveryTaskCardAction | null;
+  startEveryTask?(taskId: string): void;
+  stopEveryTask?(taskId: string): void;
   onBindingRemoved?(binding: ChannelChat): void;
   hotUpdateRunner?: HotUpdateRunner;
   hotUpdateCwd?: string;
@@ -499,6 +503,11 @@ export async function handleBridgeCommand(
         : getWorkspaceRoot());
       break;
 
+    case EVERY_TASK_FORM_COMMAND:
+      response = '新建 /every：如果没有看到表单，请直接发送 `/every <数字><s|m|h|d> <prompt>`。';
+      responseRichCard = buildEveryTaskFormCard();
+      break;
+
     case '/clear': {
       const result = await handleClearSessionCommand({
         adapter,
@@ -780,22 +789,22 @@ export async function handleBridgeCommand(
       break;
     }
 
-    case '/auto':
-    case '/auto-script': {
+    case '/every': {
       const session = commandBinding ? store.getSession(commandBinding.bridgeSessionId) : null;
-      const result = handleAutoCommand({
+      const formValue = extractCardActionFormValue(msg.raw);
+      const result = handleEveryCommand({
         msg,
         args,
+        formValue,
         session,
         store,
         deps: {
-          selectedAutoTaskId: deps.selectedAutoTaskId,
-          selectedAutoTaskAction: deps.selectedAutoTaskAction,
-          startAutoTask: deps.startAutoTask,
-          stopAutoTask: deps.stopAutoTask,
+          selectedEveryTaskId: deps.selectedEveryTaskId,
+          selectedEveryTaskAction: deps.selectedEveryTaskAction,
+          startEveryTask: deps.startEveryTask,
+          stopEveryTask: deps.stopEveryTask,
         },
         markdown: responseParseMode === 'Markdown',
-        family: command === '/auto-script' ? 'auto-script' : 'auto',
       });
       response = result.response;
       responseRichCard = result.richCard;

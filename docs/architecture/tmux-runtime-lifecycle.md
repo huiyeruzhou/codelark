@@ -168,7 +168,7 @@ Claude tmux 使用同一个 `waitForRuntimeTmuxReady` 启动门控。新建、�
 | Codex 启动没有 update prompt 但尚未 ready 时，fake Codex TUI 先输出 starting screen；CodeLark 持续 readiness capture，直到 ready 后才把触发拉起的原始输入和 Enter 透传进 tmux。 | `does not forward the triggering input until a normal fake Codex tmux startup becomes ready` |
 | Codex 启动 update prompt 选择 `update_now` 后，fake Codex TUI 模拟更新输出和进程退出，fake tmux 只负责承载 session/capture/send-keys；CodeLark 强制提示用户、重启同名 tmux、等待 ready 后再发送原始 auto-forward 输入。 | `relaunches Codex tmux and forwards input when startup update selection exits after update_now` |
 | Codex CLI resolver 拒绝 `node_modules/.bin/codex`，要求全局 Codex CLI。 | `rejects node_modules even when it is the only Codex CLI on PATH` |
-| SDK final 与已有 Codex mirror 订阅共存时建立 suppression，避免重复 final。 | `delivers /auto SDK final output for a still-bound session without duplicate mirror output` |
+| `/every` 定时输入通过当前 SDK session 触发，复用已有 BridgeSession。 | `runs /every interval prompts through the SDK provider on the current session` |
 | `/clear` 在 Claude runtime 下运行时保持 Claude runtime/provider，并保留同聊天 Codex runtime 映射。 | `keeps the active runtime and remembered alternate runtime when /clear follows a runtime switch` |
 | `/t rename` 在 runtime 切换后只修改当前 runtime 的 BridgeSession 标题。 | `renames only the active runtime BridgeSession after runtime switches` |
 | `/tmux-attach` 和 `/tmux-screen` 查看当前屏幕时通过 shared inspect 报告 selection prompt。 | `reports tmux selection prompts through shared attach and screen inspection` |
