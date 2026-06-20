@@ -81,5 +81,7 @@ export function buildHelpCommandResponse(): string {
     '**自动化**',
     '- `/every <数字><s|m|h|d> <prompt>` 创建定时输入；每次触发都会复用创建时绑定的当前会话',
     '- `/every` 查看当前聊天的定时输入表，`/every no <序号>` 取消',
+    '- `/then <prompt>` 在当前会话 completed/interrupted 后发送一次后续输入；`/then` 查看待发送 prompt 并可用卡片新建、修改、取消',
+    '- `/then set <序号> <prompt>` 修改 pending 后续输入；`/then no <序号>` 删除 pending 或中止 running',
   ].join('\n');
 }

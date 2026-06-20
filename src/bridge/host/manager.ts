@@ -60,7 +60,10 @@ import {
   parseCommandCallbackData,
   EVERY_TASK_ACTION_CALLBACK_PREFIX,
   EVERY_TASK_SELECT_CALLBACK_PREFIX,
+  THEN_TASK_ACTION_CALLBACK_PREFIX,
+  THEN_TASK_SELECT_CALLBACK_PREFIX,
   type EveryTaskCardAction,
+  type ThenTaskCardAction,
   type ThreadCardAction,
   THREAD_SELECT_ACTION_CALLBACK_PREFIX,
   THREAD_SELECT_CALLBACK_PREFIX,
@@ -168,6 +171,14 @@ import {
   updateEveryTask,
   type EveryTask,
 } from '../automation/every-tasks.js';
+import {
+  claimNextPendingThenTaskForSession,
+  getThenTask,
+  listThenTasks,
+  pauseThenTasksForSession,
+  updateThenTask,
+  type ThenTask,
+} from '../automation/then-tasks.js';
 import {
   createInteractiveRuntime,
   type BridgeInteractiveRuntimeState,
@@ -1154,7 +1165,10 @@ interface BridgeManagerState extends BridgeAdapterRuntimeState, BridgeInteractiv
   mirrorIgnoredTurnIds: Map<string, Map<string, number>>;
   threadCardSelections: Map<string, string>;
   everyTaskSelections: Map<string, string>;
+  thenTaskSelections: Map<string, string>;
   everyTaskRuntimes: Map<string, EveryTaskRuntimeState>;
+  thenTaskTimers: Map<string, NodeJS.Timeout>;
+  thenSessionQueues: Set<string>;
   autoStartChecked: boolean;
 }
 
@@ -1187,7 +1201,10 @@ function getState(): BridgeManagerState {
       mirrorIgnoredTurnIds: new Map(),
       threadCardSelections: new Map(),
       everyTaskSelections: new Map(),
+      thenTaskSelections: new Map(),
       everyTaskRuntimes: new Map(),
+      thenTaskTimers: new Map(),
+      thenSessionQueues: new Set(),
       queuedCounts: new Map(),
       sessionLocks: new Map(),
       autoStartChecked: false,
@@ -1221,8 +1238,17 @@ function getState(): BridgeManagerState {
   if (!g[GLOBAL_KEY].everyTaskSelections) {
     g[GLOBAL_KEY].everyTaskSelections = new Map();
   }
+  if (!g[GLOBAL_KEY].thenTaskSelections) {
+    g[GLOBAL_KEY].thenTaskSelections = new Map();
+  }
   if (!g[GLOBAL_KEY].everyTaskRuntimes) {
     g[GLOBAL_KEY].everyTaskRuntimes = new Map();
+  }
+  if (!g[GLOBAL_KEY].thenTaskTimers) {
+    g[GLOBAL_KEY].thenTaskTimers = new Map();
+  }
+  if (!g[GLOBAL_KEY].thenSessionQueues) {
+    g[GLOBAL_KEY].thenSessionQueues = new Set();
   }
   if (!Object.prototype.hasOwnProperty.call(g[GLOBAL_KEY], 'mirrorSyncInFlight')) {
     g[GLOBAL_KEY].mirrorSyncInFlight = false;
@@ -1898,6 +1924,7 @@ export async function start(): Promise<void> {
     console.error('[bridge-manager] Initial mirror reconcile failed:', describeUnknownError(err));
   });
   startPersistedEveryTasks();
+  startPersistedThenTasks();
 
   console.log(`[bridge-manager] Bridge started with ${startedCount} adapter(s)`);
   void runStartupNotificationFlow().catch((err) => {
@@ -1946,6 +1973,7 @@ export async function stop(): Promise<void> {
   }
   state.activeTasks.clear();
   stopAllEveryTasks();
+  stopAllThenTasks();
   state.mirrorSuppressUntil.clear();
   state.mirrorIgnoredTurnIds.clear();
   INTERACTIVE_RUNTIME.resetSessionExecutor();
@@ -2142,7 +2170,7 @@ async function checkStartupChannelChatCandidate(
     const archived = await archiveLifecycleBindingSession(store, binding);
     const detail = formatLifecycleArchiveDetail(archived);
     for (const removed of bindingsBeforeArchive.length > 0 ? bindingsBeforeArchive : [binding]) {
-      handleBindingRemovedForEveryTasks(removed);
+      handleBindingRemovedForAutomationTasks(removed);
     }
     return {
       archivedMissingChat: {
@@ -2358,6 +2386,13 @@ function startPersistedEveryTasks(): void {
   }
 }
 
+function startPersistedThenTasks(): void {
+  const tasks = listThenTasks({ statuses: ['pending'] });
+  for (const task of tasks) {
+    startThenTask(task.id);
+  }
+}
+
 function startEveryTask(taskId: string): void {
   const state = getState();
   if (state.everyTaskRuntimes.has(taskId)) return;
@@ -2393,6 +2428,160 @@ function stopAllEveryTasks(): void {
     stopEveryTask(taskId);
   }
   getState().everyTaskRuntimes.clear();
+}
+
+function startThenTask(taskId: string): void {
+  const task = getThenTask(taskId);
+  if (!task || task.status !== 'pending') return;
+  const session = getBridgeContext().store.getSession(task.bridgeSessionId);
+  if (!session) {
+    updateThenTask(task.id, {
+      status: 'failed',
+      lastError: `Bridge session 不存在：${task.bridgeSessionId}`,
+    });
+    void deliverThenTaskNotice(task, `后续输入失败：Bridge session 不存在：${task.bridgeSessionId}`);
+    return;
+  }
+
+  if (isThenSessionReadyForPrompt(session.id)) {
+    void runThenTaskQueueForSession(session.id);
+    return;
+  }
+  ensureThenTaskTimer(task.id, session.id);
+}
+
+function stopThenTask(taskId: string): void {
+  const task = getThenTask(taskId);
+  if (!task) return;
+  clearThenTaskTimer(taskId);
+  updateThenTask(taskId, {
+    status: 'cancelled',
+    completedAt: nowIso(),
+    lastError: '/then 后续输入已取消。',
+  });
+  if (task.status !== 'running') return;
+  void INTERACTIVE_RUNTIME.forceStopSession(
+    task.bridgeSessionId,
+    '/then 后续输入已取消，正在中止当前发送。',
+  ).catch((error) => {
+    console.error('[bridge-manager] Failed to stop /then interactive turn:', describeUnknownError(error));
+  });
+}
+
+function ensureThenTaskTimer(taskId: string, sessionId: string): void {
+  const state = getState();
+  if (state.thenTaskTimers.has(taskId)) return;
+  const timer = setInterval(() => {
+    const task = getThenTask(taskId);
+    if (!task || task.status !== 'pending') {
+      clearThenTaskTimer(taskId);
+      return;
+    }
+    if (!isThenSessionReadyForPrompt(sessionId)) return;
+    clearThenTaskTimer(taskId);
+    void runThenTaskQueueForSession(sessionId);
+  }, 1_000);
+  timer.unref?.();
+  state.thenTaskTimers.set(taskId, timer);
+}
+
+function clearThenTaskTimer(taskId: string): void {
+  const state = getState();
+  const timer = state.thenTaskTimers.get(taskId);
+  if (timer) clearInterval(timer);
+  state.thenTaskTimers.delete(taskId);
+}
+
+function stopAllThenTasks(): void {
+  for (const taskId of Array.from(getState().thenTaskTimers.keys())) {
+    clearThenTaskTimer(taskId);
+  }
+  getState().thenSessionQueues.clear();
+}
+
+function isThenSessionReadyForPrompt(sessionId: string): boolean {
+  const session = getBridgeContext().store.getSession(sessionId);
+  if (!session) return true;
+  if (INTERACTIVE_RUNTIME.getActiveTask(sessionId)) return false;
+  if (INTERACTIVE_RUNTIME.getQueuedCount(sessionId) > 0) return false;
+  if (session.runtime_status === 'running' || session.runtime_status === 'queued') return false;
+  if (session.health_status === 'failed') return false;
+  if (session.health_status === 'running_active' || session.health_status === 'waiting_tool') return false;
+  return true;
+}
+
+function recordInteractiveHealthEndAndScheduleThen(
+  sessionId: string,
+  outcome: 'completed' | 'failed' | 'aborted',
+  detail?: string,
+): void {
+  SESSION_HEALTH_RUNTIME.recordInteractiveEnd(sessionId, outcome, detail);
+  if (outcome !== 'completed' && outcome !== 'aborted') return;
+  const timer = setTimeout(() => {
+    void runThenTaskQueueForSession(sessionId);
+  }, 0);
+  timer.unref?.();
+}
+
+async function runThenTaskQueueForSession(sessionId: string): Promise<void> {
+  const state = getState();
+  if (state.thenSessionQueues.has(sessionId)) return;
+  state.thenSessionQueues.add(sessionId);
+  try {
+    while (isThenSessionReadyForPrompt(sessionId)) {
+      const task = claimNextPendingThenTaskForSession(sessionId);
+      if (!task) return;
+      clearThenTaskTimer(task.id);
+      await runThenTaskPrompt(task);
+    }
+  } finally {
+    state.thenSessionQueues.delete(sessionId);
+  }
+}
+
+async function runThenTaskPrompt(task: ThenTask): Promise<void> {
+  const session = getBridgeContext().store.getSession(task.bridgeSessionId);
+  if (!session) {
+    updateThenTask(task.id, {
+      status: 'failed',
+      lastError: `Bridge session 不存在：${task.bridgeSessionId}`,
+    });
+    await deliverThenTaskNotice(task, `后续输入失败：Bridge session 不存在：${task.bridgeSessionId}`);
+    return;
+  }
+
+  const { text: prompt, truncated } = sanitizeInput(task.prompt, BACKGROUND_INPUT_LIMIT);
+  if (!prompt) {
+    updateThenTask(task.id, { status: 'failed', lastError: 'prompt 为空。' });
+    await deliverThenTaskNotice(task, '后续输入失败：prompt 为空。');
+    return;
+  }
+  if (truncated) {
+    updateThenTask(task.id, { lastError: 'prompt 过长，已截断后发送。' });
+  }
+
+  try {
+    const result = await sendAgentMessageToSession({
+      source: 'then',
+      task,
+      session,
+      prompt,
+      messageId: `then:${task.id}`,
+    });
+    if (!result.ok) throw new Error(result.error);
+    if (getThenTask(task.id)?.status !== 'cancelled') {
+      updateThenTask(task.id, {
+        status: 'completed',
+        completedAt: nowIso(),
+        lastError: truncated ? 'prompt 过长，已截断后发送。' : undefined,
+      });
+    }
+  } catch (error) {
+    if (getThenTask(task.id)?.status === 'cancelled') return;
+    const detail = describeUnknownError(error);
+    updateThenTask(task.id, { status: 'failed', lastError: detail });
+    await deliverThenTaskNotice(task, `后续输入触发失败：\n\n${detail}`);
+  }
 }
 
 async function runEveryTaskLoop(taskId: string, abortController: AbortController): Promise<void> {
@@ -2463,36 +2652,74 @@ async function runEveryTaskPrompt(
   triggeredCount: number,
   abortController: AbortController,
 ): Promise<void> {
-  const adapter = getState().adapters.get(task.channelType);
+  const result = await sendAgentMessageToSession({
+    source: 'every',
+    task,
+    session,
+    prompt,
+    messageId: `every:${task.id}:${triggeredCount}`,
+    terminalAbortDetail: '/every 定时输入已中止。',
+  });
+  if (!result.ok) throw new Error(result.error);
+
+  if (abortController.signal.aborted) {
+    await INTERACTIVE_RUNTIME.forceStopSession(
+      session.id,
+      '/every 定时输入已中止。',
+    );
+  }
+}
+
+type AgentMessageTask = Pick<
+  EveryTask | ThenTask,
+  | 'id'
+  | 'bridgeSessionId'
+  | 'channelType'
+  | 'channelProvider'
+  | 'channelAlias'
+  | 'chatId'
+  | 'chatUserId'
+  | 'chatDisplayName'
+  | 'createdAt'
+>;
+
+interface SendAgentMessageToSessionResult {
+  ok: boolean;
+  error?: string;
+}
+
+async function sendAgentMessageToSession(options: {
+  source: 'every' | 'then';
+  task: AgentMessageTask;
+  session: BridgeSession;
+  prompt: string;
+  messageId: string;
+  terminalAbortDetail?: string;
+}): Promise<SendAgentMessageToSessionResult> {
+  const adapter = getState().adapters.get(options.task.channelType);
   if (!adapter?.isRunning()) {
-    updateEveryTask(task.id, {
-      status: 'failed',
-      lastError: `通道未运行：${task.channelType}`,
-    });
-    return;
+    return { ok: false, error: `通道未运行：${options.task.channelType}` };
   }
 
-  const address = everyTaskAddress(task);
-  const syntheticBinding = buildEveryTaskBinding(task, session);
-  const messageId = `every:${task.id}:${triggeredCount}`;
+  const address = agentMessageTaskAddress(options.task);
+  const syntheticBinding = buildAgentMessageTaskBinding(options.source, options.task, options.session);
   const msg: InboundMessage = {
     address,
-    text: prompt,
-    messageId,
+    text: options.prompt,
+    messageId: options.messageId,
     timestamp: Date.now(),
   };
-  const effectiveRuntimeProvider = resolveEffectiveRuntimeProvider(session, syntheticBinding);
+  const effectiveRuntimeProvider = resolveEffectiveRuntimeProvider(options.session, syntheticBinding);
   if (effectiveRuntimeProvider?.provider === 'tmux') {
-    await handleCommand(adapter, msg, `/tmux ${prompt}`, {
+    await handleCommand(adapter, msg, `/tmux ${options.prompt}`, {
       scopedBinding: syntheticBinding,
       tmuxProviderAutoForward: true,
     });
-    return;
+    return { ok: true };
   }
 
   const displayService = new ThreadDisplayService(getBridgeContext().store);
-
-  await runInteractiveMessage(adapter, msg, prompt, undefined, {
+  await runInteractiveMessage(adapter, msg, options.prompt, undefined, {
     registerInteractiveTask: (taskState) => INTERACTIVE_RUNTIME.registerInteractiveTask(taskState),
     registerBridgeTurn: (turn) => TURN_COORDINATOR.registerInteractiveTurn(turn),
     resetMirrorSessionForInteractiveRun,
@@ -2506,7 +2733,7 @@ async function runEveryTaskPrompt(
     recordInteractiveStreamUiSnapshot: (sessionId, snapshot) => {
       SESSION_HEALTH_RUNTIME.recordStructuredStreamUi(sessionId, snapshot);
     },
-    recordInteractiveHealthEnd: (sessionId, outcome, detail) => SESSION_HEALTH_RUNTIME.recordInteractiveEnd(sessionId, outcome, detail),
+    recordInteractiveHealthEnd: recordInteractiveHealthEndAndScheduleThen,
     beginMirrorSuppression,
     abortMirrorSuppression,
     settleMirrorSuppression,
@@ -2528,7 +2755,7 @@ async function runEveryTaskPrompt(
       resolveInteractiveTurnEnvironmentBase(address, targetMessageId, {
         resolveBinding: () => syntheticBinding,
         getBridgeSession: (sessionId) => getBridgeContext().store.getSession(sessionId),
-        codexThreadExists: (threadId) => Boolean(getCodexSessionByThreadIdSafe(threadId, '/every interactive turn classify')),
+        codexThreadExists: (threadId) => Boolean(getCodexSessionByThreadIdSafe(threadId, `/${options.source} interactive turn classify`)),
       })
     ),
     resolveInteractiveTurnRuntimeSettings: (channelType) => resolveInteractiveTurnRuntimeSettings(
@@ -2543,18 +2770,13 @@ async function runEveryTaskPrompt(
     nowMs: () => Date.now(),
   });
 
-  if (abortController.signal.aborted) {
-    await INTERACTIVE_RUNTIME.forceStopSession(
-      session.id,
-      '/every 定时输入已中止。',
-    );
-  }
+  return { ok: true };
 }
 
-function buildEveryTaskBinding(task: EveryTask, session: BridgeSession): ChannelChat {
+function buildAgentMessageTaskBinding(source: 'every' | 'then', task: AgentMessageTask, session: BridgeSession): ChannelChat {
   const timestamp = nowIso();
   return {
-    id: `every:${task.id}`,
+    id: `${source}:${task.id}`,
     channelType: task.channelType,
     channelProvider: task.channelProvider,
     channelAlias: task.channelAlias,
@@ -2566,7 +2788,7 @@ function buildEveryTaskBinding(task: EveryTask, session: BridgeSession): Channel
   };
 }
 
-function everyTaskAddress(task: EveryTask): ChannelAddress {
+function agentMessageTaskAddress(task: AgentMessageTask): ChannelAddress {
   return {
     channelType: task.channelType,
     channelProvider: task.channelProvider,
@@ -2575,6 +2797,10 @@ function everyTaskAddress(task: EveryTask): ChannelAddress {
     userId: task.chatUserId,
     displayName: task.chatDisplayName,
   };
+}
+
+function everyTaskAddress(task: EveryTask): ChannelAddress {
+  return agentMessageTaskAddress(task);
 }
 
 async function deliverEveryTaskNotice(task: EveryTask, text: string): Promise<void> {
@@ -2586,10 +2812,23 @@ async function deliverEveryTaskNotice(task: EveryTask, text: string): Promise<vo
   });
 }
 
-function handleBindingRemovedForEveryTasks(binding: ChannelChat): void {
+async function deliverThenTaskNotice(task: ThenTask, text: string): Promise<void> {
+  const adapter = getState().adapters.get(task.channelType);
+  if (!adapter?.isRunning()) return;
+  await deliverBridgeNotice(adapter, agentMessageTaskAddress(task), text, {
+    sessionId: task.bridgeSessionId,
+    audit: true,
+  });
+}
+
+function handleBindingRemovedForAutomationTasks(binding: ChannelChat): void {
   const everyPaused = pauseEveryTasksForSession(binding.bridgeSessionId);
   for (const task of everyPaused) {
     stopEveryTask(task.id);
+  }
+  const thenPaused = pauseThenTasksForSession(binding.bridgeSessionId);
+  for (const task of thenPaused) {
+    clearThenTaskTimer(task.id);
   }
 }
 
@@ -2649,6 +2888,15 @@ function threadSelectionKey(msg: InboundMessage): string {
 }
 
 function everyTaskSelectionKey(msg: InboundMessage): string {
+  return [
+    msg.address.channelType,
+    msg.address.chatId,
+    msg.address.userId || '',
+    msg.callbackMessageId || msg.messageId || '',
+  ].join(':');
+}
+
+function thenTaskSelectionKey(msg: InboundMessage): string {
   return [
     msg.address.channelType,
     msg.address.chatId,
@@ -2833,7 +3081,7 @@ async function handleChannelLifecycleEvent(msg: InboundMessage): Promise<void> {
     .filter((item) => item.bridgeSessionId === binding.bridgeSessionId);
   const archiveResult = await archiveLifecycleBindingSession(store, binding);
   for (const removedBinding of bindingsBeforeArchive) {
-    handleBindingRemovedForEveryTasks(removedBinding);
+    handleBindingRemovedForAutomationTasks(removedBinding);
   }
   try {
     store.insertAuditLog({
@@ -2959,6 +3207,21 @@ function parseEveryTaskActionCallback(callbackData: string): EveryTaskCardAction
   return raw === 'no' ? raw : null;
 }
 
+function parseThenTaskSelectCallback(callbackData: string): string | null | undefined {
+  if (!callbackData.startsWith(THEN_TASK_SELECT_CALLBACK_PREFIX)) return undefined;
+  try {
+    return decodeURIComponent(callbackData.slice(THEN_TASK_SELECT_CALLBACK_PREFIX.length)).trim() || null;
+  } catch {
+    return null;
+  }
+}
+
+function parseThenTaskActionCallback(callbackData: string): ThenTaskCardAction | null | undefined {
+  if (!callbackData.startsWith(THEN_TASK_ACTION_CALLBACK_PREFIX)) return undefined;
+  const raw = callbackData.slice(THEN_TASK_ACTION_CALLBACK_PREFIX.length).trim();
+  return raw === 'no' || raw === 'edit' ? raw : null;
+}
+
 function parseThreadSelectActionCallback(callbackData: string): {
   scope: 'global' | 'bound';
   action: ThreadCardAction;
@@ -3063,6 +3326,42 @@ async function handleMessage(
         { ...msg, text: commandText, callbackData: undefined },
         commandText,
         { selectedEveryTaskId: taskId, selectedEveryTaskAction: everyTaskAction },
+      );
+      ack();
+      return;
+    }
+
+    const selectedThenTaskId = parseThenTaskSelectCallback(msg.callbackData);
+    if (selectedThenTaskId !== undefined) {
+      if (!selectedThenTaskId) {
+        await deliverBridgeNotice(adapter, msg.address, '这个下拉选项无效，请刷新后重试。');
+      } else {
+        getState().thenTaskSelections.set(thenTaskSelectionKey(msg), selectedThenTaskId);
+        await adapter.answerCallback?.(msg.messageId, '已选择');
+      }
+      ack();
+      return;
+    }
+
+    const thenTaskAction = parseThenTaskActionCallback(msg.callbackData);
+    if (thenTaskAction !== undefined) {
+      if (!thenTaskAction) {
+        await deliverBridgeNotice(adapter, msg.address, '这个按钮的操作无效，请刷新后重试。');
+        ack();
+        return;
+      }
+      const taskId = getState().thenTaskSelections.get(thenTaskSelectionKey(msg));
+      if (!taskId) {
+        await deliverBridgeNotice(adapter, msg.address, '请先在下拉列表中选择一个 /then，再点击操作按钮。');
+        ack();
+        return;
+      }
+      const commandText = thenTaskAction === 'edit' ? '/then edit-form' : '/then no';
+      await handleCommand(
+        adapter,
+        { ...msg, text: commandText, callbackData: undefined },
+        commandText,
+        { selectedThenTaskId: taskId, selectedThenTaskAction: thenTaskAction },
       );
       ack();
       return;
@@ -3640,7 +3939,7 @@ async function handleMessage(
       recordInteractiveStreamUiSnapshot: (sessionId, snapshot) => {
         SESSION_HEALTH_RUNTIME.recordStructuredStreamUi(sessionId, snapshot);
       },
-      recordInteractiveHealthEnd: (sessionId, outcome, detail) => SESSION_HEALTH_RUNTIME.recordInteractiveEnd(sessionId, outcome, detail),
+      recordInteractiveHealthEnd: recordInteractiveHealthEndAndScheduleThen,
       beginMirrorSuppression,
       abortMirrorSuppression,
       settleMirrorSuppression,
@@ -3691,6 +3990,8 @@ async function handleCommand(
     threadCardSelectedId?: string | null;
     selectedEveryTaskId?: string | null;
     selectedEveryTaskAction?: EveryTaskCardAction | null;
+    selectedThenTaskId?: string | null;
+    selectedThenTaskAction?: ThenTaskCardAction | null;
     tmuxProviderAutoForward?: boolean;
     onTmuxProviderAutoForwarded?: () => Promise<void> | void;
   } = {},
@@ -3698,7 +3999,7 @@ async function handleCommand(
   await handleBridgeCommand(adapter, msg, text, {
     getActiveTask: (sessionId) => INTERACTIVE_RUNTIME.getActiveTask(sessionId),
     forceStopSession: (sessionId, detail) => INTERACTIVE_RUNTIME.forceStopSession(sessionId, detail),
-    recordInteractiveHealthEnd: (sessionId, outcome, detail) => SESSION_HEALTH_RUNTIME.recordInteractiveEnd(sessionId, outcome, detail),
+    recordInteractiveHealthEnd: recordInteractiveHealthEndAndScheduleThen,
     reconcileMirrorSubscriptions,
     diagnoseSessionHealth: (sessionId) => SESSION_HEALTH_RUNTIME.diagnoseSessionHealth(sessionId),
     diagnoseAllActiveSessions: () => SESSION_HEALTH_RUNTIME.diagnoseAllActiveSessions(),
@@ -3707,11 +4008,15 @@ async function handleCommand(
     threadCardSelectedId: options.threadCardSelectedId,
     selectedEveryTaskId: options.selectedEveryTaskId,
     selectedEveryTaskAction: options.selectedEveryTaskAction,
+    selectedThenTaskId: options.selectedThenTaskId,
+    selectedThenTaskAction: options.selectedThenTaskAction,
     tmuxProviderAutoForward: options.tmuxProviderAutoForward,
     onTmuxProviderAutoForwarded: options.onTmuxProviderAutoForwarded,
     startEveryTask,
     stopEveryTask,
-    onBindingRemoved: handleBindingRemovedForEveryTasks,
+    startThenTask,
+    stopThenTask,
+    onBindingRemoved: handleBindingRemovedForAutomationTasks,
   });
 }
 
@@ -3783,6 +4088,7 @@ function resetStateForTests(): void {
   state.loopAborts.clear();
   state.activeTasks.clear();
   stopAllEveryTasks();
+  stopAllThenTasks();
   for (const timer of pendingTmuxProviderExitProbeTimers.values()) {
     clearTimeout(timer);
   }
@@ -3794,6 +4100,9 @@ function resetStateForTests(): void {
   tmuxSelectionPromptLastProbeAt.clear();
   tmuxSelectionPromptFollowupUntil.clear();
   state.everyTaskSelections.clear();
+  state.thenTaskSelections.clear();
+  state.thenTaskTimers.clear();
+  state.thenSessionQueues.clear();
   clearMirrorSubscriptions();
   state.mirrorSuppressUntil.clear();
   state.mirrorIgnoredTurnIds.clear();

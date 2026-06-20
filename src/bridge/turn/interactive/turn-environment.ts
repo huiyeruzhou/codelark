@@ -80,7 +80,7 @@ export interface StaleTaskCompletionNoticePorts {
   resolveDisplayInfo?: ResolveInteractiveTurnDisplayInfo;
 }
 
-const SYNTHETIC_BINDING_PREFIXES = ['every:'] as const;
+const SYNTHETIC_BINDING_PREFIXES = ['every:', 'then:'] as const;
 
 const STREAM_DEFAULTS: Record<string, InteractiveStreamConfig> = {
   default: { intervalMs: 1000, minDeltaChars: 30, maxChars: 4000 },

@@ -985,6 +985,13 @@ function buildRichCardPanelElement(
     }
   }
 
+  for (const section of panel.sections || []) {
+    const sectionElements = buildRichCardSectionElements(section, chatId);
+    if (sectionElements.length === 0) continue;
+    if (elements.length > 0) elements.push({ tag: 'hr' });
+    elements.push(...sectionElements);
+  }
+
   const selectElements = buildRichCardSelectElements(panel.selects || [], chatId);
   if (selectElements.length > 0) {
     if (elements.length > 0) elements.push({ tag: 'hr' });

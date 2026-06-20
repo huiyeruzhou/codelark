@@ -15,7 +15,7 @@ import { createConfigService } from '../../../../configuration/service.js';
 import { JsonFileStore } from '../../../../storage/json-store.js';
 import { initBridgeContext } from '../../../../bridge/host/context.js';
 import { handleBridgeCommand } from '../../../../bridge/command/index.js';
-import { _testOnly as bridgeManagerTestOnly } from '../../../../bridge/host/manager.js';
+import { _testOnly as bridgeManagerTestOnly, registerAdapter } from '../../../../bridge/host/manager.js';
 import {
   resolveClaudeRuntimeConfig,
   resolveDisplayedModel,
@@ -31,7 +31,7 @@ import { CodexRoutingProvider } from '../../../../runtime/codex/routing-provider
 import { _testOnlyCodexThreadBootstrap } from '../../../../runtime/codex/thread-bootstrap.js';
 import { _testOnlyClaudePty } from '../../../../runtime/claude/pty-provider.js';
 import { _testOnlyTmuxScreenMonitors } from '../../../../bridge/command/tmux.js';
-import { buildCommandCallbackData, parseCommandCallbackData } from '../../../../bridge/command/callbacks.js';
+import { buildCommandCallbackData, parseCommandCallbackData, THEN_TASK_ACTION_CALLBACK_PREFIX, THEN_TASK_SELECT_CALLBACK_PREFIX } from '../../../../bridge/command/callbacks.js';
 import { forwardPermissionRequest, handlePermissionCallback } from '../../../../bridge/permission/broker.js';
 import * as router from '../../../../bridge/host/channel-router.js';
 import {
@@ -40,6 +40,7 @@ import {
   persistAndPinLatestThreadTableMessage,
 } from '../../../../bridge/command/thread-table-message-pins.js';
 import { listEveryTasks } from '../../../../bridge/automation/every-tasks.js';
+import { listThenTasks, updateThenTask } from '../../../../bridge/automation/then-tasks.js';
 import {
   buildCodexSandboxArgs,
   detectCodexSandboxCliStyleFromHelp,
@@ -85,6 +86,15 @@ function createDeferred<T = void>() {
     reject = rejectPromise;
   });
   return { promise, resolve, reject };
+}
+
+async function waitForCondition(predicate: () => boolean, timeoutMs = 1000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (predicate()) return;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  assert.equal(predicate(), true);
 }
 
 describe('runtime settings internals', () => {
@@ -6190,6 +6200,337 @@ enabled = true
     assert.match(sent.at(-1) || '', /session runtime-id/);
     assert.match(sent.at(-1) || '', new RegExp(claudeSessionId));
     assert.equal(richCards.at(-1)?.table?.columns.some((column) => column.name === 'runtime_id'), true);
+  });
+
+  it('creates, lists, folds, and removes /then tasks on the current bridge session', async () => {
+    const store = initTestContext();
+    const sent: string[] = [];
+    const richCards: OutboundRichCard[] = [];
+    const started: string[] = [];
+    const adapter: any = {
+      channelType: 'feishu',
+      provider: 'feishu',
+      send: async (message: { text: string; richCard?: OutboundRichCard }) => {
+        sent.push(message.text);
+        if (message.richCard) richCards.push(message.richCard);
+        return { ok: true, messageId: `reply-then-${sent.length}` };
+      },
+    };
+    const address = { channelType: 'feishu', chatId: 'chat-then' } as const;
+    const binding = router.createBinding(address, '/tmp/then');
+    const longPrompt = `long ${'x'.repeat(2200)}`;
+    const deps = {
+      getActiveTask: () => undefined,
+      diagnoseSessionHealth: async () => null,
+      diagnoseAllActiveSessions: async () => [],
+      startThenTask: (taskId: string) => { started.push(taskId); },
+    };
+
+    await handleBridgeCommand(
+      adapter,
+      {
+        address,
+        text: '/then short follow up',
+        messageId: 'incoming-then-short',
+      } as any,
+      '/then short follow up',
+      deps,
+    );
+
+    await handleBridgeCommand(
+      adapter,
+      {
+        address,
+        text: `/then ${longPrompt}`,
+        messageId: 'incoming-then-long',
+      } as any,
+      `/then ${longPrompt}`,
+      deps,
+    );
+
+    const tasks = listThenTasks({ bridgeSessionId: binding.bridgeSessionId, statuses: ['pending'] });
+    assert.equal(tasks.length, 2);
+    assert.equal(tasks[0].prompt, 'short follow up');
+    assert.equal(tasks[1].prompt, longPrompt);
+    assert.deepEqual(started, tasks.map((task) => task.id));
+    assert.match(sent.at(-1) || '', /已创建 \/then 后续输入/);
+
+    await handleBridgeCommand(
+      adapter,
+      {
+        address,
+        text: '/then',
+        messageId: 'incoming-then-list',
+      } as any,
+      '/then',
+      deps,
+    );
+
+    assert.match(sent.at(-1) || '', /当前聊天 \/then 后续输入/);
+    assert.match(sent.at(-1) || '', /Prompt 2/);
+    assert.equal(richCards.at(-1)?.template, 'blue');
+    assert.equal(richCards.at(-1)?.title, '当前聊天 /then 后续输入（2）');
+    assert.equal(richCards.at(-1)?.updateKey, `thread-card:then:${address.channelType}:${address.chatId}`);
+    assert.equal(richCards.at(-1)?.panels?.length, 1);
+    assert.equal(richCards.at(-1)?.panels?.[0]?.expanded, false);
+    assert.match(richCards.at(-1)?.panels?.[0]?.title || '', /Prompt 2（展示截断）/);
+    assert.ok((richCards.at(-1)?.panels?.[0]?.sections?.[0]?.code?.text.length || 0) <= 1800);
+    assert.deepEqual(richCards.at(-1)?.actions?.flat().map((action) => action.text), ['新建', '修改', '取消', '刷新']);
+    assert.equal(richCards.at(-1)?.actions?.every((row) => row.length <= 3), true);
+    const callbackPayloads = [
+      ...(richCards.at(-1)?.actions?.flat().map((action) => action.callbackData) || []),
+      ...(richCards.at(-1)?.selects?.flatMap((select) => select.options.map((option) => option.callbackData)) || []),
+    ];
+    assert.equal(callbackPayloads.every((payload) => typeof payload === 'string' && payload.length < 1000 && !payload.includes('\n')), true);
+    assert.equal(getThreadTableMessageRecord(address, 'then')?.messageId, 'reply-then-3');
+
+    await handleBridgeCommand(
+      adapter,
+      {
+        address,
+        text: '/then set 1 updated follow up',
+        messageId: 'incoming-then-set',
+      } as any,
+      '/then set 1 updated follow up',
+      deps,
+    );
+    assert.equal(listThenTasks({ bridgeSessionId: binding.bridgeSessionId, statuses: ['pending'] })[0].prompt, 'updated follow up');
+    assert.match(sent.at(-1) || '', /已更新 \/then 后续输入/);
+
+    await handleBridgeCommand(
+      adapter,
+      {
+        address,
+        text: '/then no 1',
+        messageId: 'incoming-then-rm',
+      } as any,
+      '/then no 1',
+      deps,
+    );
+
+    const remaining = listThenTasks({ bridgeSessionId: binding.bridgeSessionId, statuses: ['pending'] });
+    assert.equal(remaining.length, 1);
+    assert.equal(remaining[0].prompt, longPrompt);
+    assert.match(sent.at(-1) || '', /已取消 \/then 后续输入/);
+  });
+
+  it('supports /then create, edit, and delete from interactive cards without oversized callback data', async () => {
+    const store = initTestContext();
+    const sent: Array<{ text: string; richCard?: OutboundRichCard; richCardUpdateMessageId?: string }> = [];
+    const answered: string[] = [];
+    const adapter: any = {
+      channelType: 'feishu',
+      provider: 'feishu',
+      send: async (message: { text: string; richCard?: OutboundRichCard; richCardUpdateMessageId?: string }) => {
+        sent.push(message);
+        return { ok: true, messageId: `reply-then-card-${sent.length}` };
+      },
+      answerCallback: async (_messageId: string, text: string) => {
+        answered.push(text);
+      },
+    };
+    const address = { channelType: 'feishu', chatId: 'chat-then-card' } as const;
+    const binding = router.createBinding(address, '/tmp/then-card');
+    const deps = {
+      getActiveTask: () => undefined,
+      diagnoseSessionHealth: async () => null,
+      diagnoseAllActiveSessions: async () => [],
+      startThenTask: () => {},
+    };
+
+    await handleBridgeCommand(
+      adapter,
+      {
+        address,
+        text: '/then-form',
+        messageId: 'incoming-then-form-open',
+      } as any,
+      '/then-form',
+      deps,
+    );
+    assert.equal(sent.at(-1)?.richCard?.title, '新建 /then 后续输入');
+    assert.equal(sent.at(-1)?.richCard?.form?.submitCallbackData, buildCommandCallbackData('/then'));
+    assert.ok((sent.at(-1)?.richCard?.form?.submitCallbackData || '').length < 1000);
+
+    await handleBridgeCommand(
+      adapter,
+      {
+        address,
+        text: '/then',
+        messageId: 'incoming-then-form-submit',
+        raw: {
+          event: {
+            action: {
+              form_value: {
+                then_prompt: 'created from card form',
+              },
+            },
+          },
+        },
+      } as any,
+      '/then',
+      deps,
+    );
+
+    const [task] = listThenTasks({ bridgeSessionId: binding.bridgeSessionId, statuses: ['pending'] });
+    assert.ok(task);
+    assert.equal(task.prompt, 'created from card form');
+
+    await handleBridgeCommand(
+      adapter,
+      {
+        address,
+        text: '/then',
+        messageId: 'incoming-then-card-list',
+      } as any,
+      '/then',
+      deps,
+    );
+    const listCard = sent.at(-1)?.richCard;
+    assert.equal(listCard?.title, '当前聊天 /then 后续输入（1）');
+    const listMessageId = `reply-then-card-${sent.length}`;
+    const selectCallback = listCard?.selects?.[0]?.options?.[0]?.callbackData || '';
+    const editCallback = listCard?.actions?.flat().find((action) => action.text === '修改')?.callbackData || '';
+    const deleteCallback = listCard?.actions?.flat().find((action) => action.text === '取消')?.callbackData || '';
+    assert.match(selectCallback, new RegExp(`^${THEN_TASK_SELECT_CALLBACK_PREFIX}`));
+    assert.equal(editCallback, `${THEN_TASK_ACTION_CALLBACK_PREFIX}edit`);
+    assert.equal(deleteCallback, `${THEN_TASK_ACTION_CALLBACK_PREFIX}no`);
+    assert.equal([selectCallback, editCallback, deleteCallback].every((payload) => payload.length < 1000 && !payload.includes('\n')), true);
+
+    await bridgeManagerTestOnly.handleMessage(
+      adapter,
+      {
+        address,
+        text: '',
+        callbackData: selectCallback,
+        callbackMessageId: listMessageId,
+        messageId: 'incoming-then-select-callback',
+        timestamp: Date.now(),
+      } as any,
+    );
+    assert.deepEqual(answered, ['已选择']);
+
+    await bridgeManagerTestOnly.handleMessage(
+      adapter,
+      {
+        address,
+        text: '',
+        callbackData: editCallback,
+        callbackMessageId: listMessageId,
+        messageId: 'incoming-then-edit-callback',
+        timestamp: Date.now(),
+      } as any,
+    );
+    const editFormCard = sent.at(-1)?.richCard;
+    assert.equal(editFormCard?.title, '修改 /then 后续输入');
+    assert.equal(editFormCard?.form?.inputDefaultValue, 'created from card form');
+    assert.match(parseCommandCallbackData(editFormCard?.form?.submitCallbackData || '')?.commandText || '', /^\/then set-id /);
+    assert.ok((editFormCard?.form?.submitCallbackData || '').length < 1000);
+
+    await bridgeManagerTestOnly.handleMessage(
+      adapter,
+      {
+        address,
+        text: '/then set-id',
+        callbackData: editFormCard?.form?.submitCallbackData,
+        callbackMessageId: `reply-then-card-${sent.length}`,
+        messageId: 'incoming-then-edit-form-submit',
+        timestamp: Date.now(),
+        raw: {
+          event: {
+            context: {
+              open_message_id: `reply-then-card-${sent.length}`,
+            },
+            action: {
+              form_value: {
+                then_prompt: 'edited from card form',
+              },
+            },
+          },
+        },
+      } as any,
+    );
+    assert.equal(listThenTasks({ bridgeSessionId: binding.bridgeSessionId, statuses: ['pending'] })[0].prompt, 'edited from card form');
+    assert.match(sent.at(-1)?.text || '', /已更新 \/then 后续输入/);
+
+    updateThenTask(task.id, {
+      status: 'running',
+      triggeredAt: new Date().toISOString(),
+    });
+    await bridgeManagerTestOnly.handleMessage(
+      adapter,
+      {
+        address,
+        text: '',
+        callbackData: deleteCallback,
+        callbackMessageId: listMessageId,
+        messageId: 'incoming-then-delete-callback',
+        timestamp: Date.now(),
+      } as any,
+    );
+    assert.equal(listThenTasks({ bridgeSessionId: binding.bridgeSessionId, statuses: ['pending', 'running'] }).length, 0);
+    assert.equal(listThenTasks({ bridgeSessionId: binding.bridgeSessionId, statuses: ['cancelled'] }).length, 1);
+    assert.match(sent.at(-1)?.text || '', /已中止 \/then 后续输入/);
+  });
+
+  it('uses the shared agent-message path to send /then prompts after the command response is delivered', async () => {
+    const store = initTestContext();
+    const sent: Array<{ text: string; richCard?: OutboundRichCard }> = [];
+    const calls: StreamChatParams[] = [];
+    const llm: LLMProvider = {
+      streamChat(params: StreamChatParams): ReadableStream<string> {
+        calls.push(params);
+        return new ReadableStream({
+          start(controller) {
+            controller.enqueue(sseEvent('text', `agent saw: ${params.prompt}`));
+            controller.enqueue(sseEvent('result', { session_id: 'then-thread-id' }));
+            controller.close();
+          },
+        });
+      },
+    };
+    initBridgeContext({
+      store,
+      llm,
+      permissions: { resolvePendingPermission: () => false },
+      lifecycle: {},
+    });
+    const adapter: any = {
+      channelType: 'feishu',
+      provider: 'feishu',
+      isRunning: () => true,
+      send: async (message: { text: string; richCard?: OutboundRichCard }) => {
+        sent.push({ text: message.text, richCard: message.richCard });
+        return { ok: true, messageId: `reply-then-run-${sent.length}` };
+      },
+    };
+    const address = { channelType: 'feishu', chatId: 'chat-then-run' } as const;
+    const binding = router.createBinding(address, '/tmp/then-run');
+    createConfigService({ migrate: false, env: {} }).set(
+      { kind: 'session', sessionId: binding.bridgeSessionId },
+      { runtime: { claude: { provider: 'sdk' } } },
+    );
+    store.updateSession(binding.bridgeSessionId, {
+      runtime: { activeRuntime: 'claude' },
+    });
+    registerAdapter(adapter);
+
+    await bridgeManagerTestOnly.handleMessage(
+      adapter,
+      {
+        address,
+        text: '/then follow up after done',
+        messageId: 'incoming-then-run',
+        timestamp: Date.now(),
+      } as any,
+    );
+
+    await waitForCondition(() => calls.length === 1 && sent.some((message) => message.text.includes('agent saw: follow up after done')));
+    assert.match(sent[0].text, /已创建 \/then 后续输入/);
+    assert.equal(calls[0].prompt, 'follow up after done');
+    assert.equal(calls[0].runtime, 'claude');
+    assert.equal(listThenTasks({ channelType: address.channelType, chatId: address.chatId, statuses: ['pending', 'running'] }).length, 0);
+    assert.equal(listThenTasks({ channelType: address.channelType, chatId: address.chatId, statuses: ['completed'] }).length, 1);
   });
 
   it('maps /stop to C-c for a running tmux provider mirror turn', async () => {

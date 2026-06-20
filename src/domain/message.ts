@@ -106,6 +106,7 @@ export interface OutboundRichCardPanel {
   template?: OutboundRichCard['template'];
   expanded?: boolean;
   subtitle?: string;
+  sections?: OutboundRichCardSection[];
   table?: OutboundRichCardTable;
   selects?: OutboundCardActionSelect[];
   actions?: OutboundCardActionButton[][];

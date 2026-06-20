@@ -107,6 +107,8 @@ codelark run
 - `/t rename <名称>`：重命名当前线程；群聊通道会同步修改群聊名称，真实群名会自动带 `[botname]` 前缀。
 - `/new`：发送创建表单，填写名称和工作目录后创建新的 IM 群聊会话。
 - `/clear [名称] [路径]`：在当前聊天上下文创建新的对话并绑定过去，之后仍可用 `/t` 找回旧对话。
+- `/every 10m <prompt>`：按固定间隔复用当前会话发送 prompt；`/every` 查看和取消。
+- `/then <prompt>`：当前会话 completed/interrupted 后发送一次后续 prompt；`/then` 卡片可查看、新建、修改和取消。
 
 
 ## 典型使用方式

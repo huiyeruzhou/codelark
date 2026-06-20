@@ -77,6 +77,8 @@ const KNOWN_BRIDGE_COMMANDS = new Set([
   '/set',
   '/every',
   '/every-form',
+  '/then',
+  '/then-form',
   '/reasoning',
   '/runtime',
   '/cd',

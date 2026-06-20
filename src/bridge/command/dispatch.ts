@@ -75,6 +75,10 @@ import {
   handleEveryCommand,
 } from './every.js';
 import {
+  buildThenFormCommandResult,
+  handleThenCommand,
+} from './then.js';
+import {
   buildEveryTaskFormCard,
 } from './presentation/every.js';
 import { clearPendingClearConfirmation } from './clear-confirmations.js';
@@ -87,7 +91,7 @@ import { saveStartupNoticeTarget } from '../host/startup-notice-target.js';
 import {
   type ShellCommandRunner,
 } from './shell.js';
-import type { EveryTaskCardAction } from './callbacks.js';
+import type { EveryTaskCardAction, ThenTaskCardAction } from './callbacks.js';
 import { EVERY_TASK_FORM_COMMAND, parseCommandCallbackData } from './callbacks.js';
 import {
   handleTerminalDispatchCommand,
@@ -134,6 +138,7 @@ function fallbackThreadCardScopeForCallback(msg: InboundMessage): ThreadCardScop
   if (commandText.startsWith('/current')) return 'current';
   if (commandText.startsWith('/set')) return 'set';
   if (commandText.startsWith('/every')) return 'every';
+  if (commandText.startsWith('/then')) return 'then';
   return undefined;
 }
 
@@ -164,8 +169,12 @@ export interface BridgeCommandDispatchDeps {
   threadCardSelectedId?: string | null;
   selectedEveryTaskId?: string | null;
   selectedEveryTaskAction?: EveryTaskCardAction | null;
+  selectedThenTaskId?: string | null;
+  selectedThenTaskAction?: ThenTaskCardAction | null;
   startEveryTask?(taskId: string): void;
   stopEveryTask?(taskId: string): void;
+  startThenTask?(taskId: string): void;
+  stopThenTask?(taskId: string): void;
   onBindingRemoved?(binding: ChannelChat): void;
   hotUpdateRunner?: HotUpdateRunner;
   hotUpdateCwd?: string;
@@ -508,6 +517,13 @@ export async function handleBridgeCommand(
       responseRichCard = buildEveryTaskFormCard();
       break;
 
+    case '/then-form': {
+      const result = buildThenFormCommandResult();
+      response = result.response;
+      responseRichCard = result.richCard;
+      break;
+    }
+
     case '/clear': {
       const result = await handleClearSessionCommand({
         adapter,
@@ -809,6 +825,35 @@ export async function handleBridgeCommand(
       response = result.response;
       responseRichCard = result.richCard;
       threadTableCardScope = result.threadTableCardScope;
+      break;
+    }
+
+    case '/then': {
+      const session = commandBinding ? store.getSession(commandBinding.bridgeSessionId) : null;
+      const formValue = extractCardActionFormValue(msg.raw);
+      const result = handleThenCommand({
+        msg,
+        args,
+        formValue,
+        session,
+        store,
+        deps: {
+          startThenTask: deps.startThenTask,
+          stopThenTask: deps.stopThenTask,
+          isSessionActive: (sessionId) => Boolean(deps.getActiveTask(sessionId)),
+          selectedThenTaskId: deps.selectedThenTaskId,
+          selectedThenTaskAction: deps.selectedThenTaskAction,
+        },
+        markdown: responseParseMode === 'Markdown',
+      });
+      response = result.response;
+      responseRichCard = result.richCard;
+      threadTableCardScope = result.threadTableCardScope;
+      if (result.startTaskId) {
+        afterDelivery = () => {
+          deps.startThenTask?.(result.startTaskId!);
+        };
+      }
       break;
     }
 

@@ -8,7 +8,7 @@ IM 命令从用户视角分为五组。命令入口是 [src/bridge/command/dispa
 | runtime 设置 | `/runtime`、`/provider`、`/model`、`/mode`、`/reasoning`、`/sandbox`、`/network`、`/cd` | 修改当前会话的运行参数 |
 | 状态和诊断 | `/`、`/status`、`/check`、`/doctor`、`/his` | 查看状态、健康检查、历史和排障 |
 | 终端和文件 | `/shell`、`/tmux-*`、`/pty-screen`、`/cat`、`/file` | 执行命令、观察终端、发送文件 |
-| 自动化和管理 | `/every`、`/require-at`、`/ui`、`/set`、`/hot-update` | 定时输入、通道策略、显示和全局设置 |
+| 自动化和管理 | `/every`、`/then`、`/require-at`、`/ui`、`/set`、`/hot-update` | 定时输入、后续输入、通道策略、显示和全局设置 |
 
 从本机 `audit.jsonl` 的实际使用看，高频命令集中在 `/provider`、`/clear`、`/t`、`/mode`、`/tmux-screen`、`/new`、`/runtime`、`/pty-screen`、`/set` 和 `/hot-update`。这说明新用户文档应优先讲清楚“接管会话、清理/新建会话、切 provider、观察终端屏幕、调整配置”这些路径，再补完整命令索引。
 
@@ -19,6 +19,7 @@ IM 命令从用户视角分为五组。命令入口是 [src/bridge/command/dispa
 - 未绑定会话时，普通文本会进入临时草稿线程；正式接管用 `/t`。
 - 修改当前会话参数优先用 `/runtime`、`/provider`、`/model`、`/cd` 等会话级命令。
 - 修改全局默认值用 `/set`；卡片按 TOML section 写入 `~/.codelark/config.toml`。
+- `/every` 用于按固定间隔重复发送 prompt；`/then` 用于在当前会话 completed/interrupted 后发送一次后续 prompt。两者都支持列表卡片和卡片操作，`/then` 还支持通过卡片新建、修改和取消。
 - `/doctor` 可不带参数；也可使用 `/doctor bridge_id:d3c20e05 2026-06-04 17:48` 或 `/doctor d3c20e05 2026-06-04 17:48`，让当前会话读取结构化 JSONL `bridge.log` 时优先用目标 id 和时间点搜索，并优先检查 `level=ERROR/WARN`、`event`、`msg`、`chat`、`lane` 等字段。
 
 ## 设计模块
@@ -35,7 +36,7 @@ IM 命令从用户视角分为五组。命令入口是 [src/bridge/command/dispa
 | tmux | [src/bridge/command/tmux.ts](https://github.com/huiyeruzhou/codelark/blob/main/src/bridge/command/tmux.ts)、[src/bridge/command/tmux-args.ts](https://github.com/huiyeruzhou/codelark/blob/main/src/bridge/command/tmux-args.ts) |
 | pty 屏幕 | [src/bridge/command/pty.ts](https://github.com/huiyeruzhou/codelark/blob/main/src/bridge/command/pty.ts) |
 | shell | [src/bridge/command/shell.ts](https://github.com/huiyeruzhou/codelark/blob/main/src/bridge/command/shell.ts) |
-| 定时输入 | [src/bridge/command/every.ts](https://github.com/huiyeruzhou/codelark/blob/main/src/bridge/command/every.ts) |
+| 定时/后续输入 | [src/bridge/command/every.ts](https://github.com/huiyeruzhou/codelark/blob/main/src/bridge/command/every.ts)、[src/bridge/command/then.ts](https://github.com/huiyeruzhou/codelark/blob/main/src/bridge/command/then.ts) |
 | 热更新 | [src/bridge/command/hot-update.ts](https://github.com/huiyeruzhou/codelark/blob/main/src/bridge/command/hot-update.ts) |
 | 展示格式 | [src/bridge/command/presentation/](https://github.com/huiyeruzhou/codelark/blob/main/src/bridge/command/presentation/) |
 
