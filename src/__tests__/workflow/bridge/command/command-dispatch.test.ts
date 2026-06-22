@@ -2970,7 +2970,6 @@ enabled = true
       provider: 'feishu',
       fileToken: 'doc-token',
       fileType: 'docx',
-      commentId: 'comment-1',
     });
     assert.equal(sent[0]?.address.chatId, groupChatId);
     assert.match(sent[0]?.text || '', /已绑定为云文档聊天入口/);

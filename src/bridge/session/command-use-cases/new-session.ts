@@ -105,7 +105,6 @@ export async function handleNewSessionCommand(options: {
         binding.cloudDocumentChat?.provider === 'feishu'
         && binding.cloudDocumentChat.fileToken === cloudDocument.fileToken
         && binding.cloudDocumentChat.fileType === cloudDocument.fileType
-        && binding.cloudDocumentChat.commentId === cloudDocument.commentId
       ));
     if (existing) {
       return {
@@ -115,7 +114,7 @@ export async function handleNewSessionCommand(options: {
             ['群聊 chat_id', existing.chatId],
             ['Session', existing.bridgeSessionId],
           ],
-          ['请到已创建的群聊继续聊天；云文档评论不会再接入 bot 对话。'],
+          ['请到已创建的群聊继续聊天；后续云文档评论会转发到这个群聊。'],
           options.markdown,
         ),
       };
@@ -157,7 +156,6 @@ export async function handleNewSessionCommand(options: {
         provider: 'feishu',
         fileToken: cloudDocument.fileToken,
         fileType: cloudDocument.fileType,
-        commentId: cloudDocument.commentId,
       },
     });
     let session = options.store.getSession(binding.bridgeSessionId);
@@ -185,7 +183,7 @@ export async function handleNewSessionCommand(options: {
       [
         '这个群聊已绑定为云文档聊天入口。',
         `文档：${cloudDocument.fileType}/${cloudDocument.fileToken}`,
-        '接下来请直接在这个群聊里聊天；云文档评论只会提示回到本群。',
+        '接下来请直接在这个群聊里聊天；后续云文档评论会转发到本群。',
       ].join('\n'),
       { sessionId: binding.bridgeSessionId },
     );
@@ -199,7 +197,7 @@ export async function handleNewSessionCommand(options: {
           ['目录', formatCommandPath(getSessionWorkingDirectory(session) || workDir)],
           ['文档', `${cloudDocument.fileType}/${cloudDocument.fileToken}`],
         ],
-        ['请到已创建的群聊继续聊天；后续云文档评论不会再接入 bot 对话。'],
+        ['请到已创建的群聊继续聊天；后续云文档评论会转发到这个群聊。'],
         options.markdown,
       ),
       afterDelivery: () => options.adapter.notifyGroupChatCreated?.(groupAddress, groupChat),
