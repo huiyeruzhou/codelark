@@ -6279,29 +6279,50 @@ export class FeishuAdapter extends BaseChannelAdapter {
     }
     this.addToDedup(dedupKey);
 
+    const docChatId = this.buildCloudDocumentChatId(resolvedTarget);
     const documentChatBinding = this.findCloudDocumentChatBinding(resolvedTarget);
     if (documentChatBinding) {
-      await this.sendCloudDocumentReply({
-        provider: 'feishu',
-        fileToken: resolvedTarget.fileToken,
-        fileType: resolvedTarget.fileType,
-        commentId: resolvedTarget.commentId,
-        replyId: resolvedTarget.replyId,
-      }, [
-        '这份云文档已经启用群聊聊天模式。',
-        `请到已创建的群聊继续聊天：${documentChatBinding.chatId}`,
-        '云文档评论不会再接入 bot 对话。',
-      ].join('\n'));
+      const resolvedContext = await this.fetchCloudDocumentCommentContext(resolvedTarget);
+      if (!resolvedContext.question) {
+        console.log('[feishu-adapter] Cloud document comment ignored: empty question', {
+          fileToken: resolvedTarget.fileToken,
+          commentId: resolvedTarget.commentId,
+        });
+        return;
+      }
+
+      const timestamp = Date.now();
+      const messageId = `doc-forward:${resolvedTarget.fileToken}:${resolvedTarget.commentId}:${resolvedTarget.replyId || timestamp}`;
+      const groupAddress: ChannelAddress = {
+        channelType: this.channelType,
+        channelProvider: this.provider,
+        channelAlias: this.alias,
+        chatId: documentChatBinding.chatId,
+        chatKind: documentChatBinding.chatKind || 'group',
+        userId: resolvedTarget.operatorId,
+        displayName: '飞书云文档评论',
+      };
+      await this.sendCloudDocumentForwardNotice(groupAddress, resolvedTarget, resolvedContext);
+      this.enqueueInboundMessage({
+        messageId,
+        address: groupAddress,
+        text: this.buildCloudDocumentPrompt(resolvedTarget, resolvedContext),
+        timestamp,
+        raw: data,
+      });
+      this.logQueuedInboundMessage({
+        messageId,
+        chatId: documentChatBinding.chatId,
+        messageType: 'drive.notice.comment_add_v1',
+        text: resolvedContext.question,
+        attachmentCount: 0,
+      });
       return;
     }
 
-    const docChatId = this.buildCloudDocumentChatId(resolvedTarget);
-    const hasDocumentReplyChatBinding = Boolean(
-      getBridgeContext().store.getChannelChat(this.channelType, docChatId),
-    );
     const shouldInspectCommentContent = !target.mentioned
       && this.shouldInspectCloudDocumentCommentContentForMention(target);
-    if (!target.mentioned && !shouldInspectCommentContent && !hasDocumentReplyChatBinding) {
+    if (!target.mentioned && !shouldInspectCommentContent) {
       console.log('[feishu-adapter] Cloud document comment ignored: bot not mentioned', {
         fileToken: target.fileToken,
         fileType: target.fileType,
@@ -6313,7 +6334,7 @@ export class FeishuAdapter extends BaseChannelAdapter {
 
     const resolvedContext = await this.fetchCloudDocumentCommentContext(resolvedTarget);
     const mentioned = target.mentioned || Boolean(resolvedContext.mentionedBotInContent);
-    if (!mentioned && !hasDocumentReplyChatBinding) {
+    if (!mentioned) {
       console.log('[feishu-adapter] Cloud document comment ignored: bot not mentioned', {
         fileToken: resolvedTarget.fileToken,
         fileType: resolvedTarget.fileType,
@@ -6342,9 +6363,7 @@ export class FeishuAdapter extends BaseChannelAdapter {
     const isDocumentChatCommand = /^\/new(?:\s|$)/i.test(questionText);
     const text = isDocumentChatCommand
       ? questionText
-      : this.buildCloudDocumentPrompt(resolvedTarget, resolvedContext, {
-        continuedDocumentChat: hasDocumentReplyChatBinding && !mentioned,
-      });
+      : '/new';
     const inbound: InboundMessage = {
       messageId,
       address: {
@@ -6689,7 +6708,6 @@ export class FeishuAdapter extends BaseChannelAdapter {
         binding.cloudDocumentChat?.provider === 'feishu'
         && binding.cloudDocumentChat.fileToken === target.fileToken
         && binding.cloudDocumentChat.fileType === target.fileType
-        && binding.cloudDocumentChat.commentId === target.commentId
       )) || null;
   }
 
@@ -6697,13 +6715,11 @@ export class FeishuAdapter extends BaseChannelAdapter {
     question: string;
     quote?: string;
     isWhole: boolean;
-  }, options: { continuedDocumentChat?: boolean } = {}): string {
+  }): string {
     const docHost = this.site === 'lark' ? 'https://larksuite.com' : 'https://feishu.cn';
     const docUrl = `${docHost}/${target.fileType}/${target.fileToken}`;
     const parts = [
-      options.continuedDocumentChat
-        ? '这份飞书云文档已经绑定为评论回复会话；本条云文档评论是同一文档评论会话里的后续用户消息。请结合当前会话上下文和文档评论上下文回答，最终回复会直接写回同一个云文档评论线程。'
-        : '我在飞书云文档评论里被 @ 了。请根据文档评论上下文回答，并且最终回复会直接写回同一个云文档评论线程。',
+      '这是一条从已绑定云文档评论转发到群聊的用户消息。请在当前群聊中响应，不要尝试回写云文档评论。',
       '',
       '文档信息：',
       `- 链接：${docUrl}`,
@@ -6722,9 +6738,37 @@ export class FeishuAdapter extends BaseChannelAdapter {
       `- 按标题/选区替换：lark-cli docs +update --api-version v2 --as bot --doc ${target.fileToken} --mode replace_range --selection-by-title '<标题>' --markdown '<内容>'`,
       '如果 lark-cli 提示权限不足，请在回复中明确说明需要给机器人或应用补充对应云文档权限。',
       '',
-      '回复要求：直接回答用户问题；不要输出 Markdown 装饰语法、代码块或 XML 标签。云文档评论不会按 Markdown 渲染。',
+      '回复要求：直接回答用户问题；不要输出 XML 标签。',
     ].filter(Boolean);
     return parts.join('\n');
+  }
+
+  private async sendCloudDocumentForwardNotice(
+    address: ChannelAddress,
+    target: FeishuCommentTarget,
+    context: { question: string; quote?: string; isWhole: boolean },
+  ): Promise<void> {
+    const docHost = this.site === 'lark' ? 'https://larksuite.com' : 'https://feishu.cn';
+    const preview = context.question.trim().replace(/\s+/g, ' ').slice(0, 180);
+    const result = await this.send({
+      address,
+      text: [
+        '收到一条云文档评论，已转发到本群处理。',
+        `文档：${docHost}/${target.fileType}/${target.fileToken}`,
+        `comment_id：${target.commentId}`,
+        target.replyId ? `reply_id：${target.replyId}` : '',
+        preview ? `内容：${preview}` : '',
+      ].filter(Boolean).join('\n'),
+      parseMode: 'plain',
+    });
+    if (!result.ok) {
+      console.warn('[feishu-adapter] Cloud document group forward notice failed:', {
+        chatId: address.chatId,
+        fileToken: target.fileToken,
+        commentId: target.commentId,
+        error: result.error,
+      });
+    }
   }
 
   // ── Content parsing ─────────────────────────────────────────

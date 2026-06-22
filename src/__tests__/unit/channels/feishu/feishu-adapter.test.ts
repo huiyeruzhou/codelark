@@ -349,7 +349,7 @@ printf '{"ok":true,"data":{"chat_id":"oc_user_created"}}\\n'
     assert.deepEqual(updatePayloads[0].data, { name: '[BotName]新群名' });
   });
 
-  it('turns mentioned cloud document comments into inbound messages', async () => {
+  it('turns first mentioned cloud document comments into default /new commands', async () => {
     initBridgeTestContext();
     const reactionRequests: Array<Record<string, any>> = [];
     const adapter = new FeishuAdapter({
@@ -420,8 +420,7 @@ printf '{"ok":true,"data":{"chat_id":"oc_user_created"}}\\n'
     assert.equal(inbound.address.cloudDocument?.commentId, 'comment-1');
     assert.equal(inbound.address.cloudDocument?.replyId, 'reply-1');
     assert.equal(inbound.address.cloudDocument?.typingReactionReplyId, 'reply-1');
-    assert.match(inbound.text, /用户的问题：@机器人 请总结这一段/);
-    assert.match(inbound.text, /用户选中的原文/);
+    assert.equal(inbound.text, '/new');
     assert.equal(reactionRequests.length, 1);
     assert.match(reactionRequests[0].url, /\/open-apis\/drive\/v2\/files\/doc-token\/comments\/reaction\?file_type=docx/);
     assert.deepEqual(reactionRequests[0].data, {
@@ -506,15 +505,22 @@ printf '{"ok":true,"data":{"chat_id":"oc_user_created"}}\\n'
     assert.match(ignoredLog[1].mentionDiagnostics.botIdHashes[0], /^[a-f0-9]{12}$/);
   });
 
-  it('accepts unmentioned cloud document comments once the document is bound as a chat', async () => {
+  it('forwards unmentioned cloud document comments once the document is bound to a group', async () => {
     const store = initBridgeTestContext();
-    const session = store.createSession('Doc chat', 'test-model');
+    const session = store.createSession('Doc group chat', 'test-model');
     store.upsertChannelChat({
       channelType: 'feishu-default',
-      chatId: 'doc:docx:doc-bound-token:comment:comment-2',
+      chatId: 'oc_doc_group',
+      chatKind: 'group',
       bridgeSessionId: session.id,
+      cloudDocumentChat: {
+        provider: 'feishu',
+        fileToken: 'doc-bound-token',
+        fileType: 'docx',
+      },
     });
     const reactionRequests: Array<Record<string, any>> = [];
+    const groupMessages: Array<Record<string, any>> = [];
     const adapter = new FeishuAdapter({
       id: 'feishu-default',
       provider: 'feishu',
@@ -560,6 +566,14 @@ printf '{"ok":true,"data":{"chat_id":"oc_user_created"}}\\n'
           },
         },
       },
+      im: {
+        message: {
+          create: async (payload: Record<string, any>) => {
+            groupMessages.push(payload);
+            return { data: { message_id: `om_notice_${groupMessages.length}` } };
+          },
+        },
+      },
       request: async (payload: Record<string, any>) => {
         reactionRequests.push(payload);
         return { code: 0, data: {} };
@@ -577,13 +591,12 @@ printf '{"ok":true,"data":{"chat_id":"oc_user_created"}}\\n'
 
     const inbound = await adapter.consumeOne();
     assert.ok(inbound);
-    assert.equal(inbound.address.chatId, 'doc:docx:doc-bound-token:comment:comment-2');
-    assert.equal(inbound.address.cloudDocument?.commentId, 'comment-2');
-    assert.equal(inbound.address.cloudDocument?.replyId, 'reply-2');
-    assert.match(inbound.text, /已经绑定为评论回复会话/);
+    assert.equal(inbound.address.chatId, 'oc_doc_group');
+    assert.equal(groupMessages.length, 1);
+    assert.equal(groupMessages[0].data.receive_id, 'oc_doc_group');
+    assert.match(JSON.parse(groupMessages[0].data.content).text, /收到一条云文档评论/);
     assert.match(inbound.text, /用户的问题：继续整理这个 TODO/);
-    assert.equal(reactionRequests.length, 1);
-    assert.equal(reactionRequests[0].data.reply_id, 'reply-2');
+    assert.deepEqual(reactionRequests, []);
   });
 
   it('turns mentioned /new cloud document comments into slash commands', async () => {
@@ -649,6 +662,71 @@ printf '{"ok":true,"data":{"chat_id":"oc_user_created"}}\\n'
     assert.equal(inbound.text, '/new 需求评审');
     assert.equal(inbound.address.chatId, 'doc:docx:doc-new-token:comment:comment-new');
     assert.equal(inbound.address.cloudDocument?.commentId, 'comment-new');
+  });
+
+  it('turns mentioned cloud document comments into default /new commands', async () => {
+    initBridgeTestContext();
+    const adapter = new FeishuAdapter({
+      id: 'feishu-default',
+      provider: 'feishu',
+      enabled: true,
+      alias: '飞书',
+      config: {
+        appId: 'app-id',
+        appSecret: 'app-secret',
+      },
+    });
+    (adapter as any).botIds.add('ou_bot');
+    (adapter as any).restClient = {
+      wiki: {
+        v2: {
+          space: {
+            getNode: async () => {
+              throw new Error('not wiki');
+            },
+          },
+        },
+      },
+      drive: {
+        v1: {
+          fileComment: {
+            get: async () => ({
+              data: {
+                comment_id: 'comment-auto-new',
+                reply_list: {
+                  replies: [
+                    {
+                      reply_id: 'reply-auto-new',
+                      content: {
+                        elements: [
+                          { type: 'text_run', text_run: { text: '帮我看一下这个文档' } },
+                        ],
+                      },
+                    },
+                  ],
+                },
+              },
+            }),
+          },
+        },
+      },
+      request: async () => ({ code: 0, data: {} }),
+    };
+
+    await (adapter as any).processCloudDocumentCommentEvent(cloudDocumentCommentEvent('evt-doc-comment-auto-new', {
+      file_token: 'doc-auto-new-token',
+      file_type: 'docx',
+      comment_id: 'comment-auto-new',
+      reply_id: 'reply-auto-new',
+      operator_id: { open_id: 'ou_user' },
+      mention_list: [{ id: { open_id: 'ou_bot' } }],
+    }));
+
+    const inbound = await adapter.consumeOne();
+    assert.ok(inbound);
+    assert.equal(inbound.text, '/new');
+    assert.equal(inbound.address.chatId, 'doc:docx:doc-auto-new-token:comment:comment-auto-new');
+    assert.equal(inbound.address.cloudDocument?.commentId, 'comment-auto-new');
   });
 
   it('deduplicates a retried /new cloud document comment after group binding is created', async () => {
@@ -733,7 +811,6 @@ printf '{"ok":true,"data":{"chat_id":"oc_user_created"}}\\n'
         provider: 'feishu',
         fileToken: 'doc-new-token',
         fileType: 'docx',
-        commentId: 'comment-new',
       },
     });
 
@@ -797,10 +874,10 @@ printf '{"ok":true,"data":{"chat_id":"oc_user_created"}}\\n'
         provider: 'feishu',
         fileToken: 'doc-group-token',
         fileType: 'docx',
-        commentId: 'comment-3',
       },
     });
     const requests: Array<Record<string, any>> = [];
+    const groupMessages: Array<Record<string, any>> = [];
     const adapter = new FeishuAdapter({
       id: 'feishu-default',
       provider: 'feishu',
@@ -822,6 +899,38 @@ printf '{"ok":true,"data":{"chat_id":"oc_user_created"}}\\n'
           },
         },
       },
+      drive: {
+        v1: {
+          fileComment: {
+            get: async () => ({
+              data: {
+                comment_id: 'comment-3',
+                is_whole: true,
+                reply_list: {
+                  replies: [
+                    {
+                      reply_id: 'reply-3',
+                      content: {
+                        elements: [
+                          { type: 'text_run', text_run: { text: '继续整理这个 TODO' } },
+                        ],
+                      },
+                    },
+                  ],
+                },
+              },
+            }),
+          },
+        },
+      },
+      im: {
+        message: {
+          create: async (payload: Record<string, any>) => {
+            groupMessages.push(payload);
+            return { data: { message_id: `om_notice_${groupMessages.length}` } };
+          },
+        },
+      },
       request: async (payload: Record<string, any>) => {
         requests.push(payload);
         return { code: 0, data: {} };
@@ -837,14 +946,19 @@ printf '{"ok":true,"data":{"chat_id":"oc_user_created"}}\\n'
       mention_list: [{ id: { open_id: 'ou_bot' } }],
     }));
 
-    assert.equal(((adapter as any).inboundQueue || []).length, 0);
-    assert.equal(requests.length, 1);
-    assert.match(requests[0].url, /\/open-apis\/drive\/v1\/files\/doc-group-token\/comments\/comment-3\/replies\?file_type=docx/);
-    assert.match(requests[0].data.content.elements[0].text_run.text, /已经启用群聊聊天模式/);
-    assert.match(requests[0].data.content.elements[0].text_run.text, /oc_doc_group/);
+    assert.equal(groupMessages.length, 1);
+    assert.equal(groupMessages[0].data.receive_id, 'oc_doc_group');
+    assert.match(JSON.parse(groupMessages[0].data.content).text, /收到一条云文档评论/);
+    assert.match(JSON.parse(groupMessages[0].data.content).text, /继续整理这个 TODO/);
+    const inbound = await adapter.consumeOne();
+    assert.ok(inbound);
+    assert.equal(inbound.address.chatId, 'oc_doc_group');
+    assert.match(inbound.text, /从已绑定云文档评论转发到群聊/);
+    assert.match(inbound.text, /用户的问题：继续整理这个 TODO/);
+    assert.deepEqual(requests, []);
   });
 
-  it('does not redirect or continue a different comment from the same cloud document', async () => {
+  it('forwards later comments from the same cloud document to the bound group', async () => {
     const store = initBridgeTestContext();
     const session = store.createSession('Doc group chat', 'test-model');
     store.upsertChannelChat({
@@ -856,10 +970,10 @@ printf '{"ok":true,"data":{"chat_id":"oc_user_created"}}\\n'
         provider: 'feishu',
         fileToken: 'doc-group-token',
         fileType: 'docx',
-        commentId: 'comment-bound',
       },
     });
     const requests: Array<Record<string, any>> = [];
+    const groupMessages: Array<Record<string, any>> = [];
     const adapter = new FeishuAdapter({
       id: 'feishu-default',
       provider: 'feishu',
@@ -905,6 +1019,14 @@ printf '{"ok":true,"data":{"chat_id":"oc_user_created"}}\\n'
           },
         },
       },
+      im: {
+        message: {
+          create: async (payload: Record<string, any>) => {
+            groupMessages.push(payload);
+            return { data: { message_id: `om_notice_${groupMessages.length}` } };
+          },
+        },
+      },
       request: async (payload: Record<string, any>) => {
         requests.push(payload);
         return { code: 0, data: {} };
@@ -920,7 +1042,13 @@ printf '{"ok":true,"data":{"chat_id":"oc_user_created"}}\\n'
       mention_list: [{ id: { open_id: 'ou_someone_else' } }],
     }));
 
-    assert.equal(((adapter as any).inboundQueue || []).length, 0);
+    assert.equal(groupMessages.length, 1);
+    assert.equal(groupMessages[0].data.receive_id, 'oc_doc_group');
+    assert.match(JSON.parse(groupMessages[0].data.content).text, /没有 @ 的另一个评论/);
+    const inbound = await adapter.consumeOne();
+    assert.ok(inbound);
+    assert.equal(inbound.address.chatId, 'oc_doc_group');
+    assert.match(inbound.text, /用户的问题：没有 @ 的另一个评论/);
     assert.deepEqual(requests, []);
   });
 
@@ -1034,7 +1162,7 @@ printf '{"ok":true,"data":{"chat_id":"oc_user_created"}}\\n'
     assert.equal(inbound.address.chatId, 'doc:docx:doc-token:comment:comment-1');
     assert.equal(inbound.address.cloudDocument?.commentId, 'comment-1');
     assert.equal(inbound.address.cloudDocument?.typingReactionReplyId, 'reply-1');
-    assert.match(inbound.text, /用户的问题：看看这段/);
+    assert.equal(inbound.text, '/new');
   });
 
   it('logs content mention diagnostics when event and comment content do not mention the bot', async () => {
