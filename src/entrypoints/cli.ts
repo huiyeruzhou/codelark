@@ -3,6 +3,7 @@
 import fs from 'node:fs';
 import { stdin as input, stdout as output } from 'node:process';
 import path from 'node:path';
+import { createInterface } from 'node:readline/promises';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import { CODELARK_HOME } from '../configuration/paths.js';
@@ -105,6 +106,45 @@ async function promptHidden(question: string): Promise<string> {
 
     input.on('data', onData);
   });
+}
+
+async function promptYesNo(question: string, defaultValue = false): Promise<boolean> {
+  if (!isInteractiveTerminal()) {
+    throw new Error('当前终端不支持交互确认，请在可交互终端中执行。');
+  }
+
+  const suffix = defaultValue ? ' [Y/n] ' : ' [y/N] ';
+  const rl = createInterface({ input, output });
+  try {
+    while (true) {
+      const answer = (await rl.question(`${question}${suffix}`)).trim().toLowerCase();
+      if (!answer) return defaultValue;
+      if (['y', 'yes', '是'].includes(answer)) return true;
+      if (['n', 'no', '否'].includes(answer)) return false;
+      output.write('请输入 y 或 n。\n');
+    }
+  } finally {
+    rl.close();
+  }
+}
+
+type RunningBridgeStartAction = 'start' | 'restart' | 'reuse';
+
+export function formatRunningBridgePrompt(command: 'start' | 'run', status: BridgeStatus): string {
+  const pid = status.pid ? `（PID ${status.pid}）` : '';
+  return `Bridge 已经在运行${pid}。是否先停止已有实例并重新执行 codelark ${command}？`;
+}
+
+export async function resolveRunningBridgeStartAction(options: {
+  command: 'start' | 'run';
+  status: BridgeStatus;
+  interactive?: boolean;
+  prompt?: (question: string) => Promise<boolean>;
+}): Promise<RunningBridgeStartAction> {
+  if (!options.status.running) return 'start';
+  if (options.interactive === false) return 'reuse';
+  const prompt = options.prompt || ((question: string) => promptYesNo(question, false));
+  return await prompt(formatRunningBridgePrompt(options.command, options.status)) ? 'restart' : 'reuse';
 }
 
 function hasConfiguredFeishu(config: ConfigV2): boolean {
@@ -289,17 +329,27 @@ async function runRunCommand(options: { firstRunSetup: boolean; configOverrides?
   const startupProjection = loadStartupProjection(serviceOptions);
   const uiBefore = getUiServerStatus();
   const bridgeBefore = getBridgeStatus();
+  const bridgeAction = await resolveRunningBridgeStartAction({
+    command: 'run',
+    status: bridgeBefore,
+    interactive: isInteractiveTerminal(),
+  });
+  if (bridgeAction === 'restart') {
+    await stopBridge();
+  }
   const status = await ensureUiServerRunning({ ...serviceOptions, startupProjection });
   const url = getUiServerUrl(status.port);
   openBrowser(url);
   try {
-    const bridge = await startBridge({ ...serviceOptions, startupProjection });
+    const bridge = bridgeAction === 'reuse' && bridgeBefore.running
+      ? bridgeBefore
+      : await startBridge({ ...serviceOptions, startupProjection });
     process.stdout.write(formatRunSuccessMessage({
       url,
       ui: status,
       bridge,
       wasUiRunning: uiBefore.running,
-      wasBridgeRunning: bridgeBefore.running,
+      wasBridgeRunning: bridgeAction === 'reuse' && bridgeBefore.running,
     }));
   } catch (error) {
     process.stdout.write(
@@ -343,6 +393,19 @@ async function main(argv = process.argv.slice(2)): Promise<void> {
     }
 
     case 'start': {
+      const before = getBridgeStatus();
+      const bridgeAction = await resolveRunningBridgeStartAction({
+        command: 'start',
+        status: before,
+        interactive: isInteractiveTerminal(),
+      });
+      if (bridgeAction === 'reuse' && before.running) {
+        process.stdout.write(`Bridge already running. PID: ${before.pid || '-'}\n`);
+        return;
+      }
+      if (bridgeAction === 'restart') {
+        await stopBridge();
+      }
       const status = await startBridge({ cli: parsed.configOverrides.patch });
       process.stdout.write(`Bridge started. PID: ${status.pid || '-'}\n`);
       return;

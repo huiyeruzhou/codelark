@@ -13,3 +13,4 @@
 7. [JSON Schema 与升级契约](json-schemas.md)：本地数据文件 schema 和迁移边界。
 8. [桥接安全模型](security.md)：授权、输入校验、限流、权限回调和审计日志。
 9. [流式卡片](streaming-card.md)：本地镜像、投递计划、碎片投递抑制、长连接刷新、底层飞书 API 和性能观测。
+10. [Codex TUI 工具状态渲染分析](codex-tui-tool-status-rendering.md)：Codex 当前工具调用状态、底部状态行、快捷键和 Default/Plan 模式渲染链路。

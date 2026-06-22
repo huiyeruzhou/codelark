@@ -1,7 +1,11 @@
+import path from 'node:path';
+
 import { maskSecrets } from '../logger.js';
 import type { CodexToolDetail, ToolCallInfo } from '../../domain/progress.js';
 import { buildFencedCodeBlock } from '../markdown/fence.js';
 import { sanitizeInput } from '../security/validators.js';
+
+export const EXEC_COMMAND_RENDER_OUTPUT_CHAR_LIMIT = 1000;
 
 function sanitizeToolText(value: string): string {
   return maskSecrets(value)
@@ -133,7 +137,27 @@ function parseProcessOutput(raw: string): {
   };
 }
 
-function parsePatchFiles(patchText: string): Array<{ path: string; action: string; toPath?: string }> {
+function extractTextRecordValue(record: Record<string, unknown>, keys: string[]): string {
+  for (const key of keys) {
+    const value = record[key];
+    if (typeof value === 'string' && value.trim()) return value;
+    if (typeof value === 'number' || typeof value === 'boolean') return String(value);
+  }
+  return '';
+}
+
+function extractExecStructuredOutput(value: unknown): string {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return '';
+  const record = value as Record<string, unknown>;
+  const aggregated = extractTextRecordValue(record, ['aggregated_output', 'formatted_output']);
+  if (aggregated.trim()) return aggregated;
+
+  const stdout = extractTextRecordValue(record, ['stdout']);
+  const stderr = extractTextRecordValue(record, ['stderr']);
+  return [stdout.trim(), stderr.trim()].filter(Boolean).join('\n');
+}
+
+function parsePatchFiles(patchText: string, baseDir?: string): Array<{ path: string; action: string; toPath?: string }> {
   const files: Array<{ path: string; action: string; toPath?: string }> = [];
   let last: { path: string; action: string; toPath?: string } | null = null;
   for (const line of patchText.split(/\r?\n/)) {
@@ -142,20 +166,55 @@ function parsePatchFiles(patchText: string): Array<{ path: string; action: strin
     const del = line.match(/^\*\*\* Delete File:\s+(.+)$/);
     const move = line.match(/^\*\*\* Move to:\s+(.+)$/);
     if (add) {
-      last = { path: add[1].trim(), action: 'add' };
+      last = { path: normalizePatchDisplayPath(add[1], baseDir), action: 'add' };
       files.push(last);
     } else if (update) {
-      last = { path: update[1].trim(), action: 'update' };
+      last = { path: normalizePatchDisplayPath(update[1], baseDir), action: 'update' };
       files.push(last);
     } else if (del) {
-      last = { path: del[1].trim(), action: 'delete' };
+      last = { path: normalizePatchDisplayPath(del[1], baseDir), action: 'delete' };
       files.push(last);
     } else if (move && last) {
       last.action = 'move';
-      last.toPath = move[1].trim();
+      last.toPath = normalizePatchDisplayPath(move[1], baseDir);
     }
   }
   return files;
+}
+
+function relativePathFromBase(filePath: string, baseDir: string | undefined): string | null {
+  const base = baseDir?.trim();
+  if (!base) return null;
+  if (path.win32.isAbsolute(filePath) || path.win32.isAbsolute(base)) {
+    if (!path.win32.isAbsolute(filePath) || !path.win32.isAbsolute(base)) return null;
+    const relative = path.win32.relative(base, filePath).replace(/\\/g, '/');
+    return relative && !path.win32.isAbsolute(relative) ? relative : null;
+  }
+  if (!path.isAbsolute(filePath) || !path.isAbsolute(base)) return null;
+  const relative = path.relative(base, filePath);
+  return relative && !path.isAbsolute(relative) ? relative : null;
+}
+
+function normalizePatchDisplayPath(value: string, baseDir?: string): string {
+  const trimmed = value.trim();
+  if (!trimmed) return '';
+  const relative = relativePathFromBase(trimmed, baseDir)
+    ?? (!baseDir ? relativePathFromBase(trimmed, process.cwd()) : null);
+  if (relative) return relative;
+  if (path.isAbsolute(trimmed)) {
+    return trimmed.replace(/^[/\\]+/u, '');
+  }
+  if (path.win32.isAbsolute(trimmed)) {
+    return trimmed.replace(/^[A-Za-z]:[\\/]+/u, '').replace(/\\/g, '/');
+  }
+  return trimmed;
+}
+
+function normalizePatchTextPaths(patchText: string, baseDir?: string): string {
+  return patchText.split(/\r?\n/u).map((line) => {
+    const match = line.match(/^(\*\*\* (?:Add File|Update File|Delete File|Move to):\s+)(.+)$/u);
+    return match ? `${match[1]}${normalizePatchDisplayPath(match[2], baseDir)}` : line;
+  }).join('\n');
 }
 
 function extractPatchText(value: unknown): string {
@@ -170,6 +229,11 @@ function extractPatchText(value: unknown): string {
     if (typeof text === 'string' && text.includes('*** Begin Patch')) return text;
   }
   return stringifyToolValue(parsed);
+}
+
+function extractToolWorkingDirectory(record: Record<string, unknown> | null): string {
+  if (!record) return '';
+  return extractTextRecordValue(record, ['workdir', 'working_dir', 'cwd']).trim();
 }
 
 function summarizeToolSearchTools(value: unknown): Pick<Extract<CodexToolDetail, { kind: 'tool_search' }>, 'foundCount' | 'namespaces' | 'toolNames'> {
@@ -221,11 +285,13 @@ export function buildCodexToolDetailFromInput(toolName: string | undefined, inpu
     };
   }
   if (isPatchTool(toolName)) {
-    const patchText = extractPatchText(input);
+    const workdir = sanitizeToolText(extractToolWorkingDirectory(record));
+    const patchText = normalizePatchTextPaths(extractPatchText(input), workdir);
     return {
       kind: 'patch_apply',
       ...(patchText.trim() ? { patchText: sanitizeToolText(patchText) } : {}),
-      files: parsePatchFiles(patchText),
+      ...(workdir ? { workdir } : {}),
+      files: parsePatchFiles(patchText, workdir),
     };
   }
   if (normalizeToolName(toolName) === 'tool_search') {
@@ -260,9 +326,14 @@ export function buildCodexToolDetailFromOutput(
   const raw = typeof output === 'string' ? output : stringifyToolValue(output);
   const parsed = parseJsonMaybe(output);
   if (existing?.kind === 'exec_command' || isExecTool(toolName)) {
+    const structuredOutput = extractExecStructuredOutput(parsed);
+    const { output: processOutput, ...processMeta } = parseProcessOutput(raw);
+    const parsedIsRecord = Boolean(parsed && typeof parsed === 'object' && !Array.isArray(parsed));
+    const outputText = structuredOutput || (parsedIsRecord ? '' : processOutput || '');
     return {
       kind: 'exec_command',
-      ...parseProcessOutput(raw),
+      ...processMeta,
+      ...(outputText.trim() ? { output: sanitizeToolText(outputText) } : {}),
       rawOutput: raw,
     };
   }
@@ -341,13 +412,19 @@ function textTag(color: string, value: string): string {
   return `<text_tag color='${color}'>${escapeTextTagContent(value)}</text_tag>`;
 }
 
+function truncateExecOutputForRender(value: string): string {
+  const sanitized = sanitizeToolText(value);
+  if (!sanitized) return '';
+  const { text, truncated } = sanitizeInput(sanitized, EXEC_COMMAND_RENDER_OUTPUT_CHAR_LIMIT);
+  return truncated ? `${text}\n...(truncated to ${EXEC_COMMAND_RENDER_OUTPUT_CHAR_LIMIT} chars)` : text;
+}
+
 export function renderCodexToolDetailMarkdown(tool: ToolCallInfo): string {
   const detail = tool.detail;
   if (!detail) return '';
   const sections: string[] = [];
   if (detail.kind === 'exec_command') {
     const meta = [
-      detail.workdir ? `workdir: \`${detail.workdir}\`` : '',
       detail.shell ? `shell: \`${detail.shell}\`` : '',
       typeof detail.tty === 'boolean' ? `tty: \`${String(detail.tty)}\`` : '',
     ].filter(Boolean).join('  ');
@@ -355,7 +432,8 @@ export function renderCodexToolDetailMarkdown(tool: ToolCallInfo): string {
     if (detail.command) sections.push(buildFencedCodeBlock(detail.command, 'bash'));
     const status = renderStatusLine(tool, detail);
     if (status && !(tool.status === 'complete' && detail.exitCode === 0)) sections.push(status);
-    if (detail.output) sections.push(buildFencedCodeBlock(detail.output, 'text'));
+    const output = truncateExecOutputForRender(detail.output || '');
+    if (output) sections.push(buildFencedCodeBlock(output, 'text'));
     return sections.join('\n\n');
   }
   if (detail.kind === 'terminal_stdin') {
@@ -385,7 +463,6 @@ export function renderCodexToolDetailMarkdown(tool: ToolCallInfo): string {
       }).join('\n'));
     }
     if (detail.patchText) sections.push(buildFencedCodeBlock(detail.patchText, 'diff'));
-    if (detail.output) sections.push(buildFencedCodeBlock(detail.output, 'text'));
     return sections.join('\n\n');
   }
   if (detail.kind === 'tool_search') {
