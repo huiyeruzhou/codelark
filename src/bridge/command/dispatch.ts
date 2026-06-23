@@ -468,7 +468,7 @@ export async function handleBridgeCommand(
   let setConfigCard = false;
   let afterDelivery: ((messageId?: string) => Promise<void> | void) | undefined;
   let postDeliveryCurrentAddress: ChannelAddress | undefined;
-  let postDeliveryUserMessage: InboundMessage | undefined;
+  let postDeliveryUserMessages: InboundMessage[] = [];
   const currentBinding = deps.scopedBinding || store.getChannelChat(msg.address.channelType, msg.address.chatId);
   const shouldApplyDefaultTargetForCommand = !new Set(['/status', '/threads', '/t', '/set']).has(command);
   const commandBinding = !shouldApplyDefaultTargetForCommand
@@ -503,14 +503,12 @@ export async function handleBridgeCommand(
         threadTableCardScope = result.threadTableCardScope;
         afterDelivery = result.afterDelivery;
         postDeliveryCurrentAddress = result.postDeliveryCurrentAddress;
-        if (result.postDeliveryUserMessage) {
-          postDeliveryUserMessage = {
-            address: result.postDeliveryUserMessage.address,
-            text: result.postDeliveryUserMessage.text,
-            messageId: result.postDeliveryUserMessage.messageId,
-            timestamp: Date.now(),
-          };
-        }
+        postDeliveryUserMessages = (result.postDeliveryUserMessages || []).map((postDeliveryUserMessage) => ({
+          address: postDeliveryUserMessage.address,
+          text: postDeliveryUserMessage.text,
+          messageId: postDeliveryUserMessage.messageId,
+          timestamp: Date.now(),
+        }));
       }
       break;
     }
@@ -1090,8 +1088,10 @@ export async function handleBridgeCommand(
         markdown: responseParseMode === 'Markdown',
       });
     }
-    if (result.ok && postDeliveryUserMessage) {
-      await deps.dispatchPostCommandMessage?.(adapter, postDeliveryUserMessage);
+    if (result.ok && postDeliveryUserMessages.length > 0) {
+      for (const postDeliveryUserMessage of postDeliveryUserMessages) {
+        await deps.dispatchPostCommandMessage?.(adapter, postDeliveryUserMessage);
+      }
     }
   }
 }

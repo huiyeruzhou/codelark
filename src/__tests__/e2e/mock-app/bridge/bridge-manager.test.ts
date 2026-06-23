@@ -176,33 +176,6 @@ describe('bridge-manager model prompt context', () => {
     ].join('\n'));
   });
 
-  it('appends cloud document chat binding context for group-backed document chats', () => {
-    const prompt = _testOnly.appendModelContextText(
-      '请看一下这份文档',
-      undefined,
-      _testOnly.buildCloudDocumentChatContextText({
-        id: 'binding-doc-chat',
-        channelType: 'feishu',
-        chatId: 'oc_doc_chat',
-        bridgeSessionId: 'session-doc-chat',
-        cloudDocumentChat: {
-          provider: 'feishu',
-          fileType: 'docx',
-          fileToken: 'doc-token',
-          commentId: 'comment-1',
-        },
-        createdAt: '2026-06-04T00:00:00.000Z',
-        updatedAt: '2026-06-04T00:00:00.000Z',
-      }),
-    );
-
-    assert.match(prompt, /<cloud_document_chat>/);
-    assert.match(prompt, /file_type：docx/);
-    assert.match(prompt, /file_token：doc-token/);
-    assert.match(prompt, /comment_id：comment-1/);
-    assert.match(prompt, /bridge 提供的文档信息/);
-    assert.doesNotMatch(prompt, /lark-cli/);
-  });
 });
 
 function installFakeTmux(): { binDir: string; logPath: string } {

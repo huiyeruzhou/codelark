@@ -58,6 +58,27 @@ function deriveCloudDocumentGroupName(cloudDocument: CloudDocumentAddress): stri
   return `doc:${titleSegment || cloudDocument.fileToken.slice(0, 8)}`;
 }
 
+function buildCloudDocumentBootstrapPrompt(cloudDocument: CloudDocumentAddress): string {
+  const docHost = cloudDocument.provider === 'feishu' ? 'https://feishu.cn' : '';
+  const docUrl = docHost ? `${docHost}/${cloudDocument.fileType}/${cloudDocument.fileToken}` : '';
+  return [
+    '这是一条云文档群聊初始化消息，只需要在当前会话中记住这些上下文。',
+    '',
+    '当前群聊已绑定为飞书云文档聊天入口。',
+    '文档信息：',
+    cloudDocument.title ? `- 标题：${cloudDocument.title}` : '',
+    docUrl ? `- 链接：${docUrl}` : '',
+    `- file_type：${cloudDocument.fileType}`,
+    `- file_token：${cloudDocument.fileToken}`,
+    '',
+    '后续从云文档评论转发来的用户消息，会作为当前群聊里的正常用户输入处理。',
+    '如果用户要求你进行改进、重写、润色、扩写、压缩、调整结构或修改文章内容，请直接改写到当前云文档里；不要只在聊天里给出一份需要用户手动复制的版本，除非你确实没有云文档写入能力或用户明确要求只给文本建议。',
+    '如果缺少完整正文上下文，请先说明需要系统侧补充文档读取/写入能力，或基于已提供的评论选区继续处理。',
+    '',
+    '这条初始化消息不需要展开回答；如果必须回复，请只回复“已记录云文档上下文”。',
+  ].filter(Boolean).join('\n');
+}
+
 function setSessionCodexProviderToml(sessionId: string, provider: Exclude<InheritedCodexProvider, undefined>): void {
   createConfigService({ migrate: false }).set(
     { kind: 'session', sessionId },
@@ -204,7 +225,8 @@ export async function handleNewSessionCommand(options: {
         '这个群聊已绑定为云文档聊天入口。',
         cloudDocument.title ? `标题：${cloudDocument.title}` : '',
         `文档：${cloudDocument.fileType}/${cloudDocument.fileToken}`,
-        cloudDocument.initialPrompt ? '首条云文档评论会作为第一条用户输入发送给模型。' : '',
+        '云文档上下文会在聊天开始时发送给模型一次。',
+        cloudDocument.initialPrompt ? '首条云文档评论会随后作为用户输入发送给模型。' : '',
         '接下来请直接在这个群聊里聊天；后续云文档评论会转发到本群。',
       ].filter(Boolean).join('\n'),
       { sessionId: binding.bridgeSessionId },
@@ -225,11 +247,20 @@ export async function handleNewSessionCommand(options: {
       ),
       afterDelivery: () => options.adapter.notifyGroupChatCreated?.(groupAddress, groupChat),
       postDeliveryCurrentAddress: groupAddress,
-      postDeliveryUserMessage: cloudDocument.initialPrompt ? {
-        address: groupAddress,
-        text: cloudDocument.initialPrompt,
-        messageId: `doc-initial:${cloudDocument.fileToken}:${cloudDocument.commentId}:${cloudDocument.replyId || Date.now()}`,
-      } : undefined,
+      postDeliveryUserMessages: [
+        {
+          address: groupAddress,
+          text: buildCloudDocumentBootstrapPrompt(cloudDocument),
+          messageId: `doc-bootstrap:${cloudDocument.fileToken}`,
+        },
+        ...(cloudDocument.initialPrompt
+          ? [{
+              address: groupAddress,
+              text: cloudDocument.initialPrompt,
+              messageId: `doc-initial:${cloudDocument.fileToken}:${cloudDocument.commentId}:${cloudDocument.replyId || Date.now()}`,
+            }]
+          : []),
+      ],
     };
   }
 

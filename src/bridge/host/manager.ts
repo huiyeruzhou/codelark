@@ -3155,23 +3155,6 @@ function formatAgentQuestionAnswer(agentQuestion: { question: string; answer: st
   ].filter(Boolean).join('\n') || agentQuestion.answer;
 }
 
-function buildCloudDocumentChatContextText(binding?: ChannelChat | null): string {
-  const cloudDocument = binding?.cloudDocumentChat;
-  if (!cloudDocument) return '';
-  const docHost = cloudDocument.provider === 'feishu' ? 'https://feishu.cn' : '';
-  const docUrl = docHost ? `${docHost}/${cloudDocument.fileType}/${cloudDocument.fileToken}` : '';
-  return [
-    '<cloud_document_chat>',
-    '这个群聊已绑定为飞书云文档聊天入口。回答用户问题时，请结合 bridge 提供的文档信息、后续转发评论和群聊上下文。',
-    '文档信息：',
-    docUrl ? `- 链接：${docUrl}` : '',
-    `- file_type：${cloudDocument.fileType}`,
-    `- file_token：${cloudDocument.fileToken}`,
-    cloudDocument.commentId ? `- comment_id：${cloudDocument.commentId}` : '',
-    '</cloud_document_chat>',
-  ].filter(Boolean).join('\n');
-}
-
 function appendModelContextText(text: string, ...contextTexts: Array<string | undefined>): string {
   const trimmedContext = contextTexts.map((contextText) => contextText?.trim()).filter(Boolean).join('\n\n');
   if (!trimmedContext) return text;
@@ -3731,7 +3714,6 @@ async function handleMessage(
     const tmuxModelText = appendModelContextText(
       modelText,
       msg.contextText,
-      buildCloudDocumentChatContextText(tmuxProviderChat),
     );
     const { text, truncated } = sanitizeInput(tmuxModelText);
     if (truncated) {
@@ -3841,7 +3823,6 @@ async function handleMessage(
     const promptText = appendModelContextText(
       modelText,
       msg.contextText,
-      buildCloudDocumentChatContextText(terminalAppendBinding),
     );
     const { text, truncated } = sanitizeInput(promptText);
     if (truncated) {
@@ -3900,11 +3881,9 @@ async function handleMessage(
   }
 
   // Sanitize general message text before routing to conversation engine
-  const generalBinding = store.getChannelChat(msg.address.channelType, msg.address.chatId);
   const fullModelText = appendModelContextText(
     modelText,
     msg.contextText,
-    buildCloudDocumentChatContextText(generalBinding),
   );
   const { text, truncated } = sanitizeInput(fullModelText);
   if (truncated) {
@@ -4141,7 +4120,6 @@ export const _testOnly = {
   adapterImmediateLane,
   isBridgeCommandText,
   toModelPromptText,
-  buildCloudDocumentChatContextText,
   appendModelContextText,
   resolveDisplayedModel,
   formatDisplayedModel,
