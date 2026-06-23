@@ -3314,7 +3314,7 @@ function scenarioFinalMessage(options: CliOptions): string {
       'file_type: <绑定文档类型>',
       'file_token: <绑定文档 token>',
       'marker: <文档正文里的 CODELARK_DOC_AS_CHAT marker>',
-      '不要从本条消息猜测 marker；如果不知道，请使用群聊上下文里的 lark-cli docs +fetch 命令读取文档。',
+      '不要从本条消息猜测 marker；如果 bridge 提供的云文档正文上下文不足，请直接说明系统侧缺少文档正文读取能力。',
     ].join('\n');
   }
   if (options.scenario === 'history-boundaries') return historyBoundariesPrompt(options);

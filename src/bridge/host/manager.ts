@@ -3162,15 +3162,12 @@ function buildCloudDocumentChatContextText(binding?: ChannelChat | null): string
   const docUrl = docHost ? `${docHost}/${cloudDocument.fileType}/${cloudDocument.fileToken}` : '';
   return [
     '<cloud_document_chat>',
-    '这个群聊已绑定为飞书云文档聊天入口。回答用户问题时，请结合这个绑定文档的上下文；如果需要读取正文，请优先使用 lark-cli。',
+    '这个群聊已绑定为飞书云文档聊天入口。回答用户问题时，请结合 bridge 提供的文档信息、后续转发评论和群聊上下文。',
     '文档信息：',
     docUrl ? `- 链接：${docUrl}` : '',
     `- file_type：${cloudDocument.fileType}`,
     `- file_token：${cloudDocument.fileToken}`,
     cloudDocument.commentId ? `- comment_id：${cloudDocument.commentId}` : '',
-    '可用命令：',
-    `- 读取：lark-cli docs +fetch --api-version v2 --as bot --doc ${cloudDocument.fileToken}`,
-    `- 追加：lark-cli docs +update --api-version v2 --as bot --doc ${cloudDocument.fileToken} --mode append --markdown '<内容>'`,
     '</cloud_document_chat>',
   ].filter(Boolean).join('\n');
 }

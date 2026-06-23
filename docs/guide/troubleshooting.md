@@ -137,7 +137,7 @@ codelark run
 - 新权限是否已经重新发布并审批。
 - bridge 是否在审批后重启。
 
-云文档转群聊还可能依赖 user auth scope。使用工作台或 setup 重新检查 `lark-cli` 登录和授权状态。
+云文档转群聊使用机器人 IM 建群能力，并会把评论用户加入新群；如果建群失败，检查 `im:chat`、`im:chat:create`、`im:chat:read`、`im:chat:update` 等机器人权限和应用发布审批状态。
 
 ## 卸载和清理
 

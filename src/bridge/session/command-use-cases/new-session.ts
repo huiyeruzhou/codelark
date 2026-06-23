@@ -152,10 +152,12 @@ export async function handleNewSessionCommand(options: {
 
     ensureWorkingDirectoryExists(workDir);
     let groupChat: Awaited<ReturnType<NonNullable<BaseChannelAdapter['createGroupChat']>>>;
+    const operatorUserId = cloudDocument.operatorId || options.msg.address.userId;
     try {
       groupChat = await options.adapter.createGroupChat({
         name: documentChatName,
-        createAs: 'user',
+        ownerUserId: operatorUserId,
+        userIds: operatorUserId ? [operatorUserId] : [],
       });
     } catch (error) {
       return { response: `创建云文档群聊失败：${error instanceof Error ? error.message : String(error)}` };

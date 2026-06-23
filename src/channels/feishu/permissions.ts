@@ -29,7 +29,7 @@ export const FEISHU_BASE_TENANT_SCOPES: FeishuPermissionRequirement[] = [
   { scope: 'im:chat', reason: 'Create and manage bridge group chats.' },
   { scope: 'im:chat:read', reason: 'Read group metadata and receive group lifecycle events.' },
   { scope: 'im:chat:create', reason: 'Create group-backed bridge sessions as the bot.' },
-  { scope: 'im:chat:create_by_user', reason: 'Create doc-to-chat groups with a user owner when needed.' },
+  { scope: 'im:chat:create_by_user', reason: 'Allow bot OpenAPI chat creation with a designated user owner when required.' },
   { scope: 'im:chat:update', reason: 'Rename group-backed bridge sessions.' },
   { scope: 'im:resource', reason: 'Upload and send IM image/file resources.' },
   { scope: 'cardkit:card:write', reason: 'Create and update streaming CardKit cards.' },
@@ -43,12 +43,12 @@ export const FEISHU_DOC_TO_CHAT_TENANT_SCOPES: FeishuPermissionRequirement[] = [
 ];
 
 export const FEISHU_DOC_TO_CHAT_USER_AUTH_SCOPES: FeishuPermissionRequirement[] = [
-  { scope: 'im:chat', reason: 'Let lark-cli create doc-to-chat groups as the signed-in user.' },
-  { scope: 'im:chat:read', reason: 'Let lark-cli inspect created group state during setup and diagnostics.' },
-  { scope: 'im:chat:delete', reason: 'Let lark-cli clean up user-created doc-to-chat groups.' },
-  { scope: 'docs:document.comment:read', reason: 'Let lark-cli inspect document comments for doc-to-chat diagnostics.' },
-  { scope: 'docs:document.comment:create', reason: 'Let lark-cli create document comments in real doc-to-chat flows.' },
-  { scope: 'docs:document.comment:write_only', reason: 'Let lark-cli write document comments and reactions where supported.' },
+  { scope: 'im:chat', reason: 'Support user-perspective real Feishu E2E chat setup and diagnostics.' },
+  { scope: 'im:chat:read', reason: 'Inspect created group state during setup and diagnostics.' },
+  { scope: 'im:chat:delete', reason: 'Clean up user-created real Feishu E2E groups.' },
+  { scope: 'docs:document.comment:read', reason: 'Inspect document comments for doc-to-chat diagnostics.' },
+  { scope: 'docs:document.comment:create', reason: 'Create document comments in real doc-to-chat E2E flows.' },
+  { scope: 'docs:document.comment:write_only', reason: 'Write document comments and reactions where supported.' },
 ];
 
 export const FEISHU_REQUIRED_EVENTS: FeishuEventRequirement[] = [

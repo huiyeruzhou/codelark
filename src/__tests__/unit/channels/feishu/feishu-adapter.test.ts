@@ -222,19 +222,8 @@ describe('feishu-adapter structured streaming regions', () => {
     }
   });
 
-  it('creates cloud document groups through lark-cli user identity', async () => {
-    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-lark-cli-user-group-'));
-    const argsPath = path.join(tempDir, 'args.json');
-    const npxPath = path.join(tempDir, 'npx');
-    fs.writeFileSync(npxPath, `#!/usr/bin/env bash
-node -e "require('fs').writeFileSync(process.argv[1], JSON.stringify(process.argv.slice(2)))" "${argsPath}" "$@"
-printf '{"ok":true,"data":{"chat_id":"oc_user_created"}}\\n'
-`, 'utf-8');
-    fs.chmodSync(npxPath, 0o755);
-    const originalPath = process.env.PATH;
-    const originalNodeOptions = process.env.NODE_OPTIONS;
-    process.env.PATH = `${tempDir}${path.delimiter}${originalPath || ''}`;
-    process.env.NODE_OPTIONS = '--use-env-proxy';
+  it('creates cloud document groups through bot OpenAPI and invites the comment user', async () => {
+    const createdPayloads: Array<Record<string, any>> = [];
     const adapter = new FeishuAdapter({
       id: 'feishu-default',
       provider: 'feishu',
@@ -246,30 +235,31 @@ printf '{"ok":true,"data":{"chat_id":"oc_user_created"}}\\n'
       },
     });
     (adapter as any).botName = 'BotName';
+    (adapter as any).botId = 'cli_bridge_bot';
+    (adapter as any).restClient = {
+      im: {
+        chat: {
+          create: async (payload: Record<string, any>) => {
+            createdPayloads.push(payload);
+            return { code: 0, msg: 'success', data: { chat_id: 'oc_user_created', name: '[BotName]doc review' } };
+          },
+        },
+      },
+    };
 
-    try {
-      const created = await adapter.createGroupChat({
-        name: 'doc review',
-        createAs: 'user',
-        ownerUserId: 'ou_app_scoped_user',
-        userIds: ['ou_app_scoped_user'],
-      });
+    const created = await adapter.createGroupChat({
+      name: 'doc review',
+      ownerUserId: 'ou_app_scoped_user',
+      userIds: ['ou_app_scoped_user'],
+    });
 
-      assert.equal(created.chatId, 'oc_user_created');
-      assert.equal(created.name, '[BotName]doc review');
-      const args = JSON.parse(fs.readFileSync(argsPath, 'utf-8')) as string[];
-      assert.deepEqual(args.slice(0, 6), ['lark-cli', 'im', '+chat-create', '--as', 'user', '--chat-mode']);
-      assert.ok(args.includes('--bots'));
-      assert.equal(args[args.indexOf('--bots') + 1], 'cli_bridge_bot');
-      assert.ok(args.includes('--name'));
-      assert.equal(args[args.indexOf('--name') + 1], '[BotName]doc review');
-      assert.equal(args.includes('ou_app_scoped_user'), false);
-    } finally {
-      process.env.PATH = originalPath;
-      if (originalNodeOptions === undefined) delete process.env.NODE_OPTIONS;
-      else process.env.NODE_OPTIONS = originalNodeOptions;
-      fs.rmSync(tempDir, { recursive: true, force: true });
-    }
+    assert.equal(created.chatId, 'oc_user_created');
+    assert.equal(created.name, '[BotName]doc review');
+    assert.equal(createdPayloads.length, 1);
+    assert.equal(createdPayloads[0].data.name, '[BotName]doc review');
+    assert.equal(createdPayloads[0].data.owner_id, 'ou_app_scoped_user');
+    assert.deepEqual(createdPayloads[0].data.user_id_list, ['ou_app_scoped_user']);
+    assert.deepEqual(createdPayloads[0].data.bot_id_list, ['cli_bridge_bot']);
   });
 
   it('falls back to the default group avatar when bot avatar upload fails', async () => {

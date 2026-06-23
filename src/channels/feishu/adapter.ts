@@ -16,10 +16,8 @@
  */
 
 import crypto from 'crypto';
-import { execFile } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
-import { promisify } from 'node:util';
 import * as lark from '@larksuiteoapi/node-sdk';
 import { HttpsProxyAgent } from 'https-proxy-agent';
 import type {
@@ -85,7 +83,6 @@ const MAX_FILE_SIZE = 20 * 1024 * 1024;
 
 /** Feishu emoji type for completed tasks. */
 const COMPLETED_EMOJI = 'DONE';
-const execFileAsync = promisify(execFile);
 /** Feishu emoji type for failed tasks. */
 const ERROR_EMOJI = 'WAIL';
 export const FEISHU_GROUP_AUTHORIZED_CALLBACK_DATA = 'clk-feishu-group-authorized';
@@ -435,28 +432,6 @@ function firstEnvValue(env: EnvLike, keys: string[]): string | undefined {
   for (const key of keys) {
     const value = env[key]?.trim();
     if (value) return value;
-  }
-  return undefined;
-}
-
-function findFeishuChatIdInJson(value: unknown): string | undefined {
-  if (!value || typeof value !== 'object') return undefined;
-  if (Array.isArray(value)) {
-    for (const item of value) {
-      const found = findFeishuChatIdInJson(item);
-      if (found) return found;
-    }
-    return undefined;
-  }
-  const record = value as Record<string, unknown>;
-  for (const key of ['chat_id', 'chatId']) {
-    if (typeof record[key] === 'string' && record[key].startsWith('oc_')) {
-      return record[key];
-    }
-  }
-  for (const item of Object.values(record)) {
-    const found = findFeishuChatIdInJson(item);
-    if (found) return found;
   }
   return undefined;
 }
@@ -2390,10 +2365,6 @@ export class FeishuAdapter extends BaseChannelAdapter {
     const configError = this.validateConfig();
     if (configError) throw new Error(configError);
 
-    if (options.createAs === 'user') {
-      return this.createGroupChatAsLarkCliUser(options);
-    }
-
     const restClient = this.restClient || new lark.Client({
       appId: this.appId,
       appSecret: this.appSecret,
@@ -2463,61 +2434,6 @@ export class FeishuAdapter extends BaseChannelAdapter {
     });
     if (!result.ok) {
       console.warn('[feishu-adapter] Failed to send group authorization card:', result.error || result.httpStatus);
-    }
-  }
-
-  private async createGroupChatAsLarkCliUser(options: CreateGroupChatOptions): Promise<CreatedGroupChat> {
-    const requestedName = options.name.trim();
-    if (!requestedName) throw new Error('Group name is required.');
-    const groupName = this.formatBotPrefixedGroupName(requestedName);
-    const appId = this.appId;
-    if (!appId) throw new Error('Feishu App ID 未配置，无法邀请 bridge bot 入群。');
-
-    const args = [
-      'lark-cli',
-      'im',
-      '+chat-create',
-      '--as',
-      'user',
-      '--chat-mode',
-      'group',
-      '--type',
-      'private',
-      '--name',
-      groupName,
-      '--bots',
-      appId,
-      '--format',
-      'json',
-    ];
-
-    try {
-      const env = { ...process.env };
-      delete env.NODE_OPTIONS;
-      const { stdout, stderr } = await execFileAsync('npx', args, {
-        env,
-        encoding: 'utf8',
-        maxBuffer: 10 * 1024 * 1024,
-      });
-      if (stderr.trim()) {
-        console.warn('[feishu-adapter] lark-cli user chat create stderr:', stderr.trim());
-      }
-      const parsed = JSON.parse(stdout || '{}');
-      const chatId = findFeishuChatIdInJson(parsed);
-      if (!chatId) {
-        throw new Error(`lark-cli 未返回 chat_id: ${stdout.slice(0, 1000)}`);
-      }
-      return {
-        chatId,
-        chatKind: 'group',
-        name: groupName,
-      };
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      throw new Error([
-        `使用 lark-cli user 身份创建云文档群聊失败：${message}`,
-        '请确认当前机器已执行 lark-cli auth login，并具备 im:chat / im:message.send_as_user 等用户身份权限。',
-      ].join('\n'));
     }
   }
 
@@ -6752,11 +6668,7 @@ export class FeishuAdapter extends BaseChannelAdapter {
       '',
       `用户的问题：${context.question}`,
       '',
-      '需要读取或修改文档正文时，可以直接使用 lark-cli：',
-      `- 读取：lark-cli docs +fetch --api-version v2 --as bot --doc ${target.fileToken}`,
-      `- 追加：lark-cli docs +update --api-version v2 --as bot --doc ${target.fileToken} --mode append --markdown '<内容>'`,
-      `- 按标题/选区替换：lark-cli docs +update --api-version v2 --as bot --doc ${target.fileToken} --mode replace_range --selection-by-title '<标题>' --markdown '<内容>'`,
-      '如果 lark-cli 提示权限不足，请在回复中明确说明需要给机器人或应用补充对应云文档权限。',
+      'bridge 已提供评论正文、选区原文和文档标识；如果缺少完整正文上下文，请直接说明需要用户补充或让系统侧补充文档读取能力，不要要求用户手动运行命令。',
       '',
       '回复要求：直接回答用户问题；不要输出 XML 标签。',
     ].filter(Boolean);

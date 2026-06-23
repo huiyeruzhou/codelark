@@ -325,7 +325,14 @@ function createGroupCapableAdapter(options: {
   groupPrefix?: string;
 } = {}): any {
   const sent = options.sent || [];
-  const createdGroups: Array<{ chatId: string; chatKind: 'group'; name: string; requestedName: string; createAs?: string }> = [];
+  const createdGroups: Array<{
+    chatId: string;
+    chatKind: 'group';
+    name: string;
+    requestedName: string;
+    ownerUserId?: string;
+    userIds?: string[];
+  }> = [];
   const renamedGroups: Array<{ chatId: string; name: string }> = [];
   return {
     channelType: options.channelType || 'feishu',
@@ -337,13 +344,14 @@ function createGroupCapableAdapter(options: {
       sent.push(message);
       return { ok: true, messageId: `reply-${sent.length}` };
     },
-    createGroupChat: async (input: { name: string; createAs?: string }) => {
+    createGroupChat: async (input: { name: string; ownerUserId?: string; userIds?: string[] }) => {
       const group = {
         chatId: `created-group-${createdGroups.length + 1}`,
         chatKind: 'group' as const,
         name: `${options.groupPrefix || '[TestBot]'}${input.name}`,
         requestedName: input.name,
-        createAs: input.createAs,
+        ownerUserId: input.ownerUserId,
+        userIds: input.userIds,
       };
       createdGroups.push(group);
       return group;
@@ -2963,7 +2971,8 @@ enabled = true
     );
 
     assert.equal(adapter.createdGroups[0]?.requestedName, 'doc:需求评审云文档');
-    assert.equal(adapter.createdGroups[0]?.createAs, 'user');
+    assert.equal(adapter.createdGroups[0]?.ownerUserId, 'ou_user');
+    assert.deepEqual(adapter.createdGroups[0]?.userIds, ['ou_user']);
     const groupChatId = adapter.createdGroups[0]?.chatId;
     const binding = store.getChannelChat('feishu', groupChatId);
     assert.ok(binding);

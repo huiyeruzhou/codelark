@@ -60,7 +60,7 @@
 
 > **云文档评论：** `drive.notice.comment_add_v1` 只负责让 bridge 收到评论事件；回复云文档评论和提前添加 `Typing` reaction 还需要文档评论写权限。如果缺少 `docs:document.comment:create` 或 `docs:document.comment:write_only`，飞书会返回 `99991672`。
 
-> **setup 用户授权：** `codelark setup` 只以 `~/.codelark/config.toml` 中的当前 App 为准；旧版 `config.json` / `config.env` 仅作为首次迁移输入。已有 App 配置时直接加载；没有 App 配置时通过开放平台扫码创建，`App ID` / `App Secret` 来自扫码返回结果。保存后，setup 会初始化 `~/.codelark/runtime/lark-cli/`，在这个 CodeLark 专属配置里执行 `auth check --scope "docs:document.comment:create docs:document.comment:read docs:document.comment:write_only im:chat im:chat:delete im:chat:read"`，缺少授权时再发起同 App 的用户 OAuth 扫码。整个过程不会读取或导入用户 HOME 下默认 `~/.lark-cli`。控制台里的 tenant 权限和事件订阅仍需要按本页配置、发布并审批。
+> **setup 用户授权：** `codelark setup` 只以 `~/.codelark/config.toml` 中的当前 App 为准；旧版 `config.json` / `config.env` 仅作为首次迁移输入。已有 App 配置时直接加载；没有 App 配置时通过开放平台扫码创建，`App ID` / `App Secret` 来自扫码返回结果。setup 仍会初始化 `~/.codelark/runtime/lark-cli/` 供本地工具和真实 E2E 使用，但生产 bridge 的云文档建群路径走机器人 OpenAPI，不依赖用户身份 CLI。整个过程不会读取或导入用户 HOME 下默认 `~/.lark-cli`。控制台里的 tenant 权限和事件订阅仍需要按本页配置、发布并审批。
 
 **步骤 B：启用机器人**
 
