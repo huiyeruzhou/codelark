@@ -2,10 +2,11 @@ import type { BaseChannelAdapter } from '../../../channels/contracts.js';
 import { deliverBridgeNotice } from '../../../channels/delivery/feedback.js';
 import { DEFAULT_WORKSPACE_ROOT } from '../../../configuration/paths.js';
 import { createConfigService } from '../../../configuration/service.js';
-import type { BridgeSession, BridgeStore, ChannelChat, InboundMessage } from '../../../domain/index.js';
+import type { BridgeSession, BridgeStore, ChannelChat, CloudDocumentAddress, InboundMessage } from '../../../domain/index.js';
 import {
   getSessionWorkingDirectory,
 } from '../../../domain/session-runtime.js';
+import { validateWorkingDirectory } from '../../../shared/security/validators.js';
 import * as router from '../channel-router.js';
 import {
   ensureWorkingDirectoryExists,
@@ -35,6 +36,27 @@ import { auditCommandBindingChange } from './thread-targets.js';
 import type { SessionCommandDeps, SessionCommandResult } from './types.js';
 
 type InheritedCodexProvider = ReturnType<typeof getSessionCodexProviderOverride>;
+
+const CLOUD_DOCUMENT_GROUP_TITLE_CHARS = 8;
+
+function resolveDefaultWorkspaceRootForCloudDocument(): { ok: true; workDir: string } | { ok: false; message: string } {
+  const root = getWorkspaceRoot() || DEFAULT_WORKSPACE_ROOT;
+  const validated = validateWorkingDirectory(root);
+  if (validated) return { ok: true, workDir: validated };
+  return { ok: false, message: '全局默认工作目录无效，请先用 `/set defaultWorkspaceRoot <目录>` 设置有效目录。' };
+}
+
+function compactCloudDocumentTitle(title: string | undefined): string {
+  const compacted = (title || '')
+    .replace(/\s+/g, '')
+    .replace(/[<>:"/\\|?*\x00-\x1f\x7f]/g, '');
+  return Array.from(compacted).slice(0, CLOUD_DOCUMENT_GROUP_TITLE_CHARS).join('');
+}
+
+function deriveCloudDocumentGroupName(cloudDocument: CloudDocumentAddress): string {
+  const titleSegment = compactCloudDocumentTitle(cloudDocument.title);
+  return `doc:${titleSegment || cloudDocument.fileToken.slice(0, 8)}`;
+}
 
 function setSessionCodexProviderToml(sessionId: string, provider: Exclude<InheritedCodexProvider, undefined>): void {
   createConfigService({ migrate: false }).set(
@@ -120,14 +142,10 @@ export async function handleNewSessionCommand(options: {
       };
     }
 
-    const resolved = newSessionArgs.pathArgs.trim()
-      ? resolveNewSessionWorkingDirectory(newSessionArgs.pathArgs, options.commandBinding, currentSession)
-      : currentSession
-        ? resolveNewSessionWorkingDirectory('', options.commandBinding, currentSession)
-        : { ok: true as const, workDir: getWorkspaceRoot() || DEFAULT_WORKSPACE_ROOT };
+    const resolved = resolveDefaultWorkspaceRootForCloudDocument();
     if (!resolved.ok) return { response: resolved.message };
     const workDir = resolved.workDir;
-    let documentChatName = newSessionName || `文档聊天-${cloudDocument.fileToken.slice(0, 8)}`;
+    let documentChatName = deriveCloudDocumentGroupName(cloudDocument);
     const validatedName = validateNewSessionName(documentChatName);
     if (!validatedName.ok) return { response: validatedName.message };
     documentChatName = validatedName.name;
@@ -182,9 +200,10 @@ export async function handleNewSessionCommand(options: {
       groupAddress,
       [
         '这个群聊已绑定为云文档聊天入口。',
+        cloudDocument.title ? `标题：${cloudDocument.title}` : '',
         `文档：${cloudDocument.fileType}/${cloudDocument.fileToken}`,
         '接下来请直接在这个群聊里聊天；后续云文档评论会转发到本群。',
-      ].join('\n'),
+      ].filter(Boolean).join('\n'),
       { sessionId: binding.bridgeSessionId },
     );
     return {
@@ -195,6 +214,7 @@ export async function handleNewSessionCommand(options: {
           ['chat_id', groupChat.chatId],
           ['Session', binding.bridgeSessionId],
           ['目录', formatCommandPath(getSessionWorkingDirectory(session) || workDir)],
+          ...(cloudDocument.title ? [['标题', cloudDocument.title] as [string, string]] : []),
           ['文档', `${cloudDocument.fileType}/${cloudDocument.fileToken}`],
         ],
         ['请到已创建的群聊继续聊天；后续云文档评论会转发到这个群聊。'],

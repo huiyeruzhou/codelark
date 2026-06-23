@@ -349,7 +349,7 @@ printf '{"ok":true,"data":{"chat_id":"oc_user_created"}}\\n'
     assert.deepEqual(updatePayloads[0].data, { name: '[BotName]新群名' });
   });
 
-  it('turns first mentioned cloud document comments into default /new commands', async () => {
+  it('turns first mentioned cloud document comments into an internal doc chat creation event', async () => {
     initBridgeTestContext();
     const reactionRequests: Array<Record<string, any>> = [];
     const adapter = new FeishuAdapter({
@@ -408,6 +408,7 @@ printf '{"ok":true,"data":{"chat_id":"oc_user_created"}}\\n'
       file_token: 'doc-token',
       file_type: 'docx',
       comment_id: 'comment-1',
+      file: { name: '需求评审云文档' },
       reply_id: 'reply-1',
       operator_id: { open_id: 'ou_user' },
       mention_list: [{ id: { open_id: 'ou_bot' } }],
@@ -418,6 +419,7 @@ printf '{"ok":true,"data":{"chat_id":"oc_user_created"}}\\n'
     assert.equal(inbound.address.chatId, 'doc:docx:doc-token:comment:comment-1');
     assert.equal(inbound.address.cloudDocument?.fileToken, 'doc-token');
     assert.equal(inbound.address.cloudDocument?.commentId, 'comment-1');
+    assert.equal(inbound.address.cloudDocument?.title, '需求评审云文档');
     assert.equal(inbound.address.cloudDocument?.replyId, 'reply-1');
     assert.equal(inbound.address.cloudDocument?.typingReactionReplyId, 'reply-1');
     assert.equal(inbound.text, '/new');
@@ -447,6 +449,7 @@ printf '{"ok":true,"data":{"chat_id":"oc_user_created"}}\\n'
       file_token: 'doc-token',
       file_type: 'docx',
       comment_id: 'comment-1',
+      file: { title: '产品评审' },
       mention_list: [
         {
           mention_user: {
@@ -457,6 +460,7 @@ printf '{"ok":true,"data":{"chat_id":"oc_user_created"}}\\n'
     });
 
     assert.ok(target);
+    assert.equal(target.documentTitle, '产品评审');
     assert.equal(target.mentioned, true);
     assert.equal(target.mentionDiagnostics.mentionListSource, 'event.mention_list');
     assert.equal(target.mentionDiagnostics.mentionCandidates[0].candidates[0].path, 'mention[0].mention_user.bot_id');
@@ -599,7 +603,7 @@ printf '{"ok":true,"data":{"chat_id":"oc_user_created"}}\\n'
     assert.deepEqual(reactionRequests, []);
   });
 
-  it('turns mentioned /new cloud document comments into slash commands', async () => {
+  it('turns mentioned cloud document comments into the internal doc chat creation command', async () => {
     initBridgeTestContext();
     const adapter = new FeishuAdapter({
       id: 'feishu-default',
@@ -659,12 +663,12 @@ printf '{"ok":true,"data":{"chat_id":"oc_user_created"}}\\n'
 
     const inbound = await adapter.consumeOne();
     assert.ok(inbound);
-    assert.equal(inbound.text, '/new 需求评审');
+    assert.equal(inbound.text, '/new');
     assert.equal(inbound.address.chatId, 'doc:docx:doc-new-token:comment:comment-new');
     assert.equal(inbound.address.cloudDocument?.commentId, 'comment-new');
   });
 
-  it('turns mentioned cloud document comments into default /new commands', async () => {
+  it('turns mentioned cloud document comments into an internal doc chat creation event', async () => {
     initBridgeTestContext();
     const adapter = new FeishuAdapter({
       id: 'feishu-default',
@@ -797,7 +801,7 @@ printf '{"ok":true,"data":{"chat_id":"oc_user_created"}}\\n'
 
     const inbound = await adapter.consumeOne();
     assert.ok(inbound);
-    assert.equal(inbound.text, '/new 需求评审');
+    assert.equal(inbound.text, '/new');
     assert.equal(requests.length, 1);
     assert.match(requests[0].url, /\/open-apis\/drive\/v2\/files\/doc-new-token\/comments\/reaction\?file_type=docx/);
 

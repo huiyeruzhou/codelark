@@ -2924,7 +2924,7 @@ enabled = true
     assert.match(sent.at(-1)?.text || '', /当前会话/);
   });
 
-  it('creates a group-backed cloud document chat with /new from a document comment', async () => {
+  it('creates a group-backed cloud document chat from a document comment without user /new semantics', async () => {
     const store = initTestContext();
     const sent: any[] = [];
     const commentReplies: string[] = [];
@@ -2942,6 +2942,7 @@ enabled = true
         fileToken: 'doc-token',
         fileType: 'docx' as const,
         commentId: 'comment-1',
+        title: '需求评审云文档',
         replyId: 'reply-1',
       },
     };
@@ -2961,7 +2962,7 @@ enabled = true
       },
     );
 
-    assert.equal(adapter.createdGroups[0]?.requestedName, '需求评审');
+    assert.equal(adapter.createdGroups[0]?.requestedName, 'doc:需求评审云文档');
     assert.equal(adapter.createdGroups[0]?.createAs, 'user');
     const groupChatId = adapter.createdGroups[0]?.chatId;
     const binding = store.getChannelChat('feishu', groupChatId);
@@ -2971,6 +2972,10 @@ enabled = true
       fileToken: 'doc-token',
       fileType: 'docx',
     });
+    assert.equal(
+      path.resolve(getSessionWorkingDirectory(store.getSession(binding!.bridgeSessionId)) || ''),
+      path.resolve(DEFAULT_WORKSPACE_ROOT),
+    );
     assert.equal(sent[0]?.address.chatId, groupChatId);
     assert.match(sent[0]?.text || '', /已绑定为云文档聊天入口/);
     assert.equal(sent[1]?.address.chatId, groupChatId);
@@ -2978,6 +2983,57 @@ enabled = true
     assert.equal(commentReplies.length, 1);
     assert.match(commentReplies[0], /已开启云文档群聊模式/);
     assert.match(commentReplies[0], new RegExp(groupChatId));
+  });
+
+  it('derives cloud document chat defaults from the document comment when /new has no args', async () => {
+    const store = initTestContext();
+    const sent: any[] = [];
+    const commentReplies: string[] = [];
+    const adapter = createGroupCapableAdapter({ sent });
+    adapter.sendCloudDocumentReply = async (_target: unknown, text: string) => {
+      commentReplies.push(text);
+      return { ok: true, messageId: `doc-reply-${commentReplies.length}` };
+    };
+    const address = {
+      channelType: 'feishu',
+      chatId: 'doc:docx:doc-default-token',
+      userId: 'ou_user',
+      cloudDocument: {
+        provider: 'feishu' as const,
+        fileToken: 'doc-default-token',
+        fileType: 'docx' as const,
+        commentId: 'comment-default',
+        title: '需求评审云文档',
+      },
+    };
+
+    await handleBridgeCommand(
+      adapter,
+      {
+        address,
+        text: '/new',
+        messageId: 'incoming-doc-new-defaults',
+      } as any,
+      '/new',
+      {
+        getActiveTask: () => undefined,
+        diagnoseSessionHealth: async () => null,
+        diagnoseAllActiveSessions: async () => [],
+      },
+    );
+
+    assert.equal(adapter.createdGroups[0]?.requestedName, 'doc:需求评审云文档');
+    const groupChatId = adapter.createdGroups[0]?.chatId;
+    const binding = store.getChannelChat('feishu', groupChatId);
+    assert.ok(binding);
+    assert.equal(
+      path.resolve(getSessionWorkingDirectory(store.getSession(binding!.bridgeSessionId)) || ''),
+      path.resolve(DEFAULT_WORKSPACE_ROOT),
+    );
+    assert.equal(sent[0]?.address.chatId, groupChatId);
+    assert.match(sent[0]?.text || '', /标题：需求评审云文档/);
+    assert.equal(commentReplies.length, 1);
+    assert.match(commentReplies[0], /doc:需求评审云文档/);
   });
 
   it('updates the current session working directory with /cd and expands home paths', async () => {

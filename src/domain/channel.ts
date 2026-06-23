@@ -14,6 +14,7 @@ export interface CloudDocumentAddress {
   fileToken: string;
   fileType: 'doc' | 'docx' | 'sheet' | 'file';
   commentId: string;
+  title?: string;
   operatorId?: string;
   replyId?: string;
   typingReactionReplyId?: string;

@@ -479,7 +479,7 @@ export async function handleBridgeCommand(
       break;
 
     case '/new': {
-      if (!args.trim()) {
+      if (!args.trim() && !msg.address.cloudDocument) {
         response = '创建群聊会话：请输入名称和工作目录。';
         responseRichCard = buildNewSessionFormCard(commandBinding
           ? getSessionWorkingDirectory(store.getSession(commandBinding.bridgeSessionId)) || ''

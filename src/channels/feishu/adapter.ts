@@ -1521,6 +1521,7 @@ interface FeishuCommentTarget {
   fileToken: string;
   fileType: FeishuDocumentFileType;
   commentId: string;
+  documentTitle?: string;
   replyId?: string;
   eventId?: string;
   operatorId?: string;
@@ -6359,11 +6360,6 @@ export class FeishuAdapter extends BaseChannelAdapter {
       ? resolvedContext.targetReplyId
       : undefined;
     const messageId = `doc-comment:${resolvedTarget.fileToken}:${resolvedTarget.commentId}:${resolvedTarget.replyId || timestamp}`;
-    const questionText = resolvedContext.question.trim();
-    const isDocumentChatCommand = /^\/new(?:\s|$)/i.test(questionText);
-    const text = isDocumentChatCommand
-      ? questionText
-      : '/new';
     const inbound: InboundMessage = {
       messageId,
       address: {
@@ -6378,6 +6374,7 @@ export class FeishuAdapter extends BaseChannelAdapter {
           fileToken: resolvedTarget.fileToken,
           fileType: resolvedTarget.fileType,
           commentId: resolvedTarget.commentId,
+          title: resolvedTarget.documentTitle,
           operatorId: resolvedTarget.operatorId,
           replyId: resolvedTarget.replyId,
           typingReactionReplyId,
@@ -6385,7 +6382,7 @@ export class FeishuAdapter extends BaseChannelAdapter {
           quote: resolvedContext.quote,
         },
       },
-      text,
+      text: '/new',
       timestamp,
       raw: data,
     };
@@ -6407,7 +6404,7 @@ export class FeishuAdapter extends BaseChannelAdapter {
       messageId,
       chatId: docChatId,
       messageType: 'drive.notice.comment_add_v1',
-      text,
+      text: '/new',
       attachmentCount: 0,
     });
   }
@@ -6434,6 +6431,26 @@ export class FeishuAdapter extends BaseChannelAdapter {
       event.file?.file_type,
     ));
     const commentId = firstString(event.comment_id, event.commentId, meta.comment_id, meta.commentId);
+    const documentTitle = firstString(
+      event.file?.name,
+      event.file?.title,
+      event.file?.file_name,
+      event.file?.fileName,
+      event.file_name,
+      event.fileName,
+      event.title,
+      event.name,
+      event.obj_name,
+      event.objName,
+      meta.file_name,
+      meta.fileName,
+      meta.title,
+      meta.name,
+      root.file_name,
+      root.fileName,
+      root.title,
+      root.name,
+    ) || undefined;
     const replyId = firstString(event.reply_id, event.replyId, meta.reply_id, meta.replyId) || undefined;
     const eventId = firstString(header.event_id, root.event_id, root.eventId, event.event_id, event.eventId) || undefined;
     const operatorId = firstString(
@@ -6465,6 +6482,7 @@ export class FeishuAdapter extends BaseChannelAdapter {
       fileToken,
       fileType,
       commentId,
+      documentTitle,
       replyId,
       eventId,
       operatorId,
@@ -6543,7 +6561,7 @@ export class FeishuAdapter extends BaseChannelAdapter {
     if (!this.restClient) return target;
     try {
       const response = await this.withFeishuRequestTimeout<{
-        data?: { node?: { obj_token?: string; obj_type?: string } };
+        data?: { node?: { obj_token?: string; obj_type?: string; title?: string; name?: string } };
       }>(target.fileToken, 'wiki.space.getNode', () => this.restClient!.wiki.v2.space.getNode({
         params: { token: target.fileToken },
       }));
@@ -6554,6 +6572,7 @@ export class FeishuAdapter extends BaseChannelAdapter {
           ...target,
           fileToken: node.obj_token,
           fileType,
+          documentTitle: target.documentTitle || firstString(node.title, node.name) || undefined,
         };
       }
     } catch {
@@ -6722,6 +6741,7 @@ export class FeishuAdapter extends BaseChannelAdapter {
       '这是一条从已绑定云文档评论转发到群聊的用户消息。请在当前群聊中响应，不要尝试回写云文档评论。',
       '',
       '文档信息：',
+      target.documentTitle ? `- 标题：${target.documentTitle}` : '',
       `- 链接：${docUrl}`,
       `- file_token：${target.fileToken}`,
       `- file_type：${target.fileType}`,
@@ -6754,6 +6774,7 @@ export class FeishuAdapter extends BaseChannelAdapter {
       address,
       text: [
         '收到一条云文档评论，已转发到本群处理。',
+        target.documentTitle ? `标题：${target.documentTitle}` : '',
         `文档：${docHost}/${target.fileType}/${target.fileToken}`,
         `comment_id：${target.commentId}`,
         target.replyId ? `reply_id：${target.replyId}` : '',
