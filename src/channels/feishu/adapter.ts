@@ -6321,6 +6321,7 @@ export class FeishuAdapter extends BaseChannelAdapter {
           fileToken: resolvedTarget.fileToken,
           fileType: resolvedTarget.fileType,
           commentId: resolvedTarget.commentId,
+          initialPrompt: this.buildCloudDocumentPrompt(resolvedTarget, resolvedContext),
           title: resolvedTarget.documentTitle,
           operatorId: resolvedTarget.operatorId,
           replyId: resolvedTarget.replyId,

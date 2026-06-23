@@ -195,6 +195,9 @@ describe('feishu-adapter structured streaming regions', () => {
             return { code: 0, msg: 'success', data: { chat_id: 'oc_created', name: '[BotName]smoke' } };
           },
         },
+        chatMembers: {
+          create: async () => ({ code: 0, msg: 'success', data: {} }),
+        },
       },
     };
 
@@ -425,6 +428,8 @@ describe('feishu-adapter structured streaming regions', () => {
     assert.equal(inbound.address.cloudDocument?.title, '需求评审云文档');
     assert.equal(inbound.address.cloudDocument?.replyId, 'reply-1');
     assert.equal(inbound.address.cloudDocument?.typingReactionReplyId, 'reply-1');
+    assert.match(inbound.address.cloudDocument?.initialPrompt || '', /用户的问题：@机器人 请总结这一段/);
+    assert.match(inbound.address.cloudDocument?.initialPrompt || '', /用户选中的原文：\n> 被评论的原文/);
     assert.equal(inbound.text, '/new');
     assert.equal(reactionRequests.length, 1);
     assert.match(reactionRequests[0].url, /\/open-apis\/drive\/v2\/files\/doc-token\/comments\/reaction\?file_type=docx/);

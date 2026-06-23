@@ -18,6 +18,11 @@ export interface SessionCommandResult {
   threadTableCardScope?: ThreadCardScope;
   afterDelivery?: (messageId?: string) => Promise<void> | void;
   postDeliveryCurrentAddress?: ChannelAddress;
+  postDeliveryUserMessage?: {
+    address: ChannelAddress;
+    text: string;
+    messageId: string;
+  };
 }
 
 export async function reconcileMirrorSubscriptionsBestEffort(

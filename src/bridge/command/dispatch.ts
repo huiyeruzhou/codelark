@@ -183,6 +183,7 @@ export interface BridgeCommandDispatchDeps {
   shellRunner?: ShellCommandRunner;
   tmuxProviderAutoForward?: boolean;
   onTmuxProviderAutoForwarded?: () => Promise<void> | void;
+  dispatchPostCommandMessage?(adapter: BaseChannelAdapter, msg: InboundMessage): Promise<void>;
 }
 
 async function deliverCurrentCommandAfterNewSession(options: {
@@ -467,6 +468,7 @@ export async function handleBridgeCommand(
   let setConfigCard = false;
   let afterDelivery: ((messageId?: string) => Promise<void> | void) | undefined;
   let postDeliveryCurrentAddress: ChannelAddress | undefined;
+  let postDeliveryUserMessage: InboundMessage | undefined;
   const currentBinding = deps.scopedBinding || store.getChannelChat(msg.address.channelType, msg.address.chatId);
   const shouldApplyDefaultTargetForCommand = !new Set(['/status', '/threads', '/t', '/set']).has(command);
   const commandBinding = !shouldApplyDefaultTargetForCommand
@@ -501,6 +503,14 @@ export async function handleBridgeCommand(
         threadTableCardScope = result.threadTableCardScope;
         afterDelivery = result.afterDelivery;
         postDeliveryCurrentAddress = result.postDeliveryCurrentAddress;
+        if (result.postDeliveryUserMessage) {
+          postDeliveryUserMessage = {
+            address: result.postDeliveryUserMessage.address,
+            text: result.postDeliveryUserMessage.text,
+            messageId: result.postDeliveryUserMessage.messageId,
+            timestamp: Date.now(),
+          };
+        }
       }
       break;
     }
@@ -1079,6 +1089,9 @@ export async function handleBridgeCommand(
         threadDisplay,
         markdown: responseParseMode === 'Markdown',
       });
+    }
+    if (result.ok && postDeliveryUserMessage) {
+      await deps.dispatchPostCommandMessage?.(adapter, postDeliveryUserMessage);
     }
   }
 }

@@ -2936,6 +2936,7 @@ enabled = true
     const store = initTestContext();
     const sent: any[] = [];
     const commentReplies: string[] = [];
+    const postCommandMessages: any[] = [];
     const adapter = createGroupCapableAdapter({ sent });
     adapter.sendCloudDocumentReply = async (_target: unknown, text: string) => {
       commentReplies.push(text);
@@ -2950,6 +2951,7 @@ enabled = true
         fileToken: 'doc-token',
         fileType: 'docx' as const,
         commentId: 'comment-1',
+        initialPrompt: '用户的问题：请总结这段云文档评论',
         title: '需求评审云文档',
         replyId: 'reply-1',
       },
@@ -2967,6 +2969,9 @@ enabled = true
         getActiveTask: () => undefined,
         diagnoseSessionHealth: async () => null,
         diagnoseAllActiveSessions: async () => [],
+        dispatchPostCommandMessage: async (_targetAdapter, postCommandMessage) => {
+          postCommandMessages.push(postCommandMessage);
+        },
       },
     );
 
@@ -2987,8 +2992,13 @@ enabled = true
     );
     assert.equal(sent[0]?.address.chatId, groupChatId);
     assert.match(sent[0]?.text || '', /已绑定为云文档聊天入口/);
+    assert.match(sent[0]?.text || '', /首条云文档评论会作为第一条用户输入发送给模型/);
     assert.equal(sent[1]?.address.chatId, groupChatId);
     assert.match(sent[1]?.text || '', /当前会话/);
+    assert.equal(postCommandMessages.length, 1);
+    assert.equal(postCommandMessages[0]?.address.chatId, groupChatId);
+    assert.equal(postCommandMessages[0]?.text, '用户的问题：请总结这段云文档评论');
+    assert.match(postCommandMessages[0]?.messageId || '', /^doc-initial:doc-token:comment-1:reply-1$/);
     assert.equal(commentReplies.length, 1);
     assert.match(commentReplies[0], /已开启云文档群聊模式/);
     assert.match(commentReplies[0], new RegExp(groupChatId));

@@ -4009,6 +4009,7 @@ async function handleCommand(
     selectedThenTaskAction: options.selectedThenTaskAction,
     tmuxProviderAutoForward: options.tmuxProviderAutoForward,
     onTmuxProviderAutoForwarded: options.onTmuxProviderAutoForwarded,
+    dispatchPostCommandMessage: (targetAdapter, postCommandMessage) => handleMessage(targetAdapter, postCommandMessage),
     startEveryTask,
     stopEveryTask,
     startThenTask,
