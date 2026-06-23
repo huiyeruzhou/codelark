@@ -61,7 +61,6 @@ export interface CreateGroupChatOptions {
   name: string;
   ownerUserId?: string;
   userIds?: string[];
-  createAs?: 'bot' | 'user';
 }
 
 export abstract class BaseChannelAdapter {

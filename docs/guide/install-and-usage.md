@@ -92,9 +92,9 @@ codelark stop
 - 从当前启用的飞书/Lark 通道生成 `~/.codelark/runtime/lark-cli-source/config.json`。
 - 将 lark-cli 绑定到 `~/.codelark/runtime/lark-cli/`。
 - 如果 CodeLark 专属 runtime 已有当前 App 的用户授权，则切换为 user-default；否则保持 bot-only，直到用户在 setup 中完成授权。
-- 给 bridge 和 agent 子进程注入 `LARK_CHANNEL_CONFIG` 与 `LARKSUITE_CLI_CONFIG_DIR`。
+- 给 bridge 及其子进程注入 `LARK_CHANNEL_CONFIG` 与 `LARKSUITE_CLI_CONFIG_DIR`，供 setup、诊断和真实 E2E 工具使用。
 
-这样 bridge 内部和 agent 调用 `lark-cli` 时会使用 CodeLark 当前配置，不会误读默认用户 HOME 下的其他 lark-cli 配置。旧版 `codelark open` 仍作为兼容别名可用，但文档和脚本统一使用 `run`。
+生产 bridge 的云文档评论建群路径直接走机器人 OpenAPI，不要求模型或用户手动执行 `lark-cli`；保留的私有 runtime 只服务 setup、诊断和真实 E2E 工具，不会误读默认用户 HOME 下的其他 lark-cli 配置。旧版 `codelark open` 仍作为兼容别名可用，但文档和脚本统一使用 `run`。
 
 默认工作台地址：
 

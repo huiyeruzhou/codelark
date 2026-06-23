@@ -200,7 +200,8 @@ describe('bridge-manager model prompt context', () => {
     assert.match(prompt, /file_type：docx/);
     assert.match(prompt, /file_token：doc-token/);
     assert.match(prompt, /comment_id：comment-1/);
-    assert.match(prompt, /lark-cli docs \+fetch/);
+    assert.match(prompt, /bridge 提供的文档信息/);
+    assert.doesNotMatch(prompt, /lark-cli/);
   });
 });
 
