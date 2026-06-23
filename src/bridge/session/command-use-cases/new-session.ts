@@ -204,6 +204,7 @@ export async function handleNewSessionCommand(options: {
         '这个群聊已绑定为云文档聊天入口。',
         cloudDocument.title ? `标题：${cloudDocument.title}` : '',
         `文档：${cloudDocument.fileType}/${cloudDocument.fileToken}`,
+        cloudDocument.initialPrompt ? '首条云文档评论会作为第一条用户输入发送给模型。' : '',
         '接下来请直接在这个群聊里聊天；后续云文档评论会转发到本群。',
       ].filter(Boolean).join('\n'),
       { sessionId: binding.bridgeSessionId },
@@ -224,6 +225,11 @@ export async function handleNewSessionCommand(options: {
       ),
       afterDelivery: () => options.adapter.notifyGroupChatCreated?.(groupAddress, groupChat),
       postDeliveryCurrentAddress: groupAddress,
+      postDeliveryUserMessage: cloudDocument.initialPrompt ? {
+        address: groupAddress,
+        text: cloudDocument.initialPrompt,
+        messageId: `doc-initial:${cloudDocument.fileToken}:${cloudDocument.commentId}:${cloudDocument.replyId || Date.now()}`,
+      } : undefined,
     };
   }
 
