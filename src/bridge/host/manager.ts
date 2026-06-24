@@ -273,6 +273,7 @@ const tmuxSelectionUpdateNoticeLastSentAt = new Map<string, number>();
 const tmuxSelectionPromptMonitors = new Map<string, CodexTuiSelectionPromptMonitor>();
 const tmuxSelectionPromptLastProbeAt = new Map<string, number>();
 const tmuxSelectionPromptFollowupUntil = new Map<string, number>();
+const pendingTmuxSelectionPromptProbePromises = new Set<Promise<boolean>>();
 
 interface TmuxSelectionPromptTarget {
   channelType: string;
@@ -905,6 +906,25 @@ async function probeTmuxSelectionPromptForTarget(
     await new Promise((resolve) => setTimeout(resolve, intervalMs));
   }
   return false;
+}
+
+function trackTmuxSelectionPromptProbeForTarget(
+  target: TmuxSelectionPromptTarget,
+  options: { timeoutMs?: number; intervalMs?: number } = {},
+): Promise<boolean> {
+  const promise = probeTmuxSelectionPromptForTarget(target, options);
+  pendingTmuxSelectionPromptProbePromises.add(promise);
+  promise.then(
+    () => pendingTmuxSelectionPromptProbePromises.delete(promise),
+    () => pendingTmuxSelectionPromptProbePromises.delete(promise),
+  );
+  return promise;
+}
+
+async function waitForPendingTmuxSelectionPromptProbes(): Promise<void> {
+  while (pendingTmuxSelectionPromptProbePromises.size > 0) {
+    await Promise.allSettled([...pendingTmuxSelectionPromptProbePromises]);
+  }
 }
 
 function primeClaudeMirrorInitialDelivery(sessionId: string): void {
@@ -3763,7 +3783,7 @@ async function handleMessage(
             console.warn('[bridge-manager] Claude tmux provider mirror reconcile after auto-forward failed:', describeUnknownError(error));
           });
         }
-        void probeTmuxSelectionPromptForTarget({
+        void trackTmuxSelectionPromptProbeForTarget({
           channelType: msg.address.channelType,
           chatId: msg.address.chatId,
           sessionId: tmuxProviderBridgeSessionId,
@@ -4076,6 +4096,7 @@ function resetStateForTests(): void {
   tmuxSelectionPromptMonitors.clear();
   tmuxSelectionPromptLastProbeAt.clear();
   tmuxSelectionPromptFollowupUntil.clear();
+  pendingTmuxSelectionPromptProbePromises.clear();
   state.everyTaskSelections.clear();
   state.thenTaskSelections.clear();
   state.thenTaskTimers.clear();
@@ -4147,5 +4168,6 @@ export const _testOnly = {
   reconcileStartupChannelChats,
   runStartupNotificationFlow,
   deliverStartupNotifications,
+  waitForPendingTmuxSelectionPromptProbes,
   resetStateForTests,
 };

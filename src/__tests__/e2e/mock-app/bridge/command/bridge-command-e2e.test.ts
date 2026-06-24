@@ -503,6 +503,12 @@ esac
   return { binDir, logPath, statePath };
 }
 
+async function cleanupFakeTmux(fakeTmux: { binDir: string }): Promise<void> {
+  await _testOnly.waitForPendingTmuxSelectionPromptProbes();
+  _testOnly.resetStateForTests();
+  fs.rmSync(fakeTmux.binDir, { recursive: true, force: true });
+}
+
 const CODEX_GOAL_SELECTION_SCREEN = [
   'A task is already running.',
   'Do you want to replace the current goal?',
@@ -834,7 +840,7 @@ describe('bridge command e2e', () => {
       if (oldFakeState === undefined) delete process.env.TMUX_FAKE_STATE;
       else process.env.TMUX_FAKE_STATE = oldFakeState;
       fs.rmSync(workDir, { recursive: true, force: true });
-      fs.rmSync(fakeTmux.binDir, { recursive: true, force: true });
+      await cleanupFakeTmux(fakeTmux);
     }
   });
 
@@ -1551,7 +1557,7 @@ describe('bridge command e2e', () => {
       else process.env.TMUX_FAKE_STATE = oldState;
       if (oldCapture === undefined) delete process.env.TMUX_FAKE_CAPTURE_TEXT;
       else process.env.TMUX_FAKE_CAPTURE_TEXT = oldCapture;
-      fs.rmSync(fakeTmux.binDir, { recursive: true, force: true });
+      await cleanupFakeTmux(fakeTmux);
     }
   });
 
@@ -1898,7 +1904,7 @@ model = "test-model"
       else process.env.TMUX_FAKE_LOG = oldFakeLog;
       if (oldFakeState === undefined) delete process.env.TMUX_FAKE_STATE;
       else process.env.TMUX_FAKE_STATE = oldFakeState;
-      fs.rmSync(fakeTmux.binDir, { recursive: true, force: true });
+      await cleanupFakeTmux(fakeTmux);
     }
   });
 
@@ -2001,7 +2007,7 @@ provider = "tmux"
       if (oldFakeState === undefined) delete process.env.TMUX_FAKE_STATE;
       else process.env.TMUX_FAKE_STATE = oldFakeState;
       fs.rmSync(workDir, { recursive: true, force: true });
-      fs.rmSync(fakeTmux.binDir, { recursive: true, force: true });
+      await cleanupFakeTmux(fakeTmux);
     }
   });
 
@@ -2094,7 +2100,7 @@ provider = "tmux"
       fs.rmSync(workDir, { recursive: true, force: true });
       fs.rmSync(claudeHome, { recursive: true, force: true });
       if (transcriptPath) fs.rmSync(transcriptPath, { force: true });
-      fs.rmSync(fakeTmux.binDir, { recursive: true, force: true });
+      await cleanupFakeTmux(fakeTmux);
     }
   });
 
@@ -2205,7 +2211,7 @@ provider = "tmux"
       fs.rmSync(workDir, { recursive: true, force: true });
       fs.rmSync(claudeHome, { recursive: true, force: true });
       if (transcriptPath) fs.rmSync(transcriptPath, { force: true });
-      fs.rmSync(fakeTmux.binDir, { recursive: true, force: true });
+      await cleanupFakeTmux(fakeTmux);
     }
   });
 
@@ -2437,7 +2443,7 @@ provider = "tmux"
     } finally {
       _testOnlyClaudePty.clear();
       fs.rmSync(workDir, { recursive: true, force: true });
-      fs.rmSync(fakeTmux.binDir, { recursive: true, force: true });
+      await cleanupFakeTmux(fakeTmux);
       fs.rmSync(fakeClaude.binDir, { recursive: true, force: true });
       for (const [key, value] of Object.entries(previousEnv)) {
         if (value === undefined) delete process.env[key];
@@ -2758,7 +2764,7 @@ provider = "tmux"
       else process.env.TMUX_FAKE_LOG = oldFakeLog;
       if (oldFakeState === undefined) delete process.env.TMUX_FAKE_STATE;
       else process.env.TMUX_FAKE_STATE = oldFakeState;
-      fs.rmSync(fakeTmux.binDir, { recursive: true, force: true });
+      await cleanupFakeTmux(fakeTmux);
     }
   });
 
@@ -3070,7 +3076,7 @@ provider = "tmux"
       else process.env.TMUX_FAKE_LOG = oldFakeLog;
       if (oldFakeState === undefined) delete process.env.TMUX_FAKE_STATE;
       else process.env.TMUX_FAKE_STATE = oldFakeState;
-      fs.rmSync(fakeTmux.binDir, { recursive: true, force: true });
+      await cleanupFakeTmux(fakeTmux);
     }
   });
 
@@ -3279,7 +3285,7 @@ provider = "tmux"
       else process.env.TMUX_FAKE_LOG = oldFakeLog;
       if (oldFakeState === undefined) delete process.env.TMUX_FAKE_STATE;
       else process.env.TMUX_FAKE_STATE = oldFakeState;
-      fs.rmSync(fakeTmux.binDir, { recursive: true, force: true });
+      await cleanupFakeTmux(fakeTmux);
     }
   });
 
@@ -3335,7 +3341,7 @@ provider = "tmux"
       if (oldExitProbeDelay === undefined) delete process.env.CODELARK_TMUX_PROVIDER_EXIT_PROBE_DELAY_MS;
       else process.env.CODELARK_TMUX_PROVIDER_EXIT_PROBE_DELAY_MS = oldExitProbeDelay;
       fs.rmSync(workDir, { recursive: true, force: true });
-      fs.rmSync(fakeTmux.binDir, { recursive: true, force: true });
+      await cleanupFakeTmux(fakeTmux);
     }
   });
 
@@ -3386,7 +3392,7 @@ provider = "tmux"
       else process.env.TMUX_FAKE_LOG = oldFakeLog;
       if (oldFakeState === undefined) delete process.env.TMUX_FAKE_STATE;
       else process.env.TMUX_FAKE_STATE = oldFakeState;
-      fs.rmSync(fakeTmux.binDir, { recursive: true, force: true });
+      await cleanupFakeTmux(fakeTmux);
       fs.rmSync(workDir, { recursive: true, force: true });
     }
   });
