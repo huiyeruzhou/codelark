@@ -50,6 +50,8 @@ interface ControlledLlmCall extends RecordedLlmCall {
   controller: ReadableStreamDefaultController<string>;
 }
 
+const CODEX_THREAD_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+
 function writeHomeConfigToml(content: string): void {
   fs.mkdirSync(CODELARK_HOME, { recursive: true });
   fs.writeFileSync(path.join(CODELARK_HOME, 'config.toml'), content, 'utf-8');
@@ -2588,7 +2590,7 @@ provider = "tmux"
       const ptyThreadId = ptySession?.runtime?.codex?.threadId || '';
       assert.equal(ptySession?.runtime?.codex?.provider, undefined);
       assert.equal(getSessionCodexProviderToml(binding.bridgeSessionId), 'pty');
-      assert.match(ptyThreadId, /^019e[0-9a-f-]+$/);
+      assert.match(ptyThreadId, CODEX_THREAD_ID_RE);
       assert.equal(ptySession?.runtime?.general?.tmuxSessionName, undefined);
       assert.equal(ptySession?.runtime?.general?.autoEnter, undefined);
       assert.match(adapter.sent.at(-1)?.text || '', /Provider.*pty/s);
@@ -2675,7 +2677,7 @@ provider = "tmux"
       await _testOnly.handleMessage(adapter, inboundMessage(address, '/provider pty', 'incoming-runtime-provider-pty-yolo'));
       assert.equal(store.getSession(binding.bridgeSessionId)?.runtime?.codex?.provider, undefined);
       assert.equal(getSessionCodexProviderToml(binding.bridgeSessionId), 'pty');
-      assert.match(store.getSession(binding.bridgeSessionId)?.runtime?.codex?.threadId || '', /^019e[0-9a-f-]+$/);
+      assert.match(store.getSession(binding.bridgeSessionId)?.runtime?.codex?.threadId || '', CODEX_THREAD_ID_RE);
 
       await _testOnly.handleMessage(adapter, inboundMessage(address, '/', 'incoming-runtime-pty-status'));
       const statusText = adapter.sent.at(-1)?.text || '';
@@ -2731,7 +2733,7 @@ provider = "tmux"
       const tmuxSessionName = `codex_${tmuxThreadId}`;
       assert.equal(tmuxSession?.runtime?.codex?.provider, undefined);
       assert.equal(getSessionCodexProviderToml(tmuxBinding.bridgeSessionId), 'tmux');
-      assert.match(tmuxThreadId, /^019e[0-9a-f-]+$/);
+      assert.match(tmuxThreadId, CODEX_THREAD_ID_RE);
       assert.equal(tmuxSession?.runtime?.general?.tmuxSessionName, tmuxSessionName);
       assert.equal(tmuxSession?.runtime?.general?.autoEnter, undefined);
       assert.equal(getSessionTmuxAutoEnterToml(tmuxBinding.bridgeSessionId), true);
@@ -2803,7 +2805,7 @@ provider = "tmux"
     const ptyThreadId = ptySession?.runtime?.codex?.threadId || '';
     assert.equal(ptySession?.runtime?.codex?.provider, undefined);
     assert.equal(getSessionCodexProviderToml(ptyBinding.bridgeSessionId), 'pty');
-    assert.match(ptyThreadId, /^019e[0-9a-f-]+$/);
+    assert.match(ptyThreadId, CODEX_THREAD_ID_RE);
     assert.equal(llmCalls.length, 0);
     assert.match(adapter.sent.at(-1)?.text || '', new RegExp(`codex_thread_id.*${ptyThreadId}`, 's'));
 
@@ -3066,7 +3068,7 @@ provider = "tmux"
       const firstMessageLog = fs.readFileSync(fakeTmux.logPath, 'utf-8').slice(beforeFirstMessageLog.length);
       const newThreadId = store.getSession(newBinding.bridgeSessionId)?.runtime?.codex?.threadId || '';
       const newTmuxSession = `codex_${newThreadId}`;
-      assert.match(newThreadId, /^019e[0-9a-f-]+$/);
+      assert.match(newThreadId, CODEX_THREAD_ID_RE);
       assert.match(firstMessageLog, new RegExp(`new-session -d -s ${newTmuxSession}`));
       assert.match(firstMessageLog, new RegExp(`send-keys -t ${newTmuxSession} -l 新线程第一条`));
       assert.match(firstMessageLog, new RegExp(`send-keys -t ${newTmuxSession} Enter`));
@@ -3209,7 +3211,7 @@ provider = "tmux"
       const actualThreadId = store.getSession(binding.bridgeSessionId)?.runtime?.codex?.threadId || '';
       const tmuxSession = `codex_${actualThreadId}`;
       const actualSessionPath = findSessionFileByThreadId(actualThreadId) || '';
-      assert.match(actualThreadId, /^019e[0-9a-f-]+$/);
+      assert.match(actualThreadId, CODEX_THREAD_ID_RE);
       assert.equal(actualSessionPath ? fs.existsSync(actualSessionPath) : false, true);
       assert.equal(store.getSession(binding.bridgeSessionId)?.runtime?.general?.tmuxSessionName, tmuxSession);
       assert.equal(store.getSession(binding.bridgeSessionId)?.runtime?.general?.autoEnter, undefined);
@@ -3376,7 +3378,7 @@ provider = "tmux"
       assert.ok(binding);
       const actualThreadId = store.getSession(binding.bridgeSessionId)?.runtime?.codex?.threadId || '';
       const sessionPath = findSessionFileByThreadId(actualThreadId) || '';
-      assert.match(actualThreadId, /^019e[0-9a-f-]+$/);
+      assert.match(actualThreadId, CODEX_THREAD_ID_RE);
       assert.equal(sessionPath ? fs.existsSync(sessionPath) : false, true);
       assert.equal(llmCalls.length, 0);
 
