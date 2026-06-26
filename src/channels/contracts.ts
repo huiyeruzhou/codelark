@@ -6,6 +6,7 @@ import type {
 } from '../domain/channel.js';
 import type {
   InboundMessage,
+  OutboundAttachment,
   OutboundMessage,
   PreviewCapabilities,
   SendResult,
@@ -86,6 +87,11 @@ export abstract class BaseChannelAdapter {
   unpinMessage?(_chatId: string, _messageId: string): Promise<SendResult>;
   addMessageReaction?(_messageId: string, _emojiType: string): Promise<string | null>;
   removeMessageReaction?(_messageId: string, _reactionId: string, _emojiType?: string): Promise<void>;
+  startLargeFileUpload?(
+    _address: ChannelAddress,
+    _attachment: OutboundAttachment,
+    _options?: { replyToMessageId?: string },
+  ): SendResult;
 
   async answerCallback(_callbackQueryId: string, _text?: string): Promise<void> {
     // No-op by default; override in adapters that support callback queries.

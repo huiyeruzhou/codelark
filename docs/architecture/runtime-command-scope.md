@@ -37,7 +37,7 @@
 | `/shell` | 在当前会话目录通过 `codex sandbox` 执行 shell command | 读取 effective `session.workspace`；自己的 sandbox 参数来自命令实现，不写 `/sandbox` 配置 |
 | `/tmux*` | 远程控制任意 tmux session，包括 attach/switch/new/status/screen/set | `/tmux-set` 的行数/发送偏好写 Session TOML；`/tmux-attach`、`/tmux-new` 和 provider 自动生成的 tmux session name 作为运行身份保留在 BridgeSession JSON |
 | `/cat` | 查看当前工作目录下文件内容 | 读取 effective `session.workspace` |
-| `/file` | 把本地文件回传到 IM | 读取 effective `session.workspace` 和通道发送能力 |
+| `/file` | 把本地文件回传到 IM；超过 20 MB 时先确认，确认后由通道后台上传并回链接 | 读取 effective `session.workspace` 和通道发送能力 |
 
 ### 运维命令
 

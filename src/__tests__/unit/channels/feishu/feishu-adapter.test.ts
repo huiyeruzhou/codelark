@@ -6,6 +6,10 @@ import os from 'node:os';
 import path from 'node:path';
 
 import { FeishuAdapter, _testOnly } from '../../../../channels/feishu/adapter.js';
+import {
+  _testOnly as largeFileUploadTestOnly,
+  LARGE_FILE_UPLOAD_THRESHOLD_BYTES,
+} from '../../../../bridge/command/file-upload-confirmations.js';
 import type { FileAttachment } from '../../../../domain/index.js';
 import { initBridgeTestContext } from '../../../helpers/bridge/test-bridge-utils.js';
 
@@ -5477,5 +5481,221 @@ describe('feishu-adapter structured streaming regions', () => {
     assert.equal(attachment.name, '需求说明 2026.pdf');
     assert.equal(attachment.type, 'application/octet-stream');
     assert.equal(attachment.data, Buffer.from('hello').toString('base64'));
+  });
+
+  it('sends small local files as direct Feishu file messages', async () => {
+    largeFileUploadTestOnly.clear();
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'codelark-small-file-'));
+    const filePath = path.join(tempDir, 'small.txt');
+    fs.writeFileSync(filePath, 'hello', 'utf-8');
+    const sentMessages: any[] = [];
+    let uploadedFile: any = null;
+    const adapter = new FeishuAdapter({
+      id: 'feishu-default',
+      provider: 'feishu',
+      enabled: true,
+      alias: '飞书',
+      config: {
+        appId: 'app-id',
+        appSecret: 'app-secret',
+      },
+    });
+
+    (adapter as any).restClient = {
+      im: {
+        file: {
+          create: async (payload: any) => {
+            uploadedFile = payload.data;
+            uploadedFile.file.destroy();
+            return { file_key: 'file-key-small' };
+          },
+        },
+        message: {
+          create: async (payload: any) => {
+            sentMessages.push(payload.data);
+            return { data: { message_id: 'msg-small-file' } };
+          },
+        },
+      },
+    };
+
+    const result = await adapter.send({
+      address: { channelType: 'feishu', chatId: 'chat-1' },
+      text: '',
+      attachments: [{ kind: 'file', path: filePath, name: 'small.txt' }],
+    });
+
+    assert.equal(result.ok, true);
+    assert.equal(result.messageId, 'msg-small-file');
+    assert.equal(uploadedFile.file_type, 'stream');
+    assert.equal(uploadedFile.file_name, 'small.txt');
+    assert.ok(uploadedFile.file instanceof fs.ReadStream);
+    assert.deepEqual(sentMessages, [{
+      receive_id: 'chat-1',
+      msg_type: 'file',
+      content: JSON.stringify({ file_key: 'file-key-small' }),
+    }]);
+    assert.equal(largeFileUploadTestOnly.pendingCount(), 0);
+  });
+
+  it('routes large local files to a confirmation card instead of direct IM upload', async () => {
+    largeFileUploadTestOnly.clear();
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'codelark-large-file-'));
+    const filePath = path.join(tempDir, 'large.bin');
+    fs.closeSync(fs.openSync(filePath, 'w'));
+    fs.truncateSync(filePath, LARGE_FILE_UPLOAD_THRESHOLD_BYTES + 1);
+    const sentMessages: any[] = [];
+    let fileUploadCalled = false;
+    const adapter = new FeishuAdapter({
+      id: 'feishu-default',
+      provider: 'feishu',
+      enabled: true,
+      alias: '飞书',
+      config: {
+        appId: 'app-id',
+        appSecret: 'app-secret',
+      },
+    });
+
+    (adapter as any).restClient = {
+      im: {
+        file: {
+          create: async () => {
+            fileUploadCalled = true;
+            throw new Error('large file should not use IM file upload');
+          },
+        },
+        message: {
+          create: async (payload: any) => {
+            sentMessages.push(payload.data);
+            return { data: { message_id: 'msg-large-card' } };
+          },
+        },
+      },
+    };
+
+    const result = await adapter.send({
+      address: { channelType: 'feishu', chatId: 'chat-1', chatKind: 'group' },
+      text: '',
+      attachments: [{ kind: 'file', path: filePath, name: 'large.bin' }],
+    });
+
+    assert.equal(result.ok, true);
+    assert.equal(fileUploadCalled, false);
+    assert.equal(sentMessages.length, 1);
+    assert.equal(sentMessages[0].receive_id, 'chat-1');
+    assert.equal(sentMessages[0].msg_type, 'interactive');
+    const cardJson = JSON.stringify(JSON.parse(sentMessages[0].content));
+    assert.match(cardJson, /确认上传大文件/);
+    assert.match(cardJson, /上传并发链接/);
+    assert.match(cardJson, /%2Ffile%20--confirm-large%20/);
+    assert.match(cardJson, /%2Ffile%20--cancel-large%20/);
+    assert.equal(largeFileUploadTestOnly.pendingCount(), 1);
+    largeFileUploadTestOnly.clear();
+  });
+
+  it('starts confirmed large file uploads in the background and sends the Drive link', async () => {
+    largeFileUploadTestOnly.clear();
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'codelark-large-confirm-'));
+    const filePath = path.join(tempDir, 'confirmed.bin');
+    fs.closeSync(fs.openSync(filePath, 'w'));
+    fs.truncateSync(filePath, LARGE_FILE_UPLOAD_THRESHOLD_BYTES + 1);
+    const prepareStarted = createDeferred<void>();
+    const allowPrepare = createDeferred<void>();
+    const uploadedParts: Array<{ seq: number; size: number }> = [];
+    const sentMessages: any[] = [];
+    const adapter = new FeishuAdapter({
+      id: 'feishu-default',
+      provider: 'feishu',
+      enabled: true,
+      alias: '飞书',
+      config: {
+        appId: 'app-id',
+        appSecret: 'app-secret',
+      },
+    });
+
+    (adapter as any).restClient = {
+      drive: {
+        v1: {
+          file: {
+            uploadPrepare: async () => {
+              prepareStarted.resolve();
+              await allowPrepare.promise;
+              return {
+                code: 0,
+                data: {
+                  upload_id: 'upload-1',
+                  block_size: 10 * 1024 * 1024,
+                  block_num: 3,
+                },
+              };
+            },
+            uploadPart: async (payload: any) => {
+              uploadedParts.push({
+                seq: payload.data.seq,
+                size: payload.data.size,
+              });
+              payload.data.file.destroy();
+              return {};
+            },
+            uploadFinish: async () => ({
+              code: 0,
+              data: { file_token: 'drive-file-token' },
+            }),
+          },
+          meta: {
+            batchQuery: async () => ({
+              code: 0,
+              data: {
+                metas: [{
+                  doc_token: 'drive-file-token',
+                  doc_type: 'file',
+                  title: 'confirmed.bin',
+                  owner_id: 'owner',
+                  create_time: '0',
+                  latest_modify_user: 'owner',
+                  latest_modify_time: '0',
+                  url: 'https://example.feishu.cn/file/drive-file-token',
+                }],
+              },
+            }),
+          },
+          permissionPublic: {
+            patch: async () => ({ code: 0, data: {} }),
+          },
+          permissionMember: {
+            create: async () => ({ code: 0, data: {} }),
+          },
+        },
+      },
+      im: {
+        message: {
+          create: async (payload: any) => {
+            sentMessages.push(payload.data);
+            return { data: { message_id: `msg-${sentMessages.length}` } };
+          },
+        },
+      },
+    };
+
+    const result = adapter.startLargeFileUpload(
+      { channelType: 'feishu', chatId: 'chat-1', chatKind: 'group' },
+      { kind: 'file', path: filePath, name: 'confirmed.bin' },
+    );
+
+    assert.equal(result.ok, true);
+    await prepareStarted.promise;
+    assert.equal(sentMessages.length, 0);
+    allowPrepare.resolve();
+    await waitForCondition(() => sentMessages.length === 1);
+
+    assert.deepEqual(uploadedParts, [
+      { seq: 0, size: 10 * 1024 * 1024 },
+      { seq: 1, size: 10 * 1024 * 1024 },
+      { seq: 2, size: 1 },
+    ]);
+    assert.equal(sentMessages[0].msg_type, 'post');
+    assert.match(sentMessages[0].content, /https:\/\/example\.feishu\.cn\/file\/drive-file-token/);
   });
 });

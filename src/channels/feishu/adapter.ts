@@ -74,12 +74,20 @@ import {
   type FeishuCardActionButton,
 } from './markdown.js';
 import { buildFencedCodeBlock } from '../../shared/markdown/fence.js';
+import {
+  buildLargeFileUploadConfirmationCard,
+  formatLargeFileUploadSize,
+  LARGE_FILE_UPLOAD_THRESHOLD_BYTES,
+  registerPendingLargeFileUpload,
+} from '../../bridge/command/file-upload-confirmations.js';
 
 /** Max number of message_ids to keep for dedup. */
 const DEDUP_MAX = 1000;
 
 /** Max file download size (20 MB). */
 const MAX_FILE_SIZE = 20 * 1024 * 1024;
+
+const DRIVE_MULTIPART_DEFAULT_BLOCK_SIZE = 4 * 1024 * 1024;
 
 /** Feishu emoji type for completed tasks. */
 const COMPLETED_EMOJI = 'DONE';
@@ -1917,6 +1925,14 @@ function dataUrlToImageBlob(dataUrl: string): Blob {
   const data = Buffer.from(base64, 'base64');
   if (data.length === 0) throw new Error('Embedded group authorization image is empty.');
   return new Blob([data], { type: contentType || 'image/png' });
+}
+
+interface DriveMultipartUploadResult {
+  fileToken: string;
+  fileName: string;
+  size: number;
+  url?: string;
+  warnings: string[];
 }
 
 export class FeishuAdapter extends BaseChannelAdapter {
@@ -5142,7 +5158,7 @@ export class FeishuAdapter extends BaseChannelAdapter {
     }
 
     if (message.attachments && message.attachments.length > 0) {
-      return this.sendAttachments(message.address.chatId, message.attachments, message.replyToMessageId);
+      return this.sendAttachments(message.address, message.attachments, message.replyToMessageId);
     }
 
     let text = message.text;
@@ -5283,15 +5299,37 @@ export class FeishuAdapter extends BaseChannelAdapter {
     }
   }
 
+  startLargeFileUpload(
+    address: ChannelAddress,
+    attachment: OutboundAttachment,
+    options: { replyToMessageId?: string } = {},
+  ): SendResult {
+    if (!this.restClient) {
+      return { ok: false, error: 'Feishu client not initialized' };
+    }
+    if (!fs.existsSync(attachment.path)) {
+      return { ok: false, error: `Attachment not found: ${attachment.path}` };
+    }
+
+    void this.runLargeFileUpload(address, attachment, options).catch((error: unknown) => {
+      console.warn(
+        '[feishu-adapter] Large file background upload failed:',
+        error instanceof Error ? error.message : error,
+      );
+    });
+
+    return { ok: true };
+  }
+
   private async sendAttachments(
-    chatId: string,
+    address: ChannelAddress,
     attachments: OutboundAttachment[],
     replyToMessageId?: string,
   ): Promise<SendResult> {
     let lastMessageId: string | undefined;
 
     for (const attachment of attachments) {
-      const result = await this.sendAttachment(chatId, attachment, replyToMessageId);
+      const result = await this.sendAttachment(address, attachment, replyToMessageId);
       if (!result.ok) return result;
       lastMessageId = result.messageId;
     }
@@ -5300,7 +5338,7 @@ export class FeishuAdapter extends BaseChannelAdapter {
   }
 
   private async sendAttachment(
-    chatId: string,
+    address: ChannelAddress,
     attachment: OutboundAttachment,
     replyToMessageId?: string,
   ): Promise<SendResult> {
@@ -5309,10 +5347,20 @@ export class FeishuAdapter extends BaseChannelAdapter {
     }
 
     try {
+      const stat = await fs.promises.stat(attachment.path);
+      if (attachment.kind === 'file' && stat.size > LARGE_FILE_UPLOAD_THRESHOLD_BYTES) {
+        const id = registerPendingLargeFileUpload(address, attachment, stat.size);
+        return await this.sendRichCard(
+          address.chatId,
+          buildLargeFileUploadConfirmationCard({ id, attachment, size: stat.size }),
+          replyToMessageId,
+        );
+      }
+
       if (attachment.kind === 'image') {
         const imageKey = await this.uploadImage(attachment);
         return await this.sendStructuredMessage(
-          chatId,
+          address.chatId,
           'image',
           JSON.stringify({ image_key: imageKey }),
           replyToMessageId,
@@ -5321,7 +5369,7 @@ export class FeishuAdapter extends BaseChannelAdapter {
 
       const fileKey = await this.uploadFile(attachment);
       return await this.sendStructuredMessage(
-        chatId,
+        address.chatId,
         'file',
         JSON.stringify({ file_key: fileKey }),
         replyToMessageId,
@@ -5332,9 +5380,20 @@ export class FeishuAdapter extends BaseChannelAdapter {
   }
 
   private async uploadImage(attachment: OutboundAttachment): Promise<string> {
-    const fileName = attachment.name || path.basename(attachment.path) || 'image.png';
-    const data = await fs.promises.readFile(attachment.path);
-    return this.uploadImageBlob('message', new Blob([data]), fileName);
+    const response = await this.withFeishuRequestTimeout<Record<string, any> | null>(
+      attachment.name || path.basename(attachment.path) || 'image.png',
+      'im.image.create',
+      () => this.restClient!.im.image.create({
+        data: {
+          image_type: 'message',
+          image: fs.createReadStream(attachment.path),
+        },
+      }),
+    );
+    assertFeishuApiOk(response, 'im.image.create');
+    const imageKey = response?.image_key || response?.data?.image_key;
+    if (!imageKey) throw new Error('image upload failed: missing image_key');
+    return String(imageKey);
   }
 
   private async uploadImageBlob(
@@ -5390,28 +5449,205 @@ export class FeishuAdapter extends BaseChannelAdapter {
   }
 
   private async uploadFile(attachment: OutboundAttachment): Promise<string> {
-    const token = await this.getTenantAccessToken();
     const fileName = attachment.name || path.basename(attachment.path) || 'attachment.bin';
-    const form = new FormData();
-    form.set('file_type', 'stream');
-    form.set('file_name', fileName);
-    const fileData = await fs.promises.readFile(attachment.path);
-    form.set('file', new Blob([fileData]), fileName);
+    const response = await this.withFeishuRequestTimeout<Record<string, any> | null>(
+      fileName,
+      'im.file.create',
+      () => this.restClient!.im.file.create({
+        data: {
+          file_type: 'stream',
+          file_name: fileName,
+          file: fs.createReadStream(attachment.path),
+        },
+      }),
+    );
+    assertFeishuApiOk(response, 'im.file.create');
+    const fileKey = response?.file_key || response?.data?.file_key;
+    if (!fileKey) throw new Error('file upload failed: missing file_key');
+    return String(fileKey);
+  }
 
-    const response = await fetch(`${this.getOpenApiBaseUrl()}/open-apis/im/v1/files`, {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${token}` },
-      body: form,
-    });
-    const data = await response.json() as {
-      code?: number;
-      msg?: string;
-      data?: { file_key?: string };
-    };
-    if (!response.ok || data.code !== 0 || !data.data?.file_key) {
-      throw new Error(data.msg || `file upload failed: HTTP ${response.status}`);
+  private async runLargeFileUpload(
+    address: ChannelAddress,
+    attachment: OutboundAttachment,
+    options: { replyToMessageId?: string },
+  ): Promise<void> {
+    const fileName = attachment.name || path.basename(attachment.path) || 'attachment.bin';
+    try {
+      const uploaded = await this.uploadFileToDriveMultipart(address, attachment);
+      const warningSuffix = uploaded.warnings.length > 0
+        ? `\n\n权限提示：${uploaded.warnings.join('；')}`
+        : '';
+      const linkText = uploaded.url
+        ? `[${uploaded.fileName}](${uploaded.url})`
+        : `${uploaded.fileName}\nfile_token: ${uploaded.fileToken}`;
+      const result = await this.sendAsPost(
+        address.chatId,
+        [
+          `大文件已上传：${linkText}`,
+          `大小：${formatLargeFileUploadSize(uploaded.size)}`,
+          warningSuffix.trim(),
+        ].filter(Boolean).join('\n'),
+        options.replyToMessageId,
+      );
+      if (!result.ok) {
+        console.warn('[feishu-adapter] Failed to send large file upload result:', result.error || 'unknown error');
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.warn('[feishu-adapter] Large file upload failed:', message);
+      await this.sendAsPlainText(
+        address.chatId,
+        `大文件上传失败：${fileName}\n${message}`,
+        options.replyToMessageId,
+      );
     }
-    return data.data.file_key;
+  }
+
+  private async uploadFileToDriveMultipart(
+    address: ChannelAddress,
+    attachment: OutboundAttachment,
+  ): Promise<DriveMultipartUploadResult> {
+    const stat = await fs.promises.stat(attachment.path);
+    if (!stat.isFile()) throw new Error('目标不是文件。');
+    const fileName = attachment.name || path.basename(attachment.path) || 'attachment.bin';
+    const driveFile = (this.restClient as any)?.drive?.v1?.file;
+    if (!driveFile?.uploadPrepare || !driveFile?.uploadPart || !driveFile?.uploadFinish) {
+      throw new Error('Feishu Drive multipart upload API is not available');
+    }
+
+    const prepare = await this.withFeishuRequestTimeout<Record<string, any>>(
+      fileName,
+      'drive.file.uploadPrepare',
+      () => driveFile.uploadPrepare({
+        data: {
+          file_name: fileName,
+          parent_type: 'explorer',
+          parent_node: '',
+          size: stat.size,
+        },
+      }),
+    );
+    assertFeishuApiOk(prepare, 'drive.file.uploadPrepare');
+
+    const uploadId = prepare?.data?.upload_id;
+    if (!uploadId) throw new Error('drive multipart upload_prepare failed: missing upload_id');
+    const blockSize = Number(prepare?.data?.block_size || DRIVE_MULTIPART_DEFAULT_BLOCK_SIZE);
+    const blockNum = Number(prepare?.data?.block_num || Math.ceil(stat.size / blockSize));
+    if (!Number.isFinite(blockSize) || blockSize <= 0) {
+      throw new Error(`drive multipart upload_prepare returned invalid block_size: ${String(prepare?.data?.block_size)}`);
+    }
+    if (!Number.isInteger(blockNum) || blockNum <= 0) {
+      throw new Error(`drive multipart upload_prepare returned invalid block_num: ${String(prepare?.data?.block_num)}`);
+    }
+
+    for (let seq = 0; seq < blockNum; seq += 1) {
+      const start = seq * blockSize;
+      const end = Math.min(start + blockSize, stat.size) - 1;
+      const size = end - start + 1;
+      if (size <= 0) break;
+      const part = await this.withFeishuRequestTimeout<Record<string, any> | null>(
+        fileName,
+        `drive.file.uploadPart:${seq + 1}/${blockNum}`,
+        () => driveFile.uploadPart({
+          data: {
+            upload_id: uploadId,
+            seq,
+            size,
+            file: fs.createReadStream(attachment.path, { start, end }),
+          },
+        }),
+      );
+      assertFeishuApiOk(part, `drive.file.uploadPart:${seq + 1}/${blockNum}`);
+    }
+
+    const finish = await this.withFeishuRequestTimeout<Record<string, any>>(
+      fileName,
+      'drive.file.uploadFinish',
+      () => driveFile.uploadFinish({
+        data: {
+          upload_id: uploadId,
+          block_num: blockNum,
+        },
+      }),
+    );
+    assertFeishuApiOk(finish, 'drive.file.uploadFinish');
+    const fileToken = finish?.data?.file_token;
+    if (!fileToken) throw new Error('drive multipart upload_finish failed: missing file_token');
+
+    const warnings = await this.makeDriveFileVisibleToChat(String(fileToken), address);
+    const url = await this.fetchDriveFileUrl(String(fileToken));
+    return {
+      fileToken: String(fileToken),
+      fileName,
+      size: stat.size,
+      url,
+      warnings,
+    };
+  }
+
+  private async fetchDriveFileUrl(fileToken: string): Promise<string | undefined> {
+    const metaApi = (this.restClient as any)?.drive?.v1?.meta;
+    if (!metaApi?.batchQuery) return undefined;
+    const response = await this.withFeishuRequestTimeout<Record<string, any>>(
+      fileToken,
+      'drive.meta.batchQuery',
+      () => metaApi.batchQuery({
+        data: {
+          request_docs: [{ doc_token: fileToken, doc_type: 'file' }],
+          with_url: true,
+        },
+      }),
+    );
+    assertFeishuApiOk(response, 'drive.meta.batchQuery');
+    const url = response?.data?.metas?.[0]?.url;
+    return typeof url === 'string' && url.trim() ? url : undefined;
+  }
+
+  private async makeDriveFileVisibleToChat(fileToken: string, address: ChannelAddress): Promise<string[]> {
+    const warnings: string[] = [];
+    const permissionPublic = (this.restClient as any)?.drive?.v1?.permissionPublic;
+    if (permissionPublic?.patch) {
+      try {
+        const response = await this.withFeishuRequestTimeout<Record<string, any>>(
+          fileToken,
+          'drive.permissionPublic.patch:file',
+          () => permissionPublic.patch({
+            path: { token: fileToken },
+            params: { type: 'file' },
+            data: { link_share_entity: 'tenant_readable' },
+          }),
+        );
+        assertFeishuApiOk(response, 'drive.permissionPublic.patch:file');
+      } catch (error) {
+        warnings.push(`链接权限设置失败，可能需要手动分享权限（${error instanceof Error ? error.message : String(error)}）`);
+      }
+    }
+
+    if (address.chatKind === 'group') {
+      const permissionMember = (this.restClient as any)?.drive?.v1?.permissionMember;
+      if (permissionMember?.create) {
+        try {
+          const response = await this.withFeishuRequestTimeout<Record<string, any>>(
+            fileToken,
+            'drive.permissionMember.create:openchat',
+            () => permissionMember.create({
+              path: { token: fileToken },
+              params: { type: 'file', need_notification: false },
+              data: {
+                member_type: 'openchat',
+                member_id: address.chatId,
+                perm: 'view',
+              },
+            }),
+          );
+          assertFeishuApiOk(response, 'drive.permissionMember.create:openchat');
+        } catch (error) {
+          warnings.push(`群权限授权失败，群成员可能需要申请访问（${error instanceof Error ? error.message : String(error)}）`);
+        }
+      }
+    }
+    return warnings;
   }
 
   private async sendStructuredMessage(

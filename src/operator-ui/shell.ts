@@ -439,7 +439,7 @@ export function renderUiShellHtml(): string {
                 <div class="command-list">
                   <div class="command-list-head"><div>命令</div><div>原始命令</div><div>说明</div></div>
                   <div class="command-item"><div class="command-col-command"><code>/cat &lt;path&gt; [start] [end]</code></div><div class="command-col-original"><code>/cat &lt;path&gt; [start] [end]</code></div><div class="command-col-desc">打印文件内容；未指定行号时默认读取前 200 行。</div></div>
-                  <div class="command-item"><div class="command-col-command"><code>/file &lt;path&gt;</code></div><div class="command-col-original"><code>/file &lt;path&gt;</code></div><div class="command-col-desc">直接发送本地文件。</div></div>
+                  <div class="command-item"><div class="command-col-command"><code>/file &lt;path&gt;</code></div><div class="command-col-original"><code>/file &lt;path&gt;</code></div><div class="command-col-desc">发送本地文件；超过 20 MB 时先确认，确认后后台上传并回链接。</div></div>
                 </div>
               </section>
 

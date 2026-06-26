@@ -32,6 +32,10 @@ export const FEISHU_BASE_TENANT_SCOPES: FeishuPermissionRequirement[] = [
   { scope: 'im:chat:create_by_user', reason: 'Allow bot OpenAPI chat creation with a designated user owner when required.' },
   { scope: 'im:chat:update', reason: 'Rename group-backed bridge sessions.' },
   { scope: 'im:resource', reason: 'Upload and send IM image/file resources.' },
+  { scope: 'drive:file:upload', reason: 'Upload confirmed large files to Drive with multipart upload.' },
+  { scope: 'drive:drive.metadata:readonly', reason: 'Fetch Drive file URLs after confirmed large file uploads.' },
+  { scope: 'docs:permission.setting:write_only', reason: 'Set readable link sharing on Drive files uploaded for chats.' },
+  { scope: 'docs:permission.member:create', reason: 'Grant chat members view access to Drive files uploaded for group chats.' },
   { scope: 'cardkit:card:write', reason: 'Create and update streaming CardKit cards.' },
   { scope: 'cardkit:card:read', reason: 'Read CardKit card state when updating existing cards.' },
 ];

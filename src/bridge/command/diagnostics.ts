@@ -32,6 +32,14 @@ import {
 } from '../../domain/session-runtime.js';
 import type { ChannelChat, InboundMessage, OutboundAttachment, OutboundRichCard } from '../../domain/index.js';
 import {
+  buildLargeFileUploadConfirmationCard,
+  clearPendingLargeFileUpload,
+  consumePendingLargeFileUpload,
+  formatLargeFileUploadSize,
+  LARGE_FILE_UPLOAD_THRESHOLD_BYTES,
+  registerPendingLargeFileUpload,
+} from './file-upload-confirmations.js';
+import {
   expandHomePath,
   formatDisplayedModel,
   getCodexSessionByThreadIdSafe,
@@ -635,6 +643,31 @@ export async function handleFileCommand(options: {
   session?: BridgeSession | null;
 }): Promise<string> {
   const rawPath = options.args.trim();
+  const confirmMatch = rawPath.match(/^--confirm-large\s+(\S+)$/);
+  if (confirmMatch) {
+    if (!options.adapter.startLargeFileUpload) {
+      return '当前通道暂不支持大文件后台上传。';
+    }
+    const pending = consumePendingLargeFileUpload(options.msg.address, confirmMatch[1] || '');
+    if (!pending) {
+      return '大文件上传确认已过期或已处理，请重新发送 /file。';
+    }
+    const result = options.adapter.startLargeFileUpload(
+      options.msg.address,
+      pending.attachment,
+      { replyToMessageId: options.msg.messageId },
+    );
+    return result.ok
+      ? `已开始后台上传：${pending.attachment.name || path.basename(pending.attachment.path)}。上传完成后会把链接发到当前聊天。`
+      : `启动大文件上传失败：${result.error || '未知错误'}`;
+  }
+
+  const cancelMatch = rawPath.match(/^--cancel-large\s+(\S+)$/);
+  if (cancelMatch) {
+    const cleared = clearPendingLargeFileUpload(options.msg.address, cancelMatch[1] || '');
+    return cleared ? '已取消大文件上传。' : '大文件上传确认已过期或已处理。';
+  }
+
   if (!rawPath) {
     return '用法：/file <path>\n示例：/file report.txt';
   }
@@ -650,14 +683,25 @@ export async function handleFileCommand(options: {
     if (!stat.isFile()) {
       return '目标不是文件。';
     }
-    if (stat.size > 20 * 1024 * 1024) {
-      return `文件过大（${stat.size} bytes），暂不支持通过 /file 发送。`;
-    }
     const attachment: OutboundAttachment = {
       kind: 'file',
       path: resolvedPath,
       name: path.basename(resolvedPath),
     };
+    if (stat.size > LARGE_FILE_UPLOAD_THRESHOLD_BYTES) {
+      const id = registerPendingLargeFileUpload(options.msg.address, attachment, stat.size);
+      await options.adapter.send({
+        address: options.msg.address,
+        text: `文件 ${path.basename(resolvedPath)} 超过 20 MB，需要确认后上传到飞书云空间并发送链接。`,
+        richCard: buildLargeFileUploadConfirmationCard({
+          id,
+          attachment,
+          size: stat.size,
+        }),
+        replyToMessageId: options.msg.messageId,
+      });
+      return `文件较大（${formatLargeFileUploadSize(stat.size)}），已发送确认卡片。确认前不会上传。`;
+    }
     const result = await deliverResponse(
       options.adapter,
       options.msg.address,

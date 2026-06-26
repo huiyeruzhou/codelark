@@ -74,6 +74,7 @@ import { normalizeReasoningEffort, normalizeSandboxMode } from '../../../../runt
 import { sseEvent } from '../../../../runtime/sse.js';
 import type { LLMProvider, StreamChatParams } from '../../../../runtime/contracts.js';
 import { resolveConfigPaths } from '../../../../configuration/sources.js';
+import { LARGE_FILE_UPLOAD_THRESHOLD_BYTES } from '../../../../bridge/command/file-upload-confirmations.js';
 
 const DATA_DIR = path.join(CODELARK_HOME, 'data');
 const HOME_CONFIG_TOML_PATH = resolveConfigPaths({ codelarkHome: CODELARK_HOME }).homeToml;
@@ -6818,6 +6819,50 @@ enabled = true
 
     assert.ok(sent.some((m) => Array.isArray(m.attachments) && m.attachments.length === 1));
     assert.match(String(sent.at(-1)?.text || ''), /已发送文件/);
+  });
+
+  it('prompts before uploading a large local file with /file', async () => {
+    initTestContext();
+    const sent: any[] = [];
+    const adapter: any = {
+      channelType: 'feishu-default',
+      provider: 'feishu',
+      send: async (message: any) => {
+        sent.push(message);
+        return { ok: true, messageId: `reply-${sent.length}` };
+      },
+    };
+    const address = { channelType: 'feishu-default', chatId: 'chat-large-file' } as const;
+    const tempRoot = fs.mkdtempSync(path.join(DATA_DIR, 'clk-large-file-'));
+    const filePath = path.join(tempRoot, 'large.bin');
+    fs.closeSync(fs.openSync(filePath, 'w'));
+    fs.truncateSync(filePath, LARGE_FILE_UPLOAD_THRESHOLD_BYTES + 1);
+    router.createBinding(address, tempRoot);
+
+    await handleBridgeCommand(
+      adapter,
+      {
+        address,
+        text: '/file large.bin',
+        messageId: 'incoming-large-file',
+      } as any,
+      '/file large.bin',
+      {
+        getActiveTask: () => undefined,
+        diagnoseSessionHealth: async () => null,
+        diagnoseAllActiveSessions: async () => [],
+      },
+    );
+
+    assert.equal(sent.some((m) => Array.isArray(m.attachments) && m.attachments.length > 0), false);
+    const cardMessage = sent.find((message) => message.richCard);
+    assert.ok(cardMessage);
+    assert.equal(cardMessage.richCard.title, '确认上传大文件');
+    const actions = cardMessage.richCard.actions.flat();
+    const commands = actions.map((action: any) => parseCommandCallbackData(action.callbackData)?.commandText || '');
+    assert.ok(commands.some((command: string) => command.startsWith('/file --confirm-large ')));
+    assert.ok(commands.some((command: string) => command.startsWith('/file --cancel-large ')));
+    assert.match(String(sent.at(-1)?.text || ''), /已发送确认卡片/);
   });
 
   it('reports tmux selection prompts through shared attach and screen inspection', async () => {
