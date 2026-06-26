@@ -9,10 +9,10 @@ CodeLark 的 IM 对话由三层组成：
 | 层级 | 含义 | 常用入口 |
 | --- | --- | --- |
 | Chat | 飞书私聊、群聊、话题或云文档评论入口。它只记录“这个聊天当前接到哪个 BridgeSession”。 | `/t`、`/t 1`、`/t unbind` |
-| BridgeSession | CodeLark 管理的一条工作会话，保存工作目录、当前 runtime、provider、模型和底层 thread 身份。 | `/new`、`/clear`、`/current` |
-| Runtime thread | Codex thread 或 Claude Code session，是底层 agent 自己的会话身份。 | `/t` 接管、`/his` 查看历史 |
+| BridgeSession | CodeLark 管理的一条工作会话，保存工作目录、当前 runtime、provider、模型和底层 runtime 身份。 | `/new`、`/clear`、`/current` |
+| Runtime session | Codex thread、Claude Code session 或 Kimi Code session，是底层 agent 自己的会话身份。 | `/t` 接管、`/his` 查看历史 |
 
-`/runtime` 选择当前会话使用 Codex 还是 Claude Code。`/provider` 选择当前 runtime 的驱动方式，例如 SDK、pty 或 tmux。切换 runtime 不会清空另一个 runtime 已记住的 provider；同一个聊天可以记住 Codex 和 Claude 各自的 BridgeSession，来回切换时会尽量回到之前那条会话。
+`/runtime` 选择当前会话使用 Codex、Claude Code 还是 Kimi Code。`/provider` 选择当前 runtime 的驱动方式，例如 SDK、pty 或 tmux。切换 runtime 不会清空另一个 runtime 已记住的 provider；同一个聊天可以记住 Codex、Claude 和 Kimi 各自的 BridgeSession，来回切换时会尽量回到之前那条会话。
 
 ## 推荐日常流程
 
@@ -47,7 +47,7 @@ CodeLark 的 IM 对话由三层组成：
 
 - 会话下拉：选择表格中的某条本地会话，效果等同 `/t <序号>`。
 - 数量下拉：切换显示 20、50 或 100 条，也可发送 `/t n 50`、`/t n 100`。
-- runtime 下拉：切换列表查看 Codex 或 Claude Code 会话，也可发送 `/t codex n 100` 或 `/t claude n 100`。
+- runtime 下拉：切换列表查看 Codex、Claude Code 或 Kimi Code 会话，也可发送 `/t codex n 100`、`/t claude n 100` 或 `/t kimi n 100`。
 
 表格首列会标出当前聊天正在绑定的会话，以及其他聊天已经绑定的会话。接管其他聊天绑定的会话时，如果目标还在运行会被拒绝；如果目标空闲，CodeLark 会先发确认卡片，确认后解绑原聊天并把会话 attach 到当前聊天。
 
@@ -56,13 +56,13 @@ CodeLark 的 IM 对话由三层组成：
 | 操作 | 命令 | 说明 |
 | --- | --- | --- |
 | attach 本地会话 | `/t 1` | 按当前 `/t` 表中的序号接管会话。 |
-| attach 指定会话 | `/t <thread_id>` 或 `/t <bridge_id>` | 也可用名称匹配，冲突时先回到 `/t` 用序号。 |
+| attach 指定会话 | `/t <thread_id|session_id>` 或 `/t <bridge_id>` | Codex 使用 thread_id；Claude/Kimi 使用 session_id；也可用名称匹配，冲突时先回到 `/t` 用序号。 |
 | detach 当前聊天 | `/t unbind` | 当前聊天脱离原会话，并立即绑定到新的临时 BridgeSession；原会话保留，可再次 `/t` 接回。 |
 | 临时会话 | `/t 0` | 切到隐藏的临时 BridgeSession。 |
 | 重置临时会话 | `/t 0 reset` | 丢弃当前临时上下文并生成新的临时 BridgeSession。 |
-| 归档当前本地会话 | `/t archive` | 归档当前绑定的本地 Codex/Claude 会话，并解除相关绑定。 |
+| 归档当前本地会话 | `/t archive` | 归档当前绑定的本地 Codex/Claude/Kimi 会话，并解除相关绑定。 |
 | 归档指定会话 | `/t archive 1` | 按当前 runtime 的 `/t` 表序号归档。 |
-| 重命名当前线程 | `/t rename <名称>` | 群聊通道会同步修改群名，并自动带 bot 前缀。 |
+| 重命名当前会话 | `/t rename <名称>` | 群聊通道会同步修改群名，并自动带 bot 前缀。 |
 
 ## 新建、清空和接回旧会话
 
@@ -83,6 +83,7 @@ CodeLark 的 IM 对话由三层组成：
 ```text
 /runtime codex
 /runtime claude
+/runtime kimi
 ```
 
 切换 provider：
@@ -94,9 +95,9 @@ CodeLark 的 IM 对话由三层组成：
 /p sdk
 ```
 
-Codex 支持 `sdk`、`pty`、`tmux`。Claude Code 支持 `tmux`、`pty`、`sdk`，默认是 `tmux`。`/provider` 不带参数时会显示当前 runtime 的 provider 和可选值。
+Codex 支持 `sdk`、`pty`、`tmux`。Claude Code 支持 `tmux`、`pty`、`sdk`，默认是 `tmux`。Kimi Code 当前只支持 `tmux`，发送普通文本后 CodeLark 会自动补一次 `Ctrl-S` steer。`/provider` 不带参数时会显示当前 runtime 的 provider 和可选值。
 
-`/current` 卡片顶部有 runtime 下拉，可以直接在 Codex 和 Claude Code 之间切换并刷新卡片。卡片表单保存时只更新当前显示 runtime 的配置项；例如切到 Claude Code 后保存，不会修改 Codex 的 sandbox 或 network 设置。
+`/current` 卡片顶部有 runtime 下拉，可以直接在 Codex、Claude Code 和 Kimi Code 之间切换并刷新卡片。卡片表单保存时只更新当前显示 runtime 的配置项；例如切到 Claude Code 后保存，不会修改 Codex 的 sandbox 或 network 设置。
 
 运行中不能随意切换 runtime/provider。遇到拒绝提示时，先等当前任务结束，或发送 `/stop` 停止当前任务，再切换。
 
@@ -159,6 +160,7 @@ CodeLark 的配置分两类理解最清楚：
 - 通用配置：默认 agent、默认工作目录、tmux 默认展示行数、tmux 自动回车、tmux 输入回显。
 - Codex：默认模型、YOLO 模式、provider、skip git repo check、sandbox、network、reasoning。
 - Claude：默认模型、YOLO 模式、provider、Claude executable、reasoning、空闲超时。
+- Kimi：默认模型、provider。
 - Bridge：UI 访问和流式状态提示。
 - 通道配置（feishu-default）：历史消息数量、流式反馈、Markdown 反馈、群聊是否需要 @bot 等。
 
@@ -166,6 +168,7 @@ CodeLark 的配置分两类理解最清楚：
 
 ```text
 /set runtime codex
+/set runtime kimi
 /set defaultWorkspaceRoot ~/work
 /set defaultProvider tmux
 /set claudeProvider tmux
@@ -179,7 +182,7 @@ CodeLark 的配置分两类理解最清楚：
 | 目标 | 入口 |
 | --- | --- |
 | 看 bridge、通道和当前绑定 | `/status` |
-| 找本地 Codex/Claude 会话并 attach | `/t` |
+| 找本地 Codex/Claude/Kimi 会话并 attach | `/t` |
 | 改当前会话名、cwd、runtime 配置 | `/current` |
 | 改全局默认值和通道默认值 | `/set` |
 | 看 tmux provider 的当前屏幕 | `/tmux-screen` |

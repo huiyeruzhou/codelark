@@ -153,6 +153,51 @@ describe('mirror-turns pending delivery queue', () => {
     assert.equal(subscription.pendingTurn?.lastResponseAt, null);
   });
 
+  it('keeps Kimi thinking records in the mirror status area', () => {
+    const snapshots: Array<{ statusNote: string | null; thinkingNote: string | null; text: string }> = [];
+    const subscription = {
+      sessionId: 'session-kimi',
+      threadId: 'session_11111111-1111-4111-8111-111111111111',
+      pendingTurn: null,
+    } as any;
+
+    consumeMirrorRecords(subscription, [
+      {
+        signature: 'start-1',
+        type: 'task_started',
+        content: '',
+        timestamp: '2026-04-21T10:00:00.000Z',
+        turnId: 'turn-1',
+      },
+      {
+        signature: 'think-1',
+        type: 'reasoning',
+        content: 'Kimi 正在整理上下文和下一步操作',
+        timestamp: '2026-04-21T10:00:01.000Z',
+        turnId: 'turn-1',
+        reasoningKind: 'thinking',
+        reasoningLabel: '思考',
+      },
+    ], {
+      onStatusProgress: (_subscription, turnState) => {
+        snapshots.push({
+          statusNote: turnState.statusNote,
+          thinkingNote: turnState.thinkingNote,
+          text: turnState.streamedText,
+        });
+      },
+    });
+
+    assert.deepEqual(snapshots, [{
+      statusNote: '思考',
+      thinkingNote: 'Kimi 正在整理上下文和下一步操作',
+      text: '',
+    }]);
+    assert.equal(subscription.pendingTurn?.statusNote, '思考');
+    assert.equal(subscription.pendingTurn?.thinkingNote, 'Kimi 正在整理上下文和下一步操作');
+    assert.equal(subscription.pendingTurn?.streamedText, '');
+  });
+
   it('updates context usage through mirror progress hooks', () => {
     const statuses: string[] = [];
     const subscription = {

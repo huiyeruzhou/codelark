@@ -14,7 +14,7 @@ import {
 } from '../../bridge/session/display/session-display-query.js';
 import { stripLegacySessionPrefix } from '../../bridge/session/display/session-title.js';
 import type { ChannelChat } from '../../domain/channel.js';
-import type { BridgeSession, BridgeSessionUpdate } from '../../domain/session.js';
+import type { BridgeSession, BridgeSessionUpdate, RuntimeAgent } from '../../domain/session.js';
 import type { ConfigPath } from '../../configuration/fields.js';
 import {
   resolveSessionTranscriptFile,
@@ -34,8 +34,10 @@ import {
   createUiSessionRuntimeSource,
   defaultUiSessionCodexSource,
   defaultUiSessionClaudeSource,
+  defaultUiSessionKimiSource,
   type UiSessionCodexSource,
   type UiSessionClaudeSource,
+  type UiSessionKimiSource,
   type UiSessionRuntimeSource,
 } from './session-source.js';
 
@@ -47,6 +49,8 @@ export interface UiSessionIdentity {
   codexThreadId?: string;
   claudeSessionId?: string;
   claudeCwd?: string;
+  kimiSessionId?: string;
+  kimiCwd?: string;
 }
 
 export interface UiSessionHistoryMessage {
@@ -88,7 +92,7 @@ function uiHistoryMessage(
   };
 }
 
-function uiRuntimeHistoryMessages(runtimeSource: UiSessionRuntimeSource, runtime: 'codex' | 'claude', threadId: string, cwd?: string): UiSessionHistoryMessage[] {
+function uiRuntimeHistoryMessages(runtimeSource: UiSessionRuntimeSource, runtime: RuntimeAgent, threadId: string, cwd?: string): UiSessionHistoryMessage[] {
   const entries = runtimeSource.readJsonlHistory(runtime, threadId, cwd);
   return entries.map((entry) => uiHistoryMessage(entry.role, entry.kind, entry.content, entry.timestamp, entry.rawJsonl));
 }
@@ -99,9 +103,9 @@ function uiTranscriptHistoryMessages(entries: SessionTranscriptHistoryEntry[]): 
 
 function filterUiMessagesForRuntime(
   messages: UiSessionHistoryMessage[],
-  runtime: 'codex' | 'claude' | undefined,
+  runtime: RuntimeAgent | undefined,
 ): UiSessionHistoryMessage[] {
-  if (runtime !== 'claude') return messages;
+  if (runtime !== 'claude' && runtime !== 'kimi') return messages;
   return messages.filter((message) => message.role !== 'user');
 }
 
@@ -144,7 +148,11 @@ function setOrUnsetSessionConfig(
 }
 
 function applySessionConfigToml(bridgeSessionId: string, payload: Record<string, unknown>): void {
-  const activeRuntime = payload.activeRuntime === 'claude' ? 'claude' : 'codex';
+  const activeRuntime = payload.activeRuntime === 'claude'
+    ? 'claude'
+    : payload.activeRuntime === 'kimi'
+      ? 'kimi'
+      : 'codex';
   if (typeof payload.workingDirectory === 'string') {
     const workspace = payload.workingDirectory.trim() || process.cwd();
     createConfigService({ migrate: false }).set(
@@ -175,6 +183,26 @@ function applySessionConfigToml(bridgeSessionId: string, payload: Record<string,
         'runtime.claude.reasoningEffort',
         payload.claudeReasoningEffort,
         (reasoningEffort) => ({ runtime: { claude: { reasoningEffort } } }),
+      );
+    }
+    return;
+  }
+
+  if (activeRuntime === 'kimi') {
+    if (typeof payload.kimiModel === 'string') {
+      setOrUnsetSessionConfig(
+        bridgeSessionId,
+        'runtime.kimi.model',
+        payload.kimiModel.trim(),
+        (model) => ({ runtime: { kimi: { model } } }),
+      );
+    }
+    if (payload.kimiProvider === 'tmux' || payload.kimiProvider === '') {
+      setOrUnsetSessionConfig(
+        bridgeSessionId,
+        'runtime.kimi.provider',
+        payload.kimiProvider,
+        (provider) => ({ runtime: { kimi: { provider } } }),
       );
     }
     return;
@@ -240,7 +268,7 @@ function applySessionConfigToml(bridgeSessionId: string, payload: Record<string,
   }
 }
 
-function runtimeSessionToSummary(runtimeSource: UiSessionRuntimeSource, store: JsonFileStore, runtime: 'codex' | 'claude', threadId: string, cwd?: string): UiSessionSummary | null {
+function runtimeSessionToSummary(runtimeSource: UiSessionRuntimeSource, store: JsonFileStore, runtime: RuntimeAgent, threadId: string, cwd?: string): UiSessionSummary | null {
   const session = runtimeSource.getThread(runtime, threadId, cwd);
   if (!session) return null;
   return new SessionDisplayQuery(store).localRuntimeSession(session);
@@ -278,7 +306,11 @@ function bindingForSessionHistory(store: JsonFileStore, session: BridgeSession):
 function sanitizeSessionConfig(payload: Record<string, unknown>): BridgeSessionUpdate {
   const updates: BridgeSessionUpdate = {};
   const runtimeUpdates: BridgeSessionUpdate[] = [];
-  const activeRuntime = payload.activeRuntime === 'claude' ? 'claude' : 'codex';
+  const activeRuntime = payload.activeRuntime === 'claude'
+    ? 'claude'
+    : payload.activeRuntime === 'kimi'
+      ? 'kimi'
+      : 'codex';
   if (typeof payload.name === 'string') {
     updates.name = payload.name.trim() || undefined;
   }
@@ -309,6 +341,8 @@ function sessionConfigPayload(session: BridgeSession) {
     codexNetworkAccess: getSessionConfigTomlOverride<boolean>(session, 'runtime.codex.networkAccess'),
     claudeModel: getSessionConfigTomlOverride<string>(session, 'runtime.claude.model') || '',
     claudeReasoningEffort: getSessionConfigTomlOverride<string>(session, 'runtime.claude.reasoningEffort') || '',
+    kimiModel: getSessionConfigTomlOverride<string>(session, 'runtime.kimi.model') || '',
+    kimiProvider: getSessionConfigTomlOverride<string>(session, 'runtime.kimi.provider') || '',
   };
 }
 
@@ -317,14 +351,15 @@ export class UiSessionApplication {
     private readonly store: JsonFileStore,
     private readonly codexSource: UiSessionCodexSource = defaultUiSessionCodexSource,
     private readonly claudeSource: UiSessionClaudeSource = defaultUiSessionClaudeSource,
+    private readonly kimiSource: UiSessionKimiSource = defaultUiSessionKimiSource,
   ) {}
 
   private createRuntimeSource(): UiSessionRuntimeSource {
-    return createUiSessionRuntimeSource(this.codexSource, this.claudeSource);
+    return createUiSessionRuntimeSource(this.codexSource, this.claudeSource, this.kimiSource);
   }
 
   private createSessionRegistry() {
-    return createUiSessionRegistry(this.store, this.codexSource, this.claudeSource);
+    return createUiSessionRegistry(this.store, this.codexSource, this.claudeSource, this.kimiSource);
   }
 
   listSessions(limit?: number): UiSessionListPayload {
@@ -406,6 +441,20 @@ export class UiSessionApplication {
       };
     }
 
+    if (identity.kimiSessionId && identity.kimiCwd) {
+      const runtimeSource = this.createRuntimeSource();
+      const summary = runtimeSessionToSummary(runtimeSource, this.store, 'kimi', identity.kimiSessionId, identity.kimiCwd);
+      if (!summary) {
+        throw new Error('指定的 Kimi Code 会话不存在。');
+      }
+
+      return {
+        session: summary,
+        source: 'kimi',
+        messages: uiRuntimeHistoryMessages(runtimeSource, 'kimi', identity.kimiSessionId, identity.kimiCwd),
+      };
+    }
+
     throw new Error('不支持的会话目标。');
   }
 
@@ -432,13 +481,24 @@ export class UiSessionApplication {
     };
   }
 
+  importKimiThread(kimiSessionId: string, cwd: string) {
+    const session = this.createSessionRegistry().materializeKimiThread(kimiSessionId, cwd);
+    return {
+      bridgeSessionId: session.id,
+      session: bridgeSessionToSummary(session),
+      config: sessionConfigPayload(session),
+    };
+  }
+
   renameSession(identity: UiSessionIdentity, name: string | undefined) {
     const registry = this.createSessionRegistry();
     const updated = identity.bridgeSessionId
       ? registry.renameBridgeSession(identity.bridgeSessionId, name)
       : identity.codexThreadId
         ? registry.renameCodexThread(identity.codexThreadId, name)
-        : registry.renameClaudeThread(identity.claudeSessionId!, identity.claudeCwd!, name);
+        : identity.claudeSessionId && identity.claudeCwd
+          ? registry.renameClaudeThread(identity.claudeSessionId, identity.claudeCwd, name)
+          : registry.renameKimiThread(identity.kimiSessionId!, identity.kimiCwd!, name);
     return sessionConfigPayload(updated);
   }
 
@@ -478,6 +538,17 @@ export class UiSessionApplication {
       }
 
       const result = this.createSessionRegistry().archiveClaudeThread(identity.claudeSessionId, identity.claudeCwd);
+      return { deleted: summary, deletedBridgeSessionIds: result.deletedBridgeSessionIds };
+    }
+
+    if (identity.kimiSessionId && identity.kimiCwd) {
+      const runtimeSource = this.createRuntimeSource();
+      const summary = runtimeSessionToSummary(runtimeSource, this.store, 'kimi', identity.kimiSessionId, identity.kimiCwd);
+      if (!summary) {
+        throw new Error('指定的 Kimi Code 会话不存在。');
+      }
+
+      const result = this.createSessionRegistry().archiveKimiThread(identity.kimiSessionId, identity.kimiCwd);
       return { deleted: summary, deletedBridgeSessionIds: result.deletedBridgeSessionIds };
     }
 

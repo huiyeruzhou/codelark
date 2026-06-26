@@ -34,6 +34,10 @@ function baseConfigV2(): ConfigV2 {
         reasoningEffort: 'medium',
         idleTimeoutMinutes: 12,
       },
+      kimi: {
+        model: '',
+        provider: 'tmux',
+      },
     },
     bridge: {
       defaultWorkspace: '~',

@@ -29,6 +29,7 @@ export function captureRuntimePtyScreen(session: BridgeSession, lines: number): 
       claudeSessionId: getSessionClaudeSessionId(session),
     };
   }
+  if (runtime !== 'codex') return null;
   const capture = capturePtyScreen(session.id, lines);
   if (!capture) return null;
   return {

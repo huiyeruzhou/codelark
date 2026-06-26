@@ -25,17 +25,22 @@ flowchart TB
   claudeState["BridgeSessionClaudeRuntimeState"]
   generalState["BridgeSessionGeneralState"]
 
-  runtimeState["BridgeSessionRuntimeState<br/>(one of Codex/Claude)"]
+  kimiWire["~/.kimi-code/sessions/**/wire.jsonl"]
+  kimiState["BridgeSessionKimiRuntimeState"]
+
+  runtimeState["BridgeSessionRuntimeState<br/>(one of Codex/Claude/Kimi)"]
   bridgeSession["BridgeSession"]
   channelChat["ChannelChat.bridgeSessionId"]
   feishuChat["飞书里的某个聊天"]
 
   codexJsonl -->|"thread id"| codexState
   claudeJsonl -->|"thread id"| claudeState
+  kimiWire -->|"session id"| kimiState
   runtimeCfg --> generalState
 
   codexState --> runtimeState
   claudeState --> runtimeState
+  kimiState --> runtimeState
   runtimeState --> bridgeSession
   generalState --> bridgeSession
 
@@ -64,11 +69,11 @@ Codex thread 可以来自不同入口：
 - 会话名、工作目录、模型、默认模式、reasoning 设置。
 - 运行态：running/queued/idle、health、mirror 状态、stream UI 状态。
 - 消息缓存：`messages/<sessionId>.json`。
-- 唯一 Codex thread 身份：`codex_thread_id`。
+- 当前 runtime 身份：Codex `threadId`、Claude `sessionId/cwd` 或 Kimi `sessionId/cwd`。
 语义规则：
-- 没有 `codex_thread_id`：这是一个尚未创建 Codex thread 的本地 session。
-- 有 `codex_thread_id`：这是一个已经关联 Codex thread 的本地 session。
-- 这个 thread 可能来自普通 IM 对话，也可能来自用户接管已有 Codex 会话
+- Codex session 没有 `threadId`：这是一个尚未创建 Codex thread 的本地 session。
+- Codex session 有 `threadId`：这是一个已经关联 Codex thread 的本地 session。
+- Claude/Kimi session 的 `sessionId/cwd` 来自对应 CLI 写出的本地会话文件，可能来自普通 IM 对话，也可能来自用户接管已有本机会话。
 
 ### ChannelChat
 
@@ -154,7 +159,7 @@ CodeLark 自有数据：
 Codex 外部数据：
 
 - Codex Native session JSONL：只读解析。
-- Codex Native `state_*.sqlite`：只读兼容读取。
+- Codex Native `session_index.jsonl`：只读读取标题和更新时间。
 - Codex CLI/SDK thread id：写入本地 session 的 `codex_thread_id`，不再写入 ChannelChat。
 
 ### 5. API 层

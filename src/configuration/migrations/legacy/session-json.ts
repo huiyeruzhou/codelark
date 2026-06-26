@@ -74,6 +74,10 @@ function claudeProvider(value: unknown): 'sdk' | 'pty' | 'tmux' | undefined {
   return value === 'sdk' || value === 'pty' || value === 'tmux' ? value : undefined;
 }
 
+function kimiProvider(value: unknown): 'tmux' | undefined {
+  return value === 'tmux' ? value : undefined;
+}
+
 function sandboxMode(value: unknown): 'read-only' | 'workspace-write' | 'danger-full-access' | undefined {
   return value === 'read-only' || value === 'workspace-write' || value === 'danger-full-access' ? value : undefined;
 }
@@ -83,14 +87,15 @@ function hasPatchContent(patch: ConfigPatch): boolean {
     patch.session
     || patch.runtime?.agent !== undefined
     || patch.runtime?.codex
-    || patch.runtime?.claude,
+    || patch.runtime?.claude
+    || patch.runtime?.kimi,
   );
 }
 
 function deleteEmptyContainers(session: Record<string, unknown>): void {
   if (!isRecord(session.runtime)) return;
   const runtime = session.runtime;
-  for (const key of ['codex', 'claude', 'general']) {
+  for (const key of ['codex', 'claude', 'kimi', 'general']) {
     if (isRecord(runtime[key]) && Object.keys(runtime[key] as Record<string, unknown>).length === 0) {
       delete runtime[key];
     }
@@ -106,10 +111,11 @@ function extractSessionPatch(sessionId: string, session: Record<string, unknown>
   const runtime = isRecord(cleanedSession.runtime) ? cleanedSession.runtime : {};
   const codex = isRecord(runtime.codex) ? runtime.codex : {};
   const claude = isRecord(runtime.claude) ? runtime.claude : {};
+  const kimi = isRecord(runtime.kimi) ? runtime.kimi : {};
   const general = isRecord(runtime.general) ? runtime.general : {};
   const patch: ConfigPatch = {};
 
-  if (runtime.activeRuntime === 'claude' || runtime.activeRuntime === 'codex') {
+  if (runtime.activeRuntime === 'claude' || runtime.activeRuntime === 'codex' || runtime.activeRuntime === 'kimi') {
     patch.runtime = { agent: runtime.activeRuntime };
     delete runtime.activeRuntime;
   }
@@ -192,11 +198,24 @@ function extractSessionPatch(sessionId: string, session: Record<string, unknown>
     delete claude.idleTimeoutMinutes;
   }
 
-  if (Object.keys(codexPatch).length > 0 || Object.keys(claudePatch).length > 0) {
+  const kimiPatch: NonNullable<NonNullable<ConfigPatch['runtime']>['kimi']> = {};
+  const kimiModel = readString(kimi, 'model');
+  if (kimiModel !== undefined) {
+    kimiPatch.model = kimiModel;
+    delete kimi.model;
+  }
+  const runtimeKimiProvider = kimiProvider(kimi.provider);
+  if (runtimeKimiProvider !== undefined) {
+    kimiPatch.provider = runtimeKimiProvider;
+    delete kimi.provider;
+  }
+
+  if (Object.keys(codexPatch).length > 0 || Object.keys(claudePatch).length > 0 || Object.keys(kimiPatch).length > 0) {
     patch.runtime = {
       ...(patch.runtime || {}),
       ...(Object.keys(codexPatch).length > 0 ? { codex: codexPatch } : {}),
       ...(Object.keys(claudePatch).length > 0 ? { claude: claudePatch } : {}),
+      ...(Object.keys(kimiPatch).length > 0 ? { kimi: kimiPatch } : {}),
     };
   }
 

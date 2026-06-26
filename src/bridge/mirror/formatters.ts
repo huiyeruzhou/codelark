@@ -95,6 +95,7 @@ export function formatMirrorMessage(
   forceAssistantLabel = false,
   includeTitle = true,
   goalStatus?: { status?: string | null; objective?: string | null } | null,
+  assistantLabel = getMirrorAssistantRuntimeLabel(),
 ): string {
   const sections: string[] = [];
   if (goalStatus) {
@@ -106,7 +107,7 @@ export function formatMirrorMessage(
     sections.push(userBlock);
   }
   const assistantBlock = formatMirrorSpeakerBlock(
-    getMirrorAssistantRuntimeLabel(),
+    assistantLabel,
     assistantText,
     markdown,
     forceAssistantLabel,

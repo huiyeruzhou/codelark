@@ -72,10 +72,13 @@ test('real setup wizard e2e can load credentials from env file without npm secre
   const script = fs.readFileSync(scriptPath, 'utf-8');
 
   assert.match(script, /--test-env-file/);
+  assert.match(script, /--runtime/);
+  assert.match(script, /codex\|ccr\|claude\|kimi/);
   assert.match(script, /CODELARK_REAL_FEISHU_TEST_APP_ID/);
   assert.match(script, /CODELARK_REAL_FEISHU_TEST_APP_SECRET/);
-  assert.match(script, /CTI_REAL_FEISHU_TEST_APP_ID/);
-  assert.match(script, /CTI_REAL_FEISHU_TEST_APP_SECRET/);
+  assert.doesNotMatch(script, /CTI_REAL_FEISHU_TEST_APP_ID/);
+  assert.doesNotMatch(script, /CTI_REAL_FEISHU_TEST_APP_SECRET/);
+  assert.doesNotMatch(script, /CTI_REAL_FEISHU_TEST_SITE/);
 });
 
 test('real setup wizard wizard e2e creates credentials in an isolated home and writes CodeLark TOML', () => {
@@ -93,6 +96,12 @@ test('real setup wizard wizard e2e creates credentials in an isolated home and w
   assert.match(script, /auth', 'check'/);
   assert.match(script, /LARKSUITE_CLI_CONFIG_DIR/);
   assert.match(script, /mock HOME/);
+  assert.match(script, /--home-marker <name>/);
+  assert.match(script, /runtime\?: \{/);
+  assert.match(script, /agent\?: string/);
+  assert.match(script, /runtime agent mismatch/);
+  assert.match(script, /kimi provider mismatch/);
+  assert.doesNotMatch(script, /runtime\?: \{ provider\?: string \}/);
   assert.match(script, /defaultRealFeishuTestEnvFile/);
   assert.match(script, /writeDefaultRealFeishuTestEnvFile/);
   assert.match(script, /CODELARK_REAL_FEISHU_TEST_APP_ID/);
@@ -143,6 +152,13 @@ test('setup wizard refreshes lark-cli identity policy after user authorization',
 
 test('recommends runtime from home directory markers', () => {
   const root = tempDir('clk-runtime-');
+  const kimiRoot = tempDir('clk-runtime-kimi-');
+
+  fs.mkdirSync(path.join(kimiRoot, '.kimi-code'), { recursive: true });
+  assert.deepEqual(recommendRuntime(kimiRoot), {
+    runtime: 'kimi',
+    reason: '检测到 ~/.kimi-code，默认使用 Kimi Code。',
+  });
 
   fs.mkdirSync(path.join(root, '.claude-code'), { recursive: true });
   assert.deepEqual(recommendRuntime(root), {
@@ -292,6 +308,9 @@ test('documents Feishu setup permissions required by bridge and doc-to-chat', ()
     'im:chat',
     'im:chat:delete',
     'im:chat:read',
+    'im:message.group_msg:get_as_user',
+    'im:message.p2p_msg:get_as_user',
+    'im:message.send_as_user',
   ]);
   assert.equal(feishuSetupUserAuthScopeArgument(), userScopes.join(' '));
   assert.deepEqual(FEISHU_REQUIRED_EVENTS.map((item) => item.event), [

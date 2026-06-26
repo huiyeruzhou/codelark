@@ -46,10 +46,17 @@ export const FEISHU_DOC_TO_CHAT_TENANT_SCOPES: FeishuPermissionRequirement[] = [
   { scope: 'docs:document.comment:write_only', reason: 'Create fallback document comments and Typing reactions.' },
 ];
 
+export const FEISHU_REAL_E2E_USER_MESSAGE_SCOPES: FeishuPermissionRequirement[] = [
+  { scope: 'im:message.send_as_user', reason: 'Send real Feishu E2E setup and steering messages as the test user.' },
+  { scope: 'im:message.group_msg:get_as_user', reason: 'Read group chat transcripts during real Feishu E2E assertions.' },
+  { scope: 'im:message.p2p_msg:get_as_user', reason: 'Read direct-message transcripts during real Feishu E2E assertions.' },
+];
+
 export const FEISHU_DOC_TO_CHAT_USER_AUTH_SCOPES: FeishuPermissionRequirement[] = [
   { scope: 'im:chat', reason: 'Support user-perspective real Feishu E2E chat setup and diagnostics.' },
   { scope: 'im:chat:read', reason: 'Inspect created group state during setup and diagnostics.' },
   { scope: 'im:chat:delete', reason: 'Clean up user-created real Feishu E2E groups.' },
+  ...FEISHU_REAL_E2E_USER_MESSAGE_SCOPES,
   { scope: 'docs:document.comment:read', reason: 'Inspect document comments for doc-to-chat diagnostics.' },
   { scope: 'docs:document.comment:create', reason: 'Create document comments in real doc-to-chat E2E flows.' },
   { scope: 'docs:document.comment:write_only', reason: 'Write document comments and reactions where supported.' },

@@ -11,7 +11,7 @@ import {
 import type { OutboundRichCard } from '../../domain/index.js';
 import type { ChannelAddress } from '../../domain/index.js';
 
-export type SettingGroupKey = 'runtime' | 'runtime.codex' | 'runtime.claude' | 'bridge' | 'channels.feishu';
+export type SettingGroupKey = 'runtime' | 'runtime.codex' | 'runtime.claude' | 'runtime.kimi' | 'bridge' | 'channels.feishu';
 type SettingControl = 'select' | 'input';
 
 interface SettingGroupDefinition {
@@ -55,6 +55,8 @@ const SETTING_DISPLAY_LABELS: Record<string, string> = {
   claudeExecutable: 'Claude Router',
   claudeReasoningEffort: '思考级别',
   claudeIdleTimeoutMinutes: '空闲超时（分钟）',
+  kimiDefaultModel: '模型',
+  kimiProvider: 'Provider（运行方式）',
   defaultWorkspaceRoot: '默认工作目录',
   tmuxCaptureLines: 'tmux 输出行数',
   tmuxAutoEnter: 'tmux 自动回车',
@@ -89,6 +91,8 @@ const SETTING_FORM_NAMES: Record<string, string> = {
   claudeExecutable: 'cld_exec',
   claudeReasoningEffort: 'cld_rsn_eft',
   claudeIdleTimeoutMinutes: 'cld_idle_min',
+  kimiDefaultModel: 'kimi_model',
+  kimiProvider: 'kimi_provider',
   uiAllowLan: 'ui_lan',
   uiAccessToken: 'ui_token',
   historyMessageLimit: 'hist_limit',
@@ -118,6 +122,12 @@ const SETTING_GROUPS: SettingGroupDefinition[] = [
     title: 'Claude',
     subtitle: 'Claude Code runtime 的 TOML 默认值。',
     aliases: ['claude', '[runtime.claude]'],
+  },
+  {
+    key: 'runtime.kimi',
+    title: 'Kimi',
+    subtitle: 'Kimi Code runtime 的 TOML 默认值。',
+    aliases: ['kimi', '[runtime.kimi]'],
   },
   {
     key: 'bridge',
@@ -153,8 +163,8 @@ function boolOptions(): Array<{ text: string; callbackData: string }> {
 
 function parseBoolean(raw: string): boolean | null {
   const token = raw.trim().toLowerCase();
-  if (['on', 'true', '1', 'yes', 'enable', 'enabled'].includes(token)) return true;
-  if (['off', 'false', '0', 'no', 'disable', 'disabled'].includes(token)) return false;
+  if (['on', 'true', '1'].includes(token)) return true;
+  if (['off', 'false', '0'].includes(token)) return false;
   return null;
 }
 
@@ -202,10 +212,14 @@ function writeStringPatch(
   buildPatch: (value: string) => ConfigPatch,
   options: { defaultValue?: string } = {},
 ) {
-  return (rawValue: string): SettingWriteOk => {
+  return (rawValue: string): SettingWriteOk | { ok: false; message: string } => {
     const value = rawValue.trim();
-    if (['default', 'reset', 'unset', 'none'].includes(value.toLowerCase())) {
+    const normalized = value.toLowerCase();
+    if (normalized === 'default') {
       return patch(buildPatch(options.defaultValue ?? ''));
+    }
+    if (normalized === 'reset' || normalized === 'unset' || normalized === 'none') {
+      return { ok: false, message: '清空该配置只支持 default。' };
     }
     return patch(buildPatch(value));
   };
@@ -240,14 +254,14 @@ const SETTING_DEFINITIONS: SettingDefinition[] = [
     group: 'runtime',
     aliases: ['defaultRuntime', 'agent'],
     label: 'agent',
-    usage: '/set runtime codex|claude',
+    usage: '/set runtime codex|claude|kimi',
     control: 'select',
-    options: [selectOption('codex'), selectOption('claude')],
+    options: [selectOption('codex'), selectOption('claude'), selectOption('kimi')],
     read: (config) => config.runtime.agent,
     write(rawValue) {
       const token = rawValue.trim().toLowerCase();
-      if (token === 'codex' || token === 'claude') return patch({ runtime: { agent: token } });
-      return { ok: false, message: 'Runtime 必须是 codex 或 claude。' };
+      if (token === 'codex' || token === 'claude' || token === 'kimi') return patch({ runtime: { agent: token } });
+      return { ok: false, message: 'Runtime 必须是 codex、claude 或 kimi。' };
     },
   },
   {
@@ -322,8 +336,8 @@ const SETTING_DEFINITIONS: SettingDefinition[] = [
     read: (config) => config.runtime.codex.yoloMode === 'on' || config.runtime.codex.yoloMode === 'yolo' ? 'yolo' : 'normal',
     write(rawValue) {
       const token = rawValue.trim().toLowerCase();
-      if (token === 'normal' || token === 'code' || token === 'off') return patch({ runtime: { codex: { yoloMode: 'off' } } });
-      if (token === 'yolo' || token === 'on') return patch({ runtime: { codex: { yoloMode: 'on' } } });
+      if (token === 'normal') return patch({ runtime: { codex: { yoloMode: 'off' } } });
+      if (token === 'yolo') return patch({ runtime: { codex: { yoloMode: 'on' } } });
       return { ok: false, message: 'YOLO 模式必须是 normal 或 yolo。' };
     },
   },
@@ -331,7 +345,7 @@ const SETTING_DEFINITIONS: SettingDefinition[] = [
     key: 'defaultProvider',
     tomlPath: 'runtime.codex.provider',
     group: 'runtime.codex',
-    aliases: ['provider', 'codexProvider', 'defualtProvider'],
+    aliases: ['provider', 'codexProvider'],
     label: 'provider',
     usage: '/set defaultProvider sdk|pty|tmux|default',
     control: 'select',
@@ -339,9 +353,9 @@ const SETTING_DEFINITIONS: SettingDefinition[] = [
     read: (config) => config.runtime.codex.provider || 'auto',
     write(rawValue) {
       const token = rawValue.trim().toLowerCase();
-      if (['default', 'reset', 'unset', 'none', 'auto'].includes(token)) return patch({ runtime: { codex: { provider: '' } } });
+      if (token === 'default') return patch({ runtime: { codex: { provider: '' } } });
       if (token === 'sdk' || token === 'tmux' || token === 'pty') return patch({ runtime: { codex: { provider: token } } });
-      return { ok: false, message: '默认 Codex Provider 运行方式必须是 sdk、pty 或 tmux，也可以用 default/auto 恢复自动选择。' };
+      return { ok: false, message: '默认 Codex Provider 运行方式必须是 sdk、pty 或 tmux，也可以用 default 恢复自动选择。' };
     },
   },
   {
@@ -424,8 +438,8 @@ const SETTING_DEFINITIONS: SettingDefinition[] = [
     read: (config) => config.runtime.claude.yoloMode === 'on' || config.runtime.claude.yoloMode === 'yolo' ? 'yolo' : 'normal',
     write(rawValue) {
       const token = rawValue.trim().toLowerCase();
-      if (token === 'normal' || token === 'code' || token === 'off') return patch({ runtime: { claude: { yoloMode: 'off' } } });
-      if (token === 'yolo' || token === 'on') return patch({ runtime: { claude: { yoloMode: 'on' } } });
+      if (token === 'normal') return patch({ runtime: { claude: { yoloMode: 'off' } } });
+      if (token === 'yolo') return patch({ runtime: { claude: { yoloMode: 'on' } } });
       return { ok: false, message: 'Claude YOLO 模式必须是 normal 或 yolo。' };
     },
   },
@@ -441,9 +455,8 @@ const SETTING_DEFINITIONS: SettingDefinition[] = [
     read: (config) => config.runtime.claude.provider || 'tmux',
     write(rawValue) {
       const token = rawValue.trim().toLowerCase();
-      if (['default', 'reset', 'unset', 'none', 'auto'].includes(token)) return patch({ runtime: { claude: { provider: 'tmux' } } });
       if (token === 'tmux' || token === 'pty' || token === 'sdk') return patch({ runtime: { claude: { provider: token } } });
-      return { ok: false, message: '默认 Claude Provider 运行方式必须是 tmux、pty 或 sdk，也可以用 default/auto 恢复默认。' };
+      return { ok: false, message: '默认 Claude Provider 运行方式必须是 tmux、pty 或 sdk。' };
     },
   },
   {
@@ -494,6 +507,34 @@ const SETTING_DEFINITIONS: SettingDefinition[] = [
       const parsed = parseNonNegativeInt(rawValue);
       if (parsed === null || parsed > 120) return { ok: false, message: 'Claude 空闲超时必须是 0-120 的整数分钟；0/off 表示关闭。' };
       return patch({ runtime: { claude: { idleTimeoutMinutes: parsed } } });
+    },
+  },
+  {
+    key: 'kimiDefaultModel',
+    tomlPath: 'runtime.kimi.model',
+    group: 'runtime.kimi',
+    aliases: ['kimiModel'],
+    label: 'model',
+    usage: '/set kimiDefaultModel <model> 或 /set kimiDefaultModel default',
+    control: 'input',
+    placeholder: '留空则跟随 Kimi Code 默认',
+    read: (config) => config.runtime.kimi.model || '-',
+    write: writeStringPatch((value) => ({ runtime: { kimi: { model: value } } })),
+  },
+  {
+    key: 'kimiProvider',
+    tomlPath: 'runtime.kimi.provider',
+    group: 'runtime.kimi',
+    aliases: ['kimiDefaultProvider'],
+    label: 'provider',
+    usage: '/set kimiProvider tmux',
+    control: 'select',
+    options: [selectOption('tmux')],
+    read: (config) => config.runtime.kimi.provider || 'tmux',
+    write(rawValue) {
+      const token = rawValue.trim().toLowerCase();
+      if (token === 'tmux') return patch({ runtime: { kimi: { provider: 'tmux' } } });
+      return { ok: false, message: 'Kimi Provider 当前只支持 tmux。' };
     },
   },
   {
@@ -656,7 +697,7 @@ function findGroup(raw: string): SettingGroupDefinition | undefined {
   ));
 }
 
-const CURRENT_RUNTIME_SETTING_KEYS: Record<'codex' | 'claude', string[]> = {
+const CURRENT_RUNTIME_SETTING_KEYS: Record<'codex' | 'claude' | 'kimi', string[]> = {
   codex: [
     'defaultModel',
     'defaultMode',
@@ -671,6 +712,10 @@ const CURRENT_RUNTIME_SETTING_KEYS: Record<'codex' | 'claude', string[]> = {
     'claudeProvider',
     'claudeReasoningEffort',
     'claudeIdleTimeoutMinutes',
+  ],
+  kimi: [
+    'kimiDefaultModel',
+    'kimiProvider',
   ],
 };
 
@@ -699,6 +744,10 @@ const SETTING_GROUP_ORDERS: Partial<Record<SettingGroupKey, string[]>> = {
     'claudeReasoningEffort',
     'claudeIdleTimeoutMinutes',
   ],
+  'runtime.kimi': [
+    'kimiDefaultModel',
+    'kimiProvider',
+  ],
 };
 
 function groupDefinitions(groupKey: SettingGroupKey): SettingDefinition[] {
@@ -710,10 +759,12 @@ function groupDefinitions(groupKey: SettingGroupKey): SettingDefinition[] {
 }
 
 export function runtimeSettingDefinitions(
-  runtime: 'codex' | 'claude',
+  runtime: 'codex' | 'claude' | 'kimi',
   options: { sessionWritableOnly?: boolean } = {},
 ): SettingDefinition[] {
-  const definitions = groupDefinitions(runtime === 'claude' ? 'runtime.claude' : 'runtime.codex');
+  const definitions = groupDefinitions(runtime === 'kimi'
+    ? 'runtime.kimi'
+    : runtime === 'claude' ? 'runtime.claude' : 'runtime.codex');
   if (!options.sessionWritableOnly) return definitions;
   const allowed = new Set(CURRENT_RUNTIME_SETTING_KEYS[runtime]);
   return definitions.filter((definition) => allowed.has(definition.key));

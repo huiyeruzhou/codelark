@@ -31,13 +31,16 @@
       "required": ["provider"],
       "properties": {
         "provider": {
-          "const": "codex"
+          "enum": ["codex", "claude", "kimi"]
         },
         "codex": {
           "$ref": "#/$defs/codexRuntimeDefaults"
         },
         "claude": {
           "$ref": "#/$defs/claudeRuntimeDefaults"
+        },
+        "kimi": {
+          "$ref": "#/$defs/kimiRuntimeDefaults"
         },
         "bridgeControl": {
           "$ref": "#/$defs/bridgeControlConfig"
@@ -103,6 +106,26 @@
         "idleTimeoutMinutes": {
           "type": "integer",
           "minimum": 0
+        }
+      },
+      "allOf": [
+        {
+          "$ref": "#/$defs/noRetiredThreadIdentityFields"
+        }
+      ],
+      "additionalProperties": true
+    },
+    "kimiRuntimeDefaults": {
+      "type": "object",
+      "properties": {
+        "provider": {
+          "enum": ["tmux"]
+        },
+        "defaultModel": {
+          "type": "string"
+        },
+        "model": {
+          "type": "string"
         }
       },
       "allOf": [

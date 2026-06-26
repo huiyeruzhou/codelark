@@ -9,6 +9,7 @@ import {
   recordStreamContentResponse,
   shouldShowStreamLastContentResponseAge,
   updateStreamStatusNote,
+  updateStreamThinkingNote,
 } from '../../../../bridge/turn/stream-state.js';
 
 describe('stream-state', () => {
@@ -72,6 +73,17 @@ describe('stream-state', () => {
     assert.equal(
       buildStreamRuntimeStatus(state, 10_000),
       '已运行 10秒，125k(63%) · ↑125k ↓4.6k',
+    );
+  });
+
+  it('shows bounded current thinking in runtime status', () => {
+    const state = createStreamState(0);
+    updateStreamStatusNote(state, '思考', 1_000);
+    updateStreamThinkingNote(state, '甲'.repeat(610), 2_000);
+
+    assert.equal(
+      buildStreamRuntimeStatus(state, 10_000),
+      `当前步骤：思考\n当前思考：${'甲'.repeat(600)}...\n已运行 10秒`,
     );
   });
 });

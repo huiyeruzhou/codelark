@@ -18,29 +18,30 @@ nvm use 24
 
 | 目的 | 命令 | 说明 |
 | --- | --- | --- |
-| 全量本地测试 | `npm test` | 通过 `scripts/run-tests.js` 递归发现 `src/__tests__/**/*.test.ts` 并串行运行。脚本会创建临时 `HOME`、`CODELARK_HOME`、`CODEX_HOME`、`CODELARK_CLAUDE_HOME` 和 `USERPROFILE`，避免污染真实 bridge 与真实 Codex/Claude home。 |
+| 全量本地测试 | `npm test` | 通过 `scripts/run-tests.js` 递归发现 `src/__tests__/**/*.test.ts` 并串行运行。脚本会创建临时 `HOME`、`CODELARK_HOME`、`CODEX_HOME`、`CODELARK_CLAUDE_HOME`、`KIMI_CODE_HOME` 和 `USERPROFILE`，避免污染真实 bridge 与真实 Codex/Claude/Kimi home。 |
 | 纯逻辑单测 | `npm test -- --unit` | 只运行 `src/__tests__/unit/`。 |
 | 本地 workflow | `npm test -- --workflow` | 只运行 `src/__tests__/workflow/`。 |
 | 本地 mock app E2E | `npm test -- --mock-e2e` | 只运行 `src/__tests__/e2e/mock-app/`。 |
-| 本地真实进程 E2E | `npm test -- --local-e2e` | 只运行 `src/__tests__/e2e/local-process/`，其中真实外部 Codex/Claude smoke 仍由环境变量显式开启。 |
+| 本地真实进程 E2E | `npm test -- --local-e2e` | 只运行 `src/__tests__/e2e/local-process/`。Codex/Claude 覆盖真实 CLI 或 pty/tmux 进程；Kimi 这里只覆盖 fake Kimi CLI + 真实 tmux 的 deterministic smoke，不作为 Kimi 真实飞书 E2E 证据。 |
 | Harness 自测 | `npm test -- --harness` | 只运行 `src/__tests__/harness/`，包括真实飞书 harness 自测和测试环境隔离 guard。 |
 | 类型检查 | `npm run typecheck` | 验证 TypeScript 类型和公共导入边界。 |
 | 构建验证 | `npm run build` | 验证发布构建入口和 esbuild 打包。 |
 | 文档验证 | `npm run docs:build` | 验证 VitePress 文档链接、导航和 Markdown 构建。 |
 | Setup wizard / lark-cli 真实本地 E2E | `CODELARK_SETUP_WIZARD_REAL_E2E=1 npm run real:setup-wizard:e2e -- ...` | 用真实 `lark-cli config init --app-id ... --app-secret-stdin` 在临时 `HOME` 下写入 `~/.lark-cli/config.json` 和本地加密 secret，再验证 setup wizard 能通过 lark-cli 配置回读 secret，并验证 CodeLark 写入 `~/.codelark/config.toml` 且不改写 legacy `config.json` / `config.env`。默认成功和失败都会清理临时目录；只有传 `--keep-temp` 才保留。 |
 | 真实飞书场景目录 | `npm run real:feishu:e2e -- --list-scenarios` | 输出真实 E2E 场景、provider 矩阵、coverage tier 和对应本地覆盖。 |
-| 真实飞书 E2E | `CODELARK_REAL_FEISHU_E2E=1 npm run real:feishu:e2e -- ...` | 真实创建/复用飞书群、用 lark-cli 用户身份发消息，再用 lark-cli 用户身份拉取消息/群信息验证 bridge 回复、飞书 transcript、provider 输出路径和清理 gate。 |
+| 真实飞书 E2E | `CODELARK_REAL_FEISHU_E2E=1 npm run real:feishu:e2e -- --launch-bridge ...` | 启动隔离 bridge，真实创建/复用飞书群、用 lark-cli 用户身份发消息，再用 lark-cli 用户身份拉取消息/群信息验证 bridge 回复、飞书 transcript、provider 输出路径和清理 gate；不复用当前 live bridge。 |
 
 需要定向跑某个本地测试文件时，不要复用真实 home。可以手动模拟 `scripts/run-tests.js` 的隔离环境：
 
 ```bash
 tmp="$(mktemp -d)"
-mkdir -p "$tmp/runtime-home" "$tmp/codex-home" "$tmp/claude-home"
+mkdir -p "$tmp/runtime-home" "$tmp/codex-home" "$tmp/claude-home" "$tmp/kimi-home"
 HOME="$tmp/runtime-home" \
 USERPROFILE="$tmp/runtime-home" \
 CODELARK_HOME="$tmp" \
 CODEX_HOME="$tmp/codex-home" \
 CODELARK_CLAUDE_HOME="$tmp/claude-home" \
+KIMI_CODE_HOME="$tmp/kimi-home" \
 node --test --import tsx --test-timeout=15000 src/__tests__/e2e/mock-app/bridge/command/bridge-command-e2e.test.ts
 rm -rf "$tmp"
 ```
@@ -50,10 +51,11 @@ Setup wizard / lark-cli 真实本地 E2E 不访问飞书 OpenAPI，也不触碰�
 ```bash
 CODELARK_SETUP_WIZARD_REAL_E2E=1 npm run real:setup-wizard:e2e -- \
   --test-env-file ~/.codelark/test/real-feishu-e2e.test.env \
-  --site feishu
+  --site feishu \
+  --runtime kimi
 ```
 
-`--test-env-file` 支持 `CODELARK_REAL_FEISHU_TEST_APP_ID` / `CODELARK_REAL_FEISHU_TEST_APP_SECRET`，并兼容旧的 `CTI_REAL_FEISHU_TEST_APP_ID` / `CTI_REAL_FEISHU_TEST_APP_SECRET`。不要把真实 App Secret 放在 npm 参数里，npm 会回显完整命令。
+`--runtime` 支持 `codex`、`ccr`、`claude` 和 `kimi`，默认是 `codex`；Kimi 路径会验证 `runtime.agent=kimi` 和 `runtime.kimi.provider=tmux` 写入。`--test-env-file` 只读取 `CODELARK_REAL_FEISHU_TEST_APP_ID` / `CODELARK_REAL_FEISHU_TEST_APP_SECRET` / `CODELARK_REAL_FEISHU_TEST_SITE`；旧 `CTI_REAL_FEISHU_*` 写法不是有效输入。不要把真实 App Secret 放在 npm 参数里，npm 会回显完整命令。
 
 默认会删除 `/tmp/clk-setup-wizard-real-e2e-*` 临时目录。需要排查时才加 `--keep-temp`，脚本输出 JSON 里的 `runRoot` 是保留现场路径。
 
@@ -66,7 +68,7 @@ CODELARK_SETUP_WIZARD_REAL_E2E=1 npm run real:setup-wizard:e2e -- \
 | 纯逻辑测试 | 解析、格式化、状态 reducer、schema、配置转换是否正确。 | 位于 `src/__tests__/unit/<owner>/`，不启动真实 provider，不依赖网络，不触碰真实 home。 | 改命令解析、渲染、存储结构、schema、配置、权限状态时。 |
 | 本地 workflow 测试 | 一条 IM 命令或 runtime turn 经过 bridge 内部编排后，是否生成正确状态和交付动作。 | 位于 `src/__tests__/workflow/<slice>/`，使用 fake adapter/provider/store；可能覆盖多个内部组件。 | 改命令体系、会话绑定、delivery、mirror、turn runner、UI application 时。 |
 | 本地 mock app E2E | daemon 级入口、fake channel/provider、状态持久化和交付动作是否闭环。 | 位于 `src/__tests__/e2e/mock-app/`，仍不证明真实 provider 可执行文件或真实飞书客户端契约。 | 改 bridge host 集成、命令入口、card payload 或应用级编排时。 |
-| 本地真实进程 E2E | Codex/Claude pty/tmux/CLI 路径在隔离 home 中是否能启动、产生事件或完成清理。 | 位于 `src/__tests__/e2e/local-process/`；仍不等于真实飞书。 | 改 provider 启动、tmux/pty、JSONL 发现、CLI bootstrap、真实进程清理时。 |
+| 本地真实进程 E2E | Codex/Claude 的真实 pty/tmux/CLI 路径，以及 Kimi fake CLI + 真实 tmux 路径，在隔离 home 中是否能启动、产生事件或完成清理。 | 位于 `src/__tests__/e2e/local-process/`；仍不等于真实飞书。 | 改 provider 启动、tmux/pty、JSONL 或 wire 发现、CLI bootstrap、真实进程清理时。 |
 
 真实飞书 E2E 是第四层，专门验证外部平台契约：飞书事件投递、bot 入群、`reply_to`、真实卡片/文件/表单消息、provider 输出路径和测试群清理。它不替代本地测试。
 
@@ -92,7 +94,7 @@ fake 测试也要遵守真实职责边界。`fake tmux` 只模拟 tmux transport
 | `bridge-adapter-runtime.test.ts` | adapter 事件进入 bridge 后按当前 runtime 路由。 |
 | `interactive-runtime.test.ts` | runtime 选择、provider 绑定和运行时上下文。 |
 | `runtime/runtime-options.test.ts` | runtime/provider 选项解析和业务 fallback；配置层只提供 schema 校验后的统一值。 |
-| `session-runtime.test.ts` | `BridgeSession` 上 Codex/Claude runtime 字段的读写语义。 |
+| `session-runtime.test.ts` | `BridgeSession` 上 Codex/Claude/Kimi runtime 字段的读写语义。 |
 | `session-registry.test.ts`、`session-registry-bindings.test.ts`、`session-display-query.test.ts`、`session-health-runtime.test.ts` | session 创建、聊天绑定、展示查询、健康诊断和跨 runtime 状态。 |
 | `turn-classifier.test.ts` | 普通用户消息、命令、特殊控制输入等 turn 类型识别。 |
 | `turn-coordinator.test.ts` | 同一会话内 turn 的排队、互斥、取消和状态协调。 |
@@ -101,20 +103,21 @@ fake 测试也要遵守真实职责边界。`fake tmux` 只模拟 tmux transport
 
 ### Runtime/provider 执行链路
 
-这些测试证明 bridge 与 Codex/Claude provider 的协议边界稳定：事件流、session identity、pty/tmux 生命周期、CLI 可执行文件、模型列表和错误事件。
+这些测试证明 bridge 与 Codex/Claude/Kimi provider 的协议边界稳定：事件流、session identity、pty/tmux 生命周期、CLI 可执行文件、模型列表和错误事件。
 
 | 测试文件 | 关注点 |
 | --- | --- |
 | `codex-provider.test.ts` | Codex SDK/SSE 事件转换、图片输入、错误事件和 provider 主路径。 |
-| `codex-routing-provider.test.ts` | Codex/Claude `sdk|pty|tmux` provider 选择和 fallback，包含 Claude 默认 tmux。 |
+| `codex-routing-provider.test.ts` | Codex/Claude/Kimi provider 选择和 fallback，包含 Claude 默认 tmux 与 Kimi tmux。 |
 | `codex-cli-executable.test.ts`、`codex-models.test.ts` | Codex CLI 定位和模型列表缓存。 |
 | `codex-pty-provider.test.ts`、`codex-tmux-provider.test.ts` | Codex pty/tmux prompt 注入、启动参数、auto-enter、清理和事件输出。 |
 | `codex-session-index.test.ts`、`codex-session-mirror.test.ts` | Codex JSONL/session 索引读取、mirror cursor 对齐和事件重放。 |
 | `claude-tmux-provider.test.ts`、`claude-pty-provider.test.ts`、`claude-sdk-provider.test.ts`、`claude-session-jsonl.test.ts` | Claude tmux 启动/注入/mirror SSE、Claude pty 身份发现、Claude SDK helper、Claude JSONL session 读取。 |
+| `kimi-tmux-provider.test.ts`、`kimi-tmux-provider-local-process.e2e.test.ts` | Kimi tmux 启动、resume hint session id 解析、`wire.jsonl` session 索引、think/status、`Ctrl-S` steer，以及 fake Kimi CLI 穿过真实 tmux 的 local-process smoke。 |
 | `sse-stream-decoder.test.ts` | SSE 文本流解码和事件边界。 |
 | `interactive-turn-runner.test.ts` | 一次 runtime turn 的主编排，含 stream、tool、context、goal、stop、mirror suppression 和基础对话 simulator。 |
 | `interactive-turn-sdk-conversation-engine.test.ts`、`interactive-turn-sdk-stream-events-controller.test.ts`、`interactive-turn-final-response-plan.test.ts`、`interactive-turn-terminal-finalization-controller.test.ts` | SDK conversation 内联附件/tool 展开、stream event 控制、最终回复计划和终端 provider finalization。 |
-| `real-codex-pty-provider.e2e.test.ts`、`real-codex-tmux-provider.e2e.test.ts`、`real-claude-pty-provider.e2e.test.ts` | 隔离 home 中启动真实 provider 进程或 fake backend，验证 pty/tmux/Claude Code 路径。 |
+| `real-codex-pty-provider.e2e.test.ts`、`real-codex-tmux-provider.e2e.test.ts`、`real-claude-pty-provider.e2e.test.ts`、`kimi-tmux-provider-local-process.e2e.test.ts` | 隔离 home 中启动真实 provider 进程或 fake backend，验证 pty/tmux/Claude Code 路径，以及 fake Kimi CLI 穿过真实 tmux 的 resume hint、wire mirror 和 `Ctrl-S` steer。 |
 
 ### 交付、流式、mirror 和用户可见渲染
 
@@ -187,10 +190,10 @@ npm run real:feishu:e2e -- --list-scenarios
 | 验证目的 | 首选场景 | 说明 |
 | --- | --- | --- |
 | provider 路径是否健康 | `message-only` 或 `runtime-message` | 只证明消息能到达 runtime 并回到飞书，不证明复杂功能。 |
-| 同一会话多 provider 基础对话 | `basic-dialogue-suite` | 最高优先级长流程，按 `codex-sdk -> claude-sdk -> codex-tmux -> claude-pty -> codex-pty` 覆盖代表路径。 |
+| 同一会话多 provider 基础对话 | `basic-dialogue-suite` | 最高优先级长流程，按 `codex-sdk -> claude-sdk -> kimi-tmux -> codex-tmux -> claude-pty -> codex-pty` 覆盖代表路径。 |
 | 命令状态和配置 | `command-state` | 覆盖 `/status`、runtime/provider 设置、require-at、`/every` 等语义文本。 |
 | 会话生命周期 | `session-management` | 覆盖 `/help`、`/set`、`/new`、`/cd`、`/current`、`/check`、`/t`、最终 prompt 和 `/his`。 |
-| 历史功能簇 | `history-suite` | 代表 provider 合并验证 `/his` 默认/raw/msg/limit/json/file、长截断和跨群空历史隔离。 |
+| 历史功能簇 | `history-suite` | 在 runtime/provider 矩阵中合并验证 `/his` 默认/raw/msg/limit/json/file、长截断和跨群空历史隔离，包含 `kimi-tmux`。 |
 | mention 策略 | `require-at-toggle` | runtime-neutral，专门验证非 mention 群消息过滤。 |
 | 表单和交互卡片 | `card-forms`、`agent-question-forms` | 覆盖 `/new-form` 和模型输出 `<clk-ask>` 后的 CardKit/interactive payload。 |
 | Markdown 真实渲染 | `markdown-rendering` | 以飞书原始消息为准检查表格和 fenced code block。 |

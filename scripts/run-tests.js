@@ -7,9 +7,11 @@ const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), 'codelark-test-'));
 const runtimeHome = path.join(tempHome, 'runtime-home');
 const codexHome = path.join(tempHome, 'codex-home');
 const claudeHome = path.join(tempHome, 'claude-home');
+const kimiHome = path.join(tempHome, 'kimi-home');
 fs.mkdirSync(runtimeHome, { recursive: true });
 fs.mkdirSync(codexHome, { recursive: true });
 fs.mkdirSync(claudeHome, { recursive: true });
+fs.mkdirSync(kimiHome, { recursive: true });
 
 const testsDir = path.join(process.cwd(), 'src', '__tests__');
 
@@ -102,6 +104,7 @@ child = spawn(
       CODELARK_HOME: tempHome,
       CODEX_HOME: codexHome,
       CODELARK_CLAUDE_HOME: claudeHome,
+      KIMI_CODE_HOME: kimiHome,
     },
   },
 );

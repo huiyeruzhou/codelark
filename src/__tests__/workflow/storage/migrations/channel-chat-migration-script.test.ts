@@ -59,6 +59,13 @@ describe('migrate-bindings-to-channel-chats.js', () => {
       'sess-inactive': {
         id: 'sess-inactive',
       },
+      'sess-kimi': {
+        id: 'sess-kimi',
+        runtime: {
+          activeRuntime: 'kimi',
+          kimi: { sessionId: 'session_kimi_legacy_binding', cwd: '/kimi/runtime-cwd' },
+        },
+      },
     }, null, 2));
     fs.writeFileSync(path.join(dataDir, 'bindings.json'), JSON.stringify({
       inactiveSameChat: {
@@ -100,20 +107,33 @@ describe('migrate-bindings-to-channel-chats.js', () => {
         updatedAt: '2026-05-03T00:00:00.000Z',
         createdAt: '2026-05-03T00:00:00.000Z',
       },
+      activeKimi: {
+        id: 'activeKimi',
+        channelType: 'feishu-default',
+        chatId: 'chat-kimi',
+        bridgeSessionId: 'sess-kimi',
+        active: true,
+        workingDirectory: '/kimi/binding-cwd',
+        model: 'kimi-binding-model',
+        mode: 'yolo',
+        chatDisplayName: 'Kimi Chat',
+        updatedAt: '2026-05-04T00:00:00.000Z',
+        createdAt: '2026-05-04T00:00:00.000Z',
+      },
     }, null, 2));
 
     const raw = execFileSync(process.execPath, [SCRIPT_PATH, '--clk-home', codelarkHome], {
       encoding: 'utf-8',
     });
     const summary = JSON.parse(raw);
-    assert.equal(summary.inputBindings, 3);
-    assert.equal(summary.outputChannelChats, 1);
+    assert.equal(summary.inputBindings, 4);
+    assert.equal(summary.outputChannelChats, 2);
     assert.equal(summary.droppedBindings, 2);
     assert.equal(summary.skippedInactiveBindings, 2);
-    assert.equal(summary.sessionsChanged, 1);
+    assert.equal(summary.sessionsChanged, 2);
 
     const channelChats = readJson(path.join(dataDir, 'channel-chats.json'));
-    assert.deepEqual(Object.keys(channelChats), ['activeSameChat']);
+    assert.deepEqual(Object.keys(channelChats), ['activeSameChat', 'activeKimi']);
     assert.deepEqual(channelChats.activeSameChat, {
       id: 'activeSameChat',
       channelType: 'feishu-default',
@@ -126,6 +146,14 @@ describe('migrate-bindings-to-channel-chats.js', () => {
       createdAt: '2026-05-02T00:00:00.000Z',
       updatedAt: '2026-05-02T00:00:00.000Z',
     });
+    assert.deepEqual(channelChats.activeKimi, {
+      id: 'activeKimi',
+      channelType: 'feishu-default',
+      chatId: 'chat-kimi',
+      bridgeSessionId: 'sess-kimi',
+      createdAt: '2026-05-04T00:00:00.000Z',
+      updatedAt: '2026-05-04T00:00:00.000Z',
+    });
 
     const sessions = readJson(path.join(dataDir, 'sessions.json'));
     assert.equal(sessions['sess-active-new'].working_directory, '/new');
@@ -135,6 +163,13 @@ describe('migrate-bindings-to-channel-chats.js', () => {
     assert.equal(sessions['sess-active-new'].preferred_mode, undefined);
     assert.equal(sessions['sess-active-new'].name, 'New Chat');
     assert.equal(sessions['sess-inactive'].working_directory, undefined);
+    assert.equal(sessions['sess-kimi'].working_directory, '/kimi/binding-cwd');
+    assert.equal(sessions['sess-kimi'].runtime?.activeRuntime, 'kimi');
+    assert.equal(sessions['sess-kimi'].runtime?.kimi?.sessionId, 'session_kimi_legacy_binding');
+    assert.equal(sessions['sess-kimi'].runtime?.kimi?.model, 'kimi-binding-model');
+    assert.equal(sessions['sess-kimi'].runtime?.codex, undefined);
+    assert.equal(sessions['sess-kimi'].runtime?.kimi?.mode, undefined);
+    assert.equal(sessions['sess-kimi'].name, 'Kimi Chat');
     assert.equal(fs.existsSync(path.join(dataDir, 'bindings.json')), false);
   });
 });

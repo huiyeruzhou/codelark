@@ -385,8 +385,8 @@ async function handleCurrentRuntimeCommand(options: {
 }): Promise<{ response: string; richCard?: OutboundRichCard }> {
   const binding = options.binding || router.resolve(options.msg.address);
   const runtime = normalizeFormString(options.args);
-  if (runtime !== 'codex' && runtime !== 'claude') {
-    return { response: '请选择有效 runtime：codex 或 claude。' };
+  if (runtime !== 'codex' && runtime !== 'claude' && runtime !== 'kimi') {
+    return { response: '请选择有效 runtime：codex、claude 或 kimi。' };
   }
 
   const session = options.store.getSession(binding.bridgeSessionId);
@@ -415,15 +415,15 @@ async function handleCurrentRuntimeCommand(options: {
   };
 }
 
-function normalizeRuntimeFormValue(value: unknown): 'codex' | 'claude' | undefined {
+function normalizeRuntimeFormValue(value: unknown): 'codex' | 'claude' | 'kimi' | undefined {
   const runtime = normalizeFormString(value).toLowerCase();
-  return runtime === 'codex' || runtime === 'claude' ? runtime : undefined;
+  return runtime === 'codex' || runtime === 'claude' || runtime === 'kimi' ? runtime : undefined;
 }
 
-function parseCurrentRuntimeArg(args: string): 'codex' | 'claude' | undefined {
+function parseCurrentRuntimeArg(args: string): 'codex' | 'claude' | 'kimi' | undefined {
   const parts = args.trim().toLowerCase().split(/\s+/).filter(Boolean);
   const runtime = parts[0] === 'runtime' ? parts[1] : parts[0];
-  return runtime === 'codex' || runtime === 'claude' ? runtime : undefined;
+  return runtime === 'codex' || runtime === 'claude' || runtime === 'kimi' ? runtime : undefined;
 }
 
 export async function handleBridgeCommand(

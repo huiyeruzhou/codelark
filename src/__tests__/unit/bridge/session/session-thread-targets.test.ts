@@ -17,7 +17,7 @@ function localSession(
     threadId,
     filePath: `/tmp/${threadId}.jsonl`,
     cwd: `/tmp/${threadId}`,
-    originator: runtime === 'claude' ? 'Claude Code' : 'Codex',
+    originator: runtime === 'claude' ? 'Claude Code' : runtime === 'kimi' ? 'Kimi Code' : 'Codex',
     firstSeenAt: '2026-01-01T00:00:00.000Z',
     lastEventAt: '2026-01-01T00:00:00.000Z',
     title,
@@ -29,6 +29,8 @@ const localSessions: LocalRuntimeSessionSummary[] = [
   localSession('alpha-1111', 'Alpha'),
   localSession('alpha-2222', 'Alpha Two'),
   localSession('claude-3333', 'Claude', 'claude'),
+  localSession('session_kimi-4444', 'Kimi Four', 'kimi'),
+  localSession('session_kimi-5555', 'Kimi Five', 'kimi'),
 ];
 
 const threadDisplay = {
@@ -47,7 +49,21 @@ describe('session thread target selection', () => {
       threadId: 'claude-3333',
     });
 
+    assert.deepEqual(selectLocalRuntimeSessionByThreadId('session_kimi-4444', localSessions), {
+      thread: localSessions[3],
+      threadId: 'session_kimi-4444',
+    });
+
+    assert.deepEqual(selectLocalRuntimeSessionByThreadId('session_kimi-444', localSessions), {
+      thread: localSessions[3],
+      threadId: 'session_kimi-4444',
+    });
+
     assert.deepEqual(selectLocalRuntimeSessionByThreadId('alpha-', localSessions), {
+      ambiguous: true,
+    });
+
+    assert.deepEqual(selectLocalRuntimeSessionByThreadId('session_kimi-', localSessions), {
       ambiguous: true,
     });
   });
@@ -68,12 +84,56 @@ describe('session thread target selection', () => {
       store,
       [
         { kind: 'local', local: localSessions[0] },
+        { kind: 'local', local: localSessions[3] },
         { kind: 'bridge', bridge: { title: 'Bridge', bridgeSessionId: bridgeSession.id } as any },
       ],
     );
 
     assert.equal(selected.index, 2);
-    assert.equal(selected.bridgeSession, bridgeSession);
+    assert.equal(selected.thread, localSessions[3]);
+    assert.equal(selected.threadId, 'session_kimi-4444');
+
+    const bridgeSelected = selectDirectThreadTarget(
+      threadDisplay,
+      '3',
+      [],
+      localSessions,
+      [{ title: 'Bridge', bridgeSessionId: bridgeSession.id } as any],
+      store,
+      [
+        { kind: 'local', local: localSessions[0] },
+        { kind: 'local', local: localSessions[3] },
+        { kind: 'bridge', bridge: { title: 'Bridge', bridgeSessionId: bridgeSession.id } as any },
+      ],
+    );
+
+    assert.equal(bridgeSelected.index, 3);
+    assert.equal(bridgeSelected.bridgeSession, bridgeSession);
+  });
+
+  it('selects Kimi local sessions by display title without confusing them with bridge sessions', () => {
+    const selected = selectDirectThreadTarget(
+      threadDisplay,
+      'Kimi Four',
+      [],
+      localSessions,
+    );
+
+    assert.equal(selected.thread, localSessions[3]);
+    assert.equal(selected.threadId, 'session_kimi-4444');
+
+    assert.deepEqual(selectDirectThreadTarget(threadDisplay, 'Kimi Missing', [], localSessions), {});
+  });
+
+  it('reports ambiguous Kimi local session titles', () => {
+    assert.deepEqual(
+      selectDirectThreadTarget(threadDisplay, 'Kimi Duplicate', [], [
+        ...localSessions,
+        localSession('session_kimi-6666', 'Kimi Duplicate', 'kimi'),
+        localSession('session_kimi-7777', 'Kimi Duplicate', 'kimi'),
+      ]),
+      { ambiguous: true },
+    );
   });
 
   it('prefers binding thread ids and reports ambiguous binding thread prefixes', () => {

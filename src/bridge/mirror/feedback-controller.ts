@@ -52,6 +52,7 @@ export interface MirrorFeedbackControllerDeps {
   getAdapter(channelType: string): BaseChannelAdapter | null | undefined;
   getThreadTitle(threadId: string, sessionId?: string, bindingId?: string): string | null | undefined;
   getRuntimeTags?(threadId: string, sessionId?: string, bindingId?: string): string[];
+  getAssistantLabel?(threadId: string, sessionId?: string, bindingId?: string): string;
   onMirrorStreamStart?(subscription: BridgeMirrorSubscription, turnState: BridgeMirrorTurnState): void;
   getStructuredStreamStatusConfig?(): MirrorStructuredStreamStatusConfig;
   nowIso(): string;
@@ -120,6 +121,7 @@ export function createMirrorFeedbackController(
       true,
       false,
       turnState.goalStatus,
+      deps.getAssistantLabel?.(subscription.threadId, subscription.sessionId, subscription.bindingId),
     );
     return rendered || buildMirrorTitle(baseTitle, markdown);
   }
@@ -226,6 +228,7 @@ export function createMirrorFeedbackController(
       effectiveLastResponseAgeMs,
       turnState.statusNote,
       turnState.contextUsage,
+      turnState.thinkingNote,
     );
     if (turnState.lastStatusText === statusText) return;
 
@@ -374,6 +377,7 @@ export function createMirrorFeedbackController(
       true,
       false,
       turn.goalStatus,
+      deps.getAssistantLabel?.(subscription.threadId, subscription.sessionId, subscription.bindingId),
     );
     const renderedTextBaseWithGoal = formatMirrorMessage(
       plainTextTitle,
@@ -383,6 +387,7 @@ export function createMirrorFeedbackController(
       false,
       true,
       turn.goalStatus,
+      deps.getAssistantLabel?.(subscription.threadId, subscription.sessionId, subscription.bindingId),
     );
     const renderedText = turn.timedOut
       ? appendMirrorTimeoutNotice(renderedTextBaseWithGoal || buildMirrorTitle(plainTextTitle, markdown), markdown)

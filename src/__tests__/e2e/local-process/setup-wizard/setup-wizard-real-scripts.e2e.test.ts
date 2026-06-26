@@ -162,6 +162,37 @@ test('setup wizard real script runs in an isolated local e2e home and cleans its
   assert.match(parsed.larkCliShimPath || '', /lark-cli(?:\.cmd)?$/);
 });
 
+test('setup wizard real script can write Kimi as the configured runtime', async () => {
+  const runRoot = tempDir('clk-setup-wizard-real-kimi-local-e2e-');
+  fs.rmSync(runRoot, { recursive: true, force: true });
+
+  const result = await runScript({
+    script: 'scripts/setup-wizard-real-e2e.ts',
+    args: ['--run-root', runRoot, '--skip-lark-cli-bind', '--runtime', 'kimi'],
+    env: {
+      CODELARK_SETUP_WIZARD_REAL_E2E: '1',
+      CODELARK_REAL_FEISHU_TEST_APP_ID: 'cli_setup_wizard_kimi_local_e2e',
+      CODELARK_REAL_FEISHU_TEST_APP_SECRET: 'setup-wizard-kimi-local-e2e-secret',
+      CODELARK_REAL_FEISHU_TEST_SITE: 'feishu',
+    },
+  });
+
+  assert.equal(result.code, 0, result.stderr);
+  const parsed = JSON.parse(result.stdout) as {
+    ok?: boolean;
+    cleanedRunRoot?: boolean;
+    runtimeChoice?: string;
+    runtimeAgent?: string;
+    kimiProvider?: string;
+  };
+  assert.equal(parsed.ok, true);
+  assert.equal(parsed.cleanedRunRoot, true);
+  assert.equal(parsed.runtimeChoice, 'kimi');
+  assert.equal(parsed.runtimeAgent, 'kimi');
+  assert.equal(parsed.kimiProvider, 'tmux');
+  assert.equal(fs.existsSync(runRoot), false);
+});
+
 test('setup wizard real script cleans its run root after a post-sync failure', async () => {
   const runRoot = tempDir('clk-setup-wizard-real-failure-local-e2e-');
   fs.rmSync(runRoot, { recursive: true, force: true });

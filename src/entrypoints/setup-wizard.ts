@@ -8,10 +8,7 @@ import * as p from '@clack/prompts';
 import { registerApp } from '@larksuiteoapi/node-sdk';
 
 import { feishuSetupUserAuthScopeArgument } from '../channels/feishu/permissions.js';
-import {
-  type ClaudeExecutable,
-  type RuntimeProvider,
-} from '../runtime/options.js';
+import { type ClaudeExecutable } from '../runtime/options.js';
 import { CODELARK_HOME, DEFAULT_WORKSPACE_ROOT } from '../configuration/paths.js';
 import {
   type FeishuChannelConfig,
@@ -49,13 +46,13 @@ export interface FeishuCredentials {
 }
 
 export interface RuntimeRecommendation {
-  runtime: RuntimeProvider;
+  runtime: 'codex' | 'claude' | 'kimi';
   claudeExecutable?: ClaudeExecutable;
   reason: string;
 }
 
 type SetupMode = 'existing' | 'qr' | 'manual';
-type RuntimeChoice = 'codex' | 'ccr' | 'claude';
+type RuntimeChoice = 'codex' | 'ccr' | 'claude' | 'kimi';
 type LarkCliRunOptions = { homeDir?: string; input?: string; inheritStdio?: boolean; env?: NodeJS.ProcessEnv };
 type TmuxPrerequisiteResult = 'available' | 'installed' | 'sdk-fallback';
 
@@ -94,15 +91,22 @@ export function recommendRuntime(homeDir = os.homedir()): RuntimeRecommendation 
       reason: '检测到 Claude Code 配置，默认使用 Claude Code。',
     };
   }
+  if (fs.existsSync(path.join(homeDir, '.kimi-code'))) {
+    return {
+      runtime: 'kimi',
+      reason: '检测到 ~/.kimi-code，默认使用 Kimi Code。',
+    };
+  }
   return {
     runtime: 'claude',
     claudeExecutable: 'claude',
-    reason: '未检测到 Codex 或 Claude Code Router 配置，默认使用 Claude Code。',
+    reason: '未检测到 Codex、Claude Code Router 或 Kimi Code 配置，默认使用 Claude Code。',
   };
 }
 
 export function runtimeChoiceToConfig(choice: RuntimeChoice): NonNullable<ConfigPatch['runtime']> {
   if (choice === 'codex') return { agent: 'codex' };
+  if (choice === 'kimi') return { agent: 'kimi', kimi: { provider: 'tmux' } };
   return {
     agent: 'claude',
     claude: {
@@ -114,6 +118,7 @@ export function runtimeChoiceToConfig(choice: RuntimeChoice): NonNullable<Config
 
 export function recommendedRuntimeChoice(recommendation: RuntimeRecommendation): RuntimeChoice {
   if (recommendation.runtime === 'codex') return 'codex';
+  if (recommendation.runtime === 'kimi') return 'kimi';
   return recommendation.claudeExecutable === 'ccr' ? 'ccr' : 'claude';
 }
 
@@ -169,6 +174,11 @@ export function buildSetupConfig(
         provider: tmuxAvailable
           ? (runtimeConfig.claude?.provider || current.runtime.claude.provider || 'tmux')
           : 'sdk',
+      },
+      kimi: {
+        ...current.runtime.kimi,
+        ...(runtimeConfig.kimi || {}),
+        provider: 'tmux',
       },
     },
     bridge: {
@@ -656,6 +666,7 @@ async function promptRuntime(homeDir: string): Promise<RuntimeChoice> {
       { value: 'codex', label: 'Codex', hint: '检测到 ~/.codex 时推荐' },
       { value: 'ccr', label: 'Claude Code Router', hint: '写入 runtime=claude，claudeExecutable=ccr' },
       { value: 'claude', label: 'Claude Code', hint: '写入 runtime=claude，claudeExecutable=claude' },
+      { value: 'kimi', label: 'Kimi Code', hint: '写入 runtime=kimi，provider=tmux' },
     ],
   }));
 }
@@ -841,7 +852,9 @@ export async function runSetupWizard(options: SetupOptions = {}): Promise<void> 
     ? 'Codex'
     : runtimeChoice === 'ccr'
       ? 'Claude Code Router'
-      : 'Claude Code';
+      : runtimeChoice === 'kimi'
+        ? 'Kimi Code'
+        : 'Claude Code';
   p.outro(
     [
       '配置已保存。',

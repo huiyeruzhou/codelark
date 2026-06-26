@@ -15,6 +15,7 @@ export interface UnifiedTurnProgressState {
   lastActivityAtMs: number;
   lastContentResponseAtMs: number | null;
   statusNote: string | null;
+  thinkingNote: string | null;
   taskItems: TaskProgressInfo[];
   toolCalls: Map<string, ToolCallInfo>;
   historyItems: StreamingHistoryItem[];
@@ -34,6 +35,7 @@ export function createUnifiedTurnProgressState(startedAtMs: number): UnifiedTurn
     lastActivityAtMs: safeStartedAtMs,
     lastContentResponseAtMs: null,
     statusNote: null,
+    thinkingNote: null,
     taskItems: [],
     toolCalls: new Map(),
     historyItems: createInitialStreamingHistoryItems(),
@@ -205,6 +207,17 @@ export function applyUnifiedTurnStatusNote(
 ): void {
   state.statusNote = (note || '').trim() || null;
   if (state.statusNote && typeof timestampMs === 'number') {
+    recordUnifiedTurnActivity(state, timestampMs);
+  }
+}
+
+export function applyUnifiedTurnThinkingNote(
+  state: Pick<UnifiedTurnProgressState, 'lastActivityAtMs' | 'thinkingNote'>,
+  note: string | null | undefined,
+  timestampMs?: number,
+): void {
+  state.thinkingNote = (note || '').trim() || null;
+  if (state.thinkingNote && typeof timestampMs === 'number') {
     recordUnifiedTurnActivity(state, timestampMs);
   }
 }

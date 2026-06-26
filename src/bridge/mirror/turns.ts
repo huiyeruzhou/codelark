@@ -10,6 +10,7 @@ import {
   applyUnifiedTurnHistorySystemText,
   applyUnifiedTurnHistoryUserText,
   applyUnifiedTurnStatusNote,
+  applyUnifiedTurnThinkingNote,
   applyUnifiedTurnTasks,
   applyUnifiedTurnToolEvent,
   createUnifiedTurnProgressState,
@@ -486,6 +487,13 @@ export function consumeMirrorRecords<TSubscription extends MirrorTurnStateHolder
       const pendingTurn = ensureMirrorTurnState(subscription, record);
       const text = record.content.trim();
       if (!text) continue;
+      if (record.reasoningKind === 'thinking') {
+        applyUnifiedTurnThinkingNote(pendingTurn, text, mirrorTimestampMs(record.timestamp));
+        applyUnifiedTurnStatusNote(pendingTurn, record.reasoningLabel || '思考', mirrorTimestampMs(record.timestamp));
+        pendingTurn.lastActivityAt = record.timestamp || nowIso();
+        hooks.onStatusProgress?.(subscription, pendingTurn);
+        continue;
+      }
       applyUnifiedTurnStatusNote(pendingTurn, text, mirrorTimestampMs(record.timestamp));
       pendingTurn.lastActivityAt = record.timestamp || nowIso();
       hooks.onStatusProgress?.(subscription, pendingTurn);

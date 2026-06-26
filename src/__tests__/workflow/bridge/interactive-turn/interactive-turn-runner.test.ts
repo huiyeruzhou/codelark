@@ -228,6 +228,7 @@ type ScriptedTurnCallbacks = {
     detail?: { input?: unknown; output?: string; isError?: boolean },
   ) => void;
   onStatusNote?: (note: string | null) => void;
+  onThinkingNote?: (note: string) => void;
   onPromptPrepared?: (prompt: string) => void;
   onTaskEvent?: (tasks: TaskProgressInfo[]) => void;
   onContextUsage?: (usage: {
@@ -236,7 +237,7 @@ type ScriptedTurnCallbacks = {
     totalTokenUsage?: { inputTokens?: number; outputTokens?: number };
   }) => void;
   onRuntimeIdentity?: (identity: {
-    runtime: 'codex' | 'claude';
+    runtime: 'codex' | 'claude' | 'kimi';
     sessionId: string;
     cwd?: string;
     transcriptPath?: string;
@@ -283,23 +284,29 @@ class ScriptedSessionSimulator {
     return router.resolve(this.address)?.bridgeSessionId || '';
   }
 
-  setRuntimeProvider(runtime: 'codex' | 'claude', provider: 'sdk' | 'pty' | 'tmux'): void {
+  setRuntimeProvider(runtime: 'codex' | 'claude' | 'kimi', provider: 'sdk' | 'pty' | 'tmux'): void {
     const sessionId = this.sessionId();
     assert.ok(sessionId, 'scripted simulator binding must have a session id');
     getBridgeContext().store.updateSession(sessionId, {
       runtime: runtime === 'claude'
         ? {
-          activeRuntime: 'claude',
-        }
-        : {
-          activeRuntime: 'codex',
-        },
+            activeRuntime: 'claude',
+          }
+        : runtime === 'kimi'
+          ? {
+              activeRuntime: 'kimi',
+            }
+          : {
+              activeRuntime: 'codex',
+            },
     });
     setSessionConfigToml(
       sessionId,
       runtime === 'claude'
         ? { runtime: { claude: { provider } } }
-        : { runtime: { codex: { provider: provider === 'tmux' ? 'tmux' : provider === 'pty' ? 'pty' : 'sdk' } } },
+        : runtime === 'kimi'
+          ? { runtime: { kimi: { provider: 'tmux' } } }
+          : { runtime: { codex: { provider: provider === 'tmux' ? 'tmux' : provider === 'pty' ? 'pty' : 'sdk' } } },
     );
   }
 
@@ -413,6 +420,7 @@ class ScriptedSessionSimulator {
             onPermissionRequest: onPermission,
             onTaskEvent,
             onContextUsage: options?.onContextUsage,
+            onThinkingNote: options?.onThinkingNote,
             onRuntimeIdentity: options?.onRuntimeIdentity,
             abortSignal: effectiveAbortSignal,
           };
@@ -602,13 +610,14 @@ stream_status_check_interval_seconds = 3
     const sessionId = simulator.sessionId();
     const phases: Array<{
       key: string;
-      runtime: 'codex' | 'claude';
+      runtime: 'codex' | 'claude' | 'kimi';
       provider: 'sdk' | 'pty' | 'tmux';
       progressSource: ActiveBridgeTurn['progressSource'];
       finalSource: ActiveBridgeTurn['finalSource'];
     }> = [
       { key: 'codex-sdk', runtime: 'codex', provider: 'sdk', progressSource: 'sdk_stream', finalSource: 'sdk_result' },
       { key: 'claude-sdk', runtime: 'claude', provider: 'sdk', progressSource: 'sdk_stream', finalSource: 'sdk_result' },
+      { key: 'kimi-tmux', runtime: 'kimi', provider: 'tmux', progressSource: 'kimi_jsonl', finalSource: 'kimi_task_complete' },
       { key: 'codex-tmux', runtime: 'codex', provider: 'tmux', progressSource: 'codex_jsonl', finalSource: 'codex_task_complete' },
       { key: 'claude-pty', runtime: 'claude', provider: 'pty', progressSource: 'claude_jsonl', finalSource: 'claude_task_complete' },
       { key: 'codex-pty', runtime: 'codex', provider: 'pty', progressSource: 'codex_jsonl', finalSource: 'codex_task_complete' },
@@ -624,8 +633,11 @@ stream_status_check_interval_seconds = 3
         finalText: marker,
         codexThreadId: phase.runtime === 'codex' ? `${phase.key}-thread` : null,
         steps: [
-          async ({ onStatusNote, onRuntimeIdentity }) => {
+          async ({ onStatusNote, onThinkingNote, onRuntimeIdentity }) => {
             onStatusNote?.(`provider preload complete: ${phase.key}`);
+            if (phase.runtime === 'kimi') {
+              onThinkingNote?.('Kimi 正在整理上下文和下一步操作');
+            }
             await onRuntimeIdentity?.({
               runtime: phase.runtime,
               sessionId: `${phase.key}-thread`,
@@ -662,12 +674,14 @@ stream_status_check_interval_seconds = 3
     assert.deepEqual(simulator.registeredBridgeTurns.map((turn) => `${turn.runtime}:${turn.progressSource}:${turn.finalSource}`), [
       'codex:sdk_stream:sdk_result',
       'claude:sdk_stream:sdk_result',
+      'kimi:kimi_jsonl:kimi_task_complete',
       'codex:codex_jsonl:codex_task_complete',
       'claude:claude_jsonl:claude_task_complete',
       'codex:codex_jsonl:codex_task_complete',
     ]);
     assert.ok(simulator.adapter.streamedStatuses.some((status) => status.includes('provider preload complete: codex-sdk')));
     assert.ok(simulator.adapter.streamedStatuses.some((status) => status.includes('provider preload complete: claude-pty')));
+    assert.ok(simulator.adapter.streamedStatuses.some((status) => status.includes('当前思考：Kimi 正在整理上下文和下一步操作')));
     assert.ok(simulator.adapter.streamedTasks.some((tasks) => tasks.some((task) => task.text === 'Goal Active: codex-sdk provider isolation')));
     assert.ok(simulator.adapter.streamedTools.some((tools) => tools.some((tool) => tool.name === 'Bash' && tool.status === 'complete')));
     assert.deepEqual(simulator.mirrorSuppressions, [

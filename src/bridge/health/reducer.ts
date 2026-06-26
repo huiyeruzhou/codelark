@@ -1,6 +1,14 @@
-import type { BridgeSession, BridgeSessionHealthStatus } from '../../domain/session.js';
+import type { BridgeSession, BridgeSessionHealthStatus, RuntimeAgent } from '../../domain/session.js';
 import type { ThreadProcessProbeResult } from './process.js';
-import { getSessionCodexThreadId } from '../../domain/session-runtime.js';
+import {
+  getSessionActiveRuntime,
+  getSessionClaudeCwd,
+  getSessionClaudeSessionId,
+  getSessionCodexThreadId,
+  getSessionKimiCwd,
+  getSessionKimiSessionId,
+  getSessionWorkingDirectory,
+} from '../../domain/session-runtime.js';
 
 // Diagnostic-only recent-progress window. Stream UI stall detection must not
 // depend on this label threshold; otherwise long tasks can form a time cliff.
@@ -46,6 +54,9 @@ export interface ActiveSessionTool {
 export interface SessionHealthDiagnosis {
   sessionId: string;
   checkedAt: string | null;
+  activeRuntime?: RuntimeAgent;
+  runtimeIdentityValue?: string | null;
+  runtimeIdentityCwd?: string | null;
   runtimeStatus: BridgeSession['runtime_status'];
   healthStatus: BridgeSessionHealthStatus;
   healthReason: string;
@@ -220,7 +231,18 @@ export function computeBaseDiagnosis(
     && session.stream_ui_consecutive_failures > 0
     ? session.stream_ui_consecutive_failures
     : 0;
+  const activeRuntime = getSessionActiveRuntime(session) || 'codex';
   const codexThreadId = trimOrNull(getSessionCodexThreadId(session));
+  const runtimeIdentityValue = activeRuntime === 'kimi'
+    ? trimOrNull(getSessionKimiSessionId(session))
+    : activeRuntime === 'claude'
+      ? trimOrNull(getSessionClaudeSessionId(session))
+      : codexThreadId;
+  const runtimeIdentityCwd = activeRuntime === 'kimi'
+    ? trimOrNull(getSessionKimiCwd(session)) || trimOrNull(getSessionWorkingDirectory(session))
+    : activeRuntime === 'claude'
+      ? trimOrNull(getSessionClaudeCwd(session)) || trimOrNull(getSessionWorkingDirectory(session))
+      : null;
   const lastProgressMs = parseIsoMs(lastProgressAt || undefined);
   const previousStatus = session.health_status || 'idle';
 
@@ -228,6 +250,9 @@ export function computeBaseDiagnosis(
     return {
       sessionId: session.id,
       checkedAt: null,
+      activeRuntime,
+      runtimeIdentityValue,
+      runtimeIdentityCwd,
       runtimeStatus,
       healthStatus: 'idle',
       healthReason: '当前没有运行中的任务。',
@@ -251,6 +276,9 @@ export function computeBaseDiagnosis(
     return {
       sessionId: session.id,
       checkedAt: null,
+      activeRuntime,
+      runtimeIdentityValue,
+      runtimeIdentityCwd,
       runtimeStatus,
       healthStatus: fallbackStatus,
       healthReason: session.health_reason?.trim() || (
@@ -306,6 +334,9 @@ export function computeBaseDiagnosis(
   return {
     sessionId: session.id,
     checkedAt: null,
+    activeRuntime,
+    runtimeIdentityValue,
+    runtimeIdentityCwd,
     runtimeStatus,
     healthStatus,
     healthReason,

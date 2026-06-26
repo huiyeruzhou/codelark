@@ -14,6 +14,7 @@ import {
   getSessionSystemPrompt,
   getSessionWorkingDirectory,
   setSessionActiveRuntimeUpdate,
+  setSessionKimiIdentityUpdate,
 } from '../../../domain/session-runtime.js';
 
 const DATA_DIR = path.join(CODELARK_HOME, 'data');
@@ -309,6 +310,35 @@ describe('JsonFileStore', () => {
     assert.equal(store.getSession(draft.id), null);
     assert.deepEqual(store.getMessages(draft.id).messages, []);
     assert.equal(fs.existsSync(sessionConfigPath(draft.id)), false);
+  });
+
+  it('keeps an unbound hidden temporary Kimi session after it has a runtime identity', () => {
+    const store = new JsonFileStore(makeSettings());
+    const draft = store.createSession('ou_kimi', 'model', undefined, '/tmp/kimi-draft', 'normal', {
+      hidden: true,
+      sessionType: 'normal',
+      activeRuntime: 'kimi',
+    });
+    store.updateSession(draft.id, setSessionKimiIdentityUpdate('session_kimi_hidden_draft', '/tmp/kimi-draft'));
+    const target = store.createSession('target', 'model', undefined, '/tmp/target');
+    assert.equal(fs.existsSync(sessionConfigPath(draft.id)), true);
+
+    const first = store.upsertChannelChat({
+      channelType: 'feishu-default',
+      chatId: 'draft-kimi-preserve',
+      bridgeSessionId: draft.id,
+    });
+    const second = store.upsertChannelChat({
+      channelType: 'feishu-default',
+      chatId: 'draft-kimi-preserve',
+      bridgeSessionId: target.id,
+    });
+
+    assert.equal(second.id, first.id);
+    assert.equal(store.getChannelChat('feishu-default', 'draft-kimi-preserve')?.bridgeSessionId, target.id);
+    assert.equal(store.getSession(draft.id)?.runtime?.activeRuntime, 'kimi');
+    assert.equal(store.getSession(draft.id)?.runtime?.kimi?.sessionId, 'session_kimi_hidden_draft');
+    assert.equal(fs.existsSync(sessionConfigPath(draft.id)), true);
   });
 
   it('getChannelChat returns null for missing', () => {
@@ -991,6 +1021,35 @@ describe('JsonFileStore', () => {
     assert.equal(updated?.runtimeBridgeSessionIds?.claude, claudeSession.id);
   });
 
+  it('deleteSession only removes the deleted Kimi runtime mapping from surviving bindings', () => {
+    const store = new JsonFileStore(makeSettings());
+    const codexSession = store.createSession('codex', 'model', undefined, '/tmp/codex');
+    const claudeSession = store.createSession('claude', '', undefined, '/tmp/claude', undefined, {
+      activeRuntime: 'claude',
+    });
+    const kimiSession = store.createSession('kimi', '', undefined, '/tmp/kimi', undefined, {
+      activeRuntime: 'kimi',
+    });
+    const binding = store.upsertChannelChat({
+      channelType: 'feishu-default',
+      chatId: 'runtime-map-kimi',
+      bridgeSessionId: claudeSession.id,
+      runtimeBridgeSessionIds: {
+        codex: codexSession.id,
+        kimi: kimiSession.id,
+      },
+    });
+
+    store.deleteSession(kimiSession.id);
+
+    const updated = store.getChannelChat('feishu-default', 'runtime-map-kimi');
+    assert.equal(updated?.id, binding.id);
+    assert.equal(updated?.bridgeSessionId, claudeSession.id);
+    assert.equal(updated?.runtimeBridgeSessionIds?.codex, codexSession.id);
+    assert.equal(updated?.runtimeBridgeSessionIds?.claude, claudeSession.id);
+    assert.equal(updated?.runtimeBridgeSessionIds?.kimi, undefined);
+  });
+
   it('does not let one BridgeSession occupy both runtime slots on repeated upsert', () => {
     const store = new JsonFileStore(makeSettings());
     const session = store.createSession('runtime-flip', 'model', undefined, '/tmp/runtime-flip');
@@ -1010,6 +1069,23 @@ describe('JsonFileStore', () => {
 
     assert.equal(second.runtimeBridgeSessionIds?.codex, undefined);
     assert.equal(second.runtimeBridgeSessionIds?.claude, session.id);
+  });
+
+  it('stores Kimi BridgeSessions in the Kimi runtime slot', () => {
+    const store = new JsonFileStore(makeSettings());
+    const session = store.createSession('kimi', '', undefined, '/tmp/kimi', undefined, {
+      activeRuntime: 'kimi',
+    });
+    const binding = store.upsertChannelChat({
+      channelType: 'feishu-default',
+      chatId: 'runtime-kimi',
+      bridgeSessionId: session.id,
+    });
+
+    assert.equal(store.getSession(session.id)?.runtime?.activeRuntime, 'kimi');
+    assert.equal(binding.runtimeBridgeSessionIds?.codex, undefined);
+    assert.equal(binding.runtimeBridgeSessionIds?.claude, undefined);
+    assert.equal(binding.runtimeBridgeSessionIds?.kimi, session.id);
   });
 
   it('repairs persisted bindings where one BridgeSession occupies both runtime slots', () => {
@@ -1046,5 +1122,45 @@ describe('JsonFileStore', () => {
     const persisted = JSON.parse(fs.readFileSync(path.join(DATA_DIR, 'channel-chats.json'), 'utf-8')) as Record<string, ChannelChat>;
     assert.equal(persisted.dirty.runtimeBridgeSessionIds?.codex, undefined);
     assert.equal(persisted.dirty.runtimeBridgeSessionIds?.claude, claudeSession.id);
+  });
+
+  it('repairs persisted bindings where one BridgeSession occupies both Claude and Kimi runtime slots', () => {
+    const store = new JsonFileStore(makeSettings());
+    const kimiSession = store.createSession('persisted-kimi', '', undefined, '/tmp/persisted-kimi', undefined, {
+      activeRuntime: 'kimi',
+    });
+    const codexSession = store.createSession('persisted-codex', '', undefined, '/tmp/persisted-codex');
+    const timestamp = '2026-06-10T08:15:39.532Z';
+    fs.writeFileSync(
+      path.join(DATA_DIR, 'channel-chats.json'),
+      JSON.stringify({
+        dirty: {
+          id: 'dirty',
+          channelType: 'feishu-default',
+          chatId: 'persisted-runtime-map-kimi',
+          bridgeSessionId: kimiSession.id,
+          runtimeBridgeSessionIds: {
+            codex: codexSession.id,
+            claude: kimiSession.id,
+            kimi: kimiSession.id,
+          },
+          createdAt: timestamp,
+          updatedAt: timestamp,
+        },
+      }, null, 2),
+      'utf-8',
+    );
+
+    const reloaded = new JsonFileStore(makeSettings());
+    const repaired = reloaded.getChannelChat('feishu-default', 'persisted-runtime-map-kimi');
+
+    assert.equal(repaired?.runtimeBridgeSessionIds?.codex, codexSession.id);
+    assert.equal(repaired?.runtimeBridgeSessionIds?.claude, undefined);
+    assert.equal(repaired?.runtimeBridgeSessionIds?.kimi, kimiSession.id);
+
+    const persisted = JSON.parse(fs.readFileSync(path.join(DATA_DIR, 'channel-chats.json'), 'utf-8')) as Record<string, ChannelChat>;
+    assert.equal(persisted.dirty.runtimeBridgeSessionIds?.codex, codexSession.id);
+    assert.equal(persisted.dirty.runtimeBridgeSessionIds?.claude, undefined);
+    assert.equal(persisted.dirty.runtimeBridgeSessionIds?.kimi, kimiSession.id);
   });
 });

@@ -15,6 +15,7 @@ import {
   getSessionCodexProviderOverride,
   resolveNewSessionWorkingDirectory,
 } from '../support.js';
+import { kimiTmuxSessionName } from '../../../runtime/kimi/tmux-provider.js';
 import { getSessionDisplayName } from '../display/session-title.js';
 import {
   buildCommandFields,
@@ -60,6 +61,13 @@ function setSessionClaudeProviderToml(sessionId: string, provider: 'sdk' | 'tmux
   );
 }
 
+function setSessionKimiProviderToml(sessionId: string): void {
+  createConfigService({ migrate: false }).set(
+    { kind: 'session', sessionId },
+    { runtime: { kimi: { provider: 'tmux' } } },
+  );
+}
+
 function setSessionTmuxAutoEnterToml(sessionId: string, tmuxAutoEnter: boolean): void {
   createConfigService({ migrate: false }).set(
     { kind: 'session', sessionId },
@@ -92,6 +100,11 @@ function inheritClearRuntimeProvider(sessionId: string, previousSession: ReturnT
     const inheritedProvider = getSessionClaudeProviderOverride(previousSession);
     if (inheritedProvider) setSessionClaudeProviderToml(sessionId, inheritedProvider);
     if (inheritedProvider === 'tmux') setSessionTmuxAutoEnterToml(sessionId, true);
+    return;
+  }
+  if (activeRuntime === 'kimi') {
+    setSessionKimiProviderToml(sessionId);
+    setSessionTmuxAutoEnterToml(sessionId, true);
     return;
   }
   const inheritedProvider = getSessionCodexProviderOverride(previousSession);
@@ -153,11 +166,13 @@ export async function handleClearSessionCommand(options: {
     }
     options.deps.recordInteractiveHealthEnd?.(previousBinding.bridgeSessionId, 'aborted', detail);
   }
-  const previousRuntimeTmuxSessionName = getSessionRuntimeTmuxSessionName(previousSession);
+  const previousRuntime = getSessionActiveRuntime(previousSession) || 'codex';
+  const previousRuntimeTmuxSessionName = getSessionRuntimeTmuxSessionName(previousSession)
+    || (previousRuntime === 'kimi' && previousSession ? kimiTmuxSessionName(previousSession.id) : undefined);
   let cleanedTmuxSessionName: string | null = null;
   if (previousRuntimeTmuxSessionName) {
     const cleanup = await cleanupRuntimeTmuxSession({
-      runtime: getSessionActiveRuntime(previousSession) || 'codex',
+      runtime: previousRuntime,
       sessionName: previousRuntimeTmuxSessionName,
     });
     if (cleanup.error) {

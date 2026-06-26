@@ -32,6 +32,9 @@ describe('config script boundaries', () => {
 
     assert.match(doctor, /CONFIG_TOML=/);
     assert.match(doctor, /legacy config\.env\/config\.json are migration inputs only/);
+    assert.match(doctor, /Skipping Codex CLI\/auth checks for runtime agent/);
+    assert.match(doctor, /Kimi CLI available/);
+    assert.match(doctor, /tmux available for Kimi provider/);
     assert.doesNotMatch(doctor, /get_config\(\)/);
     assert.doesNotMatch(doctor, /grep\s+["']?\^\$1=/);
   });
@@ -46,8 +49,18 @@ describe('config script boundaries', () => {
 
     assert.match(realFeishu, /createConfigService/);
     assert.match(realFeishu, /replace\(\{ kind: 'home' \}/);
+    assert.doesNotMatch(realFeishu, /session:\s*\{\s*workspace:/);
     assert.doesNotMatch(realFeishu, /path\.join\(codelarkHome,\s*'config\.env'\)/);
     assert.doesNotMatch(realFeishu, /path\.join\(codelarkHome,\s*'config\.json'\)/);
     assert.doesNotMatch(realFeishu, /path\.join\(options\.codelarkHome,\s*'config\.json'\)/);
+  });
+
+  it('keeps real Feishu E2E lark-cli calls out of the live Lark Channel config', () => {
+    const realFeishu = readScript('real-feishu-e2e.ts');
+
+    assert.match(realFeishu, /delete env\.LARK_CHANNEL;/);
+    assert.match(realFeishu, /delete env\.LARK_CHANNEL_HOME;/);
+    assert.match(realFeishu, /delete env\.LARK_CHANNEL_CONFIG;/);
+    assert.match(realFeishu, /delete env\.LARKSUITE_CLI_CONFIG_DIR;/);
   });
 });

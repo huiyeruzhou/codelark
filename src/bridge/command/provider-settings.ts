@@ -63,6 +63,20 @@ function setSessionClaudeProviderToml(sessionId: string, provider: RuntimeProvid
   );
 }
 
+function setSessionKimiProviderToml(sessionId: string): void {
+  createConfigService({ migrate: false }).set(
+    { kind: 'session', sessionId },
+    { runtime: { kimi: { provider: 'tmux' } } },
+  );
+}
+
+function clearSessionKimiProviderToml(sessionId: string): void {
+  createConfigService({ migrate: false }).unset(
+    { kind: 'session', sessionId },
+    'runtime.kimi.provider',
+  );
+}
+
 function setSessionTmuxAutoEnterToml(sessionId: string, tmuxAutoEnter: boolean): void {
   createConfigService({ migrate: false }).set(
     { kind: 'session', sessionId },
@@ -239,6 +253,46 @@ export async function handleProviderCommand(options: {
           ]
           : []),
       ],
+      options.markdown,
+    );
+  }
+  if (getSessionActiveRuntime(session) === 'kimi') {
+    const requested = options.args.trim().toLowerCase();
+    if (!requested) {
+      return buildCommandFields(
+        '当前 Kimi Provider',
+        [
+          ['Runtime', 'kimi'],
+          ['Provider', 'tmux'],
+        ],
+        ['Kimi Code 当前只支持 tmux Provider；发送 `/provider tmux` 固定为 tmux，或 `/provider default` 清除会话级覆盖。'],
+        options.markdown,
+      );
+    }
+    if (requested === 'default') {
+      clearSessionKimiProviderToml(session.id);
+      await reconcileMirrorSubscriptionsBestEffort(options.deps, 'kimi provider default');
+      return buildCommandFields(
+        '已恢复默认 Kimi Provider',
+        [['Runtime', 'kimi'], ['Provider', 'tmux']],
+        ['Kimi Code 当前只支持 tmux Provider。'],
+        options.markdown,
+      );
+    }
+    if (requested !== 'tmux') {
+      return buildCommandFields(
+        'Kimi Provider 用法',
+        [['命令', '`/provider tmux|default` 或 `/p tmux|default`']],
+        ['Kimi Code 当前只支持 tmux Provider。'],
+        options.markdown,
+      );
+    }
+    setSessionKimiProviderToml(session.id);
+    await reconcileMirrorSubscriptionsBestEffort(options.deps, 'kimi provider tmux');
+    return buildCommandFields(
+      '已切换 Kimi Provider',
+      [['Runtime', 'kimi'], ['Provider', 'tmux']],
+      ['之后的普通消息会使用 Kimi Code tmux 路径。'],
       options.markdown,
     );
   }

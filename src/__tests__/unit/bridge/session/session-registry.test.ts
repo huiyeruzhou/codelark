@@ -145,6 +145,39 @@ describe('SessionRegistryService', () => {
     assert.equal(store.getSession(materialized.id), null);
   });
 
+  it('materializes and archives Kimi Code sessions through the registry port', () => {
+    const store = new JsonFileStore(makeBridgeSettings());
+    const archived: Array<{ sessionId: string; cwd: string }> = [];
+    const registry = new SessionRegistryService(store, {
+      kimiThreads: {
+        getThread: (kimiSessionId, cwd) => (
+          kimiSessionId === 'session_kimi-registry-session' && cwd === '/tmp/kimi-registry'
+            ? { kimiSessionId, title: 'Local Kimi Session', cwd }
+            : null
+        ),
+        archiveThread: (kimiSessionId, cwd) => {
+          archived.push({ sessionId: kimiSessionId, cwd });
+          return kimiSessionId === 'session_kimi-registry-session' && cwd === '/tmp/kimi-registry';
+        },
+      },
+      readDefaultModel: () => 'model-from-port',
+    });
+
+    const materialized = registry.materializeKimiThread('session_kimi-registry-session', '/tmp/kimi-registry');
+    assert.equal(materialized.runtime?.activeRuntime, 'kimi');
+    assert.equal(materialized.runtime?.kimi?.sessionId, 'session_kimi-registry-session');
+    assert.equal(materialized.runtime?.kimi?.provider, 'tmux');
+    assert.equal(getSessionWorkingDirectory(materialized), '/tmp/kimi-registry');
+
+    const renamed = registry.renameKimiThread('session_kimi-registry-session', '/tmp/kimi-registry', 'Renamed Kimi Session');
+    assert.equal(renamed.name, 'Renamed Kimi Session');
+
+    const result = registry.archiveKimiThread('session_kimi-registry-session', '/tmp/kimi-registry');
+    assert.deepEqual(archived, [{ sessionId: 'session_kimi-registry-session', cwd: '/tmp/kimi-registry' }]);
+    assert.deepEqual(result.deletedBridgeSessionIds, [materialized.id]);
+    assert.equal(store.getSession(materialized.id), null);
+  });
+
   it('sets channel default targets by BridgeSession id', () => {
     const store = new JsonFileStore(makeBridgeSettings());
     const registry = new SessionRegistryService(store);

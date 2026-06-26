@@ -239,7 +239,7 @@ export function configToSettings(config: Config): Map<string, string> {
   if (config.defaultProvider) {
     m.set('bridge_default_provider', config.defaultProvider);
   }
-  m.set('bridge_default_runtime', config.runtime === 'claude' ? 'claude' : 'codex');
+  m.set('bridge_default_runtime', config.runtime);
   m.set('bridge_default_mode', normalizeDefaultMode(config.defaultMode));
   m.set(
     'bridge_history_message_limit',

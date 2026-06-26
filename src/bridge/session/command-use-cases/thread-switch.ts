@@ -34,11 +34,32 @@ import {
   buildThreadCardRefresh,
   findVisibleBridgeSessionByToken,
   findBridgeSessionByClaudeIdentity,
+  findBridgeSessionByKimiIdentity,
   getRawCodexTitle,
   localRuntimeOf,
   selectDirectThreadTarget,
 } from './thread-targets.js';
 import type { SessionCommandDeps, SessionCommandResult } from './types.js';
+
+function localRuntimeDisplayName(runtime: ReturnType<typeof localRuntimeOf>): string {
+  if (runtime === 'claude') return 'Claude Code';
+  if (runtime === 'kimi') return 'Kimi Code';
+  return 'Codex';
+}
+
+function localRuntimeIdentityFieldName(runtime: ReturnType<typeof localRuntimeOf>): string {
+  return runtime === 'codex' ? 'thread_id' : 'session_id';
+}
+
+function bindingRuntimeIdentityFieldName(display: ReturnType<CommandThreadDisplay['binding']>): string {
+  return display.originator === 'Claude Code' || display.originator === 'Kimi Code'
+    ? 'session_id'
+    : 'thread_id';
+}
+
+function localRuntimeSwitchAction(runtime: ReturnType<typeof localRuntimeOf>): 'switch_bridge' | 'switch_codex' {
+  return runtime === 'codex' ? 'switch_codex' : 'switch_bridge';
+}
 
 export async function handleThreadSwitchCommand(options: {
   msg: InboundMessage;
@@ -217,6 +238,7 @@ export async function handleThreadSwitchCommand(options: {
   }
   if (selected.binding) {
     const previousActive = options.store.getChannelChat(options.msg.address.channelType, options.msg.address.chatId);
+    const selectedDisplay = options.threadDisplay.binding(selected.binding);
     auditCommandBindingChange(
       options.store,
       'switch_binding',
@@ -233,9 +255,9 @@ export async function handleThreadSwitchCommand(options: {
           ...(previousActive && previousActive.id !== selected.binding.id
             ? [['原线程', options.threadDisplay.binding(previousActive).title] as [string, string]]
             : []),
-          ['当前', options.threadDisplay.binding(selected.binding).title],
+          ['当前', selectedDisplay.title],
           ['bridge_id', selected.binding.bridgeSessionId.slice(0, 8)],
-          ['thread_id', options.threadDisplay.bindingThreadId(selected.binding) || '-'],
+          [bindingRuntimeIdentityFieldName(selectedDisplay), options.threadDisplay.bindingThreadId(selected.binding) || '-'],
         ],
         ['接下来直接发送文本即可继续。'],
         options.markdown,
@@ -265,13 +287,14 @@ export async function handleThreadSwitchCommand(options: {
       parsedArgs.force ? 'forced' : undefined,
     );
     const richCard = buildThreadCardRefresh(options.threadDisplay, options.deps.threadCardRefreshScope, options.msg.address, options.deps.threadCardSelectedId);
+    const bindingDisplay = options.threadDisplay.binding(binding);
     return {
       response: buildCommandFields(
         '已切换到 Bridge 会话',
         [
-          ['标题', options.threadDisplay.binding(binding).title],
+          ['标题', bindingDisplay.title],
           ['bridge_id', binding.bridgeSessionId.slice(0, 8)],
-          ['thread_id', options.threadDisplay.bindingThreadId(binding) || '-'],
+          [bindingRuntimeIdentityFieldName(bindingDisplay), options.threadDisplay.bindingThreadId(binding) || '-'],
           ['目录', formatCommandPath(getSessionWorkingDirectory(selected.bridgeSession))],
         ],
         ['接下来直接发送文本即可继续。'],
@@ -286,7 +309,7 @@ export async function handleThreadSwitchCommand(options: {
       return {
         response: displayedThreads.length > 0
           ? `当前只找到 ${displayedThreads.length} 条全局会话，没有第 ${selected.index} 条。先发送 \`/t\` 查看列表后再选择。`
-          : '没有找到本地 Codex 或 Claude Code 会话。先创建一个会话，再回来试一次。',
+          : '没有找到本地 Codex、Claude Code 或 Kimi Code 会话。先创建一个会话，再回来试一次。',
       };
     }
     const bridgeMatch = findVisibleBridgeSessionByToken(options.store, threadArgs);
@@ -314,13 +337,14 @@ export async function handleThreadSwitchCommand(options: {
         parsedArgs.force ? 'forced' : undefined,
       );
       const richCard = buildThreadCardRefresh(options.threadDisplay, options.deps.threadCardRefreshScope, options.msg.address, options.deps.threadCardSelectedId);
+      const bindingDisplay = options.threadDisplay.binding(binding);
       return {
         response: buildCommandFields(
           '已切换到 Bridge 会话',
           [
-            ['标题', options.threadDisplay.binding(binding).title],
+            ['标题', bindingDisplay.title],
             ['bridge_id', binding.bridgeSessionId.slice(0, 8)],
-            ['thread_id', options.threadDisplay.bindingThreadId(binding) || '-'],
+            [bindingRuntimeIdentityFieldName(bindingDisplay), options.threadDisplay.bindingThreadId(binding) || '-'],
             ['目录', formatCommandPath(getSessionWorkingDirectory(bridgeMatch.session))],
           ],
           ['接下来直接发送文本即可继续。'],
@@ -330,7 +354,7 @@ export async function handleThreadSwitchCommand(options: {
         threadTableCardScope: richCard && options.deps.threadCardRefreshScope ? options.deps.threadCardRefreshScope : undefined,
       };
     }
-    return { response: `没有找到对应会话：${threadArgs}。/t 列表按“序号 > thread_id > bridge_id > 名称”解析；先发送 \`/t\` 刷新列表后优先用序号接管。` };
+    return { response: `没有找到对应会话：${threadArgs}。/t 列表按“序号 > thread/session id > bridge_id > 名称”解析；先发送 \`/t\` 刷新列表后优先用序号接管，或用 \`/t codex\`、\`/t claude\`、\`/t kimi\` 切换 runtime 列表。` };
   }
   if (!selected.thread) {
     const takeover = await prepareTakeover(findConflictByThreadId(selected.threadId));
@@ -368,23 +392,26 @@ export async function handleThreadSwitchCommand(options: {
   }
 
   let binding: ChannelChat;
+  const selectedRuntime = localRuntimeOf(selected.thread);
   try {
-    const conflict = localRuntimeOf(selected.thread) === 'claude'
+    const conflict = selectedRuntime === 'claude'
       ? findConflictBySessionId(findBridgeSessionByClaudeIdentity(options.store, selected.thread.threadId, selected.thread.cwd)?.id)
-      : findConflictByThreadId(selected.thread.threadId);
+      : selectedRuntime === 'kimi'
+        ? findConflictBySessionId(findBridgeSessionByKimiIdentity(options.store, selected.thread.threadId, selected.thread.cwd)?.id)
+        : findConflictByThreadId(selected.thread.threadId);
     const takeover = await prepareTakeover(conflict);
     if (takeover) return takeover;
     binding = bindToLocalRuntimeThread(options.store, options.msg.address, selected.thread, {
-      codexTitle: localRuntimeOf(selected.thread) === 'codex'
+      codexTitle: selectedRuntime === 'codex'
         ? getRawCodexTitle(selected.thread.threadId, selected.thread.title)
         : undefined,
     });
   } catch (error) {
-    return { response: toUserVisibleBindingError(error, `切换本地 ${localRuntimeOf(selected.thread) === 'claude' ? 'Claude Code' : 'Codex'} 会话失败。`) };
+    return { response: toUserVisibleBindingError(error, `切换本地 ${localRuntimeDisplayName(selectedRuntime)} 会话失败。`) };
   }
   auditCommandBindingChange(
     options.store,
-    localRuntimeOf(selected.thread) === 'claude' ? 'switch_bridge' : 'switch_codex',
+    localRuntimeSwitchAction(selectedRuntime),
     options.msg,
     options.commandBinding,
     binding,
@@ -393,11 +420,11 @@ export async function handleThreadSwitchCommand(options: {
   const richCard = buildThreadCardRefresh(options.threadDisplay, options.deps.threadCardRefreshScope, options.msg.address, options.deps.threadCardSelectedId);
   return {
     response: buildCommandFields(
-      localRuntimeOf(selected.thread) === 'claude' ? '已切换到本地 Claude Code 会话' : '已切换到本地 Codex 会话',
+      `已切换到本地 ${localRuntimeDisplayName(selectedRuntime)} 会话`,
       [
         ['标题', options.threadDisplay.binding(binding).title],
         ['bridge_id', binding.bridgeSessionId.slice(0, 8)],
-        ['thread_id', options.threadDisplay.bindingThreadId(binding) || selected.thread.threadId],
+        [localRuntimeIdentityFieldName(selectedRuntime), options.threadDisplay.bindingThreadId(binding) || selected.thread.threadId],
         ['目录', formatCommandPath(getSessionWorkingDirectory(options.store.getSession(binding.bridgeSessionId)) || selected.thread.cwd)],
       ],
       ['接下来直接发送文本即可继续。'],

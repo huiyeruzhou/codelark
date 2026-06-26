@@ -41,7 +41,7 @@ CODELARK_REAL_FEISHU_E2E=1 npm run real:feishu:e2e -- \
 
 - `doc_as_chat_context_assertion`：群聊后续 bot 回复必须包含 `docx`、测试文档 `file_token` 和正文 marker。
 - `doc_as_chat_user_group_read`：必须以用户视角成功读取新群信息，证明当前用户在群里。
-- `doc_as_chat_document_binding`：`cloudDocumentChat` 绑定必须匹配 `file_token`，同一云文档后续评论复用同一个群聊。
+- `doc_as_chat_document_binding`：`cloudDocumentChat` 绑定必须匹配 `file_token` 和触发建群的 `comment_id`，同一云文档后续评论复用同一个群聊。
 - `scenario_created_chat_cleanup_completed` 和 `created_document_cleanup_completed`：成功运行必须删除测试群和测试云文档。
 
 ## 失败诊断

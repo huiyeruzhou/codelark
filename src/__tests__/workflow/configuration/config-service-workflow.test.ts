@@ -103,4 +103,54 @@ model = "session-model"
       fs.rmSync(cwd, { recursive: true, force: true });
     }
   });
+
+  it('resolves a Kimi session execution config from real TOML source files', () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'codelark-config-v2-home-'));
+    const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'codelark-config-v2-cwd-'));
+    try {
+      writeFile(path.join(home, 'config.toml'), `
+[runtime]
+agent = "kimi"
+
+[runtime.kimi]
+model = "home-kimi-model"
+provider = "tmux"
+`);
+      writeFile(path.join(cwd, '.codelark', 'config.toml'), `
+[runtime.kimi]
+model = "local-kimi-model"
+`);
+      writeFile(path.join(home, 'config', 'channels', 'chat-kimi.toml'), `
+[runtime.kimi]
+model = "channel-kimi-model"
+provider = "tmux"
+`);
+      writeFile(path.join(home, 'config', 'sessions', 'session-kimi.toml'), `
+[session]
+workspace = "/tmp/kimi-session-work"
+
+[runtime.kimi]
+model = "session-kimi-model"
+`);
+
+      const service = createConfigService({ codelarkHome: home, env: {} });
+      const scope = {
+        kind: 'session',
+        sessionId: 'session-kimi',
+        channelId: 'chat-kimi',
+        provider: 'feishu',
+        cwd,
+      } as const;
+
+      assert.equal(service.get('runtime.agent', scope), 'kimi');
+      assert.equal(service.resolve('runtime.agent', scope).source, 'home');
+      assert.equal(service.get('runtime.kimi.model', scope), 'session-kimi-model');
+      assert.equal(service.resolve('runtime.kimi.model', scope).source, 'session');
+      assert.equal(service.get('runtime.kimi.provider', scope), 'tmux');
+      assert.equal(service.resolve('runtime.kimi.provider', scope).source, 'channel');
+    } finally {
+      fs.rmSync(home, { recursive: true, force: true });
+      fs.rmSync(cwd, { recursive: true, force: true });
+    }
+  });
 });

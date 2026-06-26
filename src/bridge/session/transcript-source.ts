@@ -9,6 +9,11 @@ import {
   getClaudeSessionJsonlById,
   readClaudeSessionMirrorRecordStreamByFilePath,
 } from '../../runtime/claude/session-jsonl.js';
+import {
+  findKimiSessionFileById,
+  readKimiSessionMessagesByFilePath,
+  readKimiSessionMirrorRecordStreamByFilePath,
+} from '../../runtime/kimi/session-index.js';
 import { getCodexSessionByThreadIdSafe } from './support.js';
 import type { ChannelChat } from '../../domain/channel.js';
 import type { BridgeSession } from '../../domain/session.js';
@@ -17,12 +22,14 @@ import {
   getSessionClaudeCwd,
   getSessionClaudeSessionId,
   getSessionCodexTitle,
+  getSessionKimiCwd,
+  getSessionKimiSessionId,
   getSessionWorkingDirectory,
 } from '../../domain/session-runtime.js';
 import { getCodexThreadId } from '../turn/turn-classifier.js';
 
 export interface SessionTranscriptFile {
-  runtime: 'codex' | 'claude';
+  runtime: 'codex' | 'claude' | 'kimi';
   filePath: string;
   fileName: string;
   threadId: string;
@@ -44,7 +51,7 @@ export interface SessionTranscriptHistoryEntry {
 }
 
 export interface SessionTranscriptSource {
-  readonly runtime: 'codex' | 'claude';
+  readonly runtime: 'codex' | 'claude' | 'kimi';
   resolve(session: BridgeSession | null, binding: ChannelChat): SessionTranscriptFile | null;
   readMessages(transcript: SessionTranscriptFile, limit: number): SessionTranscriptMessage[];
   readHistory(transcript: SessionTranscriptFile): SessionTranscriptHistoryEntry[];
@@ -138,9 +145,53 @@ export class ClaudeSessionTranscriptSource implements SessionTranscriptSource {
   }
 }
 
+export class KimiSessionTranscriptSource implements SessionTranscriptSource {
+  readonly runtime = 'kimi' as const;
+
+  resolve(session: BridgeSession | null): SessionTranscriptFile | null {
+    const sessionId = getSessionKimiSessionId(session);
+    const cwd = getSessionKimiCwd(session) || getSessionWorkingDirectory(session);
+    if (!sessionId) return null;
+
+    const kimiSession = findKimiSessionFileById(sessionId, cwd || undefined);
+    if (!kimiSession || !isReadableFile(kimiSession.filePath)) return null;
+    return {
+      runtime: this.runtime,
+      filePath: kimiSession.filePath,
+      fileName: path.basename(kimiSession.filePath),
+      threadId: kimiSession.sessionId,
+      title: session?.name || kimiSession.title || kimiSession.sessionId,
+      sourceLabel: 'Kimi Code wire JSONL',
+    };
+  }
+
+  readMessages(transcript: SessionTranscriptFile, limit: number): SessionTranscriptMessage[] {
+    return readKimiSessionMessagesByFilePath(transcript.filePath, limit);
+  }
+
+  readHistory(transcript: SessionTranscriptFile): SessionTranscriptHistoryEntry[] {
+    return readKimiSessionMirrorRecordStreamByFilePath(transcript.filePath)
+      .filter((record) => record.type === 'message' && record.role !== 'user')
+      .map((record) => ({
+        role: record.role || 'assistant',
+        kind: 'message',
+        content: record.content,
+        timestamp: record.timestamp,
+        rawJsonl: JSON.stringify({
+          runtime: this.runtime,
+          type: record.type,
+          role: record.role || 'assistant',
+          content: record.content,
+          timestamp: record.timestamp,
+        }),
+      }));
+  }
+}
+
 export const defaultSessionTranscriptSources: readonly SessionTranscriptSource[] = [
   new CodexSessionTranscriptSource(),
   new ClaudeSessionTranscriptSource(),
+  new KimiSessionTranscriptSource(),
 ];
 
 export function resolveSessionTranscriptFile(

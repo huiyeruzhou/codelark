@@ -166,6 +166,10 @@ function loadCliEffectiveConfig(cli: ConfigPatch | undefined): ConfigV2 {
   }).snapshot().config;
 }
 
+export function formatInstallSkillsRestartGuidance(): string {
+  return 'Start a new Codex, Claude Code, or Kimi Code session for newly installed skills to be discoverable.';
+}
+
 async function runInstallSkillsCommand(args: string[]): Promise<void> {
   if (args.includes('-h') || args.includes('--help')) {
     process.stdout.write(
@@ -191,7 +195,7 @@ async function runInstallSkillsCommand(args: string[]): Promise<void> {
       'Target directories:',
       ...result.skills.map((skill) => `  ${skill.name}: ${skill.targetDir} (${skill.method})`),
       `Official Lark skills installed/confirmed: ${result.externalSkills.map((skill) => `${skill.name} (${skill.command} ${skill.args.join(' ')})`).join(', ') || '(none)'}`,
-      'Start a new Codex or Claude Code session for newly installed skills to be discoverable.',
+      formatInstallSkillsRestartGuidance(),
     ].join('\n') + '\n',
   );
 }

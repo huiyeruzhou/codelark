@@ -613,6 +613,24 @@ require_mention = false
     }
   });
 
+  it('projects Kimi as the legacy default runtime setting', () => {
+    const home = tempHome();
+    try {
+      const service = createConfigService({
+        codelarkHome: home,
+        env: {
+          CODELARK_AGENT: 'kimi',
+          CODELARK_ENABLED_CHANNELS: '',
+        },
+      });
+
+      const settings = exportRuntimeSettings(service.snapshot().config);
+      assert.equal(settings.get('bridge_default_runtime'), 'kimi');
+    } finally {
+      fs.rmSync(home, { recursive: true, force: true });
+    }
+  });
+
   it('projects v2 modes to legacy runtime setting values without Claude permission mode', () => {
     const home = tempHome();
     try {

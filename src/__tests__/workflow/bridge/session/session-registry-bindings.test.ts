@@ -6,9 +6,17 @@ import path from 'node:path';
 
 import { CODELARK_HOME } from '../../../../configuration/paths.js';
 import { bindStoreToCodexThread, bindStoreToSession } from '../../../../bridge/session/registry/bindings.js';
+import { bindToLocalRuntimeThread } from '../../../../bridge/session/command-use-cases/thread-targets.js';
+import type { LocalRuntimeSessionSummary } from '../../../../bridge/session/command-use-cases/source.js';
 import { ThreadDisplayService } from '../../../../bridge/session/thread-display-resolver.js';
+import { initBridgeContext } from '../../../../bridge/host/context.js';
 import { JsonFileStore } from '../../../../storage/json-store.js';
-import { writeCodexSessionJsonlFixture } from '../../../helpers/bridge/test-bridge-utils.js';
+import {
+  noopLifecycle,
+  noopLlm,
+  noopPermissions,
+  writeCodexSessionJsonlFixture,
+} from '../../../helpers/bridge/test-bridge-utils.js';
 
 const DATA_DIR = path.join(CODELARK_HOME, 'data');
 const CONFIG_TOML_PATH = path.join(CODELARK_HOME, 'config.toml');
@@ -198,5 +206,55 @@ enabled = true
 
     assert.ok(binding);
     assert.equal(updated?.runtime?.codex?.threadId, 'bridge-thread-1');
+  });
+
+  it('materializes and remembers Kimi local runtime sessions when binding from /t', () => {
+    const store = new JsonFileStore(makeSettings());
+    initBridgeContext({
+      store,
+      llm: noopLlm,
+      permissions: noopPermissions,
+      lifecycle: noopLifecycle,
+    });
+    const address = {
+      channelType: 'feishu-default',
+      channelProvider: 'feishu',
+      chatId: 'oc_kimi',
+      chatKind: 'group',
+    } as const;
+    const thread: LocalRuntimeSessionSummary = {
+      runtime: 'kimi',
+      threadId: 'session_kimi-bind',
+      title: 'Kimi Bind Session',
+      filePath: '/tmp/kimi-bind/wire.jsonl',
+      cwd: '/tmp/kimi-bind',
+      originator: 'Kimi Code',
+      source: 'kimi',
+      firstSeenAt: '2026-06-27T00:00:00.000Z',
+      lastEventAt: '2026-06-27T00:00:01.000Z',
+      activeEstimate: false,
+      userInputTurns: 1,
+    };
+
+    const binding = bindToLocalRuntimeThread(store, address, thread);
+    const session = store.getSession(binding.bridgeSessionId);
+
+    assert.ok(session);
+    assert.equal(session.name, 'Kimi Bind Session');
+    assert.equal(session.runtime?.activeRuntime, 'kimi');
+    assert.equal(session.runtime?.kimi?.sessionId, 'session_kimi-bind');
+    assert.equal(session.runtime?.kimi?.cwd, '/tmp/kimi-bind');
+    assert.equal(session.runtime?.kimi?.provider, 'tmux');
+    assert.equal(binding.runtimeBridgeSessionIds?.kimi, session.id);
+    assert.equal(binding.runtimeBridgeSessionIds?.codex, undefined);
+    assert.equal(binding.runtimeBridgeSessionIds?.claude, undefined);
+
+    const rebound = bindToLocalRuntimeThread(store, address, thread);
+    assert.equal(rebound.bridgeSessionId, session.id);
+    assert.equal(rebound.runtimeBridgeSessionIds?.kimi, session.id);
+    assert.equal(
+      store.listSessions().filter((item) => item.runtime?.kimi?.sessionId === 'session_kimi-bind').length,
+      1,
+    );
   });
 });

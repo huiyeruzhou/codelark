@@ -10,7 +10,7 @@ import {
 } from '../../../shared/streaming-metadata.js';
 import { getGlobalDefaultChannelConfig } from '../../session/global-config.js';
 import { classifyInteractiveTurn } from '../turn-classifier.js';
-import type { BridgeTurnClassification } from '../turn-types.js';
+import type { BridgeTurnClassification, BridgeTurnRuntime } from '../turn-types.js';
 
 export interface InteractiveStreamConfig {
   intervalMs: number;
@@ -64,7 +64,7 @@ export interface InteractiveTurnDisplayInfo {
   title: string;
   bridgeSessionId?: string | null;
   threadId?: string | null;
-  runtime?: 'codex' | 'claude' | null;
+  runtime?: BridgeTurnRuntime | null;
   executionProvider?: string | null;
   creatorKind?: string | null;
   reasoningEffort?: string | null;

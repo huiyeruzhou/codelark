@@ -16,6 +16,7 @@ import {
   getSessionActiveRuntime,
   getSessionClaudeSessionId,
   getSessionCodexThreadId,
+  getSessionKimiSessionId,
   getSessionWorkingDirectory,
 } from '../../../domain/session-runtime.js';
 
@@ -243,6 +244,9 @@ function getEveryTaskRuntimeId(session: BridgeSession | undefined): string {
   if (!session) return '-';
   if (getSessionActiveRuntime(session) === 'claude') {
     return getSessionClaudeSessionId(session) || '-';
+  }
+  if (getSessionActiveRuntime(session) === 'kimi') {
+    return getSessionKimiSessionId(session) || '-';
   }
   return getSessionCodexThreadId(session) || '-';
 }

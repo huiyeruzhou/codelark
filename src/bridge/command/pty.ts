@@ -198,6 +198,9 @@ export async function handlePtyScreenCommand(params: HandlePtyScreenCommandParam
   }
 
   const runtime = getSessionActiveRuntime(params.session) || 'codex';
+  if (runtime === 'kimi') {
+    return '当前 Kimi 会话使用 tmux Provider。请使用 `/tmux-screen` 查看当前屏幕。';
+  }
   if (runtime !== 'claude' && resolveEffectiveCodexProvider(params.session, params.binding) !== 'pty') {
     return '当前会话不是 pty Provider。请先发送 `/provider pty`，或继续使用 `/tmux-screen` 查看 tmux Provider。';
   }

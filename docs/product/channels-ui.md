@@ -58,7 +58,7 @@
 
 - 概览：查看 UI、bridge、通道数量、配置目录和运行状态。
 - 会话：查看 Bridge/IM 会话和本机 runtime 会话，进入历史详情，重命名或删除会话。
-- 配置：编辑 Codex、Claude Code、Bridge 控制和 Web 访问设置。
+- 配置：编辑 Codex、Claude Code、Kimi Code、Bridge 控制和 Web 访问设置。
 - 通道：管理飞书实例、查看聊天绑定、切换默认目标。
 - 日志：查看 bridge 日志。
 - 命令说明：查看 IM 命令清单。

@@ -1,10 +1,12 @@
 import '../../../../setup/test-setup.js';
-import { afterEach, beforeEach, describe, it } from 'node:test';
+import { afterEach, beforeEach, describe, it, type TestContext } from 'node:test';
 import assert from 'node:assert/strict';
 import os from 'node:os';
 import path from 'node:path';
 
 import fs from 'node:fs';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import { CODELARK_HOME } from '../../../../../configuration/paths.js';
 import {
   LEGACY_CONFIG_ENV_PATH as CONFIG_PATH,
@@ -16,10 +18,12 @@ import { _testOnlyClaudePty } from '../../../../../runtime/claude/pty-provider.j
 import { getClaudeProjectDir } from '../../../../../runtime/claude/session-jsonl.js';
 import { CodexRoutingProvider } from '../../../../../runtime/codex/routing-provider.js';
 import { findSessionFileByThreadId } from '../../../../../runtime/codex/tmux-provider.js';
+import { computeKimiWorkspaceDirName, isArchivedKimiSession } from '../../../../../runtime/kimi/session-index.js';
 import { _testOnly, registerAdapter } from '../../../../../bridge/host/manager.js';
 import { createMirrorSubscription } from '../../../../../bridge/mirror/subscription-state.js';
 import { listEveryTasks } from '../../../../../bridge/automation/every-tasks.js';
 import { buildCommandCallbackData } from '../../../../../bridge/command/callbacks.js';
+import { LARGE_FILE_UPLOAD_THRESHOLD_BYTES } from '../../../../../bridge/command/file-upload-confirmations.js';
 import { getSessionActiveRuntime, getSessionWorkingDirectory } from '../../../../../domain/session-runtime.js';
 import type { LLMProvider, StreamChatParams } from '../../../../../runtime/contracts.js';
 import {
@@ -51,6 +55,16 @@ interface ControlledLlmCall extends RecordedLlmCall {
 }
 
 const CODEX_THREAD_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+const execFileAsync = promisify(execFile);
+
+async function tmuxAvailable(): Promise<boolean> {
+  try {
+    await execFileAsync('tmux', ['-V']);
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 function writeHomeConfigToml(content: string): void {
   fs.mkdirSync(CODELARK_HOME, { recursive: true });
@@ -71,11 +85,223 @@ function getSessionClaudeProviderToml(sessionId: string): unknown {
   });
 }
 
+function getSessionKimiProviderToml(sessionId: string): unknown {
+  return createConfigService({ migrate: false, env: {} }).get('runtime.kimi.provider', {
+    kind: 'session',
+    sessionId,
+  });
+}
+
+function getSessionTomlSnapshot(sessionId: string): any {
+  return createConfigService({ migrate: false, env: {} }).snapshot({
+    kind: 'session',
+    sessionId,
+  }).config;
+}
+
 function getSessionTmuxAutoEnterToml(sessionId: string): unknown {
   return createConfigService({ migrate: false, env: {} }).get('session.tmuxAutoEnter', {
     kind: 'session',
     sessionId,
   });
+}
+
+function writeKimiWireFixture(params: {
+  homeDir: string;
+  cwd: string;
+  sessionId: string;
+  timestamp: string;
+  text: string;
+  assistantText?: string;
+  thinkText?: string;
+  title?: string;
+}): string {
+  const sessionDir = path.join(
+    params.homeDir,
+    'sessions',
+    computeKimiWorkspaceDirName(params.cwd),
+    params.sessionId,
+  );
+  const wireDir = path.join(sessionDir, 'agents', 'main');
+  fs.mkdirSync(wireDir, { recursive: true });
+  fs.writeFileSync(path.join(sessionDir, 'state.json'), JSON.stringify({
+    createdAt: params.timestamp,
+    updatedAt: params.timestamp,
+    title: params.title || params.text,
+  }));
+  const filePath = path.join(wireDir, 'wire.jsonl');
+  const baseTime = Date.parse(params.timestamp);
+  const lines: Array<Record<string, unknown>> = [
+    {
+      type: 'context.append_message',
+      time: baseTime,
+      message: { role: 'user', content: params.text },
+    },
+  ];
+  if (params.thinkText) {
+    lines.push({
+      type: 'context.append_loop_event',
+      time: baseTime + 500,
+      event: {
+        type: 'content.part',
+        turnId: `${params.sessionId}-turn`,
+        part: { type: 'think', think: params.thinkText },
+      },
+    });
+  }
+  if (params.assistantText) {
+    lines.push({
+      type: 'context.append_loop_event',
+      time: baseTime + 1000,
+      event: {
+        type: 'content.part',
+        turnId: `${params.sessionId}-turn`,
+        part: { type: 'text', text: params.assistantText },
+      },
+    });
+  }
+  fs.writeFileSync(filePath, `${lines.map((line) => JSON.stringify(line)).join('\n')}\n`, 'utf-8');
+  fs.mkdirSync(params.homeDir, { recursive: true });
+  fs.appendFileSync(path.join(params.homeDir, 'session_index.jsonl'), `${JSON.stringify({
+    sessionId: params.sessionId,
+    sessionDir,
+    workDir: params.cwd,
+  })}\n`, 'utf-8');
+  return filePath;
+}
+
+function writeFakeKimiExecutable(binDir: string, params: {
+  sessionId: string;
+  ctrlCPath: string;
+  keyLogPath: string;
+  launchLogPath: string;
+}): string {
+  const executablePath = path.join(binDir, 'kimi');
+  const scriptPath = path.join(binDir, 'fake-kimi.cjs');
+  fs.writeFileSync(scriptPath, `#!/usr/bin/env node
+const fs = require('node:fs');
+const path = require('node:path');
+
+const sessionId = ${JSON.stringify(params.sessionId)};
+const ctrlCPath = ${JSON.stringify(params.ctrlCPath)};
+const keyLogPath = ${JSON.stringify(params.keyLogPath)};
+const launchLogPath = ${JSON.stringify(params.launchLogPath)};
+const kimiHome = process.env.KIMI_CODE_HOME;
+if (!kimiHome) {
+  process.stderr.write('KIMI_CODE_HOME is required\\n');
+  process.exit(2);
+}
+
+const sessionDir = path.join(kimiHome, 'sessions', 'wd_mock-app', sessionId);
+const wirePath = path.join(sessionDir, 'agents', 'main', 'wire.jsonl');
+const resumeIndex = process.argv.indexOf('-r');
+const resumed = resumeIndex >= 0 && process.argv[resumeIndex + 1] === sessionId;
+fs.appendFileSync(launchLogPath, JSON.stringify({ argv: process.argv.slice(2), resumed, cwd: process.cwd() }) + '\\n');
+fs.mkdirSync(path.dirname(wirePath), { recursive: true });
+fs.writeFileSync(path.join(sessionDir, 'state.json'), JSON.stringify({
+  createdAt: '2026-06-27T10:13:00.000Z',
+  updatedAt: '2026-06-27T10:13:00.000Z',
+  title: 'Fake Kimi mock-app plain message',
+}, null, 2) + '\\n');
+fs.writeFileSync(wirePath, '');
+fs.appendFileSync(path.join(kimiHome, 'session_index.jsonl'), JSON.stringify({
+  sessionId,
+  sessionDir,
+  workDir: process.cwd(),
+}) + '\\n');
+
+process.stdout.write('Kimi Code fake mock-app\\n');
+if (resumed) process.stdout.write('Session: ' + sessionId + '\\n');
+
+if (process.stdin.isTTY && process.stdin.setRawMode) process.stdin.setRawMode(true);
+process.stdin.resume();
+
+let answered = false;
+let ctrlCCount = 0;
+const appendWire = (entry) => fs.appendFileSync(wirePath, JSON.stringify(entry) + '\\n');
+const recordCtrlC = () => {
+  const previous = fs.existsSync(ctrlCPath) ? Number(fs.readFileSync(ctrlCPath, 'utf8')) || 0 : 0;
+  fs.writeFileSync(ctrlCPath, String(previous + 1));
+};
+process.stdin.on('data', (chunk) => {
+  fs.appendFileSync(keyLogPath, JSON.stringify({ hex: chunk.toString('hex'), text: chunk.toString('utf8') }) + '\\n');
+  if (!answered && chunk.includes(0x13)) {
+    answered = true;
+    const now = Date.now();
+    appendWire({ type: 'context.append_loop_event', time: now, event: { type: 'step.begin', turnId: 'turn-1', stepUuid: 'step-1' } });
+    appendWire({ type: 'context.append_loop_event', time: now + 1, event: { type: 'content.part', turnId: 'turn-1', part: { type: 'think', think: 'mock kimi thinking' } } });
+    appendWire({ type: 'context.append_loop_event', time: now + 2, event: { type: 'content.part', turnId: 'turn-1', part: { type: 'text', text: 'Kimi mock-app plain response' } } });
+    appendWire({ type: 'context.append_loop_event', time: now + 3, event: { type: 'step.end', turnId: 'turn-1', stepUuid: 'step-1' } });
+  }
+  for (const byte of chunk) {
+    if (byte !== 0x03) continue;
+    ctrlCCount += 1;
+    recordCtrlC();
+    if (ctrlCCount >= 2) {
+      process.stdout.write('\\nTo resume this session: kimi -r ' + sessionId + '\\n');
+      setTimeout(() => process.exit(0), 50);
+    }
+  }
+});
+
+setInterval(() => {}, 1000);
+`, 'utf-8');
+
+  fs.writeFileSync(executablePath, `#!/usr/bin/env sh\nexec "${process.execPath}" "${scriptPath}" "$@"\n`, 'utf-8');
+  fs.chmodSync(executablePath, 0o755);
+  return executablePath;
+}
+
+function writeResumeOnlyFakeKimiExecutable(binDir: string, params: {
+  sessionId: string;
+  wirePath: string;
+  keyLogPath: string;
+  launchLogPath: string;
+  responseText: string;
+  thinkText: string;
+}): string {
+  const executablePath = path.join(binDir, 'kimi');
+  const scriptPath = path.join(binDir, 'fake-kimi-resume.cjs');
+  fs.writeFileSync(scriptPath, `#!/usr/bin/env node
+const fs = require('node:fs');
+
+const sessionId = ${JSON.stringify(params.sessionId)};
+const wirePath = ${JSON.stringify(params.wirePath)};
+const keyLogPath = ${JSON.stringify(params.keyLogPath)};
+const launchLogPath = ${JSON.stringify(params.launchLogPath)};
+const responseText = ${JSON.stringify(params.responseText)};
+const thinkText = ${JSON.stringify(params.thinkText)};
+const resumeIndex = process.argv.indexOf('-r');
+const resumed = resumeIndex >= 0 && process.argv[resumeIndex + 1] === sessionId;
+fs.appendFileSync(launchLogPath, JSON.stringify({ argv: process.argv.slice(2), resumed, cwd: process.cwd() }) + '\\n');
+process.stdout.write('Kimi Code fake resume\\nSession: ' + sessionId + '\\n');
+
+if (process.stdin.isTTY && process.stdin.setRawMode) process.stdin.setRawMode(true);
+process.stdin.resume();
+
+let answered = false;
+const appendWire = (entry) => fs.appendFileSync(wirePath, JSON.stringify(entry) + '\\n');
+process.stdin.on('data', (chunk) => {
+  fs.appendFileSync(keyLogPath, JSON.stringify({ hex: chunk.toString('hex'), text: chunk.toString('utf8') }) + '\\n');
+  if (!answered && chunk.includes(0x13)) {
+    answered = true;
+    const now = Date.now();
+    appendWire({ type: 'context.append_loop_event', time: now, event: { type: 'step.begin', turnId: 'turn-resume', stepUuid: 'step-resume' } });
+    appendWire({ type: 'context.append_loop_event', time: now + 1, event: { type: 'content.part', turnId: 'turn-resume', part: { type: 'think', think: thinkText } } });
+    appendWire({ type: 'context.append_loop_event', time: now + 2, event: { type: 'content.part', turnId: 'turn-resume', part: { type: 'text', text: responseText } } });
+    appendWire({ type: 'context.append_loop_event', time: now + 3, event: { type: 'step.end', turnId: 'turn-resume', stepUuid: 'step-resume' } });
+  }
+  if (chunk.includes(0x03)) {
+    setTimeout(() => process.exit(0), 20);
+  }
+});
+
+setInterval(() => {}, 1000);
+`, 'utf-8');
+
+  fs.writeFileSync(executablePath, `#!/usr/bin/env sh\nexec "${process.execPath}" "${scriptPath}" "$@"\n`, 'utf-8');
+  fs.chmodSync(executablePath, 0o755);
+  return executablePath;
 }
 
 function setSessionCodexProviderToml(sessionId: string, provider: 'sdk' | 'pty' | 'tmux'): void {
@@ -275,7 +501,7 @@ function latestCreatedGroupAddress(adapter: RecordingAdapter): { channelType: 'f
 async function createNewGroupSession(
   store: ReturnType<typeof initBridgeTestContext>,
   adapter: RecordingAdapter,
-  sourceAddress: { channelType: 'feishu'; chatId: string },
+  sourceAddress: { channelType: 'feishu'; chatId: string; userId?: string },
   commandText: string,
   messageId: string,
 ): Promise<{
@@ -291,7 +517,7 @@ async function createNewGroupSession(
 
 function createExistingChannelChat(
   store: ReturnType<typeof initBridgeTestContext>,
-  address: { channelType: 'feishu'; chatId: string; chatKind?: 'group' | 'direct' },
+  address: { channelType: string; chatId: string; chatKind?: 'group' | 'direct' },
   options: {
     workDir: string;
     name?: string;
@@ -568,7 +794,7 @@ describe('bridge command e2e', () => {
   it('handles /new, /his limit, and /his msg through the bridge manager entrypoint', async () => {
     const store = initBridgeTestContext({ dynamicSettings: true });
     const adapter = new RecordingAdapter();
-    const address = { channelType: 'feishu', chatId: 'chat-history-e2e' } as const;
+    const address = { channelType: 'feishu', chatId: 'chat-history-e2e', userId: 'ou-history-e2e' } as const;
     const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-history-e2e-'));
 
     const { address: groupAddress, binding } = await createNewGroupSession(
@@ -936,16 +1162,20 @@ describe('bridge command e2e', () => {
     assert.match(adapter.sent.at(-1)?.text || '', /已切换到本地 Codex 会话/);
   });
 
-  it('renders /t Codex and Claude Code runtime groups in the mock app card', async () => {
+  it('renders /t Codex, Claude Code, and Kimi Code runtime groups in the mock app card', async () => {
     initBridgeTestContext({ dynamicSettings: true });
     const adapter = new RecordingAdapter();
     const address = { channelType: 'feishu', chatId: 'chat-thread-card-runtime-groups' } as const;
     const codexThreadId = '33333333-3333-4333-8333-333333333334';
     const claudeSessionId = '33333333-3333-4333-8333-333333333335';
+    const kimiSessionId = 'session_33333333-3333-4333-8333-333333333336';
     const codexWorkDir = fs.mkdtempSync(path.join(os.tmpdir(), 'codelark-thread-card-groups-codex-'));
     const claudeHome = fs.mkdtempSync(path.join(os.tmpdir(), 'codelark-thread-card-groups-claude-home-'));
+    const kimiHome = fs.mkdtempSync(path.join(os.tmpdir(), 'codelark-thread-card-groups-kimi-home-'));
     const previousClaudeHome = process.env.CODELARK_CLAUDE_HOME;
+    const previousKimiHome = process.env.KIMI_CODE_HOME;
     process.env.CODELARK_CLAUDE_HOME = claudeHome;
+    process.env.KIMI_CODE_HOME = kimiHome;
     writeCodexSessionJsonlFixture({
       threadId: codexThreadId,
       workDir: codexWorkDir,
@@ -967,6 +1197,13 @@ describe('bridge command e2e', () => {
       timestamp: '2026-05-28T00:00:01.000Z',
       text: 'thread card groups claude',
     });
+    writeKimiWireFixture({
+      homeDir: kimiHome,
+      cwd: '/tmp/thread-card-groups-kimi',
+      sessionId: kimiSessionId,
+      timestamp: '2026-05-28T00:00:02.000Z',
+      text: 'thread card groups kimi',
+    });
 
     try {
       await _testOnly.handleMessage(adapter, inboundMessage(address, '/t', 'incoming-thread-card-runtime-groups'));
@@ -985,13 +1222,25 @@ describe('bridge command e2e', () => {
       assert.equal(claudeCard?.tableBlocks?.length, 1);
       assert.equal(claudeCard?.tableBlocks?.[0]?.selects?.[0]?.id, 'claude_select');
       assert.equal(claudeCard?.tableBlocks?.[0]?.selects?.[2]?.id, 'thread_runtime_select');
+
+      await _testOnly.handleMessage(adapter, inboundMessage(address, '/t kimi', 'incoming-thread-card-runtime-kimi'));
+      const kimiCard = adapter.sent.at(-1)?.richCard;
+      assert.equal(kimiCard?.tableBlocks?.length, 1);
+      assert.equal(kimiCard?.tableBlocks?.[0]?.selects?.[0]?.id, 'kimi_select');
+      assert.equal(kimiCard?.tableBlocks?.[0]?.selects?.[2]?.id, 'thread_runtime_select');
     } finally {
       if (previousClaudeHome === undefined) {
         delete process.env.CODELARK_CLAUDE_HOME;
       } else {
         process.env.CODELARK_CLAUDE_HOME = previousClaudeHome;
       }
+      if (previousKimiHome === undefined) {
+        delete process.env.KIMI_CODE_HOME;
+      } else {
+        process.env.KIMI_CODE_HOME = previousKimiHome;
+      }
       fs.rmSync(claudeHome, { recursive: true, force: true });
+      fs.rmSync(kimiHome, { recursive: true, force: true });
     }
   });
 
@@ -1299,6 +1548,253 @@ describe('bridge command e2e', () => {
     });
     assert.equal(adapter.sent.at(-1)?.richCardUpdateMessageId, 'reply-2');
     assert.equal(adapter.sent.at(-1)?.richCard?.selects?.[0]?.selectedCallbackData, 'clk-command::%2Fcurrent-runtime%20codex');
+
+    await _testOnly.handleMessage(adapter, {
+      ...inboundMessage(address, '', 'incoming-current-runtime-select-kimi'),
+      callbackData: buildCommandCallbackData('/current-runtime kimi'),
+      callbackMessageId: 'reply-2',
+    });
+    assert.equal(adapter.sent.at(-1)?.richCardUpdateMessageId, 'reply-2');
+    assert.equal(adapter.sent.at(-1)?.richCard?.selects?.[0]?.selectedCallbackData, 'clk-command::%2Fcurrent-runtime%20kimi');
+    assert.equal(store.getSession(store.getChannelChat(address.channelType, address.chatId)!.bridgeSessionId)?.runtime?.activeRuntime, 'kimi');
+  });
+
+  it('keeps Kimi command state scoped to the Kimi runtime session', async () => {
+    const store = initBridgeTestContext({
+      dynamicSettings: true,
+      settings: makeBridgeSettings(),
+    });
+    const adapter = new RecordingAdapter();
+    const address = { channelType: 'feishu-default', chatId: 'chat-kimi-command-state', chatKind: 'group' as const } as const;
+    const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-kimi-command-state-'));
+    const smallFilePath = path.join(workDir, 'kimi-small.txt');
+    const largeFilePath = path.join(workDir, 'kimi-large.bin');
+    fs.writeFileSync(smallFilePath, 'kimi command-state file payload', 'utf-8');
+    fs.closeSync(fs.openSync(largeFilePath, 'w'));
+    fs.truncateSync(largeFilePath, LARGE_FILE_UPLOAD_THRESHOLD_BYTES + 1);
+    const { binding: codexBinding } = createExistingChannelChat(store, address, {
+      workDir,
+      name: 'Kimi Command State',
+    });
+
+    try {
+      await _testOnly.handleMessage(adapter, inboundMessage(address, '/status', 'incoming-kimi-command-status'));
+      assert.match(adapter.sent.at(-1)?.text || '', /全局状态/);
+      assert.match(adapter.sent.at(-1)?.text || '', /Bridge/);
+      assert.match(adapter.sent.at(-1)?.text || '', /当前聊天/s);
+
+      await _testOnly.handleMessage(adapter, inboundMessage(address, '/require-at off', 'incoming-kimi-command-require-at-off'));
+      assert.match(adapter.sent.at(-1)?.text || '', /已更新群聊 @bot 设置/);
+      assert.match(adapter.sent.at(-1)?.text || '', /off/);
+
+      await _testOnly.handleMessage(adapter, inboundMessage(address, '/runtime kimi', 'incoming-kimi-command-runtime'));
+      const kimiBinding = store.getChannelChat(address.channelType, address.chatId);
+      assert.ok(kimiBinding);
+      assert.notEqual(kimiBinding.bridgeSessionId, codexBinding.bridgeSessionId);
+      assert.equal(kimiBinding.runtimeBridgeSessionIds?.codex, codexBinding.bridgeSessionId);
+      assert.equal(kimiBinding.runtimeBridgeSessionIds?.kimi, kimiBinding.bridgeSessionId);
+      const kimiSession = store.getSession(kimiBinding.bridgeSessionId);
+      assert.equal(kimiSession?.runtime?.activeRuntime, 'kimi');
+      assert.equal(getSessionWorkingDirectory(kimiSession), workDir);
+      assert.match(adapter.sent.at(-1)?.text || '', /已创建并切换 Runtime/);
+      assert.match(adapter.sent.at(-1)?.text || '', /Runtime.*kimi/s);
+
+      await _testOnly.handleMessage(adapter, inboundMessage(address, '/p', 'incoming-kimi-command-provider-status'));
+      assert.match(adapter.sent.at(-1)?.text || '', /当前 Kimi Provider/);
+      assert.match(adapter.sent.at(-1)?.text || '', /Provider.*tmux/s);
+
+      await _testOnly.handleMessage(adapter, inboundMessage(address, '/p sdk', 'incoming-kimi-command-provider-invalid'));
+      assert.match(adapter.sent.at(-1)?.text || '', /Kimi Provider 用法/);
+      assert.equal(getSessionTomlSnapshot(kimiBinding.bridgeSessionId).runtime?.kimi?.provider, 'tmux');
+
+      await _testOnly.handleMessage(adapter, inboundMessage(address, '/p auto', 'incoming-kimi-command-provider-auto-invalid'));
+      assert.match(adapter.sent.at(-1)?.text || '', /Kimi Provider 用法/);
+      assert.equal(getSessionTomlSnapshot(kimiBinding.bridgeSessionId).runtime?.kimi?.provider, 'tmux');
+
+      await _testOnly.handleMessage(adapter, inboundMessage(address, '/p tmux', 'incoming-kimi-command-provider-tmux'));
+      assert.match(adapter.sent.at(-1)?.text || '', /已切换 Kimi Provider/);
+      assert.equal(getSessionTomlSnapshot(kimiBinding.bridgeSessionId).runtime?.kimi?.provider, 'tmux');
+      const nonKimiRuntimeConfigBeforeUnsupportedCommands = JSON.stringify({
+        codex: getSessionTomlSnapshot(kimiBinding.bridgeSessionId).runtime?.codex,
+        claude: getSessionTomlSnapshot(kimiBinding.bridgeSessionId).runtime?.claude,
+      });
+
+      await _testOnly.handleMessage(adapter, inboundMessage(address, '/model moonshot-auto', 'incoming-kimi-command-model'));
+      assert.match(adapter.sent.at(-1)?.text || '', /已更新 Kimi Code 模型/);
+      assert.equal(getSessionTomlSnapshot(kimiBinding.bridgeSessionId).runtime?.kimi?.model, 'moonshot-auto');
+
+      await _testOnly.handleMessage(adapter, inboundMessage(address, '/r high', 'incoming-kimi-command-reasoning'));
+      assert.match(adapter.sent.at(-1)?.text || '', /Kimi Code 不支持 Bridge 思考级别设置/);
+      await _testOnly.handleMessage(adapter, inboundMessage(address, '/sandbox read-only', 'incoming-kimi-command-sandbox'));
+      assert.match(adapter.sent.at(-1)?.text || '', /Kimi Code 不支持 Bridge 沙箱设置/);
+      await _testOnly.handleMessage(adapter, inboundMessage(address, '/network off', 'incoming-kimi-command-network'));
+      assert.match(adapter.sent.at(-1)?.text || '', /Kimi Code 不支持 Bridge 网络开关/);
+      await _testOnly.handleMessage(adapter, inboundMessage(address, '/mode yolo', 'incoming-kimi-command-mode'));
+      assert.match(adapter.sent.at(-1)?.text || '', /Kimi Code 模式固定/);
+      const scopedConfig = getSessionTomlSnapshot(kimiBinding.bridgeSessionId);
+      assert.equal(JSON.stringify({
+        codex: scopedConfig.runtime?.codex,
+        claude: scopedConfig.runtime?.claude,
+      }), nonKimiRuntimeConfigBeforeUnsupportedCommands);
+
+      await _testOnly.handleMessage(adapter, inboundMessage(address, '/current', 'incoming-kimi-command-current'));
+      const currentCard = adapter.sent.at(-1)?.richCard;
+      assert.match(adapter.sent.at(-1)?.text || '', /当前会话/);
+      assert.equal(currentCard?.selects?.[0]?.selectedCallbackData, 'clk-command::%2Fcurrent-runtime%20kimi');
+      assert.equal(currentCard?.tags?.[0], 'kimi');
+      assert.match(currentCard?.footer?.join('\n') || '', /当前 agent：.*Kimi Code/s);
+
+      await _testOnly.handleMessage(adapter, inboundMessage(address, '/file kimi-small.txt', 'incoming-kimi-command-small-file'));
+      const smallFileReply = adapter.sent.find((message) => message.attachments?.some((attachment) => attachment.path === smallFilePath));
+      assert.ok(smallFileReply);
+      assert.equal(smallFileReply?.attachments?.[0]?.path, smallFilePath);
+      assert.equal(smallFileReply?.attachments?.[0]?.name, 'kimi-small.txt');
+      assert.match(adapter.sent.at(-1)?.text || '', /已发送文件/);
+      assert.equal(store.getChannelChat(address.channelType, address.chatId)?.bridgeSessionId, kimiBinding.bridgeSessionId);
+      assert.equal(store.getSession(kimiBinding.bridgeSessionId)?.runtime?.activeRuntime, 'kimi');
+
+      await _testOnly.handleMessage(adapter, inboundMessage(address, '/file kimi-large.bin', 'incoming-kimi-command-large-file'));
+      const largeFileReply = adapter.sent.find((message) => message.richCard?.title === '确认上传大文件');
+      assert.ok(largeFileReply);
+      assert.equal(largeFileReply?.attachments?.length || 0, 0);
+      assert.equal(largeFileReply?.richCard?.title, '确认上传大文件');
+      assert.match(JSON.stringify(largeFileReply?.richCard?.sections || []), /kimi-large\.bin/);
+      assert.match(JSON.stringify(largeFileReply?.richCard?.sections || []), /超过 20 MB/);
+      assert.match(JSON.stringify(largeFileReply?.richCard?.actions || []), /%2Ffile%20--confirm-large/);
+      assert.match(JSON.stringify(largeFileReply?.richCard?.actions || []), /%2Ffile%20--cancel-large/);
+      assert.match(adapter.sent.at(-1)?.text || '', /已发送确认卡片/);
+      assert.equal(store.getChannelChat(address.channelType, address.chatId)?.bridgeSessionId, kimiBinding.bridgeSessionId);
+      assert.equal(store.getSession(kimiBinding.bridgeSessionId)?.runtime?.activeRuntime, 'kimi');
+
+      await _testOnly.handleMessage(adapter, inboundMessage(address, '/every 1h e2e seed kimi-command-state', 'incoming-kimi-command-every-create'));
+      assert.match(adapter.sent.at(-1)?.text || '', /已创建 \/every 定时输入/);
+      assert.match(adapter.sent.at(-1)?.text || '', /session runtime-id/);
+      assert.match(adapter.sent.at(-1)?.text || '', /kimi-command-state/);
+      const everyTasks = listEveryTasks({ bridgeSessionId: kimiBinding.bridgeSessionId });
+      assert.equal(everyTasks.length, 1);
+      assert.equal(everyTasks[0]?.prompt, 'e2e seed kimi-command-state');
+
+      await _testOnly.handleMessage(adapter, inboundMessage(address, '/every', 'incoming-kimi-command-every-list'));
+      const everyListReply = adapter.sent.at(-1);
+      assert.match(everyListReply?.text || '', /当前聊天 \/every 定时输入/);
+      assert.match(everyListReply?.text || '', /session runtime-id/);
+      assert.match(everyListReply?.text || '', /kimi-command-state/);
+      assert.equal(everyListReply?.richCard?.title, '当前聊天 /every 定时输入（1）');
+      assert.equal(everyListReply?.richCard?.table?.columns.some((column) => column.name === 'runtime_id'), true);
+      assert.equal(store.getChannelChat(address.channelType, address.chatId)?.bridgeSessionId, kimiBinding.bridgeSessionId);
+      assert.equal(store.getSession(kimiBinding.bridgeSessionId)?.runtime?.activeRuntime, 'kimi');
+
+      await _testOnly.handleMessage(adapter, inboundMessage(address, '/every no 1', 'incoming-kimi-command-every-remove'));
+      assert.match(adapter.sent.at(-1)?.text || '', /已取消 \/every 定时输入/);
+      assert.equal(listEveryTasks({ bridgeSessionId: kimiBinding.bridgeSessionId }).length, 0);
+      assert.equal(store.getChannelChat(address.channelType, address.chatId)?.bridgeSessionId, kimiBinding.bridgeSessionId);
+      assert.equal(store.getSession(kimiBinding.bridgeSessionId)?.runtime?.activeRuntime, 'kimi');
+
+      await _testOnly.handleMessage(adapter, {
+        ...inboundMessage(address, '', 'incoming-kimi-command-current-codex'),
+        callbackData: buildCommandCallbackData('/current-runtime codex'),
+        callbackMessageId: 'reply-current-kimi',
+      });
+      const restoredCodexBinding = store.getChannelChat(address.channelType, address.chatId);
+      assert.ok(restoredCodexBinding);
+      assert.equal(restoredCodexBinding.bridgeSessionId, codexBinding.bridgeSessionId);
+      assert.equal(getSessionActiveRuntime(store.getSession(restoredCodexBinding.bridgeSessionId)) || 'codex', 'codex');
+
+      await _testOnly.handleMessage(adapter, {
+        ...inboundMessage(address, '', 'incoming-kimi-command-current-kimi'),
+        callbackData: buildCommandCallbackData('/current-runtime kimi'),
+        callbackMessageId: 'reply-current-codex',
+      });
+      const restoredKimiBinding = store.getChannelChat(address.channelType, address.chatId);
+      assert.ok(restoredKimiBinding);
+      assert.equal(restoredKimiBinding.bridgeSessionId, kimiBinding.bridgeSessionId);
+      assert.equal(store.getSession(restoredKimiBinding.bridgeSessionId)?.runtime?.activeRuntime, 'kimi');
+      assert.equal(getSessionTomlSnapshot(restoredKimiBinding.bridgeSessionId).runtime?.kimi?.model, 'moonshot-auto');
+    } finally {
+      fs.rmSync(workDir, { recursive: true, force: true });
+    }
+  });
+
+  it('runs Kimi session-management commands with runtime identity and archive state', async () => {
+    const store = initBridgeTestContext({
+      dynamicSettings: true,
+      settings: makeBridgeSettings(),
+    });
+    const adapter = new RecordingAdapter();
+    const address = { channelType: 'feishu', chatId: 'chat-kimi-session-management', chatKind: 'group' as const } as const;
+    const kimiHome = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-kimi-session-management-home-'));
+    const previousKimiHome = process.env.KIMI_CODE_HOME;
+    const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-kimi-session-management-cwd-'));
+    const kimiSessionId = 'session_kimi_session_management';
+
+    process.env.KIMI_CODE_HOME = kimiHome;
+    writeKimiWireFixture({
+      homeDir: kimiHome,
+      cwd,
+      sessionId: kimiSessionId,
+      timestamp: '2026-06-02T00:00:00.000Z',
+      text: 'Kimi session management user text',
+      assistantText: 'Kimi session management assistant text',
+      title: 'Kimi session management title',
+    });
+
+    try {
+      await _testOnly.handleMessage(adapter, inboundMessage(address, `/t ${kimiSessionId}`, 'incoming-kimi-session-management-bind'));
+      let binding = store.getChannelChat(address.channelType, address.chatId);
+      assert.ok(binding);
+      assert.equal(binding.runtimeBridgeSessionIds?.kimi, binding.bridgeSessionId);
+      assert.equal(store.getSession(binding.bridgeSessionId)?.runtime?.activeRuntime, 'kimi');
+
+      await _testOnly.handleMessage(adapter, inboundMessage(address, '/current', 'incoming-kimi-session-management-current'));
+      assert.match(adapter.sent.at(-1)?.text || '', /当前会话/);
+      assert.match(adapter.sent.at(-1)?.text || '', /runtime.*Kimi Code/s);
+      assert.match(adapter.sent.at(-1)?.text || '', new RegExp(kimiSessionId));
+      assert.equal(adapter.sent.at(-1)?.richCard?.tags?.[0], 'kimi');
+
+      await _testOnly.handleMessage(adapter, inboundMessage(address, '/check', 'incoming-kimi-session-management-check'));
+      const checkText = adapter.sent.at(-1)?.text || '';
+      assert.match(checkText, /当前会话健康检查/);
+      assert.match(checkText, /runtime.*Kimi Code/s);
+      assert.match(checkText, /kimi_session_id.*session_kimi_session_management/s);
+      assert.match(checkText, /runtime_cwd/s);
+      assert.match(checkText, new RegExp(cwd.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+      assert.doesNotMatch(checkText, /codex_thread_id|claude_session_id/);
+
+      await _testOnly.handleMessage(adapter, inboundMessage(address, '/t', 'incoming-kimi-session-management-list'));
+      assert.match(adapter.sent.at(-1)?.text || '', /本地会话/);
+      assert.match(adapter.sent.at(-1)?.text || '', /Kimi Code/);
+      assert.match(adapter.sent.at(-1)?.text || '', new RegExp(kimiSessionId));
+
+      await _testOnly.handleMessage(adapter, inboundMessage(address, '/t n 50', 'incoming-kimi-session-management-list-50'));
+      assert.match(adapter.sent.at(-1)?.text || '', /本地会话/);
+      assert.match(adapter.sent.at(-1)?.text || '', /Kimi Code/);
+      assert.match(adapter.sent.at(-1)?.text || '', new RegExp(kimiSessionId));
+
+      await _testOnly.handleMessage(adapter, inboundMessage(address, '/t unbind', 'incoming-kimi-session-management-unbind'));
+      assert.match(adapter.sent.at(-1)?.text || '', /当前聊天已解绑/);
+      assert.match(adapter.sent.at(-1)?.text || '', /新的临时 BridgeSession/);
+      const unbound = store.getChannelChat(address.channelType, address.chatId);
+      assert.ok(unbound);
+      assert.notEqual(unbound.bridgeSessionId, binding.bridgeSessionId);
+
+      await _testOnly.handleMessage(adapter, inboundMessage(address, `/t ${kimiSessionId}`, 'incoming-kimi-session-management-rebind'));
+      binding = store.getChannelChat(address.channelType, address.chatId);
+      assert.ok(binding);
+      assert.equal(store.getSession(binding.bridgeSessionId)?.runtime?.activeRuntime, 'kimi');
+
+      await _testOnly.handleMessage(adapter, inboundMessage(address, '/t archive', 'incoming-kimi-session-management-archive'));
+      assert.match(adapter.sent.at(-1)?.text || '', /已归档本地 Kimi Code 会话/);
+      assert.match(adapter.sent.at(-1)?.text || '', new RegExp(kimiSessionId));
+      assert.equal(isArchivedKimiSession(kimiSessionId, cwd), true);
+    } finally {
+      if (previousKimiHome === undefined) {
+        delete process.env.KIMI_CODE_HOME;
+      } else {
+        process.env.KIMI_CODE_HOME = previousKimiHome;
+      }
+      fs.rmSync(kimiHome, { recursive: true, force: true });
+      fs.rmSync(cwd, { recursive: true, force: true });
+    }
   });
 
   it('creates a new Claude /set card from text commands and refreshes that new card in place', async () => {
@@ -2106,6 +2602,519 @@ provider = "tmux"
     }
   });
 
+  it('auto-initializes a Kimi tmux provider binding on the first plain message', { timeout: 30_000 }, async (t: TestContext) => {
+    if (!(await tmuxAvailable())) {
+      t.skip('tmux is not available');
+      return;
+    }
+
+    const previousEnv = {
+      KIMI_CODE_HOME: process.env.KIMI_CODE_HOME,
+      KIMI_CODE_EXECUTABLE: process.env.KIMI_CODE_EXECUTABLE,
+      CODELARK_KIMI_EXECUTABLE: process.env.CODELARK_KIMI_EXECUTABLE,
+      CODELARK_KIMI_TMUX_POLL_INTERVAL_MS: process.env.CODELARK_KIMI_TMUX_POLL_INTERVAL_MS,
+      CODELARK_KIMI_TMUX_SESSION_FILE_TIMEOUT_MS: process.env.CODELARK_KIMI_TMUX_SESSION_FILE_TIMEOUT_MS,
+      CODELARK_KIMI_TMUX_SESSION_ID_TIMEOUT_MS: process.env.CODELARK_KIMI_TMUX_SESSION_ID_TIMEOUT_MS,
+      CODELARK_KIMI_TMUX_PROMPT_DELAY_MS: process.env.CODELARK_KIMI_TMUX_PROMPT_DELAY_MS,
+      CODELARK_DEBUG: process.env.CODELARK_DEBUG,
+    };
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-runtime-kimi-tmux-auto-init-'));
+    const kimiHome = path.join(tempDir, 'kimi-home');
+    const binDir = path.join(tempDir, 'bin');
+    const workDir = path.join(tempDir, 'workspace');
+    const ctrlCPath = path.join(tempDir, 'ctrl-c-count');
+    const keyLogPath = path.join(tempDir, 'keys.jsonl');
+    const launchLogPath = path.join(tempDir, 'launches.jsonl');
+    const kimiSessionId = 'session_mock-kimi-plain-e2e';
+    fs.mkdirSync(binDir, { recursive: true });
+    fs.mkdirSync(workDir, { recursive: true });
+    fs.mkdirSync(kimiHome, { recursive: true });
+
+    process.env.KIMI_CODE_HOME = kimiHome;
+    process.env.KIMI_CODE_EXECUTABLE = writeFakeKimiExecutable(binDir, {
+      sessionId: kimiSessionId,
+      ctrlCPath,
+      keyLogPath,
+      launchLogPath,
+    });
+    delete process.env.CODELARK_KIMI_EXECUTABLE;
+    delete process.env.CODELARK_DEBUG;
+    process.env.CODELARK_KIMI_TMUX_POLL_INTERVAL_MS = '50';
+    process.env.CODELARK_KIMI_TMUX_SESSION_FILE_TIMEOUT_MS = '5000';
+    process.env.CODELARK_KIMI_TMUX_SESSION_ID_TIMEOUT_MS = '5000';
+    process.env.CODELARK_KIMI_TMUX_PROMPT_DELAY_MS = '50';
+
+    const store = initBridgeTestContext({
+      dynamicSettings: true,
+      settings: makeBridgeSettings(),
+      llm: new CodexRoutingProvider(),
+    });
+    const adapter = new StreamingRecordingAdapter();
+    registerAdapter(adapter);
+    const bridgeState = (globalThis as unknown as Record<string, any>).__bridge_manager__;
+    bridgeState.running = true;
+    const address = { channelType: 'feishu', chatId: 'chat-runtime-kimi-tmux-auto-init' } as const;
+
+    try {
+      const { binding } = createExistingChannelChat(store, address, {
+        workDir,
+        name: 'runtime-kimi-tmux-auto-init',
+      });
+      store.updateSession(binding.bridgeSessionId, {
+        runtime: {
+          activeRuntime: 'kimi',
+          kimi: { provider: 'tmux' },
+          general: { workingDirectory: workDir },
+        },
+      });
+
+      await _testOnly.handleMessage(adapter, inboundMessage(address, 'first kimi tmux', 'incoming-kimi-tmux-auto-init-plain'));
+
+      await waitForCondition(() => adapter.streamEvents.some((event) => (
+        event.kind === 'end'
+        && /Kimi mock-app plain response/.test(event.text || '')
+      )), 12_000).catch((error) => {
+        const session = store.getSession(binding.bridgeSessionId);
+        assert.fail([
+          error instanceof Error ? error.message : String(error),
+          `kimiSessionId=${session?.runtime?.kimi?.sessionId || ''}`,
+          `kimiCwd=${session?.runtime?.kimi?.cwd || ''}`,
+          `streamEvents=${JSON.stringify(adapter.streamEvents)}`,
+          `sent=${JSON.stringify(adapter.sent.map((message) => ({ text: message.text, richCard: message.richCard?.title })))}`,
+          `launchLog=${fs.existsSync(launchLogPath) ? fs.readFileSync(launchLogPath, 'utf-8') : '<missing>'}`,
+          `keyLog=${fs.existsSync(keyLogPath) ? fs.readFileSync(keyLogPath, 'utf-8') : '<missing>'}`,
+        ].join('\n'));
+      });
+
+      const session = store.getSession(binding.bridgeSessionId);
+      assert.equal(session?.runtime?.activeRuntime, 'kimi');
+      assert.equal(session?.runtime?.kimi?.provider, 'tmux');
+      assert.equal(session?.runtime?.kimi?.sessionId, kimiSessionId);
+      assert.equal(session?.runtime?.kimi?.cwd, workDir);
+      assert.equal(session?.mirror_status, 'watching');
+      assert.equal(Number(fs.readFileSync(ctrlCPath, 'utf-8')) >= 2, true);
+
+      const keyLog = fs.readFileSync(keyLogPath, 'utf-8');
+      assert.match(keyLog, /first kimi tmux/);
+      assert.match(keyLog, /"hex":"13"/, 'Kimi tmux provider should send Ctrl-S after the prompt');
+      assert.ok(adapter.streamEvents.some((event) => (
+        event.kind === 'status'
+        && /当前思考：mock kimi thinking/.test(event.text || '')
+      )));
+
+      const launches = fs.readFileSync(launchLogPath, 'utf-8')
+        .trim()
+        .split(/\r?\n/)
+        .map((line) => JSON.parse(line) as { argv: string[]; resumed: boolean; cwd: string });
+      assert.equal(launches[0]?.resumed, false);
+      assert.deepEqual(launches[1]?.argv.slice(0, 2), ['-r', kimiSessionId]);
+      assert.equal(launches[1]?.resumed, true);
+      assert.equal(launches[1]?.cwd, workDir);
+    } finally {
+      for (const [key, value] of Object.entries(previousEnv)) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it('routes plain Feishu messages through Kimi after /runtime kimi and /p tmux', { timeout: 30_000 }, async (t: TestContext) => {
+    if (!(await tmuxAvailable())) {
+      t.skip('tmux is not available');
+      return;
+    }
+
+    const previousEnv = {
+      KIMI_CODE_HOME: process.env.KIMI_CODE_HOME,
+      KIMI_CODE_EXECUTABLE: process.env.KIMI_CODE_EXECUTABLE,
+      CODELARK_KIMI_EXECUTABLE: process.env.CODELARK_KIMI_EXECUTABLE,
+      CODELARK_KIMI_TMUX_POLL_INTERVAL_MS: process.env.CODELARK_KIMI_TMUX_POLL_INTERVAL_MS,
+      CODELARK_KIMI_TMUX_SESSION_FILE_TIMEOUT_MS: process.env.CODELARK_KIMI_TMUX_SESSION_FILE_TIMEOUT_MS,
+      CODELARK_KIMI_TMUX_SESSION_ID_TIMEOUT_MS: process.env.CODELARK_KIMI_TMUX_SESSION_ID_TIMEOUT_MS,
+      CODELARK_KIMI_TMUX_PROMPT_DELAY_MS: process.env.CODELARK_KIMI_TMUX_PROMPT_DELAY_MS,
+      CODELARK_DEBUG: process.env.CODELARK_DEBUG,
+    };
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-runtime-kimi-command-message-'));
+    const kimiHome = path.join(tempDir, 'kimi-home');
+    const binDir = path.join(tempDir, 'bin');
+    const workDir = path.join(tempDir, 'workspace');
+    const ctrlCPath = path.join(tempDir, 'ctrl-c-count');
+    const keyLogPath = path.join(tempDir, 'keys.jsonl');
+    const launchLogPath = path.join(tempDir, 'launches.jsonl');
+    const kimiSessionId = 'session_mock-kimi-runtime-message-e2e';
+    fs.mkdirSync(binDir, { recursive: true });
+    fs.mkdirSync(workDir, { recursive: true });
+    fs.mkdirSync(kimiHome, { recursive: true });
+
+    process.env.KIMI_CODE_HOME = kimiHome;
+    process.env.KIMI_CODE_EXECUTABLE = writeFakeKimiExecutable(binDir, {
+      sessionId: kimiSessionId,
+      ctrlCPath,
+      keyLogPath,
+      launchLogPath,
+    });
+    delete process.env.CODELARK_KIMI_EXECUTABLE;
+    delete process.env.CODELARK_DEBUG;
+    process.env.CODELARK_KIMI_TMUX_POLL_INTERVAL_MS = '50';
+    process.env.CODELARK_KIMI_TMUX_SESSION_FILE_TIMEOUT_MS = '5000';
+    process.env.CODELARK_KIMI_TMUX_SESSION_ID_TIMEOUT_MS = '5000';
+    process.env.CODELARK_KIMI_TMUX_PROMPT_DELAY_MS = '50';
+
+    const store = initBridgeTestContext({
+      dynamicSettings: true,
+      settings: makeBridgeSettings(),
+      llm: new CodexRoutingProvider(),
+    });
+    const adapter = new StreamingRecordingAdapter();
+    registerAdapter(adapter);
+    const bridgeState = (globalThis as unknown as Record<string, any>).__bridge_manager__;
+    bridgeState.running = true;
+    const address = { channelType: 'feishu', chatId: 'chat-runtime-kimi-command-message' } as const;
+
+    try {
+      const { binding } = createExistingChannelChat(store, address, {
+        workDir,
+        name: 'runtime-kimi-command-message',
+      });
+
+      await _testOnly.handleMessage(adapter, inboundMessage(address, '/runtime kimi', 'incoming-kimi-runtime-command'));
+      assert.match(adapter.sent.at(-1)?.text || '', /已创建并切换 Runtime|已切换 Runtime/s);
+      assert.match(adapter.sent.at(-1)?.text || '', /Runtime.*kimi/s);
+      await _testOnly.handleMessage(adapter, inboundMessage(address, '/p tmux', 'incoming-kimi-provider-command'));
+      assert.match(adapter.sent.at(-1)?.text || '', /当前 Kimi Provider|已设置.*tmux|tmux/s);
+
+      const currentBinding = store.getChannelChat(address.channelType, address.chatId);
+      assert.ok(currentBinding);
+      assert.notEqual(currentBinding.bridgeSessionId, binding.bridgeSessionId);
+      const configuredSession = store.getSession(currentBinding.bridgeSessionId);
+      assert.equal(configuredSession?.runtime?.activeRuntime, 'kimi');
+      assert.equal(getSessionKimiProviderToml(currentBinding.bridgeSessionId), 'tmux');
+      assert.equal(getSessionWorkingDirectory(configuredSession), workDir);
+
+      await _testOnly.handleMessage(adapter, inboundMessage(address, 'runtime command kimi prompt', 'incoming-kimi-runtime-message-plain'));
+
+      await waitForCondition(() => adapter.streamEvents.some((event) => (
+        event.kind === 'end'
+        && event.streamKey?.startsWith('mirror:')
+        && event.status === 'completed'
+        && event.text === '**kimi:** Kimi mock-app plain response'
+      )), 12_000).catch((error) => {
+        const activeBinding = store.getChannelChat(address.channelType, address.chatId);
+        const session = activeBinding ? store.getSession(activeBinding.bridgeSessionId) : undefined;
+        assert.fail([
+          error instanceof Error ? error.message : String(error),
+          `kimiSessionId=${session?.runtime?.kimi?.sessionId || ''}`,
+          `activeRuntime=${session?.runtime?.activeRuntime || ''}`,
+          `streamEvents=${JSON.stringify(adapter.streamEvents)}`,
+          `sent=${JSON.stringify(adapter.sent.map((message) => ({ text: message.text, richCard: message.richCard?.title })))}`,
+          `launchLog=${fs.existsSync(launchLogPath) ? fs.readFileSync(launchLogPath, 'utf-8') : '<missing>'}`,
+          `keyLog=${fs.existsSync(keyLogPath) ? fs.readFileSync(keyLogPath, 'utf-8') : '<missing>'}`,
+        ].join('\n'));
+      });
+
+      const activeBinding = store.getChannelChat(address.channelType, address.chatId);
+      assert.ok(activeBinding);
+      const updatedSession = store.getSession(activeBinding.bridgeSessionId);
+      assert.equal(updatedSession?.runtime?.activeRuntime, 'kimi');
+      assert.equal(getSessionKimiProviderToml(activeBinding.bridgeSessionId), 'tmux');
+      assert.equal(updatedSession?.runtime?.kimi?.sessionId, kimiSessionId);
+      assert.equal(updatedSession?.runtime?.kimi?.cwd, workDir);
+      assert.equal(updatedSession?.mirror_status, 'watching');
+
+      const keyLog = fs.readFileSync(keyLogPath, 'utf-8');
+      assert.match(keyLog, /runtime command kimi prompt/);
+      assert.match(keyLog, /"hex":"13"/, 'Kimi tmux provider should send Ctrl-S after /runtime + /p seeded prompt');
+      assert.ok(adapter.streamEvents.some((event) => (
+        event.kind === 'status'
+        && event.streamKey?.startsWith('mirror:')
+        && /当前思考：mock kimi thinking/.test(event.text || '')
+      )));
+
+      const launches = fs.readFileSync(launchLogPath, 'utf-8')
+        .trim()
+        .split(/\r?\n/)
+        .map((line) => JSON.parse(line) as { argv: string[]; resumed: boolean; cwd: string });
+      assert.equal(launches[0]?.resumed, false);
+      assert.deepEqual(launches[1]?.argv.slice(0, 2), ['-r', kimiSessionId]);
+      assert.equal(launches[1]?.resumed, true);
+      assert.equal(launches[1]?.cwd, workDir);
+    } finally {
+      for (const [key, value] of Object.entries(previousEnv)) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it('continues a /t-bound Kimi Code session on the next plain Feishu message', { timeout: 30_000 }, async (t: TestContext) => {
+    if (!(await tmuxAvailable())) {
+      t.skip('tmux is not available');
+      return;
+    }
+
+    const previousEnv = {
+      KIMI_CODE_HOME: process.env.KIMI_CODE_HOME,
+      KIMI_CODE_EXECUTABLE: process.env.KIMI_CODE_EXECUTABLE,
+      CODELARK_KIMI_EXECUTABLE: process.env.CODELARK_KIMI_EXECUTABLE,
+      CODELARK_KIMI_TMUX_POLL_INTERVAL_MS: process.env.CODELARK_KIMI_TMUX_POLL_INTERVAL_MS,
+      CODELARK_KIMI_TMUX_SESSION_FILE_TIMEOUT_MS: process.env.CODELARK_KIMI_TMUX_SESSION_FILE_TIMEOUT_MS,
+      CODELARK_KIMI_TMUX_SESSION_ID_TIMEOUT_MS: process.env.CODELARK_KIMI_TMUX_SESSION_ID_TIMEOUT_MS,
+      CODELARK_KIMI_TMUX_PROMPT_DELAY_MS: process.env.CODELARK_KIMI_TMUX_PROMPT_DELAY_MS,
+      CODELARK_DEBUG: process.env.CODELARK_DEBUG,
+    };
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-runtime-kimi-tmux-bound-'));
+    const kimiHome = path.join(tempDir, 'kimi-home');
+    const binDir = path.join(tempDir, 'bin');
+    const workDir = path.join(tempDir, 'workspace');
+    const keyLogPath = path.join(tempDir, 'keys.jsonl');
+    const launchLogPath = path.join(tempDir, 'launches.jsonl');
+    const kimiSessionId = 'session_mock-kimi-bound-e2e';
+    const responseText = 'Kimi /t bound response';
+    const thinkText = 'mock kimi bound thinking';
+    fs.mkdirSync(binDir, { recursive: true });
+    fs.mkdirSync(workDir, { recursive: true });
+    fs.mkdirSync(kimiHome, { recursive: true });
+
+    process.env.KIMI_CODE_HOME = kimiHome;
+    const wirePath = writeKimiWireFixture({
+      homeDir: kimiHome,
+      cwd: workDir,
+      sessionId: kimiSessionId,
+      timestamp: '2026-06-27T10:15:00.000Z',
+      text: 'existing Kimi /t prompt',
+      assistantText: 'existing Kimi /t answer',
+      title: 'Existing Kimi /t session',
+    });
+    process.env.KIMI_CODE_EXECUTABLE = writeResumeOnlyFakeKimiExecutable(binDir, {
+      sessionId: kimiSessionId,
+      wirePath,
+      keyLogPath,
+      launchLogPath,
+      responseText,
+      thinkText,
+    });
+    delete process.env.CODELARK_KIMI_EXECUTABLE;
+    delete process.env.CODELARK_DEBUG;
+    process.env.CODELARK_KIMI_TMUX_POLL_INTERVAL_MS = '50';
+    process.env.CODELARK_KIMI_TMUX_SESSION_FILE_TIMEOUT_MS = '5000';
+    process.env.CODELARK_KIMI_TMUX_SESSION_ID_TIMEOUT_MS = '5000';
+    process.env.CODELARK_KIMI_TMUX_PROMPT_DELAY_MS = '50';
+
+    const store = initBridgeTestContext({
+      dynamicSettings: true,
+      settings: makeBridgeSettings(),
+      llm: new CodexRoutingProvider(),
+    });
+    const adapter = new StreamingRecordingAdapter();
+    registerAdapter(adapter);
+    const bridgeState = (globalThis as unknown as Record<string, any>).__bridge_manager__;
+    bridgeState.running = true;
+    const address = { channelType: 'feishu', chatId: 'chat-runtime-kimi-tmux-bound' } as const;
+
+    try {
+      await _testOnly.handleMessage(adapter, inboundMessage(address, `/t ${kimiSessionId}`, 'incoming-kimi-bound-thread'));
+      const binding = store.getChannelChat(address.channelType, address.chatId);
+      assert.ok(binding);
+      const session = store.getSession(binding.bridgeSessionId);
+      assert.equal(session?.runtime?.activeRuntime, 'kimi');
+      assert.equal(session?.runtime?.kimi?.provider, 'tmux');
+      assert.equal(session?.runtime?.kimi?.sessionId, kimiSessionId);
+      assert.equal(session?.runtime?.kimi?.cwd, workDir);
+      assert.match(adapter.sent.at(-1)?.text || '', /已切换到本地 Kimi Code 会话/);
+
+      await _testOnly.handleMessage(adapter, inboundMessage(address, 'continue bound kimi', 'incoming-kimi-bound-plain'));
+
+      await waitForCondition(() => adapter.streamEvents.some((event) => (
+        event.kind === 'end'
+        && event.streamKey?.startsWith('mirror:')
+        && event.status === 'completed'
+        && event.text === `**kimi:** ${responseText}`
+      )), 12_000).catch((error) => {
+        assert.fail([
+          error instanceof Error ? error.message : String(error),
+          `streamEvents=${JSON.stringify(adapter.streamEvents)}`,
+          `sent=${JSON.stringify(adapter.sent.map((message) => ({ text: message.text, richCard: message.richCard?.title })))}`,
+          `launchLog=${fs.existsSync(launchLogPath) ? fs.readFileSync(launchLogPath, 'utf-8') : '<missing>'}`,
+          `keyLog=${fs.existsSync(keyLogPath) ? fs.readFileSync(keyLogPath, 'utf-8') : '<missing>'}`,
+          `wire=${fs.readFileSync(wirePath, 'utf-8')}`,
+        ].join('\n'));
+      });
+
+      const updatedSession = store.getSession(binding.bridgeSessionId);
+      assert.equal(updatedSession?.runtime?.activeRuntime, 'kimi');
+      assert.equal(updatedSession?.runtime?.kimi?.sessionId, kimiSessionId);
+      assert.equal(updatedSession?.runtime?.kimi?.cwd, workDir);
+      assert.equal(updatedSession?.mirror_status, 'watching');
+
+      const launches = fs.readFileSync(launchLogPath, 'utf-8')
+        .trim()
+        .split(/\r?\n/)
+        .map((line) => JSON.parse(line) as { argv: string[]; resumed: boolean; cwd: string });
+      assert.equal(launches.length, 1);
+      assert.deepEqual(launches[0]?.argv.slice(0, 2), ['-r', kimiSessionId]);
+      assert.equal(launches[0]?.resumed, true);
+      assert.equal(launches[0]?.cwd, workDir);
+
+      const keyLog = fs.readFileSync(keyLogPath, 'utf-8');
+      assert.match(keyLog, /continue bound kimi/);
+      assert.match(keyLog, /"hex":"13"/, 'Kimi tmux provider should send Ctrl-S after a /t-bound prompt');
+      assert.ok(adapter.streamEvents.some((event) => (
+        event.kind === 'status'
+        && event.streamKey?.startsWith('mirror:')
+        && /当前思考：mock kimi bound thinking/.test(event.text || '')
+      )));
+      assert.equal(adapter.streamEvents.some((event) => (
+        event.kind === 'end'
+        && event.streamKey?.startsWith('im:')
+        && new RegExp(responseText).test(event.text || '')
+      )), false);
+      assert.equal(adapter.streamEvents.some((event) => (
+        event.kind === 'end'
+        && /mock kimi bound thinking/.test(event.text || '')
+      )), false);
+      assert.match(fs.readFileSync(wirePath, 'utf-8'), new RegExp(responseText));
+    } finally {
+      for (const [key, value] of Object.entries(previousEnv)) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it('delivers Kimi mirror clk-ask output as a Feishu question form after /t binding', { timeout: 30_000 }, async (t: TestContext) => {
+    if (!(await tmuxAvailable())) {
+      t.skip('tmux is not available');
+      return;
+    }
+
+    const previousEnv = {
+      KIMI_CODE_HOME: process.env.KIMI_CODE_HOME,
+      KIMI_CODE_EXECUTABLE: process.env.KIMI_CODE_EXECUTABLE,
+      CODELARK_KIMI_EXECUTABLE: process.env.CODELARK_KIMI_EXECUTABLE,
+      CODELARK_KIMI_TMUX_POLL_INTERVAL_MS: process.env.CODELARK_KIMI_TMUX_POLL_INTERVAL_MS,
+      CODELARK_KIMI_TMUX_SESSION_FILE_TIMEOUT_MS: process.env.CODELARK_KIMI_TMUX_SESSION_FILE_TIMEOUT_MS,
+      CODELARK_KIMI_TMUX_SESSION_ID_TIMEOUT_MS: process.env.CODELARK_KIMI_TMUX_SESSION_ID_TIMEOUT_MS,
+      CODELARK_KIMI_TMUX_PROMPT_DELAY_MS: process.env.CODELARK_KIMI_TMUX_PROMPT_DELAY_MS,
+      CODELARK_DEBUG: process.env.CODELARK_DEBUG,
+    };
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-runtime-kimi-question-form-'));
+    const kimiHome = path.join(tempDir, 'kimi-home');
+    const binDir = path.join(tempDir, 'bin');
+    const workDir = path.join(tempDir, 'workspace');
+    const keyLogPath = path.join(tempDir, 'keys.jsonl');
+    const launchLogPath = path.join(tempDir, 'launches.jsonl');
+    const kimiSessionId = 'session_mock-kimi-question-form-e2e';
+    const askBlock = '<clk-ask>{"question":"请选择 Kimi 发布策略","options":["灰度","全量"],"input":{"label":"补充说明","placeholder":"可留空"},"submitText":"确认提交","allowTextReply":true}</clk-ask>';
+    const responseText = `Kimi asks for confirmation.\n\n${askBlock}`;
+    const thinkText = 'mock kimi question form thinking';
+    fs.mkdirSync(binDir, { recursive: true });
+    fs.mkdirSync(workDir, { recursive: true });
+    fs.mkdirSync(kimiHome, { recursive: true });
+
+    process.env.KIMI_CODE_HOME = kimiHome;
+    const wirePath = writeKimiWireFixture({
+      homeDir: kimiHome,
+      cwd: workDir,
+      sessionId: kimiSessionId,
+      timestamp: '2026-06-27T10:25:00.000Z',
+      text: 'existing Kimi question prompt',
+      assistantText: 'existing Kimi question answer',
+      title: 'Existing Kimi question session',
+    });
+    process.env.KIMI_CODE_EXECUTABLE = writeResumeOnlyFakeKimiExecutable(binDir, {
+      sessionId: kimiSessionId,
+      wirePath,
+      keyLogPath,
+      launchLogPath,
+      responseText,
+      thinkText,
+    });
+    delete process.env.CODELARK_KIMI_EXECUTABLE;
+    delete process.env.CODELARK_DEBUG;
+    process.env.CODELARK_KIMI_TMUX_POLL_INTERVAL_MS = '50';
+    process.env.CODELARK_KIMI_TMUX_SESSION_FILE_TIMEOUT_MS = '5000';
+    process.env.CODELARK_KIMI_TMUX_SESSION_ID_TIMEOUT_MS = '5000';
+    process.env.CODELARK_KIMI_TMUX_PROMPT_DELAY_MS = '50';
+
+    const store = initBridgeTestContext({
+      dynamicSettings: true,
+      settings: makeBridgeSettings(),
+      llm: new CodexRoutingProvider(),
+    });
+    const adapter = new StreamingRecordingAdapter();
+    registerAdapter(adapter);
+    const bridgeState = (globalThis as unknown as Record<string, any>).__bridge_manager__;
+    bridgeState.running = true;
+    const address = { channelType: 'feishu', chatId: 'chat-runtime-kimi-question-form' } as const;
+
+    try {
+      await _testOnly.handleMessage(adapter, inboundMessage(address, `/t ${kimiSessionId}`, 'incoming-kimi-question-thread'));
+      const binding = store.getChannelChat(address.channelType, address.chatId);
+      assert.ok(binding);
+      assert.equal(store.getSession(binding.bridgeSessionId)?.runtime?.activeRuntime, 'kimi');
+
+      await _testOnly.handleMessage(adapter, inboundMessage(address, 'ask user from kimi', 'incoming-kimi-question-plain'));
+
+      await waitForCondition(() => adapter.sent.some((message) => (
+        message.richCard?.form?.submitCallbackData.startsWith('clk-agent-question:') === true
+      )), 12_000).catch((error) => {
+        assert.fail([
+          error instanceof Error ? error.message : String(error),
+          `streamEvents=${JSON.stringify(adapter.streamEvents)}`,
+          `sent=${JSON.stringify(adapter.sent.map((message) => ({ text: message.text, richCard: message.richCard })))}`,
+          `launchLog=${fs.existsSync(launchLogPath) ? fs.readFileSync(launchLogPath, 'utf-8') : '<missing>'}`,
+          `keyLog=${fs.existsSync(keyLogPath) ? fs.readFileSync(keyLogPath, 'utf-8') : '<missing>'}`,
+          `wire=${fs.readFileSync(wirePath, 'utf-8')}`,
+        ].join('\n'));
+      });
+
+      const finalMirrorEnd = adapter.streamEvents.find((event) => (
+        event.kind === 'end'
+        && event.streamKey?.startsWith('mirror:')
+        && event.status === 'completed'
+        && /Kimi asks for confirmation\./.test(event.text || '')
+      ));
+      assert.ok(finalMirrorEnd);
+      assert.doesNotMatch(finalMirrorEnd.text || '', /<clk-ask>|请选择 Kimi 发布策略/);
+      assert.ok(adapter.streamEvents.some((event) => (
+        event.kind === 'status'
+        && event.streamKey?.startsWith('mirror:')
+        && /当前思考：mock kimi question form thinking/.test(event.text || '')
+      )));
+
+      const questionMessage = adapter.sent.find((message) => (
+        message.richCard?.form?.submitCallbackData.startsWith('clk-agent-question:') === true
+      ));
+      assert.ok(questionMessage);
+      assert.equal(questionMessage.text, '请选择 Kimi 发布策略');
+      assert.equal(questionMessage.richCard?.title, '需要确认');
+      assert.equal(questionMessage.richCard?.form?.optionElementId, 'clk_choice');
+      assert.equal(questionMessage.richCard?.form?.inputElementId, 'clk_input');
+      assert.equal(questionMessage.richCard?.form?.inputLabel, '补充说明');
+      assert.equal(questionMessage.richCard?.form?.inputPlaceholder, '可留空');
+      assert.equal(questionMessage.richCard?.form?.submitText, '确认提交');
+      assert.match(questionMessage.richCard?.form?.submitCallbackData || '', /^clk-agent-question:/);
+      assert.deepEqual(
+        questionMessage.richCard?.form?.options.map((option) => option.text),
+        ['灰度', '全量'],
+      );
+
+      const keyLog = fs.readFileSync(keyLogPath, 'utf-8');
+      assert.match(keyLog, /ask user from kimi/);
+      assert.match(keyLog, /"hex":"13"/, 'Kimi tmux provider should send Ctrl-S before the question form answer');
+      assert.match(fs.readFileSync(wirePath, 'utf-8'), /<clk-ask>/);
+    } finally {
+      for (const [key, value] of Object.entries(previousEnv)) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it('starts Claude tmux mirror after a plain auto-forwarded message discovers the JSONL session', async () => {
     const calls: RecordedLlmCall[] = [];
     const store = initBridgeTestContext({
@@ -2722,7 +3731,7 @@ provider = "tmux"
     process.env.TMUX_FAKE_STATE = fakeTmux.statePath;
 
     const adapter = new RecordingAdapter();
-    const address = { channelType: 'feishu', chatId: 'chat-runtime-tmux-before-thread-e2e' } as const;
+    const address = { channelType: 'feishu', chatId: 'chat-runtime-tmux-before-thread-e2e', userId: 'ou-runtime-tmux-before-thread' } as const;
 
     try {
       await _testOnly.handleMessage(adapter, inboundMessage(address, '/p tmux', 'incoming-runtime-provider-first'));
@@ -2796,7 +3805,7 @@ provider = "tmux"
     });
 
     const adapter = new RecordingAdapter();
-    const address = { channelType: 'feishu', chatId: 'chat-runtime-pty-before-thread-e2e' } as const;
+    const address = { channelType: 'feishu', chatId: 'chat-runtime-pty-before-thread-e2e', userId: 'ou-runtime-pty-before-thread' } as const;
 
     await _testOnly.handleMessage(adapter, inboundMessage(address, '/p pty', 'incoming-runtime-provider-pty-first'));
     const ptyBinding = store.getChannelChat(address.channelType, address.chatId);
@@ -3040,7 +4049,7 @@ provider = "tmux"
 
     const adapter = new RecordingAdapter();
     registerAdapter(adapter);
-    const address = { channelType: 'feishu', chatId: 'chat-new-after-tmux-e2e' } as const;
+    const address = { channelType: 'feishu', chatId: 'chat-new-after-tmux-e2e', userId: 'ou-new-after-tmux' } as const;
     const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-new-after-tmux-'));
 
     try {
@@ -3118,7 +4127,7 @@ provider = "tmux"
 
     const adapter = new RecordingAdapter();
     registerAdapter(adapter);
-    const address = { channelType: 'feishu', chatId: 'chat-new-after-pty-e2e' } as const;
+    const address = { channelType: 'feishu', chatId: 'chat-new-after-pty-e2e', userId: 'ou-new-after-pty' } as const;
 
     try {
       await _testOnly.handleMessage(adapter, inboundMessage(address, '/p pty', 'incoming-new-after-pty-provider'));
@@ -3186,7 +4195,7 @@ provider = "tmux"
     registerAdapter(adapter);
     const bridgeState = (globalThis as unknown as Record<string, any>).__bridge_manager__;
     bridgeState.running = true;
-    const address = { channelType: 'feishu', chatId: 'chat-runtime-tmux-default-recover-e2e' } as const;
+    const address = { channelType: 'feishu', chatId: 'chat-runtime-tmux-default-recover-e2e', userId: 'ou-runtime-tmux-default-recover' } as const;
     const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-runtime-tmux-default-recover-'));
 
     try {
@@ -3309,7 +4318,7 @@ provider = "tmux"
     registerAdapter(adapter);
     const bridgeState = (globalThis as unknown as Record<string, any>).__bridge_manager__;
     bridgeState.running = true;
-    const address = { channelType: 'feishu', chatId: 'chat-runtime-tmux-exit-notice-e2e' } as const;
+    const address = { channelType: 'feishu', chatId: 'chat-runtime-tmux-exit-notice-e2e', userId: 'ou-runtime-tmux-exit-notice' } as const;
     const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-runtime-tmux-exit-notice-'));
 
     try {
@@ -3366,7 +4375,7 @@ provider = "tmux"
     registerAdapter(adapter);
     const bridgeState = (globalThis as unknown as Record<string, any>).__bridge_manager__;
     bridgeState.running = true;
-    const address = { channelType: 'feishu', chatId: 'chat-runtime-tmux-bootstrap-visible-e2e' } as const;
+    const address = { channelType: 'feishu', chatId: 'chat-runtime-tmux-bootstrap-visible-e2e', userId: 'ou-runtime-tmux-bootstrap-visible' } as const;
 
     try {
       await _testOnly.handleMessage(adapter, inboundMessage(address, '/set defaultProvider tmux', 'incoming-tmux-bootstrap-visible-provider'));
@@ -3674,5 +4683,93 @@ provider = "tmux"
     assert.ok(attachmentMessage);
     assert.equal(attachmentMessage.attachments?.[0]?.path, sessionPath);
     assert.equal(fs.readFileSync(attachmentMessage.attachments![0].path, 'utf-8'), rawJsonl);
+  });
+
+  it('reads Kimi wire history and sends wire JSONL through /his after /t binding', async () => {
+    const store = initBridgeTestContext({ dynamicSettings: true });
+    const adapter = new RecordingAdapter();
+    const address = { channelType: 'feishu', chatId: 'chat-history-kimi-e2e' } as const;
+    const kimiHome = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-kimi-history-e2e-'));
+    const previousKimiHome = process.env.KIMI_CODE_HOME;
+    const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-kimi-history-cwd-e2e-'));
+    const kimiSessionId = 'session_kimi_history_e2e';
+
+    process.env.KIMI_CODE_HOME = kimiHome;
+    const wirePath = writeKimiWireFixture({
+      homeDir: kimiHome,
+      cwd,
+      sessionId: kimiSessionId,
+      timestamp: '2026-06-02T00:00:00.000Z',
+      text: 'Kimi wire 用户消息不应展示',
+      thinkText: 'Kimi wire 思考不应进入历史正文',
+      assistantText: 'Kimi wire 助手回复应展示',
+      title: 'Kimi wire history e2e',
+    });
+
+    try {
+      await _testOnly.handleMessage(adapter, inboundMessage(address, `/t ${kimiSessionId}`, 'incoming-kimi-history-thread'));
+      const binding = store.getChannelChat(address.channelType, address.chatId);
+      assert.ok(binding);
+      store.addMessage(binding.bridgeSessionId, 'assistant', 'Bridge 缓存不应优先展示 Kimi');
+
+      await _testOnly.handleMessage(adapter, inboundMessage(address, '/his', 'incoming-history-kimi-default'));
+
+      const defaultText = adapter.sent.at(-1)?.text || '';
+      assert.match(defaultText, /最近对话（msg）/);
+      assert.match(defaultText, /来源.*Kimi Code wire JSONL/s);
+      assert.match(defaultText, /Kimi Code/);
+      assert.match(defaultText, /Kimi wire 助手回复应展示/);
+      assert.doesNotMatch(defaultText, /Kimi wire 用户消息不应展示/);
+      assert.doesNotMatch(defaultText, /Kimi wire 思考不应进入历史正文/);
+      assert.doesNotMatch(defaultText, /Bridge 缓存不应优先展示 Kimi/);
+
+      await _testOnly.handleMessage(adapter, inboundMessage(address, '/his msg 1', 'incoming-history-kimi-msg'));
+
+      const lastText = adapter.sent.at(-1)?.text || '';
+      assert.match(lastText, /最近对话（msg）/);
+      assert.match(lastText, /来源.*Kimi Code wire JSONL/s);
+      assert.match(lastText, /Kimi Code/);
+      assert.match(lastText, /Kimi wire 助手回复应展示/);
+      assert.doesNotMatch(lastText, /Kimi wire 用户消息不应展示/);
+      assert.doesNotMatch(lastText, /Kimi wire 思考不应进入历史正文/);
+      assert.doesNotMatch(lastText, /Bridge 缓存不应优先展示 Kimi/);
+
+      await _testOnly.handleMessage(adapter, inboundMessage(address, '/his raw 1', 'incoming-history-kimi-raw'));
+
+      const rawText = adapter.sent.at(-1)?.text || '';
+      assert.match(rawText, /最近对话（解析文本）/);
+      assert.match(rawText, /来源.*Kimi Code wire JSONL/s);
+      assert.match(rawText, /返回条数.*1 \/ 本次 1（配置 8）/s);
+      assert.match(rawText, /Kimi wire 助手回复应展示/);
+      assert.doesNotMatch(rawText, /Kimi wire 用户消息不应展示/);
+      assert.doesNotMatch(rawText, /Kimi wire 思考不应进入历史正文/);
+      assert.doesNotMatch(rawText, /Bridge 缓存不应优先展示 Kimi/);
+
+      await _testOnly.handleMessage(adapter, inboundMessage(address, '/his json', 'incoming-history-kimi-json'));
+
+      const attachmentMessage = adapter.sent.find((message) =>
+        Array.isArray(message.attachments)
+        && message.attachments.some((attachment) => attachment.path === wirePath));
+      assert.ok(attachmentMessage);
+      assert.equal(attachmentMessage.attachments?.[0]?.path, wirePath);
+      assert.equal(attachmentMessage.attachments?.[0]?.name, 'wire.jsonl');
+      assert.match(fs.readFileSync(attachmentMessage.attachments![0].path, 'utf-8'), /Kimi wire 助手回复应展示/);
+
+      await _testOnly.handleMessage(adapter, inboundMessage(address, '/his file', 'incoming-history-kimi-file'));
+
+      const fileAttachmentMessage = adapter.sent.at(-1);
+      assert.ok(fileAttachmentMessage);
+      assert.equal(fileAttachmentMessage.attachments?.[0]?.path, wirePath);
+      assert.equal(fileAttachmentMessage.attachments?.[0]?.name, 'wire.jsonl');
+      assert.match(fs.readFileSync(fileAttachmentMessage.attachments![0].path, 'utf-8'), /Kimi wire 助手回复应展示/);
+    } finally {
+      if (previousKimiHome === undefined) {
+        delete process.env.KIMI_CODE_HOME;
+      } else {
+        process.env.KIMI_CODE_HOME = previousKimiHome;
+      }
+      fs.rmSync(kimiHome, { recursive: true, force: true });
+      fs.rmSync(cwd, { recursive: true, force: true });
+    }
   });
 });
