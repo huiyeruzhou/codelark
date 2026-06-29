@@ -1,5 +1,7 @@
 import fs from 'node:fs';
+import path from 'node:path';
 import type { ClaudeExecutable } from '../options.js';
+import { CODELARK_HOME } from '../../configuration/paths.js';
 import type { LLMProvider, StreamChatParams } from '../contracts.js';
 import { sseEvent } from '../sse.js';
 import {
@@ -195,8 +197,16 @@ export function buildClaudePtyEnv(): Record<string, string> {
   for (const [key, value] of Object.entries(process.env)) {
     if (value !== undefined) env[key] = value;
   }
+  env.PATH = prependLarkCliRuntimeBin(env.PATH);
   env.TERM = env.TERM || 'xterm-256color';
   return env;
+}
+
+function prependLarkCliRuntimeBin(pathValue: string | undefined): string {
+  const binDir = path.join(CODELARK_HOME, 'runtime', 'bin');
+  const parts = (pathValue || '').split(path.delimiter).filter(Boolean);
+  const withoutBin = parts.filter((entry) => path.resolve(entry) !== path.resolve(binDir));
+  return [binDir, ...withoutBin].join(path.delimiter);
 }
 
 async function waitForClaudePtyBuffer(

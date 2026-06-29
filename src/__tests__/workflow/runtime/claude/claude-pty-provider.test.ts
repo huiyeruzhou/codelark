@@ -5,10 +5,25 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-import { _testOnlyClaudePty } from '../../../../runtime/claude/pty-provider.js';
+import { _testOnlyClaudePty, buildClaudePtyEnv } from '../../../../runtime/claude/pty-provider.js';
 import { getClaudeProjectDir } from '../../../../runtime/claude/session-jsonl.js';
 
 describe('claude-pty-provider', () => {
+  it('prepends the CodeLark runtime bin when building the Claude pty env', () => {
+    const oldPath = process.env.PATH;
+    try {
+      const runtimeBin = path.join(process.env.CODELARK_HOME!, 'runtime', 'bin');
+      process.env.PATH = ['/usr/bin', runtimeBin, '/bin'].join(path.delimiter);
+
+      const env = buildClaudePtyEnv();
+
+      assert.equal(env.PATH, [runtimeBin, '/usr/bin', '/bin'].join(path.delimiter));
+    } finally {
+      if (oldPath === undefined) delete process.env.PATH;
+      else process.env.PATH = oldPath;
+    }
+  });
+
   it('builds Claude Code pty commands from the configured executable', () => {
     assert.deepEqual(_testOnlyClaudePty.buildClaudePtyCommand('ccr', {
       env: {},

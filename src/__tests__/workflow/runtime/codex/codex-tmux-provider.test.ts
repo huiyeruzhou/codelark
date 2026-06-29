@@ -73,6 +73,7 @@ describe('codex-tmux-provider', () => {
   });
 
   it('builds the Codex TUI env by inheriting source env without legacy key translation', () => {
+    const runtimeBin = path.join(process.env.CODELARK_HOME!, 'runtime', 'bin');
     const env = buildCodexTuiEnv({
       PATH: '/usr/bin:/bin',
       HOME: '/Users/tester',
@@ -81,12 +82,21 @@ describe('codex-tmux-provider', () => {
       OPENAI_API_KEY: 'official-key',
     });
 
-    assert.equal(env.PATH, '/usr/bin:/bin');
+    assert.equal(env.PATH, [runtimeBin, '/usr/bin', '/bin'].join(path.delimiter));
     assert.equal(env.HOME, '/Users/tester');
     assert.equal(env.OPENAI_API_KEY, 'official-key');
     assert.equal(env.CODELARK_CODEX_API_KEY, 'legacy-key');
     assert.equal(env.LARK_CHANNEL_HOME, '/Users/tester/.codelark');
     assert.equal(env.CODEX_API_KEY, undefined);
+  });
+
+  it('deduplicates the CodeLark runtime bin when building the Codex TUI env', () => {
+    const runtimeBin = path.join(process.env.CODELARK_HOME!, 'runtime', 'bin');
+    const env = buildCodexTuiEnv({
+      PATH: ['/usr/bin', runtimeBin, '/bin'].join(path.delimiter),
+    });
+
+    assert.equal(env.PATH, [runtimeBin, '/usr/bin', '/bin'].join(path.delimiter));
   });
 
   it('uses env fallbacks when optional integer values are unset or empty', () => {
