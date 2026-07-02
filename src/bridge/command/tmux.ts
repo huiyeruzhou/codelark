@@ -21,6 +21,7 @@ import {
   waitForRuntimeTmuxReady,
   waitForCodexResumeTmuxReady,
   type RuntimeTmuxKind,
+  type RuntimeTmuxReadinessResult,
   type RuntimeTmuxSelectionPrompt,
   type StartCodexResumeTmuxSessionParams,
   type TmuxSendAction,
@@ -534,6 +535,35 @@ function formatRuntimeTmuxSelectionPrompt(selectionPrompt: RuntimeTmuxSelectionP
   return `Claude ${selectionPrompt.kind} prompt（默认动作：Enter）`;
 }
 
+function formatRuntimeTmuxAutoForwardReadinessError(
+  runtime: RuntimeTmuxKind,
+  readiness: Pick<RuntimeTmuxReadinessResult, 'lastError' | 'lastScreen' | 'paneDead' | 'selectionPrompt'>,
+  markdown: boolean,
+): string {
+  const runtimeName = runtime === 'claude' ? 'Claude Code' : 'Codex';
+  if (readiness.paneDead) {
+    const status = readiness.paneDead.status !== undefined ? `（exit ${readiness.paneDead.status}）` : '';
+    const { text, truncated } = sanitizeInput(readiness.lastScreen || readiness.paneDead.line, 12_000);
+    const screenBlock = markdown ? buildFencedCodeBlock(text, 'text') : text;
+    const suffix = truncated ? '\n\n（屏幕内容过长已截断）' : '';
+    return [
+      `${runtimeName} tmux Provider pane 已退出${status}，未发送 auto-forward 消息。`,
+      '',
+      '最后屏幕：',
+      screenBlock + suffix,
+      '',
+      '修复运行时命令后发送 `/p tmux` 重新启动，或用 `/tmux-screen 80` 查看当前 pane。',
+    ].join('\n').trim();
+  }
+  if (readiness.selectionPrompt) {
+    return `${runtimeName} TUI 仍停在 ${formatRuntimeTmuxSelectionPrompt(readiness.selectionPrompt)}，未发送 auto-forward 消息。`;
+  }
+  if (readiness.lastError) {
+    return `${runtimeName} tmux readiness 检查失败：${readiness.lastError}，未发送 auto-forward 消息。请用 \`/tmux-screen 80\` 检查。`;
+  }
+  return `${runtimeName} TUI 未在超时时间内进入可输入状态，未发送 auto-forward 消息。请用 \`/tmux-screen 80\` 检查。`;
+}
+
 async function ensureCodexTmuxSessionForProvider(
   params: Pick<HandleTmuxBridgeCommandParams, 'store' | 'binding' | 'session' | 'autoRecoverProviderSession' | 'tmuxProviderAutoForward' | 'reconcileMirrorSubscriptions' | 'requestCodexTuiSelection' | 'notifyBackgroundOperation'> & {
     pendingAutoForwardActions?: TmuxSendAction[];
@@ -586,14 +616,11 @@ async function ensureCodexTmuxSessionForProvider(
           target: `${target}:0.0`,
         });
         if (!readiness.ready) {
-          const reason = readiness.lastError
-            ? `Claude tmux readiness 检查失败：${readiness.lastError}`
-            : 'Claude Code TUI 未在超时时间内进入可输入状态';
           return {
             target,
             commands: [exists.command, ...readiness.commands],
             recovered: false,
-            error: `${reason}，未发送 auto-forward 消息。请用 \`/tmux-screen 80\` 检查。`,
+            error: formatRuntimeTmuxAutoForwardReadinessError('claude', readiness, true),
           };
         }
         return { target, commands: [exists.command, ...readiness.commands], recovered: false };
@@ -626,6 +653,18 @@ async function ensureCodexTmuxSessionForProvider(
       recreate: true,
       waitReady: true,
     });
+    if (!started.ready) {
+      const readiness = started.runtime === 'claude' ? started.readiness : undefined;
+      return {
+        target,
+        commands: [exists.command, ...started.commands],
+        recovered: false,
+        error: formatRuntimeTmuxAutoForwardReadinessError('claude', readiness || {
+          lastScreen: undefined,
+          lastError: undefined,
+        }, true),
+      };
+    }
     store.updateSession(session.id, setSessionClaudeTmuxProviderUpdate({
       tmuxSessionName: target,
       autoEnter: getProviderAutoEnter(session),
@@ -709,16 +748,16 @@ async function ensureCodexTmuxSessionForProvider(
         selection_prompt_count: readiness.selectionPrompts?.length || 0,
       });
       if (!readiness.ready) {
-        const reason = readiness.selectionPromptKind
-          ? `Codex TUI 仍停在 ${readiness.selectionPromptKind} selection prompt`
-          : readiness.lastError
-            ? `tmux readiness 检查失败：${readiness.lastError}`
-            : 'Codex TUI 未在超时时间内进入可输入状态';
         return {
           target,
           commands,
           recovered: false,
-          error: `${reason}，未发送 auto-forward 消息。请用 \`/tmux-screen 80\` 检查。`,
+          error: formatRuntimeTmuxAutoForwardReadinessError('codex', {
+            lastError: readiness.lastError,
+            lastScreen: readiness.lastScreen,
+            paneDead: readiness.paneDead,
+            selectionPrompt: readiness.selectionPrompts?.at(-1),
+          }, true),
         };
       }
     }

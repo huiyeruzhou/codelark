@@ -73,6 +73,11 @@ export interface StartCodexResumeTmuxSessionResult {
 
 export type RuntimeTmuxKind = 'codex' | 'claude';
 
+export interface RuntimeTmuxPaneDead {
+  status?: number;
+  line: string;
+}
+
 export type RuntimeTmuxSelectionPrompt =
   | {
       runtime: 'codex';
@@ -96,6 +101,7 @@ export interface RuntimeTmuxReadinessResult {
   lastError?: string;
   sessionExists?: boolean;
   sessionExistsCommand?: string;
+  paneDead?: RuntimeTmuxPaneDead;
   selectionPrompt?: RuntimeTmuxSelectionPrompt;
 }
 
@@ -123,6 +129,7 @@ export interface CodexResumeTmuxReadinessResult {
   lastError?: string;
   sessionExists?: boolean;
   sessionExistsCommand?: string;
+  paneDead?: RuntimeTmuxPaneDead;
   selectionPromptKind?: CodexTuiSelectionPromptKind;
   selectionPromptChoice?: CodexTuiSelectionPromptChoice;
   selectionPromptSummary?: string;
@@ -206,6 +213,7 @@ export interface StartClaudeTmuxSessionResult {
   commands: string[];
   existed: boolean;
   ready: boolean;
+  readiness?: RuntimeTmuxReadinessResult;
 }
 
 export type StartRuntimeTmuxSessionParams =
@@ -452,6 +460,7 @@ function codexReadinessFromRuntimeResult(
     lastError: result.lastError,
     sessionExists: result.sessionExists,
     sessionExistsCommand: result.sessionExistsCommand,
+    paneDead: result.paneDead,
     selectionPromptKind: selectionPrompt?.kind,
     selectionPromptChoice: selectionPrompt?.defaultChoice || undefined,
     selectionPromptSummary: selectionPrompt?.summary,
@@ -467,6 +476,7 @@ export type RuntimeTmuxReadinessStateKind =
   | 'selection_resolved'
   | 'ready'
   | 'missing'
+  | 'dead'
   | 'timeout';
 
 export interface RuntimeTmuxReadinessTransition {
@@ -498,6 +508,7 @@ const runtimeTmuxReadinessEntryActions: Record<RuntimeTmuxReadinessStateKind, st
   selection_resolved: 'Send the resolved selection actions to tmux and reset the readiness window.',
   ready: 'Return control to the caller so queued input can be forwarded.',
   missing: 'Return a not-ready result because the provider-owned tmux session disappeared.',
+  dead: 'Return a not-ready result because the provider-owned tmux pane exited.',
   timeout: 'Perform a final session check and return a not-ready timeout result.',
 };
 
@@ -523,6 +534,16 @@ function transitionRuntimeTmuxReadiness(
     ...(Object.keys(details).length > 0 ? { details } : {}),
   };
   machine.onStateTransition?.(transition);
+}
+
+function detectRuntimeTmuxPaneDead(screen: string | undefined): RuntimeTmuxPaneDead | undefined {
+  const line = (screen || '').split(/\r?\n/).find((candidate) => /Pane is dead \(status \d+/i.test(candidate));
+  if (!line) return undefined;
+  const statusMatch = line.match(/Pane is dead \(status (\d+)/i);
+  return {
+    ...(statusMatch ? { status: Number(statusMatch[1]) } : {}),
+    line: line.trim(),
+  };
 }
 
 export async function waitForRuntimeTmuxReady(params: {
@@ -560,6 +581,7 @@ export async function waitForRuntimeTmuxReady(params: {
   let lastError: string | undefined;
   let sessionExists: boolean | undefined;
   let sessionExistsCommand: string | undefined;
+  let paneDead: RuntimeTmuxPaneDead | undefined;
   let selectionPrompt: RuntimeTmuxSelectionPrompt | undefined;
   const handledSelectionFingerprints = new Set<string>();
   transitionRuntimeTmuxReadiness(machine, 'polling', 'readiness check started');
@@ -569,6 +591,21 @@ export async function waitForRuntimeTmuxReady(params: {
       commands.push(capture.command);
       lastScreen = capture.screen;
       lastError = undefined;
+      paneDead = detectRuntimeTmuxPaneDead(capture.screen);
+      if (paneDead) {
+        transitionRuntimeTmuxReadiness(machine, 'dead', 'tmux pane reported dead status', {
+          ...(paneDead.status !== undefined ? { status: paneDead.status } : {}),
+          line: paneDead.line,
+        });
+        return {
+          ready: false,
+          runtime: params.runtime,
+          commands,
+          lastScreen,
+          sessionExists: true,
+          paneDead,
+        };
+      }
       selectionPrompt = detectRuntimeTmuxSelectionPrompt(params.runtime, capture.screen);
       if (selectionPrompt) {
         console.log('[tmux-runtime] Runtime tmux selection prompt detected during readiness check:', {
@@ -735,6 +772,7 @@ export async function waitForRuntimeTmuxReady(params: {
   }
 
   transitionRuntimeTmuxReadiness(machine, 'timeout', 'readiness deadline reached');
+  paneDead = paneDead || detectRuntimeTmuxPaneDead(lastScreen);
   if (sessionExists === undefined) {
     try {
       const exists = await core.hasSession(params.sessionName);
@@ -755,6 +793,7 @@ export async function waitForRuntimeTmuxReady(params: {
     timeout_ms: timeoutMs,
     session_exists: sessionExists,
     last_error: lastError,
+    pane_dead: paneDead,
     last_screen_excerpt: screenExcerpt(lastScreen),
     selection_prompt: selectionPrompt
       ? {
@@ -773,6 +812,7 @@ export async function waitForRuntimeTmuxReady(params: {
     lastError,
     sessionExists,
     sessionExistsCommand,
+    paneDead,
     ...(selectionPrompt ? { selectionPrompt } : {}),
   };
 }
@@ -994,6 +1034,7 @@ export async function startClaudeTmuxSession(
     existed: started.existed,
     commands: [...started.commands, ...(readiness?.commands || [])],
     ready: readiness?.ready ?? true,
+    ...(readiness ? { readiness } : {}),
   };
 }
 

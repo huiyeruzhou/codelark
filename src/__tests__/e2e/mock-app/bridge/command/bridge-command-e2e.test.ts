@@ -2013,6 +2013,72 @@ provider = "tmux"
     }
   });
 
+  it('notifies the chat instead of forwarding when a Claude tmux pane is dead', async () => {
+    const calls: RecordedLlmCall[] = [];
+    const store = initBridgeTestContext({
+      dynamicSettings: true,
+      settings: makeBridgeSettings(),
+      llm: createRecordingLlm(calls),
+    });
+    const fakeTmux = installFakeTmux();
+    const oldPath = process.env.PATH || '';
+    const oldFakeLog = process.env.TMUX_FAKE_LOG;
+    const oldFakeState = process.env.TMUX_FAKE_STATE;
+    const oldCaptureText = process.env.TMUX_FAKE_CAPTURE_TEXT;
+    process.env.PATH = `${fakeTmux.binDir}${path.delimiter}${oldPath}`;
+    process.env.TMUX_FAKE_LOG = fakeTmux.logPath;
+    process.env.TMUX_FAKE_STATE = fakeTmux.statePath;
+    process.env.TMUX_FAKE_CAPTURE_TEXT = [
+      '/bin/bash: line 1: exec: claude: not found',
+      '',
+      '[exited]',
+      'Pane is dead (status 127, Thu Jul  2 22:01:28 2026)',
+    ].join('\\n');
+
+    const adapter = new RecordingAdapter();
+    const address = { channelType: 'feishu', chatId: 'chat-runtime-claude-tmux-dead' } as const;
+    const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-runtime-claude-tmux-dead-'));
+    const tmuxSessionName = 'claude_dead_session';
+
+    try {
+      const { binding } = createExistingChannelChat(store, address, {
+        workDir,
+        name: 'runtime-claude-tmux-dead',
+      });
+      fs.writeFileSync(fakeTmux.statePath, `${tmuxSessionName}\n`, 'utf-8');
+      store.updateSession(binding.bridgeSessionId, {
+        runtime: {
+          activeRuntime: 'claude',
+          claude: { provider: 'tmux' },
+          general: { tmuxSessionName },
+        },
+      });
+
+      await _testOnly.handleMessage(adapter, inboundMessage(address, 'do not lose this', 'incoming-claude-tmux-dead'));
+
+      assert.equal(calls.length, 0);
+      assert.equal(adapter.sent.length, 1);
+      const responseText = adapter.sent[0]?.text || '';
+      assert.match(responseText, /Claude Code tmux Provider pane 已退出（exit 127）/);
+      assert.match(responseText, /未发送 auto-forward 消息/);
+      assert.match(responseText, /exec: claude: not found/);
+      assert.match(responseText, /\/p tmux/);
+      const tmuxLog = fs.readFileSync(fakeTmux.logPath, 'utf-8');
+      assert.match(tmuxLog, new RegExp(`capture-pane -t ${tmuxSessionName}:0.0 -p -S -80`));
+      assert.doesNotMatch(tmuxLog, /send-keys .*do not lose this/);
+    } finally {
+      process.env.PATH = oldPath;
+      if (oldFakeLog === undefined) delete process.env.TMUX_FAKE_LOG;
+      else process.env.TMUX_FAKE_LOG = oldFakeLog;
+      if (oldFakeState === undefined) delete process.env.TMUX_FAKE_STATE;
+      else process.env.TMUX_FAKE_STATE = oldFakeState;
+      if (oldCaptureText === undefined) delete process.env.TMUX_FAKE_CAPTURE_TEXT;
+      else process.env.TMUX_FAKE_CAPTURE_TEXT = oldCaptureText;
+      fs.rmSync(workDir, { recursive: true, force: true });
+      await cleanupFakeTmux(fakeTmux);
+    }
+  });
+
   it('auto-initializes a Claude tmux provider binding on the first plain message', async () => {
     const calls: RecordedLlmCall[] = [];
     const store = initBridgeTestContext({

@@ -366,6 +366,47 @@ describe('codex tmux runtime', () => {
     );
   });
 
+  it('returns immediately when the tmux pane reports a dead status', async () => {
+    const transitions: RuntimeTmuxReadinessTransition[] = [];
+    const core: TmuxCore = {
+      commandPreview: (args) => ['tmux', ...args].join(' '),
+      hasSession: async (name) => ({ exists: true, command: `tmux has-session -t ${name}` }),
+      killSession: async (name) => `tmux kill-session -t ${name}`,
+      listSessions: async () => ({ sessions: [], command: 'tmux list-sessions' }),
+      ensureDetachedSession: async () => ({ existed: false, commands: [] }),
+      capturePane: async (target) => ({
+        command: `tmux capture-pane -t ${target} -p -S -80`,
+        screen: [
+          '/bin/bash: line 1: exec: claude: not found',
+          '',
+          '[exited]',
+          'Pane is dead (status 127, Thu Jul  2 22:01:28 2026)',
+        ].join('\n'),
+      }),
+      sendActions: async () => ({ commands: [] }),
+      sendInterrupt: async () => 'tmux send-keys C-c',
+      injectPromptIntoPane: async () => ({ commands: [] }),
+    };
+
+    const result = await waitForRuntimeTmuxReady({
+      runtime: 'claude',
+      sessionName: 'claude_dead',
+      target: 'claude_dead:0.0',
+      core,
+      onStateTransition: (transition) => transitions.push(transition),
+    });
+
+    assert.equal(result.ready, false);
+    assert.equal(result.sessionExists, true);
+    assert.equal(result.paneDead?.status, 127);
+    assert.match(result.paneDead?.line || '', /Pane is dead/);
+    assert.deepEqual(result.commands, ['tmux capture-pane -t claude_dead:0.0 -p -S -80']);
+    assert.deepEqual(transitions.map((transition) => [transition.from, transition.to]), [
+      ['starting', 'polling'],
+      ['polling', 'dead'],
+    ]);
+  });
+
   it('does not count IM selection wait time against runtime readiness timeout', async () => {
     const oldTimeout = process.env.CODELARK_CODEX_RESUME_TMUX_READY_TIMEOUT_MS;
     const oldPoll = process.env.CODELARK_CODEX_RESUME_TMUX_READY_POLL_MS;
