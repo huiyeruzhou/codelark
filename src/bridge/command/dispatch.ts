@@ -102,6 +102,42 @@ import { requestCodexTuiSelectionViaPermissionBroker } from './codex-tui-selecti
 
 const PROVIDER_TMUX_LOADING_REACTION = 'Typing';
 
+function describeReactionError(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function startAsyncMessageReaction(
+  adapter: BaseChannelAdapter,
+  msg: InboundMessage,
+  emojiType: string,
+): () => void {
+  if (!msg.messageId || typeof adapter.addMessageReaction !== 'function') return () => {};
+  let shouldRemove = false;
+  let reactionId: string | null = null;
+  const messageId = msg.messageId;
+  const removeReaction = () => {
+    if (!reactionId || typeof adapter.removeMessageReaction !== 'function') return;
+    const currentReactionId = reactionId;
+    reactionId = null;
+    void adapter.removeMessageReaction(messageId, currentReactionId, emojiType).catch((error) => {
+      console.warn('[bridge-command] Failed to remove async message reaction:', describeReactionError(error));
+    });
+  };
+
+  void adapter.addMessageReaction(messageId, emojiType).then((addedReactionId) => {
+    if (!addedReactionId) return;
+    reactionId = addedReactionId;
+    if (shouldRemove) removeReaction();
+  }).catch((error) => {
+    console.warn('[bridge-command] Failed to add async message reaction:', describeReactionError(error));
+  });
+
+  return () => {
+    shouldRemove = true;
+    removeReaction();
+  };
+}
+
 function extractCardActionFormValue(raw: unknown): Record<string, unknown> | null {
   const root = raw && typeof raw === 'object' ? raw as Record<string, any> : {};
   const event = root.event && typeof root.event === 'object' ? root.event as Record<string, any> : root;
@@ -692,10 +728,9 @@ export async function handleBridgeCommand(
 
     case '/provider': {
       const isTmuxProviderStart = args.trim().toLowerCase() === 'tmux';
-      let loadingReactionId: string | null = null;
-      if (isTmuxProviderStart && msg.messageId && typeof adapter.addMessageReaction === 'function') {
-        loadingReactionId = await adapter.addMessageReaction(msg.messageId, PROVIDER_TMUX_LOADING_REACTION);
-      }
+      const clearLoadingReaction = isTmuxProviderStart
+        ? startAsyncMessageReaction(adapter, msg, PROVIDER_TMUX_LOADING_REACTION)
+        : () => {};
       try {
         response = await handleProviderCommand({
           msg,
@@ -731,9 +766,7 @@ export async function handleBridgeCommand(
       } catch (error) {
         throw error;
       } finally {
-        if (loadingReactionId && msg.messageId && typeof adapter.removeMessageReaction === 'function') {
-          await adapter.removeMessageReaction(msg.messageId, loadingReactionId, PROVIDER_TMUX_LOADING_REACTION);
-        }
+        clearLoadingReaction();
       }
       break;
     }
