@@ -3413,6 +3413,101 @@ provider = "tmux"
     }
   });
 
+  it('does not wait for slow Typing reactions before tmux provider auto-forward input', { timeout: 30000 }, async () => {
+    const bootstrapThreadId = '019e824e-10ef-7430-985d-4349ce6a15f9';
+    const store = initBridgeTestContext({
+      dynamicSettings: true,
+      llm: {
+        streamChat(): ReadableStream<string> {
+          return new ReadableStream({
+            start(controller) {
+              controller.enqueue(`data: ${JSON.stringify({ type: 'status', data: JSON.stringify({ session_id: bootstrapThreadId }) })}\n`);
+              controller.close();
+            },
+          });
+        },
+      },
+    });
+    const fakeTmux = installFakeTmux();
+    const oldPath = process.env.PATH || '';
+    const oldFakeLog = process.env.TMUX_FAKE_LOG;
+    const oldFakeState = process.env.TMUX_FAKE_STATE;
+    process.env.PATH = `${fakeTmux.binDir}${path.delimiter}${oldPath}`;
+    process.env.TMUX_FAKE_LOG = fakeTmux.logPath;
+    process.env.TMUX_FAKE_STATE = fakeTmux.statePath;
+
+    class SlowReactionAdapter extends StreamingRecordingAdapter {
+      addStarted = false;
+      private releaseAddReactionPromise: (() => void) | undefined;
+      private readonly addReactionPromise = new Promise<void>((resolve) => {
+        this.releaseAddReactionPromise = resolve;
+      });
+
+      releaseAddReaction(): void {
+        this.releaseAddReactionPromise?.();
+      }
+
+      override async addMessageReaction(messageId: string, emojiType: string): Promise<string | null> {
+        this.addStarted = true;
+        await this.addReactionPromise;
+        return super.addMessageReaction(messageId, emojiType);
+      }
+    }
+
+    const adapter = new SlowReactionAdapter();
+    registerAdapter(adapter);
+    const bridgeState = (globalThis as unknown as Record<string, any>).__bridge_manager__;
+    bridgeState.running = true;
+    const address = { channelType: 'feishu', chatId: 'chat-runtime-tmux-slow-reaction-e2e' } as const;
+    const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-runtime-tmux-slow-reaction-'));
+    let handlePromise: Promise<void> | undefined;
+    let releasedReaction = false;
+
+    try {
+      await _testOnly.handleMessage(adapter, inboundMessage(address, '/set defaultProvider tmux', 'incoming-tmux-slow-reaction-set-provider'));
+      await _testOnly.handleMessage(adapter, inboundMessage(address, `/new tmux-slow-reaction ${workDir}`, 'incoming-tmux-slow-reaction-new'));
+      const newAddress = latestCreatedGroupAddress(adapter);
+      const binding = store.getChannelChat(newAddress.channelType, newAddress.chatId);
+      assert.ok(binding);
+
+      const beforeMessageLog = fs.readFileSync(fakeTmux.logPath, 'utf-8');
+      handlePromise = _testOnly.handleMessage(adapter, inboundMessage(newAddress, '慢表情不该挡住发送', 'incoming-tmux-slow-reaction-first'));
+      await waitForCondition(() => adapter.addStarted);
+      await waitForCondition(() => {
+        const currentLog = fs.readFileSync(fakeTmux.logPath, 'utf-8').slice(beforeMessageLog.length);
+        return currentLog.includes('send-keys -t')
+          && currentLog.includes('-l 慢表情不该挡住发送')
+          && currentLog.includes('send-keys -t')
+          && currentLog.includes(' Enter');
+      }, 15000);
+      const messageLog = fs.readFileSync(fakeTmux.logPath, 'utf-8').slice(beforeMessageLog.length);
+      assert.match(messageLog, /send-keys -t .* -l 慢表情不该挡住发送/);
+      assert.match(messageLog, /send-keys -t .* Enter/);
+      assert.equal(adapter.reactions.length, 0);
+
+      releasedReaction = true;
+      adapter.releaseAddReaction();
+      await handlePromise;
+      await waitForCondition(() => adapter.reactions.some((reaction) => reaction.action === 'add'));
+      const firstReaction = adapter.reactions.find((reaction) => reaction.action === 'add');
+      assert.ok(firstReaction);
+      assert.equal(firstReaction.emojiType, 'Typing');
+    } finally {
+      if (!releasedReaction) {
+        adapter.releaseAddReaction();
+      }
+      if (handlePromise) {
+        await handlePromise.catch(() => {});
+      }
+      process.env.PATH = oldPath;
+      if (oldFakeLog === undefined) delete process.env.TMUX_FAKE_LOG;
+      else process.env.TMUX_FAKE_LOG = oldFakeLog;
+      if (oldFakeState === undefined) delete process.env.TMUX_FAKE_STATE;
+      else process.env.TMUX_FAKE_STATE = oldFakeState;
+      await cleanupFakeTmux(fakeTmux);
+    }
+  });
+
   it('keeps a locally bootstrapped tmux provider thread after the Codex session file appears', async () => {
     const llmCalls: RecordedLlmCall[] = [];
     const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-runtime-tmux-bootstrap-visible-'));

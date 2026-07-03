@@ -267,6 +267,7 @@ interface PendingTmuxAutoForwardReaction {
 }
 
 const pendingTmuxAutoForwardReactions = new Map<string, PendingTmuxAutoForwardReaction>();
+const pendingTmuxAutoForwardReactionVersions = new Map<string, number>();
 const pendingTmuxProviderExitProbeTimers = new Map<string, ReturnType<typeof setTimeout>>();
 const tmuxProviderExitNoticeLastSentAt = new Map<string, number>();
 const tmuxSelectionUpdateNoticeLastSentAt = new Map<string, number>();
@@ -307,41 +308,64 @@ function clearPendingTmuxProviderExitProbe(key: string): void {
   pendingTmuxProviderExitProbeTimers.delete(key);
 }
 
-async function clearPendingTmuxAutoForwardReaction(key: string): Promise<void> {
+function bumpPendingTmuxAutoForwardReactionVersion(key: string): number {
+  const next = (pendingTmuxAutoForwardReactionVersions.get(key) || 0) + 1;
+  pendingTmuxAutoForwardReactionVersions.set(key, next);
+  return next;
+}
+
+function removeTmuxAutoForwardReaction(
+  pending: PendingTmuxAutoForwardReaction,
+  reason: string,
+): void {
+  const adapter = getState().adapters.get(pending.channelType);
+  if (typeof adapter?.removeMessageReaction !== 'function') return;
+  void adapter.removeMessageReaction(pending.messageId, pending.reactionId, TMUX_AUTO_FORWARD_TYPING_REACTION).catch((error) => {
+    console.warn(`[bridge-manager] Failed to remove tmux auto-forward typing reaction (${reason}):`, describeUnknownError(error));
+  });
+}
+
+function clearPendingTmuxAutoForwardReaction(key: string): void {
   clearPendingTmuxProviderExitProbe(key);
+  bumpPendingTmuxAutoForwardReactionVersion(key);
   const pending = pendingTmuxAutoForwardReactions.get(key);
   if (!pending) return;
   pendingTmuxAutoForwardReactions.delete(key);
-  const adapter = getState().adapters.get(pending.channelType);
-  if (typeof adapter?.removeMessageReaction !== 'function') return;
-  try {
-    await adapter.removeMessageReaction(pending.messageId, pending.reactionId, TMUX_AUTO_FORWARD_TYPING_REACTION);
-  } catch (error) {
-    console.warn('[bridge-manager] Failed to remove tmux auto-forward typing reaction:', describeUnknownError(error));
-  }
+  removeTmuxAutoForwardReaction(pending, 'clear');
 }
 
-async function markPendingTmuxAutoForwardReaction(
+function markPendingTmuxAutoForwardReaction(
   adapter: BaseChannelAdapter,
   msg: InboundMessage,
   key: string,
   sessionId: string,
-): Promise<void> {
+): void {
   if (!msg.messageId || typeof adapter.addMessageReaction !== 'function') return;
-  try {
-    await clearPendingTmuxAutoForwardReaction(key);
-    const reactionId = await adapter.addMessageReaction(msg.messageId, TMUX_AUTO_FORWARD_TYPING_REACTION);
+  clearPendingTmuxProviderExitProbe(key);
+  const version = bumpPendingTmuxAutoForwardReactionVersion(key);
+  const previous = pendingTmuxAutoForwardReactions.get(key);
+  if (previous) {
+    pendingTmuxAutoForwardReactions.delete(key);
+    removeTmuxAutoForwardReaction(previous, 'replace');
+  }
+
+  void adapter.addMessageReaction(msg.messageId, TMUX_AUTO_FORWARD_TYPING_REACTION).then((reactionId) => {
     if (!reactionId) return;
-    pendingTmuxAutoForwardReactions.set(key, {
+    const pending: PendingTmuxAutoForwardReaction = {
       channelType: msg.address.channelType,
       chatId: msg.address.chatId,
       sessionId,
       messageId: msg.messageId,
       reactionId,
-    });
-  } catch (error) {
+    };
+    if (pendingTmuxAutoForwardReactionVersions.get(key) !== version) {
+      removeTmuxAutoForwardReaction(pending, 'stale');
+      return;
+    }
+    pendingTmuxAutoForwardReactions.set(key, pending);
+  }).catch((error) => {
     console.warn('[bridge-manager] Failed to add tmux auto-forward typing reaction:', describeUnknownError(error));
-  }
+  });
 }
 
 function scheduleTmuxProviderExitProbe(params: {
@@ -388,7 +412,7 @@ async function probeTmuxProviderExitAfterAutoForward(params: {
   if (nowMs - lastSentAt < TMUX_PROVIDER_EXIT_NOTICE_COOLDOWN_MS) return;
   tmuxProviderExitNoticeLastSentAt.set(noticeKey, nowMs);
 
-  await clearPendingTmuxAutoForwardReaction(params.reactionKey);
+  clearPendingTmuxAutoForwardReaction(params.reactionKey);
   const runtimeLabel = runtimeProvider.runtime === 'claude' ? 'Claude' : 'Codex';
   const elapsedMs = Math.max(0, nowMs - params.startedAtMs);
   SESSION_HEALTH_RUNTIME.recordInteractiveEnd(
@@ -3755,14 +3779,23 @@ async function handleMessage(
         tmuxProviderBridgeSessionId,
       );
       try {
-        await markPendingTmuxAutoForwardReaction(
+        markPendingTmuxAutoForwardReaction(
           adapter,
           msg,
           reactionKey,
           tmuxProviderBridgeSessionId,
         );
+        const tmuxProviderCommandStartedAtMs = Date.now();
         await handleCommand(adapter, msg, `/tmux ${text}`, {
           tmuxProviderAutoForward: true,
+        });
+        const tmuxProviderCommandDurationMs = Date.now() - tmuxProviderCommandStartedAtMs;
+        console.log('[bridge-manager] tmux provider auto-forward command delivered:', {
+          event: 'tmux.provider.auto_forward.delivered',
+          session_id: tmuxProviderBridgeSessionId,
+          message_id: msg.messageId,
+          duration_ms: tmuxProviderCommandDurationMs,
+          chars: text.length,
         });
         SESSION_HEALTH_RUNTIME.recordInteractiveStart(
           tmuxProviderBridgeSessionId,
@@ -3808,7 +3841,7 @@ async function handleMessage(
           ].join(' '),
         });
       } catch (error) {
-        await clearPendingTmuxAutoForwardReaction(reactionKey);
+        clearPendingTmuxAutoForwardReaction(reactionKey);
         console.error('[bridge-manager] tmux provider command forwarding failed: /tmux', error);
         await deliverBridgeNotice(adapter, msg.address, toUserVisibleCommandError('/tmux', error), {
           replyToMessageId: msg.messageId,
@@ -4093,6 +4126,7 @@ function resetStateForTests(): void {
   tmuxProviderExitNoticeLastSentAt.clear();
   tmuxSelectionUpdateNoticeLastSentAt.clear();
   pendingTmuxAutoForwardReactions.clear();
+  pendingTmuxAutoForwardReactionVersions.clear();
   tmuxSelectionPromptMonitors.clear();
   tmuxSelectionPromptLastProbeAt.clear();
   tmuxSelectionPromptFollowupUntil.clear();
