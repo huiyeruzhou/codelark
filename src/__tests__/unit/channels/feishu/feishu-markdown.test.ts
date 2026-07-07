@@ -1105,8 +1105,8 @@ describe('buildRichCardContent', () => {
     const pathInput = form.elements.find((element: any) => element.tag === 'input' && element.name === 'clk_path');
     const reasoningSelect = JSON.stringify(form).includes('"name":"cld_rsn_eft"');
     const idleInput = form.elements.find((element: any) => element.tag === 'input' && element.name === 'cld_idle_min');
-    const submitColumnSet = form.elements.find((element: any) =>
-      element.tag === 'column_set'
+    const submitButton = form.elements.find((element: any) =>
+      element.tag === 'button'
       && JSON.stringify(element).includes('clk-agent-question:payload'),
     );
 
@@ -1120,9 +1120,11 @@ describe('buildRichCardContent', () => {
     assert.equal(reasoningSelect, true);
     assert.equal(idleInput.default_value, '15');
     assert.doesNotMatch(JSON.stringify(form), /claudeReasoningEffor|claudeIdleTimeoutMin/);
-    assert.equal(submitColumnSet.columns[0].elements[0].form_action_type, 'submit');
-    assert.equal(submitColumnSet.columns[0].elements[0].behaviors[0].value.callback_data, 'clk-agent-question:payload');
-    assert.equal(submitColumnSet.columns[0].elements[0].behaviors[0].value.chatId, 'chat-1');
+    assert.equal(submitButton.form_action_type, 'submit');
+    assert.equal(submitButton.value.callback_data, 'clk-agent-question:payload');
+    assert.equal(submitButton.value.chatId, 'chat-1');
+    assert.equal(submitButton.behaviors[0].value.callback_data, 'clk-agent-question:payload');
+    assert.equal(submitButton.behaviors[0].value.chatId, 'chat-1');
   });
 
   it('renders form control bar actions beside the bottom submit button', () => {
@@ -1147,16 +1149,14 @@ describe('buildRichCardContent', () => {
 
     const parsed = JSON.parse(cardJson) as any;
     const form = parsed.body.elements.find((element: any) => element.tag === 'form');
-    const buttonRow = form.elements.at(-1);
-    const saveButton = buttonRow.columns[0].elements[0];
-    const refreshButton = buttonRow.columns[1].elements[0];
-    const buttons = form.elements
-      .flatMap((element: any) => element.columns || [])
-      .flatMap((column: any) => column.elements || [])
-      .filter((element: any) => element.tag === 'button');
+    const buttons = form.elements.filter((element: any) => element.tag === 'button');
+    const saveButton = buttons[0];
+    const refreshButton = buttons[1];
     assert.equal(saveButton.form_action_type, 'submit');
+    assert.equal(saveButton.value.callback_data, 'clk-command::%2Fcurrent-config');
     assert.equal(saveButton.behaviors[0].value.callback_data, 'clk-command::%2Fcurrent-config');
     assert.equal(refreshButton.form_action_type, undefined);
+    assert.equal(refreshButton.value.callback_data, 'clk-command::%2Fcurrent');
     assert.equal(refreshButton.behaviors[0].value.callback_data, 'clk-command::%2Fcurrent');
     assert.deepEqual(buttons.map((button: any) => button.text.content), ['保存', '刷新']);
   });

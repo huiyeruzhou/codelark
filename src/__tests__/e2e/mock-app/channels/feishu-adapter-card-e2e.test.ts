@@ -107,8 +107,8 @@ function assertCodelarkAskFormPayload(payload: Record<string, any>): void {
   assert.equal(payload.form.name, 'clk_form');
   assert.equal(payload.form.elements.some((element: any) => element.tag === 'select_static' && element.name === 'clk_choice'), true);
   assert.equal(payload.form.elements.some((element: any) => element.tag === 'input' && element.name === 'clk_input'), true);
-  const submitColumn = payload.form.elements.find((element: any) => JSON.stringify(element).includes('form_action_type'));
-  assert.equal(submitColumn?.columns?.[0]?.elements?.[0]?.form_action_type, 'submit');
+  const submitButton = payload.form.elements.find((element: any) => element.tag === 'button' && element.form_action_type === 'submit');
+  assert.equal(submitButton?.form_action_type, 'submit');
   assert.match(JSON.stringify(payload.content), /clk-agent-question:/);
 }
 

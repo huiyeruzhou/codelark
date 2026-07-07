@@ -713,55 +713,33 @@ function buildRichCardFormElements(
       input_type: 'text',
     }));
   }
-  const formElements: Array<Record<string, unknown>> = [];
-  if (form.layout === 'two_column') {
-    for (let index = 0; index < fieldGroups.length; index += 2) {
-      formElements.push({
-        tag: 'column_set',
-        flex_mode: 'stretch',
-        horizontal_align: 'left',
-        columns: fieldGroups.slice(index, index + 2).map((elements) => ({
-          tag: 'column',
-          width: 'weighted',
-          weight: 1,
-          elements,
-        })),
-      });
-    }
-  } else {
-    formElements.push(...fieldGroups.flat());
-  }
+  const formElements: Array<Record<string, unknown>> = fieldGroups.flat();
   if (!form.controlBar?.actions?.some((button) => button.submit)) {
-    const submitColumn: Record<string, unknown> = {
-      tag: 'column',
-      width: 'auto',
-      elements: [{
-        tag: 'button',
-        name: 'submit_btn',
-        text: { tag: 'plain_text', content: compactCardText(form.submitText || '提交', 40) },
-        type: 'primary',
-        form_action_type: 'submit',
-        behaviors: [{
-          type: 'callback',
-          value: {
-            callback_data: form.submitCallbackData,
-            ...(chatId ? { chatId } : {}),
-          },
-        }],
-      }],
+    const submitValue = {
+      callback_data: form.submitCallbackData,
+      ...(chatId ? { chatId } : {}),
     };
-    const actionColumns = (form.controlBar?.actions || [])
+    const actionButtons = (form.controlBar?.actions || [])
       .filter((button) => !button.submit)
       .map((button) => buildRichCardFormControlButtonColumn(button, chatId))
-      .filter((column): column is Record<string, unknown> => Boolean(column));
+      .filter((column): column is Record<string, unknown> => Boolean(column))
+      .flatMap((column) => Array.isArray(column.elements) ? column.elements : []);
     if (form.actionDividerBefore && formElements.length > 0) {
       formElements.push({ tag: 'hr' });
     }
     formElements.push({
-      tag: 'column_set',
-      flex_mode: 'none',
-      columns: [submitColumn, ...actionColumns],
+      tag: 'button',
+      name: 'submit_btn',
+      text: { tag: 'plain_text', content: compactCardText(form.submitText || '提交', 40) },
+      type: 'primary',
+      form_action_type: 'submit',
+      value: submitValue,
+      behaviors: [{
+        type: 'callback',
+        value: submitValue,
+      }],
     });
+    formElements.push(...actionButtons);
   }
 
   const elements: Array<Record<string, unknown>> = [{

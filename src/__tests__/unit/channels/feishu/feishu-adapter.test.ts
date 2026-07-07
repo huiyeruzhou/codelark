@@ -5246,14 +5246,14 @@ describe('feishu-adapter structured streaming regions', () => {
     assert.equal(result.ok, true);
     const content = JSON.parse(messageReplyCalls[0]?.data?.content || '{}');
     const form = content.body.elements.find((element: any) => element.tag === 'form');
-    const submitColumn = form.elements.find((element: any) => JSON.stringify(element).includes('form_action_type'));
+    const submitButton = form.elements.find((element: any) => element.tag === 'button' && element.form_action_type === 'submit');
     assert.equal(form.name, 'clk_form');
     assert.equal(form.elements.some((element: any) => element.tag === 'input' && element.name === 'clk_input'), true);
     assert.equal(form.elements.find((element: any) => element.tag === 'input' && element.name === 'clk_path')?.default_value, '/repo/current');
-    assert.equal(submitColumn.columns[0].elements[0].form_action_type, 'submit');
+    assert.equal(submitButton.value.callback_data, 'clk-command::%2Fnew');
   });
 
-  it('renders rich card form fields in two columns when requested', async () => {
+  it('renders rich card form fields as direct form elements when layout is requested', async () => {
     const messageReplyCalls: Array<Record<string, any>> = [];
     const adapter = new FeishuAdapter({
       id: 'feishu-default',
@@ -5316,12 +5316,11 @@ describe('feishu-adapter structured streaming regions', () => {
     assert.equal(content.header.template, 'green');
     assert.equal(content.header.text_tag_list[0].text.content, 'codex');
     const form = content.body.elements.find((element: any) => element.tag === 'form');
-    const fieldRows = form.elements.filter((element: any) => element.tag === 'column_set' && element.flex_mode === 'stretch');
-    assert.equal(fieldRows.length >= 2, true);
-    assert.equal(fieldRows[0].columns.length, 2);
-    assert.match(JSON.stringify(fieldRows[0]), /clk_runtime/);
-    assert.match(JSON.stringify(fieldRows), /clk_name/);
-    assert.match(JSON.stringify(fieldRows), /clk_cwd/);
+    assert.equal(form.elements.some((element: any) => element.tag === 'select_static' && element.name === 'clk_runtime'), true);
+    assert.equal(form.elements.some((element: any) => element.tag === 'input' && element.name === 'clk_name'), true);
+    assert.equal(form.elements.some((element: any) => element.tag === 'input' && element.name === 'clk_cwd'), true);
+    const submitButton = form.elements.find((element: any) => element.tag === 'button' && element.form_action_type === 'submit');
+    assert.equal(submitButton.value.callback_data, 'clk-command::%2Fcurrent-config');
   });
 
   it('does not fall back to post or plain text when a markdown interactive card fails', async () => {
