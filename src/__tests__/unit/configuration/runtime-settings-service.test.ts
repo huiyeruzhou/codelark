@@ -53,6 +53,10 @@ describe('runtime settings service projection', () => {
         'model = "toml-claude"',
         'yolo_mode = "off"',
         '',
+        '[runtime.kimi]',
+        'model = "toml-kimi"',
+        'provider = "tmux"',
+        '',
         '[[channels]]',
         'id = "feishu-default"',
         'alias = "飞书"',
@@ -92,6 +96,8 @@ describe('runtime settings service projection', () => {
       assert.equal(projection.settings.get('bridge_default_mode'), 'yolo');
       assert.equal(projection.settings.get('bridge_claude_default_model'), 'toml-claude');
       assert.equal(projection.settings.has('bridge_claude_permission_mode'), false);
+      assert.equal(projection.settings.get('bridge_kimi_default_model'), 'toml-kimi');
+      assert.equal(projection.settings.get('bridge_kimi_provider'), 'tmux');
       assert.equal(projection.settings.get('bridge_history_message_limit'), '19');
       assert.equal(projection.settings.get('bridge_feishu_enabled'), 'true');
       assert.equal(projection.settings.get('bridge_feishu_app_id'), 'toml-app');
@@ -121,6 +127,46 @@ model = "local-model"
     } finally {
       fs.rmSync(home, { recursive: true, force: true });
       fs.rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it('projects Kimi env and CLI runtime defaults into legacy runtime settings', () => {
+    const home = tempHome();
+    try {
+      writeFile(path.join(home, 'config.toml'), `
+[runtime]
+agent = "codex"
+
+[runtime.kimi]
+model = "toml-kimi-model"
+provider = "tmux"
+`);
+
+      const projection = runtimeSettingsFromSnapshot({
+        codelarkHome: home,
+        env: {
+          CODELARK_AGENT: 'kimi',
+          CODELARK_KIMI_MODEL: 'env-kimi-model',
+          CODELARK_KIMI_PROVIDER: 'tmux',
+        },
+        cli: {
+          runtime: {
+            kimi: {
+              model: 'cli-kimi-model',
+              provider: 'tmux',
+            },
+          },
+        },
+      });
+
+      assert.equal(projection.config.runtime.agent, 'kimi');
+      assert.equal(projection.config.runtime.kimi.model, 'cli-kimi-model');
+      assert.equal(projection.config.runtime.kimi.provider, 'tmux');
+      assert.equal(projection.settings.get('bridge_default_runtime'), 'kimi');
+      assert.equal(projection.settings.get('bridge_kimi_default_model'), 'cli-kimi-model');
+      assert.equal(projection.settings.get('bridge_kimi_provider'), 'tmux');
+    } finally {
+      fs.rmSync(home, { recursive: true, force: true });
     }
   });
 

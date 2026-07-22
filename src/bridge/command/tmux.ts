@@ -30,6 +30,7 @@ import {
 import { resolveClaudeRuntimeConfig, resolveEffectiveRuntimeProvider, resolveSessionRuntimeConfig } from '../session/support.js';
 import { getCodexThreadId } from '../turn/turn-classifier.js';
 import {
+  getSessionActiveRuntime,
   getSessionClaudeSessionId,
   getSessionTmuxAutoEnter,
   getSessionTmuxCaptureLines,
@@ -40,6 +41,7 @@ import {
   setSessionClaudeTmuxProviderUpdate,
   setSessionCodexTmuxProviderUpdate,
 } from '../../domain/session-runtime.js';
+import { kimiTmuxSessionName } from '../../runtime/kimi/tmux-provider.js';
 import {
   bootstrapCodexThreadLocally,
   type BootstrapCodexThreadParams,
@@ -450,6 +452,22 @@ function applyAutoEnter(actions: TmuxSendAction[], session: BridgeSession, defau
     : actions;
 }
 
+function applyKimiSteer(actions: TmuxSendAction[], session: BridgeSession): TmuxSendAction[] {
+  if (getSessionActiveRuntime(session) !== 'kimi') return actions;
+  const lastAction = actions.at(-1);
+  return lastAction?.type === 'key' && lastAction.key === 'C-s'
+    ? actions
+    : [...actions, { type: 'key', key: 'C-s' }];
+}
+
+function applyPlainTextTmuxActions(
+  actions: TmuxSendAction[],
+  session: BridgeSession,
+  defaultAutoEnter = false,
+): TmuxSendAction[] {
+  return applyKimiSteer(applyAutoEnter(actions, session, defaultAutoEnter), session);
+}
+
 function buildInputEchoBlock(input: string, markdown: boolean): string {
   const { text, truncated } = sanitizeInput(input, 12_000);
   const body = markdown ? buildFencedCodeBlock(text, 'text') : text;
@@ -673,6 +691,22 @@ async function ensureCodexTmuxSessionForProvider(
     setSessionTmuxAutoEnterToml(session.id, getProviderAutoEnter(session));
     await params.reconcileMirrorSubscriptions?.();
     return { target, commands: [exists.command, ...started.commands], recovered: true };
+  }
+
+  if (runtimeProvider.runtime === 'kimi') {
+    const target = configuredTarget || kimiTmuxSessionName(session.id);
+    const exists = await hasTmuxSession(target);
+    if (exists.exists) {
+      return { target, commands: [exists.command], recovered: false };
+    }
+    return {
+      target,
+      commands: [exists.command],
+      recovered: false,
+      error: params.tmuxProviderAutoForward === true
+        ? `Kimi tmux Provider session \`${target}\` 不存在，未发送 auto-forward 消息。请重新发送普通消息启动 Kimi Code。`
+        : `tmux session 不存在：${target}。Kimi Code tmux session 会由普通消息启动；运行中可用 \`/tmux-screen\` 检查。`,
+    };
   }
 
   let threadId = getCodexThreadId(session, binding);
@@ -1197,7 +1231,7 @@ export async function handleTmuxBridgeCommand(params: HandleTmuxBridgeCommandPar
       }
       const actions = parsed.actions || [];
       const pendingAutoForwardActions = params.tmuxProviderAutoForward === true && command === '/tmux'
-        ? (keySequenceActions ? actions : applyAutoEnter(actions, session, true))
+        ? (keySequenceActions ? actions : applyPlainTextTmuxActions(actions, session, true))
         : undefined;
       const ensured = await ensureCodexTmuxSessionForProvider({
         ...params,
@@ -1215,7 +1249,7 @@ export async function handleTmuxBridgeCommand(params: HandleTmuxBridgeCommandPar
       }
       const effectiveSession = store.getSession(session.id) || session;
       const actionsToSend = command === '/tmux' && !keySequenceActions
-        ? applyAutoEnter(actions, effectiveSession, params.tmuxProviderAutoForward === true)
+        ? applyPlainTextTmuxActions(actions, effectiveSession, params.tmuxProviderAutoForward === true)
         : actions;
       if (params.suppressSuccessfulResponse === true) {
         await sendTmuxActions(target, actionsToSend, { delayMs: SEND_ACTION_DELAY_MS });

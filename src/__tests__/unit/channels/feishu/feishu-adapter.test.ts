@@ -3822,6 +3822,72 @@ describe('feishu-adapter structured streaming regions', () => {
     }]);
   });
 
+  it('returns false for invalid card id finalization so mirror delivery can fall back', async () => {
+    const cardUpdates: Array<Record<string, any>> = [];
+    const elementCreates: Array<Record<string, any>> = [];
+    const reactionCreates: Array<Record<string, any>> = [];
+    const adapter = new FeishuAdapter({
+      id: 'feishu-default',
+      provider: 'feishu',
+      enabled: true,
+      alias: '飞书',
+      config: {
+        appId: 'app-id',
+        appSecret: 'app-secret',
+        streamingEnabled: true,
+      },
+    });
+    (adapter as any).cardFlushBaseIntervalMs = 1;
+
+    (adapter as any).restClient = {
+      cardkit: {
+        v1: {
+          card: {
+            create: async () => ({ data: { card_id: 'card-1' } }),
+            settings: async () => ({}),
+            update: async (payload: Record<string, any>) => {
+              cardUpdates.push(payload);
+              return { code: 99991663, msg: 'cardid is invalid' };
+            },
+          },
+          cardElement: {
+            content: async () => ({}),
+            create: async (payload: Record<string, any>) => {
+              elementCreates.push(payload);
+              return { code: 99991663, msg: 'cardid is invalid' };
+            },
+          },
+        },
+      },
+      im: {
+        message: {
+          create: async () => ({ data: { message_id: 'msg-1' } }),
+          reply: async () => ({ data: { message_id: 'msg-1' } }),
+        },
+        messageReaction: {
+          create: async (payload: Record<string, any>) => {
+            reactionCreates.push(payload);
+            return {};
+          },
+        },
+      },
+    };
+
+    await (adapter as any).createStreamingCard('chat-1', 'reply-1', 'stream-1');
+    adapter.onStreamHistory('chat-1', [
+      { type: 'markdown' as const, role: 'user' as const, content: '用户消息' },
+      { type: 'markdown' as const, role: 'assistant' as const, content: 'Kimi 最终回复' },
+    ], 'stream-1');
+
+    const finalized = await adapter.onStreamEnd('chat-1', 'completed', '', 'stream-1');
+
+    assert.equal(finalized, false);
+    assert.ok(cardUpdates.length >= 1);
+    assert.ok(elementCreates.length >= 1);
+    assert.equal(reactionCreates.length, 0);
+    assert.equal((adapter as any).activeCards.has('stream-1'), false);
+  });
+
   it('keeps tool attach payloads much smaller than whole-card refresh payloads', async () => {
     const buildAdapter = (options: { failAttach?: boolean }) => {
       const cardUpdates: Array<Record<string, any>> = [];

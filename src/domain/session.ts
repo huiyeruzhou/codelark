@@ -4,7 +4,11 @@ export type CodexSandboxMode = 'read-only' | 'workspace-write' | 'danger-full-ac
 export type CodexReasoningEffort = 'minimal' | 'low' | 'medium' | 'high' | 'xhigh';
 export type RuntimeProviderChoice = 'sdk' | 'pty' | 'tmux';
 export type ClaudeProviderChoice = RuntimeProviderChoice;
-export type RuntimeProviderIdentity = `${'codex' | 'claude'}:${RuntimeProviderChoice}`;
+export type KimiProviderChoice = 'tmux';
+export type RuntimeAgent = 'codex' | 'claude' | 'kimi';
+export type RuntimeProviderIdentity =
+  | `${'codex' | 'claude'}:${RuntimeProviderChoice}`
+  | `kimi:${KimiProviderChoice}`;
 export type ClaudeExecutable = 'claude' | 'ccr';
 
 export type BridgeSessionHealthStatus =
@@ -51,12 +55,16 @@ export interface BridgeSession {
   updated_at?: string;
 }
 
-export type BridgeSessionRuntimeState = BridgeSessionCodexRuntimeContainer | BridgeSessionClaudeRuntimeContainer;
+export type BridgeSessionRuntimeState =
+  | BridgeSessionCodexRuntimeContainer
+  | BridgeSessionClaudeRuntimeContainer
+  | BridgeSessionKimiRuntimeContainer;
 
 export interface BridgeSessionCodexRuntimeContainer {
   activeRuntime?: 'codex';
   codex?: BridgeSessionCodexRuntimeState;
   claude?: never;
+  kimi?: never;
   general?: BridgeSessionGeneralState;
 }
 
@@ -64,6 +72,15 @@ export interface BridgeSessionClaudeRuntimeContainer {
   activeRuntime: 'claude';
   codex?: never;
   claude?: BridgeSessionClaudeRuntimeState;
+  kimi?: never;
+  general?: BridgeSessionGeneralState;
+}
+
+export interface BridgeSessionKimiRuntimeContainer {
+  activeRuntime: 'kimi';
+  codex?: never;
+  claude?: never;
+  kimi?: BridgeSessionKimiRuntimeState;
   general?: BridgeSessionGeneralState;
 }
 
@@ -87,6 +104,13 @@ export interface BridgeSessionClaudeRuntimeState {
   idleTimeoutMinutes?: number;
 }
 
+export interface BridgeSessionKimiRuntimeState {
+  sessionId?: string;
+  cwd?: string;
+  model?: string;
+  provider?: KimiProviderChoice;
+}
+
 export interface BridgeSessionGeneralState {
   workingDirectory?: string;
   systemPrompt?: string;
@@ -97,10 +121,11 @@ export interface BridgeSessionGeneralState {
 }
 
 export type BridgeSessionUpdate = Omit<Partial<BridgeSession>, 'runtime'> & {
-  runtime?: {
-    activeRuntime?: BridgeSessionRuntimeState['activeRuntime'];
-    codex?: Partial<BridgeSessionCodexRuntimeState>;
-    claude?: Partial<BridgeSessionClaudeRuntimeState>;
-    general?: Partial<BridgeSessionGeneralState>;
-  };
-};
+	runtime?: {
+	    activeRuntime?: BridgeSessionRuntimeState['activeRuntime'];
+	    codex?: Partial<BridgeSessionCodexRuntimeState>;
+	    claude?: Partial<BridgeSessionClaudeRuntimeState>;
+	    kimi?: Partial<BridgeSessionKimiRuntimeState>;
+	    general?: Partial<BridgeSessionGeneralState>;
+	  };
+	};

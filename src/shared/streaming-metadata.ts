@@ -4,7 +4,7 @@ export function formatStreamContextId(value: string | null | undefined, fallback
 }
 
 export function buildRuntimeStreamTags(context: {
-  runtime?: 'codex' | 'claude' | string | null;
+  runtime?: 'codex' | 'claude' | 'kimi' | string | null;
   reasoningEffort?: string | null;
   model?: string | null;
 }): string[] {
@@ -12,7 +12,7 @@ export function buildRuntimeStreamTags(context: {
   const reasoningEffort = context.reasoningEffort?.trim();
   const model = context.model?.trim();
   return [
-    runtime === 'codex' || runtime === 'claude' ? runtime : '',
+    runtime === 'codex' || runtime === 'claude' || runtime === 'kimi' ? runtime : '',
     reasoningEffort ? `effort:${reasoningEffort}` : '',
     model ? `model:${model}` : '',
   ].filter(Boolean);

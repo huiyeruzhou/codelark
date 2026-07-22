@@ -785,6 +785,29 @@ describe('buildFinalCardJson', () => {
     assertFeishuElementIdsAreValid(parsed);
   });
 
+  it('renders Kimi runtime metadata as body tags without consuming header tag slots', () => {
+    const cardJson = buildFinalCardJson(
+      '最终回复',
+      [],
+      [],
+      null,
+      'completed',
+      [],
+      'chat-1',
+      { title: '当前线程', tags: ['kimi', 'effort:default', 'model:moonshot-v1', 'bridge_id:def67890', 'tmux', 'mirror'] },
+    );
+
+    const parsed = JSON.parse(cardJson) as any;
+    assert.equal(parsed.header.text_tag_list.length, 3);
+    assert.equal(parsed.header.text_tag_list[0].text.content, 'bridge_id:def67890');
+    assert.equal(parsed.header.text_tag_list[1].text.content, 'tmux');
+    assert.equal(parsed.header.text_tag_list[2].text.content, 'mirror');
+    assert.equal(parsed.body.elements[0].tag, 'markdown');
+    assert.equal(parsed.body.elements[0].element_id, 'runtime_meta_tags');
+    assert.equal(parsed.body.elements[0].content, "<text_tag color='orange'>kimi</text_tag> <text_tag color='green'>effort:default</text_tag> <text_tag color='turquoise'>model:moonshot-v1</text_tag>");
+    assertFeishuElementIdsAreValid(parsed);
+  });
+
   it('keeps terminal context usage visible when final content comes from history items', () => {
     const cardJson = buildFinalCardJson(
       '最终回复\n\nContext: 125k(63%) · ↑125k ↓4.6k',
@@ -1033,17 +1056,38 @@ describe('buildRichCardContent', () => {
           columns: [{ name: 'title', displayName: '标题' }],
           rows: [{ title: 'claude thread' }],
         },
+        selects: [{
+          id: 'claude_select',
+          placeholder: '选择 Claude Code 会话',
+          options: [{ text: '1. claude thread', callbackData: 'cti-thread-select:claude-thread' }],
+        }],
+      }, {
+        title: 'Kimi Code 会话（1）',
+        table: {
+          columns: [{ name: 'title', displayName: '标题' }],
+          rows: [{ title: 'kimi thread' }],
+        },
+        selects: [{
+          id: 'kimi_select',
+          placeholder: '选择 Kimi Code 会话',
+          options: [{ text: '1. kimi thread', callbackData: 'cti-thread-select:kimi-thread' }],
+        }],
+        actions: [[{ text: '接管', callbackData: 'cti-thread-action:kimi:switch', type: 'primary' }]],
       }],
     }, 'chat-1');
 
     const parsed = JSON.parse(cardJson) as any;
     assert.equal(parsed.body.elements.some((element: any) => element.tag === 'collapsible_panel'), false);
     const tables = parsed.body.elements.filter((element: any) => element.tag === 'table');
-    assert.equal(tables.length, 2);
+    assert.equal(tables.length, 3);
     assert.match(JSON.stringify(parsed.body.elements), /Codex 会话/);
     assert.match(JSON.stringify(parsed.body.elements), /Claude Code 会话/);
+    assert.match(JSON.stringify(parsed.body.elements), /Kimi Code 会话/);
     assert.equal(JSON.stringify(parsed.body.elements).includes('codex_select'), true);
+    assert.equal(JSON.stringify(parsed.body.elements).includes('claude_select'), true);
+    assert.equal(JSON.stringify(parsed.body.elements).includes('kimi_select'), true);
     assert.equal(JSON.stringify(parsed.body.elements).includes('cti-thread-action:global:switch'), true);
+    assert.equal(JSON.stringify(parsed.body.elements).includes('cti-thread-action:kimi:switch'), true);
 
     const elementIds: string[] = [];
     const collectElementIds = (value: unknown): void => {

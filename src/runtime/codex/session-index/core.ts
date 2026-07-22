@@ -16,13 +16,7 @@ import {
   readFirstLine,
 } from './file-readers.js';
 import {
-  loadVisibleCodexThreads,
-  parseCodexUpdatedAtValue,
-} from './sqlite-visibility.js';
-import {
   isInternalSkillWorkspace,
-  isWithinSavedWorkspaceRoots,
-  loadSavedWorkspaceRoots,
 } from './workspace-filter.js';
 import {
   extractNormalizedFreeText,
@@ -91,12 +85,6 @@ const TITLE_MAX_CHARS = 72;
 function isSelectableCodexSession(meta: SessionMetaLine['payload']): boolean {
   const rawSource = meta?.source;
   if (rawSource != null && typeof rawSource !== 'string') return false;
-
-  const originator = typeof meta?.originator === 'string' ? meta.originator.toLowerCase() : '';
-  const source = typeof rawSource === 'string' ? rawSource.toLowerCase() : '';
-
-  // Some Codex clients emit internal exec rollouts that are not user-selectable threads.
-  if (source === 'exec' && originator.includes('desktop')) return false;
 
   return true;
 }
@@ -229,14 +217,6 @@ export function listCodexSessions(limit?: number): CodexSessionSummary[] {
   if (!fs.existsSync(root)) return [];
   const archivedThreadIds = loadArchivedThreadIds();
   const threadIndexEntries = loadThreadIndexEntries(archivedThreadIds);
-  const savedWorkspaceRoots = loadSavedWorkspaceRoots();
-  const visibleThreads = loadVisibleCodexThreads(limit);
-  const visibleThreadIds = visibleThreads?.map((thread) => thread.id) || null;
-  const visibleThreadSet = visibleThreadIds ? new Set(visibleThreadIds) : null;
-  const visibleThreadUpdatedAt = new Map(visibleThreads?.map((thread) => [thread.id, thread.updatedAtMs]) || []);
-  const oldestVisibleUpdatedAtMs = visibleThreads && visibleThreads.length > 0
-    ? Math.min(...visibleThreads.map((thread) => thread.updatedAtMs || Number.MAX_SAFE_INTEGER))
-    : 0;
 
   const files: string[] = [];
   walkSessionFiles(root, files);
@@ -245,36 +225,10 @@ export function listCodexSessions(limit?: number): CodexSessionSummary[] {
   for (const filePath of files) {
     const session = parseCodexSession(filePath, threadIndexEntries, archivedThreadIds);
     if (!session) continue;
-    if (!isWithinSavedWorkspaceRoots(session.cwd, savedWorkspaceRoots)) continue;
     allSessions.set(session.threadId, session);
   }
 
   const sessions = Array.from(allSessions.values());
-
-  if (visibleThreadSet && visibleThreadIds) {
-    const mergedThreadIds = new Set<string>(visibleThreadIds);
-    if (oldestVisibleUpdatedAtMs > 0) {
-      for (const session of sessions) {
-        if (visibleThreadSet.has(session.threadId)) continue;
-        const candidateUpdatedAtMs = parseCodexUpdatedAtValue(threadIndexEntries.get(session.threadId)?.updatedAt || session.lastEventAt);
-        if (candidateUpdatedAtMs > oldestVisibleUpdatedAtMs) {
-          mergedThreadIds.add(session.threadId);
-        }
-      }
-    }
-
-    return sessions
-      .filter((session) => mergedThreadIds.has(session.threadId))
-      .sort((left, right) => {
-        const rightUpdatedAtMs = visibleThreadUpdatedAt.get(right.threadId)
-          || parseCodexUpdatedAtValue(threadIndexEntries.get(right.threadId)?.updatedAt || right.lastEventAt);
-        const leftUpdatedAtMs = visibleThreadUpdatedAt.get(left.threadId)
-          || parseCodexUpdatedAtValue(threadIndexEntries.get(left.threadId)?.updatedAt || left.lastEventAt);
-        return rightUpdatedAtMs - leftUpdatedAtMs;
-      })
-      .slice(0, typeof limit === 'number' && Number.isFinite(limit) && limit > 0 ? Math.max(1, Math.floor(limit)) : undefined);
-  }
-
   return sessions
     .sort((a, b) => b.lastEventAt.localeCompare(a.lastEventAt))
     .slice(0, typeof limit === 'number' && Number.isFinite(limit) && limit > 0 ? Math.max(1, Math.floor(limit)) : undefined);

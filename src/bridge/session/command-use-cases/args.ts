@@ -105,7 +105,7 @@ export function validateThreadName(raw: string): { ok: true; name: string } | { 
   if (name.length > 80) return { ok: false, message: '名称过长，请控制在 80 个字符以内。' };
   if (/[\x00-\x1f\x7f]/.test(name)) return { ok: false, message: '名称不能包含控制字符。' };
   if (isReservedThreadName(name)) {
-    return { ok: false, message: '名称不能是纯数字，也不能长得像 binding id 或 thread id。' };
+    return { ok: false, message: '名称不能是纯数字，也不能长得像 binding id 或 runtime id。' };
   }
   return { ok: true, name };
 }

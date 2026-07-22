@@ -131,6 +131,9 @@
         },
         {
           "$ref": "#/$defs/claudeSessionRuntime"
+        },
+        {
+          "$ref": "#/$defs/kimiSessionRuntime"
         }
       ]
     },
@@ -173,6 +176,9 @@
         "claude": {
           "not": {}
         },
+        "kimi": {
+          "not": {}
+        },
         "general": {
           "$ref": "#/$defs/sessionRuntimeGeneral"
         }
@@ -213,6 +219,46 @@
             "idleTimeoutMinutes": {
               "type": "integer",
               "minimum": 1
+            }
+          },
+          "additionalProperties": true
+        },
+        "kimi": {
+          "not": {}
+        },
+        "general": {
+          "$ref": "#/$defs/sessionRuntimeGeneral"
+        }
+      },
+      "additionalProperties": true
+    },
+    "kimiSessionRuntime": {
+      "type": "object",
+      "required": ["activeRuntime"],
+      "properties": {
+        "activeRuntime": {
+          "const": "kimi"
+        },
+        "codex": {
+          "not": {}
+        },
+        "claude": {
+          "not": {}
+        },
+        "kimi": {
+          "type": "object",
+          "properties": {
+            "sessionId": {
+              "type": "string"
+            },
+            "cwd": {
+              "type": "string"
+            },
+            "model": {
+              "type": "string"
+            },
+            "provider": {
+              "enum": ["tmux"]
             }
           },
           "additionalProperties": true

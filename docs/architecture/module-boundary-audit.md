@@ -87,11 +87,11 @@
 
 ### 3. Codex session-index helper 文件过碎
 
-`src/runtime/codex/session-index` 有 13 个文件，6 个文件不超过 80 行。`paths.ts`、`discovery-scanner.ts`、`workspace-filter.ts`、`file-readers.ts`、`archive-store.ts`、`sqlite-visibility.ts` 都是同一个 session index source discovery 的组成部分。
+`src/runtime/codex/session-index` 有多个偏小 helper 文件。`paths.ts`、`discovery-scanner.ts`、`workspace-filter.ts`、`file-readers.ts`、`archive-store.ts` 都是同一个 session index source discovery 的组成部分。
 
 建议按读路径聚合：
 
-- `sources.ts`：paths、workspace filter、file readers、discovery scanner、archive store、sqlite visibility。
+- `sources.ts`：paths、workspace filter、file readers、discovery scanner、archive store。
 - `events.ts`：jsonl types、history parser、event mirror parser、tool-call events、internal control events。
 - `core.ts`：保留 public list/read/reconcile 入口，隐藏 sources/events 细节。
 

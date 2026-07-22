@@ -34,7 +34,7 @@ npm run docs:build
 真实飞书 E2E 需要显式授权，默认不会无意发送真实消息：
 
 ```bash
-CODELARK_REAL_FEISHU_E2E=1 npm run real:feishu:e2e -- --launch-bridge --create-chat
+CODELARK_REAL_FEISHU_E2E=1 npm run real:feishu:e2e -- --launch-bridge --scenario runtime-message
 ```
 
 运行真实 E2E 前，需要准备飞书测试应用、测试用户授权、bot open_id、用户 open_id 和相关环境变量。可以先用下面的命令查看场景清单：

@@ -1,5 +1,7 @@
+import type { RuntimeAgent } from '../../domain/session.js';
+
 export interface LocalRuntimeSessionSummary {
-  runtime: 'codex' | 'claude';
+  runtime: RuntimeAgent;
   threadId: string;
   filePath: string;
   cwd: string;

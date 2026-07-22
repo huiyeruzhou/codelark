@@ -10,7 +10,10 @@ import {
 } from '../../command/presentation.js';
 import type { CommandThreadDisplay } from '../../command/thread-display.js';
 import { listCommandLocalRuntimeSessions } from './source.js';
+import type { LocalRuntimeFilter } from './source.js';
 import type { SessionCommandResult } from './types.js';
+
+const LOCAL_RUNTIME_FALLBACK_ORDER: LocalRuntimeFilter[] = ['codex', 'claude', 'kimi'];
 
 export function handleLocalRuntimeSessionsCommand(options: {
   msg: InboundMessage;
@@ -26,11 +29,14 @@ export function handleLocalRuntimeSessionsCommand(options: {
   let runtime = listArgs.runtime || options.threadDisplay.activeRuntimeForChat(options.msg.address.channelType, options.msg.address.chatId);
   let textLocalSessions = listCommandLocalRuntimeSessions(limit, runtime);
   if (!listArgs.runtime && textLocalSessions?.length === 0) {
-    const fallbackRuntime = runtime === 'codex' ? 'claude' : 'codex';
-    const fallbackSessions = listCommandLocalRuntimeSessions(limit, fallbackRuntime);
-    if (fallbackSessions && fallbackSessions.length > 0) {
-      runtime = fallbackRuntime;
-      textLocalSessions = fallbackSessions;
+    for (const fallbackRuntime of LOCAL_RUNTIME_FALLBACK_ORDER) {
+      if (fallbackRuntime === runtime) continue;
+      const fallbackSessions = listCommandLocalRuntimeSessions(limit, fallbackRuntime);
+      if (fallbackSessions && fallbackSessions.length > 0) {
+        runtime = fallbackRuntime;
+        textLocalSessions = fallbackSessions;
+        break;
+      }
     }
   }
   if (!textLocalSessions) {

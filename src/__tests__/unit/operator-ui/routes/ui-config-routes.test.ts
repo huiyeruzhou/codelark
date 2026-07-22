@@ -67,6 +67,10 @@ function baseConfigV2(overrides: Partial<ConfigV2> = {}): ConfigV2 {
         reasoningEffort: 'medium',
         idleTimeoutMinutes: 0,
       },
+      kimi: {
+        model: '',
+        provider: 'tmux',
+      },
     },
     bridge: {
       defaultWorkspace: '~',
@@ -130,6 +134,10 @@ describe('Ui config application', () => {
           reasoningEffort: 'high',
           yoloMode: 'on',
         },
+        kimi: {
+          model: 'kimi-current',
+          provider: 'tmux',
+        },
       },
       bridge: {
         defaultWorkspace: '/tmp/work',
@@ -144,9 +152,47 @@ describe('Ui config application', () => {
     assert.equal(patch.runtime?.codex?.networkAccess, false);
     assert.equal(patch.runtime?.codex?.reasoningEffort, 'high');
     assert.equal(patch.runtime?.codex?.yoloMode, 'on');
+    assert.equal(patch.runtime?.kimi?.model, 'kimi-current');
+    assert.equal(patch.runtime?.kimi?.provider, 'tmux');
     assert.equal(patch.bridge?.defaultWorkspace, '/tmp/work');
     assert.equal(patch.bridge?.uiAllowLan, true);
     assert.equal(patch.bridge?.uiAccessToken, 'existing-token');
+  });
+
+  it('exposes and writes global Kimi runtime defaults', () => {
+    const current = baseConfigV2({
+      runtime: {
+        ...baseConfigV2().runtime,
+        agent: 'kimi',
+        kimi: {
+          model: 'moonshot-v1-current',
+          provider: 'tmux',
+        },
+      },
+    });
+
+    const payload = configV2ToPayload(current);
+    assert.equal(payload.runtime, 'kimi');
+    assert.equal(payload.kimiDefaultModel, 'moonshot-v1-current');
+    assert.equal(payload.kimiProvider, 'tmux');
+
+    const patch = mergeConfigV2HomePatch(current, {
+      runtime: 'kimi',
+      kimiDefaultModel: 'moonshot-v1-next',
+      kimiProvider: 'tmux',
+    });
+    assert.equal(patch.runtime?.agent, 'kimi');
+    assert.equal(patch.runtime?.kimi?.model, 'moonshot-v1-next');
+    assert.equal(patch.runtime?.kimi?.provider, 'tmux');
+    assert.equal(patch.runtime?.codex?.provider, current.runtime.codex.provider);
+    assert.equal(patch.runtime?.claude?.provider, current.runtime.claude.provider);
+  });
+
+  it('rejects invalid global Kimi provider values', () => {
+    assert.throws(
+      () => mergeConfigV2HomePatch(baseConfigV2(), { kimiProvider: 'sdk' }),
+      /Invalid input: expected \\"tmux\\"/,
+    );
   });
 
   it('does not synthesize channel timing defaults when the effective config has no channel', () => {
@@ -157,6 +203,26 @@ describe('Ui config application', () => {
   it('defaults the Claude provider payload to sdk', () => {
     const payload = configV2ToPayload(baseConfigV2());
     assert.equal(payload.claudeProvider, 'sdk');
+  });
+
+  it('keeps the global config shell wired to Kimi form fields', () => {
+    const source = fs.readFileSync(path.join(process.cwd(), 'src/operator-ui/shell.ts'), 'utf-8');
+    assert.match(source, /<select id="runtime">[\s\S]*<option value="codex" selected>codex<\/option>[\s\S]*<option value="claude">claude<\/option>[\s\S]*<option value="kimi">kimi<\/option>/);
+    assert.match(source, /GlobalRuntime \/ Kimi/);
+    assert.match(source, /id="kimiProvider"/);
+    assert.match(source, /id="kimiDefaultModel"/);
+    assert.match(source, /<select id="defaultProvider">[\s\S]*<option value="sdk">sdk<\/option>[\s\S]*<option value="pty">pty<\/option>[\s\S]*<option value="tmux">tmux<\/option>/);
+    assert.match(source, /kimiProvider: document\.getElementById\('kimiProvider'\)\.value/);
+    assert.match(source, /kimiDefaultModel: document\.getElementById\('kimiDefaultModel'\)\.value/);
+    assert.match(source, /document\.getElementById\('kimiProvider'\)\.value = config\.kimiProvider \|\| 'tmux'/);
+    assert.match(source, /document\.getElementById\('kimiDefaultModel'\)\.value = config\.kimiDefaultModel \|\| ''/);
+  });
+
+  it('describes /t runtime identities as thread or session ids', () => {
+    const source = fs.readFileSync(path.join(process.cwd(), 'src/operator-ui/shell.ts'), 'utf-8');
+    assert.match(source, /thread\/session id/);
+    assert.doesNotMatch(source, /\/t &lt;序号\|thread id\|bridge id\|名称&gt;/);
+    assert.doesNotMatch(source, /\/t archive \[序号\|bridge id\|thread id\|名称\]/);
   });
 });
 

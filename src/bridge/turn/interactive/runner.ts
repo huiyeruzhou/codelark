@@ -38,6 +38,7 @@ import {
 import { getBridgeSessionDisplayTitle } from '../../session/display/session-display-query.js';
 import {
   getSessionActiveRuntime,
+  getSessionKimiSessionId,
   getSessionCodexThreadId,
   getSessionClaudeSessionId,
   getSessionWorkingDirectory,
@@ -45,6 +46,7 @@ import {
 import {
   resolveEffectiveClaudeProvider,
   resolveEffectiveCodexProvider,
+  resolveKimiRuntimeConfig,
   resolveRuntimeMetadataConfig,
 } from '../../session/support.js';
 import { maskSecrets } from '../../../shared/logger.js';
@@ -241,14 +243,24 @@ export async function runInteractiveMessage(
   const processMessageImpl = deps.processMessageImpl ?? engine.processMessage;
   const resolveDisplayInfo = deps.resolveInteractiveTurnDisplayInfo ?? ((targetBinding) => {
     if (targetBinding.id === binding.id && initialSession) {
-      const isClaude = getSessionActiveRuntime(initialSession) === 'claude';
-      const metadata = resolveRuntimeMetadataConfig(initialSession, isClaude ? 'claude' : 'codex', binding);
+      const displayRuntime = getSessionActiveRuntime(initialSession) || 'codex';
+      const metadata = resolveRuntimeMetadataConfig(initialSession, displayRuntime, binding);
+      const threadId = displayRuntime === 'kimi'
+        ? getSessionKimiSessionId(initialSession) || ''
+        : displayRuntime === 'claude'
+          ? getSessionClaudeSessionId(initialSession) || ''
+          : getSessionCodexThreadId(initialSession) || '';
+      const executionProvider = displayRuntime === 'kimi'
+        ? resolveKimiRuntimeConfig(initialSession, binding).provider
+        : displayRuntime === 'claude'
+          ? resolveEffectiveClaudeProvider(initialSession, binding)
+          : resolveEffectiveCodexProvider(initialSession, binding);
       return {
         title: getBridgeSessionDisplayTitle(initialSession),
         bridgeSessionId: initialSession.id,
-        threadId: getSessionCodexThreadId(initialSession) || '',
-        runtime: isClaude ? 'claude' : 'codex',
-        executionProvider: resolveEffectiveCodexProvider(initialSession, binding),
+        threadId,
+        runtime: displayRuntime,
+        executionProvider,
         creatorKind: 'bridge',
         reasoningEffort: metadata.reasoningEffort,
         model: metadata.model,
@@ -261,7 +273,8 @@ export async function runInteractiveMessage(
   const isClaudeMirrorTurn = activeRuntime === 'claude' && resolveEffectiveClaudeProvider(initialSession, binding) !== 'sdk';
   const codexProvider = resolveEffectiveCodexProvider(initialSession, binding);
   const isCodexMirrorTurn = activeRuntime === 'codex' && (codexProvider === 'pty' || codexProvider === 'tmux');
-  const isRuntimeMirrorTurn = isClaudeMirrorTurn || isCodexMirrorTurn;
+  const isKimiMirrorTurn = activeRuntime === 'kimi';
+  const isRuntimeMirrorTurn = isClaudeMirrorTurn || isCodexMirrorTurn || isKimiMirrorTurn;
   const initialCodexThreadId = getSessionCodexThreadId(initialSession) || codexThreadId || '';
   let observedCodexThreadId = codexThreadId || '';
   const useInteractiveStreamUi = !isRuntimeMirrorTurn;
@@ -324,17 +337,21 @@ export async function runInteractiveMessage(
     sessionId: binding.bridgeSessionId,
     kind: turnClassification.kind,
     origin: 'im',
-    progressSource: isCodexMirrorTurn ? 'codex_jsonl' : isClaudeMirrorTurn ? 'claude_jsonl' : 'sdk_stream',
+    progressSource: isCodexMirrorTurn ? 'codex_jsonl' : isClaudeMirrorTurn ? 'claude_jsonl' : isKimiMirrorTurn ? 'kimi_jsonl' : 'sdk_stream',
     finalSource: isCodexMirrorTurn || turnClassification.kind === 'im_codex_reuse'
       ? 'codex_task_complete'
       : isClaudeMirrorTurn
         ? 'claude_task_complete'
-        : 'sdk_result',
+        : isKimiMirrorTurn
+          ? 'kimi_task_complete'
+          : 'sdk_result',
     runtime: activeRuntime,
     codexThreadId: turnClassification.codexThreadId,
     runtimeThreadId: activeRuntime === 'claude'
       ? getSessionClaudeSessionId(initialSession)
-      : turnClassification.codexThreadId,
+      : activeRuntime === 'kimi'
+        ? getSessionKimiSessionId(initialSession)
+        : turnClassification.codexThreadId,
     requestMessageId: msg.messageId,
     streamKey,
     startedAt: taskStartedAt,
@@ -552,9 +569,10 @@ export async function runInteractiveMessage(
         streamPreview: {
           includeToolSnippets: useInteractiveStreamUi && !streamUi.hasStreamingCards,
         },
+        onThinkingNote: useStatusStreamUi ? sdkStreamEvents.onThinkingNote : undefined,
         onContextUsage: useInteractiveStreamUi ? sdkStreamEvents.onContextUsage : undefined,
         onRuntimeIdentity: async (identity) => {
-          if (identity.runtime === 'claude') {
+          if (identity.runtime === 'claude' || identity.runtime === 'kimi') {
             ensureMirrorSuppression(preparedPromptText);
             runtimeMirrorActivated = true;
             await deps.reconcileMirrorSubscriptions?.();

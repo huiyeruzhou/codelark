@@ -21,15 +21,18 @@ import {
   getSessionClaudeCwd,
   getSessionClaudeSessionId,
   getSessionCodexTitle,
+  getSessionKimiCwd,
+  getSessionKimiSessionId,
   getSessionWorkingDirectory,
   setSessionCodexTitleUpdate,
 } from '../../../domain/session-runtime.js';
 import { getGlobalStringConfig } from '../global-config.js';
 import {
   hasSessionCodexProviderOverride,
-  resolveDisplayedModel,
   resolveEffectiveCodexProvider,
-  resolveEffectiveMode,
+  resolveEffectiveRuntimeMode,
+  resolveEffectiveRuntimeProvider,
+  resolveRuntimeMetadataConfig,
 } from '../support.js';
 
 export interface BindingTargetOption {
@@ -55,15 +58,17 @@ export interface BindingSummary {
   chatDisplayName?: string;
   mode: ChannelChatMode;
   codexProvider: 'sdk' | 'pty' | 'tmux' | 'default';
+  executionProvider: 'sdk' | 'pty' | 'tmux' | 'default';
   model: string;
   workingDirectory: string;
   currentTargetLabel: string;
   currentSessionId: string;
   currentSessionName: string;
-  currentRuntime?: 'codex' | 'claude';
+  currentRuntime?: 'codex' | 'claude' | 'kimi';
   currentThreadId?: string;
   currentRuntimeThreadId?: string;
   currentClaudeCwd?: string;
+  currentKimiCwd?: string;
   runtimeStatus?: BridgeSession['runtime_status'];
   queuedCount?: number;
   mirrorStatus?: BridgeSession['mirror_status'];
@@ -76,12 +81,16 @@ export interface ChannelDefaultTargetSummary {
   channelProvider?: string;
   channelAlias?: string;
   bridgeSessionId: string;
+  mode: ChannelChatMode;
+  codexProvider: 'sdk' | 'pty' | 'tmux' | 'default';
+  executionProvider: 'sdk' | 'pty' | 'tmux' | 'default';
   targetLabel: string;
   targetSessionId: string;
-  targetRuntime?: 'codex' | 'claude';
+  targetRuntime?: 'codex' | 'claude' | 'kimi';
   targetThreadId?: string;
   targetRuntimeThreadId?: string;
   targetClaudeCwd?: string;
+  targetKimiCwd?: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -217,7 +226,7 @@ function getSessionName(session: BridgeSession): string {
 }
 
 function getSessionMode(session: BridgeSession, binding?: ChannelChat | null): ChannelChatMode {
-  return resolveEffectiveMode(binding, session);
+  return resolveEffectiveRuntimeMode(binding, session);
 }
 
 function getSessionCodexProvider(
@@ -227,32 +236,44 @@ function getSessionCodexProvider(
   return hasSessionCodexProviderOverride(session) ? resolveEffectiveCodexProvider(session, binding) : 'default';
 }
 
+function getSessionExecutionProvider(
+  session: BridgeSession | null | undefined,
+  binding?: ChannelChat | null,
+): 'sdk' | 'pty' | 'tmux' | 'default' {
+  if (!session) return 'default';
+  return resolveEffectiveRuntimeProvider(session, binding).provider;
+}
+
 function describeBridgeSessionTarget(
   store: BridgeStore,
   bridgeSessionId: string,
 ): {
   targetLabel: string;
   targetSessionId: string;
-  targetRuntime: 'codex' | 'claude';
+  targetRuntime: 'codex' | 'claude' | 'kimi';
   targetThreadId?: string;
   targetRuntimeThreadId?: string;
   targetClaudeCwd?: string;
+  targetKimiCwd?: string;
 } {
   const session = store.getSession(bridgeSessionId);
   if (!session) {
     throw new Error('Session not found.');
   }
-  const activeRuntime = getSessionActiveRuntime(session) === 'claude' ? 'claude' : 'codex';
+  const rawRuntime = getSessionActiveRuntime(session);
+  const activeRuntime = rawRuntime === 'claude' ? 'claude' : rawRuntime === 'kimi' ? 'kimi' : 'codex';
   const codexThreadId = getCodexThreadId(session) || undefined;
   const claudeSessionId = getSessionClaudeSessionId(session) || undefined;
+  const kimiSessionId = getSessionKimiSessionId(session) || undefined;
 
   return {
     targetLabel: getSessionName(session),
     targetSessionId: session.id,
     targetRuntime: activeRuntime,
     targetThreadId: codexThreadId,
-    targetRuntimeThreadId: activeRuntime === 'claude' ? claudeSessionId : codexThreadId,
+    targetRuntimeThreadId: activeRuntime === 'claude' ? claudeSessionId : activeRuntime === 'kimi' ? kimiSessionId : codexThreadId,
     targetClaudeCwd: activeRuntime === 'claude' ? getSessionClaudeCwd(session) || getSessionWorkingDirectory(session) || undefined : undefined,
+    targetKimiCwd: activeRuntime === 'kimi' ? getSessionKimiCwd(session) || getSessionWorkingDirectory(session) || undefined : undefined,
   };
 }
 
@@ -448,9 +469,12 @@ export function listBindingSummaries(store: BridgeStore): BindingSummary[] {
   return store.listChannelChats().map((binding) => {
     const session = store.getSession(binding.bridgeSessionId);
     const currentThreadId = getCodexThreadId(session) || undefined;
-    const currentRuntime: 'codex' | 'claude' = getSessionActiveRuntime(session) === 'claude' ? 'claude' : 'codex';
+    const rawRuntime = getSessionActiveRuntime(session);
+    const currentRuntime: 'codex' | 'claude' | 'kimi' = rawRuntime === 'claude' ? 'claude' : rawRuntime === 'kimi' ? 'kimi' : 'codex';
     const currentRuntimeThreadId = currentRuntime === 'claude'
       ? getSessionClaudeSessionId(session) || undefined
+      : currentRuntime === 'kimi'
+        ? getSessionKimiSessionId(session) || undefined
       : currentThreadId;
     const fallbackSession = { id: binding.bridgeSessionId } as BridgeSession;
     const currentTargetLabel = getSessionName(session || fallbackSession);
@@ -466,7 +490,8 @@ export function listBindingSummaries(store: BridgeStore): BindingSummary[] {
       chatDisplayName: session ? getSessionName(session) : undefined,
       mode: session ? getSessionMode(session, binding) : 'normal',
       codexProvider: getSessionCodexProvider(session, binding),
-      model: resolveDisplayedModel(binding, session, getGlobalStringConfig('runtime.codex.model'), ''),
+      executionProvider: getSessionExecutionProvider(session, binding),
+      model: resolveRuntimeMetadataConfig(session, currentRuntime, binding).model,
       workingDirectory: getSessionWorkingDirectory(session) || '',
       currentTargetLabel,
       currentSessionId: binding.bridgeSessionId,
@@ -475,6 +500,7 @@ export function listBindingSummaries(store: BridgeStore): BindingSummary[] {
       currentThreadId,
       currentRuntimeThreadId,
       currentClaudeCwd: currentRuntime === 'claude' ? getSessionClaudeCwd(session) || getSessionWorkingDirectory(session) || undefined : undefined,
+      currentKimiCwd: currentRuntime === 'kimi' ? getSessionKimiCwd(session) || getSessionWorkingDirectory(session) || undefined : undefined,
       runtimeStatus: session?.runtime_status,
       queuedCount: session?.queued_count,
       mirrorStatus: session?.mirror_status,
@@ -491,18 +517,23 @@ export function listBindingSummaries(store: BridgeStore): BindingSummary[] {
 export function listChannelDefaultTargetSummaries(store: BridgeStore): ChannelDefaultTargetSummary[] {
   return store.listChannelDefaultTargets().map((target) => {
     const resolved = describeBridgeSessionTarget(store, target.bridgeSessionId);
+    const session = store.getSession(target.bridgeSessionId);
     return {
       id: target.id,
       channelType: target.channelType,
       channelProvider: target.channelProvider,
       channelAlias: target.channelAlias,
       bridgeSessionId: target.bridgeSessionId,
+      mode: session ? getSessionMode(session, null) : 'normal',
+      codexProvider: getSessionCodexProvider(session, null),
+      executionProvider: getSessionExecutionProvider(session, null),
       targetLabel: resolved.targetLabel,
       targetSessionId: resolved.targetSessionId,
       targetRuntime: resolved.targetRuntime,
       targetThreadId: resolved.targetThreadId,
       targetRuntimeThreadId: resolved.targetRuntimeThreadId,
       targetClaudeCwd: resolved.targetClaudeCwd,
+      targetKimiCwd: resolved.targetKimiCwd,
       createdAt: target.createdAt,
       updatedAt: target.updatedAt,
     };

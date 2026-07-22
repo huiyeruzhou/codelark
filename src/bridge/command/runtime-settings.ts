@@ -29,6 +29,7 @@ import {
   resolveEffectiveNetworkAccess,
   resolveEffectiveReasoningEffort,
   resolveEffectiveSandboxMode,
+  resolveKimiRuntimeConfig,
   resolveSessionWorkingDirectoryPath,
 } from '../session/support.js';
 import type { BridgeSession, BridgeStore } from '../../domain/index.js';
@@ -70,8 +71,8 @@ export {
   resolveLocalCodexThreadId,
 } from './runtime-session.js';
 
-const MODE_OPTIONS_TEXT = '可选：`normal`（普通执行，默认） `yolo`（YOLO模式：允许 agent 无需审批绕过沙箱）。兼容：`code` 等同于 `normal`。';
-const RUNTIME_OPTIONS_TEXT = '可选：`codex`（OpenAI Codex，默认） `claude`（Claude Code）。`/provider` 选择使用何种方式运行 agent，不切换 runtime。';
+const MODE_OPTIONS_TEXT = '可选：`normal`（普通执行，默认） `yolo`（YOLO模式：允许 agent 无需审批绕过沙箱）。';
+const RUNTIME_OPTIONS_TEXT = '可选：`codex`（OpenAI Codex，默认） `claude`（Claude Code） `kimi`（Kimi Code）。`/provider` 选择使用何种方式运行 agent，不切换 runtime。';
 const REASONING_OPTIONS_TEXT = '可选：`1=minimal` `2=low` `3=medium` `4=high` `5=xhigh`';
 const CLAUDE_REASONING_OPTIONS_TEXT = '可选：`1=low` `2=medium` `3=high` `4=xhigh` `5=max`；`m` 等同于 `max`，`minimal` 会映射为 Claude Code `low`。';
 const SANDBOX_OPTIONS_TEXT = '可选：`read-only` `workspace-write` `danger-full-access` `default`（回到全局默认）';
@@ -220,6 +221,20 @@ function clearSessionClaudeModelToml(sessionId: string): void {
   );
 }
 
+function setSessionKimiModelToml(sessionId: string, model: string): void {
+  createConfigService({ migrate: false }).set(
+    { kind: 'session', sessionId },
+    { runtime: { kimi: { model } } },
+  );
+}
+
+function clearSessionKimiModelToml(sessionId: string): void {
+  createConfigService({ migrate: false }).unset(
+    { kind: 'session', sessionId },
+    'runtime.kimi.model',
+  );
+}
+
 function setSessionWorkspaceToml(sessionId: string, workspace: string): void {
   createConfigService({ migrate: false }).set(
     { kind: 'session', sessionId },
@@ -230,11 +245,11 @@ function setSessionWorkspaceToml(sessionId: string, workspace: string): void {
 function parseNetworkAccessArg(raw: string): boolean | 'default' | null {
   const token = raw.trim().toLowerCase();
   if (!token) return null;
-  if (token === 'default' || token === 'reset') return 'default';
-  if (token === 'on' || token === 'true' || token === '1' || token === 'yes' || token === 'enable' || token === 'enabled') {
+  if (token === 'default') return 'default';
+  if (token === 'on' || token === 'true' || token === '1') {
     return true;
   }
-  if (token === 'off' || token === 'false' || token === '0' || token === 'no' || token === 'disable' || token === 'disabled') {
+  if (token === 'off' || token === 'false' || token === '0') {
     return false;
   }
   return null;
@@ -259,6 +274,14 @@ export function handleReasoningCommand(options: {
   }
   const activeRuntime = getSessionActiveRuntime(session) || 'codex';
   if (!options.args) {
+    if (activeRuntime === 'kimi') {
+      return buildCommandFields(
+        'Kimi Code 不支持 Bridge 思考级别设置',
+        [['Runtime', 'kimi']],
+        ['Kimi Code 的思考内容来自 tmux mirror 状态区；`/reasoning` 只适用于 Codex 和 Claude Code runtime。'],
+        options.markdown,
+      );
+    }
     if (activeRuntime === 'claude') {
       const claudeConfig = resolveClaudeRuntimeConfig(session, options.binding);
       return buildCommandFields(
@@ -276,6 +299,14 @@ export function handleReasoningCommand(options: {
     );
   }
   if (options.args.trim().toLowerCase() === 'default' || options.args.trim().toLowerCase() === 'reset') {
+    if (activeRuntime === 'kimi') {
+      return buildCommandFields(
+        'Kimi Code 不支持 Bridge 思考级别设置',
+        [['Runtime', 'kimi']],
+        ['没有写入 Codex 或 Claude Code reasoning 配置。'],
+        options.markdown,
+      );
+    }
     if (activeRuntime === 'claude') {
       clearSessionClaudeReasoningToml(session.id);
       return buildCommandFields(
@@ -297,6 +328,14 @@ export function handleReasoningCommand(options: {
   const claudeReasoning = activeRuntime === 'claude'
     ? parseClaudeReasoningCommandArg(options.args)
     : undefined;
+  if (activeRuntime === 'kimi') {
+    return buildCommandFields(
+      'Kimi Code 不支持 Bridge 思考级别设置',
+      [['Runtime', 'kimi']],
+      ['没有写入 Codex 或 Claude Code reasoning 配置。'],
+      options.markdown,
+    );
+  }
   if (!reasoning && !claudeReasoning) {
     return buildCommandFields(
       '思考级别用法',
@@ -340,6 +379,14 @@ export function handleModeCommand(options: {
   const session = options.store.getSession(binding.bridgeSessionId);
   const activeRuntime = getSessionActiveRuntime(session) || 'codex';
   const mode = formatSessionRuntimeMode(binding, session);
+  if (activeRuntime === 'kimi') {
+    return buildCommandFields(
+      'Kimi Code 模式固定',
+      [['Runtime', 'kimi'], ['Provider', 'tmux']],
+      ['Kimi Code 当前通过 `kimi -y` 的 tmux 路径运行，`/mode` 不会写入 Codex 或 Claude 配置。'],
+      options.markdown,
+    );
+  }
   if (!options.args) {
     return buildCommandFields(
       '当前模式',
@@ -350,7 +397,7 @@ export function handleModeCommand(options: {
           ? ['YOLO模式', mode]
           : ['Provider', formatSessionCodexProvider(session, binding)],
       ],
-      [MODE_OPTIONS_TEXT, '发送 `/m normal` 或 `/m yolo` 切换。完整命令也兼容：`/mode normal`。'],
+      [MODE_OPTIONS_TEXT, '发送 `/m normal` 或 `/m yolo` 切换；完整命令是 `/mode normal|yolo`。'],
       options.markdown,
     );
   }
@@ -472,21 +519,20 @@ export function handleRuntimeCommand(options: {
       options.markdown,
     );
   }
-  if (requested !== 'codex' && requested !== 'claude') {
+  if (requested !== 'codex' && requested !== 'claude' && requested !== 'kimi') {
     return buildCommandFields(
       'Runtime 用法',
-      [['命令', '`/runtime codex|claude`']],
+      [['命令', '`/runtime codex|claude|kimi`']],
       [RUNTIME_OPTIONS_TEXT],
       options.markdown,
     );
   }
   if (requested === currentRuntime) {
+    const label = requested === 'claude' ? 'Claude Code' : requested === 'kimi' ? 'Kimi Code' : 'Codex';
     return buildCommandFields(
       'Runtime 未变化',
       [['Runtime', currentRuntime]],
-      [requested === 'claude'
-        ? '当前聊天已经绑定 Claude Code BridgeSession。'
-        : '当前聊天已经绑定 Codex BridgeSession。'],
+      [`当前聊天已经绑定 ${label} BridgeSession。`],
       options.markdown,
     );
   }
@@ -532,8 +578,10 @@ export function handleRuntimeCommand(options: {
       ['目录', getSessionWorkingDirectory(nextSession) || '-'],
     ],
     requested === 'claude'
-      ? ['当前聊天已切到独立 Claude Code BridgeSession；旧 Codex thread/provider 不会参与后续 Claude turn。再次 `/runtime codex` 会切回本聊天记住的 Codex BridgeSession。']
-      : ['当前聊天已切到独立 Codex BridgeSession；旧 Claude Code session_id/cwd 不会参与后续 Codex turn。再次 `/runtime claude` 会切回本聊天记住的 Claude Code BridgeSession。'],
+      ? ['当前聊天已切到独立 Claude Code BridgeSession；旧 Codex/Kimi 会话不会参与后续 Claude turn。再次 `/runtime codex` 或 `/runtime kimi` 会切回本聊天记住的对应 BridgeSession。']
+      : requested === 'kimi'
+        ? ['当前聊天已切到独立 Kimi Code BridgeSession；旧 Codex/Claude 会话不会参与后续 Kimi turn。再次 `/runtime codex` 或 `/runtime claude` 会切回本聊天记住的对应 BridgeSession。']
+        : ['当前聊天已切到独立 Codex BridgeSession；旧 Claude/Kimi 会话不会参与后续 Codex turn。再次 `/runtime claude` 或 `/runtime kimi` 会切回本聊天记住的对应 BridgeSession。'],
     options.markdown,
   );
 }
@@ -550,11 +598,13 @@ export function handleSandboxCommand(options: {
   if (!session) {
     return '当前会话不存在。';
   }
-  if (getSessionActiveRuntime(session) === 'claude') {
+  const activeRuntime = getSessionActiveRuntime(session);
+  if (activeRuntime === 'claude' || activeRuntime === 'kimi') {
+    const label = activeRuntime === 'kimi' ? 'Kimi Code' : 'Claude Code';
     return buildCommandFields(
-      'Claude Code 不支持 Bridge 沙箱设置',
-      [['Runtime', 'claude']],
-      ['`/sandbox` 只适用于 Codex runtime；Claude Code 可用 `/mode normal|yolo` 控制 YOLO模式。'],
+      `${label} 不支持 Bridge 沙箱设置`,
+      [['Runtime', activeRuntime]],
+      ['`/sandbox` 只适用于 Codex runtime。'],
       options.markdown,
     );
   }
@@ -609,11 +659,13 @@ export function handleNetworkCommand(options: {
   if (!session) {
     return '当前会话不存在。';
   }
-  if (getSessionActiveRuntime(session) === 'claude') {
+  const activeRuntime = getSessionActiveRuntime(session);
+  if (activeRuntime === 'claude' || activeRuntime === 'kimi') {
+    const label = activeRuntime === 'kimi' ? 'Kimi Code' : 'Claude Code';
     return buildCommandFields(
-      'Claude Code 不支持 Bridge 网络开关',
-      [['Runtime', 'claude']],
-      ['`/network` 只适用于 Codex runtime 的 sandbox network_access；Claude Code 没有对应的 session-level CLI 参数。'],
+      `${label} 不支持 Bridge 网络开关`,
+      [['Runtime', activeRuntime]],
+      ['`/network` 只适用于 Codex runtime 的 sandbox network_access。'],
       options.markdown,
     );
   }
@@ -719,6 +771,48 @@ export function handleModelCommand(options: {
       '已更新 Claude Code 模型',
       [['模型', requestedModel]],
       [`后续启动 Claude Code pty 时会传入 \`--model ${requestedModel}\`。`, CLAUDE_PTY_RUNTIME_UPDATE_NOTE],
+      options.markdown,
+    );
+  }
+  if (activeRuntime === 'kimi') {
+    if (!options.args) {
+      const currentModel = resolveKimiRuntimeConfig(session, binding).model || 'default';
+      return buildCommandFields(
+        '当前 Kimi Code 模型',
+        [['模型', currentModel]],
+        [
+          '发送 `/model <kimi-model>` 可切换；发送 `/model default` 可回退到全局 Kimi 默认模型。',
+          '模型切换保存为后续 Kimi Code tmux 启动参数；不会向运行中的 TUI 注入模型切换命令。',
+        ],
+        options.markdown,
+      );
+    }
+
+    const requestedModel = options.args.trim();
+    if (!requestedModel) {
+      return buildCommandFields(
+        'Kimi Code 模型用法',
+        [['命令', '`/model <kimi-model>`']],
+        ['发送 `/model default` 可回退到全局 Kimi 默认模型。'],
+        options.markdown,
+      );
+    }
+    if (requestedModel === 'default') {
+      clearSessionKimiModelToml(session.id);
+      const updated = options.store.getSession(session.id);
+      return buildCommandFields(
+        '已恢复默认 Kimi Code 模型',
+        [['模型', resolveKimiRuntimeConfig(updated, binding).model || 'default']],
+        ['后续启动 Kimi Code tmux 时会跟随全局 Kimi 默认模型。'],
+        options.markdown,
+      );
+    }
+
+    setSessionKimiModelToml(session.id, requestedModel);
+    return buildCommandFields(
+      '已更新 Kimi Code 模型',
+      [['模型', requestedModel]],
+      [`后续启动 Kimi Code tmux 时会传入 \`--model ${requestedModel}\`。`],
       options.markdown,
     );
   }

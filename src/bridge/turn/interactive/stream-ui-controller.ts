@@ -219,6 +219,7 @@ export function createInteractiveStreamUiController(
             effectiveLastResponseAgeMs,
             params.streamState.statusNote,
             params.streamState.contextUsage,
+            params.streamState.thinkingNote,
           ),
     );
     syncSnapshot();

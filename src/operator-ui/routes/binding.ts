@@ -52,13 +52,15 @@ export async function handleUiBindingRoute(options: {
     const codexThreadId = asString(payload.codexThreadId);
     const claudeSessionId = asString(payload.claudeSessionId);
     const claudeCwd = asString(payload.claudeCwd);
-    if (!bindingId || (!bridgeSessionId && !codexThreadId && !(claudeSessionId && claudeCwd))) {
-      json(response, 400, { error: 'bindingId 以及 bridgeSessionId、codexThreadId 或 claudeSessionId+claudeCwd 不能为空。' });
+    const kimiSessionId = asString(payload.kimiSessionId);
+    const kimiCwd = asString(payload.kimiCwd);
+    if (!bindingId || (!bridgeSessionId && !codexThreadId && !(claudeSessionId && claudeCwd) && !(kimiSessionId && kimiCwd))) {
+      json(response, 400, { error: 'bindingId 以及 bridgeSessionId、codexThreadId、claudeSessionId+claudeCwd 或 kimiSessionId+kimiCwd 不能为空。' });
       return true;
     }
 
     const { app, store } = createBindingApplication(createStore);
-    const updated = app.switchBindingTarget({ bindingId, bridgeSessionId, codexThreadId, claudeSessionId, claudeCwd });
+    const updated = app.switchBindingTarget({ bindingId, bridgeSessionId, codexThreadId, claudeSessionId, claudeCwd, kimiSessionId, kimiCwd });
     json(response, 200, {
       ok: true,
       updated,
@@ -74,13 +76,15 @@ export async function handleUiBindingRoute(options: {
     const codexThreadId = asString(payload.codexThreadId);
     const claudeSessionId = asString(payload.claudeSessionId);
     const claudeCwd = asString(payload.claudeCwd);
-    if (!channelType || (!bridgeSessionId && !codexThreadId && !(claudeSessionId && claudeCwd))) {
-      json(response, 400, { error: 'channelType 以及 bridgeSessionId、codexThreadId 或 claudeSessionId+claudeCwd 不能为空。' });
+    const kimiSessionId = asString(payload.kimiSessionId);
+    const kimiCwd = asString(payload.kimiCwd);
+    if (!channelType || (!bridgeSessionId && !codexThreadId && !(claudeSessionId && claudeCwd) && !(kimiSessionId && kimiCwd))) {
+      json(response, 400, { error: 'channelType 以及 bridgeSessionId、codexThreadId、claudeSessionId+claudeCwd 或 kimiSessionId+kimiCwd 不能为空。' });
       return true;
     }
 
     const { app, store } = createBindingApplication(createStore);
-    const updated = app.setChannelDefaultTarget({ channelType, bridgeSessionId, codexThreadId, claudeSessionId, claudeCwd });
+    const updated = app.setChannelDefaultTarget({ channelType, bridgeSessionId, codexThreadId, claudeSessionId, claudeCwd, kimiSessionId, kimiCwd });
     json(response, 200, {
       ok: true,
       updated,

@@ -31,6 +31,10 @@ executable = "claude"
 reasoning_effort = "medium"
 idle_timeout_minutes = 0
 
+[runtime.kimi]
+model = ""
+provider = "tmux"
+
 [[channels]]
 id = "feishu-default"
 alias = "飞书"

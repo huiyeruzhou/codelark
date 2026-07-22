@@ -7,6 +7,7 @@ import type { BridgeSession, BridgeStore } from '../../domain/index.js';
 import { sendTmuxInterrupt } from '../tmux/runtime.js';
 import { resolveEffectiveRuntimeProvider } from '../session/support.js';
 import { getSessionRuntimeTmuxSessionName } from '../../domain/session-runtime.js';
+import { kimiTmuxSessionName } from '../../runtime/kimi/tmux-provider.js';
 import type { CommandThreadDisplay } from './thread-display.js';
 import type { ChannelChat, InboundMessage } from '../../domain/index.js';
 import { sessionLooksRunning } from '../session/command-use-cases/status-guards.js';
@@ -22,12 +23,11 @@ function getStopTmuxInterruptTarget(
   binding?: ChannelChat | null,
 ): string | undefined {
   if (!session) return undefined;
-  const tmuxSessionName = getSessionRuntimeTmuxSessionName(session);
-  return resolveEffectiveRuntimeProvider(session, binding).provider === 'tmux'
-    && Boolean(tmuxSessionName)
-    && sessionLooksRunning(session)
-    ? tmuxSessionName
-    : undefined;
+  const provider = resolveEffectiveRuntimeProvider(session, binding);
+  if (provider.provider !== 'tmux' || !sessionLooksRunning(session)) return undefined;
+  const tmuxSessionName = getSessionRuntimeTmuxSessionName(session)
+    || (provider.runtime === 'kimi' ? kimiTmuxSessionName(session.id) : undefined);
+  return tmuxSessionName || undefined;
 }
 
 export async function handleStopCommand(options: {

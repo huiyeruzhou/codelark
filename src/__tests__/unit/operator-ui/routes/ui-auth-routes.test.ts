@@ -79,6 +79,10 @@ function baseConfigV2(overrides: Partial<ConfigV2> = {}): ConfigV2 {
         reasoningEffort: 'medium',
         idleTimeoutMinutes: 0,
       },
+      kimi: {
+        model: '',
+        provider: 'tmux',
+      },
     },
     bridge: {
       defaultWorkspace: '~',

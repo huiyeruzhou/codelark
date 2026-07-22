@@ -57,6 +57,7 @@ export interface ChannelChat {
   runtimeBridgeSessionIds?: {
     codex?: string;
     claude?: string;
+    kimi?: string;
   };
   cloudDocumentChat?: {
     provider: 'feishu';

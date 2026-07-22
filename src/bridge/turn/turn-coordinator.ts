@@ -36,11 +36,11 @@ export function createTurnCoordinator(deps: TurnCoordinatorDeps = {}): TurnCoord
   }
 
   function runtimeOf(record: BridgeTurnTerminalRecord): BridgeTurnRuntime {
-    return record.runtime === 'claude' ? 'claude' : 'codex';
+    return record.runtime === 'claude' || record.runtime === 'kimi' ? record.runtime : 'codex';
   }
 
   function turnRuntime(turn: ActiveBridgeTurn): BridgeTurnRuntime {
-    return turn.runtime === 'claude' ? 'claude' : 'codex';
+    return turn.runtime === 'claude' || turn.runtime === 'kimi' ? turn.runtime : 'codex';
   }
 
   function turnAcceptsTerminal(turn: ActiveBridgeTurn, terminal: BridgeTurnTerminalRecord): boolean {
@@ -51,8 +51,9 @@ export function createTurnCoordinator(deps: TurnCoordinatorDeps = {}): TurnCoord
       return true;
     }
 
-    if (turnRuntime(turn) !== 'claude') return false;
-    if (turn.finalSource !== 'claude_task_complete') return false;
+    if (turnRuntime(turn) !== terminalRuntime) return false;
+    if (terminalRuntime === 'claude' && turn.finalSource !== 'claude_task_complete') return false;
+    if (terminalRuntime === 'kimi' && turn.finalSource !== 'kimi_task_complete') return false;
     const terminalThreadId = terminal.threadId || terminal.codexThreadId;
     if (turn.runtimeThreadId && terminalThreadId && turn.runtimeThreadId !== terminalThreadId) {
       return false;

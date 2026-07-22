@@ -80,4 +80,26 @@ describe('local-codex-terminal-router', () => {
     assert.deepEqual(result.unclaimed.map((item) => item.signature), ['other-1']);
     assert.deepEqual(claims, ['claude:claude-session-1:final']);
   });
+
+  it('routes Kimi terminal records through the same runtime claim interface', async () => {
+    const claims: string[] = [];
+    const coordinator: Pick<TurnCoordinator, 'claimRuntimeTerminal'> = {
+      claimRuntimeTerminal: async (terminal) => {
+        claims.push(`${terminal.runtime}:${terminal.threadId}:${terminal.text}`);
+        return { claimed: true };
+      },
+    };
+    const records = [
+      record('kimi-message-1', 'message', 'partial', 'kimi-turn-1'),
+      record('kimi-terminal-1', 'task_complete', 'final', 'kimi-turn-1'),
+      record('other-1', 'message', 'other turn', 'other-turn'),
+    ];
+
+    const result = await routeRuntimeRecords('session-1', 'kimi', 'session_kimi-1', records, coordinator);
+
+    assert.equal(result.terminalClaimed, true);
+    assert.deepEqual(result.claimed.map((item) => item.signature), ['kimi-message-1', 'kimi-terminal-1']);
+    assert.deepEqual(result.unclaimed.map((item) => item.signature), ['other-1']);
+    assert.deepEqual(claims, ['kimi:session_kimi-1:final']);
+  });
 });

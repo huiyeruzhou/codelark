@@ -712,6 +712,91 @@ describe('mirror-runtime pending deliveries', () => {
     assert.equal(state.mirrorSubscriptions.size, 0);
   });
 
+  it('uses the runtime-neutral clear hook for dangling Kimi mirror identities', async () => {
+    const bindings = [{
+      id: 'binding-1',
+      channelType: 'feishu-default',
+      chatId: 'chat-1',
+      bridgeSessionId: 'session-1',
+      active: true,
+    }];
+    const session = {
+      id: 'session-1',
+      runtime: {
+        activeRuntime: 'kimi' as const,
+        kimi: {
+          sessionId: 'missing-kimi-session',
+          cwd: '/tmp/clk-kimi',
+        } as { sessionId?: string; cwd?: string },
+      },
+      mirror_last_event_at: null,
+    };
+    const state = {
+      running: true,
+      adapters: new Map([
+        ['feishu-default', { channelType: 'feishu-default', provider: 'feishu', isRunning: () => false }],
+      ]),
+      mirrorSubscriptions: new Map(),
+      mirrorWakeTimer: null,
+      mirrorSyncInFlight: false,
+      activeTasks: new Map(),
+    };
+    const clearCalls: string[] = [];
+
+    runtime = createMirrorRuntime(() => state as never, {
+      watchDebounceMs: 0,
+      danglingThreadRetryLimit: 1,
+      failureSuspendThreshold: 3,
+      failureSuspendMs: 60_000,
+    }, {
+      mirrorSource: {
+        runtime: 'kimi',
+        findByThreadId: () => null,
+        readDelta: () => ({
+          records: [],
+          nextOffset: 0,
+          trailingText: '',
+          nextTurnId: null,
+          nextSpecialCallIds: [],
+          unknownKinds: [],
+        }),
+      },
+      runtimeLabel: 'Kimi',
+      nowIso: () => '2026-04-21T10:00:00.000Z',
+      describeUnknownError: (error) => (error instanceof Error ? error.message : String(error)),
+      listChannelChats: () => bindings,
+      getSession: (sessionId) => (sessionId === session.id ? session : null),
+      clearSessionMirrorThreadId: (sessionId) => {
+        clearCalls.push(sessionId);
+        session.runtime.kimi = {};
+      },
+      clearSessionCodexThreadId: () => {
+        throw new Error('Codex clear hook should not run for Kimi mirror');
+      },
+      getCodexSessionByThreadIdSafe: () => null,
+      hasSessionMirrorSource: (candidate) => Boolean(candidate?.runtime?.kimi?.sessionId),
+      getSessionMirrorThreadId: (candidate) => candidate.runtime?.kimi?.sessionId,
+      getSessionMirrorCwd: (candidate) => candidate.runtime?.kimi?.cwd,
+      getMirrorSourceSummary: (source, threadId, cwd) => source.findByThreadId(threadId, cwd || undefined),
+      syncMirrorSessionStateSafe: () => {},
+      filterSuppressedMirrorRecords: (_sessionId, records) => records,
+      observeSessionHealthRecords: () => {},
+      consumeMirrorRecords: (subscription, records) => consumeMirrorRecords(subscription, records),
+      flushTimedOutMirrorTurn: (subscription) => flushTimedOutMirrorTurn(subscription, MIRROR_TEST_BUFFER_TIMEOUT_MS, Date.now()),
+      hasPendingMirrorWork: (subscription) => hasPendingMirrorWork(subscription),
+      consumeBufferedMirrorTurns: (subscription) => consumeBufferedMirrorTurns(subscription, MIRROR_TEST_BUFFER_TIMEOUT_MS, Date.now()),
+      stopMirrorStreaming: () => {},
+      deliverMirrorTurns: async () => ({ deliveredCount: 0 }),
+    });
+
+    await runtime.reconcileMirrorSubscriptions();
+    await runtime.reconcileMirrorSubscriptions();
+
+    assert.deepEqual(clearCalls, ['session-1']);
+    assert.equal(session.runtime.kimi.sessionId, undefined);
+    assert.equal(state.mirrorSubscriptions.size, 0);
+  });
+
   it('logs slow mirror reconcile stages around downstream routing and delivery waits', async () => {
     const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-mirror-runtime-'));
     const filePath = path.join(tempRoot, 'rollout.jsonl');

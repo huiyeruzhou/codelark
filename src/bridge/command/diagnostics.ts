@@ -28,6 +28,7 @@ import {
   getSessionActiveRuntime,
   getSessionClaudeSessionId,
   getSessionCodexTitle,
+  getSessionKimiSessionId,
   getSessionWorkingDirectory,
 } from '../../domain/session-runtime.js';
 import type { ChannelChat, InboundMessage, OutboundAttachment, OutboundRichCard } from '../../domain/index.js';
@@ -49,7 +50,9 @@ import {
   resolveEffectiveNetworkAccess,
   resolveEffectiveReasoningEffort,
   resolveEffectiveSandboxMode,
+  resolveKimiRuntimeConfig,
 } from '../session/support.js';
+import type { RuntimeAgent } from '../../domain/session.js';
 import {
   formatNetworkAccess,
   formatSessionCodexProvider,
@@ -101,17 +104,41 @@ function formatHistoryLimitLabel(limit: number, configuredLimit: number): string
   return limit === configuredLimit ? `配置 ${configuredLimit}` : `本次 ${limit}（配置 ${configuredLimit}）`;
 }
 
-function currentRuntimeFieldLabel(runtime: 'codex' | 'claude', settingKey: string): string {
+function runtimeLabel(runtime: RuntimeAgent): string {
+  if (runtime === 'claude') return 'Claude Code';
+  if (runtime === 'kimi') return 'Kimi Code';
+  return 'Codex';
+}
+
+function runtimeIdentityFieldName(runtime: RuntimeAgent): string {
+  if (runtime === 'claude') return 'claude_session_id';
+  if (runtime === 'kimi') return 'kimi_session_id';
+  return 'codex_thread_id';
+}
+
+function runtimeIdentityMissingLabel(runtime: RuntimeAgent): string {
+  if (runtime === 'claude' || runtime === 'kimi') return `${runtimeLabel(runtime)} session id 未绑定`;
+  return 'Codex thread id 未绑定';
+}
+
+function currentRuntimeFieldLabel(runtime: RuntimeAgent, settingKey: string): string {
   const definition = runtimeSettingDefinitions(runtime, { sessionWritableOnly: true })
     .find((entry) => entry.key === settingKey);
   return definition ? settingFormLabel(definition) : settingKey;
 }
 
 function currentRuntimeFields(
-  runtime: 'codex' | 'claude',
+  runtime: RuntimeAgent,
   binding: ChannelChat,
   session: BridgeSession,
 ): Array<[string, string]> {
+  if (runtime === 'kimi') {
+    const kimiConfig = resolveKimiRuntimeConfig(session, binding);
+    return [
+      [currentRuntimeFieldLabel('kimi', 'kimiDefaultModel'), kimiConfig.model || 'default'],
+      [currentRuntimeFieldLabel('kimi', 'kimiProvider'), kimiConfig.provider],
+    ];
+  }
   if (runtime === 'claude') {
     const claudeConfig = resolveClaudeRuntimeConfig(session, binding);
     const yoloMode = createConfigService({ migrate: false })
@@ -214,9 +241,9 @@ function buildHistoryMessagesRichCard(
 
 function filterHistoryMessagesForRuntime(
   messages: Array<{ role: string; content: string }>,
-  runtime: 'codex' | 'claude' | undefined,
+  runtime: RuntimeAgent | undefined,
 ): Array<{ role: string; content: string }> {
-  if (runtime !== 'claude') return messages;
+  if (runtime !== 'claude' && runtime !== 'kimi') return messages;
   return messages.filter((message) => message.role !== 'user');
 }
 
@@ -256,7 +283,7 @@ export function handleCurrentCommand(options: {
   store: BridgeStore;
   threadDisplay: CommandThreadDisplay;
   markdown: boolean;
-  previewRuntime?: 'codex' | 'claude';
+  previewRuntime?: RuntimeAgent;
 }): string {
   const binding = options.binding;
   if (!binding) {
@@ -287,7 +314,10 @@ export function handleCurrentCommand(options: {
   const codexThreadId = getCodexThreadId(session, binding);
   const claudeSessionId = getSessionClaudeSessionId(session) || '';
   const localCodexThreadId = resolveLocalCodexThreadId(session, binding, 'current command');
-  const localRuntimeThreadId = activeRuntime === 'claude' ? claudeSessionId : localCodexThreadId;
+  const kimiSessionId = getSessionKimiSessionId(session) || '';
+  const localRuntimeThreadId = activeRuntime === 'kimi'
+    ? kimiSessionId
+    : activeRuntime === 'claude' ? claudeSessionId : localCodexThreadId;
   const threadInfo = options.threadDisplay.binding(displayBinding);
   const codexTitle = getSessionCodexTitle(session)
     || (codexThreadId ? getCodexSessionByThreadIdSafe(codexThreadId, 'current codex title')?.title : '')
@@ -299,12 +329,16 @@ export function handleCurrentCommand(options: {
     : '普通会话';
   const runtimeFields = currentRuntimeFields(activeRuntime, binding, session);
   return buildCommandFields(
-    options.previewRuntime ? `当前会话（配置 ${activeRuntime === 'claude' ? 'Claude Code' : 'Codex'}）` : '当前会话',
+    options.previewRuntime ? `当前会话（配置 ${runtimeLabel(activeRuntime)}）` : '当前会话',
     [
       ['标题', threadInfo.title],
       ['name', sessionName || '-'],
-      ['runtime', activeRuntime === 'claude' ? 'Claude Code' : 'Codex'],
-      ...(activeRuntime === 'claude'
+      ['runtime', runtimeLabel(activeRuntime)],
+      ...(activeRuntime === 'kimi'
+        ? [
+          ['kimi_session_id', kimiSessionId || '-'] as [string, string],
+        ]
+        : activeRuntime === 'claude'
         ? [
           ['claude_session_id', claudeSessionId || '-'] as [string, string],
         ]
@@ -322,7 +356,7 @@ export function handleCurrentCommand(options: {
     ],
     [
       localRuntimeThreadId
-        ? `当前聊天已绑定到一条共享 ${activeRuntime === 'claude' ? 'Claude Code' : 'Codex'} 会话，直接发送消息即可继续。`
+        ? `当前聊天已绑定到一条共享 ${runtimeLabel(activeRuntime)} 会话，直接发送消息即可继续。`
         : session?.session_type === 'draft'
           ? '当前聊天正在使用临时草稿线程（等同 `/t 0`）。可直接发送消息，或用 `/t` / `/new proj1` / `/new 绝对路径` 切换到正式会话。'
           : '当前聊天正在使用 IM 会话。可直接发送消息继续；如需接管本地会话，可先发送 `/t`，再用 `/t 1` 接管。',
@@ -337,7 +371,7 @@ export function buildCurrentCommandRichCard(options: {
   binding: ChannelChat | null;
   store: BridgeStore;
   threadDisplay: CommandThreadDisplay;
-  previewRuntime?: 'codex' | 'claude';
+  previewRuntime?: RuntimeAgent;
 }): OutboundRichCard | undefined {
   const binding = options.binding;
   if (!binding) return undefined;
@@ -345,11 +379,12 @@ export function buildCurrentCommandRichCard(options: {
   if (!session) return undefined;
 
   const activeRuntime = options.previewRuntime || getSessionActiveRuntime(session) || 'codex';
-  const runtimeLabel = activeRuntime === 'claude' ? 'Claude Code' : 'Codex';
+  const runtimeDisplayLabel = runtimeLabel(activeRuntime);
   const displayBinding = binding.bridgeSessionId === session.id ? binding : { ...binding, bridgeSessionId: session.id };
   const codexThreadId = getCodexThreadId(session, binding);
   const claudeSessionId = getSessionClaudeSessionId(session) || '';
-  const runtimeThreadId = activeRuntime === 'claude' ? claudeSessionId : codexThreadId;
+  const kimiSessionId = getSessionKimiSessionId(session) || '';
+  const runtimeThreadId = activeRuntime === 'kimi' ? kimiSessionId : activeRuntime === 'claude' ? claudeSessionId : codexThreadId;
   const threadInfo = options.threadDisplay.binding(displayBinding);
   const codexTitle = getSessionCodexTitle(session)
     || (codexThreadId ? getCodexSessionByThreadIdSafe(codexThreadId, 'current card codex title')?.title : '')
@@ -370,14 +405,17 @@ export function buildCurrentCommandRichCard(options: {
     id: 'cur_runtime',
     placeholder: 'runtime',
     selectedCallbackData: buildCommandCallbackData(`/current-runtime ${activeRuntime}`),
-    options: [
-      { text: 'Codex', callbackData: buildCommandCallbackData('/current-runtime codex') },
-      { text: 'Claude Code', callbackData: buildCommandCallbackData('/current-runtime claude') },
-    ],
-  };
+	    options: [
+	      { text: 'Codex', callbackData: buildCommandCallbackData('/current-runtime codex') },
+	      { text: 'Claude Code', callbackData: buildCommandCallbackData('/current-runtime claude') },
+	      { text: 'Kimi Code', callbackData: buildCommandCallbackData('/current-runtime kimi') },
+	    ],
+	  };
   return {
-    title: `${runtimeLabel} ${activeRuntime === 'claude' ? threadInfo.title : codexTitle || threadInfo.title}`,
-    subtitle: runtimeThreadId ? `${activeRuntime}_thread_id: ${runtimeThreadId}` : `${runtimeLabel} thread id 未绑定`,
+    title: `${runtimeDisplayLabel} ${activeRuntime === 'codex' ? codexTitle || threadInfo.title : threadInfo.title}`,
+    subtitle: runtimeThreadId
+      ? `${runtimeIdentityFieldName(activeRuntime)}: ${runtimeThreadId}`
+      : runtimeIdentityMissingLabel(activeRuntime),
     template: 'green',
     updateKey: buildThreadCardUpdateKey('current', options.msg.address.channelType, options.msg.address.chatId),
     updateTtlMs: null,
@@ -418,7 +456,7 @@ export function buildCurrentCommandRichCard(options: {
       options: [],
     },
     footer: [
-      `当前 agent：${currentTag(runtimeLabel, 'orange')}`,
+      `当前 agent：${currentTag(runtimeDisplayLabel, 'orange')}`,
       '顶部 runtime 下拉会立即切换运行时并刷新卡片；配置栏保存后只更新当前 runtime 的配置项。',
     ],
   };
@@ -427,7 +465,7 @@ export function buildCurrentCommandRichCard(options: {
 function resolveCurrentCardSession(
   store: BridgeStore,
   binding: ChannelChat,
-  previewRuntime?: 'codex' | 'claude',
+  previewRuntime?: RuntimeAgent,
 ): BridgeSession | undefined {
   const session = store.getSession(binding.bridgeSessionId);
   if (!session || !previewRuntime) return session || undefined;
@@ -507,7 +545,7 @@ export async function handleHistoryCommand(options: {
 
   if (historyView === 'json' || historyView === 'file') {
     if (!sessionTranscript) {
-      return '当前会话没有可直接发送的 session JSONL 文件。只有已落盘到 Codex 或 Claude Code session 文件的线程才能使用 `/his json`。';
+      return '当前会话没有可直接发送的 session JSONL 文件。只有已落盘到 Codex、Claude Code 或 Kimi Code session 文件的线程才能使用 `/his json`。';
     }
     const attachment: OutboundAttachment = {
       kind: 'file',
@@ -581,11 +619,11 @@ export async function handleHistoryCommand(options: {
 }
 
 function resolveHistoryAssistantRoleLabel(
-  transcriptRuntime: 'codex' | 'claude' | undefined,
+  transcriptRuntime: RuntimeAgent | undefined,
   session: BridgeSession | null,
 ): string {
   const runtime = transcriptRuntime || getSessionActiveRuntime(session) || 'codex';
-  return runtime === 'claude' ? 'Claude Code' : 'Codex';
+  return runtimeLabel(runtime);
 }
 
 export function handleCatCommand(options: {

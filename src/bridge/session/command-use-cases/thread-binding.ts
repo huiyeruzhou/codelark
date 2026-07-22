@@ -1,5 +1,6 @@
 import type { BaseChannelAdapter } from '../../../channels/contracts.js';
 import type { BridgeSession, BridgeStore, ChannelChat, InboundMessage } from '../../../domain/index.js';
+import type { RuntimeAgent } from '../../../domain/session.js';
 import {
   getSessionActiveRuntime,
   getSessionRuntimeTmuxSessionName,
@@ -8,6 +9,7 @@ import {
 import type { SessionRegistryService } from '../registry.js';
 import { getBridgeSessionDisplayTitle } from '../display/session-display-query.js';
 import { cleanupRuntimeTmuxSession } from '../../tmux/runtime.js';
+import { kimiTmuxSessionName } from '../../../runtime/kimi/tmux-provider.js';
 import * as router from '../channel-router.js';
 import { clearPendingTakeoverConfirmation } from '../../command/takeover-confirmations.js';
 import {
@@ -33,6 +35,7 @@ import {
   findBridgeOnlySessionByToken,
   findBridgeSessionByClaudeIdentity,
   findBridgeSessionByCodexThread,
+  findBridgeSessionByKimiIdentity,
   resolveCurrentCodexThreadTarget,
   selectDirectThreadTarget,
 } from './thread-targets.js';
@@ -43,10 +46,12 @@ import {
 } from './types.js';
 
 async function cleanupBridgeSessionRuntimeTmuxBestEffort(session: BridgeSession | null | undefined, reason: string): Promise<void> {
-  const sessionName = getSessionRuntimeTmuxSessionName(session);
+  const runtime = getSessionActiveRuntime(session) || 'codex';
+  const sessionName = getSessionRuntimeTmuxSessionName(session)
+    || (runtime === 'kimi' && session ? kimiTmuxSessionName(session.id) : undefined);
   if (!sessionName) return;
   const cleanup = await cleanupRuntimeTmuxSession({
-    runtime: getSessionActiveRuntime(session) || 'codex',
+    runtime,
     sessionName,
   });
   if (cleanup.error) {
@@ -57,6 +62,12 @@ async function cleanupBridgeSessionRuntimeTmuxBestEffort(session: BridgeSession 
       error: cleanup.error,
     });
   }
+}
+
+function bindingRuntimeIdentityFieldName(display: ReturnType<CommandThreadDisplay['binding']>): string {
+  return display.originator === 'Claude Code' || display.originator === 'Kimi Code'
+    ? 'session_id'
+    : 'thread_id';
 }
 
 export async function handleThreadBindingCommand(options: {
@@ -96,7 +107,7 @@ export async function handleThreadBindingCommand(options: {
   if (subcommand === 'unbind') {
     const currentBinding = options.store.getChannelChat(options.msg.address.channelType, options.msg.address.chatId);
     if (!currentBinding) {
-      const binding = router.createBinding(options.msg.address);
+      const binding = router.createBinding(options.msg.address, undefined, undefined, { forceNewDraftSession: true });
       auditCommandBindingChange(
         options.store,
         'web_unbind',
@@ -122,7 +133,7 @@ export async function handleThreadBindingCommand(options: {
     const previousSession = options.store.getSession(currentBinding.bridgeSessionId);
     options.store.deleteChannelChat(currentBinding.id);
     options.deps.onBindingRemoved?.(currentBinding);
-    const binding = router.createBinding(options.msg.address);
+    const binding = router.createBinding(options.msg.address, undefined, undefined, { forceNewDraftSession: true });
     auditCommandBindingChange(
       options.store,
       'web_unbind',
@@ -154,7 +165,7 @@ export async function handleThreadBindingCommand(options: {
     const targetToken = subArgs.trim();
     let target: {
       threadId?: string;
-      runtime?: 'codex' | 'claude';
+      runtime?: RuntimeAgent;
       title?: string;
       cwd?: string;
       index?: number;
@@ -215,9 +226,10 @@ export async function handleThreadBindingCommand(options: {
           };
         }
         const session = options.store.getSession(selected.binding.bridgeSessionId);
+        const activeRuntime = getSessionActiveRuntime(session) || 'codex';
         target = {
           threadId,
-          runtime: options.store.getSession(selected.binding.bridgeSessionId)?.runtime?.activeRuntime === 'claude' ? 'claude' : 'codex',
+          runtime: activeRuntime === 'claude' || activeRuntime === 'kimi' ? activeRuntime : 'codex',
           title: options.threadDisplay.binding(selected.binding).title,
           cwd: getSessionWorkingDirectory(session),
           bridgeSessionId: selected.binding.bridgeSessionId,
@@ -292,9 +304,9 @@ export async function handleThreadBindingCommand(options: {
           };
         }
         if (selected.index !== undefined) {
-          return { response: `会话列表没有第 ${selected.index} 条。先发送 \`/t\` 查看列表，或直接使用 thread_id / bridge_id / 名称。` };
+          return { response: `会话列表没有第 ${selected.index} 条。先发送 \`/t\` 查看列表，或直接使用 thread/session id / bridge_id / 名称。` };
         }
-        return { response: `没有找到对应会话：${targetToken}。/t 列表按“序号 > thread_id > bridge_id > 名称”解析；先发送 \`/t\` 刷新列表后优先用序号归档。` };
+        return { response: `没有找到对应会话：${targetToken}。/t 列表按“序号 > thread/session id > bridge_id > 名称”解析；先发送 \`/t\` 刷新列表后优先用序号归档，或用 \`/t codex\`、\`/t claude\`、\`/t kimi\` 切换 runtime 列表。` };
       } else {
         target = {
           threadId: selected.threadId,
@@ -309,8 +321,8 @@ export async function handleThreadBindingCommand(options: {
       if (!target.threadId) {
         return {
           response: target.bridgeSessionId
-            ? '当前聊天绑定的不是可归档的本地会话。请发送 `/t archive <序号|thread-id|bridge-id|名称>` 指定要归档的会话。'
-            : '当前聊天还没有绑定本地会话。请发送 `/t archive <序号|thread-id|bridge-id|名称>` 指定要归档的会话。',
+            ? '当前聊天绑定的不是可归档的本地会话。请发送 `/t archive <序号|thread/session-id|bridge-id|名称>` 指定要归档的会话。'
+            : '当前聊天还没有绑定本地会话。请发送 `/t archive <序号|thread/session-id|bridge-id|名称>` 指定要归档的会话。',
         };
       }
     }
@@ -318,6 +330,45 @@ export async function handleThreadBindingCommand(options: {
     const threadId = target.threadId;
     if (!threadId) {
       return { response: '没有找到对应的本地会话。先发送 `/t` 查看列表，再用 `/t archive 1` 归档。' };
+    }
+    if (target.runtime === 'kimi') {
+      const cwd = target.cwd;
+      if (!cwd) return { response: '归档本地 Kimi Code 会话失败：缺少 cwd。' };
+      const bridgeSessionBeforeArchive = findBridgeSessionByKimiIdentity(options.store, threadId, cwd);
+      const bindingsBeforeArchive = options.store.listChannelChats()
+        .filter((binding) => binding.bridgeSessionId === bridgeSessionBeforeArchive?.id);
+      let result: ReturnType<SessionRegistryService['archiveKimiThread']>;
+      try {
+        await cleanupBridgeSessionRuntimeTmuxBestEffort(bridgeSessionBeforeArchive, 'kimi archive');
+        result = createCommandSessionRegistry(options.store).archiveKimiThread(threadId, cwd);
+      } catch (error) {
+        return { response: toUserVisibleBindingError(error, '归档本地 Kimi Code 会话失败。') };
+      }
+      for (const binding of bindingsBeforeArchive) {
+        options.deps.onBindingRemoved?.(binding);
+      }
+      await reconcileMirrorSubscriptionsBestEffort(options.deps, 'kimi archive');
+      const activeAfterArchive = options.store.getChannelChat(options.msg.address.channelType, options.msg.address.chatId);
+      const richCard = buildThreadCardRefresh(options.threadDisplay, options.deps.threadCardRefreshScope, options.msg.address, options.deps.threadCardSelectedId);
+      return {
+        response: buildCommandFields(
+          '已归档本地 Kimi Code 会话',
+          [
+            ['标题', target.title || threadId.slice(0, 8)],
+            ['session_id', threadId],
+            ['目录', formatCommandPath(result.cwd)],
+            ['解除绑定', `${bindingsBeforeArchive.length}`],
+            ['清理 Bridge 会话', `${result.deletedBridgeSessionIds.length}`],
+            ['当前', activeAfterArchive ? options.threadDisplay.binding(activeAfterArchive).title : '未绑定'],
+          ],
+          activeAfterArchive
+            ? ['当前聊天仍绑定到上面显示的会话。']
+            : ['当前聊天已解除该 Kimi Code 会话绑定；之后直接发送文本会自动进入临时 BridgeSession。'],
+          options.markdown,
+        ),
+        richCard,
+        threadTableCardScope: richCard && options.deps.threadCardRefreshScope ? options.deps.threadCardRefreshScope : undefined,
+      };
     }
     if (target.runtime === 'claude') {
       const cwd = target.cwd;
@@ -426,6 +477,7 @@ export async function handleThreadBindingCommand(options: {
         groupRenameStatus = '当前通道不支持修改群聊名称';
       }
     }
+    const display = options.threadDisplay.binding(binding);
     return {
       response: buildCommandFields(
         '当前线程已重命名',
@@ -433,7 +485,7 @@ export async function handleThreadBindingCommand(options: {
           ['新标题', parsed.name],
           ['群聊名称', groupRenameStatus],
           ['bridge_id', binding.bridgeSessionId.slice(0, 8)],
-          ['thread_id', options.threadDisplay.bindingThreadId(binding) || '-'],
+          [bindingRuntimeIdentityFieldName(display), options.threadDisplay.bindingThreadId(binding) || '-'],
         ],
         [],
         options.markdown,
@@ -441,5 +493,5 @@ export async function handleThreadBindingCommand(options: {
     };
   }
 
-  return { response: '用法：/t、/t codex、/t claude、/t <序号|thread-id|bridge-id|名称>、/t archive [序号|thread-id|bridge-id|名称]、/t rename <名称>' };
+  return { response: '用法：/t、/t codex、/t claude、/t kimi、/t <序号|thread/session-id|bridge-id|名称>、/t archive [序号|thread/session-id|bridge-id|名称]、/t rename <名称>' };
 }

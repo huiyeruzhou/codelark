@@ -52,6 +52,16 @@ test('builds and formats streaming metadata tags', () => {
     'model:claude-sonnet-test',
   ]);
 
+  assert.deepEqual(buildRuntimeStreamTags({
+    runtime: 'kimi',
+    reasoningEffort: 'default',
+    model: 'moonshot-v1',
+  }), [
+    'kimi',
+    'effort:default',
+    'model:moonshot-v1',
+  ]);
+
   assert.equal(formatStreamTagLabel('effort:medium'), 'medium');
   assert.equal(formatStreamTagLabel('reasoning:medium'), 'medium');
   assert.equal(formatStreamTagLabel('model:default'), 'default');

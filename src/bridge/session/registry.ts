@@ -21,6 +21,8 @@ import {
   getSessionActiveRuntime,
   getSessionClaudeCwd,
   getSessionClaudeSessionId,
+  getSessionKimiCwd,
+  getSessionKimiSessionId,
 } from '../../domain/session-runtime.js';
 
 export {
@@ -62,9 +64,21 @@ export interface ClaudeThreadRegistryPort {
   archiveThread?(claudeSessionId: string, cwd: string): boolean;
 }
 
+export interface KimiThreadRecord {
+  kimiSessionId: string;
+  title: string;
+  cwd: string;
+}
+
+export interface KimiThreadRegistryPort {
+  getThread(kimiSessionId: string, cwd: string): KimiThreadRecord | null;
+  archiveThread?(kimiSessionId: string, cwd: string): boolean;
+}
+
 export interface SessionRegistryOptions {
   codexThreads?: CodexThreadRegistryPort;
   claudeThreads?: ClaudeThreadRegistryPort;
+  kimiThreads?: KimiThreadRegistryPort;
   readDefaultModel?: () => string | null | undefined;
   defaultWorkingDirectory?: () => string;
 }
@@ -82,6 +96,13 @@ export interface ArchiveCodexThreadResult {
 
 export interface ArchiveClaudeThreadResult {
   claudeSessionId: string;
+  cwd: string;
+  deletedBridgeSessions: BridgeSession[];
+  deletedBridgeSessionIds: string[];
+}
+
+export interface ArchiveKimiThreadResult {
+  kimiSessionId: string;
   cwd: string;
   deletedBridgeSessions: BridgeSession[];
   deletedBridgeSessionIds: string[];
@@ -150,6 +171,11 @@ export class SessionRegistryService {
     return updateChannelDefaultTarget(this.store, channelType, session.id);
   }
 
+  setChannelDefaultKimiThread(channelType: string, kimiSessionId: string, cwd: string): ChannelDefaultTargetSummary {
+    const session = this.materializeKimiThread(kimiSessionId, cwd);
+    return updateChannelDefaultTarget(this.store, channelType, session.id);
+  }
+
   removeChannelDefaultTarget(channelType: string): void {
     removeChannelDefaultTarget(this.store, channelType);
   }
@@ -177,6 +203,16 @@ export class SessionRegistryService {
       && getSessionActiveRuntime(session) === 'claude'
       && getSessionClaudeSessionId(session) === claudeSessionId
       && getSessionClaudeCwd(session) === cwd
+    )) || null;
+  }
+
+  findVisibleBridgeSessionByKimiThread(kimiSessionId: string, cwd: string): BridgeSession | null {
+    if (!kimiSessionId || !cwd) return null;
+    return this.store.listSessions().find((session) => (
+      isVisibleBridgeSession(session)
+      && getSessionActiveRuntime(session) === 'kimi'
+      && getSessionKimiSessionId(session) === kimiSessionId
+      && getSessionKimiCwd(session) === cwd
     )) || null;
   }
 
@@ -236,6 +272,40 @@ export class SessionRegistryService {
     return this.store.getSession(session.id) || session;
   }
 
+  materializeKimiThread(kimiSessionId: string, cwd: string): BridgeSession {
+    const existing = this.findVisibleBridgeSessionByKimiThread(kimiSessionId, cwd);
+    if (existing) return existing;
+
+    const localThread = this.options.kimiThreads?.getThread(kimiSessionId, cwd) || null;
+    if (!localThread) {
+      throw new Error('指定的 Kimi Code 会话不存在。');
+    }
+
+    const session = this.store.createSession(
+      localThread.title || '',
+      this.options.readDefaultModel?.() || 'default',
+      undefined,
+      localThread.cwd || this.options.defaultWorkingDirectory?.() || process.cwd(),
+      'normal',
+      { activeRuntime: 'kimi' },
+    );
+    this.store.updateSession(session.id, {
+      name: localThread.title || session.name,
+      runtime: {
+        activeRuntime: 'kimi',
+        kimi: {
+          sessionId: localThread.kimiSessionId,
+          cwd: localThread.cwd,
+          provider: 'tmux',
+        },
+        general: {
+          workingDirectory: localThread.cwd,
+        },
+      },
+    }, { touch: false });
+    return this.store.getSession(session.id) || session;
+  }
+
   renameBridgeSession(bridgeSessionId: string, name: string | undefined): BridgeSession {
     const session = this.getVisibleBridgeSession(bridgeSessionId);
     this.store.updateSession(session.id, { name });
@@ -249,6 +319,11 @@ export class SessionRegistryService {
 
   renameClaudeThread(claudeSessionId: string, cwd: string, name: string | undefined): BridgeSession {
     const session = this.materializeClaudeThread(claudeSessionId, cwd);
+    return this.renameBridgeSession(session.id, name);
+  }
+
+  renameKimiThread(kimiSessionId: string, cwd: string, name: string | undefined): BridgeSession {
+    const session = this.materializeKimiThread(kimiSessionId, cwd);
     return this.renameBridgeSession(session.id, name);
   }
 
@@ -312,6 +387,33 @@ export class SessionRegistryService {
 
     return {
       claudeSessionId,
+      cwd,
+      deletedBridgeSessions: linkedSessions,
+      deletedBridgeSessionIds: linkedSessions.map((session) => session.id),
+    };
+  }
+
+  archiveKimiThread(kimiSessionId: string, cwd: string): ArchiveKimiThreadResult {
+    if (!this.options.kimiThreads?.archiveThread) {
+      throw new Error('Local Kimi archive is not configured.');
+    }
+    const archived = this.options.kimiThreads.archiveThread(kimiSessionId, cwd);
+    if (!archived) {
+      throw new Error('指定的 Kimi Code 会话不存在。');
+    }
+
+    const linkedSessions = this.store.listSessions()
+      .filter((session) => (
+        getSessionActiveRuntime(session) === 'kimi'
+        && getSessionKimiSessionId(session) === kimiSessionId
+        && getSessionKimiCwd(session) === cwd
+      ));
+    for (const session of linkedSessions) {
+      this.store.deleteSession(session.id);
+    }
+
+    return {
+      kimiSessionId,
       cwd,
       deletedBridgeSessions: linkedSessions,
       deletedBridgeSessionIds: linkedSessions.map((session) => session.id),

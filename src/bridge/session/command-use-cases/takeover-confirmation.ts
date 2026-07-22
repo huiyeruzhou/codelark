@@ -4,6 +4,12 @@ import { formatCommandPath } from '../../command/presentation.js';
 import { formatBindingChatLabel } from '../display/channel-label.js';
 import type { CommandThreadDisplay } from '../../command/thread-display.js';
 
+function displayRuntimeIdentityField(display: ReturnType<CommandThreadDisplay['binding']>): string {
+  return display.originator === 'Claude Code' || display.originator === 'Kimi Code'
+    ? 'session_id'
+    : 'thread_id';
+}
+
 export function buildTakeoverConfirmationCard(params: {
   commandText: string;
   conflict: ChannelChat;
@@ -18,7 +24,7 @@ export function buildTakeoverConfirmationCard(params: {
           ['当前绑定', formatBindingChatLabel(params.conflict)],
           ['会话', display.title],
           ['目录', formatCommandPath(display.cwd)],
-          ['thread_id', display.threadId || '-'],
+          [displayRuntimeIdentityField(display), display.threadId || '-'],
         ],
       },
       {

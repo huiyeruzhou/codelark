@@ -24,6 +24,10 @@ check() {
   fi
 }
 
+note() {
+  echo "[INFO] $1"
+}
+
 toml_value() {
   local key="$1"
   awk -F= -v key="$key" '
@@ -62,14 +66,7 @@ CODELARK_AGENT="${CODELARK_AGENT:-codex}"
 echo "Runtime agent: $CODELARK_AGENT"
 echo ""
 
-# --- Codex checks ---
-if command -v codex &>/dev/null; then
-  CODEX_VER=$(codex --version 2>/dev/null || echo "unknown")
-  check "Codex CLI available (${CODEX_VER})" 0
-else
-  check "Codex CLI available (not found in PATH)" 1
-fi
-
+# --- Package dependency checks ---
 CODEX_SDK="$SKILL_DIR/node_modules/@openai/codex-sdk"
 if [ -d "$CODEX_SDK" ]; then
   check "@openai/codex-sdk installed" 0
@@ -77,19 +74,55 @@ else
   check "@openai/codex-sdk installed (not found; run 'npm install' in $SKILL_DIR)" 1
 fi
 
-CODEX_AUTH=1
-if [ -n "${CODELARK_CODEX_API_KEY:-}" ] || [ -n "${CODEX_API_KEY:-}" ] || [ -n "${OPENAI_API_KEY:-}" ]; then
-  CODEX_AUTH=0
-elif command -v codex &>/dev/null; then
-  CODEX_AUTH_OUT=$(codex auth status 2>&1 || true)
-  if echo "$CODEX_AUTH_OUT" | grep -qiE 'logged.in|authenticated'; then
-    CODEX_AUTH=0
+# --- Codex runtime checks ---
+if [ "$CODELARK_AGENT" = "codex" ]; then
+  if command -v codex &>/dev/null; then
+    CODEX_VER=$(codex --version 2>/dev/null || echo "unknown")
+    check "Codex CLI available (${CODEX_VER})" 0
+  else
+    check "Codex CLI available (not found in PATH)" 1
   fi
-fi
-if [ "$CODEX_AUTH" = "0" ]; then
-  check "Codex auth available (API key or login)" 0
+
+  CODEX_AUTH=1
+  if [ -n "${CODELARK_CODEX_API_KEY:-}" ] || [ -n "${CODEX_API_KEY:-}" ] || [ -n "${OPENAI_API_KEY:-}" ]; then
+    CODEX_AUTH=0
+  elif command -v codex &>/dev/null; then
+    CODEX_AUTH_OUT=$(codex auth status 2>&1 || true)
+    if echo "$CODEX_AUTH_OUT" | grep -qiE 'logged.in|authenticated'; then
+      CODEX_AUTH=0
+    fi
+  fi
+  if [ "$CODEX_AUTH" = "0" ]; then
+    check "Codex auth available (API key or login)" 0
+  else
+    check "Codex auth available (set OPENAI_API_KEY or run 'codex auth login')" 1
+  fi
 else
-  check "Codex auth available (set OPENAI_API_KEY or run 'codex auth login')" 1
+  note "Skipping Codex CLI/auth checks for runtime agent '$CODELARK_AGENT'."
+fi
+
+# --- Kimi runtime checks ---
+if [ "$CODELARK_AGENT" = "kimi" ]; then
+  if command -v kimi &>/dev/null; then
+    KIMI_VER=$(kimi --version 2>/dev/null || echo "unknown")
+    check "Kimi CLI available (${KIMI_VER})" 0
+  else
+    check "Kimi CLI available (not found in PATH)" 1
+  fi
+
+  if command -v tmux &>/dev/null; then
+    TMUX_VER=$(tmux -V 2>/dev/null || echo "unknown")
+    check "tmux available for Kimi provider (${TMUX_VER})" 0
+  else
+    check "tmux available for Kimi provider (not found in PATH)" 1
+  fi
+
+  KIMI_HOME="${KIMI_CODE_HOME:-$HOME/.kimi-code}"
+  if [ -d "$KIMI_HOME" ]; then
+    note "Kimi Code home: $KIMI_HOME"
+  else
+    note "Kimi Code home not found yet: $KIMI_HOME"
+  fi
 fi
 
 # --- dist/daemon.mjs freshness ---

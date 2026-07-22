@@ -37,6 +37,8 @@ import type {
   BridgeSession,
   BridgeSessionClaudeRuntimeState,
   BridgeSessionCodexRuntimeState,
+  KimiProviderChoice,
+  RuntimeAgent,
   RuntimeProviderChoice,
   RuntimeProviderIdentity,
 } from '../../domain/session.js';
@@ -170,8 +172,14 @@ export interface ClaudeRuntimeConfig {
   idleTimeoutMinutes?: number;
 }
 
+export interface KimiRuntimeConfig {
+  runtime: 'kimi';
+  provider: KimiProviderChoice;
+  model?: string;
+}
+
 export interface RuntimeMetadataConfig {
-  runtime: 'codex' | 'claude';
+  runtime: RuntimeAgent;
   reasoningEffort: string;
   model: string;
 }
@@ -194,12 +202,35 @@ export function hasSessionClaudeProviderOverride(session?: BridgeSession | null)
   return getSessionClaudeProviderOverride(session) !== undefined;
 }
 
+export function getSessionKimiProviderOverride(session?: BridgeSession | null): KimiProviderChoice | undefined {
+  const tomlProvider = getSessionTomlOverride<KimiProviderChoice>(session, 'runtime.kimi.provider');
+  return tomlProvider === 'tmux' ? tomlProvider : undefined;
+}
+
+export function hasSessionKimiProviderOverride(session?: BridgeSession | null): boolean {
+  return getSessionKimiProviderOverride(session) !== undefined;
+}
+
 export function resolveEffectiveMode(
   binding?: ChannelChat | null,
   session?: BridgeSession | null,
 ): 'normal' | 'yolo' {
   const mode = scopedConfigForRuntime(binding, session).config.runtime.codex.yoloMode;
   return mode === 'on' || mode === 'yolo' ? 'yolo' : 'normal';
+}
+
+export function resolveEffectiveRuntimeMode(
+  binding?: ChannelChat | null,
+  session?: BridgeSession | null,
+): 'normal' | 'yolo' {
+  const activeRuntime = getSessionActiveRuntime(session);
+  if (activeRuntime === 'claude') {
+    return resolveClaudeRuntimeConfig(session, binding).permissionMode === 'bypassPermissions' ? 'yolo' : 'normal';
+  }
+  if (activeRuntime === 'kimi') {
+    return 'normal';
+  }
+  return resolveEffectiveMode(binding, session);
 }
 
 export function resolveEffectiveCodexProvider(
@@ -221,8 +252,8 @@ export function hasSessionCodexProviderOverride(session?: BridgeSession | null):
 }
 
 export interface EffectiveRuntimeProvider {
-  runtime: 'codex' | 'claude';
-  provider: RuntimeProviderChoice;
+  runtime: RuntimeAgent;
+  provider: RuntimeProviderChoice | KimiProviderChoice;
   identity: RuntimeProviderIdentity;
 }
 
@@ -232,9 +263,11 @@ export function resolveEffectiveRuntimeProvider(
 ): EffectiveRuntimeProvider {
   const configuredRuntime = scopedConfigForRuntime(binding, session).config.runtime.agent;
   const runtime = getSessionActiveRuntime(session) || configuredRuntime;
-  const provider = runtime === 'claude'
-    ? resolveEffectiveClaudeProvider(session, binding)
-    : resolveEffectiveCodexProvider(session, binding);
+  const provider = runtime === 'kimi'
+    ? resolveKimiRuntimeConfig(session, binding).provider
+    : runtime === 'claude'
+      ? resolveEffectiveClaudeProvider(session, binding)
+      : resolveEffectiveCodexProvider(session, binding);
   return {
     runtime,
     provider,
@@ -307,9 +340,22 @@ export function resolveClaudeRuntimeConfig(session?: BridgeSession | null, bindi
   };
 }
 
+export function resolveKimiRuntimeConfig(session?: BridgeSession | null, binding?: ChannelChat | null): KimiRuntimeConfig {
+  const { config } = scopedConfigForRuntime(binding, session);
+  return {
+    runtime: 'kimi',
+    provider: 'tmux',
+    model: config.runtime.kimi.model || undefined,
+  };
+}
+
 export function resolveRuntimeMetadataConfig(
   session: BridgeSession | null | undefined,
-  runtime: 'codex' | 'claude' = session?.runtime?.activeRuntime === 'claude' ? 'claude' : 'codex',
+  runtime: RuntimeAgent = session?.runtime?.activeRuntime === 'claude'
+    ? 'claude'
+    : session?.runtime?.activeRuntime === 'kimi'
+      ? 'kimi'
+      : 'codex',
   binding?: ChannelChat | null,
 ): RuntimeMetadataConfig {
   if (runtime === 'claude') {
@@ -318,6 +364,14 @@ export function resolveRuntimeMetadataConfig(
       runtime: 'claude',
       reasoningEffort: claudeConfig.reasoningEffort || 'default',
       model: claudeConfig.model || 'default',
+    };
+  }
+  if (runtime === 'kimi') {
+    const kimiConfig = resolveKimiRuntimeConfig(session, binding);
+    return {
+      runtime: 'kimi',
+      reasoningEffort: 'default',
+      model: kimiConfig.model || 'default',
     };
   }
   return {

@@ -172,6 +172,8 @@ describe('SessionDisplayQuery', () => {
     assert.equal(linkedRow.runtime, 'claude');
     assert.equal(linkedRow.claudeSessionId, 'claude-linked');
     assert.equal(linkedRow.threadId, 'claude-linked');
+    assert.equal(linkedRow.executionProvider, 'tmux');
+    assert.equal(linkedRow.codexProvider, 'tmux');
 
     const unboundRow = payload.sessions.find((session) => session.claudeSessionId === 'claude-unbound');
     assert.ok(unboundRow);
@@ -180,5 +182,67 @@ describe('SessionDisplayQuery', () => {
     assert.equal(unboundRow.bridgeSessionId, undefined);
     assert.equal(unboundRow.executionProvider, 'pty');
     assert.equal(unboundRow.codexProvider, '-');
+  });
+
+  it('lists unbound and linked Kimi Code local sessions through the runtime display interface', () => {
+    const store = new JsonFileStore(makeBridgeSettings());
+    createConfigService({ migrate: false, env: {} }).set({ kind: 'home' }, { runtime: { codex: { yoloMode: 'on' } } });
+    const linked = store.createSession('Linked Kimi', 'test-model', undefined, '/repo/linked-kimi');
+    store.updateSession(linked.id, {
+      runtime: {
+        activeRuntime: 'kimi',
+        kimi: { sessionId: 'session_kimi-linked', cwd: '/repo/linked-kimi', provider: 'tmux' },
+        general: { workingDirectory: '/repo/linked-kimi' },
+      },
+    });
+    const localSessions: LocalRuntimeSessionSummary[] = [
+      {
+        runtime: 'kimi',
+        threadId: 'session_kimi-linked',
+        filePath: '/tmp/kimi-linked/wire.jsonl',
+        cwd: '/repo/linked-kimi',
+        originator: 'Kimi Code',
+        source: 'kimi',
+        firstSeenAt: '2026-06-27T00:00:00.000Z',
+        lastEventAt: '2026-06-27T00:00:01.000Z',
+        title: 'Raw linked Kimi',
+        activeEstimate: false,
+      },
+      {
+        runtime: 'kimi',
+        threadId: 'session_kimi-unbound',
+        filePath: '/tmp/kimi-unbound/wire.jsonl',
+        cwd: '/repo/unbound-kimi',
+        originator: 'Kimi Code',
+        source: 'kimi',
+        firstSeenAt: '2026-06-27T00:00:02.000Z',
+        lastEventAt: '2026-06-27T00:00:03.000Z',
+        title: 'Unbound Kimi',
+        activeEstimate: false,
+      },
+    ];
+
+    const payload = new SessionDisplayQuery(store).listRuntimeSessions(localSessions, { root: '/codex-root' });
+
+    assert.equal(payload.counts.kimiPhysical, 2);
+    assert.equal(payload.counts.bridgeKimiLinked, 1);
+    assert.equal(payload.counts.dedupedBridgeRows, 1);
+    const linkedRow = payload.sessions.find((session) => session.bridgeSessionId === linked.id);
+    assert.ok(linkedRow);
+    assert.equal(linkedRow.kind, 'bridge');
+    assert.equal(linkedRow.runtime, 'kimi');
+    assert.equal(linkedRow.kimiSessionId, 'session_kimi-linked');
+    assert.equal(linkedRow.threadId, 'session_kimi-linked');
+    assert.equal(linkedRow.mode, 'normal');
+    assert.equal(linkedRow.executionProvider, 'tmux');
+    assert.equal(linkedRow.codexProvider, 'tmux');
+
+    const unboundRow = payload.sessions.find((session) => session.kimiSessionId === 'session_kimi-unbound');
+    assert.ok(unboundRow);
+    assert.equal(unboundRow.kind, 'kimi');
+    assert.equal(unboundRow.runtime, 'kimi');
+    assert.equal(unboundRow.bridgeSessionId, undefined);
+    assert.equal(unboundRow.executionProvider, 'tmux');
+    assert.equal(unboundRow.codexProvider, 'tmux');
   });
 });

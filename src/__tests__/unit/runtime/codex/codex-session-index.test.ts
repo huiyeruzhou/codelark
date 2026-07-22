@@ -123,7 +123,7 @@ describe('listCodexSessions', () => {
     fs.rmSync(tempRoot, { recursive: true, force: true });
   });
 
-  it('hides internal exec sessions that are not shown in the Codex sidebar', () => {
+  it('includes Desktop exec sessions in the local Codex session list', () => {
     const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-codex-sessions-'));
     process.env.CODEX_HOME = tempRoot;
 
@@ -162,7 +162,10 @@ describe('listCodexSessions', () => {
 
     const sessions = listCodexSessions(10);
 
-    assert.equal(sessions.length, 0);
+    assert.equal(sessions.length, 1);
+    assert.equal(sessions[0]?.threadId, '019d1e3a-74f9-7e43-92ef-e206eec01f80');
+    assert.equal(sessions[0]?.originator, 'Codex Desktop');
+    assert.equal(sessions[0]?.source, 'exec');
 
     fs.rmSync(tempRoot, { recursive: true, force: true });
   });
@@ -354,7 +357,7 @@ describe('listCodexSessions', () => {
     fs.rmSync(tempRoot, { recursive: true, force: true });
   });
 
-  it('hides Codex threads whose project root is no longer in the Codex saved workspace list', () => {
+  it('does not restrict local Codex sessions to Desktop saved workspace roots', () => {
     const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-codex-sessions-'));
     process.env.CODEX_HOME = tempRoot;
 
@@ -405,12 +408,15 @@ describe('listCodexSessions', () => {
 
     const sessions = listCodexSessions();
 
-    assert.deepEqual(sessions.map((session) => session.threadId), [visibleThreadId]);
+    assert.deepEqual(
+      sessions.map((session) => session.threadId).sort(),
+      [hiddenThreadId, visibleThreadId].sort(),
+    );
 
     fs.rmSync(tempRoot, { recursive: true, force: true });
   });
 
-  it('includes freshly created Codex threads that have reached session_index before the state db catches up', () => {
+  it('does not restrict local Codex sessions to the Codex state db thread list', () => {
     const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-codex-sessions-'));
     process.env.CODEX_HOME = tempRoot;
 
@@ -490,9 +496,9 @@ describe('listCodexSessions', () => {
     db.close();
 
     const sessions = listCodexSessions(10);
-    const threadIds = sessions.map((session) => session.threadId);
+    const threadIds = sessions.map((session) => session.threadId).sort();
 
-    assert.deepEqual(threadIds, [freshThreadId, visibleThreadId]);
+    assert.deepEqual(threadIds, [freshThreadId, staleThreadId, visibleThreadId].sort());
 
     fs.rmSync(tempRoot, { recursive: true, force: true });
   });

@@ -25,6 +25,7 @@ import {
   getSessionActiveRuntime,
   getSessionClaudeSessionId,
   getSessionCodexThreadId,
+  getSessionKimiSessionId,
   getSessionWorkingDirectory,
 } from '../../domain/session-runtime.js';
 
@@ -339,6 +340,9 @@ function buildThenTaskSessionMap(tasks: ThenTask[], store: BridgeStore): Map<str
 function getThenTaskRuntimeId(session: BridgeSession): string {
   if (getSessionActiveRuntime(session) === 'claude') {
     return getSessionClaudeSessionId(session) || '-';
+  }
+  if (getSessionActiveRuntime(session) === 'kimi') {
+    return getSessionKimiSessionId(session) || '-';
   }
   return getSessionCodexThreadId(session) || '-';
 }

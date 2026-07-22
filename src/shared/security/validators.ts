@@ -122,12 +122,9 @@ export function sanitizeInput(
 
 export type BridgeCommandMode = typeof VALID_MODES[number];
 
-/**
- * Parse /mode parameter. `code` is kept as the only legacy alias.
- */
 export function parseMode(mode: string): BridgeCommandMode | null {
   const normalized = mode.trim().toLowerCase();
-  if (normalized === 'code' || normalized === 'normal') return 'normal';
+  if (normalized === 'normal') return 'normal';
   if (normalized === 'yolo') return 'yolo';
   return null;
 }

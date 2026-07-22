@@ -55,6 +55,8 @@ const RETIRED_SESSION_FIELDS = [
   'threadId',
 ];
 
+const RUNTIME_KEYS = ['codex', 'claude', 'kimi'] as const;
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 }
@@ -117,8 +119,10 @@ function normalizeRuntimeBridgeSessionIds(value: unknown): Record<string, string
   const result: Record<string, string> = {};
   const codex = typeof value.codex === 'string' && value.codex.trim() ? value.codex.trim() : '';
   const claude = typeof value.claude === 'string' && value.claude.trim() ? value.claude.trim() : '';
+  const kimi = typeof value.kimi === 'string' && value.kimi.trim() ? value.kimi.trim() : '';
   if (codex) result.codex = codex;
   if (claude) result.claude = claude;
+  if (kimi) result.kimi = kimi;
   return result;
 }
 
@@ -150,20 +154,26 @@ function migrateSessions(
   for (const [key, value] of Object.entries(sessions)) {
     if (!isRecord(value)) continue;
     const runtime = ensureRuntimeContainer(value);
-    const activeRuntime = runtime.activeRuntime === 'claude' ? 'claude' : 'codex';
-    const codex = activeRuntime === 'claude' ? {} : ensureNestedContainer(runtime, 'codex');
+    const activeRuntime = runtime.activeRuntime === 'claude' ? 'claude' : runtime.activeRuntime === 'kimi' ? 'kimi' : 'codex';
+    const activeRuntimeState = ensureNestedContainer(runtime, activeRuntime);
+    const codex = activeRuntime === 'codex' ? activeRuntimeState : {};
+    const claude = activeRuntime === 'claude' ? activeRuntimeState : {};
+    const kimi = activeRuntime === 'kimi' ? activeRuntimeState : {};
     const general = ensureNestedContainer(runtime, 'general');
 
     const threadId = firstString(value, ['codex_thread_id', ...SESSION_THREAD_SOURCE_FIELDS]);
+    const model = readString(value, 'model');
     const migratedRuntime = [
       activeRuntime === 'codex' && setIfMissing(codex, 'threadId', threadId),
       activeRuntime === 'codex' && setIfMissing(codex, 'title', readString(value, 'codex_title')),
-      activeRuntime === 'codex' && setIfMissing(codex, 'model', readString(value, 'model')),
+      activeRuntime === 'codex' && setIfMissing(codex, 'model', model),
       activeRuntime === 'codex' && setIfMissing(codex, 'mode', readString(value, 'preferred_mode')),
       activeRuntime === 'codex' && setIfMissing(codex, 'provider', readString(value, 'codex_provider')),
       activeRuntime === 'codex' && setIfMissing(codex, 'sandboxMode', readString(value, 'codex_sandbox_mode')),
       activeRuntime === 'codex' && setIfMissing(codex, 'networkAccess', readBoolean(value, 'codex_network_access')),
       activeRuntime === 'codex' && setIfMissing(codex, 'reasoningEffort', readString(value, 'reasoning_effort')),
+      activeRuntime === 'claude' && setIfMissing(claude, 'model', model),
+      activeRuntime === 'kimi' && setIfMissing(kimi, 'model', model),
       setIfMissing(general, 'workingDirectory', readString(value, 'working_directory')),
       setIfMissing(general, 'systemPrompt', readString(value, 'system_prompt')),
       setIfMissing(general, 'tmuxSessionName', readString(value, 'tmux_session_name')),
@@ -172,18 +182,15 @@ function migrateSessions(
       setIfMissing(general, 'echoInput', readBoolean(value, 'tmux_echo_input')),
     ].some(Boolean);
 
-    if (activeRuntime === 'claude') {
-      if (runtime.codex !== undefined) {
-        delete runtime.codex;
+    for (const runtimeKey of RUNTIME_KEYS) {
+      if (runtimeKey === activeRuntime) continue;
+      if (runtime[runtimeKey] !== undefined) {
+        delete runtime[runtimeKey];
         changed = true;
         removedFields += 1;
       }
-    } else if (runtime.claude !== undefined) {
-      delete runtime.claude;
-      changed = true;
-      removedFields += 1;
     }
-    if (Object.keys(codex).length === 0) delete runtime.codex;
+    if (Object.keys(activeRuntimeState).length === 0) delete runtime[activeRuntime];
     if (Object.keys(general).length === 0) delete runtime.general;
     if (Object.keys(runtime).length === 0) delete value.runtime;
 
@@ -219,7 +226,11 @@ function migrateChannelChats(
     const bridgeSessionId = readString(value, 'bridgeSessionId');
     if (!bridgeSessionId) continue;
     const session = isRecord(sessions[bridgeSessionId]) ? sessions[bridgeSessionId] as Record<string, unknown> : null;
-    const runtime = isRecord(session?.runtime) && session?.runtime.activeRuntime === 'claude' ? 'claude' : 'codex';
+    const runtime = isRecord(session?.runtime) && session?.runtime.activeRuntime === 'claude'
+      ? 'claude'
+      : isRecord(session?.runtime) && session?.runtime.activeRuntime === 'kimi'
+        ? 'kimi'
+        : 'codex';
     const runtimeBridgeSessionIds = normalizeRuntimeBridgeSessionIds(value.runtimeBridgeSessionIds);
     if (!runtimeBridgeSessionIds[runtime]) {
       runtimeBridgeSessionIds[runtime] = bridgeSessionId;

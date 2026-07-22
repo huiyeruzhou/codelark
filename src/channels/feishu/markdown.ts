@@ -108,7 +108,7 @@ function resolveTitleTagColor(
   defaultColor: NonNullable<StructuredStreamingUiMetadata['tagColor']>,
 ): NonNullable<StructuredStreamingUiMetadata['tagColor']> {
   const normalized = tag.trim().toLowerCase();
-  if (normalized === 'codex' || normalized === 'claude') return 'orange';
+  if (isRuntimeNameMetadataTag(normalized)) return 'orange';
   if (normalized === 'sdk' || normalized === 'source:sdk') return 'green';
   if (normalized === 'mirror' || normalized === 'source:mirror') return 'yellow';
   if (normalized.startsWith('effort:')) return 'green';
@@ -117,9 +117,13 @@ function resolveTitleTagColor(
   return defaultColor;
 }
 
+function isRuntimeNameMetadataTag(normalized: string): boolean {
+  return normalized === 'codex' || normalized === 'claude' || normalized === 'kimi';
+}
+
 function isRuntimeMetadataTag(tag: string): boolean {
   const normalized = tag.trim().toLowerCase();
-  if (normalized === 'codex' || normalized === 'claude') return true;
+  if (isRuntimeNameMetadataTag(normalized)) return true;
   const prefix = normalized.split(':', 1)[0];
   return prefix === 'effort' || prefix === 'reasoning' || prefix === 'model';
 }
@@ -133,7 +137,7 @@ function escapeTextTagContent(value: string): string {
 
 function metadataBodyTagColor(tag: string): 'orange' | 'green' | 'turquoise' | 'grey' {
   const normalized = tag.trim().toLowerCase();
-  if (normalized === 'codex' || normalized === 'claude') return 'orange';
+  if (isRuntimeNameMetadataTag(normalized)) return 'orange';
   const prefix = normalized.split(':', 1)[0];
   if (prefix === 'effort' || prefix === 'reasoning') return 'green';
   if (prefix === 'model') return 'turquoise';

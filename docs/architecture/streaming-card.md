@@ -13,7 +13,7 @@
 
 ```mermaid
 flowchart LR
-  runtime[Codex / Claude 事件]
+  runtime[Codex / Claude / Kimi 事件]
   mirror[本地 mirror turn]
   desired[FeishuCardState desired]
   plan[投递计划]
@@ -65,7 +65,7 @@ flowchart LR
 - `updateToolProgress()`：工具面板。
 - `updateTaskProgress()`：任务列表。
 - `updateStreamingHistory()`：history-driven transcript。
-- `updateCardMetadata()`：runtime、model、effort 和 bridge 标签；runtime 以无前缀的 `codex`/`claude` 橙色 tag 展示在 model/effort 前。
+- `updateCardMetadata()`：runtime、model、effort 和 bridge 标签；runtime 以无前缀的 `codex`/`claude`/`kimi` 橙色 tag 展示在 model/effort 前。
 - `updateCardActions()`：按钮和表单 actions。
 
 这些函数只更新 desired 字段，递增 `desiredRevision`，然后调用 `scheduleCardFlush()`。真正远端请求在 `flushCardUpdate()` 中执行。
@@ -163,7 +163,7 @@ snapshotStreamingDesiredState(state)
 | 分区                 | 主要元素 ID                        | 数据来源                                    | 正常更新方式                                   | 失效时回退                              |
 | ------------------ | ------------------------------ | --------------------------------------- | ---------------------------------------- | ---------------------------------- |
 | Header             | header title、`streaming_tag_*` | stream metadata、bridge 标签 | metadata 变化触发 `card.update` full refresh | 关闭流式后 final `card.update`          |
-| Metadata body tags | `runtime_meta_tags`            | runtime、model、effort tags；runtime 为无前缀 `codex`/`claude` 橙色 tag | full refresh                             | final `card.update`                |
+| Metadata body tags | `runtime_meta_tags`            | runtime、model、effort tags；runtime 为无前缀 `codex`/`claude`/`kimi` 橙色 tag | full refresh                             | final `card.update`                |
 | History / 正文容器     | `stream_history`               | `historyItems` 或正文 + tools              | 追加 markdown/tool panel 子元素               | full refresh 或续接新卡片                |
 | 正文 markdown        | `streaming_content`            | `pendingText`                           | `cardElement.content`                    | full refresh                       |
 | 工具面板               | `stream_tool_N` / 子事件元素        | `toolCalls` 或 history tool panel        | create/append；工具结构变化倾向 full refresh      | full refresh 或续接新卡片                |

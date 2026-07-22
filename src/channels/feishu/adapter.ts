@@ -922,6 +922,13 @@ function isFeishuCardPayloadLimitError(error: unknown): boolean {
   return /(?:code=|code:\s*)200850\b/.test(message);
 }
 
+function isFeishuCardInvalidError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error || '');
+  return /\bcardid is invalid\b/i.test(message)
+    || /\bcard[_\s-]?id\b.*\binvalid\b/i.test(message)
+    || /\binvalid\b.*\bcard[_\s-]?id\b/i.test(message);
+}
+
 function countCardMarkdownElements(value: unknown): number {
   if (!value || typeof value !== 'object') return 0;
   if (Array.isArray(value)) {
@@ -4427,6 +4434,10 @@ export class FeishuAdapter extends BaseChannelAdapter {
         }
       }
       console.warn('[feishu-adapter] Card finalize failed:', err instanceof Error ? err.message : err);
+      if (isFeishuCardInvalidError(err)) {
+        console.warn('[feishu-adapter] Final card update failed because the card id is invalid; allowing message fallback:', err instanceof Error ? err.message : err);
+        return false;
+      }
       if (streamingModeClosed && ((state.pendingText || '').trim() || state.historyItems.length > 0 || state.toolCalls.length > 0)) {
         if (terminalReactionEmoji) {
           await this.addTerminalReaction(cardKey, state.messageId, terminalReactionEmoji);

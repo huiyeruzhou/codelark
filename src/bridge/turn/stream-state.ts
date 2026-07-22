@@ -7,6 +7,7 @@ import {
   recordUnifiedTurnActivity,
   recordUnifiedTurnContentResponse,
   applyUnifiedTurnStatusNote,
+  applyUnifiedTurnThinkingNote,
   type UnifiedTurnProgressState,
 } from './unified-turn-state.js';
 
@@ -18,6 +19,14 @@ export interface StreamState extends UnifiedTurnProgressState {
 export interface StreamStatusTimingConfig {
   idleStartMs: number;
   heartbeatMs: number;
+}
+
+const MAX_STREAM_THINKING_NOTE_CHARS = 600;
+
+function truncateStatusNote(text: string, maxChars: number): string {
+  const chars = Array.from(text.trim());
+  if (chars.length <= maxChars) return chars.join('');
+  return `${chars.slice(0, maxChars).join('')}...`;
 }
 
 export function createStreamState(startedAtMs: number): StreamState {
@@ -44,6 +53,14 @@ export function updateStreamStatusNote(
   applyUnifiedTurnStatusNote(state, note, nowMs);
 }
 
+export function updateStreamThinkingNote(
+  state: StreamState,
+  note: string | null | undefined,
+  nowMs: number,
+): void {
+  applyUnifiedTurnThinkingNote(state, note, nowMs);
+}
+
 export function formatRuntimeDuration(ms: number): string {
   const totalSeconds = Math.max(0, Math.floor(ms / 1000));
   const seconds = totalSeconds % 60;
@@ -62,6 +79,7 @@ export function formatStreamRuntimeStatus(
   lastContentResponseAgeMs?: number | null,
   statusNote?: string | null,
   contextUsage?: ContextUsageInfo | null,
+  thinkingNote?: string | null,
 ): string {
   const parts = [elapsedMs < 1000 ? '处理中' : `已运行 ${formatRuntimeDuration(elapsedMs)}`];
   if (typeof lastContentResponseAgeMs === 'number' && lastContentResponseAgeMs >= 0) {
@@ -71,7 +89,12 @@ export function formatStreamRuntimeStatus(
   if (contextText) parts.push(contextText);
   const runtimeText = parts.join('，');
   const note = (statusNote || '').trim();
-  return note ? `当前步骤：${note}\n${runtimeText}` : runtimeText;
+  const thinking = (thinkingNote || '').trim();
+  const lines: string[] = [];
+  if (note) lines.push(`当前步骤：${note}`);
+  if (thinking) lines.push(`当前思考：${truncateStatusNote(thinking, MAX_STREAM_THINKING_NOTE_CHARS)}`);
+  lines.push(runtimeText);
+  return lines.join('\n');
 }
 
 export function getStreamLastContentResponseAgeMs(
@@ -107,7 +130,7 @@ export function getVisibleStreamLastContentResponseAgeMs(
 }
 
 export function buildStreamRuntimeStatus(
-  state: Pick<StreamState, 'startedAtMs' | 'lastContentResponseAtMs' | 'statusNote'>,
+  state: Pick<StreamState, 'startedAtMs' | 'lastContentResponseAtMs' | 'statusNote'> & Partial<Pick<StreamState, 'thinkingNote'>>,
   nowMs: number,
   options: {
     includeLastContentResponseAge?: boolean;
@@ -120,5 +143,6 @@ export function buildStreamRuntimeStatus(
       : null,
     state.statusNote,
     'contextUsage' in state ? (state.contextUsage as ContextUsageInfo | null) : null,
+    state.thinkingNote,
   );
 }

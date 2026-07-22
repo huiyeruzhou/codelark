@@ -57,6 +57,10 @@
             "claude": {
               "type": "string",
               "minLength": 1
+            },
+            "kimi": {
+              "type": "string",
+              "minLength": 1
             }
           },
           "additionalProperties": false
@@ -74,6 +78,10 @@
             },
             "fileType": {
               "enum": ["doc", "docx", "sheet", "file"]
+            },
+            "commentId": {
+              "type": "string",
+              "minLength": 1
             }
           },
           "additionalProperties": false

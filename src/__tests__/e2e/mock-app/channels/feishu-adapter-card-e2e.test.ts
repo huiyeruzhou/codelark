@@ -6,6 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 
 import { CodexProvider } from '../../../../runtime/codex/provider.js';
+import { computeKimiWorkspaceDirName } from '../../../../runtime/kimi/session-index.js';
 import {
   FEISHU_GROUP_AUTHORIZED_CALLBACK_DATA,
   FeishuAdapter,
@@ -77,6 +78,22 @@ function findInteractiveFormPayload(calls: RecordedFeishuMessageCall[]): Record<
     if (form) return { call, content, form };
   }
   assert.fail(`expected an interactive CardKit form, got ${JSON.stringify(calls)}`);
+}
+
+function findInteractiveMarkdownPayload(
+  calls: RecordedFeishuMessageCall[],
+  needle: string,
+): { call: RecordedFeishuMessageCall; content: Record<string, any>; markdownText: string } {
+  for (const call of calls) {
+    if (call.payload?.data?.msg_type !== 'interactive') continue;
+    const content = JSON.parse(call.payload.data.content || '{}');
+    const markdownElements = findCardElementsByTag(content, 'markdown');
+    const markdownText = markdownElements
+      .map((element) => typeof element.content === 'string' ? element.content : JSON.stringify(element))
+      .join('\n');
+    if (markdownText.includes(needle)) return { call, content, markdownText };
+  }
+  assert.fail(`expected an interactive markdown card containing ${needle}, got ${JSON.stringify(calls)}`);
 }
 
 function findGroupAuthorizationCardPayloads(calls: RecordedFeishuMessageCall[]): Array<Record<string, any>> {
@@ -152,6 +169,81 @@ async function withLocalCodexEnvironment<T>(fn: (params: {
     }
     _testOnly.resetStateForTests();
   }
+}
+
+function createKimiWireFixture(params: {
+  kimiHome: string;
+  workDir: string;
+  sessionId: string;
+}): string {
+  const sessionDir = path.join(
+    params.kimiHome,
+    'sessions',
+    computeKimiWorkspaceDirName(params.workDir),
+    params.sessionId,
+  );
+  const agentDir = path.join(sessionDir, 'agents', 'main');
+  fs.mkdirSync(agentDir, { recursive: true });
+  fs.writeFileSync(path.join(sessionDir, 'state.json'), JSON.stringify({
+    createdAt: '2026-06-03T00:00:00.000Z',
+    updatedAt: '2026-06-03T00:00:00.000Z',
+    title: 'Kimi Markdown',
+  }) + '\n', 'utf-8');
+  const wirePath = path.join(agentDir, 'wire.jsonl');
+  fs.writeFileSync(wirePath, '', 'utf-8');
+  fs.mkdirSync(params.kimiHome, { recursive: true });
+  fs.appendFileSync(path.join(params.kimiHome, 'session_index.jsonl'), JSON.stringify({
+    sessionId: params.sessionId,
+    sessionDir,
+    workDir: params.workDir,
+  }) + '\n', 'utf-8');
+  return wirePath;
+}
+
+function appendKimiMarkdownTurn(params: {
+  wirePath: string;
+  turnId: string;
+  userText: string;
+  thinkingText: string;
+  assistantText: string;
+}): void {
+  const baseTime = Date.parse('2026-06-03T00:00:01.000Z');
+  const lines = [
+    {
+      type: 'context.append_loop_event',
+      time: baseTime,
+      event: { type: 'step.begin', turnId: params.turnId, stepUuid: `${params.turnId}-step` },
+    },
+    {
+      type: 'context.append_message',
+      time: baseTime + 100,
+      message: { role: 'user', content: [{ type: 'text', text: params.userText }] },
+    },
+    {
+      type: 'context.append_loop_event',
+      time: baseTime + 200,
+      event: {
+        type: 'content.part',
+        turnId: params.turnId,
+        part: { type: 'think', think: params.thinkingText },
+      },
+    },
+    {
+      type: 'context.append_loop_event',
+      time: baseTime + 300,
+      event: {
+        type: 'content.part',
+        turnId: params.turnId,
+        part: { type: 'text', text: params.assistantText },
+      },
+    },
+    {
+      type: 'context.append_loop_event',
+      time: baseTime + 400,
+      event: { type: 'step.end', turnId: params.turnId, stepUuid: `${params.turnId}-step` },
+    },
+  ];
+  fs.appendFileSync(params.wirePath, lines.map((line) => JSON.stringify(line)).join('\n') + '\n', 'utf-8');
 }
 
 describe('feishu adapter card e2e', () => {
@@ -396,6 +488,158 @@ describe('feishu adapter card e2e', () => {
       cleanupCodexThreadArtifacts(threadId, sessionPath);
       fs.rmSync(workDir, { recursive: true, force: true });
       _testOnly.resetStateForTests();
+    }
+  });
+
+  it('renders Kimi mirror markdown tables and fenced code through FeishuAdapter.send', async () => {
+    const previousKimiHome = process.env.KIMI_CODE_HOME;
+    const kimiHome = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-card-kimi-home-'));
+    const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-card-kimi-work-'));
+    process.env.KIMI_CODE_HOME = kimiHome;
+    resetBridgeTestState({ cleanKimiHome: true });
+    _testOnly.resetStateForTests();
+
+    const calls: RecordedFeishuMessageCall[] = [];
+    const store = initBridgeTestContext({
+      settings: makeBridgeSettings(),
+    });
+    const adapter = createRecordingFeishuAdapter(calls);
+    registerAdapter(adapter);
+    (globalThis as unknown as Record<string, any>).__bridge_manager__.running = true;
+    const sessionId = `session_kimi_markdown_${process.pid}`;
+    const address = { channelType: 'feishu', chatId: 'chat-kimi-markdown-card-e2e' } as const;
+
+    try {
+      const wirePath = createKimiWireFixture({ kimiHome, workDir, sessionId });
+      const session = store.createSession('Kimi Markdown', 'test-model', undefined, workDir);
+      store.updateSession(session.id, {
+        runtime: {
+          activeRuntime: 'kimi',
+          kimi: { sessionId, cwd: workDir, provider: 'tmux' },
+        },
+      });
+      store.upsertChannelChat({
+        channelType: address.channelType,
+        chatId: address.chatId,
+        chatKind: 'group',
+        bridgeSessionId: session.id,
+        runtimeBridgeSessionIds: { kimi: session.id },
+      });
+
+      await _testOnly.reconcileMirrorSubscriptions();
+      appendKimiMarkdownTurn({
+        wirePath,
+        turnId: 'turn-kimi-markdown',
+        userText: '请用 Markdown 表格和 TypeScript 代码块回答。',
+        thinkingText: 'Kimi markdown thinking should remain status-only.',
+        assistantText: [
+          'Kimi markdown rendering result.',
+          '',
+          '| 项目 | 状态 |',
+          '| --- | --- |',
+          '| 表格 | 通过 |',
+          '',
+          '```ts',
+          'const kimi = "markdown";',
+          '```',
+        ].join('\n'),
+      });
+
+      await _testOnly.reconcileMirrorSubscriptions();
+
+      const payload = findInteractiveMarkdownPayload(calls, 'Kimi markdown rendering result.');
+      assert.equal(payload.call.kind, 'create');
+      assert.match(payload.markdownText, /\| 表格 \| 通过 \|/);
+      assert.match(payload.markdownText, /```ts\nconst kimi = "markdown";\n```/);
+      assert.doesNotMatch(payload.markdownText, /Kimi markdown thinking should remain status-only/);
+      assert.doesNotMatch(JSON.stringify(payload.content), /当前思考/);
+    } finally {
+      resetBridgeTestState({ cleanKimiHome: true });
+      _testOnly.resetStateForTests();
+      fs.rmSync(workDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+      fs.rmSync(kimiHome, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+      if (previousKimiHome === undefined) delete process.env.KIMI_CODE_HOME;
+      else process.env.KIMI_CODE_HOME = previousKimiHome;
+    }
+  });
+
+  it('renders Kimi mirror markdown and extracts clk-ask as a separate question form', async () => {
+    const previousKimiHome = process.env.KIMI_CODE_HOME;
+    const kimiHome = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-card-kimi-combined-home-'));
+    const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-card-kimi-combined-work-'));
+    process.env.KIMI_CODE_HOME = kimiHome;
+    resetBridgeTestState({ cleanKimiHome: true });
+    _testOnly.resetStateForTests();
+
+    const calls: RecordedFeishuMessageCall[] = [];
+    const store = initBridgeTestContext({
+      settings: makeBridgeSettings(),
+    });
+    const adapter = createRecordingFeishuAdapter(calls);
+    registerAdapter(adapter);
+    (globalThis as unknown as Record<string, any>).__bridge_manager__.running = true;
+    const sessionId = `session_kimi_markdown_ask_${process.pid}`;
+    const address = { channelType: 'feishu', chatId: 'chat-kimi-markdown-ask-card-e2e' } as const;
+
+    try {
+      const wirePath = createKimiWireFixture({ kimiHome, workDir, sessionId });
+      const session = store.createSession('Kimi Markdown Ask', 'test-model', undefined, workDir);
+      store.updateSession(session.id, {
+        runtime: {
+          activeRuntime: 'kimi',
+          kimi: { sessionId, cwd: workDir, provider: 'tmux' },
+        },
+      });
+      store.upsertChannelChat({
+        channelType: address.channelType,
+        chatId: address.chatId,
+        chatKind: 'group',
+        bridgeSessionId: session.id,
+        runtimeBridgeSessionIds: { kimi: session.id },
+      });
+
+      await _testOnly.reconcileMirrorSubscriptions();
+      appendKimiMarkdownTurn({
+        wirePath,
+        turnId: 'turn-kimi-markdown-ask',
+        userText: '请用 Markdown 总结并让用户确认。',
+        thinkingText: 'Kimi combined card thinking should remain status-only.',
+        assistantText: [
+          'Kimi combined markdown and question result.',
+          '',
+          '| 项目 | 状态 |',
+          '| --- | --- |',
+          '| 表格 | 通过 |',
+          '',
+          '```ts',
+          'const kimiAsk = "separate-form";',
+          '```',
+          '',
+          '<clk-ask>{"question":"请选择 Kimi 发布策略","options":["灰度","全量"],"input":{"label":"补充说明","placeholder":"可留空"},"submitText":"确认提交","allowTextReply":true}</clk-ask>',
+        ].join('\n'),
+      });
+
+      await _testOnly.reconcileMirrorSubscriptions();
+
+      const markdownPayload = findInteractiveMarkdownPayload(calls, 'Kimi combined markdown and question result.');
+      assert.equal(markdownPayload.call.kind, 'create');
+      assert.match(markdownPayload.markdownText, /\| 表格 \| 通过 \|/);
+      assert.match(markdownPayload.markdownText, /```ts\nconst kimiAsk = "separate-form";\n```/);
+      assert.doesNotMatch(markdownPayload.markdownText, /<clk-ask>|请选择 Kimi 发布策略/);
+      assert.doesNotMatch(markdownPayload.markdownText, /Kimi combined card thinking should remain status-only/);
+      assert.doesNotMatch(JSON.stringify(markdownPayload.content), /当前思考/);
+
+      const formPayload = findInteractiveFormPayload(calls);
+      assertCodelarkAskFormPayload(formPayload);
+      assert.match(JSON.stringify(formPayload.content), /请选择 Kimi 发布策略/);
+      assert.match(JSON.stringify(formPayload.content), /确认提交/);
+    } finally {
+      resetBridgeTestState({ cleanKimiHome: true });
+      _testOnly.resetStateForTests();
+      fs.rmSync(workDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+      fs.rmSync(kimiHome, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+      if (previousKimiHome === undefined) delete process.env.KIMI_CODE_HOME;
+      else process.env.KIMI_CODE_HOME = previousKimiHome;
     }
   });
 });

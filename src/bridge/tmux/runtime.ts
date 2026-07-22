@@ -71,7 +71,7 @@ export interface StartCodexResumeTmuxSessionResult {
   updateRestartCount?: number;
 }
 
-export type RuntimeTmuxKind = 'codex' | 'claude';
+export type RuntimeTmuxKind = 'codex' | 'claude' | 'kimi';
 
 export interface RuntimeTmuxPaneDead {
   status?: number;
@@ -279,7 +279,7 @@ function safeTmuxSessionId(id: string, fallback: string): string {
   return id.trim().replace(/[^A-Za-z0-9_.-]/g, '-').slice(0, 180) || fallback;
 }
 
-export function runtimeTmuxSessionName(runtime: 'codex' | 'claude', id: string): string {
+export function runtimeTmuxSessionName(runtime: RuntimeTmuxKind, id: string): string {
   return `${runtime}_${safeTmuxSessionId(id, runtime === 'codex' ? 'thread' : 'session')}`;
 }
 
@@ -357,6 +357,7 @@ function detectRuntimeTmuxSelectionPrompt(
       summary: prompt.summary,
     };
   }
+  if (runtime !== 'claude') return undefined;
   if (hasClaudePtyOnboardingPrompt(screenText)) {
     return {
       runtime: 'claude',
@@ -411,9 +412,9 @@ function defaultCodexResumeStartupSelectionChoice(
 }
 
 function hasRuntimeTmuxReadyPrompt(runtime: RuntimeTmuxKind, screenText: string): boolean {
-  return runtime === 'codex'
-    ? hasCodexResumeTmuxReadyPrompt(screenText)
-    : hasClaudePtyInputPrompt(screenText) || hasGenericRuntimeTmuxReadyPrompt(screenText);
+  if (runtime === 'codex') return hasCodexResumeTmuxReadyPrompt(screenText);
+  if (runtime === 'claude') return hasClaudePtyInputPrompt(screenText) || hasGenericRuntimeTmuxReadyPrompt(screenText);
+  return hasGenericRuntimeTmuxReadyPrompt(screenText);
 }
 
 function runtimeReadyTimeoutMs(runtime: RuntimeTmuxKind): number {

@@ -2,8 +2,8 @@ import type { CodexReasoningEffort } from '../../runtime/options.js';
 import type { RuntimeProviderChoice } from '../../domain/session.js';
 import { isRuntimeProviderChoice } from '../../domain/session-runtime.js';
 
-export const MODE_OPTIONS_TEXT = '可选：`normal`（普通执行，默认） `yolo`（YOLO模式：允许 agent 无需审批绕过沙箱）。兼容：`code` 等同于 `normal`。';
-export const RUNTIME_OPTIONS_TEXT = '可选：`codex`（OpenAI Codex，默认） `claude`（Claude Code）。`/provider` 选择使用何种方式运行 agent，不切换 runtime。';
+export const MODE_OPTIONS_TEXT = '可选：`normal`（普通执行，默认） `yolo`（YOLO模式：允许 agent 无需审批绕过沙箱）。';
+export const RUNTIME_OPTIONS_TEXT = '可选：`codex`（OpenAI Codex，默认） `claude`（Claude Code） `kimi`（Kimi Code）。`/provider` 选择使用何种方式运行 agent，不切换 runtime。';
 export const CODEX_PROVIDER_OPTIONS_TEXT = '可选：`sdk`（默认 SDK 路径） `pty`（跨平台 Codex TUI 路径） `tmux`（可 attach 的 Codex TUI/tmux 路径）';
 export const CLAUDE_PROVIDER_OPTIONS_TEXT = '可选：`tmux`（可 attach 的 Claude Code TUI/tmux 路径，默认） `pty`（Claude Code TUI/mirror 路径） `sdk`（Claude Agent SDK 原生事件路径）';
 export const REASONING_OPTIONS_TEXT = '可选：`1=minimal` `2=low` `3=medium` `4=high` `5=xhigh`';
@@ -64,11 +64,11 @@ export function parseUiArgs(raw: string): { action: 'show' } | { action: 'set-de
 export function parseNetworkAccessArg(raw: string): boolean | 'default' | null {
   const token = raw.trim().toLowerCase();
   if (!token) return null;
-  if (token === 'default' || token === 'reset') return 'default';
-  if (token === 'on' || token === 'true' || token === '1' || token === 'yes' || token === 'enable' || token === 'enabled') {
+  if (token === 'default') return 'default';
+  if (token === 'on' || token === 'true' || token === '1') {
     return true;
   }
-  if (token === 'off' || token === 'false' || token === '0' || token === 'no' || token === 'disable' || token === 'disabled') {
+  if (token === 'off' || token === 'false' || token === '0') {
     return false;
   }
   return null;

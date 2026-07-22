@@ -10,9 +10,17 @@ export interface MirrorRegistryBinding {
 
 export interface MirrorRegistrySession {
   runtime?: {
-    activeRuntime?: 'codex' | 'claude';
+    activeRuntime?: 'codex' | 'claude' | 'kimi';
     codex?: {
       threadId?: string | null;
+    };
+    claude?: {
+      sessionId?: string | null;
+      cwd?: string | null;
+    };
+    kimi?: {
+      sessionId?: string | null;
+      cwd?: string | null;
     };
   };
 }

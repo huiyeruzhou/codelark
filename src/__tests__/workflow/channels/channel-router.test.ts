@@ -8,7 +8,7 @@ import { CODELARK_HOME, DEFAULT_WORKSPACE_ROOT } from '../../../configuration/pa
 import { JsonFileStore } from '../../../storage/json-store.js';
 import { initBridgeContext } from '../../../bridge/host/context.js';
 import { createBinding, resolve } from '../../../bridge/host/channel-router.js';
-import { resolveSessionRuntimeConfig } from '../../../bridge/session/support.js';
+import { resolveKimiRuntimeConfig, resolveSessionRuntimeConfig } from '../../../bridge/session/support.js';
 import { getSessionActiveRuntime, getSessionWorkingDirectory } from '../../../domain/session-runtime.js';
 import { writeCodexSessionJsonlFixture } from '../../helpers/bridge/test-bridge-utils.js';
 
@@ -27,6 +27,12 @@ function makeSettings(): Map<string, string> {
 function makeClaudeSettings(): Map<string, string> {
   const settings = makeSettings();
   settings.set('bridge_default_runtime', 'claude');
+  return settings;
+}
+
+function makeKimiSettings(): Map<string, string> {
+  const settings = makeSettings();
+  settings.set('bridge_default_runtime', 'kimi');
   return settings;
 }
 
@@ -235,10 +241,50 @@ describe('channel-router default targets', () => {
     assert.equal(getSessionWorkingDirectory(session), DEFAULT_WORKSPACE_ROOT);
   });
 
+  it('creates a Kimi temporary session when default runtime is kimi', () => {
+    fs.writeFileSync(CONFIG_TOML_PATH, [
+      'schema_version = 2',
+      '',
+      '[runtime]',
+      'agent = "kimi"',
+      '',
+      '[[channels]]',
+      'id = "feishu-default"',
+      'alias = "飞书"',
+      'provider = "feishu"',
+      'enabled = true',
+      '',
+      '[channels.config]',
+      'history_message_limit = 8',
+      '',
+    ].join('\n'), 'utf-8');
+    const store = new JsonFileStore(makeKimiSettings());
+    initBridgeContext({
+      store,
+      llm: noopLlm,
+      permissions: { resolvePendingPermission: () => false },
+      lifecycle: {},
+    });
+
+    const binding = resolve({
+      channelType: 'feishu-default',
+      chatId: 'oc_kimi_draft',
+      userId: 'ou_kimi',
+      displayName: 'Kimi 用户',
+    });
+    const session = store.getSession(binding.bridgeSessionId);
+
+    assert.equal(getSessionActiveRuntime(session), 'kimi');
+    assert.equal(session?.hidden, true);
+    assert.equal(session?.session_type, 'normal');
+    assert.equal(session?.name, 'ou_kimi');
+    assert.equal(getSessionWorkingDirectory(session), DEFAULT_WORKSPACE_ROOT);
+  });
+
   it('creates default sessions from home TOML before legacy settings', () => {
     const workspaceRoot = path.join(CODELARK_HOME, 'toml-workspace');
     fs.mkdirSync(workspaceRoot, { recursive: true });
-    const writeToml = (runtime: 'codex' | 'claude') => fs.writeFileSync(CONFIG_TOML_PATH, [
+    const writeToml = (runtime: 'codex' | 'claude' | 'kimi') => fs.writeFileSync(CONFIG_TOML_PATH, [
       'schema_version = 2',
       '',
       '[runtime]',
@@ -278,6 +324,17 @@ describe('channel-router default targets', () => {
     const draftSession = store.getSession(draftBinding.bridgeSessionId);
     assert.equal(getSessionActiveRuntime(draftSession), 'claude');
     assert.equal(getSessionWorkingDirectory(draftSession), workspaceRoot);
+
+    writeToml('kimi');
+    const kimiBinding = createBinding({
+      channelType: 'feishu-default',
+      chatId: 'oc_toml_kimi',
+      userId: 'ou_kimi',
+      displayName: 'TOML Kimi',
+    }, workspaceRoot);
+    const kimiSession = store.getSession(kimiBinding.bridgeSessionId);
+    assert.equal(getSessionActiveRuntime(kimiSession), 'kimi');
+    assert.equal(getSessionWorkingDirectory(kimiSession), workspaceRoot);
 
     writeToml('codex');
     const codexBinding = createBinding({
@@ -379,5 +436,89 @@ describe('channel-router default targets', () => {
     assert.equal(getSessionActiveRuntime(legacyProviderSession), 'claude');
     assert.equal(getSessionWorkingDirectory(legacyProviderSession), channelWorkspace);
     assert.equal(resolveSessionRuntimeConfig(legacyProviderBinding, legacyProviderSession).model, 'channel-codex-model');
+  });
+
+  it('creates new chat sessions from channel scoped Kimi runtime defaults', () => {
+    const homeWorkspace = path.join(CODELARK_HOME, 'home-kimi-workspace');
+    const channelWorkspace = path.join(CODELARK_HOME, 'channel-kimi-workspace');
+    fs.mkdirSync(homeWorkspace, { recursive: true });
+    fs.mkdirSync(channelWorkspace, { recursive: true });
+    fs.writeFileSync(CONFIG_TOML_PATH, [
+      'schema_version = 2',
+      '',
+      '[runtime]',
+      'agent = "codex"',
+      '',
+      '[bridge]',
+      `default_workspace = ${JSON.stringify(homeWorkspace)}`,
+      '',
+      '[[channels]]',
+      'id = "feishu-default"',
+      'alias = "飞书"',
+      'provider = "feishu"',
+      'enabled = true',
+      '',
+      '[channels.config]',
+      'history_message_limit = 8',
+      '',
+    ].join('\n'), 'utf-8');
+    const channelTomlPath = path.join(SCOPED_CONFIG_DIR, 'channels', 'feishu-default.toml');
+    fs.mkdirSync(path.dirname(channelTomlPath), { recursive: true });
+    fs.writeFileSync(channelTomlPath, [
+      '[session]',
+      `workspace = ${JSON.stringify(channelWorkspace)}`,
+      '',
+      '[runtime]',
+      'agent = "kimi"',
+      '',
+      '[runtime.kimi]',
+      'model = "channel-kimi-model"',
+      '',
+    ].join('\n'), 'utf-8');
+    const store = new JsonFileStore(makeSettings());
+    initBridgeContext({
+      store,
+      llm: noopLlm,
+      permissions: { resolvePendingPermission: () => false },
+      lifecycle: {},
+    });
+
+    const draftBinding = resolve({
+      channelType: 'feishu-default',
+      channelProvider: 'feishu',
+      chatId: 'oc_channel_defaults_kimi_draft',
+      userId: 'ou_channel_kimi',
+      displayName: 'Channel Kimi Defaults',
+    });
+    const draftSession = store.getSession(draftBinding.bridgeSessionId);
+    assert.equal(getSessionActiveRuntime(draftSession), 'kimi');
+    assert.equal(getSessionWorkingDirectory(draftSession), channelWorkspace);
+    assert.equal(resolveKimiRuntimeConfig(draftSession, draftBinding).model, 'channel-kimi-model');
+
+    const explicitWorkspace = path.join(CODELARK_HOME, 'explicit-kimi-workspace');
+    fs.mkdirSync(explicitWorkspace, { recursive: true });
+    const visibleBinding = createBinding({
+      channelType: 'feishu-default',
+      channelProvider: 'feishu',
+      chatId: 'oc_channel_defaults_kimi_visible',
+      userId: 'ou_visible_kimi',
+      displayName: 'Channel Kimi Visible',
+    }, explicitWorkspace);
+    const visibleSession = store.getSession(visibleBinding.bridgeSessionId);
+    assert.equal(getSessionActiveRuntime(visibleSession), 'kimi');
+    assert.equal(getSessionWorkingDirectory(visibleSession), explicitWorkspace);
+    assert.equal(resolveKimiRuntimeConfig(visibleSession, visibleBinding).model, 'channel-kimi-model');
+
+    const legacyProviderBinding = resolve({
+      channelType: 'feishu',
+      channelProvider: 'feishu',
+      chatId: 'oc_channel_defaults_kimi_legacy_provider',
+      userId: 'ou_legacy_kimi',
+      displayName: 'Legacy Provider Kimi',
+    });
+    const legacyProviderSession = store.getSession(legacyProviderBinding.bridgeSessionId);
+    assert.equal(getSessionActiveRuntime(legacyProviderSession), 'kimi');
+    assert.equal(getSessionWorkingDirectory(legacyProviderSession), channelWorkspace);
+    assert.equal(resolveKimiRuntimeConfig(legacyProviderSession, legacyProviderBinding).model, 'channel-kimi-model');
   });
 });

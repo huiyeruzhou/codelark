@@ -4,6 +4,9 @@ import type {
   BridgeSessionClaudeRuntimeState,
   BridgeSessionCodexRuntimeState,
   BridgeSessionGeneralState,
+  BridgeSessionKimiRuntimeState,
+  KimiProviderChoice,
+  RuntimeAgent,
   BridgeSessionRuntimeState,
   RuntimeProviderChoice,
   RuntimeProviderIdentity,
@@ -27,12 +30,21 @@ type SessionRuntimeLike = {
       cwd?: string | null;
       model?: string | null;
     };
+    kimi?: Omit<Partial<BridgeSessionKimiRuntimeState>, 'sessionId' | 'cwd' | 'model'> & {
+      sessionId?: string | null;
+      cwd?: string | null;
+      model?: string | null;
+    };
     general?: Partial<BridgeSessionGeneralState>;
   };
 };
 
 function isClaudeRuntime(session: SessionRuntimeLike | null | undefined): boolean {
   return session?.runtime?.activeRuntime === 'claude';
+}
+
+function isKimiRuntime(session: SessionRuntimeLike | null | undefined): boolean {
+  return session?.runtime?.activeRuntime === 'kimi';
 }
 
 function trimOrUndefined(value: string | null | undefined): string | undefined {
@@ -54,27 +66,29 @@ function getSessionTomlOverride<T>(session: SessionRuntimeLike | null | undefine
 }
 
 export function getSessionCodexThreadId(session: SessionRuntimeLike | null | undefined): string | undefined {
-  if (isClaudeRuntime(session)) return undefined;
+  if (isClaudeRuntime(session) || isKimiRuntime(session)) return undefined;
   return trimOrUndefined(session?.runtime?.codex?.threadId);
 }
 
 export function getSessionActiveRuntime(session: SessionRuntimeLike | null | undefined): BridgeSessionRuntimeState['activeRuntime'] {
   const activeRuntime = session?.runtime?.activeRuntime;
-  return activeRuntime === 'claude' ? 'claude' : activeRuntime === 'codex' ? 'codex' : undefined;
+  return activeRuntime === 'claude' || activeRuntime === 'codex' || activeRuntime === 'kimi'
+    ? activeRuntime
+    : undefined;
 }
 
 export function getSessionCodexTitle(session: SessionRuntimeLike | null | undefined): string | undefined {
-  if (isClaudeRuntime(session)) return undefined;
+  if (isClaudeRuntime(session) || isKimiRuntime(session)) return undefined;
   return trimOrUndefined(session?.runtime?.codex?.title);
 }
 
 export function getSessionCodexModel(session: SessionRuntimeLike | null | undefined): string | undefined {
-  if (isClaudeRuntime(session)) return undefined;
+  if (isClaudeRuntime(session) || isKimiRuntime(session)) return undefined;
   return trimOrUndefined(getSessionTomlOverride<string>(session, 'runtime.codex.model'));
 }
 
 export function getSessionCodexMode(session: SessionRuntimeLike | null | undefined): BridgeSessionCodexRuntimeState['mode'] | undefined {
-  if (isClaudeRuntime(session)) return undefined;
+  if (isClaudeRuntime(session) || isKimiRuntime(session)) return undefined;
   const mode = getSessionTomlOverride<'off' | 'on' | 'yolo'>(session, 'runtime.codex.yoloMode');
   if (mode === 'on' || mode === 'yolo') return 'yolo';
   if (mode === 'off') return 'normal';
@@ -82,13 +96,13 @@ export function getSessionCodexMode(session: SessionRuntimeLike | null | undefin
 }
 
 export function getSessionCodexProvider(session: SessionRuntimeLike | null | undefined): BridgeSessionCodexRuntimeState['provider'] | undefined {
-  if (isClaudeRuntime(session)) return undefined;
+  if (isClaudeRuntime(session) || isKimiRuntime(session)) return undefined;
   const provider = getSessionTomlOverride<string>(session, 'runtime.codex.provider');
   return isRuntimeProviderChoice(provider) ? provider : undefined;
 }
 
 export function getSessionCodexSandboxMode(session: SessionRuntimeLike | null | undefined): BridgeSessionCodexRuntimeState['sandboxMode'] | undefined {
-  if (isClaudeRuntime(session)) return undefined;
+  if (isClaudeRuntime(session) || isKimiRuntime(session)) return undefined;
   const sandboxMode = getSessionTomlOverride<string>(session, 'runtime.codex.sandboxMode');
   return sandboxMode === 'read-only' || sandboxMode === 'workspace-write' || sandboxMode === 'danger-full-access'
     ? sandboxMode
@@ -96,13 +110,13 @@ export function getSessionCodexSandboxMode(session: SessionRuntimeLike | null | 
 }
 
 export function getSessionCodexNetworkAccess(session: SessionRuntimeLike | null | undefined): boolean | undefined {
-  if (isClaudeRuntime(session)) return undefined;
+  if (isClaudeRuntime(session) || isKimiRuntime(session)) return undefined;
   const networkAccess = getSessionTomlOverride<boolean>(session, 'runtime.codex.networkAccess');
   return typeof networkAccess === 'boolean' ? networkAccess : undefined;
 }
 
 export function getSessionCodexReasoningEffort(session: SessionRuntimeLike | null | undefined): BridgeSessionCodexRuntimeState['reasoningEffort'] | undefined {
-  if (isClaudeRuntime(session)) return undefined;
+  if (isClaudeRuntime(session) || isKimiRuntime(session)) return undefined;
   const reasoningEffort = getSessionTomlOverride<string>(session, 'runtime.codex.reasoningEffort');
   return reasoningEffort === 'minimal'
     || reasoningEffort === 'low'
@@ -134,22 +148,48 @@ export function getSessionClaudeProvider(session: SessionRuntimeLike | null | un
   return isRuntimeProviderChoice(provider) ? provider : undefined;
 }
 
-export function getSessionRuntimeProvider(session: SessionRuntimeLike | null | undefined): RuntimeProviderChoice | undefined {
+export function getSessionKimiSessionId(session: SessionRuntimeLike | null | undefined): string | undefined {
+  if (!isKimiRuntime(session)) return undefined;
+  return trimOrUndefined(session?.runtime?.kimi?.sessionId);
+}
+
+export function getSessionKimiCwd(session: SessionRuntimeLike | null | undefined): string | undefined {
+  if (!isKimiRuntime(session)) return undefined;
+  return trimOrUndefined(session?.runtime?.kimi?.cwd);
+}
+
+export function getSessionKimiModel(session: SessionRuntimeLike | null | undefined): string | undefined {
+  if (!isKimiRuntime(session)) return undefined;
+  return trimOrUndefined(getSessionTomlOverride<string>(session, 'runtime.kimi.model'));
+}
+
+export function getSessionKimiProvider(session: SessionRuntimeLike | null | undefined): KimiProviderChoice | undefined {
+  if (!isKimiRuntime(session)) return undefined;
+  const provider = getSessionTomlOverride<string>(session, 'runtime.kimi.provider');
+  return provider === 'tmux' ? 'tmux' : undefined;
+}
+
+export function getSessionRuntimeProvider(session: SessionRuntimeLike | null | undefined): RuntimeProviderChoice | KimiProviderChoice | undefined {
+  if (isKimiRuntime(session)) return getSessionKimiProvider(session);
   return isClaudeRuntime(session) ? getSessionClaudeProvider(session) : getSessionCodexProvider(session);
 }
 
 export function getSessionRuntimeProviderIdentity(session: SessionRuntimeLike | null | undefined): RuntimeProviderIdentity | undefined {
   const provider = getSessionRuntimeProvider(session)
-    || (isClaudeRuntime(session) ? session?.runtime?.claude?.provider : session?.runtime?.codex?.provider);
+    || (isKimiRuntime(session)
+      ? session?.runtime?.kimi?.provider
+      : isClaudeRuntime(session) ? session?.runtime?.claude?.provider : session?.runtime?.codex?.provider);
+  if (isKimiRuntime(session)) return provider === 'tmux' ? 'kimi:tmux' : undefined;
   if (!isRuntimeProviderChoice(provider)) return undefined;
   if (!provider) return undefined;
   return `${isClaudeRuntime(session) ? 'claude' : 'codex'}:${provider}`;
 }
 
 export function buildRuntimeProviderIdentity(
-  runtime: 'codex' | 'claude',
-  provider: RuntimeProviderChoice,
+  runtime: RuntimeAgent,
+  provider: RuntimeProviderChoice | KimiProviderChoice,
 ): RuntimeProviderIdentity {
+  if (runtime === 'kimi') return 'kimi:tmux';
   return `${runtime}:${provider}`;
 }
 
@@ -198,9 +238,16 @@ export function getSessionTmuxEchoInput(session: SessionRuntimeLike | null | und
 }
 
 export function materializeBridgeSessionRuntime(rawSession: BridgeSession): BridgeSession {
-  const activeRuntime = rawSession.runtime?.activeRuntime === 'claude' ? 'claude' : 'codex';
+  const activeRuntime = rawSession.runtime?.activeRuntime === 'claude'
+    ? 'claude'
+    : rawSession.runtime?.activeRuntime === 'kimi'
+      ? 'kimi'
+      : 'codex';
   const codex = {
     ...rawSession.runtime?.codex,
+  };
+  const kimi = {
+    ...rawSession.runtime?.kimi,
   };
   const general = {
     ...rawSession.runtime?.general,
@@ -214,11 +261,17 @@ export function materializeBridgeSessionRuntime(rawSession: BridgeSession): Brid
           ...(rawSession.runtime?.claude ? { claude: rawSession.runtime.claude } : {}),
           ...(Object.keys(general).length > 0 ? { general } : {}),
         } satisfies BridgeSessionRuntimeState
-      : {
-          ...(rawSession.runtime?.activeRuntime === 'codex' ? { activeRuntime: 'codex' as const } : {}),
-          ...(Object.keys(codex).length > 0 ? { codex } : {}),
-          ...(Object.keys(general).length > 0 ? { general } : {}),
-        } satisfies BridgeSessionRuntimeState,
+      : activeRuntime === 'kimi'
+        ? {
+            activeRuntime: 'kimi',
+            ...(Object.keys(kimi).length > 0 ? { kimi } : {}),
+            ...(Object.keys(general).length > 0 ? { general } : {}),
+          } satisfies BridgeSessionRuntimeState
+        : {
+            ...(rawSession.runtime?.activeRuntime === 'codex' ? { activeRuntime: 'codex' as const } : {}),
+            ...(Object.keys(codex).length > 0 ? { codex } : {}),
+            ...(Object.keys(general).length > 0 ? { general } : {}),
+          } satisfies BridgeSessionRuntimeState,
   };
   return materialized;
 }
@@ -244,6 +297,13 @@ export function setSessionClaudeIdentityUpdate(
   cwd: string | undefined,
 ): BridgeSessionRuntimeUpdate {
   return { runtime: { activeRuntime: 'claude', claude: { sessionId, cwd } } };
+}
+
+export function setSessionKimiIdentityUpdate(
+  sessionId: string | undefined,
+  cwd: string | undefined,
+): BridgeSessionRuntimeUpdate {
+  return { runtime: { activeRuntime: 'kimi', kimi: { sessionId, cwd } } };
 }
 
 export function setSessionSystemPromptUpdate(systemPrompt: string | undefined): BridgeSessionRuntimeUpdate {
@@ -303,6 +363,9 @@ export function mergeSessionRuntimeUpdates(...updates: BridgeSessionRuntimeUpdat
         claude: update.runtime.claude
           ? { ...acc.runtime?.claude, ...update.runtime.claude }
           : acc.runtime?.claude,
+        kimi: update.runtime.kimi
+          ? { ...acc.runtime?.kimi, ...update.runtime.kimi }
+          : acc.runtime?.kimi,
         general: update.runtime.general
           ? { ...acc.runtime?.general, ...update.runtime.general }
           : acc.runtime?.general,

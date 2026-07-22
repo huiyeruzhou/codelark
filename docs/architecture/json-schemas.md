@@ -15,8 +15,8 @@ CodeLark 为 `~/.codelark` 下的本地数据文件发布 JSON Schema。入口�
 | 运行时文件 | Schema | 说明 |
 | --- | --- | --- |
 | `config.json` | `schemas/config.v1.schema.json` | 结构化配置，版本字段是 `schemaVersion: 1`。 |
-| `data/sessions.json` | `schemas/data/sessions.v1.schema.json` | 以 Bridge session id 为 key 的 map；`runtime.codex.threadId` 保存在这里。 |
-| `data/channel-chats.json` | `schemas/data/channel-chats.v1.schema.json` | 以 ChannelChat id 为 key 的 map；使用 `bridgeSessionId` 指向 session，禁止保存 thread 身份和旧 binding 运行时字段。 |
+| `data/sessions.json` | `schemas/data/sessions.v1.schema.json` | 以 Bridge session id 为 key 的 map；保存当前 BridgeSession 的 runtime-local identity，例如 `runtime.codex.threadId`、`runtime.claude.sessionId/cwd` 或 `runtime.kimi.sessionId/cwd`。 |
+| `data/channel-chats.json` | `schemas/data/channel-chats.v1.schema.json` | 以 ChannelChat id 为 key 的 map；使用 `bridgeSessionId` 指向 session，禁止保存底层 runtime identity 和旧 binding 运行时字段。 |
 | `data/channel-default-targets.json` | `schemas/data/channel-default-targets.v1.schema.json` | 以 channel instance id 为 key 的默认目标 map；使用 `bridgeSessionId`，启动时会丢弃缺少它的旧记录。 |
 | `data/messages/*.json` | `schemas/data/messages.v1.schema.json` | 单个 BridgeSession 的消息数组。 |
 | `data/permissions.json` | `schemas/data/permissions.v1.schema.json` | 权限请求链接。 |
@@ -35,9 +35,9 @@ JSON Schema 本身不执行迁移。`schemas/manifest.json` 只声明当前文�
 
 `schemaVersion` 是当前配置文件格式的断言，不是自动升级开关。破坏性调整发生时，如果项目决定不兼容旧格式，就直接更新 v1 schema 和代码。
 
-## Thread 身份迁移
+## Runtime 身份迁移
 
-当前启动迁移主要修复 thread 身份重构。这是显式 TypeScript 代码，不是 schema 自动升级能力。
+当前启动迁移主要修复历史 Codex thread 身份重构，并清理旧 binding 运行时字段。这是显式 TypeScript 代码，不是 schema 自动升级能力。
 
 迁移前，旧数据里可能出现多种 thread 字段：
 
@@ -52,7 +52,7 @@ JSON Schema 本身不执行迁移。`schemas/manifest.json` 只声明当前文�
 - 旧 binding 上的 `codex_thread_id`
 - 旧 binding 上的 `codexThreadId`
 
-迁移后的目标只有一个：
+Codex 旧字段迁移后的目标只有一个：
 
 ```text
 BridgeSession.runtime.codex.threadId
@@ -67,13 +67,19 @@ BridgeSession.runtime.codex.threadId
 
 ## 身份规则
 
-`BridgeSession.runtime.codex.threadId` 是唯一持久化的 Codex thread 身份字段，必须保存在：
+底层 runtime identity 必须保存在 `BridgeSession.runtime` 下：
 
 ```text
 data/sessions.json
 ```
 
-`data/channel-chats.json` 只能通过 `bridgeSessionId` 指向 session。它不应保存任何 Codex thread 身份，因为 ChannelChat 的职责是“IM chat -> BridgeSession”，不是“IM chat -> Codex thread”。
+- Codex 使用 `runtime.codex.threadId`。
+- Claude Code 使用 `runtime.claude.sessionId` 和 `runtime.claude.cwd`。
+- Kimi Code 使用 `runtime.kimi.sessionId` 和 `runtime.kimi.cwd`。
+
+同一个 `BridgeSession.runtime` 只能表示一个 active runtime namespace。schema 对 Claude 和 Kimi runtime 要求 `activeRuntime`，并禁止同一 runtime object 同时保存其他 agent 的 local identity。
+
+`data/channel-chats.json` 只能通过 `bridgeSessionId` 指向 session。它不应保存任何底层 runtime identity，因为 ChannelChat 的职责是“IM chat -> BridgeSession”，不是“IM chat -> Codex thread / Claude session / Kimi session”。
 
 Schema 会拒绝这些已删除身份字段：
 
@@ -88,10 +94,10 @@ Schema 会拒绝这些已删除身份字段：
 Schema 约束的是这条链路：
 
 ```text
-Codex thread id
-  -> data/sessions.json 中的 BridgeSession.runtime.codex.threadId
+runtime-local identity
+  -> data/sessions.json 中的 BridgeSession.runtime.*
   -> data/channel-chats.json 中的 ChannelChat.bridgeSessionId
   -> channelType + chatId 对应的 IM chat
 ```
 
-如果 schema 允许 ChannelChat 保存 thread id，这条链路就会出现两个 thread 身份来源，history、mirror、reuse 和 `/t` 切换都会变得不一致。因此 schema 层必须把 thread 身份固定在 session 上。
+如果 schema 允许 ChannelChat 保存底层 runtime identity，这条链路就会出现两个身份来源，history、mirror、reuse 和 `/t` 切换都会变得不一致。因此 schema 层必须把 Codex thread、Claude session 和 Kimi session 身份固定在 BridgeSession 上。

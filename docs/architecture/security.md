@@ -26,7 +26,7 @@ bridge 会把 IM 平台消息暴露给 LLM。主要风险包括：
 - `validateSessionId()`：只接受 32-64 字符的 hex/UUID 格式。
 - `isDangerousInput()`：检测路径穿越、命令注入、null byte 和控制字符。
 - `sanitizeInput()`：移除控制字符（保留 `\n`、`\t`），并限制最大长度为 10,000 字符。
-- `validateMode()`：使用白名单（`normal`、`yolo`；`code` 映射为 `normal`）。
+- `validateMode()`：使用白名单（`normal`、`yolo`）。
 
 ### 限流（`security/rate-limiter.ts`）
 

@@ -36,7 +36,7 @@ codelark setup
 6. 可选设置飞书用户 open_id 白名单。
 7. 可选安装 CodeLark skills 和官方 `lark-doc` skill。本地 CodeLark skills 会先安装；官方 `lark-doc` 通过 `npx skills add ...` 单独安装，失败时不会影响本地 skills 可用。
 
-如果用户拒绝在向导中安装 tmux，向导仍会继续保存配置，但会把默认 provider 改为 SDK：`runtime.codex.provider = "sdk"`，并把 Claude 默认 provider 写为 `runtime.claude.provider = "sdk"`。之后安装 tmux 后，可以在 IM 中使用 `/provider tmux` 切回 tmux provider。
+如果用户拒绝在向导中安装 tmux，向导仍会继续保存配置，但会把默认 provider 改为 SDK：`runtime.codex.provider = "sdk"`，并把 Claude 默认 provider 写为 `runtime.claude.provider = "sdk"`。Kimi Code 当前只有 tmux provider，因此需要安装 tmux 后再使用 Kimi runtime。之后安装 tmux 后，可以在 IM 中使用 `/provider tmux` 切回 tmux provider。
 
 机器人配置方式有两种：
 
@@ -126,7 +126,7 @@ http://127.0.0.1:4781
 - 查看 UI 和 bridge 是否运行。
 - 配置飞书通道实例。
 - 测试飞书凭据和连通性。
-- 查看本地 Codex / Claude Code 会话。
+- 查看本地 Codex / Claude Code / Kimi Code 会话。
 - 查看 CodeLark Bridge 会话和聊天绑定。
 - 查看会话历史。
 - 给通道设置默认目标会话。
@@ -189,11 +189,10 @@ CodeLark 自有数据位于：
 - `logs/`：bridge、UI 和启动器日志。
 - `runtime/`：运行状态、PID、端口等临时状态。
 
-Codex 自己的会话数据仍由 Codex 管理，CodeLark 只读取必要索引和 JSONL：
+Codex 自己的会话数据仍由 Codex 管理，CodeLark 只读取必要的 session index 和 JSONL：
 
 ```text
 ~/.codex/sessions/**/*.jsonl
-~/.codex/state_*.sqlite
 ```
 
 遇到启动、消息收发、权限或卡片问题时，见 [排障指南](troubleshooting.md)。

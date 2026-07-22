@@ -1,6 +1,7 @@
 import { buildCommandFields } from './presentation.js';
 import type { RuntimeSettingsCommandDeps } from './runtime-bootstrap.js';
 import type { BridgeSession, BridgeStore, ChannelChat } from '../../domain/index.js';
+import type { RuntimeAgent } from '../../domain/session.js';
 import {
   getSessionActiveRuntime,
   getSessionSystemPrompt,
@@ -13,34 +14,35 @@ import {
   resolveEffectiveCodexProvider,
   resolveEffectiveRuntimeProvider,
   resolveEffectiveMode,
+  resolveEffectiveRuntimeMode,
   hasSessionClaudeProviderOverride,
   hasSessionCodexProviderOverride,
+  hasSessionKimiProviderOverride,
 } from '../session/support.js';
 import { getGlobalStringConfig } from '../session/global-config.js';
 import { getCodexThreadId } from '../turn/turn-classifier.js';
 import { sessionLooksRunning } from './session-args.js';
 
-export type RuntimeName = 'codex' | 'claude';
+export type RuntimeName = RuntimeAgent;
+export type SupportedRuntimeName = RuntimeName;
 
 export function formatSessionMode(binding: ChannelChat | null | undefined, session?: BridgeSession | null): string {
   return resolveEffectiveMode(binding, session);
 }
 
 export function formatSessionRuntimeMode(binding: ChannelChat | null | undefined, session?: BridgeSession | null): string {
-  if (getSessionActiveRuntime(session) === 'claude') {
-    return resolveClaudeRuntimeConfig(session, binding).permissionMode === 'bypassPermissions' ? 'yolo' : 'normal';
-  }
-  return formatSessionMode(binding, session);
+  return resolveEffectiveRuntimeMode(binding, session);
 }
 
-export function sessionRuntimeName(session: BridgeSession | null | undefined): RuntimeName {
-  return getSessionActiveRuntime(session) === 'claude' ? 'claude' : 'codex';
+export function sessionRuntimeName(session: BridgeSession | null | undefined): SupportedRuntimeName {
+  const runtime = getSessionActiveRuntime(session);
+  return runtime === 'claude' || runtime === 'kimi' ? runtime : 'codex';
 }
 
 export function mappedRuntimeSessionId(
   store: BridgeStore,
   binding: ChannelChat,
-  runtime: RuntimeName,
+  runtime: SupportedRuntimeName,
 ): string | undefined {
   const mapped = binding.runtimeBridgeSessionIds?.[runtime];
   if (mapped) {
@@ -54,7 +56,7 @@ export function mappedRuntimeSessionId(
 
 export function createRuntimeSessionForChat(options: {
   store: BridgeStore;
-  runtime: RuntimeName;
+  runtime: SupportedRuntimeName;
   baseSession: BridgeSession;
   chatId: string;
   binding?: ChannelChat | null;
@@ -62,9 +64,10 @@ export function createRuntimeSessionForChat(options: {
   const workDir = getSessionWorkingDirectory(options.baseSession) || process.cwd();
   const systemPrompt = getSessionSystemPrompt(options.baseSession);
   const rawBaseName = options.baseSession.name?.trim() || `Bridge: ${options.chatId}`;
-  const baseName = rawBaseName.replace(/\s+\((?:Claude Code|Codex)\)$/u, '');
+  const baseName = rawBaseName.replace(/\s+\((?:Claude Code|Kimi Code|Codex)\)$/u, '');
+  const suffix = options.runtime === 'claude' ? 'Claude Code' : options.runtime === 'kimi' ? 'Kimi Code' : 'Codex';
   return options.store.createSession(
-    options.runtime === 'claude' ? `${baseName} (Claude Code)` : `${baseName} (Codex)`,
+    `${baseName} (${suffix})`,
     options.runtime === 'codex' ? (getGlobalStringConfig('runtime.codex.model') || '') : '',
     systemPrompt,
     workDir,
@@ -91,6 +94,8 @@ export function formatSessionRuntimeProvider(session?: BridgeSession | null, bin
   const effective = resolveEffectiveRuntimeProvider(session, binding);
   const hasOverride = effective.runtime === 'claude'
     ? hasSessionClaudeProviderOverride(session)
+    : effective.runtime === 'kimi'
+      ? hasSessionKimiProviderOverride(session)
     : hasSessionCodexProviderOverride(session);
   return hasOverride ? effective.provider : `${effective.provider} (全局默认)`;
 }
@@ -126,7 +131,7 @@ export function sessionHasActiveRuntimeTurn(
 
 export function buildRuntimeSwitchWhileRunningResponse(params: {
   commandLabel: string;
-  runtime: RuntimeName;
+  runtime: SupportedRuntimeName;
   provider?: string;
   markdown: boolean;
 }): string {

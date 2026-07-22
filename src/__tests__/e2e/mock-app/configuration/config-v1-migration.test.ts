@@ -280,6 +280,22 @@ describe('v1 config migration e2e', () => {
           },
           runtime_status: 'idle',
         },
+        'session-kimi': {
+          id: 'session-kimi',
+          runtime: {
+            activeRuntime: 'kimi',
+            kimi: {
+              sessionId: 'session_kimi-e2e-123',
+              cwd: '/repo/kimi-runtime',
+              model: 'kimi-k2-e2e',
+              provider: 'tmux',
+            },
+            general: {
+              workingDirectory: '/repo/kimi-config',
+            },
+          },
+          runtime_status: 'idle',
+        },
       }, null, 2));
 
       const result = runConfigMigrations({
@@ -292,6 +308,7 @@ describe('v1 config migration e2e', () => {
       assert.equal(fs.existsSync(path.join(paths.backupDir, 'v1', 'data', 'sessions.json')), true);
       assert.equal(fs.existsSync(path.join(paths.sessionConfigDir, 'session-codex.toml')), true);
       assert.equal(fs.existsSync(path.join(paths.sessionConfigDir, 'session-claude.toml')), true);
+      assert.equal(fs.existsSync(path.join(paths.sessionConfigDir, 'session-kimi.toml')), true);
 
       const service = createConfigService({ codelarkHome: home, env: {} });
       assert.equal(service.get('runtime.agent', { kind: 'session', sessionId: 'session-codex' }), 'codex');
@@ -314,6 +331,11 @@ describe('v1 config migration e2e', () => {
       assert.equal(service.get('runtime.claude.reasoningEffort', { kind: 'session', sessionId: 'session-claude' }), 'xhigh');
       assert.equal(service.get('runtime.claude.idleTimeoutMinutes', { kind: 'session', sessionId: 'session-claude' }), 7);
 
+      assert.equal(service.get('runtime.agent', { kind: 'session', sessionId: 'session-kimi' }), 'kimi');
+      assert.equal(service.get('session.workspace', { kind: 'session', sessionId: 'session-kimi' }), '/repo/kimi-config');
+      assert.equal(service.get('runtime.kimi.model', { kind: 'session', sessionId: 'session-kimi' }), 'kimi-k2-e2e');
+      assert.equal(service.get('runtime.kimi.provider', { kind: 'session', sessionId: 'session-kimi' }), 'tmux');
+
       const pruned = JSON.parse(fs.readFileSync(paths.dataSessionsJson, 'utf-8')) as Record<string, {
         health_status?: string;
         runtime_status?: string;
@@ -321,6 +343,7 @@ describe('v1 config migration e2e', () => {
           activeRuntime?: string;
           codex?: Record<string, unknown>;
           claude?: Record<string, unknown>;
+          kimi?: Record<string, unknown>;
           general?: Record<string, unknown>;
         };
       }>;
@@ -340,6 +363,12 @@ describe('v1 config migration e2e', () => {
         cwd: '/repo/claude-runtime',
       });
       assert.equal(pruned['session-claude']?.runtime_status, 'idle');
+      assert.equal(pruned['session-kimi']?.runtime?.activeRuntime, undefined);
+      assert.deepEqual(pruned['session-kimi']?.runtime?.kimi, {
+        sessionId: 'session_kimi-e2e-123',
+        cwd: '/repo/kimi-runtime',
+      });
+      assert.equal(pruned['session-kimi']?.runtime_status, 'idle');
     } finally {
       fs.rmSync(home, { recursive: true, force: true });
     }

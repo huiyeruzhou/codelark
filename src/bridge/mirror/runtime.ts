@@ -57,11 +57,15 @@ export interface MirrorRuntimeBinding {
 
 export interface MirrorRuntimeSession {
   runtime?: {
-    activeRuntime?: 'codex' | 'claude';
+    activeRuntime?: 'codex' | 'claude' | 'kimi';
     codex?: {
       threadId?: string | null;
     };
     claude?: {
+      sessionId?: string | null;
+      cwd?: string | null;
+    };
+    kimi?: {
       sessionId?: string | null;
       cwd?: string | null;
     };
@@ -143,7 +147,7 @@ export function createMirrorRuntime(
 ): MirrorRuntime {
   const mirrorSource = deps.mirrorSource || createCodexMirrorJsonlSource();
   const runtimeLabel = deps.runtimeLabel || 'Codex';
-  const runtimeName: BridgeTurnRuntime = mirrorSource.runtime === 'claude' ? 'claude' : 'codex';
+  const runtimeName: BridgeTurnRuntime = mirrorSource.runtime;
   const getSessionMirrorThreadId = deps.getSessionMirrorThreadId
     || ((session: MirrorRuntimeSession) => getSessionCodexThreadId(session));
   const hasSessionMirrorSource = deps.hasSessionMirrorSource

@@ -65,6 +65,41 @@ describe('turn-classifier', () => {
     assert.equal(result.codexThreadAvailable, true);
   });
 
+  it('classifies Kimi sessions as pure IM SDK even when a stale Codex thread is present', () => {
+    const currentSession = session({
+      runtime: {
+        activeRuntime: 'kimi',
+        codex: { threadId: 'stale-codex-thread' },
+        kimi: {
+          provider: 'tmux',
+          sessionId: 'session_kimi_classifier',
+          cwd: '/tmp/project',
+        },
+      },
+    } as unknown as BridgeSession);
+    const lookedUpThreadIds: string[] = [];
+
+    const result = classifyInteractiveTurn(
+      binding(),
+      currentSession,
+      (threadId) => {
+        lookedUpThreadIds.push(threadId);
+        return true;
+      },
+    );
+
+    assert.equal(
+      (currentSession.runtime as { codex?: { threadId?: string } })?.codex?.threadId,
+      'stale-codex-thread',
+    );
+    assert.equal(getCodexThreadId(currentSession), undefined);
+    assert.equal(result.kind, 'im_sdk');
+    assert.equal(result.reason, 'runtime_kimi');
+    assert.equal(result.codexThreadId, undefined);
+    assert.equal(result.codexThreadAvailable, false);
+    assert.deepEqual(lookedUpThreadIds, []);
+  });
+
   it('does not read legacy thread fields from bindings or session fallbacks', () => {
     const currentSession = session({
       runtime: { codex: { threadId: 'codex-thread-only' } },
