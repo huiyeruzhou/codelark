@@ -22,6 +22,7 @@ import {
   basicDialogueStreamCardCheckpointIssues,
   collectRealE2eDump,
   kimiThinkingStatusOnlyIssues,
+  scriptedKimiToolCardIssues,
   scriptedKimiHistoryTranscriptIssues,
   scriptedKimiResumeAndSteerIssues,
   scriptedKimiRuntimeSlotIssues,
@@ -63,6 +64,7 @@ interface CliOptions {
   launchBridge: boolean;
   fakeCcr: boolean;
   scriptedBasicDialogue: boolean;
+  scriptedKimi: boolean;
   keepGroup: boolean;
   keepCodelarkHome: boolean;
   testEnvFile: string;
@@ -1064,6 +1066,7 @@ const BOOLEAN_CLI_FLAGS = new Set([
   '--launch-bridge',
   '--fake-ccr',
   '--scripted-basic-dialogue',
+  '--scripted-kimi',
   '--keep-group',
   '--keep-clk-home',
   '--help',
@@ -1245,6 +1248,7 @@ function parseOptions(argv: string[]): CliOptions {
     launchBridge,
     fakeCcr: hasFlag(argv, '--fake-ccr'),
     scriptedBasicDialogue: hasFlag(argv, '--scripted-basic-dialogue'),
+    scriptedKimi: hasFlag(argv, '--scripted-kimi'),
     keepGroup: hasFlag(argv, '--keep-group'),
     keepCodelarkHome: hasFlag(argv, '--keep-clk-home'),
     testEnvFile: valueArg(argv, '--test-env-file', defaultRealFeishuTestEnvFile()),
@@ -1316,6 +1320,7 @@ function printUsage(): void {
     '  --fake-ccr                Run true ccr/Claude Code against a local fake OpenAI-compatible backend',
     '  --fake-ccr-response <txt> Expected fake backend response text',
     '  --scripted-basic-dialogue Run basic-dialogue through isolated Codex Responses/CCR proxies, not direct provider injection',
+    '  --scripted-kimi           Replace only the Kimi executable with a deterministic wire producer; valid for Kimi tmux runtime-message E2E',
     '  --keep-clk-home           Keep the temporary CODELARK_HOME after the run; default cleans it',
     '  --run-root <path>          Parent directory for ccr/codex/codelark test homes; default /tmp/clk-real-feishu-<run-id>',
     '  --clk-home <path>          CODELARK_HOME for the launched/dumped test bridge',
@@ -1622,6 +1627,7 @@ function canonicalRequiredCheckNamesForParts(scenario: string, providerSuffix: s
     required.add('basic_dialogue_kimi_wire_transcript_read');
     required.add('basic_dialogue_kimi_history_transcript_excludes_thinking');
     required.add('basic_dialogue_kimi_thinking_status_only');
+    required.add('basic_dialogue_kimi_tool_card');
   }
 
   return [...required];
@@ -1917,6 +1923,12 @@ function requireRealGuard(options: CliOptions): void {
       'The deterministic basic-dialogue proxies are injected into the isolated bridge child through HOME/CODEX_HOME/CCR proxy environment.',
     ].join(' '));
   }
+  if (options.scriptedKimi && !options.launchBridge) {
+    throw new Error([
+      'Refusing to use --scripted-kimi without --launch-bridge.',
+      'The deterministic Kimi executable may only run inside the isolated bridge environment.',
+    ].join(' '));
+  }
   if (options.launchBridge && (!options.testFeishuAppId || !options.testFeishuAppSecret)) {
     throw new Error('Set CODELARK_REAL_FEISHU_TEST_APP_ID and CODELARK_REAL_FEISHU_TEST_APP_SECRET, or pass --test-feishu-app-id/--test-feishu-app-secret.');
   }
@@ -1926,6 +1938,13 @@ function validateScriptedBasicDialogueOptions(options: CliOptions): void {
   if (!options.scriptedBasicDialogue) return;
   if (options.scenario !== 'basic-dialogue-suite') {
     throw new Error('--scripted-basic-dialogue is only valid with --scenario basic-dialogue-suite.');
+  }
+}
+
+function validateScriptedKimiOptions(options: CliOptions): void {
+  if (!options.scriptedKimi) return;
+  if (options.scenario !== 'runtime-message' || options.runtime !== 'kimi' || options.provider !== 'tmux') {
+    throw new Error('--scripted-kimi is only valid with --scenario runtime-message --runtime kimi --provider tmux.');
   }
 }
 
@@ -2369,8 +2388,8 @@ function visiblePrompt(text) {
 }
 
 function markerFromPrompt(text) {
-  const match = text.match(/\\bCODELARK_BASIC_DIALOGUE_[A-Z0-9_]+_KIMI_TMUX\\b/u);
-  return match ? match[0] : 'CODELARK_BASIC_DIALOGUE_SCRIPTED_KIMI_TMUX';
+  const match = text.match(/\\bCODELARK_[A-Z0-9_]+\\b/u);
+  return match ? match[0] : 'CODELARK_SCRIPTED_KIMI_TMUX';
 }
 
 function providerKeyFromMarker(marker) {
@@ -2387,6 +2406,21 @@ function answerOnce() {
   const now = Date.now();
   appendWire({ type: 'context.append_loop_event', time: now, event: { type: 'step.begin', turnId: 'turn-scripted-kimi', stepUuid: 'step-scripted-kimi' } });
   appendWire({ type: 'context.append_loop_event', time: now + 1, event: { type: 'content.part', turnId: 'turn-scripted-kimi', part: { type: 'think', think: 'scripted Kimi thinking for ' + marker } } });
+  const patchLines = ['*** Begin Patch', '*** Update File: src/tool-card-fixture.ts', '@@'];
+  for (let index = 1; index <= 190; index += 1) patchLines.push('+export const fixtureLine' + index + ' = ' + index + ';');
+  patchLines.push('*** End Patch');
+  const longPatch = patchLines.join('\\n');
+  const toolEvents = [
+    { type: 'tool.call', turnId: 'turn-scripted-kimi', toolCallId: 'read-scripted-kimi', name: 'Read', args: { path: 'src/tool-card-fixture.ts', line_offset: 0, n_lines: 80 } },
+    { type: 'tool.result', turnId: 'turn-scripted-kimi', toolCallId: 'read-scripted-kimi', result: { output: 'export const fixtureLine1 = 1;\\nexport const fixtureLine2 = 2;' } },
+    { type: 'tool.call', turnId: 'turn-scripted-kimi', toolCallId: 'grep-scripted-kimi', name: 'Grep', args: { pattern: 'fixtureLine', path: 'src', output_mode: 'content' } },
+    { type: 'tool.result', turnId: 'turn-scripted-kimi', toolCallId: 'grep-scripted-kimi', result: { output: 'src/tool-card-fixture.ts:1:fixtureLine1\\nsrc/tool-card-fixture.ts:2:fixtureLine2' } },
+    { type: 'tool.call', turnId: 'turn-scripted-kimi', toolCallId: 'patch-scripted-kimi', name: 'apply_patch', args: { patch: longPatch } },
+    { type: 'tool.result', turnId: 'turn-scripted-kimi', toolCallId: 'patch-scripted-kimi', result: { output: 'Success. Updated the following files:\\nM src/tool-card-fixture.ts' } },
+    { type: 'tool.call', turnId: 'turn-scripted-kimi', toolCallId: 'bash-scripted-kimi', name: 'Bash', args: { command: 'npm test' } },
+    { type: 'tool.result', turnId: 'turn-scripted-kimi', toolCallId: 'bash-scripted-kimi', result: { output: 'Script completed\\nWall time 0.2 seconds\\nOutput:\\n73 tests passed' } },
+  ];
+  toolEvents.forEach((event, index) => appendWire({ type: 'context.append_loop_event', time: now + 2 + index, event }));
   const chunks = [
     marker + '\\n',
     'provider preload complete: ' + providerKey + '\\n',
@@ -2483,6 +2517,10 @@ function writeTimedChunks(
 
 function usesProxyBackedBasicDialogue(options: CliOptions): boolean {
   return options.scriptedBasicDialogue && options.scenario === 'basic-dialogue-suite';
+}
+
+function usesScriptedKimiExecutable(options: CliOptions): boolean {
+  return options.scriptedKimi || usesProxyBackedBasicDialogue(options);
 }
 
 function usesFakeCcrBackend(options: CliOptions): boolean {
@@ -2682,7 +2720,7 @@ function prepareRuntimeEnvironment(options: CliOptions): RuntimeEnvironmentPlan 
     copyHostClaudeConfig(os.homedir(), options.runtimeHome)
       ? 'host-config-copy'
       : 'missing';
-  const scriptedKimiExecutablePath = usesProxyBackedBasicDialogue(options)
+  const scriptedKimiExecutablePath = usesScriptedKimiExecutable(options)
     ? writeScriptedKimiExecutable(options)
     : '';
   const kimiAuthSource: RuntimeEnvironmentPlan['kimiAuthSource'] = scriptedKimiExecutablePath
@@ -2733,9 +2771,9 @@ function plannedRuntimeEnvironment(options: CliOptions): RuntimeEnvironmentPlan 
     larkCliConfigSource: options.launchBridge ? 'missing' : 'not-needed',
     codexAuthSource: 'missing',
     claudeAuthSource: 'missing',
-    kimiAuthSource: usesProxyBackedBasicDialogue(options) ? 'not-needed' : 'missing',
-    kimiExecutableSource: usesProxyBackedBasicDialogue(options) ? 'scripted-fake-executable' : resolveKimiExecutableSource(),
-    ...(usesProxyBackedBasicDialogue(options)
+    kimiAuthSource: usesScriptedKimiExecutable(options) ? 'not-needed' : 'missing',
+    kimiExecutableSource: usesScriptedKimiExecutable(options) ? 'scripted-fake-executable' : resolveKimiExecutableSource(),
+    ...(usesScriptedKimiExecutable(options)
       ? { kimiExecutablePath: path.join(options.runRoot, 'bin', 'kimi') }
       : {}),
     ccrConfigSource: options.claudeExecutable === 'ccr' ? 'missing' : 'not-needed',
@@ -3877,6 +3915,31 @@ function scenarioSpecificChecks(
         ? 'Observed Kimi thinking only in non-final stream status checkpoints, not in the completed final answer card.'
         : kimiThinkingStatusIssues.join('\n'),
     });
+    const kimiToolCardIssues = scriptedKimiToolCardIssues(report.streamCardCheckpoints || [], {
+      providerKey: 'kimi-tmux',
+      marker: basicDialogueMarker(options, 'kimi-tmux'),
+    });
+    checks.push({
+      name: 'basic_dialogue_kimi_tool_card',
+      ok: kimiToolCardIssues.length === 0,
+      detail: kimiToolCardIssues.length === 0
+        ? 'Observed four direct Kimi tool panels, two-line semantic titles, closed bounded fences, and no transport-envelope leakage.'
+        : kimiToolCardIssues.join('\n'),
+    });
+  }
+  if (options.scenario === 'runtime-message' && options.scriptedKimi) {
+    const marker = firstCodelarkMarker(scenarioFinalMessage(options));
+    const issues = scriptedKimiToolCardIssues(report.streamCardCheckpoints || [], {
+      providerKey: 'kimi-tmux',
+      marker,
+    });
+    checks.push({
+      name: 'runtime_message_scripted_kimi_tool_card',
+      ok: issues.length === 0,
+      detail: issues.length === 0
+        ? 'Observed the scripted Kimi response as four direct Feishu tool panels with semantic titles, bounded closed fences, a multi-line diff, and no transport-envelope leakage.'
+        : issues.join('\n'),
+    });
   }
   return checks;
 }
@@ -3981,16 +4044,7 @@ function runtimePromptFinalTranscriptIssues(options: CliOptions, finalFeishuMess
   if (!finalFeishuMessages) {
     return [`Final Feishu transcript is missing; cannot verify runtime prompt marker ${expectedText}.`];
   }
-  if (options.provider === 'sdk' && botTranscriptContainsText(finalFeishuMessages, expectedText, options)) return [];
-  if (options.provider !== 'sdk') {
-    const promptOccurrences = scenarioFinalMessage(options).split(expectedText).length - 1;
-    const finalCardContainsResponse = getFeishuTranscriptMessages(finalFeishuMessages).some((message) => {
-      if (!isTestBotMessage(message, options)) return false;
-      const content = messageContent(message);
-      return content.split(expectedText).length - 1 > promptOccurrences;
-    });
-    if (finalCardContainsResponse) return [];
-  }
+  if (botTranscriptContainsText(finalFeishuMessages, expectedText, options)) return [];
   return [`Final Feishu transcript did not contain runtime prompt marker ${expectedText}.`];
 }
 
@@ -4988,7 +5042,11 @@ function plannedSuccessCheckNames(options: CliOptions): string[] {
       'basic_dialogue_kimi_wire_transcript_read',
       'basic_dialogue_kimi_history_transcript_excludes_thinking',
       'basic_dialogue_kimi_thinking_status_only',
+      'basic_dialogue_kimi_tool_card',
     );
+  }
+  if (options.scenario === 'runtime-message' && options.scriptedKimi) {
+    names.push('runtime_message_scripted_kimi_tool_card');
   }
   return names;
 }
@@ -5142,7 +5200,7 @@ function canonicalReportEligibility(
       blockers.push(`${label} is outside runRoot: ${value}`);
     }
   }
-  if (options.scriptedBasicDialogue) {
+  if (usesScriptedKimiExecutable(options)) {
     if (runtimeEnvironment.kimiExecutableSource !== 'scripted-fake-executable') {
       blockers.push(`scripted basic-dialogue expected scripted-fake-executable, got ${runtimeEnvironment.kimiExecutableSource}.`);
     }
@@ -5346,6 +5404,7 @@ function writeFailureReport(params: {
     launchBridge: params.options.launchBridge,
     initialChatCreation: createsInitialProductNewSessionGroup(params.options) ? 'product-new-session-use-case' : 'provided-chat-id',
     scriptedBasicDialogue: params.options.scriptedBasicDialogue,
+    scriptedKimi: params.options.scriptedKimi,
     scenario: params.options.scenario,
     runtime: params.options.runtime,
     provider: params.options.provider,
@@ -5655,7 +5714,7 @@ async function launchBridgeChild(options: CliOptions, runtimeEnvironment: Runtim
             OPENAI_API_KEY: 'clk-local-proxy-key',
           }
           : {}),
-        ...(options.scriptedBasicDialogue
+        ...(usesScriptedKimiExecutable(options)
           ? {
             CODELARK_REAL_FEISHU_E2E_STREAM_CARD_CHECKPOINTS: '1',
           }
@@ -6614,6 +6673,7 @@ async function main(): Promise<void> {
   const options = parseOptions(argv);
   getScenarioDefinition(options.scenario);
   validateScriptedBasicDialogueOptions(options);
+  validateScriptedKimiOptions(options);
   if (options.listScenarios) {
     writeReport({
       scenarios: listScenarioMetadata(),
@@ -6727,6 +6787,7 @@ async function main(): Promise<void> {
         launchBridge: options.launchBridge,
         initialChatCreation: createsInitialProductNewSessionGroup(options) ? 'product-new-session-use-case' : 'provided-chat-id',
         scriptedBasicDialogue: options.scriptedBasicDialogue,
+        scriptedKimi: options.scriptedKimi,
         scenario: options.scenario,
         commands: buildScenarioCommands(options),
         commandReplyExpectations: commandReplyExpectations(options),
@@ -7055,6 +7116,7 @@ async function main(): Promise<void> {
       launchBridge: options.launchBridge,
       initialChatCreation: createsInitialProductNewSessionGroup(options) ? 'product-new-session-use-case' : 'provided-chat-id',
       scriptedBasicDialogue: options.scriptedBasicDialogue,
+      scriptedKimi: options.scriptedKimi,
       scenario: options.scenario,
       commands: buildScenarioCommands(options),
       commandReplyExpectations: commandReplyExpectations(options),

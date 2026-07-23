@@ -9,6 +9,10 @@ import type {
   MirrorJsonlSource,
   MirrorJsonlSourceSummary,
 } from '../contracts.js';
+import {
+  buildToolCallDetailFromInput,
+  buildToolCallDetailFromOutput,
+} from '../../shared/progress/tool-call-details.js';
 
 export interface KimiSessionFileSummary {
   sessionId: string;
@@ -326,7 +330,7 @@ interface KimiLoopEvent {
   name?: string;
   description?: string;
   args?: unknown;
-  result?: { output?: unknown };
+  result?: { output?: unknown; error?: unknown; isError?: boolean };
   part?: { type?: string; think?: string; text?: string };
   usage?: {
     inputOther?: number;
@@ -463,6 +467,7 @@ export function parseKimiWireRecords(
 
           case 'tool.call': {
             if (!ev.toolCallId) continue;
+            const toolName = ev.name || 'tool';
             records.push({
               signature: ensureUnique(`tool.call:${ev.toolCallId}`),
               type: 'tool_started',
@@ -470,17 +475,21 @@ export function parseKimiWireRecords(
               timestamp: toIsoTimestamp(parsed.time),
               turnId: ev.turnId,
               toolId: ev.toolCallId,
-              toolName: ev.name,
+              toolName,
               toolInput: ev.args,
+              toolDetail: buildToolCallDetailFromInput(toolName, ev.args) || undefined,
             });
             break;
           }
 
           case 'tool.result': {
             if (!ev.toolCallId) continue;
-            const output = typeof ev.result?.output === 'string'
+            const rawOutput = typeof ev.result?.output !== 'undefined'
               ? ev.result.output
-              : JSON.stringify(ev.result?.output ?? '');
+              : ev.result?.error ?? '';
+            const output = typeof rawOutput === 'string'
+              ? rawOutput
+              : JSON.stringify(rawOutput);
             records.push({
               signature: ensureUnique(`tool.result:${ev.toolCallId}`),
               type: 'tool_finished',
@@ -488,6 +497,8 @@ export function parseKimiWireRecords(
               timestamp: toIsoTimestamp(parsed.time),
               turnId: ev.turnId,
               toolId: ev.toolCallId,
+              toolDetail: buildToolCallDetailFromOutput('', output) || undefined,
+              isError: ev.result?.isError === true || typeof ev.result?.error !== 'undefined',
             });
             break;
           }

@@ -121,6 +121,8 @@ interface FeishuCardState {
   renderedTextLayoutSignature: string;
   renderedTasksText: string | null;
   renderedHistoryElementIds: string[];
+  /** Number of canonical history items represented by the current card shadow. */
+  renderedHistoryItemCount: number;
   renderedHistoryElementJson: Record<string, string>;
   renderedToolSnapshots: Record<string, string>;
   renderedToolEventCounts: Record<string, number>;
@@ -815,6 +817,102 @@ function collectCardJsonMarkdownTexts(value: unknown, texts: string[] = []): str
   return texts;
 }
 
+interface RealE2eToolPanelFenceSummary {
+  language: string;
+  chars: number;
+  lines: number;
+  closed: boolean;
+}
+
+interface RealE2eToolPanelSummary {
+  elementId: string;
+  title: string;
+  detailChars: number;
+  detailLines: number;
+  nestedPanelCount: number;
+  fences: RealE2eToolPanelFenceSummary[];
+  forbiddenEnvelopeTexts: string[];
+}
+
+function collectFencedBlockSummaries(markdown: string): RealE2eToolPanelFenceSummary[] {
+  const summaries: RealE2eToolPanelFenceSummary[] = [];
+  const lines = markdown.replace(/\r\n/g, '\n').split('\n');
+  let active: { language: string; content: string[] } | null = null;
+  for (const line of lines) {
+    const opener: RegExpMatchArray | null = active === null ? line.match(/^```([^`]*)$/) : null;
+    if (opener) {
+      active = { language: opener[1]!.trim(), content: [] };
+      continue;
+    }
+    if (active && /^```\s*$/.test(line)) {
+      const content = active.content.join('\n');
+      summaries.push({
+        language: active.language,
+        chars: Array.from(content).length,
+        lines: active.content.length,
+        closed: true,
+      });
+      active = null;
+      continue;
+    }
+    if (active) active.content.push(line);
+  }
+  if (active) {
+    const content = active.content.join('\n');
+    summaries.push({
+      language: active.language,
+      chars: Array.from(content).length,
+      lines: active.content.length,
+      closed: false,
+    });
+  }
+  return summaries;
+}
+
+function countNestedCollapsiblePanels(value: unknown): number {
+  if (!value || typeof value !== 'object') return 0;
+  if (Array.isArray(value)) {
+    let count = 0;
+    for (const child of value) count += countNestedCollapsiblePanels(child);
+    return count;
+  }
+  const record = value as Record<string, unknown>;
+  let count = record.tag === 'collapsible_panel' ? 1 : 0;
+  for (const child of Object.values(record)) count += countNestedCollapsiblePanels(child);
+  return count;
+}
+
+function collectRealE2eToolPanelSummaries(value: unknown, summaries: RealE2eToolPanelSummary[] = []): RealE2eToolPanelSummary[] {
+  if (!value || typeof value !== 'object') return summaries;
+  if (Array.isArray(value)) {
+    for (const child of value) collectRealE2eToolPanelSummaries(child, summaries);
+    return summaries;
+  }
+  const record = value as Record<string, unknown>;
+  const elementId = typeof record.element_id === 'string' ? record.element_id : '';
+  if (record.tag === 'collapsible_panel' && /^stream_tool_\d+$/.test(elementId)) {
+    const header = record.header && typeof record.header === 'object'
+      ? record.header as Record<string, unknown>
+      : {};
+    const titleValue = header.title && typeof header.title === 'object'
+      ? (header.title as Record<string, unknown>).content
+      : '';
+    const detailMarkdown = collectCardJsonMarkdownTexts(record.elements).join('\n\n');
+    const envelopeCandidates = ['Script completed', 'Script running', 'Script failed', 'Wall time', 'Chunk ID', 'Original token count', 'Success', 'Completed', '长输出'];
+    summaries.push({
+      elementId,
+      title: typeof titleValue === 'string' ? titleValue : '',
+      detailChars: Array.from(detailMarkdown).length,
+      detailLines: detailMarkdown ? detailMarkdown.split('\n').length : 0,
+      nestedPanelCount: countNestedCollapsiblePanels(record.elements),
+      fences: collectFencedBlockSummaries(detailMarkdown),
+      forbiddenEnvelopeTexts: envelopeCandidates.filter((candidate) => detailMarkdown.includes(candidate)),
+    });
+  }
+  for (const child of Object.values(record)) collectRealE2eToolPanelSummaries(child, summaries);
+  return summaries;
+}
+
 function emitRealE2eStreamCardCheckpoint(params: {
   kind: 'create' | 'refresh' | 'element' | 'final';
   streamKey: string;
@@ -832,6 +930,7 @@ function emitRealE2eStreamCardCheckpoint(params: {
     const markdownTexts = (params.markdownTexts || (parsed ? collectCardJsonMarkdownTexts(parsed) : []))
       .map((text) => truncateForCardLog(text, 1000));
     const cardSummary = params.cardJson ? summarizeCardJsonForLog(params.cardJson) : {};
+    const toolPanels = parsed ? collectRealE2eToolPanelSummaries(parsed) : [];
     console.log(`${REAL_E2E_STREAM_CARD_CHECKPOINT_PREFIX}${JSON.stringify({
       kind: params.kind,
       streamKey: params.streamKey,
@@ -842,6 +941,7 @@ function emitRealE2eStreamCardCheckpoint(params: {
       ...(typeof params.sequence === 'number' ? { sequence: params.sequence } : {}),
       ...cardSummary,
       markdownTexts,
+      toolPanels,
     })}`);
   } catch (err) {
     console.warn('[feishu-adapter] Failed to emit real E2E stream card checkpoint:', err instanceof Error ? err.message : err);
@@ -1104,50 +1204,12 @@ function toolSnapshotSignature(tool: ToolCallInfo): string {
   return JSON.stringify(tool);
 }
 
-function collectMarkdownContents(element: Record<string, unknown>): string[] {
-  const contents: string[] = [];
-  if (element.tag === 'markdown' && typeof element.content === 'string' && element.content.trim()) {
-    contents.push(element.content.trim());
-  }
-  const children = Array.isArray(element.elements) ? element.elements as Array<Record<string, unknown>> : [];
-  for (const child of children) {
-    contents.push(...collectMarkdownContents(child));
-  }
-  return contents;
-}
-
-function buildStreamingToolEventPanelElement(
-  panel: Record<string, unknown>,
-  elementId: string,
-  eventIndex: number,
-): Record<string, unknown> {
-  const header = panel.header as { title?: { content?: unknown } } | undefined;
-  const title = typeof header?.title?.content === 'string' ? header.title.content : `工具 ${eventIndex}`;
-  const details = collectMarkdownContents(panel).join('\n\n').trim();
-  return {
-    tag: 'collapsible_panel',
-    expanded: false,
-    header: {
-      title: { tag: 'markdown', content: title },
-    },
-    border: { color: 'grey', corner_radius: '5px' },
-    elements: [{
-      tag: 'markdown',
-      content: preprocessFeishuMarkdown(details || '工具状态已更新。'),
-      text_align: 'left',
-      text_size: 'notation',
-    }],
-    element_id: `${elementId}_e${eventIndex}`,
-  };
-}
-
 function buildStreamingToolPaneElement(
   panel: Record<string, unknown>,
   elementId: string,
 ): Record<string, unknown> {
   return {
     ...panel,
-    elements: [buildStreamingToolEventPanelElement(panel, elementId, 1)],
     element_id: elementId,
   };
 }
@@ -3068,6 +3130,7 @@ export class FeishuAdapter extends BaseChannelAdapter {
         renderedTextLayoutSignature: buildStreamingTextLayoutSignature(initialContent),
         renderedTasksText: initialTasksText,
         renderedHistoryElementIds: renderedHistory.elementIds,
+        renderedHistoryItemCount: initialState?.historyDriven ? render.historyItems?.length || 0 : 0,
         renderedHistoryElementJson: renderedHistory.elementJson,
         renderedToolSnapshots: buildRenderedToolSnapshots(render.tools),
         renderedToolEventCounts: buildRenderedToolEventCounts(render.tools),
@@ -3287,7 +3350,7 @@ export class FeishuAdapter extends BaseChannelAdapter {
       ? 'component_count'
       : payloadReason!;
     if (state.historyDriven && state.historyItems.length > 0) {
-      const renderedAbsoluteCount = state.historyItemOffset + Math.max(1, state.renderedHistoryElementIds.length);
+      const renderedAbsoluteCount = state.historyItemOffset + Math.max(1, state.renderedHistoryItemCount);
       const nextOffset = Math.min(renderedAbsoluteCount, Math.max(0, state.historyItems.length - 1));
       if (nextOffset > state.historyItemOffset) {
         return {
@@ -3323,7 +3386,7 @@ export class FeishuAdapter extends BaseChannelAdapter {
     state: FeishuCardState,
   ): { historyItemOffset: number; toolCallOffset: number } {
     if (state.historyDriven && state.historyItems.length > 0) {
-      const renderedAbsoluteCount = state.historyItemOffset + Math.max(1, state.renderedHistoryElementIds.length);
+      const renderedAbsoluteCount = state.historyItemOffset + Math.max(1, state.renderedHistoryItemCount);
       return {
         historyItemOffset: Math.min(renderedAbsoluteCount, Math.max(0, state.historyItems.length - 1)),
         toolCallOffset: state.toolCallOffset,
@@ -3716,6 +3779,7 @@ export class FeishuAdapter extends BaseChannelAdapter {
           }
           if (renderedHistoryMatchesDesired(state, desiredHistory)) {
             state.renderedHistorySignature = historySignature;
+            state.renderedHistoryItemCount = desiredRender.render.historyItems?.length || 0;
           }
         },
       });
@@ -4326,13 +4390,13 @@ export class FeishuAdapter extends BaseChannelAdapter {
 
       // Step 2: Build and apply final card
       const statusLabels: Record<string, string> = {
-        completed: '✅ Completed',
+        completed: '',
         interrupted: '⚠️ Interrupted',
         error: '❌ Error',
       };
       const elapsedMs = Date.now() - state.startTime;
       const footer = {
-        status: statusLabels[status] || status,
+        status: statusLabels[status] ?? status,
         elapsed: formatElapsed(elapsedMs),
         context: resolveTerminalContextUsage(state),
       };
@@ -4419,7 +4483,7 @@ export class FeishuAdapter extends BaseChannelAdapter {
     } catch (err) {
       if (state.historyDriven) {
         const footerText = [
-          status === 'completed' ? '✅ Completed' : status === 'error' ? '❌ Error' : '⚠️ Interrupted',
+          status === 'completed' ? '' : status === 'error' ? '❌ Error' : '⚠️ Interrupted',
           formatElapsed(Date.now() - state.startTime),
           resolveTerminalContextUsage(state),
         ].filter(Boolean).join(' · ');
@@ -4840,6 +4904,7 @@ export class FeishuAdapter extends BaseChannelAdapter {
       state.renderedTextLayoutSignature = contentLayoutSignature;
       state.renderedTasksText = tasksText;
       state.renderedHistoryElementIds = renderedHistory.elementIds;
+      state.renderedHistoryItemCount = state.historyDriven ? render.historyItems?.length || 0 : 0;
       state.renderedHistoryElementJson = renderedHistory.elementJson;
       state.historyItemOffset = render.historyItemOffset;
       state.toolCallOffset = render.toolCallOffset;
@@ -5044,9 +5109,7 @@ export class FeishuAdapter extends BaseChannelAdapter {
       // Card should have been created by onMessageStart, but create lazily if not
       this.pendingCardCreateState(cardKey).text = fullText;
       const messageId = this.lastIncomingMessageId.get(chatId);
-      this.createStreamingCard(chatId, messageId, cardKey).then((ok) => {
-        if (ok) this.updateCardContent(chatId, fullText, cardKey);
-      }).catch(() => {});
+      this.createStreamingCard(chatId, messageId, cardKey).catch(() => {});
       return;
     }
     this.updateCardContent(chatId, fullText, cardKey);
@@ -5065,9 +5128,7 @@ export class FeishuAdapter extends BaseChannelAdapter {
     if (!this.activeCards.has(cardKey)) {
       this.pendingCardCreateState(cardKey).tools = tools;
       const messageId = this.lastIncomingMessageId.get(chatId);
-      this.createStreamingCard(chatId, messageId, cardKey).then((ok) => {
-        if (ok) this.updateToolProgress(chatId, tools, cardKey);
-      }).catch(() => {});
+      this.createStreamingCard(chatId, messageId, cardKey).catch(() => {});
       return;
     }
     this.updateToolProgress(chatId, tools, streamKey);
@@ -5081,9 +5142,7 @@ export class FeishuAdapter extends BaseChannelAdapter {
       pending.historyItems = items;
       pending.historyDriven = true;
       const messageId = this.lastIncomingMessageId.get(chatId);
-      this.createStreamingCard(chatId, messageId, cardKey).then((ok) => {
-        if (ok) this.updateStreamingHistory(chatId, items, cardKey);
-      }).catch(() => {});
+      this.createStreamingCard(chatId, messageId, cardKey).catch(() => {});
       return;
     }
     this.updateStreamingHistory(chatId, items, streamKey);
@@ -5095,9 +5154,7 @@ export class FeishuAdapter extends BaseChannelAdapter {
     if (!this.activeCards.has(cardKey)) {
       this.pendingCardCreateState(cardKey).tasks = tasks;
       const messageId = this.lastIncomingMessageId.get(chatId);
-      this.createStreamingCard(chatId, messageId, cardKey).then((ok) => {
-        if (ok) this.updateTaskProgress(chatId, tasks, cardKey);
-      }).catch(() => {});
+      this.createStreamingCard(chatId, messageId, cardKey).catch(() => {});
       return;
     }
     this.updateTaskProgress(chatId, tasks, streamKey);
@@ -5109,9 +5166,7 @@ export class FeishuAdapter extends BaseChannelAdapter {
     if (!this.activeCards.has(cardKey)) {
       this.pendingCardCreateState(cardKey).statusText = statusText;
       const messageId = this.lastIncomingMessageId.get(chatId);
-      this.createStreamingCard(chatId, messageId, cardKey).then((ok) => {
-        if (ok) this.updateCardStatus(chatId, statusText, cardKey);
-      }).catch(() => {});
+      this.createStreamingCard(chatId, messageId, cardKey).catch(() => {});
       return;
     }
     this.updateCardStatus(chatId, statusText, cardKey);

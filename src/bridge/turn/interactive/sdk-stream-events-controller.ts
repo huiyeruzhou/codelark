@@ -14,8 +14,8 @@ import type {
   InteractiveStreamUiController,
 } from './stream-ui-controller.js';
 import {
-  codexTurnEventFromSdkToolEvent,
-} from '../../../runtime/codex/turn-events.js';
+  toolCallEventFromSdk,
+} from '../../../shared/progress/tool-events.js';
 import {
   applyUnifiedTurnContextUsage,
   applyUnifiedTurnHistoryModelTextSnapshot,
@@ -111,7 +111,7 @@ export function createInteractiveSdkStreamEventsController(
       if (!isCurrentTask()) return;
       markActivity();
       params.recordHealthTool(params.sessionId, toolId, toolName, status);
-      applyUnifiedTurnToolEvent(params.streamState, codexTurnEventFromSdkToolEvent(
+      applyUnifiedTurnToolEvent(params.streamState, toolCallEventFromSdk(
         toolId,
         toolName,
         status,

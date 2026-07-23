@@ -1,7 +1,7 @@
 import { parse, type Node } from 'acorn';
 
-import type { CodexToolDetail } from '../../../domain/progress.js';
-import { buildCodexToolDetailFromInput } from '../../../shared/progress/tool-call-details.js';
+import type { ToolCallDetail } from '../../../domain/progress.js';
+import { buildToolCallDetailFromInput } from '../../../shared/progress/tool-call-details.js';
 
 export interface NormalizedCodexToolSubcall {
   name: string;
@@ -52,13 +52,27 @@ function evaluateStatic(nodeValue: unknown, bindings: Map<string, unknown>): unk
   if (node.type === 'TemplateLiteral') {
     const expressions = Array.isArray(node.expressions) ? node.expressions : [];
     const quasis = Array.isArray(node.quasis) ? node.quasis : [];
-    if (expressions.length > 0 || quasis.length !== 1) return UNRESOLVED;
-    const quasi = astNode(quasis[0]);
-    const value = quasi?.value;
-    if (!value || typeof value !== 'object') return UNRESOLVED;
-    const cooked = (value as { cooked?: unknown }).cooked;
-    const raw = (value as { raw?: unknown }).raw;
-    return typeof cooked === 'string' ? cooked : typeof raw === 'string' ? raw : UNRESOLVED;
+    if (quasis.length !== expressions.length + 1) return UNRESOLVED;
+    let result = '';
+    for (let index = 0; index < quasis.length; index += 1) {
+      const quasi = astNode(quasis[index]);
+      const value = quasi?.value;
+      if (!value || typeof value !== 'object') return UNRESOLVED;
+      const cooked = (value as { cooked?: unknown }).cooked;
+      const raw = (value as { raw?: unknown }).raw;
+      const text = typeof cooked === 'string' ? cooked : typeof raw === 'string' ? raw : null;
+      if (text == null) return UNRESOLVED;
+      result += text;
+      if (index < expressions.length) {
+        const expression = evaluateStatic(expressions[index], bindings);
+        if (expression === UNRESOLVED) return UNRESOLVED;
+        if (!['string', 'number', 'boolean', 'undefined'].includes(typeof expression) && expression !== null) {
+          return UNRESOLVED;
+        }
+        result += String(expression);
+      }
+    }
+    return result;
   }
   if (node.type === 'Identifier') {
     const name = identifierName(node);
@@ -117,7 +131,37 @@ function evaluateStatic(nodeValue: unknown, bindings: Map<string, unknown>): unk
         : Number(left) + Number(right);
     }
   }
+  if (node.type === 'CallExpression') {
+    const callee = astNode(node.callee);
+    if (callee?.type === 'MemberExpression' && callee.computed !== true
+      && identifierName(callee.object) === 'JSON' && identifierName(callee.property) === 'stringify') {
+      const args = Array.isArray(node.arguments) ? node.arguments : [];
+      if (args.length !== 1) return UNRESOLVED;
+      const value = evaluateStatic(args[0], bindings);
+      if (value === UNRESOLVED) return UNRESOLVED;
+      try {
+        return JSON.stringify(value);
+      } catch {
+        return UNRESOLVED;
+      }
+    }
+  }
   return UNRESOLVED;
+}
+
+export function formatOrchestratorSource(source: string): string {
+  try {
+    const program = parse(source, {
+      ecmaVersion: 'latest',
+      sourceType: 'script',
+      allowAwaitOutsideFunction: true,
+    }) as unknown as AstNode;
+    const body = Array.isArray(program.body) ? program.body.map(astNode).filter(Boolean) as AstNode[] : [];
+    if (body.length < 2) return source;
+    return body.map((node) => source.slice(node.start, node.end).trim()).filter(Boolean).join('\n');
+  } catch {
+    return source;
+  }
 }
 
 function toolNameFromCall(node: AstNode): string {
@@ -225,10 +269,12 @@ function orchestrationDisplayName(calls: NormalizedCodexToolSubcall[]): string {
 export function normalizeCodexToolCall(name: string, input: unknown): NormalizedCodexToolCall {
   if (!ORCHESTRATOR_TOOL_NAMES.has(name.trim()) || typeof input !== 'string') return { name, input };
   const subcalls = parseOrchestratedSubcalls(input);
-  if (!subcalls || subcalls.length === 0) return { name, input };
+  if (!subcalls || subcalls.length === 0) return { name, input: formatOrchestratorSource(input) };
   if (subcalls.length === 1) {
     const call = subcalls[0]!;
-    return canNormalizeSingleCall(call) ? { name: call.name, input: call.input } : { name, input };
+    return canNormalizeSingleCall(call)
+      ? { name: call.name, input: call.input }
+      : { name, input: formatOrchestratorSource(input) };
   }
   return {
     name: orchestrationDisplayName(subcalls),
@@ -237,19 +283,22 @@ export function normalizeCodexToolCall(name: string, input: unknown): Normalized
   };
 }
 
-export function buildCodexToolDetailFromNormalizedCall(
+export function buildToolCallDetailFromNormalizedCodexCall(
   call: NormalizedCodexToolCall,
-): CodexToolDetail | null {
+): ToolCallDetail | null {
   if (!call.subcalls || call.subcalls.length < 2) {
-    return buildCodexToolDetailFromInput(call.name, call.input);
+    return buildToolCallDetailFromInput(call.name, call.input);
   }
   return {
     kind: 'orchestration',
     calls: call.subcalls.map((subcall) => ({
       name: subcall.name,
       detail: subcall.inputResolved
-        ? buildCodexToolDetailFromInput(subcall.name, subcall.input)
+        ? buildToolCallDetailFromInput(subcall.name, subcall.input)
         : { kind: 'generic', input: subcall.input },
     })),
   };
 }
+
+/** @deprecated Use buildToolCallDetailFromNormalizedCodexCall. */
+export const buildCodexToolDetailFromNormalizedCall = buildToolCallDetailFromNormalizedCodexCall;

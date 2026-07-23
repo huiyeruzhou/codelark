@@ -2300,10 +2300,9 @@ describe('feishu-adapter structured streaming regions', () => {
     }
 
     assert.equal(finalized, true);
-    assert.match(
-      String(cardUpdateCalls.at(-1)?.data?.card?.data || ''),
-      /✅ Completed · .* · 125k\(63%\) · ↑125k ↓4\.6k/,
-    );
+    const finalCard = String(cardUpdateCalls.at(-1)?.data?.card?.data || '');
+    assert.match(finalCard, /125k\(63%\) · ↑125k ↓4\.6k/);
+    assert.doesNotMatch(finalCard, /Completed|Success/);
     assert.deepEqual(reactionCreateCalls, [{
       path: { message_id: 'card-message-1' },
       data: { reaction_type: { emoji_type: 'DONE' } },
@@ -3570,9 +3569,7 @@ describe('feishu-adapter structured streaming regions', () => {
       { type: 'markdown' as const, role: 'assistant' as const, content: '模型输出' },
       { type: 'tool_panel' as const, tools: groupedTools },
     ], 'stream-1');
-    await waitForCondition(() => elementCreates.some((create) =>
-      create.data?.target_element_id === 'stream_history'
-      && String(create.data?.elements || '').includes('stream_tool_1')));
+    await waitForCondition(() => cardUpdates.length >= 1);
 
     adapter.onStreamHistory('chat-1', [
       { type: 'markdown' as const, role: 'assistant' as const, content: '模型输出' },
@@ -3584,15 +3581,15 @@ describe('feishu-adapter structured streaming regions', () => {
         ],
       },
     ], 'stream-1');
-    await waitForCondition(() => cardUpdates.length >= 1);
+    await waitForCondition(() => cardUpdates.length >= 2);
 
-    const refreshed = String(cardUpdates[0]?.data?.card?.data || '');
-    assert.match(refreshed, /✅ `apply_patch` · 完成/);
-    assert.match(refreshed, /工具调用 · 2/);
+    const refreshed = String(cardUpdates.at(-1)?.data?.card?.data || '');
+    assert.match(refreshed, /🛠️ 修改 1 个文件/);
+    assert.doesNotMatch(refreshed, /工具调用 · 2|完成|Success/);
     assert.doesNotMatch(refreshed, /stream_tool_1_e2/);
   });
 
-  it('refreshes the full card for grouped history panel title changes', async () => {
+  it('appends a second direct tool panel without refreshing a removed group wrapper', async () => {
     const cardUpdates: Array<Record<string, any>> = [];
     const elementCreates: Array<Record<string, any>> = [];
     const batchUpdates: Array<Record<string, any>> = [];
@@ -3660,11 +3657,15 @@ describe('feishu-adapter structured streaming regions', () => {
         ],
       },
     ], 'stream-1');
-    await waitForCondition(() => cardUpdates.length >= 1);
+    await waitForCondition(() => elementCreates.some((create) =>
+      create.data?.target_element_id === 'stream_history'
+      && String(create.data?.elements || '').includes('stream_tool_2')));
 
     assert.equal(batchUpdates.length, 0);
-    assert.match(String(cardUpdates[0]?.data?.card?.data || ''), /工具调用 · 2/);
-    assert.match(String(cardUpdates[0]?.data?.card?.data || ''), /apply_patch/);
+    const secondPanel = String(elementCreates.at(-1)?.data?.elements || '');
+    assert.match(secondPanel, /stream_tool_2/);
+    assert.match(secondPanel, /apply_patch/);
+    assert.doesNotMatch(secondPanel, /工具调用 · 2/);
     assert.equal(elementCreates.some((create) =>
       create.data?.target_element_id === 'stream_tool_1'
       && String(create.data?.elements || '').includes('stream_tool_1_e2')), false);
@@ -3736,7 +3737,7 @@ describe('feishu-adapter structured streaming regions', () => {
     assert.ok(cardUpdates.length >= 1);
     assert.equal(elementCreates.at(-1)?.data?.target_element_id, undefined);
     assert.match(String(elementCreates.at(-1)?.data?.elements || ''), /stream_done/);
-    assert.match(String(elementCreates.at(-1)?.data?.elements || ''), /Completed/);
+    assert.doesNotMatch(String(elementCreates.at(-1)?.data?.elements || ''), /Completed|Success/);
     assert.match(String(elementCreates.at(-1)?.data?.elements || ''), /125k\(63%\) · ↑125k ↓4\.6k/);
     assert.deepEqual(reactionCreates, [{
       path: { message_id: 'msg-1' },
@@ -4219,7 +4220,8 @@ describe('feishu-adapter structured streaming regions', () => {
     assert.equal(batchUpdates.length, 0);
     assert.equal(cardUpdates.length, 1);
     assert.equal(state.perf.fullRefreshReasons.direct_refresh_small_card, 1);
-    assert.match(String(cardUpdates[0]?.data?.card?.data || ''), /read_file/);
+    assert.match(String(cardUpdates[0]?.data?.card?.data || ''), /读取 文件/);
+    assert.match(String(cardUpdates[0]?.data?.card?.data || ''), /a\.txt/);
     assert.match(String(cardUpdates[0]?.data?.card?.data || ''), /run_tests/);
   });
 
@@ -4864,7 +4866,7 @@ describe('feishu-adapter structured streaming regions', () => {
     assert.match(refreshCardJson, /先读一下代码/);
     assert.match(refreshCardJson, /正在读取项目结构/);
     assert.match(refreshCardJson, /读取代码/);
-    assert.match(refreshCardJson, /exec_command/);
+    assert.match(refreshCardJson, /运行 `pwd`/);
     assert.match(refreshCardJson, /stream_tool_1/);
     assert.equal(state.pendingText, '我会先检查相关代码。');
   });
@@ -4922,7 +4924,8 @@ describe('feishu-adapter structured streaming regions', () => {
     assert.equal(finalized, true);
     assert.doesNotMatch(finalCardJson, /等待中|运行中/);
     assert.match(finalCardJson, /补测试（已结束）/);
-    assert.match(finalCardJson, /`shell_command` · 完成/);
+    assert.match(finalCardJson, /🔧 调用 `shell_command`/);
+    assert.doesNotMatch(finalCardJson, /`shell_command` · 完成|Success|Completed/);
   });
 
   it('backs off lazy card creation after a timeout and coalesces retry attempts', async () => {

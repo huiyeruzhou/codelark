@@ -1,6 +1,12 @@
 import type { ToolCallInfo } from '../../domain/progress.js';
 import { buildFencedCodeBlock } from '../markdown/fence.js';
-import { renderCodexToolDetailMarkdown } from './tool-call-details.js';
+import {
+  buildToolCallDetailFromInput,
+  buildToolCallDetailFromOutput,
+  mergeToolCallDetail,
+  renderToolCallDetailMarkdown,
+} from './tool-call-details.js';
+import { getToolPresentation, type ToolPresentation } from './tool-presentation.js';
 
 export type FinalCardTerminalStatus = 'completed' | 'interrupted' | 'error';
 
@@ -16,9 +22,8 @@ export interface ToolProgressBlock {
   header: string;
   detail: string;
   titleMeta: string[];
+  presentation: ToolPresentation;
 }
-
-export const LONG_TOOL_OUTPUT_COLLAPSE_THRESHOLD = 4_000;
 
 function normalizeToolStatusForRender(
   status: ToolCallInfo['status'],
@@ -28,12 +33,24 @@ function normalizeToolStatusForRender(
   return options.terminalStatus === 'completed' ? 'complete' : 'error';
 }
 
+function hydrateToolDetail(tool: ToolCallInfo): ToolCallInfo {
+  if (tool.detail) return tool;
+  let detail = null;
+  if (typeof tool.input === 'string' && tool.input.trim()) {
+    detail = mergeToolCallDetail(detail, buildToolCallDetailFromInput(tool.name, tool.input));
+  }
+  if (typeof tool.output === 'string' && tool.output.trim()) {
+    detail = mergeToolCallDetail(detail, buildToolCallDetailFromOutput(tool.name, tool.output, detail));
+  }
+  return detail ? { ...tool, detail } : tool;
+}
+
 function buildFallbackToolDetailMarkdown(tool: ToolCallInfo): string {
   const details: string[] = [];
   const isEditTool = /^edit$/i.test(tool.name || '');
   const isBashTool = /^(bash|shell_command|exec_command)$/i.test(tool.name || '');
   const isPatchTool = /^(apply_patch|edit)$/i.test(tool.name || '');
-  const structured = renderCodexToolDetailMarkdown(tool);
+  const structured = renderToolCallDetailMarkdown(tool);
   if (structured) {
     details.push(structured);
   } else {
@@ -70,19 +87,13 @@ export function getToolTitleMeta(tool: ToolCallInfo): string[] {
   return [duration, exitCode].filter(Boolean);
 }
 
-function hasNonZeroExecExit(tool: ToolCallInfo): boolean {
-  return tool.detail?.kind === 'exec_command'
-    && typeof tool.detail.exitCode === 'number'
-    && tool.detail.exitCode !== 0;
-}
-
 export function buildToolProgressBlocks(
   tools: ToolCallInfo[],
   options: ToolProgressRenderOptions = {},
 ): ToolProgressBlock[] {
   if (tools.length === 0) return [];
 
-  const normalized = tools.map((tool) => ({
+  const normalized = tools.map((tool) => hydrateToolDetail({
     ...tool,
     status: normalizeToolStatusForRender(tool.status, options),
   }));
@@ -100,15 +111,23 @@ export function buildToolProgressBlocks(
       header: `📦 还有 ${hiddenCount} 个工具调用已折叠`,
       detail: '',
       titleMeta: [],
+      presentation: {
+        icon: '📦',
+        action: '省略',
+        target: `${hiddenCount} 个更早的工具调用`,
+        primary: `📦 省略 ${hiddenCount} 个更早的工具调用`,
+        secondary: '',
+        title: `📦 省略 ${hiddenCount} 个更早的工具调用`,
+      },
     });
   }
 
   for (const tool of slice) {
     const statusLabel = tool.status === 'running' ? '运行中' : tool.status === 'error' ? '异常' : '完成';
-    const icon = hasNonZeroExecExit(tool) ? '⚠️' : tool.status === 'running' ? '🔄' : tool.status === 'error' ? '❌' : '✅';
     const titleMeta = getToolTitleMeta(tool);
-    const titleParts = [statusLabel, ...titleMeta];
-    const header = `#### ${icon} \`${tool.name || 'tool'}\`（${titleParts.join(' · ')}）`;
+    const presentation = getToolPresentation(tool);
+    const icon = presentation.icon;
+    const header = `#### ${presentation.title.replace(/\n/g, ' · ')}`;
     rendered.push({
       tool,
       icon,
@@ -116,6 +135,7 @@ export function buildToolProgressBlocks(
       header,
       detail: buildFallbackToolDetailMarkdown(tool),
       titleMeta,
+      presentation,
     });
   }
 
@@ -128,24 +148,4 @@ export function buildToolProgressMarkdown(
 ): string {
   const blocks = buildToolProgressBlocks(tools, options);
   return blocks.map((block) => block.detail ? `${block.header}\n\n${block.detail}` : block.header).join('\n\n');
-}
-
-export function getLongExecOutput(tool: ToolCallInfo): string {
-  return tool.detail?.kind === 'exec_command'
-    && typeof tool.detail.output === 'string'
-    && tool.detail.output.length > LONG_TOOL_OUTPUT_COLLAPSE_THRESHOLD
-    ? tool.detail.output
-    : '';
-}
-
-export function buildToolDetailWithoutLongOutput(block: ToolProgressBlock): string {
-  const output = getLongExecOutput(block.tool);
-  if (!output || block.tool.detail?.kind !== 'exec_command') return block.detail;
-  return buildFallbackToolDetailMarkdown({
-    ...block.tool,
-    detail: {
-      ...block.tool.detail,
-      output: undefined,
-    },
-  });
 }

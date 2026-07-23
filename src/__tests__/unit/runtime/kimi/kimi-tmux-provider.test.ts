@@ -17,6 +17,10 @@ import {
   readKimiSessionMessagesByFilePath,
 } from '../../../../runtime/kimi/session-index.js';
 import { parseKimiSessionIdFromScreen } from '../../../../runtime/kimi/tmux-provider.js';
+import {
+  applyToolCallEventToTools,
+  toolCallEventFromMirrorRecord,
+} from '../../../../shared/progress/tool-events.js';
 
 describe('Kimi tmux provider helpers', () => {
   let previousKimiCodeHome: string | undefined;
@@ -466,6 +470,7 @@ describe('Kimi tmux provider helpers', () => {
     assert.equal(records[0]?.toolId, 'tool-1');
     assert.equal(records[0]?.toolName, 'shell_command');
     assert.deepEqual(records[0]?.toolInput, { command: 'pwd' });
+    assert.equal(records[0]?.toolDetail?.kind, 'exec_command');
     assert.equal(records[1]?.toolId, 'tool-1');
     assert.equal(records[1]?.content, '/tmp/project');
     assert.deepEqual(records[2]?.contextUsage?.lastTokenUsage, {
@@ -478,6 +483,74 @@ describe('Kimi tmux provider helpers', () => {
     assert.equal(records[4]?.goalStatus, 'active');
     assert.equal(records[4]?.content, 'turns used: 2');
     assert.equal(records[5]?.goalStatus, 'cleared');
+  });
+
+  it('normalizes Kimi native Read, Grep, and Edit tools into the shared detail model', () => {
+    const records = parseKimiWireRecords([
+      JSON.stringify({
+        type: 'context.append_loop_event',
+        time: 1782477450000,
+        event: {
+          type: 'tool.call', turnId: 'turn-native', toolCallId: 'read-1', name: 'Read',
+          args: { path: 'src/app.ts', line_offset: 9, n_lines: 20 },
+        },
+      }),
+      JSON.stringify({
+        type: 'context.append_loop_event',
+        time: 1782477450001,
+        event: { type: 'tool.result', toolCallId: 'read-1', result: { output: 'line 10\nline 11' } },
+      }),
+      JSON.stringify({
+        type: 'context.append_loop_event',
+        time: 1782477450002,
+        event: {
+          type: 'tool.call', turnId: 'turn-native', toolCallId: 'grep-1', name: 'Grep',
+          args: { pattern: 'TODO', path: 'src', output_mode: 'content' },
+        },
+      }),
+      JSON.stringify({
+        type: 'context.append_loop_event',
+        time: 1782477450003,
+        event: { type: 'tool.result', toolCallId: 'grep-1', result: { output: 'src/app.ts:10:TODO' } },
+      }),
+      JSON.stringify({
+        type: 'context.append_loop_event',
+        time: 1782477450004,
+        event: {
+          type: 'tool.call', turnId: 'turn-native', toolCallId: 'edit-1', name: 'Edit',
+          args: { path: 'src/app.ts', old_string: 'old', new_string: 'new' },
+        },
+      }),
+    ].join('\n'), new Set());
+
+    const tools = new Map();
+    for (const record of records) {
+      const event = toolCallEventFromMirrorRecord(record);
+      if (event) applyToolCallEventToTools(tools, event);
+    }
+
+    assert.deepEqual(tools.get('read-1')?.detail, {
+      kind: 'file_read',
+      path: 'src/app.ts',
+      lineOffset: 9,
+      lineCount: 20,
+      output: 'line 10\nline 11',
+    });
+    assert.deepEqual(tools.get('grep-1')?.detail, {
+      kind: 'file_search',
+      query: 'TODO',
+      path: 'src',
+      outputMode: 'content',
+      matchCount: 1,
+      output: 'src/app.ts:10:TODO',
+    });
+    assert.deepEqual(tools.get('edit-1')?.detail, {
+      kind: 'file_change',
+      operation: 'edit',
+      path: 'src/app.ts',
+      before: 'old',
+      after: 'new',
+    });
   });
 
   it('treats only terminal step.end records as turn completion and maps turn.cancel to abort', () => {

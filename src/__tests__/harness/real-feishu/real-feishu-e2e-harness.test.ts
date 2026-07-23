@@ -92,6 +92,7 @@ const BASIC_DIALOGUE_KIMI_CANONICAL_CHECKS = [
   'basic_dialogue_kimi_wire_transcript_read',
   'basic_dialogue_kimi_history_transcript_excludes_thinking',
   'basic_dialogue_kimi_thinking_status_only',
+  'basic_dialogue_kimi_tool_card',
 ];
 
 const SESSION_MANAGEMENT_KIMI_CANONICAL_CHECKS = [
@@ -1380,6 +1381,44 @@ describe('unit::real-feishu-e2e-harness::session-management-command-plan', () =>
     assert.ok(parsed.plannedSuccessCheckNames.includes('provider_output_path'));
     assert.ok(parsed.plannedSuccessCheckNames.includes('mirror_final_not_duplicated_in_direct_reply'));
     assert.ok(parsed.plannedSuccessCheckNames.includes('runtime_prompt_final_transcript_marker'));
+  });
+
+  it('plans a deterministic Kimi wire producer without bypassing the real bridge or Feishu card path', () => {
+    const runRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-real-feishu-scripted-kimi-'));
+    const output = runHarness([
+      '--dry-run',
+      '--launch-bridge',
+      '--scripted-kimi',
+      '--scenario',
+      'runtime-message',
+      '--runtime',
+      'kimi',
+      '--provider',
+      'tmux',
+      '--run-root',
+      runRoot,
+      '--run-id',
+      'unit-scripted-kimi-tool-card',
+      '--chat-id',
+      'oc_unit',
+      '--message',
+      'CODELARK_UNIT_SCRIPTED_KIMI_TOOL_CARD',
+    ]);
+    const parsed = JSON.parse(output) as {
+      scriptedKimi: boolean;
+      runtimeEnvironment: {
+        kimiAuthSource: string;
+        kimiExecutableSource: string;
+        kimiExecutablePath?: string;
+      };
+      plannedSuccessCheckNames: string[];
+    };
+
+    assert.equal(parsed.scriptedKimi, true);
+    assert.equal(parsed.runtimeEnvironment.kimiAuthSource, 'not-needed');
+    assert.equal(parsed.runtimeEnvironment.kimiExecutableSource, 'scripted-fake-executable');
+    assert.equal(parsed.runtimeEnvironment.kimiExecutablePath, path.join(runRoot, 'bin', 'kimi'));
+    assert.ok(parsed.plannedSuccessCheckNames.includes('runtime_message_scripted_kimi_tool_card'));
   });
 
   it('dry-runs Claude tmux runtime-message with mirror and JSONL evidence assertions', () => {
@@ -3786,6 +3825,7 @@ describe('unit::real-feishu-e2e-harness::session-management-command-plan', () =>
     assert.ok(parsed.plannedSuccessCheckNames.includes('basic_dialogue_kimi_wire_transcript_read'));
     assert.ok(parsed.plannedSuccessCheckNames.includes('basic_dialogue_kimi_history_transcript_excludes_thinking'));
     assert.ok(parsed.plannedSuccessCheckNames.includes('basic_dialogue_kimi_thinking_status_only'));
+    assert.ok(parsed.plannedSuccessCheckNames.includes('basic_dialogue_kimi_tool_card'));
     assert.ok(parsed.plannedSuccessCheckNames.includes('codex_responses_proxy_used'));
     assert.ok(parsed.plannedSuccessCheckNames.includes('basic_dialogue_ccr_proxy_used'));
     assert.equal(parsed.coverage.basicDialogueSuite.scriptedBridgeModel, false);

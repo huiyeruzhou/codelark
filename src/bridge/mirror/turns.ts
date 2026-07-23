@@ -1,7 +1,7 @@
 import type { ContextUsageInfo } from '../../shared/progress/context-usage.js';
 import type { TaskProgressInfo, ToolCallInfo } from '../../domain/index.js';
 import { buildMirrorStreamKey, formatMirrorUserText } from './formatters.js';
-import { codexTurnEventFromMirrorRecord } from '../../runtime/codex/turn-events.js';
+import { toolCallEventFromMirrorRecord } from '../../shared/progress/tool-events.js';
 import type { BridgeMirrorRecord } from '../../runtime/contracts.js';
 import {
   applyUnifiedTurnContextUsage,
@@ -510,7 +510,7 @@ export function consumeMirrorRecords<TSubscription extends MirrorTurnStateHolder
 
     if (record.type === 'tool_started') {
       const pendingTurn = ensureMirrorTurnState(subscription, record);
-      const event = codexTurnEventFromMirrorRecord(record);
+      const event = toolCallEventFromMirrorRecord(record);
       if (event) {
         applyUnifiedTurnToolEvent(pendingTurn, event, {
           timestampMs: mirrorTimestampMs(record.timestamp),
@@ -523,7 +523,7 @@ export function consumeMirrorRecords<TSubscription extends MirrorTurnStateHolder
 
     if (record.type === 'tool_finished') {
       const pendingTurn = ensureMirrorTurnState(subscription, record);
-      const event = codexTurnEventFromMirrorRecord(record);
+      const event = toolCallEventFromMirrorRecord(record);
       if (event) {
         applyUnifiedTurnToolEvent(pendingTurn, event, {
           timestampMs: mirrorTimestampMs(record.timestamp),

@@ -97,7 +97,7 @@ CODELARK_REAL_FEISHU_TEST_LARK_CLI_XDG_DATA_HOME=/home/me/.codelark/real-feishu-
 | `session-command-suite` | 命令和会话管理 | 覆盖 `/status`、`/runtime`、`/p`、`/help`、`/set`、`/new`、`/cd`、`/current`、`/check`、`/t` 和一个最终 marker prompt。 |
 | `history-suite` | 历史功能簇 | 进入 runtime/provider 矩阵；当前已有 canonical 报告是 `real-feishu::history-suite::codex-tmux` 的 `histsuite-codex-tmux-live-0858.json`，`kimi-tmux` 仍需真实飞书重跑。 |
 | `card-form-suite` | 交互表单 | 覆盖 `/new-form` 和模型生成 `<clk-ask>`；只有 harness 能触发真实 `card.action.trigger` 时才断言 submit callback。 |
-| `rendering-suite` | Markdown/卡片渲染 | 覆盖表格、代码块、长流式卡片完成和工具详情卡片形态。 |
+| `rendering-suite` | Markdown/卡片渲染 | 覆盖表格、代码块、长流式卡片完成和工具详情卡片形态；保留“历史记录”容器，单工具内部不得再嵌套折叠，标题使用动作图标并由代码拼成单行，展开后保留真实 command/patch，长 patch 的 `diff` fence 必须闭合且保持多行。 |
 | `permission-recovery-suite` | 运维恢复 | 诊断 bot 不在群、缺权限、重复 App 实例、清理失败等真实环境问题。 |
 | `doc-as-chat-from-scratch` | 云文档入口验收 | 从零创建云文档和评论触发 `/new`，验证群聊创建、群内后续对话的文档上下文，以及群聊/文档清理；示例见 `doc-as-chat-from-scratch.md`。 |
 
@@ -152,6 +152,7 @@ CODELARK_REAL_FEISHU_TEST_LARK_CLI_XDG_DATA_HOME=/home/me/.codelark/real-feishu-
 - 长历史截断必须同时检查头部 marker、ASCII 截断标记 `...`，并排除尾部 marker。
 - 表单场景必须检查飞书 `interactive` 消息和 CardKit form/callback 前缀字段；看到文本 fallback 不算通过。
 - Markdown 渲染以飞书原始消息为准；当前 code fence 语言可能被规范化为 `plain_text`。
+- 工具详情不能只用 bridge 日志的 `markdownPreviews` 验收，因为该日志会压缩空白。报告至少同时保存 CardKit payload checkpoint 和 user 身份读取的最终 transcript；长 patch 还要断言原始内容先按字符/行双上限裁剪、closing fence 仍存在，并确认最终卡片不含 `Script completed`、`Wall time`、`Success` 或嵌套“长输出”面板。
 
 ## 排障流程
 

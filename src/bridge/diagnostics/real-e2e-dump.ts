@@ -56,6 +56,15 @@ export interface RealE2eStreamCardCheckpoint {
   names?: string[];
   markdownTexts?: string[];
   markdownPreviews?: Array<{ elementId?: string; preview: string }>;
+  toolPanels?: Array<{
+    elementId: string;
+    title: string;
+    detailChars: number;
+    detailLines: number;
+    nestedPanelCount: number;
+    fences: Array<{ language: string; chars: number; lines: number; closed: boolean }>;
+    forbiddenEnvelopeTexts: string[];
+  }>;
 }
 
 export interface BasicDialogueStreamCardCheckpointPhase {
@@ -275,9 +284,16 @@ function asStringArray(value: unknown): string[] | undefined {
 function extractStreamCardCheckpoints(text: string): RealE2eStreamCardCheckpoint[] {
   const checkpoints: RealE2eStreamCardCheckpoint[] = [];
   for (const line of text.split(/\r?\n/)) {
-    const index = line.indexOf(STREAM_CARD_CHECKPOINT_PREFIX);
+    let message = line;
+    try {
+      const structured = JSON.parse(line) as { msg?: unknown };
+      if (typeof structured.msg === 'string') message = structured.msg;
+    } catch {
+      // Plain bridge logs are supported alongside structured JSON logs.
+    }
+    const index = message.indexOf(STREAM_CARD_CHECKPOINT_PREFIX);
     if (index < 0) continue;
-    const jsonText = line.slice(index + STREAM_CARD_CHECKPOINT_PREFIX.length).trim();
+    const jsonText = message.slice(index + STREAM_CARD_CHECKPOINT_PREFIX.length).trim();
     try {
       const parsed = JSON.parse(jsonText) as Record<string, unknown>;
       if (typeof parsed.streamKey !== 'string' || typeof parsed.kind !== 'string') continue;
@@ -295,6 +311,9 @@ function extractStreamCardCheckpoints(text: string): RealE2eStreamCardCheckpoint
         ...(asStringArray(parsed.markdownTexts) ? { markdownTexts: asStringArray(parsed.markdownTexts) } : {}),
         ...(Array.isArray(parsed.markdownPreviews)
           ? { markdownPreviews: parsed.markdownPreviews as Array<{ elementId?: string; preview: string }> }
+          : {}),
+        ...(Array.isArray(parsed.toolPanels)
+          ? { toolPanels: parsed.toolPanels as RealE2eStreamCardCheckpoint['toolPanels'] }
           : {}),
       });
     } catch {
@@ -360,6 +379,58 @@ export function basicDialogueStreamCardCheckpointIssues(
     if (!completed) {
       issues.push(`${phase.providerKey}: no completed final card checkpoint contained ${phase.marker}.`);
     }
+  }
+  return issues;
+}
+
+export function scriptedKimiToolCardIssues(
+  checkpoints: RealE2eStreamCardCheckpoint[],
+  phase: { providerKey: string; marker: string },
+): string[] {
+  const issues: string[] = [];
+  const finalCheckpoint = checkpoints.find((checkpoint) => (
+    checkpoint.kind === 'final'
+    && checkpoint.status === 'completed'
+    && (streamCardCheckpointVisibleText(checkpoint).includes(phase.marker)
+      || streamCardCheckpointVisibleText(checkpoint).includes(phase.providerKey))
+  ));
+  if (!finalCheckpoint) return [`${phase.providerKey}: no completed final checkpoint was available for tool-card audit.`];
+
+  const panels = finalCheckpoint.toolPanels || [];
+  if (panels.length < 4) issues.push(`${phase.providerKey}: expected at least 4 direct tool panels, got ${panels.length}.`);
+  for (const action of ['读取', '搜索', '修改', '运行']) {
+    if (!panels.some((panel) => panel.title.includes(action))) {
+      issues.push(`${phase.providerKey}: no tool title contained ${JSON.stringify(action)}.`);
+    }
+  }
+  for (const panel of panels) {
+    if (panel.title.includes('\n')) {
+      issues.push(`${phase.providerKey}: ${panel.elementId} title contains an explicit newline.`);
+    }
+    if (/\b(?:Success|Completed)\b|完成/u.test(panel.title)) {
+      issues.push(`${phase.providerKey}: ${panel.elementId} repeated success state in its title.`);
+    }
+    if (panel.nestedPanelCount > 0) {
+      issues.push(`${phase.providerKey}: ${panel.elementId} contains ${panel.nestedPanelCount} nested collapsible panels.`);
+    }
+    if (panel.forbiddenEnvelopeTexts.length > 0) {
+      issues.push(`${phase.providerKey}: ${panel.elementId} leaked ${panel.forbiddenEnvelopeTexts.join(', ')}.`);
+    }
+    for (const fence of panel.fences) {
+      if (!fence.closed) issues.push(`${phase.providerKey}: ${panel.elementId} contains an unclosed ${fence.language || 'plain'} fence.`);
+      if (fence.chars > 8_000) issues.push(`${phase.providerKey}: ${panel.elementId} fence exceeded 8000 characters.`);
+      if (fence.lines > 160) issues.push(`${phase.providerKey}: ${panel.elementId} fence exceeded 160 lines.`);
+    }
+  }
+
+  const diffFence = panels.flatMap((panel) => panel.fences).find((fence) => fence.language === 'diff');
+  if (!diffFence) {
+    issues.push(`${phase.providerKey}: no diff fence was present in the final tool card.`);
+  } else if (diffFence.lines !== 160) {
+    issues.push(`${phase.providerKey}: scripted long patch should exercise the 160-line cap, got ${diffFence.lines} lines.`);
+  }
+  if (!panels.some((panel) => panel.fences.some((fence) => fence.language === 'bash'))) {
+    issues.push(`${phase.providerKey}: no bash command fence was present in the final tool card.`);
   }
   return issues;
 }

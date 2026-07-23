@@ -12,10 +12,8 @@ import type { StructuredStreamingUiMetadata } from '../contracts.js';
 import { buildFencedCodeBlock } from '../../shared/markdown/fence.js';
 import { formatStreamTagLabel } from '../../shared/streaming-metadata.js';
 import {
-  buildToolDetailWithoutLongOutput,
   buildToolProgressBlocks,
   buildToolProgressMarkdown,
-  getLongExecOutput,
   type FinalCardTerminalStatus,
   type ToolProgressBlock,
   type ToolProgressRenderOptions,
@@ -34,30 +32,15 @@ export interface FeishuCardActionButton {
 export type FeishuMarkdownTextSize = 'normal' | 'notation';
 
 export interface FeishuToolCallCardStyle {
-  outerPanel: {
-    titleTextSize: FeishuMarkdownTextSize;
-    borderColor: string | null;
-    borderCornerRadius: string;
-  };
   innerPanel: {
     titleTextSize: FeishuMarkdownTextSize;
     detailTextSize: FeishuMarkdownTextSize;
     borderColorByStatus: Record<ToolCallInfo['status'], string | null>;
     borderCornerRadius: string;
   };
-  longOutputPanel: {
-    titleTextSize: FeishuMarkdownTextSize;
-    detailTextSize: FeishuMarkdownTextSize;
-    headerTemplateByStatus: Record<ToolCallInfo['status'], string>;
-  };
 }
 
 export const DEFAULT_FEISHU_TOOL_CALL_CARD_STYLE: FeishuToolCallCardStyle = {
-  outerPanel: {
-    titleTextSize: 'notation',
-    borderColor: null,
-    borderCornerRadius: '5px',
-  },
   innerPanel: {
     titleTextSize: 'notation',
     detailTextSize: 'notation',
@@ -68,40 +51,7 @@ export const DEFAULT_FEISHU_TOOL_CALL_CARD_STYLE: FeishuToolCallCardStyle = {
     },
     borderCornerRadius: '5px',
   },
-  longOutputPanel: {
-    titleTextSize: 'notation',
-    detailTextSize: 'notation',
-    headerTemplateByStatus: {
-      running: 'green',
-      complete: 'green',
-      error: 'red',
-    },
-  },
 };
-
-const FEISHU_TOOL_DETAIL_CARD_LIMIT = 2_400;
-const FEISHU_TOOL_LONG_OUTPUT_CARD_LIMIT = 2_400;
-
-interface TruncatedCardText {
-  text: string;
-  originalLength: number;
-  truncated: boolean;
-}
-
-function truncateCardPayloadText(value: string, maxLength: number): TruncatedCardText {
-  const text = String(value || '').trim();
-  const safeLimit = Math.max(0, maxLength);
-  if (text.length <= safeLimit) {
-    return { text, originalLength: text.length, truncated: false };
-  }
-  const suffix = '\n\n...(truncated for card preview)';
-  const sliceLength = Math.max(0, safeLimit - suffix.length);
-  return {
-    text: `${text.slice(0, sliceLength).trimEnd()}${suffix}`,
-    originalLength: text.length,
-    truncated: true,
-  };
-}
 
 function resolveTitleTagColor(
   tag: string,
@@ -1208,65 +1158,32 @@ function toolPanelBorderColor(status: ToolCallInfo['status']): string | null {
   return DEFAULT_FEISHU_TOOL_CALL_CARD_STYLE.innerPanel.borderColorByStatus[status] ?? null;
 }
 
-function toolOutputPanelTemplate(status: ToolCallInfo['status']): string {
-  return DEFAULT_FEISHU_TOOL_CALL_CARD_STYLE.longOutputPanel.headerTemplateByStatus[status] || 'green';
-}
-
 function buildToolProgressPanelTitle(block: ToolProgressBlock): string {
-  return `${block.icon} \`${block.tool.name || 'tool'}\` · ${[block.statusLabel, ...block.titleMeta].join(' · ')}`;
+  return block.presentation.title;
 }
 
-function buildToolProgressPanelDetailElements(block: ToolProgressBlock, outputElementId: string): Array<Record<string, unknown>> {
-  const elements: Array<Record<string, unknown>> = [];
-  const detail = truncateCardPayloadText(
-    buildToolDetailWithoutLongOutput(block),
-    FEISHU_TOOL_DETAIL_CARD_LIMIT,
-  ).text;
+function buildToolProgressPanelDetailElements(block: ToolProgressBlock): Array<Record<string, unknown>> {
+  const detail = block.detail.trim();
   if (detail) {
-    elements.push({
+    return [{
       tag: 'markdown',
       content: preprocessFeishuMarkdown(detail),
       text_align: 'left',
       text_size: DEFAULT_FEISHU_TOOL_CALL_CARD_STYLE.innerPanel.detailTextSize,
-    });
-  } else {
-    elements.push({
-      tag: 'markdown',
-      content: block.tool.id === 'hidden' ? '请查看完整会话历史获取更早的工具调用。' : '暂无详情。',
-      text_align: 'left',
-      text_size: DEFAULT_FEISHU_TOOL_CALL_CARD_STYLE.innerPanel.detailTextSize,
-    });
+    }];
   }
-  const longExecOutput = getLongExecOutput(block.tool);
-  if (longExecOutput) {
-    const output = truncateCardPayloadText(longExecOutput, FEISHU_TOOL_LONG_OUTPUT_CARD_LIMIT);
-    elements.push({
-      tag: 'collapsible_panel',
-      expanded: false,
-      header: {
-        title: {
-          tag: 'markdown',
-          content: `输出 · ${output.originalLength} chars${output.truncated ? ' · truncated' : ''}`,
-          text_size: DEFAULT_FEISHU_TOOL_CALL_CARD_STYLE.longOutputPanel.titleTextSize,
-        },
-        template: toolOutputPanelTemplate(block.tool.status),
-      },
-      elements: [{
-        tag: 'markdown',
-        content: preprocessFeishuMarkdown(buildFencedCodeBlock(output.text, 'text')),
-        text_align: 'left',
-        text_size: DEFAULT_FEISHU_TOOL_CALL_CARD_STYLE.longOutputPanel.detailTextSize,
-      }],
-      element_id: outputElementId,
-    });
-  }
-  return elements;
+  return [{
+    tag: 'markdown',
+    content: block.tool.id === 'hidden' ? '请查看完整会话历史获取更早的工具调用。' : '没有额外详情。',
+    text_align: 'left',
+    text_size: DEFAULT_FEISHU_TOOL_CALL_CARD_STYLE.innerPanel.detailTextSize,
+  }];
 }
 
 function buildToolProgressPanel(block: ToolProgressBlock, index: number, elementIdPrefix = 'stream_tool'): Record<string, unknown> {
   const elementId = `${elementIdPrefix}_${index + 1}`;
   const title = buildToolProgressPanelTitle(block);
-  const elements = buildToolProgressPanelDetailElements(block, `${elementId}_out`);
+  const elements = buildToolProgressPanelDetailElements(block);
   return {
     tag: 'collapsible_panel',
     expanded: false,
@@ -1296,30 +1213,14 @@ function isAssistantHistoryBlock(block: string): boolean {
   return /^\*\*(?!我:)[^*\n]+:\*\*/.test(firstLine);
 }
 
-function buildToolProgressGroupPanel(
+function buildToolProgressPanelsForItem(
   item: Extract<StreamingHistoryItem, { type: 'tool_panel' }>,
-  panelIndex: number,
+  startIndex: number,
   options: ToolProgressRenderOptions = {},
-): Record<string, unknown> | null {
-  if (item.tools.length === 0) return null;
+): Array<Record<string, unknown>> {
+  if (item.tools.length === 0) return [];
   const blocks = buildToolProgressBlocks(item.tools, { ...options, maxItems: null });
-  return {
-    tag: 'collapsible_panel',
-    expanded: false,
-    header: {
-      title: {
-        tag: 'markdown',
-        content: `工具调用 · ${item.tools.length}`,
-        text_size: DEFAULT_FEISHU_TOOL_CALL_CARD_STYLE.outerPanel.titleTextSize,
-      },
-    },
-    ...panelBorderStyle(
-      DEFAULT_FEISHU_TOOL_CALL_CARD_STYLE.outerPanel.borderColor,
-      DEFAULT_FEISHU_TOOL_CALL_CARD_STYLE.outerPanel.borderCornerRadius,
-    ),
-    elements: blocks.map((block, index) => buildToolProgressPanel(block, index, `st_${panelIndex + 1}_t`)),
-    element_id: `stream_tool_${panelIndex + 1}`,
-  };
+  return blocks.map((block, index) => buildToolProgressPanel(block, startIndex + index));
 }
 
 function initialStreamingHistoryItemsForRender(): StreamingHistoryItem[] {
@@ -1372,23 +1273,23 @@ export function buildStreamingHistoryElementsFromItems(
   const sourceItems = items.length > 0 ? items : initialStreamingHistoryItemsForRender();
   let markdownCount = 0;
   let toolPanelCount = 0;
-  const historyElements = sourceItems
-    .map((item) => {
-      if (item.type === 'tool_panel') {
-        const rendered = buildToolProgressGroupPanel(item, toolPanelCount, options);
-        toolPanelCount += 1;
-        return rendered;
-      }
-      const resolvedElementId = item.elementId
-        || (markdownCount === 0 ? elementId : `stream_txt_${markdownCount + 1}`);
-      const markdownElement = buildHistoryMarkdownElement(
-        formatHistoryMarkdownContent(item),
-        resolvedElementId,
-      );
-      markdownCount += 1;
-      return markdownElement;
-    })
-    .filter((item): item is Record<string, unknown> => Boolean(item));
+  const historyElements: Array<Record<string, unknown>> = [];
+  for (const item of sourceItems) {
+    if (item.type === 'tool_panel') {
+      const rendered = buildToolProgressPanelsForItem(item, toolPanelCount, options);
+      historyElements.push(...rendered);
+      toolPanelCount += rendered.length;
+      continue;
+    }
+    const resolvedElementId = item.elementId
+      || (markdownCount === 0 ? elementId : `stream_txt_${markdownCount + 1}`);
+    const markdownElement = buildHistoryMarkdownElement(
+      formatHistoryMarkdownContent(item),
+      resolvedElementId,
+    );
+    markdownCount += 1;
+    if (markdownElement) historyElements.push(markdownElement);
+  }
 
   if (historyElements.length === 0) {
     historyElements.push(...buildStreamingHistoryElementsFromItems('', initialStreamingHistoryItemsForRender(), elementId, options));
@@ -1481,6 +1382,29 @@ export function buildStreamingHistoryElements(
     element_id: 'stream_history',
   });
   return elements;
+}
+
+function withoutDuplicateTerminalContext(
+  items: StreamingHistoryItem[],
+  finalContextLine: string,
+): StreamingHistoryItem[] {
+  if (!finalContextLine) return items;
+  let removed = false;
+  return items.map((item, index) => {
+    if (removed || item.type !== 'markdown' || item.role !== 'assistant') return item;
+    const laterAssistantContainsContext = items.slice(index + 1).some((later) => (
+      later.type === 'markdown'
+      && later.role === 'assistant'
+      && later.content.split(/\r?\n/).some((line) => line.trim() === finalContextLine)
+    ));
+    if (laterAssistantContainsContext) return item;
+    const lines = item.content.split(/\r?\n/);
+    const contextIndex = lines.findLastIndex((line) => line.trim() === finalContextLine);
+    if (contextIndex < 0) return item;
+    removed = true;
+    lines.splice(contextIndex, 1);
+    return { ...item, content: lines.join('\n').trim() };
+  });
 }
 
 function getTaskProgressPresentation(
@@ -1599,14 +1523,17 @@ export function buildFinalCardJson(
   const finalContextLine = historyItems
     ? text.trim().split(/\n+/).reverse().find((line) => /^Context:\s+/.test(line.trim()))?.trim() || ''
     : '';
+  const renderedHistoryItems = historyItems
+    ? withoutDuplicateTerminalContext(historyItems, finalContextLine)
+    : undefined;
 
   elements.push(...buildMetadataTagElements(metadata));
 
   // Main text content
   const renderOptions = { terminalStatus };
   const contentElements = (text.trim() || tools.length > 0)
-    ? historyItems
-      ? buildStreamingHistoryElementsFromItems(text, historyItems, 'final_content', renderOptions)
+    ? renderedHistoryItems
+      ? buildStreamingHistoryElementsFromItems(text, renderedHistoryItems, 'final_content', renderOptions)
       : buildStreamingHistoryElements(text, tools, 'final_content', renderOptions)
     : [];
   const taskMd = buildTaskProgressMarkdown(tasks, renderOptions);
@@ -1644,7 +1571,7 @@ export function buildFinalCardJson(
     const parts: string[] = [];
     if (footer.status) parts.push(footer.status);
     if (footer.elapsed) parts.push(footer.elapsed);
-    if (footer.context) parts.push(footer.context);
+    if (footer.context && !finalContextLine.includes(footer.context)) parts.push(footer.context);
     if (parts.length > 0) {
       if (elements.length > 0) {
         elements.push({ tag: 'hr' });

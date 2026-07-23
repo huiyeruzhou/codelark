@@ -15,6 +15,10 @@ import { _testOnly, registerAdapter } from '../../../../bridge/host/manager.js';
 import { createConfigService } from '../../../../configuration/service.js';
 import { PendingPermissions } from '../../../../runtime/permission-gateway.js';
 import {
+  ScriptedToolModelProvider,
+  scriptedToolCall,
+} from '../../../../testing/scripted-tool-model.js';
+import {
   initBridgeTestContext,
   inboundMessage,
   makeBridgeSettings,
@@ -460,6 +464,70 @@ describe('feishu adapter card e2e', () => {
     });
   });
 
+  it('drives shared tool details through the bridge and Feishu card with a scripted model', async () => {
+    resetBridgeTestState({ cleanCodexHome: true });
+    _testOnly.resetStateForTests();
+    createConfigService({ migrate: false, env: {} }).set(
+      { kind: 'home' },
+      { runtime: { codex: { provider: 'sdk', yoloMode: 'on' } } },
+    );
+    const calls: RecordedFeishuMessageCall[] = [];
+    const patchText = [
+      '*** Begin Patch',
+      '*** Update File: src/app.ts',
+      '@@',
+      '-const oldValue = true;',
+      '+const newValue = true;',
+      '*** End Patch',
+    ].join('\n');
+    const scriptedModel = new ScriptedToolModelProvider({
+      steps: [
+        ...scriptedToolCall('read-1', 'Read', { path: 'src/app.ts', line_offset: 1, n_lines: 80 }, 'const oldValue = true;'),
+        ...scriptedToolCall('grep-1', 'Grep', { pattern: 'oldValue', path: 'src' }, 'src/app.ts:1:const oldValue = true;'),
+        ...scriptedToolCall('patch-1', 'apply_patch', patchText, 'Success. Updated the following files:\nM src/app.ts'),
+        ...scriptedToolCall('bash-1', 'exec_command', { cmd: 'npm test' }, 'Script completed\nWall time 0.2 seconds\nOutput:\n73 tests passed'),
+        { type: 'text', text: '工具检查完成。' },
+        { type: 'result', data: {} },
+      ],
+    });
+    const store = initBridgeTestContext({
+      settings: makeBridgeSettings({ bridge_default_provider: 'sdk' }),
+      llm: scriptedModel,
+    });
+    const adapter = createRecordingFeishuAdapter(calls, { streamingEnabled: true });
+    registerAdapter(adapter);
+    (globalThis as unknown as Record<string, any>).__bridge_manager__.running = true;
+    const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-scripted-tool-card-work-'));
+    const address = { channelType: 'feishu', chatId: 'chat-scripted-tool-card-e2e' } as const;
+
+    try {
+      await _testOnly.handleMessage(adapter, inboundMessage(address, `/clear scripted-tools ${workDir}`, 'incoming-scripted-clear'));
+      await _testOnly.handleMessage(adapter, inboundMessage(address, '检查并修改代码', 'incoming-scripted-prompt'));
+
+      assert.equal(scriptedModel.emittedSteps.length, 10);
+      assert.equal(scriptedModel.lastError, null);
+      const markdown = recordedStreamingCardMarkdown(calls);
+      assert.match(markdown, /读取 `src\/app\.ts`/);
+      assert.match(markdown, /搜索 `oldValue`/);
+      assert.match(markdown, /修改 `src\/app\.ts`/);
+      assert.match(markdown, /```diff\n\*\*\* Begin Patch[\s\S]*\*\*\* End Patch\n```/);
+      assert.match(markdown, /运行 `npm test`/);
+      assert.match(markdown, /73 tests passed/);
+      assert.doesNotMatch(markdown, /Script completed|Wall time|\bSuccess\b|\bCompleted\b|长输出/);
+
+      const finalUpdate = calls.filter((call) => call.kind === 'card-update').at(-1);
+      const finalCard = JSON.parse(String(finalUpdate?.payload?.data?.card?.data || '{}'));
+      const panels = findCardElementsByTag(finalCard, 'collapsible_panel');
+      const toolPanels = panels.filter((panel) => /^stream_tool_\d+$/.test(String(panel.element_id || '')));
+      assert.equal(toolPanels.length, 4);
+      assert.equal(toolPanels.some((panel) => findCardElementsByTag(panel.elements, 'collapsible_panel').length > 0), false);
+      assert.ok(store.getChannelChat(address.channelType, address.chatId));
+    } finally {
+      fs.rmSync(workDir, { recursive: true, force: true });
+      _testOnly.resetStateForTests();
+    }
+  });
+
   it('delivers mirror clk-ask forms through FeishuAdapter.send', async () => {
     resetBridgeTestState({ cleanCodexHome: true });
     _testOnly.resetStateForTests();
@@ -646,13 +714,14 @@ describe('feishu adapter card e2e', () => {
 
       await new Promise((resolve) => setTimeout(resolve, 50));
       const cardMarkdown = recordedStreamingCardMarkdown(calls);
-      assert.match(cardMarkdown, /tools × 2/);
+      assert.match(cardMarkdown, /编排 2 个工具/);
       assert.match(cardMarkdown, /exec_command/);
       assert.match(cardMarkdown, /```bash\nnpm test\n```/);
       assert.match(cardMarkdown, /apply_patch/);
       assert.match(cardMarkdown, /```diff\n\*\*\* Begin Patch/);
       assert.doesNotMatch(cardMarkdown, /暂无详情/);
       assert.doesNotMatch(cardMarkdown, /const r = await tools\.exec_command/);
+      assert.doesNotMatch(cardMarkdown, /Script completed|Wall time|\bSuccess\b|\bCompleted\b|\bcompleted\b/);
     } finally {
       cleanupCodexThreadArtifacts(threadId, sessionPath);
       fs.rmSync(workDir, { recursive: true, force: true });

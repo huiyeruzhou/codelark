@@ -1,9 +1,9 @@
 import type { ContextUsageInfo } from '../../shared/progress/context-usage.js';
 import type { StreamingHistoryItem, StreamingHistoryTextRole, TaskProgressInfo, ToolCallInfo } from '../../domain/index.js';
 import {
-  applyCodexTurnEventToTools,
-  type CodexTurnEvent,
-} from '../../runtime/codex/turn-events.js';
+  applyToolCallEventToTools,
+  type ToolCallEvent,
+} from '../../shared/progress/tool-events.js';
 
 export interface UnifiedTurnGoalStatus {
   status: string;
@@ -257,10 +257,10 @@ export function applyUnifiedTurnGoalStatus(
 
 export function applyUnifiedTurnToolEvent(
   state: Pick<UnifiedTurnProgressState, 'lastActivityAtMs' | 'toolCalls' | 'historyItems'>,
-  event: CodexTurnEvent,
+  event: ToolCallEvent,
   options: { timestampMs?: number } = {},
 ): void {
-  const resolvedToolId = applyCodexTurnEventToTools(state.toolCalls, event);
+  const resolvedToolId = applyToolCallEventToTools(state.toolCalls, event);
   const tool = resolvedToolId ? state.toolCalls.get(resolvedToolId) : null;
   if (tool) {
     applyUnifiedTurnHistoryTools(state, [tool]);

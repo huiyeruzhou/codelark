@@ -2,7 +2,10 @@ import '../../../setup/test-setup.js';
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { normalizeCodexToolCall } from '../../../../runtime/codex/session-index/tool-call-normalizer.js';
+import {
+  formatOrchestratorSource,
+  normalizeCodexToolCall,
+} from '../../../../runtime/codex/session-index/tool-call-normalizer.js';
 
 describe('normalizeCodexToolCall', () => {
   it('unwraps a GPT-5.6 exec_command orchestration call without evaluating JavaScript', () => {
@@ -64,9 +67,39 @@ describe('normalizeCodexToolCall', () => {
     });
   });
 
+  it('resolves static template interpolation and JSON.stringify used by real exec wrappers', () => {
+    const source = [
+      'const pod = "worker-3";',
+      'const probe = `tail -n 12 /tmp/${pod}.log`;',
+      'const payload = JSON.stringify({ pod_name: pod, exec: probe });',
+      'const r = await tools.exec_command({ cmd: `remote-exec --json \'${payload}\'`, workdir: "/tmp/project" });',
+      'text(r.output);',
+    ].join('\n');
+
+    assert.deepEqual(normalizeCodexToolCall('exec', source), {
+      name: 'exec_command',
+      input: {
+        cmd: 'remote-exec --json \'{"pod_name":"worker-3","exec":"tail -n 12 /tmp/worker-3.log"}\'',
+        workdir: '/tmp/project',
+      },
+    });
+  });
+
+  it('formats unresolved orchestration by top-level statement instead of one line', () => {
+    const source = 'const value = dynamic(); text(value);';
+    assert.equal(formatOrchestratorSource(source), 'const value = dynamic();\ntext(value);');
+    assert.deepEqual(normalizeCodexToolCall('exec', source), {
+      name: 'exec',
+      input: 'const value = dynamic();\ntext(value);',
+    });
+  });
+
   it('ignores tool-call lookalikes inside strings', () => {
     const lookalike = 'const example = "tools.apply_patch(patch)"; text(example);';
-    assert.deepEqual(normalizeCodexToolCall('exec', lookalike), { name: 'exec', input: lookalike });
+    assert.deepEqual(normalizeCodexToolCall('exec', lookalike), {
+      name: 'exec',
+      input: 'const example = "tools.apply_patch(patch)";\ntext(example);',
+    });
   });
 
   it('does not treat prototype properties as resolved command input', () => {

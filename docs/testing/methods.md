@@ -131,7 +131,8 @@ fake 测试也要遵守真实职责边界。`fake tmux` 只模拟 tmux transport
 | `mirror-runtime.test.ts`、`mirror-turns.test.ts`、`mirror-delivery-plan.test.ts` | mirror pending delivery、turn 队列和交付策略。 |
 | `mirror-feedback-controller.test.ts`、`mirror-reconcile-core.test.ts`、`mirror-reconcile-batch.test.ts`、`mirror-subscription-registry.test.ts`、`mirror-subscription-state.test.ts` | mirror 订阅、reconcile、批处理、状态恢复和反馈控制。 |
 | `feishu-markdown.test.ts`、`plain-markdown.test.ts` | Markdown 到飞书卡片/纯文本的转换，含表格、代码块、工具/任务进度和最终卡片 JSON。 |
-| `feishu-adapter-card-e2e.test.ts` | 飞书 card 级本地 E2E，覆盖 SDK/mirror question form 等真实 payload 形态。 |
+| `scripted-tool-model.test.ts`、`tool-presentation.test.ts`、`text-preview.test.ts` | 确定性生成任意工具 start/result/error 序列，验证公共标题语义和字符数/行数双 hard upper bound；不依赖真实模型随机输出。 |
+| `feishu-adapter-card-e2e.test.ts` | 飞书 card 级本地 E2E，覆盖 SDK/mirror question form、GPT-5.6 orchestration、Kimi Markdown 和真实 bash/patch 详情等 payload 形态。 |
 | `outbound-artifacts.test.ts` | 出站 artifact、问题表单和附件描述。 |
 | `permission.test.ts`、`permission-broker.test.ts` | 权限请求、pending permission 状态和 broker 行为。 |
 
@@ -197,6 +198,7 @@ npm run real:feishu:e2e -- --list-scenarios
 | mention 策略 | `require-at-toggle` | runtime-neutral，专门验证非 mention 群消息过滤。 |
 | 表单和交互卡片 | `card-forms`、`agent-question-forms` | 覆盖 `/new-form` 和模型输出 `<clk-ask>` 后的 CardKit/interactive payload。 |
 | Markdown 真实渲染 | `markdown-rendering` | 以飞书原始消息为准检查表格和 fenced code block。 |
+| 工具卡片 | `rendering-suite` | 检查保留历史记录容器、单工具内部无二次折叠、单行语义标题与动作图标、真实 command/patch、闭合多行 fence、transport envelope 清理和双上限预览。 |
 
 真实 E2E 通过必须以 harness 自动 gate 写出的非 failure JSON 为准。至少检查 `message_observations_passed`、`required_checks_passed`、`provider_output_path`、`created_chat_cleanup_completed`、`scenario_created_chat_cleanup_completed` 和场景级断言；gate 失败的 `.failure.json` 不能人工解释为通过。
 
@@ -215,6 +217,7 @@ npm run real:feishu:e2e -- --list-scenarios
 ## 维护原则
 
 - 新增测试时先判断它证明的是纯逻辑、本地 workflow、本地真实进程，还是外部平台契约；不要把真实飞书 E2E 当成本地测试的逐条镜像。
+- 工具调用测试以 scripted Mock 为协议回归基座，再用真实 Codex/Kimi fixture 验证协议 shape，最后才用隔离飞书 App 验证 CardKit 客户端边界；真模型输出不能替代确定性断言。
 - 命令密集型真实 E2E 按 runtime 压缩，不默认扩张完整 provider 矩阵；provider 差异只在输出路径、pty/tmux 专属行为和真实风险足够高时增加。
 - `src/__tests__` 下的本地测试要尽量保持隔离 home；任何读取真实 `~/.codelark`、`~/.codex`、`~/.claude` 的测试都应被视为风险。
 - 真实飞书成功证据必须来自自动 gate 和 report，不来自“群里看起来回了消息”的人工观察。

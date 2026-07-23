@@ -94,8 +94,9 @@ function buildStopActions(
   callbackData: string,
   terminal?: InteractiveStreamUiTerminalStatus,
 ): StructuredStreamingUiActionButton[][] {
+  if (terminal === 'completed') return [];
   return [[{
-    text: terminal === 'completed' ? '已完成' : terminal === 'interrupted' ? '已停止' : terminal ? '已结束' : '停止',
+    text: terminal === 'interrupted' ? '已停止' : terminal ? '已结束' : '停止',
     callbackData,
     type: terminal ? 'default' : 'danger',
     disabled: Boolean(terminal),

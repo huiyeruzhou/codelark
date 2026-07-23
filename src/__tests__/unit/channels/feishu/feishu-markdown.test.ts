@@ -19,10 +19,12 @@ import {
   preprocessFeishuMarkdown,
 } from '../../../../channels/feishu/markdown.js';
 import {
-  buildCodexToolDetailFromInput,
-  buildCodexToolDetailFromOutput,
+  buildToolCallDetailFromInput,
+  buildToolCallDetailFromOutput,
   EXEC_COMMAND_RENDER_OUTPUT_CHAR_LIMIT,
-  mergeCodexToolDetail,
+  PATCH_DETAIL_PREVIEW_CHAR_LIMIT,
+  PATCH_DETAIL_PREVIEW_LINE_LIMIT,
+  mergeToolCallDetail,
 } from '../../../../shared/progress/tool-call-details.js';
 import { buildFencedCodeBlock } from '../../../../shared/markdown/fence.js';
 
@@ -131,12 +133,10 @@ describe('buildToolProgressMarkdown', () => {
       },
     ]);
 
-    assert.match(rendered, /🔄 `shell_command`（运行中）/);
-    assert.match(rendered, /输入：/);
+    assert.match(rendered, /🔄 浏览 `\.`/);
     assert.match(rendered, /```bash/);
-    assert.match(rendered, /输出：/);
     assert.match(rendered, /```text/);
-    assert.match(rendered, /❌ `apply_patch`（异常）/);
+    assert.match(rendered, /❌ 修改 `a\.ts`/);
     assert.match(rendered, /````diff\n\*\*\* Begin Patch/);
     assert.match(rendered, /\n\+```bash\n\+echo nested\n\+```\n/);
     assert.doesNotMatch(rendered, /patch failed/);
@@ -149,8 +149,9 @@ describe('buildToolProgressMarkdown', () => {
     ], { terminalStatus: 'completed' });
 
     assert.doesNotMatch(rendered, /运行中/);
-    assert.match(rendered, /✅ `shell_command`（完成）/);
-    assert.match(rendered, /✅ `apply_patch`（完成）/);
+    assert.match(rendered, /🔧 调用 `shell_command`/);
+    assert.match(rendered, /🔧 调用 `apply_patch`/);
+    assert.doesNotMatch(rendered, /完成|Success/);
   });
 
   it('renders structured Codex exec details from the shared detail model', () => {
@@ -174,7 +175,7 @@ describe('buildToolProgressMarkdown', () => {
 
     assert.doesNotMatch(rendered, /workdir:/);
     assert.match(rendered, /```bash\nnpm test\n```/);
-    assert.match(rendered, /#### ✅ `Bash`（完成 · 1\.2s）/);
+    assert.match(rendered, /#### 💻 运行 `npm test` · 1\.2s · 输出 1 行/);
     assert.doesNotMatch(rendered, /Success in 1\.2s\./);
     assert.doesNotMatch(rendered, /exit code 0/);
     assert.match(rendered, /```text\ntests passed\n```/);
@@ -182,12 +183,12 @@ describe('buildToolProgressMarkdown', () => {
   });
 
   it('parses exec_command text output and shows the aggregated output only', () => {
-    const input = buildCodexToolDetailFromInput('exec_command', {
+    const input = buildToolCallDetailFromInput('exec_command', {
       cmd: 'printf "hello\\n"',
       workdir: '/repo/a',
       yield_time_ms: 1000,
     });
-    const output = buildCodexToolDetailFromOutput('exec_command', [
+    const output = buildToolCallDetailFromOutput('exec_command', [
       'Chunk ID: abc123',
       'Wall time: 0.1250 seconds',
       'Process exited with code 0',
@@ -196,7 +197,7 @@ describe('buildToolProgressMarkdown', () => {
       'hello',
       '',
     ].join('\n'), input);
-    const detail = mergeCodexToolDetail(input, output);
+    const detail = mergeToolCallDetail(input, output);
 
     const rendered = buildToolProgressMarkdown([
       {
@@ -208,15 +209,15 @@ describe('buildToolProgressMarkdown', () => {
     ]);
 
     assert.doesNotMatch(rendered, /workdir:/);
-    assert.match(rendered, /#### ✅ `exec_command`（完成 · 125ms）/);
+    assert.match(rendered, /#### 💻 运行 `printf "hello\\n"` · 125ms · 输出 1 行/);
     assert.match(rendered, /```bash\nprintf "hello\\n"\n```/);
     assert.match(rendered, /```text\nhello\n```/);
     assert.doesNotMatch(rendered, /Chunk ID|Original token count|Wall time|Process exited/);
   });
 
-  it('renders aggregated exec_command output in Feishu tool panels with a 1000 char cap', () => {
+  it('renders aggregated exec_command output with the shared character cap', () => {
     const longOutput = `${'x'.repeat(EXEC_COMMAND_RENDER_OUTPUT_CHAR_LIMIT)}tail`;
-    const detail = buildCodexToolDetailFromOutput('exec_command', {
+    const detail = buildToolCallDetailFromOutput('exec_command', {
       output: 'raw envelope output should not render',
       stdout: 'stdout fallback should not win',
       stderr: 'stderr fallback should not win',
@@ -227,27 +228,27 @@ describe('buildToolProgressMarkdown', () => {
       name: 'exec_command',
       status: 'complete' as const,
       output: 'raw tool output should not render',
-      detail: mergeCodexToolDetail(
-        buildCodexToolDetailFromInput('exec_command', { cmd: 'cat large.log', workdir: '/repo/a' }),
+      detail: mergeToolCallDetail(
+        buildToolCallDetailFromInput('exec_command', { cmd: 'cat large.log', workdir: '/repo/a' }),
         detail,
       ),
     }];
 
     const markdown = buildToolProgressMarkdown(tools);
     assert.match(markdown, /```text\n/);
-    assert.match(markdown, /\.\.\.\(truncated to 1000 chars\)/);
+    assert.match(markdown, /显示 4000\/4004 字符 · 1\/1 行/);
     assert.doesNotMatch(markdown, /tail/);
     assert.doesNotMatch(markdown, /raw envelope output|raw tool output|stdout fallback|stderr fallback|workdir:/);
 
     const cardJson = JSON.stringify(buildStreamingToolsElements(tools));
     assert.match(cardJson, /cat large\.log/);
-    assert.match(cardJson, /\.\.\.\(truncated to 1000 chars\)/);
+    assert.match(cardJson, /显示 4000\/4004 字符 · 1\/1 行/);
     assert.doesNotMatch(cardJson, /tail/);
     assert.doesNotMatch(cardJson, /raw envelope output|raw tool output|stdout fallback|stderr fallback|workdir:/);
   });
 
   it('falls back to stdout and stderr when aggregated exec output is missing', () => {
-    const detail = buildCodexToolDetailFromOutput('exec_command', {
+    const detail = buildToolCallDetailFromOutput('exec_command', {
       output: 'raw output should not render',
       stdout: 'stdout line',
       stderr: 'stderr line',
@@ -267,7 +268,7 @@ describe('buildToolProgressMarkdown', () => {
   it('uses diff fences for apply_patch when the patch arrives inside an input object', () => {
     const patchWorkdir = '/workspace/project';
     const absolutePath = `${patchWorkdir}/src/a.ts`;
-    const detail = buildCodexToolDetailFromInput('apply_patch', {
+    const detail = buildToolCallDetailFromInput('apply_patch', {
       working_dir: patchWorkdir,
       diff: `*** Begin Patch\n*** Update File: ${absolutePath}\n@@\n-old\n+new\n*** End Patch`,
     });
@@ -281,7 +282,8 @@ describe('buildToolProgressMarkdown', () => {
       },
     ]);
 
-    assert.match(rendered, /- update: `src\/a\.ts`/);
+    assert.doesNotMatch(rendered, /- update: `src\/a\.ts`/);
+    assert.match(rendered, /修改 `src\/a\.ts`/);
     assert.match(rendered, /```diff\n\*\*\* Begin Patch\n\*\*\* Update File: src\/a\.ts/);
     assert.doesNotMatch(rendered, new RegExp(absolutePath.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
     assert.doesNotMatch(rendered, /workspace\/project/);
@@ -307,7 +309,7 @@ describe('buildToolProgressMarkdown', () => {
       },
     ]);
 
-    assert.match(rendered, /#### 🔄 `write_stdin`（运行中 · 5\.0s）/);
+    assert.match(rendered, /#### 🔄 等待 终端 `23553` · 等待 30\.0s · 5\.0s/);
     assert.match(rendered, /<text_tag color='blue'>session 23553<\/text_tag>/);
     assert.match(rendered, /<text_tag color='green'>wait 30\.0s<\/text_tag>/);
     assert.match(rendered, /<text_tag color='yellow'>Read<\/text_tag>/);
@@ -337,6 +339,32 @@ describe('buildToolProgressMarkdown', () => {
     assert.match(rendered, /<text_tag color='red'>Write<\/text_tag>/);
     assert.match(rendered, /<text_tag color='blue'>session 23553<\/text_tag> <text_tag color='red'>Write<\/text_tag>/);
     assert.match(rendered, /```text\nq\n```/);
+  });
+
+  it('removes script transport envelopes and keeps only useful wait output', () => {
+    const input = buildToolCallDetailFromInput('wait', {
+      cell_id: '647',
+      yield_time_ms: 30_000,
+      max_tokens: 8_000,
+    });
+    const detail = mergeToolCallDetail(input, buildToolCallDetailFromOutput('wait', [
+      'Script completed',
+      'Wall time 12.8 seconds',
+      'Original token count: 4',
+      'Output:',
+      'first result',
+      'second result',
+    ].join('\n'), input));
+    const rendered = buildToolProgressMarkdown([{
+      id: 'wait-647',
+      name: 'wait',
+      status: 'complete',
+      detail,
+    }]);
+
+    assert.match(rendered, /⏳ 等待 终端 `647` · 等待 30\.0s · 12\.8s · 输出 2 行/);
+    assert.match(rendered, /```text\nfirst result\nsecond result\n```/);
+    assert.doesNotMatch(rendered, /Script completed|Wall time|Original token count|Output:/);
   });
 
   it('renders all tool detail kinds as collapsed notation panels for Feishu cards', () => {
@@ -384,7 +412,7 @@ describe('buildToolProgressMarkdown', () => {
     assert.equal(elements[0].element_id, 'stream_tool_1');
     assert.ok(String(elements[0].element_id).length <= 20);
     assert.equal((elements[0].header as any).title.tag, 'markdown');
-    assert.equal((elements[0].header as any).title.content, '✅ `Bash` · 完成 · 12ms');
+    assert.equal((elements[0].header as any).title.content, '💻 运行 `npm test` · 12ms · 输出 2 行');
     assert.equal((elements[0].header as any).title.text_size, DEFAULT_FEISHU_TOOL_CALL_CARD_STYLE.innerPanel.titleTextSize);
     assert.equal((elements[0].border as any).color, DEFAULT_FEISHU_TOOL_CALL_CARD_STYLE.innerPanel.borderColorByStatus.complete);
     assert.equal((elements[1].header as any).title.tag, 'markdown');
@@ -421,14 +449,14 @@ describe('buildToolProgressMarkdown', () => {
     ]);
 
     const content = JSON.stringify(elements);
-    assert.match(content, /truncated for card preview/);
+    assert.match(content, /显示 1359\/10199 字符 · 80\/600 行/);
     assert.ok(
       Buffer.byteLength(content, 'utf8') < Buffer.byteLength(longOutput, 'utf8'),
       'card panel should not embed the full generic tool output',
     );
   });
 
-  it('marks non-zero exec exits with warning and collapses long output in a nested panel', () => {
+  it('marks non-zero exec exits without repeating status and keeps long output in the same panel', () => {
     const longOutput = 'error line\n'.repeat(500);
     const rendered = buildToolProgressMarkdown([
       {
@@ -445,8 +473,8 @@ describe('buildToolProgressMarkdown', () => {
       },
     ]);
 
-    assert.match(rendered, /#### ⚠️ `exec_command`（异常 · 1\.5s · exit 2）/);
-    assert.match(rendered, /⚠️ Fail with exit code 2 in 1\.5s\./);
+    assert.match(rendered, /#### ⚠️ 运行 `npm test` · exit 2 · 1\.5s · 输出 1 行/);
+    assert.doesNotMatch(rendered, /异常|Fail|Success|完成/);
     assert.match(rendered, /```text\nshort failure\n```/);
 
     const elements = buildStreamingToolsElements([
@@ -465,12 +493,11 @@ describe('buildToolProgressMarkdown', () => {
 
     const panel = elements[0] as any;
     assert.equal(panel.tag, 'collapsible_panel');
-    assert.equal(panel.header.title.content, '⚠️ `exec_command` · 异常 · exit 1');
-    assert.equal(panel.elements[1].tag, 'collapsible_panel');
-    assert.match(panel.elements[1].header.title.content, /输出 · \d+ chars · truncated/);
-    assert.doesNotMatch(JSON.stringify(panel.elements[0]), /error line/);
-    assert.match(JSON.stringify(panel.elements[1]), /error line/);
-    assert.match(JSON.stringify(panel.elements[1]), /truncated for card preview/);
+    assert.match(panel.header.title.content, /^⚠️ 运行 `npm test` · exit 1 · 输出 500 行$/);
+    assert.equal(panel.elements.length, 1);
+    assert.equal(panel.elements[0].tag, 'markdown');
+    assert.match(JSON.stringify(panel.elements[0]), /error line/);
+    assert.match(JSON.stringify(panel.elements[0]), /显示 \d+\/\d+ 字符 · 80\/500 行/);
   });
 });
 
@@ -568,22 +595,17 @@ describe('buildStreamingHistoryElements', () => {
     assert.doesNotMatch(historyChildren[1]?.content, /\*\*用户\*\*/);
     assert.equal(historyChildren[2]?.element_id, 'stream_tool_1');
     assert.match(JSON.stringify(historyChildren[2]), /tool-1|exec_command/);
-    assert.equal(historyChildren[2]?.border, undefined);
-    assert.equal(historyChildren[2]?.header?.title?.text_size, DEFAULT_FEISHU_TOOL_CALL_CARD_STYLE.outerPanel.titleTextSize);
-    assert.equal((historyChildren[2]?.elements as any[])?.[0]?.tag, 'collapsible_panel');
-    assert.equal(
-      (historyChildren[2]?.elements as any[])?.[0]?.header?.title?.text_size,
-      DEFAULT_FEISHU_TOOL_CALL_CARD_STYLE.innerPanel.titleTextSize,
-    );
-    assert.notEqual((historyChildren[2]?.elements as any[])?.[0]?.border?.color, 'transparent');
+    assert.equal(historyChildren[2]?.border?.color, 'green');
+    assert.equal(historyChildren[2]?.header?.title?.text_size, DEFAULT_FEISHU_TOOL_CALL_CARD_STYLE.innerPanel.titleTextSize);
+    assert.equal((historyChildren[2]?.elements as any[])?.[0]?.tag, 'markdown');
     assert.match(historyChildren[3]?.content, /模型输出二/);
     assert.equal(historyChildren[4]?.element_id, 'stream_tool_2');
-    assert.equal((historyChildren[4]?.elements as any[])?.[0]?.tag, 'collapsible_panel');
+    assert.equal((historyChildren[4]?.elements as any[])?.[0]?.tag, 'markdown');
     assert.match(historyChildren[5]?.content, /^\*\*用户\*\*：用户补充/);
     assert.match(historyChildren[6]?.content, /模型输出三/);
     assert.doesNotMatch(historyChildren[6]?.content, /\*\*用户\*\*/);
     assert.equal(historyChildren[7]?.element_id, 'stream_tool_3');
-    assert.equal((historyChildren[7]?.elements as any[])?.[0]?.tag, 'collapsible_panel');
+    assert.equal((historyChildren[7]?.elements as any[])?.[0]?.tag, 'markdown');
     assertFeishuElementIdsAreValid(elements);
   });
 
@@ -698,7 +720,8 @@ describe('buildFinalCardJson', () => {
     assert.match(cardJson, /补测试（已结束）/);
     assert.match(cardJson, /collapsible_panel/);
     assert.match(cardJson, /stream_tool_1/);
-    assert.match(cardJson, /`shell_command` · 完成/);
+    assert.match(cardJson, /🔧 调用 `shell_command`/);
+    assert.doesNotMatch(cardJson, /`shell_command`[^}]*完成/);
   });
 
   it('renders legacy quoted mirror goal status in a collapsed panel on final cards', () => {
@@ -820,7 +843,7 @@ describe('buildFinalCardJson', () => {
       {},
       [
         { type: 'markdown', role: 'user', content: '用户输入' },
-        { type: 'markdown', role: 'assistant', content: '最终回复' },
+        { type: 'markdown', role: 'assistant', content: '最终回复\nContext: 125k(63%) · ↑125k ↓4.6k' },
         { type: 'tool_panel', tools: [] },
       ],
     );
@@ -830,6 +853,7 @@ describe('buildFinalCardJson', () => {
     assert.match(body, /\*\*用户\*\*：用户输入/);
     assert.match(body, /最终回复/);
     assert.match(body, /Context: 125k\(63%\) · ↑125k ↓4\.6k/);
+    assert.equal(body.split('Context: 125k(63%) · ↑125k ↓4.6k').length - 1, 1);
   });
 
   it('keeps compact token usage in the final card footer', () => {
@@ -847,13 +871,13 @@ describe('buildFinalCardJson', () => {
   });
 
   it('guards embedded fences in final card exec_command output', () => {
-    const detail = buildCodexToolDetailFromOutput('exec_command', [
+    const detail = buildToolCallDetailFromOutput('exec_command', [
       'Process exited with code 0',
       'Output:',
       'before',
       '```',
       'after',
-    ].join('\n'), buildCodexToolDetailFromInput('exec_command', { cmd: 'cat demo.md' }));
+    ].join('\n'), buildToolCallDetailFromInput('exec_command', { cmd: 'cat demo.md' }));
     const cardJson = buildFinalCardJson(
       '最终回复',
       [],
@@ -874,7 +898,7 @@ describe('buildFinalCardJson', () => {
   });
 
   it('guards embedded fences in final card apply_patch content', () => {
-    const detail = buildCodexToolDetailFromInput('apply_patch', [
+    const detail = buildToolCallDetailFromInput('apply_patch', [
       '*** Begin Patch',
       '*** Update File: a.md',
       '@@',
@@ -901,6 +925,32 @@ describe('buildFinalCardJson', () => {
     assert.match(content, /```diff\\n\*\*\* Begin Patch/);
     assert.match(content, /\\n\+`\u200B``ts\\n\+const ok = true;\\n\+`\u200B``\\n/);
     assert.doesNotMatch(content, /````diff/);
+  });
+
+  it('truncates long patch content before rendering a complete multiline diff fence', () => {
+    const patch = [
+      '*** Begin Patch',
+      '*** Update File: src/large.ts',
+      '@@',
+      ...Array.from({ length: 300 }, (_, index) => `+const line${index} = "${'x'.repeat(80)}";`),
+      '*** End Patch',
+    ].join('\n');
+    const [panel] = buildStreamingToolsElements([{
+      id: 'tool-long-patch',
+      name: 'apply_patch',
+      status: 'complete',
+      detail: buildToolCallDetailFromInput('apply_patch', patch),
+    }]) as any[];
+
+    const content = panel.elements[0].content as string;
+    const codeMatch = /```diff\n([\s\S]*?)\n```/.exec(content);
+    assert.ok(codeMatch, 'long patch must retain a closing diff fence');
+    const preview = codeMatch[1] || '';
+    assert.ok(Array.from(preview).length <= PATCH_DETAIL_PREVIEW_CHAR_LIMIT);
+    assert.ok(preview.split('\n').length <= PATCH_DETAIL_PREVIEW_LINE_LIMIT);
+    assert.match(content, /_显示 \d+\/\d+ 字符 · \d+\/\d+ 行_$/);
+    assert.doesNotMatch(content, /truncated for card preview/);
+    assert.equal(panel.elements.length, 1, 'patch detail must not add a nested output panel');
   });
 });
 

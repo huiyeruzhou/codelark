@@ -4,12 +4,12 @@ import {
   parseContextUsageInfo,
 } from '../../../shared/progress/context-usage.js';
 import {
-  buildCodexToolDetailFromInput,
-  buildCodexToolDetailFromOutput,
-  mergeCodexToolDetail,
-  renderCodexToolDetailMarkdown,
+  buildToolCallDetailFromInput,
+  buildToolCallDetailFromOutput,
+  mergeToolCallDetail,
+  renderToolCallDetailMarkdown,
 } from '../../../shared/progress/tool-call-details.js';
-import type { CodexToolDetail } from '../../../domain/progress.js';
+import type { ToolCallDetail } from '../../../domain/progress.js';
 import {
   createCodexEventSignature,
   extractCodexMessageText,
@@ -36,7 +36,7 @@ import {
   TURN_ABORTED_NOTICE,
 } from './internal-control-events.js';
 import {
-  buildCodexToolDetailFromNormalizedCall,
+  buildToolCallDetailFromNormalizedCodexCall,
   normalizeCodexToolCall,
 } from './tool-call-normalizer.js';
 
@@ -44,7 +44,7 @@ const CONTEXT_COMPACTED_NOTICE = '> ⚙️ 上下文已压缩，后续回复会�
 
 interface HistoryToolState {
   name: string;
-  detail: CodexToolDetail | null;
+  detail: ToolCallDetail | null;
 }
 
 function classifySessionJsonlRole(
@@ -208,12 +208,12 @@ function extractSessionJsonlPrimaryText(
       const normalized = normalizeCodexToolCall(rawToolName, rawInput);
       const toolName = normalized.name;
       const args = normalized.input;
-      const detail = buildCodexToolDetailFromNormalizedCall(normalized);
+      const detail = buildToolCallDetailFromNormalizedCodexCall(normalized);
       if (toolId) {
         toolStates?.set(toolId, { name: toolName, detail });
       }
       const structured = detail
-        ? renderCodexToolDetailMarkdown({
+        ? renderToolCallDetailMarkdown({
           id: toolId || createCodexEventSignature(toolName + String(args)),
           name: toolName,
           status: 'running',
@@ -241,15 +241,15 @@ function extractSessionJsonlPrimaryText(
       const rawOutput = extractToolOutputText(msg.payload?.output);
       const toolId = extractNormalizedFreeText(msg.payload?.call_id);
       const previous = toolId ? toolStates?.get(toolId) : null;
-      const detail = mergeCodexToolDetail(
+      const detail = mergeToolCallDetail(
         previous?.detail,
-        buildCodexToolDetailFromOutput(previous?.name, rawOutput, previous?.detail),
+        buildToolCallDetailFromOutput(previous?.name, rawOutput, previous?.detail),
       );
       if (toolId && previous) {
         toolStates?.set(toolId, { ...previous, detail });
       }
       const structured = detail
-        ? renderCodexToolDetailMarkdown({
+        ? renderToolCallDetailMarkdown({
           id: toolId || createCodexEventSignature(rawOutput),
           name: previous?.name || 'tool',
           status: msg.payload?.is_error === true ? 'error' : 'complete',
@@ -347,8 +347,8 @@ function extractSessionJsonlPrimaryText(
       const commandInput = Array.isArray(evt.payload?.command)
         ? evt.payload.command.join(' ')
         : evt.payload?.command;
-      const inputDetail = buildCodexToolDetailFromInput('Bash', { cmd: commandInput });
-      const detail = mergeCodexToolDetail(inputDetail, {
+      const inputDetail = buildToolCallDetailFromInput('Bash', { cmd: commandInput });
+      const detail = mergeToolCallDetail(inputDetail, {
         kind: 'exec_command',
         ...(exitCode != null ? { exitCode } : {}),
         ...(typeof (evt.payload as any)?.duration_seconds === 'number'
@@ -357,7 +357,7 @@ function extractSessionJsonlPrimaryText(
         ...(output ? { output } : {}),
       });
       const structured = detail
-        ? renderCodexToolDetailMarkdown({
+        ? renderToolCallDetailMarkdown({
           id: extractNormalizedFreeText(evt.payload?.call_id) || createCodexEventSignature(output),
           name: 'Bash',
           status: exitCode != null && exitCode !== 0 ? 'error' : 'complete',

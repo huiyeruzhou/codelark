@@ -9,6 +9,7 @@ import {
   basicDialogueStreamCardCheckpointIssues,
   collectRealE2eDump,
   kimiThinkingStatusOnlyIssues,
+  scriptedKimiToolCardIssues,
   scriptedKimiHistoryTranscriptIssues,
   scriptedKimiResumeAndSteerIssues,
   scriptedKimiRuntimeSlotIssues,
@@ -128,14 +129,17 @@ describe('unit::real-e2e-dump::live-log-scoping', () => {
           names: ['Bash'],
           markdownTexts: [`${runId} provider preload complete: codex-sdk\nContext: 42%`],
         })}`,
-        `[real-feishu-e2e:stream-card-checkpoint] ${JSON.stringify({
-          kind: 'final',
-          streamKey: `im:${bridgeSessionId}:om_checkpoint`,
-          chatId,
-          status: 'completed',
-          sequence: 3,
-          markdownPreviews: [{ preview: `${runId} final preview` }],
-        })}`,
+        JSON.stringify({
+          level: 'INFO',
+          msg: `[real-feishu-e2e:stream-card-checkpoint] ${JSON.stringify({
+            kind: 'final',
+            streamKey: `im:${bridgeSessionId}:om_checkpoint`,
+            chatId,
+            status: 'completed',
+            sequence: 3,
+            markdownPreviews: [{ preview: `${runId} final preview` }],
+          })}`,
+        }),
       ].join('\n'));
 
       const report = collectRealE2eDump({
@@ -470,6 +474,12 @@ describe('unit::real-e2e-dump::live-log-scoping', () => {
         streamKey: 'mirror:session:kimi',
         status: 'completed',
         markdownTexts: [kimiMarker],
+        toolPanels: [
+          { elementId: 'stream_tool_1', title: '📖 读取 `src/a.ts`', detailChars: 10, detailLines: 3, nestedPanelCount: 0, fences: [{ language: 'text', chars: 4, lines: 1, closed: true }], forbiddenEnvelopeTexts: [] },
+          { elementId: 'stream_tool_2', title: '🔎 搜索 `fixture` · 路径 `src` · 2 处', detailChars: 10, detailLines: 3, nestedPanelCount: 0, fences: [{ language: 'text', chars: 4, lines: 1, closed: true }], forbiddenEnvelopeTexts: [] },
+          { elementId: 'stream_tool_3', title: '🛠️ 修改 `src/a.ts`', detailChars: 4000, detailLines: 163, nestedPanelCount: 0, fences: [{ language: 'diff', chars: 3900, lines: 160, closed: true }], forbiddenEnvelopeTexts: [] },
+          { elementId: 'stream_tool_4', title: '💻 运行 `npm test` · 200ms · 输出 1 行', detailChars: 40, detailLines: 7, nestedPanelCount: 0, fences: [{ language: 'bash', chars: 8, lines: 1, closed: true }, { language: 'text', chars: 15, lines: 1, closed: true }], forbiddenEnvelopeTexts: [] },
+        ],
       },
     ];
     assert.deepEqual(basicDialogueStreamCardCheckpointIssues(kimiCheckpoints, kimiPhases), []);
@@ -478,6 +488,29 @@ describe('unit::real-e2e-dump::live-log-scoping', () => {
       marker: kimiMarker,
       thinkingText: `scripted Kimi thinking for ${kimiMarker}`,
     }), []);
+    assert.deepEqual(scriptedKimiToolCardIssues(kimiCheckpoints, {
+      providerKey: 'kimi-tmux',
+      marker: kimiMarker,
+    }), []);
+    assert.deepEqual(scriptedKimiToolCardIssues([
+      kimiCheckpoints[0]!,
+      {
+        ...kimiCheckpoints[1]!,
+        toolPanels: kimiCheckpoints[1]!.toolPanels!.map((panel, index) => index === 2
+          ? { ...panel, nestedPanelCount: 1, fences: [{ language: 'diff', chars: 9000, lines: 161, closed: false }], forbiddenEnvelopeTexts: ['Success'] }
+          : panel),
+      },
+    ], {
+      providerKey: 'kimi-tmux',
+      marker: kimiMarker,
+    }), [
+      'kimi-tmux: stream_tool_3 contains 1 nested collapsible panels.',
+      'kimi-tmux: stream_tool_3 leaked Success.',
+      'kimi-tmux: stream_tool_3 contains an unclosed diff fence.',
+      'kimi-tmux: stream_tool_3 fence exceeded 8000 characters.',
+      'kimi-tmux: stream_tool_3 fence exceeded 160 lines.',
+      'kimi-tmux: scripted long patch should exercise the 160-line cap, got 161 lines.',
+    ]);
     assert.deepEqual(kimiThinkingStatusOnlyIssues([
       ...kimiCheckpoints.slice(0, 1),
       {

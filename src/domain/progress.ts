@@ -1,6 +1,6 @@
 /** Runtime progress DTOs shared by mirror parsers, stream cards, and UI. */
 
-export type CodexToolDetail =
+export type ToolCallDetail =
   | {
       kind: 'exec_command';
       command?: string;
@@ -35,6 +35,50 @@ export type CodexToolDetail =
       rawOutput?: string;
     }
   | {
+      kind: 'file_read';
+      path?: string;
+      lineOffset?: number;
+      lineCount?: number;
+      output?: string;
+    }
+  | {
+      kind: 'file_search';
+      query?: string;
+      path?: string;
+      outputMode?: string;
+      headLimit?: number;
+      matchCount?: number;
+      output?: string;
+    }
+  | {
+      kind: 'file_change';
+      operation: 'edit' | 'write';
+      path?: string;
+      mode?: string;
+      before?: string;
+      after?: string;
+      content?: string;
+      output?: string;
+    }
+  | {
+      kind: 'url_fetch';
+      url?: string;
+      output?: string;
+    }
+  | {
+      kind: 'agent';
+      description?: string;
+      subagentType?: string;
+      resume?: string;
+      prompt?: string;
+      output?: string;
+    }
+  | {
+      kind: 'todo_list';
+      items?: unknown[];
+      output?: string;
+    }
+  | {
       kind: 'tool_search';
       query?: string;
       foundCount?: number;
@@ -65,7 +109,7 @@ export type CodexToolDetail =
       kind: 'orchestration';
       calls: Array<{
         name: string;
-        detail: CodexToolDetail | null;
+        detail: ToolCallDetail | null;
       }>;
       output?: string;
       rawOutput?: string;
@@ -82,8 +126,11 @@ export interface ToolCallInfo {
   status: 'running' | 'complete' | 'error';
   input?: string | null;
   output?: string | null;
-  detail?: CodexToolDetail | null;
+  detail?: ToolCallDetail | null;
 }
+
+/** @deprecated Use ToolCallDetail. */
+export type CodexToolDetail = ToolCallDetail;
 
 export type StreamingHistoryTextRole = 'assistant' | 'system' | 'user' | 'thinking';
 

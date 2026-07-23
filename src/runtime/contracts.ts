@@ -1,5 +1,5 @@
 import type { FileAttachment } from '../domain/message.js';
-import type { ContextUsageInfo, CodexToolDetail, TaskProgressInfo } from '../domain/progress.js';
+import type { ContextUsageInfo, TaskProgressInfo, ToolCallDetail } from '../domain/progress.js';
 import type {
   BridgeSessionClaudeRuntimeState,
   ClaudeExecutable,
@@ -97,7 +97,7 @@ export interface BridgeMirrorRecord {
   toolId?: string;
   toolName?: string;
   toolInput?: unknown;
-  toolDetail?: CodexToolDetail;
+  toolDetail?: ToolCallDetail;
   isError?: boolean;
   tasks?: TaskProgressInfo[];
   contextUsage?: ContextUsageInfo;
