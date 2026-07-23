@@ -493,9 +493,13 @@ export function parseKimiWireRecords(
           }
 
           case 'step.end': {
+            // Kimi 每个 agentic loop step 都会写 step.end；只有终态 step 才代表 turn 结束。
+            // finishReason "tool_use" 表示 step 为了调用工具而结束，turn 仍在继续。
+            const finishReason = typeof ev.finishReason === 'string' ? ev.finishReason : '';
+            if (finishReason === 'tool_use') break;
             records.push({
               signature: ensureUnique(`step.end:${ev.stepUuid || ev.uuid}`),
-              type: 'task_complete',
+              type: finishReason && finishReason !== 'end_turn' ? 'task_aborted' : 'task_complete',
               content: '',
               timestamp: toIsoTimestamp(parsed.time),
               turnId: ev.turnId,
@@ -503,6 +507,17 @@ export function parseKimiWireRecords(
             break;
           }
         }
+        break;
+      }
+
+      case 'turn.cancel': {
+        // 用户取消当前 turn；turn.cancel 不带 turnId，终止当前 pending turn 即可。
+        records.push({
+          signature: ensureUnique('turn.cancel'),
+          type: 'task_aborted',
+          content: '',
+          timestamp: toIsoTimestamp(parsed.time),
+        });
         break;
       }
 

@@ -158,7 +158,7 @@ export function buildProgressReason(type: SessionProgressType, detail?: string):
     case 'task_started':
       return '任务已启动。';
     case 'message':
-      return '最近收到了新的本地 Codex 会话消息。';
+      return '最近收到了新的本地会话消息。';
     case 'commentary':
       return '最近收到了新的执行进展说明。';
     case 'reasoning':

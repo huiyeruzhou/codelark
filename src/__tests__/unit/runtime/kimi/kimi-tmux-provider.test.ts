@@ -480,6 +480,50 @@ describe('Kimi tmux provider helpers', () => {
     assert.equal(records[5]?.goalStatus, 'cleared');
   });
 
+  it('treats only terminal step.end records as turn completion and maps turn.cancel to abort', () => {
+    const records = parseKimiWireRecords([
+      JSON.stringify({
+        type: 'context.append_loop_event',
+        time: 1782477500000,
+        event: { type: 'step.begin', turnId: 'turn-finish', stepUuid: 'step-1' },
+      }),
+      JSON.stringify({
+        type: 'context.append_loop_event',
+        time: 1782477500100,
+        event: { type: 'step.end', turnId: 'turn-finish', stepUuid: 'step-1', finishReason: 'tool_use' },
+      }),
+      JSON.stringify({
+        type: 'context.append_loop_event',
+        time: 1782477500200,
+        event: { type: 'step.begin', turnId: 'turn-finish', stepUuid: 'step-2' },
+      }),
+      JSON.stringify({
+        type: 'context.append_loop_event',
+        time: 1782477500300,
+        event: { type: 'step.end', turnId: 'turn-finish', stepUuid: 'step-2', finishReason: 'end_turn' },
+      }),
+      JSON.stringify({
+        type: 'context.append_loop_event',
+        time: 1782477500400,
+        event: { type: 'step.end', turnId: 'turn-finish', stepUuid: 'step-3', finishReason: 'cancelled' },
+      }),
+      JSON.stringify({
+        type: 'turn.cancel',
+        time: 1782477500500,
+      }),
+    ].join('\n'), new Set());
+
+    // tool_use 是 agentic loop 的中间 step 结束，不能产出 task_complete，
+    // 否则 mirror 会在第一次工具调用后就提前终结 turn。
+    assert.deepEqual(records.map((record) => record.type), [
+      'task_started',
+      'task_started',
+      'task_complete',
+      'task_aborted',
+      'task_aborted',
+    ]);
+  });
+
   it('reads Kimi transcript messages without leaking think parts', () => {
     const cwd = path.join(os.tmpdir(), 'kimi-transcript-project');
     const sessionId = 'session_22222222-2222-4222-8222-222222222222';

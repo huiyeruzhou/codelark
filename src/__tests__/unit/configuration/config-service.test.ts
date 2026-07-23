@@ -231,6 +231,25 @@ model = "scoped-local-model"
     }
   });
 
+  it('supports the deprecated Kimi default model env alias', () => {
+    const home = tempHome();
+    try {
+      const service = createConfigService({
+        codelarkHome: home,
+        env: { CODELARK_KIMI_DEFAULT_MODEL: 'legacy-kimi-model' },
+      });
+
+      const snapshot = service.snapshot();
+      assert.equal(snapshot.config.runtime.kimi.model, 'legacy-kimi-model');
+      assert.deepEqual(
+        snapshot.warnings.map((warning) => warning.envKey),
+        ['CODELARK_KIMI_DEFAULT_MODEL'],
+      );
+    } finally {
+      fs.rmSync(home, { recursive: true, force: true });
+    }
+  });
+
   it('keeps channels home-only and warns when local channel definitions are ignored', () => {
     const home = tempHome();
     const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'codelark-config-local-'));
@@ -543,6 +562,17 @@ require_mention = false
       assert.equal(
         service.get('runtime.codex.reasoningEffort', { kind: 'channel', channelId: 'chat-1', provider: 'feishu' }),
         'high',
+      );
+
+      // runtime.kimi.* 也必须进入 patchPaths 校验：字段可识别且按 scopes 校验，
+      // 不能像早期实现那样被静默跳过。
+      service.set(
+        { kind: 'channel', channelId: 'chat-1', provider: 'feishu' },
+        { runtime: { kimi: { model: 'kimi-k2', provider: 'tmux' } } },
+      );
+      assert.equal(
+        service.get('runtime.kimi.model', { kind: 'channel', channelId: 'chat-1', provider: 'feishu' }),
+        'kimi-k2',
       );
 
       assert.throws(

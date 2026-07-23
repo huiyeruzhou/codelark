@@ -2,7 +2,7 @@
 
 ## 安装
 
-CodeLark 不接管 `~/.codex`、`~/.claude-code` 或 `~/.claude-code-router` 的模型供应商配置。Codex CLI、Claude Code、CCR 或 API 登录态仍按你的本机环境自行准备；CodeLark 只保存自己的配置和桥接状态。
+CodeLark 不接管 `~/.codex`、`~/.claude-code`、`~/.claude-code-router` 或 `~/.kimi-code` 的模型供应商配置。Codex CLI、Claude Code、CCR、Kimi Code 或 API 登录态仍按你的本机环境自行准备；CodeLark 只保存自己的配置和桥接状态。
 
 ```bash
 # export OPENAI_API_KEY=sk-xxx
@@ -13,7 +13,7 @@ codelark run
 ## 前置条件
 
 - 本机已经可以运行 `codelark`。
-- 本机已有可用的 Codex 登录态、Claude Code 登录态或对应 API 凭据。
+- 本机已有可用的 Codex 登录态、Claude Code 登录态、Kimi Code 登录态或对应 API 凭据。
 - 本机 PATH 中已有 `tmux` 命令；如果没有，`codelark setup` 会提示确认并自动安装。Linux 使用 `sudo apt update && sudo apt install -y tmux`，macOS 使用 `brew install tmux`，Windows 使用 `winget install --id marlocarlo.psmux --accept-package-agreements --accept-source-agreements` 安装 psmux（提供 `tmux.exe`）。
 - 已创建飞书/Lark 自建应用并拿到 `App ID` / `App Secret`，或允许向导通过开放平台扫码创建机器人配置。
 - 飞书应用已启用机器人、权限、事件订阅和长连接。详细步骤见 [平台配置指南](platform-setup.md)。
@@ -51,6 +51,7 @@ codelark setup
 - 有 `~/.codex`：推荐 Codex。
 - 没有 Codex 但有 `~/.claude-code-router`：推荐 Claude Code Router，并使用 `ccr`。
 - 没有前两者但有 `~/.claude-code` 或 `~/.claude`：推荐 Claude Code。
+- 没有前三者但有 `~/.kimi-code`：推荐 Kimi Code（需要 tmux）。
 - 都没有：默认 Claude Code，后续可在向导或 IM 命令里切换。
 
 向导会写入：
@@ -189,10 +190,11 @@ CodeLark 自有数据位于：
 - `logs/`：bridge、UI 和启动器日志。
 - `runtime/`：运行状态、PID、端口等临时状态。
 
-Codex 自己的会话数据仍由 Codex 管理，CodeLark 只读取必要的 session index 和 JSONL：
+Codex 自己的会话数据仍由 Codex 管理，CodeLark 只读取必要的 session index 和 JSONL；Claude Code、Kimi Code 同理：
 
 ```text
 ~/.codex/sessions/**/*.jsonl
+~/.kimi-code/sessions/wd_*/session_*/agents/main/wire.jsonl
 ```
 
 遇到启动、消息收发、权限或卡片问题时，见 [排障指南](troubleshooting.md)。

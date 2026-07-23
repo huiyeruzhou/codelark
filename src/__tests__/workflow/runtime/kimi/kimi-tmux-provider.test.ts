@@ -122,7 +122,7 @@ function appendKimiTurn(wirePath: string, prompt: string): void {
     JSON.stringify({
       type: 'context.append_loop_event',
       time: 1782540000400,
-      event: { type: 'step.end', turnId: 'turn-1', stepUuid: 'step-1' },
+      event: { type: 'step.end', turnId: 'turn-1', stepUuid: 'step-1', finishReason: 'end_turn' },
     }),
     '',
   ].join('\n'), 'utf-8');

@@ -114,6 +114,10 @@ Kimi 需要自己的 `MirrorJsonlSource`。这样 `/t` 切换到已有 Kimi sess
 
 Kimi parser 要特别处理 `content.part` / `think`。这类内容是 Kimi 的特色状态信号，不应混入最终回答正文。它应映射到状态区的“当前思考”，并做长度截断；可见 `text`、工具调用、工具结果、token usage 和任务完成事件仍走原有流式正文、工具和 usage 通道。
 
+Parser 还必须区分“中间循环事件”和“turn 终态事件”。Kimi 的 agentic loop 每个 step 都会写 `step.begin` / `step.end`，其中 `step.end` 的 `finishReason` 为 `tool_use` 时只表示该 step 为调用工具而结束，turn 仍在继续；只有 `end_turn`（或无 `finishReason` 的旧数据）才能映射为 `task_complete`，其他非空终态值和顶层 `turn.cancel` 应映射为 `task_aborted`。如果把中间 step 结束误映射成 `task_complete`，mirror 会在第一次工具调用后就提前终结 turn、把部分输出当成最终回复发出。任何 agent 的 parser 都要先回答“这个事件是不是 turn 终态”，再映射到通用 mirror contract。
+
+wire 格式会随 CLI 版本演进（例如 Kimi 后来新增了 `metadata`、`config.update`、`llm.request`、`turn.prompt`、`turn.steer`、`permission.*`、`plan_mode.*`、`tools.*` 等顶层记录类型）。新增 agent 后要定期用真实 session 文件审计未知记录类型和 `metadata.protocol_version`：未知类型默认被忽略是安全的，但新出现的终态/取消/用户输入类事件必须评估是否需要接入 parser，fixture 也要与真实格式保持同步。
+
 TUI selection prompt 探测也是 agent 专属能力，不是 tmux provider 的通用能力。Codex TUI selection prompt、Claude Code permission selection 和 Kimi steer/think 都有不同屏幕语义。新增 agent 不能因为 `runtime.codex.provider = "tmux"` 或 `runtime.claude.provider = "tmux"` 就自动进入既有探测路径；必须先明确该 agent 的屏幕形态、解析规则和 IM 回调动作。Kimi 当前不复用 Codex/Claude 的 selection prompt probe。
 
 ## Transcript 与历史
@@ -177,3 +181,70 @@ Kimi tmux provider 的当前行为来自实测：
 6. 接通用 mirror runtime 和 transcript source。
 7. 更新命令文案、产品文档和 focused tests。
 8. 把该 agent 放入真实 Feishu E2E 的现有 runtime/provider 矩阵，而不是新增 agent 专用开关。
+
+## 新增 agent 改动 Checklist
+
+以 Kimi 接入和后续审计为准，新增一个 agent 的完整改动范围如下。PR 审查时逐项核对；任何一项缺失都会在“能发一轮消息”和“完整支持一个 agent”之间留下断层。
+
+### 类型、配置与存储
+
+- [ ] `RuntimeAgent` 联合类型、`BridgeSession` runtime state（`<agent>.sessionId` / `cwd`）、`runtimeBridgeSessionIds.<agent>`（`src/domain/`）。
+- [ ] 配置 schema：`runtime.agent` 枚举、`runtime.<agent>.provider` schema、`runtime.<agent>` 配置块，TOML↔camelCase 双向映射（`src/configuration/schema.ts`）。
+- [ ] 字段注册：env key、`runtimeSettingsKey`、scopes（`src/configuration/fields.ts`）、`defaults.toml`、`merge.ts`。
+- [ ] **写入校验穷举**：`ConfigService.patchPaths()` 必须列出 `runtime.<agent>.*`，否则 scope 校验被静默跳过（Kimi 接入时漏过，后补）。
+- [ ] env 兼容层旧 key 别名（`src/configuration/env-compat.ts`）和文件迁移（`migrations/v1.ts`、`migrations/legacy/session-json.ts`）。
+- [ ] 发布 JSON schema：`schemas/config.v1.schema.json`、`schemas/data/sessions.v1.schema.json`、`schemas/data/channel-chats.v1.schema.json`。
+- [ ] 存储归一化与启动迁移（`src/storage/json-store.ts`、`src/storage/migrations.ts`）。
+
+### 运行时与本地会话索引
+
+- [ ] `src/runtime/<agent>/session-index.ts`：枚举、按 id/cwd 查找、解析本地历史文件。
+- [ ] 驱动 provider（tmux/pty/sdk），含真实 CLI 生命周期测试（启动、resume、prompt 注入、退出）。
+- [ ] **终态事件语义**：parser 先判断“事件是不是 turn 终态”，区分中间 loop 事件（如 `finishReason: tool_use`）与真正完成/中止（`end_turn` → `task_complete`，取消类事件 → `task_aborted`）。fixture 必须取自真实 session 文件。
+- [ ] 特色状态信号（如 Kimi `think`）映射到状态区并截断，不混入最终回复正文。
+- [ ] `MirrorJsonlSource` 注册到 mirror runtime，subscription registry 含该 agent 的 identity。
+- [ ] TUI selection prompt 探测是 agent 专属能力；新 agent 不得因为 provider 恰好是 tmux 就落入 Codex/Claude 探测路径。
+
+### IM 命令层
+
+- [ ] `/runtime`、`/current-runtime`：接受新 agent，切换并恢复 `runtimeBridgeSessionIds.<agent>`。
+- [ ] `/provider`：只写当前 agent 的 provider namespace；非法值给用法。
+- [ ] `/model`、`/mode`、`/sandbox`、`/network`、`/reasoning`：支持或给出该 agent 的明确“不支持”提示，绝不串写其它 runtime 配置。
+- [ ] `/set`：设置组、`CURRENT_RUNTIME_SETTING_KEYS`、`SETTING_GROUP_ORDERS`、form 名和展示 label（`global-settings.ts`）。
+- [ ] `/current` 文本与卡片：identity 字段（如 `<agent>_session_id`）、runtime 下拉、配置表单项。
+- [ ] `/t` 全家：本地会话列表 filter/summary、materialize、绑定、接管冲突、archive（调用该 agent 的归档，不能落到 Codex/Claude 归档）、展示 label。
+- [ ] `/his`：transcript source，过滤 user 注入、系统消息和内部 think，标题回退规则。
+- [ ] `/check`：runtime label、runtime-local identity、resume/mirror 必需 cwd。
+- [ ] `/new`、`/clear`：继承 active runtime 与 provider，只写自己的 `runtimeBridgeSessionIds[activeRuntime]`；清理时杀掉该 agent 的 tmux session。
+- [ ] `/stop`、`/tmux*`、`/pty-screen` 重定向、`/every`、`/then` 任务表 runtime 三分支、`/help` 与别名。
+- [ ] 文案审计：通用路径上不得硬编码 “Codex” 字样的 reason/告警（健康 reason、goal 告警等在 Kimi 接入时都踩过）。
+
+### Turn、健康与 Feishu 卡片
+
+- [ ] `BridgeTurnRuntime`、`BridgeTurnProgressSource`、`BridgeTurnFinalSource` 三个枚举各加该 agent 的值。
+- [ ] turn classifier、coordinator 终止归属、runner 的 identity 回调（session id + cwd 一起写）。
+- [ ] 健康 reducer 的 identity/cwd；process probe 是否适用该 agent（Kimi/Claude 不走 Codex thread probe）。
+- [ ] 流式 metadata tag、markdown assistant label、卡片 finalize 失败 fallback。
+
+### Operator UI、CLI 与脚本
+
+- [ ] Operator UI：session source、session config 读写、binding/default target routes、runtime 下拉、identity 展示。
+- [ ] CLI help、`setup-wizard` 检测目录、推荐规则和选项。
+- [ ] `scripts/doctor.sh` 环境检查、`run-tests.js` 测试环境变量。
+
+### 测试与真实 E2E
+
+- [ ] 单元：parser 终态/取消/中间事件、identity 解析、transcript 过滤。
+- [ ] Workflow：provider 真实 CLI 生命周期。
+- [ ] Mock bridge E2E：命令矩阵按 agent 全覆盖。
+- [ ] 真实 Feishu E2E：纳入既有 runtime/provider 矩阵；不新增 agent 专用开关，不复用 live bridge 或宿主 agent home。
+
+### 文档
+
+- [ ] 本页（接入契约与 checklist）、`current.md`、`runtime-providers.md`、`install-and-usage.md`（接管声明、前置条件、向导推荐规则、数据文件清单）、`session-workflows.md`、`data-observability.md`、`docs/testing/` 相关页。
+- [ ] 过程状态只写 `STATUS.md` / `work/`；长期规则必须落在 tracked `docs/`。
+
+### 格式演进维护（接入后持续）
+
+- [ ] 定期用真实 session 文件审计 wire 记录类型：未知类型被忽略是安全的，但新的终态/取消/用户输入类事件必须评估接入。
+- [ ] 关注 `metadata.protocol_version` 变化；fixture 与真实格式保持同步。

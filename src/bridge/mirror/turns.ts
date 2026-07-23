@@ -275,7 +275,7 @@ function buildEmptyGoalLoopWarningTurn(
     `| 最近 turn | ${turnState.turnId || 'unknown'} |`,
     compactObjective ? `| Goal | ${compactObjective.replace(/\|/g, '\\|')} |` : null,
     '',
-    '当前任务可能因为环境、API 或 Codex goal runner 状态异常陷入无限重启。已停止为这些空 goal turn 创建镜像流式卡片；请检查底层 JSONL、API 可用性和 goal runner 状态。',
+    '当前任务可能因为环境、API 或底层 goal runner 状态异常陷入无限重启。已停止为这些空 goal turn 创建镜像流式卡片；请检查底层 JSONL、API 可用性和 goal runner 状态。',
   ].filter((line): line is string => line !== null).join('\n');
 
   return {
