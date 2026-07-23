@@ -1361,6 +1361,7 @@ describe('unit::real-feishu-e2e-harness::session-management-command-plan', () =>
       };
       commands: string[];
       commandReplyExpectations: Array<{ command: string; expectedTexts: string[]; reason: string }>;
+      waitsForMirrorFinalBeforeFollowup: boolean;
       finalMessageObservationMode: string;
       plannedSuccessCheckNames: string[];
     };
@@ -1368,6 +1369,7 @@ describe('unit::real-feishu-e2e-harness::session-management-command-plan', () =>
     assert.equal(parsed.coverage.testName, 'real-feishu::runtime-message::kimi-tmux');
     assert.equal(parsed.coverage.dualProviderCompanion, 'real-feishu::runtime-message::codex-pty');
     assert.deepEqual(parsed.commands, ['/runtime kimi', '/p tmux']);
+    assert.equal(parsed.waitsForMirrorFinalBeforeFollowup, true);
     assert.equal(parsed.finalMessageObservationMode, 'mirror-stream-evidence');
     assert.deepEqual(expectationAt(parsed.commandReplyExpectations, '/runtime kimi').expectedTexts, ['Runtime', 'kimi']);
     assert.deepEqual(expectationAt(parsed.commandReplyExpectations, '/p tmux').expectedTexts, ['Kimi Provider', 'tmux']);

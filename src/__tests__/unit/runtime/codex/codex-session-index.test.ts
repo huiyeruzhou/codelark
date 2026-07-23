@@ -1235,6 +1235,145 @@ describe('readCodexSessionMirrorRecordStreamByFilePath', () => {
     fs.rmSync(tempRoot, { recursive: true, force: true });
   });
 
+  it('unwraps GPT-5.6 exec orchestration into bash and diff tool displays', () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-codex-gpt56-tools-'));
+    const filePath = path.join(tempRoot, 'rollout.jsonl');
+    const patchText = [
+      '*** Begin Patch',
+      '*** Update File: src/app.ts',
+      '@@',
+      '+const enabled = true;',
+      '*** End Patch',
+    ].join('\n');
+    fs.writeFileSync(
+      filePath,
+      [
+        {
+          timestamp: '2026-07-23T00:00:00.000Z',
+          type: 'event_msg',
+          payload: { type: 'task_started', turn_id: 'turn-gpt56' },
+        },
+        {
+          timestamp: '2026-07-23T00:00:01.000Z',
+          type: 'response_item',
+          payload: {
+            type: 'custom_tool_call',
+            name: 'exec',
+            call_id: 'call-shell',
+            input: [
+              'const r = await tools.exec_command({"cmd":"npm test","workdir":"/tmp/project","yield_time_ms":10000});',
+              'text(r.output);',
+            ].join('\n'),
+          },
+        },
+        {
+          timestamp: '2026-07-23T00:00:02.000Z',
+          type: 'response_item',
+          payload: {
+            type: 'custom_tool_call_output',
+            call_id: 'call-shell',
+            output: [
+              { type: 'input_text', text: 'Script completed\nWall time 0.2 seconds\nOutput:\n' },
+              { type: 'input_text', text: 'tests passed' },
+            ],
+          },
+        },
+        {
+          timestamp: '2026-07-23T00:00:03.000Z',
+          type: 'response_item',
+          payload: {
+            type: 'custom_tool_call',
+            name: 'exec',
+            call_id: 'call-patch',
+            input: `const patch = ${JSON.stringify(patchText)};\ntext(await tools.apply_patch(patch));`,
+          },
+        },
+        {
+          timestamp: '2026-07-23T00:00:04.000Z',
+          type: 'response_item',
+          payload: {
+            type: 'custom_tool_call_output',
+            call_id: 'call-patch',
+            output: [{ type: 'input_text', text: 'Script completed\nWall time 0.1 seconds\nOutput:\n{}' }],
+          },
+        },
+        {
+          timestamp: '2026-07-23T00:00:05.000Z',
+          type: 'response_item',
+          payload: {
+            type: 'custom_tool_call',
+            name: 'exec',
+            call_id: 'call-multiple',
+            input: [
+              `const patch = ${JSON.stringify(patchText)};`,
+              'const results = await Promise.all([',
+              '  tools.exec_command({ cmd: "pwd", workdir: "/tmp/project" }),',
+              '  tools.apply_patch(patch),',
+              ']);',
+              'text(results.length);',
+            ].join('\n'),
+          },
+        },
+        {
+          timestamp: '2026-07-23T00:00:06.000Z',
+          type: 'response_item',
+          payload: {
+            type: 'custom_tool_call_output',
+            call_id: 'call-multiple',
+            output: [{ type: 'input_text', text: 'Script completed\nWall time 0.3 seconds\nOutput:\n2' }],
+          },
+        },
+      ].map((line) => JSON.stringify(line)).join('\n'),
+      'utf-8',
+    );
+
+    const records = readCodexSessionMirrorRecordStreamByFilePath(filePath);
+    const shellStart = records.find((record) => record.type === 'tool_started' && record.toolId === 'call-shell');
+    const shellFinish = records.find((record) => record.type === 'tool_finished' && record.toolId === 'call-shell');
+    const patchStart = records.find((record) => record.type === 'tool_started' && record.toolId === 'call-patch');
+    const multiStart = records.find((record) => record.type === 'tool_started' && record.toolId === 'call-multiple');
+    assert.equal(shellStart?.toolName, 'exec_command');
+    assert.deepEqual(shellStart?.toolDetail, {
+      kind: 'exec_command',
+      command: 'npm test',
+      workdir: '/tmp/project',
+    });
+    assert.equal(shellFinish?.toolName, undefined);
+    assert.equal(shellFinish?.content, 'Script completed\nWall time 0.2 seconds\nOutput:\ntests passed');
+    assert.equal(patchStart?.toolName, 'apply_patch');
+    assert.equal(patchStart?.toolDetail?.kind, 'patch_apply');
+    assert.equal(patchStart?.toolDetail?.kind === 'patch_apply' ? patchStart.toolDetail.patchText : '', patchText);
+    assert.equal(multiStart?.toolName, 'tools × 2');
+    assert.deepEqual(multiStart?.toolDetail, {
+      kind: 'orchestration',
+      calls: [
+        {
+          name: 'exec_command',
+          detail: { kind: 'exec_command', command: 'pwd', workdir: '/tmp/project' },
+        },
+        {
+          name: 'apply_patch',
+          detail: {
+            kind: 'patch_apply',
+            patchText,
+            files: [{ path: 'src/app.ts', action: 'update' }],
+          },
+        },
+      ],
+    });
+
+    const history = readCodexSessionJsonlHistoryStreamByFilePath(filePath)
+      .map((entry) => entry.content)
+      .join('\n\n');
+    assert.match(history, /exec_command[\s\S]*```bash\nnpm test\n```/);
+    assert.match(history, /apply_patch[\s\S]*```diff\n\*\*\* Begin Patch/);
+    assert.match(history, /tools × 2[\s\S]*1\. `exec_command`[\s\S]*```bash\npwd\n```/);
+    assert.match(history, /tools × 2[\s\S]*2\. `apply_patch`[\s\S]*```diff\n\*\*\* Begin Patch/);
+    assert.doesNotMatch(history, /```json\nconst r = await tools\.exec_command/);
+
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  });
+
   it('parses current Codex Codex tool and reasoning events into mirror records', () => {
     const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-codex-mirror-'));
     const filePath = path.join(tempRoot, 'rollout.jsonl');

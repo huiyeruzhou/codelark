@@ -62,6 +62,15 @@ export type CodexToolDetail =
       errorText?: string;
     }
   | {
+      kind: 'orchestration';
+      calls: Array<{
+        name: string;
+        detail: CodexToolDetail | null;
+      }>;
+      output?: string;
+      rawOutput?: string;
+    }
+  | {
       kind: 'generic';
       input?: unknown;
       output?: string;

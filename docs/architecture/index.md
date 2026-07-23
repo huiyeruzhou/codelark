@@ -15,3 +15,4 @@
 9. [桥接安全模型](security.md)：授权、输入校验、限流、权限回调和审计日志。
 10. [流式卡片](streaming-card.md)：本地镜像、投递计划、碎片投递抑制、长连接刷新、底层飞书 API 和性能观测。
 11. [Codex TUI 工具状态渲染分析](codex-tui-tool-status-rendering.md)：Codex 当前工具调用状态、底部状态行、快捷键和 Default/Plan 模式渲染链路。
+12. [Codex 工具调用解析与卡片展示](codex-tool-call-rendering.md)：session JSONL 到飞书工具面板的数据流、GPT-5.6 `exec` wrapper 静态归一化和验证边界。

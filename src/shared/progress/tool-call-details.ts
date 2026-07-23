@@ -325,6 +325,17 @@ export function buildCodexToolDetailFromOutput(
 ): CodexToolDetail | null {
   const raw = typeof output === 'string' ? output : stringifyToolValue(output);
   const parsed = parseJsonMaybe(output);
+  if (existing?.kind === 'orchestration') {
+    const structuredOutput = extractExecStructuredOutput(parsed);
+    const { output: processOutput } = parseProcessOutput(raw);
+    const outputText = structuredOutput || processOutput || '';
+    return {
+      kind: 'orchestration',
+      calls: existing.calls,
+      ...(outputText.trim() ? { output: sanitizeToolText(outputText) } : {}),
+      rawOutput: raw,
+    };
+  }
   if (existing?.kind === 'exec_command' || isExecTool(toolName)) {
     const structuredOutput = extractExecStructuredOutput(parsed);
     const { output: processOutput, ...processMeta } = parseProcessOutput(raw);
@@ -491,6 +502,26 @@ export function renderCodexToolDetailMarkdown(tool: ToolCallInfo): string {
     if (detail.input != null) sections.push(buildFencedCodeBlock(stringifyToolValue(detail.input), 'json'));
     if (detail.output) sections.push(buildFencedCodeBlock(detail.output, 'text'));
     if (detail.errorText) sections.push(buildFencedCodeBlock(detail.errorText, 'text'));
+    return sections.join('\n\n');
+  }
+  if (detail.kind === 'orchestration') {
+    detail.calls.forEach((call, index) => {
+      const child = renderCodexToolDetailMarkdown({
+        id: `${tool.id}:${index}`,
+        name: call.name,
+        status: tool.status,
+        input: null,
+        output: null,
+        detail: call.detail,
+      });
+      sections.push([
+        `##### ${index + 1}. \`${call.name}\``,
+        child,
+      ].filter(Boolean).join('\n\n'));
+    });
+    if (detail.output) {
+      sections.push(`编排输出：\n${buildFencedCodeBlock(truncateExecOutputForRender(detail.output), 'text')}`);
+    }
     return sections.join('\n\n');
   }
   if (detail.kind === 'generic') {

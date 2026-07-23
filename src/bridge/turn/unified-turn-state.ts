@@ -260,8 +260,8 @@ export function applyUnifiedTurnToolEvent(
   event: CodexTurnEvent,
   options: { timestampMs?: number } = {},
 ): void {
-  applyCodexTurnEventToTools(state.toolCalls, event);
-  const tool = state.toolCalls.get(event.toolId);
+  const resolvedToolId = applyCodexTurnEventToTools(state.toolCalls, event);
+  const tool = resolvedToolId ? state.toolCalls.get(resolvedToolId) : null;
   if (tool) {
     applyUnifiedTurnHistoryTools(state, [tool]);
   }

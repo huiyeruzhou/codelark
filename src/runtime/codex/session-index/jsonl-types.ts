@@ -261,8 +261,10 @@ export function parseTaskProgressItems(value: unknown): TaskProgressInfo[] {
     .filter((item): item is TaskProgressInfo => Boolean(item));
 }
 
-export function parseUpdatePlanTasks(argumentsJson: string | undefined): TaskProgressInfo[] {
-  const parsed = parseJsonSafely(argumentsJson) as { plan?: unknown; tasks?: unknown } | null;
+export function parseUpdatePlanTasks(argumentsValue: unknown): TaskProgressInfo[] {
+  const parsed = typeof argumentsValue === 'string'
+    ? parseJsonSafely(argumentsValue) as { plan?: unknown; tasks?: unknown } | null
+    : argumentsValue as { plan?: unknown; tasks?: unknown } | null;
   if (!parsed || typeof parsed !== 'object') return [];
   return parseTaskProgressItems(parsed.plan ?? parsed.tasks);
 }
@@ -276,9 +278,20 @@ export function extractReasoningSummary(payload: { summary?: unknown; content?: 
 }
 
 export function extractToolOutputText(value: unknown): string {
-  if (typeof value !== 'string') return extractNormalizedFreeText(value);
+  if (typeof value !== 'string') {
+    const parts: string[] = [];
+    collectStructuredTextParts(value, parts);
+    const orchestratedOutput = parts.join('');
+    if (/^Script (?:completed|running|failed)\b/u.test(orchestratedOutput.trimStart())) {
+      return normalizeStructuredText(orchestratedOutput);
+    }
+    return extractNormalizedFreeText(value);
+  }
   const trimmed = value.trim();
   if (!trimmed) return '';
+  if (/^Script (?:completed|running|failed)\b/u.test(trimmed)) {
+    return normalizeStructuredText(value);
+  }
   if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
     const parsed = parseJsonSafely(trimmed) as { output?: unknown } | null;
     if (parsed && typeof parsed === 'object') {

@@ -21,13 +21,31 @@ export type CodexTurnEvent =
 export function applyCodexTurnEventToTools(
   tools: Map<string, ToolCallInfo>,
   event: CodexTurnEvent,
-): void {
-  if (event.type !== 'tool') return;
+): string | null {
+  if (event.type !== 'tool') return null;
 
-  const existing = tools.get(event.toolId);
+  let resolvedToolId = event.toolId;
+  let existing = tools.get(resolvedToolId);
+  if (!existing && event.status !== 'running' && event.toolName) {
+    const normalizedName = event.toolName.trim().toLowerCase();
+    const running = Array.from(tools.values()).filter((tool) => tool.status === 'running');
+    const exact = running.filter((tool) => tool.name.trim().toLowerCase() === normalizedName);
+    if (exact.length === 1) {
+      existing = exact[0];
+      resolvedToolId = existing!.id;
+    } else {
+      const parentOrchestrations = running.filter((tool) => (
+        tool.detail?.kind === 'orchestration'
+        && tool.detail.calls.some((call) => call.name.trim().toLowerCase() === normalizedName)
+      ));
+      if (parentOrchestrations.length === 1) {
+        return parentOrchestrations[0]!.id;
+      }
+    }
+  }
   const toolName = event.toolName || existing?.name || 'tool';
   const next: ToolCallInfo = {
-    id: event.toolId,
+    id: resolvedToolId,
     name: toolName,
     status: event.status,
     input: existing?.input ?? null,
@@ -52,7 +70,8 @@ export function applyCodexTurnEventToTools(
     next.output = output.trim() ? output : existing?.output ?? null;
   }
 
-  tools.set(event.toolId, next);
+  tools.set(resolvedToolId, next);
+  return resolvedToolId;
 }
 
 export function codexTurnEventFromSdkToolEvent(

@@ -19,6 +19,10 @@ import {
   type SessionEventLine,
   type SessionMessageLine,
 } from './jsonl-types.js';
+import {
+  buildCodexToolDetailFromNormalizedCall,
+  normalizeCodexToolCall,
+} from './tool-call-normalizer.js';
 
 export interface CodexSessionToolEvent {
   recordType: Extract<BridgeMirrorRecord['type'], 'tool_started' | 'tool_finished'>;
@@ -99,13 +103,18 @@ export function codexSessionToolEventFromResponseItem(
   }
 
   if (payload.type === 'function_call' || payload.type === 'custom_tool_call') {
-    const toolName = formatCodexToolName(payload.namespace, payload.name);
+    const rawToolName = formatCodexToolName(payload.namespace, payload.name);
     const toolId = extractNormalizedFreeText(payload.call_id) || signature;
-    if (!toolName) return null;
-    const input = payload.type === 'function_call' ? payload.arguments : payload.input;
+    if (!rawToolName) return null;
+    const normalized = normalizeCodexToolCall(
+      rawToolName,
+      payload.type === 'function_call' ? payload.arguments : payload.input,
+    );
+    const toolName = normalized.name;
+    const input = normalized.input;
     const event = codexTurnEventFromSdkToolEvent(toolId, toolName, 'running', {
       input,
-      structured: buildCodexToolDetailFromInput(toolName, input),
+      structured: buildCodexToolDetailFromNormalizedCall(normalized),
     });
     return {
       recordType: 'tool_started',

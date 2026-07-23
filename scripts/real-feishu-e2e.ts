@@ -3981,7 +3981,16 @@ function runtimePromptFinalTranscriptIssues(options: CliOptions, finalFeishuMess
   if (!finalFeishuMessages) {
     return [`Final Feishu transcript is missing; cannot verify runtime prompt marker ${expectedText}.`];
   }
-  if (payloadContainsText(finalFeishuMessages, expectedText)) return [];
+  if (options.provider === 'sdk' && botTranscriptContainsText(finalFeishuMessages, expectedText, options)) return [];
+  if (options.provider !== 'sdk') {
+    const promptOccurrences = scenarioFinalMessage(options).split(expectedText).length - 1;
+    const finalCardContainsResponse = getFeishuTranscriptMessages(finalFeishuMessages).some((message) => {
+      if (!isTestBotMessage(message, options)) return false;
+      const content = messageContent(message);
+      return content.split(expectedText).length - 1 > promptOccurrences;
+    });
+    if (finalCardContainsResponse) return [];
+  }
   return [`Final Feishu transcript did not contain runtime prompt marker ${expectedText}.`];
 }
 
@@ -6179,7 +6188,7 @@ function waitsForMirrorFinalBeforeFollowup(options: CliOptions, commandText?: st
     const phase = basicDialoguePhaseForPrompt(options, commandText);
     return Boolean(phase && !phase.endsWith('-sdk'));
   }
-  return scenarioCommandsIncludeFinalMessage(options) && options.provider !== 'sdk';
+  return scenarioRequiresRuntimeOutput(options) && options.provider !== 'sdk';
 }
 
 function shouldSendBasicDialogueQueuedFollowup(
@@ -6888,6 +6897,30 @@ async function main(): Promise<void> {
         const observation = await sendAndObserve(activeChatId, scenarioFinalMessage(options), options, 'bridge response for final message', runtimeEnvironment);
         messageObservations.push(observation);
         validationChatId = activeChatId;
+        if (waitsForMirrorFinalBeforeFollowup(options, scenarioFinalMessage(options))) {
+          try {
+            await waitForMirrorStreamCompleted(
+              options,
+              activeChatId,
+              `mirror stream completion for ${scenarioFinalMessage(options)}`,
+            );
+          } catch (error) {
+            const messages = await listChatMessages(activeChatId, options, 50);
+            writeFailureReport({
+              label: `mirror stream completion for ${scenarioFinalMessage(options)}`,
+              sentText: scenarioFinalMessage(options),
+              chatId: activeChatId,
+              options,
+              runtimeEnvironment,
+              error,
+              feishuMessages: {
+                finalMessages: messages,
+                messageObservations,
+              },
+            });
+            throw error;
+          }
+        }
         if (docAsChatScenario) {
           try {
             docAsChatScenario.contextAssertion = await waitForDocAsChatContextAssertion(docAsChatScenario, options);

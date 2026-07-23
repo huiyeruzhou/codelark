@@ -35,6 +35,10 @@ import {
   resolveCodexJsonlDisplayText,
   TURN_ABORTED_NOTICE,
 } from './internal-control-events.js';
+import {
+  buildCodexToolDetailFromNormalizedCall,
+  normalizeCodexToolCall,
+} from './tool-call-normalizer.js';
 
 const CONTEXT_COMPACTED_NOTICE = '> ⚙️ 上下文已压缩，后续回复会基于压缩后的上下文继续。';
 
@@ -194,20 +198,23 @@ function extractSessionJsonlPrimaryText(
       return extractReasoningSummary(msg.payload as any);
     }
     if (payloadType === 'function_call' || payloadType === 'custom_tool_call') {
-      const toolName = formatCodexToolName(msg.payload?.namespace, msg.payload?.name) || 'tool';
+      const rawToolName = formatCodexToolName(msg.payload?.namespace, msg.payload?.name) || 'tool';
       const toolId = extractNormalizedFreeText(msg.payload?.call_id);
-      const args = typeof msg.payload?.arguments === 'string'
+      const rawInput = typeof msg.payload?.arguments === 'string'
         ? msg.payload.arguments
         : typeof msg.payload?.input === 'string'
           ? msg.payload.input
           : '';
-      const detail = buildCodexToolDetailFromInput(toolName, args);
+      const normalized = normalizeCodexToolCall(rawToolName, rawInput);
+      const toolName = normalized.name;
+      const args = normalized.input;
+      const detail = buildCodexToolDetailFromNormalizedCall(normalized);
       if (toolId) {
         toolStates?.set(toolId, { name: toolName, detail });
       }
       const structured = detail
         ? renderCodexToolDetailMarkdown({
-          id: toolId || createCodexEventSignature(toolName + args),
+          id: toolId || createCodexEventSignature(toolName + String(args)),
           name: toolName,
           status: 'running',
           input: null,
@@ -217,7 +224,7 @@ function extractSessionJsonlPrimaryText(
         : '';
       if (structured) return `${toolName}\n\n${structured}`;
 
-      if (toolName === 'exec_command' && args && args.trim().startsWith('{')) {
+      if (toolName === 'exec_command' && typeof args === 'string' && args.trim().startsWith('{')) {
         try {
           const parsedArgs = JSON.parse(args.trim());
           const command = typeof parsedArgs.command === 'string' ? parsedArgs.command.trim() : '';
@@ -228,7 +235,7 @@ function extractSessionJsonlPrimaryText(
           // fallback to original format
         }
       }
-      return args ? `${toolName}\n\n${args}` : toolName;
+      return args ? `${toolName}\n\n${typeof args === 'string' ? args : JSON.stringify(args, null, 2)}` : toolName;
     }
     if (payloadType === 'function_call_output' || payloadType === 'custom_tool_call_output') {
       const rawOutput = extractToolOutputText(msg.payload?.output);
@@ -236,7 +243,7 @@ function extractSessionJsonlPrimaryText(
       const previous = toolId ? toolStates?.get(toolId) : null;
       const detail = mergeCodexToolDetail(
         previous?.detail,
-        buildCodexToolDetailFromOutput(previous?.name, msg.payload?.output, previous?.detail),
+        buildCodexToolDetailFromOutput(previous?.name, rawOutput, previous?.detail),
       );
       if (toolId && previous) {
         toolStates?.set(toolId, { ...previous, detail });

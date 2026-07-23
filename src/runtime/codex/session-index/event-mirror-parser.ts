@@ -31,6 +31,7 @@ import {
   codexSessionToolEventFromEventMessage,
   codexSessionToolEventFromResponseItem,
 } from './tool-call-events.js';
+import { normalizeCodexToolCall } from './tool-call-normalizer.js';
 
 function compactInternalDisplayText(text: string): string {
   return renderCodexInternalTextForDisplay(text);
@@ -514,11 +515,13 @@ function pushCodexMirrorResponseRecord(
   }
 
   if (parsed.payload?.type === 'function_call') {
-    const toolName = formatCodexToolName(parsed.payload.namespace, parsed.payload.name);
+    const rawToolName = formatCodexToolName(parsed.payload.namespace, parsed.payload.name);
     const toolId = extractNormalizedFreeText(parsed.payload.call_id) || signature;
-    if (!toolName) return true;
+    if (!rawToolName) return true;
+    const normalized = normalizeCodexToolCall(rawToolName, parsed.payload.arguments);
+    const toolName = normalized.name;
     if (toolName === 'update_plan') {
-      const tasks = parseUpdatePlanTasks(parsed.payload.arguments);
+      const tasks = parseUpdatePlanTasks(normalized.input);
       activeSpecialCallIds.add(toolId);
       records.push({
         signature,
@@ -536,11 +539,13 @@ function pushCodexMirrorResponseRecord(
   }
 
   if (parsed.payload?.type === 'custom_tool_call') {
-    const toolName = formatCodexToolName(parsed.payload.namespace, parsed.payload.name);
+    const rawToolName = formatCodexToolName(parsed.payload.namespace, parsed.payload.name);
     const toolId = extractNormalizedFreeText(parsed.payload.call_id) || signature;
-    if (!toolName) return true;
+    if (!rawToolName) return true;
+    const normalized = normalizeCodexToolCall(rawToolName, parsed.payload.input);
+    const toolName = normalized.name;
     if (toolName === 'update_plan') {
-      const tasks = parseUpdatePlanTasks(typeof parsed.payload.input === 'string' ? parsed.payload.input : undefined);
+      const tasks = parseUpdatePlanTasks(normalized.input);
       activeSpecialCallIds.add(toolId);
       records.push({
         signature,

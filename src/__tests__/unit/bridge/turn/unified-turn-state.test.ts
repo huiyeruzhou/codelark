@@ -96,6 +96,63 @@ describe('unified-turn-state', () => {
     assert.equal(state.lastActivityAtMs, 1020);
   });
 
+  it('merges unmatched GPT-5.6 patch completion events into the active wrapper tool', () => {
+    const state = createUnifiedTurnProgressState(1000);
+
+    applyUnifiedTurnToolEvent(state, codexTurnEventFromSdkToolEvent(
+      'custom-call',
+      'apply_patch',
+      'running',
+      {
+        structured: {
+          kind: 'patch_apply',
+          patchText: '*** Begin Patch\n*** Add File: a.txt\n+ok\n*** End Patch',
+          files: [{ path: 'a.txt', action: 'add' }],
+        },
+      },
+    ));
+    applyUnifiedTurnToolEvent(state, codexTurnEventFromSdkToolEvent(
+      'exec-generated-call',
+      'apply_patch',
+      'complete',
+      { output: 'A a.txt' },
+    ));
+
+    assert.equal(state.toolCalls.size, 1);
+    assert.equal(state.toolCalls.get('custom-call')?.status, 'complete');
+    assert.equal(state.historyItems.length, 1);
+    assert.equal(state.historyItems[0]?.type === 'tool_panel' ? state.historyItems[0].tools.length : 0, 1);
+  });
+
+  it('ignores unmatched nested completion events while an orchestration wrapper is active', () => {
+    const state = createUnifiedTurnProgressState(1000);
+    const orchestration = {
+      kind: 'orchestration' as const,
+      calls: [
+        { name: 'exec_command', detail: { kind: 'exec_command' as const, command: 'pwd' } },
+        { name: 'apply_patch', detail: { kind: 'patch_apply' as const } },
+      ],
+    };
+
+    applyUnifiedTurnToolEvent(state, codexTurnEventFromSdkToolEvent(
+      'custom-multi-call',
+      'tools × 2',
+      'running',
+      { structured: orchestration },
+    ));
+    applyUnifiedTurnToolEvent(state, codexTurnEventFromSdkToolEvent(
+      'exec-generated-call',
+      'apply_patch',
+      'complete',
+      { output: 'A a.txt' },
+    ));
+
+    assert.equal(state.toolCalls.size, 1);
+    assert.equal(state.toolCalls.get('custom-multi-call')?.status, 'running');
+    assert.deepEqual(state.toolCalls.get('custom-multi-call')?.detail, orchestration);
+    assert.equal(state.historyItems.length, 1);
+  });
+
   it('reduces stream events into a strict append-only interleaved history', () => {
     const state = createUnifiedTurnProgressState(1000);
 

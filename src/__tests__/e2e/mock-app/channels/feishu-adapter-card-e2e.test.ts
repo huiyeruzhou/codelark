@@ -35,11 +35,14 @@ const CODELARK_ASK_FORM_TEXT = [
 ].join('\n');
 
 interface RecordedFeishuMessageCall {
-  kind: 'create' | 'reply';
+  kind: 'create' | 'reply' | 'card-create' | 'card-update' | 'element-create' | 'element-content';
   payload: Record<string, any>;
 }
 
-function createRecordingFeishuAdapter(calls: RecordedFeishuMessageCall[]): FeishuAdapter {
+function createRecordingFeishuAdapter(
+  calls: RecordedFeishuMessageCall[],
+  options: { streamingEnabled?: boolean } = {},
+): FeishuAdapter {
   const adapter = new FeishuAdapter({
     id: 'feishu',
     provider: 'feishu',
@@ -48,12 +51,39 @@ function createRecordingFeishuAdapter(calls: RecordedFeishuMessageCall[]): Feish
     config: {
       appId: 'app-id',
       appSecret: 'app-secret',
-      streamingEnabled: false,
+      streamingEnabled: options.streamingEnabled === true,
       feedbackMarkdownEnabled: true,
     },
   });
   (adapter as any).running = true;
+  (adapter as any).cardFlushBaseIntervalMs = 1;
   (adapter as any).restClient = {
+    cardkit: {
+      v1: {
+        card: {
+          create: async (payload: Record<string, any>) => {
+            calls.push({ kind: 'card-create', payload });
+            return { data: { card_id: `card-${calls.length}` } };
+          },
+          settings: async () => ({}),
+          update: async (payload: Record<string, any>) => {
+            calls.push({ kind: 'card-update', payload });
+            return {};
+          },
+        },
+        cardElement: {
+          create: async (payload: Record<string, any>) => {
+            calls.push({ kind: 'element-create', payload });
+            return {};
+          },
+          content: async (payload: Record<string, any>) => {
+            calls.push({ kind: 'element-content', payload });
+            return {};
+          },
+          update: async () => ({}),
+        },
+      },
+    },
     im: {
       message: {
         create: async (payload: Record<string, any>) => {
@@ -68,6 +98,23 @@ function createRecordingFeishuAdapter(calls: RecordedFeishuMessageCall[]): Feish
     },
   };
   return adapter;
+}
+
+function recordedStreamingCardMarkdown(calls: RecordedFeishuMessageCall[]): string {
+  const markdown: string[] = [];
+  for (const call of calls) {
+    const raw = call.payload?.data?.card?.data ?? call.payload?.data?.elements;
+    if (typeof raw !== 'string') continue;
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(raw);
+    } catch {
+      continue;
+    }
+    markdown.push(...findCardElementsByTag(parsed, 'markdown')
+      .map((element) => typeof element.content === 'string' ? element.content : ''));
+  }
+  return markdown.filter(Boolean).join('\n');
 }
 
 function findInteractiveFormPayload(calls: RecordedFeishuMessageCall[]): Record<string, any> {
@@ -484,6 +531,128 @@ describe('feishu adapter card e2e', () => {
 
       const payload = findInteractiveFormPayload(calls);
       assertCodelarkAskFormPayload(payload);
+    } finally {
+      cleanupCodexThreadArtifacts(threadId, sessionPath);
+      fs.rmSync(workDir, { recursive: true, force: true });
+      _testOnly.resetStateForTests();
+    }
+  });
+
+  it('renders GPT-5.6 wrapped bash and apply_patch calls in a Feishu mirror card', async () => {
+    resetBridgeTestState({ cleanCodexHome: true });
+    _testOnly.resetStateForTests();
+    const calls: RecordedFeishuMessageCall[] = [];
+    const store = initBridgeTestContext({ settings: makeBridgeSettings() });
+    const adapter = createRecordingFeishuAdapter(calls, { streamingEnabled: true });
+    registerAdapter(adapter);
+    (globalThis as unknown as Record<string, any>).__bridge_manager__.running = true;
+    const threadId = '019f8f04-848e-7f32-84f2-b6b961ebe63e';
+    const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-gpt56-tool-card-work-'));
+    const patchText = [
+      '*** Begin Patch',
+      '*** Update File: src/app.ts',
+      '@@',
+      '+const enabled = true;',
+      '*** End Patch',
+    ].join('\n');
+    let sessionPath = '';
+
+    try {
+      const session = store.createSession('GPT-5.6 Tool Card', 'gpt-5.6', undefined, workDir);
+      store.updateSessionCodexThreadId(session.id, threadId);
+      store.upsertChannelChat({
+        channelType: 'feishu',
+        chatId: 'chat-gpt56-tool-card-e2e',
+        chatKind: 'group',
+        bridgeSessionId: session.id,
+      });
+      const fixture = writeCodexSessionJsonlFixture({
+        threadId,
+        workDir,
+        lines: [{
+          timestamp: '2026-07-23T00:00:00.000Z',
+          type: 'session_meta',
+          payload: { id: threadId, cwd: workDir, originator: 'Codex CLI' },
+        }],
+      });
+      sessionPath = fixture.sessionPath;
+
+      await _testOnly.reconcileMirrorSubscriptions();
+      fs.appendFileSync(sessionPath, [
+        {
+          timestamp: '2026-07-23T00:00:01.000Z',
+          type: 'event_msg',
+          payload: { type: 'task_started', turn_id: 'turn-gpt56-tools' },
+        },
+        {
+          timestamp: '2026-07-23T00:00:02.000Z',
+          type: 'event_msg',
+          payload: { type: 'user_message', message: 'run bash and patch' },
+        },
+        {
+          timestamp: '2026-07-23T00:00:03.000Z',
+          type: 'response_item',
+          payload: {
+            type: 'custom_tool_call',
+            name: 'exec',
+            call_id: 'call-gpt56-tools',
+            input: [
+              `const patch = ${JSON.stringify(patchText)};`,
+              'const results = await Promise.all([',
+              '  tools.exec_command({ cmd: "npm test", workdir: "/tmp/project" }),',
+              '  tools.apply_patch(patch),',
+              ']);',
+              'text(results.length);',
+            ].join('\n'),
+          },
+        },
+        {
+          timestamp: '2026-07-23T00:00:04.000Z',
+          type: 'event_msg',
+          payload: {
+            type: 'patch_apply_end',
+            call_id: 'exec-generated-patch-call',
+            turn_id: 'turn-gpt56-tools',
+            stdout: 'Success. Updated the following files:\nA src/app.ts\n',
+            success: true,
+            status: 'completed',
+            changes: { 'src/app.ts': { type: 'add', content: 'const enabled = true;\n' } },
+          },
+        },
+        {
+          timestamp: '2026-07-23T00:00:05.000Z',
+          type: 'response_item',
+          payload: {
+            type: 'custom_tool_call_output',
+            call_id: 'call-gpt56-tools',
+            output: [
+              { type: 'input_text', text: 'Script completed\nWall time 0.2 seconds\nOutput:\n' },
+              { type: 'input_text', text: '2' },
+            ],
+          },
+        },
+        {
+          timestamp: '2026-07-23T00:00:06.000Z',
+          type: 'event_msg',
+          payload: {
+            type: 'task_complete',
+            turn_id: 'turn-gpt56-tools',
+            last_agent_message: 'tools rendered',
+          },
+        },
+      ].map((line) => JSON.stringify(line)).join('\n') + '\n', 'utf-8');
+
+      await _testOnly.reconcileMirrorSubscriptions();
+
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      const cardMarkdown = recordedStreamingCardMarkdown(calls);
+      assert.match(cardMarkdown, /tools × 2/);
+      assert.match(cardMarkdown, /exec_command/);
+      assert.match(cardMarkdown, /```bash\nnpm test\n```/);
+      assert.match(cardMarkdown, /apply_patch/);
+      assert.match(cardMarkdown, /```diff\n\*\*\* Begin Patch/);
+      assert.doesNotMatch(cardMarkdown, /暂无详情/);
+      assert.doesNotMatch(cardMarkdown, /const r = await tools\.exec_command/);
     } finally {
       cleanupCodexThreadArtifacts(threadId, sessionPath);
       fs.rmSync(workDir, { recursive: true, force: true });
