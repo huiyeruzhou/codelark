@@ -57,6 +57,10 @@ import {
   validateTmuxSessionName,
 } from './tmux-args.js';
 import type { CodexTuiSelectionPromptChoice } from '../../runtime/codex/tmux-provider.js';
+import {
+  inspectRuntimeTmuxInput,
+  sendRuntimeTmuxInput,
+} from '../tmux/input-state-machine.js';
 export {
   buildCodexResumeTmuxCommand,
   captureTmuxScreen,
@@ -582,7 +586,7 @@ function formatRuntimeTmuxAutoForwardReadinessError(
   return `${runtimeName} TUI 未在超时时间内进入可输入状态，未发送 auto-forward 消息。请用 \`/tmux-screen 80\` 检查。`;
 }
 
-async function ensureCodexTmuxSessionForProvider(
+async function ensureRuntimeTmuxSessionForProvider(
   params: Pick<HandleTmuxBridgeCommandParams, 'store' | 'binding' | 'session' | 'autoRecoverProviderSession' | 'tmuxProviderAutoForward' | 'reconcileMirrorSubscriptions' | 'requestCodexTuiSelection' | 'notifyBackgroundOperation'> & {
     pendingAutoForwardActions?: TmuxSendAction[];
   },
@@ -606,8 +610,12 @@ async function ensureCodexTmuxSessionForProvider(
         error: 'Claude tmux Provider 缺少 tmux session。请先发送 `/provider tmux` 初始化当前 Claude Code tmux 绑定。',
       };
     }
-    const exists = await hasTmuxSession(target);
-    if (exists.exists) {
+    const inspected = await inspectRuntimeTmuxInput({
+      runtime: 'claude',
+      sessionName: target,
+      hasSession: () => hasTmuxSession(target),
+    });
+    if (inspected.exists) {
       if (!configuredTarget) {
         store.updateSession(session.id, setSessionClaudeTmuxProviderUpdate({
           tmuxSessionName: target,
@@ -619,14 +627,13 @@ async function ensureCodexTmuxSessionForProvider(
       }
       if (
         params.tmuxProviderAutoForward === true
-        && session.runtime_status !== 'running'
-        && session.runtime_status !== 'queued'
+        && inspected.needsReadiness
       ) {
         console.log('[tmux-command] Waiting for existing Claude tmux provider session before auto-forward:', {
           event: 'tmux.provider.claude.existing.wait_ready',
           bridge_session_id: session.id,
           tmux_session: target,
-          runtime_status: session.runtime_status || 'idle',
+          input_state: inspected.state.state,
         });
         const readiness = await waitForRuntimeTmuxReady({
           runtime: 'claude',
@@ -636,19 +643,19 @@ async function ensureCodexTmuxSessionForProvider(
         if (!readiness.ready) {
           return {
             target,
-            commands: [exists.command, ...readiness.commands],
+            commands: [inspected.command || '', ...readiness.commands].filter(Boolean),
             recovered: false,
             error: formatRuntimeTmuxAutoForwardReadinessError('claude', readiness, true),
           };
         }
-        return { target, commands: [exists.command, ...readiness.commands], recovered: false };
+        return { target, commands: [inspected.command || '', ...readiness.commands].filter(Boolean), recovered: false };
       }
-      return { target, commands: [exists.command], recovered: false };
+      return { target, commands: inspected.command ? [inspected.command] : [], recovered: false };
     }
     if (params.autoRecoverProviderSession !== true || hasManualOnlyTarget) {
       return {
         target,
-        commands: [exists.command],
+        commands: inspected.command ? [inspected.command] : [],
         recovered: false,
         error: `tmux session 不存在：${target}。请先发送 \`/provider tmux\` 重新初始化 Claude Code tmux，或发送 \`/tmux-new ${target}\` 手动创建。`,
       };
@@ -675,7 +682,7 @@ async function ensureCodexTmuxSessionForProvider(
       const readiness = started.runtime === 'claude' ? started.readiness : undefined;
       return {
         target,
-        commands: [exists.command, ...started.commands],
+        commands: [inspected.command || '', ...started.commands].filter(Boolean),
         recovered: false,
         error: formatRuntimeTmuxAutoForwardReadinessError('claude', readiness || {
           lastScreen: undefined,
@@ -690,18 +697,22 @@ async function ensureCodexTmuxSessionForProvider(
     setSessionClaudeProviderToml(session.id, 'tmux');
     setSessionTmuxAutoEnterToml(session.id, getProviderAutoEnter(session));
     await params.reconcileMirrorSubscriptions?.();
-    return { target, commands: [exists.command, ...started.commands], recovered: true };
+    return { target, commands: [inspected.command || '', ...started.commands].filter(Boolean), recovered: true };
   }
 
   if (runtimeProvider.runtime === 'kimi') {
     const target = configuredTarget || kimiTmuxSessionName(session.id);
-    const exists = await hasTmuxSession(target);
-    if (exists.exists) {
-      return { target, commands: [exists.command], recovered: false };
+    const inspected = await inspectRuntimeTmuxInput({
+      runtime: 'kimi',
+      sessionName: target,
+      hasSession: () => hasTmuxSession(target),
+    });
+    if (inspected.exists) {
+      return { target, commands: inspected.command ? [inspected.command] : [], recovered: false };
     }
     return {
       target,
-      commands: [exists.command],
+      commands: inspected.command ? [inspected.command] : [],
       recovered: false,
       error: params.tmuxProviderAutoForward === true
         ? `Kimi tmux Provider session \`${target}\` 不存在，未发送 auto-forward 消息。请重新发送普通消息启动 Kimi Code。`
@@ -736,9 +747,13 @@ async function ensureCodexTmuxSessionForProvider(
     };
   }
 
-  const exists = await hasTmuxSession(target);
-  if (exists.exists) {
-    const commands = [exists.command];
+  const inspected = await inspectRuntimeTmuxInput({
+    runtime: 'codex',
+    sessionName: target,
+    hasSession: () => hasTmuxSession(target),
+  });
+  if (inspected.exists) {
+    const commands = inspected.command ? [inspected.command] : [];
     if (!configuredTarget || !getCodexThreadId(session, binding)) {
       store.updateSession(session.id, setSessionCodexTmuxProviderUpdate({
         tmuxSessionName: target,
@@ -750,15 +765,14 @@ async function ensureCodexTmuxSessionForProvider(
     }
     if (
       params.tmuxProviderAutoForward === true
-      && session.runtime_status !== 'running'
-      && session.runtime_status !== 'queued'
+      && inspected.needsReadiness
     ) {
       console.log('[tmux-command] Waiting for existing Codex tmux provider session before auto-forward:', {
         event: 'tmux.provider.existing.wait_ready',
         bridge_session_id: session.id,
         tmux_session: target,
         thread_id: threadId,
-        runtime_status: session.runtime_status || 'idle',
+        input_state: inspected.state.state,
         has_selection_handler: typeof params.requestCodexTuiSelection === 'function',
       });
       const readiness = await waitForCodexResumeTmuxReady(target, undefined, {
@@ -801,7 +815,7 @@ async function ensureCodexTmuxSessionForProvider(
   if (params.autoRecoverProviderSession !== true || hasManualOnlyTarget) {
     return {
       target,
-      commands: [exists.command],
+      commands: inspected.command ? [inspected.command] : [],
       recovered: false,
       error: `tmux session 不存在：${target}。请先发送 \`/provider tmux\` 重新启动 Codex TUI。`,
     };
@@ -810,7 +824,7 @@ async function ensureCodexTmuxSessionForProvider(
   if (!threadId) {
     return {
       target,
-      commands: [exists.command],
+      commands: inspected.command ? [inspected.command] : [],
       recovered: false,
       error: 'tmux Provider 缺少 codex_thread_id，无法自动恢复 Codex TUI。请先发送 `/provider tmux` 重新初始化。',
     };
@@ -865,7 +879,7 @@ async function ensureCodexTmuxSessionForProvider(
   }));
   setSessionTmuxAutoEnterToml(session.id, getProviderAutoEnter(session));
   await params.reconcileMirrorSubscriptions?.();
-  return { target, commands: [exists.command, ...started.commands], recovered: true };
+  return { target, commands: [inspected.command || '', ...started.commands].filter(Boolean), recovered: true };
 }
 
 function formatTmuxScreenCardStatus(target: string, lines: number, intervalSeconds: number): string {
@@ -1046,7 +1060,7 @@ export async function handleTmuxBridgeCommand(params: HandleTmuxBridgeCommandPar
         return '已停止 tmux 屏幕定时刷新。';
       }
 
-      const ensured = await ensureCodexTmuxSessionForProvider(params);
+      const ensured = await ensureRuntimeTmuxSessionForProvider(params);
       if (ensured.error) return ensured.error;
       const captureTarget = ensured.target || getSessionTmuxSessionName(session);
       if (!captureTarget) {
@@ -1233,7 +1247,7 @@ export async function handleTmuxBridgeCommand(params: HandleTmuxBridgeCommandPar
       const pendingAutoForwardActions = params.tmuxProviderAutoForward === true && command === '/tmux'
         ? (keySequenceActions ? actions : applyPlainTextTmuxActions(actions, session, true))
         : undefined;
-      const ensured = await ensureCodexTmuxSessionForProvider({
+      const ensured = await ensureRuntimeTmuxSessionForProvider({
         ...params,
         pendingAutoForwardActions,
       });
@@ -1252,7 +1266,16 @@ export async function handleTmuxBridgeCommand(params: HandleTmuxBridgeCommandPar
         ? applyPlainTextTmuxActions(actions, effectiveSession, params.tmuxProviderAutoForward === true)
         : actions;
       if (params.suppressSuccessfulResponse === true) {
-        await sendTmuxActions(target, actionsToSend, { delayMs: SEND_ACTION_DELAY_MS });
+        const runtimeProvider = resolveEffectiveRuntimeProvider(effectiveSession, binding);
+        if (runtimeProvider.provider === 'tmux') {
+          await sendRuntimeTmuxInput({
+            runtime: runtimeProvider.runtime,
+            sessionName: target,
+            send: () => sendTmuxActions(target, actionsToSend, { delayMs: SEND_ACTION_DELAY_MS }),
+          });
+        } else {
+          await sendTmuxActions(target, actionsToSend, { delayMs: SEND_ACTION_DELAY_MS });
+        }
         await params.onTmuxProviderAutoForwarded?.();
         return '';
       }

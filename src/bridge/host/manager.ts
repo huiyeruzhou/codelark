@@ -167,6 +167,10 @@ import {
   type TmuxSendAction,
 } from '../tmux/runtime.js';
 import type { TmuxAutoForwardRecoveryPayload } from '../command/codex-tui-selection.js';
+import {
+  sendRuntimeTmuxInput,
+  transitionRuntimeTmuxInputState,
+} from '../tmux/input-state-machine.js';
 import { buildRuntimeStreamTags } from '../../shared/streaming-metadata.js';
 import { ThreadDisplayService } from '../session/thread-display-resolver.js';
 import {
@@ -572,6 +576,13 @@ async function handleTmuxSelectionPromptForTarget(
 ): Promise<void> {
   const adapter = getState().adapters.get(target.channelType);
   if (!adapter || !adapter.isRunning()) return;
+  const tmuxSessionName = targetPane.split(':')[0] || targetPane;
+  transitionRuntimeTmuxInputState(
+    'codex',
+    tmuxSessionName,
+    'waiting_selection',
+    `Codex TUI is waiting at a ${prompt.kind} selection`,
+  );
   const permissionRequestId = `codex-selection:${prompt.kind}:mirror:${target.sessionId}:${Date.now()}`;
   const choicePromise = broker.waitForCodexTuiSelectionPermission(permissionRequestId);
   await broker.forwardPermissionRequest(
@@ -622,11 +633,16 @@ async function handleTmuxSelectionPromptForTarget(
       prompt_kind: prompt.kind,
       choice,
     });
+    transitionRuntimeTmuxInputState(
+      'codex',
+      tmuxSessionName,
+      'running',
+      'the observed Codex screen was dismissed as not being a selection',
+    );
     return;
   }
   const result = await tmuxCore.sendActions(targetPane, actions);
   if (prompt.kind === 'update' && choice === 'update_now') {
-    const tmuxSessionName = targetPane.split(':')[0] || targetPane;
     scheduleTmuxSelectionUpdateExitProbe({
       adapter,
       target,
@@ -634,6 +650,14 @@ async function handleTmuxSelectionPromptForTarget(
       choice,
     });
   }
+  transitionRuntimeTmuxInputState(
+    'codex',
+    tmuxSessionName,
+    prompt.kind === 'update' && choice === 'update_now' ? 'starting_tmux' : 'running',
+    prompt.kind === 'update' && choice === 'update_now'
+      ? 'Codex update was selected; wait for the TUI to exit or restart before more input'
+      : `Codex ${prompt.kind} selection was resolved`,
+  );
   console.log('[bridge-manager] Codex TUI selection prompt resolved from mirror probe:', {
     session_id: target.sessionId,
     thread_id: target.threadId,
@@ -829,7 +853,11 @@ async function recoverTmuxProviderAutoForwardFromSelectionCallback(
         notice: `Codex TUI Selection 已记录，但 ${recovery.target} 当前屏幕没有可识别的 TUI 选择提示；未恢复 auto-forward 消息。`,
       };
     }
-    await tmuxCore.sendActions(recovery.target, recovery.actions);
+    await sendRuntimeTmuxInput({
+      runtime: 'codex',
+      sessionName,
+      send: () => tmuxCore.sendActions(recovery.target, recovery.actions),
+    });
     console.log('[bridge-manager] Recovered tmux provider auto-forward from Codex TUI selection callback:', {
       permission_request_id: claim.permissionRequestId,
       session_id: claim.link.sessionId,
@@ -3879,6 +3907,20 @@ async function handleMessage(
     if (!tmuxProviderChat) {
       ack();
       return;
+    }
+    if (tmuxProviderActiveTask) {
+      const activeTmuxSessionName = getSessionRuntimeTmuxSessionName(tmuxProviderSession)
+        || (tmuxProviderRuntime.runtime === 'kimi'
+          ? kimiTmuxSessionName(tmuxProviderSession.id)
+          : undefined);
+      if (activeTmuxSessionName) {
+        transitionRuntimeTmuxInputState(
+          tmuxProviderRuntime.runtime,
+          activeTmuxSessionName,
+          'running',
+          'an active interactive task already owns the runtime tmux session',
+        );
+      }
     }
     if (rawText.trim().toLowerCase() === '//clear') {
       await deliverBridgeNotice(adapter, msg.address, '当前处于 tmux Provider，不能通过 `//clear` 清空上下文。请通过 codelark 手动创建新会话。', {

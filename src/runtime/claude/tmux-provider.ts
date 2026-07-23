@@ -21,6 +21,10 @@ import {
   waitForRuntimeTmuxReady,
 } from '../../bridge/tmux/runtime.js';
 import { tmuxCore } from '../../bridge/tmux/core.js';
+import {
+  sendRuntimeTmuxInput,
+  transitionRuntimeTmuxInputState,
+} from '../../bridge/tmux/input-state-machine.js';
 
 export { startClaudeTmuxSession };
 
@@ -73,7 +77,7 @@ async function prepareClaudeTmuxForPrompt(sessionName: string, targetPane: strin
     DEFAULT_CLAUDE_TMUX_AFTER_SETUP_DELAY_MS,
     0,
   );
-  await waitForRuntimeTmuxReady({
+  const readiness = await waitForRuntimeTmuxReady({
     runtime: 'claude',
     sessionName,
     target: targetPane,
@@ -84,6 +88,9 @@ async function prepareClaudeTmuxForPrompt(sessionName: string, targetPane: strin
       }));
     },
   });
+  if (!readiness.ready) {
+    throw new Error(readiness.lastError || 'Claude tmux did not become ready for input.');
+  }
 }
 
 function recordToolName(record: BridgeMirrorRecord): string {
@@ -286,7 +293,11 @@ export function streamClaudeTmuxTui(params: StreamChatParams): ReadableStream<st
           if (promptDelayMs > 0) await sleep(promptDelayMs);
           await prepareClaudeTmuxForPrompt(sessionName, targetPane, controller);
           controller.enqueue(sseEvent('status', { reasoning: '正在把本次消息发送到 Claude tmux。' }));
-          await tmuxCore.injectPromptIntoPane(targetPane, params.prompt);
+          await sendRuntimeTmuxInput({
+            runtime: 'claude',
+            sessionName,
+            send: () => tmuxCore.injectPromptIntoPane(targetPane, params.prompt),
+          });
           const startedClaudeJsonlSession = await waitForClaudeSessionJsonlUpdatedAfter(cwd, startedAtMs);
           if (startedClaudeJsonlSession) {
             context.sessionFilePath = startedClaudeJsonlSession.filePath;
@@ -303,6 +314,13 @@ export function streamClaudeTmuxTui(params: StreamChatParams): ReadableStream<st
           controller.close();
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error);
+          transitionRuntimeTmuxInputState(
+            'claude',
+            sessionName,
+            'failed',
+            'Claude tmux input lifecycle failed',
+            { error: message },
+          );
           console.error('[claude-tmux] Error:', error instanceof Error ? error.stack || error.message : error);
           try {
             controller.enqueue(sseEvent('error', message || 'Claude tmux execution failed.'));

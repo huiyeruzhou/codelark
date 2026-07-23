@@ -32,6 +32,10 @@ import { CodexRoutingProvider } from '../../../../runtime/codex/routing-provider
 import { _testOnlyCodexThreadBootstrap } from '../../../../runtime/codex/thread-bootstrap.js';
 import { _testOnlyClaudePty } from '../../../../runtime/claude/pty-provider.js';
 import { _testOnlyTmuxScreenMonitors } from '../../../../bridge/command/tmux.js';
+import {
+  resetRuntimeTmuxInputStatesForTests,
+  transitionRuntimeTmuxInputState,
+} from '../../../../bridge/tmux/input-state-machine.js';
 import { buildCommandCallbackData, parseCommandCallbackData, THEN_TASK_ACTION_CALLBACK_PREFIX, THEN_TASK_SELECT_CALLBACK_PREFIX } from '../../../../bridge/command/callbacks.js';
 import { forwardPermissionRequest, handlePermissionCallback } from '../../../../bridge/permission/broker.js';
 import * as router from '../../../../bridge/host/channel-router.js';
@@ -1071,6 +1075,7 @@ sleep 0.1
 
 describe('command-dispatch', () => {
   beforeEach(() => {
+    resetRuntimeTmuxInputStatesForTests();
     fs.rmSync(DATA_DIR, { recursive: true, force: true });
     fs.rmSync(path.join(CODELARK_HOME, 'config'), { recursive: true, force: true });
     fs.rmSync(HOME_CONFIG_TOML_PATH, { force: true });
@@ -9455,7 +9460,12 @@ enabled = true
       );
       const binding = store.getChannelChat(address.channelType, address.chatId);
       assert.ok(binding);
-      store.updateSession(binding.bridgeSessionId, { runtime_status: 'running' });
+      transitionRuntimeTmuxInputState(
+        'codex',
+        'alpha',
+        'running',
+        'test fixture has an established provider-owned tmux session',
+      );
 
       const beforeProviderForwardSent = sent.length;
       const beforeProviderForwardLog = fs.readFileSync(fakeTmux.logPath, 'utf-8');
@@ -10342,7 +10352,7 @@ enabled = true
     }
   });
 
-  it('auto-forwards into an existing Codex tmux provider screen that is working but already has an input line', async () => {
+  it('probes a cold existing Codex tmux once, then forwards subsequent input without another prompt capture', async () => {
     const settings = makeSettings();
     const store = new JsonFileStore(settings, { dynamicSettings: true });
     initBridgeContext({
@@ -10419,6 +10429,25 @@ enabled = true
       assert.ok(captureIndex > hasSessionIndex, 'readiness should inspect the existing Codex screen');
       assert.ok(literalIndex > captureIndex, 'follow-up input should be forwarded after the working screen is accepted as ready');
       assert.doesNotMatch(log, new RegExp(`send-keys -t ${tmuxSession} Down`));
+
+      await handleBridgeCommand(
+        adapter,
+        {
+          address,
+          text: '/tmux second follow up',
+          messageId: 'incoming-tmux-working-ready-second',
+        } as any,
+        '/tmux second follow up',
+        deps,
+      );
+
+      const secondLog = fs.readFileSync(fakeTmux.logPath, 'utf-8');
+      assert.equal(
+        (secondLog.match(new RegExp(`capture-pane -t ${tmuxSession} -p -S -80`, 'g')) || []).length,
+        1,
+        'running state should skip cursor/prompt readiness capture on subsequent input',
+      );
+      assert.match(secondLog, new RegExp(`send-keys -t ${tmuxSession} -l second follow up`));
     } finally {
       restoreProcessEnv(oldEnv);
       fs.rmSync(fakeTmux.binDir, { recursive: true, force: true });

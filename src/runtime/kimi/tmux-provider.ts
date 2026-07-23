@@ -6,6 +6,10 @@ import type { LLMProvider, StreamChatParams, BridgeMirrorRecord } from '../contr
 import { sseEvent } from '../sse.js';
 import { tmuxCore } from '../../bridge/tmux/core.js';
 import {
+  sendRuntimeTmuxInput,
+  transitionRuntimeTmuxInputState,
+} from '../../bridge/tmux/input-state-machine.js';
+import {
   findKimiSessionFileById,
   readKimiSessionMirrorRecordDeltaByFilePath,
 } from './session-index.js';
@@ -298,6 +302,12 @@ async function launchTmuxKimiSession(
     resume_session_id: params.kimiSessionId || null,
     debug_keep_tmux: isDebugTmuxKeepAlive(),
   });
+  transitionRuntimeTmuxInputState(
+    'kimi',
+    sessionName,
+    'starting_tmux',
+    'starting or replacing the provider-owned Kimi tmux session',
+  );
 
   await tmuxCore.ensureDetachedSession({
     name: sessionName,
@@ -309,6 +319,12 @@ async function launchTmuxKimiSession(
 
 async function waitForKimiSessionIdFromTmux(context: KimiTuiRunContext): Promise<string> {
   if (context.sessionId) return context.sessionId;
+  transitionRuntimeTmuxInputState(
+    'kimi',
+    context.sessionName,
+    'checking_session',
+    'waiting for the resumed Kimi session id',
+  );
   const timeoutMs = parsePositiveIntEnv(
     'CODELARK_KIMI_TMUX_SESSION_ID_TIMEOUT_MS',
     DEFAULT_KIMI_SESSION_ID_TIMEOUT_MS,
@@ -410,6 +426,12 @@ async function initializeFreshKimiSessionFromResumeHint(
   context: KimiTuiRunContext,
   params: StreamChatParams,
 ): Promise<void> {
+  transitionRuntimeTmuxInputState(
+    'kimi',
+    context.sessionName,
+    'starting_session',
+    'discovering and resuming a fresh Kimi session before input',
+  );
   const timeoutMs = parsePositiveIntEnv(
     'CODELARK_KIMI_TMUX_SESSION_ID_TIMEOUT_MS',
     DEFAULT_KIMI_SESSION_ID_TIMEOUT_MS,
@@ -477,8 +499,20 @@ export function streamKimiTmuxTui(params: StreamChatParams): ReadableStream<stri
 
           const promptDelayMs = parsePositiveIntEnv('CODELARK_KIMI_TMUX_PROMPT_DELAY_MS', DEFAULT_KIMI_PROMPT_DELAY_MS, 0);
           if (promptDelayMs > 0) await sleep(promptDelayMs);
-          await tmuxCore.injectPromptIntoPane(targetPane, params.prompt);
-          await tmuxCore.sendActions(targetPane, [{ type: 'key', key: 'C-s' }], { delayMs: 100 });
+          transitionRuntimeTmuxInputState(
+            'kimi',
+            sessionName,
+            'running',
+            'Kimi session id and wire file are ready for input',
+          );
+          await sendRuntimeTmuxInput({
+            runtime: 'kimi',
+            sessionName,
+            send: async () => {
+              await tmuxCore.injectPromptIntoPane(targetPane, params.prompt);
+              await tmuxCore.sendActions(targetPane, [{ type: 'key', key: 'C-s' }], { delayMs: 100 });
+            },
+          });
 
           await pollKimiSessionFile(
             controller,
@@ -489,6 +523,13 @@ export function streamKimiTmuxTui(params: StreamChatParams): ReadableStream<stri
           controller.close();
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error);
+          transitionRuntimeTmuxInputState(
+            'kimi',
+            sessionName,
+            'failed',
+            'Kimi tmux input lifecycle failed',
+            { error: message },
+          );
           console.error('[kimi-tmux] Error:', error instanceof Error ? error.stack || error.message : error);
           try {
             controller.enqueue(sseEvent('error', message || 'Kimi TUI execution failed.'));
@@ -498,7 +539,23 @@ export function streamKimiTmuxTui(params: StreamChatParams): ReadableStream<stri
           }
         } finally {
           if (!isDebugTmuxKeepAlive()) {
-            try { await tmuxCore.killSession(sessionName, { ignoreMissing: true }); } catch { /* best-effort cleanup */ }
+            try {
+              await tmuxCore.killSession(sessionName, { ignoreMissing: true });
+              transitionRuntimeTmuxInputState(
+                'kimi',
+                sessionName,
+                'stopped',
+                'Kimi turn completed and its provider-owned tmux session was cleaned up',
+              );
+            } catch (error) {
+              transitionRuntimeTmuxInputState(
+                'kimi',
+                sessionName,
+                'failed',
+                'Kimi turn completed but tmux cleanup failed',
+                { error: error instanceof Error ? error.message : String(error) },
+              );
+            }
           } else {
             console.log(`[kimi-tmux] CODELARK_DEBUG is enabled; tmux session kept: ${sessionName}`);
           }

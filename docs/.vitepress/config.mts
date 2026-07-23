@@ -69,6 +69,7 @@ export default defineConfig({
           { text: '桥接安全模型', link: '/architecture/security' },
           { text: '流式卡片', link: '/architecture/streaming-card' },
           { text: 'Codex 工具调用解析', link: '/architecture/codex-tool-call-rendering' },
+          { text: 'tmux Runtime 生命周期', link: '/architecture/tmux-runtime-lifecycle' },
         ],
       },
       {

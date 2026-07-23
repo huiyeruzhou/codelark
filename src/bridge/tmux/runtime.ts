@@ -33,6 +33,10 @@ import {
   type TmuxCore,
   type TmuxSendAction,
 } from './core.js';
+import {
+  transitionRuntimeTmuxInputState,
+  type RuntimeTmuxInputStateKind,
+} from './input-state-machine.js';
 
 export {
   tmuxCore,
@@ -535,6 +539,21 @@ function transitionRuntimeTmuxReadiness(
     ...(Object.keys(details).length > 0 ? { details } : {}),
   };
   machine.onStateTransition?.(transition);
+  const inputState: RuntimeTmuxInputStateKind = next === 'ready'
+    ? 'running'
+    : next === 'waiting_selection' || next === 'suspended'
+      ? 'waiting_selection'
+      : next === 'missing' || next === 'dead'
+        ? 'stopped'
+        : next === 'timeout'
+          ? 'failed'
+          : 'checking_session';
+  transitionRuntimeTmuxInputState(
+    machine.runtime,
+    machine.sessionName,
+    inputState,
+    `readiness: ${reason}`,
+  );
 }
 
 function detectRuntimeTmuxPaneDead(screen: string | undefined): RuntimeTmuxPaneDead | undefined {
@@ -849,6 +868,12 @@ export async function startCodexResumeTmuxSession(
   params: StartCodexResumeTmuxSessionParams,
   core: TmuxCore = tmuxCore,
 ): Promise<StartCodexResumeTmuxSessionResult> {
+  transitionRuntimeTmuxInputState(
+    'codex',
+    params.sessionName,
+    'starting_tmux',
+    'starting or replacing the provider-owned Codex tmux session',
+  );
   const { codexCommand, launchLogPath } = buildCodexResumeTmuxCommand(params);
   prepareLaunchLog(launchLogPath);
   const commands: string[] = [];
@@ -1017,6 +1042,12 @@ export async function startClaudeTmuxSession(
     cwd,
     executable,
   });
+  transitionRuntimeTmuxInputState(
+    'claude',
+    params.sessionName,
+    'starting_tmux',
+    'starting or attaching the provider-owned Claude tmux session',
+  );
   const started = await core.ensureDetachedSession({
     name: params.sessionName,
     cwd,
@@ -1030,6 +1061,14 @@ export async function startClaudeTmuxSession(
       core,
     })
     : null;
+  if (!params.waitReady) {
+    transitionRuntimeTmuxInputState(
+      'claude',
+      params.sessionName,
+      'checking_session',
+      'Claude tmux exists; waiting for runtime session readiness before input',
+    );
+  }
   return {
     sessionName: params.sessionName,
     existed: started.existed,
@@ -1136,6 +1175,14 @@ export async function cleanupRuntimeTmuxSession(params: {
   try {
     const command = await core.killSession(params.sessionName, { ignoreMissing: params.ignoreMissing !== false });
     commands.push(command);
+    if (params.runtime) {
+      transitionRuntimeTmuxInputState(
+        params.runtime,
+        params.sessionName,
+        'stopped',
+        'provider-owned tmux session was explicitly cleaned up',
+      );
+    }
     return { sessionName: params.sessionName, commands, killed: true };
   } catch (error) {
     return {

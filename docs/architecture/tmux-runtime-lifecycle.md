@@ -1,6 +1,6 @@
 # tmux Runtime 生命周期
 
-本文描述 CodeLark 当前 tmux runtime 的完整链路。Codex、Claude Code 和 Kimi Code 共用 `src/bridge/tmux/core.ts` 的 tmux API，差异保留在各自 CLI 启动参数、会话身份发现和 JSONL/wire 解析上。`src/bridge/tmux/runtime.ts` 目前承载 Codex/Claude 的 shared provider-owned 生命周期；Kimi 先由 `src/runtime/kimi/tmux-provider.ts` 管理启动和 session id 解析，再接入通用 mirror runtime。
+本文描述 CodeLark 当前 tmux runtime 的完整链路。Codex、Claude Code 和 Kimi Code 共用 `src/bridge/tmux/core.ts` 的 tmux API和 `src/bridge/tmux/input-state-machine.ts` 的输入生命周期状态机，差异保留在各自 CLI 启动参数、会话身份发现和 JSONL/wire 解析上。`src/bridge/tmux/runtime.ts` 承载 Codex/Claude 的 shared provider-owned 启动和 readiness；Kimi 由 `src/runtime/kimi/tmux-provider.ts` 处理 resume hint/session id，再把相同的 session/tmux/send 状态写入共享 machine。
 
 ## 总览
 
@@ -51,6 +51,14 @@ flowchart TD
 | `inspectRuntimeTmuxSession` | 统一检查 session 存在性、抓屏，并返回当前屏幕上的 selection prompt。 |
 | `cleanupRuntimeTmuxSession` | 统一 best-effort 清理 provider-owned tmux session，供 `/clear` 和 `/t archive` 等生命周期操作调用。 |
 
+`src/bridge/tmux/input-state-machine.ts` 位于 tmux core 和各 runtime 语义之间，统一回答“这条输入现在能否发送”：
+
+| API | 职责 |
+| --- | --- |
+| `inspectRuntimeTmuxInput` | 每次输入只检查 tmux 是否仍存在；已知 `running` 且进程仍存在时跳过 pane capture/prompt readiness。冷状态、失败状态或进程丢失才要求重新 readiness/启动。 |
+| `transitionRuntimeTmuxInputState` | 让 Codex/Claude readiness、Kimi session discovery、GUI/TUI selection、发送和清理进入同一个状态集合。 |
+| `sendRuntimeTmuxInput` | 只允许从 `running` 进入 `sending`；成功回到 `running`，失败进入 `failed`。 |
+
 Codex 保留 `startCodexResumeTmuxSession` 和 `waitForCodexResumeTmuxReady` 作为兼容包装；Claude 的 `startClaudeTmuxSession` 也由 `src/bridge/tmux/runtime.ts` 提供，`src/runtime/claude/tmux-provider.ts` 只负责 prompt 注入、JSONL discovery 和 SSE/mirror 转换。
 
 ## Codex tmux 生命周期
@@ -61,7 +69,7 @@ Codex 保留 `startCodexResumeTmuxSession` 和 `waitForCodexResumeTmuxReady` 作
 
 完成 thread 解析后，`codexTmuxSessionName(threadId)` 生成 `codex_<threadId>`，`startCodexResumeTmuxSession` 用 `codex resume <threadId>` 启动 TUI。启动参数来自 `resolveSessionRuntimeConfig`，包括 model、sandbox、network、reasoning effort、mode 和 skipGitRepoCheck。
 
-Codex tmux 还有一条隐式初始化路径：如果当前聊天的有效 Codex provider 已经是 `tmux`，但新会话还没有 `codex_thread_id` 或 tmux session，第一条普通 IM 消息会被 `src/bridge/host/manager.ts` 转成 `/tmux <message>`，并把 `autoRecoverProviderSession=true` 传给 `src/bridge/command/tmux.ts`。`ensureCodexTmuxSessionForProvider` 会在这个路径中自动执行本地 thread bootstrap、写回 `runtime.codex.threadId`、生成 `codex_<threadId>`、启动缺失的 Codex TUI，并在 ready 检测完成后再注入用户消息。
+Codex tmux 还有一条隐式初始化路径：如果当前聊天的有效 Codex provider 已经是 `tmux`，但新会话还没有 `codex_thread_id` 或 tmux session，第一条普通 IM 消息会被 `src/bridge/host/manager.ts` 转成 `/tmux <message>`，并把 `autoRecoverProviderSession=true` 传给 `src/bridge/command/tmux.ts`。共享的 `ensureRuntimeTmuxSessionForProvider` 会在这个路径中自动执行本地 thread bootstrap、写回 `runtime.codex.threadId`、生成 `codex_<threadId>`、启动缺失的 Codex TUI，并在 ready 检测完成后再注入用户消息；Claude/Kimi 的 auto-forward 也从同一入口检查 input lifecycle。
 
 ### 2. TUI 启动和 ready 检测
 
@@ -73,7 +81,7 @@ Codex/Claude 公共的终端控制字符清理和 Enter footer 检测集中在 `
 
 如果启动期 Codex update selection 选择了 `update_now`，真实 Codex CLI 通常会执行全局更新并退出当前 TUI。`startCodexResumeTmuxSession` 把“用户选择 `update_now` 后 provider-owned tmux session 消失”视为可恢复的更新完成信号：向用户发送一次强制可见 notice，然后最多重新启动同名 tmux session 一次，并重新进入 ready 检测。只有重启后的 TUI 进入 `ready`，调用方才会继续 provider 切换或 auto-forward 原始输入；如果重启仍失败，则按普通 launch failure 报告，避免重复循环。
 
-ready 检测内部按一个显式 readiness gate 状态机运转；这个状态机只回答“现在是否可以把后续输入写进 provider-owned tmux pane”，不负责整条聊天任务的运行态。状态进入时的动作和触发条件如下：
+ready 检测内部仍按一个短生命周期 readiness gate 运转；它只用于冷启动、进程恢复和 Bridge 重启后首次接管。外层输入状态机持久记录 readiness 的结果，避免每条消息重新跑 gate。readiness 状态进入时的动作和触发条件如下：
 
 | 状态 | 进入动作 | 触发条件 | 下一跳 |
 | --- | --- | --- | --- |
@@ -86,26 +94,45 @@ ready 检测内部按一个显式 readiness gate 状态机运转；这个状态�
 | `missing` | 返回 not-ready，并记录 provider-owned tmux session 已消失。 | 抓屏失败后 `has-session` 也失败。 | 调用方决定是否重建、报错或发退出通知。 |
 | `timeout` | 做最后一次 session 检查并返回 not-ready timeout 结果。 | deadline 用完且未看到 ready prompt。 | 调用方按启动失败或未就绪处理。 |
 
-`ready -> running` 不在 readiness gate 内发生：普通消息 auto-forward 在 `ready` 返回后才发送原始 literal/Enter，并由 host manager 启动 post-forward exit probe 和 mirror 等待。`running -> suspended` 也不是这个函数内部状态；它由后续 mirror probe、`/tmux-screen` 或新的 auto-forward readiness 检测再次发现 TUI selection 来表达。
+readiness gate 的 `ready` 会把共享输入状态推进到 `running`，随后普通消息才进入 `sending` 并写入 literal/Enter。运行期不再为了寻找空闲光标而重复 readiness capture；Codex 在执行过程中真正出现 permission/goal 等交互选择时，mirror selection monitor 仍可把共享状态从 `running` 推到 `waiting_selection`，用户选择完成后回到 `running`。这是业务交互检测，不是每条输入前的光标门控。
 
-### 3. 普通消息转发
+### 3. 输入生命周期状态机
+
+共享状态按 `runtime + provider-owned tmux session name` 键控：
+
+| 状态 | 含义与下一步 |
+| --- | --- |
+| `idle` | 当前 Bridge 进程尚未观察过该 tmux。 |
+| `checking_tmux` | 发送前执行轻量 `has-session`；这是 `running` 后仍保留的唯一固定门控。 |
+| `checking_session` | tmux 存在但本进程尚未确认 runtime session/readiness；冷接管只进入一次。 |
+| `starting_session` | 创建或发现 Codex thread、Claude JSONL session、Kimi session id/wire identity。 |
+| `starting_tmux` | 启动或重建 provider-owned tmux/TUI。 |
+| `waiting_selection` | 启动选择或运行期真实 GUI/TUI 选择等待 IM 用户处理。 |
+| `running` | tmux 和 runtime session 已建立；下一条输入只验证 tmux 仍存在，不抓屏找 prompt。 |
+| `sending` | 输入正在写入 pane；发送成功回 `running`。 |
+| `failed` | readiness、session discovery 或发送失败；下一条输入必须恢复，不复用该状态。 |
+| `stopped` | `has-session` 发现进程丢失，或 `/clear`、归档、turn cleanup 已结束 tmux。 |
+
+因此普通消息的统一决策是：先确认/创建 runtime session，再确认/启动 tmux并处理启动选择，进入 `running` 后发送；后续消息仅检查 tmux 是否还活着。Bridge 重启会丢失内存状态，所以首次接管已有 tmux 仍执行一次 readiness，这是必要的冷接管边界。
+
+### 4. 普通消息转发
 
 普通 IM 消息有两种进入 Codex tmux 的路径：
 
 - 已经在 interactive turn 中运行的 Codex 请求由 `CodexRoutingProvider` 根据 `codexProvider=tmux` 分发到 `CodexTmuxProvider`。provider 校验 tmux session，等待信任、更新或权限选择提示稳定后，通过 tmux core 注入 prompt。
 - 已经绑定到 tmux provider 的聊天会在 host manager 的普通消息分支中被直接 auto-forward 到 `/tmux <message>`。这条路径用于“把普通聊天文本当作 TUI 输入”，会自动追加 Enter，并在 tmux session 缺失时走上一节的 auto-recover。
 
-auto-forward 的输入必须在启动门控之后才写入 tmux：缺失 session 恢复、新建 provider session、以及已存在 session 但屏幕仍停在启动 selection 的路径，都会先执行 shared ready/selection 检测。等待过程是异步 Promise，不会阻塞 Node 主事件循环；调度层会把 tmux provider 普通消息标记为 conversation barrier，阻塞同一 chat/session 的后续普通消息和 session 变更命令，直到当前 auto-forward 完成。`/stop`、selection callback 等控制路径仍可绕过 barrier，用于中断或完成启动选择。`/tmux-screen`、`/pty-screen` 保持 feature 前的 monitor job 行为：它们走 job lane 但不等待 conversation barrier，因此可在普通对话卡住时及时抓屏；`/shell` 等普通 job 仍等待 barrier。只查看或手动控制 pane 的命令不自动恢复 provider session，也不等待 startup ready。
+auto-forward 的输入必须在启动门控之后才写入 tmux：缺失 session 恢复、新建 provider session、冷接管已有 session 的路径都会先执行 shared ready/selection 检测。状态一旦成为 `running`，后续输入只执行 `has-session`，不再依赖屏幕光标或 prompt 文本决定发送时机。等待过程是异步 Promise，不会阻塞 Node 主事件循环；调度层会把 tmux provider 普通消息标记为 conversation barrier，阻塞同一 chat/session 的后续普通消息和 session 变更命令，直到当前 auto-forward 完成。`/stop`、selection callback 等控制路径仍可绕过 barrier，用于中断或完成启动选择。`/tmux-screen`、`/pty-screen` 保持 feature 前的 monitor job 行为：它们走 job lane 但不等待 conversation barrier，因此可在普通对话卡住时及时抓屏；`/shell` 等普通 job 仍等待 barrier。只查看或手动控制 pane 的命令不自动恢复 provider session，也不等待 startup ready。
 
 host manager 会在 tmux provider 普通消息进入 auto-forward 时立即给原 IM 消息加 `Typing` reaction，覆盖本地 thread bootstrap、tmux session recovery、ready 检测和 selection 等待阶段。若 ready 过程中需要用户选择，`requestCodexTuiSelection` 会发送完整 IM selection card；permission broker 按 channel/chat/session/prompt 去重，startup readiness 和 mirror probe 同时看到同一个 Codex TUI selection 时只发一张卡，重复 waiter 共享同一个用户选择，并能接住 rich card 发送完成但 permission link 尚未落库时的早到回调。provider auto-forward 的 selection card 会在 permission link 元数据中保存原始 tmux actions；如果真实回调到达时 live waiter 已经丢失，host manager 的 orphan 恢复路径复用同一个 readiness gate 发送 selection choice、等待 `ready`，然后再继续发送原始 actions，避免另写一套抓屏/解析/发送选择逻辑。用户选择的等待时间不计入 shared ready timeout，选择动作发送到 tmux 后会重置一个完整 ready 窗口，因此 Codex trust/update/goal selection 和 Claude onboarding/trust prompt 都不会因为用户思考时间而触发启动失败清理。若无需选择，reaction 仍让用户知道后台正在处理。输入成功写入后，host manager 会启动一个短延迟的 post-forward exit probe：如果 JSONL mirror 开始 streaming，probe 会随 pending reaction 一起取消；如果 probe 发现 provider-owned tmux session 已消失，会移除 reaction、把 session health 标记为 failed，并向 IM 发送一句“tmux Provider 会话已退出，请 `/p tmux` 重启”的可见通知；诊断命令和 mirror 细节保留在日志里。启动期用户选择 Codex update `update_now` 后，如果更新流程关闭 tmux session，启动函数会先强制通知用户并自动重启一次同名 Codex tmux；只有重启失败或输入已成功写入后又异常退出，才落到 post-forward/update exit notice。
 
 Codex TUI 的输出不直接依赖屏幕文本作为最终答案，而是由 Codex session JSONL mirror 同步。
 
-### 4. JSONL mirror 和回复
+### 5. JSONL mirror 和回复
 
 Codex TUI 写入本地 JSONL 后，`src/runtime/codex/session-index/*` 负责发现 session 文件、按 offset 解析增量，并转换成 `BridgeMirrorRecord`。`src/bridge/mirror/runtime.ts` 订阅活动绑定，`src/bridge/mirror/turns.ts` 合并 message、reasoning、tool、plan 和 terminal 事件，再交给反馈控制器投递到 IM。
 
-### 5. 卡顿和健康检测
+### 6. 卡顿和健康检测
 
 卡顿检测不依赖单一信号。`src/bridge/health/runtime.ts` 汇总 `BridgeSession` 的 `runtime_status`、`last_progress_at`、活跃工具、stream UI 刷新、mirror 事件时间和进程状态，`src/bridge/health/reducer.ts` 归约为 `running_active`、`slow_observed`、`suspected_stall`、`suspected_stream_ui_stall`、`suspected_detached` 等状态。`/health` 展示单会话诊断，`/status` 和运行时卡片展示概览。
 
@@ -126,7 +153,7 @@ Claude tmux 与 Codex tmux 的差异是：Claude Code 本身决定 JSONL session
 
 Claude tmux 也必须支持和 Codex 相同的普通消息隐式初始化/恢复语义：如果当前聊天的有效 Claude provider 是 `tmux`，但还没有 `runtime.general.tmuxSessionName`，第一条普通消息会生成 `claude_<BridgeSessionId>` 并启动 Claude Code TUI；如果已记录 tmux session 但进程不存在，普通消息会重建同名 tmux session。两种情况都会写回 `runtime.claude.provider=tmux`、`runtime.general.tmuxSessionName` 和 tmux auto-enter 配置，然后再把消息注入 TUI。之后 `reconcileClaudeTmuxMirrorAfterAutoForward` 等待 Claude JSONL 出现，发现 `session_id` 后写回 `runtime.claude.sessionId/cwd`，prime 首个 turn 的 mirror delivery，并触发 Claude mirror reconcile。
 
-Claude tmux 使用同一个 `waitForRuntimeTmuxReady` 启动门控。新建、恢复或已有 Claude provider-owned tmux session 在 auto-forward 前都会等待 Claude 输入提示，并会处理 onboarding/trust prompt。为兼容旧会话和测试 fake pane，Claude readiness 还接受“看起来是 TUI 且已出现输入提示、且没有任何 selection prompt”的通用 ready 兜底；这个兜底只用于 provider-owned tmux 的启动/发送路径，不影响普通 `/tmux-screen` 查看。
+Claude tmux 使用同一个 `waitForRuntimeTmuxReady` 启动门控。新建、恢复或 Bridge 进程冷接管已有 Claude provider-owned tmux 时等待一次 Claude 输入提示，并处理 onboarding/trust prompt；进入共享 `running` 后，普通消息不再重复抓屏找输入提示。为兼容旧会话和测试 fake pane，Claude readiness 还接受“看起来是 TUI 且已出现输入提示、且没有任何 selection prompt”的通用 ready 兜底；这个兜底只用于冷启动/接管，不影响普通 `/tmux-screen` 查看。
 
 ## 链路对齐盘点
 
@@ -172,6 +199,8 @@ Claude tmux 使用同一个 `waitForRuntimeTmuxReady` 启动门控。新建、�
 | `/clear` 在 Claude runtime 下运行时保持 Claude runtime/provider，并保留同聊天 Codex runtime 映射。 | `keeps the active runtime and remembered alternate runtime when /clear follows a runtime switch` |
 | `/t rename` 在 runtime 切换后只修改当前 runtime 的 BridgeSession 标题。 | `renames only the active runtime BridgeSession after runtime switches` |
 | `/tmux-attach` 和 `/tmux-screen` 查看当前屏幕时通过 shared inspect 报告 selection prompt。 | `reports tmux selection prompts through shared attach and screen inspection` |
+| 冷接管已有 Codex tmux 时 readiness 抓屏一次，进入 `running` 后第二条输入只做 `has-session`、不再 capture prompt。 | `probes a cold existing Codex tmux once, then forwards subsequent input without another prompt capture` |
+| 通用输入 machine 在 tmux 丢失时回到 `stopped`，发送严格执行 `running -> sending -> running/failed`。 | `runtime tmux input state machine` |
 
 ## 命令和配置入口
 
@@ -203,6 +232,7 @@ Kimi 入口补充：
 
 - tmux 命令拼装、长文本 paste、屏幕抓取和特殊键发送必须继续留在 `src/bridge/tmux/core.ts`，不要在 provider 内重复 shell 拼接。
 - Codex 和 Claude 各自的 CLI 参数构造可以不同，但 provider-owned tmux session 的创建、ready/selection 检测、查看和清理应通过 `src/bridge/tmux/runtime.ts` 暴露的 runtime API；Kimi 若迁入 shared lifecycle，需要保留 resume hint/session id 解析和 `Ctrl-S` steer 语义。
+- 三个 runtime 的 tmux/session/selection/send 决策必须写入 `src/bridge/tmux/input-state-machine.ts`；不要再用 `BridgeSession.runtime_status` 推断 TUI 是否需要 readiness，也不要在 `running` 输入前新增光标/prompt capture。
 - 普通消息 auto-forward 和显式 `/tmux <...>` 的自动初始化逻辑集中在 `src/bridge/command/tmux.ts`：Codex、Claude 和 Kimi 都应只在 `autoRecoverProviderSession=true` 或当前 runtime provider 明确为 tmux 时启动或重建 provider-owned tmux session；`/tmux-screen`、`/tmux-session` 和 `/tmux-attach` 不负责 provider 恢复，也不等待 startup ready。
 - tmux provider 普通消息的调度门控在 adapter runtime/host manager 层表达为 session lane + conversation barrier；不要把同 chat 阻塞语义藏进 tmux command handler 内部，否则 `/tmux-screen`、`/runtime` 等后续 job 可能绕过启动等待。
 - tmux provider 普通消息的可见进度、selection 去重和 post-forward/update exit notice 属于 host manager/permission broker 职责，因为它们依赖 IM adapter reaction、mirror stream start、selection callback 和 session health 多方状态；provider 只应暴露底层 tmux readiness/selection 能力，否则 Claude tmux 无法共享同一行为。
