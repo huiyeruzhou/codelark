@@ -2661,6 +2661,7 @@ describe('feishu-adapter structured streaming regions', () => {
             },
             update: async (payload: Record<string, any>) => {
               cardUpdates.push(payload);
+              operations.push({ kind: 'card.update', cardId: payload.path?.card_id });
               return {};
             },
             batchUpdate: async (payload: Record<string, any>) => {
@@ -2713,7 +2714,7 @@ describe('feishu-adapter structured streaming regions', () => {
 
     assert.equal(replyCalls.length, 2);
     assert.ok(settingsCalls.some((call) => call.path?.card_id === 'card-1'));
-    assert.equal(cardUpdates.length, 0);
+    assert.equal(cardUpdates.length, 1);
     const rolloverSettingsCall = settingsCalls.find((call) => call.path?.card_id === 'card-1');
     assert.deepEqual(JSON.parse(rolloverSettingsCall?.data?.settings || '{}'), { streaming_mode: false });
     const rolloverStatusIndex = operations.findIndex((operation) =>
@@ -2725,8 +2726,21 @@ describe('feishu-adapter structured streaming regions', () => {
       index > rolloverStatusIndex
       && operation.kind === 'card.settings'
       && operation.cardId === 'card-1');
+    const rolloverStaticUpdateIndex = operations.findIndex((operation, index) =>
+      index > rolloverFinalizeIndex
+      && operation.kind === 'card.update'
+      && operation.cardId === 'card-1');
     assert.ok(rolloverStatusIndex >= 0);
     assert.ok(rolloverFinalizeIndex > rolloverStatusIndex);
+    assert.ok(rolloverStaticUpdateIndex > rolloverFinalizeIndex);
+    const rolloverStaticCard = JSON.parse(cardUpdates[0]?.data?.card?.data || '{}');
+    assert.notEqual(rolloverStaticCard.config?.streaming_mode, true);
+    assert.equal(rolloverStaticCard.config?.wide_screen_mode, true);
+    assert.ok(_testOnly.countFeishuCardComponents(rolloverStaticCard) <= 160);
+    const rolloverStaticJson = JSON.stringify(rolloverStaticCard);
+    assert.match(rolloverStaticJson, /模型输出 1/);
+    assert.match(rolloverStaticJson, /模型输出 140/);
+    assert.equal(rolloverStaticJson.includes('模型输出 141'), false);
     const continuationCard = createdCards.at(-1) || {};
     assert.ok(_testOnly.countFeishuCardComponents(continuationCard) <= 160);
     const continuationJson = JSON.stringify(continuationCard);
@@ -3258,9 +3272,13 @@ describe('feishu-adapter structured streaming regions', () => {
     await waitForCondition(() => createdCards.length >= 2, 1000);
 
     assert.equal(replyCalls.length, 2);
-    assert.equal(cardUpdates.length, 0);
+    assert.equal(cardUpdates.length, 1);
     assert.ok(settingsCalls.some((call) => call.path?.card_id === 'card-1'));
     assert.ok(elementCreates.some((create) => String(create.data?.elements || '').includes('stream_txt_2')));
+    const rolloverStaticJson = cardUpdates[0]?.data?.card?.data || '';
+    assert.notEqual(JSON.parse(rolloverStaticJson).config?.streaming_mode, true);
+    assert.match(rolloverStaticJson, /上一轮输出/);
+    assert.doesNotMatch(rolloverStaticJson, /当前输出会触发 200850/);
     const continuationJson = JSON.stringify(createdCards.at(-1));
     assert.match(continuationJson, /当前输出会触发 200850/);
     assert.doesNotMatch(continuationJson, /上一轮输出/);
@@ -3353,9 +3371,13 @@ describe('feishu-adapter structured streaming regions', () => {
     await waitForCondition(() => createdCards.length >= 2, 1000);
 
     assert.equal(replyCalls.length, 2);
-    assert.equal(cardUpdates.length, 0);
+    assert.equal(cardUpdates.length, 1);
     assert.equal(elementCreates.length, 0);
     assert.ok(settingsCalls.some((call) => call.path?.card_id === 'card-1'));
+    const rolloverStaticJson = cardUpdates[0]?.data?.card?.data || '';
+    assert.notEqual(JSON.parse(rolloverStaticJson).config?.streaming_mode, true);
+    assert.match(rolloverStaticJson, /上一组/);
+    assert.doesNotMatch(rolloverStaticJson, /当前组/);
     const continuationJson = JSON.stringify(createdCards.at(-1));
     assert.match(continuationJson, /当前组/);
     assert.doesNotMatch(continuationJson, /上一组/);

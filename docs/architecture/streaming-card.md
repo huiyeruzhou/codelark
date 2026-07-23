@@ -254,12 +254,13 @@ CardKit 的 `streaming_mode` 只影响文本流式上屏的表现，不应成为
 接近或超过任一安全线时，优先执行续接：
 
 1. 尝试用 `cardElement.content` 把旧卡状态区改成“已续接到下一条”。
-2. 对旧卡调用 `card.settings` 关闭 `streaming_mode`，让 finalize 成为旧卡续接前的最后一次 CardKit 写入。
-3. 用相同 stream key 创建 continuation card。
-4. continuation card 从 `historyItemOffset` 或 `toolCallOffset` 后继续渲染。
-5. 如果续接失败，再尝试 `card.update` full refresh。
+2. 对旧卡调用 `card.settings` 关闭服务端 `streaming_mode`。
+3. 从 remote shadow 只重建旧卡最后一次成功渲染的内容，调用 `card.update` 写回不含 `streaming_mode:true` 的静态卡片 JSON。客户端只有收到这一步后，旧卡文本才会恢复为可选中状态。
+4. 用相同 stream key 创建 continuation card。
+5. continuation card 从 `historyItemOffset` 或 `toolCallOffset` 后继续渲染。
+6. 如果续接失败，再尝试运行中的 `card.update` full refresh。
 
-续接依赖 shadow 中记录的已渲染 history/tool offset。history offset 按 canonical `StreamingHistoryItem` 数计算，不能用 CardKit element 数代替：一个 `tool_panel` history item 可能扁平渲染成多个 `stream_tool_N`。旧卡保留已显示的 history item，新卡从当前正在更新的 item 开始，避免因一对多渲染跳过内容。由于 shadow 不是客户端 ACK，慢 batch 或弱确认场景下要保守降级，避免 offset 跳过用户没看到的内容。
+续接依赖 shadow 中记录的已渲染 history/tool offset。history offset 按 canonical `StreamingHistoryItem` 数计算，不能用 CardKit element 数代替：一个 `tool_panel` history item 可能扁平渲染成多个 `stream_tool_N`。旧卡静态定稿只能使用 shadow 中已经成功写入的范围，不能使用 desired/pending 的完整内容，否则会把下一张卡的开头重复写回旧卡。新卡从当前正在更新的 item 开始，避免因一对多渲染跳过内容。由于 shadow 不是客户端 ACK，慢 batch 或弱确认场景下要保守降级，避免 offset 跳过用户没看到的内容。
 
 如果飞书返回 `code=200850`，adapter 会直接触发强制 continuation rollover，不再等待下一轮 full refresh。这个错误通常说明 payload 维度已触及飞书实际限制，即使 `componentCount` 仍低于组件软上限，也应该把当前 group 切到新卡。
 
@@ -278,7 +279,7 @@ CardKit 的 `streaming_mode` 只影响文本流式上屏的表现，不应成为
 | 关闭流式         | `cardkit.v1.card.settings`       | `settings={"streaming_mode":false}`、`sequence`                                                        | 定稿；续接状态写入后关闭 streaming mode             |
 | 终态 reaction  | `im.messageReaction.create`      | `message_id`、emoji type                                                                               | completed/error 结果提示                         |
 
-所有 CardKit 更新都依赖递增的 `sequence`。关闭 streaming mode 本身也占用一个 sequence；普通 finalize 会先关闭 streaming mode 再写最终普通卡，rollover 会先写“已续接到下一条”状态，再用 `card.settings` 作为旧卡的最后一次写入。
+所有 CardKit 更新都依赖递增的 `sequence`。关闭 streaming mode 本身也占用一个 sequence；普通 finalize 会先关闭 streaming mode 再写最终普通卡，rollover 会依次写“已续接到下一条”状态、关闭 streaming mode、写静态旧卡，然后才创建下一张卡。禁止把 `card.settings` 当成客户端静态化的最后一步。
 
 ## 日志与性能观测
 

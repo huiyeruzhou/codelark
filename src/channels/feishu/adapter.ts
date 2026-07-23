@@ -3535,8 +3535,8 @@ export class FeishuAdapter extends BaseChannelAdapter {
       }
     }
 
-    if (typeof cardkit?.card?.settings !== 'function') {
-      throw new Error('card.settings is unavailable');
+    if (typeof cardkit?.card?.settings !== 'function' || typeof cardkit?.card?.update !== 'function') {
+      throw new Error('card.settings or card.update is unavailable');
     }
     try {
       state.sequence += 1;
@@ -3548,6 +3548,46 @@ export class FeishuAdapter extends BaseChannelAdapter {
         },
       }));
       assertFeishuApiOk(settingsResult, 'card.settings:rollover');
+      this.markCardFlushSuccess(state);
+
+      // CardKit settings stop server-side streaming, but the Feishu client keeps the
+      // original streaming card non-selectable until it receives static card JSON.
+      // Rebuild only the last successfully rendered shadow so pending continuation
+      // content remains exclusively on the next card.
+      const renderedHistoryItems = state.historyDriven
+        ? state.historyItems.slice(
+          state.historyItemOffset,
+          state.historyItemOffset + state.renderedHistoryItemCount,
+        )
+        : undefined;
+      const renderedToolCount = Object.keys(state.renderedToolSnapshots)
+        .filter((elementId) => /^stream_tool_\d+$/.test(elementId))
+        .length;
+      const renderedTools = state.historyDriven
+        ? []
+        : state.toolCalls.slice(state.toolCallOffset, state.toolCallOffset + renderedToolCount);
+      const staticCard = buildStreamingCardBody(
+        state.historyDriven ? state.pendingText || '' : state.renderedText || '',
+        state.renderedTasksText || EMPTY_STREAMING_TASKS,
+        statusText,
+        renderedTools,
+        state.actionRows,
+        state.chatId,
+        state.metadata,
+        renderedHistoryItems,
+      );
+      staticCard.config = { wide_screen_mode: true };
+      const staticCardJson = JSON.stringify(staticCard);
+
+      state.sequence += 1;
+      const updateResult = await this.withFeishuRequestTimeout(streamKey, 'card.update:rollover_static', () => cardkit.card.update({
+        path: { card_id: state.cardId },
+        data: {
+          card: { type: 'card_json', data: staticCardJson },
+          sequence: state.sequence,
+        },
+      }));
+      assertFeishuApiOk(updateResult, 'card.update:rollover_static');
       this.markCardFlushSuccess(state);
     } catch (error) {
       this.markCardFlushFailure(state, error);
