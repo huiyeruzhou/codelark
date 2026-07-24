@@ -79,6 +79,11 @@ import {
   setSessionKimiIdentityUpdate,
 } from '../../../../domain/session-runtime.js';
 import { createSessionHealthRuntime } from '../../../../bridge/health/runtime.js';
+import { createMirrorSubscription } from '../../../../bridge/mirror/subscription-state.js';
+import {
+  createMirrorTurnState,
+  type FinalizedBridgeMirrorTurn,
+} from '../../../../bridge/mirror/turns.js';
 import { getClaudeProjectDir, isArchivedClaudeSession } from '../../../../runtime/claude/session-jsonl.js';
 import { computeKimiWorkspaceDirName, isArchivedKimiSession } from '../../../../runtime/kimi/session-index.js';
 import { kimiTmuxSessionName } from '../../../../runtime/kimi/tmux-provider.js';
@@ -6463,6 +6468,7 @@ enabled = true
             action: {
               form_value: {
                 hist_limit: '11',
+                stream_idle_sec: '0',
               },
             },
           },
@@ -6472,6 +6478,7 @@ enabled = true
       deps,
     );
     assert.equal(createConfigService({ migrate: false, env: {} }).snapshot().config.channels[0]?.config.historyMessageLimit, 11);
+    assert.equal(createConfigService({ migrate: false, env: {} }).snapshot().config.channels[0]?.config.streamStatusIdleStartSeconds, 0);
 
     await handleBridgeCommand(
       adapter,
@@ -9714,6 +9721,151 @@ enabled = true
       if (oldFakeLog === undefined) delete process.env.TMUX_FAKE_LOG;
       else process.env.TMUX_FAKE_LOG = oldFakeLog;
       fs.rmSync(fakeTmux.binDir, { recursive: true, force: true });
+    }
+  });
+
+  it('attributes a direct Codex TUI error only from a checkpoint completed before that turn', async () => {
+    const store = initTestContext();
+    const fakeTmux = installFakeTmux();
+    const oldEnv = captureProcessEnv(['PATH', 'TMUX_FAKE_LOG', 'TMUX_FAKE_CAPTURE_TEXT']);
+    process.env.PATH = `${fakeTmux.binDir}${path.delimiter}${oldEnv.PATH || ''}`;
+    process.env.TMUX_FAKE_LOG = fakeTmux.logPath;
+    process.env.TMUX_FAKE_CAPTURE_TEXT = '■ historical error\n\nOpenAI Codex\n› \n';
+    const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-codex-error-checkpoint-'));
+
+    try {
+      const address = { channelType: 'feishu', chatId: 'chat-codex-error-checkpoint' } as const;
+      const binding = router.createBinding(address, workDir);
+      const threadId = '019e824e-10ef-7430-985d-4349ce6a15f9';
+      store.updateSessionCodexThreadId(binding.bridgeSessionId, threadId);
+      store.updateSession(binding.bridgeSessionId, {
+        runtime: { general: { tmuxSessionName: 'alpha' } },
+      });
+      createConfigService({ migrate: false, env: {} }).set(
+        { kind: 'session', sessionId: binding.bridgeSessionId },
+        { runtime: { codex: { provider: 'tmux' } } },
+      );
+
+      const filePath = path.join(workDir, 'rollout.jsonl');
+      fs.writeFileSync(filePath, '{"type":"event_msg","payload":{"type":"task_complete"}}\n');
+      const subscription = createMirrorSubscription({
+        bindingId: binding.id,
+        sessionId: binding.bridgeSessionId,
+        channelType: address.channelType,
+        chatId: address.chatId,
+        threadId,
+        filePath,
+        lastDeliveredAt: null,
+      });
+      subscription.fileSize = fs.statSync(filePath).size;
+
+      await bridgeManagerTestOnly.captureCodexTuiIdleScreenCheckpoint(subscription);
+      const turnState = createMirrorTurnState(
+        binding.bridgeSessionId,
+        new Date(Date.now() + 10).toISOString(),
+        'direct-tui-error-turn',
+      );
+      bridgeManagerTestOnly.assignCodexTuiTurnScreenBaseline(subscription, turnState);
+      process.env.TMUX_FAKE_CAPTURE_TEXT = [
+        '■ historical error',
+        '',
+        '› trigger a direct error',
+        '■ {"error":{"type":"invalid_request_error","message":"CODELARK_MOCK_FATAL"}}',
+        '',
+      ].join('\n');
+
+      const turn: FinalizedBridgeMirrorTurn = {
+        streamKey: turnState.streamKey,
+        userText: 'trigger a direct error',
+        text: '',
+        signature: 'direct-error-complete',
+        timestamp: new Date().toISOString(),
+        startedAt: turnState.startedAt,
+        status: 'completed' as const,
+      };
+      const status = await bridgeManagerTestOnly.resolveCodexTuiFinalizedTurnStatus(
+        subscription,
+        turn,
+        { batchSize: 1 },
+      );
+
+      assert.equal(status, 'error');
+      assert.match(turn.errorText || '', /CODELARK_MOCK_FATAL/);
+
+      const overlappingTurnState = createMirrorTurnState(
+        binding.bridgeSessionId,
+        new Date(Date.now() - 1_000).toISOString(),
+        'overlapping-checkpoint-turn',
+      );
+      bridgeManagerTestOnly.assignCodexTuiTurnScreenBaseline(subscription, overlappingTurnState);
+      process.env.TMUX_FAKE_CAPTURE_TEXT += '■ must not be attributed from an overlapping checkpoint\n';
+      const overlappingTurn: FinalizedBridgeMirrorTurn = {
+        streamKey: overlappingTurnState.streamKey,
+        userText: 'overlap',
+        text: '',
+        signature: 'overlap-complete',
+        timestamp: new Date().toISOString(),
+        startedAt: overlappingTurnState.startedAt,
+        status: 'completed',
+      };
+      assert.equal(await bridgeManagerTestOnly.resolveCodexTuiFinalizedTurnStatus(
+        subscription,
+        overlappingTurn,
+        { batchSize: 1 },
+      ), 'completed');
+      assert.equal(overlappingTurn.errorText, undefined);
+
+      const batchedTurnState = createMirrorTurnState(
+        binding.bridgeSessionId,
+        new Date(Date.now() + 10).toISOString(),
+        'batched-turn',
+      );
+      bridgeManagerTestOnly.assignCodexTuiTurnScreenBaseline(subscription, batchedTurnState);
+      process.env.TMUX_FAKE_CAPTURE_TEXT += '■ ambiguous batched error\n';
+      const batchedTurn: FinalizedBridgeMirrorTurn = {
+        streamKey: batchedTurnState.streamKey,
+        userText: 'batched',
+        text: '',
+        signature: 'batched-complete',
+        timestamp: new Date().toISOString(),
+        startedAt: batchedTurnState.startedAt,
+        status: 'completed',
+      };
+      assert.equal(await bridgeManagerTestOnly.resolveCodexTuiFinalizedTurnStatus(
+        subscription,
+        batchedTurn,
+        { batchSize: 2 },
+      ), 'completed');
+      assert.equal(batchedTurn.errorText, undefined);
+
+      const changedFileTurnState = createMirrorTurnState(
+        binding.bridgeSessionId,
+        new Date(Date.now() + 10).toISOString(),
+        'changed-file-turn',
+      );
+      bridgeManagerTestOnly.assignCodexTuiTurnScreenBaseline(subscription, changedFileTurnState);
+      process.env.TMUX_FAKE_CAPTURE_TEXT += '■ error after a later rollout event\n';
+      fs.appendFileSync(filePath, '{"type":"event_msg","payload":{"type":"task_started"}}\n');
+      const changedFileTurn: FinalizedBridgeMirrorTurn = {
+        streamKey: changedFileTurnState.streamKey,
+        userText: 'changed file',
+        text: '',
+        signature: 'changed-file-complete',
+        timestamp: new Date().toISOString(),
+        startedAt: changedFileTurnState.startedAt,
+        status: 'completed',
+      };
+      assert.equal(await bridgeManagerTestOnly.resolveCodexTuiFinalizedTurnStatus(
+        subscription,
+        changedFileTurn,
+        { batchSize: 1 },
+      ), 'completed');
+      assert.equal(changedFileTurn.errorText, undefined);
+    } finally {
+      bridgeManagerTestOnly.resetStateForTests();
+      restoreProcessEnv(oldEnv);
+      fs.rmSync(fakeTmux.binDir, { recursive: true, force: true });
+      fs.rmSync(workDir, { recursive: true, force: true });
     }
   });
 

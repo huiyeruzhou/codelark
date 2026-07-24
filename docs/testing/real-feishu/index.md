@@ -98,6 +98,7 @@ CODELARK_REAL_FEISHU_TEST_LARK_CLI_XDG_DATA_HOME=/home/me/.codelark/real-feishu-
 | `history-suite` | 历史功能簇 | 进入 runtime/provider 矩阵；当前已有 canonical 报告是 `real-feishu::history-suite::codex-tmux` 的 `histsuite-codex-tmux-live-0858.json`，`kimi-tmux` 仍需真实飞书重跑。 |
 | `card-form-suite` | 交互表单 | 覆盖 `/new-form` 和模型生成 `<clk-ask>`；只有 harness 能触发真实 `card.action.trigger` 时才断言 submit callback。 |
 | `rendering-suite` | Markdown/卡片渲染 | 覆盖表格、代码块、长流式卡片完成和工具详情卡片形态；保留“历史记录”容器，单工具内部不得再嵌套折叠，标题使用动作图标并由代码拼成单行，展开后保留真实 command/patch，长 patch 的 `diff` fence 必须闭合且保持多行。 |
+| `codex-runtime-error` | Codex TUI 异常终态 | 用隔离 custom Responses provider 返回真实 HTTP 400；直接向窄 tmux TUI 提交后不再发送消息，验证 0.144.3 rollout 无 error 字段时仍只生成一个 error 卡，streaming 关闭，footer 同时保留完整 type/message、耗时和可用的 context。历史方块、重叠 checkpoint 和批量 turn 不得错归。 |
 | `permission-recovery-suite` | 运维恢复 | 诊断 bot 不在群、缺权限、重复 App 实例、清理失败等真实环境问题。 |
 | `doc-as-chat-from-scratch` | 云文档入口验收 | 从零创建云文档和评论触发 `/new`，验证群聊创建、群内后续对话的文档上下文，以及群聊/文档清理；示例见 `doc-as-chat-from-scratch.md`。 |
 
@@ -125,6 +126,7 @@ CODELARK_REAL_FEISHU_TEST_LARK_CLI_XDG_DATA_HOME=/home/me/.codelark/real-feishu-
 - `required_checks_passed`：binding、session、runtime identity、audit、provider 输出路径等 required checks 全部满足。
 - `provider_output_path`：SDK/direct 路径出现 `im:` 且不出现 `mirror:`；pty/tmux/mirror 路径出现 `mirror:`。
 - `mirror_final_not_duplicated_in_direct_reply`：mirror provider 的最终业务文本不能同时出现在 direct `reply_to` 状态卡中。
+- `codex_runtime_error_terminal_card`：真实 Codex 0.144.3 + custom provider HTTP 400 必须证明直接 TUI 输入无需下一条消息即可终止 streaming；最终卡 footer 含完整 `type · message · elapsed`，窄终端换行不能截断 JSON，rollout 缺失 error 时由 checkpoint fallback 补齐且不能产生第二个错误块。
 - `created_chat_cleanup_completed`：harness 创建的测试群成功清理，除非显式 `--keep-group`；失败报告也不能默认保留测试群。
 - `scenario_created_chat_cleanup_completed`：场景命令额外创建的群也要清理。
 - `doc_as_chat_context_assertion`：云文档 from-scratch 场景必须证明后续群内 bot 回复包含绑定文档的 `file_type`、`file_token` 和文档 marker；只证明建群不算通过。

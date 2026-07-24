@@ -5,6 +5,7 @@ import {
   buildStreamRuntimeStatus,
   createStreamState,
   formatRuntimeDuration,
+  formatStreamRuntimeStatus,
   recordStreamActivity,
   recordStreamContentResponse,
   shouldShowStreamLastContentResponseAge,
@@ -21,6 +22,29 @@ describe('stream-state', () => {
     assert.equal(formatRuntimeDuration(3_610_000), '1小时10秒');
     assert.equal(formatRuntimeDuration(3_720_000), '1小时2分');
     assert.equal(formatRuntimeDuration(3_730_000), '1小时2分10秒');
+  });
+
+  it('shows elapsed time from the first sub-second update', () => {
+    assert.equal(
+      formatStreamRuntimeStatus(33, null, '❌ invalid_request_error'),
+      '当前步骤：❌ invalid_request_error\n已运行 0秒',
+    );
+  });
+
+  it('shows last response age immediately when the configured delay is zero', () => {
+    const state = createStreamState(1_000);
+
+    assert.equal(
+      shouldShowStreamLastContentResponseAge(state, 1_000, {
+        idleStartMs: 0,
+        heartbeatMs: 10_000,
+      }),
+      true,
+    );
+    assert.equal(
+      buildStreamRuntimeStatus(state, 1_000, { includeLastContentResponseAge: true }),
+      '已运行 0秒，上次响应距今 0秒',
+    );
   });
 
   it('tracks content response time separately from activity time', () => {

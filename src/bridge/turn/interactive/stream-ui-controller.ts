@@ -20,9 +20,7 @@ import { appendContextUsageCompactText } from '../../../shared/progress/context-
 import {
   buildStreamRuntimeStatus,
   formatStreamRuntimeStatus,
-  getStreamLastContentResponseAgeMs,
   getVisibleStreamLastContentResponseAgeMs,
-  shouldShowStreamLastContentResponseAge,
   type StreamState,
   type StreamStatusTimingConfig,
 } from '../stream-state.js';
@@ -200,9 +198,9 @@ export function createInteractiveStreamUiController(
     params.recordSnapshot?.(params.sessionId, snapshot);
   };
 
-  const getVisibleLastResponseAgeMs = () => getVisibleStreamLastContentResponseAgeMs(
+  const getVisibleLastResponseAgeMs = (nowMs: number) => getVisibleStreamLastContentResponseAgeMs(
     params.streamState,
-    params.nowMs(),
+    nowMs,
     params.statusTiming,
   );
 
@@ -210,7 +208,7 @@ export function createInteractiveStreamUiController(
     if (!supportsStructuredStreamUi || streamStatusUpdatesClosed) return;
     const nowMs = params.nowMs();
     const effectiveLastResponseAgeMs = lastResponseAgeMs === undefined
-      ? getVisibleLastResponseAgeMs()
+      ? getVisibleLastResponseAgeMs(nowMs)
       : lastResponseAgeMs;
     feedback.pushStatus(
       effectiveLastResponseAgeMs == null
@@ -248,7 +246,7 @@ export function createInteractiveStreamUiController(
       if (params.stopCallbackData) {
         feedback.pushActions(buildStopActions(params.stopCallbackData));
       }
-      pushRunningStatus(null);
+      pushRunningStatus();
       streamStatusHeartbeat = params.setIntervalFn(() => {
         if (streamStatusUpdatesClosed) {
           clearStatusHeartbeat();
@@ -258,16 +256,7 @@ export function createInteractiveStreamUiController(
           clearStatusHeartbeat();
           return;
         }
-        const nowMs = params.nowMs();
-        const lastResponseAgeMs = shouldShowStreamLastContentResponseAge(
-          params.streamState,
-          nowMs,
-          params.statusTiming,
-        )
-          ? getStreamLastContentResponseAgeMs(params.streamState, nowMs)
-          : null;
-        pushRunningStatus(lastResponseAgeMs);
-        syncSnapshot();
+        pushRunningStatus();
       }, params.statusTiming.heartbeatMs);
     },
     stopStatusUpdates,

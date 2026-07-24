@@ -15,7 +15,7 @@ import type { ConfigPatch, ConfigV2 } from './schema.js';
 // legacy adapter：只负责 v1 Config 与 v2 ConfigPatch/ConfigV2 的兼容转换。
 // 新运行时读取不应从这里取配置，旧字段迁移完成后由 migrations 归档输入文件。
 
-export const LEGACY_DEFAULT_STREAM_STATUS_IDLE_START_SECONDS = 180;
+export const LEGACY_DEFAULT_STREAM_STATUS_IDLE_START_SECONDS = 0;
 export const LEGACY_DEFAULT_STREAM_STATUS_CHECK_INTERVAL_SECONDS = 10;
 const LEGACY_DEFAULT_HISTORY_MESSAGE_LIMIT = 8;
 
@@ -248,7 +248,7 @@ export function configToSettings(config: Config): Map<string, string> {
   m.set(
     'bridge_stream_status_idle_start_seconds',
     String(
-      config.streamStatusIdleStartSeconds && config.streamStatusIdleStartSeconds > 0
+      config.streamStatusIdleStartSeconds !== undefined && config.streamStatusIdleStartSeconds >= 0
         ? config.streamStatusIdleStartSeconds
         : LEGACY_DEFAULT_STREAM_STATUS_IDLE_START_SECONDS,
     ),

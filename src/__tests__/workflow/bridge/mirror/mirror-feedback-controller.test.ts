@@ -4,7 +4,10 @@ import assert from 'node:assert/strict';
 
 import { BaseChannelAdapter, type StructuredStreamingUiMetadata } from '../../../../channels/contracts.js';
 import { initBridgeContext } from '../../../../bridge/host/context.js';
-import { createMirrorFeedbackController } from '../../../../bridge/mirror/feedback-controller.js';
+import {
+  createMirrorFeedbackController,
+  formatMirrorTerminalErrorStatus,
+} from '../../../../bridge/mirror/feedback-controller.js';
 import { createMirrorSubscription } from '../../../../bridge/mirror/subscription-state.js';
 import { consumeMirrorRecords } from '../../../../bridge/mirror/turns.js';
 import type { InboundMessage, OutboundMessage, SendResult, TaskProgressInfo, ToolCallInfo } from '../../../../domain/index.js';
@@ -80,6 +83,69 @@ class FakeMirrorFeishuAdapter extends BaseChannelAdapter {
 }
 
 describe('mirror-feedback-controller', () => {
+  it('resolves the completed lifecycle before rendering one terminal card state', async () => {
+    const adapter = new FakeMirrorFeishuAdapter();
+    const controller = createMirrorFeedbackController({
+      getAdapter: () => adapter,
+      getThreadTitle: () => '测试线程',
+      resolveFinalizedTurnStatus: async (_subscription, turn) => {
+        assert.equal(turn.status, 'completed');
+        return 'error' as const;
+      },
+      nowIso: () => '2026-05-14T00:00:00.000Z',
+      eventBatchLimit: 10,
+      deliverResponse: async () => ({ ok: true }),
+    });
+    const subscription = createMirrorSubscription({
+      bindingId: 'binding-error',
+      sessionId: 'session-error',
+      channelType: 'feishu-default',
+      chatId: 'chat-error',
+      threadId: 'thread-error',
+      filePath: 'rollout.jsonl',
+      lastDeliveredAt: null,
+    });
+
+    const turn = {
+      streamKey: 'mirror:session-error:turn-error',
+      userText: '触发错误',
+      text: '请求失败',
+      signature: 'complete-error',
+      timestamp: '2026-05-14T00:00:01.000Z',
+      startedAt: new Date(Date.now() - 2_000).toISOString(),
+      status: 'completed' as const,
+      errorText: '{"error":{"type":"invalid_request_error","message":"CODELARK_MOCK_FATAL"}}',
+      contextUsage: {
+        modelContextWindow: 200_000,
+        lastTokenUsage: { inputTokens: 125_300, outputTokens: 4_600 },
+      },
+    };
+    const result = await controller.deliverMirrorTurns(subscription, [turn]);
+
+    assert.equal(result.deliveredCount, 1);
+    assert.equal(turn.status, 'error');
+    assert.deepEqual(adapter.streamEnds.map((entry) => entry.status), ['error']);
+    assert.equal(adapter.streamEnds[0]?.text, '');
+    assert.match(adapter.statuses.at(-1) || '', /invalid_request_error · CODELARK_MOCK_FATAL/);
+    assert.match(adapter.statuses.at(-1) || '', /已运行 2秒/);
+    assert.match(adapter.statuses.at(-1) || '', /125k\(63%\) · ↑125k ↓4\.6k/);
+    assert.doesNotMatch(adapter.statuses.at(-1) || '', /处理中/);
+  });
+
+  it('keeps terminal error status single-line and bounded', () => {
+    const formatted = formatMirrorTerminalErrorStatus(JSON.stringify({
+      error: {
+        type: 'invalid_request_error',
+        message: `first line\n${'x'.repeat(1_000)}`,
+      },
+    }));
+
+    assert.match(formatted, /^❌ invalid_request_error · first line /);
+    assert.equal(formatted.includes('\n'), false);
+    assert.equal(Array.from(formatted).length, 600);
+    assert.ok(formatted.endsWith('…'));
+  });
+
   it('builds mirror stream card title and tags from subscription metadata', () => {
     initBridgeContext({
       store: new JsonFileStore(new Map()),

@@ -56,6 +56,7 @@ function extractCodexUserPrompt(payload: { user_prompt?: unknown; userPrompt?: u
 const IGNORED_EVENT_MSG_TYPES = new Set([
   'thread_name_updated',
   'thread_rolled_back',
+  'thread_settings_applied',
 ]);
 
 const CONTEXT_COMPACTED_NOTICE = '> ⚙️ 上下文已压缩，后续回复会基于压缩后的上下文继续。';
@@ -439,6 +440,7 @@ function pushCodexMirrorEventRecord(
   }
 
   if (parsed.payload?.type === 'task_complete') {
+    const errorText = extractNormalizedStructuredText(parsed.payload.error);
     records.push({
       signature,
       type: 'task_complete',
@@ -446,6 +448,7 @@ function pushCodexMirrorEventRecord(
       content: extractNormalizedStructuredText(parsed.payload.last_agent_message),
       timestamp,
       turnId: parsed.payload.turn_id || '',
+      ...(errorText ? { isError: true, errorText } : {}),
     });
     return true;
   }

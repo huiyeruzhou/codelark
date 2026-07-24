@@ -128,9 +128,9 @@ fake 测试也要遵守真实职责边界。`fake tmux` 只模拟 tmux transport
 | `delivery-pipeline.test.ts` | 文本、卡片、附件和 question form 的交付编排；同 chat 队列不等待远端 ACK 且保持发送顺序。 |
 | `response-assembler.test.ts` | 分段 stream 输出合并成用户可读最终响应。 |
 | `stream-state.test.ts`、`streaming-metadata.test.ts`、`stream-feedback-controller.test.ts` | stream 状态、metadata 和反馈卡片更新节奏。 |
-| `mirror-runtime.test.ts`、`mirror-turns.test.ts`、`mirror-delivery-plan.test.ts` | mirror pending delivery、turn 队列和交付策略。 |
+| `mirror-runtime.test.ts`、`mirror-turns.test.ts`、`mirror-delivery-plan.test.ts` | mirror pending delivery、turn 队列和交付策略；Codex `task_complete.error` 在存在时必须形成 error 终态并保留真实 errorText。对 0.144.3 还要用真实 custom-provider HTTP 400 验证：直接 TUI 提交后不再发送消息，rollout 不含 error，但空闲 checkpoint 能排除历史方块并在 completed 后补成 error；checkpoint/turn 重叠、同批多 turn、capture 期间 rollout 增长均必须拒绝错归。窄 tmux 必须让 JSON error cell 在字符串内部换行并仍恢复完整 type/message。 |
 | `mirror-feedback-controller.test.ts`、`mirror-reconcile-core.test.ts`、`mirror-reconcile-batch.test.ts`、`mirror-subscription-registry.test.ts`、`mirror-subscription-state.test.ts` | mirror 订阅、reconcile、批处理、状态恢复和反馈控制。 |
-| `feishu-markdown.test.ts`、`plain-markdown.test.ts` | Markdown 到飞书卡片/纯文本的转换，含表格、代码块、工具/任务进度和最终卡片 JSON。 |
+| `feishu-markdown.test.ts`、`plain-markdown.test.ts` | Markdown 到飞书卡片/纯文本的转换，含表格、代码块、工具/任务进度、Kimi 单行统一 footer 和最终卡片 JSON。 |
 | `scripted-tool-model.test.ts`、`tool-presentation.test.ts`、`text-preview.test.ts` | 确定性生成任意工具 start/result/error 序列，验证公共标题语义和字符数/行数双 hard upper bound；不依赖真实模型随机输出。 |
 | `feishu-adapter-card-e2e.test.ts` | 飞书 card 级本地 E2E，覆盖 SDK/mirror question form、GPT-5.6 orchestration、Kimi Markdown、terminal→usage 后无悬挂 pending turn、内部 reminder 不可见，以及真实 bash/patch 详情等 payload 形态。 |
 | `outbound-artifacts.test.ts` | 出站 artifact、问题表单和附件描述。 |
@@ -144,7 +144,7 @@ fake 测试也要遵守真实职责边界。`fake tmux` 只模拟 tmux transport
 
 | 测试文件 | 关注点 |
 | --- | --- |
-| `feishu-adapter.test.ts` | 飞书消息、mention 过滤、结构化 stream 区域和事件处理。 |
+| `feishu-adapter.test.ts`、`feishu-markdown.test.ts` | 飞书消息、mention 过滤、结构化 stream 区域和事件处理；覆盖一个 canonical tool_panel 以单个工具调用为 cursor 续卡，并断言两侧重新分组、patch 多行 fence、末尾 sentinel 和单卡 payload 安全线；同时冻结短用户输入内联、超过 800 字的输入用无边框 panel 折叠且展开内容完整，以及空 final text 时 history-only 工具不能被 footer 覆盖。 |
 | `channel-adapter.test.ts`、`channel-router.test.ts`、`adapter-sync-plan.test.ts` | 通道队列、默认目标路由和 adapter 实例同步计划。 |
 | `ui-auth-routes.test.ts`、`ui-binding-application.test.ts`、`ui-channel-routes.test.ts`、`ui-config-routes.test.ts`、`ui-service-routes.test.ts`、`ui-session-application.test.ts`、`ui-session-history.test.ts` | Web 工作台的鉴权、绑定、通道、配置、服务、会话和历史。 |
 

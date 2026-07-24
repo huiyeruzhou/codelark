@@ -138,6 +138,7 @@ describe('kimi-tmux-provider workflow', () => {
     const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-kimi-workflow-cwd-'));
     const sessionId = 'session_aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
     const ensureCalls: string[] = [];
+    let extendedKeysCalls = 0;
     const sendCalls: Array<{ target: string; actions: string[] }> = [];
     const injectCalls: Array<{ target: string; prompt: string }> = [];
     let resumeHintReady = false;
@@ -146,6 +147,10 @@ describe('kimi-tmux-provider workflow', () => {
     let tmuxExists = false;
 
     const restoreTmux = patchTmuxCore({
+      async ensureExtendedKeys() {
+        extendedKeysCalls += 1;
+        return 'tmux set-option -g extended-keys on';
+      },
       async hasSession(name: string) {
         return { exists: tmuxExists, command: `tmux has-session -t ${name}` };
       },
@@ -203,6 +208,7 @@ describe('kimi-tmux-provider workflow', () => {
       })));
 
       assert.equal(ensureCalls.length, 2);
+      assert.equal(extendedKeysCalls, 1, 'fresh lifecycle enables Kimi-compatible Enter handling once');
       assert.match(ensureCalls[0]!, /\bkimi -y\b/);
       assert.doesNotMatch(ensureCalls[0]!, / -r /);
       assert.match(ensureCalls[1]!, new RegExp(`\\bkimi -r ${sessionId} -y\\b`));
@@ -245,12 +251,17 @@ describe('kimi-tmux-provider workflow', () => {
     const sessionId = 'session_bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
     const wirePath = createKimiSessionFile({ kimiHome, cwd, sessionId });
     const ensureCalls: string[] = [];
+    let extendedKeysCalls = 0;
     const sendCalls: Array<{ target: string; actions: string[] }> = [];
     const injectCalls: Array<{ target: string; prompt: string }> = [];
     let tmuxExists = true;
     let captureCount = 0;
 
     const restoreTmux = patchTmuxCore({
+      async ensureExtendedKeys() {
+        extendedKeysCalls += 1;
+        return 'tmux set-option -g extended-keys on';
+      },
       async hasSession(name: string) {
         return { exists: tmuxExists, command: `tmux has-session -t ${name}` };
       },
@@ -298,6 +309,7 @@ describe('kimi-tmux-provider workflow', () => {
       })));
 
       assert.equal(ensureCalls.length, 0, 'cold takeover must reuse the existing Kimi tmux process');
+      assert.equal(extendedKeysCalls, 1, 'cold takeover enables Kimi-compatible Enter handling once');
       assert.equal(captureCount, 1, 'cold takeover must verify the active Session header exactly once');
       assert.deepEqual(injectCalls, [{
         target: 'clk-kimi-bridge-kimi-resume-workflow:0.0',
@@ -339,8 +351,13 @@ describe('kimi-tmux-provider workflow', () => {
     const sessionDir = path.resolve(path.dirname(wirePath), '..', '..');
     let tmuxExists = false;
     let killed = false;
+    let extendedKeysCalls = 0;
 
     const restoreTmux = patchTmuxCore({
+      async ensureExtendedKeys() {
+        extendedKeysCalls += 1;
+        return 'tmux set-option -g extended-keys on';
+      },
       async hasSession(name: string) {
         return { exists: tmuxExists, command: `tmux has-session -t ${name}` };
       },
@@ -398,6 +415,7 @@ describe('kimi-tmux-provider workflow', () => {
       assert.ok(Date.now() - startedAt < 1_000, 'explicit authentication failures should not wait for idle timeout');
       assert.ok(events.some((event) => event.type === 'error'
         && String(event.data).includes('requires login before it can be used')));
+      assert.equal(extendedKeysCalls, 1);
       assert.equal(killed, true, 'a failed half-initialized Kimi lifecycle should be cleaned up');
     } finally {
       restoreTmux();

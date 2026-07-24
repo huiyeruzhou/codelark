@@ -93,7 +93,7 @@ describe('configToSettings', () => {
     assert.equal(m.has('bridge_feishu_app_id'), false);
     assert.equal(m.get('bridge_default_mode'), 'normal');
     assert.equal(m.get('bridge_history_message_limit'), '8');
-    assert.equal(m.get('bridge_stream_status_idle_start_seconds'), '180');
+    assert.equal(m.get('bridge_stream_status_idle_start_seconds'), '0');
     assert.equal(m.get('bridge_stream_status_check_interval_seconds'), '10');
 
     const configured = configToSettings({

@@ -32,6 +32,24 @@ esac
 }
 
 describe('TmuxCore', () => {
+  it('enables extended keys for TUIs that distinguish Enter from newline', async () => {
+    const fakeTmux = installFakeTmux();
+    const oldPath = process.env.PATH || '';
+    const oldFakeLog = process.env.TMUX_FAKE_LOG;
+    process.env.PATH = `${fakeTmux.binDir}${path.delimiter}${oldPath}`;
+    process.env.TMUX_FAKE_LOG = fakeTmux.logPath;
+
+    try {
+      assert.equal(await tmuxCore.ensureExtendedKeys?.(), 'tmux set-option -g extended-keys on');
+      assert.equal(fs.readFileSync(fakeTmux.logPath, 'utf-8').trim(), 'set-option -g extended-keys on');
+    } finally {
+      process.env.PATH = oldPath;
+      if (oldFakeLog === undefined) delete process.env.TMUX_FAKE_LOG;
+      else process.env.TMUX_FAKE_LOG = oldFakeLog;
+      fs.rmSync(fakeTmux.binDir, { recursive: true, force: true });
+    }
+  });
+
   it('captures only the extra history needed for the requested final screen lines', async () => {
     const fakeTmux = installFakeTmux();
     const oldPath = process.env.PATH || '';

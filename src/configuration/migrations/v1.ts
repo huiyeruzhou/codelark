@@ -262,7 +262,7 @@ function patchFromLegacyConfig(config: LegacyConfigFile, warnings: string[]): Co
       enabled: boolValue(channel.enabled) ?? false,
       config: {
         historyMessageLimit: 8,
-        streamStatusIdleStartSeconds: 180,
+        streamStatusIdleStartSeconds: 0,
         streamStatusCheckIntervalSeconds: 10,
         appId: '',
         appSecret: '',
@@ -279,7 +279,7 @@ function patchFromLegacyConfig(config: LegacyConfigFile, warnings: string[]): Co
   if (channels.length > 0) patch.channels = channels;
 
   const historyMessageLimit = positiveIntValue(bridge.historyMessageLimit);
-  const streamStatusIdleStartSeconds = positiveIntValue(bridge.streamStatusIdleStartSeconds);
+  const streamStatusIdleStartSeconds = nonNegativeIntValue(bridge.streamStatusIdleStartSeconds);
   const streamStatusCheckIntervalSeconds = positiveIntValue(bridge.streamStatusCheckIntervalSeconds);
   if (historyMessageLimit !== undefined || streamStatusIdleStartSeconds !== undefined || streamStatusCheckIntervalSeconds !== undefined) {
     patch.channels ??= [{ id: 'feishu-default', provider: 'feishu' }];

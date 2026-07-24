@@ -202,6 +202,9 @@ function createChatCompletionsEventStreamPayload(model: string, responseText: st
 export async function startLocalResponsesProxy(options: {
   responseText?: string;
   responseDelayMs?: number;
+  errorWhenBodyIncludes?: string;
+  errorStatus?: number;
+  errorBody?: unknown;
 } = {}): Promise<LocalResponsesProxy> {
   const responseText = options.responseText ?? 'clk local proxy response';
   const responseDelayMs = Math.max(0, options.responseDelayMs ?? 0);
@@ -230,6 +233,13 @@ export async function startLocalResponsesProxy(options: {
       requests.push(recordedRequest);
 
       if (req.method === 'POST' && req.url?.includes('/responses')) {
+        if (options.errorWhenBodyIncludes && rawBody.includes(options.errorWhenBodyIncludes)) {
+          res.writeHead(options.errorStatus ?? 400, { 'content-type': 'application/json' });
+          res.end(JSON.stringify(options.errorBody ?? {
+            error: { type: 'invalid_request_error', message: 'CODELARK_MOCK_FATAL' },
+          }));
+          return;
+        }
         const model = typeof body === 'object'
           && body !== null
           && typeof (body as { model?: unknown }).model === 'string'

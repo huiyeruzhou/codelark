@@ -353,8 +353,8 @@ export function renderUiShellHtml(): string {
                     <input id="historyMessageLimit" type="number" min="1" max="20" value="8" />
                   </label>
                   <label>
-                    <span class="field-title">长任务提示延迟（秒） <span class="help-tip" tabindex="0" data-tip="距离上次响应超过这个时长后，飞书长任务底部才开始显示“上次响应距今 X”。">?</span></span>
-                    <input id="streamStatusIdleStartSeconds" type="number" min="1" value="180" />
+                    <span class="field-title">响应计时显示延迟（秒） <span class="help-tip" tabindex="0" data-tip="设为 0 时，从任务开始就显示并刷新“上次响应距今 X”。">?</span></span>
+                    <input id="streamStatusIdleStartSeconds" type="number" min="0" value="0" />
                   </label>
                   <label>
                     <span class="field-title">长任务提示刷新间隔（秒） <span class="help-tip" tabindex="0" data-tip="长任务提示出现后，每隔多少秒刷新一次“上次响应距今 X”。">?</span></span>
@@ -1420,8 +1420,8 @@ export function renderUiShellHtml(): string {
         defaultProvider: '默认 Codex Provider',
         defaultMode: 'Codex 默认模式',
         historyMessageLimit: '/his 返回条数',
-        streamStatusIdleStartSeconds: '长任务提示延迟',
-        streamStatusCheckIntervalSeconds: '长任务提示刷新间隔',
+        streamStatusIdleStartSeconds: '响应计时显示延迟',
+        streamStatusCheckIntervalSeconds: '响应计时刷新间隔',
         codexSkipGitRepoCheck: '允许在未信任 Git 目录运行 Codex',
         codexSandboxMode: 'Codex 文件系统权限',
         codexNetworkAccess: 'Codex 网络访问',
@@ -2160,7 +2160,7 @@ export function renderUiShellHtml(): string {
         document.getElementById('tmuxEchoInput').checked = config.tmuxEchoInput === true;
         document.getElementById('defaultMode').value = config.defaultMode === 'yolo' ? 'yolo' : 'normal';
         document.getElementById('historyMessageLimit').value = String(config.historyMessageLimit || 8);
-        document.getElementById('streamStatusIdleStartSeconds').value = String(config.streamStatusIdleStartSeconds || 180);
+        document.getElementById('streamStatusIdleStartSeconds').value = String(config.streamStatusIdleStartSeconds ?? 0);
         document.getElementById('streamStatusCheckIntervalSeconds').value = String(config.streamStatusCheckIntervalSeconds || 10);
         document.getElementById('defaultWorkspaceRoot').value = config.defaultWorkspaceRoot || '';
         renderDefaultModelOptions(config);

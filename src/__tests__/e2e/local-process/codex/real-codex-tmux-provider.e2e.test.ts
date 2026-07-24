@@ -8,6 +8,7 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 
 import { CodexRoutingProvider } from '../../../../runtime/codex/routing-provider.js';
+import { extractCodexTuiErrorMessages } from '../../../../runtime/codex/tui-runtime-signals.js';
 import { getCodexSessionByThreadIdSafe } from '../../../../bridge/session/support.js';
 import type { BridgeStore } from '../../../../domain/index.js';
 import type { OutboundMessage } from '../../../../domain/index.js';
@@ -78,6 +79,48 @@ function findCodexTuiSelectionMessage(adapter: RecordingAdapter): { message: Out
     }
   }
   return null;
+}
+
+class RecordingStreamingAdapter extends RecordingAdapter {
+  readonly statuses: string[] = [];
+  readonly streamEnds: Array<{ status: 'completed' | 'interrupted' | 'error'; text: string }> = [];
+  private activeStreamKey: string | null = null;
+
+  supportsStructuredStreamingUi(): boolean {
+    return true;
+  }
+
+  hasActiveStreamingUi(_chatId: string, streamKey?: string): boolean {
+    return Boolean(this.activeStreamKey && (!streamKey || streamKey === this.activeStreamKey));
+  }
+
+  getStructuredStreamingUiMessageId(_chatId: string, streamKey?: string): string | null {
+    return this.hasActiveStreamingUi(_chatId, streamKey) ? 'real-codex-error-card' : null;
+  }
+
+  onMirrorStreamStart(_chatId: string, streamKey?: string): void {
+    this.activeStreamKey = streamKey || null;
+  }
+
+  onStreamText(_chatId: string, _text: string, streamKey?: string): void {
+    this.activeStreamKey = streamKey || this.activeStreamKey;
+  }
+
+  onStreamStatus(_chatId: string, statusText: string, streamKey?: string): void {
+    this.activeStreamKey = streamKey || this.activeStreamKey;
+    this.statuses.push(statusText);
+  }
+
+  onStreamEnd(
+    _chatId: string,
+    status: 'completed' | 'interrupted' | 'error',
+    text: string,
+    _streamKey?: string,
+  ): Promise<boolean> {
+    this.streamEnds.push({ status, text });
+    this.activeStreamKey = null;
+    return Promise.resolve(true);
+  }
 }
 
 async function approveTrustPermission(
@@ -246,6 +289,146 @@ describe('real codex tmux provider e2e', () => {
         const body = request.body as { reasoning?: { effort?: unknown } };
         return typeof body.reasoning?.effort === 'string' && body.reasoning.effort.length > 0;
       }), true, 'Codex request body should include a reasoning effort');
+    } finally {
+      if (tmuxSessionName) {
+        await execFileAsync('tmux', ['kill-session', '-t', tmuxSessionName]).catch(() => undefined);
+      }
+      if (generatedThreadId) {
+        cleanupCodexThreadArtifacts(generatedThreadId, generatedThreadFilePath);
+      }
+      fs.rmSync(workDir, { recursive: true, force: true });
+      fs.rmSync(codexHome, { recursive: true, force: true });
+      await proxy.close().catch(() => undefined);
+      for (const [key, value] of Object.entries(previousEnv)) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+      _testOnly.resetStateForTests();
+    }
+  });
+
+  it('turns a real direct-TUI HTTP 400 into one mirror error without another user message', { timeout: 120_000 }, async (t: TestContext) => {
+    if (!(await commandAvailable('tmux', ['-V']))) {
+      t.skip('tmux is not available');
+      return;
+    }
+    if (!(await commandAvailable('codex', ['--version']))) {
+      t.skip('codex CLI is not available');
+      return;
+    }
+
+    const previousEnv = {
+      CODEX_HOME: process.env.CODEX_HOME,
+      CODELARK_CODEX_BASE_URL: process.env.CODELARK_CODEX_BASE_URL,
+      CODELARK_CODEX_API_KEY: process.env.CODELARK_CODEX_API_KEY,
+      CODEX_API_KEY: process.env.CODEX_API_KEY,
+      OPENAI_API_KEY: process.env.OPENAI_API_KEY,
+      CODELARK_CODEX_SKIP_GIT_REPO_CHECK: process.env.CODELARK_CODEX_SKIP_GIT_REPO_CHECK,
+    };
+    const fatalMarker = 'CODELARK_DIRECT_TUI_FATAL';
+    const codexHome = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-real-codex-home-error-'));
+    const proxy = await startLocalResponsesProxy({
+      errorWhenBodyIncludes: fatalMarker,
+      errorBody: {
+        error: { type: 'invalid_request_error', message: 'CODELARK_MOCK_FATAL' },
+      },
+    });
+    process.env.CODEX_HOME = codexHome;
+    process.env.CODELARK_CODEX_BASE_URL = proxy.baseUrl;
+    process.env.CODELARK_CODEX_API_KEY = 'clk-local-proxy-key';
+    process.env.CODEX_API_KEY = 'clk-local-proxy-key';
+    process.env.OPENAI_API_KEY = 'clk-local-proxy-key';
+    process.env.CODELARK_CODEX_SKIP_GIT_REPO_CHECK = 'true';
+
+    resetBridgeTestState({ cleanCodexHome: true });
+    seedCodexApiKeyAuth(codexHome, 'clk-local-proxy-key');
+    fs.writeFileSync(path.join(codexHome, 'config.toml'), [
+      'model_provider = "mock"',
+      '',
+      '[model_providers.mock]',
+      'name = "mock"',
+      `base_url = "${proxy.baseUrl}"`,
+      'env_key = "OPENAI_API_KEY"',
+      'wire_api = "responses"',
+      'request_max_retries = 0',
+      'stream_max_retries = 0',
+      'requires_openai_auth = false',
+      'supports_websockets = false',
+      '',
+    ].join('\n'));
+    _testOnly.resetStateForTests();
+
+    const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-real-tmux-error-'));
+    const settings = makeBridgeSettings({
+      bridge_default_provider: 'tmux',
+      bridge_default_model: process.env[REAL_CODEX_E2E_MODEL_ENV] || 'gpt-5.4',
+      bridge_codex_reasoning_effort: 'low',
+    });
+    const pendingPerms = new PendingPermissions();
+    const store = initBridgeTestContext({
+      settings,
+      llm: new CodexRoutingProvider(pendingPerms, 'tmux'),
+      permissions: {
+        resolvePendingPermission: (id, resolution) => pendingPerms.resolve(id, resolution),
+      },
+    });
+    const adapter = new RecordingStreamingAdapter();
+    registerAdapter(adapter);
+    (globalThis as unknown as Record<string, any>).__bridge_manager__.running = true;
+    const address = { channelType: 'feishu', chatId: `chat-real-tmux-error-${process.pid}-${Date.now()}` } as const;
+    let tmuxSessionName = '';
+    let generatedThreadId = '';
+    let generatedThreadFilePath = '';
+
+    try {
+      await _testOnly.handleMessage(adapter, inboundMessage(address, `/clear real-tmux-error ${workDir}`, 'incoming-error-new'));
+      await _testOnly.handleMessage(adapter, inboundMessage(address, '/provider tmux', 'incoming-error-provider'));
+      const binding = store.getChannelChat(address.channelType, address.chatId);
+      assert.ok(binding);
+      const session = store.getSession(binding.bridgeSessionId);
+      generatedThreadId = session?.runtime?.codex?.threadId?.trim() || '';
+      tmuxSessionName = session?.runtime?.general?.tmuxSessionName || '';
+      assert.match(generatedThreadId, /^[0-9a-f-]{20,}$/i);
+      assert.equal(tmuxSessionName, `codex_${generatedThreadId}`);
+      generatedThreadFilePath = getCodexSessionByThreadIdSafe(generatedThreadId, 'real tmux error cleanup lookup')?.filePath || '';
+
+      await _testOnly.reconcileMirrorSubscriptions();
+      await execFileAsync('tmux', ['resize-window', '-t', tmuxSessionName, '-x', '60', '-y', '42']);
+      await execFileAsync('tmux', ['send-keys', '-t', `${tmuxSessionName}:0.0`, '-l', fatalMarker]);
+      await new Promise((resolve) => setTimeout(resolve, 250));
+      await execFileAsync('tmux', ['send-keys', '-t', `${tmuxSessionName}:0.0`, 'Enter']);
+      await new Promise((resolve) => setTimeout(resolve, 250));
+      const afterSubmit = await execFileAsync('tmux', ['capture-pane', '-p', '-t', `${tmuxSessionName}:0.0`, '-S', '-80']);
+      if (afterSubmit.stdout.includes(`› ${fatalMarker}`)) {
+        await execFileAsync('tmux', ['send-keys', '-t', `${tmuxSessionName}:0.0`, 'Enter']);
+      }
+
+      const sawSquare = await waitForCondition(async () => {
+        const capture = await execFileAsync('tmux', ['capture-pane', '-p', '-t', `${tmuxSessionName}:0.0`, '-S', '-80'])
+          .catch(() => ({ stdout: '', stderr: '' }));
+        return extractCodexTuiErrorMessages(capture.stdout)
+          .some((message) => message.includes('CODELARK_MOCK_FATAL'));
+      }, 15_000, 100);
+      assert.equal(sawSquare, true, 'real Codex TUI should render the HTTP 400 as a square error cell');
+
+      const deliveredError = await waitForCondition(async () => {
+        await _testOnly.reconcileMirrorSubscriptions();
+        return adapter.streamEnds.some((entry) => entry.status === 'error');
+      }, 15_000, 100);
+      assert.equal(deliveredError, true, 'mirror should finalize the direct TUI turn as error without another input');
+      assert.equal(adapter.streamEnds.filter((entry) => entry.status === 'error').length, 1);
+      assert.match(adapter.statuses.at(-1) || '', /invalid_request_error · CODELARK_MOCK_FATAL/);
+      assert.doesNotMatch(adapter.statuses.at(-1) || '', /处理中/);
+
+      const rollout = fs.readFileSync(generatedThreadFilePath, 'utf-8')
+        .split(/\r?\n/)
+        .filter(Boolean)
+        .map((line) => JSON.parse(line) as { type?: string; payload?: { type?: string; error?: unknown; last_agent_message?: unknown } });
+      const fatalComplete = rollout.findLast((entry) => entry.type === 'event_msg' && entry.payload?.type === 'task_complete');
+      assert.ok(fatalComplete);
+      assert.equal(fatalComplete.payload?.last_agent_message, null);
+      assert.equal(fatalComplete.payload?.error, undefined, 'Codex 0.144.3 rollout should exercise the TUI fallback');
+      assert.equal(proxy.requests.filter((request) => request.rawBody.includes(fatalMarker)).length, 1);
     } finally {
       if (tmuxSessionName) {
         await execFileAsync('tmux', ['kill-session', '-t', tmuxSessionName]).catch(() => undefined);

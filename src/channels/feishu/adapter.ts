@@ -110,6 +110,7 @@ interface FeishuCardState {
   toolCalls: ToolCallInfo[];
   historyItems: StreamingHistoryItem[];
   historyItemOffset: number;
+  historyToolCallOffset: number;
   toolCallOffset: number;
   historyDriven: boolean;
   thinking: boolean;
@@ -192,6 +193,8 @@ interface StreamingHistoryRenderState {
   elementIds: string[];
   elementJson: Record<string, string>;
   elementsById: Record<string, Record<string, unknown>>;
+  toolSnapshots: Record<string, string>;
+  toolEventCounts: Record<string, number>;
 }
 
 interface StreamingHistoryAppendOperation {
@@ -287,6 +290,7 @@ interface StreamingCardRenderResult {
   body: Record<string, unknown>;
   componentCount: number;
   historyItemOffset: number;
+  historyToolCallOffset: number;
   toolCallOffset: number;
   historyItems?: StreamingHistoryItem[];
   tools: ToolCallInfo[];
@@ -300,6 +304,7 @@ interface StreamingCardPayloadStats {
 
 interface StreamingCardRolloverOffsets {
   historyItemOffset: number;
+  historyToolCallOffset: number;
   toolCallOffset: number;
   reason: string;
   componentCount?: number;
@@ -318,6 +323,7 @@ interface StreamingCardInitialState {
   actionRows: FeishuCardActionButton[][];
   terminalContextUsageText: string;
   historyItemOffset: number;
+  historyToolCallOffset: number;
   toolCallOffset: number;
   continuationIndex: number;
   startTime: number;
@@ -1177,16 +1183,18 @@ function buildStreamingCardRender(params: {
   metadata?: StructuredStreamingUiMetadata;
   historyItems?: StreamingHistoryItem[];
   historyItemOffset?: number;
+  historyToolCallOffset?: number;
   toolCallOffset?: number;
   maxComponents?: number;
 }): StreamingCardRenderResult {
   let historyItemOffset = Math.max(0, params.historyItemOffset || 0);
+  let historyToolCallOffset = Math.max(0, params.historyToolCallOffset || 0);
   let toolCallOffset = Math.max(0, params.toolCallOffset || 0);
   const maxComponents = Math.max(1, params.maxComponents || STREAMING_CARD_COMPONENT_LIMIT);
 
   while (true) {
     const visibleHistoryItems = params.historyItems
-      ? params.historyItems.slice(historyItemOffset)
+      ? sliceStreamingHistoryItems(params.historyItems, historyItemOffset, historyToolCallOffset)
       : undefined;
     const visibleTools = params.tools.slice(toolCallOffset);
     const body = buildStreamingCardBody(
@@ -1205,6 +1213,7 @@ function buildStreamingCardRender(params: {
         body,
         componentCount,
         historyItemOffset,
+        historyToolCallOffset,
         toolCallOffset,
         historyItems: visibleHistoryItems,
         tools: visibleTools,
@@ -1213,6 +1222,7 @@ function buildStreamingCardRender(params: {
 
     if (params.historyItems && historyItemOffset < Math.max(0, params.historyItems.length - 1)) {
       historyItemOffset += 1;
+      historyToolCallOffset = 0;
       continue;
     }
     if (!params.historyItems && toolCallOffset < params.tools.length) {
@@ -1224,6 +1234,7 @@ function buildStreamingCardRender(params: {
       body,
       componentCount,
       historyItemOffset,
+      historyToolCallOffset,
       toolCallOffset,
       historyItems: visibleHistoryItems,
       tools: visibleTools,
@@ -1243,6 +1254,14 @@ function resolveTerminalContextUsage(state: Pick<FeishuCardState, 'terminalConte
   return state.terminalContextUsageText || extractTerminalContextUsage(state.pendingStatusText);
 }
 
+function extractTerminalErrorStatus(statusText: string | null | undefined): string {
+  for (const line of (statusText || '').split(/\r?\n/)) {
+    const match = line.trim().match(/^(?:当前步骤：)?(❌\s*.+)$/u);
+    if (match?.[1]) return match[1].trim();
+  }
+  return '';
+}
+
 function toolGroupSnapshotSignature(tools: ToolCallInfo[]): string {
   return JSON.stringify(tools);
 }
@@ -1255,12 +1274,123 @@ function buildRenderedToolEventCounts(tools: ToolCallInfo[]): Record<string, num
   return tools.length > 0 ? { stream_tool_1: tools.length } : {};
 }
 
+function buildRenderedHistoryToolSnapshots(items: StreamingHistoryItem[] | undefined): Record<string, string> {
+  const snapshots: Record<string, string> = {};
+  let panelIndex = 0;
+  for (const item of items || []) {
+    if (item.type !== 'tool_panel') continue;
+    panelIndex += 1;
+    snapshots[`stream_tool_${panelIndex}`] = toolGroupSnapshotSignature(item.tools);
+  }
+  return snapshots;
+}
+
+function buildRenderedHistoryToolEventCounts(items: StreamingHistoryItem[] | undefined): Record<string, number> {
+  const counts: Record<string, number> = {};
+  let panelIndex = 0;
+  for (const item of items || []) {
+    if (item.type !== 'tool_panel') continue;
+    panelIndex += 1;
+    counts[`stream_tool_${panelIndex}`] = item.tools.length;
+  }
+  return counts;
+}
+
 function renderedStreamingToolCount(state: FeishuCardState): number {
   return state.renderedToolEventCounts.stream_tool_1 || 0;
 }
 
+function sliceStreamingHistoryItems(
+  items: StreamingHistoryItem[],
+  historyItemOffset: number,
+  historyToolCallOffset: number,
+): StreamingHistoryItem[] {
+  const visible = items.slice(Math.max(0, historyItemOffset)).map((item) => (
+    item.type === 'tool_panel' ? { ...item, tools: item.tools.slice() } : { ...item }
+  ));
+  const first = visible[0];
+  if (first?.type === 'tool_panel' && historyToolCallOffset > 0) {
+    first.tools = first.tools.slice(historyToolCallOffset);
+  }
+  return visible;
+}
+
 function visibleStreamingHistoryItems(state: FeishuCardState): StreamingHistoryItem[] | undefined {
-  return state.historyDriven ? state.historyItems.slice(state.historyItemOffset) : undefined;
+  return state.historyDriven
+    ? sliceStreamingHistoryItems(state.historyItems, state.historyItemOffset, state.historyToolCallOffset)
+    : undefined;
+}
+
+function renderedHistoryContinuationCursor(
+  state: FeishuCardState,
+): { historyItemOffset: number; historyToolCallOffset: number } {
+  const lastItemOffset = Math.max(0, state.historyItems.length - 1);
+  const renderedItemCount = Math.max(1, state.renderedHistoryItemCount);
+  const lastRenderedItemOffset = Math.min(
+    state.historyItemOffset + renderedItemCount - 1,
+    lastItemOffset,
+  );
+  const nextItemOffset = Math.min(
+    state.historyItemOffset + renderedItemCount,
+    lastItemOffset,
+  );
+  const nextItem = state.historyItems[nextItemOffset];
+  if (nextItemOffset !== lastRenderedItemOffset || nextItem?.type !== 'tool_panel') {
+    return { historyItemOffset: nextItemOffset, historyToolCallOffset: 0 };
+  }
+
+  const panelIndex = state.historyItems
+    .slice(state.historyItemOffset, nextItemOffset + 1)
+    .filter((item) => item.type === 'tool_panel')
+    .length;
+  const renderedVisibleToolCount = state.renderedToolEventCounts[`stream_tool_${panelIndex}`] || 0;
+  const currentToolOffset = nextItemOffset === state.historyItemOffset
+    ? state.historyToolCallOffset
+    : 0;
+  const nextToolOffset = Math.min(
+    currentToolOffset + Math.max(1, renderedVisibleToolCount),
+    Math.max(0, nextItem.tools.length - 1),
+  );
+  return {
+    historyItemOffset: nextItemOffset,
+    historyToolCallOffset: nextToolOffset,
+  };
+}
+
+function historyCursorAdvanced(
+  state: FeishuCardState,
+  cursor: { historyItemOffset: number; historyToolCallOffset: number },
+): boolean {
+  return cursor.historyItemOffset > state.historyItemOffset
+    || (
+      cursor.historyItemOffset === state.historyItemOffset
+      && cursor.historyToolCallOffset > state.historyToolCallOffset
+    );
+}
+
+function streamingHistoryItemsBeforeCursor(
+  state: FeishuCardState,
+  cursor: { historyItemOffset: number; historyToolCallOffset: number },
+): StreamingHistoryItem[] {
+  const result: StreamingHistoryItem[] = [];
+  for (let index = state.historyItemOffset; index <= cursor.historyItemOffset; index += 1) {
+    const item = state.historyItems[index];
+    if (!item) break;
+    const startToolOffset = index === state.historyItemOffset ? state.historyToolCallOffset : 0;
+    if (index < cursor.historyItemOffset) {
+      result.push(item.type === 'tool_panel'
+        ? { ...item, tools: item.tools.slice(startToolOffset) }
+        : { ...item });
+      continue;
+    }
+    if (item.type === 'tool_panel' && cursor.historyToolCallOffset > startToolOffset) {
+      result.push({
+        ...item,
+        tools: item.tools.slice(startToolOffset, cursor.historyToolCallOffset),
+      });
+    }
+  }
+  return result;
 }
 
 function visibleStreamingToolCalls(state: FeishuCardState): ToolCallInfo[] {
@@ -1298,7 +1428,13 @@ function buildStreamingHistoryRenderState(
     elementJson[elementIdValue] = JSON.stringify(element);
     elementsById[elementIdValue] = element;
   }
-  return { elementIds, elementJson, elementsById };
+  return {
+    elementIds,
+    elementJson,
+    elementsById,
+    toolSnapshots: historyItems ? buildRenderedHistoryToolSnapshots(historyItems) : {},
+    toolEventCounts: historyItems ? buildRenderedHistoryToolEventCounts(historyItems) : {},
+  };
 }
 
 function buildStreamingToolAppendOperations(
@@ -1355,12 +1491,16 @@ function buildStreamingHistoryAppendOperations(
     if (!element || !elementJson) continue;
 
     if (!state.renderedHistoryElementJson[elementId]) {
+      const snapshot = desired.toolSnapshots[elementId];
+      const eventCount = desired.toolEventCounts[elementId];
       operations.push({
         kind: 'create',
         elementId,
         targetElementId: 'stream_history',
         element,
         elementJson,
+        ...(snapshot ? { snapshot } : {}),
+        ...(eventCount ? { eventCount } : {}),
       });
       continue;
     }
@@ -3047,6 +3187,7 @@ export class FeishuAdapter extends BaseChannelAdapter {
         metadata: initialMetadata,
         historyItems: initialHistoryItems,
         historyItemOffset: initialState?.historyItemOffset,
+        historyToolCallOffset: initialState?.historyToolCallOffset,
         toolCallOffset: initialState?.toolCallOffset,
       });
       const cardBody = render.body;
@@ -3136,6 +3277,7 @@ export class FeishuAdapter extends BaseChannelAdapter {
         toolCalls: initialTools,
         historyItems: initialState?.historyItems ?? [],
         historyItemOffset: render.historyItemOffset,
+        historyToolCallOffset: render.historyToolCallOffset,
         toolCallOffset: render.toolCallOffset,
         historyDriven: initialState?.historyDriven ?? false,
         thinking: initialState ? false : true,
@@ -3149,8 +3291,12 @@ export class FeishuAdapter extends BaseChannelAdapter {
         renderedHistoryElementIds: renderedHistory.elementIds,
         renderedHistoryItemCount: initialState?.historyDriven ? render.historyItems?.length || 0 : 0,
         renderedHistoryElementJson: renderedHistory.elementJson,
-        renderedToolSnapshots: buildRenderedToolSnapshots(render.tools),
-        renderedToolEventCounts: buildRenderedToolEventCounts(render.tools),
+        renderedToolSnapshots: initialState?.historyDriven
+          ? buildRenderedHistoryToolSnapshots(render.historyItems)
+          : buildRenderedToolSnapshots(render.tools),
+        renderedToolEventCounts: initialState?.historyDriven
+          ? buildRenderedHistoryToolEventCounts(render.historyItems)
+          : buildRenderedToolEventCounts(render.tools),
         renderedStatusText: initialStatusText,
         renderedHistorySignature: streamingHistorySignature(initialState?.historyDriven ? render.historyItems || [] : []),
         actionRows: initialActionRows,
@@ -3337,6 +3483,7 @@ export class FeishuAdapter extends BaseChannelAdapter {
       metadata,
       historyItems: state.historyDriven ? state.historyItems : undefined,
       historyItemOffset: state.historyItemOffset,
+      historyToolCallOffset: state.historyToolCallOffset,
       toolCallOffset: state.toolCallOffset,
       maxComponents,
     });
@@ -3367,11 +3514,10 @@ export class FeishuAdapter extends BaseChannelAdapter {
       ? 'component_count'
       : payloadReason!;
     if (state.historyDriven && state.historyItems.length > 0) {
-      const renderedAbsoluteCount = state.historyItemOffset + Math.max(1, state.renderedHistoryItemCount);
-      const nextOffset = Math.min(renderedAbsoluteCount, Math.max(0, state.historyItems.length - 1));
-      if (nextOffset > state.historyItemOffset) {
+      const cursor = renderedHistoryContinuationCursor(state);
+      if (historyCursorAdvanced(state, cursor)) {
         return {
-          historyItemOffset: nextOffset,
+          ...cursor,
           toolCallOffset: state.toolCallOffset,
           reason,
           componentCount: fullRender.componentCount,
@@ -3387,6 +3533,7 @@ export class FeishuAdapter extends BaseChannelAdapter {
         : state.toolCallOffset;
       return {
         historyItemOffset: state.historyItemOffset,
+        historyToolCallOffset: state.historyToolCallOffset,
         toolCallOffset: nextOffset,
         reason,
         componentCount: fullRender.componentCount,
@@ -3399,11 +3546,10 @@ export class FeishuAdapter extends BaseChannelAdapter {
 
   private streamingCardContinuationOffsets(
     state: FeishuCardState,
-  ): { historyItemOffset: number; toolCallOffset: number } {
+  ): { historyItemOffset: number; historyToolCallOffset: number; toolCallOffset: number } {
     if (state.historyDriven && state.historyItems.length > 0) {
-      const renderedAbsoluteCount = state.historyItemOffset + Math.max(1, state.renderedHistoryItemCount);
       return {
-        historyItemOffset: Math.min(renderedAbsoluteCount, Math.max(0, state.historyItems.length - 1)),
+        ...renderedHistoryContinuationCursor(state),
         toolCallOffset: state.toolCallOffset,
       };
     }
@@ -3411,6 +3557,7 @@ export class FeishuAdapter extends BaseChannelAdapter {
       const renderedToolCount = renderedStreamingToolCount(state);
       return {
         historyItemOffset: state.historyItemOffset,
+        historyToolCallOffset: state.historyToolCallOffset,
         toolCallOffset: renderedToolCount < state.toolCalls.length
           ? Math.min(state.toolCallOffset + renderedToolCount, Math.max(0, state.toolCalls.length - 1))
           : state.toolCallOffset,
@@ -3418,6 +3565,7 @@ export class FeishuAdapter extends BaseChannelAdapter {
     }
     return {
       historyItemOffset: state.historyItemOffset,
+      historyToolCallOffset: state.historyToolCallOffset,
       toolCallOffset: state.toolCallOffset,
     };
   }
@@ -3425,7 +3573,7 @@ export class FeishuAdapter extends BaseChannelAdapter {
   private async rolloverStreamingCard(
     streamKey: string,
     state: FeishuCardState,
-    offsets: { historyItemOffset: number; toolCallOffset: number },
+    offsets: { historyItemOffset: number; historyToolCallOffset: number; toolCallOffset: number },
     content: string,
     tasksText: string,
     statusText: string,
@@ -3437,7 +3585,7 @@ export class FeishuAdapter extends BaseChannelAdapter {
     if (!cardkit?.card?.settings) return false;
 
     try {
-      await this.finalizeRolloverSourceCard(streamKey, state);
+      await this.finalizeRolloverSourceCard(streamKey, state, offsets);
     } catch (error) {
       this.markCardFlushFailure(state, error);
       console.warn('[feishu-adapter] Failed to close saturated streaming card before rollover:', error instanceof Error ? error.message : error);
@@ -3456,6 +3604,7 @@ export class FeishuAdapter extends BaseChannelAdapter {
       actionRows,
       terminalContextUsageText: state.terminalContextUsageText,
       historyItemOffset: offsets.historyItemOffset,
+      historyToolCallOffset: offsets.historyToolCallOffset,
       toolCallOffset: offsets.toolCallOffset,
       continuationIndex: state.continuationIndex + 1,
       startTime: state.startTime,
@@ -3480,6 +3629,7 @@ export class FeishuAdapter extends BaseChannelAdapter {
         previousCardId: state.cardId,
         nextIndex: nextInitialState.continuationIndex,
         historyItemOffset: offsets.historyItemOffset,
+        historyToolCallOffset: offsets.historyToolCallOffset,
         toolCallOffset: offsets.toolCallOffset,
         reason,
       });
@@ -3507,6 +3657,7 @@ export class FeishuAdapter extends BaseChannelAdapter {
       cardId: state.cardId,
       reason,
       historyItemOffset: offsets.historyItemOffset,
+      historyToolCallOffset: offsets.historyToolCallOffset,
       toolCallOffset: offsets.toolCallOffset,
     });
     return this.rolloverStreamingCard(
@@ -3525,6 +3676,7 @@ export class FeishuAdapter extends BaseChannelAdapter {
   private async finalizeRolloverSourceCard(
     streamKey: string,
     state: FeishuCardState,
+    continuationOffsets: { historyItemOffset: number; historyToolCallOffset: number },
   ): Promise<void> {
     const cardkit = (this.restClient as any)?.cardkit?.v1;
     const statusText = [
@@ -3568,10 +3720,7 @@ export class FeishuAdapter extends BaseChannelAdapter {
       // Rebuild only the last successfully rendered shadow so pending continuation
       // content remains exclusively on the next card.
       const renderedHistoryItems = state.historyDriven
-        ? state.historyItems.slice(
-          state.historyItemOffset,
-          state.historyItemOffset + state.renderedHistoryItemCount,
-        )
+        ? streamingHistoryItemsBeforeCursor(state, continuationOffsets)
         : undefined;
       const renderedToolCount = renderedStreamingToolCount(state);
       const renderedTools = state.historyDriven
@@ -4443,7 +4592,7 @@ export class FeishuAdapter extends BaseChannelAdapter {
       const statusLabels: Record<string, string> = {
         completed: '',
         interrupted: '⚠️ Interrupted',
-        error: '❌ Error',
+        error: extractTerminalErrorStatus(state.pendingStatusText) || '❌ 异常',
       };
       const elapsedMs = Date.now() - state.startTime;
       const footer = {
@@ -4534,7 +4683,11 @@ export class FeishuAdapter extends BaseChannelAdapter {
     } catch (err) {
       if (state.historyDriven) {
         const footerText = [
-          status === 'completed' ? '' : status === 'error' ? '❌ Error' : '⚠️ Interrupted',
+          status === 'completed'
+            ? ''
+            : status === 'error'
+              ? extractTerminalErrorStatus(state.pendingStatusText) || '❌ 异常'
+              : '⚠️ Interrupted',
           formatElapsed(Date.now() - state.startTime),
           resolveTerminalContextUsage(state),
         ].filter(Boolean).join(' · ');
@@ -4958,9 +5111,14 @@ export class FeishuAdapter extends BaseChannelAdapter {
       state.renderedHistoryItemCount = state.historyDriven ? render.historyItems?.length || 0 : 0;
       state.renderedHistoryElementJson = renderedHistory.elementJson;
       state.historyItemOffset = render.historyItemOffset;
+      state.historyToolCallOffset = render.historyToolCallOffset;
       state.toolCallOffset = render.toolCallOffset;
-      state.renderedToolSnapshots = buildRenderedToolSnapshots(render.tools);
-      state.renderedToolEventCounts = buildRenderedToolEventCounts(render.tools);
+      state.renderedToolSnapshots = state.historyDriven
+        ? buildRenderedHistoryToolSnapshots(render.historyItems)
+        : buildRenderedToolSnapshots(render.tools);
+      state.renderedToolEventCounts = state.historyDriven
+        ? buildRenderedHistoryToolEventCounts(render.historyItems)
+        : buildRenderedToolEventCounts(render.tools);
       state.renderedStatusText = statusText;
       state.renderedHistorySignature = streamingHistorySignature(render.historyItems || []);
       state.renderedActionSignature = cardActionRowsSignature(actionRows);

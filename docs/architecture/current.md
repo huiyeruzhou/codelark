@@ -293,7 +293,7 @@ Turn reducer 会按 record 类型更新同一个 `BridgeMirrorTurnState`：
 - `tool_started` / `tool_finished`：转换成 Codex turn event 后写入 `toolCalls`。
 - `context_usage`：写入 `contextUsage`。
 - `goal_status`：写入 `goalStatus`；如果当前 turn 已经有正文、用户文本、工具或任务进展，才触发正文区域刷新。只有 active goal 状态、没有可见进展的空 turn 不会启动 mirror stream。
-- `task_complete` / `task_aborted`：结束当前 pending turn，形成 `FinalizedBridgeMirrorTurn`；如果 active turn 能 claim 这个终态，则交给 active IM turn，否则作为 mirror final delivery。连续 3 个只有 active goal 状态、没有可见进展的空 turn 会产生一次 goal loop warning，避免无限重启时刷出空镜像卡片。
+- `task_complete` / `task_aborted`：结束当前 pending turn，形成 `FinalizedBridgeMirrorTurn`；当 Codex 版本在 `task_complete.error` 中提供结构化错误时，必须保留为 runtime-neutral `errorText` 并把终态设为 `error`，不能因为事件名仍叫 complete 就画成成功。Codex CLI 0.144.3 的不可重试 HTTP 错误不会把原因写入 rollout，此时由 tmux TUI 的本回合新增 `■` 行补齐同一字段。如果 active turn 能 claim 这个终态，则交给 active IM turn，否则作为 mirror final delivery。连续 3 个只有 active goal 状态、没有可见进展的空 turn 会产生一次 goal loop warning，避免无限重启时刷出空镜像卡片。
 
 Runtime source adapter 必须先把底层事件规范化，再交给上述 reducer。Kimi Code 会按 `step.end → usage.record` 写入终态统计；adapter 必须把这条 usage 归回刚结束的同一 turn（同一增量内排到 terminal 前，跨增量且 terminal 已消费时丢弃孤立 usage），不能让它创建一张没有后续 terminal 的 `Thinking...` 卡。Kimi `context.append_message` 中 `origin.kind=injection` 的内部 reminder 也必须在 source adapter 过滤，不能进入通用 history 或飞书卡片。这个约束属于 provider 解析层；统一 turn reducer 和 Feishu renderer 不应增加 Kimi 特判。
 
@@ -321,6 +321,9 @@ Feedback controller 把 reducer hook 映射到 stream UI：
 - 为降低 CardKit `batchUpdate` 被服务端接受但客户端不重绘的风险，planner 会把两类增量直接改判为 full refresh：history 中出现用户文本更新；desired card 组件数不超过 20 且本轮 create/patch 原本会形成实际 `card.batchUpdate`。
 - metadata、actions、layout signature、shadow trust 或 history/tool 结构不再可证明安全时，走 full refresh，即 `card.update:streaming_refresh`。
 - 组件数接近上限时，先 rollover 到 continuation card，失败后再 full refresh。
+- 连续工具在公共 history 中始终保留为一个 runtime-neutral `tool_panel`；Feishu continuation cursor 同时记录 history item index 和 panel 内 tool index，因此分页原子是单个工具调用，外层“工具调用 · N”只是每张卡对当前可见工具的重新分组。不能预先把公共 panel 改写成若干大块，也不能为了让整组塞进一张卡而降低 apply_patch 的 8,000 字符/160 行详情上限。
+- 用户输入由同一个 runtime-neutral history item 渲染：不超过 800 个 Unicode 字符时保持普通 markdown；超过后使用无边框、默认收起的 panel，标题展示规范化后的前 240 字符，展开内容保留完整原文。该规则属于 Feishu 展示层，不改写 Codex、Claude 或 Kimi 的 history 数据。
+- final renderer 判断正文是否存在时必须同时考虑 `text`、legacy `tools` 和 runtime-neutral `historyItems`。已有 stream message 的 mirror finalize 会故意传空 text 以避免重复；若漏掉 history，工具-only / history-only 卡会在终态 full update 时被错误替换成只有 footer 的空卡。
 
 因此“只对变化 element 调 `cardElement.content`”是正文、任务、状态这类固定元素的正常快路径；当前实现还保留 create/patch、batchUpdate、direct full refresh 和 rollover 作为工具/history/结构变化与失败恢复路径。sync plan 日志会记录 desired component count、direct refresh 阈值、增量 action 类型/element IDs、是否命中用户文本更新和 direct refresh rule，便于核对 planner 分流。
 

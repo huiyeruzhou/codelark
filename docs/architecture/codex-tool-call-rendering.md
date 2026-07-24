@@ -45,6 +45,8 @@ const patch = "*** Begin Patch\n*** Update File: src/app.ts\n@@\n+const enabled 
 text(await tools.apply_patch(patch));
 ```
 
+`7705a548` 的真实现场正是这一形态：外层 `exec` 只有 3 个物理行，70 行 patch 全部编码在字符串的 `\n` 中。旧部署尚无 AST 解包，因而把那 3 行 wrapper 原样放进 CodeFence，飞书看到的自然是一行长字符串；不是客户端把一个 70 行 diff 压平，也与 18k/30k payload 阈值无关。当前 normalizer 对同一 rollout call 还原为单一 `apply_patch` 和 70 个真实物理行，真实 CardKit 回放也必须在终态保留完整 Begin/End fence。
+
 CodeLark 不执行这段 JavaScript。normalizer 使用 Acorn 解析 AST，再只解释 literal、object/array、简单字符串拼接和静态变量引用等白名单节点；动态 import、任意函数调用和其他表达式不会被求值。这样可以可靠跳过字符串/注释中的伪调用，并找出 `Promise.all` 等编排结构里的 `tools.<name>(...)`。
 
 单个内层调用且参数可静态确定时，外层 `exec` 会被还原为内层工具名称和输入，随后完全复用旧格式的 detail 与 renderer：

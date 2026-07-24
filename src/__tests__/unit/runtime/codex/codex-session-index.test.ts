@@ -955,6 +955,36 @@ describe('readCodexSessionMirrorRecordStreamByFilePath', () => {
     fs.rmSync(tempRoot, { recursive: true, force: true });
   });
 
+  it('preserves the structured error carried by Codex task_complete', () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-codex-mirror-'));
+    const filePath = path.join(tempRoot, 'rollout.jsonl');
+    fs.writeFileSync(
+      filePath,
+      JSON.stringify({
+        timestamp: '2026-03-25T00:00:00.000Z',
+        type: 'event_msg',
+        payload: {
+          type: 'task_complete',
+          turn_id: 'turn-error',
+          last_agent_message: '',
+          error: { message: 'stream failed after retries' },
+        },
+      }),
+      'utf-8',
+    );
+
+    const records = readCodexSessionMirrorRecordStreamByFilePath(filePath);
+
+    assert.equal(records.length, 1);
+    assert.equal(records[0]?.type, 'task_complete');
+    assert.equal(records[0]?.turnId, 'turn-error');
+    assert.equal(records[0]?.isError, true);
+    assert.match(records[0]?.errorText || '', /stream failed after retries/);
+    assert.equal(records[0]?.content, '');
+
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  });
+
   it('preserves markdown-style line breaks in mirror task_complete records', () => {
     const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-codex-mirror-'));
     const filePath = path.join(tempRoot, 'rollout.jsonl');
@@ -1970,6 +2000,47 @@ describe('readCodexSessionMirrorRecordStreamByFilePath', () => {
     fs.rmSync(tempRoot, { recursive: true, force: true });
   });
 
+  it('rewrites goal-resume AGENTS instructions without environment context to a system notice', () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-codex-mirror-'));
+    const filePath = path.join(tempRoot, 'rollout.jsonl');
+    const instructions = [
+      '# AGENTS.md instructions for /repo/project',
+      '',
+      '<INSTRUCTIONS>',
+      'These AGENTS.md instructions replace all previously provided AGENTS.md instructions.',
+      '',
+      '# AGENTS.md',
+      'read docs',
+      '</INSTRUCTIONS>',
+    ].join('\n');
+    fs.writeFileSync(
+      filePath,
+      JSON.stringify({
+        timestamp: '2026-07-24T20:49:24.803Z',
+        type: 'response_item',
+        payload: {
+          type: 'message',
+          role: 'user',
+          content: [{ type: 'input_text', text: instructions }],
+        },
+      }) + '\n',
+      'utf-8',
+    );
+
+    const delta = readCodexSessionMirrorRecordDeltaByFilePath(filePath, 0, fs.statSync(filePath).size);
+    assert.deepEqual(delta.records.map((record) => ({ role: record.role, content: record.content })), [
+      { role: 'system', content: '> ⚙️ 环境上下文已加载' },
+    ]);
+    assert.doesNotMatch(JSON.stringify(delta.records), /AGENTS\.md instructions|<INSTRUCTIONS>/);
+
+    const eventDelta = readCodexSessionEventDeltaByFilePath(filePath, 0, fs.statSync(filePath).size);
+    assert.deepEqual(eventDelta.events.map((event) => ({ role: event.role, content: event.content })), [
+      { role: 'system', content: '> ⚙️ 环境上下文已加载' },
+    ]);
+
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  });
+
   it('rewrites standalone environment context user messages to a quoted system notice', () => {
     const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-codex-mirror-'));
     const filePath = path.join(tempRoot, 'rollout.jsonl');
@@ -2040,6 +2111,11 @@ describe('readCodexSessionMirrorRecordStreamByFilePath', () => {
           timestamp: '2026-05-14T00:00:03.000Z',
           type: 'event_msg',
           payload: { type: 'thread_rolled_back', num_turns: 1 },
+        }),
+        JSON.stringify({
+          timestamp: '2026-05-14T00:00:03.500Z',
+          type: 'event_msg',
+          payload: { type: 'thread_settings_applied', thread_settings: { model: 'gpt-5.6-sol' } },
         }),
         JSON.stringify({
           timestamp: '2026-05-14T00:00:04.000Z',

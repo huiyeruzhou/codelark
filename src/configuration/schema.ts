@@ -63,7 +63,7 @@ export const bridgeConfigSchema = z.object({
 
 export const channelBehaviorConfigSchema = z.object({
   historyMessageLimit: positiveIntegerSchema,
-  streamStatusIdleStartSeconds: positiveIntegerSchema,
+  streamStatusIdleStartSeconds: nonNegativeIntegerSchema,
   streamStatusCheckIntervalSeconds: positiveIntegerSchema,
   appId: z.string(),
   appSecret: z.string(),

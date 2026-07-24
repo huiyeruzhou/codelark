@@ -92,7 +92,7 @@ const uiConfigPayloadSchema = z.object({
     (value) => value === undefined || value <= 20,
     { message: '历史消息条数必须在 1 到 20 之间。' },
   ),
-  streamStatusIdleStartSeconds: optionalPositiveInteger(),
+  streamStatusIdleStartSeconds: optionalNonNegativeInteger(),
   streamStatusCheckIntervalSeconds: optionalPositiveInteger(),
   codexSkipGitRepoCheck: z.boolean().optional(),
   codexSandboxMode: optionalEnum(sandboxModeSchema),

@@ -149,6 +149,12 @@ snapshotStreamingDesiredState(state)
 5. 调用 `card.update` 写最终卡。
 6. 成功后按 completed/error 添加终态 reaction。
 
+final full update 必须以 desired history 为权威。`responseText` 为空不代表卡片没有正文：mirror 在流式卡已包含正文时会传空 text 防止重复，工具和消息仍可能全部存在于 `historyItems`。因此 final renderer 的 content gate 同时检查 text、legacy tools 和 history；history-only 的 apply_patch 也必须在关闭 streaming mode 后完整保留。
+
+error 终态不能只靠红色边框或泛化的 `Error` footer。runtime adapter 把真实错误写入 `FinalizedBridgeMirrorTurn.errorText`；feedback controller 从 JSON 中提取 type/message（非 JSON 则保留原文），压成最多 600 个 Unicode 字符的单行状态，先更新“当前步骤：❌ 原因 + 已运行时间 + context/token usage”，再关闭 streaming mode。final footer 复用同一条原因，并继续追加 adapter 计算的真实耗时和 context；错误、时间、token 信息不能互相覆盖。history 不再重复插入错误块。新版结构化 JSONL error 与旧版 TUI `■` fallback 共用这个字段，channel renderer 不识别 Codex 专属格式。
+
+流式尾栏的两个计时必须和每次可见内容更新使用同一时刻重算：`已运行` 以 turn 开始时间为基准，`上次响应距今` 只以最后一次正文响应为基准，工具、任务、状态和思考更新不得重置它。`stream_status_idle_start_seconds = 0` 是默认值，表示从任务开始即显示 `已运行 0秒，上次响应距今 0秒`；`stream_status_check_interval_seconds` 只控制没有其他更新时的心跳频率。内容、工具或任务本身触发卡片更新时不等待心跳，尾栏必须在同一次 desired-state 刷新中同步更新。
+
 需要观察：
 
 - finalize 前等待 flush 的耗时和是否超时。

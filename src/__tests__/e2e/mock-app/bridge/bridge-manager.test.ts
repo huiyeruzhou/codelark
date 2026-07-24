@@ -1799,6 +1799,7 @@ agent = "claude"
         text: 'final answer',
         signature: 'complete',
         timestamp: '2026-03-25T08:00:03.000Z',
+        startedAt: '2026-03-25T08:00:00.000Z',
         status: 'completed',
       },
     ]);
@@ -1879,6 +1880,7 @@ agent = "claude"
           text: 'kimi final answer',
           signature: 'complete',
           timestamp: '2026-03-25T08:00:03.000Z',
+          startedAt: '2026-03-25T08:00:00.000Z',
           status: 'completed',
         },
       ]);
@@ -1957,7 +1959,7 @@ agent = "claude"
         'metadata:mirror:session-1:turn-1:本地会话:codex,effort:medium,model:test-model,bridge_id:session-,mirror',
         'start:mirror:session-1:turn-1',
         'text:mirror:session-1:turn-1:**我:** codex prompt\n\n**codex:**',
-        'status:mirror:session-1:turn-1:处理中',
+        'status:mirror:session-1:turn-1:已运行 0秒，上次响应距今 0秒',
       ]);
     } finally {
       Date.now = originalDateNow;
@@ -2022,7 +2024,7 @@ agent = "claude"
         'metadata:mirror:session-1:turn-1:本地会话:codex,effort:medium,model:test-model,bridge_id:session-,mirror',
         'start:mirror:session-1:turn-1',
         'text:mirror:session-1:turn-1:**我:**\n（基于 Review findings）\nok,当前调整已经可以收尾了吗\n\n**codex:**',
-        'status:mirror:session-1:turn-1:处理中',
+        'status:mirror:session-1:turn-1:已运行 0秒，上次响应距今 0秒',
       ]);
     } finally {
       Date.now = originalDateNow;
@@ -2306,6 +2308,7 @@ agent = "claude"
         text: 'final answer',
         signature: 'complete',
         timestamp: '2026-03-25T08:00:03.000Z',
+        startedAt: '2026-03-25T08:00:00.000Z',
         status: 'completed',
       },
     ]);
@@ -2404,6 +2407,7 @@ agent = "claude"
         text: '',
         signature: 'complete',
         timestamp: '2026-03-25T08:00:03.000Z',
+        startedAt: '2026-03-25T08:00:00.000Z',
         status: 'completed',
       },
     ]);
@@ -2493,6 +2497,7 @@ agent = "claude"
         text: 'stale answer',
         signature: 'timeout:thread-1:turn-1',
         timestamp: '2026-03-25T08:00:00.000Z',
+        startedAt: '2026-03-25T08:00:00.000Z',
         status: 'interrupted',
         timedOut: true,
       },
@@ -2844,6 +2849,7 @@ agent = "claude"
       text: 'stale answer',
       signature: 'timeout:thread-1:turn-1',
       timestamp: '2026-03-25T08:00:00.000Z',
+      startedAt: '2026-03-25T08:00:00.000Z',
       status: 'interrupted',
       timedOut: true,
     });

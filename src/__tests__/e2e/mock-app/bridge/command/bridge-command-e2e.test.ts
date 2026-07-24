@@ -4410,8 +4410,10 @@ provider = "tmux"
       assert.match(firstMessageLog, new RegExp(`send-keys -t ${tmuxSession} Enter`));
       assert.doesNotMatch(firstMessageSentText, /tmux Provider 缺少 codex_thread_id|正在后台重新启动 Codex TUI/);
       assert.deepEqual(streamingAdapter.streamEvents.filter((event) => /^provider-tmux:/.test(event.streamKey || '')), []);
-      assert.deepEqual(streamingAdapter.reactions.map((reaction) => reaction.action), ['add']);
+      assert.deepEqual(streamingAdapter.reactions.map((reaction) => reaction.action), ['add', 'remove']);
       assert.equal(streamingAdapter.reactions[0]?.emojiType, 'Typing');
+      assert.equal(streamingAdapter.reactions[1]?.reactionId, streamingAdapter.reactions[0]?.reactionId);
+      const reactionsAfterFirstTmuxSubmit = streamingAdapter.reactions.length;
       appendCodexMirrorTurn(actualSessionPath, {
         timestampPrefix: '2026-05-28T00:01',
         turnId: 'turn-tmux-default-first',
@@ -4419,17 +4421,25 @@ provider = "tmux"
         assistantText: '第一条响应',
       });
       await _testOnly.reconcileMirrorSubscriptions();
-      await waitForCondition(() => streamingAdapter.reactions.some((reaction) => reaction.action === 'remove'));
-      assert.equal(streamingAdapter.reactions.at(-1)?.reactionId, streamingAdapter.reactions[0]?.reactionId);
+      assert.equal(streamingAdapter.reactions.length, reactionsAfterFirstTmuxSubmit);
       assert.ok(streamingAdapter.streamEvents.some((event) => event.kind === 'text' && /^mirror:/.test(event.streamKey || '') && /第一条响应/.test(event.text || '')));
 
       const beforeReusableMessageLog = fs.readFileSync(fakeTmux.logPath, 'utf-8');
+      const beforeReusableReactionCount = streamingAdapter.reactions.length;
       await _testOnly.handleMessage(adapter, inboundMessage(newAddress, '复用中的第二条', 'incoming-tmux-default-reuse-second'));
       const reusableMessageLog = fs.readFileSync(fakeTmux.logPath, 'utf-8').slice(beforeReusableMessageLog.length);
       assert.match(reusableMessageLog, new RegExp(`has-session -t ${tmuxSession}`));
       assert.match(reusableMessageLog, new RegExp(`send-keys -t ${tmuxSession} -l 复用中的第二条`));
       assert.doesNotMatch(reusableMessageLog, /new-session|\bresume\b/, 'a running follow-up must reuse the established Codex tmux');
-      const reusableReactionStart = streamingAdapter.reactions.length - 1;
+      assert.deepEqual(
+        streamingAdapter.reactions.slice(beforeReusableReactionCount).map((reaction) => reaction.action),
+        ['add', 'remove'],
+      );
+      assert.equal(
+        streamingAdapter.reactions.at(-1)?.reactionId,
+        streamingAdapter.reactions[beforeReusableReactionCount]?.reactionId,
+      );
+      const reactionsAfterReusableTmuxSubmit = streamingAdapter.reactions.length;
       appendCodexMirrorTurn(actualSessionPath, {
         timestampPrefix: '2026-05-28T00:01:30',
         turnId: 'turn-tmux-default-reuse-second',
@@ -4437,9 +4447,7 @@ provider = "tmux"
         assistantText: '复用中的第二条响应',
       });
       await _testOnly.reconcileMirrorSubscriptions();
-      await waitForCondition(() => streamingAdapter.reactions
-        .slice(reusableReactionStart)
-        .some((reaction) => reaction.action === 'remove'));
+      assert.equal(streamingAdapter.reactions.length, reactionsAfterReusableTmuxSubmit);
       assert.ok(streamingAdapter.streamEvents.some((event) => event.kind === 'text'
         && /^mirror:/.test(event.streamKey || '')
         && /复用中的第二条响应/.test(event.text || '')));
@@ -4479,7 +4487,8 @@ provider = "tmux"
       assert.match(recoveredMessageLog, new RegExp(`resume ${actualThreadId}`));
       assert.match(recoveredMessageLog, new RegExp(`send-keys -t ${tmuxSession} -l 第二条`));
       assert.match(recoveredMessageLog, new RegExp(`send-keys -t ${tmuxSession} Enter`));
-      assert.deepEqual(streamingAdapter.reactions.slice(beforeSecondReactionCount).map((reaction) => reaction.action), ['add']);
+      assert.deepEqual(streamingAdapter.reactions.slice(beforeSecondReactionCount).map((reaction) => reaction.action), ['add', 'remove']);
+      const reactionsAfterRecoveredTmuxSubmit = streamingAdapter.reactions.length;
       appendCodexMirrorTurn(actualSessionPath, {
         timestampPrefix: '2026-05-28T00:02',
         turnId: 'turn-tmux-default-second',
@@ -4487,7 +4496,7 @@ provider = "tmux"
         assistantText: '第二条响应',
       });
       await _testOnly.reconcileMirrorSubscriptions();
-      await waitForCondition(() => streamingAdapter.reactions.slice(beforeSecondReactionCount).some((reaction) => reaction.action === 'remove'));
+      assert.equal(streamingAdapter.reactions.length, reactionsAfterRecoveredTmuxSubmit);
       assert.ok(streamingAdapter.streamEvents.some((event) => event.kind === 'text' && /^mirror:/.test(event.streamKey || '') && /第二条响应/.test(event.text || '')));
     } finally {
       process.env.PATH = oldPath;
@@ -4580,19 +4589,36 @@ provider = "tmux"
 
     class SlowReactionAdapter extends StreamingRecordingAdapter {
       addStarted = false;
+      removeStarted = false;
+      tmuxLogAtAddStart = '';
       private releaseAddReactionPromise: (() => void) | undefined;
       private readonly addReactionPromise = new Promise<void>((resolve) => {
         this.releaseAddReactionPromise = resolve;
+      });
+      private releaseRemoveReactionPromise: (() => void) | undefined;
+      private readonly removeReactionPromise = new Promise<void>((resolve) => {
+        this.releaseRemoveReactionPromise = resolve;
       });
 
       releaseAddReaction(): void {
         this.releaseAddReactionPromise?.();
       }
 
+      releaseRemoveReaction(): void {
+        this.releaseRemoveReactionPromise?.();
+      }
+
       override async addMessageReaction(messageId: string, emojiType: string): Promise<string | null> {
         this.addStarted = true;
+        this.tmuxLogAtAddStart = fs.readFileSync(fakeTmux.logPath, 'utf-8');
         await this.addReactionPromise;
         return super.addMessageReaction(messageId, emojiType);
+      }
+
+      override async removeMessageReaction(messageId: string, reactionId: string, emojiType?: string): Promise<void> {
+        this.removeStarted = true;
+        await this.removeReactionPromise;
+        return super.removeMessageReaction(messageId, reactionId, emojiType);
       }
     }
 
@@ -4604,6 +4630,7 @@ provider = "tmux"
     const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-runtime-tmux-slow-reaction-'));
     let handlePromise: Promise<void> | undefined;
     let releasedReaction = false;
+    let releasedRemoval = false;
 
     try {
       await _testOnly.handleMessage(adapter, inboundMessage(address, '/set defaultProvider tmux', 'incoming-tmux-slow-reaction-set-provider'));
@@ -4615,6 +4642,7 @@ provider = "tmux"
       const beforeMessageLog = fs.readFileSync(fakeTmux.logPath, 'utf-8');
       handlePromise = _testOnly.handleMessage(adapter, inboundMessage(newAddress, '慢表情不该挡住发送', 'incoming-tmux-slow-reaction-first'));
       await waitForCondition(() => adapter.addStarted);
+      assert.equal(adapter.tmuxLogAtAddStart.slice(beforeMessageLog.length), '', 'Typing add must start before tmux input');
       await waitForCondition(() => {
         const currentLog = fs.readFileSync(fakeTmux.logPath, 'utf-8').slice(beforeMessageLog.length);
         return currentLog.includes('send-keys -t')
@@ -4626,17 +4654,26 @@ provider = "tmux"
       assert.match(messageLog, /send-keys -t .* -l 慢表情不该挡住发送/);
       assert.match(messageLog, /send-keys -t .* Enter/);
       assert.equal(adapter.reactions.length, 0);
+      await handlePromise;
 
       releasedReaction = true;
       adapter.releaseAddReaction();
-      await handlePromise;
-      await waitForCondition(() => adapter.reactions.some((reaction) => reaction.action === 'add'));
+      await waitForCondition(() => adapter.removeStarted);
       const firstReaction = adapter.reactions.find((reaction) => reaction.action === 'add');
       assert.ok(firstReaction);
       assert.equal(firstReaction.emojiType, 'Typing');
+      assert.equal(adapter.reactions.some((reaction) => reaction.action === 'remove'), false);
+
+      releasedRemoval = true;
+      adapter.releaseRemoveReaction();
+      await waitForCondition(() => adapter.reactions.some((reaction) => reaction.action === 'remove'));
+      assert.deepEqual(adapter.reactions.map((reaction) => reaction.action), ['add', 'remove']);
     } finally {
       if (!releasedReaction) {
         adapter.releaseAddReaction();
+      }
+      if (!releasedRemoval) {
+        adapter.releaseRemoveReaction();
       }
       if (handlePromise) {
         await handlePromise.catch(() => {});

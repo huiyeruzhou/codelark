@@ -392,7 +392,7 @@ app_id = "home-app"
       assert.equal(channel.enabled, false);
       assert.equal(channel.config.appId, 'home-app');
       assert.equal(channel.config.historyMessageLimit, 8);
-      assert.equal(channel.config.streamStatusIdleStartSeconds, 180);
+      assert.equal(channel.config.streamStatusIdleStartSeconds, 0);
       assert.equal(channel.config.site, 'feishu');
 
       const savedToml = fs.readFileSync(configTomlPath, 'utf-8');

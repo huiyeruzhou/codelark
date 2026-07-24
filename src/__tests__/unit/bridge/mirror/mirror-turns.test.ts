@@ -11,6 +11,48 @@ import {
 } from '../../../../bridge/mirror/turns.js';
 
 describe('mirror-turns pending delivery queue', () => {
+  it('finalizes an error-bearing Codex task_complete as error', () => {
+    const subscription = {
+      sessionId: 'session-error',
+      threadId: 'thread-error',
+      pendingTurn: null,
+    } as any;
+
+    const turns = consumeMirrorRecords(subscription, [
+      {
+        signature: 'start-error',
+        type: 'task_started',
+        content: '',
+        timestamp: '2026-04-21T10:00:00.000Z',
+        turnId: 'turn-error',
+      },
+      {
+        signature: 'user-error',
+        type: 'message',
+        role: 'user',
+        content: '触发错误',
+        timestamp: '2026-04-21T10:00:00.100Z',
+        turnId: 'turn-error',
+      },
+      {
+        signature: 'complete-error',
+        type: 'task_complete',
+        role: 'assistant',
+        content: 'stream failed after retries',
+        timestamp: '2026-04-21T10:00:01.000Z',
+        turnId: 'turn-error',
+        isError: true,
+        errorText: 'stream failed after retries',
+      },
+    ]);
+
+    assert.equal(turns.length, 1);
+    assert.equal(turns[0]?.status, 'error');
+    assert.equal(turns[0]?.errorText, 'stream failed after retries');
+    assert.equal(turns[0]?.text, 'stream failed after retries');
+    assert.equal(turns[0]?.startedAt, '2026-04-21T10:00:00.000Z');
+  });
+
   it('deduplicates queued turns by signature and removes only delivered turns', () => {
     const completed = {
       streamKey: 'mirror:session-1:turn-1',

@@ -145,8 +145,8 @@ interface GlobalRuntimeConfig {
 | --- | --- | --- |
 | `defaultWorkspaceRoot` | `bridge.default_workspace` | 影响 `/new <relative>`，不是 provider 参数 |
 | `historyMessageLimit` | `channels[].config.history_message_limit` | 影响 `/history` 展示 |
-| `streamStatusIdleStartSeconds` | `channels[].config.stream_status_idle_start_seconds` | 运行观测 |
-| `streamStatusCheckIntervalSeconds` | `channels[].config.stream_status_check_interval_seconds` | 运行观测 |
+| `streamStatusIdleStartSeconds` | `channels[].config.stream_status_idle_start_seconds` | 尾栏响应计时显示延迟；默认 0，从任务开始显示 |
+| `streamStatusCheckIntervalSeconds` | `channels[].config.stream_status_check_interval_seconds` | 无其他卡片更新时的尾栏刷新间隔 |
 | `/ui` | 固定显示策略 | 工具详情始终显示 |
 | `uiAllowLan`、`uiAccessToken` | `bridge.ui` | UI server |
 | Feishu / Weixin channel config | `channels[]` | 通道连接、访问控制、消息呈现 |

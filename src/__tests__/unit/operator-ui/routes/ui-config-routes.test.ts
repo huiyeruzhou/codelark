@@ -480,6 +480,7 @@ require_mention = false
           defaultProvider: 'tmux',
           defaultMode: 'yolo',
           historyMessageLimit: 14,
+          streamStatusIdleStartSeconds: 0,
           codexNetworkAccess: false,
         }),
         response,
@@ -494,6 +495,7 @@ require_mention = false
       assert.equal(body.config?.defaultProvider, 'tmux');
       assert.equal(body.config?.defaultMode, 'yolo');
       assert.equal(body.config?.historyMessageLimit, 14);
+      assert.equal(body.config?.streamStatusIdleStartSeconds, 0);
       assert.equal(body.config?.codexNetworkAccess, false);
       assert.equal(fs.readFileSync(CONFIG_PATH, 'utf-8'), 'CODELARK_HISTORY_MESSAGE_LIMIT=5\n');
       const legacyJson = JSON.parse(fs.readFileSync(CONFIG_JSON_PATH, 'utf-8')) as any;
@@ -503,6 +505,7 @@ require_mention = false
       assert.match(savedToml, /provider = "tmux"/);
       assert.match(savedToml, /yolo_mode = "on"/);
       assert.match(savedToml, /history_message_limit = 14/);
+      assert.match(savedToml, /stream_status_idle_start_seconds = 0/);
       assert.match(savedToml, /network_access = false/);
       assert.match(savedToml, /reasoning_effort = "high"/);
     } finally {

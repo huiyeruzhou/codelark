@@ -376,6 +376,13 @@ async function launchTmuxKimiSession(
   });
 }
 
+async function ensureKimiTmuxInputKeys(): Promise<void> {
+  const command = await tmuxCore.ensureExtendedKeys?.();
+  if (command) {
+    console.log('[kimi-tmux] tmux extended keys enabled for Kimi input:', command);
+  }
+}
+
 async function waitForKimiSessionIdFromTmux(context: KimiTuiRunContext): Promise<string> {
   const expectedSessionId = context.sessionId;
   transitionRuntimeTmuxInputState(
@@ -566,12 +573,14 @@ export async function ensureKimiTmuxInputSession(
   if (!inspection.exists) {
     assertKimiLaunchAuthentication(params.model);
     await launchTmuxKimiSession(sessionName, params);
+    await ensureKimiTmuxInputKeys();
     if (params.kimiSessionId) {
       await waitForKimiSessionIdFromTmux(context);
     } else {
       await initializeFreshKimiSessionFromResumeHint(context, params);
     }
   } else if (inspection.needsReadiness || !context.sessionId) {
+    await ensureKimiTmuxInputKeys();
     await waitForKimiSessionIdFromTmux(context);
   }
 

@@ -63,6 +63,9 @@ export const DEFAULT_FEISHU_TOOL_CALL_CARD_STYLE: FeishuToolCallCardStyle = {
   },
 };
 
+export const FEISHU_LONG_USER_INPUT_COLLAPSE_THRESHOLD = 800;
+export const FEISHU_LONG_USER_INPUT_TITLE_LIMIT = 240;
+
 function resolveTitleTagColor(
   tag: string,
   defaultColor: NonNullable<StructuredStreamingUiMetadata['tagColor']>,
@@ -1272,6 +1275,46 @@ function formatHistoryMarkdownContent(item: Extract<StreamingHistoryItem, { type
   return `**用户**：${trimmed}`;
 }
 
+function userInputTitlePreview(content: string): string {
+  const normalized = content.replace(/\s+/gu, ' ').trim();
+  const chars = Array.from(normalized);
+  return chars.length > FEISHU_LONG_USER_INPUT_TITLE_LIMIT
+    ? `${chars.slice(0, FEISHU_LONG_USER_INPUT_TITLE_LIMIT).join('')}…`
+    : normalized;
+}
+
+function buildHistoryItemElement(
+  item: Extract<StreamingHistoryItem, { type: 'markdown' }>,
+  elementId: string,
+): Record<string, unknown> | null {
+  const formatted = formatHistoryMarkdownContent(item);
+  if (
+    item.role !== 'user'
+    || Array.from(item.content.trim()).length <= FEISHU_LONG_USER_INPUT_COLLAPSE_THRESHOLD
+  ) {
+    return buildHistoryMarkdownElement(formatted, elementId);
+  }
+
+  const fullContent = buildHistoryMarkdownElement(formatted);
+  if (!fullContent) return null;
+  const titleSource = /^\*\*用户\*\*/.test(item.content.trim())
+    ? item.content.trim()
+    : `**用户**：${item.content.trim()}`;
+  return {
+    tag: 'collapsible_panel',
+    expanded: false,
+    header: {
+      title: {
+        tag: 'markdown',
+        content: preprocessFeishuMarkdown(userInputTitlePreview(titleSource)),
+        text_size: 'normal',
+      },
+    },
+    elements: [fullContent],
+    element_id: elementId,
+  };
+}
+
 export function buildToolProgressElements(
   tools: ToolCallInfo[],
   options: ToolProgressRenderOptions = {},
@@ -1304,10 +1347,7 @@ export function buildStreamingHistoryElementsFromItems(
     }
     const resolvedElementId = item.elementId
       || (markdownCount === 0 ? elementId : `stream_txt_${markdownCount + 1}`);
-    const markdownElement = buildHistoryMarkdownElement(
-      formatHistoryMarkdownContent(item),
-      resolvedElementId,
-    );
+    const markdownElement = buildHistoryItemElement(item, resolvedElementId);
     markdownCount += 1;
     if (markdownElement) historyElements.push(markdownElement);
   }
@@ -1521,7 +1561,7 @@ export function buildFinalCardJson(
 
   // Main text content
   const renderOptions = { terminalStatus };
-  const contentElements = (text.trim() || tools.length > 0)
+  const contentElements = (text.trim() || tools.length > 0 || Boolean(renderedHistoryItems?.length))
     ? renderedHistoryItems
       ? buildStreamingHistoryElementsFromItems(text, renderedHistoryItems, 'final_content', renderOptions)
       : buildStreamingHistoryElements(text, tools, 'final_content', renderOptions)
@@ -1532,7 +1572,11 @@ export function buildFinalCardJson(
     elements.push(...contentElements);
   }
 
-  if (finalContextLine) {
+  // A history-driven provider may also append its terminal Context line to
+  // the response text. Keep it as a standalone fallback only when the shared
+  // footer has no normalized context value; otherwise every runtime uses the
+  // same single-line footer.
+  if (finalContextLine && !footer?.context) {
     if (elements.length > 0) {
       elements.push({ tag: 'hr' });
     }
@@ -1561,7 +1605,7 @@ export function buildFinalCardJson(
     const parts: string[] = [];
     if (footer.status) parts.push(footer.status);
     if (footer.elapsed) parts.push(footer.elapsed);
-    if (footer.context && !finalContextLine.includes(footer.context)) parts.push(footer.context);
+    if (footer.context) parts.push(footer.context);
     if (parts.length > 0) {
       if (elements.length > 0) {
         elements.push({ tag: 'hr' });

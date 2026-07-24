@@ -324,10 +324,10 @@ export const configFields = [
     path: 'channels[].config.streamStatusIdleStartSeconds',
     tomlPath: 'channels[].config.stream_status_idle_start_seconds',
     scopes: homeOnlyScopes,
-    schema: z.number().int().positive(),
+    schema: z.number().int().nonnegative(),
     envKey: 'CODELARK_STREAM_STATUS_IDLE_START_SECONDS',
     runtimeSettingsKey: 'bridge_stream_status_idle_start_seconds',
-    parseEnv: positiveIntFromEnv,
+    parseEnv: nonNegativeIntFromEnv,
   },
   {
     path: 'channels[].config.streamStatusCheckIntervalSeconds',

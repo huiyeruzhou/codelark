@@ -99,6 +99,7 @@ export interface BridgeMirrorRecord {
   toolInput?: unknown;
   toolDetail?: ToolCallDetail;
   isError?: boolean;
+  errorText?: string;
   tasks?: TaskProgressInfo[];
   contextUsage?: ContextUsageInfo;
   goalStatus?: string;

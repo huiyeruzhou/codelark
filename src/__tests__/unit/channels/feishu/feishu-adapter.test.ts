@@ -2783,6 +2783,136 @@ describe('feishu-adapter structured streaming regions', () => {
     assert.ok(activeState.renderedComponentCount <= 160);
   });
 
+  it('uses an individual tool call as the continuation cursor inside one canonical tool group', async () => {
+    const createdCards: Array<Record<string, any>> = [];
+    const cardUpdates: Array<Record<string, any>> = [];
+    const settingsCalls: Array<Record<string, any>> = [];
+    const elementCreates: Array<Record<string, any>> = [];
+    let cardIndex = 0;
+    const adapter = new FeishuAdapter({
+      id: 'feishu-default',
+      provider: 'feishu',
+      enabled: true,
+      alias: '飞书',
+      config: {
+        appId: 'app-id',
+        appSecret: 'app-secret',
+        streamingEnabled: true,
+      },
+    });
+    (adapter as any).cardFlushBaseIntervalMs = 1;
+    (adapter as any).restClient = {
+      cardkit: {
+        v1: {
+          card: {
+            create: async ({ data }: { data: { data: string } }) => {
+              createdCards.push(JSON.parse(data.data));
+              cardIndex += 1;
+              return { data: { card_id: `card-${cardIndex}` } };
+            },
+            settings: async (payload: Record<string, any>) => {
+              settingsCalls.push(payload);
+              return {};
+            },
+            update: async (payload: Record<string, any>) => {
+              cardUpdates.push(payload);
+              return {};
+            },
+          },
+          cardElement: {
+            content: async () => ({}),
+            create: async (payload: Record<string, any>) => {
+              elementCreates.push(payload);
+              return {};
+            },
+          },
+        },
+      },
+      im: {
+        message: {
+          create: async () => ({ data: { message_id: `msg-${cardIndex}` } }),
+          reply: async () => ({ data: { message_id: `msg-${cardIndex}` } }),
+        },
+      },
+    };
+
+    const tools = Array.from({ length: 17 }, (_, index) => {
+      const toolNumber = index + 1;
+      const filler = Array.from({ length: 18 }, (__, lineIndex) => `+tool-${toolNumber}-line-${lineIndex + 1}-${'x'.repeat(22)}`).join('\n');
+      return {
+        id: `tool-${toolNumber}`,
+        name: 'apply_patch',
+        status: 'complete' as const,
+        detail: {
+          kind: 'patch_apply' as const,
+          patchText: [
+            '*** Begin Patch',
+            `*** Update File: src/tool-${toolNumber}.ts`,
+            '@@',
+            filler,
+            `+TOOL_${toolNumber}_END`,
+            '*** End Patch',
+          ].join('\n'),
+          files: [{ path: `src/tool-${toolNumber}.ts`, action: 'update' as const }],
+        },
+      };
+    });
+    const firstRenderedToolCount = 10;
+    const firstRenderedTools = tools.slice(0, firstRenderedToolCount);
+
+    await (adapter as any).createStreamingCard('chat-1', 'reply-1', 'stream-1');
+    const textItems = [
+      { type: 'markdown' as const, role: 'user' as const, content: '检查工具卡完整性' },
+      { type: 'markdown' as const, role: 'assistant' as const, content: '开始检查' },
+    ];
+    adapter.onStreamHistory('chat-1', textItems, 'stream-1');
+    await waitForCondition(() => cardUpdates.length >= 1);
+
+    adapter.onStreamHistory('chat-1', [
+      ...textItems,
+      { type: 'tool_panel', tools: firstRenderedTools },
+    ], 'stream-1');
+    await waitForCondition(() => elementCreates.length >= 1);
+
+    adapter.onStreamHistory('chat-1', [
+      ...textItems,
+      { type: 'tool_panel', tools },
+    ], 'stream-1');
+    await waitForCondition(() => createdCards.length >= 2, 1000);
+
+    assert.ok(settingsCalls.some((call) => call.path?.card_id === 'card-1'));
+    const sourceCardJson = String(cardUpdates.at(-1)?.data?.card?.data || '');
+    const continuationCardJson = JSON.stringify(createdCards.at(-1));
+    assert.ok(Buffer.byteLength(sourceCardJson, 'utf8') < 18_000);
+    assert.ok(Buffer.byteLength(continuationCardJson, 'utf8') < 18_000);
+    assert.match(sourceCardJson, /TOOL_1_END[\s\S]*\*\*\* End Patch/);
+    assert.doesNotMatch(sourceCardJson, new RegExp(`TOOL_${tools.length}_END`));
+    assert.doesNotMatch(continuationCardJson, /TOOL_1_END/);
+    assert.match(continuationCardJson, new RegExp(`TOOL_${tools.length}_END[\\s\\S]*\\*\\*\\* End Patch`));
+    assert.match(sourceCardJson, new RegExp(`工具调用 · ${firstRenderedToolCount}`));
+    assert.match(continuationCardJson, new RegExp(`工具调用 · ${tools.length - firstRenderedToolCount}`));
+    const sourcePatch = findCardElement(JSON.parse(sourceCardJson), (element) => (
+      element.tag === 'markdown'
+      && typeof element.content === 'string'
+      && element.content.includes('TOOL_1_END')
+    ));
+    const continuationPatch = findCardElement(createdCards.at(-1), (element) => (
+      element.tag === 'markdown'
+      && typeof element.content === 'string'
+      && element.content.includes(`TOOL_${tools.length}_END`)
+    ));
+    assert.match(sourcePatch?.content || '', /```diff\n\*\*\* Begin Patch\n\*\*\* Update File:/);
+    assert.match(continuationPatch?.content || '', /```diff\n\*\*\* Begin Patch\n\*\*\* Update File:/);
+    assert.match(sourcePatch?.content || '', /\n\*\*\* End Patch\n```$/);
+    assert.match(continuationPatch?.content || '', /\n\*\*\* End Patch\n```$/);
+    const activeState = (adapter as any).activeCards.get('stream-1');
+    assert.equal(activeState.historyItems.length, 3, 'the canonical history keeps one tool_panel item');
+    assert.equal(activeState.historyItems[2]?.type, 'tool_panel');
+    assert.equal(activeState.historyItems[2]?.tools.length, tools.length);
+    assert.equal(activeState.historyItemOffset, 2);
+    assert.equal(activeState.historyToolCallOffset, firstRenderedToolCount);
+  });
+
   it('keeps the shadow untrusted when periodic whole-card refresh fails', async () => {
     const elementUpdates: Array<Record<string, any>> = [];
     const cardUpdateCalls: Array<Record<string, any>> = [];

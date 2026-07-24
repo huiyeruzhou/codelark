@@ -81,7 +81,7 @@ export function formatStreamRuntimeStatus(
   contextUsage?: ContextUsageInfo | null,
   thinkingNote?: string | null,
 ): string {
-  const parts = [elapsedMs < 1000 ? '处理中' : `已运行 ${formatRuntimeDuration(elapsedMs)}`];
+  const parts = [`已运行 ${formatRuntimeDuration(elapsedMs)}`];
   if (typeof lastContentResponseAgeMs === 'number' && lastContentResponseAgeMs >= 0) {
     parts.push(`上次响应距今 ${formatRuntimeDuration(lastContentResponseAgeMs)}`);
   }
@@ -116,8 +116,7 @@ export function shouldShowStreamLastContentResponseAge(
   if (!Number.isFinite(nowMs)) return false;
   const elapsedMs = nowMs - state.startedAtMs;
   if (elapsedMs < Math.max(0, config.idleStartMs)) return false;
-  const ageMs = getStreamLastContentResponseAgeMs(state, nowMs);
-  return ageMs != null && ageMs >= Math.max(1_000, config.heartbeatMs);
+  return getStreamLastContentResponseAgeMs(state, nowMs) != null;
 }
 
 export function getVisibleStreamLastContentResponseAgeMs(

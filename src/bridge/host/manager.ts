@@ -18,6 +18,7 @@ import type { BaseChannelAdapter } from '../../channels/contracts.js';
 import type { BridgeSession, BridgeStore, PermissionLinkRecord } from '../../domain/index.js';
 import type { FeishuChannelConfig } from '../../channels/types.js';
 import { feishuSiteToApiBaseUrl } from '../../channels/feishu/site.js';
+import { statSync } from 'node:fs';
 import { inspect } from 'node:util';
 // Side-effect import: triggers self-registration of all adapter factories
 import '../../channels/feishu/adapter.js';
@@ -89,6 +90,7 @@ import {
   consumeMirrorRecords as consumeMirrorRecordsBase,
   flushTimedOutMirrorTurn as flushTimedOutMirrorTurnBase,
   hasPendingMirrorWork as hasPendingMirrorWorkBase,
+  type BridgeMirrorTurnState,
   type FinalizedBridgeMirrorTurn,
 } from '../mirror/turns.js';
 import {
@@ -160,6 +162,10 @@ import {
   type CodexTuiSelectionPromptMonitor,
 } from '../../runtime/codex/tmux-provider.js';
 import {
+  findNewCodexTuiErrorMessage,
+  parseCodexTuiReconnectSignal,
+} from '../../runtime/codex/tui-runtime-signals.js';
+import {
   cleanupRuntimeTmuxSession,
   tmuxCore,
   waitForCodexResumeTmuxReady,
@@ -215,6 +221,7 @@ import { consumeSseEvents } from '../../runtime/sse-stream-decoder.js';
 import { consumePendingClearConfirmation } from '../command/clear-confirmations.js';
 import { consumePendingTakeoverConfirmation } from '../command/takeover-confirmations.js';
 import { consumeStartupNoticeTarget } from './startup-notice-target.js';
+import { applyUnifiedTurnStatusNote } from '../turn/unified-turn-state.js';
 
 const GLOBAL_KEY = '__bridge_manager__';
 const DANGLING_MIRROR_THREAD_RETRY_LIMIT = 3;
@@ -233,7 +240,7 @@ const MIRROR_PROMPT_MATCH_GRACE_MS = 120_000;
 // final source. If the SDK stream finishes first, wait for the terminal JSONL
 // record before falling back to the SDK response.
 const DESKTOP_TERMINAL_FINALIZATION_TIMEOUT_MS = 30_000;
-const MIRROR_STREAM_STATUS_IDLE_START_MS = 180_000;
+const MIRROR_STREAM_STATUS_IDLE_START_MS = 0;
 const MIRROR_STREAM_STATUS_HEARTBEAT_MS = 10_000;
 const MIRROR_TMUX_SELECTION_PROBE_INTERVAL_MS = 5_000;
 const MIRROR_TMUX_SELECTION_PROBE_FOLLOWUP_WINDOW_MS = 5_000;
@@ -292,6 +299,23 @@ const tmuxSelectionPromptMonitors = new Map<string, CodexTuiSelectionPromptMonit
 const tmuxSelectionPromptLastProbeAt = new Map<string, number>();
 const tmuxSelectionPromptFollowupUntil = new Map<string, number>();
 const pendingTmuxSelectionPromptProbePromises = new Set<Promise<boolean>>();
+interface CodexTuiScreenCheckpoint {
+  screen: string;
+  capturedAtMs: number;
+  claimedTurnKey?: string;
+}
+
+const codexTuiIdleScreenCheckpoints = new Map<string, CodexTuiScreenCheckpoint>();
+const codexTuiTurnScreenBaselines = new Map<string, CodexTuiScreenCheckpoint>();
+
+interface CodexTuiReconnectMonitor {
+  streamKey: string;
+  signalKey: string;
+  appliedNote: string;
+  previousStatusNote: string | null;
+}
+
+const codexTuiReconnectMonitors = new Map<string, CodexTuiReconnectMonitor>();
 
 interface TmuxSelectionPromptTarget {
   channelType: string;
@@ -695,6 +719,159 @@ function sessionSupportsTmuxSelectionPromptProbe(session: BridgeSession): boolea
   return resolveEffectiveCodexProvider(session) === 'tmux';
 }
 
+function sessionSupportsCodexTuiRuntimeSignals(session: BridgeSession): boolean {
+  const activeRuntime = getSessionActiveRuntime(session);
+  if (activeRuntime === 'kimi' || activeRuntime === 'claude') return false;
+  return resolveEffectiveCodexProvider(session) === 'tmux';
+}
+
+function assignCodexTuiTurnScreenBaseline(
+  subscription: BridgeMirrorSubscription,
+  turnState: BridgeMirrorTurnState,
+): void {
+  if (codexTuiTurnScreenBaselines.has(turnState.streamKey)) return;
+  const checkpoint = codexTuiIdleScreenCheckpoints.get(subscription.sessionId);
+  if (!checkpoint) return;
+  const turnStartedAtMs = Date.parse(turnState.startedAt);
+  if (!Number.isFinite(turnStartedAtMs) || checkpoint.capturedAtMs >= turnStartedAtMs) return;
+  const turnKey = turnState.turnId || turnState.startedAt;
+  if (checkpoint.claimedTurnKey && checkpoint.claimedTurnKey !== turnKey) return;
+  checkpoint.claimedTurnKey = turnKey;
+  codexTuiTurnScreenBaselines.set(turnState.streamKey, checkpoint);
+}
+
+async function captureCodexTuiIdleScreenCheckpoint(
+  subscription: BridgeMirrorSubscription,
+): Promise<void> {
+  if (subscription.pendingTurn || subscription.pendingDeliveries.length > 0) return;
+  const existing = codexTuiIdleScreenCheckpoints.get(subscription.sessionId);
+  if (existing && !existing.claimedTurnKey) return;
+  const session = getBridgeContext().store.getSession(subscription.sessionId);
+  if (!session || !sessionSupportsCodexTuiRuntimeSignals(session)) return;
+  const tmuxSessionName = getSessionRuntimeTmuxSessionName(session);
+  if (!tmuxSessionName) return;
+  try {
+    const capture = await tmuxCore.capturePane(`${tmuxSessionName}:0.0`, 80);
+    codexTuiIdleScreenCheckpoints.set(subscription.sessionId, {
+      screen: capture.screen,
+      capturedAtMs: Date.now(),
+    });
+  } catch (error) {
+    console.warn('[bridge-manager] Codex TUI idle checkpoint capture failed:', {
+      session_id: subscription.sessionId,
+      tmux_session: tmuxSessionName,
+      error: describeUnknownError(error),
+    });
+  }
+}
+
+async function ensureCodexTuiIdleScreenCheckpoints(): Promise<void> {
+  await Promise.allSettled(
+    Array.from(getState().mirrorSubscriptions.values()).map((subscription) =>
+      captureCodexTuiIdleScreenCheckpoint(subscription),
+    ),
+  );
+}
+
+function observeCodexTuiReconnectStatus(
+  subscription: BridgeMirrorSubscription,
+  screenText: string,
+  nowMs: number,
+): void {
+  const pendingTurn = subscription.pendingTurn;
+  const previous = codexTuiReconnectMonitors.get(subscription.sessionId);
+  if (!pendingTurn) {
+    codexTuiReconnectMonitors.delete(subscription.sessionId);
+    return;
+  }
+
+  const reconnect = parseCodexTuiReconnectSignal(screenText);
+  if (!reconnect) {
+    if (!previous || previous.streamKey !== pendingTurn.streamKey) return;
+    if (pendingTurn.statusNote === previous.appliedNote) {
+      applyUnifiedTurnStatusNote(pendingTurn, previous.previousStatusNote, nowMs);
+      MIRROR_TURN_HOOKS.onStatusProgress?.(subscription, pendingTurn);
+    }
+    codexTuiReconnectMonitors.delete(subscription.sessionId);
+    return;
+  }
+
+  const signalKey = `${reconnect.attempt}/${reconnect.maxAttempts}`;
+  if (previous?.streamKey === pendingTurn.streamKey && previous.signalKey === signalKey) return;
+  const appliedNote = `正在重连 ${signalKey}`;
+  const previousStatusNote = previous?.streamKey === pendingTurn.streamKey
+    ? previous.previousStatusNote
+    : pendingTurn.statusNote;
+  applyUnifiedTurnStatusNote(pendingTurn, appliedNote, nowMs);
+  codexTuiReconnectMonitors.set(subscription.sessionId, {
+    streamKey: pendingTurn.streamKey,
+    signalKey,
+    appliedNote,
+    previousStatusNote,
+  });
+  MIRROR_TURN_HOOKS.onStatusProgress?.(subscription, pendingTurn);
+}
+
+async function resolveCodexTuiFinalizedTurnStatus(
+  subscription: BridgeMirrorSubscription,
+  turn: FinalizedBridgeMirrorTurn,
+  context: { batchSize: number },
+): Promise<FinalizedBridgeMirrorTurn['status']> {
+  const baseline = codexTuiTurnScreenBaselines.get(turn.streamKey);
+  codexTuiReconnectMonitors.delete(subscription.sessionId);
+
+  const session = getBridgeContext().store.getSession(subscription.sessionId);
+  if (!session || !sessionSupportsCodexTuiRuntimeSignals(session)) {
+    codexTuiTurnScreenBaselines.delete(turn.streamKey);
+    return turn.status;
+  }
+  const tmuxSessionName = getSessionRuntimeTmuxSessionName(session);
+  if (!tmuxSessionName) {
+    codexTuiTurnScreenBaselines.delete(turn.streamKey);
+    return turn.status;
+  }
+
+  try {
+    const capture = await tmuxCore.capturePane(`${tmuxSessionName}:0.0`, 80);
+    codexTuiTurnScreenBaselines.delete(turn.streamKey);
+    const capturedAtMs = Date.now();
+    codexTuiIdleScreenCheckpoints.set(subscription.sessionId, {
+      screen: capture.screen,
+      capturedAtMs,
+    });
+    if (turn.status !== 'completed' || !baseline || context.batchSize !== 1) return turn.status;
+    const currentFileSize = subscription.filePath
+      ? (() => {
+          try {
+            return statSync(subscription.filePath).size;
+          } catch {
+            return null;
+          }
+        })()
+      : null;
+    if (subscription.fileSize === null || currentFileSize !== subscription.fileSize) {
+      return turn.status;
+    }
+    const errorMessage = findNewCodexTuiErrorMessage(baseline.screen, capture.screen);
+    if (!errorMessage) return turn.status;
+    turn.errorText ||= errorMessage;
+    console.warn('[bridge-manager] Codex TUI error detected after task_complete:', {
+      session_id: subscription.sessionId,
+      thread_id: subscription.threadId,
+      stream_key: turn.streamKey,
+      error: errorMessage,
+    });
+    return 'error';
+  } catch (error) {
+    console.warn('[bridge-manager] Codex TUI completed-turn error probe failed:', {
+      session_id: subscription.sessionId,
+      tmux_session: tmuxSessionName,
+      error: describeUnknownError(error),
+    });
+    return turn.status;
+  }
+}
+
 async function recoverMirrorTmuxSelectionPromptFromCallback(
   claim: broker.CodexSelectionCallbackClaim,
   adapter: BaseChannelAdapter,
@@ -901,9 +1078,18 @@ async function probeMirrorTmuxSelectionPrompt(subscription: BridgeMirrorSubscrip
     });
     return;
   }
+  if (sessionSupportsCodexTuiRuntimeSignals(session)) {
+    observeCodexTuiReconnectStatus(subscription, capture.screen, nowMs);
+  }
   const monitor = getTmuxSelectionPromptMonitor(subscription.sessionId);
   const prompt = observeStableCodexTuiSelectionPrompt(capture.screen, monitor);
   if (!prompt) {
+    if (
+      subscription.pendingTurn
+      && nowMs < (tmuxSelectionPromptFollowupUntil.get(subscription.sessionId) || 0)
+    ) {
+      scheduleMirrorSelectionProbeWake(MIRROR_TMUX_SELECTION_PROBE_FOLLOWUP_INTERVAL_MS);
+    }
     if (!monitor.pending && monitor.firstSeenAtMs >= 0) {
       requestTmuxSelectionPromptFollowupProbe(subscription.sessionId, nowMs, {
         resetLastProbe: false,
@@ -1557,7 +1743,7 @@ function getMirrorStructuredStreamStatusConfig(): {
   return {
     idleStartMs: Math.max(
       0,
-      (typeof idleStartSeconds === 'number' && Number.isFinite(idleStartSeconds) && idleStartSeconds > 0
+      (typeof idleStartSeconds === 'number' && Number.isFinite(idleStartSeconds) && idleStartSeconds >= 0
         ? idleStartSeconds
         : MIRROR_STREAM_STATUS_IDLE_START_MS / 1000) * 1000,
     ),
@@ -1595,10 +1781,12 @@ const MIRROR_FEEDBACK = createMirrorFeedbackController({
   getThreadTitle: getMirrorThreadTitle,
   getRuntimeTags: getMirrorRuntimeTags,
   getAssistantLabel: getMirrorAssistantLabel,
+  onMirrorTurnStarted: assignCodexTuiTurnScreenBaseline,
   onMirrorStreamStart: (subscription) => {
     const key = tmuxAutoForwardReactionKey(subscription.channelType, subscription.chatId, subscription.sessionId);
     void clearPendingTmuxAutoForwardReaction(key);
   },
+  resolveFinalizedTurnStatus: resolveCodexTuiFinalizedTurnStatus,
   getStructuredStreamStatusConfig: getMirrorStructuredStreamStatusConfig,
   nowIso,
   eventBatchLimit: MIRROR_EVENT_BATCH_LIMIT,
@@ -1819,6 +2007,7 @@ async function reconcileMirrorSubscriptions(): Promise<void> {
   await MIRROR_RUNTIME.reconcileMirrorSubscriptions();
   await CLAUDE_MIRROR_RUNTIME.reconcileMirrorSubscriptions();
   await KIMI_MIRROR_RUNTIME.reconcileMirrorSubscriptions();
+  await ensureCodexTuiIdleScreenCheckpoints();
   const nowMs = Date.now();
   await Promise.allSettled(
     [
@@ -3998,6 +4187,12 @@ async function handleMessage(
         const tmuxProviderCommandStartedAtMs = Date.now();
         await handleCommand(adapter, msg, `/tmux ${text}`, {
           tmuxProviderAutoForward: true,
+          onTmuxProviderAutoForwarded: () => {
+            // The reaction lifecycle ends when the prompt has been submitted
+            // to tmux. Both a resolved reaction and a still-pending add are
+            // cancelled without waiting for a remote Feishu acknowledgement.
+            clearPendingTmuxAutoForwardReaction(reactionKey);
+          },
         });
         const tmuxProviderCommandDurationMs = Date.now() - tmuxProviderCommandStartedAtMs;
         console.log('[bridge-manager] tmux provider auto-forward command delivered:', {
@@ -4341,6 +4536,9 @@ function resetStateForTests(): void {
   tmuxSelectionPromptLastProbeAt.clear();
   tmuxSelectionPromptFollowupUntil.clear();
   pendingTmuxSelectionPromptProbePromises.clear();
+  codexTuiIdleScreenCheckpoints.clear();
+  codexTuiTurnScreenBaselines.clear();
+  codexTuiReconnectMonitors.clear();
   state.everyTaskSelections.clear();
   state.thenTaskSelections.clear();
   state.thenTaskTimers.clear();
@@ -4412,6 +4610,9 @@ export const _testOnly = {
   deliverMirrorTurns,
   flushTimedOutMirrorTurn,
   refreshMirrorStreamingStatus,
+  captureCodexTuiIdleScreenCheckpoint,
+  assignCodexTuiTurnScreenBaseline,
+  resolveCodexTuiFinalizedTurnStatus,
   filterSuppressedMirrorRecords,
   isMirrorSuppressed,
   reconcileTerminalSessionRuntimeState: () => INTERACTIVE_RUNTIME.reconcileTerminalSessionRuntimeState(),

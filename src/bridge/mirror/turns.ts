@@ -55,7 +55,9 @@ export interface FinalizedBridgeMirrorTurn {
   goalStatus?: { status: string; objective: string } | null;
   signature: string;
   timestamp: string;
-  status: 'completed' | 'interrupted';
+  startedAt?: string;
+  status: 'completed' | 'interrupted' | 'error';
+  errorText?: string;
   timedOut?: boolean;
 }
 
@@ -79,6 +81,7 @@ export interface PendingMirrorDeliveryStateHolder {
 }
 
 export interface MirrorTurnHooks<TSubscription extends MirrorTurnStateHolder = MirrorTurnStateHolder> {
+  onTurnStarted?: (subscription: TSubscription, turnState: BridgeMirrorTurnState) => void;
   onStreamText?: (subscription: TSubscription, turnState: BridgeMirrorTurnState) => void;
   onStatusProgress?: (subscription: TSubscription, turnState: BridgeMirrorTurnState) => void;
   onTaskProgress?: (subscription: TSubscription, turnState: BridgeMirrorTurnState) => void;
@@ -324,7 +327,7 @@ export function finalizeMirrorTurn<TSubscription extends MirrorTurnStateHolder>(
   subscription: TSubscription,
   signature: string,
   timestamp: string,
-  status: 'completed' | 'interrupted',
+  status: 'completed' | 'interrupted' | 'error',
   preferredText?: string,
 ): FinalizedBridgeMirrorTurn | null {
   const pendingTurn = subscription.pendingTurn;
@@ -355,6 +358,7 @@ export function finalizeMirrorTurn<TSubscription extends MirrorTurnStateHolder>(
     ...(pendingTurn.goalStatus ? { goalStatus: pendingTurn.goalStatus } : {}),
     signature,
     timestamp: timestamp || pendingTurn.lastActivityAt || nowIso(),
+    startedAt: pendingTurn.startedAt,
     status,
     ...(signature.startsWith('timeout:') ? { timedOut: true } : {}),
   };
@@ -389,12 +393,22 @@ export function consumeMirrorRecords<TSubscription extends MirrorTurnStateHolder
           subscription.pendingTurn.lastActivityAt = record.timestamp;
         }
       }
+      if (subscription.pendingTurn) {
+        hooks.onTurnStarted?.(subscription, subscription.pendingTurn);
+      }
       continue;
     }
 
     if (record.type === 'task_complete') {
       ensureMirrorTurnState(subscription, record);
-      const completed = finalizeMirrorTurn(subscription, record.signature, record.timestamp, 'completed', record.content);
+      const completed = finalizeMirrorTurn(
+        subscription,
+        record.signature,
+        record.timestamp,
+        record.isError ? 'error' : 'completed',
+        record.content || record.errorText,
+      );
+      if (completed && record.errorText) completed.errorText = record.errorText;
       if (completed) finalized.push(completed);
       continue;
     }

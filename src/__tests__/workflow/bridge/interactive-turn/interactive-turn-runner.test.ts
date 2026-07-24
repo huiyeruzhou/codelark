@@ -855,7 +855,7 @@ stream_status_check_interval_seconds = 3
   });
 
   it('formats the persistent runtime status text', () => {
-    assert.equal(formatInteractiveRuntimeStatus(0), '处理中');
+    assert.equal(formatInteractiveRuntimeStatus(0), '已运行 0秒');
     assert.equal(formatInteractiveRuntimeStatus(65_000), '已运行 1分5秒');
     assert.equal(formatInteractiveRuntimeStatus(3_661_000, 10_000), '已运行 1小时1分1秒，上次响应距今 10秒');
     assert.equal(formatInteractiveRuntimeStatus(1_000, 70_000), '已运行 1秒，上次响应距今 1分10秒');
@@ -1188,17 +1188,17 @@ stream_status_check_interval_seconds = 3
         resolveInteractiveTurnRuntimeSettings: resolveTestInteractiveTurnRuntimeSettings,
         processMessageImpl: async (_binding, _text, _onPermission, _abortSignal, _files, onPartialText) => {
           onPartialText?.('第一段输出');
-          assert.equal(adapter.streamedStatuses[0], '处理中');
-          assert.equal(adapter.streamedStatuses.at(-1), '处理中');
+          assert.equal(adapter.streamedStatuses[0], '已运行 0秒');
+          assert.equal(adapter.streamedStatuses.at(-1), '已运行 0秒');
 
           clock.advance(5_000);
-          assert.equal(adapter.streamedStatuses.at(-1), '处理中');
+          assert.equal(adapter.streamedStatuses.at(-1), '已运行 0秒');
 
           clock.advance(5_000);
           assert.equal(adapter.streamedStatuses.at(-1), '已运行 10秒，上次响应距今 10秒');
 
           onPartialText?.('第一段输出\n第二段输出');
-          assert.equal(adapter.streamedStatuses.at(-1), '已运行 10秒');
+          assert.equal(adapter.streamedStatuses.at(-1), '已运行 10秒，上次响应距今 0秒');
 
           return {
             responseText: '最终回复',
@@ -1923,7 +1923,7 @@ stream_status_check_interval_seconds = 3
         resolveInteractiveTurnRuntimeSettings: resolveTestInteractiveTurnRuntimeSettings,
         processMessageImpl: async (_binding, _text, _onPermission, _abortSignal, _files, onPartialText) => {
           onPartialText?.('第一段输出');
-          assert.equal(adapter.streamedStatuses.at(-1), '处理中');
+          assert.equal(adapter.streamedStatuses.at(-1), '已运行 0秒');
 
           clock.advance(30_000);
           assert.equal(adapter.streamedStatuses.at(-1), '已运行 30秒');

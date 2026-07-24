@@ -61,6 +61,8 @@ export interface TmuxCore {
   sendActions(target: string, actions: TmuxSendAction[], options?: { delayMs?: number }): Promise<TmuxSendActionsResult>;
   sendInterrupt(target: string): Promise<string>;
   injectPromptIntoPane(targetPane: string, prompt: string): Promise<TmuxSendActionsResult>;
+  /** Enable tmux's extended key protocol for TUIs that distinguish Enter from newline. */
+  ensureExtendedKeys?(): Promise<string>;
   commandPreview(args: readonly string[]): string;
 }
 
@@ -160,6 +162,12 @@ function splitTextChunks(text: string, chunkSize = PASTE_CHUNK_SIZE): string[] {
 
 class TmuxCliCore implements TmuxCore {
   commandPreview(args: readonly string[]): string {
+    return tmuxCommandPreview(args);
+  }
+
+  async ensureExtendedKeys(): Promise<string> {
+    const args: TmuxArgv = ['set-option', '-g', 'extended-keys', 'on'];
+    await runTmux(args);
     return tmuxCommandPreview(args);
   }
 

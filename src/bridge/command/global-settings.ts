@@ -64,7 +64,7 @@ const SETTING_DISPLAY_LABELS: Record<string, string> = {
   uiAllowLan: '允许局域网访问 UI',
   uiAccessToken: 'UI 访问令牌',
   historyMessageLimit: '历史消息条数',
-  streamStatusIdleStartSeconds: '流式状态空闲提示秒数',
+  streamStatusIdleStartSeconds: '响应计时显示延迟秒数',
   streamStatusCheckIntervalSeconds: '流式状态检查间隔秒数',
   streamingEnabled: '启用流式反馈',
   feedbackMarkdownEnabled: '启用 Markdown 反馈',
@@ -583,13 +583,13 @@ const SETTING_DEFINITIONS: SettingDefinition[] = [
     group: 'channels.feishu',
     aliases: ['streamIdle', 'idleStart'],
     label: 'stream_status_idle_start_seconds',
-    usage: '/set streamStatusIdleStartSeconds 180',
+    usage: '/set streamStatusIdleStartSeconds 0',
     control: 'input',
     placeholder: '秒',
     read: (config) => `${defaultFeishuChannel(config)?.config.streamStatusIdleStartSeconds ?? '-'}`,
     write(rawValue, current) {
-      const parsed = parsePositiveInt(rawValue);
-      if (parsed === null) return { ok: false, message: '值必须是大于等于 1 的整数。' };
+      const parsed = parseNonNegativeInt(rawValue);
+      if (parsed === null) return { ok: false, message: '值必须是大于等于 0 的整数。' };
       return patchChannelConfig(current, { streamStatusIdleStartSeconds: parsed });
     },
   },

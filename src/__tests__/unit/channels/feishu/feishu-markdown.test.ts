@@ -16,6 +16,8 @@ import {
   buildTaskProgressMarkdown,
   buildToolProgressMarkdown,
   DEFAULT_FEISHU_TOOL_CALL_CARD_STYLE,
+  FEISHU_LONG_USER_INPUT_COLLAPSE_THRESHOLD,
+  FEISHU_LONG_USER_INPUT_TITLE_LIMIT,
   preprocessFeishuMarkdown,
 } from '../../../../channels/feishu/markdown.js';
 import {
@@ -585,6 +587,29 @@ describe('buildStreamingTextElements', () => {
 });
 
 describe('buildStreamingHistoryElements', () => {
+  it('keeps ordinary user input inline and folds only long input into a borderless panel', () => {
+    const short = buildStreamingHistoryElementsFromItems('', [
+      { type: 'markdown', role: 'user', content: '普通用户输入' },
+    ]);
+    const shortItem = ((short[0] as any).elements as any[])[0];
+    assert.equal(shortItem.tag, 'markdown');
+
+    const longText = `${'用户输入段落 '.repeat(140)}\n保留完整结尾`;
+    assert.ok(Array.from(longText).length > FEISHU_LONG_USER_INPUT_COLLAPSE_THRESHOLD);
+    const long = buildStreamingHistoryElementsFromItems('', [
+      { type: 'markdown', role: 'user', content: longText },
+    ]);
+    const longItem = ((long[0] as any).elements as any[])[0];
+    assert.equal(longItem.tag, 'collapsible_panel');
+    assert.equal(longItem.expanded, false);
+    assert.equal('border' in longItem, false);
+    assert.ok(Array.from(String(longItem.header.title.content)).length <= FEISHU_LONG_USER_INPUT_TITLE_LIMIT + 8);
+    assert.match(longItem.header.title.content, /^\*\*用户\*\*：用户输入段落/);
+    assert.match(longItem.header.title.content, /…$/);
+    assert.match(longItem.elements[0].content, /保留完整结尾$/);
+    assertFeishuElementIdsAreValid(long);
+  });
+
   it('renders explicit reducer history items without inferring tool positions from markdown text', () => {
     const elements = buildStreamingHistoryElementsFromItems('> ⚙️ **Goal Active**: 保留目标区', [
       { type: 'markdown', role: 'user', content: '用户输入' },
@@ -727,6 +752,43 @@ describe('buildStreamingHistoryElements', () => {
 });
 
 describe('buildFinalCardJson', () => {
+  it('keeps history-only tool panels when terminal response text is empty', () => {
+    const cardJson = buildFinalCardJson(
+      '',
+      [],
+      [],
+      { status: '', elapsed: '1.2s' },
+      'completed',
+      [],
+      'chat-1',
+      {},
+      [
+        { type: 'markdown', role: 'assistant', content: '现场补丁回放' },
+        {
+          type: 'tool_panel',
+          tools: [{
+            id: 'patch-1',
+            name: 'apply_patch',
+            status: 'complete',
+            detail: {
+              kind: 'patch_apply',
+              patchText: '*** Begin Patch\n*** Update File: src/example.ts\n@@\n+const fixed = true;\n*** End Patch',
+              files: [{ path: 'src/example.ts', action: 'update' }],
+            },
+          }],
+        },
+      ],
+    );
+
+    const parsed = JSON.parse(cardJson) as any;
+    const body = JSON.stringify(parsed.body.elements);
+    assert.match(body, /现场补丁回放/);
+    assert.match(body, /stream_tool_1/);
+    assert.match(body, /Begin Patch/);
+    assert.match(body, /End Patch/);
+    assert.match(body, /1\.2s/);
+  });
+
   it('renders terminal task and tool states without active waiting labels', () => {
     const cardJson = buildFinalCardJson(
       '最终回复',
@@ -893,6 +955,30 @@ describe('buildFinalCardJson', () => {
     const parsed = JSON.parse(cardJson) as any;
     const body = JSON.stringify(parsed.body.elements);
     assert.match(body, /✅ Completed · 1s · 125k\(63%\) · ↑125k ↓4\.6k/);
+  });
+
+  it('uses the same single-line final footer for history-driven Kimi cards', () => {
+    const cardJson = buildFinalCardJson(
+      'Kimi 回复\n\nContext: ↑0.2k ↓0.0k',
+      [],
+      [],
+      { status: '', elapsed: '665ms', context: '↑0.2k ↓0.0k' },
+      'completed',
+      [],
+      'chat-kimi',
+      { tags: ['kimi', 'mirror'] },
+      [
+        { type: 'markdown', role: 'user', content: '用户输入' },
+        { type: 'markdown', role: 'assistant', content: 'Kimi 回复\nContext: ↑0.2k ↓0.0k' },
+      ],
+    );
+
+    const parsed = JSON.parse(cardJson) as any;
+    const contextElements = parsed.body.elements.filter((element: any) => (
+      element.tag === 'markdown' && String(element.content || '').includes('↑0.2k ↓0.0k')
+    ));
+    assert.equal(contextElements.length, 1);
+    assert.equal(contextElements[0]?.content, '665ms · ↑0.2k ↓0.0k');
   });
 
   it('does not render embedded fences from final card exec_command output', () => {
