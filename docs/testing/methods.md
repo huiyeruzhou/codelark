@@ -136,7 +136,7 @@ fake 测试也要遵守真实职责边界。`fake tmux` 只模拟 tmux transport
 | `outbound-artifacts.test.ts` | 出站 artifact、问题表单和附件描述。 |
 | `permission.test.ts`、`permission-broker.test.ts` | 权限请求、pending permission 状态和 broker 行为。 |
 
-主路径性能回归必须同时覆盖两层：`command-dispatch.test.ts` 用永久 pending 的 fake Feishu reply 证明命令 handler 及时结束、下一条命令可继续入队；`interactive-turn-runner.test.ts` 证明 stream finalize/fallback/onMessageEnd 的顺序留在后台 delivery job 中。禁止用直接删除 `await` 的方式让卡片 cleanup 抢在 finalize 前执行。
+主路径性能回归必须同时覆盖三层：`command-dispatch.test.ts` 用永久 pending 的 fake Feishu reply、群名同步、callback answer 和 mirror reconcile 证明 raw handler 及时结束、下一条命令可继续入队；`permission-broker.test.ts` 用 pending 权限卡 ACK 证明 forwarding 立即返回并在 receipt 到达后回填 permission link，还要证明最终投递失败会立即结束 pending permission/selection waiter；`feishu-adapter.test.ts` 用 pending notice/reaction ACK 证明构造完成的内部消息先入队；`interactive-turn-runner.test.ts` 证明 stream finalize/fallback/onMessageEnd 的顺序留在后台 delivery job 中。`/new` 这类必须先取得远端主键的事务要验证文本命令和 command callback 都被路由到不阻塞 conversation 的 long-I/O job lane。常规测试必须显式 drain 后台 delivery，禁止为了让测试立刻读到 `sent` 而在产品 handler 末尾增加 `setImmediate` 或等待远端 ACK；也禁止用直接删除 `await` 的方式让卡片 cleanup 抢在 finalize 前执行。
 
 ### IM 通道、平台 adapter 和 Web 工作台
 

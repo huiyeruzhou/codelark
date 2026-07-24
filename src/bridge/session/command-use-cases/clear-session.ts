@@ -42,7 +42,9 @@ import { buildClearConfirmationCard } from './clear-confirmation.js';
 import { sessionLooksRunning } from './status-guards.js';
 import { auditCommandBindingChange } from './thread-targets.js';
 import {
-  reconcileMirrorSubscriptionsBestEffort,
+  createGroupRenameBackgroundEffect,
+  scheduleMirrorSubscriptionsBestEffort,
+  type SessionCommandBackgroundEffect,
   type SessionCommandDeps,
   type SessionCommandResult,
 } from './types.js';
@@ -215,15 +217,13 @@ export async function handleClearSessionCommand(options: {
     session = options.store.getSession(binding.bridgeSessionId);
   }
   let groupRenameStatus: string | null = null;
+  const backgroundEffects: SessionCommandBackgroundEffect[] = [];
   const shouldRenameGroup = options.msg.address.chatKind === 'group' || previousBinding?.chatKind === 'group';
   if (shouldRenameGroup) {
-    if (options.adapter.renameGroupChat) {
-      try {
-        const renamed = await options.adapter.renameGroupChat(options.msg.address.chatId, sessionName);
-        groupRenameStatus = renamed.name || sessionName;
-      } catch (error) {
-        groupRenameStatus = `失败：${error instanceof Error ? error.message : String(error)}`;
-      }
+    const renameEffect = createGroupRenameBackgroundEffect(options.adapter, options.msg.address.chatId, sessionName);
+    if (renameEffect) {
+      backgroundEffects.push(renameEffect);
+      groupRenameStatus = `${sessionName}（后台同步中）`;
     } else {
       groupRenameStatus = '当前通道不支持修改群聊名称';
     }
@@ -237,7 +237,7 @@ export async function handleClearSessionCommand(options: {
     binding,
     confirmation.confirmed ? 'clear confirmed' : 'clear',
   );
-  await reconcileMirrorSubscriptionsBestEffort(options.deps, 'clear session');
+  scheduleMirrorSubscriptionsBestEffort(options.deps, 'clear session');
 
   return {
     response: buildCommandFields(
@@ -258,5 +258,6 @@ export async function handleClearSessionCommand(options: {
       ],
       options.markdown,
     ),
+    backgroundEffects,
   };
 }

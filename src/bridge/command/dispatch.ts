@@ -33,6 +33,7 @@ import {
   handleNewSessionCommand,
   handleThreadBindingCommand,
   handleThreadSwitchCommand,
+  type SessionCommandBackgroundEffect,
 } from './session-thread.js';
 import {
   handleChangeDirectoryCommand,
@@ -301,6 +302,22 @@ function formatCurrentConfigWriteError(error: unknown): string {
   return error instanceof Error ? error.message : '配置字段不合法。';
 }
 
+function scheduleCommandBackgroundEffect(
+  effect: SessionCommandBackgroundEffect,
+  adapter: BaseChannelAdapter,
+  address: ChannelAddress,
+): void {
+  void effect.run().catch((error) => {
+    console.warn('[bridge-command] Background command effect failed:', {
+      context: effect.context,
+      error: describeReactionError(error),
+    });
+    enqueueBridgeNotice(adapter, address, `${effect.failureNotice}\n\n${describeReactionError(error)}`, {
+      audit: true,
+    });
+  });
+}
+
 async function handleCurrentConfigFormCommand(options: {
   adapter: BaseChannelAdapter;
   msg: InboundMessage;
@@ -310,7 +327,7 @@ async function handleCurrentConfigFormCommand(options: {
   deps: BridgeCommandDispatchDeps;
   threadDisplay: CommandThreadDisplay;
   markdown: boolean;
-}): Promise<{ response: string; richCard?: OutboundRichCard }> {
+}): Promise<{ response: string; richCard?: OutboundRichCard; backgroundEffects?: SessionCommandBackgroundEffect[] }> {
   let binding = options.binding || router.resolve(options.msg.address);
   let session = options.store.getSession(binding.bridgeSessionId);
   if (!session) return { response: '当前会话不存在，无法保存配置。' };
@@ -322,6 +339,7 @@ async function handleCurrentConfigFormCommand(options: {
   const submittedRuntime = parseCurrentRuntimeArg(options.args)
     || normalizeRuntimeFormValue(formValue.clk_runtime || formValue.runtime);
   const responses: string[] = [];
+  const backgroundEffects: SessionCommandBackgroundEffect[] = [];
   if (submittedRuntime && submittedRuntime !== activeRuntime) {
     responses.push(handleRuntimeCommand({
       msg: options.msg,
@@ -355,7 +373,13 @@ async function handleCurrentConfigFormCommand(options: {
     if (!parsed.ok) return { response: parsed.message };
     options.threadDisplay.renameBinding(binding, parsed.name);
     if (binding.chatKind === 'group' && options.adapter.renameGroupChat) {
-      await options.adapter.renameGroupChat(binding.chatId, parsed.name).catch(() => null);
+      backgroundEffects.push({
+        context: `rename group chat ${binding.chatId}`,
+        failureNotice: `当前会话标题已保存，但群聊名称同步失败。可稍后重试 \`/t rename ${parsed.name}\`。`,
+        run: async () => {
+          await options.adapter.renameGroupChat!(binding.chatId, parsed.name);
+        },
+      });
     }
     responses.push(`name: ${parsed.name}`);
   }
@@ -407,6 +431,7 @@ async function handleCurrentConfigFormCommand(options: {
       store: options.store,
       threadDisplay: options.threadDisplay,
     }),
+    backgroundEffects,
   };
 }
 
@@ -505,6 +530,7 @@ export async function handleBridgeCommand(
   let afterDelivery: ((messageId?: string) => Promise<void> | void) | undefined;
   let postDeliveryCurrentAddress: ChannelAddress | undefined;
   let postDeliveryUserMessages: InboundMessage[] = [];
+  const backgroundEffects: SessionCommandBackgroundEffect[] = [];
   const currentBinding = deps.scopedBinding || store.getChannelChat(msg.address.channelType, msg.address.chatId);
   const shouldApplyDefaultTargetForCommand = !new Set(['/status', '/threads', '/t', '/set']).has(command);
   const commandBinding = !shouldApplyDefaultTargetForCommand
@@ -545,6 +571,7 @@ export async function handleBridgeCommand(
           messageId: postDeliveryUserMessage.messageId,
           timestamp: Date.now(),
         }));
+        backgroundEffects.push(...(result.backgroundEffects || []));
       }
       break;
     }
@@ -583,6 +610,7 @@ export async function handleBridgeCommand(
       responseAddress = result.responseAddress || msg.address;
       responseRichCard = result.richCard;
       threadTableCardScope = result.threadTableCardScope;
+      backgroundEffects.push(...(result.backgroundEffects || []));
       break;
     }
 
@@ -618,6 +646,7 @@ export async function handleBridgeCommand(
       responseAddress = result.responseAddress || msg.address;
       responseRichCard = result.richCard;
       threadTableCardScope = result.threadTableCardScope;
+      backgroundEffects.push(...(result.backgroundEffects || []));
       break;
     }
 
@@ -945,6 +974,7 @@ export async function handleBridgeCommand(
       response = result.response;
       responseRichCard = result.richCard;
       threadTableCardScope = responseRichCard ? 'current' : undefined;
+      backgroundEffects.push(...(result.backgroundEffects || []));
       break;
     }
 
@@ -1129,8 +1159,9 @@ export async function handleBridgeCommand(
     }).catch((error) => {
       console.warn('[bridge-command] Post-delivery command work failed:', describeReactionError(error));
     });
-    // Let an idle queue run through immediately-resolved test/local adapters
-    // without ever waiting for a slow remote acknowledgement.
-    await new Promise<void>((resolve) => setImmediate(resolve));
+  }
+
+  for (const effect of backgroundEffects) {
+    scheduleCommandBackgroundEffect(effect, adapter, msg.address);
   }
 }

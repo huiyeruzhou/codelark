@@ -6,6 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 
 import { FeishuAdapter, _testOnly } from '../../../../channels/feishu/adapter.js';
+import { _testOnlyWaitForDeliveryQueuesForTests } from '../../../../channels/delivery/deliver.js';
 import {
   _testOnly as largeFileUploadTestOnly,
   LARGE_FILE_UPLOAD_THRESHOLD_BYTES,
@@ -21,6 +22,20 @@ function createDeferred<T = void>() {
     reject = rej;
   });
   return { promise, resolve, reject };
+}
+
+async function resolvesWithin<T>(promise: Promise<T>, timeoutMs = 100): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(() => reject(new Error(`promise did not resolve within ${timeoutMs}ms`)), timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
 }
 
 function findCardElement(root: unknown, predicate: (element: any) => boolean): any | null {
@@ -362,6 +377,7 @@ describe('feishu-adapter structured streaming regions', () => {
   it('turns first mentioned cloud document comments into an internal doc chat creation event', async () => {
     initBridgeTestContext();
     const reactionRequests: Array<Record<string, any>> = [];
+    const reactionAck = createDeferred<{ code: number; data: Record<string, never> }>();
     const adapter = new FeishuAdapter({
       id: 'feishu-default',
       provider: 'feishu',
@@ -408,13 +424,13 @@ describe('feishu-adapter structured streaming regions', () => {
           },
         },
       },
-      request: async (payload: Record<string, any>) => {
+      request: (payload: Record<string, any>) => {
         reactionRequests.push(payload);
-        return { code: 0, data: {} };
+        return reactionAck.promise;
       },
     };
 
-    await (adapter as any).processCloudDocumentCommentEvent(cloudDocumentCommentEvent('evt-doc-comment-1', {
+    const processing = (adapter as any).processCloudDocumentCommentEvent(cloudDocumentCommentEvent('evt-doc-comment-1', {
       file_token: 'doc-token',
       file_type: 'docx',
       comment_id: 'comment-1',
@@ -423,6 +439,8 @@ describe('feishu-adapter structured streaming regions', () => {
       operator_id: { open_id: 'ou_user' },
       mention_list: [{ id: { open_id: 'ou_bot' } }],
     }));
+    await waitForCondition(() => reactionRequests.length === 1);
+    await resolvesWithin(processing);
 
     const inbound = await adapter.consumeOne();
     assert.ok(inbound);
@@ -442,6 +460,7 @@ describe('feishu-adapter structured streaming regions', () => {
       reply_id: 'reply-1',
       reaction_type: 'Typing',
     });
+    reactionAck.resolve({ code: 0, data: {} });
   });
 
   it('matches cloud document comment mentions from nested Feishu id fields', async () => {
@@ -537,6 +556,7 @@ describe('feishu-adapter structured streaming regions', () => {
     });
     const reactionRequests: Array<Record<string, any>> = [];
     const groupMessages: Array<Record<string, any>> = [];
+    const groupNoticeAck = createDeferred<{ data: { message_id: string } }>();
     const adapter = new FeishuAdapter({
       id: 'feishu-default',
       provider: 'feishu',
@@ -584,9 +604,9 @@ describe('feishu-adapter structured streaming regions', () => {
       },
       im: {
         message: {
-          create: async (payload: Record<string, any>) => {
+          create: (payload: Record<string, any>) => {
             groupMessages.push(payload);
-            return { data: { message_id: `om_notice_${groupMessages.length}` } };
+            return groupNoticeAck.promise;
           },
         },
       },
@@ -596,7 +616,7 @@ describe('feishu-adapter structured streaming regions', () => {
       },
     };
 
-    await (adapter as any).processCloudDocumentCommentEvent(cloudDocumentCommentEvent('evt-doc-comment-bound', {
+    const processing = (adapter as any).processCloudDocumentCommentEvent(cloudDocumentCommentEvent('evt-doc-comment-bound', {
       file_token: 'doc-bound-token',
       file_type: 'docx',
       comment_id: 'comment-2',
@@ -604,6 +624,8 @@ describe('feishu-adapter structured streaming regions', () => {
       operator_id: { open_id: 'ou_user' },
       mention_list: [{ id: { open_id: 'ou_someone_else' } }],
     }));
+    await waitForCondition(() => groupMessages.length === 1);
+    await resolvesWithin(processing);
 
     const inbound = await adapter.consumeOne();
     assert.ok(inbound);
@@ -613,6 +635,8 @@ describe('feishu-adapter structured streaming regions', () => {
     assert.match(JSON.parse(groupMessages[0].data.content).text, /收到一条云文档评论/);
     assert.match(inbound.text, /用户的问题：继续整理这个 TODO/);
     assert.deepEqual(reactionRequests, []);
+    groupNoticeAck.resolve({ data: { message_id: 'om_notice_1' } });
+    await _testOnlyWaitForDeliveryQueuesForTests(adapter);
   });
 
   it('turns mentioned cloud document comments into the internal doc chat creation command', async () => {
@@ -2139,6 +2163,7 @@ describe('feishu-adapter structured streaming regions', () => {
 
   it('replies with a user-visible notice for unsupported Feishu message types', async () => {
     const replies: Array<Record<string, any>> = [];
+    const noticeAck = createDeferred<{ data: { message_id: string } }>();
     const adapter = new FeishuAdapter({
       id: 'feishu-default',
       provider: 'feishu',
@@ -2149,15 +2174,15 @@ describe('feishu-adapter structured streaming regions', () => {
     (adapter as any).restClient = {
       im: {
         message: {
-          reply: async (payload: Record<string, any>) => {
+          reply: (payload: Record<string, any>) => {
             replies.push(payload);
-            return { data: { message_id: 'notice-1' } };
+            return noticeAck.promise;
           },
         },
       },
     };
 
-    await (adapter as any).processIncomingEvent({
+    const processing = (adapter as any).processIncomingEvent({
       sender: {
         sender_type: 'user',
         sender_id: { open_id: 'user-1' },
@@ -2171,6 +2196,8 @@ describe('feishu-adapter structured streaming regions', () => {
         create_time: '1780209968114',
       },
     });
+    await waitForCondition(() => replies.length === 1);
+    await resolvesWithin(processing);
 
     assert.equal(replies.length, 1);
     assert.equal(replies[0].path.message_id, 'msg-sticker-1');
@@ -2179,6 +2206,8 @@ describe('feishu-adapter structured streaming regions', () => {
     assert.match(content.text, /暂不支持飞书消息类型：sticker/);
     assert.match(content.text, /不会转发给 Codex/);
     assert.equal(await adapter.consumeOne(), null);
+    noticeAck.resolve({ data: { message_id: 'notice-1' } });
+    await _testOnlyWaitForDeliveryQueuesForTests(adapter);
   });
 
   it('does not add typing reactions while starting or ending a stream', async () => {

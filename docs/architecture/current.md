@@ -130,7 +130,7 @@ conversation barrier 是 lane 之上的保护规则，用来处理“这条命�
 8. provider 创建或继续底层 runtime 会话，并把必要身份写回 session。
 9. 主路径把最终文本、卡片、附件等转换为 delivery intent，按 adapter + chat 入有序队列后立即释放 lane；远端 IM ACK、重试和 message id 回填在队列 worker 中完成。
 
-这里的“有序”只约束同一 adapter/chat 的同类队列。普通回复与交互卡片使用独立 queue class，确认卡、按钮和 stream finalize 不会被前面的慢普通消息挡住；各自内部仍保序。CardKit create → send、stream finalize → fallback 回复、附件 caption → 附件等存在数据依赖的动作留在同一个 worker job 内串行；不同聊天互不等待。session lane 禁止等待普通 reply、reaction、CardKit create/update/finalize 或全局 mirror reconcile 的远端回执。只有决定本地下一状态所必需的外部业务操作，例如创建群聊后取得 chat id，才可以仍属于命令 use-case 本身。
+这里的“有序”只约束同一 adapter/chat 的同类队列。普通回复与交互卡片使用独立 queue class，确认卡、按钮和 stream finalize 不会被前面的慢普通消息挡住；各自内部仍保序。CardKit create → send、stream finalize → fallback 回复、附件 caption → 附件等存在数据依赖的动作留在同一个 worker job 内串行；不同聊天互不等待。session/chat 主 lane 禁止等待普通 reply、权限/选择卡、reaction、callback answer、CardKit create/update/finalize、群名同步或全局 mirror reconcile 的远端回执。adapter 入站阶段也遵循同一边界：正文、引用和附件等构造内部消息必需的数据可以等待，Typing reaction、兼容提示和云文档群转发 notice 必须后台启动或入 delivery 队列后先放行内部消息。权限卡的 `message_id` 与 permission link 在 delivery receipt continuation 中回填；callback 先到时由 pending-callback 状态在 link 建立后对账，投递最终失败则 fail-closed 结束 pending permission 和 selection waiter。`/new` 必须等待建群结果才能取得 chat id，但文本命令和卡片 command callback 都被隔离到不阻塞 conversation 的 long-I/O job lane；远端完成后才提交新群 binding，不能把这段等待放回当前聊天的 session/chat 主 lane。
 
 ### 模块入口
 
@@ -448,7 +448,7 @@ flowchart TD
 
 命令也要服从 lane。只读状态查询可以走 chat lane；会改变会话绑定或运行配置的命令必须进入 session lane 并声明 barrier；停止和权限快捷回复这类控制动作走 control lane。
 
-命令生成展示结果后只负责 enqueue，不等待平台回复 ACK。需要 `message_id` 的置顶、记录和 post-delivery 动作挂在 delivery receipt continuation 上，不能为了回填 id 继续占用 session lane。
+命令生成展示结果后只负责 enqueue，不等待平台回复 ACK。需要 `message_id` 的置顶、记录和 post-delivery 动作挂在 delivery receipt continuation 上，不能为了回填 id 继续占用 session lane。群名同步、callback answer 和 mirror reconcile 也属于后台副作用；失败必须独立记录或提示，不能把远端状态塞回同步命令返回值。只有必须先取得远端主键才能落本地状态的事务可以在专用 job lane 内等待，例如 `/new` 建群取得 chat id；该 job 不得阻塞当前聊天继续处理普通消息。
 
 ### 命令类型
 

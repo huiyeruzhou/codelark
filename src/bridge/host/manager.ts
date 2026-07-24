@@ -207,6 +207,7 @@ import {
 import { probeCodexThreadProcess } from '../health/process.js';
 import { createSessionHealthRuntime } from '../health/runtime.js';
 import { deliverBridgeNotice, deliverResponse, enqueueBridgeNotice } from '../../channels/delivery/feedback.js';
+import { _testOnlyWaitForDeliveryQueuesForTests } from '../../channels/delivery/deliver.js';
 import { routeCodexRecords, routeRuntimeRecords } from '../turn/local-codex-terminal-router.js';
 import { createTurnCoordinator } from '../turn/turn-coordinator.js';
 import type { BridgeTurnTerminalRecord } from '../turn/turn-types.js';
@@ -585,7 +586,7 @@ async function handleTmuxSelectionPromptForTarget(
   );
   const permissionRequestId = `codex-selection:${prompt.kind}:mirror:${target.sessionId}:${Date.now()}`;
   const choicePromise = broker.waitForCodexTuiSelectionPermission(permissionRequestId);
-  await broker.forwardPermissionRequest(
+  broker.forwardPermissionRequest(
     adapter,
     { channelType: target.channelType, chatId: target.chatId },
     permissionRequestId,
@@ -1885,7 +1886,8 @@ function isReadOnlyOrLongIoCommandText(rawText: string): boolean {
   const resolvedCommand = resolveInboundCommandText(rawText);
   return resolvedCommand === '/tmux-screen'
     || resolvedCommand === '/pty-screen'
-    || resolvedCommand === '/shell';
+    || resolvedCommand === '/shell'
+    || resolvedCommand === '/new';
 }
 
 function splitInboundCommandText(rawText: string): { resolvedCommand: string; args: string } {
@@ -1975,15 +1977,21 @@ function adapterImmediateLane(msg: InboundMessage, category: 'channel-event' | '
       jobKind: 'control:command',
     };
   }
-  if (category === 'command' && isReadOnlyOrLongIoCommandText(msg.text)) {
-    const resolvedCommand = resolveInboundCommandText(msg.text);
+  const immediateJobCommandText = category === 'command'
+    ? msg.text
+    : category === 'callback' && msg.callbackData
+      ? parseCommandCallbackData(msg.callbackData)?.commandText
+      : undefined;
+  if (immediateJobCommandText && isReadOnlyOrLongIoCommandText(immediateJobCommandText)) {
+    const resolvedCommand = resolveInboundCommandText(immediateJobCommandText);
     const isScreenMonitor = resolvedCommand === '/tmux-screen' || resolvedCommand === '/pty-screen';
+    const blocksConversation = !isScreenMonitor && resolvedCommand !== '/new';
     return {
       laneKey: `job:${resolvedCommand.slice(1)}:${msg.address.channelType}:${msg.address.chatId}:${msg.messageId || 'command'}`,
       laneKind: 'job',
       jobKind: `command:${resolvedCommand.slice(1)}`,
       waitForConversationBarrier: !isScreenMonitor,
-      blocksConversation: !isScreenMonitor,
+      blocksConversation,
     };
   }
   return null;
@@ -3328,7 +3336,7 @@ async function handleChannelLifecycleEvent(msg: InboundMessage): Promise<void> {
     });
   } catch { /* best effort */ }
 
-  await reconcileMirrorSubscriptions().catch((err) => {
+  void reconcileMirrorSubscriptions().catch((err) => {
     console.error('[bridge-manager] Mirror reconcile after channel lifecycle archive failed:', describeUnknownError(err));
   });
   console.warn('[bridge-manager] Archived local ChannelChat session after channel lifecycle event:', {
@@ -3504,7 +3512,9 @@ async function handleMessage(
         enqueueBridgeNotice(adapter, msg.address, '这个下拉选项无效，请刷新后重试。');
       } else {
         getState().everyTaskSelections.set(everyTaskSelectionKey(msg), selectedEveryTaskId);
-        await adapter.answerCallback?.(msg.messageId, '已选择');
+        void adapter.answerCallback?.(msg.messageId, '已选择').catch((error) => {
+          console.warn('[bridge-manager] Failed to answer every-task selection callback:', describeUnknownError(error));
+        });
       }
       ack();
       return;
@@ -3540,7 +3550,9 @@ async function handleMessage(
         enqueueBridgeNotice(adapter, msg.address, '这个下拉选项无效，请刷新后重试。');
       } else {
         getState().thenTaskSelections.set(thenTaskSelectionKey(msg), selectedThenTaskId);
-        await adapter.answerCallback?.(msg.messageId, '已选择');
+        void adapter.answerCallback?.(msg.messageId, '已选择').catch((error) => {
+          console.warn('[bridge-manager] Failed to answer then-task selection callback:', describeUnknownError(error));
+        });
       }
       ack();
       return;
@@ -3576,7 +3588,9 @@ async function handleMessage(
         enqueueBridgeNotice(adapter, msg.address, '这个下拉选项无效，请刷新后重试。');
       } else {
         getState().threadCardSelections.set(threadSelectionKey(msg), selectedThreadId);
-        await adapter.answerCallback?.(msg.messageId, '已选择');
+        void adapter.answerCallback?.(msg.messageId, '已选择').catch((error) => {
+          console.warn('[bridge-manager] Failed to answer thread selection callback:', describeUnknownError(error));
+        });
       }
       ack();
       return;
@@ -4366,7 +4380,11 @@ function resetStateForTests(): void {
 // without wiring up the full adapter loop.
 /** @internal */
 export const _testOnly = {
-  handleMessage,
+  handleMessage: async (adapter: BaseChannelAdapter, msg: InboundMessage): Promise<void> => {
+    await handleMessage(adapter, msg);
+    await _testOnlyWaitForDeliveryQueuesForTests(adapter);
+  },
+  handleMessageWithoutDeliveryWait: handleMessage,
   syncConfiguredAdapters: (options: { startLoops: boolean }) => ADAPTER_RUNTIME.syncConfiguredAdapters(options),
   reconcileMirrorSubscriptions,
   resolveNewWorkingDirectory,

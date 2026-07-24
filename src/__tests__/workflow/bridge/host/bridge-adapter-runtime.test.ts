@@ -765,6 +765,76 @@ describe('bridge-adapter-runtime', () => {
     releaseScreen();
   });
 
+  it('does not let a pending non-blocking command callback job block the next message', async () => {
+    const state = {
+      adapters: new Map(),
+      adapterMeta: new Map(),
+      invalidAdapters: new Map(),
+      loopAborts: new Map(),
+      running: true,
+    };
+    const started: string[] = [];
+    let releaseCallback!: () => void;
+    const callbackDone = new Promise<void>((resolve) => {
+      releaseCallback = resolve;
+    });
+
+    const runtime = createAdapterRuntime(() => state, {
+      notifyAdapterSetChanged: () => {},
+      handleMessage: async (_adapter, msg) => {
+        started.push(msg.messageId);
+        if (msg.messageId === 'msg-new-callback') await callbackDone;
+      },
+      processWithSessionLock: async (_sessionId, fn) => { await fn(); },
+      isCommandMessage: (msg) => msg.text.startsWith('/'),
+      isNumericPermissionShortcut: () => false,
+      resolveSessionIdForMessage: () => 'bridge-session-a',
+      getImmediateLane: (msg, category) => (
+        category === 'callback' && msg.callbackData === 'new-session-callback'
+          ? {
+              laneKey: `job:new:${msg.address.channelType}:${msg.address.chatId}:${msg.messageId}`,
+              laneKind: 'job',
+              jobKind: 'command:new',
+              waitForConversationBarrier: true,
+              blocksConversation: false,
+            }
+          : null
+      ),
+    });
+
+    let running = true;
+    const messages = [
+      {
+        messageId: 'msg-new-callback',
+        address: { channelType: 'feishu-default', chatId: 'chat-a' },
+        text: '',
+        callbackData: 'new-session-callback',
+        timestamp: Date.now(),
+      },
+      {
+        messageId: 'msg-regular-after-new',
+        address: { channelType: 'feishu-default', chatId: 'chat-a' },
+        text: 'continue while createGroupChat is pending',
+        timestamp: Date.now(),
+      },
+    ];
+    const adapter = {
+      channelType: 'feishu-default',
+      provider: 'feishu',
+      isRunning: () => running || messages.length > 0,
+      consumeOne: async () => {
+        const next = messages.shift() || null;
+        if (messages.length === 0) running = false;
+        return next;
+      },
+    };
+
+    runtime.runAdapterLoop(adapter as never);
+    await waitForCondition(() => started.includes('msg-regular-after-new'));
+    assert.deepEqual(started, ['msg-new-callback', 'msg-regular-after-new']);
+    releaseCallback();
+  });
+
   it('waits for prior same-chat command jobs before running a conversation barrier', async () => {
     const state = {
       adapters: new Map(),

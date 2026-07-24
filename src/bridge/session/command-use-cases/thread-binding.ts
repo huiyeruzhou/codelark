@@ -40,7 +40,9 @@ import {
   selectDirectThreadTarget,
 } from './thread-targets.js';
 import {
-  reconcileMirrorSubscriptionsBestEffort,
+  createGroupRenameBackgroundEffect,
+  scheduleMirrorSubscriptionsBestEffort,
+  type SessionCommandBackgroundEffect,
   type SessionCommandDeps,
   type SessionCommandResult,
 } from './types.js';
@@ -142,7 +144,7 @@ export async function handleThreadBindingCommand(options: {
       binding,
       'im /t unbind',
     );
-    await reconcileMirrorSubscriptionsBestEffort(options.deps, 'thread unbind');
+    scheduleMirrorSubscriptionsBestEffort(options.deps, 'thread unbind');
     const richCard = buildThreadCardRefresh(options.threadDisplay, options.deps.threadCardRefreshScope, options.msg.address, options.deps.threadCardSelectedId);
     const newSession = options.store.getSession(binding.bridgeSessionId);
     return {
@@ -203,7 +205,7 @@ export async function handleThreadBindingCommand(options: {
           for (const binding of bindingsBeforeArchive) {
             options.deps.onBindingRemoved?.(binding);
           }
-          await reconcileMirrorSubscriptionsBestEffort(options.deps, 'bridge archive');
+          scheduleMirrorSubscriptionsBestEffort(options.deps, 'bridge archive');
           const activeAfterArchive = options.store.getChannelChat(options.msg.address.channelType, options.msg.address.chatId);
           const richCard = buildThreadCardRefresh(options.threadDisplay, options.deps.threadCardRefreshScope, options.msg.address, options.deps.threadCardSelectedId);
           return {
@@ -246,7 +248,7 @@ export async function handleThreadBindingCommand(options: {
         for (const binding of bindingsBeforeArchive) {
           options.deps.onBindingRemoved?.(binding);
         }
-        await reconcileMirrorSubscriptionsBestEffort(options.deps, 'bridge archive');
+        scheduleMirrorSubscriptionsBestEffort(options.deps, 'bridge archive');
         const activeAfterArchive = options.store.getChannelChat(options.msg.address.channelType, options.msg.address.chatId);
         const richCard = buildThreadCardRefresh(options.threadDisplay, options.deps.threadCardRefreshScope, options.msg.address, options.deps.threadCardSelectedId);
         return {
@@ -282,7 +284,7 @@ export async function handleThreadBindingCommand(options: {
           for (const binding of bindingsBeforeArchive) {
             options.deps.onBindingRemoved?.(binding);
           }
-          await reconcileMirrorSubscriptionsBestEffort(options.deps, 'bridge archive');
+          scheduleMirrorSubscriptionsBestEffort(options.deps, 'bridge archive');
           const activeAfterArchive = options.store.getChannelChat(options.msg.address.channelType, options.msg.address.chatId);
           const richCard = buildThreadCardRefresh(options.threadDisplay, options.deps.threadCardRefreshScope, options.msg.address, options.deps.threadCardSelectedId);
           return {
@@ -347,7 +349,7 @@ export async function handleThreadBindingCommand(options: {
       for (const binding of bindingsBeforeArchive) {
         options.deps.onBindingRemoved?.(binding);
       }
-      await reconcileMirrorSubscriptionsBestEffort(options.deps, 'kimi archive');
+      scheduleMirrorSubscriptionsBestEffort(options.deps, 'kimi archive');
       const activeAfterArchive = options.store.getChannelChat(options.msg.address.channelType, options.msg.address.chatId);
       const richCard = buildThreadCardRefresh(options.threadDisplay, options.deps.threadCardRefreshScope, options.msg.address, options.deps.threadCardSelectedId);
       return {
@@ -386,7 +388,7 @@ export async function handleThreadBindingCommand(options: {
       for (const binding of bindingsBeforeArchive) {
         options.deps.onBindingRemoved?.(binding);
       }
-      await reconcileMirrorSubscriptionsBestEffort(options.deps, 'claude archive');
+      scheduleMirrorSubscriptionsBestEffort(options.deps, 'claude archive');
       const activeAfterArchive = options.store.getChannelChat(options.msg.address.channelType, options.msg.address.chatId);
       const richCard = buildThreadCardRefresh(options.threadDisplay, options.deps.threadCardRefreshScope, options.msg.address, options.deps.threadCardSelectedId);
       return {
@@ -424,7 +426,7 @@ export async function handleThreadBindingCommand(options: {
     for (const binding of bindingsBeforeArchive) {
       options.deps.onBindingRemoved?.(binding);
     }
-    await reconcileMirrorSubscriptionsBestEffort(options.deps, 'codex archive');
+    scheduleMirrorSubscriptionsBestEffort(options.deps, 'codex archive');
     const activeAfterArchive = options.store.getChannelChat(options.msg.address.channelType, options.msg.address.chatId);
     const richCard = buildThreadCardRefresh(options.threadDisplay, options.deps.threadCardRefreshScope, options.msg.address, options.deps.threadCardSelectedId);
     const title = target.title || (bridgeSessionBeforeArchive ? getBridgeSessionDisplayTitle(bridgeSessionBeforeArchive) : threadId.slice(0, 8));
@@ -465,14 +467,12 @@ export async function handleThreadBindingCommand(options: {
     }
     options.threadDisplay.renameBinding(binding, parsed.name);
     let groupRenameStatus: string | null = null;
+    const backgroundEffects: SessionCommandBackgroundEffect[] = [];
     if (binding.chatKind === 'group') {
-      if (options.adapter.renameGroupChat) {
-        try {
-          const renamed = await options.adapter.renameGroupChat(binding.chatId, parsed.name);
-          groupRenameStatus = renamed.name || parsed.name;
-        } catch (error) {
-          groupRenameStatus = `失败：${error instanceof Error ? error.message : String(error)}`;
-        }
+      const renameEffect = createGroupRenameBackgroundEffect(options.adapter, binding.chatId, parsed.name);
+      if (renameEffect) {
+        backgroundEffects.push(renameEffect);
+        groupRenameStatus = `${parsed.name}（后台同步中）`;
       } else {
         groupRenameStatus = '当前通道不支持修改群聊名称';
       }
@@ -490,6 +490,7 @@ export async function handleThreadBindingCommand(options: {
         [],
         options.markdown,
       ),
+      backgroundEffects,
     };
   }
 

@@ -172,7 +172,7 @@ export type ForwardPermissionRequest = (
   sessionId?: string,
   suggestions?: unknown[],
   replyToMessageId?: string,
-) => Promise<void>;
+) => void;
 
 export type BuildStopCallbackData = (sessionId: string) => string;
 
@@ -567,7 +567,7 @@ export async function runInteractiveMessage(
         if (!deps.forwardPermissionRequest) {
           throw new Error('Interactive turn permission forwarding port is not configured');
         }
-        await deps.forwardPermissionRequest(
+        deps.forwardPermissionRequest(
           adapter,
           msg.address,
           perm.permissionRequestId,

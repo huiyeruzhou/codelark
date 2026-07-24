@@ -4,16 +4,96 @@ import assert from 'node:assert/strict';
 
 import {
   claimCodexSelectionCallback,
-  forwardPermissionRequest,
+  forwardPermissionRequest as forwardPermissionRequestWithoutDeliveryWait,
   handlePermissionCallback,
   waitForCodexTuiSelectionPermission,
 } from '../../../../bridge/permission/broker.js';
+import { _testOnlyWaitForDeliveryQueuesForTests } from '../../../../channels/delivery/deliver.js';
 import {
   initBridgeTestContext,
   RecordingAdapter,
 } from '../../../helpers/bridge/test-bridge-utils.js';
 
+async function forwardPermissionRequest(
+  ...args: Parameters<typeof forwardPermissionRequestWithoutDeliveryWait>
+): Promise<void> {
+  forwardPermissionRequestWithoutDeliveryWait(...args);
+  await _testOnlyWaitForDeliveryQueuesForTests(args[0]);
+}
+
 describe('permission-broker', () => {
+  it('returns before the permission card acknowledgement and links the message from the receipt', async () => {
+    const store = initBridgeTestContext();
+    const adapter = new RecordingAdapter();
+    const address = { channelType: 'feishu', chatId: 'chat-permission-background' } as const;
+    let resolveAck!: (value: { ok: true; messageId: string }) => void;
+    const ack = new Promise<{ ok: true; messageId: string }>((resolve) => {
+      resolveAck = resolve;
+    });
+    adapter.send = async (message) => {
+      adapter.sent.push(message);
+      return ack;
+    };
+
+    forwardPermissionRequestWithoutDeliveryWait(
+      adapter,
+      address,
+      'permission-background-1',
+      'Bash',
+      { command: 'npm test' },
+      'session-background-1',
+    );
+
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.equal(adapter.sent.length, 1);
+    assert.equal(store.getPermissionLink('permission-background-1'), null);
+
+    resolveAck({ ok: true, messageId: 'permission-background-message' });
+    await _testOnlyWaitForDeliveryQueuesForTests(adapter);
+    assert.equal(store.getPermissionLink('permission-background-1')?.messageId, 'permission-background-message');
+  });
+
+  it('ends permission waiters immediately when queued card delivery fails', async () => {
+    const denied: Array<{ id: string; behavior: string; message?: string }> = [];
+    initBridgeTestContext({
+      permissions: {
+        resolvePendingPermission: (id, resolution) => {
+          denied.push({ id, behavior: resolution.behavior, message: resolution.message });
+          return true;
+        },
+      },
+    });
+    const adapter = new RecordingAdapter();
+    adapter.send = async (message) => {
+      adapter.sent.push(message);
+      return { ok: false, error: 'Feishu unavailable' };
+    };
+    const address = { channelType: 'feishu', chatId: 'chat-permission-delivery-failed' } as const;
+    const permissionRequestId = 'codex-selection:permission:tmux:session-delivery-failed:1';
+    const choice = waitForCodexTuiSelectionPermission(permissionRequestId, 10_000);
+
+    forwardPermissionRequestWithoutDeliveryWait(
+      adapter,
+      address,
+      permissionRequestId,
+      'Codex TUI Selection Prompt',
+      {
+        provider: 'tmux',
+        promptKind: 'permission',
+        choices: [{ choice: 'yes_proceed', label: 'Yes, proceed', selected: true }],
+      },
+      'session-delivery-failed',
+    );
+
+    await _testOnlyWaitForDeliveryQueuesForTests(adapter);
+    assert.equal(await choice, null);
+    assert.deepEqual(denied, [{
+      id: permissionRequestId,
+      behavior: 'deny',
+      message: 'Feishu unavailable',
+    }]);
+  });
+
   it('renders Codex trust prompts as explicit trust confirmations', async () => {
     const store = initBridgeTestContext();
     const adapter = new RecordingAdapter();

@@ -14,7 +14,8 @@ import {
 import { createConfigService } from '../../../../configuration/service.js';
 import { JsonFileStore } from '../../../../storage/json-store.js';
 import { initBridgeContext } from '../../../../bridge/host/context.js';
-import { handleBridgeCommand } from '../../../../bridge/command/index.js';
+import { handleBridgeCommand as handleBridgeCommandWithoutDeliveryWait } from '../../../../bridge/command/index.js';
+import { _testOnlyWaitForDeliveryQueuesForTests } from '../../../../channels/delivery/deliver.js';
 import { _testOnly as bridgeManagerTestOnly, registerAdapter } from '../../../../bridge/host/manager.js';
 import {
   resolveClaudeRuntimeConfig,
@@ -36,7 +37,7 @@ import {
   resetRuntimeTmuxInputStatesForTests,
   transitionRuntimeTmuxInputState,
 } from '../../../../bridge/tmux/input-state-machine.js';
-import { buildCommandCallbackData, parseCommandCallbackData, THEN_TASK_ACTION_CALLBACK_PREFIX, THEN_TASK_SELECT_CALLBACK_PREFIX } from '../../../../bridge/command/callbacks.js';
+import { buildCommandCallbackData, parseCommandCallbackData, THREAD_SELECT_CALLBACK_PREFIX, THEN_TASK_ACTION_CALLBACK_PREFIX, THEN_TASK_SELECT_CALLBACK_PREFIX } from '../../../../bridge/command/callbacks.js';
 import { forwardPermissionRequest, handlePermissionCallback } from '../../../../bridge/permission/broker.js';
 import * as router from '../../../../bridge/host/channel-router.js';
 import {
@@ -89,6 +90,13 @@ import { LARGE_FILE_UPLOAD_THRESHOLD_BYTES } from '../../../../bridge/command/fi
 
 const DATA_DIR = path.join(CODELARK_HOME, 'data');
 const HOME_CONFIG_TOML_PATH = resolveConfigPaths({ codelarkHome: CODELARK_HOME }).homeToml;
+
+async function handleBridgeCommand(
+  ...args: Parameters<typeof handleBridgeCommandWithoutDeliveryWait>
+): Promise<void> {
+  await handleBridgeCommandWithoutDeliveryWait(...args);
+  await _testOnlyWaitForDeliveryQueuesForTests(args[0]);
+}
 
 function createDeferred<T = void>() {
   let resolve!: (value: T | PromiseLike<T>) => void;
@@ -4530,7 +4538,7 @@ enabled = true
     };
 
     await Promise.race([
-      handleBridgeCommand(adapter, {
+      handleBridgeCommandWithoutDeliveryWait(adapter, {
         address,
         text: '/runtime kimi',
         messageId: 'incoming-command-reply-background-1',
@@ -4540,7 +4548,7 @@ enabled = true
     await waitForCondition(() => sent.length === 1);
 
     await Promise.race([
-      handleBridgeCommand(adapter, {
+      handleBridgeCommandWithoutDeliveryWait(adapter, {
         address,
         text: '/help',
         messageId: 'incoming-command-reply-background-2',
@@ -4552,6 +4560,99 @@ enabled = true
     firstAck.resolve({ ok: true, messageId: 'reply-background-1' });
     await waitForCondition(() => sent.length === 2);
     secondAck.resolve({ ok: true, messageId: 'reply-background-2' });
+  });
+
+  it('releases /t rename before group-name and reply acknowledgements', async () => {
+    const store = initTestContext();
+    const address = { channelType: 'feishu', chatId: 'chat-rename-background', chatKind: 'group' as const } as const;
+    const binding = router.createBinding(address, '/tmp/rename-background');
+    const renameAck = createDeferred<{ chatId: string; chatKind: 'group'; name: string }>();
+    const replyAck = createDeferred<{ ok: boolean; messageId?: string }>();
+    let renameStarted = false;
+    const adapter: any = {
+      channelType: 'feishu',
+      provider: 'feishu',
+      renameGroupChat: async () => {
+        renameStarted = true;
+        return renameAck.promise;
+      },
+      send: async () => replyAck.promise,
+    };
+
+    await Promise.race([
+      handleBridgeCommandWithoutDeliveryWait(adapter, {
+        address,
+        text: '/t rename 后台标题',
+        messageId: 'incoming-rename-background',
+      } as any, '/t rename 后台标题', {
+        getActiveTask: () => undefined,
+        diagnoseSessionHealth: async () => null,
+        diagnoseAllActiveSessions: async () => [],
+      }),
+      new Promise<never>((_, reject) => setTimeout(() => reject(new Error('/t rename waited for a remote acknowledgement')), 100)),
+    ]);
+
+    assert.equal(store.getSession(binding.bridgeSessionId)?.name, '后台标题');
+    assert.equal(renameStarted, true);
+    renameAck.resolve({ chatId: address.chatId, chatKind: 'group', name: '后台标题' });
+    replyAck.resolve({ ok: true, messageId: 'reply-rename-background' });
+  });
+
+  it('releases /t unbind before mirror reconcile completes', async () => {
+    const store = initTestContext();
+    const address = { channelType: 'feishu', chatId: 'chat-unbind-reconcile-background' } as const;
+    const original = router.createBinding(address, '/tmp/unbind-reconcile-background');
+    const reconcileAck = createDeferred<void>();
+    let reconcileStarted = false;
+    const adapter = createGroupCapableAdapter({ sent: [] });
+
+    await Promise.race([
+      handleBridgeCommandWithoutDeliveryWait(adapter, {
+        address,
+        text: '/t unbind',
+        messageId: 'incoming-unbind-reconcile-background',
+      } as any, '/t unbind', {
+        getActiveTask: () => undefined,
+        diagnoseSessionHealth: async () => null,
+        diagnoseAllActiveSessions: async () => [],
+        reconcileMirrorSubscriptions: async () => {
+          reconcileStarted = true;
+          await reconcileAck.promise;
+        },
+      }),
+      new Promise<never>((_, reject) => setTimeout(() => reject(new Error('/t unbind waited for mirror reconcile')), 100)),
+    ]);
+
+    assert.notEqual(store.getChannelChat(address.channelType, address.chatId)?.bridgeSessionId, original.bridgeSessionId);
+    await waitForCondition(() => reconcileStarted);
+    reconcileAck.resolve();
+  });
+
+  it('releases selection callbacks before answerCallback completes', async () => {
+    const callbackAck = createDeferred<void>();
+    let answerStarted = false;
+    const adapter: any = {
+      channelType: 'feishu',
+      provider: 'feishu',
+      answerCallback: async () => {
+        answerStarted = true;
+        await callbackAck.promise;
+      },
+    };
+
+    await Promise.race([
+      bridgeManagerTestOnly.handleMessageWithoutDeliveryWait(adapter, {
+        address: { channelType: 'feishu', chatId: 'chat-callback-background' },
+        text: '',
+        messageId: 'callback-background',
+        callbackData: `${THREAD_SELECT_CALLBACK_PREFIX}${encodeURIComponent('thread-background')}`,
+        timestamp: Date.now(),
+      } as any),
+      new Promise<never>((_, reject) => setTimeout(() => reject(new Error('callback waited for answerCallback')), 100)),
+    ]);
+
+    assert.equal(answerStarted, true);
+    callbackAck.resolve();
   });
 
   it('rejects runtime and provider switches while the current conversation is running', async () => {
@@ -10103,7 +10204,7 @@ enabled = true
       });
 
       const permissionRequestId = `codex-selection:update:provider-auto-forward-startup:${binding.bridgeSessionId}:orphan`;
-      await forwardPermissionRequest(
+      forwardPermissionRequest(
         adapter,
         address,
         permissionRequestId,
@@ -10137,6 +10238,7 @@ enabled = true
           ],
         }],
       );
+      await _testOnlyWaitForDeliveryQueuesForTests(adapter);
 
       const selectionMessage = sent.find((message) => message.richCard?.title === 'Codex TUI Selection');
       const callbackData = selectionMessage?.richCard?.selects?.[0]?.options?.find(

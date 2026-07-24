@@ -379,7 +379,7 @@ class ScriptedSessionSimulator {
         resolveInteractiveTurnEnvironment: resolveTestInteractiveTurnEnvironment,
         resolveInteractiveTurnRuntimeSettings: resolveTestInteractiveTurnRuntimeSettings,
         ...(this.resolveDisplayInfo ? { resolveInteractiveTurnDisplayInfo: this.resolveDisplayInfo } : {}),
-        forwardPermissionRequest: async (_adapter, _address, permissionRequestId, toolName, toolInput, _sessionId, suggestions, replyToMessageId) => {
+        forwardPermissionRequest: (_adapter, _address, permissionRequestId, toolName, toolInput, _sessionId, suggestions, replyToMessageId) => {
           this.forwardedPermissions.push({
             permissionRequestId,
             toolName,
@@ -387,7 +387,7 @@ class ScriptedSessionSimulator {
             suggestions,
             replyToMessageId,
           });
-          await this.adapter.send({
+          void this.adapter.send({
             address: _address,
             text: `Permission Required: ${toolName}`,
             replyToMessageId,

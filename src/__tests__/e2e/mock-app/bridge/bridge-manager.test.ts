@@ -716,6 +716,21 @@ describe('bridge-manager resolveCommandAlias', () => {
       blocksConversation: false,
     });
     assert.equal(_testOnly.adapterImmediateLane(inbound('/shell git status') as any, 'command')?.waitForConversationBarrier, true);
+    assert.deepEqual(_testOnly.adapterImmediateLane(inbound('/new 新群 /tmp/work') as any, 'command'), {
+      laneKey: `job:new:${address.channelType}:${address.chatId}:msg-/new 新群 /tmp/work`,
+      laneKind: 'job',
+      jobKind: 'command:new',
+      waitForConversationBarrier: true,
+      blocksConversation: false,
+    });
+    const newCallbackMessage = inbound('', buildCommandCallbackData('/new', binding.bridgeSessionId));
+    assert.deepEqual(_testOnly.adapterImmediateLane(newCallbackMessage as any, 'callback'), {
+      laneKey: `job:new:${address.channelType}:${address.chatId}:${newCallbackMessage.messageId}`,
+      laneKind: 'job',
+      jobKind: 'command:new',
+      waitForConversationBarrier: true,
+      blocksConversation: false,
+    });
   });
 
   it('parses local runtime session list requests', () => {

@@ -14,6 +14,46 @@ const forbidden = [
     pattern: /\bawait\s+markPendingTmuxAutoForwardReaction\s*\(/,
     message: 'tmux auto-forward Typing reaction must not block the forwarding path.',
   },
+  {
+    file: path.join('src', 'bridge', 'host', 'manager.ts'),
+    pattern: /\bawait\s+adapter\s*\.\s*answerCallback\??\s*\(/,
+    message: 'Callback acknowledgement must not block the inbound handler.',
+  },
+  {
+    file: path.join('src', 'bridge', 'session', 'command-use-cases'),
+    pattern: /\bawait\s+reconcileMirrorSubscriptionsBestEffort\s*\(/,
+    message: 'Session commands must schedule mirror reconcile outside the session lane.',
+  },
+  {
+    file: path.join('src', 'bridge', 'session', 'command-use-cases'),
+    pattern: /\bawait\s+(?:options\.)?adapter\s*\.\s*renameGroupChat\s*\(/,
+    message: 'Session commands must not wait for group rename acknowledgement.',
+  },
+  {
+    file: path.join('src', 'bridge', 'command', 'dispatch.ts'),
+    pattern: /\bawait\s+options\s*\.\s*adapter\s*\.\s*renameGroupChat\s*\(/,
+    message: 'Command dispatch must not wait for group rename acknowledgement.',
+  },
+  {
+    file: path.join('src', 'bridge', 'command', 'dispatch.ts'),
+    pattern: /\bawait\s+new\s+Promise<[^>]*>\s*\(\s*\(resolve\)\s*=>\s*setImmediate\s*\(/,
+    message: 'Command dispatch must not yield merely to make background delivery observable to callers.',
+  },
+  {
+    file: path.join('src', 'bridge', 'permission', 'broker.ts'),
+    pattern: /\bawait\s+deliver\s*\(/,
+    message: 'Permission cards must be enqueued; the caller must not wait for the platform acknowledgement.',
+  },
+  {
+    file: path.join('src', 'bridge'),
+    pattern: /\bawait\s+(?:permissionBroker\.|broker\.)?forwardPermissionRequest\s*\(/,
+    message: 'Permission forwarding must not block a turn or tmux selection path.',
+  },
+  {
+    file: path.join('src', 'channels', 'feishu', 'adapter.ts'),
+    pattern: /\bawait\s+this\.(?:sendCloudDocumentForwardNotice|notifyUnsupportedInboundContent|addCloudDocumentTypingReaction)\s*\(/,
+    message: 'Feishu inbound routing must enqueue UI notices and reactions without waiting for remote acknowledgement.',
+  },
 ];
 
 function listFiles(dir) {

@@ -27,6 +27,7 @@ export {
 };
 export type SessionThreadCommandDeps = SessionCommandDeps;
 export type SessionThreadCommandResult = SessionCommandResult;
+export type { SessionCommandBackgroundEffect } from '../session/command-use-cases/types.js';
 
 export function buildStartCommandResponse(): string {
   return [

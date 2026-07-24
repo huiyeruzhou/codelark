@@ -50,6 +50,7 @@ import {
   type StructuredStreamingUiMetadata,
   type StructuredStreamingUiSnapshot,
 } from '../contracts.js';
+import { enqueueDelivery } from '../delivery/deliver.js';
 import { getBridgeContext } from '../../bridge/host/context.js';
 import { createConfigService } from '../../configuration/service.js';
 import {
@@ -2036,6 +2037,8 @@ export class FeishuAdapter extends BaseChannelAdapter {
   private botIds = new Set<string>();
   /** Track last incoming message ID per chat for replying with streaming cards. */
   private lastIncomingMessageId = new Map<string, string>();
+  /** Background Typing reaction additions, awaited only by the outbound cleanup worker. */
+  private cloudDocumentTypingReactionAdds = new Map<string, Promise<boolean>>();
   /** Active streaming card state per stream key. */
   private activeCards = new Map<string, FeishuCardState>();
   /** In-flight card creation promises per stream key — prevents duplicate creation. */
@@ -6364,14 +6367,13 @@ export class FeishuAdapter extends BaseChannelAdapter {
       const imageDownloads = Promise.all(imageKeys.map((key) =>
         this.downloadResource(msg.message_id, key, 'image'),
       ));
-      const warningNotice = warnings.length > 0
-        ? this.notifyUnsupportedInboundContent(chatId, msg.message_id, warnings)
-        : Promise.resolve();
+      if (warnings.length > 0) {
+        this.notifyUnsupportedInboundContent(chatId, msg.message_id, warnings);
+      }
       for (const attachment of await imageDownloads) {
         if (attachment) attachments.push(attachment);
         // Don't add fallback text for individual post images — the text already carries context
       }
-      await warningNotice;
     } else if (messageType === 'interactive') {
       text = [
         '用户发送了一张飞书交互卡片。',
@@ -6380,7 +6382,7 @@ export class FeishuAdapter extends BaseChannelAdapter {
     } else {
       // Unsupported type — log and skip
       console.log(`[feishu-adapter] Unsupported message type: ${messageType}, msgId: ${msg.message_id}`);
-      await this.notifyUnsupportedInboundContent(chatId, msg.message_id, [
+      this.notifyUnsupportedInboundContent(chatId, msg.message_id, [
         `暂不支持飞书消息类型：${messageType}`,
         '这条消息不会转发给 Codex。请改用文本/富文本、图片或文件重新发送。',
       ]);
@@ -6600,7 +6602,7 @@ export class FeishuAdapter extends BaseChannelAdapter {
         userId: resolvedTarget.operatorId,
         displayName: '飞书云文档评论',
       };
-      await this.sendCloudDocumentForwardNotice(groupAddress, resolvedTarget, resolvedContext);
+      this.sendCloudDocumentForwardNotice(groupAddress, resolvedTarget, resolvedContext);
       this.enqueueInboundMessage({
         messageId,
         address: groupAddress,
@@ -6652,10 +6654,10 @@ export class FeishuAdapter extends BaseChannelAdapter {
     }
 
     const timestamp = Date.now();
-    const typingReactionReplyId = resolvedContext.targetReplyId
-      && await this.addCloudDocumentTypingReaction(resolvedTarget, resolvedContext.targetReplyId)
-      ? resolvedContext.targetReplyId
-      : undefined;
+    const typingReactionReplyId = resolvedContext.targetReplyId;
+    if (typingReactionReplyId) {
+      this.startCloudDocumentTypingReaction(resolvedTarget, typingReactionReplyId);
+    }
     const messageId = `doc-comment:${resolvedTarget.fileToken}:${resolvedTarget.commentId}:${resolvedTarget.replyId || timestamp}`;
     const inbound: InboundMessage = {
       messageId,
@@ -6960,7 +6962,33 @@ export class FeishuAdapter extends BaseChannelAdapter {
   }
 
   private async removeCloudDocumentTypingReaction(target: CloudDocumentAddress, replyId: string): Promise<void> {
+    const key = this.cloudDocumentTypingReactionKey(target.fileToken, target.fileType, replyId);
+    const pendingAdd = this.cloudDocumentTypingReactionAdds.get(key);
+    if (pendingAdd) {
+      this.cloudDocumentTypingReactionAdds.delete(key);
+      if (!await pendingAdd) return;
+    }
     await this.updateCloudDocumentTypingReaction(target.fileToken, target.fileType, replyId, 'delete');
+  }
+
+  private cloudDocumentTypingReactionKey(
+    fileToken: string,
+    fileType: FeishuDocumentFileType,
+    replyId: string,
+  ): string {
+    return `${fileType}:${fileToken}:${replyId}`;
+  }
+
+  private startCloudDocumentTypingReaction(target: FeishuCommentTarget, replyId: string): void {
+    const key = this.cloudDocumentTypingReactionKey(target.fileToken, target.fileType, replyId);
+    const addition = this.addCloudDocumentTypingReaction(target, replyId);
+    this.cloudDocumentTypingReactionAdds.set(key, addition);
+    const cleanup = setTimeout(() => {
+      if (this.cloudDocumentTypingReactionAdds.get(key) === addition) {
+        this.cloudDocumentTypingReactionAdds.delete(key);
+      }
+    }, 30 * 60_000);
+    cleanup.unref?.();
   }
 
   private async updateCloudDocumentTypingReaction(
@@ -7057,14 +7085,14 @@ export class FeishuAdapter extends BaseChannelAdapter {
     return parts.join('\n');
   }
 
-  private async sendCloudDocumentForwardNotice(
+  private sendCloudDocumentForwardNotice(
     address: ChannelAddress,
     target: FeishuCommentTarget,
     context: { question: string; quote?: string; isWhole: boolean },
-  ): Promise<void> {
+  ): void {
     const docHost = this.site === 'lark' ? 'https://larksuite.com' : 'https://feishu.cn';
     const preview = context.question.trim().replace(/\s+/g, ' ').slice(0, 180);
-    const result = await this.send({
+    const delivery = enqueueDelivery(this, address, () => this.send({
       address,
       text: [
         '收到一条云文档评论，已转发到本群处理。',
@@ -7075,15 +7103,16 @@ export class FeishuAdapter extends BaseChannelAdapter {
         preview ? `内容：${preview}` : '',
       ].filter(Boolean).join('\n'),
       parseMode: 'plain',
-    });
-    if (!result.ok) {
+    }));
+    void delivery.completion.then((result) => {
+      if (result.ok) return;
       console.warn('[feishu-adapter] Cloud document group forward notice failed:', {
         chatId: address.chatId,
         fileToken: target.fileToken,
         commentId: target.commentId,
         error: result.error,
       });
-    }
+    });
   }
 
   // ── Content parsing ─────────────────────────────────────────
@@ -7101,7 +7130,7 @@ export class FeishuAdapter extends BaseChannelAdapter {
    * Parse rich text (post) content.
    * Extracts plain text from text elements and image keys from img elements.
    */
-  private async notifyUnsupportedInboundContent(chatId: string, messageId: string, warnings: string[]): Promise<void> {
+  private notifyUnsupportedInboundContent(chatId: string, messageId: string, warnings: string[]): void {
     const uniqueWarnings = Array.from(new Set(warnings.map((warning) => warning.trim()).filter(Boolean))).slice(0, 5);
     if (uniqueWarnings.length === 0) return;
     const omitted = warnings.length > uniqueWarnings.length
@@ -7113,14 +7142,16 @@ export class FeishuAdapter extends BaseChannelAdapter {
       omitted,
     ].join('\n').trim();
 
-    try {
-      const result = await this.sendAsPlainText(chatId, text, messageId);
+    const delivery = enqueueDelivery(
+      this,
+      { channelType: this.channelType, chatId },
+      () => this.sendAsPlainText(chatId, text, messageId),
+    );
+    void delivery.completion.then((result) => {
       if (!result.ok) {
         console.warn('[feishu-adapter] Unsupported content notice failed:', result.error || 'unknown error');
       }
-    } catch (error) {
-      console.warn('[feishu-adapter] Unsupported content notice error:', error instanceof Error ? error.message : error);
-    }
+    });
   }
 
   private parsePostContent(content: string): FeishuPostParseResult {

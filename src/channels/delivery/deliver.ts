@@ -313,6 +313,21 @@ export function _testOnlyResetDeliveryQueuesForTests(): void {
   deliveryQueues = new WeakMap();
 }
 
+export async function _testOnlyWaitForDeliveryQueuesForTests(adapter: BaseChannelAdapter): Promise<void> {
+  let idlePasses = 0;
+  while (idlePasses < 2) {
+    const queues = deliveryQueues.get(adapter);
+    const pending = queues ? Array.from(queues.values()) : [];
+    if (pending.length > 0) {
+      idlePasses = 0;
+      await Promise.all(pending);
+      continue;
+    }
+    idlePasses += 1;
+    await new Promise<void>((resolve) => setImmediate(resolve));
+  }
+}
+
 /**
  * Compute retry delay for retryable network/server failures.
  */
