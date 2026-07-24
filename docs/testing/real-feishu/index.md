@@ -152,7 +152,7 @@ CODELARK_REAL_FEISHU_TEST_LARK_CLI_XDG_DATA_HOME=/home/me/.codelark/real-feishu-
 - 长历史截断必须同时检查头部 marker、ASCII 截断标记 `...`，并排除尾部 marker。
 - 表单场景必须检查飞书 `interactive` 消息和 CardKit form/callback 前缀字段；看到文本 fallback 不算通过。
 - Markdown 渲染以飞书原始消息为准；当前 code fence 语言可能被规范化为 `plain_text`。
-- 工具详情不能只用 bridge 日志的 `markdownPreviews` 验收，因为该日志会压缩空白。报告至少同时保存 CardKit payload checkpoint 和 user 身份读取的最终 transcript；长 patch 还要断言原始内容先按字符/行双上限裁剪、closing fence 仍存在，并确认最终卡片不含 `Script completed`、`Wall time`、`Success` 或嵌套“长输出”面板。
+- 工具详情不能只用 bridge 日志的 `markdownPreviews` 验收，因为该日志会压缩空白。报告至少同时保存 CardKit payload checkpoint 和 user 身份读取的最终 transcript；结构上断言存在“工具调用组 → 单工具”，且单工具内部没有“长输出”面板。普通工具要断言 output 正文不进入卡片；长 patch 要断言原始 diff 先按字符/行双上限裁剪、closing fence 仍存在，并确认最终卡片不含 `Script completed`、`Wall time` 或 `Success`。
 
 ## 排障流程
 

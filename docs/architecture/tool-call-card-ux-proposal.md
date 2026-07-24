@@ -44,22 +44,22 @@ Codex JSONL / Claude JSONL / Kimi wire.jsonl
 - 命令标题直接显示真实脚本，web search 标题直接显示 query；完成态用视觉状态表达，不要求读者理解底层事件名。
 - TUI 的短输出预览按行保留，并明确标出省略行数；完整 transcript 是另一条审计路径。
 
-CodeLark 采用相同的语义分层，但不照搬 TUI 的 head+tail：用户明确要求显示前缀，因此卡片只保留开头，并同时受字符数与行数约束。
+CodeLark 采用相同的语义分层，但不照搬 TUI 的 head+tail：普通工具 output 默认不进入卡片正文；`apply_patch` 的真实 diff 是例外，只保留开头并同时受字符数与行数约束。
 
 ## Canonical 工具呈现模型
 
 | 原始来源 | 可识别输入 | canonical kind/name | 折叠标题示例 | 展开内容 |
 | --- | --- | --- | --- | --- |
-| Codex `exec` wrapper | 静态 `tools.exec_command({...})` | `run_command` / `exec_command` | `💻 运行 npm test · 1.2s` | 完整 command、cwd、输出前缀 |
-| shell `cat/sed/head/tail` | path、行区间 | `read_file` | `📖 读取 src/app.ts · 1–120 行` | 原命令、文件内容前缀 |
-| shell `rg/grep` | query、path | `search_files` | `🔎 搜索 “tool_call” · src/ · 18 处` | 原命令、匹配结果前缀 |
-| shell `find/ls/rg --files` | path | `list_files` | `📂 浏览 src/runtime/` | 原命令、文件列表前缀 |
-| Kimi `Read` | `path/line_offset/n_lines` | `read_file` | `📖 读取 src/app.ts · 80 行` | path、范围、内容前缀 |
-| Kimi `Grep` | `pattern/path` | `search_files` | `🔎 搜索 “foo” · src/` | query、path、匹配结果前缀 |
+| Codex `exec` wrapper | 静态 `tools.exec_command({...})` | `run_command` / `exec_command` | `💻 运行 npm test · 1.2s` | 完整 command、cwd |
+| shell `cat/sed/head/tail` | path、行区间 | `read_file` | `📖 读取 src/app.ts · 1–120 行` | 原命令、path、范围 |
+| shell `rg/grep` | query、path | `search_files` | `🔎 搜索 “tool_call” · src/ · 18 处` | 原命令、query、path |
+| shell `find/ls/rg --files` | path | `list_files` | `📂 浏览 src/runtime/` | 原命令、path |
+| Kimi `Read` | `path/line_offset/n_lines` | `read_file` | `📖 读取 src/app.ts · 80 行` | path、范围 |
+| Kimi `Grep` | `pattern/path` | `search_files` | `🔎 搜索 “foo” · src/` | query、path |
 | Kimi `Edit/Write` | path、before/after/content | `edit_file` / `write_file` | `🛠️ 修改 src/app.ts` / `📝 写入 src/app.ts` | 变更片段或写入内容前缀 |
 | `apply_patch` | patch file headers | `apply_patch` | `🛠️ 修改 3 个文件` | 文件清单、diff 前缀 |
-| MCP/dynamic | server、tool、arguments | `call_tool` | `🔧 调用 server/read · src/a.ts` | arguments、结果前缀 |
-| 无法可靠识别 | raw name/input | `unknown` | `🔧 调用 FetchURL · example.com` | 原始参数与结果前缀 |
+| MCP/dynamic | server、tool、arguments | `call_tool` | `🔧 调用 server/read · src/a.ts` | arguments |
+| 无法可靠识别 | raw name/input | `unknown` | `🔧 调用 FetchURL · example.com` | 原始参数 |
 
 完成态使用与动作对应的图标；成功不再额外出现“完成”或 `Success`。运行中和异常仍使用状态图标，异常额外显示 `exit N` 或错误摘要。
 
@@ -67,7 +67,7 @@ CodeLark 采用相同的语义分层，但不照搬 TUI 的 head+tail：用户�
 
 ### 折叠前
 
-沿用既有的“历史记录”容器；每个工具调用在历史记录中直接成为一个折叠面板，不再先藏在“工具调用 · N”的分组面板里，也不在单工具内部追加“长输出”折叠。标题由代码拼成一行：动作图标、动作、对象和非重复证据摘要；过长时交给 Feishu 客户端自然换行，不主动插入换行符。内容按以下优先级组织：
+沿用既有的“历史记录”容器和“工具调用 · N”分组面板；展开分组后，每个工具调用对应一个折叠面板，单工具内部不再追加“长输出”折叠。标题由代码拼成一行：动作图标、动作、对象和非重复证据摘要；过长时交给 Feishu 客户端自然换行，不主动插入换行符。内容按以下优先级组织：
 
 1. 状态图标。
 2. 动作 + 主要对象，例如“读取 `src/a.ts`”“搜索 `foo`”“运行 `npm test`”。
@@ -87,19 +87,19 @@ CodeLark 采用相同的语义分层，但不照搬 TUI 的 head+tail：用户�
 
 ### 展开后
 
-单次展开直接看到可复核信息：
+展开工具调用组和目标单工具后看到可复核信息：
 
 - command/query/path/cwd 等关键输入；
 - patch/file list 等结构化变更；
 - `apply_patch` 的实际 normalized diff，文件清单不能替代 diff；
-- 输出前缀和“已显示/总计”元数据；
+- 普通工具默认不显示 output 正文；output 只参与命中数、输出行数、exit code 等标题摘要；
 - 必要时附原始工具名，但只作为 notation 级审计信息。
 
-长输出不再使用单工具内部的第二层折叠面板。历史记录容器仍按原设计存在且默认展开；从已展开的历史区到有用详情只需点击对应工具一次。
+长输出不再使用单工具内部的额外折叠面板。历史记录容器仍按原设计存在且默认展开；工具调用组用于整体收纳，单工具面板用于查看参数或 `apply_patch` diff。
 
 ## 长内容双上限
 
-普通输入输出使用统一 preview policy：默认最多 **4000 Unicode characters** 且最多 **80 lines**。`apply_patch` 输入是高价值审计证据，使用独立的 **8000 Unicode characters** 且 **160 lines** 上限。算法只保留原文前缀，任一上限先到即停止；返回值必须包含 `shownChars/totalChars`、`shownLines/totalLines` 和触发的限制。
+普通工具输入使用统一 preview policy：默认最多 **4000 Unicode characters** 且最多 **80 lines**；普通 output 不进入卡片正文。`apply_patch` 输入是高价值审计证据，使用独立的 **8000 Unicode characters** 且 **160 lines** 上限。算法只保留原文前缀，任一上限先到即停止；返回值必须包含 `shownChars/totalChars`、`shownLines/totalLines` 和触发的限制。
 
 约束：
 
@@ -148,5 +148,5 @@ Kimi 达到“真的能用”至少需要同时通过：
 1. 提取 canonical detail/presentation 与双上限 preview helper，先用单测固定文案和边界。
 2. 扩展 AST 静态解释，复现并关闭 `7705a548` 的 wrapper/单行问题。
 3. 接入 Kimi native tool detail，补真实 wire 样本形状回归。
-4. 保留历史记录容器，扁平化其内部的工具分组与嵌套长输出，移除重复状态。
+4. 保留“历史记录 → 工具调用组 → 单工具”结构，移除单工具内部的嵌套长输出和重复状态。
 5. 建立 scripted Mock 和 fake Kimi E2E，最后跑隔离 Feishu 实卡验收。

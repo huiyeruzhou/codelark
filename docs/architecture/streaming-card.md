@@ -177,9 +177,9 @@ snapshotStreamingDesiredState(state)
 
 工具卡片的输入不是 Codex/Kimi 原始事件，而是公共中间层：runtime adapter 先生成 `ToolCallEvent` 和 `ToolCallDetail`，reducer 合成 `ToolCallInfo`，`ToolPresentation` 再给出标题动作、对象、证据摘要、图标和边框语义。Feishu renderer 不判断 runtime，也不解析 Codex wrapper 或 Kimi wire。
 
-沿用既有的“历史记录”外层容器。每个工具调用在历史记录内直接对应一个折叠面板，不再套“工具调用组”，也不在单工具内部为长输出再套第二层折叠。标题由代码拼成一行，依次显示动作图标、动作、对象和范围/命中数/输出行数/耗时/非零 exit code；过长时由 Feishu 自然换行。完成态使用 `📖/🔎/🛠️/💻` 等动作图标，运行中和异常仍使用状态图标；标题和详情不再重复 `Success`、`Completed` 或“完成”。
+沿用既有的“历史记录”外层容器，并在每批工具事件上保留共用的“工具调用 · N”折叠栏；展开工具调用组后，每个工具仍有自己的折叠面板，即“历史记录 → 工具调用组 → 单工具”。单工具内部不再为长输出增加折叠。标题由代码拼成一行，依次显示动作图标、动作、对象和范围/命中数/输出行数/耗时/非零 exit code；过长时由 Feishu 自然换行。完成态使用 `📖/🔎/🛠️/💻` 等动作图标，运行中和异常仍使用状态图标；标题和详情不再重复 `Success`、`Completed` 或“完成”。
 
-展开后必须能审计真实调用内容：command 使用 `bash` fence，patch 使用 `diff` fence并保留实际 diff，read/search/generic 工具显示结构化参数和真实输出前缀。`Script completed`、`Wall time`、`Chunk ID`、`Original token count` 等 transport envelope 在 adapter 层消费，不进入详情。
+展开后必须能审计真实调用参数：command 使用 `bash` fence，read/search/generic 工具显示结构化参数。普通工具的 output 仍可在中间层用于标题的行数、命中数、exit code 等摘要，但默认不把 output 正文放进卡片；`apply_patch` 是例外，使用 `diff` fence 显示真实修改内容。`Script completed`、`Wall time`、`Chunk ID`、`Original token count` 等 transport envelope 在 adapter 层消费，不进入详情。
 
 所有长内容在生成 Markdown 之前调用同一个预览 helper，并同时受字符数和行数两个 hard upper bound 约束；任何一个先达到就停止。普通输入/输出上限为 4000 Unicode code points 和 80 行，patch 上限为 8000 code points 和 160 行。省略提示写在 code fence 外。禁止对已经生成的 Markdown 盲切，否则会切掉 closing fence，导致 Feishu 客户端把多行 code block 错误排版成一行。
 

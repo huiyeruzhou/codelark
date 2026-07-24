@@ -1,4 +1,4 @@
-import type { ToolCallInfo } from '../../domain/progress.js';
+import type { ToolCallDetail, ToolCallInfo } from '../../domain/progress.js';
 import { buildFencedCodeBlock } from '../markdown/fence.js';
 import {
   buildToolCallDetailFromInput,
@@ -45,21 +45,37 @@ function hydrateToolDetail(tool: ToolCallInfo): ToolCallInfo {
   return detail ? { ...tool, detail } : tool;
 }
 
+function withoutToolOutput(detail: ToolCallDetail): ToolCallDetail {
+  if (detail.kind === 'orchestration') {
+    return {
+      ...detail,
+      output: undefined,
+      rawOutput: undefined,
+      calls: detail.calls.map((call) => ({
+        ...call,
+        detail: call.detail ? withoutToolOutput(call.detail) : null,
+      })),
+    };
+  }
+  if (!('output' in detail)) return detail;
+  return { ...detail, output: undefined };
+}
+
 function buildFallbackToolDetailMarkdown(tool: ToolCallInfo): string {
   const details: string[] = [];
   const isEditTool = /^edit$/i.test(tool.name || '');
   const isBashTool = /^(bash|shell_command|exec_command)$/i.test(tool.name || '');
-  const isPatchTool = /^(apply_patch|edit)$/i.test(tool.name || '');
-  const structured = renderToolCallDetailMarkdown(tool);
+  const isPatchTool = /^apply_patch$/i.test(tool.name || '');
+  const displayTool = !isPatchTool && tool.detail
+    ? { ...tool, detail: withoutToolOutput(tool.detail) }
+    : tool;
+  const structured = renderToolCallDetailMarkdown(displayTool);
   if (structured) {
     details.push(structured);
   } else {
     if (!isEditTool && tool.input && tool.input.trim()) {
       const language = isBashTool ? 'bash' : isPatchTool ? 'diff' : 'json';
       details.push(`输入：\n${buildFencedCodeBlock(tool.input.trim(), language)}`);
-    }
-    if (!isPatchTool && tool.output && tool.output.trim()) {
-      details.push(`输出：\n${buildFencedCodeBlock(tool.output.trim(), 'text')}`);
     }
   }
   return details.join('\n\n');

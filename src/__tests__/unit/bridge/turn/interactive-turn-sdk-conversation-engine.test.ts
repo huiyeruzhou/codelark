@@ -451,7 +451,7 @@ permission_mode = "plan"
     const preview = previews.join('\n');
     assert.match(preview, /💻 运行 `pwd` · 输出 1 行/);
     assert.match(preview, /```bash\npwd\n```/);
-    assert.match(preview, /```text\n\/tmp\/project\n```/);
+    assert.doesNotMatch(preview, /```text\n\/tmp\/project\n```/);
 
     const { messages } = store.getMessages(session.id);
     assert.equal(messages.length, 2);

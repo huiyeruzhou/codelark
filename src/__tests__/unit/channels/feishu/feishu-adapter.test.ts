@@ -2935,7 +2935,7 @@ describe('feishu-adapter structured streaming regions', () => {
     assert.equal(elementCreates[0]?.data?.type, 'append');
     assert.equal(elementCreates[0]?.data?.target_element_id, 'stream_history');
     assert.match(String(cardUpdates[0]?.data?.card?.data || ''), /shell_command/);
-    assert.match(String(cardUpdates[0]?.data?.card?.data || ''), /done/);
+    assert.doesNotMatch(String(cardUpdates[0]?.data?.card?.data || ''), /done/);
     assert.doesNotMatch(String(cardUpdates[0]?.data?.card?.data || ''), /stream_tool_1_e2/);
     assert.ok(elementUpdates.every((update) => update.path?.element_id !== 'stream_tool_1'));
   });
@@ -3110,6 +3110,7 @@ describe('feishu-adapter structured streaming regions', () => {
   it('opens a continuation card when Feishu rejects a new tool panel with element limit', async () => {
     const createdCards: Array<Record<string, any>> = [];
     const settingsCalls: Array<Record<string, any>> = [];
+    const cardUpdates: Array<Record<string, any>> = [];
     const elementCreates: Array<Record<string, any>> = [];
     const replyCalls: Array<Record<string, any>> = [];
     let cardIndex = 0;
@@ -3139,15 +3140,18 @@ describe('feishu-adapter structured streaming regions', () => {
               settingsCalls.push(payload);
               return {};
             },
-            update: async () => ({}),
+            update: async (payload: Record<string, any>) => {
+              cardUpdates.push(payload);
+              if (String(payload.data?.card?.data || '').includes('st_1_t_13')) {
+                return { code: 300315, msg: 'ErrMsg: msg: [element exceeds the limit], code: 300305;' };
+              }
+              return {};
+            },
           },
           cardElement: {
             content: async () => ({}),
             create: async (payload: Record<string, any>) => {
               elementCreates.push(payload);
-              if (String(payload.data?.elements || '').includes('stream_tool_13')) {
-                return { code: 300315, msg: 'ErrMsg: msg: [element exceeds the limit], code: 300305;' };
-              }
               return {};
             },
           },
@@ -3165,6 +3169,7 @@ describe('feishu-adapter structured streaming regions', () => {
     };
 
     await (adapter as any).createStreamingCard('chat-1', 'reply-1', 'stream-1');
+    let lastUpdateCount = cardUpdates.length;
     let lastCreateCount = elementCreates.length;
     for (let index = 1; index <= 13 && createdCards.length < 2; index += 1) {
       const tools = Array.from({ length: index }, (_, toolIndex) => ({
@@ -3173,13 +3178,18 @@ describe('feishu-adapter structured streaming regions', () => {
         status: 'running' as const,
       }));
       adapter.onToolEvent('chat-1', tools, 'stream-1');
-      await waitForCondition(() => elementCreates.length > lastCreateCount || createdCards.length >= 2, 1000);
+      await waitForCondition(() => (
+        cardUpdates.length > lastUpdateCount
+        || elementCreates.length > lastCreateCount
+        || createdCards.length >= 2
+      ), 1000);
+      lastUpdateCount = cardUpdates.length;
       lastCreateCount = elementCreates.length;
     }
 
     assert.equal(replyCalls.length, 2);
     assert.ok(settingsCalls.some((call) => call.path?.card_id === 'card-1'));
-    assert.ok(elementCreates.some((create) => String(create.data?.elements || '').includes('stream_tool_13')));
+    assert.ok(cardUpdates.some((update) => String(update.data?.card?.data || '').includes('st_1_t_13')));
     const activeState = (adapter as any).activeCards.get('stream-1');
     assert.equal(activeState.cardId, 'card-2');
     assert.equal(activeState.toolCallOffset, 12);
@@ -3529,7 +3539,8 @@ describe('feishu-adapter structured streaming regions', () => {
 
     assert.equal(elementUpdates.length, 0);
     assert.equal(elementCreates.length, 0);
-    assert.match(String(cardUpdates.at(-1)?.data?.card?.data || ''), /done/);
+    assert.doesNotMatch(String(cardUpdates.at(-1)?.data?.card?.data || ''), /done/);
+    assert.match(String(cardUpdates.at(-1)?.data?.card?.data || ''), /工具调用 · 1/);
     assert.doesNotMatch(String(cardUpdates.at(-1)?.data?.card?.data || ''), /stream_tool_1_e2/);
   });
 
@@ -3591,7 +3602,9 @@ describe('feishu-adapter structured streaming regions', () => {
       { type: 'markdown' as const, role: 'assistant' as const, content: '模型输出' },
       { type: 'tool_panel' as const, tools: groupedTools },
     ], 'stream-1');
-    await waitForCondition(() => cardUpdates.length >= 1);
+    await waitForCondition(() => elementCreates.some((create) =>
+      create.data?.target_element_id === 'stream_history'
+      && String(create.data?.elements || '').includes('工具调用 · 2')));
 
     adapter.onStreamHistory('chat-1', [
       { type: 'markdown' as const, role: 'assistant' as const, content: '模型输出' },
@@ -3603,15 +3616,16 @@ describe('feishu-adapter structured streaming regions', () => {
         ],
       },
     ], 'stream-1');
-    await waitForCondition(() => cardUpdates.length >= 2);
+    await waitForCondition(() => cardUpdates.length >= 1);
 
     const refreshed = String(cardUpdates.at(-1)?.data?.card?.data || '');
     assert.match(refreshed, /🛠️ 修改 1 个文件/);
-    assert.doesNotMatch(refreshed, /工具调用 · 2|完成|Success/);
+    assert.match(refreshed, /工具调用 · 2/);
+    assert.doesNotMatch(refreshed, /完成|Success/);
     assert.doesNotMatch(refreshed, /stream_tool_1_e2/);
   });
 
-  it('appends a second direct tool panel without refreshing a removed group wrapper', async () => {
+  it('refreshes the shared tool group when a second inner tool panel is added', async () => {
     const cardUpdates: Array<Record<string, any>> = [];
     const elementCreates: Array<Record<string, any>> = [];
     const batchUpdates: Array<Record<string, any>> = [];
@@ -3679,15 +3693,14 @@ describe('feishu-adapter structured streaming regions', () => {
         ],
       },
     ], 'stream-1');
-    await waitForCondition(() => elementCreates.some((create) =>
-      create.data?.target_element_id === 'stream_history'
-      && String(create.data?.elements || '').includes('stream_tool_2')));
+    await waitForCondition(() => cardUpdates.length >= 1);
 
     assert.equal(batchUpdates.length, 0);
-    const secondPanel = String(elementCreates.at(-1)?.data?.elements || '');
-    assert.match(secondPanel, /stream_tool_2/);
-    assert.match(secondPanel, /apply_patch/);
-    assert.doesNotMatch(secondPanel, /工具调用 · 2/);
+    const refreshedGroup = String(cardUpdates.at(-1)?.data?.card?.data || '');
+    assert.match(refreshedGroup, /工具调用 · 2/);
+    assert.match(refreshedGroup, /st_1_t_1/);
+    assert.match(refreshedGroup, /st_1_t_2/);
+    assert.match(refreshedGroup, /apply_patch/);
     assert.equal(elementCreates.some((create) =>
       create.data?.target_element_id === 'stream_tool_1'
       && String(create.data?.elements || '').includes('stream_tool_1_e2')), false);
@@ -4185,9 +4198,10 @@ describe('feishu-adapter structured streaming regions', () => {
     assert.equal(state.flushQueued, true);
   });
 
-  it('uses a direct full refresh for small-card updates that would otherwise batch append elements', async () => {
+  it('appends one shared group for small-card tool updates', async () => {
     const batchUpdates: Array<Record<string, any>> = [];
     const cardUpdates: Array<Record<string, any>> = [];
+    const elementCreates: Array<Record<string, any>> = [];
     const adapter = new FeishuAdapter({
       id: 'feishu-default',
       provider: 'feishu',
@@ -4217,7 +4231,10 @@ describe('feishu-adapter structured streaming regions', () => {
           },
           cardElement: {
             content: async () => ({}),
-            create: async () => ({}),
+            create: async (payload: Record<string, any>) => {
+              elementCreates.push(payload);
+              return {};
+            },
           },
         },
       },
@@ -4240,11 +4257,14 @@ describe('feishu-adapter structured streaming regions', () => {
     await (adapter as any).flushCardUpdate('stream-1');
 
     assert.equal(batchUpdates.length, 0);
-    assert.equal(cardUpdates.length, 1);
-    assert.equal(state.perf.fullRefreshReasons.direct_refresh_small_card, 1);
-    assert.match(String(cardUpdates[0]?.data?.card?.data || ''), /读取 文件/);
-    assert.match(String(cardUpdates[0]?.data?.card?.data || ''), /a\.txt/);
-    assert.match(String(cardUpdates[0]?.data?.card?.data || ''), /run_tests/);
+    assert.equal(cardUpdates.length, 0);
+    assert.equal(elementCreates.length, 1);
+    assert.equal(state.perf.fullRefreshReasons.direct_refresh_small_card || 0, 0);
+    const toolGroup = String(elementCreates[0]?.data?.elements || '');
+    assert.match(toolGroup, /工具调用 · 2/);
+    assert.match(toolGroup, /读取 文件/);
+    assert.match(toolGroup, /a\.txt/);
+    assert.match(toolGroup, /run_tests/);
   });
 
   it('downgrades slow batchUpdate shadow trust and corrects it with the next full refresh', async () => {
@@ -4299,22 +4319,28 @@ describe('feishu-adapter structured streaming regions', () => {
       await (adapter as any).createStreamingCard('chat-1', 'reply-1', 'stream-1');
       const state = (adapter as any).activeCards.get('stream-1');
       state.lastFullRefreshAttemptAt = now;
-      state.toolCalls = Array.from({ length: 8 }, (_, index) => ({
-        id: `tool-${index + 1}`,
-        name: index === 0 ? 'read_file' : `tool_${index + 1}`,
-        status: 'running' as const,
-        input: index === 0 ? 'a.txt' : `input-${index + 1}`,
+      state.historyDriven = true;
+      state.historyItems = Array.from({ length: 25 }, (_, index) => ({
+        type: 'markdown' as const,
+        role: index === 0 ? 'thinking' as const : 'assistant' as const,
+        content: index === 0 ? '💭 Thinking...' : `history line ${index + 1}`,
       }));
       (adapter as any).markStreamingDesiredDirty(state);
 
       await (adapter as any).flushCardUpdate('stream-1');
 
+      for (let attempt = 0; attempt < 20 && batchUpdates.length === 0; attempt += 1) {
+        await new Promise<void>((resolve) => setImmediate(resolve));
+      }
       assert.equal(batchUpdates.length, 1);
       assert.equal(cardUpdates.length, 0);
       assert.equal(state.shadowTrust, 'weak');
 
       await (adapter as any).flushCardUpdate('stream-1');
 
+      for (let attempt = 0; attempt < 20 && cardUpdates.length === 0; attempt += 1) {
+        await new Promise<void>((resolve) => setImmediate(resolve));
+      }
       assert.equal(cardUpdates.length, 1);
       assert.equal(state.shadowTrust, 'trusted');
     } finally {

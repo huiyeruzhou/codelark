@@ -397,7 +397,7 @@ export function scriptedKimiToolCardIssues(
   if (!finalCheckpoint) return [`${phase.providerKey}: no completed final checkpoint was available for tool-card audit.`];
 
   const panels = finalCheckpoint.toolPanels || [];
-  if (panels.length < 4) issues.push(`${phase.providerKey}: expected at least 4 direct tool panels, got ${panels.length}.`);
+  if (panels.length < 4) issues.push(`${phase.providerKey}: expected at least 4 inner tool panels, got ${panels.length}.`);
   for (const action of ['读取', '搜索', '修改', '运行']) {
     if (!panels.some((panel) => panel.title.includes(action))) {
       issues.push(`${phase.providerKey}: no tool title contained ${JSON.stringify(action)}.`);
@@ -415,6 +415,12 @@ export function scriptedKimiToolCardIssues(
     }
     if (panel.forbiddenEnvelopeTexts.length > 0) {
       issues.push(`${phase.providerKey}: ${panel.elementId} leaked ${panel.forbiddenEnvelopeTexts.join(', ')}.`);
+    }
+    if ((panel.title.includes('读取') || panel.title.includes('搜索')) && panel.fences.length > 0) {
+      issues.push(`${phase.providerKey}: ${panel.elementId} displayed ordinary tool output.`);
+    }
+    if (panel.title.includes('运行') && panel.fences.some((fence) => fence.language === 'text')) {
+      issues.push(`${phase.providerKey}: ${panel.elementId} displayed command output.`);
     }
     for (const fence of panel.fences) {
       if (!fence.closed) issues.push(`${phase.providerKey}: ${panel.elementId} contains an unclosed ${fence.language || 'plain'} fence.`);

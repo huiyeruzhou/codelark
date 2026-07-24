@@ -64,7 +64,6 @@ import {
   buildStreamingTextContent,
   buildStreamingTextLayoutSignature,
   buildStreamingHistoryElements,
-  buildToolProgressElements,
   buildStreamingHistoryElementsFromItems,
   buildCardActionElements,
   buildMetadataTagElements,
@@ -890,24 +889,28 @@ function collectRealE2eToolPanelSummaries(value: unknown, summaries: RealE2eTool
   }
   const record = value as Record<string, unknown>;
   const elementId = typeof record.element_id === 'string' ? record.element_id : '';
-  if (record.tag === 'collapsible_panel' && /^stream_tool_\d+$/.test(elementId)) {
+  if (record.tag === 'collapsible_panel' && /^(?:stream_tool_\d+|st_\d+_t_\d+)$/.test(elementId)) {
     const header = record.header && typeof record.header === 'object'
       ? record.header as Record<string, unknown>
       : {};
     const titleValue = header.title && typeof header.title === 'object'
       ? (header.title as Record<string, unknown>).content
       : '';
-    const detailMarkdown = collectCardJsonMarkdownTexts(record.elements).join('\n\n');
-    const envelopeCandidates = ['Script completed', 'Script running', 'Script failed', 'Wall time', 'Chunk ID', 'Original token count', 'Success', 'Completed', '长输出'];
-    summaries.push({
-      elementId,
-      title: typeof titleValue === 'string' ? titleValue : '',
-      detailChars: Array.from(detailMarkdown).length,
-      detailLines: detailMarkdown ? detailMarkdown.split('\n').length : 0,
-      nestedPanelCount: countNestedCollapsiblePanels(record.elements),
-      fences: collectFencedBlockSummaries(detailMarkdown),
-      forbiddenEnvelopeTexts: envelopeCandidates.filter((candidate) => detailMarkdown.includes(candidate)),
-    });
+    const title = typeof titleValue === 'string' ? titleValue : '';
+    const isToolGroup = /^stream_tool_\d+$/.test(elementId) && /^工具调用\s*·/u.test(title);
+    if (!isToolGroup) {
+      const detailMarkdown = collectCardJsonMarkdownTexts(record.elements).join('\n\n');
+      const envelopeCandidates = ['Script completed', 'Script running', 'Script failed', 'Wall time', 'Chunk ID', 'Original token count', 'Success', 'Completed', '长输出'];
+      summaries.push({
+        elementId,
+        title,
+        detailChars: Array.from(detailMarkdown).length,
+        detailLines: detailMarkdown ? detailMarkdown.split('\n').length : 0,
+        nestedPanelCount: countNestedCollapsiblePanels(record.elements),
+        fences: collectFencedBlockSummaries(detailMarkdown),
+        forbiddenEnvelopeTexts: envelopeCandidates.filter((candidate) => detailMarkdown.includes(candidate)),
+      });
+    }
   }
   for (const child of Object.values(record)) collectRealE2eToolPanelSummaries(child, summaries);
   return summaries;
@@ -1200,39 +1203,20 @@ function resolveTerminalContextUsage(state: Pick<FeishuCardState, 'terminalConte
   return state.terminalContextUsageText || extractTerminalContextUsage(state.pendingStatusText);
 }
 
-function toolSnapshotSignature(tool: ToolCallInfo): string {
-  return JSON.stringify(tool);
-}
-
-function buildStreamingToolPaneElement(
-  panel: Record<string, unknown>,
-  elementId: string,
-): Record<string, unknown> {
-  return {
-    ...panel,
-    element_id: elementId,
-  };
-}
-
-function buildStreamingToolPaneElements(tools: ToolCallInfo[]): Array<Record<string, unknown>> {
-  return buildToolProgressElements(tools, { maxItems: null }).map((panel, index) =>
-    buildStreamingToolPaneElement(panel, `stream_tool_${index + 1}`));
+function toolGroupSnapshotSignature(tools: ToolCallInfo[]): string {
+  return JSON.stringify(tools);
 }
 
 function buildRenderedToolSnapshots(tools: ToolCallInfo[]): Record<string, string> {
-  const snapshots: Record<string, string> = {};
-  tools.forEach((tool, index) => {
-    snapshots[`stream_tool_${index + 1}`] = toolSnapshotSignature(tool);
-  });
-  return snapshots;
+  return tools.length > 0 ? { stream_tool_1: toolGroupSnapshotSignature(tools) } : {};
 }
 
 function buildRenderedToolEventCounts(tools: ToolCallInfo[]): Record<string, number> {
-  const eventCounts: Record<string, number> = {};
-  tools.forEach((_tool, index) => {
-    eventCounts[`stream_tool_${index + 1}`] = 1;
-  });
-  return eventCounts;
+  return tools.length > 0 ? { stream_tool_1: tools.length } : {};
+}
+
+function renderedStreamingToolCount(state: FeishuCardState): number {
+  return state.renderedToolEventCounts.stream_tool_1 || 0;
 }
 
 function visibleStreamingHistoryItems(state: FeishuCardState): StreamingHistoryItem[] | undefined {
@@ -1248,15 +1232,7 @@ function buildStreamingRunningHistoryElements(
   tools: ToolCallInfo[] = [],
   elementId = 'streaming_content',
 ): Array<Record<string, unknown>> {
-  const elements = buildStreamingHistoryElements(content, [], elementId);
-  const historyPanel = elements.find((element) => element.element_id === 'stream_history');
-  if (historyPanel) {
-    const historyChildren = Array.isArray(historyPanel.elements)
-      ? historyPanel.elements as Array<Record<string, unknown>>
-      : [];
-    historyPanel.elements = [...historyChildren, ...buildStreamingToolPaneElements(tools)];
-  }
-  return elements;
+  return buildStreamingHistoryElements(content, tools, elementId);
 }
 
 function buildStreamingHistoryRenderState(
@@ -1290,31 +1266,30 @@ function buildStreamingToolAppendOperations(
   desired: StreamingHistoryRenderState,
   tools: ToolCallInfo[],
 ): StreamingHistoryAppendPlan {
-  const operations: StreamingHistoryAppendOperation[] = [];
-  let requiresFullRefresh = false;
-  tools.forEach((tool, index) => {
-    if (requiresFullRefresh) return;
-    const elementId = `stream_tool_${index + 1}`;
-    const element = desired.elementsById[elementId];
-    const elementJson = desired.elementJson[elementId];
-    if (!element || !elementJson) return;
-    const snapshot = toolSnapshotSignature(tool);
-    if (!state.renderedToolSnapshots[elementId]) {
-      operations.push({
+  if (tools.length === 0) return { operations: [], requiresFullRefresh: false };
+  const elementId = 'stream_tool_1';
+  const element = desired.elementsById[elementId];
+  const elementJson = desired.elementJson[elementId];
+  if (!element || !elementJson) return { operations: [], requiresFullRefresh: true };
+  const snapshot = toolGroupSnapshotSignature(tools);
+  if (!state.renderedToolSnapshots[elementId]) {
+    return {
+      operations: [{
         kind: 'create',
         elementId,
         targetElementId: 'stream_history',
         element,
         elementJson,
         snapshot,
-        eventCount: 1,
-      });
-      return;
-    }
-    if (state.renderedToolSnapshots[elementId] === snapshot) return;
-    requiresFullRefresh = true;
-  });
-  return { operations: requiresFullRefresh ? [] : operations, requiresFullRefresh };
+        eventCount: tools.length,
+      }],
+      requiresFullRefresh: false,
+    };
+  }
+  return {
+    operations: [],
+    requiresFullRefresh: state.renderedToolSnapshots[elementId] !== snapshot,
+  };
 }
 
 function isToolPanelElementId(elementId: string): boolean {
@@ -3364,9 +3339,7 @@ export class FeishuAdapter extends BaseChannelAdapter {
     }
 
     if (!state.historyDriven && state.toolCalls.length > 0) {
-      const renderedToolCount = Object.keys(state.renderedToolSnapshots)
-        .filter((elementId) => /^stream_tool_\d+$/.test(elementId))
-        .length;
+      const renderedToolCount = renderedStreamingToolCount(state);
       const nextOffset = renderedToolCount < state.toolCalls.length
         ? Math.min(state.toolCallOffset + renderedToolCount, Math.max(0, state.toolCalls.length - 1))
         : state.toolCallOffset;
@@ -3393,9 +3366,7 @@ export class FeishuAdapter extends BaseChannelAdapter {
       };
     }
     if (!state.historyDriven && state.toolCalls.length > 0) {
-      const renderedToolCount = Object.keys(state.renderedToolSnapshots)
-        .filter((elementId) => /^stream_tool_\d+$/.test(elementId))
-        .length;
+      const renderedToolCount = renderedStreamingToolCount(state);
       return {
         historyItemOffset: state.historyItemOffset,
         toolCallOffset: renderedToolCount < state.toolCalls.length
@@ -3560,9 +3531,7 @@ export class FeishuAdapter extends BaseChannelAdapter {
           state.historyItemOffset + state.renderedHistoryItemCount,
         )
         : undefined;
-      const renderedToolCount = Object.keys(state.renderedToolSnapshots)
-        .filter((elementId) => /^stream_tool_\d+$/.test(elementId))
-        .length;
+      const renderedToolCount = renderedStreamingToolCount(state);
       const renderedTools = state.historyDriven
         ? []
         : state.toolCalls.slice(state.toolCallOffset, state.toolCallOffset + renderedToolCount);
@@ -4961,7 +4930,7 @@ export class FeishuAdapter extends BaseChannelAdapter {
       this.markCardFlushSuccess(state);
       return true;
     } catch (err) {
-      if (isFeishuCardPayloadLimitError(err)) {
+      if (isFeishuCardPayloadLimitError(err) || isFeishuCardElementLimitError(err)) {
         const rolled = await this.forceStreamingCardContinuationRollover(
           streamKey,
           state,
@@ -4970,7 +4939,7 @@ export class FeishuAdapter extends BaseChannelAdapter {
           statusText,
           actionRows,
           metadata,
-          'feishu_200850',
+          isFeishuCardPayloadLimitError(err) ? 'feishu_200850' : 'feishu_element_limit',
         );
         if (rolled) return true;
       }

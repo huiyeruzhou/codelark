@@ -32,6 +32,11 @@ export interface FeishuCardActionButton {
 export type FeishuMarkdownTextSize = 'normal' | 'notation';
 
 export interface FeishuToolCallCardStyle {
+  outerPanel: {
+    titleTextSize: FeishuMarkdownTextSize;
+    borderColor: string | null;
+    borderCornerRadius: string;
+  };
   innerPanel: {
     titleTextSize: FeishuMarkdownTextSize;
     detailTextSize: FeishuMarkdownTextSize;
@@ -41,6 +46,11 @@ export interface FeishuToolCallCardStyle {
 }
 
 export const DEFAULT_FEISHU_TOOL_CALL_CARD_STYLE: FeishuToolCallCardStyle = {
+  outerPanel: {
+    titleTextSize: 'notation',
+    borderColor: null,
+    borderCornerRadius: '5px',
+  },
   innerPanel: {
     titleTextSize: 'notation',
     detailTextSize: 'notation',
@@ -1208,19 +1218,30 @@ function splitHistoryContentBlocks(content: string): string[] {
   return normalized ? normalized.split(/\n{2,}/).map((block) => block.trim()).filter(Boolean) : [];
 }
 
-function isAssistantHistoryBlock(block: string): boolean {
-  const firstLine = block.trimStart().split('\n')[0]?.trim() || '';
-  return /^\*\*(?!我:)[^*\n]+:\*\*/.test(firstLine);
-}
-
-function buildToolProgressPanelsForItem(
-  item: Extract<StreamingHistoryItem, { type: 'tool_panel' }>,
-  startIndex: number,
+export function buildToolProgressGroupPanel(
+  tools: ToolCallInfo[],
+  panelIndex: number,
   options: ToolProgressRenderOptions = {},
-): Array<Record<string, unknown>> {
-  if (item.tools.length === 0) return [];
-  const blocks = buildToolProgressBlocks(item.tools, { ...options, maxItems: null });
-  return blocks.map((block, index) => buildToolProgressPanel(block, startIndex + index));
+): Record<string, unknown> | null {
+  if (tools.length === 0) return null;
+  const blocks = buildToolProgressBlocks(tools, { ...options, maxItems: null });
+  return {
+    tag: 'collapsible_panel',
+    expanded: false,
+    header: {
+      title: {
+        tag: 'markdown',
+        content: `工具调用 · ${tools.length}`,
+        text_size: DEFAULT_FEISHU_TOOL_CALL_CARD_STYLE.outerPanel.titleTextSize,
+      },
+    },
+    ...panelBorderStyle(
+      DEFAULT_FEISHU_TOOL_CALL_CARD_STYLE.outerPanel.borderColor,
+      DEFAULT_FEISHU_TOOL_CALL_CARD_STYLE.outerPanel.borderCornerRadius,
+    ),
+    elements: blocks.map((block, index) => buildToolProgressPanel(block, index, `st_${panelIndex + 1}_t`)),
+    element_id: `stream_tool_${panelIndex + 1}`,
+  };
 }
 
 function initialStreamingHistoryItemsForRender(): StreamingHistoryItem[] {
@@ -1276,9 +1297,9 @@ export function buildStreamingHistoryElementsFromItems(
   const historyElements: Array<Record<string, unknown>> = [];
   for (const item of sourceItems) {
     if (item.type === 'tool_panel') {
-      const rendered = buildToolProgressPanelsForItem(item, toolPanelCount, options);
-      historyElements.push(...rendered);
-      toolPanelCount += rendered.length;
+      const rendered = buildToolProgressGroupPanel(item.tools, toolPanelCount, options);
+      if (rendered) historyElements.push(rendered);
+      toolPanelCount += 1;
       continue;
     }
     const resolvedElementId = item.elementId
@@ -1326,45 +1347,14 @@ export function buildStreamingHistoryElements(
   }
 
   const historyElements: Array<Record<string, unknown>> = [];
-  const toolBlocks = buildToolProgressBlocks(tools, { ...options, maxItems: null });
-  if (toolBlocks.length > 0) {
-    const contentBlocks = splitHistoryContentBlocks(content);
-    const assistantBlockIndexes = contentBlocks
-      .map((block, index) => isAssistantHistoryBlock(block) ? index : -1)
-      .filter((index) => index >= 0);
-    const lastAssistantBlockIndex = assistantBlockIndexes.at(-1);
-    let toolIndex = 0;
-
-    if (contentBlocks.length === 0) {
-      const fallbackElement = buildHistoryMarkdownElement('💭 Thinking...', elementId);
-      if (fallbackElement) historyElements.push(fallbackElement);
-    }
-
-    contentBlocks.forEach((block, index) => {
-      const blockElement = buildHistoryMarkdownElement(block, historyElements.length === 0 ? elementId : undefined);
-      if (blockElement) historyElements.push(blockElement);
-      if (!isAssistantHistoryBlock(block)) return;
-
-      const isLastAssistantBlock = index === lastAssistantBlockIndex;
-      const insertCount = isLastAssistantBlock ? toolBlocks.length - toolIndex : Math.min(1, toolBlocks.length - toolIndex);
-      for (let offset = 0; offset < insertCount; offset += 1) {
-        const blockToRender = toolBlocks[toolIndex];
-        if (!blockToRender) break;
-        historyElements.push(buildToolProgressPanel(blockToRender, toolIndex));
-        toolIndex += 1;
-      }
-    });
-
-    while (toolIndex < toolBlocks.length) {
-      const blockToRender = toolBlocks[toolIndex];
-      if (!blockToRender) break;
-      historyElements.push(buildToolProgressPanel(blockToRender, toolIndex));
-      toolIndex += 1;
-    }
-  } else {
-    const contentElement = buildHistoryMarkdownElement(content || '💭 Thinking...', elementId);
-    if (contentElement) historyElements.push(contentElement);
+  const contentBlocks = splitHistoryContentBlocks(content);
+  if (contentBlocks.length === 0) contentBlocks.push('💭 Thinking...');
+  for (const block of contentBlocks) {
+    const blockElement = buildHistoryMarkdownElement(block, historyElements.length === 0 ? elementId : undefined);
+    if (blockElement) historyElements.push(blockElement);
   }
+  const toolGroup = buildToolProgressGroupPanel(tools, 0, options);
+  if (toolGroup) historyElements.push(toolGroup);
 
   if (historyElements.length === 0) {
     const fallback = buildHistoryMarkdownElement('💭 Thinking...', elementId);

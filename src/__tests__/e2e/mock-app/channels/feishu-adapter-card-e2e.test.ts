@@ -512,13 +512,16 @@ describe('feishu adapter card e2e', () => {
       assert.match(markdown, /修改 `src\/app\.ts`/);
       assert.match(markdown, /```diff\n\*\*\* Begin Patch[\s\S]*\*\*\* End Patch\n```/);
       assert.match(markdown, /运行 `npm test`/);
-      assert.match(markdown, /73 tests passed/);
+      assert.doesNotMatch(markdown, /73 tests passed/);
       assert.doesNotMatch(markdown, /Script completed|Wall time|\bSuccess\b|\bCompleted\b|长输出/);
 
       const finalUpdate = calls.filter((call) => call.kind === 'card-update').at(-1);
       const finalCard = JSON.parse(String(finalUpdate?.payload?.data?.card?.data || '{}'));
       const panels = findCardElementsByTag(finalCard, 'collapsible_panel');
-      const toolPanels = panels.filter((panel) => /^stream_tool_\d+$/.test(String(panel.element_id || '')));
+      const toolGroups = panels.filter((panel) => /^stream_tool_\d+$/.test(String(panel.element_id || '')));
+      assert.equal(toolGroups.length, 1);
+      assert.equal(toolGroups[0]?.header?.title?.content, '工具调用 · 4');
+      const toolPanels = panels.filter((panel) => /^st_\d+_t_\d+$/.test(String(panel.element_id || '')));
       assert.equal(toolPanels.length, 4);
       assert.equal(toolPanels.some((panel) => findCardElementsByTag(panel.elements, 'collapsible_panel').length > 0), false);
       assert.ok(store.getChannelChat(address.channelType, address.chatId));
