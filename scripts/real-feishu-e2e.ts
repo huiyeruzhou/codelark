@@ -2413,12 +2413,12 @@ function answerOnce() {
   const toolEvents = [
     { type: 'tool.call', turnId: 'turn-scripted-kimi', toolCallId: 'read-scripted-kimi', name: 'Read', args: { path: 'src/tool-card-fixture.ts', line_offset: 0, n_lines: 80 } },
     { type: 'tool.result', turnId: 'turn-scripted-kimi', toolCallId: 'read-scripted-kimi', result: { output: 'export const fixtureLine1 = 1;\\nexport const fixtureLine2 = 2;' } },
-    { type: 'tool.call', turnId: 'turn-scripted-kimi', toolCallId: 'grep-scripted-kimi', name: 'Grep', args: { pattern: 'fixtureLine', path: 'src', output_mode: 'content' } },
-    { type: 'tool.result', turnId: 'turn-scripted-kimi', toolCallId: 'grep-scripted-kimi', result: { output: 'src/tool-card-fixture.ts:1:fixtureLine1\\nsrc/tool-card-fixture.ts:2:fixtureLine2' } },
+    { type: 'tool.call', turnId: 'turn-scripted-kimi', toolCallId: 'grep-scripted-kimi', name: 'Bash', args: { command: 'rg -n "toolPanels:" src/__tests__ -g \\'*.ts\\' && git diff --check' } },
+    { type: 'tool.result', turnId: 'turn-scripted-kimi', toolCallId: 'grep-scripted-kimi', result: { output: 'src/__tests__/a.ts:10:toolPanels:\\nsrc/__tests__/b.ts:20:toolPanels:' } },
     { type: 'tool.call', turnId: 'turn-scripted-kimi', toolCallId: 'patch-scripted-kimi', name: 'apply_patch', args: { patch: longPatch } },
     { type: 'tool.result', turnId: 'turn-scripted-kimi', toolCallId: 'patch-scripted-kimi', result: { output: 'Success. Updated the following files:\\nM src/tool-card-fixture.ts' } },
     { type: 'tool.call', turnId: 'turn-scripted-kimi', toolCallId: 'bash-scripted-kimi', name: 'Bash', args: { command: 'npm test' } },
-    { type: 'tool.result', turnId: 'turn-scripted-kimi', toolCallId: 'bash-scripted-kimi', result: { output: 'Script completed\\nWall time 0.2 seconds\\nOutput:\\n73 tests passed' } },
+    { type: 'tool.result', turnId: 'turn-scripted-kimi', toolCallId: 'bash-scripted-kimi', result: { output: 'Script running with cell ID 90\\nWall time 0.2 seconds\\nOutput:\\n' } },
   ];
   toolEvents.forEach((event, index) => appendWire({ type: 'context.append_loop_event', time: now + 2 + index, event }));
   const chunks = [
@@ -3923,7 +3923,7 @@ function scenarioSpecificChecks(
       name: 'basic_dialogue_kimi_tool_card',
       ok: kimiToolCardIssues.length === 0,
       detail: kimiToolCardIssues.length === 0
-        ? 'Observed four direct Kimi tool panels, two-line semantic titles, closed bounded fences, and no transport-envelope leakage.'
+        ? 'Observed one grouped Kimi tool-call panel with four inner semantic tool panels, closed bounded fences, and no transport-envelope leakage.'
         : kimiToolCardIssues.join('\n'),
     });
   }
@@ -3937,7 +3937,7 @@ function scenarioSpecificChecks(
       name: 'runtime_message_scripted_kimi_tool_card',
       ok: issues.length === 0,
       detail: issues.length === 0
-        ? 'Observed the scripted Kimi response as four direct Feishu tool panels with semantic titles, bounded closed fences, a multi-line diff, and no transport-envelope leakage.'
+        ? 'Observed the scripted Kimi response as one Feishu tool-call group with four inner semantic tool panels, hidden ordinary output, a bounded multi-line diff, and no transport-envelope leakage.'
         : issues.join('\n'),
     });
   }

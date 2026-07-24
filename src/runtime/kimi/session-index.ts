@@ -11,7 +11,6 @@ import type {
 } from '../contracts.js';
 import {
   buildToolCallDetailFromInput,
-  buildToolCallDetailFromOutput,
 } from '../../shared/progress/tool-call-details.js';
 
 export interface KimiSessionFileSummary {
@@ -497,7 +496,6 @@ export function parseKimiWireRecords(
               timestamp: toIsoTimestamp(parsed.time),
               turnId: ev.turnId,
               toolId: ev.toolCallId,
-              toolDetail: buildToolCallDetailFromOutput('', output) || undefined,
               isError: ev.result?.isError === true || typeof ev.result?.error !== 'undefined',
             });
             break;

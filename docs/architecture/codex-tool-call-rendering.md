@@ -70,6 +70,8 @@ tests passed
 
 这些字段是 orchestration transport envelope，不是工具的业务输出。Codex adapter 会消费 `Script completed/running/failed`、`Wall time`、`Chunk ID`、`Original token count` 和空 `Output:` 标签：耗时进入结构化元数据，正文只保留真正输出。卡片不得再显示 transport envelope，也不得用 `Success`/`Completed` 重复表达绿色边框和成功图标已经表示的状态。
 
+`Script running with cell ID N` 是例外中的结构化状态：它不作为 output 展示，而是转换为 `runningSessionId`，仅在产生该 id 的工具标题显示一次“后台终端 N”。后续 `wait(N)` 若已经完成，不沿用这个标记；是否显示只由该次工具结果是否又返回 background id 决定。
+
 ## AST 安全边界
 
 normalizer 只静态解释 literal、object/array、模板字符串的静态插值、简单拼接、局部静态变量引用和 `JSON.stringify(staticValue)`。它从不执行模型生成的 JavaScript，也不允许动态函数、getter、import 或 I/O。无法静态确定时，回退内容按 top-level statement 分行显示，避免把整段 wrapper 压成一行。

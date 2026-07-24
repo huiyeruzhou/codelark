@@ -59,10 +59,12 @@ function outputLineCount(detail: ToolCallDetail | null | undefined): number | nu
   return normalized ? normalized.split(/\r?\n/).length : null;
 }
 
-function shellToken(value: string): string {
+function shellToken(value: string): { value: string; sourceLength: number } {
   const trimmed = value.trim();
   const quoted = trimmed.match(/^(?:'([^']*)'|"([^"]*)"|([^\s;&|]+))/);
-  return quoted ? (quoted[1] ?? quoted[2] ?? quoted[3] ?? '') : '';
+  return quoted
+    ? { value: quoted[1] ?? quoted[2] ?? quoted[3] ?? '', sourceLength: quoted[0].length }
+    : { value: '', sourceLength: 0 };
 }
 
 function classifyShellCommand(command: string): { action: string; target: string; secondary?: string } {
@@ -92,12 +94,12 @@ function classifyShellCommand(command: string): { action: string; target: string
     const args = (search[1] || '').trim();
     const withoutFlags = args.replace(/^(?:(?:-[^\s]+|--[^\s]+)(?:\s+|$))+/u, '');
     const query = shellToken(withoutFlags);
-    const rest = withoutFlags.slice(query ? withoutFlags.indexOf(query) + query.length : 0).trim();
+    const rest = withoutFlags.slice(query.sourceLength).trim();
     const searchPath = shellToken(rest);
     return {
       action: '搜索',
-      target: query ? inlineCode(query) : inlineCode(command),
-      ...(searchPath ? { secondary: `路径 ${inlineCode(searchPath)}` } : {}),
+      target: query.value ? inlineCode(query.value) : inlineCode(command),
+      ...(searchPath.value ? { secondary: `路径 ${inlineCode(searchPath.value)}` } : {}),
     };
   }
 
@@ -117,6 +119,7 @@ function presentationFromDetail(tool: ToolCallInfo): { action: string; target: s
     if (duration) meta.push(duration);
     const lines = outputLineCount(detail);
     if (lines) meta.push(`输出 ${lines} 行`);
+    if (detail.runningSessionId) meta.push(`后台终端 ${inlineCode(detail.runningSessionId)}`);
     return { action: classified.action, target: classified.target, meta };
   }
   if (detail.kind === 'terminal_stdin') {
@@ -127,6 +130,7 @@ function presentationFromDetail(tool: ToolCallInfo): { action: string; target: s
     if (duration) meta.push(duration);
     const lines = outputLineCount(detail);
     if (lines) meta.push(`输出 ${lines} 行`);
+    if (detail.runningSessionId) meta.push(`后台终端 ${inlineCode(detail.runningSessionId)}`);
     return { action, target, meta };
   }
   if (detail.kind === 'patch_apply') {

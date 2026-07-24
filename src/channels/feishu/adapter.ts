@@ -833,6 +833,12 @@ interface RealE2eToolPanelSummary {
   forbiddenEnvelopeTexts: string[];
 }
 
+interface RealE2eToolGroupSummary {
+  elementId: string;
+  title: string;
+  innerPanelCount: number;
+}
+
 function collectFencedBlockSummaries(markdown: string): RealE2eToolPanelFenceSummary[] {
   const summaries: RealE2eToolPanelFenceSummary[] = [];
   const lines = markdown.replace(/\r\n/g, '\n').split('\n');
@@ -916,6 +922,37 @@ function collectRealE2eToolPanelSummaries(value: unknown, summaries: RealE2eTool
   return summaries;
 }
 
+function collectRealE2eToolGroupSummaries(value: unknown, summaries: RealE2eToolGroupSummary[] = []): RealE2eToolGroupSummary[] {
+  if (!value || typeof value !== 'object') return summaries;
+  if (Array.isArray(value)) {
+    for (const child of value) collectRealE2eToolGroupSummaries(child, summaries);
+    return summaries;
+  }
+  const record = value as Record<string, unknown>;
+  const elementId = typeof record.element_id === 'string' ? record.element_id : '';
+  if (record.tag === 'collapsible_panel' && /^stream_tool_\d+$/.test(elementId)) {
+    const header = record.header && typeof record.header === 'object'
+      ? record.header as Record<string, unknown>
+      : {};
+    const titleValue = header.title && typeof header.title === 'object'
+      ? (header.title as Record<string, unknown>).content
+      : '';
+    const title = typeof titleValue === 'string' ? titleValue : '';
+    if (/^工具调用\s*·/u.test(title)) {
+      const children = Array.isArray(record.elements) ? record.elements : [];
+      summaries.push({
+        elementId,
+        title,
+        innerPanelCount: children.filter((child) => (
+          child && typeof child === 'object' && /^st_\d+_t_\d+$/.test(String((child as Record<string, unknown>).element_id || ''))
+        )).length,
+      });
+    }
+  }
+  for (const child of Object.values(record)) collectRealE2eToolGroupSummaries(child, summaries);
+  return summaries;
+}
+
 function emitRealE2eStreamCardCheckpoint(params: {
   kind: 'create' | 'refresh' | 'element' | 'final';
   streamKey: string;
@@ -934,6 +971,7 @@ function emitRealE2eStreamCardCheckpoint(params: {
       .map((text) => truncateForCardLog(text, 1000));
     const cardSummary = params.cardJson ? summarizeCardJsonForLog(params.cardJson) : {};
     const toolPanels = parsed ? collectRealE2eToolPanelSummaries(parsed) : [];
+    const toolGroups = parsed ? collectRealE2eToolGroupSummaries(parsed) : [];
     console.log(`${REAL_E2E_STREAM_CARD_CHECKPOINT_PREFIX}${JSON.stringify({
       kind: params.kind,
       streamKey: params.streamKey,
@@ -944,6 +982,7 @@ function emitRealE2eStreamCardCheckpoint(params: {
       ...(typeof params.sequence === 'number' ? { sequence: params.sequence } : {}),
       ...cardSummary,
       markdownTexts,
+      toolGroups,
       toolPanels,
     })}`);
   } catch (err) {

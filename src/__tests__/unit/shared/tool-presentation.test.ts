@@ -41,6 +41,59 @@ describe('getToolPresentation', () => {
     assert.equal(presentation.title, '🔎 搜索 `tool_call` · 路径 `src` · 18 处');
   });
 
+  it('keeps the existing search presentation while parsing the quoted path correctly', () => {
+    const presentation = getToolPresentation({
+      id: 'compound-shell',
+      name: 'exec_command',
+      status: 'complete',
+      detail: {
+        kind: 'exec_command',
+        command: 'rg -n "toolPanels:" src/__tests__ -g \'*.ts\' && git diff --check',
+        durationMs: 100,
+        output: 'one\ntwo',
+      },
+    });
+
+    assert.equal(
+      presentation.title,
+      '🔎 搜索 `toolPanels:` · 路径 `src/__tests__` · 100ms · 输出 2 行',
+    );
+  });
+
+  it('keeps quoted rg query and path boundaries intact', () => {
+    const presentation = getToolPresentation({
+      id: 'quoted-search',
+      name: 'exec_command',
+      status: 'complete',
+      detail: { kind: 'exec_command', command: 'rg -n "toolPanels:" src/__tests__ -g \'*.ts\'' },
+    });
+
+    assert.equal(presentation.title, '🔎 搜索 `toolPanels:` · 路径 `src/__tests__`');
+  });
+
+  it('shows a yielded background terminal id in the title', () => {
+    const presentation = getToolPresentation({
+      id: 'background-shell',
+      name: 'exec_command',
+      status: 'complete',
+      detail: { kind: 'exec_command', command: 'npm test', runningSessionId: '90' },
+    });
+
+    assert.equal(presentation.title, '💻 运行 `npm test` · 后台终端 `90`');
+  });
+
+  it('does not show a background marker for a completed wait without a yielded id', () => {
+    const presentation = getToolPresentation({
+      id: 'completed-wait',
+      name: 'wait',
+      status: 'complete',
+      detail: { kind: 'terminal_stdin', sessionId: '90', isPoll: true },
+    });
+
+    assert.equal(presentation.title, '⏳ 等待 终端 `90`');
+    assert.doesNotMatch(presentation.title, /后台终端/);
+  });
+
   it('shows non-zero exit codes exactly once', () => {
     const presentation = getToolPresentation({
       id: 'exec-fail',

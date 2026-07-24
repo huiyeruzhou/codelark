@@ -196,7 +196,7 @@ describe('buildToolProgressMarkdown', () => {
       'Output:',
       'hello',
       '',
-    ].join('\n'), input);
+    ].join('\n') + '\n', input);
     const detail = mergeToolCallDetail(input, output);
 
     const rendered = buildToolProgressMarkdown([
@@ -213,6 +213,26 @@ describe('buildToolProgressMarkdown', () => {
     assert.match(rendered, /```bash\nprintf "hello\\n"\n```/);
     assert.doesNotMatch(rendered, /```text|\nhello\n/);
     assert.doesNotMatch(rendered, /Chunk ID|Original token count|Wall time|Process exited/);
+  });
+
+  it('puts a yielded Codex cell id in the title without repeating it in details', () => {
+    const input = buildToolCallDetailFromInput('exec_command', { cmd: 'npm test' });
+    const output = buildToolCallDetailFromOutput('exec_command', [
+      'Script running with cell ID 90',
+      'Wall time 10.0 seconds',
+      'Output:',
+    ].join('\n') + '\n', input);
+    const detail = mergeToolCallDetail(input, output);
+    const rendered = buildToolProgressMarkdown([{
+      id: 'yielded-cell',
+      name: 'exec_command',
+      status: 'complete',
+      detail,
+    }]);
+
+    assert.match(rendered, /#### 💻 运行 `npm test` · 10\.0s · 后台终端 `90`/);
+    assert.equal((rendered.match(/后台终端 `90`/g) || []).length, 1);
+    assert.doesNotMatch(rendered, /background session:|Script running|Wall time|Output:/);
   });
 
   it('does not embed aggregated exec_command output in markdown or cards', () => {
@@ -309,6 +329,7 @@ describe('buildToolProgressMarkdown', () => {
     ]);
 
     assert.match(rendered, /#### 🔄 等待 终端 `23553` · 等待 30\.0s · 5\.0s/);
+    assert.match(rendered, /后台终端 `23553`/);
     assert.match(rendered, /<text_tag color='blue'>session 23553<\/text_tag>/);
     assert.match(rendered, /<text_tag color='green'>wait 30\.0s<\/text_tag>/);
     assert.match(rendered, /<text_tag color='yellow'>Read<\/text_tag>/);
@@ -317,6 +338,7 @@ describe('buildToolProgressMarkdown', () => {
       /<text_tag color='blue'>session 23553<\/text_tag> <text_tag color='green'>wait 30\.0s<\/text_tag> <text_tag color='yellow'>Read<\/text_tag>/,
     );
     assert.doesNotMatch(rendered, /Read terminal output\./);
+    assert.doesNotMatch(rendered, /background session:/);
   });
 
   it('renders write_stdin text input with a distinct write tag', () => {

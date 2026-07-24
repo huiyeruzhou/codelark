@@ -553,6 +553,41 @@ describe('Kimi tmux provider helpers', () => {
     });
   });
 
+  it('parses Kimi Bash result envelopes with the tool name retained from tool.call', () => {
+    const records = parseKimiWireRecords([
+      JSON.stringify({
+        type: 'context.append_loop_event',
+        time: 1782477460000,
+        event: {
+          type: 'tool.call', turnId: 'turn-bash', toolCallId: 'bash-1', name: 'Bash',
+          args: { command: 'rg fixture && git diff --check' },
+        },
+      }),
+      JSON.stringify({
+        type: 'context.append_loop_event',
+        time: 1782477460001,
+        event: {
+          type: 'tool.result', toolCallId: 'bash-1',
+          result: { output: 'Script running with cell ID 90\nWall time 0.2 seconds\nOutput:\n' },
+        },
+      }),
+    ].join('\n'), new Set());
+
+    const tools = new Map();
+    for (const record of records) {
+      const event = toolCallEventFromMirrorRecord(record);
+      if (event) applyToolCallEventToTools(tools, event);
+    }
+
+    assert.deepEqual(tools.get('bash-1')?.detail, {
+      kind: 'exec_command',
+      command: 'rg fixture && git diff --check',
+      durationMs: 200,
+      runningSessionId: '90',
+      rawOutput: 'Script running with cell ID 90\nWall time 0.2 seconds\nOutput:\n',
+    });
+  });
+
   it('treats only terminal step.end records as turn completion and maps turn.cancel to abort', () => {
     const records = parseKimiWireRecords([
       JSON.stringify({

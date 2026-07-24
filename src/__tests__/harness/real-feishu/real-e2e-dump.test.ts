@@ -474,11 +474,14 @@ describe('unit::real-e2e-dump::live-log-scoping', () => {
         streamKey: 'mirror:session:kimi',
         status: 'completed',
         markdownTexts: [kimiMarker],
+        toolGroups: [
+          { elementId: 'stream_tool_1', title: '工具调用 · 4', innerPanelCount: 4 },
+        ],
         toolPanels: [
           { elementId: 'st_1_t_1', title: '📖 读取 `src/a.ts`', detailChars: 10, detailLines: 1, nestedPanelCount: 0, fences: [], forbiddenEnvelopeTexts: [] },
-          { elementId: 'st_1_t_2', title: '🔎 搜索 `fixture` · 路径 `src` · 2 处', detailChars: 10, detailLines: 1, nestedPanelCount: 0, fences: [], forbiddenEnvelopeTexts: [] },
+          { elementId: 'st_1_t_2', title: '🔎 搜索 `toolPanels:` · 路径 `src/__tests__` · 2 行', detailChars: 80, detailLines: 3, nestedPanelCount: 0, fences: [{ language: 'bash', chars: 63, lines: 1, closed: true }], forbiddenEnvelopeTexts: [] },
           { elementId: 'st_1_t_3', title: '🛠️ 修改 `src/a.ts`', detailChars: 4000, detailLines: 163, nestedPanelCount: 0, fences: [{ language: 'diff', chars: 3900, lines: 160, closed: true }], forbiddenEnvelopeTexts: [] },
-          { elementId: 'st_1_t_4', title: '💻 运行 `npm test` · 200ms · 输出 1 行', detailChars: 20, detailLines: 3, nestedPanelCount: 0, fences: [{ language: 'bash', chars: 8, lines: 1, closed: true }], forbiddenEnvelopeTexts: [] },
+          { elementId: 'st_1_t_4', title: '💻 运行 `npm test` · 200ms · 后台终端 `90`', detailChars: 20, detailLines: 3, nestedPanelCount: 0, fences: [{ language: 'bash', chars: 8, lines: 1, closed: true }], forbiddenEnvelopeTexts: [] },
         ],
       },
     ];
@@ -492,6 +495,13 @@ describe('unit::real-e2e-dump::live-log-scoping', () => {
       providerKey: 'kimi-tmux',
       marker: kimiMarker,
     }), []);
+    assert.deepEqual(scriptedKimiToolCardIssues([
+      kimiCheckpoints[0]!,
+      { ...kimiCheckpoints[1]!, toolGroups: [] },
+    ], {
+      providerKey: 'kimi-tmux',
+      marker: kimiMarker,
+    }), ['kimi-tmux: expected one 工具调用 · 4 group containing four inner tool panels.']);
     assert.deepEqual(scriptedKimiToolCardIssues([
       kimiCheckpoints[0]!,
       {

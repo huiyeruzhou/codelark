@@ -56,6 +56,11 @@ export interface RealE2eStreamCardCheckpoint {
   names?: string[];
   markdownTexts?: string[];
   markdownPreviews?: Array<{ elementId?: string; preview: string }>;
+  toolGroups?: Array<{
+    elementId: string;
+    title: string;
+    innerPanelCount: number;
+  }>;
   toolPanels?: Array<{
     elementId: string;
     title: string;
@@ -312,6 +317,9 @@ function extractStreamCardCheckpoints(text: string): RealE2eStreamCardCheckpoint
         ...(Array.isArray(parsed.markdownPreviews)
           ? { markdownPreviews: parsed.markdownPreviews as Array<{ elementId?: string; preview: string }> }
           : {}),
+        ...(Array.isArray(parsed.toolGroups)
+          ? { toolGroups: parsed.toolGroups as RealE2eStreamCardCheckpoint['toolGroups'] }
+          : {}),
         ...(Array.isArray(parsed.toolPanels)
           ? { toolPanels: parsed.toolPanels as RealE2eStreamCardCheckpoint['toolPanels'] }
           : {}),
@@ -396,12 +404,20 @@ export function scriptedKimiToolCardIssues(
   ));
   if (!finalCheckpoint) return [`${phase.providerKey}: no completed final checkpoint was available for tool-card audit.`];
 
+  const groups = finalCheckpoint.toolGroups || [];
+  if (!groups.some((group) => group.title === '工具调用 · 4' && group.innerPanelCount === 4)) {
+    issues.push(`${phase.providerKey}: expected one 工具调用 · 4 group containing four inner tool panels.`);
+  }
   const panels = finalCheckpoint.toolPanels || [];
   if (panels.length < 4) issues.push(`${phase.providerKey}: expected at least 4 inner tool panels, got ${panels.length}.`);
   for (const action of ['读取', '搜索', '修改', '运行']) {
     if (!panels.some((panel) => panel.title.includes(action))) {
       issues.push(`${phase.providerKey}: no tool title contained ${JSON.stringify(action)}.`);
     }
+  }
+  const runPanel = panels.find((panel) => panel.title.includes('运行'));
+  if (runPanel && !runPanel.title.includes('后台终端 `90`')) {
+    issues.push(`${phase.providerKey}: run title did not expose the yielded background terminal 90.`);
   }
   for (const panel of panels) {
     if (panel.title.includes('\n')) {
@@ -416,8 +432,11 @@ export function scriptedKimiToolCardIssues(
     if (panel.forbiddenEnvelopeTexts.length > 0) {
       issues.push(`${phase.providerKey}: ${panel.elementId} leaked ${panel.forbiddenEnvelopeTexts.join(', ')}.`);
     }
-    if ((panel.title.includes('读取') || panel.title.includes('搜索')) && panel.fences.length > 0) {
+    if (panel.title.includes('读取') && panel.fences.length > 0) {
       issues.push(`${phase.providerKey}: ${panel.elementId} displayed ordinary tool output.`);
+    }
+    if (panel.title.includes('搜索') && panel.fences.some((fence) => fence.language !== 'bash')) {
+      issues.push(`${phase.providerKey}: ${panel.elementId} displayed search output instead of only the original bash command.`);
     }
     if (panel.title.includes('运行') && panel.fences.some((fence) => fence.language === 'text')) {
       issues.push(`${phase.providerKey}: ${panel.elementId} displayed command output.`);

@@ -575,7 +575,6 @@ export function renderToolCallDetailMarkdown(tool: ToolCallInfo): string {
     ].filter(Boolean).join('  ');
     if (meta) sections.push(meta);
     if (detail.command) sections.push(buildFencedCodeBlock(detail.command, 'bash'));
-    if (detail.runningSessionId) sections.push(`background session: \`${detail.runningSessionId}\``);
     const output = renderStandardPreview(detail.output || '', 'text');
     if (output) sections.push(output);
     return sections.join('\n\n');
@@ -594,7 +593,6 @@ export function renderToolCallDetailMarkdown(tool: ToolCallInfo): string {
     if (!detail.isPoll && typeof detail.chars === 'string') {
       sections.push(buildFencedCodeBlock(detail.chars, 'text'));
     }
-    if (detail.runningSessionId) sections.push(`background session: \`${detail.runningSessionId}\``);
     if (detail.output) sections.push(renderStandardPreview(detail.output, 'text'));
     return sections.join('\n\n');
   }

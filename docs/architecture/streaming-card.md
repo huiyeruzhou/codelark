@@ -179,7 +179,9 @@ snapshotStreamingDesiredState(state)
 
 沿用既有的“历史记录”外层容器，并在每批工具事件上保留共用的“工具调用 · N”折叠栏；展开工具调用组后，每个工具仍有自己的折叠面板，即“历史记录 → 工具调用组 → 单工具”。单工具内部不再为长输出增加折叠。标题由代码拼成一行，依次显示动作图标、动作、对象和范围/命中数/输出行数/耗时/非零 exit code；过长时由 Feishu 自然换行。完成态使用 `📖/🔎/🛠️/💻` 等动作图标，运行中和异常仍使用状态图标；标题和详情不再重复 `Success`、`Completed` 或“完成”。
 
-展开后必须能审计真实调用参数：command 使用 `bash` fence，read/search/generic 工具显示结构化参数。普通工具的 output 仍可在中间层用于标题的行数、命中数、exit code 等摘要，但默认不把 output 正文放进卡片；`apply_patch` 是例外，使用 `diff` fence 显示真实修改内容。`Script completed`、`Wall time`、`Chunk ID`、`Original token count` 等 transport envelope 在 adapter 层消费，不进入详情。
+展开后必须能审计真实调用参数：command 使用 `bash` fence，read/search/generic 工具显示结构化参数。shell 中的 `rg`/`grep` 即使位于复合命令里，也保留搜索语义和完整原始 command；解析 query/path 时必须按带引号 token 的原始源码长度推进，不能把引号误当成路径。普通工具的 output 仍可在中间层用于标题的行数、命中数、exit code 等摘要，但默认不把 output 正文放进卡片；`apply_patch` 是例外，使用 `diff` fence 显示真实修改内容。`Script completed`、`Wall time`、`Chunk ID`、`Original token count` 等 transport envelope 在 adapter 层消费，不进入详情。
+
+若一次工具结果明确返回仍在运行的 background session/cell id，当前工具标题追加一次“后台终端 N”，方便后续等待工具与终端关联；详情不再重复该 id。这个标记属于产生 background id 的历史工具事件，不跨事件维护动态状态，也不因为后续 `wait` 完成而回写旧标题。普通已完成工具以及只消费既有 session 的 `wait` 不显示该标记。
 
 所有长内容在生成 Markdown 之前调用同一个预览 helper，并同时受字符数和行数两个 hard upper bound 约束；任何一个先达到就停止。普通输入/输出上限为 4000 Unicode code points 和 80 行，patch 上限为 8000 code points 和 160 行。省略提示写在 code fence 外。禁止对已经生成的 Markdown 盲切，否则会切掉 closing fence，导致 Feishu 客户端把多行 code block 错误排版成一行。
 
