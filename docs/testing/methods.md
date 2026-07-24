@@ -113,7 +113,7 @@ fake 测试也要遵守真实职责边界。`fake tmux` 只模拟 tmux transport
 | `codex-pty-provider.test.ts`、`codex-tmux-provider.test.ts` | Codex pty/tmux prompt 注入、启动参数、auto-enter、清理和事件输出。 |
 | `codex-session-index.test.ts`、`codex-session-mirror.test.ts` | Codex JSONL/session 索引读取、mirror cursor 对齐和事件重放。 |
 | `claude-tmux-provider.test.ts`、`claude-pty-provider.test.ts`、`claude-sdk-provider.test.ts`、`claude-session-jsonl.test.ts` | Claude tmux 启动/注入/mirror SSE、Claude pty 身份发现、Claude SDK helper、Claude JSONL session 读取。 |
-| `kimi-tmux-provider.test.ts`、`kimi-tmux-provider-local-process.e2e.test.ts` | Kimi tmux 启动、resume hint session id 解析、`wire.jsonl` session 索引、think/status、`Ctrl-S` steer，以及 fake Kimi CLI 穿过真实 tmux 的 local-process smoke。 |
+| `kimi-tmux-provider.test.ts`、`kimi-tmux-provider-local-process.e2e.test.ts` | Kimi tmux 启动、resume hint session id 解析、`wire.jsonl` session 索引、think/status、`Ctrl-S` steer、terminal 后 usage 的同 turn 归属、split-delta orphan usage 丢弃、injection reminder 过滤，以及 fake Kimi CLI 穿过真实 tmux 的 local-process smoke。 |
 | `sse-stream-decoder.test.ts` | SSE 文本流解码和事件边界。 |
 | `interactive-turn-runner.test.ts` | 一次 runtime turn 的主编排，含 stream、tool、context、goal、stop、mirror suppression 和基础对话 simulator。 |
 | `interactive-turn-sdk-conversation-engine.test.ts`、`interactive-turn-sdk-stream-events-controller.test.ts`、`interactive-turn-final-response-plan.test.ts`、`interactive-turn-terminal-finalization-controller.test.ts` | SDK conversation 内联附件/tool 展开、stream event 控制、最终回复计划和终端 provider finalization。 |
@@ -132,7 +132,7 @@ fake 测试也要遵守真实职责边界。`fake tmux` 只模拟 tmux transport
 | `mirror-feedback-controller.test.ts`、`mirror-reconcile-core.test.ts`、`mirror-reconcile-batch.test.ts`、`mirror-subscription-registry.test.ts`、`mirror-subscription-state.test.ts` | mirror 订阅、reconcile、批处理、状态恢复和反馈控制。 |
 | `feishu-markdown.test.ts`、`plain-markdown.test.ts` | Markdown 到飞书卡片/纯文本的转换，含表格、代码块、工具/任务进度和最终卡片 JSON。 |
 | `scripted-tool-model.test.ts`、`tool-presentation.test.ts`、`text-preview.test.ts` | 确定性生成任意工具 start/result/error 序列，验证公共标题语义和字符数/行数双 hard upper bound；不依赖真实模型随机输出。 |
-| `feishu-adapter-card-e2e.test.ts` | 飞书 card 级本地 E2E，覆盖 SDK/mirror question form、GPT-5.6 orchestration、Kimi Markdown 和真实 bash/patch 详情等 payload 形态。 |
+| `feishu-adapter-card-e2e.test.ts` | 飞书 card 级本地 E2E，覆盖 SDK/mirror question form、GPT-5.6 orchestration、Kimi Markdown、terminal→usage 后无悬挂 pending turn、内部 reminder 不可见，以及真实 bash/patch 详情等 payload 形态。 |
 | `outbound-artifacts.test.ts` | 出站 artifact、问题表单和附件描述。 |
 | `permission.test.ts`、`permission-broker.test.ts` | 权限请求、pending permission 状态和 broker 行为。 |
 

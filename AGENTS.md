@@ -2,6 +2,10 @@
 
 git 不要提交 `STATUS.md`
 
+## 用户链接格式
+
+- 向用户提供 URL 时，必须使用 Markdown 超链接（例如 `[打开授权页面](https://example.com)`）或独立代码块；不要直接发送裸 URL，以免当前聊天客户端无法点击或错误解析。
+
 ## 开发工作流
 - 本仓库的 Node.js 开发命令使用 Node.js 24。
 - 运行 `npm run build`、`npm test`、`npm run typecheck` 或其他 Node 命令前，除非当前 shell 已经是 Node.js 24，否则先运行 `nvm use 24`。

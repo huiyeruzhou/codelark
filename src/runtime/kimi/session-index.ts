@@ -348,6 +348,7 @@ interface KimiWireLine {
     role?: string;
     content?: unknown;
     toolCalls?: unknown[];
+    origin?: { kind?: string; variant?: string };
   };
   goalId?: string;
   objective?: string;
@@ -407,6 +408,7 @@ export function parseKimiWireRecords(
 
     switch (parsed.type) {
       case 'context.append_message': {
+        if (parsed.message?.origin?.kind === 'injection') continue;
         const role = parsed.message?.role;
         const content = textContent(parsed.message?.content);
         if (!content) continue;
@@ -587,6 +589,22 @@ export function parseKimiWireRecords(
     }
   }
 
+  // Kimi writes terminal step.end before the turn's final usage.record. The
+  // generic mirror state must see usage first; otherwise task_complete clears
+  // the turn and the trailing usage creates an orphan "Thinking..." card.
+  for (let index = 1; index < records.length; index += 1) {
+    const usage = records[index];
+    const terminal = records[index - 1];
+    if (
+      usage?.type === 'context_usage'
+      && (terminal?.type === 'task_complete' || terminal?.type === 'task_aborted')
+    ) {
+      usage.turnId ||= terminal.turnId;
+      records[index - 1] = usage;
+      records[index] = terminal;
+    }
+  }
+
   return records;
 }
 
@@ -650,7 +668,24 @@ export function readKimiSessionMirrorRecordDeltaByFilePath(
   }
   const split = splitCompleteKimiWireText(`${trailingText || ''}${chunk}`);
   const emittedSignatures = new Set<string>();
-  const records = parseKimiWireRecords(split.completeText, emittedSignatures);
+  const parsedRecords = parseKimiWireRecords(split.completeText, emittedSignatures);
+  let activeTurnId = currentTurnId;
+  const records = parsedRecords.filter((record) => {
+    if (record.type === 'context_usage' && !record.turnId) {
+      // A watcher snapshot may split step.end and usage.record across reads.
+      // Keep usage while a turn is active; drop it once the terminal record
+      // has already been consumed so it cannot manufacture a new mirror turn.
+      if (!activeTurnId) return false;
+      record.turnId = activeTurnId;
+    }
+    if (record.type === 'task_complete' || record.type === 'task_aborted') {
+      const completedTurnId = record.turnId || activeTurnId;
+      if (!completedTurnId || completedTurnId === activeTurnId) activeTurnId = null;
+    } else if (record.turnId) {
+      activeTurnId = record.turnId;
+    }
+    return true;
+  });
 
   return {
     records,

@@ -235,6 +235,7 @@ process.stdin.on('data', (chunk) => {
     appendWire({ type: 'context.append_loop_event', time: now + 1, event: { type: 'content.part', turnId, part: { type: 'think', think: 'mock kimi thinking ' + turnCount } } });
     appendWire({ type: 'context.append_loop_event', time: now + 2, event: { type: 'content.part', turnId, part: { type: 'text', text: response } } });
     appendWire({ type: 'context.append_loop_event', time: now + 3, event: { type: 'step.end', turnId, stepUuid } });
+    appendWire({ type: 'usage.record', time: now + 4, usage: { inputOther: 7, inputCacheRead: 11, inputCacheCreation: 0, output: 3 } });
   }
   for (const byte of chunk) {
     if (byte !== 0x03) continue;
@@ -298,6 +299,7 @@ process.stdin.on('data', (chunk) => {
     appendWire({ type: 'context.append_loop_event', time: now + 1, event: { type: 'content.part', turnId, part: { type: 'think', think: thinkText + ' ' + turnCount } } });
     appendWire({ type: 'context.append_loop_event', time: now + 2, event: { type: 'content.part', turnId, part: { type: 'text', text: currentResponse } } });
     appendWire({ type: 'context.append_loop_event', time: now + 3, event: { type: 'step.end', turnId, stepUuid } });
+    appendWire({ type: 'usage.record', time: now + 4, usage: { inputOther: 7, inputCacheRead: 11, inputCacheCreation: 0, output: 3 } });
   }
   if (chunk.includes(0x03)) {
     setTimeout(() => process.exit(0), 20);
@@ -2797,8 +2799,15 @@ provider = "tmux"
         event.kind === 'end'
         && event.streamKey?.startsWith('mirror:')
         && event.status === 'completed'
-        && event.text === '**kimi:** Kimi mock-app continued response 2'
+        && /Kimi mock-app continued response 2/.test(event.text || '')
       )), 12_000);
+
+      await _testOnly.reconcileMirrorSubscriptions();
+      assert.equal(bridgeState.kimiMirrorSubscriptions.get(binding.id)?.pendingTurn, null);
+      assert.deepEqual(
+        adapter.streamEvents.filter((event) => event.kind === 'mirror_start').map((event) => event.streamKey).sort(),
+        adapter.streamEvents.filter((event) => event.kind === 'end' && event.streamKey?.startsWith('mirror:')).map((event) => event.streamKey).sort(),
+      );
 
       const launchesAfterFollowUp = fs.readFileSync(launchLogPath, 'utf-8')
         .trim()
@@ -2899,7 +2908,7 @@ provider = "tmux"
         event.kind === 'end'
         && event.streamKey?.startsWith('mirror:')
         && event.status === 'completed'
-        && event.text === '**kimi:** Kimi mock-app plain response'
+        && /Kimi mock-app plain response/.test(event.text || '')
       )), 12_000).catch((error) => {
         const activeBinding = store.getChannelChat(address.channelType, address.chatId);
         const session = activeBinding ? store.getSession(activeBinding.bridgeSessionId) : undefined;
@@ -2922,6 +2931,12 @@ provider = "tmux"
       assert.equal(updatedSession?.runtime?.kimi?.sessionId, kimiSessionId);
       assert.equal(updatedSession?.runtime?.kimi?.cwd, workDir);
       assert.equal(updatedSession?.mirror_status, 'watching');
+      await _testOnly.reconcileMirrorSubscriptions();
+      assert.equal(bridgeState.kimiMirrorSubscriptions.get(currentBinding.id)?.pendingTurn, null);
+      assert.deepEqual(
+        adapter.streamEvents.filter((event) => event.kind === 'mirror_start').map((event) => event.streamKey).sort(),
+        adapter.streamEvents.filter((event) => event.kind === 'end' && event.streamKey?.startsWith('mirror:')).map((event) => event.streamKey).sort(),
+      );
 
       const keyLog = fs.readFileSync(keyLogPath, 'utf-8');
       assert.match(keyLog, /runtime command kimi prompt/);
@@ -3035,7 +3050,7 @@ provider = "tmux"
         event.kind === 'end'
         && event.streamKey?.startsWith('mirror:')
         && event.status === 'completed'
-        && event.text === `**kimi:** ${responseText}`
+        && new RegExp(responseText).test(event.text || '')
       )), 12_000).catch((error) => {
         assert.fail([
           error instanceof Error ? error.message : String(error),
@@ -3052,6 +3067,12 @@ provider = "tmux"
       assert.equal(updatedSession?.runtime?.kimi?.sessionId, kimiSessionId);
       assert.equal(updatedSession?.runtime?.kimi?.cwd, workDir);
       assert.equal(updatedSession?.mirror_status, 'watching');
+      await _testOnly.reconcileMirrorSubscriptions();
+      assert.equal(bridgeState.kimiMirrorSubscriptions.get(binding.id)?.pendingTurn, null);
+      assert.deepEqual(
+        adapter.streamEvents.filter((event) => event.kind === 'mirror_start').map((event) => event.streamKey).sort(),
+        adapter.streamEvents.filter((event) => event.kind === 'end' && event.streamKey?.startsWith('mirror:')).map((event) => event.streamKey).sort(),
+      );
 
       const launches = fs.readFileSync(launchLogPath, 'utf-8')
         .trim()
@@ -3235,7 +3256,7 @@ provider = "tmux"
         event.kind === 'end'
         && event.streamKey?.startsWith('mirror:')
         && event.status === 'completed'
-        && event.text === '**kimi:** Kimi accepted card answer'
+        && /Kimi accepted card answer/.test(event.text || '')
       )), 12_000);
 
       await _testOnly.handleMessage(adapter, inboundMessage(address, '卡片回答之后继续聊', 'incoming-kimi-after-question-follow-up'));
@@ -3243,8 +3264,15 @@ provider = "tmux"
         event.kind === 'end'
         && event.streamKey?.startsWith('mirror:')
         && event.status === 'completed'
-        && event.text === '**kimi:** Kimi continued after follow-up'
+        && /Kimi continued after follow-up/.test(event.text || '')
       )), 12_000);
+
+      await _testOnly.reconcileMirrorSubscriptions();
+      assert.equal(bridgeState.kimiMirrorSubscriptions.get(binding.id)?.pendingTurn, null);
+      assert.deepEqual(
+        adapter.streamEvents.filter((event) => event.kind === 'mirror_start').map((event) => event.streamKey).sort(),
+        adapter.streamEvents.filter((event) => event.kind === 'end' && event.streamKey?.startsWith('mirror:')).map((event) => event.streamKey).sort(),
+      );
 
       const continuedKeyLog = fs.readFileSync(keyLogPath, 'utf-8');
       assert.match(continuedKeyLog, /用户回答了问题卡片/);

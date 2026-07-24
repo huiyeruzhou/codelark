@@ -295,6 +295,8 @@ Turn reducer 会按 record 类型更新同一个 `BridgeMirrorTurnState`：
 - `goal_status`：写入 `goalStatus`；如果当前 turn 已经有正文、用户文本、工具或任务进展，才触发正文区域刷新。只有 active goal 状态、没有可见进展的空 turn 不会启动 mirror stream。
 - `task_complete` / `task_aborted`：结束当前 pending turn，形成 `FinalizedBridgeMirrorTurn`；如果 active turn 能 claim 这个终态，则交给 active IM turn，否则作为 mirror final delivery。连续 3 个只有 active goal 状态、没有可见进展的空 turn 会产生一次 goal loop warning，避免无限重启时刷出空镜像卡片。
 
+Runtime source adapter 必须先把底层事件规范化，再交给上述 reducer。Kimi Code 会按 `step.end → usage.record` 写入终态统计；adapter 必须把这条 usage 归回刚结束的同一 turn（同一增量内排到 terminal 前，跨增量且 terminal 已消费时丢弃孤立 usage），不能让它创建一张没有后续 terminal 的 `Thinking...` 卡。Kimi `context.append_message` 中 `origin.kind=injection` 的内部 reminder 也必须在 source adapter 过滤，不能进入通用 history 或飞书卡片。这个约束属于 provider 解析层；统一 turn reducer 和 Feishu renderer 不应增加 Kimi 特判。
+
 Feedback controller 把 reducer hook 映射到 stream UI：
 
 - `onStreamText` 调 `formatMirrorMessage(baseTitle, userText, streamedText, ...)` 生成主内容字符串，并推给 `pushStreamFeedbackText()`；同时推 history 和 status。

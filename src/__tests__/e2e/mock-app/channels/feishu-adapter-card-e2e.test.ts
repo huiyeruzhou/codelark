@@ -273,6 +273,15 @@ function appendKimiMarkdownTurn(params: {
   const baseTime = Date.parse('2026-06-03T00:00:01.000Z');
   const lines = [
     {
+      type: 'context.append_message',
+      time: baseTime - 1,
+      message: {
+        role: 'user',
+        content: [{ type: 'text', text: '<system-reminder>internal Kimi reminder</system-reminder>' }],
+        origin: { kind: 'injection', variant: 'test_reminder' },
+      },
+    },
+    {
       type: 'context.append_loop_event',
       time: baseTime,
       event: { type: 'step.begin', turnId: params.turnId, stepUuid: `${params.turnId}-step` },
@@ -304,6 +313,11 @@ function appendKimiMarkdownTurn(params: {
       type: 'context.append_loop_event',
       time: baseTime + 400,
       event: { type: 'step.end', turnId: params.turnId, stepUuid: `${params.turnId}-step` },
+    },
+    {
+      type: 'usage.record',
+      time: baseTime + 401,
+      usage: { inputOther: 13, inputCacheCreation: 2, inputCacheRead: 21, output: 8 },
     },
   ];
   fs.appendFileSync(params.wirePath, lines.map((line) => JSON.stringify(line)).join('\n') + '\n', 'utf-8');
@@ -776,7 +790,7 @@ describe('feishu adapter card e2e', () => {
           kimi: { sessionId, cwd: workDir, provider: 'tmux' },
         },
       });
-      store.upsertChannelChat({
+      const binding = store.upsertChannelChat({
         channelType: address.channelType,
         chatId: address.chatId,
         chatKind: 'group',
@@ -810,7 +824,10 @@ describe('feishu adapter card e2e', () => {
       assert.match(payload.markdownText, /\| 表格 \| 通过 \|/);
       assert.match(payload.markdownText, /```ts\nconst kimi = "markdown";\n```/);
       assert.doesNotMatch(payload.markdownText, /Kimi markdown thinking should remain status-only/);
+      assert.doesNotMatch(payload.markdownText, /internal Kimi reminder|system-reminder/);
       assert.doesNotMatch(JSON.stringify(payload.content), /当前思考/);
+      const bridgeState = (globalThis as unknown as Record<string, any>).__bridge_manager__;
+      assert.equal(bridgeState.kimiMirrorSubscriptions.get(binding.id)?.pendingTurn, null);
     } finally {
       resetBridgeTestState({ cleanKimiHome: true });
       _testOnly.resetStateForTests();

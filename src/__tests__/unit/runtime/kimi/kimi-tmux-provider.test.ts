@@ -450,6 +450,132 @@ describe('Kimi tmux provider helpers', () => {
     assert.equal(thirdDelta.nextTurnId, null);
   });
 
+  it('keeps terminal Kimi usage inside the completed turn instead of starting an orphan turn', () => {
+    const records = parseKimiWireRecords([
+      JSON.stringify({
+        type: 'context.append_loop_event',
+        time: 1782477350000,
+        event: { type: 'step.begin', turnId: 'turn-terminal-usage', stepUuid: 'step-terminal-usage' },
+      }),
+      JSON.stringify({
+        type: 'context.append_loop_event',
+        time: 1782477351000,
+        event: {
+          type: 'content.part',
+          turnId: 'turn-terminal-usage',
+          part: { type: 'text', text: 'terminal usage answer' },
+        },
+      }),
+      JSON.stringify({
+        type: 'context.append_loop_event',
+        time: 1782477352000,
+        event: {
+          type: 'step.end',
+          turnId: 'turn-terminal-usage',
+          stepUuid: 'step-terminal-usage',
+          finishReason: 'end_turn',
+        },
+      }),
+      JSON.stringify({
+        type: 'usage.record',
+        time: 1782477352001,
+        usage: { inputOther: 13, inputCacheCreation: 2, inputCacheRead: 21, output: 8 },
+      }),
+    ].join('\n'), new Set());
+
+    assert.deepEqual(records.map((record) => record.type), [
+      'task_started',
+      'message',
+      'context_usage',
+      'task_complete',
+    ]);
+    assert.equal(records[2]?.turnId, 'turn-terminal-usage');
+    assert.equal(records[3]?.turnId, 'turn-terminal-usage');
+  });
+
+  it('drops terminal usage split into a later delta after the turn is already complete', () => {
+    const cwd = path.join(os.tmpdir(), 'kimi-split-terminal-usage-project');
+    const sessionId = 'session_73737373-7373-4737-8737-737373737373';
+    const wirePath = writeKimiSession({ sessionId, cwd, title: 'Kimi split terminal usage' });
+    fs.writeFileSync(wirePath, '', 'utf-8');
+
+    const beginLine = JSON.stringify({
+      type: 'context.append_loop_event',
+      time: 1782477360000,
+      event: { type: 'step.begin', turnId: 'turn-split-terminal-usage', stepUuid: 'step-split-terminal-usage' },
+    });
+    const endLine = JSON.stringify({
+      type: 'context.append_loop_event',
+      time: 1782477361000,
+      event: {
+        type: 'step.end',
+        turnId: 'turn-split-terminal-usage',
+        stepUuid: 'step-split-terminal-usage',
+        finishReason: 'end_turn',
+      },
+    });
+    const usageLine = JSON.stringify({
+      type: 'usage.record',
+      time: 1782477361001,
+      usage: { inputOther: 5, inputCacheCreation: 0, inputCacheRead: 8, output: 3 },
+    });
+
+    fs.writeFileSync(wirePath, `${beginLine}\n`, 'utf-8');
+    const beginDelta = readKimiSessionMirrorRecordDeltaByFilePath(
+      wirePath, 0, fs.statSync(wirePath).size, '', null, [],
+    );
+    assert.equal(beginDelta.nextTurnId, 'turn-split-terminal-usage');
+
+    fs.appendFileSync(wirePath, `${endLine}\n`, 'utf-8');
+    const endDelta = readKimiSessionMirrorRecordDeltaByFilePath(
+      wirePath,
+      beginDelta.nextOffset,
+      fs.statSync(wirePath).size,
+      beginDelta.trailingText,
+      beginDelta.nextTurnId,
+      [],
+    );
+    assert.deepEqual(endDelta.records.map((record) => record.type), ['task_complete']);
+    assert.equal(endDelta.nextTurnId, null);
+
+    fs.appendFileSync(wirePath, `${usageLine}\n`, 'utf-8');
+    const usageDelta = readKimiSessionMirrorRecordDeltaByFilePath(
+      wirePath,
+      endDelta.nextOffset,
+      fs.statSync(wirePath).size,
+      endDelta.trailingText,
+      endDelta.nextTurnId,
+      [],
+    );
+    assert.deepEqual(usageDelta.records, []);
+    assert.equal(usageDelta.nextTurnId, null);
+  });
+
+  it('filters Kimi injection-origin messages from the generic mirror record stream', () => {
+    const records = parseKimiWireRecords([
+      JSON.stringify({
+        type: 'context.append_message',
+        time: 1782477370000,
+        message: {
+          role: 'user',
+          content: [{ type: 'text', text: '<system-reminder>internal only</system-reminder>' }],
+          origin: { kind: 'injection', variant: 'todo_list_reminder' },
+        },
+      }),
+      JSON.stringify({
+        type: 'context.append_message',
+        time: 1782477371000,
+        message: {
+          role: 'user',
+          content: [{ type: 'text', text: 'visible user prompt' }],
+          origin: { kind: 'user' },
+        },
+      }),
+    ].join('\n'), new Set());
+
+    assert.deepEqual(records.map((record) => record.content), ['visible user prompt']);
+  });
+
   it('maps Kimi tool, usage, and goal wire records to the generic mirror contract', () => {
     const records = parseKimiWireRecords([
       JSON.stringify({
