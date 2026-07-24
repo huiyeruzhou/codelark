@@ -16,7 +16,11 @@ import {
   readKimiSessionMirrorRecordDeltaByFilePath,
   readKimiSessionMessagesByFilePath,
 } from '../../../../runtime/kimi/session-index.js';
-import { parseKimiSessionIdFromScreen } from '../../../../runtime/kimi/tmux-provider.js';
+import { assertKimiLaunchAuthentication } from '../../../../runtime/kimi/auth.js';
+import {
+  parseKimiRuntimeErrorFromLog,
+  parseKimiSessionIdFromScreen,
+} from '../../../../runtime/kimi/tmux-provider.js';
 import {
   applyToolCallEventToTools,
   toolCallEventFromMirrorRecord,
@@ -39,6 +43,43 @@ describe('Kimi tmux provider helpers', () => {
       process.env.KIMI_CODE_HOME = previousKimiCodeHome;
     }
     fs.rmSync(kimiHome, { recursive: true, force: true });
+  });
+
+  it('extracts the actionable Kimi request failure from the session log', () => {
+    assert.equal(parseKimiRuntimeErrorFromLog([
+      '2026-07-24T09:27:41.997Z WARN  llm request failed  turnStep=3.1 attempt=1/10 model=k3 errorName=KimiError errorMessage="OAuth provider \\"managed:kimi-code\\" requires login before it can be used."',
+      '2026-07-24T09:27:42.028Z ERROR turn failed  turnId=3',
+    ].join('\n')), 'OAuth provider "managed:kimi-code" requires login before it can be used.');
+  });
+
+  it('fails before launching a managed Kimi provider with empty OAuth state', () => {
+    fs.mkdirSync(path.join(kimiHome, 'credentials'), { recursive: true });
+    fs.writeFileSync(path.join(kimiHome, 'config.toml'), [
+      'default_model = "kimi-code/k3"',
+      '',
+      '[providers."managed:kimi-code"]',
+      'type = "kimi"',
+      'api_key = ""',
+      '',
+      '[providers."managed:kimi-code".oauth]',
+      'storage = "file"',
+      'key = "oauth/kimi-code"',
+      '',
+      '[models."kimi-code/k3"]',
+      'provider = "managed:kimi-code"',
+      'model = "k3"',
+      '',
+    ].join('\n'), 'utf8');
+    fs.writeFileSync(path.join(kimiHome, 'credentials', 'kimi-code.json'), JSON.stringify({
+      access_token: '',
+      refresh_token: '',
+      expires_at: 0,
+    }), 'utf8');
+
+    assert.throws(
+      () => assertKimiLaunchAuthentication(),
+      /managed:kimi-code is not logged in.*kimi.*login/i,
+    );
   });
 
   function writeKimiSession(params: {

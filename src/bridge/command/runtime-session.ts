@@ -166,6 +166,17 @@ export async function reconcileMirrorSubscriptionsBestEffort(
   }
 }
 
+export function scheduleMirrorSubscriptionsBestEffort(
+  deps: RuntimeSettingsCommandDeps,
+  context: string,
+): void {
+  if (!deps.reconcileMirrorSubscriptions) return;
+  const immediate = setImmediate(() => {
+    void reconcileMirrorSubscriptionsBestEffort(deps, context);
+  });
+  immediate.unref?.();
+}
+
 export function resolveLocalCodexThreadId(
   session: BridgeSession | null,
   binding: ChannelChat,

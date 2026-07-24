@@ -17,7 +17,7 @@ import {
   buildHealthCommandResponse,
   buildHealthListResponse,
 } from './diagnostics-presentation.js';
-import { deliverResponse } from '../../channels/delivery/feedback.js';
+import { enqueueBridgeNotice, enqueueResponse } from '../../channels/delivery/feedback.js';
 import type { BaseChannelAdapter } from '../../channels/contracts.js';
 import type { BridgeSession, BridgeStore } from '../../domain/index.js';
 import { buildFencedCodeBlock } from '../../shared/markdown/fence.js';
@@ -552,7 +552,7 @@ export async function handleHistoryCommand(options: {
       path: sessionTranscript.transcript.filePath,
       name: sessionTranscript.transcript.fileName,
     };
-    const result = await deliverResponse(
+    enqueueResponse(
       options.adapter,
       options.msg.address,
       '',
@@ -560,7 +560,7 @@ export async function handleHistoryCommand(options: {
       options.msg.messageId,
       [attachment],
     );
-    return result.ok ? '' : `发送失败：${result.error || '未知错误'}`;
+    return '';
   }
 
   const transcriptMessages = sessionTranscript
@@ -728,19 +728,22 @@ export async function handleFileCommand(options: {
     };
     if (stat.size > LARGE_FILE_UPLOAD_THRESHOLD_BYTES) {
       const id = registerPendingLargeFileUpload(options.msg.address, attachment, stat.size);
-      await options.adapter.send({
-        address: options.msg.address,
-        text: `文件 ${path.basename(resolvedPath)} 超过 20 MB，需要确认后上传到飞书云空间并发送链接。`,
-        richCard: buildLargeFileUploadConfirmationCard({
+      enqueueBridgeNotice(
+        options.adapter,
+        options.msg.address,
+        `文件 ${path.basename(resolvedPath)} 超过 20 MB，需要确认后上传到飞书云空间并发送链接。`,
+        {
+          richCard: buildLargeFileUploadConfirmationCard({
           id,
           attachment,
           size: stat.size,
-        }),
-        replyToMessageId: options.msg.messageId,
-      });
+          }),
+          replyToMessageId: options.msg.messageId,
+        },
+      );
       return `文件较大（${formatLargeFileUploadSize(stat.size)}），已发送确认卡片。确认前不会上传。`;
     }
-    const result = await deliverResponse(
+    enqueueResponse(
       options.adapter,
       options.msg.address,
       '',
@@ -748,7 +751,7 @@ export async function handleFileCommand(options: {
       options.msg.messageId,
       [attachment],
     );
-    return result.ok ? `已发送文件：${path.basename(resolvedPath)}` : `发送失败：${result.error || '未知错误'}`;
+    return `已发送文件：${path.basename(resolvedPath)}`;
   } catch (error) {
     return `读取文件失败：${error instanceof Error ? error.message : String(error)}`;
   }

@@ -275,9 +275,38 @@ export function renderUiShellHtml(): string {
                     <input id="claudeDefaultModel" placeholder="留空则跟随 Claude Code 默认" />
                   </label>
                   <label>
+                    <span class="field-title">Claude 默认模式 <span class="help-tip" tabindex="0" data-tip="设置新 Claude Code 会话的默认权限模式；当前会话仍可单独覆盖。">?</span></span>
+                    <select id="claudeMode">
+                      <option value="normal">normal</option>
+                      <option value="yolo">yolo</option>
+                    </select>
+                  </label>
+                  <label>
+                    <span class="field-title">Claude 思考级别 <span class="help-tip" tabindex="0" data-tip="设置 Claude Code 的默认 reasoning effort；当前会话仍可单独覆盖。">?</span></span>
+                    <select id="claudeReasoningEffort">
+                      <option value="low">low</option>
+                      <option value="medium">medium</option>
+                      <option value="high">high</option>
+                      <option value="xhigh">xhigh</option>
+                      <option value="max">max</option>
+                    </select>
+                  </label>
+                  <label>
                     <span class="field-title">Claude 空闲超时（分钟） <span class="help-tip" tabindex="0" data-tip="0 表示不启用全局空闲超时；后续会话级设置可以覆盖。">?</span></span>
                     <input id="claudeIdleTimeoutMinutes" type="number" min="0" max="120" value="0" />
                   </label>
+                </div>
+              </div>
+
+              <div class="panel-block">
+                <p class="panel-subtitle">Session / tmux 默认值</p>
+                <div class="field-row triple">
+                  <label>
+                    <span class="field-title">tmux 输出行数 <span class="help-tip" tabindex="0" data-tip="控制新 session 的 tmux 屏幕抓取行数；范围 1-500。">?</span></span>
+                    <input id="tmuxCaptureLines" type="number" min="1" max="500" value="80" />
+                  </label>
+                  <label class="checkbox"><input id="tmuxAutoEnter" type="checkbox" checked /> tmux 自动回车</label>
+                  <label class="checkbox"><input id="tmuxEchoInput" type="checkbox" /> 回显 tmux 输入</label>
                 </div>
               </div>
 
@@ -331,9 +360,6 @@ export function renderUiShellHtml(): string {
                     <span class="field-title">长任务提示刷新间隔（秒） <span class="help-tip" tabindex="0" data-tip="长任务提示出现后，每隔多少秒刷新一次“上次响应距今 X”。">?</span></span>
                     <input id="streamStatusCheckIntervalSeconds" type="number" min="1" value="10" />
                   </label>
-                </div>
-                <div class="checkbox-row" style="margin-top: 12px;">
-                  <label class="checkbox"><input id="showToolCallDetails" type="checkbox" checked /> 显示工具输入输出 <span class="help-tip" tabindex="0" data-tip="开启时，SDK 和 mirror 对话都会展示工具调用的输入输出；关闭时只保留工具名、状态和正文。也可用 /ui on|off 修改。">?</span></label>
                 </div>
                 <div class="checkbox-row" style="margin-top: 12px;">
                   <label class="checkbox"><input id="uiAllowLan" type="checkbox" /> 允许局域网访问 Web 控制台 <span class="help-tip" tabindex="0" data-tip="默认仅允许本机访问当前工作台。开启后，局域网设备需要先输入访问 token。">?</span></label>
@@ -436,7 +462,7 @@ export function renderUiShellHtml(): string {
                   <div class="command-item"><div class="command-col-command"><code>/r</code></div><div class="command-col-original"><code>/reasoning</code></div><div class="command-col-desc">查看当前思考级别；可选 <code>1=minimal</code>、<code>2=low</code>、<code>3=medium</code>、<code>4=high</code>、<code>5=xhigh</code>。</div></div>
                   <div class="command-item"><div class="command-col-command"><code>/sb</code></div><div class="command-col-original"><code>/sandbox</code></div><div class="command-col-desc">查看或切换当前 IM 会话的 Codex 沙箱；可选 <code>read-only</code>、<code>workspace-write</code>、<code>danger-full-access</code>、<code>default</code>。</div></div>
                   <div class="command-item"><div class="command-col-command"><code>/net</code></div><div class="command-col-original"><code>/network</code></div><div class="command-col-desc">查看或切换当前 IM 会话的网络访问；可选 <code>on</code>、<code>off</code>、<code>default</code>。</div></div>
-                  <div class="command-item"><div class="command-col-command"><code>/ui on|off</code></div><div class="command-col-original">—</div><div class="command-col-desc">查看或切换工具输入输出显示；关闭后只保留工具名、状态和正文。</div></div>
+                  <div class="command-item"><div class="command-col-command"><code>/ui</code></div><div class="command-col-original">—</div><div class="command-col-desc">查看 UI 显示策略；工具调用详情始终展示。</div></div>
                   <div class="command-item"><div class="command-col-command"><code>/require-at on|off</code></div><div class="command-col-original"><code>/require-at</code></div><div class="command-col-desc">查看或切换当前飞书通道是否要求群聊 @bot；默认 <code>off</code>，即群聊不 @bot 也会接收。</div></div>
                   <div class="command-item"><div class="command-col-command"><code>/model [slug|default]</code></div><div class="command-col-original"><code>/model [slug|default]</code></div><div class="command-col-desc">查看或切换当前 IM 会话使用的模型；Codex 共享 thread 只允许查看，Claude Code 会保存为后续 TUI 启动参数。</div></div>
                   <div class="command-item"><div class="command-col-command"><code>/tmux-attach &lt;session&gt;</code></div><div class="command-col-original"><code>/tmux-attach &lt;session&gt;</code></div><div class="command-col-desc">把当前 IM 会话绑定到一个远程 tmux session。</div></div>
@@ -1078,6 +1104,9 @@ export function renderUiShellHtml(): string {
       function formPayload() {
         return {
           runtime: document.getElementById('runtime').value,
+          tmuxCaptureLines: document.getElementById('tmuxCaptureLines').value,
+          tmuxAutoEnter: document.getElementById('tmuxAutoEnter').checked,
+          tmuxEchoInput: document.getElementById('tmuxEchoInput').checked,
           defaultMode: document.getElementById('defaultMode').value,
           historyMessageLimit: document.getElementById('historyMessageLimit').value,
           streamStatusIdleStartSeconds: document.getElementById('streamStatusIdleStartSeconds').value,
@@ -1091,6 +1120,8 @@ export function renderUiShellHtml(): string {
           codexReasoningEffort: document.getElementById('codexReasoningEffort').value,
           claudeExecutable: document.getElementById('claudeExecutable').value,
           claudeProvider: document.getElementById('claudeProvider').value,
+          claudeMode: document.getElementById('claudeMode').value,
+          claudeReasoningEffort: document.getElementById('claudeReasoningEffort').value,
           claudeDefaultModel: document.getElementById('claudeDefaultModel').value,
           claudeIdleTimeoutMinutes: document.getElementById('claudeIdleTimeoutMinutes').value,
           kimiProvider: document.getElementById('kimiProvider').value,
@@ -1381,6 +1412,9 @@ export function renderUiShellHtml(): string {
 
       const CONFIG_FIELD_LABELS = {
         runtime: 'Runtime',
+        tmuxCaptureLines: 'tmux 输出行数',
+        tmuxAutoEnter: 'tmux 自动回车',
+        tmuxEchoInput: '回显 tmux 输入',
         defaultWorkspaceRoot: '/new 相对路径根目录',
         defaultModel: 'Codex 默认模型',
         defaultProvider: '默认 Codex Provider',
@@ -1394,11 +1428,12 @@ export function renderUiShellHtml(): string {
         codexReasoningEffort: 'Codex 思考级别',
         claudeExecutable: 'Claude executable',
         claudeProvider: '默认 Claude Provider',
+        claudeMode: 'Claude 默认模式',
+        claudeReasoningEffort: 'Claude 思考级别',
         claudeDefaultModel: 'Claude 默认模型',
         claudeIdleTimeoutMinutes: 'Claude 空闲超时',
         kimiProvider: '默认 Kimi Provider',
         kimiDefaultModel: 'Kimi 默认模型',
-        showToolCallDetails: '显示工具输入输出',
         uiAllowLan: '允许局域网访问 Web 控制台',
         uiAccessToken: '局域网访问 token',
       };
@@ -1412,6 +1447,9 @@ export function renderUiShellHtml(): string {
 
       const IMMEDIATE_FIELDS = new Set([
         'defaultWorkspaceRoot',
+        'tmuxCaptureLines',
+        'tmuxAutoEnter',
+        'tmuxEchoInput',
         'defaultModel',
         'defaultProvider',
         'defaultMode',
@@ -1423,11 +1461,12 @@ export function renderUiShellHtml(): string {
         'codexReasoningEffort',
         'claudeExecutable',
         'claudeProvider',
+        'claudeMode',
+        'claudeReasoningEffort',
         'claudeDefaultModel',
         'claudeIdleTimeoutMinutes',
         'kimiProvider',
         'kimiDefaultModel',
-        'showToolCallDetails',
         'uiAllowLan',
         'uiAccessToken',
       ]);
@@ -2116,6 +2155,9 @@ export function renderUiShellHtml(): string {
       function fillForm(config) {
         state.config = config;
         document.getElementById('runtime').value = config.runtime || 'codex';
+        document.getElementById('tmuxCaptureLines').value = String(config.tmuxCaptureLines || 80);
+        document.getElementById('tmuxAutoEnter').checked = config.tmuxAutoEnter !== false;
+        document.getElementById('tmuxEchoInput').checked = config.tmuxEchoInput === true;
         document.getElementById('defaultMode').value = config.defaultMode === 'yolo' ? 'yolo' : 'normal';
         document.getElementById('historyMessageLimit').value = String(config.historyMessageLimit || 8);
         document.getElementById('streamStatusIdleStartSeconds').value = String(config.streamStatusIdleStartSeconds || 180);
@@ -2129,11 +2171,12 @@ export function renderUiShellHtml(): string {
         document.getElementById('codexReasoningEffort').value = config.codexReasoningEffort || 'medium';
         document.getElementById('claudeExecutable').value = config.claudeExecutable || 'claude';
         document.getElementById('claudeProvider').value = config.claudeProvider || '';
+        document.getElementById('claudeMode').value = config.claudeMode === 'yolo' ? 'yolo' : 'normal';
+        document.getElementById('claudeReasoningEffort').value = config.claudeReasoningEffort || 'medium';
         document.getElementById('claudeDefaultModel').value = config.claudeDefaultModel || '';
         document.getElementById('claudeIdleTimeoutMinutes').value = String(config.claudeIdleTimeoutMinutes || 0);
         document.getElementById('kimiProvider').value = config.kimiProvider || 'tmux';
         document.getElementById('kimiDefaultModel').value = config.kimiDefaultModel || '';
-        document.getElementById('showToolCallDetails').checked = config.showToolCallDetails !== false;
         document.getElementById('uiAllowLan').checked = config.uiAllowLan === true;
         document.getElementById('uiAccessToken').value = config.uiAccessToken || '';
         renderUiAccess();

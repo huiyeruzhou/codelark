@@ -32,6 +32,8 @@ bridge 会把 IM 平台消息暴露给 LLM。主要风险包括：
 
 采用 per-chat 滑动窗口限流：默认每个 chat ID 每分钟最多 30 条普通出站消息。空闲 bucket 会定期清理。
 
+所有 outbound delivery 还会进入按 adapter + chat 隔离的有序队列。enqueue 只表示本地已接受投递，不等待飞书 ACK；远端成功/失败通过 completion receipt 回填，异常会输出 `[delivery] Queued delivery failed`。普通回复与交互卡片分属两个 queue class：各自保序，但确认卡、按钮和 stream finalize 可以绕过被慢 ACK 挡住的普通回复。这样慢 `im.message.reply:post` 不会占住会话状态机，也不会拖死高优先级交互。
+
 交互消息不进入普通出站限流队列，包括权限按钮、富卡片和富卡片更新，避免确认卡被长文本、mirror 输出或诊断回复压住。普通消息如果预计因为本地限流等待超过 3 秒，会先旁路发送一条高优先级提示，告知当前聊天普通回复已进入队列且确认卡仍会优先发送；同一 chat 的提示有 60 秒冷却，避免刷屏。限流等待前后都会输出 `[delivery] Outbound rate limiter ...` 日志，包含 chat、消息类型、chunk index 和等待时间。
 
 `CODELARK_DISABLE_OUTBOUND_RATE_LIMIT=1` 可关闭普通出站限流，主要用于测试或紧急排障。

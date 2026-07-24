@@ -5,9 +5,11 @@ import { BaseChannelAdapter } from '../../../../channels/contracts.js';
 import { FeishuAdapter } from '../../../../channels/feishu/adapter.js';
 import { initBridgeContext } from '../../../../bridge/host/context.js';
 import {
+  _testOnlyResetDeliveryQueuesForTests,
   _testOnlyResetDeliveryRateLimiterForTests,
   deliver,
 } from '../../../../channels/delivery/deliver.js';
+import { enqueueBridgeNotice } from '../../../../channels/delivery/feedback.js';
 import {
   deliverFinalResponse,
 } from '../../../../bridge/turn/delivery-pipeline.js';
@@ -42,7 +44,59 @@ describe('delivery-pipeline', () => {
 
   afterEach(() => {
     delete (globalThis as Record<string, unknown>).__bridge_context__;
+    _testOnlyResetDeliveryQueuesForTests();
     _testOnlyResetDeliveryRateLimiterForTests();
+  });
+
+  it('queues same-chat notices without making enqueue wait for remote ACK', async () => {
+    const adapter = new FakeAdapter();
+    const firstAck = new Promise<SendResult>((resolve) => {
+      (adapter as any).resolveFirstAck = resolve;
+    });
+    const sent: string[] = [];
+    adapter.send = async (message: OutboundMessage): Promise<SendResult> => {
+      sent.push(message.text);
+      if (sent.length === 1) return firstAck;
+      return { ok: true, messageId: `message-${sent.length}` };
+    };
+    const address = { channelType: 'feishu-default', chatId: 'chat-queued-notices' } as const;
+
+    const first = enqueueBridgeNotice(adapter, address, 'first');
+    const second = enqueueBridgeNotice(adapter, address, 'second');
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.deepEqual(sent, ['first']);
+
+    (adapter as any).resolveFirstAck({ ok: true, messageId: 'message-1' });
+    assert.equal((await first.completion).messageId, 'message-1');
+    assert.equal((await second.completion).messageId, 'message-2');
+    assert.deepEqual(sent, ['first', 'second']);
+  });
+
+  it('does not let a slow ordinary ACK block an interactive card', async () => {
+    const adapter = new FakeAdapter();
+    let resolveOrdinary!: (result: SendResult) => void;
+    const ordinaryAck = new Promise<SendResult>((resolve) => { resolveOrdinary = resolve; });
+    const sent: OutboundMessage[] = [];
+    adapter.send = async (message: OutboundMessage): Promise<SendResult> => {
+      sent.push(message);
+      return message.richCard
+        ? { ok: true, messageId: 'interactive-card' }
+        : ordinaryAck;
+    };
+    const address = { channelType: 'feishu-default', chatId: 'chat-priority-notices' } as const;
+
+    const ordinary = enqueueBridgeNotice(adapter, address, 'ordinary');
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.deepEqual(sent.map((message) => message.text), ['ordinary']);
+    const interactive = enqueueBridgeNotice(adapter, address, 'choose', {
+      richCard: { title: 'Choose', sections: [{ markdown: 'choose' }] },
+    });
+
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.deepEqual(sent.map((message) => message.text), ['ordinary', 'choose']);
+    assert.equal((await interactive.completion).messageId, 'interactive-card');
+    resolveOrdinary({ ok: true, messageId: 'ordinary-message' });
+    assert.equal((await ordinary.completion).messageId, 'ordinary-message');
   });
 
   it('skips text after card finalization but still delivers attachments', async () => {

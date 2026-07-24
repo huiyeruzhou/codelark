@@ -114,6 +114,10 @@ Kimi 需要自己的 `MirrorJsonlSource`。这样 `/t` 切换到已有 Kimi sess
 
 Kimi parser 要特别处理 `content.part` / `think`。这类内容是 Kimi 的特色状态信号，不应混入最终回答正文。它应映射到状态区的“当前思考”，并做长度截断；可见 `text`、工具调用、工具结果、token usage 和任务完成事件仍走原有流式正文、工具和 usage 通道。
 
+工具事件也必须在 agent adapter 边界归一化。Codex JSONL、Claude content block、Kimi `tool.call` / `tool.result` 分别解析自己的协议，但统一产出 `src/shared/progress/tool-events.ts` 的 `ToolCallEvent`，并尽量附带 `ToolCallDetail`。公共 detail 至少覆盖 command、terminal wait/input、file read/search/change/write、URL fetch、sub-agent、todo、orchestration 和 generic fallback。原始工具名、输入与输出仍应保留用于审计；不能识别时退回 generic，而不是在 Feishu renderer 中加入 agent-specific 分支。
+
+Kimi 当前应把 `Bash`、`Read`、`Grep`、`Edit`、`Write`、`FetchURL`、`Agent` 和 `TodoList` 解析为上述公共 detail。这样相同语义在 Codex、Claude、Kimi 下共享标题、详情、截断和折叠规则；新增 agent 只扩展底层 parser，不复制顶层卡片逻辑。
+
 Parser 还必须区分“中间循环事件”和“turn 终态事件”。Kimi 的 agentic loop 每个 step 都会写 `step.begin` / `step.end`，其中 `step.end` 的 `finishReason` 为 `tool_use` 时只表示该 step 为调用工具而结束，turn 仍在继续；只有 `end_turn`（或无 `finishReason` 的旧数据）才能映射为 `task_complete`，其他非空终态值和顶层 `turn.cancel` 应映射为 `task_aborted`。如果把中间 step 结束误映射成 `task_complete`，mirror 会在第一次工具调用后就提前终结 turn、把部分输出当成最终回复发出。任何 agent 的 parser 都要先回答“这个事件是不是 turn 终态”，再映射到通用 mirror contract。
 
 wire 格式会随 CLI 版本演进（例如 Kimi 后来新增了 `metadata`、`config.update`、`llm.request`、`turn.prompt`、`turn.steer`、`permission.*`、`plan_mode.*`、`tools.*` 等顶层记录类型）。新增 agent 后要定期用真实 session 文件审计未知记录类型和 `metadata.protocol_version`：未知类型默认被忽略是安全的，但新出现的终态/取消/用户输入类事件必须评估是否需要接入 parser，fixture 也要与真实格式保持同步。
@@ -200,6 +204,7 @@ Kimi tmux provider 的当前行为来自实测：
 
 - [ ] `src/runtime/<agent>/session-index.ts`：枚举、按 id/cwd 查找、解析本地历史文件。
 - [ ] 驱动 provider（tmux/pty/sdk），含真实 CLI 生命周期测试（启动、resume、prompt 注入、退出）。
+- [ ] **共享输入生命周期**：不得在 host manager 按 agent 名称开路由特例。首条消息可创建 identity/tmux，成功后 provider-owned process 必须跨 turn 保留；第二条消息只做存活检查并复用，不能重复 resume discovery、pane 光标探测或启动 CLI。进程丢失和失败恢复另测。
 - [ ] **终态事件语义**：parser 先判断“事件是不是 turn 终态”，区分中间 loop 事件（如 `finishReason: tool_use`）与真正完成/中止（`end_turn` → `task_complete`，取消类事件 → `task_aborted`）。fixture 必须取自真实 session 文件。
 - [ ] 特色状态信号（如 Kimi `think`）映射到状态区并截断，不混入最终回复正文。
 - [ ] `MirrorJsonlSource` 注册到 mirror runtime，subscription registry 含该 agent 的 identity。
@@ -225,6 +230,8 @@ Kimi tmux provider 的当前行为来自实测：
 - [ ] turn classifier、coordinator 终止归属、runner 的 identity 回调（session id + cwd 一起写）。
 - [ ] 健康 reducer 的 identity/cwd；process probe 是否适用该 agent（Kimi/Claude 不走 Codex thread probe）。
 - [ ] 流式 metadata tag、markdown assistant label、卡片 finalize 失败 fallback。
+- [ ] 原生工具事件转换为公共 `ToolCallEvent` / `ToolCallDetail`；保留 raw name/input/output，未知工具走 generic fallback。
+- [ ] 不在 channel renderer 添加 agent-specific 工具分支；公共 `ToolPresentation` 决定动作标题和状态去重；channel 统一使用“工具调用组 → 单工具”折叠，普通工具隐藏 output，`apply_patch` 显示受双上限约束的 diff。
 
 ### Operator UI、CLI 与脚本
 
@@ -235,7 +242,9 @@ Kimi tmux provider 的当前行为来自实测：
 ### 测试与真实 E2E
 
 - [ ] 单元：parser 终态/取消/中间事件、identity 解析、transcript 过滤。
+- [ ] 工具协议：用 scripted Mock 覆盖任意 start/result/error 顺序、长输出、Unicode、超长单行和多行 patch；用真实 agent fixture 覆盖原生工具参数 shape。
 - [ ] Workflow：provider 真实 CLI 生命周期。
+- [ ] P0 用户故事：同一聊天连续发送两条普通消息，CLI/tmux launch 次数在第二条不得增加，runtime session id 不变，第二条仍由同一 mirror source 返回；Codex、Claude、Kimi 使用同一断言模板。
 - [ ] Mock bridge E2E：命令矩阵按 agent 全覆盖。
 - [ ] 真实 Feishu E2E：纳入既有 runtime/provider 矩阵；不新增 agent 专用开关，不复用 live bridge 或宿主 agent home。
 

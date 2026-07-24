@@ -103,19 +103,19 @@ export const configFields = [
   {
     path: 'session.tmuxCaptureLines',
     tomlPath: 'session.tmux_capture_lines',
-    scopes: ['session', 'cli'],
+    scopes: ['home', 'session', 'cli'],
     schema: z.number().int().positive(),
   },
   {
     path: 'session.tmuxAutoEnter',
     tomlPath: 'session.tmux_auto_enter',
-    scopes: ['session', 'cli'],
+    scopes: ['home', 'session', 'cli'],
     schema: z.boolean(),
   },
   {
     path: 'session.tmuxEchoInput',
     tomlPath: 'session.tmux_echo_input',
-    scopes: ['session', 'cli'],
+    scopes: ['home', 'session', 'cli'],
     schema: z.boolean(),
   },
   {

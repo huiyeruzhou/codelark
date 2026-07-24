@@ -4,6 +4,7 @@
  */
 
 import type {
+  ChannelAddress,
   CloudDocumentAddress,
   OutboundMessage,
   SendResult,
@@ -30,6 +31,80 @@ let rateLimiter = new ChatRateLimiter({
   windowMs: DEFAULT_OUTBOUND_RATE_LIMIT_WINDOW_MS,
 });
 const rateLimitNoticeLastSentAt = new Map<string, number>();
+
+export interface QueuedDelivery {
+  /** Resolves when the remote platform acknowledges or rejects the send. */
+  completion: Promise<SendResult>;
+}
+
+export type DeliveryQueueClass = 'ordinary' | 'interactive';
+
+/**
+ * Delivery work is ordered per adapter/chat, but callers do not have to keep
+ * the inbound session lane open while the remote platform acknowledges it.
+ */
+let deliveryQueues = new WeakMap<BaseChannelAdapter, Map<string, Promise<void>>>();
+
+function deliveryQueueKey(address: ChannelAddress, queueClass: DeliveryQueueClass): string {
+  const document = address.cloudDocument;
+  return document
+    ? `${queueClass}:${address.channelType}:${address.chatId}:${document.fileType}:${document.fileToken}:${document.commentId}`
+    : `${queueClass}:${address.channelType}:${address.chatId}`;
+}
+
+function describeDeliveryError(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+export function enqueueDelivery(
+  adapter: BaseChannelAdapter,
+  address: ChannelAddress,
+  job: () => Promise<SendResult>,
+  options?: { queueClass?: DeliveryQueueClass },
+): QueuedDelivery {
+  let queues = deliveryQueues.get(adapter);
+  if (!queues) {
+    queues = new Map();
+    deliveryQueues.set(adapter, queues);
+  }
+
+  const key = deliveryQueueKey(address, options?.queueClass || 'ordinary');
+  const previous = queues.get(key);
+  const queuedAt = Date.now();
+  const run = async (): Promise<SendResult> => {
+    const waitMs = Date.now() - queuedAt;
+    if (waitMs >= DEFAULT_OUTBOUND_RATE_LIMIT_WARN_MS) {
+      console.warn('[delivery] Delivery queue delayed message:', {
+        event: 'perf.delivery.queue_wait',
+        channelType: address.channelType,
+        chatId: address.chatId,
+        waitMs,
+      });
+    }
+    try {
+      return await job();
+    } catch (error) {
+      const message = describeDeliveryError(error);
+      console.warn('[delivery] Queued delivery failed:', {
+        event: 'delivery.queue.failed',
+        channelType: address.channelType,
+        chatId: address.chatId,
+        error: message,
+      });
+      return { ok: false, error: message };
+    }
+  };
+  // Start an idle chat queue synchronously through the first adapter.send()
+  // call. This preserves fire-and-forget semantics while making enqueueing an
+  // observable operation immediately; only a genuinely occupied queue waits.
+  const completion = previous ? previous.then(run) : run();
+  const tail = completion.then(() => undefined);
+  queues.set(key, tail);
+  void tail.finally(() => {
+    if (queues?.get(key) === tail) queues.delete(key);
+  });
+  return { completion };
+}
 
 // Periodically clean up idle rate limiter buckets (every 5 minutes).
 // unref() so the timer doesn't prevent Node.js process exit (e.g. in tests).
@@ -232,6 +307,10 @@ export function _testOnlyResetDeliveryRateLimiterForTests(options?: { maxMessage
     windowMs: options?.windowMs ?? DEFAULT_OUTBOUND_RATE_LIMIT_WINDOW_MS,
   });
   rateLimitNoticeLastSentAt.clear();
+}
+
+export function _testOnlyResetDeliveryQueuesForTests(): void {
+  deliveryQueues = new WeakMap();
 }
 
 /**

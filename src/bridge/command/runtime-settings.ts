@@ -49,7 +49,7 @@ import {
   formatSessionRuntimeMode,
   isTuiProviderSession,
   mappedRuntimeSessionId,
-  reconcileMirrorSubscriptionsBestEffort,
+  scheduleMirrorSubscriptionsBestEffort,
   resolveLocalCodexThreadId,
   sessionHasActiveRuntimeTurn,
   type RuntimeName,
@@ -568,7 +568,7 @@ export function handleRuntimeCommand(options: {
     bridgeSessionId: nextSession.id,
     runtimeBridgeSessionIds,
   });
-  void reconcileMirrorSubscriptionsBestEffort(options.deps || {}, `runtime ${requested} switch`);
+  scheduleMirrorSubscriptionsBestEffort(options.deps || {}, `runtime ${requested} switch`);
   return buildCommandFields(
     createdNewSession ? '已创建并切换 Runtime' : '已切换 Runtime',
     [

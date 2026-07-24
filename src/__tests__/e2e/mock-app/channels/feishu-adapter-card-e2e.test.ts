@@ -43,6 +43,18 @@ interface RecordedFeishuMessageCall {
   payload: Record<string, any>;
 }
 
+async function waitForRecordedCall(
+  predicate: () => boolean,
+  timeoutMs = 2_000,
+): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (predicate()) return;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  assert.equal(predicate(), true, 'timed out waiting for the queued Feishu delivery');
+}
+
 function createRecordingFeishuAdapter(
   calls: RecordedFeishuMessageCall[],
   options: { streamingEnabled?: boolean } = {},
@@ -459,6 +471,11 @@ describe('feishu adapter card e2e', () => {
       assert.equal(proxy.requests.some((request) => request.url.includes('/responses')), true);
       const session = store.getSession(store.getChannelChat(address.channelType, address.chatId)!.bridgeSessionId);
       assert.ok(session?.runtime?.codex?.threadId);
+      await waitForRecordedCall(() => calls.some((call) => {
+        if (call.payload?.data?.msg_type !== 'interactive') return false;
+        const content = JSON.parse(call.payload.data.content || '{}');
+        return content.body?.elements?.some((element: any) => element.tag === 'form') === true;
+      }));
       const payload = findInteractiveFormPayload(calls);
       assertCodelarkAskFormPayload(payload);
     });

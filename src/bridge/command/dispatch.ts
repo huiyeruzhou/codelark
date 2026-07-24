@@ -2,7 +2,7 @@ import {
   resolveCommandAlias,
 } from './aliases.js';
 import { getBridgeContext } from '../host/context.js';
-import { deliverBridgeNotice } from '../../channels/delivery/feedback.js';
+import { deliverBridgeNotice, enqueueBridgeNotice } from '../../channels/delivery/feedback.js';
 import * as router from '../session/channel-router.js';
 import type { BaseChannelAdapter, StructuredStreamingUiActionButton } from '../../channels/contracts.js';
 import type { ChannelAddress, ChannelChat, InboundMessage, OutboundRichCard } from '../../domain/index.js';
@@ -489,7 +489,7 @@ export async function handleBridgeCommand(
       summary: `[BLOCKED] Dangerous input detected: ${dangerCheck.reason}`,
     });
     console.warn(`[bridge-manager] Blocked dangerous command input from chat ${msg.address.chatId}: ${dangerCheck.reason}`);
-    await deliverBridgeNotice(adapter, msg.address, '命令被拒绝：检测到无效输入。', {
+    enqueueBridgeNotice(adapter, msg.address, '命令被拒绝：检测到无效输入。', {
       replyToMessageId: msg.messageId,
     });
     return;
@@ -744,7 +744,7 @@ export async function handleBridgeCommand(
               if (isTmuxProviderStart && noticeOptions?.force !== true) {
                 return;
               }
-              await deliverBridgeNotice(adapter, msg.address, message, {
+              enqueueBridgeNotice(adapter, msg.address, message, {
                 replyToMessageId: msg.messageId,
                 audit: false,
               });
@@ -1095,7 +1095,7 @@ export async function handleBridgeCommand(
 
   if (response) {
     const richCardUpdateMessageId = richCardUpdateMessageIdForCommand(msg);
-    const result = await deliverBridgeNotice(adapter, responseAddress, response, {
+    const delivery = enqueueBridgeNotice(adapter, responseAddress, response, {
       replyToMessageId: responseAddress.channelType === msg.address.channelType && responseAddress.chatId === msg.address.chatId
         ? msg.messageId
         : undefined,
@@ -1103,28 +1103,34 @@ export async function handleBridgeCommand(
       richCard: responseRichCard,
       richCardUpdateMessageId,
     });
-    const threadCardMessageId = richCardUpdateMessageId || result.messageId;
-    if (result.ok && setConfigCard && threadCardMessageId) {
-      saveThreadTableMessageRecord(responseAddress, 'set', threadCardMessageId);
-    } else if (result.ok && threadTableCardScope && threadCardMessageId) {
-      await persistAndPinLatestThreadTableMessage(adapter, responseAddress, threadTableCardScope, threadCardMessageId);
-    }
-    if (result.ok && afterDelivery) {
-      await afterDelivery(result.messageId);
-    }
-    if (result.ok && postDeliveryCurrentAddress) {
-      await deliverCurrentCommandAfterNewSession({
-        adapter,
-        address: postDeliveryCurrentAddress,
-        store,
-        threadDisplay,
-        markdown: responseParseMode === 'Markdown',
-      });
-    }
-    if (result.ok && postDeliveryUserMessages.length > 0) {
+    void delivery.completion.then(async (result) => {
+      if (!result.ok) return;
+      const threadCardMessageId = richCardUpdateMessageId || result.messageId;
+      if (setConfigCard && threadCardMessageId) {
+        saveThreadTableMessageRecord(responseAddress, 'set', threadCardMessageId);
+      } else if (threadTableCardScope && threadCardMessageId) {
+        await persistAndPinLatestThreadTableMessage(adapter, responseAddress, threadTableCardScope, threadCardMessageId);
+      }
+      if (afterDelivery) {
+        await afterDelivery(result.messageId);
+      }
+      if (postDeliveryCurrentAddress) {
+        await deliverCurrentCommandAfterNewSession({
+          adapter,
+          address: postDeliveryCurrentAddress,
+          store,
+          threadDisplay,
+          markdown: responseParseMode === 'Markdown',
+        });
+      }
       for (const postDeliveryUserMessage of postDeliveryUserMessages) {
         await deps.dispatchPostCommandMessage?.(adapter, postDeliveryUserMessage);
       }
-    }
+    }).catch((error) => {
+      console.warn('[bridge-command] Post-delivery command work failed:', describeReactionError(error));
+    });
+    // Let an idle queue run through immediately-resolved test/local adapters
+    // without ever waiting for a slow remote acknowledgement.
+    await new Promise<void>((resolve) => setImmediate(resolve));
   }
 }

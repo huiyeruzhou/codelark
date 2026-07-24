@@ -4463,6 +4463,97 @@ enabled = true
     assert.equal(store.getSession(codexSession.id)?.runtime?.codex?.threadId, 'codex-thread-before-kimi-switch');
   });
 
+  it('does not hold the provider command open while global mirror reconcile is pending', async () => {
+    const store = initTestContext();
+    const sent: any[] = [];
+    const adapter = createGroupCapableAdapter({ sent });
+    const address = { channelType: 'feishu', chatId: 'chat-provider-reconcile-background' } as const;
+    const session = store.createSession('provider-reconcile-background', 'test-model');
+    store.updateSession(session.id, { runtime: { activeRuntime: 'kimi', kimi: { provider: 'tmux' } } });
+    store.upsertChannelChat({
+      channelType: address.channelType,
+      chatId: address.chatId,
+      bridgeSessionId: session.id,
+    });
+    const reconcile = createDeferred<void>();
+    let reconcileStarted = false;
+
+    await Promise.race([
+      handleBridgeCommand(
+        adapter,
+        {
+          address,
+          text: '/p tmux',
+          messageId: 'incoming-provider-reconcile-background',
+        } as any,
+        '/p tmux',
+        {
+          getActiveTask: () => undefined,
+          diagnoseSessionHealth: async () => null,
+          diagnoseAllActiveSessions: async () => [],
+          reconcileMirrorSubscriptions: async () => {
+            reconcileStarted = true;
+            await reconcile.promise;
+          },
+        },
+      ),
+      new Promise<never>((_, reject) => setTimeout(() => reject(new Error('provider command waited for mirror reconcile')), 250)),
+    ]);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    assert.equal(reconcileStarted, true);
+    assert.match(sent.at(-1)?.text || '', /已切换 Kimi Provider/);
+    reconcile.resolve();
+  });
+
+  it('releases command handling before the Feishu reply ACK while preserving chat delivery order', async () => {
+    const store = initTestContext();
+    const address = { channelType: 'feishu', chatId: 'chat-command-reply-background' } as const;
+    const session = store.createSession('command-reply-background', 'test-model');
+    store.upsertChannelChat({
+      channelType: address.channelType,
+      chatId: address.chatId,
+      bridgeSessionId: session.id,
+    });
+    const firstAck = createDeferred<{ ok: boolean; messageId?: string }>();
+    const secondAck = createDeferred<{ ok: boolean; messageId?: string }>();
+    const sent: any[] = [];
+    const adapter = createGroupCapableAdapter({ sent });
+    adapter.send = async (message: any) => {
+      sent.push(message);
+      return sent.length === 1 ? firstAck.promise : secondAck.promise;
+    };
+    const deps = {
+      getActiveTask: () => undefined,
+      diagnoseSessionHealth: async () => null,
+      diagnoseAllActiveSessions: async () => [],
+    };
+
+    await Promise.race([
+      handleBridgeCommand(adapter, {
+        address,
+        text: '/runtime kimi',
+        messageId: 'incoming-command-reply-background-1',
+      } as any, '/runtime kimi', deps),
+      new Promise<never>((_, reject) => setTimeout(() => reject(new Error('command waited for Feishu reply ACK')), 100)),
+    ]);
+    await waitForCondition(() => sent.length === 1);
+
+    await Promise.race([
+      handleBridgeCommand(adapter, {
+        address,
+        text: '/help',
+        messageId: 'incoming-command-reply-background-2',
+      } as any, '/help', deps),
+      new Promise<never>((_, reject) => setTimeout(() => reject(new Error('next command waited for the previous Feishu reply ACK')), 100)),
+    ]);
+    assert.equal(sent.length, 1, 'the second reply must stay queued behind the first chat delivery');
+
+    firstAck.resolve({ ok: true, messageId: 'reply-background-1' });
+    await waitForCondition(() => sent.length === 2);
+    secondAck.resolve({ ok: true, messageId: 'reply-background-2' });
+  });
+
   it('rejects runtime and provider switches while the current conversation is running', async () => {
     const store = initTestContext();
     const sent: any[] = [];
@@ -6037,6 +6128,37 @@ enabled = true
       '回显 tmux 输出',
     ]);
     assert.equal(getThreadTableMessageRecord(address, 'set')?.messageId, 'reply-4');
+
+    await handleBridgeCommand(
+      adapter,
+      {
+        address,
+        text: '/set',
+        messageId: 'incoming-set-runtime-form',
+        callbackData: buildCommandCallbackData('/set --group runtime'),
+        raw: {
+          event: {
+            context: {
+              open_message_id: 'reply-4',
+            },
+            action: {
+              form_value: {
+                tmux_lines: '160',
+                tmux_enter: 'off',
+                tmux_echo: 'on',
+              },
+            },
+          },
+        },
+      } as any,
+      '/set --group runtime',
+      deps,
+    );
+    const globalTmuxConfig = createConfigService({ migrate: false, env: {} });
+    assert.equal(globalTmuxConfig.get('session.tmuxCaptureLines'), 160);
+    assert.equal(globalTmuxConfig.get('session.tmuxAutoEnter'), false);
+    assert.equal(globalTmuxConfig.get('session.tmuxEchoInput'), true);
+    assert.equal(sent.at(-1)?.richCardUpdateMessageId, 'reply-4');
 
     await handleBridgeCommand(
       adapter,

@@ -115,6 +115,19 @@ readiness gate 的 `ready` 会把共享输入状态推进到 `running`，随后�
 
 因此普通消息的统一决策是：先确认/创建 runtime session，再确认/启动 tmux并处理启动选择，进入 `running` 后发送；后续消息仅检查 tmux 是否还活着。Bridge 重启会丢失内存状态，所以首次接管已有 tmux 仍执行一次 readiness，这是必要的冷接管边界。
 
+### 不可破坏的输入生命周期契约
+
+以下约束适用于 Codex、Claude Code、Kimi Code 和以后新增的 runtime：
+
+1. host 消息路由不得按 runtime 名称开“只对某家生效”的旁路。普通消息统一进入 provider-owned input lifecycle。
+2. 首条输入可以依次创建或发现 runtime identity、启动 tmux、处理真实启动选择并进入 `running`；后续输入必须复用同一 identity 和 tmux process。
+3. `running` 状态发送前只允许做轻量 `has-session` 存活检查。不得再次创建 session、运行 resume discovery、抓取 pane 查光标，或等待 idle prompt。输入后为捕获新出现的 goal/permission/update 选择而做的短时事件 probe 仍然允许；它不是每轮发送前的 readiness gate。
+4. 只有 tmux 进程确实丢失、前一生命周期进入 `failed`、Bridge 冷接管，或用户明确切换/清理 session/provider 时，才允许重新进入 session/tmux/readiness 阶段。
+5. runtime-specific 代码只负责 CLI 参数、identity/wire 格式和必要的交互动作（例如 Kimi `Ctrl-S`）；它不能改变共享状态机的触发时机和 process 所有权。
+6. provider-owned tmux 的生命周期长于单个 turn。成功 turn 不得在 `finally` 中 kill；失败的半初始化进程可以清理，显式 `/clear`、归档和 provider 切换负责最终释放。
+
+任何新 runtime 在接入前都必须通过“首轮初始化一次 → 同一聊天连续两条消息复用 → 进程丢失后恢复”的同一组用户故事测试。只证明单个 turn 能返回答案，不足以接入 tmux provider。
+
 ### 4. 普通消息转发
 
 普通 IM 消息有两种进入 Codex tmux 的路径：
@@ -163,8 +176,8 @@ Claude tmux 使用同一个 `waitForRuntimeTmuxReady` 启动门控。新建、�
 | 本地身份 | 先有 Codex `thread_id`；没有时本地 bootstrap。 | Claude Code 写 JSONL 后才有 `session_id`；启动前用 BridgeSessionId 命名。 | Kimi fresh session 通过两次 `Ctrl-C` 的 resume hint 得到 `session_id`，再用 `kimi -r` 重启；状态落点都是 `BridgeSession.runtime.*`。 |
 | tmux session 命名 | `codex_<thread_id>`。 | `claude_<session_id>`；没有 Claude `session_id` 时用 `claude_<BridgeSessionId>`。 | Kimi 使用 `clk-kimi-<BridgeSessionId>` 作为 provider-owned tmux session，并把 Kimi 本地 session id 存到 `runtime.kimi.sessionId`。 |
 | `/provider tmux` 启动 | 启动或重建 detached tmux，执行 `codex resume <thread_id>`。 | 启动或重建 detached tmux，执行 Claude Code TUI。 | Kimi 由 `KimiTmuxProvider` 启动 `kimi -y` 或 `kimi -r <session> -y`，再注入 prompt 并补 `Ctrl-S`。 |
-| 普通消息隐式初始化 | auto-forward 触发 `/tmux <message>`；缺 thread/session 时自动 bootstrap + 启动 + ready/selection 后注入。 | auto-forward 触发 `/tmux <message>`；缺 tmux session 时自动启动 Claude TUI，session 缺失时用 BridgeSessionId 命名。 | Kimi 普通消息走 Kimi provider stream；没有 Kimi session id 时先捕获 resume hint，再恢复并注入。 |
-| 缺失 tmux 恢复 | `/provider tmux` 会强制重启；普通消息 auto-forward 和显式 `/tmux <...>` 可重建 provider session；`/tmux-screen` 只查看并提示 `/p tmux`。 | `/provider tmux` 会强制重启；普通消息 auto-forward 和显式 `/tmux <...>` 可重建 provider session；`/tmux-screen` 只查看并提示 `/p tmux`。 | Kimi 普通消息由 provider 按 session id 重建；显式 `/tmux*` 仍只操作当前绑定 tmux，不负责 provider 恢复。 |
+| 普通消息隐式初始化 | auto-forward 触发 `/tmux <message>`；缺 thread/session 时自动 bootstrap + 启动 + ready/selection 后注入。 | auto-forward 触发 `/tmux <message>`；缺 tmux session 时自动启动 Claude TUI，session 缺失时用 BridgeSessionId 命名。 | auto-forward 进入同一 input lifecycle；缺 Kimi session id 时只在首轮捕获 resume hint、恢复并解析 wire identity，后续直接复用。 |
+| 缺失 tmux 恢复 | `/provider tmux` 会强制重启；普通消息 auto-forward 和显式 `/tmux <...>` 可重建 provider session；`/tmux-screen` 只查看并提示 `/p tmux`。 | `/provider tmux` 会强制重启；普通消息 auto-forward 和显式 `/tmux <...>` 可重建 provider session；`/tmux-screen` 只查看并提示 `/p tmux`。 | 普通消息 auto-forward 按持久化 Kimi session id 重建；显式只读屏幕不触发恢复。 |
 | prompt 注入 | provider 内部或 `/tmux` 命令都走 tmux core；普通消息自动追加 Enter。 | provider 内部或 `/tmux` 命令都走 tmux core；普通消息自动追加 Enter。 | Kimi provider 使用 tmux core paste/Enter 后额外发送 `Ctrl-S` 触发 steer。 |
 | 首轮 mirror | Codex thread 已知，mirror 可按 thread 找 JSONL。 | 首轮普通消息后等待 Claude JSONL，写回 `session_id/cwd`，再 prime 首个 turn。 | Kimi 首轮先定位 `wire.jsonl`，provider 内部轮询即时转 SSE，通用 Kimi mirror runtime 负责后续订阅。 |
 | mirror suppression | SDK turn 复用已有 Codex JSONL thread 时建立 suppression，避免 SDK final 和 mirror final 重复。 | Claude SDK provider 不订阅 tmux/pty mirror；pty/tmux 由 Claude JSONL mirror 负责最终投递。 | Kimi 只有 tmux provider，不走 SDK suppression；think/status、tool、terminal 都来自 Kimi wire mirror。 |
@@ -177,6 +190,22 @@ Claude tmux 使用同一个 `waitForRuntimeTmuxReady` 启动门控。新建、�
 | `/t rename` after runtime switch | 重命名当前聊天当前 Codex BridgeSession。 | 重命名当前聊天当前 Claude BridgeSession。 | 已对齐；切回另一个 runtime 时不会污染另一个 BridgeSession 的标题。 |
 
 ## 回归覆盖
+
+### 用户故事优先级矩阵
+
+| 优先级 | 用户故事 | 跨 runtime 断言 | 主要证据 |
+| --- | --- | --- | --- |
+| P0 | 首条普通消息进入 tmux provider | 只初始化一次 runtime identity/tmux，ready 后才注入输入 | Codex/Claude/Kimi auto-init mock-app E2E |
+| P0 | 同一聊天连续第二条普通消息 | runtime session id 与 tmux 名称不变；CLI launch 次数不增加；只做 `has-session` 后发送 | Kimi first-message E2E 的 follow-up launch count；Codex cold-probe reuse；Claude existing-session route |
+| P0 | 问题卡提交后继续普通对话 | callback 回到同一绑定；卡片答案和下一句话都进入同一 runtime process；不重新 launch | `delivers Kimi mirror clk-ask ... after /t binding` |
+| P0 | `/set` / `/current` 改配置后发下一句话 | home 默认值只影响新 session；session override 立即由当前 runtime accessor 读取；不串写其他 runtime | command-dispatch global/current config matrix |
+| P0 | `/runtime` / `/provider` 切换 | barrier 后下一条消息只进入新 runtime/provider；另一个 runtime 的映射保留 | runtime switch and provider routing E2E |
+| P0 | tmux 进程丢失或启动失败 | 只在确认缺失/failed 后恢复；失败不持久化假 running；用户得到可执行错误 | missing-session recovery、dead-pane、Kimi auth/session-log tests |
+| P0 | 飞书 reply/CardKit ACK 很慢 | session lane 已释放；同类投递仍保序；交互卡不被慢普通回复堵住 | command pending ACK、interactive finalize pending、delivery queue priority tests |
+| P1 | 启动中出现 goal/permission/update 选择 | 真实选择 prompt 仍可抓取和回调；不得把它当成重复 idle/readiness probe 删除 | Codex selection workflow + mock-app E2E |
+| P2 | 运行中停止、定时屏幕刷新 | control lane 可中断；不作为基础生命周期接入的替代证据 | stop/screen monitor tests |
+
+新增 runtime 必须至少通过全部 P0；只覆盖“运行中停止”或单轮返回不算生命周期完成。
 
 | 覆盖点 | 测试 |
 | --- | --- |
@@ -207,7 +236,7 @@ Claude tmux 使用同一个 `waitForRuntimeTmuxReady` 启动门控。新建、�
 | 入口 | 作用 |
 | --- | --- |
 | `/runtime codex|claude|kimi` | 切换当前聊天的 runtime。 |
-| `/provider tmux` | 对当前 runtime 启用 tmux provider。Codex 会启动 `codex_<threadId>`；Claude 会启动 `claude_<session_id 或 BridgeSessionId>`；Kimi 会启动 `clk-kimi-<BridgeSessionId>`，必要时先通过 resume hint 获取 Kimi session id。 |
+| `/provider tmux` | 对当前 runtime 启用 tmux provider。Codex/Claude 会立即建立 provider-owned tmux；Kimi 记录唯一受支持的 provider，下一条普通消息经统一 input lifecycle 按需建立 `clk-kimi-<BridgeSessionId>` 和 Kimi identity。 |
 | 普通消息 + tmux provider | 对当前 runtime 的 tmux provider 自动注入 TUI；Codex 可自动 bootstrap thread 并启动 `codex_<threadId>`，Claude 可自动启动或恢复 `claude_<BridgeSessionId 或 session_id>`，Kimi 会恢复 `runtime.kimi.sessionId` 或先捕获 fresh session resume hint。 |
 | `/tmux-screen` | 查看当前绑定的 tmux 屏幕。 |
 | `/stop` | 对运行中的 tmux/pty provider 发送中断。 |
@@ -224,7 +253,7 @@ Kimi 入口补充：
 | 入口 | 作用 |
 | --- | --- |
 | `/runtime kimi` | 切换当前聊天到 Kimi Code runtime。 |
-| `/provider tmux` | Kimi 当前唯一 provider；已有 session 用 `kimi -r <session> -y`，fresh session 先启动 `kimi -y`，若屏幕没有直接给出 `Session:`，就两次 `Ctrl-C` 捕获 `To resume this session: kimi -r ...`，再用该 id 重启并注入输入。 |
+| `/provider tmux` | Kimi 当前唯一 provider；命令本身只保存 provider 选择。首条普通消息才按需启动：已有 session 用 `kimi -r <session> -y`，fresh session 先启动 `kimi -y`，若屏幕没有直接给出 `Session:`，就两次 `Ctrl-C` 捕获 `To resume this session: kimi -r ...`，再用该 id 重启。成功后该 resumed process 跨 turn 保留。 |
 | 普通消息 + Kimi tmux provider | 写入 Kimi TUI，自动追加 Enter 和 `Ctrl-S`；输出从 Kimi `wire.jsonl` mirror 投递，`think` 内容截断显示在状态区「当前思考」。 |
 | `/t kimi ...` | 列出、接管和归档本地 Kimi Code 会话。 |
 

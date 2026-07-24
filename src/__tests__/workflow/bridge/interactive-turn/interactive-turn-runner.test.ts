@@ -1218,6 +1218,7 @@ stream_status_check_interval_seconds = 3
       },
     );
 
+    await new Promise<void>((resolve) => setImmediate(resolve));
     assert.deepEqual(deliveredTexts, []);
     assert.equal(adapter.streamEnds.length, 1);
     assert.equal(adapter.streamEnds[0]?.status, 'completed');
@@ -2306,7 +2307,7 @@ stream_status_check_interval_seconds = 3
     assert.match(adapter.streamEnds[0]?.text || '', /旧会话「旧任务」任务已结束/);
   });
 
-  it('stops the runtime heartbeat before stream finalization begins', async () => {
+  it('releases the turn before stream finalization ACK while preserving finalization cleanup order', async () => {
     const adapter = new FakeFeishuStreamingAdapter();
     const address = {
       channelType: 'feishu-default',
@@ -2397,12 +2398,19 @@ stream_status_check_interval_seconds = 3
 
     await finalizeStarted.promise;
     const statusCountWhileFinalizing = adapter.streamedStatuses.length;
+    await Promise.race([
+      runPromise,
+      new Promise<never>((_, reject) => setTimeout(() => reject(new Error('interactive turn waited for stream finalization ACK')), 100)),
+    ]);
+    assert.equal(taskStateMap.size, 0);
+    assert.equal(adapter.messageEnds.length, 0, 'UI cleanup must wait until stream finalization settles');
     releaseFinalize.resolve();
-    await runPromise;
+    await new Promise<void>((resolve) => setImmediate(resolve));
 
     assert.equal(adapter.streamedStatuses.length, statusCountWhileFinalizing);
     assert.deepEqual(deliveredTexts, []);
     assert.equal(clock.activeCount(), 0);
+    assert.equal(adapter.messageEnds.length, 1);
   });
 
   it('includes masked error diagnostics in the streaming card when Codex fails', async () => {

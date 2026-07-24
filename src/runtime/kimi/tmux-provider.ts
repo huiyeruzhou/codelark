@@ -6,6 +6,7 @@ import type { LLMProvider, StreamChatParams, BridgeMirrorRecord } from '../contr
 import { sseEvent } from '../sse.js';
 import { tmuxCore } from '../../bridge/tmux/core.js';
 import {
+  inspectRuntimeTmuxInput,
   sendRuntimeTmuxInput,
   transitionRuntimeTmuxInputState,
 } from '../../bridge/tmux/input-state-machine.js';
@@ -13,9 +14,11 @@ import {
   findKimiSessionFileById,
   readKimiSessionMirrorRecordDeltaByFilePath,
 } from './session-index.js';
+import { assertKimiLaunchAuthentication } from './auth.js';
 
 const DEFAULT_KIMI_POLL_INTERVAL_MS = 500;
 const DEFAULT_KIMI_SESSION_FILE_TIMEOUT_MS = 30_000;
+const DEFAULT_KIMI_OUTPUT_IDLE_TIMEOUT_MS = 120_000;
 const DEFAULT_KIMI_PROMPT_DELAY_MS = 800;
 const DEFAULT_KIMI_SESSION_ID_TIMEOUT_MS = 30_000;
 
@@ -81,6 +84,14 @@ export function parseKimiSessionIdFromScreen(screenText: string): string | null 
   return headerMatch?.[1] || null;
 }
 
+function parseKimiActiveSessionIdFromScreen(screenText: string): string | null {
+  const normalized = screenText
+    .replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, '')
+    .replace(/\r\n/g, '\n')
+    .replace(/\r/g, '\n');
+  return normalized.match(/\bSession:\s*(session_[A-Za-z0-9-]+)/i)?.[1] || null;
+}
+
 function recordToolName(record: BridgeMirrorRecord): string {
   return record.toolName || 'tool';
 }
@@ -92,7 +103,10 @@ interface KimiTuiRunContext {
   sessionId?: string;
   cwd?: string;
   sessionFilePath?: string;
+  sessionLogFilePath?: string;
   nextOffset: number;
+  nextLogOffset: number;
+  logTrailingText: string;
   trailingText: string;
   nextTurnId: string | null;
   nextSpecialCallIds: string[];
@@ -101,6 +115,53 @@ interface KimiTuiRunContext {
   lastAssistantText: string;
   terminalSeen: boolean;
   hasError: boolean;
+}
+
+function kimiSessionLogFilePath(sessionFilePath: string): string {
+  return path.resolve(path.dirname(sessionFilePath), '..', '..', 'logs', 'kimi-code.log');
+}
+
+function initializeKimiSessionLogCursor(context: KimiTuiRunContext): void {
+  if (!context.sessionFilePath) return;
+  const filePath = kimiSessionLogFilePath(context.sessionFilePath);
+  context.sessionLogFilePath = filePath;
+  try {
+    context.nextLogOffset = fs.statSync(filePath).size;
+  } catch {
+    context.nextLogOffset = 0;
+  }
+  context.logTrailingText = '';
+}
+
+export function parseKimiRuntimeErrorFromLog(text: string): string | null {
+  const requestFailure = text.match(/\bllm request failed\b[^\n]*\berrorMessage="((?:\\.|[^"\\])*)"/u);
+  if (requestFailure?.[1]) {
+    try {
+      return JSON.parse(`"${requestFailure[1]}"`) as string;
+    } catch {
+      return requestFailure[1].replace(/\\"/g, '"');
+    }
+  }
+  const turnFailure = text.match(/\bERROR\s+turn failed\b[^\n]*\n\s+([^\n]+)/u);
+  return turnFailure?.[1]?.trim() || null;
+}
+
+function readKimiRuntimeErrorDelta(context: KimiTuiRunContext): { error: string | null; advanced: boolean } {
+  if (!context.sessionLogFilePath) return { error: null, advanced: false };
+  let bytes: Buffer;
+  try {
+    bytes = fs.readFileSync(context.sessionLogFilePath);
+  } catch {
+    return { error: null, advanced: false };
+  }
+  if (bytes.length <= context.nextLogOffset) return { error: null, advanced: false };
+  const chunk = bytes.subarray(context.nextLogOffset).toString('utf8');
+  context.nextLogOffset = bytes.length;
+  const combined = `${context.logTrailingText}${chunk}`;
+  const lastNewline = combined.lastIndexOf('\n');
+  const complete = lastNewline >= 0 ? combined.slice(0, lastNewline + 1) : '';
+  context.logTrailingText = lastNewline >= 0 ? combined.slice(lastNewline + 1) : combined;
+  return { error: parseKimiRuntimeErrorFromLog(complete), advanced: true };
 }
 
 function enqueueKimiRecordAsSse(
@@ -206,13 +267,20 @@ async function pollKimiSessionFile(
     DEFAULT_KIMI_POLL_INTERVAL_MS,
     50,
   );
-  const sessionFileTimeoutMs = parsePositiveIntEnv(
+  const legacyIdleTimeoutMs = parsePositiveIntEnv(
     'CODELARK_KIMI_TMUX_SESSION_FILE_TIMEOUT_MS',
-    DEFAULT_KIMI_SESSION_FILE_TIMEOUT_MS,
+    DEFAULT_KIMI_OUTPUT_IDLE_TIMEOUT_MS,
+    1_000,
+  );
+  const outputIdleTimeoutMs = parsePositiveIntEnv(
+    'CODELARK_KIMI_TMUX_OUTPUT_IDLE_TIMEOUT_MS',
+    process.env.CODELARK_KIMI_TMUX_SESSION_FILE_TIMEOUT_MS
+      ? legacyIdleTimeoutMs
+      : DEFAULT_KIMI_OUTPUT_IDLE_TIMEOUT_MS,
     1_000,
   );
 
-  let sessionFileResolvedAtMs = context.sessionFilePath ? Date.now() : 0;
+  let lastActivityAtMs = Date.now();
 
   while (true) {
     if (!context.sessionFilePath) {
@@ -226,6 +294,7 @@ async function pollKimiSessionFile(
       } catch {
         // Let the delta reader handle the read race and preserve cursor state.
       }
+      const previousOffset = context.nextOffset;
       const delta = readKimiSessionMirrorRecordDeltaByFilePath(
         context.sessionFilePath,
         context.nextOffset,
@@ -241,32 +310,22 @@ async function pollKimiSessionFile(
       for (const record of delta.records) {
         enqueueKimiRecordAsSse(controller, context, record);
       }
-      if (delta.records.length > 0) {
-        sessionFileResolvedAtMs = Date.now();
-      }
+      if (delta.nextOffset > previousOffset) lastActivityAtMs = Date.now();
     }
+
+    const logDelta = readKimiRuntimeErrorDelta(context);
+    if (logDelta.advanced) lastActivityAtMs = Date.now();
+    if (logDelta.error) throw new Error(`Kimi Code request failed: ${logDelta.error}`);
 
     if (context.terminalSeen) break;
 
     const alive = await isTerminalAlive();
     if (!alive) {
-      if (!context.hasError) {
-        controller.enqueue(sseEvent('result', {
-          ...(context.sessionId ? { session_id: context.sessionId } : {}),
-          ...(context.cwd ? { cwd: context.cwd } : {}),
-        }));
-      }
-      break;
+      throw new Error('Kimi Code exited before writing a terminal turn event.');
     }
 
-    if (context.sessionFilePath && Date.now() - sessionFileResolvedAtMs > sessionFileTimeoutMs) {
-      // Session file has gone stale while process is still alive; bail out.
-      console.warn('[kimi-tmux] Session file stale; terminating poll.');
-      controller.enqueue(sseEvent('result', {
-        ...(context.sessionId ? { session_id: context.sessionId } : {}),
-        ...(context.cwd ? { cwd: context.cwd } : {}),
-      }));
-      break;
+    if (Date.now() - lastActivityAtMs > outputIdleTimeoutMs) {
+      throw new Error(`Kimi Code produced no wire or runtime-log activity for ${outputIdleTimeoutMs}ms.`);
     }
 
     await sleep(pollIntervalMs);
@@ -318,7 +377,7 @@ async function launchTmuxKimiSession(
 }
 
 async function waitForKimiSessionIdFromTmux(context: KimiTuiRunContext): Promise<string> {
-  if (context.sessionId) return context.sessionId;
+  const expectedSessionId = context.sessionId;
   transitionRuntimeTmuxInputState(
     'kimi',
     context.sessionName,
@@ -338,8 +397,11 @@ async function waitForKimiSessionIdFromTmux(context: KimiTuiRunContext): Promise
   const startedAtMs = Date.now();
   while (Date.now() - startedAtMs <= timeoutMs) {
     const capture = await tmuxCore.capturePane(context.targetPane, 160);
-    const parsed = parseKimiSessionIdFromScreen(capture.screen);
+    const parsed = parseKimiActiveSessionIdFromScreen(capture.screen);
     if (parsed) {
+      if (expectedSessionId && parsed !== expectedSessionId) {
+        throw new Error(`Kimi resumed unexpected session ${parsed}; expected ${expectedSessionId}.`);
+      }
       context.sessionId = parsed;
       return parsed;
     }
@@ -450,6 +512,93 @@ async function initializeFreshKimiSessionFromResumeHint(
     ...params,
     kimiSessionId: context.sessionId,
   });
+  await waitForKimiSessionIdFromTmux(context);
+}
+
+export interface KimiTmuxInputSession {
+  sessionName: string;
+  targetPane: string;
+  sessionId: string;
+  cwd?: string;
+  sessionFilePath: string;
+  nextOffset: number;
+  existed: boolean;
+}
+
+/**
+ * Establishes the provider-owned Kimi process and runtime identity exactly
+ * once. A known live process is reusable without probing for an input cursor;
+ * cold takeover only revalidates the persisted Kimi session/wire identity.
+ */
+export async function ensureKimiTmuxInputSession(
+  params: StreamChatParams,
+): Promise<KimiTmuxInputSession> {
+  const sessionName = kimiTmuxSessionName(params.sessionId);
+  const targetPane = `${sessionName}:0.0`;
+  const knownSession = params.kimiSessionId
+    ? findKimiSessionFileById(params.kimiSessionId, params.workingDirectory)
+    : null;
+  const context: KimiTuiRunContext = {
+    sessionName,
+    targetPane,
+    bridgeSessionId: params.sessionId,
+    sessionId: params.kimiSessionId,
+    cwd: params.workingDirectory,
+    sessionFilePath: knownSession?.filePath,
+    nextOffset: knownSession?.filePath ? fs.statSync(knownSession.filePath).size : 0,
+    nextLogOffset: 0,
+    logTrailingText: '',
+    trailingText: '',
+    nextTurnId: null,
+    nextSpecialCallIds: [],
+    emittedToolStarts: new Set(),
+    emittedRecordSignatures: new Set(),
+    lastAssistantText: '',
+    terminalSeen: false,
+    hasError: false,
+  };
+  const inspection = await inspectRuntimeTmuxInput({
+    runtime: 'kimi',
+    sessionName,
+    hasSession: () => tmuxCore.hasSession(sessionName),
+  });
+
+  if (!inspection.exists) {
+    assertKimiLaunchAuthentication(params.model);
+    await launchTmuxKimiSession(sessionName, params);
+    if (params.kimiSessionId) {
+      await waitForKimiSessionIdFromTmux(context);
+    } else {
+      await initializeFreshKimiSessionFromResumeHint(context, params);
+    }
+  } else if (inspection.needsReadiness || !context.sessionId) {
+    await waitForKimiSessionIdFromTmux(context);
+  }
+
+  if (!context.sessionFilePath) {
+    await waitForKimiSessionFileBySessionId(context);
+  }
+  initializeKimiSessionLogCursor(context);
+  if (!context.sessionId || !context.sessionFilePath) {
+    throw new Error('Kimi tmux input lifecycle did not resolve a session id and wire file.');
+  }
+  transitionRuntimeTmuxInputState(
+    'kimi',
+    sessionName,
+    'running',
+    inspection.exists
+      ? 'existing Kimi tmux process and persisted runtime identity are reusable'
+      : 'Kimi tmux process and runtime session are ready for input',
+  );
+  return {
+    sessionName,
+    targetPane,
+    sessionId: context.sessionId,
+    ...(context.cwd ? { cwd: context.cwd } : {}),
+    sessionFilePath: context.sessionFilePath,
+    nextOffset: context.nextOffset,
+    existed: inspection.exists,
+  };
 }
 
 export function streamKimiTmuxTui(params: StreamChatParams): ReadableStream<string> {
@@ -468,6 +617,8 @@ export function streamKimiTmuxTui(params: StreamChatParams): ReadableStream<stri
             ? findKimiSessionFileById(params.kimiSessionId, params.workingDirectory)?.filePath
             : undefined,
           nextOffset: 0,
+          nextLogOffset: 0,
+          logTrailingText: '',
           trailingText: '',
           nextTurnId: null,
           nextSpecialCallIds: [],
@@ -478,33 +629,26 @@ export function streamKimiTmuxTui(params: StreamChatParams): ReadableStream<stri
           hasError: false,
         };
 
+        let lifecycleFailed = false;
         try {
           controller.enqueue(sseEvent('status', {
             reasoning: params.kimiSessionId
-              ? '正在启动 Kimi tmux，并 resume 当前 Kimi session。'
-              : '正在启动 Kimi tmux。',
+              ? '正在确认 Kimi tmux 和当前 Kimi session。'
+              : '正在初始化 Kimi tmux 和 Kimi session。',
           }));
-          await launchTmuxKimiSession(sessionName, params);
-
-          if (params.kimiSessionId) {
-            await waitForKimiSessionIdFromTmux(context);
-          } else {
-            await initializeFreshKimiSessionFromResumeHint(context, params);
-          }
+          const prepared = await ensureKimiTmuxInputSession(params);
+          context.sessionId = prepared.sessionId;
+          context.cwd = prepared.cwd;
+          context.sessionFilePath = prepared.sessionFilePath;
+          context.nextOffset = prepared.nextOffset;
+          initializeKimiSessionLogCursor(context);
           controller.enqueue(sseEvent('status', {
             session_id: context.sessionId,
             ...(context.cwd ? { cwd: context.cwd } : {}),
           }));
-          await waitForKimiSessionFileBySessionId(context);
 
           const promptDelayMs = parsePositiveIntEnv('CODELARK_KIMI_TMUX_PROMPT_DELAY_MS', DEFAULT_KIMI_PROMPT_DELAY_MS, 0);
           if (promptDelayMs > 0) await sleep(promptDelayMs);
-          transitionRuntimeTmuxInputState(
-            'kimi',
-            sessionName,
-            'running',
-            'Kimi session id and wire file are ready for input',
-          );
           await sendRuntimeTmuxInput({
             runtime: 'kimi',
             sessionName,
@@ -519,9 +663,9 @@ export function streamKimiTmuxTui(params: StreamChatParams): ReadableStream<stri
             context,
             async () => (await tmuxCore.hasSession(context.sessionName)).exists,
           );
-          await captureKimiResumeHint(context);
           controller.close();
         } catch (error) {
+          lifecycleFailed = true;
           const message = error instanceof Error ? error.message : String(error);
           transitionRuntimeTmuxInputState(
             'kimi',
@@ -538,14 +682,14 @@ export function streamKimiTmuxTui(params: StreamChatParams): ReadableStream<stri
             // Controller may already be closed.
           }
         } finally {
-          if (!isDebugTmuxKeepAlive()) {
+          if (lifecycleFailed && !isDebugTmuxKeepAlive()) {
             try {
               await tmuxCore.killSession(sessionName, { ignoreMissing: true });
               transitionRuntimeTmuxInputState(
                 'kimi',
                 sessionName,
-                'stopped',
-                'Kimi turn completed and its provider-owned tmux session was cleaned up',
+                'failed',
+                'failed Kimi lifecycle was cleaned up so the next input can recover',
               );
             } catch (error) {
               transitionRuntimeTmuxInputState(
@@ -556,8 +700,8 @@ export function streamKimiTmuxTui(params: StreamChatParams): ReadableStream<stri
                 { error: error instanceof Error ? error.message : String(error) },
               );
             }
-          } else {
-            console.log(`[kimi-tmux] CODELARK_DEBUG is enabled; tmux session kept: ${sessionName}`);
+          } else if (!lifecycleFailed) {
+            console.log(`[kimi-tmux] Provider-owned tmux session remains reusable: ${sessionName}`);
           }
         }
       })();

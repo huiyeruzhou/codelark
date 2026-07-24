@@ -216,7 +216,7 @@ if (resumed) process.stdout.write('Session: ' + sessionId + '\\n');
 if (process.stdin.isTTY && process.stdin.setRawMode) process.stdin.setRawMode(true);
 process.stdin.resume();
 
-let answered = false;
+let turnCount = 0;
 let ctrlCCount = 0;
 const appendWire = (entry) => fs.appendFileSync(wirePath, JSON.stringify(entry) + '\\n');
 const recordCtrlC = () => {
@@ -225,13 +225,16 @@ const recordCtrlC = () => {
 };
 process.stdin.on('data', (chunk) => {
   fs.appendFileSync(keyLogPath, JSON.stringify({ hex: chunk.toString('hex'), text: chunk.toString('utf8') }) + '\\n');
-  if (!answered && chunk.includes(0x13)) {
-    answered = true;
+  if (chunk.includes(0x13)) {
+    turnCount += 1;
     const now = Date.now();
-    appendWire({ type: 'context.append_loop_event', time: now, event: { type: 'step.begin', turnId: 'turn-1', stepUuid: 'step-1' } });
-    appendWire({ type: 'context.append_loop_event', time: now + 1, event: { type: 'content.part', turnId: 'turn-1', part: { type: 'think', think: 'mock kimi thinking' } } });
-    appendWire({ type: 'context.append_loop_event', time: now + 2, event: { type: 'content.part', turnId: 'turn-1', part: { type: 'text', text: 'Kimi mock-app plain response' } } });
-    appendWire({ type: 'context.append_loop_event', time: now + 3, event: { type: 'step.end', turnId: 'turn-1', stepUuid: 'step-1' } });
+    const turnId = 'turn-' + turnCount;
+    const stepUuid = 'step-' + turnCount;
+    const response = turnCount === 1 ? 'Kimi mock-app plain response' : 'Kimi mock-app continued response ' + turnCount;
+    appendWire({ type: 'context.append_loop_event', time: now, event: { type: 'step.begin', turnId, stepUuid } });
+    appendWire({ type: 'context.append_loop_event', time: now + 1, event: { type: 'content.part', turnId, part: { type: 'think', think: 'mock kimi thinking ' + turnCount } } });
+    appendWire({ type: 'context.append_loop_event', time: now + 2, event: { type: 'content.part', turnId, part: { type: 'text', text: response } } });
+    appendWire({ type: 'context.append_loop_event', time: now + 3, event: { type: 'step.end', turnId, stepUuid } });
   }
   for (const byte of chunk) {
     if (byte !== 0x03) continue;
@@ -279,17 +282,22 @@ process.stdout.write('Kimi Code fake resume\\nSession: ' + sessionId + '\\n');
 if (process.stdin.isTTY && process.stdin.setRawMode) process.stdin.setRawMode(true);
 process.stdin.resume();
 
-let answered = false;
+let turnCount = 0;
 const appendWire = (entry) => fs.appendFileSync(wirePath, JSON.stringify(entry) + '\\n');
 process.stdin.on('data', (chunk) => {
   fs.appendFileSync(keyLogPath, JSON.stringify({ hex: chunk.toString('hex'), text: chunk.toString('utf8') }) + '\\n');
-  if (!answered && chunk.includes(0x13)) {
-    answered = true;
+  if (chunk.includes(0x13)) {
+    turnCount += 1;
     const now = Date.now();
-    appendWire({ type: 'context.append_loop_event', time: now, event: { type: 'step.begin', turnId: 'turn-resume', stepUuid: 'step-resume' } });
-    appendWire({ type: 'context.append_loop_event', time: now + 1, event: { type: 'content.part', turnId: 'turn-resume', part: { type: 'think', think: thinkText } } });
-    appendWire({ type: 'context.append_loop_event', time: now + 2, event: { type: 'content.part', turnId: 'turn-resume', part: { type: 'text', text: responseText } } });
-    appendWire({ type: 'context.append_loop_event', time: now + 3, event: { type: 'step.end', turnId: 'turn-resume', stepUuid: 'step-resume' } });
+    const turnId = 'turn-resume-' + turnCount;
+    const stepUuid = 'step-resume-' + turnCount;
+    const currentResponse = turnCount === 1
+      ? responseText
+      : turnCount === 2 ? 'Kimi accepted card answer' : 'Kimi continued after follow-up';
+    appendWire({ type: 'context.append_loop_event', time: now, event: { type: 'step.begin', turnId, stepUuid } });
+    appendWire({ type: 'context.append_loop_event', time: now + 1, event: { type: 'content.part', turnId, part: { type: 'think', think: thinkText + ' ' + turnCount } } });
+    appendWire({ type: 'context.append_loop_event', time: now + 2, event: { type: 'content.part', turnId, part: { type: 'text', text: currentResponse } } });
+    appendWire({ type: 'context.append_loop_event', time: now + 3, event: { type: 'step.end', turnId, stepUuid } });
   }
   if (chunk.includes(0x03)) {
     setTimeout(() => process.exit(0), 20);
@@ -2498,6 +2506,13 @@ provider = "tmux"
           && summary.includes('provider=tmux')
       )));
       assert.equal(store.getSession(binding.bridgeSessionId)?.health_status, 'running_active');
+
+      const beforeFollowUpLog = fs.readFileSync(fakeTmux.logPath, 'utf-8');
+      await _testOnly.handleMessage(adapter, inboundMessage(address, 'follow up claude tmux', 'incoming-claude-tmux-follow-up'));
+      const followUpLog = fs.readFileSync(fakeTmux.logPath, 'utf-8').slice(beforeFollowUpLog.length);
+      assert.match(followUpLog, new RegExp(`has-session -t ${tmuxSessionName}`));
+      assert.match(followUpLog, new RegExp(`send-keys -t ${tmuxSessionName} -l follow up claude tmux`));
+      assert.doesNotMatch(followUpLog, /new-session|\bresume\b/, 'a running follow-up must not relaunch the provider process');
     } finally {
       process.env.PATH = oldPath;
       if (oldFakeLog === undefined) delete process.env.TMUX_FAKE_LOG;
@@ -2776,7 +2791,27 @@ provider = "tmux"
       assert.deepEqual(launches[1]?.argv.slice(0, 2), ['-r', kimiSessionId]);
       assert.equal(launches[1]?.resumed, true);
       assert.equal(launches[1]?.cwd, workDir);
+
+      await _testOnly.handleMessage(adapter, inboundMessage(address, 'runtime command kimi follow-up', 'incoming-kimi-runtime-message-follow-up'));
+      await waitForCondition(() => adapter.streamEvents.some((event) => (
+        event.kind === 'end'
+        && event.streamKey?.startsWith('mirror:')
+        && event.status === 'completed'
+        && event.text === '**kimi:** Kimi mock-app continued response 2'
+      )), 12_000);
+
+      const launchesAfterFollowUp = fs.readFileSync(launchLogPath, 'utf-8')
+        .trim()
+        .split(/\r?\n/)
+        .map((line) => JSON.parse(line) as { argv: string[]; resumed: boolean; cwd: string });
+      assert.equal(launchesAfterFollowUp.length, 2, 'the follow-up must reuse the established Kimi tmux process');
+      const followUpKeyLog = fs.readFileSync(keyLogPath, 'utf-8');
+      assert.match(followUpKeyLog, /runtime command kimi follow-up/);
     } finally {
+      const activeBinding = store.getChannelChat(address.channelType, address.chatId);
+      if (activeBinding) {
+        await execFileAsync('tmux', ['kill-session', '-t', `clk-kimi-${activeBinding.bridgeSessionId}`]).catch(() => {});
+      }
       for (const [key, value] of Object.entries(previousEnv)) {
         if (value === undefined) delete process.env[key];
         else process.env[key] = value;
@@ -2906,6 +2941,10 @@ provider = "tmux"
       assert.equal(launches[1]?.resumed, true);
       assert.equal(launches[1]?.cwd, workDir);
     } finally {
+      const activeBinding = store.getChannelChat(address.channelType, address.chatId);
+      if (activeBinding) {
+        await execFileAsync('tmux', ['kill-session', '-t', `clk-kimi-${activeBinding.bridgeSessionId}`]).catch(() => {});
+      }
       for (const [key, value] of Object.entries(previousEnv)) {
         if (value === undefined) delete process.env[key];
         else process.env[key] = value;
@@ -3042,6 +3081,10 @@ provider = "tmux"
       )), false);
       assert.match(fs.readFileSync(wirePath, 'utf-8'), new RegExp(responseText));
     } finally {
+      const activeBinding = store.getChannelChat(address.channelType, address.chatId);
+      if (activeBinding) {
+        await execFileAsync('tmux', ['kill-session', '-t', `clk-kimi-${activeBinding.bridgeSessionId}`]).catch(() => {});
+      }
       for (const [key, value] of Object.entries(previousEnv)) {
         if (value === undefined) delete process.env[key];
         else process.env[key] = value;
@@ -3172,7 +3215,48 @@ provider = "tmux"
       assert.match(keyLog, /ask user from kimi/);
       assert.match(keyLog, /"hex":"13"/, 'Kimi tmux provider should send Ctrl-S before the question form answer');
       assert.match(fs.readFileSync(wirePath, 'utf-8'), /<clk-ask>/);
+
+      await _testOnly.handleMessage(adapter, {
+        ...inboundMessage(address, '', 'incoming-kimi-question-card-submit'),
+        callbackData: questionMessage.richCard?.form?.submitCallbackData,
+        callbackMessageId: 'kimi-question-card-message',
+        raw: {
+          event: {
+            action: {
+              form_value: {
+                clk_choice: '灰度',
+                clk_input: '先观察十分钟',
+              },
+            },
+          },
+        },
+      });
+      await waitForCondition(() => adapter.streamEvents.some((event) => (
+        event.kind === 'end'
+        && event.streamKey?.startsWith('mirror:')
+        && event.status === 'completed'
+        && event.text === '**kimi:** Kimi accepted card answer'
+      )), 12_000);
+
+      await _testOnly.handleMessage(adapter, inboundMessage(address, '卡片回答之后继续聊', 'incoming-kimi-after-question-follow-up'));
+      await waitForCondition(() => adapter.streamEvents.some((event) => (
+        event.kind === 'end'
+        && event.streamKey?.startsWith('mirror:')
+        && event.status === 'completed'
+        && event.text === '**kimi:** Kimi continued after follow-up'
+      )), 12_000);
+
+      const continuedKeyLog = fs.readFileSync(keyLogPath, 'utf-8');
+      assert.match(continuedKeyLog, /用户回答了问题卡片/);
+      assert.match(continuedKeyLog, /选择：灰度/);
+      assert.match(continuedKeyLog, /卡片回答之后继续聊/);
+      const launches = fs.readFileSync(launchLogPath, 'utf-8').trim().split(/\r?\n/);
+      assert.equal(launches.length, 1, 'card submit and the next message must reuse the same Kimi tmux process');
     } finally {
+      const activeBinding = store.getChannelChat(address.channelType, address.chatId);
+      if (activeBinding) {
+        await execFileAsync('tmux', ['kill-session', '-t', `clk-kimi-${activeBinding.bridgeSessionId}`]).catch(() => {});
+      }
       for (const [key, value] of Object.entries(previousEnv)) {
         if (value === undefined) delete process.env[key];
         else process.env[key] = value;
@@ -4310,6 +4394,27 @@ provider = "tmux"
       await waitForCondition(() => streamingAdapter.reactions.some((reaction) => reaction.action === 'remove'));
       assert.equal(streamingAdapter.reactions.at(-1)?.reactionId, streamingAdapter.reactions[0]?.reactionId);
       assert.ok(streamingAdapter.streamEvents.some((event) => event.kind === 'text' && /^mirror:/.test(event.streamKey || '') && /第一条响应/.test(event.text || '')));
+
+      const beforeReusableMessageLog = fs.readFileSync(fakeTmux.logPath, 'utf-8');
+      await _testOnly.handleMessage(adapter, inboundMessage(newAddress, '复用中的第二条', 'incoming-tmux-default-reuse-second'));
+      const reusableMessageLog = fs.readFileSync(fakeTmux.logPath, 'utf-8').slice(beforeReusableMessageLog.length);
+      assert.match(reusableMessageLog, new RegExp(`has-session -t ${tmuxSession}`));
+      assert.match(reusableMessageLog, new RegExp(`send-keys -t ${tmuxSession} -l 复用中的第二条`));
+      assert.doesNotMatch(reusableMessageLog, /new-session|\bresume\b/, 'a running follow-up must reuse the established Codex tmux');
+      const reusableReactionStart = streamingAdapter.reactions.length - 1;
+      appendCodexMirrorTurn(actualSessionPath, {
+        timestampPrefix: '2026-05-28T00:01:30',
+        turnId: 'turn-tmux-default-reuse-second',
+        userText: '复用中的第二条',
+        assistantText: '复用中的第二条响应',
+      });
+      await _testOnly.reconcileMirrorSubscriptions();
+      await waitForCondition(() => streamingAdapter.reactions
+        .slice(reusableReactionStart)
+        .some((reaction) => reaction.action === 'remove'));
+      assert.ok(streamingAdapter.streamEvents.some((event) => event.kind === 'text'
+        && /^mirror:/.test(event.streamKey || '')
+        && /复用中的第二条响应/.test(event.text || '')));
 
       await _testOnly.handleMessage(adapter, inboundMessage(newAddress, '/tmux manual after start', 'incoming-tmux-default-manual'));
       assert.doesNotMatch(adapter.sent.at(-1)?.text || '', /tmux session 不存在/);

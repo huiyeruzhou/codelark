@@ -150,7 +150,9 @@ interface GlobalRuntimeConfig {
 | `/ui` | 固定显示策略 | 工具详情始终显示 |
 | `uiAllowLan`、`uiAccessToken` | `bridge.ui` | UI server |
 | Feishu / Weixin channel config | `channels[]` | 通道连接、访问控制、消息呈现 |
-| `/require-at` | channel instance 或 chat policy | 飞书群聊触发策略 |
+| `/require-at` | 当前消息的 `channelType` 对应 `channels[]` 项 | 飞书群聊触发策略；精确修改当前 App/通道实例 |
+
+`/require-at` 与 `/set requireMention` 最终都写 `~/.codelark/config.toml`，但目标选择不同：前者按当前消息的 `channelType` 找到对应 channel id，后者属于全局设置卡，修改默认 Feishu channel。单 App 默认通道中两者效果相同；多 App、隔离测试 App 或非默认 channel 中，使用 `/set requireMention` 可能改到另一项，看起来就像“没有生效”。因此当前聊天的 mention 策略优先使用 `/require-at`，全局默认模板才使用 `/set --group channels.feishu`。运行中的 Bridge 在下一次 channel config sync 后应用变更。
 
 ## BridgeSession 与 Codex/ClaudeCode/KimiCode 差异
 
@@ -249,6 +251,8 @@ Accessor 边界：
 
 - `/provider`、`/p` 从 “CodexRuntime 参数” 移到 “Bridge 控制”，因为它选择 bridge 如何驱动当前 runtime，不是模型执行参数。Codex 和 Claude 都支持 `sdk|pty|tmux`，Claude 默认 `tmux`；Kimi 当前只支持 `tmux`。切换时只修改当前 active runtime 的 provider。
 - `/set` 展示与写入遵循 TOML section：顶部下拉切换 `[runtime]`、`[runtime.codex]`、`[runtime.claude]`、`[runtime.kimi]`、`[bridge]` 和默认 Feishu `[[channels]]`，表单只保存当前 section。
+- `/set --group runtime` 中的 `session.tmux_capture_lines`、`session.tmux_auto_enter`、`session.tmux_echo_input` 是 home 级“新 session 默认值”，也允许被 session TOML 覆盖。字段注册必须同时允许 `home|session|cli` 写入；如果 UI 暴露字段但 scope 拒绝 home 写入，属于配置契约错误。
+- Operator UI 与 `/set` 共享同一配置能力清单：Web 表单提交字段必须与后端 Zod input contract 全等；runtime 默认值和通用 tmux 默认值不得只接一端。App secret、授权状态等敏感或状态型字段可以是显式受控例外，但必须在测试矩阵中说明 owner，不能静默缺失。
 - `schemas/config.v1.schema.json` 以 `runtime.codex`、`runtime.claude`、`runtime.kimi`、`runtime.bridgeControl`、`runtime.bridge` 作为权威分组；旧扁平字段不再作为配置兼容输入。
 - `BridgeStore` 接口中的 `findSessionByCodexThreadId()`、`updateSessionCodexThreadId()` 是 Codex 专属 API；接 Claude 前应新增 provider-neutral accessor 或 runtime-specific registry，避免加出 `findSessionByClaudeSessionId()` 这类平行顶层接口。
 - 不要把 `BridgeSession.runtime.codex.model` 当通用字段使用；应使用 `runtime.codex.model`、`runtime.claude.model` 与 `runtime.kimi.model` 三个 runtime-specific 字段。

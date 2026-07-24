@@ -6,7 +6,11 @@ import path from 'node:path';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 
 import { handleUiConfigRoute } from '../../../../operator-ui/routes/config.js';
-import { configV2ToPayload, mergeConfigV2HomePatch } from '../../../../operator-ui/application/config.js';
+import {
+  configV2ToPayload,
+  mergeConfigV2HomePatch,
+  UI_CONFIG_INPUT_KEYS,
+} from '../../../../operator-ui/application/config.js';
 import { CODELARK_HOME } from '../../../../configuration/paths.js';
 import {
   LEGACY_CONFIG_ENV_PATH as CONFIG_PATH,
@@ -157,6 +161,48 @@ describe('Ui config application', () => {
     assert.equal(patch.bridge?.defaultWorkspace, '/tmp/work');
     assert.equal(patch.bridge?.uiAllowLan, true);
     assert.equal(patch.bridge?.uiAccessToken, 'existing-token');
+  });
+
+  it('round-trips shared tmux defaults and all Claude runtime defaults', () => {
+    const current = baseConfigV2();
+    const patch = mergeConfigV2HomePatch(current, {
+      tmuxCaptureLines: '140',
+      tmuxAutoEnter: false,
+      tmuxEchoInput: true,
+      claudeMode: 'yolo',
+      claudeReasoningEffort: 'max',
+    });
+
+    assert.deepEqual(patch.session, {
+      tmuxCaptureLines: 140,
+      tmuxAutoEnter: false,
+      tmuxEchoInput: true,
+    });
+    assert.equal(patch.runtime?.claude?.yoloMode, 'on');
+    assert.equal(patch.runtime?.claude?.reasoningEffort, 'max');
+
+    const payload = configV2ToPayload({
+      ...current,
+      session: { ...current.session, ...patch.session },
+      runtime: {
+        ...current.runtime,
+        claude: { ...current.runtime.claude, ...patch.runtime?.claude },
+      },
+    });
+    assert.equal(payload.tmuxCaptureLines, 140);
+    assert.equal(payload.tmuxAutoEnter, false);
+    assert.equal(payload.tmuxEchoInput, true);
+    assert.equal(payload.claudeMode, 'yolo');
+    assert.equal(payload.claudeReasoningEffort, 'max');
+  });
+
+  it('keeps the browser form submission keys equal to the backend input contract', () => {
+    const source = fs.readFileSync(path.join(process.cwd(), 'src/operator-ui/shell.ts'), 'utf-8');
+    const body = source.match(/function formPayload\(\) \{\s*return \{([\s\S]*?)\n\s*\};\n\s*\}/)?.[1] || '';
+    const browserKeys = [...body.matchAll(/^\s+(\w+):/gm)].map((match) => match[1]).sort();
+
+    assert.deepEqual(browserKeys, UI_CONFIG_INPUT_KEYS);
+    assert.doesNotMatch(source, /showToolCallDetails/);
   });
 
   it('exposes and writes global Kimi runtime defaults', () => {

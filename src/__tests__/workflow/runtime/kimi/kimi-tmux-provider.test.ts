@@ -141,23 +141,29 @@ describe('kimi-tmux-provider workflow', () => {
     const sendCalls: Array<{ target: string; actions: string[] }> = [];
     const injectCalls: Array<{ target: string; prompt: string }> = [];
     let resumeHintReady = false;
+    let resumedTuiReady = false;
     let wirePath: string | null = null;
+    let tmuxExists = false;
 
     const restoreTmux = patchTmuxCore({
       async hasSession(name: string) {
-        return { exists: true, command: `tmux has-session -t ${name}` };
+        return { exists: tmuxExists, command: `tmux has-session -t ${name}` };
       },
       async ensureDetachedSession(params) {
+        tmuxExists = true;
         ensureCalls.push(params.command || '');
         if (params.command?.includes(`-r ${sessionId}`)) {
+          resumedTuiReady = true;
           wirePath = createKimiSessionFile({ kimiHome, cwd, sessionId });
         }
         return { existed: false, command: `tmux new-session -d -s ${params.name}`, commands: [] };
       },
       async capturePane(target: string) {
         return {
-          screen: resumeHintReady
-            ? `To resume this session: kimi -r ${sessionId}`
+          screen: resumedTuiReady
+            ? `Kimi Code\nSession: ${sessionId}\nReady for input`
+            : resumeHintReady
+              ? `To resume this session: kimi -r ${sessionId}`
             : 'Kimi Code\nWaiting for input',
           command: `tmux capture-pane -t ${target}`,
         };
@@ -177,6 +183,7 @@ describe('kimi-tmux-provider workflow', () => {
         return { commands: [`tmux paste-buffer -t ${target}`] };
       },
       async killSession(name: string) {
+        tmuxExists = false;
         return `tmux kill-session -t ${name}`;
       },
     });
@@ -240,16 +247,20 @@ describe('kimi-tmux-provider workflow', () => {
     const ensureCalls: string[] = [];
     const sendCalls: Array<{ target: string; actions: string[] }> = [];
     const injectCalls: Array<{ target: string; prompt: string }> = [];
+    let tmuxExists = true;
+    let captureCount = 0;
 
     const restoreTmux = patchTmuxCore({
       async hasSession(name: string) {
-        return { exists: true, command: `tmux has-session -t ${name}` };
+        return { exists: tmuxExists, command: `tmux has-session -t ${name}` };
       },
       async ensureDetachedSession(params) {
+        tmuxExists = true;
         ensureCalls.push(params.command || '');
         return { existed: false, command: `tmux new-session -d -s ${params.name}`, commands: [] };
       },
       async capturePane(target: string) {
+        captureCount += 1;
         return {
           screen: `Kimi Code\nSession: ${sessionId}\nReady for input`,
           command: `tmux capture-pane -t ${target}`,
@@ -266,6 +277,7 @@ describe('kimi-tmux-provider workflow', () => {
         return { commands: [`tmux paste-buffer -t ${target}`] };
       },
       async killSession(name: string) {
+        tmuxExists = false;
         return `tmux kill-session -t ${name}`;
       },
     });
@@ -285,15 +297,14 @@ describe('kimi-tmux-provider workflow', () => {
         workingDirectory: cwd,
       })));
 
-      assert.equal(ensureCalls.length, 1);
-      assert.match(ensureCalls[0]!, new RegExp(`^KIMI_CODE_HOME=.*\\bkimi -r ${sessionId} -y$`));
-      assert.equal(ensureCalls.some((command) => /\bkimi -y\b/.test(command) && !command.includes(' -r ')), false);
+      assert.equal(ensureCalls.length, 0, 'cold takeover must reuse the existing Kimi tmux process');
+      assert.equal(captureCount, 1, 'cold takeover must verify the active Session header exactly once');
       assert.deepEqual(injectCalls, [{
         target: 'clk-kimi-bridge-kimi-resume-workflow:0.0',
         prompt: 'hello existing kimi',
       }]);
       assert.ok(sendCalls.some((call) => call.actions.join(',') === 'C-s'));
-      assert.ok(sendCalls.some((call) => call.actions.join(',') === 'C-c,C-c'));
+      assert.equal(sendCalls.some((call) => call.actions.join(',') === 'C-c,C-c'), false);
 
       assert.ok(events.some((event) => event.type === 'status'
         && typeof event.data === 'object'
@@ -313,6 +324,81 @@ describe('kimi-tmux-provider workflow', () => {
         && event.data !== null
         && (event.data as { session_id?: string }).session_id === sessionId));
       assert.equal(events.some((event) => event.type === 'error'), false);
+    } finally {
+      restoreTmux();
+      fs.rmSync(kimiHome, { recursive: true, force: true });
+      fs.rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it('surfaces Kimi session-log authentication failures without waiting for the idle timeout', async () => {
+    const kimiHome = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-kimi-auth-home-'));
+    const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-kimi-auth-cwd-'));
+    const sessionId = 'session_cccccccc-cccc-4ccc-8ccc-cccccccccccc';
+    const wirePath = createKimiSessionFile({ kimiHome, cwd, sessionId });
+    const sessionDir = path.resolve(path.dirname(wirePath), '..', '..');
+    let tmuxExists = false;
+    let killed = false;
+
+    const restoreTmux = patchTmuxCore({
+      async hasSession(name: string) {
+        return { exists: tmuxExists, command: `tmux has-session -t ${name}` };
+      },
+      async ensureDetachedSession(params) {
+        tmuxExists = true;
+        return { existed: false, command: `tmux new-session -d -s ${params.name}`, commands: [] };
+      },
+      async capturePane(target: string) {
+        return {
+          screen: `Kimi Code\nSession: ${sessionId}\nReady for input`,
+          command: `tmux capture-pane -t ${target}`,
+        };
+      },
+      async injectPromptIntoPane(target: string, prompt: string) {
+        fs.appendFileSync(wirePath, `${JSON.stringify({
+          type: 'context.append_loop_event',
+          time: Date.now(),
+          event: { type: 'step.begin', turnId: 'turn-auth', stepUuid: 'step-auth' },
+        })}\n`, 'utf8');
+        const logDir = path.join(sessionDir, 'logs');
+        fs.mkdirSync(logDir, { recursive: true });
+        fs.writeFileSync(path.join(logDir, 'kimi-code.log'), [
+          '2026-07-24T09:27:41.997Z WARN  llm request failed  turnStep=1.1 attempt=1/10 model=k3 errorName=KimiError errorMessage="OAuth provider \\"managed:kimi-code\\" requires login before it can be used."',
+          '2026-07-24T09:27:42.028Z ERROR turn failed  turnId=1',
+          '',
+        ].join('\n'), 'utf8');
+        return { commands: [`tmux paste-buffer -t ${target} # ${prompt}`] };
+      },
+      async sendActions(target: string, actions) {
+        return { commands: actions.map((action) => `tmux send-keys -t ${target} ${action.type === 'key' ? action.key : action.text}`) };
+      },
+      async killSession(name: string) {
+        killed = true;
+        tmuxExists = false;
+        return `tmux kill-session -t ${name}`;
+      },
+    });
+
+    try {
+      const startedAt = Date.now();
+      const events = await withEnv({
+        KIMI_CODE_HOME: kimiHome,
+        CODELARK_KIMI_TMUX_SESSION_ID_TIMEOUT_MS: '1000',
+        CODELARK_KIMI_TMUX_OUTPUT_IDLE_TIMEOUT_MS: '5000',
+        CODELARK_KIMI_TMUX_POLL_INTERVAL_MS: '50',
+        CODELARK_KIMI_TMUX_PROMPT_DELAY_MS: '0',
+      }, () => readSse(streamKimiTmuxTui({
+        prompt: 'hello auth failure',
+        sessionId: 'bridge-kimi-auth-workflow',
+        runtime: 'kimi',
+        kimiSessionId: sessionId,
+        workingDirectory: cwd,
+      })));
+
+      assert.ok(Date.now() - startedAt < 1_000, 'explicit authentication failures should not wait for idle timeout');
+      assert.ok(events.some((event) => event.type === 'error'
+        && String(event.data).includes('requires login before it can be used')));
+      assert.equal(killed, true, 'a failed half-initialized Kimi lifecycle should be cleaned up');
     } finally {
       restoreTmux();
       fs.rmSync(kimiHome, { recursive: true, force: true });

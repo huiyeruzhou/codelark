@@ -125,7 +125,7 @@ fake 测试也要遵守真实职责边界。`fake tmux` 只模拟 tmux transport
 
 | 测试文件 | 关注点 |
 | --- | --- |
-| `delivery-pipeline.test.ts` | 文本、卡片、附件和 question form 的交付编排。 |
+| `delivery-pipeline.test.ts` | 文本、卡片、附件和 question form 的交付编排；同 chat 队列不等待远端 ACK 且保持发送顺序。 |
 | `response-assembler.test.ts` | 分段 stream 输出合并成用户可读最终响应。 |
 | `stream-state.test.ts`、`streaming-metadata.test.ts`、`stream-feedback-controller.test.ts` | stream 状态、metadata 和反馈卡片更新节奏。 |
 | `mirror-runtime.test.ts`、`mirror-turns.test.ts`、`mirror-delivery-plan.test.ts` | mirror pending delivery、turn 队列和交付策略。 |
@@ -135,6 +135,8 @@ fake 测试也要遵守真实职责边界。`fake tmux` 只模拟 tmux transport
 | `feishu-adapter-card-e2e.test.ts` | 飞书 card 级本地 E2E，覆盖 SDK/mirror question form、GPT-5.6 orchestration、Kimi Markdown 和真实 bash/patch 详情等 payload 形态。 |
 | `outbound-artifacts.test.ts` | 出站 artifact、问题表单和附件描述。 |
 | `permission.test.ts`、`permission-broker.test.ts` | 权限请求、pending permission 状态和 broker 行为。 |
+
+主路径性能回归必须同时覆盖两层：`command-dispatch.test.ts` 用永久 pending 的 fake Feishu reply 证明命令 handler 及时结束、下一条命令可继续入队；`interactive-turn-runner.test.ts` 证明 stream finalize/fallback/onMessageEnd 的顺序留在后台 delivery job 中。禁止用直接删除 `await` 的方式让卡片 cleanup 抢在 finalize 前执行。
 
 ### IM 通道、平台 adapter 和 Web 工作台
 

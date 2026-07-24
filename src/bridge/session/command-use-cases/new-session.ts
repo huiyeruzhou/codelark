@@ -1,5 +1,5 @@
 import type { BaseChannelAdapter } from '../../../channels/contracts.js';
-import { deliverBridgeNotice } from '../../../channels/delivery/feedback.js';
+import { enqueueBridgeNotice } from '../../../channels/delivery/feedback.js';
 import { DEFAULT_WORKSPACE_ROOT } from '../../../configuration/paths.js';
 import { createConfigService } from '../../../configuration/service.js';
 import type { BridgeSession, BridgeStore, ChannelChat, CloudDocumentAddress, InboundMessage } from '../../../domain/index.js';
@@ -297,7 +297,7 @@ export async function handleNewSessionCommand(options: {
       binding,
       'cloud document chat',
     );
-    await deliverBridgeNotice(
+    enqueueBridgeNotice(
       options.adapter,
       groupAddress,
       [

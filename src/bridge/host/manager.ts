@@ -206,7 +206,7 @@ import {
 } from '../mirror/feedback-controller.js';
 import { probeCodexThreadProcess } from '../health/process.js';
 import { createSessionHealthRuntime } from '../health/runtime.js';
-import { deliverBridgeNotice, deliverResponse } from '../../channels/delivery/feedback.js';
+import { deliverBridgeNotice, deliverResponse, enqueueBridgeNotice } from '../../channels/delivery/feedback.js';
 import { routeCodexRecords, routeRuntimeRecords } from '../turn/local-codex-terminal-router.js';
 import { createTurnCoordinator } from '../turn/turn-coordinator.js';
 import type { BridgeTurnTerminalRecord } from '../turn/turn-types.js';
@@ -3501,7 +3501,7 @@ async function handleMessage(
     const selectedEveryTaskId = parseEveryTaskSelectCallback(msg.callbackData);
     if (selectedEveryTaskId !== undefined) {
       if (!selectedEveryTaskId) {
-        await deliverBridgeNotice(adapter, msg.address, '这个下拉选项无效，请刷新后重试。');
+        enqueueBridgeNotice(adapter, msg.address, '这个下拉选项无效，请刷新后重试。');
       } else {
         getState().everyTaskSelections.set(everyTaskSelectionKey(msg), selectedEveryTaskId);
         await adapter.answerCallback?.(msg.messageId, '已选择');
@@ -3513,13 +3513,13 @@ async function handleMessage(
     const everyTaskAction = parseEveryTaskActionCallback(msg.callbackData);
     if (everyTaskAction !== undefined) {
       if (!everyTaskAction) {
-        await deliverBridgeNotice(adapter, msg.address, '这个按钮的操作无效，请刷新后重试。');
+        enqueueBridgeNotice(adapter, msg.address, '这个按钮的操作无效，请刷新后重试。');
         ack();
         return;
       }
       const taskId = getState().everyTaskSelections.get(everyTaskSelectionKey(msg));
       if (!taskId) {
-        await deliverBridgeNotice(adapter, msg.address, '请先在下拉列表中选择一个 /every，再点击操作按钮。');
+        enqueueBridgeNotice(adapter, msg.address, '请先在下拉列表中选择一个 /every，再点击操作按钮。');
         ack();
         return;
       }
@@ -3537,7 +3537,7 @@ async function handleMessage(
     const selectedThenTaskId = parseThenTaskSelectCallback(msg.callbackData);
     if (selectedThenTaskId !== undefined) {
       if (!selectedThenTaskId) {
-        await deliverBridgeNotice(adapter, msg.address, '这个下拉选项无效，请刷新后重试。');
+        enqueueBridgeNotice(adapter, msg.address, '这个下拉选项无效，请刷新后重试。');
       } else {
         getState().thenTaskSelections.set(thenTaskSelectionKey(msg), selectedThenTaskId);
         await adapter.answerCallback?.(msg.messageId, '已选择');
@@ -3549,13 +3549,13 @@ async function handleMessage(
     const thenTaskAction = parseThenTaskActionCallback(msg.callbackData);
     if (thenTaskAction !== undefined) {
       if (!thenTaskAction) {
-        await deliverBridgeNotice(adapter, msg.address, '这个按钮的操作无效，请刷新后重试。');
+        enqueueBridgeNotice(adapter, msg.address, '这个按钮的操作无效，请刷新后重试。');
         ack();
         return;
       }
       const taskId = getState().thenTaskSelections.get(thenTaskSelectionKey(msg));
       if (!taskId) {
-        await deliverBridgeNotice(adapter, msg.address, '请先在下拉列表中选择一个 /then，再点击操作按钮。');
+        enqueueBridgeNotice(adapter, msg.address, '请先在下拉列表中选择一个 /then，再点击操作按钮。');
         ack();
         return;
       }
@@ -3573,7 +3573,7 @@ async function handleMessage(
     const selectedThreadId = parseThreadSelectCallback(msg.callbackData);
     if (selectedThreadId !== undefined) {
       if (!selectedThreadId) {
-        await deliverBridgeNotice(adapter, msg.address, '这个下拉选项无效，请刷新后重试。');
+        enqueueBridgeNotice(adapter, msg.address, '这个下拉选项无效，请刷新后重试。');
       } else {
         getState().threadCardSelections.set(threadSelectionKey(msg), selectedThreadId);
         await adapter.answerCallback?.(msg.messageId, '已选择');
@@ -3585,13 +3585,13 @@ async function handleMessage(
     const threadAction = parseThreadSelectActionCallback(msg.callbackData);
     if (threadAction !== undefined) {
       if (!threadAction) {
-        await deliverBridgeNotice(adapter, msg.address, '这个按钮的操作无效，请刷新后重试。');
+        enqueueBridgeNotice(adapter, msg.address, '这个按钮的操作无效，请刷新后重试。');
         ack();
         return;
       }
       const threadId = getState().threadCardSelections.get(threadSelectionKey(msg));
       if (!threadId) {
-        await deliverBridgeNotice(adapter, msg.address, '请先在下拉列表中选择一个线程，再点击接管或归档。');
+        enqueueBridgeNotice(adapter, msg.address, '请先在下拉列表中选择一个线程，再点击接管或归档。');
         ack();
         return;
       }
@@ -3615,7 +3615,7 @@ async function handleMessage(
     const commandCallback = parseCommandCallbackData(msg.callbackData);
     if (commandCallback !== undefined) {
       if (!commandCallback) {
-        await deliverBridgeNotice(adapter, msg.address, '这个按钮的命令数据无效，请改用纯文本命令。');
+        enqueueBridgeNotice(adapter, msg.address, '这个按钮的命令数据无效，请改用纯文本命令。');
         ack();
         return;
       }
@@ -3625,7 +3625,7 @@ async function handleMessage(
         if (formValue) {
           const newSessionName = normalizeFormString(formValue.clk_input || formValue.input || formValue.text);
           if (!newSessionName) {
-            await deliverBridgeNotice(adapter, msg.address, '请输入群聊名称后再创建。');
+            enqueueBridgeNotice(adapter, msg.address, '请输入群聊名称后再创建。');
             ack();
             return;
           }
@@ -3641,7 +3641,7 @@ async function handleMessage(
         ? findBindingForCallbackSession(msg.address.channelType, msg.address.chatId, commandCallback.scopeSessionId)
         : null;
       if (commandCallback.scopeSessionId && !scopedBinding) {
-        await deliverBridgeNotice(adapter, msg.address, '这个按钮对应的会话已不再绑定到当前聊天，请改用纯文本命令确认当前状态。');
+        enqueueBridgeNotice(adapter, msg.address, '这个按钮对应的会话已不再绑定到当前聊天，请改用纯文本命令确认当前状态。');
         ack();
         return;
       }
@@ -3665,7 +3665,7 @@ async function handleMessage(
         ? findBindingForCallbackSession(msg.address.channelType, msg.address.chatId, tmuxScreenSessionId)
         : store.getChannelChat(msg.address.channelType, msg.address.chatId);
       if (!binding) {
-        await deliverBridgeNotice(adapter, msg.address, '这个停止按钮对应的会话已不再绑定到当前聊天，无法停止 tmux 屏幕定时刷新。');
+        enqueueBridgeNotice(adapter, msg.address, '这个停止按钮对应的会话已不再绑定到当前聊天，无法停止 tmux 屏幕定时刷新。');
       } else {
         await handleCommand(
           adapter,
@@ -3684,7 +3684,7 @@ async function handleMessage(
         ? findBindingForCallbackSession(msg.address.channelType, msg.address.chatId, ptyScreenSessionId)
         : store.getChannelChat(msg.address.channelType, msg.address.chatId);
       if (!binding) {
-        await deliverBridgeNotice(adapter, msg.address, '这个停止按钮对应的会话已不再绑定到当前聊天，无法停止 pty 屏幕定时刷新。');
+        enqueueBridgeNotice(adapter, msg.address, '这个停止按钮对应的会话已不再绑定到当前聊天，无法停止 pty 屏幕定时刷新。');
       } else {
         await handleCommand(
           adapter,
@@ -3700,7 +3700,7 @@ async function handleMessage(
     const agentQuestion = parseAgentQuestionCallbackData(msg.callbackData);
     if (agentQuestion !== undefined) {
       if (!agentQuestion) {
-        await deliverBridgeNotice(adapter, msg.address, '这个问题卡片的数据无效，请直接输入文字回复。');
+        enqueueBridgeNotice(adapter, msg.address, '这个问题卡片的数据无效，请直接输入文字回复。');
         ack();
         return;
       }
@@ -3729,19 +3729,19 @@ async function handleMessage(
       if (codexSelectionClaim?.handledBy === 'orphan') {
         const autoForwardRecovery = await recoverTmuxProviderAutoForwardFromSelectionCallback(codexSelectionClaim);
         if (autoForwardRecovery.attempted) {
-          await deliverBridgeNotice(adapter, msg.address, autoForwardRecovery.notice);
+          enqueueBridgeNotice(adapter, msg.address, autoForwardRecovery.notice);
         } else if (parseMirrorCodexSelectionSessionId(codexSelectionClaim.permissionRequestId)) {
           const recovery = await recoverMirrorTmuxSelectionPromptFromCallback(codexSelectionClaim, adapter);
-          await deliverBridgeNotice(adapter, msg.address, recovery.notice);
+          enqueueBridgeNotice(adapter, msg.address, recovery.notice);
         } else {
-          await deliverBridgeNotice(adapter, msg.address, 'Permission response recorded.');
+          enqueueBridgeNotice(adapter, msg.address, 'Permission response recorded.');
         }
       } else if (codexSelectionClaim) {
         const mirrorSessionId = parseMirrorCodexSelectionSessionId(codexSelectionClaim.permissionRequestId);
         if (mirrorSessionId) {
           requestTmuxSelectionPromptFollowupProbe(mirrorSessionId);
         }
-        await deliverBridgeNotice(adapter, msg.address, 'Permission response recorded.');
+        enqueueBridgeNotice(adapter, msg.address, 'Permission response recorded.');
       }
       ack();
       return;
@@ -3749,7 +3749,7 @@ async function handleMessage(
 
     const handled = broker.handlePermissionCallback(msg.callbackData, msg.address.chatId, msg.callbackMessageId);
     if (handled) {
-      await deliverBridgeNotice(adapter, msg.address, 'Permission response recorded.');
+      enqueueBridgeNotice(adapter, msg.address, 'Permission response recorded.');
     }
     ack();
     return;
@@ -3770,7 +3770,7 @@ async function handleMessage(
       return;
     }
     if (takeoverConfirmation.reply === 'cancel') {
-      await deliverBridgeNotice(adapter, msg.address, '已取消接管，当前聊天绑定保持不变。', {
+      enqueueBridgeNotice(adapter, msg.address, '已取消接管，当前聊天绑定保持不变。', {
         replyToMessageId: msg.messageId,
       });
       ack();
@@ -3788,7 +3788,7 @@ async function handleMessage(
       return;
     }
     if (clearConfirmation.reply === 'cancel') {
-      await deliverBridgeNotice(adapter, msg.address, '已取消 /clear，当前对话保持不变。', {
+      enqueueBridgeNotice(adapter, msg.address, '已取消 /clear，当前对话保持不变。', {
         replyToMessageId: msg.messageId,
       });
       ack();
@@ -3806,12 +3806,12 @@ async function handleMessage(
       userVisibleError?: string;
     } | undefined;
     if (rawData?.userVisibleError) {
-      await deliverBridgeNotice(adapter, msg.address, rawData.userVisibleError, {
+      enqueueBridgeNotice(adapter, msg.address, rawData.userVisibleError, {
         replyToMessageId: msg.messageId,
       });
     } else if (rawData?.imageDownloadFailed || rawData?.attachmentDownloadFailed) {
       const failureLabel = rawData.failedLabel || (rawData.imageDownloadFailed ? 'image(s)' : 'attachment(s)');
-      await deliverBridgeNotice(adapter, msg.address, `Failed to download ${rawData.failedCount ?? 1} ${failureLabel}. Please try sending again.`, {
+      enqueueBridgeNotice(adapter, msg.address, `Failed to download ${rawData.failedCount ?? 1} ${failureLabel}. Please try sending again.`, {
         replyToMessageId: msg.messageId,
       });
     }
@@ -3846,11 +3846,11 @@ async function handleMessage(
         const handled = broker.handlePermissionCallback(callbackData, msg.address.chatId);
         const label = normalized === '1' ? 'Allow' : normalized === '2' ? 'Allow Session' : 'Deny';
         if (handled) {
-          await deliverBridgeNotice(adapter, msg.address, `${label}: recorded.`, {
+          enqueueBridgeNotice(adapter, msg.address, `${label}: recorded.`, {
             replyToMessageId: msg.messageId,
           });
         } else {
-          await deliverBridgeNotice(adapter, msg.address, 'Permission not found or already resolved.', {
+          enqueueBridgeNotice(adapter, msg.address, 'Permission not found or already resolved.', {
             replyToMessageId: msg.messageId,
           });
         }
@@ -3859,7 +3859,7 @@ async function handleMessage(
       }
       if (pendingLinks.length > 1) {
         // Multiple pending permissions — numeric shortcut is ambiguous.
-        await deliverBridgeNotice(adapter, msg.address, `当前有 ${pendingLinks.length} 条待处理权限，数字快捷回复会有歧义。请使用完整命令：\n/perm allow|allow_session|deny <id>`, {
+        enqueueBridgeNotice(adapter, msg.address, `当前有 ${pendingLinks.length} 条待处理权限，数字快捷回复会有歧义。请使用完整命令：\n/perm allow|allow_session|deny <id>`, {
           replyToMessageId: msg.messageId,
         });
         ack();
@@ -3880,7 +3880,7 @@ async function handleMessage(
     const args = modelText.trim().slice(commandToken.length).trim();
     if (rawCommand === '/doctor') {
       const spec = buildDoctorPromptFromLogs(args);
-      await deliverBridgeNotice(adapter, msg.address, spec.notice, {
+      enqueueBridgeNotice(adapter, msg.address, spec.notice, {
         replyToMessageId: msg.messageId,
         audit: true,
       });
@@ -3901,7 +3901,6 @@ async function handleMessage(
   if (
     tmuxProviderSession
     && tmuxProviderRuntime?.provider === 'tmux'
-    && (tmuxProviderRuntime.runtime !== 'kimi' || Boolean(tmuxProviderActiveTask))
   ) {
     const tmuxProviderChat = tmuxProviderBinding;
     if (!tmuxProviderChat) {
@@ -3923,14 +3922,14 @@ async function handleMessage(
       }
     }
     if (rawText.trim().toLowerCase() === '//clear') {
-      await deliverBridgeNotice(adapter, msg.address, '当前处于 tmux Provider，不能通过 `//clear` 清空上下文。请通过 codelark 手动创建新会话。', {
+      enqueueBridgeNotice(adapter, msg.address, '当前处于 tmux Provider，不能通过 `//clear` 清空上下文。请通过 codelark 手动创建新会话。', {
         replyToMessageId: msg.messageId,
       });
       ack();
       return;
     }
     if (hasAttachments) {
-      await deliverBridgeNotice(adapter, msg.address, '当前处于 tmux Provider，普通附件不会自动转发到 TUI。请先发送 `/provider sdk`，或在 TUI 内自行读取本地文件。', {
+      enqueueBridgeNotice(adapter, msg.address, '当前处于 tmux Provider，普通附件不会自动转发到 TUI。请先发送 `/provider sdk`，或在 TUI 内自行读取本地文件。', {
         replyToMessageId: msg.messageId,
       });
       ack();
@@ -3945,7 +3944,7 @@ async function handleMessage(
         const args = rawText.trim().slice(commandToken.length).trim();
         const resolvedCommand = resolveCommandAlias(rawCommand, args);
         console.error(`[bridge-manager] tmux provider command failed: ${resolvedCommand}`, error);
-        await deliverBridgeNotice(adapter, msg.address, toUserVisibleCommandError(resolvedCommand, error), {
+        enqueueBridgeNotice(adapter, msg.address, toUserVisibleCommandError(resolvedCommand, error), {
           replyToMessageId: msg.messageId,
         });
       }
@@ -4040,7 +4039,7 @@ async function handleMessage(
       } catch (error) {
         clearPendingTmuxAutoForwardReaction(reactionKey);
         console.error('[bridge-manager] tmux provider command forwarding failed: /tmux', error);
-        await deliverBridgeNotice(adapter, msg.address, toUserVisibleCommandError('/tmux', error), {
+        enqueueBridgeNotice(adapter, msg.address, toUserVisibleCommandError('/tmux', error), {
           replyToMessageId: msg.messageId,
         });
       }
@@ -4102,7 +4101,7 @@ async function handleMessage(
       ].join(' '),
     });
     if (!appended) {
-      await deliverBridgeNotice(adapter, msg.address, '当前 terminal provider 还没有可接收追加输入的本地会话，请稍后重试。', {
+      enqueueBridgeNotice(adapter, msg.address, '当前 terminal provider 还没有可接收追加输入的本地会话，请稍后重试。', {
         replyToMessageId: msg.messageId,
       });
     }
@@ -4122,7 +4121,7 @@ async function handleMessage(
       await handleCommand(adapter, msg, modelText);
     } catch (error) {
       console.error(`[bridge-manager] Command failed: ${resolvedCommand}`, error);
-      await deliverBridgeNotice(adapter, msg.address, toUserVisibleCommandError(resolvedCommand, error), {
+      enqueueBridgeNotice(adapter, msg.address, toUserVisibleCommandError(resolvedCommand, error), {
         replyToMessageId: msg.messageId,
       });
     }

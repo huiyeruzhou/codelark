@@ -128,7 +128,9 @@ conversation barrier 是 lane 之上的保护规则，用来处理“这条命�
 6. 普通 prompt 解析当前聊天绑定的 `BridgeSession`，建立本次 turn 的任务状态、abort controller、stream UI 和最终 delivery。
 7. provider 路由根据 session 上的 runtime/provider 设置选择 Codex、Claude 或 Kimi 的具体执行方式。
 8. provider 创建或继续底层 runtime 会话，并把必要身份写回 session。
-9. delivery pipeline 把最终文本、卡片、附件等发回对应 IM channel。
+9. 主路径把最终文本、卡片、附件等转换为 delivery intent，按 adapter + chat 入有序队列后立即释放 lane；远端 IM ACK、重试和 message id 回填在队列 worker 中完成。
+
+这里的“有序”只约束同一 adapter/chat 的同类队列。普通回复与交互卡片使用独立 queue class，确认卡、按钮和 stream finalize 不会被前面的慢普通消息挡住；各自内部仍保序。CardKit create → send、stream finalize → fallback 回复、附件 caption → 附件等存在数据依赖的动作留在同一个 worker job 内串行；不同聊天互不等待。session lane 禁止等待普通 reply、reaction、CardKit create/update/finalize 或全局 mirror reconcile 的远端回执。只有决定本地下一状态所必需的外部业务操作，例如创建群聊后取得 chat id，才可以仍属于命令 use-case 本身。
 
 ### 模块入口
 
@@ -445,6 +447,8 @@ flowchart TD
 命令层的边界是“解释用户意图和组织展示”，不是“承载所有业务状态”。会话、绑定、线程接管、归档和工作目录等规则归会话模块负责；命令层只做 slash 解析、参数校验、调用 use-case 和生成用户可读结果。
 
 命令也要服从 lane。只读状态查询可以走 chat lane；会改变会话绑定或运行配置的命令必须进入 session lane 并声明 barrier；停止和权限快捷回复这类控制动作走 control lane。
+
+命令生成展示结果后只负责 enqueue，不等待平台回复 ACK。需要 `message_id` 的置顶、记录和 post-delivery 动作挂在 delivery receipt continuation 上，不能为了回填 id 继续占用 session lane。
 
 ### 命令类型
 

@@ -4,6 +4,7 @@ import type {
   StreamingPreviewState,
 } from '../../../domain/index.js';
 import type { BaseChannelAdapter, StructuredStreamingUiSnapshot } from '../../../channels/contracts.js';
+import { enqueueDelivery } from '../../../channels/delivery/deliver.js';
 import * as engine from './sdk-conversation-engine.js';
 import {
   assembleCodexFinalResponse,
@@ -474,19 +475,48 @@ export async function runInteractiveMessage(
     previewOnPartialText,
   });
 
-  const finalizeStreamUiOnce = async (
-    status: 'completed' | 'interrupted' | 'error',
-    responseText: string,
-  ): Promise<boolean> => {
-    return streamUi.finalizeOnce(status, responseText);
-  };
-
   const endMessageUiOnce = () => {
     if (taskState.uiEnded) return;
     if (messageStartCalled) {
       adapter.onMessageEnd?.(msg.address.chatId, streamKey);
     }
     taskState.uiEnded = true;
+  };
+
+  let finalDeliveryCompletion: Promise<boolean> | null = null;
+  const enqueueFinalUiWork = (
+    status: 'completed' | 'interrupted' | 'error',
+    responseText: string,
+    deliveryResponse?: Parameters<typeof deliverFinalResponse>[1],
+    deliveryOptions?: {
+      skipText?: boolean;
+      skipTextWhenCardFinalized?: boolean;
+    },
+  ): Promise<boolean> => {
+    if (finalDeliveryCompletion) return finalDeliveryCompletion;
+    const queued = enqueueDelivery(adapter, msg.address, async () => {
+      const cardFinalized = await streamUi.finalizeOnce(status, responseText);
+      if (!deliveryResponse) return { ok: true };
+      return deliverFinalResponse({
+        adapter,
+        address: msg.address,
+        sessionId: binding.bridgeSessionId,
+        replyToMessageId: msg.messageId,
+        deliverResponse: deps.deliverResponse,
+      }, deliveryResponse, {
+        ...deliveryOptions,
+        skipText: Boolean(deliveryOptions?.skipText) || (
+          Boolean(deliveryOptions?.skipTextWhenCardFinalized) && cardFinalized
+        ),
+      });
+    }, { queueClass: 'interactive' });
+    finalDeliveryCompletion = queued.completion.then((result) => {
+      endMessageUiOnce();
+      const finalized = taskState.streamFinalized || !streamUi.hasStreamingCards;
+      externalTerminal.settleCompletion(finalized);
+      return result.ok && finalized;
+    });
+    return finalDeliveryCompletion;
   };
 
   if (useInteractiveStreamUi) {
@@ -515,7 +545,7 @@ export async function runInteractiveMessage(
     taskAbort.abort();
     streamUi.stopStatusUpdates();
     try {
-      await finalizeStreamUiOnce('interrupted', detail);
+      void enqueueFinalUiWork('interrupted', detail);
     } catch {
       // Force stop must release the session even if remote UI cleanup fails.
     }
@@ -631,23 +661,16 @@ export async function runInteractiveMessage(
       if (!mirrorWillDeliverFinal) {
         sdkStreamEvents.pushFinalCardText(finalResponsePlan.cardText);
       }
-      const cardFinalized = await finalizeStreamUiOnce(
+      const finalization = enqueueFinalUiWork(
         finalResponsePlan.streamEndStatus,
         mirrorWillDeliverFinal ? '' : finalResponsePlan.cardText,
+        !mirrorWillDeliverFinal ? finalResponsePlan.deliveryResponse || undefined : undefined,
+        {
+          skipText: skipTextDeliveryForExistingCard,
+          skipTextWhenCardFinalized: finalResponsePlan.skipTextWhenCardFinalized,
+        },
       );
-      if (!mirrorWillDeliverFinal && finalResponsePlan.deliveryResponse) {
-        await deliverFinalResponse({
-          adapter,
-          address: msg.address,
-          sessionId: binding.bridgeSessionId,
-          replyToMessageId: msg.messageId,
-          deliverResponse: deps.deliverResponse,
-        }, finalResponsePlan.deliveryResponse, {
-          skipText: skipTextDeliveryForExistingCard || (
-            finalResponsePlan.skipTextWhenCardFinalized && cardFinalized
-          ),
-        });
-      }
+      void finalization;
       return;
     }
 
@@ -679,7 +702,6 @@ export async function runInteractiveMessage(
         workingDirectory: getSessionWorkingDirectory(initialSession) || null,
       });
     }
-    let cardFinalized = false;
     const staleTaskNotice = buildStaleTaskCompletionNotice(msg.address, binding, {
       listChannelChats: deps.listInteractiveTurnBindings,
       resolveDisplayInfo,
@@ -698,24 +720,20 @@ export async function runInteractiveMessage(
     const skipTextDeliveryForExistingCard = !isRuntimeMirrorTurn && streamUi.shouldSkipTextDelivery();
     if (useInteractiveStreamUi && streamUi.hasStreamingCards) {
       sdkStreamEvents.pushFinalCardText(finalResponsePlan.cardText);
-      cardFinalized = await finalizeStreamUiOnce(
-        finalResponsePlan.streamEndStatus,
-        finalResponsePlan.cardText,
-      );
     }
 
     if ((!isRuntimeMirrorTurn || !runtimeMirrorActivated) && finalResponsePlan.deliveryResponse) {
-      await deliverFinalResponse({
-        adapter,
-        address: msg.address,
-        sessionId: binding.bridgeSessionId,
-        replyToMessageId: msg.messageId,
-        deliverResponse: deps.deliverResponse,
-      }, finalResponsePlan.deliveryResponse, {
-        skipText: skipTextDeliveryForExistingCard || (
-          finalResponsePlan.skipTextWhenCardFinalized && cardFinalized
-        ),
-      });
+      void enqueueFinalUiWork(
+        finalResponsePlan.streamEndStatus,
+        finalResponsePlan.cardText,
+        finalResponsePlan.deliveryResponse,
+        {
+          skipText: skipTextDeliveryForExistingCard,
+          skipTextWhenCardFinalized: finalResponsePlan.skipTextWhenCardFinalized,
+        },
+      );
+    } else if (useInteractiveStreamUi && streamUi.hasStreamingCards) {
+      void enqueueFinalUiWork(finalResponsePlan.streamEndStatus, finalResponsePlan.cardText);
     }
 
     try {
@@ -734,7 +752,7 @@ export async function runInteractiveMessage(
       : undefined);
   } finally {
     if (useInteractiveStreamUi || (isRuntimeMirrorTurn && streamUi.shouldSkipTextDelivery())) {
-      await finalizeStreamUiOnce(
+      void enqueueFinalUiWork(
         taskAbort.signal.aborted
           ? 'interrupted'
           : finalOutcome === 'completed'
@@ -766,9 +784,13 @@ export async function runInteractiveMessage(
     deps.releaseInteractiveTask(binding.bridgeSessionId, taskId);
     deps.releaseBridgeTurn?.(binding.bridgeSessionId, taskId);
     if (isRuntimeMirrorTurn && runtimeMirrorActivated) {
-      await deps.reconcileMirrorSubscriptions?.();
+      void deps.reconcileMirrorSubscriptions?.().catch((error) => {
+        console.warn('[interactive-turn/runner] Background mirror reconcile failed:', error instanceof Error ? error.message : String(error));
+      });
     }
-    endMessageUiOnce();
-    externalTerminal.settleCompletion(taskState.streamFinalized || !streamUi.hasStreamingCards);
+    if (!finalDeliveryCompletion) {
+      endMessageUiOnce();
+      externalTerminal.settleCompletion(taskState.streamFinalized || !streamUi.hasStreamingCards);
+    }
   }
 }

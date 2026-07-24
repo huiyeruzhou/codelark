@@ -8,7 +8,7 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 
 import { findKimiSessionFileById } from '../../../../runtime/kimi/session-index.js';
-import { streamKimiTmuxTui } from '../../../../runtime/kimi/tmux-provider.js';
+import { kimiTmuxSessionName, streamKimiTmuxTui } from '../../../../runtime/kimi/tmux-provider.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -91,18 +91,20 @@ if (resumed) process.stdout.write('Session: ' + sessionId + '\\n');
 if (process.stdin.isTTY && process.stdin.setRawMode) process.stdin.setRawMode(true);
 process.stdin.resume();
 
-let answered = false;
+let answerCount = 0;
 let ctrlCCount = 0;
 const appendWire = (entry) => fs.appendFileSync(wirePath, JSON.stringify(entry) + '\\n');
 process.stdin.on('data', (chunk) => {
   fs.appendFileSync(keyLogPath, chunk.toString('hex') + '\\n');
-  if (!answered && chunk.includes(0x13)) {
-    answered = true;
+  if (chunk.includes(0x13)) {
+    answerCount += 1;
     const now = Date.now();
-    appendWire({ type: 'context.append_loop_event', time: now, event: { type: 'step.begin', turnId: 'turn-1', stepUuid: 'step-1' } });
-    appendWire({ type: 'context.append_loop_event', time: now + 1, event: { type: 'content.part', turnId: 'turn-1', part: { type: 'think', think: 'fake kimi thinking' } } });
-    appendWire({ type: 'context.append_loop_event', time: now + 2, event: { type: 'content.part', turnId: 'turn-1', part: { type: 'text', text: 'fake kimi answer' } } });
-    appendWire({ type: 'context.append_loop_event', time: now + 3, event: { type: 'step.end', turnId: 'turn-1', stepUuid: 'step-1' } });
+    const turnId = 'turn-' + answerCount;
+    const stepId = 'step-' + answerCount;
+    appendWire({ type: 'context.append_loop_event', time: now, event: { type: 'step.begin', turnId, stepUuid: stepId } });
+    appendWire({ type: 'context.append_loop_event', time: now + 1, event: { type: 'content.part', turnId, part: { type: 'think', think: 'fake kimi thinking' } } });
+    appendWire({ type: 'context.append_loop_event', time: now + 2, event: { type: 'content.part', turnId, part: { type: 'text', text: answerCount === 1 ? 'fake kimi answer' : 'fake kimi answer ' + answerCount } } });
+    appendWire({ type: 'context.append_loop_event', time: now + 3, event: { type: 'step.end', turnId, stepUuid: stepId } });
   }
   for (const byte of chunk) {
     if (byte !== 0x03) continue;
@@ -124,7 +126,7 @@ setInterval(() => {}, 1000);
 }
 
 describe('Kimi tmux provider local-process smoke', () => {
-  it('drives a Kimi-like TUI through tmux, wire mirror, Ctrl-S steer, and resume hint capture', { timeout: 30_000 }, async (t: TestContext) => {
+  it('drives and reuses a persistent Kimi-like TUI through tmux, wire mirror, Ctrl-S steer, and resume hint capture', { timeout: 30_000 }, async (t: TestContext) => {
     if (!(await tmuxAvailable())) {
       t.skip('tmux is not available');
       return;
@@ -157,6 +159,8 @@ describe('Kimi tmux provider local-process smoke', () => {
     process.env.CODELARK_KIMI_TMUX_SESSION_FILE_TIMEOUT_MS = '5000';
     process.env.CODELARK_KIMI_TMUX_SESSION_ID_TIMEOUT_MS = '5000';
     process.env.CODELARK_KIMI_TMUX_PROMPT_DELAY_MS = '150';
+    const tmuxSessionName = kimiTmuxSessionName('bridge-kimi-local-e2e');
+    await execFileAsync('tmux', ['kill-session', '-t', tmuxSessionName]).catch(() => {});
 
     try {
       const raw = await readStream(streamKimiTmuxTui({
@@ -182,7 +186,23 @@ describe('Kimi tmux provider local-process smoke', () => {
       assert.equal(launches[0]?.resumed, false, 'fresh Kimi launch should not have a known session id');
       assert.deepEqual(launches[1]?.argv.slice(0, 2), ['-r', sessionId]);
       assert.equal(launches[1]?.resumed, true, 'provider should relaunch Kimi with the resume session id');
+
+      const live = await execFileAsync('tmux', ['has-session', '-t', tmuxSessionName])
+        .then(() => true, () => false);
+      assert.equal(live, true, 'successful turns must keep the provider-owned Kimi tmux session alive');
+
+      const secondRaw = await readStream(streamKimiTmuxTui({
+        sessionId: 'bridge-kimi-local-e2e',
+        prompt: 'local kimi tmux follow-up',
+        workingDirectory: workDir,
+        kimiSessionId: sessionId,
+      } as any));
+      const secondEvents = parseSse(secondRaw);
+      assert.equal(secondEvents.some((event) => event.type === 'text' && event.data === 'fake kimi answer 2'), true);
+      const launchesAfterFollowUp = fs.readFileSync(launchLogPath, 'utf-8').trim().split(/\r?\n/);
+      assert.equal(launchesAfterFollowUp.length, 2, 'the follow-up must reuse the resumed Kimi process');
     } finally {
+      await execFileAsync('tmux', ['kill-session', '-t', tmuxSessionName]).catch(() => {});
       for (const [key, value] of Object.entries(previousEnv)) {
         if (value === undefined) delete process.env[key];
         else process.env[key] = value;
