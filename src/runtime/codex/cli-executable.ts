@@ -94,6 +94,13 @@ function pathModuleForPlatform(platform: NodeJS.Platform): typeof path.win32 | t
   return platform === 'win32' ? path.win32 : path.posix;
 }
 
+function pathValueFromEnv(env: NodeJS.ProcessEnv, platform: NodeJS.Platform): string {
+  if (env.PATH !== undefined) return env.PATH;
+  if (platform !== 'win32') return '';
+  const pathEntry = Object.entries(env).find(([key]) => key.toLowerCase() === 'path');
+  return pathEntry?.[1] || '';
+}
+
 function executableNames(command: string, platform: NodeJS.Platform): string[] {
   const trimmed = command.trim();
   if (!trimmed) return [];
@@ -211,7 +218,7 @@ export function resolveCliExecutable(options: ResolveCliExecutableOptions): stri
     return override;
   }
 
-  const pathValue = env.PATH || '';
+  const pathValue = pathValueFromEnv(env, platform);
   const entries = pathValue.split(pathDelimiterForPlatform(platform)).filter(Boolean);
   const names = executableNames(options.command, platform);
 

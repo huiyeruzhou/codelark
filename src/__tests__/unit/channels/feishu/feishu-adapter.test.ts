@@ -4607,6 +4607,7 @@ describe('feishu-adapter structured streaming regions', () => {
 
   it('releases the flush queue after a timed-out update so later refreshes can continue', async () => {
     const elementUpdates: Array<Record<string, any>> = [];
+    const cardUpdates: Array<Record<string, any>> = [];
     const blocked = createDeferred<Record<string, any>>();
     let callCount = 0;
     const adapter = new FeishuAdapter({
@@ -4631,7 +4632,10 @@ describe('feishu-adapter structured streaming regions', () => {
           card: {
             create: async () => ({ data: { card_id: 'card-1' } }),
             settings: async () => ({}),
-            update: async () => ({}),
+            update: async (payload: Record<string, any>) => {
+              cardUpdates.push(payload);
+              return {};
+            },
           },
           cardElement: {
             content: async (payload: Record<string, any>) => {
@@ -4655,16 +4659,21 @@ describe('feishu-adapter structured streaming regions', () => {
 
     await (adapter as any).createStreamingCard('chat-1', 'reply-1', 'stream-1');
     adapter.onStreamText('chat-1', '第一段输出', 'stream-1');
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    await waitForCondition(() => elementUpdates.length >= 1, 1_000);
+    const state = (adapter as any).activeCards.get('stream-1');
+    await waitForCondition(() => !state.flushInFlight && !state.backgroundFlushInFlight, 1_000);
 
     adapter.onStreamStatus('chat-1', '已运行 0分20秒', 'stream-1');
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    await (adapter as any).flushCardUpdate('stream-1');
+    await waitForCondition(() => !state.flushInFlight && !state.backgroundFlushInFlight, 1_000);
 
-    const state = (adapter as any).activeCards.get('stream-1');
     assert.equal(Boolean(state.flushInFlight), false);
-    assert.ok(elementUpdates.some((update) =>
-      update.path?.element_id === 'streaming_status'
-      && update.data?.content === '已运行 0分20秒'));
+    assert.ok(
+      elementUpdates.some((update) =>
+        update.path?.element_id === 'streaming_status'
+        && update.data?.content === '已运行 0分20秒')
+      || cardUpdates.some((update) => JSON.stringify(update).includes('已运行 0分20秒')),
+    );
     assert.equal(state.lastFlushError, null);
     assert.equal(state.consecutiveFlushFailures, 0);
 

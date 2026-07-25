@@ -9,25 +9,27 @@ import { tmuxCore } from '../../../../bridge/tmux/core.js';
 function installFakeTmux(): { binDir: string; logPath: string } {
   const binDir = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-unit-fake-tmux-core-'));
   const logPath = path.join(binDir, 'tmux.log');
-  const tmuxPath = path.join(binDir, 'tmux');
+  const scriptPath = path.join(binDir, 'fake-tmux.cjs');
+  const tmuxPath = path.join(binDir, process.platform === 'win32' ? 'tmux.cmd' : 'tmux');
   fs.writeFileSync(logPath, '', 'utf-8');
-  fs.writeFileSync(tmuxPath, `#!/usr/bin/env bash
-printf '%s\\n' "$*" >> "$TMUX_FAKE_LOG"
-case "$1" in
-  display-message)
-    printf '%s\\n' "\${TMUX_FAKE_PANE_HEIGHT:-10}"
-    exit 0
-    ;;
-  capture-pane)
-    for i in $(seq 1 25); do printf 'line-%02d\\n' "$i"; done
-    exit 0
-    ;;
-  *)
-    exit 0
-    ;;
-esac
+  fs.writeFileSync(scriptPath, `
+const fs = require('node:fs');
+const args = process.argv.slice(2);
+fs.appendFileSync(process.env.TMUX_FAKE_LOG, args.join(' ') + '\\n');
+if (args[0] === 'display-message') {
+  process.stdout.write((process.env.TMUX_FAKE_PANE_HEIGHT || '10') + '\\n');
+} else if (args[0] === 'capture-pane') {
+  for (let index = 1; index <= 25; index += 1) {
+    process.stdout.write('line-' + String(index).padStart(2, '0') + '\\n');
+  }
+}
 `, 'utf-8');
-  fs.chmodSync(tmuxPath, 0o755);
+  if (process.platform === 'win32') {
+    fs.writeFileSync(tmuxPath, `@echo off\r\n"${process.execPath}" "${scriptPath}" %*\r\n`, 'utf-8');
+  } else {
+    fs.writeFileSync(tmuxPath, `#!/usr/bin/env sh\nexec "${process.execPath}" "${scriptPath}" "$@"\n`, 'utf-8');
+    fs.chmodSync(tmuxPath, 0o755);
+  }
   return { binDir, logPath };
 }
 

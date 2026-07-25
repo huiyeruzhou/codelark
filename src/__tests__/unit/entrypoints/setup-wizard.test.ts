@@ -115,7 +115,7 @@ test('real setup wizard wizard e2e creates credentials in an isolated home and w
   assert.match(realFeishuScript, /defaultRealFeishuTestEnvFile/);
   assert.match(realFeishuScript, /valueArg\(argv, '--test-env-file', defaultRealFeishuTestEnvFile\(\)\)/);
 
-  const wizardSource = fs.readFileSync(path.join(process.cwd(), 'src', 'entrypoints', 'setup-wizard.ts'), 'utf-8');
+  const wizardSource = fs.readFileSync(path.join(process.cwd(), 'src', 'entrypoints', 'setup-wizard.ts'), 'utf-8').replace(/\r\n/g, '\n');
   assert.match(wizardSource, /'auth', 'qrcode', url, '--ascii'/);
   assert.doesNotMatch(wizardSource, /QRCode\.toString/);
   assert.match(wizardSource, /config\.toml/);
@@ -134,7 +134,7 @@ test('setup wizard binds lark-cli runtime with user-default identity and resets 
 });
 
 test('setup wizard refreshes lark-cli identity policy after user authorization', () => {
-  const wizardSource = fs.readFileSync(path.join(process.cwd(), 'src', 'entrypoints', 'setup-wizard.ts'), 'utf-8');
+  const wizardSource = fs.readFileSync(path.join(process.cwd(), 'src', 'entrypoints', 'setup-wizard.ts'), 'utf-8').replace(/\r\n/g, '\n');
   const start = wizardSource.indexOf('async function ensureCodeLarkUserAuthorization');
   const end = wizardSource.indexOf('function existingFeishuCredentials', start);
   const body = wizardSource.slice(start, end);

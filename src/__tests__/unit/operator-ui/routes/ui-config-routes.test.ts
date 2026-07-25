@@ -197,7 +197,7 @@ describe('Ui config application', () => {
   });
 
   it('keeps the browser form submission keys equal to the backend input contract', () => {
-    const source = fs.readFileSync(path.join(process.cwd(), 'src/operator-ui/shell.ts'), 'utf-8');
+    const source = fs.readFileSync(path.join(process.cwd(), 'src/operator-ui/shell.ts'), 'utf-8').replace(/\r\n/g, '\n');
     const body = source.match(/function formPayload\(\) \{\s*return \{([\s\S]*?)\n\s*\};\n\s*\}/)?.[1] || '';
     const browserKeys = [...body.matchAll(/^\s+(\w+):/gm)].map((match) => match[1]).sort();
 
