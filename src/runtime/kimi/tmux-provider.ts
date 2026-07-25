@@ -55,6 +55,10 @@ export function kimiTmuxSessionName(sessionId: string): string {
   return `clk-kimi-${sessionId}`;
 }
 
+export function kimiSessionIdForBridgeSession(bridgeSessionId: string): string {
+  return `session_${bridgeSessionId}`;
+}
+
 function shellQuote(value: string): string {
   if (/^[A-Za-z0-9_@%+=:,./-]+$/.test(value)) return value;
   return `'${value.replace(/'/g, "'\\''")}'`;
@@ -417,29 +421,6 @@ async function waitForKimiSessionIdFromTmux(context: KimiTuiRunContext): Promise
   throw new Error('Timed out waiting for Kimi to print its session id.');
 }
 
-async function waitForKimiSessionIdOnScreen(
-  context: KimiTuiRunContext,
-  timeoutMs: number,
-): Promise<string | null> {
-  if (context.sessionId) return context.sessionId;
-  const pollIntervalMs = parsePositiveIntEnv(
-    'CODELARK_KIMI_TMUX_POLL_INTERVAL_MS',
-    DEFAULT_KIMI_POLL_INTERVAL_MS,
-    50,
-  );
-  const startedAtMs = Date.now();
-  while (Date.now() - startedAtMs <= timeoutMs) {
-    const capture = await tmuxCore.capturePane(context.targetPane, 160);
-    const parsed = parseKimiSessionIdFromScreen(capture.screen);
-    if (parsed) {
-      context.sessionId = parsed;
-      return parsed;
-    }
-    await sleep(pollIntervalMs);
-  }
-  return null;
-}
-
 async function waitForKimiSessionFileBySessionId(context: KimiTuiRunContext): Promise<void> {
   if (!context.sessionId) throw new Error('Kimi session id is required before locating wire.jsonl.');
   const timeoutMs = parsePositiveIntEnv(
@@ -469,57 +450,6 @@ async function waitForKimiSessionFileBySessionId(context: KimiTuiRunContext): Pr
     await sleep(pollIntervalMs);
   }
   throw new Error(`Timed out waiting for Kimi session file for ${context.sessionId}.`);
-}
-
-async function captureKimiResumeHint(
-  context: KimiTuiRunContext,
-  options: { requireKnownSession?: boolean } = {},
-): Promise<void> {
-  const requireKnownSession = options.requireKnownSession !== false;
-  if ((requireKnownSession && !context.sessionId) || isDebugTmuxKeepAlive()) return;
-  try {
-    await tmuxCore.sendActions(context.targetPane, [
-      { type: 'key', key: 'C-c' },
-      { type: 'key', key: 'C-c' },
-    ], { delayMs: 150 });
-    await sleep(500);
-    const capture = await tmuxCore.capturePane(context.targetPane, 160);
-    const parsed = parseKimiSessionIdFromScreen(capture.screen);
-    if (parsed) context.sessionId = parsed;
-  } catch (error) {
-    console.warn('[kimi-tmux] Failed to capture Kimi resume hint:', error);
-  }
-}
-
-async function initializeFreshKimiSessionFromResumeHint(
-  context: KimiTuiRunContext,
-  params: StreamChatParams,
-): Promise<void> {
-  transitionRuntimeTmuxInputState(
-    'kimi',
-    context.sessionName,
-    'starting_session',
-    'discovering and resuming a fresh Kimi session before input',
-  );
-  const timeoutMs = parsePositiveIntEnv(
-    'CODELARK_KIMI_TMUX_SESSION_ID_TIMEOUT_MS',
-    DEFAULT_KIMI_SESSION_ID_TIMEOUT_MS,
-    1_000,
-  );
-  const fastPathMs = Math.min(timeoutMs, 1_500);
-  const directSessionId = await waitForKimiSessionIdOnScreen(context, fastPathMs);
-  if (directSessionId) return;
-
-  await captureKimiResumeHint(context, { requireKnownSession: false });
-  if (!context.sessionId) {
-    throw new Error('Timed out waiting for Kimi to print its resume session id.');
-  }
-
-  await launchTmuxKimiSession(context.sessionName, {
-    ...params,
-    kimiSessionId: context.sessionId,
-  });
-  await waitForKimiSessionIdFromTmux(context);
 }
 
 export interface KimiTmuxInputSession {
@@ -572,12 +502,15 @@ export async function ensureKimiTmuxInputSession(
 
   if (!inspection.exists) {
     assertKimiLaunchAuthentication(params.model);
-    await launchTmuxKimiSession(sessionName, params);
+    const launchSessionId = params.kimiSessionId || kimiSessionIdForBridgeSession(params.sessionId);
+    context.sessionId = launchSessionId;
+    await launchTmuxKimiSession(sessionName, {
+      ...params,
+      kimiSessionId: launchSessionId,
+    });
     await ensureKimiTmuxInputKeys();
     if (params.kimiSessionId) {
       await waitForKimiSessionIdFromTmux(context);
-    } else {
-      await initializeFreshKimiSessionFromResumeHint(context, params);
     }
   } else if (inspection.needsReadiness || !context.sessionId) {
     await ensureKimiTmuxInputKeys();

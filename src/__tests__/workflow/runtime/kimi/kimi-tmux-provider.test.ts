@@ -133,10 +133,10 @@ function actionNames(actions: TmuxSendAction[]): string[] {
 }
 
 describe('kimi-tmux-provider workflow', () => {
-  it('bootstraps fresh Kimi sessions through resume hints, steers with Ctrl-S, and streams wire records', async () => {
+  it('starts a fresh deterministic Kimi session once, steers with Ctrl-S, and streams wire records', async () => {
     const kimiHome = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-kimi-workflow-home-'));
     const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-kimi-workflow-cwd-'));
-    const sessionId = 'session_aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+    const sessionId = 'session_bridge-kimi-workflow';
     const ensureCalls: string[] = [];
     let extendedKeysCalls = 0;
     const sendCalls: Array<{ target: string; actions: string[] }> = [];
@@ -207,13 +207,11 @@ describe('kimi-tmux-provider workflow', () => {
         workingDirectory: cwd,
       })));
 
-      assert.equal(ensureCalls.length, 2);
+      assert.equal(ensureCalls.length, 1);
       assert.equal(extendedKeysCalls, 1, 'fresh lifecycle enables Kimi-compatible Enter handling once');
-      assert.match(ensureCalls[0]!, /\bkimi -y\b/);
-      assert.doesNotMatch(ensureCalls[0]!, / -r /);
-      assert.match(ensureCalls[1]!, new RegExp(`\\bkimi -r ${sessionId} -y\\b`));
+      assert.match(ensureCalls[0]!, new RegExp(`\\bkimi -r ${sessionId} -y\\b`));
 
-      assert.ok(sendCalls.some((call) => call.actions.join(',') === 'C-c,C-c'));
+      assert.equal(sendCalls.some((call) => call.actions.join(',') === 'C-c,C-c'), false);
       assert.deepEqual(injectCalls, [{
         target: 'clk-kimi-bridge-kimi-workflow:0.0',
         prompt: 'hello fresh kimi',
@@ -245,7 +243,7 @@ describe('kimi-tmux-provider workflow', () => {
     }
   });
 
-  it('continues an existing Kimi session directly without a fresh resume-hint bootstrap', async () => {
+  it('continues an existing Kimi session directly without starting another process', async () => {
     const kimiHome = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-kimi-resume-home-'));
     const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-kimi-resume-cwd-'));
     const sessionId = 'session_bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';

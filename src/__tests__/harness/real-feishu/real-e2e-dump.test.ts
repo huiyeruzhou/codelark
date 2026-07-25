@@ -11,7 +11,7 @@ import {
   kimiThinkingStatusOnlyIssues,
   scriptedKimiToolCardIssues,
   scriptedKimiHistoryTranscriptIssues,
-  scriptedKimiResumeAndSteerIssues,
+  scriptedKimiLifecycleAndSteerIssues,
   scriptedKimiRuntimeSlotIssues,
   scriptedKimiWireTranscriptIssues,
   streamCardCheckpointVisibleText,
@@ -558,34 +558,31 @@ describe('unit::real-e2e-dump::live-log-scoping', () => {
     );
   });
 
-  it('validates scripted Kimi resume-hint and Ctrl-S steer evidence', () => {
+  it('validates one deterministic scripted Kimi launch and Ctrl-S steer evidence', () => {
     const kimiHome = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-real-e2e-scripted-kimi-'));
     try {
       const sessionId = 'session_scripted_kimi_unit';
       const cwd = '/tmp/scripted-kimi-unit';
       fs.writeFileSync(path.join(kimiHome, 'scripted-kimi-launches.jsonl'), [
-        JSON.stringify({ argv: [], resumed: false, cwd }),
         JSON.stringify({ argv: ['-r', sessionId], resumed: true, cwd }),
         '',
       ].join('\n'));
       fs.writeFileSync(path.join(kimiHome, 'scripted-kimi-keys.log'), [
-        '03',
-        '03',
         Buffer.from('prompt').toString('hex') + '13',
         '',
       ].join('\n'));
 
-      assert.deepEqual(scriptedKimiResumeAndSteerIssues({ kimiHome, sessionId, cwd }), []);
+      assert.deepEqual(scriptedKimiLifecycleAndSteerIssues({ kimiHome, sessionId, cwd }), []);
       assert.deepEqual(
-        scriptedKimiResumeAndSteerIssues({ kimiHome, sessionId: 'session_wrong', cwd }),
-        ['Scripted Kimi did not resume with "kimi -r session_wrong".'],
+        scriptedKimiLifecycleAndSteerIssues({ kimiHome, sessionId: 'session_wrong', cwd }),
+        ['Scripted Kimi expected one initial "kimi -r session_wrong" launch; observed 0.'],
       );
     } finally {
       fs.rmSync(kimiHome, { recursive: true, force: true });
     }
   });
 
-  it('reports missing scripted Kimi resume-hint and steer evidence', () => {
+  it('reports disposable scripted Kimi startup and missing steer evidence', () => {
     const kimiHome = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-real-e2e-scripted-kimi-missing-'));
     try {
       fs.writeFileSync(path.join(kimiHome, 'scripted-kimi-launches.jsonl'), `${JSON.stringify({
@@ -595,14 +592,15 @@ describe('unit::real-e2e-dump::live-log-scoping', () => {
       })}\n`);
       fs.writeFileSync(path.join(kimiHome, 'scripted-kimi-keys.log'), '03\n');
 
-      assert.deepEqual(scriptedKimiResumeAndSteerIssues({
+      assert.deepEqual(scriptedKimiLifecycleAndSteerIssues({
         kimiHome,
         sessionId: 'session_missing',
         cwd: '/tmp/expected',
       }), [
-        'Scripted Kimi did not resume with "kimi -r session_missing".',
+        'Scripted Kimi expected one initial "kimi -r session_missing" launch; observed 0.',
+        'Scripted Kimi unexpectedly started 1 disposable session(s) before the deterministic launch.',
         'Scripted Kimi launch cwd never matched /tmp/expected.',
-        'Scripted Kimi expected at least two Ctrl-C bytes before resume hint; observed 1.',
+        'Scripted Kimi must not terminate its initial TUI to discover a session id; observed 1 Ctrl-C byte(s).',
         'Scripted Kimi did not observe Ctrl-S steer after prompt delivery.',
       ]);
     } finally {

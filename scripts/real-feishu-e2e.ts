@@ -24,7 +24,7 @@ import {
   kimiThinkingStatusOnlyIssues,
   scriptedKimiToolCardIssues,
   scriptedKimiHistoryTranscriptIssues,
-  scriptedKimiResumeAndSteerIssues,
+  scriptedKimiLifecycleAndSteerIssues,
   scriptedKimiRuntimeSlotIssues,
   scriptedKimiWireTranscriptIssues,
 } from '../src/bridge/diagnostics/real-e2e-dump.js';
@@ -1622,7 +1622,7 @@ function canonicalRequiredCheckNamesForParts(scenario: string, providerSuffix: s
   if (scenario === 'basic-dialogue-suite') {
     required.add('basic_dialogue_stream_card_checkpoints');
     required.add('basic_dialogue_terminal_append_input_delivered');
-    required.add('basic_dialogue_scripted_kimi_resume_hint_and_ctrl_s');
+    required.add('basic_dialogue_scripted_kimi_lifecycle_and_ctrl_s');
     required.add('basic_dialogue_kimi_runtime_slot_persisted');
     required.add('basic_dialogue_kimi_wire_transcript_read');
     required.add('basic_dialogue_kimi_history_transcript_excludes_thinking');
@@ -2339,19 +2339,20 @@ function writeScriptedKimiExecutable(options: CliOptions): string {
 const fs = require('node:fs');
 const path = require('node:path');
 
-const sessionId = ${JSON.stringify(sessionId)};
+const fallbackSessionId = ${JSON.stringify(sessionId)};
 const kimiHome = process.env.KIMI_CODE_HOME;
 if (!kimiHome) {
   process.stderr.write('KIMI_CODE_HOME is required\\n');
   process.exit(2);
 }
 
-const sessionDir = path.join(kimiHome, 'sessions', 'wd_real-feishu-basic-dialogue', sessionId);
-const wirePath = path.join(sessionDir, 'agents', 'main', 'wire.jsonl');
 const launchLogPath = path.join(kimiHome, 'scripted-kimi-launches.jsonl');
 const keyLogPath = path.join(kimiHome, 'scripted-kimi-keys.log');
 const resumeIndex = process.argv.indexOf('-r');
-const resumed = resumeIndex >= 0 && process.argv[resumeIndex + 1] === sessionId;
+const resumed = resumeIndex >= 0 && Boolean(process.argv[resumeIndex + 1]);
+const sessionId = resumed ? process.argv[resumeIndex + 1] : fallbackSessionId;
+const sessionDir = path.join(kimiHome, 'sessions', 'wd_real-feishu-basic-dialogue', sessionId);
+const wirePath = path.join(sessionDir, 'agents', 'main', 'wire.jsonl');
 
 fs.mkdirSync(path.dirname(wirePath), { recursive: true });
 fs.writeFileSync(path.join(sessionDir, 'state.json'), JSON.stringify({
@@ -3855,21 +3856,23 @@ function scenarioSpecificChecks(
         ? `Observed terminal append input delivery audit entries for ${BASIC_DIALOGUE_APPEND_INPUT_PROVIDER_KEYS.join(', ')}.`
         : appendIssues.join('\n'),
     });
-    const kimiResumeAndSteerIssues = scriptedKimiResumeAndSteerIssues({
+    const observedKimiSessionId = report.runtimeSlots.find((slot) => slot.runtime === 'kimi')?.kimiSessionId
+      || scriptedKimiSessionId(options);
+    const kimiLifecycleAndSteerIssues = scriptedKimiLifecycleAndSteerIssues({
       kimiHome: options.kimiHome,
-      sessionId: scriptedKimiSessionId(options),
+      sessionId: observedKimiSessionId,
       cwd: options.workDir,
     });
     checks.push({
-      name: 'basic_dialogue_scripted_kimi_resume_hint_and_ctrl_s',
-      ok: kimiResumeAndSteerIssues.length === 0,
-      detail: kimiResumeAndSteerIssues.length === 0
-        ? 'Observed scripted Kimi fresh launch, resume via resume-hint session id, two Ctrl-C bytes, and Ctrl-S steer.'
-        : kimiResumeAndSteerIssues.join('\n'),
+      name: 'basic_dialogue_scripted_kimi_lifecycle_and_ctrl_s',
+      ok: kimiLifecycleAndSteerIssues.length === 0,
+      detail: kimiLifecycleAndSteerIssues.length === 0
+        ? 'Observed one deterministic Kimi session launch, no disposable bootstrap process, and Ctrl-S steer.'
+        : kimiLifecycleAndSteerIssues.join('\n'),
     });
     const kimiRuntimeSlotIssues = scriptedKimiRuntimeSlotIssues({
       report,
-      sessionId: scriptedKimiSessionId(options),
+      sessionId: observedKimiSessionId,
       cwd: options.workDir,
     });
     checks.push({
@@ -5037,7 +5040,7 @@ function plannedSuccessCheckNames(options: CliOptions): string[] {
     names.push(
       'basic_dialogue_stream_card_checkpoints',
       'basic_dialogue_terminal_append_input_delivered',
-      'basic_dialogue_scripted_kimi_resume_hint_and_ctrl_s',
+      'basic_dialogue_scripted_kimi_lifecycle_and_ctrl_s',
       'basic_dialogue_kimi_runtime_slot_persisted',
       'basic_dialogue_kimi_wire_transcript_read',
       'basic_dialogue_kimi_history_transcript_excludes_thinking',

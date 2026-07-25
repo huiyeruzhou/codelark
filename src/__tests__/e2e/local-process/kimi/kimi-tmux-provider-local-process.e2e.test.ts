@@ -56,7 +56,7 @@ function writeFakeKimiExecutable(binDir: string, params: {
 const fs = require('node:fs');
 const path = require('node:path');
 
-const sessionId = ${JSON.stringify(params.sessionId)};
+const fallbackSessionId = ${JSON.stringify(params.sessionId)};
 const ctrlCPath = ${JSON.stringify(params.ctrlCPath)};
 const keyLogPath = ${JSON.stringify(params.keyLogPath)};
 const launchLogPath = ${JSON.stringify(params.launchLogPath)};
@@ -66,10 +66,11 @@ if (!kimiHome) {
   process.exit(2);
 }
 
+const resumeIndex = process.argv.indexOf('-r');
+const resumed = resumeIndex >= 0 && Boolean(process.argv[resumeIndex + 1]);
+const sessionId = resumed ? process.argv[resumeIndex + 1] : fallbackSessionId;
 const sessionDir = path.join(kimiHome, 'sessions', 'wd_fake-local-process', sessionId);
 const wirePath = path.join(sessionDir, 'agents', 'main', 'wire.jsonl');
-const resumeIndex = process.argv.indexOf('-r');
-const resumed = resumeIndex >= 0 && process.argv[resumeIndex + 1] === sessionId;
 fs.appendFileSync(launchLogPath, JSON.stringify({ argv: process.argv.slice(2), resumed }) + '\\n');
 fs.mkdirSync(path.dirname(wirePath), { recursive: true });
 fs.writeFileSync(path.join(sessionDir, 'state.json'), JSON.stringify({
@@ -126,7 +127,7 @@ setInterval(() => {}, 1000);
 }
 
 describe('Kimi tmux provider local-process smoke', () => {
-  it('drives and reuses a persistent Kimi-like TUI through tmux, wire mirror, Ctrl-S steer, and resume hint capture', { timeout: 30_000 }, async (t: TestContext) => {
+  it('drives and reuses one persistent Kimi-like TUI through tmux, wire mirror, and Ctrl-S steer', { timeout: 30_000 }, async (t: TestContext) => {
     if (!(await tmuxAvailable())) {
       t.skip('tmux is not available');
       return;
@@ -148,7 +149,7 @@ describe('Kimi tmux provider local-process smoke', () => {
     const ctrlCPath = path.join(tempDir, 'ctrl-c-count');
     const keyLogPath = path.join(tempDir, 'keys.hex');
     const launchLogPath = path.join(tempDir, 'launches.jsonl');
-    const sessionId = 'session_local-kimi-tmux-e2e';
+    const sessionId = 'session_bridge-kimi-local-e2e';
     fs.mkdirSync(binDir, { recursive: true });
     fs.mkdirSync(workDir, { recursive: true });
     fs.mkdirSync(kimiHome, { recursive: true });
@@ -177,15 +178,14 @@ describe('Kimi tmux provider local-process smoke', () => {
 
       const keyLog = fs.readFileSync(keyLogPath, 'utf-8');
       assert.match(keyLog, /13/, 'Kimi tmux provider should send Ctrl-S after the prompt');
-      assert.equal(fs.readFileSync(ctrlCPath, 'utf-8'), '2', 'Kimi tmux provider should press Ctrl-C twice to expose the resume hint');
+      assert.equal(fs.existsSync(ctrlCPath), false, 'fresh Kimi startup must not terminate the first TUI just to discover its session id');
       assert.equal(findKimiSessionFileById(sessionId, workDir)?.sessionId, sessionId);
       const launches = fs.readFileSync(launchLogPath, 'utf-8')
         .trim()
         .split(/\r?\n/)
         .map((line) => JSON.parse(line) as { argv: string[]; resumed: boolean });
-      assert.equal(launches[0]?.resumed, false, 'fresh Kimi launch should not have a known session id');
-      assert.deepEqual(launches[1]?.argv.slice(0, 2), ['-r', sessionId]);
-      assert.equal(launches[1]?.resumed, true, 'provider should relaunch Kimi with the resume session id');
+      assert.deepEqual(launches[0]?.argv.slice(0, 2), ['-r', sessionId]);
+      assert.equal(launches[0]?.resumed, true, 'provider should create the deterministic session in its first Kimi process');
 
       const live = await execFileAsync('tmux', ['has-session', '-t', tmuxSessionName])
         .then(() => true, () => false);
@@ -200,7 +200,7 @@ describe('Kimi tmux provider local-process smoke', () => {
       const secondEvents = parseSse(secondRaw);
       assert.equal(secondEvents.some((event) => event.type === 'text' && event.data === 'fake kimi answer 2'), true);
       const launchesAfterFollowUp = fs.readFileSync(launchLogPath, 'utf-8').trim().split(/\r?\n/);
-      assert.equal(launchesAfterFollowUp.length, 2, 'the follow-up must reuse the resumed Kimi process');
+      assert.equal(launchesAfterFollowUp.length, 1, 'the follow-up must reuse the initial Kimi process');
     } finally {
       await execFileAsync('tmux', ['kill-session', '-t', tmuxSessionName]).catch(() => {});
       for (const [key, value] of Object.entries(previousEnv)) {

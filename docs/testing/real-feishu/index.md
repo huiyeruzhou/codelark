@@ -22,7 +22,7 @@ npm run real:feishu:e2e -- --coverage-matrix --reports-dir work/real-feishu
 
 当前 `work/real-feishu` 报告目录的关键覆盖率是：全量 2/81 = 2.5%，current 非 legacy 2/53 = 3.8%，current tmux 2/22 = 9.1%，Kimi current 2/8 = 25.0%，Kimi current tmux 2/7 = 28.6%。卡片前端 current 切片目前是 0/30 = 0.0%，卡片前端 current tmux/runtime-neutral 切片是 0/13 = 0.0%；这些卡片切片覆盖 stream/final card、`/t` rich card、文件确认卡、CardKit 表单、agent question form 和 Markdown card。
 
-`canonical-pass` 不是报告自称 `canonicalEligibility.eligible=true` 就能获得。矩阵还会要求报告里有并通过公共真实飞书 gate：逐消息发送 observation、最终 Feishu transcript 读取、coverage metadata、required dump/provider checks、mirror 异常检查和清理检查。Kimi current 条目还必须有 Kimi runtime identity、`kimi_wire_jsonl_found`、provider output path、mirror final 去重，以及对应场景的 transcript gate；例如 `command-state` 还要求 runtime/settings 与 file/large-file transcript gate，`basic-dialogue-suite` 还要求 Kimi resume hint、`Ctrl-S` steer、wire transcript、history transcript 和 thinking/status 隔离 gate。缺少这些 evidence 的 success JSON 会被降级为 `diagnostic-pass`，不能计入 Kimi canonical。
+`canonical-pass` 不是报告自称 `canonicalEligibility.eligible=true` 就能获得。矩阵还会要求报告里有并通过公共真实飞书 gate：逐消息发送 observation、最终 Feishu transcript 读取、coverage metadata、required dump/provider checks、mirror 异常检查和清理检查。Kimi current 条目还必须有 Kimi runtime identity、`kimi_wire_jsonl_found`、provider output path、mirror final 去重，以及对应场景的 transcript gate；例如 `command-state` 还要求 runtime/settings 与 file/large-file transcript gate，`basic-dialogue-suite` 还要求 Kimi 单进程 session 生命周期、`Ctrl-S` steer、wire transcript、history transcript 和 thinking/status 隔离 gate。缺少这些 evidence 的 success JSON 会被降级为 `diagnostic-pass`，不能计入 Kimi canonical。
 
 验收 Kimi 主线场景时使用硬 gate：
 
@@ -92,7 +92,7 @@ CODELARK_REAL_FEISHU_TEST_LARK_CLI_XDG_DATA_HOME=/home/me/.codelark/real-feishu-
 
 | 场景 | 角色 | 维护要求 |
 | --- | --- | --- |
-| `basic-dialogue-suite` | 最高优先级长流程 | 使用 `--scripted-basic-dialogue --launch-bridge` 时，通过隔离 Codex Responses proxy、CCR fake backend 和 fake Kimi executable 串起 `codex-sdk -> claude-sdk -> kimi-tmux -> codex-tmux -> claude-pty -> codex-pty`，不依赖 live bridge 或宿主 Kimi 会话；Kimi 阶段还必须在非 final 流式状态区 checkpoint 中出现「当前思考」，且 completed final card 不能泄漏 thinking 文本，证明 fresh Kimi 启动经两次 Ctrl-C resume hint 后用 `kimi -r <session>` 恢复，随后对用户输入发送 Ctrl-S steer，并证明 `ChannelChat.runtimeBridgeSessionIds.kimi` 保留独立 Kimi `BridgeSession`、能定位同一个 `wire.jsonl`，从该 transcript 读回本轮 think、marker 文本和 `step.end`，且历史 transcript 读取只返回 marker 正文、不返回 thinking/status 内容。 |
+| `basic-dialogue-suite` | 最高优先级长流程 | 使用 `--scripted-basic-dialogue --launch-bridge` 时，通过隔离 Codex Responses proxy、CCR fake backend 和 fake Kimi executable 串起 `codex-sdk -> claude-sdk -> kimi-tmux -> codex-tmux -> claude-pty -> codex-pty`，不依赖 live bridge 或宿主 Kimi 会话；Kimi 阶段还必须在非 final 流式状态区 checkpoint 中出现「当前思考」，且 completed final card 不能泄漏 thinking 文本，证明 fresh Kimi 首次即以稳定 session id 单进程启动、没有 Ctrl-C bootstrap，随后对用户输入发送 Ctrl-S steer，并证明 `ChannelChat.runtimeBridgeSessionIds.kimi` 保留独立 Kimi `BridgeSession`、能定位同一个 `wire.jsonl`，从该 transcript 读回本轮 think、marker 文本和 `step.end`，且历史 transcript 读取只返回 marker 正文、不返回 thinking/status 内容。 |
 | `runtime-smoke` | provider 路径健康检查 | 只在需要快速完整 provider 信号时运行。 |
 | `session-command-suite` | 命令和会话管理 | 覆盖 `/status`、`/runtime`、`/p`、`/help`、`/set`、`/new`、`/cd`、`/current`、`/check`、`/t` 和一个最终 marker prompt。 |
 | `history-suite` | 历史功能簇 | 进入 runtime/provider 矩阵；当前已有 canonical 报告是 `real-feishu::history-suite::codex-tmux` 的 `histsuite-codex-tmux-live-0858.json`，`kimi-tmux` 仍需真实飞书重跑。 |
@@ -133,7 +133,7 @@ CODELARK_REAL_FEISHU_TEST_LARK_CLI_XDG_DATA_HOME=/home/me/.codelark/real-feishu-
 - `created_document_cleanup_completed`：云文档 from-scratch 场景创建的测试文档必须删除，除非失败运行明确保留诊断资源。
 - 初始测试群创建：未传 `--chat-id` 时必须通过产品 `/new` use case 创建，并能确定 bot app id 与操作者 open_id，不能创建没有 bot 或无法绑定到当前用户的空群。
 - `fake_ccr_backend_used`：`--fake-ccr` 场景必须证明 fake backend 收到请求，并且最终 bot 回复包含 fake marker。
-- `basic_dialogue_scripted_kimi_resume_hint_and_ctrl_s`：scripted `basic-dialogue-suite` 必须证明 Kimi fake executable 记录了 fresh launch、resume hint 对应的 `kimi -r <session>`、至少两次 Ctrl-C 和一次 Ctrl-S steer。
+- `basic_dialogue_scripted_kimi_lifecycle_and_ctrl_s`：scripted `basic-dialogue-suite` 必须证明 Kimi fake executable 只记录一次稳定 `kimi -r <session>` 启动、零次用于发现 session 的 Ctrl-C，以及至少一次 Ctrl-S steer。
 - `basic_dialogue_kimi_runtime_slot_persisted`：scripted `basic-dialogue-suite` 必须证明聊天绑定的 Kimi runtime slot 指向独立 Kimi `BridgeSession`，且该 session 记录的 Kimi session id/cwd 能解析到 `wire.jsonl`。
 - `basic_dialogue_kimi_wire_transcript_read`：scripted `basic-dialogue-suite` 必须从 Kimi runtime slot 的 `wire.jsonl` 读回本轮 scripted thinking、final marker text 和 `step.end`，不能只证明文件存在。
 - `basic_dialogue_kimi_history_transcript_excludes_thinking`：scripted `basic-dialogue-suite` 必须从同一个 Kimi runtime slot 的历史 transcript 读取路径读回 final marker，并证明「当前思考」和 scripted thinking 文本不会进入历史正文。

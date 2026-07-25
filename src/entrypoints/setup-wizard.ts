@@ -300,6 +300,19 @@ export function shouldConfirmTmuxAutoInstall(platform: NodeJS.Platform = process
   return platform !== 'win32';
 }
 
+export function withTmuxPostInstallPath(
+  platform: NodeJS.Platform,
+  currentPath: string | undefined,
+  localAppData: string | undefined,
+): string {
+  const value = currentPath || '';
+  if (platform !== 'win32' || !localAppData?.trim()) return value;
+  const winGetLinks = path.win32.join(localAppData.trim(), 'Microsoft', 'WinGet', 'Links');
+  const entries = value.split(path.win32.delimiter).filter(Boolean);
+  if (entries.some((entry) => entry.toLowerCase() === winGetLinks.toLowerCase())) return value;
+  return [winGetLinks, ...entries].join(path.win32.delimiter);
+}
+
 async function runTmuxInstallCommand(guidance: TmuxInstallGuidance): Promise<void> {
   if (!guidance.command) {
     throw new Error(guidance.lines.join('\n'));
@@ -349,6 +362,7 @@ async function promptTmuxPrerequisite(): Promise<TmuxPrerequisiteResult> {
 
   p.note(`开始执行：${guidance.commandDisplay}`, '安装 tmux');
   await runTmuxInstallCommand(guidance);
+  process.env.PATH = withTmuxPostInstallPath(process.platform, process.env.PATH, process.env.LOCALAPPDATA);
   if (await isTmuxCommandAvailable()) {
     p.note('tmux 已安装并可执行。', 'tmux 已就绪');
     return 'installed';

@@ -18,6 +18,7 @@ import {
 } from '../../../../runtime/kimi/session-index.js';
 import { assertKimiLaunchAuthentication } from '../../../../runtime/kimi/auth.js';
 import {
+  kimiSessionIdForBridgeSession,
   parseKimiRuntimeErrorFromLog,
   parseKimiSessionIdFromScreen,
 } from '../../../../runtime/kimi/tmux-provider.js';
@@ -141,6 +142,13 @@ describe('Kimi tmux provider helpers', () => {
     );
     assert.equal(
       parseKimiSessionIdFromScreen('To resume this session: kimi -r session_734e073e-5199-49cf-a004-d27fefb8e2d1'),
+      'session_734e073e-5199-49cf-a004-d27fefb8e2d1',
+    );
+  });
+
+  it('derives one stable Kimi session id from its BridgeSession', () => {
+    assert.equal(
+      kimiSessionIdForBridgeSession('734e073e-5199-49cf-a004-d27fefb8e2d1'),
       'session_734e073e-5199-49cf-a004-d27fefb8e2d1',
     );
   });

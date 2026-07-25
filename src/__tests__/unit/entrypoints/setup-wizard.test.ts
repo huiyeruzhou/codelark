@@ -15,6 +15,7 @@ import {
   renderLarkCliUrlQr,
   saveSetupConfigToHomeToml,
   shouldConfirmTmuxAutoInstall,
+  withTmuxPostInstallPath,
 } from '../../../entrypoints/setup-wizard.js';
 import {
   FEISHU_REQUIRED_CALLBACKS,
@@ -282,6 +283,21 @@ test('auto-installs psmux on Windows without an extra confirmation prompt', () =
   assert.equal(shouldConfirmTmuxAutoInstall('win32'), false);
   assert.equal(shouldConfirmTmuxAutoInstall('darwin'), true);
   assert.equal(shouldConfirmTmuxAutoInstall('linux'), true);
+});
+
+test('refreshes the current Windows process PATH with WinGet command aliases after installing psmux', () => {
+  const current = 'C:\\Windows\\System32;C:\\Tools';
+  const links = 'C:\\Users\\tester\\AppData\\Local\\Microsoft\\WinGet\\Links';
+
+  assert.equal(
+    withTmuxPostInstallPath('win32', current, 'C:\\Users\\tester\\AppData\\Local'),
+    `${links};${current}`,
+  );
+  assert.equal(
+    withTmuxPostInstallPath('win32', `${links};${current}`, 'C:\\Users\\tester\\AppData\\Local'),
+    `${links};${current}`,
+  );
+  assert.equal(withTmuxPostInstallPath('linux', '/usr/bin', undefined), '/usr/bin');
 });
 
 test('documents Feishu setup permissions required by bridge and doc-to-chat', () => {

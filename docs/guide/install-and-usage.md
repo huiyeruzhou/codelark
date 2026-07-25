@@ -22,7 +22,7 @@ codelark run
 
 Windows 推荐使用原生 psmux，不使用 WSL。psmux 基于 Windows ConPTY，并提供 `tmux.exe` 兼容命令；CodeLark 的 tmux provider、Kimi runtime、session 复用和输入状态机都走这条路径。Windows x64 是主要支持目标，psmux 同时提供 ARM64 构建。
 
-`codelark setup` 检测不到 `tmux.exe` 时会直接调用 WinGet 安装 psmux，不再额外询问一次确认。
+`codelark setup` 检测不到 `tmux.exe` 时会直接调用 WinGet 安装 psmux，不再额外询问一次确认。安装成功后，向导会把 WinGet command links 加入当前进程 PATH 并立即复检，不要求为了完成本次 setup 重启终端。
 
 ```powershell
 winget install psmux --accept-package-agreements --accept-source-agreements

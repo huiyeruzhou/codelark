@@ -84,7 +84,7 @@ export interface KimiThinkingStatusOnlyPhase {
   thinkingText: string;
 }
 
-export interface ScriptedKimiResumeAndSteerAuditInput {
+export interface ScriptedKimiLifecycleAndSteerAuditInput {
   kimiHome: string;
   sessionId: string;
   cwd?: string;
@@ -510,7 +510,7 @@ function countHexByte(rawHexLines: string, byte: number): number {
   return count;
 }
 
-export function scriptedKimiResumeAndSteerIssues(input: ScriptedKimiResumeAndSteerAuditInput): string[] {
+export function scriptedKimiLifecycleAndSteerIssues(input: ScriptedKimiLifecycleAndSteerAuditInput): string[] {
   const issues: string[] = [];
   const launchLogPath = path.join(input.kimiHome, 'scripted-kimi-launches.jsonl');
   const keyLogPath = path.join(input.kimiHome, 'scripted-kimi-keys.log');
@@ -518,18 +518,18 @@ export function scriptedKimiResumeAndSteerIssues(input: ScriptedKimiResumeAndSte
   if (launches.length === 0) {
     issues.push(`No scripted Kimi launch records found at ${launchLogPath}.`);
   }
-  const freshLaunch = launches.find((launch) => launch.resumed === false);
-  if (!freshLaunch) {
-    issues.push('Scripted Kimi did not record an initial fresh launch before resume.');
-  }
-  const resumedLaunch = launches.find((launch) => (
+  const deterministicLaunches = launches.filter((launch) => (
     launch.resumed === true
       && Array.isArray(launch.argv)
       && launch.argv[0] === '-r'
       && launch.argv[1] === input.sessionId
   ));
-  if (!resumedLaunch) {
-    issues.push(`Scripted Kimi did not resume with "kimi -r ${input.sessionId}".`);
+  if (deterministicLaunches.length !== 1) {
+    issues.push(`Scripted Kimi expected one initial "kimi -r ${input.sessionId}" launch; observed ${deterministicLaunches.length}.`);
+  }
+  const freshLaunches = launches.filter((launch) => launch.resumed === false);
+  if (freshLaunches.length > 0) {
+    issues.push(`Scripted Kimi unexpectedly started ${freshLaunches.length} disposable session(s) before the deterministic launch.`);
   }
   if (input.cwd && launches.length > 0 && !launches.some((launch) => launch.cwd === input.cwd)) {
     issues.push(`Scripted Kimi launch cwd never matched ${input.cwd}.`);
@@ -541,8 +541,8 @@ export function scriptedKimiResumeAndSteerIssues(input: ScriptedKimiResumeAndSte
     return issues;
   }
   const ctrlCCount = countHexByte(keyLog, 0x03);
-  if (ctrlCCount < 2) {
-    issues.push(`Scripted Kimi expected at least two Ctrl-C bytes before resume hint; observed ${ctrlCCount}.`);
+  if (ctrlCCount > 0) {
+    issues.push(`Scripted Kimi must not terminate its initial TUI to discover a session id; observed ${ctrlCCount} Ctrl-C byte(s).`);
   }
   const ctrlSCount = countHexByte(keyLog, 0x13);
   if (ctrlSCount < 1) {

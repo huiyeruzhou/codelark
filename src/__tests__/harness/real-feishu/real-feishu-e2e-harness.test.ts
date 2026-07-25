@@ -87,7 +87,7 @@ const BASIC_DIALOGUE_KIMI_CANONICAL_CHECKS = [
   ...COMMON_CANONICAL_CHECKS,
   'basic_dialogue_stream_card_checkpoints',
   'basic_dialogue_terminal_append_input_delivered',
-  'basic_dialogue_scripted_kimi_resume_hint_and_ctrl_s',
+  'basic_dialogue_scripted_kimi_lifecycle_and_ctrl_s',
   'basic_dialogue_kimi_runtime_slot_persisted',
   'basic_dialogue_kimi_wire_transcript_read',
   'basic_dialogue_kimi_history_transcript_excludes_thinking',
@@ -3832,7 +3832,7 @@ describe('unit::real-feishu-e2e-harness::session-management-command-plan', () =>
     assert.ok(parsed.plannedSuccessCheckNames.includes('canonical_report_eligible'));
     assert.ok(parsed.plannedSuccessCheckNames.includes('basic_dialogue_stream_card_checkpoints'));
     assert.ok(parsed.plannedSuccessCheckNames.includes('basic_dialogue_terminal_append_input_delivered'));
-    assert.ok(parsed.plannedSuccessCheckNames.includes('basic_dialogue_scripted_kimi_resume_hint_and_ctrl_s'));
+    assert.ok(parsed.plannedSuccessCheckNames.includes('basic_dialogue_scripted_kimi_lifecycle_and_ctrl_s'));
     assert.ok(parsed.plannedSuccessCheckNames.includes('basic_dialogue_kimi_runtime_slot_persisted'));
     assert.ok(parsed.plannedSuccessCheckNames.includes('basic_dialogue_kimi_wire_transcript_read'));
     assert.ok(parsed.plannedSuccessCheckNames.includes('basic_dialogue_kimi_history_transcript_excludes_thinking'));
