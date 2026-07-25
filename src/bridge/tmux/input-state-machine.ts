@@ -1,4 +1,4 @@
-export type RuntimeTmuxInputRuntime = 'codex' | 'claude' | 'kimi';
+export type RuntimeTmuxInputRuntime = 'codex' | 'claude' | 'kimi' | 'cursor';
 
 export type RuntimeTmuxInputStateKind =
   | 'idle'

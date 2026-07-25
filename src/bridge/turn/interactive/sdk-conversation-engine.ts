@@ -38,17 +38,19 @@ import {
   parseContextUsageInfo,
   type ContextUsageInfo,
 } from '../../../shared/progress/context-usage.js';
-import { resolveClaudeRuntimeConfig, resolveKimiRuntimeConfig, resolveSessionRuntimeConfig } from '../../session/support.js';
+import { resolveClaudeRuntimeConfig, resolveCursorRuntimeConfig, resolveKimiRuntimeConfig, resolveSessionRuntimeConfig } from '../../session/support.js';
 import {
   getSessionActiveRuntime,
   getSessionClaudeSessionId,
   getSessionCodexThreadId,
   getSessionKimiSessionId,
+  getSessionCursorSessionId,
   getSessionSystemPrompt,
   getSessionWorkingDirectory,
   setSessionClaudeSessionIdUpdate,
   setSessionClaudeIdentityUpdate,
   setSessionKimiIdentityUpdate,
+  setSessionCursorIdentityUpdate,
 } from '../../../domain/session-runtime.js';
 import type { RuntimeAgent } from '../../../domain/session.js';
 
@@ -189,6 +191,7 @@ export async function processMessage(
     const runtimeConfig = resolveSessionRuntimeConfig(binding, session);
     const claudeRuntimeConfig = activeRuntime === 'claude' ? resolveClaudeRuntimeConfig(session, binding) : null;
     const kimiRuntimeConfig = activeRuntime === 'kimi' ? resolveKimiRuntimeConfig(session, binding) : null;
+    const cursorRuntimeConfig = activeRuntime === 'cursor' ? resolveCursorRuntimeConfig(session, binding) : null;
 
     const { savedContent, llmFiles, persistedFileMeta } = prepareSdkMessageAttachments({ text, files, workDir });
     store.addMessage(sessionId, 'user', savedContent);
@@ -207,7 +210,9 @@ export async function processMessage(
     }
 
     // Effective model
-    const effectiveModel = activeRuntime === 'kimi'
+    const effectiveModel = activeRuntime === 'cursor'
+      ? cursorRuntimeConfig?.model
+      : activeRuntime === 'kimi'
       ? kimiRuntimeConfig?.model
       : activeRuntime === 'claude'
         ? claudeRuntimeConfig?.model
@@ -215,6 +220,7 @@ export async function processMessage(
     const codexThreadId = getSessionCodexThreadId(session);
     const claudeSessionId = getSessionClaudeSessionId(session);
     const kimiSessionId = getSessionKimiSessionId(session);
+    const cursorSessionId = getSessionCursorSessionId(session);
 
     const permissionMode = runtimeConfig.mode === 'yolo' ? 'never' : 'acceptEdits';
 
@@ -241,6 +247,8 @@ export async function processMessage(
       codexThreadId: codexThreadId,
       claudeSessionId,
       kimiSessionId,
+      cursorSessionId,
+      cursorForce: cursorRuntimeConfig?.force,
       claudeExecutable: claudeRuntimeConfig?.executable,
       claudeProvider: claudeRuntimeConfig?.provider,
       model: effectiveModel,
@@ -480,7 +488,17 @@ async function consumeStream(
           try {
             const statusData = JSON.parse(event.data);
             if (statusData.session_id) {
-              if (activeRuntime === 'kimi') {
+              if (activeRuntime === 'cursor') {
+                store.updateSession(sessionId, setSessionCursorIdentityUpdate(
+                  statusData.session_id,
+                  typeof statusData.cwd === 'string' ? statusData.cwd : undefined,
+                ));
+                await options?.onRuntimeIdentity?.({
+                  runtime: 'cursor',
+                  sessionId: statusData.session_id,
+                  ...(typeof statusData.cwd === 'string' ? { cwd: statusData.cwd } : {}),
+                });
+              } else if (activeRuntime === 'kimi') {
                 store.updateSession(sessionId, setSessionKimiIdentityUpdate(
                   statusData.session_id,
                   typeof statusData.cwd === 'string' ? statusData.cwd : undefined,
@@ -524,7 +542,7 @@ async function consumeStream(
                   try { options.onThinkingNote(thinking); } catch { /* non-critical */ }
                 }
               }
-            } else if (typeof statusData.reasoning === 'string' && onPartialText) {
+            } else if (typeof statusData.reasoning === 'string' && onPartialText && !onStatusNote) {
               const note = statusData.reasoning.trim();
               if (note && note !== lastReasoningNote) {
                 lastReasoningNote = note;
@@ -586,7 +604,17 @@ async function consumeStream(
             }
             if (resultData.is_error) hasError = true;
             if (resultData.session_id) {
-              if (activeRuntime === 'kimi') {
+              if (activeRuntime === 'cursor') {
+                store.updateSession(sessionId, setSessionCursorIdentityUpdate(
+                  resultData.session_id,
+                  typeof resultData.cwd === 'string' ? resultData.cwd : undefined,
+                ));
+                await options?.onRuntimeIdentity?.({
+                  runtime: 'cursor',
+                  sessionId: resultData.session_id,
+                  ...(typeof resultData.cwd === 'string' ? { cwd: resultData.cwd } : {}),
+                });
+              } else if (activeRuntime === 'kimi') {
                 store.updateSession(sessionId, setSessionKimiIdentityUpdate(
                   resultData.session_id,
                   typeof resultData.cwd === 'string' ? resultData.cwd : undefined,

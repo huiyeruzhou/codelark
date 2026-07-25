@@ -16,6 +16,8 @@ import {
   getSessionClaudeCwd,
   getSessionClaudeSessionId,
   getSessionActiveRuntime,
+  getSessionCursorCwd,
+  getSessionCursorSessionId,
   getSessionKimiCwd,
   getSessionKimiSessionId,
   getSessionWorkingDirectory,
@@ -23,20 +25,23 @@ import {
 import {
   hasSessionCodexProviderOverride,
   resolveClaudeRuntimeConfig,
+  resolveCursorRuntimeConfig,
   resolveEffectiveCodexProvider,
   resolveEffectiveRuntimeMode,
   resolveKimiRuntimeConfig,
 } from '../support.js';
 
 export interface SessionDisplaySummary {
-  kind: 'bridge' | 'codex' | 'claude' | 'kimi';
-  runtime: 'codex' | 'claude' | 'kimi';
+  kind: 'bridge' | 'codex' | 'claude' | 'kimi' | 'cursor';
+  runtime: 'codex' | 'claude' | 'kimi' | 'cursor';
   bridgeSessionId?: string;
   sessionId?: string;
   claudeSessionId?: string;
   claudeCwd?: string;
   kimiSessionId?: string;
   kimiCwd?: string;
+  cursorSessionId?: string;
+  cursorCwd?: string;
   codexThreadId: string;
   threadId: string;
   displayTitle: string;
@@ -65,8 +70,10 @@ export interface SessionDisplayCounts {
   displayed: number;
   claudePhysical?: number;
   kimiPhysical?: number;
+  cursorPhysical?: number;
   bridgeClaudeLinked?: number;
   bridgeKimiLinked?: number;
+  bridgeCursorLinked?: number;
 }
 
 export interface SessionDisplayListPayload {
@@ -120,6 +127,7 @@ export function bridgeSessionMode(session: BridgeSession | null | undefined): st
 export function bridgeSessionExecutionProvider(session: BridgeSession | null | undefined): string {
   const activeRuntime = getSessionActiveRuntime(session);
   if (activeRuntime === 'kimi') return resolveKimiRuntimeConfig(session).provider;
+  if (activeRuntime === 'cursor') return resolveCursorRuntimeConfig(session).provider;
   if (activeRuntime === 'claude') return resolveClaudeRuntimeConfig(session).provider;
   return hasSessionCodexProviderOverride(session) ? resolveEffectiveCodexProvider(session) : 'default';
 }
@@ -163,6 +171,20 @@ export function findVisibleBridgeSessionByKimiSession(
   ));
 }
 
+export function findVisibleBridgeSessionByCursorSession(
+  store: Pick<BridgeStore, 'listSessions'>,
+  cursorSessionId: string,
+  cwd?: string,
+): BridgeSession | undefined {
+  if (!cursorSessionId) return undefined;
+  return store.listSessions().find((session) => (
+    isVisibleBridgeSession(session)
+    && getSessionActiveRuntime(session) === 'cursor'
+    && getSessionCursorSessionId(session) === cursorSessionId
+    && (!cwd || getSessionCursorCwd(session) === cwd || getSessionWorkingDirectory(session) === cwd)
+  ));
+}
+
 export function buildBridgeSessionDisplaySummary(
   session: BridgeSession,
   linkedCodexSession?: CodexSessionSummary,
@@ -175,17 +197,20 @@ export function buildBridgeSessionDisplaySummary(
   const creatorBadge = formatCreatorBadge('bridge');
   const claudeSessionId = getSessionClaudeSessionId(session) || undefined;
   const kimiSessionId = getSessionKimiSessionId(session) || undefined;
+  const cursorSessionId = getSessionCursorSessionId(session) || undefined;
   return {
     kind: 'bridge',
-    runtime: activeRuntime === 'claude' ? 'claude' : activeRuntime === 'kimi' ? 'kimi' : 'codex',
+    runtime: activeRuntime === 'claude' ? 'claude' : activeRuntime === 'kimi' ? 'kimi' : activeRuntime === 'cursor' ? 'cursor' : 'codex',
     bridgeSessionId: session.id,
     sessionId: session.id,
     claudeSessionId,
     claudeCwd: getSessionClaudeCwd(session) || undefined,
     kimiSessionId,
     kimiCwd: getSessionKimiCwd(session) || undefined,
+    cursorSessionId,
+    cursorCwd: getSessionCursorCwd(session) || undefined,
     codexThreadId,
-    threadId: codexThreadId || claudeSessionId || kimiSessionId || '',
+    threadId: codexThreadId || claudeSessionId || kimiSessionId || cursorSessionId || '',
     displayTitle: title,
     title,
     codexTitle: sessionCodexTitle || linkedCodexSession?.title || '',
@@ -261,7 +286,7 @@ export function buildLocalRuntimeSessionDisplaySummary(
     }, linkedBridgeSession);
   }
 
-  const runtime = session.runtime === 'kimi' ? 'kimi' : 'claude';
+  const runtime = session.runtime === 'kimi' ? 'kimi' : session.runtime === 'cursor' ? 'cursor' : 'claude';
   const title = linkedBridgeSession
     ? getBridgeSessionDisplayTitleWithCodexFallback(linkedBridgeSession, session.title)
     : session.title;
@@ -275,6 +300,8 @@ export function buildLocalRuntimeSessionDisplaySummary(
     claudeCwd: runtime === 'claude' ? session.cwd : undefined,
     kimiSessionId: runtime === 'kimi' ? session.threadId : undefined,
     kimiCwd: runtime === 'kimi' ? session.cwd : undefined,
+    cursorSessionId: runtime === 'cursor' ? session.threadId : undefined,
+    cursorCwd: runtime === 'cursor' ? session.cwd : undefined,
     codexThreadId: '',
     threadId: session.threadId,
     displayTitle: title,
@@ -282,8 +309,8 @@ export function buildLocalRuntimeSessionDisplaySummary(
     codexTitle: '',
     cwd: session.cwd,
     mode: '-',
-    executionProvider: runtime === 'kimi' ? 'tmux' : 'pty',
-    codexProvider: runtime === 'kimi' ? 'tmux' : '-',
+    executionProvider: runtime === 'kimi' || runtime === 'cursor' ? 'tmux' : 'pty',
+    codexProvider: runtime === 'kimi' || runtime === 'cursor' ? 'tmux' : '-',
     creatorKind: 'tui_cli',
     creatorLabel: creatorBadge.label,
     creatorClass: creatorBadge.className,
@@ -292,7 +319,7 @@ export function buildLocalRuntimeSessionDisplaySummary(
       source: session.source || undefined,
       cliVersion: session.cliVersion || undefined,
     },
-    originator: session.originator || (runtime === 'kimi' ? 'Kimi Code' : 'Claude Code'),
+    originator: session.originator || (runtime === 'kimi' ? 'Kimi Code' : runtime === 'cursor' ? 'Cursor Agent' : 'Claude Code'),
     source: session.source || runtime,
     lastEventAt: session.lastEventAt,
   };
@@ -340,7 +367,9 @@ export class SessionDisplayQuery {
         ? findVisibleBridgeSessionByCodexThread(this.store, session.threadId)
         : session.runtime === 'kimi'
           ? findVisibleBridgeSessionByKimiSession(this.store, session.threadId, session.cwd)
-          : findVisibleBridgeSessionByClaudeSession(this.store, session.threadId, session.cwd),
+          : session.runtime === 'cursor'
+            ? findVisibleBridgeSessionByCursorSession(this.store, session.threadId, session.cwd)
+            : findVisibleBridgeSessionByClaudeSession(this.store, session.threadId, session.cwd),
     );
   }
 
@@ -437,6 +466,7 @@ export class SessionDisplayQuery {
     const bridgeByCodexThreadId = new Map<string, BridgeSession>();
     const bridgeByClaudeIdentity = new Map<string, BridgeSession>();
     const bridgeByKimiIdentity = new Map<string, BridgeSession>();
+    const bridgeByCursorIdentity = new Map<string, BridgeSession>();
     for (const session of bridgeRawSessions) {
       const codexThreadId = getBridgeSessionCodexThreadId(session);
       if (codexThreadId && !bridgeByCodexThreadId.has(codexThreadId)) {
@@ -454,12 +484,19 @@ export class SessionDisplayQuery {
         const key = `${kimiCwd}\0${kimiSessionId}`;
         if (!bridgeByKimiIdentity.has(key)) bridgeByKimiIdentity.set(key, session);
       }
+      const cursorSessionId = getSessionCursorSessionId(session);
+      const cursorCwd = getSessionCursorCwd(session) || getSessionWorkingDirectory(session);
+      if (cursorSessionId && cursorCwd) {
+        const key = `${cursorCwd}\0${cursorSessionId}`;
+        if (!bridgeByCursorIdentity.has(key)) bridgeByCursorIdentity.set(key, session);
+      }
     }
 
     let dedupedBridgeRows = 0;
     const seenCodexThreadIds = new Set<string>();
     const seenClaudeIdentities = new Set<string>();
     const seenKimiIdentities = new Set<string>();
+    const seenCursorIdentities = new Set<string>();
     const bridgeSessions: SessionDisplaySummary[] = [];
     for (const session of bridgeRawSessions) {
       const codexThreadId = getBridgeSessionCodexThreadId(session);
@@ -490,6 +527,16 @@ export class SessionDisplayQuery {
         }
         seenKimiIdentities.add(key);
       }
+      const cursorSessionId = getSessionCursorSessionId(session);
+      const cursorCwd = getSessionCursorCwd(session) || getSessionWorkingDirectory(session);
+      if (cursorSessionId && cursorCwd) {
+        const key = `${cursorCwd}\0${cursorSessionId}`;
+        if (seenCursorIdentities.has(key)) {
+          dedupedBridgeRows += 1;
+          continue;
+        }
+        seenCursorIdentities.add(key);
+      }
       const linkedCodex = codexThreadId ? codexByThreadId.get(codexThreadId) : undefined;
       bridgeSessions.push(buildBridgeSessionDisplaySummary(session, linkedCodex as CodexSessionSummary | undefined));
     }
@@ -504,7 +551,9 @@ export class SessionDisplayQuery {
         const identityKey = `${session.cwd}\0${session.threadId}`;
         const linked = session.runtime === 'kimi'
           ? bridgeByKimiIdentity.has(identityKey)
-          : bridgeByClaudeIdentity.has(identityKey);
+          : session.runtime === 'cursor'
+            ? bridgeByCursorIdentity.has(identityKey)
+            : bridgeByClaudeIdentity.has(identityKey);
         if (linked) dedupedBridgeRows += 1;
         return !linked;
       })
@@ -523,9 +572,11 @@ export class SessionDisplayQuery {
     const codexPhysical = localRuntimeSessions.filter((session) => session.runtime === 'codex').length;
     const claudePhysical = localRuntimeSessions.filter((session) => session.runtime === 'claude').length;
     const kimiPhysical = localRuntimeSessions.filter((session) => session.runtime === 'kimi').length;
+    const cursorPhysical = localRuntimeSessions.filter((session) => session.runtime === 'cursor').length;
     const bridgeCodexLinked = bridgeRawSessions.filter((session) => Boolean(getBridgeSessionCodexThreadId(session))).length;
     const bridgeClaudeLinked = bridgeRawSessions.filter((session) => Boolean(getSessionClaudeSessionId(session))).length;
     const bridgeKimiLinked = bridgeRawSessions.filter((session) => Boolean(getSessionKimiSessionId(session))).length;
+    const bridgeCursorLinked = bridgeRawSessions.filter((session) => Boolean(getSessionCursorSessionId(session))).length;
 
     return {
       root: options.root,
@@ -534,11 +585,13 @@ export class SessionDisplayQuery {
         codexPhysical,
         claudePhysical,
         kimiPhysical,
+        cursorPhysical,
         bridgeStored: bridgeRawSessions.length,
         bridgeWithoutCodexThread,
         bridgeCodexLinked,
         bridgeClaudeLinked,
         bridgeKimiLinked,
+        bridgeCursorLinked,
         dedupedBridgeRows,
         totalDisplayable: combined.length,
         displayed: sessions.length,

@@ -46,12 +46,14 @@ import {
   getSessionKimiSessionId,
   getSessionCodexThreadId,
   getSessionClaudeSessionId,
+  getSessionCursorSessionId,
   getSessionWorkingDirectory,
 } from '../../../domain/session-runtime.js';
 import {
   resolveEffectiveClaudeProvider,
   resolveEffectiveCodexProvider,
   resolveKimiRuntimeConfig,
+  resolveCursorRuntimeConfig,
   resolveRuntimeMetadataConfig,
 } from '../../session/support.js';
 import { maskSecrets } from '../../../shared/logger.js';
@@ -250,12 +252,16 @@ export async function runInteractiveMessage(
     if (targetBinding.id === binding.id && initialSession) {
       const displayRuntime = getSessionActiveRuntime(initialSession) || 'codex';
       const metadata = resolveRuntimeMetadataConfig(initialSession, displayRuntime, binding);
-      const threadId = displayRuntime === 'kimi'
+      const threadId = displayRuntime === 'cursor'
+        ? getSessionCursorSessionId(initialSession) || ''
+        : displayRuntime === 'kimi'
         ? getSessionKimiSessionId(initialSession) || ''
         : displayRuntime === 'claude'
           ? getSessionClaudeSessionId(initialSession) || ''
           : getSessionCodexThreadId(initialSession) || '';
-      const executionProvider = displayRuntime === 'kimi'
+      const executionProvider = displayRuntime === 'cursor'
+        ? resolveCursorRuntimeConfig(initialSession, binding).provider
+        : displayRuntime === 'kimi'
         ? resolveKimiRuntimeConfig(initialSession, binding).provider
         : displayRuntime === 'claude'
           ? resolveEffectiveClaudeProvider(initialSession, binding)
@@ -279,6 +285,7 @@ export async function runInteractiveMessage(
   const codexProvider = resolveEffectiveCodexProvider(initialSession, binding);
   const isCodexMirrorTurn = activeRuntime === 'codex' && (codexProvider === 'pty' || codexProvider === 'tmux');
   const isKimiMirrorTurn = activeRuntime === 'kimi';
+  const isCursorTranscriptTurn = activeRuntime === 'cursor';
   const isRuntimeMirrorTurn = isClaudeMirrorTurn || isCodexMirrorTurn || isKimiMirrorTurn;
   const initialCodexThreadId = getSessionCodexThreadId(initialSession) || codexThreadId || '';
   let observedCodexThreadId = codexThreadId || '';
@@ -301,7 +308,6 @@ export async function runInteractiveMessage(
     adapter.onMessageStart?.(msg.address.chatId, streamKey);
     messageStartCalled = true;
   };
-  ensureMessageStarted();
 
   const taskAbort = new AbortController();
   const taskId = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
@@ -342,18 +348,22 @@ export async function runInteractiveMessage(
     sessionId: binding.bridgeSessionId,
     kind: turnClassification.kind,
     origin: 'im',
-    progressSource: isCodexMirrorTurn ? 'codex_jsonl' : isClaudeMirrorTurn ? 'claude_jsonl' : isKimiMirrorTurn ? 'kimi_jsonl' : 'sdk_stream',
+    progressSource: isCodexMirrorTurn ? 'codex_jsonl' : isClaudeMirrorTurn ? 'claude_jsonl' : isKimiMirrorTurn ? 'kimi_jsonl' : isCursorTranscriptTurn ? 'cursor_jsonl' : 'sdk_stream',
     finalSource: isCodexMirrorTurn || turnClassification.kind === 'im_codex_reuse'
       ? 'codex_task_complete'
       : isClaudeMirrorTurn
         ? 'claude_task_complete'
         : isKimiMirrorTurn
           ? 'kimi_task_complete'
+          : isCursorTranscriptTurn
+            ? 'cursor_task_complete'
           : 'sdk_result',
     runtime: activeRuntime,
     codexThreadId: turnClassification.codexThreadId,
     runtimeThreadId: activeRuntime === 'claude'
       ? getSessionClaudeSessionId(initialSession)
+      : activeRuntime === 'cursor'
+        ? getSessionCursorSessionId(initialSession)
       : activeRuntime === 'kimi'
         ? getSessionKimiSessionId(initialSession)
         : turnClassification.codexThreadId,
@@ -639,7 +649,7 @@ export async function runInteractiveMessage(
         onAnswerText: streamingArtifacts?.observeAnswerText,
         onContextUsage: useInteractiveStreamUi ? sdkStreamEvents.onContextUsage : undefined,
         onRuntimeIdentity: async (identity) => {
-          if (identity.runtime === 'claude' || identity.runtime === 'kimi') {
+          if (identity.runtime === 'claude' || identity.runtime === 'kimi' || identity.runtime === 'cursor') {
             ensureMirrorSuppression(preparedPromptText);
             runtimeMirrorActivated = true;
             await deps.reconcileMirrorSubscriptions?.();
@@ -813,7 +823,10 @@ export async function runInteractiveMessage(
     }
 
     if (taskState.mirrorSuppressionId) {
-      if (finalOutcome === 'aborted') {
+      if (finalOutcome === 'aborted' || isCursorTranscriptTurn) {
+        // Cursor's current IM turn is delivered directly from its transcript
+        // stream. Keep a grace suppression for a lagging background mirror,
+        // but do not wait for that mirror to own a terminal it never owns.
         deps.abortMirrorSuppression(binding.bridgeSessionId, taskState.mirrorSuppressionId);
       } else {
         deps.settleMirrorSuppression(

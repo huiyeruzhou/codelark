@@ -3,6 +3,7 @@ import { createConfigService } from '../../../configuration/service.js';
 import type { BridgeStore, ChannelChat, InboundMessage } from '../../../domain/index.js';
 import {
   getSessionActiveRuntime,
+  getSessionCursorModel,
   getSessionKimiModel,
   getSessionRuntimeTmuxSessionName,
   getSessionWorkingDirectory,
@@ -17,6 +18,7 @@ import {
   resolveNewSessionWorkingDirectory,
 } from '../support.js';
 import { kimiTmuxSessionName } from '../../../runtime/kimi/tmux-provider.js';
+import { cursorTmuxSessionName } from '../../../runtime/cursor/tmux-provider.js';
 import { getSessionDisplayName } from '../display/session-title.js';
 import {
   buildCommandFields,
@@ -78,6 +80,12 @@ function setSessionKimiModelToml(sessionId: string, model: string): void {
   );
 }
 
+function setSessionCursorRuntimeToml(sessionId: string, model?: string): void {
+  createConfigService({ migrate: false }).set(
+    { kind: 'session', sessionId },
+    { runtime: { cursor: { provider: 'tmux', ...(model ? { model } : {}) } } },
+  );
+}
 function preserveClearRuntimeBinding(options: {
   store: BridgeStore;
   previousBinding: ChannelChat | null;
@@ -108,6 +116,10 @@ function inheritClearRuntimeProvider(sessionId: string, previousSession: ReturnT
     const inheritedModel = getSessionKimiModel(previousSession);
     if (inheritedModel) setSessionKimiModelToml(sessionId, inheritedModel);
     setSessionKimiProviderToml(sessionId);
+    return;
+  }
+  if (activeRuntime === 'cursor') {
+    setSessionCursorRuntimeToml(sessionId, getSessionCursorModel(previousSession));
     return;
   }
   const inheritedProvider = getSessionCodexProviderOverride(previousSession);
@@ -173,7 +185,11 @@ export async function handleClearSessionCommand(options: {
   }
   const previousRuntime = getSessionActiveRuntime(previousSession) || 'codex';
   const previousRuntimeTmuxSessionName = getSessionRuntimeTmuxSessionName(previousSession)
-    || (previousRuntime === 'kimi' && previousSession ? kimiTmuxSessionName(previousSession.id) : undefined);
+    || (previousRuntime === 'kimi' && previousSession
+      ? kimiTmuxSessionName(previousSession.id)
+      : previousRuntime === 'cursor' && previousSession
+        ? cursorTmuxSessionName(previousSession.id)
+        : undefined);
   let cleanedTmuxSessionName: string | null = null;
   if (previousRuntimeTmuxSessionName) {
     const cleanup = await cleanupRuntimeTmuxSession({

@@ -54,10 +54,12 @@ export interface BridgeApiProvider {
 export interface StreamChatParams {
   prompt: string;
   sessionId: string;
-  runtime?: 'codex' | 'claude' | 'kimi';
+  runtime?: 'codex' | 'claude' | 'kimi' | 'cursor';
   codexThreadId?: string;
   claudeSessionId?: string;
   kimiSessionId?: string;
+  cursorSessionId?: string;
+  cursorForce?: boolean;
   claudeExecutable?: ClaudeExecutable;
   claudeProvider?: ClaudeProviderChoice;
   model?: string;
@@ -129,7 +131,7 @@ export interface MirrorJsonlSourceSummary {
 }
 
 export interface MirrorJsonlSource {
-  readonly runtime: 'codex' | 'claude' | 'kimi';
+  readonly runtime: 'codex' | 'claude' | 'kimi' | 'cursor';
   findByThreadId(threadId: string, cwd?: string): MirrorJsonlSourceSummary | null;
   readDelta(
     filePath: string,

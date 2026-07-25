@@ -30,6 +30,7 @@ import {
   resolveEffectiveReasoningEffort,
   resolveEffectiveSandboxMode,
   resolveKimiRuntimeConfig,
+  resolveCursorRuntimeConfig,
   resolveSessionWorkingDirectoryPath,
 } from '../session/support.js';
 import type { BridgeSession, BridgeStore } from '../../domain/index.js';
@@ -72,7 +73,7 @@ export {
 } from './runtime-session.js';
 
 const MODE_OPTIONS_TEXT = '可选：`normal`（普通执行，默认） `yolo`（YOLO模式：允许 agent 无需审批绕过沙箱）。';
-const RUNTIME_OPTIONS_TEXT = '可选：`codex`（OpenAI Codex，默认） `claude`（Claude Code） `kimi`（Kimi Code）。`/provider` 选择使用何种方式运行 agent，不切换 runtime。';
+const RUNTIME_OPTIONS_TEXT = '可选：`codex`（OpenAI Codex，默认） `claude`（Claude Code） `kimi`（Kimi Code） `cursor`（Cursor Agent）。`/provider` 选择使用何种方式运行 agent，不切换 runtime。';
 const REASONING_OPTIONS_TEXT = '可选：`1=minimal` `2=low` `3=medium` `4=high` `5=xhigh`';
 const CLAUDE_REASONING_OPTIONS_TEXT = '可选：`1=low` `2=medium` `3=high` `4=xhigh` `5=max`；`m` 等同于 `max`，`minimal` 会映射为 Claude Code `low`。';
 const SANDBOX_OPTIONS_TEXT = '可选：`read-only` `workspace-write` `danger-full-access` `default`（回到全局默认）';
@@ -228,6 +229,27 @@ function setSessionKimiModelToml(sessionId: string, model: string): void {
   );
 }
 
+function setSessionCursorModelToml(sessionId: string, model: string): void {
+  createConfigService({ migrate: false }).set(
+    { kind: 'session', sessionId },
+    { runtime: { cursor: { model } } },
+  );
+}
+
+function clearSessionCursorModelToml(sessionId: string): void {
+  createConfigService({ migrate: false }).unset(
+    { kind: 'session', sessionId },
+    'runtime.cursor.model',
+  );
+}
+
+function setSessionCursorForceToml(sessionId: string, force: boolean): void {
+  createConfigService({ migrate: false }).set(
+    { kind: 'session', sessionId },
+    { runtime: { cursor: { force } } },
+  );
+}
+
 function clearSessionKimiModelToml(sessionId: string): void {
   createConfigService({ migrate: false }).unset(
     { kind: 'session', sessionId },
@@ -274,11 +296,12 @@ export function handleReasoningCommand(options: {
   }
   const activeRuntime = getSessionActiveRuntime(session) || 'codex';
   if (!options.args) {
-    if (activeRuntime === 'kimi') {
+    if (activeRuntime === 'kimi' || activeRuntime === 'cursor') {
+      const label = activeRuntime === 'cursor' ? 'Cursor Agent' : 'Kimi Code';
       return buildCommandFields(
-        'Kimi Code 不支持 Bridge 思考级别设置',
-        [['Runtime', 'kimi']],
-        ['Kimi Code 的思考内容来自 tmux mirror 状态区；`/reasoning` 只适用于 Codex 和 Claude Code runtime。'],
+        `${label} 不支持 Bridge 思考级别设置`,
+        [['Runtime', activeRuntime]],
+        [`${label} 的思考内容来自 CLI 事件；\`/reasoning\` 只适用于 Codex 和 Claude Code runtime。`],
         options.markdown,
       );
     }
@@ -299,10 +322,10 @@ export function handleReasoningCommand(options: {
     );
   }
   if (options.args.trim().toLowerCase() === 'default' || options.args.trim().toLowerCase() === 'reset') {
-    if (activeRuntime === 'kimi') {
+    if (activeRuntime === 'kimi' || activeRuntime === 'cursor') {
       return buildCommandFields(
-        'Kimi Code 不支持 Bridge 思考级别设置',
-        [['Runtime', 'kimi']],
+        `${activeRuntime === 'cursor' ? 'Cursor Agent' : 'Kimi Code'} 不支持 Bridge 思考级别设置`,
+        [['Runtime', activeRuntime]],
         ['没有写入 Codex 或 Claude Code reasoning 配置。'],
         options.markdown,
       );
@@ -328,10 +351,10 @@ export function handleReasoningCommand(options: {
   const claudeReasoning = activeRuntime === 'claude'
     ? parseClaudeReasoningCommandArg(options.args)
     : undefined;
-  if (activeRuntime === 'kimi') {
+  if (activeRuntime === 'kimi' || activeRuntime === 'cursor') {
     return buildCommandFields(
-      'Kimi Code 不支持 Bridge 思考级别设置',
-      [['Runtime', 'kimi']],
+      `${activeRuntime === 'cursor' ? 'Cursor Agent' : 'Kimi Code'} 不支持 Bridge 思考级别设置`,
+      [['Runtime', activeRuntime]],
       ['没有写入 Codex 或 Claude Code reasoning 配置。'],
       options.markdown,
     );
@@ -384,6 +407,28 @@ export function handleModeCommand(options: {
       'Kimi Code 模式固定',
       [['Runtime', 'kimi'], ['Provider', 'tmux']],
       ['Kimi Code 当前通过 `kimi -y` 的 tmux 路径运行，`/mode` 不会写入 Codex 或 Claude 配置。'],
+      options.markdown,
+    );
+  }
+  if (activeRuntime === 'cursor') {
+    if (!options.args) {
+      const cursorConfig = resolveCursorRuntimeConfig(session, binding);
+      return buildCommandFields(
+        '当前 Cursor Agent 模式',
+        [['Runtime', 'cursor'], ['模式', cursorConfig.force ? 'yolo' : 'normal'], ['Provider', 'tmux']],
+        [MODE_OPTIONS_TEXT, '发送 `/mode normal` 或 `/mode yolo` 切换；修改从下一次 Cursor tmux 启动开始生效。'],
+        options.markdown,
+      );
+    }
+    const requestedMode = parseMode(options.args);
+    if (!requestedMode) {
+      return buildCommandFields('模式用法', [['命令', '`/mode normal|yolo`']], [MODE_OPTIONS_TEXT], options.markdown);
+    }
+    setSessionCursorForceToml(session!.id, requestedMode === 'yolo');
+    return buildCommandFields(
+      '已切换 Cursor Agent 模式',
+      [['模式', requestedMode], ['Provider', 'tmux']],
+      ['后续 Cursor tmux 启动会按此设置决定是否传 `--force`。'],
       options.markdown,
     );
   }
@@ -519,16 +564,16 @@ export function handleRuntimeCommand(options: {
       options.markdown,
     );
   }
-  if (requested !== 'codex' && requested !== 'claude' && requested !== 'kimi') {
+  if (requested !== 'codex' && requested !== 'claude' && requested !== 'kimi' && requested !== 'cursor') {
     return buildCommandFields(
       'Runtime 用法',
-      [['命令', '`/runtime codex|claude|kimi`']],
+      [['命令', '`/runtime codex|claude|kimi|cursor`']],
       [RUNTIME_OPTIONS_TEXT],
       options.markdown,
     );
   }
   if (requested === currentRuntime) {
-    const label = requested === 'claude' ? 'Claude Code' : requested === 'kimi' ? 'Kimi Code' : 'Codex';
+    const label = requested === 'claude' ? 'Claude Code' : requested === 'kimi' ? 'Kimi Code' : requested === 'cursor' ? 'Cursor Agent' : 'Codex';
     return buildCommandFields(
       'Runtime 未变化',
       [['Runtime', currentRuntime]],
@@ -577,11 +622,7 @@ export function handleRuntimeCommand(options: {
       ['新 BridgeSession', nextSession.id],
       ['目录', getSessionWorkingDirectory(nextSession) || '-'],
     ],
-    requested === 'claude'
-      ? ['当前聊天已切到独立 Claude Code BridgeSession；旧 Codex/Kimi 会话不会参与后续 Claude turn。再次 `/runtime codex` 或 `/runtime kimi` 会切回本聊天记住的对应 BridgeSession。']
-      : requested === 'kimi'
-        ? ['当前聊天已切到独立 Kimi Code BridgeSession；旧 Codex/Claude 会话不会参与后续 Kimi turn。再次 `/runtime codex` 或 `/runtime claude` 会切回本聊天记住的对应 BridgeSession。']
-        : ['当前聊天已切到独立 Codex BridgeSession；旧 Claude/Kimi 会话不会参与后续 Codex turn。再次 `/runtime claude` 或 `/runtime kimi` 会切回本聊天记住的对应 BridgeSession。'],
+    [`当前聊天已切到独立 ${requested === 'claude' ? 'Claude Code' : requested === 'kimi' ? 'Kimi Code' : requested === 'cursor' ? 'Cursor Agent' : 'Codex'} BridgeSession；其它 runtime 会话不会参与后续 turn。再次使用 \`/runtime codex|claude|kimi|cursor\` 会切回本聊天记住的对应 BridgeSession。`],
     options.markdown,
   );
 }
@@ -599,8 +640,8 @@ export function handleSandboxCommand(options: {
     return '当前会话不存在。';
   }
   const activeRuntime = getSessionActiveRuntime(session);
-  if (activeRuntime === 'claude' || activeRuntime === 'kimi') {
-    const label = activeRuntime === 'kimi' ? 'Kimi Code' : 'Claude Code';
+  if (activeRuntime === 'claude' || activeRuntime === 'kimi' || activeRuntime === 'cursor') {
+    const label = activeRuntime === 'kimi' ? 'Kimi Code' : activeRuntime === 'cursor' ? 'Cursor Agent' : 'Claude Code';
     return buildCommandFields(
       `${label} 不支持 Bridge 沙箱设置`,
       [['Runtime', activeRuntime]],
@@ -660,8 +701,8 @@ export function handleNetworkCommand(options: {
     return '当前会话不存在。';
   }
   const activeRuntime = getSessionActiveRuntime(session);
-  if (activeRuntime === 'claude' || activeRuntime === 'kimi') {
-    const label = activeRuntime === 'kimi' ? 'Kimi Code' : 'Claude Code';
+  if (activeRuntime === 'claude' || activeRuntime === 'kimi' || activeRuntime === 'cursor') {
+    const label = activeRuntime === 'kimi' ? 'Kimi Code' : activeRuntime === 'cursor' ? 'Cursor Agent' : 'Claude Code';
     return buildCommandFields(
       `${label} 不支持 Bridge 网络开关`,
       [['Runtime', activeRuntime]],
@@ -813,6 +854,34 @@ export function handleModelCommand(options: {
       '已更新 Kimi Code 模型',
       [['模型', requestedModel]],
       [`后续启动 Kimi Code tmux 时会传入 \`--model ${requestedModel}\`。`],
+      options.markdown,
+    );
+  }
+  if (activeRuntime === 'cursor') {
+    if (!options.args) {
+      const currentModel = resolveCursorRuntimeConfig(session, binding).model || 'default';
+      return buildCommandFields(
+        '当前 Cursor Agent 模型',
+        [['模型', currentModel]],
+        ['发送 `/model <cursor-model>` 可切换；发送 `/model default` 可回退到 Cursor 默认模型。'],
+        options.markdown,
+      );
+    }
+    const requestedModel = options.args.trim();
+    if (requestedModel === 'default') {
+      clearSessionCursorModelToml(session.id);
+      return buildCommandFields(
+        '已恢复默认 Cursor Agent 模型',
+        [['模型', resolveCursorRuntimeConfig(options.store.getSession(session.id), binding).model || 'default']],
+        ['后续 Cursor tmux 启动不再显式传 `--model`。'],
+        options.markdown,
+      );
+    }
+    setSessionCursorModelToml(session.id, requestedModel);
+    return buildCommandFields(
+      '已更新 Cursor Agent 模型',
+      [['模型', requestedModel]],
+      [`后续 Cursor tmux 启动会传入 \`--model ${requestedModel}\`。`],
       options.markdown,
     );
   }

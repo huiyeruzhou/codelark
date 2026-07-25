@@ -100,6 +100,7 @@ function buildRuntimeSelect(
       { text: 'Codex', callbackData: buildCommandCallbackData(`/t codex${suffix}`) },
       { text: 'Claude', callbackData: buildCommandCallbackData(`/t claude${suffix}`) },
       { text: 'Kimi', callbackData: buildCommandCallbackData(`/t kimi${suffix}`) },
+      { text: 'Cursor', callbackData: buildCommandCallbackData(`/t cursor${suffix}`) },
     ],
   };
 }
@@ -107,22 +108,25 @@ function buildRuntimeSelect(
 function localRuntimeOf(session: LocalRuntimeSessionSummary): LocalSessionListRuntime {
   if (session.runtime === 'claude') return 'claude';
   if (session.runtime === 'kimi') return 'kimi';
+  if (session.runtime === 'cursor') return 'cursor';
   return 'codex';
 }
 
 function formatLocalRuntimeCreator(session: LocalRuntimeSessionSummary): string {
   if (localRuntimeOf(session) === 'claude') return 'Claude Code';
   if (localRuntimeOf(session) === 'kimi') return 'Kimi Code';
+  if (localRuntimeOf(session) === 'cursor') return 'Cursor Agent';
   return formatCreatorBadge(resolveCreatorKind({
     source: session.source,
     originator: session.originator,
   })).label;
 }
 
-function formatLocalThreadListTitle(codexCount: number, claudeCount: number, kimiCount: number, bridgeCount: number): string {
+function formatLocalThreadListTitle(codexCount: number, claudeCount: number, kimiCount: number, cursorCount: number, bridgeCount: number): string {
   const parts = [`Codex${codexCount}`];
   if (claudeCount > 0) parts.push(`Claude${claudeCount}`);
   if (kimiCount > 0) parts.push(`Kimi${kimiCount}`);
+  if (cursorCount > 0) parts.push(`Cursor${cursorCount}`);
   if (bridgeCount > 0) parts.push(`Bridge${bridgeCount}`);
   return `本地会话（${parts.join(' + ')}）`;
 }
@@ -532,7 +536,7 @@ function buildRuntimeThreadSelect(
       };
     });
   if (options.length === 0) return null;
-  const runtimeLabel = runtime === 'claude' ? 'Claude Code' : runtime === 'kimi' ? 'Kimi Code' : 'Codex';
+  const runtimeLabel = runtime === 'claude' ? 'Claude Code' : runtime === 'kimi' ? 'Kimi Code' : runtime === 'cursor' ? 'Cursor Agent' : 'Codex';
   return {
     id: `${runtime}_select`,
     placeholder: `选择 ${runtimeLabel} 会话`,
@@ -554,7 +558,7 @@ function buildRuntimeThreadTableBlock(
     .filter(({ item }) => item.kind === 'local' && localRuntimeOf(item.local) === runtime)
     .map(({ row }) => row);
   const select = buildRuntimeThreadSelect(runtime, items, selectedCallbackData);
-  const label = runtime === 'claude' ? 'Claude Code' : runtime === 'kimi' ? 'Kimi Code' : 'Codex';
+  const label = runtime === 'claude' ? 'Claude Code' : runtime === 'kimi' ? 'Kimi Code' : runtime === 'cursor' ? 'Cursor Agent' : 'Codex';
   const refreshCommand = showAll
     ? `/t ${runtime} n ${limit || MAX_LOCAL_SESSION_LIST_LIMIT}`
     : limit && limit !== DEFAULT_LOCAL_SESSION_LIST_LIMIT
@@ -642,7 +646,8 @@ export function buildLocalRuntimeSessionsCommandResponse(
   const codexCount = localSessions.filter((session) => localRuntimeOf(session) === 'codex').length;
   const claudeCount = localSessions.filter((session) => localRuntimeOf(session) === 'claude').length;
   const kimiCount = localSessions.filter((session) => localRuntimeOf(session) === 'kimi').length;
-  const title = formatLocalThreadListTitle(codexCount, claudeCount, kimiCount, 0);
+  const cursorCount = localSessions.filter((session) => localRuntimeOf(session) === 'cursor').length;
+  const title = formatLocalThreadListTitle(codexCount, claudeCount, kimiCount, cursorCount, 0);
   const limitNotice = buildLocalRuntimeSessionLimitNotice(actualCount, limit);
   const globalItems = buildGlobalThreadList(localSessions, []);
   return buildThreadCommandTableResponse(
@@ -655,11 +660,11 @@ export function buildLocalRuntimeSessionsCommandResponse(
       ? [
           '发送 `/t 1` 可接管第 1 条本地会话。',
           `默认显示最近 ${DEFAULT_LOCAL_SESSION_LIST_LIMIT} 条；卡片下拉可切换 50/100。`,
-          `发送 \`/t codex n 100\`、\`/t claude n 100\` 或 \`/t kimi n 100\` 可只看最近 100 条本地会话。`,
+          `发送 \`/t codex n 100\`、\`/t claude n 100\`、\`/t kimi n 100\` 或 \`/t cursor n 100\` 可只看最近 100 条本地会话。`,
         ]
       : [
           '发送 `/t 1` 可接管第 1 条本地会话。',
-          '发送 `/t codex n 50`、`/t claude n 50` 或 `/t kimi n 50` 可调整本地会话数量。',
+          '发送 `/t codex n 50`、`/t claude n 50`、`/t kimi n 50` 或 `/t cursor n 50` 可调整本地会话数量。',
         ]),
     ],
     markdown,
@@ -690,6 +695,8 @@ export function buildLocalRuntimeSessionsCommandCard(
     ? 'claude'
     : options.activeRuntime === 'kimi'
       ? 'kimi'
+      : options.activeRuntime === 'cursor'
+        ? 'cursor'
       : 'codex';
   const card: OutboundRichCard = {
     title: '',
@@ -709,7 +716,7 @@ export function buildLocalRuntimeSessionsCommandCard(
           ...(limitNotice ? [limitNotice] : []),
           '纯文本命令：`/t 1` 接管第 1 条。',
           '`/t` 和 `/t archive` 的序号来自这张全局本地会话表。',
-          '更多：使用卡片下拉或 `/t codex n 50`、`/t claude n 100`、`/t kimi n 100` 调整显示数量。',
+          '更多：使用卡片下拉或 `/t codex n 50`、`/t claude n 100`、`/t kimi n 100`、`/t cursor n 100` 调整显示数量。',
         ],
   };
   if (options.channelType && options.chatId) {

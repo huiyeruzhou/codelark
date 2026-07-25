@@ -87,6 +87,7 @@ describe('ConfigService v2 foundation', () => {
 
       assert.equal(service.migrationResult, undefined);
       assert.equal(service.get('runtime.codex.model'), '');
+      assert.equal(service.get('runtime.cursor.model'), 'gpt-5.3-codex');
       assert.equal(fs.existsSync(path.join(home, 'config.toml')), false);
     } finally {
       fs.rmSync(home, { recursive: true, force: true });

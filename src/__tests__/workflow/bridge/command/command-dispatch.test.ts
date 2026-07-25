@@ -6362,7 +6362,7 @@ enabled = true
     ]);
     assert.deepEqual(
       sent.at(-1)?.richCard?.selects?.[0]?.options.map((option: any) => option.text),
-      ['通用配置', 'Codex', 'Claude', 'Kimi', 'Bridge', '通道配置（feishu-default）'],
+      ['通用配置', 'Codex', 'Claude', 'Kimi', 'Cursor', 'Bridge', '通道配置（feishu-default）'],
     );
     assert.deepEqual(sent.at(-1)?.richCard?.sections, []);
     assert.deepEqual(
@@ -7420,7 +7420,7 @@ enabled = true
     assert.equal(message?.richCard?.tableBlocks?.[0]?.table.rows.length, 20);
     assert.equal(message?.richCard?.tableBlocks?.[0]?.selects?.[0]?.options.length, 20);
     assert.deepEqual(message?.richCard?.tableBlocks?.[0]?.selects?.[1]?.options.map((option) => option.text), ['显示 20', '显示 50', '显示 100']);
-    assert.deepEqual(message?.richCard?.tableBlocks?.[0]?.selects?.[2]?.options.map((option) => option.text), ['Codex', 'Claude', 'Kimi']);
+    assert.deepEqual(message?.richCard?.tableBlocks?.[0]?.selects?.[2]?.options.map((option) => option.text), ['Codex', 'Claude', 'Kimi', 'Cursor']);
     assert.deepEqual(
       message?.richCard?.tableBlocks?.[0]?.actions?.map((row) => row.map((action) => action.text)),
       [['接管', '归档', '新建'], ['解绑', '刷新']],

@@ -35,6 +35,11 @@ idle_timeout_minutes = 0
 model = ""
 provider = "tmux"
 
+[runtime.cursor]
+model = "gpt-5.3-codex"
+provider = "tmux"
+force = false
+
 [[channels]]
 id = "feishu-default"
 alias = "飞书"

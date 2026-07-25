@@ -185,7 +185,7 @@ export function buildInteractiveStreamCardMetadata(
         threadId: display.threadId || fallback.threadId,
         executionProvider: display.executionProvider || fallback.executionProvider,
         creatorKind: display.creatorKind || fallback.creatorKind,
-        source: 'sdk',
+        source: display.runtime === 'cursor' ? 'direct' : 'sdk',
       }),
     ],
   };

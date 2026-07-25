@@ -240,7 +240,7 @@ type ScriptedTurnCallbacks = {
     totalTokenUsage?: { inputTokens?: number; outputTokens?: number };
   }) => void;
   onRuntimeIdentity?: (identity: {
-    runtime: 'codex' | 'claude' | 'kimi';
+    runtime: 'codex' | 'claude' | 'kimi' | 'cursor';
     sessionId: string;
     cwd?: string;
     transcriptPath?: string;
@@ -288,7 +288,7 @@ class ScriptedSessionSimulator {
     return router.resolve(this.address)?.bridgeSessionId || '';
   }
 
-  setRuntimeProvider(runtime: 'codex' | 'claude' | 'kimi', provider: 'sdk' | 'pty' | 'tmux'): void {
+  setRuntimeProvider(runtime: 'codex' | 'claude' | 'kimi' | 'cursor', provider: 'sdk' | 'pty' | 'tmux'): void {
     const sessionId = this.sessionId();
     assert.ok(sessionId, 'scripted simulator binding must have a session id');
     getBridgeContext().store.updateSession(sessionId, {
@@ -300,6 +300,10 @@ class ScriptedSessionSimulator {
           ? {
               activeRuntime: 'kimi',
             }
+          : runtime === 'cursor'
+            ? {
+                activeRuntime: 'cursor',
+              }
           : {
               activeRuntime: 'codex',
             },
@@ -310,6 +314,8 @@ class ScriptedSessionSimulator {
         ? { runtime: { claude: { provider } } }
         : runtime === 'kimi'
           ? { runtime: { kimi: { provider: 'tmux' } } }
+          : runtime === 'cursor'
+            ? { runtime: { cursor: { provider: 'tmux' } } }
           : { runtime: { codex: { provider: provider === 'tmux' ? 'tmux' : provider === 'pty' ? 'pty' : 'sdk' } } },
     );
   }
@@ -656,6 +662,43 @@ stream_status_check_interval_seconds = 3
 
     assert.equal(sdkAnswerObserverPresent, false);
     assert.deepEqual(simulator.deliveredAttachments, []);
+  });
+
+  it('keeps Cursor direct transcript ownership while leaving a grace suppression for its background mirror', async () => {
+    const simulator = new ScriptedSessionSimulator('chat-cursor-direct-suppression');
+    simulator.setRuntimeProvider('cursor', 'tmux');
+
+    await simulator.send({
+      messageId: 'incoming-cursor-direct-suppression',
+      text: 'Cursor direct prompt',
+      preparedPrompt: 'prepared Cursor direct prompt',
+      finalText: 'CURSOR_DIRECT_DONE',
+      steps: [async ({ onPartialText, onRuntimeIdentity }) => {
+        await onRuntimeIdentity?.({
+          runtime: 'cursor',
+          sessionId: 'cursor-direct-session',
+          cwd: 'D:\\workspace\\cursor-direct',
+        });
+        onPartialText?.('CURSOR_DIRECT_DONE');
+      }],
+    });
+
+    assert.equal(simulator.adapter.streamEnds.at(-1)?.status, 'completed');
+    assert.match(simulator.adapter.streamEnds.at(-1)?.text || '', /CURSOR_DIRECT_DONE/);
+    assert.deepEqual(simulator.mirrorSuppressions, [{
+      sessionId: simulator.sessionId(),
+      prompt: 'prepared Cursor direct prompt',
+    }]);
+    assert.equal(simulator.settledMirrorSuppressions.length, 0);
+    assert.deepEqual(simulator.abortedMirrorSuppressions, [{
+      sessionId: simulator.sessionId(),
+      suppressionId: 'suppression-1',
+    }]);
+    const metadata = simulator.adapter.streamMetadata.at(-1);
+    assert.ok(metadata?.title);
+    assert.match((metadata?.tags || []).join(' '), /\bcursor\b/);
+    assert.match((metadata?.tags || []).join(' '), /\btmux\b/);
+    assert.doesNotMatch((metadata?.tags || []).join(' '), /\bsdk\b/);
   });
 
   it('keeps one scripted session isolated across the basic dialogue provider sequence', async () => {

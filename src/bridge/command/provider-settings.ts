@@ -9,14 +9,20 @@ import {
   getSessionClaudeSessionId,
   getSessionActiveRuntime,
   getSessionKimiSessionId,
+  getSessionCursorSessionId,
   getSessionWorkingDirectory,
   mergeSessionRuntimeUpdates,
   setSessionClaudeTmuxProviderUpdate,
   setSessionCodexThreadIdUpdate,
   setSessionCodexTmuxProviderUpdate,
   setSessionKimiIdentityUpdate,
+  setSessionCursorIdentityUpdate,
 } from '../../domain/session-runtime.js';
 import { restartKimiTmuxInputSession } from '../../runtime/kimi/tmux-provider.js';
+import {
+  cursorTmuxSessionName,
+  restartCursorTmuxInputSession,
+} from '../../runtime/cursor/tmux-provider.js';
 import {
   CodexResumeTmuxLaunchError,
   claudeTmuxSessionName,
@@ -30,6 +36,7 @@ import {
   resolveEffectiveCodexProvider,
   resolveClaudeRuntimeConfig,
   resolveKimiRuntimeConfig,
+  resolveCursorRuntimeConfig,
   resolveSessionRuntimeConfig,
 } from '../session/support.js';
 import { buildCommandFields } from './presentation.js';
@@ -82,6 +89,19 @@ function clearSessionKimiProviderToml(sessionId: string): void {
   );
 }
 
+function setSessionCursorProviderToml(sessionId: string): void {
+  createConfigService({ migrate: false }).set(
+    { kind: 'session', sessionId },
+    { runtime: { cursor: { provider: 'tmux' } } },
+  );
+}
+
+function clearSessionCursorProviderToml(sessionId: string): void {
+  createConfigService({ migrate: false }).unset(
+    { kind: 'session', sessionId },
+    'runtime.cursor.provider',
+  );
+}
 function claudeProviderSwitchNote(provider: RuntimeProviderChoice): string {
   switch (provider) {
     case 'sdk':
@@ -97,7 +117,7 @@ async function cancelStaleTmuxProviderStart(options: {
   store: BridgeStore;
   msg: InboundMessage;
   sessionId: string;
-  runtime: 'codex' | 'claude' | 'kimi';
+  runtime: 'codex' | 'claude' | 'kimi' | 'cursor';
   tmuxSessionName?: string;
   markdown: boolean;
 }): Promise<string | null> {
@@ -388,6 +408,94 @@ export async function handleProviderCommand(options: {
           ? '同名 tmux session 已存在，已先销毁并重新启动 Kimi Code TUI。'
           : '已启动 Kimi Code TUI。',
         '之后的普通消息会使用 Kimi Code tmux 路径。',
+      ],
+      options.markdown,
+    );
+  }
+  if (getSessionActiveRuntime(session) === 'cursor') {
+    const requested = options.args.trim().toLowerCase();
+    if (!requested) {
+      return buildCommandFields(
+        '当前 Cursor Provider',
+        [['Runtime', 'cursor'], ['Provider', 'tmux']],
+        ['Cursor Agent 当前只支持 tmux Provider；发送 `/provider tmux` 可重新启动官方 TUI，或 `/provider default` 清除会话级覆盖。'],
+        options.markdown,
+      );
+    }
+    if (requested === 'default') {
+      clearSessionCursorProviderToml(session.id);
+      scheduleMirrorSubscriptionsBestEffort(options.deps, 'cursor provider default');
+      return buildCommandFields(
+        '已恢复默认 Cursor Provider',
+        [['Runtime', 'cursor'], ['Provider', 'tmux']],
+        ['Cursor Agent 当前只支持 tmux Provider。'],
+        options.markdown,
+      );
+    }
+    if (requested !== 'tmux') {
+      return buildCommandFields(
+        'Cursor Provider 用法',
+        [['命令', '`/provider tmux|default` 或 `/p tmux|default`']],
+        ['Cursor Agent 当前只支持 tmux Provider。'],
+        options.markdown,
+      );
+    }
+    const cursorConfig = resolveCursorRuntimeConfig(session, binding);
+    const tmuxSessionName = cursorTmuxSessionName(session.id);
+    await options.deps.notifyBackgroundOperation?.(`正在重新启动 Cursor Agent tmux 后台会话 \`${tmuxSessionName}\`。`);
+    let prepared: Awaited<ReturnType<typeof restartCursorTmuxInputSession>>;
+    try {
+      prepared = await (options.deps.restartCursorTmuxSession || restartCursorTmuxInputSession)({
+        prompt: '',
+        sessionId: session.id,
+        runtime: 'cursor',
+        cursorSessionId: getSessionCursorSessionId(session),
+        cursorForce: cursorConfig.force,
+        workingDirectory: getSessionWorkingDirectory(session),
+        model: cursorConfig.model,
+      });
+    } catch (error) {
+      const staleStart = await cancelStaleTmuxProviderStart({
+        store: options.store,
+        msg: options.msg,
+        sessionId: session.id,
+        runtime: 'cursor',
+        tmuxSessionName,
+        markdown: options.markdown,
+      });
+      if (staleStart) return staleStart;
+      throw error;
+    }
+    const staleStart = await cancelStaleTmuxProviderStart({
+      store: options.store,
+      msg: options.msg,
+      sessionId: session.id,
+      runtime: 'cursor',
+      tmuxSessionName: prepared.sessionName,
+      markdown: options.markdown,
+    });
+    if (staleStart) return staleStart;
+    const identityUpdate = setSessionCursorIdentityUpdate(prepared.sessionId, prepared.cwd);
+    options.store.updateSession(session.id, {
+      ...identityUpdate,
+      runtime: {
+        ...identityUpdate.runtime,
+        general: {
+          tmuxSessionName: prepared.sessionName,
+          autoEnter: true,
+        },
+      },
+    });
+    setSessionCursorProviderToml(session.id);
+    scheduleMirrorSubscriptionsBestEffort(options.deps, 'cursor provider tmux');
+    return buildCommandFields(
+      '已切换 Cursor Provider',
+      [['Runtime', 'cursor'], ['Provider', 'tmux'], ['tmux session', prepared.sessionName]],
+      [
+        prepared.existed
+          ? '同名 tmux session 已存在，已先销毁并重新启动 Cursor Agent TUI。'
+          : '已启动 Cursor Agent TUI。',
+        '之后的普通消息会使用 Cursor Agent tmux/transcript 路径。',
       ],
       options.markdown,
     );

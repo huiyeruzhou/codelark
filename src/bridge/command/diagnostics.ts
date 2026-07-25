@@ -28,6 +28,7 @@ import {
   getSessionActiveRuntime,
   getSessionClaudeSessionId,
   getSessionCodexTitle,
+  getSessionCursorSessionId,
   getSessionKimiSessionId,
   getSessionWorkingDirectory,
 } from '../../domain/session-runtime.js';
@@ -50,6 +51,7 @@ import {
   resolveEffectiveNetworkAccess,
   resolveEffectiveReasoningEffort,
   resolveEffectiveSandboxMode,
+  resolveCursorRuntimeConfig,
   resolveKimiRuntimeConfig,
 } from '../session/support.js';
 import type { RuntimeAgent } from '../../domain/session.js';
@@ -111,17 +113,19 @@ function formatHistoryLimitLabel(limit: number, configuredLimit: number): string
 function runtimeLabel(runtime: RuntimeAgent): string {
   if (runtime === 'claude') return 'Claude Code';
   if (runtime === 'kimi') return 'Kimi Code';
+  if (runtime === 'cursor') return 'Cursor Agent';
   return 'Codex';
 }
 
 function runtimeIdentityFieldName(runtime: RuntimeAgent): string {
   if (runtime === 'claude') return 'claude_session_id';
   if (runtime === 'kimi') return 'kimi_session_id';
+  if (runtime === 'cursor') return 'cursor_session_id';
   return 'codex_thread_id';
 }
 
 function runtimeIdentityMissingLabel(runtime: RuntimeAgent): string {
-  if (runtime === 'claude' || runtime === 'kimi') return `${runtimeLabel(runtime)} session id 未绑定`;
+  if (runtime === 'claude' || runtime === 'kimi' || runtime === 'cursor') return `${runtimeLabel(runtime)} session id 未绑定`;
   return 'Codex thread id 未绑定';
 }
 
@@ -141,6 +145,14 @@ function currentRuntimeFields(
     return [
       [currentRuntimeFieldLabel('kimi', 'kimiDefaultModel'), kimiConfig.model || 'default'],
       [currentRuntimeFieldLabel('kimi', 'kimiProvider'), kimiConfig.provider],
+    ];
+  }
+  if (runtime === 'cursor') {
+    const cursorConfig = resolveCursorRuntimeConfig(session, binding);
+    return [
+      [currentRuntimeFieldLabel('cursor', 'cursorDefaultModel'), cursorConfig.model || 'default'],
+      [currentRuntimeFieldLabel('cursor', 'cursorProvider'), cursorConfig.provider],
+      [currentRuntimeFieldLabel('cursor', 'cursorForce'), cursorConfig.force ? 'on' : 'off'],
     ];
   }
   if (runtime === 'claude') {
@@ -247,7 +259,7 @@ function filterHistoryMessagesForRuntime(
   messages: Array<{ role: string; content: string }>,
   runtime: RuntimeAgent | undefined,
 ): Array<{ role: string; content: string }> {
-  if (runtime !== 'claude' && runtime !== 'kimi') return messages;
+  if (runtime !== 'claude' && runtime !== 'kimi' && runtime !== 'cursor') return messages;
   return messages.filter((message) => message.role !== 'user');
 }
 
@@ -319,9 +331,14 @@ export function handleCurrentCommand(options: {
   const claudeSessionId = getSessionClaudeSessionId(session) || '';
   const localCodexThreadId = resolveLocalCodexThreadId(session, binding, 'current command');
   const kimiSessionId = getSessionKimiSessionId(session) || '';
+  const cursorSessionId = getSessionCursorSessionId(session) || '';
   const localRuntimeThreadId = activeRuntime === 'kimi'
     ? kimiSessionId
-    : activeRuntime === 'claude' ? claudeSessionId : localCodexThreadId;
+    : activeRuntime === 'claude'
+      ? claudeSessionId
+      : activeRuntime === 'cursor'
+        ? cursorSessionId
+        : localCodexThreadId;
   const threadInfo = options.threadDisplay.binding(displayBinding);
   const codexTitle = getSessionCodexTitle(session)
     || (codexThreadId ? getCodexSessionByThreadIdSafe(codexThreadId, 'current codex title')?.title : '')
@@ -345,6 +362,10 @@ export function handleCurrentCommand(options: {
         : activeRuntime === 'claude'
         ? [
           ['claude_session_id', claudeSessionId || '-'] as [string, string],
+        ]
+        : activeRuntime === 'cursor'
+        ? [
+          ['cursor_session_id', cursorSessionId || '-'] as [string, string],
         ]
         : [
           ['codex_title', codexTitle || '-'] as [string, string],
@@ -391,7 +412,14 @@ export function buildCurrentCommandRichCard(options: {
   const codexThreadId = getCodexThreadId(session, binding);
   const claudeSessionId = getSessionClaudeSessionId(session) || '';
   const kimiSessionId = getSessionKimiSessionId(session) || '';
-  const runtimeThreadId = activeRuntime === 'kimi' ? kimiSessionId : activeRuntime === 'claude' ? claudeSessionId : codexThreadId;
+  const cursorSessionId = getSessionCursorSessionId(session) || '';
+  const runtimeThreadId = activeRuntime === 'kimi'
+    ? kimiSessionId
+    : activeRuntime === 'claude'
+      ? claudeSessionId
+      : activeRuntime === 'cursor'
+        ? cursorSessionId
+        : codexThreadId;
   const threadInfo = options.threadDisplay.binding(displayBinding);
   const codexTitle = getSessionCodexTitle(session)
     || (codexThreadId ? getCodexSessionByThreadIdSafe(codexThreadId, 'current card codex title')?.title : '')
@@ -569,7 +597,7 @@ export async function handleHistoryCommand(options: {
 
   if (historyView === 'json' || historyView === 'file') {
     if (!sessionTranscript) {
-      return '当前会话没有可直接发送的 session JSONL 文件。只有已落盘到 Codex、Claude Code 或 Kimi Code session 文件的线程才能使用 `/his json`。';
+      return '当前会话没有可直接发送的 session JSONL 文件。只有已落盘到 Codex、Claude Code、Kimi Code 或 Cursor Agent session 文件的线程才能使用 `/his json`。';
     }
     const attachment: OutboundAttachment = {
       kind: 'file',

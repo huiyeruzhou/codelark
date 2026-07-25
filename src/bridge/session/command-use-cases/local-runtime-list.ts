@@ -13,7 +13,7 @@ import { listCommandLocalRuntimeSessions } from './source.js';
 import type { LocalRuntimeFilter } from './source.js';
 import type { SessionCommandResult } from './types.js';
 
-const LOCAL_RUNTIME_FALLBACK_ORDER: LocalRuntimeFilter[] = ['codex', 'claude', 'kimi'];
+const LOCAL_RUNTIME_FALLBACK_ORDER: LocalRuntimeFilter[] = ['codex', 'claude', 'kimi', 'cursor'];
 
 export function handleLocalRuntimeSessionsCommand(options: {
   msg: InboundMessage;

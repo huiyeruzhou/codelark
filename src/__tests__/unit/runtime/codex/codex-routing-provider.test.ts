@@ -68,6 +68,12 @@ describe('CodexRoutingProvider', () => {
         return streamWithText('kimi-tmux-stream');
       },
     };
+    provider.cursorTmuxProvider = {
+      streamChat() {
+        routed.push('cursor-tmux');
+        return streamWithText('cursor-tmux-stream');
+      },
+    };
 
     const sdkOutput = await readStream(provider.streamChat({
       prompt: 'hello',
@@ -116,8 +122,14 @@ describe('CodexRoutingProvider', () => {
       codexProvider: 'sdk',
       claudeProvider: 'pty',
     }));
+    const cursorOutput = await readStream(provider.streamChat({
+      prompt: 'hello',
+      sessionId: 'session-cursor',
+      runtime: 'cursor',
+      cursorProvider: 'tmux',
+    }));
 
-    assert.deepEqual(routed, ['sdk', 'tmux', 'pty', 'sdk', 'claude-tmux', 'claude-sdk', 'claude-tmux', 'kimi-tmux']);
+    assert.deepEqual(routed, ['sdk', 'tmux', 'pty', 'sdk', 'claude-tmux', 'claude-sdk', 'claude-tmux', 'kimi-tmux', 'cursor-tmux']);
     assert.equal(sdkOutput, 'sdk-stream');
     assert.equal(tmuxOutput, 'tmux-stream');
     assert.equal(ptyOutput, 'pty-stream');
@@ -126,6 +138,7 @@ describe('CodexRoutingProvider', () => {
     assert.equal(claudeSdkOutput, 'claude-sdk-stream');
     assert.equal(claudeTmuxOutput, 'claude-tmux-stream');
     assert.equal(kimiOutput, 'kimi-tmux-stream');
+    assert.equal(cursorOutput, 'cursor-tmux-stream');
   });
 
   it('builds Claude Code pty commands from the global Claude executable', () => {

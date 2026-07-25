@@ -2310,6 +2310,59 @@ describe('feishu-adapter structured streaming regions', () => {
     assert.equal(reactionDeleteCalls.length, 0);
   });
 
+  it('applies metadata that arrives while the streaming card is being created', async () => {
+    const createCard = createDeferred<{ data: { card_id: string } }>();
+    const cardUpdates: Array<Record<string, any>> = [];
+    const adapter = new FeishuAdapter({
+      id: 'feishu-default',
+      provider: 'feishu',
+      enabled: true,
+      alias: '飞书',
+      config: {
+        appId: 'app-id',
+        appSecret: 'app-secret',
+        streamingEnabled: true,
+      },
+    });
+    (adapter as any).cardFlushBaseIntervalMs = 1;
+    (adapter as any).lastIncomingMessageId.set('chat-1', 'incoming-1');
+    (adapter as any).restClient = {
+      cardkit: {
+        v1: {
+          card: {
+            create: async () => createCard.promise,
+            update: async (payload: Record<string, any>) => {
+              cardUpdates.push(payload);
+              return {};
+            },
+          },
+          cardElement: {
+            content: async () => ({}),
+          },
+        },
+      },
+      im: {
+        message: {
+          reply: async () => ({ data: { message_id: 'stream-message-1' } }),
+        },
+      },
+    };
+
+    adapter.onMessageStart('chat-1', 'stream-1');
+    adapter.onStreamMetadata('chat-1', {
+      title: 'Cursor Session',
+      tags: ['cursor', 'model:gpt-5.3-codex', 'bridge_id:bridge-1', 'tmux'],
+    }, 'stream-1');
+    createCard.resolve({ data: { card_id: 'card-1' } });
+
+    await waitForCondition(() => cardUpdates.length > 0);
+    const card = JSON.parse(String(cardUpdates.at(-1)?.data?.card?.data || '{}'));
+    assert.equal(card.header?.title?.content, 'Cursor Session');
+    assert.equal(card.header?.text_tag_list?.some((tag: any) => tag.text?.content === 'tmux'), true);
+    assert.match(JSON.stringify(card.body), /cursor/);
+    assert.match(JSON.stringify(card.body), /gpt-5\.3-codex/);
+  });
+
   it('waits for an in-flight mirror card before exposing its message id', async () => {
     const createCard = createDeferred<{ data: { card_id: string } }>();
     const adapter = new FeishuAdapter({

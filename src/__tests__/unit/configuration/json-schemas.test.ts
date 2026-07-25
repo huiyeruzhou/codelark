@@ -95,7 +95,7 @@ describe('published JSON schemas', () => {
 
     const schema = readJson(path.join(schemasDir, 'config.v2.schema.json')) as any;
     assert.equal(schema.properties.schema_version.const, 2);
-    assert.deepEqual(schema.$defs.runtime.properties.agent.enum, ['codex', 'claude', 'kimi']);
+    assert.deepEqual(schema.$defs.runtime.properties.agent.enum, ['codex', 'claude', 'kimi', 'cursor']);
     assert.deepEqual(schema.$defs.codex.properties.provider.enum, ['', 'sdk', 'pty', 'tmux']);
     assert.deepEqual(schema.$defs.claude.properties.provider.enum, ['sdk', 'pty', 'tmux']);
     assert.deepEqual(schema.$defs.claude.properties.executable.enum, ['claude', 'ccr']);
@@ -166,7 +166,7 @@ describe('published JSON schemas', () => {
     assert.equal(bridgeSession.properties.codex_thread_id, undefined);
     assert.equal(bridgeSession.properties.model, undefined);
     assert.equal(bridgeSession.properties.runtime.$ref, '#/$defs/sessionRuntime');
-    assert.equal(sessionsSchema.$defs.sessionRuntime.oneOf.length, 3);
+    assert.equal(sessionsSchema.$defs.sessionRuntime.oneOf.length, 4);
     assert.equal(sessionsSchema.$defs.codexSessionRuntime.properties.codex.properties.threadId.type, 'string');
     assert.equal(sessionsSchema.$defs.codexSessionRuntime.properties.codex.properties.model.type, 'string');
     assert.deepEqual(sessionsSchema.$defs.claudeSessionRuntime.required, ['activeRuntime']);
@@ -178,10 +178,13 @@ describe('published JSON schemas', () => {
     assert.deepEqual(sessionsSchema.$defs.kimiSessionRuntime.properties.codex, { not: {} });
     assert.deepEqual(sessionsSchema.$defs.kimiSessionRuntime.properties.claude, { not: {} });
     assert.deepEqual(sessionsSchema.$defs.kimiSessionRuntime.properties.kimi.properties.provider.enum, ['tmux']);
+    assert.equal(sessionsSchema.$defs.cursorSessionRuntime.properties.activeRuntime.const, 'cursor');
+    assert.equal(sessionsSchema.$defs.cursorSessionRuntime.properties.cursor.properties.provider.const, 'tmux');
     assert.equal(sessionsSchema.$defs.sessionRuntimeGeneral.properties.tmuxSessionName.type, 'string');
     assert.ok(JSON.stringify(sessionsSchema.$defs.noRetiredRuntimeTopLevelFields).includes('codex_thread_id'));
 
     const channelChatsSchema = readJson(path.join(schemasDir, 'data', 'channel-chats.v1.schema.json')) as any;
     assert.equal(channelChatsSchema.$defs.channelChat.properties.runtimeBridgeSessionIds.properties.kimi.type, 'string');
+    assert.equal(channelChatsSchema.$defs.channelChat.properties.runtimeBridgeSessionIds.properties.cursor.type, 'string');
   });
 });

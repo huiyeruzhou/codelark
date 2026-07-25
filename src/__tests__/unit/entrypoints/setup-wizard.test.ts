@@ -110,7 +110,7 @@ test('real setup wizard e2e can load credentials from env file without npm secre
 
   assert.match(script, /--test-env-file/);
   assert.match(script, /--runtime/);
-  assert.match(script, /codex\|ccr\|claude\|kimi/);
+  assert.match(script, /codex\|ccr\|claude\|kimi\|cursor/);
   assert.match(script, /CODELARK_REAL_FEISHU_TEST_APP_ID/);
   assert.match(script, /CODELARK_REAL_FEISHU_TEST_APP_SECRET/);
   assert.doesNotMatch(script, /CTI_REAL_FEISHU_TEST_APP_ID/);
@@ -138,6 +138,7 @@ test('real setup wizard wizard e2e creates credentials in an isolated home and w
   assert.match(script, /agent\?: string/);
   assert.match(script, /runtime agent mismatch/);
   assert.match(script, /kimi provider mismatch/);
+  assert.match(script, /cursor provider mismatch/);
   assert.doesNotMatch(script, /runtime\?: \{ provider\?: string \}/);
   assert.match(script, /defaultRealFeishuTestEnvFile/);
   assert.match(script, /writeDefaultRealFeishuTestEnvFile/);
@@ -190,11 +191,18 @@ test('setup wizard refreshes lark-cli identity policy after user authorization',
 test('recommends runtime from home directory markers', () => {
   const root = tempDir('clk-runtime-');
   const kimiRoot = tempDir('clk-runtime-kimi-');
+  const cursorRoot = tempDir('clk-runtime-cursor-');
 
   fs.mkdirSync(path.join(kimiRoot, '.kimi-code'), { recursive: true });
   assert.deepEqual(recommendRuntime(kimiRoot), {
     runtime: 'kimi',
     reason: '检测到 ~/.kimi-code，默认使用 Kimi Code。',
+  });
+
+  fs.mkdirSync(path.join(cursorRoot, '.cursor'), { recursive: true });
+  assert.deepEqual(recommendRuntime(cursorRoot), {
+    runtime: 'cursor',
+    reason: '检测到 ~/.cursor，默认使用 Cursor Agent。',
   });
 
   fs.mkdirSync(path.join(root, '.claude-code'), { recursive: true });
@@ -298,6 +306,19 @@ test('builds setup config with sdk providers when tmux install is declined', () 
   assert.equal(next.runtime.agent, 'claude');
   assert.equal(next.runtime.codex.provider, 'sdk');
   assert.equal(next.runtime.claude.provider, 'sdk');
+});
+
+test('builds setup config for the Cursor tmux runtime', () => {
+  const current = baseSetupConfig();
+  const next = buildSetupConfig(current, {
+    appId: 'cli_demo',
+    appSecret: 'secret_demo',
+    site: 'feishu',
+  }, 'cursor', '/work/cursor');
+
+  assert.equal(next.runtime.agent, 'cursor');
+  assert.equal(next.runtime.cursor.provider, 'tmux');
+  assert.equal(next.bridge.defaultWorkspace, '/work/cursor');
 });
 
 test('builds platform-specific tmux installation guidance', () => {

@@ -35,9 +35,11 @@ import {
   defaultUiSessionCodexSource,
   defaultUiSessionClaudeSource,
   defaultUiSessionKimiSource,
+  defaultUiSessionCursorSource,
   type UiSessionCodexSource,
   type UiSessionClaudeSource,
   type UiSessionKimiSource,
+  type UiSessionCursorSource,
   type UiSessionRuntimeSource,
 } from './session-source.js';
 
@@ -51,6 +53,8 @@ export interface UiSessionIdentity {
   claudeCwd?: string;
   kimiSessionId?: string;
   kimiCwd?: string;
+  cursorSessionId?: string;
+  cursorCwd?: string;
 }
 
 export interface UiSessionHistoryMessage {
@@ -105,7 +109,7 @@ function filterUiMessagesForRuntime(
   messages: UiSessionHistoryMessage[],
   runtime: RuntimeAgent | undefined,
 ): UiSessionHistoryMessage[] {
-  if (runtime !== 'claude' && runtime !== 'kimi') return messages;
+  if (runtime !== 'claude' && runtime !== 'kimi' && runtime !== 'cursor') return messages;
   return messages.filter((message) => message.role !== 'user');
 }
 
@@ -152,7 +156,9 @@ function applySessionConfigToml(bridgeSessionId: string, payload: Record<string,
     ? 'claude'
     : payload.activeRuntime === 'kimi'
       ? 'kimi'
-      : 'codex';
+      : payload.activeRuntime === 'cursor'
+        ? 'cursor'
+        : 'codex';
   if (typeof payload.workingDirectory === 'string') {
     const workspace = payload.workingDirectory.trim() || process.cwd();
     createConfigService({ migrate: false }).set(
@@ -203,6 +209,34 @@ function applySessionConfigToml(bridgeSessionId: string, payload: Record<string,
         'runtime.kimi.provider',
         payload.kimiProvider,
         (provider) => ({ runtime: { kimi: { provider } } }),
+      );
+    }
+    return;
+  }
+
+  if (activeRuntime === 'cursor') {
+    if (typeof payload.cursorModel === 'string') {
+      setOrUnsetSessionConfig(
+        bridgeSessionId,
+        'runtime.cursor.model',
+        payload.cursorModel.trim(),
+        (model) => ({ runtime: { cursor: { model } } }),
+      );
+    }
+    if (payload.cursorProvider === 'tmux' || payload.cursorProvider === '') {
+      setOrUnsetSessionConfig(
+        bridgeSessionId,
+        'runtime.cursor.provider',
+        payload.cursorProvider,
+        (provider) => ({ runtime: { cursor: { provider } } }),
+      );
+    }
+    if (typeof payload.cursorForce === 'boolean') {
+      setOrUnsetSessionConfig(
+        bridgeSessionId,
+        'runtime.cursor.force',
+        payload.cursorForce,
+        (force) => ({ runtime: { cursor: { force } } }),
       );
     }
     return;
@@ -310,7 +344,9 @@ function sanitizeSessionConfig(payload: Record<string, unknown>): BridgeSessionU
     ? 'claude'
     : payload.activeRuntime === 'kimi'
       ? 'kimi'
-      : 'codex';
+      : payload.activeRuntime === 'cursor'
+        ? 'cursor'
+        : 'codex';
   if (typeof payload.name === 'string') {
     updates.name = payload.name.trim() || undefined;
   }
@@ -343,6 +379,9 @@ function sessionConfigPayload(session: BridgeSession) {
     claudeReasoningEffort: getSessionConfigTomlOverride<string>(session, 'runtime.claude.reasoningEffort') || '',
     kimiModel: getSessionConfigTomlOverride<string>(session, 'runtime.kimi.model') || '',
     kimiProvider: getSessionConfigTomlOverride<string>(session, 'runtime.kimi.provider') || '',
+    cursorModel: getSessionConfigTomlOverride<string>(session, 'runtime.cursor.model') || '',
+    cursorProvider: getSessionConfigTomlOverride<string>(session, 'runtime.cursor.provider') || '',
+    cursorForce: getSessionConfigTomlOverride<boolean>(session, 'runtime.cursor.force') === true,
   };
 }
 
@@ -352,14 +391,15 @@ export class UiSessionApplication {
     private readonly codexSource: UiSessionCodexSource = defaultUiSessionCodexSource,
     private readonly claudeSource: UiSessionClaudeSource = defaultUiSessionClaudeSource,
     private readonly kimiSource: UiSessionKimiSource = defaultUiSessionKimiSource,
+    private readonly cursorSource: UiSessionCursorSource = defaultUiSessionCursorSource,
   ) {}
 
   private createRuntimeSource(): UiSessionRuntimeSource {
-    return createUiSessionRuntimeSource(this.codexSource, this.claudeSource, this.kimiSource);
+    return createUiSessionRuntimeSource(this.codexSource, this.claudeSource, this.kimiSource, this.cursorSource);
   }
 
   private createSessionRegistry() {
-    return createUiSessionRegistry(this.store, this.codexSource, this.claudeSource, this.kimiSource);
+    return createUiSessionRegistry(this.store, this.codexSource, this.claudeSource, this.kimiSource, this.cursorSource);
   }
 
   listSessions(limit?: number): UiSessionListPayload {
@@ -455,6 +495,17 @@ export class UiSessionApplication {
       };
     }
 
+    if (identity.cursorSessionId && identity.cursorCwd) {
+      const runtimeSource = this.createRuntimeSource();
+      const summary = runtimeSessionToSummary(runtimeSource, this.store, 'cursor', identity.cursorSessionId, identity.cursorCwd);
+      if (!summary) throw new Error('指定的 Cursor Agent 会话不存在。');
+      return {
+        session: summary,
+        source: 'cursor',
+        messages: uiRuntimeHistoryMessages(runtimeSource, 'cursor', identity.cursorSessionId, identity.cursorCwd),
+      };
+    }
+
     throw new Error('不支持的会话目标。');
   }
 
@@ -490,6 +541,15 @@ export class UiSessionApplication {
     };
   }
 
+  importCursorThread(cursorSessionId: string, cwd: string) {
+    const session = this.createSessionRegistry().materializeCursorThread(cursorSessionId, cwd);
+    return {
+      bridgeSessionId: session.id,
+      session: bridgeSessionToSummary(session),
+      config: sessionConfigPayload(session),
+    };
+  }
+
   renameSession(identity: UiSessionIdentity, name: string | undefined) {
     const registry = this.createSessionRegistry();
     const updated = identity.bridgeSessionId
@@ -498,7 +558,9 @@ export class UiSessionApplication {
         ? registry.renameCodexThread(identity.codexThreadId, name)
         : identity.claudeSessionId && identity.claudeCwd
           ? registry.renameClaudeThread(identity.claudeSessionId, identity.claudeCwd, name)
-          : registry.renameKimiThread(identity.kimiSessionId!, identity.kimiCwd!, name);
+          : identity.kimiSessionId && identity.kimiCwd
+            ? registry.renameKimiThread(identity.kimiSessionId, identity.kimiCwd, name)
+            : registry.renameCursorThread(identity.cursorSessionId!, identity.cursorCwd!, name);
     return sessionConfigPayload(updated);
   }
 
@@ -549,6 +611,14 @@ export class UiSessionApplication {
       }
 
       const result = this.createSessionRegistry().archiveKimiThread(identity.kimiSessionId, identity.kimiCwd);
+      return { deleted: summary, deletedBridgeSessionIds: result.deletedBridgeSessionIds };
+    }
+
+    if (identity.cursorSessionId && identity.cursorCwd) {
+      const runtimeSource = this.createRuntimeSource();
+      const summary = runtimeSessionToSummary(runtimeSource, this.store, 'cursor', identity.cursorSessionId, identity.cursorCwd);
+      if (!summary) throw new Error('指定的 Cursor Agent 会话不存在。');
+      const result = this.createSessionRegistry().archiveCursorThread(identity.cursorSessionId, identity.cursorCwd);
       return { deleted: summary, deletedBridgeSessionIds: result.deletedBridgeSessionIds };
     }
 

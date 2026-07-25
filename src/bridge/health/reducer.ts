@@ -5,6 +5,8 @@ import {
   getSessionClaudeCwd,
   getSessionClaudeSessionId,
   getSessionCodexThreadId,
+  getSessionCursorCwd,
+  getSessionCursorSessionId,
   getSessionKimiCwd,
   getSessionKimiSessionId,
   getSessionWorkingDirectory,
@@ -237,11 +239,15 @@ export function computeBaseDiagnosis(
     ? trimOrNull(getSessionKimiSessionId(session))
     : activeRuntime === 'claude'
       ? trimOrNull(getSessionClaudeSessionId(session))
+      : activeRuntime === 'cursor'
+        ? trimOrNull(getSessionCursorSessionId(session))
       : codexThreadId;
   const runtimeIdentityCwd = activeRuntime === 'kimi'
     ? trimOrNull(getSessionKimiCwd(session)) || trimOrNull(getSessionWorkingDirectory(session))
     : activeRuntime === 'claude'
       ? trimOrNull(getSessionClaudeCwd(session)) || trimOrNull(getSessionWorkingDirectory(session))
+      : activeRuntime === 'cursor'
+        ? trimOrNull(getSessionCursorCwd(session)) || trimOrNull(getSessionWorkingDirectory(session))
       : null;
   const lastProgressMs = parseIsoMs(lastProgressAt || undefined);
   const previousStatus = session.health_status || 'idle';

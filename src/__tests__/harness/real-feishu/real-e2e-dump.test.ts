@@ -8,6 +8,7 @@ import path from 'node:path';
 import {
   basicDialogueStreamCardCheckpointIssues,
   collectRealE2eDump,
+  cursorStreamCardUnifiedUiIssues,
   kimiThinkingStatusOnlyIssues,
   scriptedKimiToolCardIssues,
   scriptedKimiHistoryTranscriptIssues,
@@ -17,6 +18,10 @@ import {
   streamCardCheckpointVisibleText,
 } from '../../../bridge/diagnostics/real-e2e-dump.js';
 import { computeKimiWorkspaceDirName } from '../../../runtime/kimi/session-index.js';
+import {
+  cursorWorkspaceHash,
+  getCursorTranscriptCandidates,
+} from '../../../runtime/cursor/session-index.js';
 
 describe('unit::real-e2e-dump::live-log-scoping', () => {
   it('extracts stream keys only from lines related to the requested chat/session', () => {
@@ -162,6 +167,32 @@ describe('unit::real-e2e-dump::live-log-scoping', () => {
     }
   });
 
+  it('requires Cursor final cards to use the shared header and streaming regions', () => {
+    const marker = 'CODELARK_CURSOR_UI_MARKER';
+    const checkpoint = {
+      kind: 'final',
+      streamKey: 'im:cursor-session:om_cursor',
+      status: 'completed',
+      headerTitle: 'Cursor Session',
+      headerTags: ['bridge_id:cursor-session', 'tmux'],
+      elementIds: ['runtime_meta_tags', 'stream_history', 'final_content', 'streaming_status'],
+      markdownTexts: [
+        "<text_tag color='orange'>cursor</text_tag> <text_tag color='turquoise'>model:gpt-5.3-codex</text_tag>",
+        marker,
+      ],
+    };
+
+    assert.deepEqual(cursorStreamCardUnifiedUiIssues([checkpoint], marker, 'gpt-5.3-codex'), []);
+    assert.deepEqual(
+      cursorStreamCardUnifiedUiIssues([{ ...checkpoint, headerTitle: undefined }], marker, 'gpt-5.3-codex'),
+      ['Cursor final card did not use the shared session-title header.'],
+    );
+    assert.deepEqual(
+      cursorStreamCardUnifiedUiIssues([{ ...checkpoint, elementIds: ['stream_history'] }], marker, 'gpt-5.3-codex'),
+      ['Cursor final card did not use the shared runtime metadata region.'],
+    );
+  });
+
   it('reports Kimi runtime identity and wire transcript paths', () => {
     const codelarkHome = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-real-e2e-dump-'));
     const kimiHome = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-real-e2e-kimi-'));
@@ -266,6 +297,89 @@ describe('unit::real-e2e-dump::live-log-scoping', () => {
       else process.env.KIMI_CODE_HOME = previousKimiHome;
       fs.rmSync(codelarkHome, { recursive: true, force: true });
       fs.rmSync(kimiHome, { recursive: true, force: true });
+    }
+  });
+
+  it('reports Cursor identity and transcript from the explicitly isolated data roots', () => {
+    const codelarkHome = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-real-e2e-dump-'));
+    const cursorConfigDir = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-real-e2e-cursor-config-'));
+    const cursorDataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-real-e2e-cursor-data-'));
+    const previousConfigDir = process.env.CURSOR_CONFIG_DIR;
+    const previousDataDir = process.env.CURSOR_DATA_DIR;
+    try {
+      process.env.CURSOR_CONFIG_DIR = cursorConfigDir;
+      process.env.CURSOR_DATA_DIR = cursorDataDir;
+      const dataDir = path.join(codelarkHome, 'data');
+      fs.mkdirSync(path.join(dataDir, 'messages'), { recursive: true });
+      const chatId = 'oc_cursor_chat';
+      const bridgeSessionId = 'session-cursor-dump';
+      const cursorSessionId = '22222222-2222-4222-8222-222222222222';
+      const cwd = '/tmp/cursor-dump';
+      const chatDir = path.join(cursorConfigDir, 'chats', cursorWorkspaceHash(cwd), cursorSessionId);
+      fs.mkdirSync(chatDir, { recursive: true });
+      fs.writeFileSync(path.join(chatDir, 'store.db'), 'cursor-store');
+      fs.writeFileSync(path.join(chatDir, 'meta.json'), JSON.stringify({
+        schemaVersion: 1,
+        title: 'Cursor dump',
+        createdAtMs: Date.now(),
+        updatedAtMs: Date.now(),
+        hasConversation: true,
+        isSubagent: false,
+        cwd,
+      }));
+      const transcriptPath = getCursorTranscriptCandidates(cursorSessionId, cwd)[0]!;
+      fs.mkdirSync(path.dirname(transcriptPath), { recursive: true });
+      fs.writeFileSync(transcriptPath, [
+        { role: 'user', message: { content: [{ type: 'text', text: 'cursor prompt' }] } },
+        { role: 'assistant', message: { content: [{ type: 'text', text: 'cursor answer' }] } },
+        { type: 'turn_ended', status: 'success' },
+      ].map((row) => JSON.stringify(row)).join('\n') + '\n');
+      fs.writeFileSync(path.join(dataDir, 'channel-chats.json'), JSON.stringify({
+        binding: {
+          id: 'binding-cursor',
+          channelType: 'feishu-default',
+          chatId,
+          bridgeSessionId,
+          runtimeBridgeSessionIds: { cursor: bridgeSessionId },
+        },
+      }));
+      fs.writeFileSync(path.join(dataDir, 'sessions.json'), JSON.stringify({
+        [bridgeSessionId]: {
+          id: bridgeSessionId,
+          name: 'cursor session',
+          runtime: {
+            activeRuntime: 'cursor',
+            cursor: { sessionId: cursorSessionId, cwd, provider: 'tmux' },
+          },
+        },
+      }));
+
+      delete process.env.CURSOR_CONFIG_DIR;
+      delete process.env.CURSOR_DATA_DIR;
+      const report = collectRealE2eDump({
+        codelarkHome,
+        cursorConfigDir,
+        cursorDataDir,
+        channelType: 'feishu-default',
+        chatId,
+        bridgeSessionId,
+      });
+
+      assert.equal(report.runtime, 'cursor');
+      assert.equal(report.cursorSessionId, cursorSessionId);
+      assert.equal(report.cursorTranscriptPath, transcriptPath);
+      assert.equal(report.runtimeSlots[0]?.cursorTranscriptPath, transcriptPath);
+      assert.equal(report.checks.find((check) => check.name === 'cursor_transcript_found')?.ok, true);
+      assert.equal(process.env.CURSOR_CONFIG_DIR, undefined);
+      assert.equal(process.env.CURSOR_DATA_DIR, undefined);
+    } finally {
+      if (previousConfigDir === undefined) delete process.env.CURSOR_CONFIG_DIR;
+      else process.env.CURSOR_CONFIG_DIR = previousConfigDir;
+      if (previousDataDir === undefined) delete process.env.CURSOR_DATA_DIR;
+      else process.env.CURSOR_DATA_DIR = previousDataDir;
+      fs.rmSync(codelarkHome, { recursive: true, force: true });
+      fs.rmSync(cursorConfigDir, { recursive: true, force: true });
+      fs.rmSync(cursorDataDir, { recursive: true, force: true });
     }
   });
 

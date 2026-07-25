@@ -38,10 +38,12 @@ import type {
   BridgeSessionClaudeRuntimeState,
   BridgeSessionCodexRuntimeState,
   KimiProviderChoice,
+  CursorProviderChoice,
   RuntimeAgent,
   RuntimeProviderChoice,
   RuntimeProviderIdentity,
 } from '../../domain/session.js';
+import { DEFAULT_CURSOR_MODEL } from '../../runtime/cursor/constants.js';
 import { validateWorkingDirectory } from '../../shared/security/validators.js';
 import {
   getGlobalStringConfig,
@@ -178,6 +180,13 @@ export interface KimiRuntimeConfig {
   model?: string;
 }
 
+export interface CursorRuntimeConfig {
+  runtime: 'cursor';
+  provider: CursorProviderChoice;
+  model?: string;
+  force: boolean;
+}
+
 export interface RuntimeMetadataConfig {
   runtime: RuntimeAgent;
   reasoningEffort: string;
@@ -211,6 +220,15 @@ export function hasSessionKimiProviderOverride(session?: BridgeSession | null): 
   return getSessionKimiProviderOverride(session) !== undefined;
 }
 
+export function getSessionCursorProviderOverride(session?: BridgeSession | null): CursorProviderChoice | undefined {
+  const tomlProvider = getSessionTomlOverride<CursorProviderChoice>(session, 'runtime.cursor.provider');
+  return tomlProvider === 'tmux' ? 'tmux' : undefined;
+}
+
+export function hasSessionCursorProviderOverride(session?: BridgeSession | null): boolean {
+  return getSessionCursorProviderOverride(session) !== undefined;
+}
+
 export function resolveEffectiveMode(
   binding?: ChannelChat | null,
   session?: BridgeSession | null,
@@ -229,6 +247,9 @@ export function resolveEffectiveRuntimeMode(
   }
   if (activeRuntime === 'kimi') {
     return 'normal';
+  }
+  if (activeRuntime === 'cursor') {
+    return resolveCursorRuntimeConfig(session, binding).force ? 'yolo' : 'normal';
   }
   return resolveEffectiveMode(binding, session);
 }
@@ -253,7 +274,7 @@ export function hasSessionCodexProviderOverride(session?: BridgeSession | null):
 
 export interface EffectiveRuntimeProvider {
   runtime: RuntimeAgent;
-  provider: RuntimeProviderChoice | KimiProviderChoice;
+  provider: RuntimeProviderChoice | KimiProviderChoice | CursorProviderChoice;
   identity: RuntimeProviderIdentity;
 }
 
@@ -263,7 +284,9 @@ export function resolveEffectiveRuntimeProvider(
 ): EffectiveRuntimeProvider {
   const configuredRuntime = scopedConfigForRuntime(binding, session).config.runtime.agent;
   const runtime = getSessionActiveRuntime(session) || configuredRuntime;
-  const provider = runtime === 'kimi'
+  const provider = runtime === 'cursor'
+    ? resolveCursorRuntimeConfig(session, binding).provider
+    : runtime === 'kimi'
     ? resolveKimiRuntimeConfig(session, binding).provider
     : runtime === 'claude'
       ? resolveEffectiveClaudeProvider(session, binding)
@@ -349,13 +372,25 @@ export function resolveKimiRuntimeConfig(session?: BridgeSession | null, binding
   };
 }
 
+export function resolveCursorRuntimeConfig(session?: BridgeSession | null, binding?: ChannelChat | null): CursorRuntimeConfig {
+  const { config } = scopedConfigForRuntime(binding, session);
+  return {
+    runtime: 'cursor',
+    provider: 'tmux',
+    model: config.runtime.cursor.model.trim() || DEFAULT_CURSOR_MODEL,
+    force: config.runtime.cursor.force === true,
+  };
+}
+
 export function resolveRuntimeMetadataConfig(
   session: BridgeSession | null | undefined,
   runtime: RuntimeAgent = session?.runtime?.activeRuntime === 'claude'
     ? 'claude'
     : session?.runtime?.activeRuntime === 'kimi'
       ? 'kimi'
-      : 'codex',
+      : session?.runtime?.activeRuntime === 'cursor'
+        ? 'cursor'
+        : 'codex',
   binding?: ChannelChat | null,
 ): RuntimeMetadataConfig {
   if (runtime === 'claude') {
@@ -372,6 +407,14 @@ export function resolveRuntimeMetadataConfig(
       runtime: 'kimi',
       reasoningEffort: 'default',
       model: kimiConfig.model || 'default',
+    };
+  }
+  if (runtime === 'cursor') {
+    const cursorConfig = resolveCursorRuntimeConfig(session, binding);
+    return {
+      runtime: 'cursor',
+      reasoningEffort: cursorConfig.force ? 'force' : 'default',
+      model: cursorConfig.model || 'default',
     };
   }
   return {

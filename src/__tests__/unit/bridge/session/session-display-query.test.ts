@@ -245,4 +245,37 @@ describe('SessionDisplayQuery', () => {
     assert.equal(unboundRow.executionProvider, 'tmux');
     assert.equal(unboundRow.codexProvider, 'tmux');
   });
+
+  it('lists Cursor sessions as Cursor instead of falling back to Claude', () => {
+    const store = new JsonFileStore(makeBridgeSettings());
+    const linked = store.createSession('Linked Cursor', 'test-model', undefined, '/repo/cursor');
+    store.updateSession(linked.id, {
+      runtime: {
+        activeRuntime: 'cursor',
+        cursor: { sessionId: 'cursor-linked', cwd: '/repo/cursor', provider: 'tmux' },
+        general: { workingDirectory: '/repo/cursor' },
+      },
+    });
+    const payload = new SessionDisplayQuery(store).listRuntimeSessions([{
+      runtime: 'cursor',
+      threadId: 'cursor-linked',
+      filePath: '/tmp/cursor/transcript.jsonl',
+      cwd: '/repo/cursor',
+      originator: 'Cursor Agent',
+      source: 'cursor',
+      firstSeenAt: '2026-07-25T00:00:00.000Z',
+      lastEventAt: '2026-07-25T00:00:01.000Z',
+      title: 'Cursor transcript',
+      activeEstimate: false,
+    }], { root: '/cursor-root' });
+
+    assert.equal(payload.counts.cursorPhysical, 1);
+    assert.equal(payload.counts.bridgeCursorLinked, 1);
+    const row = payload.sessions.find((session) => session.bridgeSessionId === linked.id);
+    assert.ok(row);
+    assert.equal(row.runtime, 'cursor');
+    assert.equal(row.cursorSessionId, 'cursor-linked');
+    assert.equal(row.threadId, 'cursor-linked');
+    assert.equal(row.executionProvider, 'tmux');
+  });
 });

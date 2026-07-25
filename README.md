@@ -14,7 +14,7 @@
 
 | 能力 | 怎么用 | 入口 |
 | --- | --- | --- |
-| 共享本地 runtime 会话 | 在飞书上继续本地 Codex / Claude Code / Kimi Code 对话，用可视化面板选择要接管的线程。 | `/t` |
+| 共享本地 runtime 会话 | 在飞书上继续本地 Codex / Claude Code / Kimi Code / Cursor Agent 对话，用可视化面板选择要接管的线程。 | `/t` |
 | 流式卡片输出 | 将模型思考、工具调用、长任务进度和最终结果渲染成飞书卡片，对话留痕且可追踪。 | 普通消息 |
 | 群聊 = Session | 一个群聊对应一个 session，用群聊名称管理任务；多线并行时一键拉起新群。 | `/new`、`/t rename <名称>` |
 | 云文档驱动开发 | 模型可以生成云文档；在云文档评论中 `@bot` 会直接按文档创建长线群聊，后续评论转发到群内处理。 | 云文档评论 |
@@ -102,9 +102,10 @@ codelark run
 - `/tmux-screen`：显示本地 agent 的 TUI 界面，遇到卡住不动的问题排查用。
 - `<enter>`、`<C-c>`、`<esc>`：向 tmux Provider 发送控制键。
 - `/p tmux`：重启当前 runtime 的 tmux Provider 会话
-- `/p sdk`：Codex / Claude Code 改为使用 SDK provider；Kimi Code 当前只支持 `tmux`。
+- `/p sdk`：Codex / Claude Code 改为使用 SDK provider；Kimi Code 与 Cursor Agent 当前只支持 `tmux`。
+- `/runtime cursor`：切换到 Cursor Agent；原生 Cursor slash 命令使用 `/tmux /<command>`，例如 `/tmux /mcp list`。
 - `/stop`：停止当前任务
-- `/t`：查看最近本地 Codex / Claude Code / Kimi Code 会话。
+- `/t`：查看最近本地 Codex / Claude Code / Kimi Code / Cursor Agent 会话。
 - `/t rename <名称>`：重命名当前线程；群聊通道会同步修改群聊名称，真实群名会自动带 `[botname]` 前缀。
 - `/new`：发送创建表单，填写名称和工作目录后创建新的 IM 群聊会话。
 - `/clear [名称] [路径]`：在当前聊天上下文创建新的对话并绑定过去，之后仍可用 `/t` 找回旧对话。
@@ -128,7 +129,7 @@ codelark run
 绑定成功后，直接发送普通消息即可继续当前线程。
 
 - tmux Provider 会解释 `<enter>`、`<C-c>`、`<esc>` 等控制键；卡权限或需要中断时很有用。
-- Codex CLI/Desktop、Claude Code 或 Kimi Code 继续操作这条共享会话时，结果也会通过对应 JSONL mirror 同步到 IM。
+- Codex CLI/Desktop、Claude Code、Kimi Code 或 Cursor Agent 继续操作这条共享会话时，结果也会通过对应 JSONL mirror 同步到 IM。
 
 > 也就是说，你可以回到电脑继续在 TUI 中和 Agent 协作，再回到飞书时依旧能看到完整对话记录。
 

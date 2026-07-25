@@ -10,6 +10,7 @@ import type { SessionRegistryService } from '../registry.js';
 import { getBridgeSessionDisplayTitle } from '../display/session-display-query.js';
 import { cleanupRuntimeTmuxSession } from '../../tmux/runtime.js';
 import { kimiTmuxSessionName } from '../../../runtime/kimi/tmux-provider.js';
+import { cursorTmuxSessionName } from '../../../runtime/cursor/tmux-provider.js';
 import * as router from '../channel-router.js';
 import { clearPendingAttachmentConfirmation } from '../../command/attachment-confirmations.js';
 import { clearPendingTakeoverConfirmation } from '../../command/takeover-confirmations.js';
@@ -37,6 +38,7 @@ import {
   findBridgeSessionByClaudeIdentity,
   findBridgeSessionByCodexThread,
   findBridgeSessionByKimiIdentity,
+  findBridgeSessionByCursorIdentity,
   resolveCurrentCodexThreadTarget,
   selectDirectThreadTarget,
 } from './thread-targets.js';
@@ -51,7 +53,11 @@ import {
 async function cleanupBridgeSessionRuntimeTmuxBestEffort(session: BridgeSession | null | undefined, reason: string): Promise<void> {
   const runtime = getSessionActiveRuntime(session) || 'codex';
   const sessionName = getSessionRuntimeTmuxSessionName(session)
-    || (runtime === 'kimi' && session ? kimiTmuxSessionName(session.id) : undefined);
+    || (runtime === 'kimi' && session
+      ? kimiTmuxSessionName(session.id)
+      : runtime === 'cursor' && session
+        ? cursorTmuxSessionName(session.id)
+        : undefined);
   if (!sessionName) return;
   const cleanup = await cleanupRuntimeTmuxSession({
     runtime,
@@ -233,7 +239,7 @@ export async function handleThreadBindingCommand(options: {
         const activeRuntime = getSessionActiveRuntime(session) || 'codex';
         target = {
           threadId,
-          runtime: activeRuntime === 'claude' || activeRuntime === 'kimi' ? activeRuntime : 'codex',
+          runtime: activeRuntime === 'claude' || activeRuntime === 'kimi' || activeRuntime === 'cursor' ? activeRuntime : 'codex',
           title: options.threadDisplay.binding(selected.binding).title,
           cwd: getSessionWorkingDirectory(session),
           bridgeSessionId: selected.binding.bridgeSessionId,
@@ -310,7 +316,7 @@ export async function handleThreadBindingCommand(options: {
         if (selected.index !== undefined) {
           return { response: `会话列表没有第 ${selected.index} 条。先发送 \`/t\` 查看列表，或直接使用 thread/session id / bridge_id / 名称。` };
         }
-        return { response: `没有找到对应会话：${targetToken}。/t 列表按“序号 > thread/session id > bridge_id > 名称”解析；先发送 \`/t\` 刷新列表后优先用序号归档，或用 \`/t codex\`、\`/t claude\`、\`/t kimi\` 切换 runtime 列表。` };
+        return { response: `没有找到对应会话：${targetToken}。/t 列表按“序号 > thread/session id > bridge_id > 名称”解析；先发送 \`/t\` 刷新列表后优先用序号归档，或用 \`/t codex\`、\`/t claude\`、\`/t kimi\`、\`/t cursor\` 切换 runtime 列表。` };
       } else {
         target = {
           threadId: selected.threadId,
@@ -372,6 +378,42 @@ export async function handleThreadBindingCommand(options: {
         ),
         richCard,
         threadTableCardScope: richCard && options.deps.threadCardRefreshScope ? options.deps.threadCardRefreshScope : undefined,
+      };
+    }
+    if (target.runtime === 'cursor') {
+      const cwd = target.cwd;
+      if (!cwd) return { response: '归档本地 Cursor Agent 会话失败：缺少 cwd。' };
+      const bridgeSessionBeforeArchive = findBridgeSessionByCursorIdentity(options.store, threadId, cwd);
+      const bindingsBeforeArchive = options.store.listChannelChats()
+        .filter((binding) => binding.bridgeSessionId === bridgeSessionBeforeArchive?.id);
+      let result: ReturnType<SessionRegistryService['archiveCursorThread']>;
+      try {
+        await cleanupBridgeSessionRuntimeTmuxBestEffort(bridgeSessionBeforeArchive, 'cursor archive');
+        result = createCommandSessionRegistry(options.store).archiveCursorThread(threadId, cwd);
+      } catch (error) {
+        return { response: toUserVisibleBindingError(error, '归档本地 Cursor Agent 会话失败。') };
+      }
+      for (const binding of bindingsBeforeArchive) options.deps.onBindingRemoved?.(binding);
+      scheduleMirrorSubscriptionsBestEffort(options.deps, 'cursor archive');
+      const activeAfterArchive = options.store.getChannelChat(options.msg.address.channelType, options.msg.address.chatId);
+      const richCard = buildThreadCardRefresh(options.threadDisplay, options.deps.threadCardRefreshScope, options.msg.address, options.deps.threadCardSelectedId);
+      return {
+        response: buildCommandFields(
+          '已归档本地 Cursor Agent 会话',
+          [
+            ['标题', target.title || threadId.slice(0, 8)],
+            ['session_id', threadId],
+            ['目录', formatCommandPath(result.cwd)],
+            ['解除绑定', `${bindingsBeforeArchive.length}`],
+            ['清理 Bridge 会话', `${result.deletedBridgeSessionIds.length}`],
+            ['当前', activeAfterArchive ? options.threadDisplay.binding(activeAfterArchive).title : '未绑定'],
+          ],
+          activeAfterArchive
+            ? ['当前聊天仍绑定到上面显示的会话。']
+            : ['当前聊天已解除该 Cursor Agent 会话绑定；之后直接发送文本会自动进入临时 BridgeSession。'],
+          options.markdown,
+        ),
+        richCard,
       };
     }
     if (target.runtime === 'claude') {
@@ -496,5 +538,5 @@ export async function handleThreadBindingCommand(options: {
     };
   }
 
-  return { response: '用法：/t、/t codex、/t claude、/t kimi、/t <序号|thread/session-id|bridge-id|名称>、/t archive [序号|thread/session-id|bridge-id|名称]、/t rename <名称>' };
+  return { response: '用法：/t、/t codex、/t claude、/t kimi、/t cursor、/t <序号|thread/session-id|bridge-id|名称>、/t archive [序号|thread/session-id|bridge-id|名称]、/t rename <名称>' };
 }

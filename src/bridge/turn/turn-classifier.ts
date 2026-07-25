@@ -26,13 +26,13 @@ export function classifyInteractiveTurn(
 ): BridgeTurnClassification {
   const sessionId = session?.id || binding.bridgeSessionId;
   const activeRuntime = getSessionActiveRuntime(session);
-  if (activeRuntime === 'claude' || activeRuntime === 'kimi') {
+  if (activeRuntime === 'claude' || activeRuntime === 'kimi' || activeRuntime === 'cursor') {
     return {
       kind: 'im_sdk',
       sessionId,
       codexThreadId: undefined,
       codexThreadAvailable: false,
-      reason: activeRuntime === 'kimi' ? 'runtime_kimi' : 'runtime_claude',
+      reason: activeRuntime === 'kimi' ? 'runtime_kimi' : activeRuntime === 'cursor' ? 'runtime_cursor' : 'runtime_claude',
     };
   }
   const codexThreadId = getCodexThreadId(session, binding);

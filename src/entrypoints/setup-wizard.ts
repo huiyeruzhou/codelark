@@ -50,13 +50,13 @@ export interface FeishuCredentials {
 }
 
 export interface RuntimeRecommendation {
-  runtime: 'codex' | 'claude' | 'kimi';
+  runtime: 'codex' | 'claude' | 'kimi' | 'cursor';
   claudeExecutable?: ClaudeExecutable;
   reason: string;
 }
 
 type SetupMode = 'existing' | 'qr' | 'manual';
-type RuntimeChoice = 'codex' | 'ccr' | 'claude' | 'kimi';
+type RuntimeChoice = 'codex' | 'ccr' | 'claude' | 'kimi' | 'cursor';
 type LarkCliRunOptions = {
   homeDir?: string;
   input?: string;
@@ -107,16 +107,23 @@ export function recommendRuntime(homeDir = os.homedir()): RuntimeRecommendation 
       reason: '检测到 ~/.kimi-code，默认使用 Kimi Code。',
     };
   }
+  if (fs.existsSync(path.join(homeDir, '.cursor'))) {
+    return {
+      runtime: 'cursor',
+      reason: '检测到 ~/.cursor，默认使用 Cursor Agent。',
+    };
+  }
   return {
     runtime: 'claude',
     claudeExecutable: 'claude',
-    reason: '未检测到 Codex、Claude Code Router 或 Kimi Code 配置，默认使用 Claude Code。',
+    reason: '未检测到 Codex、Claude Code Router、Kimi Code 或 Cursor Agent 配置，默认使用 Claude Code。',
   };
 }
 
 export function runtimeChoiceToConfig(choice: RuntimeChoice): NonNullable<ConfigPatch['runtime']> {
   if (choice === 'codex') return { agent: 'codex' };
   if (choice === 'kimi') return { agent: 'kimi', kimi: { provider: 'tmux' } };
+  if (choice === 'cursor') return { agent: 'cursor', cursor: { provider: 'tmux' } };
   return {
     agent: 'claude',
     claude: {
@@ -129,6 +136,7 @@ export function runtimeChoiceToConfig(choice: RuntimeChoice): NonNullable<Config
 export function recommendedRuntimeChoice(recommendation: RuntimeRecommendation): RuntimeChoice {
   if (recommendation.runtime === 'codex') return 'codex';
   if (recommendation.runtime === 'kimi') return 'kimi';
+  if (recommendation.runtime === 'cursor') return 'cursor';
   return recommendation.claudeExecutable === 'ccr' ? 'ccr' : 'claude';
 }
 
@@ -200,6 +208,11 @@ export function buildSetupConfig(
       kimi: {
         ...current.runtime.kimi,
         ...(runtimeConfig.kimi || {}),
+        provider: 'tmux',
+      },
+      cursor: {
+        ...current.runtime.cursor,
+        ...(runtimeConfig.cursor || {}),
         provider: 'tmux',
       },
     },
@@ -879,6 +892,7 @@ async function promptRuntime(homeDir: string): Promise<RuntimeChoice> {
       { value: 'ccr', label: 'Claude Code Router', hint: '写入 runtime=claude，claudeExecutable=ccr' },
       { value: 'claude', label: 'Claude Code', hint: '写入 runtime=claude，claudeExecutable=claude' },
       { value: 'kimi', label: 'Kimi Code', hint: '写入 runtime=kimi，provider=tmux' },
+      { value: 'cursor', label: 'Cursor Agent', hint: '写入 runtime=cursor，provider=tmux' },
     ],
   }));
 }
@@ -1066,6 +1080,8 @@ export async function runSetupWizard(options: SetupOptions = {}): Promise<void> 
       ? 'Claude Code Router'
       : runtimeChoice === 'kimi'
         ? 'Kimi Code'
+        : runtimeChoice === 'cursor'
+          ? 'Cursor Agent'
         : 'Claude Code';
   let botChatUrl: string | undefined;
   const botLinkSpinner = p.spinner();

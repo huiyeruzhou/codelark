@@ -57,7 +57,7 @@ export interface MirrorRuntimeBinding {
 
 export interface MirrorRuntimeSession {
   runtime?: {
-    activeRuntime?: 'codex' | 'claude' | 'kimi';
+    activeRuntime?: 'codex' | 'claude' | 'kimi' | 'cursor';
     codex?: {
       threadId?: string | null;
     };
@@ -66,6 +66,10 @@ export interface MirrorRuntimeSession {
       cwd?: string | null;
     };
     kimi?: {
+      sessionId?: string | null;
+      cwd?: string | null;
+    };
+    cursor?: {
       sessionId?: string | null;
       cwd?: string | null;
     };

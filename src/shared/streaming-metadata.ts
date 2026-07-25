@@ -12,7 +12,7 @@ export function buildRuntimeStreamTags(context: {
   const reasoningEffort = context.reasoningEffort?.trim();
   const model = context.model?.trim();
   return [
-    runtime === 'codex' || runtime === 'claude' || runtime === 'kimi' ? runtime : '',
+    runtime === 'codex' || runtime === 'claude' || runtime === 'kimi' || runtime === 'cursor' ? runtime : '',
     reasoningEffort ? `effort:${reasoningEffort}` : '',
     model ? `model:${model}` : '',
   ].filter(Boolean);
@@ -34,12 +34,14 @@ export function buildStreamContextTags(context: {
   threadId?: string | null;
   executionProvider?: string | null;
   creatorKind?: string | null;
-  source?: 'sdk' | 'mirror' | null;
+  source?: 'sdk' | 'mirror' | 'direct' | null;
 }): string[] {
   const bridgeId = formatStreamContextId(context.bridgeSessionId, context.fallbackId || context.bindingId || '');
+  const directProvider = context.source === 'direct' ? context.executionProvider?.trim() : '';
   return [
     bridgeId ? `bridge_id:${bridgeId}` : '',
     context.source === 'sdk' ? 'sdk' : '',
     context.source === 'mirror' ? 'mirror' : '',
+    directProvider || (context.source === 'direct' ? 'direct' : ''),
   ].filter(Boolean);
 }

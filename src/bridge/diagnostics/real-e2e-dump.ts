@@ -8,11 +8,14 @@ import type { BridgeMessage } from '../../domain/message.js';
 import type { BridgeSession, RuntimeAgent } from '../../domain/session.js';
 import { getClaudeSessionJsonlById } from '../../runtime/claude/session-jsonl.js';
 import { findKimiSessionFileById, readKimiSessionMessagesByFilePath } from '../../runtime/kimi/session-index.js';
+import { findCursorSessionFileById } from '../../runtime/cursor/session-index.js';
 import {
   getSessionActiveRuntime,
   getSessionClaudeCwd,
   getSessionClaudeSessionId,
   getSessionCodexThreadId,
+  getSessionCursorCwd,
+  getSessionCursorSessionId,
   getSessionKimiCwd,
   getSessionKimiSessionId,
   getSessionWorkingDirectory,
@@ -27,6 +30,8 @@ export interface RealE2eDumpInput {
   codelarkHome?: string;
   claudeHome?: string;
   kimiHome?: string;
+  cursorConfigDir?: string;
+  cursorDataDir?: string;
   channelType?: string;
   chatId?: string;
   bridgeSessionId?: string;
@@ -52,6 +57,8 @@ export interface RealE2eStreamCardCheckpoint {
   status?: string;
   sequence?: number;
   preview?: string;
+  headerTitle?: string;
+  headerTags?: string[];
   elementIds?: string[];
   names?: string[];
   markdownTexts?: string[];
@@ -119,6 +126,9 @@ export interface RealE2eRuntimeSlotReport {
   kimiSessionId?: string;
   kimiCwd?: string;
   kimiWireJsonlPath?: string;
+  cursorSessionId?: string;
+  cursorCwd?: string;
+  cursorTranscriptPath?: string;
 }
 
 export interface RealE2eDumpReport {
@@ -136,6 +146,8 @@ export interface RealE2eDumpReport {
   claudeJsonlPath?: string;
   kimiSessionId?: string;
   kimiWireJsonlPath?: string;
+  cursorSessionId?: string;
+  cursorTranscriptPath?: string;
   messages: BridgeMessage[];
   audit: StoredAuditLogEntry[];
   streamKeys: string[];
@@ -311,6 +323,8 @@ function extractStreamCardCheckpoints(text: string): RealE2eStreamCardCheckpoint
         ...(typeof parsed.status === 'string' ? { status: parsed.status } : {}),
         ...(typeof parsed.sequence === 'number' ? { sequence: parsed.sequence } : {}),
         ...(typeof parsed.preview === 'string' ? { preview: parsed.preview } : {}),
+        ...(typeof parsed.headerTitle === 'string' ? { headerTitle: parsed.headerTitle } : {}),
+        ...(asStringArray(parsed.headerTags) ? { headerTags: asStringArray(parsed.headerTags) } : {}),
         ...(asStringArray(parsed.elementIds) ? { elementIds: asStringArray(parsed.elementIds) } : {}),
         ...(asStringArray(parsed.names) ? { names: asStringArray(parsed.names) } : {}),
         ...(asStringArray(parsed.markdownTexts) ? { markdownTexts: asStringArray(parsed.markdownTexts) } : {}),
@@ -333,14 +347,53 @@ function extractStreamCardCheckpoints(text: string): RealE2eStreamCardCheckpoint
 
 export function streamCardCheckpointVisibleText(checkpoint: Pick<
   RealE2eStreamCardCheckpoint,
-  'preview' | 'names' | 'markdownTexts' | 'markdownPreviews'
+  'preview' | 'headerTitle' | 'headerTags' | 'names' | 'markdownTexts' | 'markdownPreviews'
 >): string {
   return [
     checkpoint.preview || '',
+    checkpoint.headerTitle || '',
+    ...(checkpoint.headerTags || []),
     ...(checkpoint.names || []),
     ...(checkpoint.markdownTexts || []),
     ...(checkpoint.markdownPreviews || []).map((item) => item.preview || ''),
   ].join('\n');
+}
+
+export function cursorStreamCardUnifiedUiIssues(
+  checkpoints: RealE2eStreamCardCheckpoint[],
+  marker: string,
+  expectedModel: string,
+): string[] {
+  const finalCheckpoint = checkpoints.find((checkpoint) => (
+    checkpoint.kind === 'final'
+      && checkpoint.status === 'completed'
+      && streamCardCheckpointVisibleText(checkpoint).includes(marker)
+  ));
+  if (!finalCheckpoint) {
+    return ['Cursor did not emit a completed final stream-card checkpoint containing the model reply marker.'];
+  }
+
+  const issues: string[] = [];
+  if (!finalCheckpoint.headerTitle?.trim()) {
+    issues.push('Cursor final card did not use the shared session-title header.');
+  }
+  if (!(finalCheckpoint.headerTags || []).includes('tmux')) {
+    issues.push('Cursor final card header did not expose the tmux provider tag.');
+  }
+  if (!(finalCheckpoint.elementIds || []).includes('runtime_meta_tags')) {
+    issues.push('Cursor final card did not use the shared runtime metadata region.');
+  }
+  if (!(finalCheckpoint.elementIds || []).includes('stream_history')) {
+    issues.push('Cursor final card did not use the shared streaming history region.');
+  }
+  const visibleText = streamCardCheckpointVisibleText(finalCheckpoint);
+  if (!visibleText.includes('cursor')) {
+    issues.push('Cursor final card did not expose the cursor runtime tag.');
+  }
+  if (expectedModel && !visibleText.includes(`model:${expectedModel}`)) {
+    issues.push(`Cursor final card did not expose model:${expectedModel}.`);
+  }
+  return issues;
 }
 
 function streamCardCheckpointIncludes(checkpoints: RealE2eStreamCardCheckpoint[], text: string): boolean {
@@ -695,7 +748,7 @@ export function collectRealE2eDump(input: RealE2eDumpInput = {}): RealE2eDumpRep
   const binding = findBinding(bindings, input);
   const session = findSession(sessions, binding, input);
   const bridgeSessionId = input.bridgeSessionId || binding?.bridgeSessionId || session?.id;
-  const runtimeSlots = (['codex', 'claude', 'kimi'] as const)
+  const runtimeSlots = (['codex', 'claude', 'kimi', 'cursor'] as const)
     .map((slotRuntime): RealE2eRuntimeSlotReport | null => {
       const slotBridgeSessionId = binding?.runtimeBridgeSessionIds?.[slotRuntime];
       if (!slotBridgeSessionId) return null;
@@ -705,6 +758,8 @@ export function collectRealE2eDump(input: RealE2eDumpInput = {}): RealE2eDumpRep
         ? getSessionClaudeSessionId(slotSession)
         : slotRuntime === 'kimi'
           ? getSessionKimiSessionId(slotSession)
+          : slotRuntime === 'cursor'
+            ? getSessionCursorSessionId(slotSession)
           : getSessionCodexThreadId(slotSession);
       const slotClaudeSessionId = slotRuntime === 'claude' ? getSessionClaudeSessionId(slotSession) : undefined;
       const slotClaudeCwd = slotRuntime === 'claude'
@@ -720,6 +775,15 @@ export function collectRealE2eDump(input: RealE2eDumpInput = {}): RealE2eDumpRep
       const slotKimiWireJsonl = slotKimiSessionId
         ? withTemporaryEnv('KIMI_CODE_HOME', input.kimiHome, () => findKimiSessionFileById(slotKimiSessionId, slotKimiCwd))
         : null;
+      const slotCursorSessionId = slotRuntime === 'cursor' ? getSessionCursorSessionId(slotSession) : undefined;
+      const slotCursorCwd = slotRuntime === 'cursor'
+        ? getSessionCursorCwd(slotSession) || getSessionWorkingDirectory(slotSession)
+        : undefined;
+      const slotCursorTranscript = slotCursorSessionId
+        ? withTemporaryEnv('CURSOR_CONFIG_DIR', input.cursorConfigDir, () =>
+          withTemporaryEnv('CURSOR_DATA_DIR', input.cursorDataDir, () =>
+            findCursorSessionFileById(slotCursorSessionId, slotCursorCwd)))
+        : null;
       return {
         runtime: slotRuntime,
         bridgeSessionId: slotBridgeSessionId,
@@ -733,6 +797,9 @@ export function collectRealE2eDump(input: RealE2eDumpInput = {}): RealE2eDumpRep
         ...(slotKimiSessionId ? { kimiSessionId: slotKimiSessionId } : {}),
         ...(slotKimiCwd ? { kimiCwd: slotKimiCwd } : {}),
         ...(slotKimiWireJsonl?.filePath ? { kimiWireJsonlPath: slotKimiWireJsonl.filePath } : {}),
+        ...(slotCursorSessionId ? { cursorSessionId: slotCursorSessionId } : {}),
+        ...(slotCursorCwd ? { cursorCwd: slotCursorCwd } : {}),
+        ...(slotCursorTranscript?.filePath ? { cursorTranscriptPath: slotCursorTranscript.filePath } : {}),
       };
     })
     .filter((slot): slot is RealE2eRuntimeSlotReport => slot !== null);
@@ -744,12 +811,14 @@ export function collectRealE2eDump(input: RealE2eDumpInput = {}): RealE2eDumpRep
     : [];
   const activeRuntime = getSessionActiveRuntime(session);
   const inferredRuntime = activeRuntime
-    || (getSessionKimiSessionId(session) ? 'kimi' : getSessionClaudeSessionId(session) ? 'claude' : getSessionCodexThreadId(session) ? 'codex' : undefined);
+    || (getSessionCursorSessionId(session) ? 'cursor' : getSessionKimiSessionId(session) ? 'kimi' : getSessionClaudeSessionId(session) ? 'claude' : getSessionCodexThreadId(session) ? 'codex' : undefined);
   const runtime = inferredRuntime;
   const runtimeThreadId = runtime === 'claude'
     ? getSessionClaudeSessionId(session)
     : runtime === 'kimi'
       ? getSessionKimiSessionId(session)
+      : runtime === 'cursor'
+        ? getSessionCursorSessionId(session)
       : getSessionCodexThreadId(session);
   const claudeSessionId = runtime === 'claude' ? getSessionClaudeSessionId(session) : undefined;
   const claudeCwd = runtime === 'claude'
@@ -764,6 +833,15 @@ export function collectRealE2eDump(input: RealE2eDumpInput = {}): RealE2eDumpRep
     : undefined;
   const kimiWireJsonl = kimiSessionId
     ? withTemporaryEnv('KIMI_CODE_HOME', input.kimiHome, () => findKimiSessionFileById(kimiSessionId, kimiCwd))
+    : null;
+  const cursorSessionId = runtime === 'cursor' ? getSessionCursorSessionId(session) : undefined;
+  const cursorCwd = runtime === 'cursor'
+    ? getSessionCursorCwd(session) || getSessionWorkingDirectory(session)
+    : undefined;
+  const cursorTranscript = cursorSessionId
+    ? withTemporaryEnv('CURSOR_CONFIG_DIR', input.cursorConfigDir, () =>
+      withTemporaryEnv('CURSOR_DATA_DIR', input.cursorDataDir, () =>
+        findCursorSessionFileById(cursorSessionId, cursorCwd)))
     : null;
   const auditNeedles = [
     input.runId,
@@ -806,6 +884,8 @@ export function collectRealE2eDump(input: RealE2eDumpInput = {}): RealE2eDumpRep
           ? Boolean(claudeSessionId)
           : runtime === 'kimi'
             ? Boolean(kimiSessionId)
+            : runtime === 'cursor'
+              ? Boolean(cursorSessionId)
             : false,
       detail: runtimeThreadId || 'No local runtime identity is bound.',
     },
@@ -834,6 +914,13 @@ export function collectRealE2eDump(input: RealE2eDumpInput = {}): RealE2eDumpRep
       detail: kimiWireJsonl?.filePath || 'No Kimi wire.jsonl transcript matched the bound session id/cwd.',
     });
   }
+  if (runtime === 'cursor') {
+    checks.push({
+      name: 'cursor_transcript_found',
+      ok: Boolean(cursorTranscript?.filePath),
+      detail: cursorTranscript?.filePath || 'No Cursor transcript JSONL matched the bound session id/cwd.',
+    });
+  }
   return {
     ...(input.runId ? { runId: input.runId } : {}),
     ...(input.channelType || binding?.channelType ? { channelType: input.channelType || binding?.channelType } : {}),
@@ -849,6 +936,8 @@ export function collectRealE2eDump(input: RealE2eDumpInput = {}): RealE2eDumpRep
     ...(claudeJsonl?.filePath ? { claudeJsonlPath: claudeJsonl.filePath } : {}),
     ...(kimiSessionId ? { kimiSessionId } : {}),
     ...(kimiWireJsonl?.filePath ? { kimiWireJsonlPath: kimiWireJsonl.filePath } : {}),
+    ...(cursorSessionId ? { cursorSessionId } : {}),
+    ...(cursorTranscript?.filePath ? { cursorTranscriptPath: cursorTranscript.filePath } : {}),
     messages: messages.slice(-messageLimit),
     audit: relevantAudit.slice(-auditLimit),
     streamKeys,

@@ -9,6 +9,7 @@ import {
   claudeReasoningEffortSchema,
   codexProviderSchema,
   kimiProviderSchema,
+  cursorProviderSchema,
   reasoningEffortSchema,
   runtimeAgentSchema,
   sandboxModeSchema,
@@ -105,6 +106,9 @@ const uiConfigPayloadSchema = z.object({
   claudeIdleTimeoutMinutes: optionalNonNegativeInteger(),
   kimiDefaultModel: optionalString(),
   kimiProvider: optionalEnum(kimiProviderSchema),
+  cursorDefaultModel: optionalString(),
+  cursorProvider: optionalEnum(cursorProviderSchema),
+  cursorForce: z.boolean().optional(),
   uiAllowLan: z.boolean().optional(),
   uiAccessToken: optionalString(),
 }).strict();
@@ -144,6 +148,9 @@ export function configV2ToPayload(config: ConfigV2) {
     claudeIdleTimeoutMinutes: config.runtime.claude.idleTimeoutMinutes ?? 0,
     kimiDefaultModel: config.runtime.kimi.model || '',
     kimiProvider: config.runtime.kimi.provider || 'tmux',
+    cursorDefaultModel: config.runtime.cursor.model || '',
+    cursorProvider: config.runtime.cursor.provider || 'tmux',
+    cursorForce: config.runtime.cursor.force === true,
     uiAllowLan: config.bridge.uiAllowLan === true,
     uiAccessToken: config.bridge.uiAccessToken || '',
     channels: config.channels.map(v2ChannelToPayload),
@@ -220,6 +227,15 @@ export function mergeConfigV2HomePatch(current: ConfigV2, payload: Record<string
           ? current.runtime.kimi.model
           : parsed.kimiDefaultModel || '',
         provider: parsed.kimiProvider ?? current.runtime.kimi.provider,
+      },
+      cursor: {
+        model: parsed.cursorDefaultModel === undefined
+          ? current.runtime.cursor.model
+          : parsed.cursorDefaultModel || '',
+        provider: parsed.cursorProvider ?? current.runtime.cursor.provider,
+        force: hasPayloadKey(payload, 'cursorForce')
+          ? parsed.cursorForce === true
+          : current.runtime.cursor.force,
       },
     },
     bridge: {

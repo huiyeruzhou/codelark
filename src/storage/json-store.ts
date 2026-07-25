@@ -122,11 +122,12 @@ function compareBindingUpdatedAtDesc(a: ChannelChat, b: ChannelChat): number {
 
 function normalizeRuntimeBridgeSessionIds(value: unknown): ChannelChat['runtimeBridgeSessionIds'] | undefined {
   if (!value || typeof value !== 'object') return undefined;
-  const raw = value as { codex?: unknown; claude?: unknown; kimi?: unknown };
+  const raw = value as { codex?: unknown; claude?: unknown; kimi?: unknown; cursor?: unknown };
   const normalized: NonNullable<ChannelChat['runtimeBridgeSessionIds']> = {};
   if (typeof raw.codex === 'string' && raw.codex.trim()) normalized.codex = raw.codex.trim();
   if (typeof raw.claude === 'string' && raw.claude.trim()) normalized.claude = raw.claude.trim();
   if (typeof raw.kimi === 'string' && raw.kimi.trim()) normalized.kimi = raw.kimi.trim();
+  if (typeof raw.cursor === 'string' && raw.cursor.trim()) normalized.cursor = raw.cursor.trim();
   return Object.keys(normalized).length > 0 ? normalized : undefined;
 }
 
@@ -136,19 +137,20 @@ function sameRuntimeBridgeSessionIds(
 ): boolean {
   return (left?.codex || '') === (right?.codex || '')
     && (left?.claude || '') === (right?.claude || '')
-    && (left?.kimi || '') === (right?.kimi || '');
+    && (left?.kimi || '') === (right?.kimi || '')
+    && (left?.cursor || '') === (right?.cursor || '');
 }
 
 function runtimeBridgeSessionIdsForActiveSession(
   value: ChannelChat['runtimeBridgeSessionIds'],
-  activeRuntime: 'codex' | 'claude' | 'kimi',
+  activeRuntime: 'codex' | 'claude' | 'kimi' | 'cursor',
   bridgeSessionId: string,
 ): ChannelChat['runtimeBridgeSessionIds'] {
   const normalized = {
     ...normalizeRuntimeBridgeSessionIds(value),
     [activeRuntime]: bridgeSessionId,
   };
-  for (const runtime of ['codex', 'claude', 'kimi'] as const) {
+  for (const runtime of ['codex', 'claude', 'kimi', 'cursor'] as const) {
     if (runtime !== activeRuntime && normalized[runtime] === bridgeSessionId) {
       delete normalized[runtime];
     }
@@ -160,7 +162,7 @@ function normalizeRuntimeBridgeSessionIdsForBinding(
   binding: ChannelChat,
   sessions: Map<string, BridgeSession>,
 ): ChannelChat['runtimeBridgeSessionIds'] {
-  const runtimeSlots = ['codex', 'claude', 'kimi'] as const;
+  const runtimeSlots = ['codex', 'claude', 'kimi', 'cursor'] as const;
   let normalized = normalizeRuntimeBridgeSessionIds(binding.runtimeBridgeSessionIds);
   if (!normalized) return undefined;
 
@@ -188,13 +190,17 @@ function mergeSessionRuntime(
   if (!updatesRuntime) return sessionRuntime;
   const targetRuntime = updatesRuntime.activeRuntime === 'claude'
     ? 'claude'
-    : updatesRuntime.activeRuntime === 'kimi'
+    : updatesRuntime.activeRuntime === 'cursor'
+      ? 'cursor'
+      : updatesRuntime.activeRuntime === 'kimi'
       ? 'kimi'
       : updatesRuntime.activeRuntime === 'codex'
         ? 'codex'
         : sessionRuntime?.activeRuntime === 'claude'
           ? 'claude'
-          : sessionRuntime?.activeRuntime === 'kimi'
+          : sessionRuntime?.activeRuntime === 'cursor'
+            ? 'cursor'
+            : sessionRuntime?.activeRuntime === 'kimi'
             ? 'kimi'
             : 'codex';
   const general = updatesRuntime.general
@@ -218,6 +224,17 @@ function mergeSessionRuntime(
         ? { ...(sessionRuntime?.activeRuntime === 'kimi' ? sessionRuntime.kimi : undefined), ...updatesRuntime.kimi }
         : sessionRuntime?.activeRuntime === 'kimi'
           ? sessionRuntime.kimi
+          : undefined,
+      ...(general ? { general } : {}),
+    };
+  }
+  if (targetRuntime === 'cursor') {
+    return {
+      activeRuntime: 'cursor',
+      cursor: updatesRuntime.cursor
+        ? { ...(sessionRuntime?.activeRuntime === 'cursor' ? sessionRuntime.cursor : undefined), ...updatesRuntime.cursor }
+        : sessionRuntime?.activeRuntime === 'cursor'
+          ? sessionRuntime.cursor
           : undefined,
       ...(general ? { general } : {}),
     };
@@ -699,7 +716,7 @@ export class JsonFileStore implements BridgeStore {
     _mode?: string,
     options?: {
       reasoningEffort?: CodexReasoningEffort;
-      activeRuntime?: 'codex' | 'claude' | 'kimi';
+      activeRuntime?: 'codex' | 'claude' | 'kimi' | 'cursor';
       sessionType?: BridgeSession['session_type'];
       hidden?: boolean;
       parentSessionId?: string;
@@ -710,7 +727,9 @@ export class JsonFileStore implements BridgeStore {
     const timestamp = now();
     const activeRuntime = options?.activeRuntime === 'claude'
       ? 'claude'
-      : options?.activeRuntime === 'kimi'
+      : options?.activeRuntime === 'cursor'
+        ? 'cursor'
+        : options?.activeRuntime === 'kimi'
         ? 'kimi'
         : options?.activeRuntime === 'codex'
           ? 'codex'
@@ -722,7 +741,12 @@ export class JsonFileStore implements BridgeStore {
       runtime: activeRuntime === 'claude' ? {
         activeRuntime: 'claude',
         ...(systemPrompt ? { general: { systemPrompt } } : {}),
-      } : activeRuntime === 'kimi'
+      } : activeRuntime === 'cursor'
+        ? {
+            activeRuntime: 'cursor',
+            ...(systemPrompt ? { general: { systemPrompt } } : {}),
+          }
+        : activeRuntime === 'kimi'
         ? {
             activeRuntime: 'kimi',
             ...(systemPrompt ? { general: { systemPrompt } } : {}),
@@ -789,6 +813,7 @@ export class JsonFileStore implements BridgeStore {
         codex: binding.runtimeBridgeSessionIds?.codex === sessionId ? undefined : binding.runtimeBridgeSessionIds?.codex,
         claude: binding.runtimeBridgeSessionIds?.claude === sessionId ? undefined : binding.runtimeBridgeSessionIds?.claude,
         kimi: binding.runtimeBridgeSessionIds?.kimi === sessionId ? undefined : binding.runtimeBridgeSessionIds?.kimi,
+        cursor: binding.runtimeBridgeSessionIds?.cursor === sessionId ? undefined : binding.runtimeBridgeSessionIds?.cursor,
       });
       if (!sameRuntimeBridgeSessionIds(runtimeBridgeSessionIds, binding.runtimeBridgeSessionIds)) {
         this.bindings.set(key, { ...binding, runtimeBridgeSessionIds, updatedAt: now() });

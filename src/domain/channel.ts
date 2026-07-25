@@ -59,6 +59,7 @@ export interface ChannelChat {
     codex?: string;
     claude?: string;
     kimi?: string;
+    cursor?: string;
   };
   cloudDocumentChat?: {
     provider: 'feishu';

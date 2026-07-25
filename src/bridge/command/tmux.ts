@@ -32,6 +32,7 @@ import {
   resolveClaudeRuntimeConfig,
   resolveEffectiveRuntimeProvider,
   resolveKimiRuntimeConfig,
+  resolveCursorRuntimeConfig,
   resolveSessionRuntimeConfig,
 } from '../session/support.js';
 import { getCodexThreadId } from '../turn/turn-classifier.js';
@@ -44,6 +45,7 @@ import {
   getSessionTmuxSessionName,
   getSessionWorkingDirectory,
   setSessionKimiIdentityUpdate,
+  setSessionCursorIdentityUpdate,
   setSessionClaudeTmuxProviderUpdate,
   setSessionCodexTmuxProviderUpdate,
 } from '../../domain/session-runtime.js';
@@ -51,6 +53,9 @@ import {
   ensureKimiTmuxInputSession,
   kimiTmuxSessionName,
 } from '../../runtime/kimi/tmux-provider.js';
+import {
+  ensureCursorTmuxInputSession,
+} from '../../runtime/cursor/tmux-provider.js';
 import {
   bootstrapCodexThreadLocally,
   type BootstrapCodexThreadParams,
@@ -750,6 +755,51 @@ async function ensureRuntimeTmuxSessionForProvider(
     return { target: prepared.sessionName, commands: [], recovered: !prepared.existed };
   }
 
+  if (runtimeProvider.runtime === 'cursor') {
+    if (configuredTarget) {
+      const inspected = await inspectRuntimeTmuxInput({
+        runtime: 'cursor',
+        sessionName: configuredTarget,
+        hasSession: () => hasTmuxSession(configuredTarget),
+      });
+      if (inspected.exists) {
+        return {
+          target: configuredTarget,
+          commands: inspected.command ? [inspected.command] : [],
+          recovered: false,
+        };
+      }
+      if (params.autoRecoverProviderSession !== true) {
+        return {
+          target: configuredTarget,
+          commands: inspected.command ? [inspected.command] : [],
+          recovered: false,
+          error: `tmux session 不存在：${configuredTarget}。请先发送 \`/provider tmux\` 重新初始化 Cursor Agent tmux。`,
+        };
+      }
+    }
+    const cursorConfig = resolveCursorRuntimeConfig(session, binding);
+    const prepared = await ensureCursorTmuxInputSession({
+      prompt: '',
+      sessionId: session.id,
+      runtime: 'cursor',
+      cursorSessionId: session.runtime?.cursor?.sessionId,
+      cursorForce: cursorConfig.force,
+      workingDirectory: getSessionWorkingDirectory(session),
+      model: cursorConfig.model,
+    });
+    const identityUpdate = setSessionCursorIdentityUpdate(prepared.sessionId, prepared.cwd);
+    store.updateSession(session.id, {
+      ...identityUpdate,
+      runtime: {
+        ...identityUpdate.runtime,
+        general: { tmuxSessionName: prepared.sessionName },
+      },
+    });
+    scheduleTmuxMirrorReconcile(params.reconcileMirrorSubscriptions, 'initialized Cursor provider session');
+    return { target: prepared.sessionName, commands: [], recovered: !prepared.existed };
+  }
+
   let threadId = getCodexThreadId(session, binding);
   if (!threadId && params.autoRecoverProviderSession === true) {
     await params.notifyBackgroundOperation?.('tmux Provider 缺少 codex_thread_id，正在本地预创建 Codex thread。');
@@ -1097,7 +1147,9 @@ export async function handleTmuxBridgeCommand(params: HandleTmuxBridgeCommandPar
       const lines = parsed.lines ?? getCaptureLines(session);
       const runtimeProvider = resolveEffectiveRuntimeProvider(session, binding);
       const inspected = await inspectRuntimeTmuxSession({
-        runtime: runtimeProvider.runtime,
+        runtime: runtimeProvider.provider === 'tmux'
+          ? runtimeProvider.runtime
+          : undefined,
         sessionName: captureTarget,
         lines,
       });
@@ -1128,7 +1180,9 @@ export async function handleTmuxBridgeCommand(params: HandleTmuxBridgeCommandPar
           key: params.screenMonitor.key,
           target: captureTarget,
           lines,
-          runtime: runtimeProvider.runtime,
+          runtime: runtimeProvider.provider === 'tmux'
+            ? runtimeProvider.runtime
+            : undefined,
           intervalSeconds: parsed.intervalSeconds,
           markdown,
           deliver: params.screenMonitor.deliver,

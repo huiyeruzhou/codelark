@@ -1,3 +1,5 @@
+import fs from 'node:fs';
+
 import {
   archiveCodexSession,
   getCodexSessionByThreadId,
@@ -15,6 +17,11 @@ import {
   findKimiSessionFileById,
   listKimiSessionFileSummaries,
 } from '../../../runtime/kimi/session-index.js';
+import {
+  archiveCursorSessionFile,
+  findCursorSessionFileById,
+  listCursorSessionFileSummaries,
+} from '../../../runtime/cursor/session-index.js';
 import type { LocalRuntimeSessionSummary } from '../local-runtime-session.js';
 import { validateSessionId } from '../../../shared/security/validators.js';
 import { userInputTurnCountCache } from './user-input-turn-cache.js';
@@ -22,7 +29,7 @@ import { userInputTurnCountCache } from './user-input-turn-cache.js';
 export type { CodexSessionSummary };
 export type { LocalRuntimeSessionSummary };
 
-export type LocalRuntimeFilter = 'codex' | 'claude' | 'kimi';
+export type LocalRuntimeFilter = 'codex' | 'claude' | 'kimi' | 'cursor';
 
 function isSafeLocalRuntimeThreadId(id: string): boolean {
   const trimmed = id.trim();
@@ -101,6 +108,28 @@ function isKimiUserInputLine(line: string): boolean {
   }
 }
 
+function countCursorUserInputTurns(filePath: string): number | undefined {
+  try {
+    let count = 0;
+    for (const line of fs.readFileSync(filePath, 'utf-8').split(/\r?\n/)) {
+      if (!line.trim()) continue;
+      let parsed: any;
+      try {
+        parsed = JSON.parse(line);
+      } catch {
+        continue;
+      }
+      if (parsed?.role !== 'user') continue;
+      const text = textOf(parsed?.message?.content);
+      if (!text || isInternalUserInput(text)) continue;
+      count += 1;
+    }
+    return count;
+  } catch {
+    return undefined;
+  }
+}
+
 function toCodexRuntimeSession(session: CodexSessionSummary): LocalRuntimeSessionSummary {
   return {
     ...session,
@@ -149,6 +178,26 @@ function toKimiRuntimeSession(session: ReturnType<typeof listKimiSessionFileSumm
   };
 }
 
+function listCommandCursorThreads(limit?: number): LocalRuntimeSessionSummary[] {
+  return listCursorSessionFileSummaries(undefined, limit).map(toCursorRuntimeSession);
+}
+
+function toCursorRuntimeSession(session: ReturnType<typeof listCursorSessionFileSummaries>[number]): LocalRuntimeSessionSummary {
+  return {
+    runtime: 'cursor',
+    threadId: session.sessionId,
+    filePath: session.filePath || session.storePath,
+    cwd: session.cwd || '',
+    originator: 'Cursor Agent',
+    source: 'cursor',
+    firstSeenAt: session.createdAt || session.updatedAt || new Date(0).toISOString(),
+    lastEventAt: session.updatedAt || session.createdAt || new Date(0).toISOString(),
+    title: session.title || session.sessionId.slice(0, 8),
+    activeEstimate: false,
+    userInputTurns: session.filePath ? countCursorUserInputTurns(session.filePath) : undefined,
+  };
+}
+
 function sortRuntimeSessionsByActivity(sessions: LocalRuntimeSessionSummary[]): LocalRuntimeSessionSummary[] {
   return sessions.sort((left, right) => right.lastEventAt.localeCompare(left.lastEventAt));
 }
@@ -164,10 +213,11 @@ export function listCommandCodexThreads(limit?: number): CodexSessionSummary[] |
 
 export function listCommandLocalRuntimeSessions(limit?: number, runtime?: LocalRuntimeFilter): LocalRuntimeSessionSummary[] | null {
   try {
-    const codex = runtime === 'claude' || runtime === 'kimi' ? [] : listCodexSessions(limit).map(toCodexRuntimeSession);
-    const claude = runtime === 'codex' || runtime === 'kimi' ? [] : listCommandClaudeThreads(limit);
-    const kimi = runtime === 'codex' || runtime === 'claude' ? [] : listCommandKimiThreads(limit);
-    return sortRuntimeSessionsByActivity([...codex, ...claude, ...kimi])
+    const codex = runtime && runtime !== 'codex' ? [] : listCodexSessions(limit).map(toCodexRuntimeSession);
+    const claude = runtime && runtime !== 'claude' ? [] : listCommandClaudeThreads(limit);
+    const kimi = runtime && runtime !== 'kimi' ? [] : listCommandKimiThreads(limit);
+    const cursor = runtime && runtime !== 'cursor' ? [] : listCommandCursorThreads(limit);
+    return sortRuntimeSessionsByActivity([...codex, ...claude, ...kimi, ...cursor])
       .slice(0, typeof limit === 'number' && Number.isFinite(limit) && limit > 0 ? Math.max(1, Math.floor(limit)) : undefined);
   } catch (error) {
     console.error('[command-session-source] Failed to list local runtime sessions:', error);
@@ -222,6 +272,18 @@ export function archiveCommandKimiThread(threadId: string, cwd: string | undefin
   }
 }
 
+export function archiveCommandCursorThread(threadId: string, cwd: string | undefined): LocalRuntimeSessionSummary | null {
+  if (!cwd) return null;
+  try {
+    const session = findCursorSessionFileById(threadId, cwd);
+    if (!session || !archiveCursorSessionFile(session)) return null;
+    return toCursorRuntimeSession(session);
+  } catch (error) {
+    console.error(`[command-session-source] Failed to archive Cursor thread ${threadId}:`, error);
+    return null;
+  }
+}
+
 export function getCommandCodexThreadByIdSafe(
   rawThreadId: string,
   context: string,
@@ -263,6 +325,10 @@ export function getCommandLocalRuntimeThreadByIdSafe(
       if (kimi) {
         return { threadId, thread: toKimiRuntimeSession(kimi) };
       }
+      const cursor = findCursorSessionFileById(threadId, cwd);
+      if (cursor) {
+        return { threadId, thread: toCursorRuntimeSession(cursor) };
+      }
     }
     const claudeMatches = listClaudeSessionJsonlSummaries()
       .filter((session) => session.sessionId === threadId);
@@ -272,6 +338,10 @@ export function getCommandLocalRuntimeThreadByIdSafe(
     const kimi = findKimiSessionFileById(threadId);
     if (kimi) {
       return { threadId, thread: toKimiRuntimeSession(kimi) };
+    }
+    const cursor = findCursorSessionFileById(threadId);
+    if (cursor) {
+      return { threadId, thread: toCursorRuntimeSession(cursor) };
     }
     return { threadId };
   } catch (error) {

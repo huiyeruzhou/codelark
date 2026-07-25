@@ -178,6 +178,30 @@ describe('SessionRegistryService', () => {
     assert.equal(store.getSession(materialized.id), null);
   });
 
+  it('materializes and archives Cursor Agent sessions through the registry port', () => {
+    const store = new JsonFileStore(makeBridgeSettings());
+    const archived: Array<{ sessionId: string; cwd: string }> = [];
+    const registry = new SessionRegistryService(store, {
+      cursorThreads: {
+        getThread: (cursorSessionId, cwd) => cursorSessionId === 'cursor-registry-session'
+          ? { cursorSessionId, title: 'Local Cursor Session', cwd }
+          : null,
+        archiveThread: (cursorSessionId, cwd) => {
+          archived.push({ sessionId: cursorSessionId, cwd });
+          return true;
+        },
+      },
+    });
+
+    const materialized = registry.materializeCursorThread('cursor-registry-session', '/tmp/cursor-registry');
+    assert.equal(materialized.runtime?.activeRuntime, 'cursor');
+    assert.equal(materialized.runtime?.cursor?.sessionId, 'cursor-registry-session');
+    assert.equal(materialized.runtime?.cursor?.provider, 'tmux');
+    const result = registry.archiveCursorThread('cursor-registry-session', '/tmp/cursor-registry');
+    assert.deepEqual(archived, [{ sessionId: 'cursor-registry-session', cwd: '/tmp/cursor-registry' }]);
+    assert.deepEqual(result.deletedBridgeSessionIds, [materialized.id]);
+  });
+
   it('sets channel default targets by BridgeSession id', () => {
     const store = new JsonFileStore(makeBridgeSettings());
     const registry = new SessionRegistryService(store);

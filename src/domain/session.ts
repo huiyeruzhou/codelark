@@ -5,10 +5,12 @@ export type CodexReasoningEffort = 'minimal' | 'low' | 'medium' | 'high' | 'xhig
 export type RuntimeProviderChoice = 'sdk' | 'pty' | 'tmux';
 export type ClaudeProviderChoice = RuntimeProviderChoice;
 export type KimiProviderChoice = 'tmux';
-export type RuntimeAgent = 'codex' | 'claude' | 'kimi';
+export type CursorProviderChoice = 'tmux';
+export type RuntimeAgent = 'codex' | 'claude' | 'kimi' | 'cursor';
 export type RuntimeProviderIdentity =
   | `${'codex' | 'claude'}:${RuntimeProviderChoice}`
-  | `kimi:${KimiProviderChoice}`;
+  | `kimi:${KimiProviderChoice}`
+  | `cursor:${CursorProviderChoice}`;
 export type ClaudeExecutable = 'claude' | 'ccr';
 
 export type BridgeSessionHealthStatus =
@@ -58,13 +60,15 @@ export interface BridgeSession {
 export type BridgeSessionRuntimeState =
   | BridgeSessionCodexRuntimeContainer
   | BridgeSessionClaudeRuntimeContainer
-  | BridgeSessionKimiRuntimeContainer;
+  | BridgeSessionKimiRuntimeContainer
+  | BridgeSessionCursorRuntimeContainer;
 
 export interface BridgeSessionCodexRuntimeContainer {
   activeRuntime?: 'codex';
   codex?: BridgeSessionCodexRuntimeState;
   claude?: never;
   kimi?: never;
+  cursor?: never;
   general?: BridgeSessionGeneralState;
 }
 
@@ -73,6 +77,7 @@ export interface BridgeSessionClaudeRuntimeContainer {
   codex?: never;
   claude?: BridgeSessionClaudeRuntimeState;
   kimi?: never;
+  cursor?: never;
   general?: BridgeSessionGeneralState;
 }
 
@@ -81,6 +86,16 @@ export interface BridgeSessionKimiRuntimeContainer {
   codex?: never;
   claude?: never;
   kimi?: BridgeSessionKimiRuntimeState;
+  cursor?: never;
+  general?: BridgeSessionGeneralState;
+}
+
+export interface BridgeSessionCursorRuntimeContainer {
+  activeRuntime: 'cursor';
+  codex?: never;
+  claude?: never;
+  kimi?: never;
+  cursor?: BridgeSessionCursorRuntimeState;
   general?: BridgeSessionGeneralState;
 }
 
@@ -111,6 +126,14 @@ export interface BridgeSessionKimiRuntimeState {
   provider?: KimiProviderChoice;
 }
 
+export interface BridgeSessionCursorRuntimeState {
+  sessionId?: string;
+  cwd?: string;
+  model?: string;
+  provider?: CursorProviderChoice;
+  force?: boolean;
+}
+
 export interface BridgeSessionGeneralState {
   workingDirectory?: string;
   systemPrompt?: string;
@@ -126,6 +149,7 @@ export type BridgeSessionUpdate = Omit<Partial<BridgeSession>, 'runtime'> & {
 	    codex?: Partial<BridgeSessionCodexRuntimeState>;
 	    claude?: Partial<BridgeSessionClaudeRuntimeState>;
 	    kimi?: Partial<BridgeSessionKimiRuntimeState>;
+	    cursor?: Partial<BridgeSessionCursorRuntimeState>;
 	    general?: Partial<BridgeSessionGeneralState>;
 	  };
 	};

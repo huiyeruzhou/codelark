@@ -32,6 +32,15 @@ test('builds and formats streaming metadata tags', () => {
     'mirror',
   ]);
 
+  assert.deepEqual(buildStreamContextTags({
+    bridgeSessionId: 'bridge-session-123456789',
+    executionProvider: 'tmux',
+    source: 'direct',
+  }), [
+    'bridge_id:bridge-s',
+    'tmux',
+  ]);
+
   assert.deepEqual(buildRuntimeStreamTags({
     runtime: 'codex',
     reasoningEffort: 'high',

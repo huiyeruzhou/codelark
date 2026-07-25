@@ -9,6 +9,7 @@ import { WebSocket } from 'ws';
 import { DEFAULT_WORKSPACE_ROOT } from '../../../configuration/paths.js';
 import { startLocalCodexResponsesProxy } from '../../../testing/real-feishu/codex-responses-proxy.js';
 import { serializeFailureError } from '../../../testing/real-feishu/failure-report.js';
+import { containsGeneratedReplyTexts } from '../../../testing/real-feishu/reply-evidence.js';
 
 const RUNTIME_PROVIDER_MATRIX_SUFFIXES = [
   'codex-sdk',
@@ -18,7 +19,21 @@ const RUNTIME_PROVIDER_MATRIX_SUFFIXES = [
   'claude-sdk',
   'claude-tmux',
   'kimi-tmux',
+  'cursor-tmux',
 ];
+
+describe('unit::real-feishu-e2e-harness::reply-evidence', () => {
+  it('does not accept a marker that appears only in the echoed user history', () => {
+    const marker = 'CODELARK_CURSOR_REPLY_EVIDENCE';
+    const prompt = `Reply with exactly this marker and no other text: ${marker}`;
+    const initialCard = `<card>\n▼ 历史记录\n**用户**：${prompt}\n> 正在初始化 Cursor\n▲\n</card>`;
+    const completedCard = `${initialCard}\n${marker}`;
+
+    assert.equal(containsGeneratedReplyTexts(initialCard, prompt, [marker]), false);
+    assert.equal(containsGeneratedReplyTexts(completedCard, prompt, [marker]), true);
+    assert.equal(containsGeneratedReplyTexts(marker, prompt, [marker]), true);
+  });
+});
 
 function expectedRuntimeProviderMatrix(prefix: string): string[] {
   return RUNTIME_PROVIDER_MATRIX_SUFFIXES.map((suffix) => `${prefix}::${suffix}`);
@@ -681,7 +696,7 @@ describe('unit::real-feishu-e2e-harness::auth-preflight', () => {
 });
 
 describe('unit::real-feishu-e2e-harness::scenario-coverage-metadata', () => {
-  it('keeps Kimi coverage inside the real Feishu runtime/provider matrix', () => {
+  it('keeps Kimi and Cursor coverage inside the real Feishu runtime/provider matrix', () => {
     const output = runHarness(['--list-scenarios']);
     const parsed = JSON.parse(output) as {
       scenarios: Array<{
@@ -703,6 +718,11 @@ describe('unit::real-feishu-e2e-harness::scenario-coverage-metadata', () => {
         1,
         `${scenario.scenario} should include Kimi exactly once through the shared matrix`,
       );
+      assert.equal(
+        scenario.providerMatrix.filter((name) => name.endsWith('::cursor-tmux')).length,
+        1,
+        `${scenario.scenario} should include Cursor exactly once through the shared matrix`,
+      );
     }
 
     const basicDialogue = parsed.scenarios.find((item) => item.scenario === 'basic-dialogue-suite');
@@ -718,7 +738,7 @@ describe('unit::real-feishu-e2e-harness::scenario-coverage-metadata', () => {
     ]);
 
     const helpText = runHarness(['--help']);
-    assert.match(helpText, /--runtime <claude\|codex\|kimi>/);
+    assert.match(helpText, /--runtime <claude\|codex\|kimi\|cursor>/);
     assert.doesNotMatch(helpText, /--kimi[\w-]*/);
   });
 
@@ -1128,7 +1148,8 @@ describe('unit::real-feishu-e2e-harness::scenario-coverage-metadata', () => {
     };
 
     assert.equal(parsed.scenarios, 15);
-    assert.equal(parsed.summary.matrixEntries, 81);
+    assert.equal(parsed.summary.matrixEntries, parsed.entries.length);
+    assert.ok(parsed.entries.some((entry) => entry.testName === 'real-feishu::runtime-message::cursor-tmux'));
     assert.equal(parsed.summary.kimiEntries, 12);
     assert.equal(parsed.summary.kimiCurrentEntries, 8);
     assert.equal(parsed.summary.kimiCanonicalPass, 1);
@@ -1165,28 +1186,28 @@ describe('unit::real-feishu-e2e-harness::scenario-coverage-metadata', () => {
       executedPercent: 28.6,
     });
     assert.deepEqual(parsed.coverageRates.cardFrontend, {
-      total: 30,
+      total: 34,
       canonicalPass: 1,
       legacyPass: 0,
       diagnosticPass: 0,
       diagnosticFailure: 0,
       dryRun: 1,
-      plannedOnly: 28,
+      plannedOnly: 32,
       executed: 2,
-      canonicalPercent: 3.3,
-      executedPercent: 6.7,
+      canonicalPercent: 2.9,
+      executedPercent: 5.9,
     });
     assert.deepEqual(parsed.coverageRates.cardFrontendTmux, {
-      total: 13,
+      total: 17,
       canonicalPass: 1,
       legacyPass: 0,
       diagnosticPass: 0,
       diagnosticFailure: 0,
       dryRun: 0,
-      plannedOnly: 12,
+      plannedOnly: 16,
       executed: 1,
-      canonicalPercent: 7.7,
-      executedPercent: 7.7,
+      canonicalPercent: 5.9,
+      executedPercent: 5.9,
     });
     const commandStateKimi = parsed.entries.find((entry) => entry.testName === 'real-feishu::command-state::kimi-tmux');
     assert.equal(commandStateKimi?.includesKimi, true);
@@ -1373,7 +1394,7 @@ describe('unit::real-feishu-e2e-harness::session-management-command-plan', () =>
         dualProviderCompanion: string | null;
       };
       commands: string[];
-      commandReplyExpectations: Array<{ command: string; expectedTexts: string[]; reason: string }>;
+      commandReplyExpectations: Array<{ command: string; expectedTexts: string[]; replyTimeoutMs: number; reason: string }>;
       waitsForMirrorFinalBeforeFollowup: boolean;
       finalMessageObservationMode: string;
       plannedSuccessCheckNames: string[];
@@ -1393,6 +1414,57 @@ describe('unit::real-feishu-e2e-harness::session-management-command-plan', () =>
     assert.ok(parsed.plannedSuccessCheckNames.includes('provider_output_path'));
     assert.ok(parsed.plannedSuccessCheckNames.includes('mirror_final_not_duplicated_in_direct_reply'));
     assert.ok(parsed.plannedSuccessCheckNames.includes('runtime_prompt_final_transcript_marker'));
+  });
+
+  it('dry-runs Cursor through the shared runtime-message matrix as a direct transcript provider', () => {
+    const output = runHarness([
+      '--dry-run',
+      '--scenario',
+      'runtime-message',
+      '--runtime',
+      'cursor',
+      '--provider',
+      'tmux',
+      '--cursor-model',
+      'gpt-5.3-codex',
+      '--run-id',
+      'unit-runtime-message-cursor-tmux',
+      '--chat-id',
+      'oc_unit',
+      '--message',
+      'CODELARK_UNIT_RUNTIME_MESSAGE_CURSOR_TMUX',
+    ]);
+    const parsed = JSON.parse(output) as {
+      coverage: { testName: string; dualProviderCompanion: string | null };
+      commands: string[];
+      cursorModel: string;
+      commandReplyExpectations: Array<{ command: string; expectedTexts: string[]; replyTimeoutMs: number; reason: string }>;
+      waitsForMirrorFinalBeforeFollowup: boolean;
+      finalMessageObservationMode: string;
+      plannedSuccessCheckNames: string[];
+      runtimeEnvironment: {
+        bridgeHome: string;
+        cursorConfigDir: string;
+        cursorDataDir: string;
+        cursorExecutableSource: string;
+      };
+    };
+
+    assert.equal(parsed.coverage.testName, 'real-feishu::runtime-message::cursor-tmux');
+    assert.equal(parsed.coverage.dualProviderCompanion, 'real-feishu::runtime-message::codex-pty');
+    assert.deepEqual(parsed.commands, ['/runtime cursor', '/p tmux']);
+    assert.equal(parsed.cursorModel, 'gpt-5.3-codex');
+    assert.equal(parsed.waitsForMirrorFinalBeforeFollowup, false);
+    assert.equal(parsed.finalMessageObservationMode, 'reply_to');
+    assert.deepEqual(expectationAt(parsed.commandReplyExpectations, '/runtime cursor').expectedTexts, ['Runtime', 'cursor']);
+    assert.deepEqual(expectationAt(parsed.commandReplyExpectations, '/p tmux').expectedTexts, ['Cursor Provider', 'tmux']);
+    assert.equal(expectationAt(parsed.commandReplyExpectations, '/p tmux').replyTimeoutMs, 120_000);
+    assert.ok(parsed.runtimeEnvironment.cursorConfigDir.includes('cursor-config'));
+    assert.ok(parsed.runtimeEnvironment.cursorDataDir.includes('cursor-data'));
+    assert.ok(parsed.runtimeEnvironment.cursorExecutableSource.length > 0);
+    assert.ok(parsed.plannedSuccessCheckNames.includes('provider_output_path'));
+    assert.ok(parsed.plannedSuccessCheckNames.includes('cursor_stream_card_unified_ui'));
+    assert.equal(parsed.plannedSuccessCheckNames.includes('mirror_final_not_duplicated_in_direct_reply'), false);
   });
 
   it('plans a deterministic Kimi wire producer without bypassing the real bridge or Feishu card path', () => {
@@ -2102,7 +2174,7 @@ describe('unit::real-feishu-e2e-harness::session-management-command-plan', () =>
     assert.deepEqual(expectationAt(parsed.commandReplyExpectations, '/t unbind').expectedTexts, ['当前聊天已解绑', '新的临时 BridgeSession']);
     assert.deepEqual(expectationAt(parsed.commandReplyExpectations, '/his 5').expectedTexts, ['CODELARK_UNIT_SESSION_MANAGEMENT_CODEX_PTY']);
     assert.deepEqual(expectationAt(parsed.commandReplyExpectations, '/t archive').expectedTexts, ['已归档本地 Codex 会话']);
-    assert.equal(expectationAt(parsed.commandReplyExpectations, '/p pty', 0).replyTimeoutMs, 15_000);
+    assert.equal(expectationAt(parsed.commandReplyExpectations, '/p pty', 0).replyTimeoutMs, 120_000);
     assert.equal(expectationAt(parsed.commandReplyExpectations, '/his 5').replyTimeoutMs, 120_000);
   });
 
@@ -2219,7 +2291,7 @@ describe('unit::real-feishu-e2e-harness::session-management-command-plan', () =>
         expectedTexts: ['Codex Provider', 'sdk'],
         expectedReplyMessageTypes: [],
         expectedReplyContentKeys: [],
-        replyTimeoutMs: 15_000,
+        replyTimeoutMs: 120_000,
         reason: 'history-boundaries setup command must reach the expected session/provider state before history assertions',
       },
       {
@@ -2243,7 +2315,7 @@ describe('unit::real-feishu-e2e-harness::session-management-command-plan', () =>
         expectedTexts: ['Codex Provider', 'sdk'],
         expectedReplyMessageTypes: [],
         expectedReplyContentKeys: [],
-        replyTimeoutMs: 15_000,
+        replyTimeoutMs: 120_000,
         reason: 'history-boundaries setup command must reach the expected session/provider state before history assertions',
       },
       {

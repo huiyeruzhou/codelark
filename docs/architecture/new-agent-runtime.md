@@ -37,7 +37,7 @@ Kimi 当前只有 tmux 执行形态，所以 provider 集合保持单值 `tmux`�
 
 ## 从 Kimi 接入历史反推的改动地图
 
-本页的规则不是只来自抽象设计。`feature/kimi-tmux-provider` 的实现历史显示，新增一个 agent 会沿着多条既有系统边界扩散；如果未来接入第四个 agent，PR 审查应逐项检查这些边界，而不是只看 provider 是否能返回一段文本。
+本页的规则不是只来自抽象设计。`feature/kimi-tmux-provider` 和后续 Cursor Agent 接入历史显示，新增一个 agent 会沿着多条既有系统边界扩散；PR 审查应逐项检查这些边界，而不是只看 provider 是否能返回一段文本。
 
 | Kimi 改动证据 | 稳定接入义务 |
 | --- | --- |
@@ -48,7 +48,9 @@ Kimi 当前只有 tmux 执行形态，所以 provider 集合保持单值 `tmux`�
 | 修改 `/t`、session registry、thread display、archive 和 Operator UI session/binding routes | 新 agent 必须能被列出、materialize、绑定到聊天、归档、设为默认目标，并在前端展示正确的 runtime identity。 |
 | 新增 Kimi `MirrorJsonlSource`、mirror subscription state、transcript source 和 turn runtime 类型 | provider stream 只是入口；已有本地会话的外部更新、历史读取、健康追踪和 turn final/progress source 都要接入 mirror/transcript/turn 三条通道。 |
 | 修改 Feishu adapter card、streaming metadata 和 status note tests | agent 特有状态可以展示在状态区，例如 Kimi 的“当前思考”，但必须与最终回答正文分离，并有长度截断和不泄露内部内容的断言。 |
-| 修改 real Feishu harness、coverage matrix、isolated bridge env 和 docs/testing 页面 | 新 agent 应进入既有 Feishu E2E runtime/provider 矩阵；不要新增 agent 专用开关，也不要复用 live bridge 或宿主 agent home。 |
+| 修改 real Feishu harness、coverage matrix、isolated bridge env 和 docs/testing 页面 | 新 agent 应进入既有 Feishu E2E runtime/provider 矩阵；不要新增 agent 专用开关，也不要复用 live bridge 或宿主会话数据目录。必须读取宿主安全登录存储时，凭据边界要显式、只读，测试 config/data/session 仍落在 runRoot。 |
+| Cursor bridge harness 误用 noop provider，一度被误判为 transcript 空 completed | 真实 E2E 必须证明实际 routing provider/executable 被调用；日志没有 provider 启动证据时不能把 fake/noop 终态归因给 runtime。JSONL/wire/transcript 可以由 direct provider 或 mirror 驱动，但必须只有一个 terminal owner。 |
+| Cursor rebase 到 provider-start/attachment/stop 新生命周期 | 新 agent 必须接入集中式 stale-start、stop、cleanup、attach confirmation 和进程丢失恢复；不能保留接入时复制的旧私有命令路径。 |
 
 因此，一个新增 agent 的完成标准至少包括：配置能表达它，命令能切到它，本地历史能找到它，`/t` 能接管它，mirror 能观察它，Feishu 卡片能正确呈现它，真实 E2E 能把它纳入同一套矩阵。任一项缺失，都会让“能发一轮消息”的演示和“CodeLark 完整支持一个 agent”之间出现断层。
 
@@ -204,7 +206,10 @@ Kimi tmux provider 的当前行为来自实测：
 - [ ] `src/runtime/<agent>/session-index.ts`：枚举、按 id/cwd 查找、解析本地历史文件。
 - [ ] 驱动 provider（tmux/pty/sdk），含真实 CLI 生命周期测试（启动、resume、prompt 注入、退出）。
 - [ ] **共享输入生命周期**：不得在 host manager 按 agent 名称开路由特例。首条消息可创建 identity/tmux，成功后 provider-owned process 必须跨 turn 保留；第二条消息只做存活检查并复用，不能重复 resume discovery、pane 光标探测或启动 CLI。进程丢失和失败恢复另测。
+- [ ] **Bridge 冷接管**：清空内存输入状态但保留 tmux 和持久 identity 后，下一条普通消息必须确认 editor ready 并复用同一进程/session；不能要求已滚出屏幕的 session header，也不能重启 tmux。
+- [ ] **provider-start 所有权**：显式 `/p tmux` 走共享 provider-start job；启动成功或失败后都重新校验聊天仍绑定原 session。过期启动只清理自己创建的 tmux，不写回旧 session。
 - [ ] **终态事件语义**：parser 先判断“事件是不是 turn 终态”，区分中间 loop 事件（如 `finishReason: tool_use`）与真正完成/中止（`end_turn` → `task_complete`，取消类事件 → `task_aborted`）。fixture 必须取自真实 session 文件。
+- [ ] **终态所有权**：明确 direct stream 与 mirror 谁拥有文本、工具、artifact 和 terminal。JSONL/wire/transcript 型 provider可以由 direct provider 读取本轮增量，也可以由 mirror 交付，但 suppression/claim 必须保证同一 turn 只有一个 completed。
 - [ ] 特色状态信号（如 Kimi `think`）映射到状态区并截断，不混入最终回复正文。
 - [ ] `MirrorJsonlSource` 注册到 mirror runtime，subscription registry 含该 agent 的 identity。
 - [ ] TUI selection prompt 探测是 agent 专属能力；新 agent 不得因为 provider 恰好是 tmux 就落入 Codex/Claude 探测路径。
@@ -220,7 +225,7 @@ Kimi tmux provider 的当前行为来自实测：
 - [ ] `/his`：transcript source，过滤 user 注入、系统消息和内部 think，标题回退规则。
 - [ ] `/check`：runtime label、runtime-local identity、resume/mirror 必需 cwd。
 - [ ] `/new`、`/clear`：继承 active runtime 与 provider，只写自己的 `runtimeBridgeSessionIds[activeRuntime]`；清理时杀掉该 agent 的 tmux session。
-- [ ] `/stop`、`/tmux*`、`/pty-screen` 重定向、`/every`、`/then` 任务表 runtime 三分支、`/help` 与别名。
+- [ ] `/stop`、`/tmux*`、`/pty-screen` 重定向、`/every`、`/then` 任务表 runtime 分支、`/help` 与别名；`stopRunningSession`、`cleanupRuntimeTmuxSession`、post-forward exit probe 必须认识新 agent，不能在命令文件恢复私有中断逻辑。
 - [ ] 文案审计：通用路径上不得硬编码 “Codex” 字样的 reason/告警（健康 reason、goal 告警等在 Kimi 接入时都踩过）。
 
 ### Turn、健康与 Feishu 卡片
@@ -243,9 +248,10 @@ Kimi tmux provider 的当前行为来自实测：
 - [ ] 单元：parser 终态/取消/中间事件、identity 解析、transcript 过滤。
 - [ ] 工具协议：用 scripted Mock 覆盖任意 start/result/error 顺序、长输出、Unicode、超长单行和多行 patch；用真实 agent fixture 覆盖原生工具参数 shape。
 - [ ] Workflow：provider 真实 CLI 生命周期。
-- [ ] P0 用户故事：同一聊天连续发送两条普通消息，CLI/tmux launch 次数在第二条不得增加，runtime session id 不变，第二条仍由同一 mirror source 返回；Codex、Claude、Kimi 使用同一断言模板。
+- [ ] P0 用户故事：同一聊天首轮冷启动、清空 bridge 输入状态后的存活 tmux 冷接管、tmux 丢失后的 resume；CLI/tmux launch 次数、runtime session id、pane pid、mirror source 和旧文本不重放都要断言。Codex、Claude、Kimi、Cursor 使用同一故事模板。
 - [ ] Mock bridge E2E：命令矩阵按 agent 全覆盖。
-- [ ] 真实 Feishu E2E：纳入既有 runtime/provider 矩阵；不新增 agent 专用开关，不复用 live bridge 或宿主 agent home。
+- [ ] 真实 executable E2E：运行官方版本化 CLI 和真 tmux；必须明确哪些后端被 mock。只能使用真实账号后端时应 opt-in，并把会话 config/data 隔离到临时目录，不能污染宿主会话。
+- [ ] 真实 Feishu E2E：纳入既有 runtime/provider 矩阵；不新增 agent 专用场景开关，不复用 live bridge 或宿主会话数据目录。若官方 CLI 的安全凭据只能从宿主 HOME/keyring 读取，应保持该凭据边界只读，并用 agent 专属 config/data env 把测试会话隔离到 runRoot。测试必须创建/复用隔离群、邀请当前用户、由用户身份发送并回读最终消息；需要人工评价时保留群直到确认。
 
 ### 文档
 

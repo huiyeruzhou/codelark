@@ -339,7 +339,7 @@ export async function handleThreadSwitchCommand(options: {
       return {
         response: displayedThreads.length > 0
           ? `当前只找到 ${displayedThreads.length} 条全局会话，没有第 ${selected.index} 条。先发送 \`/t\` 查看列表后再选择。`
-          : '没有找到本地 Codex、Claude Code 或 Kimi Code 会话。先创建一个会话，再回来试一次。',
+          : '没有找到本地 Codex、Claude Code、Kimi Code 或 Cursor Agent 会话。先创建一个会话，再回来试一次。',
       };
     }
     const bridgeMatch = findVisibleBridgeSessionByToken(options.store, threadArgs);
@@ -394,7 +394,7 @@ export async function handleThreadSwitchCommand(options: {
         threadTableCardScope: richCard && options.deps.threadCardRefreshScope ? options.deps.threadCardRefreshScope : undefined,
       };
     }
-    return { response: `没有找到对应会话：${threadArgs}。/t 列表按“序号 > thread/session id > bridge_id > 名称”解析；先发送 \`/t\` 刷新列表后优先用序号接管，或用 \`/t codex\`、\`/t claude\`、\`/t kimi\` 切换 runtime 列表。` };
+    return { response: `没有找到对应会话：${threadArgs}。/t 列表按“序号 > thread/session id > bridge_id > 名称”解析；先发送 \`/t\` 刷新列表后优先用序号接管，或用 \`/t codex\`、\`/t claude\`、\`/t kimi\`、\`/t cursor\` 切换 runtime 列表。` };
   }
   if (!selected.thread) {
     const blocked = await prepareCurrentSessionForSwitch(

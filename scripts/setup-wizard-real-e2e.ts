@@ -5,7 +5,7 @@ import path from 'node:path';
 import { spawn } from 'node:child_process';
 
 type FeishuSite = 'feishu' | 'lark';
-type SetupRuntimeChoice = 'codex' | 'ccr' | 'claude' | 'kimi';
+type SetupRuntimeChoice = 'codex' | 'ccr' | 'claude' | 'kimi' | 'cursor';
 
 function valueArg(args: string[], name: string, fallback = ''): string {
   const index = args.indexOf(name);
@@ -28,7 +28,7 @@ function printUsage(): void {
     '  --app-id <cli_...>      App ID written to isolated lark-cli/CodeLark config',
     '  --app-secret <secret>   App Secret for the isolated smoke app; prefer env file/env vars to avoid npm echo',
     '  --site <feishu|lark>    Site brand; default feishu',
-    '  --runtime <name>        Runtime choice to write: codex|ccr|claude|kimi; default codex',
+    '  --runtime <name>        Runtime choice to write: codex|ccr|claude|kimi|cursor; default codex',
     '  --keep-temp             Keep temporary root for diagnosis; default cleans it in success and failure paths',
     '  --skip-lark-cli-bind    Test-only: write the private lark-cli runtime projection without invoking macOS Keychain',
     '  --simulate-failure-after-sync  Test cleanup on a post-lark-cli failure',
@@ -38,11 +38,11 @@ function printUsage(): void {
 }
 
 function runtimeChoiceArg(value: string): SetupRuntimeChoice {
-  if (value === 'codex' || value === 'ccr' || value === 'claude' || value === 'kimi') return value;
-  throw new Error(`Invalid --runtime "${value}". Expected codex, ccr, claude, or kimi.`);
+  if (value === 'codex' || value === 'ccr' || value === 'claude' || value === 'kimi' || value === 'cursor') return value;
+  throw new Error(`Invalid --runtime "${value}". Expected codex, ccr, claude, kimi, or cursor.`);
 }
 
-function expectedRuntimeAgent(choice: SetupRuntimeChoice): 'codex' | 'claude' | 'kimi' {
+function expectedRuntimeAgent(choice: SetupRuntimeChoice): 'codex' | 'claude' | 'kimi' | 'cursor' {
   if (choice === 'ccr') return 'claude';
   return choice;
 }
@@ -248,6 +248,9 @@ async function main(): Promise<void> {
     if (savedConfig.runtime.agent !== expectedAgent) throw new Error(`runtime mismatch: ${savedConfig.runtime.agent}`);
     if (runtimeChoice === 'kimi' && savedConfig.runtime.kimi.provider !== 'tmux') {
       throw new Error(`kimi provider mismatch: ${savedConfig.runtime.kimi.provider}`);
+    }
+    if (runtimeChoice === 'cursor' && savedConfig.runtime.cursor.provider !== 'tmux') {
+      throw new Error(`cursor provider mismatch: ${savedConfig.runtime.cursor.provider}`);
     }
     if (runtimeChoice === 'ccr' && savedConfig.runtime.claude.executable !== 'ccr') {
       throw new Error(`claude executable mismatch: ${savedConfig.runtime.claude.executable}`);

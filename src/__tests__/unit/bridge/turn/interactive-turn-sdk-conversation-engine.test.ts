@@ -165,6 +165,51 @@ describe('buildInlineToolBlock', () => {
 });
 
 describe('interactive-turn sdk-conversation-engine tool expansion', () => {
+  it('keeps provider status reasoning out of answer text when a status handler is available', async () => {
+    resetBridgeTestState();
+    const partialTexts: string[] = [];
+    const statusNotes: Array<string | null> = [];
+    const llm: LLMProvider = {
+      streamChat(): ReadableStream<string> {
+        return new ReadableStream({
+          start(controller) {
+            controller.enqueue(sseEvent('status', { reasoning: '正在初始化 Cursor tmux 和 Cursor chat。' }));
+            controller.enqueue(sseEvent('text', 'CURSOR_FINAL_ANSWER'));
+            controller.enqueue(sseEvent('result', {}));
+            controller.close();
+          },
+        });
+      },
+    };
+    const store = initBridgeTestContext({ settings: makeBridgeSettings(), llm });
+    const session = store.createSession('cursor-status-test', 'codex-model', undefined, '', 'normal');
+    store.updateSession(session.id, { runtime: { activeRuntime: 'cursor' } });
+    const binding = store.upsertChannelChat({
+      channelType: 'feishu',
+      chatId: 'chat-cursor-status',
+      bridgeSessionId: session.id,
+    });
+
+    const result = await processMessage(
+      binding,
+      'hello cursor',
+      undefined,
+      undefined,
+      undefined,
+      (text) => partialTexts.push(text),
+      undefined,
+      undefined,
+      (note) => statusNotes.push(note),
+      undefined,
+      undefined,
+      createTestSdkConversationRuntime(store, llm),
+    );
+
+    assert.deepEqual(statusNotes, ['正在初始化 Cursor tmux 和 Cursor chat。']);
+    assert.deepEqual(partialTexts, ['CURSOR_FINAL_ANSWER']);
+    assert.equal(result.responseText, 'CURSOR_FINAL_ANSWER');
+  });
+
   it('routes active Claude runtime turns with Claude-specific settings from yolo mode', async () => {
     resetBridgeTestState();
     const configTomlPath = path.join(CODELARK_HOME, 'config.toml');

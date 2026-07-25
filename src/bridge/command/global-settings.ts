@@ -12,8 +12,8 @@ import type { OutboundRichCard } from '../../domain/index.js';
 import type { ChannelAddress } from '../../domain/index.js';
 import { configFields, type ConfigPath } from '../../configuration/fields.js';
 
-export type SettingGroupKey = 'runtime' | 'runtime.codex' | 'runtime.claude' | 'runtime.kimi' | 'bridge' | 'channels.feishu';
-export type CurrentSessionConfigSection = 'common' | 'codex' | 'claude' | 'kimi';
+export type SettingGroupKey = 'runtime' | 'runtime.codex' | 'runtime.claude' | 'runtime.kimi' | 'runtime.cursor' | 'bridge' | 'channels.feishu';
+export type CurrentSessionConfigSection = 'common' | 'codex' | 'claude' | 'kimi' | 'cursor';
 export const SESSION_CONFIG_INHERIT_VALUE = 'clk:config:inherit';
 type SettingControl = 'select' | 'input';
 
@@ -60,6 +60,9 @@ const SETTING_DISPLAY_LABELS: Record<string, string> = {
   claudeIdleTimeoutMinutes: '空闲超时（分钟）',
   kimiDefaultModel: '模型',
   kimiProvider: 'Provider（运行方式）',
+  cursorDefaultModel: '模型',
+  cursorProvider: 'Provider（运行方式）',
+  cursorForce: 'YOLO模式',
   defaultWorkspaceRoot: '默认工作目录',
   tmuxCaptureLines: 'tmux 输出行数',
   tmuxEchoInput: '回显 tmux 输出',
@@ -94,6 +97,9 @@ const SETTING_FORM_NAMES: Record<string, string> = {
   claudeIdleTimeoutMinutes: 'cld_idle_min',
   kimiDefaultModel: 'kimi_model',
   kimiProvider: 'kimi_provider',
+  cursorDefaultModel: 'cursor_model',
+  cursorProvider: 'cursor_provider',
+  cursorForce: 'cursor_force',
   uiAllowLan: 'ui_lan',
   uiAccessToken: 'ui_token',
   historyMessageLimit: 'hist_limit',
@@ -129,6 +135,12 @@ const SETTING_GROUPS: SettingGroupDefinition[] = [
     title: 'Kimi',
     subtitle: 'Kimi Code runtime 的 TOML 默认值。',
     aliases: ['kimi', '[runtime.kimi]'],
+  },
+  {
+    key: 'runtime.cursor',
+    title: 'Cursor',
+    subtitle: 'Cursor Agent CLI runtime 的 TOML 默认值。',
+    aliases: ['cursor', '[runtime.cursor]'],
   },
   {
     key: 'bridge',
@@ -255,14 +267,14 @@ const SETTING_DEFINITIONS: SettingDefinition[] = [
     group: 'runtime',
     aliases: ['defaultRuntime', 'agent'],
     label: 'agent',
-    usage: '/set runtime codex|claude|kimi',
+    usage: '/set runtime codex|claude|kimi|cursor',
     control: 'select',
-    options: [selectOption('codex'), selectOption('claude'), selectOption('kimi')],
+    options: [selectOption('codex'), selectOption('claude'), selectOption('kimi'), selectOption('cursor')],
     read: (config) => config.runtime.agent,
     write(rawValue) {
       const token = rawValue.trim().toLowerCase();
-      if (token === 'codex' || token === 'claude' || token === 'kimi') return patch({ runtime: { agent: token } });
-      return { ok: false, message: 'Runtime 必须是 codex、claude 或 kimi。' };
+      if (token === 'codex' || token === 'claude' || token === 'kimi' || token === 'cursor') return patch({ runtime: { agent: token } });
+      return { ok: false, message: 'Runtime 必须是 codex、claude、kimi 或 cursor。' };
     },
   },
   {
@@ -527,6 +539,46 @@ const SETTING_DEFINITIONS: SettingDefinition[] = [
     },
   },
   {
+    key: 'cursorDefaultModel',
+    tomlPath: 'runtime.cursor.model',
+    group: 'runtime.cursor',
+    aliases: ['cursorModel'],
+    label: 'model',
+    usage: '/set cursorDefaultModel <model> 或 /set cursorDefaultModel default',
+    control: 'input',
+    placeholder: '留空则跟随 Cursor Agent 默认',
+    read: (config) => config.runtime.cursor.model || '-',
+    write: writeStringPatch((value) => ({ runtime: { cursor: { model: value } } })),
+  },
+  {
+    key: 'cursorProvider',
+    tomlPath: 'runtime.cursor.provider',
+    group: 'runtime.cursor',
+    aliases: ['cursorDefaultProvider'],
+    label: 'provider',
+    usage: '/set cursorProvider tmux',
+    control: 'select',
+    options: [selectOption('tmux')],
+    read: (config) => config.runtime.cursor.provider || 'tmux',
+    write(rawValue) {
+      const token = rawValue.trim().toLowerCase();
+      if (token === 'tmux') return patch({ runtime: { cursor: { provider: 'tmux' } } });
+      return { ok: false, message: 'Cursor Provider 当前只支持 tmux。' };
+    },
+  },
+  {
+    key: 'cursorForce',
+    tomlPath: 'runtime.cursor.force',
+    group: 'runtime.cursor',
+    aliases: ['cursorYolo', 'cursorMode'],
+    label: 'force',
+    usage: '/set cursorForce on|off',
+    control: 'select',
+    options: boolOptions(),
+    read: (config) => formatBool(config.runtime.cursor.force),
+    write: writeBooleanPatch((value) => ({ runtime: { cursor: { force: value } } })),
+  },
+  {
     key: 'uiAllowLan',
     tomlPath: 'bridge.ui_allow_lan',
     group: 'bridge',
@@ -686,7 +738,7 @@ function findGroup(raw: string): SettingGroupDefinition | undefined {
   ));
 }
 
-const CURRENT_RUNTIME_SETTING_KEYS: Record<'codex' | 'claude' | 'kimi', string[]> = {
+const CURRENT_RUNTIME_SETTING_KEYS: Record<'codex' | 'claude' | 'kimi' | 'cursor', string[]> = {
   codex: [
     'defaultModel',
     'defaultMode',
@@ -705,6 +757,11 @@ const CURRENT_RUNTIME_SETTING_KEYS: Record<'codex' | 'claude' | 'kimi', string[]
   kimi: [
     'kimiDefaultModel',
     'kimiProvider',
+  ],
+  cursor: [
+    'cursorDefaultModel',
+    'cursorProvider',
+    'cursorForce',
   ],
 };
 
@@ -736,6 +793,11 @@ const SETTING_GROUP_ORDERS: Partial<Record<SettingGroupKey, string[]>> = {
     'kimiDefaultModel',
     'kimiProvider',
   ],
+  'runtime.cursor': [
+    'cursorDefaultModel',
+    'cursorProvider',
+    'cursorForce',
+  ],
 };
 
 function groupDefinitions(groupKey: SettingGroupKey): SettingDefinition[] {
@@ -747,10 +809,12 @@ function groupDefinitions(groupKey: SettingGroupKey): SettingDefinition[] {
 }
 
 export function runtimeSettingDefinitions(
-  runtime: 'codex' | 'claude' | 'kimi',
+  runtime: 'codex' | 'claude' | 'kimi' | 'cursor',
   options: { sessionWritableOnly?: boolean } = {},
 ): SettingDefinition[] {
-  const definitions = groupDefinitions(runtime === 'kimi'
+  const definitions = groupDefinitions(runtime === 'cursor'
+    ? 'runtime.cursor'
+    : runtime === 'kimi'
     ? 'runtime.kimi'
     : runtime === 'claude' ? 'runtime.claude' : 'runtime.codex');
   if (!options.sessionWritableOnly) return definitions;
@@ -765,7 +829,7 @@ export function settingConfigPath(definition: Pick<SettingDefinition, 'tomlPath'
 }
 
 export function currentSessionSettingDefinitions(
-  runtime: 'codex' | 'claude' | 'kimi',
+  runtime: 'codex' | 'claude' | 'kimi' | 'cursor',
 ): SettingDefinition[] {
   return runtimeSettingDefinitions(runtime, { sessionWritableOnly: true });
 }

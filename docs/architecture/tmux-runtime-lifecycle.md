@@ -1,6 +1,6 @@
 # tmux Runtime 生命周期
 
-本文描述 CodeLark 当前 tmux runtime 的完整链路。Codex、Claude Code 和 Kimi Code 共用 `src/bridge/tmux/core.ts` 的 tmux API 和 `src/bridge/tmux/input-state-machine.ts` 的输入生命周期状态机，差异保留在各自 CLI 启动参数、会话身份和 JSONL/wire 解析上。`src/bridge/tmux/runtime.ts` 承载 Codex/Claude 的 shared provider-owned 启动和 readiness；Kimi 由 `src/runtime/kimi/tmux-provider.ts` 从真实 TUI 发现 CLI 生成的 session id，再把相同的 session/tmux/send 状态写入共享 machine。
+本文描述 CodeLark 当前 tmux runtime 的完整链路。Codex、Claude Code、Kimi Code 和 Cursor Agent 共用 `src/bridge/tmux/core.ts` 的 tmux API 和 `src/bridge/tmux/input-state-machine.ts` 的输入生命周期状态机，差异保留在各自 CLI 启动参数、会话身份和 JSONL/wire/transcript 解析上。`src/bridge/tmux/runtime.ts` 承载 Codex/Claude 的 shared provider-owned 启动和 readiness；Kimi 与 Cursor 分别在自己的 provider 中发现 CLI identity 和持久输出文件，再把相同的 session/tmux/send 状态写入共享 machine。
 
 ## 总览
 
@@ -120,7 +120,7 @@ readiness gate 的 `ready` 会把共享输入状态推进到 `running`，随后�
 
 ### 不可破坏的输入生命周期契约
 
-以下约束适用于 Codex、Claude Code、Kimi Code 和以后新增的 runtime：
+以下约束适用于 Codex、Claude Code、Kimi Code、Cursor Agent 和以后新增的 runtime：
 
 1. host 消息路由不得按 runtime 名称开“只对某家生效”的旁路。普通消息统一进入 provider-owned input lifecycle。
 2. 首条输入可以依次创建或发现 runtime identity、启动 tmux、处理真实启动选择并进入 `running`；后续输入必须复用同一 identity 和 tmux process。
@@ -128,6 +128,8 @@ readiness gate 的 `ready` 会把共享输入状态推进到 `running`，随后�
 4. 只有 tmux 进程确实丢失、前一生命周期进入 `failed`、Bridge 冷接管，或用户明确切换/清理 session/provider 时，才允许重新进入 session/tmux/readiness 阶段。
 5. runtime-specific 代码只负责 CLI 参数、identity/wire 格式和必要的交互动作（例如 Kimi `Ctrl-S`）；它不能改变共享状态机的触发时机和 process 所有权。
 6. provider-owned tmux 的生命周期长于单个 turn。成功 turn 不得在 `finally` 中 kill；失败的半初始化进程可以清理，显式 `/clear`、归档和 provider 切换负责最终释放。
+7. 任何以 JSONL、wire 或 transcript 作为答案来源的 provider 都必须明确单一 terminal owner：可以由 provider 读取当前增量并完成 direct turn，也可以由独立 mirror 完成，但另一条路径必须 suppression/claim 清晰，不能让同一持久事件结束两张卡或丢失真实回答。
+8. `/p tmux` 的启动结果写回前必须重新校验聊天仍绑定原 session；`/stop`、`/clear`、`/t` attach/archive 和进程丢失恢复必须进入共享 lifecycle owner，不能在 runtime 命令里保留私有旧路径。
 
 任何新 runtime 在接入前都必须通过“首轮初始化一次 → 同一聊天连续两条消息复用 → 进程丢失后恢复”的同一组用户故事测试。只证明单个 turn 能返回答案，不足以接入 tmux provider。
 

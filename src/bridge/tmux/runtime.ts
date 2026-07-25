@@ -78,7 +78,7 @@ export interface StartCodexResumeTmuxSessionResult {
   updateRestartCount?: number;
 }
 
-export type RuntimeTmuxKind = 'codex' | 'claude' | 'kimi';
+export type RuntimeTmuxKind = 'codex' | 'claude' | 'kimi' | 'cursor';
 
 export interface RuntimeTmuxPaneDead {
   status?: number;

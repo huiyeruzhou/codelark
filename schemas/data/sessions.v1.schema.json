@@ -134,6 +134,9 @@
         },
         {
           "$ref": "#/$defs/kimiSessionRuntime"
+        },
+        {
+          "$ref": "#/$defs/cursorSessionRuntime"
         }
       ]
     },
@@ -259,6 +262,49 @@
             },
             "provider": {
               "enum": ["tmux"]
+            }
+          },
+          "additionalProperties": true
+        },
+        "general": {
+          "$ref": "#/$defs/sessionRuntimeGeneral"
+        }
+      },
+      "additionalProperties": true
+    },
+    "cursorSessionRuntime": {
+      "type": "object",
+      "required": ["activeRuntime"],
+      "properties": {
+        "activeRuntime": {
+          "const": "cursor"
+        },
+        "codex": {
+          "not": {}
+        },
+        "claude": {
+          "not": {}
+        },
+        "kimi": {
+          "not": {}
+        },
+        "cursor": {
+          "type": "object",
+          "properties": {
+            "sessionId": {
+              "type": "string"
+            },
+            "cwd": {
+              "type": "string"
+            },
+            "model": {
+              "type": "string"
+            },
+            "provider": {
+              "const": "tmux"
+            },
+            "force": {
+              "type": "boolean"
             }
           },
           "additionalProperties": true

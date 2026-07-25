@@ -6,6 +6,7 @@ import { ClaudePtyProvider } from '../../runtime/claude/pty-provider.js';
 import { ClaudeSdkProvider } from '../../runtime/claude/sdk-provider.js';
 import { ClaudeTmuxProvider } from '../../runtime/claude/tmux-provider.js';
 import { KimiTmuxProvider } from '../../runtime/kimi/tmux-provider.js';
+import { CursorTmuxProvider } from '../../runtime/cursor/tmux-provider.js';
 import { CodexProvider } from './provider.js';
 import { CodexPtyProvider, shouldUseCodexPtyTui } from './pty-provider.js';
 import { CodexTmuxProvider, shouldUseCodexTmuxTui } from './tmux-provider.js';
@@ -24,6 +25,7 @@ export class CodexRoutingProvider implements LLMProvider {
   private readonly claudeSdkProvider: LLMProvider;
   private readonly claudeTmuxProvider: LLMProvider;
   private readonly kimiTmuxProvider: LLMProvider;
+  private readonly cursorTmuxProvider: LLMProvider;
   private readonly defaultProvider: CodexProviderChoice;
 
   constructor(pendingPerms?: PendingPermissions, defaultProvider?: CodexProviderChoice) {
@@ -34,11 +36,20 @@ export class CodexRoutingProvider implements LLMProvider {
     this.claudeSdkProvider = new ClaudeSdkProvider();
     this.claudeTmuxProvider = new ClaudeTmuxProvider();
     this.kimiTmuxProvider = new KimiTmuxProvider();
+    this.cursorTmuxProvider = new CursorTmuxProvider();
     this.defaultProvider = defaultProvider
       || (shouldUseCodexPtyTui() ? 'pty' : shouldUseCodexTmuxTui() ? 'tmux' : 'sdk');
   }
 
   streamChat(params: StreamChatParams): ReadableStream<string> {
+    if (params.runtime === 'cursor') {
+      console.log('[codex-routing-provider] Route Cursor Agent request:', {
+        bridge_session_id: params.sessionId,
+        runtime: params.runtime,
+        provider: 'tmux',
+      });
+      return this.cursorTmuxProvider.streamChat(params);
+    }
     if (params.runtime === 'kimi') {
       console.log('[codex-routing-provider] Route Kimi Code request:', {
         bridge_session_id: params.sessionId,

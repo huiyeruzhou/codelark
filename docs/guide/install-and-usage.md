@@ -2,7 +2,7 @@
 
 ## 安装
 
-CodeLark 不接管 `~/.codex`、`~/.claude-code`、`~/.claude-code-router` 或 `~/.kimi-code` 的模型供应商配置。Codex CLI、Claude Code、CCR、Kimi Code 或 API 登录态仍按你的本机环境自行准备；CodeLark 只保存自己的配置和桥接状态。
+CodeLark 不接管 `~/.codex`、`~/.claude-code`、`~/.claude-code-router`、`~/.kimi-code` 或 `~/.cursor` 的模型供应商配置。Codex CLI、Claude Code、CCR、Kimi Code、Cursor Agent 或 API 登录态仍按你的本机环境自行准备；CodeLark 只保存自己的配置和桥接状态。Cursor Agent 可通过 [Cursor 官方安装入口](https://cursor.com/install) 安装，并需先在本机终端完成登录。
 
 ```bash
 # export OPENAI_API_KEY=sk-xxx
@@ -23,7 +23,7 @@ Bridge 每个本地自然日最多检查一次 npm 最新版本。检查由当�
 ## 前置条件
 
 - 本机已经可以运行 `codelark`。
-- 本机已有可用的 Codex 登录态、Claude Code 登录态、Kimi Code 登录态或对应 API 凭据。
+- 本机已有可用的 Codex、Claude Code、Kimi Code、Cursor Agent 登录态或对应 API 凭据。
 - 本机 PATH 中已有 `tmux` 命令；如果没有，`codelark setup` 会按平台说明将执行的命令并帮助安装，具体行为见下方平台说明和首次配置步骤。
 - 已创建飞书/Lark 自建应用并拿到 `App ID` / `App Secret`，或允许向导通过开放平台扫码创建机器人配置。
 - 飞书应用已启用机器人、权限、事件订阅和长连接。详细步骤见 [平台配置指南](platform-setup.md)。
@@ -95,6 +95,7 @@ codelark setup
 - 没有 Codex 但有 `~/.claude-code-router`：推荐 Claude Code Router，并使用 `ccr`。
 - 没有前两者但有 `~/.claude-code` 或 `~/.claude`：推荐 Claude Code。
 - 没有前三者但有 `~/.kimi-code`：推荐 Kimi Code（需要 tmux）。
+- 没有上述配置但有 `~/.cursor`：推荐 Cursor Agent（需要 tmux）。
 - 都没有：默认 Claude Code，后续可在向导或 IM 命令里切换。
 
 向导会写入：

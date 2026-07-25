@@ -352,6 +352,7 @@ interface PendingStreamingCardCreateState {
   tools?: ToolCallInfo[];
   historyItems?: StreamingHistoryItem[];
   historyDriven?: boolean;
+  metadata?: StructuredStreamingUiMetadata;
 }
 
 interface RichCardUpdateState {
@@ -993,6 +994,24 @@ function emitRealE2eStreamCardCheckpoint(params: {
   if (process.env[REAL_E2E_STREAM_CARD_CHECKPOINT_ENV] !== '1') return;
   try {
     const parsed = params.cardJson ? JSON.parse(params.cardJson) as unknown : null;
+    const parsedCard = parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+      ? parsed as Record<string, unknown>
+      : {};
+    const parsedHeader = parsedCard.header && typeof parsedCard.header === 'object' && !Array.isArray(parsedCard.header)
+      ? parsedCard.header as Record<string, unknown>
+      : {};
+    const parsedHeaderTitle = parsedHeader.title && typeof parsedHeader.title === 'object' && !Array.isArray(parsedHeader.title)
+      ? (parsedHeader.title as Record<string, unknown>).content
+      : undefined;
+    const headerTags = Array.isArray(parsedHeader.text_tag_list)
+      ? parsedHeader.text_tag_list.flatMap((item) => {
+          if (!item || typeof item !== 'object' || Array.isArray(item)) return [];
+          const text = (item as Record<string, unknown>).text;
+          if (!text || typeof text !== 'object' || Array.isArray(text)) return [];
+          const content = (text as Record<string, unknown>).content;
+          return typeof content === 'string' ? [content] : [];
+        })
+      : [];
     const markdownTexts = (params.markdownTexts || (parsed ? collectCardJsonMarkdownTexts(parsed) : []))
       .map((text) => truncateForCardLog(text, 1000));
     const cardSummary = params.cardJson ? summarizeCardJsonForLog(params.cardJson) : {};
@@ -1006,6 +1025,8 @@ function emitRealE2eStreamCardCheckpoint(params: {
       ...(params.elementId ? { elementId: params.elementId } : {}),
       ...(params.status ? { status: params.status } : {}),
       ...(typeof params.sequence === 'number' ? { sequence: params.sequence } : {}),
+      ...(typeof parsedHeaderTitle === 'string' ? { headerTitle: parsedHeaderTitle } : {}),
+      headerTags,
       ...cardSummary,
       markdownTexts,
       toolGroups,
@@ -3259,6 +3280,10 @@ export class FeishuAdapter extends BaseChannelAdapter {
       state.historyDriven = pending.historyDriven ?? true;
       dirty = true;
     }
+    if (pending.metadata) {
+      state.metadata = normalizeStreamMetadata(pending.metadata);
+      dirty = true;
+    }
     if (!dirty) return;
 
     this.markStreamingDesiredDirty(state);
@@ -3537,7 +3562,11 @@ export class FeishuAdapter extends BaseChannelAdapter {
     const normalized = normalizeStreamMetadata(metadata);
     this.pendingStreamMetadata.set(cardKey, normalized);
     const state = this.activeCards.get(cardKey);
-    if (!state || !this.restClient) return;
+    if (!state) {
+      this.pendingCardCreateState(cardKey).metadata = normalized;
+      return;
+    }
+    if (!this.restClient) return;
     state.metadata = normalized;
     this.markStreamingDesiredDirty(state);
     this.scheduleCardFlush(cardKey);

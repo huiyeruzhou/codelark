@@ -38,6 +38,11 @@ function baseConfigV2(): ConfigV2 {
         model: '',
         provider: 'tmux',
       },
+      cursor: {
+        model: '',
+        provider: 'tmux',
+        force: false,
+      },
     },
     bridge: {
       defaultWorkspace: '~',

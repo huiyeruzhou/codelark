@@ -43,8 +43,14 @@ import {
   findKimiSessionFileById,
 } from '../../runtime/kimi/session-index.js';
 import {
+  archiveCursorSessionFile,
+  createCursorMirrorJsonlSource,
+  findCursorSessionFileById,
+} from '../../runtime/cursor/session-index.js';
+import {
   kimiTmuxSessionName,
 } from '../../runtime/kimi/tmux-provider.js';
+import { cursorTmuxSessionName } from '../../runtime/cursor/tmux-provider.js';
 import {
   sanitizeInput,
 } from '../../shared/security/validators.js';
@@ -145,6 +151,8 @@ import {
   getSessionClaudeSessionId,
   getSessionKimiCwd,
   getSessionKimiSessionId,
+  getSessionCursorCwd,
+  getSessionCursorSessionId,
   getSessionActiveRuntime,
   getSessionSystemPrompt,
   getSessionWorkingDirectory,
@@ -152,6 +160,7 @@ import {
   setSessionClaudeIdentityUpdate,
   setSessionCodexTitleUpdate,
   setSessionKimiIdentityUpdate,
+  setSessionCursorIdentityUpdate,
 } from '../../domain/session-runtime.js';
 import {
   buildCodexTuiSelectionChoiceActions,
@@ -411,7 +420,13 @@ async function probeTmuxProviderExitAfterAutoForward(params: {
 
   const noticeKey = `${params.msg.address.channelType}:${params.msg.address.chatId}:${params.sessionId}:${tmuxSessionName}`;
   const nowMs = Date.now();
-  const runtimeLabel = runtimeProvider.runtime === 'claude' ? 'Claude' : runtimeProvider.runtime === 'kimi' ? 'Kimi' : 'Codex';
+  const runtimeLabel = runtimeProvider.runtime === 'claude'
+    ? 'Claude'
+    : runtimeProvider.runtime === 'kimi'
+      ? 'Kimi'
+      : runtimeProvider.runtime === 'cursor'
+        ? 'Cursor'
+        : 'Codex';
   const elapsedMs = Math.max(0, nowMs - params.startedAtMs);
   SESSION_HEALTH_RUNTIME.recordInteractiveEnd(
     params.sessionId,
@@ -699,14 +714,14 @@ function parseMirrorCodexSelectionSessionId(permissionRequestId: string): string
 
 function sessionSupportsTmuxSelectionPromptProbe(session: BridgeSession): boolean {
   const activeRuntime = getSessionActiveRuntime(session);
-  if (activeRuntime === 'kimi') return false;
+  if (activeRuntime === 'kimi' || activeRuntime === 'cursor') return false;
   if (activeRuntime === 'claude') return resolveEffectiveClaudeProvider(session) === 'tmux';
   return resolveEffectiveCodexProvider(session) === 'tmux';
 }
 
 function sessionSupportsCodexTuiRuntimeSignals(session: BridgeSession): boolean {
   const activeRuntime = getSessionActiveRuntime(session);
-  if (activeRuntime === 'kimi' || activeRuntime === 'claude') return false;
+  if (activeRuntime === 'kimi' || activeRuntime === 'claude' || activeRuntime === 'cursor') return false;
   return resolveEffectiveCodexProvider(session) === 'tmux';
 }
 
@@ -1691,6 +1706,9 @@ interface BridgeManagerState extends BridgeAdapterRuntimeState, BridgeInteractiv
   kimiMirrorWakeTimer: NodeJS.Timeout | null;
   kimiMirrorSubscriptions: Map<string, BridgeMirrorSubscription>;
   kimiMirrorSyncInFlight: boolean;
+  cursorMirrorWakeTimer: NodeJS.Timeout | null;
+  cursorMirrorSubscriptions: Map<string, BridgeMirrorSubscription>;
+  cursorMirrorSyncInFlight: boolean;
   mirrorSuppressUntil: Map<string, MirrorSuppressionState[]>;
   mirrorIgnoredTurnIds: Map<string, Map<string, number>>;
   threadCardSelections: Map<string, string>;
@@ -1731,6 +1749,9 @@ function getState(): BridgeManagerState {
       kimiMirrorWakeTimer: null,
       kimiMirrorSubscriptions: new Map(),
       kimiMirrorSyncInFlight: false,
+      cursorMirrorWakeTimer: null,
+      cursorMirrorSubscriptions: new Map(),
+      cursorMirrorSyncInFlight: false,
       mirrorSuppressUntil: new Map(),
       mirrorIgnoredTurnIds: new Map(),
       threadCardSelections: new Map(),
@@ -1757,6 +1778,9 @@ function getState(): BridgeManagerState {
   }
   if (!g[GLOBAL_KEY].kimiMirrorSubscriptions) {
     g[GLOBAL_KEY].kimiMirrorSubscriptions = new Map();
+  }
+  if (!g[GLOBAL_KEY].cursorMirrorSubscriptions) {
+    g[GLOBAL_KEY].cursorMirrorSubscriptions = new Map();
   }
   if (!g[GLOBAL_KEY].invalidAdapters) {
     g[GLOBAL_KEY].invalidAdapters = new Map();
@@ -1800,6 +1824,12 @@ function getState(): BridgeManagerState {
   if (!Object.prototype.hasOwnProperty.call(g[GLOBAL_KEY], 'kimiMirrorSyncInFlight')) {
     g[GLOBAL_KEY].kimiMirrorSyncInFlight = false;
   }
+  if (!Object.prototype.hasOwnProperty.call(g[GLOBAL_KEY], 'cursorMirrorWakeTimer')) {
+    g[GLOBAL_KEY].cursorMirrorWakeTimer = null;
+  }
+  if (!Object.prototype.hasOwnProperty.call(g[GLOBAL_KEY], 'cursorMirrorSyncInFlight')) {
+    g[GLOBAL_KEY].cursorMirrorSyncInFlight = false;
+  }
   return g[GLOBAL_KEY];
 }
 
@@ -1839,6 +1869,24 @@ function getKimiMirrorState(): BridgeMirrorRuntimeState {
   };
 }
 
+function getCursorMirrorState(): BridgeMirrorRuntimeState {
+  const state = getState();
+  return {
+    get running() { return state.running; },
+    set running(value) { state.running = value; },
+    get adapters() { return state.adapters; },
+    set adapters(value) { state.adapters = value; },
+    get mirrorSubscriptions() { return state.cursorMirrorSubscriptions; },
+    set mirrorSubscriptions(value) { state.cursorMirrorSubscriptions = value; },
+    get mirrorWakeTimer() { return state.cursorMirrorWakeTimer; },
+    set mirrorWakeTimer(value) { state.cursorMirrorWakeTimer = value; },
+    get mirrorSyncInFlight() { return state.cursorMirrorSyncInFlight; },
+    set mirrorSyncInFlight(value) { state.cursorMirrorSyncInFlight = value; },
+    get activeTasks() { return state.activeTasks; },
+    set activeTasks(value) { state.activeTasks = value; },
+  };
+}
+
 const INTERACTIVE_RUNTIME = createInteractiveRuntime(getState, {
   getStore: () => getBridgeContext().store,
   nowIso,
@@ -1862,6 +1910,15 @@ function formatRuntimeTerminalDetail(terminal: BridgeTurnTerminalRecord): string
       return '检测到 Kimi Code 会话当前任务执行失败。';
     }
     return '检测到 Kimi Code 会话已完成当前任务。';
+  }
+  if (terminal.runtime === 'cursor') {
+    if (terminal.outcome === 'aborted') {
+      return '检测到 Cursor Agent 会话已停止当前任务。';
+    }
+    if (terminal.outcome === 'failed') {
+      return '检测到 Cursor Agent 会话当前任务执行失败。';
+    }
+    return '检测到 Cursor Agent 会话已完成当前任务。';
   }
   if (terminal.outcome === 'aborted') {
     return '检测到 Codex thread已停止当前任务。';
@@ -1956,6 +2013,7 @@ function syncMirrorSessionState(sessionId: string): void {
     ...Array.from(state.mirrorSubscriptions.values()),
     ...Array.from(state.claudeMirrorSubscriptions.values()),
     ...Array.from(state.kimiMirrorSubscriptions.values()),
+    ...Array.from(state.cursorMirrorSubscriptions.values()),
   ]
     .filter((item) => item.sessionId === sessionId);
   const mirrorStatus: BridgeSession['mirror_status'] = subscriptions.length === 0
@@ -2066,6 +2124,7 @@ function refreshActiveMirrorStreamingStatuses(nowMs = Date.now()): void {
     ...Array.from(state.mirrorSubscriptions.values()),
     ...Array.from(state.claudeMirrorSubscriptions.values()),
     ...Array.from(state.kimiMirrorSubscriptions.values()),
+    ...Array.from(state.cursorMirrorSubscriptions.values()),
   ]) {
     refreshMirrorStreamingStatus(subscription, nowMs);
   }
@@ -2256,22 +2315,74 @@ const KIMI_MIRROR_RUNTIME = createMirrorRuntime(getKimiMirrorState, {
   deliverMirrorTurns,
 });
 
+const CURSOR_MIRROR_RUNTIME = createMirrorRuntime(getCursorMirrorState, {
+  watchDebounceMs: MIRROR_WATCH_DEBOUNCE_MS,
+  danglingThreadRetryLimit: DANGLING_MIRROR_THREAD_RETRY_LIMIT,
+  failureSuspendThreshold: MIRROR_FAILURE_SUSPEND_THRESHOLD,
+  failureSuspendMs: MIRROR_FAILURE_SUSPEND_MS,
+  reconcileConcurrency: MIRROR_RECONCILE_CONCURRENCY,
+  slowReconcileSubscriptionMs: MIRROR_SLOW_RECONCILE_SUBSCRIPTION_MS,
+  activeBindingWindowMs: MIRROR_ACTIVE_BINDING_WINDOW_MS,
+  coldReconcileIntervalMs: MIRROR_COLD_RECONCILE_INTERVAL_MS,
+}, {
+  mirrorSource: createCursorMirrorJsonlSource(),
+  runtimeLabel: 'Cursor',
+  nowIso,
+  describeUnknownError,
+  listChannelChats: () => getBridgeContext().store.listChannelChats(),
+  getSession: (sessionId) => getBridgeContext().store.getSession(sessionId),
+  clearSessionMirrorThreadId: (sessionId) => {
+    getBridgeContext().store.updateSession(sessionId, setSessionCursorIdentityUpdate(undefined, undefined));
+  },
+  clearSessionCodexThreadId: () => {},
+  getCodexSessionByThreadIdSafe: () => null,
+  hasSessionMirrorSource: (session) => Boolean(
+    getSessionActiveRuntime(session) === 'cursor'
+    && getSessionCursorSessionId(session)
+    && (getSessionCursorCwd(session) || getSessionWorkingDirectory(session)),
+  ),
+  getSessionMirrorThreadId: (session) => getSessionCursorSessionId(session),
+  getSessionMirrorCwd: (session) => getSessionCursorCwd(session) || getSessionWorkingDirectory(session),
+  getMirrorSourceSummary: (source, threadId, cwd) => source.findByThreadId(threadId, cwd || undefined),
+  syncMirrorSessionStateSafe,
+  filterSuppressedMirrorRecords,
+  observeSessionHealthRecords: (sessionId, threadId, records) => {
+    SESSION_HEALTH_RUNTIME.observeBridgeMirrorRecords(sessionId, threadId, records);
+  },
+  routeRuntimeRecords: (runtime, sessionId, threadId, records) => routeRuntimeRecords(
+    sessionId,
+    runtime,
+    threadId,
+    records,
+    TURN_COORDINATOR,
+  ),
+  consumeMirrorRecords,
+  flushTimedOutMirrorTurn: (subscription) => flushTimedOutMirrorTurn(subscription),
+  hasPendingMirrorWork,
+  consumeBufferedMirrorTurns: (subscription) => consumeBufferedMirrorTurns(subscription),
+  stopMirrorStreaming,
+  deliverMirrorTurns,
+});
+
 function resetMirrorSessionForInteractiveRun(sessionId: string): void {
   MIRROR_RUNTIME.resetMirrorSessionForInteractiveRun(sessionId);
   CLAUDE_MIRROR_RUNTIME.resetMirrorSessionForInteractiveRun(sessionId);
   KIMI_MIRROR_RUNTIME.resetMirrorSessionForInteractiveRun(sessionId);
+  CURSOR_MIRROR_RUNTIME.resetMirrorSessionForInteractiveRun(sessionId);
 }
 
 async function reconcileMirrorSubscriptions(): Promise<void> {
   await MIRROR_RUNTIME.reconcileMirrorSubscriptions();
   await CLAUDE_MIRROR_RUNTIME.reconcileMirrorSubscriptions();
   await KIMI_MIRROR_RUNTIME.reconcileMirrorSubscriptions();
+  await CURSOR_MIRROR_RUNTIME.reconcileMirrorSubscriptions();
   await ensureCodexTuiIdleScreenCheckpoints();
   const nowMs = Date.now();
   await Promise.allSettled(
     [
       ...Array.from(getState().mirrorSubscriptions.values()),
       ...Array.from(getState().claudeMirrorSubscriptions.values()),
+      ...Array.from(getState().cursorMirrorSubscriptions.values()),
     ].map((subscription) =>
       probeMirrorTmuxSelectionPrompt(subscription, nowMs),
     ),
@@ -2283,6 +2394,7 @@ function clearMirrorSubscriptions(): void {
   MIRROR_RUNTIME.clearMirrorSubscriptions();
   CLAUDE_MIRROR_RUNTIME.clearMirrorSubscriptions();
   KIMI_MIRROR_RUNTIME.clearMirrorSubscriptions();
+  CURSOR_MIRROR_RUNTIME.clearMirrorSubscriptions();
 }
 
 function shouldRouteTerminalAppendInline(msg: InboundMessage): boolean {
@@ -3093,6 +3205,10 @@ function formatLifecycleArchiveDetail(result: Awaited<ReturnType<typeof archiveL
       return result.kimiSessionId
         ? `archived Kimi session ${result.kimiSessionId.slice(0, 8)}`
         : 'archived Kimi session';
+    case 'cursor_archive':
+      return result.cursorSessionId
+        ? `archived Cursor session ${result.cursorSessionId.slice(0, 8)}`
+        : 'archived Cursor session';
     case 'bridge_delete':
       return 'deleted BridgeSession';
     case 'binding_delete':
@@ -3660,6 +3776,13 @@ function createLifecycleSessionRegistry(store: BridgeStore): SessionRegistryServ
         return session ? archiveKimiSessionFile(session) : false;
       },
     },
+    cursorThreads: {
+      getThread: () => null,
+      archiveThread: (cursorSessionId, cwd) => {
+        const session = findCursorSessionFileById(cursorSessionId, cwd);
+        return session ? archiveCursorSessionFile(session) : false;
+      },
+    },
   });
 }
 
@@ -3667,12 +3790,14 @@ async function archiveLifecycleBindingSession(
   store: BridgeStore,
   binding: ChannelChat,
 ): Promise<{
-  action: 'codex_archive' | 'claude_archive' | 'kimi_archive' | 'bridge_delete' | 'delete_after_archive_failure' | 'binding_delete';
+  action: 'codex_archive' | 'claude_archive' | 'kimi_archive' | 'cursor_archive' | 'bridge_delete' | 'delete_after_archive_failure' | 'binding_delete';
   codexThreadId?: string;
   claudeSessionId?: string;
   claudeCwd?: string;
   kimiSessionId?: string;
   kimiCwd?: string;
+  cursorSessionId?: string;
+  cursorCwd?: string;
   deletedBridgeSessionIds: string[];
   tmuxSessionNames: string[];
   tmuxCleanupCommands: string[];
@@ -3698,12 +3823,16 @@ async function archiveLifecycleBindingSession(
   const claudeCwd = activeRuntime === 'claude' ? getSessionClaudeCwd(session) || getSessionWorkingDirectory(session) || undefined : undefined;
   const kimiSessionId = activeRuntime === 'kimi' ? getSessionKimiSessionId(session) || undefined : undefined;
   const kimiCwd = activeRuntime === 'kimi' ? getSessionKimiCwd(session) || getSessionWorkingDirectory(session) || undefined : undefined;
+  const cursorSessionId = activeRuntime === 'cursor' ? getSessionCursorSessionId(session) || undefined : undefined;
+  const cursorCwd = activeRuntime === 'cursor' ? getSessionCursorCwd(session) || getSessionWorkingDirectory(session) || undefined : undefined;
   const tmuxCleanup = await cleanupLifecycleTmuxSessions(store, session, {
     codexThreadId,
     claudeSessionId,
     claudeCwd,
     kimiSessionId,
     kimiCwd,
+    cursorSessionId,
+    cursorCwd,
   });
   try {
     if (codexThreadId) {
@@ -3735,6 +3864,16 @@ async function archiveLifecycleBindingSession(
         ...tmuxCleanup,
       };
     }
+    if (cursorSessionId && cursorCwd) {
+      const result = registry.archiveCursorThread(cursorSessionId, cursorCwd);
+      return {
+        action: 'cursor_archive',
+        cursorSessionId,
+        cursorCwd,
+        deletedBridgeSessionIds: result.deletedBridgeSessionIds,
+        ...tmuxCleanup,
+      };
+    }
 
     const result = registry.deleteBridgeSession(session.id);
     return {
@@ -3750,6 +3889,10 @@ async function archiveLifecycleBindingSession(
       codexThreadId,
       claudeSessionId,
       claudeCwd,
+      kimiSessionId,
+      kimiCwd,
+      cursorSessionId,
+      cursorCwd,
       deletedBridgeSessionIds: [session.id],
       ...tmuxCleanup,
       error,
@@ -3766,6 +3909,8 @@ async function cleanupLifecycleTmuxSessions(
     claudeCwd?: string;
     kimiSessionId?: string;
     kimiCwd?: string;
+    cursorSessionId?: string;
+    cursorCwd?: string;
   },
 ): Promise<{
   tmuxSessionNames: string[];
@@ -3787,6 +3932,11 @@ async function cleanupLifecycleTmuxSessions(
           && getSessionKimiSessionId(candidate) === identity.kimiSessionId
           && getSessionKimiCwd(candidate) === identity.kimiCwd;
       }
+      if (identity.cursorSessionId && identity.cursorCwd) {
+        return getSessionActiveRuntime(candidate) === 'cursor'
+          && getSessionCursorSessionId(candidate) === identity.cursorSessionId
+          && getSessionCursorCwd(candidate) === identity.cursorCwd;
+      }
       return candidate.id === session.id;
     });
   const targets = linkedSessions.length > 0 ? linkedSessions : [session];
@@ -3798,7 +3948,11 @@ async function cleanupLifecycleTmuxSessions(
   for (const target of targets) {
     const activeRuntime = getSessionActiveRuntime(target);
     const tmuxSessionName = getSessionRuntimeTmuxSessionName(target)
-      || (activeRuntime === 'kimi' ? kimiTmuxSessionName(target.id) : undefined);
+      || (activeRuntime === 'kimi'
+        ? kimiTmuxSessionName(target.id)
+        : activeRuntime === 'cursor'
+          ? cursorTmuxSessionName(target.id)
+          : undefined);
     if (!tmuxSessionName || seen.has(tmuxSessionName)) continue;
     seen.add(tmuxSessionName);
     tmuxSessionNames.push(tmuxSessionName);
@@ -3857,6 +4011,8 @@ async function handleChannelLifecycleEvent(msg: InboundMessage): Promise<void> {
         archiveResult.claudeCwd ? `claude_cwd=${archiveResult.claudeCwd}` : '',
         archiveResult.kimiSessionId ? `kimi_session=${archiveResult.kimiSessionId}` : '',
         archiveResult.kimiCwd ? `kimi_cwd=${archiveResult.kimiCwd}` : '',
+        archiveResult.cursorSessionId ? `cursor_session=${archiveResult.cursorSessionId}` : '',
+        archiveResult.cursorCwd ? `cursor_cwd=${archiveResult.cursorCwd}` : '',
         archiveResult.tmuxSessionNames.length > 0 ? `tmux_sessions=${archiveResult.tmuxSessionNames.join(',')}` : '',
         archiveResult.tmuxCleanupCommands.length > 0 ? `tmux_cleanup=${archiveResult.tmuxCleanupCommands.join(',')}` : '',
         archiveResult.tmuxCleanupErrors.length > 0 ? `tmux_cleanup_errors=${archiveResult.tmuxCleanupErrors.join(',')}` : '',
@@ -3880,6 +4036,8 @@ async function handleChannelLifecycleEvent(msg: InboundMessage): Promise<void> {
     claudeCwd: archiveResult.claudeCwd,
     kimiSessionId: archiveResult.kimiSessionId,
     kimiCwd: archiveResult.kimiCwd,
+    cursorSessionId: archiveResult.cursorSessionId,
+    cursorCwd: archiveResult.cursorCwd,
     tmuxSessionNames: archiveResult.tmuxSessionNames,
     tmuxCleanupCommands: archiveResult.tmuxCleanupCommands,
     tmuxCleanupErrors: archiveResult.tmuxCleanupErrors,
@@ -4417,6 +4575,7 @@ async function handleMessage(
   if (
     tmuxProviderSession
     && tmuxProviderRuntime?.provider === 'tmux'
+    && tmuxProviderRuntime.runtime !== 'cursor'
   ) {
     const tmuxProviderChat = tmuxProviderBinding;
     if (!tmuxProviderChat) {

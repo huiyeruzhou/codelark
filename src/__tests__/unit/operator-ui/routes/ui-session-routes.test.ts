@@ -9,6 +9,12 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 
 import { handleUiSessionRoute } from '../../../../operator-ui/routes/session.js';
 import { computeKimiWorkspaceDirName, isArchivedKimiSession } from '../../../../runtime/kimi/session-index.js';
+import {
+  cursorWorkspaceHash,
+  encodeCursorConversationId,
+  getCursorTranscriptCandidates,
+  isArchivedCursorSession,
+} from '../../../../runtime/cursor/session-index.js';
 import { JsonFileStore } from '../../../../storage/json-store.js';
 import { makeBridgeSettings, resetBridgeTestState } from '../../../helpers/bridge/test-bridge-utils.js';
 
@@ -77,6 +83,29 @@ function writeKimiWireFixture(params: {
     sessionDir,
     workDir: params.cwd,
   })}\n`, 'utf-8');
+}
+
+function writeCursorTranscriptFixture(params: { configDir: string; cwd: string; sessionId: string }): void {
+  fs.mkdirSync(params.cwd, { recursive: true });
+  const sessionDir = path.join(params.configDir, 'chats', cursorWorkspaceHash(params.cwd), params.sessionId);
+  fs.mkdirSync(sessionDir, { recursive: true });
+  fs.writeFileSync(path.join(sessionDir, 'meta.json'), JSON.stringify({
+    schemaVersion: 1,
+    title: 'Cursor UI route session',
+    createdAtMs: Date.parse('2026-07-25T00:00:00.000Z'),
+    updatedAtMs: Date.parse('2026-07-25T00:00:02.000Z'),
+    hasConversation: true,
+    isSubagent: false,
+    cwd: params.cwd,
+  }), 'utf-8');
+  const transcript = getCursorTranscriptCandidates(params.sessionId, params.cwd)[0];
+  fs.mkdirSync(path.dirname(transcript), { recursive: true });
+  fs.writeFileSync(transcript, [
+    JSON.stringify({ role: 'user', message: { content: [{ type: 'text', text: 'hello cursor ui route' }] } }),
+    JSON.stringify({ role: 'assistant', message: { content: [{ type: 'text', text: 'cursor route reply' }] } }),
+    JSON.stringify({ type: 'turn_ended', status: 'success' }),
+  ].join('\n') + '\n', 'utf-8');
+  assert.equal(path.basename(transcript), `${encodeCursorConversationId(params.sessionId)}.jsonl`);
 }
 
 async function dispatch(
@@ -164,6 +193,45 @@ describe('handleUiSessionRoute', () => {
       if (previousKimiHome === undefined) delete process.env.KIMI_CODE_HOME;
       else process.env.KIMI_CODE_HOME = previousKimiHome;
       fs.rmSync(kimiHome, { recursive: true, force: true });
+    }
+  });
+
+  it('imports, reads, and archives Cursor Agent sessions through HTTP routes', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-ui-session-route-cursor-'));
+    const configDir = path.join(root, 'config');
+    const dataDir = path.join(root, 'data');
+    const cwd = path.join(root, 'workspace');
+    const sessionId = '019f9b31-1df0-7777-a111-123456789abc';
+    const previousConfig = process.env.CURSOR_CONFIG_DIR;
+    const previousData = process.env.CURSOR_DATA_DIR;
+    process.env.CURSOR_CONFIG_DIR = configDir;
+    process.env.CURSOR_DATA_DIR = dataDir;
+    writeCursorTranscriptFixture({ configDir, cwd, sessionId });
+    const store = new JsonFileStore(makeBridgeSettings());
+
+    try {
+      const imported = await dispatch(store, createJsonRequest({ cursorSessionId: sessionId, cursorCwd: cwd }), 'http://localhost/api/sessions/import-cursor-thread');
+      assert.equal(imported.statusCode, 200);
+      assert.equal(imported.body.config.activeRuntime, 'cursor');
+      assert.equal(imported.body.session.cursorSessionId, sessionId);
+      assert.equal(store.getSession(imported.body.bridgeSessionId)?.runtime?.cursor?.provider, 'tmux');
+
+      const history = await dispatch(store, createGetRequest(), `http://localhost/api/session-history?cursorSessionId=${encodeURIComponent(sessionId)}&cursorCwd=${encodeURIComponent(cwd)}`);
+      assert.equal(history.statusCode, 200);
+      assert.equal(history.body.source, 'cursor');
+      assert.equal(history.body.messages.some((message: { content?: string }) => message.content === 'hello cursor ui route'), true);
+      assert.equal(history.body.messages.some((message: { content?: string }) => message.content === 'cursor route reply'), true);
+
+      const deleted = await dispatch(store, createJsonRequest({ cursorSessionId: sessionId, cursorCwd: cwd }), 'http://localhost/api/sessions/delete');
+      assert.equal(deleted.statusCode, 200);
+      assert.deepEqual(deleted.body.deletedBridgeSessionIds, [imported.body.bridgeSessionId]);
+      assert.equal(isArchivedCursorSession(sessionId, cwd), true);
+    } finally {
+      if (previousConfig === undefined) delete process.env.CURSOR_CONFIG_DIR;
+      else process.env.CURSOR_CONFIG_DIR = previousConfig;
+      if (previousData === undefined) delete process.env.CURSOR_DATA_DIR;
+      else process.env.CURSOR_DATA_DIR = previousData;
+      fs.rmSync(root, { recursive: true, force: true });
     }
   });
 });

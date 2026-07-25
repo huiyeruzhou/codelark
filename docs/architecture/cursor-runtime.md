@@ -51,17 +51,26 @@ CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT);
 - `text` 与 `tool_use` content block；
 - `{type:"turn_ended", status:"success|error|aborted"}` 终态。
 
-CodeLark 把这些行归一化为公共 message/tool/task mirror record 和 SSE 事件。
+CodeLark 把这些行归一化为公共 message/tool/task mirror record 和 SSE 事件。官方 writer 还会在 assistant 回答后写入仅包含 `<|eos|>` 的内部边界块，并可能在同一 turn 连续写入内容完全相同的 assistant text 行；parser 必须过滤边界块，并以 `turn + content` 的稳定语义签名折叠重复 assistant 行，不能把官方内部快照重复展示给用户。多轮后的最终 transcript snapshot 可能只保留文件末尾一个 `turn_ended`；测试应以 user/归一化后的可见 assistant record 确认轮次，以文件末尾终态确认整体完成，不能把物理 assistant/终态行数当成轮数。
 
 ## 生命周期
 
+当前内置默认模型固定为 `gpt-5.3-codex`，而不是省略 `--model` 交给官方 `auto`。在 Cursor Agent `2026.07.23-e383d2b` 的隔离 A/B 中，`auto` 会把同一 assistant state 写入四次后以 `WritableIterable is closed` 失败，显式 `gpt-5.3-codex` 则只写一次并成功；用户仍可通过 `/model` 覆盖。兼容 parser 会折叠同一 turn 的完全相同 assistant state，但真实 `turn_ended error` 仍按失败交付，不能伪装成功。
+
 1. provider 为 Bridge session 使用固定 tmux 名 `clk-cursor-<bridgeSessionId>`。
-2. 冷启动运行 `agent [--model ...] [--force] --trust`；已有 chat ID 时附加 `--resume <chatId>`。
+2. 冷启动运行 `agent [--model ...] [--force] --trust`；已有 chat ID 时附加 `--resume <chatId>`。显式 `/p tmux` 完成前重新校验聊天 binding；如果启动期间 `/clear` 或 `/t` 已改绑，只清理旧 tmux，不写回旧 session。
 3. provider 检查 pane 未退出、未停在登录页且已出现输入编辑器；未登录时提示先运行 `agent login`。
 4. 普通用户消息原样注入 TUI。首次消息后，从当前 cwd 新增的 chat sidecar/transcript 发现 UUID，并写入 Bridge session。
-5. provider 从当前 transcript offset 开始轮询增量，直到 `turn_ended`，同时输出文本、工具调用与终态。
-6. 独立 Cursor mirror runtime 继续观察同一 transcript，使本地 TUI 后续输出也能同步到 IM。
-7. stop、clear、unbind、archive 和群生命周期清理使用同一个 provider-owned tmux session 名。
+5. provider 从当前 transcript offset 开始轮询增量，直到 `turn_ended`，同时把文本、工具调用与终态转换成公共事件；bridge 输入状态被清空但 tmux 仍存活时，依靠已持久化 UUID/transcript 和真实输入框完成冷接管，不重启 TUI。
+6. 当前 IM turn 由 Cursor provider 从本轮 transcript offset 读取并形成 direct stream；独立 Cursor mirror runtime 观察同一 transcript，使本地 TUI 后续输出也能同步到 IM。identity 出现后建立 suppression 边界；direct turn 完成时保留一段 mirror grace suppression，但不等待 mirror terminal，因为当前 terminal owner 明确是 direct transcript stream。这样既不重复结束同一回合，也不会产生“等待一个不归 mirror 所有的 terminal”超时误报。
+7. tmux 丢失时按同一 UUID 执行 `agent --resume`，从旧 transcript 末尾继续读取；不得重放上一轮回答。
+8. stop、clear、unbind、archive 和群生命周期清理使用同一个 provider-owned tmux session 名，并进入共享 stop/cleanup owner。
+
+## 验收用户故事
+
+- **本地 workflow**：Cursor direct transcript turn 与后台 mirror 之间只有一个 terminal owner，不出现空 completed、重复 final 或历史重放。
+- **真实进程**：已登录官方 `agent` 冷启动一个 UUID；第二轮在清空 bridge 输入状态后复用同一 tmux/UUID；杀掉 tmux 后仍恢复同一 UUID；三轮都只有一个 completed 且不重放旧文本。
+- **真实飞书**：隔离 bridge 创建或复用测试群并邀请当前用户；用户身份发送 `/runtime cursor`、`/p tmux` 和普通消息；用户身份回读最终卡片、Cursor UUID/transcript/provider output path，测试群保留到用户确认。`runtime-message::cursor-tmux` 还会读取隔离 bridge 输出的最终 CardKit checkpoint，要求卡片具有共享会话标题、`tmux` header tag、`cursor`/model metadata 区域和统一 history 区域；只在历史回显中找到 prompt 或只看到正确回答文本都不算 UI 验收通过。
 
 ## Slash 命令
 

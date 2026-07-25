@@ -22,7 +22,7 @@ nvm use 24
 | 纯逻辑单测 | `npm test -- --unit` | 只运行 `src/__tests__/unit/`。 |
 | 本地 workflow | `npm test -- --workflow` | 只运行 `src/__tests__/workflow/`。 |
 | 本地 mock app E2E | `npm test -- --mock-e2e` | 只运行 `src/__tests__/e2e/mock-app/`。 |
-| 本地真实进程 E2E | `npm test -- --local-e2e` | 只运行 `src/__tests__/e2e/local-process/`。Codex/Claude 覆盖真实 CLI 或 tmux 进程；Kimi 同时保留 deterministic fake CLI smoke，并在可执行文件可用时运行真实 Kimi Code + 真 tmux + 本地 fake model proxy 的启动、steer 和 Bridge 重启冷接管故事。 |
+| 本地真实进程 E2E | `npm test -- --local-e2e` | 只运行 `src/__tests__/e2e/local-process/`。Codex/Claude 覆盖真实 CLI 或 tmux 进程；Kimi 用真实 executable + 真 tmux + 本地 fake model proxy；Cursor 的 `real-cursor-agent-bridge.e2e.test.ts` 需显式 `CODELARK_REAL_CURSOR_E2E=1`，使用已登录官方 backend，并隔离 config/data/workspace 验证冷启动、冷接管和 resume；默认显式使用 `gpt-5.3-codex`，可用 `CODELARK_REAL_CURSOR_E2E_MODEL` 覆盖。 |
 | Harness 自测 | `npm test -- --harness` | 只运行 `src/__tests__/harness/`，包括真实飞书 harness 自测和测试环境隔离 guard。 |
 | 类型检查 | `npm run typecheck` | 验证 TypeScript 类型和公共导入边界。 |
 | 构建验证 | `npm run build` | 验证发布构建入口和 esbuild 打包。 |
@@ -55,7 +55,7 @@ CODELARK_SETUP_WIZARD_REAL_E2E=1 npm run real:setup-wizard:e2e -- \
   --runtime kimi
 ```
 
-`--runtime` 支持 `codex`、`ccr`、`claude` 和 `kimi`，默认是 `codex`；Kimi 路径会验证 `runtime.agent=kimi` 和 `runtime.kimi.provider=tmux` 写入。`--test-env-file` 只读取 `CODELARK_REAL_FEISHU_TEST_APP_ID` / `CODELARK_REAL_FEISHU_TEST_APP_SECRET` / `CODELARK_REAL_FEISHU_TEST_SITE`；旧 `CTI_REAL_FEISHU_*` 写法不是有效输入。不要把真实 App Secret 放在 npm 参数里，npm 会回显完整命令。
+`--runtime` 支持 `codex`、`ccr`、`claude`、`kimi` 和 `cursor`，默认是 `codex`；Kimi/Cursor 路径分别验证 `runtime.agent` 与固定 `tmux` provider 写入。`--test-env-file` 只读取 `CODELARK_REAL_FEISHU_TEST_APP_ID` / `CODELARK_REAL_FEISHU_TEST_APP_SECRET` / `CODELARK_REAL_FEISHU_TEST_SITE`；旧 `CTI_REAL_FEISHU_*` 写法不是有效输入。不要把真实 App Secret 放在 npm 参数里，npm 会回显完整命令。
 
 默认会删除 `/tmp/clk-setup-wizard-real-e2e-*` 临时目录。需要排查时才加 `--keep-temp`，脚本输出 JSON 里的 `runRoot` 是保留现场路径。
 
@@ -82,7 +82,7 @@ tmux workflow 的 fake transport 必须通过 `TmuxCore` 的可执行命令注�
 | 纯逻辑测试 | 解析、格式化、状态 reducer、schema、配置转换是否正确。 | 位于 `src/__tests__/unit/<owner>/`，不启动真实 provider，不依赖网络，不触碰真实 home。 | 改命令解析、渲染、存储结构、schema、配置、权限状态时。 |
 | 本地 workflow 测试 | 一条 IM 命令或 runtime turn 经过 bridge 内部编排后，是否生成正确状态和交付动作。 | 位于 `src/__tests__/workflow/<slice>/`，使用 fake adapter/provider/store；可能覆盖多个内部组件。 | 改命令体系、会话绑定、delivery、mirror、turn runner、UI application 时。 |
 | 本地 mock app E2E | daemon 级入口、fake channel/provider、状态持久化和交付动作是否闭环。 | 位于 `src/__tests__/e2e/mock-app/`，仍不证明真实 provider 可执行文件或真实飞书客户端契约。 | 改 bridge host 集成、命令入口、card payload 或应用级编排时。 |
-| 本地真实进程 E2E | Codex/Claude 的真实 tmux/CLI 路径，以及可用时 Kimi Code 真实 executable + 真实 tmux + 本地 fake model proxy，在隔离 home 中是否能启动、产生事件、冷接管或完成清理。 | 位于 `src/__tests__/e2e/local-process/`；仍不等于真实飞书。 | 改 provider 启动、tmux、JSONL 或 wire 发现、CLI bootstrap、真实进程清理时。 |
+| 本地真实进程 E2E | Codex/Claude 的真实 tmux/CLI，Kimi Code 真实 executable + fake model proxy，以及 opt-in Cursor 已登录官方 backend，在隔离 runtime 数据目录中是否能启动、产生事件、冷接管、恢复或完成清理。 | 位于 `src/__tests__/e2e/local-process/`；仍不等于真实飞书。Cursor 测试读取宿主安全凭据但不把测试 chat 写入真实 `~/.cursor`。 | 改 provider 启动、tmux、JSONL/wire/transcript 发现、CLI bootstrap、真实进程清理时。 |
 
 真实飞书 E2E 是第四层，专门验证外部平台契约：飞书事件投递、bot 入群、`reply_to`、真实卡片/文件/表单消息、provider 输出路径和测试群清理。它不替代本地测试。
 
@@ -208,7 +208,7 @@ npm run real:feishu:e2e -- --list-scenarios
 
 | 验证目的 | 首选场景 | 说明 |
 | --- | --- | --- |
-| provider 路径是否健康 | `message-only` 或 `runtime-message` | 只证明消息能到达 runtime 并回到飞书，不证明复杂功能。 |
+| provider 路径是否健康 | `message-only` 或 `runtime-message` | 证明消息能到达 runtime 并回到飞书，不证明复杂功能。Cursor 的 `runtime-message` 额外检查最终 CardKit 是否使用共享 header、runtime/model metadata 和 history 区域，防止正文正确但卡片退化为无标题旧结构。 |
 | 同一会话多 provider 基础对话 | `basic-dialogue-suite` | 最高优先级长流程，按 `codex-sdk -> claude-sdk -> kimi-tmux -> codex-tmux -> claude-pty -> codex-pty` 覆盖代表路径。 |
 | 命令状态和配置 | `command-state` | 覆盖 `/status`、runtime/provider 设置、require-at、`/every` 等语义文本。 |
 | 会话生命周期 | `session-management` | 覆盖 `/help`、`/set`、`/new`、`/cd`、`/current`、`/check`、`/t`、最终 prompt 和 `/his`。 |

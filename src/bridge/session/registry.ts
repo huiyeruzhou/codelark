@@ -23,6 +23,8 @@ import {
   getSessionClaudeSessionId,
   getSessionKimiCwd,
   getSessionKimiSessionId,
+  getSessionCursorCwd,
+  getSessionCursorSessionId,
 } from '../../domain/session-runtime.js';
 
 export {
@@ -75,10 +77,16 @@ export interface KimiThreadRegistryPort {
   archiveThread?(kimiSessionId: string, cwd: string): boolean;
 }
 
+export interface CursorThreadRegistryPort {
+  getThread(cursorSessionId: string, cwd: string): { cursorSessionId: string; title: string; cwd: string } | null;
+  archiveThread?(cursorSessionId: string, cwd: string): boolean;
+}
+
 export interface SessionRegistryOptions {
   codexThreads?: CodexThreadRegistryPort;
   claudeThreads?: ClaudeThreadRegistryPort;
   kimiThreads?: KimiThreadRegistryPort;
+  cursorThreads?: CursorThreadRegistryPort;
   readDefaultModel?: () => string | null | undefined;
   defaultWorkingDirectory?: () => string;
 }
@@ -103,6 +111,13 @@ export interface ArchiveClaudeThreadResult {
 
 export interface ArchiveKimiThreadResult {
   kimiSessionId: string;
+  cwd: string;
+  deletedBridgeSessions: BridgeSession[];
+  deletedBridgeSessionIds: string[];
+}
+
+export interface ArchiveCursorThreadResult {
+  cursorSessionId: string;
   cwd: string;
   deletedBridgeSessions: BridgeSession[];
   deletedBridgeSessionIds: string[];
@@ -176,6 +191,11 @@ export class SessionRegistryService {
     return updateChannelDefaultTarget(this.store, channelType, session.id);
   }
 
+  setChannelDefaultCursorThread(channelType: string, cursorSessionId: string, cwd: string): ChannelDefaultTargetSummary {
+    const session = this.materializeCursorThread(cursorSessionId, cwd);
+    return updateChannelDefaultTarget(this.store, channelType, session.id);
+  }
+
   removeChannelDefaultTarget(channelType: string): void {
     removeChannelDefaultTarget(this.store, channelType);
   }
@@ -213,6 +233,15 @@ export class SessionRegistryService {
       && getSessionActiveRuntime(session) === 'kimi'
       && getSessionKimiSessionId(session) === kimiSessionId
       && getSessionKimiCwd(session) === cwd
+    )) || null;
+  }
+
+  findVisibleBridgeSessionByCursorThread(cursorSessionId: string, cwd: string): BridgeSession | null {
+    return this.store.listSessions().find((session) => (
+      isVisibleBridgeSession(session)
+      && getSessionActiveRuntime(session) === 'cursor'
+      && getSessionCursorSessionId(session) === cursorSessionId
+      && getSessionCursorCwd(session) === cwd
     )) || null;
   }
 
@@ -306,6 +335,30 @@ export class SessionRegistryService {
     return this.store.getSession(session.id) || session;
   }
 
+  materializeCursorThread(cursorSessionId: string, cwd: string): BridgeSession {
+    const existing = this.findVisibleBridgeSessionByCursorThread(cursorSessionId, cwd);
+    if (existing) return existing;
+    const localThread = this.options.cursorThreads?.getThread(cursorSessionId, cwd) || null;
+    if (!localThread) throw new Error('指定的 Cursor Agent 会话不存在。');
+    const session = this.store.createSession(
+      localThread.title || '',
+      this.options.readDefaultModel?.() || 'default',
+      undefined,
+      localThread.cwd || this.options.defaultWorkingDirectory?.() || process.cwd(),
+      'normal',
+      { activeRuntime: 'cursor' },
+    );
+    this.store.updateSession(session.id, {
+      name: localThread.title || session.name,
+      runtime: {
+        activeRuntime: 'cursor',
+        cursor: { sessionId: localThread.cursorSessionId, cwd: localThread.cwd, provider: 'tmux' },
+        general: { workingDirectory: localThread.cwd },
+      },
+    }, { touch: false });
+    return this.store.getSession(session.id) || session;
+  }
+
   renameBridgeSession(bridgeSessionId: string, name: string | undefined): BridgeSession {
     const session = this.getVisibleBridgeSession(bridgeSessionId);
     this.store.updateSession(session.id, { name });
@@ -324,6 +377,11 @@ export class SessionRegistryService {
 
   renameKimiThread(kimiSessionId: string, cwd: string, name: string | undefined): BridgeSession {
     const session = this.materializeKimiThread(kimiSessionId, cwd);
+    return this.renameBridgeSession(session.id, name);
+  }
+
+  renameCursorThread(cursorSessionId: string, cwd: string, name: string | undefined): BridgeSession {
+    const session = this.materializeCursorThread(cursorSessionId, cwd);
     return this.renameBridgeSession(session.id, name);
   }
 
@@ -414,6 +472,26 @@ export class SessionRegistryService {
 
     return {
       kimiSessionId,
+      cwd,
+      deletedBridgeSessions: linkedSessions,
+      deletedBridgeSessionIds: linkedSessions.map((session) => session.id),
+    };
+  }
+
+  archiveCursorThread(cursorSessionId: string, cwd: string): ArchiveCursorThreadResult {
+    if (!this.options.cursorThreads?.archiveThread) {
+      throw new Error('Local Cursor archive is not configured.');
+    }
+    const archived = this.options.cursorThreads.archiveThread(cursorSessionId, cwd);
+    if (!archived) throw new Error('指定的 Cursor Agent 会话不存在。');
+    const linkedSessions = this.store.listSessions().filter((session) => (
+      getSessionActiveRuntime(session) === 'cursor'
+      && getSessionCursorSessionId(session) === cursorSessionId
+      && getSessionCursorCwd(session) === cwd
+    ));
+    for (const session of linkedSessions) this.store.deleteSession(session.id);
+    return {
+      cursorSessionId,
       cwd,
       deletedBridgeSessions: linkedSessions,
       deletedBridgeSessionIds: linkedSessions.map((session) => session.id),

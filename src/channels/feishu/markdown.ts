@@ -81,7 +81,7 @@ function resolveTitleTagColor(
 }
 
 function isRuntimeNameMetadataTag(normalized: string): boolean {
-  return normalized === 'codex' || normalized === 'claude' || normalized === 'kimi';
+  return normalized === 'codex' || normalized === 'claude' || normalized === 'kimi' || normalized === 'cursor';
 }
 
 function isRuntimeMetadataTag(tag: string): boolean {

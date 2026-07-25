@@ -61,6 +61,10 @@
             "kimi": {
               "type": "string",
               "minLength": 1
+            },
+            "cursor": {
+              "type": "string",
+              "minLength": 1
             }
           },
           "additionalProperties": false

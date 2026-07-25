@@ -1,6 +1,7 @@
 import type { BridgeSession, BridgeStore, ChannelChat } from '../../domain/index.js';
 import { getSessionRuntimeTmuxSessionName } from '../../domain/session-runtime.js';
 import { kimiTmuxSessionName } from '../../runtime/kimi/tmux-provider.js';
+import { cursorTmuxSessionName } from '../../runtime/cursor/tmux-provider.js';
 import { sendTmuxInterrupt } from '../tmux/runtime.js';
 import { sessionLooksRunning } from './command-use-cases/status-guards.js';
 import { resolveEffectiveRuntimeProvider } from './support.js';
@@ -22,12 +23,16 @@ export interface StopRunningSessionResult {
 function tmuxInterruptTarget(
   session: BridgeSession | null | undefined,
   binding: ChannelChat,
-): { sessionName: string; runtime: 'codex' | 'claude' | 'kimi' } | undefined {
+): { sessionName: string; runtime: 'codex' | 'claude' | 'kimi' | 'cursor' } | undefined {
   if (!session || !sessionLooksRunning(session)) return undefined;
   const provider = resolveEffectiveRuntimeProvider(session, binding);
   if (provider.provider !== 'tmux') return undefined;
   const sessionName = getSessionRuntimeTmuxSessionName(session)
-    || (provider.runtime === 'kimi' ? kimiTmuxSessionName(session.id) : undefined);
+    || (provider.runtime === 'kimi'
+      ? kimiTmuxSessionName(session.id)
+      : provider.runtime === 'cursor'
+        ? cursorTmuxSessionName(session.id)
+        : undefined);
   return sessionName ? { sessionName, runtime: provider.runtime } : undefined;
 }
 
@@ -36,7 +41,7 @@ function interruptDelay(ms: number): Promise<void> {
 }
 
 async function sendRuntimeInterrupts(
-  target: { sessionName: string; runtime: 'codex' | 'claude' | 'kimi' },
+  target: { sessionName: string; runtime: 'codex' | 'claude' | 'kimi' | 'cursor' },
 ): Promise<string[]> {
   const commands = [await sendTmuxInterrupt(target.sessionName)];
   if (target.runtime === 'kimi') {

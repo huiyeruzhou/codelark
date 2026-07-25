@@ -3,10 +3,11 @@ import { z } from 'zod';
 // 当前 v2 TOML shape 的运行时校验与 camelCase/snake_case 转换。
 // sources.ts 负责读写文件，service.ts 负责调用链路，这里只维护结构和类型。
 
-export const runtimeAgentSchema = z.enum(['codex', 'claude', 'kimi']);
+export const runtimeAgentSchema = z.enum(['codex', 'claude', 'kimi', 'cursor']);
 export const codexProviderSchema = z.enum(['sdk', 'tmux', 'pty']);
 export const claudeProviderSchema = z.enum(['sdk', 'pty', 'tmux']);
 export const kimiProviderSchema = z.enum(['tmux']);
+export const cursorProviderSchema = z.enum(['tmux']);
 export const claudeExecutableSchema = z.enum(['claude', 'ccr']);
 export const yoloModeSchema = z.enum(['off', 'on', 'yolo']);
 export const sandboxModeSchema = z.enum(['read-only', 'workspace-write', 'danger-full-access']);
@@ -48,11 +49,18 @@ export const kimiConfigSchema = z.object({
   provider: kimiProviderSchema,
 });
 
+export const cursorConfigSchema = z.object({
+  model: z.string(),
+  provider: cursorProviderSchema,
+  force: z.boolean(),
+});
+
 export const runtimeConfigSchema = z.object({
   agent: runtimeAgentSchema,
   codex: codexConfigSchema,
   claude: claudeConfigSchema,
   kimi: kimiConfigSchema,
+  cursor: cursorConfigSchema,
 });
 
 export const bridgeConfigSchema = z.object({
@@ -107,6 +115,7 @@ export const configPatchSchema = z.object({
     codex: codexConfigSchema.partial().optional(),
     claude: claudeConfigSchema.partial().optional(),
     kimi: kimiConfigSchema.partial().optional(),
+    cursor: cursorConfigSchema.partial().optional(),
   }).optional(),
   bridge: bridgeConfigSchema.partial().optional(),
   channels: z.array(channelConfigPatchSchema).optional(),
@@ -134,6 +143,7 @@ export function tomlToConfigPatch(raw: unknown): ConfigPatch {
   const codex = asRecord(runtime.codex);
   const claude = asRecord(runtime.claude);
   const kimi = asRecord(runtime.kimi);
+  const cursor = asRecord(runtime.cursor);
   const bridge = asRecord(root.bridge);
   const session = asRecord(root.session);
   const patch: ConfigPatch = {};
@@ -174,6 +184,12 @@ export function tomlToConfigPatch(raw: unknown): ConfigPatch {
     ['provider', 'provider'],
   ]);
   if (Object.keys(kimiPatch).length > 0) runtimePatch.kimi = kimiPatch;
+  const cursorPatch = copyDefined<NonNullable<NonNullable<ConfigPatch['runtime']>['cursor']>>(cursor, [
+    ['model', 'model'],
+    ['provider', 'provider'],
+    ['force', 'force'],
+  ]);
+  if (Object.keys(cursorPatch).length > 0) runtimePatch.cursor = cursorPatch;
   if (Object.keys(runtimePatch).length > 0) patch.runtime = runtimePatch;
 
   const bridgePatch = copyDefined<NonNullable<ConfigPatch['bridge']>>(bridge, [
@@ -248,6 +264,11 @@ export function configToTomlShape(config: ConfigPatch): Record<string, unknown> 
       ...(config.runtime.kimi ? { kimi: {
         ...(config.runtime.kimi.model !== undefined ? { model: config.runtime.kimi.model } : {}),
         ...(config.runtime.kimi.provider !== undefined ? { provider: config.runtime.kimi.provider } : {}),
+      } } : {}),
+      ...(config.runtime.cursor ? { cursor: {
+        ...(config.runtime.cursor.model !== undefined ? { model: config.runtime.cursor.model } : {}),
+        ...(config.runtime.cursor.provider !== undefined ? { provider: config.runtime.cursor.provider } : {}),
+        ...(config.runtime.cursor.force !== undefined ? { force: config.runtime.cursor.force } : {}),
       } } : {}),
     };
   }

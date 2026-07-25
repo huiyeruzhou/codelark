@@ -75,6 +75,11 @@ function baseConfigV2(overrides: Partial<ConfigV2> = {}): ConfigV2 {
         model: '',
         provider: 'tmux',
       },
+      cursor: {
+        model: '',
+        provider: 'tmux',
+        force: false,
+      },
     },
     bridge: {
       defaultWorkspace: '~',
@@ -250,6 +255,30 @@ describe('Ui config application', () => {
     );
   });
 
+  it('exposes and writes global Cursor runtime defaults', () => {
+    const current = baseConfigV2({
+      runtime: {
+        ...baseConfigV2().runtime,
+        agent: 'cursor',
+        cursor: { model: 'cursor-current', provider: 'tmux', force: true },
+      },
+    });
+    const payload = configV2ToPayload(current);
+    assert.equal(payload.runtime, 'cursor');
+    assert.equal(payload.cursorDefaultModel, 'cursor-current');
+    assert.equal(payload.cursorProvider, 'tmux');
+    assert.equal(payload.cursorForce, true);
+
+    const patch = mergeConfigV2HomePatch(current, {
+      runtime: 'cursor',
+      cursorDefaultModel: 'cursor-next',
+      cursorProvider: 'tmux',
+      cursorForce: false,
+    });
+    assert.equal(patch.runtime?.agent, 'cursor');
+    assert.deepEqual(patch.runtime?.cursor, { model: 'cursor-next', provider: 'tmux', force: false });
+  });
+
   it('does not synthesize channel timing defaults when the effective config has no channel', () => {
     const patch = mergeConfigV2HomePatch(baseConfigV2({ channels: [] }), { historyMessageLimit: 19 });
     assert.deepEqual(patch.channels, []);
@@ -271,6 +300,18 @@ describe('Ui config application', () => {
     assert.match(source, /kimiDefaultModel: document\.getElementById\('kimiDefaultModel'\)\.value/);
     assert.match(source, /document\.getElementById\('kimiProvider'\)\.value = config\.kimiProvider \|\| 'tmux'/);
     assert.match(source, /document\.getElementById\('kimiDefaultModel'\)\.value = config\.kimiDefaultModel \|\| ''/);
+  });
+
+  it('keeps the global and session config shell wired to Cursor form fields', () => {
+    const source = fs.readFileSync(path.join(process.cwd(), 'src/operator-ui/shell.ts'), 'utf-8');
+    assert.match(source, /<option value="cursor">cursor<\/option>/);
+    assert.match(source, /GlobalRuntime \/ Cursor/);
+    assert.match(source, /id="cursorProvider"/);
+    assert.match(source, /id="cursorDefaultModel"/);
+    assert.match(source, /id="cursorForce"/);
+    assert.match(source, /id="sessionConfigCursorBlock"/);
+    assert.match(source, /cursorProvider: document\.getElementById\('cursorProvider'\)\.value/);
+    assert.match(source, /document\.getElementById\('cursorForce'\)\.checked = config\.cursorForce === true/);
   });
 
   it('describes /t runtime identities as thread or session ids', () => {

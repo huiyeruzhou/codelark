@@ -21,6 +21,7 @@ import type { ConfigPatch } from '../src/configuration/schema.js';
 import {
   basicDialogueStreamCardCheckpointIssues,
   collectRealE2eDump,
+  cursorStreamCardUnifiedUiIssues,
   kimiThinkingStatusOnlyIssues,
   scriptedKimiToolCardIssues,
   scriptedKimiHistoryTranscriptIssues,
@@ -38,10 +39,11 @@ import type {
   ScriptedModelReplyPlan,
 } from '../src/testing/real-feishu/codex-responses-proxy.js';
 import { serializeFailureError } from '../src/testing/real-feishu/failure-report.js';
+import { containsGeneratedReplyTexts } from '../src/testing/real-feishu/reply-evidence.js';
 
 const execFileAsync = promisify(execFile);
 
-type RuntimeName = 'codex' | 'claude' | 'kimi';
+type RuntimeName = 'codex' | 'claude' | 'kimi' | 'cursor';
 type ProviderName = 'sdk' | 'pty' | 'tmux';
 
 const COMMAND_RESPONSE_TIMEOUT_MS = 15_000;
@@ -79,6 +81,8 @@ interface CliOptions {
   codexHome: string;
   claudeHome: string;
   kimiHome: string;
+  cursorConfigDir: string;
+  cursorDataDir: string;
   claudeExecutable: ClaudeExecutable;
   testFeishuAppId: string;
   testFeishuAppSecret: string;
@@ -94,6 +98,7 @@ interface CliOptions {
   workDir: string;
   message: string;
   codexModel: string;
+  cursorModel: string;
   timeoutMs: number;
   pollMs: number;
   outputPath: string;
@@ -111,9 +116,12 @@ interface AppLock {
 
 interface RuntimeEnvironmentPlan {
   runtimeHome: string;
+  bridgeHome: string;
   codexHome: string;
   claudeHome: string;
   kimiHome: string;
+  cursorConfigDir: string;
+  cursorDataDir: string;
   claudeExecutable: ClaudeExecutable;
   larkCliConfigSource: 'test-env-app' | 'not-needed' | 'missing';
   codexAuthSource: 'env-api-key' | 'host-auth-copy' | 'missing';
@@ -121,6 +129,9 @@ interface RuntimeEnvironmentPlan {
   kimiAuthSource: 'host-config-copy' | 'not-needed' | 'missing';
   kimiExecutableSource: 'scripted-fake-executable' | 'env-executable' | 'host-home-bin' | 'path';
   kimiExecutablePath?: string;
+  cursorAuthSource: 'host-config-copy' | 'missing';
+  cursorExecutableSource: 'env-executable' | 'host-home-bin' | 'path';
+  cursorExecutablePath?: string;
   ccrConfigSource: 'fake-backend-json' | 'host-config-copy' | 'not-needed' | 'missing';
   fakeCcrProxyBaseUrl?: string;
   fakeCcrPort?: number;
@@ -876,6 +887,7 @@ function buildRuntimeProviderCommands(options: CliOptions): string[] {
 
 function sessionManagementProviderSettingCommand(options: CliOptions): string {
   if (options.runtime === 'kimi') return '/set kimiProvider tmux';
+  if (options.runtime === 'cursor') return '/set cursorProvider tmux';
   return `/set claudeProvider ${options.runtime === 'claude' ? options.provider : 'pty'}`;
 }
 
@@ -894,18 +906,21 @@ function parseRuntimeProviderKey(key: string): { runtime: RuntimeName; provider:
 function runtimeProviderCommandTitle(runtime: RuntimeName): string {
   if (runtime === 'claude') return 'Claude Provider';
   if (runtime === 'kimi') return 'Kimi Provider';
+  if (runtime === 'cursor') return 'Cursor Provider';
   return 'Codex Provider';
 }
 
 function runtimeDisplayLabel(runtime: RuntimeName): string {
   if (runtime === 'claude') return 'Claude Code';
   if (runtime === 'kimi') return 'Kimi Code';
+  if (runtime === 'cursor') return 'Cursor';
   return 'Codex';
 }
 
 function runtimeIdentityFieldName(runtime: RuntimeName): string {
   if (runtime === 'claude') return 'claude_session_id';
   if (runtime === 'kimi') return 'kimi_session_id';
+  if (runtime === 'cursor') return 'cursor_session_id';
   return 'codex_thread_id';
 }
 
@@ -1101,6 +1116,7 @@ const VALUE_CLI_OPTIONS = new Set([
   '--workdir',
   '--message',
   '--codex-model',
+  '--cursor-model',
   '--timeout-ms',
   '--poll-ms',
   '--output',
@@ -1128,8 +1144,8 @@ function validateCliArgs(argv: string[]): void {
 }
 
 function parseRuntimeName(raw: string): RuntimeName {
-  if (raw === 'codex' || raw === 'claude' || raw === 'kimi') return raw;
-  throw new Error(`Invalid runtime "${raw}". Expected codex, claude, or kimi.`);
+  if (raw === 'codex' || raw === 'claude' || raw === 'kimi' || raw === 'cursor') return raw;
+  throw new Error(`Invalid runtime "${raw}". Expected codex, claude, kimi, or cursor.`);
 }
 
 function parseClaudeExecutable(raw: string): ClaudeExecutable {
@@ -1232,6 +1248,8 @@ function parseOptions(argv: string[]): CliOptions {
   );
   const launchBridge = hasFlag(argv, '--launch-bridge');
   const kimiHome = path.join(runtimeHome, '.kimi-code');
+  const cursorConfigDir = path.join(runRoot, 'cursor-config');
+  const cursorDataDir = path.join(runRoot, 'cursor-data');
   const claudeExecutableArg = valueArg(
     argv,
     '--claude-executable',
@@ -1263,6 +1281,8 @@ function parseOptions(argv: string[]): CliOptions {
     codexHome,
     claudeHome,
     kimiHome,
+    cursorConfigDir,
+    cursorDataDir,
     claudeExecutable: parseClaudeExecutable(claudeExecutableArg),
     testFeishuAppId: valueArg(argv, '--test-feishu-app-id', process.env.CODELARK_REAL_FEISHU_TEST_APP_ID || ''),
     testFeishuAppSecret: valueArg(argv, '--test-feishu-app-secret', process.env.CODELARK_REAL_FEISHU_TEST_APP_SECRET || ''),
@@ -1278,6 +1298,7 @@ function parseOptions(argv: string[]): CliOptions {
     workDir: valueArg(argv, '--workdir', DEFAULT_WORKSPACE_ROOT),
     message: valueArg(argv, '--message', `real feishu e2e ${runId}`),
     codexModel: valueArg(argv, '--codex-model', process.env.CODELARK_REAL_FEISHU_CODEX_MODEL || 'gpt-5.5'),
+    cursorModel: valueArg(argv, '--cursor-model', process.env.CODELARK_REAL_FEISHU_CURSOR_MODEL || 'gpt-5.3-codex'),
     timeoutMs: parsePositiveIntOption(argv, '--timeout-ms', 120_000),
     pollMs: parsePositiveIntOption(argv, '--poll-ms', 2_000),
     outputPath: valueArg(argv, '--output', ''),
@@ -1288,7 +1309,7 @@ function parseOptions(argv: string[]): CliOptions {
 
 function normalizeProviderForRuntime(runtime: RuntimeName, raw: string): ProviderName {
   const provider = raw.trim().toLowerCase();
-  if (!provider) return runtime === 'kimi' ? 'tmux' : 'pty';
+  if (!provider) return runtime === 'kimi' || runtime === 'cursor' ? 'tmux' : 'pty';
   if (runtime === 'codex') {
     if (provider === 'sdk' || provider === 'pty' || provider === 'tmux') return provider;
     throw new Error(`Invalid Codex provider "${raw}". Expected sdk, pty, or tmux.`);
@@ -1296,6 +1317,10 @@ function normalizeProviderForRuntime(runtime: RuntimeName, raw: string): Provide
   if (runtime === 'kimi') {
     if (provider === 'tmux') return provider;
     throw new Error(`Invalid Kimi provider "${raw}". Expected tmux.`);
+  }
+  if (runtime === 'cursor') {
+    if (provider === 'tmux') return provider;
+    throw new Error(`Invalid Cursor provider "${raw}". Expected tmux.`);
   }
   if (provider === 'sdk' || provider === 'pty' || provider === 'tmux') return provider;
   throw new Error(`Invalid Claude provider "${raw}". Expected sdk, pty, or tmux.`);
@@ -1339,8 +1364,9 @@ function printUsage(): void {
     '  --scenario <name>          runtime-message|basic-dialogue-suite|command-state|session-management|history-boundaries|history-attachments|history-empty-isolation|history-long-truncation|history-suite|card-forms|agent-question-forms|markdown-rendering|doc-as-chat-from-scratch|message-only|require-at-toggle',
     '  --commands <list>          Extra commands to run before the final message; JSON array or ;; separated',
     '  --chat-id <oc_>            Existing real test group; skips /new creation',
-    '  --runtime <claude|codex|kimi> Runtime to validate after group creation',
-    '  --provider <name>          Codex: sdk|pty|tmux; Claude: sdk|pty|tmux; Kimi: tmux. Default pty, or tmux for Kimi.',
+    '  --runtime <claude|codex|kimi|cursor> Runtime to validate after group creation',
+    '  --cursor-model <model>    Cursor model for the isolated bridge; default gpt-5.3-codex',
+    '  --provider <name>          Codex/Claude: sdk|pty|tmux; Kimi/Cursor: tmux. Default pty, or tmux for Kimi/Cursor.',
     '  --channel-type <id>        Bridge channel type, default feishu-env',
     '  --workdir <path>           Working directory for /new',
     '  --message <text>           Test message to send as user',
@@ -1379,6 +1405,7 @@ function providerMatrixForScenario(scenario: ScenarioDefinition): string[] {
       `${scenario.testNamePrefix}::claude-sdk`,
       `${scenario.testNamePrefix}::claude-tmux`,
       `${scenario.testNamePrefix}::kimi-tmux`,
+      `${scenario.testNamePrefix}::cursor-tmux`,
     ];
   }
   if (scenario.providerCoverage === 'representative-provider') {
@@ -1419,7 +1446,7 @@ function scenarioCoverage(options: CliOptions): Record<string, unknown> {
     e2eCoverage: scenario.e2eCoverage,
     coverageNotes: [
       scenario.providerCoverage === 'runtime-parameterized'
-        ? '该场景需要覆盖 codex-sdk、codex-pty、codex-tmux、claude-sdk、claude-pty、claude-tmux、kimi-tmux 七条路径，才能形成完整 runtime/provider 矩阵证据。'
+        ? '该场景需要覆盖 codex-sdk、codex-pty、codex-tmux、claude-sdk、claude-pty、claude-tmux、kimi-tmux、cursor-tmux 八条路径，才能形成完整 runtime/provider 矩阵证据。'
         : scenario.providerCoverage === 'representative-provider'
         ? '该功能簇场景默认只要求代表 provider 路径；provider smoke matrix 负责完整 runtime/provider 健康检查。'
         : scenario.providerCoverage === 'cross-provider-suite'
@@ -1432,7 +1459,7 @@ function scenarioCoverage(options: CliOptions): Record<string, unknown> {
         : scenario.coverageTier === 'legacy-transitional-evidence'
         ? 'legacy/transitional evidence：保留历史报告和局部回归价值，但不再作为后续补齐 full matrix 的主线。'
         : scenario.coverageTier === 'runtime-compressed-command-check'
-        ? 'runtime-compressed command check：后续命令类覆盖应按 Codex/Claude/Kimi runtime 压缩，只有 tmux 命令族额外覆盖 codex-tmux 与 kimi-tmux。'
+        ? 'runtime-compressed command check：后续命令类覆盖应按 Codex/Claude/Kimi/Cursor runtime 压缩，tmux 命令族额外覆盖各 tmux runtime。'
         : scenario.coverageTier === 'runtime-smoke-evidence'
         ? 'runtime-smoke evidence：用于 provider path 健康检查，不替代 high-value feature suite。'
         : 'runtime-neutral check：验证与 provider 无关的飞书可见行为。',
@@ -1463,7 +1490,7 @@ function listScenarioMetadata(): unknown[] {
 function parseRuntimeProviderFromTestName(testName: string): { runtime?: RuntimeName; provider?: ProviderName } {
   const suffix = testName.split('::').pop() || '';
   const [runtime, provider] = suffix.split('-');
-  if ((runtime === 'codex' || runtime === 'claude' || runtime === 'kimi')
+  if ((runtime === 'codex' || runtime === 'claude' || runtime === 'kimi' || runtime === 'cursor')
     && (provider === 'sdk' || provider === 'pty' || provider === 'tmux')) {
     return { runtime, provider };
   }
@@ -1472,7 +1499,7 @@ function parseRuntimeProviderFromTestName(testName: string): { runtime?: Runtime
 
 function coverageEntriesForScenario(scenario: ScenarioDefinition): Omit<CoverageMatrixEntry, 'evidence'>[] {
   if (scenario.providerCoverage === 'runtime-neutral') {
-    const matchingTestNames = ['codex', 'claude', 'kimi'].map((runtime) => `${scenario.testNamePrefix}::${runtime}`);
+    const matchingTestNames = ['codex', 'claude', 'kimi', 'cursor'].map((runtime) => `${scenario.testNamePrefix}::${runtime}`);
     return [{
       scenario: scenario.name,
       testName: `${scenario.testNamePrefix}::runtime-neutral`,
@@ -1589,6 +1616,13 @@ function canonicalRequiredCheckNamesForParts(scenario: string, providerSuffix: s
     required.add('claude_jsonl_found');
     required.add('provider_output_path');
     required.add('mirror_final_not_duplicated_in_direct_reply');
+  }
+
+  if (providerSuffix === 'cursor-tmux') {
+    required.add('runtime_identity_bound');
+    required.add('cursor_transcript_found');
+    required.add('provider_output_path');
+    if (scenario === 'runtime-message') required.add('cursor_stream_card_unified_ui');
   }
 
   if (
@@ -2205,12 +2239,12 @@ async function cleanupTestTmuxSessions(options: CliOptions): Promise<string[]> {
 }
 
 function isProviderOwnedTmuxSessionName(value: string): boolean {
-  return /^(?:codex_[0-9a-f-]{20,}|claude_[A-Za-z0-9_-]{8,}|clk-kimi-[A-Za-z0-9_-]{8,})$/.test(value);
+  return /^(?:codex_[0-9a-f-]{20,}|claude_[A-Za-z0-9_-]{8,}|clk-kimi-[A-Za-z0-9_-]{8,}|clk-cursor-[A-Za-z0-9_-]{8,})$/.test(value);
 }
 
 function findProviderOwnedTmuxSessionNames(content: string): string[] {
   const names = new Set<string>();
-  const pattern = /(?:^|[^A-Za-z0-9_-])((?:codex_[0-9a-f-]{20,}|claude_[A-Za-z0-9_-]{8,}|clk-kimi-[A-Za-z0-9_-]{8,}))(?![A-Za-z0-9_-])/g;
+  const pattern = /(?:^|[^A-Za-z0-9_-])((?:codex_[0-9a-f-]{20,}|claude_[A-Za-z0-9_-]{8,}|clk-kimi-[A-Za-z0-9_-]{8,}|clk-cursor-[A-Za-z0-9_-]{8,}))(?![A-Za-z0-9_-])/g;
   for (const match of content.matchAll(pattern)) {
     names.add(match[1]);
   }
@@ -2322,6 +2356,27 @@ function resolveKimiExecutableSource(): RuntimeEnvironmentPlan['kimiExecutableSo
   if (process.env.CODELARK_KIMI_EXECUTABLE || process.env.KIMI_CODE_EXECUTABLE) return 'env-executable';
   if (fs.existsSync(hostKimiExecutablePath())) return 'host-home-bin';
   return 'path';
+}
+
+function copyHostCursorConfig(hostHome: string, cursorConfigDir: string): boolean {
+  const copied = copyFileIfExists(
+    path.join(hostHome, '.cursor', 'cli-config.json'),
+    path.join(cursorConfigDir, 'cli-config.json'),
+  );
+  return copied || fs.existsSync(path.join(cursorConfigDir, 'cli-config.json'));
+}
+
+function resolveCursorExecutablePath(): string | undefined {
+  const explicit = process.env.CURSOR_AGENT_EXECUTABLE || process.env.CODELARK_CURSOR_EXECUTABLE;
+  if (explicit?.trim()) return explicit.trim();
+  const hostBin = path.join(os.homedir(), '.local', 'bin', process.platform === 'win32' ? 'agent.exe' : 'agent');
+  if (fs.existsSync(hostBin)) return hostBin;
+  return undefined;
+}
+
+function resolveCursorExecutableSource(): RuntimeEnvironmentPlan['cursorExecutableSource'] {
+  if (process.env.CURSOR_AGENT_EXECUTABLE || process.env.CODELARK_CURSOR_EXECUTABLE) return 'env-executable';
+  return resolveCursorExecutablePath() ? 'host-home-bin' : 'path';
 }
 
 function scriptedKimiSessionId(options: CliOptions): string {
@@ -2698,6 +2753,8 @@ function prepareRuntimeEnvironment(options: CliOptions): RuntimeEnvironmentPlan 
   fs.mkdirSync(options.codexHome, { recursive: true, mode: 0o700 });
   fs.mkdirSync(options.claudeHome, { recursive: true, mode: 0o700 });
   fs.mkdirSync(options.kimiHome, { recursive: true, mode: 0o700 });
+  fs.mkdirSync(options.cursorConfigDir, { recursive: true, mode: 0o700 });
+  fs.mkdirSync(options.cursorDataDir, { recursive: true, mode: 0o700 });
 
   const larkCliConfigSource = initializeIsolatedLarkCliConfig(options);
 
@@ -2732,6 +2789,11 @@ function prepareRuntimeEnvironment(options: CliOptions): RuntimeEnvironmentPlan 
     : copyHostKimiConfig(os.homedir(), options.kimiHome)
       ? 'host-config-copy'
       : 'missing';
+  const cursorAuthSource: RuntimeEnvironmentPlan['cursorAuthSource'] =
+    copyHostCursorConfig(os.homedir(), options.cursorConfigDir)
+      ? 'host-config-copy'
+      : 'missing';
+  const cursorExecutablePath = resolveCursorExecutablePath();
 
   let ccrConfigSource: RuntimeEnvironmentPlan['ccrConfigSource'] = 'not-needed';
   if (options.claudeExecutable === 'ccr') {
@@ -2747,9 +2809,12 @@ function prepareRuntimeEnvironment(options: CliOptions): RuntimeEnvironmentPlan 
 
   return {
     runtimeHome: options.runtimeHome,
+    bridgeHome: options.runtime === 'cursor' ? os.homedir() : options.runtimeHome,
     codexHome: options.codexHome,
     claudeHome: options.claudeHome,
     kimiHome: options.kimiHome,
+    cursorConfigDir: options.cursorConfigDir,
+    cursorDataDir: options.cursorDataDir,
     claudeExecutable: options.claudeExecutable,
     larkCliConfigSource,
     codexAuthSource,
@@ -2757,6 +2822,9 @@ function prepareRuntimeEnvironment(options: CliOptions): RuntimeEnvironmentPlan 
     kimiAuthSource,
     kimiExecutableSource: scriptedKimiExecutablePath ? 'scripted-fake-executable' : resolveKimiExecutableSource(),
     ...(scriptedKimiExecutablePath ? { kimiExecutablePath: scriptedKimiExecutablePath } : {}),
+    cursorAuthSource,
+    cursorExecutableSource: resolveCursorExecutableSource(),
+    ...(cursorExecutablePath ? { cursorExecutablePath } : {}),
     ccrConfigSource,
     ...(options.fakeCcrProxyBaseUrl ? { fakeCcrProxyBaseUrl: options.fakeCcrProxyBaseUrl } : {}),
     ...(options.fakeCcrPort ? { fakeCcrPort: options.fakeCcrPort } : {}),
@@ -2768,9 +2836,12 @@ function prepareRuntimeEnvironment(options: CliOptions): RuntimeEnvironmentPlan 
 function plannedRuntimeEnvironment(options: CliOptions): RuntimeEnvironmentPlan {
   return {
     runtimeHome: options.runtimeHome,
+    bridgeHome: options.runtime === 'cursor' ? os.homedir() : options.runtimeHome,
     codexHome: options.codexHome,
     claudeHome: options.claudeHome,
     kimiHome: options.kimiHome,
+    cursorConfigDir: options.cursorConfigDir,
+    cursorDataDir: options.cursorDataDir,
     claudeExecutable: options.claudeExecutable,
     larkCliConfigSource: options.launchBridge ? 'missing' : 'not-needed',
     codexAuthSource: 'missing',
@@ -2780,6 +2851,9 @@ function plannedRuntimeEnvironment(options: CliOptions): RuntimeEnvironmentPlan 
     ...(usesScriptedKimiExecutable(options)
       ? { kimiExecutablePath: path.join(options.runRoot, 'bin', 'kimi') }
       : {}),
+    cursorAuthSource: 'missing',
+    cursorExecutableSource: resolveCursorExecutableSource(),
+    ...(resolveCursorExecutablePath() ? { cursorExecutablePath: resolveCursorExecutablePath() } : {}),
     ccrConfigSource: options.claudeExecutable === 'ccr' ? 'missing' : 'not-needed',
   };
 }
@@ -2995,6 +3069,13 @@ function findBotRepliesToMessage(payload: unknown, sourceMessageId: string, opti
   });
 }
 
+function findMessageById(payload: unknown, messageId: string): unknown | undefined {
+  return getFeishuTranscriptMessages(payload).find((message) => (
+    message && typeof message === 'object'
+    && (message as { message_id?: unknown }).message_id === messageId
+  ));
+}
+
 function messageContentContainsKeys(message: unknown, keys: string[]): boolean {
   if (keys.length === 0) return true;
   const content = messageContent(message);
@@ -3021,6 +3102,7 @@ function hasBotReplyToMessageMatching(
   const forbiddenTexts = expectation.forbiddenTexts.filter(Boolean);
   const requiredMessageTypes = expectation.messageTypes.filter(Boolean);
   const requiredContentKeys = expectation.contentKeys.filter(Boolean);
+  const sourceText = messageContent(findMessageById(payload, sourceMessageId));
   return replies.some((message) => {
     if (requiredMessageTypes.length > 0) {
       const msgType = (message as { msg_type?: unknown; message_type?: unknown }).msg_type
@@ -3031,7 +3113,7 @@ function hasBotReplyToMessageMatching(
     const content = messageContent(message);
     if (forbiddenTexts.some((forbiddenText) => content.includes(forbiddenText))) return false;
     if (requiredTexts.length === 0) return true;
-    return requiredTexts.every((expectedText) => content.includes(expectedText));
+    return containsGeneratedReplyTexts(content, sourceText, requiredTexts);
   });
 }
 
@@ -3048,6 +3130,19 @@ function botTranscriptContainsText(payload: unknown, expectedText: string, optio
   if (!expectedText) return true;
   return getFeishuTranscriptMessages(payload).some((message) => (
     isTestBotMessage(message, options) && messageContent(message).includes(expectedText)
+  ));
+}
+
+function botTranscriptContainsGeneratedText(
+  payload: unknown,
+  expectedText: string,
+  sourceText: string,
+  options: CliOptions,
+): boolean {
+  if (!expectedText) return true;
+  return getFeishuTranscriptMessages(payload).some((message) => (
+    isTestBotMessage(message, options)
+    && containsGeneratedReplyTexts(messageContent(message), sourceText, [expectedText])
   ));
 }
 
@@ -3646,6 +3741,8 @@ function latestDump(options: CliOptions, chatId?: string) {
     codelarkHome: options.codelarkHome,
     claudeHome: options.claudeHome,
     kimiHome: options.kimiHome,
+    cursorConfigDir: options.cursorConfigDir,
+    cursorDataDir: options.cursorDataDir,
     channelType: options.channelType,
     chatId: chatId || options.chatId || undefined,
     runId: options.runId,
@@ -3668,6 +3765,11 @@ async function waitFor<T>(
     if (last) return last;
     await new Promise((resolve) => setTimeout(resolve, pollMs));
   }
+  // A response can land during the final poll sleep. Observe once at the
+  // deadline before declaring a timeout so the failure report cannot contain
+  // the very evidence this wait just missed.
+  last = await fn();
+  if (last) return last;
   throw new Error(`Timed out waiting for ${label}`);
 }
 
@@ -3704,6 +3806,9 @@ function missingRequiredChecks(options: CliOptions, report: ReturnType<typeof la
   }
   if (options.runtime === 'kimi' && scenarioRequiresRuntimeOutput(options)) {
     required.add('kimi_wire_jsonl_found');
+  }
+  if (options.runtime === 'cursor' && scenarioRequiresRuntimeOutput(options)) {
+    required.add('cursor_transcript_found');
   }
   required.add('unexpected_mirror_absent');
   if (scenarioRequiresRuntimeOutput(options)) {
@@ -3830,6 +3935,21 @@ function scenarioSpecificChecks(
       ok: issues.length === 0,
       detail: issues.length === 0
         ? 'Observed the runtime prompt final marker in the final Feishu transcript.'
+        : issues.join('\n'),
+    });
+  }
+  if (options.scenario === 'runtime-message' && options.runtime === 'cursor') {
+    const marker = expectedRuntimePromptResponseText(options, scenarioFinalMessage(options));
+    const issues = cursorStreamCardUnifiedUiIssues(
+      report.streamCardCheckpoints || [],
+      marker,
+      options.cursorModel,
+    );
+    checks.push({
+      name: 'cursor_stream_card_unified_ui',
+      ok: issues.length === 0,
+      detail: issues.length === 0
+        ? 'Observed Cursor final output in the shared stream-card header, runtime metadata, history, and terminal layout.'
         : issues.join('\n'),
     });
   }
@@ -4050,7 +4170,12 @@ function runtimePromptFinalTranscriptIssues(options: CliOptions, finalFeishuMess
   if (!finalFeishuMessages) {
     return [`Final Feishu transcript is missing; cannot verify runtime prompt marker ${expectedText}.`];
   }
-  if (botTranscriptContainsText(finalFeishuMessages, expectedText, options)) return [];
+  if (botTranscriptContainsGeneratedText(
+    finalFeishuMessages,
+    expectedText,
+    scenarioFinalMessage(options),
+    options,
+  )) return [];
   return [`Final Feishu transcript did not contain runtime prompt marker ${expectedText}.`];
 }
 
@@ -4078,11 +4203,12 @@ function unexpectedMirrorIssues(options: CliOptions, report: ReturnType<typeof l
   const mirrorKeys = report.streamKeys.filter((key) => key.startsWith('mirror:'));
   const directKeys = report.streamKeys.filter((key) => key.startsWith('im:'));
   const issues: string[] = [];
-  if (options.provider === 'sdk' && mirrorKeys.length > 0) {
-    issues.push(`sdk provider produced mirror streams: ${mirrorKeys.join(', ')}`);
+  const directProvider = options.provider === 'sdk' || options.runtime === 'cursor';
+  if (directProvider && mirrorKeys.length > 0) {
+    issues.push(`${options.runtime}-${options.provider} direct provider produced mirror streams: ${mirrorKeys.join(', ')}`);
   }
-  if (options.provider === 'sdk' && directKeys.length > 0 && mirrorKeys.length > 0) {
-    issues.push(`sdk provider produced both direct IM streams and mirror streams; direct=${directKeys.join(', ')} mirror=${mirrorKeys.join(', ')}`);
+  if (directProvider && directKeys.length > 0 && mirrorKeys.length > 0) {
+    issues.push(`${options.runtime}-${options.provider} produced both direct IM streams and mirror streams; direct=${directKeys.join(', ')} mirror=${mirrorKeys.join(', ')}`);
   }
   return issues;
 }
@@ -4103,12 +4229,12 @@ function providerOutputPathIssues(options: CliOptions, report: ReturnType<typeof
   if (options.scenario === 'require-at-toggle') return [];
 
   const issues: string[] = [];
-  if (options.provider === 'sdk') {
+  if (options.provider === 'sdk' || options.runtime === 'cursor') {
     if (directKeys.length === 0) {
-      issues.push(`sdk provider did not produce a direct IM stream; streamKeys=${report.streamKeys.join(', ') || '[none]'}`);
+      issues.push(`${options.runtime}-${options.provider} direct provider did not produce a direct IM stream; streamKeys=${report.streamKeys.join(', ') || '[none]'}`);
     }
     if (mirrorKeys.length > 0) {
-      issues.push(`sdk provider produced mirror streams: ${mirrorKeys.join(', ')}`);
+      issues.push(`${options.runtime}-${options.provider} direct provider produced mirror streams: ${mirrorKeys.join(', ')}`);
     }
     return issues;
   }
@@ -4404,30 +4530,36 @@ function commandStateExpectedTexts(options: CliOptions, text: string): string[] 
   if (command === '/model') {
     if (options.runtime === 'claude') return ['当前 Claude Code 模型'];
     if (options.runtime === 'kimi') return ['当前 Kimi Code 模型'];
+    if (options.runtime === 'cursor') return ['当前 Cursor Agent 模型'];
     return ['当前模型'];
   }
   if (command === '/mode') {
     if (options.runtime === 'kimi') return ['Kimi Code 模式固定'];
+    if (options.runtime === 'cursor') return ['当前 Cursor Agent 模式'];
     return ['当前模式', 'Runtime', options.runtime];
   }
   if (command === '/provider') {
     if (options.runtime === 'claude') return ['当前 Claude Provider'];
     if (options.runtime === 'kimi') return ['当前 Kimi Provider'];
+    if (options.runtime === 'cursor') return ['当前 Cursor Provider'];
     return ['当前 Codex Provider'];
   }
   if (command === '/sandbox') {
     if (options.runtime === 'claude') return ['Claude Code 不支持 Bridge 沙箱设置'];
     if (options.runtime === 'kimi') return ['Kimi Code 不支持 Bridge 沙箱设置'];
+    if (options.runtime === 'cursor') return ['Cursor Agent 不支持 Bridge 沙箱设置'];
     return ['当前 Codex 沙箱'];
   }
   if (command === '/network') {
     if (options.runtime === 'claude') return ['Claude Code 不支持 Bridge 网络开关'];
     if (options.runtime === 'kimi') return ['Kimi Code 不支持 Bridge 网络开关'];
+    if (options.runtime === 'cursor') return ['Cursor Agent 不支持 Bridge 网络开关'];
     return ['当前 Codex 网络'];
   }
   if (command === '/reasoning') {
     if (options.runtime === 'claude') return ['当前 Claude Code 思考级别'];
     if (options.runtime === 'kimi') return ['Kimi Code 不支持 Bridge 思考级别设置'];
+    if (options.runtime === 'cursor') return ['Cursor Agent 不支持 Bridge 思考级别设置'];
     return ['当前思考级别'];
   }
   if (command === `/every 1h e2e seed ${options.runId}`) {
@@ -4490,6 +4622,7 @@ function sessionManagementExpectedTexts(options: CliOptions, text: string): stri
   if (command === '/set') return ['全局配置', '通用配置', '默认 agent', 'tmux 输出行数'];
   if (command === sessionManagementProviderSettingCommand(options)) {
     if (options.runtime === 'kimi') return ['已更新全局配置', 'runtime.kimi.provider', 'tmux'];
+    if (options.runtime === 'cursor') return ['已更新全局配置', 'runtime.cursor.provider', 'tmux'];
     return ['已更新全局配置', 'runtime.claude.provider', options.runtime === 'claude' ? options.provider : 'pty'];
   }
   if (command === `/new mgmt-${options.runId} ${options.workDir}`) {
@@ -4524,7 +4657,7 @@ function sessionManagementExpectedTexts(options: CliOptions, text: string): stri
       'runtime',
       runtimeDisplayLabel(options.runtime),
       runtimeIdentityFieldName(options.runtime),
-      ...(options.runtime === 'claude' || options.runtime === 'kimi' ? ['runtime_cwd'] : []),
+      ...(options.runtime === 'claude' || options.runtime === 'kimi' || options.runtime === 'cursor' ? ['runtime_cwd'] : []),
     ];
   }
   if (command === '/t') return ['本地会话'];
@@ -4533,6 +4666,7 @@ function sessionManagementExpectedTexts(options: CliOptions, text: string): stri
   if (command === '/t archive') {
     if (options.runtime === 'claude') return ['已归档本地 Claude Code 会话'];
     if (options.runtime === 'kimi') return ['已归档本地 Kimi Code 会话'];
+    if (options.runtime === 'cursor') return ['已归档本地 Cursor Agent 会话'];
     return ['已归档本地 Codex 会话'];
   }
   return [];
@@ -4694,7 +4828,7 @@ function expectedReplyForMessage(options: CliOptions, text: string, label: strin
     const semanticTexts = basicDialogueExpectedTexts(options, text, label);
     if (semanticTexts.length > 0) return { ...empty, texts: semanticTexts };
   }
-  if (label.includes('final message') && options.provider === 'sdk') {
+  if (label.includes('final message') && (options.provider === 'sdk' || options.runtime === 'cursor')) {
     return { ...empty, texts: [expectedRuntimePromptResponseText(options, text)].filter(Boolean) };
   }
   if (options.scenario === 'command-state') {
@@ -4835,6 +4969,9 @@ function replyTimeoutMsForMessage(options: CliOptions, text: string, label: stri
   if (label.includes('final message')) return options.timeoutMs;
   if (command === '/his' || command.startsWith('/his ')) return options.timeoutMs;
   if (command.startsWith('/shell ')) return options.timeoutMs;
+  // Provider switches may synchronously launch and probe an external runtime
+  // before CodeLark can acknowledge the command (for example Cursor tmux).
+  if (command === '/p' || command.startsWith('/p ')) return options.timeoutMs;
   return Math.min(options.timeoutMs, COMMAND_RESPONSE_TIMEOUT_MS);
 }
 
@@ -4996,7 +5133,7 @@ function plannedSuccessCheckNames(options: CliOptions): string[] {
   if (scenarioRequiresRuntimeOutput(options)) {
     names.push('provider_output_path');
   }
-  if (scenarioRequiresRuntimeOutput(options) && options.provider !== 'sdk') {
+  if (scenarioRequiresRuntimeOutput(options) && options.provider !== 'sdk' && options.runtime !== 'cursor') {
     names.push('mirror_final_not_duplicated_in_direct_reply');
   }
   if (options.scenario === 'doc-as-chat-from-scratch') {
@@ -5031,6 +5168,9 @@ function plannedSuccessCheckNames(options: CliOptions): string[] {
   }
   if (shouldCheckRuntimePromptFinalTranscript(options)) {
     names.push('runtime_prompt_final_transcript_marker');
+  }
+  if (options.scenario === 'runtime-message' && options.runtime === 'cursor') {
+    names.push('cursor_stream_card_unified_ui');
   }
   if (usesProxyBackedBasicDialogue(options)) {
     names.push(
@@ -5198,6 +5338,8 @@ function canonicalReportEligibility(
     ['runtimeHome', runtimeEnvironment.runtimeHome],
     ['codexHome', runtimeEnvironment.codexHome],
     ['kimiHome', runtimeEnvironment.kimiHome],
+    ['cursorConfigDir', runtimeEnvironment.cursorConfigDir],
+    ['cursorDataDir', runtimeEnvironment.cursorDataDir],
   ];
 
   if (!options.launchBridge) {
@@ -5221,6 +5363,9 @@ function canonicalReportEligibility(
   }
   if (options.dryRun) {
     notes.push('dry-run only describes the planned canonical eligibility; it is not execution evidence.');
+  }
+  if (options.runtime === 'cursor') {
+    notes.push('Cursor keeps config/data inside runRoot but preserves the host HOME only for the official CLI secure login store.');
   }
 
   return {
@@ -5261,6 +5406,7 @@ function automatedSuccessChecks(params: {
   const finalExpectedText = expectedFinalResponseText(params.options);
   const directMirrorDuplicate = Boolean(
     params.options.provider !== 'sdk'
+    && params.options.runtime !== 'cursor'
     && finalObservation?.sentMessageId
     && finalExpectedText
     && directReplyToContainsText(
@@ -5334,7 +5480,7 @@ function automatedSuccessChecks(params: {
     },
   ];
 
-  if (scenarioRequiresRuntimeOutput(params.options) && params.options.provider !== 'sdk') {
+  if (scenarioRequiresRuntimeOutput(params.options) && params.options.provider !== 'sdk' && params.options.runtime !== 'cursor') {
     checks.push({
       name: 'mirror_final_not_duplicated_in_direct_reply',
       ok: !directMirrorDuplicate,
@@ -5463,6 +5609,7 @@ function shouldObserveFinalPromptByMirrorEvidence(options: CliOptions, label: st
   }
   return label.includes('final message')
     && options.provider !== 'sdk'
+    && options.runtime !== 'cursor'
     && (isEmptyReplyExpectation(expectation) || scenarioCommandsIncludeFinalMessage(options));
 }
 
@@ -5619,6 +5766,10 @@ function writeIsolatedBridgeConfig(options: CliOptions): void {
           ? { model: process.env.CODELARK_KIMI_MODEL }
           : {}),
       },
+      cursor: {
+        provider: 'tmux',
+        model: options.cursorModel,
+      },
     },
     channels: [{
       id: options.channelType,
@@ -5690,7 +5841,7 @@ async function stopFakeCcrRouter(options: CliOptions): Promise<void> {
 async function launchBridgeChild(options: CliOptions, runtimeEnvironment: RuntimeEnvironmentPlan): Promise<ChildProcess | null> {
   if (!options.launchBridge || options.dryRun) return null;
   writeIsolatedBridgeConfig(options);
-  process.stderr.write(`[real-feishu-e2e] Launching isolated bridge with CODELARK_HOME=${options.codelarkHome} CODEX_HOME=${options.codexHome} KIMI_CODE_HOME=${options.kimiHome} HOME=${options.runtimeHome} claude=${options.claudeExecutable}\n`);
+  process.stderr.write(`[real-feishu-e2e] Launching isolated bridge with CODELARK_HOME=${options.codelarkHome} CODEX_HOME=${options.codexHome} KIMI_CODE_HOME=${options.kimiHome} CURSOR_CONFIG_DIR=${options.cursorConfigDir} CURSOR_DATA_DIR=${options.cursorDataDir} HOME=${runtimeEnvironment.bridgeHome} claude=${options.claudeExecutable}\n`);
   const child = spawn(
     process.execPath,
     ['--import', 'tsx', 'src/entrypoints/daemon.ts'],
@@ -5698,14 +5849,21 @@ async function launchBridgeChild(options: CliOptions, runtimeEnvironment: Runtim
       cwd: process.cwd(),
       env: sanitizedChildEnv({
         CODELARK_HOME: options.codelarkHome,
-        HOME: runtimeEnvironment.runtimeHome,
-        USERPROFILE: runtimeEnvironment.runtimeHome,
+        HOME: runtimeEnvironment.bridgeHome,
+        USERPROFILE: runtimeEnvironment.bridgeHome,
         XDG_DATA_HOME: path.join(runtimeEnvironment.runtimeHome, '.local', 'share'),
         XDG_CONFIG_HOME: path.join(runtimeEnvironment.runtimeHome, '.config'),
         XDG_CACHE_HOME: path.join(runtimeEnvironment.runtimeHome, '.cache'),
         CODEX_HOME: runtimeEnvironment.codexHome,
         CODELARK_CLAUDE_HOME: runtimeEnvironment.claudeHome,
         KIMI_CODE_HOME: runtimeEnvironment.kimiHome,
+        CURSOR_CONFIG_DIR: runtimeEnvironment.cursorConfigDir,
+        CURSOR_DATA_DIR: runtimeEnvironment.cursorDataDir,
+        CODELARK_CURSOR_PROVIDER: 'tmux',
+        CODELARK_CURSOR_MODEL: options.cursorModel,
+        ...(runtimeEnvironment.cursorExecutablePath
+          ? { CURSOR_AGENT_EXECUTABLE: runtimeEnvironment.cursorExecutablePath }
+          : {}),
         CODELARK_CLAUDE_EXECUTABLE: runtimeEnvironment.claudeExecutable,
         CODELARK_CLAUDE_PROVIDER: options.runtime === 'claude' ? options.provider : (process.env.CODELARK_CLAUDE_PROVIDER || 'pty'),
         CODELARK_KIMI_PROVIDER: 'tmux',
@@ -5723,6 +5881,7 @@ async function launchBridgeChild(options: CliOptions, runtimeEnvironment: Runtim
           }
           : {}),
         ...(usesScriptedKimiExecutable(options)
+          || (options.scenario === 'runtime-message' && options.runtime === 'cursor')
           ? {
             CODELARK_REAL_FEISHU_E2E_STREAM_CARD_CHECKPOINTS: '1',
           }
@@ -6255,7 +6414,7 @@ function waitsForMirrorFinalBeforeFollowup(options: CliOptions, commandText?: st
     const phase = basicDialoguePhaseForPrompt(options, commandText);
     return Boolean(phase && !phase.endsWith('-sdk'));
   }
-  return scenarioRequiresRuntimeOutput(options) && options.provider !== 'sdk';
+  return scenarioRequiresRuntimeOutput(options) && options.provider !== 'sdk' && options.runtime !== 'cursor';
 }
 
 function shouldSendBasicDialogueQueuedFollowup(
@@ -6807,6 +6966,7 @@ async function main(): Promise<void> {
         runRoot: options.runRoot,
         codelarkHome: options.codelarkHome,
         codexModel: options.codexModel,
+        cursorModel: options.cursorModel,
         runtimeEnvironment,
         canonicalEligibility: canonicalReportEligibility(options, runtimeEnvironment),
         initialChatCreationBotAppId: createsInitialProductNewSessionGroup(options) ? options.testFeishuAppId || null : null,

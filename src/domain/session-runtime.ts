@@ -5,6 +5,8 @@ import type {
   BridgeSessionCodexRuntimeState,
   BridgeSessionGeneralState,
   BridgeSessionKimiRuntimeState,
+  BridgeSessionCursorRuntimeState,
+  CursorProviderChoice,
   KimiProviderChoice,
   RuntimeAgent,
   BridgeSessionRuntimeState,
@@ -35,6 +37,11 @@ type SessionRuntimeLike = {
       cwd?: string | null;
       model?: string | null;
     };
+    cursor?: Omit<Partial<BridgeSessionCursorRuntimeState>, 'sessionId' | 'cwd' | 'model'> & {
+      sessionId?: string | null;
+      cwd?: string | null;
+      model?: string | null;
+    };
     general?: Partial<BridgeSessionGeneralState>;
   };
 };
@@ -45,6 +52,10 @@ function isClaudeRuntime(session: SessionRuntimeLike | null | undefined): boolea
 
 function isKimiRuntime(session: SessionRuntimeLike | null | undefined): boolean {
   return session?.runtime?.activeRuntime === 'kimi';
+}
+
+function isCursorRuntime(session: SessionRuntimeLike | null | undefined): boolean {
+  return session?.runtime?.activeRuntime === 'cursor';
 }
 
 function trimOrUndefined(value: string | null | undefined): string | undefined {
@@ -66,29 +77,29 @@ function getSessionTomlOverride<T>(session: SessionRuntimeLike | null | undefine
 }
 
 export function getSessionCodexThreadId(session: SessionRuntimeLike | null | undefined): string | undefined {
-  if (isClaudeRuntime(session) || isKimiRuntime(session)) return undefined;
+  if (isClaudeRuntime(session) || isKimiRuntime(session) || isCursorRuntime(session)) return undefined;
   return trimOrUndefined(session?.runtime?.codex?.threadId);
 }
 
 export function getSessionActiveRuntime(session: SessionRuntimeLike | null | undefined): BridgeSessionRuntimeState['activeRuntime'] {
   const activeRuntime = session?.runtime?.activeRuntime;
-  return activeRuntime === 'claude' || activeRuntime === 'codex' || activeRuntime === 'kimi'
+  return activeRuntime === 'claude' || activeRuntime === 'codex' || activeRuntime === 'kimi' || activeRuntime === 'cursor'
     ? activeRuntime
     : undefined;
 }
 
 export function getSessionCodexTitle(session: SessionRuntimeLike | null | undefined): string | undefined {
-  if (isClaudeRuntime(session) || isKimiRuntime(session)) return undefined;
+  if (isClaudeRuntime(session) || isKimiRuntime(session) || isCursorRuntime(session)) return undefined;
   return trimOrUndefined(session?.runtime?.codex?.title);
 }
 
 export function getSessionCodexModel(session: SessionRuntimeLike | null | undefined): string | undefined {
-  if (isClaudeRuntime(session) || isKimiRuntime(session)) return undefined;
+  if (isClaudeRuntime(session) || isKimiRuntime(session) || isCursorRuntime(session)) return undefined;
   return trimOrUndefined(getSessionTomlOverride<string>(session, 'runtime.codex.model'));
 }
 
 export function getSessionCodexMode(session: SessionRuntimeLike | null | undefined): BridgeSessionCodexRuntimeState['mode'] | undefined {
-  if (isClaudeRuntime(session) || isKimiRuntime(session)) return undefined;
+  if (isClaudeRuntime(session) || isKimiRuntime(session) || isCursorRuntime(session)) return undefined;
   const mode = getSessionTomlOverride<'off' | 'on' | 'yolo'>(session, 'runtime.codex.yoloMode');
   if (mode === 'on' || mode === 'yolo') return 'yolo';
   if (mode === 'off') return 'normal';
@@ -96,13 +107,13 @@ export function getSessionCodexMode(session: SessionRuntimeLike | null | undefin
 }
 
 export function getSessionCodexProvider(session: SessionRuntimeLike | null | undefined): BridgeSessionCodexRuntimeState['provider'] | undefined {
-  if (isClaudeRuntime(session) || isKimiRuntime(session)) return undefined;
+  if (isClaudeRuntime(session) || isKimiRuntime(session) || isCursorRuntime(session)) return undefined;
   const provider = getSessionTomlOverride<string>(session, 'runtime.codex.provider');
   return isRuntimeProviderChoice(provider) ? provider : undefined;
 }
 
 export function getSessionCodexSandboxMode(session: SessionRuntimeLike | null | undefined): BridgeSessionCodexRuntimeState['sandboxMode'] | undefined {
-  if (isClaudeRuntime(session) || isKimiRuntime(session)) return undefined;
+  if (isClaudeRuntime(session) || isKimiRuntime(session) || isCursorRuntime(session)) return undefined;
   const sandboxMode = getSessionTomlOverride<string>(session, 'runtime.codex.sandboxMode');
   return sandboxMode === 'read-only' || sandboxMode === 'workspace-write' || sandboxMode === 'danger-full-access'
     ? sandboxMode
@@ -110,13 +121,13 @@ export function getSessionCodexSandboxMode(session: SessionRuntimeLike | null | 
 }
 
 export function getSessionCodexNetworkAccess(session: SessionRuntimeLike | null | undefined): boolean | undefined {
-  if (isClaudeRuntime(session) || isKimiRuntime(session)) return undefined;
+  if (isClaudeRuntime(session) || isKimiRuntime(session) || isCursorRuntime(session)) return undefined;
   const networkAccess = getSessionTomlOverride<boolean>(session, 'runtime.codex.networkAccess');
   return typeof networkAccess === 'boolean' ? networkAccess : undefined;
 }
 
 export function getSessionCodexReasoningEffort(session: SessionRuntimeLike | null | undefined): BridgeSessionCodexRuntimeState['reasoningEffort'] | undefined {
-  if (isClaudeRuntime(session) || isKimiRuntime(session)) return undefined;
+  if (isClaudeRuntime(session) || isKimiRuntime(session) || isCursorRuntime(session)) return undefined;
   const reasoningEffort = getSessionTomlOverride<string>(session, 'runtime.codex.reasoningEffort');
   return reasoningEffort === 'minimal'
     || reasoningEffort === 'low'
@@ -169,16 +180,40 @@ export function getSessionKimiProvider(session: SessionRuntimeLike | null | unde
   return provider === 'tmux' ? 'tmux' : undefined;
 }
 
-export function getSessionRuntimeProvider(session: SessionRuntimeLike | null | undefined): RuntimeProviderChoice | KimiProviderChoice | undefined {
+export function getSessionCursorSessionId(session: SessionRuntimeLike | null | undefined): string | undefined {
+  if (!isCursorRuntime(session)) return undefined;
+  return trimOrUndefined(session?.runtime?.cursor?.sessionId);
+}
+
+export function getSessionCursorCwd(session: SessionRuntimeLike | null | undefined): string | undefined {
+  if (!isCursorRuntime(session)) return undefined;
+  return trimOrUndefined(session?.runtime?.cursor?.cwd);
+}
+
+export function getSessionCursorModel(session: SessionRuntimeLike | null | undefined): string | undefined {
+  if (!isCursorRuntime(session)) return undefined;
+  return trimOrUndefined(getSessionTomlOverride<string>(session, 'runtime.cursor.model'));
+}
+
+export function getSessionCursorProvider(session: SessionRuntimeLike | null | undefined): CursorProviderChoice | undefined {
+  if (!isCursorRuntime(session)) return undefined;
+  return getSessionTomlOverride<string>(session, 'runtime.cursor.provider') === 'tmux' ? 'tmux' : undefined;
+}
+
+export function getSessionRuntimeProvider(session: SessionRuntimeLike | null | undefined): RuntimeProviderChoice | KimiProviderChoice | CursorProviderChoice | undefined {
+  if (isCursorRuntime(session)) return getSessionCursorProvider(session);
   if (isKimiRuntime(session)) return getSessionKimiProvider(session);
   return isClaudeRuntime(session) ? getSessionClaudeProvider(session) : getSessionCodexProvider(session);
 }
 
 export function getSessionRuntimeProviderIdentity(session: SessionRuntimeLike | null | undefined): RuntimeProviderIdentity | undefined {
   const provider = getSessionRuntimeProvider(session)
-    || (isKimiRuntime(session)
+    || (isCursorRuntime(session)
+      ? session?.runtime?.cursor?.provider
+      : isKimiRuntime(session)
       ? session?.runtime?.kimi?.provider
       : isClaudeRuntime(session) ? session?.runtime?.claude?.provider : session?.runtime?.codex?.provider);
+  if (isCursorRuntime(session)) return provider === 'tmux' ? 'cursor:tmux' : undefined;
   if (isKimiRuntime(session)) return provider === 'tmux' ? 'kimi:tmux' : undefined;
   if (!isRuntimeProviderChoice(provider)) return undefined;
   if (!provider) return undefined;
@@ -187,10 +222,11 @@ export function getSessionRuntimeProviderIdentity(session: SessionRuntimeLike | 
 
 export function buildRuntimeProviderIdentity(
   runtime: RuntimeAgent,
-  provider: RuntimeProviderChoice | KimiProviderChoice,
+  provider: RuntimeProviderChoice | KimiProviderChoice | CursorProviderChoice,
 ): RuntimeProviderIdentity {
+  if (runtime === 'cursor') return 'cursor:tmux';
   if (runtime === 'kimi') return 'kimi:tmux';
-  return `${runtime}:${provider}`;
+  return `${runtime}:${provider as RuntimeProviderChoice}`;
 }
 
 export function getSessionClaudeReasoningEffort(session: SessionRuntimeLike | null | undefined): BridgeSessionClaudeRuntimeState['reasoningEffort'] | undefined {
@@ -242,12 +278,17 @@ export function materializeBridgeSessionRuntime(rawSession: BridgeSession): Brid
     ? 'claude'
     : rawSession.runtime?.activeRuntime === 'kimi'
       ? 'kimi'
-      : 'codex';
+      : rawSession.runtime?.activeRuntime === 'cursor'
+        ? 'cursor'
+        : 'codex';
   const codex = {
     ...rawSession.runtime?.codex,
   };
   const kimi = {
     ...rawSession.runtime?.kimi,
+  };
+  const cursor = {
+    ...rawSession.runtime?.cursor,
   };
   const general = {
     ...rawSession.runtime?.general,
@@ -267,7 +308,13 @@ export function materializeBridgeSessionRuntime(rawSession: BridgeSession): Brid
             ...(Object.keys(kimi).length > 0 ? { kimi } : {}),
             ...(Object.keys(general).length > 0 ? { general } : {}),
           } satisfies BridgeSessionRuntimeState
-        : {
+        : activeRuntime === 'cursor'
+          ? {
+              activeRuntime: 'cursor',
+              ...(Object.keys(cursor).length > 0 ? { cursor } : {}),
+              ...(Object.keys(general).length > 0 ? { general } : {}),
+            } satisfies BridgeSessionRuntimeState
+          : {
             ...(rawSession.runtime?.activeRuntime === 'codex' ? { activeRuntime: 'codex' as const } : {}),
             ...(Object.keys(codex).length > 0 ? { codex } : {}),
             ...(Object.keys(general).length > 0 ? { general } : {}),
@@ -304,6 +351,13 @@ export function setSessionKimiIdentityUpdate(
   cwd: string | undefined,
 ): BridgeSessionRuntimeUpdate {
   return { runtime: { activeRuntime: 'kimi', kimi: { sessionId, cwd } } };
+}
+
+export function setSessionCursorIdentityUpdate(
+  sessionId: string | undefined,
+  cwd: string | undefined,
+): BridgeSessionRuntimeUpdate {
+  return { runtime: { activeRuntime: 'cursor', cursor: { sessionId, cwd } } };
 }
 
 export function setSessionSystemPromptUpdate(systemPrompt: string | undefined): BridgeSessionRuntimeUpdate {
@@ -370,6 +424,9 @@ export function mergeSessionRuntimeUpdates(...updates: BridgeSessionRuntimeUpdat
         kimi: update.runtime.kimi
           ? { ...acc.runtime?.kimi, ...update.runtime.kimi }
           : acc.runtime?.kimi,
+        cursor: update.runtime.cursor
+          ? { ...acc.runtime?.cursor, ...update.runtime.cursor }
+          : acc.runtime?.cursor,
         general: update.runtime.general
           ? { ...acc.runtime?.general, ...update.runtime.general }
           : acc.runtime?.general,
