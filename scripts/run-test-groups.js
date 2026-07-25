@@ -29,8 +29,12 @@ if (requestedArgs.length > 0) {
 } else {
   const runRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'codelark-test-groups-'));
   const groups = [
-    { name: 'unit-workflow', args: ['--unit', '--workflow'] },
-    { name: 'mock-harness', args: ['--mock-e2e', '--harness'] },
+    { name: 'unit-1', args: ['--unit', '--test-shard=1/2'] },
+    { name: 'unit-2', args: ['--unit', '--test-shard=2/2'] },
+    { name: 'workflow', args: ['--workflow'] },
+    { name: 'mock-e2e-1', args: ['--mock-e2e', '--test-shard=1/2'] },
+    { name: 'mock-e2e-2', args: ['--mock-e2e', '--test-shard=2/2'] },
+    { name: 'harness', args: ['--harness'] },
     { name: 'local-e2e', args: ['--local-e2e'] },
   ];
 
@@ -99,7 +103,17 @@ if (requestedArgs.length > 0) {
     });
   }
 
-  const results = await Promise.all(groups.map(runGroup));
+  const results = new Array(groups.length);
+  const workerCount = Math.min(groups.length, os.availableParallelism());
+  let nextGroupIndex = 0;
+  async function runWorker() {
+    while (nextGroupIndex < groups.length) {
+      const index = nextGroupIndex;
+      nextGroupIndex += 1;
+      results[index] = await runGroup(groups[index]);
+    }
+  }
+  await Promise.all(Array.from({ length: workerCount }, () => runWorker()));
   const totals = results.reduce((sum, result) => {
     for (const key of ['tests', 'suites', 'pass', 'fail', 'cancelled', 'skipped', 'todo']) {
       sum[key] += result.summary[key];

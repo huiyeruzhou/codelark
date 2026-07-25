@@ -73,7 +73,7 @@ Windows 托管 runner 的版本可以随 GitHub 支持范围升级；发布 gate
 
 本地测试有四种强度，不应只统称为“单元测试”：
 
-默认 `npm test` 会把完整测试集拆成三个彼此隔离的进程组并行执行：`unit + workflow`、`mock-e2e + harness`、`local-e2e`。每组由 `run-tests.js` 创建独立的 HOME、CODELARK_HOME 和各 runtime home，组内仍保持 `--test-concurrency=1`，因此不会用共享配置目录换取虚假并发。结束时只打印各组摘要和日志目录；失败组额外打印尾部。需要复现旧串行顺序时使用 `npm run test:serial`；传入 `npm test -- --unit --workflow` 等 layer 参数时仍只启动所选单组。
+默认 `npm test` 会先按原生测试层隔离 `unit`、`workflow`、`mock-e2e`、`harness`、`local-e2e`；其中最长的 `unit` 和 `mock-e2e` 再使用 Node 原生 `--test-shard=1/2` 拆成两个文件 shard，共七个进程组，并按 `os.availableParallelism()` 限制同时运行数。每组由 `run-tests.js` 创建独立的 HOME、CODELARK_HOME、各 runtime home 和 `TMUX_TMPDIR`，shard 内仍保持 `--test-concurrency=1`，因此不会让同一测试文件、配置目录或真实 tmux server 内部并发。结束时只打印各组摘要和日志目录；失败组额外打印尾部。需要复现旧串行顺序时使用 `npm run test:serial`；传入 `npm test -- --unit --workflow` 等 layer 参数时仍只启动所选单组，也可显式追加 Node 原生 `--test-shard=N/M`（`1 ≤ N ≤ M`）。
 
 | 层次 | 回答的问题 | 典型特征 | 何时必须跑 |
 | --- | --- | --- | --- |
@@ -125,11 +125,11 @@ fake 测试也要遵守真实职责边界。`fake tmux` 只模拟 tmux transport
 | `codex-pty-provider.test.ts`、`codex-tmux-provider.test.ts` | Codex pty/tmux prompt 注入、启动参数、auto-enter、清理和事件输出。 |
 | `codex-session-index.test.ts`、`codex-session-mirror.test.ts` | Codex JSONL/session 索引读取、mirror cursor 对齐和事件重放。 |
 | `claude-tmux-provider.test.ts`、`claude-pty-provider.test.ts`、`claude-sdk-provider.test.ts`、`claude-session-jsonl.test.ts` | Claude tmux 启动/注入/mirror SSE、Claude pty 身份发现、Claude SDK helper、Claude JSONL session 读取。 |
-| `kimi-tmux-provider.test.ts`、`kimi-tmux-provider-local-process.e2e.test.ts` | Kimi tmux 启动、resume hint session id 解析、`wire.jsonl` session 索引、think/status、`Ctrl-S` steer、terminal 后 usage 的同 turn 归属、split-delta orphan usage 丢弃、injection reminder 过滤，以及 fake Kimi CLI 穿过真实 tmux 的 local-process smoke。 |
+| `kimi-tmux-provider.test.ts`、`kimi-tmux-provider-local-process.e2e.test.ts` | Kimi tmux 确定性 session 单次启动与跨 turn 复用、`wire.jsonl` session 索引、think/status、`Ctrl-S` steer、terminal 后 usage 的同 turn 归属、split-delta orphan usage 丢弃、injection reminder 过滤，以及 fake Kimi CLI 穿过真实 tmux 的 local-process smoke。 |
 | `sse-stream-decoder.test.ts` | SSE 文本流解码和事件边界。 |
 | `interactive-turn-runner.test.ts` | 一次 runtime turn 的主编排，含 stream、tool、context、goal、stop、mirror suppression 和基础对话 simulator。 |
 | `interactive-turn-sdk-conversation-engine.test.ts`、`interactive-turn-sdk-stream-events-controller.test.ts`、`interactive-turn-final-response-plan.test.ts`、`interactive-turn-terminal-finalization-controller.test.ts` | SDK conversation 内联附件/tool 展开、stream event 控制、最终回复计划和终端 provider finalization。 |
-| `real-codex-pty-provider.e2e.test.ts`、`real-codex-tmux-provider.e2e.test.ts`、`real-claude-pty-provider.e2e.test.ts`、`kimi-tmux-provider-local-process.e2e.test.ts` | 隔离 home 中启动真实 provider 进程或 fake backend，验证 pty/tmux/Claude Code 路径，以及 fake Kimi CLI 穿过真实 tmux 的 resume hint、wire mirror 和 `Ctrl-S` steer。 |
+| `real-codex-pty-provider.e2e.test.ts`、`real-codex-tmux-provider.e2e.test.ts`、`real-claude-pty-provider.e2e.test.ts`、`kimi-tmux-provider-local-process.e2e.test.ts` | 隔离 home 中启动真实 provider 进程或 fake backend，验证 pty/tmux/Claude Code 路径，以及 fake Kimi CLI 穿过真实 tmux 的单进程 session 生命周期、wire mirror 和 `Ctrl-S` steer。 |
 
 ### 交付、流式、mirror 和用户可见渲染
 

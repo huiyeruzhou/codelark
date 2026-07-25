@@ -9,10 +9,12 @@ const runtimeHome = path.join(tempHome, 'runtime-home');
 const codexHome = path.join(tempHome, 'codex-home');
 const claudeHome = path.join(tempHome, 'claude-home');
 const kimiHome = path.join(tempHome, 'kimi-home');
+const tmuxTempDir = path.join(tempHome, 'tmux');
 fs.mkdirSync(runtimeHome, { recursive: true });
 fs.mkdirSync(codexHome, { recursive: true });
 fs.mkdirSync(claudeHome, { recursive: true });
 fs.mkdirSync(kimiHome, { recursive: true });
+fs.mkdirSync(tmuxTempDir, { recursive: true });
 
 const testsDir = path.join(process.cwd(), 'src', '__tests__');
 
@@ -38,6 +40,19 @@ const layerFilters = new Map([
 ]);
 
 const requestedLayers = process.argv.slice(2).filter((arg) => layerFilters.has(arg));
+const shardArgs = process.argv.slice(2).filter((arg) => arg === '--test-shard' || arg.startsWith('--test-shard='));
+if (shardArgs.length > 1) {
+  console.error(`Expected one test shard, received: ${shardArgs.join(', ')}`);
+  process.exit(1);
+}
+const requestedShard = shardArgs[0];
+const shardMatch = requestedShard?.match(/^--test-shard=(\d+)\/(\d+)$/u);
+const shardIndex = Number(shardMatch?.[1] || 0);
+const shardTotal = Number(shardMatch?.[2] || 0);
+if (requestedShard && (!shardMatch || shardIndex < 1 || shardTotal < 1 || shardIndex > shardTotal)) {
+  console.error(`Invalid test shard: ${requestedShard}. Expected --test-shard=N/M with 1 <= N <= M.`);
+  process.exit(1);
+}
 const testFiles = discoverTestFiles(testsDir)
   .sort()
   .filter((file) => requestedLayers.length === 0 || requestedLayers.some((arg) => file.startsWith(layerFilters.get(arg))));
@@ -93,6 +108,7 @@ child = spawn(
     '--import',
     'tsx',
     '--test-timeout=15000',
+    ...(requestedShard ? [requestedShard] : []),
     ...testFiles,
   ],
   {
@@ -106,6 +122,7 @@ child = spawn(
       CODEX_HOME: codexHome,
       CODELARK_CLAUDE_HOME: claudeHome,
       KIMI_CODE_HOME: kimiHome,
+      TMUX_TMPDIR: tmuxTempDir,
     },
   },
 );
