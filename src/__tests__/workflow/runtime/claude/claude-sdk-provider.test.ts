@@ -30,16 +30,13 @@ async function withEnvOverride<T>(
 }
 
 describe('ClaudeSdkProvider helpers', () => {
-  it('launches Windows command shims through cmd without shell-mode argument interpolation', () => {
+  it('passes start as a native argument without shell-mode interpolation', () => {
+    assert.deepEqual(buildClaudeCodeRouterStartInvocation('C:\\Program Files\\ccr.cmd'), {
+      command: 'C:\\Program Files\\ccr.cmd',
+      args: ['start'],
+    });
     assert.deepEqual(
-      buildClaudeCodeRouterStartInvocation('C:\\Program Files\\ccr.cmd', 'win32', 'C:\\Windows\\cmd.exe'),
-      {
-        command: 'C:\\Windows\\cmd.exe',
-        args: ['/d', '/s', '/c', 'call', 'C:\\Program Files\\ccr.cmd', 'start'],
-      },
-    );
-    assert.deepEqual(
-      buildClaudeCodeRouterStartInvocation('/usr/local/bin/ccr', 'linux'),
+      buildClaudeCodeRouterStartInvocation('/usr/local/bin/ccr'),
       { command: '/usr/local/bin/ccr', args: ['start'] },
     );
   });

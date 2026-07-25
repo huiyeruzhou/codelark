@@ -884,21 +884,24 @@ describe('codex-tmux-provider', () => {
     const readyPath = path.join(tempDir, 'ready');
     const outputPath = path.join(tempDir, 'output.hex');
     const scriptPath = path.join(tempDir, 'capture-stdin.cjs');
-    const expectedHex = Buffer.from('hello').toString('hex') + '1b0d' + Buffer.from('world').toString('hex') + '0d';
-    const expectedLength = expectedHex.length / 2;
+    const expectedBytes = process.platform === 'win32'
+      ? Buffer.from('hello\x1b[13;3~world\r')
+      : Buffer.from('hello\x1b\rworld\r');
+    const expectedNewlineCount = process.platform === 'win32' ? 1 : 2;
 
     fs.writeFileSync(scriptPath, [
       "const fs = require('node:fs');",
       `const readyPath = ${JSON.stringify(readyPath)};`,
       `const outputPath = ${JSON.stringify(outputPath)};`,
-      `const expectedLength = ${expectedLength};`,
+      `const expectedNewlineCount = ${expectedNewlineCount};`,
       'const chunks = [];',
       'process.stdin.setRawMode(true);',
       'process.stdin.resume();',
       "fs.writeFileSync(readyPath, '1');",
       "process.stdin.on('data', (chunk) => {",
       '  chunks.push(...chunk);',
-      '  if (chunks.length >= expectedLength) {',
+      '  const newlineCount = chunks.filter((byte) => byte === 10 || byte === 13).length;',
+      '  if (newlineCount >= expectedNewlineCount) {',
       "    fs.writeFileSync(outputPath, Buffer.from(chunks).toString('hex'));",
       '    process.exit(0);',
       '  }',
@@ -924,8 +927,8 @@ describe('codex-tmux-provider', () => {
       await injectPromptIntoTmuxPane(`${sessionName}:0.0`, 'hello\nworld');
       assert.equal(await waitForFile(outputPath), true, 'capture process should write received bytes');
 
-      const receivedHex = fs.readFileSync(outputPath, 'utf-8').trim();
-      assert.equal(receivedHex, expectedHex);
+      const receivedBytes = Buffer.from(fs.readFileSync(outputPath, 'utf-8').trim(), 'hex');
+      assert.deepEqual(receivedBytes, expectedBytes);
     } finally {
       await execFileAsync('tmux', ['kill-session', '-t', sessionName]).catch(() => undefined);
       fs.rmSync(tempDir, { recursive: true, force: true });
@@ -996,7 +999,7 @@ describe('codex-tmux-provider', () => {
       await injectPromptIntoTmuxPane(`${sessionName}:0.0`, longPrompt);
       assert.equal(await waitForFile(outputPath, 12_000), true, 'capture process should write received bytes');
 
-      const received = fs.readFileSync(outputPath, 'utf-8').replace(/\x1B\[4~/g, '');
+      const received = fs.readFileSync(outputPath, 'utf-8').replace(/\x1B(?:\[4~|\[F)/g, '');
       assert.equal(received, longPrompt);
     } finally {
       await execFileAsync('tmux', ['kill-session', '-t', sessionName]).catch(() => undefined);

@@ -23,6 +23,7 @@ import {
   quoteCommandLineArg,
 } from './shell-snapshot.js';
 import { resolveCodexCliExecutable } from './cli-executable.js';
+import { readPathEnv, writeCanonicalPathEnv } from '../path-env.js';
 import { tmuxCore, type TmuxCore, type TmuxSendAction } from '../../bridge/tmux/core.js';
 import {
   sendRuntimeTmuxInput,
@@ -634,7 +635,7 @@ export function buildCodexTuiEnv(sourceEnv: NodeJS.ProcessEnv = process.env): Re
   for (const [key, value] of Object.entries(sourceEnv)) {
     if (value !== undefined) env[key] = value;
   }
-  env.PATH = prependLarkCliRuntimeBin(env.PATH);
+  writeCanonicalPathEnv(env, prependLarkCliRuntimeBin(readPathEnv(env)));
   return env;
 }
 

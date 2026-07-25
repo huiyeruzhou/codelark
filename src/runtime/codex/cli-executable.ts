@@ -4,6 +4,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { readPathEnv } from '../path-env.js';
+
 export interface ResolveCodexCliExecutableOptions {
   env?: NodeJS.ProcessEnv;
   platform?: NodeJS.Platform;
@@ -92,13 +94,6 @@ function pathDelimiterForPlatform(platform: NodeJS.Platform): string {
 
 function pathModuleForPlatform(platform: NodeJS.Platform): typeof path.win32 | typeof path.posix {
   return platform === 'win32' ? path.win32 : path.posix;
-}
-
-function pathValueFromEnv(env: NodeJS.ProcessEnv, platform: NodeJS.Platform): string {
-  if (env.PATH !== undefined) return env.PATH;
-  if (platform !== 'win32') return '';
-  const pathEntry = Object.entries(env).find(([key]) => key.toLowerCase() === 'path');
-  return pathEntry?.[1] || '';
 }
 
 function executableNames(command: string, platform: NodeJS.Platform): string[] {
@@ -218,7 +213,7 @@ export function resolveCliExecutable(options: ResolveCliExecutableOptions): stri
     return override;
   }
 
-  const pathValue = pathValueFromEnv(env, platform);
+  const pathValue = readPathEnv(env, platform);
   const entries = pathValue.split(pathDelimiterForPlatform(platform)).filter(Boolean);
   const names = executableNames(options.command, platform);
 

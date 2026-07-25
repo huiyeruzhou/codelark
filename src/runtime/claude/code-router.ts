@@ -90,12 +90,8 @@ async function isClaudeCodeRouterRunning(command: string, env: Record<string, st
 
 export function buildClaudeCodeRouterStartInvocation(
   command: string,
-  platform: NodeJS.Platform = process.platform,
-  comspec = process.env.ComSpec || process.env.COMSPEC || 'cmd.exe',
 ): { command: string; args: string[] } {
-  return platform === 'win32'
-    ? { command: comspec, args: ['/d', '/s', '/c', 'call', command, 'start'] }
-    : { command, args: ['start'] };
+  return { command, args: ['start'] };
 }
 
 async function startClaudeCodeRouter(command: string, env: Record<string, string>): Promise<void> {
@@ -106,13 +102,20 @@ async function startClaudeCodeRouter(command: string, env: Record<string, string
       1_000,
     );
     const invocation = buildClaudeCodeRouterStartInvocation(command);
-    const child = spawn(invocation.command, invocation.args, {
-      env,
-      detached: true,
-      stdio: 'ignore',
-      ...WINDOWS_HIDE,
-    });
-    child.unref();
+    if (process.platform === 'win32') {
+      await execFileAsync(invocation.command, invocation.args, {
+        env,
+        timeout: timeoutMs,
+        ...WINDOWS_HIDE,
+      });
+    } else {
+      const child = spawn(invocation.command, invocation.args, {
+        env,
+        detached: true,
+        stdio: 'ignore',
+      });
+      child.unref();
+    }
     const deadline = Date.now() + timeoutMs;
     while (Date.now() < deadline) {
       if (await isClaudeCodeRouterRunning(command, env)) return;
