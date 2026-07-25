@@ -120,8 +120,19 @@ jobs:
         run: npm run typecheck
 
       - name: Test unit and workflow suites
+        if: matrix.os != 'windows'
         timeout-minutes: 20
         run: npm test -- --parallel --unit --workflow
+
+      - name: Test Windows unit suites
+        if: matrix.os == 'windows'
+        timeout-minutes: 10
+        run: npm test -- --parallel --unit
+
+      - name: Test Windows runtime-sensitive workflows
+        if: matrix.os == 'windows'
+        timeout-minutes: 10
+        run: node scripts/run-tests.js --windows-runtime
 
       - name: Build
         run: npm run build

@@ -64,7 +64,7 @@ CODELARK_SETUP_WIZARD_REAL_E2E=1 npm run real:setup-wizard:e2e -- \
 GitHub Actions 把“完整回归”和“真实平台依赖 smoke”分开：Linux job 运行完整测试、文档构建和打包检查；跨平台 matrix 验证用户实际会走到的原生终端路径，不用 Linux mock 代替操作系统行为。
 
 - macOS 26 arm64 安装 Homebrew tmux，验证 `tmux -V` 和 session 的创建、查询、名称读取、清理，再运行 typecheck、unit/workflow、build、pack 和 CLI smoke。
-- Windows x64 job 使用原生 Windows runner，通过 WinGet 安装 psmux，验证同一组 `tmux.exe` session 生命周期，再运行同一组 Node.js 24 检查。psmux 走 ConPTY，不经过 WSL。
+- Windows x64 job 使用原生 Windows runner，通过 WinGet 安装 psmux，验证同一组 `tmux.exe` session 生命周期，再运行 typecheck、完整 unit、Windows runtime-sensitive workflow、build、pack 和 CLI smoke。runtime-sensitive 层覆盖真实 psmux/Codex、Claude、Kimi 和 service-manager；平台无关的 command workflow 已由 Linux/macOS 双重覆盖，不在 Windows 重复数百次 Bash fake 冷启动。psmux 走 ConPTY，不经过 WSL。
 - matrix job 不等于真实 Codex/Claude/Kimi 或真实飞书 E2E；provider TUI、CardKit 客户端和用户可见行为仍按下文对应层级补验。
 
 Windows 托管 runner 的版本可以随 GitHub 支持范围升级；发布 gate 关注的是 x64 Node.js、WinGet、原生进程/PATH、ConPTY/psmux 这条用户路径，而不是把某个 runner 标签宣传成桌面 Windows 版本。
