@@ -518,18 +518,18 @@ export function scriptedKimiLifecycleAndSteerIssues(input: ScriptedKimiLifecycle
   if (launches.length === 0) {
     issues.push(`No scripted Kimi launch records found at ${launchLogPath}.`);
   }
-  const deterministicLaunches = launches.filter((launch) => (
-    launch.resumed === true
+  const freshLaunches = launches.filter((launch) => (
+    launch.resumed === false
       && Array.isArray(launch.argv)
-      && launch.argv[0] === '-r'
-      && launch.argv[1] === input.sessionId
+      && !launch.argv.includes('-r')
+      && launch.argv.includes('-y')
   ));
-  if (deterministicLaunches.length !== 1) {
-    issues.push(`Scripted Kimi expected one initial "kimi -r ${input.sessionId}" launch; observed ${deterministicLaunches.length}.`);
+  if (freshLaunches.length !== 1) {
+    issues.push(`Scripted Kimi expected one initial fresh "kimi -y" launch; observed ${freshLaunches.length}.`);
   }
-  const freshLaunches = launches.filter((launch) => launch.resumed === false);
-  if (freshLaunches.length > 0) {
-    issues.push(`Scripted Kimi unexpectedly started ${freshLaunches.length} disposable session(s) before the deterministic launch.`);
+  const resumedLaunches = launches.filter((launch) => launch.resumed === true);
+  if (resumedLaunches.length > 0) {
+    issues.push(`Scripted Kimi unexpectedly resumed ${resumedLaunches.length} session(s) during fresh startup.`);
   }
   if (input.cwd && launches.length > 0 && !launches.some((launch) => launch.cwd === input.cwd)) {
     issues.push(`Scripted Kimi launch cwd never matched ${input.cwd}.`);

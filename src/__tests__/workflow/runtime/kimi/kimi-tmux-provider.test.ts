@@ -133,10 +133,10 @@ function actionNames(actions: TmuxSendAction[]): string[] {
 }
 
 describe('kimi-tmux-provider workflow', () => {
-  it('starts a fresh deterministic Kimi session once, steers with Ctrl-S, and streams wire records', async () => {
+  it('starts one fresh Kimi session without resume, discovers its id, steers with Ctrl-S, and streams wire records', async () => {
     const kimiHome = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-kimi-workflow-home-'));
     const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-kimi-workflow-cwd-'));
-    const sessionId = 'session_bridge-kimi-workflow';
+    const sessionId = 'session_aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
     const ensureCalls: string[] = [];
     let extendedKeysCalls = 0;
     const sendCalls: Array<{ target: string; actions: string[] }> = [];
@@ -158,7 +158,7 @@ describe('kimi-tmux-provider workflow', () => {
         tmuxExists = true;
         const commandText = Array.isArray(params.command) ? params.command.join(' ') : params.command || '';
         ensureCalls.push(commandText);
-        if (commandText.includes(`-r ${sessionId}`)) {
+        if (commandText.includes(' -y')) {
           resumedTuiReady = true;
           wirePath = createKimiSessionFile({ kimiHome, cwd, sessionId });
         }
@@ -167,7 +167,7 @@ describe('kimi-tmux-provider workflow', () => {
       async capturePane(target: string) {
         return {
           screen: resumedTuiReady
-            ? `Kimi Code\nSession: ${sessionId}\nReady for input`
+            ? `Kimi Code\nSession: ${sessionId}\n│ > \ncontext: 0% (0/256k)`
             : resumeHintReady
               ? `To resume this session: kimi -r ${sessionId}`
             : 'Kimi Code\nWaiting for input',
@@ -210,7 +210,8 @@ describe('kimi-tmux-provider workflow', () => {
 
       assert.equal(ensureCalls.length, 1);
       assert.equal(extendedKeysCalls, 1, 'fresh lifecycle enables Kimi-compatible Enter handling once');
-      assert.match(ensureCalls[0]!, new RegExp(`\\bkimi -r ${sessionId} -y\\b`));
+      assert.match(ensureCalls[0]!, /\bkimi -y\b/);
+      assert.doesNotMatch(ensureCalls[0]!, /\s-r\s/);
 
       assert.equal(sendCalls.some((call) => call.actions.join(',') === 'C-c,C-c'), false);
       assert.deepEqual(injectCalls, [{
@@ -272,7 +273,7 @@ describe('kimi-tmux-provider workflow', () => {
       async capturePane(target: string) {
         captureCount += 1;
         return {
-          screen: `Kimi Code\nSession: ${sessionId}\nReady for input`,
+          screen: `Kimi Code\nSession: ${sessionId}\n│ > \ncontext: 0% (0/256k)`,
           command: `tmux capture-pane -t ${target}`,
         };
       },
@@ -366,7 +367,7 @@ describe('kimi-tmux-provider workflow', () => {
       },
       async capturePane(target: string) {
         return {
-          screen: `Kimi Code\nSession: ${sessionId}\nReady for input`,
+          screen: `Kimi Code\nSession: ${sessionId}\n│ > \ncontext: 0% (0/256k)`,
           command: `tmux capture-pane -t ${target}`,
         };
       },

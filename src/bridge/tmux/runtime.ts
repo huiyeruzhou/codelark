@@ -549,7 +549,7 @@ function transitionRuntimeTmuxReadiness(
   );
 }
 
-function detectRuntimeTmuxPaneDead(screen: string | undefined): RuntimeTmuxPaneDead | undefined {
+export function detectRuntimeTmuxPaneDead(screen: string | undefined): RuntimeTmuxPaneDead | undefined {
   const line = (screen || '').split(/\r?\n/).find((candidate) => /Pane is dead \(status \d+/i.test(candidate));
   if (!line) return undefined;
   const statusMatch = line.match(/Pane is dead \(status (\d+)/i);

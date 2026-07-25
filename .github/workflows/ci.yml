@@ -1,5 +1,10 @@
 name: CI
 
+env:
+  CODELARK_CI_CODEX_VERSION: 0.145.0
+  CODELARK_CI_CLAUDE_VERSION: 2.1.220
+  CODELARK_CI_KIMI_VERSION: 0.29.1
+
 on:
   workflow_dispatch:
   pull_request:
@@ -27,6 +32,19 @@ jobs:
 
       - name: Configure CI tool shims
         run: node scripts/setup-ci-tool-shims.js
+
+      - name: Install tmux for real runtime lifecycle tests
+        run: sudo apt-get update && sudo apt-get install -y tmux
+
+      - name: Install real agent CLIs
+        run: npm install --global @openai/codex@${CODELARK_CI_CODEX_VERSION} @anthropic-ai/claude-code@${CODELARK_CI_CLAUDE_VERSION} @moonshot-ai/kimi-code@${CODELARK_CI_KIMI_VERSION}
+
+      - name: Smoke test real agent executables
+        run: node scripts/verify-ci-runtime-clis.js
+
+      - name: Test real agent tmux lifecycles with fake model proxies
+        timeout-minutes: 10
+        run: node scripts/run-real-runtime-e2e.js
 
       - name: Typecheck
         run: npm run typecheck
@@ -115,6 +133,17 @@ jobs:
           } finally {
             tmux kill-session -t codelark_ci_tmux 2>$null
           }
+
+      - name: Install real agent CLIs
+        shell: bash
+        run: npm install --global @openai/codex@${CODELARK_CI_CODEX_VERSION} @anthropic-ai/claude-code@${CODELARK_CI_CLAUDE_VERSION} @moonshot-ai/kimi-code@${CODELARK_CI_KIMI_VERSION}
+
+      - name: Smoke test real agent executables
+        run: node scripts/verify-ci-runtime-clis.js
+
+      - name: Test real agent tmux lifecycles with fake model proxies
+        timeout-minutes: 10
+        run: node scripts/run-real-runtime-e2e.js
 
       - name: Typecheck
         run: npm run typecheck

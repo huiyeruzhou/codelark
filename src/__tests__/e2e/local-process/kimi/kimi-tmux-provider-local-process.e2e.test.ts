@@ -87,7 +87,8 @@ fs.appendFileSync(path.join(kimiHome, 'session_index.jsonl'), JSON.stringify({
 }) + '\\n');
 
 process.stdout.write('Kimi Code fake local process\\n');
-if (resumed) process.stdout.write('Session: ' + sessionId + '\\n');
+process.stdout.write('Session: ' + sessionId + '\\n');
+process.stdout.write('│ > \\ncontext: 0% (0/256k)\\n');
 
 if (process.stdin.isTTY && process.stdin.setRawMode) process.stdin.setRawMode(true);
 process.stdin.resume();
@@ -126,8 +127,8 @@ setInterval(() => {}, 1000);
   return executablePath;
 }
 
-describe('Kimi tmux provider local-process smoke', () => {
-  it('drives and reuses one persistent Kimi-like TUI through tmux, wire mirror, and Ctrl-S steer', { timeout: 30_000 }, async (t: TestContext) => {
+describe('scripted Kimi-like tmux adapter fixture', () => {
+  it('drives and reuses a scripted wire producer through real tmux and Ctrl-S steer', { timeout: 30_000 }, async (t: TestContext) => {
     if (!(await tmuxAvailable())) {
       t.skip('tmux is not available');
       return;
@@ -184,8 +185,8 @@ describe('Kimi tmux provider local-process smoke', () => {
         .trim()
         .split(/\r?\n/)
         .map((line) => JSON.parse(line) as { argv: string[]; resumed: boolean });
-      assert.deepEqual(launches[0]?.argv.slice(0, 2), ['-r', sessionId]);
-      assert.equal(launches[0]?.resumed, true, 'provider should create the deterministic session in its first Kimi process');
+      assert.deepEqual(launches[0]?.argv, ['-y']);
+      assert.equal(launches[0]?.resumed, false, 'fresh Kimi startup must let Kimi Code create the session id');
 
       const live = await execFileAsync('tmux', ['has-session', '-t', tmuxSessionName])
         .then(() => true, () => false);

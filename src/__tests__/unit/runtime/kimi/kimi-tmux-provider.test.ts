@@ -18,7 +18,7 @@ import {
 } from '../../../../runtime/kimi/session-index.js';
 import { assertKimiLaunchAuthentication } from '../../../../runtime/kimi/auth.js';
 import {
-  kimiSessionIdForBridgeSession,
+  isKimiInputReadyScreen,
   parseKimiRuntimeErrorFromLog,
   parseKimiSessionIdFromScreen,
 } from '../../../../runtime/kimi/tmux-provider.js';
@@ -146,10 +146,21 @@ describe('Kimi tmux provider helpers', () => {
     );
   });
 
-  it('derives one stable Kimi session id from its BridgeSession', () => {
+  it('requires the active session, editor prompt, and context footer before treating Kimi as input-ready', () => {
+    const sessionId = 'session_734e073e-5199-49cf-a004-d27fefb8e2d1';
+    assert.equal(isKimiInputReadyScreen(`Session: ${sessionId}`, sessionId), false);
+    assert.equal(isKimiInputReadyScreen(`Session: ${sessionId}\n│ > `, sessionId), false);
     assert.equal(
-      kimiSessionIdForBridgeSession('734e073e-5199-49cf-a004-d27fefb8e2d1'),
-      'session_734e073e-5199-49cf-a004-d27fefb8e2d1',
+      isKimiInputReadyScreen(`Session: ${sessionId}\n│ > \ncontext: 0% (0/256k)`, sessionId),
+      true,
+    );
+    assert.equal(
+      isKimiInputReadyScreen(`Session: ${sessionId}\n│ > \ncontext: 0%`, sessionId),
+      true,
+    );
+    assert.equal(
+      isKimiInputReadyScreen(`Session: ${sessionId}\n│ > \ncontext: 0% (0/256k)`, 'session_other'),
+      false,
     );
   });
 

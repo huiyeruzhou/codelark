@@ -41,11 +41,9 @@ const layerFilters = new Map([
 const windowsRuntimeFiles = new Set([
   'src/__tests__/workflow/local-service/global-version-update-worker.test.ts',
   'src/__tests__/workflow/local-service/service-manager.test.ts',
-  'src/__tests__/workflow/runtime/claude/claude-pty-provider.test.ts',
   'src/__tests__/workflow/runtime/claude/claude-sdk-provider.test.ts',
   'src/__tests__/workflow/runtime/claude/claude-tmux-provider.test.ts',
   'src/__tests__/workflow/runtime/codex/codex-provider.test.ts',
-  'src/__tests__/workflow/runtime/codex/codex-pty-provider.test.ts',
   'src/__tests__/workflow/runtime/codex/codex-tmux-provider.test.ts',
   'src/__tests__/workflow/runtime/kimi/kimi-tmux-provider.test.ts',
 ]);

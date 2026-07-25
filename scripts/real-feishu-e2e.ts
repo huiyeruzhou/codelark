@@ -2370,7 +2370,8 @@ fs.appendFileSync(path.join(kimiHome, 'session_index.jsonl'), JSON.stringify({
 fs.appendFileSync(launchLogPath, JSON.stringify({ argv: process.argv.slice(2), resumed, cwd: process.cwd() }) + '\\n');
 
 process.stdout.write('Kimi Code scripted real Feishu E2E\\n');
-if (resumed) process.stdout.write('Session: ' + sessionId + '\\n');
+process.stdout.write('Session: ' + sessionId + '\\n');
+process.stdout.write('│ > \\ncontext: 0% (0/256k)\\n');
 if (process.stdin.isTTY && process.stdin.setRawMode) process.stdin.setRawMode(true);
 process.stdin.resume();
 
@@ -3867,7 +3868,7 @@ function scenarioSpecificChecks(
       name: 'basic_dialogue_scripted_kimi_lifecycle_and_ctrl_s',
       ok: kimiLifecycleAndSteerIssues.length === 0,
       detail: kimiLifecycleAndSteerIssues.length === 0
-        ? 'Observed one deterministic Kimi session launch, no disposable bootstrap process, and Ctrl-S steer.'
+        ? 'Observed one fresh Kimi launch without resume, no bootstrap restart, and Ctrl-S steer.'
         : kimiLifecycleAndSteerIssues.join('\n'),
     });
     const kimiRuntimeSlotIssues = scriptedKimiRuntimeSlotIssues({

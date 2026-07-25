@@ -29,7 +29,7 @@ function sleep(ms: number): Promise<void> {
 
 export async function commandAvailable(command: string, args: string[]): Promise<boolean> {
   try {
-    await execFileAsync(command, args);
+    await execFileAsync(command, args, { shell: process.platform === 'win32' });
     return true;
   } catch {
     return false;
@@ -199,6 +199,45 @@ function createChatCompletionsEventStreamPayload(model: string, responseText: st
   return chunks.map((chunk) => `data: ${JSON.stringify(chunk)}\n\n`).join('') + 'data: [DONE]\n\n';
 }
 
+function createAnthropicMessagesEventStreamPayload(model: string, responseText: string): string {
+  const messageId = `msg_clk_${Date.now()}`;
+  const events: unknown[] = [
+    {
+      type: 'message_start',
+      message: {
+        id: messageId,
+        type: 'message',
+        role: 'assistant',
+        model,
+        content: [],
+        stop_reason: null,
+        stop_sequence: null,
+        usage: { input_tokens: 1, output_tokens: 0 },
+      },
+    },
+    {
+      type: 'content_block_start',
+      index: 0,
+      content_block: { type: 'text', text: '' },
+    },
+    {
+      type: 'content_block_delta',
+      index: 0,
+      delta: { type: 'text_delta', text: responseText },
+    },
+    { type: 'content_block_stop', index: 0 },
+    {
+      type: 'message_delta',
+      delta: { stop_reason: 'end_turn', stop_sequence: null },
+      usage: { output_tokens: 4 },
+    },
+    { type: 'message_stop' },
+  ];
+  return events
+    .map((event) => `event: ${(event as { type: string }).type}\ndata: ${JSON.stringify(event)}\n\n`)
+    .join('');
+}
+
 export async function startLocalResponsesProxy(options: {
   responseText?: string;
   responseDelayMs?: number;
@@ -231,6 +270,47 @@ export async function startLocalResponsesProxy(options: {
         rawBody,
       };
       requests.push(recordedRequest);
+
+      if (req.method === 'POST' && req.url?.includes('/messages/count_tokens')) {
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ input_tokens: 1 }));
+        return;
+      }
+
+      if (req.method === 'POST' && /\/messages(?:\?|$)/u.test(req.url || '')) {
+        const model = typeof body === 'object'
+          && body !== null
+          && typeof (body as { model?: unknown }).model === 'string'
+          ? (body as { model: string }).model
+          : 'claude-sonnet-4-5';
+        const wantsStream = typeof body === 'object'
+          && body !== null
+          && (body as { stream?: unknown }).stream === true;
+        void (async () => {
+          if (responseDelayMs > 0) await sleep(responseDelayMs);
+          if (wantsStream) {
+            res.writeHead(200, {
+              'content-type': 'text/event-stream',
+              'cache-control': 'no-cache',
+              connection: 'keep-alive',
+            });
+            res.end(createAnthropicMessagesEventStreamPayload(model, responseText));
+            return;
+          }
+          res.writeHead(200, { 'content-type': 'application/json' });
+          res.end(JSON.stringify({
+            id: `msg_clk_${Date.now()}`,
+            type: 'message',
+            role: 'assistant',
+            model,
+            content: [{ type: 'text', text: responseText }],
+            stop_reason: 'end_turn',
+            stop_sequence: null,
+            usage: { input_tokens: 1, output_tokens: 4 },
+          }));
+        })();
+        return;
+      }
 
       if (req.method === 'POST' && req.url?.includes('/responses')) {
         if (options.errorWhenBodyIncludes && rawBody.includes(options.errorWhenBodyIncludes)) {

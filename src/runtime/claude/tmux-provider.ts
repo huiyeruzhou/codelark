@@ -55,7 +55,18 @@ interface ClaudeTmuxRunContext {
   emittedRecordSignatures: Set<string>;
   lastAssistantText: string;
   terminalSeen: boolean;
+  latestLifecycleTimestampMs: number | null;
   hasError: boolean;
+}
+
+function acceptClaudeLifecycleRecord(context: ClaudeTmuxRunContext, timestamp: string): boolean {
+  const timestampMs = Date.parse(timestamp);
+  if (!Number.isFinite(timestampMs)) return true;
+  if (context.latestLifecycleTimestampMs !== null && timestampMs < context.latestLifecycleTimestampMs) {
+    return false;
+  }
+  context.latestLifecycleTimestampMs = timestampMs;
+  return true;
 }
 
 function snapshotClaudeSessionFiles(cwd: string): SessionFileSnapshot {
@@ -107,7 +118,9 @@ function enqueueClaudeTmuxRecordAsSse(
 
   switch (record.type) {
     case 'task_started':
-      context.terminalSeen = false;
+      if (acceptClaudeLifecycleRecord(context, record.timestamp)) {
+        context.terminalSeen = false;
+      }
       break;
     case 'tool_started': {
       const toolId = record.toolId || record.signature;
@@ -145,6 +158,7 @@ function enqueueClaudeTmuxRecordAsSse(
       }
       break;
     case 'task_complete':
+      if (!acceptClaudeLifecycleRecord(context, record.timestamp)) break;
       if (record.content && record.content !== context.lastAssistantText) {
         context.lastAssistantText = record.content;
         controller.enqueue(sseEvent('text', record.content));
@@ -157,6 +171,7 @@ function enqueueClaudeTmuxRecordAsSse(
       }));
       break;
     case 'task_aborted':
+      if (!acceptClaudeLifecycleRecord(context, record.timestamp)) break;
       context.terminalSeen = true;
       context.hasError = true;
       controller.enqueue(sseEvent('error', record.content || 'Claude tmux task aborted.'));
@@ -268,6 +283,7 @@ export function streamClaudeTmuxTui(params: StreamChatParams): ReadableStream<st
           emittedRecordSignatures: new Set(),
           lastAssistantText: '',
           terminalSeen: false,
+          latestLifecycleTimestampMs: null,
           hasError: false,
         };
         const abortListener = () => {

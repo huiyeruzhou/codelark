@@ -10,6 +10,7 @@ import {
   sendRuntimeTmuxInput,
   transitionRuntimeTmuxInputState,
 } from '../../bridge/tmux/input-state-machine.js';
+import { detectRuntimeTmuxPaneDead } from '../../bridge/tmux/runtime.js';
 import {
   findKimiSessionFileById,
   readKimiSessionMirrorRecordDeltaByFilePath,
@@ -19,8 +20,9 @@ import { assertKimiLaunchAuthentication } from './auth.js';
 const DEFAULT_KIMI_POLL_INTERVAL_MS = 500;
 const DEFAULT_KIMI_SESSION_FILE_TIMEOUT_MS = 30_000;
 const DEFAULT_KIMI_OUTPUT_IDLE_TIMEOUT_MS = 120_000;
-const DEFAULT_KIMI_PROMPT_DELAY_MS = 800;
+const DEFAULT_KIMI_PROMPT_DELAY_MS = 0;
 const DEFAULT_KIMI_SESSION_ID_TIMEOUT_MS = 30_000;
+const DEFAULT_KIMI_INPUT_READY_TIMEOUT_MS = 30_000;
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -55,10 +57,6 @@ export function kimiTmuxSessionName(sessionId: string): string {
   return `clk-kimi-${sessionId}`;
 }
 
-export function kimiSessionIdForBridgeSession(bridgeSessionId: string): string {
-  return `session_${bridgeSessionId}`;
-}
-
 function shellQuote(value: string): string {
   if (/^[A-Za-z0-9_@%+=:,./-]+$/.test(value)) return value;
   return `'${value.replace(/'/g, "'\\''")}'`;
@@ -77,11 +75,15 @@ function kimiCommandEnvironmentPrefix(): string {
   return assignments.length > 0 ? `${assignments.join(' ')} ` : '';
 }
 
-export function parseKimiSessionIdFromScreen(screenText: string): string | null {
-  const normalized = screenText
+function normalizeKimiScreenText(screenText: string): string {
+  return screenText
     .replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, '')
     .replace(/\r\n/g, '\n')
     .replace(/\r/g, '\n');
+}
+
+export function parseKimiSessionIdFromScreen(screenText: string): string | null {
+  const normalized = normalizeKimiScreenText(screenText);
   const resumeMatch = normalized.match(/To\s+resume\s+this\s+session:\s*kimi\s+-r\s+(session_[A-Za-z0-9-]+)/i);
   if (resumeMatch?.[1]) return resumeMatch[1];
   const headerMatch = normalized.match(/\bSession:\s*(session_[A-Za-z0-9-]+)/i);
@@ -89,11 +91,44 @@ export function parseKimiSessionIdFromScreen(screenText: string): string | null 
 }
 
 function parseKimiActiveSessionIdFromScreen(screenText: string): string | null {
-  const normalized = screenText
+  const normalized = normalizeKimiScreenText(screenText);
+  return normalized.match(/\bSession:\s*(session_[A-Za-z0-9-]+)/i)?.[1] || null;
+}
+
+export function isKimiInputReadyScreen(
+  screenText: string,
+  expectedSessionId?: string,
+): boolean {
+  const normalized = normalizeKimiScreenText(screenText);
+  const activeSessionId = parseKimiActiveSessionIdFromScreen(normalized);
+  if (!activeSessionId || (expectedSessionId && activeSessionId !== expectedSessionId)) return false;
+  const hasInputPrompt = /(?:^|\n)\s*(?:[│|]\s*)?>\s/u.test(normalized);
+  const hasContextFooter = /\bcontext:\s*\d+%/iu.test(normalized);
+  return hasInputPrompt && hasContextFooter;
+}
+
+function kimiStartupErrorFromScreen(screenText: string): string | null {
+  const lines = screenText
     .replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, '')
     .replace(/\r\n/g, '\n')
-    .replace(/\r/g, '\n');
-  return normalized.match(/\bSession:\s*(session_[A-Za-z0-9-]+)/i)?.[1] || null;
+    .replace(/\r/g, '\n')
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean);
+  const start = lines.findIndex((line) => /^error:/i.test(line));
+  if (start < 0) return null;
+  return lines
+    .slice(start)
+    .filter((line) => !/^See log:/i.test(line) && !/^Pane is dead /i.test(line))
+    .join(' ');
+}
+
+function assertKimiPaneAlive(screenText: string): void {
+  const paneDead = detectRuntimeTmuxPaneDead(screenText);
+  if (!paneDead) return;
+  const status = paneDead.status === undefined ? '' : ` (exit ${paneDead.status})`;
+  const detail = kimiStartupErrorFromScreen(screenText);
+  throw new Error(`Kimi Code exited before session initialization${status}${detail ? `: ${detail}` : '.'}`);
 }
 
 function recordToolName(record: BridgeMirrorRecord): string {
@@ -107,6 +142,7 @@ interface KimiTuiRunContext {
   sessionId?: string;
   cwd?: string;
   sessionFilePath?: string;
+  lastScreen?: string;
   sessionLogFilePath?: string;
   nextOffset: number;
   nextLogOffset: number;
@@ -376,7 +412,7 @@ async function launchTmuxKimiSession(
   await tmuxCore.ensureDetachedSession({
     name: sessionName,
     cwd: params.workingDirectory,
-    command,
+    command: tmuxCommand,
     recreate: true,
   });
 }
@@ -409,6 +445,8 @@ async function waitForKimiSessionIdFromTmux(context: KimiTuiRunContext): Promise
   const startedAtMs = Date.now();
   while (Date.now() - startedAtMs <= timeoutMs) {
     const capture = await tmuxCore.capturePane(context.targetPane, 160);
+    context.lastScreen = capture.screen;
+    assertKimiPaneAlive(capture.screen);
     const parsed = parseKimiActiveSessionIdFromScreen(capture.screen);
     if (parsed) {
       if (expectedSessionId && parsed !== expectedSessionId) {
@@ -440,6 +478,7 @@ async function waitForKimiSessionFileBySessionId(context: KimiTuiRunContext): Pr
     if (summary?.filePath) {
       context.sessionFilePath = summary.filePath;
       context.sessionId = summary.sessionId;
+      context.cwd = summary.cwd || context.cwd;
       context.nextOffset = fs.statSync(summary.filePath).size;
       console.log('[kimi-tmux] Session file resolved:', {
         session_id: context.sessionId,
@@ -448,9 +487,43 @@ async function waitForKimiSessionFileBySessionId(context: KimiTuiRunContext): Pr
       });
       return;
     }
+    const capture = await tmuxCore.capturePane(context.targetPane, 160);
+    context.lastScreen = capture.screen;
+    assertKimiPaneAlive(capture.screen);
     await sleep(pollIntervalMs);
   }
   throw new Error(`Timed out waiting for Kimi session file for ${context.sessionId}.`);
+}
+
+async function waitForKimiInputReady(context: KimiTuiRunContext): Promise<void> {
+  const timeoutMs = parsePositiveIntEnv(
+    'CODELARK_KIMI_TMUX_INPUT_READY_TIMEOUT_MS',
+    DEFAULT_KIMI_INPUT_READY_TIMEOUT_MS,
+    1_000,
+  );
+  const pollIntervalMs = parsePositiveIntEnv(
+    'CODELARK_KIMI_TMUX_POLL_INTERVAL_MS',
+    DEFAULT_KIMI_POLL_INTERVAL_MS,
+    50,
+  );
+  const startedAtMs = Date.now();
+  let lastScreen = context.lastScreen || '';
+  if (isKimiInputReadyScreen(lastScreen, context.sessionId)) return;
+  while (Date.now() - startedAtMs <= timeoutMs) {
+    const capture = await tmuxCore.capturePane(context.targetPane, 160);
+    lastScreen = capture.screen;
+    context.lastScreen = lastScreen;
+    assertKimiPaneAlive(lastScreen);
+    if (isKimiInputReadyScreen(lastScreen, context.sessionId)) return;
+    await sleep(pollIntervalMs);
+  }
+  const visibleTail = normalizeKimiScreenText(lastScreen)
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .slice(-6)
+    .join(' · ');
+  throw new Error(`Timed out waiting for Kimi Code input readiness${visibleTail ? `: ${visibleTail}` : '.'}`);
 }
 
 export interface KimiTmuxInputSession {
@@ -503,16 +576,9 @@ export async function ensureKimiTmuxInputSession(
 
   if (!inspection.exists) {
     assertKimiLaunchAuthentication(params.model);
-    const launchSessionId = params.kimiSessionId || kimiSessionIdForBridgeSession(params.sessionId);
-    context.sessionId = launchSessionId;
-    await launchTmuxKimiSession(sessionName, {
-      ...params,
-      kimiSessionId: launchSessionId,
-    });
+    await launchTmuxKimiSession(sessionName, params);
     await ensureKimiTmuxInputKeys();
-    if (params.kimiSessionId) {
-      await waitForKimiSessionIdFromTmux(context);
-    }
+    await waitForKimiSessionIdFromTmux(context);
   } else if (inspection.needsReadiness || !context.sessionId) {
     await ensureKimiTmuxInputKeys();
     await waitForKimiSessionIdFromTmux(context);
@@ -520,6 +586,9 @@ export async function ensureKimiTmuxInputSession(
 
   if (!context.sessionFilePath) {
     await waitForKimiSessionFileBySessionId(context);
+  }
+  if (!inspection.exists || inspection.needsReadiness) {
+    await waitForKimiInputReady(context);
   }
   initializeKimiSessionLogCursor(context);
   if (!context.sessionId || !context.sessionFilePath) {
@@ -596,6 +665,9 @@ export function streamKimiTmuxTui(params: StreamChatParams): ReadableStream<stri
             runtime: 'kimi',
             sessionName,
             send: async () => {
+              // Enter queues or starts the prompt. Ctrl-S then upgrades a queued
+              // prompt to Kimi's mid-turn steer semantics; it is a no-op when
+              // the prompt already started from an idle editor.
               await tmuxCore.injectPromptIntoPane(targetPane, params.prompt);
               await tmuxCore.sendActions(targetPane, [{ type: 'key', key: 'C-s' }], { delayMs: 100 });
             },

@@ -558,13 +558,13 @@ describe('unit::real-e2e-dump::live-log-scoping', () => {
     );
   });
 
-  it('validates one deterministic scripted Kimi launch and Ctrl-S steer evidence', () => {
+  it('validates one fresh scripted Kimi launch and Ctrl-S steer evidence', () => {
     const kimiHome = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-real-e2e-scripted-kimi-'));
     try {
       const sessionId = 'session_scripted_kimi_unit';
       const cwd = '/tmp/scripted-kimi-unit';
       fs.writeFileSync(path.join(kimiHome, 'scripted-kimi-launches.jsonl'), [
-        JSON.stringify({ argv: ['-r', sessionId], resumed: true, cwd }),
+        JSON.stringify({ argv: ['-y'], resumed: false, cwd }),
         '',
       ].join('\n'));
       fs.writeFileSync(path.join(kimiHome, 'scripted-kimi-keys.log'), [
@@ -575,19 +575,19 @@ describe('unit::real-e2e-dump::live-log-scoping', () => {
       assert.deepEqual(scriptedKimiLifecycleAndSteerIssues({ kimiHome, sessionId, cwd }), []);
       assert.deepEqual(
         scriptedKimiLifecycleAndSteerIssues({ kimiHome, sessionId: 'session_wrong', cwd }),
-        ['Scripted Kimi expected one initial "kimi -r session_wrong" launch; observed 0.'],
+        [],
       );
     } finally {
       fs.rmSync(kimiHome, { recursive: true, force: true });
     }
   });
 
-  it('reports disposable scripted Kimi startup and missing steer evidence', () => {
+  it('reports resumed scripted Kimi startup and missing steer evidence', () => {
     const kimiHome = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-real-e2e-scripted-kimi-missing-'));
     try {
       fs.writeFileSync(path.join(kimiHome, 'scripted-kimi-launches.jsonl'), `${JSON.stringify({
-        argv: [],
-        resumed: false,
+        argv: ['-r', 'session_missing', '-y'],
+        resumed: true,
         cwd: '/tmp/other',
       })}\n`);
       fs.writeFileSync(path.join(kimiHome, 'scripted-kimi-keys.log'), '03\n');
@@ -597,8 +597,8 @@ describe('unit::real-e2e-dump::live-log-scoping', () => {
         sessionId: 'session_missing',
         cwd: '/tmp/expected',
       }), [
-        'Scripted Kimi expected one initial "kimi -r session_missing" launch; observed 0.',
-        'Scripted Kimi unexpectedly started 1 disposable session(s) before the deterministic launch.',
+        'Scripted Kimi expected one initial fresh "kimi -y" launch; observed 0.',
+        'Scripted Kimi unexpectedly resumed 1 session(s) during fresh startup.',
         'Scripted Kimi launch cwd never matched /tmp/expected.',
         'Scripted Kimi must not terminate its initial TUI to discover a session id; observed 1 Ctrl-C byte(s).',
         'Scripted Kimi did not observe Ctrl-S steer after prompt delivery.',

@@ -212,7 +212,8 @@ fs.appendFileSync(path.join(kimiHome, 'session_index.jsonl'), JSON.stringify({
 }) + '\\n');
 
 process.stdout.write('Kimi Code fake mock-app\\n');
-if (resumed) process.stdout.write('Session: ' + sessionId + '\\n');
+process.stdout.write('Session: ' + sessionId + '\\n');
+process.stdout.write('│ > \\ncontext: 0% (0/256k)\\n');
 
 if (process.stdin.isTTY && process.stdin.setRawMode) process.stdin.setRawMode(true);
 process.stdin.resume();
@@ -280,6 +281,7 @@ const resumeIndex = process.argv.indexOf('-r');
 const resumed = resumeIndex >= 0 && process.argv[resumeIndex + 1] === sessionId;
 fs.appendFileSync(launchLogPath, JSON.stringify({ argv: process.argv.slice(2), resumed, cwd: process.cwd() }) + '\\n');
 process.stdout.write('Kimi Code fake resume\\nSession: ' + sessionId + '\\n');
+process.stdout.write('│ > \\ncontext: 0% (0/256k)\\n');
 
 if (process.stdin.isTTY && process.stdin.setRawMode) process.stdin.setRawMode(true);
 process.stdin.resume();
@@ -2775,7 +2777,7 @@ provider = "tmux"
         workDir,
         name: 'runtime-kimi-tmux-auto-init',
       });
-      const expectedKimiSessionId = `session_${binding.bridgeSessionId}`;
+      const expectedKimiSessionId = kimiSessionId;
       store.updateSession(binding.bridgeSessionId, {
         runtime: {
           activeRuntime: 'kimi',
@@ -2822,8 +2824,8 @@ provider = "tmux"
         .trim()
         .split(/\r?\n/)
         .map((line) => JSON.parse(line) as { argv: string[]; resumed: boolean; cwd: string });
-      assert.deepEqual(launches[0]?.argv.slice(0, 2), ['-r', expectedKimiSessionId]);
-      assert.equal(launches[0]?.resumed, true);
+      assert.deepEqual(launches[0]?.argv, ['-y']);
+      assert.equal(launches[0]?.resumed, false);
       assert.equal(launches[0]?.cwd, workDir);
 
       await _testOnly.handleMessage(adapter, inboundMessage(address, 'runtime command kimi follow-up', 'incoming-kimi-runtime-message-follow-up'));
@@ -2928,7 +2930,7 @@ provider = "tmux"
 
       const currentBinding = store.getChannelChat(address.channelType, address.chatId);
       assert.ok(currentBinding);
-      const expectedKimiSessionId = `session_${currentBinding.bridgeSessionId}`;
+      const expectedKimiSessionId = kimiSessionId;
       assert.notEqual(currentBinding.bridgeSessionId, binding.bridgeSessionId);
       const configuredSession = store.getSession(currentBinding.bridgeSessionId);
       assert.equal(configuredSession?.runtime?.activeRuntime, 'kimi');
@@ -2984,8 +2986,8 @@ provider = "tmux"
         .trim()
         .split(/\r?\n/)
         .map((line) => JSON.parse(line) as { argv: string[]; resumed: boolean; cwd: string });
-      assert.deepEqual(launches[0]?.argv.slice(0, 2), ['-r', expectedKimiSessionId]);
-      assert.equal(launches[0]?.resumed, true);
+      assert.deepEqual(launches[0]?.argv, ['-y']);
+      assert.equal(launches[0]?.resumed, false);
       assert.equal(launches[0]?.cwd, workDir);
     } finally {
       const activeBinding = store.getChannelChat(address.channelType, address.chatId);
