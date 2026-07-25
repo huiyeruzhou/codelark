@@ -50,7 +50,8 @@ async function build(entryPoint, outfile) {
 await build('src/entrypoints/daemon.ts', 'dist/daemon.mjs');
 await build('src/operator-ui/server.ts', 'dist/ui-server.mjs');
 await build('src/entrypoints/cli.ts', 'dist/cli.mjs');
+await build('src/entrypoints/update-worker.ts', 'dist/update-global-codelark.mjs');
 await mkdir('dist', { recursive: true });
 await copyFile('src/configuration/defaults.toml', 'dist/defaults.toml');
 
-console.log('Built dist/daemon.mjs, dist/ui-server.mjs, dist/cli.mjs, dist/defaults.toml');
+console.log('Built dist/daemon.mjs, dist/ui-server.mjs, dist/cli.mjs, dist/update-global-codelark.mjs, dist/defaults.toml');

@@ -39,6 +39,7 @@ const layerFilters = new Map([
   ['--harness', path.join('src', '__tests__', 'harness') + path.sep],
 ]);
 const windowsRuntimeFiles = new Set([
+  'src/__tests__/workflow/local-service/global-version-update-worker.test.ts',
   'src/__tests__/workflow/local-service/service-manager.test.ts',
   'src/__tests__/workflow/runtime/claude/claude-pty-provider.test.ts',
   'src/__tests__/workflow/runtime/claude/claude-sdk-provider.test.ts',
@@ -137,6 +138,7 @@ child = spawn(
       CODELARK_CLAUDE_HOME: claudeHome,
       KIMI_CODE_HOME: kimiHome,
       TMUX_TMPDIR: tmuxTempDir,
+      CODELARK_DISABLE_DAILY_VERSION_CHECK: '1',
     },
   },
 );

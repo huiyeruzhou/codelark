@@ -15,6 +15,7 @@ CodeLark 为 `~/.codelark` 下的本地数据文件发布 JSON Schema。入口�
 | 运行时文件 | Schema | 说明 |
 | --- | --- | --- |
 | `config.json` | `schemas/config.v1.schema.json` | 结构化配置，版本字段是 `schemaVersion: 1`。 |
+| `version-check.json` | `schemas/version-check.v1.schema.json` | 每日 npm 版本检查状态：最新版本、忽略到的版本、最后检查日期；bridge 启动时读取一次并在进程内缓存。 |
 | `data/sessions.json` | `schemas/data/sessions.v1.schema.json` | 以 Bridge session id 为 key 的 map；保存当前 BridgeSession 的 runtime-local identity，例如 `runtime.codex.threadId`、`runtime.claude.sessionId/cwd` 或 `runtime.kimi.sessionId/cwd`。 |
 | `data/channel-chats.json` | `schemas/data/channel-chats.v1.schema.json` | 以 ChannelChat id 为 key 的 map；使用 `bridgeSessionId` 指向 session，禁止保存底层 runtime identity 和旧 binding 运行时字段。 |
 | `data/channel-default-targets.json` | `schemas/data/channel-default-targets.v1.schema.json` | 以 channel instance id 为 key 的默认目标 map；使用 `bridgeSessionId`，启动时会丢弃缺少它的旧记录。 |
@@ -23,6 +24,8 @@ CodeLark 为 `~/.codelark` 下的本地数据文件发布 JSON Schema。入口�
 | `data/offsets.json` | `schemas/data/string-map.v1.schema.json` | 通道消费偏移 map。 |
 | `data/dedup.json` | `schemas/data/number-map.v1.schema.json` | 去重时间戳 map。 |
 | `data/audit.jsonl` | `schemas/data/audit.v1.schema.json` | 审计记录，当前新记录按 JSONL 追加；schema 描述单条记录形状和旧 `audit.json` 数组形状。 |
+
+`version-check.json` 不属于用户配置，也不参与配置迁移。缺失或损坏时按三个 `null` 字段重新开始；同一自然日的检查日期会在访问 npm registry 前先在内存中 claim，避免当天第一批并发消息重复查询。registry 查询失败也会写入当天日期，下一条消息不会立即重试。
 
 ## 版本策略
 

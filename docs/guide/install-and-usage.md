@@ -10,6 +10,16 @@ npm install -g codelark
 codelark run
 ```
 
+## 自动检查更新
+
+Bridge 每个本地自然日最多检查一次 npm 最新版本。检查由当天收到的第一条飞书消息触发，但版本查询和提示卡投递都在消息处理链路之外执行，不会延迟这条消息进入会话。
+
+- “立即更新并重启”会在后台执行全局 npm 安装，然后停止并重新启动 CodeLark；它不执行 git pull、项目构建或测试。
+- “忽略此版本”会停止提示这个版本，直到 npm 发布更高版本。
+- 卡片保留可复制的手动命令：`npm install -g --yes codelark && codelark stop && codelark start`。
+
+检查状态保存在 `~/.codelark/version-check.json`，Bridge 启动时读取一次，之后在进程内缓存；不会因为每条消息反复读取文件。自动更新日志写在 `~/.codelark/logs/version-update-*.log`。
+
 ## 前置条件
 
 - 本机已经可以运行 `codelark`。

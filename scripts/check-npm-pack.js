@@ -53,6 +53,7 @@ const forbiddenMatches = files.filter((file) =>
 );
 const requiredFiles = new Set([
   'dist/defaults.toml',
+  'dist/update-global-codelark.mjs',
 ]);
 const missingRequiredFiles = [...requiredFiles].filter((file) => !files.includes(file));
 

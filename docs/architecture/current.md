@@ -51,6 +51,10 @@ flowchart LR
 
 普通 IM 文本进入后端前，先被归一成平台无关的内部消息。后端接着要解决的核心问题不是“调用哪个函数”，而是“这条消息要不要等别人”。有些消息必须保持顺序，比如同一个工作会话里的两个 prompt；有些消息应该马上处理，比如 `/stop`；有些消息可以和 prompt 同时跑，比如看状态、看 screen、跑 shell。lane 就是 CodeLark 用来表达这组等待关系的名字。
 
+每日版本检查也不进入这些 lane。Bridge 成功启动 adapter、但尚未开启入站消费循环时，先把 `~/.codelark/version-check.json` 读入进程缓存。当天第一条非 callback 消息只 fire-and-forget 发起 npm 查询；host manager 不等待查询或提示卡投递。进程会在请求 registry 前 claim 本地日期，查询失败也会持久化当天日期，避免并发首条消息或后续消息形成检查风暴。
+
+版本提示与更新执行保持分层：host manager 只分流普通消息和 `clk-version-update:*` callback；update runtime 负责状态验证、卡片与按钮生命周期；独立 Node worker 负责 `npm install -g --yes` 和 stop/start。按钮回调先立即 ACK 并替换卡片，再派发 detached worker；worker 不执行 repo hot update 的 pull/build/test。
+
 ```mermaid
 flowchart TD
   inbound[平台事件 / InboundMessage]

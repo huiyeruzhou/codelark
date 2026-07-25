@@ -93,6 +93,28 @@ describe('published JSON schemas', () => {
     assert.deepEqual(parsed.$defs.bridgeControlConfig.properties.defaultCodexProvider.enum, ['sdk', 'pty', 'tmux']);
   });
 
+  it('documents the cached daily version check state', () => {
+    const manifest = readJson(path.join(schemasDir, 'manifest.json')) as {
+      files?: Array<{ id?: string; path?: string; schema?: string }>;
+    };
+    assert.deepEqual(
+      manifest.files?.find((entry) => entry.id === 'version-check.v1'),
+      {
+        id: 'version-check.v1',
+        path: 'version-check.json',
+        schema: 'schemas/version-check.v1.schema.json',
+        kind: 'state',
+        version: 1,
+        versionField: null,
+        current: true,
+        missingFile: 'empty-object',
+      },
+    );
+    const schema = readJson(path.join(schemasDir, 'version-check.v1.schema.json')) as any;
+    assert.deepEqual(schema.required, ['latestVersion', 'ignoredUntilVersion', 'lastCheckedDate']);
+    assert.equal(schema.additionalProperties, false);
+  });
+
   it('documents the BridgeSession runtime storage schema', () => {
     const sessionsSchema = readJson(path.join(schemasDir, 'data', 'sessions.v1.schema.json')) as any;
     const bridgeSession = sessionsSchema.$defs.bridgeSession;

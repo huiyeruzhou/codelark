@@ -222,6 +222,12 @@ import { consumePendingClearConfirmation } from '../command/clear-confirmations.
 import { consumePendingTakeoverConfirmation } from '../command/takeover-confirmations.js';
 import { consumeStartupNoticeTarget } from './startup-notice-target.js';
 import { applyUnifiedTurnStatusNote } from '../turn/unified-turn-state.js';
+import { resolveInstalledCodelarkVersion } from '../update/installed-version.js';
+import { createDailyVersionChecker } from '../update/version-check.js';
+import {
+  createDailyVersionUpdateRuntime,
+  type DailyVersionUpdateRuntime,
+} from '../update/runtime.js';
 
 const GLOBAL_KEY = '__bridge_manager__';
 const DANGLING_MIRROR_THREAD_RETRY_LIMIT = 3;
@@ -1412,6 +1418,7 @@ interface BridgeManagerState extends BridgeAdapterRuntimeState, BridgeInteractiv
   thenTaskTimers: Map<string, NodeJS.Timeout>;
   thenSessionQueues: Set<string>;
   autoStartChecked: boolean;
+  dailyVersionUpdateRuntime: DailyVersionUpdateRuntime | null;
 }
 
 interface EveryTaskRuntimeState {
@@ -1453,6 +1460,7 @@ function getState(): BridgeManagerState {
       queuedCounts: new Map(),
       sessionLocks: new Map(),
       autoStartChecked: false,
+      dailyVersionUpdateRuntime: null,
     };
   }
   // Backfill sessionLocks for states created before this field existed
@@ -2232,6 +2240,14 @@ export async function start(): Promise<void> {
     state.adapters.clear();
     state.adapterMeta.clear();
     return;
+  }
+
+  if (!state.dailyVersionUpdateRuntime) {
+    const currentVersion = resolveInstalledCodelarkVersion();
+    state.dailyVersionUpdateRuntime = createDailyVersionUpdateRuntime({
+      currentVersion,
+      checker: createDailyVersionChecker({ currentVersion }),
+    });
   }
 
   // Mark running BEFORE starting consumer loops — runAdapterLoop checks
@@ -3663,6 +3679,10 @@ async function handleMessage(
 
   // Handle callback queries (permission buttons and interactive command cards)
   if (msg.callbackData) {
+    if (getState().dailyVersionUpdateRuntime?.handleCallback(adapter, msg)) {
+      ack();
+      return;
+    }
     const selectedEveryTaskId = parseEveryTaskSelectCallback(msg.callbackData);
     if (selectedEveryTaskId !== undefined) {
       if (!selectedEveryTaskId) {
@@ -3925,6 +3945,8 @@ async function handleMessage(
     ack();
     return;
   }
+
+  getState().dailyVersionUpdateRuntime?.onFirstUserMessage(adapter, msg);
 
   const rawText = msg.text.trim();
   const hasAttachments = msg.attachments && msg.attachments.length > 0;
@@ -4460,6 +4482,7 @@ function resetStateForTests(): void {
   state.mirrorSyncInFlight = false;
   state.claudeMirrorSyncInFlight = false;
   state.kimiMirrorSyncInFlight = false;
+  state.dailyVersionUpdateRuntime = null;
   if (state.reconcileTimer) {
     clearInterval(state.reconcileTimer);
     state.reconcileTimer = null;

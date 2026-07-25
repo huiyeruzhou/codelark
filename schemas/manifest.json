@@ -38,6 +38,16 @@
       "missingFile": "empty-object"
     },
     {
+      "id": "version-check.v1",
+      "path": "version-check.json",
+      "schema": "schemas/version-check.v1.schema.json",
+      "kind": "state",
+      "version": 1,
+      "versionField": null,
+      "current": true,
+      "missingFile": "empty-object"
+    },
+    {
       "id": "data.channel-chats.v1",
       "path": "data/channel-chats.json",
       "schema": "schemas/data/channel-chats.v1.schema.json",
