@@ -9,6 +9,7 @@ import { promisify } from 'node:util';
 
 import {
   buildCodexTuiShellCommand,
+  buildCodexTuiTmuxCommand,
   buildCodexTuiArgs,
   buildCodexTuiEnv,
   buildCodexTuiSelectionChoiceActions,
@@ -56,6 +57,12 @@ async function waitForFile(filePath: string, timeoutMs = 5_000): Promise<boolean
     await new Promise((resolve) => setTimeout(resolve, 50));
   }
   return false;
+}
+
+function tmuxLaunchCommandArgs(args: string[]): string[] {
+  return process.platform === 'win32'
+    ? args
+    : [args.map((value) => quoteCommandLineArg(value)).join(' ')];
 }
 
 describe('codex-tmux-provider', () => {
@@ -833,11 +840,12 @@ describe('codex-tmux-provider', () => {
       '',
     ].join('\n'), 'utf-8');
 
-    const shellCommand = buildCodexTuiShellCommand(process.execPath, [
+    const commandArgs = [
       scriptPath,
       outputPath,
       'arg with spaces',
-    ], {
+    ];
+    const shellCommand = buildCodexTuiTmuxCommand(process.execPath, commandArgs, {
       CODELARK_TMUX_COMMAND_TEST: envValue,
       PATH: process.env.PATH || '',
     });
@@ -849,7 +857,7 @@ describe('codex-tmux-provider', () => {
         '-s',
         sessionName,
         '--',
-        shellCommand,
+        ...(Array.isArray(shellCommand) ? shellCommand : [shellCommand]),
       ]);
 
       assert.equal(await waitForFile(outputPath), true, 'tmux shell command should write output');
@@ -909,7 +917,7 @@ describe('codex-tmux-provider', () => {
         '-s',
         sessionName,
         '--',
-        `${quoteCommandLineArg(process.execPath)} ${quoteCommandLineArg(scriptPath)}`,
+        ...tmuxLaunchCommandArgs([process.execPath, scriptPath]),
       ]);
 
       assert.equal(await waitForFile(readyPath), true, 'capture process should become ready');
@@ -981,7 +989,7 @@ describe('codex-tmux-provider', () => {
         '-s',
         sessionName,
         '--',
-        [process.execPath, scriptPath, readyPath, outputPath].map((value) => quoteCommandLineArg(value)).join(' '),
+        ...tmuxLaunchCommandArgs([process.execPath, scriptPath, readyPath, outputPath]),
       ]);
 
       assert.equal(await waitForFile(readyPath), true, 'capture process should become ready');

@@ -18,7 +18,9 @@ import {
 } from '../options.js';
 import {
   buildShellSnapshotLaunchCommand,
+  buildShellSnapshotLaunchArgs,
   ensureShellSnapshot,
+  quoteCommandLineArg,
 } from './shell-snapshot.js';
 import { resolveCodexCliExecutable } from './cli-executable.js';
 import { tmuxCore, type TmuxCore, type TmuxSendAction } from '../../bridge/tmux/core.js';
@@ -653,6 +655,19 @@ export function buildCodexTuiShellCommand(
   return buildShellSnapshotLaunchCommand(command, args, snapshot, options);
 }
 
+export function buildCodexTuiTmuxCommand(
+  command: string,
+  args: string[],
+  env: Record<string, string>,
+  options: { stderrLogPath?: string } = {},
+): string | string[] {
+  const snapshot = ensureShellSnapshot(env);
+  const launchArgs = buildShellSnapshotLaunchArgs(command, args, snapshot, options);
+  return process.platform === 'win32'
+    ? launchArgs
+    : launchArgs.map((value) => quoteCommandLineArg(value)).join(' ');
+}
+
 function toApprovalPolicy(permissionMode?: string): string {
   switch (permissionMode) {
     case 'never': return 'never';
@@ -1013,7 +1028,7 @@ async function launchTmuxCodexSession(
   const env = buildCodexTuiEnv();
   const codexArgs = buildCodexTuiArgs(params, imagePaths);
   const executable = resolveCodexCliExecutable({ env });
-  const command = buildCodexTuiShellCommand(executable, codexArgs, env);
+  const command = buildCodexTuiTmuxCommand(executable, codexArgs, env);
 
   console.log('[codex-tmux] Codex TUI start:', {
     bridge_session_id: params.sessionId,

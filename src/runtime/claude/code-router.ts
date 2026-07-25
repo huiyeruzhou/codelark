@@ -94,7 +94,7 @@ export function buildClaudeCodeRouterStartInvocation(
   comspec = process.env.ComSpec || process.env.COMSPEC || 'cmd.exe',
 ): { command: string; args: string[] } {
   return platform === 'win32'
-    ? { command: comspec, args: ['/d', '/s', '/c', `"${command}" start`] }
+    ? { command: comspec, args: ['/d', '/s', '/c', 'call', command, 'start'] }
     : { command, args: ['start'] };
 }
 

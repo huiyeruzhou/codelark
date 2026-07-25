@@ -355,11 +355,12 @@ async function launchTmuxKimiSession(
   const executable = resolveKimiCliExecutable();
   const args = buildKimiArgs(params);
   const command = `${kimiCommandEnvironmentPrefix()}${commandPreview(executable, args)}`;
+  const tmuxCommand = process.platform === 'win32' ? [executable, ...args] : command;
 
   console.log('[kimi-tmux] Kimi TUI start:', {
     bridge_session_id: params.sessionId,
     tmux_session: sessionName,
-    command,
+    command: tmuxCommand,
     prompt_chars: params.prompt.length,
     cwd: params.workingDirectory || null,
     resume_session_id: params.kimiSessionId || null,

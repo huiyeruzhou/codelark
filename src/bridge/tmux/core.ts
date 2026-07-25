@@ -48,7 +48,7 @@ export interface TmuxEnsureSessionResult {
 export interface TmuxStartDetachedSessionParams {
   name: string;
   cwd?: string;
-  command?: string;
+  command?: string | string[];
   recreate?: boolean;
 }
 
@@ -102,7 +102,9 @@ function trimCapturedScreen(screen: string, lines: number): string {
 function buildNewSessionArgs(params: TmuxStartDetachedSessionParams): string[] {
   const args: string[] = ['new-session', '-d', '-s', params.name];
   if (params.cwd) args.push('-c', params.cwd);
-  if (params.command) args.push('--', params.command);
+  if (params.command) {
+    args.push('--', ...(Array.isArray(params.command) ? params.command : [params.command]));
+  }
   return args;
 }
 

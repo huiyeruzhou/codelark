@@ -6,6 +6,7 @@ const logPath = process.env.TMUX_FAKE_LOG;
 const statePath = process.env.TMUX_FAKE_STATE_PATH || `${logPath}.sessions`;
 const fakeCodexRoot = process.env.CODELARK_FAKE_CODEX_TUI_STATE_DIR || '';
 const fakeCodexControl = process.env.CODELARK_FAKE_CODEX_TUI_CONTROL || '';
+const fakeCodexControlScript = process.env.CODELARK_FAKE_CODEX_TUI_CONTROL_SCRIPT || '';
 
 if (logPath) fs.appendFileSync(logPath, `${args.join(' ')}\n`);
 
@@ -50,7 +51,9 @@ function optionValue(option) {
 
 function runFakeCodex(controlArgs) {
   if (!fakeCodexControl) return;
-  const result = process.platform === 'win32'
+  const result = fakeCodexControlScript
+    ? spawnSync(process.execPath, [fakeCodexControlScript, ...controlArgs], { env: process.env, stdio: 'ignore' })
+    : process.platform === 'win32'
     ? spawnSync(process.env.ComSpec || process.env.COMSPEC || 'cmd.exe', [
         '/d', '/s', '/c', `"${fakeCodexControl}" ${controlArgs.map((value) => `"${String(value).replace(/"/g, '""')}"`).join(' ')}`,
       ], { env: process.env, stdio: 'ignore' })

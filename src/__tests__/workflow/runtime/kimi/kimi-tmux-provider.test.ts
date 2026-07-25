@@ -156,8 +156,9 @@ describe('kimi-tmux-provider workflow', () => {
       },
       async ensureDetachedSession(params) {
         tmuxExists = true;
-        ensureCalls.push(params.command || '');
-        if (params.command?.includes(`-r ${sessionId}`)) {
+        const commandText = Array.isArray(params.command) ? params.command.join(' ') : params.command || '';
+        ensureCalls.push(commandText);
+        if (commandText.includes(`-r ${sessionId}`)) {
           resumedTuiReady = true;
           wirePath = createKimiSessionFile({ kimiHome, cwd, sessionId });
         }
@@ -265,7 +266,7 @@ describe('kimi-tmux-provider workflow', () => {
       },
       async ensureDetachedSession(params) {
         tmuxExists = true;
-        ensureCalls.push(params.command || '');
+        ensureCalls.push(Array.isArray(params.command) ? params.command.join(' ') : params.command || '');
         return { existed: false, command: `tmux new-session -d -s ${params.name}`, commands: [] };
       },
       async capturePane(target: string) {

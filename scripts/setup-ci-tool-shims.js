@@ -59,6 +59,12 @@ function installShims() {
     'utf-8',
   );
   fs.appendFileSync(githubPath, `${binDir}${os.EOL}`);
+  if (process.env.GITHUB_ENV) {
+    const codexExecutable = process.platform === 'win32'
+      ? path.join(binDir, 'codex.cmd')
+      : unixShim;
+    fs.appendFileSync(process.env.GITHUB_ENV, `CODELARK_CODEX_CLI_PATH=${codexExecutable}${os.EOL}`);
+  }
   process.stdout.write(`Installed CI tool shims in ${binDir}\n`);
 }
 

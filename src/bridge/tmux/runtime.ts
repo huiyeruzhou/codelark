@@ -7,6 +7,7 @@ import {
   buildCodexTuiArgs,
   buildCodexTuiEnv,
   buildCodexTuiShellCommand,
+  buildCodexTuiTmuxCommand,
   getCodexTuiSelectionPromptUiDefaultChoice,
   parseCodexTuiSelectionPrompt,
   parsePositiveIntEnv,
@@ -24,8 +25,9 @@ import {
 } from '../../runtime/claude/pty-provider.js';
 import { prepareClaudeCodeRouterEnv } from '../../runtime/claude/code-router.js';
 import {
-  buildShellSnapshotLaunchCommand,
+  buildShellSnapshotLaunchArgs,
   ensureShellSnapshot,
+  quoteCommandLineArg,
 } from '../../runtime/codex/shell-snapshot.js';
 import type { StreamChatParams } from '../../runtime/contracts.js';
 import {
@@ -288,6 +290,7 @@ export function claudeTmuxSessionName(sessionId: string): string {
 export function buildCodexResumeTmuxCommand(params: StartCodexResumeTmuxSessionParams): {
   tmuxArgs: string[];
   codexCommand: string;
+  tmuxCommand: string | string[];
   launchLogPath: string;
 } {
   const codexArgs = buildCodexTuiArgs({
@@ -308,12 +311,13 @@ export function buildCodexResumeTmuxCommand(params: StartCodexResumeTmuxSessionP
   const executable = resolveCodexCliExecutable({ env });
   const launchLogPath = codexLaunchLogPath(params.sessionName);
   const codexCommand = buildCodexTuiShellCommand(executable, codexArgs, env, { stderrLogPath: launchLogPath });
+  const tmuxCommand = buildCodexTuiTmuxCommand(executable, codexArgs, env, { stderrLogPath: launchLogPath });
   const tmuxArgs = ['new-session', '-d', '-s', params.sessionName];
   if (params.workingDirectory) {
     tmuxArgs.push('-c', params.workingDirectory);
   }
-  tmuxArgs.push('--', codexCommand);
-  return { tmuxArgs, codexCommand, launchLogPath };
+  tmuxArgs.push('--', ...(Array.isArray(tmuxCommand) ? tmuxCommand : [tmuxCommand]));
+  return { tmuxArgs, codexCommand, tmuxCommand, launchLogPath };
 }
 
 function sleep(ms: number): Promise<void> {
@@ -863,7 +867,7 @@ export async function startCodexResumeTmuxSession(
     'starting_tmux',
     'starting or replacing the provider-owned Codex tmux session',
   );
-  const { codexCommand, launchLogPath } = buildCodexResumeTmuxCommand(params);
+  const { codexCommand, tmuxCommand, launchLogPath } = buildCodexResumeTmuxCommand(params);
   prepareLaunchLog(launchLogPath);
   const commands: string[] = [];
   const selectionPrompts: RuntimeTmuxSelectionPrompt[] = [];
@@ -875,7 +879,7 @@ export async function startCodexResumeTmuxSession(
     const started = await core.ensureDetachedSession({
       name: params.sessionName,
       cwd: params.workingDirectory,
-      command: codexCommand,
+      command: tmuxCommand,
       recreate: true,
     });
     finalStarted = started;
@@ -998,9 +1002,12 @@ function commandPreview(command: string, args: string[]): string {
   return [command, ...args].map(posixShellQuote).join(' ');
 }
 
-function buildClaudeTmuxShellCommand(command: string, args: string[], env: Record<string, string>): string {
+function buildClaudeTmuxShellCommand(command: string, args: string[], env: Record<string, string>): string | string[] {
   const snapshot = ensureShellSnapshot(env);
-  return buildShellSnapshotLaunchCommand(command, args, snapshot);
+  const launchArgs = buildShellSnapshotLaunchArgs(command, args, snapshot);
+  return process.platform === 'win32'
+    ? launchArgs
+    : launchArgs.map((value) => quoteCommandLineArg(value)).join(' ');
 }
 
 export async function startClaudeTmuxSession(

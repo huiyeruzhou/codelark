@@ -92,8 +92,9 @@ describe('codex tmux runtime', () => {
       },
       listSessions: async () => ({ sessions: [], command: 'tmux list-sessions' }),
       ensureDetachedSession: async ({ command }) => {
-        assert.match(command || '', /2> /);
-        launchLogPath = (command || '').match(/ 2> ([^;]+)/)?.[1] || '';
+        const commandText = Array.isArray(command) ? command.join(' ') : command || '';
+        assert.match(commandText, /2> /);
+        launchLogPath = commandText.match(/ 2> ([^;]+)/)?.[1] || '';
         assert.match(launchLogPath, /codelark-codex-tmux-.*-codex_fail\.log$/);
         fs.writeFileSync(launchLogPath, 'bash: codex: command not found\n[codelark] process exited with status 127\n', 'utf-8');
         return { existed: false, command: 'tmux new-session -d -s codex_fail', commands: ['tmux new-session -d -s codex_fail'] };

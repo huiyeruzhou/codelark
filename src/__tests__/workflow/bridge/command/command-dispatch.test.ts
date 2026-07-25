@@ -681,7 +681,7 @@ esac
   return { binDir, logPath };
 }
 
-function installFakeCodexTui(): { binDir: string; codexPath: string; logPath: string; stateDir: string } {
+function installFakeCodexTui(): { binDir: string; codexPath: string; scriptPath: string; logPath: string; stateDir: string } {
   const binDir = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-fake-codex-tui-'));
   const stateDir = path.join(binDir, 'state');
   const logPath = path.join(binDir, 'codex-tui.log');
@@ -918,13 +918,14 @@ process.exit(2);
     : `#!/usr/bin/env sh\nexec "${process.execPath}" "${scriptPath}" "$@"\n`, 'utf-8');
   fs.chmodSync(scriptPath, 0o755);
   fs.chmodSync(codexPath, 0o755);
-  return { binDir, codexPath, logPath, stateDir };
+  return { binDir, codexPath, scriptPath, logPath, stateDir };
 }
 
 const FAKE_CODEX_TUI_ENV_KEYS = [
   'CODELARK_CODEX_CLI_PATH',
   'CODELARK_FAKE_CODEX_TUI_STATE_DIR',
   'CODELARK_FAKE_CODEX_TUI_CONTROL',
+  'CODELARK_FAKE_CODEX_TUI_CONTROL_SCRIPT',
   'CODELARK_FAKE_CODEX_TUI_LOG',
   'CODELARK_FAKE_CODEX_TUI_UPDATE_PROMPT_ONCE',
   'CODELARK_FAKE_CODEX_TUI_UPDATE_CONTINUE_FOOTER',
@@ -946,7 +947,7 @@ function restoreProcessEnv(snapshot: Record<string, string | undefined>): void {
 }
 
 function configureFakeCodexTuiEnv(
-  fakeCodex: { codexPath: string; logPath: string; stateDir: string },
+  fakeCodex: { codexPath: string; scriptPath: string; logPath: string; stateDir: string },
   options: {
     updatePromptOnce?: boolean;
     continueFooter?: boolean;
@@ -959,6 +960,7 @@ function configureFakeCodexTuiEnv(
   process.env.CODELARK_CODEX_CLI_PATH = fakeCodex.codexPath;
   process.env.CODELARK_FAKE_CODEX_TUI_STATE_DIR = fakeCodex.stateDir;
   process.env.CODELARK_FAKE_CODEX_TUI_CONTROL = fakeCodex.codexPath;
+  process.env.CODELARK_FAKE_CODEX_TUI_CONTROL_SCRIPT = fakeCodex.scriptPath;
   process.env.CODELARK_FAKE_CODEX_TUI_LOG = fakeCodex.logPath;
   if (options.updatePromptOnce) process.env.CODELARK_FAKE_CODEX_TUI_UPDATE_PROMPT_ONCE = '1';
   else delete process.env.CODELARK_FAKE_CODEX_TUI_UPDATE_PROMPT_ONCE;

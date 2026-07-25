@@ -290,7 +290,17 @@ export function buildShellSnapshotLaunchCommand(
   options: ShellLaunchCommandOptions = {},
 ): string {
   const platform = options.platform || process.platform;
-  const quoteHostArg = (value: string) => quoteCommandLineArg(value, platform);
+  return buildShellSnapshotLaunchArgs(command, args, snapshot, options)
+    .map((value) => quoteCommandLineArg(value, platform))
+    .join(' ');
+}
+
+export function buildShellSnapshotLaunchArgs(
+  command: string,
+  args: string[],
+  snapshot: ShellSnapshot,
+  options: ShellLaunchCommandOptions = {},
+): string[] {
   switch (snapshot.shell.type) {
     case 'bash':
     case 'zsh':
@@ -305,7 +315,7 @@ export function buildShellSnapshotLaunchCommand(
             'exit "$status"',
           ].join('; ')
         : `. ${posixShellQuote(snapshot.path)}; exec ${commandText}`;
-      return [snapshot.shell.path, '-c', script].map(quoteHostArg).join(' ');
+      return [snapshot.shell.path, '-c', script];
     }
     case 'powershell': {
       const commandText = [command, ...args].map(powershellSingleQuote).join(' ');
@@ -319,14 +329,14 @@ export function buildShellSnapshotLaunchCommand(
             'exit $status',
           ].join('; ')
         : `. ${powershellSingleQuote(snapshot.path)}; & ${commandText}`;
-      return [snapshot.shell.path, '-NoProfile', '-Command', script].map(quoteHostArg).join(' ');
+      return [snapshot.shell.path, '-NoProfile', '-Command', script];
     }
     case 'cmd': {
       const commandText = [command, ...args].map(cmdArgQuote).join(' ');
       const script = options.stderrLogPath
         ? `call ${cmdArgQuote(snapshot.path)} && ${commandText} 2> ${cmdArgQuote(options.stderrLogPath)}`
         : `call ${cmdArgQuote(snapshot.path)} && ${commandText}`;
-      return [snapshot.shell.path, '/c', script].map(quoteHostArg).join(' ');
+      return [snapshot.shell.path, '/c', script];
     }
   }
 }

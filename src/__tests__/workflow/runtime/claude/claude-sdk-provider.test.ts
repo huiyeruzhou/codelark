@@ -35,7 +35,7 @@ describe('ClaudeSdkProvider helpers', () => {
       buildClaudeCodeRouterStartInvocation('C:\\Program Files\\ccr.cmd', 'win32', 'C:\\Windows\\cmd.exe'),
       {
         command: 'C:\\Windows\\cmd.exe',
-        args: ['/d', '/s', '/c', '"C:\\Program Files\\ccr.cmd" start'],
+        args: ['/d', '/s', '/c', 'call', 'C:\\Program Files\\ccr.cmd', 'start'],
       },
     );
     assert.deepEqual(
