@@ -1,3 +1,4 @@
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 
@@ -7,9 +8,20 @@ import type { ChannelAddress } from '../domain/channel.js';
 const STARTUP_TARGET_PATH = path.join(CODELARK_HOME, 'data', 'startup-notice-target.json');
 const STARTUP_TARGET_TTL_MS = 30 * 60 * 1000;
 
+export interface VersionUpdateStartupOperation {
+  kind: 'version-update';
+  version: string;
+  updateKey: string;
+  updateMessageId?: string;
+}
+
+export type StartupNoticeOperation = VersionUpdateStartupOperation;
+
 export interface StartupNoticeTarget {
+  id?: string;
   address: ChannelAddress;
   sessionId?: string;
+  operation?: StartupNoticeOperation;
   createdAt: number;
 }
 
@@ -17,16 +29,40 @@ function ensureParentDir(filePath: string): void {
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
 }
 
-export function saveStartupNoticeTarget(address: ChannelAddress, sessionId?: string): void {
+export function saveStartupNoticeTarget(
+  address: ChannelAddress,
+  sessionId?: string,
+  operation?: StartupNoticeOperation,
+): StartupNoticeTarget {
   const record: StartupNoticeTarget = {
+    id: crypto.randomUUID(),
     address,
     sessionId,
+    operation,
     createdAt: Date.now(),
   };
   ensureParentDir(STARTUP_TARGET_PATH);
   const tmpPath = `${STARTUP_TARGET_PATH}.tmp`;
   fs.writeFileSync(tmpPath, JSON.stringify(record, null, 2), 'utf-8');
   fs.renameSync(tmpPath, STARTUP_TARGET_PATH);
+  return record;
+}
+
+export function clearStartupNoticeTarget(expectedId?: string): boolean {
+  if (expectedId) {
+    try {
+      const parsed = JSON.parse(fs.readFileSync(STARTUP_TARGET_PATH, 'utf-8')) as StartupNoticeTarget;
+      if (parsed.id !== expectedId) return false;
+    } catch {
+      return false;
+    }
+  }
+  try {
+    fs.rmSync(STARTUP_TARGET_PATH);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 export function consumeStartupNoticeTarget(): StartupNoticeTarget | null {

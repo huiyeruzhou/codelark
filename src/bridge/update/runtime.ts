@@ -1,6 +1,12 @@
 import type { BaseChannelAdapter } from '../../channels/contracts.js';
 import { enqueueBridgeNotice } from '../../channels/delivery/feedback.js';
 import type { InboundMessage, OutboundRichCard } from '../../domain/index.js';
+import { sanitizeInput } from '../../shared/security/validators.js';
+import { startDetachedLogMonitor } from '../background/detached-log-monitor.js';
+import {
+  clearStartupNoticeTarget,
+  saveStartupNoticeTarget,
+} from '../startup-notice-target.js';
 import {
   compareVersions,
   normalizeVersion,
@@ -14,6 +20,10 @@ import {
 
 export const VERSION_UPDATE_CALLBACK_PREFIX = 'clk-version-update:';
 export const MANUAL_VERSION_UPDATE_COMMAND = 'npm install -g --yes codelark && codelark stop && codelark start';
+export const VERSION_UPDATE_LOG_REFRESH_INTERVAL_SECONDS = 3;
+const VERSION_UPDATE_LOG_TAIL_LINES = 100;
+const VERSION_UPDATE_LOG_MAX_CHARS = 24_000;
+const VERSION_UPDATE_LOG_MONITOR_MAX_MS = 30 * 60 * 1000;
 
 type VersionUpdateAction = 'update' | 'ignore';
 
@@ -31,6 +41,7 @@ export interface DailyVersionUpdateRuntimeDeps {
   checker: DailyVersionChecker;
   currentVersion: string | null;
   dispatchUpdate?: GlobalUpdateDispatcher;
+  updateMonitorRefreshIntervalMs?: number;
 }
 
 export function buildVersionUpdateCallbackData(action: VersionUpdateAction, version: string): string {
@@ -119,6 +130,65 @@ function buildUpdatingCard(chatId: string, version: string, logPath: string): Ou
         code: { text: MANUAL_VERSION_UPDATE_COMMAND, language: 'bash' },
       },
     ],
+  };
+}
+
+export function buildVersionUpdateCompletedCard(
+  chatId: string,
+  version: string,
+  updateKey = versionUpdateCardKey(chatId, version),
+): OutboundRichCard {
+  return {
+    title: `CodeLark v${version} 更新完成`,
+    template: 'green',
+    updateKey,
+    updateTtlMs: null,
+    sections: [
+      { text: '安装完成，Bridge 已重启并恢复在线。' },
+      { fields: [['当前版本', `v${version}`]] },
+    ],
+  };
+}
+
+function detectVersionUpdateLogState(logText: string): 'running' | 'completed' | 'error' {
+  if (/\[version-update\] completed\b/u.test(logText)) return 'completed';
+  if (/\[version-update\] failed:/iu.test(logText)) return 'error';
+  return 'running';
+}
+
+function buildVersionUpdateMonitorCard(params: {
+  chatId: string;
+  version: string;
+  logPath: string;
+  logText: string;
+  state: 'running' | 'completed' | 'error';
+  stateDetail: string | null;
+}): OutboundRichCard {
+  if (params.state === 'completed') {
+    return buildVersionUpdateCompletedCard(params.chatId, params.version);
+  }
+  const { text, truncated } = sanitizeInput(params.logText || '(empty)', VERSION_UPDATE_LOG_MAX_CHARS);
+  return {
+    title: params.state === 'error' ? 'CodeLark 更新失败' : `正在更新到 v${params.version}`,
+    template: params.state === 'error' ? 'red' : 'blue',
+    updateKey: versionUpdateCardKey(params.chatId, params.version),
+    updateTtlMs: null,
+    sections: [
+      {
+        fields: [
+          ['目标版本', `v${params.version}`],
+          ['任务日志', params.logPath],
+        ],
+      },
+      {
+        title: `更新日志 (tail -n ${VERSION_UPDATE_LOG_TAIL_LINES})`,
+        code: { text, language: 'text' },
+      },
+    ],
+    footer: [
+      params.stateDetail || '',
+      truncated ? '日志内容过长，已截断。' : '',
+    ].filter(Boolean),
   };
 }
 
@@ -242,6 +312,12 @@ export function createDailyVersionUpdateRuntime(
       }
 
       updatesInFlight.add(callback.version);
+      const completionTarget = saveStartupNoticeTarget(msg.address, undefined, {
+        kind: 'version-update',
+        version: callback.version,
+        updateKey: versionUpdateCardKey(msg.address.chatId, callback.version),
+        updateMessageId: msg.callbackMessageId,
+      });
       answerCallback(adapter, msg.messageId, '已开始后台更新');
       updateOriginalCard(
         adapter,
@@ -249,15 +325,49 @@ export function createDailyVersionUpdateRuntime(
         `正在准备更新 CodeLark v${callback.version}。`,
         buildDispatchingCard(msg.address.chatId, callback.version),
       );
-      void dispatchUpdate(callback.version).then((dispatched) => {
+      void Promise.resolve().then(() => dispatchUpdate(callback.version)).then((dispatched) => {
         updateOriginalCard(
           adapter,
           msg,
           `CodeLark v${callback.version} 更新已启动。`,
           buildUpdatingCard(msg.address.chatId, callback.version, dispatched.logPath),
         );
+        startDetachedLogMonitor({
+          logPath: dispatched.logPath,
+          workerPid: dispatched.pid,
+          refreshIntervalMs: deps.updateMonitorRefreshIntervalMs
+            || VERSION_UPDATE_LOG_REFRESH_INTERVAL_SECONDS * 1000,
+          maxDurationMs: VERSION_UPDATE_LOG_MONITOR_MAX_MS,
+          tailLines: VERSION_UPDATE_LOG_TAIL_LINES,
+          workerLabel: 'version update worker',
+          detectState: detectVersionUpdateLogState,
+          onSnapshot(snapshot) {
+            if (snapshot.state === 'error') {
+              clearStartupNoticeTarget(completionTarget.id);
+              updatesInFlight.delete(callback.version);
+            }
+            updateOriginalCard(
+              adapter,
+              msg,
+              snapshot.state === 'error'
+                ? `CodeLark v${callback.version} 更新失败。`
+                : snapshot.state === 'completed'
+                  ? `CodeLark v${callback.version} 更新完成。`
+                  : `正在更新 CodeLark v${callback.version}。`,
+              buildVersionUpdateMonitorCard({
+                chatId: msg.address.chatId,
+                version: callback.version,
+                logPath: dispatched.logPath,
+                logText: snapshot.text,
+                state: snapshot.state,
+                stateDetail: snapshot.stateDetail,
+              }),
+            );
+          },
+        });
       }).catch((error) => {
         updatesInFlight.delete(callback.version);
+        clearStartupNoticeTarget(completionTarget.id);
         const detail = error instanceof Error ? error.message : String(error);
         updateOriginalCard(
           adapter,

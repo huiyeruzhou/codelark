@@ -94,6 +94,8 @@ tmux workflow 的 fake transport 必须通过 `TmuxCore` 的可执行命令注�
 
 fake 测试也要遵守真实职责边界。`fake tmux` 只模拟 tmux transport：session/pane 存在性、`capture-pane`、`send-keys` 和进程退出；Codex TUI 的 update prompt、permission prompt、delayed-ready、选择后退出或进入正常输入界面由 `fake Codex TUI` 模拟。真实进程 E2E 覆盖 happy path 后，不应保留只重复 happy path 的 fake 断言；但 orphan callback、启动失败、update 后重启、bootstrap 后选择、已有 session 卡在选择页这类真实 E2E 不稳定或不应真实触发的分支仍应保留 fake/workflow 覆盖。
 
+long-running 功能不能只测“成功派发 worker”。精炼用户故事至少覆盖：入口及时 ACK；进行态按合理频率刷新；worker 日志明确失败、worker 无完成标记提前退出和超时都进入失败终态；破坏性动作前已经持久化恢复 receipt；成功重启后由新进程消费 receipt，更新原卡或发送 fallback 完成卡。涉及真实安装、stop/start 或平台卡片时，本地 workflow 负责确定性失败矩阵，真实端再完成一次“用户点击 → 进程变化 → 用户身份回读终态”的主路径验收。
+
 ## 语义分类
 
 ### 用户对话、命令和会话体验

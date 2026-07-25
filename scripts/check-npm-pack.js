@@ -38,15 +38,25 @@ if (result.status !== 0) {
   process.exit(result.status ?? 1);
 }
 
-let packEntries;
+let packOutput;
 try {
-  packEntries = JSON.parse(stdout);
+  packOutput = JSON.parse(stdout);
 } catch (error) {
   console.error('Unable to parse npm pack --dry-run --json output.');
   console.error(error instanceof Error ? error.message : String(error));
   process.exit(1);
 }
 
+// npm <=11 returns an array; npm 12 returns an object keyed by package name.
+const packEntries = Array.isArray(packOutput)
+  ? packOutput
+  : packOutput && typeof packOutput === 'object'
+    ? Object.values(packOutput)
+    : [];
+if (packEntries.length === 0) {
+  console.error('npm pack --dry-run --json returned no package entries.');
+  process.exit(1);
+}
 const files = packEntries.flatMap((entry) => entry.files?.map((file) => file.path) ?? []);
 const forbiddenMatches = files.filter((file) =>
   forbiddenFiles.has(file) || forbiddenPrefixes.some((prefix) => file.startsWith(prefix)),

@@ -3525,6 +3525,59 @@ describe('bridge-manager startup runtime cleanup', () => {
     assert.equal(StartupNoticeAdapter.sentMessages[0].address.chatId, 'chat-hot-update-source');
   });
 
+  it('closes a persisted version-update card after the restarted bridge is online', async () => {
+    StartupNoticeAdapter.sentMessages = [];
+    StartupNoticeAdapter.groupChats = new Map();
+    registerAdapterFactory('feishu', (instance) => new StartupNoticeAdapter(instance as any));
+
+    writeHomeChannelsToml([{
+      id: 'startup-notice-main',
+      alias: 'Startup Notice',
+      enabled: true,
+    }]);
+    const store = new JsonFileStore(makeSettings());
+    initBridgeContext({
+      store,
+      llm: noopLlm,
+      permissions: noopPermissions,
+      lifecycle: noopLifecycle,
+    });
+    _testOnly.resetStateForTests();
+    const address = {
+      channelType: 'startup-notice-main',
+      channelProvider: 'feishu',
+      channelAlias: 'Startup Notice',
+      chatId: 'chat-version-update',
+      chatKind: 'group' as const,
+      userId: 'user-version-update',
+      displayName: 'Version Update Source',
+    };
+    saveStartupNoticeTarget(address, undefined, {
+      kind: 'version-update',
+      version: '1.3.0',
+      updateKey: 'version-update:chat-version-update:1.3.0',
+      updateMessageId: 'card-version-update',
+    });
+
+    try {
+      await start();
+      for (let i = 0; i < 20 && StartupNoticeAdapter.sentMessages.length === 0; i += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 5));
+      }
+    } finally {
+      await stop();
+    }
+
+    assert.equal(StartupNoticeAdapter.sentMessages.length, 1);
+    const notice = StartupNoticeAdapter.sentMessages[0];
+    assert.equal(notice.address.chatId, 'chat-version-update');
+    assert.equal(notice.richCardUpdateMessageId, 'card-version-update');
+    assert.equal(notice.richCard?.updateKey, 'version-update:chat-version-update:1.3.0');
+    assert.equal(notice.richCard?.title, 'CodeLark v1.3.0 更新完成');
+    assert.equal(notice.richCard?.template, 'green');
+    assert.match(notice.richCard?.sections[0]?.text || '', /Bridge 已重启并恢复在线/);
+  });
+
   it('backfills missing ChannelChat kinds from the provider chat info on startup', async () => {
     StartupNoticeAdapter.sentMessages = [];
     StartupNoticeAdapter.groupChats = new Map([

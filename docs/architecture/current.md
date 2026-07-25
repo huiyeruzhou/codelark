@@ -55,6 +55,10 @@ flowchart LR
 
 版本提示与更新执行保持分层：host manager 只分流普通消息和 `clk-version-update:*` callback；update runtime 负责状态验证、卡片与按钮生命周期；独立 Node worker 负责 `npm install -g --yes` 和 stop/start。按钮回调先立即 ACK 并替换卡片，再派发 detached worker；worker 不执行 repo hot update 的 pull/build/test。
 
+版本更新也必须遵守 long-running 操作的统一反馈纪律，不能把“worker 已派发”当作完成：旧 bridge 每 3 秒读取任务日志，检测 running/completed/error、worker 提前退出和超时，并持续更新原卡；派发前还会持久化 operation receipt（原 chat、原 card、目标版本和 update key）。安装失败且 bridge 仍在线时，旧 bridge 把原卡收口为红色失败终态并清除 receipt；安装成功导致进程重启时，新 bridge 消费 receipt，用原 message id 恢复并把同一张卡收口为绿色“更新完成”。若平台不能恢复原卡，rich-card delivery 自己降级为发送新卡，仍必须让用户看到终态。
+
+这条约束适用于所有可能跨秒、跨进程或跨重启的后台动作：入口要快速 ACK，进行态要可观察，恢复所需状态要先于破坏性动作持久化，最终必须只有一个明确的成功或失败终态。环境变量由 detached child 和后续启动命令正常继承；不能用无关的环境分支代替任务状态检测。
+
 ```mermaid
 flowchart TD
   inbound[平台事件 / InboundMessage]
