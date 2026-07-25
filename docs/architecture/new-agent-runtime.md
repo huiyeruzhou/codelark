@@ -166,12 +166,11 @@ Kimi tmux provider 的当前行为来自实测：
 
 1. 已有 session：启动 `kimi -r <session> -y`。
 2. fresh session：先启动 `kimi -y`。
-3. 如果屏幕很快出现 `Session:`，直接使用该 session id。
-4. 否则发送两次 `Ctrl-C`，从 `To resume this session: kimi -r ...` 解析 session id。
-5. 用 `kimi -r <session> -y` 重启。
-6. 注入用户 prompt 后发送一次 `Ctrl-S` 触发 steer。
-7. status/result identity 输出 Kimi session id 和 cwd。
-8. 从 Kimi `wire.jsonl` mirror 输出 text、tool、usage、terminal 和 think 状态。
+3. 等待同一 TUI 出现 `Session:`、输入框和 context footer，直接保存 CLI 生成的 session id；fresh 不预造 id、不自杀重启。
+4. 注入用户 prompt 后发送一次 `Ctrl-S` 触发 steer。
+5. `wire.jsonl` 已存在时从当前尾部续读；如果 CLI 延迟到首条 prompt 后才创建 wire，则提交后等待并从 offset 0 读取。
+6. status/result identity 输出 Kimi session id 和 cwd。
+7. 从 Kimi `wire.jsonl` mirror 输出 text、tool、usage、terminal 和 think 状态。
 
 早期关于 `kimi -p`、无常驻 TUI、无需交互处理的结论已经废弃。
 

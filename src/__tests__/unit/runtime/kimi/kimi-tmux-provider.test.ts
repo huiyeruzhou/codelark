@@ -239,6 +239,25 @@ describe('Kimi tmux provider helpers', () => {
     assert.equal(findKimiSessionFileById(sessionId, path.join(os.tmpdir(), 'kimi-fallback-missing')), null);
   });
 
+  it('matches a Kimi session when the requested cwd is a symlink to the indexed real path', () => {
+    const sessionId = 'session_66666666-6666-4666-8666-666666666666';
+    const realCwd = fs.mkdtempSync(path.join(os.tmpdir(), 'kimi-canonical-real-'));
+    const aliasCwd = `${realCwd}-alias`;
+    fs.symlinkSync(realCwd, aliasCwd, process.platform === 'win32' ? 'junction' : 'dir');
+    try {
+      const wirePath = writeKimiSession({
+        sessionId,
+        cwd: realCwd,
+        title: 'Kimi canonical cwd',
+      });
+      assert.equal(computeKimiWorkspaceDirName(aliasCwd), computeKimiWorkspaceDirName(realCwd));
+      assert.equal(findKimiSessionFileById(sessionId, aliasCwd)?.filePath, wirePath);
+    } finally {
+      fs.rmSync(aliasCwd, { recursive: true, force: true });
+      fs.rmSync(realCwd, { recursive: true, force: true });
+    }
+  });
+
   it('exposes Kimi wire files through the generic mirror source contract', () => {
     const cwd = path.join(os.tmpdir(), 'kimi-mirror-project');
     const sessionId = 'session_33333333-3333-4333-8333-333333333333';

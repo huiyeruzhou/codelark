@@ -20,6 +20,7 @@ import {
 } from '../../../helpers/bridge/test-bridge-utils.js';
 import {
   commandAvailable,
+  removeRuntimeTestDirectory,
   startLocalResponsesProxy,
   waitForCondition,
 } from '../../../helpers/runtime/real-codex-e2e-utils.js';
@@ -224,7 +225,7 @@ describe('real Kimi Code bridge e2e', () => {
         if (value === undefined) delete process.env[key];
         else process.env[key] = value;
       }
-      fs.rmSync(tempDir, { recursive: true, force: true });
+      removeRuntimeTestDirectory(tempDir);
     }
   });
 });

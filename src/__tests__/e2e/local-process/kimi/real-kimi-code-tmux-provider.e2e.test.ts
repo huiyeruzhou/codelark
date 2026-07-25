@@ -15,6 +15,8 @@ import {
 } from '../../../../runtime/kimi/tmux-provider.js';
 import {
   commandAvailable,
+  execRuntimeCommand,
+  removeRuntimeTestDirectory,
   startLocalResponsesProxy,
   waitForCondition,
 } from '../../../helpers/runtime/real-codex-e2e-utils.js';
@@ -133,7 +135,7 @@ describe('real Kimi Code tmux provider e2e', () => {
     await execFileAsync('tmux', ['kill-session', '-t', tmuxSessionName]).catch(() => {});
 
     try {
-      const version = (await execFileAsync(executable, ['--version'])).stdout.trim();
+      const version = (await execRuntimeCommand(executable, ['--version'])).stdout.trim();
       assert.match(version, /^\d+\.\d+\.\d+/, 'the gate must execute a real versioned Kimi Code binary');
 
       const firstPromise = readSse(streamKimiTmuxTui({
@@ -216,7 +218,7 @@ describe('real Kimi Code tmux provider e2e', () => {
         if (value === undefined) delete process.env[key];
         else process.env[key] = value;
       }
-      fs.rmSync(tempDir, { recursive: true, force: true });
+      removeRuntimeTestDirectory(tempDir);
     }
   });
 });

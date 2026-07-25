@@ -25,9 +25,10 @@
 
 ### 验证范围
 
-- GitHub Actions 已在 Linux、macOS 26 arm64 和 Windows x64 + psmux 上完成 typecheck、对应测试集、build、npm package 检查和打包 CLI smoke test。
-- Linux full suite 通过；Windows 额外通过 unit 与 runtime-sensitive workflows；macOS 真实安装并 smoke test tmux。
+- GitHub Actions 在 Linux、macOS 26 arm64 和 Windows x64 + psmux 上安装并执行真实 Codex、Claude Code、Kimi Code CLI；模型服务由本地 fake proxy 保持确定性，三者的 tmux 生命周期不是 shim 或假 executable 冒充。
+- 真实 executable gate 覆盖 Codex 正常输出、结构化/方块错误与长输入，Claude Code TUI + JSONL，以及 Kimi fresh 随机 session id、慢模型 steer、复用、tmux 丢失恢复和 wire 在首条输入前后两种创建时序。各平台还完成 typecheck、对应测试集、build、npm package 检查和打包 CLI smoke test。
 - 每日版本卡已在隔离飞书群真实完成发送、用户身份回读、按钮点击、原卡更新和最终回读；callback 不会再额外创建重复卡片。
+- Kimi 0.2.0 发布候选已在隔离飞书群通过真实 Kimi executable 完成 `/runtime kimi`、`/p tmux`、流式卡片创建、completed 原卡更新与用户身份最终 transcript 回读。
 
 ### 升级
 

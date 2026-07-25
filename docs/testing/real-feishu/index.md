@@ -92,7 +92,7 @@ CODELARK_REAL_FEISHU_TEST_LARK_CLI_XDG_DATA_HOME=/home/me/.codelark/real-feishu-
 
 | 场景 | 角色 | 维护要求 |
 | --- | --- | --- |
-| `basic-dialogue-suite` | 最高优先级长流程 | 使用 `--scripted-basic-dialogue --launch-bridge` 时，通过隔离 Codex Responses proxy、CCR fake backend 和 fake Kimi executable 串起 `codex-sdk -> claude-sdk -> kimi-tmux -> codex-tmux -> claude-pty -> codex-pty`，不依赖 live bridge 或宿主 Kimi 会话；Kimi 阶段还必须在非 final 流式状态区 checkpoint 中出现「当前思考」，且 completed final card 不能泄漏 thinking 文本，证明 fresh Kimi 首次即以稳定 session id 单进程启动、没有 Ctrl-C bootstrap，随后对用户输入发送 Ctrl-S steer，并证明 `ChannelChat.runtimeBridgeSessionIds.kimi` 保留独立 Kimi `BridgeSession`、能定位同一个 `wire.jsonl`，从该 transcript 读回本轮 think、marker 文本和 `step.end`，且历史 transcript 读取只返回 marker 正文、不返回 thinking/status 内容。 |
+| `basic-dialogue-suite` | 最高优先级长流程 | 使用 `--scripted-basic-dialogue --launch-bridge` 时，通过隔离 Codex Responses proxy、CCR fake backend 和 fake Kimi executable 串起 `codex-sdk -> claude-sdk -> kimi-tmux -> codex-tmux -> claude-pty -> codex-pty`，不依赖 live bridge 或宿主 Kimi 会话；Kimi 阶段还必须在非 final 流式状态区 checkpoint 中出现「当前思考」，且 completed final card 不能泄漏 thinking 文本，证明 fresh Kimi 只执行一次不带 `-r` 的启动、没有 Ctrl-C bootstrap、从 TUI 保存 fake CLI 生成的 session id，随后对用户输入发送 Ctrl-S steer，并证明 `ChannelChat.runtimeBridgeSessionIds.kimi` 保留独立 Kimi `BridgeSession`、能定位同一个 `wire.jsonl`，从该 transcript 读回本轮 think、marker 文本和 `step.end`，且历史 transcript 读取只返回 marker 正文、不返回 thinking/status 内容。 |
 | `runtime-smoke` | provider 路径健康检查 | 只在需要快速完整 provider 信号时运行。 |
 | `session-command-suite` | 命令和会话管理 | 覆盖 `/status`、`/runtime`、`/p`、`/help`、`/set`、`/new`、`/cd`、`/current`、`/check`、`/t` 和一个最终 marker prompt。 |
 | `history-suite` | 历史功能簇 | 进入 runtime/provider 矩阵；当前已有 canonical 报告是 `real-feishu::history-suite::codex-tmux` 的 `histsuite-codex-tmux-live-0858.json`，`kimi-tmux` 仍需真实飞书重跑。 |
@@ -133,7 +133,7 @@ CODELARK_REAL_FEISHU_TEST_LARK_CLI_XDG_DATA_HOME=/home/me/.codelark/real-feishu-
 - `created_document_cleanup_completed`：云文档 from-scratch 场景创建的测试文档必须删除，除非失败运行明确保留诊断资源。
 - 初始测试群创建：未传 `--chat-id` 时必须通过产品 `/new` use case 创建，并能确定 bot app id 与操作者 open_id，不能创建没有 bot 或无法绑定到当前用户的空群。
 - `fake_ccr_backend_used`：`--fake-ccr` 场景必须证明 fake backend 收到请求，并且最终 bot 回复包含 fake marker。
-- `basic_dialogue_scripted_kimi_lifecycle_and_ctrl_s`：scripted `basic-dialogue-suite` 必须证明 Kimi fake executable 只记录一次稳定 `kimi -r <session>` 启动、零次用于发现 session 的 Ctrl-C，以及至少一次 Ctrl-S steer。
+- `basic_dialogue_scripted_kimi_lifecycle_and_ctrl_s`：scripted `basic-dialogue-suite` 必须证明 fresh Kimi fake executable 只记录一次不带 `-r` 的启动、零次用于发现 session 的 Ctrl-C、从 TUI 绑定 fake CLI 生成的 session id，以及至少一次 Ctrl-S steer。
 - `basic_dialogue_kimi_runtime_slot_persisted`：scripted `basic-dialogue-suite` 必须证明聊天绑定的 Kimi runtime slot 指向独立 Kimi `BridgeSession`，且该 session 记录的 Kimi session id/cwd 能解析到 `wire.jsonl`。
 - `basic_dialogue_kimi_wire_transcript_read`：scripted `basic-dialogue-suite` 必须从 Kimi runtime slot 的 `wire.jsonl` 读回本轮 scripted thinking、final marker text 和 `step.end`，不能只证明文件存在。
 - `basic_dialogue_kimi_history_transcript_excludes_thinking`：scripted `basic-dialogue-suite` 必须从同一个 Kimi runtime slot 的历史 transcript 读取路径读回 final marker，并证明「当前思考」和 scripted thinking 文本不会进入历史正文。

@@ -6,7 +6,12 @@ import os from 'node:os';
 import path from 'node:path';
 
 function globalExecutable(name) {
-  const prefix = execFileSync('npm', ['prefix', '-g'], { encoding: 'utf-8' }).trim();
+  const npmCommand = process.platform === 'win32' ? 'npm.cmd' : 'npm';
+  const prefix = execFileSync(npmCommand, ['prefix', '-g'], {
+    encoding: 'utf-8',
+    shell: process.platform === 'win32',
+    windowsHide: true,
+  }).trim();
   return process.platform === 'win32'
     ? path.join(prefix, `${name}.cmd`)
     : path.join(prefix, 'bin', name);

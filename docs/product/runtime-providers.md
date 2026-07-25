@@ -23,7 +23,7 @@ CodeLark 把“使用哪个 AI 工具”和“如何驱动它”拆成两层。
 
 - Claude Code 运行时默认使用 `tmux` 提供方，便于从 IM 和本机终端同时观察/接管 Claude Code TUI；可通过 `/provider pty` 或 `/provider sdk` 为当前会话切换。
 - Codex 运行时的默认提供方由全局配置和平台探测共同决定；需要可 attach 的长期终端会话时，优先选择 `tmux`。
-- Kimi Code 当前只支持 `tmux` 提供方。fresh session 会先启动 Kimi，短暂检查屏幕上是否已有 `Session:`；如果没有，就发送两次 `Ctrl-C`，从 `To resume this session: kimi -r ...` 提示解析 session id，再用 `kimi -r <session>` 重启并注入用户输入。输出由 Kimi `wire.jsonl` mirror 同步；状态区会展示截断后的「当前思考」。
+- Kimi Code 当前只支持 `tmux` 提供方。fresh session 只启动一次 `kimi -y`，等待 TUI 同时出现真实 `Session:`、输入框与 context footer 后保存 CLI 生成的 session id；只有恢复已绑定 session 才使用 `kimi -r <session> -y`。首条输入不以 `wire.jsonl` 已存在为前置条件：文件较早出现时从尾部续读，较晚出现时先提交 prompt，再从头读取首轮事件。输出由 Kimi wire mirror 同步；状态区会展示截断后的「当前思考」。
 
 ## 用户配置入口
 

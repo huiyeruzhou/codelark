@@ -24,6 +24,7 @@ import {
 import {
   cleanupCodexThreadArtifacts,
   commandAvailable,
+  removeRuntimeTestDirectory,
   seedCodexApiKeyAuth,
   startLocalResponsesProxy,
   waitForCondition,
@@ -295,8 +296,8 @@ describe('real codex tmux provider e2e', () => {
       if (generatedThreadId) {
         cleanupCodexThreadArtifacts(generatedThreadId, generatedThreadFilePath);
       }
-      fs.rmSync(workDir, { recursive: true, force: true });
-      fs.rmSync(codexHome, { recursive: true, force: true });
+      removeRuntimeTestDirectory(workDir);
+      removeRuntimeTestDirectory(codexHome);
       await proxy.close().catch(() => undefined);
       for (const [key, value] of Object.entries(previousEnv)) {
         if (value === undefined) delete process.env[key];
@@ -426,7 +427,13 @@ describe('real codex tmux provider e2e', () => {
       const fatalComplete = rollout.findLast((entry) => entry.type === 'event_msg' && entry.payload?.type === 'task_complete');
       assert.ok(fatalComplete);
       assert.equal(fatalComplete.payload?.last_agent_message, null);
-      assert.equal(fatalComplete.payload?.error, undefined, 'Codex 0.144.3 rollout should exercise the TUI fallback');
+      if (fatalComplete.payload?.error !== undefined) {
+        assert.match(
+          JSON.stringify(fatalComplete.payload.error),
+          /invalid_request_error.*CODELARK_MOCK_FATAL/u,
+          'newer Codex versions should preserve the structured model error',
+        );
+      }
       assert.equal(proxy.requests.filter((request) => request.rawBody.includes(fatalMarker)).length, 1);
     } finally {
       if (tmuxSessionName) {
@@ -435,8 +442,8 @@ describe('real codex tmux provider e2e', () => {
       if (generatedThreadId) {
         cleanupCodexThreadArtifacts(generatedThreadId, generatedThreadFilePath);
       }
-      fs.rmSync(workDir, { recursive: true, force: true });
-      fs.rmSync(codexHome, { recursive: true, force: true });
+      removeRuntimeTestDirectory(workDir);
+      removeRuntimeTestDirectory(codexHome);
       await proxy.close().catch(() => undefined);
       for (const [key, value] of Object.entries(previousEnv)) {
         if (value === undefined) delete process.env[key];
@@ -542,8 +549,8 @@ describe('real codex tmux provider e2e', () => {
       if (generatedThreadId) {
         cleanupCodexThreadArtifacts(generatedThreadId, generatedThreadFilePath);
       }
-      fs.rmSync(workDir, { recursive: true, force: true });
-      fs.rmSync(codexHome, { recursive: true, force: true });
+      removeRuntimeTestDirectory(workDir);
+      removeRuntimeTestDirectory(codexHome);
       await proxy.close().catch(() => undefined);
       for (const [key, value] of Object.entries(previousEnv)) {
         if (value === undefined) delete process.env[key];
@@ -699,8 +706,8 @@ describe('real codex tmux provider e2e', () => {
       if (generatedThreadId) {
         cleanupCodexThreadArtifacts(generatedThreadId, generatedThreadFilePath);
       }
-      fs.rmSync(workDir, { recursive: true, force: true });
-      fs.rmSync(codexHome, { recursive: true, force: true });
+      removeRuntimeTestDirectory(workDir);
+      removeRuntimeTestDirectory(codexHome);
       await proxy.close().catch(() => undefined);
       for (const [key, value] of Object.entries(previousEnv)) {
         if (value === undefined) delete process.env[key];

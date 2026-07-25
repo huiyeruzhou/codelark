@@ -11,6 +11,7 @@ import { streamClaudeTmuxTui } from '../../../../runtime/claude/tmux-provider.js
 import { claudeTmuxSessionName } from '../../../../bridge/tmux/runtime.js';
 import {
   commandAvailable,
+  removeRuntimeTestDirectory,
   startLocalResponsesProxy,
 } from '../../../helpers/runtime/real-codex-e2e-utils.js';
 
@@ -86,8 +87,8 @@ describe('real Claude Code tmux provider e2e', () => {
         if (value === undefined) delete process.env[key];
         else process.env[key] = value;
       }
-      fs.rmSync(homeDir, { recursive: true, force: true });
-      fs.rmSync(workDir, { recursive: true, force: true });
+      removeRuntimeTestDirectory(homeDir);
+      removeRuntimeTestDirectory(workDir);
     }
   });
 });

@@ -7,7 +7,10 @@ import path from 'node:path';
 
 import { tmuxCore, type TmuxCore, type TmuxSendAction } from '../../../../bridge/tmux/core.js';
 import { computeKimiWorkspaceDirName } from '../../../../runtime/kimi/session-index.js';
-import { streamKimiTmuxTui } from '../../../../runtime/kimi/tmux-provider.js';
+import {
+  buildKimiTmuxLaunchCommand,
+  streamKimiTmuxTui,
+} from '../../../../runtime/kimi/tmux-provider.js';
 
 interface ParsedSse {
   type: string;
@@ -132,8 +135,46 @@ function actionNames(actions: TmuxSendAction[]): string[] {
   return actions.map((action) => action.type === 'key' ? action.key : action.text);
 }
 
+function commandHasArg(command: string, arg: string): boolean {
+  return command.includes(` ${arg}`)
+    || command.includes(`'${arg}'`)
+    || command.includes(`"${arg}"`);
+}
+
 describe('kimi-tmux-provider workflow', () => {
-  it('starts one fresh Kimi session without resume, discovers its id, steers with Ctrl-S, and streams wire records', async () => {
+  it('launches Kimi through an environment snapshot on Windows', () => {
+    const command = buildKimiTmuxLaunchCommand(
+      'C:\\Program Files\\nodejs\\kimi.cmd',
+      ['-y', '-m', 'kimi-for-coding'],
+      {
+        platform: 'win32',
+        env: {
+          PATH: 'C:\\Program Files\\nodejs',
+          KIMI_CODE_HOME: 'C:\\Users\\tester\\.kimi-code',
+        },
+        shell: { type: 'cmd', path: 'cmd.exe' },
+      },
+    );
+
+    assert.ok(Array.isArray(command));
+    assert.equal(command[0], 'cmd.exe');
+    assert.equal(command[1], '/c');
+    assert.match(command[2] || '', /call .*codelark-shell-snapshot/u);
+    assert.match(command[2] || '', /C:\\Program Files\\nodejs\\kimi\.cmd/u);
+    assert.match(command[2] || '', /kimi-for-coding/u);
+    assert.equal(commandHasArg(command.join(' '), '-y'), true);
+    assert.equal(commandHasArg(command.join(' '), '-r'), false);
+    const snapshotPath = (command[2] || '')
+      .match(/call ([^ ]*codelark-shell-snapshot[^ ]*) &&/u)?.[1]
+      ?.replace(/^["']|["']$/gu, '');
+    assert.ok(snapshotPath);
+    assert.match(
+      fs.readFileSync(snapshotPath, 'utf-8'),
+      /set "KIMI_CODE_HOME=C:\\Users\\tester\\\.kimi-code"/u,
+    );
+  });
+
+  it('submits the first prompt before a fresh Kimi session creates its wire file', async () => {
     const kimiHome = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-kimi-workflow-home-'));
     const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-kimi-workflow-cwd-'));
     const sessionId = 'session_aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
@@ -158,9 +199,8 @@ describe('kimi-tmux-provider workflow', () => {
         tmuxExists = true;
         const commandText = Array.isArray(params.command) ? params.command.join(' ') : params.command || '';
         ensureCalls.push(commandText);
-        if (commandText.includes(' -y')) {
+        if (commandHasArg(commandText, '-y')) {
           resumedTuiReady = true;
-          wirePath = createKimiSessionFile({ kimiHome, cwd, sessionId });
         }
         return { existed: false, command: `tmux new-session -d -s ${params.name}`, commands: [] };
       },
@@ -184,7 +224,8 @@ describe('kimi-tmux-provider workflow', () => {
       },
       async injectPromptIntoPane(target: string, prompt: string) {
         injectCalls.push({ target, prompt });
-        assert.ok(wirePath, 'Kimi wire file must exist before prompt injection');
+        assert.equal(wirePath, null, 'fresh Kimi may defer wire creation until its first prompt');
+        wirePath = createKimiSessionFile({ kimiHome, cwd, sessionId });
         appendKimiTurn(wirePath, prompt);
         return { commands: [`tmux paste-buffer -t ${target}`] };
       },
@@ -210,8 +251,8 @@ describe('kimi-tmux-provider workflow', () => {
 
       assert.equal(ensureCalls.length, 1);
       assert.equal(extendedKeysCalls, 1, 'fresh lifecycle enables Kimi-compatible Enter handling once');
-      assert.match(ensureCalls[0]!, /\bkimi -y\b/);
-      assert.doesNotMatch(ensureCalls[0]!, /\s-r\s/);
+      assert.equal(commandHasArg(ensureCalls[0]!, '-y'), true);
+      assert.equal(commandHasArg(ensureCalls[0]!, '-r'), false);
 
       assert.equal(sendCalls.some((call) => call.actions.join(',') === 'C-c,C-c'), false);
       assert.deepEqual(injectCalls, [{

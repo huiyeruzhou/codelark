@@ -23,13 +23,37 @@ export interface LocalResponsesProxy {
   close(): Promise<void>;
 }
 
+function quoteCmdArgument(value: string): string {
+  if (!value) return '""';
+  return `"${value.replace(/(["^&|<>])/gu, '^$1')}"`;
+}
+
+export async function execRuntimeCommand(command: string, args: string[]) {
+  if (process.platform !== 'win32') return execFileAsync(command, args);
+  const commandLine = [command, ...args].map(quoteCmdArgument).join(' ');
+  return execFileAsync(
+    process.env.ComSpec || process.env.COMSPEC || 'cmd.exe',
+    ['/d', '/s', '/c', commandLine],
+    { windowsHide: true },
+  );
+}
+
+export function removeRuntimeTestDirectory(directory: string): void {
+  fs.rmSync(directory, {
+    recursive: true,
+    force: true,
+    maxRetries: 20,
+    retryDelay: 100,
+  });
+}
+
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 export async function commandAvailable(command: string, args: string[]): Promise<boolean> {
   try {
-    await execFileAsync(command, args, { shell: process.platform === 'win32' });
+    await execRuntimeCommand(command, args);
     return true;
   } catch {
     return false;

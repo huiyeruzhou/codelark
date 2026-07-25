@@ -3,6 +3,10 @@ import fs from 'node:fs';
 
 import type { CodexReasoningEffort, CodexSandboxMode } from '../options.js';
 import { resolveCodexCliExecutable } from './cli-executable.js';
+import {
+  buildShellSnapshotLaunchArgs,
+  ensureShellSnapshot,
+} from './shell-snapshot.js';
 import { findSessionFileByThreadId } from './tmux-provider.js';
 
 const LOCAL_BOOTSTRAP_BASE_URL = 'http://127.0.0.1:9/v1';
@@ -63,6 +67,24 @@ function buildLocalBootstrapEnv(): NodeJS.ProcessEnv {
   env.CODEX_API_KEY = apiKey;
   env.OPENAI_API_KEY = apiKey;
   return env;
+}
+
+function buildLocalBootstrapInvocation(
+  executable: string,
+  args: string[],
+  env: NodeJS.ProcessEnv,
+): { command: string; args: string[] } {
+  if (process.platform !== 'win32') return { command: executable, args };
+  const definedEnv = Object.fromEntries(
+    Object.entries(env).filter((entry): entry is [string, string] => entry[1] !== undefined),
+  );
+  const launchArgs = buildShellSnapshotLaunchArgs(
+    executable,
+    args,
+    ensureShellSnapshot(definedEnv),
+    { platform: process.platform },
+  );
+  return { command: launchArgs[0]!, args: launchArgs.slice(1) };
 }
 
 function readThreadIdFromCodexExecLine(line: string): string | null {
@@ -178,9 +200,10 @@ export async function bootstrapLocalCodexThread(options: LocalCodexThreadBootstr
     command: commandPreview(executable, args),
     base_url: LOCAL_BOOTSTRAP_BASE_URL,
   });
+  const invocation = buildLocalBootstrapInvocation(executable, args, env);
 
   const { threadId, sessionFile } = await new Promise<{ threadId: string; sessionFile: string }>((resolve, reject) => {
-    const child = spawn(executable, args, {
+    const child = spawn(invocation.command, invocation.args, {
       env,
       stdio: ['ignore', 'pipe', 'pipe'],
       windowsHide: process.platform === 'win32',

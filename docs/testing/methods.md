@@ -127,7 +127,7 @@ fake 测试也要遵守真实职责边界。`fake tmux` 只模拟 tmux transport
 | `codex-pty-provider.test.ts`、`codex-tmux-provider.test.ts` | Codex pty/tmux prompt 注入、启动参数、auto-enter、清理和事件输出。 |
 | `codex-session-index.test.ts`、`codex-session-mirror.test.ts` | Codex JSONL/session 索引读取、mirror cursor 对齐和事件重放。 |
 | `claude-tmux-provider.test.ts`、`claude-pty-provider.test.ts`、`claude-sdk-provider.test.ts`、`claude-session-jsonl.test.ts` | Claude tmux 启动/注入/mirror SSE、Claude pty 身份发现、Claude SDK helper、Claude JSONL session 读取。 |
-| `kimi-tmux-provider.test.ts`、`kimi-tmux-provider-local-process.e2e.test.ts` | Kimi tmux 确定性 session 单次启动与跨 turn 复用、`wire.jsonl` session 索引、think/status、`Ctrl-S` steer、terminal 后 usage 的同 turn 归属、split-delta orphan usage 丢弃、injection reminder 过滤，以及 fake Kimi CLI 穿过真实 tmux 的 local-process smoke。 |
+| `kimi-tmux-provider.test.ts`、真实 Kimi executable E2E、`kimi-tmux-provider-local-process.e2e.test.ts` | fresh 不带 `-r` 单次启动、从真实 TUI 发现 CLI session id、wire 在首条输入前或输入后创建、跨 turn 复用、慢模型 `Ctrl-S` steer、tmux 丢失恢复、think/status 和 terminal 归属；scripted fixture 继续穿过真实 tmux，但不冒充真实 executable gate。 |
 | `sse-stream-decoder.test.ts` | SSE 文本流解码和事件边界。 |
 | `interactive-turn-runner.test.ts` | 一次 runtime turn 的主编排，含 stream、tool、context、goal、stop、mirror suppression 和基础对话 simulator。 |
 | `interactive-turn-sdk-conversation-engine.test.ts`、`interactive-turn-sdk-stream-events-controller.test.ts`、`interactive-turn-final-response-plan.test.ts`、`interactive-turn-terminal-finalization-controller.test.ts` | SDK conversation 内联附件/tool 展开、stream event 控制、最终回复计划和终端 provider finalization。 |

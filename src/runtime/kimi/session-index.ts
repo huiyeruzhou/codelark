@@ -56,12 +56,21 @@ function getKimiSessionIndexPath(): string {
   return path.join(getKimiHome(), 'session_index.jsonl');
 }
 
+function canonicalExistingPath(value: string): string {
+  const resolved = path.resolve(value);
+  try {
+    return fs.realpathSync.native(resolved);
+  } catch {
+    return resolved;
+  }
+}
+
 function sha256Hex(value: string, length = 12): string {
   return crypto.createHash('sha256').update(value).digest('hex').slice(0, length);
 }
 
 function archiveKey(sessionId: string, cwd: string): string {
-  return `${path.resolve(cwd)}\0${sessionId.trim()}`;
+  return `${canonicalExistingPath(cwd)}\0${sessionId.trim()}`;
 }
 
 function archivedKimiSessionsPath(): string {
@@ -117,7 +126,7 @@ export function archiveKimiSessionFile(session: Pick<KimiSessionFileSummary, 'se
 }
 
 export function computeKimiWorkspaceDirName(cwd: string): string {
-  const resolved = path.resolve(cwd || process.cwd());
+  const resolved = canonicalExistingPath(cwd || process.cwd());
   const basename = path.basename(resolved) || resolved;
   const hash = sha256Hex(resolved, 12);
   return `wd_${basename}_${hash}`;
@@ -221,10 +230,10 @@ function summarizeKimiSessionDir(
 
 export function findKimiSessionFileById(sessionId: string, cwd?: string): KimiSessionFileSummary | null {
   if (!sessionId) return null;
-  const resolvedCwd = cwd ? path.resolve(cwd) : undefined;
+  const resolvedCwd = cwd ? canonicalExistingPath(cwd) : undefined;
   for (const entry of readKimiSessionIndexEntries()) {
     if (entry.sessionId !== sessionId || !entry.sessionDir) continue;
-    if (resolvedCwd && entry.workDir && path.resolve(entry.workDir) !== resolvedCwd) continue;
+    if (resolvedCwd && entry.workDir && canonicalExistingPath(entry.workDir) !== resolvedCwd) continue;
     const summary = summarizeKimiSessionDir(entry.sessionDir, entry.workDir || cwd);
     if (summary) return summary;
   }

@@ -447,9 +447,9 @@ export function withTmuxPostInstallPath(
 ): string {
   const value = currentPath || '';
   if (platform === 'darwin') {
-    const entries = value.split(path.delimiter).filter(Boolean);
+    const entries = value.split(path.posix.delimiter).filter(Boolean);
     const candidates = ['/opt/homebrew/bin', '/usr/local/bin'];
-    return [...candidates.filter((candidate) => !entries.includes(candidate)), ...entries].join(path.delimiter);
+    return [...candidates.filter((candidate) => !entries.includes(candidate)), ...entries].join(path.posix.delimiter);
   }
   if (platform === 'win32' && localAppData?.trim()) {
     const winGetLinks = path.win32.join(localAppData.trim(), 'Microsoft', 'WinGet', 'Links');
