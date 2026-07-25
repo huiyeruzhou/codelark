@@ -96,7 +96,7 @@ export function buildClaudeCodeRouterStartInvocation(
   if (platform !== 'win32') return { command, args: ['start'] };
   return {
     command: comspec,
-    args: ['/d', '/s', '/c', `call "${command}" start`],
+    args: ['/d', '/s', '/c', `""${command}" start"`],
   };
 }
 
