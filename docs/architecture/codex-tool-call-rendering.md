@@ -22,7 +22,7 @@
 {"type":"function_call","name":"exec_command","arguments":"{\"cmd\":\"npm test\"}"}
 ```
 
-`Bash`、`shell_command` 和 `exec_command` 都进入 command detail，命令使用 `bash` code fence。`apply_patch` 和 `edit` 进入 patch detail，补丁使用 `diff` code fence，并从 `*** Add/Update/Delete File` 行提取文件摘要。
+`Bash`、`shell_command` 和 `exec_command` 都进入 command detail，命令使用 `bash` code fence。`apply_patch` 和 `edit` 进入 patch detail，从 `*** Add/Update/Delete File` 行提取文件摘要，并按目标文件后缀选择代码语言；多个目标文件语言不同或后缀未知时使用纯文本。
 
 Codex SDK 的高层 `ThreadItem::CommandExecution` / `FileChange` 也分别映射到 `Bash` / `Edit`，不经过 GPT-5.6 wrapper 兼容逻辑。
 
@@ -52,10 +52,10 @@ CodeLark 不执行这段 JavaScript。normalizer 使用 Acorn 解析 AST，再�
 单个内层调用且参数可静态确定时，外层 `exec` 会被还原为内层工具名称和输入，随后完全复用旧格式的 detail 与 renderer：
 
 - `tools.exec_command(...)` → `exec_command` 工具面板 + `bash` fence。
-- `tools.apply_patch(...)` → `apply_patch` 工具面板 + `diff` fence。
+- `tools.apply_patch(...)` → `apply_patch` 工具面板 + 按目标文件后缀选择语言的 patch 代码块。
 - 其他单一、静态内层调用保留其真实工具名称并走现有 generic/专用 detail。
 
-一次 wrapper 含多个内层调用时，CodeLark 保留一个外层 lifecycle / `call_id`，生成 `orchestration` detail。折叠标题在同一行显示“编排 N 个工具 · 可识别工具名”；展开后按源码顺序分别展示每个子工具。可静态确定的 command/patch 仍分别使用 `bash` / `diff` fence；动态参数显示为未求值的参数源码。外层只有一份聚合输出，因此它只显示在“编排输出”区，不会被伪造为某个子工具的输出。
+一次 wrapper 含多个内层调用时，CodeLark 保留一个外层 lifecycle / `call_id`，生成 `orchestration` detail。折叠标题在同一行显示“编排 N 个工具 · 可识别工具名”；展开后按源码顺序分别展示每个子工具。可静态确定的 command 使用 `bash` fence，patch 按目标文件后缀选择语言；动态参数显示为未求值的参数源码。外层只有一份聚合输出，因此它只显示在“编排输出”区，不会被伪造为某个子工具的输出。
 
 GPT-5.6 对 patch 还可能同时写入一个不同 call id 的低层 `patch_apply_end`。共享 turn reducer 会把唯一同名 running wrapper 的 completion 合并回原工具；如果它属于唯一的多工具 orchestration wrapper，则忽略这个冗余 lifecycle，等待外层 output 完成。没有 wrapper 的旧事件仍独立展示；多个同名 running 工具存在歧义时也不猜测归属。
 
@@ -81,6 +81,6 @@ normalizer 只静态解释 literal、object/array、模板字符串的静态插�
 ## 验证边界
 
 - normalizer 单测覆盖单 command、静态变量 patch、字符串伪装、`Promise.all` 多工具顺序和旧格式不变。
-- session parser 集成测试用真实 GPT-5.6 JSONL shape 验证 mirror record 与 history 的 `bash` / `diff` fence。
-- mock-app E2E 从一个包含 bash + patch 的多工具 wrapper 出发，经过 session JSONL、公共 reducer 和真实 `FeishuAdapter` CardKit payload，验证最终卡片显示“编排 2 个工具”、两个子工具、正确且闭合的 code fence，并且不泄漏外层 orchestration JavaScript 或 transport envelope。
+- session parser 集成测试用真实 GPT-5.6 JSONL shape 验证 mirror record 与 history 的 `bash` / 文件语言 fence。
+- mock-app E2E 从一个包含 bash + patch 的多工具 wrapper 出发，经过 session JSONL、公共 reducer 和真实 `FeishuAdapter` CardKit payload，验证最终卡片显示“编排 2 个工具”、两个子工具，并且不泄漏外层 orchestration JavaScript 或 transport envelope。fixture 同时包含 `${...}` 表达式，冻结 Feishu 出站层只把命中该表达式的完整 patch 降级为多行缩进代码、而不插入零宽字符或 entity 的契约。
 - 真实飞书验收必须使用独立 test app 和隔离 `CODELARK_HOME`；触发消息与最终 transcript 都由 `lark-cli --as user` 发送/读取，不能复用当前 live bridge app。mirror provider 必须等到 `Card finalized status=completed` 后再收集报告；流式卡片回显的用户 prompt 不能当作 final marker。

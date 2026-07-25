@@ -541,7 +541,7 @@ describe('feishu adapter card e2e', () => {
       assert.match(markdown, /读取 `src\/app\.ts`/);
       assert.match(markdown, /搜索 `oldValue`/);
       assert.match(markdown, /修改 `src\/app\.ts`/);
-      assert.match(markdown, /```diff\n\*\*\* Begin Patch[\s\S]*\*\*\* End Patch\n```/);
+      assert.match(markdown, /```typescript\n\*\*\* Begin Patch[\s\S]*\*\*\* End Patch\n```/);
       assert.match(markdown, /运行 `npm test`/);
       assert.doesNotMatch(markdown, /73 tests passed/);
       assert.doesNotMatch(markdown, /Script completed|Wall time|\bSuccess\b|\bCompleted\b|长输出/);
@@ -655,6 +655,7 @@ describe('feishu adapter card e2e', () => {
       '*** Update File: src/app.ts',
       '@@',
       '+const enabled = true;',
+      '+const version = `${year}`;',
       '*** End Patch',
     ].join('\n');
     let sessionPath = '';
@@ -752,7 +753,9 @@ describe('feishu adapter card e2e', () => {
       assert.match(cardMarkdown, /exec_command/);
       assert.match(cardMarkdown, /```bash\nnpm test\n```/);
       assert.match(cardMarkdown, /apply_patch/);
-      assert.match(cardMarkdown, /```diff\n\*\*\* Begin Patch/);
+      assert.match(cardMarkdown, /    \*\*\* Begin Patch\n    \*\*\* Update File: src\/app\.ts/);
+      assert.match(cardMarkdown, /\n    \+const version = `\$\{year\}`;\n/);
+      assert.doesNotMatch(cardMarkdown, /```typescript\n\*\*\* Begin Patch|\u200B|&#96;/);
       assert.doesNotMatch(cardMarkdown, /暂无详情/);
       assert.doesNotMatch(cardMarkdown, /const r = await tools\.exec_command/);
       assert.doesNotMatch(cardMarkdown, /Script completed|Wall time|\bSuccess\b|\bCompleted\b|\bcompleted\b/);

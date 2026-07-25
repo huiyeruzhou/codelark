@@ -152,14 +152,14 @@ describe('buildInlineToolBlock', () => {
     assert.doesNotMatch(result, /```json\nnpm test/);
   });
 
-  it('uses diff fences for apply_patch inline input and protects nested fences', () => {
+  it('uses file-language fences for apply_patch inline input and protects nested fences', () => {
     const result = buildInlineToolBlock({
       name: 'apply_patch',
       status: 'running',
       input: '*** Begin Patch\n*** Update File: a.ts\n@@\n+```ts\n+const x = 1;\n+```\n*** End Patch',
     });
 
-    assert.match(result, /````diff\n\*\*\* Begin Patch/);
+    assert.match(result, /````typescript\n\*\*\* Begin Patch/);
     assert.match(result, /\n\+```ts\n\+const x = 1;\n\+```\n/);
   });
 });

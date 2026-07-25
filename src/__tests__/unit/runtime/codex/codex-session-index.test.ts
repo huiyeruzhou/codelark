@@ -1265,7 +1265,7 @@ describe('readCodexSessionMirrorRecordStreamByFilePath', () => {
     fs.rmSync(tempRoot, { recursive: true, force: true });
   });
 
-  it('unwraps GPT-5.6 exec orchestration into bash and diff tool displays', () => {
+  it('unwraps GPT-5.6 exec orchestration into bash and file-language tool displays', () => {
     const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-codex-gpt56-tools-'));
     const filePath = path.join(tempRoot, 'rollout.jsonl');
     const patchText = [
@@ -1396,9 +1396,9 @@ describe('readCodexSessionMirrorRecordStreamByFilePath', () => {
       .map((entry) => entry.content)
       .join('\n\n');
     assert.match(history, /exec_command[\s\S]*```bash\nnpm test\n```/);
-    assert.match(history, /apply_patch[\s\S]*```diff\n\*\*\* Begin Patch/);
+    assert.match(history, /apply_patch[\s\S]*```typescript\n\*\*\* Begin Patch/);
     assert.match(history, /tools × 2[\s\S]*1\. `exec_command`[\s\S]*```bash\npwd\n```/);
-    assert.match(history, /tools × 2[\s\S]*2\. `apply_patch`[\s\S]*```diff\n\*\*\* Begin Patch/);
+    assert.match(history, /tools × 2[\s\S]*2\. `apply_patch`[\s\S]*```typescript\n\*\*\* Begin Patch/);
     assert.doesNotMatch(history, /```json\nconst r = await tools\.exec_command/);
 
     fs.rmSync(tempRoot, { recursive: true, force: true });

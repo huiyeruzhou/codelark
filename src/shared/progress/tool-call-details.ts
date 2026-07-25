@@ -557,8 +557,82 @@ function renderStandardPreview(value: string, language: string): string {
   });
 }
 
-function renderPatchPreview(value: string): string {
-  return renderPreview(value, 'diff', {
+function codeLanguageFromFilePath(filePath: string): string {
+  const basename = path.basename(filePath).toLowerCase();
+  if (basename === 'dockerfile') return 'docker_file';
+  if (/^(?:gnumakefile|makefile)$/u.test(basename)) return 'makefile';
+  const extension = path.extname(basename).toLowerCase();
+  return ({
+    '.abap': 'abap',
+    '.ada': 'ada',
+    '.adb': 'ada',
+    '.ads': 'ada',
+    '.asm': 'assembly',
+    '.bash': 'bash',
+    '.c': 'c',
+    '.cc': 'cpp',
+    '.cpp': 'cpp',
+    '.cxx': 'cpp',
+    '.h': 'cpp',
+    '.hh': 'cpp',
+    '.hpp': 'cpp',
+    '.cs': 'c_sharp',
+    '.css': 'css',
+    '.dart': 'dart',
+    '.dockerfile': 'docker_file',
+    '.go': 'go',
+    '.graphql': 'graphql',
+    '.gql': 'graphql',
+    '.groovy': 'groovy',
+    '.hbs': 'htmlbars',
+    '.htm': 'html',
+    '.html': 'html',
+    '.java': 'java',
+    '.js': 'javascript',
+    '.jsx': 'javascript',
+    '.mjs': 'javascript',
+    '.cjs': 'javascript',
+    '.json': 'json',
+    '.kt': 'kotlin',
+    '.kts': 'kotlin',
+    '.lua': 'lua',
+    '.md': 'markdown',
+    '.mdx': 'markdown',
+    '.php': 'php',
+    '.pl': 'perl',
+    '.pm': 'perl',
+    '.proto': 'protobuf',
+    '.ps1': 'powershell',
+    '.py': 'python',
+    '.r': 'r',
+    '.rb': 'ruby',
+    '.rs': 'rust',
+    '.scss': 'scss',
+    '.sh': 'shell',
+    '.sol': 'solidity',
+    '.sql': 'sql',
+    '.swift': 'swift',
+    '.toml': 'toml',
+    '.ts': 'typescript',
+    '.tsx': 'typescript',
+    '.vb': 'visual_basic',
+    '.vbs': 'vbscript',
+    '.xml': 'xml',
+    '.yaml': 'yaml',
+    '.yml': 'yaml',
+  } as Record<string, string>)[extension] || 'plain_text';
+}
+
+function patchCodeLanguage(detail: Extract<ToolCallDetail, { kind: 'patch_apply' }>): string {
+  const languages = new Set((detail.files || [])
+    .map((file) => file.toPath || file.path)
+    .filter(Boolean)
+    .map(codeLanguageFromFilePath));
+  return languages.size === 1 ? [...languages][0] || 'plain_text' : 'plain_text';
+}
+
+function renderPatchPreview(value: string, language: string): string {
+  return renderPreview(value, language, {
     maxChars: PATCH_DETAIL_PREVIEW_CHAR_LIMIT,
     maxLines: PATCH_DETAIL_PREVIEW_LINE_LIMIT,
   });
@@ -603,7 +677,7 @@ export function renderToolCallDetailMarkdown(tool: ToolCallInfo): string {
         return `- ${file.action}: \`${target}\``;
       }).join('\n'));
     }
-    if (detail.patchText) sections.push(renderPatchPreview(detail.patchText));
+    if (detail.patchText) sections.push(renderPatchPreview(detail.patchText, patchCodeLanguage(detail)));
     return sections.join('\n\n');
   }
   if (detail.kind === 'file_read') {

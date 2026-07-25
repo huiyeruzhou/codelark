@@ -193,6 +193,53 @@ function isFenceLine(line: string, fenceLength: number): boolean {
   return Boolean(match && match[2].length >= fenceLength);
 }
 
+function containsFeishuTemplateExpression(text: string): boolean {
+  return text.includes('${');
+}
+
+/**
+ * Feishu's card Markdown renderer flattens a fenced block when its body
+ * contains a `${...}` expression, even without JavaScript backticks. Card
+ * JSON 2.0 also supports CommonMark indented code blocks, which preserve the
+ * body byte-for-byte without asking the client to parse that combination.
+ */
+function rewriteTemplateLiteralFencesAsIndentedCode(text: string): string {
+  const lines = text.split('\n');
+  const rendered: string[] = [];
+
+  for (let index = 0; index < lines.length; index += 1) {
+    const opener = /^( {0,3})(`{3,})([^`]*)$/.exec(lines[index] || '');
+    if (!opener) {
+      rendered.push(lines[index] || '');
+      continue;
+    }
+
+    const fenceLength = opener[2].length;
+    let closingIndex = index + 1;
+    while (closingIndex < lines.length && !isFenceLine(lines[closingIndex] || '', fenceLength)) {
+      closingIndex += 1;
+    }
+    if (closingIndex >= lines.length) {
+      rendered.push(lines[index] || '');
+      continue;
+    }
+
+    const body = lines.slice(index + 1, closingIndex);
+    if (!containsFeishuTemplateExpression(body.join('\n'))) {
+      rendered.push(...lines.slice(index, closingIndex + 1));
+      index = closingIndex;
+      continue;
+    }
+
+    if (rendered.length > 0 && rendered[rendered.length - 1]?.trim()) rendered.push('');
+    rendered.push(...body.map((line) => `    ${line}`));
+    if (lines[closingIndex + 1]?.trim()) rendered.push('');
+    index = closingIndex;
+  }
+
+  return rendered.join('\n');
+}
+
 function protectCodeFenceContents(text: string): string {
   const lines = text.split('\n');
   const rendered: string[] = [];
@@ -221,17 +268,25 @@ function protectCodeFenceContents(text: string): string {
   return rendered.join('\n');
 }
 
+function ensureCodeFenceStartsOnNewLine(text: string): string {
+  return text.split('\n').map((line) => {
+    // Four-space indented code is already a code block. Literal backticks in
+    // its body must never be promoted back into Markdown fence delimiters.
+    if (/^(?: {4}|\t)/u.test(line)) return line;
+    return line.replace(/([^\n])```/g, '$1\n```');
+  }).join('\n');
+}
+
 /**
  * Preprocess markdown for Feishu rendering.
- * Ensures code fences have a newline before them and protects literal ```
- * inside generated plaintext/diff blocks. Feishu card markdown is less
- * reliable with longer CommonMark fences, so keep outer fences at ``` and
- * break embedded fence runs with a zero-width boundary.
+ * Keeps ordinary fenced blocks (and their language hint) unchanged. Feishu
+ * flattens fenced bodies containing `${...}`, so only those blocks fall back
+ * to CommonMark's four-space indented code form.
  */
 export function preprocessFeishuMarkdown(text: string): string {
-  const protectedText = protectCodeFenceContents(text);
+  const protectedText = protectCodeFenceContents(rewriteTemplateLiteralFencesAsIndentedCode(text));
   // Ensure ``` has newline before it (unless at start of text)
-  return protectedText.replace(/([^\n])```/g, '$1\n```');
+  return ensureCodeFenceStartsOnNewLine(protectedText);
 }
 
 /**

@@ -47,23 +47,26 @@ function assertFeishuElementIdsAreValid(value: unknown): void {
 }
 
 describe('preprocessFeishuMarkdown', () => {
-  it('guards embedded code fences inside plaintext fenced blocks', () => {
-    const rendered = preprocessFeishuMarkdown(buildFencedCodeBlock([
-      'line 1',
-      '```',
-      'line 3',
-    ].join('\n'), 'text'));
+  it('keeps ordinary fenced code and its language for syntax highlighting', () => {
+    const markdown = buildFencedCodeBlock([
+      'const plain = true;',
+      'const value = 42;',
+    ].join('\n'), 'typescript');
 
-    assert.equal(rendered, [
-      '```text',
-      'line 1',
-      '`\u200B``',
-      'line 3',
-      '```',
-    ].join('\n'));
+    assert.equal(preprocessFeishuMarkdown(markdown), markdown);
   });
 
-  it('guards embedded code fences inside apply_patch diff fenced blocks', () => {
+  it('keeps fenced code for ordinary backticks, dollar signs, and braces', () => {
+    for (const value of ['`year`', '`$year`', '`{year}`']) {
+      const markdown = buildFencedCodeBlock([
+        '+const plain = true;',
+        `+const value = ${value};`,
+      ].join('\n'), 'typescript');
+      assert.equal(preprocessFeishuMarkdown(markdown), markdown);
+    }
+  });
+
+  it('preserves apply_patch content byte-for-byte inside indented code', () => {
     const rendered = preprocessFeishuMarkdown(buildFencedCodeBlock([
       '*** Begin Patch',
       '*** Update File: a.md',
@@ -71,31 +74,56 @@ describe('preprocessFeishuMarkdown', () => {
       '+```bash',
       '+echo nested',
       '+```',
+      '+const value = `${year}`;',
       '*** End Patch',
     ].join('\n'), 'diff'));
 
     assert.equal(rendered, [
-      '```diff',
-      '*** Begin Patch',
-      '*** Update File: a.md',
-      '@@',
-      '+`\u200B``bash',
-      '+echo nested',
-      '+`\u200B``',
-      '*** End Patch',
-      '```',
+      '    *** Begin Patch',
+      '    *** Update File: a.md',
+      '    @@',
+      '    +```bash',
+      '    +echo nested',
+      '    +```',
+      '    +const value = `${year}`;',
+      '    *** End Patch',
+    ].join('\n'));
+  });
+
+  it('reproduces the minimal two-line Feishu backtick case as indented code', () => {
+    const rendered = preprocessFeishuMarkdown(buildFencedCodeBlock([
+      '+const plain = true;',
+      '+const value = `${year}`;',
+    ].join('\n'), 'typescript'));
+
+    assert.equal(rendered, [
+      '    +const plain = true;',
+      '    +const value = `${year}`;',
+    ].join('\n'));
+    assert.doesNotMatch(rendered, /\u200B|&#96;|\\`/u);
+  });
+
+  it('uses indented code for a Feishu template expression without backticks', () => {
+    const rendered = preprocessFeishuMarkdown(buildFencedCodeBlock([
+      '+const plain = true;',
+      '+const value = ${year};',
+    ].join('\n'), 'typescript'));
+
+    assert.equal(rendered, [
+      '    +const plain = true;',
+      '    +const value = ${year};',
     ].join('\n'));
   });
 });
 
 describe('Feishu markdown payload builders', () => {
-  it('guards embedded fences in direct card and post markdown payloads', () => {
-    const markdown = buildFencedCodeBlock(['before', '```', 'after'].join('\n'), 'text');
+  it('uses indented code for template interpolation in direct card and post payloads', () => {
+    const markdown = buildFencedCodeBlock(['before', 'const value = `${year}`;', 'after'].join('\n'), 'text');
     const card = JSON.parse(buildCardContent(markdown)) as any;
     const post = JSON.parse(buildPostContent(markdown)) as any;
 
-    assert.match(card.body.elements[0].content, /```text\nbefore\n`\u200B``\nafter\n```/);
-    assert.match(post.zh_cn.content[0][0].text, /```text\nbefore\n`\u200B``\nafter\n```/);
+    assert.equal(card.body.elements[0].content, '    before\n    const value = `${year}`;\n    after');
+    assert.equal(post.zh_cn.content[0][0].text, '    before\n    const value = `${year}`;\n    after');
   });
 
   it('does not pass invalid card template values into collapsible panel border colors', () => {
@@ -139,7 +167,7 @@ describe('buildToolProgressMarkdown', () => {
     assert.match(rendered, /```bash/);
     assert.doesNotMatch(rendered, /file1|file2|```text/);
     assert.match(rendered, /❌ 修改 `a\.ts`/);
-    assert.match(rendered, /````diff\n\*\*\* Begin Patch/);
+    assert.match(rendered, /````typescript\n\*\*\* Begin Patch/);
     assert.match(rendered, /\n\+```bash\n\+echo nested\n\+```\n/);
     assert.doesNotMatch(rendered, /patch failed/);
   });
@@ -286,7 +314,7 @@ describe('buildToolProgressMarkdown', () => {
     assert.doesNotMatch(rendered, /stdout line|stderr line|raw output should not render|```text/);
   });
 
-  it('uses diff fences for apply_patch when the patch arrives inside an input object', () => {
+  it('uses the modified file language for apply_patch syntax highlighting', () => {
     const patchWorkdir = '/workspace/project';
     const absolutePath = `${patchWorkdir}/src/a.ts`;
     const detail = buildToolCallDetailFromInput('apply_patch', {
@@ -305,7 +333,7 @@ describe('buildToolProgressMarkdown', () => {
 
     assert.doesNotMatch(rendered, /- update: `src\/a\.ts`/);
     assert.match(rendered, /修改 `src\/a\.ts`/);
-    assert.match(rendered, /```diff\n\*\*\* Begin Patch\n\*\*\* Update File: src\/a\.ts/);
+    assert.match(rendered, /```typescript\n\*\*\* Begin Patch\n\*\*\* Update File: src\/a\.ts/);
     assert.doesNotMatch(rendered, new RegExp(absolutePath.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
     assert.doesNotMatch(rendered, /workspace\/project/);
     assert.doesNotMatch(rendered, /```json/);
@@ -543,10 +571,10 @@ describe('buildTaskProgressMarkdown', () => {
 });
 
 describe('buildStreamingTextElements', () => {
-  it('guards embedded fences in streaming text content updates', () => {
-    const markdown = buildFencedCodeBlock(['before', '```', 'after'].join('\n'), 'text');
+  it('uses indented code for template interpolation in streaming text updates', () => {
+    const markdown = buildFencedCodeBlock(['before', 'const value = `${year}`;', 'after'].join('\n'), 'text');
 
-    assert.match(buildStreamingTextContent(markdown), /```text\nbefore\n`\u200B``\nafter\n```/);
+    assert.equal(buildStreamingTextContent(markdown), '    before\n    const value = `${year}`;\n    after');
   });
 
   it('renders short mirror goal status once as a separate markdown element', () => {
@@ -1007,7 +1035,7 @@ describe('buildFinalCardJson', () => {
     assert.doesNotMatch(content, /before|after|```text|````text/);
   });
 
-  it('guards embedded fences in final card apply_patch content', () => {
+  it('uses indented code for final-card apply_patch template interpolation', () => {
     const detail = buildToolCallDetailFromInput('apply_patch', [
       '*** Begin Patch',
       '*** Update File: a.md',
@@ -1015,6 +1043,7 @@ describe('buildFinalCardJson', () => {
       '+```ts',
       '+const ok = true;',
       '+```',
+      '+const value = `${year}`;',
       '*** End Patch',
     ].join('\n'));
     const cardJson = buildFinalCardJson(
@@ -1032,12 +1061,12 @@ describe('buildFinalCardJson', () => {
 
     const parsed = JSON.parse(cardJson) as any;
     const content = JSON.stringify(parsed.body.elements);
-    assert.match(content, /```diff\\n\*\*\* Begin Patch/);
-    assert.match(content, /\\n\+`\u200B``ts\\n\+const ok = true;\\n\+`\u200B``\\n/);
-    assert.doesNotMatch(content, /````diff/);
+    assert.match(content, /    \*\*\* Begin Patch\\n    \*\*\* Update File: a\.md/);
+    assert.match(content, /\\n    \+```ts\\n    \+const ok = true;\\n    \+```\\n    \+const value = `\$\{year\}`;\\n/);
+    assert.doesNotMatch(content, /```markdown|\u200B|&#96;/);
   });
 
-  it('truncates long patch content before rendering a complete multiline diff fence', () => {
+  it('truncates long patch content before rendering a complete highlighted fence', () => {
     const patch = [
       '*** Begin Patch',
       '*** Update File: src/large.ts',
@@ -1053,8 +1082,8 @@ describe('buildFinalCardJson', () => {
     }]) as any[];
 
     const content = panel.elements[0].content as string;
-    const codeMatch = /```diff\n([\s\S]*?)\n```/.exec(content);
-    assert.ok(codeMatch, 'long patch must retain a closing diff fence');
+    const codeMatch = /```typescript\n([\s\S]*?)\n```/.exec(content);
+    assert.ok(codeMatch, 'long patch must retain a closing language fence');
     const preview = codeMatch[1] || '';
     assert.ok(Array.from(preview).length <= PATCH_DETAIL_PREVIEW_CHAR_LIMIT);
     assert.ok(preview.split('\n').length <= PATCH_DETAIL_PREVIEW_LINE_LIMIT);

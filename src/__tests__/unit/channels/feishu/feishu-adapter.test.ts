@@ -2901,8 +2901,8 @@ describe('feishu-adapter structured streaming regions', () => {
       && typeof element.content === 'string'
       && element.content.includes(`TOOL_${tools.length}_END`)
     ));
-    assert.match(sourcePatch?.content || '', /```diff\n\*\*\* Begin Patch\n\*\*\* Update File:/);
-    assert.match(continuationPatch?.content || '', /```diff\n\*\*\* Begin Patch\n\*\*\* Update File:/);
+    assert.match(sourcePatch?.content || '', /```typescript\n\*\*\* Begin Patch\n\*\*\* Update File:/);
+    assert.match(continuationPatch?.content || '', /```typescript\n\*\*\* Begin Patch\n\*\*\* Update File:/);
     assert.match(sourcePatch?.content || '', /\n\*\*\* End Patch\n```$/);
     assert.match(continuationPatch?.content || '', /\n\*\*\* End Patch\n```$/);
     const activeState = (adapter as any).activeCards.get('stream-1');
