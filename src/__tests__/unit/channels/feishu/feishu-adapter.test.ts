@@ -461,6 +461,8 @@ describe('feishu-adapter structured streaming regions', () => {
       reaction_type: 'Typing',
     });
     reactionAck.resolve({ code: 0, data: {} });
+    await reactionAck.promise;
+    await new Promise<void>((resolve) => setImmediate(resolve));
   });
 
   it('matches cloud document comment mentions from nested Feishu id fields', async () => {

@@ -4541,32 +4541,14 @@ export class FeishuAdapter extends BaseChannelAdapter {
       if (inFlight) {
         const remainingMs = deadline - Date.now();
         if (remainingMs <= 0) return false;
-        const timedOut = Symbol('flush-timeout');
-        try {
-          const result = await Promise.race([
-            inFlight.then(() => null),
-            new Promise<typeof timedOut>((resolve) => setTimeout(() => resolve(timedOut), remainingMs)),
-          ]);
-          if (result === timedOut) return false;
-        } catch {
-          // best effort only
-        }
+        if (!await this.waitForCardFlushPromise(inFlight, remainingMs)) return false;
         continue;
       }
       const backgroundInFlight = state.backgroundFlushInFlight;
       if (backgroundInFlight) {
         const remainingMs = deadline - Date.now();
         if (remainingMs <= 0) return false;
-        const timedOut = Symbol('background-flush-timeout');
-        try {
-          const result = await Promise.race([
-            backgroundInFlight.then(() => null),
-            new Promise<typeof timedOut>((resolve) => setTimeout(() => resolve(timedOut), remainingMs)),
-          ]);
-          if (result === timedOut) return false;
-        } catch {
-          // best effort only
-        }
+        if (!await this.waitForCardFlushPromise(backgroundInFlight, remainingMs)) return false;
         continue;
       }
       if (Date.now() >= deadline) return false;
@@ -4576,6 +4558,20 @@ export class FeishuAdapter extends BaseChannelAdapter {
         continue;
       }
       return true;
+    }
+  }
+
+  private async waitForCardFlushPromise(promise: Promise<unknown>, timeoutMs: number): Promise<boolean> {
+    let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
+    try {
+      return await Promise.race([
+        promise.then(() => true, () => true),
+        new Promise<boolean>((resolve) => {
+          timeoutHandle = setTimeout(() => resolve(false), timeoutMs);
+        }),
+      ]);
+    } finally {
+      if (timeoutHandle) clearTimeout(timeoutHandle);
     }
   }
 
