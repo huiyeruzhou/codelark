@@ -15,6 +15,10 @@ import {
   type FeishuSite,
 } from '../channels/types.js';
 import { normalizeFeishuSite } from '../channels/feishu/site.js';
+import {
+  buildFeishuBotChatAppLink,
+  fetchFeishuBotIdentity,
+} from '../channels/feishu/bot-identity.js';
 import { createConfigService } from '../configuration/service.js';
 import type { ConfigPatch, ConfigV2 } from '../configuration/schema.js';
 import {
@@ -53,7 +57,13 @@ export interface RuntimeRecommendation {
 
 type SetupMode = 'existing' | 'qr' | 'manual';
 type RuntimeChoice = 'codex' | 'ccr' | 'claude' | 'kimi';
-type LarkCliRunOptions = { homeDir?: string; input?: string; inheritStdio?: boolean; env?: NodeJS.ProcessEnv };
+type LarkCliRunOptions = {
+  homeDir?: string;
+  input?: string;
+  inheritStdio?: boolean;
+  compactAuthOutput?: boolean;
+  env?: NodeJS.ProcessEnv;
+};
 type TmuxPrerequisiteResult = 'available' | 'installed' | 'sdk-fallback';
 
 function assertInteractiveTerminal(): void {
@@ -120,6 +130,18 @@ export function recommendedRuntimeChoice(recommendation: RuntimeRecommendation):
   if (recommendation.runtime === 'codex') return 'codex';
   if (recommendation.runtime === 'kimi') return 'kimi';
   return recommendation.claudeExecutable === 'ccr' ? 'ccr' : 'claude';
+}
+
+export function buildSetupCompletionGuide(botChatUrl?: string): string[] {
+  return [
+    ...(botChatUrl ? ['机器人私聊：', `  ${botChatUrl}`, ''] : []),
+    '开始使用：',
+    '  1. 打开机器人私聊，发送 `/new` 新建聊天。',
+    '  2. 直接发送普通内容，即可透传给当前 agent。',
+    '  3. 需要发送特殊键时使用 `/tmux <C-c>`、`/tmux <Esc>` 或 `/tmux <Enter>`。',
+    '  4. 卡住时发送 `/tmux-screen` 查看当前终端屏幕。',
+    '  5. 仍无法判断时，把卡片标题栏的 Bridge ID 发给本地 Codex 排查。',
+  ];
 }
 
 function splitAllowedUsers(value: string): string[] | undefined {
@@ -229,25 +251,102 @@ function trimUrlPunctuation(url: string): string {
 export interface TmuxInstallGuidance {
   title: string;
   lines: string[];
-  command: string;
+  steps: TmuxInstallStep[];
   commandDisplay: string;
 }
 
-export function buildTmuxInstallGuidance(platform: NodeJS.Platform = process.platform): TmuxInstallGuidance {
+export interface TmuxInstallStep {
+  command: string;
+  args: string[];
+  display: string;
+}
+
+export type LinuxTmuxPackageManager = 'apt-get' | 'dnf' | 'yum' | 'pacman' | 'zypper' | 'apk';
+
+interface TmuxInstallGuidanceOptions {
+  linuxPackageManager?: LinuxTmuxPackageManager | null;
+  useSudo?: boolean;
+  homebrewAvailable?: boolean;
+  architecture?: NodeJS.Architecture;
+}
+
+const HOMEBREW_INSTALL_SCRIPT = '$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)';
+
+function installStep(command: string, args: string[], display?: string): TmuxInstallStep {
+  return { command, args, display: display || [command, ...args].join(' ') };
+}
+
+function privilegedInstallStep(command: string, args: string[], useSudo: boolean): TmuxInstallStep {
+  return useSudo
+    ? installStep('sudo', [command, ...args])
+    : installStep(command, args);
+}
+
+function linuxTmuxInstallSteps(
+  packageManager: LinuxTmuxPackageManager,
+  useSudo: boolean,
+): TmuxInstallStep[] {
+  switch (packageManager) {
+    case 'apt-get':
+      return [
+        privilegedInstallStep('apt-get', ['update'], useSudo),
+        privilegedInstallStep('apt-get', ['install', '-y', 'tmux'], useSudo),
+      ];
+    case 'dnf':
+      return [privilegedInstallStep('dnf', ['install', '-y', 'tmux'], useSudo)];
+    case 'yum':
+      return [privilegedInstallStep('yum', ['install', '-y', 'tmux'], useSudo)];
+    case 'pacman':
+      return [privilegedInstallStep('pacman', ['-S', '--needed', '--noconfirm', 'tmux'], useSudo)];
+    case 'zypper':
+      return [privilegedInstallStep('zypper', ['--non-interactive', 'install', 'tmux'], useSudo)];
+    case 'apk':
+      return [privilegedInstallStep('apk', ['add', 'tmux'], useSudo)];
+  }
+}
+
+export function buildTmuxInstallGuidance(
+  platform: NodeJS.Platform = process.platform,
+  options: TmuxInstallGuidanceOptions = {},
+): TmuxInstallGuidance {
   if (platform === 'darwin') {
+    const homebrewAvailable = options.homebrewAvailable !== false;
+    const brewCommand = homebrewAvailable
+      ? 'brew'
+      : options.architecture === 'arm64'
+        ? '/opt/homebrew/bin/brew'
+        : '/usr/local/bin/brew';
+    const steps = [
+      ...(homebrewAvailable
+        ? []
+        : [installStep(
+            '/bin/bash',
+            ['-c', HOMEBREW_INSTALL_SCRIPT],
+            `/bin/bash -c "${HOMEBREW_INSTALL_SCRIPT}"`,
+          )]),
+      installStep(brewCommand, ['install', 'tmux']),
+    ];
     return {
       title: 'tmux 未安装',
       lines: [
         'CodeLark 默认使用 tmux provider，需要本机 PATH 中存在 tmux 命令。',
-        'macOS 安装命令：',
-        'brew install tmux',
+        homebrewAvailable
+          ? '将使用当前 Homebrew 安装 tmux。'
+          : '未检测到 Homebrew，将先运行 Homebrew 官方安装脚本，再安装 tmux。',
+        '安装过程继承当前终端；Homebrew 需要系统权限时可正常输入 macOS 登录密码。',
         '安装完成后向导会再次检测 tmux 是否可用。',
       ],
-      command: 'brew install tmux',
-      commandDisplay: 'brew install tmux',
+      steps,
+      commandDisplay: steps.map((step) => step.display).join('\n'),
     };
   }
   if (platform === 'win32') {
+    const steps = [installStep('winget', [
+      'install',
+      'psmux',
+      '--accept-package-agreements',
+      '--accept-source-agreements',
+    ])];
     return {
       title: 'tmux 未安装',
       lines: [
@@ -256,21 +355,32 @@ export function buildTmuxInstallGuidance(platform: NodeJS.Platform = process.pla
         'winget install psmux --accept-package-agreements --accept-source-agreements',
         '安装完成后向导会再次检测 tmux 是否可用；如果 PATH 尚未刷新，请重新打开 PowerShell / Windows Terminal 后再运行 codelark setup。',
       ],
-      command: 'winget install psmux --accept-package-agreements --accept-source-agreements',
-      commandDisplay: 'winget install psmux --accept-package-agreements --accept-source-agreements',
+      steps,
+      commandDisplay: steps.map((step) => step.display).join('\n'),
     };
   }
   if (platform === 'linux') {
+    const packageManager = options.linuxPackageManager === undefined
+      ? 'apt-get'
+      : options.linuxPackageManager;
+    const useSudo = options.useSudo !== false;
+    const steps = packageManager ? linuxTmuxInstallSteps(packageManager, useSudo) : [];
     return {
       title: 'tmux 未安装',
       lines: [
         'CodeLark 默认使用 tmux provider，需要本机 PATH 中存在 tmux 命令。',
-        'Linux 安装命令：',
-        'sudo apt update && sudo apt install -y tmux',
+        packageManager
+          ? `检测到 Linux 包管理器：${packageManager}。`
+          : '未识别当前 Linux 包管理器，请按发行版文档手动安装 tmux。',
+        useSudo
+          ? '安装命令会通过 sudo 继承当前终端，可正常输入登录密码。'
+          : '当前进程以 root 身份运行，安装命令不会额外调用 sudo。',
         '安装完成后向导会再次检测 tmux 是否可用。',
       ],
-      command: 'sudo apt update && sudo apt install -y tmux',
-      commandDisplay: 'sudo apt update && sudo apt install -y tmux',
+      steps,
+      commandDisplay: steps.length > 0
+        ? steps.map((step) => step.display).join('\n')
+        : '请手动使用当前发行版的包管理器安装 tmux',
     };
   }
   return {
@@ -280,20 +390,50 @@ export function buildTmuxInstallGuidance(platform: NodeJS.Platform = process.pla
       '请使用当前系统的包管理器安装 tmux，并确认 tmux -V 可以正常执行。',
       '安装完成后请重新打开终端，再运行 codelark setup。',
     ],
-    command: '',
+    steps: [],
     commandDisplay: '请手动安装 tmux',
   };
 }
 
-export async function isTmuxCommandAvailable(): Promise<boolean> {
+async function isCommandAvailable(command: string, args: string[] = ['--version']): Promise<boolean> {
   return new Promise<boolean>((resolve) => {
-    const child = spawn('tmux', ['-V'], {
+    const child = spawn(command, args, {
       stdio: 'ignore',
       shell: process.platform === 'win32',
     });
     child.on('error', () => resolve(false));
     child.on('exit', (code) => resolve(code === 0));
   });
+}
+
+export async function isTmuxCommandAvailable(): Promise<boolean> {
+  return isCommandAvailable('tmux', ['-V']);
+}
+
+export async function detectLinuxTmuxPackageManager(
+  available: (command: string) => Promise<boolean> = (command) => isCommandAvailable(command),
+): Promise<LinuxTmuxPackageManager | null> {
+  const candidates: LinuxTmuxPackageManager[] = ['apt-get', 'dnf', 'yum', 'pacman', 'zypper', 'apk'];
+  for (const candidate of candidates) {
+    if (await available(candidate)) return candidate;
+  }
+  return null;
+}
+
+async function resolveTmuxInstallGuidance(): Promise<TmuxInstallGuidance> {
+  if (process.platform === 'linux') {
+    return buildTmuxInstallGuidance('linux', {
+      linuxPackageManager: await detectLinuxTmuxPackageManager(),
+      useSudo: typeof process.getuid === 'function' ? process.getuid() !== 0 : true,
+    });
+  }
+  if (process.platform === 'darwin') {
+    return buildTmuxInstallGuidance('darwin', {
+      homebrewAvailable: await isCommandAvailable('brew'),
+      architecture: process.arch,
+    });
+  }
+  return buildTmuxInstallGuidance();
 }
 
 export function shouldConfirmTmuxAutoInstall(platform: NodeJS.Platform = process.platform): boolean {
@@ -306,37 +446,57 @@ export function withTmuxPostInstallPath(
   localAppData: string | undefined,
 ): string {
   const value = currentPath || '';
-  if (platform !== 'win32' || !localAppData?.trim()) return value;
-  const winGetLinks = path.win32.join(localAppData.trim(), 'Microsoft', 'WinGet', 'Links');
-  const entries = value.split(path.win32.delimiter).filter(Boolean);
-  if (entries.some((entry) => entry.toLowerCase() === winGetLinks.toLowerCase())) return value;
-  return [winGetLinks, ...entries].join(path.win32.delimiter);
+  if (platform === 'darwin') {
+    const entries = value.split(path.delimiter).filter(Boolean);
+    const candidates = ['/opt/homebrew/bin', '/usr/local/bin'];
+    return [...candidates.filter((candidate) => !entries.includes(candidate)), ...entries].join(path.delimiter);
+  }
+  if (platform === 'win32' && localAppData?.trim()) {
+    const winGetLinks = path.win32.join(localAppData.trim(), 'Microsoft', 'WinGet', 'Links');
+    const entries = value.split(path.win32.delimiter).filter(Boolean);
+    if (entries.some((entry) => entry.toLowerCase() === winGetLinks.toLowerCase())) return value;
+    return [winGetLinks, ...entries].join(path.win32.delimiter);
+  }
+  return value;
 }
 
 async function runTmuxInstallCommand(guidance: TmuxInstallGuidance): Promise<void> {
-  if (!guidance.command) {
+  if (guidance.steps.length === 0) {
     throw new Error(guidance.lines.join('\n'));
   }
-  await new Promise<void>((resolve, reject) => {
-    const child = spawn(guidance.command, {
-      stdio: 'inherit',
-      shell: true,
-    });
-    child.on('error', reject);
-    child.on('exit', (code, signal) => {
-      if (code === 0) {
-        resolve();
-        return;
-      }
-      reject(new Error(`tmux 安装命令退出失败：${signal || code}`));
-    });
-  });
+  for (const step of guidance.steps) {
+    p.note(`开始执行：${step.display}`, '安装 tmux');
+    try {
+      await new Promise<void>((resolve, reject) => {
+        const child = spawn(step.command, step.args, {
+          stdio: 'inherit',
+          shell: false,
+        });
+        child.on('error', reject);
+        child.on('exit', (code, signal) => {
+          if (code === 0) {
+            resolve();
+            return;
+          }
+          reject(new Error(`退出状态：${signal || code}`));
+        });
+      });
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      throw new Error([
+        `tmux 自动安装未完成：${step.display}`,
+        detail,
+        '可手动依次执行：',
+        ...guidance.steps.map((item) => item.display),
+      ].join('\n'), { cause: error });
+    }
+  }
 }
 
 async function promptTmuxPrerequisite(): Promise<TmuxPrerequisiteResult> {
   if (await isTmuxCommandAvailable()) return 'available';
 
-  const guidance = buildTmuxInstallGuidance();
+  const guidance = await resolveTmuxInstallGuidance();
   p.note([
     ...guidance.lines,
     '',
@@ -360,7 +520,6 @@ async function promptTmuxPrerequisite(): Promise<TmuxPrerequisiteResult> {
     return 'sdk-fallback';
   }
 
-  p.note(`开始执行：${guidance.commandDisplay}`, '安装 tmux');
   await runTmuxInstallCommand(guidance);
   process.env.PATH = withTmuxPostInstallPath(process.platform, process.env.PATH, process.env.LOCALAPPDATA);
   if (await isTmuxCommandAvailable()) {
@@ -411,6 +570,36 @@ export async function renderLarkCliUrlQr(url: string): Promise<string> {
   ].join('\n');
 }
 
+interface AuthOutputFilterState {
+  suppressAgentInstructions: boolean;
+}
+
+function filterAuthOutputLine(line: string, state: AuthOutputFilterState): string {
+  if (line.includes('[AI agent]')) {
+    state.suppressAgentInstructions = true;
+    return '';
+  }
+  if (state.suppressAgentInstructions) {
+    if (line.includes('等待用户授权...')) {
+      state.suppressAgentInstructions = false;
+      return '等待用户授权...';
+    }
+    return '';
+  }
+  if (/^\s*本次(?:请求|新授予) scopes:/u.test(line)) return '';
+  if (/^可执行 `lark-cli auth status`/u.test(line)) return '';
+  return line;
+}
+
+export function compactLarkCliAuthOutput(text: string): string {
+  const state: AuthOutputFilterState = { suppressAgentInstructions: false };
+  return text
+    .split(/\r?\n/u)
+    .map((line) => filterAuthOutputLine(line, state))
+    .filter(Boolean)
+    .join('\n');
+}
+
 async function runLarkCli(
   args: string[],
   options: LarkCliRunOptions = {},
@@ -434,33 +623,33 @@ async function runLarkCli(
         } : {}),
       },
     });
-    let combinedOutput = '';
-    const renderedUrls = new Set<string>();
-    let qrRenderQueue = Promise.resolve();
     let stderr = '';
+    const outputFilters = new Map<NodeJS.WriteStream, {
+      pending: string;
+      state: AuthOutputFilterState;
+    }>();
     if (options.input !== undefined && child.stdin) {
       child.stdin.end(options.input);
     }
     const handleOutput = (chunk: Buffer, stream: NodeJS.WriteStream) => {
       const text = chunk.toString();
-      if (inheritStdio) stream.write(chunk);
-      combinedOutput += text;
-      for (const url of extractHttpUrlsFromText(combinedOutput)) {
-        if (renderedUrls.has(url)) continue;
-        renderedUrls.add(url);
-        qrRenderQueue = qrRenderQueue
-          .then(() => renderLarkCliUrlQr(url))
-          .then((rendered) => {
-            if (inheritStdio) process.stdout.write(rendered);
-          })
-          .catch((error) => {
-            const message = error instanceof Error ? error.message : String(error);
-            if (inheritStdio) process.stderr.write(`\n生成授权二维码失败：${message}\n`);
-          });
+      if (!inheritStdio) return;
+      if (!options.compactAuthOutput) {
+        stream.write(chunk);
+        return;
       }
-      if (combinedOutput.length > 20_000) {
-        combinedOutput = combinedOutput.slice(-10_000);
+      const current = outputFilters.get(stream) || {
+        pending: '',
+        state: { suppressAgentInstructions: false },
+      };
+      current.pending += text;
+      const lines = current.pending.split(/\r?\n/u);
+      current.pending = lines.pop() || '';
+      for (const line of lines) {
+        const filtered = filterAuthOutputLine(line, current.state);
+        if (filtered) stream.write(`${filtered}\n`);
       }
+      outputFilters.set(stream, current);
     };
     child.stdout?.on('data', (chunk: Buffer) => {
       handleOutput(chunk, process.stdout);
@@ -470,8 +659,11 @@ async function runLarkCli(
       handleOutput(chunk, process.stderr);
     });
     child.on('error', reject);
-    child.on('exit', async (code, signal) => {
-      await qrRenderQueue;
+    child.on('exit', (code, signal) => {
+      for (const [stream, filter] of outputFilters) {
+        const filtered = filterAuthOutputLine(filter.pending, filter.state);
+        if (filtered) stream.write(filtered);
+      }
       if (code === 0) {
         resolve();
         return;
@@ -544,7 +736,7 @@ async function ensureCodeLarkUserAuthorization(config: ConfigV2): Promise<void> 
       '--scope',
       feishuSetupUserAuthScopeArgument(),
     ],
-    { env: buildLarkCliRuntimeEnv() },
+    { env: buildLarkCliRuntimeEnv(), compactAuthOutput: true },
   );
   // login 会把 user 写进私有 lark-cli config。这里立即刷新 runtime policy，
   // 但不要再次 bind --force；重复绑定同一个 app 可能覆盖刚写入的 user。
@@ -875,6 +1067,22 @@ export async function runSetupWizard(options: SetupOptions = {}): Promise<void> 
       : runtimeChoice === 'kimi'
         ? 'Kimi Code'
         : 'Claude Code';
+  let botChatUrl: string | undefined;
+  const botLinkSpinner = p.spinner();
+  botLinkSpinner.start('生成机器人私聊入口');
+  try {
+    const bot = await fetchFeishuBotIdentity(credentials);
+    botChatUrl = buildFeishuBotChatAppLink(credentials.site, bot.openId);
+    botLinkSpinner.stop(`已找到机器人：${bot.name || credentials.alias || credentials.appId}`);
+  } catch (error) {
+    botLinkSpinner.stop('暂时无法生成机器人私聊入口');
+    const message = error instanceof Error ? error.message : String(error);
+    p.note([
+      '配置和授权已经完成，但机器人信息接口暂未返回可用的 bot open_id。',
+      message,
+      '可在飞书/Lark 中搜索机器人名称进入私聊，不影响 CodeLark 启动。',
+    ].join('\n'), '私聊入口未生成');
+  }
   p.outro(
     [
       '配置已保存。',
@@ -882,6 +1090,8 @@ export async function runSetupWizard(options: SetupOptions = {}): Promise<void> 
       `默认 runtime：${runtimeSummary}`,
       `默认工作目录：${workspaceRoot}`,
       codexSkillsSummary,
+      '',
+      ...buildSetupCompletionGuide(botChatUrl),
       '',
       '启动方式：',
       '  codelark run',

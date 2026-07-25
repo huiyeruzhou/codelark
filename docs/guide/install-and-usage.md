@@ -24,7 +24,7 @@ Bridge 每个本地自然日最多检查一次 npm 最新版本。检查由当�
 
 - 本机已经可以运行 `codelark`。
 - 本机已有可用的 Codex 登录态、Claude Code 登录态、Kimi Code 登录态或对应 API 凭据。
-- 本机 PATH 中已有 `tmux` 命令；如果没有，`codelark setup` 会按平台安装，具体行为见下方“Windows 的 tmux 支持”和首次配置步骤。
+- 本机 PATH 中已有 `tmux` 命令；如果没有，`codelark setup` 会按平台说明将执行的命令并帮助安装，具体行为见下方平台说明和首次配置步骤。
 - 已创建飞书/Lark 自建应用并拿到 `App ID` / `App Secret`，或允许向导通过开放平台扫码创建机器人配置。
 - 飞书应用已启用机器人、权限、事件订阅和长连接。详细步骤见 [平台配置指南](platform-setup.md)。
 
@@ -49,6 +49,14 @@ tmux kill-session -t codelark_check
 
 若 `tmux` 仍不在 PATH，先重开终端；不要为此改用 WSL 内的 tmux，因为 Windows bridge 和 WSL 会拥有不同的进程、路径与用户环境。
 
+### macOS 和 Linux 的 tmux 安装
+
+macOS 缺少 tmux 时，向导会先展示安装步骤并询问确认。已有 Homebrew 时直接运行 `brew install tmux`；没有 Homebrew 时先运行 Homebrew 官方交互式安装脚本，再使用对应的 `/opt/homebrew/bin/brew`（Apple Silicon）或 `/usr/local/bin/brew`（Intel）安装 tmux。安装子进程继承当前终端，Homebrew 需要系统权限时可以正常要求用户输入 macOS 登录密码。
+
+Linux 会依次识别 `apt-get`、`dnf`、`yum`、`pacman`、`zypper` 和 `apk`，展示与当前发行版匹配的命令后再询问确认。普通用户执行时，包管理器命令通过交互式 `sudo` 运行，密码提示直接显示在当前终端；root 用户不会额外调用 `sudo`。向导不会使用 `sudo -n`、吞掉错误或在失败后假装 tmux 已可用。
+
+自动安装任一步失败时，错误消息会保留失败步骤、退出状态和整组可复制的手动命令。未识别包管理器时不猜测发行版，改为提示手动安装。
+
 ## 首次配置
 
 推荐先运行交互式向导：
@@ -59,7 +67,7 @@ codelark setup
 
 向导会依次完成：
 
-1. 检查 `tmux` 是否可用；缺失时按当前系统自动安装。Windows 直接安装 psmux；macOS/Linux 先询问确认。
+1. 检查 `tmux` 是否可用；缺失时展示平台安装计划。Windows 直接安装 psmux；macOS/Linux 先询问确认，并允许安装器在当前终端请求密码。
 2. 选择飞书机器人配置方式。
 3. 复用 `~/.codelark` 已有配置、扫码创建新 App，或粘贴 `App ID` / `App Secret`。
 4. 按本机环境推荐默认 runtime。
@@ -67,9 +75,13 @@ codelark setup
 6. 可选设置飞书用户 open_id 白名单。
 7. 可选安装 CodeLark skills 和官方 `lark-doc` skill。本地 CodeLark skills 会先安装；官方 `lark-doc` 通过 `npx skills add ...` 单独安装，失败时不会影响本地 skills 可用。
 
-在 macOS/Linux 上，如果用户拒绝向导安装 tmux，向导仍会继续保存配置，但会把默认 provider 改为 SDK：`runtime.codex.provider = "sdk"`，并把 Claude 默认 provider 写为 `runtime.claude.provider = "sdk"`。Kimi Code 当前只有 tmux provider，因此需要安装 tmux 后再使用 Kimi runtime。之后安装 tmux 后，可以在 IM 中使用 `/provider tmux` 切回 tmux provider。Windows 不显示这次额外确认，而是直接通过 WinGet 安装 psmux；安装失败时向导不会伪装成已具备 tmux。
+配置完成后，向导会通过机器人信息接口获取当前 bot 的 `open_id`，并在终端结束页输出一个直接打开机器人私聊的飞书/Lark AppLink。该链接只展示给当前运行向导的用户，不会主动向 allowed users 群发教程。进入私聊后发送 `/new` 新建聊天，普通消息会透传给 agent；特殊键使用 `/tmux <C-c>`、`/tmux <Esc>` 或 `/tmux <Enter>`，卡住时可用 `/tmux-screen` 查看终端屏幕，并可把卡片标题栏的 Bridge ID 交给本地 Codex 排查。
 
-机器人配置方式有两种：
+若机器人信息接口暂时不可用，向导仍会保存配置并完成，不会把私聊链接失败误报为安装失败；此时可直接在飞书/Lark 中搜索机器人名称进入私聊。
+
+在 macOS/Linux 上，如果用户拒绝向导安装 tmux，向导仍会继续保存配置，但会把默认 provider 改为 SDK：`runtime.codex.provider = "sdk"`，并把 Claude 默认 provider 写为 `runtime.claude.provider = "sdk"`。Kimi Code 当前只有 tmux provider，因此需要安装 tmux 后再使用 Kimi runtime。之后安装 tmux 后，可以在 IM 中使用 `/provider tmux` 切回 tmux provider。Windows 不显示这次额外确认，而是直接通过 WinGet 安装 psmux；任何平台安装失败时，向导都会保留错误和手动命令，不会伪装成已具备 tmux。
+
+机器人配置方式有三种：
 
 - 使用现有 CodeLark 配置：从 `~/.codelark/config.toml` 加载已有 `App ID` / `App Secret`；首次遇到旧版 `config.json` / `config.env` 时会迁移到 TOML，不会读取用户 HOME 下的 `~/.lark-cli`。
 - 扫码创建：通过飞书/Lark 开放平台扫码创建 App，`App ID` / `App Secret` 直接来自扫码返回结果。

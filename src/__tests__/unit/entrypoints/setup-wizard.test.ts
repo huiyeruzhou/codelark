@@ -8,7 +8,10 @@ import test from 'node:test';
 
 import {
   buildSetupConfig,
+  buildSetupCompletionGuide,
   buildTmuxInstallGuidance,
+  compactLarkCliAuthOutput,
+  detectLinuxTmuxPackageManager,
   extractHttpUrlsFromText,
   loadSetupConfig,
   recommendRuntime,
@@ -50,6 +53,38 @@ test('extracts lark-cli authorization URLs from terminal output', () => {
     'https://open.feishu.cn/open-apis/authen/v1/authorize?app_id=cli_x&redirect_uri=http%3A%2F%2F127.0.0.1%3A3000%2Fcb',
     'https://accounts.larksuite.com/oauth/authorize?state=abc',
   ]);
+});
+
+test('builds a concise setup completion guide with the bot private-chat link', () => {
+  const lines = buildSetupCompletionGuide('https://applink.feishu.cn/client/chat/open?openId=ou_bot');
+  const text = lines.join('\n');
+  assert.match(text, /applink\.feishu\.cn\/client\/chat\/open/);
+  assert.match(text, /`\/new`/);
+  assert.match(text, /`\/tmux <C-c>`/);
+  assert.match(text, /`\/tmux-screen`/);
+  assert.match(text, /Bridge ID/);
+  assert.doesNotMatch(buildSetupCompletionGuide().join('\n'), /applink/);
+});
+
+test('keeps actionable auth progress while removing AI instructions and scope dumps', () => {
+  const compact = compactLarkCliAuthOutput([
+    '在浏览器中打开以下链接进行认证:',
+    'https://accounts.feishu.cn/oauth/v1/device/verify?flow_id=demo',
+    '[AI agent] 此命令最长阻塞约 10 分钟。',
+    '不要在同一轮里展示 URL 后立刻阻塞。',
+    '等待用户授权...',
+    '[lark-cli] device-flow: token response received',
+    'OK: 授权成功! 用户: 测试用户 (ou_demo)',
+    '  本次请求 scopes: im:chat docs:document.comment:read',
+    '  本次新授予 scopes: im:chat docs:document.comment:read',
+    '可执行 `lark-cli auth status` 查看账号当前已授予的全部 scopes；',
+  ].join('\n'));
+
+  assert.match(compact, /在浏览器中打开/);
+  assert.match(compact, /accounts\.feishu\.cn/);
+  assert.match(compact, /等待用户授权/);
+  assert.match(compact, /授权成功/);
+  assert.doesNotMatch(compact, /AI agent|不要在同一轮|本次请求 scopes|本次新授予 scopes|auth status/);
 });
 
 test('renders a terminal QR block for lark-cli authorization URLs', async () => {
@@ -266,17 +301,55 @@ test('builds setup config with sdk providers when tmux install is declined', () 
 });
 
 test('builds platform-specific tmux installation guidance', () => {
-  const linux = buildTmuxInstallGuidance('linux');
-  assert.match(linux.command, /sudo apt update && sudo apt install -y tmux/);
-  assert.match(linux.lines.join('\n'), /Linux 安装命令/);
+  const linux = buildTmuxInstallGuidance('linux', {
+    linuxPackageManager: 'apt-get',
+    useSudo: true,
+  });
+  assert.deepEqual(linux.steps.map((step) => [step.command, step.args]), [
+    ['sudo', ['apt-get', 'update']],
+    ['sudo', ['apt-get', 'install', '-y', 'tmux']],
+  ]);
+  assert.match(linux.lines.join('\n'), /可正常输入登录密码/);
 
   const macos = buildTmuxInstallGuidance('darwin');
-  assert.equal(macos.command, 'brew install tmux');
-  assert.match(macos.lines.join('\n'), /macOS 安装命令/);
+  assert.deepEqual(macos.steps.map((step) => [step.command, step.args]), [
+    ['brew', ['install', 'tmux']],
+  ]);
+
+  const macosWithoutHomebrew = buildTmuxInstallGuidance('darwin', {
+    homebrewAvailable: false,
+    architecture: 'arm64',
+  });
+  assert.equal(macosWithoutHomebrew.steps[0]?.command, '/bin/bash');
+  assert.match(macosWithoutHomebrew.steps[0]?.display || '', /Homebrew\/install\/HEAD\/install\.sh/);
+  assert.deepEqual(macosWithoutHomebrew.steps[1], {
+    command: '/opt/homebrew/bin/brew',
+    args: ['install', 'tmux'],
+    display: '/opt/homebrew/bin/brew install tmux',
+  });
+  assert.match(macosWithoutHomebrew.lines.join('\n'), /macOS 登录密码/);
 
   const windows = buildTmuxInstallGuidance('win32');
-  assert.match(windows.command, /winget install psmux/);
+  assert.match(windows.commandDisplay, /winget install psmux/);
   assert.match(windows.lines.join('\n'), /psmux/);
+});
+
+test('detects the first supported Linux package manager without assuming apt', async () => {
+  const checked: string[] = [];
+  const detected = await detectLinuxTmuxPackageManager(async (command) => {
+    checked.push(command);
+    return command === 'pacman';
+  });
+
+  assert.equal(detected, 'pacman');
+  assert.deepEqual(checked, ['apt-get', 'dnf', 'yum', 'pacman']);
+
+  const unknown = buildTmuxInstallGuidance('linux', {
+    linuxPackageManager: null,
+    useSudo: true,
+  });
+  assert.equal(unknown.steps.length, 0);
+  assert.match(unknown.commandDisplay, /手动/);
 });
 
 test('auto-installs psmux on Windows without an extra confirmation prompt', () => {
@@ -298,6 +371,10 @@ test('refreshes the current Windows process PATH with WinGet command aliases aft
     `${links};${current}`,
   );
   assert.equal(withTmuxPostInstallPath('linux', '/usr/bin', undefined), '/usr/bin');
+  assert.equal(
+    withTmuxPostInstallPath('darwin', '/usr/bin:/bin', undefined),
+    '/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin',
+  );
 });
 
 test('documents Feishu setup permissions required by bridge and doc-to-chat', () => {

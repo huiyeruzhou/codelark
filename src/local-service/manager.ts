@@ -1519,7 +1519,9 @@ export interface ExternalSkillDefinition {
 }
 
 function npxCommand(): string {
-  return process.platform === 'win32' ? 'npx.cmd' : 'npx';
+  const name = process.platform === 'win32' ? 'npx.cmd' : 'npx';
+  const besideNode = path.join(path.dirname(process.execPath), name);
+  return fs.existsSync(besideNode) ? besideNode : name;
 }
 
 export const OFFICIAL_LARK_DOC_SKILL: ExternalSkillDefinition = {

@@ -38,6 +38,7 @@ import {
   feishuSiteToApiBaseUrl,
   normalizeFeishuSite,
 } from './site.js';
+import { fetchFeishuBotIdentity } from './bot-identity.js';
 import groupAuthorizationImageDataUrl from './assets/group-authorization-image.js';
 import {
   BaseChannelAdapter,
@@ -7272,44 +7273,19 @@ export class FeishuAdapter extends BaseChannelAdapter {
     domain: lark.Domain,
   ): Promise<void> {
     try {
-      const baseUrl = domain === lark.Domain.Lark
-        ? 'https://open.larksuite.com'
-        : 'https://open.feishu.cn';
-
-      const tokenRes = await fetch(`${baseUrl}/open-apis/auth/v3/tenant_access_token/internal`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ app_id: appId, app_secret: appSecret }),
-        signal: AbortSignal.timeout(10_000),
+      const bot = await fetchFeishuBotIdentity({
+        appId,
+        appSecret,
+        site: domain === lark.Domain.Lark ? 'lark' : 'feishu',
       });
-      const tokenData: any = await tokenRes.json();
-      if (!tokenData.tenant_access_token) {
-        console.warn('[feishu-adapter] Failed to get tenant access token');
-        return;
+      this.botOpenId = bot.openId;
+      this.botIds.add(bot.openId);
+      if (bot.botId) {
+        this.botId = bot.botId;
+        this.botIds.add(bot.botId);
       }
-
-      const botRes = await fetch(`${baseUrl}/open-apis/bot/v3/info/`, {
-        method: 'GET',
-        headers: { Authorization: `Bearer ${tokenData.tenant_access_token}` },
-        signal: AbortSignal.timeout(10_000),
-      });
-      const botData: any = await botRes.json();
-      if (botData?.bot?.open_id) {
-        this.botOpenId = botData.bot.open_id;
-        this.botIds.add(botData.bot.open_id);
-      }
-      // Also record app_id-based IDs if available
-      if (botData?.bot?.bot_id) {
-        this.botId = botData.bot.bot_id;
-        this.botIds.add(botData.bot.bot_id);
-      }
-      this.botName = botData?.bot?.app_name || botData?.bot?.name || this.botName;
-      this.botAvatarUrl = botData?.bot?.avatar_url || this.botAvatarUrl;
-      if (!this.botOpenId) {
-        console.warn('[feishu-adapter] Could not resolve bot open_id', {
-          preview: JSON.stringify(botData).slice(0, 1000),
-        });
-      }
+      this.botName = bot.name || this.botName;
+      this.botAvatarUrl = bot.avatarUrl || this.botAvatarUrl;
     } catch (err) {
       console.warn(
         '[feishu-adapter] Failed to resolve bot identity:',
