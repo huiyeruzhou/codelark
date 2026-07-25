@@ -241,7 +241,7 @@ const MIRROR_PROMPT_MATCH_GRACE_MS = 120_000;
 // record before falling back to the SDK response.
 const DESKTOP_TERMINAL_FINALIZATION_TIMEOUT_MS = 30_000;
 const MIRROR_STREAM_STATUS_IDLE_START_MS = 0;
-const MIRROR_STREAM_STATUS_HEARTBEAT_MS = 10_000;
+const MIRROR_STREAM_STATUS_HEARTBEAT_MS = 5_000;
 const MIRROR_TMUX_SELECTION_PROBE_INTERVAL_MS = 5_000;
 const MIRROR_TMUX_SELECTION_PROBE_FOLLOWUP_WINDOW_MS = 5_000;
 const MIRROR_TMUX_SELECTION_PROBE_FOLLOWUP_INTERVAL_MS = 300;
@@ -252,7 +252,7 @@ const TMUX_SELECTION_UPDATE_EXIT_PROBE_DELAY_MS = 2_000;
 const TMUX_PROVIDER_EXIT_NOTICE_COOLDOWN_MS = 60_000;
 const TMUX_SCREEN_STOP_CALLBACK_PREFIX = 'tmux-screen:stop:';
 const PTY_SCREEN_STOP_CALLBACK_PREFIX = 'pty-screen:stop:';
-const TMUX_AUTO_FORWARD_TYPING_REACTION = 'Typing';
+const INBOUND_GET_REACTION = 'Get';
 // Timeout after the last Codex event before we flush a buffered mirror turn
 // without seeing task_complete. This is an internal mirror buffer guard, not an
 // IM idle reminder. Active streaming turns never use this fallback timeout.
@@ -282,16 +282,6 @@ const SESSION_SERIAL_COMMANDS = new Set([
   '/tmux-new',
 ]);
 
-interface PendingTmuxAutoForwardReaction {
-  channelType: string;
-  chatId: string;
-  sessionId: string;
-  messageId: string;
-  reactionId: string;
-}
-
-const pendingTmuxAutoForwardReactions = new Map<string, PendingTmuxAutoForwardReaction>();
-const pendingTmuxAutoForwardReactionVersions = new Map<string, number>();
 const pendingTmuxProviderExitProbeTimers = new Map<string, ReturnType<typeof setTimeout>>();
 const tmuxProviderExitNoticeLastSentAt = new Map<string, number>();
 const tmuxSelectionUpdateNoticeLastSentAt = new Map<string, number>();
@@ -349,63 +339,17 @@ function clearPendingTmuxProviderExitProbe(key: string): void {
   pendingTmuxProviderExitProbeTimers.delete(key);
 }
 
-function bumpPendingTmuxAutoForwardReactionVersion(key: string): number {
-  const next = (pendingTmuxAutoForwardReactionVersions.get(key) || 0) + 1;
-  pendingTmuxAutoForwardReactionVersions.set(key, next);
-  return next;
-}
-
-function removeTmuxAutoForwardReaction(
-  pending: PendingTmuxAutoForwardReaction,
-  reason: string,
-): void {
-  const adapter = getState().adapters.get(pending.channelType);
-  if (typeof adapter?.removeMessageReaction !== 'function') return;
-  void adapter.removeMessageReaction(pending.messageId, pending.reactionId, TMUX_AUTO_FORWARD_TYPING_REACTION).catch((error) => {
-    console.warn(`[bridge-manager] Failed to remove tmux auto-forward typing reaction (${reason}):`, describeUnknownError(error));
-  });
-}
-
-function clearPendingTmuxAutoForwardReaction(key: string): void {
-  clearPendingTmuxProviderExitProbe(key);
-  bumpPendingTmuxAutoForwardReactionVersion(key);
-  const pending = pendingTmuxAutoForwardReactions.get(key);
-  if (!pending) return;
-  pendingTmuxAutoForwardReactions.delete(key);
-  removeTmuxAutoForwardReaction(pending, 'clear');
-}
-
-function markPendingTmuxAutoForwardReaction(
+function addInboundGetReaction(
   adapter: BaseChannelAdapter,
   msg: InboundMessage,
-  key: string,
-  sessionId: string,
+  reason: 'command_received' | 'tmux_prompt_delivered',
 ): void {
   if (!msg.messageId || typeof adapter.addMessageReaction !== 'function') return;
-  clearPendingTmuxProviderExitProbe(key);
-  const version = bumpPendingTmuxAutoForwardReactionVersion(key);
-  const previous = pendingTmuxAutoForwardReactions.get(key);
-  if (previous) {
-    pendingTmuxAutoForwardReactions.delete(key);
-    removeTmuxAutoForwardReaction(previous, 'replace');
-  }
-
-  void adapter.addMessageReaction(msg.messageId, TMUX_AUTO_FORWARD_TYPING_REACTION).then((reactionId) => {
-    if (!reactionId) return;
-    const pending: PendingTmuxAutoForwardReaction = {
-      channelType: msg.address.channelType,
-      chatId: msg.address.chatId,
-      sessionId,
-      messageId: msg.messageId,
-      reactionId,
-    };
-    if (pendingTmuxAutoForwardReactionVersions.get(key) !== version) {
-      removeTmuxAutoForwardReaction(pending, 'stale');
-      return;
-    }
-    pendingTmuxAutoForwardReactions.set(key, pending);
-  }).catch((error) => {
-    console.warn('[bridge-manager] Failed to add tmux auto-forward typing reaction:', describeUnknownError(error));
+  void adapter.addMessageReaction(msg.messageId, INBOUND_GET_REACTION).catch((error) => {
+    console.warn('[bridge-manager] Failed to add inbound Get reaction:', {
+      reason,
+      error: describeUnknownError(error),
+    });
   });
 }
 
@@ -453,7 +397,7 @@ async function probeTmuxProviderExitAfterAutoForward(params: {
   if (nowMs - lastSentAt < TMUX_PROVIDER_EXIT_NOTICE_COOLDOWN_MS) return;
   tmuxProviderExitNoticeLastSentAt.set(noticeKey, nowMs);
 
-  clearPendingTmuxAutoForwardReaction(params.reactionKey);
+  clearPendingTmuxProviderExitProbe(params.reactionKey);
   const runtimeLabel = runtimeProvider.runtime === 'claude' ? 'Claude' : runtimeProvider.runtime === 'kimi' ? 'Kimi' : 'Codex';
   const elapsedMs = Math.max(0, nowMs - params.startedAtMs);
   SESSION_HEALTH_RUNTIME.recordInteractiveEnd(
@@ -550,7 +494,7 @@ function shouldProbeMirrorTmuxSelectionPrompt(
 ): boolean {
   const followupUntil = tmuxSelectionPromptFollowupUntil.get(subscription.sessionId) || 0;
   const inFollowupWindow = nowMs <= followupUntil;
-  if (!subscription.pendingTurn && !inFollowupWindow) return false;
+  if (subscription.activityTier === 'cold' && !subscription.pendingTurn && !inFollowupWindow) return false;
   const lastProbeAt = tmuxSelectionPromptLastProbeAt.get(subscription.sessionId) || 0;
   const intervalMs = inFollowupWindow
     ? MIRROR_TMUX_SELECTION_PROBE_FOLLOWUP_INTERVAL_MS
@@ -1248,16 +1192,6 @@ function nowIso(): string {
   return new Date().toISOString();
 }
 
-function getPendingPermissionLinksForCurrentSession(
-  chatId: string,
-  sessionId?: string,
-): PermissionLinkRecord[] {
-  const { store } = getBridgeContext();
-  const pending = store.listPendingPermissionLinksByChat(chatId);
-  if (!sessionId) return pending;
-  return pending.filter((link) => !link.sessionId || link.sessionId === sessionId);
-}
-
 function channelAddressFromBinding(binding: {
   channelType: string;
   channelProvider?: string;
@@ -1399,24 +1333,6 @@ function touchInboundChannelChatActivity(msg: InboundMessage): void {
   store.touchChannelChatActivity(binding.id, nowIso());
 }
 
-
-/**
- * Check if a message looks like a numeric permission shortcut (1/2/3) for
- * Feishu channels WITH at least one pending permission in that chat.
- *
- * This is used by the adapter loop to route these messages to the inline
- * (non-session-locked) path, avoiding deadlock: the session is blocked
- * waiting for the permission to be resolved, so putting "1" behind the
- * session lock would deadlock.
- */
-function isNumericPermissionShortcut(channelType: string, rawText: string, chatId: string): boolean {
-  if (channelType !== 'feishu') return false;
-  const normalized = rawText.normalize('NFKC').replace(/[\u200B-\u200D\uFEFF]/g, '').trim();
-  if (!/^[123]$/.test(normalized)) return false;
-  const { store } = getBridgeContext();
-  const pending = store.listPendingPermissionLinksByChat(chatId);
-  return pending.length > 0; // any pending → route to inline path
-}
 
 interface BridgeManagerState extends BridgeAdapterRuntimeState, BridgeInteractiveRuntimeState {
   startedAt: string | null;
@@ -1783,10 +1699,6 @@ const MIRROR_FEEDBACK = createMirrorFeedbackController({
   getRuntimeTags: getMirrorRuntimeTags,
   getAssistantLabel: getMirrorAssistantLabel,
   onMirrorTurnStarted: assignCodexTuiTurnScreenBaseline,
-  onMirrorStreamStart: (subscription) => {
-    const key = tmuxAutoForwardReactionKey(subscription.channelType, subscription.chatId, subscription.sessionId);
-    void clearPendingTmuxAutoForwardReaction(key);
-  },
   resolveFinalizedTurnStatus: resolveCodexTuiFinalizedTurnStatus,
   getStructuredStreamStatusConfig: getMirrorStructuredStreamStatusConfig,
   nowIso,
@@ -2049,7 +1961,7 @@ function resolveInboundCommandText(rawText: string): string {
 
 function isHighPriorityControlCommandText(rawText: string): boolean {
   const resolvedCommand = resolveInboundCommandText(rawText);
-  if (resolvedCommand === '/stop' || resolvedCommand === '/perm') return true;
+  if (resolvedCommand === '/stop') return true;
   const args = rawText.trim().slice((rawText.trim().split(/\s+/)[0] || '').length).trim();
   return (
     (resolvedCommand === '/tmux-screen' || resolvedCommand === '/pty-screen')
@@ -2145,8 +2057,8 @@ function sessionMutatingCallbackLane(callbackData: string): { jobKind: string; s
   return null;
 }
 
-function adapterImmediateLane(msg: InboundMessage, category: 'channel-event' | 'callback' | 'command' | 'permission-shortcut' | 'bypass' | 'regular'): AdapterImmediateLane | null {
-  if (category === 'channel-event' || category === 'permission-shortcut') {
+function adapterImmediateLane(msg: InboundMessage, category: 'channel-event' | 'callback' | 'command' | 'bypass' | 'regular'): AdapterImmediateLane | null {
+  if (category === 'channel-event') {
     return {
       laneKey: `control:${msg.address.channelType}:${msg.address.chatId}:${msg.messageId || msg.updateId || 'event'}`,
       laneKind: 'control',
@@ -2187,7 +2099,7 @@ function adapterImmediateLane(msg: InboundMessage, category: 'channel-event' | '
   return null;
 }
 
-function adapterSessionLane(msg: InboundMessage, category: 'channel-event' | 'callback' | 'command' | 'permission-shortcut' | 'bypass' | 'regular'): { sessionId: string; jobKind: string; blocksConversation?: boolean } | null {
+function adapterSessionLane(msg: InboundMessage, category: 'channel-event' | 'callback' | 'command' | 'bypass' | 'regular'): { sessionId: string; jobKind: string; blocksConversation?: boolean } | null {
   if (category === 'regular') {
     const binding = getBridgeContext().store.getChannelChat(msg.address.channelType, msg.address.chatId);
     if (!binding) return null;
@@ -2231,7 +2143,6 @@ const ADAPTER_RUNTIME = createAdapterRuntime(getState, {
   },
   handleMessage,
   processWithSessionLock: (sessionId, fn, options) => INTERACTIVE_RUNTIME.processWithSessionLock(sessionId, fn, options),
-  isNumericPermissionShortcut,
   isCommandMessage: (msg) => isBridgeCommandText(msg.text),
   resolveSessionIdForMessage: (msg) => router.resolve(msg.address).bridgeSessionId,
   shouldBypassSessionLock: shouldRouteTerminalAppendInline,
@@ -3961,6 +3872,9 @@ async function handleMessage(
 
   const rawText = msg.text.trim();
   const hasAttachments = msg.attachments && msg.attachments.length > 0;
+  if (isBridgeCommandText(rawText)) {
+    addInboundGetReaction(adapter, msg, 'command_received');
+  }
 
   if (rawText && !hasAttachments) {
     const takeoverConfirmation = consumePendingTakeoverConfirmation(msg.address, rawText);
@@ -4021,60 +3935,6 @@ async function handleMessage(
     }
     ack();
     return;
-  }
-
-  // ── Numeric shortcut for permission replies (Feishu only) ──
-  // On mobile, typing `/perm allow <uuid>` is painful.
-  // If the user sends "1", "2", or "3" and there is exactly one pending
-  // permission for this chat, map it: 1→allow, 2→allow_session, 3→deny.
-  //
-  // Input normalization: mobile keyboards / IM clients may send fullwidth
-  // digits (１２３), digits with zero-width joiners, or other Unicode
-  // variants. NFKC normalization folds them all to ASCII 1/2/3.
-  if (
-          adapter.provider === 'feishu'
-  ) {
-    // eslint-disable-next-line no-control-regex
-    const normalized = rawText.normalize('NFKC').replace(/[\u200B-\u200D\uFEFF]/g, '').trim();
-    if (/^[123]$/.test(normalized)) {
-      const currentBinding = store.getChannelChat(msg.address.channelType, msg.address.chatId);
-      const pendingLinks = getPendingPermissionLinksForCurrentSession(
-        msg.address.chatId,
-        currentBinding?.bridgeSessionId,
-      );
-      if (pendingLinks.length === 1) {
-        const actionMap: Record<string, string> = { '1': 'allow', '2': 'allow_session', '3': 'deny' };
-        const action = actionMap[normalized];
-        const permId = pendingLinks[0].permissionRequestId;
-        const callbackData = `perm:${action}:${permId}`;
-        const handled = broker.handlePermissionCallback(callbackData, msg.address.chatId);
-        const label = normalized === '1' ? 'Allow' : normalized === '2' ? 'Allow Session' : 'Deny';
-        if (handled) {
-          enqueueBridgeNotice(adapter, msg.address, `${label}: recorded.`, {
-            replyToMessageId: msg.messageId,
-          });
-        } else {
-          enqueueBridgeNotice(adapter, msg.address, 'Permission not found or already resolved.', {
-            replyToMessageId: msg.messageId,
-          });
-        }
-        ack();
-        return;
-      }
-      if (pendingLinks.length > 1) {
-        // Multiple pending permissions — numeric shortcut is ambiguous.
-        enqueueBridgeNotice(adapter, msg.address, `当前有 ${pendingLinks.length} 条待处理权限，数字快捷回复会有歧义。请使用完整命令：\n/perm allow|allow_session|deny <id>`, {
-          replyToMessageId: msg.messageId,
-        });
-        ack();
-        return;
-      }
-      // pendingLinks.length === 0: no pending permissions, fall through as normal message
-    } else if (rawText !== normalized && /^[123]$/.test(rawText) === false) {
-      // Log when normalization changed the text — helps diagnose encoding issues
-      const codePoints = [...rawText].map(c => 'U+' + c.codePointAt(0)!.toString(16).toUpperCase().padStart(4, '0'));
-      console.log(`[bridge-manager] Shortcut candidate raw codepoints: ${codePoints.join(' ')} → normalized: "${normalized}"`);
-    }
   }
 
   const modelText = toModelPromptText(rawText);
@@ -4179,20 +4039,13 @@ async function handleMessage(
         tmuxProviderBridgeSessionId,
       );
       try {
-        markPendingTmuxAutoForwardReaction(
-          adapter,
-          msg,
-          reactionKey,
-          tmuxProviderBridgeSessionId,
-        );
         const tmuxProviderCommandStartedAtMs = Date.now();
         await handleCommand(adapter, msg, `/tmux ${text}`, {
           tmuxProviderAutoForward: true,
           onTmuxProviderAutoForwarded: () => {
-            // The reaction lifecycle ends when the prompt has been submitted
-            // to tmux. Both a resolved reaction and a still-pending add are
-            // cancelled without waiting for a remote Feishu acknowledgement.
-            clearPendingTmuxAutoForwardReaction(reactionKey);
+            // Get means the prompt has been submitted to tmux. Adding it is a
+            // detached acknowledgement and never delays the message lane.
+            addInboundGetReaction(adapter, msg, 'tmux_prompt_delivered');
           },
         });
         const tmuxProviderCommandDurationMs = Date.now() - tmuxProviderCommandStartedAtMs;
@@ -4247,7 +4100,7 @@ async function handleMessage(
           ].join(' '),
         });
       } catch (error) {
-        clearPendingTmuxAutoForwardReaction(reactionKey);
+        clearPendingTmuxProviderExitProbe(reactionKey);
         console.error('[bridge-manager] tmux provider command forwarding failed: /tmux', error);
         enqueueBridgeNotice(adapter, msg.address, toUserVisibleCommandError('/tmux', error), {
           replyToMessageId: msg.messageId,
@@ -4531,8 +4384,6 @@ function resetStateForTests(): void {
   pendingTmuxProviderExitProbeTimers.clear();
   tmuxProviderExitNoticeLastSentAt.clear();
   tmuxSelectionUpdateNoticeLastSentAt.clear();
-  pendingTmuxAutoForwardReactions.clear();
-  pendingTmuxAutoForwardReactionVersions.clear();
   tmuxSelectionPromptMonitors.clear();
   tmuxSelectionPromptLastProbeAt.clear();
   tmuxSelectionPromptFollowupUntil.clear();

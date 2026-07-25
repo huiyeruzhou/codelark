@@ -149,7 +149,7 @@ SDK、pty、tmux、Claude tmux/pty 的实际运行体不同，但对外都叫 pr
 
 - `BridgeApplication`：只负责 start/stop 和组合服务。
 - `ChannelIngressService`：adapter loop、lane/session 调度、message ack。
-- `MessageRouter`：权限快捷回复、terminal append、command、ordinary prompt 的分流。
+- `MessageRouter`：结构化权限 callback、terminal append、command、ordinary prompt 的分流。
 - `TurnOrchestrator`：包装 `runInteractiveMessage()` 所需依赖，隔离 manager 对 turn 的装配细节。
 - `BridgeLifecycleState`：收敛 daemon 内全局 state，不让每个 feature 直接扩展 manager state。
 

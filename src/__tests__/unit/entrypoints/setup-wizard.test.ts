@@ -14,6 +14,7 @@ import {
   recommendRuntime,
   renderLarkCliUrlQr,
   saveSetupConfigToHomeToml,
+  shouldConfirmTmuxAutoInstall,
 } from '../../../entrypoints/setup-wizard.js';
 import {
   FEISHU_REQUIRED_CALLBACKS,
@@ -273,8 +274,14 @@ test('builds platform-specific tmux installation guidance', () => {
   assert.match(macos.lines.join('\n'), /macOS 安装命令/);
 
   const windows = buildTmuxInstallGuidance('win32');
-  assert.match(windows.command, /winget install --id marlocarlo\.psmux/);
+  assert.match(windows.command, /winget install psmux/);
   assert.match(windows.lines.join('\n'), /psmux/);
+});
+
+test('auto-installs psmux on Windows without an extra confirmation prompt', () => {
+  assert.equal(shouldConfirmTmuxAutoInstall('win32'), false);
+  assert.equal(shouldConfirmTmuxAutoInstall('darwin'), true);
+  assert.equal(shouldConfirmTmuxAutoInstall('linux'), true);
 });
 
 test('documents Feishu setup permissions required by bridge and doc-to-chat', () => {

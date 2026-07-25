@@ -126,6 +126,9 @@ function presentationFromDetail(tool: ToolCallInfo): { action: string; target: s
     const action = detail.isPoll ? '等待' : '输入';
     const target = detail.sessionId ? `终端 ${inlineCode(detail.sessionId)}` : '后台终端';
     if (typeof detail.waitMs === 'number') meta.push(`等待 ${formatDuration(detail.waitMs)}`);
+    if (typeof detail.maxTokens === 'number') {
+      meta.push(`≤${Math.round(detail.maxTokens).toLocaleString('en-US')} tokens`);
+    }
     const duration = formatDuration(detail.durationMs);
     if (duration) meta.push(duration);
     const lines = outputLineCount(detail);

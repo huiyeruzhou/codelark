@@ -45,6 +45,7 @@ import { writeCodexSessionJsonlFixture } from '../../../helpers/bridge/test-brid
 import { getClaudeProjectDir, isArchivedClaudeSession } from '../../../../runtime/claude/session-jsonl.js';
 import { computeKimiWorkspaceDirName, isArchivedKimiSession } from '../../../../runtime/kimi/session-index.js';
 import { kimiTmuxSessionName } from '../../../../runtime/kimi/tmux-provider.js';
+import { formatFooterClockTime } from '../../../../shared/progress/footer.js';
 
 const DATA_DIR = path.join(CODELARK_HOME, 'data');
 const CONFIG_TOML_PATH = path.join(CODELARK_HOME, 'config.toml');
@@ -219,7 +220,7 @@ describe('bridge-manager model prompt context', () => {
 });
 
 describe('bridge-manager mirror tmux selection probe scheduling', () => {
-  it('skips idle subscriptions but probes active turns and explicit follow-up windows', () => {
+  it('skips cold idle subscriptions but probes hot chats, active turns, and follow-up windows', () => {
     _testOnly.resetStateForTests();
     const subscription = createMirrorSubscription({
       bindingId: 'binding-probe',
@@ -229,10 +230,15 @@ describe('bridge-manager mirror tmux selection probe scheduling', () => {
       threadId: 'thread-probe',
       filePath: '/tmp/session-probe.jsonl',
       lastDeliveredAt: null,
+      activityTier: 'cold',
     });
 
     assert.equal(_testOnly.shouldProbeMirrorTmuxSelectionPrompt(subscription, 10_000), false);
 
+    subscription.activityTier = 'hot';
+    assert.equal(_testOnly.shouldProbeMirrorTmuxSelectionPrompt(subscription, 10_000), true);
+
+    subscription.activityTier = 'cold';
     subscription.pendingTurn = {} as typeof subscription.pendingTurn;
     assert.equal(_testOnly.shouldProbeMirrorTmuxSelectionPrompt(subscription, 10_000), true);
 
@@ -1987,7 +1993,7 @@ agent = "claude"
         'metadata:mirror:session-1:turn-1:本地会话:codex,effort:medium,model:test-model,bridge_id:session-,mirror',
         'start:mirror:session-1:turn-1',
         'text:mirror:session-1:turn-1:**我:** codex prompt\n\n**codex:**',
-        'status:mirror:session-1:turn-1:已运行 0秒，上次响应距今 0秒',
+        `status:mirror:session-1:turn-1:${formatFooterClockTime(Date.parse('2026-03-25T08:00:00.700Z'))} · 已运行 0s · 上次响应 0s`,
       ]);
     } finally {
       Date.now = originalDateNow;
@@ -2052,7 +2058,7 @@ agent = "claude"
         'metadata:mirror:session-1:turn-1:本地会话:codex,effort:medium,model:test-model,bridge_id:session-,mirror',
         'start:mirror:session-1:turn-1',
         'text:mirror:session-1:turn-1:**我:**\n（基于 Review findings）\nok,当前调整已经可以收尾了吗\n\n**codex:**',
-        'status:mirror:session-1:turn-1:已运行 0秒，上次响应距今 0秒',
+        `status:mirror:session-1:turn-1:${formatFooterClockTime(Date.parse('2026-03-25T08:00:00.700Z'))} · 已运行 0s · 上次响应 0s`,
       ]);
     } finally {
       Date.now = originalDateNow;
@@ -2226,7 +2232,7 @@ agent = "claude"
     );
 
     assert.deepEqual(statusEvents, [
-      'status:mirror:session-1:turn-1:已运行 5分，上次响应距今 20秒',
+      `status:mirror:session-1:turn-1:${formatFooterClockTime(Date.parse('2026-03-25T08:05:00.000Z'))} · 已运行 5m · 上次响应 20s`,
     ]);
   });
 
@@ -2286,10 +2292,10 @@ agent = "claude"
     );
 
     assert.deepEqual(statusEvents, [
-      'status:mirror:session-1:turn-1:已运行 5分，上次响应距今 20秒',
-      'status:mirror:session-1:turn-1:已运行 5分，上次响应距今 20秒',
+      `status:mirror:session-1:turn-1:${formatFooterClockTime(Date.parse('2026-03-25T08:05:00.000Z'))} · 已运行 5m · 上次响应 20s`,
+      `status:mirror:session-1:turn-1:${formatFooterClockTime(Date.parse('2026-03-25T08:05:00.000Z'))} · 已运行 5m · 上次响应 20s`,
     ]);
-    assert.equal(subscription.pendingTurn.lastStatusText, '已运行 5分，上次响应距今 20秒');
+    assert.equal(subscription.pendingTurn.lastStatusText, `${formatFooterClockTime(Date.parse('2026-03-25T08:05:00.000Z'))} · 已运行 5m · 上次响应 20s`);
   });
 
   it('keeps the original mirror stream key when turnId arrives after streaming has started', () => {
@@ -2587,7 +2593,7 @@ agent = "claude"
     );
 
     assert.deepEqual(statusEvents, [
-      'status:mirror:session-1:turn-1:已运行 10分1秒，上次响应距今 10分1秒',
+      `status:mirror:session-1:turn-1:${formatFooterClockTime(Date.parse('2026-03-25T08:10:01.000Z'))} · 已运行 10m1s · 上次响应 10m1s`,
     ]);
   });
 

@@ -4876,7 +4876,7 @@ enabled = true
     }
   });
 
-  it('starts tmux provider with only a reaction and final text', async () => {
+  it('starts /p tmux without a transient provider-loading reaction and sends final text', async () => {
     const previousEnv = {
       PATH: process.env.PATH,
       TMUX_FAKE_LOG: process.env.TMUX_FAKE_LOG,
@@ -4911,8 +4911,8 @@ enabled = true
           return true;
         },
         addMessageReaction: async (messageId: string, emojiType: string) => {
-          reactions.push({ action: 'add', messageId, emojiType, reactionId: 'reaction-typing' });
-          return 'reaction-typing';
+          reactions.push({ action: 'add', messageId, emojiType, reactionId: 'unexpected-reaction' });
+          return 'unexpected-reaction';
         },
         removeMessageReaction: async (messageId: string, reactionId: string, emojiType?: string) => {
           reactions.push({ action: 'remove', messageId, emojiType, reactionId });
@@ -4943,9 +4943,7 @@ enabled = true
         },
       );
 
-      assert.deepEqual(reactions.map((reaction) => reaction.action), ['add', 'remove']);
-      assert.equal(reactions[0]?.emojiType, 'Typing');
-      assert.equal(reactions[1]?.reactionId, 'reaction-typing');
+      assert.deepEqual(reactions, []);
       assert.deepEqual(cardTexts, []);
       assert.deepEqual(cardStatuses, []);
       assert.deepEqual(cardMetadata, []);
@@ -5004,8 +5002,8 @@ enabled = true
           return { ok: true, messageId };
         },
         addMessageReaction: async (messageId: string, emojiType: string) => {
-          reactions.push({ action: 'add', messageId, emojiType, reactionId: 'reaction-typing' });
-          return 'reaction-typing';
+          reactions.push({ action: 'add', messageId, emojiType, reactionId: 'reaction-get' });
+          return 'reaction-get';
         },
         removeMessageReaction: async (messageId: string, reactionId: string, emojiType?: string) => {
           reactions.push({ action: 'remove', messageId, emojiType, reactionId });
@@ -5036,7 +5034,7 @@ enabled = true
         },
       );
 
-      assert.deepEqual(reactions.map((reaction) => reaction.action), ['add', 'remove']);
+      assert.deepEqual(reactions, []);
       assert.equal(sent.length, 2);
       assert.equal(sent[0]?.richCard?.title, 'Codex TUI Selection');
       assert.equal(sent[0]?.richCard?.selects?.[0]?.id, 'clk_codex_tui_selection');

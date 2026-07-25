@@ -87,7 +87,7 @@ const STREAM_DEFAULTS: Record<string, InteractiveStreamConfig> = {
 };
 
 const STREAM_STATUS_IDLE_START_MS = 0;
-const STREAM_STATUS_HEARTBEAT_MS = 10_000;
+const STREAM_STATUS_HEARTBEAT_MS = 5_000;
 
 export function resolveInteractiveTurnRuntimeSettings(
   channelType = 'default',

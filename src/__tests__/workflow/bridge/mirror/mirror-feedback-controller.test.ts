@@ -12,6 +12,7 @@ import { createMirrorSubscription } from '../../../../bridge/mirror/subscription
 import { consumeMirrorRecords } from '../../../../bridge/mirror/turns.js';
 import type { InboundMessage, OutboundMessage, SendResult, TaskProgressInfo, ToolCallInfo } from '../../../../domain/index.js';
 import { JsonFileStore } from '../../../../storage/json-store.js';
+import { formatFooterClockTime } from '../../../../shared/progress/footer.js';
 
 class FakeMirrorFeishuAdapter extends BaseChannelAdapter {
   readonly channelType = 'feishu-default';
@@ -127,7 +128,7 @@ describe('mirror-feedback-controller', () => {
     assert.deepEqual(adapter.streamEnds.map((entry) => entry.status), ['error']);
     assert.equal(adapter.streamEnds[0]?.text, '');
     assert.match(adapter.statuses.at(-1) || '', /invalid_request_error · CODELARK_MOCK_FATAL/);
-    assert.match(adapter.statuses.at(-1) || '', /已运行 2秒/);
+    assert.match(adapter.statuses.at(-1) || '', /已运行 2s/);
     assert.match(adapter.statuses.at(-1) || '', /125k\(63%\) · ↑125k ↓4\.6k/);
     assert.doesNotMatch(adapter.statuses.at(-1) || '', /处理中/);
   });
@@ -281,7 +282,7 @@ describe('mirror-feedback-controller', () => {
         },
       ], controller.hooks);
 
-      assert.equal(adapter.statuses.at(-1), '已运行 15秒，上次响应距今 15秒');
+      assert.equal(adapter.statuses.at(-1), `${formatFooterClockTime(15_000)} · 已运行 15s · 上次响应 0s`);
     } finally {
       Date.now = originalDateNow;
     }

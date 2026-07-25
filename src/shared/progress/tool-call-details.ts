@@ -312,6 +312,7 @@ export function buildToolCallDetailFromInput(toolName: string | undefined, input
   }
   if (isWriteStdinTool(toolName)) {
     const waitMs = numberFromRecord(record, ['yield_time_ms', 'yieldTimeMs']);
+    const maxTokens = numberFromRecord(record, ['max_tokens', 'maxTokens', 'max_output_tokens', 'maxOutputTokens']);
     return {
       kind: 'terminal_stdin',
       ...(record && typeof record.session_id !== 'undefined' ? { sessionId: String(record.session_id) } : {}),
@@ -321,6 +322,7 @@ export function buildToolCallDetailFromInput(toolName: string | undefined, input
       ...(record && typeof record.chars === 'string' ? { chars: sanitizeToolText(record.chars), isPoll: record.chars.length === 0 } : {}),
       ...(normalizeToolName(toolName) === 'wait' ? { isPoll: true } : {}),
       ...(typeof waitMs === 'number' ? { waitMs } : {}),
+      ...(typeof maxTokens === 'number' ? { maxTokens } : {}),
     };
   }
   if (isPatchTool(toolName)) {
@@ -657,6 +659,9 @@ export function renderToolCallDetailMarkdown(tool: ToolCallInfo): string {
     const tags = [textTag('blue', `session ${detail.sessionId || 'unknown'}`)];
     if (typeof detail.waitMs === 'number') {
       tags.push(textTag('green', `wait ${formatDuration(detail.waitMs)}`));
+    }
+    if (typeof detail.maxTokens === 'number') {
+      tags.push(textTag('purple', `≤${Math.round(detail.maxTokens).toLocaleString('en-US')} tokens`));
     }
     if (detail.isPoll) {
       tags.push(textTag('yellow', 'Read'));

@@ -103,7 +103,6 @@ const KNOWN_BRIDGE_COMMANDS = new Set([
   '/cat',
   '/file',
   '/stop',
-  '/perm',
   '/help',
 ]);
 

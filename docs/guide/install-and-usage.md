@@ -14,9 +14,30 @@ codelark run
 
 - 本机已经可以运行 `codelark`。
 - 本机已有可用的 Codex 登录态、Claude Code 登录态、Kimi Code 登录态或对应 API 凭据。
-- 本机 PATH 中已有 `tmux` 命令；如果没有，`codelark setup` 会提示确认并自动安装。Linux 使用 `sudo apt update && sudo apt install -y tmux`，macOS 使用 `brew install tmux`，Windows 使用 `winget install --id marlocarlo.psmux --accept-package-agreements --accept-source-agreements` 安装 psmux（提供 `tmux.exe`）。
+- 本机 PATH 中已有 `tmux` 命令；如果没有，`codelark setup` 会按平台安装，具体行为见下方“Windows 的 tmux 支持”和首次配置步骤。
 - 已创建飞书/Lark 自建应用并拿到 `App ID` / `App Secret`，或允许向导通过开放平台扫码创建机器人配置。
 - 飞书应用已启用机器人、权限、事件订阅和长连接。详细步骤见 [平台配置指南](platform-setup.md)。
+
+### Windows 的 tmux 支持
+
+Windows 推荐使用原生 psmux，不使用 WSL。psmux 基于 Windows ConPTY，并提供 `tmux.exe` 兼容命令；CodeLark 的 tmux provider、Kimi runtime、session 复用和输入状态机都走这条路径。Windows x64 是主要支持目标，psmux 同时提供 ARM64 构建。
+
+`codelark setup` 检测不到 `tmux.exe` 时会直接调用 WinGet 安装 psmux，不再额外询问一次确认。
+
+```powershell
+winget install psmux --accept-package-agreements --accept-source-agreements
+```
+
+安装完成后重新打开 PowerShell 或 Windows Terminal，再验证：
+
+```powershell
+tmux -V
+tmux new-session -d -s codelark_check
+tmux has-session -t codelark_check
+tmux kill-session -t codelark_check
+```
+
+若 `tmux` 仍不在 PATH，先重开终端；不要为此改用 WSL 内的 tmux，因为 Windows bridge 和 WSL 会拥有不同的进程、路径与用户环境。
 
 ## 首次配置
 
@@ -28,7 +49,7 @@ codelark setup
 
 向导会依次完成：
 
-1. 检查 `tmux` 是否可用；缺失时先提示用户确认，再按当前系统自动安装。
+1. 检查 `tmux` 是否可用；缺失时按当前系统自动安装。Windows 直接安装 psmux；macOS/Linux 先询问确认。
 2. 选择飞书机器人配置方式。
 3. 复用 `~/.codelark` 已有配置、扫码创建新 App，或粘贴 `App ID` / `App Secret`。
 4. 按本机环境推荐默认 runtime。
@@ -36,7 +57,7 @@ codelark setup
 6. 可选设置飞书用户 open_id 白名单。
 7. 可选安装 CodeLark skills 和官方 `lark-doc` skill。本地 CodeLark skills 会先安装；官方 `lark-doc` 通过 `npx skills add ...` 单独安装，失败时不会影响本地 skills 可用。
 
-如果用户拒绝在向导中安装 tmux，向导仍会继续保存配置，但会把默认 provider 改为 SDK：`runtime.codex.provider = "sdk"`，并把 Claude 默认 provider 写为 `runtime.claude.provider = "sdk"`。Kimi Code 当前只有 tmux provider，因此需要安装 tmux 后再使用 Kimi runtime。之后安装 tmux 后，可以在 IM 中使用 `/provider tmux` 切回 tmux provider。
+在 macOS/Linux 上，如果用户拒绝向导安装 tmux，向导仍会继续保存配置，但会把默认 provider 改为 SDK：`runtime.codex.provider = "sdk"`，并把 Claude 默认 provider 写为 `runtime.claude.provider = "sdk"`。Kimi Code 当前只有 tmux provider，因此需要安装 tmux 后再使用 Kimi runtime。之后安装 tmux 后，可以在 IM 中使用 `/provider tmux` 切回 tmux provider。Windows 不显示这次额外确认，而是直接通过 WinGet 安装 psmux；安装失败时向导不会伪装成已具备 tmux。
 
 机器人配置方式有两种：
 

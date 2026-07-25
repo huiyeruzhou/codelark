@@ -35,7 +35,7 @@ history_message_limit = 12
       assert.equal(custom.enabled, true);
       assert.equal(custom.config.historyMessageLimit, 12);
       assert.equal(custom.config.streamStatusIdleStartSeconds, 0);
-      assert.equal(custom.config.streamStatusCheckIntervalSeconds, 10);
+      assert.equal(custom.config.streamStatusCheckIntervalSeconds, 5);
       assert.equal(custom.config.appId, '');
       assert.deepEqual(custom.config.allowedUsers, []);
     } finally {

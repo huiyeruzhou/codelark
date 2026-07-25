@@ -253,11 +253,11 @@ export function buildTmuxInstallGuidance(platform: NodeJS.Platform = process.pla
       lines: [
         'CodeLark 默认使用 tmux provider，需要本机 PATH 中存在 tmux 命令。',
         'Windows 请安装 psmux，它会提供兼容的 tmux.exe 命令：',
-        'winget install --id marlocarlo.psmux --accept-package-agreements --accept-source-agreements',
+        'winget install psmux --accept-package-agreements --accept-source-agreements',
         '安装完成后向导会再次检测 tmux 是否可用；如果 PATH 尚未刷新，请重新打开 PowerShell / Windows Terminal 后再运行 codelark setup。',
       ],
-      command: 'winget install --id marlocarlo.psmux --accept-package-agreements --accept-source-agreements',
-      commandDisplay: 'winget install --id marlocarlo.psmux --accept-package-agreements --accept-source-agreements',
+      command: 'winget install psmux --accept-package-agreements --accept-source-agreements',
+      commandDisplay: 'winget install psmux --accept-package-agreements --accept-source-agreements',
     };
   }
   if (platform === 'linux') {
@@ -296,6 +296,10 @@ export async function isTmuxCommandAvailable(): Promise<boolean> {
   });
 }
 
+export function shouldConfirmTmuxAutoInstall(platform: NodeJS.Platform = process.platform): boolean {
+  return platform !== 'win32';
+}
+
 async function runTmuxInstallCommand(guidance: TmuxInstallGuidance): Promise<void> {
   if (!guidance.command) {
     throw new Error(guidance.lines.join('\n'));
@@ -325,10 +329,12 @@ async function promptTmuxPrerequisite(): Promise<TmuxPrerequisiteResult> {
     '',
     `即将执行：${guidance.commandDisplay}`,
   ].join('\n'), guidance.title);
-  const shouldInstall = cancelIfNeeded(await p.confirm({
-    message: '未检测到 tmux，是否现在自动安装？',
-    initialValue: true,
-  }));
+  const shouldInstall = shouldConfirmTmuxAutoInstall()
+    ? cancelIfNeeded(await p.confirm({
+        message: '未检测到 tmux，是否现在自动安装？',
+        initialValue: true,
+      }))
+    : true;
   if (!shouldInstall) {
     p.note(
       [

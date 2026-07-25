@@ -101,7 +101,7 @@
 1. **添加新权限**：进入权限管理并添加这些 scope：
    - `cardkit:card:write`、`cardkit:card:read`：流式卡片。
    - `im:message:update`：实时更新卡片内容。
-   - `im:message.reactions:read`、`im:message.reactions:write_only`：Typing 指示。
+   - `im:message.reactions:read`、`im:message.reactions:write_only`：tmux 输入的 Get 投递确认，以及云文档评论的 Typing 指示。
    - `im:message.pins:write_only`：Pin/Unpin 线程表消息。
    - `im:chat`、`im:chat:create`、`im:chat:create_by_user`、`im:chat:read`、`im:chat:update`：创建、读取和重命名 bridge 群聊。
    - `docs:document.comment:read`、`docs:document.comment:create`、`docs:document.comment:write_only`：云文档评论读取、回复和 Typing reaction。

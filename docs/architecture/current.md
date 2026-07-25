@@ -96,7 +96,7 @@ Lane 可以理解成“等待关系的名字”。调度层会给每条消息一
 
 当前主要有四类 lane：
 
-- `control:*`：控制通道。`/stop`、权限快捷回复、screen stop callback 走这里。它们的价值是“马上生效”，所以不等普通对话和长任务。
+- `control:*`：控制通道。`/stop`、结构化权限 callback、screen stop callback 走这里。它们的价值是“马上生效”，所以不等普通对话和长任务。
 - `job:*`：长 I/O 通道。`/shell`、`/tmux-screen`、`/pty-screen` 走这里。它们可能跑很久，所以不占住同一 session 的 prompt 队伍；其中 `/tmux-screen`、`/pty-screen` 是监控命令，不等待普通 conversation barrier，避免排在卡住的普通对话后面；`/shell` 等普通 job 仍会先等同一聊天前面的会话配置变更或普通 prompt barrier 完成。
 - `chat:<channel>:<chat>`：聊天通道。只读命令、普通 callback、状态查询这类不改 session 状态的交互走这里。`channel` 和 `chat` 的作用是把不同平台、不同群聊或私聊隔开：A 群的状态查询不会挡住 B 群，飞书群聊也不会和别的通道混在一起。
 - `session:<session_id>`：工作会话通道。普通 prompt、会话配置变更、会切换绑定的 callback 走这里。它按 `BridgeSession.id` 区分，而不是按群聊区分，因为多个入口可能绑定同一条本地工作会话；只要它们操作的是同一个 session，就必须保持同一份上下文和配置的顺序。
@@ -121,7 +121,7 @@ conversation barrier 是 lane 之上的保护规则，用来处理“这条命�
 普通 IM 文本消息进入当前 runtime 的主路径：
 
 1. 平台 adapter 接收飞书事件，转换成内部消息。
-2. adapter loop 从队列取消息，先识别它是平台事件、callback、命令、权限快捷回复、控制输入，还是普通 prompt。
+2. adapter loop 从队列取消息，先识别它是平台事件、callback、命令、控制输入，还是普通 prompt。
 3. 调度层为消息选择 lane。控制消息直接走 control lane；长 I/O 走 job lane；只读命令走 chat lane；prompt 和会话变更进入 session lane。
 4. 如果消息会改变会话配置或绑定，它会声明 conversation barrier，阻止同一聊天后续非 control 消息抢跑。
 5. session lane 进入同一 session 的串行队伍，更新 queued/running/idle 状态，并在相邻 turn 之间保留短 cooldown。
@@ -130,7 +130,7 @@ conversation barrier 是 lane 之上的保护规则，用来处理“这条命�
 8. provider 创建或继续底层 runtime 会话，并把必要身份写回 session。
 9. 主路径把最终文本、卡片、附件等转换为 delivery intent，按 adapter + chat 入有序队列后立即释放 lane；远端 IM ACK、重试和 message id 回填在队列 worker 中完成。
 
-这里的“有序”只约束同一 adapter/chat 的同类队列。普通回复与交互卡片使用独立 queue class，确认卡、按钮和 stream finalize 不会被前面的慢普通消息挡住；各自内部仍保序。CardKit create → send、stream finalize → fallback 回复、附件 caption → 附件等存在数据依赖的动作留在同一个 worker job 内串行；不同聊天互不等待。session/chat 主 lane 禁止等待普通 reply、权限/选择卡、reaction、callback answer、CardKit create/update/finalize、群名同步或全局 mirror reconcile 的远端回执。adapter 入站阶段也遵循同一边界：正文、引用和附件等构造内部消息必需的数据可以等待，Typing reaction、兼容提示和云文档群转发 notice 必须后台启动或入 delivery 队列后先放行内部消息。权限卡的 `message_id` 与 permission link 在 delivery receipt continuation 中回填；callback 先到时由 pending-callback 状态在 link 建立后对账，投递最终失败则 fail-closed 结束 pending permission 和 selection waiter。`/new` 必须等待建群结果才能取得 chat id，但文本命令和卡片 command callback 都被隔离到不阻塞 conversation 的 long-I/O job lane；远端完成后才提交新群 binding，不能把这段等待放回当前聊天的 session/chat 主 lane。
+这里的“有序”只约束同一 adapter/chat 的同类队列。普通回复与交互卡片使用独立 queue class，确认卡、按钮和 stream finalize 不会被前面的慢普通消息挡住；各自内部仍保序。CardKit create → send、stream finalize → fallback 回复、附件 caption → 附件等存在数据依赖的动作留在同一个 worker job 内串行；不同聊天互不等待。session/chat 主 lane 禁止等待普通 reply、权限/选择卡、reaction、callback answer、CardKit create/update/finalize、群名同步或全局 mirror reconcile 的远端回执。adapter 入站阶段也遵循同一边界：正文、引用和附件等构造内部消息必需的数据可以等待，兼容提示和云文档群转发 notice 必须后台启动或入 delivery 队列后先放行内部消息；slash/控制命令在进入命令处理时添加的 Get，以及 tmux prompt 提交成功后添加的 Get，都只做异步确认。权限卡的 `message_id` 与 permission link 在 delivery receipt continuation 中回填；callback 先到时由 pending-callback 状态在 link 建立后对账，投递最终失败则 fail-closed 结束 pending permission 和 selection waiter。`/new` 必须等待建群结果才能取得 chat id，但文本命令和卡片 command callback 都被隔离到不阻塞 conversation 的 long-I/O job lane；远端完成后才提交新群 binding，不能把这段等待放回当前聊天的 session/chat 主 lane。
 
 ### 模块入口
 
@@ -186,7 +186,7 @@ flowchart TD
 
 Mirror 不是子线程，也不是独立 worker。它运行在 bridge daemon 内：`fs.watch` 只负责标记 dirty 和唤醒 debounce；poll timer 负责兜底；真正处理发生在 reconcile 批次里。批次对不同 subscription 使用有界并发，同一个 subscription 内部按 JSONL cursor 顺序读取、过滤、reduce、触发 hook，避免一张 mirror 卡片的局部更新乱序。已经绑定的 subscription 必须先对已知 `filePath` 做 stat，并用 inode/size/mtime 判断无变化或只读新增区间；不能在 stat 之前重新 list 全部 runtime sessions。只有文件路径缺失、失效或 runtime identity 改变时，才允许重新调用 runtime-specific source discovery。
 
-tmux pane 抓屏也必须由活动状态驱动，不能随 mirror poll 永久扫描所有历史 subscription。通用 selection/reconnect probe 只在当前有 pending turn，或刚向 tmux 注入消息后的短 follow-up window 内运行；turn completed 后的异常方块由 finalized-status 路径单独抓屏，idle baseline 只在需要建立基线时抓一次。这样既保留 selection、reconnecting 和异常终态检测，也避免每 5 秒为每个空闲 pane 启动 `display-message` / `capture-pane` 子进程。
+tmux pane 抓屏也必须由活动状态驱动，不能随 mirror poll 永久扫描所有历史 subscription。通用 selection/reconnect probe 只覆盖当前 hot chat、有 pending turn，或刚向 tmux 注入消息后的短 follow-up window；turn completed 后的异常方块由 finalized-status 路径单独抓屏，idle baseline 只在需要建立基线时抓一次。这样既保留当前聊天的 selection、reconnecting 和异常终态检测，也避免每 5 秒为每个 cold 历史 pane 启动 `display-message` / `capture-pane` 子进程。
 
 Mirror 的身份分两层，不应混用。第一层是“哪个本地会话文件”，由 `BridgeSession`、runtime identity 和 cwd 决定；第二层是“文件内哪一轮 turn”，由 runtime-specific parser 从 JSONL 记录关系里推断。文件名只回答“观察哪个会话”，不能回答“这是第几轮输出”。
 
@@ -315,6 +315,8 @@ Feedback controller 把 reducer hook 映射到 stream UI：
 - `onStreamHistory` -> `historyItems`
 - `onStreamMetadata` -> `metadata`
 - `onStreamActions` -> `actionRows`
+
+状态栏和 CardKit 更新也遵循公共渲染契约：从 turn 开始按 5 秒心跳刷新，所有可见事件都更新活动时间，系统时区只在进程启动时解析一次；新增工具与 `streaming_status` 分成两个 CardKit 动作。字段顺序、紧凑时长格式、续接/异常前缀和具体投递边界统一记录在[流式卡片的“状态栏与活动时间”](streaming-card.md#状态栏与活动时间)，这里不再维护第二份细则。
 
 每次 desired state 变化都会标记 `desiredRevision` 并调用 `scheduleCardFlush()`。`flushCardUpdate()` 只在 flush tick 读取一份 desired snapshot，构造 desired render，再和本地 remote shadow 比较：
 
@@ -453,7 +455,7 @@ flowchart TD
 
 命令层的边界是“解释用户意图和组织展示”，不是“承载所有业务状态”。会话、绑定、线程接管、归档和工作目录等规则归会话模块负责；命令层只做 slash 解析、参数校验、调用 use-case 和生成用户可读结果。
 
-命令也要服从 lane。只读状态查询可以走 chat lane；会改变会话绑定或运行配置的命令必须进入 session lane 并声明 barrier；停止和权限快捷回复这类控制动作走 control lane。
+命令也要服从 lane。只读状态查询可以走 chat lane；会改变会话绑定或运行配置的命令必须进入 session lane 并声明 barrier；停止和结构化权限 callback 这类控制动作走 control lane。
 
 命令生成展示结果后只负责 enqueue，不等待平台回复 ACK。需要 `message_id` 的置顶、记录和 post-delivery 动作挂在 delivery receipt continuation 上，不能为了回填 id 继续占用 session lane。群名同步、callback answer 和 mirror reconcile 也属于后台副作用；失败必须独立记录或提示，不能把远端状态塞回同步命令返回值。只有必须先取得远端主键才能落本地状态的事务可以在专用 job lane 内等待，例如 `/new` 建群取得 chat id；该 job 不得阻塞当前聊天继续处理普通消息。
 

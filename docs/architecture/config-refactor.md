@@ -93,7 +93,7 @@ enabled = false
 [channels.config]
 history_message_limit = 8
 stream_status_idle_start_seconds = 0
-stream_status_check_interval_seconds = 10
+stream_status_check_interval_seconds = 5
 app_id = ""
 app_secret = ""
 site = "feishu"

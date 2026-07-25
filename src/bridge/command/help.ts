@@ -40,7 +40,6 @@ export function buildHelpCommandResponse(): string {
     '- `/clear [name] [path]` 在当前聊天上下文创建新对话并绑定过去；名称或路径包含空格时，请使用英文双引号 `"` 或英文单引号 `\'`；可用 `/t` 附回旧对话；当前任务或 tmux TUI 追加输入运行中会先询问是否终止',
     '- `/require-at` 查看飞书群聊 @bot 要求；`/require-at on|off` 切换当前飞书通道是否要求群聊 @bot',
     '- 直接发文本：继续当前会话；未绑定时进入临时 BridgeSession',
-    '- `/perm allow|allow_session|deny <id>` 或 `1 / 2 / 3` 处理权限',
     '',
     '**终端工具**',
     '- `/shell [秒数] <command>`（新特性）在当前会话目录用 `codex sandbox` 流式执行命令；默认允许网络；卡片刷新最低 5 秒；高风险命令需追加 `--force`',

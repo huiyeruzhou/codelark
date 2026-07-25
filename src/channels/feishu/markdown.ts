@@ -1597,7 +1597,14 @@ export function buildFinalCardJson(
   text: string,
   tasks: TaskProgressInfo[],
   tools: ToolCallInfo[],
-  footer: { status: string; elapsed: string; context?: string } | null,
+  footer: {
+    status: string;
+    currentTime?: string;
+    elapsed: string;
+    lastResponse?: string;
+    context?: string;
+    lastIo?: string;
+  } | null,
   terminalStatus?: FinalCardTerminalStatus,
   actionRows: FeishuCardActionButton[][] = [],
   chatId?: string,
@@ -1659,8 +1666,11 @@ export function buildFinalCardJson(
   if (footer) {
     const parts: string[] = [];
     if (footer.status) parts.push(footer.status);
+    if (footer.currentTime) parts.push(footer.currentTime);
     if (footer.elapsed) parts.push(footer.elapsed);
+    if (footer.lastResponse) parts.push(footer.lastResponse);
     if (footer.context) parts.push(footer.context);
+    if (footer.lastIo) parts.push(footer.lastIo);
     if (parts.length > 0) {
       if (elements.length > 0) {
         elements.push({ tag: 'hr' });

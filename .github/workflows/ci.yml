@@ -1,6 +1,7 @@
 name: CI
 
 on:
+  workflow_dispatch:
   pull_request:
   push:
     branches:
@@ -9,7 +10,7 @@ on:
 
 jobs:
   node24:
-    name: Node.js 24
+    name: Linux · full suite · Node.js 24
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -81,8 +82,85 @@ jobs:
       - name: Build
         run: npm run build
 
+      - name: Smoke test packaged CLI
+        run: node dist/cli.mjs --help
+
       - name: Build docs
         run: npm run docs:build
 
       - name: Check npm package contents
         run: npm run pack:check
+
+  cross-platform:
+    name: ${{ matrix.name }} · Node.js 24
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: macOS 26 arm64
+            os: macos
+            runner: macos-26
+          - name: Windows x64 + psmux
+            os: windows
+            runner: windows-2025
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install
+        run: npm ci
+
+      - name: Install tmux on macOS
+        if: matrix.os == 'macos'
+        run: brew install tmux
+
+      - name: Install psmux on Windows
+        if: matrix.os == 'windows'
+        shell: pwsh
+        run: winget install psmux --accept-package-agreements --accept-source-agreements --disable-interactivity
+
+      - name: Smoke test tmux on macOS
+        if: matrix.os == 'macos'
+        shell: bash
+        run: |
+          tmux -V
+          tmux new-session -d -s codelark_ci_tmux
+          tmux has-session -t codelark_ci_tmux
+          test "$(tmux display-message -p -t codelark_ci_tmux '#{session_name}')" = codelark_ci_tmux
+          tmux kill-session -t codelark_ci_tmux
+
+      - name: Smoke test psmux tmux compatibility on Windows
+        if: matrix.os == 'windows'
+        shell: pwsh
+        run: |
+          try {
+            tmux -V
+            tmux new-session -d -s codelark_ci_tmux
+            tmux has-session -t codelark_ci_tmux
+            $sessionName = tmux display-message -p -t codelark_ci_tmux '#{session_name}'
+            if ($sessionName.Trim() -ne 'codelark_ci_tmux') { throw "Unexpected tmux session: $sessionName" }
+          } finally {
+            tmux kill-session -t codelark_ci_tmux 2>$null
+          }
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Test unit and workflow suites
+        run: npm test -- --unit --workflow
+
+      - name: Build
+        run: npm run build
+
+      - name: Check npm package contents
+        run: npm run pack:check
+
+      - name: Smoke test packaged CLI
+        run: node dist/cli.mjs --help

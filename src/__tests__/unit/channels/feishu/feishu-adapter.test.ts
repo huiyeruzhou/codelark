@@ -1648,6 +1648,47 @@ describe('feishu-adapter structured streaming regions', () => {
     assert.deepEqual(requests, []);
   });
 
+  it('fails closed when a permission button card cannot be sent without legacy text fallbacks', async () => {
+    const requests: Array<Record<string, any>> = [];
+    const adapter = new FeishuAdapter({
+      id: 'feishu-default',
+      provider: 'feishu',
+      enabled: true,
+      alias: '飞书',
+      config: {
+        appId: 'app-id',
+        appSecret: 'app-secret',
+      },
+    });
+    (adapter as any).restClient = {
+      im: {
+        message: {
+          create: async (payload: Record<string, any>) => {
+            requests.push(payload);
+            return { code: 230001, msg: 'send failed' };
+          },
+        },
+      },
+    };
+
+    const result = await adapter.send({
+      address: { channelType: 'feishu', chatId: 'chat-1' },
+      text: '<b>Permission Required</b>',
+      parseMode: 'HTML',
+      inlineButtons: [[
+        { text: 'Allow', callbackData: 'perm:allow:request-1' },
+        { text: 'Deny', callbackData: 'perm:deny:request-1' },
+      ]],
+    });
+
+    assert.equal(result.ok, false);
+    assert.equal(requests.length, 1);
+    assert.equal(requests[0]?.data?.msg_type, 'interactive');
+    const body = String(requests[0]?.data?.content || '');
+    assert.doesNotMatch(body, /\/perm\b/);
+    assert.doesNotMatch(body, /Reply:|1\s*=|2\s*=|3\s*=/);
+  });
+
   it('accepts unmentioned group messages when the Feishu channel disables mention requirement', async () => {
     initBridgeTestContext();
     const adapter = new FeishuAdapter({
@@ -3031,6 +3072,63 @@ describe('feishu-adapter structured streaming regions', () => {
     assert.ok(elementUpdates.every((update) =>
       update.path?.element_id !== 'streaming_content'
       && update.path?.element_id !== 'streaming_status'));
+  });
+
+  it('creates a new tool panel before refreshing the footer as a separate streaming update', async () => {
+    const operations: Array<{ kind: string; elementId?: string }> = [];
+    const adapter = new FeishuAdapter({
+      id: 'feishu-default',
+      provider: 'feishu',
+      enabled: true,
+      alias: '飞书',
+      config: {
+        appId: 'app-id',
+        appSecret: 'app-secret',
+        streamingEnabled: true,
+      },
+    });
+    (adapter as any).cardFlushBaseIntervalMs = 1;
+    (adapter as any).restClient = {
+      cardkit: {
+        v1: {
+          card: {
+            create: async () => ({ data: { card_id: 'card-1' } }),
+            settings: async () => ({}),
+            update: async () => {
+              operations.push({ kind: 'card.update' });
+              return {};
+            },
+          },
+          cardElement: {
+            create: async (payload: Record<string, any>) => {
+              operations.push({ kind: 'cardElement.create', elementId: payload.data?.target_element_id });
+              return {};
+            },
+            content: async (payload: Record<string, any>) => {
+              operations.push({ kind: 'cardElement.content', elementId: payload.path?.element_id });
+              return {};
+            },
+          },
+        },
+      },
+      im: {
+        message: {
+          create: async () => ({ data: { message_id: 'msg-1' } }),
+          reply: async () => ({ data: { message_id: 'msg-1' } }),
+        },
+      },
+    };
+
+    await (adapter as any).createStreamingCard('chat-1', 'reply-1', 'stream-1');
+    adapter.onToolEvent('chat-1', [{ id: 'tool-1', name: 'shell_command', status: 'running' }], 'stream-1');
+    adapter.onStreamStatus('chat-1', '已运行 1秒，上次响应距今 0秒', 'stream-1');
+    await waitForCondition(() => operations.some((operation) =>
+      operation.kind === 'cardElement.content' && operation.elementId === 'streaming_status'));
+
+    assert.deepEqual(operations, [
+      { kind: 'cardElement.create', elementId: 'stream_history' },
+      { kind: 'cardElement.content', elementId: 'streaming_status' },
+    ]);
   });
 
   it('refreshes the full card for existing streaming tool updates', async () => {

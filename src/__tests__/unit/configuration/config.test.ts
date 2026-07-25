@@ -94,7 +94,7 @@ describe('configToSettings', () => {
     assert.equal(m.get('bridge_default_mode'), 'normal');
     assert.equal(m.get('bridge_history_message_limit'), '8');
     assert.equal(m.get('bridge_stream_status_idle_start_seconds'), '0');
-    assert.equal(m.get('bridge_stream_status_check_interval_seconds'), '10');
+    assert.equal(m.get('bridge_stream_status_check_interval_seconds'), '5');
 
     const configured = configToSettings({
       ...base,

@@ -72,8 +72,9 @@
   ```
   - Windows
   ```sh
-  winget install --id marlocarlo.psmux
-  ``` 
+  winget install psmux
+  ```
+  psmux 是原生 Windows tmux 兼容实现，会提供 `tmux.exe`，不需要 WSL。安装后请重新打开终端，并用 `tmux -V` 验证 PATH。
 
 > 如果你通过环境变量配置模型、代理或 API Key，需要在启动 `codelark` 前 export。
 

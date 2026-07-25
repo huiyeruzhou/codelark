@@ -20,6 +20,7 @@ export type ToolCallDetail =
       chars?: string;
       isPoll?: boolean;
       waitMs?: number;
+      maxTokens?: number;
       durationMs?: number;
       exitCode?: number;
       runningSessionId?: string;

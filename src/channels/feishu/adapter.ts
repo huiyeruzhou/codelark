@@ -10,9 +10,8 @@
  * - Other text → post (msg_type: 'post') with md tag
  * - Permission prompts → interactive card with action buttons
  *
- * card.action.trigger events are handled via EventDispatcher (Openclaw pattern):
- * button clicks are converted to synthetic text messages and routed through
- * the normal /perm command processing pipeline.
+ * card.action.trigger events are handled via EventDispatcher and forwarded as
+ * structured callbacks.
  */
 
 import crypto from 'crypto';
@@ -75,6 +74,11 @@ import {
 } from './markdown.js';
 import { buildFencedCodeBlock } from '../../shared/markdown/fence.js';
 import {
+  formatFooterClockTime,
+  formatFooterDuration,
+  joinFooterParts,
+} from '../../shared/progress/footer.js';
+import {
   buildLargeFileUploadConfirmationCard,
   formatLargeFileUploadSize,
   LARGE_FILE_UPLOAD_THRESHOLD_BYTES,
@@ -118,6 +122,8 @@ interface FeishuCardState {
   pendingTasksText: string | null;
   pendingStatusText: string | null;
   terminalContextUsageText: string;
+  terminalLastResponseText: string;
+  terminalLastIoText: string;
   renderedText: string | null;
   renderedTextLayoutSignature: string;
   renderedTasksText: string | null;
@@ -322,6 +328,8 @@ interface StreamingCardInitialState {
   metadata: StructuredStreamingUiMetadata;
   actionRows: FeishuCardActionButton[][];
   terminalContextUsageText: string;
+  terminalLastResponseText: string;
+  terminalLastIoText: string;
   historyItemOffset: number;
   historyToolCallOffset: number;
   toolCallOffset: number;
@@ -1243,15 +1251,34 @@ function buildStreamingCardRender(params: {
 }
 
 function extractTerminalContextUsage(statusText: string | null | undefined): string {
-  const text = (statusText || '').trim();
-  if (!text) return '';
-  const pattern = /(?:^|[，,\n])\s*((?:\d+(?:\.\d+)?k\(\d+%\))(?:\s*·\s*)?(?:[↑↓]\d+(?:\.\d+)?k(?:\s+[↑↓]\d+(?:\.\d+)?k)?)?|(?:[↑↓]\d+(?:\.\d+)?k(?:\s+[↑↓]\d+(?:\.\d+)?k)?))(?=$|[，,\n])/g;
-  const matches = [...text.matchAll(pattern)];
-  return matches.at(-1)?.[1]?.trim() || '';
+  const parts = (statusText || '').split(/\s*·\s*|[，,\n]/).map((part) => part.trim()).filter(Boolean);
+  const current = parts.find((part) => /^Context\s+\d+(?:\.\d+)?k\(\d+%\)$/u.test(part));
+  if (current) return current;
+  const legacy = parts.find((part) => /^\d+(?:\.\d+)?k\(\d+%\)$/u.test(part));
+  return legacy ? `Context ${legacy}` : '';
+}
+
+function extractTerminalLastResponse(statusText: string | null | undefined): string {
+  const parts = (statusText || '').split(/\s*·\s*|[\n]/).map((part) => part.trim()).filter(Boolean);
+  const value = parts.find((part) => /^上次响应(?:距今)?\s+/u.test(part));
+  return value?.replace(/^上次响应距今\s+/u, '上次响应 ') || '';
+}
+
+function extractTerminalLastIo(statusText: string | null | undefined): string {
+  const parts = (statusText || '').split(/\s*·\s*|[，,\n]/).map((part) => part.trim()).filter(Boolean);
+  return parts.find((part) => /^[↑↓]\d+(?:\.\d+)?k(?:\s+[↑↓]\d+(?:\.\d+)?k)?$/u.test(part)) || '';
 }
 
 function resolveTerminalContextUsage(state: Pick<FeishuCardState, 'terminalContextUsageText' | 'pendingStatusText'>): string {
   return state.terminalContextUsageText || extractTerminalContextUsage(state.pendingStatusText);
+}
+
+function resolveTerminalLastResponse(state: Pick<FeishuCardState, 'terminalLastResponseText' | 'pendingStatusText'>): string {
+  return state.terminalLastResponseText || extractTerminalLastResponse(state.pendingStatusText);
+}
+
+function resolveTerminalLastIo(state: Pick<FeishuCardState, 'terminalLastIoText' | 'pendingStatusText'>): string {
+  return state.terminalLastIoText || extractTerminalLastIo(state.pendingStatusText);
 }
 
 function extractTerminalErrorStatus(statusText: string | null | undefined): string {
@@ -3106,6 +3133,10 @@ export class FeishuAdapter extends BaseChannelAdapter {
       state.pendingStatusText = pending.statusText || INITIAL_STREAMING_STATUS;
       const contextUsage = extractTerminalContextUsage(state.pendingStatusText);
       if (contextUsage) state.terminalContextUsageText = contextUsage;
+      const lastResponse = extractTerminalLastResponse(state.pendingStatusText);
+      if (lastResponse) state.terminalLastResponseText = lastResponse;
+      const lastIo = extractTerminalLastIo(state.pendingStatusText);
+      if (lastIo) state.terminalLastIoText = lastIo;
       dirty = true;
     }
     if (pending.tasks) {
@@ -3285,6 +3316,8 @@ export class FeishuAdapter extends BaseChannelAdapter {
         pendingTasksText: initialTasksText,
         pendingStatusText: initialStatusText,
         terminalContextUsageText: initialState?.terminalContextUsageText ?? '',
+        terminalLastResponseText: initialState?.terminalLastResponseText ?? '',
+        terminalLastIoText: initialState?.terminalLastIoText ?? '',
         renderedText: buildStreamingTextContent(initialContent),
         renderedTextLayoutSignature: buildStreamingTextLayoutSignature(initialContent),
         renderedTasksText: initialTasksText,
@@ -3368,6 +3401,10 @@ export class FeishuAdapter extends BaseChannelAdapter {
     if (contextUsage) {
       state.terminalContextUsageText = contextUsage;
     }
+    const lastResponse = extractTerminalLastResponse(state.pendingStatusText);
+    if (lastResponse) state.terminalLastResponseText = lastResponse;
+    const lastIo = extractTerminalLastIo(state.pendingStatusText);
+    if (lastIo) state.terminalLastIoText = lastIo;
     this.markStreamingDesiredDirty(state);
     this.scheduleCardFlush(cardKey);
   }
@@ -3603,6 +3640,8 @@ export class FeishuAdapter extends BaseChannelAdapter {
       metadata,
       actionRows,
       terminalContextUsageText: state.terminalContextUsageText,
+      terminalLastResponseText: state.terminalLastResponseText,
+      terminalLastIoText: state.terminalLastIoText,
       historyItemOffset: offsets.historyItemOffset,
       historyToolCallOffset: offsets.historyToolCallOffset,
       toolCallOffset: offsets.toolCallOffset,
@@ -3679,11 +3718,15 @@ export class FeishuAdapter extends BaseChannelAdapter {
     continuationOffsets: { historyItemOffset: number; historyToolCallOffset: number },
   ): Promise<void> {
     const cardkit = (this.restClient as any)?.cardkit?.v1;
-    const statusText = [
+    const nowMs = Date.now();
+    const statusText = joinFooterParts([
       '已续接到下一条',
-      formatElapsed(Date.now() - state.startTime),
+      formatFooterClockTime(nowMs),
+      `已运行 ${formatFooterDuration(nowMs - state.startTime)}`,
+      resolveTerminalLastResponse(state),
       resolveTerminalContextUsage(state),
-    ].filter(Boolean).join(' · ');
+      resolveTerminalLastIo(state),
+    ]);
     if (typeof cardkit?.cardElement?.content === 'function') {
       try {
         state.sequence += 1;
@@ -4594,11 +4637,15 @@ export class FeishuAdapter extends BaseChannelAdapter {
         interrupted: '⚠️ Interrupted',
         error: extractTerminalErrorStatus(state.pendingStatusText) || '❌ 异常',
       };
-      const elapsedMs = Date.now() - state.startTime;
+      const finalizedAtMs = Date.now();
+      const elapsedMs = finalizedAtMs - state.startTime;
       const footer = {
         status: statusLabels[status] ?? status,
-        elapsed: formatElapsed(elapsedMs),
+        currentTime: formatFooterClockTime(finalizedAtMs),
+        elapsed: `已运行 ${formatFooterDuration(elapsedMs)}`,
+        lastResponse: resolveTerminalLastResponse(state),
         context: resolveTerminalContextUsage(state),
+        lastIo: resolveTerminalLastIo(state),
       };
 
       const existingText = state.pendingText || '';
@@ -4682,15 +4729,19 @@ export class FeishuAdapter extends BaseChannelAdapter {
       return true;
     } catch (err) {
       if (state.historyDriven) {
-        const footerText = [
+        const fallbackFinalizedAtMs = Date.now();
+        const footerText = joinFooterParts([
           status === 'completed'
             ? ''
             : status === 'error'
               ? extractTerminalErrorStatus(state.pendingStatusText) || '❌ 异常'
               : '⚠️ Interrupted',
-          formatElapsed(Date.now() - state.startTime),
+          formatFooterClockTime(fallbackFinalizedAtMs),
+          `已运行 ${formatFooterDuration(fallbackFinalizedAtMs - state.startTime)}`,
+          resolveTerminalLastResponse(state),
           resolveTerminalContextUsage(state),
-        ].filter(Boolean).join(' · ');
+          resolveTerminalLastIo(state),
+        ]);
         const appended = await this.appendFinalStatusElement(cardKey, state, footerText);
         if (appended) {
           if (terminalReactionEmoji) {
@@ -6209,7 +6260,6 @@ export class FeishuAdapter extends BaseChannelAdapter {
   /**
    * Send a permission card with real Feishu card action buttons.
    * Button clicks trigger card.action.trigger events handled by handleCardAction().
-   * Falls back to text-based /perm commands if button card fails.
    */
   private async sendPermissionCard(
     chatId: string,
@@ -6257,91 +6307,11 @@ export class FeishuAdapter extends BaseChannelAdapter {
         }
         console.warn('[feishu-adapter] Permission button card send failed:', JSON.stringify({ code: (res as any)?.code, msg: res?.msg }));
       } catch (err) {
-        console.warn('[feishu-adapter] Permission button card error, falling back to text:', err instanceof Error ? err.message : err);
+        console.warn('[feishu-adapter] Permission button card error:', err instanceof Error ? err.message : err);
       }
     }
 
-    // Fallback: text-based permission commands (same as before, for backward compat)
-    const permCommands = inlineButtons.flat().map((btn) => {
-      if (btn.callbackData.startsWith('perm:')) {
-        const parts = btn.callbackData.split(':');
-        const action = parts[1];
-        const id = parts.slice(2).join(':');
-        return `\`/perm ${action} ${id}\``;
-      }
-      return btn.text;
-    });
-
-    const cardContent = [
-      mdText,
-      '',
-      '---',
-      '**Reply:**',
-      '`1` - Allow once',
-      '`2` - Allow session',
-      '`3` - Deny',
-      '',
-      'Or use full commands:',
-      ...permCommands,
-    ].join('\n');
-
-    const cardJson = JSON.stringify({
-      schema: '2.0',
-      config: { wide_screen_mode: true },
-      header: {
-        template: 'orange',
-        title: { tag: 'plain_text', content: '🔐 Permission Required' },
-      },
-      body: {
-        elements: [
-          { tag: 'markdown', content: cardContent },
-        ],
-      },
-    });
-
-    try {
-      const res = await this.withFeishuRequestTimeout(chatId, 'im.message.create:permission-fallback-card', () => this.restClient!.im.message.create({
-        params: { receive_id_type: 'chat_id' },
-        data: {
-          receive_id: chatId,
-          msg_type: 'interactive',
-          content: cardJson,
-        },
-      }));
-      if (res?.data?.message_id) {
-        return { ok: true, messageId: res.data.message_id };
-      }
-      console.warn('[feishu-adapter] Fallback card also failed:', res?.msg);
-    } catch (err) {
-      console.warn('[feishu-adapter] Fallback card error, sending plain text:', err instanceof Error ? err.message : err);
-    }
-
-    // Last resort: plain text message (works even without card permissions)
-    const plainText = [
-      mdText,
-      '',
-      '---',
-      'Reply: 1 = Allow once | 2 = Allow session | 3 = Deny',
-      '',
-      ...permCommands,
-    ].join('\n');
-
-    try {
-      const res = await this.withFeishuRequestTimeout(chatId, 'im.message.create:permission-fallback-text', () => this.restClient!.im.message.create({
-        params: { receive_id_type: 'chat_id' },
-        data: {
-          receive_id: chatId,
-          msg_type: 'text',
-          content: JSON.stringify({ text: plainText }),
-        },
-      }));
-      if (res?.data?.message_id) {
-        return { ok: true, messageId: res.data.message_id };
-      }
-      return { ok: false, error: res?.msg || 'Send failed' };
-    } catch (err) {
-      return { ok: false, error: err instanceof Error ? err.message : 'Send failed' };
-    }
+    return { ok: false, error: 'Failed to send permission button card' };
   }
 
   // ── Config & Auth ───────────────────────────────────────────
@@ -6562,28 +6532,6 @@ export class FeishuAdapter extends BaseChannelAdapter {
       chatKind: isGroup ? 'group' as const : 'p2p' as const,
       userId,
     };
-
-    // [P1] Check for /perm text command (permission approval fallback)
-    const trimmedText = text.trim();
-    if (trimmedText.startsWith('/perm ')) {
-      const permParts = trimmedText.split(/\s+/);
-      // /perm <action> <permId>
-      if (permParts.length >= 3) {
-        const action = permParts[1]; // allow / allow_session / deny
-        const permId = permParts.slice(2).join(' ');
-        const callbackData = `perm:${action}:${permId}`;
-
-        const inbound: InboundMessage = {
-          messageId: msg.message_id,
-          address,
-          text: trimmedText,
-          timestamp,
-          callbackData,
-        };
-        this.enqueueInboundMessage(inbound);
-        return;
-      }
-    }
 
     const inbound: InboundMessage = {
       messageId: msg.message_id,

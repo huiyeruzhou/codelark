@@ -58,7 +58,7 @@ Claude 的 `executable` 影响 `tmux` 和 `pty` 提供方；Claude SDK 提供方
 
 SDK 提供方通常直接把结构化事件交给 IM turn。pty / tmux 提供方更接近真实终端使用，会依赖本地 JSONL mirror 把最终输出同步到 IM。
 
-tmux Provider 的普通文本会先转发到 tmux 中的当前 runtime TUI。Codex tmux 如需自动预创建 `codex_thread_id` 或恢复缺失的 tmux session，启动进度会更新到同一张 Provider 卡片；Claude tmux 会启动或复用 Claude Code TUI，并通过 Claude JSONL mirror 同步输出；Kimi tmux 会启动或复用 Kimi Code TUI，通过 Kimi `wire.jsonl` mirror 同步输出，并在普通文本发送后自动补 `Ctrl-S` 触发 steer。显式发送 `/p tmux` 时，Codex 和 Claude 通过 shared tmux runtime 生命周期入口创建或重建 provider-owned session；Kimi 由 Kimi provider 负责启动、解析 session id 和注入输入。shared runtime 会在 ready 检测和屏幕查看时报告 Codex/Claude selection prompt；`/clear` 和 `/t archive` 会 best-effort 清理记录在 runtime state 中的 tmux provider session。输入成功转发后，原用户消息会短暂添加 `Typing` reaction，直到 mirror stream 启动并开始同步本地 JSONL 输出。
+tmux Provider 的普通文本会先转发到 tmux 中的当前 runtime TUI。Codex tmux 如需自动预创建 `codex_thread_id` 或恢复缺失的 tmux session，启动进度会更新到同一张 Provider 卡片；Claude tmux 会启动或复用 Claude Code TUI，并通过 Claude JSONL mirror 同步输出；Kimi tmux 会启动或复用 Kimi Code TUI，通过 Kimi `wire.jsonl` mirror 同步输出，并在普通文本发送后自动补 `Ctrl-S` 触发 steer。显式发送 `/p tmux` 时，Codex 和 Claude 通过 shared tmux runtime 生命周期入口创建或重建 provider-owned session；Kimi 由 Kimi provider 负责启动、解析 session id 和注入输入。shared runtime 会在 ready 检测和屏幕查看时报告 Codex/Claude selection prompt；`/clear` 和 `/t archive` 会 best-effort 清理记录在 runtime state 中的 tmux provider session。普通输入只有成功提交到 tmux 后，bridge 才异步给原用户消息添加常亮的 `Get`（“了解”）reaction，表示“已投递”；slash/控制命令进入命令处理时也异步添加常亮 Get，表示“已收到”。两条路径都不表示模型已经响应，不删除 reaction，也不等待飞书 ACK。
 
 相关模块：
 

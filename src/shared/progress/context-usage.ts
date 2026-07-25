@@ -52,13 +52,16 @@ function formatDecimalK(value: number): string {
   return `${Math.round(normalized)}k`;
 }
 
-export function formatContextUsageCompact(info?: ContextUsageInfo | null): string {
-  if (!info) return '';
-  const parts: string[] = [];
+export function formatContextUsageCompactParts(info?: ContextUsageInfo | null): {
+  context: string;
+  lastIo: string;
+} {
+  if (!info) return { context: '', lastIo: '' };
+  let context = '';
   const inputTokens = info.lastTokenUsage?.inputTokens ?? info.totalTokenUsage?.inputTokens;
   if (typeof inputTokens === 'number' && typeof info.modelContextWindow === 'number' && info.modelContextWindow > 0) {
     const pct = Math.round((inputTokens / info.modelContextWindow) * 100);
-    parts.push(`${formatWholeK(inputTokens)}(${pct}%)`);
+    context = `Context ${formatWholeK(inputTokens)}(${pct}%)`;
   }
 
   const turnInput = info.lastTokenUsage?.inputTokens;
@@ -66,9 +69,12 @@ export function formatContextUsageCompact(info?: ContextUsageInfo | null): strin
   const ioParts: string[] = [];
   if (typeof turnInput === 'number') ioParts.push(`↑${formatDecimalK(turnInput)}`);
   if (typeof turnOutput === 'number') ioParts.push(`↓${formatDecimalK(turnOutput)}`);
-  if (ioParts.length > 0) parts.push(ioParts.join(' '));
+  return { context, lastIo: ioParts.join(' ') };
+}
 
-  return parts.join(' · ');
+export function formatContextUsageCompact(info?: ContextUsageInfo | null): string {
+  const { context, lastIo } = formatContextUsageCompactParts(info);
+  return [context.replace(/^Context\s+/u, ''), lastIo].filter(Boolean).join(' · ');
 }
 
 export function appendContextUsageCompactText(text: string, info?: ContextUsageInfo | null): string {

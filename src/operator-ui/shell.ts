@@ -357,8 +357,8 @@ export function renderUiShellHtml(): string {
                     <input id="streamStatusIdleStartSeconds" type="number" min="0" value="0" />
                   </label>
                   <label>
-                    <span class="field-title">长任务提示刷新间隔（秒） <span class="help-tip" tabindex="0" data-tip="长任务提示出现后，每隔多少秒刷新一次“上次响应距今 X”。">?</span></span>
-                    <input id="streamStatusCheckIntervalSeconds" type="number" min="1" value="10" />
+                    <span class="field-title">运行状态刷新间隔（秒） <span class="help-tip" tabindex="0" data-tip="没有其他卡片更新时，按此间隔刷新当前时刻、已运行和上次响应；默认 5 秒。正文、思考、工具、任务或状态变化会立即刷新。">?</span></span>
+                    <input id="streamStatusCheckIntervalSeconds" type="number" min="1" value="5" />
                   </label>
                 </div>
                 <div class="checkbox-row" style="margin-top: 12px;">
@@ -488,14 +488,6 @@ export function renderUiShellHtml(): string {
                 </div>
               </section>
 
-              <section class="command-section">
-                <h3 class="command-section-title">权限</h3>
-                <div class="command-list">
-                  <div class="command-list-head"><div>命令</div><div>原始命令</div><div>说明</div></div>
-                  <div class="command-item"><div class="command-col-command"><code>/perm allow|allow_session|deny &lt;id&gt;</code></div><div class="command-col-original"><code>/perm allow|allow_session|deny &lt;id&gt;</code></div><div class="command-col-desc">文本方式处理一个待批准权限。</div></div>
-                  <div class="command-item"><div class="command-col-command"><code>1 / 2 / 3</code></div><div class="command-col-original">—</div><div class="command-col-desc">快速处理单个待批准权限。</div></div>
-                </div>
-              </section>
             </div>
           </section>
         </section>
@@ -1421,7 +1413,7 @@ export function renderUiShellHtml(): string {
         defaultMode: 'Codex 默认模式',
         historyMessageLimit: '/his 返回条数',
         streamStatusIdleStartSeconds: '响应计时显示延迟',
-        streamStatusCheckIntervalSeconds: '响应计时刷新间隔',
+        streamStatusCheckIntervalSeconds: '运行状态刷新间隔',
         codexSkipGitRepoCheck: '允许在未信任 Git 目录运行 Codex',
         codexSandboxMode: 'Codex 文件系统权限',
         codexNetworkAccess: 'Codex 网络访问',
@@ -2161,7 +2153,7 @@ export function renderUiShellHtml(): string {
         document.getElementById('defaultMode').value = config.defaultMode === 'yolo' ? 'yolo' : 'normal';
         document.getElementById('historyMessageLimit').value = String(config.historyMessageLimit || 8);
         document.getElementById('streamStatusIdleStartSeconds').value = String(config.streamStatusIdleStartSeconds ?? 0);
-        document.getElementById('streamStatusCheckIntervalSeconds').value = String(config.streamStatusCheckIntervalSeconds || 10);
+        document.getElementById('streamStatusCheckIntervalSeconds').value = String(config.streamStatusCheckIntervalSeconds || 5);
         document.getElementById('defaultWorkspaceRoot').value = config.defaultWorkspaceRoot || '';
         renderDefaultModelOptions(config);
         document.getElementById('defaultProvider').value = config.defaultProvider || '';

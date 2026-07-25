@@ -38,9 +38,9 @@ import {
 } from '../turn/delivery-pipeline.js';
 import {
   formatStreamRuntimeStatus,
-  getStreamLastContentResponseAgeMs,
-  getVisibleStreamLastContentResponseAgeMs,
-  shouldShowStreamLastContentResponseAge,
+  getStreamLastActivityAgeMs,
+  getVisibleStreamLastActivityAgeMs,
+  shouldShowStreamLastActivityAge,
 } from '../turn/stream-state.js';
 
 export interface MirrorStructuredStreamStatusConfig {
@@ -249,20 +249,16 @@ export function createMirrorFeedbackController(
       return;
     }
 
-    const lastContentResponseAtMs = turnState.lastContentResponseAt
-      ? Date.parse(turnState.lastContentResponseAt)
-      : turnState.lastResponseAt
-        ? Date.parse(turnState.lastResponseAt)
-        : null;
+    const lastActivityAtMs = Date.parse(turnState.lastActivityAt);
     const streamState = {
       startedAtMs,
-      lastContentResponseAtMs: Number.isFinite(lastContentResponseAtMs) ? lastContentResponseAtMs : null,
+      lastActivityAtMs: Number.isFinite(lastActivityAtMs) ? lastActivityAtMs : startedAtMs,
     };
     const statusConfig = deps.getStructuredStreamStatusConfig?.();
     const effectiveLastResponseAgeMs = Object.prototype.hasOwnProperty.call(options, 'lastResponseAgeMs')
       ? options.lastResponseAgeMs
       : statusConfig
-        ? getVisibleStreamLastContentResponseAgeMs(streamState, nowMs, statusConfig)
+        ? getVisibleStreamLastActivityAgeMs(streamState, nowMs, statusConfig)
         : null;
     const statusText = formatStreamRuntimeStatus(
       Math.max(0, nowMs - startedAtMs),
@@ -270,6 +266,7 @@ export function createMirrorFeedbackController(
       turnState.statusNote,
       turnState.contextUsage,
       turnState.thinkingNote,
+      nowMs,
     );
     if (turnState.lastStatusText === statusText) return;
 
@@ -293,20 +290,16 @@ export function createMirrorFeedbackController(
     const startedAtMs = Date.parse(pendingTurn.startedAt);
     if (!Number.isFinite(startedAtMs)) return;
 
-    const lastContentResponseAtMs = pendingTurn.lastContentResponseAt
-      ? Date.parse(pendingTurn.lastContentResponseAt)
-      : pendingTurn.lastResponseAt
-        ? Date.parse(pendingTurn.lastResponseAt)
-        : null;
+    const lastActivityAtMs = Date.parse(pendingTurn.lastActivityAt);
     const streamState = {
       startedAtMs,
-      lastContentResponseAtMs: Number.isFinite(lastContentResponseAtMs) ? lastContentResponseAtMs : null,
+      lastActivityAtMs: Number.isFinite(lastActivityAtMs) ? lastActivityAtMs : startedAtMs,
     };
-    if (!shouldShowStreamLastContentResponseAge(streamState, nowMs, config)) return;
+    if (!shouldShowStreamLastActivityAge(streamState, nowMs, config)) return;
 
     pushMirrorStreamingStatus(subscription, pendingTurn, {
       nowMs,
-      lastResponseAgeMs: getStreamLastContentResponseAgeMs(streamState, nowMs),
+      lastResponseAgeMs: getStreamLastActivityAgeMs(streamState, nowMs),
       minIntervalMs: config.heartbeatMs,
     });
   }
@@ -392,7 +385,8 @@ export function createMirrorFeedbackController(
     if (!adapter || !adapter.isRunning()) return;
     if (terminalStatus === 'error' && typeof adapter.onStreamStatus === 'function') {
       const startedAtMs = Date.parse(turn.startedAt || turn.timestamp);
-      const elapsedMs = Number.isFinite(startedAtMs) ? Math.max(0, Date.now() - startedAtMs) : 0;
+      const nowMs = Date.now();
+      const elapsedMs = Number.isFinite(startedAtMs) ? Math.max(0, nowMs - startedAtMs) : 0;
       adapter.onStreamStatus(
         subscription.chatId,
         formatStreamRuntimeStatus(
@@ -401,6 +395,7 @@ export function createMirrorFeedbackController(
           formatMirrorTerminalErrorStatus(turn.errorText),
           turn.contextUsage,
           null,
+          nowMs,
         ),
         turn.streamKey,
       );

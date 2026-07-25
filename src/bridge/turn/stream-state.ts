@@ -1,7 +1,12 @@
 import {
-  formatContextUsageCompact,
+  formatContextUsageCompactParts,
   type ContextUsageInfo,
 } from '../../shared/progress/context-usage.js';
+import {
+  formatFooterClockTime,
+  formatFooterDuration,
+  joinFooterParts,
+} from '../../shared/progress/footer.js';
 import {
   createUnifiedTurnProgressState,
   recordUnifiedTurnActivity,
@@ -62,32 +67,29 @@ export function updateStreamThinkingNote(
 }
 
 export function formatRuntimeDuration(ms: number): string {
-  const totalSeconds = Math.max(0, Math.floor(ms / 1000));
-  const seconds = totalSeconds % 60;
-  const totalMinutes = Math.floor(totalSeconds / 60);
-  const minutes = totalMinutes % 60;
-  const hours = Math.floor(totalMinutes / 60);
-  const parts: string[] = [];
-  if (hours > 0) parts.push(`${hours}小时`);
-  if (minutes > 0) parts.push(`${minutes}分`);
-  if (seconds > 0 || parts.length === 0) parts.push(`${seconds}秒`);
-  return parts.join('');
+  return formatFooterDuration(ms);
 }
 
 export function formatStreamRuntimeStatus(
   elapsedMs: number,
-  lastContentResponseAgeMs?: number | null,
+  lastActivityAgeMs?: number | null,
   statusNote?: string | null,
   contextUsage?: ContextUsageInfo | null,
   thinkingNote?: string | null,
+  currentTimeMs?: number,
 ): string {
-  const parts = [`已运行 ${formatRuntimeDuration(elapsedMs)}`];
-  if (typeof lastContentResponseAgeMs === 'number' && lastContentResponseAgeMs >= 0) {
-    parts.push(`上次响应距今 ${formatRuntimeDuration(lastContentResponseAgeMs)}`);
+  const parts: string[] = [];
+  if (typeof currentTimeMs === 'number' && Number.isFinite(currentTimeMs)) {
+    parts.push(formatFooterClockTime(currentTimeMs));
   }
-  const contextText = formatContextUsageCompact(contextUsage);
-  if (contextText) parts.push(contextText);
-  const runtimeText = parts.join('，');
+  parts.push(`已运行 ${formatRuntimeDuration(elapsedMs)}`);
+  if (typeof lastActivityAgeMs === 'number' && lastActivityAgeMs >= 0) {
+    parts.push(`上次响应 ${formatRuntimeDuration(lastActivityAgeMs)}`);
+  }
+  const context = formatContextUsageCompactParts(contextUsage);
+  if (context.context) parts.push(context.context);
+  if (context.lastIo) parts.push(context.lastIo);
+  const runtimeText = joinFooterParts(parts);
   const note = (statusNote || '').trim();
   const thinking = (thinkingNote || '').trim();
   const lines: string[] = [];
@@ -97,51 +99,52 @@ export function formatStreamRuntimeStatus(
   return lines.join('\n');
 }
 
-export function getStreamLastContentResponseAgeMs(
-  state: Pick<StreamState, 'startedAtMs' | 'lastContentResponseAtMs'>,
+export function getStreamLastActivityAgeMs(
+  state: Pick<StreamState, 'startedAtMs' | 'lastActivityAtMs'>,
   nowMs: number,
   options: { fallbackToStart?: boolean } = {},
 ): number | null {
   const fallbackToStart = options.fallbackToStart !== false;
-  const base = state.lastContentResponseAtMs ?? (fallbackToStart ? state.startedAtMs : null);
+  const base = state.lastActivityAtMs ?? (fallbackToStart ? state.startedAtMs : null);
   if (base == null || !Number.isFinite(base) || !Number.isFinite(nowMs)) return null;
   return Math.max(0, nowMs - base);
 }
 
-export function shouldShowStreamLastContentResponseAge(
-  state: Pick<StreamState, 'startedAtMs' | 'lastContentResponseAtMs'>,
+export function shouldShowStreamLastActivityAge(
+  state: Pick<StreamState, 'startedAtMs' | 'lastActivityAtMs'>,
   nowMs: number,
   config: StreamStatusTimingConfig,
 ): boolean {
   if (!Number.isFinite(nowMs)) return false;
   const elapsedMs = nowMs - state.startedAtMs;
   if (elapsedMs < Math.max(0, config.idleStartMs)) return false;
-  return getStreamLastContentResponseAgeMs(state, nowMs) != null;
+  return getStreamLastActivityAgeMs(state, nowMs) != null;
 }
 
-export function getVisibleStreamLastContentResponseAgeMs(
-  state: Pick<StreamState, 'startedAtMs' | 'lastContentResponseAtMs'>,
+export function getVisibleStreamLastActivityAgeMs(
+  state: Pick<StreamState, 'startedAtMs' | 'lastActivityAtMs'>,
   nowMs: number,
   config: StreamStatusTimingConfig,
 ): number | null {
-  if (!shouldShowStreamLastContentResponseAge(state, nowMs, config)) return null;
-  return getStreamLastContentResponseAgeMs(state, nowMs);
+  if (!shouldShowStreamLastActivityAge(state, nowMs, config)) return null;
+  return getStreamLastActivityAgeMs(state, nowMs);
 }
 
 export function buildStreamRuntimeStatus(
-  state: Pick<StreamState, 'startedAtMs' | 'lastContentResponseAtMs' | 'statusNote'> & Partial<Pick<StreamState, 'thinkingNote'>>,
+  state: Pick<StreamState, 'startedAtMs' | 'lastActivityAtMs' | 'statusNote'> & Partial<Pick<StreamState, 'thinkingNote'>>,
   nowMs: number,
   options: {
-    includeLastContentResponseAge?: boolean;
+    includeLastActivityAge?: boolean;
   } = {},
 ): string {
   return formatStreamRuntimeStatus(
     Math.max(0, nowMs - state.startedAtMs),
-    options.includeLastContentResponseAge
-      ? getStreamLastContentResponseAgeMs(state, nowMs)
+    options.includeLastActivityAge
+      ? getStreamLastActivityAgeMs(state, nowMs)
       : null,
     state.statusNote,
     'contextUsage' in state ? (state.contextUsage as ContextUsageInfo | null) : null,
     state.thinkingNote,
+    nowMs,
   );
 }

@@ -1,7 +1,6 @@
 import {
   buildCommandFields,
 } from './presentation.js';
-import * as broker from '../permission/broker.js';
 import * as router from '../session/channel-router.js';
 import type { BridgeSession, BridgeStore } from '../../domain/index.js';
 import { sendTmuxInterrupt } from '../tmux/runtime.js';
@@ -73,34 +72,4 @@ export async function handleStopCommand(options: {
     return `旧会话「${taskName}」任务已停止，可继续发送消息恢复该线程。`;
   }
   return '当前没有正在运行的任务。';
-}
-
-export function handlePermissionCommand(options: {
-  args: string;
-  chatId: string;
-  currentBinding: ChannelChat | null;
-  store: BridgeStore;
-}): string {
-  const permParts = options.args.split(/\s+/);
-  const permAction = permParts[0];
-  const permId = permParts.slice(1).join(' ');
-  if (!permAction || !permId || !['allow', 'allow_session', 'deny'].includes(permAction)) {
-    return '用法：/perm allow|allow_session|deny <permission_id>';
-  }
-  const link = options.store.getPermissionLink(permId);
-  if (!link) {
-    return '没有找到对应权限，或该权限已处理。';
-  }
-  if (
-    options.currentBinding?.bridgeSessionId
-    && link.sessionId
-    && link.sessionId !== options.currentBinding.bridgeSessionId
-  ) {
-    return '这条权限请求不属于当前会话。请先切回对应会话，再处理该权限。';
-  }
-  const callbackData = `perm:${permAction}:${permId}`;
-  const handled = broker.handlePermissionCallback(callbackData, options.chatId);
-  return handled
-    ? `已记录权限操作：${permAction}`
-    : '没有找到对应权限，或该权限已处理。';
 }

@@ -138,6 +138,16 @@ snapshotStreamingDesiredState(state)
 - full refresh payload bytes、component count、耗时、超时次数。
 - full refresh 后是否立即又有 `flushQueued`，表示刷新期间新状态继续堆积。
 
+### 状态栏与活动时间
+
+状态栏从 turn 开始显示，默认每 5 秒刷新一次。每次正文、思考、工具、任务或状态事件都算一次可见活动，并把“上次响应”归零；若这些事件本身已经触发卡片更新，状态栏必须使用同一个时刻立即重算，不能等下一次心跳。
+
+所有运行中、续接和最终卡片共用同一套 footer 格式。状态字段（例如异常原因、已续接到下一条）排在最前，公共字段固定为“当前时刻 `HH:mm:ss` · 已运行时长 · 上次响应时长 · Context 使用 · 上一轮输入输出”；缺失字段省略，分隔符统一为 ` · `。时长使用紧凑格式并省略零值高位，例如 `3m11s`、`1h2m10s`、`0s`，不得补 `00h` 或混用中英文单位。
+
+`stream_status_idle_start_seconds = 0` 表示从任务开始立即显示状态栏；`stream_status_check_interval_seconds = 5` 是默认心跳间隔。进程启动时只解析一次系统时区：shell `TZ` 优先，macOS/Windows 使用 runtime 系统时区，Linux 在 runtime 默认与系统文件冲突时读取 `/etc/timezone` 或 `/etc/localtime`；后续刷新只复用缓存的时区和 formatter，不得重复文件 I/O。
+
+新增工具与状态栏刷新必须保持为两个 CardKit 动作：先原子创建或更新工具 history，再单独更新 `streaming_status`。这既保持工具调用的原子边界，也让 footer 保留流式效果；不能为了合并请求而把工具正文和状态栏一起重绘成整张卡。
+
 ### Finalize
 
 入口是 `finalizeCard()`。
@@ -152,8 +162,6 @@ snapshotStreamingDesiredState(state)
 final full update 必须以 desired history 为权威。`responseText` 为空不代表卡片没有正文：mirror 在流式卡已包含正文时会传空 text 防止重复，工具和消息仍可能全部存在于 `historyItems`。因此 final renderer 的 content gate 同时检查 text、legacy tools 和 history；history-only 的 apply_patch 也必须在关闭 streaming mode 后完整保留。
 
 error 终态不能只靠红色边框或泛化的 `Error` footer。runtime adapter 把真实错误写入 `FinalizedBridgeMirrorTurn.errorText`；feedback controller 从 JSON 中提取 type/message（非 JSON 则保留原文），压成最多 600 个 Unicode 字符的单行状态，先更新“当前步骤：❌ 原因 + 已运行时间 + context/token usage”，再关闭 streaming mode。final footer 复用同一条原因，并继续追加 adapter 计算的真实耗时和 context；错误、时间、token 信息不能互相覆盖。history 不再重复插入错误块。新版结构化 JSONL error 与旧版 TUI `■` fallback 共用这个字段，channel renderer 不识别 Codex 专属格式。
-
-流式尾栏的两个计时必须和每次可见内容更新使用同一时刻重算：`已运行` 以 turn 开始时间为基准，`上次响应距今` 只以最后一次正文响应为基准，工具、任务、状态和思考更新不得重置它。`stream_status_idle_start_seconds = 0` 是默认值，表示从任务开始即显示 `已运行 0秒，上次响应距今 0秒`；`stream_status_check_interval_seconds` 只控制没有其他更新时的心跳频率。内容、工具或任务本身触发卡片更新时不等待心跳，尾栏必须在同一次 desired-state 刷新中同步更新。
 
 需要观察：
 

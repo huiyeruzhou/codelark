@@ -203,6 +203,10 @@ describe('Ui config application', () => {
 
     assert.deepEqual(browserKeys, UI_CONFIG_INPUT_KEYS);
     assert.doesNotMatch(source, /showToolCallDetails/);
+    assert.match(source, /运行状态刷新间隔（秒）/);
+    assert.match(source, /id="streamStatusCheckIntervalSeconds"[^>]*value="5"/);
+    assert.match(source, /config\.streamStatusCheckIntervalSeconds \|\| 5/);
+    assert.doesNotMatch(source, /长任务提示刷新间隔/);
   });
 
   it('exposes and writes global Kimi runtime defaults', () => {

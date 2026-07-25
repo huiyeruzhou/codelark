@@ -64,7 +64,6 @@
 | `/t rename` | 重命名当前 BridgeSession，部分通道同步群名 | 写 `BridgeSession.name` |
 | `/provider`、`/p` | 在当前 runtime 的 provider 间切换；Codex/Claude 支持 `sdk|pty|tmux`，Kimi 当前只支持 `tmux` | 写 Session TOML 的 `runtime.codex.provider` / `runtime.claude.provider` / `runtime.kimi.provider`；tmux 时只把自动生成 tmux session name 和必要的 runtime identity 作为运行身份写 BridgeSession JSON |
 | `/stop` | 停止当前运行任务 | 触发 bridge 任务控制；tmux provider 下映射为 tmux interrupt |
-| `/perm` | 权限审批回调 | 读写 permission link 状态 |
 
 ### 会话运行时配置
 
@@ -146,7 +145,7 @@ interface GlobalRuntimeConfig {
 | `defaultWorkspaceRoot` | `bridge.default_workspace` | 影响 `/new <relative>`，不是 provider 参数 |
 | `historyMessageLimit` | `channels[].config.history_message_limit` | 影响 `/history` 展示 |
 | `streamStatusIdleStartSeconds` | `channels[].config.stream_status_idle_start_seconds` | 尾栏响应计时显示延迟；默认 0，从任务开始显示 |
-| `streamStatusCheckIntervalSeconds` | `channels[].config.stream_status_check_interval_seconds` | 无其他卡片更新时的尾栏刷新间隔 |
+| `streamStatusCheckIntervalSeconds` | `channels[].config.stream_status_check_interval_seconds` | 无其他卡片更新时的尾栏刷新间隔；默认 5 秒 |
 | `/ui` | 固定显示策略 | 工具详情始终显示 |
 | `uiAllowLan`、`uiAccessToken` | `bridge.ui` | UI server |
 | Feishu / Weixin channel config | `channels[]` | 通道连接、访问控制、消息呈现 |

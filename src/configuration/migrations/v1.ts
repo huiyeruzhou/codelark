@@ -263,7 +263,7 @@ function patchFromLegacyConfig(config: LegacyConfigFile, warnings: string[]): Co
       config: {
         historyMessageLimit: 8,
         streamStatusIdleStartSeconds: 0,
-        streamStatusCheckIntervalSeconds: 10,
+        streamStatusCheckIntervalSeconds: 5,
         appId: '',
         appSecret: '',
         site: 'feishu',

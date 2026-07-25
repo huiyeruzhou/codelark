@@ -20,7 +20,7 @@ import { appendContextUsageCompactText } from '../../../shared/progress/context-
 import {
   buildStreamRuntimeStatus,
   formatStreamRuntimeStatus,
-  getVisibleStreamLastContentResponseAgeMs,
+  getVisibleStreamLastActivityAgeMs,
   type StreamState,
   type StreamStatusTimingConfig,
 } from '../stream-state.js';
@@ -79,7 +79,7 @@ export interface InteractiveStreamUiController {
   readonly hasStreamingCards: boolean;
   readonly supportsStructuredStreamUi: boolean;
   pushMetadata(metadata: StructuredStreamingUiMetadata): void;
-  pushRunningStatus(lastResponseAgeMs?: number | null): void;
+  pushRunningStatus(lastActivityAgeMs?: number | null): void;
   syncSnapshot(): void;
   startStatusHeartbeat(): void;
   stopStatusUpdates(): void;
@@ -198,27 +198,28 @@ export function createInteractiveStreamUiController(
     params.recordSnapshot?.(params.sessionId, snapshot);
   };
 
-  const getVisibleLastResponseAgeMs = (nowMs: number) => getVisibleStreamLastContentResponseAgeMs(
+  const getVisibleLastActivityAgeMs = (nowMs: number) => getVisibleStreamLastActivityAgeMs(
     params.streamState,
     nowMs,
     params.statusTiming,
   );
 
-  const pushRunningStatus = (lastResponseAgeMs?: number | null) => {
+  const pushRunningStatus = (lastActivityAgeMs?: number | null) => {
     if (!supportsStructuredStreamUi || streamStatusUpdatesClosed) return;
     const nowMs = params.nowMs();
-    const effectiveLastResponseAgeMs = lastResponseAgeMs === undefined
-      ? getVisibleLastResponseAgeMs(nowMs)
-      : lastResponseAgeMs;
+    const effectiveLastActivityAgeMs = lastActivityAgeMs === undefined
+      ? getVisibleLastActivityAgeMs(nowMs)
+      : lastActivityAgeMs;
     feedback.pushStatus(
-      effectiveLastResponseAgeMs == null
+      effectiveLastActivityAgeMs == null
         ? buildStreamRuntimeStatus(params.streamState, nowMs)
         : formatStreamRuntimeStatus(
             Math.max(0, nowMs - params.streamState.startedAtMs),
-            effectiveLastResponseAgeMs,
+            effectiveLastActivityAgeMs,
             params.streamState.statusNote,
             params.streamState.contextUsage,
             params.streamState.thinkingNote,
+            nowMs,
           ),
     );
     syncSnapshot();

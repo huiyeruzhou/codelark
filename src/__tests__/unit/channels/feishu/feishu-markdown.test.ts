@@ -398,6 +398,8 @@ describe('buildToolProgressMarkdown', () => {
       yield_time_ms: 30_000,
       max_tokens: 8_000,
     });
+    assert.equal(input?.kind, 'terminal_stdin');
+    assert.equal(input?.kind === 'terminal_stdin' ? input.maxTokens : undefined, 8_000);
     const detail = mergeToolCallDetail(input, buildToolCallDetailFromOutput('wait', [
       'Script completed',
       'Wall time 12.8 seconds',
@@ -413,7 +415,8 @@ describe('buildToolProgressMarkdown', () => {
       detail,
     }]);
 
-    assert.match(rendered, /⏳ 等待 终端 `647` · 等待 30\.0s · 12\.8s · 输出 2 行/);
+    assert.match(rendered, /⏳ 等待 终端 `647` · 等待 30\.0s · ≤8,000 tokens · 12\.8s · 输出 2 行/);
+    assert.match(rendered, /<text_tag color='purple'>≤8,000 tokens<\/text_tag>/);
     assert.doesNotMatch(rendered, /first result|second result|```text|Script completed|Wall time|Original token count|Output:/);
   });
 

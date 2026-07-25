@@ -159,7 +159,7 @@ describe('legacy config compatibility adapter', () => {
     assert.equal(patch.channels?.[0]?.config?.appId, 'app-id');
     assert.equal(patch.channels?.[0]?.config?.historyMessageLimit, 8);
     assert.equal(patch.channels?.[0]?.config?.streamStatusIdleStartSeconds, 0);
-    assert.equal(patch.channels?.[0]?.config?.streamStatusCheckIntervalSeconds, 10);
+    assert.equal(patch.channels?.[0]?.config?.streamStatusCheckIntervalSeconds, 5);
     assert.equal(patch.channels?.[0]?.config?.site, 'feishu');
     assert.deepEqual(patch.channels?.[0]?.config?.allowedUsers, []);
     assert.equal(patch.channels?.[0]?.config?.streamingEnabled, true);
@@ -180,7 +180,7 @@ describe('legacy config compatibility adapter', () => {
     assert.equal(patch.channels?.[0]?.enabled, false);
     assert.equal(patch.channels?.[0]?.config?.historyMessageLimit, 12);
     assert.equal(patch.channels?.[0]?.config?.streamStatusIdleStartSeconds, 0);
-    assert.equal(patch.channels?.[0]?.config?.streamStatusCheckIntervalSeconds, 10);
+    assert.equal(patch.channels?.[0]?.config?.streamStatusCheckIntervalSeconds, 5);
   });
 
 });

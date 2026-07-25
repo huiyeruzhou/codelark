@@ -16,7 +16,7 @@ import type { ConfigPatch, ConfigV2 } from './schema.js';
 // 新运行时读取不应从这里取配置，旧字段迁移完成后由 migrations 归档输入文件。
 
 export const LEGACY_DEFAULT_STREAM_STATUS_IDLE_START_SECONDS = 0;
-export const LEGACY_DEFAULT_STREAM_STATUS_CHECK_INTERVAL_SECONDS = 10;
+export const LEGACY_DEFAULT_STREAM_STATUS_CHECK_INTERVAL_SECONDS = 5;
 const LEGACY_DEFAULT_HISTORY_MESSAGE_LIMIT = 8;
 
 function legacyCodexMode(mode: ConfigV2['runtime']['codex']['yoloMode']): string {
