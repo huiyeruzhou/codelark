@@ -90,8 +90,14 @@ async function isClaudeCodeRouterRunning(command: string, env: Record<string, st
 
 export function buildClaudeCodeRouterStartInvocation(
   command: string,
+  platform: NodeJS.Platform = process.platform,
+  comspec = process.env.ComSpec || process.env.COMSPEC || 'cmd.exe',
 ): { command: string; args: string[] } {
-  return { command, args: ['start'] };
+  if (platform !== 'win32') return { command, args: ['start'] };
+  return {
+    command: comspec,
+    args: ['/d', '/s', '/c', `call "${command}" start`],
+  };
 }
 
 async function startClaudeCodeRouter(command: string, env: Record<string, string>): Promise<void> {

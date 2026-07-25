@@ -273,13 +273,22 @@ class TmuxCliCore implements TmuxCore {
   private async pasteLiteralChunks(target: string, text: string, bufferName?: string): Promise<string[]> {
     const commands: string[] = [];
     const name = bufferName || `clk-paste-${process.pid}-${Date.now()}`;
-    for (const chunk of splitTextChunks(text)) {
-      const loadArgs: TmuxArgv = ['load-buffer', '-b', name, '-'];
-      await this.runTmux(loadArgs, chunk);
-      commands.push(tmuxCommandPreview(loadArgs));
-      const pasteArgs: TmuxArgv = ['paste-buffer', '-d', '-p', '-b', name, '-t', target];
-      await this.runTmux(pasteArgs);
-      commands.push(tmuxCommandPreview(pasteArgs));
+    for (const rawChunk of splitTextChunks(text)) {
+      const leadingWhitespace = rawChunk.match(/^\s+/u)?.[0] || '';
+      const chunk = rawChunk.slice(leadingWhitespace.length);
+      if (leadingWhitespace) {
+        const leadingArgs: TmuxArgv = ['send-keys', '-t', target, '-l', leadingWhitespace];
+        await this.runTmux(leadingArgs);
+        commands.push(tmuxCommandPreview(leadingArgs));
+      }
+      if (chunk) {
+        const loadArgs: TmuxArgv = ['load-buffer', '-b', name, '-'];
+        await this.runTmux(loadArgs, chunk);
+        commands.push(tmuxCommandPreview(loadArgs));
+        const pasteArgs: TmuxArgv = ['paste-buffer', '-d', '-p', '-b', name, '-t', target];
+        await this.runTmux(pasteArgs);
+        commands.push(tmuxCommandPreview(pasteArgs));
+      }
       const endArgs: TmuxArgv = ['send-keys', '-t', target, 'End'];
       await this.runTmux(endArgs);
       commands.push(tmuxCommandPreview(endArgs));

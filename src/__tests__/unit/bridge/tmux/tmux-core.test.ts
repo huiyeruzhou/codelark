@@ -99,4 +99,24 @@ describe('TmuxCore', () => {
       fs.rmSync(fakeTmux.binDir, { recursive: true, force: true });
     }
   });
+
+  it('sends chunk-leading whitespace literally instead of passing it through paste-buffer', async () => {
+    const fakeTmux = installFakeTmux();
+    const oldFakeLog = process.env.TMUX_FAKE_LOG;
+    process.env.TMUX_FAKE_LOG = fakeTmux.logPath;
+
+    try {
+      const result = await fakeTmux.core.sendActions('alpha', [{
+        type: 'literal',
+        text: `${'a'.repeat(512)} leading-space`,
+      }]);
+
+      assert.ok(result.commands.includes("tmux send-keys -t alpha -l ' '"));
+      assert.equal(result.commands.filter((command) => command.includes('paste-buffer')).length, 2);
+    } finally {
+      if (oldFakeLog === undefined) delete process.env.TMUX_FAKE_LOG;
+      else process.env.TMUX_FAKE_LOG = oldFakeLog;
+      fs.rmSync(fakeTmux.binDir, { recursive: true, force: true });
+    }
+  });
 });
