@@ -186,6 +186,8 @@ flowchart TD
 
 Mirror 不是子线程，也不是独立 worker。它运行在 bridge daemon 内：`fs.watch` 只负责标记 dirty 和唤醒 debounce；poll timer 负责兜底；真正处理发生在 reconcile 批次里。批次对不同 subscription 使用有界并发，同一个 subscription 内部按 JSONL cursor 顺序读取、过滤、reduce、触发 hook，避免一张 mirror 卡片的局部更新乱序。已经绑定的 subscription 必须先对已知 `filePath` 做 stat，并用 inode/size/mtime 判断无变化或只读新增区间；不能在 stat 之前重新 list 全部 runtime sessions。只有文件路径缺失、失效或 runtime identity 改变时，才允许重新调用 runtime-specific source discovery。
 
+tmux pane 抓屏也必须由活动状态驱动，不能随 mirror poll 永久扫描所有历史 subscription。通用 selection/reconnect probe 只在当前有 pending turn，或刚向 tmux 注入消息后的短 follow-up window 内运行；turn completed 后的异常方块由 finalized-status 路径单独抓屏，idle baseline 只在需要建立基线时抓一次。这样既保留 selection、reconnecting 和异常终态检测，也避免每 5 秒为每个空闲 pane 启动 `display-message` / `capture-pane` 子进程。
+
 Mirror 的身份分两层，不应混用。第一层是“哪个本地会话文件”，由 `BridgeSession`、runtime identity 和 cwd 决定；第二层是“文件内哪一轮 turn”，由 runtime-specific parser 从 JSONL 记录关系里推断。文件名只回答“观察哪个会话”，不能回答“这是第几轮输出”。
 
 Mirror 和主动 IM turn 之间有显式归属规则。当前 IM 发起的 prompt 会产生本地 JSONL 回声，suppression 会过滤重复回显；如果新增记录包含可被 active turn 接受的 `task_complete` / `task_aborted`，`routeRuntimeRecords` 会通过 `TurnCoordinator.claimRuntimeTerminal` 把终态归还给 active turn。未被 claim 的记录才作为独立 mirror delivery。

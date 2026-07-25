@@ -218,6 +218,34 @@ describe('bridge-manager model prompt context', () => {
 
 });
 
+describe('bridge-manager mirror tmux selection probe scheduling', () => {
+  it('skips idle subscriptions but probes active turns and explicit follow-up windows', () => {
+    _testOnly.resetStateForTests();
+    const subscription = createMirrorSubscription({
+      bindingId: 'binding-probe',
+      sessionId: 'session-probe',
+      channelType: 'feishu',
+      chatId: 'chat-probe',
+      threadId: 'thread-probe',
+      filePath: '/tmp/session-probe.jsonl',
+      lastDeliveredAt: null,
+    });
+
+    assert.equal(_testOnly.shouldProbeMirrorTmuxSelectionPrompt(subscription, 10_000), false);
+
+    subscription.pendingTurn = {} as typeof subscription.pendingTurn;
+    assert.equal(_testOnly.shouldProbeMirrorTmuxSelectionPrompt(subscription, 10_000), true);
+
+    subscription.pendingTurn = null;
+    _testOnly.requestTmuxSelectionPromptFollowupProbe(subscription.sessionId, 10_000, {
+      wakeDelayMs: 60_000,
+    });
+    assert.equal(_testOnly.shouldProbeMirrorTmuxSelectionPrompt(subscription, 10_000), true);
+    assert.equal(_testOnly.shouldProbeMirrorTmuxSelectionPrompt(subscription, 15_001), false);
+    _testOnly.resetStateForTests();
+  });
+});
+
 function installFakeTmux(): { binDir: string; logPath: string } {
   const binDir = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-bridge-manager-fake-tmux-'));
   const logPath = path.join(binDir, 'tmux.log');

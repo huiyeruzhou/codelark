@@ -550,6 +550,7 @@ function shouldProbeMirrorTmuxSelectionPrompt(
 ): boolean {
   const followupUntil = tmuxSelectionPromptFollowupUntil.get(subscription.sessionId) || 0;
   const inFollowupWindow = nowMs <= followupUntil;
+  if (!subscription.pendingTurn && !inFollowupWindow) return false;
   const lastProbeAt = tmuxSelectionPromptLastProbeAt.get(subscription.sessionId) || 0;
   const intervalMs = inFollowupWindow
     ? MIRROR_TMUX_SELECTION_PROBE_FOLLOWUP_INTERVAL_MS
@@ -4597,6 +4598,8 @@ export const _testOnly = {
   formatDisplayedModel,
   formatRuntimeTerminalDetail,
   sessionSupportsTmuxSelectionPromptProbe,
+  shouldProbeMirrorTmuxSelectionPrompt,
+  requestTmuxSelectionPromptFollowupProbe,
   formatBindingChatLabel,
   formatMirrorUserText,
   formatMirrorMessage,
