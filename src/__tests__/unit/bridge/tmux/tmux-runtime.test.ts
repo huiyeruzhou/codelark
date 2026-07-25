@@ -63,7 +63,7 @@ describe('codex tmux runtime', () => {
   });
 
   it('passes the requested model when launching a resumed Codex tmux session', () => {
-    const { codexCommand } = buildCodexResumeTmuxCommand({
+    const { codexCommand, tmuxCommand } = buildCodexResumeTmuxCommand({
       sessionName: 'codex_test',
       bridgeSessionId: 'bridge-session-1',
       threadId: '019e8d75-4f82-7df3-b15a-901980812307',
@@ -72,8 +72,11 @@ describe('codex tmux runtime', () => {
       modelReasoningEffort: 'low',
     });
 
-    assert.match(codexCommand, /--model gpt-5\.4/);
-    assert.match(codexCommand, /resume 019e8d75-4f82-7df3-b15a-901980812307/);
+    const launchText = Array.isArray(tmuxCommand) ? tmuxCommand.join('\n') : codexCommand;
+    assert.match(launchText, /--model/);
+    assert.match(launchText, /gpt-5\.4/);
+    assert.match(launchText, /resume/);
+    assert.match(launchText, /019e8d75-4f82-7df3-b15a-901980812307/);
   });
   it('includes the Codex process stderr when a tmux launch exits before pane capture', async () => {
     let launchLogPath = '';
@@ -94,7 +97,8 @@ describe('codex tmux runtime', () => {
       ensureDetachedSession: async ({ command }) => {
         const commandText = Array.isArray(command) ? command.join(' ') : command || '';
         assert.match(commandText, /2> /);
-        launchLogPath = commandText.match(/ 2> ([^;]+)/)?.[1] || '';
+        const logMatch = commandText.match(/ 2> (?:'([^']+)'|"([^"]+)"|([^;]+))/);
+        launchLogPath = logMatch?.[1] || logMatch?.[2] || logMatch?.[3]?.trim() || '';
         assert.match(launchLogPath, /codelark-codex-tmux-.*-codex_fail\.log$/);
         fs.writeFileSync(launchLogPath, 'bash: codex: command not found\n[codelark] process exited with status 127\n', 'utf-8');
         return { existed: false, command: 'tmux new-session -d -s codex_fail', commands: ['tmux new-session -d -s codex_fail'] };
