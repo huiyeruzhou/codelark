@@ -141,8 +141,18 @@ function sessionManagementShellCommand(runId: string): string {
   return `/shell --sandbox read-only printf ${sessionManagementShellMarker(runId)}`;
 }
 
+const staticHarnessOutputCache = new Map<string, string>();
+
 function runHarness(args: string[], env: NodeJS.ProcessEnv = {}): string {
-  return execFileSync(
+  const cacheKey = Object.keys(env).length === 0
+    && args.length === 1
+    && (args[0] === '--list-scenarios' || args[0] === '--help')
+    ? args[0]
+    : null;
+  if (cacheKey && staticHarnessOutputCache.has(cacheKey)) {
+    return staticHarnessOutputCache.get(cacheKey)!;
+  }
+  const output = execFileSync(
     process.execPath,
     ['--import', 'tsx', 'scripts/real-feishu-e2e.ts', ...args],
     {
@@ -155,6 +165,8 @@ function runHarness(args: string[], env: NodeJS.ProcessEnv = {}): string {
       },
     },
   );
+  if (cacheKey) staticHarnessOutputCache.set(cacheKey, output);
+  return output;
 }
 
 function runHarnessFailure(args: string[], env: NodeJS.ProcessEnv = {}): string {

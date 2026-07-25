@@ -40,7 +40,8 @@
     "real:setup-wizard:wizard-e2e": "tsx scripts/setup-wizard-real-wizard-e2e.ts",
     "real:feishu:e2e": "tsx scripts/real-feishu-e2e.ts",
     "run": "node dist/cli.mjs run",
-    "test": "node scripts/run-tests.js",
+    "test": "node scripts/run-test-groups.js",
+    "test:serial": "node scripts/run-tests.js",
     "pack:check": "node scripts/check-npm-pack.js",
     "prepublishOnly": "npm run typecheck && npm test && npm run docs:build && npm run build && npm run pack:check"
   },

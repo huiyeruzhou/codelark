@@ -59,9 +59,21 @@ CODELARK_SETUP_WIZARD_REAL_E2E=1 npm run real:setup-wizard:e2e -- \
 
 默认会删除 `/tmp/clk-setup-wizard-real-e2e-*` 临时目录。需要排查时才加 `--keep-temp`，脚本输出 JSON 里的 `runRoot` 是保留现场路径。
 
+## 跨平台 CI
+
+GitHub Actions 把“完整回归”和“真实平台依赖 smoke”分开：Linux job 运行完整测试、文档构建和打包检查；跨平台 matrix 验证用户实际会走到的原生终端路径，不用 Linux mock 代替操作系统行为。
+
+- macOS 26 arm64 安装 Homebrew tmux，验证 `tmux -V` 和 session 的创建、查询、名称读取、清理，再运行 typecheck、unit/workflow、build、pack 和 CLI smoke。
+- Windows x64 job 使用原生 Windows runner，通过 WinGet 安装 psmux，验证同一组 `tmux.exe` session 生命周期，再运行同一组 Node.js 24 检查。psmux 走 ConPTY，不经过 WSL。
+- matrix job 不等于真实 Codex/Claude/Kimi 或真实飞书 E2E；provider TUI、CardKit 客户端和用户可见行为仍按下文对应层级补验。
+
+Windows 托管 runner 的版本可以随 GitHub 支持范围升级；发布 gate 关注的是 x64 Node.js、WinGet、原生进程/PATH、ConPTY/psmux 这条用户路径，而不是把某个 runner 标签宣传成桌面 Windows 版本。
+
 ## 本地测试的层次
 
 本地测试有四种强度，不应只统称为“单元测试”：
+
+默认 `npm test` 会把完整测试集拆成三个彼此隔离的进程组并行执行：`unit + workflow`、`mock-e2e + harness`、`local-e2e`。每组由 `run-tests.js` 创建独立的 HOME、CODELARK_HOME 和各 runtime home，组内仍保持 `--test-concurrency=1`，因此不会用共享配置目录换取虚假并发。结束时只打印各组摘要和日志目录；失败组额外打印尾部。需要复现旧串行顺序时使用 `npm run test:serial`；传入 `npm test -- --unit --workflow` 等 layer 参数时仍只启动所选单组。
 
 | 层次 | 回答的问题 | 典型特征 | 何时必须跑 |
 | --- | --- | --- | --- |

@@ -261,7 +261,6 @@ describe('real codex tmux provider e2e', () => {
       for (let i = 0; i < 3; i += 1) {
         await _testOnly.reconcileMirrorSubscriptions();
         assert.equal(store.getSession(binding.bridgeSessionId)?.runtime?.codex?.threadId, threadId);
-        await new Promise((resolve) => setTimeout(resolve, 2_500));
       }
 
       assert.equal(store.getSession(binding.bridgeSessionId)?.runtime?.codex?.threadId, threadId);
