@@ -197,7 +197,7 @@ Kimi tmux provider 的当前行为来自实测：
 - [ ] 字段注册：env key、`runtimeSettingsKey`、scopes（`src/configuration/fields.ts`）、`defaults.toml`、`merge.ts`。
 - [ ] **写入校验穷举**：`ConfigService.patchPaths()` 必须列出 `runtime.<agent>.*`，否则 scope 校验被静默跳过（Kimi 接入时漏过，后补）。
 - [ ] env 兼容层旧 key 别名（`src/configuration/env-compat.ts`）和文件迁移（`migrations/v1.ts`、`migrations/legacy/session-json.ts`）。
-- [ ] 发布 JSON schema：`schemas/config.v1.schema.json`、`schemas/data/sessions.v1.schema.json`、`schemas/data/channel-chats.v1.schema.json`。
+- [ ] 发布 JSON schema：`schemas/config.v2.schema.json`、`schemas/data/sessions.v1.schema.json`、`schemas/data/channel-chats.v1.schema.json`。
 - [ ] 存储归一化与启动迁移（`src/storage/json-store.ts`、`src/storage/migrations.ts`）。
 
 ### 运行时与本地会话索引

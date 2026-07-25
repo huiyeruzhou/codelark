@@ -1,6 +1,6 @@
 {
   "name": "codelark",
-  "version": "0.1.2",
+  "version": "0.2.0",
   "description": "Installable CodeLark bridge with local setup UI and background service",
   "license": "MIT",
   "homepage": "https://github.com/huiyeruzhou/codelark#readme",

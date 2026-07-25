@@ -1,0 +1,214 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://codelark.local/schemas/config.v2.schema.json",
+  "title": "CodeLark config.toml v2",
+  "description": "The parsed snake_case shape accepted from ~/.codelark/config.toml. Missing fields inherit defaults.",
+  "type": "object",
+  "properties": {
+    "schema_version": {
+      "const": 2
+    },
+    "session": {
+      "$ref": "#/$defs/session"
+    },
+    "runtime": {
+      "$ref": "#/$defs/runtime"
+    },
+    "bridge": {
+      "$ref": "#/$defs/bridge"
+    },
+    "channels": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/channel"
+      }
+    }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "session": {
+      "type": "object",
+      "properties": {
+        "workspace": {
+          "type": "string"
+        },
+        "tmux_capture_lines": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "tmux_auto_enter": {
+          "type": "boolean"
+        },
+        "tmux_echo_input": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    },
+    "runtime": {
+      "type": "object",
+      "properties": {
+        "agent": {
+          "enum": ["codex", "claude", "kimi"]
+        },
+        "codex": {
+          "$ref": "#/$defs/codex"
+        },
+        "claude": {
+          "$ref": "#/$defs/claude"
+        },
+        "kimi": {
+          "$ref": "#/$defs/kimi"
+        }
+      },
+      "additionalProperties": false
+    },
+    "codex": {
+      "type": "object",
+      "properties": {
+        "model": {
+          "type": "string"
+        },
+        "yolo_mode": {
+          "enum": ["off", "on", "yolo"]
+        },
+        "provider": {
+          "enum": ["", "sdk", "pty", "tmux"]
+        },
+        "skip_git_repo_check": {
+          "type": "boolean"
+        },
+        "sandbox_mode": {
+          "enum": ["read-only", "workspace-write", "danger-full-access"]
+        },
+        "network_access": {
+          "type": "boolean"
+        },
+        "reasoning_effort": {
+          "enum": ["minimal", "low", "medium", "high", "xhigh"]
+        }
+      },
+      "additionalProperties": false
+    },
+    "claude": {
+      "type": "object",
+      "properties": {
+        "model": {
+          "type": "string"
+        },
+        "yolo_mode": {
+          "enum": ["off", "on", "yolo"]
+        },
+        "provider": {
+          "enum": ["sdk", "pty", "tmux"]
+        },
+        "executable": {
+          "enum": ["claude", "ccr"]
+        },
+        "reasoning_effort": {
+          "enum": ["low", "medium", "high", "xhigh", "max"]
+        },
+        "idle_timeout_minutes": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false
+    },
+    "kimi": {
+      "type": "object",
+      "properties": {
+        "model": {
+          "type": "string"
+        },
+        "provider": {
+          "const": "tmux"
+        }
+      },
+      "additionalProperties": false
+    },
+    "bridge": {
+      "type": "object",
+      "properties": {
+        "default_workspace": {
+          "type": "string"
+        },
+        "ui_allow_lan": {
+          "type": "boolean"
+        },
+        "ui_access_token": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "channel": {
+      "type": "object",
+      "required": ["id"],
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "alias": {
+          "type": "string"
+        },
+        "provider": {
+          "const": "feishu"
+        },
+        "enabled": {
+          "type": "boolean"
+        },
+        "config": {
+          "$ref": "#/$defs/channelConfig"
+        }
+      },
+      "additionalProperties": false
+    },
+    "channelConfig": {
+      "type": "object",
+      "properties": {
+        "history_message_limit": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "stream_status_idle_start_seconds": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "stream_status_check_interval_seconds": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "app_id": {
+          "type": "string"
+        },
+        "app_secret": {
+          "type": "string"
+        },
+        "site": {
+          "enum": ["feishu", "lark"]
+        },
+        "allowed_users": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "streaming_enabled": {
+          "type": "boolean"
+        },
+        "feedback_markdown_enabled": {
+          "type": "boolean"
+        },
+        "require_mention": {
+          "type": "boolean"
+        },
+        "group_authorized": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

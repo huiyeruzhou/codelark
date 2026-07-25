@@ -47,7 +47,7 @@ CodeLark 自己拥有的是 `BridgeSession`、`ChannelChat`、通道配置、消
 | 命令分发 | [src/bridge/command/dispatch.ts](https://github.com/huiyeruzhou/codelark/blob/main/src/bridge/command/dispatch.ts) |
 | 运行时提供方路由 | [src/runtime/codex/routing-provider.ts](https://github.com/huiyeruzhou/codelark/blob/main/src/runtime/codex/routing-provider.ts) |
 | 本地 JSON 存储 | [src/storage/json-store.ts](https://github.com/huiyeruzhou/codelark/blob/main/src/storage/json-store.ts) |
-| 配置 schema | [schemas/config.v1.schema.json](https://github.com/huiyeruzhou/codelark/blob/main/schemas/config.v1.schema.json) |
+| 配置 schema | [schemas/config.v2.schema.json](https://github.com/huiyeruzhou/codelark/blob/main/schemas/config.v2.schema.json) |
 
 ## 维护原则
 
