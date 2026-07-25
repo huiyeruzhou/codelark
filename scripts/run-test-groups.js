@@ -4,6 +4,8 @@ import path from 'node:path';
 import { spawn } from 'node:child_process';
 
 const requestedArgs = process.argv.slice(2);
+const parallelSelected = requestedArgs.includes('--parallel');
+const selectedArgs = requestedArgs.filter((arg) => arg !== '--parallel');
 const startedAt = Date.now();
 const children = new Set();
 
@@ -24,11 +26,11 @@ function runSelectedLayers(args) {
   });
 }
 
-if (requestedArgs.length > 0) {
+if (requestedArgs.length > 0 && !parallelSelected) {
   runSelectedLayers(requestedArgs);
 } else {
   const runRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'codelark-test-groups-'));
-  const groups = [
+  let groups = [
     { name: 'unit-1', args: ['--unit', '--test-shard=1/2'] },
     { name: 'unit-2', args: ['--unit', '--test-shard=2/2'] },
     { name: 'workflow', args: ['--workflow'] },
@@ -37,6 +39,15 @@ if (requestedArgs.length > 0) {
     { name: 'harness', args: ['--harness'] },
     { name: 'local-e2e', args: ['--local-e2e'] },
   ];
+  if (parallelSelected) {
+    const supportedLayers = new Set(groups.flatMap((group) => group.args.filter((arg) => !arg.startsWith('--test-shard='))));
+    const selectedLayers = new Set(selectedArgs);
+    groups = groups.filter((group) => group.args.some((arg) => selectedLayers.has(arg)));
+    if (groups.length === 0 || selectedArgs.some((arg) => !supportedLayers.has(arg))) {
+      process.stderr.write('[test-groups] --parallel requires one or more layer flags and no shard override.\n');
+      process.exit(1);
+    }
+  }
 
   function tail(text, lineLimit = 200) {
     return text.split(/\r?\n/u).slice(-lineLimit).join('\n');

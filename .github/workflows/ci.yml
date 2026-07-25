@@ -32,7 +32,8 @@ jobs:
         run: npm run typecheck
 
       - name: Test stable suites
-        run: npm test -- --unit --workflow --mock-e2e --harness
+        timeout-minutes: 20
+        run: npm test -- --parallel --unit --workflow --mock-e2e --harness
 
       - name: Build
         run: npm run build
@@ -118,7 +119,8 @@ jobs:
         run: npm run typecheck
 
       - name: Test unit and workflow suites
-        run: npm test -- --unit --workflow
+        timeout-minutes: 20
+        run: npm test -- --parallel --unit --workflow
 
       - name: Build
         run: npm run build
