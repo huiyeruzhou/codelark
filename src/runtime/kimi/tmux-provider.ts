@@ -133,6 +133,11 @@ export function isKimiInputReadyScreen(
   const normalized = normalizeKimiScreenText(screenText);
   const activeSessionId = parseKimiActiveSessionIdFromScreen(normalized);
   if (!activeSessionId || (expectedSessionId && activeSessionId !== expectedSessionId)) return false;
+  return isKimiEditorReadyScreen(normalized);
+}
+
+function isKimiEditorReadyScreen(screenText: string): boolean {
+  const normalized = normalizeKimiScreenText(screenText);
   const hasInputPrompt = /(?:^|\n)\s*(?:[│|]\s*)?>\s/u.test(normalized);
   const hasContextFooter = /\bcontext:\s*\d+%/iu.test(normalized);
   return hasInputPrompt && hasContextFooter;
@@ -535,7 +540,10 @@ async function waitForKimiSessionFileBySessionId(
   throw new Error(`Timed out waiting for Kimi session file for ${context.sessionId}.`);
 }
 
-async function waitForKimiInputReady(context: KimiTuiRunContext): Promise<void> {
+async function waitForKimiInputReady(
+  context: KimiTuiRunContext,
+  options: { requireSessionHeader?: boolean } = {},
+): Promise<void> {
   const timeoutMs = parsePositiveIntEnv(
     'CODELARK_KIMI_TMUX_INPUT_READY_TIMEOUT_MS',
     DEFAULT_KIMI_INPUT_READY_TIMEOUT_MS,
@@ -548,13 +556,22 @@ async function waitForKimiInputReady(context: KimiTuiRunContext): Promise<void> 
   );
   const startedAtMs = Date.now();
   let lastScreen = context.lastScreen || '';
-  if (isKimiInputReadyScreen(lastScreen, context.sessionId)) return;
+  const isReady = (screen: string): boolean => {
+    const activeSessionId = parseKimiActiveSessionIdFromScreen(screen);
+    if (activeSessionId && context.sessionId && activeSessionId !== context.sessionId) {
+      throw new Error(`Kimi resumed unexpected session ${activeSessionId}; expected ${context.sessionId}.`);
+    }
+    return options.requireSessionHeader === false
+      ? isKimiEditorReadyScreen(screen)
+      : isKimiInputReadyScreen(screen, context.sessionId);
+  };
+  if (isReady(lastScreen)) return;
   while (Date.now() - startedAtMs <= timeoutMs) {
     const capture = await tmuxCore.capturePane(context.targetPane, 160);
     lastScreen = capture.screen;
     context.lastScreen = lastScreen;
     assertKimiPaneAlive(lastScreen);
-    if (isKimiInputReadyScreen(lastScreen, context.sessionId)) return;
+    if (isReady(lastScreen)) return;
     await sleep(pollIntervalMs);
   }
   const visibleTail = normalizeKimiScreenText(lastScreen)
@@ -615,42 +632,61 @@ export async function ensureKimiTmuxInputSession(
     hasSession: () => tmuxCore.hasSession(sessionName),
   });
   const launched = !inspection.exists || options.recreate === true;
+  const hasPersistedResumeIdentity = Boolean(context.sessionId && context.sessionFilePath);
 
-  if (launched) {
-    assertKimiLaunchAuthentication(params.model);
-    await launchTmuxKimiSession(sessionName, params);
-    await ensureKimiTmuxInputKeys();
-    await waitForKimiSessionIdFromTmux(context);
-  } else if (inspection.needsReadiness || !context.sessionId) {
-    await ensureKimiTmuxInputKeys();
-    await waitForKimiSessionIdFromTmux(context);
-  }
+  try {
+    if (launched) {
+      assertKimiLaunchAuthentication(params.model);
+      await launchTmuxKimiSession(sessionName, params);
+      await ensureKimiTmuxInputKeys();
+      if (!hasPersistedResumeIdentity) {
+        await waitForKimiSessionIdFromTmux(context);
+      }
+    } else if (inspection.needsReadiness || !context.sessionId) {
+      await ensureKimiTmuxInputKeys();
+      if (!hasPersistedResumeIdentity) {
+        await waitForKimiSessionIdFromTmux(context);
+      }
+    }
 
-  if (!context.sessionFilePath) resolveKimiSessionFileBySessionId(context, true);
-  if (launched || inspection.needsReadiness) {
-    await waitForKimiInputReady(context);
+    if (!context.sessionFilePath) resolveKimiSessionFileBySessionId(context, true);
+    if (launched || inspection.needsReadiness) {
+      await waitForKimiInputReady(context, {
+        requireSessionHeader: !hasPersistedResumeIdentity,
+      });
+    }
+    initializeKimiSessionLogCursor(context);
+    if (!context.sessionId) {
+      throw new Error('Kimi tmux input lifecycle did not resolve a session id.');
+    }
+    transitionRuntimeTmuxInputState(
+      'kimi',
+      sessionName,
+      'running',
+      !launched
+        ? 'existing Kimi tmux process and persisted runtime identity are reusable'
+        : 'Kimi tmux process and runtime session are ready for input',
+    );
+    return {
+      sessionName,
+      targetPane,
+      sessionId: context.sessionId,
+      ...(context.cwd ? { cwd: context.cwd } : {}),
+      ...(context.sessionFilePath ? { sessionFilePath: context.sessionFilePath } : {}),
+      nextOffset: context.nextOffset,
+      existed: inspection.exists,
+    };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    transitionRuntimeTmuxInputState(
+      'kimi',
+      sessionName,
+      'failed',
+      'Kimi tmux preparation failed',
+      { error: message },
+    );
+    throw error;
   }
-  initializeKimiSessionLogCursor(context);
-  if (!context.sessionId) {
-    throw new Error('Kimi tmux input lifecycle did not resolve a session id.');
-  }
-  transitionRuntimeTmuxInputState(
-    'kimi',
-    sessionName,
-    'running',
-    !launched
-      ? 'existing Kimi tmux process and persisted runtime identity are reusable'
-      : 'Kimi tmux process and runtime session are ready for input',
-  );
-  return {
-    sessionName,
-    targetPane,
-    sessionId: context.sessionId,
-    ...(context.cwd ? { cwd: context.cwd } : {}),
-    ...(context.sessionFilePath ? { sessionFilePath: context.sessionFilePath } : {}),
-    nextOffset: context.nextOffset,
-    existed: inspection.exists,
-  };
 }
 
 export async function restartKimiTmuxInputSession(

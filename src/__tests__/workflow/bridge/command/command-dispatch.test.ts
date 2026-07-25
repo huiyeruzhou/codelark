@@ -35,6 +35,7 @@ import { _testOnlyClaudePty } from '../../../../runtime/claude/pty-provider.js';
 import { _testOnlyTmuxScreenMonitors } from '../../../../bridge/command/tmux.js';
 import { _testOnlyTmuxCore, createTmuxCliCore } from '../../../../bridge/tmux/core.js';
 import {
+  getRuntimeTmuxInputState,
   resetRuntimeTmuxInputStatesForTests,
   transitionRuntimeTmuxInputState,
 } from '../../../../bridge/tmux/input-state-machine.js';
@@ -11024,6 +11025,109 @@ enabled = true
       restoreProcessEnv(oldEnv);
       fs.rmSync(fakeTmux.binDir, { recursive: true, force: true });
       fs.rmSync(fakeCodex.binDir, { recursive: true, force: true });
+    }
+  });
+
+  it('cold-takes over an existing Kimi tmux before provider auto-forward sends input', async () => {
+    const settings = makeSettings();
+    const store = new JsonFileStore(settings, { dynamicSettings: true });
+    initBridgeContext({
+      store,
+      llm: noopLlm,
+      permissions: { resolvePendingPermission: () => false },
+      lifecycle: {},
+    });
+    const fakeTmux = installFakeTmux();
+    const kimiHome = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-kimi-cold-auto-forward-home-'));
+    const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-kimi-cold-auto-forward-work-'));
+    const oldEnv = captureProcessEnv([
+      'PATH',
+      'TMUX_FAKE_LOG',
+      'TMUX_FAKE_EXISTING_SESSIONS',
+      'TMUX_FAKE_CAPTURE_TEXT',
+      'KIMI_CODE_HOME',
+      'CODELARK_KIMI_TMUX_POLL_INTERVAL_MS',
+    ]);
+    const address = { channelType: 'feishu', chatId: 'chat-kimi-cold-auto-forward' } as const;
+    const binding = router.createBinding(address, workDir);
+    const sessionId = 'session_66666666-6666-4666-8666-666666666666';
+    const tmuxSession = kimiTmuxSessionName(binding.bridgeSessionId);
+    writeKimiWireFixture({
+      homeDir: kimiHome,
+      cwd: workDir,
+      sessionId,
+      timestamp: '2026-07-26T00:00:00.000Z',
+      text: 'existing Kimi history',
+    });
+    process.env.PATH = `${fakeTmux.binDir}${path.delimiter}${oldEnv.PATH}`;
+    process.env.TMUX_FAKE_LOG = fakeTmux.logPath;
+    process.env.TMUX_FAKE_EXISTING_SESSIONS = tmuxSession;
+    process.env.TMUX_FAKE_CAPTURE_TEXT = `Kimi Code\nSession: ${sessionId}\n│ > \ncontext: 0% (0/256k)`;
+    process.env.KIMI_CODE_HOME = kimiHome;
+    process.env.CODELARK_KIMI_TMUX_POLL_INTERVAL_MS = '10';
+
+    try {
+      store.updateSession(binding.bridgeSessionId, {
+        runtime: {
+          activeRuntime: 'kimi',
+          kimi: { sessionId, cwd: workDir },
+          general: { tmuxSessionName: tmuxSession, workingDirectory: workDir },
+        },
+      });
+      createConfigService({ migrate: false, env: {} }).set(
+        { kind: 'session', sessionId: binding.bridgeSessionId },
+        { runtime: { kimi: { provider: 'tmux' } } },
+      );
+      resetRuntimeTmuxInputStatesForTests();
+
+      const sent: any[] = [];
+      let autoForwarded = false;
+      const adapter: any = {
+        channelType: 'feishu',
+        send: async (message: any) => {
+          sent.push(message);
+          return { ok: true, messageId: `reply-kimi-cold-auto-forward-${sent.length}` };
+        },
+      };
+      const deps = {
+        getActiveTask: () => undefined,
+        diagnoseSessionHealth: async () => null,
+        diagnoseAllActiveSessions: async () => [],
+        tmuxProviderAutoForward: true,
+        onTmuxProviderAutoForwarded: () => {
+          autoForwarded = true;
+        },
+      };
+
+      await handleBridgeCommand(
+        adapter,
+        {
+          address,
+          text: '/tmux after bridge restart',
+          messageId: 'incoming-kimi-cold-auto-forward',
+        } as any,
+        '/tmux after bridge restart',
+        deps,
+      );
+
+      assert.equal(sent.length, 0, 'successful provider auto-forward must not send a /tmux response');
+      assert.equal(autoForwarded, true, 'delivery callback must run only after the input reaches tmux');
+      assert.equal(getRuntimeTmuxInputState('kimi', tmuxSession).state, 'running');
+      const log = fs.readFileSync(fakeTmux.logPath, 'utf-8');
+      const firstHasSessionIndex = log.indexOf(`has-session -t ${tmuxSession}`);
+      const captureIndex = log.indexOf(`capture-pane -t ${tmuxSession}:0.0`);
+      const literalIndex = log.indexOf(`send-keys -t ${tmuxSession} -l after bridge restart`);
+      assert.ok(firstHasSessionIndex >= 0, 'cold takeover must verify the persisted tmux process');
+      assert.ok(captureIndex > firstHasSessionIndex, 'cold takeover must verify the persisted Kimi session before sending');
+      assert.ok(literalIndex > captureIndex, 'auto-forward input must wait for Kimi cold readiness');
+      assert.match(log, new RegExp(`send-keys -t ${tmuxSession} Enter`));
+      assert.match(log, new RegExp(`send-keys -t ${tmuxSession} C-s`));
+      assert.doesNotMatch(log, new RegExp(`new-session -d -s ${tmuxSession}`));
+    } finally {
+      restoreProcessEnv(oldEnv);
+      fs.rmSync(fakeTmux.binDir, { recursive: true, force: true });
+      fs.rmSync(kimiHome, { recursive: true, force: true });
+      fs.rmSync(workDir, { recursive: true, force: true });
     }
   });
 

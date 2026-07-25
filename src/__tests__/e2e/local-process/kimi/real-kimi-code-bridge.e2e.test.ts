@@ -9,6 +9,7 @@ import { promisify } from 'node:util';
 
 import type { StructuredStreamingUiMetadata } from '../../../../channels/contracts.js';
 import { _testOnly, registerAdapter } from '../../../../bridge/host/manager.js';
+import { resetRuntimeTmuxInputStatesForTests } from '../../../../bridge/tmux/input-state-machine.js';
 import { findKimiSessionFileById } from '../../../../runtime/kimi/session-index.js';
 import { kimiTmuxSessionName } from '../../../../runtime/kimi/tmux-provider.js';
 import {
@@ -95,7 +96,7 @@ describe('real Kimi Code bridge e2e', () => {
     _testOnly.resetStateForTests();
   });
 
-  it('cold-starts from a plain IM message and steers a second message into the running turn', { timeout: 60_000 }, async (t: TestContext) => {
+  it('cold-starts, steers, then cold-takes over the surviving tmux after a bridge restart', { timeout: 60_000 }, async (t: TestContext) => {
     if (!(await commandAvailable('tmux', ['-V']))) {
       t.skip('tmux is not available');
       return;
@@ -112,6 +113,7 @@ describe('real Kimi Code bridge e2e', () => {
     const workDir = path.join(tempDir, 'workspace');
     const responseText = `CODELARK_REAL_BRIDGE_${process.pid}_${Date.now()}`;
     const steerText = `CODELARK_REAL_STEER_${process.pid}_${Date.now()}`;
+    const coldTakeoverText = `CODELARK_REAL_COLD_TAKEOVER_${process.pid}_${Date.now()}`;
     const proxy = await startLocalResponsesProxy({ responseText, responseDelayMs: 3_000 });
     const env = {
       KIMI_CODE_HOME: kimiHome,
@@ -217,6 +219,50 @@ describe('real Kimi Code bridge e2e', () => {
       ]);
       assert.equal(binding.bridgeSessionId, session.id);
       assert.equal(store.getSession(session.id)?.runtime?.kimi?.sessionId, kimiSessionId);
+
+      const requestCountBeforeColdTakeover = proxy.requests.length;
+      resetRuntimeTmuxInputStatesForTests();
+      await _testOnly.handleMessage(
+        adapter,
+        inboundMessage(address, coldTakeoverText, 'incoming-real-kimi-cold-takeover'),
+      );
+      assert.equal(
+        await waitForCondition(() => {
+          const wire = fs.readFileSync(sessionFile.filePath, 'utf-8');
+          return wire.includes('"type":"turn.prompt"') && wire.includes(coldTakeoverText);
+        }, 10_000, 50),
+        true,
+      );
+      assert.equal(
+        await waitForCondition(
+          () => proxy.requests.length > requestCountBeforeColdTakeover,
+          10_000,
+          50,
+        ),
+        true,
+      );
+      assert.equal(
+        await waitForCondition(async () => {
+          await _testOnly.reconcileMirrorSubscriptions();
+          return adapter.streamEvents.filter((event) => (
+            event.kind === 'end'
+            && event.status === 'completed'
+            && event.text?.includes(responseText)
+          )).length >= 2;
+        }, 20_000, 100),
+        true,
+      );
+      await execFileAsync('tmux', ['has-session', '-t', tmuxSessionName]);
+      assert.equal(store.getSession(session.id)?.runtime?.kimi?.sessionId, kimiSessionId);
+      assert.deepEqual(adapter.reactions, [
+        { messageId: 'incoming-real-kimi-first', emojiType: 'Get' },
+        { messageId: 'incoming-real-kimi-steer', emojiType: 'Get' },
+        { messageId: 'incoming-real-kimi-cold-takeover', emojiType: 'Get' },
+      ]);
+      assert.equal(
+        adapter.sent.some((message) => message.text.includes('expected running before send')),
+        false,
+      );
     } finally {
       bridgeState.running = false;
       await execFileAsync('tmux', ['kill-session', '-t', tmuxSessionName]).catch(() => {});

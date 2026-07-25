@@ -6,9 +6,11 @@ import os from 'node:os';
 import path from 'node:path';
 
 import { tmuxCore, type TmuxCore, type TmuxSendAction } from '../../../../bridge/tmux/core.js';
+import { getRuntimeTmuxInputState } from '../../../../bridge/tmux/input-state-machine.js';
 import { computeKimiWorkspaceDirName } from '../../../../runtime/kimi/session-index.js';
 import {
   buildKimiTmuxLaunchCommand,
+  restartKimiTmuxInputSession,
   streamKimiTmuxTui,
 } from '../../../../runtime/kimi/tmux-provider.js';
 
@@ -314,7 +316,7 @@ describe('kimi-tmux-provider workflow', () => {
       async capturePane(target: string) {
         captureCount += 1;
         return {
-          screen: `Kimi Code\nSession: ${sessionId}\n│ > \ncontext: 0% (0/256k)`,
+          screen: 'Kimi Code\nrestored conversation history\n│ > \ncontext: 42% (107k/256k)',
           command: `tmux capture-pane -t ${target}`,
         };
       },
@@ -351,7 +353,7 @@ describe('kimi-tmux-provider workflow', () => {
 
       assert.equal(ensureCalls.length, 0, 'cold takeover must reuse the existing Kimi tmux process');
       assert.equal(extendedKeysCalls, 1, 'cold takeover enables Kimi-compatible Enter handling once');
-      assert.equal(captureCount, 1, 'cold takeover must verify the active Session header exactly once');
+      assert.equal(captureCount, 1, 'cold takeover must verify editor readiness exactly once');
       assert.deepEqual(injectCalls, [{
         target: 'clk-kimi-bridge-kimi-resume-workflow:0.0',
         prompt: 'hello existing kimi',
@@ -377,6 +379,122 @@ describe('kimi-tmux-provider workflow', () => {
         && event.data !== null
         && (event.data as { session_id?: string }).session_id === sessionId));
       assert.equal(events.some((event) => event.type === 'error'), false);
+    } finally {
+      restoreTmux();
+      fs.rmSync(kimiHome, { recursive: true, force: true });
+      fs.rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it('restarts a known Kimi session after restored history scrolls the session header away', async () => {
+    const kimiHome = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-kimi-restart-home-'));
+    const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-kimi-restart-cwd-'));
+    const sessionId = 'session_bcbcbcbc-bcbc-4bcb-8bcb-bcbcbcbcbcbc';
+    createKimiSessionFile({ kimiHome, cwd, sessionId });
+    const ensureCalls: string[] = [];
+    let tmuxExists = true;
+    let captureCount = 0;
+
+    const restoreTmux = patchTmuxCore({
+      async ensureExtendedKeys() {
+        return 'tmux set-option -g extended-keys on';
+      },
+      async hasSession(name: string) {
+        return { exists: tmuxExists, command: `tmux has-session -t ${name}` };
+      },
+      async ensureDetachedSession(params) {
+        tmuxExists = true;
+        ensureCalls.push(Array.isArray(params.command) ? params.command.join(' ') : params.command || '');
+        return { existed: false, command: `tmux new-session -d -s ${params.name}`, commands: [] };
+      },
+      async capturePane(target: string) {
+        captureCount += 1;
+        return {
+          screen: 'Kimi Code\nrestored conversation history\n│ > \ncontext: 42% (107k/256k)',
+          command: `tmux capture-pane -t ${target}`,
+        };
+      },
+      async killSession(name: string) {
+        tmuxExists = false;
+        return `tmux kill-session -t ${name}`;
+      },
+    });
+
+    try {
+      const prepared = await withEnv({
+        KIMI_CODE_HOME: kimiHome,
+        CODELARK_KIMI_TMUX_SESSION_ID_TIMEOUT_MS: '1000',
+        CODELARK_KIMI_TMUX_INPUT_READY_TIMEOUT_MS: '1000',
+        CODELARK_KIMI_TMUX_POLL_INTERVAL_MS: '50',
+      }, () => restartKimiTmuxInputSession({
+        prompt: '',
+        sessionId: 'bridge-kimi-restart-workflow',
+        runtime: 'kimi',
+        kimiSessionId: sessionId,
+        workingDirectory: cwd,
+      }));
+
+      assert.equal(prepared.sessionId, sessionId);
+      assert.equal(captureCount, 1, 'known resume waits for the editor, not a repeated session header');
+      assert.equal(ensureCalls.length, 1);
+      assert.equal(commandHasArg(ensureCalls[0] || '', '-r'), true);
+      assert.match(ensureCalls[0] || '', new RegExp(sessionId));
+    } finally {
+      restoreTmux();
+      fs.rmSync(kimiHome, { recursive: true, force: true });
+      fs.rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it('marks a failed Kimi restart recoverable instead of leaving checking_session behind', async () => {
+    const kimiHome = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-kimi-restart-fail-home-'));
+    const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-kimi-restart-fail-cwd-'));
+    const sessionId = 'session_cdcdcdcd-cdcd-4dcd-8dcd-cdcdcdcdcdcd';
+    const otherSessionId = 'session_dcdcdcdc-dcdc-4dcd-8dcd-dcdcdcdcdcdc';
+    createKimiSessionFile({ kimiHome, cwd, sessionId });
+    const bridgeSessionId = 'bridge-kimi-restart-fail-workflow';
+    const tmuxSessionName = `clk-kimi-${bridgeSessionId}`;
+    let tmuxExists = true;
+
+    const restoreTmux = patchTmuxCore({
+      async ensureExtendedKeys() {
+        return 'tmux set-option -g extended-keys on';
+      },
+      async hasSession(name: string) {
+        return { exists: tmuxExists, command: `tmux has-session -t ${name}` };
+      },
+      async ensureDetachedSession(params) {
+        tmuxExists = true;
+        return { existed: false, command: `tmux new-session -d -s ${params.name}`, commands: [] };
+      },
+      async capturePane(target: string) {
+        return {
+          screen: `Kimi Code\nSession: ${otherSessionId}\n│ > \ncontext: 0% (0/256k)`,
+          command: `tmux capture-pane -t ${target}`,
+        };
+      },
+      async killSession(name: string) {
+        tmuxExists = false;
+        return `tmux kill-session -t ${name}`;
+      },
+    });
+
+    try {
+      await assert.rejects(withEnv({
+        KIMI_CODE_HOME: kimiHome,
+        CODELARK_KIMI_TMUX_INPUT_READY_TIMEOUT_MS: '1000',
+        CODELARK_KIMI_TMUX_POLL_INTERVAL_MS: '50',
+      }, () => restartKimiTmuxInputSession({
+        prompt: '',
+        sessionId: bridgeSessionId,
+        runtime: 'kimi',
+        kimiSessionId: sessionId,
+        workingDirectory: cwd,
+      })), new RegExp(`unexpected session ${otherSessionId}`));
+
+      const state = getRuntimeTmuxInputState('kimi', tmuxSessionName);
+      assert.equal(state.state, 'failed');
+      assert.match(state.error || '', new RegExp(`unexpected session ${otherSessionId}`));
     } finally {
       restoreTmux();
       fs.rmSync(kimiHome, { recursive: true, force: true });

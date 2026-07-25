@@ -729,7 +729,13 @@ async function ensureRuntimeTmuxSessionForProvider(
         sessionName: configuredTarget,
         hasSession: () => hasTmuxSession(configuredTarget),
       });
-      if (inspected.exists) {
+      if (
+        inspected.exists
+        && !(
+          params.tmuxProviderAutoForward === true
+          && inspected.needsReadiness
+        )
+      ) {
         return {
           target: configuredTarget,
           commands: inspected.command ? [inspected.command] : [],
@@ -1298,7 +1304,12 @@ export async function handleTmuxBridgeCommand(params: HandleTmuxBridgeCommandPar
         pendingAutoForwardActions,
       });
       const target = ensured.target || getSessionTmuxSessionName(session);
-      if (ensured.error) return ensured.error;
+      if (ensured.error) {
+        if (params.suppressSuccessfulResponse === true) {
+          throw new Error(ensured.error);
+        }
+        return ensured.error;
+      }
       if (!target) {
         return buildCommandFields(
           'tmux 未绑定',

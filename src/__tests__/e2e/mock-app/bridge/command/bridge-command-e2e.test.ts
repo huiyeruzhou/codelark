@@ -179,6 +179,7 @@ function writeFakeKimiExecutable(binDir: string, params: {
   ctrlCPath: string;
   keyLogPath: string;
   launchLogPath: string;
+  omitResumedSessionHeader?: boolean;
 }): string {
   const executablePath = path.join(binDir, 'kimi');
   const scriptPath = path.join(binDir, 'fake-kimi.cjs');
@@ -191,6 +192,7 @@ const fallbackSessionId = ${JSON.stringify(params.sessionId)};
 const ctrlCPath = ${JSON.stringify(params.ctrlCPath)};
 const keyLogPath = ${JSON.stringify(params.keyLogPath)};
 const launchLogPath = ${JSON.stringify(params.launchLogPath)};
+const omitResumedSessionHeader = ${JSON.stringify(params.omitResumedSessionHeader === true)};
 const kimiHome = process.env.KIMI_CODE_HOME;
 if (!kimiHome) {
   process.stderr.write('KIMI_CODE_HOME is required\\n');
@@ -217,7 +219,7 @@ fs.appendFileSync(path.join(kimiHome, 'session_index.jsonl'), JSON.stringify({
 }) + '\\n');
 
 process.stdout.write('Kimi Code fake mock-app\\n');
-process.stdout.write('Session: ' + sessionId + '\\n');
+if (!(resumed && omitResumedSessionHeader)) process.stdout.write('Session: ' + sessionId + '\\n');
 process.stdout.write('│ > \\ncontext: 0% (0/256k)\\n');
 
 if (process.stdin.isTTY && process.stdin.setRawMode) process.stdin.setRawMode(true);
@@ -2768,6 +2770,7 @@ provider = "tmux"
       ctrlCPath,
       keyLogPath,
       launchLogPath,
+      omitResumedSessionHeader: true,
     });
     delete process.env.CODELARK_KIMI_EXECUTABLE;
     delete process.env.CODELARK_DEBUG;

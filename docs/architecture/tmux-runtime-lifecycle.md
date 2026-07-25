@@ -213,10 +213,10 @@ Claude tmux 使用同一个 `waitForRuntimeTmuxReady` 启动门控。新建、�
 | P0 | 问题卡提交后继续普通对话 | callback 回到同一绑定；卡片答案和下一句话都进入同一 runtime process；不重新 launch | `delivers Kimi mirror clk-ask ... after /t binding` |
 | P0 | `/set` / `/current` 改配置后发下一句话 | home 默认值只影响新 session；session override 立即由当前 runtime accessor 读取；不串写其他 runtime | command-dispatch global/current config matrix |
 | P0 | `/runtime` / `/provider` 切换 | barrier 后下一条消息只进入新 runtime/provider；另一个 runtime 的映射保留 | runtime switch and provider routing E2E |
-| P0 | 已经选择 tmux 后再次执行 `/p tmux` | 结束并重建当前 runtime 的 provider-owned tmux；Kimi 复用已有 session id，ready 后写回新 binding | Kimi 真实 executable + 真 tmux 的退出、解绑、显式重启 E2E |
+| P0 | 已经选择 tmux 后再次执行 `/p tmux` | 结束并重建当前 runtime 的 provider-owned tmux；Kimi 复用已有 session id；即使长历史把 session header 滚出屏幕，也要以持久 wire identity + 编辑框 ready 完成恢复，失败必须进入 `failed` 而不是悬在 `checking_session` | Kimi 真实 executable + 真 tmux resume E2E；mock-app 的退出→显式重启→继续输入故事；header 缺失和失败状态 workflow 回归 |
 | P0 | tmux 进程丢失或启动失败 | 只在确认缺失/failed 后恢复；失败不持久化假 running；用户得到可执行错误 | missing-session recovery、dead-pane、Kimi auth/session-log tests |
 | P0 | Kimi 每轮 `step.end` 后写入 usage，或 wire 含内部 injection reminder | 每个真实 turn 只创建一张 mirror 卡且必有 terminal；usage 归属刚结束的 turn；内部 reminder 不进入用户卡片 | Kimi terminal-usage unit/split-delta tests、Kimi Feishu card E2E pendingTurn/injection assertions |
-| P0 | Kimi 首次启动或 Bridge 冷接管后发送普通消息 | readiness 只启用一次 tmux extended keys；fresh 不传 `-r`；Enter 形成真实 `turn.prompt`；wire 无论在提交前还是提交后创建都不丢首轮事件；后续 running turn 不重复初始化 | Kimi fresh/cold/lazy-wire workflow tests、真实 Kimi executable + fake proxy pane/wire E2E |
+| P0 | Kimi 首次启动或 Bridge 重启后冷接管仍存活的 tmux，再发送普通消息 | readiness 只启用一次 tmux extended keys；fresh 不传 `-r`；Enter 形成真实 `turn.prompt`；wire 无论在提交前还是提交后创建都不丢首轮事件；Bridge 内存状态清空但 tmux/session identity 保留时，以持久 identity + 编辑框 ready 完成 `checking_session → running`，session header 已滚出也不能误报失败，且不得重启 tmux；后续 running turn 不重复初始化 | Kimi fresh/cold/lazy-wire workflow tests、真实 Kimi executable + 真 tmux + fake proxy 的 bridge 重启同构 E2E |
 | P0 | Get reaction 的飞书 ACK 很慢 | tmux 输入先完整提交；之后才异步 add Get；主 lane 不等待 reaction ACK | slow Get mock-app E2E |
 | P0 | 飞书 reply/权限卡/CardKit/群名/callback ACK、入站 notice/reaction 或 mirror reconcile 很慢 | session/chat/adapter 入站主路径已释放；同类投递仍保序；权限/交互卡不被慢普通回复堵住；文本和按钮 `/new` 建群都在独立 job lane | command pending ACK、permission pending/failure、rename pending、callback pending、inbound adapter pending ACK、reconcile pending、interactive finalize pending、delivery queue priority tests |
 | P1 | 启动中出现 goal/permission/update 选择 | 真实选择 prompt 仍可抓取和回调；不得把它当成重复 idle/readiness probe 删除 | Codex selection workflow + mock-app E2E |
@@ -270,7 +270,7 @@ Kimi 入口补充：
 | 入口 | 作用 |
 | --- | --- |
 | `/runtime kimi` | 切换当前聊天到 Kimi Code runtime。 |
-| `/provider tmux` | Kimi 当前唯一 provider。每次显式执行都会重建 `clk-kimi-<BridgeSessionId>`：已有 session 用持久化 id 执行 `kimi -r <session> -y`，fresh 执行 `kimi -y` 并从可输入 TUI 读取真实 session id；确认 ready 后写回 binding。成功后同一进程跨普通 turn 保留。禁止通过 Ctrl-C 杀掉空 TUI 再抓 resume hint；Kimi 对空 session 不保证 hint，且会删除它。 |
+| `/provider tmux` | Kimi 当前唯一 provider。每次显式执行都会重建 `clk-kimi-<BridgeSessionId>`：已有 session 用持久化 id 执行 `kimi -r <session> -y`，以已索引的 wire identity 和真实编辑框 ready 共同确认恢复；恢复大量历史时不要求 TUI 再次露出已滚出屏幕的 session header。fresh 执行 `kimi -y`，仍必须从 TUI 读取 CLI 新生成的真实 session id。确认 ready 后写回 binding，成功后同一进程跨普通 turn 保留。禁止通过 Ctrl-C 杀掉空 TUI 再抓 resume hint；Kimi 对空 session 不保证 hint，且会删除它。 |
 | 普通消息 + Kimi tmux provider | 写入 Kimi TUI，自动追加 Enter 和 `Ctrl-S`；输出从 Kimi `wire.jsonl` mirror 投递，`think` 内容截断显示在状态区「当前思考」。 |
 | `/t kimi ...` | 列出、接管和归档本地 Kimi Code 会话。 |
 
