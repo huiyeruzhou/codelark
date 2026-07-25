@@ -30,6 +30,9 @@ describe('build script', () => {
     assert.match(buildSource, /copyFile\('src\/configuration\/defaults\.toml', 'dist\/defaults\.toml'\)/);
     assert.match(buildSource, /dist\/defaults\.toml/);
     assert.match(packCheckSource, /dist\/defaults\.toml/);
+    assert.match(packCheckSource, /process\.env\.npm_execpath/);
+    assert.match(packCheckSource, /spawnSync\(process\.execPath/);
+    assert.match(packCheckSource, /if \(result\.error\)/);
   });
 
   it('reports missing package.json runtime dependencies by installed package directory', async () => {
