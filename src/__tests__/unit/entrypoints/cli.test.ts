@@ -24,6 +24,7 @@ describe('cli entrypoint', () => {
     assert.deepEqual(parseCliCommand(['help']), { command: 'help', args: [] });
     assert.deepEqual(parseCliCommand(['--help']), { command: 'help', args: [] });
     assert.deepEqual(parseCliCommand(['-h']), { command: 'help', args: [] });
+    assert.equal(parseCliInvocation(['--help']).command, 'help');
     assert.deepEqual(parseCliCommand(['autostart', 'install']), {
       command: 'autostart',
       args: ['install'],
