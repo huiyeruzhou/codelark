@@ -10,6 +10,7 @@ git 不要提交 `STATUS.md`
 - 本仓库的 Node.js 开发命令使用 Node.js 24。
 - 运行 `npm run build`、`npm test`、`npm run typecheck` 或其他 Node 命令前，除非当前 shell 已经是 Node.js 24，否则先运行 `nvm use 24`。
 - 由于环境可能带有普通 Node 不接受的 `NODE_OPTIONS`，必要时使用 `unset NODE_OPTIONS; source ~/.nvm/nvm.sh && nvm use 24 && ...`。
+- 长测试或高噪声命令默认把 stdout/stderr 写入任务日志文件，不要把数千行完整日志直接回灌到工具结果或人工盯读。控制台先只报告退出码和简短摘要；失败时再用 `tail`、`rg` 或测试报告定向读取相关片段。后台执行只保留一层可轮询的进程/session 句柄，避免外层执行单元与内层 PTY 形成嵌套等待链。
 - 除非用户明确要求，不要 push commit，不要 hot update 或 redeploy 本地 bridge。
 - 工作完成后，代码变更仍应提交到本地 git；同一功能阶段的 follow-up 应 amend 到同一个 commit，并且询问用户是否要merge回主分支。
 
