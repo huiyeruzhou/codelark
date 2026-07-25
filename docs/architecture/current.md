@@ -540,6 +540,17 @@ CodeLark 自有数据位于 `~/.codelark`：
 
 Codex 自有数据仍位于 `~/.codex`，Claude Code 自有 JSONL 由 Claude Code 生成，Kimi Code 自有 `wire.jsonl` 位于 `~/.kimi-code`。CodeLark 只读使用这些本地 runtime 文件。
 
+### 系统日志的后续收敛项
+
+当前 `logs/bridge.log` 已能定位 Feishu API、流式卡片 diff、session lane 和 runtime 生命周期问题，但结构化契约尚未完全统一。后续日志重构必须保持现有诊断能力，并按以下顺序收敛，不能在无回归证据时一次性改写全部调用点：
+
+1. 统一事件 envelope：`event`、`component`、`operation`、`phase`、`status`、`duration_ms` 和关联 ID 使用一套 snake_case 字段；同一条记录不再同时写 `duration_ms/durationMs`、`card_id/cardId`、`stream_key/streamKey`。
+2. 降低成功快路径噪声：单次 Feishu `Request success` 改为 debug 或按窗口聚合；失败、超时、慢请求和生命周期终态继续逐条保留。不能为了降日志量删除性能定位所需的 target、scope、duration 和返回码。
+3. payload 日志分层：INFO 只保留 bytes、组件数、hash、element IDs 和 diff 决策；完整 preview/markdown preview 只在显式诊断模式输出，并继续执行脱敏与长度上限，避免每次 full refresh 重复记录大段用户内容。
+4. 为核心 event 建立 schema/contract 测试：必填字段、类型、错误结构和敏感字段脱敏必须可自动验证；普通 `console.*` 兼容入口逐步迁移到具名 logger，但不引入第二套并行日志系统。
+
+这是一项独立维护任务，不与工具卡或版本更新补丁混做。实施前先用真实 bridge 日志建立事件频率、字节占比和诊断查询基线，再分阶段迁移高频事件。
+
 ## 迁移边界
 
 启动迁移负责把旧 session thread 身份字段收敛到 `BridgeSession.codex_thread_id`。旧 `data/bindings.json` 到 `data/channel-chats.json` 的迁移使用显式脚本执行，不在运行时代码中保留兼容读取：

@@ -64,10 +64,12 @@ import { stripLegacySessionPrefix } from '../session/display/session-title.js';
 import { resolveSessionTranscriptFile } from '../session/transcript-source.js';
 import { buildCommandCallbackData, buildThreadCardUpdateKey } from './callbacks.js';
 import {
+  currentSessionSettingDefinitions,
   runtimeSettingDefinitions,
   settingFormLabel,
-  settingFormInput,
-  settingFormSelect,
+  settingConfigPath,
+  settingSessionFormInput,
+  settingSessionFormSelect,
 } from './global-settings.js';
 import { readConfiguredCodexModel } from '../../runtime/codex/models.js';
 
@@ -390,14 +392,24 @@ export function buildCurrentCommandRichCard(options: {
     || (codexThreadId ? getCodexSessionByThreadIdSafe(codexThreadId, 'current card codex title')?.title : '')
     || '';
   const sessionName = session.name?.trim() ? stripLegacySessionPrefix(session.name) : '';
-  const runtimeConfig = createConfigService({ migrate: false }).snapshot({ kind: 'session', sessionId: session.id }).config;
-  const runtimeDefinitions = runtimeSettingDefinitions(activeRuntime, { sessionWritableOnly: true });
+  const configService = createConfigService({ migrate: false });
+  const configScope = { kind: 'session' as const, sessionId: session.id };
+  const runtimeConfig = configService.snapshot(configScope).config;
+  const runtimeDefinitions = currentSessionSettingDefinitions(activeRuntime);
   const formSelects = runtimeDefinitions
     .filter((definition) => definition.control === 'select')
-    .map((definition) => settingFormSelect(definition, runtimeConfig));
+    .map((definition) => settingSessionFormSelect(
+      definition,
+      runtimeConfig,
+      configService.resolve(settingConfigPath(definition), configScope).source === 'session',
+    ));
   const runtimeInputs = runtimeDefinitions
     .filter((definition) => definition.control === 'input')
-    .map((definition) => settingFormInput(definition, runtimeConfig));
+    .map((definition) => settingSessionFormInput(
+      definition,
+      runtimeConfig,
+      configService.resolve(settingConfigPath(definition), configScope).source === 'session',
+    ));
   const statusColor = session.runtime_status === 'running' || session.runtime_status === 'queued' ? 'yellow' : 'green';
   const mirrorColor = session.mirror_status === 'watching' ? 'blue' : 'grey';
   const sessionKind = session.session_type === 'draft' ? '临时草稿线程' : '普通会话';
@@ -457,7 +469,7 @@ export function buildCurrentCommandRichCard(options: {
     },
     footer: [
       `当前 agent：${currentTag(runtimeDisplayLabel, 'orange')}`,
-      '顶部 runtime 下拉会立即切换运行时并刷新卡片；配置栏保存后只更新当前 runtime 的配置项。',
+      '顶部 runtime 下拉会立即切换运行时并刷新卡片；配置栏可更新通用会话配置和当前 runtime，留空或选择“跟随上层配置”会删除当前会话覆盖。',
     ],
   };
 }

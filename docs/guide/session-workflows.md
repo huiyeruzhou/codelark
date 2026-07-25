@@ -97,7 +97,7 @@ CodeLark 的 IM 对话由三层组成：
 
 Codex 支持 `sdk`、`pty`、`tmux`。Claude Code 支持 `tmux`、`pty`、`sdk`，默认是 `tmux`。Kimi Code 当前只支持 `tmux`，发送普通文本后 CodeLark 会自动补一次 `Ctrl-S` steer。`/provider` 不带参数时会显示当前 runtime 的 provider 和可选值。
 
-`/current` 卡片顶部有 runtime 下拉，可以直接在 Codex、Claude Code 和 Kimi Code 之间切换并刷新卡片。卡片表单保存时只更新当前显示 runtime 的配置项；例如切到 Claude Code 后保存，不会修改 Codex 的 sandbox 或 network 设置。
+`/current` 卡片顶部有 runtime 下拉，可以直接在 Codex、Claude Code 和 Kimi Code 之间切换并刷新卡片。表单同时展示当前 session 可覆盖的通用 tmux 配置和当前 runtime 配置；例如切到 Claude Code 后保存，不会修改 Codex 的 sandbox 或 network 设置。输入框留空或下拉选择“跟随上层配置”时，会删除对应的 session-level 覆盖，立即恢复 home/local/channel 等上层配置的当前有效值。
 
 运行中不能随意切换 runtime/provider。遇到拒绝提示时，先等当前任务结束，或发送 `/stop` 停止当前任务，再切换。
 
@@ -176,6 +176,8 @@ CodeLark 的配置分两类理解最清楚：
 ```
 
 当前聊天的 runtime/provider/model/cwd 优先使用 session-level 覆盖。也就是说，`/set defaultProvider tmux` 会影响以后新建或没有覆盖的会话；已经在当前聊天里执行过 `/provider sdk` 的会话，会继续使用自己的 session-level provider，直到再次发送 `/provider ...` 或在 `/current` 卡片里保存新值。
+
+`/current` 只呈现允许写入 session 的 `/set` 配置：tmux 展示行数、自动回车、输入回显，以及当前 runtime 的模型/provider/权限等。默认工作目录、UI 访问、通道设置等只能写入 home 或其他上层作用域，不会伪装成会话配置；当前工作目录继续使用卡片里的“工作目录”或 `/cd` 修改。
 
 ## 什么时候看哪张卡片
 
