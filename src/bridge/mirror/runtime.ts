@@ -288,14 +288,15 @@ export function createMirrorRuntime(
       return;
     }
 
-    const sourceSummary = getMirrorSourceSummary(
-      mirrorSource,
-      threadId,
-      getSessionMirrorCwd(session),
-      'mirror subscription sync',
-    );
-    const filePath = sourceSummary?.filePath || null;
     const existing = state.mirrorSubscriptions.get(binding.id);
+    const filePath = existing?.threadId === threadId && existing.filePath
+      ? existing.filePath
+      : getMirrorSourceSummary(
+          mirrorSource,
+          threadId,
+          getSessionMirrorCwd(session),
+          'mirror subscription sync',
+        )?.filePath || null;
     const activityTier = getMirrorRegistryBindingActivityTier(binding, {
       activeBindingWindowMs: options.activeBindingWindowMs,
       nowMs: Date.now(),
@@ -384,30 +385,36 @@ export function createMirrorRuntime(
       subscription.suspendedUntil = null;
     }
 
-    const sourceSummary = getMirrorSourceSummary(
-      mirrorSource,
-      subscription.threadId,
-      getSessionMirrorCwd(session),
-      'mirror reconcile',
-    );
-    if (!sourceSummary) {
-      subscription.missingThreadPolls += 1;
-      if (subscription.missingThreadPolls >= options.danglingThreadRetryLimit) {
-        clearDanglingMirrorThread(subscription, `${runtimeLabel} thread no longer exists locally`);
+    let snapshot = subscription.filePath ? statMirrorFile(subscription.filePath) : null;
+    if (!snapshot) {
+      const sourceSummary = getMirrorSourceSummary(
+        mirrorSource,
+        subscription.threadId,
+        getSessionMirrorCwd(session),
+        'mirror reconcile',
+      );
+      if (!sourceSummary) {
+        subscription.missingThreadPolls += 1;
+        if (subscription.missingThreadPolls >= options.danglingThreadRetryLimit) {
+          clearDanglingMirrorThread(subscription, `${runtimeLabel} thread no longer exists locally`);
+          return 'processed';
+        }
+      } else {
+        subscription.missingThreadPolls = 0;
+      }
+      refreshMirrorSubscriptionSource(subscription, sourceSummary?.filePath || null, deps.nowIso());
+      watchMirrorFile(subscription, subscription.filePath);
+
+      if (!subscription.filePath) {
+        deps.syncMirrorSessionStateSafe(subscription.sessionId, 'mirror reconcile without file');
         return 'processed';
       }
+      snapshot = statMirrorFile(subscription.filePath);
     } else {
       subscription.missingThreadPolls = 0;
-    }
-    refreshMirrorSubscriptionSource(subscription, sourceSummary?.filePath || null, deps.nowIso());
-    watchMirrorFile(subscription, subscription.filePath);
-
-    if (!subscription.filePath) {
-      deps.syncMirrorSessionStateSafe(subscription.sessionId, 'mirror reconcile without file');
-      return 'processed';
+      subscription.lastReconciledAt = deps.nowIso();
     }
 
-    const snapshot = statMirrorFile(subscription.filePath);
     if (!snapshot) {
       markMirrorSnapshotMissing(subscription);
       deps.syncMirrorSessionStateSafe(subscription.sessionId, 'mirror reconcile missing snapshot');

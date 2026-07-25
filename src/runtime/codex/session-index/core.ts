@@ -81,6 +81,11 @@ const ACTIVE_WINDOW_MS = 15 * 60 * 1000;
 const MAX_SESSION_META_BYTES = 4 * 1024 * 1024;
 const MAX_SESSION_TITLE_SCAN_BYTES = 512 * 1024;
 const TITLE_MAX_CHARS = 72;
+const sessionFileByThreadId = new Map<string, string>();
+
+function sessionFileCacheKey(threadId: string): string {
+  return `${getCodexSessionsRoot()}\0${threadId}`;
+}
 
 function isSelectableCodexSession(meta: SessionMetaLine['payload']): boolean {
   const rawSource = meta?.source;
@@ -226,6 +231,7 @@ export function listCodexSessions(limit?: number): CodexSessionSummary[] {
     const session = parseCodexSession(filePath, threadIndexEntries, archivedThreadIds);
     if (!session) continue;
     allSessions.set(session.threadId, session);
+    sessionFileByThreadId.set(sessionFileCacheKey(session.threadId), session.filePath);
   }
 
   const sessions = Array.from(allSessions.values());
@@ -235,6 +241,19 @@ export function listCodexSessions(limit?: number): CodexSessionSummary[] {
 }
 
 export function getCodexSessionByThreadId(threadId: string): CodexSessionSummary | null {
+  const cacheKey = sessionFileCacheKey(threadId);
+  const cachedFilePath = sessionFileByThreadId.get(cacheKey);
+  if (cachedFilePath) {
+    const archivedThreadIds = loadArchivedThreadIds();
+    const cached = parseCodexSession(
+      cachedFilePath,
+      loadThreadIndexEntries(archivedThreadIds),
+      archivedThreadIds,
+    );
+    if (cached?.threadId === threadId) return cached;
+    sessionFileByThreadId.delete(cacheKey);
+  }
+
   const sessions = listCodexSessions();
   return sessions.find((session) => session.threadId === threadId) || null;
 }
@@ -244,6 +263,7 @@ export function archiveCodexSession(threadId: string): CodexSessionSummary | nul
   if (!session) return null;
 
   moveSessionFileToArchive(session.filePath);
+  sessionFileByThreadId.delete(sessionFileCacheKey(threadId));
   return session;
 }
 

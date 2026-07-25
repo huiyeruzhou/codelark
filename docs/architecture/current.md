@@ -184,7 +184,7 @@ flowchart TD
 
 ### 设计理念
 
-Mirror 不是子线程，也不是独立 worker。它运行在 bridge daemon 内：`fs.watch` 只负责标记 dirty 和唤醒 debounce；poll timer 负责兜底；真正处理发生在 reconcile 批次里。批次对不同 subscription 使用有界并发，同一个 subscription 内部按 JSONL cursor 顺序读取、过滤、reduce、触发 hook，避免一张 mirror 卡片的局部更新乱序。
+Mirror 不是子线程，也不是独立 worker。它运行在 bridge daemon 内：`fs.watch` 只负责标记 dirty 和唤醒 debounce；poll timer 负责兜底；真正处理发生在 reconcile 批次里。批次对不同 subscription 使用有界并发，同一个 subscription 内部按 JSONL cursor 顺序读取、过滤、reduce、触发 hook，避免一张 mirror 卡片的局部更新乱序。已经绑定的 subscription 必须先对已知 `filePath` 做 stat，并用 inode/size/mtime 判断无变化或只读新增区间；不能在 stat 之前重新 list 全部 runtime sessions。只有文件路径缺失、失效或 runtime identity 改变时，才允许重新调用 runtime-specific source discovery。
 
 Mirror 的身份分两层，不应混用。第一层是“哪个本地会话文件”，由 `BridgeSession`、runtime identity 和 cwd 决定；第二层是“文件内哪一轮 turn”，由 runtime-specific parser 从 JSONL 记录关系里推断。文件名只回答“观察哪个会话”，不能回答“这是第几轮输出”。
 
@@ -196,8 +196,8 @@ Mirror 主路径：
 
 1. 订阅规划找到有本地 runtime 身份的 `BridgeSession`，再找到绑定这些 session 的 `ChannelChat`。
 2. 订阅 runtime 根据绑定关系建立或更新 subscription。
-3. 每个 subscription 通过当前 runtime source 定位对应 JSONL 文件。
-4. 文件监听和定时 reconcile 读取新增记录；订阅间有界并发，单订阅内部按 cursor 顺序处理。
+3. 新 subscription 通过当前 runtime source 定位对应 JSONL 文件；稳定 subscription 复用已验证路径。
+4. 文件监听和定时 reconcile 先 stat 已知文件，无变化即结束，增长时只读取新增记录；路径失效才重新 discover。订阅间有界并发，单订阅内部按 cursor 顺序处理。
 5. suppression 去掉当前 IM 发起 turn 造成的重复回显。
 6. turn reducer 把 JSONL 事件合并成可展示 turn。
 7. feedback controller 更新流式卡片或发送最终 fallback 消息。

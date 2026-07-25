@@ -7,6 +7,7 @@ import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 
 import {
+  getCodexSessionByThreadId,
   listCodexSessions,
   readCodexSessionJsonlHistoryStreamByFilePath,
   readCodexSessionMessagesByFilePath,
@@ -27,6 +28,39 @@ afterEach(() => {
 });
 
 describe('listCodexSessions', () => {
+  it('reuses the indexed file path for repeated thread lookup', () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-codex-session-cache-'));
+    process.env.CODEX_HOME = tempRoot;
+    const sessionsDir = path.join(tempRoot, 'sessions', '2026', '07', '25');
+    fs.mkdirSync(sessionsDir, { recursive: true });
+    const threadId = '019f9699-7f1a-7000-8000-000000000001';
+    const rolloutPath = path.join(sessionsDir, `rollout-2026-07-25T09-00-00-${threadId}.jsonl`);
+    fs.writeFileSync(rolloutPath, JSON.stringify({
+      timestamp: '2026-07-25T09:00:00.000Z',
+      type: 'session_meta',
+      payload: {
+        id: threadId,
+        timestamp: '2026-07-25T09:00:00.000Z',
+        cwd: '/repo/cache-test',
+        originator: 'Codex CLI',
+      },
+    }), 'utf-8');
+
+    assert.equal(listCodexSessions().length, 1);
+    const originalReaddirSync = fs.readdirSync;
+    fs.readdirSync = (() => {
+      throw new Error('cached lookup must not rescan the sessions tree');
+    }) as typeof fs.readdirSync;
+    try {
+      const session = getCodexSessionByThreadId(threadId);
+      assert.equal(session?.filePath, rolloutPath);
+      assert.equal(session?.cwd, '/repo/cache-test');
+    } finally {
+      fs.readdirSync = originalReaddirSync;
+      fs.rmSync(tempRoot, { recursive: true, force: true });
+    }
+  });
+
   it('falls back to the first real user message when session_index has no title', () => {
     const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-codex-sessions-'));
     process.env.CODEX_HOME = tempRoot;

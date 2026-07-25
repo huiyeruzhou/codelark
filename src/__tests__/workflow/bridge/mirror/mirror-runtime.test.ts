@@ -496,6 +496,7 @@ describe('mirror-runtime pending deliveries', () => {
     const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-mirror-runtime-'));
     const filePath = path.join(tempRoot, 'rollout.jsonl');
     fs.writeFileSync(filePath, '', 'utf-8');
+    let discoveredFilePath = filePath;
 
     let nowMs = Date.parse('2026-06-05T04:00:00.000Z');
     const originalDateNow = Date.now;
@@ -525,7 +526,7 @@ describe('mirror-runtime pending deliveries', () => {
       mirrorSyncInFlight: false,
       activeTasks: new Map(),
     };
-    const reconcileSummaryLookups: string[] = [];
+    const summaryLookups: Array<{ threadId: string; context: string }> = [];
 
     runtime = createMirrorRuntime(() => state as never, {
       watchDebounceMs: 0,
@@ -542,8 +543,8 @@ describe('mirror-runtime pending deliveries', () => {
       clearSessionCodexThreadId: () => {},
       getCodexSessionByThreadIdSafe: () => null,
       getMirrorSourceSummary: (_source, threadId, _cwd, context) => {
-        if (context === 'mirror reconcile') reconcileSummaryLookups.push(threadId);
-        return { threadId, filePath };
+        summaryLookups.push({ threadId, context });
+        return { threadId, filePath: discoveredFilePath };
       },
       syncMirrorSessionStateSafe: () => {},
       filterSuppressedMirrorRecords: (_sessionId, records) => records,
@@ -559,14 +560,25 @@ describe('mirror-runtime pending deliveries', () => {
     try {
       await runtime.reconcileMirrorSubscriptions();
       assert.equal(state.mirrorSubscriptions.get('cold-binding')?.activityTier, 'cold');
-      assert.equal(reconcileSummaryLookups.length, 1);
+      assert.deepEqual(summaryLookups, [{ threadId: 'thread-1', context: 'mirror subscription sync' }]);
 
       await runtime.reconcileMirrorSubscriptions();
-      assert.equal(reconcileSummaryLookups.length, 1);
+      assert.equal(summaryLookups.length, 1);
 
       nowMs += 60_001;
       await runtime.reconcileMirrorSubscriptions();
-      assert.equal(reconcileSummaryLookups.length, 2);
+      assert.equal(summaryLookups.length, 1, 'stable bound paths must be stat-ed without rediscovery');
+
+      const replacementPath = path.join(tempRoot, 'replacement-rollout.jsonl');
+      fs.writeFileSync(replacementPath, '', 'utf-8');
+      discoveredFilePath = replacementPath;
+      const subscription = state.mirrorSubscriptions.get('cold-binding');
+      assert.ok(subscription);
+      subscription.filePath = path.join(tempRoot, 'missing-rollout.jsonl');
+      nowMs += 60_001;
+      await runtime.reconcileMirrorSubscriptions();
+      assert.equal(subscription.filePath, replacementPath);
+      assert.deepEqual(summaryLookups.at(-1), { threadId: 'thread-1', context: 'mirror reconcile' });
     } finally {
       Date.now = originalDateNow;
       fs.rmSync(tempRoot, { recursive: true, force: true });
