@@ -7,6 +7,10 @@ import { sanitizeInput } from '../../shared/security/validators.js';
 import type { BaseChannelAdapter } from '../../channels/contracts.js';
 import { deliverBridgeNotice } from '../../channels/delivery/feedback.js';
 import type { ChannelAddress, OutboundRichCard } from '../../domain/index.js';
+import {
+  readDetachedLogTail,
+  startDetachedLogMonitor,
+} from '../background/detached-log-monitor.js';
 import { formatCommandPath } from './presentation.js';
 
 const execFileAsync = promisify(execFile);
@@ -150,25 +154,9 @@ function extractOutputPid(output: string): number | null {
   return Number.isSafeInteger(pid) && pid > 0 ? pid : null;
 }
 
-function isProcessAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (error) {
-    const code = (error as NodeJS.ErrnoException)?.code;
-    return code === 'EPERM';
-  }
-}
-
 function readHotUpdateLog(logPath: string): { text: string; exists: boolean } {
-  try {
-    const rawLog = fs.readFileSync(logPath, 'utf-8');
-    const lines = rawLog.split(/\r?\n/);
-    if (lines.length > 1 && lines.at(-1) === '') lines.pop();
-    return { text: lines.slice(-HOT_UPDATE_LOG_TAIL_LINES).join('\n'), exists: true };
-  } catch {
-    return { text: '(hot update log 尚未创建或暂时不可读)', exists: false };
-  }
+  const log = readDetachedLogTail(logPath, HOT_UPDATE_LOG_TAIL_LINES);
+  return log.exists ? log : { ...log, text: '(hot update log 尚未创建或暂时不可读)' };
 }
 
 function detectHotUpdateLogState(logText: string): 'running' | 'completed' | 'error' {
@@ -266,27 +254,19 @@ export function startHotUpdateLogMonitor(params: {
   refreshIntervalMs?: number;
   spec: HotUpdateLogMonitorSpec;
 }): void {
-  const startedAt = Date.now();
   const refreshIntervalMs = params.refreshIntervalMs || HOT_UPDATE_LOG_REFRESH_INTERVAL_SECONDS * 1000;
-  let busy = false;
-  let finished = false;
-  let timer: NodeJS.Timeout | null = null;
-
-  const refresh = async () => {
-    if (busy || finished) return;
-    busy = true;
-    try {
-      const log = readHotUpdateLog(params.spec.logPath);
-      let state = detectHotUpdateLogState(log.text);
-      let stateDetail: string | null = null;
-      if (state === 'running' && params.spec.workerPid && !isProcessAlive(params.spec.workerPid)) {
-        state = 'error';
-        stateDetail = `hot update worker PID ${params.spec.workerPid} 已退出，但日志未写出 completed；停止刷新。`;
-      }
-      if (state === 'running' && Date.now() - startedAt > HOT_UPDATE_LOG_MONITOR_MAX_MS) {
-        state = 'error';
-        stateDetail = '超过 30 分钟仍未完成；停止刷新。';
-      }
+  startDetachedLogMonitor({
+    logPath: params.spec.logPath,
+    workerPid: params.spec.workerPid,
+    refreshIntervalMs,
+    maxDurationMs: HOT_UPDATE_LOG_MONITOR_MAX_MS,
+    tailLines: HOT_UPDATE_LOG_TAIL_LINES,
+    workerLabel: 'hot update worker',
+    detectState: detectHotUpdateLogState,
+    async onSnapshot(snapshot) {
+      const log = snapshot.exists
+        ? snapshot
+        : { ...snapshot, text: '(hot update log 尚未创建或暂时不可读)' };
       const richCard = buildHotUpdateLogRichCard({
         command: params.spec.command,
         projectDir: params.spec.projectDir,
@@ -297,8 +277,8 @@ export function startHotUpdateLogMonitor(params: {
         dispatchOutput: params.spec.dispatchOutput,
         logText: log.text,
         logExists: log.exists,
-        state,
-        stateDetail,
+        state: snapshot.state,
+        stateDetail: snapshot.stateDetail,
         updateKey: params.spec.updateKey,
       });
       const fallbackText = [
@@ -309,19 +289,8 @@ export function startHotUpdateLogMonitor(params: {
         richCard,
         richCardUpdateMessageId: params.messageId,
       });
-      if (state === 'completed' || state === 'error') {
-        finished = true;
-        if (timer) clearInterval(timer);
-      }
-    } finally {
-      busy = false;
-    }
-  };
-
-  timer = setInterval(() => {
-    void refresh();
-  }, refreshIntervalMs);
-  timer.unref?.();
+    },
+  });
 }
 
 function buildHotUpdateLogMonitorSpec(params: {

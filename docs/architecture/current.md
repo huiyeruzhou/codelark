@@ -55,6 +55,10 @@ flowchart LR
 
 版本提示与更新执行保持分层：host manager 只分流普通消息和 `clk-version-update:*` callback；update runtime 负责状态验证、卡片与按钮生命周期；独立 Node worker 负责 `npm install -g --yes` 和 stop/start。按钮回调先立即 ACK 并替换卡片，再派发 detached worker；worker 不执行 repo hot update 的 pull/build/test。
 
+版本更新也必须遵守 long-running 操作的统一反馈纪律，不能把“worker 已派发”当作完成：旧 bridge 每 3 秒读取任务日志，检测 running/completed/error、worker 提前退出和超时，并持续更新原卡；派发前还会持久化 operation receipt（原 chat、原 card、目标版本和 update key）。安装失败且 bridge 仍在线时，旧 bridge 把原卡收口为红色失败终态并清除 receipt；安装成功导致进程重启时，新 bridge 消费 receipt，用原 message id 恢复并把同一张卡收口为绿色“更新完成”。若平台不能恢复原卡，rich-card delivery 自己降级为发送新卡，仍必须让用户看到终态。
+
+这条约束适用于所有可能跨秒、跨进程或跨重启的后台动作：入口要快速 ACK，进行态要可观察，恢复所需状态要先于破坏性动作持久化，最终必须只有一个明确的成功或失败终态。环境变量由 detached child 和后续启动命令正常继承；不能用无关的环境分支代替任务状态检测。
+
 ```mermaid
 flowchart TD
   inbound[平台事件 / InboundMessage]
@@ -535,6 +539,17 @@ CodeLark 自有数据位于 `~/.codelark`：
 - bridge 和 UI 的 runtime 状态文件。
 
 Codex 自有数据仍位于 `~/.codex`，Claude Code 自有 JSONL 由 Claude Code 生成，Kimi Code 自有 `wire.jsonl` 位于 `~/.kimi-code`。CodeLark 只读使用这些本地 runtime 文件。
+
+### 系统日志的后续收敛项
+
+当前 `logs/bridge.log` 已能定位 Feishu API、流式卡片 diff、session lane 和 runtime 生命周期问题，但结构化契约尚未完全统一。后续日志重构必须保持现有诊断能力，并按以下顺序收敛，不能在无回归证据时一次性改写全部调用点：
+
+1. 统一事件 envelope：`event`、`component`、`operation`、`phase`、`status`、`duration_ms` 和关联 ID 使用一套 snake_case 字段；同一条记录不再同时写 `duration_ms/durationMs`、`card_id/cardId`、`stream_key/streamKey`。
+2. 降低成功快路径噪声：单次 Feishu `Request success` 改为 debug 或按窗口聚合；失败、超时、慢请求和生命周期终态继续逐条保留。不能为了降日志量删除性能定位所需的 target、scope、duration 和返回码。
+3. payload 日志分层：INFO 只保留 bytes、组件数、hash、element IDs 和 diff 决策；完整 preview/markdown preview 只在显式诊断模式输出，并继续执行脱敏与长度上限，避免每次 full refresh 重复记录大段用户内容。
+4. 为核心 event 建立 schema/contract 测试：必填字段、类型、错误结构和敏感字段脱敏必须可自动验证；普通 `console.*` 兼容入口逐步迁移到具名 logger，但不引入第二套并行日志系统。
+
+这是一项独立维护任务，不与工具卡或版本更新补丁混做。实施前先用真实 bridge 日志建立事件频率、字节占比和诊断查询基线，再分阶段迁移高频事件。
 
 ## 迁移边界
 

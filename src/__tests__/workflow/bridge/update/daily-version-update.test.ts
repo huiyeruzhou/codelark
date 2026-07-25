@@ -1,5 +1,8 @@
 import '../../../setup/test-setup.js';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { describe, it } from 'node:test';
 
 import type { BaseChannelAdapter } from '../../../../channels/contracts.js';
@@ -14,6 +17,7 @@ import {
   parseVersionUpdateCallbackData,
 } from '../../../../bridge/update/runtime.js';
 import type { DailyVersionChecker, VersionCheckState } from '../../../../bridge/update/version-check.js';
+import { consumeStartupNoticeTarget } from '../../../../bridge/startup-notice-target.js';
 
 initBridgeContext({
   store: new JsonFileStore(new Map()),
@@ -156,6 +160,79 @@ describe('daily version update user stories', () => {
     await _testOnlyWaitForDeliveryQueuesForTests(adapter);
     assert.equal(sent.at(-1)?.richCard?.title, '正在更新到 v1.3.0');
     assert.equal(sent.at(-1)?.richCard?.sections[1]?.fields?.[0]?.[1], '/tmp/version-update.log');
+  });
+
+  it('persists the original card as a cross-restart completion receipt', async () => {
+    consumeStartupNoticeTarget();
+    const fixture = fakeChecker({ currentVersion: '1.2.3', latestVersion: '1.3.0' });
+    const { adapter } = fakeAdapter();
+    const runtime = createDailyVersionUpdateRuntime({
+      checker: fixture.checker,
+      currentVersion: '1.2.3',
+      dispatchUpdate: async () => ({ pid: 42, logPath: '/tmp/version-update.log' }),
+    });
+
+    assert.equal(runtime.handleCallback(adapter, inbound('clk-version-update:update:1.3.0')), true);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    const target = consumeStartupNoticeTarget();
+    assert.equal(target?.address.chatId, 'chat-1');
+    assert.deepEqual(target?.operation, {
+      kind: 'version-update',
+      version: '1.3.0',
+      updateKey: 'version-update:chat-1:1.3.0',
+      updateMessageId: 'card-message-1',
+    });
+  });
+
+  it('monitors a failed update worker and replaces the original card with an error terminal', async () => {
+    consumeStartupNoticeTarget();
+    const logDir = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-version-update-failed-'));
+    const logPath = path.join(logDir, 'version-update.log');
+    fs.writeFileSync(logPath, '[version-update] failed: npm exited with code 1\n', 'utf-8');
+    const fixture = fakeChecker({ currentVersion: '1.2.3', latestVersion: '1.3.0' });
+    const { adapter, sent } = fakeAdapter();
+    const runtime = createDailyVersionUpdateRuntime({
+      checker: fixture.checker,
+      currentVersion: '1.2.3',
+      dispatchUpdate: async () => ({ pid: null, logPath }),
+      updateMonitorRefreshIntervalMs: 5,
+    });
+
+    try {
+      assert.equal(runtime.handleCallback(adapter, inbound('clk-version-update:update:1.3.0')), true);
+      await new Promise((resolve) => setTimeout(resolve, 35));
+      await _testOnlyWaitForDeliveryQueuesForTests(adapter);
+
+      const terminal = sent.find((message) => message.richCard?.title === 'CodeLark 更新失败');
+      assert.equal(terminal?.richCardUpdateMessageId, 'card-message-1');
+      assert.equal(terminal?.richCard?.template, 'red');
+      assert.match(terminal?.richCard?.sections.at(-1)?.code?.text || '', /npm exited with code 1/);
+      assert.equal(consumeStartupNoticeTarget(), null, 'failed workers must clear stale restart receipts');
+    } finally {
+      fs.rmSync(logDir, { recursive: true, force: true });
+      consumeStartupNoticeTarget();
+    }
+  });
+
+  it('clears the persisted completion receipt when the worker cannot be dispatched', async () => {
+    consumeStartupNoticeTarget();
+    const fixture = fakeChecker({ currentVersion: '1.2.3', latestVersion: '1.3.0' });
+    const { adapter, sent } = fakeAdapter();
+    const runtime = createDailyVersionUpdateRuntime({
+      checker: fixture.checker,
+      currentVersion: '1.2.3',
+      dispatchUpdate: async () => { throw new Error('spawn denied'); },
+    });
+
+    assert.equal(runtime.handleCallback(adapter, inbound('clk-version-update:update:1.3.0')), true);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    await _testOnlyWaitForDeliveryQueuesForTests(adapter);
+
+    assert.equal(consumeStartupNoticeTarget(), null);
+    assert.equal(sent.at(-1)?.richCardUpdateMessageId, 'card-message-1');
+    assert.equal(sent.at(-1)?.richCard?.title, '自动更新未能启动');
+    assert.match(JSON.stringify(sent.at(-1)?.richCard), /spawn denied/);
   });
 
   it('rejects stale, forged, duplicate, and shell-shaped callback data', async () => {

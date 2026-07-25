@@ -47,10 +47,11 @@ import { handleRequireAtCommand } from './require-at.js';
 import {
   buildSettingsFields,
   buildSetCommandRichCard,
+  currentSessionSettingDefinitions,
   handleSetCommand,
   handleSetFormCommand,
-  runtimeSettingDefinitions,
   setCommandSelectedGroup,
+  settingConfigPath,
   settingFormName,
   type SettingDefinition,
 } from './global-settings.js';
@@ -360,9 +361,25 @@ async function handleCurrentConfigFormCommand(options: {
 
   let currentConfig = sessionConfigService.snapshot({ kind: 'session', sessionId: session.id }).config;
   const updatedSettings: SettingDefinition[] = [];
-  for (const definition of runtimeSettingDefinitions(activeRuntime, { sessionWritableOnly: true })) {
+  const fallbackSettings: SettingDefinition[] = [];
+  const configTarget = { kind: 'session' as const, sessionId: session.id };
+  const configScope = { kind: 'session' as const, sessionId: session.id };
+  for (const definition of currentSessionSettingDefinitions(activeRuntime)) {
     const rawValue = currentSettingFormValue(formValue, definition);
     if (rawValue === undefined) continue;
+    const configPath = settingConfigPath(definition);
+    const source = sessionConfigService.resolve(configPath, configScope).source;
+    if (!rawValue) {
+      if (source !== 'session') continue;
+      try {
+        sessionConfigService.unset(configTarget, configPath);
+        currentConfig = sessionConfigService.snapshot(configScope).config;
+        fallbackSettings.push(definition);
+      } catch (error) {
+        return { response: `${definition.tomlPath} 未回退：${formatCurrentConfigWriteError(error)}` };
+      }
+      continue;
+    }
     const currentValue = definition.read(currentConfig);
     const normalizedCurrent = currentValue === '-' || currentValue === 'auto' ? '' : currentValue;
     if (rawValue === normalizedCurrent) continue;
@@ -371,8 +388,8 @@ async function handleCurrentConfigFormCommand(options: {
       return { response: `${definition.tomlPath} 未更新：${written.message}\n\n用法：${definition.usage}` };
     }
     try {
-      sessionConfigService.set({ kind: 'session', sessionId: session.id }, written.patch);
-      currentConfig = sessionConfigService.snapshot({ kind: 'session', sessionId: session.id }).config;
+      sessionConfigService.set(configTarget, written.patch);
+      currentConfig = sessionConfigService.snapshot(configScope).config;
       updatedSettings.push(definition);
     } catch (error) {
       return { response: `${definition.tomlPath} 未更新：${formatCurrentConfigWriteError(error)}` };
@@ -381,11 +398,15 @@ async function handleCurrentConfigFormCommand(options: {
 
   const refreshedBinding = options.store.getChannelChat(options.msg.address.channelType, options.msg.address.chatId) || binding;
   return {
-    response: responses.length > 0 || updatedSettings.length > 0
+    response: responses.length > 0 || updatedSettings.length > 0 || fallbackSettings.length > 0
       ? [
           '已保存当前会话配置。',
           ...responses,
           ...(updatedSettings.length > 0 ? [buildSettingsFields(currentConfig, updatedSettings).map(([label, value]) => `${label}: ${value}`).join('\n')] : []),
+          ...(fallbackSettings.length > 0 ? [
+            '已回退上层配置：\n'
+              + buildSettingsFields(currentConfig, fallbackSettings).map(([label, value]) => `${label}: ${value}`).join('\n'),
+          ] : []),
         ].filter(Boolean).join('\n\n')
       : '没有检测到需要保存的配置变更。',
     richCard: buildCurrentCommandRichCard({

@@ -193,13 +193,13 @@ error 终态不能只靠红色边框或泛化的 `Error` footer。runtime adapte
 
 沿用既有的“历史记录”外层容器，并在每批工具事件上保留共用的“工具调用 · N”折叠栏；展开工具调用组后，每个工具仍有自己的折叠面板，即“历史记录 → 工具调用组 → 单工具”。单工具内部不再为长输出增加折叠。标题由代码拼成一行，依次显示动作图标、动作、对象和范围/命中数/输出行数/耗时/非零 exit code；过长时由 Feishu 自然换行。完成态使用 `📖/🔎/🛠️/💻` 等动作图标，运行中和异常仍使用状态图标；标题和详情不再重复 `Success`、`Completed` 或“完成”。
 
-展开后必须能审计真实调用参数：command 使用 `bash` fence，read/search/generic 工具显示结构化参数。shell 中的 `rg`/`grep` 即使位于复合命令里，也保留搜索语义和完整原始 command；解析 query/path 时必须按带引号 token 的原始源码长度推进，不能把引号误当成路径。普通工具的 output 仍可在中间层用于标题的行数、命中数、exit code 等摘要，但默认不把 output 正文放进卡片；`apply_patch` 是例外，显示真实修改内容，并在所有目标文件语言一致时按文件后缀选择 fence 语言，混合或未知类型使用纯文本。`Script completed`、`Wall time`、`Chunk ID`、`Original token count` 等 transport envelope 在 adapter 层消费，不进入详情。
+展开后必须能审计真实调用参数：command 使用 `bash` fence，read/search/generic 工具显示结构化参数。shell 中的 `rg`/`grep` 即使位于复合命令里，也保留搜索语义和完整原始 command；解析 query/path 时必须按带引号 token 的原始源码长度推进，不能把引号误当成路径。普通工具的 output 仍可在中间层用于标题的行数、命中数、exit code 等摘要，但默认不把 output 正文放进卡片；`apply_patch` 是例外，显示真实修改内容。多文件 patch 按文件分成独立代码块，每块按自己的目标文件后缀选择语言；所有文件共同使用一份 8000 字符/160 行预算，而不是每个文件各获得一份预算。`Script completed`、`Wall time`、`Chunk ID`、`Original token count` 等 transport envelope 在 adapter 层消费，不进入详情。
 
 飞书 CardKit Markdown 对 fenced code 有一个客户端兼容问题：当 fence 正文包含字面 `${...}` 表达式时，即使完全没有内部反引号，整个代码块也可能被布局成一行。公共 `ToolCallDetail` 和 Markdown renderer 不得为此改写内容；只在 Feishu 出站预处理边界，把命中 `${` 的完整 fenced block 改成 CommonMark 四空格缩进代码块。该异常块会失去语言高亮，但换行和可复制正文必须保持；普通反引号、单独 `$`、单独 `{...}` 和其他 block 继续保留文件语言高亮。禁止使用零宽字符、反斜杠或 HTML entity 替换正文，因为这些方案会污染用户看到和复制的 patch。
 
 若一次工具结果明确返回仍在运行的 background session/cell id，当前工具标题追加一次“后台终端 N”，方便后续等待工具与终端关联；详情不再重复该 id。这个标记属于产生 background id 的历史工具事件，不跨事件维护动态状态，也不因为后续 `wait` 完成而回写旧标题。普通已完成工具以及只消费既有 session 的 `wait` 不显示该标记。
 
-所有长内容在生成 Markdown 之前调用同一个预览 helper，并同时受字符数和行数两个 hard upper bound 约束；任何一个先达到就停止。普通输入/输出上限为 4000 Unicode code points 和 80 行，patch 上限为 8000 code points 和 160 行。省略提示写在代码块外。禁止对已经生成的 Markdown 盲切，否则会切掉 closing fence；Feishu 兼容层的缩进代码降级也必须发生在预览完成之后，并覆盖完整 block。
+所有长内容在生成 Markdown 之前调用同一个预览 helper，并同时受字符数和行数两个 hard upper bound 约束；任何一个先达到就停止。普通输入/输出上限为 4000 Unicode code points 和 80 行，patch 上限为 8000 code points 和 160 行；多文件分块不能乘算这份预算。省略提示写在代码块外。禁止对已经生成的 Markdown 盲切，否则会切掉 closing fence。工具标题同样不能把已经包好的 inline-code Markdown 交给通用字符截断：文件名全部放得下就完整显示，放不下全部但能放下首个完整文件名时显示“`文件名` 等 N 个文件”，连一个完整文件名也放不下时只显示文件数量。Feishu 兼容层的缩进代码降级必须发生在预览完成之后，并覆盖完整 block。
 
 ## 本地镜像
 

@@ -225,9 +225,11 @@ import { applyUnifiedTurnStatusNote } from '../turn/unified-turn-state.js';
 import { resolveInstalledCodelarkVersion } from '../update/installed-version.js';
 import { createDailyVersionChecker } from '../update/version-check.js';
 import {
+  buildVersionUpdateCompletedCard,
   createDailyVersionUpdateRuntime,
   type DailyVersionUpdateRuntime,
 } from '../update/runtime.js';
+import type { StartupNoticeOperation } from '../startup-notice-target.js';
 
 const GLOBAL_KEY = '__bridge_manager__';
 const DANGLING_MIRROR_THREAD_RETRY_LIMIT = 3;
@@ -1309,6 +1311,7 @@ interface StartupNoticeTarget {
   address: ChannelAddress;
   binding: ChannelChat | null;
   sessionId?: string;
+  operation?: StartupNoticeOperation;
 }
 
 const REQUIRED_FEISHU_EVENT_SUBSCRIPTIONS = [
@@ -2598,6 +2601,36 @@ async function deliverStartupNotifications(channelChatCheck: StartupChannelChatC
   const adapter = state.adapters.get(target.address.channelType);
   if (!adapter?.isRunning()) return;
 
+  if (target.operation?.kind === 'version-update') {
+    const operation = target.operation;
+    const richCard = buildVersionUpdateCompletedCard(
+      target.address.chatId,
+      operation.version,
+      operation.updateKey,
+    );
+    try {
+      await deliverBridgeNotice(
+        adapter,
+        target.address,
+        `CodeLark v${operation.version} 更新完成，Bridge 已重启并恢复在线。`,
+        {
+          sessionId: target.binding?.bridgeSessionId || target.sessionId,
+          audit: false,
+          richCard,
+          richCardUpdateMessageId: operation.updateMessageId,
+        },
+      );
+    } catch (err) {
+      console.error('[bridge-manager] Failed to deliver version update completion:', {
+        channel_type: target.address.channelType,
+        chat_id: target.address.chatId,
+        version: operation.version,
+        error: describeUnknownError(err),
+      });
+    }
+    return;
+  }
+
   const feishuSetupNotices = collectStartupFeishuSetupNotices(state);
   logStartupFeishuSetupNotices(feishuSetupNotices);
   const baseStatusText = buildGlobalStatusResponse(store, target.binding, true);
@@ -2638,6 +2671,7 @@ function selectStartupNoticeTarget(
       address: explicitTarget.address,
       binding: store.getChannelChat(explicitTarget.address.channelType, explicitTarget.address.chatId),
       sessionId: explicitTarget.sessionId,
+      operation: explicitTarget.operation,
     };
   }
 

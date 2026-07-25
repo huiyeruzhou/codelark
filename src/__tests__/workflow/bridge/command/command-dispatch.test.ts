@@ -2032,6 +2032,8 @@ describe('command-dispatch', () => {
     assert.deepEqual(card?.sections?.[0]?.fields?.map(([label]) => label), ['类型', '运行状态', '共享镜像']);
     assert.equal(card?.sections?.[0]?.fields?.some(([label]) => label === '目录'), false);
     assert.deepEqual(card?.form?.selects?.map((select) => select.elementId), [
+      'tmuxAutoEnter',
+      'tmuxEchoInput',
       'defaultMode',
       'defaultProvider',
       'codexSandboxMode',
@@ -2039,6 +2041,8 @@ describe('command-dispatch', () => {
       'codexReasoningEffort',
     ]);
     assert.deepEqual(card?.form?.selects?.map((select) => select.label), [
+      'tmux 自动回车 (session.tmux_auto_enter)',
+      '回显 tmux 输出 (session.tmux_echo_input)',
       'YOLO模式 (runtime.codex.yolo_mode)',
       'Provider（运行方式） (runtime.codex.provider)',
       '文件系统权限 (runtime.codex.sandbox_mode)',
@@ -2046,12 +2050,13 @@ describe('command-dispatch', () => {
       '思考级别 (runtime.codex.reasoning_effort)',
     ]);
     assert.equal(card?.form?.extraInputs?.find((input) => input.elementId === 'clk_cwd')?.defaultValue, '/tmp/current-card');
+    assert.equal(card?.form?.extraInputs?.some((input) => input.elementId === 'tmuxCaptureLines'), true);
     assert.equal(card?.form?.extraInputs?.some((input) => input.elementId === 'defaultModel'), true);
     assert.equal(card?.form?.selects?.some((select) => select.elementId === 'codexSandboxMode'), true);
     assert.match(card?.footer?.[0] || '', /当前 agent.*<text_tag color='orange'>Codex<\/text_tag>/);
     assert.deepEqual(
       card?.form?.selects?.find((select) => select.elementId === 'codexReasoningEffort')?.options.map((option) => option.text),
-      ['medium', 'minimal', 'low', 'high', 'xhigh'],
+      ['跟随上层配置', 'medium', 'minimal', 'low', 'high', 'xhigh'],
     );
     assert.equal(getThreadTableMessageRecord(address, 'current')?.messageId, 'reply-1');
     assert.deepEqual(pinned, ['reply-1']);
@@ -2082,16 +2087,22 @@ describe('command-dispatch', () => {
     assert.equal(sent.at(-1)?.richCardUpdateMessageId, 'reply-2');
     assert.equal(sent.at(-1)?.richCard?.selects?.[0]?.selectedCallbackData, buildCommandCallbackData('/current-runtime claude'));
     assert.deepEqual(sent.at(-1)?.richCard?.form?.selects?.map((select: any) => select.elementId), [
+      'tmuxAutoEnter',
+      'tmuxEchoInput',
       'claudeMode',
       'claudeProvider',
       'claudeReasoningEffort',
     ]);
     assert.deepEqual(sent.at(-1)?.richCard?.form?.selects?.map((select: any) => select.formName), [
+      'tmux_enter',
+      'tmux_echo',
       'cld_mode',
       'cld_provider',
       'cld_rsn_eft',
     ]);
     assert.deepEqual(sent.at(-1)?.richCard?.form?.selects?.map((select: any) => select.label), [
+      'tmux 自动回车 (session.tmux_auto_enter)',
+      '回显 tmux 输出 (session.tmux_echo_input)',
       'YOLO模式 (runtime.claude.yolo_mode)',
       'Provider（运行方式） (runtime.claude.provider)',
       '思考级别 (runtime.claude.reasoning_effort)',
@@ -2118,11 +2129,11 @@ describe('command-dispatch', () => {
     assert.equal(claudePreviewCard?.form?.selects?.some((select) => select.elementId === 'codexNetworkAccess'), false);
     assert.deepEqual(
       claudePreviewCard?.form?.selects?.find((select) => select.elementId === 'claudeProvider')?.options.map((option) => option.text),
-      ['tmux', 'pty', 'sdk'],
+      ['跟随上层配置', 'tmux', 'pty', 'sdk'],
     );
     assert.deepEqual(
       claudePreviewCard?.form?.selects?.find((select) => select.elementId === 'claudeReasoningEffort')?.options.map((option) => option.text),
-      ['medium', 'low', 'high', 'xhigh', 'max'],
+      ['跟随上层配置', 'medium', 'low', 'high', 'xhigh', 'max'],
     );
     assert.deepEqual(
       parseCommandCallbackData(claudePreviewCard?.form?.submitCallbackData || '')?.commandText,
@@ -2255,11 +2266,11 @@ describe('command-dispatch', () => {
     const card = sent.at(-1)?.richCard as OutboundRichCard | undefined;
     assert.equal(card?.selects?.[0]?.selectedCallbackData, buildCommandCallbackData('/current-runtime kimi'));
     assert.match(card?.footer?.[0] || '', /当前 agent.*<text_tag color='orange'>Kimi Code<\/text_tag>/);
-    assert.deepEqual(card?.form?.selects?.map((select) => select.elementId), ['kimiProvider']);
-    assert.deepEqual(card?.form?.selects?.map((select) => select.formName), ['kimi_provider']);
+    assert.deepEqual(card?.form?.selects?.map((select) => select.elementId), ['tmuxAutoEnter', 'tmuxEchoInput', 'kimiProvider']);
+    assert.deepEqual(card?.form?.selects?.map((select) => select.formName), ['tmux_enter', 'tmux_echo', 'kimi_provider']);
     assert.deepEqual(
       card?.form?.selects?.find((select) => select.elementId === 'kimiProvider')?.options.map((option) => option.text),
-      ['tmux'],
+      ['跟随上层配置', 'tmux'],
     );
     assert.equal(card?.form?.selects?.some((select) => select.elementId === 'defaultProvider'), false);
     assert.equal(card?.form?.selects?.some((select) => select.elementId === 'claudeProvider'), false);
@@ -2313,6 +2324,72 @@ describe('command-dispatch', () => {
     assert.deepEqual(adapter.renamedGroups, [{ chatId: address.chatId, name: 'Kimi Current Card' }]);
     assert.equal(sent.at(-1)?.richCard?.form?.inputDefaultValue, 'Kimi Current Card');
     assert.equal(sent.at(-1)?.richCard?.selects?.[0]?.selectedCallbackData, buildCommandCallbackData('/current-runtime kimi'));
+  });
+
+  it('shows shared session settings in /current and removes overrides when submitted empty', async () => {
+    const store = initTestContext();
+    const sent: any[] = [];
+    const adapter = createGroupCapableAdapter({ sent });
+    const address = { channelType: 'feishu', chatId: 'chat-current-fallback', chatKind: 'group' as const } as const;
+    const binding = router.createBinding(address, '/tmp/current-fallback');
+    const config = createConfigService({ migrate: false, env: {} });
+    config.set({ kind: 'home' }, {
+      session: { tmuxCaptureLines: 80, tmuxAutoEnter: false },
+      runtime: { codex: { model: 'home-model' } },
+    });
+    config.set({ kind: 'session', sessionId: binding.bridgeSessionId }, {
+      session: { tmuxCaptureLines: 120, tmuxAutoEnter: true },
+      runtime: { codex: { model: 'session-model' } },
+    });
+    const deps = {
+      getActiveTask: () => undefined,
+      diagnoseSessionHealth: async () => null,
+      diagnoseAllActiveSessions: async () => [],
+    };
+
+    await handleBridgeCommand(adapter, { address, text: '/current', messageId: 'current-fallback-card' } as any, '/current', deps);
+    const card = sent.at(-1)?.richCard as OutboundRichCard | undefined;
+    assert.equal(card?.form?.extraInputs?.find((input) => input.elementId === 'tmuxCaptureLines')?.defaultValue, '120');
+    assert.equal(card?.form?.extraInputs?.find((input) => input.elementId === 'defaultModel')?.defaultValue, 'session-model');
+    assert.equal(card?.form?.selects?.find((select) => select.elementId === 'tmuxAutoEnter')?.selectedCallbackData, 'on');
+    assert.equal(card?.form?.selects?.find((select) => select.elementId === 'tmuxEchoInput')?.selectedCallbackData, '');
+    assert.match(card?.form?.selects?.find((select) => select.elementId === 'tmuxEchoInput')?.placeholder || '', /跟随上层配置/);
+
+    await handleBridgeCommand(
+      adapter,
+      {
+        address,
+        text: '/current-config',
+        messageId: 'current-fallback-submit',
+        raw: {
+          event: {
+            context: { open_message_id: 'reply-current-fallback' },
+            action: {
+              form_value: {
+                tmux_lines: '',
+                tmux_enter: '',
+                cdx_model: '',
+              },
+            },
+          },
+        },
+      } as any,
+      '/current-config codex',
+      deps,
+    );
+
+    const scope = { kind: 'session' as const, sessionId: binding.bridgeSessionId };
+    assert.equal(config.resolve('session.tmuxCaptureLines', scope).source, 'home');
+    assert.equal(config.resolve('session.tmuxAutoEnter', scope).source, 'home');
+    assert.equal(config.resolve('runtime.codex.model', scope).source, 'home');
+    assert.equal(config.get('session.tmuxCaptureLines', scope), 80);
+    assert.equal(config.get('session.tmuxAutoEnter', scope), false);
+    assert.equal(config.get('runtime.codex.model', scope), 'home-model');
+    assert.match(sent.at(-1)?.text || '', /已回退上层配置/);
+    assert.equal(sent.at(-1)?.richCard?.form?.extraInputs?.find((input: any) => input.elementId === 'tmuxCaptureLines')?.defaultValue, '');
+    assert.match(sent.at(-1)?.richCard?.form?.extraInputs?.find((input: any) => input.elementId === 'tmuxCaptureLines')?.placeholder || '', /当前：80/);
+    assert.equal(sent.at(-1)?.richCard?.form?.extraInputs?.find((input: any) => input.elementId === 'defaultModel')?.defaultValue, '');
+    assert.match(sent.at(-1)?.richCard?.form?.extraInputs?.find((input: any) => input.elementId === 'defaultModel')?.placeholder || '', /当前：home-model/);
   });
 
   it('reads Claude Code JSONL for /t, /current, and /his on Claude runtime sessions', async () => {
@@ -2429,11 +2506,15 @@ describe('command-dispatch', () => {
       assert.equal(sent.at(-1)?.richCard?.form?.controlBar?.selects, undefined);
       assert.deepEqual(sent.at(-1)?.richCard?.form?.controlBar?.actions?.map((action) => action.text), ['刷新']);
       assert.deepEqual(sent.at(-1)?.richCard?.form?.selects?.map((select) => select.elementId), [
+        'tmuxAutoEnter',
+        'tmuxEchoInput',
         'claudeMode',
         'claudeProvider',
         'claudeReasoningEffort',
       ]);
       assert.deepEqual(sent.at(-1)?.richCard?.form?.selects?.map((select) => select.formName), [
+        'tmux_enter',
+        'tmux_echo',
         'cld_mode',
         'cld_provider',
         'cld_rsn_eft',

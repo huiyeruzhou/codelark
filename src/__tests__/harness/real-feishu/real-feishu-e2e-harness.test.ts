@@ -1763,7 +1763,13 @@ describe('unit::real-feishu-e2e-harness::session-management-command-plan', () =>
     assert.deepEqual(expectationByCommand.get('/require-at off')?.expectedTexts, ['已更新群聊 @bot 设置', 'off']);
     assert.deepEqual(expectationByCommand.get('/runtime codex')?.expectedTexts, ['Runtime', 'codex']);
     assert.deepEqual(expectationByCommand.get('/p sdk')?.expectedTexts, ['Codex Provider', 'sdk']);
-    assert.deepEqual(expectationByCommand.get('/current')?.expectedTexts, ['当前会话']);
+    assert.deepEqual(expectationByCommand.get('/current')?.expectedTexts, [
+      '当前会话',
+      'tmux 输出行数',
+      'tmux 自动回车',
+      '回显 tmux 输出',
+      '跟随上层配置',
+    ]);
     assert.deepEqual(expectationByCommand.get('/model')?.expectedTexts, ['当前模型']);
     assert.deepEqual(expectationByCommand.get('/mode')?.expectedTexts, ['当前模式', 'Runtime', 'codex']);
     assert.deepEqual(expectationByCommand.get('/provider')?.expectedTexts, ['当前 Codex Provider']);

@@ -448,11 +448,23 @@ export function scriptedKimiToolCardIssues(
     }
   }
 
-  const diffFence = panels.flatMap((panel) => panel.fences).find((fence) => fence.language === 'diff');
-  if (!diffFence) {
-    issues.push(`${phase.providerKey}: no diff fence was present in the final tool card.`);
-  } else if (diffFence.lines !== 160) {
-    issues.push(`${phase.providerKey}: scripted long patch should exercise the 160-line cap, got ${diffFence.lines} lines.`);
+  const patchPanel = panels.find((panel) => panel.title.includes('修改'));
+  const patchFences = patchPanel?.fences || [];
+  if (!patchPanel?.title.includes('修改 2 个文件')) {
+    issues.push(`${phase.providerKey}: patch title did not expose the two-file summary.`);
+  }
+  for (const language of ['typescript', 'python']) {
+    if (!patchFences.some((fence) => fence.language === language)) {
+      issues.push(`${phase.providerKey}: multi-file patch did not include a ${language} fence.`);
+    }
+  }
+  const patchChars = patchFences.reduce((total, fence) => total + fence.chars, 0);
+  const patchLines = patchFences.reduce((total, fence) => total + fence.lines, 0);
+  if (patchChars > 8_000) {
+    issues.push(`${phase.providerKey}: multi-file patch fences exceeded the shared 8000-character budget.`);
+  }
+  if (patchLines !== 160) {
+    issues.push(`${phase.providerKey}: scripted multi-file patch should exercise the shared 160-line cap, got ${patchLines} lines.`);
   }
   if (!panels.some((panel) => panel.fences.some((fence) => fence.language === 'bash'))) {
     issues.push(`${phase.providerKey}: no bash command fence was present in the final tool card.`);

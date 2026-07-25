@@ -10,6 +10,7 @@ import {
 } from './presentation.js';
 import type { OutboundRichCard } from '../../domain/index.js';
 import type { ChannelAddress } from '../../domain/index.js';
+import { configFields, type ConfigPath } from '../../configuration/fields.js';
 
 export type SettingGroupKey = 'runtime' | 'runtime.codex' | 'runtime.claude' | 'runtime.kimi' | 'bridge' | 'channels.feishu';
 type SettingControl = 'select' | 'input';
@@ -770,6 +771,23 @@ export function runtimeSettingDefinitions(
   return definitions.filter((definition) => allowed.has(definition.key));
 }
 
+export function settingConfigPath(definition: Pick<SettingDefinition, 'tomlPath'>): ConfigPath {
+  const field = configFields.find((entry) => entry.tomlPath === definition.tomlPath);
+  if (!field) throw new Error(`配置项 ${definition.tomlPath} 缺少 canonical path。`);
+  return field.path;
+}
+
+export function currentSessionSettingDefinitions(
+  runtime: 'codex' | 'claude' | 'kimi',
+): SettingDefinition[] {
+  const shared = groupDefinitions('runtime').filter((definition) => {
+    if (definition.key === 'runtime') return false;
+    const field = configFields.find((entry) => entry.tomlPath === definition.tomlPath);
+    return field?.scopes.some((scope: string) => scope === 'session') || false;
+  });
+  return [...shared, ...runtimeSettingDefinitions(runtime, { sessionWritableOnly: true })];
+}
+
 export function settingDisplayLabel(definition: Pick<SettingDefinition, 'key' | 'label'>): string {
   return SETTING_DISPLAY_LABELS[definition.key] || definition.label;
 }
@@ -851,6 +869,25 @@ export function settingFormSelect(definition: SettingDefinition, config: ConfigV
   };
 }
 
+export function settingSessionFormSelect(
+  definition: SettingDefinition,
+  config: ConfigV2,
+  overridden: boolean,
+): NonNullable<NonNullable<OutboundRichCard['form']>['selects']>[number] {
+  const value = definition.read(config);
+  return {
+    elementId: definition.key,
+    formName: settingFormName(definition),
+    label: settingFormLabel(definition),
+    placeholder: overridden ? value : `跟随上层配置（当前：${value}）`,
+    selectedCallbackData: overridden && value !== 'auto' ? value : '',
+    options: [
+      { text: '跟随上层配置', callbackData: '' },
+      ...(definition.options || []),
+    ],
+  };
+}
+
 function settingPanelSelect(definition: SettingDefinition, config: ConfigV2): NonNullable<NonNullable<OutboundRichCard['form']>['selects']>[number] {
   return {
     ...settingFormSelect(definition, config),
@@ -866,6 +903,23 @@ export function settingFormInput(definition: SettingDefinition, config: ConfigV2
     label: settingFormLabel(definition),
     placeholder: definition.placeholder || definition.tomlPath,
     defaultValue: value === '-' ? '' : value,
+  };
+}
+
+export function settingSessionFormInput(
+  definition: SettingDefinition,
+  config: ConfigV2,
+  overridden: boolean,
+): NonNullable<NonNullable<OutboundRichCard['form']>['extraInputs']>[number] {
+  const value = definition.read(config);
+  return {
+    elementId: definition.key,
+    formName: settingFormName(definition),
+    label: settingFormLabel(definition),
+    placeholder: overridden
+      ? definition.placeholder || definition.tomlPath
+      : `跟随上层配置（当前：${value}）`,
+    defaultValue: overridden && value !== '-' ? value : '',
   };
 }
 

@@ -2409,7 +2409,9 @@ function answerOnce() {
   appendWire({ type: 'context.append_loop_event', time: now, event: { type: 'step.begin', turnId: 'turn-scripted-kimi', stepUuid: 'step-scripted-kimi' } });
   appendWire({ type: 'context.append_loop_event', time: now + 1, event: { type: 'content.part', turnId: 'turn-scripted-kimi', part: { type: 'think', think: 'scripted Kimi thinking for ' + marker } } });
   const patchLines = ['*** Begin Patch', '*** Update File: src/tool-card-fixture.ts', '@@'];
-  for (let index = 1; index <= 190; index += 1) patchLines.push('+export const fixtureLine' + index + ' = ' + index + ';');
+  for (let index = 1; index <= 100; index += 1) patchLines.push('+export const fixtureLine' + index + ' = ' + index + ';');
+  patchLines.push('*** Update File: scripts/tool_card_fixture.py', '@@');
+  for (let index = 1; index <= 90; index += 1) patchLines.push('+fixture_line_' + index + ' = ' + index);
   patchLines.push('*** End Patch');
   const longPatch = patchLines.join('\\n');
   const toolEvents = [
@@ -2418,7 +2420,7 @@ function answerOnce() {
     { type: 'tool.call', turnId: 'turn-scripted-kimi', toolCallId: 'grep-scripted-kimi', name: 'Bash', args: { command: 'rg -n "toolPanels:" src/__tests__ -g \\'*.ts\\' && git diff --check' } },
     { type: 'tool.result', turnId: 'turn-scripted-kimi', toolCallId: 'grep-scripted-kimi', result: { output: 'src/__tests__/a.ts:10:toolPanels:\\nsrc/__tests__/b.ts:20:toolPanels:' } },
     { type: 'tool.call', turnId: 'turn-scripted-kimi', toolCallId: 'patch-scripted-kimi', name: 'apply_patch', args: { patch: longPatch } },
-    { type: 'tool.result', turnId: 'turn-scripted-kimi', toolCallId: 'patch-scripted-kimi', result: { output: 'Success. Updated the following files:\\nM src/tool-card-fixture.ts' } },
+    { type: 'tool.result', turnId: 'turn-scripted-kimi', toolCallId: 'patch-scripted-kimi', result: { output: 'Success. Updated the following files:\\nM src/tool-card-fixture.ts\\nM scripts/tool_card_fixture.py' } },
     { type: 'tool.call', turnId: 'turn-scripted-kimi', toolCallId: 'bash-scripted-kimi', name: 'Bash', args: { command: 'npm test' } },
     { type: 'tool.result', turnId: 'turn-scripted-kimi', toolCallId: 'bash-scripted-kimi', result: { output: 'Script running with cell ID 90\\nWall time 0.2 seconds\\nOutput:\\n' } },
   ];
@@ -3927,7 +3929,7 @@ function scenarioSpecificChecks(
       name: 'basic_dialogue_kimi_tool_card',
       ok: kimiToolCardIssues.length === 0,
       detail: kimiToolCardIssues.length === 0
-        ? 'Observed one grouped Kimi tool-call panel with four inner semantic tool panels, closed bounded fences, and no transport-envelope leakage.'
+        ? 'Observed one grouped Kimi tool-call panel with four inner semantic tool panels, a shared-budget multi-file patch with per-file highlighting, closed fences, and no transport-envelope leakage.'
         : kimiToolCardIssues.join('\n'),
     });
   }
@@ -3941,7 +3943,7 @@ function scenarioSpecificChecks(
       name: 'runtime_message_scripted_kimi_tool_card',
       ok: issues.length === 0,
       detail: issues.length === 0
-        ? 'Observed the scripted Kimi response as one Feishu tool-call group with four inner semantic tool panels, hidden ordinary output, a bounded multi-line diff, and no transport-envelope leakage.'
+        ? 'Observed the scripted Kimi response as one Feishu tool-call group with four inner semantic tool panels, hidden ordinary output, a shared-budget multi-file patch with per-file highlighting, and no transport-envelope leakage.'
         : issues.join('\n'),
     });
   }
@@ -4396,7 +4398,9 @@ function commandStateExpectedTexts(options: CliOptions, text: string): string[] 
       options.provider,
     ];
   }
-  if (command === '/current') return ['当前会话'];
+  if (command === '/current') {
+    return ['当前会话', 'tmux 输出行数', 'tmux 自动回车', '回显 tmux 输出', '跟随上层配置'];
+  }
   if (command === '/model') {
     if (options.runtime === 'claude') return ['当前 Claude Code 模型'];
     if (options.runtime === 'kimi') return ['当前 Kimi Code 模型'];
