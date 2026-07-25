@@ -1,5 +1,5 @@
 import type { FileAttachment } from '../domain/message.js';
-import type { ContextUsageInfo, CodexToolDetail, TaskProgressInfo } from '../domain/progress.js';
+import type { ContextUsageInfo, TaskProgressInfo, ToolCallDetail } from '../domain/progress.js';
 import type {
   BridgeSessionClaudeRuntimeState,
   ClaudeExecutable,
@@ -54,9 +54,10 @@ export interface BridgeApiProvider {
 export interface StreamChatParams {
   prompt: string;
   sessionId: string;
-  runtime?: 'codex' | 'claude';
+  runtime?: 'codex' | 'claude' | 'kimi';
   codexThreadId?: string;
   claudeSessionId?: string;
+  kimiSessionId?: string;
   claudeExecutable?: ClaudeExecutable;
   claudeProvider?: ClaudeProviderChoice;
   model?: string;
@@ -88,14 +89,17 @@ export interface BridgeMirrorRecord {
   type: 'message' | 'reasoning' | 'plan_update' | 'task_started' | 'task_complete' | 'task_aborted' | 'tool_started' | 'tool_finished' | 'context_usage' | 'goal_status';
   role?: 'user' | 'assistant' | 'commentary' | 'system';
   content: string;
+  reasoningKind?: 'status' | 'thinking';
+  reasoningLabel?: string;
   userPrompt?: string;
   timestamp: string;
   turnId?: string;
   toolId?: string;
   toolName?: string;
   toolInput?: unknown;
-  toolDetail?: CodexToolDetail;
+  toolDetail?: ToolCallDetail;
   isError?: boolean;
+  errorText?: string;
   tasks?: TaskProgressInfo[];
   contextUsage?: ContextUsageInfo;
   goalStatus?: string;
@@ -119,7 +123,7 @@ export interface MirrorJsonlSourceSummary {
 }
 
 export interface MirrorJsonlSource {
-  readonly runtime: 'codex' | 'claude';
+  readonly runtime: 'codex' | 'claude' | 'kimi';
   findByThreadId(threadId: string, cwd?: string): MirrorJsonlSourceSummary | null;
   readDelta(
     filePath: string,

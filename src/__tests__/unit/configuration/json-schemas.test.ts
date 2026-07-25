@@ -3,6 +3,7 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
+import { parse } from 'smol-toml';
 
 const rootDir = process.cwd();
 const schemasDir = path.join(rootDir, 'schemas');
@@ -74,21 +75,89 @@ describe('published JSON schemas', () => {
     assert.match(channelChatsSchema, /codepilotSessionId/);
   });
 
-  it('documents runtime config grouping', () => {
-    const configSchema = fs.readFileSync(path.join(schemasDir, 'config.v1.schema.json'), 'utf-8');
-    assert.match(configSchema, /codexRuntimeDefaults/);
-    assert.match(configSchema, /claudeRuntimeDefaults/);
-    assert.match(configSchema, /bridgeControlConfig/);
-    assert.match(configSchema, /globalBridgeConfig/);
-    assert.match(configSchema, /defaultCodexProvider/);
-    const parsed = JSON.parse(configSchema) as any;
-    assert.equal(parsed.$defs.runtime.properties.defaultModel, undefined);
-    assert.equal(parsed.$defs.runtime.properties.defaultProvider, undefined);
-    assert.equal(parsed.$defs.runtime.properties.historyMessageLimit, undefined);
-    assert.deepEqual(parsed.$defs.claudeRuntimeDefaults.properties.provider.enum, ['sdk', 'pty', 'tmux']);
-    assert.deepEqual(parsed.$defs.claudeRuntimeDefaults.properties.executable.enum, ['claude', 'ccr']);
-    assert.equal(parsed.$defs.codexRuntimeDefaults.properties.executable, undefined);
-    assert.deepEqual(parsed.$defs.bridgeControlConfig.properties.defaultCodexProvider.enum, ['sdk', 'pty', 'tmux']);
+  it('documents the current config.toml v2 shape', () => {
+    const manifest = readJson(path.join(schemasDir, 'manifest.json')) as {
+      files?: Array<Record<string, unknown>>;
+    };
+    assert.deepEqual(
+      manifest.files?.find((entry) => entry.id === 'config.v2'),
+      {
+        id: 'config.v2',
+        path: 'config.toml',
+        schema: 'schemas/config.v2.schema.json',
+        kind: 'config-toml',
+        version: 2,
+        versionField: 'schema_version',
+        current: true,
+        missingFile: 'create-default',
+      },
+    );
+
+    const schema = readJson(path.join(schemasDir, 'config.v2.schema.json')) as any;
+    assert.equal(schema.properties.schema_version.const, 2);
+    assert.deepEqual(schema.$defs.runtime.properties.agent.enum, ['codex', 'claude', 'kimi']);
+    assert.deepEqual(schema.$defs.codex.properties.provider.enum, ['', 'sdk', 'pty', 'tmux']);
+    assert.deepEqual(schema.$defs.claude.properties.provider.enum, ['sdk', 'pty', 'tmux']);
+    assert.deepEqual(schema.$defs.claude.properties.executable.enum, ['claude', 'ccr']);
+    assert.equal(schema.$defs.kimi.properties.provider.const, 'tmux');
+    assert.equal(schema.$defs.channelConfig.properties.stream_status_idle_start_seconds.minimum, 0);
+    assert.equal(schema.$defs.channelConfig.properties.group_authorized.type, 'boolean');
+
+    const defaults = parse(fs.readFileSync(path.join(rootDir, 'src', 'configuration', 'defaults.toml'), 'utf-8')) as any;
+    assert.equal(defaults.schema_version, 2);
+    assert.equal(defaults.runtime.codex.skip_git_repo_check, true);
+    assert.equal(defaults.runtime.claude.idle_timeout_minutes, 0);
+    assert.equal(defaults.runtime.kimi.provider, 'tmux');
+    assert.equal(defaults.channels[0].config.stream_status_check_interval_seconds, 5);
+    assert.equal(fs.existsSync(path.join(schemasDir, 'config.v1.schema.json')), false);
+  });
+
+  it('documents current audit writes as JSONL entries', () => {
+    const manifest = readJson(path.join(schemasDir, 'manifest.json')) as {
+      files?: Array<Record<string, unknown>>;
+    };
+    assert.deepEqual(
+      manifest.files?.find((entry) => entry.id === 'data.audit.v1'),
+      {
+        id: 'data.audit.v1',
+        path: 'data/audit.jsonl',
+        schema: 'schemas/data/audit.v1.schema.json',
+        kind: 'store-jsonl',
+        version: 1,
+        versionField: null,
+        current: true,
+        missingFile: 'empty-file',
+      },
+    );
+    const schema = readJson(path.join(schemasDir, 'data', 'audit.v1.schema.json')) as any;
+    assert.equal(schema.type, 'object');
+    assert.equal(schema.items, undefined);
+    assert.deepEqual(
+      schema.required,
+      ['id', 'createdAt', 'channelType', 'chatId', 'direction', 'messageId', 'summary'],
+    );
+  });
+
+  it('documents the cached daily version check state', () => {
+    const manifest = readJson(path.join(schemasDir, 'manifest.json')) as {
+      files?: Array<{ id?: string; path?: string; schema?: string }>;
+    };
+    assert.deepEqual(
+      manifest.files?.find((entry) => entry.id === 'version-check.v1'),
+      {
+        id: 'version-check.v1',
+        path: 'version-check.json',
+        schema: 'schemas/version-check.v1.schema.json',
+        kind: 'state',
+        version: 1,
+        versionField: null,
+        current: true,
+        missingFile: 'empty-object',
+      },
+    );
+    const schema = readJson(path.join(schemasDir, 'version-check.v1.schema.json')) as any;
+    assert.deepEqual(schema.required, ['latestVersion', 'ignoredUntilVersion', 'lastCheckedDate']);
+    assert.equal(schema.additionalProperties, false);
   });
 
   it('documents the BridgeSession runtime storage schema', () => {
@@ -97,14 +166,22 @@ describe('published JSON schemas', () => {
     assert.equal(bridgeSession.properties.codex_thread_id, undefined);
     assert.equal(bridgeSession.properties.model, undefined);
     assert.equal(bridgeSession.properties.runtime.$ref, '#/$defs/sessionRuntime');
-    assert.equal(sessionsSchema.$defs.sessionRuntime.oneOf.length, 2);
+    assert.equal(sessionsSchema.$defs.sessionRuntime.oneOf.length, 3);
     assert.equal(sessionsSchema.$defs.codexSessionRuntime.properties.codex.properties.threadId.type, 'string');
     assert.equal(sessionsSchema.$defs.codexSessionRuntime.properties.codex.properties.model.type, 'string');
     assert.deepEqual(sessionsSchema.$defs.claudeSessionRuntime.required, ['activeRuntime']);
     assert.equal(sessionsSchema.$defs.claudeSessionRuntime.properties.activeRuntime.const, 'claude');
     assert.deepEqual(sessionsSchema.$defs.claudeSessionRuntime.properties.codex, { not: {} });
     assert.deepEqual(sessionsSchema.$defs.claudeSessionRuntime.properties.claude.properties.provider.enum, ['sdk', 'pty', 'tmux']);
+    assert.deepEqual(sessionsSchema.$defs.kimiSessionRuntime.required, ['activeRuntime']);
+    assert.equal(sessionsSchema.$defs.kimiSessionRuntime.properties.activeRuntime.const, 'kimi');
+    assert.deepEqual(sessionsSchema.$defs.kimiSessionRuntime.properties.codex, { not: {} });
+    assert.deepEqual(sessionsSchema.$defs.kimiSessionRuntime.properties.claude, { not: {} });
+    assert.deepEqual(sessionsSchema.$defs.kimiSessionRuntime.properties.kimi.properties.provider.enum, ['tmux']);
     assert.equal(sessionsSchema.$defs.sessionRuntimeGeneral.properties.tmuxSessionName.type, 'string');
     assert.ok(JSON.stringify(sessionsSchema.$defs.noRetiredRuntimeTopLevelFields).includes('codex_thread_id'));
+
+    const channelChatsSchema = readJson(path.join(schemasDir, 'data', 'channel-chats.v1.schema.json')) as any;
+    assert.equal(channelChatsSchema.$defs.channelChat.properties.runtimeBridgeSessionIds.properties.kimi.type, 'string');
   });
 });

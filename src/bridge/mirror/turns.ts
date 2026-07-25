@@ -1,7 +1,7 @@
 import type { ContextUsageInfo } from '../../shared/progress/context-usage.js';
 import type { TaskProgressInfo, ToolCallInfo } from '../../domain/index.js';
 import { buildMirrorStreamKey, formatMirrorUserText } from './formatters.js';
-import { codexTurnEventFromMirrorRecord } from '../../runtime/codex/turn-events.js';
+import { toolCallEventFromMirrorRecord } from '../../shared/progress/tool-events.js';
 import type { BridgeMirrorRecord } from '../../runtime/contracts.js';
 import {
   applyUnifiedTurnContextUsage,
@@ -10,6 +10,7 @@ import {
   applyUnifiedTurnHistorySystemText,
   applyUnifiedTurnHistoryUserText,
   applyUnifiedTurnStatusNote,
+  applyUnifiedTurnThinkingNote,
   applyUnifiedTurnTasks,
   applyUnifiedTurnToolEvent,
   createUnifiedTurnProgressState,
@@ -54,7 +55,9 @@ export interface FinalizedBridgeMirrorTurn {
   goalStatus?: { status: string; objective: string } | null;
   signature: string;
   timestamp: string;
-  status: 'completed' | 'interrupted';
+  startedAt?: string;
+  status: 'completed' | 'interrupted' | 'error';
+  errorText?: string;
   timedOut?: boolean;
 }
 
@@ -78,6 +81,7 @@ export interface PendingMirrorDeliveryStateHolder {
 }
 
 export interface MirrorTurnHooks<TSubscription extends MirrorTurnStateHolder = MirrorTurnStateHolder> {
+  onTurnStarted?: (subscription: TSubscription, turnState: BridgeMirrorTurnState) => void;
   onStreamText?: (subscription: TSubscription, turnState: BridgeMirrorTurnState) => void;
   onStatusProgress?: (subscription: TSubscription, turnState: BridgeMirrorTurnState) => void;
   onTaskProgress?: (subscription: TSubscription, turnState: BridgeMirrorTurnState) => void;
@@ -274,7 +278,7 @@ function buildEmptyGoalLoopWarningTurn(
     `| 最近 turn | ${turnState.turnId || 'unknown'} |`,
     compactObjective ? `| Goal | ${compactObjective.replace(/\|/g, '\\|')} |` : null,
     '',
-    '当前任务可能因为环境、API 或 Codex goal runner 状态异常陷入无限重启。已停止为这些空 goal turn 创建镜像流式卡片；请检查底层 JSONL、API 可用性和 goal runner 状态。',
+    '当前任务可能因为环境、API 或底层 goal runner 状态异常陷入无限重启。已停止为这些空 goal turn 创建镜像流式卡片；请检查底层 JSONL、API 可用性和 goal runner 状态。',
   ].filter((line): line is string => line !== null).join('\n');
 
   return {
@@ -323,7 +327,7 @@ export function finalizeMirrorTurn<TSubscription extends MirrorTurnStateHolder>(
   subscription: TSubscription,
   signature: string,
   timestamp: string,
-  status: 'completed' | 'interrupted',
+  status: 'completed' | 'interrupted' | 'error',
   preferredText?: string,
 ): FinalizedBridgeMirrorTurn | null {
   const pendingTurn = subscription.pendingTurn;
@@ -354,6 +358,7 @@ export function finalizeMirrorTurn<TSubscription extends MirrorTurnStateHolder>(
     ...(pendingTurn.goalStatus ? { goalStatus: pendingTurn.goalStatus } : {}),
     signature,
     timestamp: timestamp || pendingTurn.lastActivityAt || nowIso(),
+    startedAt: pendingTurn.startedAt,
     status,
     ...(signature.startsWith('timeout:') ? { timedOut: true } : {}),
   };
@@ -388,12 +393,22 @@ export function consumeMirrorRecords<TSubscription extends MirrorTurnStateHolder
           subscription.pendingTurn.lastActivityAt = record.timestamp;
         }
       }
+      if (subscription.pendingTurn) {
+        hooks.onTurnStarted?.(subscription, subscription.pendingTurn);
+      }
       continue;
     }
 
     if (record.type === 'task_complete') {
       ensureMirrorTurnState(subscription, record);
-      const completed = finalizeMirrorTurn(subscription, record.signature, record.timestamp, 'completed', record.content);
+      const completed = finalizeMirrorTurn(
+        subscription,
+        record.signature,
+        record.timestamp,
+        record.isError ? 'error' : 'completed',
+        record.content || record.errorText,
+      );
+      if (completed && record.errorText) completed.errorText = record.errorText;
       if (completed) finalized.push(completed);
       continue;
     }
@@ -486,6 +501,13 @@ export function consumeMirrorRecords<TSubscription extends MirrorTurnStateHolder
       const pendingTurn = ensureMirrorTurnState(subscription, record);
       const text = record.content.trim();
       if (!text) continue;
+      if (record.reasoningKind === 'thinking') {
+        applyUnifiedTurnThinkingNote(pendingTurn, text, mirrorTimestampMs(record.timestamp));
+        applyUnifiedTurnStatusNote(pendingTurn, record.reasoningLabel || '思考', mirrorTimestampMs(record.timestamp));
+        pendingTurn.lastActivityAt = record.timestamp || nowIso();
+        hooks.onStatusProgress?.(subscription, pendingTurn);
+        continue;
+      }
       applyUnifiedTurnStatusNote(pendingTurn, text, mirrorTimestampMs(record.timestamp));
       pendingTurn.lastActivityAt = record.timestamp || nowIso();
       hooks.onStatusProgress?.(subscription, pendingTurn);
@@ -502,7 +524,7 @@ export function consumeMirrorRecords<TSubscription extends MirrorTurnStateHolder
 
     if (record.type === 'tool_started') {
       const pendingTurn = ensureMirrorTurnState(subscription, record);
-      const event = codexTurnEventFromMirrorRecord(record);
+      const event = toolCallEventFromMirrorRecord(record);
       if (event) {
         applyUnifiedTurnToolEvent(pendingTurn, event, {
           timestampMs: mirrorTimestampMs(record.timestamp),
@@ -515,7 +537,7 @@ export function consumeMirrorRecords<TSubscription extends MirrorTurnStateHolder
 
     if (record.type === 'tool_finished') {
       const pendingTurn = ensureMirrorTurnState(subscription, record);
-      const event = codexTurnEventFromMirrorRecord(record);
+      const event = toolCallEventFromMirrorRecord(record);
       if (event) {
         applyUnifiedTurnToolEvent(pendingTurn, event, {
           timestampMs: mirrorTimestampMs(record.timestamp),

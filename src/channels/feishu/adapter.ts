@@ -10,9 +10,8 @@
  * - Other text → post (msg_type: 'post') with md tag
  * - Permission prompts → interactive card with action buttons
  *
- * card.action.trigger events are handled via EventDispatcher (Openclaw pattern):
- * button clicks are converted to synthetic text messages and routed through
- * the normal /perm command processing pipeline.
+ * card.action.trigger events are handled via EventDispatcher and forwarded as
+ * structured callbacks.
  */
 
 import crypto from 'crypto';
@@ -39,6 +38,7 @@ import {
   feishuSiteToApiBaseUrl,
   normalizeFeishuSite,
 } from './site.js';
+import { fetchFeishuBotIdentity } from './bot-identity.js';
 import groupAuthorizationImageDataUrl from './assets/group-authorization-image.js';
 import {
   BaseChannelAdapter,
@@ -50,6 +50,7 @@ import {
   type StructuredStreamingUiMetadata,
   type StructuredStreamingUiSnapshot,
 } from '../contracts.js';
+import { enqueueDelivery } from '../delivery/deliver.js';
 import { getBridgeContext } from '../../bridge/host/context.js';
 import { createConfigService } from '../../configuration/service.js';
 import {
@@ -64,7 +65,6 @@ import {
   buildStreamingTextContent,
   buildStreamingTextLayoutSignature,
   buildStreamingHistoryElements,
-  buildToolProgressElements,
   buildStreamingHistoryElementsFromItems,
   buildCardActionElements,
   buildMetadataTagElements,
@@ -74,6 +74,11 @@ import {
   type FeishuCardActionButton,
 } from './markdown.js';
 import { buildFencedCodeBlock } from '../../shared/markdown/fence.js';
+import {
+  formatFooterClockTime,
+  formatFooterDuration,
+  joinFooterParts,
+} from '../../shared/progress/footer.js';
 import {
   buildLargeFileUploadConfirmationCard,
   formatLargeFileUploadSize,
@@ -110,6 +115,7 @@ interface FeishuCardState {
   toolCalls: ToolCallInfo[];
   historyItems: StreamingHistoryItem[];
   historyItemOffset: number;
+  historyToolCallOffset: number;
   toolCallOffset: number;
   historyDriven: boolean;
   thinking: boolean;
@@ -117,10 +123,14 @@ interface FeishuCardState {
   pendingTasksText: string | null;
   pendingStatusText: string | null;
   terminalContextUsageText: string;
+  terminalLastResponseText: string;
+  terminalLastIoText: string;
   renderedText: string | null;
   renderedTextLayoutSignature: string;
   renderedTasksText: string | null;
   renderedHistoryElementIds: string[];
+  /** Number of canonical history items represented by the current card shadow. */
+  renderedHistoryItemCount: number;
   renderedHistoryElementJson: Record<string, string>;
   renderedToolSnapshots: Record<string, string>;
   renderedToolEventCounts: Record<string, number>;
@@ -190,6 +200,8 @@ interface StreamingHistoryRenderState {
   elementIds: string[];
   elementJson: Record<string, string>;
   elementsById: Record<string, Record<string, unknown>>;
+  toolSnapshots: Record<string, string>;
+  toolEventCounts: Record<string, number>;
 }
 
 interface StreamingHistoryAppendOperation {
@@ -285,6 +297,7 @@ interface StreamingCardRenderResult {
   body: Record<string, unknown>;
   componentCount: number;
   historyItemOffset: number;
+  historyToolCallOffset: number;
   toolCallOffset: number;
   historyItems?: StreamingHistoryItem[];
   tools: ToolCallInfo[];
@@ -298,6 +311,7 @@ interface StreamingCardPayloadStats {
 
 interface StreamingCardRolloverOffsets {
   historyItemOffset: number;
+  historyToolCallOffset: number;
   toolCallOffset: number;
   reason: string;
   componentCount?: number;
@@ -315,7 +329,10 @@ interface StreamingCardInitialState {
   metadata: StructuredStreamingUiMetadata;
   actionRows: FeishuCardActionButton[][];
   terminalContextUsageText: string;
+  terminalLastResponseText: string;
+  terminalLastIoText: string;
   historyItemOffset: number;
+  historyToolCallOffset: number;
   toolCallOffset: number;
   continuationIndex: number;
   startTime: number;
@@ -815,6 +832,143 @@ function collectCardJsonMarkdownTexts(value: unknown, texts: string[] = []): str
   return texts;
 }
 
+interface RealE2eToolPanelFenceSummary {
+  language: string;
+  chars: number;
+  lines: number;
+  closed: boolean;
+}
+
+interface RealE2eToolPanelSummary {
+  elementId: string;
+  title: string;
+  detailChars: number;
+  detailLines: number;
+  nestedPanelCount: number;
+  fences: RealE2eToolPanelFenceSummary[];
+  forbiddenEnvelopeTexts: string[];
+}
+
+interface RealE2eToolGroupSummary {
+  elementId: string;
+  title: string;
+  innerPanelCount: number;
+}
+
+function collectFencedBlockSummaries(markdown: string): RealE2eToolPanelFenceSummary[] {
+  const summaries: RealE2eToolPanelFenceSummary[] = [];
+  const lines = markdown.replace(/\r\n/g, '\n').split('\n');
+  let active: { language: string; content: string[] } | null = null;
+  for (const line of lines) {
+    const opener: RegExpMatchArray | null = active === null ? line.match(/^```([^`]*)$/) : null;
+    if (opener) {
+      active = { language: opener[1]!.trim(), content: [] };
+      continue;
+    }
+    if (active && /^```\s*$/.test(line)) {
+      const content = active.content.join('\n');
+      summaries.push({
+        language: active.language,
+        chars: Array.from(content).length,
+        lines: active.content.length,
+        closed: true,
+      });
+      active = null;
+      continue;
+    }
+    if (active) active.content.push(line);
+  }
+  if (active) {
+    const content = active.content.join('\n');
+    summaries.push({
+      language: active.language,
+      chars: Array.from(content).length,
+      lines: active.content.length,
+      closed: false,
+    });
+  }
+  return summaries;
+}
+
+function countNestedCollapsiblePanels(value: unknown): number {
+  if (!value || typeof value !== 'object') return 0;
+  if (Array.isArray(value)) {
+    let count = 0;
+    for (const child of value) count += countNestedCollapsiblePanels(child);
+    return count;
+  }
+  const record = value as Record<string, unknown>;
+  let count = record.tag === 'collapsible_panel' ? 1 : 0;
+  for (const child of Object.values(record)) count += countNestedCollapsiblePanels(child);
+  return count;
+}
+
+function collectRealE2eToolPanelSummaries(value: unknown, summaries: RealE2eToolPanelSummary[] = []): RealE2eToolPanelSummary[] {
+  if (!value || typeof value !== 'object') return summaries;
+  if (Array.isArray(value)) {
+    for (const child of value) collectRealE2eToolPanelSummaries(child, summaries);
+    return summaries;
+  }
+  const record = value as Record<string, unknown>;
+  const elementId = typeof record.element_id === 'string' ? record.element_id : '';
+  if (record.tag === 'collapsible_panel' && /^(?:stream_tool_\d+|st_\d+_t_\d+)$/.test(elementId)) {
+    const header = record.header && typeof record.header === 'object'
+      ? record.header as Record<string, unknown>
+      : {};
+    const titleValue = header.title && typeof header.title === 'object'
+      ? (header.title as Record<string, unknown>).content
+      : '';
+    const title = typeof titleValue === 'string' ? titleValue : '';
+    const isToolGroup = /^stream_tool_\d+$/.test(elementId) && /^工具调用\s*·/u.test(title);
+    if (!isToolGroup) {
+      const detailMarkdown = collectCardJsonMarkdownTexts(record.elements).join('\n\n');
+      const envelopeCandidates = ['Script completed', 'Script running', 'Script failed', 'Wall time', 'Chunk ID', 'Original token count', 'Success', 'Completed', '长输出'];
+      summaries.push({
+        elementId,
+        title,
+        detailChars: Array.from(detailMarkdown).length,
+        detailLines: detailMarkdown ? detailMarkdown.split('\n').length : 0,
+        nestedPanelCount: countNestedCollapsiblePanels(record.elements),
+        fences: collectFencedBlockSummaries(detailMarkdown),
+        forbiddenEnvelopeTexts: envelopeCandidates.filter((candidate) => detailMarkdown.includes(candidate)),
+      });
+    }
+  }
+  for (const child of Object.values(record)) collectRealE2eToolPanelSummaries(child, summaries);
+  return summaries;
+}
+
+function collectRealE2eToolGroupSummaries(value: unknown, summaries: RealE2eToolGroupSummary[] = []): RealE2eToolGroupSummary[] {
+  if (!value || typeof value !== 'object') return summaries;
+  if (Array.isArray(value)) {
+    for (const child of value) collectRealE2eToolGroupSummaries(child, summaries);
+    return summaries;
+  }
+  const record = value as Record<string, unknown>;
+  const elementId = typeof record.element_id === 'string' ? record.element_id : '';
+  if (record.tag === 'collapsible_panel' && /^stream_tool_\d+$/.test(elementId)) {
+    const header = record.header && typeof record.header === 'object'
+      ? record.header as Record<string, unknown>
+      : {};
+    const titleValue = header.title && typeof header.title === 'object'
+      ? (header.title as Record<string, unknown>).content
+      : '';
+    const title = typeof titleValue === 'string' ? titleValue : '';
+    if (/^工具调用\s*·/u.test(title)) {
+      const children = Array.isArray(record.elements) ? record.elements : [];
+      summaries.push({
+        elementId,
+        title,
+        innerPanelCount: children.filter((child) => (
+          child && typeof child === 'object' && /^st_\d+_t_\d+$/.test(String((child as Record<string, unknown>).element_id || ''))
+        )).length,
+      });
+    }
+  }
+  for (const child of Object.values(record)) collectRealE2eToolGroupSummaries(child, summaries);
+  return summaries;
+}
+
 function emitRealE2eStreamCardCheckpoint(params: {
   kind: 'create' | 'refresh' | 'element' | 'final';
   streamKey: string;
@@ -832,6 +986,8 @@ function emitRealE2eStreamCardCheckpoint(params: {
     const markdownTexts = (params.markdownTexts || (parsed ? collectCardJsonMarkdownTexts(parsed) : []))
       .map((text) => truncateForCardLog(text, 1000));
     const cardSummary = params.cardJson ? summarizeCardJsonForLog(params.cardJson) : {};
+    const toolPanels = parsed ? collectRealE2eToolPanelSummaries(parsed) : [];
+    const toolGroups = parsed ? collectRealE2eToolGroupSummaries(parsed) : [];
     console.log(`${REAL_E2E_STREAM_CARD_CHECKPOINT_PREFIX}${JSON.stringify({
       kind: params.kind,
       streamKey: params.streamKey,
@@ -842,6 +998,8 @@ function emitRealE2eStreamCardCheckpoint(params: {
       ...(typeof params.sequence === 'number' ? { sequence: params.sequence } : {}),
       ...cardSummary,
       markdownTexts,
+      toolGroups,
+      toolPanels,
     })}`);
   } catch (err) {
     console.warn('[feishu-adapter] Failed to emit real E2E stream card checkpoint:', err instanceof Error ? err.message : err);
@@ -920,6 +1078,13 @@ function isFeishuCardPayloadLimitError(error: unknown): boolean {
   if (code === 200850 || code === '200850') return true;
   const message = error instanceof Error ? error.message : String(error || '');
   return /(?:code=|code:\s*)200850\b/.test(message);
+}
+
+function isFeishuCardInvalidError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error || '');
+  return /\bcardid is invalid\b/i.test(message)
+    || /\bcard[_\s-]?id\b.*\binvalid\b/i.test(message)
+    || /\binvalid\b.*\bcard[_\s-]?id\b/i.test(message);
 }
 
 function countCardMarkdownElements(value: unknown): number {
@@ -1027,16 +1192,18 @@ function buildStreamingCardRender(params: {
   metadata?: StructuredStreamingUiMetadata;
   historyItems?: StreamingHistoryItem[];
   historyItemOffset?: number;
+  historyToolCallOffset?: number;
   toolCallOffset?: number;
   maxComponents?: number;
 }): StreamingCardRenderResult {
   let historyItemOffset = Math.max(0, params.historyItemOffset || 0);
+  let historyToolCallOffset = Math.max(0, params.historyToolCallOffset || 0);
   let toolCallOffset = Math.max(0, params.toolCallOffset || 0);
   const maxComponents = Math.max(1, params.maxComponents || STREAMING_CARD_COMPONENT_LIMIT);
 
   while (true) {
     const visibleHistoryItems = params.historyItems
-      ? params.historyItems.slice(historyItemOffset)
+      ? sliceStreamingHistoryItems(params.historyItems, historyItemOffset, historyToolCallOffset)
       : undefined;
     const visibleTools = params.tools.slice(toolCallOffset);
     const body = buildStreamingCardBody(
@@ -1055,6 +1222,7 @@ function buildStreamingCardRender(params: {
         body,
         componentCount,
         historyItemOffset,
+        historyToolCallOffset,
         toolCallOffset,
         historyItems: visibleHistoryItems,
         tools: visibleTools,
@@ -1063,6 +1231,7 @@ function buildStreamingCardRender(params: {
 
     if (params.historyItems && historyItemOffset < Math.max(0, params.historyItems.length - 1)) {
       historyItemOffset += 1;
+      historyToolCallOffset = 0;
       continue;
     }
     if (!params.historyItems && toolCallOffset < params.tools.length) {
@@ -1074,6 +1243,7 @@ function buildStreamingCardRender(params: {
       body,
       componentCount,
       historyItemOffset,
+      historyToolCallOffset,
       toolCallOffset,
       historyItems: visibleHistoryItems,
       tools: visibleTools,
@@ -1082,92 +1252,173 @@ function buildStreamingCardRender(params: {
 }
 
 function extractTerminalContextUsage(statusText: string | null | undefined): string {
-  const text = (statusText || '').trim();
-  if (!text) return '';
-  const pattern = /(?:^|[，,\n])\s*((?:\d+(?:\.\d+)?k\(\d+%\))(?:\s*·\s*)?(?:[↑↓]\d+(?:\.\d+)?k(?:\s+[↑↓]\d+(?:\.\d+)?k)?)?|(?:[↑↓]\d+(?:\.\d+)?k(?:\s+[↑↓]\d+(?:\.\d+)?k)?))(?=$|[，,\n])/g;
-  const matches = [...text.matchAll(pattern)];
-  return matches.at(-1)?.[1]?.trim() || '';
+  const parts = (statusText || '').split(/\s*·\s*|[，,\n]/).map((part) => part.trim()).filter(Boolean);
+  const current = parts.find((part) => /^Context\s+\d+(?:\.\d+)?k\(\d+%\)$/u.test(part));
+  if (current) return current;
+  const legacy = parts.find((part) => /^\d+(?:\.\d+)?k\(\d+%\)$/u.test(part));
+  return legacy ? `Context ${legacy}` : '';
+}
+
+function extractTerminalLastResponse(statusText: string | null | undefined): string {
+  const parts = (statusText || '').split(/\s*·\s*|[\n]/).map((part) => part.trim()).filter(Boolean);
+  const value = parts.find((part) => /^上次响应(?:距今)?\s+/u.test(part));
+  return value?.replace(/^上次响应距今\s+/u, '上次响应 ') || '';
+}
+
+function extractTerminalLastIo(statusText: string | null | undefined): string {
+  const parts = (statusText || '').split(/\s*·\s*|[，,\n]/).map((part) => part.trim()).filter(Boolean);
+  return parts.find((part) => /^[↑↓]\d+(?:\.\d+)?k(?:\s+[↑↓]\d+(?:\.\d+)?k)?$/u.test(part)) || '';
 }
 
 function resolveTerminalContextUsage(state: Pick<FeishuCardState, 'terminalContextUsageText' | 'pendingStatusText'>): string {
   return state.terminalContextUsageText || extractTerminalContextUsage(state.pendingStatusText);
 }
 
-function toolSnapshotSignature(tool: ToolCallInfo): string {
-  return JSON.stringify(tool);
+function resolveTerminalLastResponse(state: Pick<FeishuCardState, 'terminalLastResponseText' | 'pendingStatusText'>): string {
+  return state.terminalLastResponseText || extractTerminalLastResponse(state.pendingStatusText);
 }
 
-function collectMarkdownContents(element: Record<string, unknown>): string[] {
-  const contents: string[] = [];
-  if (element.tag === 'markdown' && typeof element.content === 'string' && element.content.trim()) {
-    contents.push(element.content.trim());
+function resolveTerminalLastIo(state: Pick<FeishuCardState, 'terminalLastIoText' | 'pendingStatusText'>): string {
+  return state.terminalLastIoText || extractTerminalLastIo(state.pendingStatusText);
+}
+
+function extractTerminalErrorStatus(statusText: string | null | undefined): string {
+  for (const line of (statusText || '').split(/\r?\n/)) {
+    const match = line.trim().match(/^(?:当前步骤：)?(❌\s*.+)$/u);
+    if (match?.[1]) return match[1].trim();
   }
-  const children = Array.isArray(element.elements) ? element.elements as Array<Record<string, unknown>> : [];
-  for (const child of children) {
-    contents.push(...collectMarkdownContents(child));
-  }
-  return contents;
+  return '';
 }
 
-function buildStreamingToolEventPanelElement(
-  panel: Record<string, unknown>,
-  elementId: string,
-  eventIndex: number,
-): Record<string, unknown> {
-  const header = panel.header as { title?: { content?: unknown } } | undefined;
-  const title = typeof header?.title?.content === 'string' ? header.title.content : `工具 ${eventIndex}`;
-  const details = collectMarkdownContents(panel).join('\n\n').trim();
-  return {
-    tag: 'collapsible_panel',
-    expanded: false,
-    header: {
-      title: { tag: 'markdown', content: title },
-    },
-    border: { color: 'grey', corner_radius: '5px' },
-    elements: [{
-      tag: 'markdown',
-      content: preprocessFeishuMarkdown(details || '工具状态已更新。'),
-      text_align: 'left',
-      text_size: 'notation',
-    }],
-    element_id: `${elementId}_e${eventIndex}`,
-  };
-}
-
-function buildStreamingToolPaneElement(
-  panel: Record<string, unknown>,
-  elementId: string,
-): Record<string, unknown> {
-  return {
-    ...panel,
-    elements: [buildStreamingToolEventPanelElement(panel, elementId, 1)],
-    element_id: elementId,
-  };
-}
-
-function buildStreamingToolPaneElements(tools: ToolCallInfo[]): Array<Record<string, unknown>> {
-  return buildToolProgressElements(tools, { maxItems: null }).map((panel, index) =>
-    buildStreamingToolPaneElement(panel, `stream_tool_${index + 1}`));
+function toolGroupSnapshotSignature(tools: ToolCallInfo[]): string {
+  return JSON.stringify(tools);
 }
 
 function buildRenderedToolSnapshots(tools: ToolCallInfo[]): Record<string, string> {
-  const snapshots: Record<string, string> = {};
-  tools.forEach((tool, index) => {
-    snapshots[`stream_tool_${index + 1}`] = toolSnapshotSignature(tool);
-  });
-  return snapshots;
+  return tools.length > 0 ? { stream_tool_1: toolGroupSnapshotSignature(tools) } : {};
 }
 
 function buildRenderedToolEventCounts(tools: ToolCallInfo[]): Record<string, number> {
-  const eventCounts: Record<string, number> = {};
-  tools.forEach((_tool, index) => {
-    eventCounts[`stream_tool_${index + 1}`] = 1;
-  });
-  return eventCounts;
+  return tools.length > 0 ? { stream_tool_1: tools.length } : {};
+}
+
+function buildRenderedHistoryToolSnapshots(items: StreamingHistoryItem[] | undefined): Record<string, string> {
+  const snapshots: Record<string, string> = {};
+  let panelIndex = 0;
+  for (const item of items || []) {
+    if (item.type !== 'tool_panel') continue;
+    panelIndex += 1;
+    snapshots[`stream_tool_${panelIndex}`] = toolGroupSnapshotSignature(item.tools);
+  }
+  return snapshots;
+}
+
+function buildRenderedHistoryToolEventCounts(items: StreamingHistoryItem[] | undefined): Record<string, number> {
+  const counts: Record<string, number> = {};
+  let panelIndex = 0;
+  for (const item of items || []) {
+    if (item.type !== 'tool_panel') continue;
+    panelIndex += 1;
+    counts[`stream_tool_${panelIndex}`] = item.tools.length;
+  }
+  return counts;
+}
+
+function renderedStreamingToolCount(state: FeishuCardState): number {
+  return state.renderedToolEventCounts.stream_tool_1 || 0;
+}
+
+function sliceStreamingHistoryItems(
+  items: StreamingHistoryItem[],
+  historyItemOffset: number,
+  historyToolCallOffset: number,
+): StreamingHistoryItem[] {
+  const visible = items.slice(Math.max(0, historyItemOffset)).map((item) => (
+    item.type === 'tool_panel' ? { ...item, tools: item.tools.slice() } : { ...item }
+  ));
+  const first = visible[0];
+  if (first?.type === 'tool_panel' && historyToolCallOffset > 0) {
+    first.tools = first.tools.slice(historyToolCallOffset);
+  }
+  return visible;
 }
 
 function visibleStreamingHistoryItems(state: FeishuCardState): StreamingHistoryItem[] | undefined {
-  return state.historyDriven ? state.historyItems.slice(state.historyItemOffset) : undefined;
+  return state.historyDriven
+    ? sliceStreamingHistoryItems(state.historyItems, state.historyItemOffset, state.historyToolCallOffset)
+    : undefined;
+}
+
+function renderedHistoryContinuationCursor(
+  state: FeishuCardState,
+): { historyItemOffset: number; historyToolCallOffset: number } {
+  const lastItemOffset = Math.max(0, state.historyItems.length - 1);
+  const renderedItemCount = Math.max(1, state.renderedHistoryItemCount);
+  const lastRenderedItemOffset = Math.min(
+    state.historyItemOffset + renderedItemCount - 1,
+    lastItemOffset,
+  );
+  const nextItemOffset = Math.min(
+    state.historyItemOffset + renderedItemCount,
+    lastItemOffset,
+  );
+  const nextItem = state.historyItems[nextItemOffset];
+  if (nextItemOffset !== lastRenderedItemOffset || nextItem?.type !== 'tool_panel') {
+    return { historyItemOffset: nextItemOffset, historyToolCallOffset: 0 };
+  }
+
+  const panelIndex = state.historyItems
+    .slice(state.historyItemOffset, nextItemOffset + 1)
+    .filter((item) => item.type === 'tool_panel')
+    .length;
+  const renderedVisibleToolCount = state.renderedToolEventCounts[`stream_tool_${panelIndex}`] || 0;
+  const currentToolOffset = nextItemOffset === state.historyItemOffset
+    ? state.historyToolCallOffset
+    : 0;
+  const nextToolOffset = Math.min(
+    currentToolOffset + Math.max(1, renderedVisibleToolCount),
+    Math.max(0, nextItem.tools.length - 1),
+  );
+  return {
+    historyItemOffset: nextItemOffset,
+    historyToolCallOffset: nextToolOffset,
+  };
+}
+
+function historyCursorAdvanced(
+  state: FeishuCardState,
+  cursor: { historyItemOffset: number; historyToolCallOffset: number },
+): boolean {
+  return cursor.historyItemOffset > state.historyItemOffset
+    || (
+      cursor.historyItemOffset === state.historyItemOffset
+      && cursor.historyToolCallOffset > state.historyToolCallOffset
+    );
+}
+
+function streamingHistoryItemsBeforeCursor(
+  state: FeishuCardState,
+  cursor: { historyItemOffset: number; historyToolCallOffset: number },
+): StreamingHistoryItem[] {
+  const result: StreamingHistoryItem[] = [];
+  for (let index = state.historyItemOffset; index <= cursor.historyItemOffset; index += 1) {
+    const item = state.historyItems[index];
+    if (!item) break;
+    const startToolOffset = index === state.historyItemOffset ? state.historyToolCallOffset : 0;
+    if (index < cursor.historyItemOffset) {
+      result.push(item.type === 'tool_panel'
+        ? { ...item, tools: item.tools.slice(startToolOffset) }
+        : { ...item });
+      continue;
+    }
+    if (item.type === 'tool_panel' && cursor.historyToolCallOffset > startToolOffset) {
+      result.push({
+        ...item,
+        tools: item.tools.slice(startToolOffset, cursor.historyToolCallOffset),
+      });
+    }
+  }
+  return result;
 }
 
 function visibleStreamingToolCalls(state: FeishuCardState): ToolCallInfo[] {
@@ -1179,15 +1430,7 @@ function buildStreamingRunningHistoryElements(
   tools: ToolCallInfo[] = [],
   elementId = 'streaming_content',
 ): Array<Record<string, unknown>> {
-  const elements = buildStreamingHistoryElements(content, [], elementId);
-  const historyPanel = elements.find((element) => element.element_id === 'stream_history');
-  if (historyPanel) {
-    const historyChildren = Array.isArray(historyPanel.elements)
-      ? historyPanel.elements as Array<Record<string, unknown>>
-      : [];
-    historyPanel.elements = [...historyChildren, ...buildStreamingToolPaneElements(tools)];
-  }
-  return elements;
+  return buildStreamingHistoryElements(content, tools, elementId);
 }
 
 function buildStreamingHistoryRenderState(
@@ -1213,7 +1456,13 @@ function buildStreamingHistoryRenderState(
     elementJson[elementIdValue] = JSON.stringify(element);
     elementsById[elementIdValue] = element;
   }
-  return { elementIds, elementJson, elementsById };
+  return {
+    elementIds,
+    elementJson,
+    elementsById,
+    toolSnapshots: historyItems ? buildRenderedHistoryToolSnapshots(historyItems) : {},
+    toolEventCounts: historyItems ? buildRenderedHistoryToolEventCounts(historyItems) : {},
+  };
 }
 
 function buildStreamingToolAppendOperations(
@@ -1221,31 +1470,30 @@ function buildStreamingToolAppendOperations(
   desired: StreamingHistoryRenderState,
   tools: ToolCallInfo[],
 ): StreamingHistoryAppendPlan {
-  const operations: StreamingHistoryAppendOperation[] = [];
-  let requiresFullRefresh = false;
-  tools.forEach((tool, index) => {
-    if (requiresFullRefresh) return;
-    const elementId = `stream_tool_${index + 1}`;
-    const element = desired.elementsById[elementId];
-    const elementJson = desired.elementJson[elementId];
-    if (!element || !elementJson) return;
-    const snapshot = toolSnapshotSignature(tool);
-    if (!state.renderedToolSnapshots[elementId]) {
-      operations.push({
+  if (tools.length === 0) return { operations: [], requiresFullRefresh: false };
+  const elementId = 'stream_tool_1';
+  const element = desired.elementsById[elementId];
+  const elementJson = desired.elementJson[elementId];
+  if (!element || !elementJson) return { operations: [], requiresFullRefresh: true };
+  const snapshot = toolGroupSnapshotSignature(tools);
+  if (!state.renderedToolSnapshots[elementId]) {
+    return {
+      operations: [{
         kind: 'create',
         elementId,
         targetElementId: 'stream_history',
         element,
         elementJson,
         snapshot,
-        eventCount: 1,
-      });
-      return;
-    }
-    if (state.renderedToolSnapshots[elementId] === snapshot) return;
-    requiresFullRefresh = true;
-  });
-  return { operations: requiresFullRefresh ? [] : operations, requiresFullRefresh };
+        eventCount: tools.length,
+      }],
+      requiresFullRefresh: false,
+    };
+  }
+  return {
+    operations: [],
+    requiresFullRefresh: state.renderedToolSnapshots[elementId] !== snapshot,
+  };
 }
 
 function isToolPanelElementId(elementId: string): boolean {
@@ -1271,12 +1519,16 @@ function buildStreamingHistoryAppendOperations(
     if (!element || !elementJson) continue;
 
     if (!state.renderedHistoryElementJson[elementId]) {
+      const snapshot = desired.toolSnapshots[elementId];
+      const eventCount = desired.toolEventCounts[elementId];
       operations.push({
         kind: 'create',
         elementId,
         targetElementId: 'stream_history',
         element,
         elementJson,
+        ...(snapshot ? { snapshot } : {}),
+        ...(eventCount ? { eventCount } : {}),
       });
       continue;
     }
@@ -1953,6 +2205,8 @@ export class FeishuAdapter extends BaseChannelAdapter {
   private botIds = new Set<string>();
   /** Track last incoming message ID per chat for replying with streaming cards. */
   private lastIncomingMessageId = new Map<string, string>();
+  /** Background Typing reaction additions, awaited only by the outbound cleanup worker. */
+  private cloudDocumentTypingReactionAdds = new Map<string, Promise<boolean>>();
   /** Active streaming card state per stream key. */
   private activeCards = new Map<string, FeishuCardState>();
   /** In-flight card creation promises per stream key — prevents duplicate creation. */
@@ -2880,6 +3134,10 @@ export class FeishuAdapter extends BaseChannelAdapter {
       state.pendingStatusText = pending.statusText || INITIAL_STREAMING_STATUS;
       const contextUsage = extractTerminalContextUsage(state.pendingStatusText);
       if (contextUsage) state.terminalContextUsageText = contextUsage;
+      const lastResponse = extractTerminalLastResponse(state.pendingStatusText);
+      if (lastResponse) state.terminalLastResponseText = lastResponse;
+      const lastIo = extractTerminalLastIo(state.pendingStatusText);
+      if (lastIo) state.terminalLastIoText = lastIo;
       dirty = true;
     }
     if (pending.tasks) {
@@ -2961,6 +3219,7 @@ export class FeishuAdapter extends BaseChannelAdapter {
         metadata: initialMetadata,
         historyItems: initialHistoryItems,
         historyItemOffset: initialState?.historyItemOffset,
+        historyToolCallOffset: initialState?.historyToolCallOffset,
         toolCallOffset: initialState?.toolCallOffset,
       });
       const cardBody = render.body;
@@ -3050,6 +3309,7 @@ export class FeishuAdapter extends BaseChannelAdapter {
         toolCalls: initialTools,
         historyItems: initialState?.historyItems ?? [],
         historyItemOffset: render.historyItemOffset,
+        historyToolCallOffset: render.historyToolCallOffset,
         toolCallOffset: render.toolCallOffset,
         historyDriven: initialState?.historyDriven ?? false,
         thinking: initialState ? false : true,
@@ -3057,13 +3317,20 @@ export class FeishuAdapter extends BaseChannelAdapter {
         pendingTasksText: initialTasksText,
         pendingStatusText: initialStatusText,
         terminalContextUsageText: initialState?.terminalContextUsageText ?? '',
+        terminalLastResponseText: initialState?.terminalLastResponseText ?? '',
+        terminalLastIoText: initialState?.terminalLastIoText ?? '',
         renderedText: buildStreamingTextContent(initialContent),
         renderedTextLayoutSignature: buildStreamingTextLayoutSignature(initialContent),
         renderedTasksText: initialTasksText,
         renderedHistoryElementIds: renderedHistory.elementIds,
+        renderedHistoryItemCount: initialState?.historyDriven ? render.historyItems?.length || 0 : 0,
         renderedHistoryElementJson: renderedHistory.elementJson,
-        renderedToolSnapshots: buildRenderedToolSnapshots(render.tools),
-        renderedToolEventCounts: buildRenderedToolEventCounts(render.tools),
+        renderedToolSnapshots: initialState?.historyDriven
+          ? buildRenderedHistoryToolSnapshots(render.historyItems)
+          : buildRenderedToolSnapshots(render.tools),
+        renderedToolEventCounts: initialState?.historyDriven
+          ? buildRenderedHistoryToolEventCounts(render.historyItems)
+          : buildRenderedToolEventCounts(render.tools),
         renderedStatusText: initialStatusText,
         renderedHistorySignature: streamingHistorySignature(initialState?.historyDriven ? render.historyItems || [] : []),
         actionRows: initialActionRows,
@@ -3135,6 +3402,10 @@ export class FeishuAdapter extends BaseChannelAdapter {
     if (contextUsage) {
       state.terminalContextUsageText = contextUsage;
     }
+    const lastResponse = extractTerminalLastResponse(state.pendingStatusText);
+    if (lastResponse) state.terminalLastResponseText = lastResponse;
+    const lastIo = extractTerminalLastIo(state.pendingStatusText);
+    if (lastIo) state.terminalLastIoText = lastIo;
     this.markStreamingDesiredDirty(state);
     this.scheduleCardFlush(cardKey);
   }
@@ -3250,6 +3521,7 @@ export class FeishuAdapter extends BaseChannelAdapter {
       metadata,
       historyItems: state.historyDriven ? state.historyItems : undefined,
       historyItemOffset: state.historyItemOffset,
+      historyToolCallOffset: state.historyToolCallOffset,
       toolCallOffset: state.toolCallOffset,
       maxComponents,
     });
@@ -3280,11 +3552,10 @@ export class FeishuAdapter extends BaseChannelAdapter {
       ? 'component_count'
       : payloadReason!;
     if (state.historyDriven && state.historyItems.length > 0) {
-      const renderedAbsoluteCount = state.historyItemOffset + Math.max(1, state.renderedHistoryElementIds.length);
-      const nextOffset = Math.min(renderedAbsoluteCount, Math.max(0, state.historyItems.length - 1));
-      if (nextOffset > state.historyItemOffset) {
+      const cursor = renderedHistoryContinuationCursor(state);
+      if (historyCursorAdvanced(state, cursor)) {
         return {
-          historyItemOffset: nextOffset,
+          ...cursor,
           toolCallOffset: state.toolCallOffset,
           reason,
           componentCount: fullRender.componentCount,
@@ -3294,14 +3565,13 @@ export class FeishuAdapter extends BaseChannelAdapter {
     }
 
     if (!state.historyDriven && state.toolCalls.length > 0) {
-      const renderedToolCount = Object.keys(state.renderedToolSnapshots)
-        .filter((elementId) => /^stream_tool_\d+$/.test(elementId))
-        .length;
+      const renderedToolCount = renderedStreamingToolCount(state);
       const nextOffset = renderedToolCount < state.toolCalls.length
         ? Math.min(state.toolCallOffset + renderedToolCount, Math.max(0, state.toolCalls.length - 1))
         : state.toolCallOffset;
       return {
         historyItemOffset: state.historyItemOffset,
+        historyToolCallOffset: state.historyToolCallOffset,
         toolCallOffset: nextOffset,
         reason,
         componentCount: fullRender.componentCount,
@@ -3314,20 +3584,18 @@ export class FeishuAdapter extends BaseChannelAdapter {
 
   private streamingCardContinuationOffsets(
     state: FeishuCardState,
-  ): { historyItemOffset: number; toolCallOffset: number } {
+  ): { historyItemOffset: number; historyToolCallOffset: number; toolCallOffset: number } {
     if (state.historyDriven && state.historyItems.length > 0) {
-      const renderedAbsoluteCount = state.historyItemOffset + Math.max(1, state.renderedHistoryElementIds.length);
       return {
-        historyItemOffset: Math.min(renderedAbsoluteCount, Math.max(0, state.historyItems.length - 1)),
+        ...renderedHistoryContinuationCursor(state),
         toolCallOffset: state.toolCallOffset,
       };
     }
     if (!state.historyDriven && state.toolCalls.length > 0) {
-      const renderedToolCount = Object.keys(state.renderedToolSnapshots)
-        .filter((elementId) => /^stream_tool_\d+$/.test(elementId))
-        .length;
+      const renderedToolCount = renderedStreamingToolCount(state);
       return {
         historyItemOffset: state.historyItemOffset,
+        historyToolCallOffset: state.historyToolCallOffset,
         toolCallOffset: renderedToolCount < state.toolCalls.length
           ? Math.min(state.toolCallOffset + renderedToolCount, Math.max(0, state.toolCalls.length - 1))
           : state.toolCallOffset,
@@ -3335,6 +3603,7 @@ export class FeishuAdapter extends BaseChannelAdapter {
     }
     return {
       historyItemOffset: state.historyItemOffset,
+      historyToolCallOffset: state.historyToolCallOffset,
       toolCallOffset: state.toolCallOffset,
     };
   }
@@ -3342,7 +3611,7 @@ export class FeishuAdapter extends BaseChannelAdapter {
   private async rolloverStreamingCard(
     streamKey: string,
     state: FeishuCardState,
-    offsets: { historyItemOffset: number; toolCallOffset: number },
+    offsets: { historyItemOffset: number; historyToolCallOffset: number; toolCallOffset: number },
     content: string,
     tasksText: string,
     statusText: string,
@@ -3354,7 +3623,7 @@ export class FeishuAdapter extends BaseChannelAdapter {
     if (!cardkit?.card?.settings) return false;
 
     try {
-      await this.finalizeRolloverSourceCard(streamKey, state);
+      await this.finalizeRolloverSourceCard(streamKey, state, offsets);
     } catch (error) {
       this.markCardFlushFailure(state, error);
       console.warn('[feishu-adapter] Failed to close saturated streaming card before rollover:', error instanceof Error ? error.message : error);
@@ -3372,7 +3641,10 @@ export class FeishuAdapter extends BaseChannelAdapter {
       metadata,
       actionRows,
       terminalContextUsageText: state.terminalContextUsageText,
+      terminalLastResponseText: state.terminalLastResponseText,
+      terminalLastIoText: state.terminalLastIoText,
       historyItemOffset: offsets.historyItemOffset,
+      historyToolCallOffset: offsets.historyToolCallOffset,
       toolCallOffset: offsets.toolCallOffset,
       continuationIndex: state.continuationIndex + 1,
       startTime: state.startTime,
@@ -3397,6 +3669,7 @@ export class FeishuAdapter extends BaseChannelAdapter {
         previousCardId: state.cardId,
         nextIndex: nextInitialState.continuationIndex,
         historyItemOffset: offsets.historyItemOffset,
+        historyToolCallOffset: offsets.historyToolCallOffset,
         toolCallOffset: offsets.toolCallOffset,
         reason,
       });
@@ -3424,6 +3697,7 @@ export class FeishuAdapter extends BaseChannelAdapter {
       cardId: state.cardId,
       reason,
       historyItemOffset: offsets.historyItemOffset,
+      historyToolCallOffset: offsets.historyToolCallOffset,
       toolCallOffset: offsets.toolCallOffset,
     });
     return this.rolloverStreamingCard(
@@ -3442,13 +3716,18 @@ export class FeishuAdapter extends BaseChannelAdapter {
   private async finalizeRolloverSourceCard(
     streamKey: string,
     state: FeishuCardState,
+    continuationOffsets: { historyItemOffset: number; historyToolCallOffset: number },
   ): Promise<void> {
     const cardkit = (this.restClient as any)?.cardkit?.v1;
-    const statusText = [
+    const nowMs = Date.now();
+    const statusText = joinFooterParts([
       '已续接到下一条',
-      formatElapsed(Date.now() - state.startTime),
+      formatFooterClockTime(nowMs),
+      `已运行 ${formatFooterDuration(nowMs - state.startTime)}`,
+      resolveTerminalLastResponse(state),
       resolveTerminalContextUsage(state),
-    ].filter(Boolean).join(' · ');
+      resolveTerminalLastIo(state),
+    ]);
     if (typeof cardkit?.cardElement?.content === 'function') {
       try {
         state.sequence += 1;
@@ -3465,8 +3744,8 @@ export class FeishuAdapter extends BaseChannelAdapter {
       }
     }
 
-    if (typeof cardkit?.card?.settings !== 'function') {
-      throw new Error('card.settings is unavailable');
+    if (typeof cardkit?.card?.settings !== 'function' || typeof cardkit?.card?.update !== 'function') {
+      throw new Error('card.settings or card.update is unavailable');
     }
     try {
       state.sequence += 1;
@@ -3478,6 +3757,41 @@ export class FeishuAdapter extends BaseChannelAdapter {
         },
       }));
       assertFeishuApiOk(settingsResult, 'card.settings:rollover');
+      this.markCardFlushSuccess(state);
+
+      // CardKit settings stop server-side streaming, but the Feishu client keeps the
+      // original streaming card non-selectable until it receives static card JSON.
+      // Rebuild only the last successfully rendered shadow so pending continuation
+      // content remains exclusively on the next card.
+      const renderedHistoryItems = state.historyDriven
+        ? streamingHistoryItemsBeforeCursor(state, continuationOffsets)
+        : undefined;
+      const renderedToolCount = renderedStreamingToolCount(state);
+      const renderedTools = state.historyDriven
+        ? []
+        : state.toolCalls.slice(state.toolCallOffset, state.toolCallOffset + renderedToolCount);
+      const staticCard = buildStreamingCardBody(
+        state.historyDriven ? state.pendingText || '' : state.renderedText || '',
+        state.renderedTasksText || EMPTY_STREAMING_TASKS,
+        statusText,
+        renderedTools,
+        state.actionRows,
+        state.chatId,
+        state.metadata,
+        renderedHistoryItems,
+      );
+      staticCard.config = { wide_screen_mode: true };
+      const staticCardJson = JSON.stringify(staticCard);
+
+      state.sequence += 1;
+      const updateResult = await this.withFeishuRequestTimeout(streamKey, 'card.update:rollover_static', () => cardkit.card.update({
+        path: { card_id: state.cardId },
+        data: {
+          card: { type: 'card_json', data: staticCardJson },
+          sequence: state.sequence,
+        },
+      }));
+      assertFeishuApiOk(updateResult, 'card.update:rollover_static');
       this.markCardFlushSuccess(state);
     } catch (error) {
       this.markCardFlushFailure(state, error);
@@ -3709,6 +4023,7 @@ export class FeishuAdapter extends BaseChannelAdapter {
           }
           if (renderedHistoryMatchesDesired(state, desiredHistory)) {
             state.renderedHistorySignature = historySignature;
+            state.renderedHistoryItemCount = desiredRender.render.historyItems?.length || 0;
           }
         },
       });
@@ -4227,32 +4542,14 @@ export class FeishuAdapter extends BaseChannelAdapter {
       if (inFlight) {
         const remainingMs = deadline - Date.now();
         if (remainingMs <= 0) return false;
-        const timedOut = Symbol('flush-timeout');
-        try {
-          const result = await Promise.race([
-            inFlight.then(() => null),
-            new Promise<typeof timedOut>((resolve) => setTimeout(() => resolve(timedOut), remainingMs)),
-          ]);
-          if (result === timedOut) return false;
-        } catch {
-          // best effort only
-        }
+        if (!await this.waitForCardFlushPromise(inFlight, remainingMs)) return false;
         continue;
       }
       const backgroundInFlight = state.backgroundFlushInFlight;
       if (backgroundInFlight) {
         const remainingMs = deadline - Date.now();
         if (remainingMs <= 0) return false;
-        const timedOut = Symbol('background-flush-timeout');
-        try {
-          const result = await Promise.race([
-            backgroundInFlight.then(() => null),
-            new Promise<typeof timedOut>((resolve) => setTimeout(() => resolve(timedOut), remainingMs)),
-          ]);
-          if (result === timedOut) return false;
-        } catch {
-          // best effort only
-        }
+        if (!await this.waitForCardFlushPromise(backgroundInFlight, remainingMs)) return false;
         continue;
       }
       if (Date.now() >= deadline) return false;
@@ -4262,6 +4559,20 @@ export class FeishuAdapter extends BaseChannelAdapter {
         continue;
       }
       return true;
+    }
+  }
+
+  private async waitForCardFlushPromise(promise: Promise<unknown>, timeoutMs: number): Promise<boolean> {
+    let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
+    try {
+      return await Promise.race([
+        promise.then(() => true, () => true),
+        new Promise<boolean>((resolve) => {
+          timeoutHandle = setTimeout(() => resolve(false), timeoutMs);
+        }),
+      ]);
+    } finally {
+      if (timeoutHandle) clearTimeout(timeoutHandle);
     }
   }
 
@@ -4319,15 +4630,19 @@ export class FeishuAdapter extends BaseChannelAdapter {
 
       // Step 2: Build and apply final card
       const statusLabels: Record<string, string> = {
-        completed: '✅ Completed',
+        completed: '',
         interrupted: '⚠️ Interrupted',
-        error: '❌ Error',
+        error: extractTerminalErrorStatus(state.pendingStatusText) || '❌ 异常',
       };
-      const elapsedMs = Date.now() - state.startTime;
+      const finalizedAtMs = Date.now();
+      const elapsedMs = finalizedAtMs - state.startTime;
       const footer = {
-        status: statusLabels[status] || status,
-        elapsed: formatElapsed(elapsedMs),
+        status: statusLabels[status] ?? status,
+        currentTime: formatFooterClockTime(finalizedAtMs),
+        elapsed: `已运行 ${formatFooterDuration(elapsedMs)}`,
+        lastResponse: resolveTerminalLastResponse(state),
         context: resolveTerminalContextUsage(state),
+        lastIo: resolveTerminalLastIo(state),
       };
 
       const existingText = state.pendingText || '';
@@ -4411,11 +4726,19 @@ export class FeishuAdapter extends BaseChannelAdapter {
       return true;
     } catch (err) {
       if (state.historyDriven) {
-        const footerText = [
-          status === 'completed' ? '✅ Completed' : status === 'error' ? '❌ Error' : '⚠️ Interrupted',
-          formatElapsed(Date.now() - state.startTime),
+        const fallbackFinalizedAtMs = Date.now();
+        const footerText = joinFooterParts([
+          status === 'completed'
+            ? ''
+            : status === 'error'
+              ? extractTerminalErrorStatus(state.pendingStatusText) || '❌ 异常'
+              : '⚠️ Interrupted',
+          formatFooterClockTime(fallbackFinalizedAtMs),
+          `已运行 ${formatFooterDuration(fallbackFinalizedAtMs - state.startTime)}`,
+          resolveTerminalLastResponse(state),
           resolveTerminalContextUsage(state),
-        ].filter(Boolean).join(' · ');
+          resolveTerminalLastIo(state),
+        ]);
         const appended = await this.appendFinalStatusElement(cardKey, state, footerText);
         if (appended) {
           if (terminalReactionEmoji) {
@@ -4427,6 +4750,10 @@ export class FeishuAdapter extends BaseChannelAdapter {
         }
       }
       console.warn('[feishu-adapter] Card finalize failed:', err instanceof Error ? err.message : err);
+      if (isFeishuCardInvalidError(err)) {
+        console.warn('[feishu-adapter] Final card update failed because the card id is invalid; allowing message fallback:', err instanceof Error ? err.message : err);
+        return false;
+      }
       if (streamingModeClosed && ((state.pendingText || '').trim() || state.historyItems.length > 0 || state.toolCalls.length > 0)) {
         if (terminalReactionEmoji) {
           await this.addTerminalReaction(cardKey, state.messageId, terminalReactionEmoji);
@@ -4829,11 +5156,17 @@ export class FeishuAdapter extends BaseChannelAdapter {
       state.renderedTextLayoutSignature = contentLayoutSignature;
       state.renderedTasksText = tasksText;
       state.renderedHistoryElementIds = renderedHistory.elementIds;
+      state.renderedHistoryItemCount = state.historyDriven ? render.historyItems?.length || 0 : 0;
       state.renderedHistoryElementJson = renderedHistory.elementJson;
       state.historyItemOffset = render.historyItemOffset;
+      state.historyToolCallOffset = render.historyToolCallOffset;
       state.toolCallOffset = render.toolCallOffset;
-      state.renderedToolSnapshots = buildRenderedToolSnapshots(render.tools);
-      state.renderedToolEventCounts = buildRenderedToolEventCounts(render.tools);
+      state.renderedToolSnapshots = state.historyDriven
+        ? buildRenderedHistoryToolSnapshots(render.historyItems)
+        : buildRenderedToolSnapshots(render.tools);
+      state.renderedToolEventCounts = state.historyDriven
+        ? buildRenderedHistoryToolEventCounts(render.historyItems)
+        : buildRenderedToolEventCounts(render.tools);
       state.renderedStatusText = statusText;
       state.renderedHistorySignature = streamingHistorySignature(render.historyItems || []);
       state.renderedActionSignature = cardActionRowsSignature(actionRows);
@@ -4845,7 +5178,7 @@ export class FeishuAdapter extends BaseChannelAdapter {
       this.markCardFlushSuccess(state);
       return true;
     } catch (err) {
-      if (isFeishuCardPayloadLimitError(err)) {
+      if (isFeishuCardPayloadLimitError(err) || isFeishuCardElementLimitError(err)) {
         const rolled = await this.forceStreamingCardContinuationRollover(
           streamKey,
           state,
@@ -4854,7 +5187,7 @@ export class FeishuAdapter extends BaseChannelAdapter {
           statusText,
           actionRows,
           metadata,
-          'feishu_200850',
+          isFeishuCardPayloadLimitError(err) ? 'feishu_200850' : 'feishu_element_limit',
         );
         if (rolled) return true;
       }
@@ -5033,9 +5366,7 @@ export class FeishuAdapter extends BaseChannelAdapter {
       // Card should have been created by onMessageStart, but create lazily if not
       this.pendingCardCreateState(cardKey).text = fullText;
       const messageId = this.lastIncomingMessageId.get(chatId);
-      this.createStreamingCard(chatId, messageId, cardKey).then((ok) => {
-        if (ok) this.updateCardContent(chatId, fullText, cardKey);
-      }).catch(() => {});
+      this.createStreamingCard(chatId, messageId, cardKey).catch(() => {});
       return;
     }
     this.updateCardContent(chatId, fullText, cardKey);
@@ -5054,9 +5385,7 @@ export class FeishuAdapter extends BaseChannelAdapter {
     if (!this.activeCards.has(cardKey)) {
       this.pendingCardCreateState(cardKey).tools = tools;
       const messageId = this.lastIncomingMessageId.get(chatId);
-      this.createStreamingCard(chatId, messageId, cardKey).then((ok) => {
-        if (ok) this.updateToolProgress(chatId, tools, cardKey);
-      }).catch(() => {});
+      this.createStreamingCard(chatId, messageId, cardKey).catch(() => {});
       return;
     }
     this.updateToolProgress(chatId, tools, streamKey);
@@ -5070,9 +5399,7 @@ export class FeishuAdapter extends BaseChannelAdapter {
       pending.historyItems = items;
       pending.historyDriven = true;
       const messageId = this.lastIncomingMessageId.get(chatId);
-      this.createStreamingCard(chatId, messageId, cardKey).then((ok) => {
-        if (ok) this.updateStreamingHistory(chatId, items, cardKey);
-      }).catch(() => {});
+      this.createStreamingCard(chatId, messageId, cardKey).catch(() => {});
       return;
     }
     this.updateStreamingHistory(chatId, items, streamKey);
@@ -5084,9 +5411,7 @@ export class FeishuAdapter extends BaseChannelAdapter {
     if (!this.activeCards.has(cardKey)) {
       this.pendingCardCreateState(cardKey).tasks = tasks;
       const messageId = this.lastIncomingMessageId.get(chatId);
-      this.createStreamingCard(chatId, messageId, cardKey).then((ok) => {
-        if (ok) this.updateTaskProgress(chatId, tasks, cardKey);
-      }).catch(() => {});
+      this.createStreamingCard(chatId, messageId, cardKey).catch(() => {});
       return;
     }
     this.updateTaskProgress(chatId, tasks, streamKey);
@@ -5098,9 +5423,7 @@ export class FeishuAdapter extends BaseChannelAdapter {
     if (!this.activeCards.has(cardKey)) {
       this.pendingCardCreateState(cardKey).statusText = statusText;
       const messageId = this.lastIncomingMessageId.get(chatId);
-      this.createStreamingCard(chatId, messageId, cardKey).then((ok) => {
-        if (ok) this.updateCardStatus(chatId, statusText, cardKey);
-      }).catch(() => {});
+      this.createStreamingCard(chatId, messageId, cardKey).catch(() => {});
       return;
     }
     this.updateCardStatus(chatId, statusText, cardKey);
@@ -5934,7 +6257,6 @@ export class FeishuAdapter extends BaseChannelAdapter {
   /**
    * Send a permission card with real Feishu card action buttons.
    * Button clicks trigger card.action.trigger events handled by handleCardAction().
-   * Falls back to text-based /perm commands if button card fails.
    */
   private async sendPermissionCard(
     chatId: string,
@@ -5982,91 +6304,11 @@ export class FeishuAdapter extends BaseChannelAdapter {
         }
         console.warn('[feishu-adapter] Permission button card send failed:', JSON.stringify({ code: (res as any)?.code, msg: res?.msg }));
       } catch (err) {
-        console.warn('[feishu-adapter] Permission button card error, falling back to text:', err instanceof Error ? err.message : err);
+        console.warn('[feishu-adapter] Permission button card error:', err instanceof Error ? err.message : err);
       }
     }
 
-    // Fallback: text-based permission commands (same as before, for backward compat)
-    const permCommands = inlineButtons.flat().map((btn) => {
-      if (btn.callbackData.startsWith('perm:')) {
-        const parts = btn.callbackData.split(':');
-        const action = parts[1];
-        const id = parts.slice(2).join(':');
-        return `\`/perm ${action} ${id}\``;
-      }
-      return btn.text;
-    });
-
-    const cardContent = [
-      mdText,
-      '',
-      '---',
-      '**Reply:**',
-      '`1` - Allow once',
-      '`2` - Allow session',
-      '`3` - Deny',
-      '',
-      'Or use full commands:',
-      ...permCommands,
-    ].join('\n');
-
-    const cardJson = JSON.stringify({
-      schema: '2.0',
-      config: { wide_screen_mode: true },
-      header: {
-        template: 'orange',
-        title: { tag: 'plain_text', content: '🔐 Permission Required' },
-      },
-      body: {
-        elements: [
-          { tag: 'markdown', content: cardContent },
-        ],
-      },
-    });
-
-    try {
-      const res = await this.withFeishuRequestTimeout(chatId, 'im.message.create:permission-fallback-card', () => this.restClient!.im.message.create({
-        params: { receive_id_type: 'chat_id' },
-        data: {
-          receive_id: chatId,
-          msg_type: 'interactive',
-          content: cardJson,
-        },
-      }));
-      if (res?.data?.message_id) {
-        return { ok: true, messageId: res.data.message_id };
-      }
-      console.warn('[feishu-adapter] Fallback card also failed:', res?.msg);
-    } catch (err) {
-      console.warn('[feishu-adapter] Fallback card error, sending plain text:', err instanceof Error ? err.message : err);
-    }
-
-    // Last resort: plain text message (works even without card permissions)
-    const plainText = [
-      mdText,
-      '',
-      '---',
-      'Reply: 1 = Allow once | 2 = Allow session | 3 = Deny',
-      '',
-      ...permCommands,
-    ].join('\n');
-
-    try {
-      const res = await this.withFeishuRequestTimeout(chatId, 'im.message.create:permission-fallback-text', () => this.restClient!.im.message.create({
-        params: { receive_id_type: 'chat_id' },
-        data: {
-          receive_id: chatId,
-          msg_type: 'text',
-          content: JSON.stringify({ text: plainText }),
-        },
-      }));
-      if (res?.data?.message_id) {
-        return { ok: true, messageId: res.data.message_id };
-      }
-      return { ok: false, error: res?.msg || 'Send failed' };
-    } catch (err) {
-      return { ok: false, error: err instanceof Error ? err.message : 'Send failed' };
-    }
+    return { ok: false, error: 'Failed to send permission button card' };
   }
 
   // ── Config & Auth ───────────────────────────────────────────
@@ -6250,14 +6492,13 @@ export class FeishuAdapter extends BaseChannelAdapter {
       const imageDownloads = Promise.all(imageKeys.map((key) =>
         this.downloadResource(msg.message_id, key, 'image'),
       ));
-      const warningNotice = warnings.length > 0
-        ? this.notifyUnsupportedInboundContent(chatId, msg.message_id, warnings)
-        : Promise.resolve();
+      if (warnings.length > 0) {
+        this.notifyUnsupportedInboundContent(chatId, msg.message_id, warnings);
+      }
       for (const attachment of await imageDownloads) {
         if (attachment) attachments.push(attachment);
         // Don't add fallback text for individual post images — the text already carries context
       }
-      await warningNotice;
     } else if (messageType === 'interactive') {
       text = [
         '用户发送了一张飞书交互卡片。',
@@ -6266,7 +6507,7 @@ export class FeishuAdapter extends BaseChannelAdapter {
     } else {
       // Unsupported type — log and skip
       console.log(`[feishu-adapter] Unsupported message type: ${messageType}, msgId: ${msg.message_id}`);
-      await this.notifyUnsupportedInboundContent(chatId, msg.message_id, [
+      this.notifyUnsupportedInboundContent(chatId, msg.message_id, [
         `暂不支持飞书消息类型：${messageType}`,
         '这条消息不会转发给 Codex。请改用文本/富文本、图片或文件重新发送。',
       ]);
@@ -6288,28 +6529,6 @@ export class FeishuAdapter extends BaseChannelAdapter {
       chatKind: isGroup ? 'group' as const : 'p2p' as const,
       userId,
     };
-
-    // [P1] Check for /perm text command (permission approval fallback)
-    const trimmedText = text.trim();
-    if (trimmedText.startsWith('/perm ')) {
-      const permParts = trimmedText.split(/\s+/);
-      // /perm <action> <permId>
-      if (permParts.length >= 3) {
-        const action = permParts[1]; // allow / allow_session / deny
-        const permId = permParts.slice(2).join(' ');
-        const callbackData = `perm:${action}:${permId}`;
-
-        const inbound: InboundMessage = {
-          messageId: msg.message_id,
-          address,
-          text: trimmedText,
-          timestamp,
-          callbackData,
-        };
-        this.enqueueInboundMessage(inbound);
-        return;
-      }
-    }
 
     const inbound: InboundMessage = {
       messageId: msg.message_id,
@@ -6486,7 +6705,7 @@ export class FeishuAdapter extends BaseChannelAdapter {
         userId: resolvedTarget.operatorId,
         displayName: '飞书云文档评论',
       };
-      await this.sendCloudDocumentForwardNotice(groupAddress, resolvedTarget, resolvedContext);
+      this.sendCloudDocumentForwardNotice(groupAddress, resolvedTarget, resolvedContext);
       this.enqueueInboundMessage({
         messageId,
         address: groupAddress,
@@ -6538,10 +6757,10 @@ export class FeishuAdapter extends BaseChannelAdapter {
     }
 
     const timestamp = Date.now();
-    const typingReactionReplyId = resolvedContext.targetReplyId
-      && await this.addCloudDocumentTypingReaction(resolvedTarget, resolvedContext.targetReplyId)
-      ? resolvedContext.targetReplyId
-      : undefined;
+    const typingReactionReplyId = resolvedContext.targetReplyId;
+    if (typingReactionReplyId) {
+      this.startCloudDocumentTypingReaction(resolvedTarget, typingReactionReplyId);
+    }
     const messageId = `doc-comment:${resolvedTarget.fileToken}:${resolvedTarget.commentId}:${resolvedTarget.replyId || timestamp}`;
     const inbound: InboundMessage = {
       messageId,
@@ -6846,7 +7065,33 @@ export class FeishuAdapter extends BaseChannelAdapter {
   }
 
   private async removeCloudDocumentTypingReaction(target: CloudDocumentAddress, replyId: string): Promise<void> {
+    const key = this.cloudDocumentTypingReactionKey(target.fileToken, target.fileType, replyId);
+    const pendingAdd = this.cloudDocumentTypingReactionAdds.get(key);
+    if (pendingAdd) {
+      this.cloudDocumentTypingReactionAdds.delete(key);
+      if (!await pendingAdd) return;
+    }
     await this.updateCloudDocumentTypingReaction(target.fileToken, target.fileType, replyId, 'delete');
+  }
+
+  private cloudDocumentTypingReactionKey(
+    fileToken: string,
+    fileType: FeishuDocumentFileType,
+    replyId: string,
+  ): string {
+    return `${fileType}:${fileToken}:${replyId}`;
+  }
+
+  private startCloudDocumentTypingReaction(target: FeishuCommentTarget, replyId: string): void {
+    const key = this.cloudDocumentTypingReactionKey(target.fileToken, target.fileType, replyId);
+    const addition = this.addCloudDocumentTypingReaction(target, replyId);
+    this.cloudDocumentTypingReactionAdds.set(key, addition);
+    const cleanup = setTimeout(() => {
+      if (this.cloudDocumentTypingReactionAdds.get(key) === addition) {
+        this.cloudDocumentTypingReactionAdds.delete(key);
+      }
+    }, 30 * 60_000);
+    cleanup.unref?.();
   }
 
   private async updateCloudDocumentTypingReaction(
@@ -6943,14 +7188,14 @@ export class FeishuAdapter extends BaseChannelAdapter {
     return parts.join('\n');
   }
 
-  private async sendCloudDocumentForwardNotice(
+  private sendCloudDocumentForwardNotice(
     address: ChannelAddress,
     target: FeishuCommentTarget,
     context: { question: string; quote?: string; isWhole: boolean },
-  ): Promise<void> {
+  ): void {
     const docHost = this.site === 'lark' ? 'https://larksuite.com' : 'https://feishu.cn';
     const preview = context.question.trim().replace(/\s+/g, ' ').slice(0, 180);
-    const result = await this.send({
+    const delivery = enqueueDelivery(this, address, () => this.send({
       address,
       text: [
         '收到一条云文档评论，已转发到本群处理。',
@@ -6961,15 +7206,16 @@ export class FeishuAdapter extends BaseChannelAdapter {
         preview ? `内容：${preview}` : '',
       ].filter(Boolean).join('\n'),
       parseMode: 'plain',
-    });
-    if (!result.ok) {
+    }));
+    void delivery.completion.then((result) => {
+      if (result.ok) return;
       console.warn('[feishu-adapter] Cloud document group forward notice failed:', {
         chatId: address.chatId,
         fileToken: target.fileToken,
         commentId: target.commentId,
         error: result.error,
       });
-    }
+    });
   }
 
   // ── Content parsing ─────────────────────────────────────────
@@ -6987,7 +7233,7 @@ export class FeishuAdapter extends BaseChannelAdapter {
    * Parse rich text (post) content.
    * Extracts plain text from text elements and image keys from img elements.
    */
-  private async notifyUnsupportedInboundContent(chatId: string, messageId: string, warnings: string[]): Promise<void> {
+  private notifyUnsupportedInboundContent(chatId: string, messageId: string, warnings: string[]): void {
     const uniqueWarnings = Array.from(new Set(warnings.map((warning) => warning.trim()).filter(Boolean))).slice(0, 5);
     if (uniqueWarnings.length === 0) return;
     const omitted = warnings.length > uniqueWarnings.length
@@ -6999,14 +7245,16 @@ export class FeishuAdapter extends BaseChannelAdapter {
       omitted,
     ].join('\n').trim();
 
-    try {
-      const result = await this.sendAsPlainText(chatId, text, messageId);
+    const delivery = enqueueDelivery(
+      this,
+      { channelType: this.channelType, chatId },
+      () => this.sendAsPlainText(chatId, text, messageId),
+    );
+    void delivery.completion.then((result) => {
       if (!result.ok) {
         console.warn('[feishu-adapter] Unsupported content notice failed:', result.error || 'unknown error');
       }
-    } catch (error) {
-      console.warn('[feishu-adapter] Unsupported content notice error:', error instanceof Error ? error.message : error);
-    }
+    });
   }
 
   private parsePostContent(content: string): FeishuPostParseResult {
@@ -7025,44 +7273,19 @@ export class FeishuAdapter extends BaseChannelAdapter {
     domain: lark.Domain,
   ): Promise<void> {
     try {
-      const baseUrl = domain === lark.Domain.Lark
-        ? 'https://open.larksuite.com'
-        : 'https://open.feishu.cn';
-
-      const tokenRes = await fetch(`${baseUrl}/open-apis/auth/v3/tenant_access_token/internal`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ app_id: appId, app_secret: appSecret }),
-        signal: AbortSignal.timeout(10_000),
+      const bot = await fetchFeishuBotIdentity({
+        appId,
+        appSecret,
+        site: domain === lark.Domain.Lark ? 'lark' : 'feishu',
       });
-      const tokenData: any = await tokenRes.json();
-      if (!tokenData.tenant_access_token) {
-        console.warn('[feishu-adapter] Failed to get tenant access token');
-        return;
+      this.botOpenId = bot.openId;
+      this.botIds.add(bot.openId);
+      if (bot.botId) {
+        this.botId = bot.botId;
+        this.botIds.add(bot.botId);
       }
-
-      const botRes = await fetch(`${baseUrl}/open-apis/bot/v3/info/`, {
-        method: 'GET',
-        headers: { Authorization: `Bearer ${tokenData.tenant_access_token}` },
-        signal: AbortSignal.timeout(10_000),
-      });
-      const botData: any = await botRes.json();
-      if (botData?.bot?.open_id) {
-        this.botOpenId = botData.bot.open_id;
-        this.botIds.add(botData.bot.open_id);
-      }
-      // Also record app_id-based IDs if available
-      if (botData?.bot?.bot_id) {
-        this.botId = botData.bot.bot_id;
-        this.botIds.add(botData.bot.bot_id);
-      }
-      this.botName = botData?.bot?.app_name || botData?.bot?.name || this.botName;
-      this.botAvatarUrl = botData?.bot?.avatar_url || this.botAvatarUrl;
-      if (!this.botOpenId) {
-        console.warn('[feishu-adapter] Could not resolve bot open_id', {
-          preview: JSON.stringify(botData).slice(0, 1000),
-        });
-      }
+      this.botName = bot.name || this.botName;
+      this.botAvatarUrl = bot.avatarUrl || this.botAvatarUrl;
     } catch (err) {
       console.warn(
         '[feishu-adapter] Failed to resolve bot identity:',

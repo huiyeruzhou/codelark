@@ -37,7 +37,7 @@ import {
   formatSessionClaudeProvider,
   formatSessionCodexProvider,
   formatSessionMode,
-  reconcileMirrorSubscriptionsBestEffort,
+  scheduleMirrorSubscriptionsBestEffort,
   sessionHasActiveRuntimeTurn,
 } from './runtime-session.js';
 import * as router from '../session/channel-router.js';
@@ -60,6 +60,20 @@ function setSessionClaudeProviderToml(sessionId: string, provider: RuntimeProvid
   createConfigService({ migrate: false }).set(
     { kind: 'session', sessionId },
     { runtime: { claude: { provider } } },
+  );
+}
+
+function setSessionKimiProviderToml(sessionId: string): void {
+  createConfigService({ migrate: false }).set(
+    { kind: 'session', sessionId },
+    { runtime: { kimi: { provider: 'tmux' } } },
+  );
+}
+
+function clearSessionKimiProviderToml(sessionId: string): void {
+  createConfigService({ migrate: false }).unset(
+    { kind: 'session', sessionId },
+    'runtime.kimi.provider',
   );
 }
 
@@ -218,7 +232,7 @@ export async function handleProviderCommand(options: {
       setSessionTmuxAutoEnterToml(session.id, true);
     }
     setSessionClaudeProviderToml(session.id, requestedProvider);
-    await reconcileMirrorSubscriptionsBestEffort(options.deps, `claude provider ${requestedProvider} switch`);
+    scheduleMirrorSubscriptionsBestEffort(options.deps, `claude provider ${requestedProvider} switch`);
     return buildCommandFields(
       '已切换 Claude Provider',
       [
@@ -239,6 +253,46 @@ export async function handleProviderCommand(options: {
           ]
           : []),
       ],
+      options.markdown,
+    );
+  }
+  if (getSessionActiveRuntime(session) === 'kimi') {
+    const requested = options.args.trim().toLowerCase();
+    if (!requested) {
+      return buildCommandFields(
+        '当前 Kimi Provider',
+        [
+          ['Runtime', 'kimi'],
+          ['Provider', 'tmux'],
+        ],
+        ['Kimi Code 当前只支持 tmux Provider；发送 `/provider tmux` 固定为 tmux，或 `/provider default` 清除会话级覆盖。'],
+        options.markdown,
+      );
+    }
+    if (requested === 'default') {
+      clearSessionKimiProviderToml(session.id);
+      scheduleMirrorSubscriptionsBestEffort(options.deps, 'kimi provider default');
+      return buildCommandFields(
+        '已恢复默认 Kimi Provider',
+        [['Runtime', 'kimi'], ['Provider', 'tmux']],
+        ['Kimi Code 当前只支持 tmux Provider。'],
+        options.markdown,
+      );
+    }
+    if (requested !== 'tmux') {
+      return buildCommandFields(
+        'Kimi Provider 用法',
+        [['命令', '`/provider tmux|default` 或 `/p tmux|default`']],
+        ['Kimi Code 当前只支持 tmux Provider。'],
+        options.markdown,
+      );
+    }
+    setSessionKimiProviderToml(session.id);
+    scheduleMirrorSubscriptionsBestEffort(options.deps, 'kimi provider tmux');
+    return buildCommandFields(
+      '已切换 Kimi Provider',
+      [['Runtime', 'kimi'], ['Provider', 'tmux']],
+      ['之后的普通消息会使用 Kimi Code tmux 路径。'],
       options.markdown,
     );
   }
@@ -273,7 +327,7 @@ export async function handleProviderCommand(options: {
   }
   if (requestedProvider === 'sdk') {
     setSessionCodexProviderToml(session.id, 'sdk');
-    await reconcileMirrorSubscriptionsBestEffort(options.deps, 'provider sdk switch');
+    scheduleMirrorSubscriptionsBestEffort(options.deps, 'provider sdk switch');
     return buildCommandFields(
       '已切换 Codex Provider',
       [
@@ -313,7 +367,7 @@ export async function handleProviderCommand(options: {
       setSessionCodexThreadIdUpdate(threadId),
     ));
     setSessionCodexProviderToml(session.id, 'pty');
-    await reconcileMirrorSubscriptionsBestEffort(options.deps, 'provider pty switch');
+    scheduleMirrorSubscriptionsBestEffort(options.deps, 'provider pty switch');
     return buildCommandFields(
       '已切换 Codex Provider',
       [
@@ -371,7 +425,7 @@ export async function handleProviderCommand(options: {
   }));
   setSessionCodexProviderToml(session.id, 'tmux');
   setSessionTmuxAutoEnterToml(session.id, true);
-  await reconcileMirrorSubscriptionsBestEffort(options.deps, 'provider tmux switch');
+  scheduleMirrorSubscriptionsBestEffort(options.deps, 'provider tmux switch');
   return buildCommandFields(
     '已切换 Codex Provider',
     [

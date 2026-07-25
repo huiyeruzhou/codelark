@@ -183,4 +183,63 @@ describe('turn-coordinator', () => {
 
     assert.equal(result.claimed, false);
   });
+
+  it('claims a Kimi terminal for the active Kimi runtime IM turn', async () => {
+    const finalized: string[] = [];
+    const coordinator = createTurnCoordinator({
+      finalizeTerminalTurn: async (turn, record) => {
+        finalized.push(`${turn.runtime}:${record.runtime}:${record.threadId}:${record.text}`);
+        return true;
+      },
+    });
+    coordinator.registerInteractiveTurn(activeTurn({
+      kind: 'im_sdk',
+      runtime: 'kimi',
+      runtimeThreadId: 'session_kimi-1',
+      codexThreadId: undefined,
+      progressSource: 'kimi_jsonl',
+      finalSource: 'kimi_task_complete',
+    }));
+
+    const result = await coordinator.claimRuntimeTerminal({
+      runtime: 'kimi',
+      sessionId: 'session-1',
+      threadId: 'session_kimi-1',
+      codexThreadId: '',
+      turnId: 'kimi-turn-1',
+      text: 'kimi final answer',
+      outcome: 'completed',
+      timestamp: '2026-04-27T00:00:00.000Z',
+    });
+
+    assert.equal(result.claimed, true);
+    assert.equal(result.turn?.id, 'turn-1');
+    assert.deepEqual(finalized, ['kimi:kimi:session_kimi-1:kimi final answer']);
+  });
+
+  it('does not claim Kimi terminals for a different Kimi session id', async () => {
+    const coordinator = createTurnCoordinator({
+      finalizeTerminalTurn: async () => true,
+    });
+    coordinator.registerInteractiveTurn(activeTurn({
+      kind: 'im_sdk',
+      runtime: 'kimi',
+      runtimeThreadId: 'session_kimi-1',
+      codexThreadId: undefined,
+      progressSource: 'kimi_jsonl',
+      finalSource: 'kimi_task_complete',
+    }));
+
+    const result = await coordinator.claimRuntimeTerminal({
+      runtime: 'kimi',
+      sessionId: 'session-1',
+      threadId: 'session_kimi-other',
+      codexThreadId: '',
+      text: 'other kimi final answer',
+      outcome: 'completed',
+      timestamp: '2026-04-27T00:00:00.000Z',
+    });
+
+    assert.equal(result.claimed, false);
+  });
 });

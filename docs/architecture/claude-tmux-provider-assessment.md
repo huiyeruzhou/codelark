@@ -147,7 +147,7 @@ Claude mirror source 已经有 `createClaudeMirrorJsonlSource()`，但需要确�
 - Claude 没有 Codex 那种已稳定使用的 `threadId -> resume tmux session` 启动路径。是否支持 `--resume`、如何选择最近 session，需要单独验证 CLI 行为。
 - Codex tmux provider 里有大量 Codex 专属选择提示处理，不能直接套给 Claude；否则权限/更新/goal prompt 误判风险高。
 - 当前全局配置序列化似乎没有写出 `CODELARK_CLAUDE_PROVIDER`，这会影响所有 Claude provider 默认配置持久化，需顺手修。
-- Windows/psmux 支持要单独确认；当前 tmux 文案兼容 psmux，但 Claude TUI 行为可能不同。
+- Windows 使用原生 psmux 提供的 `tmux.exe`，不经过 WSL。通用 session 命令由跨平台 CI 的真实 psmux smoke 验证；Claude TUI 的 provider 级交互仍需保留真实 Windows E2E。
 
 ## 测试建议
 

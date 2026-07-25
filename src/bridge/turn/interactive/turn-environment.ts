@@ -10,7 +10,7 @@ import {
 } from '../../../shared/streaming-metadata.js';
 import { getGlobalDefaultChannelConfig } from '../../session/global-config.js';
 import { classifyInteractiveTurn } from '../turn-classifier.js';
-import type { BridgeTurnClassification } from '../turn-types.js';
+import type { BridgeTurnClassification, BridgeTurnRuntime } from '../turn-types.js';
 
 export interface InteractiveStreamConfig {
   intervalMs: number;
@@ -64,7 +64,7 @@ export interface InteractiveTurnDisplayInfo {
   title: string;
   bridgeSessionId?: string | null;
   threadId?: string | null;
-  runtime?: 'codex' | 'claude' | null;
+  runtime?: BridgeTurnRuntime | null;
   executionProvider?: string | null;
   creatorKind?: string | null;
   reasoningEffort?: string | null;
@@ -86,8 +86,8 @@ const STREAM_DEFAULTS: Record<string, InteractiveStreamConfig> = {
   default: { intervalMs: 1000, minDeltaChars: 30, maxChars: 4000 },
 };
 
-const STREAM_STATUS_IDLE_START_MS = 180_000;
-const STREAM_STATUS_HEARTBEAT_MS = 10_000;
+const STREAM_STATUS_IDLE_START_MS = 0;
+const STREAM_STATUS_HEARTBEAT_MS = 5_000;
 
 export function resolveInteractiveTurnRuntimeSettings(
   channelType = 'default',
@@ -106,7 +106,7 @@ export function resolveInteractiveTurnRuntimeSettings(
     statusTiming: {
       idleStartMs: Math.max(
         0,
-        (typeof idleStartSeconds === 'number' && Number.isFinite(idleStartSeconds) && idleStartSeconds > 0
+        (typeof idleStartSeconds === 'number' && Number.isFinite(idleStartSeconds) && idleStartSeconds >= 0
           ? idleStartSeconds
           : STREAM_STATUS_IDLE_START_MS / 1000) * 1000,
       ),

@@ -18,6 +18,7 @@ import type { BaseChannelAdapter } from '../../channels/contracts.js';
 import type { BridgeSession, BridgeStore, PermissionLinkRecord } from '../../domain/index.js';
 import type { FeishuChannelConfig } from '../../channels/types.js';
 import { feishuSiteToApiBaseUrl } from '../../channels/feishu/site.js';
+import { statSync } from 'node:fs';
 import { inspect } from 'node:util';
 // Side-effect import: triggers self-registration of all adapter factories
 import '../../channels/feishu/adapter.js';
@@ -36,6 +37,14 @@ import {
   createClaudeMirrorJsonlSource,
   getClaudeSessionJsonlById,
 } from '../../runtime/claude/session-jsonl.js';
+import {
+  archiveKimiSessionFile,
+  createKimiMirrorJsonlSource,
+  findKimiSessionFileById,
+} from '../../runtime/kimi/session-index.js';
+import {
+  kimiTmuxSessionName,
+} from '../../runtime/kimi/tmux-provider.js';
 import {
   sanitizeInput,
 } from '../../shared/security/validators.js';
@@ -81,6 +90,7 @@ import {
   consumeMirrorRecords as consumeMirrorRecordsBase,
   flushTimedOutMirrorTurn as flushTimedOutMirrorTurnBase,
   hasPendingMirrorWork as hasPendingMirrorWorkBase,
+  type BridgeMirrorTurnState,
   type FinalizedBridgeMirrorTurn,
 } from '../mirror/turns.js';
 import {
@@ -126,17 +136,21 @@ import {
 import { createConfigService } from '../../configuration/service.js';
 import {
   getGlobalDefaultChannelConfig,
+  getGlobalRuntimeAgent,
 } from '../session/global-config.js';
 import {
   getSessionRuntimeTmuxSessionName,
   getSessionCodexThreadId,
   getSessionClaudeCwd,
   getSessionClaudeSessionId,
+  getSessionKimiCwd,
+  getSessionKimiSessionId,
   getSessionActiveRuntime,
   getSessionSystemPrompt,
   getSessionWorkingDirectory,
   setSessionClaudeIdentityUpdate,
   setSessionCodexTitleUpdate,
+  setSessionKimiIdentityUpdate,
 } from '../../domain/session-runtime.js';
 import {
   buildCodexTuiSelectionChoiceActions,
@@ -148,6 +162,10 @@ import {
   type CodexTuiSelectionPromptMonitor,
 } from '../../runtime/codex/tmux-provider.js';
 import {
+  findNewCodexTuiErrorMessage,
+  parseCodexTuiReconnectSignal,
+} from '../../runtime/codex/tui-runtime-signals.js';
+import {
   cleanupRuntimeTmuxSession,
   tmuxCore,
   waitForCodexResumeTmuxReady,
@@ -155,6 +173,10 @@ import {
   type TmuxSendAction,
 } from '../tmux/runtime.js';
 import type { TmuxAutoForwardRecoveryPayload } from '../command/codex-tui-selection.js';
+import {
+  sendRuntimeTmuxInput,
+  transitionRuntimeTmuxInputState,
+} from '../tmux/input-state-machine.js';
 import { buildRuntimeStreamTags } from '../../shared/streaming-metadata.js';
 import { ThreadDisplayService } from '../session/thread-display-resolver.js';
 import {
@@ -190,7 +212,8 @@ import {
 } from '../mirror/feedback-controller.js';
 import { probeCodexThreadProcess } from '../health/process.js';
 import { createSessionHealthRuntime } from '../health/runtime.js';
-import { deliverBridgeNotice, deliverResponse } from '../../channels/delivery/feedback.js';
+import { deliverBridgeNotice, deliverResponse, enqueueBridgeNotice } from '../../channels/delivery/feedback.js';
+import { _testOnlyWaitForDeliveryQueuesForTests } from '../../channels/delivery/deliver.js';
 import { routeCodexRecords, routeRuntimeRecords } from '../turn/local-codex-terminal-router.js';
 import { createTurnCoordinator } from '../turn/turn-coordinator.js';
 import type { BridgeTurnTerminalRecord } from '../turn/turn-types.js';
@@ -198,6 +221,13 @@ import { consumeSseEvents } from '../../runtime/sse-stream-decoder.js';
 import { consumePendingClearConfirmation } from '../command/clear-confirmations.js';
 import { consumePendingTakeoverConfirmation } from '../command/takeover-confirmations.js';
 import { consumeStartupNoticeTarget } from './startup-notice-target.js';
+import { applyUnifiedTurnStatusNote } from '../turn/unified-turn-state.js';
+import { resolveInstalledCodelarkVersion } from '../update/installed-version.js';
+import { createDailyVersionChecker } from '../update/version-check.js';
+import {
+  createDailyVersionUpdateRuntime,
+  type DailyVersionUpdateRuntime,
+} from '../update/runtime.js';
 
 const GLOBAL_KEY = '__bridge_manager__';
 const DANGLING_MIRROR_THREAD_RETRY_LIMIT = 3;
@@ -216,11 +246,13 @@ const MIRROR_PROMPT_MATCH_GRACE_MS = 120_000;
 // final source. If the SDK stream finishes first, wait for the terminal JSONL
 // record before falling back to the SDK response.
 const DESKTOP_TERMINAL_FINALIZATION_TIMEOUT_MS = 30_000;
-const MIRROR_STREAM_STATUS_IDLE_START_MS = 180_000;
-const MIRROR_STREAM_STATUS_HEARTBEAT_MS = 10_000;
+const MIRROR_STREAM_STATUS_IDLE_START_MS = 0;
+const MIRROR_STREAM_STATUS_HEARTBEAT_MS = 5_000;
 const MIRROR_TMUX_SELECTION_PROBE_INTERVAL_MS = 5_000;
 const MIRROR_TMUX_SELECTION_PROBE_FOLLOWUP_WINDOW_MS = 5_000;
 const MIRROR_TMUX_SELECTION_PROBE_FOLLOWUP_INTERVAL_MS = 300;
+const CODEX_TUI_IDLE_CHECKPOINT_HOT_MISSING_RETRY_MS = 5_000;
+const CODEX_TUI_IDLE_CHECKPOINT_COLD_MISSING_RETRY_MS = 60_000;
 const TMUX_AUTO_FORWARD_SELECTION_PROBE_TIMEOUT_MS = 5_000;
 const TMUX_AUTO_FORWARD_SELECTION_PROBE_INTERVAL_MS = 300;
 const TMUX_PROVIDER_EXIT_PROBE_DELAY_MS = 1_500;
@@ -228,7 +260,7 @@ const TMUX_SELECTION_UPDATE_EXIT_PROBE_DELAY_MS = 2_000;
 const TMUX_PROVIDER_EXIT_NOTICE_COOLDOWN_MS = 60_000;
 const TMUX_SCREEN_STOP_CALLBACK_PREFIX = 'tmux-screen:stop:';
 const PTY_SCREEN_STOP_CALLBACK_PREFIX = 'pty-screen:stop:';
-const TMUX_AUTO_FORWARD_TYPING_REACTION = 'Typing';
+const INBOUND_GET_REACTION = 'Get';
 // Timeout after the last Codex event before we flush a buffered mirror turn
 // without seeing task_complete. This is an internal mirror buffer guard, not an
 // IM idle reminder. Active streaming turns never use this fallback timeout.
@@ -258,16 +290,6 @@ const SESSION_SERIAL_COMMANDS = new Set([
   '/tmux-new',
 ]);
 
-interface PendingTmuxAutoForwardReaction {
-  channelType: string;
-  chatId: string;
-  sessionId: string;
-  messageId: string;
-  reactionId: string;
-}
-
-const pendingTmuxAutoForwardReactions = new Map<string, PendingTmuxAutoForwardReaction>();
-const pendingTmuxAutoForwardReactionVersions = new Map<string, number>();
 const pendingTmuxProviderExitProbeTimers = new Map<string, ReturnType<typeof setTimeout>>();
 const tmuxProviderExitNoticeLastSentAt = new Map<string, number>();
 const tmuxSelectionUpdateNoticeLastSentAt = new Map<string, number>();
@@ -275,6 +297,24 @@ const tmuxSelectionPromptMonitors = new Map<string, CodexTuiSelectionPromptMonit
 const tmuxSelectionPromptLastProbeAt = new Map<string, number>();
 const tmuxSelectionPromptFollowupUntil = new Map<string, number>();
 const pendingTmuxSelectionPromptProbePromises = new Set<Promise<boolean>>();
+interface CodexTuiScreenCheckpoint {
+  screen: string;
+  capturedAtMs: number;
+  claimedTurnKey?: string;
+}
+
+const codexTuiIdleScreenCheckpoints = new Map<string, CodexTuiScreenCheckpoint>();
+const codexTuiTurnScreenBaselines = new Map<string, CodexTuiScreenCheckpoint>();
+const codexTuiIdleScreenMissingCheckedAt = new Map<string, number>();
+
+interface CodexTuiReconnectMonitor {
+  streamKey: string;
+  signalKey: string;
+  appliedNote: string;
+  previousStatusNote: string | null;
+}
+
+const codexTuiReconnectMonitors = new Map<string, CodexTuiReconnectMonitor>();
 
 interface TmuxSelectionPromptTarget {
   channelType: string;
@@ -308,63 +348,17 @@ function clearPendingTmuxProviderExitProbe(key: string): void {
   pendingTmuxProviderExitProbeTimers.delete(key);
 }
 
-function bumpPendingTmuxAutoForwardReactionVersion(key: string): number {
-  const next = (pendingTmuxAutoForwardReactionVersions.get(key) || 0) + 1;
-  pendingTmuxAutoForwardReactionVersions.set(key, next);
-  return next;
-}
-
-function removeTmuxAutoForwardReaction(
-  pending: PendingTmuxAutoForwardReaction,
-  reason: string,
-): void {
-  const adapter = getState().adapters.get(pending.channelType);
-  if (typeof adapter?.removeMessageReaction !== 'function') return;
-  void adapter.removeMessageReaction(pending.messageId, pending.reactionId, TMUX_AUTO_FORWARD_TYPING_REACTION).catch((error) => {
-    console.warn(`[bridge-manager] Failed to remove tmux auto-forward typing reaction (${reason}):`, describeUnknownError(error));
-  });
-}
-
-function clearPendingTmuxAutoForwardReaction(key: string): void {
-  clearPendingTmuxProviderExitProbe(key);
-  bumpPendingTmuxAutoForwardReactionVersion(key);
-  const pending = pendingTmuxAutoForwardReactions.get(key);
-  if (!pending) return;
-  pendingTmuxAutoForwardReactions.delete(key);
-  removeTmuxAutoForwardReaction(pending, 'clear');
-}
-
-function markPendingTmuxAutoForwardReaction(
+function addInboundGetReaction(
   adapter: BaseChannelAdapter,
   msg: InboundMessage,
-  key: string,
-  sessionId: string,
+  reason: 'command_received' | 'tmux_prompt_delivered',
 ): void {
   if (!msg.messageId || typeof adapter.addMessageReaction !== 'function') return;
-  clearPendingTmuxProviderExitProbe(key);
-  const version = bumpPendingTmuxAutoForwardReactionVersion(key);
-  const previous = pendingTmuxAutoForwardReactions.get(key);
-  if (previous) {
-    pendingTmuxAutoForwardReactions.delete(key);
-    removeTmuxAutoForwardReaction(previous, 'replace');
-  }
-
-  void adapter.addMessageReaction(msg.messageId, TMUX_AUTO_FORWARD_TYPING_REACTION).then((reactionId) => {
-    if (!reactionId) return;
-    const pending: PendingTmuxAutoForwardReaction = {
-      channelType: msg.address.channelType,
-      chatId: msg.address.chatId,
-      sessionId,
-      messageId: msg.messageId,
-      reactionId,
-    };
-    if (pendingTmuxAutoForwardReactionVersions.get(key) !== version) {
-      removeTmuxAutoForwardReaction(pending, 'stale');
-      return;
-    }
-    pendingTmuxAutoForwardReactions.set(key, pending);
-  }).catch((error) => {
-    console.warn('[bridge-manager] Failed to add tmux auto-forward typing reaction:', describeUnknownError(error));
+  void adapter.addMessageReaction(msg.messageId, INBOUND_GET_REACTION).catch((error) => {
+    console.warn('[bridge-manager] Failed to add inbound Get reaction:', {
+      reason,
+      error: describeUnknownError(error),
+    });
   });
 }
 
@@ -412,8 +406,8 @@ async function probeTmuxProviderExitAfterAutoForward(params: {
   if (nowMs - lastSentAt < TMUX_PROVIDER_EXIT_NOTICE_COOLDOWN_MS) return;
   tmuxProviderExitNoticeLastSentAt.set(noticeKey, nowMs);
 
-  clearPendingTmuxAutoForwardReaction(params.reactionKey);
-  const runtimeLabel = runtimeProvider.runtime === 'claude' ? 'Claude' : 'Codex';
+  clearPendingTmuxProviderExitProbe(params.reactionKey);
+  const runtimeLabel = runtimeProvider.runtime === 'claude' ? 'Claude' : runtimeProvider.runtime === 'kimi' ? 'Kimi' : 'Codex';
   const elapsedMs = Math.max(0, nowMs - params.startedAtMs);
   SESSION_HEALTH_RUNTIME.recordInteractiveEnd(
     params.sessionId,
@@ -509,6 +503,7 @@ function shouldProbeMirrorTmuxSelectionPrompt(
 ): boolean {
   const followupUntil = tmuxSelectionPromptFollowupUntil.get(subscription.sessionId) || 0;
   const inFollowupWindow = nowMs <= followupUntil;
+  if (subscription.activityTier === 'cold' && !subscription.pendingTurn && !inFollowupWindow) return false;
   const lastProbeAt = tmuxSelectionPromptLastProbeAt.get(subscription.sessionId) || 0;
   const intervalMs = inFollowupWindow
     ? MIRROR_TMUX_SELECTION_PROBE_FOLLOWUP_INTERVAL_MS
@@ -560,9 +555,16 @@ async function handleTmuxSelectionPromptForTarget(
 ): Promise<void> {
   const adapter = getState().adapters.get(target.channelType);
   if (!adapter || !adapter.isRunning()) return;
+  const tmuxSessionName = targetPane.split(':')[0] || targetPane;
+  transitionRuntimeTmuxInputState(
+    'codex',
+    tmuxSessionName,
+    'waiting_selection',
+    `Codex TUI is waiting at a ${prompt.kind} selection`,
+  );
   const permissionRequestId = `codex-selection:${prompt.kind}:mirror:${target.sessionId}:${Date.now()}`;
   const choicePromise = broker.waitForCodexTuiSelectionPermission(permissionRequestId);
-  await broker.forwardPermissionRequest(
+  broker.forwardPermissionRequest(
     adapter,
     { channelType: target.channelType, chatId: target.chatId },
     permissionRequestId,
@@ -610,11 +612,16 @@ async function handleTmuxSelectionPromptForTarget(
       prompt_kind: prompt.kind,
       choice,
     });
+    transitionRuntimeTmuxInputState(
+      'codex',
+      tmuxSessionName,
+      'running',
+      'the observed Codex screen was dismissed as not being a selection',
+    );
     return;
   }
   const result = await tmuxCore.sendActions(targetPane, actions);
   if (prompt.kind === 'update' && choice === 'update_now') {
-    const tmuxSessionName = targetPane.split(':')[0] || targetPane;
     scheduleTmuxSelectionUpdateExitProbe({
       adapter,
       target,
@@ -622,6 +629,14 @@ async function handleTmuxSelectionPromptForTarget(
       choice,
     });
   }
+  transitionRuntimeTmuxInputState(
+    'codex',
+    tmuxSessionName,
+    prompt.kind === 'update' && choice === 'update_now' ? 'starting_tmux' : 'running',
+    prompt.kind === 'update' && choice === 'update_now'
+      ? 'Codex update was selected; wait for the TUI to exit or restart before more input'
+      : `Codex ${prompt.kind} selection was resolved`,
+  );
   console.log('[bridge-manager] Codex TUI selection prompt resolved from mirror probe:', {
     session_id: target.sessionId,
     thread_id: target.threadId,
@@ -651,6 +666,218 @@ function parseMirrorCodexSelectionSessionId(permissionRequestId: string): string
   return parts[3] || null;
 }
 
+function sessionSupportsTmuxSelectionPromptProbe(session: BridgeSession): boolean {
+  const activeRuntime = getSessionActiveRuntime(session);
+  if (activeRuntime === 'kimi') return false;
+  if (activeRuntime === 'claude') return resolveEffectiveClaudeProvider(session) === 'tmux';
+  return resolveEffectiveCodexProvider(session) === 'tmux';
+}
+
+function sessionSupportsCodexTuiRuntimeSignals(session: BridgeSession): boolean {
+  const activeRuntime = getSessionActiveRuntime(session);
+  if (activeRuntime === 'kimi' || activeRuntime === 'claude') return false;
+  return resolveEffectiveCodexProvider(session) === 'tmux';
+}
+
+function assignCodexTuiTurnScreenBaseline(
+  subscription: BridgeMirrorSubscription,
+  turnState: BridgeMirrorTurnState,
+): void {
+  if (codexTuiTurnScreenBaselines.has(turnState.streamKey)) return;
+  const checkpoint = codexTuiIdleScreenCheckpoints.get(subscription.sessionId);
+  if (!checkpoint) return;
+  const turnStartedAtMs = Date.parse(turnState.startedAt);
+  if (!Number.isFinite(turnStartedAtMs) || checkpoint.capturedAtMs >= turnStartedAtMs) return;
+  const turnKey = turnState.turnId || turnState.startedAt;
+  if (checkpoint.claimedTurnKey && checkpoint.claimedTurnKey !== turnKey) return;
+  checkpoint.claimedTurnKey = turnKey;
+  codexTuiTurnScreenBaselines.set(turnState.streamKey, checkpoint);
+}
+
+async function captureCodexTuiIdleScreenCheckpoint(
+  subscription: BridgeMirrorSubscription,
+  activeTmuxSessionNames?: ReadonlySet<string>,
+  nowMs = Date.now(),
+): Promise<void> {
+  if (subscription.pendingTurn || subscription.pendingDeliveries.length > 0) return;
+  const existing = codexTuiIdleScreenCheckpoints.get(subscription.sessionId);
+  if (existing && !existing.claimedTurnKey) return;
+  const session = getBridgeContext().store.getSession(subscription.sessionId);
+  if (!session || !sessionSupportsCodexTuiRuntimeSignals(session)) return;
+  const tmuxSessionName = getSessionRuntimeTmuxSessionName(session);
+  if (!tmuxSessionName) return;
+  if (activeTmuxSessionNames && !activeTmuxSessionNames.has(tmuxSessionName)) {
+    codexTuiIdleScreenMissingCheckedAt.set(subscription.sessionId, nowMs);
+    return;
+  }
+  try {
+    const capture = await tmuxCore.capturePane(`${tmuxSessionName}:0.0`, 80);
+    codexTuiIdleScreenMissingCheckedAt.delete(subscription.sessionId);
+    codexTuiIdleScreenCheckpoints.set(subscription.sessionId, {
+      screen: capture.screen,
+      capturedAtMs: nowMs,
+    });
+  } catch (error) {
+    console.warn('[bridge-manager] Codex TUI idle checkpoint capture failed:', {
+      session_id: subscription.sessionId,
+      tmux_session: tmuxSessionName,
+      error: describeUnknownError(error),
+    });
+  }
+}
+
+function shouldAttemptCodexTuiIdleScreenCheckpoint(
+  subscription: BridgeMirrorSubscription,
+  nowMs: number,
+): boolean {
+  if (subscription.pendingTurn || subscription.pendingDeliveries.length > 0) return false;
+  const existing = codexTuiIdleScreenCheckpoints.get(subscription.sessionId);
+  if (existing && !existing.claimedTurnKey) return false;
+  const missingCheckedAt = codexTuiIdleScreenMissingCheckedAt.get(subscription.sessionId) || 0;
+  const retryMs = subscription.activityTier === 'cold'
+    ? CODEX_TUI_IDLE_CHECKPOINT_COLD_MISSING_RETRY_MS
+    : CODEX_TUI_IDLE_CHECKPOINT_HOT_MISSING_RETRY_MS;
+  return nowMs - missingCheckedAt >= retryMs;
+}
+
+function resolveCodexTuiIdleScreenCheckpointTmuxSessionName(
+  subscription: BridgeMirrorSubscription,
+  nowMs: number,
+): string | null {
+  if (!shouldAttemptCodexTuiIdleScreenCheckpoint(subscription, nowMs)) return null;
+  const session = getBridgeContext().store.getSession(subscription.sessionId);
+  if (!session || !sessionSupportsCodexTuiRuntimeSignals(session)) return null;
+  return getSessionRuntimeTmuxSessionName(session) || null;
+}
+
+async function ensureCodexTuiIdleScreenCheckpoints(): Promise<void> {
+  const nowMs = Date.now();
+  const candidates = Array.from(getState().mirrorSubscriptions.values()).flatMap((subscription) => {
+    const tmuxSessionName = resolveCodexTuiIdleScreenCheckpointTmuxSessionName(subscription, nowMs);
+    return tmuxSessionName ? [{ subscription, tmuxSessionName }] : [];
+  });
+  if (candidates.length === 0) return;
+
+  let activeTmuxSessionNames: Set<string>;
+  try {
+    const listed = await tmuxCore.listSessions();
+    activeTmuxSessionNames = new Set(listed.sessions.map((session) => session.name));
+  } catch (error) {
+    for (const { subscription } of candidates) {
+      codexTuiIdleScreenMissingCheckedAt.set(subscription.sessionId, nowMs);
+    }
+    console.warn('[bridge-manager] Unable to list tmux sessions for Codex TUI idle checkpoints:', {
+      error: describeUnknownError(error),
+    });
+    return;
+  }
+
+  await Promise.allSettled(
+    candidates.map(({ subscription }) =>
+      captureCodexTuiIdleScreenCheckpoint(subscription, activeTmuxSessionNames, nowMs),
+    ),
+  );
+}
+
+function observeCodexTuiReconnectStatus(
+  subscription: BridgeMirrorSubscription,
+  screenText: string,
+  nowMs: number,
+): void {
+  const pendingTurn = subscription.pendingTurn;
+  const previous = codexTuiReconnectMonitors.get(subscription.sessionId);
+  if (!pendingTurn) {
+    codexTuiReconnectMonitors.delete(subscription.sessionId);
+    return;
+  }
+
+  const reconnect = parseCodexTuiReconnectSignal(screenText);
+  if (!reconnect) {
+    if (!previous || previous.streamKey !== pendingTurn.streamKey) return;
+    if (pendingTurn.statusNote === previous.appliedNote) {
+      applyUnifiedTurnStatusNote(pendingTurn, previous.previousStatusNote, nowMs);
+      MIRROR_TURN_HOOKS.onStatusProgress?.(subscription, pendingTurn);
+    }
+    codexTuiReconnectMonitors.delete(subscription.sessionId);
+    return;
+  }
+
+  const signalKey = `${reconnect.attempt}/${reconnect.maxAttempts}`;
+  if (previous?.streamKey === pendingTurn.streamKey && previous.signalKey === signalKey) return;
+  const appliedNote = `正在重连 ${signalKey}`;
+  const previousStatusNote = previous?.streamKey === pendingTurn.streamKey
+    ? previous.previousStatusNote
+    : pendingTurn.statusNote;
+  applyUnifiedTurnStatusNote(pendingTurn, appliedNote, nowMs);
+  codexTuiReconnectMonitors.set(subscription.sessionId, {
+    streamKey: pendingTurn.streamKey,
+    signalKey,
+    appliedNote,
+    previousStatusNote,
+  });
+  MIRROR_TURN_HOOKS.onStatusProgress?.(subscription, pendingTurn);
+}
+
+async function resolveCodexTuiFinalizedTurnStatus(
+  subscription: BridgeMirrorSubscription,
+  turn: FinalizedBridgeMirrorTurn,
+  context: { batchSize: number },
+): Promise<FinalizedBridgeMirrorTurn['status']> {
+  const baseline = codexTuiTurnScreenBaselines.get(turn.streamKey);
+  codexTuiReconnectMonitors.delete(subscription.sessionId);
+
+  const session = getBridgeContext().store.getSession(subscription.sessionId);
+  if (!session || !sessionSupportsCodexTuiRuntimeSignals(session)) {
+    codexTuiTurnScreenBaselines.delete(turn.streamKey);
+    return turn.status;
+  }
+  const tmuxSessionName = getSessionRuntimeTmuxSessionName(session);
+  if (!tmuxSessionName) {
+    codexTuiTurnScreenBaselines.delete(turn.streamKey);
+    return turn.status;
+  }
+
+  try {
+    const capture = await tmuxCore.capturePane(`${tmuxSessionName}:0.0`, 80);
+    codexTuiTurnScreenBaselines.delete(turn.streamKey);
+    const capturedAtMs = Date.now();
+    codexTuiIdleScreenCheckpoints.set(subscription.sessionId, {
+      screen: capture.screen,
+      capturedAtMs,
+    });
+    if (turn.status !== 'completed' || !baseline || context.batchSize !== 1) return turn.status;
+    const currentFileSize = subscription.filePath
+      ? (() => {
+          try {
+            return statSync(subscription.filePath).size;
+          } catch {
+            return null;
+          }
+        })()
+      : null;
+    if (subscription.fileSize === null || currentFileSize !== subscription.fileSize) {
+      return turn.status;
+    }
+    const errorMessage = findNewCodexTuiErrorMessage(baseline.screen, capture.screen);
+    if (!errorMessage) return turn.status;
+    turn.errorText ||= errorMessage;
+    console.warn('[bridge-manager] Codex TUI error detected after task_complete:', {
+      session_id: subscription.sessionId,
+      thread_id: subscription.threadId,
+      stream_key: turn.streamKey,
+      error: errorMessage,
+    });
+    return 'error';
+  } catch (error) {
+    console.warn('[bridge-manager] Codex TUI completed-turn error probe failed:', {
+      session_id: subscription.sessionId,
+      tmux_session: tmuxSessionName,
+      error: describeUnknownError(error),
+    });
+    return turn.status;
+  }
+}
+
 async function recoverMirrorTmuxSelectionPromptFromCallback(
   claim: broker.CodexSelectionCallbackClaim,
   adapter: BaseChannelAdapter,
@@ -663,11 +890,7 @@ async function recoverMirrorTmuxSelectionPromptFromCallback(
   if (!session) {
     return { ok: false, notice: `Codex TUI Selection 已记录，但找不到目标会话 ${sessionId}。` };
   }
-  const activeRuntime = getSessionActiveRuntime(session);
-  const isTmuxRuntime = activeRuntime === 'claude'
-    ? resolveEffectiveClaudeProvider(session) === 'tmux'
-    : resolveEffectiveCodexProvider(session) === 'tmux';
-  if (!isTmuxRuntime) {
+  if (!sessionSupportsTmuxSelectionPromptProbe(session)) {
     return { ok: false, notice: `Codex TUI Selection 已记录，但目标会话 ${sessionId} 当前不是 tmux runtime。` };
   }
   const tmuxSessionName = getSessionRuntimeTmuxSessionName(session);
@@ -814,7 +1037,11 @@ async function recoverTmuxProviderAutoForwardFromSelectionCallback(
         notice: `Codex TUI Selection 已记录，但 ${recovery.target} 当前屏幕没有可识别的 TUI 选择提示；未恢复 auto-forward 消息。`,
       };
     }
-    await tmuxCore.sendActions(recovery.target, recovery.actions);
+    await sendRuntimeTmuxInput({
+      runtime: 'codex',
+      sessionName,
+      send: () => tmuxCore.sendActions(recovery.target, recovery.actions),
+    });
     console.log('[bridge-manager] Recovered tmux provider auto-forward from Codex TUI selection callback:', {
       permission_request_id: claim.permissionRequestId,
       session_id: claim.link.sessionId,
@@ -842,11 +1069,7 @@ async function probeMirrorTmuxSelectionPrompt(subscription: BridgeMirrorSubscrip
   tmuxSelectionPromptLastProbeAt.set(subscription.sessionId, nowMs);
   const session = getBridgeContext().store.getSession(subscription.sessionId);
   if (!session) return;
-  const activeRuntime = getSessionActiveRuntime(session);
-  const isTmuxRuntime = activeRuntime === 'claude'
-    ? resolveEffectiveClaudeProvider(session) === 'tmux'
-    : resolveEffectiveCodexProvider(session) === 'tmux';
-  if (!isTmuxRuntime) return;
+  if (!sessionSupportsTmuxSelectionPromptProbe(session)) return;
   const tmuxSessionName = getSessionRuntimeTmuxSessionName(session);
   if (!tmuxSessionName) return;
   const targetPane = `${tmuxSessionName}:0.0`;
@@ -861,9 +1084,18 @@ async function probeMirrorTmuxSelectionPrompt(subscription: BridgeMirrorSubscrip
     });
     return;
   }
+  if (sessionSupportsCodexTuiRuntimeSignals(session)) {
+    observeCodexTuiReconnectStatus(subscription, capture.screen, nowMs);
+  }
   const monitor = getTmuxSelectionPromptMonitor(subscription.sessionId);
   const prompt = observeStableCodexTuiSelectionPrompt(capture.screen, monitor);
   if (!prompt) {
+    if (
+      subscription.pendingTurn
+      && nowMs < (tmuxSelectionPromptFollowupUntil.get(subscription.sessionId) || 0)
+    ) {
+      scheduleMirrorSelectionProbeWake(MIRROR_TMUX_SELECTION_PROBE_FOLLOWUP_INTERVAL_MS);
+    }
     if (!monitor.pending && monitor.firstSeenAtMs >= 0) {
       requestTmuxSelectionPromptFollowupProbe(subscription.sessionId, nowMs, {
         resetLastProbe: false,
@@ -889,11 +1121,7 @@ async function probeTmuxSelectionPromptForTarget(
 ): Promise<boolean> {
   const session = getBridgeContext().store.getSession(target.sessionId);
   if (!session) return false;
-  const activeRuntime = getSessionActiveRuntime(session);
-  const isTmuxRuntime = activeRuntime === 'claude'
-    ? resolveEffectiveClaudeProvider(session) === 'tmux'
-    : resolveEffectiveCodexProvider(session) === 'tmux';
-  if (!isTmuxRuntime) return false;
+  if (!sessionSupportsTmuxSelectionPromptProbe(session)) return false;
   const tmuxSessionName = getSessionRuntimeTmuxSessionName(session);
   if (!tmuxSessionName) return false;
   const targetPane = `${tmuxSessionName}:0.0`;
@@ -1023,16 +1251,6 @@ function describeUnknownError(error: unknown): string {
 
 function nowIso(): string {
   return new Date().toISOString();
-}
-
-function getPendingPermissionLinksForCurrentSession(
-  chatId: string,
-  sessionId?: string,
-): PermissionLinkRecord[] {
-  const { store } = getBridgeContext();
-  const pending = store.listPendingPermissionLinksByChat(chatId);
-  if (!sessionId) return pending;
-  return pending.filter((link) => !link.sessionId || link.sessionId === sessionId);
 }
 
 function channelAddressFromBinding(binding: {
@@ -1174,26 +1392,9 @@ function touchInboundChannelChatActivity(msg: InboundMessage): void {
   const binding = store.getChannelChat(msg.address.channelType, msg.address.chatId);
   if (!binding) return;
   store.touchChannelChatActivity(binding.id, nowIso());
+  codexTuiIdleScreenMissingCheckedAt.delete(binding.bridgeSessionId);
 }
 
-
-/**
- * Check if a message looks like a numeric permission shortcut (1/2/3) for
- * Feishu channels WITH at least one pending permission in that chat.
- *
- * This is used by the adapter loop to route these messages to the inline
- * (non-session-locked) path, avoiding deadlock: the session is blocked
- * waiting for the permission to be resolved, so putting "1" behind the
- * session lock would deadlock.
- */
-function isNumericPermissionShortcut(channelType: string, rawText: string, chatId: string): boolean {
-  if (channelType !== 'feishu') return false;
-  const normalized = rawText.normalize('NFKC').replace(/[\u200B-\u200D\uFEFF]/g, '').trim();
-  if (!/^[123]$/.test(normalized)) return false;
-  const { store } = getBridgeContext();
-  const pending = store.listPendingPermissionLinksByChat(chatId);
-  return pending.length > 0; // any pending → route to inline path
-}
 
 interface BridgeManagerState extends BridgeAdapterRuntimeState, BridgeInteractiveRuntimeState {
   startedAt: string | null;
@@ -1205,6 +1406,9 @@ interface BridgeManagerState extends BridgeAdapterRuntimeState, BridgeInteractiv
   claudeMirrorWakeTimer: NodeJS.Timeout | null;
   claudeMirrorSubscriptions: Map<string, BridgeMirrorSubscription>;
   claudeMirrorSyncInFlight: boolean;
+  kimiMirrorWakeTimer: NodeJS.Timeout | null;
+  kimiMirrorSubscriptions: Map<string, BridgeMirrorSubscription>;
+  kimiMirrorSyncInFlight: boolean;
   mirrorSuppressUntil: Map<string, MirrorSuppressionState[]>;
   mirrorIgnoredTurnIds: Map<string, Map<string, number>>;
   threadCardSelections: Map<string, string>;
@@ -1214,6 +1418,7 @@ interface BridgeManagerState extends BridgeAdapterRuntimeState, BridgeInteractiv
   thenTaskTimers: Map<string, NodeJS.Timeout>;
   thenSessionQueues: Set<string>;
   autoStartChecked: boolean;
+  dailyVersionUpdateRuntime: DailyVersionUpdateRuntime | null;
 }
 
 interface EveryTaskRuntimeState {
@@ -1241,6 +1446,9 @@ function getState(): BridgeManagerState {
       claudeMirrorWakeTimer: null,
       claudeMirrorSubscriptions: new Map(),
       claudeMirrorSyncInFlight: false,
+      kimiMirrorWakeTimer: null,
+      kimiMirrorSubscriptions: new Map(),
+      kimiMirrorSyncInFlight: false,
       mirrorSuppressUntil: new Map(),
       mirrorIgnoredTurnIds: new Map(),
       threadCardSelections: new Map(),
@@ -1252,6 +1460,7 @@ function getState(): BridgeManagerState {
       queuedCounts: new Map(),
       sessionLocks: new Map(),
       autoStartChecked: false,
+      dailyVersionUpdateRuntime: null,
     };
   }
   // Backfill sessionLocks for states created before this field existed
@@ -1263,6 +1472,9 @@ function getState(): BridgeManagerState {
   }
   if (!g[GLOBAL_KEY].claudeMirrorSubscriptions) {
     g[GLOBAL_KEY].claudeMirrorSubscriptions = new Map();
+  }
+  if (!g[GLOBAL_KEY].kimiMirrorSubscriptions) {
+    g[GLOBAL_KEY].kimiMirrorSubscriptions = new Map();
   }
   if (!g[GLOBAL_KEY].invalidAdapters) {
     g[GLOBAL_KEY].invalidAdapters = new Map();
@@ -1300,6 +1512,12 @@ function getState(): BridgeManagerState {
   if (!Object.prototype.hasOwnProperty.call(g[GLOBAL_KEY], 'claudeMirrorSyncInFlight')) {
     g[GLOBAL_KEY].claudeMirrorSyncInFlight = false;
   }
+  if (!Object.prototype.hasOwnProperty.call(g[GLOBAL_KEY], 'kimiMirrorWakeTimer')) {
+    g[GLOBAL_KEY].kimiMirrorWakeTimer = null;
+  }
+  if (!Object.prototype.hasOwnProperty.call(g[GLOBAL_KEY], 'kimiMirrorSyncInFlight')) {
+    g[GLOBAL_KEY].kimiMirrorSyncInFlight = false;
+  }
   return g[GLOBAL_KEY];
 }
 
@@ -1321,12 +1539,30 @@ function getClaudeMirrorState(): BridgeMirrorRuntimeState {
   };
 }
 
+function getKimiMirrorState(): BridgeMirrorRuntimeState {
+  const state = getState();
+  return {
+    get running() { return state.running; },
+    set running(value) { state.running = value; },
+    get adapters() { return state.adapters; },
+    set adapters(value) { state.adapters = value; },
+    get mirrorSubscriptions() { return state.kimiMirrorSubscriptions; },
+    set mirrorSubscriptions(value) { state.kimiMirrorSubscriptions = value; },
+    get mirrorWakeTimer() { return state.kimiMirrorWakeTimer; },
+    set mirrorWakeTimer(value) { state.kimiMirrorWakeTimer = value; },
+    get mirrorSyncInFlight() { return state.kimiMirrorSyncInFlight; },
+    set mirrorSyncInFlight(value) { state.kimiMirrorSyncInFlight = value; },
+    get activeTasks() { return state.activeTasks; },
+    set activeTasks(value) { state.activeTasks = value; },
+  };
+}
+
 const INTERACTIVE_RUNTIME = createInteractiveRuntime(getState, {
   getStore: () => getBridgeContext().store,
   nowIso,
 });
 
-function formatCodexTerminalDetail(terminal: BridgeTurnTerminalRecord): string {
+function formatRuntimeTerminalDetail(terminal: BridgeTurnTerminalRecord): string {
   if (terminal.runtime === 'claude') {
     if (terminal.outcome === 'aborted') {
       return '检测到 Claude Code 会话已停止当前任务。';
@@ -1335,6 +1571,15 @@ function formatCodexTerminalDetail(terminal: BridgeTurnTerminalRecord): string {
       return '检测到 Claude Code 会话当前任务执行失败。';
     }
     return '检测到 Claude Code 会话已完成当前任务。';
+  }
+  if (terminal.runtime === 'kimi') {
+    if (terminal.outcome === 'aborted') {
+      return '检测到 Kimi Code 会话已停止当前任务。';
+    }
+    if (terminal.outcome === 'failed') {
+      return '检测到 Kimi Code 会话当前任务执行失败。';
+    }
+    return '检测到 Kimi Code 会话已完成当前任务。';
   }
   if (terminal.outcome === 'aborted') {
     return '检测到 Codex thread已停止当前任务。';
@@ -1349,7 +1594,7 @@ const TURN_COORDINATOR = createTurnCoordinator({
   finalizeTerminalTurn: (turn, terminal) => INTERACTIVE_RUNTIME.finalizeTerminalActiveTask(
     turn.sessionId,
     terminal.outcome,
-    formatCodexTerminalDetail(terminal),
+    formatRuntimeTerminalDetail(terminal),
     terminal.text,
   ),
 });
@@ -1428,6 +1673,7 @@ function syncMirrorSessionState(sessionId: string): void {
   const subscriptions = [
     ...Array.from(state.mirrorSubscriptions.values()),
     ...Array.from(state.claudeMirrorSubscriptions.values()),
+    ...Array.from(state.kimiMirrorSubscriptions.values()),
   ]
     .filter((item) => item.sessionId === sessionId);
   const mirrorStatus: BridgeSession['mirror_status'] = subscriptions.length === 0
@@ -1478,7 +1724,7 @@ function getMirrorStructuredStreamStatusConfig(): {
   return {
     idleStartMs: Math.max(
       0,
-      (typeof idleStartSeconds === 'number' && Number.isFinite(idleStartSeconds) && idleStartSeconds > 0
+      (typeof idleStartSeconds === 'number' && Number.isFinite(idleStartSeconds) && idleStartSeconds >= 0
         ? idleStartSeconds
         : MIRROR_STREAM_STATUS_IDLE_START_MS / 1000) * 1000,
     ),
@@ -1505,14 +1751,19 @@ function getMirrorRuntimeTags(_threadId: string, sessionId?: string): string[] {
   return buildRuntimeStreamTags(resolveRuntimeMetadataConfig(session));
 }
 
+function getMirrorAssistantLabel(_threadId: string, sessionId?: string): string {
+  const { store } = getBridgeContext();
+  const session = sessionId ? store.getSession(sessionId) : null;
+  return getSessionActiveRuntime(session) || getGlobalRuntimeAgent();
+}
+
 const MIRROR_FEEDBACK = createMirrorFeedbackController({
   getAdapter: (channelType) => getState().adapters.get(channelType) || null,
   getThreadTitle: getMirrorThreadTitle,
   getRuntimeTags: getMirrorRuntimeTags,
-  onMirrorStreamStart: (subscription) => {
-    const key = tmuxAutoForwardReactionKey(subscription.channelType, subscription.chatId, subscription.sessionId);
-    void clearPendingTmuxAutoForwardReaction(key);
-  },
+  getAssistantLabel: getMirrorAssistantLabel,
+  onMirrorTurnStarted: assignCodexTuiTurnScreenBaseline,
+  resolveFinalizedTurnStatus: resolveCodexTuiFinalizedTurnStatus,
   getStructuredStreamStatusConfig: getMirrorStructuredStreamStatusConfig,
   nowIso,
   eventBatchLimit: MIRROR_EVENT_BATCH_LIMIT,
@@ -1532,6 +1783,7 @@ function refreshActiveMirrorStreamingStatuses(nowMs = Date.now()): void {
   for (const subscription of [
     ...Array.from(state.mirrorSubscriptions.values()),
     ...Array.from(state.claudeMirrorSubscriptions.values()),
+    ...Array.from(state.kimiMirrorSubscriptions.values()),
   ]) {
     refreshMirrorStreamingStatus(subscription, nowMs);
   }
@@ -1604,6 +1856,7 @@ const MIRROR_RUNTIME = createMirrorRuntime(getState, {
   getCodexSessionByThreadIdSafe,
   hasSessionMirrorSource: (session) => Boolean(
     getSessionActiveRuntime(session) !== 'claude'
+    && getSessionActiveRuntime(session) !== 'kimi'
     && getSessionCodexThreadId(session)
     && getSessionCodexProviderOverride(session as BridgeSession | null | undefined) !== 'sdk',
   ),
@@ -1672,14 +1925,66 @@ const CLAUDE_MIRROR_RUNTIME = createMirrorRuntime(getClaudeMirrorState, {
   deliverMirrorTurns,
 });
 
+const KIMI_MIRROR_RUNTIME = createMirrorRuntime(getKimiMirrorState, {
+  watchDebounceMs: MIRROR_WATCH_DEBOUNCE_MS,
+  danglingThreadRetryLimit: DANGLING_MIRROR_THREAD_RETRY_LIMIT,
+  failureSuspendThreshold: MIRROR_FAILURE_SUSPEND_THRESHOLD,
+  failureSuspendMs: MIRROR_FAILURE_SUSPEND_MS,
+  reconcileConcurrency: MIRROR_RECONCILE_CONCURRENCY,
+  slowReconcileSubscriptionMs: MIRROR_SLOW_RECONCILE_SUBSCRIPTION_MS,
+  activeBindingWindowMs: MIRROR_ACTIVE_BINDING_WINDOW_MS,
+  coldReconcileIntervalMs: MIRROR_COLD_RECONCILE_INTERVAL_MS,
+}, {
+  mirrorSource: createKimiMirrorJsonlSource(),
+  runtimeLabel: 'Kimi',
+  nowIso,
+  describeUnknownError,
+  listChannelChats: () => getBridgeContext().store.listChannelChats(),
+  getSession: (sessionId) => getBridgeContext().store.getSession(sessionId),
+  clearSessionMirrorThreadId: (sessionId) => {
+    getBridgeContext().store.updateSession(sessionId, setSessionKimiIdentityUpdate(undefined, undefined));
+  },
+  clearSessionCodexThreadId: () => {},
+  getCodexSessionByThreadIdSafe: () => null,
+  hasSessionMirrorSource: (session) => Boolean(
+    getSessionActiveRuntime(session) === 'kimi'
+    && getSessionKimiSessionId(session)
+    && (getSessionKimiCwd(session) || getSessionWorkingDirectory(session)),
+  ),
+  getSessionMirrorThreadId: (session) => getSessionKimiSessionId(session),
+  getSessionMirrorCwd: (session) => getSessionKimiCwd(session) || getSessionWorkingDirectory(session),
+  getMirrorSourceSummary: (source, threadId, cwd) => source.findByThreadId(threadId, cwd || undefined),
+  syncMirrorSessionStateSafe,
+  filterSuppressedMirrorRecords,
+  observeSessionHealthRecords: (sessionId, threadId, records) => {
+    SESSION_HEALTH_RUNTIME.observeBridgeMirrorRecords(sessionId, threadId, records);
+  },
+  routeRuntimeRecords: (runtime, sessionId, threadId, records) => routeRuntimeRecords(
+    sessionId,
+    runtime,
+    threadId,
+    records,
+    TURN_COORDINATOR,
+  ),
+  consumeMirrorRecords,
+  flushTimedOutMirrorTurn: (subscription) => flushTimedOutMirrorTurn(subscription),
+  hasPendingMirrorWork,
+  consumeBufferedMirrorTurns: (subscription) => consumeBufferedMirrorTurns(subscription),
+  stopMirrorStreaming,
+  deliverMirrorTurns,
+});
+
 function resetMirrorSessionForInteractiveRun(sessionId: string): void {
   MIRROR_RUNTIME.resetMirrorSessionForInteractiveRun(sessionId);
   CLAUDE_MIRROR_RUNTIME.resetMirrorSessionForInteractiveRun(sessionId);
+  KIMI_MIRROR_RUNTIME.resetMirrorSessionForInteractiveRun(sessionId);
 }
 
 async function reconcileMirrorSubscriptions(): Promise<void> {
   await MIRROR_RUNTIME.reconcileMirrorSubscriptions();
   await CLAUDE_MIRROR_RUNTIME.reconcileMirrorSubscriptions();
+  await KIMI_MIRROR_RUNTIME.reconcileMirrorSubscriptions();
+  await ensureCodexTuiIdleScreenCheckpoints();
   const nowMs = Date.now();
   await Promise.allSettled(
     [
@@ -1695,6 +2000,7 @@ async function reconcileMirrorSubscriptions(): Promise<void> {
 function clearMirrorSubscriptions(): void {
   MIRROR_RUNTIME.clearMirrorSubscriptions();
   CLAUDE_MIRROR_RUNTIME.clearMirrorSubscriptions();
+  KIMI_MIRROR_RUNTIME.clearMirrorSubscriptions();
 }
 
 function shouldRouteTerminalAppendInline(msg: InboundMessage): boolean {
@@ -1719,7 +2025,7 @@ function resolveInboundCommandText(rawText: string): string {
 
 function isHighPriorityControlCommandText(rawText: string): boolean {
   const resolvedCommand = resolveInboundCommandText(rawText);
-  if (resolvedCommand === '/stop' || resolvedCommand === '/perm') return true;
+  if (resolvedCommand === '/stop') return true;
   const args = rawText.trim().slice((rawText.trim().split(/\s+/)[0] || '').length).trim();
   return (
     (resolvedCommand === '/tmux-screen' || resolvedCommand === '/pty-screen')
@@ -1746,7 +2052,8 @@ function isReadOnlyOrLongIoCommandText(rawText: string): boolean {
   const resolvedCommand = resolveInboundCommandText(rawText);
   return resolvedCommand === '/tmux-screen'
     || resolvedCommand === '/pty-screen'
-    || resolvedCommand === '/shell';
+    || resolvedCommand === '/shell'
+    || resolvedCommand === '/new';
 }
 
 function splitInboundCommandText(rawText: string): { resolvedCommand: string; args: string } {
@@ -1814,8 +2121,8 @@ function sessionMutatingCallbackLane(callbackData: string): { jobKind: string; s
   return null;
 }
 
-function adapterImmediateLane(msg: InboundMessage, category: 'channel-event' | 'callback' | 'command' | 'permission-shortcut' | 'bypass' | 'regular'): AdapterImmediateLane | null {
-  if (category === 'channel-event' || category === 'permission-shortcut') {
+function adapterImmediateLane(msg: InboundMessage, category: 'channel-event' | 'callback' | 'command' | 'bypass' | 'regular'): AdapterImmediateLane | null {
+  if (category === 'channel-event') {
     return {
       laneKey: `control:${msg.address.channelType}:${msg.address.chatId}:${msg.messageId || msg.updateId || 'event'}`,
       laneKind: 'control',
@@ -1836,21 +2143,27 @@ function adapterImmediateLane(msg: InboundMessage, category: 'channel-event' | '
       jobKind: 'control:command',
     };
   }
-  if (category === 'command' && isReadOnlyOrLongIoCommandText(msg.text)) {
-    const resolvedCommand = resolveInboundCommandText(msg.text);
+  const immediateJobCommandText = category === 'command'
+    ? msg.text
+    : category === 'callback' && msg.callbackData
+      ? parseCommandCallbackData(msg.callbackData)?.commandText
+      : undefined;
+  if (immediateJobCommandText && isReadOnlyOrLongIoCommandText(immediateJobCommandText)) {
+    const resolvedCommand = resolveInboundCommandText(immediateJobCommandText);
     const isScreenMonitor = resolvedCommand === '/tmux-screen' || resolvedCommand === '/pty-screen';
+    const blocksConversation = !isScreenMonitor && resolvedCommand !== '/new';
     return {
       laneKey: `job:${resolvedCommand.slice(1)}:${msg.address.channelType}:${msg.address.chatId}:${msg.messageId || 'command'}`,
       laneKind: 'job',
       jobKind: `command:${resolvedCommand.slice(1)}`,
       waitForConversationBarrier: !isScreenMonitor,
-      blocksConversation: !isScreenMonitor,
+      blocksConversation,
     };
   }
   return null;
 }
 
-function adapterSessionLane(msg: InboundMessage, category: 'channel-event' | 'callback' | 'command' | 'permission-shortcut' | 'bypass' | 'regular'): { sessionId: string; jobKind: string; blocksConversation?: boolean } | null {
+function adapterSessionLane(msg: InboundMessage, category: 'channel-event' | 'callback' | 'command' | 'bypass' | 'regular'): { sessionId: string; jobKind: string; blocksConversation?: boolean } | null {
   if (category === 'regular') {
     const binding = getBridgeContext().store.getChannelChat(msg.address.channelType, msg.address.chatId);
     if (!binding) return null;
@@ -1894,7 +2207,6 @@ const ADAPTER_RUNTIME = createAdapterRuntime(getState, {
   },
   handleMessage,
   processWithSessionLock: (sessionId, fn, options) => INTERACTIVE_RUNTIME.processWithSessionLock(sessionId, fn, options),
-  isNumericPermissionShortcut,
   isCommandMessage: (msg) => isBridgeCommandText(msg.text),
   resolveSessionIdForMessage: (msg) => router.resolve(msg.address).bridgeSessionId,
   shouldBypassSessionLock: shouldRouteTerminalAppendInline,
@@ -1928,6 +2240,14 @@ export async function start(): Promise<void> {
     state.adapters.clear();
     state.adapterMeta.clear();
     return;
+  }
+
+  if (!state.dailyVersionUpdateRuntime) {
+    const currentVersion = resolveInstalledCodelarkVersion();
+    state.dailyVersionUpdateRuntime = createDailyVersionUpdateRuntime({
+      currentVersion,
+      checker: createDailyVersionChecker({ currentVersion }),
+    });
   }
 
   // Mark running BEFORE starting consumer loops — runAdapterLoop checks
@@ -2413,6 +2733,10 @@ function formatLifecycleArchiveDetail(result: Awaited<ReturnType<typeof archiveL
       return result.claudeSessionId
         ? `archived Claude session ${result.claudeSessionId.slice(0, 8)}`
         : 'archived Claude session';
+    case 'kimi_archive':
+      return result.kimiSessionId
+        ? `archived Kimi session ${result.kimiSessionId.slice(0, 8)}`
+        : 'archived Kimi session';
     case 'bridge_delete':
       return 'deleted BridgeSession';
     case 'binding_delete':
@@ -2973,6 +3297,13 @@ function createLifecycleSessionRegistry(store: BridgeStore): SessionRegistryServ
         return session ? archiveClaudeSessionJsonl(session) : false;
       },
     },
+    kimiThreads: {
+      getThread: () => null,
+      archiveThread: (kimiSessionId, cwd) => {
+        const session = findKimiSessionFileById(kimiSessionId, cwd);
+        return session ? archiveKimiSessionFile(session) : false;
+      },
+    },
   });
 }
 
@@ -2980,10 +3311,12 @@ async function archiveLifecycleBindingSession(
   store: BridgeStore,
   binding: ChannelChat,
 ): Promise<{
-  action: 'codex_archive' | 'claude_archive' | 'bridge_delete' | 'delete_after_archive_failure' | 'binding_delete';
+  action: 'codex_archive' | 'claude_archive' | 'kimi_archive' | 'bridge_delete' | 'delete_after_archive_failure' | 'binding_delete';
   codexThreadId?: string;
   claudeSessionId?: string;
   claudeCwd?: string;
+  kimiSessionId?: string;
+  kimiCwd?: string;
   deletedBridgeSessionIds: string[];
   tmuxSessionNames: string[];
   tmuxCleanupCommands: string[];
@@ -3007,10 +3340,14 @@ async function archiveLifecycleBindingSession(
   const activeRuntime = getSessionActiveRuntime(session);
   const claudeSessionId = activeRuntime === 'claude' ? getSessionClaudeSessionId(session) || undefined : undefined;
   const claudeCwd = activeRuntime === 'claude' ? getSessionClaudeCwd(session) || getSessionWorkingDirectory(session) || undefined : undefined;
+  const kimiSessionId = activeRuntime === 'kimi' ? getSessionKimiSessionId(session) || undefined : undefined;
+  const kimiCwd = activeRuntime === 'kimi' ? getSessionKimiCwd(session) || getSessionWorkingDirectory(session) || undefined : undefined;
   const tmuxCleanup = await cleanupLifecycleTmuxSessions(store, session, {
     codexThreadId,
     claudeSessionId,
     claudeCwd,
+    kimiSessionId,
+    kimiCwd,
   });
   try {
     if (codexThreadId) {
@@ -3028,6 +3365,16 @@ async function archiveLifecycleBindingSession(
         action: 'claude_archive',
         claudeSessionId,
         claudeCwd,
+        deletedBridgeSessionIds: result.deletedBridgeSessionIds,
+        ...tmuxCleanup,
+      };
+    }
+    if (kimiSessionId && kimiCwd) {
+      const result = registry.archiveKimiThread(kimiSessionId, kimiCwd);
+      return {
+        action: 'kimi_archive',
+        kimiSessionId,
+        kimiCwd,
         deletedBridgeSessionIds: result.deletedBridgeSessionIds,
         ...tmuxCleanup,
       };
@@ -3061,6 +3408,8 @@ async function cleanupLifecycleTmuxSessions(
     codexThreadId?: string;
     claudeSessionId?: string;
     claudeCwd?: string;
+    kimiSessionId?: string;
+    kimiCwd?: string;
   },
 ): Promise<{
   tmuxSessionNames: string[];
@@ -3077,6 +3426,11 @@ async function cleanupLifecycleTmuxSessions(
           && getSessionClaudeSessionId(candidate) === identity.claudeSessionId
           && getSessionClaudeCwd(candidate) === identity.claudeCwd;
       }
+      if (identity.kimiSessionId && identity.kimiCwd) {
+        return getSessionActiveRuntime(candidate) === 'kimi'
+          && getSessionKimiSessionId(candidate) === identity.kimiSessionId
+          && getSessionKimiCwd(candidate) === identity.kimiCwd;
+      }
       return candidate.id === session.id;
     });
   const targets = linkedSessions.length > 0 ? linkedSessions : [session];
@@ -3086,12 +3440,14 @@ async function cleanupLifecycleTmuxSessions(
   const tmuxCleanupErrors: string[] = [];
 
   for (const target of targets) {
-    const tmuxSessionName = getSessionRuntimeTmuxSessionName(target);
+    const activeRuntime = getSessionActiveRuntime(target);
+    const tmuxSessionName = getSessionRuntimeTmuxSessionName(target)
+      || (activeRuntime === 'kimi' ? kimiTmuxSessionName(target.id) : undefined);
     if (!tmuxSessionName || seen.has(tmuxSessionName)) continue;
     seen.add(tmuxSessionName);
     tmuxSessionNames.push(tmuxSessionName);
     const cleanup = await cleanupRuntimeTmuxSession({
-      runtime: getSessionActiveRuntime(target),
+      runtime: activeRuntime,
       sessionName: tmuxSessionName,
       ignoreMissing: true,
     });
@@ -3143,6 +3499,8 @@ async function handleChannelLifecycleEvent(msg: InboundMessage): Promise<void> {
         archiveResult.codexThreadId ? `thread=${archiveResult.codexThreadId}` : '',
         archiveResult.claudeSessionId ? `claude_session=${archiveResult.claudeSessionId}` : '',
         archiveResult.claudeCwd ? `claude_cwd=${archiveResult.claudeCwd}` : '',
+        archiveResult.kimiSessionId ? `kimi_session=${archiveResult.kimiSessionId}` : '',
+        archiveResult.kimiCwd ? `kimi_cwd=${archiveResult.kimiCwd}` : '',
         archiveResult.tmuxSessionNames.length > 0 ? `tmux_sessions=${archiveResult.tmuxSessionNames.join(',')}` : '',
         archiveResult.tmuxCleanupCommands.length > 0 ? `tmux_cleanup=${archiveResult.tmuxCleanupCommands.join(',')}` : '',
         archiveResult.tmuxCleanupErrors.length > 0 ? `tmux_cleanup_errors=${archiveResult.tmuxCleanupErrors.join(',')}` : '',
@@ -3151,7 +3509,7 @@ async function handleChannelLifecycleEvent(msg: InboundMessage): Promise<void> {
     });
   } catch { /* best effort */ }
 
-  await reconcileMirrorSubscriptions().catch((err) => {
+  void reconcileMirrorSubscriptions().catch((err) => {
     console.error('[bridge-manager] Mirror reconcile after channel lifecycle archive failed:', describeUnknownError(err));
   });
   console.warn('[bridge-manager] Archived local ChannelChat session after channel lifecycle event:', {
@@ -3164,6 +3522,8 @@ async function handleChannelLifecycleEvent(msg: InboundMessage): Promise<void> {
     codexThreadId: archiveResult.codexThreadId,
     claudeSessionId: archiveResult.claudeSessionId,
     claudeCwd: archiveResult.claudeCwd,
+    kimiSessionId: archiveResult.kimiSessionId,
+    kimiCwd: archiveResult.kimiCwd,
     tmuxSessionNames: archiveResult.tmuxSessionNames,
     tmuxCleanupCommands: archiveResult.tmuxCleanupCommands,
     tmuxCleanupErrors: archiveResult.tmuxCleanupErrors,
@@ -3319,13 +3679,19 @@ async function handleMessage(
 
   // Handle callback queries (permission buttons and interactive command cards)
   if (msg.callbackData) {
+    if (getState().dailyVersionUpdateRuntime?.handleCallback(adapter, msg)) {
+      ack();
+      return;
+    }
     const selectedEveryTaskId = parseEveryTaskSelectCallback(msg.callbackData);
     if (selectedEveryTaskId !== undefined) {
       if (!selectedEveryTaskId) {
-        await deliverBridgeNotice(adapter, msg.address, '这个下拉选项无效，请刷新后重试。');
+        enqueueBridgeNotice(adapter, msg.address, '这个下拉选项无效，请刷新后重试。');
       } else {
         getState().everyTaskSelections.set(everyTaskSelectionKey(msg), selectedEveryTaskId);
-        await adapter.answerCallback?.(msg.messageId, '已选择');
+        void adapter.answerCallback?.(msg.messageId, '已选择').catch((error) => {
+          console.warn('[bridge-manager] Failed to answer every-task selection callback:', describeUnknownError(error));
+        });
       }
       ack();
       return;
@@ -3334,13 +3700,13 @@ async function handleMessage(
     const everyTaskAction = parseEveryTaskActionCallback(msg.callbackData);
     if (everyTaskAction !== undefined) {
       if (!everyTaskAction) {
-        await deliverBridgeNotice(adapter, msg.address, '这个按钮的操作无效，请刷新后重试。');
+        enqueueBridgeNotice(adapter, msg.address, '这个按钮的操作无效，请刷新后重试。');
         ack();
         return;
       }
       const taskId = getState().everyTaskSelections.get(everyTaskSelectionKey(msg));
       if (!taskId) {
-        await deliverBridgeNotice(adapter, msg.address, '请先在下拉列表中选择一个 /every，再点击操作按钮。');
+        enqueueBridgeNotice(adapter, msg.address, '请先在下拉列表中选择一个 /every，再点击操作按钮。');
         ack();
         return;
       }
@@ -3358,10 +3724,12 @@ async function handleMessage(
     const selectedThenTaskId = parseThenTaskSelectCallback(msg.callbackData);
     if (selectedThenTaskId !== undefined) {
       if (!selectedThenTaskId) {
-        await deliverBridgeNotice(adapter, msg.address, '这个下拉选项无效，请刷新后重试。');
+        enqueueBridgeNotice(adapter, msg.address, '这个下拉选项无效，请刷新后重试。');
       } else {
         getState().thenTaskSelections.set(thenTaskSelectionKey(msg), selectedThenTaskId);
-        await adapter.answerCallback?.(msg.messageId, '已选择');
+        void adapter.answerCallback?.(msg.messageId, '已选择').catch((error) => {
+          console.warn('[bridge-manager] Failed to answer then-task selection callback:', describeUnknownError(error));
+        });
       }
       ack();
       return;
@@ -3370,13 +3738,13 @@ async function handleMessage(
     const thenTaskAction = parseThenTaskActionCallback(msg.callbackData);
     if (thenTaskAction !== undefined) {
       if (!thenTaskAction) {
-        await deliverBridgeNotice(adapter, msg.address, '这个按钮的操作无效，请刷新后重试。');
+        enqueueBridgeNotice(adapter, msg.address, '这个按钮的操作无效，请刷新后重试。');
         ack();
         return;
       }
       const taskId = getState().thenTaskSelections.get(thenTaskSelectionKey(msg));
       if (!taskId) {
-        await deliverBridgeNotice(adapter, msg.address, '请先在下拉列表中选择一个 /then，再点击操作按钮。');
+        enqueueBridgeNotice(adapter, msg.address, '请先在下拉列表中选择一个 /then，再点击操作按钮。');
         ack();
         return;
       }
@@ -3394,10 +3762,12 @@ async function handleMessage(
     const selectedThreadId = parseThreadSelectCallback(msg.callbackData);
     if (selectedThreadId !== undefined) {
       if (!selectedThreadId) {
-        await deliverBridgeNotice(adapter, msg.address, '这个下拉选项无效，请刷新后重试。');
+        enqueueBridgeNotice(adapter, msg.address, '这个下拉选项无效，请刷新后重试。');
       } else {
         getState().threadCardSelections.set(threadSelectionKey(msg), selectedThreadId);
-        await adapter.answerCallback?.(msg.messageId, '已选择');
+        void adapter.answerCallback?.(msg.messageId, '已选择').catch((error) => {
+          console.warn('[bridge-manager] Failed to answer thread selection callback:', describeUnknownError(error));
+        });
       }
       ack();
       return;
@@ -3406,13 +3776,13 @@ async function handleMessage(
     const threadAction = parseThreadSelectActionCallback(msg.callbackData);
     if (threadAction !== undefined) {
       if (!threadAction) {
-        await deliverBridgeNotice(adapter, msg.address, '这个按钮的操作无效，请刷新后重试。');
+        enqueueBridgeNotice(adapter, msg.address, '这个按钮的操作无效，请刷新后重试。');
         ack();
         return;
       }
       const threadId = getState().threadCardSelections.get(threadSelectionKey(msg));
       if (!threadId) {
-        await deliverBridgeNotice(adapter, msg.address, '请先在下拉列表中选择一个线程，再点击接管或归档。');
+        enqueueBridgeNotice(adapter, msg.address, '请先在下拉列表中选择一个线程，再点击接管或归档。');
         ack();
         return;
       }
@@ -3436,7 +3806,7 @@ async function handleMessage(
     const commandCallback = parseCommandCallbackData(msg.callbackData);
     if (commandCallback !== undefined) {
       if (!commandCallback) {
-        await deliverBridgeNotice(adapter, msg.address, '这个按钮的命令数据无效，请改用纯文本命令。');
+        enqueueBridgeNotice(adapter, msg.address, '这个按钮的命令数据无效，请改用纯文本命令。');
         ack();
         return;
       }
@@ -3446,7 +3816,7 @@ async function handleMessage(
         if (formValue) {
           const newSessionName = normalizeFormString(formValue.clk_input || formValue.input || formValue.text);
           if (!newSessionName) {
-            await deliverBridgeNotice(adapter, msg.address, '请输入群聊名称后再创建。');
+            enqueueBridgeNotice(adapter, msg.address, '请输入群聊名称后再创建。');
             ack();
             return;
           }
@@ -3462,7 +3832,7 @@ async function handleMessage(
         ? findBindingForCallbackSession(msg.address.channelType, msg.address.chatId, commandCallback.scopeSessionId)
         : null;
       if (commandCallback.scopeSessionId && !scopedBinding) {
-        await deliverBridgeNotice(adapter, msg.address, '这个按钮对应的会话已不再绑定到当前聊天，请改用纯文本命令确认当前状态。');
+        enqueueBridgeNotice(adapter, msg.address, '这个按钮对应的会话已不再绑定到当前聊天，请改用纯文本命令确认当前状态。');
         ack();
         return;
       }
@@ -3486,7 +3856,7 @@ async function handleMessage(
         ? findBindingForCallbackSession(msg.address.channelType, msg.address.chatId, tmuxScreenSessionId)
         : store.getChannelChat(msg.address.channelType, msg.address.chatId);
       if (!binding) {
-        await deliverBridgeNotice(adapter, msg.address, '这个停止按钮对应的会话已不再绑定到当前聊天，无法停止 tmux 屏幕定时刷新。');
+        enqueueBridgeNotice(adapter, msg.address, '这个停止按钮对应的会话已不再绑定到当前聊天，无法停止 tmux 屏幕定时刷新。');
       } else {
         await handleCommand(
           adapter,
@@ -3505,7 +3875,7 @@ async function handleMessage(
         ? findBindingForCallbackSession(msg.address.channelType, msg.address.chatId, ptyScreenSessionId)
         : store.getChannelChat(msg.address.channelType, msg.address.chatId);
       if (!binding) {
-        await deliverBridgeNotice(adapter, msg.address, '这个停止按钮对应的会话已不再绑定到当前聊天，无法停止 pty 屏幕定时刷新。');
+        enqueueBridgeNotice(adapter, msg.address, '这个停止按钮对应的会话已不再绑定到当前聊天，无法停止 pty 屏幕定时刷新。');
       } else {
         await handleCommand(
           adapter,
@@ -3521,7 +3891,7 @@ async function handleMessage(
     const agentQuestion = parseAgentQuestionCallbackData(msg.callbackData);
     if (agentQuestion !== undefined) {
       if (!agentQuestion) {
-        await deliverBridgeNotice(adapter, msg.address, '这个问题卡片的数据无效，请直接输入文字回复。');
+        enqueueBridgeNotice(adapter, msg.address, '这个问题卡片的数据无效，请直接输入文字回复。');
         ack();
         return;
       }
@@ -3550,19 +3920,19 @@ async function handleMessage(
       if (codexSelectionClaim?.handledBy === 'orphan') {
         const autoForwardRecovery = await recoverTmuxProviderAutoForwardFromSelectionCallback(codexSelectionClaim);
         if (autoForwardRecovery.attempted) {
-          await deliverBridgeNotice(adapter, msg.address, autoForwardRecovery.notice);
+          enqueueBridgeNotice(adapter, msg.address, autoForwardRecovery.notice);
         } else if (parseMirrorCodexSelectionSessionId(codexSelectionClaim.permissionRequestId)) {
           const recovery = await recoverMirrorTmuxSelectionPromptFromCallback(codexSelectionClaim, adapter);
-          await deliverBridgeNotice(adapter, msg.address, recovery.notice);
+          enqueueBridgeNotice(adapter, msg.address, recovery.notice);
         } else {
-          await deliverBridgeNotice(adapter, msg.address, 'Permission response recorded.');
+          enqueueBridgeNotice(adapter, msg.address, 'Permission response recorded.');
         }
       } else if (codexSelectionClaim) {
         const mirrorSessionId = parseMirrorCodexSelectionSessionId(codexSelectionClaim.permissionRequestId);
         if (mirrorSessionId) {
           requestTmuxSelectionPromptFollowupProbe(mirrorSessionId);
         }
-        await deliverBridgeNotice(adapter, msg.address, 'Permission response recorded.');
+        enqueueBridgeNotice(adapter, msg.address, 'Permission response recorded.');
       }
       ack();
       return;
@@ -3570,14 +3940,19 @@ async function handleMessage(
 
     const handled = broker.handlePermissionCallback(msg.callbackData, msg.address.chatId, msg.callbackMessageId);
     if (handled) {
-      await deliverBridgeNotice(adapter, msg.address, 'Permission response recorded.');
+      enqueueBridgeNotice(adapter, msg.address, 'Permission response recorded.');
     }
     ack();
     return;
   }
 
+  getState().dailyVersionUpdateRuntime?.onFirstUserMessage(adapter, msg);
+
   const rawText = msg.text.trim();
   const hasAttachments = msg.attachments && msg.attachments.length > 0;
+  if (isBridgeCommandText(rawText)) {
+    addInboundGetReaction(adapter, msg, 'command_received');
+  }
 
   if (rawText && !hasAttachments) {
     const takeoverConfirmation = consumePendingTakeoverConfirmation(msg.address, rawText);
@@ -3591,7 +3966,7 @@ async function handleMessage(
       return;
     }
     if (takeoverConfirmation.reply === 'cancel') {
-      await deliverBridgeNotice(adapter, msg.address, '已取消接管，当前聊天绑定保持不变。', {
+      enqueueBridgeNotice(adapter, msg.address, '已取消接管，当前聊天绑定保持不变。', {
         replyToMessageId: msg.messageId,
       });
       ack();
@@ -3609,7 +3984,7 @@ async function handleMessage(
       return;
     }
     if (clearConfirmation.reply === 'cancel') {
-      await deliverBridgeNotice(adapter, msg.address, '已取消 /clear，当前对话保持不变。', {
+      enqueueBridgeNotice(adapter, msg.address, '已取消 /clear，当前对话保持不变。', {
         replyToMessageId: msg.messageId,
       });
       ack();
@@ -3627,71 +4002,17 @@ async function handleMessage(
       userVisibleError?: string;
     } | undefined;
     if (rawData?.userVisibleError) {
-      await deliverBridgeNotice(adapter, msg.address, rawData.userVisibleError, {
+      enqueueBridgeNotice(adapter, msg.address, rawData.userVisibleError, {
         replyToMessageId: msg.messageId,
       });
     } else if (rawData?.imageDownloadFailed || rawData?.attachmentDownloadFailed) {
       const failureLabel = rawData.failedLabel || (rawData.imageDownloadFailed ? 'image(s)' : 'attachment(s)');
-      await deliverBridgeNotice(adapter, msg.address, `Failed to download ${rawData.failedCount ?? 1} ${failureLabel}. Please try sending again.`, {
+      enqueueBridgeNotice(adapter, msg.address, `Failed to download ${rawData.failedCount ?? 1} ${failureLabel}. Please try sending again.`, {
         replyToMessageId: msg.messageId,
       });
     }
     ack();
     return;
-  }
-
-  // ── Numeric shortcut for permission replies (Feishu only) ──
-  // On mobile, typing `/perm allow <uuid>` is painful.
-  // If the user sends "1", "2", or "3" and there is exactly one pending
-  // permission for this chat, map it: 1→allow, 2→allow_session, 3→deny.
-  //
-  // Input normalization: mobile keyboards / IM clients may send fullwidth
-  // digits (１２３), digits with zero-width joiners, or other Unicode
-  // variants. NFKC normalization folds them all to ASCII 1/2/3.
-  if (
-          adapter.provider === 'feishu'
-  ) {
-    // eslint-disable-next-line no-control-regex
-    const normalized = rawText.normalize('NFKC').replace(/[\u200B-\u200D\uFEFF]/g, '').trim();
-    if (/^[123]$/.test(normalized)) {
-      const currentBinding = store.getChannelChat(msg.address.channelType, msg.address.chatId);
-      const pendingLinks = getPendingPermissionLinksForCurrentSession(
-        msg.address.chatId,
-        currentBinding?.bridgeSessionId,
-      );
-      if (pendingLinks.length === 1) {
-        const actionMap: Record<string, string> = { '1': 'allow', '2': 'allow_session', '3': 'deny' };
-        const action = actionMap[normalized];
-        const permId = pendingLinks[0].permissionRequestId;
-        const callbackData = `perm:${action}:${permId}`;
-        const handled = broker.handlePermissionCallback(callbackData, msg.address.chatId);
-        const label = normalized === '1' ? 'Allow' : normalized === '2' ? 'Allow Session' : 'Deny';
-        if (handled) {
-          await deliverBridgeNotice(adapter, msg.address, `${label}: recorded.`, {
-            replyToMessageId: msg.messageId,
-          });
-        } else {
-          await deliverBridgeNotice(adapter, msg.address, 'Permission not found or already resolved.', {
-            replyToMessageId: msg.messageId,
-          });
-        }
-        ack();
-        return;
-      }
-      if (pendingLinks.length > 1) {
-        // Multiple pending permissions — numeric shortcut is ambiguous.
-        await deliverBridgeNotice(adapter, msg.address, `当前有 ${pendingLinks.length} 条待处理权限，数字快捷回复会有歧义。请使用完整命令：\n/perm allow|allow_session|deny <id>`, {
-          replyToMessageId: msg.messageId,
-        });
-        ack();
-        return;
-      }
-      // pendingLinks.length === 0: no pending permissions, fall through as normal message
-    } else if (rawText !== normalized && /^[123]$/.test(rawText) === false) {
-      // Log when normalization changed the text — helps diagnose encoding issues
-      const codePoints = [...rawText].map(c => 'U+' + c.codePointAt(0)!.toString(16).toUpperCase().padStart(4, '0'));
-      console.log(`[bridge-manager] Shortcut candidate raw codepoints: ${codePoints.join(' ')} → normalized: "${normalized}"`);
-    }
   }
 
   const modelText = toModelPromptText(rawText);
@@ -3701,7 +4022,7 @@ async function handleMessage(
     const args = modelText.trim().slice(commandToken.length).trim();
     if (rawCommand === '/doctor') {
       const spec = buildDoctorPromptFromLogs(args);
-      await deliverBridgeNotice(adapter, msg.address, spec.notice, {
+      enqueueBridgeNotice(adapter, msg.address, spec.notice, {
         replyToMessageId: msg.messageId,
         audit: true,
       });
@@ -3716,6 +4037,9 @@ async function handleMessage(
   const tmuxProviderRuntime = tmuxProviderSession
     ? resolveEffectiveRuntimeProvider(tmuxProviderSession, tmuxProviderBinding)
     : null;
+  const tmuxProviderActiveTask = tmuxProviderBinding
+    ? INTERACTIVE_RUNTIME.getActiveTask(tmuxProviderBinding.bridgeSessionId)
+    : null;
   if (
     tmuxProviderSession
     && tmuxProviderRuntime?.provider === 'tmux'
@@ -3725,15 +4049,29 @@ async function handleMessage(
       ack();
       return;
     }
+    if (tmuxProviderActiveTask) {
+      const activeTmuxSessionName = getSessionRuntimeTmuxSessionName(tmuxProviderSession)
+        || (tmuxProviderRuntime.runtime === 'kimi'
+          ? kimiTmuxSessionName(tmuxProviderSession.id)
+          : undefined);
+      if (activeTmuxSessionName) {
+        transitionRuntimeTmuxInputState(
+          tmuxProviderRuntime.runtime,
+          activeTmuxSessionName,
+          'running',
+          'an active interactive task already owns the runtime tmux session',
+        );
+      }
+    }
     if (rawText.trim().toLowerCase() === '//clear') {
-      await deliverBridgeNotice(adapter, msg.address, '当前处于 tmux Provider，不能通过 `//clear` 清空上下文。请通过 codelark 手动创建新会话。', {
+      enqueueBridgeNotice(adapter, msg.address, '当前处于 tmux Provider，不能通过 `//clear` 清空上下文。请通过 codelark 手动创建新会话。', {
         replyToMessageId: msg.messageId,
       });
       ack();
       return;
     }
     if (hasAttachments) {
-      await deliverBridgeNotice(adapter, msg.address, '当前处于 tmux Provider，普通附件不会自动转发到 TUI。请先发送 `/provider sdk`，或在 TUI 内自行读取本地文件。', {
+      enqueueBridgeNotice(adapter, msg.address, '当前处于 tmux Provider，普通附件不会自动转发到 TUI。请先发送 `/provider sdk`，或在 TUI 内自行读取本地文件。', {
         replyToMessageId: msg.messageId,
       });
       ack();
@@ -3748,7 +4086,7 @@ async function handleMessage(
         const args = rawText.trim().slice(commandToken.length).trim();
         const resolvedCommand = resolveCommandAlias(rawCommand, args);
         console.error(`[bridge-manager] tmux provider command failed: ${resolvedCommand}`, error);
-        await deliverBridgeNotice(adapter, msg.address, toUserVisibleCommandError(resolvedCommand, error), {
+        enqueueBridgeNotice(adapter, msg.address, toUserVisibleCommandError(resolvedCommand, error), {
           replyToMessageId: msg.messageId,
         });
       }
@@ -3779,15 +4117,14 @@ async function handleMessage(
         tmuxProviderBridgeSessionId,
       );
       try {
-        markPendingTmuxAutoForwardReaction(
-          adapter,
-          msg,
-          reactionKey,
-          tmuxProviderBridgeSessionId,
-        );
         const tmuxProviderCommandStartedAtMs = Date.now();
         await handleCommand(adapter, msg, `/tmux ${text}`, {
           tmuxProviderAutoForward: true,
+          onTmuxProviderAutoForwarded: () => {
+            // Get means the prompt has been submitted to tmux. Adding it is a
+            // detached acknowledgement and never delays the message lane.
+            addInboundGetReaction(adapter, msg, 'tmux_prompt_delivered');
+          },
         });
         const tmuxProviderCommandDurationMs = Date.now() - tmuxProviderCommandStartedAtMs;
         console.log('[bridge-manager] tmux provider auto-forward command delivered:', {
@@ -3841,9 +4178,9 @@ async function handleMessage(
           ].join(' '),
         });
       } catch (error) {
-        clearPendingTmuxAutoForwardReaction(reactionKey);
+        clearPendingTmuxProviderExitProbe(reactionKey);
         console.error('[bridge-manager] tmux provider command forwarding failed: /tmux', error);
-        await deliverBridgeNotice(adapter, msg.address, toUserVisibleCommandError('/tmux', error), {
+        enqueueBridgeNotice(adapter, msg.address, toUserVisibleCommandError('/tmux', error), {
           replyToMessageId: msg.messageId,
         });
       }
@@ -3869,7 +4206,7 @@ async function handleMessage(
     && !isBridgeCommandText(rawText)
     && rawText.trim()
     && (
-      (terminalAppendActiveRuntime !== 'claude' && terminalAppendCodexProvider === 'pty')
+      (terminalAppendActiveRuntime === 'codex' && terminalAppendCodexProvider === 'pty')
       || (terminalAppendActiveRuntime === 'claude' && terminalAppendClaudeProvider === 'pty')
     )
   ) {
@@ -3898,14 +4235,14 @@ async function handleMessage(
       messageId: msg.messageId,
       summary: [
         appended ? 'terminal append input delivered' : 'terminal append input receiver missing',
-        `runtime=${terminalAppendActiveRuntime === 'claude' ? 'claude' : 'codex'}`,
+        `runtime=${terminalAppendActiveRuntime}`,
         `provider=${terminalAppendActiveRuntime === 'claude' ? terminalAppendClaudeProvider : terminalAppendCodexProvider}`,
         `session=${terminalAppendBinding.bridgeSessionId}`,
         `chars=${text.length}`,
       ].join(' '),
     });
     if (!appended) {
-      await deliverBridgeNotice(adapter, msg.address, '当前 terminal provider 还没有可接收追加输入的本地会话，请稍后重试。', {
+      enqueueBridgeNotice(adapter, msg.address, '当前 terminal provider 还没有可接收追加输入的本地会话，请稍后重试。', {
         replyToMessageId: msg.messageId,
       });
     }
@@ -3925,7 +4262,7 @@ async function handleMessage(
       await handleCommand(adapter, msg, modelText);
     } catch (error) {
       console.error(`[bridge-manager] Command failed: ${resolvedCommand}`, error);
-      await deliverBridgeNotice(adapter, msg.address, toUserVisibleCommandError(resolvedCommand, error), {
+      enqueueBridgeNotice(adapter, msg.address, toUserVisibleCommandError(resolvedCommand, error), {
         replyToMessageId: msg.messageId,
       });
     }
@@ -4125,12 +4462,14 @@ function resetStateForTests(): void {
   pendingTmuxProviderExitProbeTimers.clear();
   tmuxProviderExitNoticeLastSentAt.clear();
   tmuxSelectionUpdateNoticeLastSentAt.clear();
-  pendingTmuxAutoForwardReactions.clear();
-  pendingTmuxAutoForwardReactionVersions.clear();
   tmuxSelectionPromptMonitors.clear();
   tmuxSelectionPromptLastProbeAt.clear();
   tmuxSelectionPromptFollowupUntil.clear();
   pendingTmuxSelectionPromptProbePromises.clear();
+  codexTuiIdleScreenCheckpoints.clear();
+  codexTuiTurnScreenBaselines.clear();
+  codexTuiIdleScreenMissingCheckedAt.clear();
+  codexTuiReconnectMonitors.clear();
   state.everyTaskSelections.clear();
   state.thenTaskSelections.clear();
   state.thenTaskTimers.clear();
@@ -4142,6 +4481,8 @@ function resetStateForTests(): void {
   TURN_COORDINATOR.clear();
   state.mirrorSyncInFlight = false;
   state.claudeMirrorSyncInFlight = false;
+  state.kimiMirrorSyncInFlight = false;
+  state.dailyVersionUpdateRuntime = null;
   if (state.reconcileTimer) {
     clearInterval(state.reconcileTimer);
     state.reconcileTimer = null;
@@ -4158,6 +4499,10 @@ function resetStateForTests(): void {
     clearTimeout(state.claudeMirrorWakeTimer);
     state.claudeMirrorWakeTimer = null;
   }
+  if (state.kimiMirrorWakeTimer) {
+    clearTimeout(state.kimiMirrorWakeTimer);
+    state.kimiMirrorWakeTimer = null;
+  }
 }
 
 // ── Test-only export ─────────────────────────────────────────
@@ -4165,7 +4510,11 @@ function resetStateForTests(): void {
 // without wiring up the full adapter loop.
 /** @internal */
 export const _testOnly = {
-  handleMessage,
+  handleMessage: async (adapter: BaseChannelAdapter, msg: InboundMessage): Promise<void> => {
+    await handleMessage(adapter, msg);
+    await _testOnlyWaitForDeliveryQueuesForTests(adapter);
+  },
+  handleMessageWithoutDeliveryWait: handleMessage,
   syncConfiguredAdapters: (options: { startLoops: boolean }) => ADAPTER_RUNTIME.syncConfiguredAdapters(options),
   reconcileMirrorSubscriptions,
   resolveNewWorkingDirectory,
@@ -4178,6 +4527,10 @@ export const _testOnly = {
   appendModelContextText,
   resolveDisplayedModel,
   formatDisplayedModel,
+  formatRuntimeTerminalDetail,
+  sessionSupportsTmuxSelectionPromptProbe,
+  shouldProbeMirrorTmuxSelectionPrompt,
+  requestTmuxSelectionPromptFollowupProbe,
   formatBindingChatLabel,
   formatMirrorUserText,
   formatMirrorMessage,
@@ -4191,6 +4544,10 @@ export const _testOnly = {
   deliverMirrorTurns,
   flushTimedOutMirrorTurn,
   refreshMirrorStreamingStatus,
+  captureCodexTuiIdleScreenCheckpoint,
+  ensureCodexTuiIdleScreenCheckpoints,
+  assignCodexTuiTurnScreenBaseline,
+  resolveCodexTuiFinalizedTurnStatus,
   filterSuppressedMirrorRecords,
   isMirrorSuppressed,
   reconcileTerminalSessionRuntimeState: () => INTERACTIVE_RUNTIME.reconcileTerminalSessionRuntimeState(),

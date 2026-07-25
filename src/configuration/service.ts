@@ -103,6 +103,9 @@ function patchPaths(patch: ConfigPatch): ConfigPath[] {
   if (patch.runtime?.claude) {
     for (const key of Object.keys(patch.runtime.claude)) paths.push(`runtime.claude.${key}`);
   }
+  if (patch.runtime?.kimi) {
+    for (const key of Object.keys(patch.runtime.kimi)) paths.push(`runtime.kimi.${key}`);
+  }
   for (const channel of patch.channels || []) {
     if (channel.enabled !== undefined) paths.push('channels[].enabled');
     if (channel.config) {

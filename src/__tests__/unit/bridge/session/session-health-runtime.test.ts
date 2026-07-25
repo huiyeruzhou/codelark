@@ -70,6 +70,69 @@ describe('session-health-runtime', () => {
     assert.deepEqual(refreshed, before);
   });
 
+  it('diagnoses Kimi runtime identity without falling back to Codex thread probes', async () => {
+    const store = new JsonFileStore(makeSettings());
+    const session = store.createSession('Health Kimi', 'test-model', undefined, '/workspace/health-kimi', 'code');
+    store.updateSession(session.id, {
+      runtime_status: 'running',
+      runtime: {
+        activeRuntime: 'kimi',
+        kimi: {
+          sessionId: 'session_kimi_health',
+          cwd: '/workspace/health-kimi',
+          provider: 'tmux',
+        },
+        general: { workingDirectory: '/workspace/health-kimi' },
+      },
+      last_progress_at: new Date().toISOString(),
+      last_progress_type: 'reasoning',
+    });
+    const runtime = createSessionHealthRuntime({
+      getStore: () => store,
+      nowIso: () => new Date().toISOString(),
+      probeThreadProcess: async () => {
+        throw new Error('Kimi health diagnosis must not probe Codex thread processes');
+      },
+    });
+
+    const diagnosis = await runtime.diagnoseSessionHealth(session.id);
+
+    assert.ok(diagnosis);
+    assert.equal(diagnosis.activeRuntime, 'kimi');
+    assert.equal(diagnosis.runtimeIdentityValue, 'session_kimi_health');
+    assert.equal(diagnosis.runtimeIdentityCwd, '/workspace/health-kimi');
+    assert.equal(diagnosis.codexThreadId, null);
+    assert.equal(diagnosis.processProbe, null);
+    assert.equal(diagnosis.healthStatus, 'running_active');
+  });
+
+  it('keeps Kimi runtime cwd visible before the Kimi session id is discovered', async () => {
+    const store = new JsonFileStore(makeSettings());
+    const session = store.createSession('Health Kimi Pending Identity', 'test-model', undefined, '/workspace/health-kimi-pending', 'code');
+    store.updateSession(session.id, {
+      runtime_status: 'idle',
+      runtime: {
+        activeRuntime: 'kimi',
+        kimi: {
+          provider: 'tmux',
+        },
+        general: { workingDirectory: '/workspace/health-kimi-pending' },
+      },
+    });
+    const runtime = createSessionHealthRuntime({
+      getStore: () => store,
+      nowIso: () => '2026-04-13T12:05:00.000Z',
+    });
+
+    const diagnosis = await runtime.diagnoseSessionHealth(session.id);
+
+    assert.ok(diagnosis);
+    assert.equal(diagnosis.activeRuntime, 'kimi');
+    assert.equal(diagnosis.runtimeIdentityValue, null);
+    assert.equal(diagnosis.runtimeIdentityCwd, '/workspace/health-kimi-pending');
+    assert.equal(diagnosis.processProbe, null);
+  });
+
   it('does not touch updated_at when reconciling derived health state', () => {
     const store = new JsonFileStore(makeSettings());
     const session = store.createSession('Health Reconcile Read Only', 'test-model', undefined, 'D:\\workspace\\health-reconcile', 'code');

@@ -5,6 +5,7 @@ import path from 'node:path';
 import { spawn } from 'node:child_process';
 
 type FeishuSite = 'feishu' | 'lark';
+type SetupRuntimeChoice = 'codex' | 'ccr' | 'claude' | 'kimi';
 
 function valueArg(args: string[], name: string, fallback = ''): string {
   const index = args.indexOf(name);
@@ -27,12 +28,23 @@ function printUsage(): void {
     '  --app-id <cli_...>      App ID written to isolated lark-cli/CodeLark config',
     '  --app-secret <secret>   App Secret for the isolated smoke app; prefer env file/env vars to avoid npm echo',
     '  --site <feishu|lark>    Site brand; default feishu',
+    '  --runtime <name>        Runtime choice to write: codex|ccr|claude|kimi; default codex',
     '  --keep-temp             Keep temporary root for diagnosis; default cleans it in success and failure paths',
     '  --skip-lark-cli-bind    Test-only: write the private lark-cli runtime projection without invoking macOS Keychain',
     '  --simulate-failure-after-sync  Test cleanup on a post-lark-cli failure',
     '  --help                  Show this help',
     '',
   ].join('\n'));
+}
+
+function runtimeChoiceArg(value: string): SetupRuntimeChoice {
+  if (value === 'codex' || value === 'ccr' || value === 'claude' || value === 'kimi') return value;
+  throw new Error(`Invalid --runtime "${value}". Expected codex, ccr, claude, or kimi.`);
+}
+
+function expectedRuntimeAgent(choice: SetupRuntimeChoice): 'codex' | 'claude' | 'kimi' {
+  if (choice === 'ccr') return 'claude';
+  return choice;
 }
 
 function parseEnvFile(filePath: string): Record<string, string> {
@@ -57,8 +69,8 @@ function parseEnvFile(filePath: string): Record<string, string> {
   return values;
 }
 
-function envValue(envFile: Record<string, string>, key: string, legacyKey?: string): string {
-  return process.env[key] || envFile[key] || (legacyKey ? process.env[legacyKey] || envFile[legacyKey] || '' : '');
+function envValue(envFile: Record<string, string>, key: string): string {
+  return process.env[key] || envFile[key] || '';
 }
 
 function assertInside(parentPath: string, childPath: string): void {
@@ -161,19 +173,21 @@ async function main(): Promise<void> {
   const appId = valueArg(
     argv,
     '--app-id',
-    envValue(envFile, 'CODELARK_REAL_FEISHU_TEST_APP_ID', 'CTI_REAL_FEISHU_TEST_APP_ID') || 'cli_setup_wizard_real_e2e',
+    envValue(envFile, 'CODELARK_REAL_FEISHU_TEST_APP_ID') || 'cli_setup_wizard_real_e2e',
   );
   const appSecret = valueArg(
     argv,
     '--app-secret',
-    envValue(envFile, 'CODELARK_REAL_FEISHU_TEST_APP_SECRET', 'CTI_REAL_FEISHU_TEST_APP_SECRET') || 'setup-wizard-real-e2e-secret',
+    envValue(envFile, 'CODELARK_REAL_FEISHU_TEST_APP_SECRET') || 'setup-wizard-real-e2e-secret',
   );
   const siteArg = valueArg(
     argv,
     '--site',
-    envValue(envFile, 'CODELARK_REAL_FEISHU_TEST_SITE', 'CTI_REAL_FEISHU_TEST_SITE') || 'feishu',
+    envValue(envFile, 'CODELARK_REAL_FEISHU_TEST_SITE') || 'feishu',
   );
   const site: FeishuSite = siteArg === 'lark' ? 'lark' : 'feishu';
+  const runtimeChoice = runtimeChoiceArg(valueArg(argv, '--runtime', 'codex'));
+  const expectedAgent = expectedRuntimeAgent(runtimeChoice);
 
   const runtimeHome = path.join(runRoot, 'home');
   const codelarkHome = path.join(runRoot, 'clk-home');
@@ -205,7 +219,7 @@ async function main(): Promise<void> {
 
     const current = setupWizard.loadSetupConfig(codelarkHome);
     setupWizard.saveSetupConfigToHomeToml(
-      setupWizard.buildSetupConfig(current, credentials, 'codex', workspaceRoot),
+      setupWizard.buildSetupConfig(current, credentials, runtimeChoice, workspaceRoot),
       codelarkHome,
     );
 
@@ -231,7 +245,13 @@ async function main(): Promise<void> {
     }
 
     const savedFeishu = savedConfig.channels?.find((channel) => channel.provider === 'feishu');
-    if (savedConfig.runtime.agent !== 'codex') throw new Error(`runtime mismatch: ${savedConfig.runtime.agent}`);
+    if (savedConfig.runtime.agent !== expectedAgent) throw new Error(`runtime mismatch: ${savedConfig.runtime.agent}`);
+    if (runtimeChoice === 'kimi' && savedConfig.runtime.kimi.provider !== 'tmux') {
+      throw new Error(`kimi provider mismatch: ${savedConfig.runtime.kimi.provider}`);
+    }
+    if (runtimeChoice === 'ccr' && savedConfig.runtime.claude.executable !== 'ccr') {
+      throw new Error(`claude executable mismatch: ${savedConfig.runtime.claude.executable}`);
+    }
     if (savedConfig.bridge.defaultWorkspace !== workspaceRoot) {
       throw new Error(`workspace mismatch: ${savedConfig.bridge.defaultWorkspace}`);
     }
@@ -292,6 +312,10 @@ async function main(): Promise<void> {
       configEnvPath,
       configJsonPath,
       configTomlPath,
+      runtimeChoice,
+      runtimeAgent: savedConfig.runtime.agent,
+      kimiProvider: savedConfig.runtime.kimi.provider,
+      claudeExecutable: savedConfig.runtime.claude.executable,
       daemonLarkCliConfigDir: daemonEnv.LARKSUITE_CLI_CONFIG_DIR,
       daemonPathHead,
       larkCliShimPath: expectedShimPath,

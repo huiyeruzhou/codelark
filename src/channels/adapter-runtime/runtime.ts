@@ -25,7 +25,6 @@ export interface CreateAdapterRuntimeDeps {
   notifyAdapterSetChanged(channelTypes: string[]): void;
   handleMessage(adapter: BaseChannelAdapter, msg: InboundMessage): Promise<void>;
   processWithSessionLock(sessionId: string, fn: () => Promise<void>, options?: { jobKind?: string }): Promise<void>;
-  isNumericPermissionShortcut(channelType: string, rawText: string, chatId: string): boolean;
   isCommandMessage?(msg: InboundMessage): boolean;
   resolveSessionIdForMessage(msg: InboundMessage): string;
   shouldBypassSessionLock?(msg: InboundMessage): boolean;
@@ -46,7 +45,7 @@ const ADAPTER_HANDLER_SLOW_MS = 2_000;
 const ADAPTER_HANDLER_QUEUE_SLOW_MS = 1_000;
 const logger = getLogger('adapter-runtime').child({ component: 'bridge-manager' });
 
-type AdapterMessageCategory = 'channel-event' | 'callback' | 'command' | 'permission-shortcut' | 'bypass' | 'regular';
+type AdapterMessageCategory = 'channel-event' | 'callback' | 'command' | 'bypass' | 'regular';
 
 interface AdapterMessageTimelineContext {
   onSessionLockAcquired(): void;
@@ -142,9 +141,6 @@ export function createAdapterRuntime(
     if (msg.channelEvent) return { category: 'channel-event', bypassSessionLock: true };
     if (msg.callbackData) return { category: 'callback', bypassSessionLock: true };
     if (deps.isCommandMessage?.(msg)) return { category: 'command', bypassSessionLock: true };
-    if (deps.isNumericPermissionShortcut(msg.address.channelType, msg.text.trim(), msg.address.chatId)) {
-      return { category: 'permission-shortcut', bypassSessionLock: true };
-    }
     if (deps.shouldBypassSessionLock?.(msg)) return { category: 'bypass', bypassSessionLock: true };
     return { category: 'regular', bypassSessionLock: false };
   }

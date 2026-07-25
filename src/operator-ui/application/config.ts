@@ -8,6 +8,7 @@ import {
   claudeProviderSchema,
   claudeReasoningEffortSchema,
   codexProviderSchema,
+  kimiProviderSchema,
   reasoningEffortSchema,
   runtimeAgentSchema,
   sandboxModeSchema,
@@ -71,6 +72,12 @@ function optionalNonNegativeInteger() {
 
 const uiConfigPayloadSchema = z.object({
   runtime: optionalEnum(runtimeAgentSchema),
+  tmuxCaptureLines: optionalPositiveInteger().refine(
+    (value) => value === undefined || value <= 500,
+    { message: 'tmux 输出行数必须在 1 到 500 之间。' },
+  ),
+  tmuxAutoEnter: z.boolean().optional(),
+  tmuxEchoInput: z.boolean().optional(),
   defaultWorkspaceRoot: optionalString(),
   defaultModel: optionalString().refine(
     (value) => value === undefined || value === '' || availableCodexModelSlugs.has(value),
@@ -85,20 +92,25 @@ const uiConfigPayloadSchema = z.object({
     (value) => value === undefined || value <= 20,
     { message: '历史消息条数必须在 1 到 20 之间。' },
   ),
-  streamStatusIdleStartSeconds: optionalPositiveInteger(),
+  streamStatusIdleStartSeconds: optionalNonNegativeInteger(),
   streamStatusCheckIntervalSeconds: optionalPositiveInteger(),
   codexSkipGitRepoCheck: z.boolean().optional(),
   codexSandboxMode: optionalEnum(sandboxModeSchema),
   codexNetworkAccess: z.boolean().optional(),
   codexReasoningEffort: optionalEnum(reasoningEffortSchema),
   claudeProvider: optionalEnum(claudeProviderSchema),
+  claudeMode: z.enum(['normal', 'yolo']).optional(),
   claudeReasoningEffort: optionalEnum(claudeReasoningEffortSchema),
   claudeExecutable: optionalEnum(claudeExecutableSchema),
   claudeDefaultModel: optionalString(),
   claudeIdleTimeoutMinutes: optionalNonNegativeInteger(),
+  kimiDefaultModel: optionalString(),
+  kimiProvider: optionalEnum(kimiProviderSchema),
   uiAllowLan: z.boolean().optional(),
   uiAccessToken: optionalString(),
 }).strict();
+
+export const UI_CONFIG_INPUT_KEYS = Object.freeze(Object.keys(uiConfigPayloadSchema.shape).sort());
 
 type UiConfigPayload = z.infer<typeof uiConfigPayloadSchema>;
 
@@ -110,6 +122,9 @@ export function configV2ToPayload(config: ConfigV2) {
   const channel = defaultUiChannel(config);
   return {
     runtime: config.runtime.agent,
+    tmuxCaptureLines: config.session.tmuxCaptureLines,
+    tmuxAutoEnter: config.session.tmuxAutoEnter,
+    tmuxEchoInput: config.session.tmuxEchoInput,
     defaultWorkspaceRoot: config.bridge.defaultWorkspace === '~' ? os.homedir() : config.bridge.defaultWorkspace,
     defaultModel: config.runtime.codex.model || '',
     defaultProvider: config.runtime.codex.provider || '',
@@ -124,10 +139,13 @@ export function configV2ToPayload(config: ConfigV2) {
     codexNetworkAccess: config.runtime.codex.networkAccess !== false,
     codexReasoningEffort: config.runtime.codex.reasoningEffort || 'medium',
     claudeProvider: config.runtime.claude.provider || 'tmux',
+    claudeMode: config.runtime.claude.yoloMode === 'on' || config.runtime.claude.yoloMode === 'yolo' ? 'yolo' : 'normal',
     claudeExecutable: config.runtime.claude.executable || 'claude',
     claudeDefaultModel: config.runtime.claude.model || '',
     claudeReasoningEffort: config.runtime.claude.reasoningEffort || 'medium',
     claudeIdleTimeoutMinutes: config.runtime.claude.idleTimeoutMinutes ?? 0,
+    kimiDefaultModel: config.runtime.kimi.model || '',
+    kimiProvider: config.runtime.kimi.provider || 'tmux',
     uiAllowLan: config.bridge.uiAllowLan === true,
     uiAccessToken: config.bridge.uiAccessToken || '',
     channels: config.channels.map(v2ChannelToPayload),
@@ -154,6 +172,15 @@ export function mergeConfigV2HomePatch(current: ConfigV2, payload: Record<string
 
   return {
     schemaVersion: 2,
+    session: {
+      tmuxCaptureLines: parsed.tmuxCaptureLines ?? current.session.tmuxCaptureLines,
+      tmuxAutoEnter: hasPayloadKey(payload, 'tmuxAutoEnter')
+        ? parsed.tmuxAutoEnter === true
+        : current.session.tmuxAutoEnter,
+      tmuxEchoInput: hasPayloadKey(payload, 'tmuxEchoInput')
+        ? parsed.tmuxEchoInput === true
+        : current.session.tmuxEchoInput,
+    },
     runtime: {
       agent: parsed.runtime ?? current.runtime.agent,
       codex: {
@@ -185,11 +212,19 @@ export function mergeConfigV2HomePatch(current: ConfigV2, payload: Record<string
           ? current.runtime.claude.provider
           : parsed.claudeProvider,
         executable: parsed.claudeExecutable ?? current.runtime.claude.executable,
-        yoloMode: current.runtime.claude.yoloMode,
+        yoloMode: hasPayloadKey(payload, 'claudeMode')
+          ? parsed.claudeMode === 'yolo' ? 'on' : 'off'
+          : current.runtime.claude.yoloMode,
         reasoningEffort: parsed.claudeReasoningEffort ?? current.runtime.claude.reasoningEffort,
         idleTimeoutMinutes: parsed.claudeIdleTimeoutMinutes
           ?? current.runtime.claude.idleTimeoutMinutes
           ?? 0,
+      },
+      kimi: {
+        model: parsed.kimiDefaultModel === undefined
+          ? current.runtime.kimi.model
+          : parsed.kimiDefaultModel || '',
+        provider: parsed.kimiProvider ?? current.runtime.kimi.provider,
       },
     },
     bridge: {
@@ -219,6 +254,11 @@ export function checkUiConfigPayload(payload: Record<string, unknown>): void {
 export function homeWritableConfigPatch(config: ConfigV2): ConfigPatch {
   return {
     schemaVersion: config.schemaVersion,
+    session: {
+      tmuxCaptureLines: config.session.tmuxCaptureLines,
+      tmuxAutoEnter: config.session.tmuxAutoEnter,
+      tmuxEchoInput: config.session.tmuxEchoInput,
+    },
     runtime: config.runtime,
     bridge: config.bridge,
     channels: config.channels,

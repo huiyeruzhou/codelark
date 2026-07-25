@@ -7,6 +7,7 @@ import {
   buildCodexTuiArgs,
   buildCodexTuiEnv,
   buildCodexTuiShellCommand,
+  buildCodexTuiTmuxCommand,
   getCodexTuiSelectionPromptUiDefaultChoice,
   parseCodexTuiSelectionPrompt,
   parsePositiveIntEnv,
@@ -24,8 +25,9 @@ import {
 } from '../../runtime/claude/pty-provider.js';
 import { prepareClaudeCodeRouterEnv } from '../../runtime/claude/code-router.js';
 import {
-  buildShellSnapshotLaunchCommand,
+  buildShellSnapshotLaunchArgs,
   ensureShellSnapshot,
+  quoteCommandLineArg,
 } from '../../runtime/codex/shell-snapshot.js';
 import type { StreamChatParams } from '../../runtime/contracts.js';
 import {
@@ -33,6 +35,10 @@ import {
   type TmuxCore,
   type TmuxSendAction,
 } from './core.js';
+import {
+  transitionRuntimeTmuxInputState,
+  type RuntimeTmuxInputStateKind,
+} from './input-state-machine.js';
 
 export {
   tmuxCore,
@@ -71,7 +77,7 @@ export interface StartCodexResumeTmuxSessionResult {
   updateRestartCount?: number;
 }
 
-export type RuntimeTmuxKind = 'codex' | 'claude';
+export type RuntimeTmuxKind = 'codex' | 'claude' | 'kimi';
 
 export interface RuntimeTmuxPaneDead {
   status?: number;
@@ -248,16 +254,6 @@ function prepareLaunchLog(filePath: string): void {
   try { fs.rmSync(filePath, { force: true }); } catch { /* best effort cleanup */ }
 }
 
-function withStderrLaunchLog(command: string, launchLogPath: string): string {
-  const quotedLogPath = posixShellQuote(launchLogPath);
-  return [
-    `${command} 2> ${quotedLogPath}`,
-    'status=$?',
-    `if [ "$status" -ne 0 ]; then printf '%s\n' "[codelark] process exited with status $status" >> ${quotedLogPath}; fi`,
-    'exit "$status"',
-  ].join('; ');
-}
-
 function readRecentFile(filePath: string | undefined, lines = CODEX_TMUX_LAUNCH_LOG_LINES): string | undefined {
   if (!filePath) return undefined;
   try {
@@ -279,7 +275,7 @@ function safeTmuxSessionId(id: string, fallback: string): string {
   return id.trim().replace(/[^A-Za-z0-9_.-]/g, '-').slice(0, 180) || fallback;
 }
 
-export function runtimeTmuxSessionName(runtime: 'codex' | 'claude', id: string): string {
+export function runtimeTmuxSessionName(runtime: RuntimeTmuxKind, id: string): string {
   return `${runtime}_${safeTmuxSessionId(id, runtime === 'codex' ? 'thread' : 'session')}`;
 }
 
@@ -294,6 +290,7 @@ export function claudeTmuxSessionName(sessionId: string): string {
 export function buildCodexResumeTmuxCommand(params: StartCodexResumeTmuxSessionParams): {
   tmuxArgs: string[];
   codexCommand: string;
+  tmuxCommand: string | string[];
   launchLogPath: string;
 } {
   const codexArgs = buildCodexTuiArgs({
@@ -312,15 +309,15 @@ export function buildCodexResumeTmuxCommand(params: StartCodexResumeTmuxSessionP
   }, []);
   const env = buildCodexTuiEnv();
   const executable = resolveCodexCliExecutable({ env });
-  const rawCodexCommand = buildCodexTuiShellCommand(executable, codexArgs, env);
   const launchLogPath = codexLaunchLogPath(params.sessionName);
-  const codexCommand = withStderrLaunchLog(rawCodexCommand, launchLogPath);
+  const codexCommand = buildCodexTuiShellCommand(executable, codexArgs, env, { stderrLogPath: launchLogPath });
+  const tmuxCommand = buildCodexTuiTmuxCommand(executable, codexArgs, env, { stderrLogPath: launchLogPath });
   const tmuxArgs = ['new-session', '-d', '-s', params.sessionName];
   if (params.workingDirectory) {
     tmuxArgs.push('-c', params.workingDirectory);
   }
-  tmuxArgs.push('--', codexCommand);
-  return { tmuxArgs, codexCommand, launchLogPath };
+  tmuxArgs.push('--', ...(Array.isArray(tmuxCommand) ? tmuxCommand : [tmuxCommand]));
+  return { tmuxArgs, codexCommand, tmuxCommand, launchLogPath };
 }
 
 function sleep(ms: number): Promise<void> {
@@ -357,6 +354,7 @@ function detectRuntimeTmuxSelectionPrompt(
       summary: prompt.summary,
     };
   }
+  if (runtime !== 'claude') return undefined;
   if (hasClaudePtyOnboardingPrompt(screenText)) {
     return {
       runtime: 'claude',
@@ -411,9 +409,9 @@ function defaultCodexResumeStartupSelectionChoice(
 }
 
 function hasRuntimeTmuxReadyPrompt(runtime: RuntimeTmuxKind, screenText: string): boolean {
-  return runtime === 'codex'
-    ? hasCodexResumeTmuxReadyPrompt(screenText)
-    : hasClaudePtyInputPrompt(screenText) || hasGenericRuntimeTmuxReadyPrompt(screenText);
+  if (runtime === 'codex') return hasCodexResumeTmuxReadyPrompt(screenText);
+  if (runtime === 'claude') return hasClaudePtyInputPrompt(screenText) || hasGenericRuntimeTmuxReadyPrompt(screenText);
+  return hasGenericRuntimeTmuxReadyPrompt(screenText);
 }
 
 function runtimeReadyTimeoutMs(runtime: RuntimeTmuxKind): number {
@@ -534,9 +532,24 @@ function transitionRuntimeTmuxReadiness(
     ...(Object.keys(details).length > 0 ? { details } : {}),
   };
   machine.onStateTransition?.(transition);
+  const inputState: RuntimeTmuxInputStateKind = next === 'ready'
+    ? 'running'
+    : next === 'waiting_selection' || next === 'suspended'
+      ? 'waiting_selection'
+      : next === 'missing' || next === 'dead'
+        ? 'stopped'
+        : next === 'timeout'
+          ? 'failed'
+          : 'checking_session';
+  transitionRuntimeTmuxInputState(
+    machine.runtime,
+    machine.sessionName,
+    inputState,
+    `readiness: ${reason}`,
+  );
 }
 
-function detectRuntimeTmuxPaneDead(screen: string | undefined): RuntimeTmuxPaneDead | undefined {
+export function detectRuntimeTmuxPaneDead(screen: string | undefined): RuntimeTmuxPaneDead | undefined {
   const line = (screen || '').split(/\r?\n/).find((candidate) => /Pane is dead \(status \d+/i.test(candidate));
   if (!line) return undefined;
   const statusMatch = line.match(/Pane is dead \(status (\d+)/i);
@@ -848,7 +861,13 @@ export async function startCodexResumeTmuxSession(
   params: StartCodexResumeTmuxSessionParams,
   core: TmuxCore = tmuxCore,
 ): Promise<StartCodexResumeTmuxSessionResult> {
-  const { codexCommand, launchLogPath } = buildCodexResumeTmuxCommand(params);
+  transitionRuntimeTmuxInputState(
+    'codex',
+    params.sessionName,
+    'starting_tmux',
+    'starting or replacing the provider-owned Codex tmux session',
+  );
+  const { codexCommand, tmuxCommand, launchLogPath } = buildCodexResumeTmuxCommand(params);
   prepareLaunchLog(launchLogPath);
   const commands: string[] = [];
   const selectionPrompts: RuntimeTmuxSelectionPrompt[] = [];
@@ -860,7 +879,7 @@ export async function startCodexResumeTmuxSession(
     const started = await core.ensureDetachedSession({
       name: params.sessionName,
       cwd: params.workingDirectory,
-      command: codexCommand,
+      command: tmuxCommand,
       recreate: true,
     });
     finalStarted = started;
@@ -983,9 +1002,12 @@ function commandPreview(command: string, args: string[]): string {
   return [command, ...args].map(posixShellQuote).join(' ');
 }
 
-function buildClaudeTmuxShellCommand(command: string, args: string[], env: Record<string, string>): string {
+function buildClaudeTmuxShellCommand(command: string, args: string[], env: Record<string, string>): string | string[] {
   const snapshot = ensureShellSnapshot(env);
-  return buildShellSnapshotLaunchCommand(command, args, snapshot);
+  const launchArgs = buildShellSnapshotLaunchArgs(command, args, snapshot);
+  return process.platform === 'win32'
+    ? launchArgs
+    : launchArgs.map((value) => quoteCommandLineArg(value)).join(' ');
 }
 
 export async function startClaudeTmuxSession(
@@ -1016,6 +1038,12 @@ export async function startClaudeTmuxSession(
     cwd,
     executable,
   });
+  transitionRuntimeTmuxInputState(
+    'claude',
+    params.sessionName,
+    'starting_tmux',
+    'starting or attaching the provider-owned Claude tmux session',
+  );
   const started = await core.ensureDetachedSession({
     name: params.sessionName,
     cwd,
@@ -1029,6 +1057,14 @@ export async function startClaudeTmuxSession(
       core,
     })
     : null;
+  if (!params.waitReady) {
+    transitionRuntimeTmuxInputState(
+      'claude',
+      params.sessionName,
+      'checking_session',
+      'Claude tmux exists; waiting for runtime session readiness before input',
+    );
+  }
   return {
     sessionName: params.sessionName,
     existed: started.existed,
@@ -1135,6 +1171,14 @@ export async function cleanupRuntimeTmuxSession(params: {
   try {
     const command = await core.killSession(params.sessionName, { ignoreMissing: params.ignoreMissing !== false });
     commands.push(command);
+    if (params.runtime) {
+      transitionRuntimeTmuxInputState(
+        params.runtime,
+        params.sessionName,
+        'stopped',
+        'provider-owned tmux session was explicitly cleaned up',
+      );
+    }
     return { sessionName: params.sessionName, commands, killed: true };
   } catch (error) {
     return {

@@ -38,9 +38,9 @@ import {
 } from '../turn/delivery-pipeline.js';
 import {
   formatStreamRuntimeStatus,
-  getStreamLastContentResponseAgeMs,
-  getVisibleStreamLastContentResponseAgeMs,
-  shouldShowStreamLastContentResponseAge,
+  getStreamLastActivityAgeMs,
+  getVisibleStreamLastActivityAgeMs,
+  shouldShowStreamLastActivityAge,
 } from '../turn/stream-state.js';
 
 export interface MirrorStructuredStreamStatusConfig {
@@ -52,7 +52,14 @@ export interface MirrorFeedbackControllerDeps {
   getAdapter(channelType: string): BaseChannelAdapter | null | undefined;
   getThreadTitle(threadId: string, sessionId?: string, bindingId?: string): string | null | undefined;
   getRuntimeTags?(threadId: string, sessionId?: string, bindingId?: string): string[];
+  getAssistantLabel?(threadId: string, sessionId?: string, bindingId?: string): string;
+  onMirrorTurnStarted?(subscription: BridgeMirrorSubscription, turnState: BridgeMirrorTurnState): void;
   onMirrorStreamStart?(subscription: BridgeMirrorSubscription, turnState: BridgeMirrorTurnState): void;
+  resolveFinalizedTurnStatus?(
+    subscription: BridgeMirrorSubscription,
+    turn: FinalizedBridgeMirrorTurn,
+    context: { batchSize: number },
+  ): Promise<FinalizedBridgeMirrorTurn['status']> | FinalizedBridgeMirrorTurn['status'];
   getStructuredStreamStatusConfig?(): MirrorStructuredStreamStatusConfig;
   nowIso(): string;
   eventBatchLimit: number;
@@ -74,6 +81,41 @@ export interface MirrorFeedbackController {
     subscription: BridgeMirrorSubscription,
     turns: FinalizedBridgeMirrorTurn[],
   ): Promise<{ deliveredCount: number; error?: unknown }>;
+}
+
+const MIRROR_TERMINAL_ERROR_STATUS_MAX_CHARS = 600;
+
+function compactTerminalErrorStatus(value: string): string {
+  const normalized = value.replace(/\s+/gu, ' ').trim();
+  const chars = Array.from(normalized);
+  if (chars.length <= MIRROR_TERMINAL_ERROR_STATUS_MAX_CHARS) return normalized;
+  return `${chars.slice(0, MIRROR_TERMINAL_ERROR_STATUS_MAX_CHARS - 1).join('')}…`;
+}
+
+function appendTerminalErrorText(text: string, errorText: string | undefined): string {
+  const error = (errorText || '').trim();
+  if (!error || text.includes(error)) return text;
+  return [text.trim(), `❌ 错误原因：${error}`].filter(Boolean).join('\n\n');
+}
+
+export function formatMirrorTerminalErrorStatus(errorText: string | undefined): string {
+  const raw = (errorText || '').trim();
+  if (!raw) return '❌ 异常';
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    const root = parsed && typeof parsed === 'object'
+      ? ((parsed as { error?: unknown }).error && typeof (parsed as { error?: unknown }).error === 'object'
+          ? (parsed as { error: Record<string, unknown> }).error
+          : parsed as Record<string, unknown>)
+      : null;
+    const type = typeof root?.type === 'string' ? root.type.trim() : '';
+    const message = typeof root?.message === 'string' ? root.message.trim() : '';
+    const parts = [type, message].filter((part, index, values) => part && values.indexOf(part) === index);
+    if (parts.length > 0) return compactTerminalErrorStatus(`❌ ${parts.join(' · ')}`);
+  } catch {
+    // Preserve non-JSON runtime errors below.
+  }
+  return compactTerminalErrorStatus(`❌ ${raw}`);
 }
 
 function createMirrorStreamFeedbackTarget(
@@ -120,6 +162,7 @@ export function createMirrorFeedbackController(
       true,
       false,
       turnState.goalStatus,
+      deps.getAssistantLabel?.(subscription.threadId, subscription.sessionId, subscription.bindingId),
     );
     return rendered || buildMirrorTitle(baseTitle, markdown);
   }
@@ -206,26 +249,24 @@ export function createMirrorFeedbackController(
       return;
     }
 
-    const lastContentResponseAtMs = turnState.lastContentResponseAt
-      ? Date.parse(turnState.lastContentResponseAt)
-      : turnState.lastResponseAt
-        ? Date.parse(turnState.lastResponseAt)
-        : null;
+    const lastActivityAtMs = Date.parse(turnState.lastActivityAt);
     const streamState = {
       startedAtMs,
-      lastContentResponseAtMs: Number.isFinite(lastContentResponseAtMs) ? lastContentResponseAtMs : null,
+      lastActivityAtMs: Number.isFinite(lastActivityAtMs) ? lastActivityAtMs : startedAtMs,
     };
     const statusConfig = deps.getStructuredStreamStatusConfig?.();
     const effectiveLastResponseAgeMs = Object.prototype.hasOwnProperty.call(options, 'lastResponseAgeMs')
       ? options.lastResponseAgeMs
       : statusConfig
-        ? getVisibleStreamLastContentResponseAgeMs(streamState, nowMs, statusConfig)
+        ? getVisibleStreamLastActivityAgeMs(streamState, nowMs, statusConfig)
         : null;
     const statusText = formatStreamRuntimeStatus(
       Math.max(0, nowMs - startedAtMs),
       effectiveLastResponseAgeMs,
       turnState.statusNote,
       turnState.contextUsage,
+      turnState.thinkingNote,
+      nowMs,
     );
     if (turnState.lastStatusText === statusText) return;
 
@@ -249,20 +290,16 @@ export function createMirrorFeedbackController(
     const startedAtMs = Date.parse(pendingTurn.startedAt);
     if (!Number.isFinite(startedAtMs)) return;
 
-    const lastContentResponseAtMs = pendingTurn.lastContentResponseAt
-      ? Date.parse(pendingTurn.lastContentResponseAt)
-      : pendingTurn.lastResponseAt
-        ? Date.parse(pendingTurn.lastResponseAt)
-        : null;
+    const lastActivityAtMs = Date.parse(pendingTurn.lastActivityAt);
     const streamState = {
       startedAtMs,
-      lastContentResponseAtMs: Number.isFinite(lastContentResponseAtMs) ? lastContentResponseAtMs : null,
+      lastActivityAtMs: Number.isFinite(lastActivityAtMs) ? lastActivityAtMs : startedAtMs,
     };
-    if (!shouldShowStreamLastContentResponseAge(streamState, nowMs, config)) return;
+    if (!shouldShowStreamLastActivityAge(streamState, nowMs, config)) return;
 
     pushMirrorStreamingStatus(subscription, pendingTurn, {
       nowMs,
-      lastResponseAgeMs: getStreamLastContentResponseAgeMs(streamState, nowMs),
+      lastResponseAgeMs: getStreamLastActivityAgeMs(streamState, nowMs),
       minIntervalMs: config.heartbeatMs,
     });
   }
@@ -340,9 +377,29 @@ export function createMirrorFeedbackController(
   async function deliverMirrorTurn(
     subscription: BridgeMirrorSubscription,
     turn: FinalizedBridgeMirrorTurn,
+    context: { batchSize: number },
   ): Promise<void> {
+    const terminalStatus = await deps.resolveFinalizedTurnStatus?.(subscription, turn, context) ?? turn.status;
+    turn.status = terminalStatus;
     const adapter = deps.getAdapter(subscription.channelType);
     if (!adapter || !adapter.isRunning()) return;
+    if (terminalStatus === 'error' && typeof adapter.onStreamStatus === 'function') {
+      const startedAtMs = Date.parse(turn.startedAt || turn.timestamp);
+      const nowMs = Date.now();
+      const elapsedMs = Number.isFinite(startedAtMs) ? Math.max(0, nowMs - startedAtMs) : 0;
+      adapter.onStreamStatus(
+        subscription.chatId,
+        formatStreamRuntimeStatus(
+          elapsedMs,
+          null,
+          formatMirrorTerminalErrorStatus(turn.errorText),
+          turn.contextUsage,
+          null,
+          nowMs,
+        ),
+        turn.streamKey,
+      );
+    }
 
     const baseTitle = deps.getThreadTitle(subscription.threadId, subscription.sessionId, subscription.bindingId)?.trim() || '本地会话';
     const plainTextTitle = getMirrorPlainTextTitle(subscription, baseTitle);
@@ -351,7 +408,9 @@ export function createMirrorFeedbackController(
     const rawFinalResponse = assembleCodexFinalResponse({ text: turn.text });
     const attachments = rawFinalResponse.attachments;
     const questions = rawFinalResponse.questions;
-    const cleanTurnText = rawFinalResponse.text;
+    const cleanTurnText = terminalStatus === 'error'
+      ? appendTerminalErrorText(rawFinalResponse.text, turn.errorText)
+      : rawFinalResponse.text;
     if (attachments.length > 0 || questions.length > 0) {
       console.log('[bridge-manager] Mirror final artifacts parsed:', {
         bindingId: subscription.bindingId,
@@ -363,7 +422,7 @@ export function createMirrorFeedbackController(
         inputQuestionCount: questions.filter((question) => Boolean(question.input)).length,
       });
     }
-    const finalTurnText = turn.status === 'completed'
+    const finalTurnText = terminalStatus === 'completed'
       ? appendContextUsageCompactText(cleanTurnText, turn.contextUsage)
       : cleanTurnText;
     const renderedStreamTextBase = formatMirrorMessage(
@@ -374,6 +433,7 @@ export function createMirrorFeedbackController(
       true,
       false,
       turn.goalStatus,
+      deps.getAssistantLabel?.(subscription.threadId, subscription.sessionId, subscription.bindingId),
     );
     const renderedTextBaseWithGoal = formatMirrorMessage(
       plainTextTitle,
@@ -383,6 +443,7 @@ export function createMirrorFeedbackController(
       false,
       true,
       turn.goalStatus,
+      deps.getAssistantLabel?.(subscription.threadId, subscription.sessionId, subscription.bindingId),
     );
     const renderedText = turn.timedOut
       ? appendMirrorTimeoutNotice(renderedTextBaseWithGoal || buildMirrorTitle(plainTextTitle, markdown), markdown)
@@ -410,7 +471,7 @@ export function createMirrorFeedbackController(
             chatId: subscription.chatId,
             streamKey: turn.streamKey,
           },
-          turn.status,
+          terminalStatus,
           streamFinalizeText,
         );
         if (finalized) {
@@ -490,9 +551,10 @@ export function createMirrorFeedbackController(
     turns: FinalizedBridgeMirrorTurn[],
   ): Promise<{ deliveredCount: number; error?: unknown }> {
     let deliveredCount = 0;
-    for (const turn of turns.slice(0, deps.eventBatchLimit)) {
+    const batch = turns.slice(0, deps.eventBatchLimit);
+    for (const turn of batch) {
       try {
-        await deliverMirrorTurn(subscription, turn);
+        await deliverMirrorTurn(subscription, turn, { batchSize: batch.length });
         deliveredCount += 1;
       } catch (error) {
         return { deliveredCount, error };
@@ -503,6 +565,7 @@ export function createMirrorFeedbackController(
 
   return {
     hooks: {
+      onTurnStarted: deps.onMirrorTurnStarted,
       onStreamText: updateMirrorStreaming,
       onStatusProgress: updateMirrorStatusProgress,
       onTaskProgress: updateMirrorTaskProgress,

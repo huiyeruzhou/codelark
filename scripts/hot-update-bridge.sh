@@ -181,9 +181,8 @@ run_worker() {
   echo "[hot-update] project: $PROJECT_DIR"
   echo "[hot-update] bridge log: $BRIDGE_LOG"
 
-  validate_project_dir
-
   ensure_node24
+  validate_project_dir
   echo "[hot-update] node: $(node -v)"
 
   local proxy_supported=0
@@ -224,8 +223,8 @@ run_worker() {
 
 run_dry_run() {
   cd "$PROJECT_DIR"
-  validate_project_dir
   ensure_node24
+  validate_project_dir
 
   local args=(--run)
   if [ "$USE_PULL" = "1" ]; then

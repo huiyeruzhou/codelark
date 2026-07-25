@@ -7,6 +7,7 @@ import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 
 import {
+  getCodexSessionByThreadId,
   listCodexSessions,
   readCodexSessionJsonlHistoryStreamByFilePath,
   readCodexSessionMessagesByFilePath,
@@ -27,6 +28,39 @@ afterEach(() => {
 });
 
 describe('listCodexSessions', () => {
+  it('reuses the indexed file path for repeated thread lookup', () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-codex-session-cache-'));
+    process.env.CODEX_HOME = tempRoot;
+    const sessionsDir = path.join(tempRoot, 'sessions', '2026', '07', '25');
+    fs.mkdirSync(sessionsDir, { recursive: true });
+    const threadId = '019f9699-7f1a-7000-8000-000000000001';
+    const rolloutPath = path.join(sessionsDir, `rollout-2026-07-25T09-00-00-${threadId}.jsonl`);
+    fs.writeFileSync(rolloutPath, JSON.stringify({
+      timestamp: '2026-07-25T09:00:00.000Z',
+      type: 'session_meta',
+      payload: {
+        id: threadId,
+        timestamp: '2026-07-25T09:00:00.000Z',
+        cwd: '/repo/cache-test',
+        originator: 'Codex CLI',
+      },
+    }), 'utf-8');
+
+    assert.equal(listCodexSessions().length, 1);
+    const originalReaddirSync = fs.readdirSync;
+    fs.readdirSync = (() => {
+      throw new Error('cached lookup must not rescan the sessions tree');
+    }) as typeof fs.readdirSync;
+    try {
+      const session = getCodexSessionByThreadId(threadId);
+      assert.equal(session?.filePath, rolloutPath);
+      assert.equal(session?.cwd, '/repo/cache-test');
+    } finally {
+      fs.readdirSync = originalReaddirSync;
+      fs.rmSync(tempRoot, { recursive: true, force: true });
+    }
+  });
+
   it('falls back to the first real user message when session_index has no title', () => {
     const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-codex-sessions-'));
     process.env.CODEX_HOME = tempRoot;
@@ -123,7 +157,7 @@ describe('listCodexSessions', () => {
     fs.rmSync(tempRoot, { recursive: true, force: true });
   });
 
-  it('hides internal exec sessions that are not shown in the Codex sidebar', () => {
+  it('includes Desktop exec sessions in the local Codex session list', () => {
     const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-codex-sessions-'));
     process.env.CODEX_HOME = tempRoot;
 
@@ -162,7 +196,10 @@ describe('listCodexSessions', () => {
 
     const sessions = listCodexSessions(10);
 
-    assert.equal(sessions.length, 0);
+    assert.equal(sessions.length, 1);
+    assert.equal(sessions[0]?.threadId, '019d1e3a-74f9-7e43-92ef-e206eec01f80');
+    assert.equal(sessions[0]?.originator, 'Codex Desktop');
+    assert.equal(sessions[0]?.source, 'exec');
 
     fs.rmSync(tempRoot, { recursive: true, force: true });
   });
@@ -354,7 +391,7 @@ describe('listCodexSessions', () => {
     fs.rmSync(tempRoot, { recursive: true, force: true });
   });
 
-  it('hides Codex threads whose project root is no longer in the Codex saved workspace list', () => {
+  it('does not restrict local Codex sessions to Desktop saved workspace roots', () => {
     const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-codex-sessions-'));
     process.env.CODEX_HOME = tempRoot;
 
@@ -405,12 +442,15 @@ describe('listCodexSessions', () => {
 
     const sessions = listCodexSessions();
 
-    assert.deepEqual(sessions.map((session) => session.threadId), [visibleThreadId]);
+    assert.deepEqual(
+      sessions.map((session) => session.threadId).sort(),
+      [hiddenThreadId, visibleThreadId].sort(),
+    );
 
     fs.rmSync(tempRoot, { recursive: true, force: true });
   });
 
-  it('includes freshly created Codex threads that have reached session_index before the state db catches up', () => {
+  it('does not restrict local Codex sessions to the Codex state db thread list', () => {
     const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-codex-sessions-'));
     process.env.CODEX_HOME = tempRoot;
 
@@ -490,9 +530,9 @@ describe('listCodexSessions', () => {
     db.close();
 
     const sessions = listCodexSessions(10);
-    const threadIds = sessions.map((session) => session.threadId);
+    const threadIds = sessions.map((session) => session.threadId).sort();
 
-    assert.deepEqual(threadIds, [freshThreadId, visibleThreadId]);
+    assert.deepEqual(threadIds, [freshThreadId, staleThreadId, visibleThreadId].sort());
 
     fs.rmSync(tempRoot, { recursive: true, force: true });
   });
@@ -949,6 +989,36 @@ describe('readCodexSessionMirrorRecordStreamByFilePath', () => {
     fs.rmSync(tempRoot, { recursive: true, force: true });
   });
 
+  it('preserves the structured error carried by Codex task_complete', () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-codex-mirror-'));
+    const filePath = path.join(tempRoot, 'rollout.jsonl');
+    fs.writeFileSync(
+      filePath,
+      JSON.stringify({
+        timestamp: '2026-03-25T00:00:00.000Z',
+        type: 'event_msg',
+        payload: {
+          type: 'task_complete',
+          turn_id: 'turn-error',
+          last_agent_message: '',
+          error: { message: 'stream failed after retries' },
+        },
+      }),
+      'utf-8',
+    );
+
+    const records = readCodexSessionMirrorRecordStreamByFilePath(filePath);
+
+    assert.equal(records.length, 1);
+    assert.equal(records[0]?.type, 'task_complete');
+    assert.equal(records[0]?.turnId, 'turn-error');
+    assert.equal(records[0]?.isError, true);
+    assert.match(records[0]?.errorText || '', /stream failed after retries/);
+    assert.equal(records[0]?.content, '');
+
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  });
+
   it('preserves markdown-style line breaks in mirror task_complete records', () => {
     const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-codex-mirror-'));
     const filePath = path.join(tempRoot, 'rollout.jsonl');
@@ -1225,6 +1295,145 @@ describe('readCodexSessionMirrorRecordStreamByFilePath', () => {
         },
       ],
     );
+
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  });
+
+  it('unwraps GPT-5.6 exec orchestration into bash and file-language tool displays', () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-codex-gpt56-tools-'));
+    const filePath = path.join(tempRoot, 'rollout.jsonl');
+    const patchText = [
+      '*** Begin Patch',
+      '*** Update File: src/app.ts',
+      '@@',
+      '+const enabled = true;',
+      '*** End Patch',
+    ].join('\n');
+    fs.writeFileSync(
+      filePath,
+      [
+        {
+          timestamp: '2026-07-23T00:00:00.000Z',
+          type: 'event_msg',
+          payload: { type: 'task_started', turn_id: 'turn-gpt56' },
+        },
+        {
+          timestamp: '2026-07-23T00:00:01.000Z',
+          type: 'response_item',
+          payload: {
+            type: 'custom_tool_call',
+            name: 'exec',
+            call_id: 'call-shell',
+            input: [
+              'const r = await tools.exec_command({"cmd":"npm test","workdir":"/tmp/project","yield_time_ms":10000});',
+              'text(r.output);',
+            ].join('\n'),
+          },
+        },
+        {
+          timestamp: '2026-07-23T00:00:02.000Z',
+          type: 'response_item',
+          payload: {
+            type: 'custom_tool_call_output',
+            call_id: 'call-shell',
+            output: [
+              { type: 'input_text', text: 'Script completed\nWall time 0.2 seconds\nOutput:\n' },
+              { type: 'input_text', text: 'tests passed' },
+            ],
+          },
+        },
+        {
+          timestamp: '2026-07-23T00:00:03.000Z',
+          type: 'response_item',
+          payload: {
+            type: 'custom_tool_call',
+            name: 'exec',
+            call_id: 'call-patch',
+            input: `const patch = ${JSON.stringify(patchText)};\ntext(await tools.apply_patch(patch));`,
+          },
+        },
+        {
+          timestamp: '2026-07-23T00:00:04.000Z',
+          type: 'response_item',
+          payload: {
+            type: 'custom_tool_call_output',
+            call_id: 'call-patch',
+            output: [{ type: 'input_text', text: 'Script completed\nWall time 0.1 seconds\nOutput:\n{}' }],
+          },
+        },
+        {
+          timestamp: '2026-07-23T00:00:05.000Z',
+          type: 'response_item',
+          payload: {
+            type: 'custom_tool_call',
+            name: 'exec',
+            call_id: 'call-multiple',
+            input: [
+              `const patch = ${JSON.stringify(patchText)};`,
+              'const results = await Promise.all([',
+              '  tools.exec_command({ cmd: "pwd", workdir: "/tmp/project" }),',
+              '  tools.apply_patch(patch),',
+              ']);',
+              'text(results.length);',
+            ].join('\n'),
+          },
+        },
+        {
+          timestamp: '2026-07-23T00:00:06.000Z',
+          type: 'response_item',
+          payload: {
+            type: 'custom_tool_call_output',
+            call_id: 'call-multiple',
+            output: [{ type: 'input_text', text: 'Script completed\nWall time 0.3 seconds\nOutput:\n2' }],
+          },
+        },
+      ].map((line) => JSON.stringify(line)).join('\n'),
+      'utf-8',
+    );
+
+    const records = readCodexSessionMirrorRecordStreamByFilePath(filePath);
+    const shellStart = records.find((record) => record.type === 'tool_started' && record.toolId === 'call-shell');
+    const shellFinish = records.find((record) => record.type === 'tool_finished' && record.toolId === 'call-shell');
+    const patchStart = records.find((record) => record.type === 'tool_started' && record.toolId === 'call-patch');
+    const multiStart = records.find((record) => record.type === 'tool_started' && record.toolId === 'call-multiple');
+    assert.equal(shellStart?.toolName, 'exec_command');
+    assert.deepEqual(shellStart?.toolDetail, {
+      kind: 'exec_command',
+      command: 'npm test',
+      workdir: '/tmp/project',
+    });
+    assert.equal(shellFinish?.toolName, undefined);
+    assert.equal(shellFinish?.content, 'Script completed\nWall time 0.2 seconds\nOutput:\ntests passed');
+    assert.equal(patchStart?.toolName, 'apply_patch');
+    assert.equal(patchStart?.toolDetail?.kind, 'patch_apply');
+    assert.equal(patchStart?.toolDetail?.kind === 'patch_apply' ? patchStart.toolDetail.patchText : '', patchText);
+    assert.equal(multiStart?.toolName, 'tools × 2');
+    assert.deepEqual(multiStart?.toolDetail, {
+      kind: 'orchestration',
+      calls: [
+        {
+          name: 'exec_command',
+          detail: { kind: 'exec_command', command: 'pwd', workdir: '/tmp/project' },
+        },
+        {
+          name: 'apply_patch',
+          detail: {
+            kind: 'patch_apply',
+            patchText,
+            files: [{ path: 'src/app.ts', action: 'update' }],
+          },
+        },
+      ],
+    });
+
+    const history = readCodexSessionJsonlHistoryStreamByFilePath(filePath)
+      .map((entry) => entry.content)
+      .join('\n\n');
+    assert.match(history, /exec_command[\s\S]*```bash\nnpm test\n```/);
+    assert.match(history, /apply_patch[\s\S]*```typescript\n\*\*\* Begin Patch/);
+    assert.match(history, /tools × 2[\s\S]*1\. `exec_command`[\s\S]*```bash\npwd\n```/);
+    assert.match(history, /tools × 2[\s\S]*2\. `apply_patch`[\s\S]*```typescript\n\*\*\* Begin Patch/);
+    assert.doesNotMatch(history, /```json\nconst r = await tools\.exec_command/);
 
     fs.rmSync(tempRoot, { recursive: true, force: true });
   });
@@ -1825,6 +2034,47 @@ describe('readCodexSessionMirrorRecordStreamByFilePath', () => {
     fs.rmSync(tempRoot, { recursive: true, force: true });
   });
 
+  it('rewrites goal-resume AGENTS instructions without environment context to a system notice', () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-codex-mirror-'));
+    const filePath = path.join(tempRoot, 'rollout.jsonl');
+    const instructions = [
+      '# AGENTS.md instructions for /repo/project',
+      '',
+      '<INSTRUCTIONS>',
+      'These AGENTS.md instructions replace all previously provided AGENTS.md instructions.',
+      '',
+      '# AGENTS.md',
+      'read docs',
+      '</INSTRUCTIONS>',
+    ].join('\n');
+    fs.writeFileSync(
+      filePath,
+      JSON.stringify({
+        timestamp: '2026-07-24T20:49:24.803Z',
+        type: 'response_item',
+        payload: {
+          type: 'message',
+          role: 'user',
+          content: [{ type: 'input_text', text: instructions }],
+        },
+      }) + '\n',
+      'utf-8',
+    );
+
+    const delta = readCodexSessionMirrorRecordDeltaByFilePath(filePath, 0, fs.statSync(filePath).size);
+    assert.deepEqual(delta.records.map((record) => ({ role: record.role, content: record.content })), [
+      { role: 'system', content: '> ⚙️ 环境上下文已加载' },
+    ]);
+    assert.doesNotMatch(JSON.stringify(delta.records), /AGENTS\.md instructions|<INSTRUCTIONS>/);
+
+    const eventDelta = readCodexSessionEventDeltaByFilePath(filePath, 0, fs.statSync(filePath).size);
+    assert.deepEqual(eventDelta.events.map((event) => ({ role: event.role, content: event.content })), [
+      { role: 'system', content: '> ⚙️ 环境上下文已加载' },
+    ]);
+
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  });
+
   it('rewrites standalone environment context user messages to a quoted system notice', () => {
     const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-codex-mirror-'));
     const filePath = path.join(tempRoot, 'rollout.jsonl');
@@ -1895,6 +2145,11 @@ describe('readCodexSessionMirrorRecordStreamByFilePath', () => {
           timestamp: '2026-05-14T00:00:03.000Z',
           type: 'event_msg',
           payload: { type: 'thread_rolled_back', num_turns: 1 },
+        }),
+        JSON.stringify({
+          timestamp: '2026-05-14T00:00:03.500Z',
+          type: 'event_msg',
+          payload: { type: 'thread_settings_applied', thread_settings: { model: 'gpt-5.6-sol' } },
         }),
         JSON.stringify({
           timestamp: '2026-05-14T00:00:04.000Z',

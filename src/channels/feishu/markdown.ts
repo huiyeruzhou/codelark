@@ -12,10 +12,8 @@ import type { StructuredStreamingUiMetadata } from '../contracts.js';
 import { buildFencedCodeBlock } from '../../shared/markdown/fence.js';
 import { formatStreamTagLabel } from '../../shared/streaming-metadata.js';
 import {
-  buildToolDetailWithoutLongOutput,
   buildToolProgressBlocks,
   buildToolProgressMarkdown,
-  getLongExecOutput,
   type FinalCardTerminalStatus,
   type ToolProgressBlock,
   type ToolProgressRenderOptions,
@@ -45,11 +43,6 @@ export interface FeishuToolCallCardStyle {
     borderColorByStatus: Record<ToolCallInfo['status'], string | null>;
     borderCornerRadius: string;
   };
-  longOutputPanel: {
-    titleTextSize: FeishuMarkdownTextSize;
-    detailTextSize: FeishuMarkdownTextSize;
-    headerTemplateByStatus: Record<ToolCallInfo['status'], string>;
-  };
 }
 
 export const DEFAULT_FEISHU_TOOL_CALL_CARD_STYLE: FeishuToolCallCardStyle = {
@@ -68,47 +61,17 @@ export const DEFAULT_FEISHU_TOOL_CALL_CARD_STYLE: FeishuToolCallCardStyle = {
     },
     borderCornerRadius: '5px',
   },
-  longOutputPanel: {
-    titleTextSize: 'notation',
-    detailTextSize: 'notation',
-    headerTemplateByStatus: {
-      running: 'green',
-      complete: 'green',
-      error: 'red',
-    },
-  },
 };
 
-const FEISHU_TOOL_DETAIL_CARD_LIMIT = 2_400;
-const FEISHU_TOOL_LONG_OUTPUT_CARD_LIMIT = 2_400;
-
-interface TruncatedCardText {
-  text: string;
-  originalLength: number;
-  truncated: boolean;
-}
-
-function truncateCardPayloadText(value: string, maxLength: number): TruncatedCardText {
-  const text = String(value || '').trim();
-  const safeLimit = Math.max(0, maxLength);
-  if (text.length <= safeLimit) {
-    return { text, originalLength: text.length, truncated: false };
-  }
-  const suffix = '\n\n...(truncated for card preview)';
-  const sliceLength = Math.max(0, safeLimit - suffix.length);
-  return {
-    text: `${text.slice(0, sliceLength).trimEnd()}${suffix}`,
-    originalLength: text.length,
-    truncated: true,
-  };
-}
+export const FEISHU_LONG_USER_INPUT_COLLAPSE_THRESHOLD = 800;
+export const FEISHU_LONG_USER_INPUT_TITLE_LIMIT = 240;
 
 function resolveTitleTagColor(
   tag: string,
   defaultColor: NonNullable<StructuredStreamingUiMetadata['tagColor']>,
 ): NonNullable<StructuredStreamingUiMetadata['tagColor']> {
   const normalized = tag.trim().toLowerCase();
-  if (normalized === 'codex' || normalized === 'claude') return 'orange';
+  if (isRuntimeNameMetadataTag(normalized)) return 'orange';
   if (normalized === 'sdk' || normalized === 'source:sdk') return 'green';
   if (normalized === 'mirror' || normalized === 'source:mirror') return 'yellow';
   if (normalized.startsWith('effort:')) return 'green';
@@ -117,9 +80,13 @@ function resolveTitleTagColor(
   return defaultColor;
 }
 
+function isRuntimeNameMetadataTag(normalized: string): boolean {
+  return normalized === 'codex' || normalized === 'claude' || normalized === 'kimi';
+}
+
 function isRuntimeMetadataTag(tag: string): boolean {
   const normalized = tag.trim().toLowerCase();
-  if (normalized === 'codex' || normalized === 'claude') return true;
+  if (isRuntimeNameMetadataTag(normalized)) return true;
   const prefix = normalized.split(':', 1)[0];
   return prefix === 'effort' || prefix === 'reasoning' || prefix === 'model';
 }
@@ -133,7 +100,7 @@ function escapeTextTagContent(value: string): string {
 
 function metadataBodyTagColor(tag: string): 'orange' | 'green' | 'turquoise' | 'grey' {
   const normalized = tag.trim().toLowerCase();
-  if (normalized === 'codex' || normalized === 'claude') return 'orange';
+  if (isRuntimeNameMetadataTag(normalized)) return 'orange';
   const prefix = normalized.split(':', 1)[0];
   if (prefix === 'effort' || prefix === 'reasoning') return 'green';
   if (prefix === 'model') return 'turquoise';
@@ -226,6 +193,53 @@ function isFenceLine(line: string, fenceLength: number): boolean {
   return Boolean(match && match[2].length >= fenceLength);
 }
 
+function containsFeishuTemplateExpression(text: string): boolean {
+  return text.includes('${');
+}
+
+/**
+ * Feishu's card Markdown renderer flattens a fenced block when its body
+ * contains a `${...}` expression, even without JavaScript backticks. Card
+ * JSON 2.0 also supports CommonMark indented code blocks, which preserve the
+ * body byte-for-byte without asking the client to parse that combination.
+ */
+function rewriteTemplateLiteralFencesAsIndentedCode(text: string): string {
+  const lines = text.split('\n');
+  const rendered: string[] = [];
+
+  for (let index = 0; index < lines.length; index += 1) {
+    const opener = /^( {0,3})(`{3,})([^`]*)$/.exec(lines[index] || '');
+    if (!opener) {
+      rendered.push(lines[index] || '');
+      continue;
+    }
+
+    const fenceLength = opener[2].length;
+    let closingIndex = index + 1;
+    while (closingIndex < lines.length && !isFenceLine(lines[closingIndex] || '', fenceLength)) {
+      closingIndex += 1;
+    }
+    if (closingIndex >= lines.length) {
+      rendered.push(lines[index] || '');
+      continue;
+    }
+
+    const body = lines.slice(index + 1, closingIndex);
+    if (!containsFeishuTemplateExpression(body.join('\n'))) {
+      rendered.push(...lines.slice(index, closingIndex + 1));
+      index = closingIndex;
+      continue;
+    }
+
+    if (rendered.length > 0 && rendered[rendered.length - 1]?.trim()) rendered.push('');
+    rendered.push(...body.map((line) => `    ${line}`));
+    if (lines[closingIndex + 1]?.trim()) rendered.push('');
+    index = closingIndex;
+  }
+
+  return rendered.join('\n');
+}
+
 function protectCodeFenceContents(text: string): string {
   const lines = text.split('\n');
   const rendered: string[] = [];
@@ -254,17 +268,25 @@ function protectCodeFenceContents(text: string): string {
   return rendered.join('\n');
 }
 
+function ensureCodeFenceStartsOnNewLine(text: string): string {
+  return text.split('\n').map((line) => {
+    // Four-space indented code is already a code block. Literal backticks in
+    // its body must never be promoted back into Markdown fence delimiters.
+    if (/^(?: {4}|\t)/u.test(line)) return line;
+    return line.replace(/([^\n])```/g, '$1\n```');
+  }).join('\n');
+}
+
 /**
  * Preprocess markdown for Feishu rendering.
- * Ensures code fences have a newline before them and protects literal ```
- * inside generated plaintext/diff blocks. Feishu card markdown is less
- * reliable with longer CommonMark fences, so keep outer fences at ``` and
- * break embedded fence runs with a zero-width boundary.
+ * Keeps ordinary fenced blocks (and their language hint) unchanged. Feishu
+ * flattens fenced bodies containing `${...}`, so only those blocks fall back
+ * to CommonMark's four-space indented code form.
  */
 export function preprocessFeishuMarkdown(text: string): string {
-  const protectedText = protectCodeFenceContents(text);
+  const protectedText = protectCodeFenceContents(rewriteTemplateLiteralFencesAsIndentedCode(text));
   // Ensure ``` has newline before it (unless at start of text)
-  return protectedText.replace(/([^\n])```/g, '$1\n```');
+  return ensureCodeFenceStartsOnNewLine(protectedText);
 }
 
 /**
@@ -1204,65 +1226,32 @@ function toolPanelBorderColor(status: ToolCallInfo['status']): string | null {
   return DEFAULT_FEISHU_TOOL_CALL_CARD_STYLE.innerPanel.borderColorByStatus[status] ?? null;
 }
 
-function toolOutputPanelTemplate(status: ToolCallInfo['status']): string {
-  return DEFAULT_FEISHU_TOOL_CALL_CARD_STYLE.longOutputPanel.headerTemplateByStatus[status] || 'green';
-}
-
 function buildToolProgressPanelTitle(block: ToolProgressBlock): string {
-  return `${block.icon} \`${block.tool.name || 'tool'}\` · ${[block.statusLabel, ...block.titleMeta].join(' · ')}`;
+  return block.presentation.title;
 }
 
-function buildToolProgressPanelDetailElements(block: ToolProgressBlock, outputElementId: string): Array<Record<string, unknown>> {
-  const elements: Array<Record<string, unknown>> = [];
-  const detail = truncateCardPayloadText(
-    buildToolDetailWithoutLongOutput(block),
-    FEISHU_TOOL_DETAIL_CARD_LIMIT,
-  ).text;
+function buildToolProgressPanelDetailElements(block: ToolProgressBlock): Array<Record<string, unknown>> {
+  const detail = block.detail.trim();
   if (detail) {
-    elements.push({
+    return [{
       tag: 'markdown',
       content: preprocessFeishuMarkdown(detail),
       text_align: 'left',
       text_size: DEFAULT_FEISHU_TOOL_CALL_CARD_STYLE.innerPanel.detailTextSize,
-    });
-  } else {
-    elements.push({
-      tag: 'markdown',
-      content: block.tool.id === 'hidden' ? '请查看完整会话历史获取更早的工具调用。' : '暂无详情。',
-      text_align: 'left',
-      text_size: DEFAULT_FEISHU_TOOL_CALL_CARD_STYLE.innerPanel.detailTextSize,
-    });
+    }];
   }
-  const longExecOutput = getLongExecOutput(block.tool);
-  if (longExecOutput) {
-    const output = truncateCardPayloadText(longExecOutput, FEISHU_TOOL_LONG_OUTPUT_CARD_LIMIT);
-    elements.push({
-      tag: 'collapsible_panel',
-      expanded: false,
-      header: {
-        title: {
-          tag: 'markdown',
-          content: `输出 · ${output.originalLength} chars${output.truncated ? ' · truncated' : ''}`,
-          text_size: DEFAULT_FEISHU_TOOL_CALL_CARD_STYLE.longOutputPanel.titleTextSize,
-        },
-        template: toolOutputPanelTemplate(block.tool.status),
-      },
-      elements: [{
-        tag: 'markdown',
-        content: preprocessFeishuMarkdown(buildFencedCodeBlock(output.text, 'text')),
-        text_align: 'left',
-        text_size: DEFAULT_FEISHU_TOOL_CALL_CARD_STYLE.longOutputPanel.detailTextSize,
-      }],
-      element_id: outputElementId,
-    });
-  }
-  return elements;
+  return [{
+    tag: 'markdown',
+    content: block.tool.id === 'hidden' ? '请查看完整会话历史获取更早的工具调用。' : '没有额外详情。',
+    text_align: 'left',
+    text_size: DEFAULT_FEISHU_TOOL_CALL_CARD_STYLE.innerPanel.detailTextSize,
+  }];
 }
 
 function buildToolProgressPanel(block: ToolProgressBlock, index: number, elementIdPrefix = 'stream_tool'): Record<string, unknown> {
   const elementId = `${elementIdPrefix}_${index + 1}`;
   const title = buildToolProgressPanelTitle(block);
-  const elements = buildToolProgressPanelDetailElements(block, `${elementId}_out`);
+  const elements = buildToolProgressPanelDetailElements(block);
   return {
     tag: 'collapsible_panel',
     expanded: false,
@@ -1287,25 +1276,20 @@ function splitHistoryContentBlocks(content: string): string[] {
   return normalized ? normalized.split(/\n{2,}/).map((block) => block.trim()).filter(Boolean) : [];
 }
 
-function isAssistantHistoryBlock(block: string): boolean {
-  const firstLine = block.trimStart().split('\n')[0]?.trim() || '';
-  return /^\*\*(?!我:)[^*\n]+:\*\*/.test(firstLine);
-}
-
-function buildToolProgressGroupPanel(
-  item: Extract<StreamingHistoryItem, { type: 'tool_panel' }>,
+export function buildToolProgressGroupPanel(
+  tools: ToolCallInfo[],
   panelIndex: number,
   options: ToolProgressRenderOptions = {},
 ): Record<string, unknown> | null {
-  if (item.tools.length === 0) return null;
-  const blocks = buildToolProgressBlocks(item.tools, { ...options, maxItems: null });
+  if (tools.length === 0) return null;
+  const blocks = buildToolProgressBlocks(tools, { ...options, maxItems: null });
   return {
     tag: 'collapsible_panel',
     expanded: false,
     header: {
       title: {
         tag: 'markdown',
-        content: `工具调用 · ${item.tools.length}`,
+        content: `工具调用 · ${tools.length}`,
         text_size: DEFAULT_FEISHU_TOOL_CALL_CARD_STYLE.outerPanel.titleTextSize,
       },
     },
@@ -1346,6 +1330,46 @@ function formatHistoryMarkdownContent(item: Extract<StreamingHistoryItem, { type
   return `**用户**：${trimmed}`;
 }
 
+function userInputTitlePreview(content: string): string {
+  const normalized = content.replace(/\s+/gu, ' ').trim();
+  const chars = Array.from(normalized);
+  return chars.length > FEISHU_LONG_USER_INPUT_TITLE_LIMIT
+    ? `${chars.slice(0, FEISHU_LONG_USER_INPUT_TITLE_LIMIT).join('')}…`
+    : normalized;
+}
+
+function buildHistoryItemElement(
+  item: Extract<StreamingHistoryItem, { type: 'markdown' }>,
+  elementId: string,
+): Record<string, unknown> | null {
+  const formatted = formatHistoryMarkdownContent(item);
+  if (
+    item.role !== 'user'
+    || Array.from(item.content.trim()).length <= FEISHU_LONG_USER_INPUT_COLLAPSE_THRESHOLD
+  ) {
+    return buildHistoryMarkdownElement(formatted, elementId);
+  }
+
+  const fullContent = buildHistoryMarkdownElement(formatted);
+  if (!fullContent) return null;
+  const titleSource = /^\*\*用户\*\*/.test(item.content.trim())
+    ? item.content.trim()
+    : `**用户**：${item.content.trim()}`;
+  return {
+    tag: 'collapsible_panel',
+    expanded: false,
+    header: {
+      title: {
+        tag: 'markdown',
+        content: preprocessFeishuMarkdown(userInputTitlePreview(titleSource)),
+        text_size: 'normal',
+      },
+    },
+    elements: [fullContent],
+    element_id: elementId,
+  };
+}
+
 export function buildToolProgressElements(
   tools: ToolCallInfo[],
   options: ToolProgressRenderOptions = {},
@@ -1368,23 +1392,20 @@ export function buildStreamingHistoryElementsFromItems(
   const sourceItems = items.length > 0 ? items : initialStreamingHistoryItemsForRender();
   let markdownCount = 0;
   let toolPanelCount = 0;
-  const historyElements = sourceItems
-    .map((item) => {
-      if (item.type === 'tool_panel') {
-        const rendered = buildToolProgressGroupPanel(item, toolPanelCount, options);
-        toolPanelCount += 1;
-        return rendered;
-      }
-      const resolvedElementId = item.elementId
-        || (markdownCount === 0 ? elementId : `stream_txt_${markdownCount + 1}`);
-      const markdownElement = buildHistoryMarkdownElement(
-        formatHistoryMarkdownContent(item),
-        resolvedElementId,
-      );
-      markdownCount += 1;
-      return markdownElement;
-    })
-    .filter((item): item is Record<string, unknown> => Boolean(item));
+  const historyElements: Array<Record<string, unknown>> = [];
+  for (const item of sourceItems) {
+    if (item.type === 'tool_panel') {
+      const rendered = buildToolProgressGroupPanel(item.tools, toolPanelCount, options);
+      if (rendered) historyElements.push(rendered);
+      toolPanelCount += 1;
+      continue;
+    }
+    const resolvedElementId = item.elementId
+      || (markdownCount === 0 ? elementId : `stream_txt_${markdownCount + 1}`);
+    const markdownElement = buildHistoryItemElement(item, resolvedElementId);
+    markdownCount += 1;
+    if (markdownElement) historyElements.push(markdownElement);
+  }
 
   if (historyElements.length === 0) {
     historyElements.push(...buildStreamingHistoryElementsFromItems('', initialStreamingHistoryItemsForRender(), elementId, options));
@@ -1421,45 +1442,14 @@ export function buildStreamingHistoryElements(
   }
 
   const historyElements: Array<Record<string, unknown>> = [];
-  const toolBlocks = buildToolProgressBlocks(tools, { ...options, maxItems: null });
-  if (toolBlocks.length > 0) {
-    const contentBlocks = splitHistoryContentBlocks(content);
-    const assistantBlockIndexes = contentBlocks
-      .map((block, index) => isAssistantHistoryBlock(block) ? index : -1)
-      .filter((index) => index >= 0);
-    const lastAssistantBlockIndex = assistantBlockIndexes.at(-1);
-    let toolIndex = 0;
-
-    if (contentBlocks.length === 0) {
-      const fallbackElement = buildHistoryMarkdownElement('💭 Thinking...', elementId);
-      if (fallbackElement) historyElements.push(fallbackElement);
-    }
-
-    contentBlocks.forEach((block, index) => {
-      const blockElement = buildHistoryMarkdownElement(block, historyElements.length === 0 ? elementId : undefined);
-      if (blockElement) historyElements.push(blockElement);
-      if (!isAssistantHistoryBlock(block)) return;
-
-      const isLastAssistantBlock = index === lastAssistantBlockIndex;
-      const insertCount = isLastAssistantBlock ? toolBlocks.length - toolIndex : Math.min(1, toolBlocks.length - toolIndex);
-      for (let offset = 0; offset < insertCount; offset += 1) {
-        const blockToRender = toolBlocks[toolIndex];
-        if (!blockToRender) break;
-        historyElements.push(buildToolProgressPanel(blockToRender, toolIndex));
-        toolIndex += 1;
-      }
-    });
-
-    while (toolIndex < toolBlocks.length) {
-      const blockToRender = toolBlocks[toolIndex];
-      if (!blockToRender) break;
-      historyElements.push(buildToolProgressPanel(blockToRender, toolIndex));
-      toolIndex += 1;
-    }
-  } else {
-    const contentElement = buildHistoryMarkdownElement(content || '💭 Thinking...', elementId);
-    if (contentElement) historyElements.push(contentElement);
+  const contentBlocks = splitHistoryContentBlocks(content);
+  if (contentBlocks.length === 0) contentBlocks.push('💭 Thinking...');
+  for (const block of contentBlocks) {
+    const blockElement = buildHistoryMarkdownElement(block, historyElements.length === 0 ? elementId : undefined);
+    if (blockElement) historyElements.push(blockElement);
   }
+  const toolGroup = buildToolProgressGroupPanel(tools, 0, options);
+  if (toolGroup) historyElements.push(toolGroup);
 
   if (historyElements.length === 0) {
     const fallback = buildHistoryMarkdownElement('💭 Thinking...', elementId);
@@ -1477,6 +1467,29 @@ export function buildStreamingHistoryElements(
     element_id: 'stream_history',
   });
   return elements;
+}
+
+function withoutDuplicateTerminalContext(
+  items: StreamingHistoryItem[],
+  finalContextLine: string,
+): StreamingHistoryItem[] {
+  if (!finalContextLine) return items;
+  let removed = false;
+  return items.map((item, index) => {
+    if (removed || item.type !== 'markdown' || item.role !== 'assistant') return item;
+    const laterAssistantContainsContext = items.slice(index + 1).some((later) => (
+      later.type === 'markdown'
+      && later.role === 'assistant'
+      && later.content.split(/\r?\n/).some((line) => line.trim() === finalContextLine)
+    ));
+    if (laterAssistantContainsContext) return item;
+    const lines = item.content.split(/\r?\n/);
+    const contextIndex = lines.findLastIndex((line) => line.trim() === finalContextLine);
+    if (contextIndex < 0) return item;
+    removed = true;
+    lines.splice(contextIndex, 1);
+    return { ...item, content: lines.join('\n').trim() };
+  });
 }
 
 function getTaskProgressPresentation(
@@ -1584,7 +1597,14 @@ export function buildFinalCardJson(
   text: string,
   tasks: TaskProgressInfo[],
   tools: ToolCallInfo[],
-  footer: { status: string; elapsed: string; context?: string } | null,
+  footer: {
+    status: string;
+    currentTime?: string;
+    elapsed: string;
+    lastResponse?: string;
+    context?: string;
+    lastIo?: string;
+  } | null,
   terminalStatus?: FinalCardTerminalStatus,
   actionRows: FeishuCardActionButton[][] = [],
   chatId?: string,
@@ -1595,14 +1615,17 @@ export function buildFinalCardJson(
   const finalContextLine = historyItems
     ? text.trim().split(/\n+/).reverse().find((line) => /^Context:\s+/.test(line.trim()))?.trim() || ''
     : '';
+  const renderedHistoryItems = historyItems
+    ? withoutDuplicateTerminalContext(historyItems, finalContextLine)
+    : undefined;
 
   elements.push(...buildMetadataTagElements(metadata));
 
   // Main text content
   const renderOptions = { terminalStatus };
-  const contentElements = (text.trim() || tools.length > 0)
-    ? historyItems
-      ? buildStreamingHistoryElementsFromItems(text, historyItems, 'final_content', renderOptions)
+  const contentElements = (text.trim() || tools.length > 0 || Boolean(renderedHistoryItems?.length))
+    ? renderedHistoryItems
+      ? buildStreamingHistoryElementsFromItems(text, renderedHistoryItems, 'final_content', renderOptions)
       : buildStreamingHistoryElements(text, tools, 'final_content', renderOptions)
     : [];
   const taskMd = buildTaskProgressMarkdown(tasks, renderOptions);
@@ -1611,7 +1634,11 @@ export function buildFinalCardJson(
     elements.push(...contentElements);
   }
 
-  if (finalContextLine) {
+  // A history-driven provider may also append its terminal Context line to
+  // the response text. Keep it as a standalone fallback only when the shared
+  // footer has no normalized context value; otherwise every runtime uses the
+  // same single-line footer.
+  if (finalContextLine && !footer?.context) {
     if (elements.length > 0) {
       elements.push({ tag: 'hr' });
     }
@@ -1639,8 +1666,11 @@ export function buildFinalCardJson(
   if (footer) {
     const parts: string[] = [];
     if (footer.status) parts.push(footer.status);
+    if (footer.currentTime) parts.push(footer.currentTime);
     if (footer.elapsed) parts.push(footer.elapsed);
+    if (footer.lastResponse) parts.push(footer.lastResponse);
     if (footer.context) parts.push(footer.context);
+    if (footer.lastIo) parts.push(footer.lastIo);
     if (parts.length > 0) {
       if (elements.length > 0) {
         elements.push({ tag: 'hr' });

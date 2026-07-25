@@ -29,7 +29,7 @@
 codelark status
 ```
 
-再打开工作台日志页，确认飞书凭据、Codex / Claude Code 登录态和本机 Node.js 版本。日志目录通常在：
+再打开工作台日志页，确认飞书凭据、Codex / Claude Code / Kimi Code 登录态和本机 Node.js 版本。日志目录通常在：
 
 ```text
 ~/.codelark/logs/
@@ -114,15 +114,15 @@ codelark run
 //status
 ```
 
-这会把 `/status` 作为普通消息发给 Codex / Claude Code，而不是执行 CodeLark 命令。
+这会把 `/status` 作为普通消息发给 Codex / Claude Code / Kimi Code，而不是执行 CodeLark 命令。
 
 ## 本地会话找不到
 
 `/t` 依赖本机 runtime 会话索引。排查顺序：
 
-1. 确认当前 runtime 是否正确：`/runtime codex` 或 `/runtime claude`。
+1. 确认当前 runtime 是否正确：`/runtime codex`、`/runtime claude` 或 `/runtime kimi`。
 2. 确认 provider 是否符合预期：`/provider sdk`、`/provider pty` 或 `/provider tmux`。
-3. 在本机确认 Codex / Claude Code 已经产生过会话。
+3. 在本机确认 Codex / Claude Code / Kimi Code 已经产生过会话。
 4. 在工作台查看本地会话列表和 bridge 日志。
 
 如果本机路径是符号链接，CodeLark 会尽量同时识别原始路径和 realpath；仍找不到时，把 `/status` 和相关日志一起用于排查。
@@ -153,4 +153,4 @@ codelark stop
 rm -rf ~/.codelark
 ```
 
-删除 `~/.codelark` 会移除配置、聊天绑定、会话缓存、日志和运行状态；不会删除 Codex / Claude Code 自己的会话数据。
+删除 `~/.codelark` 会移除配置、聊天绑定、会话缓存、日志和运行状态；不会删除 Codex / Claude Code / Kimi Code 自己的会话数据。

@@ -78,7 +78,7 @@ export async function requestCodexTuiSelectionViaPermissionBroker(params: {
     default_choice: defaultChoice,
     prompt_summary: selectionPrompt.summary,
   });
-  await permissionBroker.forwardPermissionRequest(
+  permissionBroker.forwardPermissionRequest(
     params.adapter,
     params.msg.address,
     permissionRequestId,

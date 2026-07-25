@@ -64,9 +64,12 @@ export default defineConfig({
           { text: '模块边界审计', link: '/architecture/module-boundary-audit' },
           { text: '后端状态', link: '/architecture/backend-status' },
           { text: '运行时命令作用域', link: '/architecture/runtime-command-scope' },
+          { text: '新增 Agent / Runtime 接入边界', link: '/architecture/new-agent-runtime' },
           { text: 'JSON Schemas', link: '/architecture/json-schemas' },
           { text: '桥接安全模型', link: '/architecture/security' },
           { text: '流式卡片', link: '/architecture/streaming-card' },
+          { text: 'Codex 工具调用解析', link: '/architecture/codex-tool-call-rendering' },
+          { text: 'tmux Runtime 生命周期', link: '/architecture/tmux-runtime-lifecycle' },
         ],
       },
       {

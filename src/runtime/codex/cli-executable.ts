@@ -4,6 +4,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { readPathEnv } from '../path-env.js';
+
 export interface ResolveCodexCliExecutableOptions {
   env?: NodeJS.ProcessEnv;
   platform?: NodeJS.Platform;
@@ -211,7 +213,7 @@ export function resolveCliExecutable(options: ResolveCliExecutableOptions): stri
     return override;
   }
 
-  const pathValue = env.PATH || '';
+  const pathValue = readPathEnv(env, platform);
   const entries = pathValue.split(pathDelimiterForPlatform(platform)).filter(Boolean);
   const names = executableNames(options.command, platform);
 

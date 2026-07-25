@@ -36,6 +36,7 @@ if (
 }
 
 process.env.CODELARK_DISABLE_OUTBOUND_RATE_LIMIT = process.env.CODELARK_DISABLE_OUTBOUND_RATE_LIMIT || '1';
+process.env.CODELARK_DISABLE_DAILY_VERSION_CHECK = process.env.CODELARK_DISABLE_DAILY_VERSION_CHECK || '1';
 process.env.CLK_TEST_DISABLE_LOCAL_CONFIG_CWD = process.env.CLK_TEST_DISABLE_LOCAL_CONFIG_CWD || process.cwd();
 
 if (
@@ -114,6 +115,9 @@ const configEnvKeys = [
   'CODELARK_CLAUDE_EXECUTABLE',
   'CODELARK_CLAUDE_REASONING_EFFORT',
   'CODELARK_CLAUDE_IDLE_TIMEOUT_MINUTES',
+  'CODELARK_KIMI_MODEL',
+  'CODELARK_KIMI_DEFAULT_MODEL',
+  'CODELARK_KIMI_PROVIDER',
   'CODELARK_ENABLED_CHANNELS',
   'CODELARK_HISTORY_MESSAGE_LIMIT',
   'CODELARK_STREAM_STATUS_IDLE_START_SECONDS',
@@ -141,6 +145,17 @@ if (
 ) {
   const claudeHome = path.join(process.env.CODELARK_HOME!, 'claude-home');
   ensureDirEnv('CODELARK_CLAUDE_HOME', claudeHome);
+}
+
+if (
+  !process.env.KIMI_CODE_HOME
+  || (
+    process.env.CODELARK_TEST_ALLOW_EXTERNAL_HOME !== '1'
+    && !isManagedTestHome(process.env.KIMI_CODE_HOME)
+  )
+) {
+  const kimiHome = path.join(process.env.CODELARK_HOME!, 'kimi-home');
+  ensureDirEnv('KIMI_CODE_HOME', kimiHome);
 }
 
 if (createdTempHome) {

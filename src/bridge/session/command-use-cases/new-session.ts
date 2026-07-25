@@ -1,15 +1,18 @@
 import type { BaseChannelAdapter } from '../../../channels/contracts.js';
-import { deliverBridgeNotice } from '../../../channels/delivery/feedback.js';
+import { enqueueBridgeNotice } from '../../../channels/delivery/feedback.js';
 import { DEFAULT_WORKSPACE_ROOT } from '../../../configuration/paths.js';
 import { createConfigService } from '../../../configuration/service.js';
 import type { BridgeSession, BridgeStore, ChannelChat, CloudDocumentAddress, InboundMessage } from '../../../domain/index.js';
 import {
+  getSessionActiveRuntime,
   getSessionWorkingDirectory,
+  setSessionActiveRuntimeUpdate,
 } from '../../../domain/session-runtime.js';
 import { validateWorkingDirectory } from '../../../shared/security/validators.js';
 import * as router from '../channel-router.js';
 import {
   ensureWorkingDirectoryExists,
+  getSessionClaudeProviderOverride,
   getSessionCodexProviderOverride,
   getWorkspaceRoot,
   resolveEffectiveCodexProvider,
@@ -21,9 +24,9 @@ import {
   formatCommandPath,
 } from '../../command/presentation.js';
 import {
-  formatSessionCodexProvider,
-  formatSessionMode,
-} from '../../command/runtime-settings.js';
+  formatSessionRuntimeMode,
+  formatSessionRuntimeProvider,
+} from '../../command/runtime-session.js';
 import type { CommandThreadDisplay } from '../../command/thread-display.js';
 import {
   deriveNewGroupName,
@@ -36,6 +39,8 @@ import { auditCommandBindingChange } from './thread-targets.js';
 import type { SessionCommandDeps, SessionCommandResult } from './types.js';
 
 type InheritedCodexProvider = ReturnType<typeof getSessionCodexProviderOverride>;
+type InheritedClaudeProvider = ReturnType<typeof getSessionClaudeProviderOverride>;
+type InheritedRuntime = 'codex' | 'claude' | 'kimi';
 
 const CLOUD_DOCUMENT_GROUP_TITLE_CHARS = 8;
 
@@ -86,6 +91,20 @@ function setSessionCodexProviderToml(sessionId: string, provider: Exclude<Inheri
   );
 }
 
+function setSessionClaudeProviderToml(sessionId: string, provider: Exclude<InheritedClaudeProvider, undefined>): void {
+  createConfigService({ migrate: false }).set(
+    { kind: 'session', sessionId },
+    { runtime: { claude: { provider } } },
+  );
+}
+
+function setSessionKimiProviderToml(sessionId: string): void {
+  createConfigService({ migrate: false }).set(
+    { kind: 'session', sessionId },
+    { runtime: { kimi: { provider: 'tmux' } } },
+  );
+}
+
 function setSessionTmuxAutoEnterToml(sessionId: string, tmuxAutoEnter: boolean): void {
   createConfigService({ migrate: false }).set(
     { kind: 'session', sessionId },
@@ -101,6 +120,62 @@ function shouldEnableTmuxAutoEnterForNewSession(
   if (inheritedProvider === 'tmux') return true;
   if (inheritedProvider === 'pty') return false;
   return resolveEffectiveCodexProvider(session, binding) === 'tmux';
+}
+
+function activeRuntimeForNewSession(previousSession: BridgeSession | null): InheritedRuntime {
+  const activeRuntime = getSessionActiveRuntime(previousSession);
+  return activeRuntime === 'claude' || activeRuntime === 'kimi' ? activeRuntime : 'codex';
+}
+
+function formatInheritedRuntimeLabel(runtime: InheritedRuntime): string {
+  if (runtime === 'claude') return 'Claude Code';
+  if (runtime === 'kimi') return 'Kimi Code';
+  return 'Codex';
+}
+
+function preserveNewSessionRuntimeBinding(options: {
+  store: BridgeStore;
+  previousSession: BridgeSession | null;
+  newBinding: ChannelChat;
+}): ChannelChat {
+  const activeRuntime = activeRuntimeForNewSession(options.previousSession);
+  const newSession = options.store.getSession(options.newBinding.bridgeSessionId);
+  if (newSession && getSessionActiveRuntime(newSession) !== activeRuntime) {
+    options.store.updateSession(newSession.id, setSessionActiveRuntimeUpdate(activeRuntime), { touch: false });
+  }
+  options.store.updateChannelChat(options.newBinding.id, {
+    runtimeBridgeSessionIds: {
+      [activeRuntime]: options.newBinding.bridgeSessionId,
+    },
+  });
+  return options.store.getChannelChat(options.newBinding.channelType, options.newBinding.chatId) || options.newBinding;
+}
+
+function inheritNewSessionRuntimeProvider(
+  sessionId: string,
+  previousSession: BridgeSession | null,
+  newSession: BridgeSession,
+  binding: ChannelChat,
+): void {
+  const activeRuntime = activeRuntimeForNewSession(previousSession);
+  if (activeRuntime === 'claude') {
+    const inheritedProvider = getSessionClaudeProviderOverride(previousSession);
+    if (inheritedProvider) setSessionClaudeProviderToml(sessionId, inheritedProvider);
+    if (inheritedProvider === 'tmux') setSessionTmuxAutoEnterToml(sessionId, true);
+    return;
+  }
+  if (activeRuntime === 'kimi') {
+    setSessionKimiProviderToml(sessionId);
+    setSessionTmuxAutoEnterToml(sessionId, true);
+    return;
+  }
+  const inheritedProvider = getSessionCodexProviderOverride(previousSession);
+  if (inheritedProvider === 'tmux' || inheritedProvider === 'pty') {
+    setSessionCodexProviderToml(sessionId, inheritedProvider);
+  }
+  if (shouldEnableTmuxAutoEnterForNewSession(inheritedProvider, newSession, binding)) {
+    setSessionTmuxAutoEnterToml(sessionId, true);
+  }
 }
 
 const NEW_SESSION_KEY_COMMAND_NOTES = [
@@ -174,11 +249,14 @@ export async function handleNewSessionCommand(options: {
     ensureWorkingDirectoryExists(workDir);
     let groupChat: Awaited<ReturnType<NonNullable<BaseChannelAdapter['createGroupChat']>>>;
     const operatorUserId = cloudDocument.operatorId || options.msg.address.userId;
+    if (!operatorUserId) {
+      return { response: '无法确定当前操作者，已停止创建云文档群聊，避免创建无法由用户管理的群。' };
+    }
     try {
       groupChat = await options.adapter.createGroupChat({
         name: documentChatName,
         ownerUserId: operatorUserId,
-        userIds: operatorUserId ? [operatorUserId] : [],
+        userIds: [operatorUserId],
       });
     } catch (error) {
       return { response: `创建云文档群聊失败：${error instanceof Error ? error.message : String(error)}` };
@@ -191,23 +269,24 @@ export async function handleNewSessionCommand(options: {
       displayName: groupChat.name || documentChatName,
       cloudDocument: undefined,
     };
-    const binding = router.createBinding(groupAddress, workDir, groupChat.name || documentChatName);
+    let binding = router.createBinding(groupAddress, workDir, groupChat.name || documentChatName);
+    binding = preserveNewSessionRuntimeBinding({
+      store: options.store,
+      previousSession: currentSession,
+      newBinding: binding,
+    });
     options.store.updateChannelChat(binding.id, {
       cloudDocumentChat: {
         provider: 'feishu',
         fileToken: cloudDocument.fileToken,
         fileType: cloudDocument.fileType,
+        ...(cloudDocument.commentId ? { commentId: cloudDocument.commentId } : {}),
       },
     });
     let session = options.store.getSession(binding.bridgeSessionId);
     if (session) {
-      const inheritedProvider = getSessionCodexProviderOverride(currentSession);
-      if (inheritedProvider === 'tmux' || inheritedProvider === 'pty') {
-        setSessionCodexProviderToml(session.id, inheritedProvider);
-      }
-      if (shouldEnableTmuxAutoEnterForNewSession(inheritedProvider, session, binding)) {
-        setSessionTmuxAutoEnterToml(session.id, true);
-      }
+      inheritNewSessionRuntimeProvider(session.id, currentSession, session, binding);
+      session = options.store.getSession(binding.bridgeSessionId);
     }
 
     auditCommandBindingChange(
@@ -218,7 +297,7 @@ export async function handleNewSessionCommand(options: {
       binding,
       'cloud document chat',
     );
-    await deliverBridgeNotice(
+    enqueueBridgeNotice(
       options.adapter,
       groupAddress,
       [
@@ -239,6 +318,7 @@ export async function handleNewSessionCommand(options: {
           ['chat_id', groupChat.chatId],
           ['Session', binding.bridgeSessionId],
           ['目录', formatCommandPath(getSessionWorkingDirectory(session) || workDir)],
+          ['Runtime', formatInheritedRuntimeLabel(activeRuntimeForNewSession(currentSession))],
           ...(cloudDocument.title ? [['标题', cloudDocument.title] as [string, string]] : []),
           ['文档', `${cloudDocument.fileType}/${cloudDocument.fileToken}`],
         ],
@@ -279,11 +359,14 @@ export async function handleNewSessionCommand(options: {
 
   ensureWorkingDirectoryExists(workDir);
   let groupChat: Awaited<ReturnType<NonNullable<BaseChannelAdapter['createGroupChat']>>>;
+  if (!options.msg.address.userId) {
+    return { response: '无法确定当前操作者，已停止创建群聊，避免创建无法由用户管理的群。' };
+  }
   try {
     groupChat = await options.adapter.createGroupChat({
       name: newSessionName,
       ownerUserId: options.msg.address.userId,
-      userIds: options.msg.address.userId ? [options.msg.address.userId] : [],
+      userIds: [options.msg.address.userId],
     });
   } catch (error) {
     return { response: `创建群聊失败：${error instanceof Error ? error.message : String(error)}` };
@@ -295,16 +378,16 @@ export async function handleNewSessionCommand(options: {
     chatKind: 'group' as const,
     displayName: groupChat.name || newSessionName,
   };
-  const binding = router.createBinding(groupAddress, workDir, groupChat.name || newSessionName);
+  let binding = router.createBinding(groupAddress, workDir, groupChat.name || newSessionName);
+  binding = preserveNewSessionRuntimeBinding({
+    store: options.store,
+    previousSession: currentSession,
+    newBinding: binding,
+  });
   let session = options.store.getSession(binding.bridgeSessionId);
   if (session) {
-    const inheritedProvider = getSessionCodexProviderOverride(currentSession);
-    if (inheritedProvider === 'tmux' || inheritedProvider === 'pty') {
-      setSessionCodexProviderToml(session.id, inheritedProvider);
-    }
-    if (shouldEnableTmuxAutoEnterForNewSession(inheritedProvider, session, binding)) {
-      setSessionTmuxAutoEnterToml(session.id, true);
-    }
+    inheritNewSessionRuntimeProvider(session.id, currentSession, session, binding);
+    session = options.store.getSession(binding.bridgeSessionId);
   }
   auditCommandBindingChange(
     options.store,
@@ -321,6 +404,7 @@ export async function handleNewSessionCommand(options: {
       ? ['如果当前聊天里已有旧任务在运行，它不会被终止，仍会在后台继续执行并可能稍后回消息。']
       : []),
   ];
+  const inheritedRuntime = activeRuntimeForNewSession(currentSession);
   return {
     responseAddress: groupAddress,
     response: buildCommandFields(
@@ -330,8 +414,9 @@ export async function handleNewSessionCommand(options: {
         ['chat_id', groupChat.chatId],
         ['标题', session ? getSessionDisplayName(session, getSessionWorkingDirectory(session)) : options.threadDisplay.binding(binding).title],
         ['目录', formatCommandPath(getSessionWorkingDirectory(session) || workDir)],
-        ['模式', formatSessionMode(binding, session)],
-        ['Provider', formatSessionCodexProvider(session, binding)],
+        ['Runtime', formatInheritedRuntimeLabel(inheritedRuntime)],
+        ['模式', formatSessionRuntimeMode(binding, session)],
+        ['Provider', formatSessionRuntimeProvider(session, binding)],
       ],
       notes,
       options.markdown,

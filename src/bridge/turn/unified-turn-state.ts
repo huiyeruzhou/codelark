@@ -1,9 +1,9 @@
 import type { ContextUsageInfo } from '../../shared/progress/context-usage.js';
 import type { StreamingHistoryItem, StreamingHistoryTextRole, TaskProgressInfo, ToolCallInfo } from '../../domain/index.js';
 import {
-  applyCodexTurnEventToTools,
-  type CodexTurnEvent,
-} from '../../runtime/codex/turn-events.js';
+  applyToolCallEventToTools,
+  type ToolCallEvent,
+} from '../../shared/progress/tool-events.js';
 
 export interface UnifiedTurnGoalStatus {
   status: string;
@@ -15,6 +15,7 @@ export interface UnifiedTurnProgressState {
   lastActivityAtMs: number;
   lastContentResponseAtMs: number | null;
   statusNote: string | null;
+  thinkingNote: string | null;
   taskItems: TaskProgressInfo[];
   toolCalls: Map<string, ToolCallInfo>;
   historyItems: StreamingHistoryItem[];
@@ -34,6 +35,7 @@ export function createUnifiedTurnProgressState(startedAtMs: number): UnifiedTurn
     lastActivityAtMs: safeStartedAtMs,
     lastContentResponseAtMs: null,
     statusNote: null,
+    thinkingNote: null,
     taskItems: [],
     toolCalls: new Map(),
     historyItems: createInitialStreamingHistoryItems(),
@@ -209,6 +211,17 @@ export function applyUnifiedTurnStatusNote(
   }
 }
 
+export function applyUnifiedTurnThinkingNote(
+  state: Pick<UnifiedTurnProgressState, 'lastActivityAtMs' | 'thinkingNote'>,
+  note: string | null | undefined,
+  timestampMs?: number,
+): void {
+  state.thinkingNote = (note || '').trim() || null;
+  if (state.thinkingNote && typeof timestampMs === 'number') {
+    recordUnifiedTurnActivity(state, timestampMs);
+  }
+}
+
 export function applyUnifiedTurnTasks(
   state: Pick<UnifiedTurnProgressState, 'lastActivityAtMs' | 'taskItems'>,
   tasks: TaskProgressInfo[],
@@ -244,11 +257,11 @@ export function applyUnifiedTurnGoalStatus(
 
 export function applyUnifiedTurnToolEvent(
   state: Pick<UnifiedTurnProgressState, 'lastActivityAtMs' | 'toolCalls' | 'historyItems'>,
-  event: CodexTurnEvent,
+  event: ToolCallEvent,
   options: { timestampMs?: number } = {},
 ): void {
-  applyCodexTurnEventToTools(state.toolCalls, event);
-  const tool = state.toolCalls.get(event.toolId);
+  const resolvedToolId = applyToolCallEventToTools(state.toolCalls, event);
+  const tool = resolvedToolId ? state.toolCalls.get(resolvedToolId) : null;
   if (tool) {
     applyUnifiedTurnHistoryTools(state, [tool]);
   }

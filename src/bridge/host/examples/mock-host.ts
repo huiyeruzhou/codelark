@@ -28,6 +28,7 @@ import type {
   BridgeSession,
   BridgeSessionUpdate,
   BridgeSessionCodexRuntimeState,
+  RuntimeAgent,
   UpsertChannelChatInput,
 } from '../../../domain/index.js';
 import type {
@@ -139,7 +140,7 @@ class InMemoryStore implements BridgeStore {
     _mode?: string,
     options?: {
       reasoningEffort?: BridgeSessionCodexRuntimeState['reasoningEffort'];
-      activeRuntime?: 'codex' | 'claude';
+      activeRuntime?: RuntimeAgent;
       sessionType?: BridgeSession['session_type'];
       hidden?: boolean;
       parentSessionId?: string;
@@ -150,8 +151,8 @@ class InMemoryStore implements BridgeStore {
     const session: BridgeSession = {
       id: `session-${this.nextId++}`,
       name,
-      runtime: options?.activeRuntime === 'claude' ? {
-        activeRuntime: 'claude',
+      runtime: options?.activeRuntime === 'claude' || options?.activeRuntime === 'kimi' ? {
+        activeRuntime: options.activeRuntime,
         general: {
           workingDirectory: cwd || '/tmp',
         },

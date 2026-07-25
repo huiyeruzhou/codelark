@@ -8,8 +8,10 @@ import {
 import {
   getSessionActiveRuntime,
   getSessionClaudeSessionId,
+  getSessionKimiSessionId,
   getSessionWorkingDirectory,
 } from '../../domain/session-runtime.js';
+import type { RuntimeAgent } from '../../domain/session.js';
 import type { ChannelChat, OutboundRichCard } from '../../domain/index.js';
 import {
   buildBoundThreadsCommandCard,
@@ -51,7 +53,7 @@ export class CommandThreadDisplay {
     chatId: string,
     selectedThreadId?: string | null,
     bridgeBindings: BoundThreadCardItem[] = [],
-    runtime?: 'codex' | 'claude',
+    runtime?: RuntimeAgent,
   ): OutboundRichCard | undefined {
     return buildLocalRuntimeSessionsCommandCard(
       this.decorateLocalRuntimeSessions(localSessions || [], channelType, chatId),
@@ -63,11 +65,9 @@ export class CommandThreadDisplay {
     ) || undefined;
   }
 
-  activeRuntimeForChat(channelType: string, chatId: string): 'codex' | 'claude' {
+  activeRuntimeForChat(channelType: string, chatId: string): RuntimeAgent {
     const currentBinding = this.store.getChannelChat(channelType, chatId);
-    return getSessionActiveRuntime(this.store.getSession(currentBinding?.bridgeSessionId || '')) === 'claude'
-      ? 'claude'
-      : 'codex';
+    return getSessionActiveRuntime(this.store.getSession(currentBinding?.bridgeSessionId || '')) || 'codex';
   }
 
   refreshedBoundThreadsCard(
@@ -135,7 +135,9 @@ export class CommandThreadDisplay {
       const activeRuntime = getSessionActiveRuntime(session);
       const threadId = activeRuntime === 'claude'
         ? getSessionClaudeSessionId(session)
-        : getBridgeSessionCodexThreadId(session);
+        : activeRuntime === 'kimi'
+          ? getSessionKimiSessionId(session)
+          : getBridgeSessionCodexThreadId(session);
       if (!threadId) continue;
       statesByThreadId.set(threadId, {
         threadId,
@@ -208,16 +210,22 @@ export class CommandThreadDisplay {
         const anyBinding = binding || anyBindingsBySessionId.get(session.id);
         const display = binding ? this.binding(binding) : this.display.thread('', session.id);
         const activeRuntime = getSessionActiveRuntime(session);
-        const claudeSessionId = activeRuntime === 'claude' ? getSessionClaudeSessionId(session) || '' : '';
+        const runtimeSessionId = activeRuntime === 'claude'
+          ? getSessionClaudeSessionId(session) || ''
+          : activeRuntime === 'kimi'
+            ? getSessionKimiSessionId(session) || ''
+            : '';
         return {
           title: display.title,
           cwd: display.cwd || getSessionWorkingDirectory(session) || '',
           lastActiveAt: display.lastActiveAt || session.updated_at,
-          threadId: claudeSessionId,
+          threadId: runtimeSessionId,
           bridgeSessionId: session.id,
           bindingId: anyBinding ? anyBinding.id : '',
           active: Boolean(binding),
-          originator: claudeSessionId ? 'Claude Code' : binding ? display.originator : 'Bridge',
+          originator: runtimeSessionId
+            ? activeRuntime === 'kimi' ? 'Kimi Code' : 'Claude Code'
+            : binding ? display.originator : 'Bridge',
         };
       })
       .sort(compareBoundThreadActivityDesc);

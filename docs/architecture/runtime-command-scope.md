@@ -1,6 +1,6 @@
 # 斜杠命令与运行时/Bridge 配置边界
 
-本文整理当前 IM slash 命令、配置项与 `BridgeSession` 存储边界，作为后续把 `CodexRuntime` 扩展到 Claude Code 前的收口依据。
+本文整理当前 IM slash 命令、配置项与 `BridgeSession` 存储边界，作为 Codex、Claude Code 和 Kimi Code 三类 runtime 的收口依据。
 
 当前入口：
 
@@ -22,7 +22,7 @@
 
 - 终端工具、运维命令、Bridge 控制命令不写 Runtime 默认值。
 - SessionRuntime 命令只写当前 `BridgeSession` 的运行覆盖值。
-- GlobalRuntime 命令只写对应 runtime 自己的默认值；Codex 配置不能 fallback 到 Claude，Claude 配置也不能 fallback 到 Codex。
+- GlobalRuntime 命令只写对应 runtime 自己的默认值；Codex、Claude 和 Kimi 的配置不能互相 fallback。
 - GlobalBridge 配置只影响 bridge 自身行为，例如工作空间根、UI 服务、通道、消息展示和状态观测。
 - provider/thread/session id 这类身份字段属于 runtime-specific identity，不应继续作为通用 `BridgeSession` 顶层字段扩散。
 
@@ -41,7 +41,7 @@
 
 ### 运维命令
 
-这些命令观察或修复 bridge 运行状态，不改变 Codex/Claude 的模型执行参数。
+这些命令观察或修复 bridge 运行状态，不改变 Codex/Claude/Kimi 的模型执行参数。
 
 | 命令 | 当前职责 | 存储交互 |
 | --- | --- | --- |
@@ -60,31 +60,30 @@
 | --- | --- | --- |
 | `/new`、`/n` | 创建新的正式 BridgeSession，或基于当前会话目录新建线程 | 创建 `BridgeSession`；工作目录和模型/mode/reasoning/provider 继承写入新 session TOML |
 | `/clear` | 当前聊天切到新的 BridgeSession | 创建/切换 binding，必要时终止当前任务 |
-| `/t`、`/thread`、`/threads` | 列表、接管、切换、归档本地 Codex thread 和 Bridge session | 写 `ChannelChat.bridgeSessionId`；接管 Codex 时写 `BridgeSession.runtime.codex.threadId/title` |
+| `/t`、`/thread`、`/threads` | 列表、接管、切换、归档本地 Codex thread、Claude session、Kimi session 和 Bridge session | 写 `ChannelChat.bridgeSessionId`；接管本地 runtime 会话时写对应 `BridgeSession.runtime.codex.threadId/title`、`runtime.claude.sessionId/cwd` 或 `runtime.kimi.sessionId/cwd` |
 | `/t rename` | 重命名当前 BridgeSession，部分通道同步群名 | 写 `BridgeSession.name` |
-| `/provider`、`/p` | 在 Codex SDK provider 与 Codex TUI pty/tmux provider 间切换 | 写 Session TOML 的 `runtime.codex.provider` / `runtime.claude.provider`；tmux 时只把自动生成 tmux session name 和必要的 `runtime.codex.threadId` 作为运行身份写 BridgeSession JSON |
+| `/provider`、`/p` | 在当前 runtime 的 provider 间切换；Codex/Claude 支持 `sdk|pty|tmux`，Kimi 当前只支持 `tmux` | 写 Session TOML 的 `runtime.codex.provider` / `runtime.claude.provider` / `runtime.kimi.provider`；tmux 时只把自动生成 tmux session name 和必要的 runtime identity 作为运行身份写 BridgeSession JSON |
 | `/stop` | 停止当前运行任务 | 触发 bridge 任务控制；tmux provider 下映射为 tmux interrupt |
-| `/perm` | 权限审批回调 | 读写 permission link 状态 |
 
 ### 会话运行时配置
 
 这些命令写当前会话的运行覆盖值。当前通过 `ConfigService` 写 Session TOML，旧 BridgeSession JSON 中的同名 runtime 配置字段只作为 v1 启动迁移输入，不再作为运行时 fallback。
 
-| 命令 | 当前写入字段 | Codex 语义 | Claude Code 迁移判断 |
+| 命令 | 当前写入字段 | Codex 语义 | 其他 runtime 语义 |
 | --- | --- | --- | --- |
-| `/runtime` | `runtime.activeRuntime` | `codex` 时普通消息进入 Codex routing provider | `claude` 时普通消息默认进入 Claude Code tmux provider；不改变已记住的 `/provider` |
+| `/runtime` | `runtime.activeRuntime` | `codex` 时普通消息进入 Codex routing provider；`claude` 时普通消息默认进入 Claude Code tmux provider；`kimi` 时普通消息进入 Kimi tmux provider | 切换 runtime 不改变各 runtime 已记住的 `/provider` |
 | `/mode`、`/m` | `runtime.codex.mode` / `runtime.claude.yoloMode` | Codex `yolo` 强制 `danger-full-access` 与 `permissionMode=never` | Claude Code 只保留 YOLO 开关，运行时由 `yolo_mode` 推导 CLI/SDK permission 参数 |
-| `/reasoning`、`/r` | `runtime.codex.reasoningEffort` | `modelReasoningEffort` | Claude 不应 fallback 到 Codex reasoning；需要 Claude 自己的 thinking/budget 配置或不支持 |
+| `/reasoning`、`/r` | `runtime.codex.reasoningEffort` | `modelReasoningEffort` | Claude 不应 fallback 到 Codex reasoning；Kimi 的 think 来自 wire mirror 状态区，不写 bridge reasoning 配置 |
 | `/sandbox`、`/sb` | `runtime.codex.sandboxMode` | Codex sandbox mode | Claude Code 没有同名 sandbox；不能共用 |
 | `/network`、`/net` | `runtime.codex.networkAccess` | Codex network access | Claude Code 网络通常由工具权限/环境决定，不能共用 |
-| `/model` | `runtime.codex.model` | Codex model；已有本地 Codex thread 时只允许查看 | 应拆成 runtime-specific model，例如 Codex model 与 Claude model 分开 |
+| `/model` | `runtime.<agent>.model` | 当前 runtime 的模型；已有本地 Codex thread 时只允许查看 | Codex/Claude/Kimi 模型名空间分开，不能互相 fallback |
 
 当前有效 Codex runtime 参数由 `resolveSessionRuntimeConfig()` 产出：
 
 | 有效参数 | 当前 fallback | 收口问题 |
 | --- | --- | --- |
 | `mode` | Session TOML `runtime.codex.yoloMode` -> v2 global `runtime.codex.yoloMode` | Codex 专属；旧 BridgeSession JSON 同名字段只作为迁移输入 |
-| `model` | Session TOML `runtime.codex.model` -> v2 global `runtime.codex.model` | Codex/Claude 模型名空间分开，不能互相 fallback |
+| `model` | Session TOML `runtime.codex.model` -> v2 global `runtime.codex.model` | Codex/Claude/Kimi 模型名空间分开，不能互相 fallback |
 | `codexProvider` | Session TOML `runtime.codex.provider` -> v2 global `runtime.codex.provider` -> tmux/pty 环境探测 -> `sdk` | 旧 BridgeSession JSON `runtime.codex.provider` 只作为迁移输入，不再作为运行时 fallback |
 | `sandboxMode` | `mode=yolo` 强制；否则 Session TOML `runtime.codex.sandboxMode` -> v2 global `runtime.codex.sandboxMode` | Codex 专属 |
 | `networkAccessEnabled` | Session TOML `runtime.codex.networkAccess` -> v2 global `runtime.codex.networkAccess` | Codex 专属 |
@@ -99,7 +98,7 @@
 
 ```ts
 interface GlobalRuntimeConfig {
-  defaultRuntime: 'codex' | 'claude';
+  defaultRuntime: 'codex' | 'claude' | 'kimi';
   codex: {
     defaultModel?: string;
     defaultMode?: 'normal' | 'yolo';
@@ -113,6 +112,10 @@ interface GlobalRuntimeConfig {
     defaultModel?: string;
     yoloMode?: 'off' | 'on';
     idleTimeoutMinutes?: number;
+  };
+  kimi: {
+    defaultModel?: string;
+    provider?: 'tmux';
   };
 }
 ```
@@ -130,6 +133,8 @@ interface GlobalRuntimeConfig {
 | `codexReasoningEffort` | `runtime.codex.reasoning_effort` | Codex 专属 |
 | `defaultProvider` | `runtime.codex.provider` | `sdk/pty/tmux` 是 Codex provider transport |
 | `claudeExecutable` | `runtime.claude.executable` | 只允许 `claude` 或 `ccr`；这是 Claude Code 启动命令，不是 provider |
+| `kimiModel` | `runtime.kimi.model` | Kimi Code 专属模型名 |
+| `kimiProvider` | `runtime.kimi.provider` | 当前只允许 `tmux` |
 
 ### 全局 Bridge 配置
 
@@ -139,14 +144,16 @@ interface GlobalRuntimeConfig {
 | --- | --- | --- |
 | `defaultWorkspaceRoot` | `bridge.default_workspace` | 影响 `/new <relative>`，不是 provider 参数 |
 | `historyMessageLimit` | `channels[].config.history_message_limit` | 影响 `/history` 展示 |
-| `streamStatusIdleStartSeconds` | `channels[].config.stream_status_idle_start_seconds` | 运行观测 |
-| `streamStatusCheckIntervalSeconds` | `channels[].config.stream_status_check_interval_seconds` | 运行观测 |
+| `streamStatusIdleStartSeconds` | `channels[].config.stream_status_idle_start_seconds` | 尾栏响应计时显示延迟；默认 0，从任务开始显示 |
+| `streamStatusCheckIntervalSeconds` | `channels[].config.stream_status_check_interval_seconds` | 无其他卡片更新时的尾栏刷新间隔；默认 5 秒 |
 | `/ui` | 固定显示策略 | 工具详情始终显示 |
 | `uiAllowLan`、`uiAccessToken` | `bridge.ui` | UI server |
 | Feishu / Weixin channel config | `channels[]` | 通道连接、访问控制、消息呈现 |
-| `/require-at` | channel instance 或 chat policy | 飞书群聊触发策略 |
+| `/require-at` | 当前消息的 `channelType` 对应 `channels[]` 项 | 飞书群聊触发策略；精确修改当前 App/通道实例 |
 
-## BridgeSession 与 Codex/ClaudeCode 差异
+`/require-at` 与 `/set requireMention` 最终都写 `~/.codelark/config.toml`，但目标选择不同：前者按当前消息的 `channelType` 找到对应 channel id，后者属于全局设置卡，修改默认 Feishu channel。单 App 默认通道中两者效果相同；多 App、隔离测试 App 或非默认 channel 中，使用 `/set requireMention` 可能改到另一项，看起来就像“没有生效”。因此当前聊天的 mention 策略优先使用 `/require-at`，全局默认模板才使用 `/set --group channels.feishu`。运行中的 Bridge 在下一次 channel config sync 后应用变更。
+
+## BridgeSession 与 Codex/ClaudeCode/KimiCode 差异
 
 当前 `BridgeSession` 是 bridge 本地会话容器，已经承担以下通用职责：
 
@@ -160,6 +167,8 @@ interface GlobalRuntimeConfig {
 当前 session runtime schema 把 provider-specific 状态放在 `runtime` 容器中：
 
 - `runtime.codex.threadId`：Codex thread/resume identity。
+- `runtime.claude.sessionId/cwd`：Claude Code resume identity。
+- `runtime.kimi.sessionId/cwd`：Kimi Code resume identity。
 - `runtime.codex.title`：从本地 Codex thread 读取的原始标题。
 - `runtime.codex.provider`：旧 JSON 中的 Codex transport 选择只作为迁移输入；当前 transport 选择由 scoped TOML `runtime.codex.provider` 表达。
 - 旧 `runtime.codex.sandboxMode/networkAccess/reasoningEffort/provider/model/mode`：只作为迁移输入；当前执行参数读取 scoped TOML。
@@ -189,7 +198,7 @@ Codex thread id 是跨 bridge 与 Codex native 的共享身份，所以 `/t arch
 
 ### 对现有 BridgeSession 的结论
 
-Codex 与 ClaudeCode 可以共享：
+Codex、ClaudeCode 与 KimiCode 可以共享：
 
 - `BridgeSession.id/name/session_type/hidden/parent_session_id/expires_at`。
 - `ChannelChat -> BridgeSession` 绑定模型、`systemPrompt` 和运行身份字段。
@@ -198,7 +207,7 @@ Codex 与 ClaudeCode 可以共享：
 不能共享为同一字段：
 
 - `runtime.codex.threadId` 与 Claude `sessionId`。前者可跨 Codex native index 查找和归档，后者必须绑定 cwd 才可 resume。
-- `runtime.codex.model` 与 `runtime.claude.model`。Codex 与 Claude 的模型名空间不同，只能 fallback 到各自 runtime 默认值。
+- `runtime.codex.model`、`runtime.claude.model` 与 `runtime.kimi.model`。Codex、Claude 和 Kimi 的模型名空间不同，只能 fallback 到各自 runtime 默认值。
 - `runtime.codex.provider`。它是 Codex SDK/pty/tmux transport 配置，运行时读取 scoped TOML，不再读取 BridgeSession JSON 同名字段。
 - `runtime.codex.sandboxMode/networkAccess/reasoningEffort`。Claude 只保留自己的 YOLO、thinking 和 idle timeout 配置；不再暴露独立 `permission_mode` 配置。
 
@@ -206,12 +215,16 @@ Codex 与 ClaudeCode 可以共享：
 
 ```ts
 interface BridgeSessionRuntimeState {
-  activeRuntime?: 'codex' | 'claude';
+  activeRuntime?: 'codex' | 'claude' | 'kimi';
   codex?: {
     threadId?: string;
     title?: string;
   };
   claude?: {
+    sessionId?: string;
+    cwd?: string;
+  };
+  kimi?: {
     sessionId?: string;
     cwd?: string;
   };
@@ -231,14 +244,17 @@ Accessor 边界：
 - `setBridgeSessionCodexThreadId(sessionId, threadId)` 写 `runtime.codex.threadId`。
 - `resolveCodexRuntimeConfig(session)` 只能读 scoped TOML / v2 ConfigService effective config，以及 Codex thread identity。
 - `resolveClaudeRuntimeConfig(session)` 只能读 scoped TOML / v2 ConfigService effective config，以及 Claude session identity。
+- `resolveKimiRuntimeConfig(session)` 只能读 scoped TOML / v2 ConfigService effective config，以及 Kimi session identity。
 
 ## 当前优先调整点
 
-- `/provider`、`/p` 从 “CodexRuntime 参数” 移到 “Bridge 控制”，因为它选择 bridge 如何驱动当前 runtime，不是模型执行参数。Codex 和 Claude 都支持 `sdk|pty|tmux`，Claude 默认 `tmux`，切换时只修改当前 active runtime 的 provider。
-- `/set` 展示与写入遵循 TOML section：顶部下拉切换 `[runtime]`、`[runtime.codex]`、`[runtime.claude]`、`[bridge]` 和默认 Feishu `[[channels]]`，表单只保存当前 section。
-- `schemas/config.v1.schema.json` 以 `runtime.codex`、`runtime.claude`、`runtime.bridgeControl`、`runtime.bridge` 作为权威分组；旧扁平字段不再作为配置兼容输入。
+- `/provider`、`/p` 从 “CodexRuntime 参数” 移到 “Bridge 控制”，因为它选择 bridge 如何驱动当前 runtime，不是模型执行参数。Codex 和 Claude 都支持 `sdk|pty|tmux`，Claude 默认 `tmux`；Kimi 当前只支持 `tmux`。切换时只修改当前 active runtime 的 provider。
+- `/set` 展示与写入遵循 TOML section：顶部下拉切换 `[runtime]`、`[runtime.codex]`、`[runtime.claude]`、`[runtime.kimi]`、`[bridge]` 和默认 Feishu `[[channels]]`，表单只保存当前 section。
+- `/set --group runtime` 中的 `session.tmux_capture_lines`、`session.tmux_auto_enter`、`session.tmux_echo_input` 是 home 级“新 session 默认值”，也允许被 session TOML 覆盖。字段注册必须同时允许 `home|session|cli` 写入；如果 UI 暴露字段但 scope 拒绝 home 写入，属于配置契约错误。
+- Operator UI 与 `/set` 共享同一配置能力清单：Web 表单提交字段必须与后端 Zod input contract 全等；runtime 默认值和通用 tmux 默认值不得只接一端。App secret、授权状态等敏感或状态型字段可以是显式受控例外，但必须在测试矩阵中说明 owner，不能静默缺失。
+- `schemas/config.v2.schema.json` 描述 `config.toml` 解析后的当前结构，以 `runtime.codex`、`runtime.claude`、`runtime.kimi`、`session`、`bridge` 和 `channels` 作为权威分组；旧扁平字段不再作为配置兼容输入。
 - `BridgeStore` 接口中的 `findSessionByCodexThreadId()`、`updateSessionCodexThreadId()` 是 Codex 专属 API；接 Claude 前应新增 provider-neutral accessor 或 runtime-specific registry，避免加出 `findSessionByClaudeSessionId()` 这类平行顶层接口。
-- Claude Code 接入前，不要把 `BridgeSession.runtime.codex.model` 当通用字段使用；应使用 `runtime.codex.model` 与 `runtime.claude.model` 两个 runtime-specific 字段。
+- 不要把 `BridgeSession.runtime.codex.model` 当通用字段使用；应使用 `runtime.codex.model`、`runtime.claude.model` 与 `runtime.kimi.model` 三个 runtime-specific 字段。
 
 ## 真实 E2E 开关
 

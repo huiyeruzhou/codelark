@@ -80,6 +80,7 @@ export function parseConfigCliOverrides(argv: string[]): ParsedConfigCliOverride
   const program = new Command();
   program
     .exitOverride()
+    .helpOption(false)
     .allowUnknownOption(true)
     .allowExcessArguments(true)
     .option('--set <path=value>', '按 canonical path 临时覆盖配置值', collect, [])

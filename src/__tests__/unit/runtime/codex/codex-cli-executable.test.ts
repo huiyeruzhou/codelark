@@ -103,4 +103,12 @@ describe('codex-cli-executable', () => {
     assert.equal(isNodeModulesBinPath('C:\\repo\\node_modules\\.bin'), true);
     assert.equal(isNodeModulesBinPath('/home/user/.local/bin'), false);
   });
+
+  it('reads the case-preserved Windows Path environment key', () => {
+    assert.equal(resolveCodexCliExecutable({
+      env: { Path: 'C:\\ci-bin;C:\\repo\\node_modules\\.bin' },
+      platform: 'win32',
+      fileExists: (filePath) => filePath === 'C:\\ci-bin\\codex.cmd',
+    }), 'C:\\ci-bin\\codex.cmd');
+  });
 });

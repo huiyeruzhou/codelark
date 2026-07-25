@@ -39,9 +39,13 @@ function isFullXmlLikeBlock(text: string, tagName: string): boolean {
 
 function isCodexAgentsEnvironmentContextBlock(text: string): boolean {
   const trimmed = text.trim();
-  return trimmed.startsWith('# AGENTS.md instructions for ')
-    && trimmed.includes('<INSTRUCTIONS>')
-    && trimmed.includes('<environment_context>');
+  if (!trimmed.startsWith('# AGENTS.md instructions for ')) return false;
+  const instructionsStart = trimmed.indexOf('<INSTRUCTIONS>');
+  const instructionsEnd = trimmed.indexOf('</INSTRUCTIONS>', instructionsStart + '<INSTRUCTIONS>'.length);
+  if (instructionsStart < 0 || instructionsEnd < 0) return false;
+
+  const trailing = trimmed.slice(instructionsEnd + '</INSTRUCTIONS>'.length).trim();
+  return !trailing || isFullXmlLikeBlock(trailing, 'environment_context');
 }
 
 function isCodexGoalContextBlock(text: string): boolean {

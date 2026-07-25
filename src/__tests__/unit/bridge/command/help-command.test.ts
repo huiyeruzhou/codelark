@@ -23,7 +23,7 @@ describe('help command', () => {
     assert.match(text, /运维[\s\S]*\/doctor[\s\S]*\/his/);
     assert.match(text, /Bridge 控制[\s\S]*\/require-at/);
     assert.doesNotMatch(text, /SessionRuntime 配置[\s\S]*\/require-at/);
-    assert.match(text, /GlobalRuntime 配置[\s\S]*\[runtime\.codex\][\s\S]*\[runtime\.claude\]/);
+    assert.match(text, /GlobalRuntime 配置[\s\S]*\[runtime\.codex\][\s\S]*\[runtime\.claude\][\s\S]*\[runtime\.kimi\]/);
     assert.match(text, /GlobalBridge 配置[\s\S]*defaultWorkspaceRoot[\s\S]*\/ui/);
   });
 });

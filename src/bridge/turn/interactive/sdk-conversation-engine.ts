@@ -38,16 +38,19 @@ import {
   parseContextUsageInfo,
   type ContextUsageInfo,
 } from '../../../shared/progress/context-usage.js';
-import { resolveClaudeRuntimeConfig, resolveSessionRuntimeConfig } from '../../session/support.js';
+import { resolveClaudeRuntimeConfig, resolveKimiRuntimeConfig, resolveSessionRuntimeConfig } from '../../session/support.js';
 import {
   getSessionActiveRuntime,
   getSessionClaudeSessionId,
   getSessionCodexThreadId,
+  getSessionKimiSessionId,
   getSessionSystemPrompt,
   getSessionWorkingDirectory,
   setSessionClaudeSessionIdUpdate,
   setSessionClaudeIdentityUpdate,
+  setSessionKimiIdentityUpdate,
 } from '../../../domain/session-runtime.js';
+import type { RuntimeAgent } from '../../../domain/session.js';
 
 export interface PermissionRequestInfo {
   permissionRequestId: string;
@@ -86,9 +89,10 @@ export type OnToolEvent = (
 ) => void;
 export type OnTaskEvent = (tasks: TaskProgressInfo[]) => void;
 export type OnStatusNote = (note: string | null) => void;
+export type OnThinkingNote = (note: string) => void;
 export type OnContextUsage = (contextUsage: ContextUsageInfo) => void;
 export type OnRuntimeIdentity = (identity: {
-  runtime: 'codex' | 'claude';
+  runtime: RuntimeAgent;
   sessionId: string;
   cwd?: string;
   transcriptPath?: string;
@@ -140,6 +144,7 @@ export async function processMessage(
     streamPreview?: {
       includeToolSnippets?: boolean;
     };
+    onThinkingNote?: OnThinkingNote;
     onContextUsage?: OnContextUsage;
     onRuntimeIdentity?: OnRuntimeIdentity;
   },
@@ -181,6 +186,7 @@ export async function processMessage(
     const activeRuntime = getSessionActiveRuntime(session) || 'codex';
     const runtimeConfig = resolveSessionRuntimeConfig(binding, session);
     const claudeRuntimeConfig = activeRuntime === 'claude' ? resolveClaudeRuntimeConfig(session, binding) : null;
+    const kimiRuntimeConfig = activeRuntime === 'kimi' ? resolveKimiRuntimeConfig(session, binding) : null;
 
     const { savedContent, llmFiles, persistedFileMeta } = prepareSdkMessageAttachments({ text, files, workDir });
     store.addMessage(sessionId, 'user', savedContent);
@@ -199,11 +205,14 @@ export async function processMessage(
     }
 
     // Effective model
-    const effectiveModel = activeRuntime === 'claude'
-      ? claudeRuntimeConfig?.model
-      : runtimeConfig.model || undefined;
+    const effectiveModel = activeRuntime === 'kimi'
+      ? kimiRuntimeConfig?.model
+      : activeRuntime === 'claude'
+        ? claudeRuntimeConfig?.model
+        : runtimeConfig.model || undefined;
     const codexThreadId = getSessionCodexThreadId(session);
     const claudeSessionId = getSessionClaudeSessionId(session);
+    const kimiSessionId = getSessionKimiSessionId(session);
 
     const permissionMode = runtimeConfig.mode === 'yolo' ? 'never' : 'acceptEdits';
 
@@ -229,6 +238,7 @@ export async function processMessage(
       runtime: activeRuntime,
       codexThreadId: codexThreadId,
       claudeSessionId,
+      kimiSessionId,
       claudeExecutable: claudeRuntimeConfig?.executable,
       claudeProvider: claudeRuntimeConfig?.provider,
       model: effectiveModel,
@@ -293,10 +303,11 @@ async function consumeStream(
     streamPreview?: {
       includeToolSnippets?: boolean;
     };
+    onThinkingNote?: OnThinkingNote;
     onContextUsage?: OnContextUsage;
     onRuntimeIdentity?: OnRuntimeIdentity;
   },
-  activeRuntime: 'codex' | 'claude' = 'codex',
+  activeRuntime: RuntimeAgent = 'codex',
 ): Promise<ConversationResult> {
   const { store } = runtime;
   const contentBlocks: MessageContentBlock[] = [];
@@ -460,7 +471,17 @@ async function consumeStream(
           try {
             const statusData = JSON.parse(event.data);
             if (statusData.session_id) {
-              if (activeRuntime === 'claude') {
+              if (activeRuntime === 'kimi') {
+                store.updateSession(sessionId, setSessionKimiIdentityUpdate(
+                  statusData.session_id,
+                  typeof statusData.cwd === 'string' ? statusData.cwd : undefined,
+                ));
+                await options?.onRuntimeIdentity?.({
+                  runtime: 'kimi',
+                  sessionId: statusData.session_id,
+                  ...(typeof statusData.cwd === 'string' ? { cwd: statusData.cwd } : {}),
+                });
+              } else if (activeRuntime === 'claude') {
                 if (typeof statusData.cwd === 'string') {
                   store.updateSession(sessionId, setSessionClaudeIdentityUpdate(statusData.session_id, statusData.cwd));
                 } else {
@@ -481,13 +502,20 @@ async function consumeStream(
                 });
               }
             }
-            if (statusData.model && activeRuntime !== 'claude') {
+            if (statusData.model && activeRuntime === 'codex') {
               store.updateSessionModel(sessionId, statusData.model);
             }
             if (typeof statusData.reasoning === 'string' && onStatusNote) {
               try { onStatusNote(statusData.reasoning); } catch { /* non-critical */ }
             }
-            if (typeof statusData.reasoning === 'string' && onPartialText) {
+            if (typeof statusData.thinking === 'string') {
+              const thinking = statusData.thinking.trim();
+              if (thinking) {
+                if (options?.onThinkingNote) {
+                  try { options.onThinkingNote(thinking); } catch { /* non-critical */ }
+                }
+              }
+            } else if (typeof statusData.reasoning === 'string' && onPartialText) {
               const note = statusData.reasoning.trim();
               if (note && note !== lastReasoningNote) {
                 lastReasoningNote = note;
@@ -538,7 +566,7 @@ async function consumeStream(
           try {
             const resultData = JSON.parse(event.data);
             if (resultData.usage) tokenUsage = resultData.usage;
-            if (resultData.model && activeRuntime !== 'claude') {
+            if (resultData.model && activeRuntime === 'codex') {
               store.updateSessionModel(sessionId, resultData.model);
             }
             if (resultData.usage && onContextUsage) {
@@ -549,7 +577,17 @@ async function consumeStream(
             }
             if (resultData.is_error) hasError = true;
             if (resultData.session_id) {
-              if (activeRuntime === 'claude') {
+              if (activeRuntime === 'kimi') {
+                store.updateSession(sessionId, setSessionKimiIdentityUpdate(
+                  resultData.session_id,
+                  typeof resultData.cwd === 'string' ? resultData.cwd : undefined,
+                ));
+                await options?.onRuntimeIdentity?.({
+                  runtime: 'kimi',
+                  sessionId: resultData.session_id,
+                  ...(typeof resultData.cwd === 'string' ? { cwd: resultData.cwd } : {}),
+                });
+              } else if (activeRuntime === 'claude') {
                 store.updateSession(sessionId, setSessionClaudeIdentityUpdate(
                   resultData.session_id,
                   typeof resultData.cwd === 'string' ? resultData.cwd : undefined,

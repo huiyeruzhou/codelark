@@ -6,7 +6,10 @@ import os from 'node:os';
 import path from 'node:path';
 
 import { tmuxCore, type TmuxCore } from '../../../../bridge/tmux/core.js';
-import { getClaudeProjectDir } from '../../../../runtime/claude/session-jsonl.js';
+import {
+  getClaudeProjectDir,
+  parseClaudeSessionMirrorRecordText,
+} from '../../../../runtime/claude/session-jsonl.js';
 import {
   _testOnlyClaudeTmux,
   startClaudeTmuxSession,
@@ -64,6 +67,63 @@ function patchTmuxCore(patch: Partial<TmuxCore>): () => void {
 describe('claude-tmux-provider', () => {
   it('uses symmetric Claude tmux session names', () => {
     assert.equal(_testOnlyClaudeTmux.tmuxSessionName('claude/session 1'), 'claude_claude-session-1');
+  });
+
+  it('keeps a newer completion terminal when Claude JSONL lines arrive out of event-time order', () => {
+    const records = parseClaudeSessionMirrorRecordText([
+      JSON.stringify({
+        type: 'assistant',
+        uuid: 'assistant-1',
+        parentUuid: 'user-1',
+        timestamp: '2026-07-25T09:53:38.924Z',
+        message: {
+          role: 'assistant',
+          content: [{ type: 'text', text: 'instant response' }],
+          stop_reason: 'end_turn',
+        },
+      }),
+      JSON.stringify({
+        type: 'user',
+        uuid: 'user-1',
+        promptId: 'prompt-1',
+        timestamp: '2026-07-25T09:53:38.854Z',
+        message: { role: 'user', content: 'hello' },
+      }),
+    ].join('\n'));
+    let controller!: ReadableStreamDefaultController<string>;
+    new ReadableStream<string>({
+      start(streamController) {
+        controller = streamController;
+      },
+    });
+    const context = {
+      sessionName: 'claude_test',
+      targetPane: 'claude_test:0.0',
+      bridgeSessionId: 'bridge-test',
+      cwd: '/tmp/work',
+      nextOffset: 0,
+      trailingText: '',
+      nextTurnId: null,
+      nextSpecialCallIds: [],
+      emittedToolStarts: new Set<string>(),
+      emittedRecordSignatures: new Set<string>(),
+      lastAssistantText: '',
+      terminalSeen: false,
+      latestLifecycleTimestampMs: null,
+      hasError: false,
+    };
+
+    for (const record of records) {
+      _testOnlyClaudeTmux.enqueueClaudeTmuxRecordAsSse(controller, context, record);
+    }
+
+    assert.deepEqual(records.map((record) => record.type), [
+      'message',
+      'task_complete',
+      'task_started',
+      'message',
+    ]);
+    assert.equal(context.terminalSeen, true);
   });
 
   it('recreates an existing Claude tmux session when explicitly started', async () => {

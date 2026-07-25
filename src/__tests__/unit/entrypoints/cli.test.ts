@@ -9,6 +9,7 @@ import { pathToFileURL } from 'node:url';
 
 import {
   buildCliHelpText,
+  formatInstallSkillsRestartGuidance,
   formatRunSuccessMessage,
   formatRunningBridgePrompt,
   isDirectCliRun,
@@ -23,6 +24,7 @@ describe('cli entrypoint', () => {
     assert.deepEqual(parseCliCommand(['help']), { command: 'help', args: [] });
     assert.deepEqual(parseCliCommand(['--help']), { command: 'help', args: [] });
     assert.deepEqual(parseCliCommand(['-h']), { command: 'help', args: [] });
+    assert.equal(parseCliInvocation(['--help']).command, 'help');
     assert.deepEqual(parseCliCommand(['autostart', 'install']), {
       command: 'autostart',
       args: ['install'],
@@ -49,6 +51,28 @@ describe('cli entrypoint', () => {
         unset: [],
       },
     });
+
+    assert.deepEqual(parseCliInvocation([
+      'run',
+      '--set', 'runtime.agent=kimi',
+      '--set', 'runtime.kimi.model=moonshot-v1-test',
+      '--set', 'runtime.kimi.provider=tmux',
+    ]), {
+      command: 'run',
+      args: [],
+      configOverrides: {
+        patch: {
+          runtime: {
+            agent: 'kimi',
+            kimi: {
+              model: 'moonshot-v1-test',
+              provider: 'tmux',
+            },
+          },
+        },
+        unset: [],
+      },
+    });
   });
 
   it('rejects CLI unset at command entrypoints until reset semantics are defined', () => {
@@ -69,6 +93,14 @@ describe('cli entrypoint', () => {
     assert.match(help, /--set path=value/);
     assert.match(help, /~\/\.codelark\/config\.toml/);
     assert.match(help, /~\/\.codelark\/logs\//);
+  });
+
+  it('tells skill installers to restart every supported runtime session', () => {
+    const guidance = formatInstallSkillsRestartGuidance();
+
+    assert.match(guidance, /Codex/);
+    assert.match(guidance, /Claude Code/);
+    assert.match(guidance, /Kimi Code/);
   });
 
   it('renders run success with explicit UI, bridge, and IM readiness guidance', () => {

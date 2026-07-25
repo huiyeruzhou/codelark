@@ -14,6 +14,8 @@ export class UiBindingApplication {
     codexThreadId?: string;
     claudeSessionId?: string;
     claudeCwd?: string;
+    kimiSessionId?: string;
+    kimiCwd?: string;
   }) {
     if (options.bridgeSessionId) {
       return this.registry.switchBindingToBridgeSession(options.bindingId, options.bridgeSessionId);
@@ -21,7 +23,9 @@ export class UiBindingApplication {
     if (options.codexThreadId) {
       return this.registry.switchBindingToCodexThread(options.bindingId, options.codexThreadId);
     }
-    const session = this.registry.materializeClaudeThread(options.claudeSessionId!, options.claudeCwd!);
+    const session = options.claudeSessionId && options.claudeCwd
+      ? this.registry.materializeClaudeThread(options.claudeSessionId, options.claudeCwd)
+      : this.registry.materializeKimiThread(options.kimiSessionId!, options.kimiCwd!);
     return this.registry.switchBindingToBridgeSession(options.bindingId, session.id);
   }
 
@@ -31,6 +35,8 @@ export class UiBindingApplication {
     codexThreadId?: string;
     claudeSessionId?: string;
     claudeCwd?: string;
+    kimiSessionId?: string;
+    kimiCwd?: string;
   }) {
     if (options.bridgeSessionId) {
       return this.registry.setChannelDefaultBridgeSession(options.channelType, options.bridgeSessionId);
@@ -38,7 +44,10 @@ export class UiBindingApplication {
     if (options.codexThreadId) {
       return this.registry.setChannelDefaultCodexThread(options.channelType, options.codexThreadId);
     }
-    return this.registry.setChannelDefaultClaudeThread(options.channelType, options.claudeSessionId!, options.claudeCwd!);
+    if (options.claudeSessionId && options.claudeCwd) {
+      return this.registry.setChannelDefaultClaudeThread(options.channelType, options.claudeSessionId, options.claudeCwd);
+    }
+    return this.registry.setChannelDefaultKimiThread(options.channelType, options.kimiSessionId!, options.kimiCwd!);
   }
 
   removeChannelDefaultTarget(channelType: string): void {

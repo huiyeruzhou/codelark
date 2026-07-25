@@ -171,9 +171,13 @@ describe('service-manager lark-cli runtime environment', () => {
         'schema_version = 2',
         '',
         '[runtime]',
-        'agent = "claude"',
+        'agent = "kimi"',
         '',
         '[runtime.codex]',
+        'provider = "tmux"',
+        '',
+        '[runtime.kimi]',
+        'model = "moonshot-v1-test"',
         'provider = "tmux"',
         '',
         '[[channels]]',
@@ -190,14 +194,18 @@ describe('service-manager lark-cli runtime environment', () => {
       fs.writeFileSync(configEnvPath, [
         'CODELARK_RUNTIME=codex',
         'CODELARK_DEFAULT_CODEX_PROVIDER=pty',
+        'CODELARK_KIMI_MODEL=legacy-kimi-model',
+        'CODELARK_KIMI_PROVIDER=tmux',
         'CODELARK_FEISHU_APP_ID=legacy-app',
         '',
       ].join('\n'));
 
       const config = _testOnly.loadStartupConfig();
 
-      assert.equal(config.runtime.agent, 'claude');
+      assert.equal(config.runtime.agent, 'kimi');
       assert.equal(config.runtime.codex.provider, 'tmux');
+      assert.equal(config.runtime.kimi.model, 'moonshot-v1-test');
+      assert.equal(config.runtime.kimi.provider, 'tmux');
       assert.equal(config.channels?.[0]?.config.appId, 'toml-app');
       assert.equal(config.channels?.[0]?.config.appSecret, 'toml-secret');
     } finally {
@@ -218,6 +226,9 @@ describe('service-manager lark-cli runtime environment', () => {
       'CODELARK_AGENT',
       'CODELARK_CODEX_MODEL',
       'CODELARK_CODEX_PROVIDER',
+      'CODELARK_KIMI_MODEL',
+      'CODELARK_KIMI_DEFAULT_MODEL',
+      'CODELARK_KIMI_PROVIDER',
       'CODELARK_FEISHU_APP_ID',
       'CODELARK_ENABLED_CHANNELS',
       'LARK_CHANNEL_HOME',
@@ -240,6 +251,10 @@ describe('service-manager lark-cli runtime environment', () => {
         'model = "toml-model"',
         'provider = "tmux"',
         '',
+        '[runtime.kimi]',
+        'model = "toml-kimi-model"',
+        'provider = "tmux"',
+        '',
         '[[channels]]',
         'id = "feishu-default"',
         'alias = "飞书"',
@@ -255,6 +270,8 @@ describe('service-manager lark-cli runtime environment', () => {
       fs.writeFileSync(configEnvPath, [
         'CODELARK_AGENT=legacy-env-agent',
         'CODELARK_CODEX_MODEL=legacy-env-model',
+        'CODELARK_KIMI_MODEL=legacy-kimi-model',
+        'CODELARK_KIMI_PROVIDER=tmux',
         'CODELARK_FEISHU_APP_ID=legacy-app',
         '',
       ].join('\n'));
@@ -264,6 +281,9 @@ describe('service-manager lark-cli runtime environment', () => {
       assert.equal(env.CODELARK_AGENT, 'user-env-agent');
       assert.equal(env.CODELARK_CODEX_MODEL, undefined);
       assert.equal(env.CODELARK_CODEX_PROVIDER, undefined);
+      assert.equal(env.CODELARK_KIMI_MODEL, undefined);
+      assert.equal(env.CODELARK_KIMI_DEFAULT_MODEL, undefined);
+      assert.equal(env.CODELARK_KIMI_PROVIDER, undefined);
       assert.equal(env.CODELARK_FEISHU_APP_ID, undefined);
       assert.equal(env.CODELARK_ENABLED_CHANNELS, undefined);
       assert.equal(env.LARK_CHANNEL, '1');
@@ -313,11 +333,15 @@ describe('service-manager lark-cli runtime environment', () => {
 
       const cli = {
         runtime: {
-          agent: 'claude' as const,
+          agent: 'kimi' as const,
           codex: {
             model: 'cli-model',
             provider: 'tmux' as const,
             yoloMode: 'on' as const,
+          },
+          kimi: {
+            model: 'cli-kimi-model',
+            provider: 'tmux' as const,
           },
         },
       };
@@ -325,12 +349,18 @@ describe('service-manager lark-cli runtime environment', () => {
       const daemonEnv = _testOnly.buildDaemonEnv({ cli });
       const uiEnv = _testOnly.buildUiServerEnv({ cli });
 
-      assert.equal(projection.config.runtime.agent, 'claude');
+      assert.equal(projection.config.runtime.agent, 'kimi');
       assert.equal(projection.config.runtime.codex.model, 'cli-model');
       assert.equal(projection.config.runtime.codex.provider, 'tmux');
       assert.equal(projection.config.runtime.codex.yoloMode, 'on');
+      assert.equal(projection.config.runtime.kimi.model, 'cli-kimi-model');
+      assert.equal(projection.config.runtime.kimi.provider, 'tmux');
       assert.equal(daemonEnv.CODELARK_CODEX_MODEL, process.env.CODELARK_CODEX_MODEL);
+      assert.equal(daemonEnv.CODELARK_KIMI_MODEL, process.env.CODELARK_KIMI_MODEL);
+      assert.equal(daemonEnv.CODELARK_KIMI_PROVIDER, process.env.CODELARK_KIMI_PROVIDER);
       assert.equal(uiEnv.CODELARK_CODEX_MODEL, process.env.CODELARK_CODEX_MODEL);
+      assert.equal(uiEnv.CODELARK_KIMI_MODEL, process.env.CODELARK_KIMI_MODEL);
+      assert.equal(uiEnv.CODELARK_KIMI_PROVIDER, process.env.CODELARK_KIMI_PROVIDER);
     } finally {
       if (previousToml === null) fs.rmSync(configTomlPath, { force: true });
       else fs.writeFileSync(configTomlPath, previousToml, 'utf-8');
@@ -576,6 +606,69 @@ describe('service-manager lark-cli runtime environment', () => {
       brand: 'feishu',
       defaultAs: 'bot',
       strictMode: 'bot',
+    }]);
+  });
+
+  it('restores private lark-cli users after bind rewrites the current app entry', () => {
+    const config: Config = {
+      runtime: 'codex',
+      defaultMode: 'normal',
+      enabledChannels: ['feishu'],
+      channels: [{
+        id: 'feishu-default',
+        alias: '飞书',
+        provider: 'feishu',
+        enabled: true,
+        createdAt: '2026-06-05T00:00:00.000Z',
+        updatedAt: '2026-06-05T00:00:00.000Z',
+        config: {
+          appId: 'cli_bind_user_app',
+          appSecret: 'plain-secret',
+          site: 'feishu',
+        },
+      }],
+    };
+    const targetConfigPath = path.join(process.env.CODELARK_HOME!, 'runtime', 'lark-cli', 'lark-channel', 'config.json');
+    fs.mkdirSync(path.dirname(targetConfigPath), { recursive: true });
+    fs.writeFileSync(targetConfigPath, JSON.stringify({
+      apps: [{
+        appId: 'cli_bind_user_app',
+        appSecret: 'plain-secret',
+        brand: 'feishu',
+        defaultAs: 'auto',
+        strictMode: 'off',
+        users: [{ userOpenId: 'ou_user', userName: 'Tester' }],
+      }],
+    }), 'utf-8');
+
+    const users = _testOnly.snapshotTargetLarkCliUsers(config);
+    fs.writeFileSync(targetConfigPath, JSON.stringify({
+      apps: [{
+        appId: 'cli_bind_user_app',
+        appSecret: {
+          source: 'keychain',
+          id: 'appsecret:cli_bind_user_app',
+        },
+        brand: 'feishu',
+        defaultAs: 'user',
+        strictMode: 'off',
+        users: null,
+      }],
+    }), 'utf-8');
+
+    assert.equal(_testOnly.restoreTargetLarkCliUsers(config, users), true);
+
+    const parsed = JSON.parse(fs.readFileSync(targetConfigPath, 'utf-8'));
+    assert.deepEqual(parsed.apps, [{
+      appId: 'cli_bind_user_app',
+      appSecret: {
+        source: 'keychain',
+        id: 'appsecret:cli_bind_user_app',
+      },
+      brand: 'feishu',
+      defaultAs: 'user',
+      strictMode: 'off',
+      users: [{ userOpenId: 'ou_user', userName: 'Tester' }],
     }]);
   });
 

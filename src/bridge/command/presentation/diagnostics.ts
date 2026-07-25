@@ -1,4 +1,5 @@
 import type { BridgeSession } from '../../../domain/index.js';
+import type { RuntimeAgent } from '../../../domain/session.js';
 import type { SessionHealthDiagnosis } from '../../health/runtime.js';
 import {
   buildCommandFields,
@@ -49,6 +50,20 @@ export function formatCommandTimestamp(value: string | null | undefined): string
   return `${localized}（${diffDays} 天前）`;
 }
 
+function formatHealthRuntimeLabel(runtime: RuntimeAgent | null | undefined): string | null {
+  if (runtime === 'claude') return 'Claude Code';
+  if (runtime === 'kimi') return 'Kimi Code';
+  if (runtime === 'codex') return 'Codex';
+  return null;
+}
+
+function healthRuntimeIdentityFieldName(runtime: RuntimeAgent | null | undefined): string | null {
+  if (runtime === 'claude') return 'claude_session_id';
+  if (runtime === 'kimi') return 'kimi_session_id';
+  if (runtime === 'codex') return 'codex_thread_id';
+  return null;
+}
+
 export function formatHealthProcessProbe(diagnosis: SessionHealthDiagnosis): string {
   if (!diagnosis.processProbe) {
     return diagnosis.codexThreadId ? '未检查' : '不适用';
@@ -80,11 +95,15 @@ export function buildHealthCommandResponse(
   const currentStage = diagnosis.activeToolName
     ? `工具 · ${diagnosis.activeToolName}`
     : diagnosis.lastProgressType || '-';
+  const runtimeIdentityField = healthRuntimeIdentityFieldName(diagnosis.activeRuntime);
 
   return buildCommandFields(
     title,
     [
       ['Session', diagnosis.sessionId],
+      ['runtime', formatHealthRuntimeLabel(diagnosis.activeRuntime)],
+      ...(runtimeIdentityField ? [[runtimeIdentityField, diagnosis.runtimeIdentityValue || '-'] as [string, string]] : []),
+      ['runtime_cwd', diagnosis.runtimeIdentityCwd || null],
       ['运行状态', formatRuntimeStatus({ runtime_status: diagnosis.runtimeStatus, queued_count: 0 } as BridgeSession)],
       ['健康状态', formatHealthStatusLabel(diagnosis.healthStatus)],
       ['当前阶段', currentStage],
@@ -111,6 +130,10 @@ export function buildHealthListResponse(
     diagnoses.map((diagnosis) => ({
       heading: diagnosis.sessionId,
       details: [
+        ...(diagnosis.activeRuntime ? [`runtime：${formatHealthRuntimeLabel(diagnosis.activeRuntime) || diagnosis.activeRuntime}`] : []),
+        ...(diagnosis.runtimeIdentityValue
+          ? [`${healthRuntimeIdentityFieldName(diagnosis.activeRuntime) || 'runtime_identity'}：${diagnosis.runtimeIdentityValue}`]
+          : []),
         `健康状态：${formatHealthStatusLabel(diagnosis.healthStatus)}`,
         `当前阶段：${diagnosis.activeToolName ? `工具 · ${diagnosis.activeToolName}` : (diagnosis.lastProgressType || '-')}`,
         `最后进展：${formatCommandTimestamp(diagnosis.lastProgressAt)}`,

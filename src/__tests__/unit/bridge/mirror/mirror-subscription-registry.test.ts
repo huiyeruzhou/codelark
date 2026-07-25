@@ -9,7 +9,8 @@ import {
 } from '../../../../bridge/mirror/subscription-registry.js';
 
 function hasCodexThreadMirrorSource(session: MirrorRegistrySession | null | undefined): boolean {
-  return session?.runtime?.activeRuntime !== 'claude'
+  const activeRuntime = session?.runtime?.activeRuntime;
+  return (activeRuntime === undefined || activeRuntime === 'codex')
     && Boolean(session?.runtime?.codex?.threadId?.trim());
 }
 
@@ -122,6 +123,49 @@ describe('mirror-subscription-registry', () => {
 
     assert.deepEqual(plan.upsertBindings.map((binding) => binding.id), ['legacy-binding']);
     assert.deepEqual(plan.removeBindingIds, ['sdk-binding']);
+  });
+
+  it('does not plan Codex mirror subscriptions for Kimi runtime sessions with stale Codex thread ids', () => {
+    const plan = buildMirrorSubscriptionRegistryPlan(
+      [
+        {
+          id: 'kimi-binding',
+          channelType: 'feishu-default',
+          bridgeSessionId: 'kimi-session',
+        },
+        {
+          id: 'codex-binding',
+          channelType: 'feishu-default',
+          bridgeSessionId: 'codex-session',
+        },
+      ],
+      ['feishu-default'],
+      ['kimi-binding'],
+      (sessionId) => {
+        if (sessionId === 'kimi-session') {
+          return {
+            runtime: {
+              activeRuntime: 'kimi',
+              codex: { threadId: 'stale-codex-thread' },
+              kimi: { sessionId: 'session_kimi_live', cwd: '/tmp/kimi' },
+            },
+          };
+        }
+        if (sessionId === 'codex-session') {
+          return {
+            runtime: {
+              activeRuntime: 'codex',
+              codex: { threadId: 'codex-thread' },
+            },
+          };
+        }
+        return null;
+      },
+      hasCodexThreadMirrorSource,
+    );
+
+    assert.deepEqual(plan.upsertBindings.map((binding) => binding.id), ['codex-binding']);
+    assert.deepEqual(plan.removeBindingIds, ['kimi-binding']);
   });
 
   it('does not mirror cloud document virtual chats through IM delivery', () => {

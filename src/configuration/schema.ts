@@ -3,9 +3,10 @@ import { z } from 'zod';
 // 当前 v2 TOML shape 的运行时校验与 camelCase/snake_case 转换。
 // sources.ts 负责读写文件，service.ts 负责调用链路，这里只维护结构和类型。
 
-export const runtimeAgentSchema = z.enum(['codex', 'claude']);
+export const runtimeAgentSchema = z.enum(['codex', 'claude', 'kimi']);
 export const codexProviderSchema = z.enum(['sdk', 'tmux', 'pty']);
 export const claudeProviderSchema = z.enum(['sdk', 'pty', 'tmux']);
+export const kimiProviderSchema = z.enum(['tmux']);
 export const claudeExecutableSchema = z.enum(['claude', 'ccr']);
 export const yoloModeSchema = z.enum(['off', 'on', 'yolo']);
 export const sandboxModeSchema = z.enum(['read-only', 'workspace-write', 'danger-full-access']);
@@ -42,10 +43,16 @@ export const claudeConfigSchema = z.object({
   idleTimeoutMinutes: nonNegativeIntegerSchema,
 });
 
+export const kimiConfigSchema = z.object({
+  model: z.string(),
+  provider: kimiProviderSchema,
+});
+
 export const runtimeConfigSchema = z.object({
   agent: runtimeAgentSchema,
   codex: codexConfigSchema,
   claude: claudeConfigSchema,
+  kimi: kimiConfigSchema,
 });
 
 export const bridgeConfigSchema = z.object({
@@ -56,7 +63,7 @@ export const bridgeConfigSchema = z.object({
 
 export const channelBehaviorConfigSchema = z.object({
   historyMessageLimit: positiveIntegerSchema,
-  streamStatusIdleStartSeconds: positiveIntegerSchema,
+  streamStatusIdleStartSeconds: nonNegativeIntegerSchema,
   streamStatusCheckIntervalSeconds: positiveIntegerSchema,
   appId: z.string(),
   appSecret: z.string(),
@@ -99,6 +106,7 @@ export const configPatchSchema = z.object({
     agent: runtimeAgentSchema.optional(),
     codex: codexConfigSchema.partial().optional(),
     claude: claudeConfigSchema.partial().optional(),
+    kimi: kimiConfigSchema.partial().optional(),
   }).optional(),
   bridge: bridgeConfigSchema.partial().optional(),
   channels: z.array(channelConfigPatchSchema).optional(),
@@ -125,6 +133,7 @@ export function tomlToConfigPatch(raw: unknown): ConfigPatch {
   const runtime = asRecord(root.runtime);
   const codex = asRecord(runtime.codex);
   const claude = asRecord(runtime.claude);
+  const kimi = asRecord(runtime.kimi);
   const bridge = asRecord(root.bridge);
   const session = asRecord(root.session);
   const patch: ConfigPatch = {};
@@ -160,6 +169,11 @@ export function tomlToConfigPatch(raw: unknown): ConfigPatch {
     ['idleTimeoutMinutes', 'idle_timeout_minutes'],
   ]);
   if (Object.keys(claudePatch).length > 0) runtimePatch.claude = claudePatch;
+  const kimiPatch = copyDefined<NonNullable<NonNullable<ConfigPatch['runtime']>['kimi']>>(kimi, [
+    ['model', 'model'],
+    ['provider', 'provider'],
+  ]);
+  if (Object.keys(kimiPatch).length > 0) runtimePatch.kimi = kimiPatch;
   if (Object.keys(runtimePatch).length > 0) patch.runtime = runtimePatch;
 
   const bridgePatch = copyDefined<NonNullable<ConfigPatch['bridge']>>(bridge, [
@@ -230,6 +244,10 @@ export function configToTomlShape(config: ConfigPatch): Record<string, unknown> 
         ...(config.runtime.claude.executable !== undefined ? { executable: config.runtime.claude.executable } : {}),
         ...(config.runtime.claude.reasoningEffort !== undefined ? { reasoning_effort: config.runtime.claude.reasoningEffort } : {}),
         ...(config.runtime.claude.idleTimeoutMinutes !== undefined ? { idle_timeout_minutes: config.runtime.claude.idleTimeoutMinutes } : {}),
+      } } : {}),
+      ...(config.runtime.kimi ? { kimi: {
+        ...(config.runtime.kimi.model !== undefined ? { model: config.runtime.kimi.model } : {}),
+        ...(config.runtime.kimi.provider !== undefined ? { provider: config.runtime.kimi.provider } : {}),
       } } : {}),
     };
   }

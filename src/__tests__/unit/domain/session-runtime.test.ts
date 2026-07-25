@@ -8,6 +8,7 @@ import {
   getHistoryMessageLimit,
   getWorkspaceRoot,
   resolveClaudeRuntimeConfig,
+  resolveKimiRuntimeConfig,
   resolveDisplayedModel,
   resolveEffectiveCodexProvider,
   resolveEffectiveNetworkAccess,
@@ -28,6 +29,7 @@ import {
   getSessionCodexReasoningEffort,
   getSessionCodexSandboxMode,
   getSessionCodexThreadId,
+  getSessionKimiSessionId,
   getSessionRuntimeProviderIdentity,
   getSessionTmuxSessionName,
   materializeBridgeSessionRuntime,
@@ -35,6 +37,7 @@ import {
   setSessionActiveRuntimeUpdate,
   setSessionClaudeSessionIdUpdate,
   setSessionCodexTmuxProviderUpdate,
+  setSessionKimiIdentityUpdate,
 } from '../../../domain/session-runtime.js';
 import type { BridgeSession } from '../../../domain/index.js';
 import { initBridgeTestContext } from '../../helpers/bridge/test-bridge-utils.js';
@@ -42,8 +45,8 @@ import { initBridgeTestContext } from '../../helpers/bridge/test-bridge-utils.js
 const configTomlPath = path.join(CODELARK_HOME, 'config.toml');
 
 describe('BridgeSession runtime accessors', () => {
-  it('keeps Claude and Codex runtime containers mutually exclusive', () => {
-    const session = materializeBridgeSessionRuntime({
+  it('keeps active runtime containers mutually exclusive', () => {
+    const claudeSession = materializeBridgeSessionRuntime({
       id: 'session-runtime-nested',
       runtime: {
         activeRuntime: 'claude',
@@ -64,18 +67,48 @@ describe('BridgeSession runtime accessors', () => {
       },
     } as unknown as BridgeSession);
 
-    assert.equal(getSessionActiveRuntime(session), 'claude');
-    assert.equal(getSessionClaudeSessionId(session), 'claude-session');
-    assert.equal(getSessionClaudeModel(session), undefined);
-    assert.equal(getSessionClaudeProvider(session), undefined);
-    assert.equal(session.runtime?.codex, undefined);
-    assert.equal(getSessionCodexThreadId(session), undefined);
-    assert.equal(getSessionCodexModel(session), undefined);
-    assert.equal(getSessionCodexProvider(session), undefined);
-    assert.equal(getSessionCodexSandboxMode(session), undefined);
-    assert.equal(getSessionCodexNetworkAccess(session), undefined);
-    assert.equal(getSessionCodexReasoningEffort(session), undefined);
-    assert.equal(getSessionTmuxSessionName(session), 'nested-tmux');
+    assert.equal(getSessionActiveRuntime(claudeSession), 'claude');
+    assert.equal(getSessionClaudeSessionId(claudeSession), 'claude-session');
+    assert.equal(getSessionClaudeModel(claudeSession), undefined);
+    assert.equal(getSessionClaudeProvider(claudeSession), undefined);
+    assert.equal(claudeSession.runtime?.codex, undefined);
+    assert.equal(getSessionCodexThreadId(claudeSession), undefined);
+    assert.equal(getSessionCodexModel(claudeSession), undefined);
+    assert.equal(getSessionCodexProvider(claudeSession), undefined);
+    assert.equal(getSessionCodexSandboxMode(claudeSession), undefined);
+    assert.equal(getSessionCodexNetworkAccess(claudeSession), undefined);
+    assert.equal(getSessionCodexReasoningEffort(claudeSession), undefined);
+    assert.equal(getSessionKimiSessionId(claudeSession), undefined);
+    assert.equal(getSessionTmuxSessionName(claudeSession), 'nested-tmux');
+
+    const kimiSession = materializeBridgeSessionRuntime({
+      id: 'session-runtime-nested-kimi',
+      runtime: {
+        activeRuntime: 'kimi',
+        codex: {
+          threadId: 'stale-codex-thread',
+          provider: 'tmux',
+        },
+        claude: {
+          sessionId: 'stale-claude-session',
+          provider: 'tmux',
+        },
+        kimi: {
+          sessionId: ' session_kimi ',
+          provider: 'tmux',
+        },
+        general: { tmuxSessionName: 'kimi-tmux' },
+      },
+    } as unknown as BridgeSession);
+
+    assert.equal(getSessionActiveRuntime(kimiSession), 'kimi');
+    assert.equal(getSessionKimiSessionId(kimiSession), 'session_kimi');
+    assert.equal(kimiSession.runtime?.codex, undefined);
+    assert.equal(kimiSession.runtime?.claude, undefined);
+    assert.equal(getSessionCodexThreadId(kimiSession), undefined);
+    assert.equal(getSessionClaudeSessionId(kimiSession), undefined);
+    assert.equal(getSessionRuntimeProviderIdentity(kimiSession), 'kimi:tmux');
+    assert.equal(getSessionTmuxSessionName(kimiSession), 'kimi-tmux');
   });
 
   it('ignores stale Claude provider JSON and resolves config fields from v2', () => {
@@ -117,7 +150,41 @@ model = "claude-global"
     }
   });
 
-  it('uses symmetric runtime provider identities for Codex and Claude tmux', () => {
+  it('ignores stale Kimi provider JSON and resolves config fields from v2', () => {
+    const previousToml = fs.existsSync(configTomlPath) ? fs.readFileSync(configTomlPath, 'utf-8') : null;
+    try {
+      fs.mkdirSync(CODELARK_HOME, { recursive: true });
+      fs.writeFileSync(configTomlPath, `
+schema_version = 2
+
+[runtime.kimi]
+provider = "tmux"
+model = "kimi-global"
+`);
+      initBridgeTestContext({ settings: new Map() });
+
+      const session: BridgeSession = {
+        id: 'session-kimi-runtime-config',
+        runtime: {
+          activeRuntime: 'kimi',
+          kimi: {
+            provider: 'tmux',
+            model: 'kimi-session-json',
+          },
+        },
+      };
+
+      const resolved = resolveKimiRuntimeConfig(session);
+
+      assert.equal(resolved.provider, 'tmux');
+      assert.equal(resolved.model, 'kimi-global');
+    } finally {
+      if (previousToml === null) fs.rmSync(configTomlPath, { force: true });
+      else fs.writeFileSync(configTomlPath, previousToml, 'utf-8');
+    }
+  });
+
+  it('uses symmetric runtime provider identities for Codex, Claude, and Kimi tmux', () => {
     assert.equal(getSessionRuntimeProviderIdentity({
       id: 'session-codex-tmux-identity',
       runtime: { codex: { provider: 'tmux' } },
@@ -127,6 +194,11 @@ model = "claude-global"
       id: 'session-claude-tmux-identity',
       runtime: { activeRuntime: 'claude', claude: { provider: 'tmux' } },
     } as BridgeSession), 'claude:tmux');
+
+    assert.equal(getSessionRuntimeProviderIdentity({
+      id: 'session-kimi-tmux-identity',
+      runtime: { activeRuntime: 'kimi', kimi: { provider: 'tmux' } },
+    } as BridgeSession), 'kimi:tmux');
 
     assert.deepEqual(setSessionClaudeTmuxProviderUpdate({
       tmuxSessionName: 'claude_session',
@@ -337,11 +409,19 @@ model = "channel-claude"
 provider = "pty"
 yolo_mode = "on"
 reasoning_effort = "xhigh"
+
+[runtime.kimi]
+model = "channel-kimi"
+provider = "tmux"
 `);
     fs.writeFileSync(sessionTomlPath, `
 [runtime.codex]
 model = "session-codex"
 reasoning_effort = "low"
+
+[runtime.kimi]
+model = "session-kimi"
+provider = "tmux"
 `);
 
     const binding = {
@@ -353,6 +433,7 @@ reasoning_effort = "low"
 
     const codex = resolveSessionRuntimeConfig(binding, session);
     const claude = resolveClaudeRuntimeConfig(session, binding);
+    const kimi = resolveKimiRuntimeConfig(session, binding);
 
     assert.equal(codex.model, 'session-codex');
     assert.equal(codex.codexProvider, 'pty');
@@ -368,6 +449,8 @@ reasoning_effort = "low"
     assert.equal(claude.provider, 'pty');
     assert.equal(claude.permissionMode, 'bypassPermissions');
     assert.equal(claude.reasoningEffort, 'xhigh');
+    assert.equal(kimi.model, 'session-kimi');
+    assert.equal(kimi.provider, 'tmux');
 
     const legacyProviderBinding = {
       ...binding,
@@ -376,6 +459,7 @@ reasoning_effort = "low"
     assert.equal(resolveEffectiveCodexProvider(session, legacyProviderBinding), 'pty');
     assert.equal(resolveEffectiveSandboxMode(session, legacyProviderBinding), 'read-only');
     assert.equal(resolveClaudeRuntimeConfig(session, legacyProviderBinding).model, 'channel-claude');
+    assert.equal(resolveKimiRuntimeConfig(session, legacyProviderBinding).model, 'session-kimi');
   });
 
   it('honors explicit Codex activeRuntime over a Claude default runtime config', () => {
@@ -432,6 +516,15 @@ yolo_mode = "on"
   it('centralizes update payloads for the runtime storage schema', () => {
     assert.deepEqual(setSessionActiveRuntimeUpdate('claude'), { runtime: { activeRuntime: 'claude' } });
     assert.deepEqual(setSessionClaudeSessionIdUpdate('claude-1'), { runtime: { activeRuntime: 'claude', claude: { sessionId: 'claude-1' } } });
+    assert.deepEqual(setSessionKimiIdentityUpdate('session_kimi', '/tmp/kimi'), {
+      runtime: {
+        activeRuntime: 'kimi',
+        kimi: {
+          sessionId: 'session_kimi',
+          cwd: '/tmp/kimi',
+        },
+      },
+    });
     assert.deepEqual(setSessionCodexTmuxProviderUpdate({
       tmuxSessionName: 'clk-thread',
       autoEnter: true,

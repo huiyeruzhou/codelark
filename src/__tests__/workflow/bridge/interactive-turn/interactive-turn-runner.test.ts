@@ -23,6 +23,7 @@ import type { ActiveBridgeTurn } from '../../../../bridge/turn/turn-types.js';
 import { getCodexSessionByThreadIdSafe } from '../../../../bridge/session/support.js';
 import { ThreadDisplayService } from '../../../../bridge/session/thread-display-resolver.js';
 import { writeCodexSessionJsonlFixture } from '../../../helpers/bridge/test-bridge-utils.js';
+import { formatFooterClockTime } from '../../../../shared/progress/footer.js';
 
 const DATA_DIR = path.join(CODELARK_HOME, 'data');
 const CONFIG_TOML_PATH = path.join(CODELARK_HOME, 'config.toml');
@@ -228,6 +229,7 @@ type ScriptedTurnCallbacks = {
     detail?: { input?: unknown; output?: string; isError?: boolean },
   ) => void;
   onStatusNote?: (note: string | null) => void;
+  onThinkingNote?: (note: string) => void;
   onPromptPrepared?: (prompt: string) => void;
   onTaskEvent?: (tasks: TaskProgressInfo[]) => void;
   onContextUsage?: (usage: {
@@ -236,7 +238,7 @@ type ScriptedTurnCallbacks = {
     totalTokenUsage?: { inputTokens?: number; outputTokens?: number };
   }) => void;
   onRuntimeIdentity?: (identity: {
-    runtime: 'codex' | 'claude';
+    runtime: 'codex' | 'claude' | 'kimi';
     sessionId: string;
     cwd?: string;
     transcriptPath?: string;
@@ -283,23 +285,29 @@ class ScriptedSessionSimulator {
     return router.resolve(this.address)?.bridgeSessionId || '';
   }
 
-  setRuntimeProvider(runtime: 'codex' | 'claude', provider: 'sdk' | 'pty' | 'tmux'): void {
+  setRuntimeProvider(runtime: 'codex' | 'claude' | 'kimi', provider: 'sdk' | 'pty' | 'tmux'): void {
     const sessionId = this.sessionId();
     assert.ok(sessionId, 'scripted simulator binding must have a session id');
     getBridgeContext().store.updateSession(sessionId, {
       runtime: runtime === 'claude'
         ? {
-          activeRuntime: 'claude',
-        }
-        : {
-          activeRuntime: 'codex',
-        },
+            activeRuntime: 'claude',
+          }
+        : runtime === 'kimi'
+          ? {
+              activeRuntime: 'kimi',
+            }
+          : {
+              activeRuntime: 'codex',
+            },
     });
     setSessionConfigToml(
       sessionId,
       runtime === 'claude'
         ? { runtime: { claude: { provider } } }
-        : { runtime: { codex: { provider: provider === 'tmux' ? 'tmux' : provider === 'pty' ? 'pty' : 'sdk' } } },
+        : runtime === 'kimi'
+          ? { runtime: { kimi: { provider: 'tmux' } } }
+          : { runtime: { codex: { provider: provider === 'tmux' ? 'tmux' : provider === 'pty' ? 'pty' : 'sdk' } } },
     );
   }
 
@@ -372,7 +380,7 @@ class ScriptedSessionSimulator {
         resolveInteractiveTurnEnvironment: resolveTestInteractiveTurnEnvironment,
         resolveInteractiveTurnRuntimeSettings: resolveTestInteractiveTurnRuntimeSettings,
         ...(this.resolveDisplayInfo ? { resolveInteractiveTurnDisplayInfo: this.resolveDisplayInfo } : {}),
-        forwardPermissionRequest: async (_adapter, _address, permissionRequestId, toolName, toolInput, _sessionId, suggestions, replyToMessageId) => {
+        forwardPermissionRequest: (_adapter, _address, permissionRequestId, toolName, toolInput, _sessionId, suggestions, replyToMessageId) => {
           this.forwardedPermissions.push({
             permissionRequestId,
             toolName,
@@ -380,7 +388,7 @@ class ScriptedSessionSimulator {
             suggestions,
             replyToMessageId,
           });
-          await this.adapter.send({
+          void this.adapter.send({
             address: _address,
             text: `Permission Required: ${toolName}`,
             replyToMessageId,
@@ -413,6 +421,7 @@ class ScriptedSessionSimulator {
             onPermissionRequest: onPermission,
             onTaskEvent,
             onContextUsage: options?.onContextUsage,
+            onThinkingNote: options?.onThinkingNote,
             onRuntimeIdentity: options?.onRuntimeIdentity,
             abortSignal: effectiveAbortSignal,
           };
@@ -602,13 +611,14 @@ stream_status_check_interval_seconds = 3
     const sessionId = simulator.sessionId();
     const phases: Array<{
       key: string;
-      runtime: 'codex' | 'claude';
+      runtime: 'codex' | 'claude' | 'kimi';
       provider: 'sdk' | 'pty' | 'tmux';
       progressSource: ActiveBridgeTurn['progressSource'];
       finalSource: ActiveBridgeTurn['finalSource'];
     }> = [
       { key: 'codex-sdk', runtime: 'codex', provider: 'sdk', progressSource: 'sdk_stream', finalSource: 'sdk_result' },
       { key: 'claude-sdk', runtime: 'claude', provider: 'sdk', progressSource: 'sdk_stream', finalSource: 'sdk_result' },
+      { key: 'kimi-tmux', runtime: 'kimi', provider: 'tmux', progressSource: 'kimi_jsonl', finalSource: 'kimi_task_complete' },
       { key: 'codex-tmux', runtime: 'codex', provider: 'tmux', progressSource: 'codex_jsonl', finalSource: 'codex_task_complete' },
       { key: 'claude-pty', runtime: 'claude', provider: 'pty', progressSource: 'claude_jsonl', finalSource: 'claude_task_complete' },
       { key: 'codex-pty', runtime: 'codex', provider: 'pty', progressSource: 'codex_jsonl', finalSource: 'codex_task_complete' },
@@ -624,8 +634,11 @@ stream_status_check_interval_seconds = 3
         finalText: marker,
         codexThreadId: phase.runtime === 'codex' ? `${phase.key}-thread` : null,
         steps: [
-          async ({ onStatusNote, onRuntimeIdentity }) => {
+          async ({ onStatusNote, onThinkingNote, onRuntimeIdentity }) => {
             onStatusNote?.(`provider preload complete: ${phase.key}`);
+            if (phase.runtime === 'kimi') {
+              onThinkingNote?.('Kimi 正在整理上下文和下一步操作');
+            }
             await onRuntimeIdentity?.({
               runtime: phase.runtime,
               sessionId: `${phase.key}-thread`,
@@ -662,12 +675,14 @@ stream_status_check_interval_seconds = 3
     assert.deepEqual(simulator.registeredBridgeTurns.map((turn) => `${turn.runtime}:${turn.progressSource}:${turn.finalSource}`), [
       'codex:sdk_stream:sdk_result',
       'claude:sdk_stream:sdk_result',
+      'kimi:kimi_jsonl:kimi_task_complete',
       'codex:codex_jsonl:codex_task_complete',
       'claude:claude_jsonl:claude_task_complete',
       'codex:codex_jsonl:codex_task_complete',
     ]);
     assert.ok(simulator.adapter.streamedStatuses.some((status) => status.includes('provider preload complete: codex-sdk')));
     assert.ok(simulator.adapter.streamedStatuses.some((status) => status.includes('provider preload complete: claude-pty')));
+    assert.ok(simulator.adapter.streamedStatuses.some((status) => status.includes('当前思考：Kimi 正在整理上下文和下一步操作')));
     assert.ok(simulator.adapter.streamedTasks.some((tasks) => tasks.some((task) => task.text === 'Goal Active: codex-sdk provider isolation')));
     assert.ok(simulator.adapter.streamedTools.some((tools) => tools.some((tool) => tool.name === 'Bash' && tool.status === 'complete')));
     assert.deepEqual(simulator.mirrorSuppressions, [
@@ -841,14 +856,14 @@ stream_status_check_interval_seconds = 3
   });
 
   it('formats the persistent runtime status text', () => {
-    assert.equal(formatInteractiveRuntimeStatus(0), '处理中');
-    assert.equal(formatInteractiveRuntimeStatus(65_000), '已运行 1分5秒');
-    assert.equal(formatInteractiveRuntimeStatus(3_661_000, 10_000), '已运行 1小时1分1秒，上次响应距今 10秒');
-    assert.equal(formatInteractiveRuntimeStatus(1_000, 70_000), '已运行 1秒，上次响应距今 1分10秒');
-    assert.equal(formatInteractiveRuntimeStatus(1_000, 3_600_000), '已运行 1秒，上次响应距今 1小时');
-    assert.equal(formatInteractiveRuntimeStatus(1_000, 3_610_000), '已运行 1秒，上次响应距今 1小时10秒');
-    assert.equal(formatInteractiveRuntimeStatus(1_000, 3_720_000), '已运行 1秒，上次响应距今 1小时2分');
-    assert.equal(formatInteractiveRuntimeStatus(1_000, 3_730_000), '已运行 1秒，上次响应距今 1小时2分10秒');
+    assert.equal(formatInteractiveRuntimeStatus(0), '已运行 0s');
+    assert.equal(formatInteractiveRuntimeStatus(65_000), '已运行 1m5s');
+    assert.equal(formatInteractiveRuntimeStatus(3_661_000, 10_000), '已运行 1h1m1s · 上次响应 10s');
+    assert.equal(formatInteractiveRuntimeStatus(1_000, 70_000), '已运行 1s · 上次响应 1m10s');
+    assert.equal(formatInteractiveRuntimeStatus(1_000, 3_600_000), '已运行 1s · 上次响应 1h');
+    assert.equal(formatInteractiveRuntimeStatus(1_000, 3_610_000), '已运行 1s · 上次响应 1h10s');
+    assert.equal(formatInteractiveRuntimeStatus(1_000, 3_720_000), '已运行 1s · 上次响应 1h2m');
+    assert.equal(formatInteractiveRuntimeStatus(1_000, 3_730_000), '已运行 1s · 上次响应 1h2m10s');
   });
 
   it('shows status-only stream updates for Claude background preparation without suppressing fallback text', async () => {
@@ -1174,17 +1189,17 @@ stream_status_check_interval_seconds = 3
         resolveInteractiveTurnRuntimeSettings: resolveTestInteractiveTurnRuntimeSettings,
         processMessageImpl: async (_binding, _text, _onPermission, _abortSignal, _files, onPartialText) => {
           onPartialText?.('第一段输出');
-          assert.equal(adapter.streamedStatuses[0], '处理中');
-          assert.equal(adapter.streamedStatuses.at(-1), '处理中');
+          assert.equal(adapter.streamedStatuses[0], `${formatFooterClockTime(0)} · 已运行 0s`);
+          assert.equal(adapter.streamedStatuses.at(-1), `${formatFooterClockTime(0)} · 已运行 0s`);
 
           clock.advance(5_000);
-          assert.equal(adapter.streamedStatuses.at(-1), '处理中');
+          assert.equal(adapter.streamedStatuses.at(-1), `${formatFooterClockTime(0)} · 已运行 0s`);
 
           clock.advance(5_000);
-          assert.equal(adapter.streamedStatuses.at(-1), '已运行 10秒，上次响应距今 10秒');
+          assert.equal(adapter.streamedStatuses.at(-1), `${formatFooterClockTime(10_000)} · 已运行 10s · 上次响应 10s`);
 
           onPartialText?.('第一段输出\n第二段输出');
-          assert.equal(adapter.streamedStatuses.at(-1), '已运行 10秒');
+          assert.equal(adapter.streamedStatuses.at(-1), `${formatFooterClockTime(10_000)} · 已运行 10s · 上次响应 0s`);
 
           return {
             responseText: '最终回复',
@@ -1204,6 +1219,7 @@ stream_status_check_interval_seconds = 3
       },
     );
 
+    await new Promise<void>((resolve) => setImmediate(resolve));
     assert.deepEqual(deliveredTexts, []);
     assert.equal(adapter.streamEnds.length, 1);
     assert.equal(adapter.streamEnds[0]?.status, 'completed');
@@ -1218,7 +1234,7 @@ stream_status_check_interval_seconds = 3
     assert.equal(adapter.messageEnds.length, 1);
   });
 
-  it('keeps last response age visible when tool progress updates the status area', async () => {
+  it('resets last response age when tool progress updates the status area', async () => {
     const adapter = new FakeFeishuStreamingAdapter();
     const address = {
       channelType: 'feishu-default',
@@ -1273,11 +1289,11 @@ stream_status_check_interval_seconds = 3
         processMessageImpl: async (_binding, _text, _onPermission, _abortSignal, _files, onPartialText, onToolEvent) => {
           onPartialText?.('第一段输出');
           clock.advance(10_000);
-          assert.equal(adapter.streamedStatuses.at(-1), '已运行 10秒，上次响应距今 10秒');
+          assert.equal(adapter.streamedStatuses.at(-1), `${formatFooterClockTime(10_000)} · 已运行 10s · 上次响应 10s`);
 
           clock.advance(5_000);
           onToolEvent?.('tool-1', 'Bash', 'running');
-          assert.equal(adapter.streamedStatuses.at(-1), '已运行 15秒，上次响应距今 15秒');
+          assert.equal(adapter.streamedStatuses.at(-1), `${formatFooterClockTime(15_000)} · 已运行 15s · 上次响应 0s`);
 
           return {
             responseText: '最终回复',
@@ -1908,13 +1924,13 @@ stream_status_check_interval_seconds = 3
         resolveInteractiveTurnRuntimeSettings: resolveTestInteractiveTurnRuntimeSettings,
         processMessageImpl: async (_binding, _text, _onPermission, _abortSignal, _files, onPartialText) => {
           onPartialText?.('第一段输出');
-          assert.equal(adapter.streamedStatuses.at(-1), '处理中');
+          assert.equal(adapter.streamedStatuses.at(-1), `${formatFooterClockTime(0)} · 已运行 0s`);
 
           clock.advance(30_000);
-          assert.equal(adapter.streamedStatuses.at(-1), '已运行 30秒');
+          assert.equal(adapter.streamedStatuses.at(-1), `${formatFooterClockTime(30_000)} · 已运行 30s`);
 
           clock.advance(150_000);
-          assert.equal(adapter.streamedStatuses.at(-1), '已运行 3分，上次响应距今 3分');
+          assert.equal(adapter.streamedStatuses.at(-1), `${formatFooterClockTime(180_000)} · 已运行 3m · 上次响应 3m`);
 
           return {
             responseText: '最终回复',
@@ -1935,7 +1951,7 @@ stream_status_check_interval_seconds = 3
     );
   });
 
-  it('does not reset last response age when only tool progress is updated', async () => {
+  it('resets last activity age when tool progress is updated', async () => {
     const adapter = new FakeFeishuStreamingAdapter();
     const address = {
       channelType: 'feishu-default',
@@ -1999,10 +2015,10 @@ stream_status_check_interval_seconds = 3
           onPartialText?.('第一段输出');
           clock.advance(180_000);
           onToolEvent?.('tool-1', 'shell_command', 'running');
-          assert.equal(adapter.streamedStatuses.at(-1), '已运行 3分，上次响应距今 3分');
+          assert.equal(adapter.streamedStatuses.at(-1), `${formatFooterClockTime(180_000)} · 已运行 3m · 上次响应 0s`);
 
           clock.advance(10_000);
-          assert.equal(adapter.streamedStatuses.at(-1), '已运行 3分10秒，上次响应距今 3分10秒');
+          assert.equal(adapter.streamedStatuses.at(-1), `${formatFooterClockTime(190_000)} · 已运行 3m10s · 上次响应 10s`);
 
           return {
             responseText: '最终回复',
@@ -2292,7 +2308,7 @@ stream_status_check_interval_seconds = 3
     assert.match(adapter.streamEnds[0]?.text || '', /旧会话「旧任务」任务已结束/);
   });
 
-  it('stops the runtime heartbeat before stream finalization begins', async () => {
+  it('releases the turn before stream finalization ACK while preserving finalization cleanup order', async () => {
     const adapter = new FakeFeishuStreamingAdapter();
     const address = {
       channelType: 'feishu-default',
@@ -2383,12 +2399,19 @@ stream_status_check_interval_seconds = 3
 
     await finalizeStarted.promise;
     const statusCountWhileFinalizing = adapter.streamedStatuses.length;
+    await Promise.race([
+      runPromise,
+      new Promise<never>((_, reject) => setTimeout(() => reject(new Error('interactive turn waited for stream finalization ACK')), 100)),
+    ]);
+    assert.equal(taskStateMap.size, 0);
+    assert.equal(adapter.messageEnds.length, 0, 'UI cleanup must wait until stream finalization settles');
     releaseFinalize.resolve();
-    await runPromise;
+    await new Promise<void>((resolve) => setImmediate(resolve));
 
     assert.equal(adapter.streamedStatuses.length, statusCountWhileFinalizing);
     assert.deepEqual(deliveredTexts, []);
     assert.equal(clock.activeCount(), 0);
+    assert.equal(adapter.messageEnds.length, 1);
   });
 
   it('includes masked error diagnostics in the streaming card when Codex fails', async () => {

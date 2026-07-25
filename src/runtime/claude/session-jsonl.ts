@@ -198,11 +198,11 @@ function findClaudeRootForToolResults(
 }
 
 function claudeProjectDirName(cwd: string): string {
-  return path.resolve(cwd).replace(/[\\/_.]/g, '-');
+  return path.resolve(cwd).replace(/[\\/:_.]/g, '-');
 }
 
 function legacyClaudeProjectDirName(cwd: string): string {
-  return path.resolve(cwd).replace(/[\\/]/g, '-');
+  return path.resolve(cwd).replace(/[\\/:]/g, '-');
 }
 
 function realpathIfExists(cwd: string): string | null {

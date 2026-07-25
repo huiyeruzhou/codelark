@@ -7,14 +7,14 @@
 ## 阅读路径
 
 1. [命令体系](commands.md)：IM 命令如何按用户任务分组。
-2. [运行时与提供方](runtime-providers.md)：Codex / Claude Code 与 sdk / pty / tmux 的能力边界。
+2. [运行时与提供方](runtime-providers.md)：Codex / Claude Code / Kimi Code 与 sdk / pty / tmux 的能力边界。
 3. [通道与 Web 工作台](channels-ui.md)：飞书、多实例配置和本地 UI。
 4. [数据、可观测性与验证](data-observability.md)：本地文件、日志、状态、真实飞书 E2E。
 5. [开发者源码地图](developer-map.md)：按功能查源码和测试。
 
 ## 产品主线
 
-CodeLark 是一个运行在本机的桥接应用，把本机 Codex 和 Claude Code 会话接入飞书 IM 通道，让用户可以在聊天软件里继续本地 AI coding session、切换线程、查看状态、处理权限、接收流式卡片、回传文件，并用 Web 工作台管理通道和会话。
+CodeLark 是一个运行在本机的桥接应用，把本机 Codex、Claude Code 和 Kimi Code 会话接入飞书 IM 通道，让用户可以在聊天软件里继续本地 AI coding session、切换线程、查看状态、处理权限、接收流式卡片、回传文件，并用 Web 工作台管理通道和会话。
 
 核心链路是：
 
@@ -24,7 +24,7 @@ flowchart LR
   adapter[通道 Adapter]
   chat[ChannelChat]
   session[BridgeSession]
-  runtime[Codex / Claude Code Runtime]
+  runtime[Codex / Claude Code / Kimi Code Runtime]
   response[IM 回复 / 流式卡片]
 
   im --> adapter
@@ -34,7 +34,7 @@ flowchart LR
   runtime --> response
 ```
 
-CodeLark 自己拥有的是 `BridgeSession`、`ChannelChat`、通道配置、消息缓存和审计日志；Codex / Claude Code 自己的会话文件仍由对应工具生成和维护。
+CodeLark 自己拥有的是 `BridgeSession`、`ChannelChat`、通道配置、消息缓存和审计日志；Codex / Claude Code / Kimi Code 自己的会话文件仍由对应工具生成和维护。
 
 ## 代码入口
 
@@ -47,7 +47,7 @@ CodeLark 自己拥有的是 `BridgeSession`、`ChannelChat`、通道配置、消
 | 命令分发 | [src/bridge/command/dispatch.ts](https://github.com/huiyeruzhou/codelark/blob/main/src/bridge/command/dispatch.ts) |
 | 运行时提供方路由 | [src/runtime/codex/routing-provider.ts](https://github.com/huiyeruzhou/codelark/blob/main/src/runtime/codex/routing-provider.ts) |
 | 本地 JSON 存储 | [src/storage/json-store.ts](https://github.com/huiyeruzhou/codelark/blob/main/src/storage/json-store.ts) |
-| 配置 schema | [schemas/config.v1.schema.json](https://github.com/huiyeruzhou/codelark/blob/main/schemas/config.v1.schema.json) |
+| 配置 schema | [schemas/config.v2.schema.json](https://github.com/huiyeruzhou/codelark/blob/main/schemas/config.v2.schema.json) |
 
 ## 维护原则
 

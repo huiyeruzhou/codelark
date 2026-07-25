@@ -10,6 +10,7 @@ import {
   prepareClaudeCodeRouterEnv,
 } from './code-router.js';
 import { resolveClaudeCliExecutable } from '../../runtime/codex/cli-executable.js';
+import { readPathEnv, writeCanonicalPathEnv } from '../path-env.js';
 import {
   listClaudeSessionJsonlFiles,
   summarizeClaudeSessionJsonl,
@@ -197,7 +198,7 @@ export function buildClaudePtyEnv(): Record<string, string> {
   for (const [key, value] of Object.entries(process.env)) {
     if (value !== undefined) env[key] = value;
   }
-  env.PATH = prependLarkCliRuntimeBin(env.PATH);
+  writeCanonicalPathEnv(env, prependLarkCliRuntimeBin(readPathEnv(env)));
   env.TERM = env.TERM || 'xterm-256color';
   return env;
 }

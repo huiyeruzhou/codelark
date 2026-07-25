@@ -21,6 +21,10 @@ import {
   waitForRuntimeTmuxReady,
 } from '../../bridge/tmux/runtime.js';
 import { tmuxCore } from '../../bridge/tmux/core.js';
+import {
+  sendRuntimeTmuxInput,
+  transitionRuntimeTmuxInputState,
+} from '../../bridge/tmux/input-state-machine.js';
 
 export { startClaudeTmuxSession };
 
@@ -51,7 +55,18 @@ interface ClaudeTmuxRunContext {
   emittedRecordSignatures: Set<string>;
   lastAssistantText: string;
   terminalSeen: boolean;
+  latestLifecycleTimestampMs: number | null;
   hasError: boolean;
+}
+
+function acceptClaudeLifecycleRecord(context: ClaudeTmuxRunContext, timestamp: string): boolean {
+  const timestampMs = Date.parse(timestamp);
+  if (!Number.isFinite(timestampMs)) return true;
+  if (context.latestLifecycleTimestampMs !== null && timestampMs < context.latestLifecycleTimestampMs) {
+    return false;
+  }
+  context.latestLifecycleTimestampMs = timestampMs;
+  return true;
 }
 
 function snapshotClaudeSessionFiles(cwd: string): SessionFileSnapshot {
@@ -73,7 +88,7 @@ async function prepareClaudeTmuxForPrompt(sessionName: string, targetPane: strin
     DEFAULT_CLAUDE_TMUX_AFTER_SETUP_DELAY_MS,
     0,
   );
-  await waitForRuntimeTmuxReady({
+  const readiness = await waitForRuntimeTmuxReady({
     runtime: 'claude',
     sessionName,
     target: targetPane,
@@ -84,6 +99,9 @@ async function prepareClaudeTmuxForPrompt(sessionName: string, targetPane: strin
       }));
     },
   });
+  if (!readiness.ready) {
+    throw new Error(readiness.lastError || 'Claude tmux did not become ready for input.');
+  }
 }
 
 function recordToolName(record: BridgeMirrorRecord): string {
@@ -100,7 +118,9 @@ function enqueueClaudeTmuxRecordAsSse(
 
   switch (record.type) {
     case 'task_started':
-      context.terminalSeen = false;
+      if (acceptClaudeLifecycleRecord(context, record.timestamp)) {
+        context.terminalSeen = false;
+      }
       break;
     case 'tool_started': {
       const toolId = record.toolId || record.signature;
@@ -138,6 +158,7 @@ function enqueueClaudeTmuxRecordAsSse(
       }
       break;
     case 'task_complete':
+      if (!acceptClaudeLifecycleRecord(context, record.timestamp)) break;
       if (record.content && record.content !== context.lastAssistantText) {
         context.lastAssistantText = record.content;
         controller.enqueue(sseEvent('text', record.content));
@@ -150,6 +171,7 @@ function enqueueClaudeTmuxRecordAsSse(
       }));
       break;
     case 'task_aborted':
+      if (!acceptClaudeLifecycleRecord(context, record.timestamp)) break;
       context.terminalSeen = true;
       context.hasError = true;
       controller.enqueue(sseEvent('error', record.content || 'Claude tmux task aborted.'));
@@ -261,6 +283,7 @@ export function streamClaudeTmuxTui(params: StreamChatParams): ReadableStream<st
           emittedRecordSignatures: new Set(),
           lastAssistantText: '',
           terminalSeen: false,
+          latestLifecycleTimestampMs: null,
           hasError: false,
         };
         const abortListener = () => {
@@ -286,7 +309,11 @@ export function streamClaudeTmuxTui(params: StreamChatParams): ReadableStream<st
           if (promptDelayMs > 0) await sleep(promptDelayMs);
           await prepareClaudeTmuxForPrompt(sessionName, targetPane, controller);
           controller.enqueue(sseEvent('status', { reasoning: '正在把本次消息发送到 Claude tmux。' }));
-          await tmuxCore.injectPromptIntoPane(targetPane, params.prompt);
+          await sendRuntimeTmuxInput({
+            runtime: 'claude',
+            sessionName,
+            send: () => tmuxCore.injectPromptIntoPane(targetPane, params.prompt),
+          });
           const startedClaudeJsonlSession = await waitForClaudeSessionJsonlUpdatedAfter(cwd, startedAtMs);
           if (startedClaudeJsonlSession) {
             context.sessionFilePath = startedClaudeJsonlSession.filePath;
@@ -303,6 +330,13 @@ export function streamClaudeTmuxTui(params: StreamChatParams): ReadableStream<st
           controller.close();
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error);
+          transitionRuntimeTmuxInputState(
+            'claude',
+            sessionName,
+            'failed',
+            'Claude tmux input lifecycle failed',
+            { error: message },
+          );
           console.error('[claude-tmux] Error:', error instanceof Error ? error.stack || error.message : error);
           try {
             controller.enqueue(sseEvent('error', message || 'Claude tmux execution failed.'));

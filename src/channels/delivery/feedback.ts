@@ -5,7 +5,7 @@ import type {
   OutboundRichCard,
   SendResult,
 } from '../../domain/index.js';
-import { deliver } from './deliver.js';
+import { deliver, enqueueDelivery, type QueuedDelivery } from './deliver.js';
 import { getFeedbackParseMode, renderFeedbackText } from '../adapter-runtime/channel-runtime.js';
 import { supportsOutboundArtifacts } from './artifacts.js';
 
@@ -76,6 +76,34 @@ export async function deliverBridgeNotice(
   );
 }
 
+/**
+ * Enqueue a bridge notice and return immediately. Consumers that need the
+ * platform message id can continue from `completion` outside the session lane.
+ */
+export function enqueueBridgeNotice(
+  adapter: BaseChannelAdapter,
+  address: ChannelAddress,
+  text: string,
+  options?: {
+    sessionId?: string;
+    replyToMessageId?: string;
+    audit?: boolean;
+    richCard?: OutboundRichCard;
+    richCardUpdateMessageId?: string;
+  },
+): QueuedDelivery {
+  return enqueueDelivery(
+    adapter,
+    address,
+    () => deliverBridgeNotice(adapter, address, text, options),
+    {
+      queueClass: options?.richCard || options?.richCardUpdateMessageId
+        ? 'interactive'
+        : 'ordinary',
+    },
+  );
+}
+
 export async function deliverResponse(
   adapter: BaseChannelAdapter,
   address: ChannelAddress,
@@ -138,4 +166,26 @@ export async function deliverResponse(
   }
 
   return lastResult;
+}
+
+export function enqueueResponse(
+  adapter: BaseChannelAdapter,
+  address: ChannelAddress,
+  responseText: string,
+  sessionId: string,
+  replyToMessageId?: string,
+  attachments: OutboundAttachment[] = [],
+): QueuedDelivery {
+  return enqueueDelivery(
+    adapter,
+    address,
+    () => deliverResponse(
+      adapter,
+      address,
+      responseText,
+      sessionId,
+      replyToMessageId,
+      attachments,
+    ),
+  );
 }

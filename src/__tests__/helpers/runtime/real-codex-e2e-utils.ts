@@ -23,13 +23,37 @@ export interface LocalResponsesProxy {
   close(): Promise<void>;
 }
 
+function quoteCmdArgument(value: string): string {
+  if (!value) return '""';
+  return `"${value.replace(/(["^&|<>])/gu, '^$1')}"`;
+}
+
+export async function execRuntimeCommand(command: string, args: string[]) {
+  if (process.platform !== 'win32') return execFileAsync(command, args);
+  const commandLine = [command, ...args].map(quoteCmdArgument).join(' ');
+  return execFileAsync(
+    process.env.ComSpec || process.env.COMSPEC || 'cmd.exe',
+    ['/d', '/s', '/c', commandLine],
+    { windowsHide: true },
+  );
+}
+
+export function removeRuntimeTestDirectory(directory: string): void {
+  fs.rmSync(directory, {
+    recursive: true,
+    force: true,
+    maxRetries: 20,
+    retryDelay: 100,
+  });
+}
+
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 export async function commandAvailable(command: string, args: string[]): Promise<boolean> {
   try {
-    await execFileAsync(command, args);
+    await execRuntimeCommand(command, args);
     return true;
   } catch {
     return false;
@@ -199,9 +223,51 @@ function createChatCompletionsEventStreamPayload(model: string, responseText: st
   return chunks.map((chunk) => `data: ${JSON.stringify(chunk)}\n\n`).join('') + 'data: [DONE]\n\n';
 }
 
+function createAnthropicMessagesEventStreamPayload(model: string, responseText: string): string {
+  const messageId = `msg_clk_${Date.now()}`;
+  const events: unknown[] = [
+    {
+      type: 'message_start',
+      message: {
+        id: messageId,
+        type: 'message',
+        role: 'assistant',
+        model,
+        content: [],
+        stop_reason: null,
+        stop_sequence: null,
+        usage: { input_tokens: 1, output_tokens: 0 },
+      },
+    },
+    {
+      type: 'content_block_start',
+      index: 0,
+      content_block: { type: 'text', text: '' },
+    },
+    {
+      type: 'content_block_delta',
+      index: 0,
+      delta: { type: 'text_delta', text: responseText },
+    },
+    { type: 'content_block_stop', index: 0 },
+    {
+      type: 'message_delta',
+      delta: { stop_reason: 'end_turn', stop_sequence: null },
+      usage: { output_tokens: 4 },
+    },
+    { type: 'message_stop' },
+  ];
+  return events
+    .map((event) => `event: ${(event as { type: string }).type}\ndata: ${JSON.stringify(event)}\n\n`)
+    .join('');
+}
+
 export async function startLocalResponsesProxy(options: {
   responseText?: string;
   responseDelayMs?: number;
+  errorWhenBodyIncludes?: string;
+  errorStatus?: number;
+  errorBody?: unknown;
 } = {}): Promise<LocalResponsesProxy> {
   const responseText = options.responseText ?? 'clk local proxy response';
   const responseDelayMs = Math.max(0, options.responseDelayMs ?? 0);
@@ -229,7 +295,55 @@ export async function startLocalResponsesProxy(options: {
       };
       requests.push(recordedRequest);
 
+      if (req.method === 'POST' && req.url?.includes('/messages/count_tokens')) {
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ input_tokens: 1 }));
+        return;
+      }
+
+      if (req.method === 'POST' && /\/messages(?:\?|$)/u.test(req.url || '')) {
+        const model = typeof body === 'object'
+          && body !== null
+          && typeof (body as { model?: unknown }).model === 'string'
+          ? (body as { model: string }).model
+          : 'claude-sonnet-4-5';
+        const wantsStream = typeof body === 'object'
+          && body !== null
+          && (body as { stream?: unknown }).stream === true;
+        void (async () => {
+          if (responseDelayMs > 0) await sleep(responseDelayMs);
+          if (wantsStream) {
+            res.writeHead(200, {
+              'content-type': 'text/event-stream',
+              'cache-control': 'no-cache',
+              connection: 'keep-alive',
+            });
+            res.end(createAnthropicMessagesEventStreamPayload(model, responseText));
+            return;
+          }
+          res.writeHead(200, { 'content-type': 'application/json' });
+          res.end(JSON.stringify({
+            id: `msg_clk_${Date.now()}`,
+            type: 'message',
+            role: 'assistant',
+            model,
+            content: [{ type: 'text', text: responseText }],
+            stop_reason: 'end_turn',
+            stop_sequence: null,
+            usage: { input_tokens: 1, output_tokens: 4 },
+          }));
+        })();
+        return;
+      }
+
       if (req.method === 'POST' && req.url?.includes('/responses')) {
+        if (options.errorWhenBodyIncludes && rawBody.includes(options.errorWhenBodyIncludes)) {
+          res.writeHead(options.errorStatus ?? 400, { 'content-type': 'application/json' });
+          res.end(JSON.stringify(options.errorBody ?? {
+            error: { type: 'invalid_request_error', message: 'CODELARK_MOCK_FATAL' },
+          }));
+          return;
+        }
         const model = typeof body === 'object'
           && body !== null
           && typeof (body as { model?: unknown }).model === 'string'

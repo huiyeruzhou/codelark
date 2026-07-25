@@ -2,7 +2,7 @@
 
 ## 一眼看整体
 
-CodeLark 的核心不是“把 IM 消息转发给一个模型 API”，而是把 IM、Web 工作台、本地 Codex / Claude Code 会话和飞书卡片都收敛到同一个 `BridgeSession` 生命周期里。IM 只是入口，`BridgeSession` 是 CodeLark 自己维护的会话边界，Codex thread / Claude session 才是底层 runtime 的真实会话。
+CodeLark 的核心不是“把 IM 消息转发给一个模型 API”，而是把 IM、Web 工作台、本地 Codex / Claude Code / Kimi Code 会话和飞书卡片都收敛到同一个 `BridgeSession` 生命周期里。IM 只是入口，`BridgeSession` 是 CodeLark 自己维护的会话边界，Codex thread、Claude session 和 Kimi session 才是底层 runtime 的真实会话。
 
 ```mermaid
 flowchart LR
@@ -12,7 +12,7 @@ flowchart LR
   bridge[Bridge daemon]
   session[BridgeSession]
   lane[Lane 调度]
-  runtime[Codex / Claude Runtime]
+  runtime[Codex / Claude / Kimi Runtime]
   jsonl[本地 JSONL]
   mirror[Mirror 同步]
   card[IM 文本 / 卡片]
@@ -44,12 +44,16 @@ flowchart LR
 | Bridge host | 维护 daemon 生命周期，并把通道、命令、turn、mirror、权限和健康检查装配在一起。 |
 | BridgeSession | 表达“当前聊天对应哪条本地工作会话”，承载 runtime 身份、工作目录和会话级设置。 |
 | Lane 调度 | 表达“这条消息要和谁互相等待”，决定控制命令、长任务、普通命令和 prompt 的并发关系。 |
-| Runtime provider | 屏蔽 Codex SDK、Codex pty、Codex tmux、Claude tmux、Claude pty、Claude SDK 的底层差异。 |
+| Runtime provider | 屏蔽 Codex SDK、Codex pty、Codex tmux、Claude tmux、Claude pty、Claude SDK、Kimi tmux 的底层差异。 |
 | Mirror 与 Stream UI | 把本地 JSONL 变化聚合为 turn progress，并用卡片 diff 推送到 IM。 |
 
 ## 消息投递到后端
 
 普通 IM 文本进入后端前，先被归一成平台无关的内部消息。后端接着要解决的核心问题不是“调用哪个函数”，而是“这条消息要不要等别人”。有些消息必须保持顺序，比如同一个工作会话里的两个 prompt；有些消息应该马上处理，比如 `/stop`；有些消息可以和 prompt 同时跑，比如看状态、看 screen、跑 shell。lane 就是 CodeLark 用来表达这组等待关系的名字。
+
+每日版本检查也不进入这些 lane。Bridge 成功启动 adapter、但尚未开启入站消费循环时，先把 `~/.codelark/version-check.json` 读入进程缓存。当天第一条非 callback 消息只 fire-and-forget 发起 npm 查询；host manager 不等待查询或提示卡投递。进程会在请求 registry 前 claim 本地日期，查询失败也会持久化当天日期，避免并发首条消息或后续消息形成检查风暴。
+
+版本提示与更新执行保持分层：host manager 只分流普通消息和 `clk-version-update:*` callback；update runtime 负责状态验证、卡片与按钮生命周期；独立 Node worker 负责 `npm install -g --yes` 和 stop/start。按钮回调先立即 ACK 并替换卡片，再派发 detached worker；worker 不执行 repo hot update 的 pull/build/test。
 
 ```mermaid
 flowchart TD
@@ -62,7 +66,7 @@ flowchart TD
   barrier[conversation barrier<br/>先改配置，再处理后续消息]
   lock[SessionExecutor<br/>同一 session 一次只跑一个 turn]
   turn[Interactive turn]
-  provider[Codex / Claude provider]
+  provider[Codex / Claude / Kimi provider]
   delivery[Delivery pipeline]
 
   inbound --> classify
@@ -82,7 +86,7 @@ flowchart TD
 
 ### 先区分三个问题
 
-`BridgeSession` 回答“这条聊天现在连着哪条工作会话”。它保存底层 Codex thread、Claude session、tmux provider 会话名、运行健康和消息生命周期等身份/状态；当前工作目录、模型、provider、sandbox、reasoning 等用户配置覆盖已经迁到 Session TOML。一个 IM 群聊、Web 工作台入口或本地接管动作，最后都要落到某个 `BridgeSession`，再按 scoped TOML 解析 effective runtime 配置。
+`BridgeSession` 回答“这条聊天现在连着哪条工作会话”。它保存底层 Codex thread、Claude session、Kimi session、tmux provider 会话名、运行健康和消息生命周期等身份/状态；当前工作目录、模型、provider、sandbox、reasoning 等用户配置覆盖已经迁到 Session TOML。一个 IM 群聊、Web 工作台入口或本地接管动作，最后都要落到某个 `BridgeSession`，再按 scoped TOML 解析 effective runtime 配置。
 
 Lane 回答“这条消息要和谁互相等待”。同一条 lane 里的消息按顺序执行；不同 lane 里的消息，默认认为互不影响，可以同时执行。它解决的是并发边界：哪些事情必须排队，哪些事情不应该互相拖慢。
 
@@ -96,7 +100,7 @@ Lane 可以理解成“等待关系的名字”。调度层会给每条消息一
 
 当前主要有四类 lane：
 
-- `control:*`：控制通道。`/stop`、权限快捷回复、screen stop callback 走这里。它们的价值是“马上生效”，所以不等普通对话和长任务。
+- `control:*`：控制通道。`/stop`、结构化权限 callback、screen stop callback 走这里。它们的价值是“马上生效”，所以不等普通对话和长任务。
 - `job:*`：长 I/O 通道。`/shell`、`/tmux-screen`、`/pty-screen` 走这里。它们可能跑很久，所以不占住同一 session 的 prompt 队伍；其中 `/tmux-screen`、`/pty-screen` 是监控命令，不等待普通 conversation barrier，避免排在卡住的普通对话后面；`/shell` 等普通 job 仍会先等同一聊天前面的会话配置变更或普通 prompt barrier 完成。
 - `chat:<channel>:<chat>`：聊天通道。只读命令、普通 callback、状态查询这类不改 session 状态的交互走这里。`channel` 和 `chat` 的作用是把不同平台、不同群聊或私聊隔开：A 群的状态查询不会挡住 B 群，飞书群聊也不会和别的通道混在一起。
 - `session:<session_id>`：工作会话通道。普通 prompt、会话配置变更、会切换绑定的 callback 走这里。它按 `BridgeSession.id` 区分，而不是按群聊区分，因为多个入口可能绑定同一条本地工作会话；只要它们操作的是同一个 session，就必须保持同一份上下文和配置的顺序。
@@ -121,14 +125,16 @@ conversation barrier 是 lane 之上的保护规则，用来处理“这条命�
 普通 IM 文本消息进入当前 runtime 的主路径：
 
 1. 平台 adapter 接收飞书事件，转换成内部消息。
-2. adapter loop 从队列取消息，先识别它是平台事件、callback、命令、权限快捷回复、控制输入，还是普通 prompt。
+2. adapter loop 从队列取消息，先识别它是平台事件、callback、命令、控制输入，还是普通 prompt。
 3. 调度层为消息选择 lane。控制消息直接走 control lane；长 I/O 走 job lane；只读命令走 chat lane；prompt 和会话变更进入 session lane。
 4. 如果消息会改变会话配置或绑定，它会声明 conversation barrier，阻止同一聊天后续非 control 消息抢跑。
 5. session lane 进入同一 session 的串行队伍，更新 queued/running/idle 状态，并在相邻 turn 之间保留短 cooldown。
 6. 普通 prompt 解析当前聊天绑定的 `BridgeSession`，建立本次 turn 的任务状态、abort controller、stream UI 和最终 delivery。
-7. provider 路由根据 session 上的 runtime/provider 设置选择 Codex 或 Claude 的具体执行方式。
+7. provider 路由根据 session 上的 runtime/provider 设置选择 Codex、Claude 或 Kimi 的具体执行方式。
 8. provider 创建或继续底层 runtime 会话，并把必要身份写回 session。
-9. delivery pipeline 把最终文本、卡片、附件等发回对应 IM channel。
+9. 主路径把最终文本、卡片、附件等转换为 delivery intent，按 adapter + chat 入有序队列后立即释放 lane；远端 IM ACK、重试和 message id 回填在队列 worker 中完成。
+
+这里的“有序”只约束同一 adapter/chat 的同类队列。普通回复与交互卡片使用独立 queue class，确认卡、按钮和 stream finalize 不会被前面的慢普通消息挡住；各自内部仍保序。CardKit create → send、stream finalize → fallback 回复、附件 caption → 附件等存在数据依赖的动作留在同一个 worker job 内串行；不同聊天互不等待。session/chat 主 lane 禁止等待普通 reply、权限/选择卡、reaction、callback answer、CardKit create/update/finalize、群名同步或全局 mirror reconcile 的远端回执。adapter 入站阶段也遵循同一边界：正文、引用和附件等构造内部消息必需的数据可以等待，兼容提示和云文档群转发 notice 必须后台启动或入 delivery 队列后先放行内部消息；slash/控制命令在进入命令处理时添加的 Get，以及 tmux prompt 提交成功后添加的 Get，都只做异步确认。权限卡的 `message_id` 与 permission link 在 delivery receipt continuation 中回填；callback 先到时由 pending-callback 状态在 link 建立后对账，投递最终失败则 fail-closed 结束 pending permission 和 selection waiter。`/new` 必须等待建群结果才能取得 chat id，但文本命令和卡片 command callback 都被隔离到不阻塞 conversation 的 long-I/O job lane；远端完成后才提交新群 binding，不能把这段等待放回当前聊天的 session/chat 主 lane。
 
 ### 模块入口
 
@@ -138,30 +144,30 @@ conversation barrier 是 lane 之上的保护规则，用来处理“这条命�
 - 普通 prompt turn：`src/bridge/turn/interactive/runner.ts`
 - provider 路由：`src/runtime/codex/routing-provider.ts`
 
-## `/t` 接管本地 Codex 线程
+## `/t` 接管本地 runtime 会话
 
-`/t` 命令用于把本机可发现的 Codex thread 接入 IM。
+`/t` 命令用于把本机可发现的 Codex thread、Claude Code session 或 Kimi Code session 接入 IM。它展示的是本地 runtime 历史和当前聊天绑定关系，而不是单一 provider 的内部列表。
 
 典型过程：
 
 1. 用户发送 `/t`。
-2. local Codex session index 扫描 `~/.codex/sessions/**/*.jsonl`。
-3. bridge 返回最近的本地 Codex 线程列表。
+2. local session index 按 runtime 扫描本地历史：Codex 读 `~/.codex/sessions/**/*.jsonl`，Claude Code 读项目目录下的 Claude JSONL，Kimi Code 读 `~/.kimi-code/sessions/wd_*/session_*/agents/main/wire.jsonl`。
+3. bridge 返回最近的本地 runtime 会话列表，并标出 runtime、底层 id、cwd 和当前绑定状态。
 4. 用户发送 `/t 1`。
-5. 被选中的 Codex thread 会被 materialize 成一个 `BridgeSession`，或复用已有同 thread 的 `BridgeSession`。
+5. 被选中的本地 runtime 会话会被 materialized 成一个 `BridgeSession`，或复用已有同底层身份的 `BridgeSession`。
 6. 当前 IM chat 创建或更新 `ChannelChat`，让它指向这个 `BridgeSession.id`。
-7. 后续普通消息通过 ChannelChat 找到 session，再通过 `BridgeSession.codex_thread_id` 继续同一条 Codex thread。
+7. 后续普通消息通过 ChannelChat 找到 session，再根据 `runtime.codex.threadId`、`runtime.claude.sessionId + cwd` 或 `runtime.kimi.sessionId + cwd` 继续同一条底层 runtime 会话。
 
-因此 `/t` 不是“把 thread id 写到聊天上”，而是“把 Codex thread 纳入 BridgeSession，再让聊天绑定这个 BridgeSession”。
+因此 `/t` 不是“把某个 thread id 写到聊天上”，而是“把底层 runtime 会话纳入 BridgeSession，再让聊天绑定这个 BridgeSession”。新增 agent 时必须同时定义它的本地 session index、materialize 身份、archive 语义和 mirror source；只新增 provider stream 不足以让 `/t` 可恢复、可切换、可观察。
 
 ## Mirror 运行时
 
-Mirror 是对本地 runtime JSONL 文件的持续观察。它让 IM 能看到本地 Codex TUI、Codex Native 或 Claude Code 在同一条会话里继续产生的输出。
+Mirror 是对本地 runtime 输出文件的持续观察。它让 IM 能看到本地 Codex TUI、Codex Native、Claude Code 或 Kimi Code 在同一条会话里继续产生的输出；Kimi 的底层文件名是 `wire.jsonl`，但进入 CodeLark 后仍转换成统一 `BridgeMirrorRecord`。
 
 ```mermaid
 flowchart TD
   registry[订阅规划<br/>BridgeSession + ChannelChat]
-  source[定位 JSONL source<br/>Codex thread / Claude session + cwd]
+  source[定位 mirror source<br/>Codex thread / Claude/Kimi session + cwd]
   wake[文件 watch / poll timer]
   batch[reconcile 批次<br/>订阅间有界并发]
   cursor[单订阅 cursor 顺序读取]
@@ -182,7 +188,9 @@ flowchart TD
 
 ### 设计理念
 
-Mirror 不是子线程，也不是独立 worker。它运行在 bridge daemon 内：`fs.watch` 只负责标记 dirty 和唤醒 debounce；poll timer 负责兜底；真正处理发生在 reconcile 批次里。批次对不同 subscription 使用有界并发，同一个 subscription 内部按 JSONL cursor 顺序读取、过滤、reduce、触发 hook，避免一张 mirror 卡片的局部更新乱序。
+Mirror 不是子线程，也不是独立 worker。它运行在 bridge daemon 内：`fs.watch` 只负责标记 dirty 和唤醒 debounce；poll timer 负责兜底；真正处理发生在 reconcile 批次里。批次对不同 subscription 使用有界并发，同一个 subscription 内部按 JSONL cursor 顺序读取、过滤、reduce、触发 hook，避免一张 mirror 卡片的局部更新乱序。已经绑定的 subscription 必须先对已知 `filePath` 做 stat，并用 inode/size/mtime 判断无变化或只读新增区间；不能在 stat 之前重新 list 全部 runtime sessions。只有文件路径缺失、失效或 runtime identity 改变时，才允许重新调用 runtime-specific source discovery。
+
+tmux pane 抓屏也必须由活动状态驱动，不能随 mirror poll 永久扫描所有历史 subscription。通用 selection/reconnect probe 只覆盖当前 hot chat、有 pending turn，或刚向 tmux 注入消息后的短 follow-up window；turn completed 后的异常方块由 finalized-status 路径单独抓屏，idle baseline 只在需要建立基线时抓一次。这样既保留当前聊天的 selection、reconnecting 和异常终态检测，也避免每 5 秒为每个 cold 历史 pane 启动 `display-message` / `capture-pane` 子进程。
 
 Mirror 的身份分两层，不应混用。第一层是“哪个本地会话文件”，由 `BridgeSession`、runtime identity 和 cwd 决定；第二层是“文件内哪一轮 turn”，由 runtime-specific parser 从 JSONL 记录关系里推断。文件名只回答“观察哪个会话”，不能回答“这是第几轮输出”。
 
@@ -194,8 +202,8 @@ Mirror 主路径：
 
 1. 订阅规划找到有本地 runtime 身份的 `BridgeSession`，再找到绑定这些 session 的 `ChannelChat`。
 2. 订阅 runtime 根据绑定关系建立或更新 subscription。
-3. 每个 subscription 通过当前 runtime source 定位对应 JSONL 文件。
-4. 文件监听和定时 reconcile 读取新增记录；订阅间有界并发，单订阅内部按 cursor 顺序处理。
+3. 新 subscription 通过当前 runtime source 定位对应 JSONL 文件；稳定 subscription 复用已验证路径。
+4. 文件监听和定时 reconcile 先 stat 已知文件，无变化即结束，增长时只读取新增记录；路径失效才重新 discover。订阅间有界并发，单订阅内部按 cursor 顺序处理。
 5. suppression 去掉当前 IM 发起 turn 造成的重复回显。
 6. turn reducer 把 JSONL 事件合并成可展示 turn。
 7. feedback controller 更新流式卡片或发送最终 fallback 消息。
@@ -203,7 +211,7 @@ Mirror 主路径：
 Codex mirror 的身份链路是：
 
 ```text
-codex_thread_id -> BridgeSession -> ChannelChat -> channel/chat
+runtime.codex.threadId -> BridgeSession -> ChannelChat -> channel/chat
 ```
 
 Claude Code mirror 的身份链路是：
@@ -212,10 +220,17 @@ Claude Code mirror 的身份链路是：
 runtime.claude.sessionId + runtime.claude.cwd -> BridgeSession -> ChannelChat -> channel/chat
 ```
 
-如果 JSONL source 连续多次无法定位，mirror 订阅层会通过 runtime-neutral
+Kimi Code mirror 的身份链路是：
+
+```text
+runtime.kimi.sessionId + runtime.kimi.cwd -> BridgeSession -> ChannelChat -> channel/chat
+```
+
+如果 mirror source 连续多次无法定位，mirror 订阅层会通过 runtime-neutral
 identity cleanup hook 清理当前 runtime 身份：Codex 清理
 `runtime.codex.threadId`，Claude Code 清理 `runtime.claude.sessionId` /
-`runtime.claude.cwd`。这样 dangling 本地线程不会在 subscription registry
+`runtime.claude.cwd`，Kimi Code 清理 `runtime.kimi.sessionId` /
+`runtime.kimi.cwd`。这样 dangling 本地会话不会在 subscription registry
 里反复重建。
 
 Mirror subscription registry 采用兴趣驱动分层策略。bridge 会为最近触达的
@@ -240,7 +255,7 @@ Mirror subscription registry 采用兴趣驱动分层策略。bridge 会为最�
 
 ```mermaid
 flowchart TD
-  rows[runtime JSONL rows]
+  rows[runtime output rows]
   parser[runtime-specific parser]
   records[BridgeMirrorRecord]
   turns[Turn 聚合层<br/>合成可展示状态]
@@ -268,7 +283,7 @@ flowchart TD
 
 #### 设计理念
 
-Mirror 渲染不把每条 record 直接投递到飞书。record 先被 reducer 合并为一轮可展示进展，再通过 hook 推给 stream UI，最后由 Feishu adapter 把“期望状态”和“已渲染状态”做 diff。这样可以把高频 JSONL 写入折叠成低频卡片更新，并且只更新发生变化的 element。
+Mirror 渲染不把每条 record 直接投递到飞书。record 先被 reducer 合并为一轮可展示进展，再通过 hook 推给 stream UI，最后由 Feishu adapter 把“期望状态”和“已渲染状态”做 diff。这样可以把高频 runtime 文件写入折叠成低频卡片更新，并且只更新发生变化的 element。
 
 `cardElement.content` 是固定正文、任务、状态区的正常快路径，不是唯一更新手段。工具和 history 结构变化需要 create/patch；多条结构更新可合并为 `card.batchUpdate`；metadata、actions、layout signature、shadow trust 或失败恢复不安全时走 full refresh。
 
@@ -284,7 +299,9 @@ Turn reducer 会按 record 类型更新同一个 `BridgeMirrorTurnState`：
 - `tool_started` / `tool_finished`：转换成 Codex turn event 后写入 `toolCalls`。
 - `context_usage`：写入 `contextUsage`。
 - `goal_status`：写入 `goalStatus`；如果当前 turn 已经有正文、用户文本、工具或任务进展，才触发正文区域刷新。只有 active goal 状态、没有可见进展的空 turn 不会启动 mirror stream。
-- `task_complete` / `task_aborted`：结束当前 pending turn，形成 `FinalizedBridgeMirrorTurn`；如果 active turn 能 claim 这个终态，则交给 active IM turn，否则作为 mirror final delivery。连续 3 个只有 active goal 状态、没有可见进展的空 turn 会产生一次 goal loop warning，避免无限重启时刷出空镜像卡片。
+- `task_complete` / `task_aborted`：结束当前 pending turn，形成 `FinalizedBridgeMirrorTurn`；当 Codex 版本在 `task_complete.error` 中提供结构化错误时，必须保留为 runtime-neutral `errorText` 并把终态设为 `error`，不能因为事件名仍叫 complete 就画成成功。Codex CLI 0.144.3 的不可重试 HTTP 错误不会把原因写入 rollout，此时由 tmux TUI 的本回合新增 `■` 行补齐同一字段。如果 active turn 能 claim 这个终态，则交给 active IM turn，否则作为 mirror final delivery。连续 3 个只有 active goal 状态、没有可见进展的空 turn 会产生一次 goal loop warning，避免无限重启时刷出空镜像卡片。
+
+Runtime source adapter 必须先把底层事件规范化，再交给上述 reducer。Kimi Code 会按 `step.end → usage.record` 写入终态统计；adapter 必须把这条 usage 归回刚结束的同一 turn（同一增量内排到 terminal 前，跨增量且 terminal 已消费时丢弃孤立 usage），不能让它创建一张没有后续 terminal 的 `Thinking...` 卡。Kimi `context.append_message` 中 `origin.kind=injection` 的内部 reminder 也必须在 source adapter 过滤，不能进入通用 history 或飞书卡片。这个约束属于 provider 解析层；统一 turn reducer 和 Feishu renderer 不应增加 Kimi 特判。
 
 Feedback controller 把 reducer hook 映射到 stream UI：
 
@@ -303,6 +320,8 @@ Feedback controller 把 reducer hook 映射到 stream UI：
 - `onStreamMetadata` -> `metadata`
 - `onStreamActions` -> `actionRows`
 
+状态栏和 CardKit 更新也遵循公共渲染契约：从 turn 开始按 5 秒心跳刷新，所有可见事件都更新活动时间，系统时区只在进程启动时解析一次；新增工具与 `streaming_status` 分成两个 CardKit 动作。字段顺序、紧凑时长格式、续接/异常前缀和具体投递边界统一记录在[流式卡片的“状态栏与活动时间”](streaming-card.md#状态栏与活动时间)，这里不再维护第二份细则。
+
 每次 desired state 变化都会标记 `desiredRevision` 并调用 `scheduleCardFlush()`。`flushCardUpdate()` 只在 flush tick 读取一份 desired snapshot，构造 desired render，再和本地 remote shadow 比较：
 
 - 正文、任务、状态内容变化且布局没变时，生成 `content` 更新，通常只对 `streaming_content`、`streaming_tasks`、`streaming_status` 调 `cardElement.content`。
@@ -310,6 +329,9 @@ Feedback controller 把 reducer hook 映射到 stream UI：
 - 为降低 CardKit `batchUpdate` 被服务端接受但客户端不重绘的风险，planner 会把两类增量直接改判为 full refresh：history 中出现用户文本更新；desired card 组件数不超过 20 且本轮 create/patch 原本会形成实际 `card.batchUpdate`。
 - metadata、actions、layout signature、shadow trust 或 history/tool 结构不再可证明安全时，走 full refresh，即 `card.update:streaming_refresh`。
 - 组件数接近上限时，先 rollover 到 continuation card，失败后再 full refresh。
+- 连续工具在公共 history 中始终保留为一个 runtime-neutral `tool_panel`；Feishu continuation cursor 同时记录 history item index 和 panel 内 tool index，因此分页原子是单个工具调用，外层“工具调用 · N”只是每张卡对当前可见工具的重新分组。不能预先把公共 panel 改写成若干大块，也不能为了让整组塞进一张卡而降低 apply_patch 的 8,000 字符/160 行详情上限。
+- 用户输入由同一个 runtime-neutral history item 渲染：不超过 800 个 Unicode 字符时保持普通 markdown；超过后使用无边框、默认收起的 panel，标题展示规范化后的前 240 字符，展开内容保留完整原文。该规则属于 Feishu 展示层，不改写 Codex、Claude 或 Kimi 的 history 数据。
+- final renderer 判断正文是否存在时必须同时考虑 `text`、legacy `tools` 和 runtime-neutral `historyItems`。已有 stream message 的 mirror finalize 会故意传空 text 以避免重复；若漏掉 history，工具-only / history-only 卡会在终态 full update 时被错误替换成只有 footer 的空卡。
 
 因此“只对变化 element 调 `cardElement.content`”是正文、任务、状态这类固定元素的正常快路径；当前实现还保留 create/patch、batchUpdate、direct full refresh 和 rollover 作为工具/history/结构变化与失败恢复路径。sync plan 日志会记录 desired component count、direct refresh 阈值、增量 action 类型/element IDs、是否命中用户文本更新和 direct refresh rule，便于核对 planner 分流。
 
@@ -327,18 +349,23 @@ Feedback controller 把 reducer hook 映射到 stream UI：
 
 ```text
 BridgeSession + runtime identity + cwd
-  -> runtime JSONL file
+  -> runtime output file
 ```
 
-Codex 主要使用 `codex_thread_id` 定位 Codex JSONL。Claude Code 使用
-`runtime.claude.sessionId + cwd` 定位：
+Codex 主要使用 `runtime.codex.threadId` 定位 Codex JSONL。Claude Code 使用
+`runtime.claude.sessionId + cwd` 定位 Claude JSONL：
 
 ```text
 ~/.claude/projects/<encoded-cwd>/<claude-session-id>.jsonl
 ```
 
-这一层不使用 `uuid` 或 `parentUuid`。文件名和 cwd 只回答“这个
-BridgeSession 应该观察哪个 Claude 会话文件”。
+Kimi Code 使用 `runtime.kimi.sessionId + cwd` 定位 Kimi `wire.jsonl`：
+
+```text
+~/.kimi-code/sessions/wd_<encoded-cwd>/session_<kimi-session-id>/agents/main/wire.jsonl
+```
+
+这一层不使用 Claude 的 `uuid` / `parentUuid`，也不使用 Kimi `wire.jsonl` 内部记录顺序来猜文件归属。文件名、runtime identity 和 cwd 只回答“这个 BridgeSession 应该观察哪个本地会话文件”。
 
 第二层是文件内 turn 索引，用来判断同一个 JSONL 文件里哪些行属于同一次用户请求。
 一个 Claude Code prompt 通常不是单行，而是一条链：
@@ -432,7 +459,9 @@ flowchart TD
 
 命令层的边界是“解释用户意图和组织展示”，不是“承载所有业务状态”。会话、绑定、线程接管、归档和工作目录等规则归会话模块负责；命令层只做 slash 解析、参数校验、调用 use-case 和生成用户可读结果。
 
-命令也要服从 lane。只读状态查询可以走 chat lane；会改变会话绑定或运行配置的命令必须进入 session lane 并声明 barrier；停止和权限快捷回复这类控制动作走 control lane。
+命令也要服从 lane。只读状态查询可以走 chat lane；会改变会话绑定或运行配置的命令必须进入 session lane 并声明 barrier；停止和结构化权限 callback 这类控制动作走 control lane。
+
+命令生成展示结果后只负责 enqueue，不等待平台回复 ACK。需要 `message_id` 的置顶、记录和 post-delivery 动作挂在 delivery receipt continuation 上，不能为了回填 id 继续占用 session lane。群名同步、callback answer 和 mirror reconcile 也属于后台副作用；失败必须独立记录或提示，不能把远端状态塞回同步命令返回值。只有必须先取得远端主键才能落本地状态的事务可以在专用 job lane 内等待，例如 `/new` 建群取得 chat id；该 job 不得阻塞当前聊天继续处理普通消息。
 
 ### 命令类型
 
@@ -468,12 +497,12 @@ flowchart TD
 
 ### 设计理念
 
-工作台里的可变操作仍然围绕 `BridgeSession.id`。本机 Codex thread 在未接管前只是只读候选项；一旦用户要重命名、绑定、配置、删除或设置默认目标，就先 materialize 成 `BridgeSession`，再进入同一套会话生命周期。
+工作台里的可变操作仍然围绕 `BridgeSession.id`。本机 Codex thread、Claude session 和 Kimi session 在未接管前只是只读候选项；一旦用户要重命名、绑定、配置、删除或设置默认目标，就先 materialize 成 `BridgeSession`，再进入同一套会话生命周期。
 
 ### 主要页面
 
 - 概览：显示 UI、bridge、通道数量和进程状态。
-- Sessions：列出 Bridge 会话和本机可发现的 Codex 线程。
+- Sessions：列出 Bridge 会话和本机可发现的 Codex、Claude、Kimi 本地会话。
 - Session History：查看某个 session 的历史。
 - Channels：管理飞书通道实例、ChannelChat、默认目标和测试。
 - Config：编辑全局默认设置。
@@ -505,7 +534,7 @@ CodeLark 自有数据位于 `~/.codelark`：
 - `thread-table-messages.json`：线程卡片消息记录。
 - bridge 和 UI 的 runtime 状态文件。
 
-Codex 自有数据仍位于 `~/.codex`。CodeLark 只读使用它们。
+Codex 自有数据仍位于 `~/.codex`，Claude Code 自有 JSONL 由 Claude Code 生成，Kimi Code 自有 `wire.jsonl` 位于 `~/.kimi-code`。CodeLark 只读使用这些本地 runtime 文件。
 
 ## 迁移边界
 

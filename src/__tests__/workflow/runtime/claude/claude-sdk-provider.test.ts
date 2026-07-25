@@ -6,6 +6,10 @@ import os from 'node:os';
 import path from 'node:path';
 
 import { _testOnlyClaudeSdk } from '../../../../runtime/claude/sdk-provider.js';
+import {
+  buildClaudeCodeRouterInvocation,
+  buildClaudeCodeRouterStartInvocation,
+} from '../../../../runtime/claude/code-router.js';
 
 async function withEnvOverride<T>(
   overrides: Record<string, string | undefined>,
@@ -29,6 +33,29 @@ async function withEnvOverride<T>(
 }
 
 describe('ClaudeSdkProvider helpers', () => {
+  it('runs every Windows batch action through cmd from the shim directory', () => {
+    assert.deepEqual(
+      buildClaudeCodeRouterStartInvocation('C:\\Program Files\\ccr.cmd', 'win32', 'C:\\Windows\\cmd.exe'),
+      {
+        command: 'C:\\Windows\\cmd.exe',
+        args: ['/d', '/s', '/c', 'ccr.cmd', 'start'],
+        cwd: 'C:\\Program Files',
+      },
+    );
+    assert.deepEqual(
+      buildClaudeCodeRouterInvocation('C:\\Program Files\\ccr.cmd', ['status'], 'win32', 'cmd.exe'),
+      {
+        command: 'cmd.exe',
+        args: ['/d', '/s', '/c', 'ccr.cmd', 'status'],
+        cwd: 'C:\\Program Files',
+      },
+    );
+    assert.deepEqual(
+      buildClaudeCodeRouterStartInvocation('/usr/local/bin/ccr', 'linux'),
+      { command: '/usr/local/bin/ccr', args: ['start'] },
+    );
+  });
+
   beforeEach(() => {
     delete process.env.CODELARK_CLAUDE_EXECUTABLE;
     delete process.env.CODELARK_CLAUDE_CCR_START_TIMEOUT_MS;
@@ -96,6 +123,7 @@ const fs = require('node:fs');
 const command = process.argv[2] || '';
 const callsPath = process.env.CODELARK_FAKE_CCR_CALLS_PATH;
 const runningPath = process.env.CODELARK_FAKE_CCR_RUNNING_PATH;
+const running = runningPath ? fs.existsSync(runningPath) : false;
 if (callsPath) {
   fs.appendFileSync(callsPath, JSON.stringify({
     command,
@@ -104,7 +132,7 @@ if (callsPath) {
       ANTHROPIC_AUTH_TOKEN: process.env.ANTHROPIC_AUTH_TOKEN,
       CODELARK_FAKE_CCR_BRIDGE_ENV: process.env.CODELARK_FAKE_CCR_BRIDGE_ENV,
     },
-    running: runningPath ? fs.existsSync(runningPath) : false,
+    running,
   }) + '\n');
 }
 if (command === 'activate') {
@@ -113,7 +141,7 @@ if (command === 'activate') {
   process.exit(0);
 }
 if (command === 'status') {
-  if (runningPath && fs.existsSync(runningPath)) {
+  if (running) {
     process.stdout.write('Status: Running\n');
     process.exit(0);
   }

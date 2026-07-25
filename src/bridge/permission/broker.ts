@@ -9,9 +9,9 @@
  * 4. When a callback arrives, resolves the permission via the gateway
  */
 
-import type { ChannelAddress, OutboundMessage, OutboundRichCard, PermissionLinkRecord, SendResult } from '../../domain/index.js';
+import type { ChannelAddress, OutboundMessage, OutboundRichCard, PermissionLinkRecord } from '../../domain/index.js';
 import type { BaseChannelAdapter } from '../../channels/contracts.js';
-import { deliver } from '../../channels/delivery/deliver.js';
+import { deliver, enqueueDelivery } from '../../channels/delivery/deliver.js';
 import { getBridgeContext } from '../host/context.js';
 
 function escapeHtml(text: string): string {
@@ -378,6 +378,28 @@ function resolveCodexSelectionWaiter(permissionRequestId: string, choice: CodexS
   return true;
 }
 
+function cancelCodexSelectionWaiters(permissionRequestId: string): void {
+  const primary = codexSelectionPrimaryByAlias.get(permissionRequestId) || permissionRequestId;
+  const aliases = [...(codexSelectionAliasesByPrimary.get(primary) || [])];
+  const waiter = codexSelectionWaiters.get(primary);
+  if (waiter) {
+    clearTimeout(waiter.timer);
+    codexSelectionWaiters.delete(primary);
+    waiter.resolve(null);
+  }
+  codexSelectionPendingCallbacks.delete(primary);
+  for (const alias of aliases) {
+    const aliasWaiter = codexSelectionWaiters.get(alias);
+    if (aliasWaiter) {
+      clearTimeout(aliasWaiter.timer);
+      codexSelectionWaiters.delete(alias);
+      aliasWaiter.resolve(null);
+    }
+    codexSelectionPendingCallbacks.delete(alias);
+  }
+  releaseCodexSelectionActive(primary);
+}
+
 function resolveCodexSelectionChoice(permissionRequestId: string, choice: CodexSelectionChoice): boolean {
   const waiterResolved = resolveCodexSelectionWaiter(permissionRequestId, choice);
   const aliases = codexSelectionAliasesByPrimary.get(permissionRequestId);
@@ -479,7 +501,7 @@ export function claimCodexSelectionCallback(
 /**
  * Forward a permission request to an IM channel as an interactive message.
  */
-export async function forwardPermissionRequest(
+export function forwardPermissionRequest(
   adapter: BaseChannelAdapter,
   address: ChannelAddress,
   permissionRequestId: string,
@@ -488,8 +510,8 @@ export async function forwardPermissionRequest(
   sessionId?: string,
   suggestions?: unknown[],
   replyToMessageId?: string,
-): Promise<void> {
-  const { store } = getBridgeContext();
+): void {
+  const { store, permissions } = getBridgeContext();
 
   // Dedup: prevent duplicate forwarding of the same permission request
   const now = Date.now();
@@ -532,10 +554,10 @@ export async function forwardPermissionRequest(
     ? inputStr.slice(0, 300) + '...'
     : inputStr;
 
-  let result: SendResult;
+  let message: OutboundMessage;
 
   if (isUpdatePrompt || isSelectionPrompt) {
-    const message: OutboundMessage = {
+    message = {
       address,
       text: [
         `<b>Codex TUI Selection</b>`,
@@ -553,7 +575,6 @@ export async function forwardPermissionRequest(
       ),
       replyToMessageId,
     };
-    result = await deliver(adapter, message, { sessionId });
   } else {
     const text = isTrustPrompt
     ? [
@@ -572,7 +593,7 @@ export async function forwardPermissionRequest(
       `Choose an action:`,
     ].join('\n');
 
-    const message: OutboundMessage = {
+    message = {
       address,
       text,
       parseMode: 'HTML',
@@ -593,34 +614,53 @@ export async function forwardPermissionRequest(
       replyToMessageId,
     };
 
-    result = await deliver(adapter, message, { sessionId });
   }
 
-  // Record the link so we can match callback queries back to this permission
-  if (result.ok && result.messageId) {
-    try {
-      store.insertPermissionLink({
-        permissionRequestId,
-        channelType: adapter.channelType,
-        chatId: address.chatId,
-        messageId: result.messageId,
-        sessionId,
-        toolName,
-        suggestions: suggestions ? JSON.stringify(suggestions) : '',
+  const delivery = enqueueDelivery(
+    adapter,
+    address,
+    () => deliver(adapter, message, { sessionId }),
+    { queueClass: 'interactive' },
+  );
+  void delivery.completion.then((result) => {
+    // Record the link after the platform returns the message id. Callback-first
+    // races are reconciled through codexSelectionPendingCallbacks below.
+    if (result.ok && result.messageId) {
+      try {
+        store.insertPermissionLink({
+          permissionRequestId,
+          channelType: adapter.channelType,
+          chatId: address.chatId,
+          messageId: result.messageId,
+          sessionId,
+          toolName,
+          suggestions: suggestions ? JSON.stringify(suggestions) : '',
+        });
+        const pending = codexSelectionPendingCallbacks.get(permissionRequestId);
+        if (
+          pending
+          && pending.chatId === address.chatId
+          && (!pending.callbackMessageId || pending.callbackMessageId === result.messageId)
+        ) {
+          store.markPermissionLinkResolved(permissionRequestId);
+          codexSelectionPendingCallbacks.delete(permissionRequestId);
+        }
+      } catch { /* best effort */ }
+    } else {
+      permissions.resolvePendingPermission(permissionRequestId, {
+        behavior: 'deny',
+        message: result.error || 'Permission prompt delivery failed.',
       });
-      const pending = codexSelectionPendingCallbacks.get(permissionRequestId);
-      if (
-        pending
-        && pending.chatId === address.chatId
-        && (!pending.callbackMessageId || pending.callbackMessageId === result.messageId)
-      ) {
-        store.markPermissionLinkResolved(permissionRequestId);
-        codexSelectionPendingCallbacks.delete(permissionRequestId);
-      }
-    } catch { /* best effort */ }
-  } else if (isSelectionPrompt) {
-    releaseCodexSelectionActive(permissionRequestId);
-  }
+      if (isSelectionPrompt) cancelCodexSelectionWaiters(permissionRequestId);
+    }
+  }).catch((error) => {
+    console.warn('[permission-broker] Permission delivery continuation failed:', error);
+    permissions.resolvePendingPermission(permissionRequestId, {
+      behavior: 'deny',
+      message: error instanceof Error ? error.message : String(error),
+    });
+    if (isSelectionPrompt) cancelCodexSelectionWaiters(permissionRequestId);
+  });
 }
 
 /**

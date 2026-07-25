@@ -5,13 +5,16 @@ import { CODELARK_HOME } from '../../configuration/paths.js';
 import type { AuditLogInput } from '../../domain/audit.js';
 import type { ChannelChat } from '../../domain/channel.js';
 import type { BridgeMessage } from '../../domain/message.js';
-import type { BridgeSession } from '../../domain/session.js';
+import type { BridgeSession, RuntimeAgent } from '../../domain/session.js';
 import { getClaudeSessionJsonlById } from '../../runtime/claude/session-jsonl.js';
+import { findKimiSessionFileById, readKimiSessionMessagesByFilePath } from '../../runtime/kimi/session-index.js';
 import {
   getSessionActiveRuntime,
   getSessionClaudeCwd,
   getSessionClaudeSessionId,
   getSessionCodexThreadId,
+  getSessionKimiCwd,
+  getSessionKimiSessionId,
   getSessionWorkingDirectory,
 } from '../../domain/session-runtime.js';
 
@@ -23,6 +26,7 @@ interface StoredAuditLogEntry extends AuditLogInput {
 export interface RealE2eDumpInput {
   codelarkHome?: string;
   claudeHome?: string;
+  kimiHome?: string;
   channelType?: string;
   chatId?: string;
   bridgeSessionId?: string;
@@ -52,11 +56,69 @@ export interface RealE2eStreamCardCheckpoint {
   names?: string[];
   markdownTexts?: string[];
   markdownPreviews?: Array<{ elementId?: string; preview: string }>;
+  toolGroups?: Array<{
+    elementId: string;
+    title: string;
+    innerPanelCount: number;
+  }>;
+  toolPanels?: Array<{
+    elementId: string;
+    title: string;
+    detailChars: number;
+    detailLines: number;
+    nestedPanelCount: number;
+    fences: Array<{ language: string; chars: number; lines: number; closed: boolean }>;
+    forbiddenEnvelopeTexts: string[];
+  }>;
 }
 
 export interface BasicDialogueStreamCardCheckpointPhase {
   providerKey: string;
   marker: string;
+  requiredTexts?: string[];
+}
+
+export interface KimiThinkingStatusOnlyPhase {
+  providerKey: string;
+  marker: string;
+  thinkingText: string;
+}
+
+export interface ScriptedKimiLifecycleAndSteerAuditInput {
+  kimiHome: string;
+  sessionId: string;
+  cwd?: string;
+}
+
+export interface ScriptedKimiRuntimeSlotAuditInput {
+  report: Pick<RealE2eDumpReport, 'binding' | 'runtimeSlots'>;
+  sessionId: string;
+  cwd?: string;
+}
+
+export interface ScriptedKimiWireTranscriptAuditInput {
+  report: Pick<RealE2eDumpReport, 'binding' | 'runtimeSlots'>;
+  marker: string;
+  thinkingText: string;
+}
+
+export interface ScriptedKimiHistoryTranscriptAuditInput {
+  report: Pick<RealE2eDumpReport, 'binding' | 'runtimeSlots'>;
+  marker: string;
+  thinkingText: string;
+}
+
+export interface RealE2eRuntimeSlotReport {
+  runtime: RuntimeAgent;
+  bridgeSessionId: string;
+  session?: BridgeSession;
+  runtimeThreadId?: string;
+  workingDirectory?: string;
+  claudeSessionId?: string;
+  claudeJsonlPath?: string;
+  kimiSessionId?: string;
+  kimiCwd?: string;
+  kimiWireJsonlPath?: string;
 }
 
 export interface RealE2eDumpReport {
@@ -66,11 +128,14 @@ export interface RealE2eDumpReport {
   bridgeSessionId?: string;
   binding?: ChannelChat;
   session?: BridgeSession;
-  runtime?: 'codex' | 'claude';
+  runtimeSlots: RealE2eRuntimeSlotReport[];
+  runtime?: RuntimeAgent;
   runtimeThreadId?: string;
   workingDirectory?: string;
   claudeSessionId?: string;
   claudeJsonlPath?: string;
+  kimiSessionId?: string;
+  kimiWireJsonlPath?: string;
   messages: BridgeMessage[];
   audit: StoredAuditLogEntry[];
   streamKeys: string[];
@@ -110,6 +175,21 @@ function readJsonlFile<T>(filePath: string): T[] {
     }
   }
   return rows;
+}
+
+function withTemporaryEnv<T>(name: string, value: string | undefined, fn: () => T): T {
+  if (!value) return fn();
+  const previous = process.env[name];
+  process.env[name] = value;
+  try {
+    return fn();
+  } finally {
+    if (previous === undefined) {
+      delete process.env[name];
+    } else {
+      process.env[name] = previous;
+    }
+  }
 }
 
 function asRecord<T>(value: unknown): Record<string, T> {
@@ -209,9 +289,16 @@ function asStringArray(value: unknown): string[] | undefined {
 function extractStreamCardCheckpoints(text: string): RealE2eStreamCardCheckpoint[] {
   const checkpoints: RealE2eStreamCardCheckpoint[] = [];
   for (const line of text.split(/\r?\n/)) {
-    const index = line.indexOf(STREAM_CARD_CHECKPOINT_PREFIX);
+    let message = line;
+    try {
+      const structured = JSON.parse(line) as { msg?: unknown };
+      if (typeof structured.msg === 'string') message = structured.msg;
+    } catch {
+      // Plain bridge logs are supported alongside structured JSON logs.
+    }
+    const index = message.indexOf(STREAM_CARD_CHECKPOINT_PREFIX);
     if (index < 0) continue;
-    const jsonText = line.slice(index + STREAM_CARD_CHECKPOINT_PREFIX.length).trim();
+    const jsonText = message.slice(index + STREAM_CARD_CHECKPOINT_PREFIX.length).trim();
     try {
       const parsed = JSON.parse(jsonText) as Record<string, unknown>;
       if (typeof parsed.streamKey !== 'string' || typeof parsed.kind !== 'string') continue;
@@ -229,6 +316,12 @@ function extractStreamCardCheckpoints(text: string): RealE2eStreamCardCheckpoint
         ...(asStringArray(parsed.markdownTexts) ? { markdownTexts: asStringArray(parsed.markdownTexts) } : {}),
         ...(Array.isArray(parsed.markdownPreviews)
           ? { markdownPreviews: parsed.markdownPreviews as Array<{ elementId?: string; preview: string }> }
+          : {}),
+        ...(Array.isArray(parsed.toolGroups)
+          ? { toolGroups: parsed.toolGroups as RealE2eStreamCardCheckpoint['toolGroups'] }
+          : {}),
+        ...(Array.isArray(parsed.toolPanels)
+          ? { toolPanels: parsed.toolPanels as RealE2eStreamCardCheckpoint['toolPanels'] }
           : {}),
       });
     } catch {
@@ -279,6 +372,7 @@ export function basicDialogueStreamCardCheckpointIssues(
       `running representative tool: ${phase.providerKey}`,
       'Bash',
       'Context:',
+      ...(phase.requiredTexts || []),
     ];
     for (const text of requiredTexts) {
       if (!streamCardCheckpointIncludes(phaseCheckpoints, text)) {
@@ -292,6 +386,276 @@ export function basicDialogueStreamCardCheckpointIssues(
     ));
     if (!completed) {
       issues.push(`${phase.providerKey}: no completed final card checkpoint contained ${phase.marker}.`);
+    }
+  }
+  return issues;
+}
+
+export function scriptedKimiToolCardIssues(
+  checkpoints: RealE2eStreamCardCheckpoint[],
+  phase: { providerKey: string; marker: string },
+): string[] {
+  const issues: string[] = [];
+  const finalCheckpoint = checkpoints.find((checkpoint) => (
+    checkpoint.kind === 'final'
+    && checkpoint.status === 'completed'
+    && (streamCardCheckpointVisibleText(checkpoint).includes(phase.marker)
+      || streamCardCheckpointVisibleText(checkpoint).includes(phase.providerKey))
+  ));
+  if (!finalCheckpoint) return [`${phase.providerKey}: no completed final checkpoint was available for tool-card audit.`];
+
+  const groups = finalCheckpoint.toolGroups || [];
+  if (!groups.some((group) => group.title === '工具调用 · 4' && group.innerPanelCount === 4)) {
+    issues.push(`${phase.providerKey}: expected one 工具调用 · 4 group containing four inner tool panels.`);
+  }
+  const panels = finalCheckpoint.toolPanels || [];
+  if (panels.length < 4) issues.push(`${phase.providerKey}: expected at least 4 inner tool panels, got ${panels.length}.`);
+  for (const action of ['读取', '搜索', '修改', '运行']) {
+    if (!panels.some((panel) => panel.title.includes(action))) {
+      issues.push(`${phase.providerKey}: no tool title contained ${JSON.stringify(action)}.`);
+    }
+  }
+  const runPanel = panels.find((panel) => panel.title.includes('运行'));
+  if (runPanel && !runPanel.title.includes('后台终端 `90`')) {
+    issues.push(`${phase.providerKey}: run title did not expose the yielded background terminal 90.`);
+  }
+  for (const panel of panels) {
+    if (panel.title.includes('\n')) {
+      issues.push(`${phase.providerKey}: ${panel.elementId} title contains an explicit newline.`);
+    }
+    if (/\b(?:Success|Completed)\b|完成/u.test(panel.title)) {
+      issues.push(`${phase.providerKey}: ${panel.elementId} repeated success state in its title.`);
+    }
+    if (panel.nestedPanelCount > 0) {
+      issues.push(`${phase.providerKey}: ${panel.elementId} contains ${panel.nestedPanelCount} nested collapsible panels.`);
+    }
+    if (panel.forbiddenEnvelopeTexts.length > 0) {
+      issues.push(`${phase.providerKey}: ${panel.elementId} leaked ${panel.forbiddenEnvelopeTexts.join(', ')}.`);
+    }
+    if (panel.title.includes('读取') && panel.fences.length > 0) {
+      issues.push(`${phase.providerKey}: ${panel.elementId} displayed ordinary tool output.`);
+    }
+    if (panel.title.includes('搜索') && panel.fences.some((fence) => fence.language !== 'bash')) {
+      issues.push(`${phase.providerKey}: ${panel.elementId} displayed search output instead of only the original bash command.`);
+    }
+    if (panel.title.includes('运行') && panel.fences.some((fence) => fence.language === 'text')) {
+      issues.push(`${phase.providerKey}: ${panel.elementId} displayed command output.`);
+    }
+    for (const fence of panel.fences) {
+      if (!fence.closed) issues.push(`${phase.providerKey}: ${panel.elementId} contains an unclosed ${fence.language || 'plain'} fence.`);
+      if (fence.chars > 8_000) issues.push(`${phase.providerKey}: ${panel.elementId} fence exceeded 8000 characters.`);
+      if (fence.lines > 160) issues.push(`${phase.providerKey}: ${panel.elementId} fence exceeded 160 lines.`);
+    }
+  }
+
+  const diffFence = panels.flatMap((panel) => panel.fences).find((fence) => fence.language === 'diff');
+  if (!diffFence) {
+    issues.push(`${phase.providerKey}: no diff fence was present in the final tool card.`);
+  } else if (diffFence.lines !== 160) {
+    issues.push(`${phase.providerKey}: scripted long patch should exercise the 160-line cap, got ${diffFence.lines} lines.`);
+  }
+  if (!panels.some((panel) => panel.fences.some((fence) => fence.language === 'bash'))) {
+    issues.push(`${phase.providerKey}: no bash command fence was present in the final tool card.`);
+  }
+  return issues;
+}
+
+export function kimiThinkingStatusOnlyIssues(
+  checkpoints: RealE2eStreamCardCheckpoint[],
+  phase: KimiThinkingStatusOnlyPhase,
+): string[] {
+  const phaseCheckpoints = checkpoints.filter((checkpoint) => {
+    const visibleText = streamCardCheckpointVisibleText(checkpoint);
+    return visibleText.includes(phase.marker) || visibleText.includes(phase.providerKey);
+  });
+  if (phaseCheckpoints.length === 0) {
+    return [`${phase.providerKey}: no stream-card checkpoint contained the phase marker or provider key.`];
+  }
+  const thinkingNeedles = ['当前思考', phase.thinkingText];
+  const streamingThinking = phaseCheckpoints.some((checkpoint) => (
+    checkpoint.kind !== 'final'
+      && checkpoint.status !== 'completed'
+      && thinkingNeedles.every((needle) => streamCardCheckpointVisibleText(checkpoint).includes(needle))
+  ));
+  const issues: string[] = [];
+  if (!streamingThinking) {
+    issues.push(`${phase.providerKey}: no non-final stream-card checkpoint showed Kimi thinking in the status area.`);
+  }
+  const finalThinkingLeak = phaseCheckpoints.find((checkpoint) => (
+    checkpoint.kind === 'final'
+      && checkpoint.status === 'completed'
+      && thinkingNeedles.some((needle) => streamCardCheckpointVisibleText(checkpoint).includes(needle))
+  ));
+  if (finalThinkingLeak) {
+    issues.push(`${phase.providerKey}: completed final card leaked Kimi thinking text into the final answer.`);
+  }
+  return issues;
+}
+
+function readTextFile(filePath: string): string | null {
+  try {
+    return fs.readFileSync(filePath, 'utf-8');
+  } catch {
+    return null;
+  }
+}
+
+function countHexByte(rawHexLines: string, byte: number): number {
+  const expected = byte.toString(16).padStart(2, '0');
+  let count = 0;
+  for (const line of rawHexLines.split(/\r?\n/)) {
+    const bytes = line.toLowerCase().match(/[0-9a-f]{2}/g) || [];
+    count += bytes.filter((item) => item === expected).length;
+  }
+  return count;
+}
+
+export function scriptedKimiLifecycleAndSteerIssues(input: ScriptedKimiLifecycleAndSteerAuditInput): string[] {
+  const issues: string[] = [];
+  const launchLogPath = path.join(input.kimiHome, 'scripted-kimi-launches.jsonl');
+  const keyLogPath = path.join(input.kimiHome, 'scripted-kimi-keys.log');
+  const launches = readJsonlFile<{ argv?: unknown; resumed?: unknown; cwd?: unknown }>(launchLogPath);
+  if (launches.length === 0) {
+    issues.push(`No scripted Kimi launch records found at ${launchLogPath}.`);
+  }
+  const freshLaunches = launches.filter((launch) => (
+    launch.resumed === false
+      && Array.isArray(launch.argv)
+      && !launch.argv.includes('-r')
+      && launch.argv.includes('-y')
+  ));
+  if (freshLaunches.length !== 1) {
+    issues.push(`Scripted Kimi expected one initial fresh "kimi -y" launch; observed ${freshLaunches.length}.`);
+  }
+  const resumedLaunches = launches.filter((launch) => launch.resumed === true);
+  if (resumedLaunches.length > 0) {
+    issues.push(`Scripted Kimi unexpectedly resumed ${resumedLaunches.length} session(s) during fresh startup.`);
+  }
+  if (input.cwd && launches.length > 0 && !launches.some((launch) => launch.cwd === input.cwd)) {
+    issues.push(`Scripted Kimi launch cwd never matched ${input.cwd}.`);
+  }
+
+  const keyLog = readTextFile(keyLogPath);
+  if (keyLog == null) {
+    issues.push(`No scripted Kimi key log found at ${keyLogPath}.`);
+    return issues;
+  }
+  const ctrlCCount = countHexByte(keyLog, 0x03);
+  if (ctrlCCount > 0) {
+    issues.push(`Scripted Kimi must not terminate its initial TUI to discover a session id; observed ${ctrlCCount} Ctrl-C byte(s).`);
+  }
+  const ctrlSCount = countHexByte(keyLog, 0x13);
+  if (ctrlSCount < 1) {
+    issues.push('Scripted Kimi did not observe Ctrl-S steer after prompt delivery.');
+  }
+  return issues;
+}
+
+export function scriptedKimiRuntimeSlotIssues(input: ScriptedKimiRuntimeSlotAuditInput): string[] {
+  const issues: string[] = [];
+  const kimiBridgeSessionId = input.report.binding?.runtimeBridgeSessionIds?.kimi;
+  if (!kimiBridgeSessionId) {
+    issues.push('ChannelChat did not retain a kimi runtimeBridgeSessionIds slot.');
+    return issues;
+  }
+  const slot = input.report.runtimeSlots.find((item) => (
+    item.runtime === 'kimi' && item.bridgeSessionId === kimiBridgeSessionId
+  ));
+  if (!slot) {
+    issues.push(`No dump runtime slot was collected for kimi BridgeSession ${kimiBridgeSessionId}.`);
+    return issues;
+  }
+  if (slot.session?.runtime?.activeRuntime !== 'kimi') {
+    issues.push(`Kimi runtime slot ${kimiBridgeSessionId} does not point to an active Kimi BridgeSession.`);
+  }
+  if (slot.kimiSessionId !== input.sessionId) {
+    issues.push(`Kimi runtime slot expected session id ${input.sessionId}; observed ${slot.kimiSessionId || 'none'}.`);
+  }
+  if (input.cwd && slot.kimiCwd !== input.cwd) {
+    issues.push(`Kimi runtime slot expected cwd ${input.cwd}; observed ${slot.kimiCwd || 'none'}.`);
+  }
+  if (!slot.kimiWireJsonlPath) {
+    issues.push(`Kimi runtime slot ${kimiBridgeSessionId} did not resolve a Kimi wire.jsonl transcript.`);
+  }
+  return issues;
+}
+
+export function scriptedKimiWireTranscriptIssues(input: ScriptedKimiWireTranscriptAuditInput): string[] {
+  const issues: string[] = [];
+  const kimiBridgeSessionId = input.report.binding?.runtimeBridgeSessionIds?.kimi;
+  const slot = input.report.runtimeSlots.find((item) => (
+    item.runtime === 'kimi' && (!kimiBridgeSessionId || item.bridgeSessionId === kimiBridgeSessionId)
+  ));
+  if (!slot) {
+    issues.push(kimiBridgeSessionId
+      ? `No dump runtime slot was collected for kimi BridgeSession ${kimiBridgeSessionId}.`
+      : 'ChannelChat did not retain a kimi runtimeBridgeSessionIds slot.');
+    return issues;
+  }
+  if (!slot.kimiWireJsonlPath) {
+    issues.push(`Kimi runtime slot ${slot.bridgeSessionId} did not resolve a Kimi wire.jsonl transcript.`);
+    return issues;
+  }
+  const rows = readJsonlFile<Record<string, unknown>>(slot.kimiWireJsonlPath);
+  if (rows.length === 0) {
+    issues.push(`No Kimi wire transcript records found at ${slot.kimiWireJsonlPath}.`);
+    return issues;
+  }
+  const contentParts = rows
+    .map((row) => {
+      const event = asRecord<unknown>(row.event);
+      const part = asRecord<unknown>(event.part);
+      return { event, part };
+    })
+    .filter(({ event }) => event.type === 'content.part');
+  const hasThinking = contentParts.some(({ part }) => (
+    part.type === 'think'
+      && typeof part.think === 'string'
+      && part.think.includes(input.thinkingText)
+  ));
+  if (!hasThinking) {
+    issues.push(`Kimi wire transcript did not contain scripted thinking text ${JSON.stringify(input.thinkingText)}.`);
+  }
+  const hasMarkerText = contentParts.some(({ part }) => (
+    part.type === 'text'
+      && typeof part.text === 'string'
+      && part.text.includes(input.marker)
+  ));
+  if (!hasMarkerText) {
+    issues.push(`Kimi wire transcript did not contain scripted marker text ${JSON.stringify(input.marker)}.`);
+  }
+  const hasStepEnd = rows.some((row) => asRecord<unknown>(row.event).type === 'step.end');
+  if (!hasStepEnd) {
+    issues.push('Kimi wire transcript did not contain a step.end event for the scripted turn.');
+  }
+  return issues;
+}
+
+export function scriptedKimiHistoryTranscriptIssues(input: ScriptedKimiHistoryTranscriptAuditInput): string[] {
+  const issues: string[] = [];
+  const kimiBridgeSessionId = input.report.binding?.runtimeBridgeSessionIds?.kimi;
+  const slot = input.report.runtimeSlots.find((item) => (
+    item.runtime === 'kimi' && (!kimiBridgeSessionId || item.bridgeSessionId === kimiBridgeSessionId)
+  ));
+  if (!slot) {
+    issues.push(kimiBridgeSessionId
+      ? `No dump runtime slot was collected for kimi BridgeSession ${kimiBridgeSessionId}.`
+      : 'ChannelChat did not retain a kimi runtimeBridgeSessionIds slot.');
+    return issues;
+  }
+  if (!slot.kimiWireJsonlPath) {
+    issues.push(`Kimi runtime slot ${slot.bridgeSessionId} did not resolve a Kimi wire.jsonl transcript.`);
+    return issues;
+  }
+  const messages = readKimiSessionMessagesByFilePath(slot.kimiWireJsonlPath, 20);
+  const transcriptText = messages.map((message) => message.content).join('\n');
+  if (!transcriptText.includes(input.marker)) {
+    issues.push(`Kimi history transcript did not contain scripted marker text ${JSON.stringify(input.marker)}.`);
+  }
+  const forbiddenThinking = ['当前思考', input.thinkingText].filter(Boolean);
+  for (const text of forbiddenThinking) {
+    if (transcriptText.includes(text)) {
+      issues.push(`Kimi history transcript leaked thinking text ${JSON.stringify(text)}.`);
     }
   }
   return issues;
@@ -319,6 +683,47 @@ export function collectRealE2eDump(input: RealE2eDumpInput = {}): RealE2eDumpRep
   const binding = findBinding(bindings, input);
   const session = findSession(sessions, binding, input);
   const bridgeSessionId = input.bridgeSessionId || binding?.bridgeSessionId || session?.id;
+  const runtimeSlots = (['codex', 'claude', 'kimi'] as const)
+    .map((slotRuntime): RealE2eRuntimeSlotReport | null => {
+      const slotBridgeSessionId = binding?.runtimeBridgeSessionIds?.[slotRuntime];
+      if (!slotBridgeSessionId) return null;
+      const slotSession = sessions[slotBridgeSessionId];
+      const slotActiveRuntime = getSessionActiveRuntime(slotSession);
+      const slotRuntimeThreadId = slotRuntime === 'claude'
+        ? getSessionClaudeSessionId(slotSession)
+        : slotRuntime === 'kimi'
+          ? getSessionKimiSessionId(slotSession)
+          : getSessionCodexThreadId(slotSession);
+      const slotClaudeSessionId = slotRuntime === 'claude' ? getSessionClaudeSessionId(slotSession) : undefined;
+      const slotClaudeCwd = slotRuntime === 'claude'
+        ? getSessionClaudeCwd(slotSession) || getSessionWorkingDirectory(slotSession)
+        : undefined;
+      const slotClaudeJsonl = slotClaudeSessionId && slotClaudeCwd
+        ? getClaudeSessionJsonlById(slotClaudeSessionId, slotClaudeCwd, input.claudeHome)
+        : null;
+      const slotKimiSessionId = slotRuntime === 'kimi' ? getSessionKimiSessionId(slotSession) : undefined;
+      const slotKimiCwd = slotRuntime === 'kimi'
+        ? getSessionKimiCwd(slotSession) || getSessionWorkingDirectory(slotSession)
+        : undefined;
+      const slotKimiWireJsonl = slotKimiSessionId
+        ? withTemporaryEnv('KIMI_CODE_HOME', input.kimiHome, () => findKimiSessionFileById(slotKimiSessionId, slotKimiCwd))
+        : null;
+      return {
+        runtime: slotRuntime,
+        bridgeSessionId: slotBridgeSessionId,
+        ...(slotSession ? { session: slotSession } : {}),
+        ...(slotRuntimeThreadId ? { runtimeThreadId: slotRuntimeThreadId } : {}),
+        ...(slotActiveRuntime === slotRuntime && getSessionWorkingDirectory(slotSession)
+          ? { workingDirectory: getSessionWorkingDirectory(slotSession) }
+          : {}),
+        ...(slotClaudeSessionId ? { claudeSessionId: slotClaudeSessionId } : {}),
+        ...(slotClaudeJsonl?.filePath ? { claudeJsonlPath: slotClaudeJsonl.filePath } : {}),
+        ...(slotKimiSessionId ? { kimiSessionId: slotKimiSessionId } : {}),
+        ...(slotKimiCwd ? { kimiCwd: slotKimiCwd } : {}),
+        ...(slotKimiWireJsonl?.filePath ? { kimiWireJsonlPath: slotKimiWireJsonl.filePath } : {}),
+      };
+    })
+    .filter((slot): slot is RealE2eRuntimeSlotReport => slot !== null);
   const messages = bridgeSessionId
     ? [
         ...readJsonFile<BridgeMessage[]>(path.join(dataDir, 'messages', `${bridgeSessionId}.json`), []),
@@ -327,17 +732,26 @@ export function collectRealE2eDump(input: RealE2eDumpInput = {}): RealE2eDumpRep
     : [];
   const activeRuntime = getSessionActiveRuntime(session);
   const inferredRuntime = activeRuntime
-    || (getSessionClaudeSessionId(session) ? 'claude' : getSessionCodexThreadId(session) ? 'codex' : undefined);
+    || (getSessionKimiSessionId(session) ? 'kimi' : getSessionClaudeSessionId(session) ? 'claude' : getSessionCodexThreadId(session) ? 'codex' : undefined);
   const runtime = inferredRuntime;
   const runtimeThreadId = runtime === 'claude'
     ? getSessionClaudeSessionId(session)
-    : getSessionCodexThreadId(session);
+    : runtime === 'kimi'
+      ? getSessionKimiSessionId(session)
+      : getSessionCodexThreadId(session);
   const claudeSessionId = runtime === 'claude' ? getSessionClaudeSessionId(session) : undefined;
   const claudeCwd = runtime === 'claude'
     ? getSessionClaudeCwd(session) || getSessionWorkingDirectory(session)
     : undefined;
   const claudeJsonl = claudeSessionId && claudeCwd
     ? getClaudeSessionJsonlById(claudeSessionId, claudeCwd, input.claudeHome)
+    : null;
+  const kimiSessionId = runtime === 'kimi' ? getSessionKimiSessionId(session) : undefined;
+  const kimiCwd = runtime === 'kimi'
+    ? getSessionKimiCwd(session) || getSessionWorkingDirectory(session)
+    : undefined;
+  const kimiWireJsonl = kimiSessionId
+    ? withTemporaryEnv('KIMI_CODE_HOME', input.kimiHome, () => findKimiSessionFileById(kimiSessionId, kimiCwd))
     : null;
   const auditNeedles = [
     input.runId,
@@ -374,7 +788,13 @@ export function collectRealE2eDump(input: RealE2eDumpInput = {}): RealE2eDumpRep
     },
     {
       name: 'runtime_identity_bound',
-      ok: runtime === 'codex' ? Boolean(runtimeThreadId) : runtime === 'claude' ? Boolean(claudeSessionId) : false,
+      ok: runtime === 'codex'
+        ? Boolean(runtimeThreadId)
+        : runtime === 'claude'
+          ? Boolean(claudeSessionId)
+          : runtime === 'kimi'
+            ? Boolean(kimiSessionId)
+            : false,
       detail: runtimeThreadId || 'No local runtime identity is bound.',
     },
     {
@@ -395,6 +815,13 @@ export function collectRealE2eDump(input: RealE2eDumpInput = {}): RealE2eDumpRep
       detail: claudeJsonl?.filePath || 'No Claude JSONL transcript matched the bound session id/cwd.',
     });
   }
+  if (runtime === 'kimi') {
+    checks.push({
+      name: 'kimi_wire_jsonl_found',
+      ok: Boolean(kimiWireJsonl?.filePath),
+      detail: kimiWireJsonl?.filePath || 'No Kimi wire.jsonl transcript matched the bound session id/cwd.',
+    });
+  }
   return {
     ...(input.runId ? { runId: input.runId } : {}),
     ...(input.channelType || binding?.channelType ? { channelType: input.channelType || binding?.channelType } : {}),
@@ -402,11 +829,14 @@ export function collectRealE2eDump(input: RealE2eDumpInput = {}): RealE2eDumpRep
     ...(bridgeSessionId ? { bridgeSessionId } : {}),
     ...(binding ? { binding } : {}),
     ...(session ? { session } : {}),
+    runtimeSlots,
     ...(runtime ? { runtime } : {}),
     ...(runtimeThreadId ? { runtimeThreadId } : {}),
     ...(getSessionWorkingDirectory(session) ? { workingDirectory: getSessionWorkingDirectory(session) } : {}),
     ...(claudeSessionId ? { claudeSessionId } : {}),
     ...(claudeJsonl?.filePath ? { claudeJsonlPath: claudeJsonl.filePath } : {}),
+    ...(kimiSessionId ? { kimiSessionId } : {}),
+    ...(kimiWireJsonl?.filePath ? { kimiWireJsonlPath: kimiWireJsonl.filePath } : {}),
     messages: messages.slice(-messageLimit),
     audit: relevantAudit.slice(-auditLimit),
     streamKeys,

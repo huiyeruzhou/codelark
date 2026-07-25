@@ -14,12 +14,13 @@ import type {
   InteractiveStreamUiController,
 } from './stream-ui-controller.js';
 import {
-  codexTurnEventFromSdkToolEvent,
-} from '../../../runtime/codex/turn-events.js';
+  toolCallEventFromSdk,
+} from '../../../shared/progress/tool-events.js';
 import {
   applyUnifiedTurnContextUsage,
   applyUnifiedTurnHistoryModelTextSnapshot,
   applyUnifiedTurnTasks,
+  applyUnifiedTurnThinkingNote,
   applyUnifiedTurnToolEvent,
 } from '../unified-turn-state.js';
 
@@ -54,6 +55,7 @@ export interface InteractiveSdkStreamEventsController {
   ): void;
   onTaskEvent(tasks: TaskProgressInfo[]): void;
   onStatusNote(note: string | null): void;
+  onThinkingNote(note: string): void;
   onContextUsage(contextUsage: ContextUsageInfo): void;
   onPermissionWait(toolName: string): void;
   pushFinalCardText(text: string): void;
@@ -109,7 +111,7 @@ export function createInteractiveSdkStreamEventsController(
       if (!isCurrentTask()) return;
       markActivity();
       params.recordHealthTool(params.sessionId, toolId, toolName, status);
-      applyUnifiedTurnToolEvent(params.streamState, codexTurnEventFromSdkToolEvent(
+      applyUnifiedTurnToolEvent(params.streamState, toolCallEventFromSdk(
         toolId,
         toolName,
         status,
@@ -134,6 +136,14 @@ export function createInteractiveSdkStreamEventsController(
       if (!isCurrentTask()) return;
       updateStreamStatusNote(params.streamState, note, params.nowMs());
       if (params.streamState.statusNote) markActivity();
+      pushRunningStatus();
+    },
+    onThinkingNote(note) {
+      if (!isCurrentTask()) return;
+      const normalized = note.trim();
+      if (!normalized) return;
+      applyUnifiedTurnThinkingNote(params.streamState, normalized, params.nowMs());
+      markActivity();
       pushRunningStatus();
     },
     onContextUsage(contextUsage) {

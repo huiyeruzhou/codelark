@@ -93,8 +93,8 @@ describe('configToSettings', () => {
     assert.equal(m.has('bridge_feishu_app_id'), false);
     assert.equal(m.get('bridge_default_mode'), 'normal');
     assert.equal(m.get('bridge_history_message_limit'), '8');
-    assert.equal(m.get('bridge_stream_status_idle_start_seconds'), '180');
-    assert.equal(m.get('bridge_stream_status_check_interval_seconds'), '10');
+    assert.equal(m.get('bridge_stream_status_idle_start_seconds'), '0');
+    assert.equal(m.get('bridge_stream_status_check_interval_seconds'), '5');
 
     const configured = configToSettings({
       ...base,
@@ -690,6 +690,24 @@ require_mention = false
     assert.equal(reloaded.claudeProvider, 'pty');
     assert.equal(configToSettings(reloaded).get('bridge_default_runtime'), 'claude');
     assert.match(fs.readFileSync(path.join(path.dirname(CONFIG_JSON_PATH), 'config.toml'), 'utf-8'), /agent = "claude"/);
+    assert.equal(fs.existsSync(CONFIG_PATH), false);
+    assert.equal(fs.existsSync(CONFIG_JSON_PATH), false);
+  });
+
+  it('round-trips kimi as the default runtime through home TOML', () => {
+    const loaded = loadLegacyConfig();
+    saveLegacyConfig({
+      ...loaded,
+      runtime: 'kimi',
+    });
+
+    const reloaded = loadLegacyConfig();
+    const effective = createConfigService({ codelarkHome: CODELARK_HOME }).snapshot().config;
+    const savedToml = fs.readFileSync(path.join(path.dirname(CONFIG_JSON_PATH), 'config.toml'), 'utf-8');
+    assert.equal(reloaded.runtime, 'kimi');
+    assert.equal(configToSettings(reloaded).get('bridge_default_runtime'), 'kimi');
+    assert.equal(effective.runtime.kimi.provider, 'tmux');
+    assert.match(savedToml, /agent = "kimi"/);
     assert.equal(fs.existsSync(CONFIG_PATH), false);
     assert.equal(fs.existsSync(CONFIG_JSON_PATH), false);
   });

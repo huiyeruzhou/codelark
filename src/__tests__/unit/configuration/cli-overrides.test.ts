@@ -42,6 +42,28 @@ describe('parseConfigCliOverrides', () => {
     });
   });
 
+  it('parses Kimi runtime overrides through the same CLI path', () => {
+    const parsed = parseConfigCliOverrides([
+      '--set', 'runtime.agent=kimi',
+      '--set', 'runtime.kimi.model=moonshot-v1-test',
+      '--set', 'runtime.kimi.provider=tmux',
+      '--unset', 'runtime.kimi.model',
+    ]);
+
+    assert.deepEqual(parsed, {
+      patch: {
+        runtime: {
+          agent: 'kimi',
+          kimi: {
+            model: 'moonshot-v1-test',
+            provider: 'tmux',
+          },
+        },
+      },
+      unset: ['runtime.kimi.model'],
+    });
+  });
+
   it('rejects unknown fields, malformed assignments, and invalid values', () => {
     assert.throws(
       () => parseConfigCliOverrides(['--set', 'runtime.codex.unknown=value']),
@@ -53,6 +75,10 @@ describe('parseConfigCliOverrides', () => {
     );
     assert.throws(
       () => parseConfigCliOverrides(['--set', 'runtime.codex.reasoningEffort=extreme']),
+      InvalidArgumentError,
+    );
+    assert.throws(
+      () => parseConfigCliOverrides(['--set', 'runtime.kimi.provider=sdk']),
       InvalidArgumentError,
     );
     assert.throws(

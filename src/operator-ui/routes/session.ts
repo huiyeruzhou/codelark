@@ -53,8 +53,10 @@ export async function handleUiSessionRoute(options: {
     const codexThreadId = asString(url.searchParams.get('codexThreadId'));
     const claudeSessionId = asString(url.searchParams.get('claudeSessionId'));
     const claudeCwd = asString(url.searchParams.get('claudeCwd'));
-    if (!bridgeSessionId && !codexThreadId && !(claudeSessionId && claudeCwd)) {
-      json(response, 400, { error: 'bridgeSessionId、codexThreadId 或 claudeSessionId+claudeCwd 不能为空。' });
+    const kimiSessionId = asString(url.searchParams.get('kimiSessionId'));
+    const kimiCwd = asString(url.searchParams.get('kimiCwd'));
+    if (!bridgeSessionId && !codexThreadId && !(claudeSessionId && claudeCwd) && !(kimiSessionId && kimiCwd)) {
+      json(response, 400, { error: 'bridgeSessionId、codexThreadId、claudeSessionId+claudeCwd 或 kimiSessionId+kimiCwd 不能为空。' });
       return true;
     }
 
@@ -64,6 +66,8 @@ export async function handleUiSessionRoute(options: {
         codexThreadId,
         claudeSessionId,
         claudeCwd,
+        kimiSessionId,
+        kimiCwd,
       }));
     } catch (error) {
       json(response, 404, { error: error instanceof Error ? error.message : String(error) });
@@ -125,14 +129,36 @@ export async function handleUiSessionRoute(options: {
     return true;
   }
 
+  if (request.method === 'POST' && url.pathname === '/api/sessions/import-kimi-thread') {
+    const payload = await readJsonBody<Record<string, unknown>>(request);
+    const kimiSessionId = asString(payload.kimiSessionId);
+    const kimiCwd = asString(payload.kimiCwd);
+    if (!kimiSessionId || !kimiCwd) {
+      json(response, 400, { error: 'kimiSessionId 和 kimiCwd 不能为空。' });
+      return true;
+    }
+
+    try {
+      json(response, 200, {
+        ok: true,
+        ...createSessionApplication(createStore).importKimiThread(kimiSessionId, kimiCwd),
+      });
+    } catch (error) {
+      json(response, 404, { error: error instanceof Error ? error.message : String(error) });
+    }
+    return true;
+  }
+
   if (request.method === 'POST' && url.pathname === '/api/sessions/rename') {
     const payload = await readJsonBody<Record<string, unknown>>(request);
     const bridgeSessionId = asString(payload.bridgeSessionId);
     const codexThreadId = asString(payload.codexThreadId);
     const claudeSessionId = asString(payload.claudeSessionId);
     const claudeCwd = asString(payload.claudeCwd);
-    if (!bridgeSessionId && !codexThreadId && !(claudeSessionId && claudeCwd)) {
-      json(response, 400, { error: 'bridgeSessionId、codexThreadId 或 claudeSessionId+claudeCwd 不能为空。' });
+    const kimiSessionId = asString(payload.kimiSessionId);
+    const kimiCwd = asString(payload.kimiCwd);
+    if (!bridgeSessionId && !codexThreadId && !(claudeSessionId && claudeCwd) && !(kimiSessionId && kimiCwd)) {
+      json(response, 400, { error: 'bridgeSessionId、codexThreadId、claudeSessionId+claudeCwd 或 kimiSessionId+kimiCwd 不能为空。' });
       return true;
     }
 
@@ -143,6 +169,8 @@ export async function handleUiSessionRoute(options: {
         codexThreadId,
         claudeSessionId,
         claudeCwd,
+        kimiSessionId,
+        kimiCwd,
       }, name);
       json(response, 200, { ok: true, config });
     } catch (error) {
@@ -174,8 +202,10 @@ export async function handleUiSessionRoute(options: {
     const codexThreadId = asString(payload.codexThreadId);
     const claudeSessionId = asString(payload.claudeSessionId);
     const claudeCwd = asString(payload.claudeCwd);
-    if (!bridgeSessionId && !codexThreadId && !(claudeSessionId && claudeCwd)) {
-      json(response, 400, { error: 'bridgeSessionId、codexThreadId 或 claudeSessionId+claudeCwd 不能为空。' });
+    const kimiSessionId = asString(payload.kimiSessionId);
+    const kimiCwd = asString(payload.kimiCwd);
+    if (!bridgeSessionId && !codexThreadId && !(claudeSessionId && claudeCwd) && !(kimiSessionId && kimiCwd)) {
+      json(response, 400, { error: 'bridgeSessionId、codexThreadId、claudeSessionId+claudeCwd 或 kimiSessionId+kimiCwd 不能为空。' });
       return true;
     }
 
@@ -187,6 +217,8 @@ export async function handleUiSessionRoute(options: {
           codexThreadId,
           claudeSessionId,
           claudeCwd,
+          kimiSessionId,
+          kimiCwd,
         }),
       });
     } catch (error) {

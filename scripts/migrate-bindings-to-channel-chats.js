@@ -84,6 +84,13 @@ function ensureRecord(parent, key) {
   return parent[key];
 }
 
+function activeRuntimeForSession(session) {
+  const runtime = session?.runtime;
+  if (!runtime || typeof runtime !== 'object' || Array.isArray(runtime)) return 'codex';
+  if (runtime.activeRuntime === 'claude' || runtime.activeRuntime === 'kimi') return runtime.activeRuntime;
+  return 'codex';
+}
+
 function chooseActiveBinding(records) {
   return records
     .filter((record) => readBoolean(record, 'active') === true)
@@ -112,16 +119,17 @@ function migrateSessionFromBinding(session, binding) {
   const chatDisplayName = readString(binding, 'chatDisplayName');
   const mode = normalizeMode(binding?.mode);
   const runtime = ensureRecord(session, 'runtime');
-  const codex = ensureRecord(runtime, 'codex');
+  const activeRuntime = activeRuntimeForSession(session);
+  const activeRuntimeState = ensureRecord(runtime, activeRuntime);
   const existingModel = readString(session, 'model');
   const existingMode = readString(session, 'preferred_mode');
 
-  if (existingModel && !readString(codex, 'model')) {
-    codex.model = existingModel;
+  if (existingModel && !readString(activeRuntimeState, 'model')) {
+    activeRuntimeState.model = existingModel;
     changed = true;
   }
-  if (existingMode && !readString(codex, 'mode')) {
-    codex.mode = normalizeMode(existingMode);
+  if (activeRuntime === 'codex' && existingMode && !readString(activeRuntimeState, 'mode')) {
+    activeRuntimeState.mode = normalizeMode(existingMode);
     changed = true;
   }
   if ('model' in session) {
@@ -137,12 +145,12 @@ function migrateSessionFromBinding(session, binding) {
     session.working_directory = workingDirectory;
     changed = true;
   }
-  if (model && !readString(codex, 'model')) {
-    codex.model = model;
+  if (model && !readString(activeRuntimeState, 'model')) {
+    activeRuntimeState.model = model;
     changed = true;
   }
-  if (mode && !readString(codex, 'mode')) {
-    codex.mode = mode;
+  if (activeRuntime === 'codex' && mode && !readString(activeRuntimeState, 'mode')) {
+    activeRuntimeState.mode = mode;
     changed = true;
   }
   if (chatDisplayName && !readString(session, 'name')) {

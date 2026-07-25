@@ -6,7 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 
 import { UiSessionApplication } from '../../../operator-ui/application/session.js';
-import type { UiSessionClaudeSource, UiSessionCodexSource } from '../../../operator-ui/application/session-source.js';
+import type { UiSessionClaudeSource, UiSessionCodexSource, UiSessionKimiSource } from '../../../operator-ui/application/session-source.js';
 import { JsonFileStore } from '../../../storage/json-store.js';
 import { makeBridgeSettings, resetBridgeTestState } from '../../helpers/bridge/test-bridge-utils.js';
 import { getClaudeProjectDir } from '../../../runtime/claude/session-jsonl.js';
@@ -21,6 +21,15 @@ function defaultEmptyCodexSource(): UiSessionCodexSource {
     archiveThread: () => false,
     readDefaultModel: () => 'test-model',
     defaultWorkingDirectory: () => '/tmp',
+  };
+}
+
+function defaultEmptyClaudeSource(): UiSessionClaudeSource {
+  return {
+    listSessions: () => [],
+    getThread: () => null,
+    readJsonlHistory: () => [],
+    archiveThread: () => false,
   };
 }
 
@@ -143,6 +152,68 @@ describe('UiSessionApplication', () => {
     assert.equal(store.getSession(imported.bridgeSessionId), null);
   });
 
+  it('uses the runtime source for unbound Kimi Code list, history, import, rename, and archive use cases', () => {
+    const store = new JsonFileStore(makeBridgeSettings());
+    const archivedKimiSessions: Array<{ sessionId: string; cwd: string }> = [];
+    const cwd = '/tmp/kimi-ui-runtime-source';
+    const kimiThread = {
+      sessionId: 'session_kimi-ui-runtime-source',
+      filePath: '/tmp/kimi-ui-runtime-source/wire.jsonl',
+      cwd,
+      title: 'Kimi UI Runtime Source',
+      firstSeenAt: '2026-06-27T00:00:00.000Z',
+      updatedAt: '2026-06-27T00:00:03.000Z',
+    };
+    const kimiSource: UiSessionKimiSource = {
+      listSessions: () => [kimiThread],
+      getThread: (sessionId, candidateCwd) => (
+        sessionId === kimiThread.sessionId && candidateCwd === kimiThread.cwd ? kimiThread : null
+      ),
+      readJsonlHistory: (sessionId, candidateCwd) => (
+        sessionId === kimiThread.sessionId && candidateCwd === kimiThread.cwd ? [{
+          signature: 'kimi-history-1',
+          role: 'assistant',
+          kind: 'kimi:message',
+          content: 'hello **kimi ui**',
+          timestamp: '2026-06-27T00:00:04.000Z',
+          rawJsonl: '{"type":"assistant"}',
+        }] : []
+      ),
+      archiveThread(sessionId, candidateCwd) {
+        archivedKimiSessions.push({ sessionId, cwd: candidateCwd });
+        return sessionId === kimiThread.sessionId && candidateCwd === kimiThread.cwd;
+      },
+    };
+    const app = new UiSessionApplication(store, defaultEmptyCodexSource(), defaultEmptyClaudeSource(), kimiSource);
+
+    const list = app.listSessions();
+    const listed = list.sessions.find((session) => session.kimiSessionId === kimiThread.sessionId);
+    assert.ok(listed);
+    assert.equal(listed.kind, 'kimi');
+    assert.equal(listed.runtime, 'kimi');
+    assert.equal(listed.threadId, kimiThread.sessionId);
+    assert.equal(listed.kimiCwd, cwd);
+
+    const history = app.getHistory({ kimiSessionId: kimiThread.sessionId, kimiCwd: cwd });
+    assert.equal(history.source, 'kimi');
+    assert.equal(history.messages[0]?.rawJsonl, '{"type":"assistant"}');
+    assert.match(history.messages[0]?.renderedContent || '', /<strong>kimi ui<\/strong>/);
+
+    const imported = app.importKimiThread(kimiThread.sessionId, cwd);
+    assert.equal(imported.config.activeRuntime, 'kimi');
+    assert.equal(store.getSession(imported.bridgeSessionId)?.runtime?.kimi?.sessionId, kimiThread.sessionId);
+    assert.equal(store.getSession(imported.bridgeSessionId)?.runtime?.kimi?.provider, 'tmux');
+    assert.equal(store.getSession(imported.bridgeSessionId)?.runtime?.general?.workingDirectory, cwd);
+
+    const renamed = app.renameSession({ kimiSessionId: kimiThread.sessionId, kimiCwd: cwd }, 'Renamed Kimi');
+    assert.equal(renamed.name, 'Renamed Kimi');
+
+    const deleted = app.deleteSession({ kimiSessionId: kimiThread.sessionId, kimiCwd: cwd });
+    assert.deepEqual(archivedKimiSessions, [{ sessionId: kimiThread.sessionId, cwd }]);
+    assert.deepEqual(deleted.deletedBridgeSessionIds, [imported.bridgeSessionId]);
+    assert.equal(store.getSession(imported.bridgeSessionId), null);
+  });
+
   it('reads Claude Code transcript history for Claude runtime Bridge sessions', () => {
     const store = new JsonFileStore(makeBridgeSettings());
     const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-ui-claude-home-'));
@@ -201,6 +272,31 @@ describe('UiSessionApplication', () => {
       }
       fs.rmSync(homeDir, { recursive: true, force: true });
     }
+  });
+
+  it('filters user messages from Kimi Bridge fallback history', () => {
+    const store = new JsonFileStore(makeBridgeSettings());
+    const cwd = '/tmp/kimi-ui-bridge-fallback';
+    const session = store.createSession('Kimi UI Bridge Fallback', 'test-model', undefined, cwd);
+    store.updateSession(session.id, {
+      runtime: {
+        activeRuntime: 'kimi',
+        kimi: {
+          sessionId: 'session_kimi-ui-bridge-fallback',
+          cwd,
+          provider: 'tmux',
+        },
+        general: { workingDirectory: cwd },
+      },
+    });
+    store.addMessage(session.id, 'user', 'hello ui kimi');
+    store.addMessage(session.id, 'assistant', 'ui kimi **reply**');
+
+    const history = new UiSessionApplication(store).getHistory({ bridgeSessionId: session.id });
+    assert.equal(history.source, 'bridge');
+    assert.equal(history.messages.length, 1);
+    assert.equal(history.messages.some((message) => message.content.includes('hello ui kimi')), false);
+    assert.match(history.messages[0]?.renderedContent || '', /<strong>reply<\/strong>/);
   });
 
   it('reads and updates Claude session-level config without writing Codex runtime state', () => {
@@ -350,5 +446,59 @@ describe('UiSessionApplication', () => {
     assert.notEqual(configService.resolve('runtime.codex.provider', { kind: 'session', sessionId: session.id }).source, 'session');
     assert.notEqual(configService.resolve('runtime.codex.reasoningEffort', { kind: 'session', sessionId: session.id }).source, 'session');
     assert.notEqual(configService.resolve('runtime.codex.sandboxMode', { kind: 'session', sessionId: session.id }).source, 'session');
+  });
+
+  it('writes Kimi UI session-level config to session TOML without writing Codex runtime state', () => {
+    const store = new JsonFileStore(makeBridgeSettings());
+    const session = store.createSession('Kimi Config Session', 'codex-model', undefined, '/tmp/kimi-config');
+    store.updateSession(session.id, {
+      runtime: {
+        activeRuntime: 'kimi',
+        kimi: {
+          sessionId: 'session_kimi-config',
+          cwd: '/tmp/kimi-config',
+          model: 'legacy-kimi',
+          provider: 'tmux',
+        },
+        general: { workingDirectory: '/tmp/kimi-config' },
+      },
+    });
+    const configService = createConfigService({ migrate: false, env: {} });
+    configService.set(
+      { kind: 'session', sessionId: session.id },
+      {
+        runtime: {
+          kimi: {
+            model: 'initial-kimi',
+            provider: 'tmux',
+          },
+        },
+      },
+    );
+
+    const app = new UiSessionApplication(store);
+    const config = app.getConfig(session.id);
+    assert.equal(config.activeRuntime, 'kimi');
+    assert.equal(config.kimiModel, 'initial-kimi');
+    assert.equal(config.kimiProvider, 'tmux');
+
+    const updated = app.updateConfig(session.id, {
+      activeRuntime: 'kimi',
+      kimiModel: 'kimi-k2',
+      kimiProvider: 'tmux',
+      model: 'should-not-write-codex',
+      preferredMode: 'yolo',
+    });
+
+    assert.equal(updated.activeRuntime, 'kimi');
+    assert.equal(updated.kimiModel, 'kimi-k2');
+    assert.equal(updated.kimiProvider, 'tmux');
+    const stored = store.getSession(session.id);
+    assert.equal(stored?.runtime?.activeRuntime, 'kimi');
+    assert.equal(stored?.runtime?.kimi?.model, 'legacy-kimi');
+    assert.equal(stored?.runtime?.codex, undefined);
+    assert.equal(configService.get('runtime.kimi.model', { kind: 'session', sessionId: session.id }), 'kimi-k2');
+    assert.equal(configService.get('runtime.kimi.provider', { kind: 'session', sessionId: session.id }), 'tmux');
+    assert.notEqual(configService.resolve('runtime.codex.model', { kind: 'session', sessionId: session.id }).source, 'session');
   });
 });

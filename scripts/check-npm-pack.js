@@ -10,20 +10,37 @@ const forbiddenFiles = new Set([
   'package/config.env.example',
 ]);
 
-const result = spawnSync('npm', ['pack', '--dry-run', '--json'], {
-  cwd: process.cwd(),
-  encoding: 'utf8',
-  stdio: ['ignore', 'pipe', 'pipe'],
-});
+const npmArgs = ['pack', '--dry-run', '--json'];
+const npmExecPath = process.env.npm_execpath;
+const result = npmExecPath
+  ? spawnSync(process.execPath, [npmExecPath, ...npmArgs], {
+      cwd: process.cwd(),
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'pipe'],
+    })
+  : spawnSync('npm', npmArgs, {
+      cwd: process.cwd(),
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+
+if (result.error) {
+  console.error(`Unable to start npm pack: ${result.error.message}`);
+  process.exit(1);
+}
+
+const stdout = typeof result.stdout === 'string' ? result.stdout : '';
+const stderr = typeof result.stderr === 'string' ? result.stderr : '';
 
 if (result.status !== 0) {
-  process.stderr.write(result.stderr);
+  if (stderr) process.stderr.write(stderr);
+  else console.error(`npm pack exited with status ${result.status ?? 'unknown'}.`);
   process.exit(result.status ?? 1);
 }
 
 let packEntries;
 try {
-  packEntries = JSON.parse(result.stdout);
+  packEntries = JSON.parse(stdout);
 } catch (error) {
   console.error('Unable to parse npm pack --dry-run --json output.');
   console.error(error instanceof Error ? error.message : String(error));
@@ -36,6 +53,7 @@ const forbiddenMatches = files.filter((file) =>
 );
 const requiredFiles = new Set([
   'dist/defaults.toml',
+  'dist/update-global-codelark.mjs',
 ]);
 const missingRequiredFiles = [...requiredFiles].filter((file) => !files.includes(file));
 

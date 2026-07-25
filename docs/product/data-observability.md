@@ -17,7 +17,7 @@
 | `runtime/status.json` | Bridge 运行状态 | [src/entrypoints/daemon.ts](https://github.com/huiyeruzhou/codelark/blob/main/src/entrypoints/daemon.ts)、[src/local-service/manager.ts](https://github.com/huiyeruzhou/codelark/blob/main/src/local-service/manager.ts) |
 | `runtime/ui-server.json` | UI 运行状态 | [src/operator-ui/server.ts](https://github.com/huiyeruzhou/codelark/blob/main/src/operator-ui/server.ts)、[src/local-service/manager.ts](https://github.com/huiyeruzhou/codelark/blob/main/src/local-service/manager.ts) |
 
-Codex 自有数据仍在 `~/.codex`；CodeLark 只读索引和镜像。Claude Code 自有 JSONL 也由 Claude Code 生成；bridge 只保存可继续定位它的 runtime 身份。
+Codex 自有数据仍在 `~/.codex`，Claude Code 自有 JSONL 仍由 Claude Code 生成，Kimi Code 自有 `wire.jsonl` 仍在 `~/.kimi-code`。CodeLark 只读索引和 mirror source；bridge 只保存可继续定位对应 runtime 会话的身份。
 
 ## 可观测性
 

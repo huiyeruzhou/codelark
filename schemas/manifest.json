@@ -18,12 +18,12 @@
   },
   "files": [
     {
-      "id": "config.v1",
-      "path": "config.json",
-      "schema": "schemas/config.v1.schema.json",
-      "kind": "config",
-      "version": 1,
-      "versionField": "schemaVersion",
+      "id": "config.v2",
+      "path": "config.toml",
+      "schema": "schemas/config.v2.schema.json",
+      "kind": "config-toml",
+      "version": 2,
+      "versionField": "schema_version",
       "current": true,
       "missingFile": "create-default"
     },
@@ -32,6 +32,16 @@
       "path": "data/sessions.json",
       "schema": "schemas/data/sessions.v1.schema.json",
       "kind": "store-map",
+      "version": 1,
+      "versionField": null,
+      "current": true,
+      "missingFile": "empty-object"
+    },
+    {
+      "id": "version-check.v1",
+      "path": "version-check.json",
+      "schema": "schemas/version-check.v1.schema.json",
+      "kind": "state",
       "version": 1,
       "versionField": null,
       "current": true,
@@ -99,13 +109,13 @@
     },
     {
       "id": "data.audit.v1",
-      "path": "data/audit.json",
+      "path": "data/audit.jsonl",
       "schema": "schemas/data/audit.v1.schema.json",
-      "kind": "store-array",
+      "kind": "store-jsonl",
       "version": 1,
       "versionField": null,
       "current": true,
-      "missingFile": "empty-array"
+      "missingFile": "empty-file"
     },
     {
       "id": "data.auto-tasks.v1",

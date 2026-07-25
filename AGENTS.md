@@ -2,10 +2,15 @@
 
 git 不要提交 `STATUS.md`
 
+## 用户链接格式
+
+- 向用户提供 URL 时，必须使用 Markdown 超链接（例如 `[打开授权页面](https://example.com)`）或独立代码块；不要直接发送裸 URL，以免当前聊天客户端无法点击或错误解析。
+
 ## 开发工作流
 - 本仓库的 Node.js 开发命令使用 Node.js 24。
 - 运行 `npm run build`、`npm test`、`npm run typecheck` 或其他 Node 命令前，除非当前 shell 已经是 Node.js 24，否则先运行 `nvm use 24`。
 - 由于环境可能带有普通 Node 不接受的 `NODE_OPTIONS`，必要时使用 `unset NODE_OPTIONS; source ~/.nvm/nvm.sh && nvm use 24 && ...`。
+- 所有异步等待（测试、构建、CI、下载、远端 API、服务启动、热更新、实验、subagent）都只保留一个可观察句柄；有独立工作就继续推进，只有下一步确实被阻塞时才短读一次状态。禁止把一个 wait/session 再包进另一个 wait cell。长测试或高噪声命令默认把 stdout/stderr 写入任务日志文件，优先让单个 detached 进程写 exit marker，再读 marker/日志；控制台先只报告退出码和简短摘要，失败时再定向读取片段。每次 wait/poll 必须显式设置并在工具摘要中展示输出 token 上限，完整输出仍保留在日志文件。
 - 除非用户明确要求，不要 push commit，不要 hot update 或 redeploy 本地 bridge。
 - 工作完成后，代码变更仍应提交到本地 git；同一功能阶段的 follow-up 应 amend 到同一个 commit，并且询问用户是否要merge回主分支。
 
@@ -30,6 +35,13 @@ git 不要提交 `STATUS.md`
   - 文档编写：检查内容是否全面、准确、没有旧术语误导。
   - 代码重构：检查重构是否干净、彻底，是否消除了目标耦合，而不是只移动文件。
 - 然后继续考虑下一个工作点
+
+### 用户可见界面的真实端手测
+
+- 凡是修改飞书卡片、Markdown、CodeFence、折叠块、按钮、表单、图标、状态栏、流式更新或 continuation 等用户可见表现，只要现有环境允许真实发送，就必须在隔离测试群做一次真实飞书手测；不能只凭 unit test、JSON payload、日志 preview 或 OpenAPI `code=0` 宣称显示正确。
+- 手测必须覆盖本次修改的临界输入和真实用户故事，例如超长文本、超预算工具组、多行 patch、展开/收起、按钮点击和流式终态；同时从用户身份读取最终消息，检查实际卡片结构和内容完整性。
+- 需要用户共同评价视觉效果时，创建测试群后必须把当前用户拉进群，并保留测试群直到用户完成查看；不要只在用户不可见的群里自测后删除。
+- 真实端手测是相关自动化测试之外的发布 gate。若受授权、权限或环境限制无法执行，必须在 `STATUS.md` 和最终回复中明确记录未验证项，不能把它表述为已验收。
 
 ## 飞书云文档创建 SOP
 

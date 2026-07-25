@@ -15,6 +15,7 @@ import {
   getSessionCodexProviderOverride,
   resolveNewSessionWorkingDirectory,
 } from '../support.js';
+import { kimiTmuxSessionName } from '../../../runtime/kimi/tmux-provider.js';
 import { getSessionDisplayName } from '../display/session-title.js';
 import {
   buildCommandFields,
@@ -41,7 +42,9 @@ import { buildClearConfirmationCard } from './clear-confirmation.js';
 import { sessionLooksRunning } from './status-guards.js';
 import { auditCommandBindingChange } from './thread-targets.js';
 import {
-  reconcileMirrorSubscriptionsBestEffort,
+  createGroupRenameBackgroundEffect,
+  scheduleMirrorSubscriptionsBestEffort,
+  type SessionCommandBackgroundEffect,
   type SessionCommandDeps,
   type SessionCommandResult,
 } from './types.js';
@@ -57,6 +60,13 @@ function setSessionClaudeProviderToml(sessionId: string, provider: 'sdk' | 'tmux
   createConfigService({ migrate: false }).set(
     { kind: 'session', sessionId },
     { runtime: { claude: { provider } } },
+  );
+}
+
+function setSessionKimiProviderToml(sessionId: string): void {
+  createConfigService({ migrate: false }).set(
+    { kind: 'session', sessionId },
+    { runtime: { kimi: { provider: 'tmux' } } },
   );
 }
 
@@ -92,6 +102,11 @@ function inheritClearRuntimeProvider(sessionId: string, previousSession: ReturnT
     const inheritedProvider = getSessionClaudeProviderOverride(previousSession);
     if (inheritedProvider) setSessionClaudeProviderToml(sessionId, inheritedProvider);
     if (inheritedProvider === 'tmux') setSessionTmuxAutoEnterToml(sessionId, true);
+    return;
+  }
+  if (activeRuntime === 'kimi') {
+    setSessionKimiProviderToml(sessionId);
+    setSessionTmuxAutoEnterToml(sessionId, true);
     return;
   }
   const inheritedProvider = getSessionCodexProviderOverride(previousSession);
@@ -153,11 +168,13 @@ export async function handleClearSessionCommand(options: {
     }
     options.deps.recordInteractiveHealthEnd?.(previousBinding.bridgeSessionId, 'aborted', detail);
   }
-  const previousRuntimeTmuxSessionName = getSessionRuntimeTmuxSessionName(previousSession);
+  const previousRuntime = getSessionActiveRuntime(previousSession) || 'codex';
+  const previousRuntimeTmuxSessionName = getSessionRuntimeTmuxSessionName(previousSession)
+    || (previousRuntime === 'kimi' && previousSession ? kimiTmuxSessionName(previousSession.id) : undefined);
   let cleanedTmuxSessionName: string | null = null;
   if (previousRuntimeTmuxSessionName) {
     const cleanup = await cleanupRuntimeTmuxSession({
-      runtime: getSessionActiveRuntime(previousSession) || 'codex',
+      runtime: previousRuntime,
       sessionName: previousRuntimeTmuxSessionName,
     });
     if (cleanup.error) {
@@ -200,15 +217,13 @@ export async function handleClearSessionCommand(options: {
     session = options.store.getSession(binding.bridgeSessionId);
   }
   let groupRenameStatus: string | null = null;
+  const backgroundEffects: SessionCommandBackgroundEffect[] = [];
   const shouldRenameGroup = options.msg.address.chatKind === 'group' || previousBinding?.chatKind === 'group';
   if (shouldRenameGroup) {
-    if (options.adapter.renameGroupChat) {
-      try {
-        const renamed = await options.adapter.renameGroupChat(options.msg.address.chatId, sessionName);
-        groupRenameStatus = renamed.name || sessionName;
-      } catch (error) {
-        groupRenameStatus = `失败：${error instanceof Error ? error.message : String(error)}`;
-      }
+    const renameEffect = createGroupRenameBackgroundEffect(options.adapter, options.msg.address.chatId, sessionName);
+    if (renameEffect) {
+      backgroundEffects.push(renameEffect);
+      groupRenameStatus = `${sessionName}（后台同步中）`;
     } else {
       groupRenameStatus = '当前通道不支持修改群聊名称';
     }
@@ -222,7 +237,7 @@ export async function handleClearSessionCommand(options: {
     binding,
     confirmation.confirmed ? 'clear confirmed' : 'clear',
   );
-  await reconcileMirrorSubscriptionsBestEffort(options.deps, 'clear session');
+  scheduleMirrorSubscriptionsBestEffort(options.deps, 'clear session');
 
   return {
     response: buildCommandFields(
@@ -243,5 +258,6 @@ export async function handleClearSessionCommand(options: {
       ],
       options.markdown,
     ),
+    backgroundEffects,
   };
 }

@@ -8,15 +8,16 @@
 import type { ChannelAddress, ChannelChat, ChannelType } from '../../domain/index.js';
 import { getBridgeContext } from '../context.js';
 import { SessionRegistryService } from '../session/registry.js';
-import { getOrCreateDraftSession } from '../session/internal-sessions.js';
+import { createDraftSession, getOrCreateDraftSession } from '../session/internal-sessions.js';
 import { recordBindingChange } from '../session/binding-audit.js';
 import { createConfigService, type ConfigScope } from '../../configuration/service.js';
 import { expandHomePath } from '../../configuration/paths.js';
 import type { ConfigV2 } from '../../configuration/schema.js';
 import { getConfiguredChannelInstance } from '../../channels/adapter-runtime/channel-runtime.js';
+import type { RuntimeAgent } from '../../domain/session.js';
 
 interface ChannelSessionDefaults {
-  activeRuntime: 'codex' | 'claude';
+  activeRuntime: RuntimeAgent;
   codexModel: string;
   codexMode: 'normal' | 'yolo';
   workspace: string;
@@ -41,7 +42,7 @@ function resolveChannelSessionDefaults(address: ChannelAddress): ChannelSessionD
     : config.bridge.defaultWorkspace;
   const workspace = expandHomePath(workspaceValue || config.bridge.defaultWorkspace) || process.cwd();
   return {
-    activeRuntime: config.runtime.agent === 'claude' ? 'claude' : 'codex',
+    activeRuntime: config.runtime.agent,
     codexModel: config.runtime.codex.model || '',
     codexMode: codexModeFromConfig(config),
     workspace,
@@ -133,6 +134,7 @@ export function createBinding(
   address: ChannelAddress,
   workingDirectory?: string,
   sessionName?: string,
+  options: { forceNewDraftSession?: boolean } = {},
 ): ChannelChat {
   const { store } = getBridgeContext();
   const defaultProviderId = store.getSetting('bridge_default_provider_id') || '';
@@ -147,7 +149,7 @@ export function createBinding(
         defaults.codexMode,
         { activeRuntime: defaults.activeRuntime },
       )
-    : getOrCreateDraftSession(store, address, {
+    : (options.forceNewDraftSession ? createDraftSession : getOrCreateDraftSession)(store, address, {
         activeRuntime: defaults.activeRuntime,
         codexModel: defaults.codexModel,
         codexMode: defaults.codexMode,

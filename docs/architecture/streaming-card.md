@@ -13,7 +13,7 @@
 
 ```mermaid
 flowchart LR
-  runtime[Codex / Claude 事件]
+  runtime[Codex / Claude / Kimi 事件]
   mirror[本地 mirror turn]
   desired[FeishuCardState desired]
   plan[投递计划]
@@ -65,7 +65,7 @@ flowchart LR
 - `updateToolProgress()`：工具面板。
 - `updateTaskProgress()`：任务列表。
 - `updateStreamingHistory()`：history-driven transcript。
-- `updateCardMetadata()`：runtime、model、effort 和 bridge 标签；runtime 以无前缀的 `codex`/`claude` 橙色 tag 展示在 model/effort 前。
+- `updateCardMetadata()`：runtime、model、effort 和 bridge 标签；runtime 以无前缀的 `codex`/`claude`/`kimi` 橙色 tag 展示在 model/effort 前。
 - `updateCardActions()`：按钮和表单 actions。
 
 这些函数只更新 desired 字段，递增 `desiredRevision`，然后调用 `scheduleCardFlush()`。真正远端请求在 `flushCardUpdate()` 中执行。
@@ -138,6 +138,16 @@ snapshotStreamingDesiredState(state)
 - full refresh payload bytes、component count、耗时、超时次数。
 - full refresh 后是否立即又有 `flushQueued`，表示刷新期间新状态继续堆积。
 
+### 状态栏与活动时间
+
+状态栏从 turn 开始显示，默认每 5 秒刷新一次。每次正文、思考、工具、任务或状态事件都算一次可见活动，并把“上次响应”归零；若这些事件本身已经触发卡片更新，状态栏必须使用同一个时刻立即重算，不能等下一次心跳。
+
+所有运行中、续接和最终卡片共用同一套 footer 格式。状态字段（例如异常原因、已续接到下一条）排在最前，公共字段固定为“当前时刻 `HH:mm:ss` · 已运行时长 · 上次响应时长 · Context 使用 · 上一轮输入输出”；缺失字段省略，分隔符统一为 ` · `。时长使用紧凑格式并省略零值高位，例如 `3m11s`、`1h2m10s`、`0s`，不得补 `00h` 或混用中英文单位。
+
+`stream_status_idle_start_seconds = 0` 表示从任务开始立即显示状态栏；`stream_status_check_interval_seconds = 5` 是默认心跳间隔。进程启动时只解析一次系统时区：shell `TZ` 优先，macOS/Windows 使用 runtime 系统时区，Linux 在 runtime 默认与系统文件冲突时读取 `/etc/timezone` 或 `/etc/localtime`；后续刷新只复用缓存的时区和 formatter，不得重复文件 I/O。
+
+新增工具与状态栏刷新必须保持为两个 CardKit 动作：先原子创建或更新工具 history，再单独更新 `streaming_status`。这既保持工具调用的原子边界，也让 footer 保留流式效果；不能为了合并请求而把工具正文和状态栏一起重绘成整张卡。
+
 ### Finalize
 
 入口是 `finalizeCard()`。
@@ -148,6 +158,10 @@ snapshotStreamingDesiredState(state)
 4. 如果组件数超过上限，裁剪较早 history/tool 内容。
 5. 调用 `card.update` 写最终卡。
 6. 成功后按 completed/error 添加终态 reaction。
+
+final full update 必须以 desired history 为权威。`responseText` 为空不代表卡片没有正文：mirror 在流式卡已包含正文时会传空 text 防止重复，工具和消息仍可能全部存在于 `historyItems`。因此 final renderer 的 content gate 同时检查 text、legacy tools 和 history；history-only 的 apply_patch 也必须在关闭 streaming mode 后完整保留。
+
+error 终态不能只靠红色边框或泛化的 `Error` footer。runtime adapter 把真实错误写入 `FinalizedBridgeMirrorTurn.errorText`；feedback controller 从 JSON 中提取 type/message（非 JSON 则保留原文），压成最多 600 个 Unicode 字符的单行状态，先更新“当前步骤：❌ 原因 + 已运行时间 + context/token usage”，再关闭 streaming mode。final footer 复用同一条原因，并继续追加 adapter 计算的真实耗时和 context；错误、时间、token 信息不能互相覆盖。history 不再重复插入错误块。新版结构化 JSONL error 与旧版 TUI `■` fallback 共用这个字段，channel renderer 不识别 Codex 专属格式。
 
 需要观察：
 
@@ -163,15 +177,29 @@ snapshotStreamingDesiredState(state)
 | 分区                 | 主要元素 ID                        | 数据来源                                    | 正常更新方式                                   | 失效时回退                              |
 | ------------------ | ------------------------------ | --------------------------------------- | ---------------------------------------- | ---------------------------------- |
 | Header             | header title、`streaming_tag_*` | stream metadata、bridge 标签 | metadata 变化触发 `card.update` full refresh | 关闭流式后 final `card.update`          |
-| Metadata body tags | `runtime_meta_tags`            | runtime、model、effort tags；runtime 为无前缀 `codex`/`claude` 橙色 tag | full refresh                             | final `card.update`                |
+| Metadata body tags | `runtime_meta_tags`            | runtime、model、effort tags；runtime 为无前缀 `codex`/`claude`/`kimi` 橙色 tag | full refresh                             | final `card.update`                |
 | History / 正文容器     | `stream_history`               | `historyItems` 或正文 + tools              | 追加 markdown/tool panel 子元素               | full refresh 或续接新卡片                |
 | 正文 markdown        | `streaming_content`            | `pendingText`                           | `cardElement.content`                    | full refresh                       |
-| 工具面板               | `stream_tool_N` / 子事件元素        | `toolCalls` 或 history tool panel        | create/append；工具结构变化倾向 full refresh      | full refresh 或续接新卡片                |
+| 工具面板               | `stream_tool_N`                   | `toolCalls` 或 history tool panel        | create/append；工具结构变化倾向 full refresh      | full refresh 或续接新卡片                |
 | 任务区                | `streaming_tasks`              | task progress                           | `cardElement.content`                    | full refresh                       |
 | 状态区                | `streaming_status`             | elapsed/status/context usage            | `cardElement.content`                    | final status append 或 full refresh |
 | Actions            | action rows                    | stream actions                          | full refresh                             | 关闭流式后 final `card.update`          |
 
 这个分区不是 CardKit 原生概念，是 CodeLark adapter 的同步边界。`renderedHistoryElementJson`、`renderedToolSnapshots`、`renderedComponentCount` 等状态只表示“本地认为已经提交到飞书服务端的结构”，不能证明用户客户端已经完成重绘。
+
+## 工具调用呈现契约
+
+工具卡片的输入不是 Codex/Kimi 原始事件，而是公共中间层：runtime adapter 先生成 `ToolCallEvent` 和 `ToolCallDetail`，reducer 合成 `ToolCallInfo`，`ToolPresentation` 再给出标题动作、对象、证据摘要、图标和边框语义。Feishu renderer 不判断 runtime，也不解析 Codex wrapper 或 Kimi wire。
+
+沿用既有的“历史记录”外层容器，并在每批工具事件上保留共用的“工具调用 · N”折叠栏；展开工具调用组后，每个工具仍有自己的折叠面板，即“历史记录 → 工具调用组 → 单工具”。单工具内部不再为长输出增加折叠。标题由代码拼成一行，依次显示动作图标、动作、对象和范围/命中数/输出行数/耗时/非零 exit code；过长时由 Feishu 自然换行。完成态使用 `📖/🔎/🛠️/💻` 等动作图标，运行中和异常仍使用状态图标；标题和详情不再重复 `Success`、`Completed` 或“完成”。
+
+展开后必须能审计真实调用参数：command 使用 `bash` fence，read/search/generic 工具显示结构化参数。shell 中的 `rg`/`grep` 即使位于复合命令里，也保留搜索语义和完整原始 command；解析 query/path 时必须按带引号 token 的原始源码长度推进，不能把引号误当成路径。普通工具的 output 仍可在中间层用于标题的行数、命中数、exit code 等摘要，但默认不把 output 正文放进卡片；`apply_patch` 是例外，显示真实修改内容，并在所有目标文件语言一致时按文件后缀选择 fence 语言，混合或未知类型使用纯文本。`Script completed`、`Wall time`、`Chunk ID`、`Original token count` 等 transport envelope 在 adapter 层消费，不进入详情。
+
+飞书 CardKit Markdown 对 fenced code 有一个客户端兼容问题：当 fence 正文包含字面 `${...}` 表达式时，即使完全没有内部反引号，整个代码块也可能被布局成一行。公共 `ToolCallDetail` 和 Markdown renderer 不得为此改写内容；只在 Feishu 出站预处理边界，把命中 `${` 的完整 fenced block 改成 CommonMark 四空格缩进代码块。该异常块会失去语言高亮，但换行和可复制正文必须保持；普通反引号、单独 `$`、单独 `{...}` 和其他 block 继续保留文件语言高亮。禁止使用零宽字符、反斜杠或 HTML entity 替换正文，因为这些方案会污染用户看到和复制的 patch。
+
+若一次工具结果明确返回仍在运行的 background session/cell id，当前工具标题追加一次“后台终端 N”，方便后续等待工具与终端关联；详情不再重复该 id。这个标记属于产生 background id 的历史工具事件，不跨事件维护动态状态，也不因为后续 `wait` 完成而回写旧标题。普通已完成工具以及只消费既有 session 的 `wait` 不显示该标记。
+
+所有长内容在生成 Markdown 之前调用同一个预览 helper，并同时受字符数和行数两个 hard upper bound 约束；任何一个先达到就停止。普通输入/输出上限为 4000 Unicode code points 和 80 行，patch 上限为 8000 code points 和 160 行。省略提示写在代码块外。禁止对已经生成的 Markdown 盲切，否则会切掉 closing fence；Feishu 兼容层的缩进代码降级也必须发生在预览完成之后，并覆盖完整 block。
 
 ## 本地镜像
 
@@ -180,7 +208,7 @@ snapshotStreamingDesiredState(state)
 | 类型            | 代表字段                                                                                                                                                                                                                  | 含义                  |
 | ------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------- |
 | Desired state | `pendingText`、`pendingTasksText`、`pendingStatusText`、`toolCalls`、`historyItems`、`metadata`、`actionRows`、`desiredRevision`                                                                                             | 本地现在希望卡片长什么样        |
-| Remote shadow | `renderedText`、`renderedTasksText`、`renderedStatusText`、`renderedHistoryElementIds`、`renderedHistoryElementJson`、`renderedToolSnapshots`、`rendered*Signature`、`renderedComponentCount`、`shadowRevision`、`shadowTrust` | 本地认为已经被飞书服务端接受的卡片状态 |
+| Remote shadow | `renderedText`、`renderedTasksText`、`renderedStatusText`、`renderedHistoryElementIds`、`renderedHistoryItemCount`、`renderedHistoryElementJson`、`renderedToolSnapshots`、`rendered*Signature`、`renderedComponentCount`、`shadowRevision`、`shadowTrust` | 本地认为已经被飞书服务端接受的卡片状态 |
 
 Remote shadow 不是从飞书客户端反查出来的真实 DOM，而是 CodeLark 在每次 API 成功后提交的本地账本：
 
@@ -215,7 +243,7 @@ CardKit 的 `streaming_mode` 只影响文本流式上屏的表现，不应成为
 - 正文区：不强制流式。可以用 `cardElement.content` 更新固定 `streaming_content` 元素，也可以用 `card.update` / full refresh 直接写入全文。
 - 状态区：不需要严格流式。`streaming_status` 可以用 `cardElement.content` 低频更新；如果结构变化或客户端不同步，可以接受 full refresh。
 - 任务区：不需要严格流式。`streaming_tasks` 可以低频更新；多任务结构变化可以接受 full refresh。
-- 工具区：不需要严格流式。工具调用面板、长输出折叠面板和 history/tool panel 追加不应依赖高频 `batchUpdate` 保证每个中间态都上屏。
+- 工具区：不需要严格流式。历史记录内的单工具面板和 history/tool panel 追加不应依赖高频 `batchUpdate` 保证每个中间态都上屏。
 - header、tag、actions、按钮、表单：不需要流式。运行中可以低频 full refresh；最终交互组件应在关闭流式后再更新。
 
 飞书文档中的 `streaming_config.print_frequency_ms`、`print_step`、`print_strategy` 控制的是流式更新文本的打字机上屏，不控制 `batchUpdate` 组件树同步。因此不要把 `batchUpdate` 当成正文流式刷新机制。
@@ -244,12 +272,13 @@ CardKit 的 `streaming_mode` 只影响文本流式上屏的表现，不应成为
 接近或超过任一安全线时，优先执行续接：
 
 1. 尝试用 `cardElement.content` 把旧卡状态区改成“已续接到下一条”。
-2. 对旧卡调用 `card.settings` 关闭 `streaming_mode`，让 finalize 成为旧卡续接前的最后一次 CardKit 写入。
-3. 用相同 stream key 创建 continuation card。
-4. continuation card 从 `historyItemOffset` 或 `toolCallOffset` 后继续渲染。
-5. 如果续接失败，再尝试 `card.update` full refresh。
+2. 对旧卡调用 `card.settings` 关闭服务端 `streaming_mode`。
+3. 从 remote shadow 只重建旧卡最后一次成功渲染的内容，调用 `card.update` 写回不含 `streaming_mode:true` 的静态卡片 JSON。客户端只有收到这一步后，旧卡文本才会恢复为可选中状态。
+4. 用相同 stream key 创建 continuation card。
+5. continuation card 从 `historyItemOffset` 或 `toolCallOffset` 后继续渲染。
+6. 如果续接失败，再尝试运行中的 `card.update` full refresh。
 
-续接依赖 shadow 中记录的已渲染 history/tool offset。offset 按“上一个已渲染文本/工具 group”后退：旧卡保留已显示的 group，新卡从当前正在更新的 history item 或 tool group 开始，避免把还没写成功的内容留在过大的旧卡里。由于 shadow 不是客户端 ACK，慢 batch 或弱确认场景下要保守降级，避免 offset 跳过用户没看到的内容。
+续接依赖 shadow 中记录的已渲染 history/tool offset。history offset 按 canonical `StreamingHistoryItem` 数计算，不能用 CardKit element 数代替：一个 `tool_panel` history item 可能扁平渲染成多个 `stream_tool_N`。旧卡静态定稿只能使用 shadow 中已经成功写入的范围，不能使用 desired/pending 的完整内容，否则会把下一张卡的开头重复写回旧卡。新卡从当前正在更新的 item 开始，避免因一对多渲染跳过内容。由于 shadow 不是客户端 ACK，慢 batch 或弱确认场景下要保守降级，避免 offset 跳过用户没看到的内容。
 
 如果飞书返回 `code=200850`，adapter 会直接触发强制 continuation rollover，不再等待下一轮 full refresh。这个错误通常说明 payload 维度已触及飞书实际限制，即使 `componentCount` 仍低于组件软上限，也应该把当前 group 切到新卡。
 
@@ -268,7 +297,7 @@ CardKit 的 `streaming_mode` 只影响文本流式上屏的表现，不应成为
 | 关闭流式         | `cardkit.v1.card.settings`       | `settings={"streaming_mode":false}`、`sequence`                                                        | 定稿；续接状态写入后关闭 streaming mode             |
 | 终态 reaction  | `im.messageReaction.create`      | `message_id`、emoji type                                                                               | completed/error 结果提示                         |
 
-所有 CardKit 更新都依赖递增的 `sequence`。关闭 streaming mode 本身也占用一个 sequence；普通 finalize 会先关闭 streaming mode 再写最终普通卡，rollover 会先写“已续接到下一条”状态，再用 `card.settings` 作为旧卡的最后一次写入。
+所有 CardKit 更新都依赖递增的 `sequence`。关闭 streaming mode 本身也占用一个 sequence；普通 finalize 会先关闭 streaming mode 再写最终普通卡，rollover 会依次写“已续接到下一条”状态、关闭 streaming mode、写静态旧卡，然后才创建下一张卡。禁止把 `card.settings` 当成客户端静态化的最后一步。
 
 ## 日志与性能观测
 

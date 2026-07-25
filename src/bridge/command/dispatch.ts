@@ -2,7 +2,7 @@ import {
   resolveCommandAlias,
 } from './aliases.js';
 import { getBridgeContext } from '../host/context.js';
-import { deliverBridgeNotice } from '../../channels/delivery/feedback.js';
+import { deliverBridgeNotice, enqueueBridgeNotice } from '../../channels/delivery/feedback.js';
 import * as router from '../session/channel-router.js';
 import type { BaseChannelAdapter, StructuredStreamingUiActionButton } from '../../channels/contracts.js';
 import type { ChannelAddress, ChannelChat, InboundMessage, OutboundRichCard } from '../../domain/index.js';
@@ -21,10 +21,7 @@ import {
   handleHealthCommand,
   handleHistoryCommand,
 } from './diagnostics.js';
-import {
-  handlePermissionCommand,
-  handleStopCommand,
-} from './control.js';
+import { handleStopCommand } from './control.js';
 import { buildHelpCommandResponse } from './help.js';
 import {
   buildStartCommandResponse,
@@ -33,6 +30,7 @@ import {
   handleNewSessionCommand,
   handleThreadBindingCommand,
   handleThreadSwitchCommand,
+  type SessionCommandBackgroundEffect,
 } from './session-thread.js';
 import {
   handleChangeDirectoryCommand,
@@ -100,42 +98,8 @@ import {
 import { validateThreadName } from '../session/command-use-cases/args.js';
 import { requestCodexTuiSelectionViaPermissionBroker } from './codex-tui-selection.js';
 
-const PROVIDER_TMUX_LOADING_REACTION = 'Typing';
-
 function describeReactionError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
-}
-
-function startAsyncMessageReaction(
-  adapter: BaseChannelAdapter,
-  msg: InboundMessage,
-  emojiType: string,
-): () => void {
-  if (!msg.messageId || typeof adapter.addMessageReaction !== 'function') return () => {};
-  let shouldRemove = false;
-  let reactionId: string | null = null;
-  const messageId = msg.messageId;
-  const removeReaction = () => {
-    if (!reactionId || typeof adapter.removeMessageReaction !== 'function') return;
-    const currentReactionId = reactionId;
-    reactionId = null;
-    void adapter.removeMessageReaction(messageId, currentReactionId, emojiType).catch((error) => {
-      console.warn('[bridge-command] Failed to remove async message reaction:', describeReactionError(error));
-    });
-  };
-
-  void adapter.addMessageReaction(messageId, emojiType).then((addedReactionId) => {
-    if (!addedReactionId) return;
-    reactionId = addedReactionId;
-    if (shouldRemove) removeReaction();
-  }).catch((error) => {
-    console.warn('[bridge-command] Failed to add async message reaction:', describeReactionError(error));
-  });
-
-  return () => {
-    shouldRemove = true;
-    removeReaction();
-  };
 }
 
 function extractCardActionFormValue(raw: unknown): Record<string, unknown> | null {
@@ -301,6 +265,22 @@ function formatCurrentConfigWriteError(error: unknown): string {
   return error instanceof Error ? error.message : '配置字段不合法。';
 }
 
+function scheduleCommandBackgroundEffect(
+  effect: SessionCommandBackgroundEffect,
+  adapter: BaseChannelAdapter,
+  address: ChannelAddress,
+): void {
+  void effect.run().catch((error) => {
+    console.warn('[bridge-command] Background command effect failed:', {
+      context: effect.context,
+      error: describeReactionError(error),
+    });
+    enqueueBridgeNotice(adapter, address, `${effect.failureNotice}\n\n${describeReactionError(error)}`, {
+      audit: true,
+    });
+  });
+}
+
 async function handleCurrentConfigFormCommand(options: {
   adapter: BaseChannelAdapter;
   msg: InboundMessage;
@@ -310,7 +290,7 @@ async function handleCurrentConfigFormCommand(options: {
   deps: BridgeCommandDispatchDeps;
   threadDisplay: CommandThreadDisplay;
   markdown: boolean;
-}): Promise<{ response: string; richCard?: OutboundRichCard }> {
+}): Promise<{ response: string; richCard?: OutboundRichCard; backgroundEffects?: SessionCommandBackgroundEffect[] }> {
   let binding = options.binding || router.resolve(options.msg.address);
   let session = options.store.getSession(binding.bridgeSessionId);
   if (!session) return { response: '当前会话不存在，无法保存配置。' };
@@ -322,6 +302,7 @@ async function handleCurrentConfigFormCommand(options: {
   const submittedRuntime = parseCurrentRuntimeArg(options.args)
     || normalizeRuntimeFormValue(formValue.clk_runtime || formValue.runtime);
   const responses: string[] = [];
+  const backgroundEffects: SessionCommandBackgroundEffect[] = [];
   if (submittedRuntime && submittedRuntime !== activeRuntime) {
     responses.push(handleRuntimeCommand({
       msg: options.msg,
@@ -355,7 +336,13 @@ async function handleCurrentConfigFormCommand(options: {
     if (!parsed.ok) return { response: parsed.message };
     options.threadDisplay.renameBinding(binding, parsed.name);
     if (binding.chatKind === 'group' && options.adapter.renameGroupChat) {
-      await options.adapter.renameGroupChat(binding.chatId, parsed.name).catch(() => null);
+      backgroundEffects.push({
+        context: `rename group chat ${binding.chatId}`,
+        failureNotice: `当前会话标题已保存，但群聊名称同步失败。可稍后重试 \`/t rename ${parsed.name}\`。`,
+        run: async () => {
+          await options.adapter.renameGroupChat!(binding.chatId, parsed.name);
+        },
+      });
     }
     responses.push(`name: ${parsed.name}`);
   }
@@ -407,6 +394,7 @@ async function handleCurrentConfigFormCommand(options: {
       store: options.store,
       threadDisplay: options.threadDisplay,
     }),
+    backgroundEffects,
   };
 }
 
@@ -421,8 +409,8 @@ async function handleCurrentRuntimeCommand(options: {
 }): Promise<{ response: string; richCard?: OutboundRichCard }> {
   const binding = options.binding || router.resolve(options.msg.address);
   const runtime = normalizeFormString(options.args);
-  if (runtime !== 'codex' && runtime !== 'claude') {
-    return { response: '请选择有效 runtime：codex 或 claude。' };
+  if (runtime !== 'codex' && runtime !== 'claude' && runtime !== 'kimi') {
+    return { response: '请选择有效 runtime：codex、claude 或 kimi。' };
   }
 
   const session = options.store.getSession(binding.bridgeSessionId);
@@ -451,15 +439,15 @@ async function handleCurrentRuntimeCommand(options: {
   };
 }
 
-function normalizeRuntimeFormValue(value: unknown): 'codex' | 'claude' | undefined {
+function normalizeRuntimeFormValue(value: unknown): 'codex' | 'claude' | 'kimi' | undefined {
   const runtime = normalizeFormString(value).toLowerCase();
-  return runtime === 'codex' || runtime === 'claude' ? runtime : undefined;
+  return runtime === 'codex' || runtime === 'claude' || runtime === 'kimi' ? runtime : undefined;
 }
 
-function parseCurrentRuntimeArg(args: string): 'codex' | 'claude' | undefined {
+function parseCurrentRuntimeArg(args: string): 'codex' | 'claude' | 'kimi' | undefined {
   const parts = args.trim().toLowerCase().split(/\s+/).filter(Boolean);
   const runtime = parts[0] === 'runtime' ? parts[1] : parts[0];
-  return runtime === 'codex' || runtime === 'claude' ? runtime : undefined;
+  return runtime === 'codex' || runtime === 'claude' || runtime === 'kimi' ? runtime : undefined;
 }
 
 export async function handleBridgeCommand(
@@ -489,7 +477,7 @@ export async function handleBridgeCommand(
       summary: `[BLOCKED] Dangerous input detected: ${dangerCheck.reason}`,
     });
     console.warn(`[bridge-manager] Blocked dangerous command input from chat ${msg.address.chatId}: ${dangerCheck.reason}`);
-    await deliverBridgeNotice(adapter, msg.address, '命令被拒绝：检测到无效输入。', {
+    enqueueBridgeNotice(adapter, msg.address, '命令被拒绝：检测到无效输入。', {
       replyToMessageId: msg.messageId,
     });
     return;
@@ -505,6 +493,7 @@ export async function handleBridgeCommand(
   let afterDelivery: ((messageId?: string) => Promise<void> | void) | undefined;
   let postDeliveryCurrentAddress: ChannelAddress | undefined;
   let postDeliveryUserMessages: InboundMessage[] = [];
+  const backgroundEffects: SessionCommandBackgroundEffect[] = [];
   const currentBinding = deps.scopedBinding || store.getChannelChat(msg.address.channelType, msg.address.chatId);
   const shouldApplyDefaultTargetForCommand = !new Set(['/status', '/threads', '/t', '/set']).has(command);
   const commandBinding = !shouldApplyDefaultTargetForCommand
@@ -545,6 +534,7 @@ export async function handleBridgeCommand(
           messageId: postDeliveryUserMessage.messageId,
           timestamp: Date.now(),
         }));
+        backgroundEffects.push(...(result.backgroundEffects || []));
       }
       break;
     }
@@ -583,6 +573,7 @@ export async function handleBridgeCommand(
       responseAddress = result.responseAddress || msg.address;
       responseRichCard = result.richCard;
       threadTableCardScope = result.threadTableCardScope;
+      backgroundEffects.push(...(result.backgroundEffects || []));
       break;
     }
 
@@ -618,6 +609,7 @@ export async function handleBridgeCommand(
       responseAddress = result.responseAddress || msg.address;
       responseRichCard = result.richCard;
       threadTableCardScope = result.threadTableCardScope;
+      backgroundEffects.push(...(result.backgroundEffects || []));
       break;
     }
 
@@ -728,46 +720,37 @@ export async function handleBridgeCommand(
 
     case '/provider': {
       const isTmuxProviderStart = args.trim().toLowerCase() === 'tmux';
-      const clearLoadingReaction = isTmuxProviderStart
-        ? startAsyncMessageReaction(adapter, msg, PROVIDER_TMUX_LOADING_REACTION)
-        : () => {};
-      try {
-        response = await handleProviderCommand({
-          msg,
-          args,
-          currentBinding,
-          store,
-          deps: {
-            ...deps,
-            getActiveTask: deps.getActiveTask,
-            notifyBackgroundOperation: async (message: string, noticeOptions?: { force?: boolean }) => {
-              if (isTmuxProviderStart && noticeOptions?.force !== true) {
-                return;
-              }
-              await deliverBridgeNotice(adapter, msg.address, message, {
-                replyToMessageId: msg.messageId,
-                audit: false,
-              });
-            },
-            requestCodexTuiSelection: async (selectionPrompt, requestOptions) => {
-              return requestCodexTuiSelectionViaPermissionBroker({
-                adapter,
-                msg,
-                selectionPrompt,
-                sessionId: requestOptions.sessionId,
-                requestScope: 'provider-startup',
-                reasonContext: 'during /p tmux startup',
-                replyToMessageId: requestOptions.replyToMessageId,
-              });
-            },
+      response = await handleProviderCommand({
+        msg,
+        args,
+        currentBinding,
+        store,
+        deps: {
+          ...deps,
+          getActiveTask: deps.getActiveTask,
+          notifyBackgroundOperation: async (message: string, noticeOptions?: { force?: boolean }) => {
+            if (isTmuxProviderStart && noticeOptions?.force !== true) {
+              return;
+            }
+            enqueueBridgeNotice(adapter, msg.address, message, {
+              replyToMessageId: msg.messageId,
+              audit: false,
+            });
           },
-          markdown: responseParseMode === 'Markdown',
-        });
-      } catch (error) {
-        throw error;
-      } finally {
-        clearLoadingReaction();
-      }
+          requestCodexTuiSelection: async (selectionPrompt, requestOptions) => {
+            return requestCodexTuiSelectionViaPermissionBroker({
+              adapter,
+              msg,
+              selectionPrompt,
+              sessionId: requestOptions.sessionId,
+              requestScope: 'provider-startup',
+              reasonContext: 'during /p tmux startup',
+              replyToMessageId: requestOptions.replyToMessageId,
+            });
+          },
+        },
+        markdown: responseParseMode === 'Markdown',
+      });
       break;
     }
 
@@ -945,6 +928,7 @@ export async function handleBridgeCommand(
       response = result.response;
       responseRichCard = result.richCard;
       threadTableCardScope = responseRichCard ? 'current' : undefined;
+      backgroundEffects.push(...(result.backgroundEffects || []));
       break;
     }
 
@@ -1074,16 +1058,6 @@ export async function handleBridgeCommand(
       break;
     }
 
-    case '/perm': {
-      response = handlePermissionCommand({
-        args,
-        chatId: msg.address.chatId,
-        currentBinding,
-        store,
-      });
-      break;
-    }
-
     case '/help':
       responseParseMode = getFeedbackParseMode(adapter.channelType);
       response = buildHelpCommandResponse();
@@ -1095,7 +1069,7 @@ export async function handleBridgeCommand(
 
   if (response) {
     const richCardUpdateMessageId = richCardUpdateMessageIdForCommand(msg);
-    const result = await deliverBridgeNotice(adapter, responseAddress, response, {
+    const delivery = enqueueBridgeNotice(adapter, responseAddress, response, {
       replyToMessageId: responseAddress.channelType === msg.address.channelType && responseAddress.chatId === msg.address.chatId
         ? msg.messageId
         : undefined,
@@ -1103,28 +1077,35 @@ export async function handleBridgeCommand(
       richCard: responseRichCard,
       richCardUpdateMessageId,
     });
-    const threadCardMessageId = richCardUpdateMessageId || result.messageId;
-    if (result.ok && setConfigCard && threadCardMessageId) {
-      saveThreadTableMessageRecord(responseAddress, 'set', threadCardMessageId);
-    } else if (result.ok && threadTableCardScope && threadCardMessageId) {
-      await persistAndPinLatestThreadTableMessage(adapter, responseAddress, threadTableCardScope, threadCardMessageId);
-    }
-    if (result.ok && afterDelivery) {
-      await afterDelivery(result.messageId);
-    }
-    if (result.ok && postDeliveryCurrentAddress) {
-      await deliverCurrentCommandAfterNewSession({
-        adapter,
-        address: postDeliveryCurrentAddress,
-        store,
-        threadDisplay,
-        markdown: responseParseMode === 'Markdown',
-      });
-    }
-    if (result.ok && postDeliveryUserMessages.length > 0) {
+    void delivery.completion.then(async (result) => {
+      if (!result.ok) return;
+      const threadCardMessageId = richCardUpdateMessageId || result.messageId;
+      if (setConfigCard && threadCardMessageId) {
+        saveThreadTableMessageRecord(responseAddress, 'set', threadCardMessageId);
+      } else if (threadTableCardScope && threadCardMessageId) {
+        await persistAndPinLatestThreadTableMessage(adapter, responseAddress, threadTableCardScope, threadCardMessageId);
+      }
+      if (afterDelivery) {
+        await afterDelivery(result.messageId);
+      }
+      if (postDeliveryCurrentAddress) {
+        await deliverCurrentCommandAfterNewSession({
+          adapter,
+          address: postDeliveryCurrentAddress,
+          store,
+          threadDisplay,
+          markdown: responseParseMode === 'Markdown',
+        });
+      }
       for (const postDeliveryUserMessage of postDeliveryUserMessages) {
         await deps.dispatchPostCommandMessage?.(adapter, postDeliveryUserMessage);
       }
-    }
+    }).catch((error) => {
+      console.warn('[bridge-command] Post-delivery command work failed:', describeReactionError(error));
+    });
+  }
+
+  for (const effect of backgroundEffects) {
+    scheduleCommandBackgroundEffect(effect, adapter, msg.address);
   }
 }

@@ -98,25 +98,30 @@ function buildRuntimeSelect(
     options: [
       { text: 'Codex', callbackData: buildCommandCallbackData(`/t codex${suffix}`) },
       { text: 'Claude', callbackData: buildCommandCallbackData(`/t claude${suffix}`) },
+      { text: 'Kimi', callbackData: buildCommandCallbackData(`/t kimi${suffix}`) },
     ],
   };
 }
 
-function localRuntimeOf(session: LocalRuntimeSessionSummary): 'codex' | 'claude' {
-  return session.runtime === 'claude' ? 'claude' : 'codex';
+function localRuntimeOf(session: LocalRuntimeSessionSummary): LocalSessionListRuntime {
+  if (session.runtime === 'claude') return 'claude';
+  if (session.runtime === 'kimi') return 'kimi';
+  return 'codex';
 }
 
 function formatLocalRuntimeCreator(session: LocalRuntimeSessionSummary): string {
   if (localRuntimeOf(session) === 'claude') return 'Claude Code';
+  if (localRuntimeOf(session) === 'kimi') return 'Kimi Code';
   return formatCreatorBadge(resolveCreatorKind({
     source: session.source,
     originator: session.originator,
   })).label;
 }
 
-function formatLocalThreadListTitle(codexCount: number, claudeCount: number, bridgeCount: number): string {
+function formatLocalThreadListTitle(codexCount: number, claudeCount: number, kimiCount: number, bridgeCount: number): string {
   const parts = [`Codex${codexCount}`];
   if (claudeCount > 0) parts.push(`Claude${claudeCount}`);
+  if (kimiCount > 0) parts.push(`Kimi${kimiCount}`);
   if (bridgeCount > 0) parts.push(`Bridge${bridgeCount}`);
   return `本地会话（${parts.join(' + ')}）`;
 }
@@ -514,7 +519,7 @@ function buildThreadCardActionRows(buttons: OutboundCardActionButton[]): Outboun
 }
 
 function buildRuntimeThreadSelect(
-  runtime: 'codex' | 'claude',
+  runtime: LocalSessionListRuntime,
   items: GlobalThreadListItem[],
   selectedCallbackData: string | undefined,
 ): NonNullable<OutboundRichCard['selects']>[number] | null {
@@ -529,16 +534,17 @@ function buildRuntimeThreadSelect(
       };
     });
   if (options.length === 0) return null;
+  const runtimeLabel = runtime === 'claude' ? 'Claude Code' : runtime === 'kimi' ? 'Kimi Code' : 'Codex';
   return {
     id: `${runtime}_select`,
-    placeholder: runtime === 'claude' ? '选择 Claude Code 会话' : '选择 Codex 会话',
+    placeholder: `选择 ${runtimeLabel} 会话`,
     selectedCallbackData,
     options,
   };
 }
 
 function buildRuntimeThreadTableBlock(
-  runtime: 'codex' | 'claude',
+  runtime: LocalSessionListRuntime,
   items: GlobalThreadListItem[],
   rows: ThreadCommandTableRow[],
   selectedCallbackData: string | undefined,
@@ -550,7 +556,7 @@ function buildRuntimeThreadTableBlock(
     .filter(({ item }) => item.kind === 'local' && localRuntimeOf(item.local) === runtime)
     .map(({ row }) => row);
   const select = buildRuntimeThreadSelect(runtime, items, selectedCallbackData);
-  const label = runtime === 'claude' ? 'Claude Code' : 'Codex';
+  const label = runtime === 'claude' ? 'Claude Code' : runtime === 'kimi' ? 'Kimi Code' : 'Codex';
   const refreshCommand = showAll
     ? `/t ${runtime} n ${limit || MAX_LOCAL_SESSION_LIST_LIMIT}`
     : limit && limit !== DEFAULT_LOCAL_SESSION_LIST_LIMIT
@@ -609,7 +615,7 @@ export function buildBoundThreadsCommandResponse(
     '当前聊天绑定',
     buildBoundThreadCommandTableRows(bindings),
     [
-      '`/t <序号|bridge-id|thread-id|名称>` 接管到当前聊天；`/t rename <名称>` 重命名当前线程并同步群聊名称，真实群名自动带 `[botname]` 前缀。',
+      '`/t <序号|bridge-id|thread/session-id|名称>` 接管到当前聊天；`/t rename <名称>` 重命名当前会话并同步群聊名称，真实群名自动带 `[botname]` 前缀。',
       '`/t` 和 `/t archive` 的序号来自全局本地会话表。',
     ],
     markdown,
@@ -622,7 +628,7 @@ function hasReachedLocalRuntimeSessionDisplayLimit(actualCount: number, limit: n
 
 export function buildLocalRuntimeSessionLimitNotice(actualCount: number, limit: number | undefined): string | null {
   if (!hasReachedLocalRuntimeSessionDisplayLimit(actualCount, limit)) return null;
-  return `已达到 ${MAX_LOCAL_SESSION_LIST_LIMIT} 条显示上限，可能还有更多本地会话未显示；可用名称/thread id 缩小范围。`;
+  return `已达到 ${MAX_LOCAL_SESSION_LIST_LIMIT} 条显示上限，可能还有更多本地会话未显示；可用名称或 thread/session id 缩小范围。`;
 }
 
 export function buildLocalRuntimeSessionsCommandResponse(
@@ -637,7 +643,8 @@ export function buildLocalRuntimeSessionsCommandResponse(
   const actualCount = localSessions.length;
   const codexCount = localSessions.filter((session) => localRuntimeOf(session) === 'codex').length;
   const claudeCount = localSessions.filter((session) => localRuntimeOf(session) === 'claude').length;
-  const title = formatLocalThreadListTitle(codexCount, claudeCount, 0);
+  const kimiCount = localSessions.filter((session) => localRuntimeOf(session) === 'kimi').length;
+  const title = formatLocalThreadListTitle(codexCount, claudeCount, kimiCount, 0);
   const limitNotice = buildLocalRuntimeSessionLimitNotice(actualCount, limit);
   const globalItems = buildGlobalThreadList(localSessions, []);
   return buildThreadCommandTableResponse(
@@ -650,11 +657,11 @@ export function buildLocalRuntimeSessionsCommandResponse(
       ? [
           '发送 `/t 1` 可接管第 1 条本地会话。',
           `默认显示最近 ${DEFAULT_LOCAL_SESSION_LIST_LIMIT} 条；卡片下拉可切换 50/100。`,
-          `发送 \`/t codex n 100\` 或 \`/t claude n 100\` 可只看最近 100 条本地会话。`,
+          `发送 \`/t codex n 100\`、\`/t claude n 100\` 或 \`/t kimi n 100\` 可只看最近 100 条本地会话。`,
         ]
       : [
           '发送 `/t 1` 可接管第 1 条本地会话。',
-          '发送 `/t codex n 50` 或 `/t claude n 50` 可调整本地会话数量。',
+          '发送 `/t codex n 50`、`/t claude n 50` 或 `/t kimi n 50` 可调整本地会话数量。',
         ]),
     ],
     markdown,
@@ -681,7 +688,11 @@ export function buildLocalRuntimeSessionsCommandCard(
     : undefined;
   const globalItems = buildGlobalThreadList(localSessions, []);
   const tableRows = buildGlobalThreadCommandTableRows(globalItems, bindingStates);
-  const activeRuntime = options.activeRuntime === 'claude' ? 'claude' : 'codex';
+  const activeRuntime = options.activeRuntime === 'claude'
+    ? 'claude'
+    : options.activeRuntime === 'kimi'
+      ? 'kimi'
+      : 'codex';
   const card: OutboundRichCard = {
     title: '',
     subtitle: `${formatActiveThreadCardNumberTag('1')} 表示当前激活的对话，${formatSelectedThreadCardNumberTag('1')} 表示其他人激活的对话，bridge_id 存在表示曾经接入过 codelark。`,
@@ -700,7 +711,7 @@ export function buildLocalRuntimeSessionsCommandCard(
           ...(limitNotice ? [limitNotice] : []),
           '纯文本命令：`/t 1` 接管第 1 条。',
           '`/t` 和 `/t archive` 的序号来自这张全局本地会话表。',
-          '更多：使用卡片下拉或 `/t codex n 50`、`/t claude n 100` 调整显示数量。',
+          '更多：使用卡片下拉或 `/t codex n 50`、`/t claude n 100`、`/t kimi n 100` 调整显示数量。',
         ],
   };
   if (options.channelType && options.chatId) {
@@ -772,7 +783,7 @@ export function buildBoundThreadsCommandCard(
           },
         ]),
     footer: [
-      '纯文本命令：`/t <序号|thread-id|bridge-session-id|名称>` 接管到当前聊天；`/t archive` 归档当前线程。',
+      '纯文本命令：`/t <序号|thread/session-id|bridge-session-id|名称>` 接管到当前聊天；`/t archive` 归档当前本地会话。',
     ],
   };
   if (options.channelType && options.chatId) {
@@ -903,9 +914,10 @@ export function formatMirrorStatus(session: BridgeSession | null | undefined): s
       : '监听中';
   }
   if (session?.mirror_status === 'stale') {
-    return getSessionActiveRuntime(session) === 'claude'
-      ? '待恢复（暂时没定位到本地 Claude Code JSONL 文件）'
-      : '待恢复（暂时没定位到本地 Codex thread 文件）';
+    const runtime = getSessionActiveRuntime(session);
+    if (runtime === 'claude') return '待恢复（暂时没定位到本地 Claude Code JSONL 文件）';
+    if (runtime === 'kimi') return '待恢复（暂时没定位到本地 Kimi Code wire 文件）';
+    return '待恢复（暂时没定位到本地 Codex thread 文件）';
   }
   return '未监听';
 }

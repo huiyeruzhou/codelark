@@ -27,6 +27,10 @@ import {
 import type { BridgeStore } from '../../../../domain/index.js';
 import type { LLMProvider, StreamChatParams } from '../../../../runtime/contracts.js';
 import { CODELARK_HOME } from '../../../../configuration/paths.js';
+import {
+  getSessionKimiCwd,
+  getSessionKimiSessionId,
+} from '../../../../domain/session-runtime.js';
 
 function toolOnlyLlm(): LLMProvider {
   return {
@@ -148,14 +152,14 @@ describe('buildInlineToolBlock', () => {
     assert.doesNotMatch(result, /```json\nnpm test/);
   });
 
-  it('uses diff fences for apply_patch inline input and protects nested fences', () => {
+  it('uses file-language fences for apply_patch inline input and protects nested fences', () => {
     const result = buildInlineToolBlock({
       name: 'apply_patch',
       status: 'running',
       input: '*** Begin Patch\n*** Update File: a.ts\n@@\n+```ts\n+const x = 1;\n+```\n*** End Patch',
     });
 
-    assert.match(result, /````diff\n\*\*\* Begin Patch/);
+    assert.match(result, /````typescript\n\*\*\* Begin Patch/);
     assert.match(result, /\n\+```ts\n\+const x = 1;\n\+```\n/);
   });
 });
@@ -236,6 +240,89 @@ permission_mode = "plan"
       if (previousToml === null) fs.rmSync(configTomlPath, { force: true });
       else fs.writeFileSync(configTomlPath, previousToml, 'utf-8');
     }
+  });
+
+  it('captures Kimi status identity and thinking notes from SDK streams', async () => {
+    resetBridgeTestState();
+    const calls: StreamChatParams[] = [];
+    const llm: LLMProvider = {
+      streamChat(params: StreamChatParams): ReadableStream<string> {
+        calls.push(params);
+        return new ReadableStream({
+          start(controller) {
+            controller.enqueue(sseEvent('status', {
+              session_id: 'session_kimi_sdk_status_1',
+              cwd: '/tmp/kimi-sdk',
+              reasoning: '思考',
+              thinking: '正在分析 Kimi 上下文',
+            }));
+            controller.enqueue(sseEvent('text', 'kimi reply'));
+            controller.enqueue(sseEvent('result', {
+              session_id: 'session_kimi_sdk_status_1',
+              cwd: '/tmp/kimi-sdk',
+            }));
+            controller.close();
+          },
+        });
+      },
+    };
+    const store = initBridgeTestContext({
+      settings: makeBridgeSettings(),
+      llm,
+    });
+    const session = store.createSession('kimi-runtime-test', 'codex-model', undefined, '/tmp/kimi-sdk', 'normal');
+    store.updateSession(session.id, {
+      runtime: {
+        activeRuntime: 'kimi',
+      },
+    });
+    const binding = store.upsertChannelChat({
+      channelType: 'feishu',
+      chatId: 'chat-kimi-runtime',
+      bridgeSessionId: session.id,
+    });
+    const statusNotes: Array<string | null> = [];
+    const thinkingNotes: string[] = [];
+    const identities: Array<{ runtime: string; sessionId: string; cwd?: string }> = [];
+
+    const result = await processMessage(
+      binding,
+      'hello kimi',
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      (note) => statusNotes.push(note),
+      undefined,
+      {
+        onThinkingNote: (note) => thinkingNotes.push(note),
+        onRuntimeIdentity: (identity) => {
+          identities.push({
+            runtime: identity.runtime,
+            sessionId: identity.sessionId,
+            ...(identity.cwd ? { cwd: identity.cwd } : {}),
+          });
+        },
+      },
+      createTestSdkConversationRuntime(store, llm),
+    );
+
+    assert.equal(result.responseText, 'kimi reply');
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0]?.runtime, 'kimi');
+    assert.equal(calls[0]?.kimiSessionId, undefined);
+    assert.deepEqual(statusNotes, ['思考']);
+    assert.deepEqual(thinkingNotes, ['正在分析 Kimi 上下文']);
+    assert.deepEqual(identities, [
+      { runtime: 'kimi', sessionId: 'session_kimi_sdk_status_1', cwd: '/tmp/kimi-sdk' },
+      { runtime: 'kimi', sessionId: 'session_kimi_sdk_status_1', cwd: '/tmp/kimi-sdk' },
+    ]);
+    const updatedSession = store.getSession(session.id);
+    assert.equal(getSessionKimiSessionId(updatedSession), 'session_kimi_sdk_status_1');
+    assert.equal(getSessionKimiCwd(updatedSession), '/tmp/kimi-sdk');
+    assert.equal(updatedSession?.runtime?.codex?.threadId, undefined);
   });
 
   it('passes only the configured session system prompt to SDK providers', async () => {
@@ -361,9 +448,10 @@ permission_mode = "plan"
     );
 
     assert.equal(result.responseText, '');
-    assert.match(previews.join('\n'), /Bash/);
-    assert.match(previews.join('\n'), /pwd/);
-    assert.match(previews.join('\n'), /\/tmp\/project/);
+    const preview = previews.join('\n');
+    assert.match(preview, /💻 运行 `pwd` · 输出 1 行/);
+    assert.match(preview, /```bash\npwd\n```/);
+    assert.doesNotMatch(preview, /```text\n\/tmp\/project\n```/);
 
     const { messages } = store.getMessages(session.id);
     assert.equal(messages.length, 2);

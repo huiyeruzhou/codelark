@@ -1,6 +1,6 @@
 {
   "name": "codelark",
-  "version": "0.1.2",
+  "version": "0.2.0",
   "description": "Installable CodeLark bridge with local setup UI and background service",
   "license": "MIT",
   "homepage": "https://github.com/huiyeruzhou/codelark#readme",
@@ -40,7 +40,8 @@
     "real:setup-wizard:wizard-e2e": "tsx scripts/setup-wizard-real-wizard-e2e.ts",
     "real:feishu:e2e": "tsx scripts/real-feishu-e2e.ts",
     "run": "node dist/cli.mjs run",
-    "test": "node scripts/run-tests.js",
+    "test": "node scripts/run-test-groups.js",
+    "test:serial": "node scripts/run-tests.js",
     "pack:check": "node scripts/check-npm-pack.js",
     "prepublishOnly": "npm run typecheck && npm test && npm run docs:build && npm run build && npm run pack:check"
   },
@@ -51,6 +52,7 @@
     "@larksuite/cli": "^1.0.45",
     "@larksuiteoapi/node-sdk": "^1.66.1",
     "@openai/codex-sdk": "^0.130.0",
+    "acorn": "^8.17.0",
     "commander": "^7.2.0",
     "config": "^4.4.1",
     "https-proxy-agent": "^9.0.0",

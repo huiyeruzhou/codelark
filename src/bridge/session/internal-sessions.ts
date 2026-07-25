@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 import type { BridgeSession, BridgeStore } from '../../domain/index.js';
+import type { RuntimeAgent } from '../../domain/session.js';
 import { createConfigService } from '../../configuration/service.js';
 import { getGlobalStringConfig, getGlobalWorkspaceRoot } from './global-config.js';
 
@@ -37,7 +38,10 @@ function getDefaultSessionWorkingDirectory(store: BridgeStore): string {
 }
 
 function isHiddenTemporarySession(session: BridgeSession): boolean {
-  return session.hidden === true && !session.runtime?.codex?.threadId && !session.runtime?.claude?.sessionId;
+  return session.hidden === true
+    && !session.runtime?.codex?.threadId
+    && !session.runtime?.claude?.sessionId
+    && !session.runtime?.kimi?.sessionId;
 }
 
 export function cleanupHiddenSessions(store: BridgeStore): void {
@@ -64,7 +68,7 @@ export function getOrCreateDraftSession(
   store: BridgeStore,
   address: { channelType: string; chatId: string; userId?: string },
   options?: {
-    activeRuntime?: 'codex' | 'claude';
+    activeRuntime?: RuntimeAgent;
     codexModel?: string;
     codexMode?: 'normal' | 'yolo';
     workingDirectory?: string;
@@ -86,6 +90,21 @@ export function getOrCreateDraftSession(
     return store.getSession(existing.id) || existing;
   }
 
+  return createDraftSession(store, address, options);
+}
+
+export function createDraftSession(
+  store: BridgeStore,
+  address: { channelType: string; chatId: string; userId?: string },
+  options?: {
+    activeRuntime?: RuntimeAgent;
+    codexModel?: string;
+    codexMode?: 'normal' | 'yolo';
+    workingDirectory?: string;
+  },
+): BridgeSession {
+  cleanupHiddenSessions(store);
+  const expectedName = makeDraftSessionName(address);
   const workingDirectory = options?.workingDirectory || getDefaultSessionWorkingDirectory(store);
   ensureDirectory(workingDirectory);
   const session = store.createSession(
@@ -102,7 +121,7 @@ export function getOrCreateDraftSession(
       activeRuntime: options?.activeRuntime,
     },
   );
-  if (options?.activeRuntime !== 'claude') {
+  if (!options?.activeRuntime || options.activeRuntime === 'codex') {
     createConfigService({ migrate: false }).set(
       { kind: 'session', sessionId: session.id },
       { runtime: { codex: { reasoningEffort: 'low' } } },

@@ -31,6 +31,7 @@ import {
   codexSessionToolEventFromEventMessage,
   codexSessionToolEventFromResponseItem,
 } from './tool-call-events.js';
+import { normalizeCodexToolCall } from './tool-call-normalizer.js';
 
 function compactInternalDisplayText(text: string): string {
   return renderCodexInternalTextForDisplay(text);
@@ -55,6 +56,7 @@ function extractCodexUserPrompt(payload: { user_prompt?: unknown; userPrompt?: u
 const IGNORED_EVENT_MSG_TYPES = new Set([
   'thread_name_updated',
   'thread_rolled_back',
+  'thread_settings_applied',
 ]);
 
 const CONTEXT_COMPACTED_NOTICE = '> ⚙️ 上下文已压缩，后续回复会基于压缩后的上下文继续。';
@@ -438,6 +440,7 @@ function pushCodexMirrorEventRecord(
   }
 
   if (parsed.payload?.type === 'task_complete') {
+    const errorText = extractNormalizedStructuredText(parsed.payload.error);
     records.push({
       signature,
       type: 'task_complete',
@@ -445,6 +448,7 @@ function pushCodexMirrorEventRecord(
       content: extractNormalizedStructuredText(parsed.payload.last_agent_message),
       timestamp,
       turnId: parsed.payload.turn_id || '',
+      ...(errorText ? { isError: true, errorText } : {}),
     });
     return true;
   }
@@ -514,11 +518,13 @@ function pushCodexMirrorResponseRecord(
   }
 
   if (parsed.payload?.type === 'function_call') {
-    const toolName = formatCodexToolName(parsed.payload.namespace, parsed.payload.name);
+    const rawToolName = formatCodexToolName(parsed.payload.namespace, parsed.payload.name);
     const toolId = extractNormalizedFreeText(parsed.payload.call_id) || signature;
-    if (!toolName) return true;
+    if (!rawToolName) return true;
+    const normalized = normalizeCodexToolCall(rawToolName, parsed.payload.arguments);
+    const toolName = normalized.name;
     if (toolName === 'update_plan') {
-      const tasks = parseUpdatePlanTasks(parsed.payload.arguments);
+      const tasks = parseUpdatePlanTasks(normalized.input);
       activeSpecialCallIds.add(toolId);
       records.push({
         signature,
@@ -536,11 +542,13 @@ function pushCodexMirrorResponseRecord(
   }
 
   if (parsed.payload?.type === 'custom_tool_call') {
-    const toolName = formatCodexToolName(parsed.payload.namespace, parsed.payload.name);
+    const rawToolName = formatCodexToolName(parsed.payload.namespace, parsed.payload.name);
     const toolId = extractNormalizedFreeText(parsed.payload.call_id) || signature;
-    if (!toolName) return true;
+    if (!rawToolName) return true;
+    const normalized = normalizeCodexToolCall(rawToolName, parsed.payload.input);
+    const toolName = normalized.name;
     if (toolName === 'update_plan') {
-      const tasks = parseUpdatePlanTasks(typeof parsed.payload.input === 'string' ? parsed.payload.input : undefined);
+      const tasks = parseUpdatePlanTasks(normalized.input);
       activeSpecialCallIds.add(toolId);
       records.push({
         signature,

@@ -161,16 +161,30 @@ describe('runStartupStorageMigrations', () => {
         runtime: {
           codex: { model: 'gpt-5.4' },
           claude: { sessionId: 'should-be-removed' },
+          kimi: { sessionId: 'should-be-removed' },
           general: { workingDirectory: '/tmp/codex' },
         },
       },
       'claude-session': {
         id: 'claude-session',
+        model: 'claude-retired-model',
         runtime: {
           activeRuntime: 'claude',
           codex: { model: 'should-be-removed' },
           claude: { sessionId: 'claude-1' },
+          kimi: { sessionId: 'should-be-removed' },
           general: { workingDirectory: '/tmp/claude' },
+        },
+      },
+      'kimi-session': {
+        id: 'kimi-session',
+        model: 'kimi-retired-model',
+        runtime: {
+          activeRuntime: 'kimi',
+          codex: { model: 'should-be-removed' },
+          claude: { sessionId: 'should-be-removed' },
+          kimi: { sessionId: 'session_kimi_migration', cwd: '/tmp/kimi' },
+          general: { workingDirectory: '/tmp/kimi' },
         },
       },
     }, null, 2));
@@ -191,6 +205,15 @@ describe('runStartupStorageMigrations', () => {
         createdAt: '2026-05-28T00:00:00.000Z',
         updatedAt: '2026-05-28T00:00:00.000Z',
       },
+      chatKimi: {
+        id: 'chatKimi',
+        channelType: 'feishu',
+        chatId: 'chat-kimi',
+        bridgeSessionId: 'kimi-session',
+        runtimeBridgeSessionIds: { codex: 'old-codex', kimi: 'kimi-session' },
+        createdAt: '2026-05-28T00:00:00.000Z',
+        updatedAt: '2026-05-28T00:00:00.000Z',
+      },
     }, null, 2));
 
     const result = runStartupStorageMigrations({ logger: false });
@@ -199,12 +222,23 @@ describe('runStartupStorageMigrations', () => {
     assert.equal(result.migratedChannelRuntimeBindings, 2);
     const sessions = readJson(SESSIONS_PATH);
     assert.equal(sessions['codex-session'].runtime.claude, undefined);
+    assert.equal(sessions['codex-session'].runtime.kimi, undefined);
     assert.equal(sessions['codex-session'].runtime.codex.model, 'gpt-5.4');
     assert.equal(sessions['claude-session'].runtime.codex, undefined);
+    assert.equal(sessions['claude-session'].runtime.kimi, undefined);
     assert.equal(sessions['claude-session'].runtime.claude.sessionId, 'claude-1');
+    assert.equal(sessions['claude-session'].runtime.claude.model, 'claude-retired-model');
+    assert.equal(sessions['claude-session'].model, undefined);
+    assert.equal(sessions['kimi-session'].runtime.codex, undefined);
+    assert.equal(sessions['kimi-session'].runtime.claude, undefined);
+    assert.equal(sessions['kimi-session'].runtime.kimi.sessionId, 'session_kimi_migration');
+    assert.equal(sessions['kimi-session'].runtime.kimi.model, 'kimi-retired-model');
+    assert.equal(sessions['kimi-session'].model, undefined);
 
     const channelChats = readJson(CHANNEL_CHATS_PATH);
     assert.equal(channelChats.chatCodex.runtimeBridgeSessionIds.codex, 'codex-session');
     assert.equal(channelChats.chatClaude.runtimeBridgeSessionIds.claude, 'claude-session');
+    assert.equal(channelChats.chatKimi.runtimeBridgeSessionIds.codex, 'old-codex');
+    assert.equal(channelChats.chatKimi.runtimeBridgeSessionIds.kimi, 'kimi-session');
   });
 });

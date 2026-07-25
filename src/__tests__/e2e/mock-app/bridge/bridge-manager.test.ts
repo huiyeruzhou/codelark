@@ -36,12 +36,16 @@ import {
   setSessionActiveRuntimeUpdate,
   setSessionClaudeIdentityUpdate,
   setSessionClaudeTmuxProviderUpdate,
+  setSessionKimiIdentityUpdate,
 } from '../../../../domain/session-runtime.js';
 import { tmuxCore, type TmuxCore } from '../../../../bridge/tmux/runtime.js';
 import type { OutboundMessage, OutboundRichCard, PermissionGateway, SendResult } from '../../../../domain/index.js';
 import type { LifecycleHooks, LLMProvider, StreamChatParams } from '../../../../runtime/contracts.js';
 import { writeCodexSessionJsonlFixture } from '../../../helpers/bridge/test-bridge-utils.js';
 import { getClaudeProjectDir, isArchivedClaudeSession } from '../../../../runtime/claude/session-jsonl.js';
+import { computeKimiWorkspaceDirName, isArchivedKimiSession } from '../../../../runtime/kimi/session-index.js';
+import { kimiTmuxSessionName } from '../../../../runtime/kimi/tmux-provider.js';
+import { formatFooterClockTime } from '../../../../shared/progress/footer.js';
 
 const DATA_DIR = path.join(CODELARK_HOME, 'data');
 const CONFIG_TOML_PATH = path.join(CODELARK_HOME, 'config.toml');
@@ -128,6 +132,43 @@ function writeClaudeJsonlFixture(params: {
   return filePath;
 }
 
+function writeKimiWireFixture(params: {
+  homeDir: string;
+  cwd: string;
+  sessionId: string;
+  title?: string;
+  updatedAt?: string;
+}): string {
+  const sessionDir = path.join(
+    params.homeDir,
+    'sessions',
+    computeKimiWorkspaceDirName(params.cwd),
+    params.sessionId,
+  );
+  const agentDir = path.join(sessionDir, 'agents', 'main');
+  fs.mkdirSync(agentDir, { recursive: true });
+  fs.writeFileSync(path.join(sessionDir, 'state.json'), JSON.stringify({
+    createdAt: '2026-06-26T00:00:00.000Z',
+    updatedAt: params.updatedAt || '2026-06-26T00:01:00.000Z',
+    title: params.title || 'Kimi mirror fixture',
+    lastPrompt: 'hello kimi',
+  }), 'utf-8');
+  const wirePath = path.join(agentDir, 'wire.jsonl');
+  fs.writeFileSync(wirePath, [
+    JSON.stringify({
+      type: 'context.append_message',
+      time: 1782477000000,
+      message: { role: 'assistant', content: [{ type: 'text', text: 'hello from kimi' }] },
+    }),
+  ].join('\n') + '\n', 'utf-8');
+  fs.appendFileSync(
+    path.join(params.homeDir, 'session_index.jsonl'),
+    `${JSON.stringify({ sessionId: params.sessionId, sessionDir, workDir: params.cwd })}\n`,
+    'utf-8',
+  );
+  return wirePath;
+}
+
 function makeSettings(): Map<string, string> {
   return new Map([
     ['remote_bridge_enabled', 'true'],
@@ -176,6 +217,114 @@ describe('bridge-manager model prompt context', () => {
     ].join('\n'));
   });
 
+});
+
+describe('bridge-manager mirror tmux selection probe scheduling', () => {
+  it('skips cold idle subscriptions but probes hot chats, active turns, and follow-up windows', () => {
+    _testOnly.resetStateForTests();
+    const subscription = createMirrorSubscription({
+      bindingId: 'binding-probe',
+      sessionId: 'session-probe',
+      channelType: 'feishu',
+      chatId: 'chat-probe',
+      threadId: 'thread-probe',
+      filePath: '/tmp/session-probe.jsonl',
+      lastDeliveredAt: null,
+      activityTier: 'cold',
+    });
+
+    assert.equal(_testOnly.shouldProbeMirrorTmuxSelectionPrompt(subscription, 10_000), false);
+
+    subscription.activityTier = 'hot';
+    assert.equal(_testOnly.shouldProbeMirrorTmuxSelectionPrompt(subscription, 10_000), true);
+
+    subscription.activityTier = 'cold';
+    subscription.pendingTurn = {} as typeof subscription.pendingTurn;
+    assert.equal(_testOnly.shouldProbeMirrorTmuxSelectionPrompt(subscription, 10_000), true);
+
+    subscription.pendingTurn = null;
+    _testOnly.requestTmuxSelectionPromptFollowupProbe(subscription.sessionId, 10_000, {
+      wakeDelayMs: 60_000,
+    });
+    assert.equal(_testOnly.shouldProbeMirrorTmuxSelectionPrompt(subscription, 10_000), true);
+    assert.equal(_testOnly.shouldProbeMirrorTmuxSelectionPrompt(subscription, 15_001), false);
+    _testOnly.resetStateForTests();
+  });
+
+  it('captures idle checkpoints only for tmux sessions present in one shared listing', async () => {
+    fs.rmSync(DATA_DIR, { recursive: true, force: true });
+    fs.rmSync(CONFIG_TOML_PATH, { force: true });
+    const store = new JsonFileStore(makeSettings());
+    initBridgeContext({
+      store,
+      llm: noopLlm,
+      permissions: noopPermissions,
+      lifecycle: noopLifecycle,
+    });
+    _testOnly.resetStateForTests();
+
+    const state = (globalThis as unknown as Record<string, any>).__bridge_manager__;
+    const config = createConfigService({ migrate: false, env: {} });
+    const subscriptions: Array<{ tmuxSessionName: string; activityTier: 'hot' | 'cold' }> = [
+      { tmuxSessionName: 'active-codex', activityTier: 'hot' },
+      { tmuxSessionName: 'missing-codex', activityTier: 'cold' },
+    ];
+    for (const [index, item] of subscriptions.entries()) {
+      const address = { channelType: 'feishu-default', chatId: `chat-checkpoint-${index}` } as const;
+      const binding = router.createBinding(address, `/tmp/checkpoint-${index}`);
+      const threadId = `019f0000-0000-7000-8000-00000000000${index}`;
+      store.updateSessionCodexThreadId(binding.bridgeSessionId, threadId);
+      store.updateSession(binding.bridgeSessionId, {
+        runtime: { general: { tmuxSessionName: item.tmuxSessionName } },
+      });
+      config.set(
+        { kind: 'session', sessionId: binding.bridgeSessionId },
+        { runtime: { codex: { provider: 'tmux' } } },
+      );
+      state.mirrorSubscriptions.set(binding.id, createMirrorSubscription({
+        bindingId: binding.id,
+        sessionId: binding.bridgeSessionId,
+        channelType: address.channelType,
+        chatId: address.chatId,
+        threadId,
+        filePath: `/tmp/checkpoint-${index}.jsonl`,
+        lastDeliveredAt: null,
+        activityTier: item.activityTier,
+      }));
+    }
+
+    let listCalls = 0;
+    const capturedTargets: string[] = [];
+    const restoreTmux = patchTmuxCore({
+      listSessions: async () => {
+        listCalls += 1;
+        return {
+          sessions: [{
+            name: 'active-codex',
+            windows: '1',
+            attached: '0',
+            created: '1',
+            activity: '1',
+          }],
+          command: 'tmux list-sessions',
+        };
+      },
+      capturePane: async (target) => {
+        capturedTargets.push(target);
+        return { screen: 'ready', command: `tmux capture-pane -t ${target}` };
+      },
+    });
+
+    try {
+      await _testOnly.ensureCodexTuiIdleScreenCheckpoints();
+      await _testOnly.ensureCodexTuiIdleScreenCheckpoints();
+      assert.equal(listCalls, 1);
+      assert.deepEqual(capturedTargets, ['active-codex:0.0']);
+    } finally {
+      restoreTmux();
+      _testOnly.resetStateForTests();
+    }
+  });
 });
 
 function installFakeTmux(): { binDir: string; logPath: string } {
@@ -548,6 +697,9 @@ describe('bridge-manager resolveCommandAlias', () => {
       ['/t', '', '/threads'],
       ['/t', 'all', '/threads'],
       ['/t', 'n 10', '/threads'],
+      ['/t', 'codex', '/threads'],
+      ['/t', 'claude', '/threads'],
+      ['/t', 'kimi', '/threads'],
       ['/t', 'archive', '/t'],
       ['/t', 'archive 1', '/t'],
       ['/t', '1', '/thread'],
@@ -673,6 +825,21 @@ describe('bridge-manager resolveCommandAlias', () => {
       blocksConversation: false,
     });
     assert.equal(_testOnly.adapterImmediateLane(inbound('/shell git status') as any, 'command')?.waitForConversationBarrier, true);
+    assert.deepEqual(_testOnly.adapterImmediateLane(inbound('/new 新群 /tmp/work') as any, 'command'), {
+      laneKey: `job:new:${address.channelType}:${address.chatId}:msg-/new 新群 /tmp/work`,
+      laneKind: 'job',
+      jobKind: 'command:new',
+      waitForConversationBarrier: true,
+      blocksConversation: false,
+    });
+    const newCallbackMessage = inbound('', buildCommandCallbackData('/new', binding.bridgeSessionId));
+    assert.deepEqual(_testOnly.adapterImmediateLane(newCallbackMessage as any, 'callback'), {
+      laneKey: `job:new:${address.channelType}:${address.chatId}:${newCallbackMessage.messageId}`,
+      laneKind: 'job',
+      jobKind: 'command:new',
+      waitForConversationBarrier: true,
+      blocksConversation: false,
+    });
   });
 
   it('parses local runtime session list requests', () => {
@@ -737,6 +904,36 @@ describe('bridge-manager resolveCommandAlias', () => {
       100,
     );
     assert.match(response, /^本地会话（Codex1）/);
+  });
+
+  it('renders Kimi local runtime sessions in text lists and rich cards', () => {
+    const sessions = [
+      {
+        runtime: 'kimi' as const,
+        threadId: 'session_kimi-list-1',
+        filePath: '/tmp/kimi-list-1/wire.jsonl',
+        cwd: '/tmp/kimi-project',
+        originator: 'Kimi Code',
+        source: 'kimi',
+        firstSeenAt: '2026-06-27T00:00:00.000Z',
+        lastEventAt: '2026-06-27T00:00:01.000Z',
+        title: 'Kimi Project',
+        activeEstimate: false,
+      },
+    ];
+
+    const response = buildLocalRuntimeSessionsCommandResponse(sessions, false, false, 20);
+    assert.match(response, /^本地会话（Codex0 \+ Kimi1）/);
+    assert.match(response, /Kimi Project\s+\/tmp\/kimi-project/);
+    assert.match(response, /Kimi Code/);
+
+    const card = buildLocalRuntimeSessionsCommandCard(sessions, false, undefined, [], [], {
+      activeRuntime: 'kimi',
+    });
+    assert.equal(card?.tableBlocks?.[0]?.selects?.[0]?.id, 'kimi_select');
+    assert.equal(card?.tableBlocks?.[0]?.selects?.[0]?.placeholder, '选择 Kimi Code 会话');
+    assert.equal(card?.tableBlocks?.[0]?.selects?.[2]?.id, 'thread_runtime_select');
+    assert.ok(card?.tableBlocks?.[0]?.selects?.[2]?.options.some((option) => option.text === 'Kimi'));
   });
 
   it('adds a visible notice when the local runtime session text list reaches its limit', () => {
@@ -1404,6 +1601,88 @@ model = "test-model"
     );
   });
 
+  it('formats terminal finalization detail per runtime', () => {
+    assert.equal(
+      _testOnly.formatRuntimeTerminalDetail({
+        runtime: 'kimi',
+        sessionId: 'session-kimi',
+        threadId: 'session_kimi_123',
+        codexThreadId: '',
+        text: 'done',
+        outcome: 'completed',
+        timestamp: '2026-06-27T00:00:00.000Z',
+      }),
+      '检测到 Kimi Code 会话已完成当前任务。',
+    );
+    assert.equal(
+      _testOnly.formatRuntimeTerminalDetail({
+        runtime: 'kimi',
+        sessionId: 'session-kimi',
+        threadId: 'session_kimi_123',
+        codexThreadId: '',
+        text: 'stopped',
+        outcome: 'aborted',
+        timestamp: '2026-06-27T00:00:00.000Z',
+      }),
+      '检测到 Kimi Code 会话已停止当前任务。',
+    );
+    assert.equal(
+      _testOnly.formatRuntimeTerminalDetail({
+        runtime: 'claude',
+        sessionId: 'session-claude',
+        threadId: 'claude-session-1',
+        codexThreadId: '',
+        text: 'failed',
+        outcome: 'failed',
+        timestamp: '2026-06-27T00:00:00.000Z',
+      }),
+      '检测到 Claude Code 会话当前任务执行失败。',
+    );
+    assert.equal(
+      _testOnly.formatRuntimeTerminalDetail({
+        runtime: 'codex',
+        sessionId: 'session-codex',
+        threadId: 'codex-thread-1',
+        codexThreadId: 'codex-thread-1',
+        text: 'done',
+        outcome: 'completed',
+        timestamp: '2026-06-27T00:00:00.000Z',
+      }),
+      '检测到 Codex thread已完成当前任务。',
+    );
+  });
+
+  it('does not treat Kimi tmux sessions as Codex TUI selection prompt targets', () => {
+    createConfigService({ migrate: false, env: {} }).set(
+      { kind: 'home' },
+      {
+        runtime: {
+          codex: { provider: 'tmux' },
+          claude: { provider: 'tmux' },
+          kimi: { provider: 'tmux' },
+        },
+      },
+    );
+    const store = new JsonFileStore(makeSettings());
+    const codexSession = store.createSession('Codex tmux', 'test-model', undefined, '/tmp/codex-selection-probe');
+    store.updateSession(codexSession.id, mergeSessionRuntimeUpdates(
+      setSessionActiveRuntimeUpdate('codex'),
+    ));
+    const claudeSession = store.createSession('Claude tmux', 'test-model', undefined, '/tmp/claude-selection-probe');
+    store.updateSession(claudeSession.id, mergeSessionRuntimeUpdates(
+      setSessionActiveRuntimeUpdate('claude'),
+      setSessionClaudeTmuxProviderUpdate({ tmuxSessionName: 'claude_selection_probe' }),
+    ));
+    const kimiSession = store.createSession('Kimi tmux', 'test-model', undefined, '/tmp/kimi-selection-probe');
+    store.updateSession(kimiSession.id, mergeSessionRuntimeUpdates(
+      setSessionKimiIdentityUpdate('session_kimi-selection-probe', '/tmp/kimi-selection-probe'),
+    ));
+
+    assert.equal(_testOnly.sessionSupportsTmuxSelectionPromptProbe(store.getSession(codexSession.id)!), true);
+    assert.equal(_testOnly.sessionSupportsTmuxSelectionPromptProbe(store.getSession(claudeSession.id)!), true);
+    assert.equal(_testOnly.sessionSupportsTmuxSelectionPromptProbe(store.getSession(kimiSession.id)!), false);
+  });
+
   it('formats mirror state summaries', () => {
     assert.equal(formatMirrorStatus({ id: 's-1', mirror_status: 'inactive' }), '未监听');
     assert.equal(
@@ -1561,6 +1840,7 @@ agent = "claude"
       lastStatusText: null,
       lastStatusAt: 0,
       statusNote: null,
+      thinkingNote: null,
       userText: 'codex prompt',
       lastAssistantText: null,
       lastCommentaryText: null,
@@ -1628,10 +1908,101 @@ agent = "claude"
         text: 'final answer',
         signature: 'complete',
         timestamp: '2026-03-25T08:00:03.000Z',
+        startedAt: '2026-03-25T08:00:00.000Z',
         status: 'completed',
       },
     ]);
     assert.equal(subscription.pendingTurn, null);
+  });
+
+  it('keeps Kimi thinking in mirror stream status without leaking it into final text', () => {
+    _testOnly.resetStateForTests();
+    const state = (globalThis as unknown as Record<string, any>).__bridge_manager__;
+    const streamTexts: string[] = [];
+    const streamStatuses: string[] = [];
+    state.adapters.set('feishu', {
+      channelType: 'feishu',
+      provider: 'feishu',
+      isRunning: () => true,
+      onMirrorStreamStart: () => {},
+      onStreamText: (_chatId: string, text: string) => {
+        streamTexts.push(text);
+      },
+      onStreamStatus: (_chatId: string, text: string) => {
+        streamStatuses.push(text);
+      },
+      onStreamEnd: async () => true,
+    });
+
+    const subscription = {
+      pendingTurn: null,
+      sessionId: 'session-kimi',
+      threadId: 'session_11111111-1111-4111-8111-111111111111',
+      channelType: 'feishu',
+      chatId: 'chat-kimi-thinking-status',
+    } as { pendingTurn: any; threadId: string };
+
+    const longThinking = `Kimi thinking ${'甲'.repeat(610)}`;
+    const originalDateNow = Date.now;
+    Date.now = () => Date.parse('2026-03-25T08:00:02.500Z');
+    try {
+      const finalized = _testOnly.consumeMirrorRecords(subscription as any, [
+        {
+          signature: 'user',
+          type: 'message',
+          role: 'user',
+          content: 'kimi prompt',
+          timestamp: '2026-03-25T08:00:00.000Z',
+          turnId: 'turn-kimi',
+        },
+        {
+          signature: 'think',
+          type: 'reasoning',
+          content: longThinking,
+          timestamp: '2026-03-25T08:00:01.000Z',
+          turnId: 'turn-kimi',
+          reasoningKind: 'thinking',
+          reasoningLabel: '思考',
+        },
+        {
+          signature: 'assistant',
+          type: 'message',
+          role: 'assistant',
+          content: 'kimi final answer',
+          timestamp: '2026-03-25T08:00:02.000Z',
+          turnId: 'turn-kimi',
+        },
+        {
+          signature: 'complete',
+          type: 'task_complete',
+          role: 'assistant',
+          content: 'kimi final answer',
+          timestamp: '2026-03-25T08:00:03.000Z',
+          turnId: 'turn-kimi',
+        },
+      ]);
+
+      assert.deepEqual(finalized, [
+        {
+          streamKey: 'mirror:session-kimi:turn-kimi',
+          userText: 'kimi prompt',
+          text: 'kimi final answer',
+          signature: 'complete',
+          timestamp: '2026-03-25T08:00:03.000Z',
+          startedAt: '2026-03-25T08:00:00.000Z',
+          status: 'completed',
+        },
+      ]);
+      assert.ok(streamStatuses.some((text) => text.includes('当前步骤：思考')));
+      assert.ok(streamStatuses.some((text) => text.includes('当前思考：Kimi thinking ')));
+      assert.ok(streamStatuses.some((text) => text.includes(`${'甲'.repeat(586)}...`)));
+      assert.equal(streamTexts.some((text) => text.includes('当前思考')), false);
+      assert.equal(streamTexts.some((text) => text.includes(longThinking)), false);
+      assert.equal(streamTexts.some((text) => text.includes('kimi final answer')), true);
+      assert.equal(subscription.pendingTurn, null);
+    } finally {
+      Date.now = originalDateNow;
+    }
   });
 
   it('waits for visible mirror content before opening a mirror stream card', () => {
@@ -1697,7 +2068,7 @@ agent = "claude"
         'metadata:mirror:session-1:turn-1:本地会话:codex,effort:medium,model:test-model,bridge_id:session-,mirror',
         'start:mirror:session-1:turn-1',
         'text:mirror:session-1:turn-1:**我:** codex prompt\n\n**codex:**',
-        'status:mirror:session-1:turn-1:处理中',
+        `status:mirror:session-1:turn-1:${formatFooterClockTime(Date.parse('2026-03-25T08:00:00.700Z'))} · 已运行 0s · 上次响应 0s`,
       ]);
     } finally {
       Date.now = originalDateNow;
@@ -1762,7 +2133,7 @@ agent = "claude"
         'metadata:mirror:session-1:turn-1:本地会话:codex,effort:medium,model:test-model,bridge_id:session-,mirror',
         'start:mirror:session-1:turn-1',
         'text:mirror:session-1:turn-1:**我:**\n（基于 Review findings）\nok,当前调整已经可以收尾了吗\n\n**codex:**',
-        'status:mirror:session-1:turn-1:处理中',
+        `status:mirror:session-1:turn-1:${formatFooterClockTime(Date.parse('2026-03-25T08:00:00.700Z'))} · 已运行 0s · 上次响应 0s`,
       ]);
     } finally {
       Date.now = originalDateNow;
@@ -1936,7 +2307,7 @@ agent = "claude"
     );
 
     assert.deepEqual(statusEvents, [
-      'status:mirror:session-1:turn-1:已运行 5分，上次响应距今 20秒',
+      `status:mirror:session-1:turn-1:${formatFooterClockTime(Date.parse('2026-03-25T08:05:00.000Z'))} · 已运行 5m · 上次响应 20s`,
     ]);
   });
 
@@ -1996,10 +2367,10 @@ agent = "claude"
     );
 
     assert.deepEqual(statusEvents, [
-      'status:mirror:session-1:turn-1:已运行 5分，上次响应距今 20秒',
-      'status:mirror:session-1:turn-1:已运行 5分，上次响应距今 20秒',
+      `status:mirror:session-1:turn-1:${formatFooterClockTime(Date.parse('2026-03-25T08:05:00.000Z'))} · 已运行 5m · 上次响应 20s`,
+      `status:mirror:session-1:turn-1:${formatFooterClockTime(Date.parse('2026-03-25T08:05:00.000Z'))} · 已运行 5m · 上次响应 20s`,
     ]);
-    assert.equal(subscription.pendingTurn.lastStatusText, '已运行 5分，上次响应距今 20秒');
+    assert.equal(subscription.pendingTurn.lastStatusText, `${formatFooterClockTime(Date.parse('2026-03-25T08:05:00.000Z'))} · 已运行 5m · 上次响应 20s`);
   });
 
   it('keeps the original mirror stream key when turnId arrives after streaming has started', () => {
@@ -2046,6 +2417,7 @@ agent = "claude"
         text: 'final answer',
         signature: 'complete',
         timestamp: '2026-03-25T08:00:03.000Z',
+        startedAt: '2026-03-25T08:00:00.000Z',
         status: 'completed',
       },
     ]);
@@ -2144,6 +2516,7 @@ agent = "claude"
         text: '',
         signature: 'complete',
         timestamp: '2026-03-25T08:00:03.000Z',
+        startedAt: '2026-03-25T08:00:00.000Z',
         status: 'completed',
       },
     ]);
@@ -2186,6 +2559,7 @@ agent = "claude"
       lastStatusText: null,
       lastStatusAt: 0,
       statusNote: null,
+      thinkingNote: null,
       userText: 'codex prompt',
       lastAssistantText: null,
       lastCommentaryText: null,
@@ -2232,6 +2606,7 @@ agent = "claude"
         text: 'stale answer',
         signature: 'timeout:thread-1:turn-1',
         timestamp: '2026-03-25T08:00:00.000Z',
+        startedAt: '2026-03-25T08:00:00.000Z',
         status: 'interrupted',
         timedOut: true,
       },
@@ -2293,7 +2668,7 @@ agent = "claude"
     );
 
     assert.deepEqual(statusEvents, [
-      'status:mirror:session-1:turn-1:已运行 10分1秒，上次响应距今 10分1秒',
+      `status:mirror:session-1:turn-1:${formatFooterClockTime(Date.parse('2026-03-25T08:10:01.000Z'))} · 已运行 10m1s · 上次响应 10m1s`,
     ]);
   });
 
@@ -2583,6 +2958,7 @@ agent = "claude"
       text: 'stale answer',
       signature: 'timeout:thread-1:turn-1',
       timestamp: '2026-03-25T08:00:00.000Z',
+      startedAt: '2026-03-25T08:00:00.000Z',
       status: 'interrupted',
       timedOut: true,
     });
@@ -2871,6 +3247,86 @@ describe('bridge-manager channel lifecycle events', () => {
         delete process.env.CODELARK_CLAUDE_HOME;
       } else {
         process.env.CODELARK_CLAUDE_HOME = previousClaudeHome;
+      }
+      fs.rmSync(homeDir, { recursive: true, force: true });
+    }
+  });
+
+  it('archives the linked Kimi Code wire session and deterministic tmux session when a group chat is disbanded', async () => {
+    const store = getBridgeContext().store;
+    const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'codelark-lifecycle-kimi-home-'));
+    const previousKimiHome = process.env.KIMI_CODE_HOME;
+    process.env.KIMI_CODE_HOME = homeDir;
+
+    const adapter = new StartupNoticeAdapter({
+      id: 'feishu-main',
+      provider: 'feishu',
+      alias: 'Feishu Main',
+    });
+    const address = {
+      channelType: 'feishu-main',
+      channelProvider: 'feishu',
+      channelAlias: 'Feishu Main',
+      chatId: 'oc_removed_kimi',
+      chatKind: 'group' as const,
+    };
+    const kimiSessionId = 'session_lifecycle_kimi';
+    const cwd = '/tmp/lifecycle-archive-kimi';
+    const killedTmuxSessions: string[] = [];
+    const restoreTmuxCore = patchTmuxCore({
+      async killSession(name: string) {
+        killedTmuxSessions.push(name);
+        return `tmux kill-session -t ${name}`;
+      },
+    });
+    writeKimiWireFixture({
+      homeDir,
+      cwd,
+      sessionId: kimiSessionId,
+      title: 'Lifecycle Archive Kimi',
+    });
+    const session = store.createSession('Lifecycle Archive Kimi', 'default', undefined, cwd, 'normal');
+    store.updateSession(session.id, mergeSessionRuntimeUpdates(
+      {},
+      setSessionKimiIdentityUpdate(kimiSessionId, cwd),
+    ));
+    const binding = router.bindToSession(address, session.id);
+    assert.ok(binding);
+    const expectedTmuxSessionName = kimiTmuxSessionName(session.id);
+
+    try {
+      await _testOnly.handleMessage(adapter, {
+        messageId: 'im.chat.disbanded_v1:evt-removed-kimi',
+        address,
+        text: '',
+        timestamp: Date.now(),
+        channelEvent: {
+          type: 'chat_removed',
+          reason: 'chat_disbanded',
+          eventType: 'im.chat.disbanded_v1',
+        },
+      });
+
+      assert.equal(isArchivedKimiSession(kimiSessionId, cwd), true);
+      assert.equal(store.getChannelChat(address.channelType, address.chatId), null);
+      assert.equal(store.getSession(binding.bridgeSessionId), null);
+      assert.equal(store.listChannelChats().some((item) => item.id === binding.id), false);
+      assert.deepEqual(killedTmuxSessions, [expectedTmuxSessionName]);
+      const audit = fs.readFileSync(path.join(DATA_DIR, 'audit.jsonl'), 'utf-8')
+        .split(/\r?\n/)
+        .filter((line) => line.trim())
+        .map((line) => JSON.parse(line) as { summary?: string });
+      assert.match(audit.at(-1)?.summary || '', /ChannelChat archived: chat disbanded/);
+      assert.match(audit.at(-1)?.summary || '', /action=kimi_archive/);
+      assert.match(audit.at(-1)?.summary || '', new RegExp(`kimi_session=${kimiSessionId}`));
+      assert.match(audit.at(-1)?.summary || '', new RegExp(`tmux_sessions=${expectedTmuxSessionName}`));
+      assert.match(audit.at(-1)?.summary || '', new RegExp(`tmux_cleanup=tmux kill-session -t ${expectedTmuxSessionName}`));
+    } finally {
+      restoreTmuxCore();
+      if (previousKimiHome === undefined) {
+        delete process.env.KIMI_CODE_HOME;
+      } else {
+        process.env.KIMI_CODE_HOME = previousKimiHome;
       }
       fs.rmSync(homeDir, { recursive: true, force: true });
     }
@@ -3684,6 +4140,57 @@ describe('bridge-manager mirror subscription recovery', () => {
     assert.deepEqual(Array.from(state.mirrorSubscriptions.keys()), []);
   });
 
+  it('creates Kimi mirror subscriptions through the generic mirror runtime', async () => {
+    const store = new JsonFileStore(makeSettings());
+    initBridgeContext({
+      store,
+      llm: noopLlm,
+      permissions: noopPermissions,
+      lifecycle: noopLifecycle,
+    });
+    _testOnly.resetStateForTests();
+
+    const previousKimiHome = process.env.KIMI_CODE_HOME;
+    const kimiHome = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-bridge-kimi-home-'));
+    let cwd = '';
+    try {
+      process.env.KIMI_CODE_HOME = kimiHome;
+      cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-bridge-kimi-cwd-'));
+      const sessionId = 'session_44444444-4444-4444-8444-444444444444';
+      const wirePath = writeKimiWireFixture({
+        homeDir: kimiHome,
+        cwd,
+        sessionId,
+        title: 'Kimi generic mirror',
+      });
+      const address = { channelType: 'feishu-default', chatId: 'chat-kimi-mirror' } as const;
+      const binding = router.createBinding(address, cwd);
+      store.updateSession(binding.bridgeSessionId, setSessionKimiIdentityUpdate(sessionId, cwd));
+
+      const state = (globalThis as unknown as Record<string, any>).__bridge_manager__;
+      state.running = true;
+      state.adapters.set(address.channelType, {
+        channelType: address.channelType,
+        provider: 'feishu',
+        isRunning: () => true,
+      });
+
+      await _testOnly.reconcileMirrorSubscriptions();
+
+      assert.equal(state.mirrorSubscriptions.has(binding.id), false);
+      assert.equal(state.claudeMirrorSubscriptions.has(binding.id), false);
+      assert.equal(state.kimiMirrorSubscriptions.has(binding.id), true);
+      assert.equal(state.kimiMirrorSubscriptions.get(binding.id)?.threadId, sessionId);
+      assert.equal(state.kimiMirrorSubscriptions.get(binding.id)?.filePath, wirePath);
+      assert.equal(store.getSession(binding.bridgeSessionId)?.mirror_status, 'watching');
+    } finally {
+      if (previousKimiHome === undefined) delete process.env.KIMI_CODE_HOME;
+      else process.env.KIMI_CODE_HOME = previousKimiHome;
+      fs.rmSync(kimiHome, { recursive: true, force: true });
+      if (cwd) fs.rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+
   it('clears mirrorSyncInFlight even when subscription set planning throws', async () => {
     const store = new JsonFileStore(makeSettings());
     initBridgeContext({
@@ -3844,7 +4351,7 @@ describe('bridge-manager new session handling', () => {
         return group;
       },
     };
-    const address = { channelType: 'feishu', chatId: 'chat-new' } as const;
+    const address = { channelType: 'feishu', chatId: 'chat-new', userId: 'ou-new-force' } as const;
     const oldWorkDir = path.join(os.tmpdir(), 'clk-old-session');
     const newWorkDir = path.join(os.tmpdir(), 'clk-new-session');
     const binding = router.createBinding(address, oldWorkDir);

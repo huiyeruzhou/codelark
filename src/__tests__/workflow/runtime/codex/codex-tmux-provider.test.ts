@@ -9,6 +9,7 @@ import { promisify } from 'node:util';
 
 import {
   buildCodexTuiShellCommand,
+  buildCodexTuiTmuxCommand,
   buildCodexTuiArgs,
   buildCodexTuiEnv,
   buildCodexTuiSelectionChoiceActions,
@@ -31,6 +32,7 @@ import {
   buildShellSnapshotLaunchCommand,
   buildShellSnapshotContent,
   detectCodexShellType,
+  quoteCommandLineArg,
   resolveDefaultUserShell,
 } from '../../../../runtime/codex/shell-snapshot.js';
 
@@ -48,11 +50,6 @@ async function tmuxAvailable(): Promise<boolean> {
   }
 }
 
-function shellQuote(value: string): string {
-  if (/^[A-Za-z0-9_@%+=:,./-]+$/.test(value)) return value;
-  return `'${value.replace(/'/g, "'\\''")}'`;
-}
-
 async function waitForFile(filePath: string, timeoutMs = 5_000): Promise<boolean> {
   const startedAt = Date.now();
   while (Date.now() - startedAt < timeoutMs) {
@@ -60,6 +57,12 @@ async function waitForFile(filePath: string, timeoutMs = 5_000): Promise<boolean
     await new Promise((resolve) => setTimeout(resolve, 50));
   }
   return false;
+}
+
+function tmuxLaunchCommandArgs(args: string[]): string[] {
+  return process.platform === 'win32'
+    ? args
+    : [args.map((value) => quoteCommandLineArg(value)).join(' ')];
 }
 
 describe('codex-tmux-provider', () => {
@@ -74,8 +77,9 @@ describe('codex-tmux-provider', () => {
 
   it('builds the Codex TUI env by inheriting source env without legacy key translation', () => {
     const runtimeBin = path.join(process.env.CODELARK_HOME!, 'runtime', 'bin');
+    const sourcePath = ['/usr/bin', '/bin'].join(path.delimiter);
     const env = buildCodexTuiEnv({
-      PATH: '/usr/bin:/bin',
+      PATH: sourcePath,
       HOME: '/Users/tester',
       CODELARK_CODEX_API_KEY: 'legacy-key',
       LARK_CHANNEL_HOME: '/Users/tester/.codelark',
@@ -798,10 +802,21 @@ describe('codex-tmux-provider', () => {
       shell: { type: 'powershell', path: 'C:\\Program Files\\PowerShell\\7\\pwsh.exe' },
       path: 'C:\\Temp\\clk env.ps1',
       content: '',
-    });
+    }, { platform: 'win32' });
+    assert.match(powershellCommand, /^"C:\\Program Files\\PowerShell\\7\\pwsh\.exe" /);
+    assert.doesNotMatch(powershellCommand, /^'/);
     assert.match(powershellCommand, /-NoProfile -Command/);
     assert.match(powershellCommand, /C:\\Temp\\clk env\.ps1/);
     assert.match(powershellCommand, /gpt-5-codex/);
+
+    const powershellWithLog = buildShellSnapshotLaunchCommand('codex', [], {
+      shell: { type: 'powershell', path: 'C:\\Program Files\\PowerShell\\7\\pwsh.exe' },
+      path: 'C:\\Temp\\clk env.ps1',
+      content: '',
+    }, { platform: 'win32', stderrLogPath: 'C:\\Temp\\codex launch.log' });
+    assert.match(powershellWithLog, /2> 'C:\\Temp\\codex launch\.log'/);
+    assert.match(powershellWithLog, /Add-Content -LiteralPath/);
+    assert.doesNotMatch(powershellWithLog, /status=\$\?/);
   });
 
   it('starts a real tmux session with the shell snapshot command form', async (t: TestContext) => {
@@ -825,11 +840,12 @@ describe('codex-tmux-provider', () => {
       '',
     ].join('\n'), 'utf-8');
 
-    const shellCommand = buildCodexTuiShellCommand(process.execPath, [
+    const commandArgs = [
       scriptPath,
       outputPath,
       'arg with spaces',
-    ], {
+    ];
+    const shellCommand = buildCodexTuiTmuxCommand(process.execPath, commandArgs, {
       CODELARK_TMUX_COMMAND_TEST: envValue,
       PATH: process.env.PATH || '',
     });
@@ -841,7 +857,7 @@ describe('codex-tmux-provider', () => {
         '-s',
         sessionName,
         '--',
-        shellCommand,
+        ...(Array.isArray(shellCommand) ? shellCommand : [shellCommand]),
       ]);
 
       assert.equal(await waitForFile(outputPath), true, 'tmux shell command should write output');
@@ -868,21 +884,24 @@ describe('codex-tmux-provider', () => {
     const readyPath = path.join(tempDir, 'ready');
     const outputPath = path.join(tempDir, 'output.hex');
     const scriptPath = path.join(tempDir, 'capture-stdin.cjs');
-    const expectedHex = Buffer.from('hello').toString('hex') + '1b0d' + Buffer.from('world').toString('hex') + '0d';
-    const expectedLength = expectedHex.length / 2;
+    const expectedBytes = process.platform === 'win32'
+      ? Buffer.from('hello\x1b[13;3~world\r')
+      : Buffer.from('hello\x1b\rworld\r');
+    const expectedNewlineCount = process.platform === 'win32' ? 1 : 2;
 
     fs.writeFileSync(scriptPath, [
       "const fs = require('node:fs');",
       `const readyPath = ${JSON.stringify(readyPath)};`,
       `const outputPath = ${JSON.stringify(outputPath)};`,
-      `const expectedLength = ${expectedLength};`,
+      `const expectedNewlineCount = ${expectedNewlineCount};`,
       'const chunks = [];',
       'process.stdin.setRawMode(true);',
       'process.stdin.resume();',
       "fs.writeFileSync(readyPath, '1');",
       "process.stdin.on('data', (chunk) => {",
       '  chunks.push(...chunk);',
-      '  if (chunks.length >= expectedLength) {',
+      '  const newlineCount = chunks.filter((byte) => byte === 10 || byte === 13).length;',
+      '  if (newlineCount >= expectedNewlineCount) {',
       "    fs.writeFileSync(outputPath, Buffer.from(chunks).toString('hex'));",
       '    process.exit(0);',
       '  }',
@@ -901,15 +920,15 @@ describe('codex-tmux-provider', () => {
         '-s',
         sessionName,
         '--',
-        `${shellQuote(process.execPath)} ${shellQuote(scriptPath)}`,
+        ...tmuxLaunchCommandArgs([process.execPath, scriptPath]),
       ]);
 
       assert.equal(await waitForFile(readyPath), true, 'capture process should become ready');
       await injectPromptIntoTmuxPane(`${sessionName}:0.0`, 'hello\nworld');
       assert.equal(await waitForFile(outputPath), true, 'capture process should write received bytes');
 
-      const receivedHex = fs.readFileSync(outputPath, 'utf-8').trim();
-      assert.equal(receivedHex, expectedHex);
+      const receivedBytes = Buffer.from(fs.readFileSync(outputPath, 'utf-8').trim(), 'hex');
+      assert.deepEqual(receivedBytes, expectedBytes);
     } finally {
       await execFileAsync('tmux', ['kill-session', '-t', sessionName]).catch(() => undefined);
       fs.rmSync(tempDir, { recursive: true, force: true });
@@ -973,14 +992,14 @@ describe('codex-tmux-provider', () => {
         '-s',
         sessionName,
         '--',
-        `${shellQuote(process.execPath)} ${shellQuote(scriptPath)} ${shellQuote(readyPath)} ${shellQuote(outputPath)}`,
+        ...tmuxLaunchCommandArgs([process.execPath, scriptPath, readyPath, outputPath]),
       ]);
 
       assert.equal(await waitForFile(readyPath), true, 'capture process should become ready');
       await injectPromptIntoTmuxPane(`${sessionName}:0.0`, longPrompt);
       assert.equal(await waitForFile(outputPath, 12_000), true, 'capture process should write received bytes');
 
-      const received = fs.readFileSync(outputPath, 'utf-8').replace(/\x1B\[4~/g, '');
+      const received = fs.readFileSync(outputPath, 'utf-8').replace(/\x1B(?:\[4~|\[F)/g, '');
       assert.equal(received, longPrompt);
     } finally {
       await execFileAsync('tmux', ['kill-session', '-t', sessionName]).catch(() => undefined);

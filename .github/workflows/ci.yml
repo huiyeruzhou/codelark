@@ -1,6 +1,12 @@
 name: CI
 
+env:
+  CODELARK_CI_CODEX_VERSION: 0.145.0
+  CODELARK_CI_CLAUDE_VERSION: 2.1.220
+  CODELARK_CI_KIMI_VERSION: 0.29.1
+
 on:
+  workflow_dispatch:
   pull_request:
   push:
     branches:
@@ -9,7 +15,7 @@ on:
 
 jobs:
   node24:
-    name: Node.js 24
+    name: Linux · full suite · Node.js 24
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -25,64 +31,143 @@ jobs:
         run: npm ci
 
       - name: Configure CI tool shims
-        run: |
-          mkdir -p "$RUNNER_TEMP/codelark-ci-bin"
-          cat > "$RUNNER_TEMP/codelark-ci-bin/codex" <<'EOF'
-          #!/usr/bin/env node
-          const fs = require('node:fs');
-          const crypto = require('node:crypto');
-          const os = require('node:os');
-          const path = require('node:path');
+        run: node scripts/setup-ci-tool-shims.js
 
-          const args = process.argv.slice(2);
-          const logPath = process.env.CODELARK_FAKE_CODEX_LOG;
-          if (logPath) {
-            fs.appendFileSync(logPath, args.join(' ') + '\n');
-          }
+      - name: Install tmux for real runtime lifecycle tests
+        run: sudo apt-get update && sudo apt-get install -y tmux
 
-          if (args[0] === 'exec' && args.includes('--json')) {
-            const randomHex = (size) => crypto.randomBytes(size).toString('hex');
-            const threadId = process.env.TMUX_FAKE_BOOTSTRAP_THREAD_ID ||
-              `019e${randomHex(2)}-${randomHex(2)}-7${randomHex(2).slice(0, 3)}-9${randomHex(2).slice(0, 3)}-${randomHex(6)}`;
-            const codexHome = process.env.CODEX_HOME || path.join(os.homedir(), '.codex');
-            const cdIndex = args.indexOf('--cd');
-            const cwd = cdIndex >= 0 ? args[cdIndex + 1] : process.cwd();
-            const now = new Date();
-            const yyyy = String(now.getUTCFullYear());
-            const mm = String(now.getUTCMonth() + 1).padStart(2, '0');
-            const dd = String(now.getUTCDate()).padStart(2, '0');
-            const sessionDir = path.join(codexHome, 'sessions', yyyy, mm, dd);
-            fs.mkdirSync(sessionDir, { recursive: true });
-            fs.writeFileSync(
-              path.join(sessionDir, `rollout-ci-${threadId}.jsonl`),
-              JSON.stringify({
-                type: 'session_meta',
-                payload: {
-                  id: threadId,
-                  cwd,
-                  originator: 'codelark-ci',
-                  source: 'exec',
-                },
-              }) + '\n',
-              'utf-8',
-            );
-            process.stdout.write(JSON.stringify({ type: 'thread.started', thread_id: threadId }) + '\n');
-          }
-          EOF
-          chmod +x "$RUNNER_TEMP/codelark-ci-bin/codex"
-          echo "$RUNNER_TEMP/codelark-ci-bin" >> "$GITHUB_PATH"
+      - name: Install real agent CLIs
+        run: npm install --global @openai/codex@${CODELARK_CI_CODEX_VERSION} @anthropic-ai/claude-code@${CODELARK_CI_CLAUDE_VERSION} @moonshot-ai/kimi-code@${CODELARK_CI_KIMI_VERSION}
+
+      - name: Smoke test real agent executables
+        run: node scripts/verify-ci-runtime-clis.js
+
+      - name: Test real agent tmux lifecycles with fake model proxies
+        timeout-minutes: 10
+        run: node scripts/run-real-runtime-e2e.js
 
       - name: Typecheck
         run: npm run typecheck
 
       - name: Test stable suites
-        run: npm test -- --unit --workflow --mock-e2e --harness
+        timeout-minutes: 20
+        run: npm test -- --parallel --unit --workflow --mock-e2e --harness
 
       - name: Build
         run: npm run build
+
+      - name: Smoke test packaged CLI
+        run: node dist/cli.mjs --help
 
       - name: Build docs
         run: npm run docs:build
 
       - name: Check npm package contents
         run: npm run pack:check
+
+  cross-platform:
+    name: ${{ matrix.name }} · Node.js 24
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: macOS 26 arm64
+            os: macos
+            runner: macos-26
+          - name: Windows x64 + psmux
+            os: windows
+            runner: windows-2025
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install
+        run: npm ci
+
+      - name: Configure CI tool shims
+        run: node scripts/setup-ci-tool-shims.js
+
+      - name: Install tmux on macOS
+        if: matrix.os == 'macos'
+        run: brew install tmux
+
+      - name: Install psmux on Windows
+        if: matrix.os == 'windows'
+        shell: pwsh
+        run: |
+          winget install psmux --accept-package-agreements --accept-source-agreements --disable-interactivity
+          $winGetLinks = Join-Path $env:LOCALAPPDATA 'Microsoft\WinGet\Links'
+          if (-not (Test-Path (Join-Path $winGetLinks 'tmux.exe'))) {
+            throw "WinGet reported success but tmux.exe was not linked under $winGetLinks"
+          }
+          $winGetLinks | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
+      - name: Smoke test tmux on macOS
+        if: matrix.os == 'macos'
+        shell: bash
+        run: |
+          tmux -V
+          tmux new-session -d -s codelark_ci_tmux
+          tmux has-session -t codelark_ci_tmux
+          test "$(tmux display-message -p -t codelark_ci_tmux '#{session_name}')" = codelark_ci_tmux
+          tmux kill-session -t codelark_ci_tmux
+
+      - name: Smoke test psmux tmux compatibility on Windows
+        if: matrix.os == 'windows'
+        shell: pwsh
+        run: |
+          try {
+            bash --version
+            tmux -V
+            tmux new-session -d -s codelark_ci_tmux
+            tmux has-session -t codelark_ci_tmux
+            $sessionName = tmux display-message -p -t codelark_ci_tmux '#{session_name}'
+            if ($sessionName.Trim() -ne 'codelark_ci_tmux') { throw "Unexpected tmux session: $sessionName" }
+          } finally {
+            tmux kill-session -t codelark_ci_tmux 2>$null
+          }
+
+      - name: Install real agent CLIs
+        shell: bash
+        run: npm install --global @openai/codex@${CODELARK_CI_CODEX_VERSION} @anthropic-ai/claude-code@${CODELARK_CI_CLAUDE_VERSION} @moonshot-ai/kimi-code@${CODELARK_CI_KIMI_VERSION}
+
+      - name: Smoke test real agent executables
+        run: node scripts/verify-ci-runtime-clis.js
+
+      - name: Test real agent tmux lifecycles with fake model proxies
+        timeout-minutes: 10
+        run: node scripts/run-real-runtime-e2e.js
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Test unit and workflow suites
+        if: matrix.os != 'windows'
+        timeout-minutes: 20
+        run: npm test -- --parallel --unit --workflow
+
+      - name: Test Windows unit suites
+        if: matrix.os == 'windows'
+        timeout-minutes: 10
+        run: npm test -- --parallel --unit
+
+      - name: Test Windows runtime-sensitive workflows
+        if: matrix.os == 'windows'
+        timeout-minutes: 10
+        run: node scripts/run-tests.js --windows-runtime
+
+      - name: Build
+        run: npm run build
+
+      - name: Check npm package contents
+        run: npm run pack:check
+
+      - name: Smoke test packaged CLI
+        run: node dist/cli.mjs --help

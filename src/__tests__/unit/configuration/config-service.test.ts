@@ -231,6 +231,25 @@ model = "scoped-local-model"
     }
   });
 
+  it('supports the deprecated Kimi default model env alias', () => {
+    const home = tempHome();
+    try {
+      const service = createConfigService({
+        codelarkHome: home,
+        env: { CODELARK_KIMI_DEFAULT_MODEL: 'legacy-kimi-model' },
+      });
+
+      const snapshot = service.snapshot();
+      assert.equal(snapshot.config.runtime.kimi.model, 'legacy-kimi-model');
+      assert.deepEqual(
+        snapshot.warnings.map((warning) => warning.envKey),
+        ['CODELARK_KIMI_DEFAULT_MODEL'],
+      );
+    } finally {
+      fs.rmSync(home, { recursive: true, force: true });
+    }
+  });
+
   it('keeps channels home-only and warns when local channel definitions are ignored', () => {
     const home = tempHome();
     const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'codelark-config-local-'));
@@ -373,7 +392,7 @@ app_id = "home-app"
       assert.equal(channel.enabled, false);
       assert.equal(channel.config.appId, 'home-app');
       assert.equal(channel.config.historyMessageLimit, 8);
-      assert.equal(channel.config.streamStatusIdleStartSeconds, 180);
+      assert.equal(channel.config.streamStatusIdleStartSeconds, 0);
       assert.equal(channel.config.site, 'feishu');
 
       const savedToml = fs.readFileSync(configTomlPath, 'utf-8');
@@ -545,6 +564,17 @@ require_mention = false
         'high',
       );
 
+      // runtime.kimi.* 也必须进入 patchPaths 校验：字段可识别且按 scopes 校验，
+      // 不能像早期实现那样被静默跳过。
+      service.set(
+        { kind: 'channel', channelId: 'chat-1', provider: 'feishu' },
+        { runtime: { kimi: { model: 'kimi-k2', provider: 'tmux' } } },
+      );
+      assert.equal(
+        service.get('runtime.kimi.model', { kind: 'channel', channelId: 'chat-1', provider: 'feishu' }),
+        'kimi-k2',
+      );
+
       assert.throws(
         () => service.set(
           { kind: 'session', sessionId: 's-1' },
@@ -608,6 +638,24 @@ require_mention = false
       assert.equal(settings.get('default_model'), 'gpt-test');
       assert.equal(settings.get('bridge_feishu_app_secret'), 'home-secret');
       assert.equal(settings.get('bridge_feishu_enabled'), 'true');
+    } finally {
+      fs.rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it('projects Kimi as the legacy default runtime setting', () => {
+    const home = tempHome();
+    try {
+      const service = createConfigService({
+        codelarkHome: home,
+        env: {
+          CODELARK_AGENT: 'kimi',
+          CODELARK_ENABLED_CHANNELS: '',
+        },
+      });
+
+      const settings = exportRuntimeSettings(service.snapshot().config);
+      assert.equal(settings.get('bridge_default_runtime'), 'kimi');
     } finally {
       fs.rmSync(home, { recursive: true, force: true });
     }

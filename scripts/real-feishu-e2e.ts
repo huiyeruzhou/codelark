@@ -6,10 +6,13 @@ import fs from 'node:fs';
 import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
-import { WebSocketServer } from 'ws';
 
 import type { FeishuSite } from '../src/channels/types.js';
+import {
+  feishuSetupUserAuthScopeArgument,
+} from '../src/channels/feishu/permissions.js';
 import { feishuSiteToApiBaseUrl } from '../src/channels/feishu/site.js';
 import { createConfigService } from '../src/configuration/service.js';
 import { DEFAULT_WORKSPACE_ROOT } from '../src/configuration/paths.js';
@@ -18,18 +21,33 @@ import type { ConfigPatch } from '../src/configuration/schema.js';
 import {
   basicDialogueStreamCardCheckpointIssues,
   collectRealE2eDump,
+  kimiThinkingStatusOnlyIssues,
+  scriptedKimiToolCardIssues,
+  scriptedKimiHistoryTranscriptIssues,
+  scriptedKimiLifecycleAndSteerIssues,
+  scriptedKimiRuntimeSlotIssues,
+  scriptedKimiWireTranscriptIssues,
 } from '../src/bridge/diagnostics/real-e2e-dump.js';
+import {
+  BASIC_DIALOGUE_MODEL_PROXY_CHUNK_DELAY_MS,
+  basicDialogueProxyReplyPlan,
+  startLocalCodexResponsesProxy as startSharedLocalCodexResponsesProxy,
+} from '../src/testing/real-feishu/codex-responses-proxy.js';
+import type {
+  LocalCodexResponsesProxy,
+  ScriptedModelReplyPlan,
+} from '../src/testing/real-feishu/codex-responses-proxy.js';
+import { serializeFailureError } from '../src/testing/real-feishu/failure-report.js';
 
 const execFileAsync = promisify(execFile);
 
-type RuntimeName = 'codex' | 'claude';
+type RuntimeName = 'codex' | 'claude' | 'kimi';
 type ProviderName = 'sdk' | 'pty' | 'tmux';
 
 const COMMAND_RESPONSE_TIMEOUT_MS = 15_000;
 const FILTERED_MESSAGE_OBSERVE_MS = 6_000;
 const TEST_CHAT_REGISTRY_PATH = process.env.CODELARK_REAL_FEISHU_TEST_CHAT_REGISTRY_PATH
   || path.join(os.tmpdir(), 'codelark-real-feishu-e2e-chats.json');
-const BASIC_DIALOGUE_MODEL_PROXY_CHUNK_DELAY_MS = 120;
 
 function defaultRealFeishuTestEnvFile(): string {
   const codelarkHome = process.env.CODELARK_HOME || path.join(os.homedir(), '.codelark');
@@ -40,14 +58,15 @@ interface CliOptions {
   dryRun: boolean;
   dumpOnly: boolean;
   listScenarios: boolean;
+  coverageMatrix: boolean;
+  requireCanonicalCoverage: '' | 'kimi' | 'kimi-current';
   stopTestBridge: boolean;
   launchBridge: boolean;
-  createChat: boolean;
   fakeCcr: boolean;
   scriptedBasicDialogue: boolean;
+  scriptedKimi: boolean;
   keepGroup: boolean;
   keepCodelarkHome: boolean;
-  allowConcurrentApp: boolean;
   testEnvFile: string;
   runId: string;
   channelType: string;
@@ -59,17 +78,18 @@ interface CliOptions {
   runtimeHome: string;
   codexHome: string;
   claudeHome: string;
+  kimiHome: string;
   claudeExecutable: ClaudeExecutable;
   testFeishuAppId: string;
   testFeishuAppSecret: string;
   testBotOpenId: string;
-  testUserOpenId: string;
   testUserAccessToken: string;
+  testLarkCliConfigDir: string;
+  testLarkCliXdgDataHome: string;
   feishuSite: FeishuSite;
   larkProfile: string;
   scenario: string;
   commands: string[];
-  sourceChatId: string;
   chatId: string;
   workDir: string;
   message: string;
@@ -77,6 +97,7 @@ interface CliOptions {
   timeoutMs: number;
   pollMs: number;
   outputPath: string;
+  reportsDir: string;
   fakeCcrResponseText: string;
   fakeCcrProxyBaseUrl?: string;
   fakeCcrPort?: number;
@@ -92,10 +113,14 @@ interface RuntimeEnvironmentPlan {
   runtimeHome: string;
   codexHome: string;
   claudeHome: string;
+  kimiHome: string;
   claudeExecutable: ClaudeExecutable;
   larkCliConfigSource: 'test-env-app' | 'not-needed' | 'missing';
   codexAuthSource: 'env-api-key' | 'host-auth-copy' | 'missing';
   claudeAuthSource: 'host-config-copy' | 'missing';
+  kimiAuthSource: 'host-config-copy' | 'not-needed' | 'missing';
+  kimiExecutableSource: 'scripted-fake-executable' | 'env-executable' | 'host-home-bin' | 'path';
+  kimiExecutablePath?: string;
   ccrConfigSource: 'fake-backend-json' | 'host-config-copy' | 'not-needed' | 'missing';
   fakeCcrProxyBaseUrl?: string;
   fakeCcrPort?: number;
@@ -104,12 +129,6 @@ interface RuntimeEnvironmentPlan {
 }
 
 interface LocalFakeCcrBackend {
-  baseUrl: string;
-  requests: Array<{ method: string; url: string; rawBody: string }>;
-  close(): Promise<void>;
-}
-
-interface LocalCodexResponsesProxy {
   baseUrl: string;
   requests: Array<{ method: string; url: string; rawBody: string }>;
   close(): Promise<void>;
@@ -130,12 +149,6 @@ interface CodexProxyModelAudit {
   hasModelField: boolean;
   hasReasoningLow: boolean;
   hasBootstrapPrompt: boolean;
-}
-
-interface ScriptedModelReplyPlan {
-  text: string;
-  chunks: string[];
-  chunkDelayMs: number;
 }
 
 interface LarkCliUserAuthorizationStatus {
@@ -236,7 +249,7 @@ interface MessageObservation {
   sentMessageId: string;
   expectation: 'bot-reply' | 'bot-reply-after-queued-send' | 'no-bot-reply' | 'mirror-stream-evidence' | 'append-input-delivered-no-direct-reply';
   ok: boolean;
-  check: 'feishu-reply_to' | 'feishu-reply_to-queued-prompt' | 'feishu-reply_to-queued-followup' | 'feishu-mirror-stream' | 'feishu-append-input-no-direct-reply';
+  check: 'feishu-reply_to' | 'feishu-new-chat-transcript' | 'feishu-reply_to-queued-prompt' | 'feishu-reply_to-queued-followup' | 'feishu-mirror-stream' | 'feishu-append-input-no-direct-reply';
   expectedText?: string;
   expectedTexts?: string[];
   expectedForbiddenTexts?: string[];
@@ -276,17 +289,101 @@ interface ScenarioDefinition {
   buildCommands: (options: CliOptions) => string[];
 }
 
+type CoverageEvidenceStatus =
+  | 'none'
+  | 'dry-run'
+  | 'diagnostic-failure'
+  | 'diagnostic-pass'
+  | 'legacy-pass'
+  | 'canonical-pass';
+
+interface CoverageEvidence {
+  status: CoverageEvidenceStatus;
+  reportPath?: string;
+  reportMtimeMs?: number;
+  runId?: string;
+  dryRun?: boolean;
+  failedChecks?: string[];
+  missingCanonicalChecks?: string[];
+  canonicalEligible?: boolean;
+  canonicalBlockers?: string[];
+  canonicalReportCheck?: boolean | null;
+}
+
+interface CoverageMatrixEntry {
+  scenario: string;
+  testName: string;
+  matchingTestNames: string[];
+  providerCoverage: ScenarioDefinition['providerCoverage'];
+  coverageTier: ScenarioDefinition['coverageTier'];
+  includesKimi: boolean;
+  runtime?: RuntimeName;
+  provider?: ProviderName;
+  evidence: CoverageEvidence;
+  unitCoverage: string[];
+  e2eCoverage: string[];
+}
+
+interface CoverageMatrixGap {
+  scenario: string;
+  testName: string;
+  coverageTier: ScenarioDefinition['coverageTier'];
+  evidenceStatus: CoverageEvidenceStatus;
+  reportPath?: string;
+  runId?: string;
+  failedChecks?: string[];
+  missingCanonicalChecks?: string[];
+}
+
+interface CoverageRateBucket {
+  total: number;
+  canonicalPass: number;
+  legacyPass: number;
+  diagnosticPass: number;
+  diagnosticFailure: number;
+  dryRun: number;
+  plannedOnly: number;
+  executed: number;
+  canonicalPercent: number;
+  executedPercent: number;
+}
+
+interface CoverageRateSummary {
+  all: CoverageRateBucket;
+  current: CoverageRateBucket;
+  tmux: CoverageRateBucket;
+  currentTmux: CoverageRateBucket;
+  kimi: CoverageRateBucket;
+  kimiCurrent: CoverageRateBucket;
+  kimiCurrentTmux: CoverageRateBucket;
+  cardFrontend: CoverageRateBucket;
+  cardFrontendTmux: CoverageRateBucket;
+}
+
+interface CoverageMatrixReport {
+  reportDir: string;
+  scenarios: number;
+  summary: Record<string, number>;
+  coverageRates: CoverageRateSummary;
+  entries: CoverageMatrixEntry[];
+  unmatchedReports: CoverageEvidence[];
+  kimiGaps: CoverageMatrixGap[];
+  kimiCurrentGaps: CoverageMatrixGap[];
+}
+
 const BASIC_DIALOGUE_SDK_MIRROR_SUPPRESSION_GRACE_MS = 10_000;
 const BASIC_DIALOGUE_QUEUED_FOLLOWUP_DELAY_MS = 250;
 
 const BASIC_DIALOGUE_PROVIDER_SEQUENCE = [
   'codex-sdk',
   'claude-sdk',
+  'kimi-tmux',
   'codex-tmux',
   'claude-pty',
   'codex-pty',
 ];
 const BASIC_DIALOGUE_APPEND_INPUT_PROVIDER_KEYS = [
+  'kimi-tmux',
   'codex-tmux',
   'claude-pty',
   'codex-pty',
@@ -325,6 +422,7 @@ const SCENARIOS: ScenarioDefinition[] = [
     e2eCoverage: [
       'e2e::lark-cli-user-command',
       'e2e::runtime-switch',
+      'e2e::mock-app-kimi-runtime-provider-message',
       'e2e::lark-cli-user-message',
       'e2e::runtime-response',
       'e2e::runtime-identity-bound',
@@ -336,13 +434,14 @@ const SCENARIOS: ScenarioDefinition[] = [
   {
     name: 'basic-dialogue-suite',
     testNamePrefix: 'real-feishu::basic-dialogue-suite',
-    description: '同一会话中按 codex-sdk -> claude-sdk -> codex-tmux -> claude-pty -> codex-pty 切换，覆盖基本对话、工具/权限/goal/context/stop 和 SDK mirror 抑制。',
+    description: '同一会话中按 codex-sdk -> claude-sdk -> kimi-tmux -> codex-tmux -> claude-pty -> codex-pty 切换，覆盖基本对话、工具/权限/goal/context/stop、Kimi steer 和 SDK mirror 抑制。',
     unitCoverage: [
       'unit::interactive-turn-runner::basic-dialogue-session-simulator',
       'unit::interactive-turn-runner::controlled-tool-context-stream-card',
       'unit::interactive-turn-runner::stop-interrupted-stream',
       'unit::mirror-suppression::sdk-terminal-grace',
       'unit::command-dispatch::runtime-provider-switch',
+      'unit::bridge-manager::kimi-thinking-status-only',
     ],
     e2eCoverage: [
       'e2e::same-chat-cross-provider-sequence',
@@ -372,6 +471,9 @@ const SCENARIOS: ScenarioDefinition[] = [
       'unit::runtime-options::provider-settings',
       'unit::session-runtime::current-session-state',
       'unit::bridge-command-e2e::auto-task-state',
+      'unit::bridge-command-e2e::file-command-local-file',
+      'unit::bridge-command-e2e::large-file-upload-confirmation',
+      'unit::bridge-command-e2e::kimi-command-state',
       'unit::interactive-turn-runner::runtime-turn',
     ],
     e2eCoverage: [
@@ -380,6 +482,8 @@ const SCENARIOS: ScenarioDefinition[] = [
       'e2e::runtime-switch',
       'e2e::session-state-commands',
       'e2e::every-task-create-list-remove',
+      'e2e::file-command-feishu-file-reply',
+      'e2e::large-file-confirmation-card-reply',
       'e2e::runtime-response',
     ],
     providerCoverage: 'runtime-parameterized',
@@ -396,6 +500,8 @@ const SCENARIOS: ScenarioDefinition[] = [
       '/sandbox',
       '/network',
       '/reasoning',
+      `/file ${commandStateFixtureFilePath(options)}`,
+      `/file ${commandStateLargeFixtureFilePath(options)}`,
       `/every 1h e2e seed ${options.runId}`,
       '/every',
       '/every no 1',
@@ -404,15 +510,19 @@ const SCENARIOS: ScenarioDefinition[] = [
   {
     name: 'session-management',
     testNamePrefix: 'real-feishu::session-management',
-    description: '覆盖帮助、全局配置、/new、/cd、/current、/check、/t 列表/分页/解绑/归档，发送 runtime prompt 后再用 /his 验证历史。',
+    description: '覆盖帮助、全局配置、/new、/clear、/cd、/current、/check、/t 列表/分页/解绑/归档，发送 runtime prompt 后再用 /his 验证历史。',
     unitCoverage: [
       'unit::help-command::slash-command-groups',
       'unit::command-dispatch::global-settings',
       'unit::command-dispatch::new-session',
+      'unit::command-dispatch::clear-session-runtime-preservation',
       'unit::command-dispatch::cd-command',
+      'unit::command-dispatch::shell-command',
       'unit::command-dispatch::health-diagnostics',
       'unit::command-dispatch::thread-list-unbind-archive',
       'unit::bridge-command-e2e::history-commands',
+      'unit::bridge-command-e2e::kimi-command-state',
+      'unit::bridge-command-e2e::kimi-session-management-identity-archive',
       'unit::interactive-turn-runner::runtime-turn',
     ],
     e2eCoverage: [
@@ -420,12 +530,15 @@ const SCENARIOS: ScenarioDefinition[] = [
       'e2e::help-command-response',
       'e2e::global-settings-response',
       'e2e::new-session-binding',
+      'e2e::clear-session-runtime-binding',
       'e2e::session-working-directory-update',
+      'e2e::shell-command-sandbox-reply',
       'e2e::health-diagnostics-response',
       'e2e::thread-list-card-response',
       'e2e::thread-list-limit-response',
       'e2e::thread-unbind-temporary-session',
       'e2e::thread-archive-current-runtime-session',
+      'e2e::mock-app-kimi-session-management-identity-archive',
       'e2e::history-command-response',
       'e2e::runtime-response',
     ],
@@ -436,16 +549,18 @@ const SCENARIOS: ScenarioDefinition[] = [
       ...buildRuntimeProviderCommands(options),
       '/help',
       '/set',
-      `/set claudeProvider ${options.runtime === 'claude' ? options.provider : 'pty'}`,
+      sessionManagementProviderSettingCommand(options),
       `/new mgmt-${options.runId} ${options.workDir}`,
       ...buildRuntimeProviderCommands(options),
+      `/clear clear-${options.runId} ${options.workDir}`,
       `/cd ${options.workDir}`,
+      sessionManagementShellCommand(options),
       '/current',
       '/check',
       '/t',
       '/t n 50',
       '/t unbind',
-      options.message,
+      scenarioFinalMessage(options),
       '/his 5',
       '/t archive',
     ],
@@ -580,6 +695,7 @@ const SCENARIOS: ScenarioDefinition[] = [
       'unit::bridge-command-e2e::history-raw-limit',
       'unit::bridge-command-e2e::history-json-attachment',
       'unit::bridge-command-e2e::history-long-truncation',
+      'unit::bridge-command-e2e::kimi-history-suite-wire',
       'unit::store::session-message-isolation',
       'unit::command-dispatch::claude-history-jsonl',
     ],
@@ -594,8 +710,9 @@ const SCENARIOS: ScenarioDefinition[] = [
       'e2e::history-empty-response',
       'e2e::history-cross-chat-isolation',
       'e2e::runtime-response',
+      'e2e::mock-app-kimi-history-default-msg-raw-json-file',
     ],
-    providerCoverage: 'representative-provider',
+    providerCoverage: 'runtime-parameterized',
     coverageTier: 'representative-suite',
     buildCommands: (options) => [
       ...options.commands,
@@ -642,9 +759,11 @@ const SCENARIOS: ScenarioDefinition[] = [
   {
     name: 'card-forms',
     testNamePrefix: 'real-feishu::card-forms',
-    description: '覆盖命令 rich card 表单在飞书客户端以 interactive reply_to 返回。',
+    description: '覆盖命令 rich card 表单在飞书客户端以 interactive reply_to 返回，包括新会话和自动化输入表单入口。',
     unitCoverage: [
       'unit::bridge-command-e2e::new-session-form-card',
+      'unit::bridge-command-e2e::every-card-form-callback-chain',
+      'unit::command-dispatch::then-form-card',
       'unit::feishu-adapter::rich-card-form',
       'unit::delivery-pipeline::question-form-card',
     ],
@@ -652,12 +771,13 @@ const SCENARIOS: ScenarioDefinition[] = [
       'e2e::lark-cli-user-command',
       'e2e::feishu-interactive-card-reply_to',
       'e2e::cardkit-form-fields',
+      'e2e::automation-form-fields',
       'e2e::card-submit-callback-prefix',
     ],
     providerCoverage: 'runtime-neutral',
     coverageTier: 'runtime-neutral-check',
     requiresRuntimeOutput: false,
-    buildCommands: (options) => [...options.commands, '/new'],
+    buildCommands: (options) => [...options.commands, '/new', '/every-form', '/then-form'],
   },
   {
     name: 'agent-question-forms',
@@ -668,6 +788,7 @@ const SCENARIOS: ScenarioDefinition[] = [
       'unit::delivery-pipeline::question-form-card',
       'unit::feishu-adapter-card-e2e::sdk-clk-ask-form',
       'unit::feishu-adapter-card-e2e::mirror-clk-ask-form',
+      'unit::feishu-adapter-card-e2e::kimi-mirror-markdown-ask-form',
     ],
     e2eCoverage: [
       'e2e::lark-cli-user-message',
@@ -675,6 +796,8 @@ const SCENARIOS: ScenarioDefinition[] = [
       'e2e::feishu-interactive-card-reply_to',
       'e2e::agent-question-form-fields',
       'e2e::agent-question-callback-prefix',
+      'e2e::mock-app-kimi-mirror-clk-ask-form',
+      'e2e::mock-app-kimi-mirror-markdown-ask-split',
     ],
     providerCoverage: 'runtime-parameterized',
     coverageTier: 'representative-suite',
@@ -692,6 +815,8 @@ const SCENARIOS: ScenarioDefinition[] = [
       'unit::plain-markdown::tables-and-code-blocks',
       'unit::feishu-markdown::card-markdown-elements',
       'unit::delivery-pipeline::final-response-delivery',
+      'unit::feishu-adapter-card-e2e::kimi-mirror-markdown-card',
+      'unit::feishu-adapter-card-e2e::kimi-mirror-markdown-ask-form',
     ],
     e2eCoverage: [
       'e2e::lark-cli-user-message',
@@ -699,6 +824,7 @@ const SCENARIOS: ScenarioDefinition[] = [
       'e2e::feishu-markdown-table',
       'e2e::feishu-markdown-fenced-code',
       'e2e::feishu-outbound-response',
+      'e2e::mock-app-kimi-mirror-markdown-ask-split',
     ],
     providerCoverage: 'runtime-parameterized',
     coverageTier: 'representative-suite',
@@ -748,13 +874,39 @@ function buildRuntimeProviderCommands(options: CliOptions): string[] {
   ];
 }
 
+function sessionManagementProviderSettingCommand(options: CliOptions): string {
+  if (options.runtime === 'kimi') return '/set kimiProvider tmux';
+  return `/set claudeProvider ${options.runtime === 'claude' ? options.provider : 'pty'}`;
+}
+
 function parseRuntimeProviderKey(key: string): { runtime: RuntimeName; provider: ProviderName } {
   const [runtimePart, providerPart] = key.split('-');
-  const runtime: RuntimeName = runtimePart === 'claude' ? 'claude' : 'codex';
+  if (!runtimePart || !providerPart || key.split('-').length !== 2) {
+    throw new Error(`Invalid runtime/provider key "${key}". Expected <runtime>-<provider>.`);
+  }
+  const runtime = parseRuntimeName(runtimePart);
   return {
     runtime,
-    provider: normalizeProviderForRuntime(runtime, providerPart || ''),
+    provider: normalizeProviderForRuntime(runtime, providerPart),
   };
+}
+
+function runtimeProviderCommandTitle(runtime: RuntimeName): string {
+  if (runtime === 'claude') return 'Claude Provider';
+  if (runtime === 'kimi') return 'Kimi Provider';
+  return 'Codex Provider';
+}
+
+function runtimeDisplayLabel(runtime: RuntimeName): string {
+  if (runtime === 'claude') return 'Claude Code';
+  if (runtime === 'kimi') return 'Kimi Code';
+  return 'Codex';
+}
+
+function runtimeIdentityFieldName(runtime: RuntimeName): string {
+  if (runtime === 'claude') return 'claude_session_id';
+  if (runtime === 'kimi') return 'kimi_session_id';
+  return 'codex_thread_id';
 }
 
 function basicDialogueMarker(options: CliOptions, providerKey: string): string {
@@ -832,7 +984,7 @@ function basicDialogueSuitePlan(options: CliOptions): Record<string, unknown> {
     followupSemantics: {
       codexSdk: 'queue-in-after-tool-turn',
       claudeSdk: 'no-runtime-append-channel',
-      terminalAndClaude: options.scriptedBasicDialogue
+      terminalRuntime: options.scriptedBasicDialogue
         ? 'append-input-message-delivered-no-direct-reply'
         : 'append-input-planned-not-yet-gated',
     },
@@ -878,9 +1030,21 @@ function basicDialogueSuitePlan(options: CliOptions): Record<string, unknown> {
               : 'planned-not-yet-gated',
           }
           : {}),
+        ...(options.scriptedBasicDialogue && providerKey === 'kimi-tmux'
+          ? {
+            streamCardRequiredTexts: basicDialogueKimiThinkingCheckpointTexts(options),
+          }
+          : {}),
       };
     }),
   };
+}
+
+function basicDialogueKimiThinkingCheckpointTexts(options: CliOptions): string[] {
+  return [
+    '当前思考',
+    `scripted Kimi thinking for ${basicDialogueMarker(options, 'kimi-tmux')}`,
+  ];
 }
 
 function valueArg(args: string[], name: string, fallback = ''): string {
@@ -893,9 +1057,106 @@ function hasFlag(args: string[], name: string): boolean {
   return args.includes(name);
 }
 
-function parsePositiveInt(value: string | undefined, fallback: number): number {
+const BOOLEAN_CLI_FLAGS = new Set([
+  '--dry-run',
+  '--dump-only',
+  '--list-scenarios',
+  '--coverage-matrix',
+  '--stop-test-bridge',
+  '--launch-bridge',
+  '--fake-ccr',
+  '--scripted-basic-dialogue',
+  '--scripted-kimi',
+  '--keep-group',
+  '--keep-clk-home',
+  '--help',
+  '-h',
+]);
+
+const VALUE_CLI_OPTIONS = new Set([
+  '--require-canonical',
+  '--test-env-file',
+  '--run-id',
+  '--runtime',
+  '--scenario',
+  '--provider',
+  '--run-root',
+  '--clk-home',
+  '--runtime-home',
+  '--codex-home',
+  '--claude-home',
+  '--claude-executable',
+  '--feishu-site',
+  '--channel-type',
+  '--channel-alias',
+  '--test-feishu-app-id',
+  '--test-feishu-app-secret',
+  '--test-bot-open-id',
+  '--test-user-access-token',
+  '--test-lark-cli-config-dir',
+  '--test-lark-cli-xdg-data-home',
+  '--lark-profile',
+  '--commands',
+  '--chat-id',
+  '--workdir',
+  '--message',
+  '--codex-model',
+  '--timeout-ms',
+  '--poll-ms',
+  '--output',
+  '--reports-dir',
+  '--fake-ccr-response',
+]);
+
+function validateCliArgs(argv: string[]): void {
+  for (let index = 0; index < argv.length; index += 1) {
+    const arg = argv[index];
+    if (BOOLEAN_CLI_FLAGS.has(arg)) continue;
+    if (VALUE_CLI_OPTIONS.has(arg)) {
+      const value = argv[index + 1];
+      if (value === undefined || value.startsWith('--')) {
+        throw new Error(`Missing value for option: ${arg}`);
+      }
+      index += 1;
+      continue;
+    }
+    if (arg.startsWith('-')) {
+      throw new Error(`Unknown option: ${arg}`);
+    }
+    throw new Error(`Unexpected positional argument: ${arg}. Use named options only.`);
+  }
+}
+
+function parseRuntimeName(raw: string): RuntimeName {
+  if (raw === 'codex' || raw === 'claude' || raw === 'kimi') return raw;
+  throw new Error(`Invalid runtime "${raw}". Expected codex, claude, or kimi.`);
+}
+
+function parseClaudeExecutable(raw: string): ClaudeExecutable {
+  if (raw === 'ccr' || raw === 'claude') return raw;
+  throw new Error(`Invalid Claude executable "${raw}". Expected ccr or claude.`);
+}
+
+function parseFeishuSite(raw: string): FeishuSite {
+  if (raw === 'feishu' || raw === 'lark') return raw;
+  throw new Error(`Invalid Feishu site "${raw}". Expected feishu or lark.`);
+}
+
+function parseRequireCanonicalCoverage(argv: string[]): CliOptions['requireCanonicalCoverage'] {
+  const raw = valueArg(argv, '--require-canonical', '').trim();
+  if (!raw) return '';
+  if (raw === 'kimi' || raw === 'kimi-current') return raw;
+  throw new Error(`Invalid --require-canonical "${raw}". Expected kimi or kimi-current.`);
+}
+
+function parsePositiveIntOption(argv: string[], name: string, fallback: number): number {
+  const value = valueArg(argv, name, '');
+  if (!value) return fallback;
   const parsed = Number(value);
-  return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : fallback;
+  if (!Number.isInteger(parsed) || parsed <= 0) {
+    throw new Error(`Invalid ${name} "${value}". Expected a positive integer.`);
+  }
+  return parsed;
 }
 
 function parseEnvLine(line: string): { key: string; value: string } | null {
@@ -928,7 +1189,7 @@ function loadRealFeishuTestEnvFile(argv: string[]): string {
   for (const line of content.split(/\r?\n/)) {
     const parsed = parseEnvLine(line);
     if (!parsed) continue;
-    if (!parsed.key.startsWith('CODELARK_REAL_FEISHU_TEST_')) continue;
+    if (!parsed.key.startsWith('CODELARK_REAL_FEISHU_TEST_') && parsed.key !== 'CODELARK_REAL_FEISHU_AUTH_HOME') continue;
     if (process.env[parsed.key] === undefined) {
       process.env[parsed.key] = parsed.value;
     }
@@ -938,8 +1199,7 @@ function loadRealFeishuTestEnvFile(argv: string[]): string {
 
 function parseOptions(argv: string[]): CliOptions {
   const runId = valueArg(argv, '--run-id', `clk-real-${Date.now()}`);
-  const runtimeArg = valueArg(argv, '--runtime', 'claude');
-  const runtime = runtimeArg === 'codex' ? 'codex' : 'claude';
+  const runtime = parseRuntimeName(valueArg(argv, '--runtime', 'claude'));
   const scenario = valueArg(argv, '--scenario', 'runtime-message');
   const provider = normalizeProviderForRuntime(
     runtime,
@@ -970,6 +1230,8 @@ function parseOptions(argv: string[]): CliOptions {
     '--claude-home',
     runtimeHome,
   );
+  const launchBridge = hasFlag(argv, '--launch-bridge');
+  const kimiHome = path.join(runtimeHome, '.kimi-code');
   const claudeExecutableArg = valueArg(
     argv,
     '--claude-executable',
@@ -980,14 +1242,15 @@ function parseOptions(argv: string[]): CliOptions {
     dryRun: hasFlag(argv, '--dry-run'),
     dumpOnly: hasFlag(argv, '--dump-only'),
     listScenarios: hasFlag(argv, '--list-scenarios'),
+    coverageMatrix: hasFlag(argv, '--coverage-matrix'),
+    requireCanonicalCoverage: parseRequireCanonicalCoverage(argv),
     stopTestBridge: hasFlag(argv, '--stop-test-bridge'),
-    launchBridge: hasFlag(argv, '--launch-bridge'),
-    createChat: hasFlag(argv, '--create-chat'),
+    launchBridge,
     fakeCcr: hasFlag(argv, '--fake-ccr'),
     scriptedBasicDialogue: hasFlag(argv, '--scripted-basic-dialogue'),
+    scriptedKimi: hasFlag(argv, '--scripted-kimi'),
     keepGroup: hasFlag(argv, '--keep-group'),
     keepCodelarkHome: hasFlag(argv, '--keep-clk-home'),
-    allowConcurrentApp: hasFlag(argv, '--allow-concurrent-app'),
     testEnvFile: valueArg(argv, '--test-env-file', defaultRealFeishuTestEnvFile()),
     runId,
     channelType: valueArg(argv, '--channel-type', 'feishu-env'),
@@ -999,76 +1262,85 @@ function parseOptions(argv: string[]): CliOptions {
     runtimeHome,
     codexHome,
     claudeHome,
-    claudeExecutable: claudeExecutableArg === 'claude' ? 'claude' : 'ccr',
+    kimiHome,
+    claudeExecutable: parseClaudeExecutable(claudeExecutableArg),
     testFeishuAppId: valueArg(argv, '--test-feishu-app-id', process.env.CODELARK_REAL_FEISHU_TEST_APP_ID || ''),
     testFeishuAppSecret: valueArg(argv, '--test-feishu-app-secret', process.env.CODELARK_REAL_FEISHU_TEST_APP_SECRET || ''),
     testBotOpenId: valueArg(argv, '--test-bot-open-id', process.env.CODELARK_REAL_FEISHU_TEST_BOT_OPEN_ID || ''),
-    testUserOpenId: valueArg(argv, '--test-user-open-id', process.env.CODELARK_REAL_FEISHU_TEST_USER_OPEN_ID || ''),
     testUserAccessToken: valueArg(argv, '--test-user-access-token', process.env.CODELARK_REAL_FEISHU_TEST_USER_ACCESS_TOKEN || ''),
-    feishuSite: siteArg === 'lark' ? 'lark' : 'feishu',
+    testLarkCliConfigDir: valueArg(argv, '--test-lark-cli-config-dir', process.env.CODELARK_REAL_FEISHU_TEST_LARK_CLI_CONFIG_DIR || ''),
+    testLarkCliXdgDataHome: valueArg(argv, '--test-lark-cli-xdg-data-home', process.env.CODELARK_REAL_FEISHU_TEST_LARK_CLI_XDG_DATA_HOME || ''),
+    feishuSite: parseFeishuSite(siteArg),
     larkProfile: valueArg(argv, '--lark-profile', ''),
     scenario,
     commands: parseCommandList(valueArg(argv, '--commands', '')),
-    sourceChatId: valueArg(argv, '--source-chat-id', ''),
     chatId: valueArg(argv, '--chat-id', ''),
     workDir: valueArg(argv, '--workdir', DEFAULT_WORKSPACE_ROOT),
     message: valueArg(argv, '--message', `real feishu e2e ${runId}`),
     codexModel: valueArg(argv, '--codex-model', process.env.CODELARK_REAL_FEISHU_CODEX_MODEL || 'gpt-5.5'),
-    timeoutMs: parsePositiveInt(valueArg(argv, '--timeout-ms'), 120_000),
-    pollMs: parsePositiveInt(valueArg(argv, '--poll-ms'), 2_000),
+    timeoutMs: parsePositiveIntOption(argv, '--timeout-ms', 120_000),
+    pollMs: parsePositiveIntOption(argv, '--poll-ms', 2_000),
     outputPath: valueArg(argv, '--output', ''),
+    reportsDir: valueArg(argv, '--reports-dir', path.join(process.cwd(), 'work', 'real-feishu')),
     fakeCcrResponseText: valueArg(argv, '--fake-ccr-response', defaultFakeCcrResponseText(runId, scenario)),
   };
 }
 
 function normalizeProviderForRuntime(runtime: RuntimeName, raw: string): ProviderName {
   const provider = raw.trim().toLowerCase();
-  if (!provider) return runtime === 'claude' ? 'pty' : 'pty';
+  if (!provider) return runtime === 'kimi' ? 'tmux' : 'pty';
   if (runtime === 'codex') {
     if (provider === 'sdk' || provider === 'pty' || provider === 'tmux') return provider;
     throw new Error(`Invalid Codex provider "${raw}". Expected sdk, pty, or tmux.`);
   }
-  if (provider === 'sdk' || provider === 'pty') return provider;
-  throw new Error(`Invalid Claude provider "${raw}". Expected pty or sdk.`);
+  if (runtime === 'kimi') {
+    if (provider === 'tmux') return provider;
+    throw new Error(`Invalid Kimi provider "${raw}". Expected tmux.`);
+  }
+  if (provider === 'sdk' || provider === 'pty' || provider === 'tmux') return provider;
+  throw new Error(`Invalid Claude provider "${raw}". Expected sdk, pty, or tmux.`);
 }
 
 function printUsage(): void {
   process.stdout.write([
     'Usage:',
-    '  CODELARK_REAL_FEISHU_E2E=1 node --import tsx scripts/real-feishu-e2e.ts --launch-bridge --create-chat [options]',
+    '  CODELARK_REAL_FEISHU_E2E=1 node --import tsx scripts/real-feishu-e2e.ts --launch-bridge [options]',
     '',
     'Options:',
     '  --dry-run                 Print planned lark-cli commands without sending messages',
     '  --dump-only               Only collect bridge dump state',
     '  --list-scenarios          Print scenario names and coverage metadata as JSON',
+    '  --coverage-matrix         Print scenario/test-name coverage matrix and scan report evidence',
+    '  --reports-dir <path>      Report directory for --coverage-matrix; default work/real-feishu',
+    '  --require-canonical <scope> With --coverage-matrix, fail unless canonical coverage exists; scope kimi|kimi-current',
     '  --stop-test-bridge        Stop a previous isolated real Feishu E2E bridge for --run-root/--clk-home',
     '  --launch-bridge           Start a test-only bridge child process with an isolated CODELARK_HOME',
-    '  --allow-concurrent-app    Skip same-app bridge lock; unsafe only when launching another bridge for the same app',
     `  --test-env-file <path>     Load CODELARK_REAL_FEISHU_TEST_* values from a private test env file; default ${defaultRealFeishuTestEnvFile()}`,
-    '  --create-chat             Create a new Feishu group and invite the test/live bridge bot',
+    '  When --chat-id is omitted, the harness creates the initial test group through the product /new use case.',
     '  --fake-ccr                Run true ccr/Claude Code against a local fake OpenAI-compatible backend',
     '  --fake-ccr-response <txt> Expected fake backend response text',
     '  --scripted-basic-dialogue Run basic-dialogue through isolated Codex Responses/CCR proxies, not direct provider injection',
+    '  --scripted-kimi           Replace only the Kimi executable with a deterministic wire producer; valid for Kimi tmux runtime-message E2E',
     '  --keep-clk-home           Keep the temporary CODELARK_HOME after the run; default cleans it',
     '  --run-root <path>          Parent directory for ccr/codex/codelark test homes; default /tmp/clk-real-feishu-<run-id>',
     '  --clk-home <path>          CODELARK_HOME for the launched/dumped test bridge',
-    '  --runtime-home <path>      HOME for the launched bridge child; default <clk-home>/runtime-home',
+    '  --runtime-home <path>      HOME for the launched bridge child; default <clk-home>/runtime-home; KIMI_CODE_HOME is <runtime-home>/.kimi-code',
     '  --codex-home <path>        CODEX_HOME for the launched bridge child; default <clk-home>/codex-home',
     '  --claude-home <path>       CODELARK_CLAUDE_HOME for Claude JSONL mirror; default runtime home',
     '  --claude-executable <cmd>  ccr|claude for Claude runtime; default ccr',
     '  --test-feishu-app-id <cli_>     Test Feishu app id; env CODELARK_REAL_FEISHU_TEST_APP_ID is preferred',
     '  --test-feishu-app-secret <sec>  Test Feishu app secret; prefer --test-env-file or CODELARK_REAL_FEISHU_TEST_APP_SECRET to avoid shell/npm echo',
-    '  --test-user-open-id <ou_>       Optional lark-cli user open_id; enables test-bot-owned group creation and cleanup',
     '  --test-user-access-token <u-...> Optional current bridge app user access token for deleting user-owned test groups',
+    '  --test-lark-cli-config-dir <dir> Optional lark-cli config dir used for user-side send/read/create/delete actions',
+    '  --test-lark-cli-xdg-data-home <dir> Optional XDG_DATA_HOME used for user-side lark-cli auth tokens',
     '  --feishu-site <site>       feishu|lark, default feishu',
     '  --lark-profile <name>      Optional lark-cli profile for user identity',
     '  --test-bot-open-id <ou_>        Optional bot open_id for structured cloud document mention comments',
     '  --scenario <name>          runtime-message|basic-dialogue-suite|command-state|session-management|history-boundaries|history-attachments|history-empty-isolation|history-long-truncation|history-suite|card-forms|agent-question-forms|markdown-rendering|doc-as-chat-from-scratch|message-only|require-at-toggle',
     '  --commands <list>          Extra commands to run before the final message; JSON array or ;; separated',
-    '  --source-chat-id <oc_>     Existing p2p/group chat where /new will be sent',
     '  --chat-id <oc_>            Existing real test group; skips /new creation',
-    '  --runtime <claude|codex>   Runtime to validate after group creation',
-    '  --provider <name>          Codex: sdk|pty|tmux; Claude: pty|sdk. Default pty.',
+    '  --runtime <claude|codex|kimi> Runtime to validate after group creation',
+    '  --provider <name>          Codex: sdk|pty|tmux; Claude: sdk|pty|tmux; Kimi: tmux. Default pty, or tmux for Kimi.',
     '  --channel-type <id>        Bridge channel type, default feishu-env',
     '  --workdir <path>           Working directory for /new',
     '  --message <text>           Test message to send as user',
@@ -1105,6 +1377,8 @@ function providerMatrixForScenario(scenario: ScenarioDefinition): string[] {
       `${scenario.testNamePrefix}::codex-tmux`,
       `${scenario.testNamePrefix}::claude-pty`,
       `${scenario.testNamePrefix}::claude-sdk`,
+      `${scenario.testNamePrefix}::claude-tmux`,
+      `${scenario.testNamePrefix}::kimi-tmux`,
     ];
   }
   if (scenario.providerCoverage === 'representative-provider') {
@@ -1145,7 +1419,7 @@ function scenarioCoverage(options: CliOptions): Record<string, unknown> {
     e2eCoverage: scenario.e2eCoverage,
     coverageNotes: [
       scenario.providerCoverage === 'runtime-parameterized'
-        ? '该场景需要覆盖 codex-sdk、codex-pty、codex-tmux、claude-pty、claude-sdk 五条路径，才能形成完整 runtime/provider 矩阵证据。'
+        ? '该场景需要覆盖 codex-sdk、codex-pty、codex-tmux、claude-sdk、claude-pty、claude-tmux、kimi-tmux 七条路径，才能形成完整 runtime/provider 矩阵证据。'
         : scenario.providerCoverage === 'representative-provider'
         ? '该功能簇场景默认只要求代表 provider 路径；provider smoke matrix 负责完整 runtime/provider 健康检查。'
         : scenario.providerCoverage === 'cross-provider-suite'
@@ -1154,11 +1428,11 @@ function scenarioCoverage(options: CliOptions): Record<string, unknown> {
       scenario.coverageTier === 'mandatory-suite'
         ? 'mandatory-suite：最高优先级真实飞书集成测试，必须优先维护。'
         : scenario.coverageTier === 'representative-suite'
-        ? 'representative-suite：使用代表 provider 汇总高信息量用户流程，不按 feature × provider 全矩阵扩张。'
+        ? 'representative-suite：高信息量用户流程；是否进入完整 runtime/provider 矩阵由 providerCoverage 决定。'
         : scenario.coverageTier === 'legacy-transitional-evidence'
         ? 'legacy/transitional evidence：保留历史报告和局部回归价值，但不再作为后续补齐 full matrix 的主线。'
         : scenario.coverageTier === 'runtime-compressed-command-check'
-        ? 'runtime-compressed command check：后续命令类覆盖应按 Codex/Claude runtime 压缩，只有 tmux 命令族额外覆盖 codex-tmux。'
+        ? 'runtime-compressed command check：后续命令类覆盖应按 Codex/Claude/Kimi runtime 压缩，只有 tmux 命令族额外覆盖 codex-tmux 与 kimi-tmux。'
         : scenario.coverageTier === 'runtime-smoke-evidence'
         ? 'runtime-smoke evidence：用于 provider path 健康检查，不替代 high-value feature suite。'
         : 'runtime-neutral check：验证与 provider 无关的飞书可见行为。',
@@ -1186,24 +1460,473 @@ function listScenarioMetadata(): unknown[] {
   }));
 }
 
+function parseRuntimeProviderFromTestName(testName: string): { runtime?: RuntimeName; provider?: ProviderName } {
+  const suffix = testName.split('::').pop() || '';
+  const [runtime, provider] = suffix.split('-');
+  if ((runtime === 'codex' || runtime === 'claude' || runtime === 'kimi')
+    && (provider === 'sdk' || provider === 'pty' || provider === 'tmux')) {
+    return { runtime, provider };
+  }
+  return {};
+}
+
+function coverageEntriesForScenario(scenario: ScenarioDefinition): Omit<CoverageMatrixEntry, 'evidence'>[] {
+  if (scenario.providerCoverage === 'runtime-neutral') {
+    const matchingTestNames = ['codex', 'claude', 'kimi'].map((runtime) => `${scenario.testNamePrefix}::${runtime}`);
+    return [{
+      scenario: scenario.name,
+      testName: `${scenario.testNamePrefix}::runtime-neutral`,
+      matchingTestNames,
+      providerCoverage: scenario.providerCoverage,
+      coverageTier: scenario.coverageTier,
+      includesKimi: false,
+      unitCoverage: scenario.unitCoverage,
+      e2eCoverage: scenario.e2eCoverage,
+    }];
+  }
+  return providerMatrixForScenario(scenario).map((testName) => {
+    const parsed = parseRuntimeProviderFromTestName(testName);
+    return {
+      scenario: scenario.name,
+      testName,
+      matchingTestNames: [testName],
+      providerCoverage: scenario.providerCoverage,
+      coverageTier: scenario.coverageTier,
+      includesKimi: parsed.runtime === 'kimi' || Boolean(scenario.providerSequence?.includes('kimi-tmux')),
+      ...(parsed.runtime ? { runtime: parsed.runtime } : {}),
+      ...(parsed.provider ? { provider: parsed.provider } : {}),
+      unitCoverage: scenario.unitCoverage,
+      e2eCoverage: scenario.e2eCoverage,
+    };
+  });
+}
+
+function safeObject(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {};
+}
+
+function stringArray(value: unknown): string[] {
+  return Array.isArray(value) ? value.map((item) => String(item)) : [];
+}
+
+function reportTestName(report: Record<string, unknown>): string {
+  const coverage = safeObject(report.coverage);
+  if (typeof coverage.testName === 'string') return coverage.testName;
+  if (typeof report.testName === 'string') return report.testName;
+  const scenario = typeof report.scenario === 'string' ? report.scenario : '';
+  const runtime = typeof report.runtime === 'string' ? report.runtime : '';
+  const provider = typeof report.provider === 'string' ? report.provider : '';
+  return scenario && runtime && provider ? `real-feishu::${scenario}::${runtime}-${provider}` : '';
+}
+
+function reportCheckValue(report: Record<string, unknown>, checkName: string): boolean | null {
+  const checks = Array.isArray(report.checks) ? report.checks : [];
+  const check = checks.map(safeObject).find((item) => item.name === checkName);
+  if (!check) return null;
+  return check.ok === true;
+}
+
+function reportChecksByName(report: Record<string, unknown>): Map<string, boolean> {
+  const checks = new Map<string, boolean>();
+  for (const raw of Array.isArray(report.checks) ? report.checks : []) {
+    const check = safeObject(raw);
+    const name = typeof check.name === 'string' ? check.name : '';
+    if (!name) continue;
+    const ok = check.ok === true;
+    checks.set(name, checks.get(name) === false ? false : ok);
+  }
+  for (const raw of Array.isArray(report.failedChecks) ? report.failedChecks : []) {
+    const check = safeObject(raw);
+    const name = typeof check.name === 'string' ? check.name : '';
+    if (name) checks.set(name, false);
+  }
+  return checks;
+}
+
+function failedReportCheckNames(report: Record<string, unknown>): string[] {
+  return [...reportChecksByName(report).entries()]
+    .filter(([, ok]) => ok !== true)
+    .map(([name]) => name);
+}
+
+function scenarioFromReport(report: Record<string, unknown>): string {
+  if (typeof report.scenario === 'string' && report.scenario) return report.scenario;
+  const testName = reportTestName(report);
+  const match = testName.match(/^real-feishu::([^:]+)::/);
+  return match?.[1] || '';
+}
+
+function providerSuffixFromReport(report: Record<string, unknown>): string {
+  const testName = reportTestName(report);
+  const match = testName.match(/^real-feishu::[^:]+::(.+)$/);
+  return match?.[1] || '';
+}
+
+function canonicalRequiredCheckNamesForParts(scenario: string, providerSuffix: string): string[] {
+  const required = new Set<string>([
+    'canonical_report_eligible',
+    'message_observations_passed',
+    'final_feishu_transcript_present',
+    'coverage_metadata_present',
+    'created_chat_cleanup_completed',
+    'scenario_created_chat_cleanup_completed',
+    'scenario_created_chat_names_match_requests',
+    'required_checks_passed',
+    'unexpected_mirror_absent',
+  ]);
+
+  if (providerSuffix === 'kimi-tmux') {
+    required.add('runtime_identity_bound');
+    required.add('kimi_wire_jsonl_found');
+    required.add('provider_output_path');
+    required.add('mirror_final_not_duplicated_in_direct_reply');
+  }
+
+  if (providerSuffix === 'claude-tmux') {
+    required.add('runtime_identity_bound');
+    required.add('claude_jsonl_found');
+    required.add('provider_output_path');
+    required.add('mirror_final_not_duplicated_in_direct_reply');
+  }
+
+  if (
+    providerSuffix === 'kimi-tmux'
+    && [
+      'command-state',
+      'session-management',
+      'history-suite',
+      'markdown-rendering',
+    ].includes(scenario)
+  ) {
+    required.add('runtime_prompt_final_transcript_marker');
+  }
+
+  if (scenario === 'command-state') {
+    required.add('command_state_runtime_settings_transcript');
+    required.add('command_state_file_and_large_file_transcript');
+  }
+  if (scenario === 'session-management') {
+    required.add('session_management_runtime_identity_transcript');
+  }
+  if (scenario === 'history-suite') {
+    required.add('history_suite_transcript_contract');
+  }
+  if (scenario === 'agent-question-forms') {
+    required.add('agent_question_form_interactive_transcript');
+  }
+  if (scenario === 'markdown-rendering') {
+    required.add('markdown_rendering_transcript_structure');
+  }
+  if (scenario === 'basic-dialogue-suite') {
+    required.add('basic_dialogue_stream_card_checkpoints');
+    required.add('basic_dialogue_terminal_append_input_delivered');
+    required.add('basic_dialogue_scripted_kimi_lifecycle_and_ctrl_s');
+    required.add('basic_dialogue_kimi_runtime_slot_persisted');
+    required.add('basic_dialogue_kimi_wire_transcript_read');
+    required.add('basic_dialogue_kimi_history_transcript_excludes_thinking');
+    required.add('basic_dialogue_kimi_thinking_status_only');
+    required.add('basic_dialogue_kimi_tool_card');
+  }
+
+  return [...required];
+}
+
+function canonicalRequiredCheckNames(report: Record<string, unknown>): string[] {
+  return canonicalRequiredCheckNamesForParts(
+    scenarioFromReport(report),
+    providerSuffixFromReport(report),
+  );
+}
+
+function canonicalRequiredCheckNamesForEntry(entry: CoverageMatrixEntry): string[] {
+  const providerSuffix = entry.runtime && entry.provider
+    ? `${entry.runtime}-${entry.provider}`
+    : entry.testName.replace(/^real-feishu::[^:]+::/, '');
+  return canonicalRequiredCheckNamesForParts(entry.scenario, providerSuffix);
+}
+
+function reportEvidenceStatus(filePath: string, report: Record<string, unknown>): CoverageEvidence {
+  const checksByName = reportChecksByName(report);
+  const failedChecks = failedReportCheckNames(report);
+  const canonicalEligibility = safeObject(report.canonicalEligibility);
+  const canonicalEligible = typeof canonicalEligibility.eligible === 'boolean'
+    ? canonicalEligibility.eligible
+    : undefined;
+  const canonicalReportCheck = reportCheckValue(report, 'canonical_report_eligible');
+  const missingCanonicalChecks = canonicalRequiredCheckNames(report)
+    .filter((name) => checksByName.get(name) !== true);
+  const isFailure = filePath.endsWith('.failure.json') || failedChecks.length > 0;
+  const dryRun = report.dryRun === true;
+  const base: CoverageEvidence = {
+    status: 'none',
+    reportPath: filePath,
+    reportMtimeMs: fs.statSync(filePath).mtimeMs,
+    ...(typeof report.runId === 'string' ? { runId: report.runId } : {}),
+    dryRun,
+    ...(failedChecks.length > 0 ? { failedChecks } : {}),
+    ...(canonicalEligible !== undefined ? { canonicalEligible } : {}),
+    ...(canonicalEligibility.blockers !== undefined ? { canonicalBlockers: stringArray(canonicalEligibility.blockers) } : {}),
+    canonicalReportCheck,
+    ...(missingCanonicalChecks.length > 0 ? { missingCanonicalChecks } : {}),
+  };
+  if (isFailure) return { ...base, status: 'diagnostic-failure' };
+  if (dryRun) return { ...base, status: 'dry-run' };
+  if (canonicalEligible === false) return { ...base, status: 'diagnostic-pass' };
+  if (canonicalEligible === true && missingCanonicalChecks.length === 0) return { ...base, status: 'canonical-pass' };
+  if (canonicalEligible === true) return { ...base, status: 'diagnostic-pass' };
+  return { ...base, status: 'legacy-pass' };
+}
+
+function isCoverageEvidenceCandidate(report: Record<string, unknown>): boolean {
+  return report.coverage !== undefined
+    || report.runId !== undefined
+    || report.dryRun !== undefined
+    || report.canonicalEligibility !== undefined
+    || report.checks !== undefined
+    || report.failedChecks !== undefined;
+}
+
+function evidencePriority(status: CoverageEvidenceStatus): number {
+  switch (status) {
+    case 'canonical-pass': return 5;
+    case 'legacy-pass': return 4;
+    case 'diagnostic-pass': return 3;
+    case 'diagnostic-failure': return 2;
+    case 'dry-run': return 1;
+    case 'none': return 0;
+  }
+}
+
+function strongerEvidence(a: CoverageEvidence, b: CoverageEvidence): CoverageEvidence {
+  const aPriority = evidencePriority(a.status);
+  const bPriority = evidencePriority(b.status);
+  if (bPriority !== aPriority) return bPriority > aPriority ? b : a;
+  return (b.reportMtimeMs ?? -1) > (a.reportMtimeMs ?? -1) ? b : a;
+}
+
+function isCurrentKimiMatrixEntry(entry: CoverageMatrixEntry): boolean {
+  return entry.includesKimi && entry.coverageTier !== 'legacy-transitional-evidence';
+}
+
+function isCurrentMatrixEntry(entry: CoverageMatrixEntry): boolean {
+  return entry.coverageTier !== 'legacy-transitional-evidence';
+}
+
+function isTmuxMatrixEntry(entry: CoverageMatrixEntry): boolean {
+  return entry.provider === 'tmux';
+}
+
+function isTmuxOrRuntimeNeutralMatrixEntry(entry: CoverageMatrixEntry): boolean {
+  return isTmuxMatrixEntry(entry) || entry.providerCoverage === 'runtime-neutral';
+}
+
+function isCardFrontendMatrixEntry(entry: CoverageMatrixEntry): boolean {
+  return [
+    'basic-dialogue-suite',
+    'command-state',
+    'session-management',
+    'card-forms',
+    'agent-question-forms',
+    'markdown-rendering',
+  ].includes(entry.scenario);
+}
+
+function percent(numerator: number, denominator: number): number {
+  if (denominator === 0) return 0;
+  return Math.round((numerator / denominator) * 1000) / 10;
+}
+
+function coverageRateBucket(entries: CoverageMatrixEntry[]): CoverageRateBucket {
+  const canonicalPass = entries.filter((entry) => entry.evidence.status === 'canonical-pass').length;
+  const legacyPass = entries.filter((entry) => entry.evidence.status === 'legacy-pass').length;
+  const diagnosticPass = entries.filter((entry) => entry.evidence.status === 'diagnostic-pass').length;
+  const diagnosticFailure = entries.filter((entry) => entry.evidence.status === 'diagnostic-failure').length;
+  const dryRun = entries.filter((entry) => entry.evidence.status === 'dry-run').length;
+  const plannedOnly = entries.filter((entry) => entry.evidence.status === 'none').length;
+  const total = entries.length;
+  const executed = total - plannedOnly;
+  return {
+    total,
+    canonicalPass,
+    legacyPass,
+    diagnosticPass,
+    diagnosticFailure,
+    dryRun,
+    plannedOnly,
+    executed,
+    canonicalPercent: percent(canonicalPass, total),
+    executedPercent: percent(executed, total),
+  };
+}
+
+function coverageRateSummary(entries: CoverageMatrixEntry[]): CoverageRateSummary {
+  const currentEntries = entries.filter(isCurrentMatrixEntry);
+  const tmuxEntries = entries.filter(isTmuxMatrixEntry);
+  const currentTmuxEntries = currentEntries.filter(isTmuxMatrixEntry);
+  const kimiEntries = entries.filter((entry) => entry.includesKimi);
+  const kimiCurrentEntries = entries.filter(isCurrentKimiMatrixEntry);
+  const cardFrontendEntries = currentEntries.filter(isCardFrontendMatrixEntry);
+  const cardFrontendTmuxEntries = cardFrontendEntries.filter(isTmuxOrRuntimeNeutralMatrixEntry);
+  return {
+    all: coverageRateBucket(entries),
+    current: coverageRateBucket(currentEntries),
+    tmux: coverageRateBucket(tmuxEntries),
+    currentTmux: coverageRateBucket(currentTmuxEntries),
+    kimi: coverageRateBucket(kimiEntries),
+    kimiCurrent: coverageRateBucket(kimiCurrentEntries),
+    kimiCurrentTmux: coverageRateBucket(kimiCurrentEntries.filter(isTmuxMatrixEntry)),
+    cardFrontend: coverageRateBucket(cardFrontendEntries),
+    cardFrontendTmux: coverageRateBucket(cardFrontendTmuxEntries),
+  };
+}
+
+function scanCoverageEvidence(reportsDir: string): {
+  evidenceByTestName: Map<string, CoverageEvidence>;
+  unmatchedReports: CoverageEvidence[];
+} {
+  const evidenceByTestName = new Map<string, CoverageEvidence>();
+  const unmatchedReports: CoverageEvidence[] = [];
+  if (!fs.existsSync(reportsDir)) return { evidenceByTestName, unmatchedReports };
+  for (const entry of fs.readdirSync(reportsDir, { withFileTypes: true })) {
+    if (!entry.isFile() || !entry.name.endsWith('.json')) continue;
+    const reportPath = path.join(reportsDir, entry.name);
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(fs.readFileSync(reportPath, 'utf-8'));
+    } catch {
+      continue;
+    }
+    const report = safeObject(parsed);
+    if (!isCoverageEvidenceCandidate(report)) continue;
+    const evidence = reportEvidenceStatus(reportPath, report);
+    const testName = reportTestName(report);
+    if (!testName) {
+      unmatchedReports.push(evidence);
+      continue;
+    }
+    evidenceByTestName.set(testName, strongerEvidence(
+      evidenceByTestName.get(testName) || { status: 'none' },
+      evidence,
+    ));
+  }
+  return { evidenceByTestName, unmatchedReports };
+}
+
+function coverageGapForEntry(entry: CoverageMatrixEntry): CoverageMatrixGap {
+  const missingCanonicalChecks = entry.evidence.missingCanonicalChecks?.length
+    ? entry.evidence.missingCanonicalChecks
+    : entry.evidence.status === 'none'
+    ? canonicalRequiredCheckNamesForEntry(entry)
+    : [];
+  return {
+    scenario: entry.scenario,
+    testName: entry.testName,
+    coverageTier: entry.coverageTier,
+    evidenceStatus: entry.evidence.status,
+    ...(entry.evidence.reportPath ? { reportPath: entry.evidence.reportPath } : {}),
+    ...(entry.evidence.runId ? { runId: entry.evidence.runId } : {}),
+    ...(entry.evidence.failedChecks?.length ? { failedChecks: entry.evidence.failedChecks } : {}),
+    ...(missingCanonicalChecks.length ? { missingCanonicalChecks } : {}),
+  };
+}
+
+function coverageMatrix(options: CliOptions): CoverageMatrixReport {
+  const reportsDir = path.resolve(options.reportsDir);
+  const { evidenceByTestName, unmatchedReports } = scanCoverageEvidence(reportsDir);
+  const entries: CoverageMatrixEntry[] = SCENARIOS.flatMap(coverageEntriesForScenario)
+    .map((entry) => {
+      const evidence = entry.matchingTestNames.reduce<CoverageEvidence>((best, testName) => (
+        strongerEvidence(best, evidenceByTestName.get(testName) || { status: 'none' })
+      ), { status: 'none' });
+      return { ...entry, evidence };
+    });
+  const statusCount = entries.reduce<Record<string, number>>((acc, entry) => {
+    acc[entry.evidence.status] = (acc[entry.evidence.status] || 0) + 1;
+    return acc;
+  }, {});
+  const kimiEntries = entries.filter((entry) => entry.includesKimi);
+  const kimiCurrentEntries = entries.filter(isCurrentKimiMatrixEntry);
+  return {
+    reportDir: reportsDir,
+    scenarios: SCENARIOS.length,
+    summary: {
+      matrixEntries: entries.length,
+      kimiEntries: kimiEntries.length,
+      canonicalPass: statusCount['canonical-pass'] || 0,
+      legacyPass: statusCount['legacy-pass'] || 0,
+      diagnosticPass: statusCount['diagnostic-pass'] || 0,
+      diagnosticFailure: statusCount['diagnostic-failure'] || 0,
+      dryRun: statusCount['dry-run'] || 0,
+      plannedOnly: statusCount.none || 0,
+      unmatchedReports: unmatchedReports.length,
+      unmatchedFailures: unmatchedReports.filter((report) => report.status === 'diagnostic-failure').length,
+      kimiCanonicalPass: kimiEntries.filter((entry) => entry.evidence.status === 'canonical-pass').length,
+      kimiLegacyPass: kimiEntries.filter((entry) => entry.evidence.status === 'legacy-pass').length,
+      kimiDiagnosticFailure: kimiEntries.filter((entry) => entry.evidence.status === 'diagnostic-failure').length,
+      kimiDryRun: kimiEntries.filter((entry) => entry.evidence.status === 'dry-run').length,
+      kimiPlannedOnly: kimiEntries.filter((entry) => entry.evidence.status === 'none').length,
+      kimiCurrentEntries: kimiCurrentEntries.length,
+      kimiCurrentCanonicalPass: kimiCurrentEntries.filter((entry) => entry.evidence.status === 'canonical-pass').length,
+      kimiCurrentDiagnosticFailure: kimiCurrentEntries.filter((entry) => entry.evidence.status === 'diagnostic-failure').length,
+      kimiCurrentDryRun: kimiCurrentEntries.filter((entry) => entry.evidence.status === 'dry-run').length,
+      kimiCurrentPlannedOnly: kimiCurrentEntries.filter((entry) => entry.evidence.status === 'none').length,
+    },
+    coverageRates: coverageRateSummary(entries),
+    entries,
+    unmatchedReports,
+    kimiGaps: kimiEntries
+      .filter((entry) => entry.evidence.status !== 'canonical-pass')
+      .map(coverageGapForEntry),
+    kimiCurrentGaps: kimiCurrentEntries
+      .filter((entry) => entry.evidence.status !== 'canonical-pass')
+      .map(coverageGapForEntry),
+  };
+}
+
+function enforceCoverageMatrixRequirements(options: CliOptions, matrix: CoverageMatrixReport): void {
+  if (!options.requireCanonicalCoverage) return;
+  const gaps = options.requireCanonicalCoverage === 'kimi-current'
+    ? matrix.kimiCurrentGaps
+    : matrix.kimiGaps;
+  if (gaps.length === 0) return;
+  throw new Error([
+    `Kimi canonical coverage requirement failed for scope ${options.requireCanonicalCoverage}.`,
+    `missing=${gaps.length}`,
+    `gaps=${gaps.map((gap) => `${gap.testName}:${gap.evidenceStatus}`).join(', ')}`,
+  ].join(' '));
+}
+
 function requireRealGuard(options: CliOptions): void {
-  if (options.dryRun || options.dumpOnly || options.listScenarios || options.stopTestBridge) return;
+  if (options.dryRun || options.dumpOnly || options.listScenarios || options.coverageMatrix || options.stopTestBridge) return;
   if (process.env.CODELARK_REAL_FEISHU_E2E !== '1') {
     throw new Error('Refusing to send real Feishu messages without CODELARK_REAL_FEISHU_E2E=1. Use --dry-run to inspect commands.');
+  }
+  if (!options.launchBridge) {
+    throw new Error([
+      'Refusing to run real Feishu E2E without --launch-bridge.',
+      'Real Feishu E2E must launch an isolated bridge with isolated CODELARK_HOME, HOME, CODEX_HOME, CODELARK_CLAUDE_HOME, and KIMI_CODE_HOME.',
+      'Do not drive the currently running live bridge; use --dry-run to inspect a plan without sending messages.',
+    ].join(' '));
   }
   if (usesFakeCcrBackend(options) && !options.launchBridge) {
     throw new Error([
       'Refusing to use fake CCR/basic-dialogue proxy mode without --launch-bridge.',
       'The fake CCR backend and .claude-code-router config are only injected into an isolated bridge launched by this harness.',
-      'When driving an already running live bridge with --clk-home, that bridge will keep using its existing Claude executable and CCR config.',
-      'Use --launch-bridge with test Feishu app credentials, or omit --fake-ccr and verify the live bridge is already externally configured for CCR.',
+      'Use --launch-bridge with test Feishu app credentials so the harness controls the runtime environment.',
     ].join(' '));
   }
   if (options.scriptedBasicDialogue && !options.launchBridge) {
     throw new Error([
       'Refusing to use --scripted-basic-dialogue without --launch-bridge.',
       'The deterministic basic-dialogue proxies are injected into the isolated bridge child through HOME/CODEX_HOME/CCR proxy environment.',
-      'When driving an already running live bridge with --clk-home, that bridge will keep using its existing runtime providers.',
+    ].join(' '));
+  }
+  if (options.scriptedKimi && !options.launchBridge) {
+    throw new Error([
+      'Refusing to use --scripted-kimi without --launch-bridge.',
+      'The deterministic Kimi executable may only run inside the isolated bridge environment.',
     ].join(' '));
   }
   if (options.launchBridge && (!options.testFeishuAppId || !options.testFeishuAppSecret)) {
@@ -1215,6 +1938,13 @@ function validateScriptedBasicDialogueOptions(options: CliOptions): void {
   if (!options.scriptedBasicDialogue) return;
   if (options.scenario !== 'basic-dialogue-suite') {
     throw new Error('--scripted-basic-dialogue is only valid with --scenario basic-dialogue-suite.');
+  }
+}
+
+function validateScriptedKimiOptions(options: CliOptions): void {
+  if (!options.scriptedKimi) return;
+  if (options.scenario !== 'runtime-message' || options.runtime !== 'kimi' || options.provider !== 'tmux') {
+    throw new Error('--scripted-kimi is only valid with --scenario runtime-message --runtime kimi --provider tmux.');
   }
 }
 
@@ -1341,7 +2071,7 @@ async function resolveEffectiveTestFeishuAppId(options: CliOptions): Promise<voi
 }
 
 function assertNoLiveBridgeUsingSameApp(options: CliOptions): void {
-  if (options.dryRun || options.dumpOnly || !options.launchBridge || options.allowConcurrentApp) return;
+  if (options.dryRun || options.dumpOnly || !options.launchBridge) return;
   const liveCodelarkHome = defaultCodelarkHome();
   if (path.resolve(liveCodelarkHome) === path.resolve(options.codelarkHome)) return;
   if (!listConfiguredFeishuAppIds(liveCodelarkHome).includes(options.testFeishuAppId)) return;
@@ -1359,12 +2089,12 @@ function assertNoLiveBridgeUsingSameApp(options: CliOptions): void {
     `live_channels=${(status.channels || []).join(',') || '-'}`,
     `test_clk_home=${options.codelarkHome}`,
     'lark-cli user messages are safe; this guard only prevents two bridge long-connection clients from using the same app.',
-    'Use the separate test Feishu app, stop/switch the live bridge first, or pass --allow-concurrent-app only if you accept random event delivery.',
+    'Use the separate test Feishu app, or stop/switch the live bridge first.',
   ].join('\n'));
 }
 
 function acquireAppLock(options: CliOptions): AppLock | null {
-  if (options.dryRun || options.dumpOnly || !options.launchBridge || options.allowConcurrentApp) return null;
+  if (options.dryRun || options.dumpOnly || !options.launchBridge) return null;
   const hash = crypto.createHash('sha256').update(`${options.feishuSite}:${options.testFeishuAppId}`).digest('hex').slice(0, 16);
   const lockPath = path.join(os.tmpdir(), `clk-real-feishu-app-${hash}.lock`);
   try {
@@ -1385,7 +2115,7 @@ function acquireAppLock(options: CliOptions): AppLock | null {
       `holder_pid=${existing.pid ?? '-'}`,
       `holder_run=${existing.runId ?? '-'}`,
       `holder_clk_home=${existing.codelarkHome ?? '-'}`,
-      'Stop the other test or pass --allow-concurrent-app only if you accept random event delivery.',
+      'Stop the other test before launching another bridge for the same app.',
     ].join('\n'));
   }
 }
@@ -1437,7 +2167,7 @@ async function cleanupTestTmuxSessions(options: CliOptions): Promise<string[]> {
     .map((session) => {
       const runtime = session.runtime as { general?: { tmuxSessionName?: unknown } } | undefined;
       const name = runtime?.general?.tmuxSessionName;
-      return typeof name === 'string' && name.trim().startsWith('codex_') ? name.trim() : '';
+      return typeof name === 'string' && isProviderOwnedTmuxSessionName(name.trim()) ? name.trim() : '';
     })
     .filter(Boolean));
 
@@ -1454,8 +2184,8 @@ async function cleanupTestTmuxSessions(options: CliOptions): Promise<string[]> {
     } catch {
       continue;
     }
-    for (const match of content.matchAll(/\bcodex_[0-9a-f-]{20,}\b/g)) {
-      tmuxSessionNames.add(match[0]);
+    for (const sessionName of findProviderOwnedTmuxSessionNames(content)) {
+      tmuxSessionNames.add(sessionName);
     }
   }
 
@@ -1472,6 +2202,19 @@ async function cleanupTestTmuxSessions(options: CliOptions): Promise<string[]> {
     }
   }
   return removed;
+}
+
+function isProviderOwnedTmuxSessionName(value: string): boolean {
+  return /^(?:codex_[0-9a-f-]{20,}|claude_[A-Za-z0-9_-]{8,}|clk-kimi-[A-Za-z0-9_-]{8,})$/.test(value);
+}
+
+function findProviderOwnedTmuxSessionNames(content: string): string[] {
+  const names = new Set<string>();
+  const pattern = /(?:^|[^A-Za-z0-9_-])((?:codex_[0-9a-f-]{20,}|claude_[A-Za-z0-9_-]{8,}|clk-kimi-[A-Za-z0-9_-]{8,}))(?![A-Za-z0-9_-])/g;
+  for (const match of content.matchAll(pattern)) {
+    names.add(match[1]);
+  }
+  return [...names];
 }
 
 async function cleanupTemporaryRunRoot(options: CliOptions): Promise<void> {
@@ -1491,6 +2234,14 @@ function copyFileIfExists(sourcePath: string, targetPath: string): boolean {
   if (!fs.statSync(sourcePath).isFile()) return false;
   fs.mkdirSync(path.dirname(targetPath), { recursive: true, mode: 0o700 });
   fs.cpSync(sourcePath, targetPath, { force: false, errorOnExist: true });
+  return true;
+}
+
+function copyDirectoryIfExists(sourcePath: string, targetPath: string): boolean {
+  if (!fs.existsSync(sourcePath) || fs.existsSync(targetPath)) return false;
+  if (!fs.statSync(sourcePath).isDirectory()) return false;
+  fs.mkdirSync(path.dirname(targetPath), { recursive: true, mode: 0o700 });
+  fs.cpSync(sourcePath, targetPath, { recursive: true, force: false, errorOnExist: true });
   return true;
 }
 
@@ -1523,6 +2274,193 @@ function copyHostCcrConfig(hostHome: string, runtimeHome: string, port?: number)
     path.join(runtimeHome, '.claude-code-router', 'config.json'),
     port ? { HOST: '127.0.0.1', PORT: port } : {},
   );
+}
+
+function copyHostKimiConfig(hostHome: string, kimiHome: string): boolean {
+  const hostKimiHome = process.env.CODELARK_REAL_FEISHU_TEST_KIMI_HOME
+    || path.join(hostHome, '.kimi-code');
+  const hadAuth = hasKimiAuthConfig(kimiHome);
+  const copiedCredentials = copyDirectoryIfExists(
+    path.join(hostKimiHome, 'credentials'),
+    path.join(kimiHome, 'credentials'),
+  );
+  const copiedOauth = copyDirectoryIfExists(
+    path.join(hostKimiHome, 'oauth'),
+    path.join(kimiHome, 'oauth'),
+  );
+  for (const relativePath of [
+    'config.toml',
+    'tui.toml',
+    'device_id',
+  ]) {
+    copyFileIfExists(path.join(hostKimiHome, relativePath), path.join(kimiHome, relativePath));
+  }
+  const copied = copiedCredentials || copiedOauth;
+  if (copied) {
+    process.stderr.write(`[real-feishu-e2e] Copied host Kimi auth/config into isolated KIMI_CODE_HOME=${kimiHome}\n`);
+  }
+  return hadAuth || hasKimiAuthConfig(kimiHome);
+}
+
+function hasKimiAuthConfig(kimiHome: string): boolean {
+  return fs.existsSync(path.join(kimiHome, 'credentials'))
+    || fs.existsSync(path.join(kimiHome, 'oauth'));
+}
+
+function hostKimiExecutablePath(): string {
+  return path.join(os.homedir(), '.kimi-code', 'bin', 'kimi');
+}
+
+function kimiExecutableEnv(): Record<string, string> {
+  const explicit = process.env.CODELARK_KIMI_EXECUTABLE || process.env.KIMI_CODE_EXECUTABLE || '';
+  if (explicit) return { CODELARK_KIMI_EXECUTABLE: explicit };
+  const hostBin = hostKimiExecutablePath();
+  return fs.existsSync(hostBin) ? { CODELARK_KIMI_EXECUTABLE: hostBin } : {};
+}
+
+function resolveKimiExecutableSource(): RuntimeEnvironmentPlan['kimiExecutableSource'] {
+  if (process.env.CODELARK_KIMI_EXECUTABLE || process.env.KIMI_CODE_EXECUTABLE) return 'env-executable';
+  if (fs.existsSync(hostKimiExecutablePath())) return 'host-home-bin';
+  return 'path';
+}
+
+function scriptedKimiSessionId(options: CliOptions): string {
+  const token = runIdToken(options.runId).toLowerCase().replace(/_/g, '-');
+  return `session_${token}-scripted`;
+}
+
+function writeScriptedKimiExecutable(options: CliOptions): string {
+  const binDir = path.join(options.runRoot, 'bin');
+  const executablePath = path.join(binDir, 'kimi');
+  const scriptPath = path.join(binDir, 'scripted-kimi.cjs');
+  const sessionId = scriptedKimiSessionId(options);
+  fs.mkdirSync(binDir, { recursive: true, mode: 0o700 });
+  fs.writeFileSync(scriptPath, `#!/usr/bin/env node
+const fs = require('node:fs');
+const path = require('node:path');
+
+const fallbackSessionId = ${JSON.stringify(sessionId)};
+const kimiHome = process.env.KIMI_CODE_HOME;
+if (!kimiHome) {
+  process.stderr.write('KIMI_CODE_HOME is required\\n');
+  process.exit(2);
+}
+
+const launchLogPath = path.join(kimiHome, 'scripted-kimi-launches.jsonl');
+const keyLogPath = path.join(kimiHome, 'scripted-kimi-keys.log');
+const resumeIndex = process.argv.indexOf('-r');
+const resumed = resumeIndex >= 0 && Boolean(process.argv[resumeIndex + 1]);
+const sessionId = resumed ? process.argv[resumeIndex + 1] : fallbackSessionId;
+const sessionDir = path.join(kimiHome, 'sessions', 'wd_real-feishu-basic-dialogue', sessionId);
+const wirePath = path.join(sessionDir, 'agents', 'main', 'wire.jsonl');
+
+fs.mkdirSync(path.dirname(wirePath), { recursive: true });
+fs.writeFileSync(path.join(sessionDir, 'state.json'), JSON.stringify({
+  createdAt: new Date().toISOString(),
+  updatedAt: new Date().toISOString(),
+  title: 'Scripted Kimi basic-dialogue',
+  lastPrompt: 'scripted basic-dialogue kimi',
+}, null, 2) + '\\n');
+fs.writeFileSync(wirePath, '', { flag: 'a' });
+fs.appendFileSync(path.join(kimiHome, 'session_index.jsonl'), JSON.stringify({
+  sessionId,
+  sessionDir,
+  workDir: process.cwd(),
+}) + '\\n');
+fs.appendFileSync(launchLogPath, JSON.stringify({ argv: process.argv.slice(2), resumed, cwd: process.cwd() }) + '\\n');
+
+process.stdout.write('Kimi Code scripted real Feishu E2E\\n');
+process.stdout.write('Session: ' + sessionId + '\\n');
+process.stdout.write('│ > \\ncontext: 0% (0/256k)\\n');
+if (process.stdin.isTTY && process.stdin.setRawMode) process.stdin.setRawMode(true);
+process.stdin.resume();
+
+let buffer = '';
+let answered = false;
+let ctrlCCount = 0;
+
+function appendWire(entry) {
+  fs.appendFileSync(wirePath, JSON.stringify(entry) + '\\n');
+}
+
+function visiblePrompt(text) {
+  return text
+    .replace(/\\x1b\\[[0-?]*[ -/]*[@-~]/g, '')
+    .replace(/[\\x00-\\x08\\x0b\\x0c\\x0e-\\x1f\\x7f]/g, '');
+}
+
+function markerFromPrompt(text) {
+  const match = text.match(/\\bCODELARK_[A-Z0-9_]+\\b/u);
+  return match ? match[0] : 'CODELARK_SCRIPTED_KIMI_TMUX';
+}
+
+function providerKeyFromMarker(marker) {
+  const suffix = (marker.match(/_(KIMI_TMUX)$/u) || [])[1] || 'KIMI_TMUX';
+  return suffix.toLowerCase().replace(/_/g, '-');
+}
+
+function answerOnce() {
+  if (answered) return;
+  answered = true;
+  const prompt = visiblePrompt(buffer);
+  const marker = markerFromPrompt(prompt);
+  const providerKey = providerKeyFromMarker(marker);
+  const now = Date.now();
+  appendWire({ type: 'context.append_loop_event', time: now, event: { type: 'step.begin', turnId: 'turn-scripted-kimi', stepUuid: 'step-scripted-kimi' } });
+  appendWire({ type: 'context.append_loop_event', time: now + 1, event: { type: 'content.part', turnId: 'turn-scripted-kimi', part: { type: 'think', think: 'scripted Kimi thinking for ' + marker } } });
+  const patchLines = ['*** Begin Patch', '*** Update File: src/tool-card-fixture.ts', '@@'];
+  for (let index = 1; index <= 190; index += 1) patchLines.push('+export const fixtureLine' + index + ' = ' + index + ';');
+  patchLines.push('*** End Patch');
+  const longPatch = patchLines.join('\\n');
+  const toolEvents = [
+    { type: 'tool.call', turnId: 'turn-scripted-kimi', toolCallId: 'read-scripted-kimi', name: 'Read', args: { path: 'src/tool-card-fixture.ts', line_offset: 0, n_lines: 80 } },
+    { type: 'tool.result', turnId: 'turn-scripted-kimi', toolCallId: 'read-scripted-kimi', result: { output: 'export const fixtureLine1 = 1;\\nexport const fixtureLine2 = 2;' } },
+    { type: 'tool.call', turnId: 'turn-scripted-kimi', toolCallId: 'grep-scripted-kimi', name: 'Bash', args: { command: 'rg -n "toolPanels:" src/__tests__ -g \\'*.ts\\' && git diff --check' } },
+    { type: 'tool.result', turnId: 'turn-scripted-kimi', toolCallId: 'grep-scripted-kimi', result: { output: 'src/__tests__/a.ts:10:toolPanels:\\nsrc/__tests__/b.ts:20:toolPanels:' } },
+    { type: 'tool.call', turnId: 'turn-scripted-kimi', toolCallId: 'patch-scripted-kimi', name: 'apply_patch', args: { patch: longPatch } },
+    { type: 'tool.result', turnId: 'turn-scripted-kimi', toolCallId: 'patch-scripted-kimi', result: { output: 'Success. Updated the following files:\\nM src/tool-card-fixture.ts' } },
+    { type: 'tool.call', turnId: 'turn-scripted-kimi', toolCallId: 'bash-scripted-kimi', name: 'Bash', args: { command: 'npm test' } },
+    { type: 'tool.result', turnId: 'turn-scripted-kimi', toolCallId: 'bash-scripted-kimi', result: { output: 'Script running with cell ID 90\\nWall time 0.2 seconds\\nOutput:\\n' } },
+  ];
+  toolEvents.forEach((event, index) => appendWire({ type: 'context.append_loop_event', time: now + 2 + index, event }));
+  const chunks = [
+    marker + '\\n',
+    'provider preload complete: ' + providerKey + '\\n',
+    providerKey + ' partial text\\n',
+    'Goal Active: ' + providerKey + ' provider isolation\\n',
+    'running representative tool: ' + providerKey + '\\n',
+    'Bash\\n',
+    'Context: 42%\\n',
+  ];
+  chunks.forEach((chunk, index) => {
+    setTimeout(() => {
+      appendWire({ type: 'context.append_loop_event', time: now + 10 + index, event: { type: 'content.part', turnId: 'turn-scripted-kimi', part: { type: 'text', text: chunk } } });
+    }, 120 * index);
+  });
+  setTimeout(() => {
+    appendWire({ type: 'context.append_loop_event', time: now + 100, event: { type: 'step.end', turnId: 'turn-scripted-kimi', stepUuid: 'step-scripted-kimi' } });
+  }, 1800);
+}
+
+process.stdin.on('data', (chunk) => {
+  fs.appendFileSync(keyLogPath, chunk.toString('hex') + '\\n');
+  buffer += chunk.toString('utf8');
+  if (chunk.includes(0x13)) answerOnce();
+  for (const byte of chunk) {
+    if (byte !== 0x03) continue;
+    ctrlCCount += 1;
+    if (ctrlCCount >= 2) {
+      process.stdout.write('\\nTo resume this session: kimi -r ' + sessionId + '\\n');
+      setTimeout(() => process.exit(0), 50);
+    }
+  }
+});
+
+setInterval(() => {}, 1000);
+`, 'utf-8');
+  fs.writeFileSync(executablePath, `#!/usr/bin/env sh\nexec "${process.execPath}" "${scriptPath}" "$@"\n`, 'utf-8');
+  fs.chmodSync(executablePath, 0o755);
+  return executablePath;
 }
 
 function writeCodexApiKeyAuth(codexHome: string, apiKey: string): void {
@@ -1561,89 +2499,6 @@ function createChatCompletionsEventStreamPayload(model: string, plan: ScriptedMo
   ];
 }
 
-function createResponsesEventStreamPayload(model: string, plan: ScriptedModelReplyPlan): string[] {
-  const now = Math.floor(Date.now() / 1000);
-  const responseId = `resp_clk_${now}`;
-  const itemId = `msg_clk_${now}`;
-  const events: Array<[string, unknown]> = [
-    ['response.created', {
-      type: 'response.created',
-      response: { id: responseId, object: 'response', created_at: now, status: 'in_progress', model, output: [] },
-    }],
-    ['response.output_item.added', {
-      type: 'response.output_item.added',
-      output_index: 0,
-      item: { id: itemId, type: 'message', status: 'in_progress', role: 'assistant', content: [] },
-    }],
-    ['response.content_part.added', {
-      type: 'response.content_part.added',
-      item_id: itemId,
-      output_index: 0,
-      content_index: 0,
-      part: { type: 'output_text', text: '' },
-    }],
-    ...plan.chunks.map((delta): [string, unknown] => ['response.output_text.delta', {
-      type: 'response.output_text.delta',
-      item_id: itemId,
-      output_index: 0,
-      content_index: 0,
-      delta,
-    }]),
-    ['response.output_text.done', {
-      type: 'response.output_text.done',
-      item_id: itemId,
-      output_index: 0,
-      content_index: 0,
-      text: plan.text,
-    }],
-    ['response.content_part.done', {
-      type: 'response.content_part.done',
-      item_id: itemId,
-      output_index: 0,
-      content_index: 0,
-      part: { type: 'output_text', text: plan.text },
-    }],
-    ['response.output_item.done', {
-      type: 'response.output_item.done',
-      output_index: 0,
-      item: {
-        id: itemId,
-        type: 'message',
-        status: 'completed',
-        role: 'assistant',
-        content: [{ type: 'output_text', text: plan.text }],
-      },
-    }],
-    ['response.completed', {
-      type: 'response.completed',
-      response: {
-        id: responseId,
-        object: 'response',
-        created_at: now,
-        status: 'completed',
-        model,
-        output: [{
-          id: itemId,
-          type: 'message',
-          status: 'completed',
-          role: 'assistant',
-          content: [{ type: 'output_text', text: plan.text }],
-        }],
-        usage: {
-          input_tokens: 1,
-          output_tokens: 4,
-          total_tokens: 5,
-          input_tokens_details: { cached_tokens: 0 },
-          output_tokens_details: { reasoning_tokens: 0 },
-        },
-      },
-    }],
-  ];
-  return events
-    .map(([event, data]) => `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`)
-    .concat('data: [DONE]\n\n');
-}
-
 function writeTimedChunks(
   res: http.ServerResponse,
   chunks: string[],
@@ -1662,42 +2517,12 @@ function writeTimedChunks(
   writeNext();
 }
 
-function basicDialogueProviderKeyFromMarker(marker: string): string {
-  const suffix = marker.match(/_(CODEX_SDK|CLAUDE_SDK|CODEX_TMUX|CLAUDE_PTY|CODEX_PTY)$/u)?.[1] || '';
-  return suffix.toLowerCase().replace(/_/g, '-');
-}
-
-function basicDialogueProxyReplyPlan(rawBody: string, fallback: string): ScriptedModelReplyPlan {
-  const markerMatch = rawBody.match(/\bCODELARK_BASIC_DIALOGUE_[A-Z0-9_]+_(?:CODEX_SDK|CLAUDE_SDK|CODEX_TMUX|CLAUDE_PTY|CODEX_PTY)\b/u);
-  if (!markerMatch) {
-    return {
-      text: fallback,
-      chunks: [fallback],
-      chunkDelayMs: BASIC_DIALOGUE_MODEL_PROXY_CHUNK_DELAY_MS,
-    };
-  }
-  const marker = markerMatch[0];
-  const providerKey = basicDialogueProviderKeyFromMarker(marker);
-  const chunks = rawBody.includes('FOLLOWUP')
-    ? [marker, ' FOLLOWUP_ACK']
-    : [
-      `${marker}\n`,
-      `provider preload complete: ${providerKey}\n`,
-      `${providerKey} partial text\n`,
-      `Goal Active: ${providerKey} provider isolation\n`,
-      `running representative tool: ${providerKey}\n`,
-      'Bash\n',
-      'Context: 42%\n',
-    ];
-  return {
-    text: chunks.join(''),
-    chunks,
-    chunkDelayMs: BASIC_DIALOGUE_MODEL_PROXY_CHUNK_DELAY_MS,
-  };
-}
-
 function usesProxyBackedBasicDialogue(options: CliOptions): boolean {
   return options.scriptedBasicDialogue && options.scenario === 'basic-dialogue-suite';
+}
+
+function usesScriptedKimiExecutable(options: CliOptions): boolean {
+  return options.scriptedKimi || usesProxyBackedBasicDialogue(options);
 }
 
 function usesFakeCcrBackend(options: CliOptions): boolean {
@@ -1759,79 +2584,6 @@ function codexProxyModelAuditDetail(audit: CodexProxyModelAudit): string {
     `exactMatch=${audit.exactMatch ? 'yes' : 'no'}`,
     audit.exactMatch ? 'Codex CLI request model matched the configured model.' : 'Fallback accepted: Codex CLI resolved the configured model to a different request body model; see requestedModel and actualModels.',
   ].join('; ');
-}
-
-async function startLocalCodexResponsesProxy(responseText: string): Promise<LocalCodexResponsesProxy> {
-  const requests: LocalCodexResponsesProxy['requests'] = [];
-  const server = http.createServer((req, res) => {
-    let rawBody = '';
-    req.setEncoding('utf-8');
-    req.on('data', (chunk) => {
-      rawBody += chunk;
-    });
-    req.on('end', () => {
-      requests.push({ method: req.method || '', url: req.url || '', rawBody });
-      let body: unknown = null;
-      if (rawBody) {
-        try { body = JSON.parse(rawBody) as unknown; } catch { body = rawBody; }
-      }
-      if (req.method === 'POST' && req.url?.includes('/responses')) {
-        const model = typeof body === 'object'
-          && body !== null
-          && typeof (body as { model?: unknown }).model === 'string'
-          ? (body as { model: string }).model
-          : 'gpt-5';
-        const plan = basicDialogueProxyReplyPlan(rawBody, responseText);
-        res.writeHead(200, {
-          'content-type': 'text/event-stream',
-          'cache-control': 'no-cache',
-          connection: 'keep-alive',
-        });
-        writeTimedChunks(res, createResponsesEventStreamPayload(model, plan), plan.chunkDelayMs);
-        return;
-      }
-      if (req.method === 'GET' && req.url?.includes('/models')) {
-        res.writeHead(200, { 'content-type': 'application/json' });
-        res.end(JSON.stringify({ object: 'list', data: [{ id: 'gpt-5', object: 'model' }] }));
-        return;
-      }
-      res.writeHead(404, { 'content-type': 'application/json' });
-      res.end(JSON.stringify({ error: { message: 'not found' } }));
-    });
-  });
-  const wss = new WebSocketServer({ server, path: '/v1/responses' });
-  wss.on('connection', (ws, req) => {
-    ws.on('message', (data) => {
-      const rawBody = data.toString();
-      requests.push({ method: 'WS', url: req.url || '/v1/responses', rawBody });
-      let body: unknown = rawBody;
-      try { body = JSON.parse(rawBody) as unknown; } catch { /* keep raw */ }
-      const model = typeof body === 'object'
-        && body !== null
-        && typeof (body as { model?: unknown }).model === 'string'
-        ? (body as { model: string }).model
-        : 'gpt-5';
-      const plan = basicDialogueProxyReplyPlan(rawBody, responseText);
-      const chunks = createResponsesEventStreamPayload(model, plan);
-      chunks.forEach((chunk, index) => {
-        const dataLine = chunk.trim().split(/\n/).find((line) => line.startsWith('data: '));
-        if (!dataLine || dataLine === 'data: [DONE]') return;
-        setTimeout(() => ws.send(dataLine.slice('data: '.length)), index * plan.chunkDelayMs);
-      });
-    });
-  });
-  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
-  const address = server.address();
-  if (!address || typeof address !== 'object') throw new Error('Failed to start local Codex Responses proxy.');
-  return {
-    baseUrl: `http://127.0.0.1:${address.port}/v1`,
-    requests,
-    close: () => new Promise((resolve, reject) => {
-      wss.close(() => {
-        server.close((error) => (error ? reject(error) : resolve()));
-      });
-    }),
-  };
 }
 
 async function startLocalFakeCcrBackend(responseText: string): Promise<LocalFakeCcrBackend> {
@@ -1943,6 +2695,7 @@ function prepareRuntimeEnvironment(options: CliOptions): RuntimeEnvironmentPlan 
   fs.mkdirSync(options.runtimeHome, { recursive: true, mode: 0o700 });
   fs.mkdirSync(options.codexHome, { recursive: true, mode: 0o700 });
   fs.mkdirSync(options.claudeHome, { recursive: true, mode: 0o700 });
+  fs.mkdirSync(options.kimiHome, { recursive: true, mode: 0o700 });
 
   const larkCliConfigSource = initializeIsolatedLarkCliConfig(options);
 
@@ -1969,6 +2722,14 @@ function prepareRuntimeEnvironment(options: CliOptions): RuntimeEnvironmentPlan 
     copyHostClaudeConfig(os.homedir(), options.runtimeHome)
       ? 'host-config-copy'
       : 'missing';
+  const scriptedKimiExecutablePath = usesScriptedKimiExecutable(options)
+    ? writeScriptedKimiExecutable(options)
+    : '';
+  const kimiAuthSource: RuntimeEnvironmentPlan['kimiAuthSource'] = scriptedKimiExecutablePath
+    ? 'not-needed'
+    : copyHostKimiConfig(os.homedir(), options.kimiHome)
+      ? 'host-config-copy'
+      : 'missing';
 
   let ccrConfigSource: RuntimeEnvironmentPlan['ccrConfigSource'] = 'not-needed';
   if (options.claudeExecutable === 'ccr') {
@@ -1986,10 +2747,14 @@ function prepareRuntimeEnvironment(options: CliOptions): RuntimeEnvironmentPlan 
     runtimeHome: options.runtimeHome,
     codexHome: options.codexHome,
     claudeHome: options.claudeHome,
+    kimiHome: options.kimiHome,
     claudeExecutable: options.claudeExecutable,
     larkCliConfigSource,
     codexAuthSource,
     claudeAuthSource,
+    kimiAuthSource,
+    kimiExecutableSource: scriptedKimiExecutablePath ? 'scripted-fake-executable' : resolveKimiExecutableSource(),
+    ...(scriptedKimiExecutablePath ? { kimiExecutablePath: scriptedKimiExecutablePath } : {}),
     ccrConfigSource,
     ...(options.fakeCcrProxyBaseUrl ? { fakeCcrProxyBaseUrl: options.fakeCcrProxyBaseUrl } : {}),
     ...(options.fakeCcrPort ? { fakeCcrPort: options.fakeCcrPort } : {}),
@@ -2003,10 +2768,16 @@ function plannedRuntimeEnvironment(options: CliOptions): RuntimeEnvironmentPlan 
     runtimeHome: options.runtimeHome,
     codexHome: options.codexHome,
     claudeHome: options.claudeHome,
+    kimiHome: options.kimiHome,
     claudeExecutable: options.claudeExecutable,
     larkCliConfigSource: options.launchBridge ? 'missing' : 'not-needed',
     codexAuthSource: 'missing',
     claudeAuthSource: 'missing',
+    kimiAuthSource: usesScriptedKimiExecutable(options) ? 'not-needed' : 'missing',
+    kimiExecutableSource: usesScriptedKimiExecutable(options) ? 'scripted-fake-executable' : resolveKimiExecutableSource(),
+    ...(usesScriptedKimiExecutable(options)
+      ? { kimiExecutablePath: path.join(options.runRoot, 'bin', 'kimi') }
+      : {}),
     ccrConfigSource: options.claudeExecutable === 'ccr' ? 'missing' : 'not-needed',
   };
 }
@@ -2020,35 +2791,34 @@ function initializeIsolatedLarkCliConfig(options: CliOptions): RuntimeEnvironmen
   fs.mkdirSync(path.join(options.runtimeHome, '.cache'), { recursive: true, mode: 0o700 });
   const larkCliConfigPath = path.join(options.runtimeHome, '.lark-cli', 'config.json');
   const existingConfig = readJsonIfExists<{ apps?: Array<{ appId?: string }> }>(larkCliConfigPath, {});
-  if (existingConfig.apps?.some((app) => app.appId === options.testFeishuAppId)) {
-    return 'test-env-app';
+  if (!existingConfig.apps?.some((app) => app.appId === options.testFeishuAppId)) {
+    execFileSync(
+      'npx',
+      [
+        'lark-cli',
+        'config',
+        'init',
+        '--app-id',
+        options.testFeishuAppId,
+        '--brand',
+        options.feishuSite,
+        '--app-secret-stdin',
+      ],
+      {
+        cwd: process.cwd(),
+        env: sanitizedChildEnv({
+          HOME: options.runtimeHome,
+          USERPROFILE: options.runtimeHome,
+          XDG_DATA_HOME: path.join(options.runtimeHome, '.local', 'share'),
+          XDG_CONFIG_HOME: path.join(options.runtimeHome, '.config'),
+          XDG_CACHE_HOME: path.join(options.runtimeHome, '.cache'),
+        }),
+        input: options.testFeishuAppSecret,
+        stdio: ['pipe', 'pipe', 'pipe'],
+      },
+    );
+    process.stderr.write(`[real-feishu-e2e] Initialized isolated lark-cli config in HOME=${options.runtimeHome} app=${options.testFeishuAppId}\n`);
   }
-  execFileSync(
-    'npx',
-    [
-      'lark-cli',
-      'config',
-      'init',
-      '--app-id',
-      options.testFeishuAppId,
-      '--brand',
-      options.feishuSite,
-      '--app-secret-stdin',
-    ],
-    {
-      cwd: process.cwd(),
-      env: sanitizedChildEnv({
-        HOME: options.runtimeHome,
-        USERPROFILE: options.runtimeHome,
-        XDG_DATA_HOME: path.join(options.runtimeHome, '.local', 'share'),
-        XDG_CONFIG_HOME: path.join(options.runtimeHome, '.config'),
-        XDG_CACHE_HOME: path.join(options.runtimeHome, '.cache'),
-      }),
-      input: options.testFeishuAppSecret,
-      stdio: ['pipe', 'pipe', 'pipe'],
-    },
-  );
-  process.stderr.write(`[real-feishu-e2e] Initialized isolated lark-cli config in HOME=${options.runtimeHome} app=${options.testFeishuAppId}\n`);
   return 'test-env-app';
 }
 
@@ -2063,9 +2833,28 @@ function isolatedLarkCliEnv(options: CliOptions): Record<string, string> {
   };
 }
 
+function larkCliUserEnv(options: CliOptions): Record<string, string> {
+  const env: Record<string, string> = {};
+  if (process.env.CODELARK_REAL_FEISHU_AUTH_HOME) {
+    env.HOME = process.env.CODELARK_REAL_FEISHU_AUTH_HOME;
+    env.USERPROFILE = process.env.CODELARK_REAL_FEISHU_AUTH_HOME;
+  }
+  if (options.testLarkCliConfigDir) {
+    env.LARKSUITE_CLI_CONFIG_DIR = options.testLarkCliConfigDir;
+  }
+  if (options.testLarkCliXdgDataHome) {
+    env.XDG_DATA_HOME = options.testLarkCliXdgDataHome;
+  }
+  return env;
+}
+
 function sanitizedChildEnv(extra: Record<string, string> = {}): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = { ...process.env, ...extra };
   delete env.NODE_OPTIONS;
+  delete env.LARK_CHANNEL;
+  delete env.LARK_CHANNEL_HOME;
+  delete env.LARK_CHANNEL_CONFIG;
+  if (!extra.LARKSUITE_CLI_CONFIG_DIR) delete env.LARKSUITE_CLI_CONFIG_DIR;
   return env;
 }
 
@@ -2085,7 +2874,7 @@ async function runLarkCli(args: string[], options: CliOptions): Promise<string> 
     'npx',
     ['lark-cli', ...(options.larkProfile ? ['--profile', options.larkProfile] : []), ...args],
     options,
-    isolatedLarkCliEnv(options),
+    larkCliUserEnv(options),
   );
 }
 
@@ -2426,53 +3215,39 @@ function parseLarkCliUserAuthorizationStatus(value: unknown): LarkCliUserAuthori
   };
 }
 
-function hasAnyScope(scopes: Set<string>, alternatives: string[]): boolean {
-  return alternatives.some((scope) => scopes.has(scope));
+function createsInitialProductNewSessionGroup(options: CliOptions): boolean {
+  return !options.chatId && options.scenario !== 'doc-as-chat-from-scratch';
+}
+
+function requiresCreatedGroupDeletionScope(options: CliOptions): boolean {
+  return !options.keepGroup && (
+    createsInitialProductNewSessionGroup(options)
+    || options.scenario === 'doc-as-chat-from-scratch'
+    || scenarioSwitchesToNewChatAfterNewCommand(options)
+  );
 }
 
 function missingLarkCliUserScopes(scopes: Set<string>, options: CliOptions): string[] {
-  const required: Array<{ label: string; alternatives: string[] }> = [
-    {
-      label: 'im:chat:read or im:chat',
-      alternatives: ['im:chat:read', 'im:chat'],
-    },
-    {
-      label: 'im:message.send_as_user or im:message',
-      alternatives: ['im:message.send_as_user', 'im:message'],
-    },
-    {
-      label: 'im:message.group_msg:get_as_user or im:message:readonly or im:message',
-      alternatives: ['im:message.group_msg:get_as_user', 'im:message:readonly', 'im:message'],
-    },
-    {
-      label: 'im:message.p2p_msg:get_as_user or im:message:readonly or im:message',
-      alternatives: ['im:message.p2p_msg:get_as_user', 'im:message:readonly', 'im:message'],
-    },
+  const requiredScopes = [
+    'im:chat:read',
+    'im:message.send_as_user',
+    'im:message.group_msg:get_as_user',
+    'im:message.p2p_msg:get_as_user',
   ];
-  if (options.createChat || options.sourceChatId || options.scenario === 'doc-as-chat-from-scratch') {
-    required.push({
-      label: 'im:chat:create_by_user or im:chat',
-      alternatives: ['im:chat:create_by_user', 'im:chat'],
-    });
-    if (!options.keepGroup) {
-      required.push({
-        label: 'im:chat:delete or im:chat',
-        alternatives: ['im:chat:delete', 'im:chat'],
-      });
-    }
+  if (requiresCreatedGroupDeletionScope(options)) {
+    requiredScopes.push('im:chat:delete');
   }
-  return required
-    .filter((item) => !hasAnyScope(scopes, item.alternatives))
-    .map((item) => item.label);
+  return requiredScopes.filter((scope) => !scopes.has(scope));
 }
 
 function larkCliUserAuthorizationHome(options: CliOptions): string {
-  if (options.launchBridge) return options.runtimeHome;
+  void options;
+  if (process.env.CODELARK_REAL_FEISHU_AUTH_HOME) return process.env.CODELARK_REAL_FEISHU_AUTH_HOME;
   return process.env.HOME || os.homedir();
 }
 
-async function assertLarkCliUserAuthorizationPreflight(options: CliOptions): Promise<void> {
-  if (options.dryRun || options.dumpOnly || options.listScenarios || options.stopTestBridge) return;
+async function assertLarkCliUserAuthorizationPreflight(options: CliOptions): Promise<LarkCliUserAuthorizationStatus | null> {
+  if (options.dryRun || options.dumpOnly || options.listScenarios || options.coverageMatrix || options.stopTestBridge) return null;
   let stdout = '';
   try {
     stdout = await runLarkCli([
@@ -2517,7 +3292,7 @@ async function assertLarkCliUserAuthorizationPreflight(options: CliOptions): Pro
       missingScopes.length > 0 ? `missing_scopes=${missingScopes.join(', ')}` : '',
       'The real Feishu harness sends and reads messages as a user, even when it launches an isolated bridge.',
       'Authorize that exact lark-cli environment first, for example:',
-      'lark-cli auth login --scope "im:chat im:chat:read im:chat:create_by_user im:chat:delete im:message im:message.send_as_user im:message.group_msg:get_as_user im:message.p2p_msg:get_as_user"',
+      `lark-cli auth login --scope "${feishuSetupUserAuthScopeArgument()}"`,
     ].filter(Boolean).join('\n'));
   }
 
@@ -2528,62 +3303,7 @@ async function assertLarkCliUserAuthorizationPreflight(options: CliOptions): Pro
     ` user=${status.userOpenId}`,
     '\n',
   ].join(''));
-}
-
-async function resolveTestUserOpenId(options: CliOptions): Promise<string> {
-  if (options.testUserOpenId) return options.testUserOpenId;
-  try {
-    const stdout = await runLarkCli([
-      'auth',
-      'status',
-      '--verify',
-    ], options);
-    const auth = findAuthStatusInJson(JSON.parse(stdout || '{}'));
-    if (auth.appId && auth.appId !== options.testFeishuAppId) {
-      process.stderr.write([
-        '[real-feishu-e2e] lark-cli user open_id belongs to a different OAuth app; not using it for test-bot-owned chat creation.',
-        ` auth_app=${auth.appId}`,
-        ` test_app=${options.testFeishuAppId}`,
-        ' Set CODELARK_REAL_FEISHU_TEST_USER_OPEN_ID to the user open_id seen by the test app.\n',
-      ].join(''));
-      return '';
-    }
-    return auth.userOpenId;
-  } catch (error) {
-    process.stderr.write(`[real-feishu-e2e] Failed to auto-detect lark-cli user open_id; falling back to user-created group: ${error instanceof Error ? error.message : String(error)}\n`);
-    return '';
-  }
-}
-
-async function createChatWithTestBot(groupName: string, options: CliOptions): Promise<string> {
-  const userOpenId = await resolveTestUserOpenId(options);
-  if (!userOpenId) throw new Error('No lark-cli user open_id available for test-bot-owned group creation.');
-  const baseUrl = feishuSiteToApiBaseUrl(options.feishuSite);
-  const token = await fetchTestBotTenantAccessToken(options);
-  const response = await fetch(`${baseUrl}/open-apis/im/v1/chats?user_id_type=open_id&set_bot_manager=true`, {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${token}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({
-      name: groupName,
-      chat_mode: 'group',
-      chat_type: 'private',
-      user_id_list: [userOpenId],
-    }),
-  });
-  const data = await response.json() as {
-    code?: number;
-    msg?: string;
-    data?: unknown;
-  };
-  if (!response.ok || data.code !== 0) {
-    throw new Error(data.msg || `create chat failed: HTTP ${response.status}`);
-  }
-  const chatId = findChatIdInJson(data);
-  if (!chatId) throw new Error(`test bot chat create returned no chat_id: ${JSON.stringify(data).slice(0, 1000)}`);
-  return chatId;
+  return status;
 }
 
 async function deleteCreatedChatWithTestBot(chatId: string, options: CliOptions): Promise<void> {
@@ -2648,7 +3368,11 @@ async function deleteCreatedChatWithTestAppUser(chatId: string, options: CliOpti
   }
 }
 
-async function deleteCreatedChat(chatId: string, options: CliOptions): Promise<CreatedChatCleanupResult> {
+async function deleteCreatedChat(
+  chatId: string,
+  options: CliOptions,
+  cleanupOptions: { notifyRetained?: boolean } = {},
+): Promise<CreatedChatCleanupResult> {
   if (options.dryRun) {
     return { chatId, attempted: false, deleted: false, retained: true, reason: 'dry-run' };
   }
@@ -2720,7 +3444,9 @@ async function deleteCreatedChat(chatId: string, options: CliOptions): Promise<C
       'The current bridge app may need chat delete permission, tenant admin approval, or bot owner/admin permission for this chat.',
       `${message}\n`,
     ].join('\n'));
-    await notifyRetainedTestChat(chatId, options, attempts);
+    if (cleanupOptions.notifyRetained !== false) {
+      await notifyRetainedTestChat(chatId, options, attempts);
+    }
     return {
       chatId,
       attempted: true,
@@ -2835,12 +3561,12 @@ async function cleanupRegisteredTestChats(options: CliOptions): Promise<CreatedC
   for (const record of records) {
     if (seen.has(record.chatId)) continue;
     seen.add(record.chatId);
-    if (record.status === 'deleted' || record.status === 'retained') continue;
+    if (record.status === 'deleted') continue;
     if (record.keepGroup) continue;
     if (record.runId === options.runId) continue;
-    if (record.chatId === options.chatId || record.chatId === options.sourceChatId) continue;
+    if (record.chatId === options.chatId) continue;
     if (record.testAppId && record.testAppId !== options.testFeishuAppId) continue;
-    const cleanup = await deleteCreatedChat(record.chatId, options);
+    const cleanup = await deleteCreatedChat(record.chatId, options, { notifyRetained: false });
     cleanupResults.push(cleanup);
     updateTestChatRegistryCleanup(record.chatId, cleanup, false);
   }
@@ -2917,6 +3643,7 @@ function latestDump(options: CliOptions, chatId?: string) {
   return collectRealE2eDump({
     codelarkHome: options.codelarkHome,
     claudeHome: options.claudeHome,
+    kimiHome: options.kimiHome,
     channelType: options.channelType,
     chatId: chatId || options.chatId || undefined,
     runId: options.runId,
@@ -2940,16 +3667,6 @@ async function waitFor<T>(
     await new Promise((resolve) => setTimeout(resolve, pollMs));
   }
   throw new Error(`Timed out waiting for ${label}`);
-}
-
-function findCreatedChatId(options: CliOptions): string | undefined {
-  const dump = collectRealE2eDump({
-    codelarkHome: options.codelarkHome,
-    channelType: options.channelType,
-    runId: options.runId,
-    logTailBytes: 128_000,
-  });
-  return dump.binding?.chatKind === 'group' ? dump.binding.chatId : undefined;
 }
 
 async function hasResponseEvidence(options: CliOptions, chatId: string): Promise<boolean> {
@@ -2978,10 +3695,13 @@ function missingRequiredChecks(options: CliOptions, report: ReturnType<typeof la
   }
   if (
     options.runtime === 'claude'
-    && options.provider === 'pty'
+    && options.provider !== 'sdk'
     && scenarioRequiresRuntimeOutput(options)
   ) {
     required.add('claude_jsonl_found');
+  }
+  if (options.runtime === 'kimi' && scenarioRequiresRuntimeOutput(options)) {
+    required.add('kimi_wire_jsonl_found');
   }
   required.add('unexpected_mirror_absent');
   if (scenarioRequiresRuntimeOutput(options)) {
@@ -3025,12 +3745,101 @@ function scenarioSpecificChecks(
         : 'Expected fake CCR visible response text was not observed.',
       });
   }
+  if (options.scenario === 'agent-question-forms') {
+    const expectation = expectedReplyForMessage(
+      options,
+      scenarioFinalMessage(options),
+      'bridge response for final message',
+    );
+    const observed = Boolean(finalFeishuMessages && botTranscriptMatchesExpectation(
+      finalFeishuMessages,
+      expectation,
+      options,
+    ));
+    checks.push({
+      name: 'agent_question_form_interactive_transcript',
+      ok: observed,
+      detail: observed
+        ? 'Observed model-generated question form as a Feishu interactive CardKit reply with clk-agent-question callback fields.'
+        : 'Final Feishu transcript did not contain the expected interactive question form fields.',
+    });
+  }
+  if (options.scenario === 'markdown-rendering') {
+    const expectation = expectedReplyForMessage(
+      options,
+      scenarioFinalMessage(options),
+      'bridge response for final message',
+    );
+    const observed = Boolean(finalFeishuMessages && botTranscriptMatchesExpectation(
+      finalFeishuMessages,
+      expectation,
+      options,
+    ));
+    checks.push({
+      name: 'markdown_rendering_transcript_structure',
+      ok: observed,
+      detail: observed
+        ? 'Observed Markdown marker, table, fenced code block, and Feishu-normalized code language in the final transcript.'
+        : 'Final Feishu transcript did not contain the expected Markdown marker, table, fenced code block, and normalized language.',
+    });
+  }
+  if (options.scenario === 'command-state') {
+    const runtimeSettingsIssues = commandStateRuntimeSettingsTranscriptIssues(options, finalFeishuMessages);
+    checks.push({
+      name: 'command_state_runtime_settings_transcript',
+      ok: runtimeSettingsIssues.length === 0,
+      detail: runtimeSettingsIssues.length === 0
+        ? 'Observed command-state runtime/settings and /every replies in the final Feishu transcript.'
+        : runtimeSettingsIssues.join('\n'),
+    });
+    const issues = commandStateFileAndLargeFileTranscriptIssues(options, finalFeishuMessages);
+    checks.push({
+      name: 'command_state_file_and_large_file_transcript',
+      ok: issues.length === 0,
+      detail: issues.length === 0
+        ? 'Observed Feishu file reply for the small /file command and interactive confirmation card for the large /file command.'
+        : issues.join('\n'),
+    });
+  }
+  if (options.scenario === 'session-management') {
+    const issues = sessionManagementRuntimeIdentityTranscriptIssues(options, finalFeishuMessages);
+    checks.push({
+      name: 'session_management_runtime_identity_transcript',
+      ok: issues.length === 0,
+      detail: issues.length === 0
+        ? 'Observed /current, /check, and /t archive runtime identity replies in the final Feishu transcript.'
+        : issues.join('\n'),
+    });
+  }
+  if (options.scenario === 'history-suite') {
+    const issues = historySuiteTranscriptContractIssues(options, finalFeishuMessages);
+    checks.push({
+      name: 'history_suite_transcript_contract',
+      ok: issues.length === 0,
+      detail: issues.length === 0
+        ? 'Observed history-suite short/raw/msg/json/file, long truncation, and empty-chat isolation replies in the final Feishu transcript.'
+        : issues.join('\n'),
+    });
+  }
+  if (shouldCheckRuntimePromptFinalTranscript(options)) {
+    const issues = runtimePromptFinalTranscriptIssues(options, finalFeishuMessages);
+    checks.push({
+      name: 'runtime_prompt_final_transcript_marker',
+      ok: issues.length === 0,
+      detail: issues.length === 0
+        ? 'Observed the runtime prompt final marker in the final Feishu transcript.'
+        : issues.join('\n'),
+    });
+  }
   if (options.scenario === 'basic-dialogue-suite' && options.scriptedBasicDialogue) {
     const issues = basicDialogueStreamCardCheckpointIssues(
       report.streamCardCheckpoints || [],
       BASIC_DIALOGUE_PROVIDER_SEQUENCE.map((providerKey) => ({
         providerKey,
         marker: basicDialogueMarker(options, providerKey),
+        ...(providerKey === 'kimi-tmux'
+          ? { requiredTexts: basicDialogueKimiThinkingCheckpointTexts(options) }
+          : {}),
       })),
     );
     checks.push({
@@ -3048,8 +3857,199 @@ function scenarioSpecificChecks(
         ? `Observed terminal append input delivery audit entries for ${BASIC_DIALOGUE_APPEND_INPUT_PROVIDER_KEYS.join(', ')}.`
         : appendIssues.join('\n'),
     });
+    const observedKimiSessionId = report.runtimeSlots.find((slot) => slot.runtime === 'kimi')?.kimiSessionId
+      || scriptedKimiSessionId(options);
+    const kimiLifecycleAndSteerIssues = scriptedKimiLifecycleAndSteerIssues({
+      kimiHome: options.kimiHome,
+      sessionId: observedKimiSessionId,
+      cwd: options.workDir,
+    });
+    checks.push({
+      name: 'basic_dialogue_scripted_kimi_lifecycle_and_ctrl_s',
+      ok: kimiLifecycleAndSteerIssues.length === 0,
+      detail: kimiLifecycleAndSteerIssues.length === 0
+        ? 'Observed one fresh Kimi launch without resume, no bootstrap restart, and Ctrl-S steer.'
+        : kimiLifecycleAndSteerIssues.join('\n'),
+    });
+    const kimiRuntimeSlotIssues = scriptedKimiRuntimeSlotIssues({
+      report,
+      sessionId: observedKimiSessionId,
+      cwd: options.workDir,
+    });
+    checks.push({
+      name: 'basic_dialogue_kimi_runtime_slot_persisted',
+      ok: kimiRuntimeSlotIssues.length === 0,
+      detail: kimiRuntimeSlotIssues.length === 0
+        ? 'Observed ChannelChat kimi runtime slot bound to the scripted Kimi BridgeSession and wire transcript.'
+        : kimiRuntimeSlotIssues.join('\n'),
+    });
+    const kimiWireTranscriptIssues = scriptedKimiWireTranscriptIssues({
+      report,
+      marker: basicDialogueMarker(options, 'kimi-tmux'),
+      thinkingText: basicDialogueKimiThinkingCheckpointTexts(options)[1] || '',
+    });
+    checks.push({
+      name: 'basic_dialogue_kimi_wire_transcript_read',
+      ok: kimiWireTranscriptIssues.length === 0,
+      detail: kimiWireTranscriptIssues.length === 0
+        ? 'Observed scripted Kimi thinking, final marker text, and completion by reading the Kimi wire transcript.'
+        : kimiWireTranscriptIssues.join('\n'),
+    });
+    const kimiHistoryTranscriptIssues = scriptedKimiHistoryTranscriptIssues({
+      report,
+      marker: basicDialogueMarker(options, 'kimi-tmux'),
+      thinkingText: basicDialogueKimiThinkingCheckpointTexts(options)[1] || '',
+    });
+    checks.push({
+      name: 'basic_dialogue_kimi_history_transcript_excludes_thinking',
+      ok: kimiHistoryTranscriptIssues.length === 0,
+      detail: kimiHistoryTranscriptIssues.length === 0
+        ? 'Observed Kimi history transcript reads final marker text while excluding thinking/status content.'
+        : kimiHistoryTranscriptIssues.join('\n'),
+    });
+    const kimiThinkingStatusIssues = kimiThinkingStatusOnlyIssues(report.streamCardCheckpoints || [], {
+      providerKey: 'kimi-tmux',
+      marker: basicDialogueMarker(options, 'kimi-tmux'),
+      thinkingText: basicDialogueKimiThinkingCheckpointTexts(options)[1] || '',
+    });
+    checks.push({
+      name: 'basic_dialogue_kimi_thinking_status_only',
+      ok: kimiThinkingStatusIssues.length === 0,
+      detail: kimiThinkingStatusIssues.length === 0
+        ? 'Observed Kimi thinking only in non-final stream status checkpoints, not in the completed final answer card.'
+        : kimiThinkingStatusIssues.join('\n'),
+    });
+    const kimiToolCardIssues = scriptedKimiToolCardIssues(report.streamCardCheckpoints || [], {
+      providerKey: 'kimi-tmux',
+      marker: basicDialogueMarker(options, 'kimi-tmux'),
+    });
+    checks.push({
+      name: 'basic_dialogue_kimi_tool_card',
+      ok: kimiToolCardIssues.length === 0,
+      detail: kimiToolCardIssues.length === 0
+        ? 'Observed one grouped Kimi tool-call panel with four inner semantic tool panels, closed bounded fences, and no transport-envelope leakage.'
+        : kimiToolCardIssues.join('\n'),
+    });
+  }
+  if (options.scenario === 'runtime-message' && options.scriptedKimi) {
+    const marker = firstCodelarkMarker(scenarioFinalMessage(options));
+    const issues = scriptedKimiToolCardIssues(report.streamCardCheckpoints || [], {
+      providerKey: 'kimi-tmux',
+      marker,
+    });
+    checks.push({
+      name: 'runtime_message_scripted_kimi_tool_card',
+      ok: issues.length === 0,
+      detail: issues.length === 0
+        ? 'Observed the scripted Kimi response as one Feishu tool-call group with four inner semantic tool panels, hidden ordinary output, a bounded multi-line diff, and no transport-envelope leakage.'
+        : issues.join('\n'),
+    });
   }
   return checks;
+}
+
+function commandStateRuntimeSettingsTranscriptIssues(options: CliOptions, finalFeishuMessages?: unknown): string[] {
+  if (!finalFeishuMessages) {
+    return ['Final Feishu transcript is missing; cannot verify command-state runtime/settings replies.'];
+  }
+  const commands = [
+    '/status',
+    '/require-at off',
+    `/runtime ${options.runtime}`,
+    `/p ${options.provider}`,
+    '/current',
+    '/model',
+    '/mode',
+    '/provider',
+    '/sandbox',
+    '/network',
+    '/reasoning',
+    `/every 1h e2e seed ${options.runId}`,
+    '/every',
+    '/every no 1',
+  ];
+  return commands
+    .map((command) => {
+      const expectation = expectedReplyForMessage(options, command, `bridge response for ${command}`);
+      if (botTranscriptMatchesExpectation(finalFeishuMessages, expectation, options)) return null;
+      return `Command-state final transcript did not contain the expected runtime/settings reply for ${command}.`;
+    })
+    .filter((issue): issue is string => Boolean(issue));
+}
+
+function commandStateFileAndLargeFileTranscriptIssues(options: CliOptions, finalFeishuMessages?: unknown): string[] {
+  if (!finalFeishuMessages) {
+    return ['Final Feishu transcript is missing; cannot verify command-state /file replies.'];
+  }
+  const fileCommand = `/file ${commandStateFixtureFilePath(options)}`;
+  const largeFileCommand = `/file ${commandStateLargeFixtureFilePath(options)}`;
+  const fileExpectation = expectedReplyForMessage(options, fileCommand, `bridge response for ${fileCommand}`);
+  const largeFileExpectation = expectedReplyForMessage(options, largeFileCommand, `bridge response for ${largeFileCommand}`);
+  const issues: string[] = [];
+  if (!botTranscriptMatchesExpectation(finalFeishuMessages, fileExpectation, options)) {
+    issues.push('Small /file command did not produce a Feishu file message with file_key in the final transcript.');
+  }
+  if (!botTranscriptMatchesExpectation(finalFeishuMessages, largeFileExpectation, options)) {
+    issues.push('Large /file command did not produce the expected Feishu interactive confirmation card in the final transcript.');
+  }
+  return issues;
+}
+
+function sessionManagementRuntimeIdentityTranscriptIssues(options: CliOptions, finalFeishuMessages?: unknown): string[] {
+  if (!finalFeishuMessages) {
+    return ['Final Feishu transcript is missing; cannot verify session-management runtime identity replies.'];
+  }
+  const commands = ['/current', '/check', '/t archive'];
+  return commands
+    .map((command) => {
+      const expectation = expectedReplyForMessage(options, command, `bridge response for ${command}`);
+      if (botTranscriptMatchesExpectation(finalFeishuMessages, expectation, options)) return null;
+      return `${command} did not produce the expected ${runtimeDisplayLabel(options.runtime)} runtime identity reply in the final transcript.`;
+    })
+    .filter((issue): issue is string => Boolean(issue));
+}
+
+function historySuiteTranscriptContractIssues(options: CliOptions, finalFeishuMessages?: unknown): string[] {
+  if (!finalFeishuMessages) {
+    return ['Final Feishu transcript is missing; cannot verify history-suite replies.'];
+  }
+  const checks = [
+    { command: '/his raw 1', label: 'bridge response for history-suite /his raw 1', description: 'short raw history marker' },
+    { command: '/his limit 3', label: 'bridge response for history-suite /his limit 3', description: 'history limit setting reply' },
+    { command: '/his', label: 'bridge response for history-suite /his', description: 'short default history marker' },
+    { command: '/his msg 1', label: 'bridge response for history-suite /his msg 1', description: 'short msg history marker' },
+    { command: '/his json', label: 'bridge response for history-suite /his json', description: 'JSON history file reply' },
+    { command: '/his file', label: 'bridge response for history-suite /his file', description: 'text history file reply' },
+    { command: '/his raw 2', label: 'bridge response for history-suite long /his raw 2', description: 'long raw history truncation' },
+    { command: '/his msg 2', label: 'bridge response for history-suite long /his msg 2', description: 'long msg history truncation' },
+    { command: '/his', label: 'bridge response for history-suite empty /his', description: 'empty default history isolation' },
+    { command: '/his raw 1', label: 'bridge response for history-suite empty /his raw 1', description: 'empty raw history isolation' },
+    { command: '/his msg 1', label: 'bridge response for history-suite empty /his msg 1', description: 'empty msg history isolation' },
+  ];
+  return checks
+    .map(({ command, label, description }) => {
+      const expectation = expectedReplyForMessage(options, command, label);
+      if (botTranscriptMatchesExpectation(finalFeishuMessages, expectation, options)) return null;
+      return `History-suite final transcript did not contain the expected ${description} for ${command}.`;
+    })
+    .filter((issue): issue is string => Boolean(issue));
+}
+
+function shouldCheckRuntimePromptFinalTranscript(options: CliOptions): boolean {
+  return options.scenario !== 'basic-dialogue-suite'
+    && options.scenario !== 'agent-question-forms'
+    && scenarioRequiresRuntimeOutput(options)
+    && Boolean(expectedRuntimePromptResponseText(options, scenarioFinalMessage(options)));
+}
+
+function runtimePromptFinalTranscriptIssues(options: CliOptions, finalFeishuMessages?: unknown): string[] {
+  const expectedText = expectedRuntimePromptResponseText(options, scenarioFinalMessage(options));
+  if (!expectedText) return [];
+  if (!finalFeishuMessages) {
+    return [`Final Feishu transcript is missing; cannot verify runtime prompt marker ${expectedText}.`];
+  }
+  if (botTranscriptContainsText(finalFeishuMessages, expectedText, options)) return [];
+  return [`Final Feishu transcript did not contain runtime prompt marker ${expectedText}.`];
 }
 
 function basicDialogueAppendInputAuditIssues(report: ReturnType<typeof latestDump>): string[] {
@@ -3322,6 +4322,12 @@ function scenarioFinalMessage(options: CliOptions): string {
   if (options.scenario === 'history-empty-isolation') return historyEmptyIsolationPrompt(options);
   if (options.scenario === 'history-long-truncation') return historyLongPrompt(options);
   if (options.scenario === 'history-suite') return historySuiteShortPrompt(options);
+  if (options.scenario === 'session-management' && options.provider !== 'sdk') {
+    return [
+      '请只回复下面这个 marker，不要添加解释：',
+      options.message,
+    ].join('\n');
+  }
   if (options.scenario === 'markdown-rendering') {
     return [
       '请严格原样回复下面的 Markdown，不要添加解释：',
@@ -3361,9 +4367,9 @@ function basicDialogueExpectedTexts(options: CliOptions, text: string, label: st
   if (command.startsWith('/runtime ')) return ['Runtime', command.slice('/runtime '.length).trim()];
   if (command.startsWith('/p ')) {
     const phase = basicDialoguePhaseFromLabel(label);
-    const runtime = phase.startsWith('claude-') ? 'claude' : 'codex';
+    const { runtime } = parseRuntimeProviderKey(phase);
     return [
-      runtime === 'claude' ? 'Claude Provider' : 'Codex Provider',
+      runtimeProviderCommandTitle(runtime),
       command.slice('/p '.length).trim(),
     ];
   }
@@ -3386,33 +4392,85 @@ function commandStateExpectedTexts(options: CliOptions, text: string): string[] 
   if (command === `/runtime ${options.runtime}`) return ['Runtime', options.runtime];
   if (command === `/p ${options.provider}`) {
     return [
-      options.runtime === 'claude' ? 'Claude Provider' : 'Codex Provider',
+      runtimeProviderCommandTitle(options.runtime),
       options.provider,
     ];
   }
   if (command === '/current') return ['当前会话'];
   if (command === '/model') {
-    return [options.runtime === 'claude' ? '当前 Claude Code 模型' : '当前模型'];
+    if (options.runtime === 'claude') return ['当前 Claude Code 模型'];
+    if (options.runtime === 'kimi') return ['当前 Kimi Code 模型'];
+    return ['当前模型'];
   }
-  if (command === '/mode') return ['当前模式', 'Runtime', options.runtime];
+  if (command === '/mode') {
+    if (options.runtime === 'kimi') return ['Kimi Code 模式固定'];
+    return ['当前模式', 'Runtime', options.runtime];
+  }
   if (command === '/provider') {
-    return [options.runtime === 'claude' ? '当前 Claude Provider' : '当前 Codex Provider'];
+    if (options.runtime === 'claude') return ['当前 Claude Provider'];
+    if (options.runtime === 'kimi') return ['当前 Kimi Provider'];
+    return ['当前 Codex Provider'];
   }
   if (command === '/sandbox') {
-    return [options.runtime === 'claude' ? 'Claude Code 不支持 Bridge 沙箱设置' : '当前 Codex 沙箱'];
+    if (options.runtime === 'claude') return ['Claude Code 不支持 Bridge 沙箱设置'];
+    if (options.runtime === 'kimi') return ['Kimi Code 不支持 Bridge 沙箱设置'];
+    return ['当前 Codex 沙箱'];
   }
   if (command === '/network') {
-    return [options.runtime === 'claude' ? 'Claude Code 不支持 Bridge 网络开关' : '当前 Codex 网络'];
+    if (options.runtime === 'claude') return ['Claude Code 不支持 Bridge 网络开关'];
+    if (options.runtime === 'kimi') return ['Kimi Code 不支持 Bridge 网络开关'];
+    return ['当前 Codex 网络'];
   }
   if (command === '/reasoning') {
-    return [options.runtime === 'claude' ? '当前 Claude Code 思考级别' : '当前思考级别'];
+    if (options.runtime === 'claude') return ['当前 Claude Code 思考级别'];
+    if (options.runtime === 'kimi') return ['Kimi Code 不支持 Bridge 思考级别设置'];
+    return ['当前思考级别'];
   }
   if (command === `/every 1h e2e seed ${options.runId}`) {
-    return ['已创建 /every 定时输入', `e2e seed ${options.runId}`];
+    return ['已创建 /every 定时输入', `e2e seed ${options.runId}`, 'session runtime-id'];
   }
-  if (command === '/every') return ['当前聊天 /every 定时输入'];
+  if (command === '/every') return ['当前聊天 /every 定时输入', 'session runtime-id'];
   if (command === '/every no 1') return ['已取消 /every 定时输入'];
   return [];
+}
+
+function commandStateFixtureFileName(options: CliOptions): string {
+  return `codelark-file-${runIdToken(options.runId)}.txt`;
+}
+
+function commandStateFixtureFilePath(options: CliOptions): string {
+  return path.join(options.runRoot, 'fixtures', commandStateFixtureFileName(options));
+}
+
+function commandStateLargeFixtureFileName(options: CliOptions): string {
+  return `codelark-large-file-${runIdToken(options.runId)}.bin`;
+}
+
+function commandStateLargeFixtureFilePath(options: CliOptions): string {
+  return path.join(options.runRoot, 'fixtures', commandStateLargeFixtureFileName(options));
+}
+
+function prepareScenarioWorkspaceFixtures(options: CliOptions): void {
+  if (options.scenario !== 'command-state') return;
+  const filePath = commandStateFixtureFilePath(options);
+  fs.mkdirSync(path.dirname(filePath), { recursive: true, mode: 0o700 });
+  fs.writeFileSync(
+    filePath,
+    [
+      `CODELARK_FILE_COMMAND_${runIdToken(options.runId)}`,
+      `runtime=${options.runtime}`,
+      `provider=${options.provider}`,
+      '',
+    ].join('\n'),
+    { encoding: 'utf-8', mode: 0o600 },
+  );
+  const largeFilePath = commandStateLargeFixtureFilePath(options);
+  const fd = fs.openSync(largeFilePath, 'w', 0o600);
+  try {
+    fs.ftruncateSync(fd, 20 * 1024 * 1024 + 1);
+  } finally {
+    fs.closeSync(fd);
+  }
 }
 
 function sessionManagementExpectedTexts(options: CliOptions, text: string): string[] {
@@ -3420,30 +4478,68 @@ function sessionManagementExpectedTexts(options: CliOptions, text: string): stri
   if (command === `/runtime ${options.runtime}`) return ['Runtime', options.runtime];
   if (command === `/p ${options.provider}`) {
     return [
-      options.runtime === 'claude' ? 'Claude Provider' : 'Codex Provider',
+      runtimeProviderCommandTitle(options.runtime),
       options.provider,
     ];
   }
   if (command === '/help') return ['命令速览', 'Bridge 控制', 'SessionRuntime 配置'];
-  if (command === '/set') return ['全局配置', '[runtime.codex]', 'runtime.codex.provider'];
-  if (command === `/set claudeProvider ${options.runtime === 'claude' ? options.provider : 'pty'}`) {
+  if (command === '/set') return ['全局配置', '通用配置', '默认 agent', 'tmux 自动回车'];
+  if (command === sessionManagementProviderSettingCommand(options)) {
+    if (options.runtime === 'kimi') return ['已更新全局配置', 'runtime.kimi.provider', 'tmux'];
     return ['已更新全局配置', 'runtime.claude.provider', options.runtime === 'claude' ? options.provider : 'pty'];
   }
   if (command === `/new mgmt-${options.runId} ${options.workDir}`) {
-    return ['已创建群聊会话', `mgmt-${options.runId}`, options.workDir];
+    return ['已创建群聊会话', `mgmt-${options.runId}`, options.workDir, 'Runtime', runtimeDisplayLabel(options.runtime)];
+  }
+  if (command === `/clear clear-${options.runId} ${options.workDir}`) {
+    return ['已清空当前聊天上下文', `clear-${options.runId}`, options.workDir, 'Provider', options.provider];
   }
   if (command === `/cd ${options.workDir}`) return ['已切换工作目录', options.workDir];
-  if (command === '/current') {
-    return ['当前会话', 'runtime', options.runtime === 'claude' ? 'Claude Code' : 'Codex'];
+  if (command === sessionManagementShellCommand(options)) {
+    return [
+      '/shell 执行完成',
+      sessionManagementShellMarker(options),
+      'Codex sandbox',
+      'read-only',
+      '退出码',
+      '0',
+    ];
   }
-  if (command === '/check') return ['当前会话健康检查'];
+  if (command === '/current') {
+    return [
+      runtimeDisplayLabel(options.runtime),
+      `clear-${options.runId}`,
+      'Provider',
+      options.provider,
+      '当前 agent',
+    ];
+  }
+  if (command === '/check') {
+    return [
+      '当前会话健康检查',
+      'runtime',
+      runtimeDisplayLabel(options.runtime),
+      runtimeIdentityFieldName(options.runtime),
+      ...(options.runtime === 'claude' || options.runtime === 'kimi' ? ['runtime_cwd'] : []),
+    ];
+  }
   if (command === '/t') return ['本地会话'];
   if (command === '/t n 50') return ['本地会话'];
   if (command === '/t unbind') return ['当前聊天已解绑', '新的临时 BridgeSession'];
   if (command === '/t archive') {
-    return [options.runtime === 'claude' ? '已归档本地 Claude Code 会话' : '已归档本地 Codex 会话'];
+    if (options.runtime === 'claude') return ['已归档本地 Claude Code 会话'];
+    if (options.runtime === 'kimi') return ['已归档本地 Kimi Code 会话'];
+    return ['已归档本地 Codex 会话'];
   }
   return [];
+}
+
+function sessionManagementShellMarker(options: CliOptions): string {
+  return `CODELARK_SHELL_${runIdToken(options.runId)}`;
+}
+
+function sessionManagementShellCommand(options: CliOptions): string {
+  return `/shell --sandbox read-only printf ${sessionManagementShellMarker(options)}`;
 }
 
 function markdownRenderingExpectedTexts(options: CliOptions): string[] {
@@ -3462,11 +4558,23 @@ function runtimeProviderSeedExpectedTexts(options: CliOptions, text: string): st
   if (command === `/runtime ${options.runtime}`) return ['Runtime', options.runtime];
   if (command === `/p ${options.provider}`) {
     return [
-      options.runtime === 'claude' ? 'Claude Provider' : 'Codex Provider',
+      runtimeProviderCommandTitle(options.runtime),
       options.provider,
     ];
   }
   return [];
+}
+
+function newSessionRuntimeExpectedTexts(options: CliOptions, command: string): string[] {
+  const match = command.match(/^\/new\s+(\S+)/u);
+  const groupName = match?.[1] || '';
+  return [
+    '已创建群聊会话',
+    ...(groupName ? [groupName] : []),
+    options.workDir,
+    'Runtime',
+    runtimeDisplayLabel(options.runtime),
+  ];
 }
 
 function historyBoundariesExpectedTexts(options: CliOptions, text: string): string[] {
@@ -3474,7 +4582,7 @@ function historyBoundariesExpectedTexts(options: CliOptions, text: string): stri
   const seedTexts = runtimeProviderSeedExpectedTexts(options, text);
   if (seedTexts.length > 0) return seedTexts;
   if (command === `/new history-${options.runId} ${options.workDir}`) {
-    return ['已创建群聊会话', `history-${options.runId}`, options.workDir];
+    return newSessionRuntimeExpectedTexts(options, command);
   }
   if (command === `/cd ${options.workDir}`) return ['已切换工作目录', options.workDir];
   return [];
@@ -3484,7 +4592,7 @@ function historyEmptyIsolationExpectedTexts(options: CliOptions, text: string): 
   const command = text.trim();
   const seedTexts = runtimeProviderSeedExpectedTexts(options, text);
   if (seedTexts.length > 0) return seedTexts;
-  if (command.startsWith(`/new histiso-`)) return ['已创建群聊会话', options.workDir];
+  if (command.startsWith(`/new histiso-`)) return newSessionRuntimeExpectedTexts(options, command);
   if (command === `/cd ${options.workDir}`) return ['已切换工作目录', options.workDir];
   return [];
 }
@@ -3493,7 +4601,7 @@ function historyAttachmentsExpectedTexts(options: CliOptions, text: string): str
   const command = text.trim();
   const seedTexts = runtimeProviderSeedExpectedTexts(options, text);
   if (seedTexts.length > 0) return seedTexts;
-  if (command.startsWith(`/new histfile-`)) return ['已创建群聊会话', options.workDir];
+  if (command.startsWith(`/new histfile-`)) return newSessionRuntimeExpectedTexts(options, command);
   if (command === `/cd ${options.workDir}`) return ['已切换工作目录', options.workDir];
   return [];
 }
@@ -3502,7 +4610,7 @@ function historyLongTruncationExpectedTexts(options: CliOptions, text: string): 
   const command = text.trim();
   const seedTexts = runtimeProviderSeedExpectedTexts(options, text);
   if (seedTexts.length > 0) return seedTexts;
-  if (command.startsWith(`/new histlong-`)) return ['已创建群聊会话', options.workDir];
+  if (command.startsWith(`/new histlong-`)) return newSessionRuntimeExpectedTexts(options, command);
   if (command === `/cd ${options.workDir}`) return ['已切换工作目录', options.workDir];
   return [];
 }
@@ -3511,7 +4619,7 @@ function historySuiteSetupExpectedTexts(options: CliOptions, text: string): stri
   const command = text.trim();
   const seedTexts = runtimeProviderSeedExpectedTexts(options, text);
   if (seedTexts.length > 0) return seedTexts;
-  if (command.startsWith(`/new histsuite-`)) return ['已创建群聊会话', options.workDir];
+  if (command.startsWith(`/new histsuite-`)) return newSessionRuntimeExpectedTexts(options, command);
   if (command === `/cd ${options.workDir}`) return ['已切换工作目录', options.workDir];
   return [];
 }
@@ -3526,6 +4634,17 @@ function historySuiteForbiddenMarkers(options: CliOptions): string[] {
 
 function expectedReplyForMessage(options: CliOptions, text: string, label: string): ReplyExpectation {
   const empty = { texts: [], forbiddenTexts: [], messageTypes: [], contentKeys: [] };
+  const runtimeSeedTexts = runtimeProviderSeedExpectedTexts(options, text);
+  if (
+    runtimeSeedTexts.length > 0
+    && (
+      options.scenario === 'message-only'
+      || options.scenario === 'runtime-message'
+      || options.scenario === 'agent-question-forms'
+    )
+  ) {
+    return { ...empty, texts: runtimeSeedTexts };
+  }
   if (options.scenario === 'card-forms') {
     const command = text.trim();
     if (command === '/new') {
@@ -3534,6 +4653,22 @@ function expectedReplyForMessage(options: CliOptions, text: string, label: strin
         texts: ['创建群聊会话'],
         messageTypes: ['interactive'],
         contentKeys: ['clk_form', 'clk_input', 'clk_path', 'submit_btn', 'clk-command'],
+      };
+    }
+    if (command === '/every-form') {
+      return {
+        ...empty,
+        texts: ['新建 /every 定时输入'],
+        messageTypes: ['interactive'],
+        contentKeys: ['clk_form', 'clk_every_interval', 'clk_every_prompt', 'submit_btn', 'clk-command'],
+      };
+    }
+    if (command === '/then-form') {
+      return {
+        ...empty,
+        texts: ['新建 /then 后续输入'],
+        messageTypes: ['interactive'],
+        contentKeys: ['clk_form', 'clk_then_prompt', 'submit_btn', 'clk-command'],
       };
     }
   }
@@ -3559,6 +4694,17 @@ function expectedReplyForMessage(options: CliOptions, text: string, label: strin
     return { ...empty, texts: [expectedRuntimePromptResponseText(options, text)].filter(Boolean) };
   }
   if (options.scenario === 'command-state') {
+    if (text.trim() === `/file ${commandStateFixtureFilePath(options)}`) {
+      return { ...empty, messageTypes: ['file'], contentKeys: ['file_key'] };
+    }
+    if (text.trim() === `/file ${commandStateLargeFixtureFilePath(options)}`) {
+      return {
+        ...empty,
+        texts: ['确认上传大文件', commandStateLargeFixtureFileName(options), '超过 20 MB'],
+        messageTypes: ['interactive'],
+        contentKeys: ['clk-command', '上传并发链接', '取消'],
+      };
+    }
     return { ...empty, texts: commandStateExpectedTexts(options, text) };
   }
   if (options.scenario === 'session-management') {
@@ -3684,6 +4830,7 @@ function replyTimeoutMsForMessage(options: CliOptions, text: string, label: stri
   const command = text.trim();
   if (label.includes('final message')) return options.timeoutMs;
   if (command === '/his' || command.startsWith('/his ')) return options.timeoutMs;
+  if (command.startsWith('/shell ')) return options.timeoutMs;
   return Math.min(options.timeoutMs, COMMAND_RESPONSE_TIMEOUT_MS);
 }
 
@@ -3758,7 +4905,7 @@ function commandReplyExpectations(options: CliOptions): CommandReplyExpectation[
           }
           : {}),
         replyTimeoutMs: replyTimeoutMsForMessage(options, command, label),
-        reason: options.scenario === 'card-forms' && command.trim() === '/new'
+        reason: options.scenario === 'card-forms' && ['/new', '/every-form', '/then-form'].includes(command.trim())
           ? 'card form command must reply with a Feishu interactive CardKit form and submit callback_data prefix'
           : options.scenario === 'basic-dialogue-suite' && basicDialoguePhaseForPrompt(options, command)
           ? 'basic dialogue provider phase must produce the expected deterministic model marker without provider contamination'
@@ -3766,10 +4913,15 @@ function commandReplyExpectations(options: CliOptions): CommandReplyExpectation[
           ? 'basic dialogue setup/control message must reach the expected runtime/provider/stop state'
           : options.scenario === 'agent-question-forms' && label.includes('final message')
           ? 'agent question form must reply with a Feishu interactive CardKit form and clk-agent-question callback prefix'
+          : options.scenario === 'agent-question-forms' && runtimeProviderSeedExpectedTexts(options, command).length > 0
+          ? 'agent question runtime/provider seed must reach the final selected state before sending the model prompt'
           : options.scenario === 'markdown-rendering' && label.includes('final message')
           ? 'markdown rendering final reply must include the expected marker, table, fenced code block, and language tag'
           : options.scenario === 'markdown-rendering' && runtimeProviderSeedExpectedTexts(options, command).length > 0
           ? 'markdown rendering runtime/provider seed must reach the final selected state before sending the markdown prompt'
+          : (options.scenario === 'message-only' || options.scenario === 'runtime-message')
+            && runtimeProviderSeedExpectedTexts(options, command).length > 0
+          ? 'runtime/provider seed command must reach the selected runtime and provider before sending the prompt'
           : options.scenario === 'history-boundaries'
             && historyBoundariesExpectedTexts(options, command).length > 0
           ? 'history-boundaries setup command must reach the expected session/provider state before history assertions'
@@ -3787,6 +4939,12 @@ function commandReplyExpectations(options: CliOptions): CommandReplyExpectation[
           ? 'history-suite setup command must reach the expected session/provider state before history assertions'
           : command.trim() === '/his json' || command.trim() === '/his file'
           ? 'history attachment command must reply with a Feishu file message containing a Feishu file key'
+          : command.trim() === `/file ${commandStateLargeFixtureFilePath(options)}`
+          ? 'large file command must reply with a Feishu interactive confirmation card and clk-command callback prefix'
+          : command.trim().startsWith('/file ')
+          ? 'file command must reply with a Feishu file message containing a Feishu file key'
+          : command.trim().startsWith('/shell ')
+          ? 'shell command must complete in Codex sandbox and include the stdout marker'
           : getScenarioDefinition(options.scenario).name === 'command-state'
           ? 'command-state reply must include the expected command-specific status text'
           : getScenarioDefinition(options.scenario).name === 'session-management' && !command.trim().startsWith('/his') && !isScenarioRuntimePrompt(options, command)
@@ -3817,6 +4975,84 @@ function commandReplyExpectations(options: CliOptions): CommandReplyExpectation[
       };
     })
     .filter((item): item is CommandReplyExpectation => item !== null);
+}
+
+function plannedSuccessCheckNames(options: CliOptions): string[] {
+  const names = [
+    'message_observations_passed',
+    'final_feishu_transcript_present',
+    'coverage_metadata_present',
+    'canonical_report_eligible',
+    'created_chat_cleanup_completed',
+    'scenario_created_chat_cleanup_completed',
+    'scenario_created_chat_names_match_requests',
+    'required_checks_passed',
+    'unexpected_mirror_absent',
+  ];
+  if (scenarioRequiresRuntimeOutput(options)) {
+    names.push('provider_output_path');
+  }
+  if (scenarioRequiresRuntimeOutput(options) && options.provider !== 'sdk') {
+    names.push('mirror_final_not_duplicated_in_direct_reply');
+  }
+  if (options.scenario === 'doc-as-chat-from-scratch') {
+    names.push(
+      'doc_as_chat_context_assertion',
+      'doc_as_chat_user_group_read',
+      'doc_as_chat_comment_granularity_binding',
+      'created_document_cleanup_completed',
+    );
+  }
+  if (options.fakeCcr && options.scenario !== 'require-at-toggle') {
+    names.push('fake_ccr_response_observed');
+  }
+  if (options.fakeCcr) {
+    names.push('fake_ccr_backend_used');
+  }
+  if (options.scenario === 'agent-question-forms') {
+    names.push('agent_question_form_interactive_transcript');
+  }
+  if (options.scenario === 'markdown-rendering') {
+    names.push('markdown_rendering_transcript_structure');
+  }
+  if (options.scenario === 'command-state') {
+    names.push('command_state_runtime_settings_transcript');
+    names.push('command_state_file_and_large_file_transcript');
+  }
+  if (options.scenario === 'session-management') {
+    names.push('session_management_runtime_identity_transcript');
+  }
+  if (options.scenario === 'history-suite') {
+    names.push('history_suite_transcript_contract');
+  }
+  if (shouldCheckRuntimePromptFinalTranscript(options)) {
+    names.push('runtime_prompt_final_transcript_marker');
+  }
+  if (usesProxyBackedBasicDialogue(options)) {
+    names.push(
+      'codex_responses_proxy_used',
+      'codex_responses_proxy_model_resolved',
+      'codex_responses_proxy_reasoning_low',
+      'codex_responses_proxy_bootstrap_prompt_observed',
+      'basic_dialogue_ccr_proxy_used',
+    );
+  }
+  if (options.scenario === 'basic-dialogue-suite' && options.scriptedBasicDialogue) {
+    names.push(
+      'basic_dialogue_stream_card_checkpoints',
+      'basic_dialogue_terminal_append_input_delivered',
+      'basic_dialogue_scripted_kimi_lifecycle_and_ctrl_s',
+      'basic_dialogue_kimi_runtime_slot_persisted',
+      'basic_dialogue_kimi_wire_transcript_read',
+      'basic_dialogue_kimi_history_transcript_excludes_thinking',
+      'basic_dialogue_kimi_thinking_status_only',
+      'basic_dialogue_kimi_tool_card',
+    );
+  }
+  if (options.scenario === 'runtime-message' && options.scriptedKimi) {
+    names.push('runtime_message_scripted_kimi_tool_card');
+  }
+  return names;
 }
 
 function extractScenarioCreatedChatIds(observations: MessageObservation[], excludedChatIds: string[] = []): string[] {
@@ -3891,6 +5127,20 @@ async function cleanupScenarioCreatedChats(
   return results;
 }
 
+async function cleanupScenarioCreatedChatsFromDump(
+  options: CliOptions,
+  baseChatId: string,
+  excludedChatIds: string[] = [],
+): Promise<CreatedChatCleanupResult[]> {
+  if (!baseChatId) return [];
+  const chatIds = extractScenarioCreatedChatIdsFromDump(latestDump(options, baseChatId), excludedChatIds);
+  const results: CreatedChatCleanupResult[] = [];
+  for (const chatId of chatIds) {
+    results.push(await deleteCreatedChat(chatId, options));
+  }
+  return results;
+}
+
 function nextScenarioChatIdFromObservation(
   observation: MessageObservation,
   excludedChatIds: string[] = [],
@@ -3932,9 +5182,54 @@ async function listFinalFeishuMessagesForObservations(
   };
 }
 
+function canonicalReportEligibility(
+  options: CliOptions,
+  runtimeEnvironment: RuntimeEnvironmentPlan,
+): { eligible: boolean; blockers: string[]; notes: string[] } {
+  const blockers: string[] = [];
+  const notes: string[] = [];
+  const runRoot = path.resolve(options.runRoot);
+  const isolatedPaths: Array<[string, string]> = [
+    ['codelarkHome', options.codelarkHome],
+    ['runtimeHome', runtimeEnvironment.runtimeHome],
+    ['codexHome', runtimeEnvironment.codexHome],
+    ['kimiHome', runtimeEnvironment.kimiHome],
+  ];
+
+  if (!options.launchBridge) {
+    blockers.push('real Feishu canonical reports must launch an isolated bridge.');
+  }
+  for (const [label, value] of isolatedPaths) {
+    if (!isPathInside(runRoot, value)) {
+      blockers.push(`${label} is outside runRoot: ${value}`);
+    }
+  }
+  if (usesScriptedKimiExecutable(options)) {
+    if (runtimeEnvironment.kimiExecutableSource !== 'scripted-fake-executable') {
+      blockers.push(`scripted basic-dialogue expected scripted-fake-executable, got ${runtimeEnvironment.kimiExecutableSource}.`);
+    }
+    if (
+      !runtimeEnvironment.kimiExecutablePath
+      || !isPathInside(runRoot, runtimeEnvironment.kimiExecutablePath)
+    ) {
+      blockers.push(`scripted Kimi executable is outside runRoot: ${runtimeEnvironment.kimiExecutablePath || '-'}`);
+    }
+  }
+  if (options.dryRun) {
+    notes.push('dry-run only describes the planned canonical eligibility; it is not execution evidence.');
+  }
+
+  return {
+    eligible: blockers.length === 0,
+    blockers,
+    notes,
+  };
+}
+
 function automatedSuccessChecks(params: {
   options: CliOptions;
   report: ReturnType<typeof latestDump>;
+  runtimeEnvironment: RuntimeEnvironmentPlan;
   messageObservations: MessageObservation[];
   finalFeishuMessages: unknown;
   createdChatCleanup: CreatedChatCleanupResult | null;
@@ -3950,13 +5245,14 @@ function automatedSuccessChecks(params: {
   const missingTranscriptIds = sentMessageIds.filter((messageId) => !payloadContainsText(params.finalFeishuMessages, messageId));
   const failedObservations = params.messageObservations.filter((observation) => !observation.ok);
   const transcriptCount = countFeishuTranscriptMessages(params.finalFeishuMessages);
-  const cleanupRequired = params.options.createChat && !params.options.keepGroup;
+  const cleanupRequired = createsInitialProductNewSessionGroup(params.options) && !params.options.keepGroup;
   const cleanupOk = !cleanupRequired || params.createdChatCleanup?.deleted === true;
   const scenarioCreatedChatCleanupOk = params.scenarioCreatedChatCleanup.every((item) => item.deleted === true);
   const scenarioCreatedNameChecksOk = params.scenarioCreatedChatInfo.every((item) => item.ok);
   const coverage = scenarioCoverage(params.options);
   const e2eCoverage = Array.isArray(coverage.e2eCoverage) ? coverage.e2eCoverage : [];
   const testName = typeof coverage.testName === 'string' ? coverage.testName : '';
+  const canonicalEligibility = canonicalReportEligibility(params.options, params.runtimeEnvironment);
   const finalObservation = params.messageObservations.find((observation) => observation.label.includes('final message'));
   const finalExpectedText = expectedFinalResponseText(params.options);
   const directMirrorDuplicate = Boolean(
@@ -3972,6 +5268,13 @@ function automatedSuccessChecks(params: {
   );
 
   const checks = [
+    {
+      name: 'canonical_report_eligible',
+      ok: canonicalEligibility.eligible,
+      detail: canonicalEligibility.eligible
+        ? 'Report satisfies canonical isolation requirements.'
+        : canonicalEligibility.blockers.join('; '),
+    },
     {
       name: 'message_observations_passed',
       ok: params.messageObservations.length > 0 && failedObservations.length === 0,
@@ -4095,18 +5398,31 @@ function writeFailureReport(params: {
   chatId: string;
   options: CliOptions;
   runtimeEnvironment: RuntimeEnvironmentPlan;
+  error?: unknown;
   feishuMessages?: unknown;
 }): void {
   const dump = latestDump(params.options, params.chatId);
   const failureReport = {
+    runId: params.options.runId,
+    dryRun: false,
+    launchBridge: params.options.launchBridge,
+    initialChatCreation: createsInitialProductNewSessionGroup(params.options) ? 'product-new-session-use-case' : 'provided-chat-id',
+    scriptedBasicDialogue: params.options.scriptedBasicDialogue,
+    scriptedKimi: params.options.scriptedKimi,
+    scenario: params.options.scenario,
+    runtime: params.options.runtime,
+    provider: params.options.provider,
+    coverage: scenarioCoverage(params.options),
     label: params.label,
     ...(params.sentText ? { sentText: params.sentText } : {}),
     chatId: params.chatId,
     runRoot: params.options.runRoot,
     codelarkHome: params.options.codelarkHome,
     runtimeEnvironment: params.runtimeEnvironment,
+    canonicalEligibility: canonicalReportEligibility(params.options, params.runtimeEnvironment),
     missingChecks: missingRequiredChecks(params.options, dump),
     unexpectedMirror: unexpectedMirrorIssues(params.options, dump),
+    ...(params.error !== undefined ? { failure: serializeFailureError(params.error) } : {}),
     ...(params.feishuMessages ? { feishuMessages: params.feishuMessages } : {}),
     dump,
   };
@@ -4214,6 +5530,48 @@ async function waitForBotTranscriptExpectation(
   });
 }
 
+function shouldObserveScenarioNewChatTranscript(options: CliOptions, text: string): boolean {
+  return scenarioSwitchesToNewChatAfterNewCommand(options) && text.trim().startsWith('/new ');
+}
+
+function extractScenarioCreatedChatIdsFromDump(
+  dump: ReturnType<typeof latestDump>,
+  excludedChatIds: string[] = [],
+): string[] {
+  const excluded = new Set(excludedChatIds.filter(Boolean));
+  const chatIds = new Set<string>();
+  const serialized = JSON.stringify(dump.audit ?? {});
+  for (const match of serialized.matchAll(/\boc_[a-z0-9]+\b/g)) {
+    const chatId = match[0];
+    if (excluded.has(chatId)) continue;
+    chatIds.add(chatId);
+  }
+  return [...chatIds];
+}
+
+async function waitForScenarioNewChatTranscript(
+  options: CliOptions,
+  baseChatId: string,
+  expectation: ReplyExpectation,
+  label: string,
+  timeoutMs: number,
+): Promise<{ chatId: string; messages: unknown }> {
+  return waitFor(label, timeoutMs, options.pollMs, async () => {
+    const dump = latestDump(options, baseChatId);
+    const createdChatIds = extractScenarioCreatedChatIdsFromDump(dump, [
+      baseChatId,
+      options.chatId,
+    ]);
+    for (const chatId of createdChatIds) {
+      const messages = await listChatMessages(chatId, options, 50);
+      if (botTranscriptMatchesExpectation(messages, expectation, options)) {
+        return { chatId, messages };
+      }
+    }
+    return undefined;
+  });
+}
+
 function writeReport(report: unknown, outputPath: string): void {
   const text = JSON.stringify(report, null, 2) + '\n';
   if (!outputPath) {
@@ -4230,9 +5588,6 @@ function writeIsolatedBridgeConfig(options: CliOptions): void {
   fs.mkdirSync(options.workDir, { recursive: true });
   const config: ConfigPatch = {
     schemaVersion: 2,
-    session: {
-      workspace: options.workDir,
-    },
     bridge: {
       defaultWorkspace: options.workDir,
     },
@@ -4252,6 +5607,12 @@ function writeIsolatedBridgeConfig(options: CliOptions): void {
         permissionMode: process.env.CODELARK_CLAUDE_PERMISSION_MODE || 'default',
         ...(process.env.CODELARK_CLAUDE_DEFAULT_MODEL
           ? { model: process.env.CODELARK_CLAUDE_DEFAULT_MODEL }
+          : {}),
+      },
+      kimi: {
+        provider: 'tmux',
+        ...(process.env.CODELARK_KIMI_MODEL
+          ? { model: process.env.CODELARK_KIMI_MODEL }
           : {}),
       },
     },
@@ -4325,7 +5686,7 @@ async function stopFakeCcrRouter(options: CliOptions): Promise<void> {
 async function launchBridgeChild(options: CliOptions, runtimeEnvironment: RuntimeEnvironmentPlan): Promise<ChildProcess | null> {
   if (!options.launchBridge || options.dryRun) return null;
   writeIsolatedBridgeConfig(options);
-  process.stderr.write(`[real-feishu-e2e] Launching isolated bridge with CODELARK_HOME=${options.codelarkHome} CODEX_HOME=${options.codexHome} HOME=${options.runtimeHome} claude=${options.claudeExecutable}\n`);
+  process.stderr.write(`[real-feishu-e2e] Launching isolated bridge with CODELARK_HOME=${options.codelarkHome} CODEX_HOME=${options.codexHome} KIMI_CODE_HOME=${options.kimiHome} HOME=${options.runtimeHome} claude=${options.claudeExecutable}\n`);
   const child = spawn(
     process.execPath,
     ['--import', 'tsx', 'src/entrypoints/daemon.ts'],
@@ -4340,10 +5701,15 @@ async function launchBridgeChild(options: CliOptions, runtimeEnvironment: Runtim
         XDG_CACHE_HOME: path.join(runtimeEnvironment.runtimeHome, '.cache'),
         CODEX_HOME: runtimeEnvironment.codexHome,
         CODELARK_CLAUDE_HOME: runtimeEnvironment.claudeHome,
+        KIMI_CODE_HOME: runtimeEnvironment.kimiHome,
         CODELARK_CLAUDE_EXECUTABLE: runtimeEnvironment.claudeExecutable,
         CODELARK_CLAUDE_PROVIDER: options.runtime === 'claude' ? options.provider : (process.env.CODELARK_CLAUDE_PROVIDER || 'pty'),
+        CODELARK_KIMI_PROVIDER: 'tmux',
         CODELARK_DEFAULT_CODEX_PROVIDER: options.runtime === 'codex' ? options.provider : (process.env.CODELARK_DEFAULT_CODEX_PROVIDER || 'pty'),
         CODELARK_CODEX_SKIP_GIT_REPO_CHECK: process.env.CODELARK_CODEX_SKIP_GIT_REPO_CHECK || 'true',
+        ...(runtimeEnvironment.kimiExecutablePath
+          ? { CODELARK_KIMI_EXECUTABLE: runtimeEnvironment.kimiExecutablePath }
+          : kimiExecutableEnv()),
         ...(options.codexProxyBaseUrl
           ? {
             CODELARK_CODEX_BASE_URL: options.codexProxyBaseUrl,
@@ -4352,7 +5718,7 @@ async function launchBridgeChild(options: CliOptions, runtimeEnvironment: Runtim
             OPENAI_API_KEY: 'clk-local-proxy-key',
           }
           : {}),
-        ...(options.scriptedBasicDialogue
+        ...(usesScriptedKimiExecutable(options)
           ? {
             CODELARK_REAL_FEISHU_E2E_STREAM_CARD_CHECKPOINTS: '1',
           }
@@ -4514,45 +5880,67 @@ function findOpenIdInJson(value: unknown): string | undefined {
   return undefined;
 }
 
-async function createUserChat(options: CliOptions): Promise<{ chatId: string; groupName: string }> {
+async function createProductNewSessionChat(
+  options: CliOptions,
+  authorization: LarkCliUserAuthorizationStatus | null,
+): Promise<{ chatId: string; groupName: string }> {
   const groupName = `clk-real-e2e-${options.runId}`.slice(0, 60);
   if (options.dryRun) return { chatId: '<created-chat-id>', groupName };
+  if (!authorization?.userOpenId) {
+    throw new Error('Unable to create a product /new Feishu test group: lark-cli user authorization preflight returned no user open_id.');
+  }
+  writeIsolatedBridgeConfig(options);
+  const outputPath = path.join(options.runRoot, 'product-new-session.json');
   try {
-    if (options.testFeishuAppId && options.testFeishuAppSecret) {
-      const chatId = await createChatWithTestBot(groupName, options);
-      registerCreatedTestChat(chatId, groupName, options);
-      return { chatId, groupName };
-    }
-    throw new Error('missing test App secret for bot-owned chat creation');
+    await runCommand(process.execPath, [
+      '--import',
+      'tsx',
+      'scripts/real-feishu-product-new-session.ts',
+      '--channel-type',
+      options.channelType,
+      '--channel-alias',
+      options.channelAlias,
+      '--user-open-id',
+      authorization.userOpenId,
+      '--group-name',
+      groupName,
+      '--workdir',
+      options.workDir,
+      '--run-id',
+      options.runId,
+      '--output',
+      outputPath,
+    ], options, {
+      CODELARK_HOME: options.codelarkHome,
+      HOME: options.runtimeHome,
+      USERPROFILE: options.runtimeHome,
+      XDG_DATA_HOME: path.join(options.runtimeHome, '.local', 'share'),
+      XDG_CONFIG_HOME: path.join(options.runtimeHome, '.config'),
+      XDG_CACHE_HOME: path.join(options.runtimeHome, '.cache'),
+    });
   } catch (error) {
-    process.stderr.write(`[real-feishu-e2e] Test-bot-owned chat creation failed; falling back to lark-cli user chat create: ${error instanceof Error ? error.message : String(error)}\n`);
+    const partial = readJsonIfExists<{ chatId?: string; groupName?: string }>(outputPath, {});
+    if (partial.chatId) {
+      registerCreatedTestChat(partial.chatId, partial.groupName || groupName, options);
+      if (!options.keepGroup) {
+        const cleanup = await deleteCreatedChat(partial.chatId, options).catch((cleanupError) => ({
+          chatId: partial.chatId!,
+          deleted: false,
+          retained: true,
+          reason: cleanupError instanceof Error ? cleanupError.message : String(cleanupError),
+        }));
+        updateTestChatRegistryCleanup(partial.chatId, cleanup, false);
+      }
+    }
+    throw error;
   }
-  if (!options.testFeishuAppId) {
-    throw new Error('Unable to infer a Feishu bot app id for --create-chat. Pass --test-feishu-app-id, set CODELARK_REAL_FEISHU_TEST_APP_ID, or use --clk-home pointing at a configured live bridge.');
-  }
-  const stdout = await runLarkCli([
-    'im',
-    '+chat-create',
-    '--as',
-    'user',
-    '--chat-mode',
-    'group',
-    '--type',
-    'private',
-    '--name',
-    groupName,
-    '--bots',
-    options.testFeishuAppId,
-    '--format',
-    'json',
-  ], options);
-  const parsed = JSON.parse(stdout || '{}');
-  const chatId = findChatIdInJson(parsed);
+  const parsed = readJsonIfExists<{ chatId?: string; groupName?: string }>(outputPath, {});
+  const chatId = parsed.chatId || '';
   if (!chatId) {
-    throw new Error(`lark-cli chat create returned no chat_id: ${stdout.slice(0, 1000)}`);
+    throw new Error(`product /new helper returned no chat_id; output=${JSON.stringify(parsed).slice(0, 1000)}`);
   }
-  registerCreatedTestChat(chatId, groupName, options);
-  return { chatId, groupName };
+  registerCreatedTestChat(chatId, parsed.groupName || groupName, options);
+  return { chatId, groupName: parsed.groupName || groupName };
 }
 
 async function resolveTestBotOpenId(options: CliOptions): Promise<string> {
@@ -4863,7 +6251,7 @@ function waitsForMirrorFinalBeforeFollowup(options: CliOptions, commandText?: st
     const phase = basicDialoguePhaseForPrompt(options, commandText);
     return Boolean(phase && !phase.endsWith('-sdk'));
   }
-  return scenarioCommandsIncludeFinalMessage(options) && options.provider !== 'sdk';
+  return scenarioRequiresRuntimeOutput(options) && options.provider !== 'sdk';
 }
 
 function shouldSendBasicDialogueQueuedFollowup(
@@ -4900,13 +6288,27 @@ async function sendAndObserve(
   const before = options.dryRun ? 0 : await countResponseEvidence(options, chatId);
   const sentMessageId = await sendUserText(chatId, text, options);
   let messages: unknown = null;
+  let observedChatId = chatId;
+  let observationCheck: MessageObservation['check'] = 'feishu-reply_to';
   if (!options.dryRun) {
     const expectedReply = expectedReplyForMessage(options, text, label);
     const replyTimeoutMs = replyTimeoutMsForMessage(options, text, label);
     try {
-      if (shouldObserveFinalPromptByMirrorEvidence(options, label, expectedReply)) {
+      if (shouldObserveScenarioNewChatTranscript(options, text)) {
+        const observed = await waitForScenarioNewChatTranscript(
+          options,
+          chatId,
+          expectedReply,
+          label,
+          Math.max(replyTimeoutMs, Math.min(options.timeoutMs, 60_000)),
+        );
+        observedChatId = observed.chatId;
+        observationCheck = 'feishu-new-chat-transcript';
+        messages = observed.messages;
+      } else if (shouldObserveFinalPromptByMirrorEvidence(options, label, expectedReply)) {
         await waitForNewResponseEvidence(options, chatId, before, label);
         messages = await listChatMessages(chatId, options, 50);
+        observationCheck = 'feishu-mirror-stream';
       } else {
         messages = await waitForBotReplyToMessage(options, chatId, sentMessageId, label, replyTimeoutMs, expectedReply);
       }
@@ -4919,6 +6321,7 @@ async function sendAndObserve(
         chatId,
         options,
         runtimeEnvironment,
+        error,
         feishuMessages: {
           responseEvidenceBefore: before,
           responseEvidenceAfter: nextCount,
@@ -4931,7 +6334,7 @@ async function sendAndObserve(
   }
   return {
     label,
-    chatId,
+    chatId: observedChatId,
     sentText: text,
     sentMessageId,
     expectation: shouldObserveFinalPromptByMirrorEvidence(
@@ -4940,11 +6343,7 @@ async function sendAndObserve(
       expectedReplyForMessage(options, text, label),
     ) ? 'mirror-stream-evidence' : 'bot-reply',
     ok: true,
-    check: shouldObserveFinalPromptByMirrorEvidence(
-      options,
-      label,
-      expectedReplyForMessage(options, text, label),
-    ) ? 'feishu-mirror-stream' : 'feishu-reply_to',
+    check: observationCheck,
     ...(expectedReplyForMessage(options, text, label).texts.length > 0
       ? {
         expectedText: expectedReplyForMessage(options, text, label).texts[0],
@@ -5012,6 +6411,7 @@ async function sendBasicDialogueQueuedFollowup(
         chatId,
         options,
         runtimeEnvironment,
+        error,
         feishuMessages: {
           responseEvidenceBefore: promptBefore,
           responseEvidenceAfter: nextCount,
@@ -5105,6 +6505,7 @@ async function sendBasicDialogueAppendFollowup(
         chatId,
         options,
         runtimeEnvironment,
+        error,
         feishuMessages: {
           responseEvidenceBefore: promptBefore,
           responseEvidenceAfter: nextCount,
@@ -5166,6 +6567,7 @@ async function sendMentionedAndObserve(
         chatId,
         options,
         runtimeEnvironment,
+        error,
         feishuMessages: {
           responseEvidenceBefore: before,
           responseEvidenceAfter: nextCount,
@@ -5212,17 +6614,19 @@ async function assertNoBotReplyToMessage(
   while (Date.now() < deadline) {
     latestMessages = await listChatMessages(chatId, options);
     if (hasBotReplyToMessage(latestMessages, sourceMessageId, options)) {
+      const error = new Error(`${label}: bot replied to filtered message ${sourceMessageId}`);
       writeFailureReport({
         label,
         chatId,
         options,
         runtimeEnvironment,
+        error,
         feishuMessages: {
           unexpectedReplyTo: sourceMessageId,
           messages: latestMessages,
         },
       });
-      throw new Error(`${label}: bot replied to filtered message ${sourceMessageId}`);
+      throw error;
     }
     await new Promise((resolve) => setTimeout(resolve, Math.min(options.pollMs, 2_000)));
   }
@@ -5264,14 +6668,16 @@ async function runRequireAtToggleScenario(
 
 async function main(): Promise<void> {
   const argv = process.argv.slice(2);
-  loadRealFeishuTestEnvFile(argv);
-  const options = parseOptions(argv);
-  if (hasFlag(process.argv, '--help') || hasFlag(process.argv, '-h')) {
+  if (hasFlag(argv, '--help') || hasFlag(argv, '-h')) {
     printUsage();
     return;
   }
+  validateCliArgs(argv);
+  loadRealFeishuTestEnvFile(argv);
+  const options = parseOptions(argv);
   getScenarioDefinition(options.scenario);
   validateScriptedBasicDialogueOptions(options);
+  validateScriptedKimiOptions(options);
   if (options.listScenarios) {
     writeReport({
       scenarios: listScenarioMetadata(),
@@ -5280,6 +6686,12 @@ async function main(): Promise<void> {
         unit: 'unit::<suite>::<behavior>',
       },
     }, options.outputPath);
+    return;
+  }
+  if (options.coverageMatrix) {
+    const matrix = coverageMatrix(options);
+    writeReport(matrix, options.outputPath);
+    enforceCoverageMatrixRequirements(options, matrix);
     return;
   }
   if (options.stopTestBridge) {
@@ -5313,12 +6725,13 @@ async function main(): Promise<void> {
   try {
     if (options.launchBridge && !options.dryRun) {
       initializeIsolatedLarkCliConfig(options);
+      copyHostKimiConfig(os.homedir(), options.kimiHome);
     }
-    await assertLarkCliUserAuthorizationPreflight(options);
+    const userAuthorization = await assertLarkCliUserAuthorizationPreflight(options);
     startupChatCleanup = await cleanupRegisteredTestChats(options);
     appLock = acquireAppLock(options);
     if (usesProxyBackedBasicDialogue(options) && !options.dryRun) {
-      codexResponsesProxy = await startLocalCodexResponsesProxy(options.fakeCcrResponseText);
+      codexResponsesProxy = await startSharedLocalCodexResponsesProxy(options.fakeCcrResponseText);
       options.codexProxyBaseUrl = codexResponsesProxy.baseUrl;
       process.stderr.write(`[real-feishu-e2e] Started local Codex Responses proxy at ${codexResponsesProxy.baseUrl}; Codex SDK/pty/tmux will use isolated CODEX_HOME=${options.codexHome}\n`);
     }
@@ -5354,24 +6767,13 @@ async function main(): Promise<void> {
           messages: null,
         },
       };
-    } else if (!chatId && options.createChat) {
-      const created = await createUserChat(options);
+    } else if (!chatId) {
+      const created = await createProductNewSessionChat(options, userAuthorization);
       chatId = created.chatId;
       createdGroupName = created.groupName;
       createdChatId = options.dryRun ? '' : chatId;
       if (!options.dryRun) {
         await new Promise((resolve) => setTimeout(resolve, options.pollMs));
-      }
-    }
-    if (!chatId) {
-      if (!options.sourceChatId) {
-        throw new Error('Set --chat-id, --create-chat, or --source-chat-id so the harness has a Feishu chat to drive.');
-      }
-      const groupName = `clk-real-e2e-${options.runId}`.slice(0, 60);
-      const newCommand = `/new ${groupName} ${options.workDir}`;
-      await sendUserText(options.sourceChatId, newCommand, options);
-      if (!options.dryRun) {
-        chatId = await waitFor('new Feishu group binding', options.timeoutMs, options.pollMs, () => findCreatedChatId(options));
       }
     }
 
@@ -5387,11 +6789,13 @@ async function main(): Promise<void> {
         runId: options.runId,
         dryRun: true,
         launchBridge: options.launchBridge,
-        createChat: options.createChat,
+        initialChatCreation: createsInitialProductNewSessionGroup(options) ? 'product-new-session-use-case' : 'provided-chat-id',
         scriptedBasicDialogue: options.scriptedBasicDialogue,
+        scriptedKimi: options.scriptedKimi,
         scenario: options.scenario,
         commands: buildScenarioCommands(options),
         commandReplyExpectations: commandReplyExpectations(options),
+        plannedSuccessCheckNames: plannedSuccessCheckNames(options),
         coverage: scenarioCoverage(options),
         validationChatSwitchesAfterNew: scenarioSwitchesToNewChatAfterNewCommand(options),
         waitsForMirrorFinalBeforeFollowup: waitsForMirrorFinalBeforeFollowup(options),
@@ -5400,7 +6804,9 @@ async function main(): Promise<void> {
         codelarkHome: options.codelarkHome,
         codexModel: options.codexModel,
         runtimeEnvironment,
-        createChatBotAppId: options.createChat ? options.testFeishuAppId || null : null,
+        canonicalEligibility: canonicalReportEligibility(options, runtimeEnvironment),
+        initialChatCreationBotAppId: createsInitialProductNewSessionGroup(options) ? options.testFeishuAppId || null : null,
+        initialChatCreationOwnerPolicy: createsInitialProductNewSessionGroup(options) ? 'product-new-session-use-case-ownerUserId' : null,
         docAsChatScenario,
         plannedChatId,
         keepGroup: options.keepGroup,
@@ -5409,6 +6815,7 @@ async function main(): Promise<void> {
     }
 
     if (!chatId) throw new Error('No real Feishu chat_id available.');
+    prepareScenarioWorkspaceFixtures(options);
     let validationChatId = chatId;
     if (options.scenario === 'require-at-toggle') {
       messageObservations.push(...await runRequireAtToggleScenario(chatId, options, runtimeEnvironment));
@@ -5474,6 +6881,7 @@ async function main(): Promise<void> {
               chatId: activeChatId,
               options,
               runtimeEnvironment,
+              error,
               feishuMessages: {
                 finalMessages: messages,
                 messageObservations,
@@ -5497,6 +6905,7 @@ async function main(): Promise<void> {
                 chatId: activeChatId,
                 options,
                 runtimeEnvironment,
+                error,
                 feishuMessages: {
                   expectedTexts: finalExpectation.texts,
                   expectedForbiddenTexts: finalExpectation.forbiddenTexts,
@@ -5524,6 +6933,7 @@ async function main(): Promise<void> {
                 chatId: activeChatId,
                 options,
                 runtimeEnvironment,
+                error,
                 feishuMessages: {
                   expectedText: finalExpectedText,
                   finalMessages: messages,
@@ -5540,7 +6950,6 @@ async function main(): Promise<void> {
             chatId,
             createdChatId,
             options.chatId,
-            options.sourceChatId,
           ]);
           if (nextChatId) {
             activeChatId = nextChatId;
@@ -5553,6 +6962,30 @@ async function main(): Promise<void> {
         const observation = await sendAndObserve(activeChatId, scenarioFinalMessage(options), options, 'bridge response for final message', runtimeEnvironment);
         messageObservations.push(observation);
         validationChatId = activeChatId;
+        if (waitsForMirrorFinalBeforeFollowup(options, scenarioFinalMessage(options))) {
+          try {
+            await waitForMirrorStreamCompleted(
+              options,
+              activeChatId,
+              `mirror stream completion for ${scenarioFinalMessage(options)}`,
+            );
+          } catch (error) {
+            const messages = await listChatMessages(activeChatId, options, 50);
+            writeFailureReport({
+              label: `mirror stream completion for ${scenarioFinalMessage(options)}`,
+              sentText: scenarioFinalMessage(options),
+              chatId: activeChatId,
+              options,
+              runtimeEnvironment,
+              error,
+              feishuMessages: {
+                finalMessages: messages,
+                messageObservations,
+              },
+            });
+            throw error;
+          }
+        }
         if (docAsChatScenario) {
           try {
             docAsChatScenario.contextAssertion = await waitForDocAsChatContextAssertion(docAsChatScenario, options);
@@ -5564,6 +6997,7 @@ async function main(): Promise<void> {
               chatId: activeChatId,
               options,
               runtimeEnvironment,
+              error,
               feishuMessages: {
                 expectedFileType: docAsChatScenario.document.fileType,
                 expectedFileToken: docAsChatScenario.document.token,
@@ -5590,6 +7024,7 @@ async function main(): Promise<void> {
         chatId: validationChatId,
         options,
         runtimeEnvironment,
+        error,
         feishuMessages: {
           finalMessages: messages,
           messageObservations,
@@ -5602,13 +7037,11 @@ async function main(): Promise<void> {
       chatId,
       createdChatId,
       options.chatId,
-      options.sourceChatId,
     ]);
     scenarioCreatedChatCleanup = await cleanupScenarioCreatedChats(messageObservations, options, [
       chatId,
       createdChatId,
       options.chatId,
-      options.sourceChatId,
     ]);
     if (docAsChatScenario) {
       scenarioCreatedChatCleanup.push(await deleteCreatedChat(docAsChatScenario.createdGroup.chatId, options));
@@ -5671,6 +7104,7 @@ async function main(): Promise<void> {
       ...automatedSuccessChecks({
         options,
         report,
+        runtimeEnvironment,
         messageObservations,
         finalFeishuMessages,
         createdChatCleanup,
@@ -5684,8 +7118,9 @@ async function main(): Promise<void> {
       ...report,
       checks,
       launchBridge: options.launchBridge,
-      createChat: options.createChat,
+      initialChatCreation: createsInitialProductNewSessionGroup(options) ? 'product-new-session-use-case' : 'provided-chat-id',
       scriptedBasicDialogue: options.scriptedBasicDialogue,
+      scriptedKimi: options.scriptedKimi,
       scenario: options.scenario,
       commands: buildScenarioCommands(options),
       commandReplyExpectations: commandReplyExpectations(options),
@@ -5697,6 +7132,7 @@ async function main(): Promise<void> {
       codelarkHome: options.codelarkHome,
       codexModel: options.codexModel,
       runtimeEnvironment,
+      canonicalEligibility: canonicalReportEligibility(options, runtimeEnvironment),
       ...(fakeCcrBackend
         ? {
           fakeCcrExpectedResponse: options.fakeCcrResponseText,
@@ -5737,14 +7173,16 @@ async function main(): Promise<void> {
     };
     const failedChecks = checks.filter((check) => !check.ok);
     if (failedChecks.length > 0) {
+      const failure = new Error(`Automated real Feishu E2E checks failed: ${failedChecks.map((check) => check.name).join(', ')}`);
       const reportPath = options.outputPath
         ? options.outputPath.replace(/\.json$/i, '.failure.json')
         : path.join(os.tmpdir(), `${path.basename(options.runRoot)}.failure.json`);
       writeReport({
         ...finalReport,
         failedChecks,
+        failure: serializeFailureError(failure),
       }, reportPath);
-      throw new Error(`Automated real Feishu E2E checks failed: ${failedChecks.map((check) => check.name).join(', ')}`);
+      throw failure;
     }
     writeReport(finalReport, options.outputPath);
     completedSuccessfully = true;
@@ -5753,24 +7191,37 @@ async function main(): Promise<void> {
       scenarioCreatedChatCleanup = await cleanupScenarioCreatedChats(messageObservations, options, [
         createdChatId,
         options.chatId,
-        options.sourceChatId,
       ]).catch((error) => {
         process.stderr.write(`[real-feishu-e2e] Failed to cleanup scenario-created /new chats: ${error instanceof Error ? error.message : String(error)}\n`);
         return [];
       });
+      const cleanedChatIds = new Set(scenarioCreatedChatCleanup.map((cleanup) => cleanup.chatId));
+      const dumpSourceChatId = createdChatId || options.chatId;
+      if (dumpSourceChatId) {
+        const dumpCleanup = await cleanupScenarioCreatedChatsFromDump(options, dumpSourceChatId, [
+          createdChatId,
+          options.chatId,
+          ...cleanedChatIds,
+        ]).catch((error) => {
+          process.stderr.write(`[real-feishu-e2e] Failed to cleanup dump-discovered /new chats: ${error instanceof Error ? error.message : String(error)}\n`);
+          return [];
+        });
+        scenarioCreatedChatCleanup.push(...dumpCleanup);
+      }
     }
     if (createdChatId && completedSuccessfully && !createdChatCleanup) {
       const cleanup = await deleteCreatedChat(createdChatId, options);
       updateTestChatRegistryCleanup(createdChatId, cleanup, options.keepGroup);
     } else if (createdChatId && !completedSuccessfully && !options.keepGroup) {
-      process.stderr.write(`[real-feishu-e2e] Keeping failed-run Feishu test group for diagnosis: ${createdChatId}\n`);
-      updateTestChatRegistryCleanup(createdChatId, {
+      const cleanup = await deleteCreatedChat(createdChatId, options).catch((error) => ({
         chatId: createdChatId,
-        attempted: false,
+        attempted: true,
         deleted: false,
         retained: true,
-        reason: 'failed-run-kept-for-diagnosis',
-      }, false);
+        reason: 'failed-run-cleanup-failed',
+        error: error instanceof Error ? error.message : String(error),
+      }));
+      updateTestChatRegistryCleanup(createdChatId, cleanup, false);
     }
     await stopBridgeChild(child);
     await stopFakeCcrRouter(options);
@@ -5786,7 +7237,20 @@ async function main(): Promise<void> {
   }
 }
 
-main().catch((error) => {
-  process.stderr.write(`[real-feishu-e2e] ${error instanceof Error ? error.stack || error.message : String(error)}\n`);
-  process.exitCode = 1;
-});
+function isCliEntrypoint(): boolean {
+  const entry = process.argv[1];
+  if (!entry) return false;
+  const modulePath = fileURLToPath(import.meta.url);
+  try {
+    return fs.realpathSync(entry) === fs.realpathSync(modulePath);
+  } catch {
+    return path.resolve(entry) === path.resolve(modulePath);
+  }
+}
+
+if (isCliEntrypoint()) {
+  main().catch((error) => {
+    process.stderr.write(`[real-feishu-e2e] ${error instanceof Error ? error.stack || error.message : String(error)}\n`);
+    process.exitCode = 1;
+  });
+}

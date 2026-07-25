@@ -14,7 +14,8 @@ import {
 import { createConfigService } from '../../../../configuration/service.js';
 import { JsonFileStore } from '../../../../storage/json-store.js';
 import { initBridgeContext } from '../../../../bridge/host/context.js';
-import { handleBridgeCommand } from '../../../../bridge/command/index.js';
+import { handleBridgeCommand as handleBridgeCommandWithoutDeliveryWait } from '../../../../bridge/command/index.js';
+import { _testOnlyWaitForDeliveryQueuesForTests } from '../../../../channels/delivery/deliver.js';
 import { _testOnly as bridgeManagerTestOnly, registerAdapter } from '../../../../bridge/host/manager.js';
 import {
   resolveClaudeRuntimeConfig,
@@ -24,6 +25,7 @@ import {
   resolveEffectiveMode,
   resolveEffectiveReasoningEffort,
   resolveEffectiveSandboxMode,
+  resolveKimiRuntimeConfig,
 } from '../../../../bridge/session/support.js';
 import { processMessage } from '../../../../bridge/turn/interactive/sdk-conversation-engine.js';
 import { consumeSseEvents } from '../../../../runtime/sse-stream-decoder.js';
@@ -31,7 +33,12 @@ import { CodexRoutingProvider } from '../../../../runtime/codex/routing-provider
 import { _testOnlyCodexThreadBootstrap } from '../../../../runtime/codex/thread-bootstrap.js';
 import { _testOnlyClaudePty } from '../../../../runtime/claude/pty-provider.js';
 import { _testOnlyTmuxScreenMonitors } from '../../../../bridge/command/tmux.js';
-import { buildCommandCallbackData, parseCommandCallbackData, THEN_TASK_ACTION_CALLBACK_PREFIX, THEN_TASK_SELECT_CALLBACK_PREFIX } from '../../../../bridge/command/callbacks.js';
+import { _testOnlyTmuxCore, createTmuxCliCore } from '../../../../bridge/tmux/core.js';
+import {
+  resetRuntimeTmuxInputStatesForTests,
+  transitionRuntimeTmuxInputState,
+} from '../../../../bridge/tmux/input-state-machine.js';
+import { buildCommandCallbackData, parseCommandCallbackData, THREAD_SELECT_CALLBACK_PREFIX, THEN_TASK_ACTION_CALLBACK_PREFIX, THEN_TASK_SELECT_CALLBACK_PREFIX } from '../../../../bridge/command/callbacks.js';
 import { forwardPermissionRequest, handlePermissionCallback } from '../../../../bridge/permission/broker.js';
 import * as router from '../../../../bridge/host/channel-router.js';
 import {
@@ -62,14 +69,25 @@ import {
   getSessionCodexProvider,
   getSessionCodexReasoningEffort,
   getSessionCodexSandboxMode,
+  getSessionKimiModel,
+  getSessionKimiProvider,
   getSessionTmuxAutoEnter,
   getSessionTmuxCaptureLines,
   getSessionTmuxEchoInput,
   getSessionRuntimeTmuxSessionName,
   getSessionTmuxSessionName,
   getSessionWorkingDirectory,
+  setSessionKimiIdentityUpdate,
 } from '../../../../domain/session-runtime.js';
+import { createSessionHealthRuntime } from '../../../../bridge/health/runtime.js';
+import { createMirrorSubscription } from '../../../../bridge/mirror/subscription-state.js';
+import {
+  createMirrorTurnState,
+  type FinalizedBridgeMirrorTurn,
+} from '../../../../bridge/mirror/turns.js';
 import { getClaudeProjectDir, isArchivedClaudeSession } from '../../../../runtime/claude/session-jsonl.js';
+import { computeKimiWorkspaceDirName, isArchivedKimiSession } from '../../../../runtime/kimi/session-index.js';
+import { kimiTmuxSessionName } from '../../../../runtime/kimi/tmux-provider.js';
 import { normalizeReasoningEffort, normalizeSandboxMode } from '../../../../runtime/options.js';
 import { sseEvent } from '../../../../runtime/sse.js';
 import type { LLMProvider, StreamChatParams } from '../../../../runtime/contracts.js';
@@ -78,6 +96,13 @@ import { LARGE_FILE_UPLOAD_THRESHOLD_BYTES } from '../../../../bridge/command/fi
 
 const DATA_DIR = path.join(CODELARK_HOME, 'data');
 const HOME_CONFIG_TOML_PATH = resolveConfigPaths({ codelarkHome: CODELARK_HOME }).homeToml;
+
+async function handleBridgeCommand(
+  ...args: Parameters<typeof handleBridgeCommandWithoutDeliveryWait>
+): Promise<void> {
+  await handleBridgeCommandWithoutDeliveryWait(...args);
+  await _testOnlyWaitForDeliveryQueuesForTests(args[0]);
+}
 
 function createDeferred<T = void>() {
   let resolve!: (value: T | PromiseLike<T>) => void;
@@ -271,6 +296,70 @@ function writeClaudeJsonlFixture(params: {
   return filePath;
 }
 
+function writeKimiWireFixture(params: {
+  homeDir: string;
+  cwd: string;
+  sessionId: string;
+  timestamp: string;
+  text: string;
+  assistantText?: string;
+  thinkText?: string;
+  title?: string;
+}): string {
+  const sessionDir = path.join(
+    params.homeDir,
+    'sessions',
+    computeKimiWorkspaceDirName(params.cwd),
+    params.sessionId,
+  );
+  const wireDir = path.join(sessionDir, 'agents', 'main');
+  fs.mkdirSync(wireDir, { recursive: true });
+  fs.writeFileSync(path.join(sessionDir, 'state.json'), JSON.stringify({
+    createdAt: params.timestamp,
+    updatedAt: params.timestamp,
+    title: params.title || params.text,
+  }));
+  const filePath = path.join(wireDir, 'wire.jsonl');
+  const baseTime = Date.parse(params.timestamp);
+  const lines: Array<Record<string, unknown>> = [
+    {
+      type: 'context.append_message',
+      time: baseTime,
+      message: { role: 'user', content: params.text },
+    },
+  ];
+  if (params.thinkText) {
+    lines.push({
+      type: 'context.append_loop_event',
+      time: baseTime + 500,
+      event: {
+        type: 'content.part',
+        turnId: `${params.sessionId}-turn`,
+        part: { type: 'think', think: params.thinkText },
+      },
+    });
+  }
+  if (params.assistantText) {
+    lines.push({
+      type: 'context.append_loop_event',
+      time: baseTime + 1000,
+      event: {
+        type: 'content.part',
+        turnId: `${params.sessionId}-turn`,
+        part: { type: 'text', text: params.assistantText },
+      },
+    });
+  }
+  fs.writeFileSync(filePath, `${lines.map((line) => JSON.stringify(line)).join('\n')}\n`, 'utf-8');
+  fs.mkdirSync(params.homeDir, { recursive: true });
+  fs.appendFileSync(path.join(params.homeDir, 'session_index.jsonl'), `${JSON.stringify({
+    sessionId: params.sessionId,
+    sessionDir,
+    workDir: params.cwd,
+  })}\n`, 'utf-8');
+  return filePath;
+}
+
 function makeSettings(): Map<string, string> {
   return new Map([
     ['remote_bridge_enabled', 'true'],
@@ -289,7 +378,20 @@ const noopLlm = {
   },
 };
 
+function seedCommandDispatchCodexModelsCache(): void {
+  const codexHome = process.env.CODEX_HOME;
+  if (!codexHome) return;
+  fs.mkdirSync(codexHome, { recursive: true });
+  fs.writeFileSync(path.join(codexHome, 'models_cache.json'), JSON.stringify({
+    models: [
+      { slug: 'gpt-5.4', display_name: 'gpt-5.4', visibility: 'list', supported_in_api: true },
+      { slug: 'gpt-5.3-codex-spark', display_name: 'gpt-5.3-codex-spark', visibility: 'list', supported_in_api: false },
+    ],
+  }), 'utf-8');
+}
+
 function initTestContext(options: { dynamicSettings?: boolean; settings?: Record<string, string> } = {}): JsonFileStore {
+  seedCommandDispatchCodexModelsCache();
   const settings = new Map([
     ...makeSettings(),
     ...Object.entries(options.settings || {}),
@@ -371,6 +473,15 @@ function installFakeTmux(): { binDir: string; logPath: string } {
   const tmuxPath = path.join(binDir, 'tmux');
   fs.writeFileSync(logPath, '', 'utf-8');
   fs.writeFileSync(statePath, '', 'utf-8');
+  if (process.env.CODELARK_TEST_NODE_TMUX === '1') {
+    const helperPath = path.resolve('src', '__tests__', 'helpers', 'fake-tmux-cli.cjs');
+    process.env.TMUX_FAKE_STATE_PATH = statePath;
+    _testOnlyTmuxCore.replace(createTmuxCliCore({
+      executable: process.execPath,
+      prefixArgs: [helperPath],
+    }));
+    return { binDir, logPath };
+  }
   fs.writeFileSync(tmuxPath, `#!/usr/bin/env bash
 	printf '%s\\n' "$*" >> "$TMUX_FAKE_LOG"
 	state_file="${statePath}"
@@ -567,15 +678,18 @@ function installFakeTmux(): { binDir: string; logPath: string } {
 esac
 `, 'utf-8');
   fs.chmodSync(tmuxPath, 0o755);
+  if (process.platform === 'win32') {
+    _testOnlyTmuxCore.replace(createTmuxCliCore({ executable: 'bash', prefixArgs: [tmuxPath] }));
+  }
   return { binDir, logPath };
 }
 
-function installFakeCodexTui(): { binDir: string; codexPath: string; logPath: string; stateDir: string } {
+function installFakeCodexTui(): { binDir: string; codexPath: string; scriptPath: string; logPath: string; stateDir: string } {
   const binDir = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-fake-codex-tui-'));
   const stateDir = path.join(binDir, 'state');
   const logPath = path.join(binDir, 'codex-tui.log');
   const scriptPath = path.join(binDir, 'codex-tui.cjs');
-  const codexPath = path.join(binDir, 'codex');
+  const codexPath = path.join(binDir, process.platform === 'win32' ? 'codex.cmd' : 'codex');
   fs.mkdirSync(stateDir, { recursive: true });
   fs.writeFileSync(logPath, '', 'utf-8');
   fs.writeFileSync(scriptPath, `#!/usr/bin/env node
@@ -775,6 +889,7 @@ if (args[0] === '__codelark_fake_tui') {
   if (command === 'send-key') sendKey(target, args[3]);
   else if (command === 'send-literal') sendLiteral(target, args[3] || '');
   else if (command === 'capture') capture(target);
+  else if (command === 'start-target') startTui(String(target || '').replace(/^codex_/, ''));
   else if (command === 'seed-update') {
     writeState(target, {
       kind: 'update',
@@ -801,16 +916,19 @@ if (resumeIndex >= 0 && args[resumeIndex + 1]) {
 process.stderr.write('unexpected fake Codex TUI command\\n');
 process.exit(2);
 `, 'utf-8');
-  fs.writeFileSync(codexPath, `#!/usr/bin/env sh\nexec "${process.execPath}" "${scriptPath}" "$@"\n`, 'utf-8');
+  fs.writeFileSync(codexPath, process.platform === 'win32'
+    ? `@echo off\r\n"${process.execPath}" "${scriptPath}" %*\r\n`
+    : `#!/usr/bin/env sh\nexec "${process.execPath}" "${scriptPath}" "$@"\n`, 'utf-8');
   fs.chmodSync(scriptPath, 0o755);
   fs.chmodSync(codexPath, 0o755);
-  return { binDir, codexPath, logPath, stateDir };
+  return { binDir, codexPath, scriptPath, logPath, stateDir };
 }
 
 const FAKE_CODEX_TUI_ENV_KEYS = [
   'CODELARK_CODEX_CLI_PATH',
   'CODELARK_FAKE_CODEX_TUI_STATE_DIR',
   'CODELARK_FAKE_CODEX_TUI_CONTROL',
+  'CODELARK_FAKE_CODEX_TUI_CONTROL_SCRIPT',
   'CODELARK_FAKE_CODEX_TUI_LOG',
   'CODELARK_FAKE_CODEX_TUI_UPDATE_PROMPT_ONCE',
   'CODELARK_FAKE_CODEX_TUI_UPDATE_CONTINUE_FOOTER',
@@ -832,7 +950,7 @@ function restoreProcessEnv(snapshot: Record<string, string | undefined>): void {
 }
 
 function configureFakeCodexTuiEnv(
-  fakeCodex: { codexPath: string; logPath: string; stateDir: string },
+  fakeCodex: { codexPath: string; scriptPath: string; logPath: string; stateDir: string },
   options: {
     updatePromptOnce?: boolean;
     continueFooter?: boolean;
@@ -845,6 +963,7 @@ function configureFakeCodexTuiEnv(
   process.env.CODELARK_CODEX_CLI_PATH = fakeCodex.codexPath;
   process.env.CODELARK_FAKE_CODEX_TUI_STATE_DIR = fakeCodex.stateDir;
   process.env.CODELARK_FAKE_CODEX_TUI_CONTROL = fakeCodex.codexPath;
+  process.env.CODELARK_FAKE_CODEX_TUI_CONTROL_SCRIPT = fakeCodex.scriptPath;
   process.env.CODELARK_FAKE_CODEX_TUI_LOG = fakeCodex.logPath;
   if (options.updatePromptOnce) process.env.CODELARK_FAKE_CODEX_TUI_UPDATE_PROMPT_ONCE = '1';
   else delete process.env.CODELARK_FAKE_CODEX_TUI_UPDATE_PROMPT_ONCE;
@@ -987,6 +1106,9 @@ sleep 0.1
 
 describe('command-dispatch', () => {
   beforeEach(() => {
+    _testOnlyTmuxCore.reset();
+    delete process.env.TMUX_FAKE_STATE_PATH;
+    resetRuntimeTmuxInputStatesForTests();
     fs.rmSync(DATA_DIR, { recursive: true, force: true });
     fs.rmSync(path.join(CODELARK_HOME, 'config'), { recursive: true, force: true });
     fs.rmSync(HOME_CONFIG_TOML_PATH, { force: true });
@@ -1900,7 +2022,7 @@ describe('command-dispatch', () => {
     assert.deepEqual(card?.tags, ['codex', '019e7d66...card01']);
     assert.match(card?.title || '', /Codex Card title/);
     assert.equal(card?.selects?.[0]?.id, 'cur_runtime');
-    assert.deepEqual(card?.selects?.[0]?.options.map((option) => option.text), ['Codex', 'Claude Code']);
+    assert.deepEqual(card?.selects?.[0]?.options.map((option) => option.text), ['Codex', 'Claude Code', 'Kimi Code']);
     assert.equal(parseCommandCallbackData(card?.selects?.[0]?.selectedCallbackData || '')?.commandText, '/current-runtime codex');
     assert.equal(card?.form?.layout, 'two_column');
     assert.equal(card?.form?.inputElementId, 'clk_name');
@@ -2089,6 +2211,110 @@ describe('command-dispatch', () => {
     assert.equal(getThreadTableMessageRecord(address, 'current')?.messageId, 'reply-4');
   });
 
+  it('renders and saves Kimi /current config card without writing Codex settings', async () => {
+    const store = initTestContext();
+    const sent: any[] = [];
+    const adapter = createGroupCapableAdapter({ sent });
+    const address = { channelType: 'feishu', chatId: 'chat-kimi-current-card', chatKind: 'group' as const } as const;
+    const binding = router.createBinding(address, '/tmp/kimi-current-card');
+    const session = store.getSession(binding.bridgeSessionId);
+    assert.ok(session);
+    store.updateSession(session.id, {
+      name: 'Kimi Current Source',
+      runtime: {
+        codex: {
+          threadId: '019e7d66-0000-7000-8000-kimicurrent01',
+          title: 'Kimi current source',
+          provider: 'sdk',
+        },
+        general: { workingDirectory: '/tmp/kimi-current-card' },
+      },
+    });
+    const deps = {
+      getActiveTask: () => undefined,
+      diagnoseSessionHealth: async () => null,
+      diagnoseAllActiveSessions: async () => [],
+    };
+
+    await handleBridgeCommand(
+      adapter,
+      {
+        address,
+        text: '/current-runtime',
+        messageId: 'incoming-kimi-current-card-runtime',
+        callbackData: buildCommandCallbackData('/current-runtime kimi'),
+      } as any,
+      '/current-runtime kimi',
+      deps,
+    );
+
+    const kimiBinding = store.getChannelChat(address.channelType, address.chatId);
+    assert.ok(kimiBinding);
+    const kimiSession = store.getSession(kimiBinding.bridgeSessionId);
+    assert.equal(getSessionActiveRuntime(kimiSession), 'kimi');
+    const card = sent.at(-1)?.richCard as OutboundRichCard | undefined;
+    assert.equal(card?.selects?.[0]?.selectedCallbackData, buildCommandCallbackData('/current-runtime kimi'));
+    assert.match(card?.footer?.[0] || '', /当前 agent.*<text_tag color='orange'>Kimi Code<\/text_tag>/);
+    assert.deepEqual(card?.form?.selects?.map((select) => select.elementId), ['kimiProvider']);
+    assert.deepEqual(card?.form?.selects?.map((select) => select.formName), ['kimi_provider']);
+    assert.deepEqual(
+      card?.form?.selects?.find((select) => select.elementId === 'kimiProvider')?.options.map((option) => option.text),
+      ['tmux'],
+    );
+    assert.equal(card?.form?.selects?.some((select) => select.elementId === 'defaultProvider'), false);
+    assert.equal(card?.form?.selects?.some((select) => select.elementId === 'claudeProvider'), false);
+    assert.equal(card?.form?.extraInputs?.some((input) => input.elementId === 'kimiDefaultModel'), true);
+    assert.equal(card?.form?.extraInputs?.some((input) => input.formName === 'kimi_model'), true);
+    assert.equal(
+      parseCommandCallbackData(card?.form?.submitCallbackData || '')?.commandText,
+      '/current-config kimi',
+    );
+
+    await handleBridgeCommand(
+      adapter,
+      {
+        address,
+        text: '/current-config',
+        messageId: 'incoming-kimi-current-card-submit',
+        raw: {
+          event: {
+            context: {
+              open_message_id: 'reply-kimi-current-card',
+            },
+            action: {
+              form_value: {
+                clk_name: 'Kimi Current Card',
+                clk_cwd: '/tmp/kimi-current-card',
+                kimi_model: 'moonshot-current-card',
+                kimi_provider: 'tmux',
+              },
+            },
+          },
+        },
+      } as any,
+      '/current-config kimi',
+      deps,
+    );
+
+    const updatedBinding = store.getChannelChat(address.channelType, address.chatId);
+    assert.ok(updatedBinding);
+    const updated = store.getSession(updatedBinding.bridgeSessionId);
+    assert.equal(updated?.name, 'Kimi Current Card');
+    assert.equal(getSessionActiveRuntime(updated), 'kimi');
+    const config = createConfigService({ migrate: false, env: {} });
+    assert.equal(config.get('runtime.kimi.model', { kind: 'session', sessionId: updatedBinding.bridgeSessionId }), 'moonshot-current-card');
+    assert.equal(config.get('runtime.kimi.provider', { kind: 'session', sessionId: updatedBinding.bridgeSessionId }), 'tmux');
+    assert.notEqual(config.resolve('runtime.codex.provider', { kind: 'session', sessionId: updatedBinding.bridgeSessionId }).source, 'session');
+    assert.notEqual(config.resolve('runtime.claude.provider', { kind: 'session', sessionId: updatedBinding.bridgeSessionId }).source, 'session');
+    assert.match(sent.at(-1)?.text || '', /已保存当前会话配置/);
+    assert.match(sent.at(-1)?.text || '', /runtime\.kimi\.model/);
+    assert.match(sent.at(-1)?.text || '', /moonshot-current-card/);
+    assert.doesNotMatch(sent.at(-1)?.text || '', /runtime\.codex\.provider|runtime\.claude\.provider/);
+    assert.deepEqual(adapter.renamedGroups, [{ chatId: address.chatId, name: 'Kimi Current Card' }]);
+    assert.equal(sent.at(-1)?.richCard?.form?.inputDefaultValue, 'Kimi Current Card');
+    assert.equal(sent.at(-1)?.richCard?.selects?.[0]?.selectedCallbackData, buildCommandCallbackData('/current-runtime kimi'));
+  });
+
   it('reads Claude Code JSONL for /t, /current, and /his on Claude runtime sessions', async () => {
     const store = initTestContext();
     const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-command-claude-home-'));
@@ -2193,6 +2419,8 @@ describe('command-dispatch', () => {
       assert.match(sent.at(-1)?.text || '', /思考级别.*high/s);
       assert.doesNotMatch(sent.at(-1)?.text || '', /codex-thread-id|文件系统权限|网络访问|permission_mode|权限模式/s);
       assert.equal(sent.at(-1)?.richCard?.template, 'green');
+      assert.match(sent.at(-1)?.richCard?.subtitle || '', /claude_session_id: claude-history-session/);
+      assert.doesNotMatch(sent.at(-1)?.richCard?.subtitle || '', /claude_thread_id|thread id 未绑定/);
       assert.deepEqual(sent.at(-1)?.richCard?.tags, ['claude', 'claude-h...ession']);
       assert.equal(sent.at(-1)?.richCard?.selects?.[0]?.id, 'cur_runtime');
       assert.equal(sent.at(-1)?.richCard?.selects?.[0]?.selectedCallbackData, buildCommandCallbackData('/current-runtime claude'));
@@ -2319,6 +2547,303 @@ describe('command-dispatch', () => {
     }
   });
 
+  it('reads Kimi Code wire JSONL for /t, /current, and /his on Kimi runtime sessions', async () => {
+    const store = initTestContext();
+    const kimiHome = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-command-kimi-home-'));
+    const fakeTmux = installFakeTmux();
+    const previousKimiHome = process.env.KIMI_CODE_HOME;
+    const previousPath = process.env.PATH || '';
+    const previousFakeLog = process.env.TMUX_FAKE_LOG;
+    process.env.KIMI_CODE_HOME = kimiHome;
+    process.env.PATH = `${fakeTmux.binDir}${path.delimiter}${previousPath}`;
+    process.env.TMUX_FAKE_LOG = fakeTmux.logPath;
+    const sent: Array<{ text: string; richCard?: OutboundRichCard; attachments?: Array<{ path: string; name?: string }> }> = [];
+    const adapter: any = {
+      channelType: 'feishu',
+      provider: 'feishu',
+      send: async (message: { text: string; richCard?: OutboundRichCard; attachments?: Array<{ path: string; name?: string }> }) => {
+        sent.push(message);
+        return { ok: true, messageId: `reply-kimi-history-${sent.length}` };
+      },
+    };
+    const address = { channelType: 'feishu', chatId: 'chat-kimi-history' } as const;
+    const binding = router.createBinding(address, '/tmp/kimi-history-cwd');
+    const session = store.getSession(binding.bridgeSessionId);
+    assert.ok(session);
+    const kimiSessionId = 'session_kimi_history';
+    const wirePath = writeKimiWireFixture({
+      homeDir: kimiHome,
+      cwd: '/tmp/kimi-history-cwd',
+      sessionId: kimiSessionId,
+      timestamp: '2026-06-02T00:00:00.000Z',
+      text: 'hello kimi history',
+      thinkText: 'private kimi thinking',
+      assistantText: 'kimi history reply',
+      title: 'Kimi history title',
+    });
+    store.updateSession(session.id, {
+      runtime: {
+        activeRuntime: 'kimi',
+        kimi: { sessionId: kimiSessionId, cwd: '/tmp/kimi-history-cwd', model: 'moonshot-test', provider: 'tmux' },
+        general: { workingDirectory: '/tmp/kimi-history-cwd' },
+      },
+    });
+    const expectedTmuxSessionName = kimiTmuxSessionName(session.id);
+    createConfigService({ migrate: false, env: {} }).set(
+      { kind: 'session', sessionId: session.id },
+      {
+        runtime: {
+          kimi: {
+            model: 'moonshot-test',
+            provider: 'tmux',
+          },
+        },
+      },
+    );
+
+    try {
+      await handleBridgeCommand(
+        adapter,
+        {
+          address,
+          text: '/t',
+          messageId: 'incoming-kimi-thread-list',
+        } as any,
+        '/t',
+        {
+          getActiveTask: () => undefined,
+          diagnoseSessionHealth: async () => null,
+          diagnoseAllActiveSessions: async () => [],
+        },
+      );
+
+      assert.match(sent.at(-1)?.text || '', /本地会话/);
+      assert.match(sent.at(-1)?.text || '', /Kimi Code/);
+      assert.match(sent.at(-1)?.text || '', new RegExp(kimiSessionId));
+
+      await handleBridgeCommand(
+        adapter,
+        {
+          address,
+          text: '/current',
+          messageId: 'incoming-kimi-current',
+        } as any,
+        '/current',
+        {
+          getActiveTask: () => undefined,
+          diagnoseSessionHealth: async () => null,
+          diagnoseAllActiveSessions: async () => [],
+        },
+      );
+
+      assert.match(sent.at(-1)?.text || '', /runtime.*Kimi Code/s);
+      assert.match(sent.at(-1)?.text || '', /kimi_session_id.*session_kimi_history/s);
+      assert.match(sent.at(-1)?.text || '', /模型 .*runtime\.kimi\.model.*moonshot-test/s);
+      assert.match(sent.at(-1)?.text || '', /Provider（运行方式） .*runtime\.kimi\.provider.*tmux/s);
+      assert.doesNotMatch(sent.at(-1)?.text || '', /codex-thread-id|claude_session_id|文件系统权限|网络访问|permission_mode|权限模式/s);
+      assert.equal(sent.at(-1)?.richCard?.template, 'green');
+      assert.match(sent.at(-1)?.richCard?.subtitle || '', /kimi_session_id: session_kimi_history/);
+      assert.doesNotMatch(sent.at(-1)?.richCard?.subtitle || '', /kimi_thread_id|thread id 未绑定/);
+      assert.deepEqual(sent.at(-1)?.richCard?.tags, ['kimi', 'session_...istory']);
+      assert.equal(sent.at(-1)?.richCard?.selects?.[0]?.selectedCallbackData, buildCommandCallbackData('/current-runtime kimi'));
+
+      await handleBridgeCommand(
+        adapter,
+        {
+          address,
+          text: '/his msg 2',
+          messageId: 'incoming-kimi-history-msg',
+        } as any,
+        '/his msg 2',
+        {
+          getActiveTask: () => undefined,
+          diagnoseSessionHealth: async () => null,
+          diagnoseAllActiveSessions: async () => [],
+        },
+      );
+
+      assert.match(sent.at(-1)?.text || '', /Kimi Code wire JSONL/);
+      assert.match(sent.at(-1)?.text || '', /Kimi Code/);
+      assert.doesNotMatch(sent.at(-1)?.text || '', /\bCodex\b/);
+      assert.doesNotMatch(sent.at(-1)?.text || '', /hello kimi history/);
+      assert.doesNotMatch(sent.at(-1)?.text || '', /private kimi thinking/);
+      assert.match(sent.at(-1)?.text || '', /kimi history reply/);
+
+      await handleBridgeCommand(
+        adapter,
+        {
+          address,
+          text: '/his raw 2',
+          messageId: 'incoming-kimi-history-raw',
+        } as any,
+        '/his raw 2',
+        {
+          getActiveTask: () => undefined,
+          diagnoseSessionHealth: async () => null,
+          diagnoseAllActiveSessions: async () => [],
+        },
+      );
+
+      assert.match(sent.at(-1)?.text || '', /Kimi Code wire JSONL/);
+      assert.match(sent.at(-1)?.text || '', /Kimi Code/);
+      assert.doesNotMatch(sent.at(-1)?.text || '', /\bCodex\b/);
+      assert.doesNotMatch(sent.at(-1)?.text || '', /hello kimi history/);
+      assert.doesNotMatch(sent.at(-1)?.text || '', /private kimi thinking/);
+      assert.match(sent.at(-1)?.text || '', /kimi history reply/);
+
+      await handleBridgeCommand(
+        adapter,
+        {
+          address,
+          text: '/his json',
+          messageId: 'incoming-kimi-history-json',
+        } as any,
+        '/his json',
+        {
+          getActiveTask: () => undefined,
+          diagnoseSessionHealth: async () => null,
+          diagnoseAllActiveSessions: async () => [],
+        },
+      );
+
+      assert.equal(sent.at(-1)?.attachments?.[0]?.path, wirePath);
+      assert.equal(sent.at(-1)?.attachments?.[0]?.name, 'wire.jsonl');
+
+      await handleBridgeCommand(
+        adapter,
+        {
+          address,
+          text: '/t archive',
+          messageId: 'incoming-kimi-archive',
+        } as any,
+        '/t archive',
+        {
+          getActiveTask: () => undefined,
+          diagnoseSessionHealth: async () => null,
+          diagnoseAllActiveSessions: async () => [],
+        },
+      );
+
+      assert.match(sent.at(-1)?.text || '', /已归档本地 Kimi Code 会话/);
+      assert.equal(store.getSession(session.id), null);
+      const tmuxLog = fs.readFileSync(fakeTmux.logPath, 'utf-8');
+      assert.match(tmuxLog, new RegExp(`kill-session -t ${expectedTmuxSessionName}`));
+
+      await handleBridgeCommand(
+        adapter,
+        {
+          address,
+          text: '/t',
+          messageId: 'incoming-kimi-thread-list-after-archive',
+        } as any,
+        '/t',
+        {
+          getActiveTask: () => undefined,
+          diagnoseSessionHealth: async () => null,
+          diagnoseAllActiveSessions: async () => [],
+        },
+      );
+      assert.doesNotMatch(sent.at(-1)?.text || '', new RegExp(kimiSessionId));
+    } finally {
+      if (previousKimiHome === undefined) {
+        delete process.env.KIMI_CODE_HOME;
+      } else {
+        process.env.KIMI_CODE_HOME = previousKimiHome;
+      }
+      process.env.PATH = previousPath;
+      if (previousFakeLog === undefined) {
+        delete process.env.TMUX_FAKE_LOG;
+      } else {
+        process.env.TMUX_FAKE_LOG = previousFakeLog;
+      }
+      fs.rmSync(kimiHome, { recursive: true, force: true });
+      fs.rmSync(fakeTmux.binDir, { recursive: true, force: true });
+    }
+  });
+
+  it('filters user messages from Kimi /his Bridge fallback history', async () => {
+    const store = initTestContext();
+    const kimiHome = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-command-kimi-history-fallback-'));
+    const previousKimiHome = process.env.KIMI_CODE_HOME;
+    process.env.KIMI_CODE_HOME = kimiHome;
+    const sent: Array<{ text: string; richCard?: OutboundRichCard }> = [];
+    const adapter: any = {
+      channelType: 'feishu',
+      provider: 'feishu',
+      send: async (message: { text: string; richCard?: OutboundRichCard }) => {
+        sent.push(message);
+        return { ok: true, messageId: `reply-kimi-history-fallback-${sent.length}` };
+      },
+    };
+    const address = { channelType: 'feishu', chatId: 'chat-kimi-history-fallback' } as const;
+    const binding = router.createBinding(address, '/tmp/kimi-history-fallback-cwd');
+    const session = store.getSession(binding.bridgeSessionId);
+    assert.ok(session);
+    store.updateSession(session.id, {
+      runtime: {
+        activeRuntime: 'kimi',
+        kimi: {
+          sessionId: 'session_kimi_history_fallback',
+          cwd: '/tmp/kimi-history-fallback-cwd',
+          provider: 'tmux',
+        },
+        general: { workingDirectory: '/tmp/kimi-history-fallback-cwd' },
+      },
+    });
+    store.addMessage(session.id, 'user', 'hello kimi fallback history');
+    store.addMessage(session.id, 'assistant', 'kimi fallback **reply**');
+
+    try {
+      await handleBridgeCommand(
+        adapter,
+        {
+          address,
+          text: '/his msg 2',
+          messageId: 'incoming-kimi-history-fallback-msg',
+        } as any,
+        '/his msg 2',
+        {
+          getActiveTask: () => undefined,
+          diagnoseSessionHealth: async () => null,
+          diagnoseAllActiveSessions: async () => [],
+        },
+      );
+
+      assert.match(sent.at(-1)?.text || '', /Bridge 缓存/);
+      assert.match(sent.at(-1)?.text || '', /Kimi Code/);
+      assert.doesNotMatch(sent.at(-1)?.text || '', /hello kimi fallback history/);
+      assert.match(sent.at(-1)?.text || '', /kimi fallback/);
+      assert.equal(sent.at(-1)?.richCard?.sections?.some((section) => JSON.stringify(section).includes('hello kimi fallback history')), false);
+
+      await handleBridgeCommand(
+        adapter,
+        {
+          address,
+          text: '/his raw 2',
+          messageId: 'incoming-kimi-history-fallback-raw',
+        } as any,
+        '/his raw 2',
+        {
+          getActiveTask: () => undefined,
+          diagnoseSessionHealth: async () => null,
+          diagnoseAllActiveSessions: async () => [],
+        },
+      );
+
+      assert.match(sent.at(-1)?.text || '', /Bridge 缓存/);
+      assert.match(sent.at(-1)?.text || '', /Kimi Code/);
+      assert.doesNotMatch(sent.at(-1)?.text || '', /hello kimi fallback history/);
+      assert.match(sent.at(-1)?.text || '', /kimi fallback/);
+    } finally {
+      if (previousKimiHome === undefined) {
+        delete process.env.KIMI_CODE_HOME;
+      } else {
+        process.env.KIMI_CODE_HOME = previousKimiHome;
+      }
+      fs.rmSync(kimiHome, { recursive: true, force: true });
+    }
+  });
+
   it('imports an unbound Claude Code JSONL session from /t global list', async () => {
     const store = initTestContext();
     const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-command-claude-import-home-'));
@@ -2388,6 +2913,75 @@ describe('command-dispatch', () => {
         process.env.CODELARK_CLAUDE_HOME = previousClaudeHome;
       }
       fs.rmSync(homeDir, { recursive: true, force: true });
+    }
+  });
+
+  it('imports an unbound Kimi Code wire session from /t global list', async () => {
+    const store = initTestContext();
+    const kimiHome = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-command-kimi-import-home-'));
+    const previousKimiHome = process.env.KIMI_CODE_HOME;
+    process.env.KIMI_CODE_HOME = kimiHome;
+    const cwd = '/tmp/kimi-import-cwd';
+    const kimiSessionId = 'session_kimi_import';
+    writeKimiWireFixture({
+      homeDir: kimiHome,
+      cwd,
+      sessionId: kimiSessionId,
+      timestamp: '2026-06-02T00:00:00.000Z',
+      text: 'hello imported kimi',
+      title: 'Imported Kimi',
+    });
+
+    const sent: Array<{ text: string; richCard?: OutboundRichCard }> = [];
+    const adapter: any = {
+      channelType: 'feishu',
+      provider: 'feishu',
+      send: async (message: { text: string; richCard?: OutboundRichCard }) => {
+        sent.push(message);
+        return { ok: true, messageId: `reply-kimi-import-${sent.length}` };
+      },
+    };
+    const address = { channelType: 'feishu', chatId: 'chat-kimi-import' } as const;
+
+    try {
+      await handleBridgeCommand(adapter, {
+        address,
+        text: '/t',
+        messageId: 'incoming-kimi-import-list',
+      } as any, '/t', {
+        getActiveTask: () => undefined,
+        diagnoseSessionHealth: async () => null,
+        diagnoseAllActiveSessions: async () => [],
+      });
+      assert.match(sent.at(-1)?.text || '', /Kimi1/);
+      assert.match(sent.at(-1)?.text || '', new RegExp(kimiSessionId));
+
+      await handleBridgeCommand(adapter, {
+        address,
+        text: `/t ${kimiSessionId}`,
+        messageId: 'incoming-kimi-import-switch',
+      } as any, `/t ${kimiSessionId}`, {
+        getActiveTask: () => undefined,
+        diagnoseSessionHealth: async () => null,
+        diagnoseAllActiveSessions: async () => [],
+      });
+
+      assert.match(sent.at(-1)?.text || '', /已切换到本地 Kimi Code 会话/);
+      const binding = store.getChannelChat(address.channelType, address.chatId);
+      assert.ok(binding);
+      const session = store.getSession(binding.bridgeSessionId);
+      assert.equal(getSessionActiveRuntime(session), 'kimi');
+      assert.equal(session?.runtime?.kimi?.sessionId, kimiSessionId);
+      assert.equal(session?.runtime?.kimi?.cwd, cwd);
+      assert.equal(session?.runtime?.kimi?.provider, 'tmux');
+      assert.equal(getSessionWorkingDirectory(session), cwd);
+    } finally {
+      if (previousKimiHome === undefined) {
+        delete process.env.KIMI_CODE_HOME;
+      } else {
+        process.env.KIMI_CODE_HOME = previousKimiHome;
+      }
+      fs.rmSync(kimiHome, { recursive: true, force: true });
     }
   });
 
@@ -2477,6 +3071,165 @@ describe('command-dispatch', () => {
     }
   });
 
+  it('switches and archives Kimi Code sessions by full id outside the /t display window', async () => {
+    const store = initTestContext();
+    const kimiHome = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-command-kimi-direct-home-'));
+    const previousKimiHome = process.env.KIMI_CODE_HOME;
+    process.env.KIMI_CODE_HOME = kimiHome;
+    const cwd = '/tmp/kimi-direct-cwd';
+    const targetSessionId = 'session_kimi_direct_switch';
+    const archiveSessionId = 'session_kimi_direct_archive';
+    writeKimiWireFixture({
+      homeDir: kimiHome,
+      cwd,
+      sessionId: targetSessionId,
+      timestamp: '2026-06-02T00:00:00.000Z',
+      text: 'old direct switch kimi',
+    });
+    writeKimiWireFixture({
+      homeDir: kimiHome,
+      cwd,
+      sessionId: archiveSessionId,
+      timestamp: '2026-06-02T00:00:01.000Z',
+      text: 'old direct archive kimi',
+    });
+    for (let i = 0; i < 201; i += 1) {
+      writeKimiWireFixture({
+        homeDir: kimiHome,
+        cwd: `/tmp/kimi-direct-filler-${i}`,
+        sessionId: `session_kimi_direct_filler_${i.toString().padStart(3, '0')}`,
+        timestamp: `2026-06-02T01:${String(Math.floor(i / 60)).padStart(2, '0')}:${String(i % 60).padStart(2, '0')}.000Z`,
+        text: `newer kimi filler ${i}`,
+      });
+    }
+
+    const sent: Array<{ text: string; richCard?: OutboundRichCard }> = [];
+    const adapter: any = {
+      channelType: 'feishu',
+      provider: 'feishu',
+      send: async (message: { text: string; richCard?: OutboundRichCard }) => {
+        sent.push(message);
+        return { ok: true, messageId: `reply-kimi-direct-${sent.length}` };
+      },
+    };
+    const address = { channelType: 'feishu', chatId: 'chat-kimi-direct-id' } as const;
+
+    try {
+      await handleBridgeCommand(adapter, {
+        address,
+        text: `/t ${targetSessionId}`,
+        messageId: 'incoming-kimi-direct-switch',
+      } as any, `/t ${targetSessionId}`, {
+        getActiveTask: () => undefined,
+        diagnoseSessionHealth: async () => null,
+        diagnoseAllActiveSessions: async () => [],
+      });
+
+      assert.match(sent.at(-1)?.text || '', /已切换到本地 Kimi Code 会话/);
+      const binding = store.getChannelChat(address.channelType, address.chatId);
+      assert.ok(binding);
+      const session = store.getSession(binding.bridgeSessionId);
+      assert.equal(getSessionActiveRuntime(session), 'kimi');
+      assert.equal(session?.runtime?.kimi?.sessionId, targetSessionId);
+      assert.equal(session?.runtime?.kimi?.cwd, cwd);
+      assert.equal(getSessionWorkingDirectory(session), cwd);
+
+      await handleBridgeCommand(adapter, {
+        address,
+        text: `/t archive ${archiveSessionId}`,
+        messageId: 'incoming-kimi-direct-archive',
+      } as any, `/t archive ${archiveSessionId}`, {
+        getActiveTask: () => undefined,
+        diagnoseSessionHealth: async () => null,
+        diagnoseAllActiveSessions: async () => [],
+      });
+
+      assert.match(sent.at(-1)?.text || '', /已归档本地 Kimi Code 会话/);
+      assert.match(sent.at(-1)?.text || '', new RegExp(archiveSessionId));
+      assert.equal(isArchivedKimiSession(archiveSessionId, cwd), true);
+      assert.equal(store.getSession(binding.bridgeSessionId)?.runtime?.kimi?.sessionId, targetSessionId);
+    } finally {
+      if (previousKimiHome === undefined) {
+        delete process.env.KIMI_CODE_HOME;
+      } else {
+        process.env.KIMI_CODE_HOME = previousKimiHome;
+      }
+      fs.rmSync(kimiHome, { recursive: true, force: true });
+    }
+  });
+
+  it('archives a selected Kimi Code session with /t archive using the runtime list index', async () => {
+    const store = initTestContext();
+    const kimiHome = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-command-kimi-archive-index-home-'));
+    const previousKimiHome = process.env.KIMI_CODE_HOME;
+    process.env.KIMI_CODE_HOME = kimiHome;
+    const olderCwd = '/tmp/kimi-archive-index-old';
+    const newerCwd = '/tmp/kimi-archive-index-new';
+    const olderSessionId = 'session_kimi_archive_index_old';
+    const newerSessionId = 'session_kimi_archive_index_new';
+    writeKimiWireFixture({
+      homeDir: kimiHome,
+      cwd: olderCwd,
+      sessionId: olderSessionId,
+      timestamp: '2026-06-02T00:00:00.000Z',
+      text: 'old indexed kimi',
+      title: 'Kimi archive index old',
+    });
+    writeKimiWireFixture({
+      homeDir: kimiHome,
+      cwd: newerCwd,
+      sessionId: newerSessionId,
+      timestamp: '2026-06-02T00:00:01.000Z',
+      text: 'new indexed kimi',
+      title: 'Kimi archive index new',
+    });
+
+    const address = { channelType: 'feishu', chatId: 'chat-kimi-archive-index' } as const;
+    const binding = router.createBinding(address, olderCwd);
+    store.updateSession(binding.bridgeSessionId, {
+      runtime: {
+        activeRuntime: 'kimi',
+        kimi: { sessionId: olderSessionId, cwd: olderCwd, provider: 'tmux' },
+        general: { workingDirectory: olderCwd },
+      },
+    });
+    const sent: string[] = [];
+    const adapter: any = {
+      channelType: 'feishu',
+      provider: 'feishu',
+      send: async (message: { text: string }) => {
+        sent.push(message.text);
+        return { ok: true, messageId: `reply-kimi-archive-index-${sent.length}` };
+      },
+    };
+
+    try {
+      await handleBridgeCommand(adapter, {
+        address,
+        text: '/t archive 1',
+        messageId: 'incoming-kimi-archive-index',
+      } as any, '/t archive 1', {
+        getActiveTask: () => undefined,
+        diagnoseSessionHealth: async () => null,
+        diagnoseAllActiveSessions: async () => [],
+      });
+
+      assert.match(sent.at(-1) || '', /已归档本地 Kimi Code 会话/);
+      assert.match(sent.at(-1) || '', new RegExp(newerSessionId));
+      assert.equal(isArchivedKimiSession(newerSessionId, newerCwd), true);
+      assert.equal(isArchivedKimiSession(olderSessionId, olderCwd), false);
+      assert.equal(store.getChannelChat(address.channelType, address.chatId)?.bridgeSessionId, binding.bridgeSessionId);
+      assert.equal(store.getSession(binding.bridgeSessionId)?.runtime?.kimi?.sessionId, olderSessionId);
+    } finally {
+      if (previousKimiHome === undefined) {
+        delete process.env.KIMI_CODE_HOME;
+      } else {
+        process.env.KIMI_CODE_HOME = previousKimiHome;
+      }
+      fs.rmSync(kimiHome, { recursive: true, force: true });
+    }
+  });
+
   it('renders /check health diagnostics for the current session', async () => {
     initTestContext();
     const sent: string[] = [];
@@ -2530,6 +3283,104 @@ describe('command-dispatch', () => {
     assert.match(response, new RegExp(binding.bridgeSessionId));
     assert.match(response, /长时运行，待观察/);
     assert.match(response, /shell_command/);
+  });
+
+  it('renders /check health diagnostics with Kimi Code runtime identity', async () => {
+    const store = initTestContext();
+    const sent: string[] = [];
+    const adapter: any = {
+      channelType: 'feishu',
+      send: async (message: { text: string }) => {
+        sent.push(message.text);
+        return { ok: true, messageId: 'reply-kimi-health' };
+      },
+    };
+    const address = { channelType: 'feishu', chatId: 'chat-kimi-health' } as const;
+    const kimiCwd = '/tmp/kimi-health';
+    const kimiSessionId = 'session_kimi_health_check';
+    const binding = router.createBinding(address, kimiCwd);
+    store.updateSession(binding.bridgeSessionId, {
+      ...setSessionKimiIdentityUpdate(kimiSessionId, kimiCwd),
+      runtime_status: 'running',
+      health_status: 'running_active',
+      health_reason: '检测到 Kimi 正在思考。',
+      last_progress_at: '2026-04-13T12:00:00.000Z',
+      last_progress_type: 'reasoning',
+    });
+    const healthRuntime = createSessionHealthRuntime({
+      getStore: () => store,
+      nowIso: () => '2026-04-13T12:10:00.000Z',
+    });
+
+    await handleBridgeCommand(
+      adapter,
+      {
+        address,
+        text: '/check',
+        messageId: 'incoming-kimi-health',
+      } as any,
+      '/check',
+      {
+        getActiveTask: () => undefined,
+        diagnoseSessionHealth: (sessionId) => healthRuntime.diagnoseSessionHealth(sessionId),
+        diagnoseAllActiveSessions: () => healthRuntime.diagnoseAllActiveSessions(),
+      },
+    );
+
+    const response = sent[0] || '';
+    assert.match(response, /当前会话健康检查/);
+    assert.match(response, /runtime.*Kimi Code/);
+    assert.match(response, new RegExp(`kimi_session_id.*${kimiSessionId}`));
+    assert.match(response, new RegExp(`runtime_cwd.*${kimiCwd}`));
+    assert.doesNotMatch(response, /codex_thread_id/);
+    assert.doesNotMatch(response, /claude_session_id/);
+  });
+
+  it('renders /check Kimi identity fields before the Kimi session id is discovered', async () => {
+    const store = initTestContext();
+    const sent: string[] = [];
+    const adapter: any = {
+      channelType: 'feishu',
+      send: async (message: { text: string }) => {
+        sent.push(message.text);
+        return { ok: true, messageId: 'reply-kimi-health-pending' };
+      },
+    };
+    const address = { channelType: 'feishu', chatId: 'chat-kimi-health-pending' } as const;
+    const kimiCwd = '/tmp/kimi-health-pending';
+    const binding = router.createBinding(address, kimiCwd);
+    store.updateSession(binding.bridgeSessionId, {
+      runtime: {
+        activeRuntime: 'kimi',
+        kimi: { provider: 'tmux' },
+        general: { workingDirectory: kimiCwd },
+      },
+    });
+    const healthRuntime = createSessionHealthRuntime({
+      getStore: () => store,
+      nowIso: () => '2026-04-13T12:10:00.000Z',
+    });
+
+    await handleBridgeCommand(
+      adapter,
+      {
+        address,
+        text: '/check',
+        messageId: 'incoming-kimi-health-pending',
+      } as any,
+      '/check',
+      {
+        getActiveTask: () => undefined,
+        diagnoseSessionHealth: (sessionId) => healthRuntime.diagnoseSessionHealth(sessionId),
+        diagnoseAllActiveSessions: () => healthRuntime.diagnoseAllActiveSessions(),
+      },
+    );
+
+    const response = sent[0] || '';
+    assert.match(response, /当前会话健康检查/);
+    assert.match(response, /runtime.*Kimi Code/);
+    assert.match(response, /kimi_session_id.*-/);
+    assert.match(response, new RegExp(`runtime_cwd.*${kimiCwd}`));
   });
 
   it('renders /check diagnostics for an explicit session id', async () => {
@@ -2682,7 +3533,7 @@ enabled = true
     const store = initTestContext();
     const sent: any[] = [];
     const adapter = createGroupCapableAdapter({ sent });
-    const address = { channelType: 'feishu', chatId: 'chat-new-command' } as const;
+    const address = { channelType: 'feishu', chatId: 'chat-new-command', userId: 'ou_user' } as const;
     const commonWorkDir = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-new-common-'));
     const apiWorkDir = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-new-api-'));
     const namedWorkDir = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-new-named-'));
@@ -2705,7 +3556,7 @@ enabled = true
     assert.equal(store.getChannelChat(address.channelType, address.chatId), null);
     assert.equal(adapter.createdGroups[0]?.requestedName, 'common-flow');
     assert.equal(adapter.createdGroups[0]?.name, '[TestBot]common-flow');
-    const groupAddress = { channelType: 'feishu', chatId: adapter.createdGroups[0].chatId } as const;
+    const groupAddress = { ...address, chatId: adapter.createdGroups[0].chatId } as const;
     const binding = store.getChannelChat(groupAddress.channelType, groupAddress.chatId);
     assert.ok(binding);
     assert.equal(getSessionWorkingDirectory(store.getSession(binding!.bridgeSessionId)), commonWorkDir);
@@ -2819,8 +3670,8 @@ enabled = true
     const store = initTestContext();
     const sent: any[] = [];
     const adapter = createGroupCapableAdapter({ sent });
-    const address = { channelType: 'feishu', chatId: 'chat-new-command-form' } as const;
-    const unboundAddress = { channelType: 'feishu', chatId: 'chat-new-command-form-unbound' } as const;
+    const address = { channelType: 'feishu', chatId: 'chat-new-command-form', userId: 'ou_user' } as const;
+    const unboundAddress = { channelType: 'feishu', chatId: 'chat-new-command-form-unbound', userId: 'ou_user' } as const;
 
     await handleBridgeCommand(
       adapter,
@@ -2933,6 +3784,33 @@ enabled = true
     assert.match(sent.at(-1)?.text || '', /当前会话/);
   });
 
+  it('refuses to create a group chat when the operator user id is missing', async () => {
+    const store = initTestContext();
+    const sent: any[] = [];
+    const adapter = createGroupCapableAdapter({ sent });
+    const address = { channelType: 'feishu', chatId: 'chat-new-missing-user' } as const;
+
+    await handleBridgeCommand(
+      adapter,
+      {
+        address,
+        text: '/new unsafe-child',
+        messageId: 'incoming-new-missing-user',
+      } as any,
+      '/new unsafe-child',
+      {
+        getActiveTask: () => undefined,
+        diagnoseSessionHealth: async () => null,
+        diagnoseAllActiveSessions: async () => [],
+      },
+    );
+
+    assert.equal(adapter.createdGroups.length, 0);
+    assert.match(sent.at(-1)?.text || '', /无法确定当前操作者/);
+    assert.match(sent.at(-1)?.text || '', /避免创建无法由用户管理的群/);
+    assert.equal(store.getChannelChat(address.channelType, address.chatId), null);
+  });
+
   it('creates a group-backed cloud document chat from a document comment without user /new semantics', async () => {
     const store = initTestContext();
     const sent: any[] = [];
@@ -2986,6 +3864,7 @@ enabled = true
       provider: 'feishu',
       fileToken: 'doc-token',
       fileType: 'docx',
+      commentId: 'comment-1',
     });
     assert.equal(
       path.resolve(getSessionWorkingDirectory(store.getSession(binding!.bridgeSessionId)) || ''),
@@ -3055,10 +3934,58 @@ enabled = true
       path.resolve(getSessionWorkingDirectory(store.getSession(binding!.bridgeSessionId)) || ''),
       path.resolve(DEFAULT_WORKSPACE_ROOT),
     );
+    assert.deepEqual(binding!.cloudDocumentChat, {
+      provider: 'feishu',
+      fileToken: 'doc-default-token',
+      fileType: 'docx',
+      commentId: 'comment-default',
+    });
     assert.equal(sent[0]?.address.chatId, groupChatId);
     assert.match(sent[0]?.text || '', /标题：需求评审云文档/);
     assert.equal(commentReplies.length, 1);
     assert.match(commentReplies[0], /doc:需求评审云文档/);
+  });
+
+  it('refuses to create a cloud document group when the operator user id is missing', async () => {
+    initTestContext();
+    const sent: any[] = [];
+    const commentReplies: string[] = [];
+    const adapter = createGroupCapableAdapter({ sent });
+    adapter.sendCloudDocumentReply = async (_target: unknown, text: string) => {
+      commentReplies.push(text);
+      return { ok: true, messageId: `doc-reply-${commentReplies.length}` };
+    };
+    const address = {
+      channelType: 'feishu',
+      chatId: 'doc:docx:doc-missing-user-token',
+      cloudDocument: {
+        provider: 'feishu' as const,
+        fileToken: 'doc-missing-user-token',
+        fileType: 'docx' as const,
+        commentId: 'comment-missing-user',
+        title: '缺少操作者云文档',
+      },
+    };
+
+    await handleBridgeCommand(
+      adapter,
+      {
+        address,
+        text: '/new',
+        messageId: 'incoming-doc-new-missing-user',
+      } as any,
+      '/new',
+      {
+        getActiveTask: () => undefined,
+        diagnoseSessionHealth: async () => null,
+        diagnoseAllActiveSessions: async () => [],
+      },
+    );
+
+    assert.equal(adapter.createdGroups.length, 0);
+    assert.equal(commentReplies.length, 1);
+    assert.match(commentReplies[0], /无法确定当前操作者/);
+    assert.match(commentReplies[0], /避免创建无法由用户管理的群/);
   });
 
   it('updates the current session working directory with /cd and expands home paths', async () => {
@@ -3200,6 +4127,203 @@ enabled = true
     assert.equal(codexBinding?.runtimeBridgeSessionIds?.claude, claudeSession?.id);
   });
 
+  it('switches the current chat between Codex and Kimi BridgeSessions without losing the Kimi mapping', async () => {
+    const store = initTestContext();
+    const sent: any[] = [];
+    const adapter = createGroupCapableAdapter({ sent });
+    const address = { channelType: 'feishu', chatId: 'chat-runtime-kimi-command' } as const;
+    const session = store.createSession('runtime-kimi-session', 'test-model');
+    store.upsertChannelChat({
+      channelType: address.channelType,
+      chatId: address.chatId,
+      bridgeSessionId: session.id,
+    });
+
+    await handleBridgeCommand(
+      adapter,
+      {
+        address,
+        text: '/runtime kimi',
+        messageId: 'incoming-runtime-kimi',
+      } as any,
+      '/runtime kimi',
+      {
+        getActiveTask: () => undefined,
+        diagnoseSessionHealth: async () => null,
+        diagnoseAllActiveSessions: async () => [],
+      },
+    );
+
+    const kimiBinding = store.getChannelChat(address.channelType, address.chatId);
+    assert.ok(kimiBinding);
+    assert.notEqual(kimiBinding.bridgeSessionId, session.id);
+    const kimiSession = store.getSession(kimiBinding.bridgeSessionId);
+    assert.equal(getSessionActiveRuntime(kimiSession), 'kimi');
+    assert.equal(kimiBinding.runtimeBridgeSessionIds?.codex, session.id);
+    assert.equal(kimiBinding.runtimeBridgeSessionIds?.kimi, kimiSession?.id);
+    assert.match(sent.at(-1)?.text || '', /Runtime.*kimi/s);
+
+    await handleBridgeCommand(
+      adapter,
+      {
+        address,
+        text: '/runtime codex',
+        messageId: 'incoming-runtime-codex-after-kimi',
+      } as any,
+      '/runtime codex',
+      {
+        getActiveTask: () => undefined,
+        diagnoseSessionHealth: async () => null,
+        diagnoseAllActiveSessions: async () => [],
+      },
+    );
+
+    const codexBinding = store.getChannelChat(address.channelType, address.chatId);
+    assert.equal(codexBinding?.bridgeSessionId, session.id);
+    assert.equal(getSessionActiveRuntime(store.getSession(session.id)), undefined);
+    assert.equal(codexBinding?.runtimeBridgeSessionIds?.kimi, kimiSession?.id);
+    assert.match(sent.at(-1)?.text || '', /Runtime.*codex/s);
+
+    await handleBridgeCommand(
+      adapter,
+      {
+        address,
+        text: '/runtime kimi',
+        messageId: 'incoming-runtime-kimi-again',
+      } as any,
+      '/runtime kimi',
+      {
+        getActiveTask: () => undefined,
+        diagnoseSessionHealth: async () => null,
+        diagnoseAllActiveSessions: async () => [],
+      },
+    );
+
+    const reboundKimiBinding = store.getChannelChat(address.channelType, address.chatId);
+    assert.equal(reboundKimiBinding?.bridgeSessionId, kimiSession?.id);
+    assert.equal(reboundKimiBinding?.runtimeBridgeSessionIds?.codex, session.id);
+    assert.equal(reboundKimiBinding?.runtimeBridgeSessionIds?.kimi, kimiSession?.id);
+    assert.equal(
+      store.listSessions().filter((item) => getSessionActiveRuntime(item) === 'kimi').length,
+      1,
+    );
+  });
+
+  it('creates /new group sessions in the current Kimi runtime without carrying old Codex mappings', async () => {
+    const store = initTestContext();
+    const sent: any[] = [];
+    const adapter = createGroupCapableAdapter({ sent });
+    const oldWorkDir = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-new-kimi-old-'));
+    const newWorkDir = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-new-kimi-new-'));
+    const address = { channelType: 'feishu', chatId: 'chat-new-kimi-runtime', chatKind: 'group' as const, userId: 'ou_user' } as const;
+    const rememberedCodexSession = store.createSession('remembered Codex context', 'test-model', undefined, oldWorkDir);
+    const kimiSession = store.createSession('Kimi parent', 'test-model', undefined, oldWorkDir);
+    store.updateSession(kimiSession.id, {
+      runtime: {
+        activeRuntime: 'kimi',
+        kimi: { sessionId: 'session_kimi_new_parent', cwd: oldWorkDir, provider: 'tmux' },
+        general: { workingDirectory: oldWorkDir },
+      },
+    });
+    const binding = store.upsertChannelChat({
+      channelType: address.channelType,
+      chatId: address.chatId,
+      chatKind: 'group',
+      bridgeSessionId: kimiSession.id,
+    });
+    store.updateChannelChat(binding.id, {
+      runtimeBridgeSessionIds: {
+        codex: rememberedCodexSession.id,
+        kimi: kimiSession.id,
+      },
+    });
+
+    await handleBridgeCommand(
+      adapter,
+      {
+        address,
+        text: `/new KimiChild ${newWorkDir}`,
+        messageId: 'incoming-new-kimi-runtime',
+      } as any,
+      `/new KimiChild ${newWorkDir}`,
+      {
+        getActiveTask: () => undefined,
+        diagnoseSessionHealth: async () => null,
+        diagnoseAllActiveSessions: async () => [],
+        reconcileMirrorSubscriptions: async () => {},
+      },
+    );
+
+    assert.equal(adapter.createdGroups.length, 1);
+    const createdAddress = {
+      ...address,
+      chatId: adapter.createdGroups[0].chatId,
+      displayName: adapter.createdGroups[0].name,
+    };
+    const createdBinding = store.getChannelChat(createdAddress.channelType, createdAddress.chatId);
+    assert.ok(createdBinding);
+    assert.notEqual(createdBinding.bridgeSessionId, kimiSession.id);
+    assert.equal(createdBinding.runtimeBridgeSessionIds?.kimi, createdBinding.bridgeSessionId);
+    assert.equal(createdBinding.runtimeBridgeSessionIds?.codex, undefined);
+    const createdSession = store.getSession(createdBinding.bridgeSessionId);
+    assert.equal(getSessionActiveRuntime(createdSession), 'kimi');
+    assert.equal(createdSession?.runtime?.codex, undefined);
+    assert.equal(getSessionWorkingDirectory(createdSession), newWorkDir);
+    const config = createConfigService({ migrate: false, env: {} });
+    assert.equal(config.get('runtime.kimi.provider', { kind: 'session', sessionId: createdBinding.bridgeSessionId }), 'tmux');
+    assert.equal(config.get('session.tmuxAutoEnter', { kind: 'session', sessionId: createdBinding.bridgeSessionId }), true);
+    assert.equal(resolveKimiRuntimeConfig(createdSession, createdBinding).provider, 'tmux');
+    const creationResponse = sent.find((message) => /已创建群聊会话/.test(message.text || ''));
+    assert.ok(creationResponse);
+    assert.match(creationResponse.text || '', /Runtime.*Kimi Code/s);
+    assert.match(creationResponse.text || '', /Provider.*tmux/s);
+    assert.match(sent.at(-1)?.text || '', /runtime.*Kimi Code/s);
+    assert.match(sent.at(-1)?.text || '', /Provider.*tmux/s);
+  });
+
+  it('keeps /pty-screen from falling back to Codex pty for Kimi sessions', async () => {
+    const store = initTestContext();
+    const sent: any[] = [];
+    const adapter = createGroupCapableAdapter({ sent });
+    const address = { channelType: 'feishu', chatId: 'chat-kimi-pty-screen-boundary' } as const;
+    const session = store.createSession('kimi-pty-boundary', 'test-model');
+    store.updateSession(session.id, {
+      runtime: {
+        activeRuntime: 'kimi',
+        kimi: { sessionId: 'session_kimi_pty_boundary', cwd: '/tmp/kimi-pty-boundary', provider: 'tmux' },
+        general: { workingDirectory: '/tmp/kimi-pty-boundary' },
+      },
+    });
+    createConfigService({ migrate: false, env: {} }).set(
+      { kind: 'session', sessionId: session.id },
+      { runtime: { codex: { provider: 'pty' } } },
+    );
+    store.upsertChannelChat({
+      channelType: address.channelType,
+      chatId: address.chatId,
+      bridgeSessionId: session.id,
+    });
+
+    await handleBridgeCommand(
+      adapter,
+      {
+        address,
+        text: '/pty-screen 2',
+        messageId: 'incoming-kimi-pty-screen-boundary',
+      } as any,
+      '/pty-screen 2',
+      {
+        getActiveTask: () => undefined,
+        diagnoseSessionHealth: async () => null,
+        diagnoseAllActiveSessions: async () => [],
+      },
+    );
+
+    assert.match(sent.at(-1)?.text || '', /Kimi.*tmux Provider/s);
+    assert.match(sent.at(-1)?.text || '', /\/tmux-screen/);
+    assert.doesNotMatch(sent.at(-1)?.text || '', /pty 当前屏幕状态/);
+  });
+
   it('routes the next normal message through Claude after /runtime claude', async () => {
     const store = initTestContext();
     const sent: any[] = [];
@@ -3278,6 +4402,282 @@ enabled = true
     assert.equal(updatedClaudeSession?.runtime?.claude?.sessionId, 'claude-session-after-switch');
     assert.equal(updatedClaudeSession?.runtime?.codex, undefined);
     assert.equal(store.getSession(codexSession.id)?.runtime?.codex?.threadId, 'codex-thread-before-switch');
+  });
+
+  it('routes the next normal message through Kimi after /runtime kimi', async () => {
+    const store = initTestContext();
+    const sent: any[] = [];
+    const adapter = createGroupCapableAdapter({ sent });
+    const address = { channelType: 'feishu', chatId: 'chat-runtime-kimi-next-message' } as const;
+    const codexSession = store.createSession('runtime-kimi-route-session', 'test-model');
+    store.updateSession(codexSession.id, { runtime: { codex: { threadId: 'codex-thread-before-kimi-switch' } } });
+    store.upsertChannelChat({
+      channelType: address.channelType,
+      chatId: address.chatId,
+      bridgeSessionId: codexSession.id,
+    });
+
+    await handleBridgeCommand(
+      adapter,
+      {
+        address,
+        text: '/runtime kimi',
+        messageId: 'incoming-runtime-kimi-route',
+      } as any,
+      '/runtime kimi',
+      {
+        getActiveTask: () => undefined,
+        diagnoseSessionHealth: async () => null,
+        diagnoseAllActiveSessions: async () => [],
+      },
+    );
+
+    const kimiBinding = store.getChannelChat(address.channelType, address.chatId);
+    assert.ok(kimiBinding);
+    const calls: StreamChatParams[] = [];
+    const llm: LLMProvider = {
+      streamChat(params: StreamChatParams): ReadableStream<string> {
+        calls.push(params);
+        return new ReadableStream({
+          start(controller) {
+            controller.enqueue(sseEvent('status', {
+              session_id: 'session_kimi_after_switch',
+              cwd: '/tmp/kimi-after-switch',
+              reasoning: '思考',
+              thinking: '正在处理 Kimi runtime 消息',
+            }));
+            controller.enqueue(sseEvent('text', 'hello from kimi'));
+            controller.enqueue(sseEvent('result', {
+              session_id: 'session_kimi_after_switch',
+              cwd: '/tmp/kimi-after-switch',
+            }));
+            controller.close();
+          },
+        });
+      },
+    };
+    const thinkingNotes: string[] = [];
+
+    const result = await processMessage(
+      kimiBinding,
+      'hi kimi',
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      {
+        onThinkingNote: (note) => thinkingNotes.push(note),
+      },
+      {
+        store,
+        llm,
+        consumeSseEvents,
+        normalizeSandboxMode,
+        normalizeReasoningEffort,
+      },
+    );
+
+    assert.equal(result.responseText, 'hello from kimi');
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0]?.runtime, 'kimi');
+    assert.equal(calls[0]?.codexThreadId, undefined);
+    assert.equal(calls[0]?.kimiSessionId, undefined);
+    assert.deepEqual(thinkingNotes, ['正在处理 Kimi runtime 消息']);
+    const updatedKimiSession = store.getSession(kimiBinding.bridgeSessionId);
+    assert.equal(updatedKimiSession?.runtime?.activeRuntime, 'kimi');
+    assert.equal(updatedKimiSession?.runtime?.kimi?.sessionId, 'session_kimi_after_switch');
+    assert.equal(updatedKimiSession?.runtime?.kimi?.cwd, '/tmp/kimi-after-switch');
+    assert.equal(resolveKimiRuntimeConfig(updatedKimiSession).provider, 'tmux');
+    assert.equal(updatedKimiSession?.runtime?.codex, undefined);
+    assert.equal(store.getSession(codexSession.id)?.runtime?.codex?.threadId, 'codex-thread-before-kimi-switch');
+  });
+
+  it('does not hold the provider command open while global mirror reconcile is pending', async () => {
+    const store = initTestContext();
+    const sent: any[] = [];
+    const adapter = createGroupCapableAdapter({ sent });
+    const address = { channelType: 'feishu', chatId: 'chat-provider-reconcile-background' } as const;
+    const session = store.createSession('provider-reconcile-background', 'test-model');
+    store.updateSession(session.id, { runtime: { activeRuntime: 'kimi', kimi: { provider: 'tmux' } } });
+    store.upsertChannelChat({
+      channelType: address.channelType,
+      chatId: address.chatId,
+      bridgeSessionId: session.id,
+    });
+    const reconcile = createDeferred<void>();
+    let reconcileStarted = false;
+
+    await Promise.race([
+      handleBridgeCommand(
+        adapter,
+        {
+          address,
+          text: '/p tmux',
+          messageId: 'incoming-provider-reconcile-background',
+        } as any,
+        '/p tmux',
+        {
+          getActiveTask: () => undefined,
+          diagnoseSessionHealth: async () => null,
+          diagnoseAllActiveSessions: async () => [],
+          reconcileMirrorSubscriptions: async () => {
+            reconcileStarted = true;
+            await reconcile.promise;
+          },
+        },
+      ),
+      new Promise<never>((_, reject) => setTimeout(() => reject(new Error('provider command waited for mirror reconcile')), 250)),
+    ]);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    assert.equal(reconcileStarted, true);
+    assert.match(sent.at(-1)?.text || '', /已切换 Kimi Provider/);
+    reconcile.resolve();
+  });
+
+  it('releases command handling before the Feishu reply ACK while preserving chat delivery order', async () => {
+    const store = initTestContext();
+    const address = { channelType: 'feishu', chatId: 'chat-command-reply-background' } as const;
+    const session = store.createSession('command-reply-background', 'test-model');
+    store.upsertChannelChat({
+      channelType: address.channelType,
+      chatId: address.chatId,
+      bridgeSessionId: session.id,
+    });
+    const firstAck = createDeferred<{ ok: boolean; messageId?: string }>();
+    const secondAck = createDeferred<{ ok: boolean; messageId?: string }>();
+    const sent: any[] = [];
+    const adapter = createGroupCapableAdapter({ sent });
+    adapter.send = async (message: any) => {
+      sent.push(message);
+      return sent.length === 1 ? firstAck.promise : secondAck.promise;
+    };
+    const deps = {
+      getActiveTask: () => undefined,
+      diagnoseSessionHealth: async () => null,
+      diagnoseAllActiveSessions: async () => [],
+    };
+
+    await Promise.race([
+      handleBridgeCommandWithoutDeliveryWait(adapter, {
+        address,
+        text: '/runtime kimi',
+        messageId: 'incoming-command-reply-background-1',
+      } as any, '/runtime kimi', deps),
+      new Promise<never>((_, reject) => setTimeout(() => reject(new Error('command waited for Feishu reply ACK')), 100)),
+    ]);
+    await waitForCondition(() => sent.length === 1);
+
+    await Promise.race([
+      handleBridgeCommandWithoutDeliveryWait(adapter, {
+        address,
+        text: '/help',
+        messageId: 'incoming-command-reply-background-2',
+      } as any, '/help', deps),
+      new Promise<never>((_, reject) => setTimeout(() => reject(new Error('next command waited for the previous Feishu reply ACK')), 100)),
+    ]);
+    assert.equal(sent.length, 1, 'the second reply must stay queued behind the first chat delivery');
+
+    firstAck.resolve({ ok: true, messageId: 'reply-background-1' });
+    await waitForCondition(() => sent.length === 2);
+    secondAck.resolve({ ok: true, messageId: 'reply-background-2' });
+  });
+
+  it('releases /t rename before group-name and reply acknowledgements', async () => {
+    const store = initTestContext();
+    const address = { channelType: 'feishu', chatId: 'chat-rename-background', chatKind: 'group' as const } as const;
+    const binding = router.createBinding(address, '/tmp/rename-background');
+    const renameAck = createDeferred<{ chatId: string; chatKind: 'group'; name: string }>();
+    const replyAck = createDeferred<{ ok: boolean; messageId?: string }>();
+    let renameStarted = false;
+    const adapter: any = {
+      channelType: 'feishu',
+      provider: 'feishu',
+      renameGroupChat: async () => {
+        renameStarted = true;
+        return renameAck.promise;
+      },
+      send: async () => replyAck.promise,
+    };
+
+    await Promise.race([
+      handleBridgeCommandWithoutDeliveryWait(adapter, {
+        address,
+        text: '/t rename 后台标题',
+        messageId: 'incoming-rename-background',
+      } as any, '/t rename 后台标题', {
+        getActiveTask: () => undefined,
+        diagnoseSessionHealth: async () => null,
+        diagnoseAllActiveSessions: async () => [],
+      }),
+      new Promise<never>((_, reject) => setTimeout(() => reject(new Error('/t rename waited for a remote acknowledgement')), 100)),
+    ]);
+
+    assert.equal(store.getSession(binding.bridgeSessionId)?.name, '后台标题');
+    assert.equal(renameStarted, true);
+    renameAck.resolve({ chatId: address.chatId, chatKind: 'group', name: '后台标题' });
+    replyAck.resolve({ ok: true, messageId: 'reply-rename-background' });
+  });
+
+  it('releases /t unbind before mirror reconcile completes', async () => {
+    const store = initTestContext();
+    const address = { channelType: 'feishu', chatId: 'chat-unbind-reconcile-background' } as const;
+    const original = router.createBinding(address, '/tmp/unbind-reconcile-background');
+    const reconcileAck = createDeferred<void>();
+    let reconcileStarted = false;
+    const adapter = createGroupCapableAdapter({ sent: [] });
+
+    await Promise.race([
+      handleBridgeCommandWithoutDeliveryWait(adapter, {
+        address,
+        text: '/t unbind',
+        messageId: 'incoming-unbind-reconcile-background',
+      } as any, '/t unbind', {
+        getActiveTask: () => undefined,
+        diagnoseSessionHealth: async () => null,
+        diagnoseAllActiveSessions: async () => [],
+        reconcileMirrorSubscriptions: async () => {
+          reconcileStarted = true;
+          await reconcileAck.promise;
+        },
+      }),
+      new Promise<never>((_, reject) => setTimeout(() => reject(new Error('/t unbind waited for mirror reconcile')), 100)),
+    ]);
+
+    assert.notEqual(store.getChannelChat(address.channelType, address.chatId)?.bridgeSessionId, original.bridgeSessionId);
+    await waitForCondition(() => reconcileStarted);
+    reconcileAck.resolve();
+  });
+
+  it('releases selection callbacks before answerCallback completes', async () => {
+    const callbackAck = createDeferred<void>();
+    let answerStarted = false;
+    const adapter: any = {
+      channelType: 'feishu',
+      provider: 'feishu',
+      answerCallback: async () => {
+        answerStarted = true;
+        await callbackAck.promise;
+      },
+    };
+
+    await Promise.race([
+      bridgeManagerTestOnly.handleMessageWithoutDeliveryWait(adapter, {
+        address: { channelType: 'feishu', chatId: 'chat-callback-background' },
+        text: '',
+        messageId: 'callback-background',
+        callbackData: `${THREAD_SELECT_CALLBACK_PREFIX}${encodeURIComponent('thread-background')}`,
+        timestamp: Date.now(),
+      } as any),
+      new Promise<never>((_, reject) => setTimeout(() => reject(new Error('callback waited for answerCallback')), 100)),
+    ]);
+
+    assert.equal(answerStarted, true);
+    callbackAck.resolve();
   });
 
   it('rejects runtime and provider switches while the current conversation is running', async () => {
@@ -3496,7 +4896,7 @@ enabled = true
     }
   });
 
-  it('starts tmux provider with only a reaction and final text', async () => {
+  it('starts /p tmux without a transient provider-loading reaction and sends final text', async () => {
     const previousEnv = {
       PATH: process.env.PATH,
       TMUX_FAKE_LOG: process.env.TMUX_FAKE_LOG,
@@ -3531,8 +4931,8 @@ enabled = true
           return true;
         },
         addMessageReaction: async (messageId: string, emojiType: string) => {
-          reactions.push({ action: 'add', messageId, emojiType, reactionId: 'reaction-typing' });
-          return 'reaction-typing';
+          reactions.push({ action: 'add', messageId, emojiType, reactionId: 'unexpected-reaction' });
+          return 'unexpected-reaction';
         },
         removeMessageReaction: async (messageId: string, reactionId: string, emojiType?: string) => {
           reactions.push({ action: 'remove', messageId, emojiType, reactionId });
@@ -3563,9 +4963,7 @@ enabled = true
         },
       );
 
-      assert.deepEqual(reactions.map((reaction) => reaction.action), ['add', 'remove']);
-      assert.equal(reactions[0]?.emojiType, 'Typing');
-      assert.equal(reactions[1]?.reactionId, 'reaction-typing');
+      assert.deepEqual(reactions, []);
       assert.deepEqual(cardTexts, []);
       assert.deepEqual(cardStatuses, []);
       assert.deepEqual(cardMetadata, []);
@@ -3624,8 +5022,8 @@ enabled = true
           return { ok: true, messageId };
         },
         addMessageReaction: async (messageId: string, emojiType: string) => {
-          reactions.push({ action: 'add', messageId, emojiType, reactionId: 'reaction-typing' });
-          return 'reaction-typing';
+          reactions.push({ action: 'add', messageId, emojiType, reactionId: 'reaction-get' });
+          return 'reaction-get';
         },
         removeMessageReaction: async (messageId: string, reactionId: string, emojiType?: string) => {
           reactions.push({ action: 'remove', messageId, emojiType, reactionId });
@@ -3656,7 +5054,7 @@ enabled = true
         },
       );
 
-      assert.deepEqual(reactions.map((reaction) => reaction.action), ['add', 'remove']);
+      assert.deepEqual(reactions, []);
       assert.equal(sent.length, 2);
       assert.equal(sent[0]?.richCard?.title, 'Codex TUI Selection');
       assert.equal(sent[0]?.richCard?.selects?.[0]?.id, 'clk_codex_tui_selection');
@@ -3786,7 +5184,7 @@ enabled = true
       });
       const sent: any[] = [];
       const adapter = createGroupCapableAdapter({ sent });
-      const address = { channelType: 'feishu', chatId: 'chat-runtime-e2e-source', chatKind: 'group' as const } as const;
+      const address = { channelType: 'feishu', chatId: 'chat-runtime-e2e-source', chatKind: 'group' as const, userId: 'ou_user' } as const;
       const session = store.createSession('runtime-e2e-source', 'test-model', undefined, workDir, 'normal');
       store.upsertChannelChat({
         channelType: address.channelType,
@@ -3938,7 +5336,7 @@ enabled = true
       });
       const sent: any[] = [];
       const adapter = createGroupCapableAdapter({ sent });
-      const address = { channelType: 'feishu', chatId: 'chat-runtime-default-source', chatKind: 'group' as const } as const;
+      const address = { channelType: 'feishu', chatId: 'chat-runtime-default-source', chatKind: 'group' as const, userId: 'ou_user' } as const;
       const session = store.createSession('runtime-default-source', 'test-model', undefined, workDir, 'normal');
       store.upsertChannelChat({
         channelType: address.channelType,
@@ -4138,6 +5536,91 @@ enabled = true
     assert.match(sent.at(-1)?.text || '', /已切换 Claude Provider/);
   });
 
+  it('applies SessionRuntime commands to Kimi state without writing Codex runtime settings', async () => {
+    const store = initTestContext();
+    const sent: any[] = [];
+    const adapter = createGroupCapableAdapter({ sent });
+    const address = { channelType: 'feishu', chatId: 'chat-kimi-session-runtime' } as const;
+    const session = store.createSession('kimi-runtime-session', 'codex-model');
+    store.updateSession(session.id, {
+      runtime: {
+        activeRuntime: 'kimi',
+        kimi: { sessionId: 'session_kimi-runtime', cwd: '/tmp/kimi-runtime', provider: 'tmux' },
+        general: { workingDirectory: '/tmp/kimi-runtime' },
+      },
+    });
+    store.upsertChannelChat({
+      channelType: address.channelType,
+      chatId: address.chatId,
+      bridgeSessionId: session.id,
+    });
+    const deps = {
+      getActiveTask: () => undefined,
+      diagnoseSessionHealth: async () => null,
+      diagnoseAllActiveSessions: async () => [],
+      reconcileMirrorSubscriptions: async () => {},
+    };
+
+    await handleBridgeCommand(adapter, { address, text: '/mode yolo', messageId: 'incoming-kimi-mode' } as any, '/mode yolo', deps);
+    await handleBridgeCommand(adapter, { address, text: '/model moonshot-v1', messageId: 'incoming-kimi-model' } as any, '/model moonshot-v1', deps);
+    await handleBridgeCommand(adapter, { address, text: '/p tmux', messageId: 'incoming-kimi-provider' } as any, '/p tmux', deps);
+    await handleBridgeCommand(adapter, { address, text: '/reasoning high', messageId: 'incoming-kimi-reasoning' } as any, '/reasoning high', deps);
+    await handleBridgeCommand(adapter, { address, text: '/sandbox read-only', messageId: 'incoming-kimi-sandbox' } as any, '/sandbox read-only', deps);
+    await handleBridgeCommand(adapter, { address, text: '/network off', messageId: 'incoming-kimi-network' } as any, '/network off', deps);
+
+    const updated = store.getSession(session.id);
+    assert.equal(getSessionKimiModel(updated), 'moonshot-v1');
+    assert.equal(getSessionKimiProvider(updated), 'tmux');
+    assert.equal(getSessionCodexModel(updated), undefined);
+    assert.equal(getSessionCodexReasoningEffort(updated), undefined);
+    assert.equal(getSessionCodexSandboxMode(updated), undefined);
+    assert.equal(getSessionCodexNetworkAccess(updated), undefined);
+    assert.equal(updated?.runtime?.codex, undefined);
+    assert.equal(updated?.runtime?.kimi?.model, undefined);
+    assert.equal(updated?.runtime?.kimi?.provider, 'tmux');
+    assert.equal(
+      createConfigService({ migrate: false, env: {} }).get('runtime.kimi.model', {
+        kind: 'session',
+        sessionId: session.id,
+      }),
+      'moonshot-v1',
+    );
+    assert.equal(
+      createConfigService({ migrate: false, env: {} }).get('runtime.kimi.provider', {
+        kind: 'session',
+        sessionId: session.id,
+      }),
+      'tmux',
+    );
+    assert.equal(
+      createConfigService({ migrate: false, env: {} }).get('runtime.codex.reasoningEffort', {
+        kind: 'session',
+        sessionId: session.id,
+      }),
+      'medium',
+    );
+    assert.notEqual(
+      createConfigService({ migrate: false, env: {} }).resolve('runtime.codex.reasoningEffort', {
+        kind: 'session',
+        sessionId: session.id,
+      }).source,
+      'session',
+    );
+    assert.deepEqual(
+      {
+        provider: resolveKimiRuntimeConfig(store.getSession(session.id)).provider,
+        model: resolveKimiRuntimeConfig(store.getSession(session.id)).model,
+      },
+      { provider: 'tmux', model: 'moonshot-v1' },
+    );
+    assert.match(sent.at(-6)?.text || '', /Kimi Code 模式固定/);
+    assert.match(sent.at(-5)?.text || '', /已更新 Kimi Code 模型/);
+    assert.match(sent.at(-4)?.text || '', /已切换 Kimi Provider/);
+    assert.match(sent.at(-3)?.text || '', /Kimi Code 不支持 Bridge 思考级别设置/);
+    assert.match(sent.at(-2)?.text || '', /Kimi Code 不支持 Bridge 沙箱设置/);
+    assert.match(sent.at(-1)?.text || '', /Kimi Code 不支持 Bridge 网络开关/);
+  });
+
   it('reminds users that Codex runtime settings apply on the next request', async () => {
     const store = initTestContext();
     const sent: any[] = [];
@@ -4230,6 +5713,16 @@ enabled = true
       assert.match(sent.at(-1)?.text || '', /不会影响已经启动的 Codex TUI/);
       assert.doesNotMatch(sent.at(-1)?.text || '', /无法影响/);
 
+      await handleBridgeCommand(adapter, { address, text: '/mode code', messageId: `incoming-${provider}-mode-code-invalid` } as any, '/mode code', deps);
+      assert.match(sent.at(-1)?.text || '', /模式用法/);
+      assert.equal(
+        createConfigService({ migrate: false, env: {} }).get('runtime.codex.yoloMode', {
+          kind: 'session',
+          sessionId: session.id,
+        }),
+        'on',
+      );
+
       await handleBridgeCommand(adapter, { address, text: '/reasoning minimal', messageId: `incoming-${provider}-reasoning` } as any, '/reasoning minimal', deps);
       assert.equal(getSessionCodexReasoningEffort(store.getSession(session.id)), 'minimal');
       assert.equal(
@@ -4268,6 +5761,10 @@ enabled = true
       assert.equal(resolveEffectiveNetworkAccess(store.getSession(session.id)), false);
       assert.match(sent.at(-1)?.text || '', /已更新 Codex 网络/);
       assert.match(sent.at(-1)?.text || '', /重启后的后续请求中生效/);
+
+      await handleBridgeCommand(adapter, { address, text: '/network reset', messageId: `incoming-${provider}-network-reset-invalid` } as any, '/network reset', deps);
+      assert.match(sent.at(-1)?.text || '', /Codex 网络用法/);
+      assert.equal(getSessionCodexNetworkAccess(store.getSession(session.id)), false);
 
       await handleBridgeCommand(adapter, { address, text: '/sandbox default', messageId: `incoming-${provider}-sandbox-default` } as any, '/sandbox default', deps);
       assert.notEqual(
@@ -4419,6 +5916,102 @@ enabled = true
     assert.match(sent.at(-1)?.text || '', /\/clear \[name\] \[path\]/);
   });
 
+  it('clears a Kimi tmux runtime into a new Kimi BridgeSession and cleans the old deterministic tmux session', async () => {
+    const store = initTestContext();
+    const fakeTmux = installFakeTmux();
+    const previousPath = process.env.PATH || '';
+    const previousFakeLog = process.env.TMUX_FAKE_LOG;
+    process.env.PATH = `${fakeTmux.binDir}${path.delimiter}${previousPath}`;
+    process.env.TMUX_FAKE_LOG = fakeTmux.logPath;
+    const sent: Array<{ text: string; richCard?: OutboundRichCard }> = [];
+    const adapter: any = {
+      channelType: 'feishu',
+      provider: 'feishu',
+      send: async (message: { text: string; richCard?: OutboundRichCard }) => {
+        sent.push(message);
+        return { ok: true, messageId: `reply-clear-kimi-${sent.length}` };
+      },
+    };
+    const oldWorkDir = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-clear-kimi-old-'));
+    const newWorkDir = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-clear-kimi-new-'));
+    const address = { channelType: 'feishu', chatId: 'chat-clear-kimi', chatKind: 'group' as const } as const;
+    const alternateCodexSession = store.createSession('remembered Codex context', 'test-model', undefined, oldWorkDir);
+    const initialBinding = router.createBinding(address, oldWorkDir, '旧 Kimi 上下文');
+    const initialSession = store.getSession(initialBinding.bridgeSessionId);
+    assert.ok(initialSession);
+    store.updateSession(initialSession.id, {
+      runtime: {
+        activeRuntime: 'kimi',
+        kimi: { sessionId: 'session_clear_kimi', cwd: oldWorkDir, provider: 'tmux' },
+        general: { workingDirectory: oldWorkDir },
+      },
+    });
+    store.updateChannelChat(initialBinding.id, {
+      runtimeBridgeSessionIds: {
+        codex: alternateCodexSession.id,
+        kimi: initialSession.id,
+      },
+    });
+    createConfigService({ migrate: false, env: {} }).set(
+      { kind: 'session', sessionId: initialSession.id },
+      {
+        runtime: {
+          codex: { provider: 'pty' },
+          kimi: { provider: 'tmux' },
+        },
+      },
+    );
+    const expectedTmuxSessionName = kimiTmuxSessionName(initialSession.id);
+
+    try {
+      await handleBridgeCommand(
+        adapter,
+        {
+          address,
+          text: `/clear Kimi新上下文 ${newWorkDir}`,
+          messageId: 'incoming-clear-kimi',
+        } as any,
+        `/clear Kimi新上下文 ${newWorkDir}`,
+        {
+          getActiveTask: () => undefined,
+          diagnoseSessionHealth: async () => null,
+          diagnoseAllActiveSessions: async () => [],
+        },
+      );
+
+      const nextBinding = store.getChannelChat('feishu', 'chat-clear-kimi');
+      assert.ok(nextBinding);
+      assert.notEqual(nextBinding.bridgeSessionId, initialBinding.bridgeSessionId);
+      assert.equal(nextBinding.runtimeBridgeSessionIds?.codex, alternateCodexSession.id);
+      assert.equal(nextBinding.runtimeBridgeSessionIds?.kimi, nextBinding.bridgeSessionId);
+      const nextSession = store.getSession(nextBinding.bridgeSessionId);
+      assert.equal(getSessionActiveRuntime(nextSession), 'kimi');
+      assert.equal(nextSession?.name, 'Kimi新上下文');
+      assert.equal(getSessionWorkingDirectory(nextSession), newWorkDir);
+      const config = createConfigService({ migrate: false, env: {} });
+      assert.equal(config.get('runtime.kimi.provider', { kind: 'session', sessionId: nextBinding.bridgeSessionId }), 'tmux');
+      assert.equal(config.get('session.tmuxAutoEnter', { kind: 'session', sessionId: nextBinding.bridgeSessionId }), true);
+      assert.notEqual(
+        config.resolve('runtime.codex.provider', { kind: 'session', sessionId: nextBinding.bridgeSessionId }).source,
+        'session',
+      );
+      const tmuxLog = fs.readFileSync(fakeTmux.logPath, 'utf-8');
+      assert.match(tmuxLog, new RegExp(`kill-session -t ${expectedTmuxSessionName}`));
+      assert.match(sent.at(-1)?.text || '', /Provider.*tmux/s);
+      assert.match(sent.at(-1)?.text || '', new RegExp(`已清理旧 tmux Provider session：${expectedTmuxSessionName}`));
+    } finally {
+      process.env.PATH = previousPath;
+      if (previousFakeLog === undefined) {
+        delete process.env.TMUX_FAKE_LOG;
+      } else {
+        process.env.TMUX_FAKE_LOG = previousFakeLog;
+      }
+      fs.rmSync(fakeTmux.binDir, { recursive: true, force: true });
+      fs.rmSync(oldWorkDir, { recursive: true, force: true });
+      fs.rmSync(newWorkDir, { recursive: true, force: true });
+    }
+  });
+
   it('asks for confirmation before /clear stops a running session', async () => {
     const store = initTestContext();
     const sent: Array<{ text: string; richCard?: OutboundRichCard }> = [];
@@ -4494,7 +6087,7 @@ enabled = true
     const store = initTestContext({ dynamicSettings: true });
     const sent: any[] = [];
     const adapter = createGroupCapableAdapter({ sent });
-    const address = { channelType: 'feishu', chatId: 'chat-set-command' } as const;
+    const address = { channelType: 'feishu', chatId: 'chat-set-command', userId: 'ou_user' } as const;
     const deps = {
       getActiveTask: () => undefined,
       diagnoseSessionHealth: async () => null,
@@ -4532,7 +6125,7 @@ enabled = true
     ]);
     assert.deepEqual(
       sent.at(-1)?.richCard?.selects?.[0]?.options.map((option: any) => option.text),
-      ['通用配置', 'Codex', 'Claude', 'Bridge', '通道配置（feishu-default）'],
+      ['通用配置', 'Codex', 'Claude', 'Kimi', 'Bridge', '通道配置（feishu-default）'],
     );
     assert.deepEqual(sent.at(-1)?.richCard?.sections, []);
     assert.deepEqual(
@@ -4664,6 +6257,37 @@ enabled = true
       adapter,
       {
         address,
+        text: '/set',
+        messageId: 'incoming-set-runtime-form',
+        callbackData: buildCommandCallbackData('/set --group runtime'),
+        raw: {
+          event: {
+            context: {
+              open_message_id: 'reply-4',
+            },
+            action: {
+              form_value: {
+                tmux_lines: '160',
+                tmux_enter: 'off',
+                tmux_echo: 'on',
+              },
+            },
+          },
+        },
+      } as any,
+      '/set --group runtime',
+      deps,
+    );
+    const globalTmuxConfig = createConfigService({ migrate: false, env: {} });
+    assert.equal(globalTmuxConfig.get('session.tmuxCaptureLines'), 160);
+    assert.equal(globalTmuxConfig.get('session.tmuxAutoEnter'), false);
+    assert.equal(globalTmuxConfig.get('session.tmuxEchoInput'), true);
+    assert.equal(sent.at(-1)?.richCardUpdateMessageId, 'reply-4');
+
+    await handleBridgeCommand(
+      adapter,
+      {
+        address,
         text: '/set --group runtime.claude',
         messageId: 'incoming-set-runtime-select-claude',
         callbackData: buildCommandCallbackData('/set --group runtime.claude'),
@@ -4767,6 +6391,73 @@ enabled = true
       adapter,
       {
         address,
+        text: '/set --group runtime.kimi',
+        messageId: 'incoming-set-kimi-card',
+      } as any,
+      '/set --group runtime.kimi',
+      deps,
+    );
+    assert.match(sent.at(-1)?.text || '', /Kimi/);
+    assert.match(sent.at(-1)?.text || '', /runtime\.kimi\.model/);
+    assert.match(sent.at(-1)?.text || '', /runtime\.kimi\.provider/);
+    assert.equal(sent.at(-1)?.richCardUpdateMessageId, undefined);
+    assert.equal(sent.at(-1)?.richCard?.subtitle, '写入 ~/.codelark/config.toml · Kimi');
+    assert.equal(sent.at(-1)?.richCard?.form?.submitCallbackData, buildCommandCallbackData('/set --group runtime.kimi'));
+    assert.deepEqual(
+      sent.at(-1)?.richCard?.form?.selects?.map((select: any) => select.elementId),
+      ['kimiProvider'],
+    );
+    assert.deepEqual(
+      sent.at(-1)?.richCard?.form?.selects?.map((select: any) => select.formName),
+      ['kimi_provider'],
+    );
+    assert.deepEqual(
+      sent.at(-1)?.richCard?.form?.extraInputs?.map((input: any) => input.elementId),
+      ['kimiDefaultModel'],
+    );
+    assert.deepEqual(
+      sent.at(-1)?.richCard?.form?.extraInputs?.map((input: any) => input.formName),
+      ['kimi_model'],
+    );
+
+    await handleBridgeCommand(
+      adapter,
+      {
+        address,
+        text: '/set',
+        messageId: 'incoming-set-kimi-form',
+        callbackData: buildCommandCallbackData('/set --group runtime.kimi'),
+        raw: {
+          event: {
+            context: {
+              open_message_id: 'reply-8',
+            },
+            action: {
+              form_value: {
+                kimi_model: 'moonshot-global-card',
+                kimi_provider: 'tmux',
+              },
+            },
+          },
+        },
+      } as any,
+      '/set --group runtime.kimi',
+      deps,
+    );
+    assert.match(sent.at(-1)?.text || '', /已保存全局配置/);
+    assert.match(sent.at(-1)?.text || '', /runtime\.kimi\.model/);
+    assert.match(sent.at(-1)?.text || '', /moonshot-global-card/);
+    assert.equal(sent.at(-1)?.richCardUpdateMessageId, 'reply-8');
+    assert.equal(getThreadTableMessageRecord(address, 'set')?.messageId, 'reply-8');
+    assert.doesNotMatch(sent.at(-1)?.text || '', /runtime\.codex\.provider|runtime\.claude\.provider/);
+    const configAfterKimiSave = createConfigService({ migrate: false, env: {} });
+    assert.equal(configAfterKimiSave.get('runtime.kimi.model'), 'moonshot-global-card');
+    assert.equal(configAfterKimiSave.get('runtime.kimi.provider'), 'tmux');
+
+    await handleBridgeCommand(
+      adapter,
+      {
+        address,
         text: '/set --group channels.feishu',
         messageId: 'incoming-set-channel-card',
       } as any,
@@ -4795,6 +6486,7 @@ enabled = true
             action: {
               form_value: {
                 hist_limit: '11',
+                stream_idle_sec: '0',
               },
             },
           },
@@ -4804,6 +6496,7 @@ enabled = true
       deps,
     );
     assert.equal(createConfigService({ migrate: false, env: {} }).snapshot().config.channels[0]?.config.historyMessageLimit, 11);
+    assert.equal(createConfigService({ migrate: false, env: {} }).snapshot().config.channels[0]?.config.streamStatusIdleStartSeconds, 0);
 
     await handleBridgeCommand(
       adapter,
@@ -4855,6 +6548,46 @@ enabled = true
       adapter,
       {
         address,
+        text: '/set defaultMode code',
+        messageId: 'incoming-set-mode-code-invalid',
+      } as any,
+      '/set defaultMode code',
+      deps,
+    );
+    assert.match(sent.at(-1)?.text || '', /配置未更新/s);
+    assert.equal(createConfigService({ migrate: false, env: {} }).get('runtime.codex.yoloMode'), 'on');
+
+    await handleBridgeCommand(
+      adapter,
+      {
+        address,
+        text: '/set defaultModel gpt-strict',
+        messageId: 'incoming-set-model',
+      } as any,
+      '/set defaultModel gpt-strict',
+      deps,
+    );
+    assert.match(sent.at(-1)?.text || '', /runtime\.codex\.model.*gpt-strict/s);
+    assert.equal(createConfigService({ migrate: false, env: {} }).get('runtime.codex.model'), 'gpt-strict');
+
+    await handleBridgeCommand(
+      adapter,
+      {
+        address,
+        text: '/set defaultModel reset',
+        messageId: 'incoming-set-model-reset-invalid',
+      } as any,
+      '/set defaultModel reset',
+      deps,
+    );
+    assert.match(sent.at(-1)?.text || '', /配置未更新/s);
+    assert.match(sent.at(-1)?.text || '', /只支持 default/);
+    assert.equal(createConfigService({ migrate: false, env: {} }).get('runtime.codex.model'), 'gpt-strict');
+
+    await handleBridgeCommand(
+      adapter,
+      {
+        address,
         text: '/set defaultProvider tmux',
         messageId: 'incoming-set-provider',
       } as any,
@@ -4888,7 +6621,33 @@ enabled = true
       '/set defualtProvider sdk',
       deps,
     );
+    assert.match(sent.at(-1)?.text || '', /未知配置项/s);
+    assert.equal(createConfigService({ migrate: false, env: {} }).get('runtime.codex.provider'), 'pty');
+
+    await handleBridgeCommand(
+      adapter,
+      {
+        address,
+        text: '/set defaultProvider sdk',
+        messageId: 'incoming-set-provider-sdk',
+      } as any,
+      '/set defaultProvider sdk',
+      deps,
+    );
     assert.match(sent.at(-1)?.text || '', /runtime\.codex\.provider.*sdk/s);
+    assert.equal(createConfigService({ migrate: false, env: {} }).get('runtime.codex.provider'), 'sdk');
+
+    await handleBridgeCommand(
+      adapter,
+      {
+        address,
+        text: '/set defaultProvider auto',
+        messageId: 'incoming-set-provider-auto-invalid',
+      } as any,
+      '/set defaultProvider auto',
+      deps,
+    );
+    assert.match(sent.at(-1)?.text || '', /配置未更新/s);
     assert.equal(createConfigService({ migrate: false, env: {} }).get('runtime.codex.provider'), 'sdk');
 
     await handleBridgeCommand(
@@ -4904,6 +6663,19 @@ enabled = true
     assert.match(sent.at(-1)?.text || '', /runtime\.codex\.provider.*auto/s);
     assert.equal(createConfigService({ migrate: false, env: {} }).resolve('runtime.codex.provider').source, 'home');
     assert.equal(createConfigService({ migrate: false, env: {} }).get('runtime.codex.provider'), '');
+
+    await handleBridgeCommand(
+      adapter,
+      {
+        address,
+        text: '/set kimiProvider auto',
+        messageId: 'incoming-set-kimi-provider-auto-invalid',
+      } as any,
+      '/set kimiProvider auto',
+      deps,
+    );
+    assert.match(sent.at(-1)?.text || '', /配置未更新/s);
+    assert.equal(createConfigService({ migrate: false, env: {} }).get('runtime.kimi.provider'), 'tmux');
 
     await handleBridgeCommand(
       adapter,
@@ -5328,7 +7100,7 @@ enabled = true
     assert.equal(message?.richCard?.tableBlocks?.[0]?.table.rows.length, 20);
     assert.equal(message?.richCard?.tableBlocks?.[0]?.selects?.[0]?.options.length, 20);
     assert.deepEqual(message?.richCard?.tableBlocks?.[0]?.selects?.[1]?.options.map((option) => option.text), ['显示 20', '显示 50', '显示 100']);
-    assert.deepEqual(message?.richCard?.tableBlocks?.[0]?.selects?.[2]?.options.map((option) => option.text), ['Codex', 'Claude']);
+    assert.deepEqual(message?.richCard?.tableBlocks?.[0]?.selects?.[2]?.options.map((option) => option.text), ['Codex', 'Claude', 'Kimi']);
     assert.deepEqual(
       message?.richCard?.tableBlocks?.[0]?.actions?.map((row) => row.map((action) => action.text)),
       [['接管', '归档', '新建'], ['解绑', '刷新']],
@@ -5339,7 +7111,7 @@ enabled = true
     fs.rmSync(path.join(process.env.CODEX_HOME!, 'sessions'), { recursive: true, force: true });
   });
 
-  it('renders /t as one active-runtime table with a Codex/Claude selector', async () => {
+  it('renders /t as one active-runtime table with a Codex/Claude/Kimi selector', async () => {
     const store = initTestContext();
     fs.rmSync(path.join(process.env.CODEX_HOME!, 'sessions'), { recursive: true, force: true });
     fs.rmSync(path.join(process.env.CODEX_HOME!, 'session_index.jsonl'), { force: true });
@@ -5413,6 +7185,127 @@ enabled = true
       }
       fs.rmSync(homeDir, { recursive: true, force: true });
       fs.rmSync(path.join(process.env.CODEX_HOME!, 'sessions'), { recursive: true, force: true });
+    }
+  });
+
+  it('includes Kimi in the /t usage guidance for invalid arguments', async () => {
+    initTestContext();
+    const sent: Array<{ text: string }> = [];
+    const adapter: any = {
+      channelType: 'feishu',
+      provider: 'feishu',
+      send: async (message: { text: string }) => {
+        sent.push(message);
+        return { ok: true, messageId: `reply-t-usage-${sent.length}` };
+      },
+    };
+    const address = { channelType: 'feishu', chatId: 'chat-t-usage' } as const;
+
+    await handleBridgeCommand(adapter, {
+      address,
+      text: '/t unknown',
+      messageId: 'incoming-t-usage',
+    } as any, '/t unknown', {
+      getActiveTask: () => undefined,
+      diagnoseSessionHealth: async () => null,
+      diagnoseAllActiveSessions: async () => [],
+    });
+
+    assert.match(sent.at(-1)?.text || '', /\/t codex/);
+    assert.match(sent.at(-1)?.text || '', /\/t claude/);
+    assert.match(sent.at(-1)?.text || '', /\/t kimi/);
+    assert.match(sent.at(-1)?.text || '', /thread\/session id/);
+    assert.doesNotMatch(sent.at(-1)?.text || '', /序号 > thread_id > bridge_id/);
+  });
+
+  it('switches to a local Kimi Code session by id and detects takeover conflicts', async () => {
+    const store = initTestContext();
+    const kimiHome = fs.mkdtempSync(path.join(os.tmpdir(), 'codelark-command-t-kimi-home-'));
+    const previousKimiHome = process.env.KIMI_CODE_HOME;
+    process.env.KIMI_CODE_HOME = kimiHome;
+    const kimiSessionId = 'session_kimi_thread_switch';
+    const kimiCwd = '/tmp/thread-switch-kimi';
+    writeKimiWireFixture({
+      homeDir: kimiHome,
+      cwd: kimiCwd,
+      sessionId: kimiSessionId,
+      timestamp: '2026-06-02T00:00:02.000Z',
+      text: 'panel kimi',
+      title: 'Kimi panel',
+    });
+
+    const sent: Array<{ text: string; richCard?: OutboundRichCard }> = [];
+    const adapter: any = {
+      channelType: 'feishu',
+      provider: 'feishu',
+      send: async (message: { text: string; richCard?: OutboundRichCard }) => {
+        sent.push(message);
+        return { ok: true, messageId: `reply-t-kimi-${sent.length}` };
+      },
+    };
+    const firstAddress = { channelType: 'feishu', chatId: 'chat-t-kimi-first' } as const;
+    const secondAddress = { channelType: 'feishu', chatId: 'chat-t-kimi-second' } as const;
+    const deps = {
+      getActiveTask: () => undefined,
+      diagnoseSessionHealth: async () => null,
+      diagnoseAllActiveSessions: async () => [],
+    };
+
+    try {
+      await handleBridgeCommand(adapter, {
+        address: firstAddress,
+        text: `/t ${kimiSessionId}`,
+        messageId: 'incoming-t-kimi-first',
+      } as any, `/t ${kimiSessionId}`, deps);
+
+      const firstBinding = store.getChannelChat(firstAddress.channelType, firstAddress.chatId);
+      const firstSession = store.getSession(firstBinding!.bridgeSessionId);
+      assert.equal(getSessionActiveRuntime(firstSession), 'kimi');
+      assert.equal(firstSession?.runtime?.kimi?.sessionId, kimiSessionId);
+      assert.equal(firstSession?.runtime?.kimi?.cwd, kimiCwd);
+      assert.match(sent.at(-1)?.text || '', /已切换到本地 Kimi Code 会话/);
+      assert.match(sent.at(-1)?.text || '', new RegExp(`session_id.*${kimiSessionId}`, 's'));
+      assert.doesNotMatch(sent.at(-1)?.text || '', /thread_id/);
+      assert.doesNotMatch(sent.at(-1)?.text || '', /Codex 会话/);
+
+      await handleBridgeCommand(adapter, {
+        address: firstAddress,
+        text: `/t ${firstBinding!.bridgeSessionId.slice(0, 8)}`,
+        messageId: 'incoming-t-kimi-binding-switch',
+      } as any, `/t ${firstBinding!.bridgeSessionId.slice(0, 8)}`, deps);
+
+      assert.match(sent.at(-1)?.text || '', /已切换到 Bridge 会话|当前线程已切换/);
+      assert.match(sent.at(-1)?.text || '', new RegExp(`session_id.*${kimiSessionId}`, 's'));
+      assert.doesNotMatch(sent.at(-1)?.text || '', /thread_id/);
+
+      await handleBridgeCommand(adapter, {
+        address: firstAddress,
+        text: '/t rename Renamed Kimi Session',
+        messageId: 'incoming-t-kimi-rename',
+      } as any, '/t rename Renamed Kimi Session', deps);
+
+      assert.match(sent.at(-1)?.text || '', /当前线程已重命名/);
+      assert.match(sent.at(-1)?.text || '', new RegExp(`session_id.*${kimiSessionId}`, 's'));
+      assert.doesNotMatch(sent.at(-1)?.text || '', /thread_id/);
+
+      await handleBridgeCommand(adapter, {
+        address: secondAddress,
+        text: `/t ${kimiSessionId}`,
+        messageId: 'incoming-t-kimi-second',
+      } as any, `/t ${kimiSessionId}`, deps);
+
+      assert.match(sent.at(-1)?.text || '', /确认接管会话/);
+      const takeoverFields = sent.at(-1)?.richCard?.sections?.[0]?.fields || [];
+      assert.equal(takeoverFields.some(([label, value]) => label === 'session_id' && value === kimiSessionId), true);
+      assert.equal(takeoverFields.some(([label]) => label === 'thread_id'), false);
+      assert.equal(store.getChannelChat(secondAddress.channelType, secondAddress.chatId) || null, null);
+    } finally {
+      if (previousKimiHome === undefined) {
+        delete process.env.KIMI_CODE_HOME;
+      } else {
+        process.env.KIMI_CODE_HOME = previousKimiHome;
+      }
+      fs.rmSync(kimiHome, { recursive: true, force: true });
     }
   });
 
@@ -5975,6 +7868,46 @@ enabled = true
     assert.match(sent.at(-1) || '', /已切换到 Bridge 会话/);
   });
 
+  it('does not reuse another chat draft session when /t unbind creates a temporary binding', async () => {
+    const store = initTestContext();
+    const sent: string[] = [];
+    const adapter: any = {
+      channelType: 'feishu',
+      provider: 'feishu',
+      send: async (message: { text: string }) => {
+        sent.push(message.text);
+        return { ok: true, messageId: `reply-t-unbind-cross-chat-${sent.length}` };
+      },
+    };
+    const userId = 'ou_shared_draft_user';
+    const otherAddress = { channelType: 'feishu', chatId: 'chat-t-unbind-other', userId } as const;
+    const currentAddress = { channelType: 'feishu', chatId: 'chat-t-unbind-current', userId } as const;
+    const otherDraft = router.createBinding(otherAddress);
+    const original = router.createBinding(currentAddress, 'D:\\workspace\\unbind-current');
+
+    await handleBridgeCommand(
+      adapter,
+      {
+        address: currentAddress,
+        text: '/t unbind',
+        messageId: 'incoming-t-unbind-cross-chat',
+      } as any,
+      '/t unbind',
+      {
+        getActiveTask: () => undefined,
+        diagnoseSessionHealth: async () => null,
+        diagnoseAllActiveSessions: async () => [],
+      },
+    );
+
+    const nextBinding = store.getChannelChat(currentAddress.channelType, currentAddress.chatId);
+    assert.ok(nextBinding);
+    assert.notEqual(nextBinding.bridgeSessionId, original.bridgeSessionId);
+    assert.notEqual(nextBinding.bridgeSessionId, otherDraft.bridgeSessionId);
+    assert.equal(store.getChannelChat(otherAddress.channelType, otherAddress.chatId)?.bridgeSessionId, otherDraft.bridgeSessionId);
+    assert.match(sent.at(-1) || '', /当前聊天已解绑/);
+  });
+
   it('switches /t targets directly without activation subcommands', async () => {
     const store = initTestContext();
     const sent: string[] = [];
@@ -6289,6 +8222,70 @@ enabled = true
     assert.equal(richCards.at(-1)?.table?.columns.some((column) => column.name === 'runtime_id'), true);
   });
 
+  it('renders /every task runtime identity for Kimi sessions', async () => {
+    const store = initTestContext();
+    const sent: string[] = [];
+    const richCards: OutboundRichCard[] = [];
+    const started: string[] = [];
+    const adapter: any = {
+      channelType: 'feishu',
+      provider: 'feishu',
+      send: async (message: { text: string; richCard?: OutboundRichCard }) => {
+        sent.push(message.text);
+        if (message.richCard) richCards.push(message.richCard);
+        return { ok: true, messageId: `reply-every-kimi-${sent.length}` };
+      },
+    };
+    const address = { channelType: 'feishu', chatId: 'chat-every-kimi' } as const;
+    const binding = router.createBinding(address, '/tmp/every-kimi');
+    const kimiSessionId = 'session_every_kimi_runtime';
+    store.updateSession(binding.bridgeSessionId, {
+      runtime: {
+        activeRuntime: 'kimi',
+        kimi: { sessionId: kimiSessionId, cwd: '/tmp/every-kimi', provider: 'tmux' },
+        general: { workingDirectory: '/tmp/every-kimi' },
+      },
+    });
+    const deps = {
+      getActiveTask: () => undefined,
+      diagnoseSessionHealth: async () => null,
+      diagnoseAllActiveSessions: async () => [],
+      startEveryTask: (taskId: string) => { started.push(taskId); },
+    };
+
+    await handleBridgeCommand(
+      adapter,
+      {
+        address,
+        text: '/every 2h check kimi',
+        messageId: 'incoming-every-kimi-new',
+      } as any,
+      '/every 2h check kimi',
+      deps,
+    );
+
+    assert.match(sent.at(-1) || '', /session runtime-id/);
+    assert.match(sent.at(-1) || '', new RegExp(kimiSessionId));
+    const tasks = listEveryTasks({ bridgeSessionId: binding.bridgeSessionId });
+    assert.equal(tasks.length, 1);
+    assert.deepEqual(started, [tasks[0].id]);
+
+    await handleBridgeCommand(
+      adapter,
+      {
+        address,
+        text: '/every',
+        messageId: 'incoming-every-kimi-ls',
+      } as any,
+      '/every',
+      deps,
+    );
+
+    assert.match(sent.at(-1) || '', /session runtime-id/);
+    assert.match(sent.at(-1) || '', new RegExp(kimiSessionId));
+    assert.equal(richCards.at(-1)?.table?.columns.some((column) => column.name === 'runtime_id'), true);
+  });
+
   it('creates, lists, folds, and removes /then tasks on the current bridge session', async () => {
     const store = initTestContext();
     const sent: string[] = [];
@@ -6399,6 +8396,70 @@ enabled = true
     assert.equal(remaining.length, 1);
     assert.equal(remaining[0].prompt, longPrompt);
     assert.match(sent.at(-1) || '', /已取消 \/then 后续输入/);
+  });
+
+  it('renders /then task runtime identity for Kimi sessions', async () => {
+    const store = initTestContext();
+    const sent: string[] = [];
+    const richCards: OutboundRichCard[] = [];
+    const started: string[] = [];
+    const adapter: any = {
+      channelType: 'feishu',
+      provider: 'feishu',
+      send: async (message: { text: string; richCard?: OutboundRichCard }) => {
+        sent.push(message.text);
+        if (message.richCard) richCards.push(message.richCard);
+        return { ok: true, messageId: `reply-then-kimi-${sent.length}` };
+      },
+    };
+    const address = { channelType: 'feishu', chatId: 'chat-then-kimi' } as const;
+    const binding = router.createBinding(address, '/tmp/then-kimi');
+    const kimiSessionId = 'session_then_kimi_runtime';
+    store.updateSession(binding.bridgeSessionId, {
+      runtime: {
+        activeRuntime: 'kimi',
+        kimi: { sessionId: kimiSessionId, cwd: '/tmp/then-kimi', provider: 'tmux' },
+        general: { workingDirectory: '/tmp/then-kimi' },
+      },
+    });
+    const deps = {
+      getActiveTask: () => undefined,
+      diagnoseSessionHealth: async () => null,
+      diagnoseAllActiveSessions: async () => [],
+      startThenTask: (taskId: string) => { started.push(taskId); },
+    };
+
+    await handleBridgeCommand(
+      adapter,
+      {
+        address,
+        text: '/then check kimi after completion',
+        messageId: 'incoming-then-kimi-new',
+      } as any,
+      '/then check kimi after completion',
+      deps,
+    );
+
+    assert.match(sent.at(-1) || '', /session runtime-id/);
+    assert.match(sent.at(-1) || '', new RegExp(kimiSessionId));
+    const tasks = listThenTasks({ bridgeSessionId: binding.bridgeSessionId, statuses: ['pending'] });
+    assert.equal(tasks.length, 1);
+    assert.deepEqual(started, [tasks[0].id]);
+
+    await handleBridgeCommand(
+      adapter,
+      {
+        address,
+        text: '/then',
+        messageId: 'incoming-then-kimi-ls',
+      } as any,
+      '/then',
+      deps,
+    );
+
+    assert.match(sent.at(-1) || '', /session runtime-id/);
+    assert.match(sent.at(-1) || '', new RegExp(kimiSessionId));
+    assert.equal(richCards.at(-1)?.table?.columns.some((column) => column.name === 'runtime_id'), true);
   });
 
   it('supports /then create, edit, and delete from interactive cards without oversized callback data', async () => {
@@ -6676,6 +8737,76 @@ enabled = true
       assert.deepEqual(forcedStops, []);
       assert.match(sent[0] || '', /已发送停止按键/);
       assert.match(sent[0] || '', /tmux send-keys -t alpha C-c/);
+    } finally {
+      process.env.PATH = oldPath;
+      if (oldFakeLog === undefined) {
+        delete process.env.TMUX_FAKE_LOG;
+      } else {
+        process.env.TMUX_FAKE_LOG = oldFakeLog;
+      }
+      fs.rmSync(fakeTmux.binDir, { recursive: true, force: true });
+    }
+  });
+
+  it('maps /stop to C-c for a running Kimi tmux provider session without a stored tmux name', async () => {
+    const store = initTestContext();
+    const fakeTmux = installFakeTmux();
+    const oldPath = process.env.PATH || '';
+    const oldFakeLog = process.env.TMUX_FAKE_LOG;
+    process.env.PATH = `${fakeTmux.binDir}${path.delimiter}${oldPath}`;
+    process.env.TMUX_FAKE_LOG = fakeTmux.logPath;
+    const sent: string[] = [];
+    const forcedStops: Array<{ sessionId: string; detail?: string }> = [];
+    const adapter: any = {
+      channelType: 'feishu',
+      send: async (message: { text: string }) => {
+        sent.push(message.text);
+        return { ok: true, messageId: 'reply-stop-kimi-tmux-provider' };
+      },
+    };
+    const address = { channelType: 'feishu', chatId: 'chat-stop-kimi-tmux-provider' } as const;
+    const binding = router.createBinding(address, '/tmp/stop-kimi-tmux-provider');
+    const target = kimiTmuxSessionName(binding.bridgeSessionId);
+    store.updateSession(binding.bridgeSessionId, {
+      runtime: {
+        activeRuntime: 'kimi',
+        kimi: {
+          sessionId: 'session_stop_kimi_tui',
+          cwd: '/tmp/stop-kimi-tmux-provider',
+          provider: 'tmux',
+        },
+        general: { workingDirectory: '/tmp/stop-kimi-tmux-provider' },
+      },
+      mirror_status: 'watching',
+      runtime_status: 'running',
+      health_status: 'running_active',
+    });
+
+    try {
+      await handleBridgeCommand(
+        adapter,
+        {
+          address,
+          text: '/stop',
+          messageId: 'incoming-stop-kimi-tmux-provider',
+        } as any,
+        '/stop',
+        {
+          getActiveTask: () => undefined,
+          forceStopSession: async (sessionId, detail) => {
+            forcedStops.push({ sessionId, detail });
+            return false;
+          },
+          diagnoseSessionHealth: async () => null,
+          diagnoseAllActiveSessions: async () => [],
+        },
+      );
+
+      const log = fs.readFileSync(fakeTmux.logPath, 'utf-8');
+      assert.match(log, new RegExp(`send-keys -t ${target} C-c`));
+      assert.deepEqual(forcedStops, []);
+      assert.match(sent[0] || '', /已发送停止按键/);
+      assert.match(sent[0] || '', new RegExp(`tmux send-keys -t ${target} C-c`));
     } finally {
       process.env.PATH = oldPath;
       if (oldFakeLog === undefined) {
@@ -7132,6 +9263,32 @@ enabled = true
         'provider auto-forward should inspect readiness before sending literal input',
       );
 
+      store.updateSession(binding.bridgeSessionId, {
+        runtime: {
+          activeRuntime: 'kimi',
+          kimi: {
+            sessionId: 'session_55555555-5555-4555-8555-555555555555',
+            cwd: '/tmp/kimi-tmux-steer',
+          },
+        },
+      });
+      const beforeKimiSteerLog = fs.readFileSync(fakeTmux.logPath, 'utf-8');
+      await handleBridgeCommand(
+        adapter,
+        {
+          address,
+          text: '/tmux kimi steer',
+          messageId: 'incoming-tmux-kimi-steer',
+        } as any,
+        '/tmux kimi steer',
+        deps,
+      );
+      const kimiSteerLogDelta = fs.readFileSync(fakeTmux.logPath, 'utf-8').slice(beforeKimiSteerLog.length);
+      assert.match(kimiSteerLogDelta, /send-keys -t alpha -l '?kimi steer'?/);
+      assert.match(kimiSteerLogDelta, /send-keys -t alpha Enter/);
+      assert.match(kimiSteerLogDelta, /send-keys -t alpha C-s/);
+      store.updateSession(binding.bridgeSessionId, { runtime: { activeRuntime: 'codex' } });
+
       await handleBridgeCommand(
         adapter,
         {
@@ -7551,7 +9708,12 @@ enabled = true
       );
       const binding = store.getChannelChat(address.channelType, address.chatId);
       assert.ok(binding);
-      store.updateSession(binding.bridgeSessionId, { runtime_status: 'running' });
+      transitionRuntimeTmuxInputState(
+        'codex',
+        'alpha',
+        'running',
+        'test fixture has an established provider-owned tmux session',
+      );
 
       const beforeProviderForwardSent = sent.length;
       const beforeProviderForwardLog = fs.readFileSync(fakeTmux.logPath, 'utf-8');
@@ -7577,6 +9739,151 @@ enabled = true
       if (oldFakeLog === undefined) delete process.env.TMUX_FAKE_LOG;
       else process.env.TMUX_FAKE_LOG = oldFakeLog;
       fs.rmSync(fakeTmux.binDir, { recursive: true, force: true });
+    }
+  });
+
+  it('attributes a direct Codex TUI error only from a checkpoint completed before that turn', async () => {
+    const store = initTestContext();
+    const fakeTmux = installFakeTmux();
+    const oldEnv = captureProcessEnv(['PATH', 'TMUX_FAKE_LOG', 'TMUX_FAKE_CAPTURE_TEXT']);
+    process.env.PATH = `${fakeTmux.binDir}${path.delimiter}${oldEnv.PATH || ''}`;
+    process.env.TMUX_FAKE_LOG = fakeTmux.logPath;
+    process.env.TMUX_FAKE_CAPTURE_TEXT = '■ historical error\n\nOpenAI Codex\n› \n';
+    const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-codex-error-checkpoint-'));
+
+    try {
+      const address = { channelType: 'feishu', chatId: 'chat-codex-error-checkpoint' } as const;
+      const binding = router.createBinding(address, workDir);
+      const threadId = '019e824e-10ef-7430-985d-4349ce6a15f9';
+      store.updateSessionCodexThreadId(binding.bridgeSessionId, threadId);
+      store.updateSession(binding.bridgeSessionId, {
+        runtime: { general: { tmuxSessionName: 'alpha' } },
+      });
+      createConfigService({ migrate: false, env: {} }).set(
+        { kind: 'session', sessionId: binding.bridgeSessionId },
+        { runtime: { codex: { provider: 'tmux' } } },
+      );
+
+      const filePath = path.join(workDir, 'rollout.jsonl');
+      fs.writeFileSync(filePath, '{"type":"event_msg","payload":{"type":"task_complete"}}\n');
+      const subscription = createMirrorSubscription({
+        bindingId: binding.id,
+        sessionId: binding.bridgeSessionId,
+        channelType: address.channelType,
+        chatId: address.chatId,
+        threadId,
+        filePath,
+        lastDeliveredAt: null,
+      });
+      subscription.fileSize = fs.statSync(filePath).size;
+
+      await bridgeManagerTestOnly.captureCodexTuiIdleScreenCheckpoint(subscription);
+      const turnState = createMirrorTurnState(
+        binding.bridgeSessionId,
+        new Date(Date.now() + 10).toISOString(),
+        'direct-tui-error-turn',
+      );
+      bridgeManagerTestOnly.assignCodexTuiTurnScreenBaseline(subscription, turnState);
+      process.env.TMUX_FAKE_CAPTURE_TEXT = [
+        '■ historical error',
+        '',
+        '› trigger a direct error',
+        '■ {"error":{"type":"invalid_request_error","message":"CODELARK_MOCK_FATAL"}}',
+        '',
+      ].join('\n');
+
+      const turn: FinalizedBridgeMirrorTurn = {
+        streamKey: turnState.streamKey,
+        userText: 'trigger a direct error',
+        text: '',
+        signature: 'direct-error-complete',
+        timestamp: new Date().toISOString(),
+        startedAt: turnState.startedAt,
+        status: 'completed' as const,
+      };
+      const status = await bridgeManagerTestOnly.resolveCodexTuiFinalizedTurnStatus(
+        subscription,
+        turn,
+        { batchSize: 1 },
+      );
+
+      assert.equal(status, 'error');
+      assert.match(turn.errorText || '', /CODELARK_MOCK_FATAL/);
+
+      const overlappingTurnState = createMirrorTurnState(
+        binding.bridgeSessionId,
+        new Date(Date.now() - 1_000).toISOString(),
+        'overlapping-checkpoint-turn',
+      );
+      bridgeManagerTestOnly.assignCodexTuiTurnScreenBaseline(subscription, overlappingTurnState);
+      process.env.TMUX_FAKE_CAPTURE_TEXT += '■ must not be attributed from an overlapping checkpoint\n';
+      const overlappingTurn: FinalizedBridgeMirrorTurn = {
+        streamKey: overlappingTurnState.streamKey,
+        userText: 'overlap',
+        text: '',
+        signature: 'overlap-complete',
+        timestamp: new Date().toISOString(),
+        startedAt: overlappingTurnState.startedAt,
+        status: 'completed',
+      };
+      assert.equal(await bridgeManagerTestOnly.resolveCodexTuiFinalizedTurnStatus(
+        subscription,
+        overlappingTurn,
+        { batchSize: 1 },
+      ), 'completed');
+      assert.equal(overlappingTurn.errorText, undefined);
+
+      const batchedTurnState = createMirrorTurnState(
+        binding.bridgeSessionId,
+        new Date(Date.now() + 10).toISOString(),
+        'batched-turn',
+      );
+      bridgeManagerTestOnly.assignCodexTuiTurnScreenBaseline(subscription, batchedTurnState);
+      process.env.TMUX_FAKE_CAPTURE_TEXT += '■ ambiguous batched error\n';
+      const batchedTurn: FinalizedBridgeMirrorTurn = {
+        streamKey: batchedTurnState.streamKey,
+        userText: 'batched',
+        text: '',
+        signature: 'batched-complete',
+        timestamp: new Date().toISOString(),
+        startedAt: batchedTurnState.startedAt,
+        status: 'completed',
+      };
+      assert.equal(await bridgeManagerTestOnly.resolveCodexTuiFinalizedTurnStatus(
+        subscription,
+        batchedTurn,
+        { batchSize: 2 },
+      ), 'completed');
+      assert.equal(batchedTurn.errorText, undefined);
+
+      const changedFileTurnState = createMirrorTurnState(
+        binding.bridgeSessionId,
+        new Date(Date.now() + 10).toISOString(),
+        'changed-file-turn',
+      );
+      bridgeManagerTestOnly.assignCodexTuiTurnScreenBaseline(subscription, changedFileTurnState);
+      process.env.TMUX_FAKE_CAPTURE_TEXT += '■ error after a later rollout event\n';
+      fs.appendFileSync(filePath, '{"type":"event_msg","payload":{"type":"task_started"}}\n');
+      const changedFileTurn: FinalizedBridgeMirrorTurn = {
+        streamKey: changedFileTurnState.streamKey,
+        userText: 'changed file',
+        text: '',
+        signature: 'changed-file-complete',
+        timestamp: new Date().toISOString(),
+        startedAt: changedFileTurnState.startedAt,
+        status: 'completed',
+      };
+      assert.equal(await bridgeManagerTestOnly.resolveCodexTuiFinalizedTurnStatus(
+        subscription,
+        changedFileTurn,
+        { batchSize: 1 },
+      ), 'completed');
+      assert.equal(changedFileTurn.errorText, undefined);
+    } finally {
+      bridgeManagerTestOnly.resetStateForTests();
+      restoreProcessEnv(oldEnv);
+      fs.rmSync(fakeTmux.binDir, { recursive: true, force: true });
+      fs.rmSync(workDir, { recursive: true, force: true });
     }
   });
 
@@ -8067,7 +10374,7 @@ enabled = true
       });
 
       const permissionRequestId = `codex-selection:update:provider-auto-forward-startup:${binding.bridgeSessionId}:orphan`;
-      await forwardPermissionRequest(
+      forwardPermissionRequest(
         adapter,
         address,
         permissionRequestId,
@@ -8101,6 +10408,7 @@ enabled = true
           ],
         }],
       );
+      await _testOnlyWaitForDeliveryQueuesForTests(adapter);
 
       const selectionMessage = sent.find((message) => message.richCard?.title === 'Codex TUI Selection');
       const callbackData = selectionMessage?.richCard?.selects?.[0]?.options?.find(
@@ -8438,7 +10746,7 @@ enabled = true
     }
   });
 
-  it('auto-forwards into an existing Codex tmux provider screen that is working but already has an input line', async () => {
+  it('probes a cold existing Codex tmux once, then forwards subsequent input without another prompt capture', async () => {
     const settings = makeSettings();
     const store = new JsonFileStore(settings, { dynamicSettings: true });
     initBridgeContext({
@@ -8515,6 +10823,25 @@ enabled = true
       assert.ok(captureIndex > hasSessionIndex, 'readiness should inspect the existing Codex screen');
       assert.ok(literalIndex > captureIndex, 'follow-up input should be forwarded after the working screen is accepted as ready');
       assert.doesNotMatch(log, new RegExp(`send-keys -t ${tmuxSession} Down`));
+
+      await handleBridgeCommand(
+        adapter,
+        {
+          address,
+          text: '/tmux second follow up',
+          messageId: 'incoming-tmux-working-ready-second',
+        } as any,
+        '/tmux second follow up',
+        deps,
+      );
+
+      const secondLog = fs.readFileSync(fakeTmux.logPath, 'utf-8');
+      assert.equal(
+        (secondLog.match(new RegExp(`capture-pane -t ${tmuxSession} -p -S -80`, 'g')) || []).length,
+        1,
+        'running state should skip cursor/prompt readiness capture on subsequent input',
+      );
+      assert.match(secondLog, new RegExp(`send-keys -t ${tmuxSession} -l second follow up`));
     } finally {
       restoreProcessEnv(oldEnv);
       fs.rmSync(fakeTmux.binDir, { recursive: true, force: true });

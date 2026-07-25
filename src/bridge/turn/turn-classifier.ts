@@ -25,13 +25,14 @@ export function classifyInteractiveTurn(
   codexThreadLookup?: CodexThreadLookup,
 ): BridgeTurnClassification {
   const sessionId = session?.id || binding.bridgeSessionId;
-  if (getSessionActiveRuntime(session) === 'claude') {
+  const activeRuntime = getSessionActiveRuntime(session);
+  if (activeRuntime === 'claude' || activeRuntime === 'kimi') {
     return {
       kind: 'im_sdk',
       sessionId,
       codexThreadId: undefined,
       codexThreadAvailable: false,
-      reason: 'runtime_claude',
+      reason: activeRuntime === 'kimi' ? 'runtime_kimi' : 'runtime_claude',
     };
   }
   const codexThreadId = getCodexThreadId(session, binding);

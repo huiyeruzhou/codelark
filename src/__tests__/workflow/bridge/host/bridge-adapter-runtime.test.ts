@@ -38,7 +38,6 @@ describe('bridge-adapter-runtime', () => {
         await fn();
       },
       isCommandMessage: (msg) => msg.text === '/status',
-      isNumericPermissionShortcut: () => false,
       resolveSessionIdForMessage: (msg) => `session:${msg.address.chatId}`,
     });
 
@@ -146,7 +145,6 @@ describe('bridge-adapter-runtime', () => {
         await fn();
       },
       isCommandMessage: (msg) => msg.text === '/status',
-      isNumericPermissionShortcut: () => false,
       resolveSessionIdForMessage: (msg) => `session:${msg.address.chatId}`,
       shouldBypassSessionLock: (msg) => {
         if (msg.text === 'append while running') {
@@ -221,7 +219,6 @@ describe('bridge-adapter-runtime', () => {
       },
       processWithSessionLock: async (_sessionId, fn) => { await fn(); },
       isCommandMessage: (msg) => msg.text.startsWith('/'),
-      isNumericPermissionShortcut: () => false,
       resolveSessionIdForMessage: (msg) => `session:${msg.address.chatId}`,
     });
 
@@ -282,7 +279,6 @@ describe('bridge-adapter-runtime', () => {
       },
       processWithSessionLock: async (_sessionId, fn) => { await fn(); },
       isCommandMessage: (msg) => msg.text.startsWith('/'),
-      isNumericPermissionShortcut: () => false,
       resolveSessionIdForMessage: (msg) => `session:${msg.address.chatId}`,
     });
 
@@ -344,7 +340,6 @@ describe('bridge-adapter-runtime', () => {
       },
       processWithSessionLock: async (_sessionId, fn) => { await fn(); },
       isCommandMessage: (msg) => msg.text.startsWith('/'),
-      isNumericPermissionShortcut: () => false,
       resolveSessionIdForMessage: (msg) => `session:${msg.address.chatId}`,
       getImmediateLane: (msg) => (msg.text === '/stop'
         ? {
@@ -412,7 +407,6 @@ describe('bridge-adapter-runtime', () => {
       },
       processWithSessionLock: async (_sessionId, fn) => { await fn(); },
       isCommandMessage: (msg) => msg.text.startsWith('/'),
-      isNumericPermissionShortcut: () => false,
       resolveSessionIdForMessage: (msg) => `session:${msg.address.chatId}`,
       getImmediateLane: (msg) => (msg.text.startsWith('/shell')
         ? {
@@ -480,7 +474,6 @@ describe('bridge-adapter-runtime', () => {
       },
       processWithSessionLock: async (_sessionId, fn) => { await fn(); },
       isCommandMessage: (msg) => msg.text.startsWith('/'),
-      isNumericPermissionShortcut: () => false,
       resolveSessionIdForMessage: () => 'bridge-session-a',
       getImmediateLane: (msg) => {
         if (msg.text === '/stop') {
@@ -581,7 +574,6 @@ describe('bridge-adapter-runtime', () => {
       },
       processWithSessionLock: async (_sessionId, fn) => { await fn(); },
       isCommandMessage: (msg) => msg.text.startsWith('/'),
-      isNumericPermissionShortcut: () => false,
       resolveSessionIdForMessage: () => 'bridge-session-a',
       getImmediateLane: (msg) => {
         if (msg.text.startsWith('/tmux-screen')) {
@@ -702,7 +694,6 @@ describe('bridge-adapter-runtime', () => {
       },
       processWithSessionLock: async (_sessionId, fn) => { await fn(); },
       isCommandMessage: (msg) => msg.text.startsWith('/'),
-      isNumericPermissionShortcut: () => false,
       resolveSessionIdForMessage: () => 'bridge-session-a',
       getImmediateLane: (msg) => (msg.text.startsWith('/tmux-screen')
         ? {
@@ -765,6 +756,75 @@ describe('bridge-adapter-runtime', () => {
     releaseScreen();
   });
 
+  it('does not let a pending non-blocking command callback job block the next message', async () => {
+    const state = {
+      adapters: new Map(),
+      adapterMeta: new Map(),
+      invalidAdapters: new Map(),
+      loopAborts: new Map(),
+      running: true,
+    };
+    const started: string[] = [];
+    let releaseCallback!: () => void;
+    const callbackDone = new Promise<void>((resolve) => {
+      releaseCallback = resolve;
+    });
+
+    const runtime = createAdapterRuntime(() => state, {
+      notifyAdapterSetChanged: () => {},
+      handleMessage: async (_adapter, msg) => {
+        started.push(msg.messageId);
+        if (msg.messageId === 'msg-new-callback') await callbackDone;
+      },
+      processWithSessionLock: async (_sessionId, fn) => { await fn(); },
+      isCommandMessage: (msg) => msg.text.startsWith('/'),
+      resolveSessionIdForMessage: () => 'bridge-session-a',
+      getImmediateLane: (msg, category) => (
+        category === 'callback' && msg.callbackData === 'new-session-callback'
+          ? {
+              laneKey: `job:new:${msg.address.channelType}:${msg.address.chatId}:${msg.messageId}`,
+              laneKind: 'job',
+              jobKind: 'command:new',
+              waitForConversationBarrier: true,
+              blocksConversation: false,
+            }
+          : null
+      ),
+    });
+
+    let running = true;
+    const messages = [
+      {
+        messageId: 'msg-new-callback',
+        address: { channelType: 'feishu-default', chatId: 'chat-a' },
+        text: '',
+        callbackData: 'new-session-callback',
+        timestamp: Date.now(),
+      },
+      {
+        messageId: 'msg-regular-after-new',
+        address: { channelType: 'feishu-default', chatId: 'chat-a' },
+        text: 'continue while createGroupChat is pending',
+        timestamp: Date.now(),
+      },
+    ];
+    const adapter = {
+      channelType: 'feishu-default',
+      provider: 'feishu',
+      isRunning: () => running || messages.length > 0,
+      consumeOne: async () => {
+        const next = messages.shift() || null;
+        if (messages.length === 0) running = false;
+        return next;
+      },
+    };
+
+    runtime.runAdapterLoop(adapter as never);
+    await waitForCondition(() => started.includes('msg-regular-after-new'));
+    assert.deepEqual(started, ['msg-new-callback', 'msg-regular-after-new']);
+    releaseCallback();
+  });
+
   it('waits for prior same-chat command jobs before running a conversation barrier', async () => {
     const state = {
       adapters: new Map(),
@@ -789,7 +849,6 @@ describe('bridge-adapter-runtime', () => {
       },
       processWithSessionLock: async (_sessionId, fn) => { await fn(); },
       isCommandMessage: (msg) => msg.text.startsWith('/'),
-      isNumericPermissionShortcut: () => false,
       resolveSessionIdForMessage: () => 'bridge-session-a',
       getImmediateLane: (msg) => (msg.text.startsWith('/shell')
         ? {
@@ -872,7 +931,6 @@ describe('bridge-adapter-runtime', () => {
         return current;
       },
       isCommandMessage: (msg) => msg.text.startsWith('/'),
-      isNumericPermissionShortcut: () => false,
       resolveSessionIdForMessage: () => 'bridge-session-a',
       getSessionLane: (msg) => (msg.text.startsWith('/provider')
         ? { sessionId: 'bridge-session-a', jobKind: 'command:provider' }
@@ -944,7 +1002,6 @@ describe('bridge-adapter-runtime', () => {
         return current;
       },
       isCommandMessage: (msg) => msg.text.startsWith('/'),
-      isNumericPermissionShortcut: () => false,
       resolveSessionIdForMessage: () => 'bridge-session-a',
       getSessionLane: (msg, category) => (category === 'callback' && msg.callbackData === 'session-config-callback'
         ? { sessionId: 'bridge-session-a', jobKind: 'command:current-config' }
@@ -1015,7 +1072,6 @@ describe('bridge-adapter-runtime', () => {
         await fn();
       },
       isCommandMessage: (msg) => msg.text.startsWith('/'),
-      isNumericPermissionShortcut: () => false,
       resolveSessionIdForMessage: (msg) => `session:${msg.address.chatId}`,
     });
 
@@ -1086,7 +1142,6 @@ describe('bridge-adapter-runtime', () => {
         },
         processWithSessionLock: async (_sessionId, fn) => { await fn(); },
         isCommandMessage: (msg) => msg.text.startsWith('/'),
-        isNumericPermissionShortcut: () => false,
         resolveSessionIdForMessage: (msg) => `session:${msg.address.chatId}`,
         getSessionLane: (msg) => (msg.messageId === 'msg-slow'
           ? { sessionId: 'bridge-session-a', jobKind: 'command:runtime', blocksConversation: true }
@@ -1226,7 +1281,6 @@ describe('bridge-adapter-runtime', () => {
           await fn();
         },
         isCommandMessage: (msg) => msg.text.startsWith('/'),
-        isNumericPermissionShortcut: () => false,
         resolveSessionIdForMessage: () => 'bridge-session-a',
       });
 

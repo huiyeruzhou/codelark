@@ -20,9 +20,7 @@ import { appendContextUsageCompactText } from '../../../shared/progress/context-
 import {
   buildStreamRuntimeStatus,
   formatStreamRuntimeStatus,
-  getStreamLastContentResponseAgeMs,
-  getVisibleStreamLastContentResponseAgeMs,
-  shouldShowStreamLastContentResponseAge,
+  getVisibleStreamLastActivityAgeMs,
   type StreamState,
   type StreamStatusTimingConfig,
 } from '../stream-state.js';
@@ -81,7 +79,7 @@ export interface InteractiveStreamUiController {
   readonly hasStreamingCards: boolean;
   readonly supportsStructuredStreamUi: boolean;
   pushMetadata(metadata: StructuredStreamingUiMetadata): void;
-  pushRunningStatus(lastResponseAgeMs?: number | null): void;
+  pushRunningStatus(lastActivityAgeMs?: number | null): void;
   syncSnapshot(): void;
   startStatusHeartbeat(): void;
   stopStatusUpdates(): void;
@@ -94,8 +92,9 @@ function buildStopActions(
   callbackData: string,
   terminal?: InteractiveStreamUiTerminalStatus,
 ): StructuredStreamingUiActionButton[][] {
+  if (terminal === 'completed') return [];
   return [[{
-    text: terminal === 'completed' ? '已完成' : terminal === 'interrupted' ? '已停止' : terminal ? '已结束' : '停止',
+    text: terminal === 'interrupted' ? '已停止' : terminal ? '已结束' : '停止',
     callbackData,
     type: terminal ? 'default' : 'danger',
     disabled: Boolean(terminal),
@@ -199,26 +198,28 @@ export function createInteractiveStreamUiController(
     params.recordSnapshot?.(params.sessionId, snapshot);
   };
 
-  const getVisibleLastResponseAgeMs = () => getVisibleStreamLastContentResponseAgeMs(
+  const getVisibleLastActivityAgeMs = (nowMs: number) => getVisibleStreamLastActivityAgeMs(
     params.streamState,
-    params.nowMs(),
+    nowMs,
     params.statusTiming,
   );
 
-  const pushRunningStatus = (lastResponseAgeMs?: number | null) => {
+  const pushRunningStatus = (lastActivityAgeMs?: number | null) => {
     if (!supportsStructuredStreamUi || streamStatusUpdatesClosed) return;
     const nowMs = params.nowMs();
-    const effectiveLastResponseAgeMs = lastResponseAgeMs === undefined
-      ? getVisibleLastResponseAgeMs()
-      : lastResponseAgeMs;
+    const effectiveLastActivityAgeMs = lastActivityAgeMs === undefined
+      ? getVisibleLastActivityAgeMs(nowMs)
+      : lastActivityAgeMs;
     feedback.pushStatus(
-      effectiveLastResponseAgeMs == null
+      effectiveLastActivityAgeMs == null
         ? buildStreamRuntimeStatus(params.streamState, nowMs)
         : formatStreamRuntimeStatus(
             Math.max(0, nowMs - params.streamState.startedAtMs),
-            effectiveLastResponseAgeMs,
+            effectiveLastActivityAgeMs,
             params.streamState.statusNote,
             params.streamState.contextUsage,
+            params.streamState.thinkingNote,
+            nowMs,
           ),
     );
     syncSnapshot();
@@ -246,7 +247,7 @@ export function createInteractiveStreamUiController(
       if (params.stopCallbackData) {
         feedback.pushActions(buildStopActions(params.stopCallbackData));
       }
-      pushRunningStatus(null);
+      pushRunningStatus();
       streamStatusHeartbeat = params.setIntervalFn(() => {
         if (streamStatusUpdatesClosed) {
           clearStatusHeartbeat();
@@ -256,16 +257,7 @@ export function createInteractiveStreamUiController(
           clearStatusHeartbeat();
           return;
         }
-        const nowMs = params.nowMs();
-        const lastResponseAgeMs = shouldShowStreamLastContentResponseAge(
-          params.streamState,
-          nowMs,
-          params.statusTiming,
-        )
-          ? getStreamLastContentResponseAgeMs(params.streamState, nowMs)
-          : null;
-        pushRunningStatus(lastResponseAgeMs);
-        syncSnapshot();
+        pushRunningStatus();
       }, params.statusTiming.heartbeatMs);
     },
     stopStatusUpdates,

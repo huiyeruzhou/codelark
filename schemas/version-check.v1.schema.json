@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://codelark.local/schemas/version-check.v1.schema.json",
+  "title": "CodeLark version-check.json",
+  "description": "Daily npm version check state. This file is cached in memory for the lifetime of the bridge process.",
+  "type": "object",
+  "required": ["latestVersion", "ignoredUntilVersion", "lastCheckedDate"],
+  "properties": {
+    "latestVersion": {
+      "type": ["string", "null"],
+      "pattern": "^\\d+\\.\\d+\\.\\d+(?:-[0-9A-Za-z.-]+)?(?:\\+[0-9A-Za-z.-]+)?$"
+    },
+    "ignoredUntilVersion": {
+      "type": ["string", "null"],
+      "pattern": "^\\d+\\.\\d+\\.\\d+(?:-[0-9A-Za-z.-]+)?(?:\\+[0-9A-Za-z.-]+)?$"
+    },
+    "lastCheckedDate": {
+      "type": ["string", "null"],
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+    }
+  },
+  "additionalProperties": false
+}

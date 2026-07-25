@@ -11,9 +11,10 @@ import {
 // v1 -> v2 迁移：读取 config.json/config.env 和旧 sessions.json 中的配置覆盖，写入统一 TOML。
 // 这里是旧字段语义的集中解释点，避免 legacy 回退逻辑泄漏到运行时模块。
 
-type LegacyRuntimeProvider = 'codex' | 'claude';
+type LegacyRuntimeProvider = 'codex' | 'claude' | 'kimi';
 type LegacyCodexProvider = 'sdk' | 'tmux' | 'pty';
 type LegacyClaudeProvider = 'sdk' | 'pty' | 'tmux';
+type LegacyKimiProvider = 'tmux';
 type LegacyClaudeExecutable = 'claude' | 'ccr';
 type LegacyFeishuSite = 'feishu' | 'lark';
 type LegacyReasoningEffort = 'minimal' | 'low' | 'medium' | 'high' | 'xhigh';
@@ -42,6 +43,11 @@ interface LegacyConfigFile {
       yoloMode?: unknown;
       reasoningEffort?: unknown;
       idleTimeoutMinutes?: unknown;
+    };
+    kimi?: {
+      provider?: unknown;
+      defaultModel?: unknown;
+      model?: unknown;
     };
     bridgeControl?: {
       defaultCodexProvider?: unknown;
@@ -105,7 +111,7 @@ function csvValue(value: unknown): string[] | undefined {
 }
 
 function runtimeProvider(value: unknown): LegacyRuntimeProvider | undefined {
-  return value === 'claude' ? 'claude' : value === 'codex' ? 'codex' : undefined;
+  return value === 'claude' ? 'claude' : value === 'kimi' ? 'kimi' : value === 'codex' ? 'codex' : undefined;
 }
 
 function codexProvider(value: unknown): LegacyCodexProvider | undefined {
@@ -114,6 +120,10 @@ function codexProvider(value: unknown): LegacyCodexProvider | undefined {
 
 function claudeProvider(value: unknown): LegacyClaudeProvider | undefined {
   return value === 'sdk' || value === 'pty' || value === 'tmux' ? value : undefined;
+}
+
+function kimiProvider(value: unknown): LegacyKimiProvider | undefined {
+  return value === 'tmux' ? value : undefined;
 }
 
 function claudeExecutable(value: unknown): LegacyClaudeExecutable | undefined {
@@ -163,6 +173,7 @@ function patchFromLegacyConfig(config: LegacyConfigFile, warnings: string[]): Co
   const runtime = config.runtime || {};
   const codex = runtime.codex || {};
   const claude = runtime.claude || {};
+  const kimi = runtime.kimi || {};
   const bridge = runtime.bridge || {};
   const bridgeControl = runtime.bridgeControl || {};
   const patch: ConfigPatch = { schemaVersion: 2 };
@@ -200,11 +211,18 @@ function patchFromLegacyConfig(config: LegacyConfigFile, warnings: string[]): Co
   const idleTimeoutMinutes = nonNegativeIntValue(claude.idleTimeoutMinutes);
   if (idleTimeoutMinutes !== undefined) claudePatch.idleTimeoutMinutes = idleTimeoutMinutes;
 
-  if (Object.keys(codexPatch).length > 0 || Object.keys(claudePatch).length > 0) {
+  const kimiPatch: NonNullable<NonNullable<ConfigPatch['runtime']>['kimi']> = {};
+  const kimiModel = stringValue(kimi.model) ?? stringValue(kimi.defaultModel);
+  if (kimiModel !== undefined) kimiPatch.model = kimiModel;
+  const legacyKimiProvider = kimiProvider(kimi.provider);
+  if (legacyKimiProvider !== undefined) kimiPatch.provider = legacyKimiProvider;
+
+  if (Object.keys(codexPatch).length > 0 || Object.keys(claudePatch).length > 0 || Object.keys(kimiPatch).length > 0) {
     patch.runtime = {
       ...(patch.runtime || {}),
       ...(Object.keys(codexPatch).length > 0 ? { codex: codexPatch } : {}),
       ...(Object.keys(claudePatch).length > 0 ? { claude: claudePatch } : {}),
+      ...(Object.keys(kimiPatch).length > 0 ? { kimi: kimiPatch } : {}),
     };
   }
 
@@ -244,8 +262,8 @@ function patchFromLegacyConfig(config: LegacyConfigFile, warnings: string[]): Co
       enabled: boolValue(channel.enabled) ?? false,
       config: {
         historyMessageLimit: 8,
-        streamStatusIdleStartSeconds: 180,
-        streamStatusCheckIntervalSeconds: 10,
+        streamStatusIdleStartSeconds: 0,
+        streamStatusCheckIntervalSeconds: 5,
         appId: '',
         appSecret: '',
         site: 'feishu',
@@ -261,7 +279,7 @@ function patchFromLegacyConfig(config: LegacyConfigFile, warnings: string[]): Co
   if (channels.length > 0) patch.channels = channels;
 
   const historyMessageLimit = positiveIntValue(bridge.historyMessageLimit);
-  const streamStatusIdleStartSeconds = positiveIntValue(bridge.streamStatusIdleStartSeconds);
+  const streamStatusIdleStartSeconds = nonNegativeIntValue(bridge.streamStatusIdleStartSeconds);
   const streamStatusCheckIntervalSeconds = positiveIntValue(bridge.streamStatusCheckIntervalSeconds);
   if (historyMessageLimit !== undefined || streamStatusIdleStartSeconds !== undefined || streamStatusCheckIntervalSeconds !== undefined) {
     patch.channels ??= [{ id: 'feishu-default', provider: 'feishu' }];
@@ -307,6 +325,10 @@ function patchFromLegacyEnv(env: Map<string, string>, warnings: string[]): Confi
         yoloMode: env.get('CODELARK_CLAUDE_YOLO_MODE'),
         reasoningEffort: env.get('CODELARK_CLAUDE_REASONING_EFFORT'),
         idleTimeoutMinutes: env.get('CODELARK_CLAUDE_IDLE_TIMEOUT_MINUTES'),
+      },
+      kimi: {
+        provider: env.get('CODELARK_KIMI_PROVIDER'),
+        defaultModel: env.get('CODELARK_KIMI_MODEL') ?? env.get('CODELARK_KIMI_DEFAULT_MODEL'),
       },
     },
     channels: [{

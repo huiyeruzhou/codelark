@@ -18,10 +18,17 @@ import {
 } from '../options.js';
 import {
   buildShellSnapshotLaunchCommand,
+  buildShellSnapshotLaunchArgs,
   ensureShellSnapshot,
+  quoteCommandLineArg,
 } from './shell-snapshot.js';
 import { resolveCodexCliExecutable } from './cli-executable.js';
+import { readPathEnv, writeCanonicalPathEnv } from '../path-env.js';
 import { tmuxCore, type TmuxCore, type TmuxSendAction } from '../../bridge/tmux/core.js';
+import {
+  sendRuntimeTmuxInput,
+  transitionRuntimeTmuxInputState,
+} from '../../bridge/tmux/input-state-machine.js';
 import {
   hasTuiEnterActionFooter,
   normalizeTerminalScreenText,
@@ -628,7 +635,7 @@ export function buildCodexTuiEnv(sourceEnv: NodeJS.ProcessEnv = process.env): Re
   for (const [key, value] of Object.entries(sourceEnv)) {
     if (value !== undefined) env[key] = value;
   }
-  env.PATH = prependLarkCliRuntimeBin(env.PATH);
+  writeCanonicalPathEnv(env, prependLarkCliRuntimeBin(readPathEnv(env)));
   return env;
 }
 
@@ -639,9 +646,27 @@ function prependLarkCliRuntimeBin(pathValue: string | undefined): string {
   return [binDir, ...withoutBin].join(path.delimiter);
 }
 
-export function buildCodexTuiShellCommand(command: string, args: string[], env: Record<string, string>): string {
+export function buildCodexTuiShellCommand(
+  command: string,
+  args: string[],
+  env: Record<string, string>,
+  options: { stderrLogPath?: string } = {},
+): string {
   const snapshot = ensureShellSnapshot(env);
-  return buildShellSnapshotLaunchCommand(command, args, snapshot);
+  return buildShellSnapshotLaunchCommand(command, args, snapshot, options);
+}
+
+export function buildCodexTuiTmuxCommand(
+  command: string,
+  args: string[],
+  env: Record<string, string>,
+  options: { stderrLogPath?: string } = {},
+): string | string[] {
+  const snapshot = ensureShellSnapshot(env);
+  const launchArgs = buildShellSnapshotLaunchArgs(command, args, snapshot, options);
+  return process.platform === 'win32'
+    ? launchArgs
+    : launchArgs.map((value) => quoteCommandLineArg(value)).join(' ');
 }
 
 function toApprovalPolicy(permissionMode?: string): string {
@@ -1004,7 +1029,7 @@ async function launchTmuxCodexSession(
   const env = buildCodexTuiEnv();
   const codexArgs = buildCodexTuiArgs(params, imagePaths);
   const executable = resolveCodexCliExecutable({ env });
-  const command = buildCodexTuiShellCommand(executable, codexArgs, env);
+  const command = buildCodexTuiTmuxCommand(executable, codexArgs, env);
 
   console.log('[codex-tmux] Codex TUI start:', {
     bridge_session_id: params.sessionId,
@@ -1015,6 +1040,12 @@ async function launchTmuxCodexSession(
     resume_thread_id: params.codexThreadId || null,
     debug_keep_tmux: isDebugTmuxKeepAlive(),
   });
+  transitionRuntimeTmuxInputState(
+    'codex',
+    sessionName,
+    'starting_tmux',
+    'starting or replacing the turn-owned Codex tmux session',
+  );
 
   await tmuxCore.ensureDetachedSession({
     name: sessionName,
@@ -1057,6 +1088,12 @@ async function prepareCodexTmuxUpdatePrompt(params: {
   const prompt = parseCodexTuiUpdatePrompt(params.screen);
   if (!prompt) return false;
 
+  transitionRuntimeTmuxInputState(
+    'codex',
+    params.sessionName,
+    'waiting_selection',
+    'Codex startup update selection requires a user decision',
+  );
   console.log('[codex-tmux] Codex TUI update prompt detected; waiting for user confirmation');
   const choice = await requestCodexTuiUpdateConfirmation({
     controller: params.controller,
@@ -1227,6 +1264,12 @@ export async function pollCodexTuiSessionFile(
     if (stableSelectionPrompt) {
       selectionPromptMonitor.pending = true;
       try {
+        transitionRuntimeTmuxInputState(
+          'codex',
+          context.sessionName,
+          'waiting_selection',
+          'Codex runtime selection requires a user decision',
+        );
         console.log('[codex-tmux] Stable Codex TUI selection prompt detected during polling; waiting for user selection', {
           prompt_kind: stableSelectionPrompt.kind,
         });
@@ -1239,6 +1282,12 @@ export async function pollCodexTuiSessionFile(
           prompt: stableSelectionPrompt,
           screenCommand: '/tmux-screen 80',
         });
+        transitionRuntimeTmuxInputState(
+          'codex',
+          context.sessionName,
+          'running',
+          'Codex runtime selection was resolved',
+        );
       } finally {
         markCodexTuiSelectionPromptActionSent(selectionPromptMonitor);
       }
@@ -1303,6 +1352,12 @@ export function streamCodexTmuxTui(params: StreamChatParams, pendingPerms?: Pend
             break;
           }
           if (hasCodexTuiTrustPrompt(screen.screen)) {
+            transitionRuntimeTmuxInputState(
+              'codex',
+              sessionName,
+              'waiting_selection',
+              'Codex workspace trust requires user confirmation',
+            );
             console.log('[codex-tmux] Codex TUI trust prompt detected; waiting for user confirmation before prompt injection');
             await requestCodexTuiTrustConfirmation({
               controller,
@@ -1322,7 +1377,17 @@ export function streamCodexTmuxTui(params: StreamChatParams, pendingPerms?: Pend
             if (afterTrustDelayMs > 0) await sleep(afterTrustDelayMs);
           }
           controller.enqueue(sseEvent('status', { reasoning: '正在把本次消息发送到 Codex tmux。' }));
-          await injectPromptIntoTmuxPane(targetPane, params.prompt);
+          transitionRuntimeTmuxInputState(
+            'codex',
+            sessionName,
+            'running',
+            'Codex startup and model session checks completed',
+          );
+          await sendRuntimeTmuxInput({
+            runtime: 'codex',
+            sessionName,
+            send: () => injectPromptIntoTmuxPane(targetPane, params.prompt),
+          });
           await pollCodexTuiSessionFile(
             controller,
             params,
@@ -1335,6 +1400,13 @@ export function streamCodexTmuxTui(params: StreamChatParams, pendingPerms?: Pend
           controller.close();
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error);
+          transitionRuntimeTmuxInputState(
+            'codex',
+            sessionName,
+            'failed',
+            'Codex tmux input lifecycle failed',
+            { error: message },
+          );
           console.error('[codex-tmux] Error:', error instanceof Error ? error.stack || error.message : error);
           try {
             controller.enqueue(sseEvent('error', message || 'Codex TUI execution failed.'));
@@ -1347,7 +1419,23 @@ export function streamCodexTmuxTui(params: StreamChatParams, pendingPerms?: Pend
             try { fs.unlinkSync(tmp); } catch { /* ignore */ }
           }
           if (!isDebugTmuxKeepAlive()) {
-            try { await tmuxCore.killSession(sessionName, { ignoreMissing: true }); } catch { /* best-effort cleanup */ }
+            try {
+              await tmuxCore.killSession(sessionName, { ignoreMissing: true });
+              transitionRuntimeTmuxInputState(
+                'codex',
+                sessionName,
+                'stopped',
+                'Codex turn completed and its turn-owned tmux session was cleaned up',
+              );
+            } catch (error) {
+              transitionRuntimeTmuxInputState(
+                'codex',
+                sessionName,
+                'failed',
+                'Codex turn completed but tmux cleanup failed',
+                { error: error instanceof Error ? error.message : String(error) },
+              );
+            }
           } else {
             console.log(`[codex-tmux] CODELARK_DEBUG is enabled; tmux session kept: ${sessionName}`);
           }

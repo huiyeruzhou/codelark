@@ -1,9 +1,9 @@
 import { maskSecrets } from '../../../shared/logger.js';
 import { sanitizeInput } from '../../../shared/security/validators.js';
 import {
-  buildCodexToolDetailFromInput,
-  buildCodexToolDetailFromOutput,
-  mergeCodexToolDetail,
+  buildToolCallDetailFromInput,
+  buildToolCallDetailFromOutput,
+  mergeToolCallDetail,
 } from '../../../shared/progress/tool-call-details.js';
 import { buildToolProgressMarkdown } from '../../../shared/progress/tool-rendering.js';
 
@@ -28,12 +28,12 @@ export function buildInlineToolBlock(params: {
 }): string {
   const status = params.status || (params.isError ? 'error' : (typeof params.output === 'string' ? 'complete' : 'running'));
   const inputDetail = typeof params.input !== 'undefined'
-    ? buildCodexToolDetailFromInput(params.name, params.input)
+    ? buildToolCallDetailFromInput(params.name, params.input)
     : null;
   const outputDetail = typeof params.output === 'string'
-    ? buildCodexToolDetailFromOutput(params.name, params.output, inputDetail)
+    ? buildToolCallDetailFromOutput(params.name, params.output, inputDetail)
     : null;
-  const detail = mergeCodexToolDetail(inputDetail, outputDetail);
+  const detail = mergeToolCallDetail(inputDetail, outputDetail);
   return buildToolProgressMarkdown([{
     id: 'inline',
     name: params.name || 'tool',

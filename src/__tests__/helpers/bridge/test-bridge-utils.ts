@@ -39,18 +39,54 @@ export const noopPermissions: PermissionGateway = {
 
 export const noopLifecycle: LifecycleHooks = {};
 
-export function resetBridgeTestState(options: { cleanCodexHome?: boolean } = {}): void {
+export interface ResetBridgeTestStateOptions {
+  cleanCodexHome?: boolean;
+  cleanClaudeHome?: boolean;
+  cleanKimiHome?: boolean;
+  cleanRuntimeHomes?: boolean;
+}
+
+function shouldCleanRuntimeHome(value: boolean | undefined, cleanRuntimeHomes: boolean | undefined): boolean {
+  return value === true || cleanRuntimeHomes === true;
+}
+
+function cleanCodexRuntimeHome(): void {
+  if (!process.env.CODEX_HOME) return;
+
+  fs.rmSync(path.join(process.env.CODEX_HOME, 'sessions'), { recursive: true, force: true });
+  fs.rmSync(path.join(process.env.CODEX_HOME, 'archived_sessions'), { recursive: true, force: true });
+  fs.rmSync(path.join(process.env.CODEX_HOME, 'session_index.jsonl'), { force: true });
+}
+
+function cleanClaudeRuntimeHome(): void {
+  if (!process.env.CODELARK_CLAUDE_HOME) return;
+
+  fs.rmSync(path.join(process.env.CODELARK_CLAUDE_HOME, '.claude', 'projects'), { recursive: true, force: true });
+}
+
+function cleanKimiRuntimeHome(): void {
+  if (!process.env.KIMI_CODE_HOME) return;
+
+  fs.rmSync(path.join(process.env.KIMI_CODE_HOME, 'sessions'), { recursive: true, force: true });
+  fs.rmSync(path.join(process.env.KIMI_CODE_HOME, 'session_index.jsonl'), { force: true });
+}
+
+export function resetBridgeTestState(options: ResetBridgeTestStateOptions = {}): void {
   fs.rmSync(BRIDGE_TEST_DATA_DIR, { recursive: true, force: true });
   fs.rmSync(path.join(CODELARK_HOME, 'config.toml'), { force: true });
   fs.rmSync(path.join(CODELARK_HOME, 'config'), { recursive: true, force: true });
   fs.rmSync(CONFIG_PATH, { force: true });
   fs.rmSync(CONFIG_JSON_PATH, { force: true });
 
-  if (!options.cleanCodexHome || !process.env.CODEX_HOME) return;
-
-  fs.rmSync(path.join(process.env.CODEX_HOME, 'sessions'), { recursive: true, force: true });
-  fs.rmSync(path.join(process.env.CODEX_HOME, 'archived_sessions'), { recursive: true, force: true });
-  fs.rmSync(path.join(process.env.CODEX_HOME, 'session_index.jsonl'), { force: true });
+  if (shouldCleanRuntimeHome(options.cleanCodexHome, options.cleanRuntimeHomes)) {
+    cleanCodexRuntimeHome();
+  }
+  if (shouldCleanRuntimeHome(options.cleanClaudeHome, options.cleanRuntimeHomes)) {
+    cleanClaudeRuntimeHome();
+  }
+  if (shouldCleanRuntimeHome(options.cleanKimiHome, options.cleanRuntimeHomes)) {
+    cleanKimiRuntimeHome();
+  }
 }
 
 export function initBridgeTestContext(options: {

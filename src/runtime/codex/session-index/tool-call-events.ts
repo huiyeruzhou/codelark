@@ -1,13 +1,13 @@
-import type { CodexToolDetail } from '../../../domain/progress.js';
+import type { ToolCallDetail } from '../../../domain/progress.js';
 import type { BridgeMirrorRecord } from '../../contracts.js';
 import {
-  codexTurnEventFromSdkToolEvent,
-  type CodexTurnEvent,
-} from '../turn-events.js';
+  toolCallEventFromSdk,
+  type ToolCallEvent,
+} from '../../../shared/progress/tool-events.js';
 import {
-  buildCodexToolDetailFromInput,
-  buildCodexToolDetailFromOutput,
-  mergeCodexToolDetail,
+  buildToolCallDetailFromInput,
+  buildToolCallDetailFromOutput,
+  mergeToolCallDetail,
 } from '../../../shared/progress/tool-call-details.js';
 import {
   extractNormalizedFreeText,
@@ -19,21 +19,25 @@ import {
   type SessionEventLine,
   type SessionMessageLine,
 } from './jsonl-types.js';
+import {
+  buildToolCallDetailFromNormalizedCodexCall,
+  normalizeCodexToolCall,
+} from './tool-call-normalizer.js';
 
 export interface CodexSessionToolEvent {
   recordType: Extract<BridgeMirrorRecord['type'], 'tool_started' | 'tool_finished'>;
-  event: CodexTurnEvent;
+  event: ToolCallEvent;
   content: string;
   turnId?: string;
   toolInput?: unknown;
   isError?: boolean;
 }
 
-function mergeToolDetails(...details: Array<CodexToolDetail | null | undefined>): CodexToolDetail | null {
-  return details.reduce<CodexToolDetail | null>((merged, detail) => mergeCodexToolDetail(merged, detail), null);
+function mergeToolDetails(...details: Array<ToolCallDetail | null | undefined>): ToolCallDetail | null {
+  return details.reduce<ToolCallDetail | null>((merged, detail) => mergeToolCallDetail(merged, detail), null);
 }
 
-function eventDetail(event: CodexTurnEvent): CodexToolDetail | undefined {
+function eventDetail(event: ToolCallEvent): ToolCallDetail | undefined {
   return event.type === 'tool' && event.detail ? event.detail : undefined;
 }
 
@@ -68,9 +72,9 @@ export function codexSessionToolEventFromResponseItem(
 
   if (payload.type === 'tool_search_call') {
     const toolId = extractNormalizedFreeText(payload.call_id) || signature;
-    const event = codexTurnEventFromSdkToolEvent(toolId, 'tool_search', 'running', {
+    const event = toolCallEventFromSdk(toolId, 'tool_search', 'running', {
       input: payload.arguments,
-      structured: buildCodexToolDetailFromInput('tool_search', payload.arguments),
+      structured: buildToolCallDetailFromInput('tool_search', payload.arguments),
     });
     return {
       recordType: 'tool_started',
@@ -85,9 +89,9 @@ export function codexSessionToolEventFromResponseItem(
     const toolId = extractNormalizedFreeText(payload.call_id) || signature;
     const status = extractNormalizedFreeText(payload.status).toLowerCase();
     const output = { tools: payload.tools };
-    const event = codexTurnEventFromSdkToolEvent(toolId, 'tool_search', status === 'failed' ? 'error' : 'complete', {
+    const event = toolCallEventFromSdk(toolId, 'tool_search', status === 'failed' ? 'error' : 'complete', {
       output: summarizeToolSearchOutput(payload.tools),
-      structured: buildCodexToolDetailFromOutput('tool_search', output),
+      structured: buildToolCallDetailFromOutput('tool_search', output),
     });
     return {
       recordType: 'tool_finished',
@@ -99,13 +103,18 @@ export function codexSessionToolEventFromResponseItem(
   }
 
   if (payload.type === 'function_call' || payload.type === 'custom_tool_call') {
-    const toolName = formatCodexToolName(payload.namespace, payload.name);
+    const rawToolName = formatCodexToolName(payload.namespace, payload.name);
     const toolId = extractNormalizedFreeText(payload.call_id) || signature;
-    if (!toolName) return null;
-    const input = payload.type === 'function_call' ? payload.arguments : payload.input;
-    const event = codexTurnEventFromSdkToolEvent(toolId, toolName, 'running', {
+    if (!rawToolName) return null;
+    const normalized = normalizeCodexToolCall(
+      rawToolName,
+      payload.type === 'function_call' ? payload.arguments : payload.input,
+    );
+    const toolName = normalized.name;
+    const input = normalized.input;
+    const event = toolCallEventFromSdk(toolId, toolName, 'running', {
       input,
-      structured: buildCodexToolDetailFromInput(toolName, input),
+      structured: buildToolCallDetailFromNormalizedCodexCall(normalized),
     });
     return {
       recordType: 'tool_started',
@@ -119,7 +128,7 @@ export function codexSessionToolEventFromResponseItem(
   if (payload.type === 'function_call_output' || payload.type === 'custom_tool_call_output') {
     const toolId = extractNormalizedFreeText(payload.call_id) || signature;
     const output = extractToolOutputText(payload.output);
-    const event = codexTurnEventFromSdkToolEvent(toolId, '', payload.is_error === true ? 'error' : 'complete', {
+    const event = toolCallEventFromSdk(toolId, '', payload.is_error === true ? 'error' : 'complete', {
       output,
     });
     return {
@@ -146,7 +155,7 @@ export function codexSessionToolEventFromEventMessage(
     const query = extractToolOutputText(payload.query);
     return {
       recordType: 'tool_finished',
-      event: codexTurnEventFromSdkToolEvent(toolId, 'Web Search', 'complete', {
+      event: toolCallEventFromSdk(toolId, 'Web Search', 'complete', {
         output: query,
         structured: { kind: 'web_search', query },
       }),
@@ -162,7 +171,7 @@ export function codexSessionToolEventFromEventMessage(
     const toolName = server && tool ? `mcp__${server}__${tool}` : 'mcp_tool_call';
     return {
       recordType: 'tool_finished',
-      event: codexTurnEventFromSdkToolEvent(toolId, toolName, 'complete', {
+      event: toolCallEventFromSdk(toolId, toolName, 'complete', {
         structured: {
           kind: 'mcp',
           ...(server ? { server } : {}),
@@ -191,7 +200,7 @@ export function codexSessionToolEventFromEventMessage(
       ? (payload as { duration_seconds: number }).duration_seconds
       : null;
     const detail = mergeToolDetails(
-      buildCodexToolDetailFromInput('Bash', { cmd: commandInput }),
+      buildToolCallDetailFromInput('Bash', { cmd: commandInput }),
       {
         kind: 'exec_command',
         ...(exitCode != null ? { exitCode } : {}),
@@ -203,7 +212,7 @@ export function codexSessionToolEventFromEventMessage(
     const isError = status === 'failed' || (exitCode != null && exitCode !== 0);
     return {
       recordType: 'tool_finished',
-      event: codexTurnEventFromSdkToolEvent(toolId, 'Bash', isError ? 'error' : 'complete', {
+      event: toolCallEventFromSdk(toolId, 'Bash', isError ? 'error' : 'complete', {
         input: commandInput,
         output: outputText,
         structured: detail,
@@ -223,7 +232,7 @@ export function codexSessionToolEventFromEventMessage(
     const isError = payload.success === false || status === 'failed';
     return {
       recordType: 'tool_finished',
-      event: codexTurnEventFromSdkToolEvent(toolId, 'apply_patch', isError ? 'error' : 'complete', {
+      event: toolCallEventFromSdk(toolId, 'apply_patch', isError ? 'error' : 'complete', {
         output,
         structured: {
           kind: 'patch_apply',
@@ -241,9 +250,9 @@ export function codexSessionToolEventFromEventMessage(
     const toolName = extractNormalizedFreeText(payload.tool) || 'tool';
     return {
       recordType: 'tool_started',
-      event: codexTurnEventFromSdkToolEvent(toolId, toolName, 'running', {
+      event: toolCallEventFromSdk(toolId, toolName, 'running', {
         input: payload.arguments,
-        structured: buildCodexToolDetailFromInput(toolName, payload.arguments),
+        structured: buildToolCallDetailFromInput(toolName, payload.arguments),
       }),
       content: '',
       ...(payload.turnId || activeTurnId ? { turnId: payload.turnId || activeTurnId || undefined } : {}),
@@ -257,7 +266,7 @@ export function codexSessionToolEventFromEventMessage(
     const output = extractToolOutputText(payload.content_items ?? payload.error);
     return {
       recordType: 'tool_finished',
-      event: codexTurnEventFromSdkToolEvent(toolId, toolName, payload.success === false ? 'error' : 'complete', {
+      event: toolCallEventFromSdk(toolId, toolName, payload.success === false ? 'error' : 'complete', {
         output,
         structured: {
           kind: 'dynamic',

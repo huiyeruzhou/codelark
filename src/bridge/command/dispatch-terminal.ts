@@ -1,5 +1,5 @@
 import * as router from '../session/channel-router.js';
-import { deliverBridgeNotice } from '../../channels/delivery/feedback.js';
+import { deliverBridgeNotice, enqueueBridgeNotice } from '../../channels/delivery/feedback.js';
 import type { BaseChannelAdapter, StructuredStreamingUiActionButton } from '../../channels/contracts.js';
 import type { BridgeStore, ChannelChat, InboundMessage, OutboundRichCard } from '../../domain/index.js';
 import {
@@ -123,7 +123,7 @@ async function handleTmuxDispatchCommand(params: TerminalDispatchParams): Promis
       if (deps.tmuxProviderAutoForward === true && command === '/tmux' && noticeOptions?.force !== true) {
         return;
       }
-      await deliverBridgeNotice(adapter, msg.address, message, {
+      enqueueBridgeNotice(adapter, msg.address, message, {
         replyToMessageId: msg.messageId,
         audit: false,
       });

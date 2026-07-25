@@ -277,4 +277,64 @@ describe('config migration runner', () => {
       fs.rmSync(home, { recursive: true, force: true });
     }
   });
+
+  it('migrates legacy session Kimi runtime config to scoped TOML', () => {
+    const home = tempHome();
+    try {
+      const paths = resolveMigrationPaths(home);
+      writeFile(paths.dataSessionsJson, JSON.stringify({
+        'session-kimi': {
+          id: 'session-kimi',
+          runtime: {
+            activeRuntime: 'kimi',
+            kimi: {
+              sessionId: 'session_kimi_legacy',
+              cwd: '/tmp/kimi-legacy',
+              model: 'kimi-k2-test',
+              provider: 'tmux',
+            },
+          },
+        },
+      }));
+
+      const result = runConfigMigrations({ codelarkHome: home });
+
+      assert.equal(result.changed, true);
+      const toml = fs.readFileSync(path.join(paths.sessionConfigDir, 'session-kimi.toml'), 'utf-8');
+      assert.match(toml, /agent = "kimi"/);
+      assert.match(toml, /model = "kimi-k2-test"/);
+      assert.match(toml, /provider = "tmux"/);
+      const sessions = JSON.parse(fs.readFileSync(paths.dataSessionsJson, 'utf-8')) as any;
+      assert.equal(sessions['session-kimi'].runtime.activeRuntime, undefined);
+      assert.equal(sessions['session-kimi'].runtime.kimi.sessionId, 'session_kimi_legacy');
+      assert.equal(sessions['session-kimi'].runtime.kimi.model, undefined);
+      assert.equal(fs.existsSync(paths.migrationState), true);
+    } finally {
+      fs.rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it('migrates legacy home Kimi runtime config from config.env', () => {
+    const home = tempHome();
+    try {
+      const paths = resolveMigrationPaths(home);
+      writeFile(paths.legacyConfigEnv, [
+        'CODELARK_RUNTIME=kimi',
+        'CODELARK_KIMI_MODEL=moonshot-v1-test',
+        'CODELARK_KIMI_PROVIDER=tmux',
+        '',
+      ].join('\n'));
+
+      const result = runConfigMigrations({ codelarkHome: home });
+      const config = createConfigService({ codelarkHome: home, env: {}, migrate: false }).snapshot().config;
+
+      assert.equal(result.changed, true);
+      assert.equal(config.runtime.agent, 'kimi');
+      assert.equal(config.runtime.kimi.model, 'moonshot-v1-test');
+      assert.equal(config.runtime.kimi.provider, 'tmux');
+      assert.equal(fs.existsSync(paths.migrationState), true);
+    } finally {
+      fs.rmSync(home, { recursive: true, force: true });
+    }
+  });
 });

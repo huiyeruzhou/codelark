@@ -4,6 +4,7 @@ import type {
   StreamingPreviewState,
 } from '../../../domain/index.js';
 import type { BaseChannelAdapter, StructuredStreamingUiSnapshot } from '../../../channels/contracts.js';
+import { enqueueDelivery } from '../../../channels/delivery/deliver.js';
 import * as engine from './sdk-conversation-engine.js';
 import {
   assembleCodexFinalResponse,
@@ -38,6 +39,7 @@ import {
 import { getBridgeSessionDisplayTitle } from '../../session/display/session-display-query.js';
 import {
   getSessionActiveRuntime,
+  getSessionKimiSessionId,
   getSessionCodexThreadId,
   getSessionClaudeSessionId,
   getSessionWorkingDirectory,
@@ -45,6 +47,7 @@ import {
 import {
   resolveEffectiveClaudeProvider,
   resolveEffectiveCodexProvider,
+  resolveKimiRuntimeConfig,
   resolveRuntimeMetadataConfig,
 } from '../../session/support.js';
 import { maskSecrets } from '../../../shared/logger.js';
@@ -169,7 +172,7 @@ export type ForwardPermissionRequest = (
   sessionId?: string,
   suggestions?: unknown[],
   replyToMessageId?: string,
-) => Promise<void>;
+) => void;
 
 export type BuildStopCallbackData = (sessionId: string) => string;
 
@@ -241,14 +244,24 @@ export async function runInteractiveMessage(
   const processMessageImpl = deps.processMessageImpl ?? engine.processMessage;
   const resolveDisplayInfo = deps.resolveInteractiveTurnDisplayInfo ?? ((targetBinding) => {
     if (targetBinding.id === binding.id && initialSession) {
-      const isClaude = getSessionActiveRuntime(initialSession) === 'claude';
-      const metadata = resolveRuntimeMetadataConfig(initialSession, isClaude ? 'claude' : 'codex', binding);
+      const displayRuntime = getSessionActiveRuntime(initialSession) || 'codex';
+      const metadata = resolveRuntimeMetadataConfig(initialSession, displayRuntime, binding);
+      const threadId = displayRuntime === 'kimi'
+        ? getSessionKimiSessionId(initialSession) || ''
+        : displayRuntime === 'claude'
+          ? getSessionClaudeSessionId(initialSession) || ''
+          : getSessionCodexThreadId(initialSession) || '';
+      const executionProvider = displayRuntime === 'kimi'
+        ? resolveKimiRuntimeConfig(initialSession, binding).provider
+        : displayRuntime === 'claude'
+          ? resolveEffectiveClaudeProvider(initialSession, binding)
+          : resolveEffectiveCodexProvider(initialSession, binding);
       return {
         title: getBridgeSessionDisplayTitle(initialSession),
         bridgeSessionId: initialSession.id,
-        threadId: getSessionCodexThreadId(initialSession) || '',
-        runtime: isClaude ? 'claude' : 'codex',
-        executionProvider: resolveEffectiveCodexProvider(initialSession, binding),
+        threadId,
+        runtime: displayRuntime,
+        executionProvider,
         creatorKind: 'bridge',
         reasoningEffort: metadata.reasoningEffort,
         model: metadata.model,
@@ -261,7 +274,8 @@ export async function runInteractiveMessage(
   const isClaudeMirrorTurn = activeRuntime === 'claude' && resolveEffectiveClaudeProvider(initialSession, binding) !== 'sdk';
   const codexProvider = resolveEffectiveCodexProvider(initialSession, binding);
   const isCodexMirrorTurn = activeRuntime === 'codex' && (codexProvider === 'pty' || codexProvider === 'tmux');
-  const isRuntimeMirrorTurn = isClaudeMirrorTurn || isCodexMirrorTurn;
+  const isKimiMirrorTurn = activeRuntime === 'kimi';
+  const isRuntimeMirrorTurn = isClaudeMirrorTurn || isCodexMirrorTurn || isKimiMirrorTurn;
   const initialCodexThreadId = getSessionCodexThreadId(initialSession) || codexThreadId || '';
   let observedCodexThreadId = codexThreadId || '';
   const useInteractiveStreamUi = !isRuntimeMirrorTurn;
@@ -324,17 +338,21 @@ export async function runInteractiveMessage(
     sessionId: binding.bridgeSessionId,
     kind: turnClassification.kind,
     origin: 'im',
-    progressSource: isCodexMirrorTurn ? 'codex_jsonl' : isClaudeMirrorTurn ? 'claude_jsonl' : 'sdk_stream',
+    progressSource: isCodexMirrorTurn ? 'codex_jsonl' : isClaudeMirrorTurn ? 'claude_jsonl' : isKimiMirrorTurn ? 'kimi_jsonl' : 'sdk_stream',
     finalSource: isCodexMirrorTurn || turnClassification.kind === 'im_codex_reuse'
       ? 'codex_task_complete'
       : isClaudeMirrorTurn
         ? 'claude_task_complete'
-        : 'sdk_result',
+        : isKimiMirrorTurn
+          ? 'kimi_task_complete'
+          : 'sdk_result',
     runtime: activeRuntime,
     codexThreadId: turnClassification.codexThreadId,
     runtimeThreadId: activeRuntime === 'claude'
       ? getSessionClaudeSessionId(initialSession)
-      : turnClassification.codexThreadId,
+      : activeRuntime === 'kimi'
+        ? getSessionKimiSessionId(initialSession)
+        : turnClassification.codexThreadId,
     requestMessageId: msg.messageId,
     streamKey,
     startedAt: taskStartedAt,
@@ -457,19 +475,48 @@ export async function runInteractiveMessage(
     previewOnPartialText,
   });
 
-  const finalizeStreamUiOnce = async (
-    status: 'completed' | 'interrupted' | 'error',
-    responseText: string,
-  ): Promise<boolean> => {
-    return streamUi.finalizeOnce(status, responseText);
-  };
-
   const endMessageUiOnce = () => {
     if (taskState.uiEnded) return;
     if (messageStartCalled) {
       adapter.onMessageEnd?.(msg.address.chatId, streamKey);
     }
     taskState.uiEnded = true;
+  };
+
+  let finalDeliveryCompletion: Promise<boolean> | null = null;
+  const enqueueFinalUiWork = (
+    status: 'completed' | 'interrupted' | 'error',
+    responseText: string,
+    deliveryResponse?: Parameters<typeof deliverFinalResponse>[1],
+    deliveryOptions?: {
+      skipText?: boolean;
+      skipTextWhenCardFinalized?: boolean;
+    },
+  ): Promise<boolean> => {
+    if (finalDeliveryCompletion) return finalDeliveryCompletion;
+    const queued = enqueueDelivery(adapter, msg.address, async () => {
+      const cardFinalized = await streamUi.finalizeOnce(status, responseText);
+      if (!deliveryResponse) return { ok: true };
+      return deliverFinalResponse({
+        adapter,
+        address: msg.address,
+        sessionId: binding.bridgeSessionId,
+        replyToMessageId: msg.messageId,
+        deliverResponse: deps.deliverResponse,
+      }, deliveryResponse, {
+        ...deliveryOptions,
+        skipText: Boolean(deliveryOptions?.skipText) || (
+          Boolean(deliveryOptions?.skipTextWhenCardFinalized) && cardFinalized
+        ),
+      });
+    }, { queueClass: 'interactive' });
+    finalDeliveryCompletion = queued.completion.then((result) => {
+      endMessageUiOnce();
+      const finalized = taskState.streamFinalized || !streamUi.hasStreamingCards;
+      externalTerminal.settleCompletion(finalized);
+      return result.ok && finalized;
+    });
+    return finalDeliveryCompletion;
   };
 
   if (useInteractiveStreamUi) {
@@ -498,7 +545,7 @@ export async function runInteractiveMessage(
     taskAbort.abort();
     streamUi.stopStatusUpdates();
     try {
-      await finalizeStreamUiOnce('interrupted', detail);
+      void enqueueFinalUiWork('interrupted', detail);
     } catch {
       // Force stop must release the session even if remote UI cleanup fails.
     }
@@ -520,7 +567,7 @@ export async function runInteractiveMessage(
         if (!deps.forwardPermissionRequest) {
           throw new Error('Interactive turn permission forwarding port is not configured');
         }
-        await deps.forwardPermissionRequest(
+        deps.forwardPermissionRequest(
           adapter,
           msg.address,
           perm.permissionRequestId,
@@ -552,9 +599,10 @@ export async function runInteractiveMessage(
         streamPreview: {
           includeToolSnippets: useInteractiveStreamUi && !streamUi.hasStreamingCards,
         },
+        onThinkingNote: useStatusStreamUi ? sdkStreamEvents.onThinkingNote : undefined,
         onContextUsage: useInteractiveStreamUi ? sdkStreamEvents.onContextUsage : undefined,
         onRuntimeIdentity: async (identity) => {
-          if (identity.runtime === 'claude') {
+          if (identity.runtime === 'claude' || identity.runtime === 'kimi') {
             ensureMirrorSuppression(preparedPromptText);
             runtimeMirrorActivated = true;
             await deps.reconcileMirrorSubscriptions?.();
@@ -613,23 +661,16 @@ export async function runInteractiveMessage(
       if (!mirrorWillDeliverFinal) {
         sdkStreamEvents.pushFinalCardText(finalResponsePlan.cardText);
       }
-      const cardFinalized = await finalizeStreamUiOnce(
+      const finalization = enqueueFinalUiWork(
         finalResponsePlan.streamEndStatus,
         mirrorWillDeliverFinal ? '' : finalResponsePlan.cardText,
+        !mirrorWillDeliverFinal ? finalResponsePlan.deliveryResponse || undefined : undefined,
+        {
+          skipText: skipTextDeliveryForExistingCard,
+          skipTextWhenCardFinalized: finalResponsePlan.skipTextWhenCardFinalized,
+        },
       );
-      if (!mirrorWillDeliverFinal && finalResponsePlan.deliveryResponse) {
-        await deliverFinalResponse({
-          adapter,
-          address: msg.address,
-          sessionId: binding.bridgeSessionId,
-          replyToMessageId: msg.messageId,
-          deliverResponse: deps.deliverResponse,
-        }, finalResponsePlan.deliveryResponse, {
-          skipText: skipTextDeliveryForExistingCard || (
-            finalResponsePlan.skipTextWhenCardFinalized && cardFinalized
-          ),
-        });
-      }
+      void finalization;
       return;
     }
 
@@ -661,7 +702,6 @@ export async function runInteractiveMessage(
         workingDirectory: getSessionWorkingDirectory(initialSession) || null,
       });
     }
-    let cardFinalized = false;
     const staleTaskNotice = buildStaleTaskCompletionNotice(msg.address, binding, {
       listChannelChats: deps.listInteractiveTurnBindings,
       resolveDisplayInfo,
@@ -680,24 +720,20 @@ export async function runInteractiveMessage(
     const skipTextDeliveryForExistingCard = !isRuntimeMirrorTurn && streamUi.shouldSkipTextDelivery();
     if (useInteractiveStreamUi && streamUi.hasStreamingCards) {
       sdkStreamEvents.pushFinalCardText(finalResponsePlan.cardText);
-      cardFinalized = await finalizeStreamUiOnce(
-        finalResponsePlan.streamEndStatus,
-        finalResponsePlan.cardText,
-      );
     }
 
     if ((!isRuntimeMirrorTurn || !runtimeMirrorActivated) && finalResponsePlan.deliveryResponse) {
-      await deliverFinalResponse({
-        adapter,
-        address: msg.address,
-        sessionId: binding.bridgeSessionId,
-        replyToMessageId: msg.messageId,
-        deliverResponse: deps.deliverResponse,
-      }, finalResponsePlan.deliveryResponse, {
-        skipText: skipTextDeliveryForExistingCard || (
-          finalResponsePlan.skipTextWhenCardFinalized && cardFinalized
-        ),
-      });
+      void enqueueFinalUiWork(
+        finalResponsePlan.streamEndStatus,
+        finalResponsePlan.cardText,
+        finalResponsePlan.deliveryResponse,
+        {
+          skipText: skipTextDeliveryForExistingCard,
+          skipTextWhenCardFinalized: finalResponsePlan.skipTextWhenCardFinalized,
+        },
+      );
+    } else if (useInteractiveStreamUi && streamUi.hasStreamingCards) {
+      void enqueueFinalUiWork(finalResponsePlan.streamEndStatus, finalResponsePlan.cardText);
     }
 
     try {
@@ -716,7 +752,7 @@ export async function runInteractiveMessage(
       : undefined);
   } finally {
     if (useInteractiveStreamUi || (isRuntimeMirrorTurn && streamUi.shouldSkipTextDelivery())) {
-      await finalizeStreamUiOnce(
+      void enqueueFinalUiWork(
         taskAbort.signal.aborted
           ? 'interrupted'
           : finalOutcome === 'completed'
@@ -748,9 +784,13 @@ export async function runInteractiveMessage(
     deps.releaseInteractiveTask(binding.bridgeSessionId, taskId);
     deps.releaseBridgeTurn?.(binding.bridgeSessionId, taskId);
     if (isRuntimeMirrorTurn && runtimeMirrorActivated) {
-      await deps.reconcileMirrorSubscriptions?.();
+      void deps.reconcileMirrorSubscriptions?.().catch((error) => {
+        console.warn('[interactive-turn/runner] Background mirror reconcile failed:', error instanceof Error ? error.message : String(error));
+      });
     }
-    endMessageUiOnce();
-    externalTerminal.settleCompletion(taskState.streamFinalized || !streamUi.hasStreamingCards);
+    if (!finalDeliveryCompletion) {
+      endMessageUiOnce();
+      externalTerminal.settleCompletion(taskState.streamFinalized || !streamUi.hasStreamingCards);
+    }
   }
 }

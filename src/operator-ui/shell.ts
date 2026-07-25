@@ -205,6 +205,8 @@ export function renderUiShellHtml(): string {
                     Runtime
                     <select id="runtime">
                       <option value="codex" selected>codex</option>
+                      <option value="claude">claude</option>
+                      <option value="kimi">kimi</option>
                     </select>
                   </label>
                   <label>
@@ -273,8 +275,53 @@ export function renderUiShellHtml(): string {
                     <input id="claudeDefaultModel" placeholder="留空则跟随 Claude Code 默认" />
                   </label>
                   <label>
+                    <span class="field-title">Claude 默认模式 <span class="help-tip" tabindex="0" data-tip="设置新 Claude Code 会话的默认权限模式；当前会话仍可单独覆盖。">?</span></span>
+                    <select id="claudeMode">
+                      <option value="normal">normal</option>
+                      <option value="yolo">yolo</option>
+                    </select>
+                  </label>
+                  <label>
+                    <span class="field-title">Claude 思考级别 <span class="help-tip" tabindex="0" data-tip="设置 Claude Code 的默认 reasoning effort；当前会话仍可单独覆盖。">?</span></span>
+                    <select id="claudeReasoningEffort">
+                      <option value="low">low</option>
+                      <option value="medium">medium</option>
+                      <option value="high">high</option>
+                      <option value="xhigh">xhigh</option>
+                      <option value="max">max</option>
+                    </select>
+                  </label>
+                  <label>
                     <span class="field-title">Claude 空闲超时（分钟） <span class="help-tip" tabindex="0" data-tip="0 表示不启用全局空闲超时；后续会话级设置可以覆盖。">?</span></span>
                     <input id="claudeIdleTimeoutMinutes" type="number" min="0" max="120" value="0" />
+                  </label>
+                </div>
+              </div>
+
+              <div class="panel-block">
+                <p class="panel-subtitle">Session / tmux 默认值</p>
+                <div class="field-row triple">
+                  <label>
+                    <span class="field-title">tmux 输出行数 <span class="help-tip" tabindex="0" data-tip="控制新 session 的 tmux 屏幕抓取行数；范围 1-500。">?</span></span>
+                    <input id="tmuxCaptureLines" type="number" min="1" max="500" value="80" />
+                  </label>
+                  <label class="checkbox"><input id="tmuxAutoEnter" type="checkbox" checked /> tmux 自动回车</label>
+                  <label class="checkbox"><input id="tmuxEchoInput" type="checkbox" /> 回显 tmux 输入</label>
+                </div>
+              </div>
+
+              <div class="panel-block">
+                <p class="panel-subtitle">GlobalRuntime / Kimi</p>
+                <div class="field-row triple">
+                  <label>
+                    <span class="field-title">默认 Kimi Provider <span class="help-tip" tabindex="0" data-tip="Kimi Code 当前只支持 tmux；当前会话仍可用 /p 查看或写入会话级覆盖。">?</span></span>
+                    <select id="kimiProvider">
+                      <option value="tmux">tmux</option>
+                    </select>
+                  </label>
+                  <label>
+                    <span class="field-title">Kimi 默认模型 <span class="help-tip" tabindex="0" data-tip="只作为 Kimi Code runtime 的默认模型；留空则跟随 Kimi Code 默认。">?</span></span>
+                    <input id="kimiDefaultModel" placeholder="留空则跟随 Kimi Code 默认" />
                   </label>
                 </div>
               </div>
@@ -287,6 +334,7 @@ export function renderUiShellHtml(): string {
                     <select id="defaultProvider">
                       <option value="">auto</option>
                       <option value="sdk">sdk</option>
+                      <option value="pty">pty</option>
                       <option value="tmux">tmux</option>
                     </select>
                   </label>
@@ -305,16 +353,13 @@ export function renderUiShellHtml(): string {
                     <input id="historyMessageLimit" type="number" min="1" max="20" value="8" />
                   </label>
                   <label>
-                    <span class="field-title">长任务提示延迟（秒） <span class="help-tip" tabindex="0" data-tip="距离上次响应超过这个时长后，飞书长任务底部才开始显示“上次响应距今 X”。">?</span></span>
-                    <input id="streamStatusIdleStartSeconds" type="number" min="1" value="180" />
+                    <span class="field-title">响应计时显示延迟（秒） <span class="help-tip" tabindex="0" data-tip="设为 0 时，从任务开始就显示并刷新“上次响应距今 X”。">?</span></span>
+                    <input id="streamStatusIdleStartSeconds" type="number" min="0" value="0" />
                   </label>
                   <label>
-                    <span class="field-title">长任务提示刷新间隔（秒） <span class="help-tip" tabindex="0" data-tip="长任务提示出现后，每隔多少秒刷新一次“上次响应距今 X”。">?</span></span>
-                    <input id="streamStatusCheckIntervalSeconds" type="number" min="1" value="10" />
+                    <span class="field-title">运行状态刷新间隔（秒） <span class="help-tip" tabindex="0" data-tip="没有其他卡片更新时，按此间隔刷新当前时刻、已运行和上次响应；默认 5 秒。正文、思考、工具、任务或状态变化会立即刷新。">?</span></span>
+                    <input id="streamStatusCheckIntervalSeconds" type="number" min="1" value="5" />
                   </label>
-                </div>
-                <div class="checkbox-row" style="margin-top: 12px;">
-                  <label class="checkbox"><input id="showToolCallDetails" type="checkbox" checked /> 显示工具输入输出 <span class="help-tip" tabindex="0" data-tip="开启时，SDK 和 mirror 对话都会展示工具调用的输入输出；关闭时只保留工具名、状态和正文。也可用 /ui on|off 修改。">?</span></label>
                 </div>
                 <div class="checkbox-row" style="margin-top: 12px;">
                   <label class="checkbox"><input id="uiAllowLan" type="checkbox" /> 允许局域网访问 Web 控制台 <span class="help-tip" tabindex="0" data-tip="默认仅允许本机访问当前工作台。开启后，局域网设备需要先输入访问 token。">?</span></label>
@@ -361,7 +406,7 @@ export function renderUiShellHtml(): string {
               </div>
             </div>
 
-            <div class="notice" style="margin-bottom: 16px;">最短使用路径：先发 <code>/t</code> 查看本地 Codex / Claude Code 会话，再发 <code>/t 1</code> 接管；之后直接发送文本即可继续当前会话。</div>
+            <div class="notice" style="margin-bottom: 16px;">最短使用路径：先发 <code>/t</code> 查看本地 Codex / Claude Code / Kimi Code 会话，再发 <code>/t 1</code> 接管；之后直接发送文本即可继续当前会话。</div>
 
             <div class="command-sections">
               <section class="command-section">
@@ -375,22 +420,22 @@ export function renderUiShellHtml(): string {
                   <div class="command-item"><div class="command-col-command"><code>/doctor [bridge_id|描述]</code></div><div class="command-col-original"><code>/doctor</code></div><div class="command-col-desc">把目标 id、故障描述和结构化 JSONL bridge.log 路径交给当前会话诊断，不会把整段日志贴进上下文。</div></div>
                   <div class="command-item"><div class="command-col-command"><code>//...</code></div><div class="command-col-original">—</div><div class="command-col-desc">向模型发送以 <code>/</code> 开头的文本，避免被当成桥接命令。</div></div>
                   <div class="command-item"><div class="command-col-command"><code>/h</code></div><div class="command-col-original"><code>/help</code></div><div class="command-col-desc">查看帮助。</div></div>
-          <div class="command-item"><div class="command-col-command"><code>/t</code></div><div class="command-col-original"><code>/threads</code></div><div class="command-col-desc">默认显示当前 runtime 最近 20 条；飞书卡片是一张表，可用数量下拉切换 20/50/100，也可用 runtime 下拉切换 Codex/Claude。</div></div>
+          <div class="command-item"><div class="command-col-command"><code>/t</code></div><div class="command-col-original"><code>/threads</code></div><div class="command-col-desc">默认显示当前 runtime 最近 20 条；飞书卡片是一张表，可用数量下拉切换 20/50/100，也可用 runtime 下拉切换 Codex/Claude/Kimi。</div></div>
           <div class="command-item"><div class="command-col-command"><code>/t all</code></div><div class="command-col-original"><code>/threads all</code></div><div class="command-col-desc">最多列出当前 runtime 最近 100 条本地会话。</div></div>
-          <div class="command-item"><div class="command-col-command"><code>/t n 100</code></div><div class="command-col-original"><code>/threads n 100</code></div><div class="command-col-desc">列出当前 runtime 最近 100 条本地会话；也可用 <code>/t codex n 100</code> 或 <code>/t claude n 100</code>。</div></div>
-              <div class="command-item"><div class="command-col-command"><code>/t &lt;序号|thread id|bridge id|名称&gt;</code></div><div class="command-col-original"><code>/thread &lt;序号|thread id|bridge id|名称&gt;</code></div><div class="command-col-desc">按当前 runtime 表序号、thread id、bridge_id 或唯一名称接管本地会话，并设为当前线程；接管其他聊天已绑定的会话需要确认，目标运行中会拒绝。</div></div>
+          <div class="command-item"><div class="command-col-command"><code>/t n 100</code></div><div class="command-col-original"><code>/threads n 100</code></div><div class="command-col-desc">列出当前 runtime 最近 100 条本地会话；也可用 <code>/t codex n 100</code>、<code>/t claude n 100</code> 或 <code>/t kimi n 100</code>。</div></div>
+              <div class="command-item"><div class="command-col-command"><code>/t &lt;序号|thread/session id|bridge id|名称&gt;</code></div><div class="command-col-original"><code>/thread &lt;序号|thread/session id|bridge id|名称&gt;</code></div><div class="command-col-desc">按当前 runtime 表序号、thread/session id、bridge_id 或唯一名称接管本地会话，并设为当前会话；接管其他聊天已绑定的会话需要确认，目标运行中会拒绝。</div></div>
               <div class="command-item"><div class="command-col-command"><code>/t 标记</code></div><div class="command-col-original"><code>/t</code></div><div class="command-col-desc">卡片首列会标出当前激活的对话和其他人激活的对话，bridge_id 存在表示曾经接入过 codelark。</div></div>
-              <div class="command-item"><div class="command-col-command"><code>/t archive [序号|bridge id|thread id|名称]</code></div><div class="command-col-original"><code>/t archive [序号|bridge id|thread id|名称]</code></div><div class="command-col-desc">归档当前或指定本地会话，并解除相关绑定。</div></div>
+              <div class="command-item"><div class="command-col-command"><code>/t archive [序号|bridge id|thread/session id|名称]</code></div><div class="command-col-original"><code>/t archive [序号|bridge id|thread/session id|名称]</code></div><div class="command-col-desc">归档当前或指定本地会话，并解除相关绑定。</div></div>
               <div class="command-item"><div class="command-col-command"><code>/t unbind</code></div><div class="command-col-original"><code>/t unbind</code></div><div class="command-col-desc">解绑当前聊天，并立即绑定到新的临时 BridgeSession；之后接管已有会话时会自动删除该临时 BridgeSession。</div></div>
-              <div class="command-item"><div class="command-col-command"><code>/t rename &lt;名称&gt;</code></div><div class="command-col-original"><code>/t rename &lt;名称&gt;</code></div><div class="command-col-desc">重命名当前线程；群聊通道会同步修改群聊名称并自动带 [botname] 前缀；名称不能是纯数字或类似线程/绑定 ID。</div></div>
+              <div class="command-item"><div class="command-col-command"><code>/t rename &lt;名称&gt;</code></div><div class="command-col-original"><code>/t rename &lt;名称&gt;</code></div><div class="command-col-desc">重命名当前会话；群聊通道会同步修改群聊名称并自动带 [botname] 前缀；名称不能是纯数字或类似 runtime/绑定 ID。</div></div>
               <div class="command-item"><div class="command-col-command"><code>/t 序号范围</code></div><div class="command-col-original"><code>/t</code></div><div class="command-col-desc"><code>/t</code> 和 <code>/t archive</code> 使用当前 runtime 的本地会话表序号。</div></div>
                   <div class="command-item"><div class="command-col-command"><code>/n</code></div><div class="command-col-original"><code>/new</code></div><div class="command-col-desc">打开新建 IM 群聊会话表单；也可用 <code>/new &lt;name&gt; [path]</code> 直接创建，未指定路径时继承当前会话目录，未绑定时使用全局默认工作目录。</div></div>
                   <div class="command-item"><div class="command-col-command"><code>/clear [name] [path]</code></div><div class="command-col-original"><code>/clear [name] [path]</code></div><div class="command-col-desc">在当前聊天上下文创建新对话并绑定过去；名称或路径包含空格时，请使用英文双引号 <code>&quot;</code> 或英文单引号 <code>'</code>；可用 <code>/t</code> 附回旧对话，运行中会先确认是否终止。</div></div>
                   <div class="command-item"><div class="command-col-command"><code>直接发送文本</code></div><div class="command-col-original">—</div><div class="command-col-desc">继续当前已绑定会话；未绑定时会自动进入临时草稿线程，等同先使用 <code>/t 0</code>。</div></div>
-                  <div class="command-item"><div class="command-col-command"><code>/his [N]</code></div><div class="command-col-original"><code>/history</code></div><div class="command-col-desc">把最近 N 条消息渲染成卡片发送；优先读取 Codex / Claude Code session JSONL，找不到再退回 Bridge 缓存。</div></div>
+                  <div class="command-item"><div class="command-col-command"><code>/his [N]</code></div><div class="command-col-original"><code>/history</code></div><div class="command-col-desc">把最近 N 条消息渲染成卡片发送；优先读取 Codex / Claude Code / Kimi Code 本地 session 文件，找不到再退回 Bridge 缓存。</div></div>
                   <div class="command-item"><div class="command-col-command"><code>/his msg [N]</code></div><div class="command-col-original"><code>/history msg</code></div><div class="command-col-desc">把最近 N 条消息渲染成卡片发送，可临时指定本次条数。</div></div>
                   <div class="command-item"><div class="command-col-command"><code>/his raw [N]</code></div><div class="command-col-original"><code>/history raw</code></div><div class="command-col-desc">查看解析后的纯文本视图，可临时指定本次条数；不是原始 JSONL。</div></div>
-                  <div class="command-item"><div class="command-col-command"><code>/his json</code></div><div class="command-col-original"><code>/history json</code></div><div class="command-col-desc">直接发送原始 Codex / Claude Code session JSONL 文件，不做二次包装。</div></div>
+                  <div class="command-item"><div class="command-col-command"><code>/his json</code></div><div class="command-col-original"><code>/history json</code></div><div class="command-col-desc">直接发送原始 Codex / Claude Code / Kimi Code session 文件，不做二次包装。</div></div>
                   <div class="command-item"><div class="command-col-command"><code>/his limit 12</code></div><div class="command-col-original"><code>/history limit 12</code></div><div class="command-col-desc">修改 /his 默认返回条数限制（1-20）。</div></div>
                   <div class="command-item"><div class="command-col-command"><code>/shell [秒数] &lt;command&gt;</code></div><div class="command-col-original"><code>/shell</code></div><div class="command-col-desc">新特性：在当前会话目录通过 <code>codex sandbox</code> 流式执行命令；默认 workspace-write 且网络开启，支持 <code>--sandbox read-only</code>，卡片刷新最低 5 秒，高风险命令需 <code>--force</code>，不允许 danger-full-access，IM 自动链接按显示文本执行。</div></div>
                   <div class="command-item"><div class="command-col-command"><code>/every 10m 检查实验进度</code></div><div class="command-col-original"><code>/every &lt;时间&gt; &lt;prompt&gt;</code></div><div class="command-col-desc">创建定时输入；时间支持 s/m/h/d；每次触发都会复用当前会话。</div></div>
@@ -412,12 +457,12 @@ export function renderUiShellHtml(): string {
                 <h3 class="command-section-title">设置与切换</h3>
                 <div class="command-list">
                   <div class="command-list-head"><div>命令</div><div>原始命令</div><div>说明</div></div>
-                  <div class="command-item"><div class="command-col-command"><code>/m</code></div><div class="command-col-original"><code>/mode</code></div><div class="command-col-desc">查看当前模式；可选 <code>normal</code>、<code>yolo</code>，<code>code</code> 会映射为 <code>normal</code>。</div></div>
-                  <div class="command-item"><div class="command-col-command"><code>/provider</code></div><div class="command-col-original"><code>/provider</code></div><div class="command-col-desc">查看或切换当前 IM 会话 active runtime 的 Provider；Codex 和 Claude 都可选 <code>sdk</code>、<code>pty</code>、<code>tmux</code>，Claude 默认 <code>tmux</code>。</div></div>
+                  <div class="command-item"><div class="command-col-command"><code>/m</code></div><div class="command-col-original"><code>/mode</code></div><div class="command-col-desc">查看当前模式；可选 <code>normal</code>、<code>yolo</code>。</div></div>
+                  <div class="command-item"><div class="command-col-command"><code>/provider</code></div><div class="command-col-original"><code>/provider</code></div><div class="command-col-desc">查看或切换当前 IM 会话 active runtime 的 Provider；Codex 和 Claude 可选 <code>sdk</code>、<code>pty</code>、<code>tmux</code>，Claude 默认 <code>tmux</code>，Kimi 当前只支持 <code>tmux</code>。</div></div>
                   <div class="command-item"><div class="command-col-command"><code>/r</code></div><div class="command-col-original"><code>/reasoning</code></div><div class="command-col-desc">查看当前思考级别；可选 <code>1=minimal</code>、<code>2=low</code>、<code>3=medium</code>、<code>4=high</code>、<code>5=xhigh</code>。</div></div>
                   <div class="command-item"><div class="command-col-command"><code>/sb</code></div><div class="command-col-original"><code>/sandbox</code></div><div class="command-col-desc">查看或切换当前 IM 会话的 Codex 沙箱；可选 <code>read-only</code>、<code>workspace-write</code>、<code>danger-full-access</code>、<code>default</code>。</div></div>
                   <div class="command-item"><div class="command-col-command"><code>/net</code></div><div class="command-col-original"><code>/network</code></div><div class="command-col-desc">查看或切换当前 IM 会话的网络访问；可选 <code>on</code>、<code>off</code>、<code>default</code>。</div></div>
-                  <div class="command-item"><div class="command-col-command"><code>/ui on|off</code></div><div class="command-col-original">—</div><div class="command-col-desc">查看或切换工具输入输出显示；关闭后只保留工具名、状态和正文。</div></div>
+                  <div class="command-item"><div class="command-col-command"><code>/ui</code></div><div class="command-col-original">—</div><div class="command-col-desc">查看 UI 显示策略；工具调用详情始终展示。</div></div>
                   <div class="command-item"><div class="command-col-command"><code>/require-at on|off</code></div><div class="command-col-original"><code>/require-at</code></div><div class="command-col-desc">查看或切换当前飞书通道是否要求群聊 @bot；默认 <code>off</code>，即群聊不 @bot 也会接收。</div></div>
                   <div class="command-item"><div class="command-col-command"><code>/model [slug|default]</code></div><div class="command-col-original"><code>/model [slug|default]</code></div><div class="command-col-desc">查看或切换当前 IM 会话使用的模型；Codex 共享 thread 只允许查看，Claude Code 会保存为后续 TUI 启动参数。</div></div>
                   <div class="command-item"><div class="command-col-command"><code>/tmux-attach &lt;session&gt;</code></div><div class="command-col-original"><code>/tmux-attach &lt;session&gt;</code></div><div class="command-col-desc">把当前 IM 会话绑定到一个远程 tmux session。</div></div>
@@ -443,14 +488,6 @@ export function renderUiShellHtml(): string {
                 </div>
               </section>
 
-              <section class="command-section">
-                <h3 class="command-section-title">权限</h3>
-                <div class="command-list">
-                  <div class="command-list-head"><div>命令</div><div>原始命令</div><div>说明</div></div>
-                  <div class="command-item"><div class="command-col-command"><code>/perm allow|allow_session|deny &lt;id&gt;</code></div><div class="command-col-original"><code>/perm allow|allow_session|deny &lt;id&gt;</code></div><div class="command-col-desc">文本方式处理一个待批准权限。</div></div>
-                  <div class="command-item"><div class="command-col-command"><code>1 / 2 / 3</code></div><div class="command-col-original">—</div><div class="command-col-desc">快速处理单个待批准权限。</div></div>
-                </div>
-              </section>
             </div>
           </section>
         </section>
@@ -579,6 +616,10 @@ export function renderUiShellHtml(): string {
           <div class="field-row triple" id="sessionConfigClaudeBlock" hidden>
             <label>Claude 模型<input id="sessionConfigClaudeModel" placeholder="留空跟随全局 Claude 默认模型" /></label>
             <label>Claude 思考级别<select id="sessionConfigClaudeReasoning"><option value="">跟随全局</option><option value="low">low</option><option value="medium">medium</option><option value="high">high</option><option value="xhigh">xhigh</option><option value="max">max</option></select></label>
+          </div>
+          <div class="field-row triple" id="sessionConfigKimiBlock" hidden>
+            <label>Kimi 模型<input id="sessionConfigKimiModel" placeholder="留空跟随全局 Kimi 默认模型" /></label>
+            <label>Kimi Provider<select id="sessionConfigKimiProvider"><option value="">跟随全局</option><option value="tmux">tmux</option></select></label>
           </div>
           <label>系统提示<textarea id="sessionConfigPrompt" placeholder="留空则不覆盖系统提示"></textarea></label>
         </div>
@@ -738,7 +779,7 @@ export function renderUiShellHtml(): string {
       }
 
       function sessionCodexThreadId(session) {
-        if (!session || session.runtime === 'claude' || session.kind === 'claude') return '';
+        if (!session || session.runtime === 'claude' || session.kind === 'claude' || session.runtime === 'kimi' || session.kind === 'kimi') return '';
         return (session.codexThreadId || session.threadId) || '';
       }
 
@@ -752,8 +793,18 @@ export function renderUiShellHtml(): string {
         return session.claudeCwd || session.cwd || '';
       }
 
+      function sessionKimiSessionId(session) {
+        if (!session || (session.runtime !== 'kimi' && session.kind !== 'kimi')) return '';
+        return session.kimiSessionId || session.threadId || '';
+      }
+
+      function sessionKimiCwd(session) {
+        if (!session || (session.runtime !== 'kimi' && session.kind !== 'kimi')) return '';
+        return session.kimiCwd || session.cwd || '';
+      }
+
       function sessionRuntimeThreadId(session) {
-        return sessionClaudeSessionId(session) || sessionCodexThreadId(session);
+        return sessionClaudeSessionId(session) || sessionKimiSessionId(session) || sessionCodexThreadId(session);
       }
 
       function sessionRef(session) {
@@ -761,6 +812,8 @@ export function renderUiShellHtml(): string {
         if (bridgeSessionId) return 'bridge:' + bridgeSessionId;
         const claudeSessionId = sessionClaudeSessionId(session);
         if (claudeSessionId) return 'claude:' + encodeURIComponent(claudeSessionId) + ':' + encodeURIComponent(sessionClaudeCwd(session));
+        const kimiSessionId = sessionKimiSessionId(session);
+        if (kimiSessionId) return 'kimi:' + encodeURIComponent(kimiSessionId) + ':' + encodeURIComponent(sessionKimiCwd(session));
         const codexThreadId = sessionCodexThreadId(session);
         return codexThreadId ? 'codex:' + codexThreadId : '';
       }
@@ -770,11 +823,15 @@ export function renderUiShellHtml(): string {
         const codexThreadId = sessionCodexThreadId(session);
         const claudeSessionId = sessionClaudeSessionId(session);
         const claudeCwd = sessionClaudeCwd(session);
+        const kimiSessionId = sessionKimiSessionId(session);
+        const kimiCwd = sessionKimiCwd(session);
         return 'data-session-ref="' + escapeHtml(sessionRef(session)) + '"'
           + (bridgeSessionId ? ' data-bridge-session-id="' + escapeHtml(bridgeSessionId) + '"' : '')
           + (codexThreadId ? ' data-codex-thread-id="' + escapeHtml(codexThreadId) + '"' : '')
           + (claudeSessionId ? ' data-claude-session-id="' + escapeHtml(claudeSessionId) + '"' : '')
-          + (claudeCwd ? ' data-claude-cwd="' + escapeHtml(claudeCwd) + '"' : '');
+          + (claudeCwd ? ' data-claude-cwd="' + escapeHtml(claudeCwd) + '"' : '')
+          + (kimiSessionId ? ' data-kimi-session-id="' + escapeHtml(kimiSessionId) + '"' : '')
+          + (kimiCwd ? ' data-kimi-cwd="' + escapeHtml(kimiCwd) + '"' : '');
       }
 
       function sessionIdentityPayload(ref) {
@@ -790,6 +847,15 @@ export function renderUiShellHtml(): string {
             claudeCwd: decodeURIComponent(raw.slice(separator + 1)),
           };
         }
+        if (value.startsWith('kimi:')) {
+          const raw = value.slice('kimi:'.length);
+          const separator = raw.indexOf(':');
+          if (separator < 0) return {};
+          return {
+            kimiSessionId: decodeURIComponent(raw.slice(0, separator)),
+            kimiCwd: decodeURIComponent(raw.slice(separator + 1)),
+          };
+        }
         return {};
       }
 
@@ -800,6 +866,8 @@ export function renderUiShellHtml(): string {
         if (identity.codexThreadId) params.set('codexThreadId', identity.codexThreadId);
         if (identity.claudeSessionId) params.set('claudeSessionId', identity.claudeSessionId);
         if (identity.claudeCwd) params.set('claudeCwd', identity.claudeCwd);
+        if (identity.kimiSessionId) params.set('kimiSessionId', identity.kimiSessionId);
+        if (identity.kimiCwd) params.set('kimiCwd', identity.kimiCwd);
         return params.toString();
       }
 
@@ -808,10 +876,14 @@ export function renderUiShellHtml(): string {
         if (identity.bridgeSessionId && binding.currentSessionId === identity.bridgeSessionId) return true;
         if (identity.codexThreadId && binding.currentThreadId === identity.codexThreadId) return true;
         return Boolean(
-          identity.claudeSessionId
-          && binding.currentRuntime === 'claude'
-          && binding.currentRuntimeThreadId === identity.claudeSessionId
-          && (!identity.claudeCwd || binding.currentClaudeCwd === identity.claudeCwd)
+          (identity.claudeSessionId
+            && binding.currentRuntime === 'claude'
+            && binding.currentRuntimeThreadId === identity.claudeSessionId
+            && (!identity.claudeCwd || binding.currentClaudeCwd === identity.claudeCwd))
+          || (identity.kimiSessionId
+            && binding.currentRuntime === 'kimi'
+            && binding.currentRuntimeThreadId === identity.kimiSessionId
+            && (!identity.kimiCwd || binding.currentKimiCwd === identity.kimiCwd))
         );
       }
 
@@ -820,10 +892,14 @@ export function renderUiShellHtml(): string {
         if (identity.bridgeSessionId && channelDefault.targetSessionId === identity.bridgeSessionId) return true;
         if (identity.codexThreadId && channelDefault.targetThreadId === identity.codexThreadId) return true;
         return Boolean(
-          identity.claudeSessionId
-          && channelDefault.targetRuntime === 'claude'
-          && channelDefault.targetRuntimeThreadId === identity.claudeSessionId
-          && (!identity.claudeCwd || channelDefault.targetClaudeCwd === identity.claudeCwd)
+          (identity.claudeSessionId
+            && channelDefault.targetRuntime === 'claude'
+            && channelDefault.targetRuntimeThreadId === identity.claudeSessionId
+            && (!identity.claudeCwd || channelDefault.targetClaudeCwd === identity.claudeCwd))
+          || (identity.kimiSessionId
+            && channelDefault.targetRuntime === 'kimi'
+            && channelDefault.targetRuntimeThreadId === identity.kimiSessionId
+            && (!identity.kimiCwd || channelDefault.targetKimiCwd === identity.kimiCwd))
         );
       }
 
@@ -861,6 +937,14 @@ export function renderUiShellHtml(): string {
           + '<div class="session-value">Provider: <code>' + escapeHtml(provider || 'default') + '</code></div>';
       }
 
+      function bindingProviderValue(binding) {
+        return binding.executionProvider || binding.codexProvider || 'default';
+      }
+
+      function sessionProviderValue(session) {
+        return session.executionProvider || session.codexProvider || 'default';
+      }
+
       function renderSessionTitle(session, marksHtml) {
         return ''
           + '<div class="session-title-row">'
@@ -893,19 +977,23 @@ export function renderUiShellHtml(): string {
 
       function sessionFromBindingOption(option) {
         const isBridge = option.kind === 'session';
+        const isClaude = option.runtime === 'claude' || option.kind === 'claude';
+        const isKimi = option.runtime === 'kimi' || option.kind === 'kimi';
         return {
-          kind: isBridge ? 'bridge' : (option.runtime === 'claude' || option.kind === 'claude' ? 'claude' : 'codex'),
-          runtime: option.runtime || (option.kind === 'claude' ? 'claude' : 'codex'),
+          kind: isBridge ? 'bridge' : (isKimi ? 'kimi' : isClaude ? 'claude' : 'codex'),
+          runtime: option.runtime || (isKimi ? 'kimi' : isClaude ? 'claude' : 'codex'),
           bridgeSessionId: option.bridgeSessionId || option.sessionId || (isBridge ? option.id : ''),
-          codexThreadId: option.codexThreadId || option.threadId || (isBridge ? '' : option.id),
-          claudeSessionId: option.claudeSessionId || (option.runtime === 'claude' || option.kind === 'claude' ? option.threadId || option.id : ''),
-          claudeCwd: option.claudeCwd || option.cwd || '',
+          codexThreadId: isClaude || isKimi ? '' : option.codexThreadId || option.threadId || (isBridge ? '' : option.id),
+          claudeSessionId: option.claudeSessionId || (isClaude ? option.threadId || option.id : ''),
+          claudeCwd: option.claudeCwd || (isClaude ? option.cwd || '' : ''),
+          kimiSessionId: option.kimiSessionId || (isKimi ? option.threadId || option.id : ''),
+          kimiCwd: option.kimiCwd || (isKimi ? option.cwd || '' : ''),
           sessionId: option.sessionId || (isBridge ? option.id : ''),
           threadId: option.threadId || (isBridge ? '' : option.id),
           title: option.label,
           cwd: option.cwd || '',
-          originator: isBridge ? 'Bridge / IM' : 'Codex Native',
-          source: isBridge ? 'bridge' : 'codex',
+          originator: isBridge ? 'Bridge / IM' : isKimi ? 'Kimi Code' : isClaude ? 'Claude Code' : 'Codex Native',
+          source: isBridge ? 'bridge' : isKimi ? 'kimi' : isClaude ? 'claude' : 'codex',
           creatorKind: isBridge ? 'bridge' : 'native',
           creatorLabel: isBridge ? 'Bridge' : 'Native',
           creatorClass: isBridge ? 'bridge' : 'native',
@@ -982,7 +1070,7 @@ export function renderUiShellHtml(): string {
             +   '<div class="binding-detail">当前会话：<code>' + escapeHtml(binding.currentSessionId ? binding.currentSessionId.slice(0, 8) + '...' : 'not-shared') + '</code> · ' + escapeHtml(binding.currentSessionName || binding.currentTargetLabel || '未指定') + '</div>'
             +   '<div class="binding-detail">当前目标：' + escapeHtml(binding.currentTargetLabel || '未指定') + '</div>'
           +   '<div class="binding-detail">当前 runtime：<code>' + escapeHtml(binding.currentRuntime || 'codex') + '</code> · <code>' + escapeHtml(bindingRuntimeIdentityText(binding)) + '</code></div>'
-          +   '<div class="binding-detail">Mode / Provider：<code>' + escapeHtml(binding.mode || 'normal') + '</code> · <code>' + escapeHtml(binding.codexProvider || 'default') + '</code></div>'
+          +   '<div class="binding-detail">Mode / Provider：<code>' + escapeHtml(binding.mode || 'normal') + '</code> · <code>' + escapeHtml(bindingProviderValue(binding)) + '</code></div>'
           + '</article>';
         }
         return ''
@@ -990,7 +1078,7 @@ export function renderUiShellHtml(): string {
           +   '<div class="binding-head">'
           +     '<div class="binding-title">' + escapeHtml(binding.chatDisplayName || binding.chatId) + '</div>'
           +     '<div class="actions">'
-          +       '<div class="small">' + escapeHtml((binding.mode || 'normal') + ' · ' + (binding.codexProvider || 'default')) + '</div>'
+          +       '<div class="small">' + escapeHtml((binding.mode || 'normal') + ' · ' + bindingProviderValue(binding)) + '</div>'
           +       '<button type="button" data-action="unbind-binding" data-binding-id="' + escapeHtml(binding.id) + '">解绑当前聊天</button>'
           +     '</div>'
           +   '</div>'
@@ -998,7 +1086,7 @@ export function renderUiShellHtml(): string {
           +   '<div class="binding-detail">当前会话：<code>' + escapeHtml(binding.currentSessionId.slice(0, 8)) + '...</code> · ' + escapeHtml(binding.currentSessionName) + '</div>'
           +   '<div class="binding-detail">当前目标：' + escapeHtml(binding.currentTargetLabel || '未绑定') + '</div>'
           +   '<div class="binding-detail">当前 runtime：<code>' + escapeHtml(binding.currentRuntime || 'codex') + '</code> · <code>' + escapeHtml(bindingRuntimeIdentityText(binding)) + '</code></div>'
-          +   '<div class="binding-detail">Mode / Provider：<code>' + escapeHtml(binding.mode || 'normal') + '</code> · <code>' + escapeHtml(binding.codexProvider || 'default') + '</code></div>'
+          +   '<div class="binding-detail">Mode / Provider：<code>' + escapeHtml(binding.mode || 'normal') + '</code> · <code>' + escapeHtml(bindingProviderValue(binding)) + '</code></div>'
           +   '<div class="binding-detail">运行状态：' + escapeHtml(bindingRuntimeText(binding)) + '</div>'
           +   '<div class="binding-detail">共享镜像：' + escapeHtml(bindingMirrorText(binding)) + '</div>'
           +   '<div class="binding-detail">目录：' + escapeHtml(binding.workingDirectory || '~') + '</div>'
@@ -1008,6 +1096,9 @@ export function renderUiShellHtml(): string {
       function formPayload() {
         return {
           runtime: document.getElementById('runtime').value,
+          tmuxCaptureLines: document.getElementById('tmuxCaptureLines').value,
+          tmuxAutoEnter: document.getElementById('tmuxAutoEnter').checked,
+          tmuxEchoInput: document.getElementById('tmuxEchoInput').checked,
           defaultMode: document.getElementById('defaultMode').value,
           historyMessageLimit: document.getElementById('historyMessageLimit').value,
           streamStatusIdleStartSeconds: document.getElementById('streamStatusIdleStartSeconds').value,
@@ -1021,8 +1112,12 @@ export function renderUiShellHtml(): string {
           codexReasoningEffort: document.getElementById('codexReasoningEffort').value,
           claudeExecutable: document.getElementById('claudeExecutable').value,
           claudeProvider: document.getElementById('claudeProvider').value,
+          claudeMode: document.getElementById('claudeMode').value,
+          claudeReasoningEffort: document.getElementById('claudeReasoningEffort').value,
           claudeDefaultModel: document.getElementById('claudeDefaultModel').value,
           claudeIdleTimeoutMinutes: document.getElementById('claudeIdleTimeoutMinutes').value,
+          kimiProvider: document.getElementById('kimiProvider').value,
+          kimiDefaultModel: document.getElementById('kimiDefaultModel').value,
           uiAllowLan: document.getElementById('uiAllowLan').checked,
           uiAccessToken: document.getElementById('uiAccessToken').value,
         };
@@ -1309,22 +1404,28 @@ export function renderUiShellHtml(): string {
 
       const CONFIG_FIELD_LABELS = {
         runtime: 'Runtime',
+        tmuxCaptureLines: 'tmux 输出行数',
+        tmuxAutoEnter: 'tmux 自动回车',
+        tmuxEchoInput: '回显 tmux 输入',
         defaultWorkspaceRoot: '/new 相对路径根目录',
         defaultModel: 'Codex 默认模型',
         defaultProvider: '默认 Codex Provider',
         defaultMode: 'Codex 默认模式',
         historyMessageLimit: '/his 返回条数',
-        streamStatusIdleStartSeconds: '长任务提示延迟',
-        streamStatusCheckIntervalSeconds: '长任务提示刷新间隔',
+        streamStatusIdleStartSeconds: '响应计时显示延迟',
+        streamStatusCheckIntervalSeconds: '运行状态刷新间隔',
         codexSkipGitRepoCheck: '允许在未信任 Git 目录运行 Codex',
         codexSandboxMode: 'Codex 文件系统权限',
         codexNetworkAccess: 'Codex 网络访问',
         codexReasoningEffort: 'Codex 思考级别',
         claudeExecutable: 'Claude executable',
         claudeProvider: '默认 Claude Provider',
+        claudeMode: 'Claude 默认模式',
+        claudeReasoningEffort: 'Claude 思考级别',
         claudeDefaultModel: 'Claude 默认模型',
         claudeIdleTimeoutMinutes: 'Claude 空闲超时',
-        showToolCallDetails: '显示工具输入输出',
+        kimiProvider: '默认 Kimi Provider',
+        kimiDefaultModel: 'Kimi 默认模型',
         uiAllowLan: '允许局域网访问 Web 控制台',
         uiAccessToken: '局域网访问 token',
       };
@@ -1338,6 +1439,9 @@ export function renderUiShellHtml(): string {
 
       const IMMEDIATE_FIELDS = new Set([
         'defaultWorkspaceRoot',
+        'tmuxCaptureLines',
+        'tmuxAutoEnter',
+        'tmuxEchoInput',
         'defaultModel',
         'defaultProvider',
         'defaultMode',
@@ -1349,9 +1453,12 @@ export function renderUiShellHtml(): string {
         'codexReasoningEffort',
         'claudeExecutable',
         'claudeProvider',
+        'claudeMode',
+        'claudeReasoningEffort',
         'claudeDefaultModel',
         'claudeIdleTimeoutMinutes',
-        'showToolCallDetails',
+        'kimiProvider',
+        'kimiDefaultModel',
         'uiAllowLan',
         'uiAccessToken',
       ]);
@@ -1525,9 +1632,10 @@ export function renderUiShellHtml(): string {
         const bridgeSessionId = sessionBridgeSessionId(session);
         const threadId = sessionRuntimeThreadId(session);
         const isClaude = Boolean(sessionClaudeSessionId(session));
+        const isKimi = Boolean(sessionKimiSessionId(session));
         const identity = threadId || bridgeSessionId || '';
         const identityAction = threadId ? 'copy-thread' : 'copy-session-id';
-        const identityLabel = threadId ? (isClaude ? '复制 Claude session' : '复制 thread') : '复制 Bridge 会话 ID';
+        const identityLabel = threadId ? (isClaude ? '复制 Claude session' : isKimi ? '复制 Kimi session' : '复制 thread') : '复制 Bridge 会话 ID';
         const identityAttr = threadId
           ? 'data-thread-id="' + escapeHtml(threadId) + '"'
           : 'data-session-id="' + escapeHtml(bridgeSessionId) + '"';
@@ -1535,7 +1643,7 @@ export function renderUiShellHtml(): string {
 
         return ''
           + (identity ? iconButton(identityAction, 'copy', identityLabel, identityAttr, '') : '')
-          + (threadId && !isClaude
+          + (threadId && !isClaude && !isKimi
             ? iconButton('copy-bind-command', 'command', '复制接管命令', 'data-thread-id="' + escapeHtml(threadId) + '"', '')
             : '')
           + (configurable
@@ -1593,7 +1701,7 @@ export function renderUiShellHtml(): string {
           +     '</div>'
           +     '<div class="session-cell">'
           +       '<div class="session-label">状态</div>'
-          +       renderModeProviderValue(session.mode, session.codexProvider)
+          +       renderModeProviderValue(session.mode, sessionProviderValue(session))
           +     '</div>'
           +     '<div class="session-cell">'
           +       '<div class="session-label">目录</div>'
@@ -1612,7 +1720,7 @@ export function renderUiShellHtml(): string {
         const marks = currentThreadMarks(session);
         const markHtml = marks.map((mark) => '<span class="session-mark">' + escapeHtml(mark) + '</span>').join('');
         const runtimeThreadId = sessionRuntimeThreadId(session);
-        const identityLabel = runtimeThreadId ? (sessionClaudeSessionId(session) ? 'Claude session' : 'Thread') : 'Bridge 会话';
+        const identityLabel = runtimeThreadId ? (sessionClaudeSessionId(session) ? 'Claude session' : sessionKimiSessionId(session) ? 'Kimi session' : 'Thread') : 'Bridge 会话';
         const identityValue = runtimeThreadId || session.sessionId || '-';
         const bindingTags = bindings.map((binding) => (
           '<div class="session-binding-tag">'
@@ -1649,7 +1757,7 @@ export function renderUiShellHtml(): string {
           +     '</div>'
           +     '<div class="session-cell">'
           +       '<div class="session-label">状态</div>'
-          +       renderModeProviderValue(session.mode, session.codexProvider)
+          +       renderModeProviderValue(session.mode, sessionProviderValue(session))
           +     '</div>'
           +     '<div class="session-cell">'
           +       '<div class="session-label">Creator</div>'
@@ -1667,7 +1775,7 @@ export function renderUiShellHtml(): string {
         const markHtml = marks.map((mark) => '<span class="binding-table-mark">' + escapeHtml(mark) + '</span>').join('');
         const threadId = sessionRuntimeThreadId(session);
         const bridgeSessionId = sessionBridgeSessionId(session);
-        const identityLabel = threadId ? (sessionClaudeSessionId(session) ? 'Claude session' : 'Thread') : 'Bridge 会话';
+        const identityLabel = threadId ? (sessionClaudeSessionId(session) ? 'Claude session' : sessionKimiSessionId(session) ? 'Kimi session' : 'Thread') : 'Bridge 会话';
         const identityValue = threadId || bridgeSessionId || '-';
         const actionHtml = renderSessionActions(session);
 
@@ -1675,7 +1783,7 @@ export function renderUiShellHtml(): string {
           + '<tr class="session-table-row" ' + sessionIdentityAttrs(session) + '>'
           +   '<td><div class="binding-table-title session-table-title">' + renderSessionTitle(session, markHtml) + '</div><div class="binding-table-thread">' + identityLabel + ': <code>' + escapeHtml(identityValue) + '</code></div></td>'
           +   '<td><div class="binding-table-path">' + escapeHtml(session.cwd || '(no cwd)') + '</div></td>'
-          +   '<td>' + renderModeProviderValue(session.mode, session.codexProvider) + '</td>'
+          +   '<td>' + renderModeProviderValue(session.mode, sessionProviderValue(session)) + '</td>'
           +   '<td><div class="binding-table-source">' + renderCreatorToggle(session) + '</div></td>'
           +   '<td><div class="binding-table-thread session-date">' + escapeHtml(formatTime(session.lastEventAt || '')) + '</div></td>'
           +   '<td><div class="session-actions compact-actions">' + actionHtml + '</div></td>'
@@ -1697,6 +1805,9 @@ export function renderUiShellHtml(): string {
         const claudePhysical = Number.isFinite(Number(counts.claudePhysical))
           ? Number(counts.claudePhysical)
           : sessions.filter((session) => session.kind === 'claude').length;
+        const kimiPhysical = Number.isFinite(Number(counts.kimiPhysical))
+          ? Number(counts.kimiPhysical)
+          : sessions.filter((session) => session.kind === 'kimi').length;
         const bridgeStored = Number.isFinite(Number(counts.bridgeStored))
           ? Number(counts.bridgeStored)
           : sessions.filter((session) => session.kind === 'bridge').length;
@@ -1712,8 +1823,9 @@ export function renderUiShellHtml(): string {
           '扫描目录：' + state.codexRoot
           + ' · 本地 Codex ' + codexPhysical + ' 条'
           + ' · 本地 Claude ' + claudePhysical + ' 条'
+          + ' · 本地 Kimi ' + kimiPhysical + ' 条'
           + ' · Bridge 存储 ' + bridgeStored + ' 条'
-          + (bridgeWithoutCodexThread > 0 ? '（' + bridgeWithoutCodexThread + ' 条没有 Codex thread；可能是 Claude 或纯 Bridge 会话）' : '')
+          + (bridgeWithoutCodexThread > 0 ? '（' + bridgeWithoutCodexThread + ' 条没有 Codex thread；可能是 Claude、Kimi 或纯 Bridge 会话）' : '')
           + (dedupedBridgeRows > 0 ? ' · 已按 runtime identity 合并 ' + dedupedBridgeRows + ' 条重复映射' : '');
         document.getElementById('codexRootStatus').textContent = state.codexRoot;
 
@@ -1734,7 +1846,7 @@ export function renderUiShellHtml(): string {
         }
 
         if (state.codexSessions.length === 0) {
-          list.innerHTML = '<div class="notice ghost">当前没有发现本地会话。先从 IM 发一条消息，或在本机 Codex / Claude Code 中打开一个会话，再回到这里刷新。</div>';
+          list.innerHTML = '<div class="notice ghost">当前没有发现本地会话。先从 IM 发一条消息，或在本机 Codex / Claude Code / Kimi Code 中打开一个会话，再回到这里刷新。</div>';
           renderChannelsWorkspace();
           return;
         }
@@ -1786,8 +1898,10 @@ export function renderUiShellHtml(): string {
           channelAlias: channelDefault.channelAlias,
           chatId: '*',
           chatDisplayName: '等待首条新聊天',
-          mode: 'pending',
+          mode: channelDefault.mode || 'normal',
           model: '',
+          codexProvider: channelDefault.codexProvider || 'default',
+          executionProvider: channelDefault.executionProvider || channelDefault.codexProvider || 'default',
           workingDirectory: '',
           currentTargetLabel: channelDefault.targetLabel,
           currentSessionId: channelDefault.targetSessionId || channelDefault.bridgeSessionId || '',
@@ -1796,6 +1910,7 @@ export function renderUiShellHtml(): string {
           currentThreadId: channelDefault.targetThreadId || '',
           currentRuntimeThreadId: channelDefault.targetRuntimeThreadId || channelDefault.targetThreadId || '',
           currentClaudeCwd: channelDefault.targetClaudeCwd || '',
+          currentKimiCwd: channelDefault.targetKimiCwd || '',
           runtimeStatus: '',
           queuedCount: 0,
           mirrorStatus: '',
@@ -2032,10 +2147,13 @@ export function renderUiShellHtml(): string {
       function fillForm(config) {
         state.config = config;
         document.getElementById('runtime').value = config.runtime || 'codex';
+        document.getElementById('tmuxCaptureLines').value = String(config.tmuxCaptureLines || 80);
+        document.getElementById('tmuxAutoEnter').checked = config.tmuxAutoEnter !== false;
+        document.getElementById('tmuxEchoInput').checked = config.tmuxEchoInput === true;
         document.getElementById('defaultMode').value = config.defaultMode === 'yolo' ? 'yolo' : 'normal';
         document.getElementById('historyMessageLimit').value = String(config.historyMessageLimit || 8);
-        document.getElementById('streamStatusIdleStartSeconds').value = String(config.streamStatusIdleStartSeconds || 180);
-        document.getElementById('streamStatusCheckIntervalSeconds').value = String(config.streamStatusCheckIntervalSeconds || 10);
+        document.getElementById('streamStatusIdleStartSeconds').value = String(config.streamStatusIdleStartSeconds ?? 0);
+        document.getElementById('streamStatusCheckIntervalSeconds').value = String(config.streamStatusCheckIntervalSeconds || 5);
         document.getElementById('defaultWorkspaceRoot').value = config.defaultWorkspaceRoot || '';
         renderDefaultModelOptions(config);
         document.getElementById('defaultProvider').value = config.defaultProvider || '';
@@ -2045,9 +2163,12 @@ export function renderUiShellHtml(): string {
         document.getElementById('codexReasoningEffort').value = config.codexReasoningEffort || 'medium';
         document.getElementById('claudeExecutable').value = config.claudeExecutable || 'claude';
         document.getElementById('claudeProvider').value = config.claudeProvider || '';
+        document.getElementById('claudeMode').value = config.claudeMode === 'yolo' ? 'yolo' : 'normal';
+        document.getElementById('claudeReasoningEffort').value = config.claudeReasoningEffort || 'medium';
         document.getElementById('claudeDefaultModel').value = config.claudeDefaultModel || '';
         document.getElementById('claudeIdleTimeoutMinutes').value = String(config.claudeIdleTimeoutMinutes || 0);
-        document.getElementById('showToolCallDetails').checked = config.showToolCallDetails !== false;
+        document.getElementById('kimiProvider').value = config.kimiProvider || 'tmux';
+        document.getElementById('kimiDefaultModel').value = config.kimiDefaultModel || '';
         document.getElementById('uiAllowLan').checked = config.uiAllowLan === true;
         document.getElementById('uiAccessToken').value = config.uiAccessToken || '';
         renderUiAccess();
@@ -2182,6 +2303,7 @@ export function renderUiShellHtml(): string {
 
       function sessionCreatorLabel(source) {
         if (source === 'claude') return 'Claude Code';
+        if (source === 'kimi') return 'Kimi Code';
         return source === 'bridge' ? 'Bridge / IM' : 'Codex Native';
       }
 
@@ -2496,12 +2618,18 @@ export function renderUiShellHtml(): string {
       }
 
       function fillSessionConfigForm(config) {
-        const activeRuntime = config.activeRuntime === 'claude' ? 'claude' : 'codex';
+        const activeRuntime = config.activeRuntime === 'claude'
+          ? 'claude'
+          : config.activeRuntime === 'kimi'
+            ? 'kimi'
+            : 'codex';
         state.activeSessionConfigRuntime = activeRuntime;
         const isClaude = activeRuntime === 'claude';
-        document.getElementById('sessionConfigCodexBlock').hidden = isClaude;
-        document.getElementById('sessionConfigCodexSandboxBlock').hidden = isClaude;
+        const isKimi = activeRuntime === 'kimi';
+        document.getElementById('sessionConfigCodexBlock').hidden = isClaude || isKimi;
+        document.getElementById('sessionConfigCodexSandboxBlock').hidden = isClaude || isKimi;
         document.getElementById('sessionConfigClaudeBlock').hidden = !isClaude;
+        document.getElementById('sessionConfigKimiBlock').hidden = !isKimi;
         document.getElementById('sessionConfigName').value = config.name || config.title || '';
         document.getElementById('sessionConfigCwd').value = config.workingDirectory || '';
         renderModelOptionsForSelect(document.getElementById('sessionConfigModel'), config.model || '', '跟随全局 / Codex 默认模型');
@@ -2514,6 +2642,8 @@ export function renderUiShellHtml(): string {
           : config.codexNetworkAccess !== false;
         document.getElementById('sessionConfigClaudeModel').value = config.claudeModel || '';
         document.getElementById('sessionConfigClaudeReasoning').value = config.claudeReasoningEffort || '';
+        document.getElementById('sessionConfigKimiModel').value = config.kimiModel || '';
+        document.getElementById('sessionConfigKimiProvider').value = config.kimiProvider || '';
         document.getElementById('sessionConfigPrompt').value = config.systemPrompt || '';
       }
 
@@ -2531,6 +2661,8 @@ export function renderUiShellHtml(): string {
           codexNetworkAccess: document.getElementById('sessionConfigNetwork').checked,
           claudeModel: document.getElementById('sessionConfigClaudeModel').value,
           claudeReasoningEffort: document.getElementById('sessionConfigClaudeReasoning').value,
+          kimiModel: document.getElementById('sessionConfigKimiModel').value,
+          kimiProvider: document.getElementById('sessionConfigKimiProvider').value,
           systemPrompt: document.getElementById('sessionConfigPrompt').value,
         };
       }

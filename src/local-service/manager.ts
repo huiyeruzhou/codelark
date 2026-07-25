@@ -801,6 +801,11 @@ function structuredLarkCliUsers(users: unknown): unknown[] | null {
   return structured.length > 0 ? structured : null;
 }
 
+function cloneLarkCliUsers(users: unknown[] | null): unknown[] | null {
+  if (!users) return null;
+  return JSON.parse(JSON.stringify(users)) as unknown[];
+}
+
 function readTargetLarkCliApp(config: LocalServiceConfig): {
   raw: Record<string, unknown>;
   app: Record<string, unknown>;
@@ -862,6 +867,22 @@ function hasTargetLarkCliUsers(config: LocalServiceConfig): boolean {
   return Boolean(structuredLarkCliUsers(target.app.users));
 }
 
+function snapshotTargetLarkCliUsers(config: LocalServiceConfig): unknown[] | null {
+  return cloneLarkCliUsers(structuredLarkCliUsers(readTargetLarkCliApp(config)?.app.users));
+}
+
+function restoreTargetLarkCliUsers(config: LocalServiceConfig, users: unknown[] | null): boolean {
+  const cloned = cloneLarkCliUsers(users);
+  if (!cloned) return false;
+  const target = readTargetLarkCliApp(config);
+  if (!target) return false;
+  target.app.users = cloned;
+  const tmpPath = `${larkCliTargetConfigFile}.tmp`;
+  fs.writeFileSync(tmpPath, `${JSON.stringify(target.raw, null, 2)}\n`, { mode: 0o600 });
+  fs.renameSync(tmpPath, larkCliTargetConfigFile);
+  return true;
+}
+
 function hasLegacyStrictLarkCliRuntime(config: LocalServiceConfig): boolean {
   const target = readTargetLarkCliApp(config);
   if (!target) return false;
@@ -893,12 +914,18 @@ function larkCliIdentityPolicyCommands(hasUser: boolean, options: LarkCliRuntime
 export async function applyLarkCliRuntimeIdentityPolicy(
   hasUser: boolean,
   options: LarkCliRuntimeConfigOptions = {},
+  config: LocalServiceConfig = loadStartupConfig(),
 ): Promise<string | undefined> {
   const env = buildLarkCliRuntimeEnv();
+  const preservedUsers = snapshotTargetLarkCliUsers(config);
   for (const args of larkCliIdentityPolicyCommands(hasUser, options)) {
     const result = await runBundledLarkCli(args, env);
-    if (result.code !== 0) return formatLarkCliFailure(args, result);
+    if (result.code !== 0) {
+      restoreTargetLarkCliUsers(config, preservedUsers);
+      return formatLarkCliFailure(args, result);
+    }
   }
+  restoreTargetLarkCliUsers(config, preservedUsers);
   return undefined;
 }
 
@@ -966,10 +993,12 @@ export async function ensureLarkCliRuntimeConfig(
   // setup 随后就会申请用户 OAuth，所以 bind 阶段使用允许用户身份的预设。
   // 如果当前还没有 user，再在下面临时收紧到 bot，避免永久把 workspace 锁死到 bot-only。
   const bindArgs = ['config', 'bind', '--source', 'lark-channel', '--identity', 'user-default', '--force'];
+  const preservedUsers = snapshotTargetLarkCliUsers(config);
   const bind = await runBundledLarkCli(bindArgs, env);
   if (bind.code !== 0) {
     const warning = formatLarkCliFailure(bindArgs, bind);
     if (!isLarkCliKeychainFailure(warning) || !writePlainLarkCliTargetProjection(config)) {
+      restoreTargetLarkCliUsers(config, preservedUsers);
       return {
         ready: false,
         skipped: false,
@@ -979,8 +1008,9 @@ export async function ensureLarkCliRuntimeConfig(
       };
     }
   }
+  restoreTargetLarkCliUsers(config, preservedUsers);
 
-  const policyWarning = await applyLarkCliRuntimeIdentityPolicy(hasTargetLarkCliUsers(config), options);
+  const policyWarning = await applyLarkCliRuntimeIdentityPolicy(hasTargetLarkCliUsers(config), options, config);
   if (policyWarning) {
     return {
       ready: false,
@@ -1235,6 +1265,8 @@ export const _testOnly = {
   writePlainLarkCliTargetProjection,
   hasTargetLarkCliUsers,
   hasLegacyStrictLarkCliRuntime,
+  snapshotTargetLarkCliUsers,
+  restoreTargetLarkCliUsers,
   larkCliIdentityPolicyCommands,
   resetLegacyStrictLarkCliRuntimeForSetup,
   readTargetLarkCliApp,
@@ -1487,7 +1519,9 @@ export interface ExternalSkillDefinition {
 }
 
 function npxCommand(): string {
-  return process.platform === 'win32' ? 'npx.cmd' : 'npx';
+  const name = process.platform === 'win32' ? 'npx.cmd' : 'npx';
+  const besideNode = path.join(path.dirname(process.execPath), name);
+  return fs.existsSync(besideNode) ? besideNode : name;
 }
 
 export const OFFICIAL_LARK_DOC_SKILL: ExternalSkillDefinition = {

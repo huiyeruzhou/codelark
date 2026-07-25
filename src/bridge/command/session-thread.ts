@@ -27,6 +27,7 @@ export {
 };
 export type SessionThreadCommandDeps = SessionCommandDeps;
 export type SessionThreadCommandResult = SessionCommandResult;
+export type { SessionCommandBackgroundEffect } from '../session/command-use-cases/types.js';
 
 export function buildStartCommandResponse(): string {
   return [
@@ -35,7 +36,7 @@ export function buildStartCommandResponse(): string {
     '直接发送文本，就会继续当前聊天绑定的会话。',
     '',
     '常用流程',
-    '1. /t 查看本地 Codex / Claude Code 会话',
+    '1. /t 查看本地 Codex / Claude Code / Kimi Code 会话',
     '2. /t 1 接管第 1 条本地会话并设为当前线程',
     '3. /new name 创建一个新的 IM 群聊会话',
     '4. /t 全局表中绿色是当前聊天绑定，灰色是其他聊天已绑定',

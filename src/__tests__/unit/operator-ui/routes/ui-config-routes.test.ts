@@ -6,7 +6,11 @@ import path from 'node:path';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 
 import { handleUiConfigRoute } from '../../../../operator-ui/routes/config.js';
-import { configV2ToPayload, mergeConfigV2HomePatch } from '../../../../operator-ui/application/config.js';
+import {
+  configV2ToPayload,
+  mergeConfigV2HomePatch,
+  UI_CONFIG_INPUT_KEYS,
+} from '../../../../operator-ui/application/config.js';
 import { CODELARK_HOME } from '../../../../configuration/paths.js';
 import {
   LEGACY_CONFIG_ENV_PATH as CONFIG_PATH,
@@ -66,6 +70,10 @@ function baseConfigV2(overrides: Partial<ConfigV2> = {}): ConfigV2 {
         executable: 'claude',
         reasoningEffort: 'medium',
         idleTimeoutMinutes: 0,
+      },
+      kimi: {
+        model: '',
+        provider: 'tmux',
       },
     },
     bridge: {
@@ -130,6 +138,10 @@ describe('Ui config application', () => {
           reasoningEffort: 'high',
           yoloMode: 'on',
         },
+        kimi: {
+          model: 'kimi-current',
+          provider: 'tmux',
+        },
       },
       bridge: {
         defaultWorkspace: '/tmp/work',
@@ -144,9 +156,93 @@ describe('Ui config application', () => {
     assert.equal(patch.runtime?.codex?.networkAccess, false);
     assert.equal(patch.runtime?.codex?.reasoningEffort, 'high');
     assert.equal(patch.runtime?.codex?.yoloMode, 'on');
+    assert.equal(patch.runtime?.kimi?.model, 'kimi-current');
+    assert.equal(patch.runtime?.kimi?.provider, 'tmux');
     assert.equal(patch.bridge?.defaultWorkspace, '/tmp/work');
     assert.equal(patch.bridge?.uiAllowLan, true);
     assert.equal(patch.bridge?.uiAccessToken, 'existing-token');
+  });
+
+  it('round-trips shared tmux defaults and all Claude runtime defaults', () => {
+    const current = baseConfigV2();
+    const patch = mergeConfigV2HomePatch(current, {
+      tmuxCaptureLines: '140',
+      tmuxAutoEnter: false,
+      tmuxEchoInput: true,
+      claudeMode: 'yolo',
+      claudeReasoningEffort: 'max',
+    });
+
+    assert.deepEqual(patch.session, {
+      tmuxCaptureLines: 140,
+      tmuxAutoEnter: false,
+      tmuxEchoInput: true,
+    });
+    assert.equal(patch.runtime?.claude?.yoloMode, 'on');
+    assert.equal(patch.runtime?.claude?.reasoningEffort, 'max');
+
+    const payload = configV2ToPayload({
+      ...current,
+      session: { ...current.session, ...patch.session },
+      runtime: {
+        ...current.runtime,
+        claude: { ...current.runtime.claude, ...patch.runtime?.claude },
+      },
+    });
+    assert.equal(payload.tmuxCaptureLines, 140);
+    assert.equal(payload.tmuxAutoEnter, false);
+    assert.equal(payload.tmuxEchoInput, true);
+    assert.equal(payload.claudeMode, 'yolo');
+    assert.equal(payload.claudeReasoningEffort, 'max');
+  });
+
+  it('keeps the browser form submission keys equal to the backend input contract', () => {
+    const source = fs.readFileSync(path.join(process.cwd(), 'src/operator-ui/shell.ts'), 'utf-8').replace(/\r\n/g, '\n');
+    const body = source.match(/function formPayload\(\) \{\s*return \{([\s\S]*?)\n\s*\};\n\s*\}/)?.[1] || '';
+    const browserKeys = [...body.matchAll(/^\s+(\w+):/gm)].map((match) => match[1]).sort();
+
+    assert.deepEqual(browserKeys, UI_CONFIG_INPUT_KEYS);
+    assert.doesNotMatch(source, /showToolCallDetails/);
+    assert.match(source, /运行状态刷新间隔（秒）/);
+    assert.match(source, /id="streamStatusCheckIntervalSeconds"[^>]*value="5"/);
+    assert.match(source, /config\.streamStatusCheckIntervalSeconds \|\| 5/);
+    assert.doesNotMatch(source, /长任务提示刷新间隔/);
+  });
+
+  it('exposes and writes global Kimi runtime defaults', () => {
+    const current = baseConfigV2({
+      runtime: {
+        ...baseConfigV2().runtime,
+        agent: 'kimi',
+        kimi: {
+          model: 'moonshot-v1-current',
+          provider: 'tmux',
+        },
+      },
+    });
+
+    const payload = configV2ToPayload(current);
+    assert.equal(payload.runtime, 'kimi');
+    assert.equal(payload.kimiDefaultModel, 'moonshot-v1-current');
+    assert.equal(payload.kimiProvider, 'tmux');
+
+    const patch = mergeConfigV2HomePatch(current, {
+      runtime: 'kimi',
+      kimiDefaultModel: 'moonshot-v1-next',
+      kimiProvider: 'tmux',
+    });
+    assert.equal(patch.runtime?.agent, 'kimi');
+    assert.equal(patch.runtime?.kimi?.model, 'moonshot-v1-next');
+    assert.equal(patch.runtime?.kimi?.provider, 'tmux');
+    assert.equal(patch.runtime?.codex?.provider, current.runtime.codex.provider);
+    assert.equal(patch.runtime?.claude?.provider, current.runtime.claude.provider);
+  });
+
+  it('rejects invalid global Kimi provider values', () => {
+    assert.throws(
+      () => mergeConfigV2HomePatch(baseConfigV2(), { kimiProvider: 'sdk' }),
+      /Invalid input: expected \\"tmux\\"/,
+    );
   });
 
   it('does not synthesize channel timing defaults when the effective config has no channel', () => {
@@ -157,6 +253,26 @@ describe('Ui config application', () => {
   it('defaults the Claude provider payload to sdk', () => {
     const payload = configV2ToPayload(baseConfigV2());
     assert.equal(payload.claudeProvider, 'sdk');
+  });
+
+  it('keeps the global config shell wired to Kimi form fields', () => {
+    const source = fs.readFileSync(path.join(process.cwd(), 'src/operator-ui/shell.ts'), 'utf-8');
+    assert.match(source, /<select id="runtime">[\s\S]*<option value="codex" selected>codex<\/option>[\s\S]*<option value="claude">claude<\/option>[\s\S]*<option value="kimi">kimi<\/option>/);
+    assert.match(source, /GlobalRuntime \/ Kimi/);
+    assert.match(source, /id="kimiProvider"/);
+    assert.match(source, /id="kimiDefaultModel"/);
+    assert.match(source, /<select id="defaultProvider">[\s\S]*<option value="sdk">sdk<\/option>[\s\S]*<option value="pty">pty<\/option>[\s\S]*<option value="tmux">tmux<\/option>/);
+    assert.match(source, /kimiProvider: document\.getElementById\('kimiProvider'\)\.value/);
+    assert.match(source, /kimiDefaultModel: document\.getElementById\('kimiDefaultModel'\)\.value/);
+    assert.match(source, /document\.getElementById\('kimiProvider'\)\.value = config\.kimiProvider \|\| 'tmux'/);
+    assert.match(source, /document\.getElementById\('kimiDefaultModel'\)\.value = config\.kimiDefaultModel \|\| ''/);
+  });
+
+  it('describes /t runtime identities as thread or session ids', () => {
+    const source = fs.readFileSync(path.join(process.cwd(), 'src/operator-ui/shell.ts'), 'utf-8');
+    assert.match(source, /thread\/session id/);
+    assert.doesNotMatch(source, /\/t &lt;序号\|thread id\|bridge id\|名称&gt;/);
+    assert.doesNotMatch(source, /\/t archive \[序号\|bridge id\|thread id\|名称\]/);
   });
 });
 
@@ -368,6 +484,7 @@ require_mention = false
           defaultProvider: 'tmux',
           defaultMode: 'yolo',
           historyMessageLimit: 14,
+          streamStatusIdleStartSeconds: 0,
           codexNetworkAccess: false,
         }),
         response,
@@ -382,6 +499,7 @@ require_mention = false
       assert.equal(body.config?.defaultProvider, 'tmux');
       assert.equal(body.config?.defaultMode, 'yolo');
       assert.equal(body.config?.historyMessageLimit, 14);
+      assert.equal(body.config?.streamStatusIdleStartSeconds, 0);
       assert.equal(body.config?.codexNetworkAccess, false);
       assert.equal(fs.readFileSync(CONFIG_PATH, 'utf-8'), 'CODELARK_HISTORY_MESSAGE_LIMIT=5\n');
       const legacyJson = JSON.parse(fs.readFileSync(CONFIG_JSON_PATH, 'utf-8')) as any;
@@ -391,6 +509,7 @@ require_mention = false
       assert.match(savedToml, /provider = "tmux"/);
       assert.match(savedToml, /yolo_mode = "on"/);
       assert.match(savedToml, /history_message_limit = 14/);
+      assert.match(savedToml, /stream_status_idle_start_seconds = 0/);
       assert.match(savedToml, /network_access = false/);
       assert.match(savedToml, /reasoning_effort = "high"/);
     } finally {

@@ -1,11 +1,16 @@
 import path from 'node:path';
 
 import { maskSecrets } from '../logger.js';
-import type { CodexToolDetail, ToolCallInfo } from '../../domain/progress.js';
+import type { ToolCallDetail, ToolCallInfo } from '../../domain/progress.js';
 import { buildFencedCodeBlock } from '../markdown/fence.js';
 import { sanitizeInput } from '../security/validators.js';
+import { createTextPreview, type TextPreviewOptions } from '../text-preview.js';
 
-export const EXEC_COMMAND_RENDER_OUTPUT_CHAR_LIMIT = 1000;
+export const TOOL_DETAIL_PREVIEW_CHAR_LIMIT = 4_000;
+export const TOOL_DETAIL_PREVIEW_LINE_LIMIT = 80;
+export const PATCH_DETAIL_PREVIEW_CHAR_LIMIT = 8_000;
+export const PATCH_DETAIL_PREVIEW_LINE_LIMIT = 160;
+export const EXEC_COMMAND_RENDER_OUTPUT_CHAR_LIMIT = TOOL_DETAIL_PREVIEW_CHAR_LIMIT;
 
 function sanitizeToolText(value: string): string {
   return maskSecrets(value)
@@ -43,11 +48,39 @@ function isExecTool(name: string | undefined): boolean {
 }
 
 function isWriteStdinTool(name: string | undefined): boolean {
-  return normalizeToolName(name) === 'write_stdin';
+  return /^(write_stdin|wait)$/.test(normalizeToolName(name));
 }
 
 function isPatchTool(name: string | undefined): boolean {
-  return /^(apply_patch|edit)$/.test(normalizeToolName(name));
+  return normalizeToolName(name) === 'apply_patch';
+}
+
+function isReadTool(name: string | undefined): boolean {
+  return /^(read|read_file)$/.test(normalizeToolName(name));
+}
+
+function isSearchTool(name: string | undefined): boolean {
+  return /^(grep|search|search_files)$/.test(normalizeToolName(name));
+}
+
+function isEditTool(name: string | undefined): boolean {
+  return normalizeToolName(name) === 'edit';
+}
+
+function isWriteTool(name: string | undefined): boolean {
+  return /^(write|write_file)$/.test(normalizeToolName(name));
+}
+
+function isFetchTool(name: string | undefined): boolean {
+  return /^(fetchurl|fetch_url)$/.test(normalizeToolName(name));
+}
+
+function isAgentTool(name: string | undefined): boolean {
+  return /^(agent|task)$/.test(normalizeToolName(name));
+}
+
+function isTodoTool(name: string | undefined): boolean {
+  return /^(todolist|todo_list|update_plan)$/.test(normalizeToolName(name));
 }
 
 function numberFromRecord(record: Record<string, unknown> | null, keys: string[]): number | undefined {
@@ -85,7 +118,7 @@ function commandFromInput(value: unknown): string {
 }
 
 function parseDurationMs(text: string): number | undefined {
-  const wallTime = text.match(/\bWall time:\s*([\d.]+)\s*seconds?\b/i);
+  const wallTime = text.match(/\bWall time:?\s*([\d.]+)\s*seconds?\b/i);
   if (wallTime) return Math.round(Number(wallTime[1]) * 1000);
   const durationNs = text.match(/\bduration:\s*(\d+)ns\b/i);
   if (durationNs) return Math.round(Number(durationNs[1]) / 1_000_000);
@@ -113,7 +146,8 @@ function parseProcessOutput(raw: string): {
   const text = raw || '';
   const exitMatch = text.match(/\bProcess exited with code\s+(-?\d+)\b/i)
     || text.match(/\bexit_code:\s*(-?\d+)\b/i);
-  const runningMatch = text.match(/\bProcess running with session ID\s+([^\s]+)\b/i);
+  const runningMatch = text.match(/\bProcess running with session ID\s+([^\s]+)\b/i)
+    || text.match(/\bScript running with cell ID\s+([^\s]+)\b/i);
   const outputMarker = text.match(/\nOutput:\n/);
   let output = '';
   if (outputMarker?.index != null) {
@@ -125,7 +159,9 @@ function parseProcessOutput(raw: string): {
       .filter((line) => !/^Wall time:/i.test(line.trim()))
       .filter((line) => !/^Process exited with code/i.test(line.trim()))
       .filter((line) => !/^Process running with session ID/i.test(line.trim()))
+      .filter((line) => !/^Script (?:completed|running|failed)(?:\b|:)/i.test(line.trim()))
       .filter((line) => !/^Original token count:/i.test(line.trim()))
+      .filter((line) => !/^Output:\s*$/i.test(line.trim()))
       .join('\n');
   }
   return {
@@ -236,7 +272,7 @@ function extractToolWorkingDirectory(record: Record<string, unknown> | null): st
   return extractTextRecordValue(record, ['workdir', 'working_dir', 'cwd']).trim();
 }
 
-function summarizeToolSearchTools(value: unknown): Pick<Extract<CodexToolDetail, { kind: 'tool_search' }>, 'foundCount' | 'namespaces' | 'toolNames'> {
+function summarizeToolSearchTools(value: unknown): Pick<Extract<ToolCallDetail, { kind: 'tool_search' }>, 'foundCount' | 'namespaces' | 'toolNames'> {
   if (!Array.isArray(value)) return {};
   const namespaces: string[] = [];
   const toolNames: string[] = [];
@@ -261,7 +297,7 @@ function summarizeToolSearchTools(value: unknown): Pick<Extract<CodexToolDetail,
   };
 }
 
-export function buildCodexToolDetailFromInput(toolName: string | undefined, input: unknown): CodexToolDetail | null {
+export function buildToolCallDetailFromInput(toolName: string | undefined, input: unknown): ToolCallDetail | null {
   const parsed = parseJsonMaybe(input);
   const record = parsed && typeof parsed === 'object' ? parsed as Record<string, unknown> : null;
   if (isExecTool(toolName)) {
@@ -276,12 +312,17 @@ export function buildCodexToolDetailFromInput(toolName: string | undefined, inpu
   }
   if (isWriteStdinTool(toolName)) {
     const waitMs = numberFromRecord(record, ['yield_time_ms', 'yieldTimeMs']);
+    const maxTokens = numberFromRecord(record, ['max_tokens', 'maxTokens', 'max_output_tokens', 'maxOutputTokens']);
     return {
       kind: 'terminal_stdin',
       ...(record && typeof record.session_id !== 'undefined' ? { sessionId: String(record.session_id) } : {}),
       ...(record && typeof record.sessionId !== 'undefined' ? { sessionId: String(record.sessionId) } : {}),
+      ...(record && typeof record.cell_id !== 'undefined' ? { sessionId: String(record.cell_id) } : {}),
+      ...(record && typeof record.cellId !== 'undefined' ? { sessionId: String(record.cellId) } : {}),
       ...(record && typeof record.chars === 'string' ? { chars: sanitizeToolText(record.chars), isPoll: record.chars.length === 0 } : {}),
+      ...(normalizeToolName(toolName) === 'wait' ? { isPoll: true } : {}),
       ...(typeof waitMs === 'number' ? { waitMs } : {}),
+      ...(typeof maxTokens === 'number' ? { maxTokens } : {}),
     };
   }
   if (isPatchTool(toolName)) {
@@ -292,6 +333,70 @@ export function buildCodexToolDetailFromInput(toolName: string | undefined, inpu
       ...(patchText.trim() ? { patchText: sanitizeToolText(patchText) } : {}),
       ...(workdir ? { workdir } : {}),
       files: parsePatchFiles(patchText, workdir),
+    };
+  }
+  if (isReadTool(toolName)) {
+    const lineOffset = numberFromRecord(record, ['line_offset', 'lineOffset', 'offset']);
+    const lineCount = numberFromRecord(record, ['n_lines', 'line_count', 'lineCount', 'limit']);
+    const filePath = record ? extractTextRecordValue(record, ['path', 'file_path', 'filePath']) : '';
+    return {
+      kind: 'file_read',
+      ...(filePath ? { path: sanitizeToolText(filePath) } : {}),
+      ...(typeof lineOffset === 'number' ? { lineOffset } : {}),
+      ...(typeof lineCount === 'number' ? { lineCount } : {}),
+    };
+  }
+  if (isSearchTool(toolName)) {
+    const query = record ? extractTextRecordValue(record, ['pattern', 'query', 'q']) : '';
+    const searchPath = record ? extractTextRecordValue(record, ['path', 'directory', 'cwd']) : '';
+    const outputMode = record ? extractTextRecordValue(record, ['output_mode', 'outputMode']) : '';
+    const headLimit = numberFromRecord(record, ['head_limit', 'headLimit', 'limit']);
+    return {
+      kind: 'file_search',
+      ...(query ? { query: sanitizeToolText(query) } : {}),
+      ...(searchPath ? { path: sanitizeToolText(searchPath) } : {}),
+      ...(outputMode ? { outputMode: sanitizeToolText(outputMode) } : {}),
+      ...(typeof headLimit === 'number' ? { headLimit } : {}),
+    };
+  }
+  if (isEditTool(toolName) || isWriteTool(toolName)) {
+    const filePath = record ? extractTextRecordValue(record, ['path', 'file_path', 'filePath']) : '';
+    const before = record ? extractTextRecordValue(record, ['old_string', 'before']) : '';
+    const after = record ? extractTextRecordValue(record, ['new_string', 'after']) : '';
+    const content = record ? extractTextRecordValue(record, ['content']) : '';
+    const mode = record ? extractTextRecordValue(record, ['mode']) : '';
+    return {
+      kind: 'file_change',
+      operation: isWriteTool(toolName) ? 'write' : 'edit',
+      ...(filePath ? { path: sanitizeToolText(filePath) } : {}),
+      ...(mode ? { mode: sanitizeToolText(mode) } : {}),
+      ...(before ? { before: sanitizeToolText(before) } : {}),
+      ...(after ? { after: sanitizeToolText(after) } : {}),
+      ...(content ? { content: sanitizeToolText(content) } : {}),
+    };
+  }
+  if (isFetchTool(toolName)) {
+    const url = record ? extractTextRecordValue(record, ['url']) : '';
+    return { kind: 'url_fetch', ...(url ? { url: sanitizeToolText(url) } : {}) };
+  }
+  if (isAgentTool(toolName)) {
+    const description = record ? extractTextRecordValue(record, ['description']) : '';
+    const subagentType = record ? extractTextRecordValue(record, ['subagent_type', 'subagentType']) : '';
+    const resume = record ? extractTextRecordValue(record, ['resume']) : '';
+    const prompt = record ? extractTextRecordValue(record, ['prompt']) : '';
+    return {
+      kind: 'agent',
+      ...(description ? { description: sanitizeToolText(description) } : {}),
+      ...(subagentType ? { subagentType: sanitizeToolText(subagentType) } : {}),
+      ...(resume ? { resume: sanitizeToolText(resume) } : {}),
+      ...(prompt ? { prompt: sanitizeToolText(prompt) } : {}),
+    };
+  }
+  if (isTodoTool(toolName)) {
+    return {
+      kind: 'todo_list',
+      ...(Array.isArray(record?.todos) ? { items: record.todos } : {}),
+      ...(Array.isArray(record?.plan) ? { items: record.plan } : {}),
     };
   }
   if (normalizeToolName(toolName) === 'tool_search') {
@@ -318,13 +423,24 @@ export function buildCodexToolDetailFromInput(toolName: string | undefined, inpu
   return { kind: 'generic', input: parsed };
 }
 
-export function buildCodexToolDetailFromOutput(
+export function buildToolCallDetailFromOutput(
   toolName: string | undefined,
   output: unknown,
-  existing?: CodexToolDetail | null,
-): CodexToolDetail | null {
+  existing?: ToolCallDetail | null,
+): ToolCallDetail | null {
   const raw = typeof output === 'string' ? output : stringifyToolValue(output);
   const parsed = parseJsonMaybe(output);
+  if (existing?.kind === 'orchestration') {
+    const structuredOutput = extractExecStructuredOutput(parsed);
+    const { output: processOutput } = parseProcessOutput(raw);
+    const outputText = structuredOutput || processOutput || '';
+    return {
+      kind: 'orchestration',
+      calls: existing.calls,
+      ...(outputText.trim() ? { output: sanitizeToolText(outputText) } : {}),
+      rawOutput: raw,
+    };
+  }
   if (existing?.kind === 'exec_command' || isExecTool(toolName)) {
     const structuredOutput = extractExecStructuredOutput(parsed);
     const { output: processOutput, ...processMeta } = parseProcessOutput(raw);
@@ -351,6 +467,36 @@ export function buildCodexToolDetailFromOutput(
       rawOutput: raw,
     };
   }
+  if (existing?.kind === 'file_read' || isReadTool(toolName)) {
+    return { kind: 'file_read', ...(raw.trim() ? { output: sanitizeToolText(raw) } : {}) };
+  }
+  if (existing?.kind === 'file_search' || isSearchTool(toolName)) {
+    const outputText = sanitizeToolText(raw);
+    const matchCount = outputText ? outputText.split(/\r?\n/).filter(Boolean).length : 0;
+    return {
+      kind: 'file_search',
+      ...(matchCount > 0 ? { matchCount } : {}),
+      ...(outputText ? { output: outputText } : {}),
+    };
+  }
+  if (existing?.kind === 'file_change' || isEditTool(toolName) || isWriteTool(toolName)) {
+    return {
+      kind: 'file_change',
+      operation: existing?.kind === 'file_change'
+        ? existing.operation
+        : isWriteTool(toolName) ? 'write' : 'edit',
+      ...(raw.trim() ? { output: sanitizeToolText(raw) } : {}),
+    };
+  }
+  if (existing?.kind === 'url_fetch' || isFetchTool(toolName)) {
+    return { kind: 'url_fetch', ...(raw.trim() ? { output: sanitizeToolText(raw) } : {}) };
+  }
+  if (existing?.kind === 'agent' || isAgentTool(toolName)) {
+    return { kind: 'agent', ...(raw.trim() ? { output: sanitizeToolText(raw) } : {}) };
+  }
+  if (existing?.kind === 'todo_list' || isTodoTool(toolName)) {
+    return { kind: 'todo_list', ...(raw.trim() ? { output: sanitizeToolText(raw) } : {}) };
+  }
   if (existing?.kind === 'tool_search' || normalizeToolName(toolName) === 'tool_search') {
     const summary = parsed && typeof parsed === 'object'
       ? summarizeToolSearchTools((parsed as { tools?: unknown }).tools ?? parsed)
@@ -370,35 +516,19 @@ export function buildCodexToolDetailFromOutput(
   return { kind: 'generic', output: sanitizeToolText(raw) };
 }
 
-export function mergeCodexToolDetail(
-  existing: CodexToolDetail | null | undefined,
-  update: CodexToolDetail | null | undefined,
-): CodexToolDetail | null {
+export function mergeToolCallDetail(
+  existing: ToolCallDetail | null | undefined,
+  update: ToolCallDetail | null | undefined,
+): ToolCallDetail | null {
   if (!existing) return update || null;
   if (!update) return existing;
   if (existing.kind !== update.kind) {
     if (update.kind === 'generic' && typeof update.output === 'string') {
-      return { ...existing, output: update.output } as CodexToolDetail;
+      return { ...existing, output: update.output } as ToolCallDetail;
     }
     return update.kind === 'generic' ? existing : update;
   }
-  return { ...existing, ...update } as CodexToolDetail;
-}
-
-function renderStatusLine(tool: ToolCallInfo, detail: Extract<CodexToolDetail, { kind: 'exec_command' | 'terminal_stdin' }>): string {
-  const duration = formatDuration(detail.durationMs);
-  const suffix = [
-    typeof detail.exitCode === 'number' && detail.exitCode !== 0 ? `with exit code ${detail.exitCode}` : '',
-    duration ? `in ${duration}` : '',
-  ].filter(Boolean).join(' ');
-  if (detail.runningSessionId) return `Process running with session ${detail.runningSessionId}${duration ? ` after ${duration}` : ''}.`;
-  if (tool.status === 'error' || (typeof detail.exitCode === 'number' && detail.exitCode !== 0)) {
-    return `⚠️ Fail${suffix ? ` ${suffix}` : ''}.`;
-  }
-  if (tool.status === 'complete') {
-    return `Success${suffix ? ` ${suffix}` : ''}.`;
-  }
-  return 'Running.';
+  return { ...existing, ...update } as ToolCallDetail;
 }
 
 function escapeTextTagContent(value: string): string {
@@ -412,14 +542,105 @@ function textTag(color: string, value: string): string {
   return `<text_tag color='${color}'>${escapeTextTagContent(value)}</text_tag>`;
 }
 
-function truncateExecOutputForRender(value: string): string {
+function renderPreview(value: string, language: string, options: TextPreviewOptions): string {
   const sanitized = sanitizeToolText(value);
   if (!sanitized) return '';
-  const { text, truncated } = sanitizeInput(sanitized, EXEC_COMMAND_RENDER_OUTPUT_CHAR_LIMIT);
-  return truncated ? `${text}\n...(truncated to ${EXEC_COMMAND_RENDER_OUTPUT_CHAR_LIMIT} chars)` : text;
+  const preview = createTextPreview(sanitized, options);
+  const note = preview.truncated
+    ? `显示 ${preview.shownChars}/${preview.totalChars} 字符 · ${preview.shownLines}/${preview.totalLines} 行`
+    : '';
+  return [buildFencedCodeBlock(preview.text, language), note ? `_${note}_` : ''].filter(Boolean).join('\n\n');
 }
 
-export function renderCodexToolDetailMarkdown(tool: ToolCallInfo): string {
+function renderStandardPreview(value: string, language: string): string {
+  return renderPreview(value, language, {
+    maxChars: TOOL_DETAIL_PREVIEW_CHAR_LIMIT,
+    maxLines: TOOL_DETAIL_PREVIEW_LINE_LIMIT,
+  });
+}
+
+function codeLanguageFromFilePath(filePath: string): string {
+  const basename = path.basename(filePath).toLowerCase();
+  if (basename === 'dockerfile') return 'docker_file';
+  if (/^(?:gnumakefile|makefile)$/u.test(basename)) return 'makefile';
+  const extension = path.extname(basename).toLowerCase();
+  return ({
+    '.abap': 'abap',
+    '.ada': 'ada',
+    '.adb': 'ada',
+    '.ads': 'ada',
+    '.asm': 'assembly',
+    '.bash': 'bash',
+    '.c': 'c',
+    '.cc': 'cpp',
+    '.cpp': 'cpp',
+    '.cxx': 'cpp',
+    '.h': 'cpp',
+    '.hh': 'cpp',
+    '.hpp': 'cpp',
+    '.cs': 'c_sharp',
+    '.css': 'css',
+    '.dart': 'dart',
+    '.dockerfile': 'docker_file',
+    '.go': 'go',
+    '.graphql': 'graphql',
+    '.gql': 'graphql',
+    '.groovy': 'groovy',
+    '.hbs': 'htmlbars',
+    '.htm': 'html',
+    '.html': 'html',
+    '.java': 'java',
+    '.js': 'javascript',
+    '.jsx': 'javascript',
+    '.mjs': 'javascript',
+    '.cjs': 'javascript',
+    '.json': 'json',
+    '.kt': 'kotlin',
+    '.kts': 'kotlin',
+    '.lua': 'lua',
+    '.md': 'markdown',
+    '.mdx': 'markdown',
+    '.php': 'php',
+    '.pl': 'perl',
+    '.pm': 'perl',
+    '.proto': 'protobuf',
+    '.ps1': 'powershell',
+    '.py': 'python',
+    '.r': 'r',
+    '.rb': 'ruby',
+    '.rs': 'rust',
+    '.scss': 'scss',
+    '.sh': 'shell',
+    '.sol': 'solidity',
+    '.sql': 'sql',
+    '.swift': 'swift',
+    '.toml': 'toml',
+    '.ts': 'typescript',
+    '.tsx': 'typescript',
+    '.vb': 'visual_basic',
+    '.vbs': 'vbscript',
+    '.xml': 'xml',
+    '.yaml': 'yaml',
+    '.yml': 'yaml',
+  } as Record<string, string>)[extension] || 'plain_text';
+}
+
+function patchCodeLanguage(detail: Extract<ToolCallDetail, { kind: 'patch_apply' }>): string {
+  const languages = new Set((detail.files || [])
+    .map((file) => file.toPath || file.path)
+    .filter(Boolean)
+    .map(codeLanguageFromFilePath));
+  return languages.size === 1 ? [...languages][0] || 'plain_text' : 'plain_text';
+}
+
+function renderPatchPreview(value: string, language: string): string {
+  return renderPreview(value, language, {
+    maxChars: PATCH_DETAIL_PREVIEW_CHAR_LIMIT,
+    maxLines: PATCH_DETAIL_PREVIEW_LINE_LIMIT,
+  });
+}
+
+export function renderToolCallDetailMarkdown(tool: ToolCallInfo): string {
   const detail = tool.detail;
   if (!detail) return '';
   const sections: string[] = [];
@@ -430,16 +651,17 @@ export function renderCodexToolDetailMarkdown(tool: ToolCallInfo): string {
     ].filter(Boolean).join('  ');
     if (meta) sections.push(meta);
     if (detail.command) sections.push(buildFencedCodeBlock(detail.command, 'bash'));
-    const status = renderStatusLine(tool, detail);
-    if (status && !(tool.status === 'complete' && detail.exitCode === 0)) sections.push(status);
-    const output = truncateExecOutputForRender(detail.output || '');
-    if (output) sections.push(buildFencedCodeBlock(output, 'text'));
+    const output = renderStandardPreview(detail.output || '', 'text');
+    if (output) sections.push(output);
     return sections.join('\n\n');
   }
   if (detail.kind === 'terminal_stdin') {
     const tags = [textTag('blue', `session ${detail.sessionId || 'unknown'}`)];
     if (typeof detail.waitMs === 'number') {
       tags.push(textTag('green', `wait ${formatDuration(detail.waitMs)}`));
+    }
+    if (typeof detail.maxTokens === 'number') {
+      tags.push(textTag('purple', `≤${Math.round(detail.maxTokens).toLocaleString('en-US')} tokens`));
     }
     if (detail.isPoll) {
       tags.push(textTag('yellow', 'Read'));
@@ -450,19 +672,58 @@ export function renderCodexToolDetailMarkdown(tool: ToolCallInfo): string {
     if (!detail.isPoll && typeof detail.chars === 'string') {
       sections.push(buildFencedCodeBlock(detail.chars, 'text'));
     }
-    const status = renderStatusLine(tool, detail);
-    if (status && tool.status !== 'running') sections.push(status);
-    if (detail.output) sections.push(buildFencedCodeBlock(detail.output, 'text'));
+    if (detail.output) sections.push(renderStandardPreview(detail.output, 'text'));
     return sections.join('\n\n');
   }
   if (detail.kind === 'patch_apply') {
-    if (detail.files && detail.files.length > 0) {
+    if (!detail.patchText && detail.files && detail.files.length > 0) {
       sections.push(detail.files.map((file) => {
         const target = file.toPath ? `${file.path} -> ${file.toPath}` : file.path;
         return `- ${file.action}: \`${target}\``;
       }).join('\n'));
     }
-    if (detail.patchText) sections.push(buildFencedCodeBlock(detail.patchText, 'diff'));
+    if (detail.patchText) sections.push(renderPatchPreview(detail.patchText, patchCodeLanguage(detail)));
+    return sections.join('\n\n');
+  }
+  if (detail.kind === 'file_read') {
+    if (!detail.output && detail.path) sections.push(`path: \`${detail.path}\``);
+    if (!detail.output && (typeof detail.lineOffset === 'number' || typeof detail.lineCount === 'number')) {
+      sections.push(`range: offset ${detail.lineOffset ?? 0}${typeof detail.lineCount === 'number' ? ` · ${detail.lineCount} lines` : ''}`);
+    }
+    if (detail.output) sections.push(renderStandardPreview(detail.output, 'text'));
+    return sections.join('\n\n');
+  }
+  if (detail.kind === 'file_search') {
+    if (!detail.output && detail.query) sections.push(`query: \`${detail.query}\``);
+    if (!detail.output && detail.path) sections.push(`path: \`${detail.path}\``);
+    if (detail.output) sections.push(renderStandardPreview(detail.output, 'text'));
+    return sections.join('\n\n');
+  }
+  if (detail.kind === 'file_change') {
+    if (!detail.before && !detail.after && !detail.content && !detail.output && detail.path) sections.push(`path: \`${detail.path}\``);
+    if (detail.mode) sections.push(`mode: \`${detail.mode}\``);
+    if (detail.before) sections.push(`before:\n${renderStandardPreview(detail.before, 'text')}`);
+    if (detail.after) sections.push(`after:\n${renderStandardPreview(detail.after, 'text')}`);
+    if (detail.content) sections.push(`content:\n${renderStandardPreview(detail.content, 'text')}`);
+    if (detail.output) sections.push(renderStandardPreview(detail.output, 'text'));
+    return sections.join('\n\n');
+  }
+  if (detail.kind === 'url_fetch') {
+    if (detail.url) sections.push(`url: ${detail.url}`);
+    if (detail.output) sections.push(renderStandardPreview(detail.output, 'text'));
+    return sections.join('\n\n');
+  }
+  if (detail.kind === 'agent') {
+    if (detail.description) sections.push(`description: ${detail.description}`);
+    if (detail.subagentType) sections.push(`agent: \`${detail.subagentType}\``);
+    if (detail.resume) sections.push(`resume: \`${detail.resume}\``);
+    if (detail.prompt) sections.push(`prompt:\n${renderStandardPreview(detail.prompt, 'text')}`);
+    if (detail.output) sections.push(renderStandardPreview(detail.output, 'text'));
+    return sections.join('\n\n');
+  }
+  if (detail.kind === 'todo_list') {
+    if (detail.items) sections.push(renderStandardPreview(stringifyToolValue(detail.items), 'json'));
+    if (detail.output) sections.push(renderStandardPreview(detail.output, 'text'));
     return sections.join('\n\n');
   }
   if (detail.kind === 'tool_search') {
@@ -493,9 +754,30 @@ export function renderCodexToolDetailMarkdown(tool: ToolCallInfo): string {
     if (detail.errorText) sections.push(buildFencedCodeBlock(detail.errorText, 'text'));
     return sections.join('\n\n');
   }
+  if (detail.kind === 'orchestration') {
+    detail.calls.forEach((call, index) => {
+      const child = renderToolCallDetailMarkdown({
+        id: `${tool.id}:${index}`,
+        name: call.name,
+        status: tool.status,
+        input: null,
+        output: null,
+        detail: call.detail,
+      });
+      sections.push([
+        `##### ${index + 1}. \`${call.name}\``,
+        child,
+      ].filter(Boolean).join('\n\n'));
+    });
+    if (detail.output) {
+      sections.push(`编排输出：\n${renderStandardPreview(detail.output, 'text')}`);
+    }
+    return sections.join('\n\n');
+  }
   if (detail.kind === 'generic') {
-    if (detail.input != null) sections.push(buildFencedCodeBlock(stringifyToolValue(detail.input), 'json'));
-    if (detail.output) sections.push(buildFencedCodeBlock(detail.output, 'text'));
+    const isJavaScript = /^(exec|functions__exec|functions\.exec)$/i.test(tool.name || '');
+    if (detail.input != null) sections.push(renderStandardPreview(stringifyToolValue(detail.input), isJavaScript ? 'javascript' : 'json'));
+    if (detail.output) sections.push(renderStandardPreview(detail.output, 'text'));
     return sections.join('\n\n');
   }
   return '';
@@ -530,3 +812,12 @@ export function summarizeToolDetailValue(value: unknown, maxChars: number): stri
   const { text, truncated } = sanitizeInput(masked, maxChars);
   return truncated ? `${text}\n...(truncated)` : text;
 }
+
+/** @deprecated Runtime-neutral callers should use buildToolCallDetailFromInput. */
+export const buildCodexToolDetailFromInput = buildToolCallDetailFromInput;
+/** @deprecated Runtime-neutral callers should use buildToolCallDetailFromOutput. */
+export const buildCodexToolDetailFromOutput = buildToolCallDetailFromOutput;
+/** @deprecated Runtime-neutral callers should use mergeToolCallDetail. */
+export const mergeCodexToolDetail = mergeToolCallDetail;
+/** @deprecated Runtime-neutral callers should use renderToolCallDetailMarkdown. */
+export const renderCodexToolDetailMarkdown = renderToolCallDetailMarkdown;
