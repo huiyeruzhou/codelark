@@ -245,6 +245,8 @@ const MIRROR_STREAM_STATUS_HEARTBEAT_MS = 5_000;
 const MIRROR_TMUX_SELECTION_PROBE_INTERVAL_MS = 5_000;
 const MIRROR_TMUX_SELECTION_PROBE_FOLLOWUP_WINDOW_MS = 5_000;
 const MIRROR_TMUX_SELECTION_PROBE_FOLLOWUP_INTERVAL_MS = 300;
+const CODEX_TUI_IDLE_CHECKPOINT_HOT_MISSING_RETRY_MS = 5_000;
+const CODEX_TUI_IDLE_CHECKPOINT_COLD_MISSING_RETRY_MS = 60_000;
 const TMUX_AUTO_FORWARD_SELECTION_PROBE_TIMEOUT_MS = 5_000;
 const TMUX_AUTO_FORWARD_SELECTION_PROBE_INTERVAL_MS = 300;
 const TMUX_PROVIDER_EXIT_PROBE_DELAY_MS = 1_500;
@@ -297,6 +299,7 @@ interface CodexTuiScreenCheckpoint {
 
 const codexTuiIdleScreenCheckpoints = new Map<string, CodexTuiScreenCheckpoint>();
 const codexTuiTurnScreenBaselines = new Map<string, CodexTuiScreenCheckpoint>();
+const codexTuiIdleScreenMissingCheckedAt = new Map<string, number>();
 
 interface CodexTuiReconnectMonitor {
   streamKey: string;
@@ -687,6 +690,8 @@ function assignCodexTuiTurnScreenBaseline(
 
 async function captureCodexTuiIdleScreenCheckpoint(
   subscription: BridgeMirrorSubscription,
+  activeTmuxSessionNames?: ReadonlySet<string>,
+  nowMs = Date.now(),
 ): Promise<void> {
   if (subscription.pendingTurn || subscription.pendingDeliveries.length > 0) return;
   const existing = codexTuiIdleScreenCheckpoints.get(subscription.sessionId);
@@ -695,11 +700,16 @@ async function captureCodexTuiIdleScreenCheckpoint(
   if (!session || !sessionSupportsCodexTuiRuntimeSignals(session)) return;
   const tmuxSessionName = getSessionRuntimeTmuxSessionName(session);
   if (!tmuxSessionName) return;
+  if (activeTmuxSessionNames && !activeTmuxSessionNames.has(tmuxSessionName)) {
+    codexTuiIdleScreenMissingCheckedAt.set(subscription.sessionId, nowMs);
+    return;
+  }
   try {
     const capture = await tmuxCore.capturePane(`${tmuxSessionName}:0.0`, 80);
+    codexTuiIdleScreenMissingCheckedAt.delete(subscription.sessionId);
     codexTuiIdleScreenCheckpoints.set(subscription.sessionId, {
       screen: capture.screen,
-      capturedAtMs: Date.now(),
+      capturedAtMs: nowMs,
     });
   } catch (error) {
     console.warn('[bridge-manager] Codex TUI idle checkpoint capture failed:', {
@@ -710,10 +720,55 @@ async function captureCodexTuiIdleScreenCheckpoint(
   }
 }
 
+function shouldAttemptCodexTuiIdleScreenCheckpoint(
+  subscription: BridgeMirrorSubscription,
+  nowMs: number,
+): boolean {
+  if (subscription.pendingTurn || subscription.pendingDeliveries.length > 0) return false;
+  const existing = codexTuiIdleScreenCheckpoints.get(subscription.sessionId);
+  if (existing && !existing.claimedTurnKey) return false;
+  const missingCheckedAt = codexTuiIdleScreenMissingCheckedAt.get(subscription.sessionId) || 0;
+  const retryMs = subscription.activityTier === 'cold'
+    ? CODEX_TUI_IDLE_CHECKPOINT_COLD_MISSING_RETRY_MS
+    : CODEX_TUI_IDLE_CHECKPOINT_HOT_MISSING_RETRY_MS;
+  return nowMs - missingCheckedAt >= retryMs;
+}
+
+function resolveCodexTuiIdleScreenCheckpointTmuxSessionName(
+  subscription: BridgeMirrorSubscription,
+  nowMs: number,
+): string | null {
+  if (!shouldAttemptCodexTuiIdleScreenCheckpoint(subscription, nowMs)) return null;
+  const session = getBridgeContext().store.getSession(subscription.sessionId);
+  if (!session || !sessionSupportsCodexTuiRuntimeSignals(session)) return null;
+  return getSessionRuntimeTmuxSessionName(session) || null;
+}
+
 async function ensureCodexTuiIdleScreenCheckpoints(): Promise<void> {
+  const nowMs = Date.now();
+  const candidates = Array.from(getState().mirrorSubscriptions.values()).flatMap((subscription) => {
+    const tmuxSessionName = resolveCodexTuiIdleScreenCheckpointTmuxSessionName(subscription, nowMs);
+    return tmuxSessionName ? [{ subscription, tmuxSessionName }] : [];
+  });
+  if (candidates.length === 0) return;
+
+  let activeTmuxSessionNames: Set<string>;
+  try {
+    const listed = await tmuxCore.listSessions();
+    activeTmuxSessionNames = new Set(listed.sessions.map((session) => session.name));
+  } catch (error) {
+    for (const { subscription } of candidates) {
+      codexTuiIdleScreenMissingCheckedAt.set(subscription.sessionId, nowMs);
+    }
+    console.warn('[bridge-manager] Unable to list tmux sessions for Codex TUI idle checkpoints:', {
+      error: describeUnknownError(error),
+    });
+    return;
+  }
+
   await Promise.allSettled(
-    Array.from(getState().mirrorSubscriptions.values()).map((subscription) =>
-      captureCodexTuiIdleScreenCheckpoint(subscription),
+    candidates.map(({ subscription }) =>
+      captureCodexTuiIdleScreenCheckpoint(subscription, activeTmuxSessionNames, nowMs),
     ),
   );
 }
@@ -1331,6 +1386,7 @@ function touchInboundChannelChatActivity(msg: InboundMessage): void {
   const binding = store.getChannelChat(msg.address.channelType, msg.address.chatId);
   if (!binding) return;
   store.touchChannelChatActivity(binding.id, nowIso());
+  codexTuiIdleScreenMissingCheckedAt.delete(binding.bridgeSessionId);
 }
 
 
@@ -4390,6 +4446,7 @@ function resetStateForTests(): void {
   pendingTmuxSelectionPromptProbePromises.clear();
   codexTuiIdleScreenCheckpoints.clear();
   codexTuiTurnScreenBaselines.clear();
+  codexTuiIdleScreenMissingCheckedAt.clear();
   codexTuiReconnectMonitors.clear();
   state.everyTaskSelections.clear();
   state.thenTaskSelections.clear();
@@ -4465,6 +4522,7 @@ export const _testOnly = {
   flushTimedOutMirrorTurn,
   refreshMirrorStreamingStatus,
   captureCodexTuiIdleScreenCheckpoint,
+  ensureCodexTuiIdleScreenCheckpoints,
   assignCodexTuiTurnScreenBaseline,
   resolveCodexTuiFinalizedTurnStatus,
   filterSuppressedMirrorRecords,

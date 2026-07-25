@@ -250,6 +250,81 @@ describe('bridge-manager mirror tmux selection probe scheduling', () => {
     assert.equal(_testOnly.shouldProbeMirrorTmuxSelectionPrompt(subscription, 15_001), false);
     _testOnly.resetStateForTests();
   });
+
+  it('captures idle checkpoints only for tmux sessions present in one shared listing', async () => {
+    fs.rmSync(DATA_DIR, { recursive: true, force: true });
+    fs.rmSync(CONFIG_TOML_PATH, { force: true });
+    const store = new JsonFileStore(makeSettings());
+    initBridgeContext({
+      store,
+      llm: noopLlm,
+      permissions: noopPermissions,
+      lifecycle: noopLifecycle,
+    });
+    _testOnly.resetStateForTests();
+
+    const state = (globalThis as unknown as Record<string, any>).__bridge_manager__;
+    const config = createConfigService({ migrate: false, env: {} });
+    const subscriptions: Array<{ tmuxSessionName: string; activityTier: 'hot' | 'cold' }> = [
+      { tmuxSessionName: 'active-codex', activityTier: 'hot' },
+      { tmuxSessionName: 'missing-codex', activityTier: 'cold' },
+    ];
+    for (const [index, item] of subscriptions.entries()) {
+      const address = { channelType: 'feishu-default', chatId: `chat-checkpoint-${index}` } as const;
+      const binding = router.createBinding(address, `/tmp/checkpoint-${index}`);
+      const threadId = `019f0000-0000-7000-8000-00000000000${index}`;
+      store.updateSessionCodexThreadId(binding.bridgeSessionId, threadId);
+      store.updateSession(binding.bridgeSessionId, {
+        runtime: { general: { tmuxSessionName: item.tmuxSessionName } },
+      });
+      config.set(
+        { kind: 'session', sessionId: binding.bridgeSessionId },
+        { runtime: { codex: { provider: 'tmux' } } },
+      );
+      state.mirrorSubscriptions.set(binding.id, createMirrorSubscription({
+        bindingId: binding.id,
+        sessionId: binding.bridgeSessionId,
+        channelType: address.channelType,
+        chatId: address.chatId,
+        threadId,
+        filePath: `/tmp/checkpoint-${index}.jsonl`,
+        lastDeliveredAt: null,
+        activityTier: item.activityTier,
+      }));
+    }
+
+    let listCalls = 0;
+    const capturedTargets: string[] = [];
+    const restoreTmux = patchTmuxCore({
+      listSessions: async () => {
+        listCalls += 1;
+        return {
+          sessions: [{
+            name: 'active-codex',
+            windows: '1',
+            attached: '0',
+            created: '1',
+            activity: '1',
+          }],
+          command: 'tmux list-sessions',
+        };
+      },
+      capturePane: async (target) => {
+        capturedTargets.push(target);
+        return { screen: 'ready', command: `tmux capture-pane -t ${target}` };
+      },
+    });
+
+    try {
+      await _testOnly.ensureCodexTuiIdleScreenCheckpoints();
+      await _testOnly.ensureCodexTuiIdleScreenCheckpoints();
+      assert.equal(listCalls, 1);
+      assert.deepEqual(capturedTargets, ['active-codex:0.0']);
+    } finally {
+      restoreTmux();
+      _testOnly.resetStateForTests();
+    }
+  });
 });
 
 function installFakeTmux(): { binDir: string; logPath: string } {
