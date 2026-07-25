@@ -6,7 +6,10 @@ import os from 'node:os';
 import path from 'node:path';
 
 import { _testOnlyClaudeSdk } from '../../../../runtime/claude/sdk-provider.js';
-import { buildClaudeCodeRouterStartInvocation } from '../../../../runtime/claude/code-router.js';
+import {
+  buildClaudeCodeRouterInvocation,
+  buildClaudeCodeRouterStartInvocation,
+} from '../../../../runtime/claude/code-router.js';
 
 async function withEnvOverride<T>(
   overrides: Record<string, string | undefined>,
@@ -30,12 +33,21 @@ async function withEnvOverride<T>(
 }
 
 describe('ClaudeSdkProvider helpers', () => {
-  it('runs Windows batch shims through one cmd command string', () => {
+  it('runs every Windows batch action through cmd from the shim directory', () => {
     assert.deepEqual(
       buildClaudeCodeRouterStartInvocation('C:\\Program Files\\ccr.cmd', 'win32', 'C:\\Windows\\cmd.exe'),
       {
         command: 'C:\\Windows\\cmd.exe',
-        args: ['/d', '/s', '/c', '""C:\\Program Files\\ccr.cmd" start"'],
+        args: ['/d', '/s', '/c', 'ccr.cmd', 'start'],
+        cwd: 'C:\\Program Files',
+      },
+    );
+    assert.deepEqual(
+      buildClaudeCodeRouterInvocation('C:\\Program Files\\ccr.cmd', ['status'], 'win32', 'cmd.exe'),
+      {
+        command: 'cmd.exe',
+        args: ['/d', '/s', '/c', 'ccr.cmd', 'status'],
+        cwd: 'C:\\Program Files',
       },
     );
     assert.deepEqual(

@@ -1,4 +1,5 @@
 import { execFile, spawn } from 'node:child_process';
+import path from 'node:path';
 import { promisify } from 'node:util';
 
 import { sseEvent } from '../sse.js';
@@ -8,6 +9,12 @@ const WINDOWS_HIDE = process.platform === 'win32' ? { windowsHide: true } : {};
 const CCR_ENV_READY_STATUS = '已为Claude Code sdk 注入 Router 环境。';
 
 const execFileAsync = promisify(execFile);
+
+interface ClaudeCodeRouterInvocation {
+  command: string;
+  args: string[];
+  cwd?: string;
+}
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -61,7 +68,9 @@ async function readClaudeCodeRouterActivateEnv(
   logPrefix: string,
 ): Promise<Record<string, string>> {
   try {
-    const { stdout } = await execFileAsync(command, ['activate'], {
+    const invocation = buildClaudeCodeRouterInvocation(command, ['activate']);
+    const { stdout } = await execFileAsync(invocation.command, invocation.args, {
+      cwd: invocation.cwd,
       env,
       timeout: parsePositiveIntEnv('CODELARK_CLAUDE_CCR_START_TIMEOUT_MS', DEFAULT_CCR_START_TIMEOUT_MS, 1_000),
       ...WINDOWS_HIDE,
@@ -76,7 +85,9 @@ async function readClaudeCodeRouterActivateEnv(
 
 async function isClaudeCodeRouterRunning(command: string, env: Record<string, string>): Promise<boolean> {
   try {
-    const { stdout, stderr } = await execFileAsync(command, ['status'], {
+    const invocation = buildClaudeCodeRouterInvocation(command, ['status']);
+    const { stdout, stderr } = await execFileAsync(invocation.command, invocation.args, {
+      cwd: invocation.cwd,
       env,
       timeout: parsePositiveIntEnv('CODELARK_CLAUDE_CCR_START_TIMEOUT_MS', DEFAULT_CCR_START_TIMEOUT_MS, 1_000),
       ...WINDOWS_HIDE,
@@ -88,16 +99,27 @@ async function isClaudeCodeRouterRunning(command: string, env: Record<string, st
   }
 }
 
+export function buildClaudeCodeRouterInvocation(
+  command: string,
+  args: string[],
+  platform: NodeJS.Platform = process.platform,
+  comspec = process.env.ComSpec || process.env.COMSPEC || 'cmd.exe',
+): ClaudeCodeRouterInvocation {
+  if (platform !== 'win32') return { command, args };
+  const cwd = path.win32.dirname(command);
+  return {
+    command: comspec,
+    args: ['/d', '/s', '/c', path.win32.basename(command), ...args],
+    ...(cwd && cwd !== '.' ? { cwd } : {}),
+  };
+}
+
 export function buildClaudeCodeRouterStartInvocation(
   command: string,
   platform: NodeJS.Platform = process.platform,
   comspec = process.env.ComSpec || process.env.COMSPEC || 'cmd.exe',
-): { command: string; args: string[] } {
-  if (platform !== 'win32') return { command, args: ['start'] };
-  return {
-    command: comspec,
-    args: ['/d', '/s', '/c', `""${command}" start"`],
-  };
+): ClaudeCodeRouterInvocation {
+  return buildClaudeCodeRouterInvocation(command, ['start'], platform, comspec);
 }
 
 async function startClaudeCodeRouter(command: string, env: Record<string, string>): Promise<void> {
@@ -110,12 +132,14 @@ async function startClaudeCodeRouter(command: string, env: Record<string, string
     const invocation = buildClaudeCodeRouterStartInvocation(command);
     if (process.platform === 'win32') {
       await execFileAsync(invocation.command, invocation.args, {
+        cwd: invocation.cwd,
         env,
         timeout: timeoutMs,
         ...WINDOWS_HIDE,
       });
     } else {
       const child = spawn(invocation.command, invocation.args, {
+        cwd: invocation.cwd,
         env,
         detached: true,
         stdio: 'ignore',
