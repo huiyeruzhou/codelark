@@ -64,7 +64,9 @@ import { stripLegacySessionPrefix } from '../session/display/session-title.js';
 import { resolveSessionTranscriptFile } from '../session/transcript-source.js';
 import { buildCommandCallbackData, buildThreadCardUpdateKey } from './callbacks.js';
 import {
+  currentSessionCommonSettingDefinitions,
   currentSessionSettingDefinitions,
+  type CurrentSessionConfigSection,
   runtimeSettingDefinitions,
   settingFormLabel,
   settingConfigPath,
@@ -374,6 +376,7 @@ export function buildCurrentCommandRichCard(options: {
   store: BridgeStore;
   threadDisplay: CommandThreadDisplay;
   previewRuntime?: RuntimeAgent;
+  configSection?: CurrentSessionConfigSection;
 }): OutboundRichCard | undefined {
   const binding = options.binding;
   if (!binding) return undefined;
@@ -381,6 +384,8 @@ export function buildCurrentCommandRichCard(options: {
   if (!session) return undefined;
 
   const activeRuntime = options.previewRuntime || getSessionActiveRuntime(session) || 'codex';
+  const configSection = options.configSection || activeRuntime;
+  const commonSection = configSection === 'common';
   const runtimeDisplayLabel = runtimeLabel(activeRuntime);
   const displayBinding = binding.bridgeSessionId === session.id ? binding : { ...binding, bridgeSessionId: session.id };
   const codexThreadId = getCodexThreadId(session, binding);
@@ -395,15 +400,17 @@ export function buildCurrentCommandRichCard(options: {
   const configService = createConfigService({ migrate: false });
   const configScope = { kind: 'session' as const, sessionId: session.id };
   const runtimeConfig = configService.snapshot(configScope).config;
-  const runtimeDefinitions = currentSessionSettingDefinitions(activeRuntime);
-  const formSelects = runtimeDefinitions
+  const configDefinitions = commonSection
+    ? currentSessionCommonSettingDefinitions()
+    : currentSessionSettingDefinitions(activeRuntime);
+  const formSelects = configDefinitions
     .filter((definition) => definition.control === 'select')
     .map((definition) => settingSessionFormSelect(
       definition,
       runtimeConfig,
       configService.resolve(settingConfigPath(definition), configScope).source === 'session',
     ));
-  const runtimeInputs = runtimeDefinitions
+  const configInputs = configDefinitions
     .filter((definition) => definition.control === 'input')
     .map((definition) => settingSessionFormInput(
       definition,
@@ -415,14 +422,15 @@ export function buildCurrentCommandRichCard(options: {
   const sessionKind = session.session_type === 'draft' ? '临时草稿线程' : '普通会话';
   const runtimeSelect: NonNullable<OutboundRichCard['selects']>[number] = {
     id: 'cur_runtime',
-    placeholder: 'runtime',
-    selectedCallbackData: buildCommandCallbackData(`/current-runtime ${activeRuntime}`),
-	    options: [
-	      { text: 'Codex', callbackData: buildCommandCallbackData('/current-runtime codex') },
-	      { text: 'Claude Code', callbackData: buildCommandCallbackData('/current-runtime claude') },
-	      { text: 'Kimi Code', callbackData: buildCommandCallbackData('/current-runtime kimi') },
-	    ],
-	  };
+    placeholder: '配置分栏',
+    selectedCallbackData: buildCommandCallbackData(`/current-runtime ${configSection}`),
+    options: [
+      { text: '通用配置', callbackData: buildCommandCallbackData('/current-runtime common') },
+      { text: 'Codex', callbackData: buildCommandCallbackData('/current-runtime codex') },
+      { text: 'Claude Code', callbackData: buildCommandCallbackData('/current-runtime claude') },
+      { text: 'Kimi Code', callbackData: buildCommandCallbackData('/current-runtime kimi') },
+    ],
+  };
   return {
     title: `${runtimeDisplayLabel} ${activeRuntime === 'codex' ? codexTitle || threadInfo.title : threadInfo.title}`,
     subtitle: runtimeThreadId
@@ -443,33 +451,37 @@ export function buildCurrentCommandRichCard(options: {
     }],
     form: {
       optionElementId: 'clk_current_option',
-      inputElementId: 'clk_name',
-      inputLabel: '会话名',
-      inputPlaceholder: '等同 /t rename；留空表示不修改',
-      inputDefaultValue: sessionName,
+      ...(commonSection ? {
+        inputElementId: 'clk_name',
+        inputLabel: '会话名',
+        inputPlaceholder: '等同 /t rename；留空表示不修改',
+        inputDefaultValue: sessionName,
+      } : {}),
       layout: 'two_column',
       controlBar: {
         actions: [
-          { text: '刷新', callbackData: buildCommandCallbackData('/current') },
+          {
+            text: '刷新',
+            callbackData: buildCommandCallbackData(commonSection ? '/current common' : `/current runtime ${activeRuntime}`),
+          },
         ],
       },
       selects: formSelects,
-      extraInputs: [
-        {
+      extraInputs: commonSection ? [{
           elementId: 'clk_cwd',
           label: '工作目录 (session.workspace)',
           placeholder: '等同 /cd；留空表示不修改',
           defaultValue: getSessionWorkingDirectory(session) || '',
-        },
-        ...runtimeInputs,
-      ],
+        }, ...configInputs] : configInputs,
       submitText: '保存',
-      submitCallbackData: buildCommandCallbackData(`/current-config ${activeRuntime}`),
+      submitCallbackData: buildCommandCallbackData(`/current-config ${configSection}`),
       options: [],
     },
     footer: [
       `当前 agent：${currentTag(runtimeDisplayLabel, 'orange')}`,
-      '顶部 runtime 下拉会立即切换运行时并刷新卡片；配置栏可更新通用会话配置和当前 runtime，留空或选择“跟随上层配置”会删除当前会话覆盖。',
+      commonSection
+        ? '通用配置只修改当前会话的名称、工作目录和 tmux 设置，不会切换 agent。留空或选择“跟随上层配置”会删除当前会话覆盖。'
+        : `当前分栏只显示 ${runtimeDisplayLabel} 配置；选择其他 runtime 分栏会切换当前 agent。留空或选择“跟随上层配置”会删除当前会话覆盖。`,
     ],
   };
 }

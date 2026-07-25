@@ -310,6 +310,10 @@ export function setSessionSystemPromptUpdate(systemPrompt: string | undefined): 
   return { runtime: { general: { systemPrompt } } };
 }
 
+export function clearSessionTmuxBindingUpdate(): BridgeSessionRuntimeUpdate {
+  return { runtime: { general: { tmuxSessionName: undefined } } };
+}
+
 export function setSessionCodexTmuxProviderUpdate(options: {
   tmuxSessionName: string;
   autoEnter?: boolean;

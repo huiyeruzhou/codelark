@@ -11,6 +11,7 @@ import {
   getSessionWorkingDirectory,
 } from '../../domain/session-runtime.js';
 import type { LLMProvider, SSEEvent } from '../../runtime/contracts.js';
+import type { restartKimiTmuxInputSession } from '../../runtime/kimi/tmux-provider.js';
 import {
   getCodexSessionByThreadIdSafe,
   resolveSessionRuntimeConfig,
@@ -34,6 +35,7 @@ export interface RuntimeSettingsCommandDeps {
     },
   ): Promise<CodexTuiSelectionPromptChoice | null>;
   getActiveTask?(sessionId: string): { abortController: AbortController } | undefined;
+  restartKimiTmuxSession?: typeof restartKimiTmuxInputSession;
 }
 
 export interface BootstrapCodexThreadParams {

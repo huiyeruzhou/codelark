@@ -24,7 +24,11 @@ import { createMirrorSubscription } from '../../../../../bridge/mirror/subscript
 import { listEveryTasks } from '../../../../../bridge/automation/every-tasks.js';
 import { buildCommandCallbackData } from '../../../../../bridge/command/callbacks.js';
 import { LARGE_FILE_UPLOAD_THRESHOLD_BYTES } from '../../../../../bridge/command/file-upload-confirmations.js';
-import { getSessionActiveRuntime, getSessionWorkingDirectory } from '../../../../../domain/session-runtime.js';
+import {
+  getSessionActiveRuntime,
+  getSessionRuntimeTmuxSessionName,
+  getSessionWorkingDirectory,
+} from '../../../../../domain/session-runtime.js';
 import type { LLMProvider, StreamChatParams } from '../../../../../runtime/contracts.js';
 import {
   BRIDGE_TEST_DATA_DIR,
@@ -181,6 +185,7 @@ function writeFakeKimiExecutable(binDir: string, params: {
   fs.writeFileSync(scriptPath, `#!/usr/bin/env node
 const fs = require('node:fs');
 const path = require('node:path');
+const { execFileSync } = require('node:child_process');
 
 const fallbackSessionId = ${JSON.stringify(params.sessionId)};
 const ctrlCPath = ${JSON.stringify(params.ctrlCPath)};
@@ -245,7 +250,12 @@ process.stdin.on('data', (chunk) => {
     recordCtrlC();
     if (ctrlCCount >= 2) {
       process.stdout.write('\\nTo resume this session: kimi -r ' + sessionId + '\\n');
-      setTimeout(() => process.exit(0), 50);
+      setTimeout(() => {
+        if (process.env.TMUX_PANE) {
+          try { execFileSync('tmux', ['kill-session', '-t', process.env.TMUX_PANE]); } catch {}
+        }
+        process.exit(0);
+      }, 50);
     }
   }
 });
@@ -1953,7 +1963,7 @@ describe('bridge command e2e', () => {
 
       await _testOnly.handleMessage(adapter, {
         ...inboundMessage(currentAddress, '', 'incoming-current-missing-id-submit'),
-        callbackData: buildCommandCallbackData('/current-config codex'),
+        callbackData: buildCommandCallbackData('/current-config common'),
         raw: {
           event: {
             action: {
@@ -1966,6 +1976,10 @@ describe('bridge command e2e', () => {
       });
       assert.equal(adapter.sent.at(-1)?.richCardUpdateMessageId, 'reply-3');
       assert.match(adapter.sent.at(-1)?.text || '', /已保存当前会话配置/);
+      assert.equal(
+        adapter.sent.at(-1)?.richCard?.selects?.[0]?.selectedCallbackData,
+        buildCommandCallbackData('/current-runtime common'),
+      );
       assert.equal(adapter.sent.at(-1)?.richCard?.form?.inputDefaultValue, 'Current Missing Message Id Updated');
     } finally {
       if (previousAgent === undefined) {
@@ -2733,6 +2747,7 @@ provider = "tmux"
       CODELARK_KIMI_TMUX_SESSION_FILE_TIMEOUT_MS: process.env.CODELARK_KIMI_TMUX_SESSION_FILE_TIMEOUT_MS,
       CODELARK_KIMI_TMUX_SESSION_ID_TIMEOUT_MS: process.env.CODELARK_KIMI_TMUX_SESSION_ID_TIMEOUT_MS,
       CODELARK_KIMI_TMUX_PROMPT_DELAY_MS: process.env.CODELARK_KIMI_TMUX_PROMPT_DELAY_MS,
+      CODELARK_TMUX_PROVIDER_EXIT_PROBE_DELAY_MS: process.env.CODELARK_TMUX_PROVIDER_EXIT_PROBE_DELAY_MS,
       CODELARK_DEBUG: process.env.CODELARK_DEBUG,
     };
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-runtime-kimi-tmux-auto-init-'));
@@ -2760,6 +2775,7 @@ provider = "tmux"
     process.env.CODELARK_KIMI_TMUX_SESSION_FILE_TIMEOUT_MS = '5000';
     process.env.CODELARK_KIMI_TMUX_SESSION_ID_TIMEOUT_MS = '5000';
     process.env.CODELARK_KIMI_TMUX_PROMPT_DELAY_MS = '50';
+    process.env.CODELARK_TMUX_PROVIDER_EXIT_PROBE_DELAY_MS = '100';
 
     const store = initBridgeTestContext({
       dynamicSettings: true,
@@ -2828,6 +2844,33 @@ provider = "tmux"
       assert.equal(launches[0]?.resumed, false);
       assert.equal(launches[0]?.cwd, workDir);
 
+      await _testOnly.handleMessage(adapter, inboundMessage(address, '<C-c>', 'incoming-kimi-first-ctrl-c'));
+      await _testOnly.handleMessage(adapter, inboundMessage(address, '<C-c>', 'incoming-kimi-second-ctrl-c'));
+      await waitForCondition(() => fs.existsSync(ctrlCPath) && fs.readFileSync(ctrlCPath, 'utf8') === '2', 5_000);
+      await waitForCondition(() => {
+        const sessionAfterExit = store.getSession(binding.bridgeSessionId);
+        return getSessionRuntimeTmuxSessionName(sessionAfterExit) === undefined;
+      }, 5_000);
+
+      const exitedSession = store.getSession(binding.bridgeSessionId);
+      assert.equal(exitedSession?.health_status, 'failed');
+      assert.match(exitedSession?.health_reason || '', /disappeared .* after auto-forward input/);
+      assert.ok(adapter.sent.some((message) => /Kimi tmux Provider 会话已退出/.test(message.text || '')));
+
+      await _testOnly.handleMessage(adapter, inboundMessage(address, '/p tmux', 'incoming-kimi-provider-restart'));
+      const restartedSession = store.getSession(binding.bridgeSessionId);
+      assert.equal(getSessionRuntimeTmuxSessionName(restartedSession), `clk-kimi-${binding.bridgeSessionId}`);
+      const restartedLaunches = fs.readFileSync(launchLogPath, 'utf-8')
+        .trim()
+        .split(/\r?\n/)
+        .map((line) => JSON.parse(line) as { argv: string[]; resumed: boolean; cwd: string });
+      assert.equal(restartedLaunches.length, 2);
+      assert.deepEqual(restartedLaunches[1]?.argv, ['-r', expectedKimiSessionId, '-y']);
+      assert.equal(restartedLaunches[1]?.resumed, true);
+
+      await _testOnly.handleMessage(adapter, inboundMessage(address, 'prompt after Kimi restart', 'incoming-kimi-after-restart'));
+      await waitForCondition(() => fs.readFileSync(keyLogPath, 'utf-8').includes('prompt after Kimi restart'), 5_000);
+
       await _testOnly.handleMessage(adapter, inboundMessage(address, 'runtime command kimi follow-up', 'incoming-kimi-runtime-message-follow-up'));
       await waitForCondition(() => adapter.streamEvents.some((event) => (
         event.kind === 'end'
@@ -2847,7 +2890,7 @@ provider = "tmux"
         .trim()
         .split(/\r?\n/)
         .map((line) => JSON.parse(line) as { argv: string[]; resumed: boolean; cwd: string });
-      assert.equal(launchesAfterFollowUp.length, 1, 'the follow-up must reuse the established Kimi tmux process');
+      assert.equal(launchesAfterFollowUp.length, 2, 'the follow-up must reuse the restarted Kimi tmux process');
       const followUpKeyLog = fs.readFileSync(keyLogPath, 'utf-8');
       assert.match(followUpKeyLog, /runtime command kimi follow-up/);
     } finally {
@@ -4576,9 +4619,9 @@ provider = "tmux"
       await _testOnly.handleMessage(adapter, inboundMessage(newAddress, '会退出的一条', 'incoming-tmux-exit-first'));
       await waitForCondition(() => adapter.sent.slice(beforeSentCount).some((message) => /tmux Provider 会话已退出/.test(message.text || '')));
       const noticeText = adapter.sent.slice(beforeSentCount).map((message) => message.text || '').join('\n\n');
-      const tmuxSession = store.getSession(binding.bridgeSessionId)?.runtime?.general?.tmuxSessionName || '';
-      assert.match(tmuxSession, /^codex_/);
-      assert.match(noticeText, new RegExp(`Codex tmux Provider 会话已退出：\`${tmuxSession}\``));
+      const exitedTmuxSession = noticeText.match(/Codex tmux Provider 会话已退出：`(codex_[^`]+)`/)?.[1] || '';
+      assert.match(exitedTmuxSession, /^codex_/);
+      assert.equal(store.getSession(binding.bridgeSessionId)?.runtime?.general?.tmuxSessionName, undefined);
       assert.match(noticeText, /\/p tmux/);
       assert.doesNotMatch(noticeText, /\/tmux-screen/);
       assert.doesNotMatch(noticeText, /诊断命令/);

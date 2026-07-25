@@ -47,12 +47,14 @@ import { handleRequireAtCommand } from './require-at.js';
 import {
   buildSettingsFields,
   buildSetCommandRichCard,
+  currentSessionCommonSettingDefinitions,
   currentSessionSettingDefinitions,
   handleSetCommand,
   handleSetFormCommand,
   setCommandSelectedGroup,
   settingConfigPath,
   settingFormName,
+  type CurrentSessionConfigSection,
   type SettingDefinition,
 } from './global-settings.js';
 import { buildGlobalStatusResponse } from './status.js';
@@ -163,6 +165,7 @@ export interface BridgeCommandDispatchDeps {
   recordInteractiveHealthEnd?(sessionId: string, outcome: 'completed' | 'failed' | 'aborted', detail?: string): void;
   reconcileMirrorSubscriptions?(): Promise<void>;
   bootstrapCodexThread?: import('./runtime-settings.js').RuntimeSettingsCommandDeps['bootstrapCodexThread'];
+  restartKimiTmuxSession?: import('./runtime-settings.js').RuntimeSettingsCommandDeps['restartKimiTmuxSession'];
   diagnoseSessionHealth(sessionId: string): Promise<import('../health/runtime.js').SessionHealthDiagnosis | null>;
   diagnoseAllActiveSessions(): Promise<import('../health/runtime.js').SessionHealthDiagnosis[]>;
   scopedBinding?: ChannelChat | null;
@@ -300,7 +303,8 @@ async function handleCurrentConfigFormCommand(options: {
   if (!formValue) return { response: '没有读取到卡片表单内容，请刷新 `/current` 后重试。' };
 
   let activeRuntime = getSessionActiveRuntime(session) || 'codex';
-  const submittedRuntime = parseCurrentRuntimeArg(options.args)
+  const submittedSection = parseCurrentConfigSectionArg(options.args) || activeRuntime;
+  const submittedRuntime = submittedSection === 'common' ? undefined : submittedSection
     || normalizeRuntimeFormValue(formValue.clk_runtime || formValue.runtime);
   const responses: string[] = [];
   const backgroundEffects: SessionCommandBackgroundEffect[] = [];
@@ -325,13 +329,16 @@ async function handleCurrentConfigFormCommand(options: {
           binding,
           store: options.store,
           threadDisplay: options.threadDisplay,
+          configSection: submittedSection,
         }),
       };
     }
   }
 
   const sessionConfigService = createConfigService({ migrate: false });
-  const name = normalizeFormString(formValue.clk_name || formValue.name);
+  const name = submittedSection === 'common'
+    ? normalizeFormString(formValue.clk_name || formValue.name)
+    : '';
   if (name && name !== (session.name || '').trim()) {
     const parsed = validateThreadName(name);
     if (!parsed.ok) return { response: parsed.message };
@@ -348,7 +355,9 @@ async function handleCurrentConfigFormCommand(options: {
     responses.push(`name: ${parsed.name}`);
   }
 
-  const cwd = normalizeFormString(formValue.clk_cwd || formValue.cwd);
+  const cwd = submittedSection === 'common'
+    ? normalizeFormString(formValue.clk_cwd || formValue.cwd)
+    : '';
   if (cwd && cwd !== getSessionWorkingDirectory(session)) {
     responses.push(await handleChangeDirectoryCommand({
       msg: options.msg,
@@ -364,7 +373,10 @@ async function handleCurrentConfigFormCommand(options: {
   const fallbackSettings: SettingDefinition[] = [];
   const configTarget = { kind: 'session' as const, sessionId: session.id };
   const configScope = { kind: 'session' as const, sessionId: session.id };
-  for (const definition of currentSessionSettingDefinitions(activeRuntime)) {
+  const settingDefinitions = submittedSection === 'common'
+    ? currentSessionCommonSettingDefinitions()
+    : currentSessionSettingDefinitions(activeRuntime);
+  for (const definition of settingDefinitions) {
     const rawValue = currentSettingFormValue(formValue, definition);
     if (rawValue === undefined) continue;
     const configPath = settingConfigPath(definition);
@@ -414,6 +426,7 @@ async function handleCurrentConfigFormCommand(options: {
       binding: refreshedBinding,
       store: options.store,
       threadDisplay: options.threadDisplay,
+      configSection: submittedSection,
     }),
     backgroundEffects,
   };
@@ -429,13 +442,28 @@ async function handleCurrentRuntimeCommand(options: {
   markdown: boolean;
 }): Promise<{ response: string; richCard?: OutboundRichCard }> {
   const binding = options.binding || router.resolve(options.msg.address);
-  const runtime = normalizeFormString(options.args);
-  if (runtime !== 'codex' && runtime !== 'claude' && runtime !== 'kimi') {
-    return { response: '请选择有效 runtime：codex、claude 或 kimi。' };
+  const section = parseCurrentConfigSectionArg(options.args);
+  if (!section) {
+    return { response: '请选择有效配置分栏：common、codex、claude 或 kimi。' };
   }
 
   const session = options.store.getSession(binding.bridgeSessionId);
   if (!session) return { response: '当前会话不存在，无法切换 runtime。' };
+
+  if (section === 'common') {
+    return {
+      response: '已打开通用配置，当前 agent 未改变。',
+      richCard: buildCurrentCommandRichCard({
+        msg: options.msg,
+        binding,
+        store: options.store,
+        threadDisplay: options.threadDisplay,
+        configSection: 'common',
+      }),
+    };
+  }
+
+  const runtime = section;
 
   const activeRuntime = getSessionActiveRuntime(session) || 'codex';
   const responses = runtime === activeRuntime
@@ -456,6 +484,7 @@ async function handleCurrentRuntimeCommand(options: {
       binding: refreshedBinding,
       store: options.store,
       threadDisplay: options.threadDisplay,
+      configSection: runtime,
     }),
   };
 }
@@ -466,9 +495,16 @@ function normalizeRuntimeFormValue(value: unknown): 'codex' | 'claude' | 'kimi' 
 }
 
 function parseCurrentRuntimeArg(args: string): 'codex' | 'claude' | 'kimi' | undefined {
+  const section = parseCurrentConfigSectionArg(args);
+  return section === 'common' ? undefined : section;
+}
+
+function parseCurrentConfigSectionArg(args: string): CurrentSessionConfigSection | undefined {
   const parts = args.trim().toLowerCase().split(/\s+/).filter(Boolean);
   const runtime = parts[0] === 'runtime' ? parts[1] : parts[0];
-  return runtime === 'codex' || runtime === 'claude' || runtime === 'kimi' ? runtime : undefined;
+  return runtime === 'common' || runtime === 'codex' || runtime === 'claude' || runtime === 'kimi'
+    ? runtime
+    : undefined;
 }
 
 export async function handleBridgeCommand(
@@ -914,7 +950,8 @@ export async function handleBridgeCommand(
 
     case '/current': {
       auditResponse = false;
-      const previewRuntime = parseCurrentRuntimeArg(args);
+      const configSection = parseCurrentConfigSectionArg(args);
+      const previewRuntime = configSection === 'common' ? undefined : configSection;
       response = handleCurrentCommand({
         msg,
         binding: commandBinding,
@@ -929,6 +966,7 @@ export async function handleBridgeCommand(
         store,
         threadDisplay,
         previewRuntime,
+        configSection,
       });
       threadTableCardScope = responseRichCard ? 'current' : undefined;
       break;

@@ -8,12 +8,15 @@ import type { BridgeStore, ChannelChat, InboundMessage } from '../../domain/inde
 import {
   getSessionClaudeSessionId,
   getSessionActiveRuntime,
+  getSessionKimiSessionId,
   getSessionWorkingDirectory,
   mergeSessionRuntimeUpdates,
   setSessionClaudeTmuxProviderUpdate,
   setSessionCodexThreadIdUpdate,
   setSessionCodexTmuxProviderUpdate,
+  setSessionKimiIdentityUpdate,
 } from '../../domain/session-runtime.js';
+import { restartKimiTmuxInputSession } from '../../runtime/kimi/tmux-provider.js';
 import {
   CodexResumeTmuxLaunchError,
   claudeTmuxSessionName,
@@ -25,6 +28,7 @@ import {
   resolveEffectiveClaudeProvider,
   resolveEffectiveCodexProvider,
   resolveClaudeRuntimeConfig,
+  resolveKimiRuntimeConfig,
   resolveSessionRuntimeConfig,
 } from '../session/support.js';
 import { buildCommandFields } from './presentation.js';
@@ -287,12 +291,40 @@ export async function handleProviderCommand(options: {
         options.markdown,
       );
     }
+    const tmuxSessionName = `clk-kimi-${session.id}`;
+    await options.deps.notifyBackgroundOperation?.(`正在重新启动 tmux 后台会话 \`${tmuxSessionName}\` 并运行 Kimi Code TUI。`);
+    const kimiConfig = resolveKimiRuntimeConfig(session, binding);
+    const prepared = await (options.deps.restartKimiTmuxSession || restartKimiTmuxInputSession)({
+      prompt: '',
+      sessionId: session.id,
+      runtime: 'kimi',
+      kimiSessionId: getSessionKimiSessionId(session),
+      workingDirectory: getSessionWorkingDirectory(session),
+      model: kimiConfig.model || undefined,
+    });
+    const identityUpdate = setSessionKimiIdentityUpdate(prepared.sessionId, prepared.cwd);
+    options.store.updateSession(session.id, {
+      ...identityUpdate,
+      runtime: {
+        ...identityUpdate.runtime,
+        general: {
+          tmuxSessionName: prepared.sessionName,
+          autoEnter: true,
+        },
+      },
+    });
+    setSessionTmuxAutoEnterToml(session.id, true);
     setSessionKimiProviderToml(session.id);
     scheduleMirrorSubscriptionsBestEffort(options.deps, 'kimi provider tmux');
     return buildCommandFields(
       '已切换 Kimi Provider',
-      [['Runtime', 'kimi'], ['Provider', 'tmux']],
-      ['之后的普通消息会使用 Kimi Code tmux 路径。'],
+      [['Runtime', 'kimi'], ['Provider', 'tmux'], ['tmux session', prepared.sessionName]],
+      [
+        prepared.existed
+          ? '同名 tmux session 已存在，已先销毁并重新启动 Kimi Code TUI。'
+          : '已启动 Kimi Code TUI。',
+        '之后的普通消息会使用 Kimi Code tmux 路径。',
+      ],
       options.markdown,
     );
   }

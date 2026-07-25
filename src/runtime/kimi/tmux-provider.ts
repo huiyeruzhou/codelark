@@ -583,6 +583,7 @@ export interface KimiTmuxInputSession {
  */
 export async function ensureKimiTmuxInputSession(
   params: StreamChatParams,
+  options: { recreate?: boolean } = {},
 ): Promise<KimiTmuxInputSession> {
   const sessionName = kimiTmuxSessionName(params.sessionId);
   const targetPane = `${sessionName}:0.0`;
@@ -613,8 +614,9 @@ export async function ensureKimiTmuxInputSession(
     sessionName,
     hasSession: () => tmuxCore.hasSession(sessionName),
   });
+  const launched = !inspection.exists || options.recreate === true;
 
-  if (!inspection.exists) {
+  if (launched) {
     assertKimiLaunchAuthentication(params.model);
     await launchTmuxKimiSession(sessionName, params);
     await ensureKimiTmuxInputKeys();
@@ -625,7 +627,7 @@ export async function ensureKimiTmuxInputSession(
   }
 
   if (!context.sessionFilePath) resolveKimiSessionFileBySessionId(context, true);
-  if (!inspection.exists || inspection.needsReadiness) {
+  if (launched || inspection.needsReadiness) {
     await waitForKimiInputReady(context);
   }
   initializeKimiSessionLogCursor(context);
@@ -636,7 +638,7 @@ export async function ensureKimiTmuxInputSession(
     'kimi',
     sessionName,
     'running',
-    inspection.exists
+    !launched
       ? 'existing Kimi tmux process and persisted runtime identity are reusable'
       : 'Kimi tmux process and runtime session are ready for input',
   );
@@ -649,6 +651,12 @@ export async function ensureKimiTmuxInputSession(
     nextOffset: context.nextOffset,
     existed: inspection.exists,
   };
+}
+
+export async function restartKimiTmuxInputSession(
+  params: StreamChatParams,
+): Promise<KimiTmuxInputSession> {
+  return ensureKimiTmuxInputSession(params, { recreate: true });
 }
 
 export function streamKimiTmuxTui(params: StreamChatParams): ReadableStream<string> {

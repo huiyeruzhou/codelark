@@ -1,5 +1,5 @@
 import '../../../setup/test-setup.js';
-import { describe, it } from 'node:test';
+import { beforeEach, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 
 import { PendingPermissions } from '../../../../runtime/permission-gateway.js';
@@ -12,6 +12,7 @@ import {
   type CodexTuiSelectionPromptChoice,
 } from '../../../../runtime/codex/tmux-provider.js';
 import type { TmuxCore, TmuxSendAction } from '../../../../bridge/tmux/core.js';
+import { resetRuntimeTmuxInputStatesForTests } from '../../../../bridge/tmux/input-state-machine.js';
 
 const CODEX_TUI_CONFIRM_FOOTER = 'Press enter to confirm or esc to cancel';
 
@@ -88,6 +89,8 @@ function createMockPromptRuntime() {
 }
 
 describe('codex tui selection prompt mock e2e', () => {
+  beforeEach(() => resetRuntimeTmuxInputStatesForTests());
+
   it('only prompts once while the user leaves an ordinary stuck prompt unresolved, then stops after resolution clears the screen', async () => {
     const monitor = createCodexTuiSelectionPromptMonitor();
     const runtime = createMockPromptRuntime();

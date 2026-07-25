@@ -148,6 +148,7 @@ import {
   getSessionActiveRuntime,
   getSessionSystemPrompt,
   getSessionWorkingDirectory,
+  clearSessionTmuxBindingUpdate,
   setSessionClaudeIdentityUpdate,
   setSessionCodexTitleUpdate,
   setSessionKimiIdentityUpdate,
@@ -174,6 +175,7 @@ import {
 } from '../tmux/runtime.js';
 import type { TmuxAutoForwardRecoveryPayload } from '../command/codex-tui-selection.js';
 import {
+  coordinateRuntimeTmuxSelection,
   sendRuntimeTmuxInput,
   transitionRuntimeTmuxInputState,
 } from '../tmux/input-state-machine.js';
@@ -292,7 +294,7 @@ const SESSION_SERIAL_COMMANDS = new Set([
   '/tmux-new',
 ]);
 
-const pendingTmuxProviderExitProbeTimers = new Map<string, ReturnType<typeof setTimeout>>();
+const pendingTmuxProviderExitProbeTimers = new Set<ReturnType<typeof setTimeout>>();
 const tmuxProviderExitNoticeLastSentAt = new Map<string, number>();
 const tmuxSelectionUpdateNoticeLastSentAt = new Map<string, number>();
 const tmuxSelectionPromptMonitors = new Map<string, CodexTuiSelectionPromptMonitor>();
@@ -325,10 +327,6 @@ interface TmuxSelectionPromptTarget {
   threadId?: string;
 }
 
-function tmuxAutoForwardReactionKey(channelType: string, chatId: string, sessionId: string): string {
-  return `${channelType}:${chatId}:${sessionId}`;
-}
-
 function tmuxProviderExitProbeDelayMs(): number {
   const raw = process.env.CODELARK_TMUX_PROVIDER_EXIT_PROBE_DELAY_MS;
   if (raw === undefined || raw.trim() === '') return TMUX_PROVIDER_EXIT_PROBE_DELAY_MS;
@@ -341,13 +339,6 @@ function tmuxSelectionUpdateExitProbeDelayMs(): number {
   if (raw === undefined || raw.trim() === '') return TMUX_SELECTION_UPDATE_EXIT_PROBE_DELAY_MS;
   const parsed = Number(raw);
   return Number.isFinite(parsed) && parsed >= 0 ? Math.floor(parsed) : TMUX_SELECTION_UPDATE_EXIT_PROBE_DELAY_MS;
-}
-
-function clearPendingTmuxProviderExitProbe(key: string): void {
-  const timer = pendingTmuxProviderExitProbeTimers.get(key);
-  if (!timer) return;
-  clearTimeout(timer);
-  pendingTmuxProviderExitProbeTimers.delete(key);
 }
 
 function addInboundGetReaction(
@@ -368,25 +359,22 @@ function scheduleTmuxProviderExitProbe(params: {
   adapter: BaseChannelAdapter;
   msg: InboundMessage;
   sessionId: string;
-  reactionKey: string;
   startedAtMs: number;
 }): void {
-  clearPendingTmuxProviderExitProbe(params.reactionKey);
   const timer = setTimeout(() => {
-    pendingTmuxProviderExitProbeTimers.delete(params.reactionKey);
+    pendingTmuxProviderExitProbeTimers.delete(timer);
     void probeTmuxProviderExitAfterAutoForward(params).catch((error) => {
       console.warn('[bridge-manager] Tmux provider exit probe failed:', describeUnknownError(error));
     });
   }, tmuxProviderExitProbeDelayMs());
   timer.unref?.();
-  pendingTmuxProviderExitProbeTimers.set(params.reactionKey, timer);
+  pendingTmuxProviderExitProbeTimers.add(timer);
 }
 
 async function probeTmuxProviderExitAfterAutoForward(params: {
   adapter: BaseChannelAdapter;
   msg: InboundMessage;
   sessionId: string;
-  reactionKey: string;
   startedAtMs: number;
 }): Promise<void> {
   if (!params.adapter.isRunning()) return;
@@ -402,13 +390,14 @@ async function probeTmuxProviderExitAfterAutoForward(params: {
   const exists = await tmuxCore.hasSession(tmuxSessionName);
   if (exists.exists) return;
 
+  const latestSession = store.getSession(params.sessionId);
+  if (getSessionRuntimeTmuxSessionName(latestSession) !== tmuxSessionName) return;
+  const confirmedMissing = await tmuxCore.hasSession(tmuxSessionName);
+  if (confirmedMissing.exists) return;
+  store.updateSession(params.sessionId, clearSessionTmuxBindingUpdate());
+
   const noticeKey = `${params.msg.address.channelType}:${params.msg.address.chatId}:${params.sessionId}:${tmuxSessionName}`;
   const nowMs = Date.now();
-  const lastSentAt = tmuxProviderExitNoticeLastSentAt.get(noticeKey) || 0;
-  if (nowMs - lastSentAt < TMUX_PROVIDER_EXIT_NOTICE_COOLDOWN_MS) return;
-  tmuxProviderExitNoticeLastSentAt.set(noticeKey, nowMs);
-
-  clearPendingTmuxProviderExitProbe(params.reactionKey);
   const runtimeLabel = runtimeProvider.runtime === 'claude' ? 'Claude' : runtimeProvider.runtime === 'kimi' ? 'Kimi' : 'Codex';
   const elapsedMs = Math.max(0, nowMs - params.startedAtMs);
   SESSION_HEALTH_RUNTIME.recordInteractiveEnd(
@@ -424,6 +413,9 @@ async function probeTmuxProviderExitAfterAutoForward(params: {
     elapsed_ms: elapsedMs,
     command: exists.command,
   });
+  const lastSentAt = tmuxProviderExitNoticeLastSentAt.get(noticeKey) || 0;
+  if (nowMs - lastSentAt < TMUX_PROVIDER_EXIT_NOTICE_COOLDOWN_MS) return;
+  tmuxProviderExitNoticeLastSentAt.set(noticeKey, nowMs);
   await deliverBridgeNotice(
     params.adapter,
     params.msg.address,
@@ -550,13 +542,13 @@ function getTmuxSelectionPromptMonitor(sessionId: string): CodexTuiSelectionProm
   return monitor;
 }
 
-async function handleTmuxSelectionPromptForTarget(
+async function executeTmuxSelectionPromptForTarget(
   target: TmuxSelectionPromptTarget,
   prompt: NonNullable<ReturnType<typeof observeStableCodexTuiSelectionPrompt>>,
   targetPane: string,
-): Promise<void> {
+): Promise<{ choice: string | null; commands: string[] }> {
   const adapter = getState().adapters.get(target.channelType);
-  if (!adapter || !adapter.isRunning()) return;
+  if (!adapter || !adapter.isRunning()) return { choice: null, commands: [] };
   const tmuxSessionName = targetPane.split(':')[0] || targetPane;
   transitionRuntimeTmuxInputState(
     'codex',
@@ -604,7 +596,7 @@ async function handleTmuxSelectionPromptForTarget(
       thread_id: target.threadId,
       prompt_kind: prompt.kind,
     });
-    return;
+    return { choice: null, commands: [] };
   }
   const actions = buildCodexTuiSelectionChoiceActions(prompt, choice);
   if (choice === 'not_selection' || actions.length === 0) {
@@ -620,7 +612,7 @@ async function handleTmuxSelectionPromptForTarget(
       'running',
       'the observed Codex screen was dismissed as not being a selection',
     );
-    return;
+    return { choice, commands: [] };
   }
   const result = await tmuxCore.sendActions(targetPane, actions);
   if (prompt.kind === 'update' && choice === 'update_now') {
@@ -646,6 +638,30 @@ async function handleTmuxSelectionPromptForTarget(
     choice,
     commands: result.commands,
   });
+  return { choice, commands: result.commands };
+}
+
+async function handleTmuxSelectionPromptForTarget(
+  target: TmuxSelectionPromptTarget,
+  prompt: NonNullable<ReturnType<typeof observeStableCodexTuiSelectionPrompt>>,
+  targetPane: string,
+): Promise<void> {
+  const tmuxSessionName = targetPane.split(':')[0] || targetPane;
+  const coordinated = await coordinateRuntimeTmuxSelection({
+    runtime: 'codex',
+    sessionName: tmuxSessionName,
+    fingerprint: prompt.fingerprint,
+    run: () => executeTmuxSelectionPromptForTarget(target, prompt, targetPane),
+  });
+  if (!coordinated.owner) {
+    console.log('[bridge-manager] Codex TUI selection joined the session lifecycle owner:', {
+      event: 'tmux.selection.lifecycle_joined',
+      session_id: target.sessionId,
+      thread_id: target.threadId,
+      tmux_session: tmuxSessionName,
+      prompt_kind: prompt.kind,
+    });
+  }
 }
 
 async function handleMirrorTmuxSelectionPrompt(
@@ -694,6 +710,30 @@ function assignCodexTuiTurnScreenBaseline(
   if (checkpoint.claimedTurnKey && checkpoint.claimedTurnKey !== turnKey) return;
   checkpoint.claimedTurnKey = turnKey;
   codexTuiTurnScreenBaselines.set(turnState.streamKey, checkpoint);
+}
+
+function assignCodexTuiChainedTurnScreenBaseline(
+  subscription: BridgeMirrorSubscription,
+  checkpoint: CodexTuiScreenCheckpoint,
+  finalizedStreamKey: string,
+): void {
+  const pendingTurn = subscription.pendingTurn;
+  if (!pendingTurn || pendingTurn.streamKey === finalizedStreamKey) return;
+  if (codexTuiTurnScreenBaselines.has(pendingTurn.streamKey)) return;
+  const turnStartedAtMs = Date.parse(pendingTurn.startedAt);
+  if (!Number.isFinite(turnStartedAtMs) || turnStartedAtMs > checkpoint.capturedAtMs) return;
+
+  checkpoint.claimedTurnKey = pendingTurn.turnId || pendingTurn.startedAt;
+  codexTuiTurnScreenBaselines.set(pendingTurn.streamKey, checkpoint);
+  console.log('[bridge-manager] Codex TUI terminal screen handed to chained turn as error baseline:', {
+    event: 'codex.tui.error_baseline.handoff',
+    session_id: subscription.sessionId,
+    thread_id: subscription.threadId,
+    finalized_stream_key: finalizedStreamKey,
+    pending_stream_key: pendingTurn.streamKey,
+    captured_at_ms: checkpoint.capturedAtMs,
+    pending_started_at: pendingTurn.startedAt,
+  });
 }
 
 async function captureCodexTuiIdleScreenCheckpoint(
@@ -843,11 +883,25 @@ async function resolveCodexTuiFinalizedTurnStatus(
     const capture = await tmuxCore.capturePane(`${tmuxSessionName}:0.0`, 80);
     codexTuiTurnScreenBaselines.delete(turn.streamKey);
     const capturedAtMs = Date.now();
-    codexTuiIdleScreenCheckpoints.set(subscription.sessionId, {
+    const checkpoint: CodexTuiScreenCheckpoint = {
       screen: capture.screen,
       capturedAtMs,
-    });
-    if (turn.status !== 'completed' || !baseline || context.batchSize !== 1) return turn.status;
+    };
+    codexTuiIdleScreenCheckpoints.set(subscription.sessionId, checkpoint);
+    assignCodexTuiChainedTurnScreenBaseline(subscription, checkpoint, turn.streamKey);
+    if (turn.status !== 'completed' || !baseline || context.batchSize !== 1) {
+      if (turn.status === 'completed' && !baseline) {
+        console.log('[bridge-manager] Codex TUI completed-turn error probe skipped without a screen baseline:', {
+          event: 'codex.tui.error_probe.skipped',
+          reason: 'missing_screen_baseline',
+          session_id: subscription.sessionId,
+          thread_id: subscription.threadId,
+          stream_key: turn.streamKey,
+          batch_size: context.batchSize,
+        });
+      }
+      return turn.status;
+    }
     const currentFileSize = subscription.filePath
       ? (() => {
           try {
@@ -924,8 +978,17 @@ async function recoverMirrorTmuxSelectionPromptFromCallback(
     if (claim.choice === 'not_selection' || actions.length === 0) {
       return { ok: true, notice: 'Codex TUI Selection 已记录为误判，未向 tmux 发送按键。' };
     }
-    const result = await tmuxCore.sendActions(targetPane, actions);
-    if (prompt.kind === 'update' && claim.choice === 'update_now') {
+    const coordinated = await coordinateRuntimeTmuxSelection({
+      runtime: 'codex',
+      sessionName: tmuxSessionName,
+      fingerprint: prompt.fingerprint,
+      run: async () => {
+        const sent = await tmuxCore.sendActions(targetPane, actions);
+        return { choice: claim.choice, commands: sent.commands };
+      },
+    });
+    const result = coordinated.result;
+    if (coordinated.owner && prompt.kind === 'update' && result.choice === 'update_now') {
       scheduleTmuxSelectionUpdateExitProbe({
         adapter,
         target: {
@@ -934,17 +997,18 @@ async function recoverMirrorTmuxSelectionPromptFromCallback(
           sessionId,
         },
         tmuxSessionName,
-        choice: claim.choice,
+        choice: result.choice,
       });
     }
     console.log('[bridge-manager] Codex TUI selection prompt recovered from callback after waiter loss:', {
       permission_request_id: claim.permissionRequestId,
       session_id: sessionId,
       prompt_kind: prompt.kind,
-      choice: claim.choice,
+      choice: result.choice,
       commands: result.commands,
+      lifecycle_owner: coordinated.owner,
     });
-    return { ok: true, notice: `Codex TUI Selection 已恢复并发送到 tmux：${claim.choice}` };
+    return { ok: true, notice: `Codex TUI Selection 已恢复并发送到 tmux：${result.choice || claim.choice}` };
   } catch (error) {
     console.warn('[bridge-manager] Recovering Codex TUI selection callback failed to send tmux actions:', {
       permission_request_id: claim.permissionRequestId,
@@ -4145,11 +4209,6 @@ async function handleMessage(
     if (text) {
       const tmuxProviderBridgeSessionId = tmuxProviderChat.bridgeSessionId;
       const tmuxProviderForwardStartedAtMs = Date.now();
-      const reactionKey = tmuxAutoForwardReactionKey(
-        msg.address.channelType,
-        msg.address.chatId,
-        tmuxProviderBridgeSessionId,
-      );
       try {
         const tmuxProviderCommandStartedAtMs = Date.now();
         await handleCommand(adapter, msg, `/tmux ${text}`, {
@@ -4176,7 +4235,6 @@ async function handleMessage(
           adapter,
           msg,
           sessionId: tmuxProviderBridgeSessionId,
-          reactionKey,
           startedAtMs: tmuxProviderForwardStartedAtMs,
         });
         if (tmuxProviderRuntime.runtime === 'claude') {
@@ -4212,7 +4270,6 @@ async function handleMessage(
           ].join(' '),
         });
       } catch (error) {
-        clearPendingTmuxProviderExitProbe(reactionKey);
         console.error('[bridge-manager] tmux provider command forwarding failed: /tmux', error);
         enqueueBridgeNotice(adapter, msg.address, toUserVisibleCommandError('/tmux', error), {
           replyToMessageId: msg.messageId,

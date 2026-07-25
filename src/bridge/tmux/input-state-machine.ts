@@ -46,6 +46,15 @@ export interface RuntimeTmuxInputInspection {
 }
 
 const states = new Map<string, RuntimeTmuxInputState>();
+export interface RuntimeTmuxSelectionLifecycleResult {
+  choice: string | null;
+  commands: string[];
+}
+
+const selectionLifecycles = new Map<string, {
+  promise: Promise<RuntimeTmuxSelectionLifecycleResult>;
+}>();
+const RUNTIME_TMUX_SELECTION_LIFECYCLE_GRACE_MS = 2_000;
 
 function stateKey(runtime: RuntimeTmuxInputRuntime, sessionName: string): string {
   return `${runtime}:${sessionName}`;
@@ -214,6 +223,35 @@ export async function sendRuntimeTmuxInput<T>(params: {
   }
 }
 
+export async function coordinateRuntimeTmuxSelection(params: {
+  runtime: RuntimeTmuxInputRuntime;
+  sessionName: string;
+  fingerprint: string;
+  run: () => Promise<RuntimeTmuxSelectionLifecycleResult>;
+}): Promise<{ owner: boolean; result: RuntimeTmuxSelectionLifecycleResult }> {
+  const key = `${stateKey(params.runtime, params.sessionName)}\u0000${params.fingerprint}`;
+  const existing = selectionLifecycles.get(key);
+  if (existing) {
+    const result = await existing.promise;
+    return { owner: false, result };
+  }
+
+  const entry = { promise: params.run() };
+  selectionLifecycles.set(key, entry);
+  try {
+    const result = await entry.promise;
+    const cleanupTimer = setTimeout(() => {
+      if (selectionLifecycles.get(key) === entry) selectionLifecycles.delete(key);
+    }, RUNTIME_TMUX_SELECTION_LIFECYCLE_GRACE_MS);
+    cleanupTimer.unref?.();
+    return { owner: true, result };
+  } catch (error) {
+    if (selectionLifecycles.get(key) === entry) selectionLifecycles.delete(key);
+    throw error;
+  }
+}
+
 export function resetRuntimeTmuxInputStatesForTests(): void {
   states.clear();
+  selectionLifecycles.clear();
 }

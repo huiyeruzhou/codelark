@@ -3,6 +3,7 @@ import { createConfigService } from '../../../configuration/service.js';
 import type { BridgeStore, ChannelChat, InboundMessage } from '../../../domain/index.js';
 import {
   getSessionActiveRuntime,
+  getSessionKimiModel,
   getSessionRuntimeTmuxSessionName,
   getSessionWorkingDirectory,
   setSessionActiveRuntimeUpdate,
@@ -70,6 +71,13 @@ function setSessionKimiProviderToml(sessionId: string): void {
   );
 }
 
+function setSessionKimiModelToml(sessionId: string, model: string): void {
+  createConfigService({ migrate: false }).set(
+    { kind: 'session', sessionId },
+    { runtime: { kimi: { model } } },
+  );
+}
+
 function setSessionTmuxAutoEnterToml(sessionId: string, tmuxAutoEnter: boolean): void {
   createConfigService({ migrate: false }).set(
     { kind: 'session', sessionId },
@@ -105,6 +113,8 @@ function inheritClearRuntimeProvider(sessionId: string, previousSession: ReturnT
     return;
   }
   if (activeRuntime === 'kimi') {
+    const inheritedModel = getSessionKimiModel(previousSession);
+    if (inheritedModel) setSessionKimiModelToml(sessionId, inheritedModel);
     setSessionKimiProviderToml(sessionId);
     setSessionTmuxAutoEnterToml(sessionId, true);
     return;

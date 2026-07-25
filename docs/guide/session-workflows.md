@@ -25,7 +25,7 @@ CodeLark 的 IM 对话由三层组成：
 /current
 ```
 
-`/status` 看 bridge 和通道状态。`/t` 打开本地会话表；选择一条会话后发送 `/t 1` 或点击卡片中的选择项接管。`/current` 查看当前会话卡片，并在同一张卡片里改会话名、工作目录和当前 runtime 的配置。
+`/status` 看 bridge 和通道状态。`/t` 打开本地会话表；选择一条会话后发送 `/t 1` 或点击卡片中的选择项接管。`/current` 查看当前会话卡片；顶部“配置分栏”可分别编辑通用会话配置与 Codex、Claude Code、Kimi Code 配置。
 
 如果要从空白会话开始：
 
@@ -39,7 +39,7 @@ CodeLark 的 IM 对话由三层组成：
 /clear my-next-task ~/work/project
 ```
 
-`/clear` 不会删除旧对话；之后仍可用 `/t` 找回并 attach。
+`/clear` 不会删除旧对话；之后仍可用 `/t` 找回并 attach。当前 Kimi 会话显式设置过的 model 会随 active runtime 继承到新 BridgeSession，卡片和下一次 Kimi 启动不会退回 `default`。
 
 ## 会话列表和下拉选框
 
@@ -95,9 +95,13 @@ CodeLark 的 IM 对话由三层组成：
 /p sdk
 ```
 
-Codex 支持 `sdk`、`pty`、`tmux`。Claude Code 支持 `tmux`、`pty`、`sdk`，默认是 `tmux`。Kimi Code 当前只支持 `tmux`，发送普通文本后 CodeLark 会自动补一次 `Ctrl-S` steer。`/provider` 不带参数时会显示当前 runtime 的 provider 和可选值。
+Codex 支持 `sdk`、`pty`、`tmux`。Claude Code 支持 `tmux`、`pty`、`sdk`，默认是 `tmux`。Kimi Code 当前只支持 `tmux`，发送普通文本后 CodeLark 会自动补一次 `Ctrl-S` steer。显式发送 `/p tmux` 会重建当前 runtime 的同名 provider-owned tmux；Kimi 会恢复已有 Kimi session id，并在 TUI ready 后更新绑定。`/provider` 不带参数时会显示当前 runtime 的 provider 和可选值。
 
-`/current` 卡片顶部有 runtime 下拉，可以直接在 Codex、Claude Code 和 Kimi Code 之间切换并刷新卡片。表单同时展示当前 session 可覆盖的通用 tmux 配置和当前 runtime 配置；例如切到 Claude Code 后保存，不会修改 Codex 的 sandbox 或 network 设置。输入框留空或下拉选择“跟随上层配置”时，会删除对应的 session-level 覆盖，立即恢复 home/local/channel 等上层配置的当前有效值。
+`/current` 卡片顶部有“通用配置、Codex、Claude Code、Kimi Code”四个分栏：
+
+- 通用配置只显示会话名、工作目录和当前 session 可覆盖的 tmux 配置；切到该分栏不会改变当前 agent。
+- Codex、Claude Code、Kimi Code 分栏只显示各自的 model、provider、mode、reasoning 等配置，不重复显示通用字段。选择另一个 runtime 分栏会沿用既有行为，切换当前 agent 并刷新卡片。
+- 输入框留空或下拉选择“跟随上层配置”时，只删除当前分栏对应的 session-level 覆盖，立即恢复 home/local/channel 等上层配置的当前有效值；保存一个分栏不会串写其他分栏。
 
 运行中不能随意切换 runtime/provider。遇到拒绝提示时，先等当前任务结束，或发送 `/stop` 停止当前任务，再切换。
 
@@ -177,7 +181,7 @@ CodeLark 的配置分两类理解最清楚：
 
 当前聊天的 runtime/provider/model/cwd 优先使用 session-level 覆盖。也就是说，`/set defaultProvider tmux` 会影响以后新建或没有覆盖的会话；已经在当前聊天里执行过 `/provider sdk` 的会话，会继续使用自己的 session-level provider，直到再次发送 `/provider ...` 或在 `/current` 卡片里保存新值。
 
-`/current` 只呈现允许写入 session 的 `/set` 配置：tmux 展示行数、自动回车、输入回显，以及当前 runtime 的模型/provider/权限等。默认工作目录、UI 访问、通道设置等只能写入 home 或其他上层作用域，不会伪装成会话配置；当前工作目录继续使用卡片里的“工作目录”或 `/cd` 修改。
+`/current` 只呈现允许写入 session 的配置：通用分栏包含会话名、当前工作目录、tmux 展示行数、自动回车和输入回显；三个 runtime 分栏分别包含各自的模型、provider、权限等会话级覆盖。默认工作目录、UI 访问、通道设置等只能写入 home 或其他上层作用域，不会伪装成会话配置；当前工作目录继续使用通用分栏里的“工作目录”或 `/cd` 修改。
 
 ## 什么时候看哪张卡片
 

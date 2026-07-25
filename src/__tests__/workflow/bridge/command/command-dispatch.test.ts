@@ -2022,18 +2022,16 @@ describe('command-dispatch', () => {
     assert.deepEqual(card?.tags, ['codex', '019e7d66...card01']);
     assert.match(card?.title || '', /Codex Card title/);
     assert.equal(card?.selects?.[0]?.id, 'cur_runtime');
-    assert.deepEqual(card?.selects?.[0]?.options.map((option) => option.text), ['Codex', 'Claude Code', 'Kimi Code']);
+    assert.deepEqual(card?.selects?.[0]?.options.map((option) => option.text), ['通用配置', 'Codex', 'Claude Code', 'Kimi Code']);
     assert.equal(parseCommandCallbackData(card?.selects?.[0]?.selectedCallbackData || '')?.commandText, '/current-runtime codex');
     assert.equal(card?.form?.layout, 'two_column');
-    assert.equal(card?.form?.inputElementId, 'clk_name');
+    assert.equal(card?.form?.inputElementId, undefined);
     assert.equal(card?.form?.controlBar?.selects, undefined);
     assert.deepEqual(card?.form?.controlBar?.actions?.map((action) => action.text), ['刷新']);
     assert.equal(card?.form?.submitText, '保存');
     assert.deepEqual(card?.sections?.[0]?.fields?.map(([label]) => label), ['类型', '运行状态', '共享镜像']);
     assert.equal(card?.sections?.[0]?.fields?.some(([label]) => label === '目录'), false);
     assert.deepEqual(card?.form?.selects?.map((select) => select.elementId), [
-      'tmuxAutoEnter',
-      'tmuxEchoInput',
       'defaultMode',
       'defaultProvider',
       'codexSandboxMode',
@@ -2041,16 +2039,14 @@ describe('command-dispatch', () => {
       'codexReasoningEffort',
     ]);
     assert.deepEqual(card?.form?.selects?.map((select) => select.label), [
-      'tmux 自动回车 (session.tmux_auto_enter)',
-      '回显 tmux 输出 (session.tmux_echo_input)',
       'YOLO模式 (runtime.codex.yolo_mode)',
       'Provider（运行方式） (runtime.codex.provider)',
       '文件系统权限 (runtime.codex.sandbox_mode)',
       '网络访问 (runtime.codex.network_access)',
       '思考级别 (runtime.codex.reasoning_effort)',
     ]);
-    assert.equal(card?.form?.extraInputs?.find((input) => input.elementId === 'clk_cwd')?.defaultValue, '/tmp/current-card');
-    assert.equal(card?.form?.extraInputs?.some((input) => input.elementId === 'tmuxCaptureLines'), true);
+    assert.equal(card?.form?.extraInputs?.some((input) => input.elementId === 'clk_cwd'), false);
+    assert.equal(card?.form?.extraInputs?.some((input) => input.elementId === 'tmuxCaptureLines'), false);
     assert.equal(card?.form?.extraInputs?.some((input) => input.elementId === 'defaultModel'), true);
     assert.equal(card?.form?.selects?.some((select) => select.elementId === 'codexSandboxMode'), true);
     assert.match(card?.footer?.[0] || '', /当前 agent.*<text_tag color='orange'>Codex<\/text_tag>/);
@@ -2062,11 +2058,38 @@ describe('command-dispatch', () => {
     assert.deepEqual(pinned, ['reply-1']);
     assert.deepEqual(unpinned, []);
 
+    await handleBridgeCommand(
+      adapter,
+      {
+        address,
+        text: '/current-runtime',
+        messageId: 'incoming-current-card-common',
+        callbackData: buildCommandCallbackData('/current-runtime common'),
+        raw: { event: { context: { open_message_id: 'reply-1' } } },
+      } as any,
+      '/current-runtime common',
+      deps,
+    );
+    const commonCard = sent.at(-1)?.richCard as OutboundRichCard | undefined;
+    assert.equal(getSessionActiveRuntime(store.getSession(binding.bridgeSessionId)), 'codex');
+    assert.equal(sent.at(-1)?.richCardUpdateMessageId, 'reply-1');
+    assert.equal(commonCard?.selects?.[0]?.selectedCallbackData, buildCommandCallbackData('/current-runtime common'));
+    assert.equal(commonCard?.form?.inputElementId, 'clk_name');
+    assert.equal(commonCard?.form?.inputDefaultValue, 'Current Card');
+    assert.deepEqual(commonCard?.form?.selects?.map((select) => select.elementId), ['tmuxAutoEnter', 'tmuxEchoInput']);
+    assert.deepEqual(commonCard?.form?.extraInputs?.map((input) => input.elementId), ['clk_cwd', 'tmuxCaptureLines']);
+    assert.equal(commonCard?.form?.selects?.some((select) => select.elementId === 'defaultMode'), false);
+    assert.equal(commonCard?.form?.extraInputs?.some((input) => input.elementId === 'defaultModel'), false);
+    assert.equal(
+      parseCommandCallbackData(commonCard?.form?.submitCallbackData || '')?.commandText,
+      '/current-config common',
+    );
+
     await handleBridgeCommand(adapter, { address, text: '/currnet', messageId: 'incoming-current-card-refresh' } as any, '/currnet', deps);
     await flushThreadTablePinJobs();
     assert.equal(sent.at(-1)?.richCardUpdateMessageId, undefined);
-    assert.equal(getThreadTableMessageRecord(address, 'current')?.messageId, 'reply-2');
-    assert.deepEqual(pinned, ['reply-1', 'reply-2']);
+    assert.equal(getThreadTableMessageRecord(address, 'current')?.messageId, 'reply-3');
+    assert.deepEqual(pinned, ['reply-1', 'reply-3']);
     assert.deepEqual(unpinned, ['reply-1']);
 
     await handleBridgeCommand(
@@ -2075,7 +2098,7 @@ describe('command-dispatch', () => {
         address,
         text: '/current-runtime',
         messageId: 'incoming-current-card-runtime',
-        callbackMessageId: 'reply-2',
+        callbackMessageId: 'reply-3',
       } as any,
       '/current-runtime claude',
       deps,
@@ -2084,25 +2107,20 @@ describe('command-dispatch', () => {
     const claudeBinding = store.getChannelChat(address.channelType, address.chatId);
     assert.ok(claudeBinding);
     assert.equal(getSessionActiveRuntime(store.getSession(claudeBinding.bridgeSessionId)), 'claude');
-    assert.equal(sent.at(-1)?.richCardUpdateMessageId, 'reply-2');
+    const claudeNameBeforeRuntimeSave = store.getSession(claudeBinding.bridgeSessionId)?.name;
+    assert.equal(sent.at(-1)?.richCardUpdateMessageId, 'reply-3');
     assert.equal(sent.at(-1)?.richCard?.selects?.[0]?.selectedCallbackData, buildCommandCallbackData('/current-runtime claude'));
     assert.deepEqual(sent.at(-1)?.richCard?.form?.selects?.map((select: any) => select.elementId), [
-      'tmuxAutoEnter',
-      'tmuxEchoInput',
       'claudeMode',
       'claudeProvider',
       'claudeReasoningEffort',
     ]);
     assert.deepEqual(sent.at(-1)?.richCard?.form?.selects?.map((select: any) => select.formName), [
-      'tmux_enter',
-      'tmux_echo',
       'cld_mode',
       'cld_provider',
       'cld_rsn_eft',
     ]);
     assert.deepEqual(sent.at(-1)?.richCard?.form?.selects?.map((select: any) => select.label), [
-      'tmux 自动回车 (session.tmux_auto_enter)',
-      '回显 tmux 输出 (session.tmux_echo_input)',
       'YOLO模式 (runtime.claude.yolo_mode)',
       'Provider（运行方式） (runtime.claude.provider)',
       '思考级别 (runtime.claude.reasoning_effort)',
@@ -2116,12 +2134,12 @@ describe('command-dispatch', () => {
       true,
     );
     assert.equal(sent.at(-1)?.richCard?.form?.selects?.some((select: any) => select.elementId === 'codexSandboxMode'), false);
-    assert.equal(getThreadTableMessageRecord(address, 'current')?.messageId, 'reply-2');
+    assert.equal(getThreadTableMessageRecord(address, 'current')?.messageId, 'reply-3');
 
     await handleBridgeCommand(adapter, { address, text: '/current runtime claude', messageId: 'incoming-current-card-claude-preview' } as any, '/current runtime claude', deps);
     const claudePreviewCard = sent.at(-1)?.richCard as OutboundRichCard | undefined;
     assert.equal(sent.at(-1)?.richCardUpdateMessageId, undefined);
-    assert.equal(getThreadTableMessageRecord(address, 'current')?.messageId, 'reply-4');
+    assert.equal(getThreadTableMessageRecord(address, 'current')?.messageId, 'reply-5');
     assert.equal(claudePreviewCard?.tags?.[0], 'claude');
     assert.match(claudePreviewCard?.footer?.[0] || '', /当前 agent.*<text_tag color='orange'>Claude Code<\/text_tag>/);
     assert.equal(claudePreviewCard?.selects?.[0]?.selectedCallbackData, buildCommandCallbackData('/current-runtime claude'));
@@ -2149,7 +2167,7 @@ describe('command-dispatch', () => {
         raw: {
           event: {
             context: {
-              open_message_id: 'reply-4',
+              open_message_id: 'reply-5',
             },
             action: {
               form_value: {
@@ -2169,7 +2187,7 @@ describe('command-dispatch', () => {
       deps,
     );
 
-    assert.equal(store.getSession(claudeBinding.bridgeSessionId)?.name, '重命名 Current');
+    assert.equal(store.getSession(claudeBinding.bridgeSessionId)?.name, claudeNameBeforeRuntimeSave);
     assert.equal(createConfigService({ migrate: false, env: {} }).get('runtime.claude.yoloMode', {
       kind: 'session',
       sessionId: claudeBinding.bridgeSessionId,
@@ -2191,10 +2209,10 @@ describe('command-dispatch', () => {
       kind: 'session',
       sessionId: claudeBinding.bridgeSessionId,
     }), 15);
-    assert.deepEqual(adapter.renamedGroups, [{ chatId: 'chat-current-card', name: '重命名 Current' }]);
-    assert.equal(sent.at(-1)?.richCard?.form?.inputDefaultValue, '重命名 Current');
-    assert.equal(sent.at(-1)?.richCardUpdateMessageId, 'reply-4');
-    assert.equal(getThreadTableMessageRecord(address, 'current')?.messageId, 'reply-4');
+    assert.deepEqual(adapter.renamedGroups, []);
+    assert.equal(sent.at(-1)?.richCard?.form?.inputDefaultValue, undefined);
+    assert.equal(sent.at(-1)?.richCardUpdateMessageId, 'reply-5');
+    assert.equal(getThreadTableMessageRecord(address, 'current')?.messageId, 'reply-5');
 
     await handleBridgeCommand(
       adapter,
@@ -2206,7 +2224,7 @@ describe('command-dispatch', () => {
         raw: {
           event: {
             context: {
-              open_message_id: 'reply-4',
+              open_message_id: 'reply-5',
             },
           },
         },
@@ -2217,9 +2235,9 @@ describe('command-dispatch', () => {
     const codexBinding = store.getChannelChat(address.channelType, address.chatId);
     assert.ok(codexBinding);
     assert.equal(getSessionActiveRuntime(store.getSession(codexBinding.bridgeSessionId)), 'codex');
-    assert.equal(sent.at(-1)?.richCardUpdateMessageId, 'reply-4');
+    assert.equal(sent.at(-1)?.richCardUpdateMessageId, 'reply-5');
     assert.equal(sent.at(-1)?.richCard?.selects?.[0]?.selectedCallbackData, buildCommandCallbackData('/current-runtime codex'));
-    assert.equal(getThreadTableMessageRecord(address, 'current')?.messageId, 'reply-4');
+    assert.equal(getThreadTableMessageRecord(address, 'current')?.messageId, 'reply-5');
   });
 
   it('renders and saves Kimi /current config card without writing Codex settings', async () => {
@@ -2263,11 +2281,12 @@ describe('command-dispatch', () => {
     assert.ok(kimiBinding);
     const kimiSession = store.getSession(kimiBinding.bridgeSessionId);
     assert.equal(getSessionActiveRuntime(kimiSession), 'kimi');
+    const kimiNameBeforeRuntimeSave = kimiSession?.name;
     const card = sent.at(-1)?.richCard as OutboundRichCard | undefined;
     assert.equal(card?.selects?.[0]?.selectedCallbackData, buildCommandCallbackData('/current-runtime kimi'));
     assert.match(card?.footer?.[0] || '', /当前 agent.*<text_tag color='orange'>Kimi Code<\/text_tag>/);
-    assert.deepEqual(card?.form?.selects?.map((select) => select.elementId), ['tmuxAutoEnter', 'tmuxEchoInput', 'kimiProvider']);
-    assert.deepEqual(card?.form?.selects?.map((select) => select.formName), ['tmux_enter', 'tmux_echo', 'kimi_provider']);
+    assert.deepEqual(card?.form?.selects?.map((select) => select.elementId), ['kimiProvider']);
+    assert.deepEqual(card?.form?.selects?.map((select) => select.formName), ['kimi_provider']);
     assert.deepEqual(
       card?.form?.selects?.find((select) => select.elementId === 'kimiProvider')?.options.map((option) => option.text),
       ['跟随上层配置', 'tmux'],
@@ -2310,7 +2329,7 @@ describe('command-dispatch', () => {
     const updatedBinding = store.getChannelChat(address.channelType, address.chatId);
     assert.ok(updatedBinding);
     const updated = store.getSession(updatedBinding.bridgeSessionId);
-    assert.equal(updated?.name, 'Kimi Current Card');
+    assert.equal(updated?.name, kimiNameBeforeRuntimeSave);
     assert.equal(getSessionActiveRuntime(updated), 'kimi');
     const config = createConfigService({ migrate: false, env: {} });
     assert.equal(config.get('runtime.kimi.model', { kind: 'session', sessionId: updatedBinding.bridgeSessionId }), 'moonshot-current-card');
@@ -2321,8 +2340,8 @@ describe('command-dispatch', () => {
     assert.match(sent.at(-1)?.text || '', /runtime\.kimi\.model/);
     assert.match(sent.at(-1)?.text || '', /moonshot-current-card/);
     assert.doesNotMatch(sent.at(-1)?.text || '', /runtime\.codex\.provider|runtime\.claude\.provider/);
-    assert.deepEqual(adapter.renamedGroups, [{ chatId: address.chatId, name: 'Kimi Current Card' }]);
-    assert.equal(sent.at(-1)?.richCard?.form?.inputDefaultValue, 'Kimi Current Card');
+    assert.deepEqual(adapter.renamedGroups, []);
+    assert.equal(sent.at(-1)?.richCard?.form?.inputDefaultValue, undefined);
     assert.equal(sent.at(-1)?.richCard?.selects?.[0]?.selectedCallbackData, buildCommandCallbackData('/current-runtime kimi'));
   });
 
@@ -2347,10 +2366,14 @@ describe('command-dispatch', () => {
       diagnoseAllActiveSessions: async () => [],
     };
 
-    await handleBridgeCommand(adapter, { address, text: '/current', messageId: 'current-fallback-card' } as any, '/current', deps);
+    await handleBridgeCommand(adapter, {
+      address,
+      text: '/current-runtime common',
+      messageId: 'current-fallback-card',
+    } as any, '/current-runtime common', deps);
     const card = sent.at(-1)?.richCard as OutboundRichCard | undefined;
     assert.equal(card?.form?.extraInputs?.find((input) => input.elementId === 'tmuxCaptureLines')?.defaultValue, '120');
-    assert.equal(card?.form?.extraInputs?.find((input) => input.elementId === 'defaultModel')?.defaultValue, 'session-model');
+    assert.equal(card?.form?.extraInputs?.some((input) => input.elementId === 'defaultModel'), false);
     assert.equal(card?.form?.selects?.find((select) => select.elementId === 'tmuxAutoEnter')?.selectedCallbackData, 'on');
     assert.equal(card?.form?.selects?.find((select) => select.elementId === 'tmuxEchoInput')?.selectedCallbackData, '');
     assert.match(card?.form?.selects?.find((select) => select.elementId === 'tmuxEchoInput')?.placeholder || '', /跟随上层配置/);
@@ -2368,26 +2391,40 @@ describe('command-dispatch', () => {
               form_value: {
                 tmux_lines: '',
                 tmux_enter: '',
-                cdx_model: '',
               },
             },
           },
         },
       } as any,
-      '/current-config codex',
+      '/current-config common',
       deps,
     );
 
     const scope = { kind: 'session' as const, sessionId: binding.bridgeSessionId };
     assert.equal(config.resolve('session.tmuxCaptureLines', scope).source, 'home');
     assert.equal(config.resolve('session.tmuxAutoEnter', scope).source, 'home');
-    assert.equal(config.resolve('runtime.codex.model', scope).source, 'home');
+    assert.equal(config.resolve('runtime.codex.model', scope).source, 'session');
     assert.equal(config.get('session.tmuxCaptureLines', scope), 80);
     assert.equal(config.get('session.tmuxAutoEnter', scope), false);
-    assert.equal(config.get('runtime.codex.model', scope), 'home-model');
+    assert.equal(config.get('runtime.codex.model', scope), 'session-model');
     assert.match(sent.at(-1)?.text || '', /已回退上层配置/);
     assert.equal(sent.at(-1)?.richCard?.form?.extraInputs?.find((input: any) => input.elementId === 'tmuxCaptureLines')?.defaultValue, '');
     assert.match(sent.at(-1)?.richCard?.form?.extraInputs?.find((input: any) => input.elementId === 'tmuxCaptureLines')?.placeholder || '', /当前：80/);
+    assert.equal(sent.at(-1)?.richCard?.form?.extraInputs?.some((input: any) => input.elementId === 'defaultModel'), false);
+
+    await handleBridgeCommand(adapter, {
+      address,
+      text: '/current-config codex',
+      messageId: 'current-runtime-fallback-submit',
+      raw: {
+        event: {
+          context: { open_message_id: 'reply-current-fallback' },
+          action: { form_value: { cdx_model: '' } },
+        },
+      },
+    } as any, '/current-config codex', deps);
+    assert.equal(config.resolve('runtime.codex.model', scope).source, 'home');
+    assert.equal(config.get('runtime.codex.model', scope), 'home-model');
     assert.equal(sent.at(-1)?.richCard?.form?.extraInputs?.find((input: any) => input.elementId === 'defaultModel')?.defaultValue, '');
     assert.match(sent.at(-1)?.richCard?.form?.extraInputs?.find((input: any) => input.elementId === 'defaultModel')?.placeholder || '', /当前：home-model/);
   });
@@ -2502,19 +2539,15 @@ describe('command-dispatch', () => {
       assert.equal(sent.at(-1)?.richCard?.selects?.[0]?.id, 'cur_runtime');
       assert.equal(sent.at(-1)?.richCard?.selects?.[0]?.selectedCallbackData, buildCommandCallbackData('/current-runtime claude'));
       assert.equal(sent.at(-1)?.richCard?.form?.layout, 'two_column');
-      assert.equal(sent.at(-1)?.richCard?.form?.inputElementId, 'clk_name');
+      assert.equal(sent.at(-1)?.richCard?.form?.inputElementId, undefined);
       assert.equal(sent.at(-1)?.richCard?.form?.controlBar?.selects, undefined);
       assert.deepEqual(sent.at(-1)?.richCard?.form?.controlBar?.actions?.map((action) => action.text), ['刷新']);
       assert.deepEqual(sent.at(-1)?.richCard?.form?.selects?.map((select) => select.elementId), [
-        'tmuxAutoEnter',
-        'tmuxEchoInput',
         'claudeMode',
         'claudeProvider',
         'claudeReasoningEffort',
       ]);
       assert.deepEqual(sent.at(-1)?.richCard?.form?.selects?.map((select) => select.formName), [
-        'tmux_enter',
-        'tmux_echo',
         'cld_mode',
         'cld_provider',
         'cld_rsn_eft',
@@ -4609,6 +4642,14 @@ enabled = true
             reconcileStarted = true;
             await reconcile.promise;
           },
+          restartKimiTmuxSession: async () => ({
+            sessionName: `clk-kimi-${session.id}`,
+            targetPane: `clk-kimi-${session.id}:0.0`,
+            sessionId: 'session_provider_reconcile',
+            cwd: '/tmp/provider-reconcile',
+            nextOffset: 0,
+            existed: true,
+          }),
         },
       ),
       new Promise<never>((_, reject) => setTimeout(() => reject(new Error('provider command waited for mirror reconcile')), 250)),
@@ -5640,6 +5681,14 @@ enabled = true
       diagnoseSessionHealth: async () => null,
       diagnoseAllActiveSessions: async () => [],
       reconcileMirrorSubscriptions: async () => {},
+      restartKimiTmuxSession: async () => ({
+        sessionName: `clk-kimi-${session.id}`,
+        targetPane: `clk-kimi-${session.id}:0.0`,
+        sessionId: 'session_kimi-runtime',
+        cwd: '/tmp/kimi-runtime',
+        nextOffset: 0,
+        existed: true,
+      }),
     };
 
     await handleBridgeCommand(adapter, { address, text: '/mode yolo', messageId: 'incoming-kimi-mode' } as any, '/mode yolo', deps);
@@ -6038,7 +6087,7 @@ enabled = true
       {
         runtime: {
           codex: { provider: 'pty' },
-          kimi: { provider: 'tmux' },
+          kimi: { provider: 'tmux', model: 'k3' },
         },
       },
     );
@@ -6071,6 +6120,8 @@ enabled = true
       assert.equal(getSessionWorkingDirectory(nextSession), newWorkDir);
       const config = createConfigService({ migrate: false, env: {} });
       assert.equal(config.get('runtime.kimi.provider', { kind: 'session', sessionId: nextBinding.bridgeSessionId }), 'tmux');
+      assert.equal(config.get('runtime.kimi.model', { kind: 'session', sessionId: nextBinding.bridgeSessionId }), 'k3');
+      assert.equal(resolveKimiRuntimeConfig(nextSession, nextBinding).model, 'k3');
       assert.equal(config.get('session.tmuxAutoEnter', { kind: 'session', sessionId: nextBinding.bridgeSessionId }), true);
       assert.notEqual(
         config.resolve('runtime.codex.provider', { kind: 'session', sessionId: nextBinding.bridgeSessionId }).source,
@@ -9890,6 +9941,52 @@ enabled = true
 
       assert.equal(status, 'error');
       assert.match(turn.errorText || '', /CODELARK_MOCK_FATAL/);
+
+      const chainedTurnState = createMirrorTurnState(
+        binding.bridgeSessionId,
+        new Date(Date.now() - 50).toISOString(),
+        'goal-auto-continued-turn',
+      );
+      subscription.pendingTurn = chainedTurnState;
+      process.env.TMUX_FAKE_CAPTURE_TEXT = [
+        '■ historical error',
+        '■ {"error":{"type":"invalid_request_error","message":"CODELARK_MOCK_FATAL"}}',
+        '',
+        '• Goal active',
+        '• next turn is already working',
+      ].join('\n');
+      const previousTurn: FinalizedBridgeMirrorTurn = {
+        streamKey: 'mirror:previous-goal-turn',
+        userText: 'previous goal step',
+        text: 'previous step complete',
+        signature: 'previous-goal-complete',
+        timestamp: new Date().toISOString(),
+        startedAt: new Date(Date.now() - 1_000).toISOString(),
+        status: 'completed',
+      };
+      assert.equal(await bridgeManagerTestOnly.resolveCodexTuiFinalizedTurnStatus(
+        subscription,
+        previousTurn,
+        { batchSize: 1 },
+      ), 'completed');
+
+      process.env.TMUX_FAKE_CAPTURE_TEXT += '\n■ exceeded retry limit, last status: 429 Too Many Requests\n';
+      const chainedTurn: FinalizedBridgeMirrorTurn = {
+        streamKey: chainedTurnState.streamKey,
+        userText: 'goal automatically continued',
+        text: '',
+        signature: 'goal-auto-continued-complete',
+        timestamp: new Date().toISOString(),
+        startedAt: chainedTurnState.startedAt,
+        status: 'completed',
+      };
+      assert.equal(await bridgeManagerTestOnly.resolveCodexTuiFinalizedTurnStatus(
+        subscription,
+        chainedTurn,
+        { batchSize: 1 },
+      ), 'error');
+      assert.match(chainedTurn.errorText || '', /429 Too Many Requests/);
+      subscription.pendingTurn = null;
 
       const overlappingTurnState = createMirrorTurnState(
         binding.bridgeSessionId,

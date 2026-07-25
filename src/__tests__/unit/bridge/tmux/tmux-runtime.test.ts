@@ -16,6 +16,11 @@ import {
   type TmuxCore,
   type TmuxSendAction,
 } from '../../../../bridge/tmux/runtime.js';
+import {
+  coordinateRuntimeTmuxSelection,
+  resetRuntimeTmuxInputStatesForTests,
+} from '../../../../bridge/tmux/input-state-machine.js';
+import { parseCodexTuiSelectionPrompt } from '../../../../runtime/codex/tmux-provider.js';
 
 describe('codex tmux runtime', () => {
   it('detects a resumed Codex TUI prompt that already contains suggested text', () => {
@@ -215,6 +220,85 @@ describe('codex tmux runtime', () => {
 
     assert.equal(captureCount, 1);
     assert.deepEqual(sentActions, []);
+  });
+
+  it('shares one selection lifecycle when startup readiness and mirror observe the same prompt', async () => {
+    resetRuntimeTmuxInputStatesForTests();
+    const screen = [
+      'Resume paused goal?',
+      'Goal: continue lifecycle audit',
+      '› 1. Resume goal   Mark it active and continue when idle',
+      '  2. Leave paused  Keep it paused; use /goal resume later',
+      'Press enter to confirm or esc to cancel',
+    ].join('\n');
+    const prompt = parseCodexTuiSelectionPrompt(screen);
+    assert.ok(prompt);
+
+    let ready = false;
+    let startupWaiters = 0;
+    let mirrorWaiters = 0;
+    let resolveStartupChoice!: () => void;
+    const startupChoice = new Promise<void>((resolve) => {
+      resolveStartupChoice = resolve;
+    });
+    let notifyStartupWaiting!: () => void;
+    const startupWaiting = new Promise<void>((resolve) => {
+      notifyStartupWaiting = resolve;
+    });
+    const sentActions: TmuxSendAction[][] = [];
+    const core = {
+      commandPreview: (args: readonly string[]) => ['tmux', ...args].join(' '),
+      hasSession: async (name: string) => ({ exists: true, command: `tmux has-session -t ${name}` }),
+      killSession: async (name: string) => `tmux kill-session -t ${name}`,
+      listSessions: async () => ({ sessions: [], command: 'tmux list-sessions' }),
+      ensureDetachedSession: async () => ({ existed: true, command: '', commands: [] }),
+      capturePane: async (target: string) => ({
+        command: `tmux capture-pane -t ${target} -p -S -80`,
+        screen: ready ? 'OpenAI Codex\n\n› ' : screen,
+      }),
+      sendActions: async (_target: string, actions: TmuxSendAction[]) => {
+        sentActions.push(actions);
+        ready = true;
+        return { commands: ['tmux send-keys Down', 'tmux send-keys Enter'] };
+      },
+      sendInterrupt: async () => '',
+      injectPromptIntoPane: async () => ({ commands: [] }),
+    } as TmuxCore;
+
+    const readiness = waitForRuntimeTmuxReady({
+      runtime: 'codex',
+      sessionName: 'codex_shared_goal',
+      target: 'codex_shared_goal',
+      core,
+      onSelectionPrompt: async () => {
+        startupWaiters += 1;
+        notifyStartupWaiting();
+        await startupChoice;
+        return 'option_2' as const;
+      },
+    });
+    await startupWaiting;
+    const mirror = coordinateRuntimeTmuxSelection({
+      runtime: 'codex',
+      sessionName: 'codex_shared_goal',
+      fingerprint: prompt.fingerprint,
+      run: async () => {
+        mirrorWaiters += 1;
+        return { choice: 'option_2', commands: [] };
+      },
+    });
+    resolveStartupChoice();
+
+    const [readinessResult, mirrorResult] = await Promise.all([readiness, mirror]);
+    assert.equal(readinessResult.ready, true);
+    assert.equal(mirrorResult.owner, false);
+    assert.equal(startupWaiters, 1);
+    assert.equal(mirrorWaiters, 0);
+    assert.deepEqual(sentActions, [[
+      { type: 'key', key: 'Down' },
+      { type: 'key', key: 'Enter' },
+    ]]);
+    resetRuntimeTmuxInputStatesForTests();
   });
 
   it('reports unsupported startup selection prompts without waiting for the full ready timeout', async () => {

@@ -13,6 +13,7 @@ import type { ChannelAddress } from '../../domain/index.js';
 import { configFields, type ConfigPath } from '../../configuration/fields.js';
 
 export type SettingGroupKey = 'runtime' | 'runtime.codex' | 'runtime.claude' | 'runtime.kimi' | 'bridge' | 'channels.feishu';
+export type CurrentSessionConfigSection = 'common' | 'codex' | 'claude' | 'kimi';
 type SettingControl = 'select' | 'input';
 
 interface SettingGroupDefinition {
@@ -780,12 +781,15 @@ export function settingConfigPath(definition: Pick<SettingDefinition, 'tomlPath'
 export function currentSessionSettingDefinitions(
   runtime: 'codex' | 'claude' | 'kimi',
 ): SettingDefinition[] {
-  const shared = groupDefinitions('runtime').filter((definition) => {
+  return runtimeSettingDefinitions(runtime, { sessionWritableOnly: true });
+}
+
+export function currentSessionCommonSettingDefinitions(): SettingDefinition[] {
+  return groupDefinitions('runtime').filter((definition) => {
     if (definition.key === 'runtime') return false;
     const field = configFields.find((entry) => entry.tomlPath === definition.tomlPath);
     return field?.scopes.some((scope: string) => scope === 'session') || false;
   });
-  return [...shared, ...runtimeSettingDefinitions(runtime, { sessionWritableOnly: true })];
 }
 
 export function settingDisplayLabel(definition: Pick<SettingDefinition, 'key' | 'label'>): string {

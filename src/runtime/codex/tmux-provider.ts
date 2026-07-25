@@ -24,8 +24,13 @@ import {
 } from './shell-snapshot.js';
 import { resolveCodexCliExecutable } from './cli-executable.js';
 import { readPathEnv, writeCanonicalPathEnv } from '../path-env.js';
-import { tmuxCore, type TmuxCore, type TmuxSendAction } from '../../bridge/tmux/core.js';
 import {
+  tmuxCore,
+  type TmuxCore,
+  type TmuxSendAction,
+} from '../../bridge/tmux/core.js';
+import {
+  coordinateRuntimeTmuxSelection,
   sendRuntimeTmuxInput,
   transitionRuntimeTmuxInputState,
 } from '../../bridge/tmux/input-state-machine.js';
@@ -1095,20 +1100,19 @@ async function prepareCodexTmuxUpdatePrompt(params: {
     'Codex startup update selection requires a user decision',
   );
   console.log('[codex-tmux] Codex TUI update prompt detected; waiting for user confirmation');
-  const choice = await requestCodexTuiUpdateConfirmation({
+  const sent = await resolveStableCodexTuiSelectionPrompt({
     controller: params.controller,
     pendingPerms: params.pendingPerms,
     provider: 'tmux',
     bridgeSessionId: params.bridgeSessionId,
-    screenCommand: '/tmux-screen 80',
+    targetPane: params.targetPane,
     prompt,
+    screenCommand: '/tmux-screen 80',
   });
-  const actions = buildCodexTuiSelectionChoiceActions(prompt, choice);
-  const sent = await tmuxCore.sendActions(params.targetPane, actions);
-  if (choice !== 'update_now') {
+  if (sent.choice !== 'update_now') {
     console.log('[codex-tmux] Codex TUI update prompt skipped:', {
       target_pane: params.targetPane,
-      choice,
+      choice: sent.choice,
       commands: sent.commands,
     });
     return false;
@@ -1162,26 +1166,46 @@ export async function resolveStableCodexTuiSelectionPrompt(params: {
   core?: TmuxCore;
 }): Promise<{ choice: CodexTuiSelectionPromptChoice; commands: string[] }> {
   const core = params.core || tmuxCore;
-  const choice = await requestCodexTuiSelectionConfirmation({
-    controller: params.controller,
-    pendingPerms: params.pendingPerms,
-    provider: params.provider,
-    bridgeSessionId: params.bridgeSessionId,
-    screenCommand: params.screenCommand,
-    prompt: params.prompt,
+  const sessionName = params.targetPane.split(':')[0]?.trim() || params.targetPane.trim();
+  const coordinated = await coordinateRuntimeTmuxSelection({
+    runtime: 'codex',
+    sessionName,
+    fingerprint: params.prompt.fingerprint,
+    run: async () => {
+      const choice = await requestCodexTuiSelectionConfirmation({
+        controller: params.controller,
+        pendingPerms: params.pendingPerms,
+        provider: params.provider,
+        bridgeSessionId: params.bridgeSessionId,
+        screenCommand: params.screenCommand,
+        prompt: params.prompt,
+      });
+      const actions = buildCodexTuiSelectionChoiceActions(params.prompt, choice);
+      if (choice === 'not_selection' || actions.length === 0) {
+        params.controller.enqueue(sseEvent('status', {
+          reasoning: '已记录：当前屏幕不是 Codex TUI 选择界面，未向 tmux 发送选择按键。',
+        }));
+        return { choice, commands: [] };
+      }
+      const result = await core.sendActions(params.targetPane, actions);
+      params.controller.enqueue(sseEvent('status', {
+        reasoning: `已将 Codex TUI 选择发送到 tmux：${choice}`,
+      }));
+      return { choice, commands: result.commands };
+    },
   });
-  const actions = buildCodexTuiSelectionChoiceActions(params.prompt, choice);
-  if (choice === 'not_selection' || actions.length === 0) {
-    params.controller.enqueue(sseEvent('status', {
-      reasoning: '已记录：当前屏幕不是 Codex TUI 选择界面，未向 tmux 发送选择按键。',
-    }));
-    return { choice, commands: [] };
+  if (coordinated.result.choice === null) {
+    throw new Error('Codex TUI selection lifecycle ended without a choice.');
   }
-  const result = await core.sendActions(params.targetPane, actions);
-  params.controller.enqueue(sseEvent('status', {
-    reasoning: `已将 Codex TUI 选择发送到 tmux：${choice}`,
-  }));
-  return { choice, commands: result.commands };
+  if (!coordinated.owner) {
+    params.controller.enqueue(sseEvent('status', {
+      reasoning: `Codex TUI 选择已由当前 session 的 selection lifecycle 处理：${coordinated.result.choice}`,
+    }));
+  }
+  return {
+    choice: coordinated.result.choice as CodexTuiSelectionPromptChoice,
+    commands: coordinated.owner ? coordinated.result.commands : [],
+  };
 }
 
 export async function pollCodexTuiSessionFile(

@@ -47,6 +47,29 @@ function responseRequestModels(requests: Array<{ body: unknown }>): string[] {
     .filter((actualModel) => actualModel.trim().length > 0))];
 }
 
+function readThreadGoalObjectives(filePath: string): string[] {
+  if (!filePath || !fs.existsSync(filePath)) return [];
+  return fs.readFileSync(filePath, 'utf-8')
+    .split(/\r?\n/u)
+    .filter(Boolean)
+    .flatMap((line) => {
+      try {
+        const parsed = JSON.parse(line) as {
+          type?: unknown;
+          payload?: { type?: unknown; goal?: { objective?: unknown } };
+        };
+        const objective = parsed.type === 'event_msg'
+          && parsed.payload?.type === 'thread_goal_updated'
+          && typeof parsed.payload.goal?.objective === 'string'
+          ? parsed.payload.goal.objective.trim()
+          : '';
+        return objective ? [objective] : [];
+      } catch {
+        return [];
+      }
+    });
+}
+
 function findTrustPermission(adapter: RecordingAdapter): {
   callbackData: string;
   callbackMessageId: string;
@@ -307,7 +330,7 @@ describe('real codex tmux provider e2e', () => {
     }
   });
 
-  it('turns a real direct-TUI HTTP 400 into one mirror error without another user message', { timeout: 120_000 }, async (t: TestContext) => {
+  it('turns a real direct-TUI HTTP 429 into one mirror error without another user message', { timeout: 120_000 }, async (t: TestContext) => {
     if (!(await commandAvailable('tmux', ['-V']))) {
       t.skip('tmux is not available');
       return;
@@ -329,8 +352,9 @@ describe('real codex tmux provider e2e', () => {
     const codexHome = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-real-codex-home-error-'));
     const proxy = await startLocalResponsesProxy({
       errorWhenBodyIncludes: fatalMarker,
+      errorStatus: 429,
       errorBody: {
-        error: { type: 'invalid_request_error', message: 'CODELARK_MOCK_FATAL' },
+        error: { type: 'rate_limit_error', message: 'CODELARK_MOCK_FATAL' },
       },
     });
     process.env.CODEX_HOME = codexHome;
@@ -407,9 +431,9 @@ describe('real codex tmux provider e2e', () => {
         const capture = await execFileAsync('tmux', ['capture-pane', '-p', '-t', `${tmuxSessionName}:0.0`, '-S', '-80'])
           .catch(() => ({ stdout: '', stderr: '' }));
         return extractCodexTuiErrorMessages(capture.stdout)
-          .some((message) => message.includes('CODELARK_MOCK_FATAL'));
+          .some((message) => message.includes('429 Too Many Requests'));
       }, 15_000, 100);
-      assert.equal(sawSquare, true, 'real Codex TUI should render the HTTP 400 as a square error cell');
+      assert.equal(sawSquare, true, 'real Codex TUI should render the HTTP 429 as a square error cell');
 
       const deliveredError = await waitForCondition(async () => {
         await _testOnly.reconcileMirrorSubscriptions();
@@ -417,7 +441,7 @@ describe('real codex tmux provider e2e', () => {
       }, 15_000, 100);
       assert.equal(deliveredError, true, 'mirror should finalize the direct TUI turn as error without another input');
       assert.equal(adapter.streamEnds.filter((entry) => entry.status === 'error').length, 1);
-      assert.match(adapter.statuses.at(-1) || '', /invalid_request_error · CODELARK_MOCK_FATAL/);
+      assert.match(adapter.statuses.at(-1) || '', /429 Too Many Requests/);
       assert.doesNotMatch(adapter.statuses.at(-1) || '', /处理中/);
 
       const rollout = fs.readFileSync(generatedThreadFilePath, 'utf-8')
@@ -430,7 +454,7 @@ describe('real codex tmux provider e2e', () => {
       if (fatalComplete.payload?.error !== undefined) {
         assert.match(
           JSON.stringify(fatalComplete.payload.error),
-          /invalid_request_error.*CODELARK_MOCK_FATAL/u,
+          /rate_limit_error.*CODELARK_MOCK_FATAL/u,
           'newer Codex versions should preserve the structured model error',
         );
       }
@@ -698,6 +722,13 @@ describe('real codex tmux provider e2e', () => {
       generatedThreadFilePath = generatedThreadId
         ? getCodexSessionByThreadIdSafe(generatedThreadId, 'real tmux goal selection cleanup lookup')?.filePath || ''
         : '';
+      const goalObjectives = readThreadGoalObjectives(generatedThreadFilePath);
+      assert.ok(goalObjectives.includes('goala'), 'the real Codex session should preserve the original active goal');
+      assert.equal(
+        goalObjectives.includes('b'),
+        false,
+        'Cancel must be executed exactly once; a duplicate Down+Enter would wrap to Replace and activate goal b',
+      );
       assert.equal(session?.runtime?.codex?.threadId, generatedThreadId);
     } finally {
       if (tmuxSessionName) {

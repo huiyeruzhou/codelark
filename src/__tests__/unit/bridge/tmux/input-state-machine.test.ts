@@ -3,6 +3,7 @@ import { beforeEach, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
+  coordinateRuntimeTmuxSelection,
   getRuntimeTmuxInputState,
   inspectRuntimeTmuxInput,
   resetRuntimeTmuxInputStatesForTests,
@@ -91,5 +92,43 @@ describe('runtime tmux input state machine', () => {
     const failed = getRuntimeTmuxInputState('codex', 'codex_failed');
     assert.equal(failed.state, 'failed');
     assert.equal(failed.error, 'pane vanished');
+  });
+
+  it('gives one owner to concurrent observers of the same selection lifecycle', async () => {
+    let releaseOwner!: () => void;
+    const ownerBlocked = new Promise<void>((resolve) => {
+      releaseOwner = resolve;
+    });
+    let startupExecutions = 0;
+    let mirrorExecutions = 0;
+
+    const startup = coordinateRuntimeTmuxSelection({
+      runtime: 'codex',
+      sessionName: 'codex_shared_selection',
+      fingerprint: 'resume-paused-goal',
+      run: async () => {
+        startupExecutions += 1;
+        await ownerBlocked;
+        return { choice: 'option_2', commands: ['Down', 'Enter'] };
+      },
+    });
+    const mirror = coordinateRuntimeTmuxSelection({
+      runtime: 'codex',
+      sessionName: 'codex_shared_selection',
+      fingerprint: 'resume-paused-goal',
+      run: async () => {
+        mirrorExecutions += 1;
+        return { choice: 'option_2', commands: ['Down', 'Enter'] };
+      },
+    });
+
+    assert.equal(startupExecutions, 1);
+    assert.equal(mirrorExecutions, 0);
+    releaseOwner();
+    const [startupResult, mirrorResult] = await Promise.all([startup, mirror]);
+    assert.equal(startupResult.owner, true);
+    assert.equal(mirrorResult.owner, false);
+    assert.deepEqual(startupResult.result, mirrorResult.result);
+    assert.equal(startupExecutions + mirrorExecutions, 1);
   });
 });
