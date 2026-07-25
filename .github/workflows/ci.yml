@@ -106,6 +106,7 @@ jobs:
         shell: pwsh
         run: |
           try {
+            bash --version
             tmux -V
             tmux new-session -d -s codelark_ci_tmux
             tmux has-session -t codelark_ci_tmux
