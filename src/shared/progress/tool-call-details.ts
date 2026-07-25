@@ -625,19 +625,83 @@ function codeLanguageFromFilePath(filePath: string): string {
   } as Record<string, string>)[extension] || 'plain_text';
 }
 
-function patchCodeLanguage(detail: Extract<ToolCallDetail, { kind: 'patch_apply' }>): string {
-  const languages = new Set((detail.files || [])
-    .map((file) => file.toPath || file.path)
-    .filter(Boolean)
-    .map(codeLanguageFromFilePath));
-  return languages.size === 1 ? [...languages][0] || 'plain_text' : 'plain_text';
-}
-
 function renderPatchPreview(value: string, language: string): string {
   return renderPreview(value, language, {
     maxChars: PATCH_DETAIL_PREVIEW_CHAR_LIMIT,
     maxLines: PATCH_DETAIL_PREVIEW_LINE_LIMIT,
   });
+}
+
+interface PatchFilePreviewSection {
+  path: string;
+  text: string;
+}
+
+function splitPatchFilePreviewSections(value: string): PatchFilePreviewSection[] {
+  const sections: Array<{ path: string; lines: string[] }> = [];
+  let current: { path: string; lines: string[] } | null = null;
+  for (const line of value.replace(/\r\n?/g, '\n').split('\n')) {
+    const fileHeader = line.match(/^\*\*\* (?:Add|Update|Delete) File:\s+(.+)$/u);
+    if (fileHeader) {
+      current = { path: fileHeader[1].trim(), lines: [line] };
+      sections.push(current);
+      continue;
+    }
+    if (/^\*\*\* (?:Begin|End) Patch$/u.test(line)) continue;
+    if (current) current.lines.push(line);
+  }
+  return sections.map((section) => ({
+    path: section.path,
+    text: sanitizeToolText(section.lines.join('\n')),
+  })).filter((section) => section.text);
+}
+
+function countPreviewLines(value: string): number {
+  return value ? value.split('\n').length : 0;
+}
+
+function renderMultiFilePatchPreview(
+  detail: Extract<ToolCallDetail, { kind: 'patch_apply' }>,
+  patchText: string,
+): string {
+  const fileSections = splitPatchFilePreviewSections(patchText);
+  if (fileSections.length < 2) {
+    const filePath = detail.files?.[0]?.toPath || detail.files?.[0]?.path || fileSections[0]?.path || '';
+    return renderPatchPreview(patchText, codeLanguageFromFilePath(filePath));
+  }
+
+  const totalChars = fileSections.reduce((total, section) => total + Array.from(section.text).length, 0);
+  const totalLines = fileSections.reduce((total, section) => total + countPreviewLines(section.text), 0);
+  let remainingChars = PATCH_DETAIL_PREVIEW_CHAR_LIMIT;
+  let remainingLines = PATCH_DETAIL_PREVIEW_LINE_LIMIT;
+  let shownChars = 0;
+  let shownLines = 0;
+  const rendered: string[] = [];
+
+  for (let index = 0; index < fileSections.length && remainingChars > 0 && remainingLines > 0; index += 1) {
+    const section = fileSections[index]!;
+    const preview = createTextPreview(section.text, {
+      maxChars: remainingChars,
+      maxLines: remainingLines,
+    });
+    if (!preview.text) break;
+    const file = detail.files?.[index];
+    const displayPath = file?.toPath || file?.path || section.path;
+    rendered.push([
+      `\`${displayPath.replace(/`/g, '′')}\``,
+      buildFencedCodeBlock(preview.text, codeLanguageFromFilePath(displayPath)),
+    ].join('\n\n'));
+    shownChars += preview.shownChars;
+    shownLines += preview.shownLines;
+    remainingChars -= preview.shownChars;
+    remainingLines -= preview.shownLines;
+    if (preview.truncated) break;
+  }
+
+  if (shownChars < totalChars) {
+    rendered.push(`_显示 ${shownChars}/${totalChars} 字符 · ${shownLines}/${totalLines} 行_`);
+  }
+  return rendered.join('\n\n');
 }
 
 export function renderToolCallDetailMarkdown(tool: ToolCallInfo): string {
@@ -682,7 +746,7 @@ export function renderToolCallDetailMarkdown(tool: ToolCallInfo): string {
         return `- ${file.action}: \`${target}\``;
       }).join('\n'));
     }
-    if (detail.patchText) sections.push(renderPatchPreview(detail.patchText, patchCodeLanguage(detail)));
+    if (detail.patchText) sections.push(renderMultiFilePatchPreview(detail, detail.patchText));
     return sections.join('\n\n');
   }
   if (detail.kind === 'file_read') {

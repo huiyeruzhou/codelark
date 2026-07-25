@@ -42,6 +42,22 @@ function inlineCode(value: string): string {
   return `\`${truncateInline(value, 88).replace(/`/g, '′')}\``;
 }
 
+function inlineCodeExact(value: string): string {
+  return `\`${String(value || '').replace(/\s+/g, ' ').trim().replace(/`/g, '′')}\``;
+}
+
+function fitsInlineBudget(value: string, maxChars: number): boolean {
+  return Array.from(value).length <= maxChars;
+}
+
+function patchFileSummary(paths: string[]): string {
+  if (paths.length < 2) return '';
+  const allFiles = paths.map(inlineCodeExact).join(' · ');
+  if (fitsInlineBudget(allFiles, TITLE_SECONDARY_CHAR_LIMIT)) return allFiles;
+  const firstFile = `${inlineCodeExact(paths[0] || '')} 等 ${paths.length} 个文件`;
+  return fitsInlineBudget(firstFile, TITLE_SECONDARY_CHAR_LIMIT) ? firstFile : '';
+}
+
 function formatDuration(ms: number | undefined): string {
   if (!Number.isFinite(ms)) return '';
   const safeMs = Math.max(0, Math.round(ms || 0));
@@ -138,10 +154,14 @@ function presentationFromDetail(tool: ToolCallInfo): { action: string; target: s
   }
   if (detail.kind === 'patch_apply') {
     const files = detail.files || [];
-    const target = files.length === 1
-      ? inlineCode(files[0]!.toPath || files[0]!.path)
+    const paths = files.map((file) => file.toPath || file.path).filter(Boolean);
+    const singleFile = paths.length === 1 ? inlineCodeExact(paths[0] || '') : '';
+    const singleFilePrimary = `🛠️ 修改 ${singleFile}`;
+    const target = paths.length === 1 && fitsInlineBudget(singleFilePrimary, TITLE_PRIMARY_CHAR_LIMIT)
+      ? singleFile
       : `${files.length || 1} 个文件`;
-    if (files.length > 1) meta.push(files.slice(0, 4).map((file) => inlineCode(file.toPath || file.path)).join(' · '));
+    const fileSummary = patchFileSummary(paths);
+    if (fileSummary) meta.push(fileSummary);
     return { action: '修改', target, meta };
   }
   if (detail.kind === 'file_read') {

@@ -27,6 +27,7 @@ import {
   PATCH_DETAIL_PREVIEW_CHAR_LIMIT,
   PATCH_DETAIL_PREVIEW_LINE_LIMIT,
   mergeToolCallDetail,
+  renderToolCallDetailMarkdown,
 } from '../../../../shared/progress/tool-call-details.js';
 import { buildFencedCodeBlock } from '../../../../shared/markdown/fence.js';
 
@@ -1093,6 +1094,59 @@ describe('buildFinalCardJson', () => {
     assert.match(content, /_显示 \d+\/\d+ 字符 · \d+\/\d+ 行_$/);
     assert.doesNotMatch(content, /truncated for card preview/);
     assert.equal(panel.elements.length, 1, 'patch detail must not add a nested output panel');
+  });
+
+  it('splits a multi-file patch into language-specific code blocks', () => {
+    const detail = buildToolCallDetailFromInput('apply_patch', [
+      '*** Begin Patch',
+      '*** Update File: src/app.ts',
+      '@@',
+      '+const ready = true;',
+      '*** Update File: scripts/check.py',
+      '@@',
+      '+ready = True',
+      '*** End Patch',
+    ].join('\n'));
+    const markdown = renderToolCallDetailMarkdown({
+      id: 'tool-multi-patch',
+      name: 'apply_patch',
+      status: 'complete',
+      detail,
+    });
+
+    assert.match(markdown, /`src\/app\.ts`\n\n```typescript\n\*\*\* Update File: src\/app\.ts/);
+    assert.match(markdown, /`scripts\/check\.py`\n\n```python\n\*\*\* Update File: scripts\/check\.py/);
+  });
+
+  it('shares one hard character and line budget across multi-file patch blocks', () => {
+    const fileLines = (prefix: string) => Array.from(
+      { length: 100 },
+      (_, index) => `+${prefix}_${index} = "${'x'.repeat(40)}"`,
+    );
+    const detail = buildToolCallDetailFromInput('apply_patch', [
+      '*** Begin Patch',
+      '*** Update File: src/first.ts',
+      '@@',
+      ...fileLines('first'),
+      '*** Update File: src/second.ts',
+      '@@',
+      ...fileLines('second'),
+      '*** End Patch',
+    ].join('\n'));
+    const markdown = renderToolCallDetailMarkdown({
+      id: 'tool-budgeted-multi-patch',
+      name: 'apply_patch',
+      status: 'complete',
+      detail,
+    });
+    const previews = [...markdown.matchAll(/```typescript\n([\s\S]*?)\n```/g)].map((match) => match[1] || '');
+    const shownChars = previews.reduce((total, preview) => total + Array.from(preview).length, 0);
+    const shownLines = previews.reduce((total, preview) => total + preview.split('\n').length, 0);
+
+    assert.equal(previews.length, 2);
+    assert.ok(shownChars <= PATCH_DETAIL_PREVIEW_CHAR_LIMIT);
+    assert.ok(shownLines <= PATCH_DETAIL_PREVIEW_LINE_LIMIT);
+    assert.match(markdown, /_显示 \d+\/\d+ 字符 · \d+\/\d+ 行_$/);
   });
 });
 

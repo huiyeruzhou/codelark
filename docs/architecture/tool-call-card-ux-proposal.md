@@ -111,7 +111,7 @@ CodeLark 采用相同的语义分层，但不照搬 TUI 的 head+tail：普通�
 - 必须先裁剪原始 code content，再生成 opening/closing fence；禁止截断已经渲染完成的 Markdown，否则会切掉 closing fence 并让 Feishu 把多行 code block 错误布局成一行；
 - exec、read、search、generic、Kimi result 使用同一个 helper，不允许各层二次硬截断。
 
-`apply_patch` 的语言提示来自目标文件后缀，而不是固定写成 `diff`。这是公共渲染语义；Feishu 仍可在自己的出站边界处理客户端兼容问题。已知 CardKit Markdown 会把正文含字面 `${...}` 的 fenced block 布局成单行，即使没有内部反引号；因此 Feishu 仅对这类完整 block 降级成四空格缩进代码：牺牲该块高亮，保留原始字符和换行。普通反引号仍保留 fence 与高亮；其他 channel 不继承这个平台 workaround。
+`apply_patch` 的语言提示来自目标文件后缀，而不是固定写成 `diff`。多文件 patch 在公共中间层按文件拆块，每块独立选择语言，但全部块共享同一份预览预算。这是公共渲染语义；Feishu 仍可在自己的出站边界处理客户端兼容问题。已知 CardKit Markdown 会把正文含字面 `${...}` 的 fenced block 布局成单行，即使没有内部反引号；因此 Feishu 仅对命中的完整块降级成四空格缩进代码：牺牲该块高亮，保留原始字符和换行，而同一 patch 中未命中的其他文件块仍保留各自高亮。普通反引号仍保留 fence 与高亮；其他 channel 不继承这个平台 workaround。
 
 ## `exec` wrapper 的安全归一化
 

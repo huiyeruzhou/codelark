@@ -106,4 +106,59 @@ describe('getToolPresentation', () => {
     assert.equal((presentation.title.match(/exit 2/g) || []).length, 1);
     assert.doesNotMatch(presentation.title, /异常|失败|Fail/);
   });
+
+  it('lists every apply_patch file when complete Markdown tokens fit', () => {
+    const presentation = getToolPresentation({
+      id: 'patch-files-fit',
+      name: 'apply_patch',
+      status: 'complete',
+      detail: {
+        kind: 'patch_apply',
+        files: [
+          { path: 'src/app.ts', action: 'update' },
+          { path: 'docs/guide.md', action: 'update' },
+        ],
+      },
+    });
+
+    assert.equal(presentation.primary, '🛠️ 修改 2 个文件');
+    assert.equal(presentation.secondary, '`src/app.ts` · `docs/guide.md`');
+  });
+
+  it('falls back to one complete apply_patch filename instead of cutting inline Markdown', () => {
+    const firstPath = `src/${'a'.repeat(96)}.ts`;
+    const presentation = getToolPresentation({
+      id: 'patch-files-partial',
+      name: 'apply_patch',
+      status: 'complete',
+      detail: {
+        kind: 'patch_apply',
+        files: [
+          { path: firstPath, action: 'update' },
+          { path: 'src/second.ts', action: 'update' },
+          { path: 'src/third.ts', action: 'update' },
+        ],
+      },
+    });
+
+    assert.equal(presentation.secondary, `\`${firstPath}\` 等 3 个文件`);
+    assert.equal((presentation.secondary.match(/`/g) || []).length, 2);
+  });
+
+  it('shows only the apply_patch file count when no complete filename fits', () => {
+    const presentation = getToolPresentation({
+      id: 'patch-file-too-long',
+      name: 'apply_patch',
+      status: 'complete',
+      detail: {
+        kind: 'patch_apply',
+        files: [
+          { path: `src/${'a'.repeat(140)}.ts`, action: 'update' },
+          { path: 'src/second.ts', action: 'update' },
+        ],
+      },
+    });
+
+    assert.equal(presentation.title, '🛠️ 修改 2 个文件');
+  });
 });
