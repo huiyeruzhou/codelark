@@ -77,7 +77,7 @@ switch (args[0]) {
     const commandText = commandIndex >= 0 ? args.slice(commandIndex + 1).join(' ') : '';
     if (process.env.TMUX_FAKE_LAUNCH_STDERR) {
       const match = commandText.match(/\s2>\s+(?:'([^']+)'|"([^"]+)"|(\S+))/u);
-      const launchLogPath = match?.[1] || match?.[2] || match?.[3];
+      const launchLogPath = (match?.[1] || match?.[2] || match?.[3] || '').replace(/[;'"]+$/u, '');
       if (launchLogPath) {
         fs.mkdirSync(require('node:path').dirname(launchLogPath), { recursive: true });
         fs.writeFileSync(launchLogPath, process.env.TMUX_FAKE_LAUNCH_STDERR, 'utf-8');
@@ -88,7 +88,7 @@ switch (args[0]) {
       const sessions = readSessions();
       if (!sessions.includes(target)) writeSessions([...sessions, target]);
       if (fakeCodexRoot && fakeCodexControl && commandText) {
-        runFakeCodex(['__codelark_fake_tui', 'start-target', target]);
+        runFakeCodex(['__codelark_fake_tui', 'start-target', target, commandText]);
       }
     }
     break;

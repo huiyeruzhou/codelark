@@ -326,13 +326,26 @@ export function createTmuxCliCore(options: { executable?: string; prefixArgs?: s
   return new TmuxCliCore(options.executable, options.prefixArgs);
 }
 
-export let tmuxCore: TmuxCore = createTmuxCliCore();
+let activeTmuxCore: TmuxCore = createTmuxCliCore();
+
+export const tmuxCore: TmuxCore = {
+  commandPreview: (args) => activeTmuxCore.commandPreview(args),
+  ensureExtendedKeys: () => activeTmuxCore.ensureExtendedKeys?.() || Promise.resolve(''),
+  hasSession: (name) => activeTmuxCore.hasSession(name),
+  killSession: (name, options) => activeTmuxCore.killSession(name, options),
+  listSessions: () => activeTmuxCore.listSessions(),
+  ensureDetachedSession: (params) => activeTmuxCore.ensureDetachedSession(params),
+  capturePane: (target, lines) => activeTmuxCore.capturePane(target, lines),
+  sendActions: (target, actions, options) => activeTmuxCore.sendActions(target, actions, options),
+  sendInterrupt: (target) => activeTmuxCore.sendInterrupt(target),
+  injectPromptIntoPane: (targetPane, prompt) => activeTmuxCore.injectPromptIntoPane(targetPane, prompt),
+};
 
 export const _testOnlyTmuxCore = {
   replace(core: TmuxCore): void {
-    tmuxCore = core;
+    activeTmuxCore = core;
   },
   reset(): void {
-    tmuxCore = createTmuxCliCore();
+    activeTmuxCore = createTmuxCliCore();
   },
 };

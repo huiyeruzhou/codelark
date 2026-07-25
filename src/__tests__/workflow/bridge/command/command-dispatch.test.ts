@@ -473,7 +473,7 @@ function installFakeTmux(): { binDir: string; logPath: string } {
   const tmuxPath = path.join(binDir, 'tmux');
   fs.writeFileSync(logPath, '', 'utf-8');
   fs.writeFileSync(statePath, '', 'utf-8');
-  if (process.platform === 'win32') {
+  if (process.platform === 'win32' || process.env.CODELARK_TEST_NODE_TMUX === '1') {
     const helperPath = path.resolve('src', '__tests__', 'helpers', 'fake-tmux-cli.cjs');
     process.env.TMUX_FAKE_STATE_PATH = statePath;
     _testOnlyTmuxCore.replace(createTmuxCliCore({
