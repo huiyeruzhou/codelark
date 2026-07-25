@@ -6,6 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 
 import { _testOnlyClaudeSdk } from '../../../../runtime/claude/sdk-provider.js';
+import { buildClaudeCodeRouterStartInvocation } from '../../../../runtime/claude/code-router.js';
 
 async function withEnvOverride<T>(
   overrides: Record<string, string | undefined>,
@@ -29,6 +30,20 @@ async function withEnvOverride<T>(
 }
 
 describe('ClaudeSdkProvider helpers', () => {
+  it('launches Windows command shims through cmd without shell-mode argument interpolation', () => {
+    assert.deepEqual(
+      buildClaudeCodeRouterStartInvocation('C:\\Program Files\\ccr.cmd', 'win32', 'C:\\Windows\\cmd.exe'),
+      {
+        command: 'C:\\Windows\\cmd.exe',
+        args: ['/d', '/s', '/c', '"C:\\Program Files\\ccr.cmd" start'],
+      },
+    );
+    assert.deepEqual(
+      buildClaudeCodeRouterStartInvocation('/usr/local/bin/ccr', 'linux'),
+      { command: '/usr/local/bin/ccr', args: ['start'] },
+    );
+  });
+
   beforeEach(() => {
     delete process.env.CODELARK_CLAUDE_EXECUTABLE;
     delete process.env.CODELARK_CLAUDE_CCR_START_TIMEOUT_MS;

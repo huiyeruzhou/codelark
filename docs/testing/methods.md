@@ -73,7 +73,9 @@ Windows 托管 runner 的版本可以随 GitHub 支持范围升级；发布 gate
 
 本地测试有四种强度，不应只统称为“单元测试”：
 
-默认 `npm test` 会先按原生测试层隔离 `unit`、`workflow`、`mock-e2e`、`harness`、`local-e2e`；其中最长的 `unit`、`workflow` 和 `mock-e2e` 再使用 Node 原生 `--test-shard=1/2` 拆成两个文件 shard，共八个进程组，并按 `os.availableParallelism()` 限制同时运行数。每组由 `run-tests.js` 创建独立的 HOME、CODELARK_HOME、各 runtime home 和 `TMUX_TMPDIR`，shard 内仍保持 `--test-concurrency=1`，因此不会让同一测试文件、配置目录或真实 tmux server 内部并发。结束时只打印各组摘要和日志目录；失败组额外打印尾部。需要复现旧串行顺序时使用 `npm run test:serial`；传入 `npm test -- --unit --workflow` 等 layer 参数时默认仍只启动所选单组，也可显式追加 Node 原生 `--test-shard=N/M`（`1 ≤ N ≤ M`）。需要让选定 layer 也走同一隔离分组时使用 `npm test -- --parallel --unit --workflow`；CI 对稳定层和跨平台层使用该入口，并给测试 step 设置 20 分钟上限，避免平台进程永久悬挂。
+默认 `npm test` 会先按原生测试层隔离 `unit`、`workflow`、`mock-e2e`、`harness`、`local-e2e`；其中 `unit` 和 `mock-e2e` 使用 Node 原生 `--test-shard=1/2` 拆成两个文件 shard，Windows 曾暴露平台悬挂的 `workflow` 进一步拆成四个文件 shard，共十个进程组，并按 `os.availableParallelism()` 限制同时运行数。每组由 `run-tests.js` 创建独立的 HOME、CODELARK_HOME、各 runtime home 和 `TMUX_TMPDIR`，shard 内仍保持 `--test-concurrency=1`，因此不会让同一测试文件、配置目录或真实 tmux server 内部并发。结束时只打印各组摘要和日志目录；失败组额外打印尾部。需要复现旧串行顺序时使用 `npm run test:serial`；传入 `npm test -- --unit --workflow` 等 layer 参数时默认仍只启动所选单组，也可显式追加 Node 原生 `--test-shard=N/M`（`1 ≤ N ≤ M`）。需要让选定 layer 也走同一隔离分组时使用 `npm test -- --parallel --unit --workflow`；CI 对稳定层和跨平台层使用该入口，并给测试 step 设置 20 分钟上限，避免平台进程永久悬挂。
+
+tmux workflow 的 fake transport 必须通过 `TmuxCore` 的可执行命令注入运行 Node helper，不要在 Windows 上用无扩展名 shebang 或 `.cmd` 去遮蔽真实 `tmux.exe`：`CreateProcess` 的可执行文件搜索语义与 POSIX PATH 不同，这种 fake 会静默落到真实 psmux。真实 psmux/tmux lifecycle 仍由跨平台 CI 的独立 smoke 与 real-tmux workflow 覆盖。
 
 | 层次 | 回答的问题 | 典型特征 | 何时必须跑 |
 | --- | --- | --- | --- |

@@ -33,8 +33,10 @@ if (requestedArgs.length > 0 && !parallelSelected) {
   let groups = [
     { name: 'unit-1', args: ['--unit', '--test-shard=1/2'] },
     { name: 'unit-2', args: ['--unit', '--test-shard=2/2'] },
-    { name: 'workflow-1', args: ['--workflow', '--test-shard=1/2'] },
-    { name: 'workflow-2', args: ['--workflow', '--test-shard=2/2'] },
+    { name: 'workflow-1', args: ['--workflow', '--test-shard=1/4'] },
+    { name: 'workflow-2', args: ['--workflow', '--test-shard=2/4'] },
+    { name: 'workflow-3', args: ['--workflow', '--test-shard=3/4'] },
+    { name: 'workflow-4', args: ['--workflow', '--test-shard=4/4'] },
     { name: 'mock-e2e-1', args: ['--mock-e2e', '--test-shard=1/2'] },
     { name: 'mock-e2e-2', args: ['--mock-e2e', '--test-shard=2/2'] },
     { name: 'harness', args: ['--harness'] },

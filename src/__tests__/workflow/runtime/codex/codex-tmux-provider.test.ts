@@ -31,6 +31,7 @@ import {
   buildShellSnapshotLaunchCommand,
   buildShellSnapshotContent,
   detectCodexShellType,
+  quoteCommandLineArg,
   resolveDefaultUserShell,
 } from '../../../../runtime/codex/shell-snapshot.js';
 
@@ -46,11 +47,6 @@ async function tmuxAvailable(): Promise<boolean> {
   } catch {
     return false;
   }
-}
-
-function shellQuote(value: string): string {
-  if (/^[A-Za-z0-9_@%+=:,./-]+$/.test(value)) return value;
-  return `'${value.replace(/'/g, "'\\''")}'`;
 }
 
 async function waitForFile(filePath: string, timeoutMs = 5_000): Promise<boolean> {
@@ -74,8 +70,9 @@ describe('codex-tmux-provider', () => {
 
   it('builds the Codex TUI env by inheriting source env without legacy key translation', () => {
     const runtimeBin = path.join(process.env.CODELARK_HOME!, 'runtime', 'bin');
+    const sourcePath = ['/usr/bin', '/bin'].join(path.delimiter);
     const env = buildCodexTuiEnv({
-      PATH: '/usr/bin:/bin',
+      PATH: sourcePath,
       HOME: '/Users/tester',
       CODELARK_CODEX_API_KEY: 'legacy-key',
       LARK_CHANNEL_HOME: '/Users/tester/.codelark',
@@ -798,10 +795,21 @@ describe('codex-tmux-provider', () => {
       shell: { type: 'powershell', path: 'C:\\Program Files\\PowerShell\\7\\pwsh.exe' },
       path: 'C:\\Temp\\clk env.ps1',
       content: '',
-    });
+    }, { platform: 'win32' });
+    assert.match(powershellCommand, /^"C:\\Program Files\\PowerShell\\7\\pwsh\.exe" /);
+    assert.doesNotMatch(powershellCommand, /^'/);
     assert.match(powershellCommand, /-NoProfile -Command/);
     assert.match(powershellCommand, /C:\\Temp\\clk env\.ps1/);
     assert.match(powershellCommand, /gpt-5-codex/);
+
+    const powershellWithLog = buildShellSnapshotLaunchCommand('codex', [], {
+      shell: { type: 'powershell', path: 'C:\\Program Files\\PowerShell\\7\\pwsh.exe' },
+      path: 'C:\\Temp\\clk env.ps1',
+      content: '',
+    }, { platform: 'win32', stderrLogPath: 'C:\\Temp\\codex launch.log' });
+    assert.match(powershellWithLog, /2> 'C:\\Temp\\codex launch\.log'/);
+    assert.match(powershellWithLog, /Add-Content -LiteralPath/);
+    assert.doesNotMatch(powershellWithLog, /status=\$\?/);
   });
 
   it('starts a real tmux session with the shell snapshot command form', async (t: TestContext) => {
@@ -901,7 +909,7 @@ describe('codex-tmux-provider', () => {
         '-s',
         sessionName,
         '--',
-        `${shellQuote(process.execPath)} ${shellQuote(scriptPath)}`,
+        `${quoteCommandLineArg(process.execPath)} ${quoteCommandLineArg(scriptPath)}`,
       ]);
 
       assert.equal(await waitForFile(readyPath), true, 'capture process should become ready');
@@ -973,7 +981,7 @@ describe('codex-tmux-provider', () => {
         '-s',
         sessionName,
         '--',
-        `${shellQuote(process.execPath)} ${shellQuote(scriptPath)} ${shellQuote(readyPath)} ${shellQuote(outputPath)}`,
+        [process.execPath, scriptPath, readyPath, outputPath].map((value) => quoteCommandLineArg(value)).join(' '),
       ]);
 
       assert.equal(await waitForFile(readyPath), true, 'capture process should become ready');

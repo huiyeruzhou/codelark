@@ -643,9 +643,14 @@ function prependLarkCliRuntimeBin(pathValue: string | undefined): string {
   return [binDir, ...withoutBin].join(path.delimiter);
 }
 
-export function buildCodexTuiShellCommand(command: string, args: string[], env: Record<string, string>): string {
+export function buildCodexTuiShellCommand(
+  command: string,
+  args: string[],
+  env: Record<string, string>,
+  options: { stderrLogPath?: string } = {},
+): string {
   const snapshot = ensureShellSnapshot(env);
-  return buildShellSnapshotLaunchCommand(command, args, snapshot);
+  return buildShellSnapshotLaunchCommand(command, args, snapshot, options);
 }
 
 function toApprovalPolicy(permissionMode?: string): string {

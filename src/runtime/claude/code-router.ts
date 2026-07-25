@@ -88,6 +88,16 @@ async function isClaudeCodeRouterRunning(command: string, env: Record<string, st
   }
 }
 
+export function buildClaudeCodeRouterStartInvocation(
+  command: string,
+  platform: NodeJS.Platform = process.platform,
+  comspec = process.env.ComSpec || process.env.COMSPEC || 'cmd.exe',
+): { command: string; args: string[] } {
+  return platform === 'win32'
+    ? { command: comspec, args: ['/d', '/s', '/c', `"${command}" start`] }
+    : { command, args: ['start'] };
+}
+
 async function startClaudeCodeRouter(command: string, env: Record<string, string>): Promise<void> {
   try {
     const timeoutMs = parsePositiveIntEnv(
@@ -95,7 +105,8 @@ async function startClaudeCodeRouter(command: string, env: Record<string, string
       DEFAULT_CCR_START_TIMEOUT_MS,
       1_000,
     );
-    const child = spawn(command, ['start'], {
+    const invocation = buildClaudeCodeRouterStartInvocation(command);
+    const child = spawn(invocation.command, invocation.args, {
       env,
       detached: true,
       stdio: 'ignore',

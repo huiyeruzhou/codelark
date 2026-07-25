@@ -33,6 +33,7 @@ import { CodexRoutingProvider } from '../../../../runtime/codex/routing-provider
 import { _testOnlyCodexThreadBootstrap } from '../../../../runtime/codex/thread-bootstrap.js';
 import { _testOnlyClaudePty } from '../../../../runtime/claude/pty-provider.js';
 import { _testOnlyTmuxScreenMonitors } from '../../../../bridge/command/tmux.js';
+import { _testOnlyTmuxCore, createTmuxCliCore } from '../../../../bridge/tmux/core.js';
 import {
   resetRuntimeTmuxInputStatesForTests,
   transitionRuntimeTmuxInputState,
@@ -472,6 +473,15 @@ function installFakeTmux(): { binDir: string; logPath: string } {
   const tmuxPath = path.join(binDir, 'tmux');
   fs.writeFileSync(logPath, '', 'utf-8');
   fs.writeFileSync(statePath, '', 'utf-8');
+  if (process.platform === 'win32') {
+    const helperPath = path.resolve('src', '__tests__', 'helpers', 'fake-tmux-cli.cjs');
+    process.env.TMUX_FAKE_STATE_PATH = statePath;
+    _testOnlyTmuxCore.replace(createTmuxCliCore({
+      executable: process.execPath,
+      prefixArgs: [helperPath],
+    }));
+    return { binDir, logPath };
+  }
   fs.writeFileSync(tmuxPath, `#!/usr/bin/env bash
 	printf '%s\\n' "$*" >> "$TMUX_FAKE_LOG"
 	state_file="${statePath}"
@@ -676,7 +686,7 @@ function installFakeCodexTui(): { binDir: string; codexPath: string; logPath: st
   const stateDir = path.join(binDir, 'state');
   const logPath = path.join(binDir, 'codex-tui.log');
   const scriptPath = path.join(binDir, 'codex-tui.cjs');
-  const codexPath = path.join(binDir, 'codex');
+  const codexPath = path.join(binDir, process.platform === 'win32' ? 'codex.cmd' : 'codex');
   fs.mkdirSync(stateDir, { recursive: true });
   fs.writeFileSync(logPath, '', 'utf-8');
   fs.writeFileSync(scriptPath, `#!/usr/bin/env node
@@ -876,6 +886,7 @@ if (args[0] === '__codelark_fake_tui') {
   if (command === 'send-key') sendKey(target, args[3]);
   else if (command === 'send-literal') sendLiteral(target, args[3] || '');
   else if (command === 'capture') capture(target);
+  else if (command === 'start-target') startTui(String(target || '').replace(/^codex_/, ''));
   else if (command === 'seed-update') {
     writeState(target, {
       kind: 'update',
@@ -902,7 +913,9 @@ if (resumeIndex >= 0 && args[resumeIndex + 1]) {
 process.stderr.write('unexpected fake Codex TUI command\\n');
 process.exit(2);
 `, 'utf-8');
-  fs.writeFileSync(codexPath, `#!/usr/bin/env sh\nexec "${process.execPath}" "${scriptPath}" "$@"\n`, 'utf-8');
+  fs.writeFileSync(codexPath, process.platform === 'win32'
+    ? `@echo off\r\n"${process.execPath}" "${scriptPath}" %*\r\n`
+    : `#!/usr/bin/env sh\nexec "${process.execPath}" "${scriptPath}" "$@"\n`, 'utf-8');
   fs.chmodSync(scriptPath, 0o755);
   fs.chmodSync(codexPath, 0o755);
   return { binDir, codexPath, logPath, stateDir };
@@ -1088,6 +1101,8 @@ sleep 0.1
 
 describe('command-dispatch', () => {
   beforeEach(() => {
+    _testOnlyTmuxCore.reset();
+    delete process.env.TMUX_FAKE_STATE_PATH;
     resetRuntimeTmuxInputStatesForTests();
     fs.rmSync(DATA_DIR, { recursive: true, force: true });
     fs.rmSync(path.join(CODELARK_HOME, 'config'), { recursive: true, force: true });

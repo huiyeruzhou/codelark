@@ -23,6 +23,11 @@ export interface ShellSnapshot {
   content: string;
 }
 
+export interface ShellLaunchCommandOptions {
+  platform?: NodeJS.Platform;
+  stderrLogPath?: string;
+}
+
 const EXCLUDED_EXPORT_VARS = new Set(['PWD', 'OLDPWD']);
 const shellSnapshotCache = new Map<string, ShellSnapshot>();
 let cleanupRegistered = false;
@@ -282,26 +287,75 @@ export function buildShellSnapshotLaunchCommand(
   command: string,
   args: string[],
   snapshot: ShellSnapshot,
+  options: ShellLaunchCommandOptions = {},
 ): string {
+  const platform = options.platform || process.platform;
+  const quoteHostArg = (value: string) => quoteCommandLineArg(value, platform);
   switch (snapshot.shell.type) {
     case 'bash':
     case 'zsh':
     case 'sh': {
       const commandText = [command, ...args].map(posixShellQuote).join(' ');
-      const script = `. ${posixShellQuote(snapshot.path)}; exec ${commandText}`;
-      return [snapshot.shell.path, '-c', script].map(posixShellQuote).join(' ');
+      const script = options.stderrLogPath
+        ? [
+            `. ${posixShellQuote(snapshot.path)}`,
+            `${commandText} 2> ${posixShellQuote(options.stderrLogPath)}`,
+            'status=$?',
+            `if [ "$status" -ne 0 ]; then printf '%s\\n' "[codelark] process exited with status $status" >> ${posixShellQuote(options.stderrLogPath)}; fi`,
+            'exit "$status"',
+          ].join('; ')
+        : `. ${posixShellQuote(snapshot.path)}; exec ${commandText}`;
+      return [snapshot.shell.path, '-c', script].map(quoteHostArg).join(' ');
     }
     case 'powershell': {
       const commandText = [command, ...args].map(powershellSingleQuote).join(' ');
-      const script = `. ${powershellSingleQuote(snapshot.path)}; & ${commandText}`;
-      return [snapshot.shell.path, '-NoProfile', '-Command', script].map(posixShellQuote).join(' ');
+      const script = options.stderrLogPath
+        ? [
+            `. ${powershellSingleQuote(snapshot.path)}`,
+            `& ${commandText} 2> ${powershellSingleQuote(options.stderrLogPath)}`,
+            '$status = $LASTEXITCODE',
+            'if ($null -eq $status) { $status = 0 }',
+            `if ($status -ne 0) { Add-Content -LiteralPath ${powershellSingleQuote(options.stderrLogPath)} -Value ('[codelark] process exited with status ' + $status) }`,
+            'exit $status',
+          ].join('; ')
+        : `. ${powershellSingleQuote(snapshot.path)}; & ${commandText}`;
+      return [snapshot.shell.path, '-NoProfile', '-Command', script].map(quoteHostArg).join(' ');
     }
     case 'cmd': {
       const commandText = [command, ...args].map(cmdArgQuote).join(' ');
-      const script = `call ${cmdArgQuote(snapshot.path)} && ${commandText}`;
-      return [snapshot.shell.path, '/c', script].map(posixShellQuote).join(' ');
+      const script = options.stderrLogPath
+        ? `call ${cmdArgQuote(snapshot.path)} && ${commandText} 2> ${cmdArgQuote(options.stderrLogPath)}`
+        : `call ${cmdArgQuote(snapshot.path)} && ${commandText}`;
+      return [snapshot.shell.path, '/c', script].map(quoteHostArg).join(' ');
     }
   }
+}
+
+export function quoteCommandLineArg(
+  value: string,
+  platform: NodeJS.Platform = process.platform,
+): string {
+  if (platform !== 'win32') return posixShellQuote(value);
+  if (value && !/[\s"]/u.test(value)) return value;
+
+  // CreateProcess/CommandLineToArgvW escaping: backslashes are doubled only
+  // when they precede a quote or the closing quote.
+  let quoted = '"';
+  let backslashes = 0;
+  for (const char of value) {
+    if (char === '\\') {
+      backslashes += 1;
+      continue;
+    }
+    if (char === '"') {
+      quoted += '\\'.repeat((backslashes * 2) + 1) + '"';
+      backslashes = 0;
+      continue;
+    }
+    quoted += '\\'.repeat(backslashes) + char;
+    backslashes = 0;
+  }
+  return quoted + '\\'.repeat(backslashes * 2) + '"';
 }
 
 function posixShellQuote(value: string): string {

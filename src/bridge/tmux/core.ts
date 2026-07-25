@@ -124,14 +124,6 @@ function runCommand(command: string, args: string[], stdin?: string): Promise<Tm
   });
 }
 
-async function runTmux(args: string[], stdin?: string): Promise<TmuxCommandResult> {
-  const result = await runCommand('tmux', args, stdin);
-  if (result.code !== 0) {
-    throw new Error((result.stderr || result.stdout || `tmux ${args[0] || ''} failed`).trim());
-  }
-  return result;
-}
-
 function tmuxSendActionArgv(target: string, action: TmuxSendAction): TmuxArgv {
   if (action.type === 'literal') {
     if (action.text.startsWith('-')) {
@@ -161,25 +153,42 @@ function splitTextChunks(text: string, chunkSize = PASTE_CHUNK_SIZE): string[] {
 }
 
 class TmuxCliCore implements TmuxCore {
+  constructor(
+    private readonly executable = 'tmux',
+    private readonly prefixArgs: string[] = [],
+  ) {}
+
+  private runCommand(args: string[], stdin?: string): Promise<TmuxCommandResult> {
+    return runCommand(this.executable, [...this.prefixArgs, ...args], stdin);
+  }
+
+  private async runTmux(args: string[], stdin?: string): Promise<TmuxCommandResult> {
+    const result = await this.runCommand(args, stdin);
+    if (result.code !== 0) {
+      throw new Error((result.stderr || result.stdout || `tmux ${args[0] || ''} failed`).trim());
+    }
+    return result;
+  }
+
   commandPreview(args: readonly string[]): string {
     return tmuxCommandPreview(args);
   }
 
   async ensureExtendedKeys(): Promise<string> {
     const args: TmuxArgv = ['set-option', '-g', 'extended-keys', 'on'];
-    await runTmux(args);
+    await this.runTmux(args);
     return tmuxCommandPreview(args);
   }
 
   async hasSession(name: string): Promise<TmuxSessionExistsResult> {
     const args: TmuxArgv = ['has-session', '-t', name];
-    const result = await runCommand('tmux', args);
+    const result = await this.runCommand(args);
     return { exists: result.code === 0, command: tmuxCommandPreview(args) };
   }
 
   async killSession(name: string, options: { ignoreMissing?: boolean } = {}): Promise<string> {
     const args: TmuxArgv = ['kill-session', '-t', name];
-    const result = await runCommand('tmux', args);
+    const result = await this.runCommand(args);
     if (result.code !== 0 && !(options.ignoreMissing && /can't find session/i.test(result.stderr))) {
       throw new Error((result.stderr || result.stdout || 'tmux kill-session failed').trim());
     }
@@ -192,7 +201,7 @@ class TmuxCliCore implements TmuxCore {
       '-F',
       '#{session_name}\t#{session_windows}\t#{session_attached}\t#{session_created}\t#{session_activity}',
     ];
-    const result = await runCommand('tmux', args);
+    const result = await this.runCommand(args);
     if (result.code !== 0) {
       if (/no server running|failed to connect/i.test(result.stderr || result.stdout)) {
         return { sessions: [], command: tmuxCommandPreview(args) };
@@ -218,7 +227,7 @@ class TmuxCliCore implements TmuxCore {
     }
     if (!exists.exists || params.recreate) {
       const args = buildNewSessionArgs(params);
-      await runTmux(args);
+      await this.runTmux(args);
       const command = tmuxCommandPreview(args);
       commands.push(command);
       return { existed: exists.exists, command, commands };
@@ -228,10 +237,10 @@ class TmuxCliCore implements TmuxCore {
 
   async capturePane(target: string, lines: number): Promise<TmuxCapturePaneResult> {
     const heightArgs = paneHeightTmuxArgv(target);
-    const heightResult = await runTmux(heightArgs);
+    const heightResult = await this.runTmux(heightArgs);
     const startOffset = captureStartOffset(lines, parsePaneHeight(heightResult.stdout));
     const args = captureTmuxArgv(target, startOffset);
-    const result = await runTmux(args);
+    const result = await this.runTmux(args);
     return {
       screen: trimCapturedScreen(result.stdout, lines),
       command: [tmuxCommandPreview(heightArgs), tmuxCommandPreview(args)].join('\n'),
@@ -249,7 +258,7 @@ class TmuxCliCore implements TmuxCore {
         commands.push(...(await this.pasteLiteralChunks(target, action.text)));
       } else {
         const args = tmuxSendActionArgv(target, action);
-        await runTmux(args);
+        await this.runTmux(args);
         commands.push(tmuxCommandPreview(args));
       }
       if (options.delayMs !== undefined && index < actions.length - 1) {
@@ -264,13 +273,13 @@ class TmuxCliCore implements TmuxCore {
     const name = bufferName || `clk-paste-${process.pid}-${Date.now()}`;
     for (const chunk of splitTextChunks(text)) {
       const loadArgs: TmuxArgv = ['load-buffer', '-b', name, '-'];
-      await runTmux(loadArgs, chunk);
+      await this.runTmux(loadArgs, chunk);
       commands.push(tmuxCommandPreview(loadArgs));
       const pasteArgs: TmuxArgv = ['paste-buffer', '-d', '-p', '-b', name, '-t', target];
-      await runTmux(pasteArgs);
+      await this.runTmux(pasteArgs);
       commands.push(tmuxCommandPreview(pasteArgs));
       const endArgs: TmuxArgv = ['send-keys', '-t', target, 'End'];
-      await runTmux(endArgs);
+      await this.runTmux(endArgs);
       commands.push(tmuxCommandPreview(endArgs));
       await sleep(PASTE_CHUNK_DELAY_MS);
     }
@@ -293,10 +302,10 @@ class TmuxCliCore implements TmuxCore {
           commands.push(...(await this.pasteLiteralChunks(targetPane, line, bufferName)));
         } else {
           const loadArgs: TmuxArgv = ['load-buffer', '-b', bufferName, '-'];
-          await runTmux(loadArgs, line);
+          await this.runTmux(loadArgs, line);
           commands.push(tmuxCommandPreview(loadArgs));
           const pasteArgs: TmuxArgv = ['paste-buffer', '-d', '-p', '-b', bufferName, '-t', targetPane];
-          await runTmux(pasteArgs);
+          await this.runTmux(pasteArgs);
           commands.push(tmuxCommandPreview(pasteArgs));
         }
       }
@@ -311,4 +320,17 @@ class TmuxCliCore implements TmuxCore {
   }
 }
 
-export const tmuxCore: TmuxCore = new TmuxCliCore();
+export function createTmuxCliCore(options: { executable?: string; prefixArgs?: string[] } = {}): TmuxCore {
+  return new TmuxCliCore(options.executable, options.prefixArgs);
+}
+
+export let tmuxCore: TmuxCore = createTmuxCliCore();
+
+export const _testOnlyTmuxCore = {
+  replace(core: TmuxCore): void {
+    tmuxCore = core;
+  },
+  reset(): void {
+    tmuxCore = createTmuxCliCore();
+  },
+};

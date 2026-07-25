@@ -252,16 +252,6 @@ function prepareLaunchLog(filePath: string): void {
   try { fs.rmSync(filePath, { force: true }); } catch { /* best effort cleanup */ }
 }
 
-function withStderrLaunchLog(command: string, launchLogPath: string): string {
-  const quotedLogPath = posixShellQuote(launchLogPath);
-  return [
-    `${command} 2> ${quotedLogPath}`,
-    'status=$?',
-    `if [ "$status" -ne 0 ]; then printf '%s\n' "[codelark] process exited with status $status" >> ${quotedLogPath}; fi`,
-    'exit "$status"',
-  ].join('; ');
-}
-
 function readRecentFile(filePath: string | undefined, lines = CODEX_TMUX_LAUNCH_LOG_LINES): string | undefined {
   if (!filePath) return undefined;
   try {
@@ -316,9 +306,8 @@ export function buildCodexResumeTmuxCommand(params: StartCodexResumeTmuxSessionP
   }, []);
   const env = buildCodexTuiEnv();
   const executable = resolveCodexCliExecutable({ env });
-  const rawCodexCommand = buildCodexTuiShellCommand(executable, codexArgs, env);
   const launchLogPath = codexLaunchLogPath(params.sessionName);
-  const codexCommand = withStderrLaunchLog(rawCodexCommand, launchLogPath);
+  const codexCommand = buildCodexTuiShellCommand(executable, codexArgs, env, { stderrLogPath: launchLogPath });
   const tmuxArgs = ['new-session', '-d', '-s', params.sessionName];
   if (params.workingDirectory) {
     tmuxArgs.push('-c', params.workingDirectory);
