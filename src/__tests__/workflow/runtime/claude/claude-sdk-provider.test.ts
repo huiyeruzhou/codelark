@@ -96,6 +96,7 @@ const fs = require('node:fs');
 const command = process.argv[2] || '';
 const callsPath = process.env.CODELARK_FAKE_CCR_CALLS_PATH;
 const runningPath = process.env.CODELARK_FAKE_CCR_RUNNING_PATH;
+const running = runningPath ? fs.existsSync(runningPath) : false;
 if (callsPath) {
   fs.appendFileSync(callsPath, JSON.stringify({
     command,
@@ -104,7 +105,7 @@ if (callsPath) {
       ANTHROPIC_AUTH_TOKEN: process.env.ANTHROPIC_AUTH_TOKEN,
       CODELARK_FAKE_CCR_BRIDGE_ENV: process.env.CODELARK_FAKE_CCR_BRIDGE_ENV,
     },
-    running: runningPath ? fs.existsSync(runningPath) : false,
+    running,
   }) + '\n');
 }
 if (command === 'activate') {
@@ -113,7 +114,7 @@ if (command === 'activate') {
   process.exit(0);
 }
 if (command === 'status') {
-  if (runningPath && fs.existsSync(runningPath)) {
+  if (running) {
     process.stdout.write('Status: Running\n');
     process.exit(0);
   }
