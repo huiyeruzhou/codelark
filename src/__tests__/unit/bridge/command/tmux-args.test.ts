@@ -35,7 +35,7 @@ describe('tmux command args', () => {
 
     assert.deepEqual(parseTmuxSetArgs('lines 999'), { key: 'lines', value: 500 });
     assert.equal(parseTmuxSetArgs('lines 0'), null);
-    assert.deepEqual(parseTmuxSetArgs('enter off'), { key: 'enter', value: false });
+    assert.equal(parseTmuxSetArgs('enter off'), null);
     assert.deepEqual(parseTmuxSetArgs('echo yes'), { key: 'echo', value: true });
     assert.equal(parseTmuxSetArgs('echo maybe'), null);
   });

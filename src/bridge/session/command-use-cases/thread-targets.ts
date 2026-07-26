@@ -416,6 +416,7 @@ export function buildThreadCardRefresh(
   scope: ThreadCardScope | null | undefined,
   address: InboundMessage['address'],
   selectedId?: string | null,
+  localSessions?: LocalRuntimeSessionSummary[] | null,
 ): OutboundRichCard | undefined {
   if (scope === 'bound') {
     return threadDisplay.refreshedBoundThreadsCard(address.channelType, address.chatId, selectedId);
@@ -423,7 +424,7 @@ export function buildThreadCardRefresh(
   if (scope === 'global') {
     const runtime = threadDisplay.activeRuntimeForChat(address.channelType, address.chatId);
     return threadDisplay.refreshedLocalRuntimeSessionsCard(
-      listCommandLocalRuntimeSessions(MAX_LOCAL_SESSION_LIST_LIMIT, runtime),
+      localSessions ?? listCommandLocalRuntimeSessions(MAX_LOCAL_SESSION_LIST_LIMIT, runtime),
       true,
       MAX_LOCAL_SESSION_LIST_LIMIT,
       address.channelType,

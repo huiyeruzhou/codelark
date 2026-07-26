@@ -5677,6 +5677,66 @@ describe('feishu-adapter structured streaming regions', () => {
     assert.deepEqual(messageReplyCalls[0]?.path, { message_id: 'card-message-1' });
   });
 
+  it('bounds callback card recovery and quickly creates a replacement card', async () => {
+    const blockedIdConvert = createDeferred<{ data: { card_id: string } }>();
+    const cardCreateCalls: Array<Record<string, any>> = [];
+    const messageReplyCalls: Array<Record<string, any>> = [];
+    const adapter = new FeishuAdapter({
+      id: 'feishu-default',
+      provider: 'feishu',
+      enabled: true,
+      alias: '飞书',
+      config: {
+        appId: 'app-id',
+        appSecret: 'app-secret',
+      },
+    });
+    (adapter as any).richCardIdConvertTimeoutMs = 5;
+    (adapter as any).restClient = {
+      cardkit: {
+        v1: {
+          card: {
+            idConvert: async () => blockedIdConvert.promise,
+            create: async (payload: Record<string, any>) => {
+              cardCreateCalls.push(payload);
+              return { data: { card_id: 'replacement-card' } };
+            },
+            update: async () => ({}),
+          },
+        },
+      },
+      im: {
+        message: {
+          reply: async (payload: Record<string, any>) => {
+            messageReplyCalls.push(payload);
+            return { data: { message_id: 'replacement-message' } };
+          },
+          create: async () => ({ data: { message_id: 'unexpected-create' } }),
+        },
+      },
+    };
+
+    const result = await resolvesWithin(adapter.send({
+      address: { channelType: 'feishu', chatId: 'chat-1' },
+      text: '当前线程已切换',
+      parseMode: 'Markdown',
+      replyToMessageId: 'card-message-1',
+      richCardUpdateMessageId: 'card-message-1',
+      richCard: {
+        title: '当前聊天绑定（1）',
+        sections: [],
+        updateKey: 'thread-card:bound:feishu:chat-1',
+        updateTtlMs: null,
+      },
+    }));
+
+    assert.equal(result.ok, true);
+    assert.equal(result.messageId, 'replacement-message');
+    assert.equal(cardCreateCalls.length, 1);
+    assert.equal(messageReplyCalls.length, 1);
+    blockedIdConvert.resolve({ data: { card_id: 'too-late' } });
+  });
+
   it('sends form submit buttons inside a CardKit form container', async () => {
     const messageReplyCalls: Array<Record<string, any>> = [];
     const adapter = new FeishuAdapter({
@@ -5844,6 +5904,34 @@ describe('feishu-adapter structured streaming regions', () => {
     assert.match(result.error || '', /timeout after 60000ms/);
     assert.equal(messageCreateCalls.length, 1);
     assert.equal(messageCreateCalls[0]?.data?.msg_type, 'interactive');
+  });
+
+  it('caps every CardKit and interactive-card request below the generic Feishu timeout', async () => {
+    const adapter = new FeishuAdapter({
+      id: 'feishu-default',
+      provider: 'feishu',
+      enabled: true,
+      alias: '飞书',
+      config: { appId: 'app-id', appSecret: 'app-secret' },
+    });
+    (adapter as any).cardRequestTimeoutMs = 1_000;
+    (adapter as any).cardApiRequestTimeoutMs = 5;
+
+    for (const target of [
+      'card.update:test',
+      'cardElement.content:test',
+      'im.message.reply:interactive',
+      'im.message.reply:interactive-card',
+      'im.message.reply:rich-command-card',
+      'im.message.create:permission-button-card',
+    ]) {
+      const blocked = createDeferred<Record<string, never>>();
+      await assert.rejects(
+        () => (adapter as any).withFeishuRequestTimeout('card-test', target, () => blocked.promise),
+        /timeout after 5ms/,
+      );
+      blocked.resolve({});
+    }
   });
 
   it('does not fall back to plain text when a rich command card fails', async () => {

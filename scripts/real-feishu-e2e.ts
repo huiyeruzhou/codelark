@@ -4399,7 +4399,7 @@ function commandStateExpectedTexts(options: CliOptions, text: string): string[] 
     ];
   }
   if (command === '/current') {
-    return ['当前会话', 'tmux 输出行数', 'tmux 自动回车', '回显 tmux 输出', '跟随上层配置'];
+    return ['当前会话', '对话名称', '工作目录', 'tmux 输出行数'];
   }
   if (command === '/model') {
     if (options.runtime === 'claude') return ['当前 Claude Code 模型'];
@@ -4487,7 +4487,7 @@ function sessionManagementExpectedTexts(options: CliOptions, text: string): stri
     ];
   }
   if (command === '/help') return ['命令速览', 'Bridge 控制', 'SessionRuntime 配置'];
-  if (command === '/set') return ['全局配置', '通用配置', '默认 agent', 'tmux 自动回车'];
+  if (command === '/set') return ['全局配置', '通用配置', '默认 agent', 'tmux 输出行数'];
   if (command === sessionManagementProviderSettingCommand(options)) {
     if (options.runtime === 'kimi') return ['已更新全局配置', 'runtime.kimi.provider', 'tmux'];
     return ['已更新全局配置', 'runtime.claude.provider', options.runtime === 'claude' ? options.provider : 'pty'];

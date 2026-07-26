@@ -453,7 +453,7 @@ export function buildCurrentCommandRichCard(options: {
       optionElementId: 'clk_current_option',
       ...(commonSection ? {
         inputElementId: 'clk_name',
-        inputLabel: '会话名',
+        inputLabel: '对话名称',
         inputPlaceholder: '等同 /t rename；留空表示不修改',
         inputDefaultValue: sessionName,
       } : {}),
@@ -480,7 +480,7 @@ export function buildCurrentCommandRichCard(options: {
     footer: [
       `当前 agent：${currentTag(runtimeDisplayLabel, 'orange')}`,
       commonSection
-        ? '通用配置只修改当前会话的名称、工作目录和 tmux 设置，不会切换 agent。留空或选择“跟随上层配置”会删除当前会话覆盖。'
+        ? '通用配置只修改当前会话的对话名称、工作目录和 tmux 展示行数，不会切换 agent。留空会删除当前会话覆盖。'
         : `当前分栏只显示 ${runtimeDisplayLabel} 配置；选择其他 runtime 分栏会切换当前 agent。留空或选择“跟随上层配置”会删除当前会话覆盖。`,
     ],
   };

@@ -236,6 +236,11 @@ export async function handleThreadSwitchCommand(options: {
     return { response: '读取本地会话列表失败，请稍后重试。' };
   }
   const decoratedThreads = options.threadDisplay.decorateLocalRuntimeSessions(displayedThreads, options.msg.address.channelType, options.msg.address.chatId);
+  const reusableRefreshSessions = (): typeof displayedThreads | undefined => (
+    options.threadDisplay.activeRuntimeForChat(options.msg.address.channelType, options.msg.address.chatId) === runtime
+      ? displayedThreads
+      : undefined
+  );
   const bindings = listBindingsForChat(options.store, options.msg.address.channelType, options.msg.address.chatId);
   const selected = selectDirectThreadTarget(options.threadDisplay, threadArgs, bindings, decoratedThreads, [], options.store);
   if (selected.ambiguous) {
@@ -256,7 +261,13 @@ export async function handleThreadSwitchCommand(options: {
       selected.binding,
       parsedArgs.force ? 'forced' : undefined,
     );
-    const richCard = buildThreadCardRefresh(options.threadDisplay, options.deps.threadCardRefreshScope, options.msg.address, options.deps.threadCardSelectedId);
+    const richCard = buildThreadCardRefresh(
+      options.threadDisplay,
+      options.deps.threadCardRefreshScope,
+      options.msg.address,
+      options.deps.threadCardSelectedId,
+      reusableRefreshSessions(),
+    );
     return {
       response: buildCommandFields(
         '当前线程已切换',
@@ -299,7 +310,13 @@ export async function handleThreadSwitchCommand(options: {
       binding,
       parsedArgs.force ? 'forced' : undefined,
     );
-    const richCard = buildThreadCardRefresh(options.threadDisplay, options.deps.threadCardRefreshScope, options.msg.address, options.deps.threadCardSelectedId);
+    const richCard = buildThreadCardRefresh(
+      options.threadDisplay,
+      options.deps.threadCardRefreshScope,
+      options.msg.address,
+      options.deps.threadCardSelectedId,
+      reusableRefreshSessions(),
+    );
     const bindingDisplay = options.threadDisplay.binding(binding);
     return {
       response: buildCommandFields(
@@ -353,7 +370,13 @@ export async function handleThreadSwitchCommand(options: {
         binding,
         parsedArgs.force ? 'forced' : undefined,
       );
-      const richCard = buildThreadCardRefresh(options.threadDisplay, options.deps.threadCardRefreshScope, options.msg.address, options.deps.threadCardSelectedId);
+      const richCard = buildThreadCardRefresh(
+        options.threadDisplay,
+        options.deps.threadCardRefreshScope,
+        options.msg.address,
+        options.deps.threadCardSelectedId,
+        reusableRefreshSessions(),
+      );
       const bindingDisplay = options.threadDisplay.binding(binding);
       return {
         response: buildCommandFields(
@@ -396,7 +419,13 @@ export async function handleThreadSwitchCommand(options: {
       binding,
       parsedArgs.force ? 'forced' : undefined,
     );
-    const richCard = buildThreadCardRefresh(options.threadDisplay, options.deps.threadCardRefreshScope, options.msg.address, options.deps.threadCardSelectedId);
+    const richCard = buildThreadCardRefresh(
+      options.threadDisplay,
+      options.deps.threadCardRefreshScope,
+      options.msg.address,
+      options.deps.threadCardSelectedId,
+      reusableRefreshSessions(),
+    );
     return {
       response: buildCommandFields(
         '已切换到本地 Codex 会话',
@@ -446,7 +475,13 @@ export async function handleThreadSwitchCommand(options: {
     binding,
     parsedArgs.force ? 'forced' : undefined,
   );
-  const richCard = buildThreadCardRefresh(options.threadDisplay, options.deps.threadCardRefreshScope, options.msg.address, options.deps.threadCardSelectedId);
+  const richCard = buildThreadCardRefresh(
+    options.threadDisplay,
+    options.deps.threadCardRefreshScope,
+    options.msg.address,
+    options.deps.threadCardSelectedId,
+    reusableRefreshSessions(),
+  );
   return {
     response: buildCommandFields(
       `已切换到本地 ${localRuntimeDisplayName(selectedRuntime)} 会话`,

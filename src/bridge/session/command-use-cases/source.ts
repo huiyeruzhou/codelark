@@ -1,5 +1,3 @@
-import fs from 'node:fs';
-
 import {
   archiveCodexSession,
   getCodexSessionByThreadId,
@@ -19,6 +17,7 @@ import {
 } from '../../../runtime/kimi/session-index.js';
 import type { LocalRuntimeSessionSummary } from '../local-runtime-session.js';
 import { validateSessionId } from '../../../shared/security/validators.js';
+import { userInputTurnCountCache } from './user-input-turn-cache.js';
 
 export type { CodexSessionSummary };
 export type { LocalRuntimeSessionSummary };
@@ -60,83 +59,54 @@ function isInternalUserInput(text: string): boolean {
     || /<codex_internal_context\b|source="goal"|source='goal'|Codex context/i.test(text);
 }
 
-function countCodexUserInputTurns(filePath: string): number | undefined {
+function isCodexUserInputLine(line: string): boolean {
   try {
-    let count = 0;
-    for (const line of fs.readFileSync(filePath, 'utf-8').split(/\r?\n/)) {
-      if (!line.trim()) continue;
-      let parsed: any;
-      try {
-        parsed = JSON.parse(line);
-      } catch {
-        continue;
-      }
-      const payload = parsed?.payload;
-      const isUserMessage = payload?.type === 'user_message'
-        || (payload?.type === 'message' && payload?.role === 'user');
-      if (!isUserMessage) continue;
-      const text = textOf(payload?.user_prompt ?? payload?.userPrompt ?? payload?.message ?? payload?.content);
-      if (!text || isInternalUserInput(text)) continue;
-      count += 1;
-    }
-    return count;
+    const parsed = JSON.parse(line) as any;
+    const payload = parsed?.payload;
+    const isUserMessage = payload?.type === 'user_message'
+      || (payload?.type === 'message' && payload?.role === 'user');
+    if (!isUserMessage) return false;
+    const text = textOf(payload?.user_prompt ?? payload?.userPrompt ?? payload?.message ?? payload?.content);
+    return Boolean(text && !isInternalUserInput(text));
   } catch {
-    return undefined;
+    return false;
   }
 }
 
-function countClaudeUserInputTurns(filePath: string): number | undefined {
+function isClaudeUserInputLine(line: string): boolean {
   try {
-    let count = 0;
-    for (const line of fs.readFileSync(filePath, 'utf-8').split(/\r?\n/)) {
-      if (!line.trim()) continue;
-      let parsed: any;
-      try {
-        parsed = JSON.parse(line);
-      } catch {
-        continue;
-      }
-      if (parsed?.type !== 'user') continue;
-      const blocks = Array.isArray(parsed?.message?.content)
-        ? parsed.message.content
-        : parsed?.message?.content == null
-          ? []
-          : [parsed.message.content];
-      if (blocks.length > 0 && blocks.every((block: any) => block?.type === 'tool_result')) continue;
-      const text = textOf(parsed?.message?.content);
-      if (!text || isInternalUserInput(text)) continue;
-      count += 1;
-    }
-    return count;
+    const parsed = JSON.parse(line) as any;
+    if (parsed?.type !== 'user') return false;
+    const blocks = Array.isArray(parsed?.message?.content)
+      ? parsed.message.content
+      : parsed?.message?.content == null
+        ? []
+        : [parsed.message.content];
+    if (blocks.length > 0 && blocks.every((block: any) => block?.type === 'tool_result')) return false;
+    const text = textOf(parsed?.message?.content);
+    return Boolean(text && !isInternalUserInput(text));
   } catch {
-    return undefined;
+    return false;
   }
 }
 
-function countKimiUserInputTurns(filePath: string): number | undefined {
+function isKimiUserInputLine(line: string): boolean {
   try {
-    let count = 0;
-    for (const line of fs.readFileSync(filePath, 'utf-8').split(/\r?\n/)) {
-      if (!line.trim()) continue;
-      let parsed: any;
-      try {
-        parsed = JSON.parse(line);
-      } catch {
-        continue;
-      }
-      if (parsed?.type !== 'context.append_message' || parsed?.message?.role !== 'user') continue;
-      const text = textOf(parsed?.message?.content);
-      if (!text || isInternalUserInput(text)) continue;
-      count += 1;
-    }
-    return count;
+    const parsed = JSON.parse(line) as any;
+    if (parsed?.type !== 'context.append_message' || parsed?.message?.role !== 'user') return false;
+    const text = textOf(parsed?.message?.content);
+    return Boolean(text && !isInternalUserInput(text));
   } catch {
-    return undefined;
+    return false;
   }
 }
 
 function toCodexRuntimeSession(session: CodexSessionSummary): LocalRuntimeSessionSummary {
-  return { ...session, runtime: 'codex', userInputTurns: countCodexUserInputTurns(session.filePath) };
+  return {
+    ...session,
+    runtime: 'codex',
+    userInputTurns: userInputTurnCountCache.get('codex', session.filePath, isCodexUserInputLine),
+  };
 }
 
 function listCommandClaudeThreads(limit?: number): LocalRuntimeSessionSummary[] {
@@ -155,7 +125,7 @@ function toClaudeRuntimeSession(session: ReturnType<typeof listClaudeSessionJson
     lastEventAt: session.updatedAt,
     title: session.title || session.sessionId.slice(0, 8),
     activeEstimate: false,
-    userInputTurns: countClaudeUserInputTurns(session.filePath),
+    userInputTurns: userInputTurnCountCache.get('claude', session.filePath, isClaudeUserInputLine),
   };
 }
 
@@ -175,7 +145,7 @@ function toKimiRuntimeSession(session: ReturnType<typeof listKimiSessionFileSumm
     lastEventAt: session.updatedAt || session.firstSeenAt || new Date(0).toISOString(),
     title: session.title || session.sessionId.slice(0, 8),
     activeEstimate: false,
-    userInputTurns: countKimiUserInputTurns(session.filePath),
+    userInputTurns: userInputTurnCountCache.get('kimi', session.filePath, isKimiUserInputLine),
   };
 }
 
@@ -231,7 +201,7 @@ export function archiveCommandClaudeThread(threadId: string, cwd: string | undef
       lastEventAt: session.updatedAt,
       title: session.title || session.sessionId.slice(0, 8),
       activeEstimate: false,
-      userInputTurns: countClaudeUserInputTurns(session.filePath),
+      userInputTurns: userInputTurnCountCache.get('claude', session.filePath, isClaudeUserInputLine),
     };
   } catch (error) {
     console.error(`[command-session-source] Failed to archive Claude thread ${threadId}:`, error);

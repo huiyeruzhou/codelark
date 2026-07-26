@@ -1,5 +1,20 @@
 # Release Notes
 
+## Unreleased
+
+### 用户可见变化
+
+- `/t` 不再为会话表同步读取整份 Codex/Claude/Kimi JSONL；冷缓存时“用户输入轮数”暂显示 `-`，后台统计完成后刷新即显示精确值。真实 1.6GB Codex 历史下，51 条候选的列表耗时从约 13.1 秒降至约 107 毫秒。
+- 修复 `/t` runtime 下拉 ID 超过飞书限制导致整张卡创建/更新失败；renderer 现在统一保证 element ID 合法。
+- `/every`、`/then`、`/status`、会话活动时间、tmux/pty screen、hot-update、streaming footer 与 Web 状态页统一使用 bridge 启动时解析的本地时区。
+- `tmux 自动回车`不再作为用户配置；普通 tmux 文本固定补 Enter，显式 Enter 不重复。`/current` 通用配置固定按“对话名称、工作目录、tmux 输出行数”显示。
+
+### 可靠性与验证
+
+- 飞书按钮、下拉和表单回调新增独立 2 秒响应预算与日志；授权确认不再在 ACK 前同步写配置。
+- 所有 CardKit/interactive card 请求上限收紧为 10 秒，可降级的 `card.idConvert` 上限为 2 秒，避免单个恢复请求占住同聊天 interactive queue 数十秒。
+- 新增异步增量轮数缓存、CardKit 超时、callback ACK 矩阵、element ID、时区一致性和配置入口回归测试。
+
 ## v0.2.1
 
 发布日期：2026-07-25

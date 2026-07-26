@@ -49,7 +49,6 @@ export function buildHelpCommandResponse(): string {
     '- `/tmux-new [session]` 新建并绑定 tmux session；已存在则提示并直接绑定',
     '- `/tmux-status` 查看当前绑定和截屏行数',
     '- `/tmux-set lines 120` 设置 `/tmux` 自动截屏行数',
-    '- `/tmux-set enter on|off` 设置 `/tmux` 发送内容后是否自动补 Enter',
     '- `/tmux-screen [lines] [seconds]s` 查看当前绑定 tmux session 的屏幕状态；例如 `/tmux-screen 5s` 或 `/tmux-screen 120 5s`，最低 3 秒',
     '- `/tmux-screen stop` 停止当前聊天的 tmux 屏幕定时刷新',
     '- `/pty-screen [lines] [seconds]s` 查看当前 Codex pty Provider 或 Claude Code pty 的屏幕输出；例如 `/pty-screen 120 5s`，最低 3 秒',

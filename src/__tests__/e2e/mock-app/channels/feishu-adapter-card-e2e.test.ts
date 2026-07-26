@@ -386,6 +386,57 @@ describe('feishu adapter card e2e', () => {
     assert.ok(elapsedMs < 500, `callback ACK took ${elapsedMs.toFixed(1)}ms`);
   });
 
+  it('keeps button, select, and form callback responses inside the ACK-only boundary', async () => {
+    const adapter = createRecordingFeishuAdapter([]);
+    const inbound: any[] = [];
+    (adapter as any).enqueueInboundMessage = (message: any) => inbound.push(message);
+    const cases = [
+      {
+        name: 'button',
+        action: { tag: 'button', value: { callback_data: 'clk-command::%2Fcurrent' } },
+        expected: 'clk-command::%2Fcurrent',
+      },
+      {
+        name: 'select',
+        action: {
+          tag: 'select_static',
+          value: { select_id: 'runtime_select' },
+          option: { value: 'clk-command::%2Ft%20codex' },
+        },
+        expected: 'clk-command::%2Ft%20codex',
+      },
+      {
+        name: 'form',
+        action: {
+          tag: 'button',
+          value: { callback_data: 'clk-command::%2Fcurrent-config%20common' },
+          form_value: {
+            clk_name: 'session name',
+            clk_cwd: '/repo',
+            tmux_capture_lines: '80',
+          },
+        },
+        expected: 'clk-command::%2Fcurrent-config%20common',
+      },
+    ];
+
+    for (const fixture of cases) {
+      const startedAt = performance.now();
+      const result = await (adapter as any).handleCardActionWithTelemetry({
+        action: fixture.action,
+        context: {
+          open_chat_id: `chat-${fixture.name}`,
+          open_message_id: `message-${fixture.name}`,
+        },
+        operator: { open_id: 'ou-callback-user' },
+      });
+      const elapsedMs = performance.now() - startedAt;
+      assert.equal(result?.toast?.type, 'info');
+      assert.ok(elapsedMs < 500, `${fixture.name} callback response took ${elapsedMs.toFixed(1)}ms`);
+      assert.equal(inbound.at(-1)?.callbackData, fixture.expected);
+    }
+  });
+
   it('prompts for group message authorization after /new until the callback persists authorization', async () => {
     resetBridgeTestState({ cleanCodexHome: true });
     _testOnly.resetStateForTests();
@@ -468,6 +519,10 @@ describe('feishu adapter card e2e', () => {
       });
       assert.equal(callbackResult?.toast?.type, 'success');
       assert.equal((adapter as any).channelConfig.groupAuthorized, true);
+      await waitForRecordedCall(() => (
+        createConfigService({ migrate: false }).snapshot().config.channels
+          .find((channel) => channel.id === 'feishu')?.config.groupAuthorized === true
+      ));
       assert.equal(
         createConfigService({ migrate: false }).snapshot().config.channels
           .find((channel) => channel.id === 'feishu')?.config.groupAuthorized,

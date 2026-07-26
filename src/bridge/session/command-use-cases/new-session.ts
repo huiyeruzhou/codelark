@@ -15,7 +15,6 @@ import {
   getSessionClaudeProviderOverride,
   getSessionCodexProviderOverride,
   getWorkspaceRoot,
-  resolveEffectiveCodexProvider,
   resolveNewSessionWorkingDirectory,
 } from '../support.js';
 import { getSessionDisplayName } from '../display/session-title.js';
@@ -105,23 +104,6 @@ function setSessionKimiProviderToml(sessionId: string): void {
   );
 }
 
-function setSessionTmuxAutoEnterToml(sessionId: string, tmuxAutoEnter: boolean): void {
-  createConfigService({ migrate: false }).set(
-    { kind: 'session', sessionId },
-    { session: { tmuxAutoEnter } },
-  );
-}
-
-function shouldEnableTmuxAutoEnterForNewSession(
-  inheritedProvider: InheritedCodexProvider,
-  session: BridgeSession,
-  binding?: ChannelChat | null,
-): boolean {
-  if (inheritedProvider === 'tmux') return true;
-  if (inheritedProvider === 'pty') return false;
-  return resolveEffectiveCodexProvider(session, binding) === 'tmux';
-}
-
 function activeRuntimeForNewSession(previousSession: BridgeSession | null): InheritedRuntime {
   const activeRuntime = getSessionActiveRuntime(previousSession);
   return activeRuntime === 'claude' || activeRuntime === 'kimi' ? activeRuntime : 'codex';
@@ -154,27 +136,20 @@ function preserveNewSessionRuntimeBinding(options: {
 function inheritNewSessionRuntimeProvider(
   sessionId: string,
   previousSession: BridgeSession | null,
-  newSession: BridgeSession,
-  binding: ChannelChat,
 ): void {
   const activeRuntime = activeRuntimeForNewSession(previousSession);
   if (activeRuntime === 'claude') {
     const inheritedProvider = getSessionClaudeProviderOverride(previousSession);
     if (inheritedProvider) setSessionClaudeProviderToml(sessionId, inheritedProvider);
-    if (inheritedProvider === 'tmux') setSessionTmuxAutoEnterToml(sessionId, true);
     return;
   }
   if (activeRuntime === 'kimi') {
     setSessionKimiProviderToml(sessionId);
-    setSessionTmuxAutoEnterToml(sessionId, true);
     return;
   }
   const inheritedProvider = getSessionCodexProviderOverride(previousSession);
   if (inheritedProvider === 'tmux' || inheritedProvider === 'pty') {
     setSessionCodexProviderToml(sessionId, inheritedProvider);
-  }
-  if (shouldEnableTmuxAutoEnterForNewSession(inheritedProvider, newSession, binding)) {
-    setSessionTmuxAutoEnterToml(sessionId, true);
   }
 }
 
@@ -285,7 +260,7 @@ export async function handleNewSessionCommand(options: {
     });
     let session = options.store.getSession(binding.bridgeSessionId);
     if (session) {
-      inheritNewSessionRuntimeProvider(session.id, currentSession, session, binding);
+      inheritNewSessionRuntimeProvider(session.id, currentSession);
       session = options.store.getSession(binding.bridgeSessionId);
     }
 
@@ -386,7 +361,7 @@ export async function handleNewSessionCommand(options: {
   });
   let session = options.store.getSession(binding.bridgeSessionId);
   if (session) {
-    inheritNewSessionRuntimeProvider(session.id, currentSession, session, binding);
+    inheritNewSessionRuntimeProvider(session.id, currentSession);
     session = options.store.getSession(binding.bridgeSessionId);
   }
   auditCommandBindingChange(

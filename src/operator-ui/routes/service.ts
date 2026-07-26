@@ -25,6 +25,7 @@ export async function handleUiServiceRoute(options: {
   statusContext: {
     home: string;
     startedAt: string;
+    timeZone: string;
     getUiAccess(): unknown;
   };
 }): Promise<boolean> {
@@ -40,6 +41,7 @@ export async function handleUiServiceRoute(options: {
       packageRoot: getPackageRoot(),
       codexIntegrationInstalled: isCodexIntegrationInstalled(),
       startedAt: statusContext.startedAt,
+      timeZone: statusContext.timeZone,
     });
     return true;
   }

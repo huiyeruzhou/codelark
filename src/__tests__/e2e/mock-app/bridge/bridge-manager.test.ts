@@ -1006,7 +1006,7 @@ describe('bridge-manager resolveCommandAlias', () => {
     });
     assert.equal(card?.tableBlocks?.[0]?.selects?.[0]?.id, 'kimi_select');
     assert.equal(card?.tableBlocks?.[0]?.selects?.[0]?.placeholder, '选择 Kimi Code 会话');
-    assert.equal(card?.tableBlocks?.[0]?.selects?.[2]?.id, 'thread_runtime_select');
+    assert.equal(card?.tableBlocks?.[0]?.selects?.[2]?.id, 'runtime_select');
     assert.ok(card?.tableBlocks?.[0]?.selects?.[2]?.options.some((option) => option.text === 'Kimi'));
   });
 

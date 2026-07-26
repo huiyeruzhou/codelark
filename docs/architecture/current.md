@@ -164,6 +164,8 @@ conversation barrier 是 lane 之上的保护规则，用来处理“这条命�
 6. 当前 IM chat 创建或更新 `ChannelChat`，让它指向这个 `BridgeSession.id`。
 7. 后续普通消息通过 ChannelChat 找到 session，再根据 `runtime.codex.threadId`、`runtime.claude.sessionId + cwd` 或 `runtime.kimi.sessionId + cwd` 继续同一条底层 runtime 会话。
 
+会话索引热路径只能读取目录、文件元信息和小型持久缓存，禁止为了表格里的“用户输入轮数”同步整文件读取 JSONL。轮数缓存以 `runtime + path + size + mtime` 为键：冷缓存和新增后缀由单并发异步流统计，命令先返回；下一次刷新显示精确值。单次接管解析出的候选列表应复用于同 runtime 的卡片刷新，不能为同一个动作重复扫描。
+
 因此 `/t` 不是“把某个 thread id 写到聊天上”，而是“把底层 runtime 会话纳入 BridgeSession，再让聊天绑定这个 BridgeSession”。新增 agent 时必须同时定义它的本地 session index、materialize 身份、archive 语义和 mirror source；只新增 provider stream 不足以让 `/t` 可恢复、可切换、可观察。
 
 ## Mirror 运行时

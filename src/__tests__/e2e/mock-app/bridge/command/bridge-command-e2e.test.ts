@@ -1277,20 +1277,20 @@ describe('bridge command e2e', () => {
       assert.equal(card.title, '');
       assert.equal(card.tableBlocks?.length, 1);
       assert.equal(card.tableBlocks?.[0]?.selects?.[0]?.id, 'codex_select');
-      assert.equal(card.tableBlocks?.[0]?.selects?.[2]?.id, 'thread_runtime_select');
+      assert.equal(card.tableBlocks?.[0]?.selects?.[2]?.id, 'runtime_select');
       assert.deepEqual(card.tableBlocks?.[0]?.actions?.map((row) => row.map((action) => action.text)), [['接管', '归档', '新建'], ['解绑', '刷新']]);
 
       await _testOnly.handleMessage(adapter, inboundMessage(address, '/t claude', 'incoming-thread-card-runtime-claude'));
       const claudeCard = adapter.sent.at(-1)?.richCard;
       assert.equal(claudeCard?.tableBlocks?.length, 1);
       assert.equal(claudeCard?.tableBlocks?.[0]?.selects?.[0]?.id, 'claude_select');
-      assert.equal(claudeCard?.tableBlocks?.[0]?.selects?.[2]?.id, 'thread_runtime_select');
+      assert.equal(claudeCard?.tableBlocks?.[0]?.selects?.[2]?.id, 'runtime_select');
 
       await _testOnly.handleMessage(adapter, inboundMessage(address, '/t kimi', 'incoming-thread-card-runtime-kimi'));
       const kimiCard = adapter.sent.at(-1)?.richCard;
       assert.equal(kimiCard?.tableBlocks?.length, 1);
       assert.equal(kimiCard?.tableBlocks?.[0]?.selects?.[0]?.id, 'kimi_select');
-      assert.equal(kimiCard?.tableBlocks?.[0]?.selects?.[2]?.id, 'thread_runtime_select');
+      assert.equal(kimiCard?.tableBlocks?.[0]?.selects?.[2]?.id, 'runtime_select');
       assert.equal(
         store.getChannelChat(address.channelType, address.chatId)?.bridgeSessionId,
         initialBinding.bridgeSessionId,

@@ -255,7 +255,6 @@ describe('real codex tmux provider e2e', () => {
     try {
       await _testOnly.handleMessage(adapter, inboundMessage(address, `/clear real-tmux-fresh ${workDir}`, 'incoming-real-new'));
       await _testOnly.handleMessage(adapter, inboundMessage(address, '/provider tmux', 'incoming-real-provider-tmux'));
-      await _testOnly.handleMessage(adapter, inboundMessage(address, '/tmux-set enter on', 'incoming-real-enter-on'));
       const firstTurn = _testOnly.handleMessage(
         adapter,
         inboundMessage(address, 'Reply with exactly: clk real tmux smoke', 'incoming-real-first'),

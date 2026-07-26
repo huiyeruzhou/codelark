@@ -79,7 +79,7 @@ Kimi 的 `sessionId` 是 Kimi 本地 session id，不是 Codex thread id，也�
 - `/new`：从当前聊天创建新群聊时，应继承当前 active runtime 和该 runtime 的 provider 选择；新群只写自己的 `runtimeBridgeSessionIds[activeRuntime]`，不能复制旧聊天的其它 runtime 映射，否则会把另一个群的 Codex/Claude/Kimi 上下文串过去。
 - `/clear`：清空当前 active runtime 的上下文时，应替换该 runtime 的 `BridgeSession`，同时保留同一聊天里其它 runtime 的 `runtimeBridgeSessionIds`，让用户之后切回 Codex/Claude/Kimi 时还能回到原本的本地会话。
 
-Kimi 的 `/new` 继承结果应直接是 `runtime.activeRuntime = "kimi"` 的新 `BridgeSession`，并写入 `runtime.kimi.provider = "tmux"` 与 `session.tmuxAutoEnter = true`；不能先创建 Codex session，再要求用户手动 `/runtime kimi`。
+Kimi 的 `/new` 继承结果应直接是 `runtime.activeRuntime = "kimi"` 的新 `BridgeSession`，并写入 `runtime.kimi.provider = "tmux"`；普通 tmux 文本固定补 Enter，不再通过 session 配置开关表达。不能先创建 Codex session，再要求用户手动 `/runtime kimi`。
 
 ## `/t` 本地会话
 

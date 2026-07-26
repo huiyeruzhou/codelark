@@ -1765,10 +1765,9 @@ describe('unit::real-feishu-e2e-harness::session-management-command-plan', () =>
     assert.deepEqual(expectationByCommand.get('/p sdk')?.expectedTexts, ['Codex Provider', 'sdk']);
     assert.deepEqual(expectationByCommand.get('/current')?.expectedTexts, [
       '当前会话',
+      '对话名称',
+      '工作目录',
       'tmux 输出行数',
-      'tmux 自动回车',
-      '回显 tmux 输出',
-      '跟随上层配置',
     ]);
     assert.deepEqual(expectationByCommand.get('/model')?.expectedTexts, ['当前模型']);
     assert.deepEqual(expectationByCommand.get('/mode')?.expectedTexts, ['当前模式', 'Runtime', 'codex']);
@@ -1972,7 +1971,7 @@ describe('unit::real-feishu-e2e-harness::session-management-command-plan', () =>
     assert.deepEqual(expectationAt(parsed.commandReplyExpectations, '/runtime codex', 0).expectedTexts, ['Runtime', 'codex']);
     assert.deepEqual(expectationAt(parsed.commandReplyExpectations, '/p sdk', 0).expectedTexts, ['Codex Provider', 'sdk']);
     assert.deepEqual(expectationAt(parsed.commandReplyExpectations, '/help').expectedTexts, ['命令速览', 'Bridge 控制', 'SessionRuntime 配置']);
-    assert.deepEqual(expectationAt(parsed.commandReplyExpectations, '/set').expectedTexts, ['全局配置', '通用配置', '默认 agent', 'tmux 自动回车']);
+    assert.deepEqual(expectationAt(parsed.commandReplyExpectations, '/set').expectedTexts, ['全局配置', '通用配置', '默认 agent', 'tmux 输出行数']);
     assert.deepEqual(expectationAt(parsed.commandReplyExpectations, '/set claudeProvider pty').expectedTexts, ['已更新全局配置', 'runtime.claude.provider', 'pty']);
     assert.deepEqual(expectationAt(parsed.commandReplyExpectations, `/new mgmt-unit-session-management ${DEFAULT_WORKSPACE_ROOT}`).expectedTexts, ['已创建群聊会话', 'mgmt-unit-session-management', DEFAULT_WORKSPACE_ROOT, 'Runtime', 'Codex']);
     assert.deepEqual(expectationAt(parsed.commandReplyExpectations, '/runtime codex', 1).expectedTexts, ['Runtime', 'codex']);

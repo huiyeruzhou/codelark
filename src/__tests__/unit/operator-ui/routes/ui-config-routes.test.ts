@@ -163,11 +163,10 @@ describe('Ui config application', () => {
     assert.equal(patch.bridge?.uiAccessToken, 'existing-token');
   });
 
-  it('round-trips shared tmux defaults and all Claude runtime defaults', () => {
+  it('round-trips user-configurable tmux defaults and all Claude runtime defaults', () => {
     const current = baseConfigV2();
     const patch = mergeConfigV2HomePatch(current, {
       tmuxCaptureLines: '140',
-      tmuxAutoEnter: false,
       tmuxEchoInput: true,
       claudeMode: 'yolo',
       claudeReasoningEffort: 'max',
@@ -175,7 +174,6 @@ describe('Ui config application', () => {
 
     assert.deepEqual(patch.session, {
       tmuxCaptureLines: 140,
-      tmuxAutoEnter: false,
       tmuxEchoInput: true,
     });
     assert.equal(patch.runtime?.claude?.yoloMode, 'on');
@@ -190,10 +188,17 @@ describe('Ui config application', () => {
       },
     });
     assert.equal(payload.tmuxCaptureLines, 140);
-    assert.equal(payload.tmuxAutoEnter, false);
+    assert.equal('tmuxAutoEnter' in payload, false);
     assert.equal(payload.tmuxEchoInput, true);
     assert.equal(payload.claudeMode, 'yolo');
     assert.equal(payload.claudeReasoningEffort, 'max');
+  });
+
+  it('rejects the removed tmux auto-enter browser setting', () => {
+    assert.throws(
+      () => mergeConfigV2HomePatch(baseConfigV2(), { tmuxAutoEnter: false }),
+      /unrecognized key/i,
+    );
   });
 
   it('keeps the browser form submission keys equal to the backend input contract', () => {

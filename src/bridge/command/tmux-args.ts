@@ -143,17 +143,13 @@ function parseOnOff(raw: string): boolean | null {
   return null;
 }
 
-export function parseTmuxSetArgs(args: string): { key: 'lines'; value: number } | { key: 'enter' | 'echo'; value: boolean } | null {
+export function parseTmuxSetArgs(args: string): { key: 'lines'; value: number } | { key: 'echo'; value: boolean } | null {
   const parts = args.trim().split(/\s+/).filter(Boolean);
   if (parts.length !== 2) return null;
   const key = parts[0].toLowerCase();
   if (['lines', 'line', 'rows', 'row', 'capture-lines', 'capture'].includes(key)) {
     const value = parseCaptureLineLimit(parts[1]);
     return value === null ? null : { key: 'lines', value };
-  }
-  if (['enter', 'auto-enter', 'autoenter', 'submit'].includes(key)) {
-    const value = parseOnOff(parts[1]);
-    return value === null ? null : { key: 'enter', value };
   }
   if (['echo', 'echo-input', 'input-echo', 'replay'].includes(key)) {
     const value = parseOnOff(parts[1]);

@@ -1183,6 +1183,24 @@ describe('buildRichCardContent', () => {
     assert.match(content, /chat-1/);
   });
 
+  it('normalizes select element ids to Feishu platform constraints', () => {
+    const cardJson = buildRichCardContent({
+      title: 'Select id constraints',
+      sections: [],
+      selects: [{
+        id: 'thread_runtime_select_that_is_far_too_long',
+        placeholder: '运行时',
+        options: [{ text: 'Codex', callbackData: 'codex' }],
+      }],
+    }, 'chat-1');
+
+    const parsed = JSON.parse(cardJson) as any;
+    assertFeishuElementIdsAreValid(parsed);
+    const select = parsed.body.elements.find((element: any) => element.tag === 'select_static');
+    assert.equal(select.element_id, 'thread_runtime_sel_1');
+    assert.equal(select.behaviors[0].value.select_id, select.element_id);
+  });
+
   it('preserves raw markdown sections in rich cards', () => {
     const cardJson = buildRichCardContent({
       title: 'Bridge 已启动',

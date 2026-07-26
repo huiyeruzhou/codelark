@@ -366,6 +366,9 @@ const CARD_FLUSH_BASE_INTERVAL_MS = 2_000;
 const CARD_FLUSH_FIRST_FAILURE_INTERVAL_MS = 5_000;
 const CARD_FLUSH_MAX_FAILURE_INTERVAL_MS = 10_000;
 const CARD_REQUEST_TIMEOUT_MS = 60_000;
+const CARD_ACTION_RESPONSE_BUDGET_MS = 2_000;
+const CARD_API_REQUEST_TIMEOUT_MS = 10_000;
+const RICH_CARD_ID_CONVERT_TIMEOUT_MS = 2_000;
 const CARD_FINALIZE_FLUSH_WAIT_EXTRA_MS = 1_000;
 const CARD_FINALIZE_BLOCKING_BUDGET_MS = 10_000;
 const CARD_FULL_REFRESH_INTERVAL_MS = 5 * 60_000;
@@ -2238,6 +2241,8 @@ export class FeishuAdapter extends BaseChannelAdapter {
     | null = null;
   private tenantTokenRequest: Promise<string> | null = null;
   private cardRequestTimeoutMs = CARD_REQUEST_TIMEOUT_MS;
+  private cardApiRequestTimeoutMs = CARD_API_REQUEST_TIMEOUT_MS;
+  private richCardIdConvertTimeoutMs = RICH_CARD_ID_CONVERT_TIMEOUT_MS;
   private cardFinalizeFlushWaitExtraMs = CARD_FINALIZE_FLUSH_WAIT_EXTRA_MS;
   private cardFinalizeBlockingBudgetMs = CARD_FINALIZE_BLOCKING_BUDGET_MS;
   private cardFullRefreshIntervalMs = CARD_FULL_REFRESH_INTERVAL_MS;
@@ -2354,16 +2359,25 @@ export class FeishuAdapter extends BaseChannelAdapter {
 
   private persistGroupAuthorized(): void {
     this.channelConfig.groupAuthorized = true;
-    createConfigService({ migrate: false }).set(
-      { kind: 'home' },
-      {
-        channels: [{
-          id: this.channelType,
-          provider: 'feishu',
-          config: { groupAuthorized: true },
-        }],
-      },
-    );
+    setImmediate(() => {
+      try {
+        createConfigService({ migrate: false }).set(
+          { kind: 'home' },
+          {
+            channels: [{
+              id: this.channelType,
+              provider: 'feishu',
+              config: { groupAuthorized: true },
+            }],
+          },
+        );
+      } catch (error) {
+        console.error(
+          '[feishu-adapter] Failed to persist group authorization state:',
+          error instanceof Error ? error.message : error,
+        );
+      }
+    });
   }
 
   supportsStructuredStreamingUi(chatId: string): boolean {
@@ -2539,7 +2553,7 @@ export class FeishuAdapter extends BaseChannelAdapter {
         );
       },
       'card.action.trigger': (async (data: unknown) => {
-        return await this.handleCardAction(data);
+        return await this.handleCardActionWithTelemetry(data);
       }) as any,
       'drive.notice.comment_add_v1': (data: unknown) => {
         this.runDetachedEventTask('cloud document comment', () =>
@@ -3003,6 +3017,29 @@ export class FeishuAdapter extends BaseChannelAdapter {
 
   // ── Card Action Handler ─────────────────────────────────────
 
+  private async handleCardActionWithTelemetry(data: unknown): Promise<unknown> {
+    const startedAt = Date.now();
+    try {
+      return await this.handleCardAction(data);
+    } finally {
+      const durationMs = Math.max(0, Date.now() - startedAt);
+      const fields = {
+        event: 'perf.feishu.card_action_response',
+        duration_ms: durationMs,
+        durationMs,
+        budget_ms: CARD_ACTION_RESPONSE_BUDGET_MS,
+        budgetMs: CARD_ACTION_RESPONSE_BUDGET_MS,
+        within_budget: durationMs < CARD_ACTION_RESPONSE_BUDGET_MS,
+        withinBudget: durationMs < CARD_ACTION_RESPONSE_BUDGET_MS,
+      };
+      if (durationMs >= CARD_ACTION_RESPONSE_BUDGET_MS) {
+        console.warn('[feishu-adapter] Card action response exceeded budget:', fields);
+      } else {
+        console.log('[feishu-adapter] Card action response prepared:', fields);
+      }
+    }
+  }
+
   /**
    * Handle card.action.trigger events (button clicks on permission cards).
    * Converts button clicks to synthetic InboundMessage with callbackData.
@@ -3061,23 +3098,13 @@ export class FeishuAdapter extends BaseChannelAdapter {
       if (!chatId) return FALLBACK_TOAST;
 
       if (String(callbackData).trim() === FEISHU_GROUP_AUTHORIZED_CALLBACK_DATA) {
-        try {
-          this.persistGroupAuthorized();
-          return {
-            toast: {
-              type: 'success' as const,
-              content: '已记录授权状态',
-            },
-          };
-        } catch (error) {
-          console.error('[feishu-adapter] Failed to persist group authorization state:', error instanceof Error ? error.message : error);
-          return {
-            toast: {
-              type: 'warning' as const,
-              content: '授权状态保存失败，请稍后重试',
-            },
-          };
-        }
+        this.persistGroupAuthorized();
+        return {
+          toast: {
+            type: 'success' as const,
+            content: '已收到授权状态',
+          },
+        };
       }
 
       const callbackMsg: import('../../domain/index.js').InboundMessage = {
@@ -5329,9 +5356,16 @@ export class FeishuAdapter extends BaseChannelAdapter {
     scope: string,
     target: string,
     operation: () => Promise<T>,
+    timeoutOverrideMs?: number,
   ): Promise<T> {
     const startedAt = Date.now();
-    const timeoutMs = this.getCardRequestTimeoutMs();
+    const isCardOperation = target.startsWith('card.')
+      || target.startsWith('cardElement.')
+      || /:(?:interactive(?:-card)?|rich-command-card|permission-button-card)$/.test(target);
+    const defaultTimeoutMs = isCardOperation
+      ? Math.min(this.getCardRequestTimeoutMs(), this.cardApiRequestTimeoutMs)
+      : this.getCardRequestTimeoutMs();
+    const timeoutMs = Math.max(1, timeoutOverrideMs ?? defaultTimeoutMs);
     if (process.env[LOG_FEISHU_REQUEST_START_ENV] === '1') {
       this.logRequestOperation('start', scope, target, startedAt);
     }
@@ -6132,6 +6166,7 @@ export class FeishuAdapter extends BaseChannelAdapter {
             () => cardkit.card.idConvert({
               data: { message_id: updateMessageId },
             }),
+            this.richCardIdConvertTimeoutMs,
           );
           const recoveredCardId = converted?.data?.card_id;
           if (recoveredCardId) {

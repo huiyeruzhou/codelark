@@ -51,6 +51,8 @@ CodeLark 的 IM 对话由三层组成：
 
 表格首列会标出当前聊天正在绑定的会话，以及其他聊天已经绑定的会话。接管其他聊天绑定的会话时，如果目标还在运行会被拒绝；如果目标空闲，CodeLark 会先发确认卡片，确认后解绑原聊天并把会话 attach 到当前聊天。
 
+“用户输入轮数”来自后台增量缓存。bridge 首次看到大型历史文件时，该列可能暂时显示 `-`，但 `/t` 和接管不会等待整份 JSONL；后台统计完成后刷新 `/t` 即显示精确轮数，后续只统计新增后缀。
+
 runtime 和数量下拉只切换卡片里的候选列表，不会改变当前会话。选择具体目标并点击“接管”后才会修改 binding。如果当前会话仍在运行，CodeLark 会先询问是否停止；取消时旧任务和 binding 都不变，确认后会先停止旧任务，再把后续消息切到所选 runtime。
 
 停止 Kimi Code 时，CodeLark 会按 Kimi TUI 约定连续发送两次 `Ctrl-C`；这会取消当前 turn 并保留可复用的 tmux 会话。Codex 和 Claude Code 仍只发送一次。
@@ -103,7 +105,7 @@ Codex 支持 `sdk`、`pty`、`tmux`。Claude Code 支持 `tmux`、`pty`、`sdk`�
 
 `/current` 卡片顶部有“通用配置、Codex、Claude Code、Kimi Code”四个分栏：
 
-- 通用配置只显示会话名、工作目录和当前 session 可覆盖的 tmux 配置；切到该分栏不会改变当前 agent。
+- 通用配置严格按“对话名称、工作目录、tmux 输出行数”显示；切到该分栏不会改变当前 agent。
 - Codex、Claude Code、Kimi Code 分栏只显示各自的 model、provider、mode、reasoning 等配置，不重复显示通用字段。选择另一个 runtime 分栏会沿用既有行为，切换当前 agent 并刷新卡片。
 - 输入框留空或下拉选择“跟随上层配置”时，只删除当前分栏对应的 session-level 覆盖，立即恢复 home/local/channel 等上层配置的当前有效值；保存一个分栏不会串写其他分栏。
 
@@ -138,7 +140,7 @@ Codex 支持 `sdk`、`pty`、`tmux`。Claude Code 支持 `tmux`、`pty`、`sdk`�
 /tmux-key <C-c>
 ```
 
-`/tmux ...` 会把普通文本写入当前绑定的 tmux session，并按当前会话设置决定是否自动补 Enter。`/tmux-key ...` 用来发送控制键。发送后会自动截屏返回。
+`/tmux ...` 会把普通文本写入当前绑定的 tmux session，并固定补一个 Enter；如果输入已经显式以 `<Enter>` 结尾则不重复补。这个行为不提供配置开关。`/tmux-key ...` 用来发送控制键。发送后会自动截屏返回。
 
 tmux 绑定和默认值：
 
@@ -149,7 +151,6 @@ tmux 绑定和默认值：
 | `/tmux-attach <session>` | 把当前 BridgeSession 绑定到已有 tmux session。 |
 | `/tmux-new [session]` | 新建并绑定 tmux session；已存在则直接绑定。 |
 | `/tmux-set lines <1-500>` | 设置 `/tmux` 和 `/tmux-screen` 默认展示行数。 |
-| `/tmux-set enter on/off` | 设置 `/tmux ...` 是否自动补 Enter。 |
 | `/tmux-set echo on/off` | 设置 `/tmux ...` 回复中是否回显本次输入。 |
 
 `/tmux-set` 写的是当前 BridgeSession 的 session-level 配置。想修改全局默认展示行数，用 `/set tmuxCaptureLines <1-500>`。
@@ -165,7 +166,7 @@ CodeLark 的配置分两类理解最清楚：
 
 `/set` 打开的是 home level TOML 配置卡片，顶部下拉可切换：
 
-- 通用配置：默认 agent、默认工作目录、tmux 默认展示行数、tmux 自动回车、tmux 输入回显。
+- 通用配置：默认 agent、默认工作目录、tmux 默认展示行数、tmux 输入回显。
 - Codex：默认模型、YOLO 模式、provider、skip git repo check、sandbox、network、reasoning。
 - Claude：默认模型、YOLO 模式、provider、Claude executable、reasoning、空闲超时。
 - Kimi：默认模型、provider。
@@ -185,7 +186,7 @@ CodeLark 的配置分两类理解最清楚：
 
 当前聊天的 runtime/provider/model/cwd 优先使用 session-level 覆盖。也就是说，`/set defaultProvider tmux` 会影响以后新建或没有覆盖的会话；已经在当前聊天里执行过 `/provider sdk` 的会话，会继续使用自己的 session-level provider，直到再次发送 `/provider ...` 或在 `/current` 卡片里保存新值。
 
-`/current` 只呈现允许写入 session 的配置：通用分栏包含会话名、当前工作目录、tmux 展示行数、自动回车和输入回显；三个 runtime 分栏分别包含各自的模型、provider、权限等会话级覆盖。默认工作目录、UI 访问、通道设置等只能写入 home 或其他上层作用域，不会伪装成会话配置；当前工作目录继续使用通用分栏里的“工作目录”或 `/cd` 修改。
+`/current` 只呈现允许写入 session 的配置：通用分栏严格包含对话名称、当前工作目录、tmux 展示行数；三个 runtime 分栏分别包含各自的模型、provider、权限等会话级覆盖。默认工作目录、UI 访问、通道设置等只能写入 home 或其他上层作用域，不会伪装成会话配置；当前工作目录继续使用通用分栏里的“工作目录”或 `/cd` 修改。
 
 ## 什么时候看哪张卡片
 

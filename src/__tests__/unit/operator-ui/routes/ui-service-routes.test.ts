@@ -23,6 +23,7 @@ function createResponse(): ServerResponse & { body: string; statusCodeWritten?: 
 const statusContext = {
   home: '/tmp/clk-test-home',
   startedAt: '2026-05-30T00:00:00.000Z',
+  timeZone: 'Asia/Shanghai',
   getUiAccess: () => ({ local: true }),
   getWeixinAccountsPayload: () => [],
 };

@@ -8,6 +8,7 @@ import {
 } from '../../domain/session-runtime.js';
 import { buildCommandFields } from './presentation.js';
 import { buildFencedCodeBlock } from '../../shared/markdown/fence.js';
+import { formatLocalClockTime } from '../../shared/date-time.js';
 import { captureRuntimePtyScreen, type RuntimePtyScreenSnapshot } from '../pty/runtime.js';
 import {
   DEFAULT_PTY_SCREEN_LINES,
@@ -47,7 +48,7 @@ export interface HandlePtyScreenCommandParams {
 const screenMonitors = new Map<string, PtyScreenMonitor>();
 
 function formatPtyScreenCardStatus(sessionId: string, lines: number, intervalSeconds: number): string {
-  const refreshedAt = new Date().toLocaleTimeString('zh-CN', { hour12: false });
+  const refreshedAt = formatLocalClockTime(Date.now()) || '--:--:--';
   return `pty ${sessionId.slice(0, 8)} · ${lines} lines · every ${intervalSeconds}s · ${refreshedAt}`;
 }
 

@@ -78,13 +78,6 @@ function setSessionKimiModelToml(sessionId: string, model: string): void {
   );
 }
 
-function setSessionTmuxAutoEnterToml(sessionId: string, tmuxAutoEnter: boolean): void {
-  createConfigService({ migrate: false }).set(
-    { kind: 'session', sessionId },
-    { session: { tmuxAutoEnter } },
-  );
-}
-
 function preserveClearRuntimeBinding(options: {
   store: BridgeStore;
   previousBinding: ChannelChat | null;
@@ -109,19 +102,16 @@ function inheritClearRuntimeProvider(sessionId: string, previousSession: ReturnT
   if (activeRuntime === 'claude') {
     const inheritedProvider = getSessionClaudeProviderOverride(previousSession);
     if (inheritedProvider) setSessionClaudeProviderToml(sessionId, inheritedProvider);
-    if (inheritedProvider === 'tmux') setSessionTmuxAutoEnterToml(sessionId, true);
     return;
   }
   if (activeRuntime === 'kimi') {
     const inheritedModel = getSessionKimiModel(previousSession);
     if (inheritedModel) setSessionKimiModelToml(sessionId, inheritedModel);
     setSessionKimiProviderToml(sessionId);
-    setSessionTmuxAutoEnterToml(sessionId, true);
     return;
   }
   const inheritedProvider = getSessionCodexProviderOverride(previousSession);
   if (inheritedProvider) setSessionCodexProviderToml(sessionId, inheritedProvider);
-  if (inheritedProvider === 'tmux') setSessionTmuxAutoEnterToml(sessionId, true);
 }
 
 export async function handleClearSessionCommand(options: {

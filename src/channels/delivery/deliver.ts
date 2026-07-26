@@ -76,6 +76,7 @@ export function enqueueDelivery(
     if (waitMs >= DEFAULT_OUTBOUND_RATE_LIMIT_WARN_MS) {
       console.warn('[delivery] Delivery queue delayed message:', {
         event: 'perf.delivery.queue_wait',
+        queueClass: options?.queueClass || 'ordinary',
         channelType: address.channelType,
         chatId: address.chatId,
         waitMs,
@@ -87,6 +88,7 @@ export function enqueueDelivery(
       const message = describeDeliveryError(error);
       console.warn('[delivery] Queued delivery failed:', {
         event: 'delivery.queue.failed',
+        queueClass: options?.queueClass || 'ordinary',
         channelType: address.channelType,
         chatId: address.chatId,
         error: message,

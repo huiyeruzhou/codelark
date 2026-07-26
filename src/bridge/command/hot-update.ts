@@ -4,6 +4,7 @@ import path from 'node:path';
 import { promisify } from 'node:util';
 
 import { sanitizeInput } from '../../shared/security/validators.js';
+import { formatLocalClockTime } from '../../shared/date-time.js';
 import type { BaseChannelAdapter } from '../../channels/contracts.js';
 import { deliverBridgeNotice } from '../../channels/delivery/feedback.js';
 import type { ChannelAddress, OutboundRichCard } from '../../domain/index.js';
@@ -166,7 +167,7 @@ function detectHotUpdateLogState(logText: string): 'running' | 'completed' | 'er
 }
 
 function formatHotUpdateRefreshedAt(): string {
-  return new Date().toLocaleTimeString('zh-CN', { hour12: false });
+  return formatLocalClockTime(Date.now()) || '--:--:--';
 }
 
 function buildHotUpdateLogRichCard(params: {

@@ -1,6 +1,5 @@
 import { resolveSystemTimeZone } from '../time-zone.js';
-
-const clockFormatters = new Map<string, Intl.DateTimeFormat>();
+import { formatLocalClockTime } from '../date-time.js';
 
 export function formatFooterDuration(ms: number): string {
   const totalSeconds = Math.max(0, Math.floor(ms / 1000));
@@ -19,20 +18,7 @@ export function formatFooterClockTime(
   timestampMs: number,
   timeZone = resolveSystemTimeZone(),
 ): string {
-  let formatter = clockFormatters.get(timeZone);
-  if (!formatter) {
-    formatter = new Intl.DateTimeFormat('en-GB', {
-      timeZone,
-      hour: '2-digit',
-      minute: '2-digit',
-      second: '2-digit',
-      hourCycle: 'h23',
-    });
-    clockFormatters.set(timeZone, formatter);
-  }
-  const parts = formatter.formatToParts(new Date(timestampMs));
-  const read = (type: Intl.DateTimeFormatPartTypes) => parts.find((part) => part.type === type)?.value || '00';
-  return `${read('hour')}:${read('minute')}:${read('second')}`;
+  return formatLocalClockTime(timestampMs, timeZone) || '00:00:00';
 }
 
 export function joinFooterParts(parts: Array<string | null | undefined | false>): string {

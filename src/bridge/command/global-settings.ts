@@ -61,7 +61,6 @@ const SETTING_DISPLAY_LABELS: Record<string, string> = {
   kimiProvider: 'Provider（运行方式）',
   defaultWorkspaceRoot: '默认工作目录',
   tmuxCaptureLines: 'tmux 输出行数',
-  tmuxAutoEnter: 'tmux 自动回车',
   tmuxEchoInput: '回显 tmux 输出',
   uiAllowLan: '允许局域网访问 UI',
   uiAccessToken: 'UI 访问令牌',
@@ -78,7 +77,6 @@ const SETTING_FORM_NAMES: Record<string, string> = {
   runtime: 'rt',
   defaultWorkspaceRoot: 'ws_root',
   tmuxCaptureLines: 'tmux_lines',
-  tmuxAutoEnter: 'tmux_enter',
   tmuxEchoInput: 'tmux_echo',
   defaultModel: 'cdx_model',
   defaultMode: 'cdx_mode',
@@ -289,18 +287,6 @@ const SETTING_DEFINITIONS: SettingDefinition[] = [
     placeholder: '1-500，影响 /tmux 默认截屏返回行数',
     read: (config) => `${config.session.tmuxCaptureLines}`,
     write: writePositiveIntPatch((value) => ({ session: { tmuxCaptureLines: value } }), 1, 500),
-  },
-  {
-    key: 'tmuxAutoEnter',
-    tomlPath: 'session.tmux_auto_enter',
-    group: 'runtime',
-    aliases: ['tmuxEnter', 'autoEnter'],
-    label: 'tmux_auto_enter',
-    usage: '/set tmuxAutoEnter on|off',
-    control: 'select',
-    options: boolOptions(),
-    read: (config) => formatBool(config.session.tmuxAutoEnter),
-    write: writeBooleanPatch((value) => ({ session: { tmuxAutoEnter: value } })),
   },
   {
     key: 'tmuxEchoInput',
@@ -726,7 +712,6 @@ const SETTING_GROUP_ORDERS: Partial<Record<SettingGroupKey, string[]>> = {
     'runtime',
     'defaultWorkspaceRoot',
     'tmuxCaptureLines',
-    'tmuxAutoEnter',
     'tmuxEchoInput',
   ],
   'runtime.codex': [
@@ -785,11 +770,7 @@ export function currentSessionSettingDefinitions(
 }
 
 export function currentSessionCommonSettingDefinitions(): SettingDefinition[] {
-  return groupDefinitions('runtime').filter((definition) => {
-    if (definition.key === 'runtime') return false;
-    const field = configFields.find((entry) => entry.tomlPath === definition.tomlPath);
-    return field?.scopes.some((scope: string) => scope === 'session') || false;
-  });
+  return groupDefinitions('runtime').filter((definition) => definition.key === 'tmuxCaptureLines');
 }
 
 export function settingDisplayLabel(definition: Pick<SettingDefinition, 'key' | 'label'>): string {

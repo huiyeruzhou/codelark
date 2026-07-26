@@ -5,6 +5,7 @@ import { createConfigService } from '../../configuration/service.js';
 import { buildCommandCallbackData } from './callbacks.js';
 import { buildCommandFields } from './presentation.js';
 import { buildFencedCodeBlock } from '../../shared/markdown/fence.js';
+import { formatLocalClockTime } from '../../shared/date-time.js';
 import { sanitizeInput } from '../../shared/security/validators.js';
 import {
   claudeTmuxSessionName,
@@ -37,7 +38,6 @@ import { getCodexThreadId } from '../turn/turn-classifier.js';
 import {
   getSessionActiveRuntime,
   getSessionClaudeSessionId,
-  getSessionTmuxAutoEnter,
   getSessionTmuxCaptureLines,
   getSessionTmuxEchoInput,
   getSessionRuntimeTmuxSessionName,
@@ -112,13 +112,6 @@ function setSessionTmuxCaptureLinesToml(sessionId: string, tmuxCaptureLines: num
   createConfigService({ migrate: false }).set(
     { kind: 'session', sessionId },
     { session: { tmuxCaptureLines } },
-  );
-}
-
-function setSessionTmuxAutoEnterToml(sessionId: string, tmuxAutoEnter: boolean): void {
-  createConfigService({ migrate: false }).set(
-    { kind: 'session', sessionId },
-    { session: { tmuxAutoEnter } },
   );
 }
 
@@ -247,13 +240,8 @@ function getCaptureLines(session: BridgeSession): number {
   return normalizeCaptureLines(getSessionTmuxCaptureLines(session) || DEFAULT_CAPTURE_LINES);
 }
 
-function getAutoEnter(session: BridgeSession): boolean {
-  return getSessionTmuxAutoEnter(session) === true;
-}
-
-function getProviderAutoEnter(session: BridgeSession): boolean {
-  const configured = getSessionTmuxAutoEnter(session);
-  return typeof configured === 'boolean' ? configured : true;
+function getProviderAutoEnter(): boolean {
+  return true;
 }
 
 function getEchoInput(session: BridgeSession): boolean {
@@ -418,7 +406,6 @@ function tmuxCommandFamilyHelp(): string[] {
     '`/tmux-new [session]`：新建并绑定 tmux session；如果已存在，会提示并直接绑定。',
     '`/tmux-status`：查看当前绑定到哪个 tmux session，以及当前展示行数。',
     '`/tmux-set lines <1-500>`：设置 `/tmux ...` 自动截屏返回的行数，默认 20。',
-    '`/tmux-set enter on|off`：设置 `/tmux ...` 每次发送后是否自动补一个 Enter。',
     '`/tmux-set echo on|off`：设置 `/tmux ...` 发送后是否在回复里回显输入内容。',
     '`/tmux-screen [lines] [seconds]s`：查看当前绑定 tmux session 的屏幕状态；`lines` 只对本次/本轮定时生效。',
     '`/tmux-screen 5s`：使用默认行数，并每 5 秒刷新一次。',
@@ -442,7 +429,6 @@ function buildTmuxStatusResponse(session: BridgeSession, markdown: boolean): str
     [
       ['当前绑定', getSessionTmuxSessionName(session) || '未绑定'],
       ['展示行数', `${getCaptureLines(session)}`],
-      ['自动回车', formatOnOff(getAutoEnter(session))],
       ['输入回显', formatOnOff(getEchoInput(session))],
     ],
     ['查看当前 IM 会话绑定到哪个 tmux session，以及 `/tmux ...` 自动截屏返回的展示行数和发送设置。'],
@@ -456,7 +442,6 @@ function buildTmuxOverviewResponse(session: BridgeSession, markdown: boolean): s
     [
       ['当前绑定', getSessionTmuxSessionName(session) || '未绑定'],
       ['展示行数', `${getCaptureLines(session)}`],
-      ['自动回车', formatOnOff(getAutoEnter(session))],
       ['输入回显', formatOnOff(getEchoInput(session))],
     ],
     tmuxFullHelp(),
@@ -464,16 +449,13 @@ function buildTmuxOverviewResponse(session: BridgeSession, markdown: boolean): s
   );
 }
 
-function shouldAppendAutoEnter(actions: TmuxSendAction[], session: BridgeSession, defaultAutoEnter = false): boolean {
-  const configured = getSessionTmuxAutoEnter(session);
-  const autoEnter = typeof configured === 'boolean' ? configured : defaultAutoEnter;
-  if (!autoEnter) return false;
+function shouldAppendAutoEnter(actions: TmuxSendAction[]): boolean {
   const lastAction = actions.at(-1);
   return !(lastAction?.type === 'key' && lastAction.key === 'Enter');
 }
 
-function applyAutoEnter(actions: TmuxSendAction[], session: BridgeSession, defaultAutoEnter = false): TmuxSendAction[] {
-  return shouldAppendAutoEnter(actions, session, defaultAutoEnter)
+function applyAutoEnter(actions: TmuxSendAction[]): TmuxSendAction[] {
+  return shouldAppendAutoEnter(actions)
     ? [...actions, { type: 'key', key: 'Enter' }]
     : actions;
 }
@@ -489,9 +471,8 @@ function applyKimiSteer(actions: TmuxSendAction[], session: BridgeSession): Tmux
 function applyPlainTextTmuxActions(
   actions: TmuxSendAction[],
   session: BridgeSession,
-  defaultAutoEnter = false,
 ): TmuxSendAction[] {
-  return applyKimiSteer(applyAutoEnter(actions, session, defaultAutoEnter), session);
+  return applyKimiSteer(applyAutoEnter(actions), session);
 }
 
 function buildInputEchoBlock(input: string, markdown: boolean): string {
@@ -641,10 +622,9 @@ async function ensureRuntimeTmuxSessionForProvider(
       if (!configuredTarget) {
         store.updateSession(session.id, setSessionClaudeTmuxProviderUpdate({
           tmuxSessionName: target,
-          autoEnter: getProviderAutoEnter(session),
+          autoEnter: getProviderAutoEnter(),
         }));
         setSessionClaudeProviderToml(session.id, 'tmux');
-        setSessionTmuxAutoEnterToml(session.id, getProviderAutoEnter(session));
         scheduleTmuxMirrorReconcile(params.reconcileMirrorSubscriptions, 'existing Claude provider binding');
       }
       if (
@@ -714,10 +694,9 @@ async function ensureRuntimeTmuxSessionForProvider(
     }
     store.updateSession(session.id, setSessionClaudeTmuxProviderUpdate({
       tmuxSessionName: target,
-      autoEnter: getProviderAutoEnter(session),
+      autoEnter: getProviderAutoEnter(),
     }));
     setSessionClaudeProviderToml(session.id, 'tmux');
-    setSessionTmuxAutoEnterToml(session.id, getProviderAutoEnter(session));
     scheduleTmuxMirrorReconcile(params.reconcileMirrorSubscriptions, 'recovered Claude provider session');
     return { target, commands: [inspected.command || '', ...started.commands].filter(Boolean), recovered: true };
   }
@@ -767,7 +746,6 @@ async function ensureRuntimeTmuxSessionForProvider(
         general: { tmuxSessionName: prepared.sessionName },
       },
     });
-    setSessionTmuxAutoEnterToml(session.id, true);
     scheduleTmuxMirrorReconcile(params.reconcileMirrorSubscriptions, 'initialized Kimi provider session');
     return { target: prepared.sessionName, commands: [], recovered: !prepared.existed };
   }
@@ -809,10 +787,9 @@ async function ensureRuntimeTmuxSessionForProvider(
     if (!configuredTarget || !getCodexThreadId(session, binding)) {
       store.updateSession(session.id, setSessionCodexTmuxProviderUpdate({
         tmuxSessionName: target,
-        autoEnter: getProviderAutoEnter(session),
+        autoEnter: getProviderAutoEnter(),
         threadId,
       }));
-      setSessionTmuxAutoEnterToml(session.id, getProviderAutoEnter(session));
       scheduleTmuxMirrorReconcile(params.reconcileMirrorSubscriptions, 'existing Codex provider binding');
     }
     if (
@@ -926,16 +903,15 @@ async function ensureRuntimeTmuxSessionForProvider(
   });
   store.updateSession(session.id, setSessionCodexTmuxProviderUpdate({
     tmuxSessionName: target,
-    autoEnter: getProviderAutoEnter(session),
+    autoEnter: getProviderAutoEnter(),
     threadId,
   }));
-  setSessionTmuxAutoEnterToml(session.id, getProviderAutoEnter(session));
   scheduleTmuxMirrorReconcile(params.reconcileMirrorSubscriptions, 'recovered Codex provider session');
   return { target, commands: [inspected.command || '', ...started.commands].filter(Boolean), recovered: true };
 }
 
 function formatTmuxScreenCardStatus(target: string, lines: number, intervalSeconds: number): string {
-  const refreshedAt = new Date().toLocaleTimeString('zh-CN', { hour12: false });
+  const refreshedAt = formatLocalClockTime(Date.now()) || '--:--:--';
   return `tmux ${target} · ${lines} lines · every ${intervalSeconds}s · ${refreshedAt}`;
 }
 
@@ -1174,10 +1150,9 @@ export async function handleTmuxBridgeCommand(params: HandleTmuxBridgeCommandPar
       if (!parsed) {
         return buildCommandFields(
           'tmux 设置用法',
-          [['命令', '`/tmux-set lines <1-500>`、`/tmux-set enter on|off` 或 `/tmux-set echo on|off`']],
+          [['命令', '`/tmux-set lines <1-500>` 或 `/tmux-set echo on|off`']],
           [
             `当前展示行数：${getCaptureLines(session)}`,
-            `当前自动回车：${formatOnOff(getAutoEnter(session))}`,
             `当前输入回显：${formatOnOff(getEchoInput(session))}`,
           ],
           markdown,
@@ -1205,17 +1180,6 @@ export async function handleTmuxBridgeCommand(params: HandleTmuxBridgeCommandPar
         markdown,
       );
       }
-      setSessionTmuxAutoEnterToml(session.id, parsed.value);
-      return buildCommandFields(
-        '已更新 tmux 设置',
-        [['自动回车', formatOnOff(parsed.value)]],
-        [
-          parsed.value
-            ? '之后 `/tmux ...` 会在发送内容后自动补一个 Enter；如果消息已显式以 `<Enter>` 结尾，不会重复补。'
-            : '之后 `/tmux ...` 不会自动补 Enter。',
-        ],
-        markdown,
-      );
     }
 
     if (command === '/tmux-attach') {
@@ -1297,7 +1261,7 @@ export async function handleTmuxBridgeCommand(params: HandleTmuxBridgeCommandPar
       }
       const actions = parsed.actions || [];
       const pendingAutoForwardActions = params.tmuxProviderAutoForward === true && command === '/tmux'
-        ? (keySequenceActions ? actions : applyPlainTextTmuxActions(actions, session, true))
+        ? (keySequenceActions ? actions : applyPlainTextTmuxActions(actions, session))
         : undefined;
       const ensured = await ensureRuntimeTmuxSessionForProvider({
         ...params,
@@ -1320,7 +1284,7 @@ export async function handleTmuxBridgeCommand(params: HandleTmuxBridgeCommandPar
       }
       const effectiveSession = store.getSession(session.id) || session;
       const actionsToSend = command === '/tmux' && !keySequenceActions
-        ? applyPlainTextTmuxActions(actions, effectiveSession, params.tmuxProviderAutoForward === true)
+        ? applyPlainTextTmuxActions(actions, effectiveSession)
         : actions;
       if (params.suppressSuccessfulResponse === true) {
         const runtimeProvider = resolveEffectiveRuntimeProvider(effectiveSession, binding);

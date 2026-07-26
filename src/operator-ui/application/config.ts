@@ -76,7 +76,6 @@ const uiConfigPayloadSchema = z.object({
     (value) => value === undefined || value <= 500,
     { message: 'tmux 输出行数必须在 1 到 500 之间。' },
   ),
-  tmuxAutoEnter: z.boolean().optional(),
   tmuxEchoInput: z.boolean().optional(),
   defaultWorkspaceRoot: optionalString(),
   defaultModel: optionalString().refine(
@@ -123,7 +122,6 @@ export function configV2ToPayload(config: ConfigV2) {
   return {
     runtime: config.runtime.agent,
     tmuxCaptureLines: config.session.tmuxCaptureLines,
-    tmuxAutoEnter: config.session.tmuxAutoEnter,
     tmuxEchoInput: config.session.tmuxEchoInput,
     defaultWorkspaceRoot: config.bridge.defaultWorkspace === '~' ? os.homedir() : config.bridge.defaultWorkspace,
     defaultModel: config.runtime.codex.model || '',
@@ -174,9 +172,6 @@ export function mergeConfigV2HomePatch(current: ConfigV2, payload: Record<string
     schemaVersion: 2,
     session: {
       tmuxCaptureLines: parsed.tmuxCaptureLines ?? current.session.tmuxCaptureLines,
-      tmuxAutoEnter: hasPayloadKey(payload, 'tmuxAutoEnter')
-        ? parsed.tmuxAutoEnter === true
-        : current.session.tmuxAutoEnter,
       tmuxEchoInput: hasPayloadKey(payload, 'tmuxEchoInput')
         ? parsed.tmuxEchoInput === true
         : current.session.tmuxEchoInput,
@@ -256,7 +251,6 @@ export function homeWritableConfigPatch(config: ConfigV2): ConfigPatch {
     schemaVersion: config.schemaVersion,
     session: {
       tmuxCaptureLines: config.session.tmuxCaptureLines,
-      tmuxAutoEnter: config.session.tmuxAutoEnter,
       tmuxEchoInput: config.session.tmuxEchoInput,
     },
     runtime: config.runtime,

@@ -144,7 +144,13 @@ snapshotStreamingDesiredState(state)
 
 所有运行中、续接和最终卡片共用同一套 footer 格式。状态字段（例如异常原因、已续接到下一条）排在最前，公共字段固定为“当前时刻 `HH:mm:ss` · 已运行时长 · 上次响应时长 · Context 使用 · 上一轮输入输出”；缺失字段省略，分隔符统一为 ` · `。时长使用紧凑格式并省略零值高位，例如 `3m11s`、`1h2m10s`、`0s`，不得补 `00h` 或混用中英文单位。
 
-`stream_status_idle_start_seconds = 0` 表示从任务开始立即显示状态栏；`stream_status_check_interval_seconds = 5` 是默认心跳间隔。进程启动时只解析一次系统时区：shell `TZ` 优先，macOS/Windows 使用 runtime 系统时区，Linux 在 runtime 默认与系统文件冲突时读取 `/etc/timezone` 或 `/etc/localtime`；后续刷新只复用缓存的时区和 formatter，不得重复文件 I/O。
+`stream_status_idle_start_seconds = 0` 表示从任务开始立即显示状态栏；`stream_status_check_interval_seconds = 5` 是默认心跳间隔。进程启动时只解析一次系统时区：shell `TZ` 优先，macOS/Windows 使用 runtime 系统时区，Linux 在 runtime 默认与系统文件冲突时读取 `/etc/timezone` 或 `/etc/localtime`；后续刷新只复用缓存的时区和 formatter，不得重复文件 I/O。这个 formatter 也是所有用户可见绝对时刻的唯一来源，包括 `/every`、`/then`、`/status`、会话活动时间、tmux/pty screen、hot-update 和 Web 状态页；不得再直接使用 `Date#getHours()` 或未指定时区的 `toLocaleString()`。持续时长仍使用 duration formatter，不参与时区换算。
+
+### 卡片交互响应边界
+
+飞书 `card.action.trigger` 必须在 2 秒内返回。SDK 回调只允许完成 callback data 解析、构造内部消息、入队并返回 toast；按钮、下拉、表单和确认卡共享这一条边界。文件扫描、配置写盘、命令执行、CardKit 恢复和卡片更新全部在返回后执行。`perf.feishu.card_action_response` 单独记录这段耗时，不能用后台命令的 `adapter.message.finished` 冒充 ACK 耗时。
+
+CardKit create/update/settings/element 与 interactive/rich-card message 请求使用 10 秒上限；`card.idConvert` 只是恢复旧卡的优化路径，最多等待 2 秒，失败后立即创建替代卡。interactive delivery queue 仍按聊天保序，但任何可降级恢复请求都不得长期占住队头；`perf.delivery.queue_wait.queueClass` 用于区分 interactive 与 ordinary 排队。
 
 新增工具与状态栏刷新必须保持为两个 CardKit 动作：先原子创建或更新工具 history，再单独更新 `streaming_status`。这既保持工具调用的原子边界，也让 footer 保留流式效果；不能为了合并请求而把工具正文和状态栏一起重绘成整张卡。
 

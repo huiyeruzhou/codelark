@@ -57,6 +57,7 @@ import {
 } from '../../../../bridge/command/shell.js';
 import { _testOnlyRuntimeSettings } from '../../../../bridge/command/runtime-settings.js';
 import { writeCodexSessionJsonlFixture } from '../../../helpers/bridge/test-bridge-utils.js';
+import { userInputTurnCountCache } from '../../../../bridge/session/command-use-cases/user-input-turn-cache.js';
 import type { OutboundRichCard } from '../../../../domain/index.js';
 import type { HotUpdateRunRequest } from '../../../../bridge/command/hot-update.js';
 import { consumeStartupNoticeTarget } from '../../../../bridge/host/startup-notice-target.js';
@@ -72,7 +73,6 @@ import {
   getSessionCodexSandboxMode,
   getSessionKimiModel,
   getSessionKimiProvider,
-  getSessionTmuxAutoEnter,
   getSessionTmuxCaptureLines,
   getSessionTmuxEchoInput,
   getSessionRuntimeTmuxSessionName,
@@ -2077,7 +2077,7 @@ describe('command-dispatch', () => {
     assert.equal(commonCard?.selects?.[0]?.selectedCallbackData, buildCommandCallbackData('/current-runtime common'));
     assert.equal(commonCard?.form?.inputElementId, 'clk_name');
     assert.equal(commonCard?.form?.inputDefaultValue, 'Current Card');
-    assert.deepEqual(commonCard?.form?.selects?.map((select) => select.elementId), ['tmuxAutoEnter', 'tmuxEchoInput']);
+    assert.deepEqual(commonCard?.form?.selects?.map((select) => select.elementId), []);
     assert.deepEqual(commonCard?.form?.extraInputs?.map((input) => input.elementId), ['clk_cwd', 'tmuxCaptureLines']);
     assert.equal(commonCard?.form?.selects?.some((select) => select.elementId === 'defaultMode'), false);
     assert.equal(commonCard?.form?.extraInputs?.some((input) => input.elementId === 'defaultModel'), false);
@@ -2354,11 +2354,11 @@ describe('command-dispatch', () => {
     const binding = router.createBinding(address, '/tmp/current-fallback');
     const config = createConfigService({ migrate: false, env: {} });
     config.set({ kind: 'home' }, {
-      session: { tmuxCaptureLines: 80, tmuxAutoEnter: false },
+      session: { tmuxCaptureLines: 80 },
       runtime: { codex: { model: 'home-model' } },
     });
     config.set({ kind: 'session', sessionId: binding.bridgeSessionId }, {
-      session: { tmuxCaptureLines: 120, tmuxAutoEnter: true },
+      session: { tmuxCaptureLines: 120 },
       runtime: { codex: { model: 'session-model' } },
     });
     const deps = {
@@ -2375,9 +2375,7 @@ describe('command-dispatch', () => {
     const card = sent.at(-1)?.richCard as OutboundRichCard | undefined;
     assert.equal(card?.form?.extraInputs?.find((input) => input.elementId === 'tmuxCaptureLines')?.defaultValue, '120');
     assert.equal(card?.form?.extraInputs?.some((input) => input.elementId === 'defaultModel'), false);
-    assert.equal(card?.form?.selects?.find((select) => select.elementId === 'tmuxAutoEnter')?.selectedCallbackData, 'on');
-    assert.equal(card?.form?.selects?.find((select) => select.elementId === 'tmuxEchoInput')?.selectedCallbackData, '');
-    assert.match(card?.form?.selects?.find((select) => select.elementId === 'tmuxEchoInput')?.placeholder || '', /跟随上层配置/);
+    assert.deepEqual(card?.form?.selects, []);
 
     await handleBridgeCommand(
       adapter,
@@ -2391,7 +2389,6 @@ describe('command-dispatch', () => {
             action: {
               form_value: {
                 tmux_lines: '',
-                tmux_enter: '',
               },
             },
           },
@@ -2403,10 +2400,8 @@ describe('command-dispatch', () => {
 
     const scope = { kind: 'session' as const, sessionId: binding.bridgeSessionId };
     assert.equal(config.resolve('session.tmuxCaptureLines', scope).source, 'home');
-    assert.equal(config.resolve('session.tmuxAutoEnter', scope).source, 'home');
     assert.equal(config.resolve('runtime.codex.model', scope).source, 'session');
     assert.equal(config.get('session.tmuxCaptureLines', scope), 80);
-    assert.equal(config.get('session.tmuxAutoEnter', scope), false);
     assert.equal(config.get('runtime.codex.model', scope), 'session-model');
     assert.match(sent.at(-1)?.text || '', /已回退上层配置/);
     assert.equal(sent.at(-1)?.richCard?.form?.extraInputs?.find((input: any) => input.elementId === 'tmuxCaptureLines')?.defaultValue, '');
@@ -6263,15 +6258,15 @@ enabled = true
     assert.deepEqual(sent.at(-1)?.richCard?.sections, []);
     assert.deepEqual(
       sent.at(-1)?.richCard?.form?.selects?.map((select: any) => select.elementId),
-      ['runtime', 'tmuxAutoEnter', 'tmuxEchoInput'],
+      ['runtime', 'tmuxEchoInput'],
     );
     assert.deepEqual(
       sent.at(-1)?.richCard?.form?.selects?.map((select: any) => select.label),
-      ['默认 agent', 'tmux 自动回车', '回显 tmux 输出'],
+      ['默认 agent', '回显 tmux 输出'],
     );
     assert.deepEqual(
       sent.at(-1)?.richCard?.form?.selects?.map((select: any) => select.formName),
-      ['rt', 'tmux_enter', 'tmux_echo'],
+      ['rt', 'tmux_echo'],
     );
     assert.deepEqual(
       sent.at(-1)?.richCard?.form?.extraInputs?.map((input: any) => input.elementId),
@@ -6378,10 +6373,9 @@ enabled = true
     assert.match(sent.at(-1)?.text || '', /通用配置/);
     assert.equal(sent.at(-1)?.richCardUpdateMessageId, undefined);
     assert.equal(sent.at(-1)?.richCard?.subtitle, '写入 ~/.codelark/config.toml · 通用配置');
-    assert.deepEqual(sent.at(-1)?.richCard?.form?.selects?.map((select: any) => select.elementId), ['runtime', 'tmuxAutoEnter', 'tmuxEchoInput']);
+    assert.deepEqual(sent.at(-1)?.richCard?.form?.selects?.map((select: any) => select.elementId), ['runtime', 'tmuxEchoInput']);
     assert.deepEqual(sent.at(-1)?.richCard?.form?.selects?.map((select: any) => select.label), [
       '默认 agent',
-      'tmux 自动回车',
       '回显 tmux 输出',
     ]);
     assert.equal(getThreadTableMessageRecord(address, 'set')?.messageId, 'reply-4');
@@ -6401,7 +6395,6 @@ enabled = true
             action: {
               form_value: {
                 tmux_lines: '160',
-                tmux_enter: 'off',
                 tmux_echo: 'on',
               },
             },
@@ -6413,7 +6406,7 @@ enabled = true
     );
     const globalTmuxConfig = createConfigService({ migrate: false, env: {} });
     assert.equal(globalTmuxConfig.get('session.tmuxCaptureLines'), 160);
-    assert.equal(globalTmuxConfig.get('session.tmuxAutoEnter'), false);
+    assert.equal(globalTmuxConfig.get('session.tmuxAutoEnter'), true);
     assert.equal(globalTmuxConfig.get('session.tmuxEchoInput'), true);
     assert.equal(sent.at(-1)?.richCardUpdateMessageId, 'reply-4');
 
@@ -7392,7 +7385,7 @@ enabled = true
       assert.deepEqual(card?.tableBlocks?.[0]?.actions?.map((row) => row.map((action) => action.text)), [['接管', '归档', '新建'], ['解绑', '刷新']]);
       assert.equal(card?.tableBlocks?.[0]?.selects?.[0]?.id, 'claude_select');
       assert.equal(card?.tableBlocks?.[0]?.selects?.[1]?.id, 'claude_limit_select');
-      assert.equal(card?.tableBlocks?.[0]?.selects?.[2]?.id, 'thread_runtime_select');
+      assert.equal(card?.tableBlocks?.[0]?.selects?.[2]?.id, 'runtime_select');
       assert.equal(card?.tableBlocks?.[0]?.table.rows.length, 1);
       assert.match(String(card?.tableBlocks?.[0]?.table.rows[0]?.thread_id || ''), new RegExp(claudeSessionId));
     } finally {
@@ -7595,6 +7588,22 @@ enabled = true
     );
 
     assert.match(sent.at(-1)?.text || '', /用户输入轮数/);
+    assert.equal(sent.at(-1)?.richCard?.tableBlocks?.[0]?.table.rows[0]?.user_input_turns, "<font color='grey-500'>-</font>");
+    await userInputTurnCountCache.waitForIdle();
+    await handleBridgeCommand(
+      adapter,
+      {
+        address: { channelType: 'feishu', chatId: 'chat-t-user-turns' },
+        text: '/t',
+        messageId: 'incoming-t-user-turns-refresh',
+      } as any,
+      '/t',
+      {
+        getActiveTask: () => undefined,
+        diagnoseSessionHealth: async () => null,
+        diagnoseAllActiveSessions: async () => [],
+      },
+    );
     assert.equal(sent.at(-1)?.richCard?.tableBlocks?.[0]?.table.rows[0]?.user_input_turns, "<font color='grey-500'>2</font>");
 
     fs.rmSync(path.join(process.env.CODEX_HOME!, 'sessions'), { recursive: true, force: true });
@@ -7849,7 +7858,7 @@ enabled = true
     assert.doesNotMatch(texts.at(-1) || '', /没有找到本地 Codex 会话/);
     assert.equal(richCards.at(-1)?.title, '');
     assert.equal(richCards.at(-1)?.tableBlocks?.[0]?.table.rows.length, 0);
-    assert.deepEqual(richCards.at(-1)?.tableBlocks?.[0]?.selects?.map((select) => select.id), ['codex_limit_select', 'thread_runtime_select']);
+    assert.deepEqual(richCards.at(-1)?.tableBlocks?.[0]?.selects?.map((select) => select.id), ['codex_limit_select', 'runtime_select']);
     assert.deepEqual(richCards.at(-1)?.tableBlocks?.[0]?.selects?.[0]?.options.map((option) => option.text), ['显示 20', '显示 50', '显示 100']);
     assert.deepEqual(
       richCards.at(-1)?.tableBlocks?.[0]?.actions?.map((row) => row.map((action) => action.text)),
@@ -9387,24 +9396,14 @@ enabled = true
         adapter,
         {
           address,
-          text: '/tmux-set enter on',
-          messageId: 'incoming-tmux-set-enter-on',
+          text: '/tmux-set enter off',
+          messageId: 'incoming-tmux-set-enter-removed',
         } as any,
-        '/tmux-set enter on',
+        '/tmux-set enter off',
         deps,
       );
-      const autoEnterSession = binding ? store.getSession(binding.bridgeSessionId) : null;
-      assert.equal(autoEnterSession?.runtime?.general?.autoEnter, undefined);
-      assert.equal(
-        createConfigService({ migrate: false, env: {} }).get('session.tmuxAutoEnter', {
-          kind: 'session',
-          sessionId: binding.bridgeSessionId,
-        }),
-        true,
-      );
-      store.updateSession(binding.bridgeSessionId, { runtime: { general: { autoEnter: undefined } } });
-      assert.equal(getSessionTmuxAutoEnter(store.getSession(binding.bridgeSessionId)), true);
-      assert.match(sent.at(-1) || '', /自动回车.*on/s);
+      assert.match(sent.at(-1) || '', /tmux 设置用法/);
+      assert.doesNotMatch(sent.at(-1) || '', /enter on\|off/);
 
       await handleBridgeCommand(
         adapter,
@@ -9635,26 +9634,6 @@ enabled = true
       assert.match(mixedDirectLogDelta, /send-keys -t alpha -l <C-c> hello/);
       assert.doesNotMatch(mixedDirectLogDelta, /send-keys -t alpha C-c/);
 
-      await handleBridgeCommand(
-        adapter,
-        {
-          address,
-          text: '/tmux-set enter off',
-          messageId: 'incoming-tmux-set-enter-off',
-        } as any,
-        '/tmux-set enter off',
-        deps,
-      );
-      const autoEnterOffSession = binding ? store.getSession(binding.bridgeSessionId) : null;
-      assert.equal(autoEnterOffSession?.runtime?.general?.autoEnter, undefined);
-      assert.equal(
-        createConfigService({ migrate: false, env: {} }).get('session.tmuxAutoEnter', {
-          kind: 'session',
-          sessionId: binding.bridgeSessionId,
-        }),
-        false,
-      );
-
       const beforeAutoEnterOffLog = fs.readFileSync(fakeTmux.logPath, 'utf-8');
       await handleBridgeCommand(
         adapter,
@@ -9668,11 +9647,11 @@ enabled = true
       );
       const autoEnterOffResponse = sent.at(-1) || '';
       assert.match(autoEnterOffResponse, /tmux send-keys -t alpha -l 'echo off'/);
-      assert.doesNotMatch(autoEnterOffResponse, /tmux send-keys -t alpha Enter/);
+      assert.match(autoEnterOffResponse, /tmux send-keys -t alpha Enter/);
       const afterAutoEnterOffLog = fs.readFileSync(fakeTmux.logPath, 'utf-8');
       const autoEnterOffLogDelta = afterAutoEnterOffLog.slice(beforeAutoEnterOffLog.length);
       assert.match(autoEnterOffLogDelta, /send-keys -t alpha -l echo off/);
-      assert.doesNotMatch(autoEnterOffLogDelta, /send-keys -t alpha Enter/);
+      assert.match(autoEnterOffLogDelta, /send-keys -t alpha Enter/);
 
       const beforeScreenLog = fs.readFileSync(fakeTmux.logPath, 'utf-8');
       await handleBridgeCommand(

@@ -535,7 +535,11 @@ function normalizeSelectElementId(id: string | undefined, index: number): string
   const normalized = String(id || `command_select_${index + 1}`)
     .replace(/[^A-Za-z0-9_]/g, '_')
     .replace(/^[^A-Za-z]+/, '');
-  return normalized || `command_select_${index + 1}`;
+  const fallback = `command_select_${index + 1}`;
+  const valid = normalized || fallback;
+  if (valid.length <= 20) return valid;
+  const suffix = `_${index + 1}`;
+  return `${valid.slice(0, 20 - suffix.length)}${suffix}`;
 }
 
 function normalizeFormFieldName(name: string | undefined, fallback: string): string {

@@ -17,6 +17,7 @@ import {
   buildThreadCardUpdateKey,
   THREAD_SELECT_CALLBACK_PREFIX,
 } from './callbacks.js';
+import { formatLocalDateTime, formatLocalMonthDayTime } from '../../shared/date-time.js';
 export { formatBindingChatLabel } from '../session/display/channel-label.js';
 export { getSessionDisplayName, stripLegacySessionPrefix } from '../session/display/session-title.js';
 export { toUserVisibleBindingError, toUserVisibleCommandError } from './errors.js';
@@ -92,7 +93,7 @@ function buildRuntimeSelect(
 ): NonNullable<OutboundRichCard['selects']>[number] {
   const suffix = limit && limit !== DEFAULT_LOCAL_SESSION_LIST_LIMIT ? ` n ${limit}` : '';
   return {
-    id: 'thread_runtime_select',
+    id: 'runtime_select',
     placeholder: '运行时',
     selectedCallbackData: buildCommandCallbackData(`/t ${runtime}${suffix}`),
     options: [
@@ -266,10 +267,7 @@ function formatThreadActivityTime(value: string | null | undefined): string {
   const trimmed = value?.trim();
   if (!trimmed) return '-';
 
-  const date = new Date(trimmed);
-  if (Number.isNaN(date.getTime())) return trimmed;
-
-  return `${pad2(date.getMonth() + 1)}/${pad2(date.getDate())} ${pad2(date.getHours())}:${pad2(date.getMinutes())}`;
+  return formatLocalMonthDayTime(trimmed) || trimmed;
 }
 
 function normalizeThreadCommandTableCell(value: string): string {
@@ -825,21 +823,11 @@ export function formatCommandMessageId(id: string | undefined | null): string {
   return id;
 }
 
-function pad2(value: number): string {
-  return String(value).padStart(2, '0');
-}
-
 export function formatCommandDateTime(value: string | null | undefined): string {
   const trimmed = value?.trim();
   if (!trimmed) return '-';
 
-  const date = new Date(trimmed);
-  if (Number.isNaN(date.getTime())) return trimmed;
-
-  return [
-    `${date.getFullYear()}-${pad2(date.getMonth() + 1)}-${pad2(date.getDate())}`,
-    `${pad2(date.getHours())}:${pad2(date.getMinutes())}:${pad2(date.getSeconds())}`,
-  ].join(' ');
+  return formatLocalDateTime(trimmed) || trimmed;
 }
 
 function stripStoredAttachmentMarker(content: string): string {

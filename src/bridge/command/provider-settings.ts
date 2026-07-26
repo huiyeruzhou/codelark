@@ -81,13 +81,6 @@ function clearSessionKimiProviderToml(sessionId: string): void {
   );
 }
 
-function setSessionTmuxAutoEnterToml(sessionId: string, tmuxAutoEnter: boolean): void {
-  createConfigService({ migrate: false }).set(
-    { kind: 'session', sessionId },
-    { session: { tmuxAutoEnter } },
-  );
-}
-
 function claudeProviderSwitchNote(provider: RuntimeProviderChoice): string {
   switch (provider) {
     case 'sdk':
@@ -233,7 +226,6 @@ export async function handleProviderCommand(options: {
         tmuxSessionName,
         autoEnter: true,
       }));
-      setSessionTmuxAutoEnterToml(session.id, true);
     }
     setSessionClaudeProviderToml(session.id, requestedProvider);
     scheduleMirrorSubscriptionsBestEffort(options.deps, `claude provider ${requestedProvider} switch`);
@@ -313,7 +305,6 @@ export async function handleProviderCommand(options: {
         },
       },
     });
-    setSessionTmuxAutoEnterToml(session.id, true);
     setSessionKimiProviderToml(session.id);
     scheduleMirrorSubscriptionsBestEffort(options.deps, 'kimi provider tmux');
     return buildCommandFields(
@@ -456,7 +447,6 @@ export async function handleProviderCommand(options: {
     threadId,
   }));
   setSessionCodexProviderToml(session.id, 'tmux');
-  setSessionTmuxAutoEnterToml(session.id, true);
   scheduleMirrorSubscriptionsBestEffort(options.deps, 'provider tmux switch');
   return buildCommandFields(
     '已切换 Codex Provider',

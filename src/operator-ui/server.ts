@@ -26,6 +26,7 @@ import { handleUiSessionRoute } from './routes/session.js';
 import { handleUiServiceRoute } from './routes/service.js';
 import { buildUiBindingsPayload } from './application/chat-display.js';
 import { readUiHomeConfig } from './application/config.js';
+import { resolveSystemTimeZone } from '../shared/time-zone.js';
 
 let port = 4781;
 const serverStartTime = new Date().toISOString();
@@ -135,6 +136,7 @@ const server = http.createServer(async (request, response) => {
       statusContext: {
         home: CODELARK_HOME,
         startedAt: serverStartTime,
+        timeZone: resolveSystemTimeZone(),
         getUiAccess: () => buildUiAccessInfo({
           currentPort: port,
           localUrl: currentUrl,

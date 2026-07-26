@@ -6,6 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 
 import { listCommandLocalRuntimeSessions } from '../../../../bridge/session/command-use-cases/source.js';
+import { userInputTurnCountCache } from '../../../../bridge/session/command-use-cases/user-input-turn-cache.js';
 import { resolveSessionTranscriptFile } from '../../../../bridge/session/transcript-source.js';
 import {
   computeKimiWorkspaceDirName,
@@ -194,7 +195,7 @@ describe('Kimi tmux provider helpers', () => {
     assert.equal(records[0]?.reasoningLabel, '思考');
   });
 
-  it('lists Kimi sessions from session_index for /t parity', () => {
+  it('lists Kimi sessions from session_index for /t parity', async () => {
     const cwd = path.join(os.tmpdir(), 'kimi-project');
     writeKimiSession({
       sessionId: 'session_11111111-1111-4111-8111-111111111111',
@@ -208,6 +209,8 @@ describe('Kimi tmux provider helpers', () => {
     assert.equal(summaries[0]?.cwd, cwd);
     assert.equal(summaries[0]?.title, 'Kimi local session');
 
+    listCommandLocalRuntimeSessions(10, 'kimi');
+    await userInputTurnCountCache.waitForIdle();
     const commandSessions = listCommandLocalRuntimeSessions(10, 'kimi');
     assert.equal(commandSessions?.length, 1);
     assert.equal(commandSessions?.[0]?.runtime, 'kimi');

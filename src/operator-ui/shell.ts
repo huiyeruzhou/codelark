@@ -214,7 +214,7 @@ export function renderUiShellHtml(): string {
             <div class="fields">
               <div class="panel-block">
                 <p class="panel-subtitle">GlobalRuntime / Codex</p>
-                <div class="field-row triple">
+                <div class="field-row double">
                   <label>
                     Runtime
                     <select id="runtime">
@@ -319,7 +319,6 @@ export function renderUiShellHtml(): string {
                     <span class="field-title">tmux 输出行数 <span class="help-tip" tabindex="0" data-tip="控制新 session 的 tmux 屏幕抓取行数；范围 1-500。">?</span></span>
                     <input id="tmuxCaptureLines" type="number" min="1" max="500" value="80" />
                   </label>
-                  <label class="checkbox"><input id="tmuxAutoEnter" type="checkbox" checked /> tmux 自动回车</label>
                   <label class="checkbox"><input id="tmuxEchoInput" type="checkbox" /> 回显 tmux 输入</label>
                 </div>
               </div>
@@ -485,7 +484,6 @@ export function renderUiShellHtml(): string {
                   <div class="command-item"><div class="command-col-command"><code>/tmux-screen stop</code></div><div class="command-col-original"><code>/tmux-screen stop</code></div><div class="command-col-desc">停止当前聊天的 tmux 屏幕定时刷新。</div></div>
                   <div class="command-item"><div class="command-col-command"><code>/pty-screen stop</code></div><div class="command-col-original"><code>/pty-screen stop</code></div><div class="command-col-desc">停止当前聊天的 pty 屏幕定时刷新。</div></div>
                   <div class="command-item"><div class="command-col-command"><code>/tmux-set lines 120</code></div><div class="command-col-original"><code>/tmux-set lines 120</code></div><div class="command-col-desc">设置 <code>/tmux</code> 返回的截屏行数，范围 1-500。</div></div>
-                  <div class="command-item"><div class="command-col-command"><code>/tmux-set enter on</code></div><div class="command-col-original"><code>/tmux-set enter on|off</code></div><div class="command-col-desc">设置 <code>/tmux</code> 每次发送内容后是否自动补 Enter。</div></div>
                   <div class="command-item"><div class="command-col-command"><code>/tmux-set echo on</code></div><div class="command-col-original"><code>/tmux-set echo on|off</code></div><div class="command-col-desc">设置 <code>/tmux</code> 发送内容后是否在回复里回显本次输入。</div></div>
                   <div class="command-item"><div class="command-col-command"><code>/t 0</code></div><div class="command-col-original"><code>/thread 0</code></div><div class="command-col-desc">切换到当前聊天的临时草稿线程。</div></div>
                   <div class="command-item"><div class="command-col-command"><code>/t 0 reset</code></div><div class="command-col-original"><code>/thread 0 reset</code></div><div class="command-col-desc">丢弃当前草稿上下文并重建一条新的草稿线程。</div></div>
@@ -651,6 +649,7 @@ export function renderUiShellHtml(): string {
         uiAccess: null,
         bridgeStatus: null,
         autostartStatus: null,
+        systemTimeZone: '',
         codexSessions: [],
         codexSessionCounts: null,
         bindings: [],
@@ -982,7 +981,10 @@ export function renderUiShellHtml(): string {
         if (!value) return '-';
         const date = new Date(value);
         if (Number.isNaN(date.getTime())) return value;
-        return date.toLocaleString('zh-CN', { hour12: false });
+        return date.toLocaleString('zh-CN', {
+          hour12: false,
+          ...(state.systemTimeZone ? { timeZone: state.systemTimeZone } : {}),
+        });
       }
 
       function optionLabel(option) {
@@ -1111,7 +1113,6 @@ export function renderUiShellHtml(): string {
         return {
           runtime: document.getElementById('runtime').value,
           tmuxCaptureLines: document.getElementById('tmuxCaptureLines').value,
-          tmuxAutoEnter: document.getElementById('tmuxAutoEnter').checked,
           tmuxEchoInput: document.getElementById('tmuxEchoInput').checked,
           defaultMode: document.getElementById('defaultMode').value,
           historyMessageLimit: document.getElementById('historyMessageLimit').value,
@@ -1419,7 +1420,6 @@ export function renderUiShellHtml(): string {
       const CONFIG_FIELD_LABELS = {
         runtime: 'Runtime',
         tmuxCaptureLines: 'tmux 输出行数',
-        tmuxAutoEnter: 'tmux 自动回车',
         tmuxEchoInput: '回显 tmux 输入',
         defaultWorkspaceRoot: '/new 相对路径根目录',
         defaultModel: 'Codex 默认模型',
@@ -1454,7 +1454,6 @@ export function renderUiShellHtml(): string {
       const IMMEDIATE_FIELDS = new Set([
         'defaultWorkspaceRoot',
         'tmuxCaptureLines',
-        'tmuxAutoEnter',
         'tmuxEchoInput',
         'defaultModel',
         'defaultProvider',
@@ -2162,7 +2161,6 @@ export function renderUiShellHtml(): string {
         state.config = config;
         document.getElementById('runtime').value = config.runtime || 'codex';
         document.getElementById('tmuxCaptureLines').value = String(config.tmuxCaptureLines || 80);
-        document.getElementById('tmuxAutoEnter').checked = config.tmuxAutoEnter !== false;
         document.getElementById('tmuxEchoInput').checked = config.tmuxEchoInput === true;
         document.getElementById('defaultMode').value = config.defaultMode === 'yolo' ? 'yolo' : 'normal';
         document.getElementById('historyMessageLimit').value = String(config.historyMessageLimit || 8);
@@ -2209,6 +2207,7 @@ export function renderUiShellHtml(): string {
         state.uiAccess = status.uiAccess || null;
         state.bridgeStatus = status.bridge || null;
         state.autostartStatus = status.autostart || null;
+        state.systemTimeZone = status.timeZone || '';
         fillForm(config);
         const adapters = adapterStatuses();
         const runningAdapters = adapters.filter((item) => item.running);
