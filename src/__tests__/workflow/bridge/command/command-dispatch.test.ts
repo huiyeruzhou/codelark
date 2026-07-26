@@ -10078,6 +10078,39 @@ enabled = true
       assert.match(chainedTurn.errorText || '', /429 Too Many Requests/);
       subscription.pendingTurn = null;
 
+      const longTurnState = createMirrorTurnState(
+        binding.bridgeSessionId,
+        new Date(Date.now() + 10).toISOString(),
+        'long-turn-error-scrolls-out',
+      );
+      subscription.pendingTurn = longTurnState;
+      bridgeManagerTestOnly.assignCodexTuiTurnScreenBaseline(subscription, longTurnState);
+      bridgeManagerTestOnly.observeCodexTuiPendingTurnError(subscription, [
+        process.env.TMUX_FAKE_CAPTURE_TEXT || '',
+        '■ exceeded retry limit, last status: 429 Too Many Requests during long turn',
+      ].join('\n'));
+      bridgeManagerTestOnly.observeCodexTuiPendingTurnError(subscription, [
+        '• many later tool calls pushed the error out of the visible pane',
+        '› ',
+      ].join('\n'));
+      process.env.TMUX_FAKE_CAPTURE_TEXT = '• final output no longer contains the error\n› \n';
+      const longTurn: FinalizedBridgeMirrorTurn = {
+        streamKey: longTurnState.streamKey,
+        userText: 'long running turn',
+        text: 'finished after more output',
+        signature: 'long-turn-complete',
+        timestamp: new Date().toISOString(),
+        startedAt: longTurnState.startedAt,
+        status: 'completed',
+      };
+      assert.equal(await bridgeManagerTestOnly.resolveCodexTuiFinalizedTurnStatus(
+        subscription,
+        longTurn,
+        { batchSize: 1 },
+      ), 'error');
+      assert.match(longTurn.errorText || '', /429 Too Many Requests during long turn/);
+      subscription.pendingTurn = null;
+
       const overlappingTurnState = createMirrorTurnState(
         binding.bridgeSessionId,
         new Date(Date.now() - 1_000).toISOString(),

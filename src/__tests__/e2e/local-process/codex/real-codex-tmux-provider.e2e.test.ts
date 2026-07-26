@@ -330,7 +330,7 @@ describe('real codex tmux provider e2e', () => {
     }
   });
 
-  it('turns a real direct-TUI HTTP 429 into one mirror error without another user message', { timeout: 120_000 }, async (t: TestContext) => {
+  it('keeps a real direct-TUI HTTP 429 after it scrolls out before mirror finalization', { timeout: 120_000 }, async (t: TestContext) => {
     if (!(await commandAvailable('tmux', ['-V']))) {
       t.skip('tmux is not available');
       return;
@@ -353,6 +353,7 @@ describe('real codex tmux provider e2e', () => {
     const proxy = await startLocalResponsesProxy({
       errorWhenBodyIncludes: fatalMarker,
       errorStatus: 429,
+      responseDelayMs: 1_500,
       errorBody: {
         error: { type: 'rate_limit_error', message: 'CODELARK_MOCK_FATAL' },
       },
@@ -398,7 +399,8 @@ describe('real codex tmux provider e2e', () => {
     });
     const adapter = new RecordingStreamingAdapter();
     registerAdapter(adapter);
-    (globalThis as unknown as Record<string, any>).__bridge_manager__.running = true;
+    const bridgeState = (globalThis as unknown as Record<string, any>).__bridge_manager__;
+    bridgeState.running = true;
     const address = { channelType: 'feishu', chatId: `chat-real-tmux-error-${process.pid}-${Date.now()}` } as const;
     let tmuxSessionName = '';
     let generatedThreadId = '';
@@ -427,6 +429,17 @@ describe('real codex tmux provider e2e', () => {
         await execFileAsync('tmux', ['send-keys', '-t', `${tmuxSessionName}:0.0`, 'Enter']);
       }
 
+      const sawRequest = await waitForCondition(
+        () => proxy.requests.some((request) => request.rawBody.includes(fatalMarker)),
+        10_000,
+        50,
+      );
+      assert.equal(sawRequest, true, 'real Codex should submit the fatal marker to the fake proxy');
+      await _testOnly.reconcileMirrorSubscriptions();
+      const subscription = bridgeState.mirrorSubscriptions.get(binding.id);
+      assert.ok(subscription?.pendingTurn, 'mirror should own the real running turn before the delayed 429 arrives');
+      bridgeState.running = false;
+
       const sawSquare = await waitForCondition(async () => {
         const capture = await execFileAsync('tmux', ['capture-pane', '-p', '-t', `${tmuxSessionName}:0.0`, '-S', '-80'])
           .catch(() => ({ stdout: '', stderr: '' }));
@@ -435,11 +448,27 @@ describe('real codex tmux provider e2e', () => {
       }, 15_000, 100);
       assert.equal(sawSquare, true, 'real Codex TUI should render the HTTP 429 as a square error cell');
 
+      const errorCapture = await execFileAsync('tmux', ['capture-pane', '-p', '-t', `${tmuxSessionName}:0.0`, '-S', '-80']);
+      _testOnly.observeCodexTuiPendingTurnError(subscription, errorCapture.stdout);
+
+      const screenFiller = Array.from({ length: 1_200 }, (_, index) => `clkfill${index}`).join(' ');
+      await execFileAsync('tmux', ['resize-window', '-t', tmuxSessionName, '-x', '60', '-y', '6']);
+      await execFileAsync('tmux', ['send-keys', '-t', `${tmuxSessionName}:0.0`, '-l', screenFiller]);
+      await execFileAsync('tmux', ['clear-history', '-t', `${tmuxSessionName}:0.0`]);
+      const errorScrolledOut = await waitForCondition(async () => {
+        const capture = await execFileAsync('tmux', ['capture-pane', '-p', '-t', `${tmuxSessionName}:0.0`, '-S', '-80'])
+          .catch(() => ({ stdout: '', stderr: '' }));
+        return !extractCodexTuiErrorMessages(capture.stdout)
+          .some((message) => message.includes('429 Too Many Requests'));
+      }, 5_000, 100);
+      assert.equal(errorScrolledOut, true, 'later terminal content should push the real 429 out of the final 80-line capture');
+
+      bridgeState.running = true;
       const deliveredError = await waitForCondition(async () => {
         await _testOnly.reconcileMirrorSubscriptions();
         return adapter.streamEnds.some((entry) => entry.status === 'error');
       }, 15_000, 100);
-      assert.equal(deliveredError, true, 'mirror should finalize the direct TUI turn as error without another input');
+      assert.equal(deliveredError, true, 'mirror should finalize the direct TUI turn from the remembered running-turn error');
       assert.equal(adapter.streamEnds.filter((entry) => entry.status === 'error').length, 1);
       assert.match(adapter.statuses.at(-1) || '', /429 Too Many Requests/);
       assert.doesNotMatch(adapter.statuses.at(-1) || '', /处理中/);

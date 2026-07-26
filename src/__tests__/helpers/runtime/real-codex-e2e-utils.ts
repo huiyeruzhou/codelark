@@ -338,10 +338,13 @@ export async function startLocalResponsesProxy(options: {
 
       if (req.method === 'POST' && req.url?.includes('/responses')) {
         if (options.errorWhenBodyIncludes && rawBody.includes(options.errorWhenBodyIncludes)) {
-          res.writeHead(options.errorStatus ?? 400, { 'content-type': 'application/json' });
-          res.end(JSON.stringify(options.errorBody ?? {
-            error: { type: 'invalid_request_error', message: 'CODELARK_MOCK_FATAL' },
-          }));
+          void (async () => {
+            if (responseDelayMs > 0) await sleep(responseDelayMs);
+            res.writeHead(options.errorStatus ?? 400, { 'content-type': 'application/json' });
+            res.end(JSON.stringify(options.errorBody ?? {
+              error: { type: 'invalid_request_error', message: 'CODELARK_MOCK_FATAL' },
+            }));
+          })();
           return;
         }
         const model = typeof body === 'object'

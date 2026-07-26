@@ -324,6 +324,13 @@ interface CodexTuiReconnectMonitor {
 
 const codexTuiReconnectMonitors = new Map<string, CodexTuiReconnectMonitor>();
 
+interface CodexTuiPendingTurnErrorMonitor {
+  screen: string;
+  errorMessage?: string;
+}
+
+const codexTuiPendingTurnErrorMonitors = new Map<string, CodexTuiPendingTurnErrorMonitor>();
+
 interface TmuxSelectionPromptTarget {
   channelType: string;
   chatId: string;
@@ -864,12 +871,42 @@ function observeCodexTuiReconnectStatus(
   MIRROR_TURN_HOOKS.onStatusProgress?.(subscription, pendingTurn);
 }
 
+function observeCodexTuiPendingTurnError(
+  subscription: BridgeMirrorSubscription,
+  screenText: string,
+): void {
+  const pendingTurn = subscription.pendingTurn;
+  if (!pendingTurn) return;
+  const previous = codexTuiPendingTurnErrorMonitors.get(pendingTurn.streamKey);
+  const baseline = codexTuiTurnScreenBaselines.get(pendingTurn.streamKey);
+  const previousScreen = previous?.screen || baseline?.screen;
+  if (!previousScreen) return;
+  const errorMessage = previous?.errorMessage
+    || findNewCodexTuiErrorMessage(previousScreen, screenText)
+    || undefined;
+  codexTuiPendingTurnErrorMonitors.set(pendingTurn.streamKey, {
+    screen: screenText,
+    errorMessage,
+  });
+  if (errorMessage && !previous?.errorMessage) {
+    console.warn('[bridge-manager] Codex TUI error observed while turn is running:', {
+      event: 'codex.tui.error_observed',
+      session_id: subscription.sessionId,
+      thread_id: subscription.threadId,
+      stream_key: pendingTurn.streamKey,
+      error: errorMessage,
+    });
+  }
+}
+
 async function resolveCodexTuiFinalizedTurnStatus(
   subscription: BridgeMirrorSubscription,
   turn: FinalizedBridgeMirrorTurn,
   context: { batchSize: number },
 ): Promise<FinalizedBridgeMirrorTurn['status']> {
   const baseline = codexTuiTurnScreenBaselines.get(turn.streamKey);
+  const observedErrorMessage = codexTuiPendingTurnErrorMonitors.get(turn.streamKey)?.errorMessage;
+  codexTuiPendingTurnErrorMonitors.delete(turn.streamKey);
   codexTuiReconnectMonitors.delete(subscription.sessionId);
 
   const session = getBridgeContext().store.getSession(subscription.sessionId);
@@ -893,6 +930,18 @@ async function resolveCodexTuiFinalizedTurnStatus(
     };
     codexTuiIdleScreenCheckpoints.set(subscription.sessionId, checkpoint);
     assignCodexTuiChainedTurnScreenBaseline(subscription, checkpoint, turn.streamKey);
+    if (turn.status === 'completed' && observedErrorMessage) {
+      turn.errorText ||= observedErrorMessage;
+      console.warn('[bridge-manager] Codex TUI running-turn error applied after task_complete:', {
+        event: 'codex.tui.error_applied',
+        source: 'running_turn_probe',
+        session_id: subscription.sessionId,
+        thread_id: subscription.threadId,
+        stream_key: turn.streamKey,
+        error: observedErrorMessage,
+      });
+      return 'error';
+    }
     if (turn.status !== 'completed' || !baseline || context.batchSize !== 1) {
       if (turn.status === 'completed' && !baseline) {
         console.log('[bridge-manager] Codex TUI completed-turn error probe skipped without a screen baseline:', {
@@ -929,6 +978,10 @@ async function resolveCodexTuiFinalizedTurnStatus(
     });
     return 'error';
   } catch (error) {
+    if (turn.status === 'completed' && observedErrorMessage) {
+      turn.errorText ||= observedErrorMessage;
+      return 'error';
+    }
     console.warn('[bridge-manager] Codex TUI completed-turn error probe failed:', {
       session_id: subscription.sessionId,
       tmux_session: tmuxSessionName,
@@ -1156,6 +1209,7 @@ async function probeMirrorTmuxSelectionPrompt(subscription: BridgeMirrorSubscrip
   }
   if (sessionSupportsCodexTuiRuntimeSignals(session)) {
     observeCodexTuiReconnectStatus(subscription, capture.screen, nowMs);
+    observeCodexTuiPendingTurnError(subscription, capture.screen);
   }
   const monitor = getTmuxSelectionPromptMonitor(subscription.sessionId);
   const prompt = observeStableCodexTuiSelectionPrompt(capture.screen, monitor);
@@ -4605,6 +4659,7 @@ function resetStateForTests(): void {
   codexTuiTurnScreenBaselines.clear();
   codexTuiIdleScreenMissingCheckedAt.clear();
   codexTuiReconnectMonitors.clear();
+  codexTuiPendingTurnErrorMonitors.clear();
   state.everyTaskSelections.clear();
   state.thenTaskSelections.clear();
   state.thenTaskTimers.clear();
@@ -4683,6 +4738,7 @@ export const _testOnly = {
   captureCodexTuiIdleScreenCheckpoint,
   ensureCodexTuiIdleScreenCheckpoints,
   assignCodexTuiTurnScreenBaseline,
+  observeCodexTuiPendingTurnError,
   resolveCodexTuiFinalizedTurnStatus,
   filterSuppressedMirrorRecords,
   isMirrorSuppressed,
