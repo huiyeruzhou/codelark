@@ -328,6 +328,10 @@ Feedback controller 把 reducer hook 映射到 stream UI：
 
 状态栏和 CardKit 更新也遵循公共渲染契约：从 turn 开始按 5 秒心跳刷新，所有可见事件都更新活动时间，系统时区只在进程启动时解析一次；新增工具与 `streaming_status` 分成两个 CardKit 动作。字段顺序、紧凑时长格式、续接/异常前缀和具体投递边界统一记录在[流式卡片的“状态栏与活动时间”](streaming-card.md#状态栏与活动时间)，这里不再维护第二份细则。
 
+通道配置变化可能替换整个 adapter 实例。`streamStarted` 只说明某个 turn 曾经启动过，不能证明新实例持有原 CardKit stream；feedback controller 必须按 adapter 实例记录 stream owner。实例不变时启动动作去重，实例替换后必须先重发 title、runtime tags 和 bridge id，再恢复正文、工具与状态。否则 `/set` 修改通道配置会让进行中的 mirror 卡片在 adapter 重建后丢失 header。
+
+adapter 重建不能把正在路上的平台 UI 资源当成新消息重建。adapter runtime 在 config fingerprint 变化时先调用旧实例的 `takeRuntimeHandoff()`，再 stop/start，并在新实例加入 active map 前调用 `restoreRuntimeHandoff()`。Feishu 会等待已发出的 card create/send 和 flush 完成，然后移交原 `cardId`、`messageId`、CardKit sequence 和 desired/shadow state；新实例对同一 card 做全量刷新。这个顺序同时保证 header 恢复和“只有一张卡”，避免旧卡永久停在“思考中”。如果 handoff 准备失败，runtime 保留旧 adapter，不在资源归属不明时强行重启。
+
 每次 desired state 变化都会标记 `desiredRevision` 并调用 `scheduleCardFlush()`。`flushCardUpdate()` 只在 flush tick 读取一份 desired snapshot，构造 desired render，再和本地 remote shadow 比较：
 
 - 正文、任务、状态内容变化且布局没变时，生成 `content` 更新，通常只对 `streaming_content`、`streaming_tasks`、`streaming_status` 调 `cardElement.content`。

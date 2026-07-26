@@ -585,7 +585,17 @@ export function createAdapterRuntime(
     }
 
     for (const { instance, fingerprint, restartExisting } of plan.startItems) {
+      let runtimeHandoff: unknown;
       if (restartExisting) {
+        const existingAdapter = state.adapters.get(instance.id);
+        if (existingAdapter?.takeRuntimeHandoff) {
+          try {
+            runtimeHandoff = await existingAdapter.takeRuntimeHandoff();
+          } catch (err) {
+            console.error(`[bridge-manager] Failed to prepare adapter ${instance.id} for restart:`, err);
+            continue;
+          }
+        }
         await stopAdapterInstance(instance.id);
         changed = true;
       }
@@ -610,6 +620,12 @@ export function createAdapterRuntime(
         await adapter.start();
         if (!adapter.isRunning()) {
           throw new Error('adapter start completed without entering running state');
+        }
+        if (runtimeHandoff !== undefined) {
+          if (!adapter.restoreRuntimeHandoff) {
+            throw new Error('replacement adapter cannot restore runtime handoff state');
+          }
+          adapter.restoreRuntimeHandoff(runtimeHandoff);
         }
         state.adapters.set(instance.id, adapter);
         state.adapterMeta.set(instance.id, {

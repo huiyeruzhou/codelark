@@ -160,6 +160,13 @@ interface FeishuCardState {
   perf: FeishuCardPerfStats;
 }
 
+interface FeishuAdapterRuntimeHandoff {
+  kind: 'feishu-streaming-ui-v1';
+  activeCards: Map<string, FeishuCardState>;
+  streamActionRows: Map<string, FeishuCardActionButton[][]>;
+  pendingStreamMetadata: Map<string, StructuredStreamingUiMetadata>;
+}
+
 type StreamingCardFlushCarry = Pick<FeishuCardState, 'flushInFlight' | 'backgroundFlushInFlight' | 'flushQueued' | 'lastFlushStartedAt'>;
 
 interface FeishuCardApiPerfStats {
@@ -2237,6 +2244,7 @@ export class FeishuAdapter extends BaseChannelAdapter {
   private cardFlushBaseIntervalMs = CARD_FLUSH_BASE_INTERVAL_MS;
   private cardFlushFirstFailureIntervalMs = CARD_FLUSH_FIRST_FAILURE_INTERVAL_MS;
   private cardFlushMaxFailureIntervalMs = CARD_FLUSH_MAX_FAILURE_INTERVAL_MS;
+  private runtimeHandoffInProgress = false;
 
   constructor(instance?: AdapterRuntimeInstance) {
     super();
@@ -2619,6 +2627,73 @@ export class FeishuAdapter extends BaseChannelAdapter {
     this.lastIncomingMessageId.clear();
 
     console.log('[feishu-adapter] Stopped');
+  }
+
+  async takeRuntimeHandoff(): Promise<FeishuAdapterRuntimeHandoff> {
+    this.runtimeHandoffInProgress = true;
+    this.clearAllCardCreateRetryTimers();
+    this.scheduledCardCreatePromises = new Map();
+
+    try {
+      const pendingCreates = [...this.cardCreatePromises.values()];
+      if (pendingCreates.length > 0) {
+        await Promise.allSettled(pendingCreates);
+      }
+
+      for (const [streamKey, state] of this.activeCards) {
+        if (state.throttleTimer) {
+          clearTimeout(state.throttleTimer);
+          state.throttleTimer = null;
+        }
+        state.flushQueued = false;
+        const settled = await this.awaitCardFlushCompletion(streamKey);
+        if (!settled) {
+          throw new Error(`timed out waiting for streaming card ${streamKey} before adapter restart`);
+        }
+        state.flushInFlight = null;
+        state.backgroundFlushInFlight = null;
+        state.lastFlushStartedAt = null;
+        state.nextFlushEarliestAt = null;
+        state.shadowTrust = 'unknown';
+      }
+
+      const handoff: FeishuAdapterRuntimeHandoff = {
+        kind: 'feishu-streaming-ui-v1',
+        activeCards: this.activeCards,
+        streamActionRows: this.streamActionRows,
+        pendingStreamMetadata: this.pendingStreamMetadata,
+      };
+      this.activeCards = new Map();
+      this.streamActionRows = new Map();
+      this.pendingStreamMetadata = new Map();
+      return handoff;
+    } catch (error) {
+      this.runtimeHandoffInProgress = false;
+      for (const streamKey of this.activeCards.keys()) {
+        this.scheduleCardFlush(streamKey);
+      }
+      throw error;
+    }
+  }
+
+  restoreRuntimeHandoff(handoff: unknown): void {
+    if (!handoff || typeof handoff !== 'object' || (handoff as { kind?: unknown }).kind !== 'feishu-streaming-ui-v1') {
+      throw new Error('invalid Feishu adapter runtime handoff');
+    }
+    const state = handoff as FeishuAdapterRuntimeHandoff;
+    this.activeCards = state.activeCards;
+    this.streamActionRows = state.streamActionRows;
+    this.pendingStreamMetadata = state.pendingStreamMetadata;
+    for (const [streamKey, card] of this.activeCards) {
+      card.shadowTrust = 'unknown';
+      card.flushInFlight = null;
+      card.backgroundFlushInFlight = null;
+      card.flushQueued = false;
+      card.throttleTimer = null;
+      card.nextFlushEarliestAt = null;
+      this.markStreamingDesiredDirty(card);
+      this.scheduleCardFlush(streamKey);
+    }
   }
 
   isRunning(): boolean {
@@ -3055,6 +3130,7 @@ export class FeishuAdapter extends BaseChannelAdapter {
     // In-flight guard: if creation is already in progress, return the existing promise
     const existing = this.cardCreatePromises.get(cardKey);
     if (existing) return existing;
+    if (this.runtimeHandoffInProgress) return Promise.resolve(false);
 
     const waitMs = this.getCardCreateWaitMs(cardKey);
     if (waitMs > 0) {
@@ -3477,6 +3553,7 @@ export class FeishuAdapter extends BaseChannelAdapter {
   }
 
   private scheduleCardFlush(streamKey: string): void {
+    if (this.runtimeHandoffInProgress) return;
     const state = this.activeCards.get(streamKey);
     if (!state) return;
     if (state.flushInFlight || state.backgroundFlushInFlight) {

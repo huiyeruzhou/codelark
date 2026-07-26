@@ -11,6 +11,7 @@ import { JsonFileStore } from '../../../../storage/json-store.js';
 import { getBridgeContext, initBridgeContext } from '../../../../bridge/host/context.js';
 import { _testOnly, start, stop } from '../../../../bridge/host/manager.js';
 import { BaseChannelAdapter, registerAdapterFactory } from '../../../../channels/contracts.js';
+import { FeishuAdapter } from '../../../../channels/feishu/adapter.js';
 import { buildCommandCallbackData } from '../../../../bridge/command/callbacks.js';
 import {
   clearPendingAttachmentConfirmation,
@@ -421,6 +422,48 @@ class ThrowStartAdapter extends BaseChannelAdapter {
   async send() { return { ok: true, messageId: 'dummy' }; }
   validateConfig(): string | null { return null; }
   isAuthorized(): boolean { return true; }
+}
+
+class RuntimeHandoffAdapter extends BaseChannelAdapter {
+  static events: string[] = [];
+  static instanceCount = 0;
+  static failTake = false;
+
+  readonly channelType: string;
+  readonly provider = 'feishu';
+  readonly instanceNumber: number;
+  restored: unknown;
+  private running = false;
+
+  constructor(instance?: { id?: string }) {
+    super();
+    this.channelType = instance?.id || 'handoff';
+    RuntimeHandoffAdapter.instanceCount += 1;
+    this.instanceNumber = RuntimeHandoffAdapter.instanceCount;
+  }
+
+  async start(): Promise<void> {
+    this.running = true;
+    RuntimeHandoffAdapter.events.push(`start:${this.instanceNumber}`);
+  }
+  async stop(): Promise<void> {
+    this.running = false;
+    RuntimeHandoffAdapter.events.push(`stop:${this.instanceNumber}`);
+  }
+  isRunning(): boolean { return this.running; }
+  async consumeOne() { return null; }
+  async send() { return { ok: true, messageId: 'dummy' }; }
+  validateConfig(): string | null { return null; }
+  isAuthorized(): boolean { return true; }
+  async takeRuntimeHandoff(): Promise<unknown> {
+    RuntimeHandoffAdapter.events.push(`take:${this.instanceNumber}`);
+    if (RuntimeHandoffAdapter.failTake) throw new Error('handoff failed');
+    return { cardId: 'card-1' };
+  }
+  restoreRuntimeHandoff(handoff: unknown): void {
+    this.restored = handoff;
+    RuntimeHandoffAdapter.events.push(`restore:${this.instanceNumber}`);
+  }
 }
 
 class StartupNoticeAdapter extends BaseChannelAdapter {
@@ -4400,6 +4443,96 @@ describe('bridge-manager invalid adapter logging', () => {
     assert.equal(state.adapters.has('feishu-throw-start-main'), false);
     assert.equal(state.adapterMeta.has('feishu-throw-start-main'), false);
     assert.deepEqual(ThrowStartAdapter.stopCalls, ['feishu-throw-start-main']);
+  });
+});
+
+describe('bridge-manager adapter runtime handoff', () => {
+  it('moves adapter-owned state to the replacement before exposing the new instance', async () => {
+    RuntimeHandoffAdapter.events = [];
+    RuntimeHandoffAdapter.instanceCount = 0;
+    RuntimeHandoffAdapter.failTake = false;
+    registerAdapterFactory('feishu', (instance) => new RuntimeHandoffAdapter(instance as any));
+    writeHomeChannelsToml([{
+      id: 'feishu-handoff-main',
+      alias: 'Handoff Feishu',
+      enabled: true,
+      config: { app_id: 'app-id', app_secret: 'app-secret', require_mention: false },
+    }]);
+    const store = new JsonFileStore(makeSettings());
+    initBridgeContext({
+      store,
+      llm: noopLlm,
+      permissions: noopPermissions,
+      lifecycle: noopLifecycle,
+    });
+    _testOnly.resetStateForTests();
+
+    const state = (globalThis as unknown as Record<string, any>).__bridge_manager__;
+    try {
+      await _testOnly.syncConfiguredAdapters({ startLoops: false });
+      writeHomeChannelsToml([{
+        id: 'feishu-handoff-main',
+        alias: 'Handoff Feishu',
+        enabled: true,
+        config: { app_id: 'app-id', app_secret: 'app-secret', require_mention: true },
+      }]);
+      await _testOnly.syncConfiguredAdapters({ startLoops: false });
+
+      const replacement = state.adapters.get('feishu-handoff-main') as RuntimeHandoffAdapter;
+      assert.deepEqual(RuntimeHandoffAdapter.events, [
+        'start:1',
+        'take:1',
+        'stop:1',
+        'start:2',
+        'restore:2',
+      ]);
+      assert.deepEqual(replacement.restored, { cardId: 'card-1' });
+    } finally {
+      await state.adapters.get('feishu-handoff-main')?.stop?.();
+      registerAdapterFactory('feishu', (instance) => new FeishuAdapter(instance));
+      _testOnly.resetStateForTests();
+    }
+  });
+
+  it('keeps the existing adapter when runtime handoff preparation fails', async () => {
+    RuntimeHandoffAdapter.events = [];
+    RuntimeHandoffAdapter.instanceCount = 0;
+    RuntimeHandoffAdapter.failTake = true;
+    registerAdapterFactory('feishu', (instance) => new RuntimeHandoffAdapter(instance as any));
+    writeHomeChannelsToml([{
+      id: 'feishu-handoff-failure',
+      alias: 'Handoff Failure',
+      enabled: true,
+      config: { app_id: 'app-id', app_secret: 'app-secret', require_mention: false },
+    }]);
+    initBridgeContext({
+      store: new JsonFileStore(makeSettings()),
+      llm: noopLlm,
+      permissions: noopPermissions,
+      lifecycle: noopLifecycle,
+    });
+    _testOnly.resetStateForTests();
+    const state = (globalThis as unknown as Record<string, any>).__bridge_manager__;
+
+    try {
+      await _testOnly.syncConfiguredAdapters({ startLoops: false });
+      const original = state.adapters.get('feishu-handoff-failure');
+      writeHomeChannelsToml([{
+        id: 'feishu-handoff-failure',
+        alias: 'Handoff Failure',
+        enabled: true,
+        config: { app_id: 'app-id', app_secret: 'app-secret', require_mention: true },
+      }]);
+      await _testOnly.syncConfiguredAdapters({ startLoops: false });
+
+      assert.equal(state.adapters.get('feishu-handoff-failure'), original);
+      assert.deepEqual(RuntimeHandoffAdapter.events, ['start:1', 'take:1']);
+    } finally {
+      RuntimeHandoffAdapter.failTake = false;
+      await state.adapters.get('feishu-handoff-failure')?.stop?.();
+      registerAdapterFactory('feishu', (instance) => new FeishuAdapter(instance));
+      _testOnly.resetStateForTests();
+    }
   });
 });
 

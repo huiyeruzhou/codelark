@@ -78,6 +78,11 @@ export abstract class BaseChannelAdapter {
   abstract consumeOne(): Promise<InboundMessage | null>;
   abstract send(message: OutboundMessage): Promise<SendResult>;
 
+  /** Move in-flight adapter-owned UI/resource state across a config-driven instance restart. */
+  takeRuntimeHandoff?(): Promise<unknown>;
+  /** Restore state returned by the previous instance's takeRuntimeHandoff(). */
+  restoreRuntimeHandoff?(_handoff: unknown): void;
+
   sendCloudDocumentReply?(_target: CloudDocumentAddress, _text: string): Promise<SendResult>;
   createGroupChat?(_options: CreateGroupChatOptions): Promise<CreatedGroupChat>;
   notifyGroupChatCreated?(_address: ChannelAddress, _group: CreatedGroupChat): Promise<void>;

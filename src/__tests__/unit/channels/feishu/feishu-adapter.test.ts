@@ -2310,6 +2310,105 @@ describe('feishu-adapter structured streaming regions', () => {
     assert.equal(reactionDeleteCalls.length, 0);
   });
 
+  it('hands an in-flight streaming card to a replacement adapter without creating a second message', async () => {
+    const createCard = createDeferred<{ data: { card_id: string } }>();
+    const cardCreateCalls: Array<Record<string, any>> = [];
+    const messageCreateCalls: Array<Record<string, any>> = [];
+    const cardUpdateCalls: Array<Record<string, any>> = [];
+    const cardSettingsCalls: Array<Record<string, any>> = [];
+    const instance = {
+      id: 'feishu-default',
+      provider: 'feishu',
+      enabled: true,
+      alias: '飞书',
+      config: {
+        appId: 'app-id',
+        appSecret: 'app-secret',
+        streamingEnabled: true,
+      },
+    };
+    const original = new FeishuAdapter(instance);
+    (original as any).restClient = {
+      cardkit: {
+        v1: {
+          card: {
+            create: async (payload: Record<string, any>) => {
+              cardCreateCalls.push(payload);
+              return createCard.promise;
+            },
+          },
+        },
+      },
+      im: {
+        message: {
+          create: async (payload: Record<string, any>) => {
+            messageCreateCalls.push(payload);
+            return { data: { message_id: 'message-1' } };
+          },
+        },
+      },
+    };
+
+    original.onMirrorStreamStart('chat-1', 'stream-1');
+    await waitForCondition(() => cardCreateCalls.length === 1);
+    const handoffPromise = original.takeRuntimeHandoff();
+    createCard.resolve({ data: { card_id: 'card-1' } });
+    const handoff = await handoffPromise;
+
+    assert.equal(cardCreateCalls.length, 1);
+    assert.equal(messageCreateCalls.length, 1);
+    assert.equal(original.hasActiveStreamingUi('chat-1', 'stream-1'), false);
+
+    const replacement = new FeishuAdapter(instance);
+    (replacement as any).restClient = {
+      cardkit: {
+        v1: {
+          card: {
+            create: async (payload: Record<string, any>) => {
+              cardCreateCalls.push(payload);
+              return { data: { card_id: 'card-duplicate' } };
+            },
+            settings: async (payload: Record<string, any>) => {
+              cardSettingsCalls.push(payload);
+              return {};
+            },
+            update: async (payload: Record<string, any>) => {
+              cardUpdateCalls.push(payload);
+              return {};
+            },
+          },
+          cardElement: {
+            content: async () => ({}),
+          },
+        },
+      },
+      im: {
+        message: {
+          create: async (payload: Record<string, any>) => {
+            messageCreateCalls.push(payload);
+            return { data: { message_id: 'message-duplicate' } };
+          },
+        },
+        messageReaction: {
+          create: async () => ({}),
+        },
+      },
+    };
+
+    replacement.restoreRuntimeHandoff(handoff);
+    replacement.onMirrorStreamStart('chat-1', 'stream-1');
+    replacement.onStreamText('chat-1', '接续后的内容', 'stream-1');
+    await waitForCondition(() => cardUpdateCalls.length > 0);
+    const finalized = await replacement.onStreamEnd('chat-1', 'completed', '最终回复', 'stream-1');
+
+    assert.equal(finalized, true);
+    assert.equal(cardCreateCalls.length, 1);
+    assert.equal(messageCreateCalls.length, 1);
+    assert.equal(replacement.getStructuredStreamingUiMessageId('chat-1', 'stream-1'), null);
+    assert.ok(cardSettingsCalls.every((call) => call.path.card_id === 'card-1'));
+    assert.ok(cardUpdateCalls.every((call) => call.path.card_id === 'card-1'));
+  });
+
   it('adds a completed reaction to the finalized streaming card message', async () => {
     const reactionCreateCalls: Array<Record<string, any>> = [];
     const cardUpdateCalls: Array<Record<string, any>> = [];

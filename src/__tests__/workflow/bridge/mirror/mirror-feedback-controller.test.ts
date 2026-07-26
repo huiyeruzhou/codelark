@@ -205,6 +205,73 @@ describe('mirror-feedback-controller', () => {
     ]);
   });
 
+  it('replays stream metadata when a configured adapter is replaced mid-turn', () => {
+    initBridgeContext({
+      store: new JsonFileStore(new Map()),
+      llm: {
+        streamChat() {
+          return new ReadableStream({
+            start(controller) {
+              controller.close();
+            },
+          });
+        },
+      },
+      permissions: {
+        resolvePendingPermission: () => false,
+      },
+      lifecycle: {},
+    });
+
+    let adapter = new FakeMirrorFeishuAdapter();
+    const firstAdapter = adapter;
+    const baseMs = Date.parse('2026-05-14T00:00:00.000Z');
+    const controller = createMirrorFeedbackController({
+      getAdapter: () => adapter,
+      getThreadTitle: () => 'Persistent title',
+      nowIso: () => new Date(baseMs).toISOString(),
+      eventBatchLimit: 10,
+      deliverResponse: async () => ({ ok: true }),
+    });
+    const subscription = createMirrorSubscription({
+      bindingId: 'binding-restart',
+      sessionId: 'session-restart',
+      channelType: 'feishu-default',
+      chatId: 'chat-restart',
+      threadId: 'thread-restart',
+      filePath: 'rollout.jsonl',
+      lastDeliveredAt: null,
+    });
+
+    consumeMirrorRecords(subscription, [{
+      signature: 'message-before-restart',
+      type: 'message',
+      role: 'assistant',
+      content: 'first chunk',
+      timestamp: new Date(baseMs).toISOString(),
+      turnId: 'turn-restart',
+    }], controller.hooks);
+    assert.equal(firstAdapter.metadata.length, 1);
+    assert.equal(subscription.pendingTurn?.streamStarted, true);
+
+    adapter = new FakeMirrorFeishuAdapter();
+    consumeMirrorRecords(subscription, [{
+      signature: 'message-after-restart',
+      type: 'message',
+      role: 'assistant',
+      content: 'second chunk',
+      timestamp: new Date(baseMs + 1_000).toISOString(),
+      turnId: 'turn-restart',
+    }], controller.hooks);
+
+    assert.equal(adapter.metadata.length, 1);
+    assert.equal(adapter.metadata[0]?.metadata.title, 'Persistent title');
+    assert.deepEqual(adapter.metadata[0]?.metadata.tags, [
+      'bridge_id:session-',
+      'mirror',
+    ]);
+  });
+
   it('keeps last response age visible when mirror tool progress updates the status area', () => {
     initBridgeContext({
       store: new JsonFileStore(new Map()),

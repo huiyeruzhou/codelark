@@ -138,6 +138,8 @@ function createMirrorStreamFeedbackTarget(
 export function createMirrorFeedbackController(
   deps: MirrorFeedbackControllerDeps,
 ): MirrorFeedbackController {
+  const streamOwnerAdapters = new WeakMap<BridgeMirrorTurnState, BaseChannelAdapter>();
+
   function getMirrorStreamingAdapter(subscription: BridgeMirrorSubscription): BaseChannelAdapter | null {
     const adapter = deps.getAdapter(subscription.channelType);
     if (!adapter || !adapter.isRunning()) return null;
@@ -204,7 +206,8 @@ export function createMirrorFeedbackController(
     turnState: BridgeMirrorTurnState,
   ): void {
     const adapter = getMirrorStreamingAdapter(subscription);
-    if (!adapter || turnState.streamStarted) return;
+    if (!adapter) return;
+    if (turnState.streamStarted && streamOwnerAdapters.get(turnState) === adapter) return;
 
     try {
       adapter.onStreamMetadata?.(subscription.chatId, getMirrorStreamMetadata(subscription), turnState.streamKey);
@@ -214,6 +217,7 @@ export function createMirrorFeedbackController(
         adapter.onStreamText?.(subscription.chatId, '', turnState.streamKey);
       }
       turnState.streamStarted = true;
+      streamOwnerAdapters.set(turnState, adapter);
     } catch {
       // Non-critical best effort only.
     }
