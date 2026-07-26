@@ -75,21 +75,14 @@ export function getOrCreateDraftSession(
   },
 ): BridgeSession {
   cleanupHiddenSessions(store);
-  const expectedName = makeDraftSessionName(address);
-  const existing = store.listSessions().find((session) =>
-    session.hidden === true
-    && session.session_type !== 'draft'
-    && session.name === expectedName
-    && !isSessionExpired(session)
-  );
-
-  if (existing) {
+  const existingBinding = store.getChannelChat(address.channelType, address.chatId);
+  const existing = existingBinding ? store.getSession(existingBinding.bridgeSessionId) : null;
+  if (existing && isHiddenTemporarySession(existing) && !isSessionExpired(existing)) {
     store.updateSession(existing.id, {
       expires_at: new Date(Date.now() + TEMPORARY_SESSION_TTL_MS).toISOString(),
     });
     return store.getSession(existing.id) || existing;
   }
-
   return createDraftSession(store, address, options);
 }
 
@@ -134,11 +127,10 @@ export function resetDraftSession(
   store: BridgeStore,
   address: { channelType: string; chatId: string; userId?: string },
 ): BridgeSession {
-  const expectedName = makeDraftSessionName(address);
-  for (const session of store.listSessions()) {
-    if (isHiddenTemporarySession(session) && session.name === expectedName) {
-      store.deleteSession(session.id);
-    }
+  const existingBinding = store.getChannelChat(address.channelType, address.chatId);
+  const existing = existingBinding ? store.getSession(existingBinding.bridgeSessionId) : null;
+  if (existing && isHiddenTemporarySession(existing)) {
+    store.deleteSession(existing.id);
   }
   return getOrCreateDraftSession(store, address);
 }

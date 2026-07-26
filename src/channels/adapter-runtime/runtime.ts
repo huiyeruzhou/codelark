@@ -64,6 +64,10 @@ export interface AdapterImmediateLane {
   jobKind: string;
   waitForConversationBarrier?: boolean;
   blocksConversation?: boolean;
+  /** Serialize operations that mutate the same logical chat resource. */
+  serialize?: boolean;
+  /** Delay later ordinary messages until this operation commits its routing change. */
+  blocksRouting?: boolean;
 }
 
 export interface AdapterSessionLane {
@@ -90,6 +94,7 @@ export function createAdapterRuntime(
   const chatBarrierTails = new Map<string, Promise<void>>();
   const chatBarrierSpans = new Map<string, AdapterLaneSpanInfo>();
   const activeConversationJobs = new Map<string, Set<Promise<void>>>();
+  const chatRoutingBarrierTails = new Map<string, Promise<void>>();
   let nextSpanSeq = 0;
 
   function getActiveChannelTypes(): string[] {
@@ -650,6 +655,9 @@ export function createAdapterRuntime(
             const immediateLane = deps.getImmediateLane?.(msg, classification.category) || null;
             if (immediateLane) {
               const chatKey = chatLaneKey(msg);
+              const serializedBeforeStart = immediateLane.serialize
+                ? laneTails.get(immediateLane.laneKey)
+                : undefined;
               const current = scheduleImmediateMessage(
                 adapter,
                 msg,
@@ -661,10 +669,28 @@ export function createAdapterRuntime(
                   jobKind: immediateLane.jobKind,
                 },
                 () => deps.handleMessage(adapter, msg),
-                immediateLane.laneKind === 'job' && immediateLane.waitForConversationBarrier !== false
-                  ? currentConversationBarrier(chatKey)
-                  : undefined,
+                serializedBeforeStart
+                  ? { waitFor: serializedBeforeStart, blockedBy: null }
+                  : immediateLane.laneKind === 'job' && immediateLane.waitForConversationBarrier !== false
+                    ? currentConversationBarrier(chatKey)
+                    : undefined,
               );
+              if (immediateLane.serialize) {
+                laneTails.set(immediateLane.laneKey, current);
+                current.finally(() => {
+                  if (laneTails.get(immediateLane.laneKey) === current) {
+                    laneTails.delete(immediateLane.laneKey);
+                  }
+                }).catch(() => undefined);
+              }
+              if (immediateLane.blocksRouting) {
+                chatRoutingBarrierTails.set(chatKey, current);
+                current.finally(() => {
+                  if (chatRoutingBarrierTails.get(chatKey) === current) {
+                    chatRoutingBarrierTails.delete(chatKey);
+                  }
+                }).catch(() => undefined);
+              }
               if (immediateLane.laneKind !== 'control' && immediateLane.blocksConversation !== false) {
                 trackConversationJob(chatKey, current);
               }
@@ -692,6 +718,33 @@ export function createAdapterRuntime(
               }
             }
           } else {
+            const chatKey = chatLaneKey(msg);
+            const routingBarrier = chatRoutingBarrierTails.get(chatKey);
+            if (routingBarrier) {
+              const current = scheduleImmediateMessage(
+                adapter,
+                msg,
+                classification.category,
+                chatKey,
+                {
+                  usesSessionLock: false,
+                  laneKind: 'chat',
+                  jobKind: 'interactive-turn:after-routing-change',
+                },
+                async () => {
+                  const sessionLane = deps.getSessionLane?.(msg, classification.category);
+                  const sessionId = sessionLane?.sessionId || deps.resolveSessionIdForMessage(msg);
+                  await deps.processWithSessionLock(
+                    sessionId,
+                    () => deps.handleMessage(adapter, msg),
+                    { jobKind: sessionLane?.jobKind || 'interactive-turn' },
+                  );
+                },
+                { waitFor: routingBarrier.catch(() => undefined), blockedBy: null },
+              );
+              trackConversationJob(chatKey, current);
+              continue;
+            }
             const sessionLane = deps.getSessionLane?.(msg, classification.category);
             if (sessionLane) {
               const current = scheduleSessionLockedMessage(adapter, msg, classification.category, sessionLane);

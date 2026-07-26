@@ -144,6 +144,8 @@ host manager 不在消息入站时添加 `Typing` reaction。只有 tmux actions
 
 Kimi TUI 依赖 tmux extended key protocol 区分“提交 Enter”和输入框换行。Kimi 新建 lifecycle 或 Bridge 冷接管已有 Kimi tmux 时，在 readiness 阶段一次性执行 `tmux set-option -g extended-keys on`；进入 `running` 后每句话不再重复设置，也不通过抓屏/光标猜发送时机。
 
+Kimi 的停止按键合同也与 Codex/Claude 不同。共享 stop lifecycle 对 Codex/Claude 发送一次 `Ctrl-C`，对 Kimi 连续发送两次 `Ctrl-C`（中间短暂异步等待）：真实 Kimi 0.29.1 中第一次产生 `turn.cancel` 并回到输入框，第二次显示 `Press Ctrl+C again to exit`，但仍保留可复用的 tmux TUI；第三次才可能退出。`/stop` 与 `/t` 运行中确认必须共用该实现。
+
 Codex TUI 的输出不直接依赖屏幕文本作为最终答案，而是由 Codex session JSONL mirror 同步。
 
 ### 5. JSONL mirror 和回复

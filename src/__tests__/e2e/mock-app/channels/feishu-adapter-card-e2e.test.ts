@@ -353,6 +353,39 @@ describe('feishu adapter card e2e', () => {
     assert.equal(inbound[0].messageId, 'card-message-from-context');
   });
 
+  it('acks a large thread attachment callback without waiting for command execution', async () => {
+    const calls: RecordedFeishuMessageCall[] = [];
+    const adapter = createRecordingFeishuAdapter(calls);
+    const inbound: any[] = [];
+    (adapter as any).enqueueInboundMessage = (message: any) => {
+      inbound.push(message);
+    };
+    const largeCardState = 'x'.repeat(100_000);
+    const startedAt = performance.now();
+
+    const result = await (adapter as any).handleCardAction({
+      action: {
+        tag: 'button',
+        value: {
+          callback_data: 'clk-thread-action:global:switch',
+          ignored_large_card_state: largeCardState,
+        },
+      },
+      context: {
+        open_chat_id: 'chat-large-thread-attachment',
+        open_message_id: 'message-large-thread-card',
+      },
+      operator: { open_id: 'ou-large-thread-user' },
+    });
+    const elapsedMs = performance.now() - startedAt;
+
+    assert.equal(result?.toast?.type, 'info');
+    assert.match(result?.toast?.content || '', /已收到/);
+    assert.equal(inbound.length, 1);
+    assert.equal(inbound[0].callbackData, 'clk-thread-action:global:switch');
+    assert.ok(elapsedMs < 500, `callback ACK took ${elapsedMs.toFixed(1)}ms`);
+  });
+
   it('prompts for group message authorization after /new until the callback persists authorization', async () => {
     resetBridgeTestState({ cleanCodexHome: true });
     _testOnly.resetStateForTests();

@@ -290,17 +290,17 @@ export function bindToLocalRuntimeThread(
 ): ChannelChat {
   if (localRuntimeOf(thread) === 'kimi') {
     const session = materializeKimiThread(store, thread);
-    const binding = router.bindToSession(address, session.id);
+    const binding = router.attachToSession(address, session.id);
     if (!binding) throw new Error('指定的 Kimi Code 会话无法绑定。');
     return binding;
   }
   if (localRuntimeOf(thread) === 'claude') {
     const session = materializeClaudeThread(store, thread);
-    const binding = router.bindToSession(address, session.id);
+    const binding = router.attachToSession(address, session.id);
     if (!binding) throw new Error('指定的 Claude Code 会话无法绑定。');
     return binding;
   }
-  return router.bindToCodexThread(address, thread.threadId, {
+  return router.attachToCodexThread(address, thread.threadId, {
     workingDirectory: thread.cwd,
     codexTitle: opts?.codexTitle,
   });

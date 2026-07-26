@@ -222,6 +222,10 @@ import type { BridgeTurnTerminalRecord } from '../turn/turn-types.js';
 import { consumeSseEvents } from '../../runtime/sse-stream-decoder.js';
 import { consumePendingClearConfirmation } from '../command/clear-confirmations.js';
 import { consumePendingTakeoverConfirmation } from '../command/takeover-confirmations.js';
+import {
+  consumePendingAttachmentConfirmation,
+  isPendingAttachmentConfirmationReply,
+} from '../command/attachment-confirmations.js';
 import { consumeStartupNoticeTarget } from './startup-notice-target.js';
 import { applyUnifiedTurnStatusNote } from '../turn/unified-turn-state.js';
 import { resolveInstalledCodelarkVersion } from '../update/installed-version.js';
@@ -2073,6 +2077,7 @@ function clearMirrorSubscriptions(): void {
 function shouldRouteTerminalAppendInline(msg: InboundMessage): boolean {
   const rawText = msg.text.trim();
   if (!rawText || msg.channelEvent || msg.callbackData || isBridgeCommandText(rawText)) return false;
+  if (isPendingAttachmentConfirmationReply(msg.address, rawText)) return true;
   if (msg.attachments && msg.attachments.length > 0) return false;
   const binding = getBridgeContext().store.getChannelChat(msg.address.channelType, msg.address.chatId);
   if (!binding || !INTERACTIVE_RUNTIME.getActiveTask(binding.bridgeSessionId)) return false;
@@ -2208,6 +2213,27 @@ function adapterImmediateLane(msg: InboundMessage, category: 'channel-event' | '
       laneKey: `control:${msg.address.channelType}:${msg.address.chatId}:${msg.messageId || 'command'}`,
       laneKind: 'control',
       jobKind: 'control:command',
+    };
+  }
+  const attachmentCommandText = category === 'command'
+    ? msg.text
+    : category === 'callback' && msg.callbackData
+      ? parseCommandCallbackData(msg.callbackData)?.commandText
+      : undefined;
+  const isThreadAttachment = attachmentCommandText
+    ? resolveInboundCommandText(attachmentCommandText) === '/thread'
+    : category === 'callback'
+      && Boolean(msg.callbackData?.startsWith(THREAD_SELECT_ACTION_CALLBACK_PREFIX))
+      && msg.callbackData?.split(':').at(-1) === 'switch';
+  if (isThreadAttachment) {
+    return {
+      laneKey: `job:thread-attach:${msg.address.channelType}:${msg.address.chatId}`,
+      laneKind: 'job',
+      jobKind: 'command:thread-attach',
+      waitForConversationBarrier: false,
+      blocksConversation: true,
+      serialize: true,
+      blocksRouting: true,
     };
   }
   const immediateJobCommandText = category === 'command'
@@ -4053,6 +4079,24 @@ async function handleMessage(
   }
 
   if (rawText && !hasAttachments) {
+    const attachmentConfirmation = consumePendingAttachmentConfirmation(msg.address, rawText);
+    if (attachmentConfirmation.reply === 'confirm' && attachmentConfirmation.commandText) {
+      await handleCommand(
+        adapter,
+        { ...msg, text: attachmentConfirmation.commandText, callbackData: undefined },
+        attachmentConfirmation.commandText,
+      );
+      ack();
+      return;
+    }
+    if (attachmentConfirmation.reply === 'cancel') {
+      enqueueBridgeNotice(adapter, msg.address, '已取消接管，当前任务和聊天绑定保持不变。', {
+        replyToMessageId: msg.messageId,
+      });
+      ack();
+      return;
+    }
+
     const takeoverConfirmation = consumePendingTakeoverConfirmation(msg.address, rawText);
     if (takeoverConfirmation.reply === 'confirm' && takeoverConfirmation.commandText) {
       await handleCommand(
@@ -4613,6 +4657,7 @@ export const _testOnly = {
   resolveCommandAlias,
   adapterSessionLane,
   adapterImmediateLane,
+  shouldRouteTerminalAppendInline,
   isBridgeCommandText,
   toModelPromptText,
   appendModelContextText,

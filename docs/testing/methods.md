@@ -22,7 +22,7 @@ nvm use 24
 | 纯逻辑单测 | `npm test -- --unit` | 只运行 `src/__tests__/unit/`。 |
 | 本地 workflow | `npm test -- --workflow` | 只运行 `src/__tests__/workflow/`。 |
 | 本地 mock app E2E | `npm test -- --mock-e2e` | 只运行 `src/__tests__/e2e/mock-app/`。 |
-| 本地真实进程 E2E | `npm test -- --local-e2e` | 只运行 `src/__tests__/e2e/local-process/`。Codex/Claude 覆盖真实 CLI 或 pty/tmux 进程；Kimi 这里只覆盖 fake Kimi CLI + 真实 tmux 的 deterministic smoke，不作为 Kimi 真实飞书 E2E 证据。 |
+| 本地真实进程 E2E | `npm test -- --local-e2e` | 只运行 `src/__tests__/e2e/local-process/`。Codex/Claude 覆盖真实 CLI 或 tmux 进程；Kimi 同时保留 deterministic fake CLI smoke，并在可执行文件可用时运行真实 Kimi Code + 真 tmux + 本地 fake model proxy 的启动、steer 和 Bridge 重启冷接管故事。 |
 | Harness 自测 | `npm test -- --harness` | 只运行 `src/__tests__/harness/`，包括真实飞书 harness 自测和测试环境隔离 guard。 |
 | 类型检查 | `npm run typecheck` | 验证 TypeScript 类型和公共导入边界。 |
 | 构建验证 | `npm run build` | 验证发布构建入口和 esbuild 打包。 |
@@ -82,7 +82,7 @@ tmux workflow 的 fake transport 必须通过 `TmuxCore` 的可执行命令注�
 | 纯逻辑测试 | 解析、格式化、状态 reducer、schema、配置转换是否正确。 | 位于 `src/__tests__/unit/<owner>/`，不启动真实 provider，不依赖网络，不触碰真实 home。 | 改命令解析、渲染、存储结构、schema、配置、权限状态时。 |
 | 本地 workflow 测试 | 一条 IM 命令或 runtime turn 经过 bridge 内部编排后，是否生成正确状态和交付动作。 | 位于 `src/__tests__/workflow/<slice>/`，使用 fake adapter/provider/store；可能覆盖多个内部组件。 | 改命令体系、会话绑定、delivery、mirror、turn runner、UI application 时。 |
 | 本地 mock app E2E | daemon 级入口、fake channel/provider、状态持久化和交付动作是否闭环。 | 位于 `src/__tests__/e2e/mock-app/`，仍不证明真实 provider 可执行文件或真实飞书客户端契约。 | 改 bridge host 集成、命令入口、card payload 或应用级编排时。 |
-| 本地真实进程 E2E | Codex/Claude 的真实 pty/tmux/CLI 路径，以及 Kimi fake CLI + 真实 tmux 路径，在隔离 home 中是否能启动、产生事件或完成清理。 | 位于 `src/__tests__/e2e/local-process/`；仍不等于真实飞书。 | 改 provider 启动、tmux/pty、JSONL 或 wire 发现、CLI bootstrap、真实进程清理时。 |
+| 本地真实进程 E2E | Codex/Claude 的真实 tmux/CLI 路径，以及可用时 Kimi Code 真实 executable + 真实 tmux + 本地 fake model proxy，在隔离 home 中是否能启动、产生事件、冷接管或完成清理。 | 位于 `src/__tests__/e2e/local-process/`；仍不等于真实飞书。 | 改 provider 启动、tmux、JSONL 或 wire 发现、CLI bootstrap、真实进程清理时。 |
 
 真实飞书 E2E 是第四层，专门验证外部平台契约：飞书事件投递、bot 入群、`reply_to`、真实卡片/文件/表单消息、provider 输出路径和测试群清理。它不替代本地测试。
 
@@ -133,7 +133,7 @@ long-running 功能不能只测“成功派发 worker”。精炼用户故事至
 | `sse-stream-decoder.test.ts` | SSE 文本流解码和事件边界。 |
 | `interactive-turn-runner.test.ts` | 一次 runtime turn 的主编排，含 stream、tool、context、goal、stop、mirror suppression 和基础对话 simulator。 |
 | `interactive-turn-sdk-conversation-engine.test.ts`、`interactive-turn-sdk-stream-events-controller.test.ts`、`interactive-turn-final-response-plan.test.ts`、`interactive-turn-terminal-finalization-controller.test.ts` | SDK conversation 内联附件/tool 展开、stream event 控制、最终回复计划和终端 provider finalization。 |
-| `real-codex-pty-provider.e2e.test.ts`、`real-codex-tmux-provider.e2e.test.ts`、`real-claude-pty-provider.e2e.test.ts`、`kimi-tmux-provider-local-process.e2e.test.ts` | 隔离 home 中启动真实 provider 进程或 fake backend，验证 pty/tmux/Claude Code 路径，以及 fake Kimi CLI 穿过真实 tmux 的单进程 session 生命周期、wire mirror 和 `Ctrl-S` steer。 |
+| `real-codex-tmux-provider.e2e.test.ts`、`real-claude-tmux-provider.e2e.test.ts`、`real-kimi-code-bridge.e2e.test.ts`、`real-kimi-code-tmux-provider.e2e.test.ts`、`kimi-tmux-provider-local-process.e2e.test.ts` | 隔离 home 中启动真实 provider 进程或 fake backend；Kimi 同时覆盖真实 executable 的 fresh/steer/Bridge 重启冷接管，以及 fake CLI 穿过真实 tmux 的确定性 session/wire 回归。 |
 
 ### 交付、流式、mirror 和用户可见渲染
 

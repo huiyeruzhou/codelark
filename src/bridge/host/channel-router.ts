@@ -1,6 +1,6 @@
 export {
-  bindToCodexThread,
-  bindToSession,
+  attachToCodexThread,
+  attachToSession,
   createBinding,
   listBindings,
   resolve,

@@ -1218,9 +1218,17 @@ describe('bridge command e2e', () => {
   });
 
   it('renders /t Codex, Claude Code, and Kimi Code runtime groups in the mock app card', async () => {
-    initBridgeTestContext({ dynamicSettings: true });
+    const store = initBridgeTestContext({ dynamicSettings: true });
     const adapter = new RecordingAdapter();
     const address = { channelType: 'feishu', chatId: 'chat-thread-card-runtime-groups' } as const;
+    const { binding: initialBinding } = createExistingChannelChat(store, address, {
+      workDir: '/tmp/thread-card-runtime-groups-current',
+      name: 'Current running session',
+    });
+    store.updateSession(initialBinding.bridgeSessionId, {
+      runtime_status: 'running',
+      health_status: 'running_active',
+    });
     const codexThreadId = '33333333-3333-4333-8333-333333333334';
     const claudeSessionId = '33333333-3333-4333-8333-333333333335';
     const kimiSessionId = 'session_33333333-3333-4333-8333-333333333336';
@@ -1283,6 +1291,12 @@ describe('bridge command e2e', () => {
       assert.equal(kimiCard?.tableBlocks?.length, 1);
       assert.equal(kimiCard?.tableBlocks?.[0]?.selects?.[0]?.id, 'kimi_select');
       assert.equal(kimiCard?.tableBlocks?.[0]?.selects?.[2]?.id, 'thread_runtime_select');
+      assert.equal(
+        store.getChannelChat(address.channelType, address.chatId)?.bridgeSessionId,
+        initialBinding.bridgeSessionId,
+      );
+      assert.equal(store.getSession(initialBinding.bridgeSessionId)?.runtime_status, 'running');
+      assert.equal(adapter.sent.some((message) => message.richCard?.title === '确认停止并切换会话'), false);
     } finally {
       if (previousClaudeHome === undefined) {
         delete process.env.CODELARK_CLAUDE_HOME;
@@ -2197,6 +2211,60 @@ describe('bridge command e2e', () => {
     assert.match(adapter.sent.at(-1)?.text || '', /在当前聊天上下文创建一个新的对话/);
     assert.match(adapter.sent.at(-1)?.text || '', /\/t.*重新附加到之前的对话/s);
     assert.doesNotMatch(adapter.sent.at(-1)?.text || '', /会创建一个新的群聊/);
+  });
+
+  it('keeps a running attachment unchanged on cancel, then stops before a confirmed /t switch', async () => {
+    const store = initBridgeTestContext({ dynamicSettings: true });
+    const adapter = new RecordingAdapter();
+    const address = { channelType: 'feishu', chatId: 'chat-attach-confirm-text', chatKind: 'group' } as const;
+    const oldWorkDir = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-attach-confirm-old-'));
+    const newWorkDir = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-attach-confirm-new-'));
+    const { binding } = createExistingChannelChat(store, address, {
+      workDir: oldWorkDir,
+      name: '运行中的旧会话',
+    });
+    const target = store.createSession('目标 Kimi 会话', 'k3', undefined, newWorkDir, 'normal', {
+      activeRuntime: 'kimi',
+    });
+    store.updateSession(target.id, {
+      runtime_status: 'idle',
+      runtime: {
+        activeRuntime: 'kimi',
+        kimi: {
+          sessionId: 'session_attach_confirm_target',
+          cwd: newWorkDir,
+          provider: 'tmux',
+        },
+      },
+    });
+    store.updateSession(binding.bridgeSessionId, {
+      runtime_status: 'running',
+      health_status: 'running_active',
+    });
+
+    try {
+      await _testOnly.handleMessage(adapter, inboundMessage(address, `/t ${target.id}`, 'incoming-attach-confirm-prompt'));
+      assert.match(adapter.sent.at(-1)?.text || '', /确认停止并切换会话/);
+      assert.equal(store.getChannelChat(address.channelType, address.chatId)?.bridgeSessionId, binding.bridgeSessionId);
+
+      await _testOnly.handleMessage(adapter, inboundMessage(address, '否', 'incoming-attach-confirm-cancel'));
+      assert.match(adapter.sent.at(-1)?.text || '', /已取消接管/);
+      assert.equal(store.getChannelChat(address.channelType, address.chatId)?.bridgeSessionId, binding.bridgeSessionId);
+      assert.equal(store.getSession(binding.bridgeSessionId)?.runtime_status, 'running');
+
+      await _testOnly.handleMessage(adapter, inboundMessage(address, `/t ${target.id}`, 'incoming-attach-confirm-prompt-2'));
+      await _testOnly.handleMessage(adapter, inboundMessage(address, '是', 'incoming-attach-confirm-yes'));
+
+      const attached = store.getChannelChat(address.channelType, address.chatId);
+      assert.equal(attached?.bridgeSessionId, target.id);
+      assert.equal(attached?.runtimeBridgeSessionIds?.codex, binding.bridgeSessionId);
+      assert.equal(attached?.runtimeBridgeSessionIds?.kimi, target.id);
+      assert.equal(store.getSession(binding.bridgeSessionId)?.runtime_status, 'idle');
+      assert.match(adapter.sent.at(-1)?.text || '', /已切换到 Bridge 会话/);
+    } finally {
+      fs.rmSync(oldWorkDir, { recursive: true, force: true });
+      fs.rmSync(newWorkDir, { recursive: true, force: true });
+    }
   });
 
   it('keeps the active runtime and remembered alternate runtime when /clear follows a runtime switch', async () => {

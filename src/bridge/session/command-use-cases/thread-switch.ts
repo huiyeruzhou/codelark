@@ -25,8 +25,9 @@ import {
 } from '../../command/presentation.js';
 import type { CommandThreadDisplay } from '../../command/thread-display.js';
 import { parseForceFlag } from './args.js';
-import { guardBindingChangeWhileRunning, sessionLooksRunning } from './status-guards.js';
+import { sessionLooksRunning } from './status-guards.js';
 import { listCommandLocalRuntimeSessions } from './source.js';
+import { prepareCurrentSessionForAttachment } from './attachment-lifecycle.js';
 import { buildTakeoverConfirmationCard } from './takeover-confirmation.js';
 import {
   auditCommandBindingChange,
@@ -73,7 +74,26 @@ export async function handleThreadSwitchCommand(options: {
 }): Promise<SessionCommandResult> {
   const parsedArgs = parseForceFlag(options.args);
   const takeoverConfirmed = /(^|\s)--takeover-yes(?=\s|$)/.test(parsedArgs.args);
-  const threadArgs = parsedArgs.args.replace(/(^|\s)--takeover-yes(?=\s|$)/g, ' ').trim();
+  const stopCurrentMatch = parsedArgs.args.match(/(^|\s)--stop-current=([^\s]+)(?=\s|$)/);
+  const stopCurrentExpectedBindingId = stopCurrentMatch?.[2];
+  const stopCurrentConfirmed = parsedArgs.force || Boolean(stopCurrentExpectedBindingId);
+  const threadArgs = parsedArgs.args
+    .replace(/(^|\s)--takeover-yes(?=\s|$)/g, ' ')
+    .replace(/(^|\s)--stop-current=[^\s]+(?=\s|$)/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  const prepareCurrentSessionForSwitch = (targetIsCurrent: boolean) => prepareCurrentSessionForAttachment({
+    msg: options.msg,
+    store: options.store,
+    deps: options.deps,
+    threadDisplay: options.threadDisplay,
+    markdown: options.markdown,
+    targetArgs: threadArgs,
+    targetIsCurrent,
+    stopCurrentConfirmed,
+    stopCurrentExpectedBindingId,
+  });
 
   const findConflictBySessionId = (sessionId: string | undefined): ChannelChat | null => {
     if (!sessionId) return null;
@@ -140,19 +160,13 @@ export async function handleThreadSwitchCommand(options: {
     return null;
   };
   if (threadArgs === '0' || threadArgs === '0 reset') {
-    const blocked = guardBindingChangeWhileRunning(
-      options.store,
-      options.commandBinding,
-      parsedArgs.force,
-      options.deps,
-      options.markdown,
-    );
-    if (blocked) return { response: blocked };
+    const blocked = await prepareCurrentSessionForSwitch(false);
+    if (blocked) return blocked;
 
     const temporarySession = threadArgs === '0 reset'
       ? resetDraftSession(options.msg.address)
       : getOrCreateDraftSession(options.store, options.msg.address);
-    const binding = router.bindToSession(options.msg.address, temporarySession.id);
+    const binding = router.attachToSession(options.msg.address, temporarySession.id);
     if (!binding) {
       return { response: '临时 BridgeSession 切换失败。' };
     }
@@ -216,15 +230,6 @@ export async function handleThreadSwitchCommand(options: {
     };
   }
 
-  const blocked = guardBindingChangeWhileRunning(
-    options.store,
-    options.commandBinding,
-    parsedArgs.force,
-    options.deps,
-    options.markdown,
-  );
-  if (blocked) return { response: blocked };
-
   const runtime = options.threadDisplay.activeRuntimeForChat(options.msg.address.channelType, options.msg.address.chatId);
   const displayedThreads = listCommandLocalRuntimeSessions(MAX_LOCAL_SESSION_LIST_LIMIT, runtime);
   if (!displayedThreads) {
@@ -237,6 +242,10 @@ export async function handleThreadSwitchCommand(options: {
     return { response: '匹配到多个会话，请先发送 `/t` 查看列表，再用序号切换。' };
   }
   if (selected.binding) {
+    const blocked = await prepareCurrentSessionForSwitch(
+      selected.binding.id === options.commandBinding?.id,
+    );
+    if (blocked) return blocked;
     const previousActive = options.store.getChannelChat(options.msg.address.channelType, options.msg.address.chatId);
     const selectedDisplay = options.threadDisplay.binding(selected.binding);
     auditCommandBindingChange(
@@ -267,11 +276,15 @@ export async function handleThreadSwitchCommand(options: {
     };
   }
   if (selected.bridgeSession) {
+    const blocked = await prepareCurrentSessionForSwitch(
+      selected.bridgeSession.id === options.commandBinding?.bridgeSessionId,
+    );
+    if (blocked) return blocked;
     const takeover = await prepareTakeover(findConflictBySessionId(selected.bridgeSession.id));
     if (takeover) return takeover;
-    let binding: ReturnType<typeof router.bindToSession>;
+    let binding: ReturnType<typeof router.attachToSession>;
     try {
-      binding = router.bindToSession(options.msg.address, selected.bridgeSession.id);
+      binding = router.attachToSession(options.msg.address, selected.bridgeSession.id);
     } catch (error) {
       return { response: toUserVisibleBindingError(error, '切换 Bridge 会话失败。') };
     }
@@ -317,11 +330,15 @@ export async function handleThreadSwitchCommand(options: {
       return { response: '匹配到多个 Bridge 会话，请先发送 `/t` 查看列表，再使用更长的 bridge session id。' };
     }
     if (bridgeMatch.session) {
+      const blocked = await prepareCurrentSessionForSwitch(
+        bridgeMatch.session.id === options.commandBinding?.bridgeSessionId,
+      );
+      if (blocked) return blocked;
       const takeover = await prepareTakeover(findConflictBySessionId(bridgeMatch.session.id));
       if (takeover) return takeover;
-      let binding: ReturnType<typeof router.bindToSession>;
+      let binding: ReturnType<typeof router.attachToSession>;
       try {
-        binding = router.bindToSession(options.msg.address, bridgeMatch.session.id);
+        binding = router.attachToSession(options.msg.address, bridgeMatch.session.id);
       } catch (error) {
         return { response: toUserVisibleBindingError(error, '切换 Bridge 会话失败。') };
       }
@@ -357,11 +374,17 @@ export async function handleThreadSwitchCommand(options: {
     return { response: `没有找到对应会话：${threadArgs}。/t 列表按“序号 > thread/session id > bridge_id > 名称”解析；先发送 \`/t\` 刷新列表后优先用序号接管，或用 \`/t codex\`、\`/t claude\`、\`/t kimi\` 切换 runtime 列表。` };
   }
   if (!selected.thread) {
+    const blocked = await prepareCurrentSessionForSwitch(
+      selected.threadId === (options.commandBinding
+        ? options.threadDisplay.bindingThreadId(options.commandBinding)
+        : undefined),
+    );
+    if (blocked) return blocked;
     const takeover = await prepareTakeover(findConflictByThreadId(selected.threadId));
     if (takeover) return takeover;
-    let binding: ReturnType<typeof router.bindToCodexThread>;
+    let binding: ReturnType<typeof router.attachToCodexThread>;
     try {
-      binding = router.bindToCodexThread(options.msg.address, selected.threadId);
+      binding = router.attachToCodexThread(options.msg.address, selected.threadId);
     } catch (error) {
       return { response: toUserVisibleBindingError(error, '切换本地 Codex 会话失败。') };
     }
@@ -393,6 +416,12 @@ export async function handleThreadSwitchCommand(options: {
 
   let binding: ChannelChat;
   const selectedRuntime = localRuntimeOf(selected.thread);
+  const blocked = await prepareCurrentSessionForSwitch(
+    selected.thread.threadId === (options.commandBinding
+      ? options.threadDisplay.bindingThreadId(options.commandBinding)
+      : undefined),
+  );
+  if (blocked) return blocked;
   try {
     const conflict = selectedRuntime === 'claude'
       ? findConflictBySessionId(findBridgeSessionByClaudeIdentity(options.store, selected.thread.threadId, selected.thread.cwd)?.id)

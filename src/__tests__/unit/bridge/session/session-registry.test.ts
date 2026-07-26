@@ -17,7 +17,7 @@ describe('SessionRegistryService', () => {
     const registry = new SessionRegistryService(store);
     const session = store.createSession('Bridge target', 'test-model', undefined, '/tmp/bridge-target');
 
-    const binding = registry.bindChatToBridgeSession({
+    const binding = registry.attachChatToBridgeSession({
       channelType: 'feishu',
       chatId: 'chat-bridge',
       userId: 'ou_bridge',

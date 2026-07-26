@@ -150,6 +150,8 @@ conversation barrier 是 lane 之上的保护规则，用来处理“这条命�
 
 ## `/t` 接管本地 runtime 会话
 
+列表 query、聊天 attach、runtime identity 和运行中停止的完整不变量见 [Chat 与 Session 接管契约](chat-session-attachment.md)。
+
 `/t` 命令用于把本机可发现的 Codex thread、Claude Code session 或 Kimi Code session 接入 IM。它展示的是本地 runtime 历史和当前聊天绑定关系，而不是单一 provider 的内部列表。
 
 典型过程：

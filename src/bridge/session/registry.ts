@@ -114,7 +114,7 @@ export class SessionRegistryService {
     private readonly options: SessionRegistryOptions = {},
   ) {}
 
-  bindChatToBridgeSession(
+  attachChatToBridgeSession(
     address: ChannelAddress,
     bridgeSessionId: string,
   ): ChannelChat | null {

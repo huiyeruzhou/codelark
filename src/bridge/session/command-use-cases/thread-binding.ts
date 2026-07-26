@@ -11,6 +11,7 @@ import { getBridgeSessionDisplayTitle } from '../display/session-display-query.j
 import { cleanupRuntimeTmuxSession } from '../../tmux/runtime.js';
 import { kimiTmuxSessionName } from '../../../runtime/kimi/tmux-provider.js';
 import * as router from '../channel-router.js';
+import { clearPendingAttachmentConfirmation } from '../../command/attachment-confirmations.js';
 import { clearPendingTakeoverConfirmation } from '../../command/takeover-confirmations.js';
 import {
   MAX_LOCAL_SESSION_LIST_LIMIT,
@@ -102,6 +103,7 @@ export async function handleThreadBindingCommand(options: {
   }
 
   if (subcommand === 'takeover-cancel') {
+    clearPendingAttachmentConfirmation(options.msg.address);
     clearPendingTakeoverConfirmation(options.msg.address);
     return { response: '已取消接管，当前聊天绑定保持不变。' };
   }

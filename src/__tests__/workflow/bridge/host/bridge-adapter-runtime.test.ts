@@ -17,6 +17,84 @@ async function waitForCondition(fn: () => boolean, timeoutMs = 200): Promise<voi
 }
 
 describe('bridge-adapter-runtime', () => {
+  it('delays ordinary routing until a serialized chat attachment commits', async () => {
+    const state = {
+      adapters: new Map(),
+      adapterMeta: new Map(),
+      invalidAdapters: new Map(),
+      loopAborts: new Map(),
+      running: true,
+    };
+    const started: string[] = [];
+    const locked: string[] = [];
+    let activeSessionId = 'session-old';
+    let releaseAttachment!: () => void;
+    const attachmentMayCommit = new Promise<void>((resolve) => {
+      releaseAttachment = resolve;
+    });
+    const runtime = createAdapterRuntime(() => state, {
+      notifyAdapterSetChanged: () => {},
+      handleMessage: async (_adapter, msg) => {
+        started.push(msg.messageId);
+        if (msg.messageId === 'msg-attach') {
+          await attachmentMayCommit;
+          activeSessionId = 'session-new';
+        }
+      },
+      processWithSessionLock: async (sessionId, fn) => {
+        locked.push(sessionId);
+        await fn();
+      },
+      isCommandMessage: (msg) => msg.text.startsWith('/'),
+      resolveSessionIdForMessage: () => activeSessionId,
+      getImmediateLane: (msg, category) => category === 'command' && msg.text === '/attach'
+        ? {
+            laneKey: `job:attach:${msg.address.channelType}:${msg.address.chatId}`,
+            laneKind: 'job',
+            jobKind: 'command:attach',
+            waitForConversationBarrier: false,
+            blocksRouting: true,
+            serialize: true,
+          }
+        : null,
+    });
+    let running = true;
+    const messages = [
+      {
+        messageId: 'msg-attach',
+        address: { channelType: 'feishu-default', chatId: 'chat-attach' },
+        text: '/attach',
+        timestamp: Date.now(),
+      },
+      {
+        messageId: 'msg-after-attach',
+        address: { channelType: 'feishu-default', chatId: 'chat-attach' },
+        text: 'continue in selected runtime',
+        timestamp: Date.now(),
+      },
+    ];
+    const adapter = {
+      channelType: 'feishu-default',
+      provider: 'feishu',
+      isRunning: () => running || messages.length > 0,
+      consumeOne: async () => {
+        const next = messages.shift() || null;
+        if (messages.length === 0) running = false;
+        return next;
+      },
+    };
+
+    runtime.runAdapterLoop(adapter as never);
+    await waitForCondition(() => started.includes('msg-attach'));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    assert.deepEqual(started, ['msg-attach']);
+
+    releaseAttachment();
+    await waitForCondition(() => started.includes('msg-after-attach'));
+    assert.deepEqual(started, ['msg-attach', 'msg-after-attach']);
+    assert.deepEqual(locked, ['session-new']);
+  });
+
   it('routes regular messages through the session lock but keeps slash commands inline', async () => {
     const state = {
       adapters: new Map(),

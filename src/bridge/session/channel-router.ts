@@ -89,7 +89,7 @@ export function resolve(address: ChannelAddress): ChannelChat {
   const channelDefaultTarget = store.getChannelDefaultTarget(defaultTargetChannelType);
   if (channelDefaultTarget) {
     try {
-      const created = registry.bindChatToBridgeSession(address, channelDefaultTarget.bridgeSessionId);
+      const created = registry.attachChatToBridgeSession(address, channelDefaultTarget.bridgeSessionId);
       if (!created) {
         throw new Error('Session not found.');
       }
@@ -172,18 +172,18 @@ export function createBinding(
 /**
  * Bind an IM chat to an existing BridgeSession.
  */
-export function bindToSession(
+export function attachToSession(
   address: ChannelAddress,
   bridgeSessionId: string,
 ): ChannelChat | null {
   return new SessionRegistryService(getBridgeContext().store)
-    .bindChatToBridgeSession(address, bridgeSessionId);
+    .attachChatToBridgeSession(address, bridgeSessionId);
 }
 
 /**
  * Bind an IM chat to an existing Codex thread, importing it into the bridge store on demand.
  */
-export function bindToCodexThread(
+export function attachToCodexThread(
   address: ChannelAddress,
   codexThreadId: string,
   opts?: { workingDirectory?: string; model?: string; displayName?: string; name?: string; codexTitle?: string },

@@ -1757,7 +1757,7 @@ stream_status_check_interval_seconds = 3
       threadId: 'codex-thread-sdk-first-terminal-artifact',
       workDir: 'D:\\workspace\\sdk-first-terminal-artifact',
     });
-    router.bindToCodexThread(address, 'codex-thread-sdk-first-terminal-artifact', {
+    router.attachToCodexThread(address, 'codex-thread-sdk-first-terminal-artifact', {
       workingDirectory: 'D:\\workspace\\sdk-first-terminal-artifact',
       displayName: 'Codex artifact thread',
     });

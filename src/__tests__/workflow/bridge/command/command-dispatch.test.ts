@@ -7006,7 +7006,7 @@ enabled = true
     assert.equal(fs.existsSync(CONFIG_JSON_PATH), false);
   });
 
-  it('blocks thread switching while the current task is running unless forced', async () => {
+  it('asks before thread switching, then stops the current task before a forced switch', async () => {
     const store = initTestContext();
     const sent: string[] = [];
     const adapter: any = {
@@ -7035,8 +7035,8 @@ enabled = true
       },
     );
 
-    assert.match(sent.at(-1) || '', /当前会话仍在运行/);
-    assert.match(sent.at(-1) || '', /--force/);
+    assert.match(sent.at(-1) || '', /确认停止并切换会话/);
+    assert.match(sent.at(-1) || '', /先停止并等待当前任务结束/);
     assert.equal(
       store.getChannelChat(address.channelType, address.chatId)?.bridgeSessionId,
       initialBinding.bridgeSessionId,
@@ -7058,6 +7058,7 @@ enabled = true
     );
 
     const forcedBinding = store.getChannelChat(address.channelType, address.chatId);
+    assert.equal(activeTask.abortController.signal.aborted, true);
     assert.notEqual(forcedBinding?.bridgeSessionId, initialBinding.bridgeSessionId);
     assert.equal(store.getSession(forcedBinding!.bridgeSessionId)?.runtime?.codex?.mode, undefined);
     assert.match(sent.at(-1) || '', /已切换到临时 BridgeSession/);
@@ -7065,6 +7066,90 @@ enabled = true
       summary.includes('Binding change: action=switch_draft')
       && summary.includes('reason=forced')
     )));
+  });
+
+  it('stops and settles the current runtime before committing a cross-runtime /t attachment', async () => {
+    const store = initTestContext();
+    const sent: Array<{ text: string; richCard?: OutboundRichCard }> = [];
+    const adapter: any = {
+      channelType: 'feishu',
+      send: async (message: { text: string; richCard?: OutboundRichCard }) => {
+        sent.push(message);
+        return { ok: true, messageId: `reply-cross-runtime-attach-${sent.length}` };
+      },
+    };
+    const address = { channelType: 'feishu', chatId: 'chat-cross-runtime-attach', chatKind: 'group' } as const;
+    const currentBinding = router.createBinding(address, 'D:\\workspace\\attach-codex');
+    const target = store.createSession(
+      'Kimi target',
+      'k3',
+      undefined,
+      'D:\\workspace\\attach-kimi',
+      'normal',
+      { activeRuntime: 'kimi' },
+    );
+    store.updateSession(target.id, {
+      runtime: {
+        activeRuntime: 'kimi',
+        kimi: {
+          sessionId: 'session_cross_runtime_attach',
+          cwd: 'D:\\workspace\\attach-kimi',
+          provider: 'tmux',
+        },
+      },
+    });
+    let running = true;
+    const order: string[] = [];
+    const deps = {
+      getActiveTask: (sessionId: string) => running && sessionId === currentBinding.bridgeSessionId
+        ? { abortController: new AbortController() }
+        : undefined,
+      forceStopSession: async (sessionId: string) => {
+        order.push(`stop:${sessionId}`);
+        assert.equal(
+          store.getChannelChat(address.channelType, address.chatId)?.bridgeSessionId,
+          currentBinding.bridgeSessionId,
+        );
+        running = false;
+        return true;
+      },
+      recordInteractiveHealthEnd: (sessionId: string) => {
+        order.push(`settled:${sessionId}`);
+      },
+      diagnoseSessionHealth: async () => null,
+      diagnoseAllActiveSessions: async () => [],
+    };
+
+    await handleBridgeCommand(
+      adapter,
+      { address, text: `/t ${target.id}`, messageId: 'incoming-cross-runtime-attach' } as any,
+      `/t ${target.id}`,
+      deps,
+    );
+    assert.equal(store.getChannelChat(address.channelType, address.chatId)?.bridgeSessionId, currentBinding.bridgeSessionId);
+    assert.match(sent.at(-1)?.text || '', /确认停止并切换会话/);
+    assert.equal(sent.at(-1)?.richCard?.title, '确认停止并切换会话');
+
+    await handleBridgeCommand(
+      adapter,
+      {
+        address,
+        text: `/t ${target.id} --stop-current=${currentBinding.id}`,
+        messageId: 'incoming-cross-runtime-attach-confirmed',
+      } as any,
+      `/t ${target.id} --stop-current=${currentBinding.id}`,
+      deps,
+    );
+
+    const attached = store.getChannelChat(address.channelType, address.chatId);
+    assert.equal(attached?.bridgeSessionId, target.id);
+    assert.equal(attached?.runtimeBridgeSessionIds?.codex, currentBinding.bridgeSessionId);
+    assert.equal(attached?.runtimeBridgeSessionIds?.kimi, target.id);
+    assert.deepEqual(order, [
+      `stop:${currentBinding.bridgeSessionId}`,
+      `settled:${currentBinding.bridgeSessionId}`,
+    ]);
+    assert.match(sent.at(-1)?.text || '', /已切换到 Bridge 会话/);
   });
 
   it('force-stops a stale running session even when no active task remains in memory', async () => {
@@ -7526,7 +7611,7 @@ enabled = true
       workDir: '/tmp/archive-current',
     });
     const address = { channelType: 'feishu', chatId: 'chat-t-archive-current' } as const;
-    const binding = router.bindToCodexThread(address, '019e7d66-0000-7000-8000-000000000001', {
+    const binding = router.attachToCodexThread(address, '019e7d66-0000-7000-8000-000000000001', {
       workingDirectory: '/tmp/archive-current',
       codexTitle: 'Archive current',
     });
@@ -7606,7 +7691,7 @@ enabled = true
       }],
     });
     const address = { channelType: 'feishu', chatId: 'chat-t-archive-index' } as const;
-    router.bindToCodexThread(address, '019e7d66-0000-7000-8000-000000000101', {
+    router.attachToCodexThread(address, '019e7d66-0000-7000-8000-000000000101', {
       workingDirectory: '/tmp/archive-index-old',
       codexTitle: 'Archive index old',
     });
@@ -7669,7 +7754,7 @@ enabled = true
       }],
     });
     const address = { channelType: 'feishu', chatId: 'chat-t-archive-binding-id' } as const;
-    const binding = router.bindToCodexThread(address, '019e7d66-0000-7000-8000-000000000201', {
+    const binding = router.attachToCodexThread(address, '019e7d66-0000-7000-8000-000000000201', {
       workingDirectory: '/tmp/archive-binding-id',
       codexTitle: 'Archive binding id',
     });
@@ -7806,7 +7891,7 @@ enabled = true
     });
 
     const otherAddress = { channelType: 'feishu', chatId: 'chat-other-binding' } as const;
-    const otherBinding = router.bindToCodexThread(otherAddress, '019e7d66-0000-7000-8000-000000000301', {
+    const otherBinding = router.attachToCodexThread(otherAddress, '019e7d66-0000-7000-8000-000000000301', {
       workingDirectory: 'D:\\workspace\\shared-other',
       codexTitle: 'Other Chat Thread',
     });
@@ -7856,7 +7941,7 @@ enabled = true
 
     const otherAddress = { channelType: 'feishu', chatId: 'chat-takeover-other' } as const;
     const currentAddress = { channelType: 'feishu', chatId: 'chat-takeover-current' } as const;
-    const otherBinding = router.bindToCodexThread(otherAddress, threadId, {
+    const otherBinding = router.attachToCodexThread(otherAddress, threadId, {
       workingDirectory: 'D:\\workspace\\takeover-other',
       codexTitle: 'Takeover Other',
     });
@@ -7908,7 +7993,7 @@ enabled = true
     });
     const otherAddress = { channelType: 'feishu', chatId: 'chat-takeover-running-other' } as const;
     const currentAddress = { channelType: 'feishu', chatId: 'chat-takeover-running-current' } as const;
-    const otherBinding = router.bindToCodexThread(otherAddress, threadId, {
+    const otherBinding = router.attachToCodexThread(otherAddress, threadId, {
       workingDirectory: 'D:\\workspace\\takeover-running',
       codexTitle: 'Takeover Running',
     });
@@ -8055,7 +8140,7 @@ enabled = true
     router.createBinding(address, 'D:\\workspace\\current-name');
     const firstSession = store.createSession('前端修复', 'test-model', undefined, 'D:\\workspace\\first-name');
     const secondSession = store.createSession('后端修复', 'test-model', undefined, 'D:\\workspace\\second-name');
-    const first = router.bindToSession(address, firstSession.id);
+    const first = router.attachToSession(address, firstSession.id);
     assert.ok(first);
     store.updateSession(first.bridgeSessionId, { name: '前端修复' });
     store.updateSession(secondSession.id, { name: '后端修复' });
@@ -8867,6 +8952,7 @@ enabled = true
 
       const log = fs.readFileSync(fakeTmux.logPath, 'utf-8');
       assert.match(log, /send-keys -t alpha C-c/);
+      assert.equal((log.match(/send-keys -t alpha C-c/g) || []).length, 1);
       assert.deepEqual(forcedStops, []);
       assert.match(sent[0] || '', /已发送停止按键/);
       assert.match(sent[0] || '', /tmux send-keys -t alpha C-c/);
@@ -8881,7 +8967,7 @@ enabled = true
     }
   });
 
-  it('maps /stop to C-c for a running Kimi tmux provider session without a stored tmux name', async () => {
+  it('force-stops CodeLark state and sends Kimi C-c twice for an active Kimi tmux turn', async () => {
     const store = initTestContext();
     const fakeTmux = installFakeTmux();
     const oldPath = process.env.PATH || '';
@@ -8925,7 +9011,9 @@ enabled = true
         } as any,
         '/stop',
         {
-          getActiveTask: () => undefined,
+          getActiveTask: (sessionId) => sessionId === binding.bridgeSessionId
+            ? { abortController: new AbortController() }
+            : undefined,
           forceStopSession: async (sessionId, detail) => {
             forcedStops.push({ sessionId, detail });
             return false;
@@ -8937,9 +9025,10 @@ enabled = true
 
       const log = fs.readFileSync(fakeTmux.logPath, 'utf-8');
       assert.match(log, new RegExp(`send-keys -t ${target} C-c`));
-      assert.deepEqual(forcedStops, []);
-      assert.match(sent[0] || '', /已发送停止按键/);
-      assert.match(sent[0] || '', new RegExp(`tmux send-keys -t ${target} C-c`));
+      assert.equal((log.match(new RegExp(`send-keys -t ${target} C-c`, 'g')) || []).length, 2);
+      assert.equal(forcedStops.length, 1);
+      assert.equal(forcedStops[0]?.sessionId, binding.bridgeSessionId);
+      assert.match(sent[0] || '', /任务已停止/);
     } finally {
       process.env.PATH = oldPath;
       if (oldFakeLog === undefined) {

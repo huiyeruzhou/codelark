@@ -2931,7 +2931,9 @@ export class FeishuAdapter extends BaseChannelAdapter {
   /**
    * Handle card.action.trigger events (button clicks on permission cards).
    * Converts button clicks to synthetic InboundMessage with callbackData.
-   * Must return within 3 seconds (Feishu timeout), so uses a 2.5s race.
+   * Feishu requires a prompt HTTP response. This method only enqueues the
+   * internal message and returns the toast; command execution and card updates
+   * happen later in the adapter loop.
    */
   private async handleCardAction(data: unknown): Promise<unknown> {
     const FALLBACK_TOAST = { toast: { type: 'info' as const, content: '已收到' } };

@@ -13,6 +13,10 @@ import { _testOnly, start, stop } from '../../../../bridge/host/manager.js';
 import { BaseChannelAdapter, registerAdapterFactory } from '../../../../channels/contracts.js';
 import { buildCommandCallbackData } from '../../../../bridge/command/callbacks.js';
 import {
+  clearPendingAttachmentConfirmation,
+  registerPendingAttachmentConfirmation,
+} from '../../../../bridge/command/attachment-confirmations.js';
+import {
   normalizeReasoningEffort,
   parseLocalSessionListArgs,
 } from '../../../../bridge/command/aliases.js';
@@ -791,6 +795,16 @@ describe('bridge-manager resolveCommandAlias', () => {
 
     assert.equal(_testOnly.adapterSessionLane(inbound('/t') as any, 'command'), null);
     assert.equal(_testOnly.adapterSessionLane(inbound('/t ls') as any, 'command'), null);
+    assert.equal(_testOnly.adapterImmediateLane(inbound('/t kimi') as any, 'command'), null);
+    assert.deepEqual(_testOnly.adapterImmediateLane(inbound('/t 1') as any, 'command'), {
+      laneKey: `job:thread-attach:${address.channelType}:${address.chatId}`,
+      laneKind: 'job',
+      jobKind: 'command:thread-attach',
+      waitForConversationBarrier: false,
+      blocksConversation: true,
+      serialize: true,
+      blocksRouting: true,
+    });
 
     assert.deepEqual(
       _testOnly.adapterSessionLane(inbound('', buildCommandCallbackData('/current-config codex', binding.bridgeSessionId)) as any, 'callback'),
@@ -806,6 +820,18 @@ describe('bridge-manager resolveCommandAlias', () => {
         sessionId: binding.bridgeSessionId,
         jobKind: 'command:t:switch',
         blocksConversation: true,
+      },
+    );
+    assert.deepEqual(
+      _testOnly.adapterImmediateLane(inbound('', 'clk-thread-action:global:switch') as any, 'callback'),
+      {
+        laneKey: `job:thread-attach:${address.channelType}:${address.chatId}`,
+        laneKind: 'job',
+        jobKind: 'command:thread-attach',
+        waitForConversationBarrier: false,
+        blocksConversation: true,
+        serialize: true,
+        blocksRouting: true,
       },
     );
     assert.equal(_testOnly.adapterImmediateLane(inbound('/stop') as any, 'command')?.laneKind, 'control');
@@ -840,6 +866,11 @@ describe('bridge-manager resolveCommandAlias', () => {
       waitForConversationBarrier: true,
       blocksConversation: false,
     });
+
+    registerPendingAttachmentConfirmation(address, '/t target --stop-current=binding-id');
+    assert.equal(_testOnly.shouldRouteTerminalAppendInline(inbound('是') as any), true);
+    assert.equal(_testOnly.shouldRouteTerminalAppendInline(inbound('普通消息') as any), false);
+    clearPendingAttachmentConfirmation(address);
   });
 
   it('parses local runtime session list requests', () => {
@@ -3131,7 +3162,7 @@ describe('bridge-manager channel lifecycle events', () => {
       threadId,
       workDir: '/tmp/lifecycle-archive-codex',
     });
-    const binding = router.bindToCodexThread(address, threadId, {
+    const binding = router.attachToCodexThread(address, threadId, {
       workingDirectory: '/tmp/lifecycle-archive-codex',
       codexTitle: 'Lifecycle Archive Codex',
     });
@@ -3211,7 +3242,7 @@ describe('bridge-manager channel lifecycle events', () => {
         autoEnter: true,
       }),
     ));
-    const binding = router.bindToSession(address, session.id);
+    const binding = router.attachToSession(address, session.id);
     assert.ok(binding);
 
     try {
@@ -3290,7 +3321,7 @@ describe('bridge-manager channel lifecycle events', () => {
       {},
       setSessionKimiIdentityUpdate(kimiSessionId, cwd),
     ));
-    const binding = router.bindToSession(address, session.id);
+    const binding = router.attachToSession(address, session.id);
     assert.ok(binding);
     const expectedTmuxSessionName = kimiTmuxSessionName(session.id);
 
@@ -3679,7 +3710,7 @@ describe('bridge-manager startup runtime cleanup', () => {
       setSessionActiveRuntimeUpdate('claude'),
       setSessionClaudeIdentityUpdate(claudeSessionId, claudeCwd),
     ));
-    const missingBinding = router.bindToSession({
+    const missingBinding = router.attachToSession({
       channelType: 'startup-notice-main',
       channelProvider: 'feishu',
       channelAlias: 'Startup Notice',
@@ -4160,11 +4191,11 @@ describe('bridge-manager mirror subscription recovery', () => {
     _testOnly.resetStateForTests();
 
     const address = { channelType: 'feishu-default', chatId: 'chat-mirror-multi' } as const;
-    const bindingA = router.bindToCodexThread(address, 'thread-mirror-a', {
+    const bindingA = router.attachToCodexThread(address, 'thread-mirror-a', {
       workingDirectory: 'D:\\workspace\\mirror-a',
       displayName: 'mirror-a',
     });
-    const bindingB = router.bindToCodexThread(address, 'thread-mirror-b', {
+    const bindingB = router.attachToCodexThread(address, 'thread-mirror-b', {
       workingDirectory: 'D:\\workspace\\mirror-b',
       displayName: 'mirror-b',
     });
