@@ -1,6 +1,17 @@
+import { resolveInstalledCodelarkVersion } from '../bridge/update/installed-version.js';
 import { mainStyles } from './assets.js';
 
+function escapeHtml(value: string): string {
+  return value
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#39;');
+}
+
 export function renderUiShellHtml(): string {
+  const version = escapeHtml(resolveInstalledCodelarkVersion() || 'unknown');
   return `<!doctype html>
 <html lang="zh-CN">
   <head>
@@ -13,7 +24,10 @@ export function renderUiShellHtml(): string {
     <div class="shell">
       <aside class="sidebar">
         <div class="brand">
-          <p class="brand-title">CodeLark</p>
+          <div class="brand-heading">
+            <p class="brand-title">CodeLark</p>
+            <span class="brand-version">v${version}</span>
+          </div>
           <p class="brand-copy">本地后台、会话共享、通道绑定和调试都走这里。</p>
         </div>
         <nav class="nav">

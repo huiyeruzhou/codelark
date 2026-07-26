@@ -222,6 +222,18 @@ export const mainStyles = `
     font-weight: 850;
     letter-spacing: -0.04em;
   }
+  .brand-heading {
+    display: flex;
+    align-items: baseline;
+    gap: 9px;
+  }
+  .brand-version {
+    color: rgba(191, 219, 254, 0.88);
+    font-size: 12px;
+    font-weight: 750;
+    letter-spacing: 0.02em;
+    font-variant-numeric: tabular-nums;
+  }
   .brand-copy {
     margin: 8px 0 0;
     color: rgba(226, 232, 240, 0.72);

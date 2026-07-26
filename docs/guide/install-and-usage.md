@@ -126,10 +126,13 @@ codelark start
 ```bash
 codelark run
 codelark status
+codelark --version
 codelark url
 codelark start
 codelark stop
 ```
+
+`codelark --version`（或 `codelark -v`）输出当前安装版本；CLI 帮助页和 Web 工作台侧边栏也使用同一个安装包版本。
 
 `codelark run` 会在启动 bridge 前初始化 CodeLark 专属的 lark-cli 运行环境：
 
@@ -168,6 +171,7 @@ http://127.0.0.1:4781
 工作台主要用于：
 
 - 查看 UI 和 bridge 是否运行。
+- 在侧边栏确认当前 CodeLark 版本。
 - 配置飞书通道实例。
 - 测试飞书凭据和连通性。
 - 查看本地 Codex / Claude Code / Kimi Code 会话。

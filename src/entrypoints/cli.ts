@@ -6,6 +6,7 @@ import path from 'node:path';
 import { createInterface } from 'node:readline/promises';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
+import { resolveInstalledCodelarkVersion } from '../bridge/update/installed-version.js';
 import { CODELARK_HOME } from '../configuration/paths.js';
 import { parseConfigCliOverrides, type ParsedConfigCliOverrides } from '../configuration/cli-overrides.js';
 import { createConfigService } from '../configuration/service.js';
@@ -47,6 +48,7 @@ type CliCommand =
   | 'status'
   | 'autostart'
   | 'uninstall'
+  | 'version'
   | 'help'
   | 'unknown';
 
@@ -208,8 +210,9 @@ async function runFirstRunSetupIfNeeded(cli: ConfigPatch | undefined): Promise<v
 }
 
 export function buildCliHelpText(): string {
+  const version = resolveInstalledCodelarkVersion();
   return [
-    'CodeLark 本地桥接服务',
+    `CodeLark${version ? ` v${version}` : ''} 本地桥接服务`,
     '',
     '用法:',
     `  ${PRIMARY_CLI_NAME}                         打开本地工作台，并启动 Bridge`,
@@ -227,6 +230,7 @@ export function buildCliHelpText(): string {
     '  autostart install                   安装 Windows Bridge 开机启动任务',
     '  autostart uninstall                 移除 Windows Bridge 开机启动任务',
     '  uninstall                           停止服务并安排 npm uninstall -g codelark',
+    '  -v, --version                       显示 CodeLark 版本',
     '  help, -h, --help                    显示本帮助',
     '',
     '常用流程:',
@@ -263,6 +267,9 @@ function stripConfigOverrideArgs(argv: string[]): string[] {
 export function parseCliCommand(argv: string[]): ParsedCliCommand {
   const [rawCommand, ...args] = argv;
   if (!rawCommand) return { command: 'default', args: [] };
+  if (rawCommand === '-v' || rawCommand === '--version') {
+    return { command: 'version', args };
+  }
   if (rawCommand === 'help' || rawCommand === '-h' || rawCommand === '--help') {
     return { command: 'help', args };
   }
@@ -382,6 +389,11 @@ async function main(argv = process.argv.slice(2)): Promise<void> {
 
     case 'help': {
       process.stdout.write(buildCliHelpText());
+      return;
+    }
+
+    case 'version': {
+      process.stdout.write(`${resolveInstalledCodelarkVersion() || 'unknown'}\n`);
       return;
     }
 

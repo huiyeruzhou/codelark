@@ -24,6 +24,8 @@ describe('cli entrypoint', () => {
     assert.deepEqual(parseCliCommand(['help']), { command: 'help', args: [] });
     assert.deepEqual(parseCliCommand(['--help']), { command: 'help', args: [] });
     assert.deepEqual(parseCliCommand(['-h']), { command: 'help', args: [] });
+    assert.deepEqual(parseCliCommand(['--version']), { command: 'version', args: [] });
+    assert.deepEqual(parseCliCommand(['-v']), { command: 'version', args: [] });
     assert.equal(parseCliInvocation(['--help']).command, 'help');
     assert.deepEqual(parseCliCommand(['autostart', 'install']), {
       command: 'autostart',
@@ -85,12 +87,14 @@ describe('cli entrypoint', () => {
   it('renders actionable help for common local service flows', () => {
     const help = buildCliHelpText();
 
+    assert.match(help, /CodeLark v\d+\.\d+\.\d+ 本地桥接服务/);
     assert.match(help, /codelark\s+打开本地工作台，并启动 Bridge/);
     assert.match(help, /codelark run\s+显式打开工作台并启动 Bridge/);
     assert.doesNotMatch(help, /codelark open\s+显式打开工作台并启动 Bridge/);
     assert.match(help, /codelark setup\s+配置或重新配置飞书\/Lark 凭据/);
     assert.match(help, /autostart install\s+安装 Windows Bridge 开机启动任务/);
     assert.match(help, /--set path=value/);
+    assert.match(help, /-v, --version\s+显示 CodeLark 版本/);
     assert.match(help, /~\/\.codelark\/config\.toml/);
     assert.match(help, /~\/\.codelark\/logs\//);
   });
