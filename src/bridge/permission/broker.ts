@@ -71,6 +71,7 @@ const codexSelectionActiveByKey = new Map<string, { permissionRequestId: string;
 const codexSelectionAliasesByPrimary = new Map<string, Set<string>>();
 const codexSelectionPrimaryByAlias = new Map<string, string>();
 const codexSelectionKeyByRequestId = new Map<string, string>();
+const codexSelectionSessionByRequestId = new Map<string, string>();
 const CODEX_SELECTION_ACTIVE_TTL_MS = 5 * 60 * 1000;
 const CODEX_SELECTION_PENDING_CALLBACK_TTL_MS = 5 * 60 * 1000;
 
@@ -172,9 +173,13 @@ function cleanupCodexSelectionActive(now = Date.now()): void {
     if (active.expiresAt > now) continue;
     codexSelectionActiveByKey.delete(key);
     codexSelectionKeyByRequestId.delete(active.permissionRequestId);
+    codexSelectionSessionByRequestId.delete(active.permissionRequestId);
     const aliases = codexSelectionAliasesByPrimary.get(active.permissionRequestId);
     if (aliases) {
-      for (const alias of aliases) codexSelectionPrimaryByAlias.delete(alias);
+      for (const alias of aliases) {
+        codexSelectionPrimaryByAlias.delete(alias);
+        codexSelectionSessionByRequestId.delete(alias);
+      }
     }
     codexSelectionAliasesByPrimary.delete(active.permissionRequestId);
   }
@@ -211,17 +216,22 @@ function claimCodexSelectionActiveForward(params: {
 function releaseCodexSelectionActive(permissionRequestId: string): void {
   const aliasPrimary = codexSelectionPrimaryByAlias.get(permissionRequestId);
   if (aliasPrimary) {
+    codexSelectionSessionByRequestId.delete(permissionRequestId);
     codexSelectionPrimaryByAlias.delete(permissionRequestId);
     codexSelectionAliasesByPrimary.get(aliasPrimary)?.delete(permissionRequestId);
     return;
   }
   const primary = permissionRequestId;
+  codexSelectionSessionByRequestId.delete(primary);
   const key = codexSelectionKeyByRequestId.get(primary);
   if (key) codexSelectionActiveByKey.delete(key);
   codexSelectionKeyByRequestId.delete(primary);
   const aliases = codexSelectionAliasesByPrimary.get(primary);
   if (aliases) {
-    for (const alias of aliases) codexSelectionPrimaryByAlias.delete(alias);
+    for (const alias of aliases) {
+      codexSelectionPrimaryByAlias.delete(alias);
+      codexSelectionSessionByRequestId.delete(alias);
+    }
   }
   codexSelectionAliasesByPrimary.delete(primary);
   codexSelectionPrimaryByAlias.delete(permissionRequestId);
@@ -400,6 +410,19 @@ function cancelCodexSelectionWaiters(permissionRequestId: string): void {
   releaseCodexSelectionActive(primary);
 }
 
+export function cancelCodexTuiSelectionWaitersForSession(sessionId: string): number {
+  const requestIds = Array.from(codexSelectionSessionByRequestId.entries())
+    .filter(([, linkedSessionId]) => linkedSessionId === sessionId)
+    .map(([permissionRequestId]) => permissionRequestId);
+  const primaryIds = new Set(requestIds.map((permissionRequestId) => (
+    codexSelectionPrimaryByAlias.get(permissionRequestId) || permissionRequestId
+  )));
+  for (const permissionRequestId of primaryIds) {
+    cancelCodexSelectionWaiters(permissionRequestId);
+  }
+  return primaryIds.size;
+}
+
 function resolveCodexSelectionChoice(permissionRequestId: string, choice: CodexSelectionChoice): boolean {
   const waiterResolved = resolveCodexSelectionWaiter(permissionRequestId, choice);
   const aliases = codexSelectionAliasesByPrimary.get(permissionRequestId);
@@ -531,6 +554,7 @@ export function forwardPermissionRequest(
   const isUpdatePrompt = isCodexUpdatePermission(permissionRequestId, toolName);
   const isSelectionPrompt = isCodexSelectionPermission(permissionRequestId, toolName);
   if (isSelectionPrompt) {
+    if (sessionId) codexSelectionSessionByRequestId.set(permissionRequestId, sessionId);
     const active = claimCodexSelectionActiveForward({
       address,
       sessionId,

@@ -749,6 +749,20 @@ export async function waitForRuntimeTmuxReady(params: {
               selectionPrompt: activeSelectionPrompt,
             };
           }
+          if (coordinated.result.choice === 'not_selection') {
+            transitionRuntimeTmuxReadiness(machine, 'suspended', 'user dismissed a generic selection false positive', {
+              prompt_runtime: activeSelectionPrompt.runtime,
+              prompt_kind: activeSelectionPrompt.kind,
+            });
+            return {
+              ready: false,
+              runtime: params.runtime,
+              commands,
+              lastScreen,
+              sessionExists: true,
+              selectionPrompt: activeSelectionPrompt,
+            };
+          }
           deadline = Date.now() + timeoutMs;
           if (!coordinated.owner) {
             console.log('[tmux-runtime] Runtime tmux selection joined the session lifecycle owner:', {

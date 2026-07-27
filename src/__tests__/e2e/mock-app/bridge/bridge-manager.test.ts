@@ -38,6 +38,7 @@ import { saveStartupNoticeTarget } from '../../../../bridge/host/startup-notice-
 import * as router from '../../../../bridge/host/channel-router.js';
 import {
   getSessionWorkingDirectory,
+  getSessionRuntimeTmuxSessionName,
   mergeSessionRuntimeUpdates,
   setSessionActiveRuntimeUpdate,
   setSessionClaudeIdentityUpdate,
@@ -45,6 +46,10 @@ import {
   setSessionKimiIdentityUpdate,
 } from '../../../../domain/session-runtime.js';
 import { tmuxCore, type TmuxCore } from '../../../../bridge/tmux/runtime.js';
+import {
+  getRuntimeTmuxInputState,
+  resetRuntimeTmuxInputStatesForTests,
+} from '../../../../bridge/tmux/input-state-machine.js';
 import type { OutboundMessage, OutboundRichCard, PermissionGateway, SendResult } from '../../../../domain/index.js';
 import type { LifecycleHooks, LLMProvider, StreamChatParams } from '../../../../runtime/contracts.js';
 import { writeCodexSessionJsonlFixture } from '../../../helpers/bridge/test-bridge-utils.js';
@@ -329,6 +334,76 @@ describe('bridge-manager mirror tmux selection probe scheduling', () => {
     } finally {
       restoreTmux();
       _testOnly.resetStateForTests();
+    }
+  });
+
+  it('marks a missing mirror tmux lifecycle stopped and does not capture it again', async () => {
+    fs.rmSync(DATA_DIR, { recursive: true, force: true });
+    fs.rmSync(CONFIG_TOML_PATH, { force: true });
+    const store = new JsonFileStore(makeSettings());
+    initBridgeContext({
+      store,
+      llm: noopLlm,
+      permissions: noopPermissions,
+      lifecycle: noopLifecycle,
+    });
+    _testOnly.resetStateForTests();
+    resetRuntimeTmuxInputStatesForTests();
+
+    const state = (globalThis as unknown as Record<string, any>).__bridge_manager__;
+    const address = { channelType: 'feishu-default', chatId: 'chat-missing-mirror-tmux' } as const;
+    const binding = router.createBinding(address, '/tmp/missing-mirror-tmux');
+    const threadId = '019f0000-0000-7000-8000-000000000099';
+    const tmuxSessionName = 'missing-codex-mirror';
+    store.updateSessionCodexThreadId(binding.bridgeSessionId, threadId);
+    store.updateSession(binding.bridgeSessionId, {
+      runtime: { general: { tmuxSessionName } },
+    });
+    createConfigService({ migrate: false, env: {} }).set(
+      { kind: 'session', sessionId: binding.bridgeSessionId },
+      { runtime: { codex: { provider: 'tmux' } } },
+    );
+    const subscription = createMirrorSubscription({
+      bindingId: binding.id,
+      sessionId: binding.bridgeSessionId,
+      channelType: address.channelType,
+      chatId: address.chatId,
+      threadId,
+      filePath: '/tmp/missing-mirror-tmux.jsonl',
+      lastDeliveredAt: null,
+      activityTier: 'hot',
+    });
+    state.mirrorSubscriptions.set(binding.id, subscription);
+
+    let captureCalls = 0;
+    let existenceCalls = 0;
+    const restoreTmux = patchTmuxCore({
+      capturePane: async () => {
+        captureCalls += 1;
+        throw new Error(`can't find session: ${tmuxSessionName}`);
+      },
+      hasSession: async (name) => {
+        existenceCalls += 1;
+        return { exists: false, command: `tmux has-session -t ${name}` };
+      },
+    });
+
+    try {
+      await _testOnly.probeMirrorTmuxSelectionPrompt(subscription, 10_000);
+      await _testOnly.probeMirrorTmuxSelectionPrompt(subscription, 20_000);
+
+      assert.equal(captureCalls, 1);
+      assert.equal(existenceCalls, 1);
+      assert.equal(
+        getRuntimeTmuxInputState('codex', tmuxSessionName).state,
+        'stopped',
+      );
+      assert.equal(getSessionRuntimeTmuxSessionName(store.getSession(binding.bridgeSessionId)), undefined);
+      assert.equal(store.getSession(binding.bridgeSessionId)?.health_status, 'failed');
+    } finally {
+      restoreTmux();
+      _testOnly.resetStateForTests();
+      resetRuntimeTmuxInputStatesForTests();
     }
   });
 });
@@ -823,7 +898,6 @@ describe('bridge-manager resolveCommandAlias', () => {
       ['/net on', 'command:network'],
       ['/model gpt-5.4', 'command:model'],
       ['/cd ~/work', 'command:cd'],
-      ['/provider tmux', 'command:provider'],
       ['/t rename 新标题', 'command:t:rename'],
       ['/t unbind', 'command:t:unbind'],
       ['/t 1', 'command:thread'],
@@ -834,6 +908,17 @@ describe('bridge-manager resolveCommandAlias', () => {
         blocksConversation: true,
       });
     }
+
+    assert.equal(_testOnly.adapterSessionLane(inbound('/provider tmux') as any, 'command'), null);
+    assert.deepEqual(_testOnly.adapterImmediateLane(inbound('/provider tmux') as any, 'command'), {
+      laneKey: `job:provider-tmux:${address.channelType}:${address.chatId}`,
+      laneKind: 'job',
+      jobKind: 'command:provider-tmux',
+      waitForConversationBarrier: false,
+      blocksConversation: false,
+      serialize: true,
+      blocksRouting: true,
+    });
 
     assert.deepEqual(_testOnly.adapterSessionLane(inbound('/tmux hello') as any, 'command'), {
       sessionId: binding.bridgeSessionId,

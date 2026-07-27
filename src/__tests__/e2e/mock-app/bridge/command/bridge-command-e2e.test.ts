@@ -22,7 +22,7 @@ import { computeKimiWorkspaceDirName, isArchivedKimiSession } from '../../../../
 import { _testOnly, registerAdapter } from '../../../../../bridge/host/manager.js';
 import { createMirrorSubscription } from '../../../../../bridge/mirror/subscription-state.js';
 import { listEveryTasks } from '../../../../../bridge/automation/every-tasks.js';
-import { buildCommandCallbackData } from '../../../../../bridge/command/callbacks.js';
+import { buildCommandCallbackData, parseCommandCallbackData } from '../../../../../bridge/command/callbacks.js';
 import { LARGE_FILE_UPLOAD_THRESHOLD_BYTES } from '../../../../../bridge/command/file-upload-confirmations.js';
 import {
   getSessionActiveRuntime,
@@ -2211,6 +2211,42 @@ describe('bridge command e2e', () => {
     assert.match(adapter.sent.at(-1)?.text || '', /在当前聊天上下文创建一个新的对话/);
     assert.match(adapter.sent.at(-1)?.text || '', /\/t.*重新附加到之前的对话/s);
     assert.doesNotMatch(adapter.sent.at(-1)?.text || '', /会创建一个新的群聊/);
+  });
+
+  it('rejects a stale clear confirmation after the chat is rebound', async () => {
+    const store = initBridgeTestContext({ dynamicSettings: true });
+    const adapter = new RecordingAdapter();
+    const address = { channelType: 'feishu', chatId: 'chat-clear-stale-card', chatKind: 'group' } as const;
+    const oldWorkDir = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-clear-stale-old-'));
+    const nextWorkDir = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-clear-stale-next-'));
+    const { binding } = createExistingChannelChat(store, address, {
+      workDir: oldWorkDir,
+      name: '旧对话',
+    });
+    store.updateSession(binding.bridgeSessionId, {
+      runtime_status: 'running',
+      health_status: 'running_active',
+    });
+
+    await _testOnly.handleMessage(adapter, inboundMessage(address, `/clear 新对话 ${nextWorkDir}`, 'incoming-clear-stale-prompt'));
+    const staleCallback = adapter.sent.at(-1)?.richCard?.actions?.flat()
+      .find((action) => action.text === '终止并新建')?.callbackData;
+    assert.ok(staleCallback);
+    assert.equal(parseCommandCallbackData(staleCallback)?.scopeSessionId, binding.bridgeSessionId);
+
+    await _testOnly.handleMessage(adapter, inboundMessage(address, `/clear --yes 新对话 ${nextWorkDir}`, 'incoming-clear-stale-rebind'));
+    const rebound = store.getChannelChat(address.channelType, address.chatId);
+    assert.ok(rebound);
+    assert.notEqual(rebound.bridgeSessionId, binding.bridgeSessionId);
+
+    await _testOnly.handleMessage(adapter, {
+      ...inboundMessage(address, '', 'incoming-clear-stale-click'),
+      callbackData: staleCallback,
+      callbackMessageId: 'clear-stale-card',
+    });
+
+    assert.equal(store.getChannelChat(address.channelType, address.chatId)?.bridgeSessionId, rebound.bridgeSessionId);
+    assert.match(adapter.sent.at(-1)?.text || '', /这个按钮对应的会话已不再绑定/);
   });
 
   it('keeps a running attachment unchanged on cancel, then stops before a confirmed /t switch', async () => {

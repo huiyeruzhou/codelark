@@ -94,18 +94,18 @@ flowchart TD
 
 Lane 回答“这条消息要和谁互相等待”。同一条 lane 里的消息按顺序执行；不同 lane 里的消息，默认认为互不影响，可以同时执行。它解决的是并发边界：哪些事情必须排队，哪些事情不应该互相拖慢。
 
-`SessionExecutor` 回答“同一条工作会话里怎么保证一次只跑一个 prompt 或配置变更”。普通 prompt 和 `/provider`、`/model` 这类会改变会话状态的命令进入 `session:<session_id>` 后，还要经过这个会话锁。不同 session 可以并行；同一 session 保持顺序，并维护 queued/running/idle 状态。
+`SessionExecutor` 回答“同一条工作会话里怎么保证一次只跑一个 prompt 或短配置变更”。普通 prompt 和 `/provider sdk`、`/model` 这类能在一个短处理周期内完成的会话变更进入 `session:<session_id>` 后，还要经过这个会话锁。不同 session 可以并行；同一 session 保持顺序，并维护 queued/running/idle 状态。`/provider tmux` 是例外：启动 TUI、readiness 轮询和等待用户选择都属于外部等待，走独立 job lifecycle，不能跨这些等待持有 session lock。
 
 ### Lane 是什么
 
 Lane 可以理解成“等待关系的名字”。调度层会给每条消息一个 lane 名字：名字相同，说明它们碰的是同一块状态，要按顺序来；名字不同，说明它们大概率互不影响，可以并行。
 
-这套模型的重点是“并发可以发生，但只发生在不会破坏语义的地方”。例如两个不同工作会话的 prompt 可以一起跑；同一个工作会话的两个 prompt 必须一个接一个跑；`/stop` 不应该排在长任务后面；`/provider claude` 后面的 prompt 必须等 provider 切换完成。
+这套模型的重点是“并发可以发生，但只发生在不会破坏语义的地方”。例如两个不同工作会话的 prompt 可以一起跑；同一个工作会话的两个 prompt 必须一个接一个跑；`/stop` 不应该排在长任务后面；短 provider 配置变更后的 prompt 必须使用新配置，而 `/provider tmux` 等待用户时又不能挡住 `/clear`。
 
 当前主要有四类 lane：
 
 - `control:*`：控制通道。`/stop`、结构化权限 callback、screen stop callback 走这里。它们的价值是“马上生效”，所以不等普通对话和长任务。
-- `job:*`：长 I/O 通道。`/shell`、`/tmux-screen`、`/pty-screen` 走这里。它们可能跑很久，所以不占住同一 session 的 prompt 队伍；其中 `/tmux-screen`、`/pty-screen` 是监控命令，不等待普通 conversation barrier，避免排在卡住的普通对话后面；`/shell` 等普通 job 仍会先等同一聊天前面的会话配置变更或普通 prompt barrier 完成。
+- `job:*`：长 I/O 通道。`/shell`、`/tmux-screen`、`/pty-screen`、`/provider tmux` 走这里。它们可能跑很久，所以不占住同一 session 的 prompt 队伍；其中 `/tmux-screen`、`/pty-screen` 是监控命令，不等待普通 conversation barrier，避免排在卡住的普通对话后面；`/provider tmux` 也不建立 conversation barrier，允许 `/clear` 抢占并废止尚未完成的旧启动，但会建立仅针对普通消息的 routing barrier，避免下一句话抢跑到旧 Provider。其他普通 job 仍会先等同一聊天前面的会话配置变更或普通 prompt barrier 完成。
 - `chat:<channel>:<chat>`：聊天通道。只读命令、普通 callback、状态查询这类不改 session 状态的交互走这里。`channel` 和 `chat` 的作用是把不同平台、不同群聊或私聊隔开：A 群的状态查询不会挡住 B 群，飞书群聊也不会和别的通道混在一起。
 - `session:<session_id>`：工作会话通道。普通 prompt、会话配置变更、会切换绑定的 callback 走这里。它按 `BridgeSession.id` 区分，而不是按群聊区分，因为多个入口可能绑定同一条本地工作会话；只要它们操作的是同一个 session，就必须保持同一份上下文和配置的顺序。
 
@@ -118,7 +118,7 @@ conversation barrier 是 lane 之上的保护规则，用来处理“这条命�
 直观例子：
 
 ```text
-/provider claude
+/provider sdk
 请继续刚才的任务
 ```
 
@@ -137,6 +137,8 @@ conversation barrier 是 lane 之上的保护规则，用来处理“这条命�
 7. provider 路由根据 session 上的 runtime/provider 设置选择 Codex、Claude 或 Kimi 的具体执行方式。
 8. provider 创建或继续底层 runtime 会话，并把必要身份写回 session。
 9. 主路径把最终文本、卡片、附件等转换为 delivery intent，按 adapter + chat 入有序队列后立即释放 lane；远端 IM ACK、重试和 message id 回填在队列 worker 中完成。
+
+`/provider tmux` 的长启动完成前还必须重新校验聊天仍绑定启动时的 session。若 `/clear` 已经改绑，旧启动只能清理自己创建的 tmux，不能把 provider 或 runtime identity 写回旧 session，也不能影响新 session。
 
 这里的“有序”只约束同一 adapter/chat 的同类队列。普通回复与交互卡片使用独立 queue class，确认卡、按钮和 stream finalize 不会被前面的慢普通消息挡住；各自内部仍保序。CardKit create → send、stream finalize → fallback 回复、附件 caption → 附件等存在数据依赖的动作留在同一个 worker job 内串行；不同聊天互不等待。session/chat 主 lane 禁止等待普通 reply、权限/选择卡、reaction、callback answer、CardKit create/update/finalize、群名同步或全局 mirror reconcile 的远端回执。adapter 入站阶段也遵循同一边界：正文、引用和附件等构造内部消息必需的数据可以等待，兼容提示和云文档群转发 notice 必须后台启动或入 delivery 队列后先放行内部消息；slash/控制命令在进入命令处理时添加的 Get，以及 tmux prompt 提交成功后添加的 Get，都只做异步确认。权限卡的 `message_id` 与 permission link 在 delivery receipt continuation 中回填；callback 先到时由 pending-callback 状态在 link 建立后对账，投递最终失败则 fail-closed 结束 pending permission 和 selection waiter。`/new` 必须等待建群结果才能取得 chat id，但文本命令和卡片 command callback 都被隔离到不阻塞 conversation 的 long-I/O job lane；远端完成后才提交新群 binding，不能把这段等待放回当前聊天的 session/chat 主 lane。
 

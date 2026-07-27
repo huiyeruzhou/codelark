@@ -95,6 +95,102 @@ describe('bridge-adapter-runtime', () => {
     assert.deepEqual(locked, ['session-new']);
   });
 
+  it('lets clear preempt a provider tmux startup waiting for external input', async () => {
+    const state = {
+      adapters: new Map(),
+      adapterMeta: new Map(),
+      invalidAdapters: new Map(),
+      loopAborts: new Map(),
+      running: true,
+    };
+    const started: string[] = [];
+    const locked: string[] = [];
+    let activeSessionId = 'bridge-session-a';
+    let releaseProvider!: () => void;
+    const providerDone = new Promise<void>((resolve) => {
+      releaseProvider = resolve;
+    });
+    const runtime = createAdapterRuntime(() => state, {
+      notifyAdapterSetChanged: () => {},
+      handleMessage: async (_adapter, msg) => {
+        started.push(msg.messageId);
+        if (msg.messageId === 'msg-provider') await providerDone;
+        if (msg.messageId === 'msg-clear') activeSessionId = 'bridge-session-b';
+      },
+      processWithSessionLock: async (sessionId, fn) => {
+        locked.push(sessionId);
+        await fn();
+      },
+      isCommandMessage: (msg) => msg.text.startsWith('/'),
+      resolveSessionIdForMessage: () => activeSessionId,
+      getImmediateLane: (msg) => msg.text === '/provider tmux'
+        ? {
+            laneKey: `job:provider-tmux:${msg.address.channelType}:${msg.address.chatId}`,
+            laneKind: 'job',
+            jobKind: 'command:provider-tmux',
+            waitForConversationBarrier: false,
+            blocksConversation: false,
+            serialize: true,
+            blocksRouting: true,
+          }
+        : null,
+      getSessionLane: (msg, category) => msg.text === '/clear next'
+        ? {
+            sessionId: 'bridge-session-a',
+            jobKind: 'command:clear',
+            blocksConversation: true,
+          }
+        : category === 'regular'
+          ? {
+              sessionId: activeSessionId,
+              jobKind: 'interactive-turn',
+              blocksConversation: true,
+            }
+        : null,
+    });
+    let running = true;
+    const messages = [
+      {
+        messageId: 'msg-provider',
+        address: { channelType: 'feishu-default', chatId: 'chat-a' },
+        text: '/provider tmux',
+        timestamp: Date.now(),
+      },
+      {
+        messageId: 'msg-clear',
+        address: { channelType: 'feishu-default', chatId: 'chat-a' },
+        text: '/clear next',
+        timestamp: Date.now(),
+      },
+      {
+        messageId: 'msg-regular-after-clear',
+        address: { channelType: 'feishu-default', chatId: 'chat-a' },
+        text: 'continue after provider startup',
+        timestamp: Date.now(),
+      },
+    ];
+    const adapter = {
+      channelType: 'feishu-default',
+      provider: 'feishu',
+      isRunning: () => running || messages.length > 0,
+      consumeOne: async () => {
+        const next = messages.shift() || null;
+        if (messages.length === 0) running = false;
+        return next;
+      },
+    };
+
+    runtime.runAdapterLoop(adapter as never);
+    await waitForCondition(() => started.includes('msg-clear'));
+
+    assert.deepEqual(started, ['msg-provider', 'msg-clear']);
+    assert.deepEqual(locked, ['bridge-session-a']);
+    releaseProvider();
+    await waitForCondition(() => started.includes('msg-regular-after-clear'));
+    assert.deepEqual(started, ['msg-provider', 'msg-clear', 'msg-regular-after-clear']);
+    assert.deepEqual(locked, ['bridge-session-a', 'bridge-session-b']);
+  });
+
   it('routes regular messages through the session lock but keeps slash commands inline', async () => {
     const state = {
       adapters: new Map(),

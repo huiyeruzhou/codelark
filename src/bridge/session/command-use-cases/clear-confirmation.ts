@@ -1,7 +1,7 @@
 import type { OutboundRichCard } from '../../../domain/index.js';
 import { buildCommandCallbackData } from '../../command/callbacks.js';
 
-export function buildClearConfirmationCard(commandText: string): OutboundRichCard {
+export function buildClearConfirmationCard(commandText: string, scopeSessionId: string): OutboundRichCard {
   return {
     title: '确认清空当前对话',
     sections: [
@@ -13,11 +13,11 @@ export function buildClearConfirmationCard(commandText: string): OutboundRichCar
       {
         text: '终止并新建',
         type: 'danger',
-        callbackData: buildCommandCallbackData(commandText),
+        callbackData: buildCommandCallbackData(commandText, scopeSessionId),
       },
       {
         text: '取消',
-        callbackData: buildCommandCallbackData('/clear-cancel'),
+        callbackData: buildCommandCallbackData('/clear-cancel', scopeSessionId),
       },
     ]],
     template: 'orange',

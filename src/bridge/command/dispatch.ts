@@ -51,6 +51,7 @@ import {
   currentSessionSettingDefinitions,
   handleSetCommand,
   handleSetFormCommand,
+  SESSION_CONFIG_INHERIT_VALUE,
   setCommandSelectedGroup,
   settingConfigPath,
   settingFormName,
@@ -163,6 +164,7 @@ export interface BridgeCommandDispatchDeps {
   getActiveTask(sessionId: string): { abortController: AbortController } | undefined;
   forceStopSession?(sessionId: string, detail?: string): Promise<boolean>;
   recordInteractiveHealthEnd?(sessionId: string, outcome: 'completed' | 'failed' | 'aborted', detail?: string): void;
+  cancelRuntimeWaits?(sessionId: string): void;
   reconcileMirrorSubscriptions?(): Promise<void>;
   bootstrapCodexThread?: import('./runtime-settings.js').RuntimeSettingsCommandDeps['bootstrapCodexThread'];
   restartKimiTmuxSession?: import('./runtime-settings.js').RuntimeSettingsCommandDeps['restartKimiTmuxSession'];
@@ -249,7 +251,10 @@ function currentSettingFormValue(formValue: Record<string, unknown>, definition:
   ];
   for (const key of keys) {
     const rawValue = formValue[key];
-    if (typeof rawValue === 'string') return rawValue.trim();
+    if (typeof rawValue === 'string') {
+      const normalized = rawValue.trim();
+      return normalized === SESSION_CONFIG_INHERIT_VALUE ? '' : normalized;
+    }
   }
   return undefined;
 }

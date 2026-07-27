@@ -154,11 +154,14 @@ export async function handleClearSessionCommand(options: {
         ],
         options.markdown,
       ),
-      richCard: buildClearConfirmationCard(confirmedCommand),
+      richCard: buildClearConfirmationCard(confirmedCommand, previousBinding.bridgeSessionId),
     };
   }
 
   clearPendingClearConfirmation(options.msg.address);
+  if (previousBinding) {
+    options.deps.cancelRuntimeWaits?.(previousBinding.bridgeSessionId);
+  }
   if (previousBinding && runningReasons.length > 0) {
     const detail = '用户确认 /clear，终止当前任务并新建 BridgeSession。';
     if (options.deps.forceStopSession) {

@@ -16,6 +16,7 @@ import { JsonFileStore } from '../../../../storage/json-store.js';
 import { initBridgeContext } from '../../../../bridge/host/context.js';
 import { handleBridgeCommand as handleBridgeCommandWithoutDeliveryWait } from '../../../../bridge/command/index.js';
 import { _testOnlyWaitForDeliveryQueuesForTests } from '../../../../channels/delivery/deliver.js';
+import { buildRichCardContent } from '../../../../channels/feishu/markdown.js';
 import { _testOnly as bridgeManagerTestOnly, registerAdapter } from '../../../../bridge/host/manager.js';
 import {
   resolveClaudeRuntimeConfig,
@@ -2355,11 +2356,11 @@ describe('command-dispatch', () => {
     const config = createConfigService({ migrate: false, env: {} });
     config.set({ kind: 'home' }, {
       session: { tmuxCaptureLines: 80 },
-      runtime: { codex: { model: 'home-model' } },
+      runtime: { codex: { model: 'home-model', sandboxMode: 'workspace-write' } },
     });
     config.set({ kind: 'session', sessionId: binding.bridgeSessionId }, {
       session: { tmuxCaptureLines: 120 },
-      runtime: { codex: { model: 'session-model' } },
+      runtime: { codex: { model: 'session-model', sandboxMode: 'read-only' } },
     });
     const deps = {
       getActiveTask: () => undefined,
@@ -2423,6 +2424,46 @@ describe('command-dispatch', () => {
     assert.equal(config.get('runtime.codex.model', scope), 'home-model');
     assert.equal(sent.at(-1)?.richCard?.form?.extraInputs?.find((input: any) => input.elementId === 'defaultModel')?.defaultValue, '');
     assert.match(sent.at(-1)?.richCard?.form?.extraInputs?.find((input: any) => input.elementId === 'defaultModel')?.placeholder || '', /当前：home-model/);
+
+    await handleBridgeCommand(adapter, {
+      address,
+      text: '/current-runtime codex',
+      messageId: 'current-runtime-codex-inherit-card',
+    } as any, '/current-runtime codex', deps);
+    const codexCard = sent.at(-1)?.richCard as OutboundRichCard;
+    const feishuCard = JSON.parse(buildRichCardContent(codexCard, address.chatId)) as any;
+    const feishuForm = feishuCard.body.elements.find((element: any) => element.tag === 'form');
+    const sandboxSelect = feishuForm.elements.find((element: any) => (
+      element.tag === 'select_static' && element.name === 'cdx_sandbox'
+    ));
+    const inheritOption = sandboxSelect.options.find((option: any) => option.text?.content === '跟随上层配置');
+    assert.ok(inheritOption?.value);
+    assert.notEqual(inheritOption.value, '跟随上层配置');
+    assert.equal(sandboxSelect.initial_option, 'read-only');
+
+    await handleBridgeCommand(adapter, {
+      address,
+      text: '/current-config codex',
+      messageId: 'current-runtime-codex-inherit-submit',
+      raw: {
+        event: {
+          context: { open_message_id: 'reply-current-fallback' },
+          action: { form_value: { cdx_sandbox: inheritOption.value } },
+        },
+      },
+    } as any, '/current-config codex', deps);
+    assert.equal(config.resolve('runtime.codex.sandboxMode', scope).source, 'home');
+    assert.equal(config.get('runtime.codex.sandboxMode', scope), 'workspace-write');
+    assert.match(sent.at(-1)?.text || '', /已回退上层配置/);
+    const inheritedFeishuCard = JSON.parse(buildRichCardContent(sent.at(-1)?.richCard, address.chatId)) as any;
+    const inheritedFeishuForm = inheritedFeishuCard.body.elements.find((element: any) => element.tag === 'form');
+    const inheritedSandboxSelect = inheritedFeishuForm.elements.find((element: any) => (
+      element.tag === 'select_static' && element.name === 'cdx_sandbox'
+    ));
+    const selectedInheritOption = inheritedSandboxSelect.options.find((option: any) => (
+      option.text?.content === '跟随上层配置'
+    ));
+    assert.equal(inheritedSandboxSelect.initial_option, selectedInheritOption.value);
   });
 
   it('reads Claude Code JSONL for /t, /current, and /his on Claude runtime sessions', async () => {
@@ -4655,6 +4696,74 @@ enabled = true
     assert.equal(reconcileStarted, true);
     assert.match(sent.at(-1)?.text || '', /已切换 Kimi Provider/);
     reconcile.resolve();
+  });
+
+  it('does not let a delayed provider tmux startup write back after clear rebinds the chat', async () => {
+    const store = initTestContext();
+    const sent: any[] = [];
+    const adapter = createGroupCapableAdapter({ sent });
+    const address = { channelType: 'feishu', chatId: 'chat-provider-stale-after-clear', chatKind: 'group' as const } as const;
+    const session = store.createSession('provider-stale-after-clear', 'test-model');
+    store.updateSession(session.id, {
+      runtime: {
+        activeRuntime: 'kimi',
+        kimi: { sessionId: 'session_before_clear', cwd: '/tmp/provider-before-clear' },
+      },
+    });
+    store.upsertChannelChat({
+      channelType: address.channelType,
+      chatId: address.chatId,
+      chatKind: address.chatKind,
+      bridgeSessionId: session.id,
+    });
+    const restartStarted = createDeferred<void>();
+    const releaseRestart = createDeferred<void>();
+    const cancelledRuntimeWaits: string[] = [];
+    const deps = {
+      getActiveTask: () => undefined,
+      diagnoseSessionHealth: async () => null,
+      diagnoseAllActiveSessions: async () => [],
+      cancelRuntimeWaits: (sessionId: string) => cancelledRuntimeWaits.push(sessionId),
+      reconcileMirrorSubscriptions: async () => {},
+      restartKimiTmuxSession: async () => {
+        restartStarted.resolve();
+        await releaseRestart.promise;
+        return {
+          sessionName: `clk-kimi-${session.id}`,
+          targetPane: `clk-kimi-${session.id}:0.0`,
+          sessionId: 'session_started_too_late',
+          cwd: '/tmp/provider-started-too-late',
+          nextOffset: 0,
+          existed: false,
+        };
+      },
+    };
+
+    const provider = handleBridgeCommand(
+      adapter,
+      { address, text: '/p tmux', messageId: 'incoming-provider-stale-start' } as any,
+      '/p tmux',
+      deps,
+    );
+    await restartStarted.promise;
+
+    await handleBridgeCommand(
+      adapter,
+      { address, text: '/clear --yes after-clear', messageId: 'incoming-provider-stale-clear' } as any,
+      '/clear --yes after-clear',
+      deps,
+    );
+    const rebound = store.getChannelChat(address.channelType, address.chatId);
+    assert.ok(rebound);
+    assert.notEqual(rebound.bridgeSessionId, session.id);
+    assert.deepEqual(cancelledRuntimeWaits, [session.id]);
+
+    releaseRestart.resolve();
+    await provider;
+
+    assert.equal(store.getSession(session.id)?.runtime?.kimi?.sessionId, 'session_before_clear');
+    assert.equal(store.getSession(session.id)?.runtime?.kimi?.cwd, '/tmp/provider-before-clear');
+    assert.ok(sent.some((message) => /tmux 启动已取消/.test(message.text || '')));
   });
 
   it('releases command handling before the Feishu reply ACK while preserving chat delivery order', async () => {

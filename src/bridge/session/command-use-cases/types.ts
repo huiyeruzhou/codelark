@@ -6,6 +6,7 @@ export interface SessionCommandDeps {
   getActiveTask(sessionId: string): { abortController: AbortController } | undefined;
   forceStopSession?(sessionId: string, detail?: string): Promise<boolean>;
   recordInteractiveHealthEnd?(sessionId: string, outcome: 'completed' | 'failed' | 'aborted', detail?: string): void;
+  cancelRuntimeWaits?(sessionId: string): void;
   reconcileMirrorSubscriptions?(): Promise<void>;
   onBindingRemoved?(binding: ChannelChat): void;
   threadCardRefreshScope?: ThreadCardScope | null;

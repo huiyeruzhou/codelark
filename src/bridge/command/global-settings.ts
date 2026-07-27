@@ -14,6 +14,7 @@ import { configFields, type ConfigPath } from '../../configuration/fields.js';
 
 export type SettingGroupKey = 'runtime' | 'runtime.codex' | 'runtime.claude' | 'runtime.kimi' | 'bridge' | 'channels.feishu';
 export type CurrentSessionConfigSection = 'common' | 'codex' | 'claude' | 'kimi';
+export const SESSION_CONFIG_INHERIT_VALUE = 'clk:config:inherit';
 type SettingControl = 'select' | 'input';
 
 interface SettingGroupDefinition {
@@ -865,9 +866,11 @@ export function settingSessionFormSelect(
     formName: settingFormName(definition),
     label: settingFormLabel(definition),
     placeholder: overridden ? value : `跟随上层配置（当前：${value}）`,
-    selectedCallbackData: overridden && value !== 'auto' ? value : '',
+    selectedCallbackData: overridden && value !== 'auto'
+      ? value
+      : SESSION_CONFIG_INHERIT_VALUE,
     options: [
-      { text: '跟随上层配置', callbackData: '' },
+      { text: '跟随上层配置', callbackData: SESSION_CONFIG_INHERIT_VALUE },
       ...(definition.options || []),
     ],
   };

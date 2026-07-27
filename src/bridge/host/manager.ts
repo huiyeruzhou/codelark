@@ -1200,6 +1200,42 @@ async function probeMirrorTmuxSelectionPrompt(subscription: BridgeMirrorSubscrip
   try {
     capture = await tmuxCore.capturePane(targetPane, 80);
   } catch (error) {
+    const runtime = getSessionActiveRuntime(session) === 'claude' ? 'claude' : 'codex';
+    try {
+      const existence = await tmuxCore.hasSession(tmuxSessionName);
+      if (!existence.exists) {
+        transitionRuntimeTmuxInputState(
+          runtime,
+          tmuxSessionName,
+          'stopped',
+          'mirror probe confirmed the provider-owned tmux session is missing',
+        );
+        tmuxSelectionPromptFollowupUntil.delete(subscription.sessionId);
+        tmuxSelectionPromptMonitors.delete(subscription.sessionId);
+        const latestSession = getBridgeContext().store.getSession(subscription.sessionId);
+        if (getSessionRuntimeTmuxSessionName(latestSession) === tmuxSessionName) {
+          getBridgeContext().store.updateSession(subscription.sessionId, clearSessionTmuxBindingUpdate());
+          SESSION_HEALTH_RUNTIME.recordInteractiveEnd(
+            subscription.sessionId,
+            'failed',
+            `${runtime} tmux Provider session ${tmuxSessionName} is missing; mirror probing stopped.`,
+          );
+        }
+        console.warn('[bridge-manager] Mirror tmux selection probe marked missing lifecycle stopped:', {
+          event: 'tmux.mirror_probe.session_missing',
+          session_id: subscription.sessionId,
+          tmux_session: tmuxSessionName,
+          command: existence.command,
+        });
+        return;
+      }
+    } catch (existenceError) {
+      console.warn('[bridge-manager] Mirror tmux selection probe could not confirm session existence:', {
+        session_id: subscription.sessionId,
+        tmux_session: tmuxSessionName,
+        error: describeUnknownError(existenceError),
+      });
+    }
     console.warn('[bridge-manager] Mirror tmux selection probe failed:', {
       session_id: subscription.sessionId,
       tmux_session: tmuxSessionName,
@@ -2295,6 +2331,20 @@ function adapterImmediateLane(msg: InboundMessage, category: 'channel-event' | '
     : category === 'callback' && msg.callbackData
       ? parseCommandCallbackData(msg.callbackData)?.commandText
       : undefined;
+  if (immediateJobCommandText) {
+    const { resolvedCommand, args } = splitInboundCommandText(immediateJobCommandText);
+    if (resolvedCommand === '/provider' && args.split(/\s+/)[0]?.toLowerCase() === 'tmux') {
+      return {
+        laneKey: `job:provider-tmux:${msg.address.channelType}:${msg.address.chatId}`,
+        laneKind: 'job',
+        jobKind: 'command:provider-tmux',
+        waitForConversationBarrier: false,
+        blocksConversation: false,
+        serialize: true,
+        blocksRouting: true,
+      };
+    }
+  }
   if (immediateJobCommandText && isReadOnlyOrLongIoCommandText(immediateJobCommandText)) {
     const resolvedCommand = resolveInboundCommandText(immediateJobCommandText);
     const isScreenMonitor = resolvedCommand === '/tmux-screen' || resolvedCommand === '/pty-screen';
@@ -2326,6 +2376,8 @@ function adapterSessionLane(msg: InboundMessage, category: 'channel-event' | 'ca
   }
 
   if (category === 'command') {
+    const { resolvedCommand, args } = splitInboundCommandText(msg.text);
+    if (resolvedCommand === '/provider' && args.split(/\s+/)[0]?.toLowerCase() === 'tmux') return null;
     const lane = sessionMutatingCommandLane(msg.text);
     if (!lane) return null;
     const binding = getBridgeContext().store.getChannelChat(msg.address.channelType, msg.address.chatId);
@@ -2334,6 +2386,11 @@ function adapterSessionLane(msg: InboundMessage, category: 'channel-event' | 'ca
   }
 
   if (category === 'callback' && msg.callbackData) {
+    const callbackCommand = parseCommandCallbackData(msg.callbackData)?.commandText;
+    if (callbackCommand) {
+      const { resolvedCommand, args } = splitInboundCommandText(callbackCommand);
+      if (resolvedCommand === '/provider' && args.split(/\s+/)[0]?.toLowerCase() === 'tmux') return null;
+    }
     const lane = sessionMutatingCallbackLane(msg.callbackData);
     if (!lane) return null;
     if (lane.scopeSessionId) {
@@ -4555,6 +4612,9 @@ async function handleCommand(
     getActiveTask: (sessionId) => INTERACTIVE_RUNTIME.getActiveTask(sessionId),
     forceStopSession: (sessionId, detail) => INTERACTIVE_RUNTIME.forceStopSession(sessionId, detail),
     recordInteractiveHealthEnd: recordInteractiveHealthEndAndScheduleThen,
+    cancelRuntimeWaits: (sessionId) => {
+      broker.cancelCodexTuiSelectionWaitersForSession(sessionId);
+    },
     reconcileMirrorSubscriptions,
     diagnoseSessionHealth: (sessionId) => SESSION_HEALTH_RUNTIME.diagnoseSessionHealth(sessionId),
     diagnoseAllActiveSessions: () => SESSION_HEALTH_RUNTIME.diagnoseAllActiveSessions(),
@@ -4721,6 +4781,7 @@ export const _testOnly = {
   formatRuntimeTerminalDetail,
   sessionSupportsTmuxSelectionPromptProbe,
   shouldProbeMirrorTmuxSelectionPrompt,
+  probeMirrorTmuxSelectionPrompt,
   requestTmuxSelectionPromptFollowupProbe,
   formatBindingChatLabel,
   formatMirrorUserText,

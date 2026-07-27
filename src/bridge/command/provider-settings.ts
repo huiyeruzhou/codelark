@@ -20,6 +20,7 @@ import { restartKimiTmuxInputSession } from '../../runtime/kimi/tmux-provider.js
 import {
   CodexResumeTmuxLaunchError,
   claudeTmuxSessionName,
+  cleanupRuntimeTmuxSession,
   codexTmuxSessionName,
   startRuntimeTmuxSession,
 } from '../tmux/runtime.js';
@@ -90,6 +91,37 @@ function claudeProviderSwitchNote(provider: RuntimeProviderChoice): string {
     case 'pty':
       return '之后的普通消息会使用 Claude Code pty/mirror 路径；SDK/tmux session 不会自动关闭。';
   }
+}
+
+async function cancelStaleTmuxProviderStart(options: {
+  store: BridgeStore;
+  msg: InboundMessage;
+  sessionId: string;
+  runtime: 'codex' | 'claude' | 'kimi';
+  tmuxSessionName?: string;
+  markdown: boolean;
+}): Promise<string | null> {
+  const currentBinding = options.store.getChannelChat(options.msg.address.channelType, options.msg.address.chatId);
+  if (currentBinding?.bridgeSessionId === options.sessionId) return null;
+  const cleanup = options.tmuxSessionName
+    ? await cleanupRuntimeTmuxSession({
+        runtime: options.runtime,
+        sessionName: options.tmuxSessionName,
+      })
+    : null;
+  return buildCommandFields(
+    'tmux 启动已取消',
+    options.tmuxSessionName ? [['tmux session', options.tmuxSessionName]] : [],
+    [
+      '启动期间当前聊天已切换到其他会话，因此没有写入旧会话的 Provider 配置。',
+      ...(cleanup
+        ? [cleanup.error
+            ? `旧 tmux 清理失败：${cleanup.error}`
+            : '已清理这次启动创建的旧 tmux 会话。']
+        : []),
+    ],
+    options.markdown,
+  );
 }
 
 function truncateForCommandResponse(value: string | undefined, limit = 500): string | undefined {
@@ -218,10 +250,28 @@ export async function handleProviderCommand(options: {
           waitReady: true,
         });
       } catch (error) {
+        const staleStart = await cancelStaleTmuxProviderStart({
+          store: options.store,
+          msg: options.msg,
+          sessionId: session.id,
+          runtime: 'claude',
+          tmuxSessionName,
+          markdown: options.markdown,
+        });
+        if (staleStart) return staleStart;
         const unavailable = formatTmuxProviderUnavailable(error);
         if (unavailable) return unavailable;
         throw error;
       }
+      const staleStart = await cancelStaleTmuxProviderStart({
+        store: options.store,
+        msg: options.msg,
+        sessionId: session.id,
+        runtime: 'claude',
+        tmuxSessionName,
+        markdown: options.markdown,
+      });
+      if (staleStart) return staleStart;
       options.store.updateSession(session.id, setSessionClaudeTmuxProviderUpdate({
         tmuxSessionName,
         autoEnter: true,
@@ -286,14 +336,37 @@ export async function handleProviderCommand(options: {
     const tmuxSessionName = `clk-kimi-${session.id}`;
     await options.deps.notifyBackgroundOperation?.(`正在重新启动 tmux 后台会话 \`${tmuxSessionName}\` 并运行 Kimi Code TUI。`);
     const kimiConfig = resolveKimiRuntimeConfig(session, binding);
-    const prepared = await (options.deps.restartKimiTmuxSession || restartKimiTmuxInputSession)({
-      prompt: '',
+    let prepared: Awaited<ReturnType<typeof restartKimiTmuxInputSession>>;
+    try {
+      prepared = await (options.deps.restartKimiTmuxSession || restartKimiTmuxInputSession)({
+        prompt: '',
+        sessionId: session.id,
+        runtime: 'kimi',
+        kimiSessionId: getSessionKimiSessionId(session),
+        workingDirectory: getSessionWorkingDirectory(session),
+        model: kimiConfig.model || undefined,
+      });
+    } catch (error) {
+      const staleStart = await cancelStaleTmuxProviderStart({
+        store: options.store,
+        msg: options.msg,
+        sessionId: session.id,
+        runtime: 'kimi',
+        tmuxSessionName,
+        markdown: options.markdown,
+      });
+      if (staleStart) return staleStart;
+      throw error;
+    }
+    const staleStart = await cancelStaleTmuxProviderStart({
+      store: options.store,
+      msg: options.msg,
       sessionId: session.id,
       runtime: 'kimi',
-      kimiSessionId: getSessionKimiSessionId(session),
-      workingDirectory: getSessionWorkingDirectory(session),
-      model: kimiConfig.model || undefined,
+      tmuxSessionName: prepared.sessionName,
+      markdown: options.markdown,
     });
+    if (staleStart) return staleStart;
     const identityUpdate = setSessionKimiIdentityUpdate(prepared.sessionId, prepared.cwd);
     options.store.updateSession(session.id, {
       ...identityUpdate,
@@ -382,6 +455,14 @@ export async function handleProviderCommand(options: {
       modelReasoningEffort,
       skipGitRepoCheck,
     });
+    const staleStart = await cancelStaleTmuxProviderStart({
+      store: options.store,
+      msg: options.msg,
+      sessionId: session.id,
+      runtime: 'codex',
+      markdown: options.markdown,
+    });
+    if (staleStart) return staleStart;
     didBootstrapThread = true;
     options.store.updateSessionCodexThreadId(session.id, threadId);
   }
@@ -434,6 +515,15 @@ export async function handleProviderCommand(options: {
       onStatus: options.deps.notifyBackgroundOperation,
     });
   } catch (error) {
+    const staleStart = await cancelStaleTmuxProviderStart({
+      store: options.store,
+      msg: options.msg,
+      sessionId: session.id,
+      runtime: 'codex',
+      tmuxSessionName,
+      markdown: options.markdown,
+    });
+    if (staleStart) return staleStart;
     if (error instanceof CodexResumeTmuxLaunchError) {
       return formatCodexTmuxLaunchFailure(error, currentProvider, options.markdown);
     }
@@ -441,6 +531,15 @@ export async function handleProviderCommand(options: {
     if (unavailable) return unavailable;
     throw error;
   }
+  const staleStart = await cancelStaleTmuxProviderStart({
+    store: options.store,
+    msg: options.msg,
+    sessionId: session.id,
+    runtime: 'codex',
+    tmuxSessionName,
+    markdown: options.markdown,
+  });
+  if (staleStart) return staleStart;
   options.store.updateSession(session.id, setSessionCodexTmuxProviderUpdate({
     tmuxSessionName,
     autoEnter: true,

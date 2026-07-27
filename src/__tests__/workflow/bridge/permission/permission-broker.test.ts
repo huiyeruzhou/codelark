@@ -3,6 +3,7 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
+  cancelCodexTuiSelectionWaitersForSession,
   claimCodexSelectionCallback,
   forwardPermissionRequest as forwardPermissionRequestWithoutDeliveryWait,
   handlePermissionCallback,
@@ -22,6 +23,31 @@ async function forwardPermissionRequest(
 }
 
 describe('permission-broker', () => {
+  it('cancels an outstanding Codex selection waiter when clear replaces its session', async () => {
+    initBridgeTestContext();
+    const adapter = new RecordingAdapter();
+    const address = { channelType: 'feishu', chatId: 'chat-selection-clear-cancel' } as const;
+    const permissionRequestId = 'codex-selection:generic:provider-startup:session-clear-cancel:1';
+    const choice = waitForCodexTuiSelectionPermission(permissionRequestId, 10_000);
+
+    await forwardPermissionRequest(
+      adapter,
+      address,
+      permissionRequestId,
+      'Codex TUI Selection Prompt',
+      {
+        provider: 'tmux',
+        promptKind: 'generic',
+        choices: [{ choice: 'option_1', label: 'Resume', selected: true }],
+      },
+      'session-clear-cancel',
+    );
+
+    assert.equal(cancelCodexTuiSelectionWaitersForSession('session-clear-cancel'), 1);
+    assert.equal(await choice, null);
+    assert.equal(cancelCodexTuiSelectionWaitersForSession('session-clear-cancel'), 0);
+  });
+
   it('returns before the permission card acknowledgement and links the message from the receipt', async () => {
     const store = initBridgeTestContext();
     const adapter = new RecordingAdapter();

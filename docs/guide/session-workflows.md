@@ -107,7 +107,7 @@ Codex 支持 `sdk`、`pty`、`tmux`。Claude Code 支持 `tmux`、`pty`、`sdk`�
 
 - 通用配置严格按“对话名称、工作目录、tmux 输出行数”显示；切到该分栏不会改变当前 agent。
 - Codex、Claude Code、Kimi Code 分栏只显示各自的 model、provider、mode、reasoning 等配置，不重复显示通用字段。选择另一个 runtime 分栏会沿用既有行为，切换当前 agent 并刷新卡片。
-- 输入框留空或下拉选择“跟随上层配置”时，只删除当前分栏对应的 session-level 覆盖，立即恢复 home/local/channel 等上层配置的当前有效值；保存一个分栏不会串写其他分栏。
+- 输入框留空或下拉选择“跟随上层配置”时，只删除当前分栏对应的 session-level 覆盖，立即恢复 home/local/channel 等上层配置的当前有效值；保存一个分栏不会串写其他分栏。飞书里用户看到的选项文字始终保留，CardKit 内部使用独立的 inherit value，后端只把该机器值解释为 unset，不能把中文文案交给 sandbox/provider 等枚举写校验。
 
 运行中不能随意切换 runtime/provider。遇到拒绝提示时，先等当前任务结束，或发送 `/stop` 停止当前任务，再切换。
 

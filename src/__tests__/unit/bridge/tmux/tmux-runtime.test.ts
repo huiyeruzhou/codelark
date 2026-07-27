@@ -556,6 +556,55 @@ describe('codex tmux runtime', () => {
     }
   });
 
+  it('stops readiness immediately when the user dismisses a generic selection false positive', async () => {
+    const oldTimeout = process.env.CODELARK_CODEX_RESUME_TMUX_READY_TIMEOUT_MS;
+    const oldPoll = process.env.CODELARK_CODEX_RESUME_TMUX_READY_POLL_MS;
+    try {
+      process.env.CODELARK_CODEX_RESUME_TMUX_READY_TIMEOUT_MS = '500';
+      process.env.CODELARK_CODEX_RESUME_TMUX_READY_POLL_MS = '50';
+      let captureCount = 0;
+      const screen = [
+        'OpenAI Codex',
+        'Resume paused goal?',
+        '› 1. Resume goal',
+        '  2. Leave paused',
+        'Press enter to confirm or esc to cancel',
+      ].join('\n');
+      const core: TmuxCore = {
+        commandPreview: (args) => ['tmux', ...args].join(' '),
+        hasSession: async (name) => ({ exists: true, command: `tmux has-session -t ${name}` }),
+        killSession: async (name) => `tmux kill-session -t ${name}`,
+        listSessions: async () => ({ sessions: [], command: 'tmux list-sessions' }),
+        ensureDetachedSession: async () => ({ existed: false, commands: [] }),
+        capturePane: async () => {
+          captureCount += 1;
+          return { screen, command: 'tmux capture-pane -t codex_not_selection' };
+        },
+        sendActions: async () => {
+          throw new Error('not_selection must not send tmux input');
+        },
+        sendInterrupt: async () => 'tmux send-keys C-c',
+        injectPromptIntoPane: async () => ({ commands: [] }),
+      };
+
+      const result = await waitForRuntimeTmuxReady({
+        runtime: 'codex',
+        sessionName: 'codex_not_selection',
+        core,
+        onSelectionPrompt: () => 'not_selection',
+      });
+
+      assert.equal(result.ready, false);
+      assert.equal(result.selectionPrompt?.runtime, 'codex');
+      assert.equal(captureCount, 1);
+    } finally {
+      if (oldTimeout === undefined) delete process.env.CODELARK_CODEX_RESUME_TMUX_READY_TIMEOUT_MS;
+      else process.env.CODELARK_CODEX_RESUME_TMUX_READY_TIMEOUT_MS = oldTimeout;
+      if (oldPoll === undefined) delete process.env.CODELARK_CODEX_RESUME_TMUX_READY_POLL_MS;
+      else process.env.CODELARK_CODEX_RESUME_TMUX_READY_POLL_MS = oldPoll;
+    }
+  });
+
   it('uses the shared runtime readiness loop to confirm Claude trust prompts', async () => {
     const oldTimeout = process.env.CODELARK_CLAUDE_TMUX_READY_TIMEOUT_MS;
     const oldPoll = process.env.CODELARK_CLAUDE_TMUX_READY_POLL_MS;
