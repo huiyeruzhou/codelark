@@ -54,6 +54,7 @@ export interface ChannelChat {
   chatKind?: ChannelChatKind;
   chatUserId?: string;
   bridgeSessionId: string;
+  codexModelMismatchWarningKey?: string;
   runtimeBridgeSessionIds?: {
     codex?: string;
     claude?: string;

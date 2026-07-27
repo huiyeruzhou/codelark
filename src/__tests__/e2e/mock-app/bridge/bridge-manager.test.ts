@@ -406,6 +406,118 @@ describe('bridge-manager mirror tmux selection probe scheduling', () => {
       resetRuntimeTmuxInputStatesForTests();
     }
   });
+
+  it('warns once when a real Codex resume screen reports a model mismatch', async () => {
+    fs.rmSync(DATA_DIR, { recursive: true, force: true });
+    fs.rmSync(CONFIG_TOML_PATH, { force: true });
+    const store = new JsonFileStore(makeSettings());
+    initBridgeContext({
+      store,
+      llm: noopLlm,
+      permissions: noopPermissions,
+      lifecycle: noopLifecycle,
+    });
+    _testOnly.resetStateForTests();
+
+    const state = (globalThis as unknown as Record<string, any>).__bridge_manager__;
+    const address = { channelType: 'feishu', chatId: 'chat-codex-model-mismatch' } as const;
+    const binding = router.createBinding(address, '/tmp/codex-model-mismatch');
+    const threadId = '019f0000-0000-7000-8000-000000000098';
+    const tmuxSessionName = 'codex-model-mismatch';
+    store.updateSessionCodexThreadId(binding.bridgeSessionId, threadId);
+    store.updateSession(binding.bridgeSessionId, {
+      runtime: { general: { tmuxSessionName } },
+    });
+    createConfigService({ migrate: false, env: {} }).set(
+      { kind: 'session', sessionId: binding.bridgeSessionId },
+      { runtime: { codex: { provider: 'tmux' } } },
+    );
+    const subscription = createMirrorSubscription({
+      bindingId: binding.id,
+      sessionId: binding.bridgeSessionId,
+      channelType: address.channelType,
+      chatId: address.chatId,
+      threadId,
+      filePath: '/tmp/codex-model-mismatch.jsonl',
+      lastDeliveredAt: null,
+      activityTier: 'hot',
+    });
+    const secondBinding = store.upsertChannelChat({
+      channelType: address.channelType,
+      chatId: 'chat-codex-model-mismatch-second',
+      bridgeSessionId: binding.bridgeSessionId,
+    });
+    const secondSubscription = createMirrorSubscription({
+      bindingId: secondBinding.id,
+      sessionId: binding.bridgeSessionId,
+      channelType: address.channelType,
+      chatId: secondBinding.chatId,
+      threadId,
+      filePath: '/tmp/codex-model-mismatch.jsonl',
+      lastDeliveredAt: null,
+      activityTier: 'hot',
+    });
+    state.mirrorSubscriptions.set(binding.id, subscription);
+    state.mirrorSubscriptions.set(secondBinding.id, secondSubscription);
+    const firstAdapter = new MirrorArtifactAdapter();
+    state.adapters.set(address.channelType, firstAdapter);
+    const warningScreen = [
+      'OpenAI Codex',
+      '',
+      '⚠ This session was recorded with model `gpt-5.5-2026-04-24` but is resuming with',
+      '  `gpt-5.6-sol`. Consider switching back to `gpt-5.5-2026-04-24` as it may',
+      '  affect Codex performance.',
+      '',
+      '› ',
+    ].join('\n');
+    const restoreTmux = patchTmuxCore({
+      capturePane: async (target) => ({
+        screen: warningScreen,
+        command: `tmux capture-pane -t ${target}`,
+      }),
+    });
+
+    try {
+      await _testOnly.probeMirrorTmuxSelectionPrompt(subscription, 10_000);
+      await _testOnly.probeMirrorTmuxSelectionPrompt(subscription, 20_000);
+      await _testOnly.probeMirrorTmuxSelectionPrompt(secondSubscription, 10_000);
+      await _testOnly.probeMirrorTmuxSelectionPrompt(secondSubscription, 20_000);
+      await _testOnlyWaitForDeliveryQueuesForTests(firstAdapter);
+
+      assert.equal(firstAdapter.sentMessages.length, 2);
+      assert.deepEqual(
+        firstAdapter.sentMessages.map((message) => message.address.chatId).sort(),
+        [address.chatId, secondBinding.chatId].sort(),
+      );
+      const notice = firstAdapter.sentMessages[0];
+      assert.equal(notice.richCard?.title, 'Codex 恢复模型不一致');
+      assert.equal(notice.richCard?.template, 'orange');
+      assert.match(notice.text, /gpt-5\.5-2026-04-24/);
+      assert.match(notice.text, /gpt-5\.6-sol/);
+      assert.match(notice.text, /\/clear/);
+      assert.equal(
+        store.getChannelChat(address.channelType, address.chatId)?.codexModelMismatchWarningKey,
+        `${binding.bridgeSessionId}\u0000gpt-5.5-2026-04-24\u0000gpt-5.6-sol`,
+      );
+      assert.equal(
+        store.getChannelChat(address.channelType, secondBinding.chatId)?.codexModelMismatchWarningKey,
+        `${binding.bridgeSessionId}\u0000gpt-5.5-2026-04-24\u0000gpt-5.6-sol`,
+      );
+
+      _testOnly.resetStateForTests();
+      const restartedAdapter = new MirrorArtifactAdapter();
+      state.adapters.set(address.channelType, restartedAdapter);
+      state.mirrorSubscriptions.set(binding.id, subscription);
+      state.mirrorSubscriptions.set(secondBinding.id, secondSubscription);
+      await _testOnly.probeMirrorTmuxSelectionPrompt(subscription, 30_000);
+      await _testOnly.probeMirrorTmuxSelectionPrompt(secondSubscription, 30_000);
+      await _testOnlyWaitForDeliveryQueuesForTests(restartedAdapter);
+      assert.equal(restartedAdapter.sentMessages.length, 0);
+    } finally {
+      restoreTmux();
+      _testOnly.resetStateForTests();
+    }
+  });
 });
 
 function installFakeTmux(): { binDir: string; logPath: string } {

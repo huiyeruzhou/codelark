@@ -5,6 +5,7 @@ import { describe, it } from 'node:test';
 import {
   extractCodexTuiErrorMessages,
   findNewCodexTuiErrorMessage,
+  parseCodexTuiModelMismatchWarning,
   parseCodexTuiReconnectSignal,
 } from '../../../../runtime/codex/tui-runtime-signals.js';
 
@@ -23,6 +24,41 @@ describe('Codex TUI runtime signals', () => {
   it('does not mistake prose or a composer prompt for reconnect status', () => {
     assert.equal(parseCodexTuiReconnectSignal('The log says Reconnecting... 1/2.'), null);
     assert.equal(parseCodexTuiReconnectSignal('› Reconnecting... 1/2 是什么意思？'), null);
+  });
+
+  it('parses the Codex resume model mismatch warning without depending on wrapping', () => {
+    assert.deepEqual(parseCodexTuiModelMismatchWarning([
+      '\u001b[33m⚠ This session was recorded with model `gpt-5.5-2026-04-24` but is resuming with\u001b[0m',
+      '  `gpt-5.6-sol`. Consider switching back to `gpt-5.5-2026-04-24` as it may',
+      '  affect Codex performance.',
+    ].join('\n')), {
+      recordedModel: 'gpt-5.5-2026-04-24',
+      resumingModel: 'gpt-5.6-sol',
+    });
+    assert.deepEqual(parseCodexTuiModelMismatchWarning(
+      '⚠ This session was recorded with model `old` but is resuming with `new`. Consider switching back.',
+    ), {
+      recordedModel: 'old',
+      resumingModel: 'new',
+    });
+    assert.deepEqual(parseCodexTuiModelMismatchWarning([
+      '⚠ This session was recorded with model `gpt-5.5-',
+      '  2026-04-24` but is resuming with `gpt-',
+      '  5.6-sol`.',
+    ].join('\n')), {
+      recordedModel: 'gpt-5.5-2026-04-24',
+      resumingModel: 'gpt-5.6-sol',
+    });
+  });
+
+  it('does not mistake user text quoting the model mismatch warning for a TUI warning cell', () => {
+    assert.equal(parseCodexTuiModelMismatchWarning([
+      '› ⚠ This session was recorded with model `old` but is resuming with',
+      '  `new`. 这个是什么意思？',
+    ].join('\n')), null);
+    assert.equal(parseCodexTuiModelMismatchWarning(
+      '日志里出现 This session was recorded with model `old` but is resuming with `new`。',
+    ), null);
   });
 
   it('extracts line-start error markers while preserving arbitrary error text', () => {

@@ -164,6 +164,7 @@ import {
 } from '../../runtime/codex/tmux-provider.js';
 import {
   findNewCodexTuiErrorMessage,
+  parseCodexTuiModelMismatchWarning,
   parseCodexTuiReconnectSignal,
 } from '../../runtime/codex/tui-runtime-signals.js';
 import {
@@ -323,6 +324,7 @@ interface CodexTuiReconnectMonitor {
 }
 
 const codexTuiReconnectMonitors = new Map<string, CodexTuiReconnectMonitor>();
+const codexTuiModelMismatchNoticesInFlight = new Map<string, string>();
 
 interface CodexTuiPendingTurnErrorMonitor {
   screen: string;
@@ -871,6 +873,124 @@ function observeCodexTuiReconnectStatus(
   MIRROR_TURN_HOOKS.onStatusProgress?.(subscription, pendingTurn);
 }
 
+function buildCodexTuiModelMismatchCard(params: {
+  bindingId: string;
+  recordedModel: string;
+  resumingModel: string;
+}): OutboundRichCard {
+  return {
+    title: 'Codex 恢复模型不一致',
+    template: 'orange',
+    updateKey: `codex-model-mismatch:${params.bindingId}`,
+    updateTtlMs: null,
+    sections: [
+      {
+        fields: [
+          ['Session 记录模型', `\`${params.recordedModel}\``],
+          ['当前恢复模型', `\`${params.resumingModel}\``],
+        ],
+      },
+      {
+        markdown: '继续使用可能影响 Codex 表现。建议发送 `/clear` 新建 session。',
+      },
+    ],
+  };
+}
+
+function notifyCodexTuiModelMismatchWarning(
+  subscription: BridgeMirrorSubscription,
+  warning: { recordedModel: string; resumingModel: string },
+): void {
+  const signalKey = `${subscription.sessionId}\u0000${warning.recordedModel}\u0000${warning.resumingModel}`;
+  const { store } = getBridgeContext();
+  const session = store.getSession(subscription.sessionId);
+  const binding = store.getChannelChat(subscription.channelType, subscription.chatId);
+  if (!session || !binding || binding.id !== subscription.bindingId) return;
+  if (binding.bridgeSessionId !== subscription.sessionId) return;
+  if (binding.codexModelMismatchWarningKey === signalKey) return;
+  if (codexTuiModelMismatchNoticesInFlight.get(binding.id) === signalKey) return;
+  const adapter = getState().adapters.get(subscription.channelType);
+  if (!adapter?.isRunning()) return;
+
+  codexTuiModelMismatchNoticesInFlight.set(binding.id, signalKey);
+  const text = [
+    'Codex 恢复模型不一致',
+    '',
+    `Session 记录模型：\`${warning.recordedModel}\``,
+    `当前恢复模型：\`${warning.resumingModel}\``,
+    '',
+    '继续使用可能影响 Codex 表现。建议发送 `/clear` 新建 session。',
+  ].join('\n');
+  const delivery = enqueueBridgeNotice(
+    adapter,
+    { channelType: subscription.channelType, chatId: subscription.chatId },
+    text,
+    {
+      sessionId: subscription.sessionId,
+      audit: true,
+      richCard: buildCodexTuiModelMismatchCard({
+        bindingId: binding.id,
+        ...warning,
+      }),
+    },
+  );
+  void delivery.completion.then((result) => {
+    if (codexTuiModelMismatchNoticesInFlight.get(binding.id) === signalKey) {
+      codexTuiModelMismatchNoticesInFlight.delete(binding.id);
+    }
+    if (!result.ok) {
+      console.warn('[bridge-manager] Codex model mismatch notice delivery failed:', {
+        event: 'codex.tui.model_mismatch.notice_failed',
+        session_id: subscription.sessionId,
+        thread_id: subscription.threadId,
+        error: result.error,
+      });
+      return;
+    }
+    const latestSession = store.getSession(subscription.sessionId);
+    const latestBinding = store.getChannelChat(subscription.channelType, subscription.chatId);
+    if (!latestSession || getSessionCodexThreadId(latestSession) !== subscription.threadId) return;
+    if (!latestBinding || latestBinding.id !== binding.id || latestBinding.bridgeSessionId !== subscription.sessionId) return;
+    store.updateChannelChat(binding.id, { codexModelMismatchWarningKey: signalKey });
+    console.warn('[bridge-manager] Codex resumed with a different model:', {
+      event: 'codex.tui.model_mismatch.notified',
+      session_id: subscription.sessionId,
+      thread_id: subscription.threadId,
+      recorded_model: warning.recordedModel,
+      resuming_model: warning.resumingModel,
+      message_id: result.messageId,
+    });
+  }).catch((error) => {
+    if (codexTuiModelMismatchNoticesInFlight.get(binding.id) === signalKey) {
+      codexTuiModelMismatchNoticesInFlight.delete(binding.id);
+    }
+    console.warn('[bridge-manager] Codex model mismatch notice delivery failed:', {
+      event: 'codex.tui.model_mismatch.notice_failed',
+      session_id: subscription.sessionId,
+      thread_id: subscription.threadId,
+      error: describeUnknownError(error),
+    });
+  });
+}
+
+function observeCodexTuiModelMismatchWarning(
+  subscription: BridgeMirrorSubscription,
+  screenText: string,
+): void {
+  const warning = parseCodexTuiModelMismatchWarning(screenText);
+  if (!warning) return;
+  const targets = new Map<string, BridgeMirrorSubscription>();
+  for (const candidate of getState().mirrorSubscriptions.values()) {
+    if (candidate.sessionId === subscription.sessionId) {
+      targets.set(candidate.bindingId, candidate);
+    }
+  }
+  if (targets.size === 0) targets.set(subscription.bindingId, subscription);
+  for (const target of targets.values()) {
+    notifyCodexTuiModelMismatchWarning(target, warning);
+  }
+}
+
 function observeCodexTuiPendingTurnError(
   subscription: BridgeMirrorSubscription,
   screenText: string,
@@ -1244,6 +1364,7 @@ async function probeMirrorTmuxSelectionPrompt(subscription: BridgeMirrorSubscrip
     return;
   }
   if (sessionSupportsCodexTuiRuntimeSignals(session)) {
+    observeCodexTuiModelMismatchWarning(subscription, capture.screen);
     observeCodexTuiReconnectStatus(subscription, capture.screen, nowMs);
     observeCodexTuiPendingTurnError(subscription, capture.screen);
   }
@@ -4719,6 +4840,7 @@ function resetStateForTests(): void {
   codexTuiTurnScreenBaselines.clear();
   codexTuiIdleScreenMissingCheckedAt.clear();
   codexTuiReconnectMonitors.clear();
+  codexTuiModelMismatchNoticesInFlight.clear();
   codexTuiPendingTurnErrorMonitors.clear();
   state.everyTaskSelections.clear();
   state.thenTaskSelections.clear();

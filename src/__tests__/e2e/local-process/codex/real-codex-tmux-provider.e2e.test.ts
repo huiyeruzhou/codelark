@@ -8,7 +8,10 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 
 import { CodexRoutingProvider } from '../../../../runtime/codex/routing-provider.js';
-import { extractCodexTuiErrorMessages } from '../../../../runtime/codex/tui-runtime-signals.js';
+import {
+  extractCodexTuiErrorMessages,
+  parseCodexTuiModelMismatchWarning,
+} from '../../../../runtime/codex/tui-runtime-signals.js';
 import { getCodexSessionByThreadIdSafe } from '../../../../bridge/session/support.js';
 import type { BridgeStore } from '../../../../domain/index.js';
 import type { OutboundMessage } from '../../../../domain/index.js';
@@ -68,6 +71,26 @@ function readThreadGoalObjectives(filePath: string): string[] {
         return [];
       }
     });
+}
+
+function rewriteRecordedTurnContextModel(filePath: string, model: string): number {
+  let rewritten = 0;
+  const lines = fs.readFileSync(filePath, 'utf-8')
+    .split(/\r?\n/u)
+    .filter(Boolean)
+    .map((line) => {
+      const parsed = JSON.parse(line) as {
+        type?: unknown;
+        payload?: { model?: unknown };
+      };
+      if (parsed.type === 'turn_context' && typeof parsed.payload?.model === 'string') {
+        parsed.payload.model = model;
+        rewritten += 1;
+      }
+      return JSON.stringify(parsed);
+    });
+  fs.writeFileSync(filePath, `${lines.join('\n')}\n`, 'utf-8');
+  return rewritten;
 }
 
 function findTrustPermission(adapter: RecordingAdapter): {
@@ -218,7 +241,7 @@ async function approveTrustPermission(
 }
 
 describe('real codex tmux provider e2e', () => {
-  it('keeps a real fresh-directory Codex thread after tmux provider startup and mirror reconcile', { timeout: 120_000 }, async (t: TestContext) => {
+  it('keeps a real Codex thread and warns once when resuming it with a different model', { timeout: 120_000 }, async (t: TestContext) => {
     if (!(await commandAvailable('tmux', ['-V']))) {
       t.skip('tmux is not available');
       return;
@@ -247,6 +270,11 @@ describe('real codex tmux provider e2e', () => {
 
     resetBridgeTestState({ cleanCodexHome: true });
     seedCodexApiKeyAuth(codexHome, 'clk-local-proxy-key');
+    fs.writeFileSync(
+      path.join(codexHome, 'config.toml'),
+      'check_for_update_on_startup = false\n',
+      'utf-8',
+    );
     _testOnly.resetStateForTests();
 
     const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-real-tmux-provider-'));
@@ -332,6 +360,58 @@ describe('real codex tmux provider e2e', () => {
         const body = request.body as { reasoning?: { effort?: unknown } };
         return typeof body.reasoning?.effort === 'string' && body.reasoning.effort.length > 0;
       }), true, 'Codex request body should include a reasoning effort');
+
+      const resumingModel = actualModels[0];
+      assert.ok(resumingModel);
+      const recordedModel = resumingModel === 'gpt-5.5-2026-04-24'
+        ? 'gpt-5.4'
+        : 'gpt-5.5-2026-04-24';
+      await execFileAsync('tmux', ['kill-session', '-t', tmuxSessionName]);
+      assert.ok(
+        rewriteRecordedTurnContextModel(generatedThreadFilePath, recordedModel) > 0,
+        'the isolated rollout should contain a real turn_context to emulate an older Codex model record',
+      );
+      await _testOnly.handleMessage(
+        adapter,
+        inboundMessage(address, `/model ${resumingModel}`, 'incoming-real-model-switch'),
+      );
+      await _testOnly.handleMessage(
+        adapter,
+        inboundMessage(address, '/provider tmux', 'incoming-real-provider-restart'),
+      );
+
+      let observedWarning: ReturnType<typeof parseCodexTuiModelMismatchWarning> = null;
+      const sawMismatchNotice = await waitForCondition(async () => {
+        const capture = await execFileAsync(
+          'tmux',
+          ['capture-pane', '-p', '-t', `${tmuxSessionName}:0.0`, '-S', '-80'],
+        ).catch(() => ({ stdout: '', stderr: '' }));
+        observedWarning = parseCodexTuiModelMismatchWarning(capture.stdout);
+        await _testOnly.reconcileMirrorSubscriptions();
+        return adapter.sent.some((message) => message.richCard?.title === 'Codex 恢复模型不一致');
+      }, 15_000, 100);
+      assert.equal(sawMismatchNotice, true, 'real Codex resume warning should reach the bridge notice path');
+      const parsedWarning = observedWarning as {
+        recordedModel: string;
+        resumingModel: string;
+      } | null;
+      assert.ok(parsedWarning);
+      assert.equal(parsedWarning.recordedModel, recordedModel);
+      assert.equal(parsedWarning.resumingModel, resumingModel);
+      const mismatchNotices = adapter.sent.filter((message) => message.richCard?.title === 'Codex 恢复模型不一致');
+      assert.equal(mismatchNotices.length, 1);
+      assert.match(mismatchNotices[0].text, /\/clear/);
+      assert.equal(store.getSession(binding.bridgeSessionId)?.runtime?.codex?.threadId, threadId);
+      assert.equal(
+        store.getChannelChat(address.channelType, address.chatId)?.codexModelMismatchWarningKey,
+        `${binding.bridgeSessionId}\u0000${recordedModel}\u0000${resumingModel}`,
+      );
+      await _testOnly.reconcileMirrorSubscriptions();
+      await _testOnly.reconcileMirrorSubscriptions();
+      assert.equal(
+        adapter.sent.filter((message) => message.richCard?.title === 'Codex 恢复模型不一致').length,
+        1,
+      );
     } finally {
       if (tmuxSessionName) {
         await execFileAsync('tmux', ['kill-session', '-t', tmuxSessionName]).catch(() => undefined);

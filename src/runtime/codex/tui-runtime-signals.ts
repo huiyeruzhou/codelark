@@ -5,6 +5,11 @@ export interface CodexTuiReconnectSignal {
   maxAttempts: number;
 }
 
+export interface CodexTuiModelMismatchWarning {
+  recordedModel: string;
+  resumingModel: string;
+}
+
 function terminalLines(screenText: string): string[] {
   return screenText
     .replace(ANSI_ESCAPE, '')
@@ -30,6 +35,30 @@ export function parseCodexTuiReconnectSignal(
     const attempt = Number(match[1]);
     const maxAttempts = Number(match[2]);
     if (attempt > 0 && maxAttempts > 0) return { attempt, maxAttempts };
+  }
+  return null;
+}
+
+export function parseCodexTuiModelMismatchWarning(
+  screenText: string,
+): CodexTuiModelMismatchWarning | null {
+  const lines = terminalLines(screenText);
+  for (let index = lines.length - 1; index >= 0; index -= 1) {
+    if (!/^\s*⚠\s*This session was recorded with model\b/iu.test(lines[index] || '')) continue;
+    const fragments = [lines[index] || ''];
+    for (let continuationIndex = index + 1; continuationIndex < lines.length; continuationIndex += 1) {
+      const continuation = lines[continuationIndex] || '';
+      if (!/^\s{2,}\S/u.test(continuation)) break;
+      fragments.push(continuation);
+    }
+    const candidate = fragments.join('\n');
+    const match = candidate.match(
+      /^\s*⚠\s*This session was recorded with model\s+`([^`]+)`\s+but is resuming with\s+`([^`]+)`\s*\./iu,
+    );
+    if (!match) continue;
+    const recordedModel = match[1].replace(/\s+/gu, '').trim();
+    const resumingModel = match[2].replace(/\s+/gu, '').trim();
+    if (recordedModel && resumingModel) return { recordedModel, resumingModel };
   }
   return null;
 }
