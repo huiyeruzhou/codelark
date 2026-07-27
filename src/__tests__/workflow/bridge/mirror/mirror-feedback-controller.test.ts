@@ -3,6 +3,7 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 
 import { BaseChannelAdapter, type StructuredStreamingUiMetadata } from '../../../../channels/contracts.js';
+import { _testOnlyWaitForDeliveryQueuesForTests } from '../../../../channels/delivery/deliver.js';
 import { initBridgeContext } from '../../../../bridge/host/context.js';
 import {
   createMirrorFeedbackController,
@@ -10,9 +11,17 @@ import {
 } from '../../../../bridge/mirror/feedback-controller.js';
 import { createMirrorSubscription } from '../../../../bridge/mirror/subscription-state.js';
 import { consumeMirrorRecords } from '../../../../bridge/mirror/turns.js';
-import type { InboundMessage, OutboundMessage, SendResult, TaskProgressInfo, ToolCallInfo } from '../../../../domain/index.js';
+import type { InboundMessage, OutboundMessage, SendResult, StreamingHistoryItem, TaskProgressInfo, ToolCallInfo } from '../../../../domain/index.js';
 import { JsonFileStore } from '../../../../storage/json-store.js';
 import { formatFooterClockTime } from '../../../../shared/progress/footer.js';
+
+function createDeferred<T = void>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  const promise = new Promise<T>((res) => {
+    resolve = res;
+  });
+  return { promise, resolve };
+}
 
 class FakeMirrorFeishuAdapter extends BaseChannelAdapter {
   readonly channelType = 'feishu-default';
@@ -22,6 +31,7 @@ class FakeMirrorFeishuAdapter extends BaseChannelAdapter {
   readonly streamEnds: Array<{ status: 'completed' | 'interrupted' | 'error'; text: string }> = [];
   readonly tools: ToolCallInfo[][] = [];
   readonly tasks: TaskProgressInfo[][] = [];
+  readonly histories: StreamingHistoryItem[][] = [];
   readonly sent: OutboundMessage[] = [];
   readonly metadata: Array<{ chatId: string; streamKey?: string; metadata: StructuredStreamingUiMetadata }> = [];
   streamEndResult = true;
@@ -76,10 +86,37 @@ class FakeMirrorFeishuAdapter extends BaseChannelAdapter {
     this.tasks.push(tasks.map((task) => ({ ...task })));
   }
 
+  onStreamHistory(_chatId: string, items: StreamingHistoryItem[]): void {
+    this.histories.push(items.map((item) => (
+      item.type === 'tool_panel'
+        ? { ...item, tools: item.tools.map((tool) => ({ ...tool })) }
+        : { ...item }
+    )));
+  }
+
   onStreamEnd(_chatId: string, status: 'completed' | 'interrupted' | 'error', text: string): Promise<boolean> {
     this.streamEnds.push({ status, text });
     this.active = false;
     return Promise.resolve(this.streamEndResult);
+  }
+}
+
+class DelayedMirrorCardAdapter extends FakeMirrorFeishuAdapter {
+  readonly cardCreateStarted = createDeferred();
+  readonly cardCreated = createDeferred();
+  private cardMessageId: string | null = null;
+
+  onMirrorStreamStart(): void {}
+
+  getStructuredStreamingUiMessageId(): string | null {
+    return this.cardMessageId;
+  }
+
+  async waitForStructuredStreamingUiMessageId(): Promise<string | null> {
+    this.cardCreateStarted.resolve();
+    await this.cardCreated.promise;
+    this.cardMessageId = 'delayed-mirror-card-message';
+    return this.cardMessageId;
   }
 }
 
@@ -203,6 +240,94 @@ describe('mirror-feedback-controller', () => {
       'bridge_id:session-',
       'mirror',
     ]);
+  });
+
+  it('never exposes final-only artifact protocol blocks in mirror card history', () => {
+    const adapter = new FakeMirrorFeishuAdapter();
+    const controller = createMirrorFeedbackController({
+      getAdapter: () => adapter,
+      getThreadTitle: () => '测试线程',
+      nowIso: () => '2026-05-14T00:00:00.000Z',
+      eventBatchLimit: 10,
+      deliverResponse: async () => ({ ok: true }),
+    });
+    const subscription = createMirrorSubscription({
+      bindingId: 'binding-artifact-history',
+      sessionId: 'session-artifact-history',
+      channelType: 'feishu-default',
+      chatId: 'chat-artifact-history',
+      threadId: 'thread-artifact-history',
+      filePath: 'rollout.jsonl',
+      lastDeliveredAt: null,
+    });
+
+    consumeMirrorRecords(subscription, [{
+      signature: 'message-artifact-history',
+      type: 'message',
+      role: 'assistant',
+      content: [
+        '附件现在发送。',
+        '<clk-send>{"type":"file","path":"/tmp/visible.txt"}</clk-send>',
+        '终态不重复。',
+      ].join('\n'),
+      timestamp: '2026-05-14T00:00:00.000Z',
+      turnId: 'turn-artifact-history',
+    }], controller.hooks);
+
+    const renderedHistory = adapter.histories.at(-1) || [];
+    const renderedText = renderedHistory
+      .flatMap((item) => item.type === 'markdown' ? [item.content] : [])
+      .join('\n');
+    assert.match(renderedText, /附件现在发送。/);
+    assert.match(renderedText, /终态不重复。/);
+    assert.doesNotMatch(renderedText, /clk-send|visible\.txt/);
+    assert.match(subscription.pendingTurn?.streamedText || '', /clk-send/);
+  });
+
+  it('waits for the real mirror card message before delivering an intermediate artifact', { timeout: 1_000 }, async () => {
+    const adapter = new DelayedMirrorCardAdapter();
+    const controller = createMirrorFeedbackController({
+      getAdapter: () => adapter,
+      getThreadTitle: () => '测试线程',
+      nowIso: () => '2026-05-14T00:00:00.000Z',
+      eventBatchLimit: 10,
+      deliverResponse: async (_adapter, _address, _text, _sessionId, replyToMessageId, attachments) => {
+        adapter.sent.push({
+          address: { channelType: 'feishu-default', chatId: 'chat-delayed-card' },
+          text: '',
+          attachments,
+          replyToMessageId,
+        });
+        return { ok: true };
+      },
+    });
+    const subscription = createMirrorSubscription({
+      bindingId: 'binding-delayed-card',
+      sessionId: 'session-delayed-card',
+      channelType: 'feishu-default',
+      chatId: 'chat-delayed-card',
+      threadId: 'thread-delayed-card',
+      filePath: 'rollout.jsonl',
+      lastDeliveredAt: null,
+    });
+
+    consumeMirrorRecords(subscription, [{
+      signature: 'message-delayed-card',
+      type: 'message',
+      role: 'assistant',
+      content: '<clk-send>{"type":"file","path":"/tmp/delayed-card.txt"}</clk-send>',
+      timestamp: '2026-05-14T00:00:01.000Z',
+      turnId: 'turn-delayed-card',
+    }], controller.hooks);
+
+    await adapter.cardCreateStarted.promise;
+    assert.equal(adapter.sent.length, 0);
+    adapter.cardCreated.resolve();
+    await _testOnlyWaitForDeliveryQueuesForTests(adapter);
+
+    assert.equal(adapter.sent.length, 1);
+    assert.equal(adapter.sent[0]?.replyToMessageId, 'delayed-mirror-card-message');
+    assert.equal(adapter.sent[0]?.attachments?.[0]?.path, '/tmp/delayed-card.txt');
   });
 
   it('replays stream metadata when a configured adapter is replaced mid-turn', () => {

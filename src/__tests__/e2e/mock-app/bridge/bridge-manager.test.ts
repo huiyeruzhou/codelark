@@ -11,6 +11,7 @@ import { JsonFileStore } from '../../../../storage/json-store.js';
 import { getBridgeContext, initBridgeContext } from '../../../../bridge/host/context.js';
 import { _testOnly, start, stop } from '../../../../bridge/host/manager.js';
 import { BaseChannelAdapter, registerAdapterFactory } from '../../../../channels/contracts.js';
+import { _testOnlyWaitForDeliveryQueuesForTests } from '../../../../channels/delivery/deliver.js';
 import { FeishuAdapter } from '../../../../channels/feishu/adapter.js';
 import { buildCommandCallbackData } from '../../../../bridge/command/callbacks.js';
 import {
@@ -516,6 +517,28 @@ class StartupNoticeAdapter extends BaseChannelAdapter {
     }
     return StartupNoticeAdapter.groupChats.get(chatId) || null;
   }
+  validateConfig(): string | null { return null; }
+  isAuthorized(): boolean { return true; }
+}
+
+class MirrorArtifactAdapter extends BaseChannelAdapter {
+  readonly channelType = 'feishu';
+  readonly provider = 'feishu';
+  readonly sentMessages: OutboundMessage[] = [];
+  readonly streamedTexts: string[] = [];
+
+  async start(): Promise<void> {}
+  async stop(): Promise<void> {}
+  isRunning(): boolean { return true; }
+  async consumeOne() { return null; }
+  async send(message: OutboundMessage): Promise<SendResult> {
+    this.sentMessages.push(message);
+    return { ok: true, messageId: `sent-${this.sentMessages.length}` };
+  }
+  onMirrorStreamStart(): void {}
+  onStreamText(_chatId: string, text: string): void { this.streamedTexts.push(text); }
+  onStreamStatus(): void {}
+  async onStreamEnd(): Promise<boolean> { return true; }
   validateConfig(): string | null { return null; }
   isAuthorized(): boolean { return true; }
 }
@@ -2214,21 +2237,11 @@ agent = "claude"
     }
   });
 
-  it('hides outbound artifact blocks from mirror stream text', () => {
+  it('hides outbound artifact blocks from mirror stream text', async () => {
     _testOnly.resetStateForTests();
     const state = (globalThis as unknown as Record<string, any>).__bridge_manager__;
-    const streamedTexts: string[] = [];
-    state.adapters.set('feishu', {
-      channelType: 'feishu',
-      provider: 'feishu',
-      isRunning: () => true,
-      onMirrorStreamStart: () => {},
-      onStreamText: (_chatId: string, text: string) => {
-        streamedTexts.push(text);
-      },
-      onStreamStatus: () => {},
-      onStreamEnd: async () => true,
-    });
+    const adapter = new MirrorArtifactAdapter();
+    state.adapters.set('feishu', adapter);
 
     const subscription = {
       pendingTurn: null,
@@ -2261,8 +2274,74 @@ agent = "claude"
       },
     ]);
 
-    assert.ok(streamedTexts.at(-1)?.includes('done'));
-    assert.equal(streamedTexts.some((text) => text.includes('clk-send')), false);
+    await _testOnlyWaitForDeliveryQueuesForTests(adapter);
+
+    assert.ok(adapter.streamedTexts.at(-1)?.includes('done'));
+    assert.equal(adapter.streamedTexts.some((text) => text.includes('clk-send')), false);
+  });
+
+  it('sends Kimi answer artifacts before completion, ignores think artifacts, and does not resend at completion', async () => {
+    _testOnly.resetStateForTests();
+    const state = (globalThis as unknown as Record<string, any>).__bridge_manager__;
+    const adapter = new MirrorArtifactAdapter();
+    state.adapters.set('feishu', adapter);
+
+    const subscription = createMirrorSubscription({
+      bindingId: 'binding-kimi-stream-artifact',
+      sessionId: 'session-kimi-stream-artifact',
+      channelType: 'feishu',
+      chatId: 'chat-kimi-stream-artifact',
+      threadId: 'session_kimi_stream_artifact',
+      filePath: null,
+      lastDeliveredAt: null,
+    });
+
+    _testOnly.consumeMirrorRecords(subscription, [
+      {
+        signature: 'start',
+        type: 'task_started',
+        content: '',
+        timestamp: '2026-03-25T08:00:00.000Z',
+        turnId: 'turn-kimi-artifact',
+      },
+      {
+        signature: 'think',
+        type: 'reasoning',
+        reasoningKind: 'thinking',
+        content: '<clk-send>{"type":"file","path":"/tmp/private-thinking.txt"}</clk-send>',
+        timestamp: '2026-03-25T08:00:01.000Z',
+        turnId: 'turn-kimi-artifact',
+      },
+      {
+        signature: 'answer',
+        type: 'message',
+        role: 'assistant',
+        content: [
+          '文件已经生成。',
+          '<clk-send>{"type":"file","path":"/tmp/public-answer.txt"}</clk-send>',
+        ].join('\n'),
+        timestamp: '2026-03-25T08:00:02.000Z',
+        turnId: 'turn-kimi-artifact',
+      },
+    ]);
+
+    await _testOnlyWaitForDeliveryQueuesForTests(adapter);
+    assert.deepEqual(adapter.sentMessages.flatMap((message) => message.attachments || []).map((attachment) => attachment.path), [
+      '/tmp/public-answer.txt',
+    ]);
+
+    const completed = _testOnly.consumeMirrorRecords(subscription, [{
+      signature: 'complete',
+      type: 'task_complete',
+      content: '',
+      timestamp: '2026-03-25T08:00:03.000Z',
+      turnId: 'turn-kimi-artifact',
+    }]);
+    assert.equal(completed.length, 1);
+    assert.deepEqual(await _testOnly.deliverMirrorTurns(subscription, completed), { deliveredCount: 1 });
+    assert.deepEqual(adapter.sentMessages.flatMap((message) => message.attachments || []).map((attachment) => attachment.path), [
+      '/tmp/public-answer.txt',
+    ]);
   });
 
   it('sends outbound artifacts from finalized mirror turns as attachments', async () => {

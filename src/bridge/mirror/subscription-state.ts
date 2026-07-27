@@ -26,6 +26,8 @@ export interface BridgeMirrorSubscription {
   trailingText: string;
   activeMirrorTurnId: string | null;
   activeSpecialCallIds: Set<string>;
+  supplementalOffset: number;
+  supplementalTrailingText: string;
   bufferedRecords: BridgeMirrorRecord[];
   pendingTurn: BridgeMirrorTurnState | null;
   pendingDeliveries: FinalizedBridgeMirrorTurn[];
@@ -78,6 +80,8 @@ export function resetMirrorReadState(subscription: BridgeMirrorSubscription): vo
   subscription.trailingText = '';
   subscription.activeMirrorTurnId = null;
   subscription.activeSpecialCallIds.clear();
+  subscription.supplementalOffset = 0;
+  subscription.supplementalTrailingText = '';
   subscription.bufferedRecords = [];
 }
 
@@ -107,6 +111,8 @@ export function createMirrorSubscription(
     trailingText: '',
     activeMirrorTurnId: null,
     activeSpecialCallIds: new Set<string>(),
+    supplementalOffset: 0,
+    supplementalTrailingText: '',
     bufferedRecords: [],
     pendingTurn: null,
     pendingDeliveries: [],

@@ -89,7 +89,10 @@ export function readMirrorDeliverableRecords(
     );
     const delta = reconcileBridgeMirrorCursor(subscription.cursor, fullDelta.records);
     subscription.cursor = delta.nextCursor;
-    deliverableRecords = filterDuplicateAssistantEvents(previousCursor, delta.deliverableRecords);
+    const initialRecoveryRecords = !previousCursor.initialized && subscription.lastDeliveredAt
+      ? fullDelta.records.filter((record) => record.timestamp > subscription.lastDeliveredAt!)
+      : delta.deliverableRecords;
+    deliverableRecords = filterDuplicateAssistantEvents(previousCursor, initialRecoveryRecords);
     subscription.trailingText = '';
     subscription.fileOffset = snapshot.size;
     subscription.activeMirrorTurnId = fullDelta.nextTurnId;
@@ -119,8 +122,27 @@ export function readMirrorDeliverableRecords(
   subscription.fileIdentity = snapshot.identity;
   subscription.dirty = false;
 
+  if (source.readSupplementalDelta) {
+    const supplemental = source.readSupplementalDelta(
+      subscription.filePath!,
+      subscription.supplementalOffset,
+      subscription.supplementalTrailingText,
+      latestMirrorTimestamp(subscription),
+      subscription.activeMirrorTurnId,
+    );
+    subscription.supplementalOffset = supplemental.nextOffset;
+    subscription.supplementalTrailingText = supplemental.trailingText;
+    deliverableRecords.push(...supplemental.records);
+  }
+
   return {
     records: deliverableRecords,
     unknownKinds,
   };
+}
+
+function latestMirrorTimestamp(subscription: BridgeMirrorSubscription): string | null {
+  const timestamps = [subscription.cursor.lastEventTimestamp, subscription.lastDeliveredAt]
+    .filter((value): value is string => Boolean(value));
+  return timestamps.sort().at(-1) || null;
 }

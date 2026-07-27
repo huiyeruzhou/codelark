@@ -12,6 +12,7 @@ import {
   flushTimedOutMirrorTurn,
   hasPendingMirrorWork,
 } from '../../../../bridge/mirror/turns.js';
+import { createKimiMirrorJsonlSource } from '../../../../runtime/kimi/session-index.js';
 
 const MIRROR_TEST_BUFFER_TIMEOUT_MS = 10 * 60_000;
 
@@ -637,6 +638,100 @@ describe('mirror-runtime pending deliveries', () => {
 
     assert.deepEqual(clearedSessionIds, ['session-1']);
     assert.equal(state.mirrorSubscriptions.size, 0);
+  });
+
+  it('delivers a Kimi runtime-log error when the primary wire file is unchanged', async () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-kimi-mirror-error-'));
+    const wirePath = path.join(tempRoot, 'agents', 'main', 'wire.jsonl');
+    const logPath = path.join(tempRoot, 'logs', 'kimi-code.log');
+    fs.mkdirSync(path.dirname(wirePath), { recursive: true });
+    fs.mkdirSync(path.dirname(logPath), { recursive: true });
+    fs.writeFileSync(wirePath, `${JSON.stringify({
+      type: 'context.append_loop_event',
+      time: Date.parse('2026-07-27T08:14:36.428Z'),
+      event: { type: 'step.begin', turnId: 'turn-402', stepUuid: 'step-402' },
+    })}\n`, 'utf8');
+
+    const bindings = [{
+      id: 'binding-1',
+      channelType: 'feishu-default',
+      chatId: 'chat-1',
+      bridgeSessionId: 'session-1',
+      active: true,
+    }];
+    const session = {
+      runtime: { activeRuntime: 'kimi' as const, kimi: { sessionId: 'kimi-thread', cwd: tempRoot } },
+      mirror_last_event_at: null,
+    };
+    const state = {
+      running: true,
+      adapters: new Map([
+        ['feishu-default', { channelType: 'feishu-default', provider: 'feishu', isRunning: () => false }],
+      ]),
+      mirrorSubscriptions: new Map(),
+      mirrorWakeTimer: null,
+      mirrorSyncInFlight: false,
+      activeTasks: new Map(),
+    };
+    const delivered: Array<{ status: string; errorText?: string }> = [];
+    const mirrorSource = createKimiMirrorJsonlSource();
+
+    runtime = createMirrorRuntime(() => state as never, {
+      watchDebounceMs: 0,
+      danglingThreadRetryLimit: 3,
+      failureSuspendThreshold: 3,
+      failureSuspendMs: 60_000,
+    }, {
+      mirrorSource,
+      runtimeLabel: 'Kimi',
+      nowIso: () => '2026-07-27T08:14:37.000Z',
+      describeUnknownError: (error) => (error instanceof Error ? error.message : String(error)),
+      listChannelChats: () => bindings,
+      getSession: () => session,
+      clearSessionMirrorThreadId: () => {},
+      clearSessionCodexThreadId: () => {},
+      getCodexSessionByThreadIdSafe: () => null,
+      hasSessionMirrorSource: () => true,
+      getSessionMirrorThreadId: () => 'kimi-thread',
+      getSessionMirrorCwd: () => tempRoot,
+      getMirrorSourceSummary: () => ({ threadId: 'kimi-thread', filePath: wirePath, cwd: tempRoot }),
+      syncMirrorSessionStateSafe: () => {},
+      filterSuppressedMirrorRecords: (_sessionId, records) => records,
+      observeSessionHealthRecords: () => {},
+      consumeMirrorRecords: (subscription, records) => consumeMirrorRecords(subscription, records),
+      flushTimedOutMirrorTurn: (subscription) => flushTimedOutMirrorTurn(subscription, MIRROR_TEST_BUFFER_TIMEOUT_MS, Date.now()),
+      hasPendingMirrorWork: (subscription) => hasPendingMirrorWork(subscription),
+      consumeBufferedMirrorTurns: (subscription) => consumeBufferedMirrorTurns(subscription, MIRROR_TEST_BUFFER_TIMEOUT_MS, Date.now()),
+      stopMirrorStreaming: () => {},
+      deliverMirrorTurns: async (_subscription, turns) => {
+        delivered.push(...turns.map((turn) => ({ status: turn.status, errorText: turn.errorText })));
+        return { deliveredCount: turns.length };
+      },
+    });
+
+    try {
+      await runtime.reconcileMirrorSubscriptions();
+      assert.deepEqual(delivered, []);
+      fs.writeFileSync(logPath, [
+        '2026-07-27T08:14:36.747Z WARN  llm request failed  turnStep=0.1 attempt=1/10 model=k3 errorName=APIStatusError errorMessage="402 membership inactive" statusCode=402',
+        '2026-07-27T08:14:36.751Z ERROR turn failed  turnId=0',
+        '  APIStatusError: 402 We\'re unable to verify your membership benefits at this time.',
+        '    at KimiChatProvider.generate (main.cjs:1:1)',
+        '',
+      ].join('\n'), 'utf8');
+
+      await runtime.reconcileMirrorSubscriptions();
+      assert.deepEqual(delivered, [{
+        status: 'error',
+        errorText: 'APIStatusError: 402 We\'re unable to verify your membership benefits at this time.',
+      }]);
+      assert.equal(state.mirrorSubscriptions.get('binding-1')?.pendingTurn, null);
+
+      await runtime.reconcileMirrorSubscriptions();
+      assert.equal(delivered.length, 1);
+    } finally {
+      fs.rmSync(tempRoot, { recursive: true, force: true });
+    }
   });
 
   it('uses the runtime-neutral clear hook for dangling Claude mirror identities', async () => {

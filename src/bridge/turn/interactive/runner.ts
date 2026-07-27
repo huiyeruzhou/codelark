@@ -5,11 +5,15 @@ import type {
 } from '../../../domain/index.js';
 import type { BaseChannelAdapter, StructuredStreamingUiSnapshot } from '../../../channels/contracts.js';
 import { enqueueDelivery } from '../../../channels/delivery/deliver.js';
+import { supportsOutboundArtifacts } from '../../../channels/delivery/artifacts.js';
+import { resolveStructuredStreamingUiMessageId } from '../../../channels/delivery/stream-feedback.js';
 import * as engine from './sdk-conversation-engine.js';
 import {
   assembleCodexFinalResponse,
+  assembleSdkFinalResponse,
   stripFinalOnlyBlocksForStreaming,
 } from '../response-assembler.js';
+import { createStreamingArtifactDeliveryController } from '../streaming-artifact-delivery.js';
 import type { ActiveBridgeTurn } from '../turn-types.js';
 import {
   deliverFinalResponse,
@@ -456,6 +460,38 @@ export async function runInteractiveMessage(
     normalizeFinalText: (finalText) => assembleCodexFinalResponse({ text: finalText }).text,
     recordSnapshot: deps.recordInteractiveStreamUiSnapshot,
   });
+  const streamingArtifacts = !isRuntimeMirrorTurn
+    && !msg.address.cloudDocument
+    && supportsOutboundArtifacts(adapter.provider)
+    ? createStreamingArtifactDeliveryController({
+        deliver: async (outboundAttachments) => {
+          const streamMessageId = await resolveStructuredStreamingUiMessageId({
+            adapter,
+            chatId: msg.address.chatId,
+            streamKey,
+          });
+          const queued = enqueueDelivery(adapter, msg.address, () => deliverFinalResponse({
+            adapter,
+            address: msg.address,
+            sessionId: binding.bridgeSessionId,
+            replyToMessageId: streamMessageId || msg.messageId,
+            deliverResponse: deps.deliverResponse,
+          }, assembleSdkFinalResponse({ attachments: outboundAttachments }), { skipText: true }), {
+            queueClass: 'interactive',
+          });
+          return queued.completion;
+        },
+        onDeliveryError(error, outboundAttachments) {
+          console.warn('[interactive-turn/runner] Streaming artifact delivery failed:', {
+            bridge_session_id: binding.bridgeSessionId,
+            channel_type: msg.address.channelType,
+            chat_id: msg.address.chatId,
+            attachment_count: outboundAttachments.length,
+            error,
+          });
+        },
+      })
+    : null;
   taskState.hasStreamingCards = useInteractiveStreamUi && streamUi.hasStreamingCards;
   if (useInteractiveStreamUi) {
     streamUi.pushMetadata(cardMetadata);
@@ -600,6 +636,7 @@ export async function runInteractiveMessage(
           includeToolSnippets: useInteractiveStreamUi && !streamUi.hasStreamingCards,
         },
         onThinkingNote: useStatusStreamUi ? sdkStreamEvents.onThinkingNote : undefined,
+        onAnswerText: streamingArtifacts?.observeAnswerText,
         onContextUsage: useInteractiveStreamUi ? sdkStreamEvents.onContextUsage : undefined,
         onRuntimeIdentity: async (identity) => {
           if (identity.runtime === 'claude' || identity.runtime === 'kimi') {
@@ -624,6 +661,7 @@ export async function runInteractiveMessage(
 
     if (raced.kind === 'external') {
       processPromise.catch(() => {});
+      await streamingArtifacts?.close();
       finalOutcome = raced.terminal.outcome;
       finalOutcomeDetail = raced.terminal.detail;
       const streamEndStatus = raced.terminal.outcome === 'completed'
@@ -656,6 +694,11 @@ export async function runInteractiveMessage(
           workingDirectory: getSessionWorkingDirectory(initialSession) || null,
         }),
       });
+      if (streamingArtifacts && finalResponsePlan.deliveryResponse) {
+        finalResponsePlan.deliveryResponse.attachments = streamingArtifacts.withoutDelivered(
+          finalResponsePlan.deliveryResponse.attachments,
+        );
+      }
       const mirrorWillDeliverFinal = isRuntimeMirrorTurn && runtimeMirrorActivated;
       const skipTextDeliveryForExistingCard = !isRuntimeMirrorTurn && streamUi.shouldSkipTextDelivery();
       if (!mirrorWillDeliverFinal) {
@@ -675,6 +718,7 @@ export async function runInteractiveMessage(
     }
 
     const result = raced.result;
+    await streamingArtifacts?.close();
     if (result.codexThreadId) {
       ensureMirrorSuppression(preparedPromptText);
     }
@@ -717,6 +761,11 @@ export async function runInteractiveMessage(
         workingDirectory: getSessionWorkingDirectory(initialSession) || null,
       }),
     });
+    if (streamingArtifacts && finalResponsePlan.deliveryResponse) {
+      finalResponsePlan.deliveryResponse.attachments = streamingArtifacts.withoutDelivered(
+        finalResponsePlan.deliveryResponse.attachments,
+      );
+    }
     const skipTextDeliveryForExistingCard = !isRuntimeMirrorTurn && streamUi.shouldSkipTextDelivery();
     if (useInteractiveStreamUi && streamUi.hasStreamingCards) {
       sdkStreamEvents.pushFinalCardText(finalResponsePlan.cardText);
@@ -751,6 +800,7 @@ export async function runInteractiveMessage(
       ? (result.errorMessage?.trim() || undefined)
       : undefined);
   } finally {
+    await streamingArtifacts?.close();
     if (useInteractiveStreamUi || (isRuntimeMirrorTurn && streamUi.shouldSkipTextDelivery())) {
       void enqueueFinalUiWork(
         taskAbort.signal.aborted

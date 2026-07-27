@@ -145,6 +145,8 @@ export async function processMessage(
       includeToolSnippets?: boolean;
     };
     onThinkingNote?: OnThinkingNote;
+    /** Full accumulated answer text only; excludes thinking, status, and tool previews. */
+    onAnswerText?: OnPartialText;
     onContextUsage?: OnContextUsage;
     onRuntimeIdentity?: OnRuntimeIdentity;
   },
@@ -304,6 +306,8 @@ async function consumeStream(
       includeToolSnippets?: boolean;
     };
     onThinkingNote?: OnThinkingNote;
+    /** Full accumulated answer text only; excludes thinking, status, and tool previews. */
+    onAnswerText?: OnPartialText;
     onContextUsage?: OnContextUsage;
     onRuntimeIdentity?: OnRuntimeIdentity;
   },
@@ -312,6 +316,7 @@ async function consumeStream(
   const { store } = runtime;
   const contentBlocks: MessageContentBlock[] = [];
   let currentText = '';
+  let answerText = '';
   /** Monotonically accumulated text for streaming preview — never resets on tool_use. */
   let previewText = '';
   let separateNextPreviewText = false;
@@ -361,6 +366,10 @@ async function consumeStream(
       switch (event.type) {
         case 'text':
           currentText += event.data;
+          answerText += event.data;
+          if (options?.onAnswerText) {
+            try { options.onAnswerText(answerText); } catch { /* non-critical */ }
+          }
           if (onPartialText) {
             previewText = appendStreamPreviewChunk(previewText, event.data, separateNextPreviewText);
             separateNextPreviewText = false;

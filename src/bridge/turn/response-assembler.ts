@@ -1,4 +1,4 @@
-import type { OutboundAttachment, OutboundQuestion } from '../../domain/index.js';
+import type { OutboundAttachment, OutboundQuestion, StreamingHistoryItem } from '../../domain/index.js';
 import {
   parseOutboundArtifacts,
   stripOutboundArtifactBlocksForStreaming,
@@ -22,7 +22,7 @@ export interface FinalResponseArtifactParseResult {
   questions: OutboundQuestion[];
 }
 
-function attachmentKey(attachment: OutboundAttachment): string {
+export function outboundAttachmentKey(attachment: OutboundAttachment): string {
   return [
     attachment.kind,
     attachment.path,
@@ -31,13 +31,23 @@ function attachmentKey(attachment: OutboundAttachment): string {
   ].join('\0');
 }
 
+export function stripFinalOnlyBlocksFromStreamingHistory(
+  items: StreamingHistoryItem[],
+): StreamingHistoryItem[] {
+  return items.flatMap((item) => {
+    if (item.type !== 'markdown' || item.role !== 'assistant') return [item];
+    const content = stripOutboundArtifactBlocksForStreaming(item.content);
+    return content ? [{ ...item, content }] : [];
+  });
+}
+
 export function dedupeOutboundAttachments(
   attachments: OutboundAttachment[],
 ): OutboundAttachment[] {
   const seen = new Set<string>();
   const deduped: OutboundAttachment[] = [];
   for (const attachment of attachments) {
-    const key = attachmentKey(attachment);
+    const key = outboundAttachmentKey(attachment);
     if (seen.has(key)) continue;
     seen.add(key);
     deduped.push(attachment);

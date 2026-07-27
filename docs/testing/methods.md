@@ -131,9 +131,9 @@ long-running 功能不能只测“成功派发 worker”。精炼用户故事至
 | `claude-tmux-provider.test.ts`、`claude-pty-provider.test.ts`、`claude-sdk-provider.test.ts`、`claude-session-jsonl.test.ts` | Claude tmux 启动/注入/mirror SSE、Claude pty 身份发现、Claude SDK helper、Claude JSONL session 读取。 |
 | `kimi-tmux-provider.test.ts`、真实 Kimi executable E2E、`kimi-tmux-provider-local-process.e2e.test.ts` | fresh 不带 `-r` 单次启动、从真实 TUI 发现 CLI session id、wire 在首条输入前或输入后创建、跨 turn 复用、慢模型 `Ctrl-S` steer、tmux 丢失恢复、think/status 和 terminal 归属；scripted fixture 继续穿过真实 tmux，但不冒充真实 executable gate。 |
 | `sse-stream-decoder.test.ts` | SSE 文本流解码和事件边界。 |
-| `interactive-turn-runner.test.ts` | 一次 runtime turn 的主编排，含 stream、tool、context、goal、stop、mirror suppression 和基础对话 simulator。 |
+| `interactive-turn-runner.test.ts` | 一次 runtime turn 的主编排，含 stream、tool、context、goal、stop、mirror suppression、基础对话 simulator，以及 answer 中间态附件立即发送、thinking 排除和终态去重。 |
 | `interactive-turn-sdk-conversation-engine.test.ts`、`interactive-turn-sdk-stream-events-controller.test.ts`、`interactive-turn-final-response-plan.test.ts`、`interactive-turn-terminal-finalization-controller.test.ts` | SDK conversation 内联附件/tool 展开、stream event 控制、最终回复计划和终端 provider finalization。 |
-| `real-codex-tmux-provider.e2e.test.ts`、`real-claude-tmux-provider.e2e.test.ts`、`real-kimi-code-bridge.e2e.test.ts`、`real-kimi-code-tmux-provider.e2e.test.ts`、`kimi-tmux-provider-local-process.e2e.test.ts` | 隔离 home 中启动真实 provider 进程或 fake backend；Kimi 同时覆盖真实 executable 的 fresh/steer/Bridge 重启冷接管，以及 fake CLI 穿过真实 tmux 的确定性 session/wire 回归。 |
+| `real-codex-tmux-provider.e2e.test.ts`、`real-claude-tmux-provider.e2e.test.ts`、`real-kimi-code-bridge.e2e.test.ts`、`real-kimi-code-tmux-provider.e2e.test.ts`、`kimi-tmux-provider-local-process.e2e.test.ts` | 隔离 home 中启动真实 provider 进程或 fake backend；Codex 以真实 CLI + tmux + Mock Responses 流验证 answer 附件在终止事件前发送、回复到异步就绪的流式卡片且 completed 不重复。Kimi 覆盖真实 executable 的 fresh/steer/Bridge 重启冷接管；thinking 排除、runtime log 错误终态和 fake CLI session/wire 生命周期使用确定性 fixture 回归。 |
 
 ### 交付、流式、mirror 和用户可见渲染
 
@@ -145,11 +145,11 @@ long-running 功能不能只测“成功派发 worker”。精炼用户故事至
 | `response-assembler.test.ts` | 分段 stream 输出合并成用户可读最终响应。 |
 | `stream-state.test.ts`、`streaming-metadata.test.ts`、`stream-feedback-controller.test.ts` | stream 状态、metadata 和反馈卡片更新节奏。 |
 | `mirror-runtime.test.ts`、`mirror-turns.test.ts`、`mirror-delivery-plan.test.ts`、`bridge-manager.test.ts` | mirror pending delivery、turn 队列和交付策略；Codex `task_complete.error` 在存在时必须形成 error 终态并保留真实 errorText。对 0.144.3 还要用真实 custom-provider HTTP 400 验证：直接 TUI 提交后不再发送消息，rollout 不含 error，但空闲 checkpoint 能排除历史方块并在 completed 后补成 error；checkpoint/turn 重叠、同批多 turn、capture 期间 rollout 增长均必须拒绝错归。窄 tmux 必须让 JSON error cell 在字符串内部换行并仍恢复完整 type/message。baseline 调度回归还必须证明多个 subscription 共用一次 `tmux list-sessions`，只 capture 真实存活 session，缺失 session 在退避期不重复 list/capture。 |
-| `mirror-feedback-controller.test.ts`、`mirror-reconcile-core.test.ts`、`mirror-reconcile-batch.test.ts`、`mirror-subscription-registry.test.ts`、`mirror-subscription-state.test.ts`、`mirror-runtime.test.ts` | mirror 订阅、reconcile、批处理、状态恢复和反馈控制；稳定 binding 跨多轮 reconcile 只能做已知文件 stat，不得重复 source discovery，路径失效后才重新定位并切换 watcher。 |
+| `mirror-feedback-controller.test.ts`、`mirror-reconcile-core.test.ts`、`mirror-reconcile-batch.test.ts`、`mirror-subscription-registry.test.ts`、`mirror-subscription-state.test.ts`、`mirror-runtime.test.ts` | mirror 订阅、reconcile、批处理、状态恢复和反馈控制；稳定 binding 跨多轮 reconcile 只能做已知文件 stat，不得重复 source discovery，路径失效后才重新定位并切换 watcher。新 attach 首次只建立 cursor、不回放历史；Bridge 重启恢复已有水位时必须追回水位之后的记录。runtime 可声明补充增量事件源；Kimi 用独立游标读取 session 自己的 `kimi-code.log`，即使主 wire 没变化也必须把完整 `ERROR turn failed` 变成一次 error 终态，不能把可重试 WARN 提前终结，也不能重复投递。 |
 | `feishu-markdown.test.ts`、`plain-markdown.test.ts` | Markdown 到飞书卡片/纯文本的转换，含表格、代码块、工具/任务进度、Kimi 单行统一 footer 和最终卡片 JSON。 |
 | `scripted-tool-model.test.ts`、`tool-presentation.test.ts`、`text-preview.test.ts` | 确定性生成任意工具 start/result/error 序列，验证公共标题语义和字符数/行数双 hard upper bound；不依赖真实模型随机输出。 |
 | `feishu-adapter-card-e2e.test.ts` | 飞书 card 级本地 E2E，覆盖 SDK/mirror question form、GPT-5.6 orchestration、Kimi Markdown、terminal→usage 后无悬挂 pending turn、内部 reminder 不可见，以及真实 bash/patch 详情等 payload 形态。 |
-| `outbound-artifacts.test.ts` | 出站 artifact、问题表单和附件描述。 |
+| `outbound-artifacts.test.ts`、`streaming-artifact-delivery.test.ts` | 出站 artifact、问题表单和附件描述；流式附件的完整块检测、异步去重、失败后终态重试资格。 |
 | `permission.test.ts`、`permission-broker.test.ts` | 权限请求、pending permission 状态和 broker 行为。 |
 
 主路径性能回归必须同时覆盖三层：`command-dispatch.test.ts` 用永久 pending 的 fake Feishu reply、群名同步、callback answer 和 mirror reconcile 证明 raw handler 及时结束、下一条命令可继续入队；`permission-broker.test.ts` 用 pending 权限卡 ACK 证明 forwarding 立即返回并在 receipt 到达后回填 permission link，还要证明最终投递失败会立即结束 pending permission/selection waiter；`feishu-adapter.test.ts` 用 pending notice/reaction ACK 证明构造完成的内部消息先入队；`interactive-turn-runner.test.ts` 证明 stream finalize/fallback/onMessageEnd 的顺序留在后台 delivery job 中。`/new` 这类必须先取得远端主键的事务要验证文本命令和 command callback 都被路由到不阻塞 conversation 的 long-I/O job lane。常规测试必须显式 drain 后台 delivery，禁止为了让测试立刻读到 `sent` 而在产品 handler 末尾增加 `setImmediate` 或等待远端 ACK；也禁止用直接删除 `await` 的方式让卡片 cleanup 抢在 finalize 前执行。

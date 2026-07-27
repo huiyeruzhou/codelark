@@ -5,6 +5,7 @@ import { createMirrorSubscription } from '../../../../bridge/mirror/subscription
 import {
   isMirrorSnapshotUnchanged,
   markMirrorSnapshotMissing,
+  readMirrorDeliverableRecords,
   refreshMirrorSubscriptionSource,
 } from '../../../../bridge/mirror/reconcile-core.js';
 
@@ -130,5 +131,98 @@ describe('mirror-reconcile-core', () => {
       }),
       false,
     );
+  });
+
+  it('recovers records written after the last delivered event on first reconcile', () => {
+    const subscription = createMirrorSubscription({
+      bindingId: 'binding-1',
+      sessionId: 'session-1',
+      channelType: 'feishu-default',
+      chatId: 'chat-1',
+      threadId: 'thread-1',
+      filePath: '/tmp/session.jsonl',
+      lastDeliveredAt: '2026-07-27T08:17:30.464Z',
+    });
+    const source = {
+      runtime: 'codex' as const,
+      findByThreadId: () => null,
+      readDelta: () => ({
+        records: [
+          {
+            signature: 'old-complete',
+            type: 'task_complete' as const,
+            content: 'old answer',
+            timestamp: '2026-07-27T08:17:30.464Z',
+          },
+          {
+            signature: 'new-user',
+            type: 'message' as const,
+            role: 'user' as const,
+            content: 'new prompt',
+            timestamp: '2026-07-27T08:55:58.275Z',
+          },
+          {
+            signature: 'new-complete',
+            type: 'task_complete' as const,
+            content: 'new answer',
+            timestamp: '2026-07-27T08:57:24.000Z',
+          },
+        ],
+        nextOffset: 300,
+        trailingText: '',
+        nextTurnId: null,
+        nextSpecialCallIds: [],
+        unknownKinds: [],
+      }),
+    };
+
+    const result = readMirrorDeliverableRecords(subscription, {
+      size: 300,
+      mtimeMs: 1,
+      identity: '1:1',
+    }, source);
+
+    assert.deepEqual(result.records.map((record) => record.signature), ['new-user', 'new-complete']);
+    assert.equal(subscription.cursor.lastEventSignature, 'new-complete');
+  });
+
+  it('does not replay existing records for a newly attached mirror without a delivery watermark', () => {
+    const subscription = createMirrorSubscription({
+      bindingId: 'binding-1',
+      sessionId: 'session-1',
+      channelType: 'feishu-default',
+      chatId: 'chat-1',
+      threadId: 'thread-1',
+      filePath: '/tmp/session.jsonl',
+      lastDeliveredAt: null,
+    });
+    const source = {
+      runtime: 'codex' as const,
+      findByThreadId: () => null,
+      readDelta: () => ({
+        records: [
+          {
+            signature: 'existing-complete',
+            type: 'task_complete' as const,
+            content: 'existing answer',
+            timestamp: '2026-07-27T08:17:30.464Z',
+          },
+        ],
+        nextOffset: 100,
+        trailingText: '',
+        nextTurnId: null,
+        nextSpecialCallIds: [],
+        unknownKinds: [],
+      }),
+    };
+
+    const result = readMirrorDeliverableRecords(subscription, {
+      size: 100,
+      mtimeMs: 1,
+      identity: '1:1',
+    }, source);
+
+    assert.deepEqual(result.records, []);
+    assert.equal(subscription.cursor.lastEventSignature, 'existing-complete');
   });
 });

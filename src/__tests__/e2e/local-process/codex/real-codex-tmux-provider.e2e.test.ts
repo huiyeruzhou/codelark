@@ -108,7 +108,17 @@ function findCodexTuiSelectionMessage(adapter: RecordingAdapter): { message: Out
 class RecordingStreamingAdapter extends RecordingAdapter {
   readonly statuses: string[] = [];
   readonly streamEnds: Array<{ status: 'completed' | 'interrupted' | 'error'; text: string }> = [];
+  readonly deliveryEvents: Array<{ kind: 'send' | 'end'; attachmentPaths?: string[] }> = [];
   private activeStreamKey: string | null = null;
+  private streamMessageReady = false;
+
+  async send(message: OutboundMessage) {
+    this.deliveryEvents.push({
+      kind: 'send',
+      attachmentPaths: (message.attachments || []).map((attachment) => attachment.path),
+    });
+    return await super.send(message);
+  }
 
   supportsStructuredStreamingUi(): boolean {
     return true;
@@ -119,11 +129,20 @@ class RecordingStreamingAdapter extends RecordingAdapter {
   }
 
   getStructuredStreamingUiMessageId(_chatId: string, streamKey?: string): string | null {
-    return this.hasActiveStreamingUi(_chatId, streamKey) ? 'real-codex-error-card' : null;
+    return this.streamMessageReady && this.hasActiveStreamingUi(_chatId, streamKey)
+      ? 'real-codex-stream-card'
+      : null;
+  }
+
+  async waitForStructuredStreamingUiMessageId(_chatId: string, streamKey?: string): Promise<string | null> {
+    await Promise.resolve();
+    this.streamMessageReady = true;
+    return this.getStructuredStreamingUiMessageId(_chatId, streamKey);
   }
 
   onMirrorStreamStart(_chatId: string, streamKey?: string): void {
     this.activeStreamKey = streamKey || null;
+    this.streamMessageReady = false;
   }
 
   onStreamText(_chatId: string, _text: string, streamKey?: string): void {
@@ -141,8 +160,10 @@ class RecordingStreamingAdapter extends RecordingAdapter {
     text: string,
     _streamKey?: string,
   ): Promise<boolean> {
+    this.deliveryEvents.push({ kind: 'end' });
     this.streamEnds.push({ status, text });
     this.activeStreamKey = null;
+    this.streamMessageReady = false;
     return Promise.resolve(true);
   }
 }
@@ -312,6 +333,151 @@ describe('real codex tmux provider e2e', () => {
         return typeof body.reasoning?.effort === 'string' && body.reasoning.effort.length > 0;
       }), true, 'Codex request body should include a reasoning effort');
     } finally {
+      if (tmuxSessionName) {
+        await execFileAsync('tmux', ['kill-session', '-t', tmuxSessionName]).catch(() => undefined);
+      }
+      if (generatedThreadId) {
+        cleanupCodexThreadArtifacts(generatedThreadId, generatedThreadFilePath);
+      }
+      removeRuntimeTestDirectory(workDir);
+      removeRuntimeTestDirectory(codexHome);
+      await proxy.close().catch(() => undefined);
+      for (const [key, value] of Object.entries(previousEnv)) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+      _testOnly.resetStateForTests();
+    }
+  });
+
+  it('sends an answer artifact before the real Codex turn completes and does not duplicate it at finalization', { timeout: 120_000 }, async (t: TestContext) => {
+    if (!(await commandAvailable('tmux', ['-V']))) {
+      t.skip('tmux is not available');
+      return;
+    }
+    if (!(await commandAvailable('codex', ['--version']))) {
+      t.skip('codex CLI is not available');
+      return;
+    }
+
+    const previousEnv = {
+      CODEX_HOME: process.env.CODEX_HOME,
+      CODELARK_CODEX_BASE_URL: process.env.CODELARK_CODEX_BASE_URL,
+      CODELARK_CODEX_API_KEY: process.env.CODELARK_CODEX_API_KEY,
+      CODEX_API_KEY: process.env.CODEX_API_KEY,
+      OPENAI_API_KEY: process.env.OPENAI_API_KEY,
+      CODELARK_CODEX_SKIP_GIT_REPO_CHECK: process.env.CODELARK_CODEX_SKIP_GIT_REPO_CHECK,
+    };
+    const codexHome = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-real-codex-home-artifact-'));
+    const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-real-codex-artifact-'));
+    const artifactPath = path.join(workDir, 'answer-artifact.txt');
+    fs.writeFileSync(artifactPath, 'answer artifact from real Codex + mock model\n', 'utf8');
+    const sendBlock = `<clk-send>${JSON.stringify({ type: 'file', path: artifactPath })}</clk-send>`;
+    const proxy = await startLocalResponsesProxy({
+      responseText: `CODEX_STREAM_ARTIFACT_READY\n${sendBlock}`,
+      responsesFinishDelayMs: 4_000,
+    });
+    process.env.CODEX_HOME = codexHome;
+    process.env.CODELARK_CODEX_BASE_URL = proxy.baseUrl;
+    process.env.CODELARK_CODEX_API_KEY = 'clk-local-proxy-key';
+    process.env.CODEX_API_KEY = 'clk-local-proxy-key';
+    process.env.OPENAI_API_KEY = 'clk-local-proxy-key';
+    process.env.CODELARK_CODEX_SKIP_GIT_REPO_CHECK = 'true';
+    resetBridgeTestState({ cleanCodexHome: true });
+    seedCodexApiKeyAuth(codexHome, 'clk-local-proxy-key');
+    fs.writeFileSync(path.join(codexHome, 'config.toml'), [
+      'model_provider = "mock"',
+      '',
+      '[model_providers.mock]',
+      'name = "mock"',
+      `base_url = "${proxy.baseUrl}"`,
+      'env_key = "OPENAI_API_KEY"',
+      'wire_api = "responses"',
+      'request_max_retries = 0',
+      'stream_max_retries = 0',
+      'requires_openai_auth = false',
+      'supports_websockets = false',
+      '',
+    ].join('\n'));
+    _testOnly.resetStateForTests();
+
+    const model = process.env[REAL_CODEX_E2E_MODEL_ENV] || 'gpt-5.4';
+    const pendingPerms = new PendingPermissions();
+    const store = initBridgeTestContext({
+      settings: makeBridgeSettings({
+        bridge_default_provider: 'tmux',
+        bridge_default_model: model,
+        bridge_codex_reasoning_effort: 'low',
+      }),
+      llm: new CodexRoutingProvider(pendingPerms, 'tmux'),
+      permissions: {
+        resolvePendingPermission: (id, resolution) => pendingPerms.resolve(id, resolution),
+      },
+    });
+    const adapter = new RecordingStreamingAdapter();
+    registerAdapter(adapter);
+    const bridgeState = (globalThis as unknown as Record<string, any>).__bridge_manager__;
+    bridgeState.running = true;
+    const address = { channelType: 'feishu', chatId: `chat-real-artifact-${process.pid}-${Date.now()}` } as const;
+    let tmuxSessionName = '';
+    let generatedThreadId = '';
+    let generatedThreadFilePath = '';
+
+    try {
+      await _testOnly.handleMessage(adapter, inboundMessage(address, `/clear real-codex-artifact ${workDir}`, 'incoming-artifact-new'));
+      await _testOnly.handleMessage(adapter, inboundMessage(address, '/provider tmux', 'incoming-artifact-provider'));
+      const turnPromise = _testOnly.handleMessage(
+        adapter,
+        inboundMessage(address, 'Create and send the requested artifact.', 'incoming-artifact-turn'),
+      );
+      await approveTrustPermission(adapter, store, address, { required: false, timeoutMs: 3_000 });
+
+      assert.equal(await waitForCondition(
+        () => proxy.requests.some((request) => request.url.includes('/responses')),
+        15_000,
+        50,
+      ), true, 'real Codex executable should call the mock Responses server');
+
+      const binding = store.getChannelChat(address.channelType, address.chatId);
+      assert.ok(binding);
+      const session = store.getSession(binding.bridgeSessionId);
+      generatedThreadId = session?.runtime?.codex?.threadId?.trim() || '';
+      tmuxSessionName = session?.runtime?.general?.tmuxSessionName || '';
+      generatedThreadFilePath = getCodexSessionByThreadIdSafe(
+        generatedThreadId,
+        'real Codex streaming artifact cleanup lookup',
+      )?.filePath || '';
+
+      const deliveredBeforeCompletion = await waitForCondition(async () => {
+        await _testOnly.reconcileMirrorSubscriptions();
+        const sent = adapter.sent.flatMap((message) => message.attachments || [])
+          .some((attachment) => attachment.path === artifactPath);
+        return sent && adapter.streamEnds.length === 0;
+      }, 3_000, 50);
+      assert.equal(deliveredBeforeCompletion, true, 'answer artifact should arrive while the mock response remains open');
+
+      await turnPromise;
+      assert.equal(await waitForCondition(async () => {
+        await _testOnly.reconcileMirrorSubscriptions();
+        return adapter.streamEnds.some((entry) => entry.status === 'completed');
+      }, 15_000, 50), true);
+
+      const attachmentPaths = adapter.sent
+        .flatMap((message) => message.attachments || [])
+        .map((attachment) => attachment.path);
+      assert.deepEqual(attachmentPaths, [artifactPath]);
+      const artifactMessage = adapter.sent.find((message) => (
+        message.attachments || []
+      ).some((attachment) => attachment.path === artifactPath));
+      assert.equal(artifactMessage?.replyToMessageId, 'real-codex-stream-card');
+      const sendIndex = adapter.deliveryEvents.findIndex((event) => (
+        event.kind === 'send' && event.attachmentPaths?.includes(artifactPath)
+      ));
+      const endIndex = adapter.deliveryEvents.findIndex((event) => event.kind === 'end');
+      assert.ok(sendIndex >= 0 && endIndex > sendIndex);
+    } finally {
+      await _testOnly.waitForPendingTmuxSelectionPromptProbes();
+      bridgeState.running = false;
       if (tmuxSessionName) {
         await execFileAsync('tmux', ['kill-session', '-t', tmuxSessionName]).catch(() => undefined);
       }

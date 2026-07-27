@@ -2310,6 +2310,44 @@ describe('feishu-adapter structured streaming regions', () => {
     assert.equal(reactionDeleteCalls.length, 0);
   });
 
+  it('waits for an in-flight mirror card before exposing its message id', async () => {
+    const createCard = createDeferred<{ data: { card_id: string } }>();
+    const adapter = new FeishuAdapter({
+      id: 'feishu-default',
+      provider: 'feishu',
+      enabled: true,
+      alias: '飞书',
+      config: {
+        appId: 'app-id',
+        appSecret: 'app-secret',
+        streamingEnabled: true,
+      },
+    });
+    (adapter as any).restClient = {
+      cardkit: {
+        v1: {
+          card: {
+            create: async () => createCard.promise,
+          },
+        },
+      },
+      im: {
+        message: {
+          create: async () => ({ data: { message_id: 'mirror-message-1' } }),
+        },
+      },
+    };
+
+    adapter.onMirrorStreamStart('chat-1', 'stream-1');
+    const messageIdPromise = adapter.waitForStructuredStreamingUiMessageId('chat-1', 'stream-1');
+    assert.equal(adapter.getStructuredStreamingUiMessageId('chat-1', 'stream-1'), null);
+
+    createCard.resolve({ data: { card_id: 'card-1' } });
+
+    assert.equal(await messageIdPromise, 'mirror-message-1');
+    assert.equal(adapter.getStructuredStreamingUiMessageId('chat-1', 'stream-1'), 'mirror-message-1');
+  });
+
   it('hands an in-flight streaming card to a replacement adapter without creating a second message', async () => {
     const createCard = createDeferred<{ data: { card_id: string } }>();
     const cardCreateCalls: Array<Record<string, any>> = [];

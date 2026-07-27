@@ -21,6 +21,12 @@ import {
   findKimiSessionFileById,
   readKimiSessionMirrorRecordDeltaByFilePath,
 } from './session-index.js';
+import {
+  kimiSessionLogFilePath,
+  parseKimiRuntimeErrorFromLog,
+} from './runtime-log.js';
+
+export { parseKimiRuntimeErrorFromLog } from './runtime-log.js';
 import { assertKimiLaunchAuthentication } from './auth.js';
 
 const DEFAULT_KIMI_POLL_INTERVAL_MS = 500;
@@ -193,10 +199,6 @@ interface KimiTuiRunContext {
   hasError: boolean;
 }
 
-function kimiSessionLogFilePath(sessionFilePath: string): string {
-  return path.resolve(path.dirname(sessionFilePath), '..', '..', 'logs', 'kimi-code.log');
-}
-
 function initializeKimiSessionLogCursor(context: KimiTuiRunContext): void {
   if (!context.sessionFilePath) return;
   const filePath = kimiSessionLogFilePath(context.sessionFilePath);
@@ -207,19 +209,6 @@ function initializeKimiSessionLogCursor(context: KimiTuiRunContext): void {
     context.nextLogOffset = 0;
   }
   context.logTrailingText = '';
-}
-
-export function parseKimiRuntimeErrorFromLog(text: string): string | null {
-  const requestFailure = text.match(/\bllm request failed\b[^\n]*\berrorMessage="((?:\\.|[^"\\])*)"/u);
-  if (requestFailure?.[1]) {
-    try {
-      return JSON.parse(`"${requestFailure[1]}"`) as string;
-    } catch {
-      return requestFailure[1].replace(/\\"/g, '"');
-    }
-  }
-  const turnFailure = text.match(/\bERROR\s+turn failed\b[^\n]*\n\s+([^\n]+)/u);
-  return turnFailure?.[1]?.trim() || null;
 }
 
 function readKimiRuntimeErrorDelta(context: KimiTuiRunContext): { error: string | null; advanced: boolean } {

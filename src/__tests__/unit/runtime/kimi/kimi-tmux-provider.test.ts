@@ -287,6 +287,66 @@ describe('Kimi tmux provider helpers', () => {
     ]);
   });
 
+  it('emits a terminal mirror error from kimi-code.log only after turn failed is complete', () => {
+    const cwd = path.join(os.tmpdir(), 'kimi-runtime-error-project');
+    const sessionId = 'session_34343434-3434-4434-8434-343434343434';
+    const wirePath = writeKimiSession({ sessionId, cwd, title: 'Kimi runtime error' });
+    const logPath = path.resolve(path.dirname(wirePath), '..', '..', 'logs', 'kimi-code.log');
+    fs.mkdirSync(path.dirname(logPath), { recursive: true });
+    const source = createKimiMirrorJsonlSource();
+    assert.ok(source.readSupplementalDelta);
+
+    fs.writeFileSync(logPath, [
+      '2026-01-01T00:00:00.000Z ERROR turn failed  turnId=old',
+      '  KimiError: historical failure must not replay',
+      '2026-07-27T08:14:36.747Z WARN  llm request failed  turnStep=0.1 attempt=1/10 model=k3 errorName=APIStatusError errorMessage="402 membership inactive" statusCode=402',
+      '2026-07-27T08:14:36.751Z ERROR turn failed  turnId=0',
+      '',
+    ].join('\n'), 'utf8');
+    const headerOnly = source.readSupplementalDelta!(
+      wirePath,
+      0,
+      '',
+      null,
+      'turn-current',
+    );
+    assert.deepEqual(headerOnly.records, []);
+    assert.match(headerOnly.trailingText, /ERROR turn failed/);
+
+    fs.appendFileSync(logPath, [
+      '  APIStatusError: 402 We\'re unable to verify your membership benefits at this time.',
+      '    at KimiChatProvider.generate (main.cjs:1:1)',
+      '',
+    ].join('\n'), 'utf8');
+    const terminal = source.readSupplementalDelta!(
+      wirePath,
+      headerOnly.nextOffset,
+      headerOnly.trailingText,
+      null,
+      'turn-current',
+    );
+    assert.deepEqual(terminal.records.map((record) => ({
+      type: record.type,
+      turnId: record.turnId,
+      isError: record.isError,
+      errorText: record.errorText,
+    })), [{
+      type: 'task_complete',
+      turnId: 'turn-current',
+      isError: true,
+      errorText: 'APIStatusError: 402 We\'re unable to verify your membership benefits at this time.',
+    }]);
+
+    const unchanged = source.readSupplementalDelta!(
+      wirePath,
+      terminal.nextOffset,
+      terminal.trailingText,
+      null,
+      'turn-current',
+    );
+    assert.deepEqual(unchanged.records, []);
+  });
+
   it('preserves partial Kimi wire lines across incremental mirror reads', () => {
     const cwd = path.join(os.tmpdir(), 'kimi-partial-project');
     const sessionId = 'session_44444444-4444-4444-8444-444444444444';

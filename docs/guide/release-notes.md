@@ -8,12 +8,16 @@
 - 修复 `/t` runtime 下拉 ID 超过飞书限制导致整张卡创建/更新失败；renderer 现在统一保证 element ID 合法。
 - `/every`、`/then`、`/status`、会话活动时间、tmux/pty screen、hot-update、streaming footer 与 Web 状态页统一使用 bridge 启动时解析的本地时区。
 - `tmux 自动回车`不再作为用户配置；普通 tmux 文本固定补 Enter，显式 Enter 不重复。`/current` 通用配置固定按“对话名称、工作目录、tmux 输出行数”显示。
+- 模型在 turn 运行中输出完整 `<clk-send>` 后即可立即发送文件，不再等待 completed；think/reasoning 中的同类文本不会触发发送，终态也不会重复发送已经成功投递的附件。
 
 ### 可靠性与验证
 
 - 飞书按钮、下拉和表单回调新增独立 2 秒响应预算与日志；授权确认不再在 ACK 前同步写配置。
 - 所有 CardKit/interactive card 请求上限收紧为 10 秒，可降级的 `card.idConvert` 上限为 2 秒，避免单个恢复请求占住同聊天 interactive queue 数十秒。
 - 新增异步增量轮数缓存、CardKit 超时、callback ACK 矩阵、element ID、时区一致性和配置入口回归测试。
+- 新增 SDK/mirror 流式附件生命周期测试；以真实 Codex CLI、真实 tmux 和 Mock Responses 服务验证“answer 在终态前发送、completed 不重复”，Kimi thinking 排除继续由真实 wire 格式的协议与 workflow 回归覆盖。
+- 隔离飞书手测曾发现附件在 CardKit message id 就绪前抢跑，成为 `reply_to=null` 的根消息；现改为在后台交付队列等待真实卡片 message id，并补充延迟卡片合同与真实 Codex executable 回归。真实飞书用户侧 gate 需在修复版本上重新执行，不能复用旧 API 记录。
+- Kimi tmux mirror 现在同时增量观察 session 的 `kimi-code.log`；CLI 已记录 `ERROR turn failed`、但 `wire.jsonl` 没有 terminal 时，会把真实错误类型和原因收口到统一 error 卡片，不再一直停留在“思考中”。
 
 ## v0.2.1
 

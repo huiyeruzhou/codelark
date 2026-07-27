@@ -12,6 +12,7 @@ import type {
 import {
   buildToolCallDetailFromInput,
 } from '../../shared/progress/tool-call-details.js';
+import { readKimiRuntimeLogDelta } from './runtime-log.js';
 
 export interface KimiSessionFileSummary {
   sessionId: string;
@@ -735,6 +736,21 @@ export function createKimiMirrorJsonlSource(): MirrorJsonlSource {
         trailingText,
         currentTurnId,
         currentSpecialCallIds,
+      );
+    },
+    readSupplementalDelta(
+      filePath,
+      startOffset,
+      trailingText,
+      afterTimestamp,
+      currentTurnId,
+    ) {
+      return readKimiRuntimeLogDelta(
+        filePath,
+        startOffset,
+        trailingText,
+        afterTimestamp,
+        currentTurnId,
       );
     },
   };

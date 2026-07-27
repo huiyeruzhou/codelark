@@ -5175,6 +5175,13 @@ export class FeishuAdapter extends BaseChannelAdapter {
     return this.activeCards.get(this.resolveStreamKey(chatId, streamKey))?.messageId || null;
   }
 
+  async waitForStructuredStreamingUiMessageId(chatId: string, streamKey?: string): Promise<string | null> {
+    const cardKey = this.resolveStreamKey(chatId, streamKey);
+    const pending = this.cardCreatePromises.get(cardKey) || this.scheduledCardCreatePromises.get(cardKey);
+    if (pending) await pending;
+    return this.activeCards.get(cardKey)?.messageId || null;
+  }
+
   private shouldFullRefreshCard(state: FeishuCardState, now: number): boolean {
     const interval = Math.max(0, this.cardFullRefreshIntervalMs);
     if (interval <= 0) return false;

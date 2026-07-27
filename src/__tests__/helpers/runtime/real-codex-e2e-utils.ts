@@ -111,7 +111,7 @@ export function seedCodexApiKeyAuth(codexHome: string, apiKey: string): void {
   }, null, 2), { encoding: 'utf-8', mode: 0o600 });
 }
 
-function createResponsesEventStreamPayload(model: string, responseText: string): string {
+function createResponsesEventStreamChunks(model: string, responseText: string): string[] {
   const now = Math.floor(Date.now() / 1000);
   const responseId = `resp_clk_${now}`;
   const itemId = `msg_clk_${now}`;
@@ -189,9 +189,10 @@ function createResponsesEventStreamPayload(model: string, responseText: string):
       },
     }],
   ];
-  return events
-    .map(([event, data]) => `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`)
-    .join('') + 'data: [DONE]\n\n';
+  return [
+    ...events.map(([event, data]) => `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`),
+    'data: [DONE]\n\n',
+  ];
 }
 
 function createChatCompletionsEventStreamPayload(model: string, responseText: string): string {
@@ -265,6 +266,7 @@ function createAnthropicMessagesEventStreamPayload(model: string, responseText: 
 export async function startLocalResponsesProxy(options: {
   responseText?: string;
   responseDelayMs?: number;
+  responsesFinishDelayMs?: number;
   errorWhenBodyIncludes?: string;
   errorStatus?: number;
   errorBody?: unknown;
@@ -359,7 +361,15 @@ export async function startLocalResponsesProxy(options: {
             'cache-control': 'no-cache',
             connection: 'keep-alive',
           });
-          res.end(createResponsesEventStreamPayload(model, responseText));
+          const chunks = createResponsesEventStreamChunks(model, responseText);
+          const finishDelayMs = Math.max(0, options.responsesFinishDelayMs ?? 0);
+          if (finishDelayMs > 0) {
+            res.write(chunks.slice(0, -2).join(''));
+            await sleep(finishDelayMs);
+            res.end(chunks.slice(-2).join(''));
+            return;
+          }
+          res.end(chunks.join(''));
         })();
         return;
       }
@@ -435,8 +445,7 @@ export async function startLocalResponsesProxy(options: {
         && typeof (body as { model?: unknown }).model === 'string'
         ? (body as { model: string }).model
         : 'gpt-5.4';
-      const streamPayload = createResponsesEventStreamPayload(model, responseText)
-        .split(/\n\n/)
+      const streamPayload = createResponsesEventStreamChunks(model, responseText)
         .map((chunk) => chunk.trim())
         .filter(Boolean);
       for (const chunk of streamPayload) {

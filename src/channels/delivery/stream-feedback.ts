@@ -11,6 +11,19 @@ export interface StreamFeedbackTarget {
   ensureStarted?(): void;
 }
 
+export async function resolveStructuredStreamingUiMessageId(
+  target: Pick<StreamFeedbackTarget, 'adapter' | 'chatId' | 'streamKey'>,
+): Promise<string | null> {
+  try {
+    if (typeof target.adapter.waitForStructuredStreamingUiMessageId === 'function') {
+      return await target.adapter.waitForStructuredStreamingUiMessageId(target.chatId, target.streamKey);
+    }
+    return target.adapter.getStructuredStreamingUiMessageId?.(target.chatId, target.streamKey) || null;
+  } catch {
+    return target.adapter.getStructuredStreamingUiMessageId?.(target.chatId, target.streamKey) || null;
+  }
+}
+
 export function pushStreamFeedbackText(
   target: StreamFeedbackTarget,
   text: string,

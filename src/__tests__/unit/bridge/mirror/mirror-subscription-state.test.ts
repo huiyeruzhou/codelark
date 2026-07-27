@@ -44,6 +44,8 @@ describe('mirror-subscription-state', () => {
       trailingText: '',
       activeMirrorTurnId: null,
       activeSpecialCallIds: new Set(),
+      supplementalOffset: 0,
+      supplementalTrailingText: '',
       bufferedRecords: [],
       pendingTurn: null,
       pendingDeliveries: [],
@@ -104,6 +106,8 @@ describe('mirror-subscription-state', () => {
     subscription.trailingText = 'partial';
     subscription.activeMirrorTurnId = 'turn-old';
     subscription.activeSpecialCallIds.add('plan-old');
+    subscription.supplementalOffset = 42;
+    subscription.supplementalTrailingText = 'partial-error';
     subscription.bufferedRecords.push({
       signature: 'sig-1',
       type: 'message',
@@ -153,6 +157,8 @@ describe('mirror-subscription-state', () => {
     assert.equal(subscription.trailingText, '');
     assert.equal(subscription.activeMirrorTurnId, null);
     assert.deepEqual(subscription.activeSpecialCallIds, new Set());
+    assert.equal(subscription.supplementalOffset, 0);
+    assert.equal(subscription.supplementalTrailingText, '');
     assert.deepEqual(subscription.bufferedRecords, []);
     assert.deepEqual(subscription.pendingDeliveries, []);
     assert.deepEqual(subscription.unknownMirrorKindsSeen, new Set());
@@ -209,6 +215,8 @@ describe('mirror-subscription-state', () => {
     subscription.trailingText = 'partial';
     subscription.activeMirrorTurnId = 'turn-old';
     subscription.activeSpecialCallIds.add('plan-old');
+    subscription.supplementalOffset = 42;
+    subscription.supplementalTrailingText = 'partial-error';
     subscription.bufferedRecords.push({
       signature: 'sig-1',
       type: 'message',
@@ -258,6 +266,8 @@ describe('mirror-subscription-state', () => {
     assert.equal(subscription.trailingText, '');
     assert.equal(subscription.activeMirrorTurnId, null);
     assert.deepEqual(subscription.activeSpecialCallIds, new Set());
+    assert.equal(subscription.supplementalOffset, 0);
+    assert.equal(subscription.supplementalTrailingText, '');
     assert.deepEqual(subscription.bufferedRecords, []);
     assert.deepEqual(subscription.pendingDeliveries, [
       {

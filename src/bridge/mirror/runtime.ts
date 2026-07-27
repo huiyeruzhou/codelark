@@ -422,7 +422,7 @@ export function createMirrorRuntime(
     }
 
     const unchanged = isMirrorSnapshotUnchanged(subscription, snapshot);
-    if (unchanged && !deps.hasPendingMirrorWork(subscription)) {
+    if (unchanged && !deps.hasPendingMirrorWork(subscription) && !mirrorSource.readSupplementalDelta) {
       deps.syncMirrorSessionStateSafe(subscription.sessionId, 'mirror reconcile unchanged snapshot');
       return 'processed';
     }

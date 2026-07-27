@@ -154,6 +154,14 @@ CardKit create/update/settings/element 与 interactive/rich-card message 请求�
 
 新增工具与状态栏刷新必须保持为两个 CardKit 动作：先原子创建或更新工具 history，再单独更新 `streaming_status`。这既保持工具调用的原子边界，也让 footer 保留流式效果；不能为了合并请求而把工具正文和状态栏一起重绘成整张卡。
 
+### 流式出站附件
+
+`<clk-send>` 不等待 turn completed。SDK runtime 从只包含 assistant answer 的累积快照检测完整块；tmux/mirror runtime 只从 assistant/commentary 正文检测。thinking、reasoning、状态栏和工具预览即使包含合法的 `<clk-send>`，也不得触发附件发送。
+
+协议块只存在于附件解析所需的原始 answer 中，不属于用户可见历史。SDK 正文和 mirror `StreamingHistoryItem` 在送入卡片前都要经过同一 final-only block 清理；原始 turn 文本继续保留到附件控制器和终态解析完成。这样中间卡、终态卡和 continuation 都不会显示 `<clk-send>`/`<clk-ask>` 或本地路径，同时不会因过早改写原始事件而丢失附件。
+
+每个 turn 使用一个流式附件交付控制器：新发现的附件进入同聊天 interactive delivery queue，模型事件消费不等待远端发送；控制器按附件类型、路径、caption 和 name 去重。若结构化流式卡片仍在异步创建，附件 worker 必须先等待 adapter 返回真实 message id，再把附件回复到该卡片；不能用同步查询得到的空值把附件发成脱离当前 turn 的根消息。卡片创建失败时才沿用通道原有的降级发送。终态处理先等待已排队的附件发送收口，再从 final response 中删除已经成功发送的项，因此 completed 不会重复发送。中间发送失败的项不标记为成功，仍保留给终态交付重试。
+
 ### Finalize
 
 入口是 `finalizeCard()`。
@@ -168,6 +176,10 @@ CardKit create/update/settings/element 与 interactive/rich-card message 请求�
 final full update 必须以 desired history 为权威。`responseText` 为空不代表卡片没有正文：mirror 在流式卡已包含正文时会传空 text 防止重复，工具和消息仍可能全部存在于 `historyItems`。因此 final renderer 的 content gate 同时检查 text、legacy tools 和 history；history-only 的 apply_patch 也必须在关闭 streaming mode 后完整保留。
 
 error 终态不能只靠红色边框或泛化的 `Error` footer。runtime adapter 把真实错误写入 `FinalizedBridgeMirrorTurn.errorText`；feedback controller 从 JSON 中提取 type/message（非 JSON 则保留原文），压成最多 600 个 Unicode 字符的单行状态，先更新“当前步骤：❌ 原因 + 已运行时间 + context/token usage”，再关闭 streaming mode。final footer 复用同一条原因，并继续追加 adapter 计算的真实耗时和 context；错误、时间、token 信息不能互相覆盖。history 不再重复插入错误块。新版结构化 JSONL error 与旧版 TUI `■` fallback 共用这个字段，channel renderer 不识别 Codex 专属格式。
+
+mirror source 可以提供独立于主 JSONL 的补充增量事件源，但补充事件仍必须归一化成 `BridgeMirrorRecord`，由同一个 reconcile、turn 和 delivery 生命周期消费。Kimi 的 `wire.jsonl` 在 provider 失败时可能没有 terminal；此时 source 增量读取同 session 的 `kimi-code.log`，只在完整 `ERROR turn failed` 及错误详情出现后合成 `task_complete(isError=true)`。可重试的 `WARN llm request failed` 不代表终态。补充游标与主 wire 游标分离，主 wire 未变化也会检查补充源，channel renderer 不解析 Kimi 日志。
+
+mirror 冷启动分为两种语义。新 attach 没有 `mirror_last_event_at` 水位，首次 reconcile 只建立 cursor，不回放已有历史；Bridge 重启恢复已有 binding 时带有持久化水位，首次 reconcile 必须交付时间严格晚于该水位的记录，追回停机窗口内已经写入 source、但尚未投递的 turn。不能把两种情况统一成“首次全部忽略”或“首次全部回放”。
 
 需要观察：
 

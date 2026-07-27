@@ -10,6 +10,7 @@ import type { ConfigPatch } from '../../../../configuration/schema.js';
 import { JsonFileStore } from '../../../../storage/json-store.js';
 import { getBridgeContext, initBridgeContext } from '../../../../bridge/host/context.js';
 import { BaseChannelAdapter, type StructuredStreamingUiActionButton, type StructuredStreamingUiMetadata, type StructuredStreamingUiSnapshot } from '../../../../channels/contracts.js';
+import { _testOnlyWaitForDeliveryQueuesForTests } from '../../../../channels/delivery/deliver.js';
 import type { ChannelChat, InboundMessage, OutboundAttachment, OutboundMessage, SendResult, StreamingHistoryItem, TaskProgressInfo, ToolCallInfo } from '../../../../domain/index.js';
 import * as router from '../../../../bridge/host/channel-router.js';
 import { formatInteractiveRuntimeStatus, runInteractiveMessage, type InteractiveTaskState } from '../../../../bridge/turn/interactive/runner.js';
@@ -221,6 +222,7 @@ function createDeferred<T = void>() {
 
 type ScriptedTurnCallbacks = {
   onPartialText?: (text: string) => void;
+  onAnswerText?: (text: string) => void;
   onPermissionRequest?: (request: PermissionRequestInfo) => Promise<void>;
   onToolEvent?: (
     toolId: string,
@@ -252,6 +254,7 @@ class ScriptedSessionSimulator {
   readonly adapter = new FakeFeishuStreamingAdapter();
   readonly taskStateMap = new Map<string, InteractiveTaskState>();
   readonly deliveredTexts: string[] = [];
+  readonly deliveredAttachments: OutboundAttachment[] = [];
   readonly healthEvents: Array<{ type: string; detail?: string }> = [];
   readonly mirrorSuppressions: Array<{ sessionId: string; prompt: string }> = [];
   readonly settledMirrorSuppressions: Array<{ sessionId: string; suppressionId: string | null; durationMs?: number }> = [];
@@ -370,8 +373,10 @@ class ScriptedSessionSimulator {
         releaseInteractiveTask: (sessionId, taskId) => {
           if (this.taskStateMap.get(sessionId)?.id === taskId) this.taskStateMap.delete(sessionId);
         },
-        deliverResponse: async (_adapter, _address, responseText) => {
+        deliverResponse: async (_adapter, _address, responseText, _sessionId, _replyToMessageId, attachments = []) => {
           this.deliveredTexts.push(responseText);
+          this.deliveredAttachments.push(...attachments);
+          return { ok: true };
         },
         persistCodexThreadUpdate() {},
         reconcileMirrorSubscriptions: async () => {
@@ -422,6 +427,7 @@ class ScriptedSessionSimulator {
             onTaskEvent,
             onContextUsage: options?.onContextUsage,
             onThinkingNote: options?.onThinkingNote,
+            onAnswerText: options?.onAnswerText,
             onRuntimeIdentity: options?.onRuntimeIdentity,
             abortSignal: effectiveAbortSignal,
           };
@@ -604,6 +610,52 @@ stream_status_check_interval_seconds = 3
     assert.equal(simulator.settledMirrorSuppressions[0]?.durationMs, 10_000);
     assert.deepEqual(simulator.abortedMirrorSuppressions, []);
     assertStreamMetadataHasBinding(simulator.adapter);
+  });
+
+  it('delivers answer artifacts while the SDK turn is running, excludes thinking, and dedupes the final response', async () => {
+    const simulator = new ScriptedSessionSimulator('chat-streaming-artifact-sdk');
+    const publicBlock = '<clk-send>{"type":"file","path":"/tmp/public-sdk.txt"}</clk-send>';
+    const privateBlock = '<clk-send>{"type":"file","path":"/tmp/private-sdk-thinking.txt"}</clk-send>';
+    let deliveredBeforeProcessCompleted = false;
+
+    await simulator.send({
+      messageId: 'incoming-streaming-artifact-sdk-1',
+      text: '生成并发送文件',
+      finalText: `文件已生成。\n${publicBlock}`,
+      steps: [
+        async ({ onThinkingNote, onAnswerText }) => {
+          onThinkingNote?.(`Kimi 私有思考 ${privateBlock}`);
+          onAnswerText?.(`文件已生成。\n${publicBlock}`);
+          await _testOnlyWaitForDeliveryQueuesForTests(simulator.adapter);
+          deliveredBeforeProcessCompleted = simulator.deliveredAttachments.length === 1;
+        },
+      ],
+    });
+
+    assert.equal(deliveredBeforeProcessCompleted, true);
+    assert.deepEqual(simulator.deliveredAttachments.map((attachment) => attachment.path), [
+      '/tmp/public-sdk.txt',
+    ]);
+    assert.equal(simulator.deliveredAttachments.some((attachment) => attachment.path.includes('private-sdk-thinking')), false);
+    assert.equal(simulator.deliveredTexts.some((text) => text.includes('clk-send')), false);
+  });
+
+  it('leaves streaming artifact ownership to mirror for Kimi tmux turns', async () => {
+    const simulator = new ScriptedSessionSimulator('chat-streaming-artifact-kimi-owner');
+    simulator.setRuntimeProvider('kimi', 'tmux');
+    let sdkAnswerObserverPresent = true;
+
+    await simulator.send({
+      messageId: 'incoming-streaming-artifact-kimi-owner',
+      text: 'Kimi mirror owns artifacts',
+      finalText: '',
+      steps: [({ onAnswerText }) => {
+        sdkAnswerObserverPresent = Boolean(onAnswerText);
+      }],
+    });
+
+    assert.equal(sdkAnswerObserverPresent, false);
+    assert.deepEqual(simulator.deliveredAttachments, []);
   });
 
   it('keeps one scripted session isolated across the basic dialogue provider sequence', async () => {

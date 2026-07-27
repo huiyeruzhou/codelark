@@ -119,6 +119,7 @@ export abstract class BaseChannelAdapter {
   hasActiveStreamingUi?(_chatId: string, _streamKey?: string): boolean;
   getStructuredStreamingUiSnapshot?(_chatId: string, _streamKey?: string): StructuredStreamingUiSnapshot | null;
   getStructuredStreamingUiMessageId?(_chatId: string, _streamKey?: string): string | null;
+  waitForStructuredStreamingUiMessageId?(_chatId: string, _streamKey?: string): Promise<string | null>;
   onMirrorStreamStart?(_chatId: string, _streamKey?: string): void;
   onStreamHistory?(_chatId: string, _items: StreamingHistoryItem[], _streamKey?: string): void;
   onToolEvent?(_chatId: string, _tools: ToolCallInfo[], _streamKey?: string): void;

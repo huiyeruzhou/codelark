@@ -1,5 +1,6 @@
 import type { BaseChannelAdapter } from '../../channels/contracts.js';
-import { deliver } from '../../channels/delivery/deliver.js';
+import { deliver, enqueueDelivery } from '../../channels/delivery/deliver.js';
+import { supportsOutboundArtifacts } from '../../channels/delivery/artifacts.js';
 import {
   getChannelProviderKey,
   getFeedbackParseMode,
@@ -27,11 +28,17 @@ import {
   pushStreamFeedbackTasks,
   pushStreamFeedbackText,
   pushStreamFeedbackTools,
+  resolveStructuredStreamingUiMessageId,
 } from '../../channels/delivery/stream-feedback.js';
 import { buildStreamContextTags, formatStreamTagLabel } from '../../shared/streaming-metadata.js';
 import {
   assembleCodexFinalResponse,
+  stripFinalOnlyBlocksFromStreamingHistory,
 } from '../turn/response-assembler.js';
+import {
+  createStreamingArtifactDeliveryController,
+  type StreamingArtifactDeliveryController,
+} from '../turn/streaming-artifact-delivery.js';
 import {
   deliverFinalResponse,
   type DeliverResponseImpl,
@@ -139,6 +146,52 @@ export function createMirrorFeedbackController(
   deps: MirrorFeedbackControllerDeps,
 ): MirrorFeedbackController {
   const streamOwnerAdapters = new WeakMap<BridgeMirrorTurnState, BaseChannelAdapter>();
+  const streamingArtifacts = new Map<string, StreamingArtifactDeliveryController>();
+
+  function getStreamingArtifactController(
+    subscription: BridgeMirrorSubscription,
+    turnState: BridgeMirrorTurnState,
+    adapter: BaseChannelAdapter,
+  ): StreamingArtifactDeliveryController | null {
+    if (!supportsOutboundArtifacts(adapter.provider)) return null;
+    const existing = streamingArtifacts.get(turnState.streamKey);
+    if (existing) return existing;
+    const address = {
+      channelType: subscription.channelType,
+      chatId: subscription.chatId,
+    };
+    const created = createStreamingArtifactDeliveryController({
+      deliver: async (attachments) => {
+        const replyToMessageId = await resolveStructuredStreamingUiMessageId({
+          adapter,
+          chatId: subscription.chatId,
+          streamKey: turnState.streamKey,
+        });
+        const queued = enqueueDelivery(adapter, address, () => deliverFinalResponse({
+          adapter,
+          address,
+          sessionId: subscription.sessionId,
+          replyToMessageId: replyToMessageId || undefined,
+          deliverResponse: deps.deliverResponse,
+        }, assembleCodexFinalResponse({ attachments }), { skipText: true }), {
+          queueClass: 'interactive',
+        });
+        return queued.completion;
+      },
+      onDeliveryError(error, attachments) {
+        console.warn('[bridge-manager] Mirror streaming artifact delivery failed:', {
+          bindingId: subscription.bindingId,
+          sessionId: subscription.sessionId,
+          chatId: subscription.chatId,
+          streamKey: turnState.streamKey,
+          attachmentCount: attachments.length,
+          error,
+        });
+      },
+    });
+    streamingArtifacts.set(turnState.streamKey, created);
+    return created;
+  }
 
   function getMirrorStreamingAdapter(subscription: BridgeMirrorSubscription): BaseChannelAdapter | null {
     const adapter = deps.getAdapter(subscription.channelType);
@@ -320,9 +373,13 @@ export function createMirrorFeedbackController(
     );
     pushStreamFeedbackHistory(
       createStreamTarget(subscription, turnState, adapter),
-      turnState.historyItems,
+      stripFinalOnlyBlocksFromStreamingHistory(turnState.historyItems),
     );
     pushMirrorStreamingStatus(subscription, turnState);
+    if (/<clk-send>/iu.test(turnState.streamedText)) {
+      getStreamingArtifactController(subscription, turnState, adapter)
+        ?.observeAnswerText(turnState.streamedText);
+    }
   }
 
   function updateMirrorToolProgress(
@@ -337,7 +394,7 @@ export function createMirrorFeedbackController(
     );
     pushStreamFeedbackHistory(
       createStreamTarget(subscription, turnState, adapter),
-      turnState.historyItems,
+      stripFinalOnlyBlocksFromStreamingHistory(turnState.historyItems),
     );
     pushMirrorStreamingStatus(subscription, turnState);
   }
@@ -371,6 +428,11 @@ export function createMirrorFeedbackController(
     const adapter = getMirrorStreamingAdapter(subscription);
     const pendingTurn = subscription.pendingTurn;
     if (!adapter || !pendingTurn?.streamStarted) return;
+    const streamedArtifactDelivery = streamingArtifacts.get(pendingTurn.streamKey);
+    if (streamedArtifactDelivery) {
+      streamingArtifacts.delete(pendingTurn.streamKey);
+      void streamedArtifactDelivery.close();
+    }
     void finalizeStreamFeedback(
       createStreamTarget(subscription, pendingTurn, adapter),
       status,
@@ -383,10 +445,15 @@ export function createMirrorFeedbackController(
     turn: FinalizedBridgeMirrorTurn,
     context: { batchSize: number },
   ): Promise<void> {
+    const streamedArtifactDelivery = streamingArtifacts.get(turn.streamKey);
+    await streamedArtifactDelivery?.close();
     const terminalStatus = await deps.resolveFinalizedTurnStatus?.(subscription, turn, context) ?? turn.status;
     turn.status = terminalStatus;
     const adapter = deps.getAdapter(subscription.channelType);
-    if (!adapter || !adapter.isRunning()) return;
+    if (!adapter || !adapter.isRunning()) {
+      streamingArtifacts.delete(turn.streamKey);
+      return;
+    }
     if (terminalStatus === 'error' && typeof adapter.onStreamStatus === 'function') {
       const startedAtMs = Date.parse(turn.startedAt || turn.timestamp);
       const nowMs = Date.now();
@@ -410,7 +477,9 @@ export function createMirrorFeedbackController(
     const responseParseMode = getFeedbackParseMode(subscription.channelType);
     const markdown = responseParseMode === 'Markdown';
     const rawFinalResponse = assembleCodexFinalResponse({ text: turn.text });
-    const attachments = rawFinalResponse.attachments;
+    const attachments = streamedArtifactDelivery
+      ? streamedArtifactDelivery.withoutDelivered(rawFinalResponse.attachments)
+      : rawFinalResponse.attachments;
     const questions = rawFinalResponse.questions;
     const cleanTurnText = terminalStatus === 'error'
       ? appendTerminalErrorText(rawFinalResponse.text, turn.errorText)
@@ -464,9 +533,11 @@ export function createMirrorFeedbackController(
 
     if (getChannelProviderKey(subscription.channelType) === 'feishu' && typeof adapter.onStreamEnd === 'function') {
       try {
-        const streamMessageId = typeof adapter.getStructuredStreamingUiMessageId === 'function'
-          ? adapter.getStructuredStreamingUiMessageId(subscription.chatId, turn.streamKey) || undefined
-          : undefined;
+        const streamMessageId = await resolveStructuredStreamingUiMessageId({
+          adapter,
+          chatId: subscription.chatId,
+          streamKey: turn.streamKey,
+        }) || undefined;
         const streamFinalizeText = streamMessageId && !turn.timedOut ? '' : streamText;
         const finalized = await finalizeStreamFeedback(
           {
@@ -513,6 +584,7 @@ export function createMirrorFeedbackController(
             });
           }
           subscription.lastDeliveredAt = turn.timestamp || deps.nowIso();
+          streamingArtifacts.delete(turn.streamKey);
           return;
         }
       } catch (error) {
@@ -526,7 +598,10 @@ export function createMirrorFeedbackController(
       questions,
     });
 
-    if (!finalResponse.text && finalResponse.attachments.length === 0 && finalResponse.questions.length === 0) return;
+    if (!finalResponse.text && finalResponse.attachments.length === 0 && finalResponse.questions.length === 0) {
+      streamingArtifacts.delete(turn.streamKey);
+      return;
+    }
 
     const response = await deliverFinalResponse({
       adapter,
@@ -548,6 +623,7 @@ export function createMirrorFeedbackController(
     }
 
     subscription.lastDeliveredAt = turn.timestamp || deps.nowIso();
+    streamingArtifacts.delete(turn.streamKey);
   }
 
   async function deliverMirrorTurns(

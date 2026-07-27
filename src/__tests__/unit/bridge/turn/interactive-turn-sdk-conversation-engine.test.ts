@@ -254,9 +254,12 @@ permission_mode = "plan"
               session_id: 'session_kimi_sdk_status_1',
               cwd: '/tmp/kimi-sdk',
               reasoning: '思考',
-              thinking: '正在分析 Kimi 上下文',
+              thinking: '正在分析 Kimi 上下文 <clk-send>{"type":"file","path":"/tmp/private.txt"}</clk-send>',
             }));
-            controller.enqueue(sseEvent('text', 'kimi reply'));
+            controller.enqueue(sseEvent('text', [
+              'kimi reply',
+              '<clk-send>{"type":"file","path":"/tmp/public.txt"}</clk-send>',
+            ].join('\n')));
             controller.enqueue(sseEvent('result', {
               session_id: 'session_kimi_sdk_status_1',
               cwd: '/tmp/kimi-sdk',
@@ -283,6 +286,7 @@ permission_mode = "plan"
     });
     const statusNotes: Array<string | null> = [];
     const thinkingNotes: string[] = [];
+    const answerSnapshots: string[] = [];
     const identities: Array<{ runtime: string; sessionId: string; cwd?: string }> = [];
 
     const result = await processMessage(
@@ -298,6 +302,7 @@ permission_mode = "plan"
       undefined,
       {
         onThinkingNote: (note) => thinkingNotes.push(note),
+        onAnswerText: (answer) => answerSnapshots.push(answer),
         onRuntimeIdentity: (identity) => {
           identities.push({
             runtime: identity.runtime,
@@ -314,7 +319,20 @@ permission_mode = "plan"
     assert.equal(calls[0]?.runtime, 'kimi');
     assert.equal(calls[0]?.kimiSessionId, undefined);
     assert.deepEqual(statusNotes, ['思考']);
-    assert.deepEqual(thinkingNotes, ['正在分析 Kimi 上下文']);
+    assert.deepEqual(thinkingNotes, [
+      '正在分析 Kimi 上下文 <clk-send>{"type":"file","path":"/tmp/private.txt"}</clk-send>',
+    ]);
+    assert.deepEqual(answerSnapshots, [[
+      'kimi reply',
+      '<clk-send>{"type":"file","path":"/tmp/public.txt"}</clk-send>',
+    ].join('\n')]);
+    assert.equal(answerSnapshots.some((answer) => answer.includes('/tmp/private.txt')), false);
+    assert.deepEqual(result.outboundAttachments, [{
+      kind: 'file',
+      path: '/tmp/public.txt',
+      caption: undefined,
+      name: undefined,
+    }]);
     assert.deepEqual(identities, [
       { runtime: 'kimi', sessionId: 'session_kimi_sdk_status_1', cwd: '/tmp/kimi-sdk' },
       { runtime: 'kimi', sessionId: 'session_kimi_sdk_status_1', cwd: '/tmp/kimi-sdk' },

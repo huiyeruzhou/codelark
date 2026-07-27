@@ -115,6 +115,12 @@ export interface BridgeMirrorRecordDelta {
   unknownKinds: string[];
 }
 
+export interface BridgeMirrorSupplementalDelta {
+  records: BridgeMirrorRecord[];
+  nextOffset: number;
+  trailingText: string;
+}
+
 export interface MirrorJsonlSourceSummary {
   threadId: string;
   filePath: string;
@@ -133,6 +139,13 @@ export interface MirrorJsonlSource {
     currentTurnId: string | null,
     currentSpecialCallIds: Iterable<string>,
   ): BridgeMirrorRecordDelta;
+  readSupplementalDelta?(
+    filePath: string,
+    startOffset: number,
+    trailingText: string,
+    afterTimestamp: string | null,
+    currentTurnId: string | null,
+  ): BridgeMirrorSupplementalDelta;
 }
 
 export interface LifecycleHooks {
