@@ -249,9 +249,9 @@ Accessor 边界：
 ## 当前优先调整点
 
 - `/provider`、`/p` 从 “CodexRuntime 参数” 移到 “Bridge 控制”，因为它选择 bridge 如何驱动当前 runtime，不是模型执行参数。Codex 和 Claude 都支持 `sdk|pty|tmux`，Claude 默认 `tmux`；Kimi 当前只支持 `tmux`。切换时只修改当前 active runtime 的 provider。
-- `/set` 展示与写入遵循 TOML section：顶部下拉切换 `[runtime]`、`[runtime.codex]`、`[runtime.claude]`、`[runtime.kimi]`、`[bridge]` 和默认 Feishu `[[channels]]`，表单只保存当前 section。
+- `/set` 展示与写入遵循 TOML section：顶部下拉切换 `[runtime]`、`[runtime.codex]`、`[runtime.claude]`、`[runtime.kimi]`、`[runtime.cursor]`、`[bridge]` 和默认 Feishu `[[channels]]`，表单只保存当前 section。
 - `/set --group runtime` 中的 `session.tmux_capture_lines`、`session.tmux_echo_input` 是 home 级“新 session 默认值”。`session.tmux_auto_enter` 只保留为旧配置/内部迁移字段，所有用户入口都不得展示或写入，普通 tmux 文本固定补 Enter。
-- `/current` 顶部配置分栏必须把通用 session 设置与 runtime 设置分开：通用分栏严格按“对话名称、工作目录、tmux 输出行数”显示；Codex、Claude、Kimi 分栏只拥有各自 runtime 字段。选择通用分栏不得切换 agent，保存任一分栏不得读取或串写其他分栏的表单键。
+- `/current` 顶部配置分栏必须把通用 session 设置与 runtime 设置分开：通用分栏严格按“对话名称、工作目录、tmux 输出行数”显示；Codex、Claude、Kimi、Cursor 分栏只拥有各自 runtime 字段。选择通用分栏不得切换 agent，保存任一分栏不得读取或串写其他分栏的表单键。
 - Operator UI 与 `/set` 共享同一配置能力清单：Web 表单提交字段必须与后端 Zod input contract 全等；runtime 默认值和通用 tmux 默认值不得只接一端。App secret、授权状态等敏感或状态型字段可以是显式受控例外，但必须在测试矩阵中说明 owner，不能静默缺失。
 - `schemas/config.v2.schema.json` 描述 `config.toml` 解析后的当前结构，以 `runtime.codex`、`runtime.claude`、`runtime.kimi`、`session`、`bridge` 和 `channels` 作为权威分组；旧扁平字段不再作为配置兼容输入。
 - `BridgeStore` 接口中的 `findSessionByCodexThreadId()`、`updateSessionCodexThreadId()` 是 Codex 专属 API；接 Claude 前应新增 provider-neutral accessor 或 runtime-specific registry，避免加出 `findSessionByClaudeSessionId()` 这类平行顶层接口。

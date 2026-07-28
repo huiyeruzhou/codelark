@@ -450,6 +450,7 @@ Mirror suppression 不应承担 turn identity 推断。它只处理 bridge 发�
 ```mermaid
 flowchart TD
   slash[Slash command]
+  resolve[解析或创建当前 BridgeSession]
   classify{命令类型}
   channel[通道级命令<br/>不要求当前 chat 有 session]
   session[会话级命令<br/>读取或修改当前 session]
@@ -458,7 +459,8 @@ flowchart TD
   presentation[命令展示 / 卡片]
   delivery[Delivery]
 
-  slash --> classify
+  slash --> resolve
+  resolve --> classify
   classify --> channel
   classify --> session
   classify --> global
@@ -473,7 +475,7 @@ flowchart TD
 
 命令层的边界是“解释用户意图和组织展示”，不是“承载所有业务状态”。会话、绑定、线程接管、归档和工作目录等规则归会话模块负责；命令层只做 slash 解析、参数校验、调用 use-case 和生成用户可读结果。
 
-命令也要服从 lane。只读状态查询可以走 chat lane；会改变会话绑定或运行配置的命令必须进入 session lane 并声明 barrier；停止和结构化权限 callback 这类控制动作走 control lane。
+命令也要服从 lane。slash 文本进入 adapter 后，必须先解析或创建当前 BridgeSession，再决定 chat/session/control lane；否则新聊天的首条会话修改命令无法进入正确的 session lane。只读状态查询仍可走 chat lane；会改变会话绑定或运行配置的命令必须进入 session lane 并声明 barrier；停止和结构化权限 callback 这类控制动作走 control lane。
 
 命令生成展示结果后只负责 enqueue，不等待平台回复 ACK。需要 `message_id` 的置顶、记录和 post-delivery 动作挂在 delivery receipt continuation 上，不能为了回填 id 继续占用 session lane。群名同步、callback answer 和 mirror reconcile 也属于后台副作用；失败必须独立记录或提示，不能把远端状态塞回同步命令返回值。只有必须先取得远端主键才能落本地状态的事务可以在专用 job lane 内等待，例如 `/new` 建群取得 chat id；该 job 不得阻塞当前聊天继续处理普通消息。
 

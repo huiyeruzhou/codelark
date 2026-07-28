@@ -13,6 +13,7 @@ import {
   LEGACY_CONFIG_JSON_PATH as CONFIG_JSON_PATH,
 } from '../../../../../configuration/migrations/legacy/paths.js';
 import { createConfigService } from '../../../../../configuration/service.js';
+import { createAdapterRuntime } from '../../../../../channels/adapter-runtime/runtime.js';
 import { _testOnlyPtyScreens } from '../../../../../runtime/codex/pty-provider.js';
 import { _testOnlyClaudePty } from '../../../../../runtime/claude/pty-provider.js';
 import { getClaudeProjectDir } from '../../../../../runtime/claude/session-jsonl.js';
@@ -20,6 +21,7 @@ import { CodexRoutingProvider } from '../../../../../runtime/codex/routing-provi
 import { findSessionFileByThreadId } from '../../../../../runtime/codex/tmux-provider.js';
 import { computeKimiWorkspaceDirName, isArchivedKimiSession } from '../../../../../runtime/kimi/session-index.js';
 import { _testOnly, registerAdapter } from '../../../../../bridge/host/manager.js';
+import * as router from '../../../../../bridge/session/channel-router.js';
 import { createMirrorSubscription } from '../../../../../bridge/mirror/subscription-state.js';
 import { listEveryTasks } from '../../../../../bridge/automation/every-tasks.js';
 import { buildCommandCallbackData, parseCommandCallbackData } from '../../../../../bridge/command/callbacks.js';
@@ -462,6 +464,36 @@ function waitForCondition(condition: () => boolean, timeoutMs = 1000): Promise<v
   });
 }
 
+async function runThroughAdapterRuntime(
+  adapter: RecordingAdapter,
+  message: ReturnType<typeof inboundMessage>,
+  done: () => boolean = () => adapter.sent.length > 0,
+): Promise<void> {
+  const state = {
+    adapters: new Map(),
+    adapterMeta: new Map(),
+    invalidAdapters: new Map(),
+    loopAborts: new Map(),
+    running: true,
+  };
+  const queue = [message];
+  adapter.consumeOne = async () => queue.shift() || null;
+  adapter.isRunning = () => queue.length > 0;
+  const runtime = createAdapterRuntime(() => state, {
+    notifyAdapterSetChanged: () => {},
+    handleMessage: (targetAdapter, msg) => _testOnly.handleMessage(targetAdapter, msg),
+    processWithSessionLock: async (_sessionId, fn) => fn(),
+    isCommandMessage: (msg) => _testOnly.isBridgeCommandText(msg.text),
+    resolveSessionIdForMessage: (msg) => router.resolve(msg.address).bridgeSessionId,
+    shouldBypassSessionLock: (msg) => _testOnly.shouldRouteTerminalAppendInline(msg),
+    getImmediateLane: (msg, category) => _testOnly.adapterImmediateLane(msg, category),
+    getSessionLane: (msg, category) => _testOnly.adapterSessionLane(msg, category),
+  });
+  runtime.runAdapterLoop(adapter);
+  await waitForCondition(done);
+  state.running = false;
+}
+
 function createRecordingLlm(calls: RecordedLlmCall[]): LLMProvider {
   return {
     streamChat(params: StreamChatParams): ReadableStream<string> {
@@ -844,6 +876,59 @@ describe('bridge command e2e', () => {
 
     assert.deepEqual(reactions, [{ messageId: 'incoming-command-get', emojiType: 'Get' }]);
     reactionAck.resolve('reaction-command-get');
+  });
+
+  it('creates the hidden BridgeSession before a new chat runs its first status command', async () => {
+    const store = initBridgeTestContext({ dynamicSettings: true });
+    const adapter = new RecordingAdapter();
+    const address = { channelType: 'feishu', chatId: 'chat-first-status', userId: 'ou_first_status' } as const;
+
+    await runThroughAdapterRuntime(adapter, inboundMessage(address, '/status', 'incoming-first-status'));
+
+    const binding = store.getChannelChat(address.channelType, address.chatId);
+    assert.ok(binding);
+    assert.equal(store.getSession(binding.bridgeSessionId)?.hidden, true);
+    assert.doesNotMatch(adapter.sent.at(-1)?.text || '', /当前聊天.*未绑定/s);
+  });
+
+  it('replaces the hidden BridgeSession when the first command takes over a local Codex session', async () => {
+    const store = initBridgeTestContext({ dynamicSettings: true });
+    const adapter = new RecordingAdapter();
+    const address = { channelType: 'feishu', chatId: 'chat-first-takeover', userId: 'ou_first_takeover' } as const;
+    const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-first-takeover-'));
+    const threadId = '019e8a00-0000-7000-8000-000000000001';
+    writeCodexSessionJsonlFixture({ threadId, workDir });
+
+    await runThroughAdapterRuntime(adapter, inboundMessage(address, `/t ${threadId}`, 'incoming-first-takeover'));
+
+    const binding = store.getChannelChat(address.channelType, address.chatId);
+    assert.ok(binding);
+    const session = store.getSession(binding.bridgeSessionId);
+    assert.equal(session?.hidden, false);
+    assert.equal(getSessionActiveRuntime(session) || 'codex', 'codex');
+    assert.equal(session?.runtime?.codex?.threadId, threadId);
+    assert.match(adapter.sent.at(-1)?.text || '', /已切换到本地 Codex 会话/);
+  });
+
+  it('keeps the source hidden BridgeSession when the first command creates a new group session', async () => {
+    const store = initBridgeTestContext({ dynamicSettings: true });
+    const adapter = new RecordingAdapter();
+    const address = { channelType: 'feishu', chatId: 'chat-first-new', userId: 'ou_first_new' } as const;
+    const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-first-new-'));
+
+    await runThroughAdapterRuntime(
+      adapter,
+      inboundMessage(address, `/new first-group ${workDir}`, 'incoming-first-new'),
+      () => adapter.createdGroups.length === 1 && adapter.sent.length > 0,
+    );
+
+    const sourceBinding = store.getChannelChat(address.channelType, address.chatId);
+    assert.ok(sourceBinding);
+    assert.equal(store.getSession(sourceBinding.bridgeSessionId)?.hidden, true);
+    const groupBinding = store.getChannelChat(address.channelType, adapter.createdGroups[0]!.chatId);
+    assert.ok(groupBinding);
+    assert.equal(store.getSession(groupBinding.bridgeSessionId)?.hidden, false);
+    assert.equal(getSessionWorkingDirectory(store.getSession(groupBinding.bridgeSessionId)), workDir);
   });
 
   it('handles /new, /his limit, and /his msg through the bridge manager entrypoint', async () => {
@@ -2444,6 +2529,7 @@ model = "test-model"
 
       const unknownCommandResponse = adapter.sent.find((message) => message.text.includes('未知命令：/goal'))?.text || '';
       assert.match(unknownCommandResponse, /未知命令：\/goal/);
+      assert.match(unknownCommandResponse, /Agent.*\/\/goal.*\/goal/s);
       const routedLog = fs.readFileSync(fakeTmux.logPath, 'utf-8').slice(beforeRoutingLog.length);
       assert.match(routedLog, new RegExp(`send-keys -t ${normalTmuxSession} -l 普通消息`));
       assert.doesNotMatch(routedLog, new RegExp(`send-keys -t ${normalTmuxSession} -l /goal 检查权限`));
@@ -3989,6 +4075,7 @@ provider = "tmux"
 
       const unknownCommandResponse = adapter.sent.find((message) => message.text.includes('未知命令：/goal'))?.text || '';
       assert.match(unknownCommandResponse, /未知命令：\/goal/);
+      assert.match(unknownCommandResponse, /Agent.*\/\/goal.*\/goal/s);
       assert.deepEqual(llmCalls.map((call) => ({
         prompt: call.prompt,
         codexThreadId: call.codexThreadId,

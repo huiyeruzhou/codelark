@@ -457,6 +457,7 @@ export function buildCurrentCommandRichCard(options: {
       { text: 'Codex', callbackData: buildCommandCallbackData('/current-runtime codex') },
       { text: 'Claude Code', callbackData: buildCommandCallbackData('/current-runtime claude') },
       { text: 'Kimi Code', callbackData: buildCommandCallbackData('/current-runtime kimi') },
+      { text: 'Cursor Agent', callbackData: buildCommandCallbackData('/current-runtime cursor') },
     ],
   };
   return {

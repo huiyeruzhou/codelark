@@ -667,6 +667,9 @@ export function createAdapterRuntime(
           if (!msg) continue;
 
           const classification = classifyMessage(msg);
+          if (classification.category === 'command') {
+            deps.resolveSessionIdForMessage(msg);
+          }
           if (classification.bypassSessionLock) {
             const immediateLane = deps.getImmediateLane?.(msg, classification.category) || null;
             if (immediateLane) {

@@ -16,7 +16,7 @@ IM 命令从用户视角分为五组。命令入口是 [src/bridge/command/dispa
 
 - 直接发送普通文本：继续当前绑定会话。
 - 发送 `//...`：把以 `/` 开头的内容作为模型 prompt，而不是 bridge 命令。
-- 未绑定会话时，普通文本会进入临时草稿线程；正式接管用 `/t`。
+- 新聊天收到普通文本或 slash 命令时，都会先按当前默认 runtime 建立隐藏的临时 BridgeSession；正式接管用 `/t`。
 - 修改当前会话参数优先用 `/runtime`、`/provider`、`/model`、`/cd` 等会话级命令。
 - 修改全局默认值用 `/set`；卡片按 TOML section 写入 `~/.codelark/config.toml`。
 - `/every` 用于按固定间隔重复发送 prompt；`/then` 用于在当前会话 completed/interrupted 后发送一次后续 prompt。两者都支持列表卡片和卡片操作，`/then` 还支持通过卡片新建、修改和取消。

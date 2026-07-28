@@ -1975,6 +1975,34 @@ describe('command-dispatch', () => {
     assert.match(sent[0] || '', /codex-thread-prebound/);
   });
 
+  it('explains double-slash escaping only when a CodeLark command is unknown', async () => {
+    initTestContext();
+    const sent: string[] = [];
+    const adapter: any = {
+      channelType: 'feishu',
+      send: async (message: { text: string }) => {
+        sent.push(message.text);
+        return { ok: true, messageId: 'reply-unknown-command' };
+      },
+    };
+    const address = { channelType: 'feishu', chatId: 'chat-unknown-command' } as const;
+    router.createBinding(address, '/tmp/unknown-command');
+
+    await handleBridgeCommand(
+      adapter,
+      { address, text: '/goal continue', messageId: 'incoming-unknown-command' } as any,
+      '/goal continue',
+      {
+        getActiveTask: () => undefined,
+        diagnoseSessionHealth: async () => null,
+        diagnoseAllActiveSessions: async () => [],
+      },
+    );
+
+    assert.match(sent[0] || '', /未知命令：\/goal/);
+    assert.match(sent[0] || '', /Agent.*\/\/goal.*\/goal/s);
+  });
+
   it('renders /currnet as a green current-session card and saves name through the config form', async () => {
     const store = initTestContext();
     const sent: any[] = [];
@@ -2024,7 +2052,7 @@ describe('command-dispatch', () => {
     assert.deepEqual(card?.tags, ['codex', '019e7d66...card01']);
     assert.match(card?.title || '', /Codex Card title/);
     assert.equal(card?.selects?.[0]?.id, 'cur_runtime');
-    assert.deepEqual(card?.selects?.[0]?.options.map((option) => option.text), ['通用配置', 'Codex', 'Claude Code', 'Kimi Code']);
+    assert.deepEqual(card?.selects?.[0]?.options.map((option) => option.text), ['通用配置', 'Codex', 'Claude Code', 'Kimi Code', 'Cursor Agent']);
     assert.equal(parseCommandCallbackData(card?.selects?.[0]?.selectedCallbackData || '')?.commandText, '/current-runtime codex');
     assert.equal(card?.form?.layout, 'two_column');
     assert.equal(card?.form?.inputElementId, undefined);

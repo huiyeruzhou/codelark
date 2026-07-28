@@ -1129,7 +1129,11 @@ export async function handleBridgeCommand(
       break;
 
     default:
-      response = `未知命令：${rawCommand}\n发送 /h 或 /help 查看可用命令。`;
+      response = [
+        `未知命令：${rawCommand}`,
+        '发送 /h 或 /help 查看可用命令。',
+        `如果要把 slash 命令发送给 Agent，请在开头多写一个 \`/\`，例如 \`/${rawCommand}\` 会发送 \`${rawCommand}\`。`,
+      ].join('\n');
   }
 
   if (response) {

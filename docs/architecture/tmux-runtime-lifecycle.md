@@ -272,7 +272,7 @@ Claude tmux 使用同一个 `waitForRuntimeTmuxReady` 启动门控。新建、�
 | `/clear` | 清空当前聊天当前 runtime 的 BridgeSession；如果同一聊天记住了另一个 runtime 的 BridgeSession，映射会保留，之后 `/runtime <other>` 可以切回；旧 runtime tmux provider session 会 best-effort 清理。 |
 | `/t archive ...` | 归档本地 Codex/Claude/Kimi 会话或删除 Bridge-only 会话；如果目标 BridgeSession 记录了 runtime tmux provider session，会 best-effort 清理。 |
 | `/t rename <name>` | 重命名当前聊天当前 runtime 绑定的 BridgeSession；不会改写同一聊天里另一个 runtime 的 BridgeSession 标题。 |
-| `/current` | 当前会话配置卡片；通用分栏管理 name、cwd 和 session tmux 设置，三个 runtime 分栏分别管理 provider、model、mode、reasoning 等会话级覆盖。 |
+| `/current` | 当前会话配置卡片；通用分栏管理 name、cwd 和 session tmux 设置，Codex、Claude、Kimi、Cursor 四个 runtime 分栏分别管理各自支持的会话级覆盖。 |
 | `/set codexReasoningEffort ...` | 设置 Codex 全局 reasoning 默认值。 |
 | `/set claudeReasoningEffort ...` | 设置 Claude Code 全局 effort 默认值。 |
 | `/set claudeProvider pty|tmux|sdk` | 设置 Claude Code 新会话默认 provider。 |
@@ -290,7 +290,7 @@ Kimi 入口补充：
 
 - tmux 命令拼装、长文本 paste、屏幕抓取和特殊键发送必须继续留在 `src/bridge/tmux/core.ts`，不要在 provider 内重复 shell 拼接。
 - Codex 和 Claude 各自的 CLI 参数构造可以不同，但 provider-owned tmux session 的创建、ready/selection 检测、查看和清理应通过 `src/bridge/tmux/runtime.ts` 暴露的 runtime API；Kimi 若继续迁入 shared lifecycle，需要保留 fresh identity 由 CLI 生成、已绑定 session 恢复、lazy wire 与 `Ctrl-S` steer 语义。
-- 三个 runtime 的 tmux/session/selection/send 决策必须写入 `src/bridge/tmux/input-state-machine.ts`；不要再用 `BridgeSession.runtime_status` 推断 TUI 是否需要 readiness，也不要在 `running` 输入前新增光标/prompt 判定。Codex mirror 的空闲 error checkpoint 只用于 completed 后的差分归属，不能参与发送时机或 lifecycle 状态判断。
+- Codex、Claude、Kimi、Cursor 四个 runtime 的 tmux/session/selection/send 决策必须写入 `src/bridge/tmux/input-state-machine.ts`；不要再用 `BridgeSession.runtime_status` 推断 TUI 是否需要 readiness，也不要在 `running` 输入前新增光标/prompt 判定。Codex mirror 的空闲 error checkpoint 只用于 completed 后的差分归属，不能参与发送时机或 lifecycle 状态判断。
 - 普通消息 auto-forward 和显式 `/tmux <...>` 的自动初始化逻辑集中在 `src/bridge/command/tmux.ts`：Codex、Claude 和 Kimi 都应只在 `autoRecoverProviderSession=true` 或当前 runtime provider 明确为 tmux 时启动或重建 provider-owned tmux session；`/tmux-screen`、`/tmux-session` 和 `/tmux-attach` 不负责 provider 恢复，也不等待 startup ready。
 - tmux provider 普通消息的调度门控在 adapter runtime/host manager 层表达为 session lane + conversation barrier；不要把同 chat 阻塞语义藏进 tmux command handler 内部，否则 `/tmux-screen`、`/runtime` 等后续 job 可能绕过启动等待。
 - tmux provider 普通消息的可见进度、selection 去重和 post-forward/update exit notice 属于 host manager/permission broker 职责，因为它们依赖 IM adapter reaction、mirror stream start、selection callback 和 session health 多方状态；provider 只应暴露底层 tmux readiness/selection 能力，否则 Claude tmux 无法共享同一行为。
