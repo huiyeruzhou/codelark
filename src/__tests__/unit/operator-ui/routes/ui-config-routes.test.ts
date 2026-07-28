@@ -345,7 +345,8 @@ describe('Ui config application', () => {
   it('keeps the global config shell wired to Kimi form fields', () => {
     const source = fs.readFileSync(path.join(process.cwd(), 'src/operator-ui/shell.ts'), 'utf-8');
     assert.match(source, /<select id="runtime">[\s\S]*<option value="codex" selected>codex<\/option>[\s\S]*<option value="claude">claude<\/option>[\s\S]*<option value="kimi">kimi<\/option>/);
-    assert.match(source, /GlobalRuntime \/ Kimi/);
+    assert.match(source, /data-config-section="kimi"/);
+    assert.match(source, /Kimi 默认值/);
     assert.match(source, /id="kimiProvider"/);
     assert.match(source, /id="kimiDefaultModel"/);
     assert.match(source, /<select id="defaultProvider">[\s\S]*<option value="sdk">sdk<\/option>[\s\S]*<option value="pty">pty<\/option>[\s\S]*<option value="tmux">tmux<\/option>/);
@@ -363,7 +364,8 @@ describe('Ui config application', () => {
   it('keeps the global and session config shell wired to Cursor form fields', () => {
     const source = fs.readFileSync(path.join(process.cwd(), 'src/operator-ui/shell.ts'), 'utf-8');
     assert.match(source, /<option value="cursor">cursor<\/option>/);
-    assert.match(source, /GlobalRuntime \/ Cursor/);
+    assert.match(source, /data-config-section="cursor"/);
+    assert.match(source, /Cursor 默认值/);
     assert.match(source, /id="cursorProvider"/);
     assert.match(source, /id="cursorDefaultModel"/);
     assert.match(source, /id="cursorForce"/);

@@ -226,26 +226,26 @@ export function renderUiShellHtml(): string {
             <div class="panel-header">
               <div>
                 <h2>全局配置</h2>
-                <p>配置按 GlobalRuntime / Bridge 控制 / GlobalBridge 分组；保存后写入本地配置目录，少数选项需要重启 Bridge。</p>
+                <p>通用设置只出现一次，各 runtime 只维护自己的执行参数；保存后写入本地配置目录，少数选项需要重启 Bridge。</p>
               </div>
               <div class="toolbar">
                 <button class="primary" id="saveConfigBtn">保存配置</button>
               </div>
             </div>
 
+            <div class="config-tabs" role="tablist" aria-label="配置分组">
+              <button type="button" class="config-tab active" role="tab" aria-selected="true" data-config-tab="common">通用</button>
+              <button type="button" class="config-tab" role="tab" aria-selected="false" data-config-tab="codex">Codex</button>
+              <button type="button" class="config-tab" role="tab" aria-selected="false" data-config-tab="claude">Claude</button>
+              <button type="button" class="config-tab" role="tab" aria-selected="false" data-config-tab="kimi">Kimi</button>
+              <button type="button" class="config-tab" role="tab" aria-selected="false" data-config-tab="cursor">Cursor</button>
+              <button type="button" class="config-tab" role="tab" aria-selected="false" data-config-tab="web">Web 与 Bridge</button>
+            </div>
+
             <div class="fields">
-              <div class="panel-block">
-                <p class="panel-subtitle">GlobalRuntime / Codex</p>
+              <div class="panel-block config-section-secondary" data-config-section="codex" hidden>
+                <p class="panel-subtitle">Codex 默认值</p>
                 <div class="field-row double">
-                  <label>
-                    Runtime
-                    <select id="runtime">
-                      <option value="codex" selected>codex</option>
-                      <option value="claude">claude</option>
-                      <option value="kimi">kimi</option>
-                      <option value="cursor">cursor</option>
-                    </select>
-                  </label>
                   <label>
                     Codex 默认模式
                     <select id="defaultMode">
@@ -288,8 +288,8 @@ export function renderUiShellHtml(): string {
                 </div>
               </div>
 
-              <div class="panel-block">
-                <p class="panel-subtitle">GlobalRuntime / Claude</p>
+              <div class="panel-block" data-config-section="claude" hidden>
+                <p class="panel-subtitle">Claude 默认值</p>
                 <div class="field-row triple">
                   <label>
                     <span class="field-title">Claude executable <span class="help-tip" tabindex="0" data-tip="选择启动 Claude Code 的命令；这是全局 Claude 配置，不是 provider。">?</span></span>
@@ -334,19 +334,32 @@ export function renderUiShellHtml(): string {
                 </div>
               </div>
 
-              <div class="panel-block">
-                <p class="panel-subtitle">Session / tmux 默认值</p>
+              <div class="panel-block" data-config-section="common">
+                <p class="panel-subtitle">通用默认值</p>
                 <div class="field-row triple">
+                  <label>
+                    <span class="field-title">/new 相对路径根目录 <span class="help-tip" tabindex="0" data-tip="当 /new 使用项目名或相对路径时，会以这里作为根目录；留空时使用 ~。">?</span></span>
+                    <input id="defaultWorkspaceRoot" placeholder="留空时使用 ~" />
+                  </label>
                   <label>
                     <span class="field-title">tmux 输出行数 <span class="help-tip" tabindex="0" data-tip="控制新 session 的 tmux 屏幕抓取行数；范围 1-500。">?</span></span>
                     <input id="tmuxCaptureLines" type="number" min="1" max="500" value="80" />
                   </label>
                   <label class="checkbox"><input id="tmuxEchoInput" type="checkbox" /> 回显 tmux 输入</label>
+                  <label>
+                    默认 Runtime
+                    <select id="runtime">
+                      <option value="codex" selected>codex</option>
+                      <option value="claude">claude</option>
+                      <option value="kimi">kimi</option>
+                      <option value="cursor">cursor</option>
+                    </select>
+                  </label>
                 </div>
               </div>
 
-              <div class="panel-block">
-                <p class="panel-subtitle">GlobalRuntime / Kimi</p>
+              <div class="panel-block" data-config-section="kimi" hidden>
+                <p class="panel-subtitle">Kimi 默认值</p>
                 <div class="field-row triple">
                   <label>
                     <span class="field-title">默认 Kimi Provider <span class="help-tip" tabindex="0" data-tip="Kimi Code 当前只支持 tmux；当前会话仍可用 /p 查看或写入会话级覆盖。">?</span></span>
@@ -361,8 +374,8 @@ export function renderUiShellHtml(): string {
                 </div>
               </div>
 
-              <div class="panel-block">
-                <p class="panel-subtitle">GlobalRuntime / Cursor</p>
+              <div class="panel-block" data-config-section="cursor" hidden>
+                <p class="panel-subtitle">Cursor 默认值</p>
                 <div class="field-row triple">
                   <label>
                     <span class="field-title">默认 Cursor Provider <span class="help-tip" tabindex="0" data-tip="Cursor Agent 当前直接运行官方 TUI，只支持 tmux。">?</span></span>
@@ -376,8 +389,8 @@ export function renderUiShellHtml(): string {
                 </div>
               </div>
 
-              <div class="panel-block">
-                <p class="panel-subtitle">Bridge 控制</p>
+              <div class="panel-block" data-config-section="codex" hidden>
+                <p class="panel-subtitle">Codex 连接方式</p>
                 <div class="field-row triple">
                   <label>
                     <span class="field-title">默认 Codex Provider <span class="help-tip" tabindex="0" data-tip="控制 Bridge 默认用 SDK 还是 tmux 驱动 Codex；这不是模型运行参数。当前会话仍可用 /p 单独切换。">?</span></span>
@@ -391,13 +404,9 @@ export function renderUiShellHtml(): string {
                 </div>
               </div>
 
-              <div class="panel-block">
-                <p class="panel-subtitle">GlobalBridge</p>
-                <label>
-                  <span class="field-title">/new 相对路径根目录 <span class="help-tip" tabindex="0" data-tip="当 /new 使用项目名或相对路径时，会以这里作为根目录；留空时使用 ~。">?</span></span>
-                  <input id="defaultWorkspaceRoot" placeholder="留空时使用 ~" />
-                </label>
-                <div class="checkbox-row" style="margin-top: 12px;">
+              <div class="panel-block" data-config-section="web" hidden>
+                <p class="panel-subtitle">Web 与 Bridge 访问</p>
+                <div class="checkbox-row">
                   <label class="checkbox"><input id="uiAllowLan" type="checkbox" /> 允许局域网访问 Web 控制台 <span class="help-tip" tabindex="0" data-tip="默认仅允许本机访问当前工作台。开启后，局域网设备需要先输入访问 token。">?</span></label>
                 </div>
                 <div class="notice" id="uiAccessSummary">局域网访问未开启。</div>
@@ -688,6 +697,7 @@ export function renderUiShellHtml(): string {
         activeBindingByChannelId: {},
         codexRoot: '',
         activePage: 'overview',
+        activeConfigTab: 'common',
         activeSessionRef: '',
         sessionHistory: null,
         sessionHistoryMessageModes: {},
@@ -1353,6 +1363,19 @@ export function renderUiShellHtml(): string {
         }
 
         startActivePageRefresh(nextPage);
+      }
+
+      function setActiveConfigTab(tab) {
+        const nextTab = ['common', 'codex', 'claude', 'kimi', 'cursor', 'web'].includes(tab) ? tab : 'common';
+        state.activeConfigTab = nextTab;
+        document.querySelectorAll('[data-config-tab]').forEach((element) => {
+          const active = element.dataset.configTab === nextTab;
+          element.classList.toggle('active', active);
+          element.setAttribute('aria-selected', active ? 'true' : 'false');
+        });
+        document.querySelectorAll('[data-config-section]').forEach((element) => {
+          element.hidden = element.dataset.configSection !== nextTab;
+        });
       }
 
       function setActiveChannel(channelId, syncHash) {
@@ -3079,6 +3102,10 @@ export function renderUiShellHtml(): string {
         element.addEventListener('click', () => {
           setActivePage(element.dataset.page || 'overview', true);
         });
+      });
+
+      document.querySelectorAll('[data-config-tab]').forEach((element) => {
+        element.addEventListener('click', () => setActiveConfigTab(element.dataset.configTab || 'common'));
       });
 
       window.addEventListener('hashchange', syncPageFromHash);

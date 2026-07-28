@@ -61,4 +61,16 @@ describe('operator UI shell', () => {
     assert.match(html, /function sessionMatchesFilter\(session\)/);
     assert.match(html, /const sessions = allSessions\.filter\(sessionMatchesFilter\)/);
   });
+
+  it('groups global settings into one common tab and runtime-owned tabs', () => {
+    const html = renderUiShellHtml();
+
+    for (const tab of ['common', 'codex', 'claude', 'kimi', 'cursor', 'web']) {
+      assert.match(html, new RegExp(`data-config-tab="${tab}"`));
+      assert.match(html, new RegExp(`data-config-section="${tab}"`));
+    }
+    assert.match(html, /data-config-section="common"[\s\S]*id="defaultWorkspaceRoot"[\s\S]*id="tmuxCaptureLines"[\s\S]*id="tmuxEchoInput"/);
+    assert.match(html, /data-config-section="codex"[\s\S]*id="defaultProvider"/);
+    assert.match(html, /function setActiveConfigTab\(tab\)/);
+  });
 });

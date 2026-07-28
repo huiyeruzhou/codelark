@@ -157,6 +157,10 @@ export const mainStyles = `
     text-rendering: geometricPrecision;
   }
   button, input, select, textarea { font: inherit; }
+  button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible, .help-tip:focus-visible {
+    outline: 2px solid var(--primary);
+    outline-offset: 2px;
+  }
   h1, h2, h3, p { color: inherit; }
   code { font-family: "Cascadia Code", Consolas, "SF Mono", monospace; }
 
@@ -376,6 +380,30 @@ export const mainStyles = `
     font-size: 12px;
     font-weight: 750;
   }
+  .config-tabs {
+    display: flex;
+    gap: 4px;
+    margin: 0 -4px 2px;
+    padding: 0 4px 12px;
+    overflow-x: auto;
+    border-bottom: 1px solid var(--line);
+  }
+  .config-tab {
+    flex: 0 0 auto;
+    min-height: 36px;
+    border-color: transparent;
+    padding: 7px 12px;
+    color: var(--muted-strong);
+    background: transparent;
+  }
+  .config-tab.active {
+    border-color: var(--line-strong);
+    color: var(--text);
+    background: var(--surface-tint);
+  }
+  [data-config-section] { margin-top: 0; padding-top: 18px; border-top: 0; }
+  [data-config-section][hidden] { display: none; }
+  .config-section-secondary { margin-top: 18px; border-top: 1px solid var(--line); }
 
   .toolbar, .actions, .session-actions, .toolbar-danger {
     display: flex;
@@ -1120,6 +1148,7 @@ export const mainStyles = `
     .session-history-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   }
   @media (max-width: 720px) {
+    .config-tabs { flex-wrap: wrap; overflow: visible; }
     .bridge-path { grid-template-columns: 1fr; }
     .bridge-path-node {
       display: grid;
@@ -1140,5 +1169,13 @@ export const mainStyles = `
     .session-head, .session-simple-item { grid-template-columns: 1fr; }
     .session-actions { justify-content: flex-start; }
     .chat-history-list { padding: 12px; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after {
+      scroll-behavior: auto !important;
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+    }
   }
 `;
