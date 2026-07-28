@@ -8,6 +8,7 @@ import path from 'node:path';
 import { promisify } from 'node:util';
 
 import { findKimiSessionFileById } from '../../../../runtime/kimi/session-index.js';
+import { kimiSessionLogFilePath } from '../../../../runtime/kimi/runtime-log.js';
 import {
   kimiTmuxSessionName,
   parseKimiSessionIdFromScreen,
@@ -72,7 +73,7 @@ function installedKimiCodeExecutable(): string {
 }
 
 describe('real Kimi Code tmux provider e2e', () => {
-  it('creates a real random Kimi Code session, reuses it, and resumes it after tmux loss', { timeout: 120_000 }, async (t: TestContext) => {
+  it('creates, steers, resumes, and reports a provider error from the real Kimi executable', { timeout: 120_000 }, async (t: TestContext) => {
     if (!(await commandAvailable('tmux', ['-V']))) {
       t.skip('tmux is not available');
       return;
@@ -108,7 +109,20 @@ describe('real Kimi Code tmux provider e2e', () => {
     const bridgeSessionId = `real-kimi-code-${process.pid}-${Date.now()}`;
     const tmuxSessionName = kimiTmuxSessionName(bridgeSessionId);
     const responseText = `CODELARK_REAL_KIMI_CODE_${process.pid}_${Date.now()}`;
-    const proxy = await startLocalResponsesProxy({ responseText, responseDelayMs: 2_500 });
+    const fatalMarker = `CODELARK_REAL_KIMI_FATAL_${process.pid}_${Date.now()}`;
+    const proxy = await startLocalResponsesProxy({
+      responseText,
+      responseDelayMs: 2_500,
+      errorWhenBodyIncludes: fatalMarker,
+      errorStatus: 402,
+      errorBody: {
+        error: {
+          type: 'membership_inactive',
+          code: 'membership_inactive',
+          message: fatalMarker,
+        },
+      },
+    });
     env.KIMI_CODE_HOME = kimiHome;
     env.KIMI_MODEL_BASE_URL = proxy.baseUrl;
     fs.mkdirSync(kimiHome, { recursive: true });
@@ -211,6 +225,26 @@ describe('real Kimi Code tmux provider e2e', () => {
       assert.deepEqual(errorEvents(resumed), []);
       assert.equal(resultSessionId(resumed), kimiSessionId);
       assert.ok(proxy.requests.filter((request) => request.url.includes('/chat/completions')).length >= 2);
+
+      const failed = await readSse(streamKimiTmuxTui({
+        sessionId: bridgeSessionId,
+        runtime: 'kimi',
+        kimiSessionId: kimiSessionId!,
+        prompt: `Trigger the deterministic provider failure: ${fatalMarker}`,
+        workingDirectory: workDir,
+      }));
+      const failedErrors = errorEvents(failed);
+      assert.equal(failedErrors.length, 1);
+      assert.match(failedErrors[0] || '', /Kimi Code request failed/);
+      assert.match(failedErrors[0] || '', new RegExp(fatalMarker));
+      assert.equal(failed.some((event) => event.type === 'result'), false);
+      assert.equal(
+        proxy.requests.some((request) => request.url.includes('/chat/completions') && request.rawBody.includes(fatalMarker)),
+        true,
+      );
+      const runtimeLog = fs.readFileSync(kimiSessionLogFilePath(sessionFile.filePath), 'utf8');
+      assert.match(runtimeLog, /ERROR\s+turn failed/);
+      assert.match(runtimeLog, new RegExp(fatalMarker));
     } finally {
       await execFileAsync('tmux', ['kill-session', '-t', tmuxSessionName]).catch(() => {});
       await proxy.close().catch(() => undefined);

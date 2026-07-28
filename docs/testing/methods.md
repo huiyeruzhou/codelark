@@ -133,7 +133,7 @@ long-running 功能不能只测“成功派发 worker”。精炼用户故事至
 | `sse-stream-decoder.test.ts` | SSE 文本流解码和事件边界。 |
 | `interactive-turn-runner.test.ts` | 一次 runtime turn 的主编排，含 stream、tool、context、goal、stop、mirror suppression、基础对话 simulator，以及 answer 中间态附件立即发送、thinking 排除和终态去重。 |
 | `interactive-turn-sdk-conversation-engine.test.ts`、`interactive-turn-sdk-stream-events-controller.test.ts`、`interactive-turn-final-response-plan.test.ts`、`interactive-turn-terminal-finalization-controller.test.ts` | SDK conversation 内联附件/tool 展开、stream event 控制、最终回复计划和终端 provider finalization。 |
-| `real-codex-tmux-provider.e2e.test.ts`、`real-claude-tmux-provider.e2e.test.ts`、`real-kimi-code-bridge.e2e.test.ts`、`real-kimi-code-tmux-provider.e2e.test.ts`、`kimi-tmux-provider-local-process.e2e.test.ts` | 隔离 home 中启动真实 provider 进程或 fake backend；Codex 以真实 CLI + tmux + Mock Responses 流验证 answer 附件在终止事件前发送、回复到异步就绪的流式卡片且 completed 不重复。Kimi 覆盖真实 executable 的 fresh/steer/Bridge 重启冷接管；thinking 排除、runtime log 错误终态和 fake CLI session/wire 生命周期使用确定性 fixture 回归。 |
+| `real-codex-tmux-provider.e2e.test.ts`、`real-claude-tmux-provider.e2e.test.ts`、`real-kimi-code-bridge.e2e.test.ts`、`real-kimi-code-tmux-provider.e2e.test.ts`、`kimi-tmux-provider-local-process.e2e.test.ts` | 隔离 home 中启动真实 provider 进程或 fake backend；Codex 以真实 CLI + tmux + Mock Responses 流验证 answer 附件在终止事件前发送、回复到异步就绪的流式卡片且 completed 不重复。Kimi 用真实 executable + 真 tmux + 本地 OpenAI-compatible proxy 覆盖 fresh/steer/resume，并让同一 proxy 返回确定性 402，证明真实 CLI 写出的 `ERROR turn failed` 会进入 SSE error 且不产生成功 result；thinking 排除和 fake CLI session/wire 生命周期继续用确定性 fixture 回归。 |
 
 ### 交付、流式、mirror 和用户可见渲染
 

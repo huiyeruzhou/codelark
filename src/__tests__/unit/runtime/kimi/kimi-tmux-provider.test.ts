@@ -20,9 +20,9 @@ import {
 import { assertKimiLaunchAuthentication } from '../../../../runtime/kimi/auth.js';
 import {
   isKimiInputReadyScreen,
-  parseKimiRuntimeErrorFromLog,
   parseKimiSessionIdFromScreen,
 } from '../../../../runtime/kimi/tmux-provider.js';
+import { parseKimiTerminalErrorsFromLog } from '../../../../runtime/kimi/runtime-log.js';
 import {
   applyToolCallEventToTools,
   toolCallEventFromMirrorRecord,
@@ -47,11 +47,37 @@ describe('Kimi tmux provider helpers', () => {
     fs.rmSync(kimiHome, { recursive: true, force: true });
   });
 
-  it('extracts the actionable Kimi request failure from the session log', () => {
-    assert.equal(parseKimiRuntimeErrorFromLog([
+  it('waits for Kimi turn failed details instead of treating a retryable request warning as terminal', () => {
+    const warning = parseKimiTerminalErrorsFromLog([
       '2026-07-24T09:27:41.997Z WARN  llm request failed  turnStep=3.1 attempt=1/10 model=k3 errorName=KimiError errorMessage="OAuth provider \\"managed:kimi-code\\" requires login before it can be used."',
+      '',
+    ].join('\n'), null, 'turn-current');
+    assert.deepEqual(warning.records, []);
+    assert.equal(warning.trailingText, '');
+
+    const header = parseKimiTerminalErrorsFromLog([
       '2026-07-24T09:27:42.028Z ERROR turn failed  turnId=3',
-    ].join('\n')), 'OAuth provider "managed:kimi-code" requires login before it can be used.');
+      '',
+    ].join('\n'), null, 'turn-current');
+    assert.deepEqual(header.records, []);
+    assert.match(header.trailingText, /ERROR turn failed/);
+
+    const terminal = parseKimiTerminalErrorsFromLog(
+      `${header.trailingText}  KimiError: OAuth provider "managed:kimi-code" requires login before it can be used.\n`,
+      null,
+      'turn-current',
+    );
+    assert.deepEqual(terminal.records.map((record) => ({
+      type: record.type,
+      turnId: record.turnId,
+      isError: record.isError,
+      errorText: record.errorText,
+    })), [{
+      type: 'task_complete',
+      turnId: 'turn-current',
+      isError: true,
+      errorText: 'KimiError: OAuth provider "managed:kimi-code" requires login before it can be used.',
+    }]);
   });
 
   it('fails before launching a managed Kimi provider with empty OAuth state', () => {

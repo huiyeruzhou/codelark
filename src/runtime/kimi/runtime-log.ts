@@ -10,19 +10,6 @@ export function kimiSessionLogFilePath(sessionFilePath: string): string {
   return path.resolve(path.dirname(sessionFilePath), '..', '..', 'logs', 'kimi-code.log');
 }
 
-export function parseKimiRuntimeErrorFromLog(text: string): string | null {
-  const requestFailure = text.match(/\bllm request failed\b[^\n]*\berrorMessage="((?:\\.|[^"\\])*)"/u);
-  if (requestFailure?.[1]) {
-    try {
-      return JSON.parse(`"${requestFailure[1]}"`) as string;
-    } catch {
-      return requestFailure[1].replace(/\\"/g, '"');
-    }
-  }
-  const turnFailure = text.match(/\bERROR\s+turn failed\b[^\n]*\n\s+([^\n]+)/u);
-  return turnFailure?.[1]?.trim() || null;
-}
-
 interface ParsedKimiTerminalErrors {
   records: BridgeMirrorRecord[];
   trailingText: string;

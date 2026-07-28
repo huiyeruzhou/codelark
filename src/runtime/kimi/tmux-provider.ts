@@ -23,10 +23,9 @@ import {
 } from './session-index.js';
 import {
   kimiSessionLogFilePath,
-  parseKimiRuntimeErrorFromLog,
+  parseKimiTerminalErrorsFromLog,
 } from './runtime-log.js';
 
-export { parseKimiRuntimeErrorFromLog } from './runtime-log.js';
 import { assertKimiLaunchAuthentication } from './auth.js';
 
 const DEFAULT_KIMI_POLL_INTERVAL_MS = 500;
@@ -222,11 +221,13 @@ function readKimiRuntimeErrorDelta(context: KimiTuiRunContext): { error: string 
   if (bytes.length <= context.nextLogOffset) return { error: null, advanced: false };
   const chunk = bytes.subarray(context.nextLogOffset).toString('utf8');
   context.nextLogOffset = bytes.length;
-  const combined = `${context.logTrailingText}${chunk}`;
-  const lastNewline = combined.lastIndexOf('\n');
-  const complete = lastNewline >= 0 ? combined.slice(0, lastNewline + 1) : '';
-  context.logTrailingText = lastNewline >= 0 ? combined.slice(lastNewline + 1) : combined;
-  return { error: parseKimiRuntimeErrorFromLog(complete), advanced: true };
+  const parsed = parseKimiTerminalErrorsFromLog(
+    `${context.logTrailingText}${chunk}`,
+    null,
+    context.nextTurnId,
+  );
+  context.logTrailingText = parsed.trailingText;
+  return { error: parsed.records[0]?.errorText || null, advanced: true };
 }
 
 function enqueueKimiRecordAsSse(

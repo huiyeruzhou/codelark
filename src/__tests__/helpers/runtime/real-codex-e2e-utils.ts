@@ -303,6 +303,22 @@ export async function startLocalResponsesProxy(options: {
         return;
       }
 
+      const isModelGenerationRequest = req.method === 'POST' && (
+        /\/messages(?:\?|$)/u.test(req.url || '')
+        || req.url?.includes('/responses')
+        || req.url?.includes('/chat/completions')
+      );
+      if (isModelGenerationRequest && options.errorWhenBodyIncludes && rawBody.includes(options.errorWhenBodyIncludes)) {
+        void (async () => {
+          if (responseDelayMs > 0) await sleep(responseDelayMs);
+          res.writeHead(options.errorStatus ?? 400, { 'content-type': 'application/json' });
+          res.end(JSON.stringify(options.errorBody ?? {
+            error: { type: 'invalid_request_error', message: 'CODELARK_MOCK_FATAL' },
+          }));
+        })();
+        return;
+      }
+
       if (req.method === 'POST' && /\/messages(?:\?|$)/u.test(req.url || '')) {
         const model = typeof body === 'object'
           && body !== null
@@ -339,16 +355,6 @@ export async function startLocalResponsesProxy(options: {
       }
 
       if (req.method === 'POST' && req.url?.includes('/responses')) {
-        if (options.errorWhenBodyIncludes && rawBody.includes(options.errorWhenBodyIncludes)) {
-          void (async () => {
-            if (responseDelayMs > 0) await sleep(responseDelayMs);
-            res.writeHead(options.errorStatus ?? 400, { 'content-type': 'application/json' });
-            res.end(JSON.stringify(options.errorBody ?? {
-              error: { type: 'invalid_request_error', message: 'CODELARK_MOCK_FATAL' },
-            }));
-          })();
-          return;
-        }
         const model = typeof body === 'object'
           && body !== null
           && typeof (body as { model?: unknown }).model === 'string'

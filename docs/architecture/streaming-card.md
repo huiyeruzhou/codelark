@@ -177,7 +177,7 @@ final full update 必须以 desired history 为权威。`responseText` 为空不
 
 error 终态不能只靠红色边框或泛化的 `Error` footer。runtime adapter 把真实错误写入 `FinalizedBridgeMirrorTurn.errorText`；feedback controller 从 JSON 中提取 type/message（非 JSON 则保留原文），压成最多 600 个 Unicode 字符的单行状态，先更新“当前步骤：❌ 原因 + 已运行时间 + context/token usage”，再关闭 streaming mode。final footer 复用同一条原因，并继续追加 adapter 计算的真实耗时和 context；错误、时间、token 信息不能互相覆盖。history 不再重复插入错误块。新版结构化 JSONL error 与旧版 TUI `■` fallback 共用这个字段，channel renderer 不识别 Codex 专属格式。
 
-mirror source 可以提供独立于主 JSONL 的补充增量事件源，但补充事件仍必须归一化成 `BridgeMirrorRecord`，由同一个 reconcile、turn 和 delivery 生命周期消费。Kimi 的 `wire.jsonl` 在 provider 失败时可能没有 terminal；此时 source 增量读取同 session 的 `kimi-code.log`，只在完整 `ERROR turn failed` 及错误详情出现后合成 `task_complete(isError=true)`。可重试的 `WARN llm request failed` 不代表终态。补充游标与主 wire 游标分离，主 wire 未变化也会检查补充源，channel renderer 不解析 Kimi 日志。
+mirror source 可以提供独立于主 JSONL 的补充增量事件源，但补充事件仍必须归一化成 `BridgeMirrorRecord`，由同一个 reconcile、turn 和 delivery 生命周期消费。Kimi 的 `wire.jsonl` 在 provider 失败时可能没有 terminal；此时 source 增量读取同 session 的 `kimi-code.log`，只在完整 `ERROR turn failed` 及错误详情出现后合成 `task_complete(isError=true)`。active provider stream 与 mirror 必须复用这一个终态 parser；可重试的 `WARN llm request failed` 不代表终态，不能由任一路径提前终止 turn。补充游标与主 wire 游标分离，主 wire 未变化也会检查补充源，channel renderer 不解析 Kimi 日志。
 
 mirror 冷启动分为两种语义。新 attach 没有 `mirror_last_event_at` 水位，首次 reconcile 只建立 cursor，不回放已有历史；Bridge 重启恢复已有 binding 时带有持久化水位，首次 reconcile 必须交付时间严格晚于该水位的记录，追回停机窗口内已经写入 source、但尚未投递的 turn。不能把两种情况统一成“首次全部忽略”或“首次全部回放”。
 

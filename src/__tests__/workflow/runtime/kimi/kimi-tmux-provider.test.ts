@@ -511,6 +511,7 @@ describe('kimi-tmux-provider workflow', () => {
     let tmuxExists = false;
     let killed = false;
     let extendedKeysCalls = 0;
+    let appendFatalTimer: NodeJS.Timeout | undefined;
 
     const restoreTmux = patchTmuxCore({
       async ensureExtendedKeys() {
@@ -538,11 +539,18 @@ describe('kimi-tmux-provider workflow', () => {
         })}\n`, 'utf8');
         const logDir = path.join(sessionDir, 'logs');
         fs.mkdirSync(logDir, { recursive: true });
-        fs.writeFileSync(path.join(logDir, 'kimi-code.log'), [
+        const logPath = path.join(logDir, 'kimi-code.log');
+        fs.writeFileSync(logPath, [
           '2026-07-24T09:27:41.997Z WARN  llm request failed  turnStep=1.1 attempt=1/10 model=k3 errorName=KimiError errorMessage="OAuth provider \\"managed:kimi-code\\" requires login before it can be used."',
-          '2026-07-24T09:27:42.028Z ERROR turn failed  turnId=1',
           '',
         ].join('\n'), 'utf8');
+        appendFatalTimer = setTimeout(() => {
+          fs.appendFileSync(logPath, [
+            '2026-07-24T09:27:42.028Z ERROR turn failed  turnId=1',
+            '  KimiError: OAuth provider "managed:kimi-code" requires login before it can be used.',
+            '',
+          ].join('\n'), 'utf8');
+        }, 150);
         return { commands: [`tmux paste-buffer -t ${target} # ${prompt}`] };
       },
       async sendActions(target: string, actions) {
@@ -571,12 +579,15 @@ describe('kimi-tmux-provider workflow', () => {
         workingDirectory: cwd,
       })));
 
-      assert.ok(Date.now() - startedAt < 1_000, 'explicit authentication failures should not wait for idle timeout');
+      const elapsedMs = Date.now() - startedAt;
+      assert.ok(elapsedMs >= 100, `retryable WARN must not terminate before the fatal record; elapsed=${elapsedMs}ms`);
+      assert.ok(elapsedMs < 1_000, 'explicit authentication failures should not wait for idle timeout');
       assert.ok(events.some((event) => event.type === 'error'
-        && String(event.data).includes('requires login before it can be used')));
+        && String(event.data).includes('KimiError: OAuth provider "managed:kimi-code" requires login before it can be used.')));
       assert.equal(extendedKeysCalls, 1);
       assert.equal(killed, true, 'a failed half-initialized Kimi lifecycle should be cleaned up');
     } finally {
+      if (appendFatalTimer) clearTimeout(appendFatalTimer);
       restoreTmux();
       fs.rmSync(kimiHome, { recursive: true, force: true });
       fs.rmSync(cwd, { recursive: true, force: true });
