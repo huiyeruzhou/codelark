@@ -916,8 +916,9 @@ describe('unit::real-feishu-e2e-harness::scenario-coverage-metadata', () => {
     assert.ok(scenario.unitCoverage.includes('unit::bridge-command-e2e::every-card-form-callback-chain'));
     assert.ok(scenario.unitCoverage.includes('unit::command-dispatch::then-form-card'));
     assert.ok(scenario.e2eCoverage.includes('e2e::feishu-interactive-card-reply_to'));
-    assert.ok(scenario.e2eCoverage.includes('e2e::automation-form-fields'));
-    assert.ok(scenario.e2eCoverage.includes('e2e::card-submit-callback-prefix'));
+    assert.ok(scenario.e2eCoverage.includes('e2e::card-form-visible-transcript'));
+    assert.ok(scenario.e2eCoverage.includes('e2e::automation-form-visible-transcript'));
+    assert.equal(scenario.e2eCoverage.includes('e2e::card-submit-callback-prefix'), false);
   });
 
   it('exposes agent-question-forms as a dual runtime/provider real Feishu scenario', () => {
@@ -941,8 +942,9 @@ describe('unit::real-feishu-e2e-harness::scenario-coverage-metadata', () => {
     assert.ok(scenario.unitCoverage.includes('unit::feishu-adapter-card-e2e::sdk-clk-ask-form'));
     assert.ok(scenario.unitCoverage.includes('unit::feishu-adapter-card-e2e::mirror-clk-ask-form'));
     assert.ok(scenario.unitCoverage.includes('unit::feishu-adapter-card-e2e::kimi-mirror-markdown-ask-form'));
-    assert.ok(scenario.e2eCoverage.includes('e2e::agent-question-form-fields'));
-    assert.ok(scenario.e2eCoverage.includes('e2e::agent-question-callback-prefix'));
+    assert.ok(scenario.e2eCoverage.includes('e2e::agent-question-form-visible-transcript'));
+    assert.equal(scenario.e2eCoverage.includes('e2e::agent-question-form-fields'), false);
+    assert.equal(scenario.e2eCoverage.includes('e2e::agent-question-callback-prefix'), false);
     assert.ok(scenario.e2eCoverage.includes('e2e::mock-app-kimi-mirror-clk-ask-form'));
     assert.ok(scenario.e2eCoverage.includes('e2e::mock-app-kimi-mirror-markdown-ask-split'));
   });
@@ -3321,25 +3323,45 @@ describe('unit::real-feishu-e2e-harness::session-management-command-plan', () =>
     assert.equal(parsed.waitsForMirrorFinalBeforeFollowup, false);
 
     const newExpectation = expectationAt(parsed.commandReplyExpectations, '/new');
-    assert.deepEqual(newExpectation.expectedTexts, ['创建群聊会话']);
+    assert.deepEqual(newExpectation.expectedTexts, [
+      '创建群聊会话',
+      '<form>',
+      '**群聊名称**',
+      '**工作目录**',
+      '[创建]',
+      '提交后等同发送 `/new <名称> <目录>`。',
+    ]);
     assert.deepEqual(newExpectation.expectedReplyMessageTypes, ['interactive']);
-    assert.deepEqual(newExpectation.expectedReplyContentKeys, ['clk_form', 'clk_input', 'clk_path', 'submit_btn', 'clk-command']);
+    assert.deepEqual(newExpectation.expectedReplyContentKeys, []);
     assert.equal(newExpectation.replyTimeoutMs, 15_000);
-    assert.equal(newExpectation.reason, 'card form command must reply with a Feishu interactive CardKit form and submit callback_data prefix');
+    assert.equal(newExpectation.reason, 'card form command must reply with a Feishu interactive form whose visible labels survive user-side transcript normalization');
 
     const everyExpectation = expectationAt(parsed.commandReplyExpectations, '/every-form');
-    assert.deepEqual(everyExpectation.expectedTexts, ['新建 /every 定时输入']);
+    assert.deepEqual(everyExpectation.expectedTexts, [
+      '新建 /every 定时输入',
+      '<form>',
+      '**间隔**',
+      '**Prompt**',
+      '[创建]',
+      '提交后等同发送 `/every <数字><s|m|h|d> <prompt>`。',
+    ]);
     assert.deepEqual(everyExpectation.expectedReplyMessageTypes, ['interactive']);
-    assert.deepEqual(everyExpectation.expectedReplyContentKeys, ['clk_form', 'clk_every_interval', 'clk_every_prompt', 'submit_btn', 'clk-command']);
+    assert.deepEqual(everyExpectation.expectedReplyContentKeys, []);
     assert.equal(everyExpectation.replyTimeoutMs, 15_000);
-    assert.equal(everyExpectation.reason, 'card form command must reply with a Feishu interactive CardKit form and submit callback_data prefix');
+    assert.equal(everyExpectation.reason, 'card form command must reply with a Feishu interactive form whose visible labels survive user-side transcript normalization');
 
     const thenExpectation = expectationAt(parsed.commandReplyExpectations, '/then-form');
-    assert.deepEqual(thenExpectation.expectedTexts, ['新建 /then 后续输入']);
+    assert.deepEqual(thenExpectation.expectedTexts, [
+      '新建 /then 后续输入',
+      '<form>',
+      '**Prompt**',
+      '[创建]',
+      '提交后等同发送 `/then <prompt>`。',
+    ]);
     assert.deepEqual(thenExpectation.expectedReplyMessageTypes, ['interactive']);
-    assert.deepEqual(thenExpectation.expectedReplyContentKeys, ['clk_form', 'clk_then_prompt', 'submit_btn', 'clk-command']);
+    assert.deepEqual(thenExpectation.expectedReplyContentKeys, []);
     assert.equal(thenExpectation.replyTimeoutMs, 15_000);
-    assert.equal(thenExpectation.reason, 'card form command must reply with a Feishu interactive CardKit form and submit callback_data prefix');
+    assert.equal(thenExpectation.reason, 'card form command must reply with a Feishu interactive form whose visible labels survive user-side transcript normalization');
   });
 
   it('dry-runs agent-question-forms with model-generated CardKit form assertions', () => {
@@ -3392,11 +3414,19 @@ describe('unit::real-feishu-e2e-harness::session-management-command-plan', () =>
     assert.equal(parsed.waitsForMirrorFinalBeforeFollowup, false);
 
     const expectation = expectationAt(parsed.commandReplyExpectations, 'CODELARK_UNIT_AGENT_QUESTION_FORM_PROMPT');
-    assert.deepEqual(expectation.expectedTexts, []);
+    assert.deepEqual(expectation.expectedTexts, [
+      '需要确认',
+      '<form>',
+      '请选择发布策略',
+      '灰度',
+      '全量',
+      '补充说明',
+      '[提交]',
+    ]);
     assert.deepEqual(expectation.expectedReplyMessageTypes, ['interactive']);
-    assert.deepEqual(expectation.expectedReplyContentKeys, ['clk_form', 'clk_choice', 'clk_input', 'submit_btn', 'clk-agent-question']);
+    assert.deepEqual(expectation.expectedReplyContentKeys, []);
     assert.equal(expectation.replyTimeoutMs, 120_000);
-    assert.equal(expectation.reason, 'agent question form must reply with a Feishu interactive CardKit form and clk-agent-question callback prefix');
+    assert.equal(expectation.reason, 'agent question form must reply with a Feishu interactive form whose visible question and choices survive user-side transcript normalization');
   });
 
   it('dry-runs Kimi agent-question-forms with runtime/provider seed and mirror form assertions', () => {
@@ -3450,10 +3480,19 @@ describe('unit::real-feishu-e2e-harness::session-management-command-plan', () =>
     assert.deepEqual(expectationAt(parsed.commandReplyExpectations, '/p tmux').expectedTexts, ['Kimi Provider', 'tmux']);
 
     const formExpectation = expectationAt(parsed.commandReplyExpectations, 'CODELARK_UNIT_AGENT_QUESTION_FORM_KIMI_PROMPT');
+    assert.deepEqual(formExpectation.expectedTexts, [
+      '需要确认',
+      '<form>',
+      '请选择发布策略',
+      '灰度',
+      '全量',
+      '补充说明',
+      '[提交]',
+    ]);
     assert.deepEqual(formExpectation.expectedReplyMessageTypes, ['interactive']);
-    assert.deepEqual(formExpectation.expectedReplyContentKeys, ['clk_form', 'clk_choice', 'clk_input', 'submit_btn', 'clk-agent-question']);
+    assert.deepEqual(formExpectation.expectedReplyContentKeys, []);
     assert.equal(formExpectation.replyTimeoutMs, 120_000);
-    assert.equal(formExpectation.reason, 'agent question form must reply with a Feishu interactive CardKit form and clk-agent-question callback prefix');
+    assert.equal(formExpectation.reason, 'agent question form must reply with a Feishu interactive form whose visible question and choices survive user-side transcript normalization');
   });
 
   it('rejects non-isolated real runs before creating Feishu state', () => {

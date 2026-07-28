@@ -3,6 +3,7 @@ import os from 'node:os';
 import { z } from 'zod';
 
 import { createConfigService } from '../../configuration/service.js';
+import type { ConfigService } from '../../configuration/service.js';
 import {
   claudeExecutableSchema,
   claudeProviderSchema,
@@ -17,6 +18,7 @@ import {
   type ConfigV2,
 } from '../../configuration/schema.js';
 import { listSelectableCodexModels, readConfiguredCodexModel } from '../../runtime/codex/models.js';
+import { readDefaultsConfig, resolveConfigPaths } from '../../configuration/sources.js';
 
 const availableCodexModels = listSelectableCodexModels();
 const availableCodexModelSlugs = new Set(availableCodexModels.map((model) => model.slug));
@@ -79,10 +81,7 @@ const uiConfigPayloadSchema = z.object({
   ),
   tmuxEchoInput: z.boolean().optional(),
   defaultWorkspaceRoot: optionalString(),
-  defaultModel: optionalString().refine(
-    (value) => value === undefined || value === '' || availableCodexModelSlugs.has(value),
-    { message: '未知 Codex 模型。' },
-  ),
+  defaultModel: optionalString(),
   defaultProvider: z.preprocess(
     (value) => typeof value === 'string' ? value.trim().toLowerCase() : value,
     z.union([codexProviderSchema, z.literal('')]),
@@ -117,19 +116,40 @@ export const UI_CONFIG_INPUT_KEYS = Object.freeze(Object.keys(uiConfigPayloadSch
 
 type UiConfigPayload = z.infer<typeof uiConfigPayloadSchema>;
 
-export function parseUiConfigPayload(payload: Record<string, unknown>): UiConfigPayload {
-  return uiConfigPayloadSchema.parse(payload);
+export function parseUiConfigPayload(
+  payload: Record<string, unknown>,
+  currentCodexModel = '',
+): UiConfigPayload {
+  return uiConfigPayloadSchema.extend({
+    defaultModel: optionalString().refine(
+      (value) => (
+        value === undefined
+        || value === ''
+        || value === currentCodexModel
+        || availableCodexModelSlugs.has(value)
+      ),
+      { message: '未知 Codex 模型。' },
+    ),
+  }).parse(payload);
 }
 
-export function configV2ToPayload(config: ConfigV2) {
+interface UiConfigPresentation {
+  defaultProviderInherited?: boolean;
+  defaultProviderDefaultValue?: string;
+}
+
+export function configV2ToPayload(config: ConfigV2, presentation: UiConfigPresentation = {}) {
   const channel = defaultUiChannel(config);
+  const defaultProviderInherited = presentation.defaultProviderInherited === true;
   return {
     runtime: config.runtime.agent,
     tmuxCaptureLines: config.session.tmuxCaptureLines,
     tmuxEchoInput: config.session.tmuxEchoInput,
     defaultWorkspaceRoot: config.bridge.defaultWorkspace === '~' ? os.homedir() : config.bridge.defaultWorkspace,
     defaultModel: config.runtime.codex.model || '',
-    defaultProvider: config.runtime.codex.provider || '',
+    defaultProvider: defaultProviderInherited ? '' : config.runtime.codex.provider || '',
+    defaultProviderInherited,
+    defaultProviderDefaultValue: presentation.defaultProviderDefaultValue || '',
     codexDefaultModel: readConfiguredCodexModel() || '',
     availableModels: availableCodexModels,
     defaultMode: config.runtime.codex.yoloMode === 'on' || config.runtime.codex.yoloMode === 'yolo' ? 'yolo' : 'normal',
@@ -158,7 +178,7 @@ export function configV2ToPayload(config: ConfigV2) {
 }
 
 export function mergeConfigV2HomePatch(current: ConfigV2, payload: Record<string, unknown>): ConfigPatch {
-  const parsed = parseUiConfigPayload(payload);
+  const parsed = parseUiConfigPayload(payload, current.runtime.codex.model);
   const uiAllowLan = hasPayloadKey(payload, 'uiAllowLan')
     ? parsed.uiAllowLan === true
     : current.bridge.uiAllowLan;
@@ -279,12 +299,37 @@ export function readUiHomeConfig(): ConfigV2 {
   return createConfigService({ migrate: false }).snapshot().config;
 }
 
+function defaultCodexProvider(): string {
+  return codexProviderSchema.parse(
+    readDefaultsConfig(resolveConfigPaths().defaultsToml).patch.runtime?.codex?.provider,
+  );
+}
+
+function configServiceToUiPayload(service: ConfigService) {
+  const snapshot = service.snapshot();
+  const providerSource = snapshot.provenance.get('runtime.codex.provider')?.source || 'defaults';
+  return configV2ToPayload(snapshot.config, {
+    defaultProviderInherited: providerSource === 'defaults',
+    defaultProviderDefaultValue: defaultCodexProvider(),
+  });
+}
+
+export function readUiConfigPayload() {
+  return configServiceToUiPayload(createConfigService({ migrate: false }));
+}
+
 export function replaceUiHomeConfig(config: ConfigV2): void {
   createConfigService({ migrate: false }).replace({ kind: 'home' }, homeWritableConfigPatch(config));
 }
 
-export function saveUiConfigPayload(payload: Record<string, unknown>): ConfigV2 {
+export function saveUiConfigPayload(payload: Record<string, unknown>) {
   const service = createConfigService({ migrate: false });
-  service.replace({ kind: 'home' }, mergeConfigV2HomePatch(service.snapshot().config, payload));
-  return service.snapshot().config;
+  const current = service.snapshot().config;
+  const parsed = parseUiConfigPayload(payload, current.runtime.codex.model);
+  const patch = mergeConfigV2HomePatch(current, payload);
+  if (hasPayloadKey(payload, 'defaultProvider') && parsed.defaultProvider === '') {
+    delete patch.runtime?.codex?.provider;
+  }
+  service.replace({ kind: 'home' }, patch);
+  return configServiceToUiPayload(service);
 }

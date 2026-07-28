@@ -781,9 +781,8 @@ const SCENARIOS: ScenarioDefinition[] = [
     e2eCoverage: [
       'e2e::lark-cli-user-command',
       'e2e::feishu-interactive-card-reply_to',
-      'e2e::cardkit-form-fields',
-      'e2e::automation-form-fields',
-      'e2e::card-submit-callback-prefix',
+      'e2e::card-form-visible-transcript',
+      'e2e::automation-form-visible-transcript',
     ],
     providerCoverage: 'runtime-neutral',
     coverageTier: 'runtime-neutral-check',
@@ -805,8 +804,7 @@ const SCENARIOS: ScenarioDefinition[] = [
       'e2e::lark-cli-user-message',
       'e2e::runtime-response',
       'e2e::feishu-interactive-card-reply_to',
-      'e2e::agent-question-form-fields',
-      'e2e::agent-question-callback-prefix',
+      'e2e::agent-question-form-visible-transcript',
       'e2e::mock-app-kimi-mirror-clk-ask-form',
       'e2e::mock-app-kimi-mirror-markdown-ask-split',
     ],
@@ -4350,6 +4348,31 @@ function agentQuestionFormVisibleText(options: CliOptions): string {
     || agentQuestionFormMarkerFromRunId(options.runId);
 }
 
+function agentQuestionFormExpectedVisibleTexts(options: CliOptions): string[] {
+  const match = options.fakeCcrResponseText.match(/<clk-ask>([\s\S]*?)<\/clk-ask>/u);
+  if (!match?.[1]) return ['需要确认', '<form>'];
+  try {
+    const parsed = JSON.parse(match[1]) as {
+      question?: unknown;
+      options?: unknown;
+      input?: { label?: unknown };
+      submitText?: unknown;
+    };
+    return [
+      '需要确认',
+      '<form>',
+      typeof parsed.question === 'string' ? parsed.question : '',
+      ...(Array.isArray(parsed.options)
+        ? parsed.options.filter((item): item is string => typeof item === 'string')
+        : []),
+      typeof parsed.input?.label === 'string' ? parsed.input.label : '',
+      `[${typeof parsed.submitText === 'string' ? parsed.submitText : '提交'}]`,
+    ].filter(Boolean);
+  } catch {
+    return ['需要确认', '<form>'];
+  }
+}
+
 function markdownRenderingVisibleText(options: CliOptions): string {
   return firstCodelarkMarker(options.fakeCcrResponseText)
     || markdownRenderingMarkerFromRunId(options.runId);
@@ -4788,33 +4811,50 @@ function expectedReplyForMessage(options: CliOptions, text: string, label: strin
     if (command === '/new') {
       return {
         ...empty,
-        texts: ['创建群聊会话'],
+        texts: [
+          '创建群聊会话',
+          '<form>',
+          '**群聊名称**',
+          '**工作目录**',
+          '[创建]',
+          '提交后等同发送 `/new <名称> <目录>`。',
+        ],
         messageTypes: ['interactive'],
-        contentKeys: ['clk_form', 'clk_input', 'clk_path', 'submit_btn', 'clk-command'],
       };
     }
     if (command === '/every-form') {
       return {
         ...empty,
-        texts: ['新建 /every 定时输入'],
+        texts: [
+          '新建 /every 定时输入',
+          '<form>',
+          '**间隔**',
+          '**Prompt**',
+          '[创建]',
+          '提交后等同发送 `/every <数字><s|m|h|d> <prompt>`。',
+        ],
         messageTypes: ['interactive'],
-        contentKeys: ['clk_form', 'clk_every_interval', 'clk_every_prompt', 'submit_btn', 'clk-command'],
       };
     }
     if (command === '/then-form') {
       return {
         ...empty,
-        texts: ['新建 /then 后续输入'],
+        texts: [
+          '新建 /then 后续输入',
+          '<form>',
+          '**Prompt**',
+          '[创建]',
+          '提交后等同发送 `/then <prompt>`。',
+        ],
         messageTypes: ['interactive'],
-        contentKeys: ['clk_form', 'clk_then_prompt', 'submit_btn', 'clk-command'],
       };
     }
   }
   if (options.scenario === 'agent-question-forms' && label.includes('final message')) {
     return {
       ...empty,
+      texts: agentQuestionFormExpectedVisibleTexts(options),
       messageTypes: ['interactive'],
-      contentKeys: ['clk_form', 'clk_choice', 'clk_input', 'submit_btn', 'clk-agent-question'],
     };
   }
   if (options.scenario === 'markdown-rendering') {
@@ -5047,13 +5087,13 @@ function commandReplyExpectations(options: CliOptions): CommandReplyExpectation[
           : {}),
         replyTimeoutMs: replyTimeoutMsForMessage(options, command, label),
         reason: options.scenario === 'card-forms' && ['/new', '/every-form', '/then-form'].includes(command.trim())
-          ? 'card form command must reply with a Feishu interactive CardKit form and submit callback_data prefix'
+          ? 'card form command must reply with a Feishu interactive form whose visible labels survive user-side transcript normalization'
           : options.scenario === 'basic-dialogue-suite' && basicDialoguePhaseForPrompt(options, command)
           ? 'basic dialogue provider phase must produce the expected deterministic model marker without provider contamination'
           : options.scenario === 'basic-dialogue-suite'
           ? 'basic dialogue setup/control message must reach the expected runtime/provider/stop state'
           : options.scenario === 'agent-question-forms' && label.includes('final message')
-          ? 'agent question form must reply with a Feishu interactive CardKit form and clk-agent-question callback prefix'
+          ? 'agent question form must reply with a Feishu interactive form whose visible question and choices survive user-side transcript normalization'
           : options.scenario === 'agent-question-forms' && runtimeProviderSeedExpectedTexts(options, command).length > 0
           ? 'agent question runtime/provider seed must reach the final selected state before sending the model prompt'
           : options.scenario === 'markdown-rendering' && label.includes('final message')

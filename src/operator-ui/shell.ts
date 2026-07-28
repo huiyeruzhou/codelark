@@ -279,7 +279,6 @@ export function renderUiShellHtml(): string {
                   <label>
                     <span class="field-title">默认 Claude Provider <span class="help-tip" tabindex="0" data-tip="控制 Bridge 默认用 tmux、pty 还是 SDK 驱动 Claude Code；当前会话仍可用 /p 单独切换。">?</span></span>
                     <select id="claudeProvider">
-                      <option value="">auto</option>
                       <option value="sdk">sdk</option>
                       <option value="pty">pty</option>
                       <option value="tmux">tmux</option>
@@ -361,7 +360,7 @@ export function renderUiShellHtml(): string {
                   <label>
                     <span class="field-title">默认 Codex Provider <span class="help-tip" tabindex="0" data-tip="控制 Bridge 默认用 SDK 还是 tmux 驱动 Codex；这不是模型运行参数。当前会话仍可用 /p 单独切换。">?</span></span>
                     <select id="defaultProvider">
-                      <option value="">auto</option>
+                      <option value="">跟随默认</option>
                       <option value="sdk">sdk</option>
                       <option value="pty">pty</option>
                       <option value="tmux">tmux</option>
@@ -2241,7 +2240,13 @@ export function renderUiShellHtml(): string {
         document.getElementById('streamStatusCheckIntervalSeconds').value = String(config.streamStatusCheckIntervalSeconds || 5);
         document.getElementById('defaultWorkspaceRoot').value = config.defaultWorkspaceRoot || '';
         renderDefaultModelOptions(config);
-        document.getElementById('defaultProvider').value = config.defaultProvider || '';
+        const defaultProvider = document.getElementById('defaultProvider');
+        const defaultProviderOption = defaultProvider.querySelector('option[value=""]');
+        if (defaultProviderOption) {
+          defaultProviderOption.textContent = '跟随默认（默认值：' + (config.defaultProviderDefaultValue || 'tmux') + '）';
+        }
+        defaultProvider.value = config.defaultProviderInherited === true ? '' : (config.defaultProvider || '');
+        defaultProvider.classList.toggle('uses-default', defaultProvider.value === '');
         document.getElementById('codexSkipGitRepoCheck').checked = config.codexSkipGitRepoCheck === true;
         document.getElementById('codexSandboxMode').value = config.codexSandboxMode || 'workspace-write';
         document.getElementById('codexNetworkAccess').checked = config.codexNetworkAccess !== false;
@@ -3044,6 +3049,10 @@ export function renderUiShellHtml(): string {
         } catch (error) {
           showMessage('configMessage', 'error', error.message);
         }
+      });
+
+      document.getElementById('defaultProvider').addEventListener('change', (event) => {
+        event.currentTarget.classList.toggle('uses-default', event.currentTarget.value === '');
       });
 
       document.getElementById('startBridgeBtn').addEventListener('click', async () => {

@@ -182,6 +182,7 @@ CodeLark 的配置分两类理解最清楚：
 /set runtime kimi
 /set defaultWorkspaceRoot ~/work
 /set defaultProvider tmux
+/set defaultProvider default  # 删除显式覆盖，跟随产品默认值
 /set claudeProvider tmux
 /set tmuxCaptureLines 80
 ```

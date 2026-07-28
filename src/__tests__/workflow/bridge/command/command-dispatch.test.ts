@@ -6399,7 +6399,7 @@ enabled = true
     );
     assert.deepEqual(
       sent.at(-1)?.richCard?.form?.selects?.map((select: any) => select.label),
-      ['默认 agent', '回显 tmux 输出'],
+      ['默认 agent', '回显 tmux 输入'],
     );
     assert.deepEqual(
       sent.at(-1)?.richCard?.form?.selects?.map((select: any) => select.formName),
@@ -6451,8 +6451,11 @@ enabled = true
     );
     assert.deepEqual(
       sent.at(-1)?.richCard?.form?.selects?.find((select: any) => select.elementId === 'defaultProvider')?.options.map((option: any) => option.text),
-      ['sdk', 'pty', 'tmux'],
+      ['跟随默认', 'sdk', 'pty', 'tmux'],
     );
+    const initialProviderSelect = sent.at(-1)?.richCard?.form?.selects?.find((select: any) => select.elementId === 'defaultProvider');
+    assert.equal(initialProviderSelect?.selectedCallbackData, undefined);
+    assert.equal(initialProviderSelect?.placeholder, '跟随默认（默认值：tmux）');
     assert.deepEqual(
       sent.at(-1)?.richCard?.form?.selects?.find((select: any) => select.elementId === 'codexSandboxMode')?.options.map((option: any) => option.text),
       ['workspace-write', 'read-only'],
@@ -6513,7 +6516,7 @@ enabled = true
     assert.deepEqual(sent.at(-1)?.richCard?.form?.selects?.map((select: any) => select.elementId), ['runtime', 'tmuxEchoInput']);
     assert.deepEqual(sent.at(-1)?.richCard?.form?.selects?.map((select: any) => select.label), [
       '默认 agent',
-      '回显 tmux 输出',
+      '回显 tmux 输入',
     ]);
     assert.equal(getThreadTableMessageRecord(address, 'set')?.messageId, 'reply-4');
 
@@ -6923,9 +6926,9 @@ enabled = true
       '/set defaultProvider default',
       deps,
     );
-    assert.match(sent.at(-1)?.text || '', /runtime\.codex\.provider.*auto/s);
-    assert.equal(createConfigService({ migrate: false, env: {} }).resolve('runtime.codex.provider').source, 'home');
-    assert.equal(createConfigService({ migrate: false, env: {} }).get('runtime.codex.provider'), '');
+    assert.match(sent.at(-1)?.text || '', /runtime\.codex\.provider.*tmux/s);
+    assert.equal(createConfigService({ migrate: false, env: {} }).resolve('runtime.codex.provider').source, 'defaults');
+    assert.equal(createConfigService({ migrate: false, env: {} }).get('runtime.codex.provider'), 'tmux');
 
     await handleBridgeCommand(
       adapter,
@@ -7048,6 +7051,74 @@ enabled = true
     assert.ok(binding);
     assert.equal(getSessionWorkingDirectory(store.getSession(binding!.bridgeSessionId)), path.join(workspaceRoot, 'set-proj'));
     assert.equal(store.getSession(binding!.bridgeSessionId)?.runtime?.codex?.mode, undefined);
+
+    await handleBridgeCommand(
+      adapter,
+      {
+        address,
+        text: '/set defaultProvider tmux',
+        messageId: 'incoming-set-provider-before-card-reset',
+      } as any,
+      '/set defaultProvider tmux',
+      deps,
+    );
+    await handleBridgeCommand(
+      adapter,
+      {
+        address,
+        text: '/set --group runtime.codex',
+        messageId: 'incoming-set-provider-reset-card',
+      } as any,
+      '/set --group runtime.codex',
+      deps,
+    );
+    const providerSelect = sent.at(-1)?.richCard?.form?.selects?.find((select: any) => select.elementId === 'defaultProvider');
+    assert.deepEqual(providerSelect?.options.map((option: any) => [option.text, option.callbackData]), [
+      ['跟随默认', 'default'],
+      ['sdk', 'sdk'],
+      ['pty', 'pty'],
+      ['tmux', 'tmux'],
+    ]);
+    assert.equal(providerSelect?.selectedCallbackData, 'tmux');
+
+    await handleBridgeCommand(
+      adapter,
+      {
+        address,
+        text: '/set',
+        messageId: 'incoming-set-provider-reset-form',
+        callbackMessageId: 'reply-provider-reset-card',
+        raw: {
+          event: {
+            action: {
+              form_value: {
+                cdx_provider: 'default',
+              },
+            },
+          },
+        },
+      } as any,
+      '/set --group runtime.codex',
+      deps,
+    );
+    assert.match(sent.at(-1)?.text || '', /runtime\.codex\.provider.*tmux/s);
+    const providerAfterReset = createConfigService({ migrate: false, env: {} }).resolve('runtime.codex.provider');
+    assert.equal(providerAfterReset.value, 'tmux');
+    assert.equal(providerAfterReset.source, 'defaults');
+    const resetProviderSelect = sent.at(-1)?.richCard?.form?.selects?.find((select: any) => select.elementId === 'defaultProvider');
+    assert.equal(resetProviderSelect?.selectedCallbackData, undefined);
+    assert.equal(resetProviderSelect?.placeholder, '跟随默认（默认值：tmux）');
+    const resetProviderFeishuCard = JSON.parse(buildRichCardContent(sent.at(-1)?.richCard, address.chatId)) as any;
+    const resetProviderFeishuForm = resetProviderFeishuCard.body.elements.find((element: any) => element.tag === 'form');
+    const resetProviderFeishuSelect = resetProviderFeishuForm.elements.find((element: any) => (
+      element.tag === 'select_static' && element.name === 'cdx_provider'
+    ));
+    const defaultProviderOption = resetProviderFeishuSelect.options.find((option: any) => (
+      option.text?.content === '跟随默认'
+    ));
+    assert.equal(defaultProviderOption.value, 'default');
+    assert.equal(resetProviderFeishuSelect.placeholder?.content, '跟随默认（默认值：tmux）');
+    assert.equal('initial_option' in resetProviderFeishuSelect, false);
   });
 
   it('views and updates current Feishu channel group mention requirement with /require-at', async () => {

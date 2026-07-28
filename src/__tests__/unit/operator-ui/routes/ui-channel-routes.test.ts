@@ -116,6 +116,60 @@ function createMemoryStore(bindings: unknown[] = []) {
 }
 
 describe('handleUiChannelRoute', () => {
+  it('preserves callback-owned group authorization and rejects browser attempts to write it', async () => {
+    let config = baseConfigV2({
+      channels: [{
+        ...baseConfigV2().channels[0]!,
+        enabled: true,
+        config: {
+          ...baseConfigV2().channels[0]!.config,
+          groupAuthorized: true,
+        },
+      }],
+    });
+    const store = createMemoryStore();
+    const saveResponse = createResponse();
+
+    await handleUiChannelRoute({
+      request: createJsonRequest({
+        id: 'feishu-default',
+        provider: 'feishu',
+        alias: '已授权通道',
+      }),
+      response: saveResponse,
+      url: new URL('http://localhost/api/channels/save'),
+      createStore: () => store,
+      readConfig: () => config,
+      writeConfig: (next) => {
+        config = next;
+      },
+      buildBindingsPayload: async () => ({ bindings: [], options: [], channelDefaults: [] }),
+    });
+
+    assert.equal(saveResponse.statusCodeWritten, 200);
+    assert.equal(config.channels[0]?.config.groupAuthorized, true);
+
+    const forgedResponse = createResponse();
+    await handleUiChannelRoute({
+      request: createJsonRequest({
+        id: 'feishu-default',
+        provider: 'feishu',
+        groupAuthorized: false,
+      }),
+      response: forgedResponse,
+      url: new URL('http://localhost/api/channels/save'),
+      createStore: () => store,
+      readConfig: () => config,
+      writeConfig: (next) => {
+        config = next;
+      },
+      buildBindingsPayload: async () => ({ bindings: [], options: [], channelDefaults: [] }),
+    });
+
+    assert.equal(forgedResponse.statusCodeWritten, 400);
+    assert.equal(config.channels[0]?.config.groupAuthorized, true);
+  });
+
   it('saves channel config through the channel route', async () => {
     let config = baseConfigV2();
     const store = createMemoryStore();

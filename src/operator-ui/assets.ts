@@ -500,6 +500,9 @@ export const mainStyles = `
     transition: border-color 150ms ease, box-shadow 150ms ease, background 150ms ease;
   }
   input, select { min-height: 42px; }
+  select.uses-default { color: var(--muted); }
+  select option { color: var(--text); }
+  select option[value=""] { color: var(--muted); }
   textarea { min-height: 220px; resize: vertical; }
   input:focus, select:focus, textarea:focus {
     border-color: rgba(37, 99, 235, 0.66);

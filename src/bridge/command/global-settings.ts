@@ -27,6 +27,7 @@ interface SettingGroupDefinition {
 interface SettingWriteOk {
   ok: true;
   patch: ConfigPatch;
+  unsetPath?: ConfigPath;
 }
 
 export interface SettingDefinition {
@@ -39,6 +40,8 @@ export interface SettingDefinition {
   control: SettingControl;
   placeholder?: string;
   options?: Array<{ text: string; callbackData: string }>;
+  homeDefaultOption?: { text: string; callbackData: string };
+  toFormValue?: (displayValue: string) => string;
   read(config: ConfigV2): string;
   write(rawValue: string, current: ConfigV2): SettingWriteOk | { ok: false; message: string };
 }
@@ -65,7 +68,7 @@ const SETTING_DISPLAY_LABELS: Record<string, string> = {
   cursorForce: 'YOLO模式',
   defaultWorkspaceRoot: '默认工作目录',
   tmuxCaptureLines: 'tmux 输出行数',
-  tmuxEchoInput: '回显 tmux 输出',
+  tmuxEchoInput: '回显 tmux 输入',
   uiAllowLan: '允许局域网访问 UI',
   uiAccessToken: 'UI 访问令牌',
   historyMessageLimit: '历史消息条数',
@@ -350,13 +353,14 @@ const SETTING_DEFINITIONS: SettingDefinition[] = [
     label: 'provider',
     usage: '/set defaultProvider sdk|pty|tmux|default',
     control: 'select',
+    homeDefaultOption: selectOption('跟随默认', 'default'),
     options: [selectOption('sdk'), selectOption('pty'), selectOption('tmux')],
-    read: (config) => config.runtime.codex.provider || 'auto',
+    read: (config) => config.runtime.codex.provider || 'tmux',
     write(rawValue) {
       const token = rawValue.trim().toLowerCase();
-      if (token === 'default') return patch({ runtime: { codex: { provider: '' } } });
+      if (token === 'default') return { ok: true, patch: {}, unsetPath: 'runtime.codex.provider' };
       if (token === 'sdk' || token === 'tmux' || token === 'pty') return patch({ runtime: { codex: { provider: token } } });
-      return { ok: false, message: '默认 Codex Provider 运行方式必须是 sdk、pty 或 tmux，也可以用 default 恢复自动选择。' };
+      return { ok: false, message: '默认 Codex Provider 运行方式必须是 sdk、pty 或 tmux，也可以用 default 跟随产品默认值。' };
     },
   },
   {
@@ -909,12 +913,13 @@ export function buildSettingsFields(config: ConfigV2, definitions: SettingDefini
 
 export function settingFormSelect(definition: SettingDefinition, config: ConfigV2): NonNullable<NonNullable<OutboundRichCard['form']>['selects']>[number] {
   const value = definition.read(config);
+  const selectedValue = definition.toFormValue?.(value) ?? value;
   return {
     elementId: definition.key,
     formName: settingFormName(definition),
     label: settingFormLabel(definition),
     placeholder: value,
-    selectedCallbackData: value === 'auto' ? '' : value,
+    selectedCallbackData: selectedValue,
     options: definition.options || [],
   };
 }
@@ -940,10 +945,22 @@ export function settingSessionFormSelect(
   };
 }
 
-function settingPanelSelect(definition: SettingDefinition, config: ConfigV2): NonNullable<NonNullable<OutboundRichCard['form']>['selects']>[number] {
+function settingPanelSelect(
+  definition: SettingDefinition,
+  config: ConfigV2,
+  usesHomeDefault: boolean,
+): NonNullable<NonNullable<OutboundRichCard['form']>['selects']>[number] {
+  const base = settingFormSelect(definition, config);
   return {
-    ...settingFormSelect(definition, config),
+    ...base,
     label: settingPanelLabel(definition),
+    ...(definition.homeDefaultOption ? {
+      placeholder: usesHomeDefault
+        ? `跟随默认（默认值：${definition.read(config)}）`
+        : base.placeholder,
+      selectedCallbackData: usesHomeDefault ? undefined : base.selectedCallbackData,
+      options: [definition.homeDefaultOption, ...(definition.options || [])],
+    } : {}),
   };
 }
 
@@ -998,7 +1015,8 @@ export function buildSetCommandRichCard(
   selectedGroup: SettingGroupKey = 'runtime',
   address?: ChannelAddress,
 ): OutboundRichCard {
-  const config = createHomeTomlConfigService().snapshot().config;
+  const snapshot = createHomeTomlConfigService().snapshot();
+  const config = snapshot.config;
   const group = GROUP_BY_KEY.get(selectedGroup) || GROUP_BY_KEY.get('runtime')!;
   const definitions = groupDefinitions(group.key);
   return {
@@ -1014,7 +1032,11 @@ export function buildSetCommandRichCard(
     form: {
       optionElementId: 'clk_set_option',
       layout: 'two_column',
-      selects: definitions.filter((definition) => definition.control === 'select').map((definition) => settingPanelSelect(definition, config)),
+      selects: definitions.filter((definition) => definition.control === 'select').map((definition) => settingPanelSelect(
+        definition,
+        config,
+        snapshot.provenance.get(definition.tomlPath)?.source === 'defaults',
+      )),
       extraInputs: definitions.filter((definition) => definition.control === 'input').map((definition) => settingPanelInput(definition, config)),
       controlBar: {
         actions: [
@@ -1089,7 +1111,7 @@ export function handleSetFormCommand(options: {
     const rawValue = formValueString(options.formValue, definition);
     if (rawValue === undefined) continue;
     const currentValue = definition.read(currentConfig);
-    const normalizedCurrent = currentValue === 'auto' ? '' : currentValue;
+    const normalizedCurrent = definition.toFormValue?.(currentValue) ?? currentValue;
     if (rawValue === normalizedCurrent) continue;
     const written = definition.write(rawValue, currentConfig);
     if (!written.ok) {
@@ -1107,7 +1129,11 @@ export function handleSetFormCommand(options: {
       };
     }
     try {
-      service.set({ kind: 'home' }, written.patch);
+      if (written.unsetPath) {
+        service.unset({ kind: 'home' }, written.unsetPath);
+      } else {
+        service.set({ kind: 'home' }, written.patch);
+      }
       currentConfig = service.snapshot().config;
       updated.push(definition);
     } catch (error) {
@@ -1190,7 +1216,11 @@ export function handleSetCommand(options: {
   }
 
   try {
-    service.set({ kind: 'home' }, written.patch);
+    if (written.unsetPath) {
+      service.unset({ kind: 'home' }, written.unsetPath);
+    } else {
+      service.set({ kind: 'home' }, written.patch);
+    }
   } catch (error) {
     return buildCommandFields(
       '配置未更新',

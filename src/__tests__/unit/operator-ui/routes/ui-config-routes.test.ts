@@ -9,6 +9,7 @@ import { handleUiConfigRoute } from '../../../../operator-ui/routes/config.js';
 import {
   configV2ToPayload,
   mergeConfigV2HomePatch,
+  readUiConfigPayload,
   UI_CONFIG_INPUT_KEYS,
 } from '../../../../operator-ui/application/config.js';
 import { CODELARK_HOME } from '../../../../configuration/paths.js';
@@ -16,7 +17,7 @@ import {
   LEGACY_CONFIG_ENV_PATH as CONFIG_PATH,
   LEGACY_CONFIG_JSON_PATH as CONFIG_JSON_PATH,
 } from '../../../../configuration/migrations/legacy/paths.js';
-import type { ConfigV2 } from '../../../../configuration/schema.js';
+import { claudeProviderSchema, type ConfigV2 } from '../../../../configuration/schema.js';
 
 function createResponse(): ServerResponse & { body: string; statusCodeWritten?: number } {
   return {
@@ -121,6 +122,26 @@ describe('Ui config application', () => {
     assert.throws(
       () => mergeConfigV2HomePatch(current, { defaultModel: 'unknown-model', historyMessageLimit: 999, claudeExecutable: 'ccr' }),
       /未知 Codex 模型|历史消息条数必须在 1 到 20 之间/,
+    );
+  });
+
+  it('preserves an existing custom Codex model while rejecting a different unknown model', () => {
+    const current = baseConfigV2({
+      runtime: {
+        ...baseConfigV2().runtime,
+        codex: { ...baseConfigV2().runtime.codex, model: 'private-codex-model' },
+      },
+    });
+
+    const patch = mergeConfigV2HomePatch(current, {
+      defaultModel: 'private-codex-model',
+      tmuxCaptureLines: 120,
+    });
+    assert.equal(patch.runtime?.codex?.model, 'private-codex-model');
+    assert.equal(patch.session?.tmuxCaptureLines, 120);
+    assert.throws(
+      () => mergeConfigV2HomePatch(current, { defaultModel: 'different-unknown-model' }),
+      /未知 Codex 模型/,
     );
   });
 
@@ -289,6 +310,18 @@ describe('Ui config application', () => {
     assert.equal(payload.claudeProvider, 'sdk');
   });
 
+  it('keeps the Claude provider control equal to the backend enum contract', () => {
+    const source = fs.readFileSync(path.join(process.cwd(), 'src/operator-ui/shell.ts'), 'utf-8');
+    const selectBody = source.match(/<select id="claudeProvider">([\s\S]*?)<\/select>/)?.[1] || '';
+    const browserOptions = [...selectBody.matchAll(/<option value="([^"]*)">/g)].map((match) => match[1]);
+
+    assert.deepEqual(browserOptions, [...claudeProviderSchema.options]);
+    assert.throws(
+      () => mergeConfigV2HomePatch(baseConfigV2(), { claudeProvider: '' }),
+      /Invalid option/,
+    );
+  });
+
   it('keeps the global config shell wired to Kimi form fields', () => {
     const source = fs.readFileSync(path.join(process.cwd(), 'src/operator-ui/shell.ts'), 'utf-8');
     assert.match(source, /<select id="runtime">[\s\S]*<option value="codex" selected>codex<\/option>[\s\S]*<option value="claude">claude<\/option>[\s\S]*<option value="kimi">kimi<\/option>/);
@@ -296,6 +329,11 @@ describe('Ui config application', () => {
     assert.match(source, /id="kimiProvider"/);
     assert.match(source, /id="kimiDefaultModel"/);
     assert.match(source, /<select id="defaultProvider">[\s\S]*<option value="sdk">sdk<\/option>[\s\S]*<option value="pty">pty<\/option>[\s\S]*<option value="tmux">tmux<\/option>/);
+    assert.match(source, /<option value="">跟随默认<\/option>/);
+    assert.doesNotMatch(source, /<option value="">auto<\/option>/);
+    assert.match(source, /跟随默认（默认值：/);
+    assert.match(source, /defaultProviderInherited === true/);
+    assert.match(source, /classList\.toggle\('uses-default'/);
     assert.match(source, /kimiProvider: document\.getElementById\('kimiProvider'\)\.value/);
     assert.match(source, /kimiDefaultModel: document\.getElementById\('kimiDefaultModel'\)\.value/);
     assert.match(source, /document\.getElementById\('kimiProvider'\)\.value = config\.kimiProvider \|\| 'tmux'/);
@@ -323,6 +361,23 @@ describe('Ui config application', () => {
 });
 
 describe('handleUiConfigRoute', () => {
+  it('renders an inherited Codex provider as a gray default state', () => {
+    const configTomlPath = path.join(CODELARK_HOME, 'config.toml');
+    const previousToml = fs.existsSync(configTomlPath) ? fs.readFileSync(configTomlPath, 'utf-8') : null;
+    try {
+      fs.mkdirSync(CODELARK_HOME, { recursive: true });
+      fs.rmSync(configTomlPath, { force: true });
+
+      const payload = readUiConfigPayload();
+      assert.equal(payload.defaultProvider, '');
+      assert.equal(payload.defaultProviderInherited, true);
+      assert.equal(payload.defaultProviderDefaultValue, 'tmux');
+    } finally {
+      if (previousToml === null) fs.rmSync(configTomlPath, { force: true });
+      else fs.writeFileSync(configTomlPath, previousToml, 'utf-8');
+    }
+  });
+
   it('handles config reads', async () => {
     const response = createResponse();
     const handled = await handleUiConfigRoute({
@@ -569,6 +624,68 @@ require_mention = false
         if (value === undefined) delete process.env[key];
         else process.env[key] = value;
       }
+    }
+  });
+
+  it('clears the home Codex provider instead of storing an empty override', async () => {
+    const configTomlPath = path.join(CODELARK_HOME, 'config.toml');
+    const previousToml = fs.existsSync(configTomlPath) ? fs.readFileSync(configTomlPath, 'utf-8') : null;
+    try {
+      fs.mkdirSync(CODELARK_HOME, { recursive: true });
+      fs.writeFileSync(configTomlPath, `
+schema_version = 2
+
+[runtime.codex]
+provider = "sdk"
+`);
+
+      const response = createResponse();
+      const handled = await handleUiConfigRoute({
+        request: createJsonRequest('POST', { defaultProvider: '' }),
+        response,
+        url: new URL('http://localhost/api/config'),
+      });
+
+      assert.equal(handled, true);
+      assert.equal(response.statusCodeWritten, 200);
+      const body = JSON.parse(response.body) as {
+        ok?: boolean;
+        config?: Record<string, unknown>;
+      };
+      assert.equal(body.ok, true);
+      assert.equal(body.config?.defaultProvider, '');
+      assert.equal(body.config?.defaultProviderInherited, true);
+      assert.equal(body.config?.defaultProviderDefaultValue, 'tmux');
+      const savedToml = fs.readFileSync(configTomlPath, 'utf-8');
+      const codexBlock = savedToml.match(/\[runtime\.codex\]([\s\S]*?)(?=\n\[|$)/)?.[1] || '';
+      assert.doesNotMatch(codexBlock, /\bprovider\s*=/);
+    } finally {
+      if (previousToml === null) fs.rmSync(configTomlPath, { force: true });
+      else fs.writeFileSync(configTomlPath, previousToml, 'utf-8');
+    }
+  });
+
+  it('keeps an explicitly selected tmux Codex provider distinct from the default state', async () => {
+    const configTomlPath = path.join(CODELARK_HOME, 'config.toml');
+    const previousToml = fs.existsSync(configTomlPath) ? fs.readFileSync(configTomlPath, 'utf-8') : null;
+    try {
+      fs.mkdirSync(CODELARK_HOME, { recursive: true });
+      fs.rmSync(configTomlPath, { force: true });
+
+      const response = createResponse();
+      await handleUiConfigRoute({
+        request: createJsonRequest('POST', { defaultProvider: 'tmux' }),
+        response,
+        url: new URL('http://localhost/api/config'),
+      });
+
+      const body = JSON.parse(response.body) as { config?: Record<string, unknown> };
+      assert.equal(body.config?.defaultProvider, 'tmux');
+      assert.equal(body.config?.defaultProviderInherited, false);
+      assert.match(fs.readFileSync(configTomlPath, 'utf-8'), /provider = "tmux"/);
+    } finally {
+      if (previousToml === null) fs.rmSync(configTomlPath, { force: true });
+      else fs.writeFileSync(configTomlPath, previousToml, 'utf-8');
     }
   });
 

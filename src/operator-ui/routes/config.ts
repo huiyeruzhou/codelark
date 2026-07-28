@@ -3,8 +3,7 @@ import { z } from 'zod';
 
 import {
   checkUiConfigPayload,
-  configV2ToPayload,
-  readUiHomeConfig,
+  readUiConfigPayload,
   saveUiConfigPayload,
 } from '../application/config.js';
 
@@ -47,14 +46,14 @@ export async function handleUiConfigRoute(options: {
   const { request, response, url } = options;
 
   if (request.method === 'GET' && url.pathname === '/api/config') {
-    json(response, 200, configV2ToPayload(readUiHomeConfig()));
+    json(response, 200, readUiConfigPayload());
     return true;
   }
 
   if (request.method === 'POST' && url.pathname === '/api/config') {
     try {
       const payload = await readJsonBody<Record<string, unknown>>(request);
-      json(response, 200, { ok: true, config: configV2ToPayload(saveUiConfigPayload(payload)) });
+      json(response, 200, { ok: true, config: saveUiConfigPayload(payload) });
     } catch (error) {
       json(response, 400, configErrorBody(error));
     }

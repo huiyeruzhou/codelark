@@ -69,7 +69,7 @@ ui_access_token = ""
 [runtime.codex]
 model = ""
 yolo_mode = "off"
-provider = ""
+provider = "tmux"
 skip_git_repo_check = true
 sandbox_mode = "workspace-write"
 network_access = true
