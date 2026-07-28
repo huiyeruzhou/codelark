@@ -462,6 +462,16 @@ function waitForCondition(condition: () => boolean, timeoutMs = 1000): Promise<v
   });
 }
 
+async function waitForMirrorCondition(condition: () => boolean, timeoutMs = 1000): Promise<void> {
+  const startedAt = Date.now();
+  while (Date.now() - startedAt <= timeoutMs) {
+    await _testOnly.reconcileMirrorSubscriptions();
+    if (condition()) return;
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  throw new Error('Timed out waiting for mirror condition.');
+}
+
 async function runThroughAdapterRuntime(
   adapter: RecordingAdapter,
   message: ReturnType<typeof inboundMessage>,
@@ -2879,7 +2889,7 @@ provider = "tmux"
         assistantText: 'Claude tmux auto response',
       });
 
-      await waitForCondition(() => adapter.streamEvents.some((event) => (
+      await waitForMirrorCondition(() => adapter.streamEvents.some((event) => (
         event.kind === 'end'
         && event.streamKey?.startsWith('mirror:')
         && /Claude tmux auto response/.test(event.text || '')
@@ -2993,7 +3003,7 @@ provider = "tmux"
 
       await _testOnly.handleMessage(adapter, inboundMessage(address, 'first kimi tmux', 'incoming-kimi-tmux-auto-init-plain'));
 
-      await waitForCondition(() => adapter.streamEvents.some((event) => (
+      await waitForMirrorCondition(() => adapter.streamEvents.some((event) => (
         event.kind === 'end'
         && /Kimi mock-app plain response/.test(event.text || '')
       )), 12_000).catch((error) => {
@@ -3061,7 +3071,7 @@ provider = "tmux"
       await waitForCondition(() => fs.readFileSync(keyLogPath, 'utf-8').includes('prompt after Kimi restart'), 5_000);
 
       await _testOnly.handleMessage(adapter, inboundMessage(address, 'runtime command kimi follow-up', 'incoming-kimi-runtime-message-follow-up'));
-      await waitForCondition(() => adapter.streamEvents.some((event) => (
+      await waitForMirrorCondition(() => adapter.streamEvents.some((event) => (
         event.kind === 'end'
         && event.streamKey?.startsWith('mirror:')
         && event.status === 'completed'
@@ -3171,7 +3181,7 @@ provider = "tmux"
 
       await _testOnly.handleMessage(adapter, inboundMessage(address, 'runtime command kimi prompt', 'incoming-kimi-runtime-message-plain'));
 
-      await waitForCondition(() => adapter.streamEvents.some((event) => (
+      await waitForMirrorCondition(() => adapter.streamEvents.some((event) => (
         event.kind === 'end'
         && event.streamKey?.startsWith('mirror:')
         && event.status === 'completed'
@@ -3312,7 +3322,7 @@ provider = "tmux"
 
       await _testOnly.handleMessage(adapter, inboundMessage(address, 'continue bound kimi', 'incoming-kimi-bound-plain'));
 
-      await waitForCondition(() => adapter.streamEvents.some((event) => (
+      await waitForMirrorCondition(() => adapter.streamEvents.some((event) => (
         event.kind === 'end'
         && event.streamKey?.startsWith('mirror:')
         && event.status === 'completed'
@@ -3454,7 +3464,7 @@ provider = "tmux"
 
       await _testOnly.handleMessage(adapter, inboundMessage(address, 'ask user from kimi', 'incoming-kimi-question-plain'));
 
-      await waitForCondition(() => adapter.sent.some((message) => (
+      await waitForMirrorCondition(() => adapter.sent.some((message) => (
         message.richCard?.form?.submitCallbackData.startsWith('clk-agent-question:') === true
       )), 12_000).catch((error) => {
         assert.fail([
@@ -3518,7 +3528,7 @@ provider = "tmux"
           },
         },
       });
-      await waitForCondition(() => adapter.streamEvents.some((event) => (
+      await waitForMirrorCondition(() => adapter.streamEvents.some((event) => (
         event.kind === 'end'
         && event.streamKey?.startsWith('mirror:')
         && event.status === 'completed'
@@ -3526,7 +3536,7 @@ provider = "tmux"
       )), 12_000);
 
       await _testOnly.handleMessage(adapter, inboundMessage(address, '卡片回答之后继续聊', 'incoming-kimi-after-question-follow-up'));
-      await waitForCondition(() => adapter.streamEvents.some((event) => (
+      await waitForMirrorCondition(() => adapter.streamEvents.some((event) => (
         event.kind === 'end'
         && event.streamKey?.startsWith('mirror:')
         && event.status === 'completed'
@@ -3613,7 +3623,7 @@ provider = "tmux"
         assistantText: 'Claude tmux mirror response',
       });
 
-      await waitForCondition(() => adapter.streamEvents.some((event) => (
+      await waitForMirrorCondition(() => adapter.streamEvents.some((event) => (
         event.kind === 'end'
         && event.streamKey?.startsWith('mirror:')
         && /Claude tmux mirror response/.test(event.text || '')
