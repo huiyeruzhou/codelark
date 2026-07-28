@@ -36,6 +36,16 @@ function optionalTrimmedString() {
   return trimString().optional();
 }
 
+function optionalInteger(options: { min: number; max?: number; message: string }) {
+  return z.preprocess(
+    (value) => typeof value === 'string' ? Number(value.trim()) : value,
+    z.number().int().min(options.min).refine(
+      (value) => options.max === undefined || value <= options.max,
+      { message: options.message },
+    ),
+  ).optional();
+}
+
 const uiChannelPayloadSchema = z.object({
   id: trimString(z.string().min(1)).optional(),
   provider: z.preprocess(
@@ -56,6 +66,9 @@ const uiChannelPayloadSchema = z.object({
   streamingEnabled: z.boolean().optional(),
   feedbackMarkdownEnabled: z.boolean().optional(),
   requireMention: z.boolean().optional(),
+  historyMessageLimit: optionalInteger({ min: 1, max: 20, message: '历史消息条数必须在 1 到 20 之间。' }),
+  streamStatusIdleStartSeconds: optionalInteger({ min: 0, message: '响应计时显示延迟不能小于 0。' }),
+  streamStatusCheckIntervalSeconds: optionalInteger({ min: 1, message: '运行状态刷新间隔必须大于 0。' }),
 }).strict();
 
 type UiChannelPayload = z.infer<typeof uiChannelPayloadSchema>;
@@ -135,6 +148,15 @@ export function mergeChannelInstanceV2(
         ?? existing?.config.feedbackMarkdownEnabled
         ?? template.feedbackMarkdownEnabled,
       requireMention: parsed.requireMention ?? existing?.config.requireMention ?? template.requireMention,
+      historyMessageLimit: parsed.historyMessageLimit
+        ?? existing?.config.historyMessageLimit
+        ?? template.historyMessageLimit,
+      streamStatusIdleStartSeconds: parsed.streamStatusIdleStartSeconds
+        ?? existing?.config.streamStatusIdleStartSeconds
+        ?? template.streamStatusIdleStartSeconds,
+      streamStatusCheckIntervalSeconds: parsed.streamStatusCheckIntervalSeconds
+        ?? existing?.config.streamStatusCheckIntervalSeconds
+        ?? template.streamStatusCheckIntervalSeconds,
     },
   };
 

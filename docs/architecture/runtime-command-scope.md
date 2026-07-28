@@ -136,20 +136,22 @@ interface GlobalRuntimeConfig {
 | `kimiModel` | `runtime.kimi.model` | Kimi Code 专属模型名 |
 | `kimiProvider` | `runtime.kimi.provider` | 当前只允许 `tmux` |
 
-### 全局 Bridge 配置
+### Bridge 与通道配置
 
 这些配置属于 bridge 自身，不属于任何 runtime 的模型执行参数。
 
 | 配置或命令 | TOML 归属 | 说明 |
 | --- | --- | --- |
 | `defaultWorkspaceRoot` | `bridge.default_workspace` | 影响 `/new <relative>`，不是 provider 参数 |
-| `historyMessageLimit` | `channels[].config.history_message_limit` | 影响 `/history` 展示 |
-| `streamStatusIdleStartSeconds` | `channels[].config.stream_status_idle_start_seconds` | 尾栏响应计时显示延迟；默认 0，从任务开始显示 |
-| `streamStatusCheckIntervalSeconds` | `channels[].config.stream_status_check_interval_seconds` | 无其他卡片更新时的尾栏刷新间隔；默认 5 秒 |
+| `historyMessageLimit` | `channels[].config.history_message_limit` | 单通道字段，影响该通道的 `/history` 展示 |
+| `streamStatusIdleStartSeconds` | `channels[].config.stream_status_idle_start_seconds` | 单通道字段；尾栏响应计时显示延迟，默认 0 |
+| `streamStatusCheckIntervalSeconds` | `channels[].config.stream_status_check_interval_seconds` | 单通道字段；无其他卡片更新时的尾栏刷新间隔，默认 5 秒 |
 | `/ui` | 固定显示策略 | 工具详情始终显示 |
 | `uiAllowLan`、`uiAccessToken` | `bridge.ui` | UI server |
 | Feishu / Weixin channel config | `channels[]` | 通道连接、访问控制、消息呈现 |
 | `/require-at` | 当前消息的 `channelType` 对应 `channels[]` 项 | 飞书群聊触发策略；精确修改当前 App/通道实例 |
+
+Web 全局配置接口不接受上述三个单通道字段，通道编辑接口只更新目标 `channels[]` 项。这一边界防止保存 runtime 或 Web 访问设置时把同一组展示参数批量写到所有 App。Session 级布尔配置的空值表示删除 session TOML override，重新继承 home 配置。
 
 `/require-at` 与 `/set requireMention` 最终都写 `~/.codelark/config.toml`，但目标选择不同：前者按当前消息的 `channelType` 找到对应 channel id，后者属于全局设置卡，修改默认 Feishu channel。单 App 默认通道中两者效果相同；多 App、隔离测试 App 或非默认 channel 中，使用 `/set requireMention` 可能改到另一项，看起来就像“没有生效”。因此当前聊天的 mention 策略优先使用 `/require-at`，全局默认模板才使用 `/set --group channels.feishu`。运行中的 Bridge 在下一次 channel config sync 后应用变更。
 

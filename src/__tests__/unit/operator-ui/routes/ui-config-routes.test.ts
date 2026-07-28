@@ -120,8 +120,8 @@ describe('Ui config application', () => {
     });
 
     assert.throws(
-      () => mergeConfigV2HomePatch(current, { defaultModel: 'unknown-model', historyMessageLimit: 999, claudeExecutable: 'ccr' }),
-      /未知 Codex 模型|历史消息条数必须在 1 到 20 之间/,
+      () => mergeConfigV2HomePatch(current, { defaultModel: 'unknown-model', claudeExecutable: 'ccr' }),
+      /未知 Codex 模型/,
     );
   });
 
@@ -143,6 +143,23 @@ describe('Ui config application', () => {
       () => mergeConfigV2HomePatch(current, { defaultModel: 'different-unknown-model' }),
       /未知 Codex 模型/,
     );
+  });
+
+  it('keeps per-channel history and streaming timing out of the global UI payload', () => {
+    for (const key of [
+      'historyMessageLimit',
+      'streamStatusIdleStartSeconds',
+      'streamStatusCheckIntervalSeconds',
+    ]) {
+      assert.throws(
+        () => mergeConfigV2HomePatch(baseConfigV2(), { [key]: 5 }),
+        /unrecognized key/i,
+      );
+    }
+    const payload = configV2ToPayload(baseConfigV2()) as Record<string, unknown>;
+    assert.equal('historyMessageLimit' in payload, false);
+    assert.equal('streamStatusIdleStartSeconds' in payload, false);
+    assert.equal('streamStatusCheckIntervalSeconds' in payload, false);
   });
 
   it('creates a UI access token when LAN access is enabled', () => {
@@ -234,9 +251,12 @@ describe('Ui config application', () => {
 
     assert.deepEqual(browserKeys, UI_CONFIG_INPUT_KEYS);
     assert.doesNotMatch(source, /showToolCallDetails/);
-    assert.match(source, /运行状态刷新间隔（秒）/);
-    assert.match(source, /id="streamStatusCheckIntervalSeconds"[^>]*value="5"/);
-    assert.match(source, /config\.streamStatusCheckIntervalSeconds \|\| 5/);
+    assert.doesNotMatch(source, /id="historyMessageLimit"/);
+    assert.doesNotMatch(source, /id="streamStatusIdleStartSeconds"/);
+    assert.doesNotMatch(source, /id="streamStatusCheckIntervalSeconds"/);
+    assert.match(source, /id="channelHistoryMessageLimit"/);
+    assert.match(source, /id="channelStreamStatusIdleStartSeconds"/);
+    assert.match(source, /id="channelStreamStatusCheckIntervalSeconds"/);
     assert.doesNotMatch(source, /长任务提示刷新间隔/);
   });
 
@@ -300,8 +320,8 @@ describe('Ui config application', () => {
     assert.deepEqual(patch.runtime?.cursor, { model: 'cursor-next', provider: 'tmux', force: false });
   });
 
-  it('does not synthesize channel timing defaults when the effective config has no channel', () => {
-    const patch = mergeConfigV2HomePatch(baseConfigV2({ channels: [] }), { historyMessageLimit: 19 });
+  it('preserves an empty channel list when saving unrelated global config', () => {
+    const patch = mergeConfigV2HomePatch(baseConfigV2({ channels: [] }), { runtime: 'claude' });
     assert.deepEqual(patch.channels, []);
   });
 
@@ -417,7 +437,6 @@ describe('handleUiConfigRoute', () => {
       const handled = await handleUiConfigRoute({
         request: createJsonRequest('POST', {
           runtime: 'claude',
-          historyMessageLimit: 13,
           codexNetworkAccess: false,
         }),
         response,
@@ -429,14 +448,13 @@ describe('handleUiConfigRoute', () => {
       const body = JSON.parse(response.body) as { ok?: boolean; config?: Record<string, unknown> };
       assert.equal(body.ok, true);
       assert.equal(body.config?.runtime, 'claude');
-      assert.equal(body.config?.historyMessageLimit, 13);
+      assert.equal('historyMessageLimit' in (body.config || {}), false);
       assert.equal(body.config?.codexNetworkAccess, false);
       assert.equal(fs.readFileSync(CONFIG_PATH, 'utf-8'), 'CODELARK_HISTORY_MESSAGE_LIMIT=5\n');
       const legacyJson = JSON.parse(fs.readFileSync(CONFIG_JSON_PATH, 'utf-8')) as any;
       assert.equal(legacyJson.runtime.bridge.historyMessageLimit, 6);
       const savedToml = fs.readFileSync(configTomlPath, 'utf-8');
       assert.match(savedToml, /agent = "claude"/);
-      assert.match(savedToml, /history_message_limit = 13/);
       assert.match(savedToml, /network_access = false/);
     } finally {
       if (previousToml === null) fs.rmSync(configTomlPath, { force: true });
@@ -463,7 +481,6 @@ describe('handleUiConfigRoute', () => {
       const okHandled = await handleUiConfigRoute({
         request: createJsonRequest('POST', {
           runtime: 'claude',
-          historyMessageLimit: 13,
           codexNetworkAccess: false,
         }),
         response: okResponse,
@@ -478,7 +495,7 @@ describe('handleUiConfigRoute', () => {
       const badResponse = createResponse();
       const badHandled = await handleUiConfigRoute({
         request: createJsonRequest('POST', {
-          historyMessageLimit: 21,
+          tmuxCaptureLines: 0,
           showToolCallDetails: false,
         }),
         response: badResponse,
@@ -490,7 +507,7 @@ describe('handleUiConfigRoute', () => {
       const badBody = JSON.parse(badResponse.body) as { ok?: boolean; error?: string; issues?: Array<{ path: string }> };
       assert.equal(badBody.ok, false);
       assert.match(badBody.error || '', /配置字段不合法/);
-      assert.ok(badBody.issues?.some((issue) => issue.path === 'historyMessageLimit'));
+      assert.ok(badBody.issues?.some((issue) => issue.path === 'tmuxCaptureLines'));
       assert.ok(badBody.issues?.some((issue) => issue.path === ''));
       assert.equal(fs.existsSync(configTomlPath), false);
     } finally {
@@ -584,8 +601,6 @@ require_mention = false
           runtime: 'claude',
           defaultProvider: 'tmux',
           defaultMode: 'yolo',
-          historyMessageLimit: 14,
-          streamStatusIdleStartSeconds: 0,
           codexNetworkAccess: false,
         }),
         response,
@@ -599,8 +614,8 @@ require_mention = false
       assert.equal(body.config?.runtime, 'claude');
       assert.equal(body.config?.defaultProvider, 'tmux');
       assert.equal(body.config?.defaultMode, 'yolo');
-      assert.equal(body.config?.historyMessageLimit, 14);
-      assert.equal(body.config?.streamStatusIdleStartSeconds, 0);
+      assert.equal('historyMessageLimit' in (body.config || {}), false);
+      assert.equal('streamStatusIdleStartSeconds' in (body.config || {}), false);
       assert.equal(body.config?.codexNetworkAccess, false);
       assert.equal(fs.readFileSync(CONFIG_PATH, 'utf-8'), 'CODELARK_HISTORY_MESSAGE_LIMIT=5\n');
       const legacyJson = JSON.parse(fs.readFileSync(CONFIG_JSON_PATH, 'utf-8')) as any;
@@ -609,8 +624,9 @@ require_mention = false
       assert.match(savedToml, /agent = "claude"/);
       assert.match(savedToml, /provider = "tmux"/);
       assert.match(savedToml, /yolo_mode = "on"/);
-      assert.match(savedToml, /history_message_limit = 14/);
-      assert.match(savedToml, /stream_status_idle_start_seconds = 0/);
+      assert.match(savedToml, /history_message_limit = 8/);
+      assert.match(savedToml, /stream_status_idle_start_seconds = 180/);
+      assert.match(savedToml, /stream_status_check_interval_seconds = 10/);
       assert.match(savedToml, /network_access = false/);
       assert.match(savedToml, /reasoning_effort = "high"/);
     } finally {

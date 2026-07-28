@@ -10,7 +10,7 @@ Web 工作台是 CodeLark 的本地管理面。它不复制 IM 聊天，也不�
 | --- | --- | --- | --- |
 | Bridge / UI 服务 | 启动、停止、重启、刷新状态；读取开机自启动状态 | 部分 | 没有长操作进度、失败阶段、更新状态和可执行的自启动管理 |
 | Runtime | 配置 Codex、Claude Code、Kimi Code、Cursor 默认值 | 部分 | 看不到当前活动 turn、provider 进程、tmux 状态、最近错误和 reconnect 状态 |
-| Session | 四种 runtime 的本地发现、materialize、历史、重命名、配置、绑定和归档 | 接近完整 | 大量 session 缺少搜索/过滤；运行中操作的风险提示不足；布尔覆盖无法恢复“跟随上层” |
+| Session | 四种 runtime 的本地发现、materialize、历史、重命名、可继承配置、绑定和归档 | 接近完整 | 大量 session 缺少搜索/过滤；运行中操作的风险提示不足 |
 | 全局配置 | 覆盖 runtime、tmux 默认值、Bridge 和 Web 访问配置 | 接近完整 | 单页过长；缺少配置来源/继承说明；保存反馈不能清楚指出需重启项 |
 | 通道与绑定 | 飞书多实例 CRUD、凭据检查、连接测试、聊天绑定和默认目标 | 完整 | 编辑器与列表信息密度和移动端布局仍需整理 |
 | 日志与诊断 | 读取 bridge 最后若干行日志 | 部分 | 没有 level/event/bridge/chat 过滤、搜索、暂停、结构化详情和诊断入口 |
@@ -49,6 +49,8 @@ Web 工作台是 CodeLark 的本地管理面。它不复制 IM 聊天，也不�
 6. **命令**：由共享命令目录生成的可搜索参考。
 
 设置页中的“通用”只出现一次，顺序固定为默认工作目录、tmux 截屏行数、tmux 输入回显；`tmuxAutoEnter` 不提供用户配置入口。Runtime 分栏只展示自己的 provider/model/mode/reasoning 等字段，不复制通用配置。
+
+通道的历史条数、响应计时显示延迟和运行状态刷新间隔属于单个通道实例，不属于全局 Bridge 表单。它们只在通道编辑器中保存；全局配置保存必须原样保留所有通道。Session 中可继承的布尔项使用“跟随全局 / 启用 / 关闭”三态控件，选择“跟随全局”会删除 session override，而不是把当前有效值固化到 session。
 
 ## 视觉方向
 
@@ -91,4 +93,3 @@ Web 工作台是 CodeLark 的本地管理面。它不复制 IM 聊天，也不�
 - Config 应用层：`src/operator-ui/application/config.ts`
 - Channel 应用层：`src/operator-ui/application/channel.ts`
 - HTTP routes：`src/operator-ui/routes/`
-

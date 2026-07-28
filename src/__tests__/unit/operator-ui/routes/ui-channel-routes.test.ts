@@ -181,6 +181,9 @@ describe('handleUiChannelRoute', () => {
         alias: 'Ops',
         appId: 'app-id',
         appSecret: 'secret',
+        historyMessageLimit: 12,
+        streamStatusIdleStartSeconds: 0,
+        streamStatusCheckIntervalSeconds: 5,
       }),
       response,
       url: new URL('http://localhost/api/channels/save'),
@@ -197,7 +200,12 @@ describe('handleUiChannelRoute', () => {
     const savedChannel = config.channels.find((channel) => channel.alias === 'Ops');
     assert.equal(config.channels.length, 2);
     assert.equal(savedChannel?.provider, 'feishu');
-    assert.equal(savedChannel?.config.historyMessageLimit, 8);
+    assert.equal(savedChannel?.config.historyMessageLimit, 12);
+    assert.equal(savedChannel?.config.streamStatusIdleStartSeconds, 0);
+    assert.equal(savedChannel?.config.streamStatusCheckIntervalSeconds, 5);
+    assert.equal(config.channels[0]?.config.historyMessageLimit, 8, 'saving one channel must not flatten sibling channel behavior');
+    assert.equal(config.channels[0]?.config.streamStatusIdleStartSeconds, 180);
+    assert.equal(config.channels[0]?.config.streamStatusCheckIntervalSeconds, 10);
     const body = JSON.parse(response.body) as { ok?: boolean; channel?: { alias?: string } };
     assert.equal(body.ok, true);
     assert.equal(body.channel?.alias, 'Ops');
@@ -242,6 +250,10 @@ describe('handleUiChannelRoute', () => {
       { provider: 'slack', alias: 'Ops' },
       { provider: 'feishu', alias: 'Ops', site: 'open.feishu.cn' },
       { provider: 'feishu', alias: 'Ops', streamingEnabled: 'yes' },
+      { provider: 'feishu', alias: 'Ops', historyMessageLimit: 0 },
+      { provider: 'feishu', alias: 'Ops', historyMessageLimit: 21 },
+      { provider: 'feishu', alias: 'Ops', streamStatusIdleStartSeconds: -1 },
+      { provider: 'feishu', alias: 'Ops', streamStatusCheckIntervalSeconds: 0 },
     ];
 
     for (const payload of cases) {

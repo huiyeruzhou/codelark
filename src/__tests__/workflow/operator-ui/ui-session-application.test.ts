@@ -437,15 +437,48 @@ describe('UiSessionApplication', () => {
       codexProvider: '',
       reasoningEffort: '',
       codexSandboxMode: '',
+      codexNetworkAccess: '',
     });
     assert.equal(reset.model, '');
     assert.equal(reset.codexProvider, '');
     assert.equal(reset.reasoningEffort, '');
     assert.equal(reset.codexSandboxMode, '');
+    assert.equal(reset.codexNetworkAccess, undefined);
     assert.notEqual(configService.resolve('runtime.codex.model', { kind: 'session', sessionId: session.id }).source, 'session');
     assert.notEqual(configService.resolve('runtime.codex.provider', { kind: 'session', sessionId: session.id }).source, 'session');
     assert.notEqual(configService.resolve('runtime.codex.reasoningEffort', { kind: 'session', sessionId: session.id }).source, 'session');
     assert.notEqual(configService.resolve('runtime.codex.sandboxMode', { kind: 'session', sessionId: session.id }).source, 'session');
+    assert.notEqual(configService.resolve('runtime.codex.networkAccess', { kind: 'session', sessionId: session.id }).source, 'session');
+  });
+
+  it('round-trips Cursor force as an inheritable session override', () => {
+    const store = new JsonFileStore(makeBridgeSettings());
+    const session = store.createSession('Cursor Config Session', 'codex-model', undefined, '/tmp/cursor-config');
+    store.updateSession(session.id, {
+      runtime: {
+        activeRuntime: 'cursor',
+        cursor: {
+          sessionId: 'cursor-config-session',
+          cwd: '/tmp/cursor-config',
+        },
+      },
+    });
+    const app = new UiSessionApplication(store);
+    const configService = createConfigService({ migrate: false, env: {} });
+
+    const enabled = app.updateConfig(session.id, {
+      activeRuntime: 'cursor',
+      cursorForce: true,
+    });
+    assert.equal(enabled.cursorForce, true);
+    assert.equal(configService.resolve('runtime.cursor.force', { kind: 'session', sessionId: session.id }).source, 'session');
+
+    const inherited = app.updateConfig(session.id, {
+      activeRuntime: 'cursor',
+      cursorForce: '',
+    });
+    assert.equal(inherited.cursorForce, undefined);
+    assert.notEqual(configService.resolve('runtime.cursor.force', { kind: 'session', sessionId: session.id }).source, 'session');
   });
 
   it('writes Kimi UI session-level config to session TOML without writing Codex runtime state', () => {

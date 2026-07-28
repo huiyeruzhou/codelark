@@ -231,13 +231,10 @@ function applySessionConfigToml(bridgeSessionId: string, payload: Record<string,
         (provider) => ({ runtime: { cursor: { provider } } }),
       );
     }
-    if (typeof payload.cursorForce === 'boolean') {
-      setOrUnsetSessionConfig(
-        bridgeSessionId,
-        'runtime.cursor.force',
-        payload.cursorForce,
-        (force) => ({ runtime: { cursor: { force } } }),
-      );
+    if (typeof payload.cursorForce === 'boolean' || payload.cursorForce === '') {
+      setOrUnsetSessionConfig(bridgeSessionId, 'runtime.cursor.force', payload.cursorForce, (force) => ({
+        runtime: { cursor: { force } },
+      }));
     }
     return;
   }
@@ -294,11 +291,10 @@ function applySessionConfigToml(bridgeSessionId: string, payload: Record<string,
       (sandboxMode) => ({ runtime: { codex: { sandboxMode } } }),
     );
   }
-  if (payload.codexNetworkAccess === true || payload.codexNetworkAccess === false) {
-    createConfigService({ migrate: false }).set(
-      { kind: 'session', sessionId: bridgeSessionId },
-      { runtime: { codex: { networkAccess: payload.codexNetworkAccess } } },
-    );
+  if (payload.codexNetworkAccess === true || payload.codexNetworkAccess === false || payload.codexNetworkAccess === '') {
+    setOrUnsetSessionConfig(bridgeSessionId, 'runtime.codex.networkAccess', payload.codexNetworkAccess, (networkAccess) => ({
+      runtime: { codex: { networkAccess } },
+    }));
   }
 }
 
@@ -381,7 +377,7 @@ function sessionConfigPayload(session: BridgeSession) {
     kimiProvider: getSessionConfigTomlOverride<string>(session, 'runtime.kimi.provider') || '',
     cursorModel: getSessionConfigTomlOverride<string>(session, 'runtime.cursor.model') || '',
     cursorProvider: getSessionConfigTomlOverride<string>(session, 'runtime.cursor.provider') || '',
-    cursorForce: getSessionConfigTomlOverride<boolean>(session, 'runtime.cursor.force') === true,
+    cursorForce: getSessionConfigTomlOverride<boolean>(session, 'runtime.cursor.force'),
   };
 }
 

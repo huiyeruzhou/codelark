@@ -31,10 +31,6 @@ function generateAccessToken(): string {
   return crypto.randomBytes(18).toString('base64url');
 }
 
-function defaultUiChannel(config: ConfigV2): ConfigV2['channels'][number] | undefined {
-  return config.channels.find((channel) => channel.id === 'feishu-default') || config.channels[0];
-}
-
 function v2ChannelToPayload(channel: ConfigV2['channels'][number]) {
   return {
     id: channel.id,
@@ -87,12 +83,6 @@ const uiConfigPayloadSchema = z.object({
     z.union([codexProviderSchema, z.literal('')]),
   ).optional(),
   defaultMode: z.enum(['normal', 'yolo']).optional(),
-  historyMessageLimit: optionalPositiveInteger().refine(
-    (value) => value === undefined || value <= 20,
-    { message: '历史消息条数必须在 1 到 20 之间。' },
-  ),
-  streamStatusIdleStartSeconds: optionalNonNegativeInteger(),
-  streamStatusCheckIntervalSeconds: optionalPositiveInteger(),
   codexSkipGitRepoCheck: z.boolean().optional(),
   codexSandboxMode: optionalEnum(sandboxModeSchema),
   codexNetworkAccess: z.boolean().optional(),
@@ -139,7 +129,6 @@ interface UiConfigPresentation {
 }
 
 export function configV2ToPayload(config: ConfigV2, presentation: UiConfigPresentation = {}) {
-  const channel = defaultUiChannel(config);
   const defaultProviderInherited = presentation.defaultProviderInherited === true;
   return {
     runtime: config.runtime.agent,
@@ -153,9 +142,6 @@ export function configV2ToPayload(config: ConfigV2, presentation: UiConfigPresen
     codexDefaultModel: readConfiguredCodexModel() || '',
     availableModels: availableCodexModels,
     defaultMode: config.runtime.codex.yoloMode === 'on' || config.runtime.codex.yoloMode === 'yolo' ? 'yolo' : 'normal',
-    historyMessageLimit: channel?.config.historyMessageLimit,
-    streamStatusIdleStartSeconds: channel?.config.streamStatusIdleStartSeconds,
-    streamStatusCheckIntervalSeconds: channel?.config.streamStatusCheckIntervalSeconds,
     codexSkipGitRepoCheck: config.runtime.codex.skipGitRepoCheck === true,
     codexSandboxMode: config.runtime.codex.sandboxMode || 'workspace-write',
     codexNetworkAccess: config.runtime.codex.networkAccess !== false,
@@ -186,15 +172,6 @@ export function mergeConfigV2HomePatch(current: ConfigV2, payload: Record<string
   const uiAccessToken = requestedUiAccessToken
     || current.bridge.uiAccessToken
     || (uiAllowLan ? generateAccessToken() : '');
-  const currentChannel = defaultUiChannel(current);
-  const historyMessageLimit = currentChannel
-    ? parsed.historyMessageLimit ?? currentChannel.config.historyMessageLimit
-    : undefined;
-  const streamStatusIdleStartSeconds = parsed.streamStatusIdleStartSeconds
-    ?? currentChannel?.config.streamStatusIdleStartSeconds;
-  const streamStatusCheckIntervalSeconds = parsed.streamStatusCheckIntervalSeconds
-    ?? currentChannel?.config.streamStatusCheckIntervalSeconds;
-
   return {
     schemaVersion: 2,
     session: {
@@ -265,15 +242,7 @@ export function mergeConfigV2HomePatch(current: ConfigV2, payload: Record<string
       uiAllowLan,
       uiAccessToken,
     },
-    channels: current.channels.map((channel) => ({
-      ...channel,
-      config: {
-        ...channel.config,
-        ...(historyMessageLimit !== undefined ? { historyMessageLimit } : {}),
-        ...(streamStatusIdleStartSeconds !== undefined ? { streamStatusIdleStartSeconds } : {}),
-        ...(streamStatusCheckIntervalSeconds !== undefined ? { streamStatusCheckIntervalSeconds } : {}),
-      },
-    })),
+    channels: current.channels,
   };
 }
 

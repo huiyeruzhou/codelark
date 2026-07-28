@@ -375,20 +375,6 @@ export function renderUiShellHtml(): string {
                   <span class="field-title">/new 相对路径根目录 <span class="help-tip" tabindex="0" data-tip="当 /new 使用项目名或相对路径时，会以这里作为根目录；留空时使用 ~。">?</span></span>
                   <input id="defaultWorkspaceRoot" placeholder="留空时使用 ~" />
                 </label>
-                <div class="field-row triple" style="margin-top: 12px;">
-                  <label>
-                    <span class="field-title">/his 返回条数 <span class="help-tip" tabindex="0" data-tip="控制 IM 中 /his 或 /his msg 默认最多返回多少条最近消息；也可用 /his limit 12 修改，或用 /his msg 5、/his raw 5 临时指定本次条数。">?</span></span>
-                    <input id="historyMessageLimit" type="number" min="1" max="20" value="8" />
-                  </label>
-                  <label>
-                    <span class="field-title">响应计时显示延迟（秒） <span class="help-tip" tabindex="0" data-tip="设为 0 时，从任务开始就显示并刷新“上次响应距今 X”。">?</span></span>
-                    <input id="streamStatusIdleStartSeconds" type="number" min="0" value="0" />
-                  </label>
-                  <label>
-                    <span class="field-title">运行状态刷新间隔（秒） <span class="help-tip" tabindex="0" data-tip="没有其他卡片更新时，按此间隔刷新当前时刻、已运行和上次响应；默认 5 秒。正文、思考、工具、任务或状态变化会立即刷新。">?</span></span>
-                    <input id="streamStatusCheckIntervalSeconds" type="number" min="1" value="5" />
-                  </label>
-                </div>
                 <div class="checkbox-row" style="margin-top: 12px;">
                   <label class="checkbox"><input id="uiAllowLan" type="checkbox" /> 允许局域网访问 Web 控制台 <span class="help-tip" tabindex="0" data-tip="默认仅允许本机访问当前工作台。开启后，局域网设备需要先输入访问 token。">?</span></label>
                 </div>
@@ -638,7 +624,7 @@ export function renderUiShellHtml(): string {
           </div>
           <div class="field-row" id="sessionConfigCodexSandboxBlock">
             <label>文件系统权限<select id="sessionConfigSandbox"><option value="">跟随全局</option><option value="workspace-write">workspace-write</option><option value="read-only">read-only</option><option value="danger-full-access">danger-full-access</option></select></label>
-            <label>网络访问<span class="checkbox checkbox-field"><input id="sessionConfigNetwork" type="checkbox" /> 允许 Codex 访问网络</span></label>
+            <label>网络访问<select id="sessionConfigNetwork"><option value="">跟随全局</option><option value="on">允许</option><option value="off">禁止</option></select></label>
           </div>
           <div class="field-row triple" id="sessionConfigClaudeBlock" hidden>
             <label>Claude 模型<input id="sessionConfigClaudeModel" placeholder="留空跟随全局 Claude 默认模型" /></label>
@@ -651,7 +637,7 @@ export function renderUiShellHtml(): string {
           <div class="field-row triple" id="sessionConfigCursorBlock" hidden>
             <label>Cursor 模型<input id="sessionConfigCursorModel" placeholder="留空跟随全局 Cursor 默认模型" /></label>
             <label>Cursor Provider<select id="sessionConfigCursorProvider"><option value="">跟随全局</option><option value="tmux">tmux</option></select></label>
-            <label class="checkbox"><input id="sessionConfigCursorForce" type="checkbox" /> force 模式</label>
+            <label>Cursor force<select id="sessionConfigCursorForce"><option value="">跟随全局</option><option value="on">启用</option><option value="off">关闭</option></select></label>
           </div>
           <label>系统提示<textarea id="sessionConfigPrompt" placeholder="留空则不覆盖系统提示"></textarea></label>
         </div>
@@ -1173,9 +1159,6 @@ export function renderUiShellHtml(): string {
           tmuxCaptureLines: document.getElementById('tmuxCaptureLines').value,
           tmuxEchoInput: document.getElementById('tmuxEchoInput').checked,
           defaultMode: document.getElementById('defaultMode').value,
-          historyMessageLimit: document.getElementById('historyMessageLimit').value,
-          streamStatusIdleStartSeconds: document.getElementById('streamStatusIdleStartSeconds').value,
-          streamStatusCheckIntervalSeconds: document.getElementById('streamStatusCheckIntervalSeconds').value,
           defaultWorkspaceRoot: document.getElementById('defaultWorkspaceRoot').value,
           defaultModel: document.getElementById('defaultModel').value,
           defaultProvider: document.getElementById('defaultProvider').value,
@@ -1486,9 +1469,6 @@ export function renderUiShellHtml(): string {
         defaultModel: 'Codex 默认模型',
         defaultProvider: '默认 Codex Provider',
         defaultMode: 'Codex 默认模式',
-        historyMessageLimit: '/his 返回条数',
-        streamStatusIdleStartSeconds: '响应计时显示延迟',
-        streamStatusCheckIntervalSeconds: '运行状态刷新间隔',
         codexSkipGitRepoCheck: '允许在未信任 Git 目录运行 Codex',
         codexSandboxMode: 'Codex 文件系统权限',
         codexNetworkAccess: 'Codex 网络访问',
@@ -1522,9 +1502,6 @@ export function renderUiShellHtml(): string {
         'defaultModel',
         'defaultProvider',
         'defaultMode',
-        'historyMessageLimit',
-        'streamStatusIdleStartSeconds',
-        'streamStatusCheckIntervalSeconds',
         'codexSandboxMode',
         'codexNetworkAccess',
         'codexReasoningEffort',
@@ -2128,6 +2105,14 @@ export function renderUiShellHtml(): string {
             +     '<label class="checkbox"><input id="channelFeedbackMarkdownEnabled" type="checkbox"' + (feishu.feedbackMarkdownEnabled !== false ? ' checked' : '') + ' /> 反馈使用markdown</label>'
             +     '<label class="checkbox"><input id="channelRequireMention" type="checkbox"' + (feishu.requireMention === true ? ' checked' : '') + ' /> 群聊需要 @bot 才接收消息</label>'
             +   '</div>'
+            + '</div>'
+            + '<div class="editor-section">'
+            +   '<p class="editor-section-title">消息与状态</p>'
+            +   '<div class="field-row triple">'
+            +     '<label><span class="field-title">/his 返回条数 <span class="help-tip" tabindex="0" data-tip="只影响当前通道；也可在 IM 中用 /his limit 修改。">?</span></span><input id="channelHistoryMessageLimit" type="number" min="1" max="20" value="' + escapeHtml(String(feishu.historyMessageLimit || 8)) + '" /></label>'
+            +     '<label><span class="field-title">响应计时显示延迟（秒） <span class="help-tip" tabindex="0" data-tip="设为 0 时，从任务开始就显示上次响应计时。">?</span></span><input id="channelStreamStatusIdleStartSeconds" type="number" min="0" value="' + escapeHtml(String(feishu.streamStatusIdleStartSeconds ?? 0)) + '" /></label>'
+            +     '<label><span class="field-title">运行状态刷新间隔（秒） <span class="help-tip" tabindex="0" data-tip="只在没有正文、思考、工具或状态变化时作为心跳刷新间隔。">?</span></span><input id="channelStreamStatusCheckIntervalSeconds" type="number" min="1" value="' + escapeHtml(String(feishu.streamStatusCheckIntervalSeconds || 5)) + '" /></label>'
+            +   '</div>'
             + '</div>';
 
         editor.innerHTML = ''
@@ -2235,9 +2220,6 @@ export function renderUiShellHtml(): string {
         document.getElementById('tmuxCaptureLines').value = String(config.tmuxCaptureLines || 80);
         document.getElementById('tmuxEchoInput').checked = config.tmuxEchoInput === true;
         document.getElementById('defaultMode').value = config.defaultMode === 'yolo' ? 'yolo' : 'normal';
-        document.getElementById('historyMessageLimit').value = String(config.historyMessageLimit || 8);
-        document.getElementById('streamStatusIdleStartSeconds').value = String(config.streamStatusIdleStartSeconds ?? 0);
-        document.getElementById('streamStatusCheckIntervalSeconds').value = String(config.streamStatusCheckIntervalSeconds || 5);
         document.getElementById('defaultWorkspaceRoot').value = config.defaultWorkspaceRoot || '';
         renderDefaultModelOptions(config);
         const defaultProvider = document.getElementById('defaultProvider');
@@ -2736,16 +2718,18 @@ export function renderUiShellHtml(): string {
         document.getElementById('sessionConfigProvider').value = config.codexProvider || '';
         document.getElementById('sessionConfigReasoning').value = config.reasoningEffort || '';
         document.getElementById('sessionConfigSandbox').value = config.codexSandboxMode || '';
-        document.getElementById('sessionConfigNetwork').checked = config.codexNetworkAccess === undefined
-          ? ((state.config || {}).codexNetworkAccess !== false)
-          : config.codexNetworkAccess !== false;
+        document.getElementById('sessionConfigNetwork').value = config.codexNetworkAccess === undefined
+          ? ''
+          : config.codexNetworkAccess === false ? 'off' : 'on';
         document.getElementById('sessionConfigClaudeModel').value = config.claudeModel || '';
         document.getElementById('sessionConfigClaudeReasoning').value = config.claudeReasoningEffort || '';
         document.getElementById('sessionConfigKimiModel').value = config.kimiModel || '';
         document.getElementById('sessionConfigKimiProvider').value = config.kimiProvider || '';
         document.getElementById('sessionConfigCursorModel').value = config.cursorModel || '';
         document.getElementById('sessionConfigCursorProvider').value = config.cursorProvider || '';
-        document.getElementById('sessionConfigCursorForce').checked = config.cursorForce === true;
+        document.getElementById('sessionConfigCursorForce').value = config.cursorForce === undefined
+          ? ''
+          : config.cursorForce === true ? 'on' : 'off';
         document.getElementById('sessionConfigPrompt').value = config.systemPrompt || '';
       }
 
@@ -2760,14 +2744,18 @@ export function renderUiShellHtml(): string {
           codexProvider: document.getElementById('sessionConfigProvider').value,
           reasoningEffort: document.getElementById('sessionConfigReasoning').value,
           codexSandboxMode: document.getElementById('sessionConfigSandbox').value,
-          codexNetworkAccess: document.getElementById('sessionConfigNetwork').checked,
+          codexNetworkAccess: document.getElementById('sessionConfigNetwork').value === ''
+            ? ''
+            : document.getElementById('sessionConfigNetwork').value === 'on',
           claudeModel: document.getElementById('sessionConfigClaudeModel').value,
           claudeReasoningEffort: document.getElementById('sessionConfigClaudeReasoning').value,
           kimiModel: document.getElementById('sessionConfigKimiModel').value,
           kimiProvider: document.getElementById('sessionConfigKimiProvider').value,
           cursorModel: document.getElementById('sessionConfigCursorModel').value,
           cursorProvider: document.getElementById('sessionConfigCursorProvider').value,
-          cursorForce: document.getElementById('sessionConfigCursorForce').checked,
+          cursorForce: document.getElementById('sessionConfigCursorForce').value === ''
+            ? ''
+            : document.getElementById('sessionConfigCursorForce').value === 'on',
           systemPrompt: document.getElementById('sessionConfigPrompt').value,
         };
       }
@@ -2845,6 +2833,9 @@ export function renderUiShellHtml(): string {
             streamingEnabled: true,
             feedbackMarkdownEnabled: true,
             requireMention: false,
+            historyMessageLimit: 8,
+            streamStatusIdleStartSeconds: 0,
+            streamStatusCheckIntervalSeconds: 5,
           },
         };
         state.activeChannelId = state.channelDraft.id;
@@ -2869,6 +2860,9 @@ export function renderUiShellHtml(): string {
         payload.streamingEnabled = document.getElementById('channelStreamingEnabled').checked;
         payload.feedbackMarkdownEnabled = document.getElementById('channelFeedbackMarkdownEnabled').checked;
         payload.requireMention = document.getElementById('channelRequireMention').checked;
+        payload.historyMessageLimit = document.getElementById('channelHistoryMessageLimit').value;
+        payload.streamStatusIdleStartSeconds = document.getElementById('channelStreamStatusIdleStartSeconds').value;
+        payload.streamStatusCheckIntervalSeconds = document.getElementById('channelStreamStatusCheckIntervalSeconds').value;
         return payload;
       }
 
