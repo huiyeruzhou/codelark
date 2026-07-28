@@ -48,4 +48,17 @@ describe('operator UI shell', () => {
     assert.match(mainStyles, /@media \(max-width: 720px\)[\s\S]*\.bridge-path-node\s*\{[\s\S]*grid-template-columns:/);
     assert.match(mainStyles, /\.nav-link\.active\s*\{[\s\S]*background: #344054/);
   });
+
+  it('offers one shared search and runtime filter for the session ledger', () => {
+    const html = renderUiShellHtml();
+
+    assert.match(html, /id="sessionSearch"/);
+    assert.match(html, /id="sessionRuntimeFilter"/);
+    assert.match(html, /<option value="codex">Codex<\/option>/);
+    assert.match(html, /<option value="claude">Claude Code<\/option>/);
+    assert.match(html, /<option value="kimi">Kimi Code<\/option>/);
+    assert.match(html, /<option value="cursor">Cursor Agent<\/option>/);
+    assert.match(html, /function sessionMatchesFilter\(session\)/);
+    assert.match(html, /const sessions = allSessions\.filter\(sessionMatchesFilter\)/);
+  });
 });

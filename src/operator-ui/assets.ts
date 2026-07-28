@@ -618,6 +618,18 @@ export const mainStyles = `
   }
 
   .session-list, .session-section, .project-session-list, .binding-list, .command-sections { display: grid; gap: 14px; }
+  .session-filter-bar {
+    display: grid;
+    grid-template-columns: minmax(240px, 1fr) minmax(180px, 240px) auto;
+    align-items: end;
+    gap: 12px;
+    margin-top: 16px;
+    padding: 14px;
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    background: var(--surface-soft);
+  }
+  .session-filter-bar label { gap: 6px; font-size: 12px; }
   .session-section + .session-section { margin-top: 22px; }
   .session-section-head, .project-group-head, .binding-head {
     display: flex;
@@ -712,13 +724,19 @@ export const mainStyles = `
   .session-actions { justify-content: flex-end; align-items: center; }
   .compact-actions { gap: 8px; flex-wrap: nowrap; }
   .session-table-wrap { margin-top: 0; }
-  .session-table { min-width: 980px; }
+  .session-table { min-width: 1080px; table-layout: fixed; }
   .session-table th { text-align: center; }
   .session-table-row { cursor: default; transition: background 150ms ease; }
   .session-table-row:hover { background: rgba(37, 99, 235, 0.05); }
+  .session-table th:nth-child(1) { width: 30%; }
+  .session-table th:nth-child(2) { width: 20%; }
+  .session-table th:nth-child(3) { width: 120px; }
+  .session-table th:nth-child(4) { width: 100px; }
+  .session-table th:nth-child(5) { width: 150px; }
   .session-table th:last-child,
-  .session-table td:last-child { width: 184px; text-align: right; }
+  .session-table td:last-child { width: 190px; text-align: right; }
   .session-table td:nth-child(3) { text-align: center; }
+  .session-table td:nth-child(3) .session-value { white-space: nowrap; }
   .session-table .pill { margin-left: 6px; }
   .session-date {
     white-space: nowrap;
@@ -1114,6 +1132,8 @@ export const mainStyles = `
     .bridge-path-value { font-size: 15px; }
     .bridge-path-arrow { min-height: 14px; transform: rotate(90deg); font-size: 13px; }
     .session-history-summary { grid-template-columns: 1fr; }
+    .session-filter-bar { grid-template-columns: 1fr; }
+    .session-filter-bar button { width: 100%; }
     .page-header, .panel-header, .project-group-head, .binding-head, .session-section-head { flex-direction: column; align-items: stretch; }
     .channel-header-actions, .channel-action-row, .channel-action-group, .channel-refresh-button, .channel-create-button { width: 100%; }
     .channel-action-row { display: grid; grid-template-columns: 1fr; }

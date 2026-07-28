@@ -156,6 +156,17 @@ export function renderUiShellHtml(): string {
           <section class="panel" id="codex">
             <div class="notice">这里展示 Bridge/IM 本地会话和本机 runtime 会话；不再只依赖单一客户端列表。</div>
             <div class="notice" style="margin-top: 12px;">最短路径：找到目标会话后到“通道”页切换绑定；如果会话已有 thread，也可以复制 <code>/thread 019d1da4</code> 这样的命令发给机器人。</div>
+            <div class="session-filter-bar" role="search" aria-label="筛选会话">
+              <label class="session-search-field">搜索会话<input id="sessionSearch" type="search" autocomplete="off" placeholder="标题、目录、session id、provider" /></label>
+              <label>Runtime<select id="sessionRuntimeFilter">
+                <option value="">全部 runtime</option>
+                <option value="codex">Codex</option>
+                <option value="claude">Claude Code</option>
+                <option value="kimi">Kimi Code</option>
+                <option value="cursor">Cursor Agent</option>
+              </select></label>
+              <button type="button" id="clearSessionFiltersBtn">清除筛选</button>
+            </div>
             <div class="small" id="codexSessionMeta" style="margin: 14px 0 16px;">正在加载…</div>
             <div class="session-list">
               <section class="session-section">
@@ -669,6 +680,8 @@ export function renderUiShellHtml(): string {
         systemTimeZone: '',
         codexSessions: [],
         codexSessionCounts: null,
+        sessionSearchQuery: '',
+        sessionRuntimeFilter: '',
         bindings: [],
         bindingOptions: [],
         channelDefaults: [],
@@ -845,6 +858,34 @@ export function renderUiShellHtml(): string {
 
       function sessionRuntimeThreadId(session) {
         return sessionClaudeSessionId(session) || sessionKimiSessionId(session) || sessionCursorSessionId(session) || sessionCodexThreadId(session);
+      }
+
+      function sessionMatchesFilter(session) {
+        const runtimeFilter = String(state.sessionRuntimeFilter || '').trim().toLowerCase();
+        if (runtimeFilter && String(session.runtime || '').toLowerCase() !== runtimeFilter) return false;
+
+        const query = String(state.sessionSearchQuery || '').trim().toLowerCase();
+        if (!query) return true;
+        return [
+          session.displayTitle,
+          session.title,
+          session.codexTitle,
+          session.cwd,
+          session.runtime,
+          session.kind,
+          session.bridgeSessionId,
+          session.sessionId,
+          session.codexThreadId,
+          session.threadId,
+          session.claudeSessionId,
+          session.kimiSessionId,
+          session.cursorSessionId,
+          session.executionProvider,
+          session.codexProvider,
+          session.creatorLabel,
+          session.originator,
+          session.source,
+        ].some((value) => String(value || '').toLowerCase().includes(query));
       }
 
       function sessionRef(session) {
@@ -1897,26 +1938,27 @@ export function renderUiShellHtml(): string {
         state.codexSessions = result.sessions || [];
         state.codexRoot = result.root || '-';
         state.codexSessionCounts = result.counts || null;
-        const sessions = state.codexSessions || [];
+        const allSessions = state.codexSessions || [];
+        const sessions = allSessions.filter(sessionMatchesFilter);
         const counts = state.codexSessionCounts || {};
         const totalDisplayable = Number.isFinite(Number(counts.totalDisplayable))
           ? Number(counts.totalDisplayable)
-          : sessions.length;
+          : allSessions.length;
         const codexPhysical = Number.isFinite(Number(counts.codexPhysical))
           ? Number(counts.codexPhysical)
-          : sessions.filter((session) => session.kind === 'codex').length;
+          : allSessions.filter((session) => session.kind === 'codex').length;
         const claudePhysical = Number.isFinite(Number(counts.claudePhysical))
           ? Number(counts.claudePhysical)
-          : sessions.filter((session) => session.kind === 'claude').length;
+          : allSessions.filter((session) => session.kind === 'claude').length;
         const kimiPhysical = Number.isFinite(Number(counts.kimiPhysical))
           ? Number(counts.kimiPhysical)
-          : sessions.filter((session) => session.kind === 'kimi').length;
+          : allSessions.filter((session) => session.kind === 'kimi').length;
         const cursorPhysical = Number.isFinite(Number(counts.cursorPhysical))
           ? Number(counts.cursorPhysical)
-          : sessions.filter((session) => session.kind === 'cursor').length;
+          : allSessions.filter((session) => session.kind === 'cursor').length;
         const bridgeStored = Number.isFinite(Number(counts.bridgeStored))
           ? Number(counts.bridgeStored)
-          : sessions.filter((session) => session.kind === 'bridge').length;
+          : allSessions.filter((session) => session.kind === 'bridge').length;
         const bridgeWithoutCodexThread = Number.isFinite(Number(counts.bridgeWithoutCodexThread))
           ? Number(counts.bridgeWithoutCodexThread)
           : 0;
@@ -1940,11 +1982,14 @@ export function renderUiShellHtml(): string {
         const boundMeta = document.getElementById('boundSessionsMeta');
         const list = document.getElementById('codexSessionsList');
         const allMeta = document.getElementById('allSessionsMeta');
+        const filtersActive = Boolean(state.sessionSearchQuery || state.sessionRuntimeFilter);
         boundMeta.textContent = boundSessions.length > 0
-          ? '当前有 ' + boundSessions.length + ' 条会话正在使用通道入口。'
-          : '当前没有正在使用通道入口的会话。';
-        allMeta.textContent = '按最近活动排序，当前展示 ' + sessions.length
-          + (totalDisplayable === sessions.length ? ' 条。' : ' / ' + totalDisplayable + ' 条。');
+          ? (filtersActive ? '筛选结果中有 ' : '当前有 ') + boundSessions.length + ' 条会话正在使用通道入口。'
+          : filtersActive ? '筛选结果中没有正在使用通道入口的会话。' : '当前没有正在使用通道入口的会话。';
+        allMeta.textContent = filtersActive
+          ? '按最近活动排序，筛选后展示 ' + sessions.length + ' / ' + allSessions.length + ' 条。'
+          : '按最近活动排序，当前展示 ' + allSessions.length
+            + (totalDisplayable === allSessions.length ? ' 条。' : ' / ' + totalDisplayable + ' 条。');
 
         if (boundSessions.length === 0) {
           boundList.innerHTML = '<div class="binding-empty">当前没有任何会话正在使用通道入口。</div>';
@@ -1952,8 +1997,14 @@ export function renderUiShellHtml(): string {
           boundList.innerHTML = boundSessions.map((session) => renderBoundCodexSessionCard(session)).join('');
         }
 
-        if (state.codexSessions.length === 0) {
+        if (allSessions.length === 0) {
           list.innerHTML = '<div class="notice ghost">当前没有发现本地会话。先从 IM 发一条消息，或在本机 Codex / Claude Code / Kimi Code / Cursor Agent 中打开一个会话，再回到这里刷新。</div>';
+          renderChannelsWorkspace();
+          return;
+        }
+
+        if (sessions.length === 0) {
+          list.innerHTML = '<div class="notice ghost">没有会话符合当前筛选条件。可以修改搜索内容、切换 runtime，或清除筛选。</div>';
           renderChannelsWorkspace();
           return;
         }
@@ -3159,6 +3210,25 @@ export function renderUiShellHtml(): string {
         } catch (error) {
           showMessage('opsMessage', 'error', error.message);
         }
+      });
+
+      document.getElementById('sessionSearch').addEventListener('input', (event) => {
+        state.sessionSearchQuery = event.target.value;
+        rerenderCodexSessions();
+      });
+
+      document.getElementById('sessionRuntimeFilter').addEventListener('change', (event) => {
+        state.sessionRuntimeFilter = event.target.value;
+        rerenderCodexSessions();
+      });
+
+      document.getElementById('clearSessionFiltersBtn').addEventListener('click', () => {
+        state.sessionSearchQuery = '';
+        state.sessionRuntimeFilter = '';
+        document.getElementById('sessionSearch').value = '';
+        document.getElementById('sessionRuntimeFilter').value = '';
+        rerenderCodexSessions();
+        document.getElementById('sessionSearch').focus();
       });
 
       document.getElementById('refreshCodexBtn').addEventListener('click', async () => {
