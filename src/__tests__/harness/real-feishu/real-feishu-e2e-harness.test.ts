@@ -1,7 +1,7 @@
 import '../../setup/test-setup.js';
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -30,6 +30,24 @@ describe('unit::real-feishu-e2e-harness::reply-evidence', () => {
     assert.equal(containsGeneratedReplyTexts(initialCard, prompt, [marker]), false);
     assert.equal(containsGeneratedReplyTexts(completedCard, prompt, [marker]), true);
     assert.equal(containsGeneratedReplyTexts(marker, prompt, [marker]), true);
+  });
+
+  it('keeps a command token when the generated help card legitimately repeats it', () => {
+    const source = '/new';
+    const card = [
+      '<card title="创建群聊会话">',
+      '<form>',
+      '[创建]',
+      '</form>',
+      '提交后等同发送 `/new <名称> <目录>`。',
+      '</card>',
+    ].join('\n');
+
+    assert.equal(
+      containsGeneratedReplyTexts(card, source, ['创建群聊会话', '[创建]', '提交后等同发送 `/new <名称> <目录>`。']),
+      true,
+    );
+    assert.equal(containsGeneratedReplyTexts(source, source, [source]), false);
   });
 });
 
@@ -408,6 +426,71 @@ describe('unit::real-feishu-e2e-harness::auth-preflight', () => {
       assert.doesNotMatch(output, /Launching isolated bridge/);
     } finally {
       fs.rmSync(homeRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('refuses a live same-app bridge whose CODELARK_HOME is outside the sibling-home tree', () => {
+    if (process.platform !== 'linux') return;
+    const homeRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-live-primary-app-root-'));
+    const primaryHome = path.join(homeRoot, '.codelark');
+    const detachedHome = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-live-detached-app-home-'));
+    fs.mkdirSync(path.join(primaryHome, 'runtime'), { recursive: true });
+    fs.mkdirSync(path.join(detachedHome, 'runtime'), { recursive: true });
+    fs.writeFileSync(
+      path.join(detachedHome, 'config.toml'),
+      [
+        'schema_version = 2',
+        '',
+        '[[channels]]',
+        'id = "feishu-detached"',
+        'alias = "Detached Feishu"',
+        'provider = "feishu"',
+        'enabled = true',
+        '',
+        '[channels.config]',
+        'app_id = "cli_detached_app_guard"',
+        'app_secret = "test-secret"',
+        'site = "feishu"',
+        '',
+      ].join('\n'),
+      'utf-8',
+    );
+    const bridge = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], {
+      env: { ...process.env, CODELARK_HOME: detachedHome },
+      stdio: 'ignore',
+    });
+
+    try {
+      assert.ok(bridge.pid);
+      fs.writeFileSync(
+        path.join(detachedHome, 'runtime', 'status.json'),
+        JSON.stringify({ running: true, pid: bridge.pid, channels: ['feishu-detached'] }),
+        'utf-8',
+      );
+      const output = runHarnessFailure([
+        '--scenario',
+        'runtime-message',
+        '--launch-bridge',
+        '--test-feishu-app-id',
+        'cli_detached_app_guard',
+        '--test-feishu-app-secret',
+        'test-secret',
+        '--run-id',
+        'detached-app-guard',
+      ], {
+        CODELARK_REAL_FEISHU_E2E: '1',
+        CODELARK_HOME: primaryHome,
+        HOME: homeRoot,
+      });
+
+      assert.match(output, /Refusing to launch a second bridge for Feishu test app cli_detached_app_guard/);
+      assert.match(output, new RegExp(detachedHome.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+      assert.match(output, new RegExp(`live_pid=${bridge.pid}`));
+      assert.doesNotMatch(output, /Launching isolated bridge/);
+    } finally {
+      bridge.kill('SIGTERM');
+      fs.rmSync(homeRoot, { recursive: true, force: true });
+      fs.rmSync(detachedHome, { recursive: true, force: true });
     }
   });
 
@@ -807,6 +890,7 @@ describe('unit::real-feishu-e2e-harness::scenario-coverage-metadata', () => {
         testNamePattern: string;
         providerCoverage: string;
         providerMatrix: string[];
+        requiresRuntimeOutput: boolean;
         unitCoverage: string[];
         e2eCoverage: string[];
       }>;
@@ -840,6 +924,7 @@ describe('unit::real-feishu-e2e-harness::scenario-coverage-metadata', () => {
         testNamePattern: string;
         providerCoverage: string;
         providerMatrix: string[];
+        requiresRuntimeOutput: boolean;
         unitCoverage: string[];
         e2eCoverage: string[];
       }>;
@@ -959,6 +1044,7 @@ describe('unit::real-feishu-e2e-harness::scenario-coverage-metadata', () => {
         testNamePattern: string;
         providerCoverage: string;
         providerMatrix: string[];
+        requiresRuntimeOutput: boolean;
         unitCoverage: string[];
         e2eCoverage: string[];
       }>;
@@ -968,6 +1054,7 @@ describe('unit::real-feishu-e2e-harness::scenario-coverage-metadata', () => {
     assert.ok(scenario);
     assert.equal(scenario.testNamePattern, 'real-feishu::card-forms::<runtime>');
     assert.equal(scenario.providerCoverage, 'runtime-neutral');
+    assert.equal(scenario.requiresRuntimeOutput, false);
     assert.deepEqual(scenario.providerMatrix, []);
     assert.ok(scenario.unitCoverage.includes('unit::bridge-command-e2e::new-session-form-card'));
     assert.ok(scenario.unitCoverage.includes('unit::bridge-command-e2e::every-card-form-callback-chain'));

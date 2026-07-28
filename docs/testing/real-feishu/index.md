@@ -50,7 +50,9 @@ CODELARK_REAL_FEISHU_E2E=1 npm run real:feishu:e2e -- \
 
 当 host 机器上的 `lark-cli` 已经对同一个 test app 完成用户授权时，harness 会直接使用该授权环境完成用户侧动作，让“当前账号作为测试、只换隔离 bridge”的路径不需要重复授权。隔离 `--runtime-home` 只保存 bridge 运行所需的 test app bot 配置；复制 user OAuth token 会造成 refresh token 失效风险，因此禁止作为默认路径。
 
-启动隔离 bridge 时，测试 App 不能和任何正在运行的 CodeLark bridge 使用同一个 Feishu App。飞书长连接消息采用集群随机分流而不是广播；同一个 App 同时跑两个 bridge 时，一组用户消息可能被不同实例拆分消费。harness 会在发送前检查当前用户目录下所有 `.codelark*` 实例的运行状态和 App ID，并拒绝这种状态。补 canonical 报告时应使用真正空闲的测试 App，或由实例所有者明确停止/切走冲突 bridge；不提供跳过同 App 检查、重发消息或增加等待的兼容开关。
+启动隔离 bridge 时，测试 App 不能和任何正在运行的 CodeLark bridge 使用同一个 Feishu App。飞书长连接消息采用集群随机分流而不是广播；同一个 App 同时跑两个 bridge 时，一组用户消息可能被不同实例拆分消费。harness 会在发送前检查当前用户目录下所有 `.codelark*` 实例的运行状态和 App ID；Linux 还会从存活进程声明的 `CODELARK_HOME` 补充候选，因此 `/tmp` 下手动启动的隔离 bridge 也不能漏过。补 canonical 报告时应使用真正空闲的测试 App，或由实例所有者明确停止/切走冲突 bridge；不提供跳过同 App 检查、重发消息或增加等待的兼容开关。
+
+回复证据只剔除明确的用户回显行或整条纯回显，不能把原始命令字符串从整张机器人卡片中全局删除；`/new`、`/set` 等帮助卡会合法重复命令本身。`card-forms` 这类 runtime-neutral 场景只要求命令卡、`reply_to` 和客户端可见结构，不要求虚构 runtime identity 或模型消息来满足通用 dump check。
 
 测试 App ID 和 Secret 放在测试专用 env 文件中，不写入正式 `~/.codelark/config.toml`，也不要通过 npm 参数传递 secret，避免命令回显：
 

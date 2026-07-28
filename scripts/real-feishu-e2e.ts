@@ -1472,6 +1472,7 @@ function listScenarioMetadata(): unknown[] {
     description: scenario.description,
     providerCoverage: scenario.providerCoverage,
     coverageTier: scenario.coverageTier,
+    requiresRuntimeOutput: scenario.requiresRuntimeOutput !== false,
     ...(scenario.providerSequence ? { providerSequence: scenario.providerSequence } : {}),
     providerMatrix: providerMatrixForScenario(scenario),
     unitCoverage: scenario.unitCoverage,
@@ -2096,6 +2097,31 @@ async function resolveEffectiveTestFeishuAppId(options: CliOptions): Promise<voi
   }
 }
 
+function runningProcessCodelarkHomes(): string[] {
+  if (process.platform !== 'linux') return [];
+  let entries: string[];
+  try {
+    entries = fs.readdirSync('/proc');
+  } catch {
+    return [];
+  }
+  const homes = new Set<string>();
+  for (const entry of entries) {
+    if (!/^\d+$/.test(entry)) continue;
+    try {
+      const environ = fs.readFileSync(path.join('/proc', entry, 'environ'), 'utf-8');
+      for (const item of environ.split('\0')) {
+        if (!item.startsWith('CODELARK_HOME=')) continue;
+        const value = item.slice('CODELARK_HOME='.length).trim();
+        if (value) homes.add(path.resolve(value));
+      }
+    } catch {
+      // Other users' process environments may be unreadable.
+    }
+  }
+  return [...homes];
+}
+
 function assertNoLiveBridgeUsingSameApp(options: CliOptions): void {
   if (options.dryRun || options.dumpOnly || !options.launchBridge) return;
   const candidateHomes = new Set<string>([
@@ -2114,6 +2140,7 @@ function assertNoLiveBridgeUsingSameApp(options: CliOptions): void {
       // A missing or unreadable sibling directory cannot own a local bridge.
     }
   }
+  for (const processHome of runningProcessCodelarkHomes()) candidateHomes.add(processHome);
 
   const testHome = path.resolve(options.codelarkHome);
   const conflicts = [...candidateHomes].flatMap((liveCodelarkHome) => {
@@ -7288,8 +7315,20 @@ async function main(): Promise<void> {
       updateTestChatRegistryCleanup(createdChatId, createdChatCleanup, options.keepGroup);
       createdChatId = '';
     }
+    const runtimeOutputCheckNames = new Set([
+      'binding_found',
+      'session_found',
+      'runtime_identity_bound',
+      'messages_present',
+    ]);
     const effectiveReportChecks = report.checks.map((check) => (
-      check.name === 'messages_present' && options.provider !== 'sdk'
+      !scenarioRequiresRuntimeOutput(options) && runtimeOutputCheckNames.has(check.name)
+        ? {
+          ...check,
+          ok: true,
+          detail: `${check.detail}; not required for the runtime-neutral ${options.scenario} scenario.`,
+        }
+      : check.name === 'messages_present' && options.provider !== 'sdk'
         ? {
           ...check,
           ok: true,
