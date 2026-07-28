@@ -48,19 +48,30 @@ export function renderUiShellHtml(): string {
             </div>
           </div>
 
-          <section class="status-grid">
-            <div class="status-card">
-              <strong>运行时</strong>
-              <div class="status-value" id="runtimeStatus">-</div>
-            </div>
-            <div class="status-card">
-              <strong>本地会话</strong>
-              <div class="status-value" id="codexSessionCount">-</div>
-            </div>
-            <div class="status-card">
-              <strong>聊天绑定</strong>
-              <div class="status-value" id="bindingCount">-</div>
-            </div>
+          <section class="bridge-path" aria-label="CodeLark 当前运行链路">
+            <article class="bridge-path-node">
+              <span class="bridge-path-kicker">Web 工作台</span>
+              <strong class="bridge-path-value">在线</strong>
+              <span class="bridge-path-meta">v${version} · 当前页面</span>
+            </article>
+            <span class="bridge-path-arrow" aria-hidden="true">→</span>
+            <article class="bridge-path-node">
+              <span class="bridge-path-kicker">Bridge 服务</span>
+              <strong class="bridge-path-value" id="bridgeStatus">检查中</strong>
+              <span class="bridge-path-meta" id="bridgeStatusMeta">正在读取进程状态</span>
+            </article>
+            <span class="bridge-path-arrow" aria-hidden="true">→</span>
+            <article class="bridge-path-node">
+              <span class="bridge-path-kicker">通道实例</span>
+              <strong class="bridge-path-value" id="channelStatus">检查中</strong>
+              <span class="bridge-path-meta" id="channelStatusMeta">正在读取连接状态</span>
+            </article>
+            <span class="bridge-path-arrow" aria-hidden="true">→</span>
+            <article class="bridge-path-node">
+              <span class="bridge-path-kicker">活动会话</span>
+              <strong class="bridge-path-value" id="activeSessionCount">检查中</strong>
+              <span class="bridge-path-meta"><span id="runtimeStatus">-</span> · <span class="bridge-path-meta-item">本地 <span id="codexSessionCount">-</span></span> · <span class="bridge-path-meta-item">入口 <span id="bindingCount">-</span></span></span>
+            </article>
           </section>
 
           <div class="overview-grid">
@@ -84,7 +95,7 @@ export function renderUiShellHtml(): string {
               </div>
 
               <div class="panel-block">
-                <p class="panel-subtitle">桥接服务开机自启动</p>
+                <div class="panel-subtitle-row"><p class="panel-subtitle">桥接服务开机自启动</p><span class="inline-status" id="autostartStatus">检查中</span></div>
                 <div class="notice" id="autostartNotice">正在检查当前 Windows 任务计划程序状态…</div>
                 <div class="actions" style="margin-top: 12px;">
                   <button id="refreshAutostartBtn">刷新开机自启动状态</button>
@@ -92,7 +103,7 @@ export function renderUiShellHtml(): string {
               </div>
 
               <div class="panel-block">
-                <p class="panel-subtitle">可选 Codex 技能</p>
+                <div class="panel-subtitle-row"><p class="panel-subtitle">可选 Codex 技能</p><span class="inline-status" id="integrationStatus">检查中</span></div>
                 <div class="notice">桥接服务不再注入发送附件的提示词。需要让 Codex 知道“可以把本地图片/文件回发到 IM”时，请安装这个可选技能。</div>
                 <div class="actions" style="margin-top: 12px;">
                   <button id="installIntegrationBtn">安装可选 Codex 技能</button>
@@ -1452,6 +1463,40 @@ export function renderUiShellHtml(): string {
         return state.bridgeStatus && Array.isArray(state.bridgeStatus.adapters) ? state.bridgeStatus.adapters : [];
       }
 
+      function renderOverviewPath() {
+        const bridge = state.bridgeStatus || null;
+        const adapters = adapterStatuses();
+        const runningAdapters = adapters.filter((item) => item.running);
+        const adapterErrors = adapters.filter((item) => item.error);
+        const activeSessionIds = new Set(
+          (state.bindings || [])
+            .filter((binding) => binding.runtimeStatus === 'running')
+            .map((binding) => binding.bridgeSessionId)
+            .filter(Boolean),
+        );
+        const counts = state.codexSessionCounts || {};
+        const localSessionCount = Number.isFinite(Number(counts.totalDisplayable))
+          ? Number(counts.totalDisplayable)
+          : (state.codexSessions || []).length;
+
+        setText('bridgeStatus', bridge && bridge.running ? '运行中' : '已停止');
+        setText('bridgeStatusMeta', bridge && bridge.running && bridge.pid
+          ? 'PID ' + bridge.pid
+          : bridge && bridge.lastExitReason
+            ? bridge.lastExitReason
+            : '没有活动进程');
+        setText('channelStatus', adapters.length > 0
+          ? runningAdapters.length + ' / ' + adapters.length + ' 在线'
+          : '未配置');
+        setText('channelStatusMeta', adapterErrors.length > 0
+          ? adapterErrors.length + ' 个实例需要处理'
+          : adapters.length > 0 ? '连接状态正常' : '添加通道后显示连接状态');
+        setText('activeSessionCount', activeSessionIds.size + ' 运行中');
+        setText('runtimeStatus', (state.config || {}).runtime || 'codex');
+        setText('codexSessionCount', String(localSessionCount));
+        setText('bindingCount', String((state.bindings || []).length));
+      }
+
       function getAdapterStatus(channelId) {
         return adapterStatuses().find((item) => item.channelType === channelId) || null;
       }
@@ -1879,7 +1924,7 @@ export function renderUiShellHtml(): string {
           ? Number(counts.dedupedBridgeRows)
           : 0;
         const boundSessions = sessions.filter((session) => bindingsForSession(session).length > 0 || channelDefaultsForSession(session).length > 0);
-        document.getElementById('codexSessionCount').textContent = String(totalDisplayable);
+        renderOverviewPath();
         document.getElementById('codexSessionMeta').textContent =
           '扫描目录：' + state.codexRoot
           + ' · 本地 Codex ' + codexPhysical + ' 条'
@@ -2165,7 +2210,7 @@ export function renderUiShellHtml(): string {
         state.bindings = result.bindings || [];
         state.bindingOptions = result.options || [];
         state.channelDefaults = result.channelDefaults || [];
-        document.getElementById('bindingCount').textContent = String(state.bindings.length);
+        renderOverviewPath();
         renderChannelsWorkspace();
         rerenderCodexSessions();
       }
@@ -2272,15 +2317,9 @@ export function renderUiShellHtml(): string {
         state.autostartStatus = status.autostart || null;
         state.systemTimeZone = status.timeZone || '';
         fillForm(config);
-        const adapters = adapterStatuses();
-        const runningAdapters = adapters.filter((item) => item.running);
-        setText('bridgeStatus', status.bridge.running ? '运行中' : '已停止');
-        setText('bridgeStatusMeta', adapters.length
-          ? ('运行实例 ' + runningAdapters.length + ' / ' + adapters.length)
-          : '当前没有通道实例在运行');
+        renderOverviewPath();
         renderAutostartStatus(status.autostart || null);
         setText('integrationStatus', status.codexIntegrationInstalled ? '已安装' : '未安装');
-        setText('runtimeStatus', config.runtime || 'codex');
         setText('overviewHomeStatus', status.home);
         setText('packageRoot', status.packageRoot);
         renderBindings({
@@ -2365,12 +2404,7 @@ export function renderUiShellHtml(): string {
         state.uiAccess = status.uiAccess || null;
         state.bridgeStatus = status.bridge || null;
         state.autostartStatus = status.autostart || null;
-        const adapters = adapterStatuses();
-        const runningAdapters = adapters.filter((item) => item.running);
-        setText('bridgeStatus', status.bridge.running ? '运行中' : '已停止');
-        setText('bridgeStatusMeta', adapters.length
-          ? ('运行实例 ' + runningAdapters.length + ' / ' + adapters.length)
-          : '当前没有通道实例在运行');
+        renderOverviewPath();
         renderAutostartStatus(status.autostart || null);
         setText('integrationStatus', status.codexIntegrationInstalled ? '已安装' : '未安装');
         setText('overviewHomeStatus', status.home);
