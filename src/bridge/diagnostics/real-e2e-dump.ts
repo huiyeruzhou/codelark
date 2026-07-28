@@ -528,6 +528,10 @@ export function scriptedKimiToolCardIssues(
   if (!patchPanel?.title.includes('修改 2 个文件')) {
     issues.push(`${phase.providerKey}: patch title did not expose the two-file summary.`);
   }
+  const titleBackticks = patchPanel ? (patchPanel.title.match(/`/gu) || []).length : 0;
+  if (!patchPanel || !/`[^`]+\.ts` 等 2 个文件/u.test(patchPanel.title) || titleBackticks !== 2 || patchPanel.title.includes('…')) {
+    issues.push(`${phase.providerKey}: patch title did not keep one complete filename before the multi-file fallback.`);
+  }
   for (const language of ['typescript', 'python']) {
     if (!patchFences.some((fence) => fence.language === language)) {
       issues.push(`${phase.providerKey}: multi-file patch did not include a ${language} fence.`);

@@ -607,7 +607,7 @@ describe('unit::real-e2e-dump::live-log-scoping', () => {
         toolPanels: [
           { elementId: 'st_1_t_1', title: '📖 读取 `src/a.ts`', detailChars: 10, detailLines: 1, nestedPanelCount: 0, fences: [], forbiddenEnvelopeTexts: [] },
           { elementId: 'st_1_t_2', title: '🔎 搜索 `toolPanels:` · 路径 `src/__tests__` · 2 行', detailChars: 80, detailLines: 3, nestedPanelCount: 0, fences: [{ language: 'bash', chars: 63, lines: 1, closed: true }], forbiddenEnvelopeTexts: [] },
-          { elementId: 'st_1_t_3', title: '🛠️ 修改 2 个文件 · `src/a.ts` · `scripts/b.py`', detailChars: 4000, detailLines: 166, nestedPanelCount: 0, fences: [{ language: 'typescript', chars: 2500, lines: 102, closed: true }, { language: 'python', chars: 1200, lines: 58, closed: true }], forbiddenEnvelopeTexts: [] },
+          { elementId: 'st_1_t_3', title: '🛠️ 修改 2 个文件 · `src/features/tool-card-preview/this-is-a-deliberately-long-typescript-fixture-for-title-budget.ts` 等 2 个文件', detailChars: 4000, detailLines: 166, nestedPanelCount: 0, fences: [{ language: 'typescript', chars: 2500, lines: 102, closed: true }, { language: 'python', chars: 1200, lines: 58, closed: true }], forbiddenEnvelopeTexts: [] },
           { elementId: 'st_1_t_4', title: '💻 运行 `npm test` · 200ms · 后台终端 `90`', detailChars: 20, detailLines: 3, nestedPanelCount: 0, fences: [{ language: 'bash', chars: 8, lines: 1, closed: true }], forbiddenEnvelopeTexts: [] },
         ],
       },
@@ -629,6 +629,18 @@ describe('unit::real-e2e-dump::live-log-scoping', () => {
       providerKey: 'kimi-tmux',
       marker: kimiMarker,
     }), ['kimi-tmux: expected one 工具调用 · 4 group containing four inner tool panels.']);
+    assert.deepEqual(scriptedKimiToolCardIssues([
+      kimiCheckpoints[0]!,
+      {
+        ...kimiCheckpoints[1]!,
+        toolPanels: kimiCheckpoints[1]!.toolPanels!.map((panel, index) => index === 2
+          ? { ...panel, title: '🛠️ 修改 2 个文件 · `src/features/tool-card-preview/this-is-a-deliberately-long-typescript-fixture-for-title-budget.ts…' }
+          : panel),
+      },
+    ], {
+      providerKey: 'kimi-tmux',
+      marker: kimiMarker,
+    }), ['kimi-tmux: patch title did not keep one complete filename before the multi-file fallback.']);
     assert.deepEqual(scriptedKimiToolCardIssues([
       kimiCheckpoints[0]!,
       {

@@ -2104,23 +2104,59 @@ async function resolveEffectiveTestFeishuAppId(options: CliOptions): Promise<voi
 
 function assertNoLiveBridgeUsingSameApp(options: CliOptions): void {
   if (options.dryRun || options.dumpOnly || !options.launchBridge) return;
-  const liveCodelarkHome = defaultCodelarkHome();
-  if (path.resolve(liveCodelarkHome) === path.resolve(options.codelarkHome)) return;
-  if (!listConfiguredFeishuAppIds(liveCodelarkHome).includes(options.testFeishuAppId)) return;
+  const candidateHomes = new Set<string>([
+    defaultCodelarkHome(),
+    path.join(os.homedir(), '.codelark'),
+  ].map((candidate) => path.resolve(candidate)));
+  for (const baseHome of [...candidateHomes]) {
+    const parent = path.dirname(baseHome);
+    try {
+      for (const entry of fs.readdirSync(parent, { withFileTypes: true })) {
+        if (!entry.isDirectory()) continue;
+        if (entry.name !== '.codelark' && !entry.name.startsWith('.codelark-')) continue;
+        candidateHomes.add(path.resolve(parent, entry.name));
+      }
+    } catch {
+      // A missing or unreadable sibling directory cannot own a local bridge.
+    }
+  }
 
-  const status = readJsonIfExists<{ running?: boolean; pid?: number; channels?: string[] }>(
-    path.join(liveCodelarkHome, 'runtime', 'status.json'),
-    {},
-  );
-  if (!status.running || !isPidAlive(status.pid)) return;
+  const testHome = path.resolve(options.codelarkHome);
+  const conflicts = [...candidateHomes].flatMap((liveCodelarkHome) => {
+    if (liveCodelarkHome === testHome) return [];
+    const status = readJsonIfExists<{ running?: boolean; pid?: number; channels?: string[] }>(
+      path.join(liveCodelarkHome, 'runtime', 'status.json'),
+      {},
+    );
+    if (!status.running || !isPidAlive(status.pid)) return [];
+    try {
+      if (!listConfiguredFeishuAppIds(liveCodelarkHome).includes(options.testFeishuAppId)) return [];
+    } catch {
+      return [];
+    }
+    return [{
+      codelarkHome: liveCodelarkHome,
+      pid: status.pid!,
+      channels: status.channels || [],
+    }];
+  });
+  if (conflicts.length === 0) return;
+
+  const conflictDetails = conflicts.flatMap((conflict, index) => {
+    const suffix = conflicts.length > 1 ? `_${index + 1}` : '';
+    return [
+      `live_clk_home${suffix}=${conflict.codelarkHome}`,
+      `live_pid${suffix}=${conflict.pid}`,
+      `live_channels${suffix}=${conflict.channels.join(',') || '-'}`,
+    ];
+  });
 
   throw new Error([
     `Refusing to launch a second bridge for Feishu test app ${options.testFeishuAppId}.`,
-    `live_clk_home=${liveCodelarkHome}`,
-    `live_pid=${status.pid}`,
-    `live_channels=${(status.channels || []).join(',') || '-'}`,
+    `live_bridge_count=${conflicts.length}`,
+    ...conflictDetails,
     `test_clk_home=${options.codelarkHome}`,
-    'lark-cli user messages are safe; this guard only prevents two bridge long-connection clients from using the same app.',
+    'Feishu long-connection events are load-balanced, not broadcast; two bridge clients using one app split inbound messages at random.',
     'Use the separate test Feishu app, or stop/switch the live bridge first.',
   ].join('\n'));
 }
@@ -2452,6 +2488,8 @@ function providerKeyFromMarker(marker) {
   return suffix.toLowerCase().replace(/_/g, '-');
 }
 
+const longTypeScriptPath = 'src/features/tool-card-preview/this-is-a-deliberately-long-typescript-fixture-for-title-budget.ts';
+
 function answerOnce() {
   if (answered) return;
   answered = true;
@@ -2461,19 +2499,19 @@ function answerOnce() {
   const now = Date.now();
   appendWire({ type: 'context.append_loop_event', time: now, event: { type: 'step.begin', turnId: 'turn-scripted-kimi', stepUuid: 'step-scripted-kimi' } });
   appendWire({ type: 'context.append_loop_event', time: now + 1, event: { type: 'content.part', turnId: 'turn-scripted-kimi', part: { type: 'think', think: 'scripted Kimi thinking for ' + marker } } });
-  const patchLines = ['*** Begin Patch', '*** Update File: src/tool-card-fixture.ts', '@@'];
+  const patchLines = ['*** Begin Patch', '*** Update File: ' + longTypeScriptPath, '@@'];
   for (let index = 1; index <= 100; index += 1) patchLines.push('+export const fixtureLine' + index + ' = ' + index + ';');
   patchLines.push('*** Update File: scripts/tool_card_fixture.py', '@@');
   for (let index = 1; index <= 90; index += 1) patchLines.push('+fixture_line_' + index + ' = ' + index);
   patchLines.push('*** End Patch');
   const longPatch = patchLines.join('\\n');
   const toolEvents = [
-    { type: 'tool.call', turnId: 'turn-scripted-kimi', toolCallId: 'read-scripted-kimi', name: 'Read', args: { path: 'src/tool-card-fixture.ts', line_offset: 0, n_lines: 80 } },
+    { type: 'tool.call', turnId: 'turn-scripted-kimi', toolCallId: 'read-scripted-kimi', name: 'Read', args: { path: longTypeScriptPath, line_offset: 0, n_lines: 80 } },
     { type: 'tool.result', turnId: 'turn-scripted-kimi', toolCallId: 'read-scripted-kimi', result: { output: 'export const fixtureLine1 = 1;\\nexport const fixtureLine2 = 2;' } },
     { type: 'tool.call', turnId: 'turn-scripted-kimi', toolCallId: 'grep-scripted-kimi', name: 'Bash', args: { command: 'rg -n "toolPanels:" src/__tests__ -g \\'*.ts\\' && git diff --check' } },
     { type: 'tool.result', turnId: 'turn-scripted-kimi', toolCallId: 'grep-scripted-kimi', result: { output: 'src/__tests__/a.ts:10:toolPanels:\\nsrc/__tests__/b.ts:20:toolPanels:' } },
     { type: 'tool.call', turnId: 'turn-scripted-kimi', toolCallId: 'patch-scripted-kimi', name: 'apply_patch', args: { patch: longPatch } },
-    { type: 'tool.result', turnId: 'turn-scripted-kimi', toolCallId: 'patch-scripted-kimi', result: { output: 'Success. Updated the following files:\\nM src/tool-card-fixture.ts\\nM scripts/tool_card_fixture.py' } },
+    { type: 'tool.result', turnId: 'turn-scripted-kimi', toolCallId: 'patch-scripted-kimi', result: { output: 'Success. Updated the following files:\\nM ' + longTypeScriptPath + '\\nM scripts/tool_card_fixture.py' } },
     { type: 'tool.call', turnId: 'turn-scripted-kimi', toolCallId: 'bash-scripted-kimi', name: 'Bash', args: { command: 'npm test' } },
     { type: 'tool.result', turnId: 'turn-scripted-kimi', toolCallId: 'bash-scripted-kimi', result: { output: 'Script running with cell ID 90\\nWall time 0.2 seconds\\nOutput:\\n' } },
   ];

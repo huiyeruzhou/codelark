@@ -50,7 +50,7 @@ CODELARK_REAL_FEISHU_E2E=1 npm run real:feishu:e2e -- \
 
 当 host 机器上的 `lark-cli` 已经对同一个 test app 完成用户授权时，harness 会直接使用该授权环境完成用户侧动作，让“当前账号作为测试、只换隔离 bridge”的路径不需要重复授权。隔离 `--runtime-home` 只保存 bridge 运行所需的 test app bot 配置；复制 user OAuth token 会造成 refresh token 失效风险，因此禁止作为默认路径。
 
-启动隔离 bridge 时，测试 App 不能和当前 live bridge 正在使用的 Feishu App 相同。Feishu 长连接事件按 App 投递，同一个 App 同时跑两个 bridge 会导致事件随机落到任一实例；harness 会在发送前拒绝这种状态。补 canonical 报告时应使用独立测试 App，或先明确停止/切走 live bridge；不提供跳过同 App 检查的兼容开关。
+启动隔离 bridge 时，测试 App 不能和任何正在运行的 CodeLark bridge 使用同一个 Feishu App。飞书长连接消息采用集群随机分流而不是广播；同一个 App 同时跑两个 bridge 时，一组用户消息可能被不同实例拆分消费。harness 会在发送前检查当前用户目录下所有 `.codelark*` 实例的运行状态和 App ID，并拒绝这种状态。补 canonical 报告时应使用真正空闲的测试 App，或由实例所有者明确停止/切走冲突 bridge；不提供跳过同 App 检查、重发消息或增加等待的兼容开关。
 
 测试 App ID 和 Secret 放在测试专用 env 文件中，不写入正式 `~/.codelark/config.toml`，也不要通过 npm 参数传递 secret，避免命令回显：
 
@@ -154,7 +154,7 @@ CODELARK_REAL_FEISHU_TEST_LARK_CLI_XDG_DATA_HOME=/home/me/.codelark/real-feishu-
 - 长历史截断必须同时检查头部 marker、ASCII 截断标记 `...`，并排除尾部 marker。
 - 表单场景必须从 user 身份的飞书 transcript 检查 `interactive` 消息、`<form>` 结构、可见字段标签和提交按钮；看到文本 fallback 不算通过。`lark-cli` 会把 CardKit 内部 `name` / `callback_data` 规范化成用户可见文本，因此不得从 transcript 反向断言 `clk_form` 等内部键仍存在；机器字段和 callback 前缀由发送前 CardKit payload 合同测试检查，真实 callback 语义由用户点击后的 bridge 事件与持久状态证明。
 - Markdown 渲染以飞书原始消息为准；当前 code fence 语言可能被规范化为 `plain_text`。
-- 工具详情不能只用 bridge 日志的 `markdown_previews` 验收，因为该日志会压缩空白。报告至少同时保存 CardKit payload checkpoint 和 user 身份读取的最终 transcript；结构上断言存在“工具调用组 → 单工具”，且单工具内部没有“长输出”面板。普通工具要断言 output 正文不进入卡片；长 patch 要断言原始 diff 先按字符/行双上限裁剪，多文件的所有 fence 合计也不能超过总预算，并分别匹配目标文件语言。普通反引号检查 closing fence；只有正文含字面 `${...}` 时才检查命中的完整 block 已变为缩进代码、仍为多行且没有零宽字符/entity，其他文件块仍应保持高亮。最终卡片不得含 `Script completed`、`Wall time` 或 `Success`。
+- 工具详情不能只用 bridge 日志的 `markdown_previews` 验收，因为该日志会压缩空白。报告至少同时保存 CardKit payload checkpoint 和 user 身份读取的最终 transcript；结构上断言存在“工具调用组 → 单工具”，且单工具内部没有“长输出”面板。普通工具要断言 output 正文不进入卡片；长 patch 要断言原始 diff 先按字符/行双上限裁剪，多文件的所有 fence 合计也不能超过总预算，并分别匹配目标文件语言。长路径标题还必须命中一个完整闭合的 `` `文件名` 等 N 个文件`` token，不能出现省略号或奇数个反引号。普通反引号检查 closing fence；只有正文含字面 `${...}` 时才检查命中的完整 block 已变为缩进代码、仍为多行且没有零宽字符/entity，其他文件块仍应保持高亮。最终卡片不得含 `Script completed`、`Wall time` 或 `Success`。
 
 ## 排障流程
 

@@ -345,11 +345,72 @@ describe('unit::real-feishu-e2e-harness::auth-preflight', () => {
     });
 
     assert.match(output, /Refusing to launch a second bridge for Feishu test app cli_same_app_guard/);
+    assert.match(output, /live_bridge_count=1/);
     assert.match(output, /live_clk_home=/);
     assert.match(output, /test_clk_home=/);
+    assert.match(output, /events are load-balanced, not broadcast/);
     assert.match(output, /Use the separate test Feishu app/);
     assert.match(output, /stop\/switch the live bridge first/);
     assert.doesNotMatch(output, /allow-concurrent-app/);
+  });
+
+  it('refuses a test app already used by a live sibling CodeLark home', () => {
+    const homeRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-live-sibling-app-root-'));
+    const primaryHome = path.join(homeRoot, '.codelark');
+    const siblingHome = path.join(homeRoot, '.codelark-coding-agent');
+    fs.mkdirSync(path.join(primaryHome, 'runtime'), { recursive: true });
+    fs.mkdirSync(path.join(siblingHome, 'runtime'), { recursive: true });
+    fs.writeFileSync(
+      path.join(siblingHome, 'config.toml'),
+      [
+        'schema_version = 2',
+        '',
+        '[[channels]]',
+        'id = "feishu-coding-agent"',
+        'alias = "Coding Agent"',
+        'provider = "feishu"',
+        'enabled = true',
+        '',
+        '[channels.config]',
+        'app_id = "cli_sibling_app_guard"',
+        'app_secret = "test-secret"',
+        'site = "feishu"',
+        '',
+      ].join('\n'),
+      'utf-8',
+    );
+    fs.writeFileSync(
+      path.join(siblingHome, 'runtime', 'status.json'),
+      JSON.stringify({ running: true, pid: process.pid, channels: ['feishu-coding-agent'] }),
+      'utf-8',
+    );
+
+    try {
+      const output = runHarnessFailure([
+        '--scenario',
+        'runtime-message',
+        '--launch-bridge',
+        '--test-feishu-app-id',
+        'cli_sibling_app_guard',
+        '--test-feishu-app-secret',
+        'test-secret',
+        '--run-id',
+        'sibling-app-guard',
+      ], {
+        CODELARK_REAL_FEISHU_E2E: '1',
+        CODELARK_HOME: primaryHome,
+        HOME: homeRoot,
+      });
+
+      assert.match(output, /Refusing to launch a second bridge for Feishu test app cli_sibling_app_guard/);
+      assert.match(output, /live_bridge_count=1/);
+      assert.match(output, new RegExp(siblingHome.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+      assert.match(output, new RegExp(`live_pid=${process.pid}`));
+      assert.match(output, /live_channels=feishu-coding-agent/);
+      assert.doesNotMatch(output, /Launching isolated bridge/);
+    } finally {
+      fs.rmSync(homeRoot, { recursive: true, force: true });
+    }
   });
 
   it('fails before running real Feishu actions when lark-cli has no user authorization', () => {
