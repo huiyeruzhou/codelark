@@ -6801,7 +6801,7 @@ enabled = true
       .filter((option: any) => option.callbackData !== 'pty')
       .map((option: any) => [option.text, option.callbackData]);
     assert.deepEqual(maintainedProviderOptions, [
-      ['跟随默认', 'default'],
+      ['跟随默认（默认值：tmux）', 'default'],
       ['sdk', 'sdk'],
       ['tmux', 'tmux'],
     ]);
@@ -6840,7 +6840,7 @@ enabled = true
       element.tag === 'select_static' && element.name === 'cdx_provider'
     ));
     const defaultProviderOption = resetProviderFeishuSelect.options.find((option: any) => (
-      option.text?.content === '跟随默认'
+      option.text?.content === '跟随默认（默认值：tmux）'
     ));
     assert.equal(defaultProviderOption.value, 'default');
     assert.equal(resetProviderFeishuSelect.placeholder?.content, '跟随默认（默认值：tmux）');

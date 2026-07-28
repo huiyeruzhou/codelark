@@ -951,15 +951,22 @@ function settingPanelSelect(
   usesHomeDefault: boolean,
 ): NonNullable<NonNullable<OutboundRichCard['form']>['selects']>[number] {
   const base = settingFormSelect(definition, config);
+  const effectiveDefault = definition.read(config);
+  const homeDefaultOption = definition.homeDefaultOption
+    ? {
+        ...definition.homeDefaultOption,
+        text: `跟随默认（默认值：${effectiveDefault}）`,
+      }
+    : undefined;
   return {
     ...base,
     label: settingPanelLabel(definition),
-    ...(definition.homeDefaultOption ? {
+    ...(homeDefaultOption ? {
       placeholder: usesHomeDefault
-        ? `跟随默认（默认值：${definition.read(config)}）`
+        ? homeDefaultOption.text
         : base.placeholder,
       selectedCallbackData: usesHomeDefault ? undefined : base.selectedCallbackData,
-      options: [definition.homeDefaultOption, ...(definition.options || [])],
+      options: [homeDefaultOption, ...(definition.options || [])],
     } : {}),
   };
 }
