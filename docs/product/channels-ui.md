@@ -1,4 +1,4 @@
-# 通道与 Web 工作台
+# 通道
 
 ## 通道能力
 
@@ -52,22 +52,4 @@
 
 ## Web 工作台
 
-本地 Web 工作台默认运行在 `http://127.0.0.1:4781`，用于完成不适合在 IM 中操作的管理任务。侧边栏 CodeLark 品牌区会显示当前安装版本，与 `codelark --version` 共用同一版本来源。
-
-主要页面：
-
-- 概览：查看 UI、bridge、通道数量、配置目录和运行状态。
-- 会话：查看 Bridge/IM 会话和本机 runtime 会话，进入历史详情，重命名或删除会话。
-- 配置：编辑 Codex、Claude Code、Kimi Code、Bridge 控制和 Web 访问设置。
-- 通道：管理飞书实例、查看聊天绑定、切换默认目标。
-- 日志：查看 bridge 日志。
-- 命令说明：查看 IM 命令清单。
-
-设计模块：
-
-- UI server：[src/operator-ui/server.ts](https://github.com/huiyeruzhou/codelark/blob/main/src/operator-ui/server.ts)
-- UI 页面 shell：[src/operator-ui/shell.ts](https://github.com/huiyeruzhou/codelark/blob/main/src/operator-ui/shell.ts)
-- UI auth：[src/operator-ui/routes/auth.ts](https://github.com/huiyeruzhou/codelark/blob/main/src/operator-ui/routes/auth.ts)
-- UI session 应用层：[src/operator-ui/application/session.ts](https://github.com/huiyeruzhou/codelark/blob/main/src/operator-ui/application/session.ts)
-- UI config 应用层：[src/operator-ui/application/config.ts](https://github.com/huiyeruzhou/codelark/blob/main/src/operator-ui/application/config.ts)
-- UI channel 应用层：[src/operator-ui/application/channel.ts](https://github.com/huiyeruzhou/codelark/blob/main/src/operator-ui/application/channel.ts)
+本地 Web 工作台仍负责管理通道实例和聊天绑定，但它已经不只是“通道配置页”。完整的管理面能力矩阵、信息架构和测试合同见 [Web 工作台](operator-ui.md)。
