@@ -76,10 +76,10 @@ export function enqueueDelivery(
     if (waitMs >= DEFAULT_OUTBOUND_RATE_LIMIT_WARN_MS) {
       console.warn('[delivery] Delivery queue delayed message:', {
         event: 'perf.delivery.queue_wait',
-        queueClass: options?.queueClass || 'ordinary',
-        channelType: address.channelType,
-        chatId: address.chatId,
-        waitMs,
+        queue_class: options?.queueClass || 'ordinary',
+        channel: address.channelType,
+        chat: address.chatId,
+        wait_ms: waitMs,
       });
     }
     try {
@@ -88,9 +88,9 @@ export function enqueueDelivery(
       const message = describeDeliveryError(error);
       console.warn('[delivery] Queued delivery failed:', {
         event: 'delivery.queue.failed',
-        queueClass: options?.queueClass || 'ordinary',
-        channelType: address.channelType,
-        chatId: address.chatId,
+        queue_class: options?.queueClass || 'ordinary',
+        channel: address.channelType,
+        chat: address.chatId,
         error: message,
       });
       return { ok: false, error: message };
@@ -247,11 +247,11 @@ async function sendRateLimitNotice(
   });
   if (!result.ok) {
     console.warn('[delivery] Failed to send outbound rate-limit notice:', {
-      channelType: message.address.channelType,
-      chatId: message.address.chatId,
-      sessionId: sessionId ?? null,
+      channel: message.address.channelType,
+      chat: message.address.chatId,
+      session_id: sessionId ?? null,
       error: result.error ?? null,
-      httpStatus: result.httpStatus ?? null,
+      http_status: result.httpStatus ?? null,
     });
   }
 }
@@ -269,12 +269,12 @@ async function acquireOutboundRateLimit(
   const estimatedWaitMs = rateLimiter.estimateWaitMs(message.address.chatId);
   if (estimatedWaitMs >= DEFAULT_OUTBOUND_RATE_LIMIT_WARN_MS) {
     console.warn('[delivery] Outbound rate limiter will delay message:', {
-      channelType: message.address.channelType,
-      chatId: message.address.chatId,
-      sessionId: sessionId ?? null,
+      channel: message.address.channelType,
+      chat: message.address.chatId,
+      session_id: sessionId ?? null,
       kind: deliveryKind(message, cloudDocument),
-      chunkIndex,
-      estimatedWaitMs,
+      chunk_index: chunkIndex,
+      estimated_wait_ms: estimatedWaitMs,
     });
     await sendRateLimitNotice(adapter, message, estimatedWaitMs, sessionId);
   }
@@ -284,12 +284,12 @@ async function acquireOutboundRateLimit(
   const elapsedMs = Math.max(waitedMs, Date.now() - startedAt);
   if (elapsedMs >= DEFAULT_OUTBOUND_RATE_LIMIT_WARN_MS) {
     console.warn('[delivery] Outbound rate limiter delayed message:', {
-      channelType: message.address.channelType,
-      chatId: message.address.chatId,
-      sessionId: sessionId ?? null,
+      channel: message.address.channelType,
+      chat: message.address.chatId,
+      session_id: sessionId ?? null,
       kind: deliveryKind(message, cloudDocument),
-      chunkIndex,
-      waitMs: elapsedMs,
+      chunk_index: chunkIndex,
+      wait_ms: elapsedMs,
     });
   }
 }
@@ -297,8 +297,8 @@ async function acquireOutboundRateLimit(
 function logRemoteRateLimit(scope: string, result: SendResult): void {
   console.warn('[delivery] Remote rate-limit response; not retrying locally:', {
     scope,
-    httpStatus: result.httpStatus ?? null,
-    retryAfter: (result as { retryAfter?: number }).retryAfter ?? null,
+    http_status: result.httpStatus ?? null,
+    retry_after: (result as { retryAfter?: number }).retryAfter ?? null,
     error: result.error ?? null,
   });
 }
@@ -365,25 +365,17 @@ function logDeliverySend(params: {
   const fields = {
     event: 'perf.delivery.send',
     duration_ms: durationMs,
-    durationMs,
     channel: params.message.address.channelType,
-    channelType: params.message.address.channelType,
     chat: params.message.address.chatId,
-    chatId: params.message.address.chatId,
     kind: deliveryKind(params.message, params.cloudDocument),
     cloud_document: params.cloudDocument,
-    cloudDocument: params.cloudDocument,
     chunk_index: params.chunkIndex,
-    chunkIndex: params.chunkIndex,
     chunk_count: params.chunkCount,
-    chunkCount: params.chunkCount,
     payload_bytes: payloadBytes,
-    payloadBytes,
     status: params.result.ok ? 'success' : 'error',
-    ok: params.result.ok,
-    ...(params.sessionId ? { session: params.sessionId, sessionId: params.sessionId } : {}),
-    ...(params.result.messageId ? { message_id: params.result.messageId, messageId: params.result.messageId } : {}),
-    ...(params.result.httpStatus ? { http_status: params.result.httpStatus, httpStatus: params.result.httpStatus } : {}),
+    ...(params.sessionId ? { session_id: params.sessionId } : {}),
+    ...(params.result.messageId ? { message_id: params.result.messageId } : {}),
+    ...(params.result.httpStatus ? { http_status: params.result.httpStatus } : {}),
     ...(params.result.error ? { error: params.result.error } : {}),
   };
   if (params.result.ok) {

@@ -2570,23 +2570,37 @@ describe('feishu-adapter structured streaming regions', () => {
       data: { reaction_type: { emoji_type: 'DONE' } },
     }]);
     const perfSummary = logs.find((entry) => entry[0] === '[feishu-adapter] Streaming card perf summary:')?.[1] as any;
-    assert.equal(perfSummary?.streamKey, 'stream-1');
     assert.equal(perfSummary?.event, 'perf.card.lifecycle');
     assert.equal(perfSummary?.stream_key, 'stream-1');
-    assert.equal(perfSummary?.terminalStatus, 'completed');
     assert.equal(perfSummary?.terminal_status, 'completed');
-    assert.equal(perfSummary?.flushAttempts, 1);
     assert.equal(perfSummary?.flush_attempts, 1);
-    assert.ok(perfSummary?.apiTop?.some((entry: any) => entry.target === 'card.update'));
+    assert.equal(typeof perfSummary?.duration_ms, 'number');
+    assert.ok(perfSummary?.api_top?.some((entry: any) => entry.operation === 'card.update'));
+    assert.equal(Object.hasOwn(perfSummary, 'streamKey'), false);
+    assert.equal(Object.hasOwn(perfSummary, 'terminalStatus'), false);
+    assert.equal(Object.hasOwn(perfSummary, 'flushAttempts'), false);
+    assert.equal(Object.hasOwn(perfSummary, 'elapsed_ms'), false);
 
     const cardUpdateRequest = logs.find((entry) => (
       entry[0] === '[feishu-adapter] Request success:'
-        && (entry[1] as any)?.target === 'card.update'
+        && (entry[1] as any)?.operation === 'card.update'
     ))?.[1] as any;
     assert.equal(cardUpdateRequest?.event, 'perf.feishu.request');
     assert.equal(cardUpdateRequest?.operation, 'card.update');
+    assert.equal(cardUpdateRequest?.status, 'success');
     assert.equal(cardUpdateRequest?.stream_key, 'stream-1');
+    assert.equal(cardUpdateRequest?.card_id, 'card-1');
     assert.equal(typeof cardUpdateRequest?.duration_ms, 'number');
+    assert.equal(Object.hasOwn(cardUpdateRequest, 'target'), false);
+    assert.equal(Object.hasOwn(cardUpdateRequest, 'phase'), false);
+    assert.equal(Object.hasOwn(cardUpdateRequest, 'durationMs'), false);
+
+    const cardCreateRequest = logs.find((entry) => (
+      entry[0] === '[feishu-adapter] Request success:'
+        && (entry[1] as any)?.operation === 'card.create'
+    ))?.[1] as any;
+    assert.equal(cardCreateRequest?.response_card_id, 'card-1');
+    assert.equal(Object.hasOwn(cardCreateRequest, 'card_id'), false);
   });
 
   it('adds an error reaction to the finalized streaming card message on failure', async () => {
@@ -2752,13 +2766,66 @@ describe('feishu-adapter structured streaming regions', () => {
 
     const payload = logs.find((entry) => entry[0] === '[feishu-adapter] Streaming card create payload:')?.[1] as any;
     assert.ok(payload, 'expected streaming card payload diagnostic log');
-    assert.deepEqual(payload.markdownPreviews.slice(0, 6), [
-      { elementId: undefined, preview: '历史记录' },
-      { elementId: 'streaming_content', preview: '💭 Thinking...' },
-      { elementId: 'streaming_tasks', preview: '' },
-      { elementId: 'streaming_status', preview: '处理中' },
+    assert.deepEqual(payload.markdown_previews.slice(0, 6), [
+      { element_id: undefined, preview: '历史记录' },
+      { element_id: 'streaming_content', preview: '💭 Thinking...' },
+      { element_id: 'streaming_tasks', preview: '' },
+      { element_id: 'streaming_status', preview: '处理中' },
     ]);
-    assert.doesNotMatch(JSON.stringify(payload.markdownPreviews), /等待工具调用|工具调用/);
+    assert.doesNotMatch(JSON.stringify(payload.markdown_previews), /等待工具调用|工具调用/);
+    assert.equal(payload.stream_key, 'stream-1');
+    assert.equal(payload.chat, 'chat-1');
+    assert.equal(typeof payload.payload_bytes, 'number');
+    assert.match(payload.payload_hash, /^[a-f0-9]{12}$/);
+    assert.equal(typeof payload.payload_preview, 'string');
+    assert.equal(Object.hasOwn(payload, 'streamKey'), false);
+    assert.equal(Object.hasOwn(payload, 'markdownPreviews'), false);
+    assert.equal(Object.hasOwn(payload, 'bytes'), false);
+  });
+
+  it('logs streaming sync plans with one canonical field per concept', () => {
+    const logs: unknown[][] = [];
+    const originalLog = console.log;
+    console.log = (...args: unknown[]) => { logs.push(args); };
+    const adapter = new FeishuAdapter({
+      id: 'feishu-default',
+      provider: 'feishu',
+      enabled: true,
+      alias: '飞书',
+      config: { appId: 'app-id', appSecret: 'app-secret', streamingEnabled: true },
+    });
+
+    try {
+      (adapter as any).logStreamingSyncPlan('stream-schema', {
+        cardId: 'card-schema',
+        shadowRevision: 4,
+        shadowTrust: 'trusted',
+      }, {
+        kind: 'fullRefresh',
+        reason: 'component_threshold',
+        snapshot: { revision: 5 },
+        diagnostics: {
+          incrementalActionCount: 0,
+          incrementalActionKinds: [],
+          incrementalElementIds: [],
+          desiredComponentCount: 161,
+          directRefreshThreshold: 160,
+          directRefreshRule: 'component_threshold',
+          containsUserTextUpdate: false,
+        },
+      });
+    } finally {
+      console.log = originalLog;
+    }
+
+    const event = logs[0]?.[1] as Record<string, unknown>;
+    assert.equal(event.event, 'perf.card.sync_plan');
+    assert.equal(event.operation, 'fullRefresh');
+    assert.equal(event.reason, 'component_threshold');
+    assert.equal(event.stream_key, 'stream-schema');
+    assert.equal(Object.hasOwn(event, 'kind'), false);
+    assert.equal(Object.hasOwn(event, 'full_refresh_reason'), false);
+    assert.equal(Object.hasOwn(event, 'streamKey'), false);
   });
 
   it('updates the dedicated status element without mutating the main content area', async () => {

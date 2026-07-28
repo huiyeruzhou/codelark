@@ -398,6 +398,11 @@ describe('delivery-pipeline', () => {
     assert.equal(event?.kind, 'response');
     assert.equal(event?.message_id, 'msg-perf-1');
     assert.equal(typeof event?.duration_ms, 'number');
+    assert.equal(event?.session_id, 'session-perf-log');
+    assert.equal(Object.hasOwn(event, 'durationMs'), false);
+    assert.equal(Object.hasOwn(event, 'channelType'), false);
+    assert.equal(Object.hasOwn(event, 'chatId'), false);
+    assert.equal(Object.hasOwn(event, 'ok'), false);
   });
 
   it('does not retry cloud document comment client errors', async () => {
@@ -460,6 +465,12 @@ describe('delivery-pipeline', () => {
       warnings.some((args) => String(args[0]).includes('Outbound rate limiter will delay message')),
       true,
     );
+    const waitEvent = warnings.find((args) => String(args[0]).includes('Outbound rate limiter delayed message'))?.[1] as any;
+    assert.equal(waitEvent?.channel, 'feishu-default');
+    assert.equal(waitEvent?.chat, 'chat-rate-limit-log');
+    assert.equal(typeof waitEvent?.wait_ms, 'number');
+    assert.equal(Object.hasOwn(waitEvent, 'channelType'), false);
+    assert.equal(Object.hasOwn(waitEvent, 'waitMs'), false);
   });
 
   it('sends a high-priority notice when ordinary messages are locally rate limited', async () => {
@@ -556,6 +567,11 @@ describe('delivery-pipeline', () => {
       warnings.some((args) => String(args[0]).includes('Remote rate-limit response; not retrying locally')),
       true,
     );
+    const rateLimitEvent = warnings.find((args) => (
+      String(args[0]).includes('Remote rate-limit response; not retrying locally')
+    ))?.[1] as any;
+    assert.equal(rateLimitEvent?.http_status, 429);
+    assert.equal(Object.hasOwn(rateLimitEvent, 'httpStatus'), false);
   });
 
   it('does not send attachments through IM for direct cloud document delivery', async () => {

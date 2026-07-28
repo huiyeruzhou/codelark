@@ -30,17 +30,17 @@ CodeLark 的可观测性来自四层：
 
 关键性能事件：
 
-- `perf.feishu.request`：飞书 API 请求耗时，常用字段包括 `target`、`operation`、`status`、`duration_ms`、`chat`、`message_id`、`stream_key`。
+- `perf.feishu.request`：逐次飞书 API 请求耗时，常用字段包括 `operation`、`status`、`duration_ms`、`scope`、`chat`、`message_id`、`stream_key`。`card_id` 是请求发生时的 active card；create/idConvert 响应返回的新卡写入 `response_card_id`。
 - `perf.delivery.send`：delivery pipeline 发送耗时，常用字段包括 `channel`、`chat`、`status`、`duration_ms`、`kind`。
-- `perf.card.sync_plan`：CardKit streaming card 同步计划，常用字段包括 `stream_key`、`operation`、`reason`、`full_refresh_reason`、`action_count`、`shadow_trust`。
-- `perf.card.full_refresh_payload`：整卡刷新 payload 规模，常用字段包括 `stream_key`、`component_count`、`payload_bytes`、`markdownCount`、`buttonCount`。
-- `perf.card.lifecycle`：单张流式卡片生命周期汇总，常用字段包括 `terminal_status`、`elapsed_ms`、`flush_attempts`、`flush_failures`、`full_refresh_count`、`api_top`。
+- `perf.card.sync_plan`：CardKit streaming card 同步计划，常用字段包括 `stream_key`、`operation`、`reason`、`action_count`、`shadow_trust`。
+- `perf.card.full_refresh_payload`：整卡刷新 payload 规模和受限正文预览，常用字段包括 `stream_key`、`component_count`、`payload_bytes`、`payload_chars`、`payload_hash`、`payload_preview`、`markdown_previews`、`markdown_count`、`button_count`。
+- `perf.card.lifecycle`：单张流式卡片生命周期汇总，常用字段包括 `terminal_status`、`duration_ms`、`flush_attempts`、`flush_failures`、`full_refresh_count`、`api_top`。
 - `perf.mirror.batch` / `perf.mirror.subscription`：mirror reconcile 批次和慢 subscription，常用字段包括 `runtime`、`duration_ms`、`concurrency`、`binding_id`、`status`。
 - `perf.mirror.subscription_stage`：慢 mirror subscription 的子阶段耗时，当前覆盖 `route_records` 和 `deliver_turns`，用于区分本地 JSONL 读取与下游 runtime/飞书投递等待。
 - `perf.thread_table_pin`：线程表置顶后台任务耗时，常用字段包括 `channel`、`chat`、`scope`、`status`、`duration_ms`、`message_id`、`previous_pinned_message_id`。
 - `perf.feishu.card_action_response`：飞书卡片按钮、下拉或表单从 SDK 分发到返回 toast 的耗时；`budget_ms=2000`，这里只应包含解析和入队，不包含后台命令或卡片更新。
 - `perf.feishu.request`：单次飞书 API 耗时。CardKit/interactive card 默认上限 10 秒，`card.idConvert:rich-command-card` 上限 2 秒；超时文本中的预算与 `duration_ms` 可用于识别事件循环阻塞导致的定时器迟到。
-- `perf.delivery.queue_wait`：同聊天投递队列等待，`queueClass` 区分 `interactive` 与 `ordinary`。interactive 长等待优先检查前序 CardKit 恢复/更新，不能笼统归因于飞书拥塞。
+- `perf.delivery.queue_wait`：同聊天投递队列等待，`queue_class` 区分 `interactive` 与 `ordinary`。interactive 长等待优先检查前序 CardKit 恢复/更新，不能笼统归因于飞书拥塞。
 - `adapter.message.scheduled` / `adapter.message.started` / `adapter.message.finished`：adapter 入口生成的消息 span timeline；普通 command/callback 使用 chat job 并发执行，只在同 chat 存在 active conversation barrier 时等待；regular prompt 使用 `session:<session_id>` lane；`/runtime`、`/provider`、`/clear`、`/cd`、`/model`、`/mode`、`/sandbox`、`/network`、`/reasoning`、`/current-config`、session-mutating `/t` 等命令会进入 session queue 并声明 `conversation_barrier=true`，阻塞同一对话后续非 control command/job；`/stop`/permission/screen-stop 等高优先级控制消息使用 control lane；`/tmux-screen`、`/pty-screen`、`/shell` 使用 job lane，其中 screen monitor job 不等待 conversation barrier，`/shell` 等普通 job 仍等待。可直接按 `span_id`、`parent_span_id`、`lane`、`lane_kind`、`job_kind`、`conversation_barrier`、`message_id`、`session_id`、`started_at_ms`、`ended_at_ms`、`duration_ms` 聚合。
 - `adapter.message.wait` / `adapter.message.handler`：adapter 队列等待和 handler 慢路径告警，复用同一 span 字段；排队阻塞关系写入 `blocked_by_span_id`、`blocked_by_message_id`、`blocked_by_session_id`、`blocked_by_category`、`blocked_by_started_at_ms`、`blocked_by_age_ms`。
 - `session.executor.scheduled` / `session.executor.started` / `session.executor.finished`：BridgeSession 串行执行队列的结构化事件，常用字段包括 `session_id`、`job_kind`、`queued_before`、`queued_after`、`wait_ms`、`raw_wait_ms`、`run_ms`、`status`。

@@ -1020,5 +1020,14 @@ describe('mirror-runtime pending deliveries', () => {
       ));
     assert.ok(stageSummaries.some((entry) => entry.stage === 'route_records'));
     assert.ok(stageSummaries.some((entry) => entry.stage === 'deliver_turns'));
+    for (const summary of stageSummaries) {
+      assert.equal(typeof summary.duration_ms, 'number');
+      assert.equal(Object.hasOwn(summary, 'bindingId'), false);
+      assert.equal(Object.hasOwn(summary, 'sessionId'), false);
+      assert.equal(Object.hasOwn(summary, 'threadId'), false);
+      assert.equal(Object.hasOwn(summary, 'elapsedMs'), false);
+      assert.equal(Object.hasOwn(summary, 'recordCount'), false);
+      assert.equal(Object.hasOwn(summary, 'turnCount'), false);
+    }
   });
 });

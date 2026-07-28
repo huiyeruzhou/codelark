@@ -552,16 +552,22 @@ CodeLark 自有数据位于 `~/.codelark`：
 
 Codex 自有数据仍位于 `~/.codex`，Claude Code 自有 JSONL 由 Claude Code 生成，Kimi Code 自有 `wire.jsonl` 位于 `~/.kimi-code`。CodeLark 只读使用这些本地 runtime 文件。
 
-### 系统日志的后续收敛项
+### 系统日志契约
 
-当前 `logs/bridge.log` 已能定位 Feishu API、流式卡片 diff、session lane 和 runtime 生命周期问题，但结构化契约尚未完全统一。后续日志重构必须保持现有诊断能力，并按以下顺序收敛，不能在无回归证据时一次性改写全部调用点：
+`logs/bridge.log` 是一行一条 JSON 的默认诊断日志。核心事件顶层字段统一使用 snake_case；同一个概念不再同时写 `duration_ms/durationMs`、`card_id/cardId` 或 `stream_key/streamKey`。不同语义不能因为值偶尔相同而合并：`perf.feishu.request.card_id` 表示请求发生时的 active card，`response_card_id` 表示 API 响应返回的新卡。
 
-1. 统一事件 envelope：`event`、`component`、`operation`、`phase`、`status`、`duration_ms` 和关联 ID 使用一套 snake_case 字段；同一条记录不再同时写 `duration_ms/durationMs`、`card_id/cardId`、`stream_key/streamKey`。
-2. 降低成功快路径噪声：单次 Feishu `Request success` 改为 debug 或按窗口聚合；失败、超时、慢请求和生命周期终态继续逐条保留。不能为了降日志量删除性能定位所需的 target、scope、duration 和返回码。
-3. payload 日志分层：INFO 只保留 bytes、组件数、hash、element IDs 和 diff 决策；完整 preview/markdown preview 只在显式诊断模式输出，并继续执行脱敏与长度上限，避免每次 full refresh 重复记录大段用户内容。
-4. 为核心 event 建立 schema/contract 测试：必填字段、类型、错误结构和敏感字段脱敏必须可自动验证；普通 `console.*` 兼容入口逐步迁移到具名 logger，但不引入第二套并行日志系统。
+默认日志保留每一次 Feishu 请求的成功、失败、超时和耗时，也保留卡片 payload 的既有受限 preview、markdown preview、hash、组件统计与逐次同步计划。不能用聚合、采样或额外环境变量把这些证据移出默认排障路径。日志文件本身按 10 MiB 轮转并保留 3 个历史文件，因此默认磁盘占用有界；优化目标是语义清晰、可定位和无重复，不是单纯减少字节。
 
-这是一项独立维护任务，不与工具卡或版本更新补丁混做。实施前先用真实 bridge 日志建立事件频率、字节占比和诊断查询基线，再分阶段迁移高频事件。
+核心事件使用以下共同字段：
+
+- `event`：稳定事件名。
+- `operation`：本次执行的 API 或计划动作；不再同时写同义 `target`/`kind`。
+- `status`：本次结果；不再同时写同义 `phase`。生命周期自身的结束原因使用 `terminal_status`。
+- `duration_ms`：一次操作或完整生命周期耗时。等待使用 `wait_ms`，预算使用 `budget_ms`。
+- `channel`、`chat`、`session_id`、`message_id`、`stream_key`、`card_id`：关联身份。
+- `detail`、`error`、`response_msg` 和 payload preview：默认保留的原始诊断信息，继续经过脱敏与已有长度上限。
+
+`scripts/analyze-bridge-log.js` 读取上述 canonical 字段，同时兼容轮转文件中的旧 camelCase、`phase` 和 `target`。真实 Feishu E2E checkpoint 是独立测试协议，仍由 dump 层兼容读取，不反向约束生产日志字段。
 
 ## 迁移边界
 

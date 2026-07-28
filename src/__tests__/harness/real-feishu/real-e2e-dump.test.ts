@@ -65,8 +65,21 @@ describe('unit::real-e2e-dump::live-log-scoping', () => {
       fs.writeFileSync(path.join(logsDir, 'bridge.log'), [
         "[INFO] Streaming card create payload: { streamKey: 'mirror:old-session:old-turn', chatId: 'oc_unrelated' }",
         "[INFO] Request success: scope=oc_unrelated, target=im.message.create:interactive, message_id=om_old",
-        `[INFO] Streaming card create payload: { streamKey: 'im:${bridgeSessionId}:om_target', chatId: '${chatId}' }`,
-        `[INFO] Request success: scope=${chatId}, target=im.message.reply:post, message_id=om_target_reply`,
+        JSON.stringify({
+          level: 'INFO',
+          msg: 'Streaming card create payload:',
+          stream_key: `im:${bridgeSessionId}:om_target`,
+          chat: chatId,
+        }),
+        JSON.stringify({
+          level: 'INFO',
+          event: 'perf.feishu.request',
+          status: 'success',
+          scope: chatId,
+          operation: 'im.message.reply:post',
+          message_id: 'om_target_reply',
+          msg: 'Request success:',
+        }),
       ].join('\n'));
 
       const report = collectRealE2eDump({

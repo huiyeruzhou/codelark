@@ -276,18 +276,40 @@ function findSession(
   return undefined;
 }
 
+function parseStructuredLogRecords(text: string): Array<Record<string, unknown>> {
+  const records: Array<Record<string, unknown>> = [];
+  for (const line of text.split(/\r?\n/)) {
+    try {
+      const parsed = JSON.parse(line) as unknown;
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        records.push(parsed as Record<string, unknown>);
+      }
+    } catch {
+      // Legacy plain-text bridge logs are handled by the regex fallbacks below.
+    }
+  }
+  return records;
+}
+
 function extractStreamKeys(text: string): string[] {
-  return Array.from(new Set(
-    Array.from(text.matchAll(/streamKey\s*[=:]\s*'?([A-Za-z0-9:_-]+)/g)).map((match) => match[1])
-      .concat(Array.from(text.matchAll(/streamKey=([A-Za-z0-9:_-]+)/g)).map((match) => match[1])),
-  ));
+  const structured = parseStructuredLogRecords(text).flatMap((record) => {
+    const value = record.stream_key ?? record.streamKey;
+    return typeof value === 'string' ? [value] : [];
+  });
+  const legacy = Array.from(text.matchAll(/(?:stream_key|streamKey)\s*[=:]\s*'?([A-Za-z0-9:_-]+)/g))
+    .map((match) => match[1]);
+  return Array.from(new Set([...structured, ...legacy]));
 }
 
 function extractResponseMessageIds(text: string): string[] {
-  return Array.from(new Set(
-    Array.from(text.matchAll(/message_id=([A-Za-z0-9_-]+)/g)).map((match) => match[1])
-      .concat(Array.from(text.matchAll(/messageId: '([^']+)'/g)).map((match) => match[1])),
-  ));
+  const structured = parseStructuredLogRecords(text).flatMap((record) => {
+    if (record.event !== 'perf.feishu.request' || record.status === 'start' || record.phase === 'start') return [];
+    const value = record.message_id ?? record.messageId;
+    return typeof value === 'string' ? [value] : [];
+  });
+  const legacy = Array.from(text.matchAll(/message_id=([A-Za-z0-9_-]+)/g)).map((match) => match[1])
+    .concat(Array.from(text.matchAll(/messageId: '([^']+)'/g)).map((match) => match[1]));
+  return Array.from(new Set([...structured, ...legacy]));
 }
 
 const STREAM_CARD_CHECKPOINT_PREFIX = '[real-feishu-e2e:stream-card-checkpoint] ';

@@ -150,7 +150,7 @@ snapshotStreamingDesiredState(state)
 
 飞书 `card.action.trigger` 必须在 2 秒内返回。SDK 回调只允许完成 callback data 解析、构造内部消息、入队并返回 toast；按钮、下拉、表单和确认卡共享这一条边界。文件扫描、配置写盘、命令执行、CardKit 恢复和卡片更新全部在返回后执行。`perf.feishu.card_action_response` 单独记录这段耗时，不能用后台命令的 `adapter.message.finished` 冒充 ACK 耗时。
 
-CardKit create/update/settings/element 与 interactive/rich-card message 请求使用 10 秒上限；`card.idConvert` 只是恢复旧卡的优化路径，最多等待 2 秒，失败后立即创建替代卡。interactive delivery queue 仍按聊天保序，但任何可降级恢复请求都不得长期占住队头；`perf.delivery.queue_wait.queueClass` 用于区分 interactive 与 ordinary 排队。
+CardKit create/update/settings/element 与 interactive/rich-card message 请求使用 10 秒上限；`card.idConvert` 只是恢复旧卡的优化路径，最多等待 2 秒，失败后立即创建替代卡。interactive delivery queue 仍按聊天保序，但任何可降级恢复请求都不得长期占住队头；`perf.delivery.queue_wait.queue_class` 用于区分 interactive 与 ordinary 排队。
 
 新增工具与状态栏刷新必须保持为两个 CardKit 动作：先原子创建或更新工具 history，再单独更新 `streaming_status`。这既保持工具调用的原子边界，也让 footer 保留流式效果；不能为了合并请求而把工具正文和状态栏一起重绘成整张卡。
 
@@ -333,10 +333,10 @@ CardKit 的 `streaming_mode` 只影响文本流式上屏的表现，不应成为
 
 `Streaming card perf summary` 建议重点看：
 
-- 基础：`streamKey`、`chatId`、`cardId`、`messageId`、`elapsedMs`。
-- 首屏：`createCardMs`、`sendMessageMs`、`initialPayloadBytes`、`initialComponentCount`。
-- flush：`flushAttempts`、`flushSuccesses`、`flushFailures`、`flushTimeouts`、`flushQueuedCount`。
-- plan：`noopCount`、`batchUpdateCount`、`fullRefreshCount`、`fullRefreshReasons`。
-- API 汇总：按 target 记录 `count`、`timeoutCount`、`totalMs`、`maxMs`。
-- payload：`maxPayloadBytes`、`maxComponentCount`、`finalPayloadBytes`、`finalComponentCount`。
-- finalize：`finalizeWaitMs`、`settingsMs`、`finalUpdateMs`、`backgroundFinalize`。
+- 基础：`stream_key`、`chat`、`card_id`、`message_id`、`duration_ms`。
+- 首屏：`create_card_ms`、`send_message_ms`、`initial_payload_bytes`、`initial_component_count`。
+- flush：`flush_attempts`、`flush_successes`、`flush_failures`、`flush_timeouts`、`flush_queued_count`。
+- plan：`noop_count`、`batch_update_count`、`full_refresh_count`、`full_refresh_reasons`。
+- API 汇总：`api_top` 按 `operation` 记录 `count`、`timeout_count`、`error_count`、`total_ms`、`max_ms`、`avg_ms`。
+- payload：`max_payload_bytes`、`max_component_count`、`final_payload_bytes`、`final_component_count`。
+- finalize：`finalize_wait_ms`、`settings_ms`、`final_update_ms`、`background_finalize`。

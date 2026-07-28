@@ -186,13 +186,9 @@ export function createMirrorRuntime(
       runtime_label: runtimeLabel,
       stage,
       binding_id: subscription.bindingId,
-      bindingId: subscription.bindingId,
       session_id: subscription.sessionId ?? null,
-      sessionId: subscription.sessionId ?? null,
       thread_id: subscription.threadId ?? null,
-      threadId: subscription.threadId ?? null,
       duration_ms: elapsedMs,
-      elapsedMs,
       ...extra,
     });
   }
@@ -449,14 +445,14 @@ export function createMirrorRuntime(
         subscription,
         'route_records',
         () => deps.routeRuntimeRecords!(runtimeName, subscription.sessionId, subscription.threadId, unsuppressedRecords),
-        { record_count: unsuppressedRecords.length, recordCount: unsuppressedRecords.length },
+        { record_count: unsuppressedRecords.length },
       );
     } else if (unsuppressedRecords.length > 0 && deps.routeCodexRecords) {
       routeResult = await measureMirrorSubscriptionStage(
         subscription,
         'route_records',
         () => deps.routeCodexRecords!(subscription.sessionId, subscription.threadId, unsuppressedRecords),
-        { record_count: unsuppressedRecords.length, recordCount: unsuppressedRecords.length },
+        { record_count: unsuppressedRecords.length },
       );
     } else {
       routeResult = { claimed: [], unclaimed: unsuppressedRecords, terminalClaimed: false };
@@ -486,7 +482,7 @@ export function createMirrorRuntime(
         subscription,
         'deliver_turns',
         () => deps.deliverMirrorTurns(subscription, turnsToAttempt),
-        { turn_count: turnsToAttempt.length, turnCount: turnsToAttempt.length },
+        { turn_count: turnsToAttempt.length },
       );
       if (deliveryResult.deliveredCount > 0) {
         removePendingMirrorDeliveries(subscription, turnsToAttempt.slice(0, deliveryResult.deliveredCount));
@@ -580,13 +576,9 @@ export function createMirrorRuntime(
             runtime_label: runtimeLabel,
             status: summary.status,
             binding_id: summary.bindingId,
-            bindingId: summary.bindingId,
             session_id: summary.sessionId ?? null,
-            sessionId: summary.sessionId ?? null,
             thread_id: summary.threadId ?? null,
-            threadId: summary.threadId ?? null,
             duration_ms: summary.elapsedMs,
-            elapsedMs: summary.elapsedMs,
           });
         },
         logBatchSummary: (summary) => {
@@ -603,7 +595,6 @@ export function createMirrorRuntime(
             failed: summary.failed,
             concurrency: summary.concurrency,
             duration_ms: summary.elapsedMs,
-            elapsedMs: summary.elapsedMs,
           });
         },
       });

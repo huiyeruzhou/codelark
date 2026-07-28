@@ -161,23 +161,30 @@ function buildAdapterSpans(entries) {
 
 function buildFeishuRequests(entries) {
   return entries
-    .filter((entry) => entry.event === 'perf.feishu.request' && Number.isFinite(entry.duration_ms))
+    .filter((entry) => (
+      entry.event === 'perf.feishu.request'
+      && entry.status !== 'start'
+      && entry.phase !== 'start'
+      && Number.isFinite(entry.duration_ms)
+    ))
     .map((entry) => {
       const endMs = entry.__time_ms;
       const durationMs = Number(entry.duration_ms);
+      const operation = entry.operation || entry.target || 'unknown';
       return {
         time: entry.time,
         end_ms: endMs,
         start_ms: endMs - durationMs,
         duration_ms: durationMs,
-        operation: entry.operation || entry.target || 'unknown',
-        target: entry.target || entry.operation || 'unknown',
+        operation,
+        target: operation,
         scope: entry.scope || '',
         status: entry.status || entry.phase || '',
-        phase: entry.phase || '',
+        phase: entry.phase || entry.status || '',
         chat: entry.chat || entry.chatId || '',
         stream_key: entry.stream_key || entry.streamKey || '',
         card_id: entry.card_id || entry.cardId || '',
+        response_card_id: entry.response_card_id || '',
         message_id: entry.message_id || entry.messageId || '',
         response_msg: entry.response_msg || '',
         detail: entry.detail || '',

@@ -678,11 +678,11 @@ function shortHash(value: string): string {
 
 function summarizeTextForCardLog(value: string): Record<string, unknown> {
   return {
-    chars: value.length,
-    bytes: Buffer.byteLength(value, 'utf8'),
-    lines: value ? value.split(/\r\n|\r|\n/).length : 0,
-    sha256: shortHash(value),
-    preview: truncateForCardLog(value),
+    payload_chars: value.length,
+    payload_bytes: Buffer.byteLength(value, 'utf8'),
+    payload_lines: value ? value.split(/\r\n|\r|\n/).length : 0,
+    payload_hash: shortHash(value),
+    payload_preview: truncateForCardLog(value),
   };
 }
 
@@ -733,17 +733,48 @@ function summarizeCardJsonForLog(cardJson: string): Record<string, unknown> {
       formSubmitButtonCount: 0,
     };
     collectCardJsonDiagnostics(parsed, stats);
-    summary.elementIds = [...new Set(stats.elementIds)];
-    summary.names = [...new Set(stats.names)];
-    summary.markdownPreviews = stats.markdownPreviews;
-    summary.markdownCount = stats.markdownCount;
-    summary.buttonCount = stats.buttonCount;
-    summary.callbackCount = stats.callbackCount;
-    summary.formSubmitButtonCount = stats.formSubmitButtonCount;
+    summary.element_ids = [...new Set(stats.elementIds)];
+    summary.element_names = [...new Set(stats.names)];
+    summary.markdown_previews = stats.markdownPreviews.map((item) => ({
+      element_id: item.elementId,
+      preview: item.preview,
+    }));
+    summary.markdown_count = stats.markdownCount;
+    summary.button_count = stats.buttonCount;
+    summary.callback_count = stats.callbackCount;
+    summary.form_submit_button_count = stats.formSubmitButtonCount;
   } catch (err) {
-    summary.parseError = err instanceof Error ? err.message : String(err);
+    summary.parse_error = err instanceof Error ? err.message : String(err);
   }
   return summary;
+}
+
+function summarizeCardJsonForCheckpoint(cardJson: string): Record<string, unknown> {
+  const summary = summarizeCardJsonForLog(cardJson);
+  const markdownPreviews = Array.isArray(summary.markdown_previews)
+    ? summary.markdown_previews.map((item) => {
+        const record = item as Record<string, unknown>;
+        return {
+          elementId: typeof record.element_id === 'string' ? record.element_id : undefined,
+          preview: String(record.preview || ''),
+        };
+      })
+    : [];
+  return {
+    chars: summary.payload_chars,
+    bytes: summary.payload_bytes,
+    lines: summary.payload_lines,
+    sha256: summary.payload_hash,
+    preview: summary.payload_preview,
+    elementIds: summary.element_ids,
+    names: summary.element_names,
+    markdownPreviews,
+    markdownCount: summary.markdown_count,
+    buttonCount: summary.button_count,
+    callbackCount: summary.callback_count,
+    formSubmitButtonCount: summary.form_submit_button_count,
+    ...(summary.parse_error ? { parseError: summary.parse_error } : {}),
+  };
 }
 
 function createFeishuCardPerfStats(params: {
@@ -814,14 +845,26 @@ function recordFeishuCardPayloadPerf(
   perf.maxComponentCount = Math.max(perf.maxComponentCount, componentCount);
 }
 
-function summarizeFeishuCardPerfApi(perf: FeishuCardPerfStats): Array<FeishuCardApiPerfStats & { target: string; avgMs: number }> {
+function summarizeFeishuCardPerfApi(perf: FeishuCardPerfStats): Array<{
+  operation: string;
+  count: number;
+  timeout_count: number;
+  error_count: number;
+  total_ms: number;
+  max_ms: number;
+  avg_ms: number;
+}> {
   return Object.entries(perf.api)
-    .map(([target, stats]) => ({
-      target,
-      ...stats,
-      avgMs: stats.count > 0 ? Math.round(stats.totalMs / stats.count) : 0,
+    .map(([operation, stats]) => ({
+      operation,
+      count: stats.count,
+      timeout_count: stats.timeoutCount,
+      error_count: stats.errorCount,
+      total_ms: stats.totalMs,
+      max_ms: stats.maxMs,
+      avg_ms: stats.count > 0 ? Math.round(stats.totalMs / stats.count) : 0,
     }))
-    .sort((left, right) => right.totalMs - left.totalMs)
+    .sort((left, right) => right.total_ms - left.total_ms)
     .slice(0, 12);
 }
 
@@ -1014,7 +1057,7 @@ function emitRealE2eStreamCardCheckpoint(params: {
       : [];
     const markdownTexts = (params.markdownTexts || (parsed ? collectCardJsonMarkdownTexts(parsed) : []))
       .map((text) => truncateForCardLog(text, 1000));
-    const cardSummary = params.cardJson ? summarizeCardJsonForLog(params.cardJson) : {};
+    const cardSummary = params.cardJson ? summarizeCardJsonForCheckpoint(params.cardJson) : {};
     const toolPanels = parsed ? collectRealE2eToolPanelSummaries(parsed) : [];
     const toolGroups = parsed ? collectRealE2eToolGroupSummaries(parsed) : [];
     console.log(`${REAL_E2E_STREAM_CARD_CHECKPOINT_PREFIX}${JSON.stringify({
@@ -3047,11 +3090,8 @@ export class FeishuAdapter extends BaseChannelAdapter {
       const fields = {
         event: 'perf.feishu.card_action_response',
         duration_ms: durationMs,
-        durationMs,
         budget_ms: CARD_ACTION_RESPONSE_BUDGET_MS,
-        budgetMs: CARD_ACTION_RESPONSE_BUDGET_MS,
         within_budget: durationMs < CARD_ACTION_RESPONSE_BUDGET_MS,
-        withinBudget: durationMs < CARD_ACTION_RESPONSE_BUDGET_MS,
       };
       if (durationMs >= CARD_ACTION_RESPONSE_BUDGET_MS) {
         console.warn('[feishu-adapter] Card action response exceeded budget:', fields);
@@ -3356,9 +3396,9 @@ export class FeishuAdapter extends BaseChannelAdapter {
       const initialCardJson = JSON.stringify(cardBody);
       const initialPayloadBytes = Buffer.byteLength(initialCardJson, 'utf8');
       console.log('[feishu-adapter] Streaming card create payload:', {
-        streamKey: cardKey,
-        chatId,
-        componentCount: render.componentCount,
+        stream_key: cardKey,
+        chat: chatId,
+        component_count: render.componentCount,
         ...summarizeCardJsonForLog(initialCardJson),
       });
       emitRealE2eStreamCardCheckpoint({
@@ -4020,39 +4060,22 @@ export class FeishuAdapter extends BaseChannelAdapter {
     if (!shouldLog) return;
     console.log('[feishu-adapter] Streaming sync plan:', {
       event: 'perf.card.sync_plan',
-      streamKey,
       stream_key: streamKey,
-      cardId: state.cardId,
       card_id: state.cardId,
-      desiredRevision: plan.snapshot.revision,
       desired_revision: plan.snapshot.revision,
-      shadowRevision: state.shadowRevision,
       shadow_revision: state.shadowRevision,
-      shadowTrust: state.shadowTrust,
       shadow_trust: state.shadowTrust,
-      kind: plan.kind,
       operation: plan.kind,
       reason: plan.reason,
-      full_refresh_reason: plan.kind === 'fullRefresh' ? plan.reason : undefined,
-      actionCount: plan.kind === 'batchUpdate' ? plan.actions.length : 0,
       action_count: plan.kind === 'batchUpdate' ? plan.actions.length : 0,
-      incrementalActionCount: plan.diagnostics.incrementalActionCount,
       incremental_action_count: plan.diagnostics.incrementalActionCount,
-      incrementalActionKinds: plan.diagnostics.incrementalActionKinds,
       incremental_action_kinds: plan.diagnostics.incrementalActionKinds,
-      incrementalElementIds: plan.diagnostics.incrementalElementIds,
       incremental_element_ids: plan.diagnostics.incrementalElementIds,
-      importantElementIds,
       important_element_ids: importantElementIds,
-      desiredComponentCount: plan.diagnostics.desiredComponentCount,
       desired_component_count: plan.diagnostics.desiredComponentCount,
-      directRefreshThreshold: plan.diagnostics.directRefreshThreshold,
       direct_refresh_threshold: plan.diagnostics.directRefreshThreshold,
-      directRefreshRule: plan.diagnostics.directRefreshRule,
       direct_refresh_rule: plan.diagnostics.directRefreshRule,
-      containsUserTextUpdate: plan.diagnostics.containsUserTextUpdate,
       contains_user_text_update: plan.diagnostics.containsUserTextUpdate,
-      trustAfterSuccess: plan.kind === 'batchUpdate' ? plan.trustAfterSuccess : undefined,
       trust_after_success: plan.kind === 'batchUpdate' ? plan.trustAfterSuccess : undefined,
     });
   }
@@ -4239,23 +4262,16 @@ export class FeishuAdapter extends BaseChannelAdapter {
     );
     if (rolloverOffsets) {
       console.log('[feishu-adapter] Streaming card threshold reached; opening continuation card:', {
-        streamKey,
-        cardId: state.cardId,
+        stream_key: streamKey,
+        card_id: state.cardId,
         reason: rolloverOffsets.reason,
-        componentCount: rolloverOffsets.componentCount,
         component_count: rolloverOffsets.componentCount,
-        payloadBytes: rolloverOffsets.payload?.payloadBytes,
         payload_bytes: rolloverOffsets.payload?.payloadBytes,
-        payloadChars: rolloverOffsets.payload?.payloadChars,
         payload_chars: rolloverOffsets.payload?.payloadChars,
-        markdownCount: rolloverOffsets.payload?.markdownCount,
         markdown_count: rolloverOffsets.payload?.markdownCount,
         limit: STREAMING_CARD_COMPONENT_LIMIT,
-        payloadBytesLimit: STREAMING_CARD_PAYLOAD_BYTES_LIMIT,
         payload_bytes_limit: STREAMING_CARD_PAYLOAD_BYTES_LIMIT,
-        payloadCharsLimit: STREAMING_CARD_PAYLOAD_CHARS_LIMIT,
         payload_chars_limit: STREAMING_CARD_PAYLOAD_CHARS_LIMIT,
-        markdownCountLimit: STREAMING_CARD_MARKDOWN_COUNT_LIMIT,
         markdown_count_limit: STREAMING_CARD_MARKDOWN_COUNT_LIMIT,
       });
       const rolled = await this.rolloverStreamingCard(
@@ -4827,11 +4843,11 @@ export class FeishuAdapter extends BaseChannelAdapter {
 
       state.sequence++;
       console.log('[feishu-adapter] Final card update payload:', {
-        streamKey: cardKey,
-        cardId: state.cardId,
+        stream_key: cardKey,
+        card_id: state.cardId,
         status,
         sequence: state.sequence,
-        componentCount: finalComponentCount,
+        component_count: finalComponentCount,
         ...summarizeCardJsonForLog(finalCardJson),
       });
       emitRealE2eStreamCardCheckpoint({
@@ -5114,62 +5130,33 @@ export class FeishuAdapter extends BaseChannelAdapter {
     const apiTop = summarizeFeishuCardPerfApi(perf);
     console.log('[feishu-adapter] Streaming card perf summary:', {
       event: 'perf.card.lifecycle',
-      streamKey,
       stream_key: streamKey,
-      chatId: state.chatId,
       chat: state.chatId,
-      chat_id: state.chatId,
-      cardId: state.cardId,
       card_id: state.cardId,
-      messageId: state.messageId,
       message_id: state.messageId,
-      terminalStatus,
       terminal_status: terminalStatus,
-      elapsedMs,
-      elapsed_ms: elapsedMs,
-      createCardMs: perf.createCardMs,
+      duration_ms: elapsedMs,
       create_card_ms: perf.createCardMs,
-      sendMessageMs: perf.sendMessageMs,
       send_message_ms: perf.sendMessageMs,
-      initialPayloadBytes: perf.initialPayloadBytes,
       initial_payload_bytes: perf.initialPayloadBytes,
-      initialComponentCount: perf.initialComponentCount,
       initial_component_count: perf.initialComponentCount,
-      flushAttempts: perf.flushAttempts,
       flush_attempts: perf.flushAttempts,
-      flushSuccesses: perf.flushSuccesses,
       flush_successes: perf.flushSuccesses,
-      flushFailures: perf.flushFailures,
       flush_failures: perf.flushFailures,
-      flushTimeouts: perf.flushTimeouts,
       flush_timeouts: perf.flushTimeouts,
-      flushQueuedCount: perf.flushQueuedCount,
       flush_queued_count: perf.flushQueuedCount,
-      noopCount: perf.noopCount,
       noop_count: perf.noopCount,
-      batchUpdateCount: perf.batchUpdateCount,
       batch_update_count: perf.batchUpdateCount,
-      fullRefreshCount: perf.fullRefreshCount,
       full_refresh_count: perf.fullRefreshCount,
-      fullRefreshReasons: perf.fullRefreshReasons,
       full_refresh_reasons: perf.fullRefreshReasons,
-      maxPayloadBytes: perf.maxPayloadBytes,
       max_payload_bytes: perf.maxPayloadBytes,
-      maxComponentCount: perf.maxComponentCount,
       max_component_count: perf.maxComponentCount,
-      finalPayloadBytes: perf.finalPayloadBytes,
       final_payload_bytes: perf.finalPayloadBytes,
-      finalComponentCount: perf.finalComponentCount,
       final_component_count: perf.finalComponentCount,
-      finalizeWaitMs: perf.finalizeWaitMs,
       finalize_wait_ms: perf.finalizeWaitMs,
-      settingsMs: perf.settingsMs,
       settings_ms: perf.settingsMs,
-      finalUpdateMs: perf.finalUpdateMs,
       final_update_ms: perf.finalUpdateMs,
-      backgroundFinalize: perf.backgroundFinalize,
       background_finalize: perf.backgroundFinalize,
-      apiTop,
       api_top: apiTop,
     });
   }
@@ -5256,15 +5243,11 @@ export class FeishuAdapter extends BaseChannelAdapter {
       recordFeishuCardPayloadPerf(state.perf, payloadBytes, render.componentCount);
       console.log('[feishu-adapter] Streaming card full refresh payload:', {
         event: 'perf.card.full_refresh_payload',
-        streamKey,
         stream_key: streamKey,
-        cardId: state.cardId,
         card_id: state.cardId,
         sequence: state.sequence,
         operation: 'fullRefresh',
-        componentCount: render.componentCount,
         component_count: render.componentCount,
-        payload_bytes: payloadBytes,
         ...summarizeCardJsonForLog(refreshCardJson),
       });
       emitRealE2eStreamCardCheckpoint({
@@ -5356,25 +5339,23 @@ export class FeishuAdapter extends BaseChannelAdapter {
   ): void {
     const durationMs = Math.max(0, Date.now() - startedAt);
     const activeCard = this.activeCards.get(scope);
+    const responseFields = summarizeFeishuResponseFields(response);
+    const responseCardId = responseFields.card_id;
+    delete responseFields.card_id;
     const fields = {
       event: 'perf.feishu.request',
-      phase,
       status: phase,
       scope,
-      target,
       operation: target,
       duration_ms: durationMs,
-      durationMs,
       ...(activeCard ? {
         stream_key: scope,
-        streamKey: scope,
         chat: activeCard.chatId,
-        chatId: activeCard.chatId,
         card_id: activeCard.cardId,
-        cardId: activeCard.cardId,
       } : {}),
+      ...(typeof responseCardId !== 'undefined' ? { response_card_id: responseCardId } : {}),
       ...(detail ? { detail } : {}),
-      ...summarizeFeishuResponseFields(response),
+      ...responseFields,
     };
     const message = `Request ${phase}:`;
     if (phase === 'start' || phase === 'success') {
@@ -6164,16 +6145,16 @@ export class FeishuAdapter extends BaseChannelAdapter {
   ): Promise<SendResult> {
     const cardContent = buildRichCardContent(card, chatId);
     console.log('[feishu-adapter] Rich card payload:', {
-      chatId,
+      chat: chatId,
       title: card.title,
-      updateKey: card.updateKey,
-      replyToMessageId,
-      updateMessageId,
-      hasForm: Boolean(card.form),
-      formOptionElementId: card.form?.optionElementId,
-      formInputElementId: card.form?.inputElementId,
-      formOptionCount: card.form?.options.length || 0,
-      actionCount: card.actions?.flat().length || 0,
+      update_key: card.updateKey,
+      reply_to_message_id: replyToMessageId,
+      update_message_id: updateMessageId,
+      has_form: Boolean(card.form),
+      form_option_element_id: card.form?.optionElementId,
+      form_input_element_id: card.form?.inputElementId,
+      form_option_count: card.form?.options.length || 0,
+      action_count: card.actions?.flat().length || 0,
       ...summarizeCardJsonForLog(cardContent),
     });
     const updateKey = card.updateKey?.trim();
