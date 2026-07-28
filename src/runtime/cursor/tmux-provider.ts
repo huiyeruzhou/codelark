@@ -25,9 +25,15 @@ import {
 } from './session-index.js';
 
 const DEFAULT_POLL_INTERVAL_MS = 500;
-const DEFAULT_INPUT_READY_TIMEOUT_MS = 30_000;
+const DEFAULT_INPUT_READY_TIMEOUT_MS = 180_000;
+const INPUT_READY_PROGRESS_INTERVAL_MS = 10_000;
+const INPUT_SUBMISSION_RETRY_INTERVAL_MS = 1_000;
+const INPUT_SUBMISSION_CONFIRMATION_GRACE_MS = 300;
 const DEFAULT_SESSION_FILE_TIMEOUT_MS = 30_000;
 const DEFAULT_OUTPUT_IDLE_TIMEOUT_MS = 120_000;
+
+class CursorInputReadinessTimeoutError extends Error {}
+class CursorInputSubmissionTimeoutError extends Error {}
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -126,6 +132,14 @@ export function isCursorInputReadyScreen(screen: string): boolean {
   return hasPrompt || (hasMode && hasContext);
 }
 
+function cursorInputHasDraft(screen: string): boolean {
+  const normalized = normalizeScreen(screen);
+  const promptLines = normalized.split('\n').filter((line) => /^\s*[>›❯→]\s*/u.test(line));
+  const promptText = promptLines.at(-1)?.replace(/^\s*[>›❯→]\s*/u, '').trim() || '';
+  if (!promptText) return false;
+  return !/^(?:Plan, search, build anything|Add a follow-up|Ask anything)[.!]?$/i.test(promptText);
+}
+
 function assertCursorPaneAlive(screen: string): void {
   const authenticationError = cursorAuthenticationScreenError(screen);
   if (authenticationError) throw new Error(authenticationError);
@@ -165,7 +179,11 @@ async function launchCursorTmuxSession(sessionName: string, params: StreamChatPa
   });
 }
 
-async function waitForCursorInputReady(sessionName: string, targetPane: string): Promise<void> {
+async function waitForCursorInputReady(
+  sessionName: string,
+  targetPane: string,
+  onProgress?: (elapsedMs: number) => void,
+): Promise<void> {
   const timeoutMs = positiveIntEnv(
     'CODELARK_CURSOR_TMUX_INPUT_READY_TIMEOUT_MS',
     DEFAULT_INPUT_READY_TIMEOUT_MS,
@@ -177,12 +195,18 @@ async function waitForCursorInputReady(sessionName: string, targetPane: string):
     50,
   );
   const startedAt = Date.now();
+  let lastProgressAt = startedAt;
   let lastScreen = '';
   while (Date.now() - startedAt <= timeoutMs) {
     const capture = await tmuxCore.capturePane(targetPane, 160);
     lastScreen = capture.screen;
     assertCursorPaneAlive(lastScreen);
     if (isCursorInputReadyScreen(lastScreen)) return;
+    const now = Date.now();
+    if (onProgress && now - lastProgressAt >= INPUT_READY_PROGRESS_INTERVAL_MS) {
+      lastProgressAt = now;
+      onProgress(now - startedAt);
+    }
     await sleep(pollIntervalMs);
   }
   const tail = normalizeScreen(lastScreen)
@@ -191,7 +215,50 @@ async function waitForCursorInputReady(sessionName: string, targetPane: string):
     .filter(Boolean)
     .slice(-6)
     .join(' · ');
-  throw new Error(`Timed out waiting for Cursor Agent input readiness${tail ? `: ${tail}` : '.'}`);
+  throw new CursorInputReadinessTimeoutError([
+    `Cursor Agent 在 ${Math.round(timeoutMs / 1_000)}s 内尚未进入输入界面，首次打开工作区时可能仍在建立索引。`,
+    'tmux session 已保留；稍后重新发送消息即可继续，也可以用 `/tmux-screen` 查看当前屏幕。',
+    ...(tail ? [`当前屏幕末尾：${tail}`] : []),
+  ].join(' '));
+}
+
+async function waitForCursorInputSubmitted(
+  targetPane: string,
+  onProgress?: (elapsedMs: number) => void,
+): Promise<void> {
+  const timeoutMs = positiveIntEnv(
+    'CODELARK_CURSOR_TMUX_INPUT_READY_TIMEOUT_MS',
+    DEFAULT_INPUT_READY_TIMEOUT_MS,
+    1_000,
+  );
+  const pollIntervalMs = positiveIntEnv(
+    'CODELARK_CURSOR_TMUX_POLL_INTERVAL_MS',
+    DEFAULT_POLL_INTERVAL_MS,
+    50,
+  );
+  const startedAt = Date.now();
+  let lastProgressAt = startedAt;
+  let lastRetryAt = 0;
+  await sleep(INPUT_SUBMISSION_CONFIRMATION_GRACE_MS);
+  while (Date.now() - startedAt <= timeoutMs) {
+    const capture = await tmuxCore.capturePane(targetPane, 160);
+    assertCursorPaneAlive(capture.screen);
+    if (!cursorInputHasDraft(capture.screen)) return;
+    const now = Date.now();
+    if (now - lastRetryAt >= INPUT_SUBMISSION_RETRY_INTERVAL_MS) {
+      await tmuxCore.sendActions(targetPane, [{ type: 'key', key: 'Enter' }]);
+      lastRetryAt = now;
+    }
+    if (onProgress && now - lastProgressAt >= INPUT_READY_PROGRESS_INTERVAL_MS) {
+      lastProgressAt = now;
+      onProgress(now - startedAt);
+    }
+    await sleep(pollIntervalMs);
+  }
+  throw new CursorInputSubmissionTimeoutError([
+    `Cursor Agent 在 ${Math.round(timeoutMs / 1_000)}s 内仍未接受输入。`,
+    '输入保留在编辑框，tmux session 也已保留；可以稍后重新发送，或用 `/tmux-screen` 查看当前屏幕。',
+  ].join(' '));
 }
 
 function transcriptSize(summary: CursorSessionFileSummary | null | undefined): number {
@@ -219,7 +286,10 @@ export interface CursorTmuxInputSession {
 
 export async function ensureCursorTmuxInputSession(
   params: StreamChatParams,
-  options: { recreate?: boolean } = {},
+  options: {
+    recreate?: boolean;
+    onReadinessProgress?: (elapsedMs: number) => void;
+  } = {},
 ): Promise<CursorTmuxInputSession> {
   const sessionName = cursorTmuxSessionName(params.sessionId);
   const targetPane = `${sessionName}:0.0`;
@@ -235,7 +305,7 @@ export async function ensureCursorTmuxInputSession(
   if (launched) await launchCursorTmuxSession(sessionName, params);
   if (launched || inspection.needsReadiness) {
     await tmuxCore.ensureExtendedKeys?.();
-    await waitForCursorInputReady(sessionName, targetPane);
+    await waitForCursorInputReady(sessionName, targetPane, options.onReadinessProgress);
   }
   const discovered = known || (!params.cursorSessionId && !launched ? latestCursorSession(params.workingDirectory) : null);
   transitionRuntimeTmuxInputState(
@@ -438,13 +508,20 @@ export function streamCursorTmuxTui(params: StreamChatParams): ReadableStream<st
           terminalSeen: false,
         };
         let failed = false;
+        let preserveTmuxAfterFailure = false;
         try {
           controller.enqueue(sseEvent('status', {
             reasoning: params.cursorSessionId
               ? '正在确认 Cursor tmux 和当前 Cursor chat。'
-              : '正在初始化 Cursor tmux 和 Cursor chat。',
+              : '正在初始化 Cursor tmux 和 Cursor chat；首次打开工作区时可能需要先建立索引。',
           }));
-          const prepared = await ensureCursorTmuxInputSession(params);
+          const prepared = await ensureCursorTmuxInputSession(params, {
+            onReadinessProgress: (elapsedMs) => {
+              controller.enqueue(sseEvent('status', {
+                reasoning: `Cursor Agent 正在准备工作区；首次打开时通常会建立索引，已等待 ${Math.floor(elapsedMs / 1_000)}s。`,
+              }));
+            },
+          });
           context.sessionId = prepared.sessionId;
           context.cwd = prepared.cwd;
           context.sessionFilePath = prepared.sessionFilePath;
@@ -458,7 +535,15 @@ export function streamCursorTmuxTui(params: StreamChatParams): ReadableStream<st
           await sendRuntimeTmuxInput({
             runtime: 'cursor',
             sessionName,
-            send: () => tmuxCore.injectPromptIntoPane(targetPane, params.prompt),
+            send: async () => {
+              const result = await tmuxCore.injectPromptIntoPane(targetPane, params.prompt);
+              await waitForCursorInputSubmitted(targetPane, (elapsedMs) => {
+                controller.enqueue(sseEvent('status', {
+                  reasoning: `输入已写入 Cursor；工作区索引可能仍在进行，正在确认提交，已等待 ${Math.floor(elapsedMs / 1_000)}s。`,
+                }));
+              });
+              return result;
+            },
           });
           if (!context.sessionFilePath) {
             await waitForCursorTranscript(context, baselineSessionIds, targetPane);
@@ -472,6 +557,8 @@ export function streamCursorTmuxTui(params: StreamChatParams): ReadableStream<st
           controller.close();
         } catch (error) {
           failed = true;
+          preserveTmuxAfterFailure = error instanceof CursorInputReadinessTimeoutError
+            || error instanceof CursorInputSubmissionTimeoutError;
           const message = error instanceof Error ? error.message : String(error);
           transitionRuntimeTmuxInputState('cursor', sessionName, 'failed', 'Cursor tmux lifecycle failed', { error: message });
           console.error('[cursor-tmux] Error:', error instanceof Error ? error.stack || error.message : error);
@@ -482,7 +569,11 @@ export function streamCursorTmuxTui(params: StreamChatParams): ReadableStream<st
             // The stream may already be closed by its consumer.
           }
         } finally {
-          if (failed && !debugKeepsTmuxAlive()) {
+          if (
+            failed
+            && !preserveTmuxAfterFailure
+            && !debugKeepsTmuxAlive()
+          ) {
             try {
               await tmuxCore.killSession(sessionName, { ignoreMissing: true });
             } catch {

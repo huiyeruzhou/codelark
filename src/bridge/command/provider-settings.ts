@@ -442,7 +442,10 @@ export async function handleProviderCommand(options: {
     }
     const cursorConfig = resolveCursorRuntimeConfig(session, binding);
     const tmuxSessionName = cursorTmuxSessionName(session.id);
-    await options.deps.notifyBackgroundOperation?.(`正在重新启动 Cursor Agent tmux 后台会话 \`${tmuxSessionName}\`。`);
+    await options.deps.notifyBackgroundOperation?.(
+      `正在重新启动 Cursor Agent tmux 后台会话 \`${tmuxSessionName}\`；首次打开工作区时可能需要先建立索引。`,
+      { force: true },
+    );
     let prepared: Awaited<ReturnType<typeof restartCursorTmuxInputSession>>;
     try {
       prepared = await (options.deps.restartCursorTmuxSession || restartCursorTmuxInputSession)({

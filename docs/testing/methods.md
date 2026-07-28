@@ -22,7 +22,7 @@ nvm use 24
 | 纯逻辑单测 | `npm test -- --unit` | 只运行 `src/__tests__/unit/`。 |
 | 本地 workflow | `npm test -- --workflow` | 只运行 `src/__tests__/workflow/`。 |
 | 本地 mock app E2E | `npm test -- --mock-e2e` | 只运行 `src/__tests__/e2e/mock-app/`。 |
-| 本地真实进程 E2E | `npm test -- --local-e2e` | 只运行 `src/__tests__/e2e/local-process/`。Codex/Claude 覆盖真实 CLI 或 tmux 进程；Kimi 用真实 executable + 真 tmux + 本地 fake model proxy；Cursor 的 `real-cursor-agent-bridge.e2e.test.ts` 需显式 `CODELARK_REAL_CURSOR_E2E=1`，使用已登录官方 backend，并隔离 config/data/workspace 验证冷启动、冷接管和 resume；默认显式使用 `gpt-5.3-codex`，可用 `CODELARK_REAL_CURSOR_E2E_MODEL` 覆盖。 |
+| 本地真实进程 E2E | `npm test -- --local-e2e` | 只运行 `src/__tests__/e2e/local-process/`。Codex/Claude 覆盖真实 CLI 或 tmux 进程；Kimi 用真实 executable + 真 tmux + 本地 fake model proxy。Cursor 的 `real-cursor-agent-bridge.e2e.test.ts` 必须显式设置 `CODELARK_REAL_CURSOR_E2E=1`，否则即使文件被选中也会 skip；它使用已登录官方 backend，并隔离 config/data/workspace 验证超过 30 秒的冷启动、可见进度、冷接管和 resume。默认使用 `gpt-5.3-codex`，可用 `CODELARK_REAL_CURSOR_E2E_MODEL` 覆盖。 |
 | Harness 自测 | `npm test -- --harness` | 只运行 `src/__tests__/harness/`，包括真实飞书 harness 自测和测试环境隔离 guard。 |
 | 类型检查 | `npm run typecheck` | 验证 TypeScript 类型和公共导入边界。 |
 | 构建验证 | `npm run build` | 验证发布构建入口和 esbuild 打包。 |
@@ -82,7 +82,7 @@ tmux workflow 的 fake transport 必须通过 `TmuxCore` 的可执行命令注�
 | 纯逻辑测试 | 解析、格式化、状态 reducer、schema、配置转换是否正确。 | 位于 `src/__tests__/unit/<owner>/`，不启动真实 provider，不依赖网络，不触碰真实 home。 | 改命令解析、渲染、存储结构、schema、配置、权限状态时。 |
 | 本地 workflow 测试 | 一条 IM 命令或 runtime turn 经过 bridge 内部编排后，是否生成正确状态和交付动作。 | 位于 `src/__tests__/workflow/<slice>/`，使用 fake adapter/provider/store；可能覆盖多个内部组件。 | 改命令体系、会话绑定、delivery、mirror、turn runner、UI application 时。 |
 | 本地 mock app E2E | daemon 级入口、fake channel/provider、状态持久化和交付动作是否闭环。 | 位于 `src/__tests__/e2e/mock-app/`，仍不证明真实 provider 可执行文件或真实飞书客户端契约。 | 改 bridge host 集成、命令入口、card payload 或应用级编排时。 |
-| 本地真实进程 E2E | Codex/Claude 的真实 tmux/CLI，Kimi Code 真实 executable + fake model proxy，以及 opt-in Cursor 已登录官方 backend，在隔离 runtime 数据目录中是否能启动、产生事件、冷接管、恢复或完成清理。 | 位于 `src/__tests__/e2e/local-process/`；仍不等于真实飞书。Cursor 测试读取宿主安全凭据但不把测试 chat 写入真实 `~/.cursor`。 | 改 provider 启动、tmux、JSONL/wire/transcript 发现、CLI bootstrap、真实进程清理时。 |
+| 本地真实进程 E2E | Codex/Claude 的真实 tmux/CLI，Kimi Code 真实 executable + fake model proxy，以及 opt-in Cursor 已登录官方 backend，在隔离 runtime 数据目录中是否能启动、产生事件、冷接管、恢复或完成清理。 | 位于 `src/__tests__/e2e/local-process/`；仍不等于真实飞书。Cursor 测试读取宿主安全凭据但不把测试 chat 写入真实 `~/.cursor`。当前 GitHub Actions 只持续运行 Codex/Claude/Kimi 三个真实 executable shard，Cursor 仍是本机显式发布门禁；在有无凭据的 Cursor fake Connect/protobuf backend 之前，不得把它描述为 CI gate。 | 改 provider 启动、tmux、JSONL/wire/transcript 发现、CLI bootstrap、真实进程清理时。 |
 
 真实飞书 E2E 是第四层，专门验证外部平台契约：飞书事件投递、bot 入群、`reply_to`、真实卡片/文件/表单消息、provider 输出路径和测试群清理。它不替代本地测试。
 
@@ -130,6 +130,7 @@ long-running 功能不能只测“成功派发 worker”。精炼用户故事至
 | `codex-session-index.test.ts`、`codex-session-mirror.test.ts` | Codex JSONL/session 索引读取、mirror cursor 对齐和事件重放。 |
 | `claude-tmux-provider.test.ts`、`claude-sdk-provider.test.ts`、`claude-session-jsonl.test.ts` | Claude tmux 启动/注入/mirror SSE、Claude SDK helper、Claude JSONL session 读取。 |
 | `kimi-tmux-provider.test.ts`、真实 Kimi executable E2E、`kimi-tmux-provider-local-process.e2e.test.ts` | fresh 不带 `-r` 单次启动、从真实 TUI 发现 CLI session id、wire 在首条输入前或输入后创建、跨 turn 复用、慢模型 `Ctrl-S` steer、tmux 丢失恢复、think/status 和 terminal 归属；scripted fixture 继续穿过真实 tmux，但不冒充真实 executable gate。 |
+| `cursor-tmux-provider.test.ts`、`real-cursor-agent-bridge.e2e.test.ts` | 默认 suite 用确定性 pane 状态保护“空白但存活的冷索引不得 kill tmux”；显式真实 gate 用官方 `agent`、真 tmux、真实 backend 和一次性 35 秒延迟覆盖旧 30 秒失败边界、等待进度、同 pane/UUID 冷接管与 tmux 丢失后 resume。前者防代码回归，后者证明真实 CLI 集成；两者不能互相冒充。 |
 | `sse-stream-decoder.test.ts` | SSE 文本流解码和事件边界。 |
 | `interactive-turn-runner.test.ts` | 一次 runtime turn 的主编排，含 stream、tool、context、goal、stop、mirror suppression、基础对话 simulator，以及 answer 中间态附件立即发送、thinking 排除和终态去重。 |
 | `interactive-turn-sdk-conversation-engine.test.ts`、`interactive-turn-sdk-stream-events-controller.test.ts`、`interactive-turn-final-response-plan.test.ts`、`interactive-turn-terminal-finalization-controller.test.ts` | SDK conversation 内联附件/tool 展开、stream event 控制、最终回复计划和终端 provider finalization。 |

@@ -20,6 +20,7 @@ import {
   buildCursorTmuxLaunchCommand,
   cursorAuthenticationScreenError,
   cursorTmuxSessionName,
+  ensureCursorTmuxInputSession,
   isCursorInputReadyScreen,
   streamCursorTmuxTui,
 } from '../../../../runtime/cursor/tmux-provider.js';
@@ -212,6 +213,162 @@ describe('Cursor tmux provider helpers', () => {
     assert.equal(assistantRecords.length, 2);
     assert.notEqual(assistantRecords[0]?.turnId, assistantRecords[1]?.turnId);
     assert.notEqual(assistantRecords[0]?.signature, assistantRecords[1]?.signature);
+  });
+
+  it('keeps a live Cursor tmux when cold workspace initialization exceeds the readiness window', { timeout: 5_000 }, async () => {
+    const cwd = path.join(root, 'slow-workspace');
+    fs.mkdirSync(cwd, { recursive: true });
+    const core = tmuxCore as unknown as Record<string, unknown>;
+    const originals = {
+      hasSession: core.hasSession,
+      killSession: core.killSession,
+      ensureDetachedSession: core.ensureDetachedSession,
+      capturePane: core.capturePane,
+      ensureExtendedKeys: core.ensureExtendedKeys,
+    };
+    const previousTimeout = process.env.CODELARK_CURSOR_TMUX_INPUT_READY_TIMEOUT_MS;
+    const previousPoll = process.env.CODELARK_CURSOR_TMUX_POLL_INTERVAL_MS;
+    const previousDebug = process.env.CODELARK_DEBUG;
+    let killCalls = 0;
+    let launchCalls = 0;
+    let sessionExists = false;
+    let ready = false;
+    core.hasSession = async () => ({ exists: sessionExists, command: 'tmux has-session' });
+    core.ensureDetachedSession = async () => {
+      launchCalls += 1;
+      sessionExists = true;
+      return {
+        existed: false,
+        command: 'tmux new-session',
+        commands: ['tmux new-session'],
+      };
+    };
+    core.capturePane = async () => ({
+      screen: ready ? '→ Plan, search, build anything' : '',
+      command: 'tmux capture-pane',
+    });
+    core.ensureExtendedKeys = async () => 'tmux set-option extended-keys on';
+    core.killSession = async () => {
+      killCalls += 1;
+      return 'tmux kill-session';
+    };
+    process.env.CODELARK_CURSOR_TMUX_INPUT_READY_TIMEOUT_MS = '1000';
+    process.env.CODELARK_CURSOR_TMUX_POLL_INTERVAL_MS = '50';
+    delete process.env.CODELARK_DEBUG;
+
+    try {
+      const reader = streamCursorTmuxTui({
+        prompt: 'hello after cold initialization',
+        sessionId: 'bridge-cursor-slow-start',
+        runtime: 'cursor',
+        workingDirectory: cwd,
+      }).getReader();
+      let wire = '';
+      while (true) {
+        const item = await reader.read();
+        if (item.done) break;
+        wire += item.value;
+      }
+      const events = wire.trim().split('\n').map((line) => JSON.parse(line.slice(6)) as {
+        type: string;
+        data: string;
+      });
+      assert.equal(events.at(-1)?.type, 'error');
+      assert.match(events.at(-1)?.data || '', /1s 内尚未进入输入界面/);
+      assert.match(events.at(-1)?.data || '', /首次打开工作区时可能仍在建立索引/);
+      assert.match(events.at(-1)?.data || '', /tmux session 已保留/);
+      assert.equal(killCalls, 0, 'a live cold-starting Cursor process must remain available for takeover');
+      assert.equal(launchCalls, 1);
+
+      ready = true;
+      const recovered = await ensureCursorTmuxInputSession({
+        prompt: 'retry after cold initialization',
+        sessionId: 'bridge-cursor-slow-start',
+        runtime: 'cursor',
+        workingDirectory: cwd,
+      });
+      assert.equal(recovered.existed, true);
+      assert.equal(launchCalls, 1, 'the retry must reuse the preserved Cursor process instead of restarting it');
+    } finally {
+      Object.assign(core, originals);
+      if (previousTimeout === undefined) delete process.env.CODELARK_CURSOR_TMUX_INPUT_READY_TIMEOUT_MS;
+      else process.env.CODELARK_CURSOR_TMUX_INPUT_READY_TIMEOUT_MS = previousTimeout;
+      if (previousPoll === undefined) delete process.env.CODELARK_CURSOR_TMUX_POLL_INTERVAL_MS;
+      else process.env.CODELARK_CURSOR_TMUX_POLL_INTERVAL_MS = previousPoll;
+      if (previousDebug === undefined) delete process.env.CODELARK_DEBUG;
+      else process.env.CODELARK_DEBUG = previousDebug;
+    }
+  });
+
+  it('retries Enter when Cursor leaves the injected prompt in its input editor', async () => {
+    const cwd = path.join(root, 'submit-retry-workspace');
+    fs.mkdirSync(cwd, { recursive: true });
+    const sessionId = '44444444-4444-4444-8444-444444444444';
+    const core = tmuxCore as unknown as Record<string, unknown>;
+    const originals = {
+      hasSession: core.hasSession,
+      killSession: core.killSession,
+      ensureDetachedSession: core.ensureDetachedSession,
+      capturePane: core.capturePane,
+      injectPromptIntoPane: core.injectPromptIntoPane,
+      sendActions: core.sendActions,
+      ensureExtendedKeys: core.ensureExtendedKeys,
+    };
+    let prompt = '';
+    let submitted = false;
+    let retryEnterCalls = 0;
+    core.hasSession = async () => ({ exists: true, command: 'tmux has-session' });
+    core.killSession = async () => 'tmux kill-session';
+    core.ensureDetachedSession = async () => ({ existed: false, commands: ['tmux new-session'] });
+    core.capturePane = async () => ({
+      screen: submitted || !prompt
+        ? '→ Plan, search, build anything\n\nCodex 5.3 Medium'
+        : `→ ${prompt}\n\nCodex 5.3 Medium`,
+      command: 'tmux capture-pane',
+    });
+    core.ensureExtendedKeys = async () => 'tmux set-option extended-keys on';
+    core.injectPromptIntoPane = async (_target: string, value: string) => {
+      prompt = value;
+      return { commands: ['tmux paste-buffer', 'tmux send-keys Enter'] };
+    };
+    core.sendActions = async () => {
+      retryEnterCalls += 1;
+      submitted = true;
+      writeCursorSession({
+        sessionId,
+        cwd,
+        lines: [
+          { role: 'user', message: { content: [{ type: 'text', text: prompt }] } },
+          { role: 'assistant', message: { content: [{ type: 'text', text: 'submitted after retry' }] } },
+          { type: 'turn_ended', status: 'success' },
+        ],
+      });
+      return { commands: ['tmux send-keys Enter'] };
+    };
+
+    try {
+      const reader = streamCursorTmuxTui({
+        prompt: 'prompt whose first Enter was swallowed',
+        sessionId: 'bridge-cursor-submit-retry',
+        runtime: 'cursor',
+        workingDirectory: cwd,
+      }).getReader();
+      let wire = '';
+      while (true) {
+        const item = await reader.read();
+        if (item.done) break;
+        wire += item.value;
+      }
+      const events = wire.trim().split('\n').map((line) => JSON.parse(line.slice(6)) as {
+        type: string;
+        data: string;
+      });
+      assert.equal(retryEnterCalls, 1);
+      assert.ok(events.some((event) => event.type === 'text' && event.data === 'submitted after retry'));
+      assert.equal(events.at(-1)?.type, 'result');
+    } finally {
+      Object.assign(core, originals);
+    }
   });
 
   it('launches one managed TUI, discovers one fixed chat, and reuses both across turns', async () => {

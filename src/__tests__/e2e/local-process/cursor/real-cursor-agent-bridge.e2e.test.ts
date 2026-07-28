@@ -32,6 +32,7 @@ import {
 } from '../../../helpers/runtime/real-codex-e2e-utils.js';
 
 const execFileAsync = promisify(execFile);
+const COLD_START_DELAY_MS = 35_000;
 
 class CursorStreamingRecordingAdapter extends RecordingAdapter {
   readonly streamEvents: Array<{
@@ -91,6 +92,31 @@ function installedCursorExecutable(): string {
     || path.join(hostHome, '.local', 'bin', process.platform === 'win32' ? 'agent.exe' : 'agent');
 }
 
+function posixShellQuote(value: string): string {
+  return `'${value.replace(/'/g, "'\\''")}'`;
+}
+
+function delayedCursorExecutable(tempDir: string, executable: string): {
+  executable: string;
+  markerPath?: string;
+} {
+  if (process.platform === 'win32') return { executable };
+  const markerPath = path.join(tempDir, 'cursor-cold-start-delay-consumed');
+  const wrapperPath = path.join(tempDir, 'cursor-agent-delayed');
+  fs.writeFileSync(wrapperPath, [
+    '#!/usr/bin/env bash',
+    'set -euo pipefail',
+    `marker=${posixShellQuote(markerPath)}`,
+    'if [[ ! -e "$marker" ]]; then',
+    '  : > "$marker"',
+    `  sleep ${COLD_START_DELAY_MS / 1_000}`,
+    'fi',
+    `exec ${posixShellQuote(executable)} "$@"`,
+    '',
+  ].join('\n'), { mode: 0o755 });
+  return { executable: wrapperPath, markerPath };
+}
+
 async function cursorIsAuthenticated(executable: string, env: NodeJS.ProcessEnv): Promise<boolean> {
   try {
     const result = await execFileAsync(executable, ['status', '--format', 'json'], { env });
@@ -143,6 +169,7 @@ describe('real Cursor Agent bridge e2e', () => {
     fs.mkdirSync(dataDir, { recursive: true });
     fs.mkdirSync(workDir, { recursive: true });
     fs.copyFileSync(hostConfigPath, path.join(configDir, 'cli-config.json'));
+    const delayedExecutable = delayedCursorExecutable(tempDir, executable);
 
     const previousEnv = new Map<string, string | undefined>();
     const env = {
@@ -150,11 +177,11 @@ describe('real Cursor Agent bridge e2e', () => {
       USERPROFILE: hostHome,
       CURSOR_CONFIG_DIR: configDir,
       CURSOR_DATA_DIR: dataDir,
-      CURSOR_AGENT_EXECUTABLE: executable,
+      CURSOR_AGENT_EXECUTABLE: delayedExecutable.executable,
       CODELARK_CURSOR_MODEL: process.env.CODELARK_REAL_CURSOR_E2E_MODEL,
       CODELARK_CURSOR_EXECUTABLE: undefined,
       CODELARK_CURSOR_TMUX_POLL_INTERVAL_MS: '100',
-      CODELARK_CURSOR_TMUX_INPUT_READY_TIMEOUT_MS: '30000',
+      CODELARK_CURSOR_TMUX_INPUT_READY_TIMEOUT_MS: undefined,
       CODELARK_CURSOR_TMUX_SESSION_FILE_TIMEOUT_MS: '60000',
       CODELARK_CURSOR_TMUX_OUTPUT_IDLE_TIMEOUT_MS: '120000',
       CODELARK_DEBUG: '1',
@@ -199,7 +226,7 @@ describe('real Cursor Agent bridge e2e', () => {
       store.updateSession(session.id, {
         runtime: {
           activeRuntime: 'cursor',
-          cursor: { provider: 'tmux' },
+          cursor: { provider: 'tmux', force: true },
           general: { workingDirectory: workDir },
         },
       });
@@ -220,6 +247,7 @@ describe('real Cursor Agent bridge e2e', () => {
       );
 
       const firstTerminalCount = terminalEvents(adapter).length;
+      const firstTurnStartedAt = Date.now();
       await _testOnly.handleMessage(
         adapter,
         inboundMessage(address, `Reply with exactly this marker and no other text: ${firstMarker}`, 'incoming-real-cursor-first'),
@@ -232,6 +260,20 @@ describe('real Cursor Agent bridge e2e', () => {
       const firstTerminal = terminalEvents(adapter)[firstTerminalCount]!;
       assert.equal(firstTerminal.status, 'completed', `first Cursor terminal: ${JSON.stringify(firstTerminal)}`);
       assert.match(firstTerminal.text || '', new RegExp(firstMarker));
+      if (delayedExecutable.markerPath) {
+        assert.equal(fs.existsSync(delayedExecutable.markerPath), true);
+        assert.ok(
+          Date.now() - firstTurnStartedAt >= COLD_START_DELAY_MS,
+          'the real executable story must cross the former 30s readiness limit',
+        );
+        assert.ok(
+          adapter.streamEvents.some((event) => (
+            event.kind === 'status'
+            && /Cursor Agent 正在准备工作区；首次打开时通常会建立索引，已等待/.test(event.text || '')
+          )),
+          'the user must receive progress while the real Cursor executable is still cold-starting',
+        );
+      }
       const initialized = store.getSession(session.id);
       const cursorSessionId = initialized?.runtime?.cursor?.sessionId;
       assert.match(cursorSessionId || '', /^[0-9a-f-]{36}$/i);

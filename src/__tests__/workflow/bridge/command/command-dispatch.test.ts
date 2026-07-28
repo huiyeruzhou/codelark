@@ -4683,6 +4683,55 @@ enabled = true
     reconcile.resolve();
   });
 
+  it('explains Cursor workspace indexing before /p tmux cold startup finishes', async () => {
+    const store = initTestContext();
+    const sent: any[] = [];
+    const adapter = createGroupCapableAdapter({ sent });
+    const address = { channelType: 'feishu', chatId: 'chat-cursor-provider-indexing' } as const;
+    const session = store.createSession('cursor-provider-indexing', 'test-model');
+    store.updateSession(session.id, { runtime: { activeRuntime: 'cursor' } });
+    store.upsertChannelChat({
+      channelType: address.channelType,
+      chatId: address.chatId,
+      bridgeSessionId: session.id,
+    });
+    const restartStarted = createDeferred<void>();
+    const releaseRestart = createDeferred<void>();
+
+    const provider = handleBridgeCommand(
+      adapter,
+      { address, text: '/p tmux', messageId: 'incoming-cursor-provider-indexing' } as any,
+      '/p tmux',
+      {
+        getActiveTask: () => undefined,
+        diagnoseSessionHealth: async () => null,
+        diagnoseAllActiveSessions: async () => [],
+        reconcileMirrorSubscriptions: async () => {},
+        restartCursorTmuxSession: async () => {
+          restartStarted.resolve();
+          await releaseRestart.promise;
+          return {
+            sessionName: `clk-cursor-${session.id}`,
+            targetPane: `clk-cursor-${session.id}:0.0`,
+            nextOffset: 0,
+            existed: false,
+          };
+        },
+      },
+    );
+    await restartStarted.promise;
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    assert.ok(
+      sent.some((message) => /首次打开工作区时可能需要先建立索引/.test(message.text || '')),
+      'the user must see why Cursor cold startup can take time before the provider command finishes',
+    );
+
+    releaseRestart.resolve();
+    await provider;
+    assert.match(sent.at(-1)?.text || '', /已切换 Cursor Provider/);
+  });
+
   it('does not let a delayed provider tmux startup write back after clear rebinds the chat', async () => {
     const store = initTestContext();
     const sent: any[] = [];
