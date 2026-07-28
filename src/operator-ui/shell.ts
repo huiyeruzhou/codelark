@@ -1,5 +1,6 @@
 import { resolveInstalledCodelarkVersion } from '../bridge/update/installed-version.js';
 import { mainStyles } from './assets.js';
+import { projectRuntimeStatusBrowserSource } from './runtime-status.js';
 
 function escapeHtml(value: string): string {
   return value
@@ -28,7 +29,6 @@ export function renderUiShellHtml(): string {
             <p class="brand-title">CodeLark</p>
             <span class="brand-version">v${version}</span>
           </div>
-          <p class="brand-copy">本地后台、会话共享、通道绑定和调试都走这里。</p>
         </div>
         <nav class="nav">
           <button type="button" class="nav-link active" data-page="overview">概览</button>
@@ -44,7 +44,7 @@ export function renderUiShellHtml(): string {
           <div class="page-header">
             <div>
               <h1 class="page-title">概览</h1>
-              <p class="page-copy">运行状态、后台控制和当前环境集中在这一页。</p>
+              <p class="page-copy">查看运行状态，控制 Bridge，并核对本机环境。</p>
             </div>
           </div>
 
@@ -74,12 +74,47 @@ export function renderUiShellHtml(): string {
             </article>
           </section>
 
+          <section class="panel runtime-status-panel" aria-label="Runtime 当前状态">
+            <div class="panel-header">
+              <div>
+                <h2>Runtime 当前状态</h2>
+                <p>区分“本机发现”“已绑定”和“正在运行”，点击任一 runtime 可直接筛选会话。</p>
+              </div>
+            </div>
+            <div class="runtime-status-list">
+              <button type="button" class="runtime-status-item" data-runtime="codex" aria-label="查看 Codex 会话">
+                <span class="runtime-status-head"><strong>Codex</strong><span class="runtime-state" id="runtime-codex-state">检查中</span></span>
+                <span class="runtime-status-counts" id="runtime-codex-counts">正在读取会话与入口</span>
+                <span class="runtime-status-config" id="runtime-codex-config">默认配置检查中</span>
+                <span class="runtime-status-recent" id="runtime-codex-recent">最近活动检查中</span>
+              </button>
+              <button type="button" class="runtime-status-item" data-runtime="claude" aria-label="查看 Claude Code 会话">
+                <span class="runtime-status-head"><strong>Claude Code</strong><span class="runtime-state" id="runtime-claude-state">检查中</span></span>
+                <span class="runtime-status-counts" id="runtime-claude-counts">正在读取会话与入口</span>
+                <span class="runtime-status-config" id="runtime-claude-config">默认配置检查中</span>
+                <span class="runtime-status-recent" id="runtime-claude-recent">最近活动检查中</span>
+              </button>
+              <button type="button" class="runtime-status-item" data-runtime="kimi" aria-label="查看 Kimi Code 会话">
+                <span class="runtime-status-head"><strong>Kimi Code</strong><span class="runtime-state" id="runtime-kimi-state">检查中</span></span>
+                <span class="runtime-status-counts" id="runtime-kimi-counts">正在读取会话与入口</span>
+                <span class="runtime-status-config" id="runtime-kimi-config">默认配置检查中</span>
+                <span class="runtime-status-recent" id="runtime-kimi-recent">最近活动检查中</span>
+              </button>
+              <button type="button" class="runtime-status-item" data-runtime="cursor" aria-label="查看 Cursor Agent 会话">
+                <span class="runtime-status-head"><strong>Cursor Agent</strong><span class="runtime-state" id="runtime-cursor-state">检查中</span></span>
+                <span class="runtime-status-counts" id="runtime-cursor-counts">正在读取会话与入口</span>
+                <span class="runtime-status-config" id="runtime-cursor-config">默认配置检查中</span>
+                <span class="runtime-status-recent" id="runtime-cursor-recent">最近活动检查中</span>
+              </button>
+            </div>
+          </section>
+
           <div class="overview-grid">
             <section class="panel">
               <div class="panel-header">
                 <div>
                   <h2>运行控制</h2>
-                  <p>保存配置后，可以直接在这里启停桥接服务或刷新整体状态。</p>
+                  <p>启停 Bridge 或刷新整体状态。</p>
                 </div>
               </div>
               <div class="actions">
@@ -91,7 +126,7 @@ export function renderUiShellHtml(): string {
 
               <div class="panel-block">
                 <p class="panel-subtitle">当前能力</p>
-                <div class="notice">已接通：保存配置、后台启停、飞书凭据测试、本地会话发现、IM 绑定查看与网页侧切换。</div>
+                <div class="notice">已接通保存配置、后台启停、飞书凭据测试、本地会话发现、IM 绑定查看与网页改绑。</div>
               </div>
 
               <div class="panel-block">
@@ -117,7 +152,7 @@ export function renderUiShellHtml(): string {
               <div class="panel-header">
                 <div>
                   <h2>当前环境</h2>
-                  <p>这里显示本机运行时和关键目录，便于排查部署问题。</p>
+                  <p>本机运行时和关键目录，用于排查部署问题。</p>
                 </div>
               </div>
               <div class="info-list">
@@ -130,12 +165,12 @@ export function renderUiShellHtml(): string {
                   <div class="mono" id="overviewHomeStatus">-</div>
                 </div>
                 <div class="info-item">
-                  <strong>Codex 会话根目录</strong>
-                  <div class="mono" id="codexRootStatus">-</div>
+                  <strong>本地会话根目录</strong>
+                  <div class="mono" id="runtimeSessionsRootStatus">-</div>
                 </div>
                 <div class="info-item">
-                  <strong>界面说明</strong>
-                  <div>左侧切换页面；“会话”管理 Bridge/IM 会话和本地 runtime 会话；“通道”里查看飞书当前绑定并直接切换。</div>
+                  <strong>操作入口</strong>
+                  <div>“会话”管理 Bridge/IM 与本地 runtime 会话；“通道”查看聊天绑定并直接改绑。</div>
                 </div>
               </div>
             </section>
@@ -154,8 +189,7 @@ export function renderUiShellHtml(): string {
           </div>
 
           <section class="panel" id="codex">
-            <div class="notice">这里展示 Bridge/IM 本地会话和本机 runtime 会话；不再只依赖单一客户端列表。</div>
-            <div class="notice" style="margin-top: 12px;">最短路径：找到目标会话后到“通道”页切换绑定；如果会话已有 thread，也可以复制 <code>/thread 019d1da4</code> 这样的命令发给机器人。</div>
+            <div class="notice">列表同时包含 Bridge/IM 会话和本机 runtime 会话。找到目标后可在“通道”页改绑；已有 thread 也可复制 <code>/thread 019d1da4</code> 发给机器人。</div>
             <div class="session-filter-bar" role="search" aria-label="筛选会话">
               <label class="session-search-field">搜索会话<input id="sessionSearch" type="search" autocomplete="off" placeholder="标题、目录、session id、provider" /></label>
               <label>Runtime<select id="sessionRuntimeFilter">
@@ -218,7 +252,7 @@ export function renderUiShellHtml(): string {
           <div class="page-header">
             <div>
               <h1 class="page-title">配置</h1>
-              <p class="page-copy">这里维护默认工作空间、运行模式和全局行为开关。</p>
+              <p class="page-copy">维护默认工作目录、runtime 参数和 Web 访问设置。</p>
             </div>
           </div>
 
@@ -226,7 +260,7 @@ export function renderUiShellHtml(): string {
             <div class="panel-header">
               <div>
                 <h2>全局配置</h2>
-                <p>通用设置只出现一次，各 runtime 只维护自己的执行参数；保存后写入本地配置目录，少数选项需要重启 Bridge。</p>
+                <p>通用设置只出现一次，各 runtime 只维护自己的执行参数；少数选项保存后需要重启 Bridge。</p>
               </div>
               <div class="toolbar">
                 <button class="primary" id="saveConfigBtn">保存配置</button>
@@ -338,7 +372,7 @@ export function renderUiShellHtml(): string {
                 <p class="panel-subtitle">通用默认值</p>
                 <div class="field-row triple">
                   <label>
-                    <span class="field-title">/new 相对路径根目录 <span class="help-tip" tabindex="0" data-tip="当 /new 使用项目名或相对路径时，会以这里作为根目录；留空时使用 ~。">?</span></span>
+                    <span class="field-title">/new 相对路径根目录 <span class="help-tip" tabindex="0" data-tip="当 /new 使用项目名或相对路径时，以该目录为根；留空时使用 ~。">?</span></span>
                     <input id="defaultWorkspaceRoot" placeholder="留空时使用 ~" />
                   </label>
                   <label>
@@ -439,7 +473,7 @@ export function renderUiShellHtml(): string {
           <div class="page-header">
             <div>
               <h1 class="page-title">命令说明</h1>
-              <p class="page-copy">这里列出当前桥接聊天里可用的命令。</p>
+              <p class="page-copy">当前桥接聊天支持的命令与参数。</p>
             </div>
           </div>
 
@@ -540,7 +574,7 @@ export function renderUiShellHtml(): string {
           <div class="page-header">
             <div>
               <h1 class="page-title">通道</h1>
-              <p class="page-copy">通道是机器人入口；群聊和单聊会作为该入口下不同聊天绑定展示，并支持在网页里直接改绑。</p>
+              <p class="page-copy">管理机器人实例，以及各群聊和单聊的会话绑定。</p>
             </div>
           </div>
 
@@ -548,7 +582,7 @@ export function renderUiShellHtml(): string {
           <div class="panel-header">
             <div class="channel-header-copy">
               <h2>通道实例</h2>
-              <p>这里管理多个飞书机器人实例。实例是聊天入口；具体群聊或单聊绑定由聊天 ID 区分，不会改变 Codex 的会话语义。</p>
+              <p>一个实例对应一个机器人账号；聊天绑定彼此独立。</p>
             </div>
             <div class="channel-header-actions">
               <div class="channel-action-group">
@@ -559,14 +593,14 @@ export function renderUiShellHtml(): string {
                   </select>
                   <button class="primary channel-create-button" id="createChannelBtn">新增通道</button>
                 </div>
-                <div class="channel-action-hint">先选择通道类型，再创建一个新的机器人实例。</div>
+                <div class="channel-action-hint">选择通道类型后创建新的机器人实例。</div>
               </div>
               <div class="channel-action-group">
                 <div class="channel-action-label">状态同步</div>
                 <div class="channel-action-row">
                   <button class="channel-refresh-button" id="refreshChannelsBtn">刷新状态</button>
                 </div>
-                <div class="channel-action-hint">手动拉取最新通道状态和当前绑定信息。</div>
+                <div class="channel-action-hint">重新读取通道状态和聊天绑定。</div>
               </div>
             </div>
           </div>
@@ -588,7 +622,7 @@ export function renderUiShellHtml(): string {
           <div class="page-header">
             <div>
               <h1 class="page-title">日志</h1>
-              <p class="page-copy">日志页只负责查看结构化 bridge JSONL 日志，便于排查运行和通道问题。</p>
+              <p class="page-copy">查看结构化 Bridge JSONL，定位 runtime、通道和投递问题。</p>
             </div>
             <div class="toolbar">
               <button id="refreshLogsBtn">刷新日志</button>
@@ -680,6 +714,7 @@ export function renderUiShellHtml(): string {
     </div>
 
     <script>
+      const projectRuntimeStatus = (${projectRuntimeStatusBrowserSource});
       const state = {
         config: null,
         availableModels: [],
@@ -1559,6 +1594,26 @@ export function renderUiShellHtml(): string {
         setText('runtimeStatus', (state.config || {}).runtime || 'codex');
         setText('codexSessionCount', String(localSessionCount));
         setText('bindingCount', String((state.bindings || []).length));
+        renderRuntimeStatuses();
+      }
+
+      function runtimeStatusProjection(runtime) {
+        return projectRuntimeStatus(runtime, state.codexSessions || [], state.bindings || [], state.config || {});
+      }
+
+      function renderRuntimeStatuses() {
+        for (const runtime of ['codex', 'claude', 'kimi', 'cursor']) {
+          const projection = runtimeStatusProjection(runtime);
+          const item = document.querySelector('.runtime-status-item[data-runtime="' + runtime + '"]');
+          if (item) {
+            item.dataset.status = projection.tone;
+            item.dataset.defaultRuntime = (state.config || {}).runtime === runtime ? 'true' : 'false';
+          }
+          setText('runtime-' + runtime + '-state', projection.state);
+          setText('runtime-' + runtime + '-counts', '本地 ' + projection.sessions.length + ' · 入口 ' + projection.bindings.length);
+          setText('runtime-' + runtime + '-config', '默认 ' + projection.config.provider + ' · ' + projection.config.model);
+          setText('runtime-' + runtime + '-recent', projection.latest ? '最近活动 ' + formatTime(projection.latest) : '暂无本地活动记录');
+        }
       }
 
       function getAdapterStatus(channelId) {
@@ -1991,15 +2046,14 @@ export function renderUiShellHtml(): string {
         const boundSessions = sessions.filter((session) => bindingsForSession(session).length > 0 || channelDefaultsForSession(session).length > 0);
         renderOverviewPath();
         document.getElementById('codexSessionMeta').textContent =
-          '扫描目录：' + state.codexRoot
-          + ' · 本地 Codex ' + codexPhysical + ' 条'
-          + ' · 本地 Claude ' + claudePhysical + ' 条'
-          + ' · 本地 Kimi ' + kimiPhysical + ' 条'
-          + ' · 本地 Cursor ' + cursorPhysical + ' 条'
+          '已发现：Codex ' + codexPhysical + ' 条'
+          + ' · Claude ' + claudePhysical + ' 条'
+          + ' · Kimi ' + kimiPhysical + ' 条'
+          + ' · Cursor ' + cursorPhysical + ' 条'
           + ' · Bridge 存储 ' + bridgeStored + ' 条'
           + (bridgeWithoutCodexThread > 0 ? '（' + bridgeWithoutCodexThread + ' 条没有 Codex thread；可能是 Claude、Kimi、Cursor 或纯 Bridge 会话）' : '')
           + (dedupedBridgeRows > 0 ? ' · 已按 runtime identity 合并 ' + dedupedBridgeRows + ' 条重复映射' : '');
-        document.getElementById('codexRootStatus').textContent = state.codexRoot;
+        setText('runtimeSessionsRootStatus', state.codexRoot);
 
         const boundList = document.getElementById('boundSessionsList');
         const boundMeta = document.getElementById('boundSessionsMeta');
@@ -2021,7 +2075,7 @@ export function renderUiShellHtml(): string {
         }
 
         if (allSessions.length === 0) {
-          list.innerHTML = '<div class="notice ghost">当前没有发现本地会话。先从 IM 发一条消息，或在本机 Codex / Claude Code / Kimi Code / Cursor Agent 中打开一个会话，再回到这里刷新。</div>';
+          list.innerHTML = '<div class="notice ghost">当前没有发现本地会话。先从 IM 发一条消息，或在本机 Codex / Claude Code / Kimi Code / Cursor Agent 中打开一个会话，然后刷新。</div>';
           renderChannelsWorkspace();
           return;
         }
@@ -3106,6 +3160,18 @@ export function renderUiShellHtml(): string {
 
       document.querySelectorAll('[data-config-tab]').forEach((element) => {
         element.addEventListener('click', () => setActiveConfigTab(element.dataset.configTab || 'common'));
+      });
+
+      document.querySelectorAll('.runtime-status-item[data-runtime]').forEach((element) => {
+        element.addEventListener('click', () => {
+          const runtime = element.dataset.runtime || '';
+          state.sessionSearchQuery = '';
+          state.sessionRuntimeFilter = runtime;
+          document.getElementById('sessionSearch').value = '';
+          document.getElementById('sessionRuntimeFilter').value = runtime;
+          setActivePage('sessions', true);
+          rerenderCodexSessions();
+        });
       });
 
       window.addEventListener('hashchange', syncPageFromHash);

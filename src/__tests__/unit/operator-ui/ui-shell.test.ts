@@ -41,12 +41,17 @@ describe('operator UI shell', () => {
     assert.doesNotMatch(html, /class="status-card"/);
   });
 
-  it('uses the restrained control-plane visual contract at desktop and narrow widths', () => {
-    assert.doesNotMatch(mainStyles, /gradient/i);
+  it('uses the modern control-plane visual contract at desktop and narrow widths', () => {
     assert.doesNotMatch(mainStyles, /backdrop-filter/i);
     assert.match(mainStyles, /\.bridge-path\s*\{/);
     assert.match(mainStyles, /@media \(max-width: 720px\)[\s\S]*\.bridge-path-node\s*\{[\s\S]*grid-template-columns:/);
-    assert.match(mainStyles, /\.nav-link\.active\s*\{[\s\S]*background: #344054/);
+    assert.match(mainStyles, /\.nav-link\.active\s*\{[\s\S]*linear-gradient/);
+    assert.match(mainStyles, /radial-gradient/);
+    assert.match(mainStyles, /--shadow-sm:/);
+    assert.match(mainStyles, /input, select, textarea \{[\s\S]*min-width: 0;/);
+    assert.match(mainStyles, /#boundSessionsList, #codexSessionsList \{ min-width: 0; max-width: 100%; \}/);
+    assert.match(mainStyles, /\.binding-table-wrap \{ width: 100%; max-width: 100%; min-width: 0;/);
+    assert.match(mainStyles, /@media \(max-width: 720px\)[\s\S]*\.help-tip::after \{[\s\S]*position: fixed;/);
   });
 
   it('offers one shared search and runtime filter for the session ledger', () => {
@@ -72,5 +77,38 @@ describe('operator UI shell', () => {
     assert.match(html, /data-config-section="common"[\s\S]*id="defaultWorkspaceRoot"[\s\S]*id="tmuxCaptureLines"[\s\S]*id="tmuxEchoInput"/);
     assert.match(html, /data-config-section="codex"[\s\S]*id="defaultProvider"/);
     assert.match(html, /function setActiveConfigTab\(tab\)/);
+  });
+
+  it('renders equal live status surfaces for all supported runtimes', () => {
+    const html = renderUiShellHtml();
+
+    assert.match(html, /aria-label="Runtime 当前状态"/);
+    for (const runtime of ['codex', 'claude', 'kimi', 'cursor']) {
+      assert.match(html, new RegExp(`class="runtime-status-item" data-runtime="${runtime}"`));
+      assert.match(html, new RegExp(`id="runtime-${runtime}-state"`));
+      assert.match(html, new RegExp(`id="runtime-${runtime}-counts"`));
+      assert.match(html, new RegExp(`id="runtime-${runtime}-config"`));
+      assert.match(html, new RegExp(`id="runtime-${runtime}-recent"`));
+    }
+    assert.match(html, /function runtimeStatusProjection\(runtime\)/);
+    assert.match(html, /function renderRuntimeStatuses\(\)/);
+  });
+
+  it('avoids vague location filler while preserving actionable descriptions', () => {
+    const html = renderUiShellHtml();
+    for (const vagueCopy of [
+      '集中在这一页',
+      '可以直接在这里',
+      '这里显示',
+      '这里展示',
+      '这里维护',
+      '这里列出',
+      '都走这里',
+    ]) {
+      assert.equal(html.includes(vagueCopy), false, `vague UI copy: ${vagueCopy}`);
+    }
+    assert.match(html, /本机运行时和关键目录，用于排查部署问题/);
+    assert.match(html, /管理机器人实例，以及各群聊和单聊的会话绑定/);
+    assert.match(html, /查看结构化 Bridge JSONL，定位 runtime、通道和投递问题/);
   });
 });

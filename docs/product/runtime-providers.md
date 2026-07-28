@@ -27,6 +27,8 @@ CodeLark 把“使用哪个 AI 工具”和“如何驱动它”拆成两层。
 - Kimi Code 当前只支持 `tmux` 提供方。fresh session 只启动一次 `kimi -y`，等待 TUI 同时出现真实 `Session:`、输入框与 context footer 后保存 CLI 生成的 session id；只有恢复已绑定 session 才使用 `kimi -r <session> -y`。首条输入不以 `wire.jsonl` 已存在为前置条件：文件较早出现时从尾部续读，较晚出现时先提交 prompt，再从头读取首轮事件。输出由 Kimi wire mirror 同步；状态区会展示截断后的「当前思考」。
 - Cursor Agent 当前只支持 `tmux` 提供方。fresh session 只启动一次 `agent --trust`，首轮提交后从 Cursor 后台创建的 `meta.json` 和 transcript JSONL 发现 chat UUID；恢复已绑定会话使用 `agent --resume <chatId>`。CodeLark 不解析 TUI ANSI 屏幕来取得回答。原生 Cursor slash 命令可用 `/tmux /<command>` 发送；首版假设 chat ID 固定，不自动跟随 `/new`、`/fork`、`/resume` 的身份变化。
 
+Cursor tmux 是生产支持的 runtime，不是 UI 占位。真实官方 `agent` 测试已覆盖冷启动、不中断接管和 tmux 丢失后恢复同一 chat UUID；该测试需要已登录的 Cursor backend，因此目前是 opt-in，不在普通 CI 中自动执行。真实飞书 runtime/provider 矩阵已包含 Cursor 场景，但发布验收仍应区分“场景已定义”和“本次已有真实飞书执行证据”，不能把 planned-only coverage 表述为已验收。
+
 ## 用户配置入口
 
 - `/runtime codex|claude|kimi|cursor`：切换当前会话使用的运行时。
