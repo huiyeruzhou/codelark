@@ -8842,6 +8842,94 @@ enabled = true
     assert.equal(listThenTasks({ channelType: address.channelType, chatId: address.chatId, statuses: ['completed'] }).length, 1);
   });
 
+  it('keeps /then pending while the current model stream has only produced partial text', async () => {
+    const store = initTestContext();
+    const sent: string[] = [];
+    const calls: Array<{
+      prompt: string;
+      runtime?: string;
+      controller: ReadableStreamDefaultController<string>;
+    }> = [];
+    const llm: LLMProvider = {
+      streamChat(params: StreamChatParams): ReadableStream<string> {
+        return new ReadableStream({
+          start(controller) {
+            calls.push({ prompt: params.prompt, runtime: params.runtime, controller });
+          },
+        });
+      },
+    };
+    initBridgeContext({
+      store,
+      llm,
+      permissions: { resolvePendingPermission: () => false },
+      lifecycle: {},
+    });
+    const adapter: any = {
+      channelType: 'feishu',
+      provider: 'feishu',
+      isRunning: () => true,
+      send: async (message: { text: string }) => {
+        sent.push(message.text);
+        return { ok: true, messageId: `reply-then-partial-${sent.length}` };
+      },
+    };
+    const address = { channelType: 'feishu', chatId: 'chat-then-partial-stream' } as const;
+    const binding = router.createBinding(address, '/tmp/then-partial-stream');
+    createConfigService({ migrate: false, env: {} }).set(
+      { kind: 'session', sessionId: binding.bridgeSessionId },
+      { runtime: { claude: { provider: 'sdk' } } },
+    );
+    store.updateSession(binding.bridgeSessionId, {
+      runtime: { activeRuntime: 'claude' },
+    });
+    registerAdapter(adapter);
+
+    const firstTurn = bridgeManagerTestOnly.handleMessage(
+      adapter,
+      {
+        address,
+        text: '先慢慢回答第一轮',
+        messageId: 'incoming-then-partial-first',
+        timestamp: Date.now(),
+      } as any,
+    );
+    await waitForCondition(() => calls.length === 1);
+    calls[0].controller.enqueue(sseEvent('text', '第一轮目前只说到一半'));
+
+    await bridgeManagerTestOnly.handleMessage(
+      adapter,
+      {
+        address,
+        text: '/then 第一轮完成后再发送这句话',
+        messageId: 'incoming-then-partial-command',
+        timestamp: Date.now(),
+      } as any,
+    );
+    assert.match(sent.join('\n'), /已创建 \/then 后续输入/);
+    assert.equal(listThenTasks({ bridgeSessionId: binding.bridgeSessionId, statuses: ['pending'] }).length, 1);
+
+    await new Promise((resolve) => setTimeout(resolve, 1_200));
+    assert.equal(calls.length, 1, '/then must not start while the first model stream is still open');
+    assert.equal(listThenTasks({ bridgeSessionId: binding.bridgeSessionId, statuses: ['pending'] }).length, 1);
+
+    calls[0].controller.enqueue(sseEvent('result', { session_id: 'then-partial-first-session' }));
+    calls[0].controller.close();
+    await firstTurn;
+
+    await waitForCondition(() => calls.length === 2, 2_000);
+    assert.equal(calls[1].prompt, '第一轮完成后再发送这句话');
+    assert.equal(calls[1].runtime, 'claude');
+    calls[1].controller.enqueue(sseEvent('text', '第二轮已在第一轮 completed 后启动'));
+    calls[1].controller.enqueue(sseEvent('result', { session_id: 'then-partial-second-session' }));
+    calls[1].controller.close();
+
+    await waitForCondition(() => (
+      listThenTasks({ bridgeSessionId: binding.bridgeSessionId, statuses: ['completed'] }).length === 1
+    ), 2_000);
+    assert.equal(listThenTasks({ bridgeSessionId: binding.bridgeSessionId, statuses: ['pending', 'running'] }).length, 0);
+  });
+
   it('maps /stop to C-c for a running tmux provider mirror turn', async () => {
     const store = initTestContext();
     const fakeTmux = installFakeTmux();
