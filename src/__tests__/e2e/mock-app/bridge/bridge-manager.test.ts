@@ -1106,13 +1106,6 @@ describe('bridge-manager resolveCommandAlias', () => {
       waitForConversationBarrier: false,
       blocksConversation: false,
     });
-    assert.deepEqual(_testOnly.adapterImmediateLane(inbound('/pty-screen') as any, 'command'), {
-      laneKey: `job:pty-screen:${address.channelType}:${address.chatId}:msg-/pty-screen`,
-      laneKind: 'job',
-      jobKind: 'command:pty-screen',
-      waitForConversationBarrier: false,
-      blocksConversation: false,
-    });
     assert.equal(_testOnly.adapterImmediateLane(inbound('/shell git status') as any, 'command')?.waitForConversationBarrier, true);
     assert.deepEqual(_testOnly.adapterImmediateLane(inbound('/new 新群 /tmp/work') as any, 'command'), {
       laneKey: `job:new:${address.channelType}:${address.chatId}:msg-/new 新群 /tmp/work`,

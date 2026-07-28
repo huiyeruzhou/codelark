@@ -124,7 +124,7 @@ describe('permission-broker', () => {
     const store = initBridgeTestContext();
     const adapter = new RecordingAdapter();
     const address = { channelType: 'feishu', chatId: 'chat-codex-trust-permission' } as const;
-    const permissionRequestId = 'codex-trust:pty:session-1:1';
+    const permissionRequestId = 'codex-trust:tmux:session-1:1';
 
     await forwardPermissionRequest(
       adapter,
@@ -132,9 +132,9 @@ describe('permission-broker', () => {
       permissionRequestId,
       'Codex Trust Directory',
       {
-        provider: 'pty',
+        provider: 'tmux',
         workingDirectory: '/tmp/project',
-        inspect: '/pty-screen 80',
+        inspect: '/tmux-screen 80',
       },
       'session-1',
     );
@@ -144,7 +144,7 @@ describe('permission-broker', () => {
     assert.equal(message.parseMode, 'HTML');
     assert.match(message.text, /Codex Trust Confirmation/);
     assert.match(message.text, /Directory: \/tmp\/project/);
-    assert.match(message.text, /Inspect current screen: \/pty-screen 80/);
+    assert.match(message.text, /Inspect current screen: \/tmux-screen 80/);
     assert.deepEqual(message.inlineButtons?.flat().map((button) => button.text), [
       'Trust and continue',
       'Deny',
@@ -481,7 +481,7 @@ describe('permission-broker', () => {
     const store = initBridgeTestContext();
     const adapter = new RecordingAdapter();
     const address = { channelType: 'feishu', chatId: 'chat-trust-no-session-allow' } as const;
-    const permissionRequestId = 'codex-trust:pty:session-3:1';
+    const permissionRequestId = 'codex-trust:tmux:session-3:1';
 
     await forwardPermissionRequest(
       adapter,
@@ -489,7 +489,7 @@ describe('permission-broker', () => {
       permissionRequestId,
       'Codex Trust Directory',
       {
-        provider: 'pty',
+        provider: 'tmux',
         workingDirectory: '/tmp/no-session-allow',
       },
       'session-3',

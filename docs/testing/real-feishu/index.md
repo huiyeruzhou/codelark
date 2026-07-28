@@ -40,9 +40,9 @@ CODELARK_REAL_FEISHU_E2E=1 npm run real:feishu:e2e -- \
   --launch-bridge \
   --scenario runtime-message \
   --runtime claude \
-  --provider pty \
+  --provider tmux \
   --fake-ccr \
-  --run-id runtime-claude-pty-fake-ccr \
+  --run-id runtime-claude-tmux-fake-ccr \
   --message "请只回复 fake CCR 响应"
 ```
 
@@ -77,7 +77,7 @@ CODELARK_REAL_FEISHU_TEST_LARK_CLI_XDG_DATA_HOME=/home/me/.codelark/real-feishu-
 - 飞书事件到达当前活跃 bridge 实例。
 - Bot 在目标聊天中，并按正确 `message_id` 回复。
 - 文本、卡片、表单、文件和 Markdown 原始内容符合用户契约。
-- 输出路径符合 provider 预期：SDK 走直接 `im:`，pty/tmux 走 `mirror:`。
+- 输出路径符合 provider 预期：SDK 走直接 `im:`，tmux 走 `mirror:`。
 - 多聊天状态隔离，测试群和 `/new` 场景群能被清理。
 
 新增覆盖优先使用高信息量 suite；是否跑完整 runtime/provider 矩阵由各场景的 `providerCoverage` 决定：
@@ -92,7 +92,7 @@ CODELARK_REAL_FEISHU_TEST_LARK_CLI_XDG_DATA_HOME=/home/me/.codelark/real-feishu-
 
 | 场景 | 角色 | 维护要求 |
 | --- | --- | --- |
-| `basic-dialogue-suite` | 最高优先级长流程 | 使用 `--scripted-basic-dialogue --launch-bridge` 时，通过隔离 Codex Responses proxy、CCR fake backend 和 fake Kimi executable 串起 `codex-sdk -> claude-sdk -> kimi-tmux -> codex-tmux -> claude-pty -> codex-pty`，不依赖 live bridge 或宿主 Kimi 会话；Kimi 阶段还必须在非 final 流式状态区 checkpoint 中出现「当前思考」，且 completed final card 不能泄漏 thinking 文本，证明 fresh Kimi 只执行一次不带 `-r` 的启动、没有 Ctrl-C bootstrap、从 TUI 保存 fake CLI 生成的 session id，随后对用户输入发送 Ctrl-S steer，并证明 `ChannelChat.runtimeBridgeSessionIds.kimi` 保留独立 Kimi `BridgeSession`、能定位同一个 `wire.jsonl`，从该 transcript 读回本轮 think、marker 文本和 `step.end`，且历史 transcript 读取只返回 marker 正文、不返回 thinking/status 内容。 |
+| `basic-dialogue-suite` | 最高优先级长流程 | 使用 `--scripted-basic-dialogue --launch-bridge` 时，通过隔离 Codex Responses proxy、CCR fake backend 和 fake Kimi executable 串起 `codex-sdk -> claude-sdk -> kimi-tmux -> codex-tmux`，不依赖 live bridge 或宿主 Kimi 会话；Kimi 阶段还必须在非 final 流式状态区 checkpoint 中出现「当前思考」，且 completed final card 不能泄漏 thinking 文本，证明 fresh Kimi 只执行一次不带 `-r` 的启动、没有 Ctrl-C bootstrap、从 TUI 保存 fake CLI 生成的 session id，随后对用户输入发送 Ctrl-S steer，并证明 `ChannelChat.runtimeBridgeSessionIds.kimi` 保留独立 Kimi `BridgeSession`、能定位同一个 `wire.jsonl`，从该 transcript 读回本轮 think、marker 文本和 `step.end`，且历史 transcript 读取只返回 marker 正文、不返回 thinking/status 内容。 |
 | `runtime-smoke` | provider 路径健康检查 | 只在需要快速完整 provider 信号时运行。 |
 | `session-command-suite` | 命令和会话管理 | 覆盖 `/status`、`/runtime`、`/p`、`/help`、`/set`、`/new`、`/cd`、`/current`、`/check`、`/t` 和一个最终 marker prompt。 |
 | `history-suite` | 历史功能簇 | 进入 runtime/provider 矩阵；当前已有 canonical 报告是 `real-feishu::history-suite::codex-tmux` 的 `histsuite-codex-tmux-live-0858.json`，`kimi-tmux` 仍需真实飞书重跑。 |
@@ -109,9 +109,9 @@ CODELARK_REAL_FEISHU_TEST_LARK_CLI_XDG_DATA_HOME=/home/me/.codelark/real-feishu-
 - `runtime-message`：Codex/Claude 五条历史 runtime/provider 路径已有 canonical 报告；`kimi-tmux` 已有真实飞书 canonical 报告 `work/real-feishu/real-feishu-runtime-message-kimi-tmux.json`，覆盖 `/runtime kimi`、`/p tmux`、Kimi runtime identity 绑定、最终 transcript marker、Kimi `wire.jsonl`、provider output path 和 mirror final 去重。
 - `command-state`：Codex/Claude 五条历史 runtime/provider 路径已有 canonical 报告；harness 现在也计划 `kimi-tmux`，并通过 `runtime_prompt_final_transcript_marker` 验证尾部 runtime prompt marker，通过 `command_state_runtime_settings_transcript` 从最终飞书 transcript 验证 runtime/settings 与 `/every` 回复，通过 `command_state_file_and_large_file_transcript` 验证小文件 `file` 回复和大文件 `interactive` 确认卡，但 Kimi 真实飞书 canonical 报告仍待跑。
 - `kimi-tmux`：Kimi 目前已有本地 unit/workflow/mock-app 覆盖，并已有 `message-only` 与 `runtime-message` 两条 runtime smoke 的真实飞书 canonical 报告；下一步仍需要补 `session-management` 代表路径和 `basic-dialogue-suite` 长流程。当前 `basic-dialogue-suite --scripted-basic-dialogue` 诊断失败卡在 Kimi 阶段前的 Codex SDK queued followup 收尾，报告为 `work/real-feishu/real-feishu-basic-dialogue-scripted-kimi.failure.json`。
-- `session-management`：当前语义 gate 已把 `/t` 纳入命令回复断言；`runtime_prompt_final_transcript_marker` 会验证 runtime prompt marker，`session_management_runtime_identity_transcript` 会从最终飞书 transcript 验证 `/current`、`/check` 和 `/t archive` 的 runtime identity/归档回复，覆盖 Kimi 的 `kimi_session_id`、`runtime_cwd` 和 Kimi archive 文案。已有 codex-pty 和 codex-tmux 证据早于 `/t` 单表 runtime 下拉卡片，codex-sdk、claude-pty、claude-sdk 旧报告也需要新 gate 重跑。
+- `session-management`：当前语义 gate 已把 `/t` 纳入命令回复断言；`runtime_prompt_final_transcript_marker` 会验证 runtime prompt marker，`session_management_runtime_identity_transcript` 会从最终飞书 transcript 验证 `/current`、`/check` 和 `/t archive` 的 runtime identity/归档回复，覆盖 Kimi 的 `kimi_session_id`、`runtime_cwd` 和 Kimi archive 文案。当前矩阵只维护 SDK/tmux；旧 PTY 报告仅作历史参考，不再属于发布 gate。
 - `history-suite`：codex-tmux 已有通过证据；harness 现在计划完整 runtime/provider 矩阵并包含 `kimi-tmux`，并通过 `runtime_prompt_final_transcript_marker` 验证短历史 runtime prompt marker，通过 `history_suite_transcript_contract` 从最终飞书 transcript 验证短历史、json/file 附件、长截断和空历史隔离；拆分的 history 场景仅保留为诊断和局部回归参考。
-- `markdown-rendering`：codex-pty 与 codex-tmux 已有真实飞书 Markdown 表格和代码块证据；harness 会对 Kimi tmux 等 runtime/provider 路径计划同一 transcript 结构 gate，并用 `runtime_prompt_final_transcript_marker` 兜底验证 Markdown marker 从最终 transcript 读回。
+- `markdown-rendering`：codex-tmux 已有真实飞书 Markdown 表格和代码块证据；harness 会对 Kimi tmux 等 runtime/provider 路径计划同一 transcript 结构 gate，并用 `runtime_prompt_final_transcript_marker` 兜底验证 Markdown marker 从最终 transcript 读回。
 
 ## 成功报告标准
 
@@ -124,7 +124,7 @@ CODELARK_REAL_FEISHU_TEST_LARK_CLI_XDG_DATA_HOME=/home/me/.codelark/real-feishu-
 - `final_feishu_transcript_present`：最终飞书 transcript 存在，并包含本轮发送的 message id。
 - `runtime_prompt_final_transcript_marker`：所有需要 runtime output、final prompt 有稳定 marker、且没有更专门最终形态 gate 的场景，都必须从最终飞书 transcript 中读回该 marker；Kimi tmux 等 mirror provider 不能只证明 provider output 或 mirror 完成。`agent-question-forms` 使用专门的 CardKit 表单 gate，`basic-dialogue-suite` 使用多阶段状态/历史 gate。
 - `required_checks_passed`：binding、session、runtime identity、audit、provider 输出路径等 required checks 全部满足。
-- `provider_output_path`：SDK/direct 路径出现 `im:` 且不出现 `mirror:`；pty/tmux/mirror 路径出现 `mirror:`。
+- `provider_output_path`：SDK/direct 路径出现 `im:` 且不出现 `mirror:`；tmux/mirror 路径出现 `mirror:`。
 - `mirror_final_not_duplicated_in_direct_reply`：mirror provider 的最终业务文本不能同时出现在 direct `reply_to` 状态卡中。
 - `codex_runtime_error_terminal_card`：真实 Codex 0.144.3 + custom provider HTTP 400 必须证明直接 TUI 输入无需下一条消息即可终止 streaming；最终卡 footer 含完整 `type · message · elapsed`，窄终端换行不能截断 JSON，rollout 缺失 error 时由 checkpoint fallback 补齐且不能产生第二个错误块。
 - `created_chat_cleanup_completed`：harness 创建的测试群成功清理，除非显式 `--keep-group`；失败报告也不能默认保留测试群。
@@ -181,7 +181,7 @@ CODELARK_REAL_FEISHU_TEST_LARK_CLI_XDG_DATA_HOME=/home/me/.codelark/real-feishu-
 Claude/CCR 场景额外要求：
 
 - bridge 日志应出现 `Route Claude Code request`，且 executable 是 `ccr`。
-- 如果群里返回 Claude Code 欢迎页、安全提示或 trust prompt，说明 Claude Code TUI provider（tmux 默认路径或显式 pty）还没有完成 onboarding，不能算 runtime 响应通过。
+- 如果群里返回 Claude Code 欢迎页、安全提示或 trust prompt，说明 Claude Code tmux provider 还没有完成 onboarding，不能算 runtime 响应通过。
 - `--fake-ccr` 必须配合 `--launch-bridge` 使用；它只会给 harness 启动的隔离 bridge 写入 fake CCR 配置，不能注入已运行的 live bridge。
 - `--scripted-basic-dialogue` 只能配合 `basic-dialogue-suite` 和 `--launch-bridge` 使用；它会把 Codex Responses、CCR 和 Kimi executable 都隔离在本次 run root 下。
 - 接受 `basic-dialogue-suite --scripted-basic-dialogue` canonical 报告前，先检查报告 JSON：`canonicalEligibility.eligible` 必须为 `true`，`automatedSuccessChecks` 必须包含通过的 `canonical_report_eligible`，`runRoot` 必须是本次临时目录，`codelarkHome`、`runtimeEnvironment.runtimeHome`、`runtimeEnvironment.codexHome` 和 `runtimeEnvironment.kimiHome` 都必须位于该 `runRoot` 下，且 Kimi executable 来源应为 `scripted-fake-executable`。任何显示 `codelarkHome=/home/*/.codelark`、`codexHome=/home/*/.codex` 或 `kimiHome=/home/*/.kimi-code` 的报告都只能作为诊断，不算 canonical。

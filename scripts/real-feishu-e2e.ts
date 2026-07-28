@@ -44,7 +44,7 @@ import { containsGeneratedReplyTexts } from '../src/testing/real-feishu/reply-ev
 const execFileAsync = promisify(execFile);
 
 type RuntimeName = 'codex' | 'claude' | 'kimi' | 'cursor';
-type ProviderName = 'sdk' | 'pty' | 'tmux';
+type ProviderName = 'sdk' | 'tmux';
 
 const COMMAND_RESPONSE_TIMEOUT_MS = 15_000;
 const FILTERED_MESSAGE_OBSERVE_MS = 6_000;
@@ -390,14 +390,10 @@ const BASIC_DIALOGUE_PROVIDER_SEQUENCE = [
   'claude-sdk',
   'kimi-tmux',
   'codex-tmux',
-  'claude-pty',
-  'codex-pty',
 ];
 const BASIC_DIALOGUE_APPEND_INPUT_PROVIDER_KEYS = [
   'kimi-tmux',
   'codex-tmux',
-  'claude-pty',
-  'codex-pty',
 ];
 
 const SCENARIOS: ScenarioDefinition[] = [
@@ -445,7 +441,7 @@ const SCENARIOS: ScenarioDefinition[] = [
   {
     name: 'basic-dialogue-suite',
     testNamePrefix: 'real-feishu::basic-dialogue-suite',
-    description: '同一会话中按 codex-sdk -> claude-sdk -> kimi-tmux -> codex-tmux -> claude-pty -> codex-pty 切换，覆盖基本对话、工具/权限/goal/context/stop、Kimi steer 和 SDK mirror 抑制。',
+    description: '同一会话中按 codex-sdk -> claude-sdk -> kimi-tmux -> codex-tmux 切换，覆盖基本对话、工具/权限/goal/context/stop、Kimi steer 和 SDK mirror 抑制。',
     unitCoverage: [
       'unit::interactive-turn-runner::basic-dialogue-session-simulator',
       'unit::interactive-turn-runner::controlled-tool-context-stream-card',
@@ -886,7 +882,7 @@ function buildRuntimeProviderCommands(options: CliOptions): string[] {
 function sessionManagementProviderSettingCommand(options: CliOptions): string {
   if (options.runtime === 'kimi') return '/set kimiProvider tmux';
   if (options.runtime === 'cursor') return '/set cursorProvider tmux';
-  return `/set claudeProvider ${options.runtime === 'claude' ? options.provider : 'pty'}`;
+  return `/set claudeProvider ${options.runtime === 'claude' ? options.provider : 'tmux'}`;
 }
 
 function parseRuntimeProviderKey(key: string): { runtime: RuntimeName; provider: ProviderName } {
@@ -955,7 +951,7 @@ function basicDialoguePhaseCommands(options: CliOptions, providerKey: string): s
     `/p ${provider}`,
     basicDialoguePrompt(options, providerKey),
     ...(includesFollowup ? [basicDialogueFollowupPrompt(options, providerKey)] : []),
-    ...(providerKey === 'codex-pty' ? ['/stop'] : []),
+    ...(providerKey === 'codex-tmux' ? ['/stop'] : []),
   ];
 }
 
@@ -1035,7 +1031,7 @@ function basicDialogueSuitePlan(options: CliOptions): Record<string, unknown> {
             mirrorSuppressionObservationWindowMs: BASIC_DIALOGUE_SDK_MIRROR_SUPPRESSION_GRACE_MS,
           }
           : {}),
-        ...(providerKey === 'codex-pty' ? { stopCommand: '/stop' } : {}),
+        ...(providerKey === 'codex-tmux' ? { stopCommand: '/stop' } : {}),
         ...(isBasicDialogueAppendInputPhase(providerKey)
           ? {
             appendInputGate: options.scriptedBasicDialogue
@@ -1307,10 +1303,10 @@ function parseOptions(argv: string[]): CliOptions {
 
 function normalizeProviderForRuntime(runtime: RuntimeName, raw: string): ProviderName {
   const provider = raw.trim().toLowerCase();
-  if (!provider) return runtime === 'kimi' || runtime === 'cursor' ? 'tmux' : 'pty';
+  if (!provider) return 'tmux';
   if (runtime === 'codex') {
-    if (provider === 'sdk' || provider === 'pty' || provider === 'tmux') return provider;
-    throw new Error(`Invalid Codex provider "${raw}". Expected sdk, pty, or tmux.`);
+    if (provider === 'sdk' || provider === 'tmux') return provider;
+    throw new Error(`Invalid Codex provider "${raw}". Expected sdk or tmux.`);
   }
   if (runtime === 'kimi') {
     if (provider === 'tmux') return provider;
@@ -1320,8 +1316,8 @@ function normalizeProviderForRuntime(runtime: RuntimeName, raw: string): Provide
     if (provider === 'tmux') return provider;
     throw new Error(`Invalid Cursor provider "${raw}". Expected tmux.`);
   }
-  if (provider === 'sdk' || provider === 'pty' || provider === 'tmux') return provider;
-  throw new Error(`Invalid Claude provider "${raw}". Expected sdk, pty, or tmux.`);
+  if (provider === 'sdk' || provider === 'tmux') return provider;
+  throw new Error(`Invalid Claude provider "${raw}". Expected sdk or tmux.`);
 }
 
 function printUsage(): void {
@@ -1364,7 +1360,7 @@ function printUsage(): void {
     '  --chat-id <oc_>            Existing real test group; skips /new creation',
     '  --runtime <claude|codex|kimi|cursor> Runtime to validate after group creation',
     '  --cursor-model <model>    Cursor model for the isolated bridge; default gpt-5.3-codex',
-    '  --provider <name>          Codex/Claude: sdk|pty|tmux; Kimi/Cursor: tmux. Default pty, or tmux for Kimi/Cursor.',
+    '  --provider <name>          Codex/Claude: sdk|tmux; Kimi/Cursor: tmux. Default tmux.',
     '  --channel-type <id>        Bridge channel type, default feishu-env',
     '  --workdir <path>           Working directory for /new',
     '  --message <text>           Test message to send as user',
@@ -1397,9 +1393,7 @@ function providerMatrixForScenario(scenario: ScenarioDefinition): string[] {
   if (scenario.providerCoverage === 'runtime-parameterized') {
     return [
       `${scenario.testNamePrefix}::codex-sdk`,
-      `${scenario.testNamePrefix}::codex-pty`,
       `${scenario.testNamePrefix}::codex-tmux`,
-      `${scenario.testNamePrefix}::claude-pty`,
       `${scenario.testNamePrefix}::claude-sdk`,
       `${scenario.testNamePrefix}::claude-tmux`,
       `${scenario.testNamePrefix}::kimi-tmux`,
@@ -1435,8 +1429,8 @@ function scenarioCoverage(options: CliOptions): Record<string, unknown> {
     ...(scenario.name === 'basic-dialogue-suite' ? { basicDialogueSuite: basicDialogueSuitePlan(options) } : {}),
     dualProviderCompanion: matrix.find((name) => (
       options.runtime === 'codex'
-        ? name.endsWith('::claude-pty')
-        : name.endsWith('::codex-pty')
+        ? name.endsWith('::claude-tmux')
+        : name.endsWith('::codex-tmux')
     )) || null,
     matrix,
     matrixCompanions: matrix.filter((name) => name !== runtimeTestName),
@@ -1444,7 +1438,7 @@ function scenarioCoverage(options: CliOptions): Record<string, unknown> {
     e2eCoverage: scenario.e2eCoverage,
     coverageNotes: [
       scenario.providerCoverage === 'runtime-parameterized'
-        ? '该场景需要覆盖 codex-sdk、codex-pty、codex-tmux、claude-sdk、claude-pty、claude-tmux、kimi-tmux、cursor-tmux 八条路径，才能形成完整 runtime/provider 矩阵证据。'
+        ? '该场景需要覆盖 codex-sdk、codex-tmux、claude-sdk、claude-tmux、kimi-tmux、cursor-tmux 六条路径，才能形成完整 runtime/provider 矩阵证据。'
         : scenario.providerCoverage === 'representative-provider'
         ? '该功能簇场景默认只要求代表 provider 路径；provider smoke matrix 负责完整 runtime/provider 健康检查。'
         : scenario.providerCoverage === 'cross-provider-suite'
@@ -1489,7 +1483,7 @@ function parseRuntimeProviderFromTestName(testName: string): { runtime?: Runtime
   const suffix = testName.split('::').pop() || '';
   const [runtime, provider] = suffix.split('-');
   if ((runtime === 'codex' || runtime === 'claude' || runtime === 'kimi' || runtime === 'cursor')
-    && (provider === 'sdk' || provider === 'pty' || provider === 'tmux')) {
+    && (provider === 'sdk' || provider === 'tmux')) {
     return { runtime, provider };
   }
   return {};
@@ -4684,7 +4678,7 @@ function sessionManagementExpectedTexts(options: CliOptions, text: string): stri
   if (command === sessionManagementProviderSettingCommand(options)) {
     if (options.runtime === 'kimi') return ['已更新全局配置', 'runtime.kimi.provider', 'tmux'];
     if (options.runtime === 'cursor') return ['已更新全局配置', 'runtime.cursor.provider', 'tmux'];
-    return ['已更新全局配置', 'runtime.claude.provider', options.runtime === 'claude' ? options.provider : 'pty'];
+    return ['已更新全局配置', 'runtime.claude.provider', options.runtime === 'claude' ? options.provider : 'tmux'];
   }
   if (command === `/new mgmt-${options.runId} ${options.workDir}`) {
     return ['已创建群聊会话', `mgmt-${options.runId}`, options.workDir, 'Runtime', runtimeDisplayLabel(options.runtime)];
@@ -5824,14 +5818,14 @@ function writeIsolatedBridgeConfig(options: CliOptions): void {
       agent: options.runtime,
       codex: {
         ...(usesProxyBackedBasicDialogue(options) ? { model: options.codexModel } : {}),
-        provider: options.runtime === 'codex' ? options.provider : (process.env.CODELARK_DEFAULT_CODEX_PROVIDER || 'pty'),
+        provider: options.runtime === 'codex' ? options.provider : (process.env.CODELARK_DEFAULT_CODEX_PROVIDER || 'tmux'),
         skipGitRepoCheck: true,
         sandboxMode: 'workspace-write',
         networkAccess: true,
         reasoningEffort: usesProxyBackedBasicDialogue(options) ? 'low' : 'medium',
       },
       claude: {
-        provider: options.runtime === 'claude' ? options.provider : 'pty',
+        provider: options.runtime === 'claude' ? options.provider : 'tmux',
         executable: options.claudeExecutable,
         permissionMode: process.env.CODELARK_CLAUDE_PERMISSION_MODE || 'default',
         ...(process.env.CODELARK_CLAUDE_DEFAULT_MODEL
@@ -5943,9 +5937,9 @@ async function launchBridgeChild(options: CliOptions, runtimeEnvironment: Runtim
           ? { CURSOR_AGENT_EXECUTABLE: runtimeEnvironment.cursorExecutablePath }
           : {}),
         CODELARK_CLAUDE_EXECUTABLE: runtimeEnvironment.claudeExecutable,
-        CODELARK_CLAUDE_PROVIDER: options.runtime === 'claude' ? options.provider : (process.env.CODELARK_CLAUDE_PROVIDER || 'pty'),
+        CODELARK_CLAUDE_PROVIDER: options.runtime === 'claude' ? options.provider : (process.env.CODELARK_CLAUDE_PROVIDER || 'tmux'),
         CODELARK_KIMI_PROVIDER: 'tmux',
-        CODELARK_DEFAULT_CODEX_PROVIDER: options.runtime === 'codex' ? options.provider : (process.env.CODELARK_DEFAULT_CODEX_PROVIDER || 'pty'),
+        CODELARK_DEFAULT_CODEX_PROVIDER: options.runtime === 'codex' ? options.provider : (process.env.CODELARK_DEFAULT_CODEX_PROVIDER || 'tmux'),
         CODELARK_CODEX_SKIP_GIT_REPO_CHECK: process.env.CODELARK_CODEX_SKIP_GIT_REPO_CHECK || 'true',
         ...(runtimeEnvironment.kimiExecutablePath
           ? { CODELARK_KIMI_EXECUTABLE: runtimeEnvironment.kimiExecutablePath }
@@ -6974,7 +6968,7 @@ async function main(): Promise<void> {
     if (usesProxyBackedBasicDialogue(options) && !options.dryRun) {
       codexResponsesProxy = await startSharedLocalCodexResponsesProxy(options.fakeCcrResponseText);
       options.codexProxyBaseUrl = codexResponsesProxy.baseUrl;
-      process.stderr.write(`[real-feishu-e2e] Started local Codex Responses proxy at ${codexResponsesProxy.baseUrl}; Codex SDK/pty/tmux will use isolated CODEX_HOME=${options.codexHome}\n`);
+      process.stderr.write(`[real-feishu-e2e] Started local Codex Responses proxy at ${codexResponsesProxy.baseUrl}; Codex SDK/tmux will use isolated CODEX_HOME=${options.codexHome}\n`);
     }
     if (usesFakeCcrBackend(options) && !options.dryRun) {
       fakeCcrBackend = await startLocalFakeCcrBackend(options.fakeCcrResponseText);

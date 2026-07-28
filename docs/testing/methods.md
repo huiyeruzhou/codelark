@@ -119,16 +119,16 @@ long-running 功能不能只测“成功派发 worker”。精炼用户故事至
 
 ### Runtime/provider 执行链路
 
-这些测试证明 bridge 与 Codex/Claude/Kimi provider 的协议边界稳定：事件流、session identity、pty/tmux 生命周期、CLI 可执行文件、模型列表和错误事件。
+这些测试证明 bridge 与 Codex/Claude/Kimi provider 的协议边界稳定：事件流、session identity、tmux 生命周期、CLI 可执行文件、模型列表和错误事件。PTY provider 的专属测试已经移除，不再作为发布保证；配置迁移测试仍可保留旧 `pty` 值，防止读取历史配置时损坏数据。
 
 | 测试文件 | 关注点 |
 | --- | --- |
 | `codex-provider.test.ts` | Codex SDK/SSE 事件转换、图片输入、错误事件和 provider 主路径。 |
 | `codex-routing-provider.test.ts` | Codex/Claude/Kimi provider 选择和 fallback，包含 Claude 默认 tmux 与 Kimi tmux。 |
 | `codex-cli-executable.test.ts`、`codex-models.test.ts` | Codex CLI 定位和模型列表缓存。 |
-| `codex-pty-provider.test.ts`、`codex-tmux-provider.test.ts` | Codex pty/tmux prompt 注入、启动参数、auto-enter、清理和事件输出。 |
+| `codex-tmux-provider.test.ts` | Codex tmux prompt 注入、启动参数、auto-enter、清理和事件输出。 |
 | `codex-session-index.test.ts`、`codex-session-mirror.test.ts` | Codex JSONL/session 索引读取、mirror cursor 对齐和事件重放。 |
-| `claude-tmux-provider.test.ts`、`claude-pty-provider.test.ts`、`claude-sdk-provider.test.ts`、`claude-session-jsonl.test.ts` | Claude tmux 启动/注入/mirror SSE、Claude pty 身份发现、Claude SDK helper、Claude JSONL session 读取。 |
+| `claude-tmux-provider.test.ts`、`claude-sdk-provider.test.ts`、`claude-session-jsonl.test.ts` | Claude tmux 启动/注入/mirror SSE、Claude SDK helper、Claude JSONL session 读取。 |
 | `kimi-tmux-provider.test.ts`、真实 Kimi executable E2E、`kimi-tmux-provider-local-process.e2e.test.ts` | fresh 不带 `-r` 单次启动、从真实 TUI 发现 CLI session id、wire 在首条输入前或输入后创建、跨 turn 复用、慢模型 `Ctrl-S` steer、tmux 丢失恢复、think/status 和 terminal 归属；scripted fixture 继续穿过真实 tmux，但不冒充真实 executable gate。 |
 | `sse-stream-decoder.test.ts` | SSE 文本流解码和事件边界。 |
 | `interactive-turn-runner.test.ts` | 一次 runtime turn 的主编排，含 stream、tool、context、goal、stop、mirror suppression、基础对话 simulator，以及 answer 中间态附件立即发送、thinking 排除和终态去重。 |
@@ -209,7 +209,7 @@ npm run real:feishu:e2e -- --list-scenarios
 | 验证目的 | 首选场景 | 说明 |
 | --- | --- | --- |
 | provider 路径是否健康 | `message-only` 或 `runtime-message` | 证明消息能到达 runtime 并回到飞书，不证明复杂功能。Cursor 的 `runtime-message` 额外检查最终 CardKit 是否使用共享 header、runtime/model metadata 和 history 区域，防止正文正确但卡片退化为无标题旧结构。 |
-| 同一会话多 provider 基础对话 | `basic-dialogue-suite` | 最高优先级长流程，按 `codex-sdk -> claude-sdk -> kimi-tmux -> codex-tmux -> claude-pty -> codex-pty` 覆盖代表路径。 |
+| 同一会话多 provider 基础对话 | `basic-dialogue-suite` | 最高优先级长流程，按 `codex-sdk -> claude-sdk -> kimi-tmux -> codex-tmux` 覆盖代表路径。 |
 | 命令状态和配置 | `command-state` | 覆盖 `/status`、runtime/provider 设置、require-at、`/every` 等语义文本。 |
 | 会话生命周期 | `session-management` | 覆盖 `/help`、`/set`、`/new`、`/cd`、`/current`、`/check`、`/t`、最终 prompt 和 `/his`。 |
 | 历史功能簇 | `history-suite` | 在 runtime/provider 矩阵中合并验证 `/his` 默认/raw/msg/limit/json/file、长截断和跨群空历史隔离，包含 `kimi-tmux`。 |
@@ -225,7 +225,7 @@ npm run real:feishu:e2e -- --list-scenarios
 | 改动类型 | 最小本地验证 | 需要补充的验证 |
 | --- | --- | --- |
 | 命令文案、slash command、session 绑定 | `npm test` 或定向跑 `command-dispatch.test.ts`、`bridge-command-e2e.test.ts`、相关 session 测试；改飞书卡片结构时加 `feishu-markdown.test.ts` | 改用户可见命令语义时，补 `command-state` 或 `session-management` 真实飞书。 |
-| runtime/provider 选择或启动 | provider 相关测试、`interactive-turn-runner.test.ts`、`npm run typecheck` | 改 pty/tmux/Claude Code/Codex CLI 时，补对应 `real-*provider.e2e.test.ts`；用户可见路径补 `runtime-message`。 |
+| runtime/provider 选择或启动 | provider 相关测试、`interactive-turn-runner.test.ts`、`npm run typecheck` | 改 tmux/SDK/Claude Code/Codex CLI 时，补对应真实 executable E2E；用户可见路径补 `runtime-message`。 |
 | mirror、stream、delivery、Markdown、卡片 | delivery/mirror/stream/markdown/card 测试 | 改飞书 payload 或真实客户端形态时，补 `markdown-rendering`、`card-forms` 或 `agent-question-forms`。 |
 | 历史、附件、文件交付 | `bridge-command-e2e.test.ts`、`store.test.ts`、`delivery-pipeline.test.ts` | 补 `history-suite`，特别是 `/his json`、`/his file`、长截断和跨群隔离。 |
 | 通道配置、UI、服务管理 | 对应 `ui-*`、`channel-*`、`service-manager.test.ts` | 只有 IM 可见行为变化才补真实飞书；本地 Web/API 行为以本地测试为主。 |
@@ -236,6 +236,6 @@ npm run real:feishu:e2e -- --list-scenarios
 
 - 新增测试时先判断它证明的是纯逻辑、本地 workflow、本地真实进程，还是外部平台契约；不要把真实飞书 E2E 当成本地测试的逐条镜像。
 - 工具调用测试以 scripted Mock 为协议回归基座，再用真实 Codex/Kimi fixture 验证协议 shape，最后才用隔离飞书 App 验证 CardKit 客户端边界；真模型输出不能替代确定性断言。
-- 命令密集型真实 E2E 按 runtime 压缩，不默认扩张完整 provider 矩阵；provider 差异只在输出路径、pty/tmux 专属行为和真实风险足够高时增加。
+- 命令密集型真实 E2E 按 runtime 压缩，不默认扩张完整 provider 矩阵；provider 差异只在 SDK/tmux 输出路径和真实风险足够高时增加。
 - `src/__tests__` 下的本地测试要尽量保持隔离 home；任何读取真实 `~/.codelark`、`~/.codex`、`~/.claude` 的测试都应被视为风险。
 - 真实飞书成功证据必须来自自动 gate 和 report，不来自“群里看起来回了消息”的人工观察。

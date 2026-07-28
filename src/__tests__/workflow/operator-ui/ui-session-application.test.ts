@@ -376,7 +376,7 @@ describe('UiSessionApplication', () => {
       systemPrompt: 'keep this in session json only',
       model: 'gpt-5.4',
       preferredMode: 'yolo',
-      codexProvider: 'pty',
+      codexProvider: 'tmux',
       reasoningEffort: 'high',
       codexSandboxMode: 'read-only',
       codexNetworkAccess: false,
@@ -386,7 +386,7 @@ describe('UiSessionApplication', () => {
     assert.equal(updated.systemPrompt, 'keep this in session json only');
     assert.equal(updated.model, 'gpt-5.4');
     assert.equal(updated.preferredMode, 'yolo');
-    assert.equal(updated.codexProvider, 'pty');
+    assert.equal(updated.codexProvider, 'tmux');
     assert.equal(updated.reasoningEffort, 'high');
     assert.equal(updated.codexSandboxMode, 'read-only');
     assert.equal(updated.codexNetworkAccess, false);
@@ -403,7 +403,7 @@ describe('UiSessionApplication', () => {
     assert.equal(configService.get('session.workspace', { kind: 'session', sessionId: session.id }), '/tmp/codex-config-next');
     assert.equal(configService.get('runtime.codex.model', { kind: 'session', sessionId: session.id }), 'gpt-5.4');
     assert.equal(configService.get('runtime.codex.yoloMode', { kind: 'session', sessionId: session.id }), 'on');
-    assert.equal(configService.get('runtime.codex.provider', { kind: 'session', sessionId: session.id }), 'pty');
+    assert.equal(configService.get('runtime.codex.provider', { kind: 'session', sessionId: session.id }), 'tmux');
     assert.equal(configService.get('runtime.codex.reasoningEffort', { kind: 'session', sessionId: session.id }), 'high');
     assert.equal(configService.get('runtime.codex.sandboxMode', { kind: 'session', sessionId: session.id }), 'read-only');
     assert.equal(configService.get('runtime.codex.networkAccess', { kind: 'session', sessionId: session.id }), false);
@@ -426,7 +426,7 @@ describe('UiSessionApplication', () => {
     assert.equal(tomlBacked.systemPrompt, 'keep this in session json only');
     assert.equal(tomlBacked.model, 'gpt-5.4');
     assert.equal(tomlBacked.preferredMode, 'yolo');
-    assert.equal(tomlBacked.codexProvider, 'pty');
+    assert.equal(tomlBacked.codexProvider, 'tmux');
     assert.equal(tomlBacked.reasoningEffort, 'high');
     assert.equal(tomlBacked.codexSandboxMode, 'read-only');
     assert.equal(tomlBacked.codexNetworkAccess, false);

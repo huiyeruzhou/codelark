@@ -180,7 +180,6 @@ describe('SessionDisplayQuery', () => {
     assert.equal(unboundRow.kind, 'claude');
     assert.equal(unboundRow.runtime, 'claude');
     assert.equal(unboundRow.bridgeSessionId, undefined);
-    assert.equal(unboundRow.executionProvider, 'pty');
     assert.equal(unboundRow.codexProvider, '-');
   });
 

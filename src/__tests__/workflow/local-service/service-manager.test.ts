@@ -193,7 +193,7 @@ describe('service-manager lark-cli runtime environment', () => {
       ].join('\n'));
       fs.writeFileSync(configEnvPath, [
         'CODELARK_RUNTIME=codex',
-        'CODELARK_DEFAULT_CODEX_PROVIDER=pty',
+        'CODELARK_DEFAULT_CODEX_PROVIDER=tmux',
         'CODELARK_KIMI_MODEL=legacy-kimi-model',
         'CODELARK_KIMI_PROVIDER=tmux',
         'CODELARK_FEISHU_APP_ID=legacy-app',

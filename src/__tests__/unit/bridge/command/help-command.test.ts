@@ -18,7 +18,6 @@ describe('help command', () => {
       assert.match(text, new RegExp(`\\*\\*${section}\\*\\*`));
     }
     assert.match(text, /\/provider.*Bridge 控制|Bridge 控制[\s\S]*\/provider/);
-    assert.match(text, /Claude 可用 `pty \| tmux \| sdk`/);
     assert.match(text, /终端工具[\s\S]*\/shell[\s\S]*\/tmux[\s\S]*\/cat[\s\S]*\/file/);
     assert.match(text, /运维[\s\S]*\/doctor[\s\S]*\/his/);
     assert.match(text, /Bridge 控制[\s\S]*\/require-at/);

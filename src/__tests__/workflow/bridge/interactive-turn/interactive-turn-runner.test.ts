@@ -288,7 +288,7 @@ class ScriptedSessionSimulator {
     return router.resolve(this.address)?.bridgeSessionId || '';
   }
 
-  setRuntimeProvider(runtime: 'codex' | 'claude' | 'kimi' | 'cursor', provider: 'sdk' | 'pty' | 'tmux'): void {
+  setRuntimeProvider(runtime: 'codex' | 'claude' | 'kimi' | 'cursor', provider: 'sdk' | 'tmux'): void {
     const sessionId = this.sessionId();
     assert.ok(sessionId, 'scripted simulator binding must have a session id');
     getBridgeContext().store.updateSession(sessionId, {
@@ -316,7 +316,7 @@ class ScriptedSessionSimulator {
           ? { runtime: { kimi: { provider: 'tmux' } } }
           : runtime === 'cursor'
             ? { runtime: { cursor: { provider: 'tmux' } } }
-          : { runtime: { codex: { provider: provider === 'tmux' ? 'tmux' : provider === 'pty' ? 'pty' : 'sdk' } } },
+          : { runtime: { codex: { provider: provider === 'tmux' ? 'tmux' : 'sdk' } } },
     );
   }
 
@@ -707,7 +707,7 @@ stream_status_check_interval_seconds = 3
     const phases: Array<{
       key: string;
       runtime: 'codex' | 'claude' | 'kimi';
-      provider: 'sdk' | 'pty' | 'tmux';
+      provider: 'sdk' | 'tmux';
       progressSource: ActiveBridgeTurn['progressSource'];
       finalSource: ActiveBridgeTurn['finalSource'];
     }> = [
@@ -715,8 +715,6 @@ stream_status_check_interval_seconds = 3
       { key: 'claude-sdk', runtime: 'claude', provider: 'sdk', progressSource: 'sdk_stream', finalSource: 'sdk_result' },
       { key: 'kimi-tmux', runtime: 'kimi', provider: 'tmux', progressSource: 'kimi_jsonl', finalSource: 'kimi_task_complete' },
       { key: 'codex-tmux', runtime: 'codex', provider: 'tmux', progressSource: 'codex_jsonl', finalSource: 'codex_task_complete' },
-      { key: 'claude-pty', runtime: 'claude', provider: 'pty', progressSource: 'claude_jsonl', finalSource: 'claude_task_complete' },
-      { key: 'codex-pty', runtime: 'codex', provider: 'pty', progressSource: 'codex_jsonl', finalSource: 'codex_task_complete' },
     ];
 
     for (const [index, phase] of phases.entries()) {
@@ -772,11 +770,9 @@ stream_status_check_interval_seconds = 3
       'claude:sdk_stream:sdk_result',
       'kimi:kimi_jsonl:kimi_task_complete',
       'codex:codex_jsonl:codex_task_complete',
-      'claude:claude_jsonl:claude_task_complete',
-      'codex:codex_jsonl:codex_task_complete',
     ]);
     assert.ok(simulator.adapter.streamedStatuses.some((status) => status.includes('provider preload complete: codex-sdk')));
-    assert.ok(simulator.adapter.streamedStatuses.some((status) => status.includes('provider preload complete: claude-pty')));
+    assert.ok(simulator.adapter.streamedStatuses.some((status) => status.includes('provider preload complete: codex-tmux')));
     assert.ok(simulator.adapter.streamedStatuses.some((status) => status.includes('当前思考：Kimi 正在整理上下文和下一步操作')));
     assert.ok(simulator.adapter.streamedTasks.some((tasks) => tasks.some((task) => task.text === 'Goal Active: codex-sdk provider isolation')));
     assert.ok(simulator.adapter.streamedTools.some((tools) => tools.some((tool) => tool.name === 'Bash' && tool.status === 'complete')));
@@ -1623,17 +1619,17 @@ stream_status_check_interval_seconds = 3
     const address = {
       channelType: 'feishu-default',
       channelProvider: 'feishu',
-      chatId: 'chat-codex-pty-mirror-direct-status',
-      userId: 'user-codex-pty-mirror-direct-status',
+      chatId: 'chat-codex-tmux-mirror-direct-status',
+      userId: 'user-codex-tmux-mirror-direct-status',
     } as const;
-    const binding = router.createBinding(address, '/tmp/codex-pty-mirror-direct-status');
+    const binding = router.createBinding(address, '/tmp/codex-tmux-mirror-direct-status');
     const store = getBridgeContext().store;
     store.updateSession(binding.bridgeSessionId, {
       runtime: {
         activeRuntime: 'codex',
       },
     });
-    setSessionConfigToml(binding.bridgeSessionId, { runtime: { codex: { provider: 'pty' } } });
+    setSessionConfigToml(binding.bridgeSessionId, { runtime: { codex: { provider: 'tmux' } } });
 
     const taskStateMap = new Map<string, InteractiveTaskState>();
     const processStarted = createDeferred<void>();
@@ -1651,7 +1647,7 @@ stream_status_check_interval_seconds = 3
     const runPromise = runInteractiveMessage(
       adapter,
       {
-        messageId: 'incoming-codex-pty-mirror-direct-status-1',
+        messageId: 'incoming-codex-tmux-mirror-direct-status-1',
         address,
         text: 'hello mirror',
         timestamp: Date.now(),
@@ -1671,7 +1667,7 @@ stream_status_check_interval_seconds = 3
         recordInteractiveHealthProgress() {},
         recordInteractiveHealthTool() {},
         recordInteractiveHealthEnd() {},
-        beginMirrorSuppression() { return 'suppression-codex-pty-mirror-direct-status'; },
+        beginMirrorSuppression() { return 'suppression-codex-tmux-mirror-direct-status'; },
         abortMirrorSuppression() {},
         settleMirrorSuppression() {},
         releaseInteractiveTask(sessionId, taskId) {
@@ -1699,8 +1695,8 @@ stream_status_check_interval_seconds = 3
           options,
         ) => {
           onPromptPrepared?.('hello mirror');
-          onStatusNote?.('Codex PTY 正在运行。');
-          await options?.onRuntimeIdentity?.({ runtime: 'codex', sessionId: 'codex-pty-thread-1' });
+          onStatusNote?.('Codex tmux 正在运行。');
+          await options?.onRuntimeIdentity?.({ runtime: 'codex', sessionId: 'codex-tmux-thread-1' });
           processStarted.resolve();
           return neverFinish.promise;
         },
@@ -1713,14 +1709,14 @@ stream_status_check_interval_seconds = 3
 
     const finalized = await task.finalizeFromExternalTerminal(
       'completed',
-      '检测到Codex pty thread已完成当前任务。',
-      'Codex PTY mirror 最终回复',
+      '检测到 Codex tmux thread 已完成当前任务。',
+      'Codex tmux mirror 最终回复',
     );
     await runPromise;
 
     assert.equal(finalized, true);
     assert.equal(adapter.streamEnds.at(-1)?.status, 'completed');
-    assert.doesNotMatch(adapter.streamEnds.at(-1)?.text || '', /Codex PTY mirror 最终回复/);
+    assert.doesNotMatch(adapter.streamEnds.at(-1)?.text || '', /Codex tmux mirror 最终回复/);
     assert.deepEqual(deliveredTexts, []);
     assert.equal(taskStateMap.size, 0);
   });

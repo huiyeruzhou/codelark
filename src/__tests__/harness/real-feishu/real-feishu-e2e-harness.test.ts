@@ -13,9 +13,7 @@ import { containsGeneratedReplyTexts } from '../../../testing/real-feishu/reply-
 
 const RUNTIME_PROVIDER_MATRIX_SUFFIXES = [
   'codex-sdk',
-  'codex-pty',
   'codex-tmux',
-  'claude-pty',
   'claude-sdk',
   'claude-tmux',
   'kimi-tmux',
@@ -794,8 +792,6 @@ describe('unit::real-feishu-e2e-harness::scenario-coverage-metadata', () => {
       'claude-sdk',
       'kimi-tmux',
       'codex-tmux',
-      'claude-pty',
-      'codex-pty',
     ]);
 
     const helpText = runHarness(['--help']);
@@ -1087,8 +1083,6 @@ describe('unit::real-feishu-e2e-harness::scenario-coverage-metadata', () => {
       'claude-sdk',
       'kimi-tmux',
       'codex-tmux',
-      'claude-pty',
-      'codex-pty',
     ]);
     assert.deepEqual(scenario.providerMatrix, ['real-feishu::basic-dialogue-suite::cross-provider']);
     assert.ok(scenario.unitCoverage.includes('unit::interactive-turn-runner::basic-dialogue-session-simulator'));
@@ -1249,16 +1243,16 @@ describe('unit::real-feishu-e2e-harness::scenario-coverage-metadata', () => {
       executedPercent: 28.6,
     });
     assert.deepEqual(parsed.coverageRates.cardFrontend, {
-      total: 34,
+      total: 26,
       canonicalPass: 1,
       legacyPass: 0,
       diagnosticPass: 0,
       diagnosticFailure: 0,
       dryRun: 1,
-      plannedOnly: 32,
+      plannedOnly: 24,
       executed: 2,
-      canonicalPercent: 2.9,
-      executedPercent: 5.9,
+      canonicalPercent: 3.8,
+      executedPercent: 7.7,
     });
     assert.deepEqual(parsed.coverageRates.cardFrontendTmux, {
       total: 17,
@@ -1464,7 +1458,7 @@ describe('unit::real-feishu-e2e-harness::session-management-command-plan', () =>
     };
 
     assert.equal(parsed.coverage.testName, 'real-feishu::runtime-message::kimi-tmux');
-    assert.equal(parsed.coverage.dualProviderCompanion, 'real-feishu::runtime-message::codex-pty');
+    assert.equal(parsed.coverage.dualProviderCompanion, 'real-feishu::runtime-message::codex-tmux');
     assert.deepEqual(parsed.commands, ['/runtime kimi', '/p tmux']);
     assert.equal(parsed.waitsForMirrorFinalBeforeFollowup, true);
     assert.equal(parsed.finalMessageObservationMode, 'mirror-stream-evidence');
@@ -1514,7 +1508,7 @@ describe('unit::real-feishu-e2e-harness::session-management-command-plan', () =>
     };
 
     assert.equal(parsed.coverage.testName, 'real-feishu::runtime-message::cursor-tmux');
-    assert.equal(parsed.coverage.dualProviderCompanion, 'real-feishu::runtime-message::codex-pty');
+    assert.equal(parsed.coverage.dualProviderCompanion, 'real-feishu::runtime-message::codex-tmux');
     assert.deepEqual(parsed.commands, ['/runtime cursor', '/p tmux']);
     assert.equal(parsed.cursorModel, 'gpt-5.3-codex');
     assert.equal(parsed.waitsForMirrorFinalBeforeFollowup, false);
@@ -1596,7 +1590,7 @@ describe('unit::real-feishu-e2e-harness::session-management-command-plan', () =>
     };
 
     assert.equal(parsed.coverage.testName, 'real-feishu::runtime-message::claude-tmux');
-    assert.equal(parsed.coverage.dualProviderCompanion, 'real-feishu::runtime-message::codex-pty');
+    assert.equal(parsed.coverage.dualProviderCompanion, 'real-feishu::runtime-message::codex-tmux');
     assert.deepEqual(parsed.commands, ['/runtime claude', '/p tmux']);
     assert.equal(parsed.finalMessageObservationMode, 'mirror-stream-evidence');
     assert.deepEqual(expectationAt(parsed.commandReplyExpectations, '/runtime claude').expectedTexts, ['Runtime', 'claude']);
@@ -1956,7 +1950,7 @@ describe('unit::real-feishu-e2e-harness::session-management-command-plan', () =>
     const largeFileCommand = commandStateLargeFixtureCommand('unit-command-state-claude');
 
     assert.equal(parsed.coverage.testName, 'real-feishu::command-state::claude-sdk');
-    assert.equal(parsed.coverage.dualProviderCompanion, 'real-feishu::command-state::codex-pty');
+    assert.equal(parsed.coverage.dualProviderCompanion, 'real-feishu::command-state::codex-tmux');
     assert.ok(parsed.plannedSuccessCheckNames.includes('runtime_prompt_final_transcript_marker'));
     assert.ok(parsed.plannedSuccessCheckNames.includes('command_state_runtime_settings_transcript'));
     assert.ok(parsed.plannedSuccessCheckNames.includes('command_state_file_and_large_file_transcript'));
@@ -2015,7 +2009,7 @@ describe('unit::real-feishu-e2e-harness::session-management-command-plan', () =>
     const largeFileCommand = commandStateLargeFixtureCommand('unit-command-state-kimi');
 
     assert.equal(parsed.coverage.testName, 'real-feishu::command-state::kimi-tmux');
-    assert.equal(parsed.coverage.dualProviderCompanion, 'real-feishu::command-state::codex-pty');
+    assert.equal(parsed.coverage.dualProviderCompanion, 'real-feishu::command-state::codex-tmux');
     assert.ok(parsed.plannedSuccessCheckNames.includes('runtime_prompt_final_transcript_marker'));
     assert.ok(parsed.plannedSuccessCheckNames.includes('command_state_runtime_settings_transcript'));
     assert.ok(parsed.plannedSuccessCheckNames.includes('command_state_file_and_large_file_transcript'));
@@ -2044,7 +2038,7 @@ describe('unit::real-feishu-e2e-harness::session-management-command-plan', () =>
     assert.deepEqual(expectationByCommand.get('/every')?.expectedTexts, ['当前聊天 /every 定时输入', 'session runtime-id']);
   });
 
-  it('dry-runs Feishu command coverage for codex-sdk with a claude-pty companion', () => {
+  it('dry-runs Feishu command coverage for codex-sdk with a claude-tmux companion', () => {
     const output = runHarness([
       '--dry-run',
       '--scenario',
@@ -2079,14 +2073,14 @@ describe('unit::real-feishu-e2e-harness::session-management-command-plan', () =>
     assert.equal(parsed.finalMessageObservationMode, 'reply_to');
     assert.ok(parsed.plannedSuccessCheckNames.includes('runtime_prompt_final_transcript_marker'));
     assert.ok(parsed.plannedSuccessCheckNames.includes('session_management_runtime_identity_transcript'));
-    assert.equal(parsed.coverage.dualProviderCompanion, 'real-feishu::session-management::claude-pty');
+    assert.equal(parsed.coverage.dualProviderCompanion, 'real-feishu::session-management::claude-tmux');
     assert.ok(parsed.coverage.matrixCompanions.includes('real-feishu::session-management::claude-sdk'));
     assert.deepEqual(parsed.commands, [
       '/runtime codex',
       '/p sdk',
       '/help',
       '/set',
-      '/set claudeProvider pty',
+      '/set claudeProvider tmux',
       `/new mgmt-unit-session-management ${DEFAULT_WORKSPACE_ROOT}`,
       '/runtime codex',
       '/p sdk',
@@ -2107,7 +2101,7 @@ describe('unit::real-feishu-e2e-harness::session-management-command-plan', () =>
     assert.deepEqual(expectationAt(parsed.commandReplyExpectations, '/p sdk', 0).expectedTexts, ['Codex Provider', 'sdk']);
     assert.deepEqual(expectationAt(parsed.commandReplyExpectations, '/help').expectedTexts, ['命令速览', 'Bridge 控制', 'SessionRuntime 配置']);
     assert.deepEqual(expectationAt(parsed.commandReplyExpectations, '/set').expectedTexts, ['全局配置', '通用配置', '默认 agent', 'tmux 输出行数']);
-    assert.deepEqual(expectationAt(parsed.commandReplyExpectations, '/set claudeProvider pty').expectedTexts, ['已更新全局配置', 'runtime.claude.provider', 'pty']);
+    assert.deepEqual(expectationAt(parsed.commandReplyExpectations, '/set claudeProvider tmux').expectedTexts, ['已更新全局配置', 'runtime.claude.provider', 'tmux']);
     assert.deepEqual(expectationAt(parsed.commandReplyExpectations, `/new mgmt-unit-session-management ${DEFAULT_WORKSPACE_ROOT}`).expectedTexts, ['已创建群聊会话', 'mgmt-unit-session-management', DEFAULT_WORKSPACE_ROOT, 'Runtime', 'Codex']);
     assert.deepEqual(expectationAt(parsed.commandReplyExpectations, '/runtime codex', 1).expectedTexts, ['Runtime', 'codex']);
     assert.deepEqual(expectationAt(parsed.commandReplyExpectations, '/p sdk', 1).expectedTexts, ['Codex Provider', 'sdk']);
@@ -2132,7 +2126,7 @@ describe('unit::real-feishu-e2e-harness::session-management-command-plan', () =>
     assert.equal(expectationAt(parsed.commandReplyExpectations, '/his 5').replyTimeoutMs, 120_000);
   });
 
-  it('dry-runs Claude SDK command coverage without resetting Claude back to pty', () => {
+  it('dry-runs Claude SDK command coverage without resetting Claude back to tmux', () => {
     const output = runHarness([
       '--dry-run',
       '--scenario',
@@ -2159,7 +2153,7 @@ describe('unit::real-feishu-e2e-harness::session-management-command-plan', () =>
     };
 
     assert.equal(parsed.coverage.testName, 'real-feishu::session-management::claude-sdk');
-    assert.equal(parsed.coverage.dualProviderCompanion, 'real-feishu::session-management::codex-pty');
+    assert.equal(parsed.coverage.dualProviderCompanion, 'real-feishu::session-management::codex-tmux');
     assert.ok(parsed.plannedSuccessCheckNames.includes('runtime_prompt_final_transcript_marker'));
     assert.ok(parsed.plannedSuccessCheckNames.includes('session_management_runtime_identity_transcript'));
     assert.deepEqual(parsed.commands.slice(0, 5), [
@@ -2169,7 +2163,7 @@ describe('unit::real-feishu-e2e-harness::session-management-command-plan', () =>
       '/set',
       '/set claudeProvider sdk',
     ]);
-    assert.ok(!parsed.commands.includes('/set claudeProvider pty'));
+    assert.ok(!parsed.commands.includes('/set claudeProvider tmux'));
     const newIndex = parsed.commands.findIndex((command) => command.startsWith('/new '));
     assert.deepEqual(parsed.commands.slice(newIndex + 1, newIndex + 3), [
       '/runtime claude',
@@ -2202,13 +2196,13 @@ describe('unit::real-feishu-e2e-harness::session-management-command-plan', () =>
       '--runtime',
       'codex',
       '--provider',
-      'pty',
+      'tmux',
       '--run-id',
-      'unit-session-management-codex-pty',
+      'unit-session-management-codex-tmux',
       '--chat-id',
       'oc_unit',
       '--message',
-      'CODELARK_UNIT_SESSION_MANAGEMENT_CODEX_PTY',
+      'CODELARK_UNIT_SESSION_MANAGEMENT_CODEX_TMUX',
     ]);
     const parsed = JSON.parse(output) as {
       coverage: {
@@ -2221,23 +2215,23 @@ describe('unit::real-feishu-e2e-harness::session-management-command-plan', () =>
       commandReplyExpectations: Array<{ command: string; expectedTexts: string[]; replyTimeoutMs: number; reason: string }>;
     };
 
-    assert.equal(parsed.coverage.testName, 'real-feishu::session-management::codex-pty');
+    assert.equal(parsed.coverage.testName, 'real-feishu::session-management::codex-tmux');
     assert.equal(parsed.waitsForMirrorFinalBeforeFollowup, true);
     assert.equal(parsed.finalMessageObservationMode, 'mirror-stream-evidence');
     assert.ok(parsed.plannedSuccessCheckNames.includes('runtime_prompt_final_transcript_marker'));
     assert.ok(parsed.plannedSuccessCheckNames.includes('session_management_runtime_identity_transcript'));
     assert.equal(parsed.commandReplyExpectations.length, parsed.commands.length - 1);
-    assert.ok(parsed.commands.includes('请只回复下面这个 marker，不要添加解释：\nCODELARK_UNIT_SESSION_MANAGEMENT_CODEX_PTY'));
-    assert.equal(parsed.commandReplyExpectations.some((item) => item.command.includes('CODELARK_UNIT_SESSION_MANAGEMENT_CODEX_PTY')), false);
-    assert.deepEqual(expectationAt(parsed.commandReplyExpectations, '/p pty', 0).expectedTexts, ['Codex Provider', 'pty']);
-    assert.deepEqual(expectationAt(parsed.commandReplyExpectations, '/p pty', 1).expectedTexts, ['Codex Provider', 'pty']);
-    assert.deepEqual(expectationAt(parsed.commandReplyExpectations, `/clear clear-unit-session-management-codex-pty ${DEFAULT_WORKSPACE_ROOT}`).expectedTexts, ['已清空当前聊天上下文', 'clear-unit-session-management-codex-pty', DEFAULT_WORKSPACE_ROOT, 'Provider', 'pty']);
-    assert.deepEqual(expectationAt(parsed.commandReplyExpectations, sessionManagementShellCommand('unit-session-management-codex-pty')).expectedTexts, ['/shell 执行完成', 'CODELARK_SHELL_UNIT_SESSION_MANAGEMENT_CODEX_PTY', 'Codex sandbox', 'read-only', '退出码', '0']);
+    assert.ok(parsed.commands.includes('请只回复下面这个 marker，不要添加解释：\nCODELARK_UNIT_SESSION_MANAGEMENT_CODEX_TMUX'));
+    assert.equal(parsed.commandReplyExpectations.some((item) => item.command.includes('CODELARK_UNIT_SESSION_MANAGEMENT_CODEX_TMUX')), false);
+    assert.deepEqual(expectationAt(parsed.commandReplyExpectations, '/p tmux', 0).expectedTexts, ['Codex Provider', 'tmux']);
+    assert.deepEqual(expectationAt(parsed.commandReplyExpectations, '/p tmux', 1).expectedTexts, ['Codex Provider', 'tmux']);
+    assert.deepEqual(expectationAt(parsed.commandReplyExpectations, `/clear clear-unit-session-management-codex-tmux ${DEFAULT_WORKSPACE_ROOT}`).expectedTexts, ['已清空当前聊天上下文', 'clear-unit-session-management-codex-tmux', DEFAULT_WORKSPACE_ROOT, 'Provider', 'tmux']);
+    assert.deepEqual(expectationAt(parsed.commandReplyExpectations, sessionManagementShellCommand('unit-session-management-codex-tmux')).expectedTexts, ['/shell 执行完成', 'CODELARK_SHELL_UNIT_SESSION_MANAGEMENT_CODEX_TMUX', 'Codex sandbox', 'read-only', '退出码', '0']);
     assert.deepEqual(expectationAt(parsed.commandReplyExpectations, '/t n 50').expectedTexts, ['本地会话']);
     assert.deepEqual(expectationAt(parsed.commandReplyExpectations, '/t unbind').expectedTexts, ['当前聊天已解绑', '新的临时 BridgeSession']);
-    assert.deepEqual(expectationAt(parsed.commandReplyExpectations, '/his 5').expectedTexts, ['CODELARK_UNIT_SESSION_MANAGEMENT_CODEX_PTY']);
+    assert.deepEqual(expectationAt(parsed.commandReplyExpectations, '/his 5').expectedTexts, ['CODELARK_UNIT_SESSION_MANAGEMENT_CODEX_TMUX']);
     assert.deepEqual(expectationAt(parsed.commandReplyExpectations, '/t archive').expectedTexts, ['已归档本地 Codex 会话']);
-    assert.equal(expectationAt(parsed.commandReplyExpectations, '/p pty', 0).replyTimeoutMs, 120_000);
+    assert.equal(expectationAt(parsed.commandReplyExpectations, '/p tmux', 0).replyTimeoutMs, 120_000);
     assert.equal(expectationAt(parsed.commandReplyExpectations, '/his 5').replyTimeoutMs, 120_000);
   });
 
@@ -2271,7 +2265,7 @@ describe('unit::real-feishu-e2e-harness::session-management-command-plan', () =>
     };
 
     assert.equal(parsed.coverage.testName, 'real-feishu::session-management::kimi-tmux');
-    assert.equal(parsed.coverage.dualProviderCompanion, 'real-feishu::session-management::codex-pty');
+    assert.equal(parsed.coverage.dualProviderCompanion, 'real-feishu::session-management::codex-tmux');
     assert.ok(parsed.coverage.matrixCompanions.includes('real-feishu::session-management::claude-sdk'));
     assert.equal(parsed.waitsForMirrorFinalBeforeFollowup, true);
     assert.equal(parsed.finalMessageObservationMode, 'mirror-stream-evidence');
@@ -2462,7 +2456,7 @@ describe('unit::real-feishu-e2e-harness::session-management-command-plan', () =>
     };
 
     assert.equal(parsed.coverage.testName, 'real-feishu::history-boundaries::kimi-tmux');
-    assert.equal(parsed.coverage.dualProviderCompanion, 'real-feishu::history-boundaries::codex-pty');
+    assert.equal(parsed.coverage.dualProviderCompanion, 'real-feishu::history-boundaries::codex-tmux');
     assert.ok(parsed.coverage.matrixCompanions.includes('real-feishu::history-boundaries::claude-sdk'));
     assert.equal(parsed.finalMessageObservationMode, 'mirror-stream-evidence');
     assert.equal(parsed.waitsForMirrorFinalBeforeFollowup, true);
@@ -2545,7 +2539,7 @@ describe('unit::real-feishu-e2e-harness::session-management-command-plan', () =>
       '--runtime',
       'codex',
       '--provider',
-      'pty',
+      'tmux',
       '--run-id',
       'unit-history-attachments',
       '--chat-id',
@@ -2573,18 +2567,18 @@ describe('unit::real-feishu-e2e-harness::session-management-command-plan', () =>
       }>;
     };
 
-    assert.equal(parsed.coverage.testName, 'real-feishu::history-attachments::codex-pty');
-    assert.equal(parsed.coverage.dualProviderCompanion, 'real-feishu::history-attachments::claude-pty');
+    assert.equal(parsed.coverage.testName, 'real-feishu::history-attachments::codex-tmux');
+    assert.equal(parsed.coverage.dualProviderCompanion, 'real-feishu::history-attachments::claude-tmux');
     assert.ok(parsed.coverage.matrixCompanions.includes('real-feishu::history-attachments::codex-sdk'));
     assert.equal(parsed.validationChatSwitchesAfterNew, true);
     assert.equal(parsed.finalMessageObservationMode, 'mirror-stream-evidence');
     assert.equal(parsed.waitsForMirrorFinalBeforeFollowup, true);
     assert.deepEqual(parsed.commands, [
       '/runtime codex',
-      '/p pty',
+      '/p tmux',
       `/new histfile-unit-history-attachments ${DEFAULT_WORKSPACE_ROOT}`,
       '/runtime codex',
-      '/p pty',
+      '/p tmux',
       `/cd ${DEFAULT_WORKSPACE_ROOT}`,
       'Please reply exactly with this marker and no other text: CODELARK_UNIT_HISTORY_ATTACHMENTS',
       '/his json',
@@ -2592,12 +2586,12 @@ describe('unit::real-feishu-e2e-harness::session-management-command-plan', () =>
     ]);
     assert.equal(parsed.commandReplyExpectations.length, parsed.commands.length - 1);
     assert.deepEqual(expectationAt(parsed.commandReplyExpectations, '/runtime codex', 0).expectedTexts, ['Runtime', 'codex']);
-    assert.deepEqual(expectationAt(parsed.commandReplyExpectations, '/p pty', 0).expectedTexts, ['Codex Provider', 'pty']);
+    assert.deepEqual(expectationAt(parsed.commandReplyExpectations, '/p tmux', 0).expectedTexts, ['Codex Provider', 'tmux']);
     assert.deepEqual(expectationAt(parsed.commandReplyExpectations, '/runtime codex', 1).expectedTexts, ['Runtime', 'codex']);
-    assert.deepEqual(expectationAt(parsed.commandReplyExpectations, '/p pty', 1).expectedTexts, ['Codex Provider', 'pty']);
+    assert.deepEqual(expectationAt(parsed.commandReplyExpectations, '/p tmux', 1).expectedTexts, ['Codex Provider', 'tmux']);
     for (const command of [
       '/runtime codex',
-      '/p pty',
+      '/p tmux',
       `/new histfile-unit-history-attachments ${DEFAULT_WORKSPACE_ROOT}`,
       `/cd ${DEFAULT_WORKSPACE_ROOT}`,
     ]) {
@@ -2660,7 +2654,7 @@ describe('unit::real-feishu-e2e-harness::session-management-command-plan', () =>
     };
 
     assert.equal(parsed.coverage.testName, 'real-feishu::history-attachments::kimi-tmux');
-    assert.equal(parsed.coverage.dualProviderCompanion, 'real-feishu::history-attachments::codex-pty');
+    assert.equal(parsed.coverage.dualProviderCompanion, 'real-feishu::history-attachments::codex-tmux');
     assert.ok(parsed.coverage.matrixCompanions.includes('real-feishu::history-attachments::claude-sdk'));
     assert.equal(parsed.validationChatSwitchesAfterNew, true);
     assert.equal(parsed.finalMessageObservationMode, 'mirror-stream-evidence');
@@ -2713,7 +2707,7 @@ describe('unit::real-feishu-e2e-harness::session-management-command-plan', () =>
       '--runtime',
       'codex',
       '--provider',
-      'pty',
+      'tmux',
       '--run-id',
       'unit-history-isolation',
       '--chat-id',
@@ -2739,15 +2733,15 @@ describe('unit::real-feishu-e2e-harness::session-management-command-plan', () =>
       }>;
     };
 
-    assert.equal(parsed.coverage.testName, 'real-feishu::history-empty-isolation::codex-pty');
+    assert.equal(parsed.coverage.testName, 'real-feishu::history-empty-isolation::codex-tmux');
     assert.equal(parsed.validationChatSwitchesAfterNew, true);
     assert.equal(parsed.waitsForMirrorFinalBeforeFollowup, true);
     assert.deepEqual(parsed.commands, [
       '/runtime codex',
-      '/p pty',
+      '/p tmux',
       `/new histiso-a-unit-history-isolation ${DEFAULT_WORKSPACE_ROOT}`,
       '/runtime codex',
-      '/p pty',
+      '/p tmux',
       `/cd ${DEFAULT_WORKSPACE_ROOT}`,
       'Please reply exactly with this marker and no other text: CODELARK_UNIT_HISTORY_ISOLATION',
       `/new histiso-b-unit-history-isolation ${DEFAULT_WORKSPACE_ROOT}`,
@@ -2757,9 +2751,9 @@ describe('unit::real-feishu-e2e-harness::session-management-command-plan', () =>
     ]);
 
     assert.equal(parsed.commandReplyExpectations.filter((item) => item.command === '/runtime codex').length, 2);
-    assert.equal(parsed.commandReplyExpectations.filter((item) => item.command === '/p pty').length, 2);
+    assert.equal(parsed.commandReplyExpectations.filter((item) => item.command === '/p tmux').length, 2);
     assert.equal(parsed.commandReplyExpectations.filter((item) => item.command === `/cd ${DEFAULT_WORKSPACE_ROOT}`).length, 1);
-    for (const command of ['/runtime codex', '/p pty']) {
+    for (const command of ['/runtime codex', '/p tmux']) {
       const expectation = expectationAt(parsed.commandReplyExpectations, command);
       assert.ok(expectation.expectedTexts.length > 0);
       assert.equal(expectation.reason, 'history-empty-isolation setup command must reach the expected session/provider state before isolation assertions');
@@ -2825,7 +2819,7 @@ describe('unit::real-feishu-e2e-harness::session-management-command-plan', () =>
     };
 
     assert.equal(parsed.coverage.testName, 'real-feishu::history-empty-isolation::kimi-tmux');
-    assert.equal(parsed.coverage.dualProviderCompanion, 'real-feishu::history-empty-isolation::codex-pty');
+    assert.equal(parsed.coverage.dualProviderCompanion, 'real-feishu::history-empty-isolation::codex-tmux');
     assert.ok(parsed.coverage.matrixCompanions.includes('real-feishu::history-empty-isolation::claude-sdk'));
     assert.equal(parsed.validationChatSwitchesAfterNew, true);
     assert.equal(parsed.waitsForMirrorFinalBeforeFollowup, true);
@@ -2884,7 +2878,7 @@ describe('unit::real-feishu-e2e-harness::session-management-command-plan', () =>
       '--runtime',
       'codex',
       '--provider',
-      'pty',
+      'tmux',
       '--run-id',
       'unit-history-long',
       '--chat-id',
@@ -2910,15 +2904,15 @@ describe('unit::real-feishu-e2e-harness::session-management-command-plan', () =>
       }>;
     };
 
-    assert.equal(parsed.coverage.testName, 'real-feishu::history-long-truncation::codex-pty');
+    assert.equal(parsed.coverage.testName, 'real-feishu::history-long-truncation::codex-tmux');
     assert.equal(parsed.validationChatSwitchesAfterNew, true);
     assert.equal(parsed.waitsForMirrorFinalBeforeFollowup, true);
     assert.deepEqual(parsed.commands.slice(0, 6), [
       '/runtime codex',
-      '/p pty',
+      '/p tmux',
       `/new histlong-unit-history-long ${DEFAULT_WORKSPACE_ROOT}`,
       '/runtime codex',
-      '/p pty',
+      '/p tmux',
       `/cd ${DEFAULT_WORKSPACE_ROOT}`,
     ]);
     assert.match(parsed.commands[6] || '', /^CODELARK_UNIT_HISTORY_LONG Reply exactly with CODELARK_UNIT_HISTORY_LONG\./);
@@ -2926,12 +2920,12 @@ describe('unit::real-feishu-e2e-harness::session-management-command-plan', () =>
     assert.deepEqual(parsed.commands.slice(7), ['/his raw 2', '/his msg 2']);
     assert.equal(parsed.commandReplyExpectations.length, parsed.commands.length - 1);
     assert.deepEqual(expectationAt(parsed.commandReplyExpectations, '/runtime codex', 0).expectedTexts, ['Runtime', 'codex']);
-    assert.deepEqual(expectationAt(parsed.commandReplyExpectations, '/p pty', 0).expectedTexts, ['Codex Provider', 'pty']);
+    assert.deepEqual(expectationAt(parsed.commandReplyExpectations, '/p tmux', 0).expectedTexts, ['Codex Provider', 'tmux']);
     assert.deepEqual(expectationAt(parsed.commandReplyExpectations, '/runtime codex', 1).expectedTexts, ['Runtime', 'codex']);
-    assert.deepEqual(expectationAt(parsed.commandReplyExpectations, '/p pty', 1).expectedTexts, ['Codex Provider', 'pty']);
+    assert.deepEqual(expectationAt(parsed.commandReplyExpectations, '/p tmux', 1).expectedTexts, ['Codex Provider', 'tmux']);
     for (const command of [
       '/runtime codex',
-      '/p pty',
+      '/p tmux',
       `/new histlong-unit-history-long ${DEFAULT_WORKSPACE_ROOT}`,
       `/cd ${DEFAULT_WORKSPACE_ROOT}`,
     ]) {
@@ -2990,7 +2984,7 @@ describe('unit::real-feishu-e2e-harness::session-management-command-plan', () =>
     };
 
     assert.equal(parsed.coverage.testName, 'real-feishu::history-long-truncation::kimi-tmux');
-    assert.equal(parsed.coverage.dualProviderCompanion, 'real-feishu::history-long-truncation::codex-pty');
+    assert.equal(parsed.coverage.dualProviderCompanion, 'real-feishu::history-long-truncation::codex-tmux');
     assert.ok(parsed.coverage.matrixCompanions.includes('real-feishu::history-long-truncation::claude-sdk'));
     assert.equal(parsed.validationChatSwitchesAfterNew, true);
     assert.equal(parsed.waitsForMirrorFinalBeforeFollowup, true);
@@ -3235,7 +3229,7 @@ describe('unit::real-feishu-e2e-harness::session-management-command-plan', () =>
     assert.equal(parsed.coverage.testName, 'real-feishu::history-suite::kimi-tmux');
     assert.equal(parsed.coverage.providerCoverage, 'runtime-parameterized');
     assert.deepEqual(parsed.coverage.matrix, expectedRuntimeProviderMatrix('real-feishu::history-suite'));
-    assert.equal(parsed.coverage.dualProviderCompanion, 'real-feishu::history-suite::codex-pty');
+    assert.equal(parsed.coverage.dualProviderCompanion, 'real-feishu::history-suite::codex-tmux');
     assert.ok(parsed.coverage.matrixCompanions.includes('real-feishu::history-suite::claude-sdk'));
     assert.equal(parsed.validationChatSwitchesAfterNew, true);
     assert.equal(parsed.waitsForMirrorFinalBeforeFollowup, true);
@@ -3563,7 +3557,7 @@ describe('unit::real-feishu-e2e-harness::session-management-command-plan', () =>
       '--runtime',
       'claude',
       '--provider',
-      'pty',
+      'tmux',
       '--fake-ccr',
       '--chat-id',
       'oc_unit',
@@ -3679,7 +3673,7 @@ describe('unit::real-feishu-e2e-harness::session-management-command-plan', () =>
 
     assert.equal(parsed.coverage.testName, 'real-feishu::markdown-rendering::kimi-tmux');
     assert.equal(parsed.coverage.providerCoverage, 'runtime-parameterized');
-    assert.equal(parsed.coverage.dualProviderCompanion, 'real-feishu::markdown-rendering::codex-pty');
+    assert.equal(parsed.coverage.dualProviderCompanion, 'real-feishu::markdown-rendering::codex-tmux');
     assert.ok(parsed.coverage.matrix.includes('real-feishu::markdown-rendering::claude-sdk'));
     assert.ok(parsed.coverage.matrix.includes('real-feishu::markdown-rendering::codex-tmux'));
     assert.equal(parsed.waitsForMirrorFinalBeforeFollowup, true);
@@ -3812,8 +3806,6 @@ describe('unit::real-feishu-e2e-harness::session-management-command-plan', () =>
       'claude-sdk',
       'kimi-tmux',
       'codex-tmux',
-      'claude-pty',
-      'codex-pty',
     ]);
     assert.deepEqual(parsed.coverage.matrix, ['real-feishu::basic-dialogue-suite::cross-provider']);
     assert.ok(parsed.coverage.coverageNotes.some((note) => note.includes('同一会话')));
@@ -3822,7 +3814,7 @@ describe('unit::real-feishu-e2e-harness::session-management-command-plan', () =>
     assert.equal(parsed.coverage.basicDialogueSuite.sdkMirrorSuppressionObservationWindowMs, 10_000);
     assert.equal(parsed.coverage.basicDialogueSuite.queuedFollowupDelayMs, 250);
     assert.deepEqual(parsed.coverage.basicDialogueSuite.queuedFollowupProviderKeys, ['codex-sdk']);
-    assert.deepEqual(parsed.coverage.basicDialogueSuite.appendInputProviderKeys, ['kimi-tmux', 'codex-tmux', 'claude-pty', 'codex-pty']);
+    assert.deepEqual(parsed.coverage.basicDialogueSuite.appendInputProviderKeys, ['kimi-tmux', 'codex-tmux']);
     assert.deepEqual(parsed.coverage.basicDialogueSuite.followupSemantics, {
       codexSdk: 'queue-in-after-tool-turn',
       claudeSdk: 'no-runtime-append-channel',
@@ -3833,14 +3825,10 @@ describe('unit::real-feishu-e2e-harness::session-management-command-plan', () =>
       'claude-sdk',
       'kimi-tmux',
       'codex-tmux',
-      'claude-pty',
-      'codex-pty',
     ]);
     assert.deepEqual(parsed.coverage.basicDialogueSuite.phases.map((phase) => phase.outputObservationMode), [
       'direct-im-reply_to',
       'direct-im-reply_to',
-      'mirror-stream-evidence',
-      'mirror-stream-evidence',
       'mirror-stream-evidence',
       'mirror-stream-evidence',
     ]);
@@ -3855,7 +3843,7 @@ describe('unit::real-feishu-e2e-harness::session-management-command-plan', () =>
       assert.equal(phase.followupCommand, undefined);
       assert.equal(phase.appendInputGate, 'planned-not-yet-gated');
     }
-    assert.equal(parsed.coverage.basicDialogueSuite.phases[5]?.stopCommand, '/stop');
+    assert.equal(parsed.coverage.basicDialogueSuite.phases[3]?.stopCommand, '/stop');
     assert.equal(parsed.waitsForMirrorFinalBeforeFollowup, true);
     assert.equal(parsed.finalMessageObservationMode, 'cross-provider-suite');
     assert.deepEqual(parsed.commands.slice(0, 4), [
@@ -3885,9 +3873,9 @@ describe('unit::real-feishu-e2e-harness::session-management-command-plan', () =>
     ]);
     assert.deepEqual(parsed.commands.slice(-4), [
       '/runtime codex',
-      '/p pty',
+      '/p tmux',
       [
-        '请模拟 basic dialogue codex-pty 阶段，只回复这个 marker：CODELARK_BASIC_DIALOGUE_UNIT_BASIC_DIALOGUE_CODEX_PTY',
+        '请模拟 basic dialogue codex-tmux 阶段，只回复这个 marker：CODELARK_BASIC_DIALOGUE_UNIT_BASIC_DIALOGUE_CODEX_TMUX',
         '同时在本阶段测试脚本里应覆盖 provider preload、代表性工具调用、context/goal 状态和权限/更新提示回传。',
       ].join('\n'),
       '/stop',
@@ -4024,7 +4012,7 @@ describe('unit::real-feishu-e2e-harness::session-management-command-plan', () =>
     assert.equal(parsed.coverage.basicDialogueSuite.ccrProxy, true);
     assert.equal(parsed.coverage.basicDialogueSuite.modelProxyChunkDelayMs, 120);
     assert.equal(parsed.coverage.basicDialogueSuite.modelProxyBoundary, 'codex-responses-and-ccr-chat-completions');
-    assert.deepEqual(parsed.coverage.basicDialogueSuite.appendInputProviderKeys, ['kimi-tmux', 'codex-tmux', 'claude-pty', 'codex-pty']);
+    assert.deepEqual(parsed.coverage.basicDialogueSuite.appendInputProviderKeys, ['kimi-tmux', 'codex-tmux']);
     assert.deepEqual(parsed.coverage.basicDialogueSuite.followupSemantics, {
       codexSdk: 'queue-in-after-tool-turn',
       claudeSdk: 'no-runtime-append-channel',
@@ -4033,8 +4021,6 @@ describe('unit::real-feishu-e2e-harness::session-management-command-plan', () =>
     assert.deepEqual(
       parsed.coverage.basicDialogueSuite.phases.map((phase) => phase.outputObservationMode),
       [
-        'scripted-interactive-stream-card',
-        'scripted-interactive-stream-card',
         'scripted-interactive-stream-card',
         'scripted-interactive-stream-card',
         'scripted-interactive-stream-card',
@@ -4065,7 +4051,7 @@ describe('unit::real-feishu-e2e-harness::session-management-command-plan', () =>
       'scripted Kimi thinking for CODELARK_BASIC_DIALOGUE_UNIT_BASIC_DIALOGUE_SCRIPTED_KIMI_TMUX',
     ]);
     for (const phase of parsed.coverage.basicDialogueSuite.phases.filter((item) => (
-      ['kimi-tmux', 'codex-tmux', 'claude-pty', 'codex-pty'].includes(item.providerKey)
+      ['kimi-tmux', 'codex-tmux'].includes(item.providerKey)
     ))) {
       assert.match(phase.followupCommand || '', /FOLLOWUP$/);
       assert.equal(phase.followupInputSemantics, 'append-input-message-delivered-no-direct-reply');
@@ -4074,8 +4060,6 @@ describe('unit::real-feishu-e2e-harness::session-management-command-plan', () =>
     assert.equal(parsed.waitsForMirrorFinalBeforeFollowup, false);
     assert.ok(parsed.commands.includes('追加输入 kimi-tmux CODELARK_BASIC_DIALOGUE_UNIT_BASIC_DIALOGUE_SCRIPTED_KIMI_TMUX FOLLOWUP'));
     assert.ok(parsed.commands.includes('追加输入 codex-tmux CODELARK_BASIC_DIALOGUE_UNIT_BASIC_DIALOGUE_SCRIPTED_CODEX_TMUX FOLLOWUP'));
-    assert.ok(parsed.commands.includes('追加输入 claude-pty CODELARK_BASIC_DIALOGUE_UNIT_BASIC_DIALOGUE_SCRIPTED_CLAUDE_PTY FOLLOWUP'));
-    assert.ok(parsed.commands.includes('追加输入 codex-pty CODELARK_BASIC_DIALOGUE_UNIT_BASIC_DIALOGUE_SCRIPTED_CODEX_PTY FOLLOWUP'));
     const codexTmuxPrompt = parsed.commandReplyExpectations.find((expectation) => (
       expectation.command.includes('basic dialogue codex-tmux')
     ));

@@ -349,7 +349,7 @@ describe('Ui config application', () => {
     assert.match(source, /Kimi 默认值/);
     assert.match(source, /id="kimiProvider"/);
     assert.match(source, /id="kimiDefaultModel"/);
-    assert.match(source, /<select id="defaultProvider">[\s\S]*<option value="sdk">sdk<\/option>[\s\S]*<option value="pty">pty<\/option>[\s\S]*<option value="tmux">tmux<\/option>/);
+    assert.match(source, /<select id="defaultProvider">[\s\S]*<option value="sdk">sdk<\/option>[\s\S]*<option value="tmux">tmux<\/option>/);
     assert.match(source, /<option value="">跟随默认<\/option>/);
     assert.doesNotMatch(source, /<option value="">auto<\/option>/);
     assert.match(source, /跟随默认（默认值：/);
