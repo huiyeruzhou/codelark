@@ -8,7 +8,7 @@
 
 - 代码仓库：https://github.com/huiyeruzhou/codelark
 - 文档站：https://huiyeruzhou.github.io/site/codelark/
-- 当前 npm 版本：`codelark@0.2.1`
+- 当前 npm 版本：`codelark@0.2.2`
 
 ## 核心能力
 

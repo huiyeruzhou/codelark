@@ -2,25 +2,32 @@
 
 ## Unreleased
 
-### 用户可见变化
+暂无。
 
-- `/t` 不再为会话表同步读取整份 Codex/Claude/Kimi JSONL；冷缓存时“用户输入轮数”暂显示 `-`，后台统计完成后刷新即显示精确值。真实 1.6GB Codex 历史下，51 条候选的列表耗时从约 13.1 秒降至约 107 毫秒。
-- 修复 `/t` runtime 下拉 ID 超过飞书限制导致整张卡创建/更新失败；renderer 现在统一保证 element ID 合法。
-- `/every`、`/then`、`/status`、会话活动时间、tmux/pty screen、hot-update、streaming footer 与 Web 状态页统一使用 bridge 启动时解析的本地时区。
-- `tmux 自动回车`不再作为用户配置；普通 tmux 文本固定补 Enter，显式 Enter 不重复。`/current` 通用配置固定按“对话名称、工作目录、tmux 输出行数”显示。
-- 模型在 turn 运行中输出完整 `<clk-send>` 后即可立即发送文件，不再等待 completed；think/reasoning 中的同类文本不会触发发送，终态也不会重复发送已经成功投递的附件。
-- `/current` 的继承状态会明确选中“跟随上层配置”，不再以空选择代替；表单使用独立机器值提交，Codex sandbox/provider 等枚举设置现在会真正删除 session override，不再把中文选项文字误当成待写入的配置值。
+## v0.2.2
 
-### 可靠性与验证
+发布日期：2026-08-04
 
-- 飞书按钮、下拉和表单回调新增独立 2 秒响应预算与日志；授权确认不再在 ACK 前同步写配置。
-- 所有 CardKit/interactive card 请求上限收紧为 10 秒，可降级的 `card.idConvert` 上限为 2 秒，避免单个恢复请求占住同聊天 interactive queue 数十秒。
-- 新增异步增量轮数缓存、CardKit 超时、callback ACK 矩阵、element ID、时区一致性和配置入口回归测试。
-- 新增 SDK/mirror 流式附件生命周期测试；以真实 Codex CLI、真实 tmux 和 Mock Responses 服务验证“answer 在终态前发送、completed 不重复”，Kimi thinking 排除继续由真实 wire 格式的协议与 workflow 回归覆盖。
-- 隔离飞书手测曾发现附件在 CardKit message id 就绪前抢跑，成为 `reply_to=null` 的根消息；现改为在后台交付队列等待真实卡片 message id，并补充延迟卡片合同与真实 Codex executable 回归。真实飞书用户侧 gate 需在修复版本上重新执行，不能复用旧 API 记录。
-- Kimi tmux mirror 现在同时增量观察 session 的 `kimi-code.log`；CLI 已记录 `ERROR turn failed`、但 `wire.jsonl` 没有 terminal 时，会把真实错误类型和原因收口到统一 error 卡片，不再一直停留在“思考中”。
-- `/p tmux` 启动和人工选择不再持有 session lock；`/clear` 可立即取消旧 selection waiter 并改绑，旧启动不能回写。mirror 确认 tmux 已不存在后会落 `stopped`、清除 binding/health 并停止重复抓屏。
-- Codex 用不同模型恢复旧 session 时，会从真实 TUI warning cell 识别记录模型与当前模型，向对应聊天发送一次橙色提醒并建议 `/clear`；不会自动清 session，也不会因历史屏幕重复刷卡。
+`0.2.2` 聚焦运行时完整性、长任务反馈和运维可观测性：正式补齐 Cursor Agent，修复 Kimi 与跨 runtime 接管的生命周期边界，并同步升级飞书卡片、Operator UI、配置入口和日志合同。
+
+### Change list
+
+- 新增 Cursor Agent 支持，可以创建、接管和恢复 Cursor session；首次工作区索引时会持续显示当前状态，不再看起来像卡死。
+- 完善 Kimi Code 和跨 runtime 会话生命周期，修复重启接管、会话切换、tmux 丢失和错误终态。
+- 显著优化会话与飞书链路性能：`/t` 不再同步扫描大体积历史，慢回调和卡片 API 也不会长时间阻塞聊天。
+- 重新设计 Operator UI，并统一 `/current`、`/set` 和网页配置界面；现在可以直观看到各 runtime 的状态、会话和有效配置。
+- 优化卡片与长任务反馈：统一时间和状态栏，补充错误、重连、模型不一致与工作区索引提示。
+- 流式附件可以在模型运行中及时发送；`/then` 仍会等待当前 turn 结束，不会在模型只输出一半时提前触发。
+- 优化结构化日志，保留关键原始信息并兼容旧日志分析，方便定位飞书、tmux 和 session 问题。
+- 收紧聊天与 session 绑定：拒绝重复绑定，不再用通配 channel 接管未知聊天；云文档建群时直接加入相关用户，不再发起冗余成员邀请。
+- setup 和 runtime 统一使用标准 `~/.lark-cli` 环境，移除 CodeLark 私有 lark-cli 配置投影与 shim，避免覆盖或分叉用户已有授权。
+- Cursor、Kimi、Codex 和 Claude 的关键路径均经过真实 executable/协议测试；Cursor 和配置卡片还完成了真实飞书端验证。
+
+### 升级
+
+```bash
+npm install -g --yes codelark@0.2.2 && codelark
+```
 
 ## v0.2.1
 
