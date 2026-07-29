@@ -22,6 +22,7 @@ import {
   cursorAuthenticationScreenError,
   cursorTmuxSessionName,
   ensureCursorTmuxInputSession,
+  isCursorInputDraftScreen,
   isCursorInputReadyScreen,
   streamCursorTmuxTui,
 } from '../../../../runtime/cursor/tmux-provider.js';
@@ -107,6 +108,28 @@ describe('Cursor tmux provider helpers', () => {
       '/tmp/cursor-workspace',
     ].join('\n')), true);
     assert.equal(isCursorInputReadyScreen('loading Cursor Agent'), false);
+  });
+
+  it('distinguishes a real running Cursor pane from an unsubmitted draft', () => {
+    const runningPane = [
+      '  Read package.json and reply with exactly CURSOR_SUBMIT_REPRO_OK',
+      '',
+      ' ⠀⠘⠤ Working',
+      '',
+      '  → Add a follow-up                                             ctrl+c to stop',
+      '',
+      '  Codex 5.3 Medium',
+      '  /opt/tiger/codelark · fix/cursor-running-progress',
+    ].join('\n');
+    assert.equal(
+      isCursorInputDraftScreen(runningPane),
+      false,
+      'the right-aligned stop hint is not part of the Cursor input editor value',
+    );
+    assert.equal(
+      isCursorInputDraftScreen('→ inspect src/runtime/cursor/tmux-provider.ts\n\nCodex 5.3 Medium'),
+      true,
+    );
   });
 
   it('uses the official cwd hash, workspace slug, and encoded transcript id', () => {

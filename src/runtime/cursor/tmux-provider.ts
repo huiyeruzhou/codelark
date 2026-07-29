@@ -132,10 +132,13 @@ export function isCursorInputReadyScreen(screen: string): boolean {
   return hasPrompt || (hasMode && hasContext);
 }
 
-function cursorInputHasDraft(screen: string): boolean {
+export function isCursorInputDraftScreen(screen: string): boolean {
   const normalized = normalizeScreen(screen);
   const promptLines = normalized.split('\n').filter((line) => /^\s*[>›❯→]\s*/u.test(line));
-  const promptText = promptLines.at(-1)?.replace(/^\s*[>›❯→]\s*/u, '').trim() || '';
+  const promptText = promptLines.at(-1)
+    ?.replace(/^\s*[>›❯→]\s*/u, '')
+    .replace(/\s{2,}ctrl\+c\s+to\s+stop\s*$/i, '')
+    .trim() || '';
   if (!promptText) return false;
   return !/^(?:Plan, search, build anything|Add a follow-up|Ask anything)[.!]?$/i.test(promptText);
 }
@@ -243,7 +246,7 @@ async function waitForCursorInputSubmitted(
   while (Date.now() - startedAt <= timeoutMs) {
     const capture = await tmuxCore.capturePane(targetPane, 160);
     assertCursorPaneAlive(capture.screen);
-    if (!cursorInputHasDraft(capture.screen)) return;
+    if (!isCursorInputDraftScreen(capture.screen)) return;
     const now = Date.now();
     if (now - lastRetryAt >= INPUT_SUBMISSION_RETRY_INTERVAL_MS) {
       await tmuxCore.sendActions(targetPane, [{ type: 'key', key: 'Enter' }]);
