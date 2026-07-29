@@ -568,6 +568,9 @@ export function streamCursorTmuxTui(params: StreamChatParams): ReadableStream<st
               return result;
             },
           });
+          controller.enqueue(sseEvent('status', {
+            reasoning: 'Cursor Agent 已接收消息，正在运行。',
+          }));
           if (!context.sessionFilePath) {
             await waitForCursorTranscript(context, baselineSessionIds, targetPane);
             context.nextOffset = 0;

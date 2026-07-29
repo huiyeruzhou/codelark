@@ -247,6 +247,7 @@ describe('real Cursor Agent bridge e2e', () => {
       );
 
       const firstTerminalCount = terminalEvents(adapter).length;
+      const firstTurnEventStart = adapter.streamEvents.length;
       const firstTurnStartedAt = Date.now();
       await _testOnly.handleMessage(
         adapter,
@@ -261,6 +262,17 @@ describe('real Cursor Agent bridge e2e', () => {
       assert.equal(firstTerminal.status, 'completed', `first Cursor terminal: ${JSON.stringify(firstTerminal)}`);
       assert.match(firstTerminal.text || '', new RegExp(firstMarker));
       assert.equal((firstTerminal.text || '').split(firstMarker).length - 1, 1);
+      const firstTurnEvents = adapter.streamEvents.slice(firstTurnEventStart);
+      const runningStatusIndex = firstTurnEvents.findIndex((event) => (
+        event.kind === 'status'
+        && event.text?.includes('Cursor Agent 已接收消息，正在运行。')
+      ));
+      const terminalIndex = firstTurnEvents.findIndex((event) => event.kind === 'end');
+      assert.ok(
+        runningStatusIndex >= 0,
+        `真实 Cursor 接收输入后必须对用户显示运行状态；events=${JSON.stringify(firstTurnEvents)}`,
+      );
+      assert.ok(terminalIndex < 0 || runningStatusIndex < terminalIndex);
       if (delayedExecutable.markerPath) {
         assert.equal(fs.existsSync(delayedExecutable.markerPath), true);
         assert.ok(

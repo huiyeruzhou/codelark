@@ -693,6 +693,17 @@ describe('Cursor tmux provider helpers', () => {
         type: string;
         data: string;
       });
+      const runningStatusIndex = events.findIndex((event) => {
+        if (event.type !== 'status') return false;
+        const status = JSON.parse(event.data) as { reasoning?: string };
+        return status.reasoning === 'Cursor Agent 已接收消息，正在运行。';
+      });
+      const firstAssistantIndex = events.findIndex((event) => event.type === 'text_snapshot');
+      assert.ok(runningStatusIndex >= 0, '输入已提交后必须从启动确认转为 Cursor 运行状态');
+      assert.ok(
+        firstAssistantIndex < 0 || runningStatusIndex < firstAssistantIndex,
+        '运行状态必须在首个 transcript 输出前对用户可见',
+      );
       const snapshots = events.filter((event) => event.type === 'text_snapshot').map((event) => event.data);
       const thinkingSummaries = events
         .filter((event) => event.type === 'history_item')

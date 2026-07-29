@@ -45,7 +45,7 @@ CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT);
 └── agent-transcripts/<encoded-chatId>/<encoded-chatId>.jsonl
 ```
 
-同时兼容旧的 `agent-transcripts/<encoded-chatId>.jsonl`。官方 transcript writer 在正常执行时增量 append：
+同时兼容旧的 `agent-transcripts/<encoded-chatId>.jsonl`。官方 transcript writer 会在执行中 append 或重写 snapshot；真实工具/子 Agent 故事中也可能直到本轮接近结束才把可读 JSONL flush 到磁盘。可见记录包括：
 
 - `{role:"user|assistant|tool", message:{content:[...]}}`；
 - `text` 与 `tool_use` content block；
@@ -62,7 +62,7 @@ Cursor 不调用名为 `completed` 的工具结束一轮。assistant message 后
 1. provider 为 Bridge session 使用固定 tmux 名 `clk-cursor-<bridgeSessionId>`。
 2. 冷启动运行 `agent [--model ...] [--force] --trust`；已有 chat ID 时附加 `--resume <chatId>`。显式 `/p tmux` 完成前重新校验聊天 binding；如果启动期间 `/clear` 或 `/t` 已改绑，只清理旧 tmux，不写回旧 session。
 3. provider 检查 pane 未退出、未停在登录页且已出现输入编辑器。Cursor 首次进入较大工作区时会先做 workspace indexing，这一阶段进程仍存活但 pane 可能完全空白；它属于合法冷启动，而不是 CLI 退出或 prompt parser 失败。显式 `/p tmux` 会在等待 TUI 前立即回复“首次打开工作区时可能需要先建立索引”；普通消息触发冷启动时，当前流式卡片会立即显示同类说明，并从第 10 秒起持续更新已等待时间。readiness 默认最多等待 180 秒；若窗口用尽但 pane 仍活着，只结束当前 IM turn，并说明索引可能仍在进行，同时保留 tmux，下一条消息会重新执行 readiness 后复用它。登录页、pane 退出等确定失败仍立即报错并清理；未登录时提示先运行 `agent login`。
-4. 普通用户消息原样注入 TUI。tmux 的 `paste-buffer + Enter` 只证明按键已发送，不证明 Cursor 已接受本轮；workspace indexing 尚未收口时，Cursor 可能把文字留在带 `→` 的输入编辑器里并吞掉第一次 Enter。provider 会在短暂渲染宽限后抓屏确认：输入框已经清空才算投递成功；若原文仍在输入框，则按固定间隔重发 Enter，并在同一流里说明“正在确认提交”。这条确认不解析回答，只验证输入所有权边界。首次消息真正提交后，再从当前 cwd 新增的 chat sidecar/transcript 发现 UUID，并写入 Bridge session。
+4. 普通用户消息原样注入 TUI。tmux 的 `paste-buffer + Enter` 只证明按键已发送，不证明 Cursor 已接受本轮；workspace indexing 尚未收口时，Cursor 可能把文字留在带 `→` 的输入编辑器里并吞掉第一次 Enter。provider 会在短暂渲染宽限后抓屏确认：输入框已经清空才算投递成功；若原文仍在输入框，则按固定间隔重发 Enter，并在同一流里说明“正在确认提交”。这条确认不解析回答，只验证输入所有权边界。输入框清空后立即向用户转移为“Cursor Agent 已接收消息，正在运行”；不得因 transcript 尚未 flush 而继续显示启动确认。首次消息真正提交后，再从当前 cwd 新增的 chat sidecar/transcript 发现 UUID，并写入 Bridge session。
 5. provider 从当前 transcript offset 开始轮询增量，直到 `turn_ended`，同时把文本、工具调用与终态转换成公共事件；bridge 输入状态被清空但 tmux 仍存活时，依靠已持久化 UUID/transcript 和真实输入框完成冷接管，不重启 TUI。
 6. 当前 IM turn 由 Cursor provider 从本轮 transcript offset 读取并形成 direct stream；独立 Cursor mirror runtime 观察同一 transcript，使本地 TUI 后续输出也能同步到 IM。identity 出现后建立 suppression 边界；direct turn 完成时保留一段 mirror grace suppression，但不等待 mirror terminal，因为当前 terminal owner 明确是 direct transcript stream。这样既不重复结束同一回合，也不会产生“等待一个不归 mirror 所有的 terminal”超时误报。
 7. tmux 丢失时按同一 UUID 执行 `agent --resume`，从旧 transcript 末尾继续读取；不得重放上一轮回答。
@@ -71,7 +71,7 @@ Cursor 不调用名为 `completed` 的工具结束一轮。assistant message 后
 ## 验收用户故事
 
 - **本地 workflow**：Cursor direct transcript turn 与后台 mirror 之间只有一个 terminal owner，不出现空 completed、重复 final 或历史重放。
-- **真实进程**：已登录官方 `agent` 首次启动前注入一次超过旧 30 秒门限的确定性延迟，证明等待期间有可见进度且不会误杀；若首次 Enter 被冷索引阶段吞掉，抓屏确认会在原文仍留在输入框时补发提交。随后冷启动一个 UUID，第二轮在清空 bridge 输入状态后复用同一 tmux/UUID，杀掉 tmux 后仍恢复同一 UUID；三轮都只有一个 completed 且不重放旧文本。延迟 wrapper 只控制启动时序，实际 TUI、tmux、backend 和 transcript 仍全部来自官方 Cursor Agent。
+- **真实进程**：已登录官方 `agent` 首次启动前注入一次超过旧 30 秒门限的确定性延迟，证明等待期间有可见进度且不会误杀；若首次 Enter 被冷索引阶段吞掉，抓屏确认会在原文仍留在输入框时补发提交。输入被真实 TUI 接收后、第一个 transcript 输出或终态前，必须出现用户可见的“正在运行”状态。随后冷启动一个 UUID，第二轮在清空 bridge 输入状态后复用同一 tmux/UUID，杀掉 tmux 后仍恢复同一 UUID；三轮都只有一个 completed 且不重放旧文本。延迟 wrapper 只控制启动时序，实际 TUI、tmux、backend 和 transcript 仍全部来自官方 Cursor Agent。
 - **真实飞书**：隔离 bridge 创建或复用测试群并邀请当前用户；用户身份发送 `/runtime cursor`、`/p tmux` 和普通消息。冷启动场景还要在 `/p tmux` 完成前读到索引原因提示；随后用户身份回读最终卡片、Cursor UUID/transcript/provider output path，测试群保留到用户确认。`runtime-message::cursor-tmux` 还会读取隔离 bridge 输出的最终 CardKit checkpoint，要求卡片具有共享会话标题、`tmux` header tag、`cursor`/model metadata 区域和统一 history 区域；thinking summary 必须作为独立的引用样式历史项出现在最终正文之前，不能丢失、混入正文或误占卡片标题。只在历史回显中找到 prompt，或者只看到正确回答文本，都不算 UI 验收通过。
 
 ## Slash 命令
