@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import './check-async-bridge-side-effects.js';
 
 const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), 'codelark-test-'));
@@ -15,6 +15,22 @@ fs.mkdirSync(codexHome, { recursive: true });
 fs.mkdirSync(claudeHome, { recursive: true });
 fs.mkdirSync(kimiHome, { recursive: true });
 fs.mkdirSync(tmuxTempDir, { recursive: true });
+
+const testEnv = {
+  ...process.env,
+  HOME: runtimeHome,
+  USERPROFILE: runtimeHome,
+  CODELARK_HOME: tempHome,
+  CODEX_HOME: codexHome,
+  CODELARK_CLAUDE_HOME: claudeHome,
+  KIMI_CODE_HOME: kimiHome,
+  TMUX_TMPDIR: tmuxTempDir,
+  CODELARK_DISABLE_DAILY_VERSION_CHECK: '1',
+};
+delete testEnv.TMUX;
+delete testEnv.TMUX_PANE;
+delete testEnv.NODE_TEST_CONTEXT;
+delete testEnv.NODE_TEST_WORKER_ID;
 
 const testsDir = path.join(process.cwd(), 'src', '__tests__');
 
@@ -82,6 +98,15 @@ function cleanup() {
   if (cleaned) return;
   cleaned = true;
   try {
+    spawnSync('tmux', ['kill-server'], {
+      env: testEnv,
+      stdio: 'ignore',
+      timeout: 5_000,
+    });
+  } catch {
+    // tmux is optional on platforms and test layers that do not exercise it
+  }
+  try {
     fs.rmSync(tempHome, { recursive: true, force: true });
   } catch {
     // ignore
@@ -127,17 +152,7 @@ child = spawn(
   {
     stdio: 'inherit',
     detached: process.platform !== 'win32',
-    env: {
-      ...process.env,
-      HOME: runtimeHome,
-      USERPROFILE: runtimeHome,
-      CODELARK_HOME: tempHome,
-      CODEX_HOME: codexHome,
-      CODELARK_CLAUDE_HOME: claudeHome,
-      KIMI_CODE_HOME: kimiHome,
-      TMUX_TMPDIR: tmuxTempDir,
-      CODELARK_DISABLE_DAILY_VERSION_CHECK: '1',
-    },
+    env: testEnv,
   },
 );
 
