@@ -726,10 +726,12 @@ describe('real codex tmux provider e2e', () => {
       assert.ok(fatalComplete);
       assert.equal(fatalComplete.payload?.last_agent_message, null);
       if (fatalComplete.payload?.error !== undefined) {
-        assert.match(
-          JSON.stringify(fatalComplete.payload.error),
-          /rate_limit_error.*CODELARK_MOCK_FATAL/u,
-          'newer Codex versions should preserve the structured model error',
+        const structuredError = JSON.stringify(fatalComplete.payload.error);
+        assert.equal(
+          /rate_limit_error.*CODELARK_MOCK_FATAL/u.test(structuredError)
+            || /response_too_many_failed_attempts.*http_status_code["']?:?429/u.test(structuredError),
+          true,
+          'Codex should preserve either the model rate-limit error or its structured retry-exhausted 429 wrapper',
         );
       }
       assert.equal(proxy.requests.filter((request) => request.rawBody.includes(fatalMarker)).length, 1);

@@ -94,8 +94,11 @@ import {
 import {
   consumeBufferedMirrorTurns as consumeBufferedMirrorTurnsBase,
   consumeMirrorRecords as consumeMirrorRecordsBase,
+  enqueuePendingMirrorDeliveries,
+  finalizeMirrorTurn as finalizeMirrorTurnBase,
   flushTimedOutMirrorTurn as flushTimedOutMirrorTurnBase,
   hasPendingMirrorWork as hasPendingMirrorWorkBase,
+  removePendingMirrorDeliveries,
   type BridgeMirrorTurnState,
   type FinalizedBridgeMirrorTurn,
 } from '../mirror/turns.js';
@@ -1356,6 +1359,7 @@ async function probeMirrorTmuxSelectionPrompt(subscription: BridgeMirrorSubscrip
             `${runtime} tmux Provider session ${tmuxSessionName} is missing; mirror probing stopped.`,
           );
         }
+        await finalizeMissingMirrorTmuxTurn(subscription, runtime, tmuxSessionName, nowMs);
         console.warn('[bridge-manager] Mirror tmux selection probe marked missing lifecycle stopped:', {
           event: 'tmux.mirror_probe.session_missing',
           session_id: subscription.sessionId,
@@ -1409,6 +1413,47 @@ async function probeMirrorTmuxSelectionPrompt(subscription: BridgeMirrorSubscrip
       markCodexTuiSelectionPromptActionSent(monitor);
       requestTmuxSelectionPromptFollowupProbe(subscription.sessionId);
     });
+}
+
+async function finalizeMissingMirrorTmuxTurn(
+  subscription: BridgeMirrorSubscription,
+  runtime: 'codex' | 'claude',
+  tmuxSessionName: string,
+  nowMs: number,
+): Promise<void> {
+  const pendingTurn = subscription.pendingTurn;
+  if (!pendingTurn) return;
+
+  const runtimeLabel = runtime === 'claude' ? 'Claude Code' : 'Codex';
+  const errorText = `${runtimeLabel} tmux 会话 ${tmuxSessionName} 已退出，当前任务无法继续。发送 \`/p tmux\` 可重新启动。`;
+  const signature = `tmux-missing:${subscription.sessionId}:${pendingTurn.streamKey}`;
+  const timestamp = new Date(nowMs).toISOString();
+  const finalized: FinalizedBridgeMirrorTurn = finalizeMirrorTurnBase(subscription, signature, timestamp, 'error') || {
+    streamKey: pendingTurn.streamKey,
+    userText: pendingTurn.userText?.trim() || null,
+    text: pendingTurn.streamedText,
+    ...(pendingTurn.contextUsage ? { contextUsage: pendingTurn.contextUsage } : {}),
+    ...(pendingTurn.goalStatus ? { goalStatus: pendingTurn.goalStatus } : {}),
+    signature,
+    timestamp,
+    startedAt: pendingTurn.startedAt,
+    status: 'error' as const,
+  };
+  finalized.errorText = errorText;
+  subscription.bufferedRecords = [];
+  enqueuePendingMirrorDeliveries(subscription, [finalized]);
+
+  const result = await deliverMirrorTurns(subscription, [finalized]);
+  if (result.deliveredCount > 0) {
+    removePendingMirrorDeliveries(subscription, [finalized]);
+  }
+  if (result.error) {
+    console.warn('[bridge-manager] Failed to finalize missing tmux mirror turn:', {
+      session_id: subscription.sessionId,
+      tmux_session: tmuxSessionName,
+      error: describeUnknownError(result.error),
+    });
+  }
 }
 
 async function probeTmuxSelectionPromptForTarget(

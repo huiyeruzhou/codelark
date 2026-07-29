@@ -236,6 +236,7 @@ export type StartRuntimeTmuxSessionResult =
 
 const DEFAULT_CODEX_RESUME_TMUX_READY_TIMEOUT_MS = 15_000;
 const DEFAULT_CODEX_RESUME_TMUX_READY_POLL_MS = 250;
+const CODEX_UPDATE_TMUX_READY_TIMEOUT_MS = 5 * 60_000;
 const CODEX_TMUX_LAUNCH_LOG_LINES = 80;
 const DEFAULT_CLAUDE_TMUX_READY_TIMEOUT_MS = 10_000;
 const DEFAULT_CLAUDE_TMUX_READY_POLL_MS = 250;
@@ -443,6 +444,18 @@ function runtimeReadyPollMs(runtime: RuntimeTmuxKind): number {
     DEFAULT_CLAUDE_TMUX_READY_POLL_MS,
     50,
   );
+}
+
+function readinessTimeoutAfterSelection(
+  normalTimeoutMs: number,
+  prompt: RuntimeTmuxSelectionPrompt,
+  choice: CodexTuiSelectionPromptChoice | 'confirm' | string | null,
+): number {
+  return prompt.runtime === 'codex'
+    && prompt.kind === 'update'
+    && choice === 'update_now'
+    ? Math.max(normalTimeoutMs, CODEX_UPDATE_TMUX_READY_TIMEOUT_MS)
+    : normalTimeoutMs;
 }
 
 function codexReadinessFromRuntimeResult(
@@ -736,6 +749,12 @@ export async function waitForRuntimeTmuxReady(params: {
                   selection_wait_ms: selectionWaitMs,
                 });
               }
+              const nextReadinessTimeoutMs = readinessTimeoutAfterSelection(
+                timeoutMs,
+                activeSelectionPrompt,
+                resolvedChoice,
+              );
+              machine.timeoutMs = nextReadinessTimeoutMs;
               transitionRuntimeTmuxReadiness(machine, 'selection_resolved', 'selection choice resolved', {
                 prompt_runtime: activeSelectionPrompt.runtime,
                 prompt_kind: activeSelectionPrompt.kind,
@@ -756,7 +775,7 @@ export async function waitForRuntimeTmuxReady(params: {
                   prompt_runtime: activeSelectionPrompt.runtime,
                   prompt_kind: activeSelectionPrompt.kind,
                   action_count: actions.length,
-                  ready_timeout_reset_ms: timeoutMs,
+                  ready_timeout_reset_ms: nextReadinessTimeoutMs,
                   commands: sent.commands,
                 });
               }
@@ -787,7 +806,12 @@ export async function waitForRuntimeTmuxReady(params: {
               selectionPrompt: activeSelectionPrompt,
             };
           }
-          deadline = Date.now() + timeoutMs;
+          machine.timeoutMs = readinessTimeoutAfterSelection(
+            timeoutMs,
+            activeSelectionPrompt,
+            coordinated.result.choice,
+          );
+          deadline = Date.now() + machine.timeoutMs;
           if (!coordinated.owner) {
             console.log('[tmux-runtime] Runtime tmux selection joined the session lifecycle owner:', {
               event: 'tmux.runtime.selection.lifecycle_joined',
@@ -954,6 +978,15 @@ export async function startCodexResumeTmuxSession(
           && choice === 'update_now'
         ) {
           selectedStartupUpdateNow = true;
+          void Promise.resolve(params.onStatus?.(
+            '已选择更新 Codex CLI，正在安装；完成后会自动重启 tmux 并继续发送原消息。',
+            { force: true },
+          )).catch((error) => {
+            console.warn('[codex-tmux-runtime] Failed to publish Codex update progress:', {
+              tmux_session: params.sessionName,
+              error: describeUnknownError(error),
+            });
+          });
         }
         return choice;
       },

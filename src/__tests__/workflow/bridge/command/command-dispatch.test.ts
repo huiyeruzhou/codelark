@@ -10548,13 +10548,19 @@ enabled = true
     });
     const fakeTmux = installFakeTmux();
     const fakeCodex = installFakeCodexTui();
-    const oldEnv = captureProcessEnv(['PATH', 'TMUX_FAKE_LOG', ...FAKE_CODEX_TUI_ENV_KEYS]);
+    const oldEnv = captureProcessEnv([
+      'PATH',
+      'TMUX_FAKE_LOG',
+      'CODELARK_CODEX_RESUME_TMUX_READY_TIMEOUT_MS',
+      ...FAKE_CODEX_TUI_ENV_KEYS,
+    ]);
     process.env.PATH = `${fakeTmux.binDir}${path.delimiter}${oldEnv.PATH}`;
     process.env.TMUX_FAKE_LOG = fakeTmux.logPath;
+    process.env.CODELARK_CODEX_RESUME_TMUX_READY_TIMEOUT_MS = '300';
     configureFakeCodexTuiEnv(fakeCodex, {
       updatePromptOnce: true,
       updateNowExits: true,
-      updateExitAfterCaptures: 1,
+      updateExitAfterCaptures: 3,
     });
 
     try {
@@ -10609,6 +10615,11 @@ enabled = true
       const selectionMessage = sent.find((message) => message.richCard?.title === 'Codex TUI Selection');
       assert.ok(selectionMessage, 'expected a Codex TUI Selection rich card during provider auto-forward startup');
       assert.equal(autoForwarded, true);
+      assert.equal(
+        sent.some((message) => /正在安装；完成后会自动重启 tmux 并继续发送原消息/.test(message.text || '')),
+        true,
+        'the user should see progress while the update exceeds normal startup readiness',
+      );
       assert.equal(
         sent.some((message) => /Codex CLI 更新流程已结束，正在重新启动 Codex tmux/.test(message.text || '')),
         true,

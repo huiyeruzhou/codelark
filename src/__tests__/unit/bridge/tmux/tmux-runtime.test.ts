@@ -556,6 +556,85 @@ describe('codex tmux runtime', () => {
     }
   });
 
+  it('keeps waiting through a Codex update that outlives the normal startup window', async () => {
+    const oldTimeout = process.env.CODELARK_CODEX_RESUME_TMUX_READY_TIMEOUT_MS;
+    const oldPoll = process.env.CODELARK_CODEX_RESUME_TMUX_READY_POLL_MS;
+    try {
+      process.env.CODELARK_CODEX_RESUME_TMUX_READY_TIMEOUT_MS = '120';
+      process.env.CODELARK_CODEX_RESUME_TMUX_READY_POLL_MS = '50';
+      let captureCount = 0;
+      let updateSelected = false;
+      const transitions: RuntimeTmuxReadinessTransition[] = [];
+      const core: TmuxCore = {
+        commandPreview: (args) => ['tmux', ...args].join(' '),
+        hasSession: async (name) => ({ exists: true, command: `tmux has-session -t ${name}` }),
+        killSession: async (name) => `tmux kill-session -t ${name}`,
+        listSessions: async () => ({ sessions: [], command: 'tmux list-sessions' }),
+        ensureDetachedSession: async () => ({ existed: false, commands: [] }),
+        capturePane: async (target) => {
+          captureCount += 1;
+          if (captureCount === 1) {
+            return {
+              command: `tmux capture-pane -t ${target} -p -S -80`,
+              screen: [
+                'Update available! 0.0.0 -> 9.9.9',
+                '› 1. Update now',
+                '  2. Skip',
+                '  3. Skip until next version',
+                'Press enter to confirm or esc to cancel',
+              ].join('\n'),
+            };
+          }
+          if (captureCount === 2) {
+            await new Promise((resolve) => setTimeout(resolve, 90));
+            return {
+              command: `tmux capture-pane -t ${target} -p -S -80`,
+              screen: 'Codex updating global CLI...\nInstalling update...',
+            };
+          }
+          return {
+            command: `tmux capture-pane -t ${target} -p -S -80`,
+            screen: 'OpenAI Codex\n\n› ',
+          };
+        },
+        sendActions: async (target, actions) => {
+          updateSelected = true;
+          return {
+            commands: actions.map((action) => action.type === 'key'
+              ? `tmux send-keys -t ${target} ${action.key}`
+              : `tmux send-keys -t ${target} -l ${action.text}`),
+          };
+        },
+        sendInterrupt: async () => 'tmux send-keys C-c',
+        injectPromptIntoPane: async () => ({ commands: [] }),
+      };
+
+      const startedAt = Date.now();
+      const result = await waitForRuntimeTmuxReady({
+        runtime: 'codex',
+        sessionName: 'codex_slow_update',
+        core,
+        onSelectionPrompt: () => 'update_now',
+        onStateTransition: (transition) => transitions.push(transition),
+      });
+
+      assert.equal(result.ready, true);
+      assert.equal(updateSelected, true);
+      assert.equal(captureCount, 3);
+      assert.equal(Date.now() - startedAt > 120, true, 'the update must cross the normal startup timeout');
+      assert.equal(
+        (transitions.find((transition) => transition.to === 'selection_resolved')?.timeoutMs || 0) > 120,
+        true,
+        'update_now should switch the readiness state machine to its update window',
+      );
+    } finally {
+      if (oldTimeout === undefined) delete process.env.CODELARK_CODEX_RESUME_TMUX_READY_TIMEOUT_MS;
+      else process.env.CODELARK_CODEX_RESUME_TMUX_READY_TIMEOUT_MS = oldTimeout;
+      if (oldPoll === undefined) delete process.env.CODELARK_CODEX_RESUME_TMUX_READY_POLL_MS;
+      else process.env.CODELARK_CODEX_RESUME_TMUX_READY_POLL_MS = oldPoll;
+    }
+  });
+
   it('stops readiness immediately when the user dismisses a generic selection false positive', async () => {
     const oldTimeout = process.env.CODELARK_CODEX_RESUME_TMUX_READY_TIMEOUT_MS;
     const oldPoll = process.env.CODELARK_CODEX_RESUME_TMUX_READY_POLL_MS;

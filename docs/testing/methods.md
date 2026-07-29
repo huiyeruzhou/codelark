@@ -23,6 +23,7 @@ nvm use 24
 | 本地 workflow | `npm test -- --workflow` | 只运行 `src/__tests__/workflow/`。 |
 | 本地 mock app E2E | `npm test -- --mock-e2e` | 只运行 `src/__tests__/e2e/mock-app/`。 |
 | 本地真实进程 E2E | `npm test -- --local-e2e` | 只运行 `src/__tests__/e2e/local-process/`。Codex/Claude 覆盖真实 CLI 或 tmux 进程；Kimi 用真实 executable + 真 tmux + 本地 fake model proxy。Cursor 的 `real-cursor-agent-bridge.e2e.test.ts` 必须显式设置 `CODELARK_REAL_CURSOR_E2E=1`，否则即使文件被选中也会 skip；它使用已登录官方 backend，并隔离 config/data/workspace 验证超过 30 秒的冷启动、可见进度、冷接管和 resume。默认使用 `gpt-5.3-codex`，可用 `CODELARK_REAL_CURSOR_E2E_MODEL` 覆盖。 |
+| Codex 旧版本真实升级门禁 | `CODELARK_REAL_CODEX_UPDATE_E2E=1 npm test -- --local-e2e` | 在临时 npm prefix 安装真实 `@openai/codex@0.145.0`，让真实 TUI 检测 npm 最新版并选择 Update now；验证安装期可超过普通 readiness、更新退出后只重启一次并进入 ready，最后确认临时 prefix 已是 registry 最新版。不会改动用户全局 Codex。 |
 | Harness 自测 | `npm test -- --harness` | 只运行 `src/__tests__/harness/`，包括真实飞书 harness 自测和测试环境隔离 guard。 |
 | 类型检查 | `npm run typecheck` | 验证 TypeScript 类型和公共导入边界。 |
 | 构建验证 | `npm run build` | 验证发布构建入口和 esbuild 打包。 |
@@ -134,7 +135,7 @@ long-running 功能不能只测“成功派发 worker”。精炼用户故事至
 | `sse-stream-decoder.test.ts` | SSE 文本流解码和事件边界。 |
 | `interactive-turn-runner.test.ts` | 一次 runtime turn 的主编排，含 stream、tool、context、goal、stop、mirror suppression、基础对话 simulator，以及 answer 中间态附件立即发送、thinking 排除和终态去重。 |
 | `interactive-turn-sdk-conversation-engine.test.ts`、`interactive-turn-sdk-stream-events-controller.test.ts`、`interactive-turn-final-response-plan.test.ts`、`interactive-turn-terminal-finalization-controller.test.ts` | SDK conversation 内联附件/tool 展开、stream event 控制、最终回复计划和终端 provider finalization。 |
-| `real-codex-tmux-provider.e2e.test.ts`、`real-claude-tmux-provider.e2e.test.ts`、`real-kimi-code-bridge.e2e.test.ts`、`real-kimi-code-tmux-provider.e2e.test.ts`、`kimi-tmux-provider-local-process.e2e.test.ts` | 隔离 home 中启动真实 provider 进程或 fake backend；Codex 以真实 CLI + tmux + Mock Responses 流验证 answer 附件在终止事件前发送、回复到异步就绪的流式卡片且 completed 不重复。Kimi 用真实 executable + 真 tmux + 本地 OpenAI-compatible proxy 覆盖 fresh/steer/resume，并让同一 proxy 返回确定性 402，证明真实 CLI 写出的 `ERROR turn failed` 会进入 SSE error 且不产生成功 result；thinking 排除和 fake CLI session/wire 生命周期继续用确定性 fixture 回归。 |
+| `real-codex-tmux-provider.e2e.test.ts`、`real-codex-startup-update.e2e.test.ts`、`real-claude-tmux-provider.e2e.test.ts`、`real-kimi-code-bridge.e2e.test.ts`、`real-kimi-code-tmux-provider.e2e.test.ts`、`kimi-tmux-provider-local-process.e2e.test.ts` | 隔离 home 中启动真实 provider 进程或 fake backend；Codex 以真实 CLI + tmux + Mock Responses 流验证 answer 附件在终止事件前发送、回复到异步就绪的流式卡片且 completed 不重复；opt-in 旧版升级门禁使用隔离 npm prefix 真实执行 Update now、更新和重启。Kimi 用真实 executable + 真 tmux + 本地 OpenAI-compatible proxy 覆盖 fresh/steer/resume，并让同一 proxy 返回确定性 402，证明真实 CLI 写出的 `ERROR turn failed` 会进入 SSE error 且不产生成功 result；thinking 排除和 fake CLI session/wire 生命周期继续用确定性 fixture 回归。 |
 
 ### 交付、流式、mirror 和用户可见渲染
 

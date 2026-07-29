@@ -34,6 +34,7 @@ import {
   toUserVisibleCommandError,
 } from '../../../../bridge/command/errors.js';
 import { createMirrorSubscription } from '../../../../bridge/mirror/subscription-state.js';
+import { createMirrorTurnState } from '../../../../bridge/mirror/turns.js';
 import { saveStartupNoticeTarget } from '../../../../bridge/host/startup-notice-target.js';
 import * as router from '../../../../bridge/host/channel-router.js';
 import {
@@ -337,7 +338,7 @@ describe('bridge-manager mirror tmux selection probe scheduling', () => {
     }
   });
 
-  it('marks a missing mirror tmux lifecycle stopped and does not capture it again', async () => {
+  it('marks a missing mirror tmux stopped and finalizes its streaming card once as an error', async () => {
     fs.rmSync(DATA_DIR, { recursive: true, force: true });
     fs.rmSync(CONFIG_TOML_PATH, { force: true });
     const store = new JsonFileStore(makeSettings());
@@ -351,7 +352,7 @@ describe('bridge-manager mirror tmux selection probe scheduling', () => {
     resetRuntimeTmuxInputStatesForTests();
 
     const state = (globalThis as unknown as Record<string, any>).__bridge_manager__;
-    const address = { channelType: 'feishu-default', chatId: 'chat-missing-mirror-tmux' } as const;
+    const address = { channelType: 'feishu', chatId: 'chat-missing-mirror-tmux' } as const;
     const binding = router.createBinding(address, '/tmp/missing-mirror-tmux');
     const threadId = '019f0000-0000-7000-8000-000000000099';
     const tmuxSessionName = 'missing-codex-mirror';
@@ -373,7 +374,18 @@ describe('bridge-manager mirror tmux selection probe scheduling', () => {
       lastDeliveredAt: null,
       activityTier: 'hot',
     });
+    const pendingTurn = createMirrorTurnState(
+      binding.bridgeSessionId,
+      '2026-07-29T12:13:57.000Z',
+      'turn-missing-tmux',
+    );
+    pendingTurn.userText = '继续处理这个任务';
+    pendingTurn.streamedText = '已经完成一部分';
+    pendingTurn.streamStarted = true;
+    subscription.pendingTurn = pendingTurn;
     state.mirrorSubscriptions.set(binding.id, subscription);
+    const adapter = new MirrorArtifactAdapter();
+    state.adapters.set(address.channelType, adapter);
 
     let captureCalls = 0;
     let existenceCalls = 0;
@@ -391,6 +403,10 @@ describe('bridge-manager mirror tmux selection probe scheduling', () => {
     try {
       await _testOnly.probeMirrorTmuxSelectionPrompt(subscription, 10_000);
       await _testOnly.probeMirrorTmuxSelectionPrompt(subscription, 20_000);
+      _testOnly.refreshMirrorStreamingStatus(subscription, 30_000, {
+        idleStartMs: 0,
+        heartbeatMs: 1_000,
+      });
 
       assert.equal(captureCalls, 1);
       assert.equal(existenceCalls, 1);
@@ -400,6 +416,13 @@ describe('bridge-manager mirror tmux selection probe scheduling', () => {
       );
       assert.equal(getSessionRuntimeTmuxSessionName(store.getSession(binding.bridgeSessionId)), undefined);
       assert.equal(store.getSession(binding.bridgeSessionId)?.health_status, 'failed');
+      assert.equal(subscription.pendingTurn, null);
+      assert.equal(subscription.pendingDeliveries.length, 0);
+      assert.equal(adapter.streamEnds.length, 1);
+      assert.equal(adapter.streamStatuses.length, 1);
+      assert.equal(adapter.streamEnds[0]?.status, 'error');
+      assert.match(adapter.streamEnds[0]?.text || '', /Codex tmux 会话 missing-codex-mirror 已退出/);
+      assert.match(adapter.streamEnds[0]?.text || '', /\/p tmux/);
     } finally {
       restoreTmux();
       _testOnly.resetStateForTests();
@@ -713,6 +736,13 @@ class MirrorArtifactAdapter extends BaseChannelAdapter {
   readonly provider = 'feishu';
   readonly sentMessages: OutboundMessage[] = [];
   readonly streamedTexts: string[] = [];
+  readonly streamStatuses: string[] = [];
+  readonly streamEnds: Array<{
+    chatId: string;
+    status: 'completed' | 'interrupted' | 'error';
+    text: string;
+    streamKey?: string;
+  }> = [];
 
   async start(): Promise<void> {}
   async stop(): Promise<void> {}
@@ -724,8 +754,16 @@ class MirrorArtifactAdapter extends BaseChannelAdapter {
   }
   onMirrorStreamStart(): void {}
   onStreamText(_chatId: string, text: string): void { this.streamedTexts.push(text); }
-  onStreamStatus(): void {}
-  async onStreamEnd(): Promise<boolean> { return true; }
+  onStreamStatus(_chatId: string, status: string): void { this.streamStatuses.push(status); }
+  async onStreamEnd(
+    chatId: string,
+    status: 'completed' | 'interrupted' | 'error',
+    text: string,
+    streamKey?: string,
+  ): Promise<boolean> {
+    this.streamEnds.push({ chatId, status, text, streamKey });
+    return true;
+  }
   validateConfig(): string | null { return null; }
   isAuthorized(): boolean { return true; }
 }
