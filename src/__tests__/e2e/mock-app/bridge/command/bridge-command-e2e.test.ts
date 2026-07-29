@@ -2164,7 +2164,10 @@ describe('bridge command e2e', () => {
 
     try {
       const answerLatestGoalSelection = async (label: string): Promise<void> => {
-        await waitForCondition(() => store.listPendingPermissionLinksByChat(address.chatId).length > 0, 2_000);
+        await waitForMirrorCondition(
+          () => store.listPendingPermissionLinksByChat(address.chatId).length > 0,
+          2_000,
+        );
         const link = store.listPendingPermissionLinksByChat(address.chatId).at(-1);
         assert.ok(link, label);
         assert.match(link.permissionRequestId, /codex-selection:goal:mirror:/);
@@ -2185,7 +2188,6 @@ describe('bridge command e2e', () => {
         lastActivityAt: new Date().toISOString(),
       } as any;
       await new Promise((resolve) => setTimeout(resolve, 2_100));
-      await waitForCondition(() => store.listPendingPermissionLinksByChat(address.chatId).length > 0, 2_000);
       await answerLatestGoalSelection('b');
 
       subscription.pendingTurn = {
@@ -2194,7 +2196,6 @@ describe('bridge command e2e', () => {
         lastActivityAt: new Date().toISOString(),
       } as any;
       await new Promise((resolve) => setTimeout(resolve, 2_100));
-      await waitForCondition(() => store.listPendingPermissionLinksByChat(address.chatId).length > 0, 2_000);
       await answerLatestGoalSelection('c');
 
       assert.equal(
