@@ -191,18 +191,67 @@ describe('unit::real-e2e-dump::live-log-scoping', () => {
       elementIds: ['runtime_meta_tags', 'stream_history', 'final_content', 'streaming_status'],
       markdownTexts: [
         "<text_tag color='orange'>cursor</text_tag> <text_tag color='turquoise'>model:gpt-5.3-codex</text_tag>",
+        '> Responding with concise greeting',
         marker,
       ],
     };
 
-    assert.deepEqual(cursorStreamCardUnifiedUiIssues([checkpoint], marker, 'gpt-5.3-codex'), []);
+    assert.deepEqual(cursorStreamCardUnifiedUiIssues(
+      [checkpoint],
+      marker,
+      'gpt-5.3-codex',
+      ['Responding with concise greeting'],
+    ), []);
+    assert.deepEqual(cursorStreamCardUnifiedUiIssues(
+      [{
+        ...checkpoint,
+        markdownTexts: [
+          checkpoint.markdownTexts[0],
+          `**用户**：Cursor thinking summary 引用样式真实端验证已完成。`,
+          '> Responding with concise greeting',
+          'Cursor thinking summary 的引用样式真实端验证已完成。',
+        ],
+        markdownPreviews: [
+          { elementId: 'final_content', preview: '**用户**：Cursor thinking summary 引用样式真实端验证已完成。' },
+          { elementId: 'stream_txt_2', preview: '> Responding with concise greeting' },
+          { elementId: 'stream_txt_3', preview: 'Cursor thinking summary 的引用样式真实端验证已完成。' },
+        ],
+      }],
+      '',
+      'gpt-5.3-codex',
+      ['Responding with concise greeting'],
+    ), []);
     assert.deepEqual(
-      cursorStreamCardUnifiedUiIssues([{ ...checkpoint, headerTitle: undefined }], marker, 'gpt-5.3-codex'),
+      cursorStreamCardUnifiedUiIssues(
+        [{ ...checkpoint, headerTitle: undefined }],
+        marker,
+        'gpt-5.3-codex',
+        ['Responding with concise greeting'],
+      ),
       ['Cursor final card did not use the shared session-title header.'],
     );
     assert.deepEqual(
-      cursorStreamCardUnifiedUiIssues([{ ...checkpoint, elementIds: ['stream_history'] }], marker, 'gpt-5.3-codex'),
+      cursorStreamCardUnifiedUiIssues(
+        [{ ...checkpoint, elementIds: ['stream_history'] }],
+        marker,
+        'gpt-5.3-codex',
+        ['Responding with concise greeting'],
+      ),
       ['Cursor final card did not use the shared runtime metadata region.'],
+    );
+    assert.deepEqual(
+      cursorStreamCardUnifiedUiIssues([checkpoint], marker, 'gpt-5.3-codex', ['Missing summary']),
+      ['Cursor final card did not render thinking summary "Missing summary" as a quoted history item.'],
+    );
+    assert.deepEqual(
+      cursorStreamCardUnifiedUiIssues([{
+        ...checkpoint,
+        markdownTexts: [checkpoint.markdownTexts[0], 'Responding with concise greeting', `${marker} Responding with concise greeting`],
+      }], marker, 'gpt-5.3-codex', ['Responding with concise greeting']),
+      [
+        'Cursor final card did not render thinking summary "Responding with concise greeting" as a quoted history item.',
+        'Cursor final card mixed thinking summary "Responding with concise greeting" into the answer body.',
+      ],
     );
   });
 

@@ -69,6 +69,23 @@ describe('interactive-turn final-response-plan', () => {
     assert.equal(plan.skipTextWhenCardFinalized, false);
   });
 
+  it('keeps thinking summaries out of the final answer payload', () => {
+    const plan = buildProcessFinalResponsePlan({
+      result: {
+        responseText: 'Cursor thinking summary 独立显示验证已完成。',
+        outboundAttachments: [],
+        hasError: false,
+        errorMessage: '',
+      },
+      terminal: null,
+      aborted: false,
+      formatErrorCard: (message) => `ERR:${message}`,
+    });
+
+    assert.equal(plan.cardText, 'Cursor thinking summary 独立显示验证已完成。');
+    assert.equal(plan.deliveryResponse?.text, plan.cardText);
+  });
+
   it('does not deliver an interrupted empty response', () => {
     const plan = buildProcessFinalResponsePlan({
       result: {

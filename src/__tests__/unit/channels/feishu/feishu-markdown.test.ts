@@ -619,6 +619,23 @@ describe('buildStreamingTextElements', () => {
 });
 
 describe('buildStreamingHistoryElements', () => {
+  it('renders thinking summaries as understated Markdown quotes', () => {
+    const elements = buildStreamingHistoryElementsFromItems('', [
+      {
+        type: 'markdown',
+        role: 'thinking',
+        variant: 'thinking_summary',
+        content: '**Preparing concise comparative analysis**',
+      },
+      { type: 'markdown', role: 'assistant', content: '最终回答' },
+    ]);
+    const historyChildren = (elements[0] as any).elements as any[];
+
+    assert.equal(historyChildren[0]?.tag, 'markdown');
+    assert.equal(historyChildren[0]?.content, '> Preparing concise comparative analysis');
+    assert.equal(historyChildren[1]?.content, '最终回答');
+  });
+
   it('keeps ordinary user input inline and folds only long input into a borderless panel', () => {
     const short = buildStreamingHistoryElementsFromItems('', [
       { type: 'markdown', role: 'user', content: '普通用户输入' },

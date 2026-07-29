@@ -214,6 +214,7 @@ describe('interactive-turn sdk-conversation-engine tool expansion', () => {
     resetBridgeTestState();
     const partialTexts: string[] = [];
     const answerSnapshots: string[] = [];
+    const historyItems: Array<{ type: string; role: string; content: string }> = [];
     const llm: LLMProvider = {
       streamChat(): ReadableStream<string> {
         return new ReadableStream({
@@ -222,6 +223,12 @@ describe('interactive-turn sdk-conversation-engine tool expansion', () => {
               'text_snapshot',
               'Hey! What would you like to work on in this repo?\n\n**Responding with concise greeting**',
             ));
+            controller.enqueue(sseEvent('history_item', {
+              type: 'markdown',
+              role: 'thinking',
+              variant: 'thinking_summary',
+              content: 'Responding with concise greeting',
+            }));
             controller.enqueue(sseEvent(
               'text_snapshot',
               'Hey! What would you like to work on in this repo?',
@@ -252,13 +259,22 @@ describe('interactive-turn sdk-conversation-engine tool expansion', () => {
       undefined,
       undefined,
       undefined,
-      { onAnswerText: (text) => answerSnapshots.push(text) },
+      {
+        onAnswerText: (text) => answerSnapshots.push(text),
+        onHistoryItem: (item) => historyItems.push(item),
+      },
       createTestSdkConversationRuntime(store, llm),
     );
 
     assert.match(partialTexts[0] || '', /Responding with concise greeting/);
     assert.equal(partialTexts.at(-1), 'Hey! What would you like to work on in this repo?');
     assert.equal(answerSnapshots.at(-1), 'Hey! What would you like to work on in this repo?');
+    assert.deepEqual(historyItems, [{
+      type: 'markdown',
+      role: 'thinking',
+      variant: 'thinking_summary',
+      content: 'Responding with concise greeting',
+    }]);
     assert.equal(result.responseText, 'Hey! What would you like to work on in this repo?');
     assert.doesNotMatch(result.responseText, /Responding with concise greeting/);
   });

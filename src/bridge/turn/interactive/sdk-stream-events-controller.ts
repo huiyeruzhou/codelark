@@ -1,4 +1,5 @@
 import type {
+  StreamingHistoryItem,
   TaskProgressInfo,
 } from '../../../domain/index.js';
 import { stripFinalOnlyBlocksForStreaming } from '../response-assembler.js';
@@ -19,6 +20,8 @@ import {
 import {
   applyUnifiedTurnContextUsage,
   applyUnifiedTurnHistoryModelTextSnapshot,
+  applyUnifiedTurnHistoryMarkdown,
+  applyUnifiedTurnThinkingSummary,
   applyUnifiedTurnTasks,
   applyUnifiedTurnThinkingNote,
   applyUnifiedTurnToolEvent,
@@ -56,6 +59,7 @@ export interface InteractiveSdkStreamEventsController {
   onTaskEvent(tasks: TaskProgressInfo[]): void;
   onStatusNote(note: string | null): void;
   onThinkingNote(note: string): void;
+  onHistoryItem(item: Extract<StreamingHistoryItem, { type: 'markdown' }>): void;
   onContextUsage(contextUsage: ContextUsageInfo): void;
   onPermissionWait(toolName: string): void;
   pushFinalCardText(text: string): void;
@@ -144,6 +148,21 @@ export function createInteractiveSdkStreamEventsController(
       if (!normalized) return;
       applyUnifiedTurnThinkingNote(params.streamState, normalized, params.nowMs());
       markActivity();
+      pushRunningStatus();
+    },
+    onHistoryItem(item) {
+      if (!isCurrentTask()) return;
+      const normalized = item.content.trim();
+      if (!normalized) return;
+      if (item.variant === 'thinking_summary') {
+        applyUnifiedTurnThinkingSummary(params.streamState, normalized);
+      } else {
+        applyUnifiedTurnHistoryMarkdown(params.streamState, item.role, normalized);
+      }
+      markActivity();
+      if (params.streamUi.hasStreamingCards) {
+        params.streamFeedback.pushHistory(params.streamState.historyItems);
+      }
       pushRunningStatus();
     },
     onContextUsage(contextUsage) {

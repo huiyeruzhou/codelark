@@ -1598,7 +1598,7 @@ describe('unit::real-feishu-e2e-harness::session-management-command-plan', () =>
     assert.equal(parsed.coverage.dualProviderCompanion, 'real-feishu::runtime-message::codex-tmux');
     assert.deepEqual(parsed.commands, ['/runtime cursor', '/p tmux']);
     assert.equal(parsed.cursorModel, 'gpt-5.3-codex');
-    assert.equal(parsed.waitsForMirrorFinalBeforeFollowup, false);
+    assert.equal(parsed.waitsForMirrorFinalBeforeFollowup, true);
     assert.equal(parsed.finalMessageObservationMode, 'reply_to');
     assert.deepEqual(expectationAt(parsed.commandReplyExpectations, '/runtime cursor').expectedTexts, ['Runtime', 'cursor']);
     assert.deepEqual(expectationAt(parsed.commandReplyExpectations, '/p tmux').expectedTexts, ['Cursor Provider', 'tmux']);
@@ -1727,7 +1727,7 @@ describe('unit::real-feishu-e2e-harness::session-management-command-plan', () =>
     assert.doesNotMatch(usage, /--kimi-home/);
   });
 
-  it('cleans Codex, Claude, and Kimi provider-owned tmux sessions from an isolated run root', () => {
+  it('cleans provider tmux sessions through the run-local server without inheriting the caller socket', () => {
     const runRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-real-feishu-cleanup-'));
     const codelarkHome = path.join(runRoot, 'codelark-home');
     const dataDir = path.join(codelarkHome, 'data');
@@ -1737,10 +1737,11 @@ describe('unit::real-feishu-e2e-harness::session-management-command-plan', () =>
     const fakeTmux = path.join(fakeBin, 'tmux');
     fs.mkdirSync(dataDir, { recursive: true });
     fs.mkdirSync(logsDir, { recursive: true });
+    fs.mkdirSync(path.join(runRoot, 'tmux'), { recursive: true });
     fs.writeFileSync(fakeTmux, [
       '#!/usr/bin/env node',
       'const fs = require("node:fs");',
-      'fs.appendFileSync(process.env.CLK_FAKE_TMUX_LOG, `${process.argv.slice(2).join(" ")}\\n`);',
+      'fs.appendFileSync(process.env.CLK_FAKE_TMUX_LOG, `${JSON.stringify({ args: process.argv.slice(2), tmux: process.env.TMUX || null, tmuxPane: process.env.TMUX_PANE || null, tmuxTmpdir: process.env.TMUX_TMPDIR || null })}\\n`);',
       'process.exit(0);',
       '',
     ].join('\n'), { mode: 0o755 });
@@ -1753,6 +1754,9 @@ describe('unit::real-feishu-e2e-harness::session-management-command-plan', () =>
       },
       kimi: {
         runtime: { general: { tmuxSessionName: 'clk-kimi-session-kimi-cleanup' } },
+      },
+      cursor: {
+        runtime: { general: { tmuxSessionName: 'clk-cursor-session-cursor-cleanup' } },
       },
     }, null, 2));
     fs.writeFileSync(
@@ -1773,23 +1777,71 @@ describe('unit::real-feishu-e2e-harness::session-management-command-plan', () =>
       ], {
         PATH: `${fakeBin}${path.delimiter}${process.env.PATH || ''}`,
         CLK_FAKE_TMUX_LOG: tmuxLog,
+        TMUX: '/tmp/user-tmux/default,123,0',
+        TMUX_PANE: '%9',
       });
       const parsed = JSON.parse(output) as {
         removedTmuxSessions: string[];
       };
-      const tmuxCommands = fs.readFileSync(tmuxLog, 'utf-8');
+      const tmuxCalls = fs.readFileSync(tmuxLog, 'utf-8').trim().split('\n').map((line) => JSON.parse(line) as {
+        args: string[];
+        tmux: string | null;
+        tmuxPane: string | null;
+        tmuxTmpdir: string | null;
+      });
 
       assert.deepEqual(parsed.removedTmuxSessions, [
         'claude_session_cleanup',
         'claude_session_from_log',
+        'clk-cursor-session-cursor-cleanup',
         'clk-kimi-session-from-log',
         'clk-kimi-session-kimi-cleanup',
         'codex_019e824e-10ef-7430-985d-4349ce6a15f9',
       ]);
       for (const sessionName of parsed.removedTmuxSessions) {
-        assert.match(tmuxCommands, new RegExp(`kill-session -t ${sessionName}`));
+        assert.ok(tmuxCalls.some((call) => call.args.join(' ') === `kill-session -t ${sessionName}`));
       }
+      assert.ok(tmuxCalls.some((call) => call.args.join(' ') === 'kill-server'));
+      assert.ok(tmuxCalls.every((call) => call.tmux === null && call.tmuxPane === null));
+      assert.ok(tmuxCalls.every((call) => call.tmuxTmpdir === path.join(runRoot, 'tmux')));
       assert.equal(fs.existsSync(runRoot), false);
+    } finally {
+      fs.rmSync(runRoot, { recursive: true, force: true });
+      fs.rmSync(fakeBin, { recursive: true, force: true });
+    }
+  });
+
+  it('does not invoke tmux cleanup when dry-run never created a run-local tmux root', () => {
+    const runRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-real-feishu-dry-run-tmux-'));
+    const fakeBin = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-real-feishu-fake-tmux-'));
+    const tmuxLog = path.join(fakeBin, 'tmux.log');
+    const fakeTmux = path.join(fakeBin, 'tmux');
+    fs.writeFileSync(fakeTmux, [
+      '#!/usr/bin/env node',
+      'const fs = require("node:fs");',
+      'fs.appendFileSync(process.env.CLK_FAKE_TMUX_LOG, `${process.argv.slice(2).join(" ")}\\n`);',
+      'process.exit(0);',
+      '',
+    ].join('\n'), { mode: 0o755 });
+
+    try {
+      runHarness([
+        '--dry-run',
+        '--run-root',
+        runRoot,
+        '--scenario',
+        'message-only',
+        '--chat-id',
+        'oc_unit',
+      ], {
+        PATH: `${fakeBin}${path.delimiter}${process.env.PATH || ''}`,
+        CLK_FAKE_TMUX_LOG: tmuxLog,
+        TMUX: '/tmp/user-tmux/default,123,0',
+        TMUX_PANE: '%9',
+      });
+
+      assert.equal(fs.existsSync(path.join(runRoot, 'tmux')), false);
+      assert.equal(fs.existsSync(tmuxLog), false);
     } finally {
       fs.rmSync(runRoot, { recursive: true, force: true });
       fs.rmSync(fakeBin, { recursive: true, force: true });

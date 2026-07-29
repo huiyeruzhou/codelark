@@ -154,7 +154,7 @@ export const defaultUiSessionCursorSource: UiSessionCursorSource = {
   readJsonlHistory(cursorSessionId, cwd) {
     const session = findCursorSessionFileById(cursorSessionId, cwd);
     if (!session?.filePath) return [];
-    return readCursorSessionMirrorRecordStreamByFilePath(session.filePath)
+    return readCursorSessionMirrorRecordStreamByFilePath(session.filePath, session.storePath)
       .filter((record) => record.type === 'message')
       .map((record) => ({
         signature: record.signature,

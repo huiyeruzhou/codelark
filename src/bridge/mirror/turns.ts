@@ -9,7 +9,9 @@ import {
   applyUnifiedTurnHistoryModelText,
   applyUnifiedTurnHistoryModelTextSnapshot,
   applyUnifiedTurnHistorySystemText,
+  applyUnifiedTurnHistoryMarkdown,
   applyUnifiedTurnHistoryUserText,
+  applyUnifiedTurnThinkingSummary,
   applyUnifiedTurnStatusNote,
   applyUnifiedTurnThinkingNote,
   applyUnifiedTurnTasks,
@@ -516,6 +518,18 @@ export function consumeMirrorRecords<TSubscription extends MirrorTurnStateHolder
       const pendingTurn = ensureMirrorTurnState(subscription, record);
       const text = record.content.trim();
       if (!text) continue;
+      if (record.reasoningKind === 'summary') {
+        applyUnifiedTurnThinkingSummary(pendingTurn, text);
+        pendingTurn.lastActivityAt = record.timestamp || nowIso();
+        hooks.onStreamText?.(subscription, pendingTurn);
+        continue;
+      }
+      if (record.reasoningKind === 'history') {
+        applyUnifiedTurnHistoryMarkdown(pendingTurn, 'thinking', text);
+        pendingTurn.lastActivityAt = record.timestamp || nowIso();
+        hooks.onStreamText?.(subscription, pendingTurn);
+        continue;
+      }
       if (record.reasoningKind === 'thinking') {
         applyUnifiedTurnThinkingNote(pendingTurn, text, mirrorTimestampMs(record.timestamp));
         applyUnifiedTurnStatusNote(pendingTurn, record.reasoningLabel || '思考', mirrorTimestampMs(record.timestamp));

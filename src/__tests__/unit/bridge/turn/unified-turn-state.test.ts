@@ -7,6 +7,7 @@ import {
   applyUnifiedTurnHistoryModelText,
   applyUnifiedTurnHistoryModelTextSnapshot,
   applyUnifiedTurnHistorySystemText,
+  applyUnifiedTurnHistoryMarkdown,
   applyUnifiedTurnHistoryUserText,
   applyUnifiedTurnStatusNote,
   applyUnifiedTurnTasks,
@@ -228,5 +229,18 @@ describe('unified-turn-state', () => {
 
     assert.deepEqual(state.historyItems.map((item) => item.type), ['tool_panel', 'markdown']);
     assert.equal(state.historyItems[1]?.type === 'markdown' ? state.historyItems[1].content : '', '最终问候');
+  });
+
+  it('preserves a thinking history item while replacing an assistant snapshot', () => {
+    const state = createUnifiedTurnProgressState(1000);
+
+    applyUnifiedTurnHistoryModelTextSnapshot(state, '最终问候\n\n**简短思考标题**');
+    applyUnifiedTurnHistoryMarkdown(state, 'thinking', '**简短思考标题**');
+    applyUnifiedTurnHistoryModelTextSnapshot(state, '最终问候');
+
+    assert.deepEqual(state.historyItems, [
+      { type: 'markdown', role: 'thinking', content: '**简短思考标题**' },
+      { type: 'markdown', role: 'assistant', content: '最终问候' },
+    ]);
   });
 });

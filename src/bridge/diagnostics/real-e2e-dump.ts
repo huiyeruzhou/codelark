@@ -129,6 +129,7 @@ export interface RealE2eRuntimeSlotReport {
   cursorSessionId?: string;
   cursorCwd?: string;
   cursorTranscriptPath?: string;
+  cursorStorePath?: string;
 }
 
 export interface RealE2eDumpReport {
@@ -148,6 +149,7 @@ export interface RealE2eDumpReport {
   kimiWireJsonlPath?: string;
   cursorSessionId?: string;
   cursorTranscriptPath?: string;
+  cursorStorePath?: string;
   messages: BridgeMessage[];
   audit: StoredAuditLogEntry[];
   streamKeys: string[];
@@ -385,6 +387,7 @@ export function cursorStreamCardUnifiedUiIssues(
   checkpoints: RealE2eStreamCardCheckpoint[],
   marker: string,
   expectedModel: string,
+  expectedThinkingSummaries: string[] = [],
 ): string[] {
   const finalCheckpoint = checkpoints.find((checkpoint) => (
     checkpoint.kind === 'final'
@@ -414,6 +417,28 @@ export function cursorStreamCardUnifiedUiIssues(
   }
   if (expectedModel && !visibleText.includes(`model:${expectedModel}`)) {
     issues.push(`Cursor final card did not expose model:${expectedModel}.`);
+  }
+  if (expectedThinkingSummaries.length === 0) {
+    issues.push('Cursor transcript did not expose a thinking summary for the final-card preservation check.');
+  }
+  for (const summary of expectedThinkingSummaries) {
+    const normalizedSummary = summary.trim();
+    const quotedSummary = `> ${normalizedSummary}`;
+    if (!(finalCheckpoint.markdownTexts || []).some((text) => text.trim() === quotedSummary)) {
+      issues.push(`Cursor final card did not render thinking summary ${JSON.stringify(summary)} as a quoted history item.`);
+    }
+    const streamAnswerPreviews = (finalCheckpoint.markdownPreviews || [])
+      .filter((item) => item.elementId?.startsWith('stream_txt_'))
+      .map((item) => item.preview)
+      .filter((text) => text.trim() !== quotedSummary);
+    const answerTexts = streamAnswerPreviews.length > 0
+      ? streamAnswerPreviews
+      : (finalCheckpoint.markdownTexts || []).filter((text) => text.trim() !== quotedSummary);
+    if (answerTexts.some((text) => (
+      text.includes(normalizedSummary) && (!marker || text.includes(marker))
+    ))) {
+      issues.push(`Cursor final card mixed thinking summary ${JSON.stringify(summary)} into the answer body.`);
+    }
   }
   return issues;
 }
@@ -826,6 +851,7 @@ export function collectRealE2eDump(input: RealE2eDumpInput = {}): RealE2eDumpRep
         ...(slotCursorSessionId ? { cursorSessionId: slotCursorSessionId } : {}),
         ...(slotCursorCwd ? { cursorCwd: slotCursorCwd } : {}),
         ...(slotCursorTranscript?.filePath ? { cursorTranscriptPath: slotCursorTranscript.filePath } : {}),
+        ...(slotCursorTranscript?.storePath ? { cursorStorePath: slotCursorTranscript.storePath } : {}),
       };
     })
     .filter((slot): slot is RealE2eRuntimeSlotReport => slot !== null);
@@ -964,6 +990,7 @@ export function collectRealE2eDump(input: RealE2eDumpInput = {}): RealE2eDumpRep
     ...(kimiWireJsonl?.filePath ? { kimiWireJsonlPath: kimiWireJsonl.filePath } : {}),
     ...(cursorSessionId ? { cursorSessionId } : {}),
     ...(cursorTranscript?.filePath ? { cursorTranscriptPath: cursorTranscript.filePath } : {}),
+    ...(cursorTranscript?.storePath ? { cursorStorePath: cursorTranscript.storePath } : {}),
     messages: messages.slice(-messageLimit),
     audit: relevantAudit.slice(-auditLimit),
     streamKeys,

@@ -280,6 +280,7 @@ export interface CursorTmuxInputSession {
   sessionId?: string;
   cwd?: string;
   sessionFilePath?: string;
+  sessionStorePath?: string;
   nextOffset: number;
   existed: boolean;
 }
@@ -320,6 +321,7 @@ export async function ensureCursorTmuxInputSession(
     ...(discovered?.sessionId ? { sessionId: discovered.sessionId } : {}),
     ...(discovered?.cwd || params.workingDirectory ? { cwd: discovered?.cwd || params.workingDirectory } : {}),
     ...(discovered?.filePath ? { sessionFilePath: discovered.filePath } : {}),
+    ...(discovered?.storePath ? { sessionStorePath: discovered.storePath } : {}),
     nextOffset: transcriptSize(discovered),
     existed: inspection.exists,
   };
@@ -334,6 +336,7 @@ interface CursorTurnContext {
   sessionId?: string;
   cwd?: string;
   sessionFilePath?: string;
+  sessionStorePath?: string;
   nextOffset: number;
   trailingText: string;
   nextTurnId: string | null;
@@ -355,6 +358,23 @@ function enqueueCursorRecord(
     return;
   }
   if (record.type === 'reasoning' && record.content) {
+    if (record.reasoningKind === 'summary') {
+      controller.enqueue(sseEvent('history_item', {
+        type: 'markdown',
+        role: 'thinking',
+        variant: 'thinking_summary',
+        content: record.content,
+      }));
+      return;
+    }
+    if (record.reasoningKind === 'history') {
+      controller.enqueue(sseEvent('history_item', {
+        type: 'markdown',
+        role: 'thinking',
+        content: record.content,
+      }));
+      return;
+    }
     controller.enqueue(sseEvent('status', { reasoning: record.content }));
     return;
   }
@@ -420,6 +440,7 @@ async function waitForCursorTranscript(
       context.sessionId = summary.sessionId;
       context.cwd = summary.cwd || context.cwd;
       context.sessionFilePath = summary.filePath;
+      context.sessionStorePath = summary.storePath;
       return;
     }
     const capture = await tmuxCore.capturePane(targetPane, 160);
@@ -467,6 +488,7 @@ async function pollCursorTranscript(
       context.trailingText,
       context.nextTurnId,
       context.nextSpecialCallIds,
+      context.sessionStorePath,
     );
     context.nextOffset = delta.nextOffset;
     context.trailingText = delta.trailingText;
@@ -525,6 +547,7 @@ export function streamCursorTmuxTui(params: StreamChatParams): ReadableStream<st
           context.sessionId = prepared.sessionId;
           context.cwd = prepared.cwd;
           context.sessionFilePath = prepared.sessionFilePath;
+          context.sessionStorePath = prepared.sessionStorePath;
           context.nextOffset = prepared.nextOffset;
           if (context.sessionId) {
             controller.enqueue(sseEvent('status', {

@@ -1328,6 +1328,11 @@ function buildHistoryMarkdownElement(
 }
 
 function formatHistoryMarkdownContent(item: Extract<StreamingHistoryItem, { type: 'markdown' }>): string {
+  if (item.variant === 'thinking_summary') {
+    const trimmed = item.content.trim();
+    const unwrapped = trimmed.match(/^(\*\*|__)([^\r\n]+)\1$/u)?.[2]?.trim() || trimmed;
+    return unwrapped.split(/\r?\n/u).map((line) => `> ${line}`).join('\n');
+  }
   if (item.role !== 'user') return item.content;
   const trimmed = item.content.trim();
   if (!trimmed || /^\*\*用户\*\*/.test(trimmed)) return item.content;

@@ -6,7 +6,13 @@
  * and returns the response text for delivery.
  */
 
-import type { ChannelChat, OutboundAttachment, OutboundQuestion, TaskProgressInfo } from '../../../domain/index.js';
+import type {
+  ChannelChat,
+  OutboundAttachment,
+  OutboundQuestion,
+  StreamingHistoryItem,
+  TaskProgressInfo,
+} from '../../../domain/index.js';
 import type {
   BridgeSession,
   BridgeStore,
@@ -92,6 +98,7 @@ export type OnToolEvent = (
 export type OnTaskEvent = (tasks: TaskProgressInfo[]) => void;
 export type OnStatusNote = (note: string | null) => void;
 export type OnThinkingNote = (note: string) => void;
+export type OnHistoryItem = (item: Extract<StreamingHistoryItem, { type: 'markdown' }>) => void;
 export type OnContextUsage = (contextUsage: ContextUsageInfo) => void;
 export type OnRuntimeIdentity = (identity: {
   runtime: RuntimeAgent;
@@ -147,6 +154,7 @@ export async function processMessage(
       includeToolSnippets?: boolean;
     };
     onThinkingNote?: OnThinkingNote;
+    onHistoryItem?: OnHistoryItem;
     /** Full accumulated answer text only; excludes thinking, status, and tool previews. */
     onAnswerText?: OnPartialText;
     onContextUsage?: OnContextUsage;
@@ -314,6 +322,7 @@ async function consumeStream(
       includeToolSnippets?: boolean;
     };
     onThinkingNote?: OnThinkingNote;
+    onHistoryItem?: OnHistoryItem;
     /** Full accumulated answer text only; excludes thinking, status, and tool previews. */
     onAnswerText?: OnPartialText;
     onContextUsage?: OnContextUsage;
@@ -569,6 +578,26 @@ async function consumeStream(
                   try { onPartialText(previewText); } catch { /* non-critical */ }
                 }
               }
+            }
+          } catch { /* skip */ }
+          break;
+        }
+
+        case 'history_item': {
+          try {
+            const item = JSON.parse(event.data) as Partial<Extract<StreamingHistoryItem, { type: 'markdown' }>>;
+            if (
+              item.type === 'markdown'
+              && typeof item.content === 'string'
+              && item.content.trim()
+              && (item.role === 'assistant' || item.role === 'system' || item.role === 'user' || item.role === 'thinking')
+            ) {
+              options?.onHistoryItem?.({
+                type: 'markdown',
+                role: item.role,
+                content: item.content,
+                ...(item.variant === 'thinking_summary' ? { variant: item.variant } : {}),
+              });
             }
           } catch { /* skip */ }
           break;

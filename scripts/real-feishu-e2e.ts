@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { execFile, execFileSync } from 'node:child_process';
+import { execFile, execFileSync, spawnSync } from 'node:child_process';
 import { spawn, type ChildProcess } from 'node:child_process';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
@@ -17,6 +17,7 @@ import { feishuSiteToApiBaseUrl } from '../src/channels/feishu/site.js';
 import { createConfigService } from '../src/configuration/service.js';
 import { DEFAULT_WORKSPACE_ROOT } from '../src/configuration/paths.js';
 import type { ClaudeExecutable } from '../src/runtime/options.js';
+import { parseCursorTranscriptRecords } from '../src/runtime/cursor/session-index.js';
 import type { ConfigPatch } from '../src/configuration/schema.js';
 import {
   basicDialogueStreamCardCheckpointIssues,
@@ -129,7 +130,7 @@ interface RuntimeEnvironmentPlan {
   kimiAuthSource: 'host-config-copy' | 'not-needed' | 'missing';
   kimiExecutableSource: 'scripted-fake-executable' | 'env-executable' | 'host-home-bin' | 'path';
   kimiExecutablePath?: string;
-  cursorAuthSource: 'host-config-copy' | 'missing';
+  cursorAuthSource: 'verified-isolated-auth' | 'isolated-auth-unverified' | 'missing';
   cursorExecutableSource: 'env-executable' | 'host-home-bin' | 'path';
   cursorExecutablePath?: string;
   ccrConfigSource: 'fake-backend-json' | 'host-config-copy' | 'not-needed' | 'missing';
@@ -1982,6 +1983,52 @@ function isPathInside(parentPath: string, childPath: string): boolean {
   return relative === '' || (Boolean(relative) && !relative.startsWith('..') && !path.isAbsolute(relative));
 }
 
+function realFeishuTmuxTempDir(options: Pick<CliOptions, 'runRoot'>): string {
+  return path.join(options.runRoot, 'tmux');
+}
+
+function hasOwnedIsolatedTmuxRoot(options: Pick<CliOptions, 'runRoot'>): boolean {
+  const runRoot = path.resolve(options.runRoot);
+  const tmuxTempDir = path.resolve(realFeishuTmuxTempDir(options));
+  if (!path.basename(runRoot).startsWith('clk-real-feishu-') || !isPathInside(runRoot, tmuxTempDir)) {
+    return false;
+  }
+  try {
+    return fs.statSync(tmuxTempDir).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
+export function withIsolatedTmuxEnv(
+  sourceEnv: NodeJS.ProcessEnv,
+  tmuxTempDir: string,
+): NodeJS.ProcessEnv {
+  const env = { ...sourceEnv, TMUX_TMPDIR: tmuxTempDir };
+  delete env.TMUX;
+  delete env.TMUX_PANE;
+  return env;
+}
+
+function isolatedTmuxChildEnv(
+  options: Pick<CliOptions, 'runRoot'>,
+  extra: Record<string, string> = {},
+): NodeJS.ProcessEnv {
+  return withIsolatedTmuxEnv(sanitizedChildEnv(extra), realFeishuTmuxTempDir(options));
+}
+
+async function stopIsolatedTmuxServer(options: Pick<CliOptions, 'runRoot'>): Promise<void> {
+  if (!hasOwnedIsolatedTmuxRoot(options)) return;
+  try {
+    await execFileAsync('tmux', ['kill-server'], {
+      env: isolatedTmuxChildEnv(options),
+      timeout: 5_000,
+    });
+  } catch {
+    // No tmux server was started for this run, or tmux is unavailable.
+  }
+}
+
 async function stopPreviousTestBridge(options: CliOptions): Promise<Record<string, unknown>> {
   const codelarkHome = path.resolve(options.codelarkHome);
   const runRoot = path.resolve(options.runRoot);
@@ -2001,6 +2048,7 @@ async function stopPreviousTestBridge(options: CliOptions): Promise<Record<strin
   if (!status.pid || !isPidAlive(status.pid)) {
     const removedAppLocks = cleanupStaleAppLocksForCodelarkHome(codelarkHome);
     const removedTmuxSessions = await cleanupTestTmuxSessions(options);
+    await stopIsolatedTmuxServer(options);
     await cleanupTemporaryRunRoot(options);
     return {
       stopped: false,
@@ -2022,6 +2070,7 @@ async function stopPreviousTestBridge(options: CliOptions): Promise<Record<strin
   }
   const removedAppLocks = cleanupStaleAppLocksForCodelarkHome(codelarkHome);
   const removedTmuxSessions = await cleanupTestTmuxSessions(options);
+  await stopIsolatedTmuxServer(options);
   await cleanupTemporaryRunRoot(options);
   return {
     stopped: true,
@@ -2242,6 +2291,7 @@ function releaseAppLock(lock: AppLock | null): void {
 
 async function cleanupTestTmuxSessions(options: CliOptions): Promise<string[]> {
   if (options.keepCodelarkHome || options.dumpOnly || options.dryRun) return [];
+  if (!hasOwnedIsolatedTmuxRoot(options)) return [];
   const normalizedRunRoot = path.resolve(options.runRoot);
   const normalizedCodelarkHome = path.resolve(options.codelarkHome);
   if (!normalizedRunRoot.startsWith(path.resolve(os.tmpdir()) + path.sep)) return [];
@@ -2282,7 +2332,7 @@ async function cleanupTestTmuxSessions(options: CliOptions): Promise<string[]> {
   for (const sessionName of Array.from(tmuxSessionNames).sort()) {
     try {
       await execFileAsync('tmux', ['kill-session', '-t', sessionName], {
-        env: sanitizedChildEnv(),
+        env: isolatedTmuxChildEnv(options),
         timeout: 5_000,
       });
       removed.push(sessionName);
@@ -2413,12 +2463,50 @@ function resolveKimiExecutableSource(): RuntimeEnvironmentPlan['kimiExecutableSo
   return 'path';
 }
 
-function copyHostCursorConfig(hostHome: string, cursorConfigDir: string): boolean {
+function copyHostCursorAuthEnvironment(hostHome: string, runtimeHome: string, cursorConfigDir: string): boolean {
   const copied = copyFileIfExists(
     path.join(hostHome, '.cursor', 'cli-config.json'),
     path.join(cursorConfigDir, 'cli-config.json'),
   );
+  copyFileIfExists(
+    path.join(hostHome, '.config', 'cursor', 'auth.json'),
+    path.join(runtimeHome, '.config', 'cursor', 'auth.json'),
+  );
   return copied || fs.existsSync(path.join(cursorConfigDir, 'cli-config.json'));
+}
+
+function verifyCopiedCursorAuthentication(
+  executablePath: string | undefined,
+  runtimeHome: string,
+  cursorConfigDir: string,
+  cursorDataDir: string,
+): boolean {
+  if (!executablePath) return false;
+  try {
+    const result = spawnSync(executablePath, ['status'], {
+      env: sanitizedChildEnv({
+        HOME: os.homedir(),
+        USERPROFILE: os.homedir(),
+        XDG_DATA_HOME: path.join(runtimeHome, '.local', 'share'),
+        XDG_CONFIG_HOME: path.join(runtimeHome, '.config'),
+        XDG_CACHE_HOME: path.join(runtimeHome, '.cache'),
+        CURSOR_CONFIG_DIR: cursorConfigDir,
+        CURSOR_DATA_DIR: cursorDataDir,
+      }),
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'pipe'],
+      timeout: 20_000,
+    });
+    const output = `${result.stdout || ''}\n${result.stderr || ''}`;
+    const verified = result.status === 0 && /Logged in as\b/i.test(output);
+    if (!verified) {
+      process.stderr.write(`[real-feishu-e2e] Cursor authentication preflight was not verified: status=${String(result.status)} signal=${String(result.signal || '')} output=${JSON.stringify(output.replace(/\s+/g, ' ').trim().slice(0, 300))}\n`);
+    }
+    return verified;
+  } catch (error) {
+    process.stderr.write(`[real-feishu-e2e] Cursor authentication preflight failed: ${error instanceof Error ? error.message : String(error)}\n`);
+    return false;
+  }
 }
 
 function resolveCursorExecutablePath(): string | undefined {
@@ -2846,11 +2934,22 @@ function prepareRuntimeEnvironment(options: CliOptions): RuntimeEnvironmentPlan 
     : copyHostKimiConfig(os.homedir(), options.kimiHome)
       ? 'host-config-copy'
       : 'missing';
-  const cursorAuthSource: RuntimeEnvironmentPlan['cursorAuthSource'] =
-    copyHostCursorConfig(os.homedir(), options.cursorConfigDir)
-      ? 'host-config-copy'
-      : 'missing';
   const cursorExecutablePath = resolveCursorExecutablePath();
+  const copiedCursorConfig = copyHostCursorAuthEnvironment(
+    os.homedir(),
+    options.runtimeHome,
+    options.cursorConfigDir,
+  );
+  const cursorAuthSource: RuntimeEnvironmentPlan['cursorAuthSource'] = !copiedCursorConfig
+    ? 'missing'
+    : options.runtime === 'cursor' && verifyCopiedCursorAuthentication(
+      cursorExecutablePath,
+      options.runtimeHome,
+      options.cursorConfigDir,
+      options.cursorDataDir,
+    )
+      ? 'verified-isolated-auth'
+      : 'isolated-auth-unverified';
 
   let ccrConfigSource: RuntimeEnvironmentPlan['ccrConfigSource'] = 'not-needed';
   if (options.claudeExecutable === 'ccr') {
@@ -3997,10 +4096,19 @@ function scenarioSpecificChecks(
   }
   if (options.scenario === 'runtime-message' && options.runtime === 'cursor') {
     const marker = expectedRuntimePromptResponseText(options, scenarioFinalMessage(options));
+    const thinkingSummaries = report.cursorTranscriptPath && fs.existsSync(report.cursorTranscriptPath)
+      ? parseCursorTranscriptRecords(
+        fs.readFileSync(report.cursorTranscriptPath, 'utf8'),
+        report.cursorStorePath,
+      )
+        .filter((record) => record.type === 'reasoning' && record.reasoningKind === 'summary')
+        .map((record) => record.content)
+      : [];
     const issues = cursorStreamCardUnifiedUiIssues(
       report.streamCardCheckpoints || [],
       marker,
       options.cursorModel,
+      thinkingSummaries,
     );
     checks.push({
       name: 'cursor_stream_card_unified_ui',
@@ -5465,6 +5573,9 @@ function canonicalReportEligibility(
   }
   if (options.runtime === 'cursor') {
     notes.push('Cursor keeps config/data inside runRoot but preserves the host HOME only for the official CLI secure login store.');
+    if (runtimeEnvironment.cursorAuthSource !== 'verified-isolated-auth') {
+      blockers.push(`Cursor authentication was not verified with the isolated config/data directories: ${runtimeEnvironment.cursorAuthSource}.`);
+    }
   }
 
   return {
@@ -5720,11 +5831,15 @@ function finalMessageObservationMode(options: CliOptions): 'reply_to' | 'mirror-
     : 'reply_to';
 }
 
-function mirrorStreamCompletedInDump(dump: ReturnType<typeof latestDump>): boolean {
+function providerStreamCompletedInDump(
+  options: Pick<CliOptions, 'runtime'>,
+  dump: ReturnType<typeof latestDump>,
+): boolean {
   const logText = dump.logWindow?.text || '';
   if (!logText) return false;
+  const streamPrefix = options.runtime === 'cursor' ? 'im:' : 'mirror:';
   return dump.streamKeys
-    .filter((streamKey) => streamKey.startsWith('mirror:'))
+    .filter((streamKey) => streamKey.startsWith(streamPrefix))
     .some((streamKey) => logText.split(/\r?\n/).some((line) => (
       line.includes(streamKey)
         && (
@@ -5736,7 +5851,7 @@ function mirrorStreamCompletedInDump(dump: ReturnType<typeof latestDump>): boole
 
 async function waitForMirrorStreamCompleted(options: CliOptions, chatId: string, label: string): Promise<void> {
   await waitFor(label, options.timeoutMs, options.pollMs, () => (
-    mirrorStreamCompletedInDump(latestDump(options, chatId)) ? true : undefined
+    providerStreamCompletedInDump(options, latestDump(options, chatId)) ? true : undefined
   ));
 }
 
@@ -5940,13 +6055,14 @@ async function stopFakeCcrRouter(options: CliOptions): Promise<void> {
 async function launchBridgeChild(options: CliOptions, runtimeEnvironment: RuntimeEnvironmentPlan): Promise<ChildProcess | null> {
   if (!options.launchBridge || options.dryRun) return null;
   writeIsolatedBridgeConfig(options);
+  fs.mkdirSync(realFeishuTmuxTempDir(options), { recursive: true, mode: 0o700 });
   process.stderr.write(`[real-feishu-e2e] Launching isolated bridge with CODELARK_HOME=${options.codelarkHome} CODEX_HOME=${options.codexHome} KIMI_CODE_HOME=${options.kimiHome} CURSOR_CONFIG_DIR=${options.cursorConfigDir} CURSOR_DATA_DIR=${options.cursorDataDir} HOME=${runtimeEnvironment.bridgeHome} claude=${options.claudeExecutable}\n`);
   const child = spawn(
     process.execPath,
     ['--import', 'tsx', 'src/entrypoints/daemon.ts'],
     {
       cwd: process.cwd(),
-      env: sanitizedChildEnv({
+      env: isolatedTmuxChildEnv(options, {
         CODELARK_HOME: options.codelarkHome,
         HOME: runtimeEnvironment.bridgeHome,
         USERPROFILE: runtimeEnvironment.bridgeHome,
@@ -6513,7 +6629,7 @@ function waitsForMirrorFinalBeforeFollowup(options: CliOptions, commandText?: st
     const phase = basicDialoguePhaseForPrompt(options, commandText);
     return Boolean(phase && !phase.endsWith('-sdk'));
   }
-  return scenarioRequiresRuntimeOutput(options) && options.provider !== 'sdk' && options.runtime !== 'cursor';
+  return scenarioRequiresRuntimeOutput(options) && options.provider !== 'sdk';
 }
 
 function shouldSendBasicDialogueQueuedFollowup(
@@ -7008,6 +7124,9 @@ async function main(): Promise<void> {
     }
     if (options.launchBridge && !options.dryRun) {
       runtimeEnvironment = prepareRuntimeEnvironment(options);
+      if (options.runtime === 'cursor' && runtimeEnvironment.cursorAuthSource !== 'verified-isolated-auth') {
+        throw new Error(`Cursor authentication preflight failed for isolated real E2E environment (${runtimeEnvironment.cursorAuthSource}).`);
+      }
     }
     child = await launchBridgeChild(options, runtimeEnvironment);
 
@@ -7508,6 +7627,7 @@ async function main(): Promise<void> {
     }
     releaseAppLock(appLock);
     await cleanupTestTmuxSessions(options);
+    await stopIsolatedTmuxServer(options);
     await cleanupTemporaryRunRoot(options);
   }
 }

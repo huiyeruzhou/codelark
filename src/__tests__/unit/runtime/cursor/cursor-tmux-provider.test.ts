@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
 
 import {
   createCursorMirrorJsonlSource,
@@ -230,6 +231,11 @@ describe('Cursor tmux provider helpers', () => {
     assert.deepEqual(fullAssistantRecords.map((record) => record.content), [
       'Hey! What would you like to work on in this repo?',
     ]);
+    const fullSummaryRecords = parseCursorTranscriptRecords(fixture)
+      .filter((record) => record.type === 'reasoning' && record.reasoningKind === 'summary');
+    assert.deepEqual(fullSummaryRecords.map((record) => record.content), [
+      'Responding with concise greeting',
+    ]);
 
     const first = readCursorSessionMirrorRecordDeltaByFilePath(
       transcript,
@@ -249,11 +255,194 @@ describe('Cursor tmux provider helpers', () => {
     );
     const firstAssistant = first.records.find((record) => record.type === 'message' && record.role === 'assistant');
     const finalAssistant = second.records.find((record) => record.type === 'message' && record.role === 'assistant');
+    const thinkingSummary = second.records.find((record) => (
+      record.type === 'reasoning' && record.reasoningKind === 'summary'
+    ));
     assert.match(firstAssistant?.content || '', /Responding with concise greeting/);
     assert.equal(finalAssistant?.content, 'Hey! What would you like to work on in this repo?');
+    assert.equal(thinkingSummary?.content, 'Responding with concise greeting');
     assert.equal(firstAssistant?.replacementKey, finalAssistant?.replacementKey);
     assert.notEqual(firstAssistant?.signature, finalAssistant?.signature);
     assert.equal(second.records.at(-1)?.type, 'task_complete');
+  });
+
+  it('keeps the latest thinking summary when Cursor revises reasoning without a text-only row', () => {
+    const fixture = fs.readFileSync(path.join(
+      process.cwd(),
+      'src/__tests__/fixtures/runtime/cursor/assistant-reasoning-revisions.jsonl',
+    ), 'utf8');
+    const records = parseCursorTranscriptRecords(fixture);
+    assert.deepEqual(
+      records
+        .filter((record) => record.type === 'reasoning' && record.reasoningKind === 'summary')
+        .map((record) => record.content),
+      ['Confirming concise completion'],
+    );
+    assert.deepEqual(
+      records
+        .filter((record) => record.type === 'message' && record.role === 'assistant')
+        .map((record) => record.content),
+      ['Cursor summary revision is complete.'],
+    );
+    assert.deepEqual(
+      records.filter((record) => record.reasoningKind === 'summary' || record.role === 'assistant').map((record) => record.type),
+      ['reasoning', 'message'],
+    );
+    assert.equal(records.at(-1)?.type, 'task_complete');
+  });
+
+  it('keeps the latest thinking summary when Cursor revises the answer and summary together', () => {
+    const records = parseCursorTranscriptRecords([
+      JSON.stringify({ role: 'user', message: { content: [{ type: 'text', text: 'Confirm the result.' }] } }),
+      JSON.stringify({ role: 'assistant', message: { content: [{
+        type: 'text',
+        text: 'The implementation is complete and no regression was found.\n\n**Providing concise status update**',
+      }] } }),
+      JSON.stringify({ role: 'assistant', message: { content: [{
+        type: 'text',
+        text: 'The implementation is complete and verified.\n\n**Providing concise confirmation**',
+      }] } }),
+      JSON.stringify({ type: 'turn_ended', status: 'success' }),
+      '',
+    ].join('\n'));
+
+    assert.deepEqual(
+      records
+        .filter((record) => record.type === 'reasoning' && record.reasoningKind === 'summary')
+        .map((record) => record.content),
+      ['Providing concise confirmation'],
+    );
+    assert.deepEqual(
+      records
+        .filter((record) => record.type === 'message' && record.role === 'assistant')
+        .map((record) => record.content),
+      ['The implementation is complete and verified.'],
+    );
+  });
+
+  it('recovers a single-snapshot thinking summary from the structured Cursor store', () => {
+    const storePath = path.join(root, 'store.db');
+    const database = new DatabaseSync(storePath);
+    database.exec('CREATE TABLE blobs (id TEXT PRIMARY KEY, data BLOB)');
+    database.prepare('INSERT INTO blobs (id, data) VALUES (?, ?)').run(
+      'assistant-message',
+      JSON.stringify({
+        role: 'assistant',
+        content: [
+          { type: 'reasoning', text: '**Preparing concise comparative analysis**' },
+          { type: 'text', text: 'Structured final answer.' },
+        ],
+        providerOptions: { cursor: { openaiPhase: 'final_answer' } },
+      }),
+    );
+    database.close();
+
+    const records = parseCursorTranscriptRecords([
+      JSON.stringify({ role: 'user', message: { content: [{ type: 'text', text: 'Compare the algorithms.' }] } }),
+      JSON.stringify({ role: 'assistant', message: { content: [{
+        type: 'text',
+        text: 'Structured final answer.\n\n**Preparing concise comparative analysis**',
+      }] } }),
+      JSON.stringify({ type: 'turn_ended', status: 'success' }),
+      '',
+    ].join('\n'), storePath);
+
+    assert.deepEqual(
+      records
+        .filter((record) => record.type === 'reasoning' && record.reasoningKind === 'summary')
+        .map((record) => record.content),
+      ['Preparing concise comparative analysis'],
+    );
+    assert.deepEqual(
+      records
+        .filter((record) => record.type === 'message' && record.role === 'assistant')
+        .map((record) => record.content),
+      ['Structured final answer.'],
+    );
+    assert.equal(records.at(-1)?.type, 'task_complete');
+  });
+
+  it('preserves a store-backed summary when Cursor rewrites the answer before turn_ended', () => {
+    const storePath = path.join(root, 'rewritten-store.db');
+    const database = new DatabaseSync(storePath);
+    database.exec('CREATE TABLE blobs (id TEXT PRIMARY KEY, data BLOB)');
+    database.prepare('INSERT INTO blobs (id, data) VALUES (?, ?)').run(
+      'assistant-message',
+      JSON.stringify({
+        role: 'assistant',
+        content: [
+          { type: 'reasoning', text: '**Providing concise confirmation**' },
+          { type: 'text', text: 'The first concise answer.' },
+        ],
+        providerOptions: { cursor: { openaiPhase: 'final_answer' } },
+      }),
+    );
+    database.close();
+
+    const records = parseCursorTranscriptRecords([
+      JSON.stringify({ role: 'user', message: { content: [{ type: 'text', text: 'Confirm the result.' }] } }),
+      JSON.stringify({ role: 'assistant', message: { content: [{
+        type: 'text',
+        text: 'The first concise answer.\n\n**Providing concise confirmation**',
+      }] } }),
+      JSON.stringify({ role: 'assistant', message: { content: [{
+        type: 'text',
+        text: 'The final answer was reworded.',
+      }] } }),
+      JSON.stringify({ type: 'turn_ended', status: 'success' }),
+      '',
+    ].join('\n'), storePath);
+
+    assert.deepEqual(
+      records
+        .filter((record) => record.type === 'reasoning' && record.reasoningKind === 'summary')
+        .map((record) => record.content),
+      ['Providing concise confirmation'],
+    );
+    assert.deepEqual(
+      records
+        .filter((record) => record.type === 'message' && record.role === 'assistant')
+        .map((record) => record.content),
+      ['The final answer was reworded.'],
+    );
+  });
+
+  it('does not guess that a single-snapshot bold answer suffix is a thinking summary', () => {
+    const records = parseCursorTranscriptRecords([
+      JSON.stringify({ role: 'user', message: { content: [{ type: 'text', text: 'Answer with emphasis.' }] } }),
+      JSON.stringify({ role: 'assistant', message: { content: [{
+        type: 'text',
+        text: 'This is part of the answer.\n\n**Important conclusion**',
+      }] } }),
+      JSON.stringify({ type: 'turn_ended', status: 'success' }),
+      '',
+    ].join('\n'));
+
+    assert.equal(records.some((record) => record.reasoningKind === 'summary'), false);
+    assert.deepEqual(
+      records
+        .filter((record) => record.type === 'message' && record.role === 'assistant')
+        .map((record) => record.content),
+      ['This is part of the answer.\n\n**Important conclusion**'],
+    );
+  });
+
+  it('does not turn an ordinary revised answer paragraph into a thinking summary', () => {
+    const records = parseCursorTranscriptRecords([
+      JSON.stringify({ role: 'user', message: { content: [{ type: 'text', text: 'Revise the answer.' }] } }),
+      JSON.stringify({ role: 'assistant', message: { content: [{ type: 'text', text: 'Stable introduction.\n\nFirst answer paragraph.' }] } }),
+      JSON.stringify({ role: 'assistant', message: { content: [{ type: 'text', text: 'Stable introduction.\n\nRevised answer paragraph.' }] } }),
+      JSON.stringify({ type: 'turn_ended', status: 'success' }),
+      '',
+    ].join('\n'));
+
+    assert.equal(records.some((record) => record.reasoningKind === 'summary'), false);
+    assert.deepEqual(
+      records
+        .filter((record) => record.type === 'message' && record.role === 'assistant')
+        .map((record) => record.content),
+      ['Stable introduction.\n\nRevised answer paragraph.'],
+    );
   });
 
   it('recovers an assistant row when a rewritten transcript moves the old offset into the next user row', () => {
@@ -505,9 +694,19 @@ describe('Cursor tmux provider helpers', () => {
         data: string;
       });
       const snapshots = events.filter((event) => event.type === 'text_snapshot').map((event) => event.data);
+      const thinkingSummaries = events
+        .filter((event) => event.type === 'history_item')
+        .map((event) => JSON.parse(event.data) as { variant?: string; content?: string })
+        .filter((item) => item.variant === 'thinking_summary');
       assert.equal(snapshots.length, 2, 'both revisions must cross the provider boundary so the UI can replace the first');
       assert.match(snapshots[0] || '', /Responding with concise greeting/);
       assert.equal(snapshots[1], 'Hey! What would you like to work on in this repo?');
+      assert.deepEqual(thinkingSummaries, [{
+        type: 'markdown',
+        role: 'thinking',
+        variant: 'thinking_summary',
+        content: 'Responding with concise greeting',
+      }]);
       assert.equal(events.at(-1)?.type, 'result');
     } finally {
       Object.assign(core, originals);

@@ -42,6 +42,7 @@ export interface SessionTranscriptFile {
   threadId: string;
   title: string | null;
   sourceLabel: string;
+  structuredPath?: string;
 }
 
 export interface SessionTranscriptMessage {
@@ -212,15 +213,16 @@ export class CursorSessionTranscriptSource implements SessionTranscriptSource {
       threadId: cursorSession.sessionId,
       title: session?.name || cursorSession.title || cursorSession.sessionId,
       sourceLabel: 'Cursor Agent transcript JSONL',
+      structuredPath: cursorSession.storePath,
     };
   }
 
   readMessages(transcript: SessionTranscriptFile, limit: number): SessionTranscriptMessage[] {
-    return readCursorSessionMessagesByFilePath(transcript.filePath, limit);
+    return readCursorSessionMessagesByFilePath(transcript.filePath, limit, transcript.structuredPath);
   }
 
   readHistory(transcript: SessionTranscriptFile): SessionTranscriptHistoryEntry[] {
-    return readCursorSessionMirrorRecordStreamByFilePath(transcript.filePath)
+    return readCursorSessionMirrorRecordStreamByFilePath(transcript.filePath, transcript.structuredPath)
       .filter((record) => record.type === 'message' && record.role !== 'user')
       .map((record) => ({
         role: record.role || 'assistant',

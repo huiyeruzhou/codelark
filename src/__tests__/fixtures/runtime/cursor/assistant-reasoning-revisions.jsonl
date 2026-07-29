@@ -1,0 +1,4 @@
+{"role":"user","message":{"content":[{"type":"text","text":"Confirm the Cursor summary revision."}]}}
+{"role":"assistant","message":{"content":[{"type":"text","text":"Cursor summary revision is complete.\n\n**Confirming cursor summary revision completion**"}]}}
+{"role":"assistant","message":{"content":[{"type":"text","text":"Cursor summary revision is complete.\n\n**Confirming concise completion**"}]}}
+{"type":"turn_ended","status":"success"}

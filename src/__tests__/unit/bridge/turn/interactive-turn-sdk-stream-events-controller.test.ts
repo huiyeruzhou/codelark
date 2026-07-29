@@ -19,6 +19,7 @@ function makeHarness(options: {
   let now = 1000;
   const streamTexts: string[] = [];
   const toolEvents: unknown[] = [];
+  const historySnapshots: unknown[] = [];
   const previewTexts: string[] = [];
   const healthProgress: Array<{ type: string; detail?: string }> = [];
   const healthTools: Array<{ toolId: string; toolName: string; status: string }> = [];
@@ -36,7 +37,9 @@ function makeHarness(options: {
     pushText(text: string) {
       streamTexts.push(text);
     },
-    pushHistory() {},
+    pushHistory(items) {
+      historySnapshots.push(structuredClone(items));
+    },
     pushTools(tools: unknown[]) {
       toolEvents.push(tools);
     },
@@ -104,6 +107,7 @@ function makeHarness(options: {
     taskState,
     streamTexts,
     toolEvents,
+    historySnapshots,
     previewTexts,
     healthProgress,
     healthTools,
@@ -146,6 +150,23 @@ describe('interactive-turn sdk-stream-events-controller', () => {
     assert.equal(harness.touchCount, 1);
     assert.equal(harness.statusPushCount, 1);
     assert.equal(harness.snapshotSyncCount, 1);
+  });
+
+  it('keeps a provider reasoning heading while a later snapshot replaces only the answer', () => {
+    const harness = makeHarness();
+
+    harness.controller.onPartialText('最终问候\n\n**简短思考标题**');
+    harness.controller.onHistoryItem({
+      type: 'markdown',
+      role: 'thinking',
+      content: '**简短思考标题**',
+    });
+    harness.controller.onPartialText('最终问候');
+
+    assert.deepEqual(harness.historySnapshots.at(-1), [
+      { type: 'markdown', role: 'thinking', content: '**简短思考标题**' },
+      { type: 'markdown', role: 'assistant', content: '最终问候' },
+    ]);
   });
 
   it('ignores stale task events before mutating stream state or UI', () => {

@@ -140,6 +140,7 @@ export type StreamingHistoryItem =
       type: 'markdown';
       role: StreamingHistoryTextRole;
       content: string;
+      variant?: 'thinking_summary';
       elementId?: string;
     }
   | {

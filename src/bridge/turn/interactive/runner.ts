@@ -646,6 +646,7 @@ export async function runInteractiveMessage(
           includeToolSnippets: useInteractiveStreamUi && !streamUi.hasStreamingCards,
         },
         onThinkingNote: useStatusStreamUi ? sdkStreamEvents.onThinkingNote : undefined,
+        onHistoryItem: useInteractiveStreamUi ? sdkStreamEvents.onHistoryItem : undefined,
         onAnswerText: streamingArtifacts?.observeAnswerText,
         onContextUsage: useInteractiveStreamUi ? sdkStreamEvents.onContextUsage : undefined,
         onRuntimeIdentity: async (identity) => {

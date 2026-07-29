@@ -18,6 +18,7 @@ export interface SSEEvent {
 export type SSEEventType =
   | 'text'
   | 'text_snapshot'
+  | 'history_item'
   | 'tool_use'
   | 'tool_result'
   | 'tool_output'
@@ -92,7 +93,7 @@ export interface BridgeMirrorRecord {
   type: 'message' | 'reasoning' | 'plan_update' | 'task_started' | 'task_complete' | 'task_aborted' | 'tool_started' | 'tool_finished' | 'context_usage' | 'goal_status';
   role?: 'user' | 'assistant' | 'commentary' | 'system';
   content: string;
-  reasoningKind?: 'status' | 'thinking';
+  reasoningKind?: 'status' | 'thinking' | 'summary' | 'history';
   reasoningLabel?: string;
   userPrompt?: string;
   timestamp: string;

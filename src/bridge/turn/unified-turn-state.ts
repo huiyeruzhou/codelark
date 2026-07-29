@@ -133,6 +133,14 @@ export function applyUnifiedTurnHistorySystemText(
   appendHistoryMarkdown(state, 'system', content);
 }
 
+export function applyUnifiedTurnHistoryMarkdown(
+  state: Pick<UnifiedTurnProgressState, 'historyItems'>,
+  role: StreamingHistoryTextRole,
+  content: string,
+): void {
+  appendHistoryMarkdown(state, role, content);
+}
+
 export function applyUnifiedTurnHistoryModelText(
   state: Pick<UnifiedTurnProgressState, 'historyItems'>,
   content: string,
@@ -161,6 +169,37 @@ export function applyUnifiedTurnHistoryModelTextSnapshot(
   if (delta.trim()) {
     appendOrExtendHistoryModelSnapshotText(state, delta);
   }
+}
+
+export function applyUnifiedTurnThinkingSummary(
+  state: Pick<UnifiedTurnProgressState, 'historyItems'>,
+  content: string | null | undefined,
+): void {
+  const normalized = (content || '').trim();
+  if (!normalized) return;
+  const items = cloneStreamingHistoryItems(state.historyItems);
+  state.historyItems = items;
+  const existingIndex = items.findIndex((item) => (
+    item.type === 'markdown' && item.variant === 'thinking_summary'
+  ));
+  const summary = {
+    type: 'markdown' as const,
+    role: 'thinking' as const,
+    variant: 'thinking_summary' as const,
+    content: normalized,
+  };
+  if (existingIndex >= 0) {
+    items[existingIndex] = summary;
+    return;
+  }
+  const answerIndex = items.findLastIndex((item) => (
+    item.type === 'markdown' && item.role === 'assistant'
+  ));
+  if (answerIndex >= 0) {
+    items.splice(answerIndex, 0, summary);
+    return;
+  }
+  items.push(summary);
 }
 
 export function applyUnifiedTurnHistoryTools(

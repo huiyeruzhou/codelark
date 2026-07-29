@@ -2,6 +2,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
 import { CODELARK_HOME } from '../../configuration/paths.js';
 
 import type {
@@ -266,6 +267,172 @@ function cursorAssistantReplacementKey(turnId: string): string {
   return `cursor:${turnId}:assistant-text`;
 }
 
+const CURSOR_ASSISTANT_SNAPSHOT_STATE_PREFIX = 'cursor-assistant-snapshot:';
+
+interface CursorAssistantSnapshotState {
+  lastContent: string;
+  canonicalContent?: string;
+  thinkingSummary?: string;
+}
+
+interface CursorStructuredAssistantSnapshot {
+  canonicalContent: string;
+  thinkingSummary: string;
+}
+
+function decodeCursorAssistantSnapshots(values: Iterable<string>): Map<string, CursorAssistantSnapshotState> {
+  const snapshots = new Map<string, CursorAssistantSnapshotState>();
+  for (const value of values) {
+    if (!value.startsWith(CURSOR_ASSISTANT_SNAPSHOT_STATE_PREFIX)) continue;
+    try {
+      const decoded = Buffer.from(
+        value.slice(CURSOR_ASSISTANT_SNAPSHOT_STATE_PREFIX.length),
+        'base64url',
+      ).toString('utf8');
+      const parsed = JSON.parse(decoded) as unknown;
+      if (
+        Array.isArray(parsed)
+        && typeof parsed[0] === 'string'
+        && typeof parsed[1] === 'string'
+        && parsed[0]
+      ) {
+        snapshots.set(parsed[0], {
+          lastContent: parsed[1],
+          ...(typeof parsed[2] === 'string' && parsed[2] ? { canonicalContent: parsed[2] } : {}),
+          ...(typeof parsed[3] === 'string' && normalizeCursorThinkingSummary(parsed[3])
+            ? { thinkingSummary: normalizeCursorThinkingSummary(parsed[3]) }
+            : {}),
+        });
+      }
+    } catch {
+      // Ignore malformed opaque parser state from an older or partial run.
+    }
+  }
+  return snapshots;
+}
+
+function encodeCursorAssistantSnapshots(snapshots: Map<string, CursorAssistantSnapshotState>): string[] {
+  return Array.from(snapshots, ([turnId, snapshot]) => (
+    `${CURSOR_ASSISTANT_SNAPSHOT_STATE_PREFIX}${Buffer.from(JSON.stringify([
+      turnId,
+      snapshot.lastContent,
+      snapshot.canonicalContent || '',
+      snapshot.thinkingSummary || '',
+    ])).toString('base64url')}`
+  ));
+}
+
+function normalizeCursorThinkingSummary(content: string): string {
+  const trimmed = content.trim();
+  return trimmed.match(/^\*\*([^\r\n]+)\*\*$/u)?.[1]?.trim() || trimmed;
+}
+
+function parseCursorBoldThinkingSummary(content: string): string {
+  return content.trim().match(/^\*\*([^\r\n]+)\*\*$/u)?.[1]?.trim() || '';
+}
+
+function normalizeCursorSnapshotText(content: string): string {
+  return content.replace(/\r\n?/gu, '\n').trim();
+}
+
+function resolveCursorAssistantSnapshotFromStore(
+  storePath: string,
+  transcriptContent: string,
+): CursorStructuredAssistantSnapshot | null {
+  const normalizedTranscript = normalizeCursorSnapshotText(transcriptContent);
+  if (!storePath || !normalizedTranscript) return null;
+  let database: DatabaseSync | null = null;
+  try {
+    database = new DatabaseSync(storePath, { readOnly: true });
+    const rows = database.prepare([
+      'SELECT data FROM blobs',
+      'WHERE length(data) BETWEEN 2 AND 2097152',
+      "AND hex(substr(data, 1, 1)) = '7B'",
+    ].join(' ')).all() as Array<{ data?: string | Uint8Array }>;
+    for (const row of rows) {
+      const raw = typeof row.data === 'string'
+        ? row.data
+        : row.data instanceof Uint8Array
+          ? Buffer.from(row.data).toString('utf8')
+          : '';
+      if (!raw) continue;
+      let message: {
+        role?: unknown;
+        content?: Array<{ type?: unknown; text?: unknown }>;
+      };
+      try {
+        message = JSON.parse(raw) as typeof message;
+      } catch {
+        continue;
+      }
+      if (message.role !== 'assistant' || !Array.isArray(message.content)) continue;
+      const textParts = message.content
+        .filter((block) => block.type === 'text' && typeof block.text === 'string' && block.text.trim() !== '<|eos|>')
+        .map((block) => String(block.text));
+      const reasoningParts = message.content
+        .filter((block) => block.type === 'reasoning' && typeof block.text === 'string')
+        .map((block) => String(block.text));
+      if (textParts.length === 0 || reasoningParts.length === 0) continue;
+      const canonicalContent = normalizeCursorSnapshotText(textParts.join('\n'));
+      const rawSummary = normalizeCursorSnapshotText(reasoningParts.join('\n'));
+      if (!canonicalContent || !rawSummary) continue;
+      const flattenedCandidates = [
+        `${canonicalContent}\n\n${rawSummary}`,
+        `${canonicalContent}\n${rawSummary}`,
+      ];
+      if (!flattenedCandidates.some((candidate) => normalizeCursorSnapshotText(candidate) === normalizedTranscript)) {
+        continue;
+      }
+      return {
+        canonicalContent,
+        thinkingSummary: normalizeCursorThinkingSummary(rawSummary),
+      };
+    }
+  } catch {
+    return null;
+  } finally {
+    try {
+      database?.close();
+    } catch {
+      // Best-effort read-only evidence lookup.
+    }
+  }
+  return null;
+}
+
+function splitCursorThinkingSummarySuffix(
+  content: string,
+): { canonicalContent: string; thinkingSummary: string } | null {
+  const boundaries = Array.from(content.matchAll(/(?:\r?\n){2,}/gu));
+  const boundary = boundaries.at(-1);
+  if (boundary?.index === undefined) return null;
+  const canonicalContent = content.slice(0, boundary.index).trimEnd();
+  const thinkingSummary = parseCursorBoldThinkingSummary(
+    content.slice(boundary.index + boundary[0].length),
+  );
+  if (!canonicalContent || !thinkingSummary) return null;
+  return { canonicalContent, thinkingSummary };
+}
+
+function splitCursorAssistantRevision(
+  previous: string,
+  next: string,
+): { canonicalContent: string; thinkingSummary: string } | null {
+  if (previous === next) return null;
+  if (previous.startsWith(next)) {
+    const removedSuffix = previous.slice(next.length).match(/^(?:\r?\n){2,}([\s\S]+)$/u)?.[1] || '';
+    const thinkingSummary = parseCursorBoldThinkingSummary(removedSuffix);
+    if (thinkingSummary && next.trim()) {
+      return { canonicalContent: next.trim(), thinkingSummary };
+    }
+  }
+
+  const previousParts = splitCursorThinkingSummarySuffix(previous);
+  const nextParts = splitCursorThinkingSummarySuffix(next);
+  if (!previousParts || !nextParts) return null;
+  return nextParts;
+}
+
 function pushCursorRecord(records: BridgeMirrorRecord[], record: BridgeMirrorRecord): void {
   if (!record.replacementKey) {
     records.push(record);
@@ -287,6 +454,7 @@ interface ParsedCursorTranscriptRecords {
 function decodePendingCursorTools(values: Iterable<string>): Map<string, string[]> {
   const pending = new Map<string, string[]>();
   for (const value of values) {
+    if (value.startsWith(CURSOR_ASSISTANT_SNAPSHOT_STATE_PREFIX)) continue;
     const separator = value.indexOf('\0');
     if (separator <= 0) continue;
     const name = value.slice(0, separator);
@@ -320,10 +488,13 @@ function parseCursorTranscriptRecordState(
     baseOffset?: number;
     currentTurnId?: string | null;
     currentSpecialCallIds?: Iterable<string>;
+    resolveAssistantSnapshot?: (content: string) => CursorStructuredAssistantSnapshot | null;
   } = {},
 ): ParsedCursorTranscriptRecords {
   const records: BridgeMirrorRecord[] = [];
-  const pendingToolIdsByName = decodePendingCursorTools(options.currentSpecialCallIds || []);
+  const encodedState = Array.from(options.currentSpecialCallIds || []);
+  const pendingToolIdsByName = decodePendingCursorTools(encodedState);
+  const assistantSnapshots = decodeCursorAssistantSnapshots(encodedState);
   let activeTurnId = options.currentTurnId || null;
   for (const entry of cursorTranscriptLines(rawText, options.baseOffset || 0)) {
     const line = entry.line.trim();
@@ -332,6 +503,44 @@ function parseCursorTranscriptRecordState(
     if (!parsed) continue;
     const timestamp = '';
     if (parsed.type === 'turn_ended') {
+      if (activeTurnId) {
+        const finalSnapshot = assistantSnapshots.get(activeTurnId);
+        const structuredSnapshot = finalSnapshot?.canonicalContent && finalSnapshot.thinkingSummary
+          ? {
+            canonicalContent: finalSnapshot.canonicalContent,
+            thinkingSummary: finalSnapshot.thinkingSummary,
+          }
+          : finalSnapshot?.lastContent
+            ? options.resolveAssistantSnapshot?.(finalSnapshot.lastContent) || null
+            : null;
+        if (structuredSnapshot) {
+          const assistantReplacementKey = cursorAssistantReplacementKey(activeTurnId);
+          for (let index = records.length - 1; index >= 0; index -= 1) {
+            if (records[index]?.replacementKey === assistantReplacementKey) records.splice(index, 1);
+          }
+          records.push({
+            signature: stableAssistantTextSignature(
+              activeTurnId,
+              `thinking-summary\0${structuredSnapshot.thinkingSummary}`,
+            ),
+            type: 'reasoning',
+            content: structuredSnapshot.thinkingSummary,
+            reasoningKind: 'summary',
+            reasoningLabel: '思考摘要',
+            timestamp,
+            turnId: activeTurnId,
+          });
+          pushCursorRecord(records, {
+            signature: stableAssistantTextSignature(activeTurnId, structuredSnapshot.canonicalContent),
+            type: 'message',
+            role: 'assistant',
+            content: structuredSnapshot.canonicalContent,
+            timestamp,
+            turnId: activeTurnId,
+            replacementKey: assistantReplacementKey,
+          });
+        }
+      }
       records.push({
         signature: stableLineSignature(line, entry.offset, 'turn-ended'),
         type: parsed.status === 'success' ? 'task_complete' : 'task_aborted',
@@ -339,6 +548,7 @@ function parseCursorTranscriptRecordState(
         timestamp,
         ...(activeTurnId ? { turnId: activeTurnId } : {}),
       });
+      if (activeTurnId) assistantSnapshots.delete(activeTurnId);
       activeTurnId = null;
       continue;
     }
@@ -349,6 +559,7 @@ function parseCursorTranscriptRecordState(
     // turn_ended record. A new user row is therefore the reliable turn
     // boundary; do not let the missing intermediate terminal merge turns.
     if (role === 'user') {
+      assistantSnapshots.clear();
       activeTurnId = stableLineSignature(line, entry.offset, 'turn-id');
       records.push({
         signature: stableLineSignature(line, entry.offset, 'turn-started'),
@@ -429,13 +640,39 @@ function parseCursorTranscriptRecordState(
     }
     if (role === 'assistant' && activeTurnId && assistantTextBlocks.length > 0) {
       const content = assistantTextBlocks.join('\n\n');
-      const signature = stableAssistantTextSignature(activeTurnId, content);
+      const previousSnapshot = assistantSnapshots.get(activeTurnId);
+      const revision = previousSnapshot
+        ? splitCursorAssistantRevision(previousSnapshot.lastContent, content)
+        : null;
+      // Cursor may first persist `text + reasoning`, then rewrite both the
+      // answer and the transcript row to text-only. In that shape the two
+      // flattened revisions have no stable textual prefix, so revision
+      // comparison alone cannot recover the summary. Preserve it as soon as
+      // the structured store proves the current flattened snapshot.
+      const structuredSnapshot = revision || (
+        splitCursorThinkingSummarySuffix(content)
+          ? options.resolveAssistantSnapshot?.(content) || null
+          : null
+      );
+      const visibleContent = structuredSnapshot?.canonicalContent || content;
+      assistantSnapshots.set(activeTurnId, {
+        lastContent: content,
+        ...(structuredSnapshot || (
+          previousSnapshot?.canonicalContent && previousSnapshot.thinkingSummary
+            ? {
+              canonicalContent: content,
+              thinkingSummary: previousSnapshot.thinkingSummary,
+            }
+            : {}
+        )),
+      });
+      const signature = stableAssistantTextSignature(activeTurnId, visibleContent);
       if (!records.some((record) => record.signature === signature)) {
         pushCursorRecord(records, {
           signature,
           type: 'message',
           role: 'assistant',
-          content,
+          content: visibleContent,
           timestamp,
           turnId: activeTurnId,
           replacementKey: cursorAssistantReplacementKey(activeTurnId),
@@ -446,12 +683,19 @@ function parseCursorTranscriptRecordState(
   return {
     records,
     nextTurnId: activeTurnId,
-    nextSpecialCallIds: encodePendingCursorTools(pendingToolIdsByName),
+    nextSpecialCallIds: [
+      ...encodePendingCursorTools(pendingToolIdsByName),
+      ...encodeCursorAssistantSnapshots(assistantSnapshots),
+    ],
   };
 }
 
-export function parseCursorTranscriptRecords(rawText: string): BridgeMirrorRecord[] {
-  return parseCursorTranscriptRecordState(rawText).records;
+export function parseCursorTranscriptRecords(rawText: string, storePath?: string): BridgeMirrorRecord[] {
+  return parseCursorTranscriptRecordState(rawText, {
+    ...(storePath ? {
+      resolveAssistantSnapshot: (content) => resolveCursorAssistantSnapshotFromStore(storePath, content),
+    } : {}),
+  }).records;
 }
 
 function readFileRange(filePath: string, startOffset: number, endOffset: number): string {
@@ -479,9 +723,10 @@ function splitCompleteText(rawText: string): { completeText: string; trailingTex
 export function readCursorSessionMessagesByFilePath(
   filePath: string,
   limit: number,
+  storePath?: string,
 ): Array<{ role: string; content: string }> {
   try {
-    return parseCursorTranscriptRecords(fs.readFileSync(filePath, 'utf8'))
+    return parseCursorTranscriptRecords(fs.readFileSync(filePath, 'utf8'), storePath)
       .filter((record) => record.type === 'message' && record.role === 'assistant' && record.content.trim())
       .map((record) => ({ role: 'assistant', content: record.content }))
       .slice(-Math.max(0, Math.floor(limit)));
@@ -490,9 +735,12 @@ export function readCursorSessionMessagesByFilePath(
   }
 }
 
-export function readCursorSessionMirrorRecordStreamByFilePath(filePath: string): BridgeMirrorRecord[] {
+export function readCursorSessionMirrorRecordStreamByFilePath(
+  filePath: string,
+  storePath?: string,
+): BridgeMirrorRecord[] {
   try {
-    return parseCursorTranscriptRecords(fs.readFileSync(filePath, 'utf8'));
+    return parseCursorTranscriptRecords(fs.readFileSync(filePath, 'utf8'), storePath);
   } catch {
     return [];
   }
@@ -505,6 +753,7 @@ export function readCursorSessionMirrorRecordDeltaByFilePath(
   trailingText: string,
   currentTurnId: string | null,
   currentSpecialCallIds: Iterable<string>,
+  storePath?: string,
 ): BridgeMirrorRecordDelta {
   try {
     const split = splitCompleteText(`${trailingText}${readFileRange(filePath, startOffset, endOffset)}`);
@@ -512,6 +761,9 @@ export function readCursorSessionMirrorRecordDeltaByFilePath(
       baseOffset: Math.max(0, startOffset - Buffer.byteLength(trailingText, 'utf8')),
       currentTurnId,
       currentSpecialCallIds,
+      ...(storePath ? {
+        resolveAssistantSnapshot: (content) => resolveCursorAssistantSnapshotFromStore(storePath, content),
+      } : {}),
     });
     return {
       records: parsed.records,
@@ -534,18 +786,21 @@ export function readCursorSessionMirrorRecordDeltaByFilePath(
 }
 
 export function createCursorMirrorJsonlSource(): MirrorJsonlSource {
+  const storePathsByTranscript = new Map<string, string>();
   return {
     runtime: 'cursor' as MirrorJsonlSource['runtime'],
     findByThreadId(threadId: string, cwd?: string): MirrorJsonlSourceSummary | null {
       const summary = findCursorSessionFileById(threadId, cwd);
-      return summary?.filePath
-        ? {
+      if (summary?.filePath) {
+        storePathsByTranscript.set(summary.filePath, summary.storePath);
+        return {
             threadId: summary.sessionId,
             filePath: summary.filePath,
             cwd: summary.cwd,
             updatedAt: summary.updatedAt,
-          }
-        : null;
+          };
+      }
+      return null;
     },
     readDelta(filePath, startOffset, endOffset, trailingText, currentTurnId, currentSpecialCallIds) {
       return readCursorSessionMirrorRecordDeltaByFilePath(
@@ -555,6 +810,7 @@ export function createCursorMirrorJsonlSource(): MirrorJsonlSource {
         trailingText,
         currentTurnId,
         currentSpecialCallIds,
+        storePathsByTranscript.get(filePath),
       );
     },
   };

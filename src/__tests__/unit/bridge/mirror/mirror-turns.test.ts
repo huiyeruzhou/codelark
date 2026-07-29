@@ -240,6 +240,56 @@ describe('mirror-turns pending delivery queue', () => {
     assert.equal(subscription.pendingTurn?.streamedText, '');
   });
 
+  it('places a late thinking summary before the replaced assistant answer', () => {
+    const subscription = {
+      sessionId: 'session-cursor',
+      threadId: 'cursor-thread',
+      pendingTurn: null,
+    } as any;
+
+    consumeMirrorRecords(subscription, [
+      {
+        signature: 'start-cursor',
+        type: 'task_started',
+        content: '',
+        timestamp: '2026-04-21T10:00:00.000Z',
+        turnId: 'turn-cursor',
+      },
+      {
+        signature: 'assistant-revision-1',
+        type: 'message',
+        role: 'assistant',
+        content: '最终问候\n\n**简短思考标题**',
+        timestamp: '2026-04-21T10:00:01.000Z',
+        turnId: 'turn-cursor',
+        replacementKey: 'cursor:turn-cursor:assistant-text',
+      },
+      {
+        signature: 'thinking-summary',
+        type: 'reasoning',
+        content: '简短思考摘要',
+        reasoningKind: 'summary',
+        reasoningLabel: '思考摘要',
+        timestamp: '2026-04-21T10:00:02.000Z',
+        turnId: 'turn-cursor',
+      },
+      {
+        signature: 'assistant-revision-2',
+        type: 'message',
+        role: 'assistant',
+        content: '最终问候',
+        timestamp: '2026-04-21T10:00:03.000Z',
+        turnId: 'turn-cursor',
+        replacementKey: 'cursor:turn-cursor:assistant-text',
+      },
+    ], {});
+
+    assert.deepEqual(subscription.pendingTurn?.historyItems, [
+      { type: 'markdown', role: 'thinking', variant: 'thinking_summary', content: '简短思考摘要' },
+      { type: 'markdown', role: 'assistant', content: '最终问候' },
+    ]);
+  });
+
   it('updates context usage through mirror progress hooks', () => {
     const statuses: string[] = [];
     const subscription = {
