@@ -262,6 +262,22 @@ function stableAssistantTextSignature(turnId: string, text: string): string {
   return `cursor:${digest}:assistant-text`;
 }
 
+function cursorAssistantReplacementKey(turnId: string): string {
+  return `cursor:${turnId}:assistant-text`;
+}
+
+function pushCursorRecord(records: BridgeMirrorRecord[], record: BridgeMirrorRecord): void {
+  if (!record.replacementKey) {
+    records.push(record);
+    return;
+  }
+  const previousIndex = records.findIndex((candidate) => (
+    candidate.replacementKey === record.replacementKey
+  ));
+  if (previousIndex >= 0) records.splice(previousIndex, 1);
+  records.push(record);
+}
+
 interface ParsedCursorTranscriptRecords {
   records: BridgeMirrorRecord[];
   nextTurnId: string | null;
@@ -328,6 +344,7 @@ function parseCursorTranscriptRecordState(
     }
     const role = parsed.role;
     const blocks = Array.isArray(parsed.message?.content) ? parsed.message!.content! : [];
+    const assistantTextBlocks: string[] = [];
     // Cursor may compact a multi-turn transcript down to one final
     // turn_ended record. A new user row is therefore the reliable turn
     // boundary; do not let the missing intermediate terminal merge turns.
@@ -341,10 +358,21 @@ function parseCursorTranscriptRecordState(
         turnId: activeTurnId,
       });
     }
+    // Cursor rewrites its transcript snapshot between turns, removing the
+    // previous EOF turn_ended row. An append cursor can therefore land in the
+    // middle of the new user row and next encounter a complete assistant row.
+    // Treat that first complete row as the recoverable boundary for this turn.
+    if (role === 'assistant' && !activeTurnId) {
+      activeTurnId = stableLineSignature(line, entry.offset, 'implicit-turn-id');
+    }
     for (let blockIndex = 0; blockIndex < blocks.length; blockIndex += 1) {
       const block = blocks[blockIndex]!;
       if (block.type === 'text' && block.text?.trim()) {
         if (block.text.trim() === '<|eos|>') continue;
+        if (role === 'assistant') {
+          assistantTextBlocks.push(block.text);
+          continue;
+        }
         if (role === 'tool') {
           try {
             const tool = JSON.parse(block.text) as {
@@ -373,14 +401,10 @@ function parseCursorTranscriptRecordState(
             // Preserve non-JSON tool text as commentary below.
           }
         }
-        const signature = role === 'assistant' && activeTurnId
-          ? stableAssistantTextSignature(activeTurnId, block.text)
-          : stableLineSignature(line, entry.offset, `text:${blockIndex}`);
-        if (role === 'assistant' && records.some((record) => record.signature === signature)) continue;
         records.push({
-          signature,
+          signature: stableLineSignature(line, entry.offset, `text:${blockIndex}`),
           type: 'message',
-          role: role === 'assistant' ? 'assistant' : role === 'user' ? 'user' : 'commentary',
+          role: role === 'user' ? 'user' : 'commentary',
           content: block.text,
           timestamp,
           ...(activeTurnId ? { turnId: activeTurnId } : {}),
@@ -400,6 +424,21 @@ function parseCursorTranscriptRecordState(
           toolName,
           toolInput: block.input,
           ...(activeTurnId ? { turnId: activeTurnId } : {}),
+        });
+      }
+    }
+    if (role === 'assistant' && activeTurnId && assistantTextBlocks.length > 0) {
+      const content = assistantTextBlocks.join('\n\n');
+      const signature = stableAssistantTextSignature(activeTurnId, content);
+      if (!records.some((record) => record.signature === signature)) {
+        pushCursorRecord(records, {
+          signature,
+          type: 'message',
+          role: 'assistant',
+          content,
+          timestamp,
+          turnId: activeTurnId,
+          replacementKey: cursorAssistantReplacementKey(activeTurnId),
         });
       }
     }

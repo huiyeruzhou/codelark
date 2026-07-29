@@ -130,7 +130,7 @@ long-running 功能不能只测“成功派发 worker”。精炼用户故事至
 | `codex-session-index.test.ts`、`codex-session-mirror.test.ts` | Codex JSONL/session 索引读取、mirror cursor 对齐和事件重放。 |
 | `claude-tmux-provider.test.ts`、`claude-sdk-provider.test.ts`、`claude-session-jsonl.test.ts` | Claude tmux 启动/注入/mirror SSE、Claude SDK helper、Claude JSONL session 读取。 |
 | `kimi-tmux-provider.test.ts`、真实 Kimi executable E2E、`kimi-tmux-provider-local-process.e2e.test.ts` | fresh 不带 `-r` 单次启动、从真实 TUI 发现 CLI session id、wire 在首条输入前或输入后创建、跨 turn 复用、慢模型 `Ctrl-S` steer、tmux 丢失恢复、think/status 和 terminal 归属；scripted fixture 继续穿过真实 tmux，但不冒充真实 executable gate。 |
-| `cursor-tmux-provider.test.ts`、`real-cursor-agent-bridge.e2e.test.ts` | 默认 suite 用确定性 pane 状态保护“空白但存活的冷索引不得 kill tmux”；显式真实 gate 用官方 `agent`、真 tmux、真实 backend 和一次性 35 秒延迟覆盖旧 30 秒失败边界、等待进度、同 pane/UUID 冷接管与 tmux 丢失后 resume。前者防代码回归，后者证明真实 CLI 集成；两者不能互相冒充。 |
+| `cursor-tmux-provider.test.ts`、`real-cursor-agent-bridge.e2e.test.ts` | 默认 suite 用确定性 pane 状态保护“空白但存活的冷索引不得 kill tmux”，并用真实捕获的 JSONL 把两版 assistant revision 拆到不同 poll cycle，证明最终正文不是只在全量读取时偶然去重；显式真实 gate 用官方 `agent`、真 tmux、真实 backend 和一次性 35 秒延迟覆盖旧 30 秒失败边界、等待进度、同 pane/UUID 冷接管与 tmux 丢失后 resume。前者防代码回归，后者证明真实 CLI 集成；两者不能互相冒充。 |
 | `sse-stream-decoder.test.ts` | SSE 文本流解码和事件边界。 |
 | `interactive-turn-runner.test.ts` | 一次 runtime turn 的主编排，含 stream、tool、context、goal、stop、mirror suppression、基础对话 simulator，以及 answer 中间态附件立即发送、thinking 排除和终态去重。 |
 | `interactive-turn-sdk-conversation-engine.test.ts`、`interactive-turn-sdk-stream-events-controller.test.ts`、`interactive-turn-final-response-plan.test.ts`、`interactive-turn-terminal-finalization-controller.test.ts` | SDK conversation 内联附件/tool 展开、stream event 控制、最终回复计划和终端 provider finalization。 |

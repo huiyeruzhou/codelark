@@ -51,7 +51,7 @@ CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT);
 - `text` 与 `tool_use` content block；
 - `{type:"turn_ended", status:"success|error|aborted"}` 终态。
 
-CodeLark 把这些行归一化为公共 message/tool/task mirror record 和 SSE 事件。官方 writer 还会在 assistant 回答后写入仅包含 `<|eos|>` 的内部边界块，并可能在同一 turn 连续写入内容完全相同的 assistant text 行；parser 必须过滤边界块，并以 `turn + content` 的稳定语义签名折叠重复 assistant 行，不能把官方内部快照重复展示给用户。多轮后的最终 transcript snapshot 可能只保留文件末尾一个 `turn_ended`；测试应以 user/归一化后的可见 assistant record 确认轮次，以文件末尾终态确认整体完成，不能把物理 assistant/终态行数当成轮数。
+CodeLark 把这些行归一化为公共 message/tool/task mirror record 和 SSE 事件。官方 writer 还会在 assistant 回答后写入仅包含 `<|eos|>` 的内部边界块，并可能在同一 turn 先写一份 assistant state、稍后再写内容不同的最终 revision；后一个 revision 不是新的回答。parser 必须过滤边界块，并给同一 turn 的 assistant revision 分配稳定 `replacementKey`：同一读取批次只保留最新版，跨增量批次则把后续 revision 作为替换事件继续交付。direct provider 将它映射为通用 `text_snapshot` SSE，mirror turn 也按同一个 key 替换当前正文；不能用摘要关键词过滤，也不能把两个 revision 追加展示。多轮时 Cursor 还会重写整份 transcript、删除上一轮位于 EOF 的 `turn_ended`；旧 byte offset 可能因此落入新 user JSON 中部。增量 parser 跳过残行后若先看到完整 assistant row，必须以它建立隐式 turn 并恢复正文，不能只交付后面的成功终态。多轮后的最终 transcript snapshot 可能只保留文件末尾一个 `turn_ended`；测试应以 user/归一化后的可见 assistant record 确认轮次，以文件末尾终态确认整体完成，不能把物理 assistant/终态行数当成轮数。
 
 ## 生命周期
 

@@ -218,4 +218,15 @@ describe('unified-turn-state', () => {
     );
     assert.equal(state.historyItems[2]?.type === 'markdown' ? state.historyItems[2].content : '', '第二段');
   });
+
+  it('replaces a non-prefix assistant snapshot while preserving tool history', () => {
+    const state = createUnifiedTurnProgressState(1000);
+
+    applyUnifiedTurnHistoryModelTextSnapshot(state, '最终问候\n\n内部摘要');
+    applyUnifiedTurnToolEvent(state, codexTurnEventFromSdkToolEvent('tool-1', 'exec_command', 'complete'));
+    applyUnifiedTurnHistoryModelTextSnapshot(state, '最终问候');
+
+    assert.deepEqual(state.historyItems.map((item) => item.type), ['tool_panel', 'markdown']);
+    assert.equal(state.historyItems[1]?.type === 'markdown' ? state.historyItems[1].content : '', '最终问候');
+  });
 });

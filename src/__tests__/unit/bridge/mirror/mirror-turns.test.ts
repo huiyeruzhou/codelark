@@ -744,6 +744,51 @@ describe('mirror-turns pending delivery queue', () => {
     assert.equal(subscription.pendingTurn?.streamedText, 'OK\n\nOK');
   });
 
+  it('replaces same-key assistant revisions in the live mirror turn', () => {
+    const streamSnapshots: string[] = [];
+    const subscription = {
+      sessionId: 'session-cursor-snapshot',
+      threadId: 'thread-cursor-snapshot',
+      pendingTurn: null,
+    } as any;
+
+    const finalized = consumeMirrorRecords(subscription, [
+      {
+        signature: 'assistant-revision-1',
+        replacementKey: 'cursor:turn-1:assistant-text',
+        type: 'message',
+        role: 'assistant',
+        content: '最终问候\n\n内部摘要',
+        timestamp: '2026-07-28T19:28:07.000Z',
+        turnId: 'turn-1',
+      },
+      {
+        signature: 'assistant-revision-2',
+        replacementKey: 'cursor:turn-1:assistant-text',
+        type: 'message',
+        role: 'assistant',
+        content: '最终问候',
+        timestamp: '2026-07-28T19:28:14.000Z',
+        turnId: 'turn-1',
+      },
+      {
+        signature: 'complete-1',
+        type: 'task_complete',
+        content: '',
+        timestamp: '2026-07-28T19:28:14.100Z',
+        turnId: 'turn-1',
+      },
+    ], {
+      onStreamText: (_subscription, turnState) => {
+        streamSnapshots.push(turnState.streamedText);
+      },
+    });
+
+    assert.deepEqual(streamSnapshots, ['最终问候\n\n内部摘要', '最终问候']);
+    assert.equal(finalized[0]?.text, '最终问候');
+    assert.doesNotMatch(finalized[0]?.text || '', /内部摘要/);
+  });
+
   it('keeps streamed commentary as a separate paragraph in the final turn text', () => {
     const subscription = {
       sessionId: 'session-1',

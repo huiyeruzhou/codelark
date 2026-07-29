@@ -215,6 +215,84 @@ describe('Cursor tmux provider helpers', () => {
     assert.notEqual(assistantRecords[0]?.signature, assistantRecords[1]?.signature);
   });
 
+  it('supersedes an earlier same-turn assistant snapshot with the captured Cursor final revision', () => {
+    const fixture = fs.readFileSync(path.join(
+      process.cwd(),
+      'src/__tests__/fixtures/runtime/cursor/assistant-snapshot-supersession.jsonl',
+    ), 'utf8');
+    const lines = fixture.split('\n');
+    const firstSnapshotEnd = Buffer.byteLength(`${lines.slice(0, 2).join('\n')}\n`, 'utf8');
+    const transcript = path.join(root, 'assistant-snapshot-supersession.jsonl');
+    fs.writeFileSync(transcript, fixture);
+
+    const fullAssistantRecords = parseCursorTranscriptRecords(fixture)
+      .filter((record) => record.type === 'message' && record.role === 'assistant');
+    assert.deepEqual(fullAssistantRecords.map((record) => record.content), [
+      'Hey! What would you like to work on in this repo?',
+    ]);
+
+    const first = readCursorSessionMirrorRecordDeltaByFilePath(
+      transcript,
+      0,
+      firstSnapshotEnd,
+      '',
+      null,
+      [],
+    );
+    const second = readCursorSessionMirrorRecordDeltaByFilePath(
+      transcript,
+      first.nextOffset,
+      fs.statSync(transcript).size,
+      first.trailingText,
+      first.nextTurnId,
+      first.nextSpecialCallIds,
+    );
+    const firstAssistant = first.records.find((record) => record.type === 'message' && record.role === 'assistant');
+    const finalAssistant = second.records.find((record) => record.type === 'message' && record.role === 'assistant');
+    assert.match(firstAssistant?.content || '', /Responding with concise greeting/);
+    assert.equal(finalAssistant?.content, 'Hey! What would you like to work on in this repo?');
+    assert.equal(firstAssistant?.replacementKey, finalAssistant?.replacementKey);
+    assert.notEqual(firstAssistant?.signature, finalAssistant?.signature);
+    assert.equal(second.records.at(-1)?.type, 'task_complete');
+  });
+
+  it('recovers an assistant row when a rewritten transcript moves the old offset into the next user row', () => {
+    const transcript = path.join(root, 'rewritten-cursor-transcript.jsonl');
+    const firstUser = { role: 'user', message: { content: [{ type: 'text', text: 'first prompt' }] } };
+    const firstAssistant = { role: 'assistant', message: { content: [{ type: 'text', text: 'first answer' }] } };
+    const terminal = { type: 'turn_ended', status: 'success' };
+    const encode = (lines: unknown[]) => lines.map((line) => JSON.stringify(line)).join('\n') + '\n';
+    fs.writeFileSync(transcript, encode([firstUser, firstAssistant, terminal]));
+    const oldOffset = fs.statSync(transcript).size;
+
+    const secondUser = { role: 'user', message: { content: [{
+      type: 'text',
+      text: `second prompt ${'padding '.repeat(30)}`,
+    }] } };
+    const secondAssistant = { role: 'assistant', message: { content: [{
+      type: 'text',
+      text: 'second answer after transcript rewrite',
+    }] } };
+    const rewritten = encode([firstUser, firstAssistant, secondUser, secondAssistant, terminal]);
+    fs.writeFileSync(transcript, rewritten);
+    const prefixBeforeSecondUser = Buffer.byteLength(encode([firstUser, firstAssistant]), 'utf8');
+    const prefixAfterSecondUser = Buffer.byteLength(encode([firstUser, firstAssistant, secondUser]), 'utf8');
+    assert.ok(oldOffset > prefixBeforeSecondUser && oldOffset < prefixAfterSecondUser);
+
+    const delta = readCursorSessionMirrorRecordDeltaByFilePath(
+      transcript,
+      oldOffset,
+      fs.statSync(transcript).size,
+      '',
+      null,
+      [],
+    );
+    const assistant = delta.records.find((record) => record.type === 'message' && record.role === 'assistant');
+    assert.equal(assistant?.content, 'second answer after transcript rewrite');
+    assert.match(assistant?.replacementKey || '', /assistant-text$/);
+    assert.equal(delta.records.at(-1)?.type, 'task_complete');
+  });
+
   it('keeps a live Cursor tmux when cold workspace initialization exceeds the readiness window', { timeout: 5_000 }, async () => {
     const cwd = path.join(root, 'slow-workspace');
     fs.mkdirSync(cwd, { recursive: true });
@@ -364,10 +442,77 @@ describe('Cursor tmux provider helpers', () => {
         data: string;
       });
       assert.equal(retryEnterCalls, 1);
-      assert.ok(events.some((event) => event.type === 'text' && event.data === 'submitted after retry'));
+      assert.ok(events.some((event) => event.type === 'text_snapshot' && event.data === 'submitted after retry'));
       assert.equal(events.at(-1)?.type, 'result');
     } finally {
       Object.assign(core, originals);
+    }
+  });
+
+  it('emits a later Cursor assistant revision as a replacing snapshot across poll cycles', async () => {
+    const cwd = path.join(root, 'snapshot-revision-workspace');
+    fs.mkdirSync(cwd, { recursive: true });
+    const sessionId = '55555555-5555-4555-8555-555555555555';
+    const transcript = writeCursorSession({ sessionId, cwd });
+    const core = tmuxCore as unknown as Record<string, unknown>;
+    const originals = {
+      hasSession: core.hasSession,
+      capturePane: core.capturePane,
+      injectPromptIntoPane: core.injectPromptIntoPane,
+      ensureExtendedKeys: core.ensureExtendedKeys,
+    };
+    const previousPoll = process.env.CODELARK_CURSOR_TMUX_POLL_INTERVAL_MS;
+    core.hasSession = async () => ({ exists: true, command: 'tmux has-session' });
+    core.capturePane = async () => ({ screen: 'Agent\nContext 0%\n› ', command: 'tmux capture-pane' });
+    core.ensureExtendedKeys = async () => 'tmux set-option extended-keys on';
+    core.injectPromptIntoPane = async (_target: string, prompt: string) => {
+      fs.appendFileSync(transcript, [
+        { role: 'user', message: { content: [{ type: 'text', text: prompt }] } },
+        { role: 'assistant', message: { content: [{
+          type: 'text',
+          text: 'Hey! What would you like to work on in this repo?\n\n**Responding with concise greeting**',
+        }] } },
+      ].map((line) => JSON.stringify(line)).join('\n') + '\n');
+      setTimeout(() => {
+        fs.appendFileSync(transcript, [
+          { role: 'assistant', message: { content: [{
+            type: 'text',
+            text: 'Hey! What would you like to work on in this repo?',
+          }] } },
+          { type: 'turn_ended', status: 'success' },
+        ].map((line) => JSON.stringify(line)).join('\n') + '\n');
+      }, 500);
+      return { commands: ['tmux load-buffer', 'tmux paste-buffer', 'tmux send-keys Enter'] };
+    };
+    process.env.CODELARK_CURSOR_TMUX_POLL_INTERVAL_MS = '50';
+
+    try {
+      const reader = streamCursorTmuxTui({
+        prompt: 'hi',
+        sessionId: 'bridge-cursor-snapshot-revision',
+        cursorSessionId: sessionId,
+        runtime: 'cursor',
+        workingDirectory: cwd,
+      }).getReader();
+      let wire = '';
+      while (true) {
+        const item = await reader.read();
+        if (item.done) break;
+        wire += item.value;
+      }
+      const events = wire.trim().split('\n').map((line) => JSON.parse(line.slice(6)) as {
+        type: string;
+        data: string;
+      });
+      const snapshots = events.filter((event) => event.type === 'text_snapshot').map((event) => event.data);
+      assert.equal(snapshots.length, 2, 'both revisions must cross the provider boundary so the UI can replace the first');
+      assert.match(snapshots[0] || '', /Responding with concise greeting/);
+      assert.equal(snapshots[1], 'Hey! What would you like to work on in this repo?');
+      assert.equal(events.at(-1)?.type, 'result');
+    } finally {
+      Object.assign(core, originals);
+      if (previousPoll === undefined) delete process.env.CODELARK_CURSOR_TMUX_POLL_INTERVAL_MS;
+      else process.env.CODELARK_CURSOR_TMUX_POLL_INTERVAL_MS = previousPoll;
     }
   });
 
@@ -435,8 +580,8 @@ describe('Cursor tmux provider helpers', () => {
       assert.deepEqual(injected, ['hello from bridge', 'continue in the same chat']);
       assert.ok(firstEvents.some((event) => event.type === 'status' && event.data.includes(sessionId)));
       assert.ok(secondEvents.some((event) => event.type === 'status' && event.data.includes(sessionId)));
-      assert.deepEqual(firstEvents.filter((event) => event.type === 'text').map((event) => event.data), ['Cursor answer 1']);
-      assert.deepEqual(secondEvents.filter((event) => event.type === 'text').map((event) => event.data), ['Cursor answer 2']);
+      assert.deepEqual(firstEvents.filter((event) => event.type === 'text_snapshot').map((event) => event.data), ['Cursor answer 1']);
+      assert.deepEqual(secondEvents.filter((event) => event.type === 'text_snapshot').map((event) => event.data), ['Cursor answer 2']);
       assert.equal(firstEvents.at(-1)?.type, 'result');
       assert.equal(secondEvents.at(-1)?.type, 'result');
     } finally {

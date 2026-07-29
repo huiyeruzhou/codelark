@@ -385,6 +385,22 @@ async function consumeStream(
           }
           break;
 
+        case 'text_snapshot':
+          currentText = event.data;
+          answerText = event.data;
+          for (let index = contentBlocks.length - 1; index >= 0; index -= 1) {
+            if (contentBlocks[index]?.type === 'text') contentBlocks.splice(index, 1);
+          }
+          if (options?.onAnswerText) {
+            try { options.onAnswerText(answerText); } catch { /* non-critical */ }
+          }
+          if (onPartialText) {
+            previewText = event.data;
+            separateNextPreviewText = false;
+            try { onPartialText(previewText); } catch { /* non-critical */ }
+          }
+          break;
+
         case 'tool_use': {
           if (expandToolCalls && currentText.trim()) {
             contentBlocks.push({ type: 'text', text: currentText });

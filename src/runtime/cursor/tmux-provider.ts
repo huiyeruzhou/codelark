@@ -351,7 +351,7 @@ function enqueueCursorRecord(
   if (context.emittedSignatures.has(record.signature)) return;
   context.emittedSignatures.add(record.signature);
   if (record.type === 'message' && record.role === 'assistant' && record.content) {
-    controller.enqueue(sseEvent('text', record.content));
+    controller.enqueue(sseEvent(record.replacementKey ? 'text_snapshot' : 'text', record.content));
     return;
   }
   if (record.type === 'reasoning' && record.content) {

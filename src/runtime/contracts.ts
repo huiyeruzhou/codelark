@@ -17,6 +17,7 @@ export interface SSEEvent {
 
 export type SSEEventType =
   | 'text'
+  | 'text_snapshot'
   | 'tool_use'
   | 'tool_result'
   | 'tool_output'
@@ -96,6 +97,8 @@ export interface BridgeMirrorRecord {
   userPrompt?: string;
   timestamp: string;
   turnId?: string;
+  /** Stable identity for content that supersedes an earlier revision in the same turn. */
+  replacementKey?: string;
   toolId?: string;
   toolName?: string;
   toolInput?: unknown;

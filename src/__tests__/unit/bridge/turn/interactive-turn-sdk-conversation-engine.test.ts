@@ -210,6 +210,59 @@ describe('interactive-turn sdk-conversation-engine tool expansion', () => {
     assert.equal(result.responseText, 'CURSOR_FINAL_ANSWER');
   });
 
+  it('replaces an earlier provider text snapshot in previews and the final response', async () => {
+    resetBridgeTestState();
+    const partialTexts: string[] = [];
+    const answerSnapshots: string[] = [];
+    const llm: LLMProvider = {
+      streamChat(): ReadableStream<string> {
+        return new ReadableStream({
+          start(controller) {
+            controller.enqueue(sseEvent(
+              'text_snapshot',
+              'Hey! What would you like to work on in this repo?\n\n**Responding with concise greeting**',
+            ));
+            controller.enqueue(sseEvent(
+              'text_snapshot',
+              'Hey! What would you like to work on in this repo?',
+            ));
+            controller.enqueue(sseEvent('result', {}));
+            controller.close();
+          },
+        });
+      },
+    };
+    const store = initBridgeTestContext({ settings: makeBridgeSettings(), llm });
+    const session = store.createSession('cursor-snapshot-test', 'codex-model', undefined, '', 'normal');
+    store.updateSession(session.id, { runtime: { activeRuntime: 'cursor' } });
+    const binding = store.upsertChannelChat({
+      channelType: 'feishu',
+      chatId: 'chat-cursor-snapshot',
+      bridgeSessionId: session.id,
+    });
+
+    const result = await processMessage(
+      binding,
+      'hi',
+      undefined,
+      undefined,
+      undefined,
+      (text) => partialTexts.push(text),
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      { onAnswerText: (text) => answerSnapshots.push(text) },
+      createTestSdkConversationRuntime(store, llm),
+    );
+
+    assert.match(partialTexts[0] || '', /Responding with concise greeting/);
+    assert.equal(partialTexts.at(-1), 'Hey! What would you like to work on in this repo?');
+    assert.equal(answerSnapshots.at(-1), 'Hey! What would you like to work on in this repo?');
+    assert.equal(result.responseText, 'Hey! What would you like to work on in this repo?');
+    assert.doesNotMatch(result.responseText, /Responding with concise greeting/);
+  });
+
   it('routes active Claude runtime turns with Claude-specific settings from yolo mode', async () => {
     resetBridgeTestState();
     const configTomlPath = path.join(CODELARK_HOME, 'config.toml');

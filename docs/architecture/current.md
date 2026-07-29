@@ -302,7 +302,7 @@ Mirror 渲染不把每条 record 直接投递到飞书。record 先被 reducer �
 Turn reducer 会按 record 类型更新同一个 `BridgeMirrorTurnState`：
 
 - `message:user`：写入 `userText`，同时写入 unified history user item。
-- `message:assistant` 和 `message:commentary`：去掉近距离重复文本后追加到 `streamedText`，记录 `lastContentResponseAt`，并写入 unified history model item。
+- `message:assistant` 和 `message:commentary`：普通 record 去掉近距离重复文本后追加到 `streamedText`，记录 `lastContentResponseAt`，并写入 unified history model item。带 `replacementKey` 的 assistant record 表示同一逻辑正文的新版快照，必须替换该 key 的上一版，而不是追加；这是 runtime parser 提供的中间层语义，renderer 不解析 Cursor 等客户端的私有文本。
 - `message:system`：写入 unified history system item。
 - `reasoning`：写入 `statusNote`。
 - `plan_update`：写入 `taskItems`。

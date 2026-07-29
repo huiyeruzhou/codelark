@@ -147,6 +147,13 @@ export function applyUnifiedTurnHistoryModelTextSnapshot(
   const normalizedNext = (nextText || '').trim();
   if (!normalizedNext) return;
   const normalizedPrevious = (state.historyTextSnapshot || '').trim();
+  if (normalizedPrevious && !normalizedNext.startsWith(normalizedPrevious)) {
+    state.historyItems = cloneStreamingHistoryItems(state.historyItems)
+      .filter((item) => item.type !== 'markdown' || item.role !== 'assistant');
+    state.historyTextSnapshot = nextText;
+    appendHistoryModelText(state, normalizedNext);
+    return;
+  }
   const delta = normalizedPrevious && normalizedNext.startsWith(normalizedPrevious)
     ? normalizedNext.slice(normalizedPrevious.length)
     : normalizedNext;

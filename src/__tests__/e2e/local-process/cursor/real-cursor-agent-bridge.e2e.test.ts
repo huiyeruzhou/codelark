@@ -260,6 +260,7 @@ describe('real Cursor Agent bridge e2e', () => {
       const firstTerminal = terminalEvents(adapter)[firstTerminalCount]!;
       assert.equal(firstTerminal.status, 'completed', `first Cursor terminal: ${JSON.stringify(firstTerminal)}`);
       assert.match(firstTerminal.text || '', new RegExp(firstMarker));
+      assert.equal((firstTerminal.text || '').split(firstMarker).length - 1, 1);
       if (delayedExecutable.markerPath) {
         assert.equal(fs.existsSync(delayedExecutable.markerPath), true);
         assert.ok(
@@ -296,6 +297,7 @@ describe('real Cursor Agent bridge e2e', () => {
       const takeoverTerminal = terminalEvents(adapter)[takeoverTerminalCount]!;
       assert.equal(takeoverTerminal.status, 'completed', `takeover Cursor terminal: ${JSON.stringify(takeoverTerminal)}`);
       assert.match(takeoverTerminal.text || '', new RegExp(takeoverMarker));
+      assert.equal((takeoverTerminal.text || '').split(takeoverMarker).length - 1, 1);
       assert.equal(await panePid(tmuxSessionName), firstPanePid, 'cold takeover must not restart the live Cursor TUI');
       assert.equal(store.getSession(session.id)?.runtime?.cursor?.sessionId, cursorSessionId);
       assert.equal(takeoverTerminal.text?.includes(firstMarker), false);
@@ -314,6 +316,7 @@ describe('real Cursor Agent bridge e2e', () => {
       const resumedTerminal = terminalEvents(adapter)[resumedTerminalCount]!;
       assert.equal(resumedTerminal.status, 'completed', `resumed Cursor terminal: ${JSON.stringify(resumedTerminal)}`);
       assert.match(resumedTerminal.text || '', new RegExp(resumedMarker));
+      assert.equal((resumedTerminal.text || '').split(resumedMarker).length - 1, 1);
       assert.notEqual(await panePid(tmuxSessionName), firstPanePid);
       assert.equal(store.getSession(session.id)?.runtime?.cursor?.sessionId, cursorSessionId);
       assert.equal(resumedTerminal.text?.includes(takeoverMarker), false);

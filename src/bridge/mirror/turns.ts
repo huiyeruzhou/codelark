@@ -7,6 +7,7 @@ import {
   applyUnifiedTurnContextUsage,
   applyUnifiedTurnGoalStatus,
   applyUnifiedTurnHistoryModelText,
+  applyUnifiedTurnHistoryModelTextSnapshot,
   applyUnifiedTurnHistorySystemText,
   applyUnifiedTurnHistoryUserText,
   applyUnifiedTurnStatusNote,
@@ -41,6 +42,7 @@ export interface BridgeMirrorTurnState extends UnifiedTurnProgressState {
   userText: string | null;
   lastAssistantText: string | null;
   lastAssistantTextAt?: string | null;
+  lastAssistantReplacementKey?: string | null;
   lastCommentaryText: string | null;
   lastCommentaryTextAt?: string | null;
   streamedText: string;
@@ -465,8 +467,21 @@ export function consumeMirrorRecords<TSubscription extends MirrorTurnStateHolder
           )) continue;
           pendingTurn.lastAssistantText = text;
           pendingTurn.lastAssistantTextAt = record.timestamp || nowIso();
-          appendMirrorStreamText(pendingTurn, text);
-          applyUnifiedTurnHistoryModelText(pendingTurn, text);
+          if (record.replacementKey) {
+            if (
+              !pendingTurn.lastAssistantReplacementKey
+              || pendingTurn.lastAssistantReplacementKey === record.replacementKey
+            ) {
+              pendingTurn.streamedText = text;
+            } else {
+              appendMirrorStreamText(pendingTurn, text);
+            }
+            pendingTurn.lastAssistantReplacementKey = record.replacementKey;
+            applyUnifiedTurnHistoryModelTextSnapshot(pendingTurn, text);
+          } else {
+            appendMirrorStreamText(pendingTurn, text);
+            applyUnifiedTurnHistoryModelText(pendingTurn, text);
+          }
           markMirrorContentResponse(pendingTurn, record.timestamp);
           hooks.onStreamText?.(subscription, pendingTurn);
         }
