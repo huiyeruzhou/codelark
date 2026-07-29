@@ -28,7 +28,7 @@ nvm use 24
 | 类型检查 | `npm run typecheck` | 验证 TypeScript 类型和公共导入边界。 |
 | 构建验证 | `npm run build` | 验证发布构建入口和 esbuild 打包。 |
 | 文档验证 | `npm run docs:build` | 验证 VitePress 文档链接、导航和 Markdown 构建。 |
-| Setup wizard / lark-cli 真实本地 E2E | `CODELARK_SETUP_WIZARD_REAL_E2E=1 npm run real:setup-wizard:e2e -- ...` | 用真实 `lark-cli config init --app-id ... --app-secret-stdin` 在临时 `HOME` 下写入 `~/.lark-cli/config.json` 和本地加密 secret，再验证 setup wizard 能通过 lark-cli 配置回读 secret，并验证 CodeLark 写入 `~/.codelark/config.toml` 且不改写 legacy `config.json` / `config.env`。默认成功和失败都会清理临时目录；只有传 `--keep-temp` 才保留。 |
+| Setup wizard / lark-cli 真实本地 E2E | `CODELARK_SETUP_WIZARD_REAL_E2E=1 npm run real:setup-wizard:e2e -- ...` | 在临时 `HOME` 的标准 `~/.lark-cli/config.json` 预置既有 App 绑定，运行真实 bundled `lark-cli` 与 setup 路径，验证 CodeLark 不执行 `config init` / rebind、不创建私有 lark-cli runtime、不注入私有环境变量，也不改写既有 App 绑定；同时验证 `~/.codelark/config.toml` 正常生成且 legacy `config.json` / `config.env` 不被改写。默认成功和失败都会清理临时目录；只有传 `--keep-temp` 才保留。 |
 | 真实飞书场景目录 | `npm run real:feishu:e2e -- --list-scenarios` | 输出真实 E2E 场景、provider 矩阵、coverage tier 和对应本地覆盖。 |
 | 真实飞书 E2E | `CODELARK_REAL_FEISHU_E2E=1 npm run real:feishu:e2e -- --launch-bridge ...` | 启动隔离 bridge，真实创建/复用飞书群、用 lark-cli 用户身份发消息，再用 lark-cli 用户身份拉取消息/群信息验证 bridge 回复、飞书 transcript、provider 输出路径和清理 gate；不复用当前 live bridge。 |
 
@@ -59,6 +59,15 @@ CODELARK_SETUP_WIZARD_REAL_E2E=1 npm run real:setup-wizard:e2e -- \
 `--runtime` 支持 `codex`、`ccr`、`claude`、`kimi` 和 `cursor`，默认是 `codex`；Kimi/Cursor 路径分别验证 `runtime.agent` 与固定 `tmux` provider 写入。`--test-env-file` 只读取 `CODELARK_REAL_FEISHU_TEST_APP_ID` / `CODELARK_REAL_FEISHU_TEST_APP_SECRET` / `CODELARK_REAL_FEISHU_TEST_SITE`；旧 `CTI_REAL_FEISHU_*` 写法不是有效输入。不要把真实 App Secret 放在 npm 参数里，npm 会回显完整命令。
 
 默认会删除 `/tmp/clk-setup-wizard-real-e2e-*` 临时目录。需要排查时才加 `--keep-temp`，脚本输出 JSON 里的 `runRoot` 是保留现场路径。
+
+需要验证真实交互式扫码授权时，必须显式提供一个已有测试 App 的私有 env 文件。harness 会先用真实 lark-cli 在隔离 HOME 的标准 `~/.lark-cli` 中准备既有 App 绑定，再启动 CodeLark wizard；`config init` 只属于测试前置条件，产品代码仍只能执行 `auth check → auth login → auth check`：
+
+```bash
+CODELARK_SETUP_WIZARD_REAL_E2E=1 npm run real:setup-wizard:wizard-e2e -- \
+  --lark-cli-test-env-file ~/.codelark/test/real-feishu-e2e.test.env
+```
+
+交互 harness 只能在检测到完整的 Clack 活跃提示（`◆ … └`）后提交默认值，并且必须等前一提示出现完成标记 `◇` 才能推进下一项。禁止用固定间隔盲发回车：扫码或授权等待可能持续数分钟，盲发会提前耗尽输入额度，使真实操作完成后反而停在下一提示。
 
 ## 跨平台 CI
 

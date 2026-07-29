@@ -24,14 +24,11 @@ import type { ConfigPatch, ConfigV2 } from '../configuration/schema.js';
 import {
   INSTALLABLE_SKILLS,
   OFFICIAL_LARK_DOC_SKILL,
-  applyLarkCliRuntimeIdentityPolicy,
-  buildLarkCliRuntimeEnv,
-  ensureLarkCliRuntimeConfig,
   installCodexIntegration,
-  resetLegacyStrictLarkCliRuntimeForSetup,
   type CodexIntegrationInstallResult,
   type ExternalSkillInstallResult,
 } from '../local-service/manager.js';
+import { buildStandardLarkCliEnv } from '../shared/lark-cli-env.js';
 
 const require = createRequire(import.meta.url);
 
@@ -619,6 +616,15 @@ async function runLarkCli(
 ): Promise<void> {
   const script = resolveLarkCliScript();
   const inheritStdio = options.inheritStdio !== false;
+  const env = buildStandardLarkCliEnv({
+    ...process.env,
+    ...(options.env || {}),
+  });
+  if (options.homeDir) {
+    env.HOME = options.homeDir;
+    env.USERPROFILE = options.homeDir;
+    env.XDG_DATA_HOME = path.join(options.homeDir, '.local', 'share');
+  }
   await new Promise<void>((resolve, reject) => {
     const child = spawn(process.execPath, [script, ...args], {
       stdio: [
@@ -626,15 +632,7 @@ async function runLarkCli(
         'pipe',
         'pipe',
       ],
-      env: {
-        ...process.env,
-        ...(options.env || {}),
-        ...(options.homeDir ? {
-          HOME: options.homeDir,
-          USERPROFILE: options.homeDir,
-          XDG_DATA_HOME: path.join(options.homeDir, '.local', 'share'),
-        } : {}),
-      },
+      env,
     });
     let stderr = '';
     const outputFilters = new Map<NodeJS.WriteStream, {
@@ -695,7 +693,7 @@ async function hasCodeLarkUserAuthorization(): Promise<boolean> {
         '--scope',
         feishuSetupUserAuthScopeArgument(),
       ],
-      { env: buildLarkCliRuntimeEnv(), inheritStdio: false },
+      { inheritStdio: false },
     );
     return true;
   } catch {
@@ -703,40 +701,19 @@ async function hasCodeLarkUserAuthorization(): Promise<boolean> {
   }
 }
 
-async function ensureCodeLarkUserAuthorization(config: ConfigV2): Promise<void> {
-  // 先于常规 readiness check 清理旧 runtime。旧 bot-only runtime 可能让
-  // bot 操作看起来可用，但仍然阻止 setup 接下来要申请的用户身份。
-  const resetLegacyRuntime = resetLegacyStrictLarkCliRuntimeForSetup(config);
-  if (resetLegacyRuntime) {
-    p.note(
-      [
-        '检测到旧版 CodeLark 私有 lark-cli runtime 使用 bot-only strict policy。',
-        '已清理该隔离 runtime，本次 setup 会重新完成用户授权。',
-      ].join('\n'),
-      '飞书权限需重新授权',
-    );
-  }
-  const runtime = await ensureLarkCliRuntimeConfig(config, { allowUserAuthorization: true });
-  if (runtime.warning) {
-    throw new Error(runtime.warning);
-  }
+async function ensureCodeLarkUserAuthorization(): Promise<void> {
   if (await hasCodeLarkUserAuthorization()) {
     p.note(
-      '检测到 CodeLark 私有 lark-cli 配置已经包含 doc-to-chat 所需用户授权，本次 setup 不会重复打开授权页面。',
+      '检测到全局 lark-cli（~/.lark-cli）已经包含 doc-to-chat 所需用户授权，本次 setup 不会重复打开授权页面。',
       '飞书权限已就绪',
     );
     return;
   }
 
-  const preLoginPolicyWarning = await applyLarkCliRuntimeIdentityPolicy(true);
-  if (preLoginPolicyWarning) {
-    throw new Error(preLoginPolicyWarning);
-  }
-
   p.note(
     [
-      '接下来会打开 CodeLark 当前飞书应用的用户授权扫码流程。',
-      '授权写入 ~/.codelark/runtime/lark-cli，不读取用户 HOME 下的默认 ~/.lark-cli。',
+      '接下来会对全局 lark-cli 环境（~/.lark-cli）发起用户授权扫码流程。',
+      '授权只会追加到全局环境当前绑定的 App；CodeLark 不会执行 config init、rebind 或覆盖 App 配置。',
       `Scope：${feishuSetupUserAuthScopeArgument()}`,
     ].join('\n'),
     '飞书权限申请',
@@ -749,20 +726,15 @@ async function ensureCodeLarkUserAuthorization(config: ConfigV2): Promise<void> 
       '--scope',
       feishuSetupUserAuthScopeArgument(),
     ],
-    { env: buildLarkCliRuntimeEnv(), compactAuthOutput: true },
+    { compactAuthOutput: true },
   );
-  // login 会把 user 写进私有 lark-cli config。这里立即刷新 runtime policy，
-  // 但不要再次 bind --force；重复绑定同一个 app 可能覆盖刚写入的 user。
-  const policyWarning = await applyLarkCliRuntimeIdentityPolicy(true);
-  if (policyWarning) {
-    throw new Error(policyWarning);
-  }
   if (!(await hasCodeLarkUserAuthorization())) {
     throw new Error(
       [
-        '飞书用户授权流程已结束，但 CodeLark 私有 lark-cli runtime 仍未通过权限检查。',
-        '这通常表示重复授权同一个 bot 后本地 runtime 未写入 user，或当前进程无法读取 lark-cli keychain。',
+        '飞书用户授权流程已结束，但全局 lark-cli 仍未通过权限检查。',
+        '这通常表示授权写入了其他 App，或当前进程无法读取 lark-cli keychain。',
         '请重新运行 setup；如果仍失败，请先在交互式终端运行 lark-cli config keychain-downgrade 后再重试。',
+        '也可以手动运行 lark-cli auth status 检查全局环境的 App 绑定与登录状态。',
       ].join('\n'),
     );
   }
@@ -1033,7 +1005,7 @@ export async function runSetupWizard(options: SetupOptions = {}): Promise<void> 
   });
   saveSetupConfigToHomeToml(next);
   try {
-    await ensureCodeLarkUserAuthorization(next);
+    await ensureCodeLarkUserAuthorization();
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     p.note(

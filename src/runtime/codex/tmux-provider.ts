@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-import { CODELARK_HOME } from '../../configuration/paths.js';
+import { buildStandardLarkCliEnv } from '../../shared/lark-cli-env.js';
 import type { LLMProvider, StreamChatParams } from '../contracts.js';
 import type { CodexReasoningEffort, CodexSandboxMode } from '../options.js';
 import type { PendingPermissions } from '../permission-gateway.js';
@@ -23,7 +23,6 @@ import {
   quoteCommandLineArg,
 } from './shell-snapshot.js';
 import { resolveCodexCliExecutable } from './cli-executable.js';
-import { readPathEnv, writeCanonicalPathEnv } from '../path-env.js';
 import {
   tmuxCore,
   type TmuxCore,
@@ -637,18 +636,10 @@ function tmuxSessionName(sessionId: string): string {
 
 export function buildCodexTuiEnv(sourceEnv: NodeJS.ProcessEnv = process.env): Record<string, string> {
   const env: Record<string, string> = {};
-  for (const [key, value] of Object.entries(sourceEnv)) {
+  for (const [key, value] of Object.entries(buildStandardLarkCliEnv(sourceEnv))) {
     if (value !== undefined) env[key] = value;
   }
-  writeCanonicalPathEnv(env, prependLarkCliRuntimeBin(readPathEnv(env)));
   return env;
-}
-
-function prependLarkCliRuntimeBin(pathValue: string | undefined): string {
-  const binDir = path.join(CODELARK_HOME, 'runtime', 'bin');
-  const parts = (pathValue || '').split(path.delimiter).filter(Boolean);
-  const withoutBin = parts.filter((entry) => path.resolve(entry) !== path.resolve(binDir));
-  return [binDir, ...withoutBin].join(path.delimiter);
 }
 
 export function buildCodexTuiShellCommand(

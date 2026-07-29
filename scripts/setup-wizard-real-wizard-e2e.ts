@@ -8,6 +8,8 @@ import { fileURLToPath } from 'node:url';
 
 import { parse } from 'smol-toml';
 import { feishuSetupUserAuthScopeArgument } from '../src/channels/feishu/permissions.js';
+import { buildStandardLarkCliEnv } from '../src/shared/lark-cli-env.js';
+import { SetupWizardDefaultDriver } from '../src/testing/setup-wizard-default-driver.js';
 
 type FeishuSite = 'feishu' | 'lark';
 type RuntimeAgent = 'codex' | 'claude' | 'kimi' | 'cursor';
@@ -66,6 +68,7 @@ function printUsage(): void {
     '',
     'Options:',
     '  --run-root <path>       Temporary root; default /tmp/clk-setup-wizard-wizard-e2e-<timestamp>',
+    '  --lark-cli-test-env-file <path>  Existing test App credentials used only to prepare the isolated global ~/.lark-cli binding',
     '  --home-marker <name>    Runtime marker for default answers: codex|ccr|claude|kimi|cursor|none; default codex',
     '  --timeout-ms <number>   Overall wizard timeout; default 600000',
     '  --keep-temp             Keep temporary root for diagnosis; default cleans it after success',
@@ -76,6 +79,27 @@ function printUsage(): void {
     `app credentials to ${defaultRealFeishuTestEnvFile()}.`,
     '',
   ].join('\n'));
+}
+
+function parseEnvFile(filePath: string): Record<string, string> {
+  const values: Record<string, string> = {};
+  const content = fs.readFileSync(filePath, 'utf-8');
+  for (const rawLine of content.split(/\r?\n/u)) {
+    const line = rawLine.trim();
+    if (!line || line.startsWith('#')) continue;
+    const separator = line.indexOf('=');
+    if (separator <= 0) continue;
+    const key = line.slice(0, separator).trim();
+    let value = line.slice(separator + 1).trim();
+    if (
+      (value.startsWith('"') && value.endsWith('"'))
+      || (value.startsWith("'") && value.endsWith("'"))
+    ) {
+      value = value.slice(1, -1);
+    }
+    values[key] = value;
+  }
+  return values;
 }
 
 function assertInside(parentPath: string, childPath: string): void {
@@ -104,13 +128,13 @@ async function loadPtyModule(): Promise<PtyModule> {
 function runCommand(
   command: string,
   args: string[],
-  options: { cwd: string; env: NodeJS.ProcessEnv; timeoutMs: number },
+  options: { cwd: string; env: NodeJS.ProcessEnv; timeoutMs: number; input?: string },
 ): Promise<{ code: number; stdout: string; stderr: string }> {
   return new Promise((resolve, reject) => {
     const child = spawn(command, args, {
       cwd: options.cwd,
       env: options.env,
-      stdio: ['ignore', 'pipe', 'pipe'],
+      stdio: [options.input === undefined ? 'ignore' : 'pipe', 'pipe', 'pipe'],
     });
     let stdout = '';
     let stderr = '';
@@ -122,6 +146,7 @@ function runCommand(
     child.stderr?.setEncoding('utf8');
     child.stdout?.on('data', (chunk) => { stdout += chunk; });
     child.stderr?.on('data', (chunk) => { stderr += chunk; });
+    if (options.input !== undefined) child.stdin?.end(options.input);
     child.on('error', (error) => {
       clearTimeout(timeout);
       reject(error);
@@ -131,6 +156,38 @@ function runCommand(
       resolve({ code: code ?? 1, stdout, stderr });
     });
   });
+}
+
+async function prepareStandardLarkCliBinding(options: {
+  env: NodeJS.ProcessEnv;
+  appId: string;
+  appSecret: string;
+  site: FeishuSite;
+  timeoutMs: number;
+}): Promise<void> {
+  const larkCliScript = require.resolve('@larksuite/cli/scripts/run.js');
+  const result = await runCommand(
+    process.execPath,
+    [
+      larkCliScript,
+      'config',
+      'init',
+      '--app-id',
+      options.appId,
+      '--app-secret-stdin',
+      '--brand',
+      options.site,
+    ],
+    {
+      cwd: packageRoot,
+      env: options.env,
+      timeoutMs: options.timeoutMs,
+      input: `${options.appSecret}\n`,
+    },
+  );
+  if (result.code !== 0) {
+    throw new Error(`test harness failed to prepare standard ~/.lark-cli binding\n${result.stdout}\n${result.stderr}`);
+  }
 }
 
 async function runWizardWithDefaults(options: {
@@ -148,19 +205,11 @@ async function runWizardWithDefaults(options: {
 
   let output = '';
   const printedUrls = new Set<string>();
-  let defaultConfirmCount = 0;
-  const maxDefaultConfirms = 40;
+  const defaultDriver = new SetupWizardDefaultDriver();
   let exited = false;
-
-  const defaultInput = setInterval(() => {
-    if (exited || defaultConfirmCount >= maxDefaultConfirms) return;
-    child.write('\r');
-    defaultConfirmCount += 1;
-  }, 900);
 
   return await new Promise<string>((resolve, reject) => {
     const timeout = setTimeout(() => {
-      clearInterval(defaultInput);
       child.kill('SIGTERM');
       reject(new Error(`setup wizard timed out after ${options.timeoutMs}ms`));
     }, options.timeoutMs);
@@ -174,12 +223,11 @@ async function runWizardWithDefaults(options: {
         printedUrls.add(url);
         process.stdout.write(`\n[setup-wizard-real-wizard-e2e] 授权链接：${url}\n`);
       }
-      if (output.length > 80_000) output = output.slice(-40_000);
+      if (!exited && defaultDriver.shouldSubmit(output)) child.write('\r');
     });
 
     child.onExit((event) => {
       exited = true;
-      clearInterval(defaultInput);
       clearTimeout(timeout);
       if (event.exitCode === 0) {
         resolve(output);
@@ -197,15 +245,6 @@ interface CreatedWizardCredentials {
   runtimeAgent: RuntimeAgent;
   kimiProvider?: string;
   claudeExecutable?: string;
-}
-
-function buildLarkCliRuntimeEnv(codelarkHome: string): NodeJS.ProcessEnv {
-  return {
-    LARK_CHANNEL: '1',
-    LARK_CHANNEL_HOME: codelarkHome,
-    LARK_CHANNEL_CONFIG: path.join(codelarkHome, 'runtime', 'lark-cli-source', 'config.json'),
-    LARKSUITE_CLI_CONFIG_DIR: path.join(codelarkHome, 'runtime', 'lark-cli'),
-  };
 }
 
 function createRuntimeHomeMarker(runtimeHome: string, marker: HomeMarker): void {
@@ -297,7 +336,8 @@ function assertCodeLarkConfig(options: {
   if (!appSecret) throw new Error('CodeLark config appSecret missing');
   if (fs.existsSync(configEnvPath)) throw new Error('setup should not create config.env');
   if (fs.existsSync(configJsonPath)) throw new Error('setup should not create config.json');
-  if (!fs.existsSync(larkCliRuntimeConfigPath)) throw new Error('CodeLark private lark-cli runtime config missing');
+  // CodeLark 不再维护私有 lark-cli runtime：setup 不应写出隔离目录。
+  if (fs.existsSync(larkCliRuntimeConfigPath)) throw new Error('CodeLark should not create an isolated lark-cli runtime config');
   return {
     appId,
     appSecret,
@@ -356,6 +396,21 @@ async function main(): Promise<void> {
   const codelarkHome = path.join(runRoot, 'codelark-home');
   const workspaceRoot = path.join(runRoot, 'workspace');
   const codexHome = path.join(runtimeHome, '.codex');
+  const larkCliTestEnvFile = path.resolve(valueArg(
+    argv,
+    '--lark-cli-test-env-file',
+    defaultRealFeishuTestEnvFile(),
+  ));
+  if (!fs.existsSync(larkCliTestEnvFile)) {
+    throw new Error(`Missing lark-cli test App env file: ${larkCliTestEnvFile}`);
+  }
+  const larkCliTestEnv = parseEnvFile(larkCliTestEnvFile);
+  const larkCliAppId = larkCliTestEnv.CODELARK_REAL_FEISHU_TEST_APP_ID?.trim();
+  const larkCliAppSecret = larkCliTestEnv.CODELARK_REAL_FEISHU_TEST_APP_SECRET?.trim();
+  const larkCliSite: FeishuSite = larkCliTestEnv.CODELARK_REAL_FEISHU_TEST_SITE === 'lark' ? 'lark' : 'feishu';
+  if (!larkCliAppId || !larkCliAppSecret) {
+    throw new Error(`Missing test App ID/secret in ${larkCliTestEnvFile}`);
+  }
 
   try {
     assertInside(os.tmpdir(), runRoot);
@@ -363,7 +418,7 @@ async function main(): Promise<void> {
     createRuntimeHomeMarker(runtimeHome, homeMarker);
     fs.mkdirSync(workspaceRoot, { recursive: true });
 
-    const env = {
+    const env = buildStandardLarkCliEnv({
       ...process.env,
       HOME: runtimeHome,
       USERPROFILE: runtimeHome,
@@ -372,16 +427,24 @@ async function main(): Promise<void> {
       FORCE_COLOR: '0',
       NO_COLOR: '1',
       TERM: 'xterm-256color',
-    };
+    });
     delete env.CI;
+
+    // The product must never own `config init`. The E2E harness prepares the
+    // real user's pre-existing global binding inside the isolated HOME before
+    // launching CodeLark, then the wizard may only check/login/check it.
+    await prepareStandardLarkCliBinding({
+      env,
+      appId: larkCliAppId,
+      appSecret: larkCliAppSecret,
+      site: larkCliSite,
+      timeoutMs: 60_000,
+    });
 
     await runWizardWithDefaults({ env, timeoutMs });
 
-    const larkCliEnv = {
-      ...env,
-      ...buildLarkCliRuntimeEnv(codelarkHome),
-    };
-    await assertLarkCliAuthorization({ env: larkCliEnv, timeoutMs: 60_000 });
+    // wizard 的用户授权写入 mock HOME 下的全局 ~/.lark-cli，不做任何 env 覆盖。
+    await assertLarkCliAuthorization({ env, timeoutMs: 60_000 });
     const credentials = assertCodeLarkConfig({
       codelarkHome,
       workspaceRoot,
@@ -403,7 +466,7 @@ async function main(): Promise<void> {
       testEnvFile: outputTestEnvFile,
       appId: credentials.appId,
       site: credentials.site,
-      larkCliRuntimeDir: path.join(codelarkHome, 'runtime', 'lark-cli'),
+      larkCliBindingAppId: larkCliAppId,
       cleanedRunRoot: !keepTemp,
     };
     process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);

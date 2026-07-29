@@ -87,7 +87,7 @@ codelark setup
 - 扫码创建：通过飞书/Lark 开放平台扫码创建 App，`App ID` / `App Secret` 直接来自扫码返回结果。
 - 手动引导：直接粘贴飞书开放平台里的 `App ID` 和 `App Secret`。
 
-保存 App 配置后，向导会基于当前 `~/.codelark` 配置初始化 CodeLark 专属 lark-cli runtime，并对这个 App 发起用户 OAuth 授权扫码。授权状态写入 `~/.codelark/runtime/lark-cli/`，不读取或导入默认 `~/.lark-cli`。
+保存 App 配置后，向导会检查全局 lark-cli 环境（`~/.lark-cli`）是否已包含 CodeLark 所需的用户授权；缺失时对全局环境发起用户 OAuth 授权扫码。授权只追加到全局环境当前绑定的 App 上，CodeLark 不会修改你已绑定的 App。
 
 默认 runtime 推荐规则：
 
@@ -135,14 +135,9 @@ codelark stop
 
 `codelark --version`（或 `codelark -v`）输出当前安装版本；CLI 帮助页和 Web 工作台侧边栏也使用同一个安装包版本。
 
-`codelark run` 会在启动 bridge 前初始化 CodeLark 专属的 lark-cli 运行环境：
+`codelark run` 启动 bridge 前不再初始化任何私有 lark-cli 运行环境：CodeLark 对全局 lark-cli 环境（`~/.lark-cli`）零写入，只会执行一次只读的 `lark-cli auth check` 诊断；缺少用户授权时打印警告提示运行 `codelark setup`，不会阻断启动。manager 和 daemon 进程入口都会清除旧版本遗留的私有 lark-cli 环境变量与 shim PATH，因此通过 supervisor 直接启动 daemon 也遵循同一合同。
 
-- 从当前启用的飞书/Lark 通道生成 `~/.codelark/runtime/lark-cli-source/config.json`。
-- 将 lark-cli 绑定到 `~/.codelark/runtime/lark-cli/`。
-- 如果 CodeLark 专属 runtime 已有当前 App 的用户授权，则切换为 user-default；否则保持 bot-only，直到用户在 setup 中完成授权。
-- 给 bridge 及其子进程注入 `LARK_CHANNEL_CONFIG` 与 `LARKSUITE_CLI_CONFIG_DIR`，供 setup、诊断和真实 E2E 工具使用。
-
-生产 bridge 的云文档评论建群路径直接走机器人 OpenAPI，不要求模型或用户手动执行 `lark-cli`；保留的私有 runtime 只服务 setup、诊断和真实 E2E 工具，不会误读默认用户 HOME 下的其他 lark-cli 配置。旧版 `codelark open` 仍作为兼容别名可用，但文档和脚本统一使用 `run`。
+生产 bridge 的云文档评论建群路径直接走机器人 OpenAPI，不要求模型或用户手动执行 `lark-cli`；agent（如 lark-doc skill）需要 lark-cli 时直接使用 PATH 上的系统 lark-cli，即全局 `~/.lark-cli` 环境。旧版 `codelark open` 仍作为兼容别名可用，但文档和脚本统一使用 `run`。
 
 默认工作台地址：
 

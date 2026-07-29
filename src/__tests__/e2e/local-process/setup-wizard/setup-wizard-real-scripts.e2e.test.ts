@@ -134,7 +134,7 @@ test('setup wizard real script runs in an isolated local e2e home and cleans its
 
   const result = await runScript({
     script: 'scripts/setup-wizard-real-e2e.ts',
-    args: ['--run-root', runRoot, '--skip-lark-cli-bind'],
+    args: ['--run-root', runRoot],
     env: {
       CODELARK_SETUP_WIZARD_REAL_E2E: '1',
       CODELARK_REAL_FEISHU_TEST_APP_ID: 'cli_setup_wizard_local_e2e',
@@ -149,17 +149,25 @@ test('setup wizard real script runs in an isolated local e2e home and cleans its
     cleanedRunRoot?: boolean;
     codelarkHome?: string;
     configTomlPath?: string;
-    daemonLarkCliConfigDir?: string;
+    globalLarkCliConfigPath?: string;
+    globalLarkCliConfigUnchanged?: boolean;
+    realLarkCliConfigInit?: boolean;
+    existingGlobalAppId?: string;
+    daemonLarkCliConfigDir?: string | null;
+    daemonLarkChannelHome?: string | null;
     daemonPathHead?: string;
-    larkCliShimPath?: string;
   };
   assert.equal(parsed.ok, true);
   assert.equal(parsed.cleanedRunRoot, true);
   assert.equal(fs.existsSync(runRoot), false);
   assert.match(parsed.configTomlPath || '', /config\.toml$/);
-  assert.equal(parsed.daemonLarkCliConfigDir, path.join(parsed.codelarkHome || '', 'runtime', 'lark-cli'));
-  assert.equal(parsed.daemonPathHead, path.join(parsed.codelarkHome || '', 'runtime', 'bin'));
-  assert.match(parsed.larkCliShimPath || '', /lark-cli(?:\.cmd)?$/);
+  assert.match(parsed.globalLarkCliConfigPath || '', /\.lark-cli[\\/]config\.json$/);
+  assert.equal(parsed.globalLarkCliConfigUnchanged, true);
+  assert.equal(parsed.realLarkCliConfigInit, true);
+  assert.equal(parsed.existingGlobalAppId, 'cli_existing_global_binding');
+  assert.equal(parsed.daemonLarkCliConfigDir, null);
+  assert.equal(parsed.daemonLarkChannelHome, null);
+  assert.notEqual(parsed.daemonPathHead, path.join(parsed.codelarkHome || '', 'runtime', 'bin'));
 });
 
 test('setup wizard real script can write Kimi as the configured runtime', async () => {
@@ -168,7 +176,7 @@ test('setup wizard real script can write Kimi as the configured runtime', async 
 
   const result = await runScript({
     script: 'scripts/setup-wizard-real-e2e.ts',
-    args: ['--run-root', runRoot, '--skip-lark-cli-bind', '--runtime', 'kimi'],
+    args: ['--run-root', runRoot, '--runtime', 'kimi'],
     env: {
       CODELARK_SETUP_WIZARD_REAL_E2E: '1',
       CODELARK_REAL_FEISHU_TEST_APP_ID: 'cli_setup_wizard_kimi_local_e2e',
@@ -193,13 +201,13 @@ test('setup wizard real script can write Kimi as the configured runtime', async 
   assert.equal(fs.existsSync(runRoot), false);
 });
 
-test('setup wizard real script cleans its run root after a post-sync failure', async () => {
+test('setup wizard real script cleans its run root after a post-setup failure', async () => {
   const runRoot = tempDir('clk-setup-wizard-real-failure-local-e2e-');
   fs.rmSync(runRoot, { recursive: true, force: true });
 
   const result = await runScript({
     script: 'scripts/setup-wizard-real-e2e.ts',
-    args: ['--run-root', runRoot, '--skip-lark-cli-bind', '--simulate-failure-after-sync'],
+    args: ['--run-root', runRoot, '--simulate-failure-after-sync'],
     env: {
       CODELARK_SETUP_WIZARD_REAL_E2E: '1',
       CODELARK_REAL_FEISHU_TEST_APP_ID: 'cli_setup_wizard_failure_local_e2e',
@@ -209,7 +217,7 @@ test('setup wizard real script cleans its run root after a post-sync failure', a
   });
 
   assert.notEqual(result.code, 0);
-  assert.match(result.stderr, /simulated setup wizard real e2e failure after lark-cli sync/);
+  assert.match(result.stderr, /simulated setup wizard real e2e failure after setup/);
   assert.equal(fs.existsSync(runRoot), false);
 });
 
@@ -220,11 +228,16 @@ test('interactive setup wizard e2e is registered under local e2e and remains exp
   }
 
   const runRoot = tempDir('clk-setup-wizard-interactive-local-e2e-');
+  const larkCliTestEnvFile = process.env.CODELARK_SETUP_WIZARD_LARK_CLI_TEST_ENV_FILE;
+  assert.ok(
+    larkCliTestEnvFile,
+    'set CODELARK_SETUP_WIZARD_LARK_CLI_TEST_ENV_FILE to an existing private test App env file',
+  );
   fs.rmSync(runRoot, { recursive: true, force: true });
   try {
     const result = await runScript({
       script: 'scripts/setup-wizard-real-wizard-e2e.ts',
-      args: ['--run-root', runRoot],
+      args: ['--run-root', runRoot, '--lark-cli-test-env-file', larkCliTestEnvFile],
       env: {
         CODELARK_SETUP_WIZARD_REAL_E2E: '1',
       },

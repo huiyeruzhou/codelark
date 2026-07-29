@@ -113,6 +113,8 @@ test('real setup wizard e2e can load credentials from env file without npm secre
   assert.match(script, /codex\|ccr\|claude\|kimi\|cursor/);
   assert.match(script, /CODELARK_REAL_FEISHU_TEST_APP_ID/);
   assert.match(script, /CODELARK_REAL_FEISHU_TEST_APP_SECRET/);
+  assert.match(script, /buildStandardLarkCliEnv/);
+  assert.match(script, /'config',\s*'init'/);
   assert.doesNotMatch(script, /CTI_REAL_FEISHU_TEST_APP_ID/);
   assert.doesNotMatch(script, /CTI_REAL_FEISHU_TEST_APP_SECRET/);
   assert.doesNotMatch(script, /CTI_REAL_FEISHU_TEST_SITE/);
@@ -131,7 +133,7 @@ test('real setup wizard wizard e2e creates credentials in an isolated home and w
   assert.match(script, /@homebridge\/node-pty-prebuilt-multiarch/);
   assert.match(script, /auth', 'status'/);
   assert.match(script, /auth', 'check'/);
-  assert.match(script, /LARKSUITE_CLI_CONFIG_DIR/);
+  assert.doesNotMatch(script, /LARK_CHANNEL_CONFIG/);
   assert.match(script, /mock HOME/);
   assert.match(script, /--home-marker <name>/);
   assert.match(script, /runtime\?: \{/);
@@ -143,10 +145,13 @@ test('real setup wizard wizard e2e creates credentials in an isolated home and w
   assert.match(script, /defaultRealFeishuTestEnvFile/);
   assert.match(script, /writeDefaultRealFeishuTestEnvFile/);
   assert.match(script, /CODELARK_REAL_FEISHU_TEST_APP_ID/);
-  assert.doesNotMatch(script, /Missing test app credentials/);
+  assert.match(script, /prepareStandardLarkCliBinding/);
+  assert.match(script, /buildStandardLarkCliEnv/);
+  assert.match(script, /SetupWizardDefaultDriver/);
+  assert.doesNotMatch(script, /setInterval\(/);
+  assert.match(script, /'config',\s*'init'/);
   assert.match(script, /config\.toml/);
   assert.doesNotMatch(script, /writePreseedConfigEnv/);
-  assert.doesNotMatch(script, /--app-id/);
   assert.doesNotMatch(script, /config\.env missing/);
   assert.match(realFeishuScript, /defaultRealFeishuTestEnvFile/);
   assert.match(realFeishuScript, /valueArg\(argv, '--test-env-file', defaultRealFeishuTestEnvFile\(\)\)/);
@@ -158,34 +163,36 @@ test('real setup wizard wizard e2e creates credentials in an isolated home and w
   assert.doesNotMatch(wizardSource, /config\.json 和 config\.env/);
 });
 
-test('setup wizard binds lark-cli runtime with user-default identity and resets legacy strict runtime', () => {
+test('setup wizard authorizes the global lark-cli env without maintaining a private runtime', () => {
   const managerSource = fs.readFileSync(path.join(process.cwd(), 'src', 'local-service', 'manager.ts'), 'utf-8');
   const wizardSource = fs.readFileSync(path.join(process.cwd(), 'src', 'entrypoints', 'setup-wizard.ts'), 'utf-8');
 
-  assert.match(managerSource, /'config', 'bind', '--source', 'lark-channel', '--identity', 'user-default', '--force'/);
-  assert.doesNotMatch(managerSource, /'--identity', 'bot-only'/);
-  assert.match(managerSource, /resetLegacyStrictLarkCliRuntimeForSetup/);
-  assert.match(wizardSource, /resetLegacyStrictLarkCliRuntimeForSetup\(config\)/);
-  assert.match(wizardSource, /ensureLarkCliRuntimeConfig\(config, \{ allowUserAuthorization: true \}\)/);
+  assert.doesNotMatch(managerSource, /'config', 'bind', '--source', 'lark-channel'/);
+  assert.doesNotMatch(managerSource, /resetLegacyStrictLarkCliRuntimeForSetup/);
+  assert.doesNotMatch(managerSource, /ensureLarkCliRuntimeConfig/);
+  assert.doesNotMatch(managerSource, /applyLarkCliRuntimeIdentityPolicy/);
+  assert.doesNotMatch(wizardSource, /resetLegacyStrictLarkCliRuntimeForSetup/);
+  assert.doesNotMatch(wizardSource, /ensureLarkCliRuntimeConfig/);
+  assert.doesNotMatch(wizardSource, /applyLarkCliRuntimeIdentityPolicy/);
+  assert.doesNotMatch(wizardSource, /buildLarkCliRuntimeEnv/);
+  assert.doesNotMatch(wizardSource, /'config',\s*'init'/);
+  assert.match(wizardSource, /~\/\.lark-cli/);
 });
 
-test('setup wizard refreshes lark-cli identity policy after user authorization', () => {
+test('setup wizard checks global lark-cli auth, logs in, then re-checks', () => {
   const wizardSource = fs.readFileSync(path.join(process.cwd(), 'src', 'entrypoints', 'setup-wizard.ts'), 'utf-8').replace(/\r\n/g, '\n');
   const start = wizardSource.indexOf('async function ensureCodeLarkUserAuthorization');
   const end = wizardSource.indexOf('function existingFeishuCredentials', start);
   const body = wizardSource.slice(start, end);
-  const firstSync = body.indexOf('ensureLarkCliRuntimeConfig(config, { allowUserAuthorization: true })');
+  const preLoginCheck = body.indexOf('hasCodeLarkUserAuthorization()');
   const login = body.indexOf("'auth',\n      'login'");
-  const preLoginPolicyRefresh = body.indexOf('const preLoginPolicyWarning = await applyLarkCliRuntimeIdentityPolicy(true)');
-  const policyRefresh = body.lastIndexOf('applyLarkCliRuntimeIdentityPolicy(true)');
   const postLoginCheck = body.lastIndexOf('hasCodeLarkUserAuthorization()');
 
-  assert.ok(firstSync >= 0, 'expected pre-login lark-cli runtime sync');
-  assert.ok(preLoginPolicyRefresh > firstSync, 'expected pre-login identity policy refresh');
-  assert.ok(login > firstSync, 'expected auth login after pre-login sync');
-  assert.ok(policyRefresh > login, 'expected post-login identity policy refresh');
-  assert.ok(postLoginCheck > policyRefresh, 'expected post-login auth check');
-  assert.doesNotMatch(body.slice(login), /ensureLarkCliRuntimeConfig\(config\)/);
+  assert.ok(preLoginCheck >= 0, 'expected pre-login global lark-cli auth check');
+  assert.ok(login > preLoginCheck, 'expected auth login after the pre-login check');
+  assert.ok(postLoginCheck > login, 'expected post-login auth re-check');
+  assert.doesNotMatch(body, /config', 'bind'/);
+  assert.match(body, /keychain-downgrade/);
 });
 
 test('recommends runtime from home directory markers', () => {

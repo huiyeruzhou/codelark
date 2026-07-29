@@ -21,6 +21,7 @@ import { exportRuntimeSettings } from '../runtime/config-projections.js';
 import { PendingPermissions } from '../runtime/permission-gateway.js';
 import type { CodexProviderChoice } from '../runtime/codex/routing-provider.js';
 import { setupLogger } from '../shared/logger.js';
+import { applyStandardLarkCliEnv } from '../shared/lark-cli-env.js';
 import { releaseBridgeInstanceLock, tryAcquireBridgeInstanceLock } from '../local-service/instance-lock.js';
 import { runStartupStorageMigrations } from '../storage/migrations.js';
 
@@ -102,6 +103,9 @@ function formatProxyEnvSnapshot(env: NodeJS.ProcessEnv = process.env): string {
 }
 
 async function main(): Promise<void> {
+  // Supervisors may launch daemon.mjs directly and bypass manager.buildDaemonEnv().
+  // Sanitize again at the authoritative process boundary before any runtime starts.
+  applyStandardLarkCliEnv();
   const lockState = tryAcquireBridgeInstanceLock();
   if (!lockState.acquired) {
     const holderPid = lockState.holderPid;

@@ -7,9 +7,10 @@ import { fileURLToPath } from 'node:url';
 
 import { CODELARK_HOME } from '../configuration/paths.js';
 import type { FeishuChannelConfig } from '../channels/types.js';
+import { feishuSetupUserAuthScopeArgument } from '../channels/feishu/permissions.js';
 import { createConfigService } from '../configuration/service.js';
 import type { ConfigPatch, ConfigV2 } from '../configuration/schema.js';
-import { normalizeFeishuSite } from '../channels/feishu/site.js';
+import { buildStandardLarkCliEnv } from '../shared/lark-cli-env.js';
 import {
   clearStaleBridgeInstanceLock,
   readBridgeInstanceLock,
@@ -85,11 +86,6 @@ function resolvePackageRoot(startDir: string): string {
 const packageRoot = resolvePackageRoot(moduleDir);
 const runtimeDir = path.join(CODELARK_HOME, 'runtime');
 const logsDir = path.join(CODELARK_HOME, 'logs');
-const larkCliRuntimeDir = path.join(runtimeDir, 'lark-cli');
-const larkCliSourceDir = path.join(runtimeDir, 'lark-cli-source');
-const larkCliBinDir = path.join(runtimeDir, 'bin');
-const larkCliSourceConfigFile = path.join(larkCliSourceDir, 'config.json');
-const larkCliTargetConfigFile = path.join(larkCliRuntimeDir, 'lark-channel', 'config.json');
 const bridgePidFile = path.join(runtimeDir, 'bridge.pid');
 const bridgeStatusFile = path.join(runtimeDir, 'status.json');
 const bridgeStartLockFile = path.join(runtimeDir, 'bridge.start.lock');
@@ -103,13 +99,11 @@ const PRIMARY_CLI_COMMAND = 'codelark';
 const PRIMARY_CODEX_SKILL_NAME = 'codelark';
 const WINDOWS_HIDE = process.platform === 'win32' ? { windowsHide: true } : {};
 const BRIDGE_START_LOCK_STALE_MS = 30_000;
-const LARK_CLI_BIND_TIMEOUT_MS = 30_000;
+const LARK_CLI_CHECK_TIMEOUT_MS = 30_000;
 
 function ensureDirs(): void {
   fs.mkdirSync(runtimeDir, { recursive: true });
   fs.mkdirSync(logsDir, { recursive: true });
-  fs.mkdirSync(larkCliRuntimeDir, { recursive: true });
-  fs.mkdirSync(larkCliBinDir, { recursive: true });
 }
 
 function readJsonFile<T>(filePath: string, fallback: T): T {
@@ -609,10 +603,6 @@ export interface ServiceConfigOverrideOptions {
   startupProjection?: StartupConfigProjection;
 }
 
-export interface LarkCliRuntimeConfigOptions {
-  allowUserAuthorization?: boolean;
-}
-
 function hasConfigPatchValues(patch: ConfigPatch | undefined): boolean {
   if (!patch) return false;
   return Object.keys(patch).length > 0;
@@ -655,15 +645,12 @@ function loadStartupConfig(options: ServiceConfigOverrideOptions = {}): ConfigV2
 function buildDaemonEnv(
   _options: ServiceConfigOverrideOptions = {},
 ): NodeJS.ProcessEnv {
-  const env = { ...process.env } as NodeJS.ProcessEnv;
+  const env = buildStandardLarkCliEnv();
   const legacyEnvPrefix = ['C', 'T', 'I'].join('');
   for (const key of Object.keys(env)) {
     if (key === `${legacyEnvPrefix}_HOME` || key.startsWith(`${legacyEnvPrefix}_`)) delete env[key];
   }
   delete env.CLAUDECODE;
-  Object.assign(env, buildLarkCliRuntimeEnv());
-  const shimDir = ensureLarkCliShim();
-  env.PATH = prependPathEntry(env.PATH, shimDir);
   return env;
 }
 
@@ -671,262 +658,6 @@ function buildUiServerEnv(
   _options: ServiceConfigOverrideOptions = {},
 ): NodeJS.ProcessEnv {
   return { ...process.env } as NodeJS.ProcessEnv;
-}
-
-export function buildLarkCliRuntimeEnv(): NodeJS.ProcessEnv {
-  return {
-    LARK_CHANNEL: '1',
-    LARK_CHANNEL_HOME: CODELARK_HOME,
-    LARK_CHANNEL_CONFIG: larkCliSourceConfigFile,
-    LARKSUITE_CLI_CONFIG_DIR: larkCliRuntimeDir,
-  };
-}
-
-function prependPathEntry(pathValue: string | undefined, entry: string): string {
-  const delimiter = path.delimiter;
-  const parts = (pathValue || '').split(delimiter).filter(Boolean);
-  const withoutEntry = parts.filter((part) => path.resolve(part) !== path.resolve(entry));
-  return [entry, ...withoutEntry].join(delimiter);
-}
-
-function shellSingleQuote(value: string): string {
-  return `'${value.replace(/'/g, "'\\''")}'`;
-}
-
-function ensureLarkCliShim(): string {
-  ensureDirs();
-  const script = resolveLarkCliScript();
-  if (!script) return larkCliBinDir;
-
-  if (process.platform === 'win32') {
-    const cmdPath = path.join(larkCliBinDir, 'lark-cli.cmd');
-    fs.writeFileSync(
-      cmdPath,
-      [
-        '@echo off',
-        `"${process.execPath}" "${script}" %*`,
-        '',
-      ].join('\r\n'),
-      'utf-8',
-    );
-    return larkCliBinDir;
-  }
-
-  const shimPath = path.join(larkCliBinDir, 'lark-cli');
-  fs.writeFileSync(
-    shimPath,
-    [
-      '#!/bin/sh',
-      `exec ${shellSingleQuote(process.execPath)} ${shellSingleQuote(script)} "$@"`,
-      '',
-    ].join('\n'),
-    { encoding: 'utf-8', mode: 0o755 },
-  );
-  try {
-    fs.chmodSync(shimPath, 0o755);
-  } catch {
-    // Best effort for filesystems that ignore chmod.
-  }
-  return larkCliBinDir;
-}
-
-function findPrimaryFeishuChannel(config: LocalServiceConfig): LocalServiceChannel | undefined {
-  const channels = config.channels || [];
-  return channels.find((channel) => channel.provider === 'feishu' && channel.enabled !== false)
-    || channels.find((channel) => channel.provider === 'feishu');
-}
-
-function getFeishuCredentials(config: LocalServiceConfig): Required<Pick<FeishuChannelConfig, 'appId' | 'appSecret' | 'site'>> | null {
-  const channel = findPrimaryFeishuChannel(config);
-  const feishu = channel?.config;
-  const appId = feishu?.appId?.trim();
-  const appSecret = feishu?.appSecret?.trim();
-  if (!appId || !appSecret) return null;
-  return {
-    appId,
-    appSecret,
-    site: normalizeFeishuSite(feishu?.site),
-  };
-}
-
-function isSameFeishuApp(app: { appId?: unknown; brand?: unknown } | undefined, config: LocalServiceConfig): boolean {
-  const credentials = getFeishuCredentials(config);
-  if (!credentials || !app) return false;
-  return app.appId === credentials.appId && app.brand === credentials.site;
-}
-
-function writeLarkCliSourceProjection(config: LocalServiceConfig): string | null {
-  const credentials = getFeishuCredentials(config);
-  if (!credentials) return null;
-  fs.mkdirSync(larkCliSourceDir, { recursive: true, mode: 0o700 });
-  try {
-    fs.chmodSync(larkCliSourceDir, 0o700);
-  } catch {
-    // Best-effort hardening; Windows and some file systems may ignore chmod.
-  }
-
-  const projection = {
-    accounts: {
-      app: {
-        id: credentials.appId,
-        secret: credentials.appSecret,
-        tenant: credentials.site,
-      },
-    },
-  };
-  const tmpPath = `${larkCliSourceConfigFile}.tmp`;
-  fs.writeFileSync(tmpPath, `${JSON.stringify(projection, null, 2)}\n`, { mode: 0o600 });
-  fs.renameSync(tmpPath, larkCliSourceConfigFile);
-  return larkCliSourceConfigFile;
-}
-
-function isLarkCliKeychainFailure(output: string): boolean {
-  return /keychain (?:Get |Set |access |unavailable|not initialized|is corrupted)|use file: reference in config to bypass keychain/i.test(output);
-}
-
-function readJsonObject(filePath: string): Record<string, unknown> | null {
-  try {
-    const parsed = JSON.parse(fs.readFileSync(filePath, 'utf-8')) as unknown;
-    return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
-      ? parsed as Record<string, unknown>
-      : null;
-  } catch {
-    return null;
-  }
-}
-
-function structuredLarkCliUsers(users: unknown): unknown[] | null {
-  if (!Array.isArray(users)) return null;
-  const structured = users.filter((user) => user && typeof user === 'object');
-  return structured.length > 0 ? structured : null;
-}
-
-function cloneLarkCliUsers(users: unknown[] | null): unknown[] | null {
-  if (!users) return null;
-  return JSON.parse(JSON.stringify(users)) as unknown[];
-}
-
-function readTargetLarkCliApp(config: LocalServiceConfig): {
-  raw: Record<string, unknown>;
-  app: Record<string, unknown>;
-} | null {
-  const raw = readJsonObject(larkCliTargetConfigFile);
-  const apps = Array.isArray(raw?.apps) ? raw.apps : [];
-  const matches = apps.filter((candidate) => (
-    candidate && typeof candidate === 'object' && isSameFeishuApp(candidate as { appId?: unknown; brand?: unknown }, config)
-  ));
-  const app = matches.find((candidate) => (
-    candidate && typeof candidate === 'object' && structuredLarkCliUsers((candidate as Record<string, unknown>).users)
-  )) || matches.find((candidate) => (
-    candidate && typeof candidate === 'object'
-    && (candidate as Record<string, unknown>).strictMode !== 'bot'
-    && (candidate as Record<string, unknown>).defaultAs !== 'bot'
-  )) || matches[0];
-  return raw && app && typeof app === 'object'
-    ? { raw, app: app as Record<string, unknown> }
-    : null;
-}
-
-function writePlainLarkCliTargetProjection(config: LocalServiceConfig): boolean {
-  const credentials = getFeishuCredentials(config);
-  if (!credentials) return false;
-  fs.mkdirSync(path.dirname(larkCliTargetConfigFile), { recursive: true, mode: 0o700 });
-  try {
-    fs.chmodSync(larkCliRuntimeDir, 0o700);
-    fs.chmodSync(path.dirname(larkCliTargetConfigFile), 0o700);
-  } catch {
-    // Best-effort hardening; Windows and some file systems may ignore chmod.
-  }
-
-  const raw = readJsonObject(larkCliTargetConfigFile) || {};
-  const existingApps = Array.isArray(raw.apps) ? raw.apps : [];
-  const existing = readTargetLarkCliApp(config)?.app;
-  const replacement: Record<string, unknown> = {
-    ...(existing || {}),
-    appId: credentials.appId,
-    appSecret: credentials.appSecret,
-    brand: credentials.site,
-  };
-  const apps = [
-    ...existingApps.filter((candidate) => !(
-      candidate && typeof candidate === 'object'
-      && isSameFeishuApp(candidate as { appId?: unknown; brand?: unknown }, config)
-    )),
-    replacement,
-  ];
-  const next = { ...raw, apps };
-  const tmpPath = `${larkCliTargetConfigFile}.tmp`;
-  fs.writeFileSync(tmpPath, `${JSON.stringify(next, null, 2)}\n`, { mode: 0o600 });
-  fs.renameSync(tmpPath, larkCliTargetConfigFile);
-  return true;
-}
-
-function hasTargetLarkCliUsers(config: LocalServiceConfig): boolean {
-  const target = readTargetLarkCliApp(config);
-  if (!target) return false;
-  return Boolean(structuredLarkCliUsers(target.app.users));
-}
-
-function snapshotTargetLarkCliUsers(config: LocalServiceConfig): unknown[] | null {
-  return cloneLarkCliUsers(structuredLarkCliUsers(readTargetLarkCliApp(config)?.app.users));
-}
-
-function restoreTargetLarkCliUsers(config: LocalServiceConfig, users: unknown[] | null): boolean {
-  const cloned = cloneLarkCliUsers(users);
-  if (!cloned) return false;
-  const target = readTargetLarkCliApp(config);
-  if (!target) return false;
-  target.app.users = cloned;
-  const tmpPath = `${larkCliTargetConfigFile}.tmp`;
-  fs.writeFileSync(tmpPath, `${JSON.stringify(target.raw, null, 2)}\n`, { mode: 0o600 });
-  fs.renameSync(tmpPath, larkCliTargetConfigFile);
-  return true;
-}
-
-function hasLegacyStrictLarkCliRuntime(config: LocalServiceConfig): boolean {
-  const target = readTargetLarkCliApp(config);
-  if (!target) return false;
-  return target.app.strictMode === 'bot' || target.app.defaultAs === 'bot';
-}
-
-export function resetLegacyStrictLarkCliRuntimeForSetup(config: LocalServiceConfig = loadStartupConfig()): boolean {
-  // 旧版 setup 会把私有 lark-cli workspace 绑定成 bot-only。
-  // 这个策略会在 OAuth 成功后继续拒绝显式 `--as user` 命令，
-  // 所以下一次交互式 setup 必须从头重建隔离 runtime。
-  if (!hasLegacyStrictLarkCliRuntime(config)) return false;
-  fs.rmSync(larkCliRuntimeDir, { recursive: true, force: true });
-  return true;
-}
-
-function larkCliIdentityPolicyCommands(hasUser: boolean, options: LarkCliRuntimeConfigOptions = {}): string[][] {
-  void hasUser;
-  void options;
-  // Setup explicitly asks the user to authorize CodeLark's private lark-cli
-  // runtime. Bridge startup must preserve that user-capable policy; when no
-  // user token exists, lark-cli should report that naturally instead of strict
-  // mode rejecting --as user before auth can be diagnosed.
-  return [
-    ['config', 'strict-mode', 'off'],
-    ['config', 'default-as', 'auto'],
-  ];
-}
-
-export async function applyLarkCliRuntimeIdentityPolicy(
-  hasUser: boolean,
-  options: LarkCliRuntimeConfigOptions = {},
-  config: LocalServiceConfig = loadStartupConfig(),
-): Promise<string | undefined> {
-  const env = buildLarkCliRuntimeEnv();
-  const preservedUsers = snapshotTargetLarkCliUsers(config);
-  for (const args of larkCliIdentityPolicyCommands(hasUser, options)) {
-    const result = await runBundledLarkCli(args, env);
-    if (result.code !== 0) {
-      restoreTargetLarkCliUsers(config, preservedUsers);
-      return formatLarkCliFailure(args, result);
-    }
-  }
-  restoreTargetLarkCliUsers(config, preservedUsers);
-  return undefined;
 }
 
 function resolveLarkCliScript(): string | null {
@@ -947,7 +678,6 @@ function formatLarkCliFailure(command: string[], result: { code: number; stdout:
 
 async function runBundledLarkCli(
   args: string[],
-  env: NodeJS.ProcessEnv,
 ): Promise<{ code: number; stdout: string; stderr: string }> {
   const script = resolveLarkCliScript();
   if (!script) {
@@ -960,84 +690,43 @@ async function runBundledLarkCli(
   return runCommand(process.execPath, [script, ...args], {
     cwd: packageRoot,
     env: {
-      ...process.env,
-      ...env,
+      ...buildStandardLarkCliEnv(),
       CODELARK_HOME,
     },
-    timeoutMs: LARK_CLI_BIND_TIMEOUT_MS,
+    timeoutMs: LARK_CLI_CHECK_TIMEOUT_MS,
   });
 }
 
-export async function ensureLarkCliRuntimeConfig(
+export async function warnIfLarkCliUserAuthMissing(
   config: LocalServiceConfig = loadStartupConfig(),
-  options: LarkCliRuntimeConfigOptions = {},
-): Promise<{
-  ready: boolean;
-  skipped: boolean;
-  sourceConfigFile?: string;
-  configDir: string;
-  warning?: string;
-}> {
-  ensureDirs();
-  const sourceConfigFile = writeLarkCliSourceProjection(config);
-  if (!sourceConfigFile) {
-    return {
-      ready: false,
-      skipped: true,
-      configDir: larkCliRuntimeDir,
-      warning: '未找到完整飞书/Lark App ID 和 App Secret，已跳过 lark-cli 运行环境初始化。',
-    };
-  }
+  options: {
+    runCheck?: () => Promise<{ code: number; stdout: string; stderr: string }>;
+    warn?: (message: string) => void;
+  } = {},
+): Promise<void> {
+  const hasEnabledFeishuChannel = (config.channels || [])
+    .some((channel) => channel.provider === 'feishu' && channel.enabled !== false);
+  if (!hasEnabledFeishuChannel) return;
 
-  const env = buildLarkCliRuntimeEnv();
-  // setup 随后就会申请用户 OAuth，所以 bind 阶段使用允许用户身份的预设。
-  // 如果当前还没有 user，再在下面临时收紧到 bot，避免永久把 workspace 锁死到 bot-only。
-  const bindArgs = ['config', 'bind', '--source', 'lark-channel', '--identity', 'user-default', '--force'];
-  const preservedUsers = snapshotTargetLarkCliUsers(config);
-  const bind = await runBundledLarkCli(bindArgs, env);
-  if (bind.code !== 0) {
-    const warning = formatLarkCliFailure(bindArgs, bind);
-    if (!isLarkCliKeychainFailure(warning) || !writePlainLarkCliTargetProjection(config)) {
-      restoreTargetLarkCliUsers(config, preservedUsers);
-      return {
-        ready: false,
-        skipped: false,
-        sourceConfigFile,
-        configDir: larkCliRuntimeDir,
-        warning,
-      };
-    }
+  const checkArgs = ['auth', 'check', '--scope', feishuSetupUserAuthScopeArgument()];
+  const runCheck = options.runCheck || (() => runBundledLarkCli(checkArgs));
+  const warn = options.warn || ((message: string) => console.warn(message));
+  try {
+    const result = await runCheck();
+    if (result.code === 0) return;
+    warn([
+      '[CodeLark] 全局 lark-cli（~/.lark-cli）缺少 CodeLark 所需的用户授权，请运行 `codelark setup` 完成授权。',
+      'bridge 已继续启动；缺少用户授权只影响需要用户身份的 lark-cli 功能。',
+      formatLarkCliFailure(checkArgs, result),
+    ].join('\n'));
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    warn([
+      '[CodeLark] 无法执行 lark-cli 用户授权检查，bridge 已继续启动。',
+      '如果需要用户身份的 lark-cli 功能，请确认 lark-cli 可用后运行 `codelark setup`。',
+      detail,
+    ].join('\n'));
   }
-  restoreTargetLarkCliUsers(config, preservedUsers);
-
-  const policyWarning = await applyLarkCliRuntimeIdentityPolicy(hasTargetLarkCliUsers(config), options, config);
-  if (policyWarning) {
-    return {
-      ready: false,
-      skipped: false,
-      sourceConfigFile,
-      configDir: larkCliRuntimeDir,
-      warning: policyWarning,
-    };
-  }
-
-  const verify = await runBundledLarkCli(['config', 'show'], env);
-  if (verify.code !== 0) {
-    return {
-      ready: false,
-      skipped: false,
-      sourceConfigFile,
-      configDir: larkCliRuntimeDir,
-      warning: formatLarkCliFailure(['config', 'show'], verify),
-    };
-  }
-
-  return {
-    ready: true,
-    skipped: false,
-    sourceConfigFile,
-    configDir: larkCliRuntimeDir,
-  };
 }
 
 function describeBridgeStartupPreflightFailure(channels: LocalServiceChannel[] | undefined): string | null {
@@ -1165,10 +854,7 @@ export async function startBridge(options: ServiceConfigOverrideOptions = {}): P
       throw new Error(`Daemon bundle not found at ${daemonEntry}. Run npm run build first.`);
     }
 
-    const larkCliRuntime = await ensureLarkCliRuntimeConfig(config);
-    if (larkCliRuntime.warning) {
-      console.warn(`[CodeLark] ${larkCliRuntime.warning}`);
-    }
+    await warnIfLarkCliUserAuthMissing(config);
 
     const stdoutFd = fs.openSync(path.join(logsDir, 'bridge-launcher.out.log'), 'a');
     const stderrFd = fs.openSync(path.join(logsDir, 'bridge-launcher.err.log'), 'a');
@@ -1256,20 +942,7 @@ export const _testOnly = {
   buildUiServerEnv,
   loadStartupProjection,
   loadStartupConfig,
-  applyLarkCliRuntimeIdentityPolicy,
-  buildLarkCliRuntimeEnv,
-  ensureLarkCliShim,
-  isLarkCliKeychainFailure,
-  prependPathEntry,
-  writeLarkCliSourceProjection,
-  writePlainLarkCliTargetProjection,
-  hasTargetLarkCliUsers,
-  hasLegacyStrictLarkCliRuntime,
-  snapshotTargetLarkCliUsers,
-  restoreTargetLarkCliUsers,
-  larkCliIdentityPolicyCommands,
-  resetLegacyStrictLarkCliRuntimeForSetup,
-  readTargetLarkCliApp,
+  warnIfLarkCliUserAuthMissing,
   primaryBridgeAutostartTaskName,
   buildBridgeAutostartStatusScript,
   buildInstallBridgeAutostartScript,

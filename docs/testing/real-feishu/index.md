@@ -48,7 +48,7 @@ CODELARK_REAL_FEISHU_E2E=1 npm run real:feishu:e2e -- \
 
 脚本会在真正清理测试群、启动临时 bridge、创建群或发送消息前先运行 `lark-cli auth status --verify` 做用户授权 preflight。真实发送必须使用 `--launch-bridge` 启动隔离 bridge；触发消息、验证读取和测试群清理走当前测试账号的 `lark-cli --as user` 授权环境，不把 user token 复制到隔离 bridge HOME。未传 `--chat-id` 时，harness 会直接复用产品 `/new` 背后的 new-session use case 创建初始测试群，走同一套 adapter `createGroupChat`、ownerUserId、binding、审计和建群通知逻辑；不保留 `--create-chat`、`--source-chat-id` 或 lark-cli 直接建群兼容路径。生产 `/new` 和云文档 `/new` 也必须能确定当前操作者 open_id，否则直接拒绝建群，避免创建用户无法管理的 bot-owned 群。
 
-当 host 机器上的 `lark-cli` 已经对同一个 test app 完成用户授权时，harness 会直接使用该授权环境完成用户侧动作，让“当前账号作为测试、只换隔离 bridge”的路径不需要重复授权。隔离 `--runtime-home` 只保存 bridge 运行所需的 test app bot 配置；复制 user OAuth token 会造成 refresh token 失效风险，因此禁止作为默认路径。
+当 host 机器上的 `lark-cli` 已经对同一个 test app 完成用户授权时，harness 会直接使用该授权环境完成用户侧动作，让“当前账号作为测试、只换隔离 bridge”的路径不需要重复授权。bridge 侧不再维护任何私有 lark-cli runtime：隔离 bridge 不注入 `LARK_CHANNEL_CONFIG` / `LARKSUITE_CLI_CONFIG_DIR`，也不读写用户侧 lark-cli 授权；复制 user OAuth token 会造成 refresh token 失效风险，因此禁止作为默认路径。
 
 启动隔离 bridge 时，测试 App 不能和任何正在运行的 CodeLark bridge 使用同一个 Feishu App。飞书长连接消息采用集群随机分流而不是广播；同一个 App 同时跑两个 bridge 时，一组用户消息可能被不同实例拆分消费。harness 会在发送前检查当前用户目录下所有 `.codelark*` 实例的运行状态和 App ID；Linux 还会从存活进程声明的 `CODELARK_HOME` 补充候选，因此 `/tmp` 下手动启动的隔离 bridge 也不能漏过。补 canonical 报告时应使用真正空闲的测试 App，或由实例所有者明确停止/切走冲突 bridge；不提供跳过同 App 检查、重发消息或增加等待的兼容开关。
 
@@ -62,7 +62,7 @@ CODELARK_REAL_FEISHU_TEST_APP_SECRET=xxx
 CODELARK_REAL_FEISHU_TEST_SITE=feishu
 ```
 
-如果 test app 的 user OAuth 放在独立 lark-cli HOME，而不是当前 shell 的默认 `~/.lark-cli`，可以在同一个 env 文件里显式声明用户侧 lark-cli 环境；harness 会用这些路径运行 preflight、发消息、读消息、建群和删群，但不会复制 user token：
+如果 test app 的 user OAuth 放在独立 lark-cli HOME，而不是当前 shell 的默认 `~/.lark-cli`，可以在同一个 env 文件里显式声明用户侧 lark-cli 环境；harness 会用这些路径运行 preflight、发消息、读消息、建群和删群，但不会复制 user token。这里的 `LARKSUITE_CLI_CONFIG_DIR` 是 lark-cli 原生的配置目录覆盖能力，只作用于 harness 的用户侧命令，与 bridge 无关：
 
 ```text
 CODELARK_REAL_FEISHU_AUTH_HOME=/home/me/.codelark/real-feishu-e2e/test-app-auth

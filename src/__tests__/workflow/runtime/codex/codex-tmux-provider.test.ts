@@ -75,32 +75,37 @@ describe('codex-tmux-provider', () => {
     assert.equal(isTruthyEnv(undefined), false);
   });
 
-  it('builds the Codex TUI env by inheriting source env without legacy key translation', () => {
-    const runtimeBin = path.join(process.env.CODELARK_HOME!, 'runtime', 'bin');
+  it('builds the Codex TUI env without legacy lark-cli overrides', () => {
     const sourcePath = ['/usr/bin', '/bin'].join(path.delimiter);
     const env = buildCodexTuiEnv({
       PATH: sourcePath,
       HOME: '/Users/tester',
       CODELARK_CODEX_API_KEY: 'legacy-key',
+      LARK_CHANNEL: '1',
       LARK_CHANNEL_HOME: '/Users/tester/.codelark',
+      LARK_CHANNEL_CONFIG: '/Users/tester/.codelark/runtime/lark-cli-source/config.json',
+      LARKSUITE_CLI_CONFIG_DIR: '/Users/tester/.codelark/runtime/lark-cli',
       OPENAI_API_KEY: 'official-key',
     });
 
-    assert.equal(env.PATH, [runtimeBin, '/usr/bin', '/bin'].join(path.delimiter));
+    assert.equal(env.PATH, sourcePath);
     assert.equal(env.HOME, '/Users/tester');
     assert.equal(env.OPENAI_API_KEY, 'official-key');
     assert.equal(env.CODELARK_CODEX_API_KEY, 'legacy-key');
-    assert.equal(env.LARK_CHANNEL_HOME, '/Users/tester/.codelark');
+    assert.equal(env.LARK_CHANNEL, undefined);
+    assert.equal(env.LARK_CHANNEL_HOME, undefined);
+    assert.equal(env.LARK_CHANNEL_CONFIG, undefined);
+    assert.equal(env.LARKSUITE_CLI_CONFIG_DIR, undefined);
     assert.equal(env.CODEX_API_KEY, undefined);
   });
 
-  it('deduplicates the CodeLark runtime bin when building the Codex TUI env', () => {
+  it('removes the deprecated CodeLark lark-cli shim from inherited PATH', () => {
     const runtimeBin = path.join(process.env.CODELARK_HOME!, 'runtime', 'bin');
     const env = buildCodexTuiEnv({
       PATH: ['/usr/bin', runtimeBin, '/bin'].join(path.delimiter),
     });
 
-    assert.equal(env.PATH, [runtimeBin, '/usr/bin', '/bin'].join(path.delimiter));
+    assert.equal(env.PATH, ['/usr/bin', '/bin'].join(path.delimiter));
   });
 
   it('uses env fallbacks when optional integer values are unset or empty', () => {

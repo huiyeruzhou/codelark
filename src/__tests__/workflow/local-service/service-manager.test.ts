@@ -10,9 +10,9 @@ import {
   buildDeferredGlobalNpmUninstallLaunch,
   installCodexIntegration,
   isCodexIntegrationInstalled,
+  warnIfLarkCliUserAuthMissing,
 } from '../../../local-service/manager.js';
 import { tryAcquireBridgeInstanceLock } from '../../../local-service/instance-lock.js';
-import type { Config } from '../../../configuration/legacy-types.js';
 
 describe('buildDeferredGlobalNpmUninstallLaunch', () => {
   it('uses npm.cmd on Windows launchers', () => {
@@ -158,7 +158,7 @@ describe('service-manager bridge startup failure messaging', () => {
   });
 });
 
-describe('service-manager lark-cli runtime environment', () => {
+describe('service-manager startup config and daemon env', () => {
   it('loads startup preflight config from ConfigService instead of legacy env files', () => {
     const home = process.env.CODELARK_HOME!;
     const configTomlPath = path.join(home, 'config.toml');
@@ -216,7 +216,7 @@ describe('service-manager lark-cli runtime environment', () => {
     }
   });
 
-  it('builds daemon env by inheriting process env without projecting config values and with CodeLark lark-cli runtime', () => {
+  it('builds daemon env by inheriting process env without any lark-cli isolation', () => {
     const home = process.env.CODELARK_HOME!;
     const configTomlPath = path.join(home, 'config.toml');
     const configEnvPath = path.join(home, 'config.env');
@@ -231,8 +231,11 @@ describe('service-manager lark-cli runtime environment', () => {
       'CODELARK_KIMI_PROVIDER',
       'CODELARK_FEISHU_APP_ID',
       'CODELARK_ENABLED_CHANNELS',
+      'LARK_CHANNEL',
       'LARK_CHANNEL_HOME',
+      'LARK_CHANNEL_CONFIG',
       'LARKSUITE_CLI_CONFIG_DIR',
+      'PATH',
       'CLAUDECODE',
     ];
     const previousEnv = new Map(envKeys.map((key) => [key, process.env[key]]));
@@ -241,6 +244,11 @@ describe('service-manager lark-cli runtime environment', () => {
       for (const key of envKeys) delete process.env[key];
       process.env.CODELARK_AGENT = 'user-env-agent';
       process.env.CLAUDECODE = 'legacy-flag';
+      process.env.LARK_CHANNEL = '1';
+      process.env.LARK_CHANNEL_HOME = home;
+      process.env.LARK_CHANNEL_CONFIG = path.join(home, 'runtime', 'lark-cli-source', 'config.json');
+      process.env.LARKSUITE_CLI_CONFIG_DIR = path.join(home, 'runtime', 'lark-cli');
+      process.env.PATH = [path.join(home, 'runtime', 'bin'), '/usr/bin', '/bin'].join(path.delimiter);
       fs.writeFileSync(configTomlPath, [
         'schema_version = 2',
         '',
@@ -286,19 +294,14 @@ describe('service-manager lark-cli runtime environment', () => {
       assert.equal(env.CODELARK_KIMI_PROVIDER, undefined);
       assert.equal(env.CODELARK_FEISHU_APP_ID, undefined);
       assert.equal(env.CODELARK_ENABLED_CHANNELS, undefined);
-      assert.equal(env.LARK_CHANNEL, '1');
-      assert.equal(env.LARK_CHANNEL_HOME, process.env.CODELARK_HOME);
-      assert.equal(
-        env.LARK_CHANNEL_CONFIG,
-        path.join(process.env.CODELARK_HOME!, 'runtime', 'lark-cli-source', 'config.json'),
-      );
-      assert.equal(
-        env.LARKSUITE_CLI_CONFIG_DIR,
-        path.join(process.env.CODELARK_HOME!, 'runtime', 'lark-cli'),
-      );
-      const firstPath = (env.PATH || '').split(path.delimiter).filter(Boolean)[0];
-      assert.equal(firstPath, path.join(process.env.CODELARK_HOME!, 'runtime', 'bin'));
-      assert.equal(fs.existsSync(path.join(firstPath, process.platform === 'win32' ? 'lark-cli.cmd' : 'lark-cli')), true);
+      assert.equal(env.LARK_CHANNEL, undefined);
+      assert.equal(env.LARK_CHANNEL_HOME, undefined);
+      assert.equal(env.LARK_CHANNEL_CONFIG, undefined);
+      assert.equal(env.LARKSUITE_CLI_CONFIG_DIR, undefined);
+      const runtimeBinDir = path.join(process.env.CODELARK_HOME!, 'runtime', 'bin');
+      const pathEntries = (env.PATH || '').split(path.delimiter).filter(Boolean);
+      assert.equal(pathEntries.includes(runtimeBinDir), false);
+      assert.notEqual(pathEntries[0], runtimeBinDir);
       assert.equal(env.CLAUDECODE, undefined);
     } finally {
       if (previousToml === null) fs.rmSync(configTomlPath, { force: true });
@@ -416,312 +419,92 @@ describe('service-manager lark-cli runtime environment', () => {
     );
   });
 
-  it('builds bridge-local lark-cli environment variables', () => {
-    const env = _testOnly.buildLarkCliRuntimeEnv();
+  it('does not maintain an isolated lark-cli runtime anymore', () => {
+    const managerSource = fs.readFileSync(path.join(process.cwd(), 'src', 'local-service', 'manager.ts'), 'utf-8');
 
-    assert.equal(env.LARK_CHANNEL, '1');
-    assert.equal(env.LARK_CHANNEL_HOME, process.env.CODELARK_HOME);
-    assert.equal(
-      env.LARK_CHANNEL_CONFIG,
-      path.join(process.env.CODELARK_HOME!, 'runtime', 'lark-cli-source', 'config.json'),
-    );
-    assert.equal(
-      env.LARKSUITE_CLI_CONFIG_DIR,
-      path.join(process.env.CODELARK_HOME!, 'runtime', 'lark-cli'),
-    );
+    assert.doesNotMatch(managerSource, /LARKSUITE_CLI_CONFIG_DIR/);
+    assert.doesNotMatch(managerSource, /LARK_CHANNEL_CONFIG/);
+    assert.doesNotMatch(managerSource, /lark-cli-source/);
+    assert.doesNotMatch(managerSource, /'config', 'bind'/);
+    assert.doesNotMatch(managerSource, /ensureLarkCliRuntimeConfig/);
+    assert.doesNotMatch(managerSource, /ensureLarkCliShim/);
+    assert.doesNotMatch(managerSource, /runtime', 'bin'/);
   });
+});
 
-  it('prepends the CodeLark lark-cli shim directory without duplicating PATH entries', () => {
-    const shimDir = _testOnly.ensureLarkCliShim();
-    const existingPath = ['/usr/bin', shimDir, '/bin'].join(path.delimiter);
-    const nextPath = _testOnly.prependPathEntry(existingPath, shimDir);
+describe('service-manager warnIfLarkCliUserAuthMissing', () => {
+  const feishuConfig = {
+    channels: [{
+      id: 'feishu-default',
+      provider: 'feishu',
+      enabled: true,
+      config: { appId: 'cli_test', appSecret: 'secret', site: 'feishu' as const },
+    }],
+  };
 
-    assert.equal(nextPath, [shimDir, '/usr/bin', '/bin'].join(path.delimiter));
-    assert.equal(fs.existsSync(path.join(shimDir, process.platform === 'win32' ? 'lark-cli.cmd' : 'lark-cli')), true);
-  });
-
-  it('writes a lark-cli source projection from the configured Feishu channel', () => {
-    const config: Config = {
-      runtime: 'codex',
-      defaultMode: 'normal',
-      enabledChannels: ['feishu'],
-      channels: [{
-        id: 'feishu-default',
-        alias: '飞书',
-        provider: 'feishu',
-        enabled: true,
-        createdAt: '2026-06-05T00:00:00.000Z',
-        updatedAt: '2026-06-05T00:00:00.000Z',
-        config: {
-          appId: 'cli_test_app',
-          appSecret: 'test-secret',
-          site: 'lark',
-        },
-      }],
-    };
-    const sourcePath = _testOnly.writeLarkCliSourceProjection(config);
-
-    assert.equal(
-      sourcePath,
-      path.join(process.env.CODELARK_HOME!, 'runtime', 'lark-cli-source', 'config.json'),
-    );
-    const parsed = JSON.parse(fs.readFileSync(sourcePath!, 'utf-8'));
-    assert.deepEqual(parsed, {
-      accounts: {
-        app: {
-          id: 'cli_test_app',
-          secret: 'test-secret',
-          tenant: 'lark',
-        },
+  it('stays silent when the global lark-cli auth check passes', async () => {
+    const warnings: string[] = [];
+    let checks = 0;
+    await warnIfLarkCliUserAuthMissing(feishuConfig, {
+      runCheck: async () => {
+        checks += 1;
+        return { code: 0, stdout: 'ok', stderr: '' };
       },
+      warn: (message) => warnings.push(message),
     });
+
+    assert.equal(checks, 1);
+    assert.deepEqual(warnings, []);
   });
 
-  it('does not import users from the default local lark-cli config', () => {
-    const config: Config = {
-      runtime: 'codex',
-      defaultMode: 'normal',
-      enabledChannels: ['feishu'],
-      channels: [{
-        id: 'feishu-default',
-        alias: '飞书',
-        provider: 'feishu',
-        enabled: true,
-        createdAt: '2026-06-05T00:00:00.000Z',
-        updatedAt: '2026-06-05T00:00:00.000Z',
-        config: {
-          appId: 'cli_user_app',
-          appSecret: 'test-secret',
-          site: 'feishu',
-        },
-      }],
-    };
-    const localConfigPath = path.join(os.homedir(), '.lark-cli', 'config.json');
-    const targetConfigPath = path.join(process.env.CODELARK_HOME!, 'runtime', 'lark-cli', 'lark-channel', 'config.json');
-    fs.mkdirSync(path.dirname(localConfigPath), { recursive: true });
-    fs.mkdirSync(path.dirname(targetConfigPath), { recursive: true });
-    fs.writeFileSync(localConfigPath, JSON.stringify({
-      apps: [{
-        appId: 'cli_user_app',
-        brand: 'feishu',
-        users: [{ userOpenId: 'ou_user', userName: 'Tester' }],
-      }],
-    }), 'utf-8');
-    fs.writeFileSync(targetConfigPath, JSON.stringify({
-      apps: [{
-        appId: 'cli_user_app',
-        brand: 'feishu',
-      }],
-    }), 'utf-8');
+  it('warns and never throws when the global lark-cli auth check fails', async () => {
+    const warnings: string[] = [];
+    await warnIfLarkCliUserAuthMissing(feishuConfig, {
+      runCheck: async () => ({ code: 1, stdout: '', stderr: 'missing user authorization' }),
+      warn: (message) => warnings.push(message),
+    });
 
-    assert.equal(_testOnly.hasTargetLarkCliUsers(config), false);
-    assert.equal(_testOnly.readTargetLarkCliApp(config)?.app.users, undefined);
+    assert.equal(warnings.length, 1);
+    assert.match(warnings[0]!, /codelark setup/);
+    assert.match(warnings[0]!, /missing user authorization/);
   });
 
-  it('prefers the lark-cli app entry that contains users when duplicate app records exist', () => {
-    const config: Config = {
-      runtime: 'codex',
-      defaultMode: 'normal',
-      enabledChannels: ['feishu'],
-      channels: [{
-        id: 'feishu-default',
-        alias: '飞书',
-        provider: 'feishu',
-        enabled: true,
-        createdAt: '2026-06-05T00:00:00.000Z',
-        updatedAt: '2026-06-05T00:00:00.000Z',
-        config: {
-          appId: 'cli_duplicate_app',
-          appSecret: 'test-secret',
-          site: 'feishu',
-        },
-      }],
-    };
-    const targetConfigPath = path.join(process.env.CODELARK_HOME!, 'runtime', 'lark-cli', 'lark-channel', 'config.json');
-    fs.mkdirSync(path.dirname(targetConfigPath), { recursive: true });
-    fs.writeFileSync(targetConfigPath, JSON.stringify({
-      apps: [
-        {
-          appId: 'cli_duplicate_app',
-          brand: 'feishu',
-          defaultAs: 'bot',
-          strictMode: 'bot',
-        },
-        {
-          appId: 'cli_duplicate_app',
-          brand: 'feishu',
-          defaultAs: 'auto',
-          strictMode: 'off',
-          users: [{ userOpenId: 'ou_user', userName: 'Tester' }],
-        },
-      ],
-    }), 'utf-8');
+  it('degrades to a warning when lark-cli is unavailable', async () => {
+    const warnings: string[] = [];
+    await warnIfLarkCliUserAuthMissing(feishuConfig, {
+      runCheck: async () => ({ code: 127, stdout: '', stderr: 'Bundled @larksuite/cli entry script was not found.' }),
+      warn: (message) => warnings.push(message),
+    });
 
-    assert.equal(_testOnly.hasTargetLarkCliUsers(config), true);
-    assert.equal(_testOnly.hasLegacyStrictLarkCliRuntime(config), false);
-    assert.equal((_testOnly.readTargetLarkCliApp(config)?.app.users as unknown[] | undefined)?.length, 1);
-  });
+    assert.equal(warnings.length, 1);
+    assert.match(warnings[0]!, /codelark setup/);
 
-  it('can rewrite the bridge-local lark-cli target with a plain app secret when keychain is unavailable', () => {
-    const config: Config = {
-      runtime: 'codex',
-      defaultMode: 'normal',
-      enabledChannels: ['feishu'],
-      channels: [{
-        id: 'feishu-default',
-        alias: '飞书',
-        provider: 'feishu',
-        enabled: true,
-        createdAt: '2026-06-05T00:00:00.000Z',
-        updatedAt: '2026-06-05T00:00:00.000Z',
-        config: {
-          appId: 'cli_keychain_blocked',
-          appSecret: 'plain-secret',
-          site: 'feishu',
-        },
-      }],
-    };
-    const targetConfigPath = path.join(process.env.CODELARK_HOME!, 'runtime', 'lark-cli', 'lark-channel', 'config.json');
-    fs.mkdirSync(path.dirname(targetConfigPath), { recursive: true });
-    fs.writeFileSync(targetConfigPath, JSON.stringify({
-      apps: [{
-        appId: 'cli_keychain_blocked',
-        appSecret: {
-          source: 'keychain',
-          id: 'appsecret_cli_keychain_blocked',
-        },
-        brand: 'feishu',
-        defaultAs: 'bot',
-        strictMode: 'bot',
-      }],
-    }), 'utf-8');
-
-    assert.equal(_testOnly.isLarkCliKeychainFailure('keychain Set failed: use file: reference in config to bypass keychain'), true);
-    assert.equal(_testOnly.writePlainLarkCliTargetProjection(config), true);
-
-    const parsed = JSON.parse(fs.readFileSync(targetConfigPath, 'utf-8'));
-    assert.deepEqual(parsed.apps, [{
-      appId: 'cli_keychain_blocked',
-      appSecret: 'plain-secret',
-      brand: 'feishu',
-      defaultAs: 'bot',
-      strictMode: 'bot',
-    }]);
-  });
-
-  it('restores private lark-cli users after bind rewrites the current app entry', () => {
-    const config: Config = {
-      runtime: 'codex',
-      defaultMode: 'normal',
-      enabledChannels: ['feishu'],
-      channels: [{
-        id: 'feishu-default',
-        alias: '飞书',
-        provider: 'feishu',
-        enabled: true,
-        createdAt: '2026-06-05T00:00:00.000Z',
-        updatedAt: '2026-06-05T00:00:00.000Z',
-        config: {
-          appId: 'cli_bind_user_app',
-          appSecret: 'plain-secret',
-          site: 'feishu',
-        },
-      }],
-    };
-    const targetConfigPath = path.join(process.env.CODELARK_HOME!, 'runtime', 'lark-cli', 'lark-channel', 'config.json');
-    fs.mkdirSync(path.dirname(targetConfigPath), { recursive: true });
-    fs.writeFileSync(targetConfigPath, JSON.stringify({
-      apps: [{
-        appId: 'cli_bind_user_app',
-        appSecret: 'plain-secret',
-        brand: 'feishu',
-        defaultAs: 'auto',
-        strictMode: 'off',
-        users: [{ userOpenId: 'ou_user', userName: 'Tester' }],
-      }],
-    }), 'utf-8');
-
-    const users = _testOnly.snapshotTargetLarkCliUsers(config);
-    fs.writeFileSync(targetConfigPath, JSON.stringify({
-      apps: [{
-        appId: 'cli_bind_user_app',
-        appSecret: {
-          source: 'keychain',
-          id: 'appsecret:cli_bind_user_app',
-        },
-        brand: 'feishu',
-        defaultAs: 'user',
-        strictMode: 'off',
-        users: null,
-      }],
-    }), 'utf-8');
-
-    assert.equal(_testOnly.restoreTargetLarkCliUsers(config, users), true);
-
-    const parsed = JSON.parse(fs.readFileSync(targetConfigPath, 'utf-8'));
-    assert.deepEqual(parsed.apps, [{
-      appId: 'cli_bind_user_app',
-      appSecret: {
-        source: 'keychain',
-        id: 'appsecret:cli_bind_user_app',
+    const thrownWarnings: string[] = [];
+    await warnIfLarkCliUserAuthMissing(feishuConfig, {
+      runCheck: async () => {
+        throw new Error('spawn failed');
       },
-      brand: 'feishu',
-      defaultAs: 'user',
-      strictMode: 'off',
-      users: [{ userOpenId: 'ou_user', userName: 'Tester' }],
-    }]);
+      warn: (message) => thrownWarnings.push(message),
+    });
+
+    assert.equal(thrownWarnings.length, 1);
+    assert.match(thrownWarnings[0]!, /无法执行 lark-cli 用户授权检查/);
+    assert.match(thrownWarnings[0]!, /spawn failed/);
   });
 
-  it('detects and resets legacy bot-only strict lark-cli runtime for setup', () => {
-    const config: Config = {
-      runtime: 'codex',
-      defaultMode: 'normal',
-      enabledChannels: ['feishu'],
-      channels: [{
-        id: 'feishu-default',
-        alias: '飞书',
-        provider: 'feishu',
-        enabled: true,
-        createdAt: '2026-06-05T00:00:00.000Z',
-        updatedAt: '2026-06-05T00:00:00.000Z',
-        config: {
-          appId: 'cli_legacy_strict',
-          appSecret: 'test-secret',
-          site: 'feishu',
-        },
-      }],
-    };
-    const targetConfigPath = path.join(process.env.CODELARK_HOME!, 'runtime', 'lark-cli', 'lark-channel', 'config.json');
-    fs.mkdirSync(path.dirname(targetConfigPath), { recursive: true });
-    fs.writeFileSync(targetConfigPath, JSON.stringify({
-      apps: [{
-        appId: 'cli_legacy_strict',
-        brand: 'feishu',
-        defaultAs: 'bot',
-        strictMode: 'bot',
-        users: [{ userOpenId: 'ou_user', userName: 'Tester' }],
-      }],
-    }), 'utf-8');
+  it('skips the check entirely when no enabled feishu channel exists', async () => {
+    const warnings: string[] = [];
+    let checks = 0;
+    await warnIfLarkCliUserAuthMissing({ channels: [] }, {
+      runCheck: async () => {
+        checks += 1;
+        return { code: 0, stdout: '', stderr: '' };
+      },
+      warn: (message) => warnings.push(message),
+    });
 
-    assert.equal(_testOnly.hasLegacyStrictLarkCliRuntime(config), true);
-    assert.equal(_testOnly.resetLegacyStrictLarkCliRuntimeForSetup(config), true);
-    assert.equal(fs.existsSync(targetConfigPath), false);
-    assert.equal(_testOnly.hasLegacyStrictLarkCliRuntime(config), false);
-  });
-
-  it('keeps the private lark-cli runtime user-capable before and after user authorization', () => {
-    assert.deepEqual(_testOnly.larkCliIdentityPolicyCommands(false, { allowUserAuthorization: true }), [
-      ['config', 'strict-mode', 'off'],
-      ['config', 'default-as', 'auto'],
-    ]);
-    assert.deepEqual(_testOnly.larkCliIdentityPolicyCommands(false), [
-      ['config', 'strict-mode', 'off'],
-      ['config', 'default-as', 'auto'],
-    ]);
-    assert.deepEqual(_testOnly.larkCliIdentityPolicyCommands(true), [
-      ['config', 'strict-mode', 'off'],
-      ['config', 'default-as', 'auto'],
-    ]);
+    assert.equal(checks, 0);
+    assert.deepEqual(warnings, []);
   });
 });
 

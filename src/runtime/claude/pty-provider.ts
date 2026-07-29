@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import type { ClaudeExecutable } from '../options.js';
-import { CODELARK_HOME } from '../../configuration/paths.js';
+import { buildStandardLarkCliEnv } from '../../shared/lark-cli-env.js';
 import type { LLMProvider, StreamChatParams } from '../contracts.js';
 import { sseEvent } from '../sse.js';
 import {
@@ -10,7 +10,6 @@ import {
   prepareClaudeCodeRouterEnv,
 } from './code-router.js';
 import { resolveClaudeCliExecutable } from '../../runtime/codex/cli-executable.js';
-import { readPathEnv, writeCanonicalPathEnv } from '../path-env.js';
 import {
   listClaudeSessionJsonlFiles,
   summarizeClaudeSessionJsonl,
@@ -195,19 +194,11 @@ export function buildClaudePtyCommand(
 
 export function buildClaudePtyEnv(): Record<string, string> {
   const env: Record<string, string> = {};
-  for (const [key, value] of Object.entries(process.env)) {
+  for (const [key, value] of Object.entries(buildStandardLarkCliEnv())) {
     if (value !== undefined) env[key] = value;
   }
-  writeCanonicalPathEnv(env, prependLarkCliRuntimeBin(readPathEnv(env)));
   env.TERM = env.TERM || 'xterm-256color';
   return env;
-}
-
-function prependLarkCliRuntimeBin(pathValue: string | undefined): string {
-  const binDir = path.join(CODELARK_HOME, 'runtime', 'bin');
-  const parts = (pathValue || '').split(path.delimiter).filter(Boolean);
-  const withoutBin = parts.filter((entry) => path.resolve(entry) !== path.resolve(binDir));
-  return [binDir, ...withoutBin].join(path.delimiter);
 }
 
 async function waitForClaudePtyBuffer(

@@ -24,7 +24,7 @@ CodeLark 的常见稳态由几个进程或外部运行体组成。
 | Claude tmux session | `src/runtime/claude/tmux-provider.ts`、`src/bridge/tmux/*` | tmux server + Bridge daemon 编排 | tmux session、Claude JSONL | 默认 Claude Code provider；在 tmux 中运行 Claude Code TUI，Bridge 通过 tmux CLI 注入输入和捕获屏幕。 |
 | Claude pty child | `src/runtime/claude/pty-provider.ts` | Bridge daemon 内的 Claude pty provider | 内存中的 pty session map、Claude JSONL | 在 pty 中运行 Claude Code，注入 prompt，读取屏幕和 JSONL mirror。 |
 
-`codelark run` 会尝试启动 UI server 和 Bridge daemon；`codelark start` 只启动 Bridge daemon。启动 Bridge 前，`src/local-service/manager.ts` 会为当前 CodeLark 配置初始化专属 lark-cli 运行环境，并把 `LARK_CHANNEL_CONFIG` / `LARKSUITE_CLI_CONFIG_DIR` 注入 daemon。Linux 下 `scripts/daemon.sh start` 使用 `setsid` 或 `nohup` 启动 `dist/daemon.mjs`，macOS 走 launchctl，Windows 走 PowerShell supervisor。
+`codelark run` 会尝试启动 UI server 和 Bridge daemon；`codelark start` 只启动 Bridge daemon。启动 Bridge 前，`src/local-service/manager.ts` 不再初始化专属 lark-cli 运行环境，也不注入 `LARK_CHANNEL_CONFIG` / `LARKSUITE_CLI_CONFIG_DIR`；唯一的 lark-cli 动作是对全局 `~/.lark-cli` 做一次只读 `auth check` 诊断警告。Linux 下 `scripts/daemon.sh start` 使用 `setsid` 或 `nohup` 启动 `dist/daemon.mjs`，macOS 走 launchctl，Windows 走 PowerShell supervisor；这些入口可能绕过 manager，因此 daemon 自身会在 `main()` 最前面再次应用同一标准环境投影，确保所有启动方式都不会把旧私有 lark-cli 环境传给 runtime。
 
 ## Bridge Daemon 启动生命周期
 
