@@ -671,6 +671,58 @@ describe('codex tmux runtime', () => {
     }
   });
 
+  it('retries one swallowed Claude trust confirmation while the same prompt remains visible', async () => {
+    const oldTimeout = process.env.CODELARK_CLAUDE_TMUX_READY_TIMEOUT_MS;
+    const oldPoll = process.env.CODELARK_CLAUDE_TMUX_READY_POLL_MS;
+    try {
+      process.env.CODELARK_CLAUDE_TMUX_READY_TIMEOUT_MS = '5000';
+      process.env.CODELARK_CLAUDE_TMUX_READY_POLL_MS = '50';
+      const trustScreen = [
+        'Quick safety check',
+        'Yes, I trust this folder',
+        'Enter to confirm',
+      ].join('\n');
+      let sendCount = 0;
+      let promptCount = 0;
+      const core: TmuxCore = {
+        commandPreview: (args) => ['tmux', ...args].join(' '),
+        hasSession: async (name) => ({ exists: true, command: `tmux has-session -t ${name}` }),
+        killSession: async (name) => `tmux kill-session -t ${name}`,
+        listSessions: async () => ({ sessions: [], command: 'tmux list-sessions' }),
+        ensureDetachedSession: async () => ({ existed: false, commands: [] }),
+        capturePane: async () => ({
+          command: 'tmux capture-pane -t claude_swallowed_trust',
+          screen: sendCount >= 2 ? 'Claude Code v2.1.160\n❯ \n? for shortcuts' : trustScreen,
+        }),
+        sendActions: async () => {
+          sendCount += 1;
+          return { commands: ['tmux send-keys -t claude_swallowed_trust Enter'] };
+        },
+        sendInterrupt: async () => '',
+        injectPromptIntoPane: async () => ({ commands: [] }),
+      };
+
+      const result = await waitForRuntimeTmuxReady({
+        runtime: 'claude',
+        sessionName: 'claude_swallowed_trust',
+        core,
+        afterSelectionDelayMs: 0,
+        onSelectionPrompt: () => {
+          promptCount += 1;
+        },
+      });
+
+      assert.equal(result.ready, true);
+      assert.equal(promptCount, 1, 'the resolver remains the single lifecycle owner');
+      assert.equal(sendCount, 2, 'the same owner retries only after the unchanged prompt is observed');
+    } finally {
+      if (oldTimeout === undefined) delete process.env.CODELARK_CLAUDE_TMUX_READY_TIMEOUT_MS;
+      else process.env.CODELARK_CLAUDE_TMUX_READY_TIMEOUT_MS = oldTimeout;
+      if (oldPoll === undefined) delete process.env.CODELARK_CLAUDE_TMUX_READY_POLL_MS;
+      else process.env.CODELARK_CLAUDE_TMUX_READY_POLL_MS = oldPoll;
+    }
+  });
+
   it('inspects runtime tmux sessions and reports selection prompts', async () => {
     const core: TmuxCore = {
       commandPreview: (args) => ['tmux', ...args].join(' '),

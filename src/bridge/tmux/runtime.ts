@@ -598,6 +598,8 @@ export async function waitForRuntimeTmuxReady(params: {
   let paneDead: RuntimeTmuxPaneDead | undefined;
   let selectionPrompt: RuntimeTmuxSelectionPrompt | undefined;
   const handledSelectionFingerprints = new Set<string>();
+  const lastSelectionActionAt = new Map<string, number>();
+  const selectionActionRetryMs = 250;
   transitionRuntimeTmuxReadiness(machine, 'polling', 'readiness check started');
   while (Date.now() <= deadline) {
     try {
@@ -656,6 +658,27 @@ export async function waitForRuntimeTmuxReady(params: {
         const fingerprint = activeSelectionPrompt.runtime === 'codex'
           ? activeSelectionPrompt.prompt.fingerprint
           : `${activeSelectionPrompt.runtime}:${activeSelectionPrompt.kind}`;
+        const previousSelectionActionAt = lastSelectionActionAt.get(fingerprint);
+        if (
+          handledSelectionFingerprints.has(fingerprint)
+          && activeSelectionPrompt.runtime !== 'codex'
+          && previousSelectionActionAt !== undefined
+          && Date.now() - previousSelectionActionAt >= selectionActionRetryMs
+        ) {
+          const retried = await core.sendActions(captureTarget, [{ type: 'key', key: 'Enter' }]);
+          commands.push(...retried.commands);
+          lastSelectionActionAt.set(fingerprint, Date.now());
+          console.log('[tmux-runtime] Runtime tmux selection prompt remained after input; action retried:', {
+            event: 'tmux.runtime.selection.actions_retried',
+            runtime: params.runtime,
+            tmux_session: params.sessionName,
+            capture_target: captureTarget,
+            prompt_runtime: activeSelectionPrompt.runtime,
+            prompt_kind: activeSelectionPrompt.kind,
+            action_count: 1,
+            commands: retried.commands,
+          });
+        }
         if (!handledSelectionFingerprints.has(fingerprint)) {
           handledSelectionFingerprints.add(fingerprint);
           transitionRuntimeTmuxReadiness(machine, 'waiting_selection', 'selection prompt handed to resolver', {
@@ -724,6 +747,7 @@ export async function waitForRuntimeTmuxReady(params: {
                 const sent = await core.sendActions(captureTarget, actions);
                 commands.push(...sent.commands);
                 sentCommands = sent.commands;
+                lastSelectionActionAt.set(fingerprint, Date.now());
                 console.log('[tmux-runtime] Runtime tmux selection prompt actions sent:', {
                   event: 'tmux.runtime.selection.actions_sent',
                   runtime: params.runtime,
