@@ -40,7 +40,13 @@ import type {
   ScriptedModelReplyPlan,
 } from '../src/testing/real-feishu/codex-responses-proxy.js';
 import { serializeFailureError } from '../src/testing/real-feishu/failure-report.js';
+import { findLatestProviderStreamTerminalState } from '../src/testing/real-feishu/mirror-terminal.js';
 import { containsGeneratedReplyTexts } from '../src/testing/real-feishu/reply-evidence.js';
+import {
+  expectedScenarioChatFinalName,
+  findScenarioCreatedChatIdsInBindings,
+  scenarioChatNameMatchesRequested,
+} from '../src/testing/real-feishu/scenario-created-chat.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -66,6 +72,7 @@ interface CliOptions {
   stopTestBridge: boolean;
   launchBridge: boolean;
   fakeCcr: boolean;
+  fakeKimi: boolean;
   scriptedBasicDialogue: boolean;
   scriptedKimi: boolean;
   keepGroup: boolean;
@@ -107,6 +114,8 @@ interface CliOptions {
   fakeCcrResponseText: string;
   fakeCcrProxyBaseUrl?: string;
   fakeCcrPort?: number;
+  fakeKimiResponseText: string;
+  fakeKimiProxyBaseUrl?: string;
   codexProxyBaseUrl?: string;
 }
 
@@ -130,17 +139,19 @@ interface RuntimeEnvironmentPlan {
   kimiAuthSource: 'host-config-copy' | 'not-needed' | 'missing';
   kimiExecutableSource: 'scripted-fake-executable' | 'env-executable' | 'host-home-bin' | 'path';
   kimiExecutablePath?: string;
+  kimiExecutableVersion?: string;
   cursorAuthSource: 'verified-isolated-auth' | 'isolated-auth-unverified' | 'missing';
   cursorExecutableSource: 'env-executable' | 'host-home-bin' | 'path';
   cursorExecutablePath?: string;
   ccrConfigSource: 'fake-backend-json' | 'host-config-copy' | 'not-needed' | 'missing';
   fakeCcrProxyBaseUrl?: string;
   fakeCcrPort?: number;
+  fakeKimiProxyBaseUrl?: string;
   ccrPort?: number;
   codexProxyBaseUrl?: string;
 }
 
-interface LocalFakeCcrBackend {
+interface LocalFakeChatCompletionsBackend {
   baseUrl: string;
   requests: Array<{ method: string; url: string; rawBody: string }>;
   close(): Promise<void>;
@@ -204,6 +215,7 @@ interface ScenarioCreatedChatInfo {
   command: string;
   chatId: string;
   requestedName: string;
+  expectedFinalName: string;
   actualName?: string;
   ok: boolean;
   detail: string;
@@ -267,6 +279,7 @@ interface MessageObservation {
   expectedForbiddenTexts?: string[];
   expectedReplyMessageTypes?: string[];
   expectedReplyContentKeys?: string[];
+  streamKeysBefore?: string[];
   feishuMessages: unknown;
 }
 
@@ -1075,6 +1088,7 @@ const BOOLEAN_CLI_FLAGS = new Set([
   '--stop-test-bridge',
   '--launch-bridge',
   '--fake-ccr',
+  '--fake-kimi',
   '--scripted-basic-dialogue',
   '--scripted-kimi',
   '--keep-group',
@@ -1117,6 +1131,7 @@ const VALUE_CLI_OPTIONS = new Set([
   '--output',
   '--reports-dir',
   '--fake-ccr-response',
+  '--fake-kimi-response',
 ]);
 
 function validateCliArgs(argv: string[]): void {
@@ -1251,6 +1266,7 @@ function parseOptions(argv: string[]): CliOptions {
     'ccr',
   );
   const siteArg = valueArg(argv, '--feishu-site', process.env.CODELARK_REAL_FEISHU_TEST_SITE || 'feishu');
+  const defaultMessage = `CODELARK_REAL_FEISHU_${runIdToken(runId)}`;
   return {
     dryRun: hasFlag(argv, '--dry-run'),
     dumpOnly: hasFlag(argv, '--dump-only'),
@@ -1260,6 +1276,7 @@ function parseOptions(argv: string[]): CliOptions {
     stopTestBridge: hasFlag(argv, '--stop-test-bridge'),
     launchBridge,
     fakeCcr: hasFlag(argv, '--fake-ccr'),
+    fakeKimi: hasFlag(argv, '--fake-kimi'),
     scriptedBasicDialogue: hasFlag(argv, '--scripted-basic-dialogue'),
     scriptedKimi: hasFlag(argv, '--scripted-kimi'),
     keepGroup: hasFlag(argv, '--keep-group'),
@@ -1291,7 +1308,7 @@ function parseOptions(argv: string[]): CliOptions {
     commands: parseCommandList(valueArg(argv, '--commands', '')),
     chatId: valueArg(argv, '--chat-id', ''),
     workDir: valueArg(argv, '--workdir', DEFAULT_WORKSPACE_ROOT),
-    message: valueArg(argv, '--message', `real feishu e2e ${runId}`),
+    message: valueArg(argv, '--message', defaultMessage),
     codexModel: valueArg(argv, '--codex-model', process.env.CODELARK_REAL_FEISHU_CODEX_MODEL || 'gpt-5.5'),
     cursorModel: valueArg(argv, '--cursor-model', process.env.CODELARK_REAL_FEISHU_CURSOR_MODEL || 'gpt-5.3-codex'),
     timeoutMs: parsePositiveIntOption(argv, '--timeout-ms', 120_000),
@@ -1299,6 +1316,7 @@ function parseOptions(argv: string[]): CliOptions {
     outputPath: valueArg(argv, '--output', ''),
     reportsDir: valueArg(argv, '--reports-dir', path.join(process.cwd(), 'work', 'real-feishu')),
     fakeCcrResponseText: valueArg(argv, '--fake-ccr-response', defaultFakeCcrResponseText(runId, scenario)),
+    fakeKimiResponseText: valueArg(argv, '--fake-kimi-response', valueArg(argv, '--message', defaultMessage)),
   };
 }
 
@@ -1339,6 +1357,8 @@ function printUsage(): void {
     '  When --chat-id is omitted, the harness creates the initial test group through the product /new use case.',
     '  --fake-ccr                Run true ccr/Claude Code against a local fake OpenAI-compatible backend',
     '  --fake-ccr-response <txt> Expected fake backend response text',
+    '  --fake-kimi               Run the true Kimi Code executable against a local fake OpenAI-compatible backend',
+    '  --fake-kimi-response <txt> Expected fake Kimi backend response text; defaults to --message',
     '  --scripted-basic-dialogue Run basic-dialogue through isolated Codex Responses/CCR proxies, not direct provider injection',
     '  --scripted-kimi           Replace only the Kimi executable with a deterministic wire producer; valid for Kimi tmux runtime-message E2E',
     '  --keep-clk-home           Keep the temporary CODELARK_HOME after the run; default cleans it',
@@ -1662,10 +1682,14 @@ function canonicalRequiredCheckNamesForParts(scenario: string, providerSuffix: s
 }
 
 function canonicalRequiredCheckNames(report: Record<string, unknown>): string[] {
-  return canonicalRequiredCheckNamesForParts(
+  const names = canonicalRequiredCheckNamesForParts(
     scenarioFromReport(report),
     providerSuffixFromReport(report),
   );
+  if (report.fakeKimi === true) {
+    names.push('fake_kimi_backend_used', 'fake_kimi_real_executable_used');
+  }
+  return names;
 }
 
 function canonicalRequiredCheckNamesForEntry(entry: CoverageMatrixEntry): string[] {
@@ -1945,6 +1969,12 @@ function requireRealGuard(options: CliOptions): void {
       'Use --launch-bridge with test Feishu app credentials so the harness controls the runtime environment.',
     ].join(' '));
   }
+  if (usesFakeKimiBackend(options) && !options.launchBridge) {
+    throw new Error([
+      'Refusing to use --fake-kimi without --launch-bridge.',
+      'The fake model endpoint is injected only into the isolated bridge child while the real Kimi executable remains unchanged.',
+    ].join(' '));
+  }
   if (options.scriptedBasicDialogue && !options.launchBridge) {
     throw new Error([
       'Refusing to use --scripted-basic-dialogue without --launch-bridge.',
@@ -1973,6 +2003,16 @@ function validateScriptedKimiOptions(options: CliOptions): void {
   if (!options.scriptedKimi) return;
   if (options.scenario !== 'runtime-message' || options.runtime !== 'kimi' || options.provider !== 'tmux') {
     throw new Error('--scripted-kimi is only valid with --scenario runtime-message --runtime kimi --provider tmux.');
+  }
+}
+
+function validateFakeKimiOptions(options: CliOptions): void {
+  if (!options.fakeKimi) return;
+  if (options.runtime !== 'kimi' || options.provider !== 'tmux') {
+    throw new Error('--fake-kimi requires --runtime kimi --provider tmux.');
+  }
+  if (usesScriptedKimiExecutable(options)) {
+    throw new Error('--fake-kimi cannot be combined with a scripted Kimi executable.');
   }
 }
 
@@ -2447,7 +2487,57 @@ function hasKimiAuthConfig(kimiHome: string): boolean {
 }
 
 function hostKimiExecutablePath(): string {
-  return path.join(os.homedir(), '.kimi-code', 'bin', 'kimi');
+  return path.join(os.homedir(), '.kimi-code', 'bin', process.platform === 'win32' ? 'kimi.exe' : 'kimi');
+}
+
+function resolveExecutableOnPath(command: string): string | undefined {
+  if (path.isAbsolute(command) || command.includes(path.sep)) {
+    const candidate = path.resolve(command);
+    try {
+      fs.accessSync(candidate, fs.constants.X_OK);
+      return candidate;
+    } catch {
+      return undefined;
+    }
+  }
+  const extensions = process.platform === 'win32'
+    ? (process.env.PATHEXT || '.EXE;.CMD;.BAT').split(';')
+    : [''];
+  for (const directory of (process.env.PATH || '').split(path.delimiter).filter(Boolean)) {
+    for (const extension of extensions) {
+      const candidate = path.join(directory, `${command}${extension}`);
+      try {
+        fs.accessSync(candidate, fs.constants.X_OK);
+        return candidate;
+      } catch {
+        // Continue searching PATH.
+      }
+    }
+  }
+  return undefined;
+}
+
+function resolveKimiExecutablePath(): string | undefined {
+  const explicit = process.env.CODELARK_KIMI_EXECUTABLE || process.env.KIMI_CODE_EXECUTABLE || '';
+  if (explicit) return resolveExecutableOnPath(explicit);
+  const hostBin = hostKimiExecutablePath();
+  if (fs.existsSync(hostBin)) return hostBin;
+  return resolveExecutableOnPath('kimi');
+}
+
+function readKimiExecutableVersion(executablePath: string | undefined): string | undefined {
+  if (!executablePath) return undefined;
+  const env = { ...process.env };
+  delete env.NODE_OPTIONS;
+  delete env.TMUX;
+  delete env.TMUX_PANE;
+  const result = spawnSync(executablePath, ['--version'], {
+    encoding: 'utf-8',
+    timeout: 10_000,
+    env,
+  });
+  const output = `${result.stdout || ''}\n${result.stderr || ''}`;
+  return output.match(/\b\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?\b/u)?.[0];
 }
 
 function kimiExecutableEnv(): Record<string, string> {
@@ -2731,6 +2821,10 @@ function usesFakeCcrBackend(options: CliOptions): boolean {
   return options.fakeCcr || usesProxyBackedBasicDialogue(options);
 }
 
+function usesFakeKimiBackend(options: CliOptions): boolean {
+  return options.fakeKimi && options.runtime === 'kimi' && options.provider === 'tmux';
+}
+
 function parseJsonObject(rawBody: string): Record<string, unknown> | null {
   if (!rawBody.trim()) return null;
   try {
@@ -2788,8 +2882,11 @@ function codexProxyModelAuditDetail(audit: CodexProxyModelAudit): string {
   ].join('; ');
 }
 
-async function startLocalFakeCcrBackend(responseText: string): Promise<LocalFakeCcrBackend> {
-  const requests: LocalFakeCcrBackend['requests'] = [];
+async function startLocalFakeChatCompletionsBackend(
+  responseText: string,
+  fallbackModel: string,
+): Promise<LocalFakeChatCompletionsBackend> {
+  const requests: LocalFakeChatCompletionsBackend['requests'] = [];
   const server = http.createServer((req, res) => {
     let rawBody = '';
     req.setEncoding('utf-8');
@@ -2808,7 +2905,7 @@ async function startLocalFakeCcrBackend(responseText: string): Promise<LocalFake
           && body !== null
           && typeof (body as { model?: unknown }).model === 'string'
           ? (body as { model: string }).model
-          : 'clk-fake-claude';
+          : fallbackModel;
         const wantsStream = typeof body === 'object'
           && body !== null
           && (body as { stream?: unknown }).stream === true;
@@ -2834,7 +2931,7 @@ async function startLocalFakeCcrBackend(responseText: string): Promise<LocalFake
       }
       if (req.method === 'GET' && req.url?.includes('/models')) {
         res.writeHead(200, { 'content-type': 'application/json' });
-        res.end(JSON.stringify({ object: 'list', data: [{ id: 'clk-fake-claude', object: 'model' }] }));
+        res.end(JSON.stringify({ object: 'list', data: [{ id: fallbackModel, object: 'model' }] }));
         return;
       }
       res.writeHead(404, { 'content-type': 'application/json' });
@@ -2843,7 +2940,7 @@ async function startLocalFakeCcrBackend(responseText: string): Promise<LocalFake
   });
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
   const address = server.address();
-  if (!address || typeof address !== 'object') throw new Error('Failed to start local fake CCR backend.');
+  if (!address || typeof address !== 'object') throw new Error('Failed to start local fake chat-completions backend.');
   return {
     baseUrl: `http://127.0.0.1:${address.port}/v1`,
     requests,
@@ -2929,7 +3026,11 @@ function prepareRuntimeEnvironment(options: CliOptions): RuntimeEnvironmentPlan 
   const scriptedKimiExecutablePath = usesScriptedKimiExecutable(options)
     ? writeScriptedKimiExecutable(options)
     : '';
-  const kimiAuthSource: RuntimeEnvironmentPlan['kimiAuthSource'] = scriptedKimiExecutablePath
+  const kimiExecutablePath = scriptedKimiExecutablePath || resolveKimiExecutablePath();
+  const kimiExecutableVersion = scriptedKimiExecutablePath
+    ? undefined
+    : readKimiExecutableVersion(kimiExecutablePath);
+  const kimiAuthSource: RuntimeEnvironmentPlan['kimiAuthSource'] = scriptedKimiExecutablePath || usesFakeKimiBackend(options)
     ? 'not-needed'
     : copyHostKimiConfig(os.homedir(), options.kimiHome)
       ? 'host-config-copy'
@@ -2977,7 +3078,8 @@ function prepareRuntimeEnvironment(options: CliOptions): RuntimeEnvironmentPlan 
     claudeAuthSource,
     kimiAuthSource,
     kimiExecutableSource: scriptedKimiExecutablePath ? 'scripted-fake-executable' : resolveKimiExecutableSource(),
-    ...(scriptedKimiExecutablePath ? { kimiExecutablePath: scriptedKimiExecutablePath } : {}),
+    ...(kimiExecutablePath ? { kimiExecutablePath } : {}),
+    ...(kimiExecutableVersion ? { kimiExecutableVersion } : {}),
     cursorAuthSource,
     cursorExecutableSource: resolveCursorExecutableSource(),
     ...(cursorExecutablePath ? { cursorExecutablePath } : {}),
@@ -2985,11 +3087,15 @@ function prepareRuntimeEnvironment(options: CliOptions): RuntimeEnvironmentPlan 
     ...(options.fakeCcrProxyBaseUrl ? { fakeCcrProxyBaseUrl: options.fakeCcrProxyBaseUrl } : {}),
     ...(options.fakeCcrPort ? { fakeCcrPort: options.fakeCcrPort } : {}),
     ...(options.fakeCcrPort ? { ccrPort: options.fakeCcrPort } : {}),
+    ...(options.fakeKimiProxyBaseUrl ? { fakeKimiProxyBaseUrl: options.fakeKimiProxyBaseUrl } : {}),
     ...(options.codexProxyBaseUrl ? { codexProxyBaseUrl: options.codexProxyBaseUrl } : {}),
   };
 }
 
 function plannedRuntimeEnvironment(options: CliOptions): RuntimeEnvironmentPlan {
+  const kimiExecutablePath = usesScriptedKimiExecutable(options)
+    ? path.join(options.runRoot, 'bin', 'kimi')
+    : resolveKimiExecutablePath();
   return {
     runtimeHome: options.runtimeHome,
     bridgeHome: options.runtime === 'cursor' ? os.homedir() : options.runtimeHome,
@@ -3002,15 +3108,16 @@ function plannedRuntimeEnvironment(options: CliOptions): RuntimeEnvironmentPlan 
     larkCliConfigSource: options.launchBridge ? 'missing' : 'not-needed',
     codexAuthSource: 'missing',
     claudeAuthSource: 'missing',
-    kimiAuthSource: usesScriptedKimiExecutable(options) ? 'not-needed' : 'missing',
+    kimiAuthSource: usesScriptedKimiExecutable(options) || usesFakeKimiBackend(options) ? 'not-needed' : 'missing',
     kimiExecutableSource: usesScriptedKimiExecutable(options) ? 'scripted-fake-executable' : resolveKimiExecutableSource(),
-    ...(usesScriptedKimiExecutable(options)
-      ? { kimiExecutablePath: path.join(options.runRoot, 'bin', 'kimi') }
-      : {}),
+    ...(kimiExecutablePath ? { kimiExecutablePath } : {}),
     cursorAuthSource: 'missing',
     cursorExecutableSource: resolveCursorExecutableSource(),
     ...(resolveCursorExecutablePath() ? { cursorExecutablePath: resolveCursorExecutablePath() } : {}),
     ccrConfigSource: options.claudeExecutable === 'ccr' ? 'missing' : 'not-needed',
+    ...(usesFakeKimiBackend(options)
+      ? { fakeKimiProxyBaseUrl: '<local-openai-chat-completions-backend>' }
+      : {}),
   };
 }
 
@@ -4657,6 +4764,7 @@ function scenarioFinalMessage(options: CliOptions): string {
 
 function expectedFinalResponseText(options: CliOptions): string {
   if (options.fakeCcr) return fakeCcrObservedText(options);
+  if (usesFakeKimiBackend(options)) return options.fakeKimiResponseText;
   if (options.scenario === 'history-boundaries') return historyBoundariesMarker(options);
   if (options.scenario === 'history-attachments') return historyAttachmentsMarker(options);
   if (options.scenario === 'history-empty-isolation') return historyEmptyIsolationMarker(options);
@@ -4816,7 +4924,9 @@ function sessionManagementExpectedTexts(options: CliOptions, text: string): stri
     return ['已更新全局配置', 'runtime.claude.provider', options.runtime === 'claude' ? options.provider : 'tmux'];
   }
   if (command === `/new mgmt-${options.runId} ${options.workDir}`) {
-    return ['已创建群聊会话', `mgmt-${options.runId}`, options.workDir, 'Runtime', runtimeDisplayLabel(options.runtime)];
+    const requestedName = `mgmt-${options.runId}`;
+    const visibleNamePrefix = Array.from(requestedName).slice(0, 40).join('');
+    return ['已创建群聊会话', visibleNamePrefix, options.workDir, 'Runtime', runtimeDisplayLabel(options.runtime)];
   }
   if (command === `/clear clear-${options.runId} ${options.workDir}`) {
     return ['已清空当前聊天上下文', `clear-${options.runId}`, options.workDir, 'Provider', options.provider];
@@ -5357,6 +5467,9 @@ function plannedSuccessCheckNames(options: CliOptions): string[] {
   if (options.fakeCcr) {
     names.push('fake_ccr_backend_used');
   }
+  if (usesFakeKimiBackend(options)) {
+    names.push('fake_kimi_backend_used', 'fake_kimi_real_executable_used');
+  }
   if (options.scenario === 'agent-question-forms') {
     names.push('agent_question_form_interactive_transcript');
   }
@@ -5411,6 +5524,9 @@ function extractScenarioCreatedChatIds(observations: MessageObservation[], exclu
   const chatIds = new Set<string>();
   for (const observation of observations) {
     if (!observation.sentText.trim().startsWith('/new')) continue;
+    if (observation.chatId.startsWith('oc_') && !excluded.has(observation.chatId)) {
+      chatIds.add(observation.chatId);
+    }
     const serialized = JSON.stringify(observation.feishuMessages ?? {});
     for (const match of serialized.matchAll(/\boc_[a-z0-9]+\b/g)) {
       const chatId = match[0];
@@ -5419,6 +5535,35 @@ function extractScenarioCreatedChatIds(observations: MessageObservation[], exclu
     }
   }
   return [...chatIds];
+}
+
+function extractScenarioCreatedChatIdsFromBridgeState(
+  options: CliOptions,
+  requestedNames: string[],
+  excludedChatIds: string[] = [],
+): string[] {
+  if (requestedNames.length === 0) return [];
+  try {
+    const bindingsPath = path.join(options.codelarkHome, 'data', 'channel-chats.json');
+    const sessionsPath = path.join(options.codelarkHome, 'data', 'sessions.json');
+    const bindings = JSON.parse(fs.readFileSync(bindingsPath, 'utf8')) as unknown;
+    const sessions = JSON.parse(fs.readFileSync(sessionsPath, 'utf8')) as unknown;
+    const chatIds = new Set<string>();
+    for (const requestedName of requestedNames) {
+      for (const chatId of findScenarioCreatedChatIdsInBindings({
+        bindings,
+        sessions,
+        requestedName,
+        channelType: options.channelType,
+        excludedChatIds,
+      })) {
+        chatIds.add(chatId);
+      }
+    }
+    return [...chatIds];
+  } catch {
+    return [];
+  }
 }
 
 function parseNewSessionRequestedName(command: string): string {
@@ -5440,6 +5585,11 @@ async function inspectScenarioCreatedChats(
     const chatIds = extractScenarioCreatedChatIds([observation], [...excluded, ...seenChatIds]);
     for (const chatId of chatIds) {
       seenChatIds.add(chatId);
+      const expectedFinalName = expectedScenarioChatFinalName({
+        requestedName,
+        chatId,
+        observations,
+      });
       try {
         const info = await fetchChatInfoWithTestBot(chatId, options);
         const actualName = info.name || '';
@@ -5447,8 +5597,9 @@ async function inspectScenarioCreatedChats(
           command: observation.sentText,
           chatId,
           requestedName,
+          expectedFinalName,
           actualName,
-          ok: info.chatMode === 'group' && actualName.includes(requestedName),
+          ok: info.chatMode === 'group' && scenarioChatNameMatchesRequested(actualName, expectedFinalName),
           detail: `chat_mode=${info.chatMode || ''} actual_name=${actualName}`,
         });
       } catch (error) {
@@ -5456,6 +5607,7 @@ async function inspectScenarioCreatedChats(
           command: observation.sentText,
           chatId,
           requestedName,
+          expectedFinalName,
           ok: false,
           detail: error instanceof Error ? error.message : String(error),
         });
@@ -5484,7 +5636,14 @@ async function cleanupScenarioCreatedChatsFromDump(
   excludedChatIds: string[] = [],
 ): Promise<CreatedChatCleanupResult[]> {
   if (!baseChatId) return [];
-  const chatIds = extractScenarioCreatedChatIdsFromDump(latestDump(options, baseChatId), excludedChatIds);
+  const requestedNames = buildScenarioCommands(options)
+    .filter((command) => command.trim().startsWith('/new '))
+    .map(parseNewSessionRequestedName)
+    .filter(Boolean);
+  const chatIds = Array.from(new Set([
+    ...extractScenarioCreatedChatIdsFromDump(latestDump(options, baseChatId), excludedChatIds),
+    ...extractScenarioCreatedChatIdsFromBridgeState(options, requestedNames, excludedChatIds),
+  ]));
   const results: CreatedChatCleanupResult[] = [];
   for (const chatId of chatIds) {
     results.push(await deleteCreatedChat(chatId, options));
@@ -5678,7 +5837,7 @@ function automatedSuccessChecks(params: {
       detail: params.scenarioCreatedChatInfo.length === 0
         ? 'No scenario-created /new chats were detected.'
         : params.scenarioCreatedChatInfo
-          .map((item) => `${item.chatId}: requested=${item.requestedName} actual=${item.actualName || ''} ok=${item.ok} detail=${item.detail}`)
+          .map((item) => `${item.chatId}: requested=${item.requestedName} expected_final=${item.expectedFinalName} actual=${item.actualName || ''} ok=${item.ok} detail=${item.detail}`)
           .join('; '),
     },
     {
@@ -5769,6 +5928,8 @@ function writeFailureReport(params: {
     initialChatCreation: createsInitialProductNewSessionGroup(params.options) ? 'product-new-session-use-case' : 'provided-chat-id',
     scriptedBasicDialogue: params.options.scriptedBasicDialogue,
     scriptedKimi: params.options.scriptedKimi,
+    fakeKimi: params.options.fakeKimi,
+    ...(params.options.fakeKimi ? { fakeKimiResponseText: params.options.fakeKimiResponseText } : {}),
     scenario: params.options.scenario,
     runtime: params.options.runtime,
     provider: params.options.provider,
@@ -5831,28 +5992,40 @@ function finalMessageObservationMode(options: CliOptions): 'reply_to' | 'mirror-
     : 'reply_to';
 }
 
-function providerStreamCompletedInDump(
+function providerStreamTerminalStateInDump(
   options: Pick<CliOptions, 'runtime'>,
   dump: ReturnType<typeof latestDump>,
-): boolean {
+  excludedStreamKeys: Iterable<string> = [],
+) {
   const logText = dump.logWindow?.text || '';
-  if (!logText) return false;
+  if (!logText) return undefined;
   const streamPrefix = options.runtime === 'cursor' ? 'im:' : 'mirror:';
-  return dump.streamKeys
-    .filter((streamKey) => streamKey.startsWith(streamPrefix))
-    .some((streamKey) => logText.split(/\r?\n/).some((line) => (
-      line.includes(streamKey)
-        && (
-          /Card finalized: .*status=completed/.test(line)
-            || /Final card update payload: .*status:\s*'completed'/.test(line)
-        )
-    )));
+  return findLatestProviderStreamTerminalState({
+    streamKeys: dump.streamKeys,
+    logText,
+    streamPrefix,
+    excludedStreamKeys,
+  });
 }
 
-async function waitForMirrorStreamCompleted(options: CliOptions, chatId: string, label: string): Promise<void> {
-  await waitFor(label, options.timeoutMs, options.pollMs, () => (
-    providerStreamCompletedInDump(options, latestDump(options, chatId)) ? true : undefined
-  ));
+async function waitForMirrorStreamCompleted(
+  options: CliOptions,
+  chatId: string,
+  label: string,
+  excludedStreamKeys: Iterable<string> = [],
+): Promise<void> {
+  await waitFor(label, options.timeoutMs, options.pollMs, () => {
+    const terminal = providerStreamTerminalStateInDump(
+      options,
+      latestDump(options, chatId),
+      excludedStreamKeys,
+    );
+    if (!terminal) return undefined;
+    if (terminal.status !== 'completed') {
+      throw new Error(`Provider stream ${terminal.streamKey} finalized with status=${terminal.status}.`);
+    }
+    return true;
+  });
 }
 
 async function waitForBotReplyToMessage(
@@ -5917,16 +6090,23 @@ function extractScenarioCreatedChatIdsFromDump(
 async function waitForScenarioNewChatTranscript(
   options: CliOptions,
   baseChatId: string,
+  commandText: string,
   expectation: ReplyExpectation,
   label: string,
   timeoutMs: number,
 ): Promise<{ chatId: string; messages: unknown }> {
+  const requestedName = parseNewSessionRequestedName(commandText);
   return waitFor(label, timeoutMs, options.pollMs, async () => {
     const dump = latestDump(options, baseChatId);
-    const createdChatIds = extractScenarioCreatedChatIdsFromDump(dump, [
-      baseChatId,
-      options.chatId,
-    ]);
+    const excludedChatIds = [baseChatId, options.chatId].filter((value): value is string => Boolean(value));
+    const createdChatIds = Array.from(new Set([
+      ...extractScenarioCreatedChatIdsFromDump(dump, excludedChatIds),
+      ...extractScenarioCreatedChatIdsFromBridgeState(
+        options,
+        requestedName ? [requestedName] : [],
+        excludedChatIds,
+      ),
+    ]));
     for (const chatId of createdChatIds) {
       const messages = await listChatMessages(chatId, options, 50);
       if (botTranscriptMatchesExpectation(messages, expectation, options)) {
@@ -6082,6 +6262,19 @@ async function launchBridgeChild(options: CliOptions, runtimeEnvironment: Runtim
         CODELARK_CLAUDE_EXECUTABLE: runtimeEnvironment.claudeExecutable,
         CODELARK_CLAUDE_PROVIDER: options.runtime === 'claude' ? options.provider : (process.env.CODELARK_CLAUDE_PROVIDER || 'tmux'),
         CODELARK_KIMI_PROVIDER: 'tmux',
+        ...(usesFakeKimiBackend(options)
+          ? {
+            KIMI_MODEL_NAME: 'clk-fake-kimi',
+            KIMI_MODEL_API_KEY: 'clk-fake-key',
+            KIMI_MODEL_PROVIDER_TYPE: 'openai',
+            KIMI_MODEL_BASE_URL: options.fakeKimiProxyBaseUrl!,
+            KIMI_MODEL_MAX_CONTEXT_SIZE: '262144',
+            KIMI_MODEL_CAPABILITIES: 'tool_use',
+            KIMI_MODEL_DISPLAY_NAME: 'CodeLark Fake Kimi',
+            KIMI_DISABLE_TELEMETRY: '1',
+            KIMI_CODE_NO_AUTO_UPDATE: '1',
+          }
+          : {}),
         CODELARK_DEFAULT_CODEX_PROVIDER: options.runtime === 'codex' ? options.provider : (process.env.CODELARK_DEFAULT_CODEX_PROVIDER || 'tmux'),
         CODELARK_CODEX_SKIP_GIT_REPO_CHECK: process.env.CODELARK_CODEX_SKIP_GIT_REPO_CHECK || 'true',
         ...(runtimeEnvironment.kimiExecutablePath
@@ -6623,6 +6816,13 @@ function scenarioSwitchesToNewChatAfterNewCommand(options: CliOptions): boolean 
     || options.scenario === 'history-suite';
 }
 
+function requiredCheckCheckpointCommand(options: CliOptions): string | null {
+  // /t archive intentionally removes the runtime identity that the scenario
+  // just proved. Capture provider/session evidence immediately before that
+  // terminal lifecycle action, then still validate its user-visible reply.
+  return options.scenario === 'session-management' ? '/t archive' : null;
+}
+
 function waitsForMirrorFinalBeforeFollowup(options: CliOptions, commandText?: string): boolean {
   if (options.scriptedBasicDialogue) return false;
   if (options.scenario === 'basic-dialogue-suite' && commandText) {
@@ -6663,6 +6863,7 @@ async function sendAndObserve(
   label: string,
   runtimeEnvironment: RuntimeEnvironmentPlan,
 ): Promise<MessageObservation> {
+  const streamKeysBefore = options.dryRun ? [] : latestDump(options, chatId).streamKeys;
   const before = options.dryRun ? 0 : await countResponseEvidence(options, chatId);
   const sentMessageId = await sendUserText(chatId, text, options);
   let messages: unknown = null;
@@ -6676,6 +6877,7 @@ async function sendAndObserve(
         const observed = await waitForScenarioNewChatTranscript(
           options,
           chatId,
+          text,
           expectedReply,
           label,
           Math.max(replyTimeoutMs, Math.min(options.timeoutMs, 60_000)),
@@ -6737,6 +6939,7 @@ async function sendAndObserve(
     ...(expectedReplyForMessage(options, text, label).contentKeys.length > 0
       ? { expectedReplyContentKeys: expectedReplyForMessage(options, text, label).contentKeys }
       : {}),
+    streamKeysBefore,
     feishuMessages: messages,
   };
 }
@@ -7056,6 +7259,7 @@ async function main(): Promise<void> {
   getScenarioDefinition(options.scenario);
   validateScriptedBasicDialogueOptions(options);
   validateScriptedKimiOptions(options);
+  validateFakeKimiOptions(options);
   if (options.listScenarios) {
     writeReport({
       scenarios: listScenarioMetadata(),
@@ -7097,13 +7301,16 @@ async function main(): Promise<void> {
   let scenarioCreatedChatCleanup: CreatedChatCleanupResult[] = [];
   let scenarioCreatedChatInfo: ScenarioCreatedChatInfo[] = [];
   let startupChatCleanup: CreatedChatCleanupResult[] = [];
-  let fakeCcrBackend: LocalFakeCcrBackend | null = null;
+  let fakeCcrBackend: LocalFakeChatCompletionsBackend | null = null;
+  let fakeKimiBackend: LocalFakeChatCompletionsBackend | null = null;
   let codexResponsesProxy: LocalCodexResponsesProxy | null = null;
   const messageObservations: MessageObservation[] = [];
   try {
     if (options.launchBridge && !options.dryRun) {
       initializeIsolatedLarkCliConfig(options);
-      copyHostKimiConfig(os.homedir(), options.kimiHome);
+      if (!usesFakeKimiBackend(options)) {
+        copyHostKimiConfig(os.homedir(), options.kimiHome);
+      }
     }
     const userAuthorization = await assertLarkCliUserAuthorizationPreflight(options);
     startupChatCleanup = await cleanupRegisteredTestChats(options);
@@ -7114,13 +7321,18 @@ async function main(): Promise<void> {
       process.stderr.write(`[real-feishu-e2e] Started local Codex Responses proxy at ${codexResponsesProxy.baseUrl}; Codex SDK/tmux will use isolated CODEX_HOME=${options.codexHome}\n`);
     }
     if (usesFakeCcrBackend(options) && !options.dryRun) {
-      fakeCcrBackend = await startLocalFakeCcrBackend(options.fakeCcrResponseText);
+      fakeCcrBackend = await startLocalFakeChatCompletionsBackend(options.fakeCcrResponseText, 'clk-fake-claude');
       options.fakeCcrProxyBaseUrl = fakeCcrBackend.baseUrl;
       options.fakeCcrPort = await reserveLocalPort();
       process.stderr.write(`[real-feishu-e2e] Started local fake CCR model backend at ${fakeCcrBackend.baseUrl}; true ccr will listen on 127.0.0.1:${options.fakeCcrPort}\n`);
     } else if (options.claudeExecutable === 'ccr' && !options.dryRun) {
       options.fakeCcrPort = await reserveLocalPort();
       process.stderr.write(`[real-feishu-e2e] Reserved isolated CCR port 127.0.0.1:${options.fakeCcrPort}\n`);
+    }
+    if (usesFakeKimiBackend(options) && !options.dryRun) {
+      fakeKimiBackend = await startLocalFakeChatCompletionsBackend(options.fakeKimiResponseText, 'clk-fake-kimi');
+      options.fakeKimiProxyBaseUrl = fakeKimiBackend.baseUrl;
+      process.stderr.write(`[real-feishu-e2e] Started local fake Kimi model backend at ${fakeKimiBackend.baseUrl}; the isolated bridge will launch the true Kimi executable.\n`);
     }
     if (options.launchBridge && !options.dryRun) {
       runtimeEnvironment = prepareRuntimeEnvironment(options);
@@ -7173,12 +7385,15 @@ async function main(): Promise<void> {
         initialChatCreation: createsInitialProductNewSessionGroup(options) ? 'product-new-session-use-case' : 'provided-chat-id',
         scriptedBasicDialogue: options.scriptedBasicDialogue,
         scriptedKimi: options.scriptedKimi,
+        fakeKimi: options.fakeKimi,
+        ...(options.fakeKimi ? { fakeKimiResponseText: options.fakeKimiResponseText } : {}),
         scenario: options.scenario,
         commands: buildScenarioCommands(options),
         commandReplyExpectations: commandReplyExpectations(options),
         plannedSuccessCheckNames: plannedSuccessCheckNames(options),
         coverage: scenarioCoverage(options),
         validationChatSwitchesAfterNew: scenarioSwitchesToNewChatAfterNewCommand(options),
+        requiredCheckCheckpointCommand: requiredCheckCheckpointCommand(options),
         waitsForMirrorFinalBeforeFollowup: waitsForMirrorFinalBeforeFollowup(options),
         finalMessageObservationMode: finalMessageObservationMode(options),
         runRoot: options.runRoot,
@@ -7199,6 +7414,7 @@ async function main(): Promise<void> {
     if (!chatId) throw new Error('No real Feishu chat_id available.');
     prepareScenarioWorkspaceFixtures(options);
     let validationChatId = chatId;
+    let requiredCheckReport: ReturnType<typeof latestDump> | null = null;
     if (options.scenario === 'require-at-toggle') {
       messageObservations.push(...await runRequireAtToggleScenario(chatId, options, runtimeEnvironment));
     } else {
@@ -7209,6 +7425,26 @@ async function main(): Promise<void> {
         const commandText = scenarioCommands[commandIndex];
         const nextCommandText = scenarioCommands[commandIndex + 1];
         const label = commandLabelForScenario(options, commandText, commandIndex);
+        if (commandText.trim() === requiredCheckCheckpointCommand(options)) {
+          try {
+            requiredCheckReport = await waitForScenarioChecks(options, activeChatId);
+          } catch (error) {
+            const messages = await listChatMessages(activeChatId, options, 50);
+            writeFailureReport({
+              label: `required checks before ${commandText}`,
+              sentText: commandText,
+              chatId: activeChatId,
+              options,
+              runtimeEnvironment,
+              error,
+              feishuMessages: {
+                finalMessages: messages,
+                messageObservations,
+              },
+            });
+            throw error;
+          }
+        }
         if (shouldSendBasicDialogueQueuedFollowup(options, commandText, nextCommandText)) {
           const followupLabel = commandLabelForScenario(options, nextCommandText, commandIndex + 1);
           const observations = await sendBasicDialogueQueuedFollowup(
@@ -7254,6 +7490,7 @@ async function main(): Promise<void> {
               options,
               activeChatId,
               `mirror stream completion for ${commandText}`,
+              observation.streamKeysBefore,
             );
           } catch (error) {
             const messages = await listChatMessages(activeChatId, options, 50);
@@ -7350,6 +7587,7 @@ async function main(): Promise<void> {
               options,
               activeChatId,
               `mirror stream completion for ${scenarioFinalMessage(options)}`,
+              observation.streamKeysBefore,
             );
           } catch (error) {
             const messages = await listChatMessages(activeChatId, options, 50);
@@ -7397,22 +7635,26 @@ async function main(): Promise<void> {
       await hasResponseEvidence(options, validationChatId) ? true : undefined
     ));
     let report: ReturnType<typeof latestDump>;
-    try {
-      report = await waitForScenarioChecks(options, validationChatId);
-    } catch (error) {
-      const messages = await listChatMessages(validationChatId, options);
-      writeFailureReport({
-        label: 'required real Feishu E2E checks',
-        chatId: validationChatId,
-        options,
-        runtimeEnvironment,
-        error,
-        feishuMessages: {
-          finalMessages: messages,
-          messageObservations,
-        },
-      });
-      throw error;
+    if (requiredCheckReport) {
+      report = requiredCheckReport;
+    } else {
+      try {
+        report = await waitForScenarioChecks(options, validationChatId);
+      } catch (error) {
+        const messages = await listChatMessages(validationChatId, options);
+        writeFailureReport({
+          label: 'required real Feishu E2E checks',
+          chatId: validationChatId,
+          options,
+          runtimeEnvironment,
+          error,
+          feishuMessages: {
+            finalMessages: messages,
+            messageObservations,
+          },
+        });
+        throw error;
+      }
     }
     const finalFeishuMessages = await listFinalFeishuMessagesForObservations(messageObservations, options, validationChatId);
     scenarioCreatedChatInfo = await inspectScenarioCreatedChats(messageObservations, options, [
@@ -7472,6 +7714,19 @@ async function main(): Promise<void> {
           detail: `Fake CCR backend request count: ${fakeCcrBackend?.requests.length || 0}.`,
         }]
         : []),
+      ...(usesFakeKimiBackend(options)
+        ? [{
+          name: 'fake_kimi_backend_used',
+          ok: (fakeKimiBackend?.requests.length || 0) > 0,
+          detail: `Fake Kimi backend request count: ${fakeKimiBackend?.requests.length || 0}.`,
+        }, {
+          name: 'fake_kimi_real_executable_used',
+          ok: runtimeEnvironment.kimiExecutableSource !== 'scripted-fake-executable'
+            && Boolean(runtimeEnvironment.kimiExecutablePath)
+            && Boolean(runtimeEnvironment.kimiExecutableVersion),
+          detail: `Kimi executable source=${runtimeEnvironment.kimiExecutableSource} path=${runtimeEnvironment.kimiExecutablePath || '-'} version=${runtimeEnvironment.kimiExecutableVersion || '-'}.`,
+        }]
+        : []),
       ...(usesProxyBackedBasicDialogue(options)
         ? [{
           name: 'codex_responses_proxy_used',
@@ -7515,11 +7770,14 @@ async function main(): Promise<void> {
       initialChatCreation: createsInitialProductNewSessionGroup(options) ? 'product-new-session-use-case' : 'provided-chat-id',
       scriptedBasicDialogue: options.scriptedBasicDialogue,
       scriptedKimi: options.scriptedKimi,
+      fakeKimi: options.fakeKimi,
+      ...(options.fakeKimi ? { fakeKimiResponseText: options.fakeKimiResponseText } : {}),
       scenario: options.scenario,
       commands: buildScenarioCommands(options),
       commandReplyExpectations: commandReplyExpectations(options),
       coverage: scenarioCoverage(options),
       validationChatSwitchesAfterNew: scenarioSwitchesToNewChatAfterNewCommand(options),
+      requiredCheckCheckpointCommand: requiredCheckCheckpointCommand(options),
       waitsForMirrorFinalBeforeFollowup: waitsForMirrorFinalBeforeFollowup(options),
       finalMessageObservationMode: finalMessageObservationMode(options),
       runRoot: options.runRoot,
@@ -7532,6 +7790,16 @@ async function main(): Promise<void> {
           fakeCcrExpectedResponse: options.fakeCcrResponseText,
           fakeCcrRequestCount: fakeCcrBackend.requests.length,
           fakeCcrRequests: fakeCcrBackend.requests.map((request) => ({
+            method: request.method,
+            url: request.url,
+          })),
+        }
+        : {}),
+      ...(fakeKimiBackend
+        ? {
+          fakeKimiProxyBaseUrl: fakeKimiBackend.baseUrl,
+          fakeKimiRequestCount: fakeKimiBackend.requests.length,
+          fakeKimiRequests: fakeKimiBackend.requests.map((request) => ({
             method: request.method,
             url: request.url,
           })),
@@ -7621,6 +7889,9 @@ async function main(): Promise<void> {
     await stopFakeCcrRouter(options);
     if (fakeCcrBackend) {
       await fakeCcrBackend.close().catch(() => {});
+    }
+    if (fakeKimiBackend) {
+      await fakeKimiBackend.close().catch(() => {});
     }
     if (codexResponsesProxy) {
       await codexResponsesProxy.close().catch(() => {});

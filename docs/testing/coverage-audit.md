@@ -12,22 +12,22 @@
 npm run real:feishu:e2e -- --coverage-matrix --reports-dir work/real-feishu
 ```
 
-该输出把 15 个真实飞书场景展开为 81 个矩阵条目，其中 Kimi 相关条目为 12 个，并输出 `coverageRates`。真实飞书覆盖率只看 `canonicalPercent = canonical-pass / total`；`dry-run`、`diagnostic-failure`、`diagnostic-pass` 和旧 failure 的 `unmatchedReports` 只能说明计划或排障证据，不计入覆盖率。`executedPercent` 只是执行面参考，表示该 slice 里有任意真实报告或诊断报告的比例。
+该输出把 15 个真实飞书场景展开为 70 个矩阵条目，其中 Kimi 相关条目为 12 个，并输出 `coverageRates`。真实飞书覆盖率只看 `canonicalPercent = canonical-pass / total`；`dry-run`、`diagnostic-failure`、`diagnostic-pass` 和旧 failure 的 `unmatchedReports` 只能说明计划或排障证据，不计入覆盖率。`executedPercent` 只是执行面参考，表示该 slice 里有任意真实报告或诊断报告的比例。
 
 当前报告目录 `work/real-feishu` 的机器矩阵 `work/real-feishu/coverage-matrix-stage178-doc-sync.json` 给出的关键覆盖率：
 
 | Slice | 覆盖率口径 | 当前值 | 说明 |
 | --- | --- | --- | --- |
-| 全量真实飞书矩阵 | `coverageRates.all.canonicalPercent` | 2/81 = 2.5% | 全部 planned 条目，包含 legacy |
-| Current 非 legacy | `coverageRates.current.canonicalPercent` | 2/53 = 3.8% | 后续扩张主线，不含 legacy transitional |
-| tmux 全量 | `coverageRates.tmux.canonicalPercent` | 2/34 = 5.9% | 只看 provider=`tmux` 的矩阵条目 |
-| current tmux | `coverageRates.currentTmux.canonicalPercent` | 2/22 = 9.1% | 用户当前要求优先补测的 tmux 主线 |
-| Kimi current | `coverageRates.kimiCurrent.canonicalPercent` | 2/8 = 25.0% | 非 legacy Kimi 主线，含 cross-provider long suite |
-| Kimi current tmux | `coverageRates.kimiCurrentTmux.canonicalPercent` | 2/7 = 28.6% | 暂不测 SDK 时最直接的 Kimi tmux 覆盖面 |
-| 卡片前端 current | `coverageRates.cardFrontend.canonicalPercent` | 0/30 = 0.0% | stream/final card、`/t` rich card、文件确认卡、CardKit 表单、question form、Markdown card |
-| 卡片前端 current tmux/runtime-neutral | `coverageRates.cardFrontendTmux.canonicalPercent` | 0/13 = 0.0% | 当前优先补测的 tmux 与 runtime-neutral 卡片行为 |
+| 全量真实飞书矩阵 | `coverageRates.all.canonicalPercent` | 3/70 = 4.3% | 全部 planned 条目，包含 legacy |
+| Current 非 legacy | `coverageRates.current.canonicalPercent` | 3/46 = 6.5% | 后续扩张主线，不含 legacy transitional |
+| tmux 全量 | `coverageRates.tmux.canonicalPercent` | 3/45 = 6.7% | 只看 provider=`tmux` 的矩阵条目 |
+| current tmux | `coverageRates.currentTmux.canonicalPercent` | 3/29 = 10.3% | 用户当前要求优先补测的 tmux 主线 |
+| Kimi current | `coverageRates.kimiCurrent.canonicalPercent` | 3/8 = 37.5% | 非 legacy Kimi 主线，含 cross-provider long suite |
+| Kimi current tmux | `coverageRates.kimiCurrentTmux.canonicalPercent` | 3/7 = 42.9% | 暂不测 SDK 时最直接的 Kimi tmux 覆盖面 |
+| 卡片前端 current | `coverageRates.cardFrontend.canonicalPercent` | 1/26 = 3.8% | stream/final card、`/t` rich card、文件确认卡、CardKit 表单、question form、Markdown card |
+| 卡片前端 current tmux/runtime-neutral | `coverageRates.cardFrontendTmux.canonicalPercent` | 1/17 = 5.9% | 当前优先补测的 tmux 与 runtime-neutral 卡片行为 |
 
-当前 worktree 的报告目录已有 `message-only::kimi-tmux` 和 `runtime-message::kimi-tmux` canonical 成功报告；其余 Kimi current 场景仍是 Kimi parity 的真实缺口。
+聚合 `message-only::kimi-tmux`、`runtime-message::kimi-tmux` 和 `session-management::kimi-tmux` 三份 canonical 报告后得到上表；其余 Kimi current 场景仍是 Kimi parity 的真实缺口。
 
 矩阵接受 `canonical-pass` 时会检查报告内的实际 evidence，而不是只信 `canonicalEligibility.eligible=true`。公共 evidence 必须证明 lark-cli 发送 observation、最终飞书 transcript 读取、coverage metadata、required dump/provider checks、mirror 异常检查和清理检查都通过；Kimi current 条目还必须证明 Kimi runtime identity、`kimi_wire_jsonl_found`、provider output path、mirror final 去重，以及对应场景的 transcript gate。薄报告会显示为 `diagnostic-pass` 并列出 `missingCanonicalChecks`，不能贡献 Kimi canonical 覆盖。
 
@@ -37,15 +37,15 @@ npm run real:feishu:e2e -- --coverage-matrix --reports-dir work/real-feishu
 npm run real:feishu:e2e -- --coverage-matrix --reports-dir work/real-feishu --require-canonical kimi-current
 ```
 
-该命令会要求非 legacy 的 Kimi current 条目全部为 `canonical-pass`，当前会失败并列出 6 个未通过条目：`basic-dialogue-suite` 是诊断失败，`command-state`、`session-management`、`history-suite`、`agent-question-forms` 和 `markdown-rendering` 仍未跑出 canonical 报告。`message-only::kimi-tmux` 已由 `work/real-feishu/real-feishu-message-only-kimi-tmux.json` 覆盖，`runtime-message::kimi-tmux` 已由 `work/real-feishu/real-feishu-runtime-message-kimi-tmux.json` 覆盖。
+该命令会要求非 legacy 的 Kimi current 条目全部为 `canonical-pass`。聚合上述三份报告时仍有 5 个未通过条目：`basic-dialogue-suite`、`command-state`、`history-suite`、`agent-question-forms` 和 `markdown-rendering`。`session-management::kimi-tmux` 已由真实 Kimi executable + 本地假模型的隔离飞书运行覆盖。
 
 ## 功能面
 
 | 区域 | 用户可见行为 | 本地覆盖 | 真实飞书覆盖 |
 | --- | --- | --- | --- |
 | Runtime 路由 | 普通 IM 消息进入选定 runtime；Claude 默认走 tmux，slash 命令仍在 bridge 内联处理。 | `bridge-adapter-runtime.test.ts`、`interactive-turn-runner.test.ts`、`session-runtime.test.ts`；`bridge-command-e2e.test.ts` 现在覆盖显式 `/runtime kimi` + `/p tmux` 后的普通飞书消息会进入 Kimi tmux、自动 `Ctrl-S`、绑定 Kimi session/cwd，并以 `mirror:` 返回 `**kimi:**` final。 | `message-only`、`runtime-message` 已有 Codex/Claude canonical 报告；`message-only::kimi-tmux` 和 `runtime-message::kimi-tmux` 也已有真实飞书 canonical 报告，证明隔离 test app、隔离 bridge、Kimi auth/config 隔离复制、真实飞书发送/读取、Kimi `wire.jsonl`、provider output path、runtime identity 绑定和 mirror 去重链路。有稳定 marker 的后续场景继续通过 `runtime_prompt_final_transcript_marker` 从最终飞书 transcript 命名验证 runtime prompt 最终回复 |
-| Provider 选择 | `/provider` 和 `/p` 切换 Codex/Claude/Kimi provider；Kimi 当前只支持 `tmux`。 | `command-dispatch.test.ts`、`bridge-command-e2e.test.ts`、`codex-routing-provider.test.ts`、`claude-tmux-provider.test.ts`、`kimi-tmux-provider.test.ts` | `message-only::kimi-tmux` 和 `runtime-message::kimi-tmux` 已有真实飞书 canonical 通过；`command-state`、`session-management` provider 矩阵仍需补 Kimi canonical |
-| Session 生命周期 | `/new`、`/t`、`/current`、`/cd`、`/clear`、`/his`、`/check`、重命名和归档流程。 | `feishu-markdown.test.ts` 覆盖 `/t` CardKit 表格结构；`command-dispatch.test.ts` 覆盖 `/t` 默认 20、50/100、Codex/Claude/Kimi runtime 下拉、用户输入轮数、接管确认、running 拒绝、Claude/Kimi archive，以及 Kimi `/check` 在 session id 发现前仍显示 identity 字段和 cwd；`command-dispatch.test.ts` 和 `bridge-command-e2e.test.ts` 覆盖 `/clear` 保留当前 runtime、继承 provider、清理旧 tmux session 和保留 alternate runtime mapping；`command-dispatch.test.ts` 覆盖 `/shell` 的 Codex sandbox、read-only/workspace-write、流式卡片和风险确认；`bridge-command-e2e.test.ts` 覆盖 mock app `/t` 卡片按钮链，并覆盖 Kimi `/current-runtime` 在 Kimi/Codex BridgeSession 之间来回切换且保留 Kimi session 配置；`bridge-command-e2e.test.ts` 现在覆盖 Kimi `/t <session>` 接管后 `/current`、`/check`、`/t`、`/t n 50`、`/t unbind`、重新接管和 `/t archive`，断言 `kimi_session_id`、`runtime_cwd` 与 Kimi archive sidecar；`bridge-manager.test.ts` 覆盖群删除 Codex/Claude/Kimi 归档。 | `session-management` harness 已把 `/clear`、`/shell --sandbox read-only`、`/t` 和 `/check` runtime-local identity 字段纳入命令级飞书文本断言，并计划 `kimi-tmux` 路径；`session_management_runtime_identity_transcript` 会从最终飞书 transcript 命名验证 `/current`、`/check` 和 `/t archive`，其中 Kimi 必须暴露 `kimi_session_id`、`runtime_cwd` 和 Kimi archive 文案。当前 `codex-tmux` 有语义 canonical 证据，但报告早于 `/t` 单表卡片、`/clear` 和 `/shell` 断言；`codex-sdk`、`claude-sdk`、`claude-tmux`、`kimi-tmux` 仍需在当前 gate 下重跑，旧 PTY 报告只保留为历史证据。拆分历史场景在 Codex mirror provider 上有可用历史 canonical 证据；`history-suite` 已进入当前 SDK/tmux 矩阵，覆盖 `/his` default/raw/msg/limit/json/file、长截断和 B 群空历史隔离，`kimi-tmux` 路径仍需真实飞书 canonical 重跑。 |
+| Provider 选择 | `/provider` 和 `/p` 切换 Codex/Claude/Kimi provider；Kimi 当前只支持 `tmux`。 | `command-dispatch.test.ts`、`bridge-command-e2e.test.ts`、`codex-routing-provider.test.ts`、`claude-tmux-provider.test.ts`、`kimi-tmux-provider.test.ts` | `message-only::kimi-tmux`、`runtime-message::kimi-tmux` 和 `session-management::kimi-tmux` 已有真实飞书 canonical 通过；`command-state` 仍需补 Kimi canonical |
+| Session 生命周期 | `/new`、`/t`、`/current`、`/cd`、`/clear`、`/his`、`/check`、重命名和归档流程。 | `feishu-markdown.test.ts` 覆盖 `/t` CardKit 表格结构；`command-dispatch.test.ts` 覆盖 `/t` 默认 20、50/100、Codex/Claude/Kimi runtime 下拉、用户输入轮数、接管确认、running 拒绝、Claude/Kimi archive，以及 Kimi `/check` 在 session id 发现前仍显示 identity 字段和 cwd；`command-dispatch.test.ts` 和 `bridge-command-e2e.test.ts` 覆盖 `/clear` 保留当前 runtime、继承 provider、清理旧 tmux session 和保留 alternate runtime mapping；`command-dispatch.test.ts` 覆盖 `/shell` 的 Codex sandbox、read-only/workspace-write、流式卡片和风险确认；`bridge-command-e2e.test.ts` 覆盖 mock app `/t` 卡片按钮链，并覆盖 Kimi `/current-runtime` 在 Kimi/Codex BridgeSession 之间来回切换且保留 Kimi session 配置；`bridge-command-e2e.test.ts` 现在覆盖 Kimi `/t <session>` 接管后 `/current`、`/check`、`/t`、`/t n 50`、`/t unbind`、重新接管和 `/t archive`，断言 `kimi_session_id`、`runtime_cwd` 与 Kimi archive sidecar；`bridge-manager.test.ts` 覆盖群删除 Codex/Claude/Kimi 归档。 | `session-management::kimi-tmux` 已有 canonical 真实飞书证据：真实 Kimi 0.29.2 连接隔离假模型，完整执行 `/new` 跨群、`/clear`、`/shell`、`/current`、`/check`、`/t`、解绑、runtime prompt、`/his` 与归档。runtime/session/wire 证据在 `/t archive` 前采集，归档回复和最终群名从归档后的真实飞书 transcript/群信息验证；两个测试群均由用户身份删除。Codex/Claude 其他 provider 仍需按当前 gate 重跑。 |
 | Runtime 配置 | `/model`、`/mode`、`/sandbox`、`/network`、`/reasoning`、全局 `/set`。 | `command-dispatch.test.ts`、`bridge-command-e2e.test.ts`、`config.test.ts`；`bridge-command-e2e.test.ts` 现在覆盖 Kimi `/p` 仅接受 `tmux/default`、`/model` 写入 `runtime.kimi.model`、`/mode` 固定、`/sandbox`/`/network`/`/reasoning` 返回不支持且不继续改变 Codex/Claude runtime 配置，并在 Kimi command-state 链路里一并覆盖 `/status` 和 `/require-at off`。 | `command-state` 覆盖 runtime 设置并带命令级飞书文本断言；`command_state_runtime_settings_transcript` 会从最终飞书 transcript 命名验证 `/model`、`/mode`、`/provider`、`/sandbox`、`/network` 和 `/reasoning`，其中 Kimi 必须证明固定模式和不支持 Bridge 沙箱/网络/思考设置文案；`session-management` 覆盖 `/set` |
 | 自动化输入 | `/every` 创建/列表/取消、表单新建和 every card 回调；`/then` 创建/列表/修改/取消、卡片新建/修改/取消、长 prompt 折叠和一次性后续发送。 | `bridge-command-e2e.test.ts`、`command-dispatch.test.ts`；`bridge-command-e2e.test.ts` 的 Kimi command-state 链路现在覆盖 `/every` 创建、列表和取消，断言列表卡片含 `runtime_id` 列，且整个过程保持当前聊天绑定在 Kimi BridgeSession。 | `command-state` provider 矩阵计划覆盖 Codex/Claude/Kimi 的 `/every` 创建/列表/取消，并通过 `command_state_runtime_settings_transcript` 从最终飞书 transcript 验证创建和列表回复包含 `session runtime-id`，证明自动化输入绑定到当前 runtime 身份；`card-forms` 真实飞书场景会发送并读回 `/every-form` 和 `/then-form` 的 `interactive` CardKit 表单，断言自动化表单字段与 `clk-command` callback 前缀。已有真实飞书 canonical 报告主要覆盖 Codex/Claude，Kimi 路径仍待跑。`/then` 当前已有本地 workflow 证据；由于 `/then <prompt>` 会立即触发后续 agent turn，真实飞书 command-state 不直接创建 `/then` agent follow-up，后续仍需补真实 submit/callback 事件证据 |
 | Require-at 策略 | `/require-at on/off` 和非 mention 群消息过滤。 | `command-dispatch.test.ts`、`feishu-adapter.test.ts`、`bridge-command-e2e.test.ts`；Kimi command-state mock-app E2E 使用配置通道验证 `/require-at off` 可写当前 TOML 通道配置，不因 runtime 切换失效。 | `require-at-toggle` runtime-neutral 报告；`command-state` 也会在 Codex/Claude/Kimi provider 矩阵中检查 `/require-at off` 的命令回复 |
@@ -83,7 +83,7 @@ npm run real:feishu:e2e -- --coverage-matrix --reports-dir work/real-feishu --re
 
 ## 下一批测试切片
 
-`runtime-message::kimi-tmux` 已有真实飞书 canonical 报告，并证明 Kimi runtime prompt 最终文本可从最终飞书 transcript 读回；`command-state`、`session-management`、`history-suite`、`markdown-rendering` 等有稳定 final marker 的 runtime 场景也使用同一 gate，但仍需各自的真实飞书 canonical 报告。`history-suite::codex-tmux` 已有 canonical 证据；`history-suite::kimi-tmux` 已进入同一矩阵但仍需真实飞书 canonical 报告。下一批高价值切片仍是 `basic-dialogue-suite`，作为主要长流程集成测试。它的 Kimi gate 必须证明 fresh 只启动一次 `kimi -y`、没有用于发现 identity 的 Ctrl-C、从 TUI 读取随机 session id、至少一次 Ctrl-S steer，并从该 identity 对应的 `wire.jsonl` 读回 think、marker 与 `step.end`；completed final card 和历史正文都不能泄漏 thinking/status。命令密集型 suite 应继续按 runtime 压缩。历史 suite 应保持以下 gate 作为回归准则：
+`runtime-message::kimi-tmux` 和 `session-management::kimi-tmux` 已有真实飞书 canonical 报告；前者证明 Kimi runtime prompt 最终文本可从最终飞书 transcript 读回，后者补齐跨群 session 生命周期、真实 CLI、归档时序与清理。`command-state`、`history-suite`、`markdown-rendering` 等有稳定 final marker 的 runtime 场景继续使用同一 gate，但仍需各自的真实飞书 canonical 报告。`history-suite::codex-tmux` 已有 canonical 证据；`history-suite::kimi-tmux` 已进入同一矩阵但仍需真实飞书 canonical 报告。下一批高价值切片仍是 `basic-dialogue-suite`，作为主要长流程集成测试。它的 Kimi gate 必须证明 fresh 只启动一次 `kimi -y`、没有用于发现 identity 的 Ctrl-C、从 TUI 读取随机 session id、至少一次 Ctrl-S steer，并从该 identity 对应的 `wire.jsonl` 读回 think、marker 与 `step.end`；completed final card 和历史正文都不能泄漏 thinking/status。命令密集型 suite 应继续按 runtime 压缩。历史 suite 应保持以下 gate 作为回归准则：
 
 1. 保持跨聊天顺序：外层 `/runtime`、`/p`、`/new`；内层 `/runtime`、`/p`、`/cd`、final chat，然后执行历史命令。
 2. 每个命令都继续要求 `reply_to`。

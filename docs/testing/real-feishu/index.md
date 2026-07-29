@@ -20,7 +20,7 @@ npm run real:feishu:e2e -- --coverage-matrix --reports-dir work/real-feishu
 
 该矩阵按 `scenario/testName` 输出 planned、dry-run、diagnostic failure/pass、legacy pass 和 canonical pass，并在 `coverageRates` 中输出覆盖率。评审真实飞书 E2E 覆盖时看 `canonicalPercent = canonical-pass / total`；`dry-run`、`diagnostic-*` 和 legacy failure 只能作为计划或排障证据，不能计入覆盖率。`executedPercent` 只是辅助数字，表示该 slice 已有任意真实执行或诊断工件。评审 Kimi 覆盖时优先看 `coverageRates.kimiCurrent`、`coverageRates.kimiCurrentTmux`、`summary.kimiCurrentCanonicalPass` 和 `kimiCurrentGaps`；gap 会带 `reportPath`、`runId` 和 failed/missing canonical checks，没有任何报告的 planned-only gap 也会列出该场景必须补齐的 canonical checks。`unmatchedReports` 表示旧 failure 报告缺少 `coverage.testName`，只能作为诊断证据，不能计入 canonical 覆盖。新的 failure report 会写入 `scenario`、`runtime`、`provider` 和 `coverage.testName`，避免失败证据丢在矩阵之外。
 
-当前 `work/real-feishu` 报告目录的关键覆盖率是：全量 2/81 = 2.5%，current 非 legacy 2/53 = 3.8%，current tmux 2/22 = 9.1%，Kimi current 2/8 = 25.0%，Kimi current tmux 2/7 = 28.6%。卡片前端 current 切片目前是 0/30 = 0.0%，卡片前端 current tmux/runtime-neutral 切片是 0/13 = 0.0%；这些卡片切片覆盖 stream/final card、`/t` rich card、文件确认卡、CardKit 表单、agent question form 和 Markdown card。
+聚合当前三份 Kimi canonical 报告后的关键覆盖率是：全量 3/70 = 4.3%，current 非 legacy 3/46 = 6.5%，current tmux 3/29 = 10.3%，Kimi current 3/8 = 37.5%，Kimi current tmux 3/7 = 42.9%。卡片前端 current 切片是 1/26 = 3.8%，卡片前端 current tmux/runtime-neutral 切片是 1/17 = 5.9%；这些卡片切片覆盖 stream/final card、`/t` rich card、文件确认卡、CardKit 表单、agent question form 和 Markdown card。报告目录是本地证据输入，评审时应重新运行矩阵，不要只引用文档数字。
 
 `canonical-pass` 不是报告自称 `canonicalEligibility.eligible=true` 就能获得。矩阵还会要求报告里有并通过公共真实飞书 gate：逐消息发送 observation、最终 Feishu transcript 读取、coverage metadata、required dump/provider checks、mirror 异常检查和清理检查。Kimi current 条目还必须有 Kimi runtime identity、`kimi_wire_jsonl_found`、provider output path、mirror final 去重，以及对应场景的 transcript gate；例如 `command-state` 还要求 runtime/settings 与 file/large-file transcript gate，`basic-dialogue-suite` 还要求 Kimi 单进程 session 生命周期、`Ctrl-S` steer、wire transcript、history transcript 和 thinking/status 隔离 gate。缺少这些 evidence 的 success JSON 会被降级为 `diagnostic-pass`，不能计入 Kimi canonical。
 
@@ -110,8 +110,8 @@ CODELARK_REAL_FEISHU_TEST_LARK_CLI_XDG_DATA_HOME=/home/me/.codelark/real-feishu-
 - `message-only`：Codex/Claude 五条历史 runtime/provider 路径已有 canonical 报告；`kimi-tmux` 已有真实飞书 canonical 报告 `work/real-feishu/real-feishu-message-only-kimi-tmux.json`，覆盖隔离 test app、隔离 bridge、Kimi auth/config 隔离复制、当前测试账号真实飞书发送/读取、Kimi `wire.jsonl`、provider output path 和 mirror final 去重。
 - `runtime-message`：Codex/Claude 五条历史 runtime/provider 路径已有 canonical 报告；`kimi-tmux` 已有真实飞书 canonical 报告 `work/real-feishu/real-feishu-runtime-message-kimi-tmux.json`，覆盖 `/runtime kimi`、`/p tmux`、Kimi runtime identity 绑定、最终 transcript marker、Kimi `wire.jsonl`、provider output path 和 mirror final 去重。
 - `command-state`：Codex/Claude 五条历史 runtime/provider 路径已有 canonical 报告；harness 现在也计划 `kimi-tmux`，并通过 `runtime_prompt_final_transcript_marker` 验证尾部 runtime prompt marker，通过 `command_state_runtime_settings_transcript` 从最终飞书 transcript 验证 runtime/settings 与 `/every` 回复，通过 `command_state_file_and_large_file_transcript` 验证小文件 `file` 回复和大文件 `interactive` 确认卡，但 Kimi 真实飞书 canonical 报告仍待跑。
-- `kimi-tmux`：Kimi 目前已有本地 unit/workflow/mock-app 覆盖，并已有 `message-only` 与 `runtime-message` 两条 runtime smoke 的真实飞书 canonical 报告；下一步仍需要补 `session-management` 代表路径和 `basic-dialogue-suite` 长流程。当前 `basic-dialogue-suite --scripted-basic-dialogue` 诊断失败卡在 Kimi 阶段前的 Codex SDK queued followup 收尾，报告为 `work/real-feishu/real-feishu-basic-dialogue-scripted-kimi.failure.json`。
-- `session-management`：当前语义 gate 已把 `/t` 纳入命令回复断言；`runtime_prompt_final_transcript_marker` 会验证 runtime prompt marker，`session_management_runtime_identity_transcript` 会从最终飞书 transcript 验证 `/current`、`/check` 和 `/t archive` 的 runtime identity/归档回复，覆盖 Kimi 的 `kimi_session_id`、`runtime_cwd` 和 Kimi archive 文案。当前矩阵只维护 SDK/tmux；旧 PTY 报告仅作历史参考，不再属于发布 gate。
+- `kimi-tmux`：Kimi 目前已有本地 unit/workflow/mock-app 覆盖，并已有 `message-only`、`runtime-message` 与 `session-management` 三条真实飞书 canonical 报告；下一步重点是 `basic-dialogue-suite` 长流程。当前 `basic-dialogue-suite --scripted-basic-dialogue` 诊断失败卡在 Kimi 阶段前的 Codex SDK queued followup 收尾，报告为 `work/real-feishu/real-feishu-basic-dialogue-scripted-kimi.failure.json`。
+- `session-management`：`kimi-tmux` canonical 报告 `work/real-feishu/kimi-session-management-real-cli-fake-20260729T211529Z.json` 使用真实 Kimi 0.29.2 和本地 OpenAI-compatible 假模型，完整验证 `/new` 新群切换、长群名截断、`/clear` 最终重命名、`/current`、`/check`、`/t`、解绑、runtime prompt、`/his`、`/t archive` 与双群清理。runtime/session/wire 检查必须在 `/t archive` 前取证；归档回复与最终群名仍在终态后从真实飞书读取。当前矩阵只维护 SDK/tmux；旧 PTY 报告仅作历史参考，不再属于发布 gate。
 - `history-suite`：codex-tmux 已有通过证据；harness 现在计划完整 runtime/provider 矩阵并包含 `kimi-tmux`，并通过 `runtime_prompt_final_transcript_marker` 验证短历史 runtime prompt marker，通过 `history_suite_transcript_contract` 从最终飞书 transcript 验证短历史、json/file 附件、长截断和空历史隔离；拆分的 history 场景仅保留为诊断和局部回归参考。
 - `markdown-rendering`：codex-tmux 已有真实飞书 Markdown 表格和代码块证据；harness 会对 Kimi tmux 等 runtime/provider 路径计划同一 transcript 结构 gate，并用 `runtime_prompt_final_transcript_marker` 兜底验证 Markdown marker 从最终 transcript 读回。
 
@@ -135,6 +135,8 @@ CODELARK_REAL_FEISHU_TEST_LARK_CLI_XDG_DATA_HOME=/home/me/.codelark/real-feishu-
 - `created_document_cleanup_completed`：云文档 from-scratch 场景创建的测试文档必须删除，除非失败运行明确保留诊断资源。
 - 初始测试群创建：未传 `--chat-id` 时必须通过产品 `/new` use case 创建，并能确定 bot app id 与操作者 open_id，不能创建没有 bot 或无法绑定到当前用户的空群。
 - `fake_ccr_backend_used`：`--fake-ccr` 场景必须证明 fake backend 收到请求，并且最终 bot 回复包含 fake marker。
+- `fake_kimi_backend_used`：`--fake-kimi` 场景必须证明本地 OpenAI-compatible backend 收到真实 Kimi Code 请求。
+- `fake_kimi_real_executable_used`：`--fake-kimi` 场景必须记录非 scripted 的 Kimi executable 路径与可解析版本号；用脚本替换 `kimi` 不能满足该 gate。
 - `basic_dialogue_scripted_kimi_lifecycle_and_ctrl_s`：scripted `basic-dialogue-suite` 必须证明 fresh Kimi fake executable 只记录一次不带 `-r` 的启动、零次用于发现 session 的 Ctrl-C、从 TUI 绑定 fake CLI 生成的 session id，以及至少一次 Ctrl-S steer。
 - `basic_dialogue_kimi_runtime_slot_persisted`：scripted `basic-dialogue-suite` 必须证明聊天绑定的 Kimi runtime slot 指向独立 Kimi `BridgeSession`，且该 session 记录的 Kimi session id/cwd 能解析到 `wire.jsonl`。
 - `basic_dialogue_kimi_wire_transcript_read`：scripted `basic-dialogue-suite` 必须从 Kimi runtime slot 的 `wire.jsonl` 读回本轮 scripted thinking、final marker text 和 `step.end`，不能只证明文件存在。
@@ -185,6 +187,7 @@ Claude/CCR 场景额外要求：
 - bridge 日志应出现 `Route Claude Code request`，且 executable 是 `ccr`。
 - 如果群里返回 Claude Code 欢迎页、安全提示或 trust prompt，说明 Claude Code tmux provider 还没有完成 onboarding，不能算 runtime 响应通过。
 - `--fake-ccr` 必须配合 `--launch-bridge` 使用；它只会给 harness 启动的隔离 bridge 写入 fake CCR 配置，不能注入已运行的 live bridge。
+- `--fake-kimi` 必须配合 `--launch-bridge --runtime kimi --provider tmux` 使用；它通过 Kimi 官方 `KIMI_MODEL_*` 环境覆盖把真实 executable 指向本地假模型，不复制宿主 OAuth，也不替换 `kimi`。
 - `--scripted-basic-dialogue` 只能配合 `basic-dialogue-suite` 和 `--launch-bridge` 使用；它会把 Codex Responses、CCR 和 Kimi executable 都隔离在本次 run root 下。
 - 接受 `basic-dialogue-suite --scripted-basic-dialogue` canonical 报告前，先检查报告 JSON：`canonicalEligibility.eligible` 必须为 `true`，`automatedSuccessChecks` 必须包含通过的 `canonical_report_eligible`，`runRoot` 必须是本次临时目录，`codelarkHome`、`runtimeEnvironment.runtimeHome`、`runtimeEnvironment.codexHome` 和 `runtimeEnvironment.kimiHome` 都必须位于该 `runRoot` 下，且 Kimi executable 来源应为 `scripted-fake-executable`。任何显示 `codelarkHome=/home/*/.codelark`、`codexHome=/home/*/.codex` 或 `kimiHome=/home/*/.kimi-code` 的报告都只能作为诊断，不算 canonical。
 
@@ -205,14 +208,14 @@ Claude/CCR 场景额外要求：
 ## 本地目录隔离
 
 - `npm test` 会把 `CODELARK_HOME`、`CODEX_HOME`、`CODELARK_CLAUDE_HOME`、`KIMI_CODE_HOME`、`HOME` 和 `USERPROFILE` 指到 `/tmp/codelark-test-*`。
-- 真实飞书 harness 的 bridge 子进程使用 `--run-root` 下的隔离 `codelark-home`、`codex-home`、`runtime-home` 和 `claude-home`；Kimi 的 `KIMI_CODE_HOME` 固定为 `<runtime-home>/.kimi-code`，不提供单独的 Kimi E2E 开关。
+- 真实飞书 harness 的 bridge 子进程使用 `--run-root` 下的隔离 `codelark-home`、`codex-home`、`runtime-home` 和 `claude-home`；Kimi 的 `KIMI_CODE_HOME` 固定为 `<runtime-home>/.kimi-code`。需要稳定验证真实 CLI 时使用 `--fake-kimi`，不要依赖宿主订阅或 OAuth。
 - 真实发送不允许省略 `--launch-bridge`，也不允许驱动当前 live bridge；`--dry-run`、`--list-scenarios`、`--dump-only` 和 `--stop-test-bridge` 只是计划、读取或清理辅助路径。
 - 复用本机 Codex/Claude/CCR/Kimi 登录状态时，只把认证文件或配置目录以符号链接接入隔离 runtime home；测试写入应发生在隔离 home 中。
 
 ## 下一步
 
 1. 继续用 `basic-dialogue-suite --scripted-basic-dialogue` 作为主线长流程，补真实飞书 canonical 报告，并保持 Codex/Claude/Kimi 都由隔离确定性模型或 fake executable 驱动。
-2. 补 Kimi tmux 的真实飞书 runtime smoke 与 session-management 代表路径。
+2. 在已有 Kimi runtime smoke 与 session-management 代表路径基础上，补 `command-state` 和 `history-suite`。
 3. 命令密集型 suite 保持按 runtime 压缩，不再扩张完整 provider 矩阵。
 4. 用 `history-suite` 的 runtime/provider 矩阵补齐 Kimi/Claude/Codex 的同层历史功能簇证据，旧拆分 history 场景只做定向回归。
 5. 继续补表单 submit callback、附件 ingestion、权限失败恢复、tool detail card 和更多跨群生命周期场景。

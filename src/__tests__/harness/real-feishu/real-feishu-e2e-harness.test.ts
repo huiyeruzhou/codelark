@@ -751,6 +751,27 @@ describe('unit::real-feishu-e2e-harness::auth-preflight', () => {
     );
   });
 
+  it('restricts fake Kimi to the real Kimi tmux runtime', () => {
+    assert.match(
+      runHarnessFailure(['--dry-run', '--fake-kimi', '--runtime', 'codex', '--provider', 'tmux']),
+      /--fake-kimi requires --runtime kimi --provider tmux/,
+    );
+    assert.match(
+      runHarnessFailure([
+        '--dry-run',
+        '--fake-kimi',
+        '--scripted-kimi',
+        '--scenario',
+        'runtime-message',
+        '--runtime',
+        'kimi',
+        '--provider',
+        'tmux',
+      ]),
+      /--fake-kimi cannot be combined with a scripted Kimi executable/,
+    );
+  });
+
   it('copies host Kimi auth into isolated KIMI_CODE_HOME without copying sessions', () => {
     const fakeBin = installFakeNpxForLarkAuthStatus({
       appId: 'cli_kimi_auth_copy_test',
@@ -2383,12 +2404,11 @@ describe('unit::real-feishu-e2e-harness::session-management-command-plan', () =>
       'kimi',
       '--provider',
       'tmux',
+      '--fake-kimi',
       '--run-id',
       'unit-session-management-kimi-tmux',
       '--chat-id',
       'oc_unit',
-      '--message',
-      'CODELARK_UNIT_SESSION_MANAGEMENT_KIMI_TMUX',
     ]);
     const parsed = JSON.parse(output) as {
       coverage: {
@@ -2400,14 +2420,30 @@ describe('unit::real-feishu-e2e-harness::session-management-command-plan', () =>
       waitsForMirrorFinalBeforeFollowup: boolean;
       finalMessageObservationMode: string;
       plannedSuccessCheckNames: string[];
+      fakeKimi: boolean;
+      fakeKimiResponseText: string;
+      requiredCheckCheckpointCommand: string | null;
+      runtimeEnvironment: {
+        kimiAuthSource: string;
+        kimiExecutableSource: string;
+        fakeKimiProxyBaseUrl?: string;
+      };
       commandReplyExpectations: Array<{ command: string; expectedTexts: string[]; replyTimeoutMs: number; reason: string }>;
     };
 
     assert.equal(parsed.coverage.testName, 'real-feishu::session-management::kimi-tmux');
+    assert.equal(parsed.requiredCheckCheckpointCommand, '/t archive');
     assert.equal(parsed.coverage.dualProviderCompanion, 'real-feishu::session-management::codex-tmux');
     assert.ok(parsed.coverage.matrixCompanions.includes('real-feishu::session-management::claude-sdk'));
     assert.equal(parsed.waitsForMirrorFinalBeforeFollowup, true);
     assert.equal(parsed.finalMessageObservationMode, 'mirror-stream-evidence');
+    assert.equal(parsed.fakeKimi, true);
+    assert.equal(parsed.fakeKimiResponseText, 'CODELARK_REAL_FEISHU_UNIT_SESSION_MANAGEMENT_KIMI_TMUX');
+    assert.equal(parsed.runtimeEnvironment.kimiAuthSource, 'not-needed');
+    assert.notEqual(parsed.runtimeEnvironment.kimiExecutableSource, 'scripted-fake-executable');
+    assert.equal(parsed.runtimeEnvironment.fakeKimiProxyBaseUrl, '<local-openai-chat-completions-backend>');
+    assert.ok(parsed.plannedSuccessCheckNames.includes('fake_kimi_backend_used'));
+    assert.ok(parsed.plannedSuccessCheckNames.includes('fake_kimi_real_executable_used'));
     assert.ok(parsed.plannedSuccessCheckNames.includes('runtime_prompt_final_transcript_marker'));
     assert.ok(parsed.plannedSuccessCheckNames.includes('session_management_runtime_identity_transcript'));
     assert.equal(parsed.commandReplyExpectations.length, parsed.commands.length - 1);
@@ -2429,10 +2465,36 @@ describe('unit::real-feishu-e2e-harness::session-management-command-plan', () =>
     assert.deepEqual(expectationAt(parsed.commandReplyExpectations, '/current').expectedTexts, ['Kimi Code', 'clear-unit-session-management-kimi-tmux', 'Provider', 'tmux', '当前 agent']);
     assert.deepEqual(expectationAt(parsed.commandReplyExpectations, '/check').expectedTexts, ['当前会话健康检查', 'runtime', 'Kimi Code', 'kimi_session_id', 'runtime_cwd']);
     assert.deepEqual(expectationAt(parsed.commandReplyExpectations, '/t unbind').expectedTexts, ['当前聊天已解绑', '新的临时 BridgeSession']);
-    assert.ok(parsed.commands.includes('请只回复下面这个 marker，不要添加解释：\nCODELARK_UNIT_SESSION_MANAGEMENT_KIMI_TMUX'));
-    assert.equal(parsed.commandReplyExpectations.some((item) => item.command.includes('CODELARK_UNIT_SESSION_MANAGEMENT_KIMI_TMUX')), false);
-    assert.deepEqual(expectationAt(parsed.commandReplyExpectations, '/his 5').expectedTexts, ['CODELARK_UNIT_SESSION_MANAGEMENT_KIMI_TMUX']);
+    assert.ok(parsed.commands.includes('请只回复下面这个 marker，不要添加解释：\nCODELARK_REAL_FEISHU_UNIT_SESSION_MANAGEMENT_KIMI_TMUX'));
+    assert.equal(parsed.commandReplyExpectations.some((item) => item.command.includes('CODELARK_REAL_FEISHU_UNIT_SESSION_MANAGEMENT_KIMI_TMUX')), false);
+    assert.deepEqual(expectationAt(parsed.commandReplyExpectations, '/his 5').expectedTexts, ['CODELARK_REAL_FEISHU_UNIT_SESSION_MANAGEMENT_KIMI_TMUX']);
     assert.deepEqual(expectationAt(parsed.commandReplyExpectations, '/t archive').expectedTexts, ['已归档本地 Kimi Code 会话']);
+  });
+
+  it('matches a stable /new group-name prefix when Feishu truncates a long name', () => {
+    const runId = 'unit-session-management-kimi-tmux-with-a-very-long-unique-suffix';
+    const output = runHarness([
+      '--dry-run',
+      '--scenario',
+      'session-management',
+      '--runtime',
+      'kimi',
+      '--provider',
+      'tmux',
+      '--fake-kimi',
+      '--run-id',
+      runId,
+      '--chat-id',
+      'oc_unit',
+    ]);
+    const parsed = JSON.parse(output) as {
+      commandReplyExpectations: Array<{ command: string; expectedTexts: string[] }>;
+    };
+    const command = `/new mgmt-${runId} ${DEFAULT_WORKSPACE_ROOT}`;
+    assert.deepEqual(
+      expectationAt(parsed.commandReplyExpectations, command).expectedTexts,
+      ['已创建群聊会话', `mgmt-${runId}`.slice(0, 40), DEFAULT_WORKSPACE_ROOT, 'Runtime', 'Kimi Code'],
+    );
   });
 
   it('dry-runs history-boundaries with semantic reply assertions', () => {
