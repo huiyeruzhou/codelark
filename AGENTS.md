@@ -11,6 +11,7 @@ git 不要提交 `STATUS.md`
 - 运行 `npm run build`、`npm test`、`npm run typecheck` 或其他 Node 命令前，除非当前 shell 已经是 Node.js 24，否则先运行 `nvm use 24`。
 - 由于环境可能带有普通 Node 不接受的 `NODE_OPTIONS`，必要时使用 `unset NODE_OPTIONS; source ~/.nvm/nvm.sh && nvm use 24 && ...`。
 - 所有异步等待（测试、构建、CI、下载、远端 API、服务启动、热更新、实验、subagent）都只保留一个可观察句柄；有独立工作就继续推进，只有下一步确实被阻塞时才短读一次状态。禁止把一个 wait/session 再包进另一个 wait cell。长测试或高噪声命令默认把 stdout/stderr 写入任务日志文件，优先让单个 detached 进程写 exit marker，再读 marker/日志；控制台先只报告退出码和简短摘要，失败时再定向读取片段。每次 wait/poll 必须显式设置并在工具摘要中展示输出 token 上限，完整输出仍保留在日志文件。
+- 手工实验或测试清理 tmux 时，不能只设置 `TMUX_TMPDIR`：当前进程若继承了 `TMUX`，tmux client 会继续连接该变量指向的现有 server。必须先只读核对目标 socket，并使用 `env -u TMUX -u TMUX_PANE tmux -S <已验证的隔离 socket> ...`；优先按确切名称执行 `kill-session`。除非该 socket 确认由本次隔离任务独占，不得执行 `kill-server`，更不能对当前会话所在 socket 做清理。
 - 除非用户明确要求，不要 push commit，不要 hot update 或 redeploy 本地 bridge。
 - 工作完成后，代码变更仍应提交到本地 git；同一功能阶段的 follow-up 应 amend 到同一个 commit，并且询问用户是否要merge回主分支。
 
