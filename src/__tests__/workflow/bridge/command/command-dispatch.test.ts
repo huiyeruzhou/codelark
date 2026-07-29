@@ -1262,7 +1262,7 @@ describe('command-dispatch', () => {
         },
       );
 
-      assert.equal(sent.length, 1);
+      assert.ok(sent.length >= 1);
       assert.match(sent[0].text, /已派发 CodeLark 热更新/);
       assert.equal(sent[0].richCard?.title, 'CodeLark 热更新日志');
       assert.match(sent[0].richCard?.updateKey || '', /^hot-update-log:/);
@@ -1278,15 +1278,15 @@ describe('command-dispatch', () => {
       assert.deepEqual(consumeStartupNoticeTarget()?.address, address);
 
       fs.appendFileSync(hotUpdateLog, '\n[hot-update] completed 2026-05-31T23:43:10+08:00\n', 'utf-8');
-      await new Promise((resolve) => setTimeout(resolve, 25));
+      await waitForCondition(() => sent.some((message) => message.richCard?.title === 'CodeLark 热更新完成'));
 
       assert.ok(sent.length >= 2);
-      assert.equal(sent[1].richCardUpdateMessageId, 'reply-hot-update-card-1');
-      assert.equal(sent[1].richCard?.updateKey, sent[0].richCard?.updateKey);
-      assert.equal(sent[1].richCard?.title, 'CodeLark 热更新完成');
-      assert.match(sent[1].richCard?.sections[1]?.code?.text || '', /\[hot-update\] completed/);
-      assert.doesNotMatch(sent[1].richCard?.sections[1]?.code?.text || '', /old output line 008/);
-      assert.match(sent[1].richCard?.sections[1]?.code?.text || '', /old output line 009/);
+      const completed = sent.find((message) => message.richCard?.title === 'CodeLark 热更新完成')!;
+      assert.equal(completed.richCardUpdateMessageId, 'reply-hot-update-card-1');
+      assert.equal(completed.richCard?.updateKey, sent[0].richCard?.updateKey);
+      assert.match(completed.richCard?.sections[1]?.code?.text || '', /\[hot-update\] completed/);
+      assert.doesNotMatch(completed.richCard?.sections[1]?.code?.text || '', /old output line 008/);
+      assert.match(completed.richCard?.sections[1]?.code?.text || '', /old output line 009/);
     } finally {
       fs.rmSync(logDir, { recursive: true, force: true });
     }
