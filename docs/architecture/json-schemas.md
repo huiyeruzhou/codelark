@@ -18,12 +18,12 @@ CodeLark 为 `~/.codelark` 下的本地数据文件发布 JSON Schema。入口�
 | `version-check.json` | `schemas/version-check.v1.schema.json` | 每日 npm 版本检查状态：最新版本、忽略到的版本、最后检查日期；bridge 启动时读取一次并在进程内缓存。 |
 | `data/sessions.json` | `schemas/data/sessions.v1.schema.json` | 以 Bridge session id 为 key 的 map；保存当前 BridgeSession 的 runtime-local identity，例如 `runtime.codex.threadId`、`runtime.claude.sessionId/cwd`、`runtime.kimi.sessionId/cwd` 或 `runtime.cursor.sessionId/cwd`。 |
 | `data/channel-chats.json` | `schemas/data/channel-chats.v1.schema.json` | 以 ChannelChat id 为 key 的 map；使用 `bridgeSessionId` 指向 session，禁止保存底层 runtime identity 和旧 binding 运行时字段。 |
-| `data/channel-default-targets.json` | `schemas/data/channel-default-targets.v1.schema.json` | 以 channel instance id 为 key 的默认目标 map；使用 `bridgeSessionId`，启动时会丢弃缺少它的旧记录。 |
 | `data/messages/*.json` | `schemas/data/messages.v1.schema.json` | 单个 BridgeSession 的消息数组。 |
 | `data/permissions.json` | `schemas/data/permissions.v1.schema.json` | 权限请求链接。 |
 | `data/offsets.json` | `schemas/data/string-map.v1.schema.json` | 通道消费偏移 map。 |
 | `data/dedup.json` | `schemas/data/number-map.v1.schema.json` | 去重时间戳 map。 |
 | `data/audit.jsonl` | `schemas/data/audit.v1.schema.json` | 审计记录，当前新记录按 JSONL 追加；schema 校验每个非空行的单条对象。旧 `audit.json` 数组只作为 legacy 输入读取，不登记为 current 文件。 |
+| `data/channel-routing-recovery.jsonl` | `schemas/data/channel-routing-recovery.v1.schema.json` | 升级清理旧通配入口和重复 binding 前保存的完整恢复记录；只在实际清理时追加。 |
 
 `version-check.json` 不属于用户配置，也不参与配置迁移。缺失或损坏时按三个 `null` 字段重新开始；同一自然日的检查日期会在访问 npm registry 前先在内存中 claim，避免当天第一批并发消息重复查询。registry 查询失败也会写入当天日期，下一条消息不会立即重试。
 
@@ -66,7 +66,8 @@ BridgeSession.runtime.codex.threadId
 - session 上的 `sdk_session_id`、`desktop_thread_id`、`thread_id` 会在 session 没有 `runtime.codex.threadId` 时折叠进去。
 - 旧 binding 到 ChannelChat 的迁移不在启动路径执行；显式脚本只保留 `active: true` 的旧记录，并把 `workingDirectory`、`model`、`mode`、`chatDisplayName` 迁到对应 session 的空字段，成功后删除旧 `data/bindings.json`。
 - 旧 `data/ui-session-meta.json` 里的名称会合并到 `sessions.json.name`；只有本地 Codex thread 名称而没有 BridgeSession 时不会再创建新 BridgeSession，然后删除 `ui-session-meta.json`。
-- 旧 `data/channel-default-targets.json` 会从 target selector 字符串改写成 `bridgeSessionId`。如果 selector 指向本地 Codex thread，会先 materialize 成 BridgeSession，再删除旧 selector 字段。
+- 旧 `data/channel-default-targets.json` 不再迁移为可用配置。启动时会先把完整记录追加到 `data/channel-routing-recovery.jsonl`，再删除该文件，防止任意新聊天被转发到旧会话。
+- 如果 `data/channel-chats.json` 中多个聊天指向同一个 `bridgeSessionId`，启动迁移会优先移除带有历史 `auto_create_prebound` 审计证据的 binding；没有该证据时保留更早创建的 binding。被移除记录同样写入恢复日志，并在 `data/audit.jsonl` 中留下修复事件。
 
 ## 身份规则
 

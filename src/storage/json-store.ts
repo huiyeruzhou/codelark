@@ -13,9 +13,8 @@ import type {
   AuditLogInput,
   OutboundRefInput,
   UpsertChannelChatInput,
-  UpsertChannelDefaultTargetInput,
 } from '../domain/audit.js';
-import type { ChannelChat, ChannelDefaultTarget, ChannelType } from '../domain/channel.js';
+import type { ChannelChat, ChannelType } from '../domain/channel.js';
 import type { BridgeMessage } from '../domain/message.js';
 import type { PermissionLinkInput, PermissionLinkRecord } from '../domain/permission.js';
 import type {
@@ -41,7 +40,6 @@ import {
 const DATA_DIR = path.join(CODELARK_HOME, 'data');
 const MESSAGES_DIR = path.join(DATA_DIR, 'messages');
 const CHANNEL_CHATS_PATH = path.join(DATA_DIR, 'channel-chats.json');
-const CHANNEL_DEFAULT_TARGETS_PATH = path.join(DATA_DIR, 'channel-default-targets.json');
 const AUDIT_JSON_PATH = path.join(DATA_DIR, 'audit.json');
 const AUDIT_JSONL_PATH = path.join(DATA_DIR, 'audit.jsonl');
 
@@ -99,11 +97,6 @@ function uuid(): string {
 
 function now(): string {
   return new Date().toISOString();
-}
-
-function defaultAliasForProvider(provider: string | undefined): string | undefined {
-  if (provider === 'feishu') return '飞书';
-  return undefined;
 }
 
 function normalizeChatKind(value: unknown): ChannelChat['chatKind'] | undefined {
@@ -250,32 +243,6 @@ function mergeSessionRuntime(
   };
 }
 
-function normalizeChannelDefaultTarget(target: ChannelDefaultTarget): ChannelDefaultTarget {
-  let instance: { provider?: string; alias?: string } | undefined;
-  try {
-    instance = createConfigService({ migrate: false })
-      .snapshot()
-      .config
-      .channels
-      .find((channel) => channel.id === target.channelType);
-  } catch {
-    instance = undefined;
-  }
-  const channelProvider = instance?.provider || target.channelProvider;
-  const channelAlias = instance?.alias || target.channelAlias || defaultAliasForProvider(channelProvider);
-
-  return {
-    ...target,
-    channelProvider,
-    channelAlias,
-  };
-}
-
-function didChannelDefaultTargetChange(before: ChannelDefaultTarget, after: ChannelDefaultTarget): boolean {
-  return before.channelProvider !== after.channelProvider
-    || before.channelAlias !== after.channelAlias;
-}
-
 function messageJsonPath(sessionId: string): string {
   return path.join(MESSAGES_DIR, `${sessionId}.json`);
 }
@@ -299,7 +266,6 @@ export class JsonFileStore implements BridgeStore {
   private dynamicSettings: boolean;
   private sessions = new Map<string, BridgeSession>();
   private bindings = new Map<string, ChannelChat>();
-  private channelDefaultTargets = new Map<string, ChannelDefaultTarget>();
   private messages = new Map<string, BridgeMessage[]>();
   private permissionLinks = new Map<string, PermissionLinkRecord>();
   private offsets = new Map<string, string>();
@@ -324,7 +290,6 @@ export class JsonFileStore implements BridgeStore {
   private loadAll(): void {
     this.reloadSessions();
     this.reloadBindings();
-    this.reloadChannelDefaultTargets();
 
     // Permission links
     const perms = readJson<Record<string, PermissionLinkRecord>>(
@@ -395,28 +360,6 @@ export class JsonFileStore implements BridgeStore {
     }
   }
 
-  private reloadChannelDefaultTargets(): void {
-    const targets = readJson<Record<string, ChannelDefaultTarget>>(
-      CHANNEL_DEFAULT_TARGETS_PATH,
-      {},
-    );
-    const normalized = new Map<string, ChannelDefaultTarget>();
-    let changed = false;
-
-    for (const target of Object.values(targets)) {
-      const normalizedTarget = normalizeChannelDefaultTarget(target);
-      if (didChannelDefaultTargetChange(target, normalizedTarget)) {
-        changed = true;
-      }
-      normalized.set(normalizedTarget.channelType, normalizedTarget);
-    }
-
-    this.channelDefaultTargets = normalized;
-    if (changed) {
-      this.persistChannelDefaultTargets();
-    }
-  }
-
   private persistSessions(): void {
     writeJson(
       path.join(DATA_DIR, 'sessions.json'),
@@ -428,13 +371,6 @@ export class JsonFileStore implements BridgeStore {
     writeJson(
       CHANNEL_CHATS_PATH,
       Object.fromEntries(this.bindings),
-    );
-  }
-
-  private persistChannelDefaultTargets(): void {
-    writeJson(
-      CHANNEL_DEFAULT_TARGETS_PATH,
-      Object.fromEntries(this.channelDefaultTargets),
     );
   }
 
@@ -649,53 +585,6 @@ export class JsonFileStore implements BridgeStore {
     const all = Array.from(this.bindings.values());
     if (!channelType) return all;
     return all.filter((b) => b.channelType === channelType);
-  }
-
-  getChannelDefaultTarget(channelType: string): ChannelDefaultTarget | null {
-    this.reloadChannelDefaultTargets();
-    return this.channelDefaultTargets.get(channelType) ?? null;
-  }
-
-  upsertChannelDefaultTarget(data: UpsertChannelDefaultTargetInput): ChannelDefaultTarget {
-    this.reloadChannelDefaultTargets();
-    const existing = this.channelDefaultTargets.get(data.channelType);
-    if (existing) {
-      const updated: ChannelDefaultTarget = {
-        ...existing,
-        bridgeSessionId: data.bridgeSessionId,
-        channelProvider: data.channelProvider ?? existing.channelProvider,
-        channelAlias: data.channelAlias ?? existing.channelAlias,
-        updatedAt: now(),
-      };
-      this.channelDefaultTargets.set(data.channelType, updated);
-      this.persistChannelDefaultTargets();
-      return updated;
-    }
-
-    const target: ChannelDefaultTarget = {
-      id: uuid(),
-      channelType: data.channelType,
-      channelProvider: data.channelProvider,
-      channelAlias: data.channelAlias,
-      bridgeSessionId: data.bridgeSessionId,
-      createdAt: now(),
-      updatedAt: now(),
-    };
-    this.channelDefaultTargets.set(data.channelType, target);
-    this.persistChannelDefaultTargets();
-    return target;
-  }
-
-  deleteChannelDefaultTarget(channelType: string): void {
-    this.reloadChannelDefaultTargets();
-    if (this.channelDefaultTargets.delete(channelType)) {
-      this.persistChannelDefaultTargets();
-    }
-  }
-
-  listChannelDefaultTargets(): ChannelDefaultTarget[] {
-    this.reloadChannelDefaultTargets();
-    return Array.from(this.channelDefaultTargets.values());
   }
 
   // ── Sessions ──

@@ -728,7 +728,6 @@ export function renderUiShellHtml(): string {
         sessionRuntimeFilter: '',
         bindings: [],
         bindingOptions: [],
-        channelDefaults: [],
         activeBindingByChannelId: {},
         codexRoot: '',
         activePage: 'overview',
@@ -1034,26 +1033,6 @@ export function renderUiShellHtml(): string {
         );
       }
 
-      function channelDefaultMatchesSessionIdentity(channelDefault, identity) {
-        if (!channelDefault || !identity) return false;
-        if (identity.bridgeSessionId && channelDefault.targetSessionId === identity.bridgeSessionId) return true;
-        if (identity.codexThreadId && channelDefault.targetThreadId === identity.codexThreadId) return true;
-        return Boolean(
-          (identity.claudeSessionId
-            && channelDefault.targetRuntime === 'claude'
-            && channelDefault.targetRuntimeThreadId === identity.claudeSessionId
-            && (!identity.claudeCwd || channelDefault.targetClaudeCwd === identity.claudeCwd))
-          || (identity.kimiSessionId
-            && channelDefault.targetRuntime === 'kimi'
-            && channelDefault.targetRuntimeThreadId === identity.kimiSessionId
-            && (!identity.kimiCwd || channelDefault.targetKimiCwd === identity.kimiCwd))
-          || (identity.cursorSessionId
-            && channelDefault.targetRuntime === 'cursor'
-            && channelDefault.targetRuntimeThreadId === identity.cursorSessionId
-            && (!identity.cursorCwd || channelDefault.targetCursorCwd === identity.cursorCwd))
-        );
-      }
-
       function sessionCreatorTag(session) {
         if (session && session.creatorLabel && session.creatorClass) {
           return { label: session.creatorLabel, className: session.creatorClass };
@@ -1202,9 +1181,6 @@ export function renderUiShellHtml(): string {
       }
 
       function bindingTabLabel(binding) {
-        if (binding.kind === 'default') {
-          return '下一条新聊天';
-        }
         return binding.chatDisplayName || binding.chatId || binding.id;
       }
 
@@ -1213,23 +1189,6 @@ export function renderUiShellHtml(): string {
       }
 
       function renderBindingCard(binding) {
-        if (binding.kind === 'default') {
-          return ''
-            + '<article class="binding-item" data-binding-id="' + escapeHtml(binding.id) + '">'
-            +   '<div class="binding-head">'
-            +     '<div class="binding-title">下一条新聊天</div>'
-            +     '<div class="actions">'
-            +       '<div class="small">' + escapeHtml(formatDefaultTargetAccount(binding)) + '</div>'
-            +       '<button type="button" data-action="clear-channel-default-target" data-channel-type="' + escapeHtml(binding.channelType) + '">清除当前入口</button>'
-            +     '</div>'
-            +   '</div>'
-            +   '<div class="binding-detail">接入方式：该通道收到下一条新聊天后，会直接进入当前指定会话。</div>'
-            +   '<div class="binding-detail">当前会话：<code>' + escapeHtml(binding.currentSessionId ? binding.currentSessionId.slice(0, 8) + '...' : 'not-shared') + '</code> · ' + escapeHtml(binding.currentSessionName || binding.currentTargetLabel || '未指定') + '</div>'
-            +   '<div class="binding-detail">当前目标：' + escapeHtml(binding.currentTargetLabel || '未指定') + '</div>'
-          +   '<div class="binding-detail">当前 runtime：<code>' + escapeHtml(binding.currentRuntime || 'codex') + '</code> · <code>' + escapeHtml(bindingRuntimeIdentityText(binding)) + '</code></div>'
-          +   '<div class="binding-detail">Mode / Provider：<code>' + escapeHtml(binding.mode || 'normal') + '</code> · <code>' + escapeHtml(bindingProviderValue(binding)) + '</code></div>'
-          + '</article>';
-        }
         return ''
           + '<article class="binding-item" data-binding-id="' + escapeHtml(binding.id) + '">'
           +   '<div class="binding-head">'
@@ -1796,12 +1755,6 @@ export function renderUiShellHtml(): string {
           counts.set(label, (counts.get(label) || 0) + 1);
         }
 
-        for (const entry of state.channelDefaults || []) {
-          if (!channelDefaultMatchesSessionIdentity(entry, identity)) continue;
-          const label = (entry.channelAlias || providerLabel(entry.channelProvider)) + ' 当前';
-          counts.set(label, (counts.get(label) || 0) + 1);
-        }
-
         for (const [label, count] of counts.entries()) {
           marks.push(count > 1 ? label + ' x' + count : label);
         }
@@ -1812,11 +1765,6 @@ export function renderUiShellHtml(): string {
       function bindingsForSession(session) {
         const identity = sessionIdentityPayload(sessionRef(session));
         return (state.bindings || []).filter((binding) => bindingMatchesSessionIdentity(binding, identity));
-      }
-
-      function channelDefaultsForSession(session) {
-        const identity = sessionIdentityPayload(sessionRef(session));
-        return (state.channelDefaults || []).filter((entry) => channelDefaultMatchesSessionIdentity(entry, identity));
       }
 
       function projectNameFromCwd(cwd) {
@@ -1831,12 +1779,6 @@ export function renderUiShellHtml(): string {
         const provider = providerLabel(binding.channelProvider);
         const channel = alias ? (alias === provider ? alias : alias + ' · ' + provider) : provider;
         return channel + ' · ' + (binding.chatDisplayName || binding.chatId);
-      }
-
-      function formatDefaultTargetAccount(entry) {
-        const alias = String(entry.channelAlias || '').trim();
-        const provider = providerLabel(entry.channelProvider);
-        return alias ? (alias === provider ? alias : alias + ' · ' + provider) : provider;
       }
 
       function renderSessionChannelControl(session) {
@@ -1938,7 +1880,6 @@ export function renderUiShellHtml(): string {
 
       function renderBoundCodexSessionCard(session) {
         const bindings = bindingsForSession(session);
-        const defaults = channelDefaultsForSession(session);
         const marks = currentThreadMarks(session);
         const markHtml = marks.map((mark) => '<span class="session-mark">' + escapeHtml(mark) + '</span>').join('');
         const runtimeThreadId = sessionRuntimeThreadId(session);
@@ -1951,14 +1892,7 @@ export function renderUiShellHtml(): string {
             + '<button type="button" data-action="unbind-binding" data-binding-id="' + escapeHtml(binding.id) + '" data-channel="' + escapeHtml(binding.channelType) + '">解绑</button>'
           + '</div>'
         )).join('');
-        const defaultTags = defaults.map((entry) => (
-          '<div class="session-binding-tag">'
-            + '<span class="session-binding-tag-label">' + escapeHtml(formatDefaultTargetAccount(entry) + ' · 等待首条新聊天') + '</span>'
-            + iconButton('open-session-config-modal', 'settings', '会话配置', sessionIdentityAttrs(session), 'mini-icon')
-            + '<button type="button" data-action="clear-channel-default-target" data-channel-type="' + escapeHtml(entry.channelType) + '">清除</button>'
-          + '</div>'
-        )).join('');
-        const tagHtml = bindingTags + defaultTags;
+        const tagHtml = bindingTags;
 
         return ''
           + '<article class="session-card session-openable' + (marks.length ? ' current-thread' : '') + '" ' + sessionIdentityAttrs(session) + '>'
@@ -2043,7 +1977,7 @@ export function renderUiShellHtml(): string {
         const dedupedBridgeRows = Number.isFinite(Number(counts.dedupedBridgeRows))
           ? Number(counts.dedupedBridgeRows)
           : 0;
-        const boundSessions = sessions.filter((session) => bindingsForSession(session).length > 0 || channelDefaultsForSession(session).length > 0);
+        const boundSessions = sessions.filter((session) => bindingsForSession(session).length > 0);
         renderOverviewPath();
         document.getElementById('codexSessionMeta').textContent =
           '已发现：Codex ' + codexPhysical + ' 条'
@@ -2112,45 +2046,11 @@ export function renderUiShellHtml(): string {
         return (state.bindings || []).filter((item) => item.channelType === channelId);
       }
 
-      function channelDefaultForChannel(channelId) {
-        return (state.channelDefaults || []).find((item) => item.channelType === channelId) || null;
-      }
-
       function bindingEntriesForChannel(channelId) {
-        const bindings = bindingsForChannel(channelId).map((binding) => ({
+        return bindingsForChannel(channelId).map((binding) => ({
           kind: 'binding',
           ...binding,
         }));
-        const channelDefault = channelDefaultForChannel(channelId);
-        if (!channelDefault) {
-          return bindings;
-        }
-        return [{
-          kind: 'default',
-          id: 'default:' + channelId,
-          channelType: channelDefault.channelType,
-          channelProvider: channelDefault.channelProvider,
-          channelAlias: channelDefault.channelAlias,
-          chatId: '*',
-          chatDisplayName: '等待首条新聊天',
-          mode: channelDefault.mode || 'normal',
-          model: '',
-          codexProvider: channelDefault.codexProvider || 'default',
-          executionProvider: channelDefault.executionProvider || channelDefault.codexProvider || 'default',
-          workingDirectory: '',
-          currentTargetLabel: channelDefault.targetLabel,
-          currentSessionId: channelDefault.targetSessionId || channelDefault.bridgeSessionId || '',
-          currentSessionName: channelDefault.targetLabel || '未指定',
-          currentRuntime: channelDefault.targetRuntime || 'codex',
-          currentThreadId: channelDefault.targetThreadId || '',
-          currentRuntimeThreadId: channelDefault.targetRuntimeThreadId || channelDefault.targetThreadId || '',
-          currentClaudeCwd: channelDefault.targetClaudeCwd || '',
-          currentKimiCwd: channelDefault.targetKimiCwd || '',
-          runtimeStatus: '',
-          queuedCount: 0,
-          mirrorStatus: '',
-          mirrorLastEventAt: '',
-        }].concat(bindings);
       }
 
       function ensureActiveBinding(channelId, bindings) {
@@ -2231,7 +2131,7 @@ export function renderUiShellHtml(): string {
                 + ' data-action="select-binding-tab"'
                 + ' data-channel-id="' + escapeHtml(channel.id) + '"'
                 + ' data-binding-id="' + escapeHtml(binding.id) + '"'
-                + ' title="' + escapeHtml(binding.kind === 'default' ? '等待首条新聊天' : binding.chatId) + '">'
+                + ' title="' + escapeHtml(binding.chatId) + '">'
                 + escapeHtml(bindingTabLabel(binding))
               + '</button>'
             )).join('') + '</div>'
@@ -2337,7 +2237,6 @@ export function renderUiShellHtml(): string {
       function renderBindings(result) {
         state.bindings = result.bindings || [];
         state.bindingOptions = result.options || [];
-        state.channelDefaults = result.channelDefaults || [];
         renderOverviewPath();
         renderChannelsWorkspace();
         rerenderCodexSessions();
@@ -2713,40 +2612,6 @@ export function renderUiShellHtml(): string {
         showMessage('codexMessage', 'success', '通道已指定到当前会话。');
       }
 
-      async function assignSessionChannelDefault(ref, channelType) {
-        if (!ref) {
-          throw new Error('当前没有选中的会话。');
-        }
-        if (!channelType) {
-          throw new Error('当前没有可指定的通道实例。');
-        }
-
-        const channel = visibleChannels().find((item) => item.id === channelType);
-        if (!channel) {
-          throw new Error('指定的通道不存在。');
-        }
-
-        const channelDefault = channelDefaultForChannel(channelType);
-        const identity = sessionIdentityPayload(ref);
-        const targetSession = findSessionSummaryByRef(ref);
-        const targetLabel = targetSession && targetSession.title ? targetSession.title : ref;
-        const current = channelDefaultMatchesSessionIdentity(channelDefault, identity);
-        if (
-          channelDefault
-          && !current
-          && !window.confirm('通道“' + channel.alias + '”当前已预绑定到“' + channelDefault.targetLabel + '”。确认改为“' + targetLabel + '”？')
-        ) {
-          return;
-        }
-
-        const result = await api('/api/channel-default-targets/update', {
-          method: 'POST',
-          body: JSON.stringify({ channelType, ...identity }),
-        });
-        renderBindings(result);
-        showMessage('codexMessage', 'success', '已设置预绑定。该通道收到下一条新对话时会自动进入当前会话。');
-      }
-
       function closeSessionChannelModal() {
         const modal = document.getElementById('sessionChannelModal');
         if (!modal) return;
@@ -2759,7 +2624,6 @@ export function renderUiShellHtml(): string {
           throw new Error('当前没有选中的会话。');
         }
         const bindings = state.bindings || [];
-        const channels = visibleChannels().filter((channel) => !String(channel.id || '').startsWith('__draft__:'));
 
         const session = findSessionSummaryByRef(ref);
         const modal = document.getElementById('sessionChannelModal');
@@ -2779,30 +2643,10 @@ export function renderUiShellHtml(): string {
             + '</button>';
         });
 
-        const defaultItems = channels
-          .filter((channel) => {
-            const channelDefault = channelDefaultForChannel(channel.id);
-            return Boolean(channelDefault) || !bindings.some((binding) => binding.channelType === channel.id);
-          })
-          .map((channel) => {
-            const channelDefault = channelDefaultForChannel(channel.id);
-            const isCurrent = channelDefaultMatchesSessionIdentity(channelDefault, identity);
-            const meta = isCurrent
-              ? '下一条新聊天将直接进入当前会话。'
-              : (channelDefault && channelDefault.targetLabel
-                ? ('当前入口：' + channelDefault.targetLabel + '。点击改为当前会话。')
-                : '该通道收到下一条新聊天后，将直接进入当前会话。');
-            return ''
-              + '<button type="button" class="modal-list-item' + (isCurrent ? ' active' : '') + '" data-action="assign-session-channel-default" data-channel-type="' + escapeHtml(channel.id) + '"' + (isCurrent ? ' disabled' : '') + '>'
-              +   '<span class="modal-list-title">' + escapeHtml(channel.alias) + ' · ' + escapeHtml(providerLabel(channel.provider)) + ' · 下一条新聊天</span>'
-              +   '<span class="modal-list-meta">' + escapeHtml(meta) + '</span>'
-              + '</button>';
-          });
-
-        if (bindingItems.length === 0 && defaultItems.length === 0) {
-          list.innerHTML = '<div class="binding-empty">当前没有可用通道实例。请先创建并保存一个通道。</div>';
+        if (bindingItems.length === 0) {
+          list.innerHTML = '<div class="binding-empty">当前还没有已建立的聊天绑定。请先从目标群聊或单聊给机器人发一条消息。</div>';
         } else {
-          list.innerHTML = bindingItems.join('') + defaultItems.join('');
+          list.innerHTML = bindingItems.join('');
         }
         modal.hidden = false;
       }
@@ -3127,15 +2971,6 @@ export function renderUiShellHtml(): string {
             showMessage('channelMessage', 'success', '聊天绑定已解绑。');
             return;
           }
-          if (target.dataset.action === 'clear-channel-default-target') {
-            const result = await api('/api/channel-default-targets/delete', {
-              method: 'POST',
-              body: JSON.stringify({ channelType: target.dataset.channelType || channel.id }),
-            });
-            renderBindings(result);
-            showMessage('channelMessage', 'success', '通道入口已清除。');
-            return;
-          }
           if (target.dataset.action === 'switch-binding-target') {
             const result = await api('/api/bindings/update', {
               method: 'POST',
@@ -3454,20 +3289,6 @@ export function renderUiShellHtml(): string {
           return;
         }
 
-        if (target && target.dataset.action === 'clear-channel-default-target') {
-          try {
-            const result = await api('/api/channel-default-targets/delete', {
-              method: 'POST',
-              body: JSON.stringify({ channelType: target.dataset.channelType }),
-            });
-            renderBindings(result);
-            showMessage('codexMessage', 'success', '通道入口已清除。');
-          } catch (error) {
-            showMessage('codexMessage', 'error', error.message);
-          }
-          return;
-        }
-
         await handleSessionListAction(event);
       });
       document.getElementById('boundSessionsList').addEventListener('dblclick', handleSessionListDblClick);
@@ -3489,14 +3310,6 @@ export function renderUiShellHtml(): string {
             showMessage('codexMessage', 'error', error.message);
           }
           return;
-        }
-        if (target && target.dataset.action === 'assign-session-channel-default') {
-          try {
-            await assignSessionChannelDefault(modal.dataset.sessionRef || '', target.dataset.channelType || '');
-            closeSessionChannelModal();
-          } catch (error) {
-            showMessage('codexMessage', 'error', error.message);
-          }
         }
       });
 

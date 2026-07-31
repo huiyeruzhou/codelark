@@ -58,16 +58,6 @@
       "missingFile": "empty-object"
     },
     {
-      "id": "data.channel-default-targets.v1",
-      "path": "data/channel-default-targets.json",
-      "schema": "schemas/data/channel-default-targets.v1.schema.json",
-      "kind": "store-map",
-      "version": 1,
-      "versionField": null,
-      "current": true,
-      "missingFile": "empty-object"
-    },
-    {
       "id": "data.messages.v1",
       "path": "data/messages/*.json",
       "schema": "schemas/data/messages.v1.schema.json",
@@ -111,6 +101,16 @@
       "id": "data.audit.v1",
       "path": "data/audit.jsonl",
       "schema": "schemas/data/audit.v1.schema.json",
+      "kind": "store-jsonl",
+      "version": 1,
+      "versionField": null,
+      "current": true,
+      "missingFile": "empty-file"
+    },
+    {
+      "id": "data.channel-routing-recovery.v1",
+      "path": "data/channel-routing-recovery.jsonl",
+      "schema": "schemas/data/channel-routing-recovery.v1.schema.json",
       "kind": "store-jsonl",
       "version": 1,
       "versionField": null,

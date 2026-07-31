@@ -178,7 +178,7 @@ http://127.0.0.1:4781
 - 查看本地 Codex / Claude Code / Kimi Code 会话。
 - 查看 CodeLark Bridge 会话和聊天绑定。
 - 查看会话历史。
-- 给通道设置默认目标会话。
+- 把已经发过消息的具体群聊或单聊切换到目标会话；未知新聊天始终先建立自己的独立临时会话。
 - 查看日志和诊断信息。
 
 ![CodeLark 工作台](../assets/readme/showcase-workbench-card.png)

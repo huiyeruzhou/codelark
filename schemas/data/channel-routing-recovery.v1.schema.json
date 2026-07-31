@@ -1,0 +1,39 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://codelark.local/schemas/data/channel-routing-recovery.v1.schema.json",
+  "title": "CodeLark channel routing recovery JSONL entry",
+  "description": "升级迁移移除危险通配入口或重复聊天绑定前保存的完整恢复记录。",
+  "type": "object",
+  "required": [
+    "schemaVersion",
+    "recoveryKey",
+    "migratedAt",
+    "retiredChannelDefaultTargets",
+    "removedDuplicateBindings"
+  ],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "recoveryKey": { "type": "string", "minLength": 1 },
+    "migratedAt": { "type": "string", "minLength": 1 },
+    "retiredChannelDefaultTargets": {
+      "type": "array",
+      "items": { "type": "object", "additionalProperties": true }
+    },
+    "removedDuplicateBindings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["binding", "keptBindingId", "reason"],
+        "properties": {
+          "binding": { "type": "object", "additionalProperties": true },
+          "keptBindingId": { "type": "string", "minLength": 1 },
+          "reason": {
+            "enum": ["auto_create_prebound", "duplicate_bridge_session"]
+          }
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "additionalProperties": false
+}

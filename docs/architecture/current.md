@@ -515,14 +515,14 @@ flowchart TD
 
 ### 设计理念
 
-工作台里的可变操作仍然围绕 `BridgeSession.id`。本机 Codex thread、Claude session 和 Kimi session 在未接管前只是只读候选项；一旦用户要重命名、绑定、配置、删除或设置默认目标，就先 materialize 成 `BridgeSession`，再进入同一套会话生命周期。
+工作台里的可变操作仍然围绕 `BridgeSession.id`。本机 Codex thread、Claude session 和 Kimi session 在未接管前只是只读候选项；一旦用户要重命名、绑定、配置或删除，就先 materialize 成 `BridgeSession`，再进入同一套会话生命周期。绑定必须选择一个已经建立身份的具体群聊或单聊，不允许用“下一条未知聊天”代替明确的 chat id。
 
 ### 主要页面
 
 - 概览：显示 UI、bridge、通道数量和进程状态。
 - Sessions：列出 Bridge 会话和本机可发现的 Codex、Claude、Kimi、Cursor 本地会话。
 - Session History：查看某个 session 的历史。
-- Channels：管理飞书通道实例、ChannelChat、默认目标和测试。
+- Channels：管理飞书通道实例、具体 ChannelChat 绑定和测试。
 - Config：编辑全局默认设置。
 - 命令：展示 IM 命令帮助。
 
@@ -543,7 +543,7 @@ CodeLark 自有数据位于 `~/.codelark`：
 - `config.json` / `config.env`：旧版 v1 迁移输入，迁移成功后归档，不再作为运行时配置来源。
 - `data/sessions.json`：BridgeSession，只保存本地工作会话身份、运行状态和 provider runtime identity；用户配置覆盖保存在 scoped TOML。
 - `data/channel-chats.json`：ChannelChat，只保存 IM chat 身份和 `bridgeSessionId`。
-- `data/channel-default-targets.json`：通道实例的默认目标。
+- `data/channel-routing-recovery.jsonl`：升级时移除的危险通配入口和重复 binding 的完整恢复记录；只在确有修复时追加。
 - `data/messages/<sessionId>.json`：Bridge 消息缓存。
 - `data/permissions.json`：权限回调链接。
 - `data/offsets.json`：adapter 消费偏移。
@@ -553,6 +553,8 @@ CodeLark 自有数据位于 `~/.codelark`：
 - bridge 和 UI 的 runtime 状态文件。
 
 Codex 自有数据仍位于 `~/.codex`，Claude Code 自有 JSONL 由 Claude Code 生成，Kimi Code 自有 `wire.jsonl` 位于 `~/.kimi-code`。CodeLark 只读使用这些本地 runtime 文件。
+
+启动迁移会删除旧版 `data/channel-default-targets.json`，因为该文件按通道记录“下一条任意新聊天”的目标会话，无法证明新聊天就是用户原本想绑定的聊天。若同一个 `bridgeSessionId` 已经绑定到多个聊天，迁移优先移除审计中标记为 `auto_create_prebound` 的 binding；其余冲突保留更早创建的 binding。被移除的数据会先写入恢复记录，被解绑的群聊之后再收到消息时会创建自己的独立临时会话。
 
 ### 系统日志契约
 

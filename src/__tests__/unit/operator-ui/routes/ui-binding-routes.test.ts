@@ -9,7 +9,6 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 
 import { handleUiBindingRoute } from '../../../../operator-ui/routes/binding.js';
 import type { ConfigV2 } from '../../../../configuration/schema.js';
-import { listChannelDefaultTargetSummaries } from '../../../../bridge/session/registry/bindings.js';
 import { computeKimiWorkspaceDirName } from '../../../../runtime/kimi/session-index.js';
 import { JsonFileStore } from '../../../../storage/json-store.js';
 import { makeBridgeSettings, resetBridgeTestState } from '../../../helpers/bridge/test-bridge-utils.js';
@@ -79,7 +78,6 @@ async function dispatch(
     readConfig: () => ({}) as ConfigV2,
     buildBindingsPayload: async (payloadStore) => ({
       bindings: payloadStore.listChannelChats(),
-      channelDefaults: listChannelDefaultTargetSummaries(payloadStore),
       options: payloadStore.listSessions(),
     }),
   });
@@ -95,7 +93,7 @@ describe('handleUiBindingRoute', () => {
     resetBridgeTestState();
   });
 
-  it('materializes Kimi Code sessions when updating channel defaults and bindings through HTTP routes', async () => {
+  it('rejects retired channel defaults and materializes Kimi only for an existing chat binding', async () => {
     const kimiHome = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-ui-binding-route-kimi-home-'));
     const previousKimiHome = process.env.KIMI_CODE_HOME;
     process.env.KIMI_CODE_HOME = kimiHome;
@@ -116,25 +114,9 @@ describe('handleUiBindingRoute', () => {
         createJsonRequest({ channelType: 'feishu', kimiSessionId: sessionId, kimiCwd: cwd }),
         'http://localhost/api/channel-default-targets/update',
       );
-      assert.equal(defaultTarget.statusCode, 200);
-      assert.equal(defaultTarget.body.ok, true);
-      assert.equal(defaultTarget.body.updated.targetRuntime, 'kimi');
-      assert.equal(defaultTarget.body.updated.targetRuntimeThreadId, sessionId);
-      assert.equal(defaultTarget.body.updated.targetKimiCwd, cwd);
-      assert.equal(defaultTarget.body.updated.mode, 'normal');
-      assert.equal(defaultTarget.body.updated.executionProvider, 'tmux');
-      assert.equal(defaultTarget.body.channelDefaults[0].mode, 'normal');
-      assert.equal(defaultTarget.body.channelDefaults[0].executionProvider, 'tmux');
-      assert.equal(defaultTarget.body.channelDefaults[0].bridgeSessionId, defaultTarget.body.updated.targetSessionId);
-
-      const materializedSessionId = defaultTarget.body.updated.targetSessionId;
-      const materialized = store.getSession(materializedSessionId);
-      assert.ok(materialized);
-      assert.equal(materialized.runtime?.activeRuntime, 'kimi');
-      assert.equal(materialized.runtime?.kimi?.sessionId, sessionId);
-      assert.equal(materialized.runtime?.kimi?.cwd, cwd);
-      assert.equal(materialized.runtime?.kimi?.provider, 'tmux');
-      assert.equal(store.getChannelDefaultTarget('feishu')?.bridgeSessionId, materializedSessionId);
+      assert.equal(defaultTarget.statusCode, 410);
+      assert.match(defaultTarget.body.error, /已停用/);
+      assert.equal(store.listSessions().length, 1);
 
       const updatedBinding = await dispatch(
         store,
@@ -148,7 +130,13 @@ describe('handleUiBindingRoute', () => {
       assert.equal(updatedBinding.body.updated.currentKimiCwd, cwd);
       assert.equal(updatedBinding.body.updated.mode, 'normal');
       assert.equal(updatedBinding.body.updated.executionProvider, 'tmux');
-      assert.equal(updatedBinding.body.updated.currentSessionId, materializedSessionId);
+      const materializedSessionId = updatedBinding.body.updated.currentSessionId;
+      const materialized = store.getSession(materializedSessionId);
+      assert.ok(materialized);
+      assert.equal(materialized.runtime?.activeRuntime, 'kimi');
+      assert.equal(materialized.runtime?.kimi?.sessionId, sessionId);
+      assert.equal(materialized.runtime?.kimi?.cwd, cwd);
+      assert.equal(materialized.runtime?.kimi?.provider, 'tmux');
       assert.equal(store.getChannelChat('feishu', 'chat-kimi-binding-route')?.bridgeSessionId, materializedSessionId);
     } finally {
       if (previousKimiHome === undefined) delete process.env.KIMI_CODE_HOME;

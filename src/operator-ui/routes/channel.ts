@@ -16,14 +16,6 @@ interface UiChannelRouteStore {
     channelProvider?: string;
     channelAlias?: string;
   }): unknown;
-  getChannelDefaultTarget(channelId: string): { bridgeSessionId: string } | null;
-  upsertChannelDefaultTarget(data: {
-    channelType: string;
-    channelProvider: string;
-    channelAlias: string;
-    bridgeSessionId: string;
-  }): unknown;
-  deleteChannelDefaultTarget(channelId: string): unknown;
 }
 
 function json(response: ServerResponse, statusCode: number, body: unknown): void {
@@ -78,15 +70,6 @@ function syncBindingChannelMeta(store: UiChannelRouteStore, channel: ChannelConf
     store.updateChannelChat(binding.id, {
       channelProvider: channel.provider,
       channelAlias: channel.alias,
-    });
-  }
-  const channelDefault = store.getChannelDefaultTarget(channel.id);
-  if (channelDefault) {
-    store.upsertChannelDefaultTarget({
-      channelType: channel.id,
-      channelProvider: channel.provider,
-      channelAlias: channel.alias,
-      bridgeSessionId: channelDefault.bridgeSessionId,
     });
   }
 }
@@ -159,7 +142,6 @@ export async function handleUiChannelRoute(options: {
 
     const next = deleteChannelInstanceV2(readConfig(), channelId);
     writeConfig(next);
-    store.deleteChannelDefaultTarget(channelId);
     const latest = readConfig();
     json(response, 200, {
       ok: true,

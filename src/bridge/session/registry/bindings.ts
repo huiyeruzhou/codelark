@@ -1,7 +1,7 @@
 import path from 'node:path';
 
 import type { BridgeStore } from '../../../domain/audit.js';
-import type { ChannelAddress, ChannelChat, ChannelChatMode, ChannelDefaultTarget } from '../../../domain/channel.js';
+import type { ChannelAddress, ChannelChat, ChannelChatMode } from '../../../domain/channel.js';
 import type { BridgeSession } from '../../../domain/session.js';
 import { recordBindingChange } from '../binding-audit.js';
 import type { ChannelProvider } from '../../../channels/types.js';
@@ -78,27 +78,6 @@ export interface BindingSummary {
   mirrorLastEventAt?: string;
 }
 
-export interface ChannelDefaultTargetSummary {
-  id: string;
-  channelType: string;
-  channelProvider?: string;
-  channelAlias?: string;
-  bridgeSessionId: string;
-  mode: ChannelChatMode;
-  codexProvider: 'sdk' | 'pty' | 'tmux' | 'default';
-  executionProvider: 'sdk' | 'pty' | 'tmux' | 'default';
-  targetLabel: string;
-  targetSessionId: string;
-  targetRuntime?: 'codex' | 'claude' | 'kimi' | 'cursor';
-  targetThreadId?: string;
-  targetRuntimeThreadId?: string;
-  targetClaudeCwd?: string;
-  targetKimiCwd?: string;
-  targetCursorCwd?: string;
-  createdAt: string;
-  updatedAt: string;
-}
-
 interface BindingChatMeta {
   chatKind?: ChannelChat['chatKind'];
   chatUserId?: string;
@@ -166,18 +145,6 @@ function findConflictingBinding(
   }) || null;
 }
 
-function findTargetConflict(
-  store: BridgeStore,
-  opts: { sessionId?: string; codexThreadId?: string },
-): ChannelChat | null {
-  return store.listChannelChats().find((binding) => (
-    (opts.sessionId ? binding.bridgeSessionId === opts.sessionId : false)
-    || (opts.codexThreadId
-      ? getCodexThreadId(store.getSession(binding.bridgeSessionId)) === opts.codexThreadId
-      : false)
-  )) || null;
-}
-
 function assertBindingTargetAvailable(
   store: BridgeStore,
   current: { channelType: string; chatId: string },
@@ -199,26 +166,6 @@ function assertBindingTargetAvailable(
   throw new Error(
     `该会话已绑定到 ${formatChannelLabel(conflict)} 聊天 ${formatBindingChatTarget(conflict)}。一个会话只能绑定一个聊天。`,
   );
-}
-
-function assertBridgeSessionAvailableForDefaultRouting(
-  store: BridgeStore,
-  bridgeSessionId: string,
-): void {
-  const session = store.getSession(bridgeSessionId);
-  if (!session) {
-    throw new Error('Session not found.');
-  }
-
-  const conflict = findTargetConflict(store, {
-    sessionId: session.id,
-    codexThreadId: getCodexThreadId(session),
-  });
-  if (conflict) {
-    throw new Error(
-      `该会话已绑定到 ${formatChannelLabel(conflict)} 聊天 ${formatBindingChatTarget(conflict)}。一个会话只能绑定一个聊天。`,
-    );
-  }
 }
 
 function getSessionName(session: BridgeSession): string {
@@ -539,132 +486,6 @@ export function listBindingSummaries(store: BridgeStore): BindingSummary[] {
     const bLabel = b.channelAlias || b.channelType;
     if (aLabel !== bLabel) return aLabel.localeCompare(bLabel);
     return a.chatId.localeCompare(b.chatId);
-  });
-}
-
-export function listChannelDefaultTargetSummaries(store: BridgeStore): ChannelDefaultTargetSummary[] {
-  return store.listChannelDefaultTargets().map((target) => {
-    const resolved = describeBridgeSessionTarget(store, target.bridgeSessionId);
-    const session = store.getSession(target.bridgeSessionId);
-    return {
-      id: target.id,
-      channelType: target.channelType,
-      channelProvider: target.channelProvider,
-      channelAlias: target.channelAlias,
-      bridgeSessionId: target.bridgeSessionId,
-      mode: session ? getSessionMode(session, null) : 'normal',
-      codexProvider: getSessionCodexProvider(session, null),
-      executionProvider: getSessionExecutionProvider(session, null),
-      targetLabel: resolved.targetLabel,
-      targetSessionId: resolved.targetSessionId,
-      targetRuntime: resolved.targetRuntime,
-      targetThreadId: resolved.targetThreadId,
-      targetRuntimeThreadId: resolved.targetRuntimeThreadId,
-      targetClaudeCwd: resolved.targetClaudeCwd,
-      targetKimiCwd: resolved.targetKimiCwd,
-      targetCursorCwd: resolved.targetCursorCwd,
-      createdAt: target.createdAt,
-      updatedAt: target.updatedAt,
-    };
-  }).sort((a, b) => {
-    const aLabel = a.channelAlias || a.channelType;
-    const bLabel = b.channelAlias || b.channelType;
-    return aLabel.localeCompare(bLabel);
-  });
-}
-
-export function updateChannelDefaultTarget(
-  store: BridgeStore,
-  channelType: string,
-  bridgeSessionId: string,
-): ChannelDefaultTargetSummary {
-  assertBridgeSessionAvailableForDefaultRouting(store, bridgeSessionId);
-  const meta = resolveChannelMeta(channelType);
-  const existing = store.getChannelDefaultTarget(channelType);
-  const updated = store.upsertChannelDefaultTarget({
-    channelType,
-    channelProvider: meta.provider,
-    channelAlias: meta.alias,
-    bridgeSessionId,
-  });
-
-  recordBindingChange(store, {
-    action: 'web_set_default_target',
-    address: {
-      channelType,
-      channelProvider: meta.provider,
-      channelAlias: meta.alias,
-      chatId: '*',
-    },
-    fromBinding: existing ? ({
-      id: existing.id,
-      channelType: existing.channelType,
-      channelProvider: existing.channelProvider,
-      channelAlias: existing.channelAlias,
-      chatId: '*',
-      bridgeSessionId: existing.bridgeSessionId,
-      createdAt: existing.createdAt,
-      updatedAt: existing.updatedAt,
-    } satisfies ChannelChat) : null,
-    toBinding: {
-      id: updated.id,
-      channelType: updated.channelType,
-      channelProvider: updated.channelProvider,
-      channelAlias: updated.channelAlias,
-      chatId: '*',
-      bridgeSessionId: updated.bridgeSessionId,
-      createdAt: updated.createdAt,
-      updatedAt: updated.updatedAt,
-    },
-    source: 'web_ui',
-    reason: `bridgeSessionId=${bridgeSessionId}`,
-  });
-
-  return listChannelDefaultTargetSummaries(store).find((item) => item.channelType === channelType)!;
-}
-
-export function updateChannelDefaultCodexThread(
-  store: BridgeStore,
-  channelType: string,
-  codexThreadId: string,
-): ChannelDefaultTargetSummary {
-  const local = getCodexSessionByThreadId(codexThreadId);
-  const session = ensureBridgeSessionForCodexThread(store, codexThreadId, local ? {
-    workingDirectory: local.cwd,
-    codexTitle: local.title,
-  } : undefined);
-  return updateChannelDefaultTarget(store, channelType, session.id);
-}
-
-export function removeChannelDefaultTarget(
-  store: BridgeStore,
-  channelType: string,
-): void {
-  const existing = store.getChannelDefaultTarget(channelType);
-  if (!existing) {
-    throw new Error('Channel default target not found.');
-  }
-  store.deleteChannelDefaultTarget(channelType);
-  recordBindingChange(store, {
-    action: 'web_clear_default_target',
-    address: {
-      channelType,
-      channelProvider: existing.channelProvider,
-      channelAlias: existing.channelAlias,
-      chatId: '*',
-    },
-    fromBinding: {
-      id: existing.id,
-      channelType: existing.channelType,
-      channelProvider: existing.channelProvider,
-      channelAlias: existing.channelAlias,
-      chatId: '*',
-      bridgeSessionId: existing.bridgeSessionId,
-      createdAt: existing.createdAt,
-      updatedAt: existing.updatedAt,
-    },
-    toBinding: null,
-    source: 'web_ui',
   });
 }
 

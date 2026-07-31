@@ -1,4 +1,4 @@
-import type { ChannelChat, ChannelDefaultTarget, ChannelType } from './channel.js';
+import type { ChannelChat, ChannelType } from './channel.js';
 import type { BridgeMessage } from './message.js';
 import type { PermissionLinkInput, PermissionLinkRecord } from './permission.js';
 import type { BridgeApiProvider } from '../runtime/contracts.js';
@@ -54,13 +54,6 @@ export interface UpsertChannelChatInput {
   cloudDocumentChat?: ChannelChat['cloudDocumentChat'];
 }
 
-export interface UpsertChannelDefaultTargetInput {
-  channelType: string;
-  channelProvider?: string;
-  channelAlias?: string;
-  bridgeSessionId: string;
-}
-
 export interface SettingsProvider {
   getSetting(key: string): string | null;
 }
@@ -73,10 +66,6 @@ export interface BridgeStore {
   updateChannelChat(id: string, updates: Partial<ChannelChat>): void;
   touchChannelChatActivity(id: string, timestamp?: string): void;
   listChannelChats(channelType?: ChannelType): ChannelChat[];
-  getChannelDefaultTarget(channelType: string): ChannelDefaultTarget | null;
-  upsertChannelDefaultTarget(data: UpsertChannelDefaultTargetInput): ChannelDefaultTarget;
-  deleteChannelDefaultTarget(channelType: string): void;
-  listChannelDefaultTargets(): ChannelDefaultTarget[];
   getSession(id: string): BridgeSession | null;
   listSessions(): BridgeSession[];
   findSessionByCodexThreadId(codexThreadId: string): BridgeSession | null;

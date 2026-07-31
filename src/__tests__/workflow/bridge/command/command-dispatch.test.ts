@@ -1927,53 +1927,6 @@ describe('command-dispatch', () => {
     assert.match(sent[0] || '', /已切换到临时 BridgeSession/);
   });
 
-  it('applies channel prebinding before running the first session-scoped slash command', async () => {
-    const store = initTestContext();
-    const sent: string[] = [];
-    const adapter: any = {
-      channelType: 'feishu-default',
-      send: async (message: { text: string }) => {
-        sent.push(message.text);
-        return { ok: true, messageId: 'reply-prebound-history' };
-      },
-    };
-    const address = { channelType: 'feishu-default', chatId: 'chat-prebound-status', displayName: 'Prebound Chat' } as const;
-    const session = store.createSession('prebound-session', 'test-model', undefined, '/tmp/prebound-status');
-    store.updateSession(session.id, {
-      runtime: { codex: { threadId: 'codex-thread-prebound' } },
-    });
-    store.upsertChannelDefaultTarget({
-      channelType: 'feishu-default',
-      channelProvider: 'feishu',
-      channelAlias: '飞书',
-      bridgeSessionId: session.id,
-    });
-
-    await handleBridgeCommand(
-      adapter,
-      {
-        address,
-        text: '/',
-        messageId: 'incoming-prebound-status',
-      } as any,
-      '/',
-      {
-        getActiveTask: () => undefined,
-        diagnoseSessionHealth: async () => null,
-        diagnoseAllActiveSessions: async () => [],
-      },
-    );
-
-    const binding = store.getChannelChat(address.channelType, address.chatId);
-    assert.ok(binding);
-    assert.equal(binding?.bridgeSessionId, session.id);
-    assert.equal(store.getChannelDefaultTarget(address.channelType), null);
-    assert.match(sent[0] || '', /当前会话/);
-    assert.match(sent[0] || '', /prebound-session/);
-    assert.match(sent[0] || '', /codex-thread-id/);
-    assert.match(sent[0] || '', /codex-thread-prebound/);
-  });
-
   it('explains double-slash escaping only when a CodeLark command is unknown', async () => {
     initTestContext();
     const sent: string[] = [];

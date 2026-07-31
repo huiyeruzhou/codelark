@@ -30,7 +30,7 @@ Kimi 当前只有 tmux 执行形态，所以 provider 集合保持单值 `tmux`�
 - Transcript 与历史读取。
 - Turn 归属、最终回复和健康状态。
 - `/check` 健康诊断的 runtime identity。
-- Operator UI 本地会话、默认目标和 session config。
+- Operator UI 本地会话、具体聊天绑定和 session config。
 - 真实 Feishu E2E runtime/provider 矩阵。
 
 只新增 provider stream 不够。它最多让用户发起一次 turn，但不能可靠列出、切换、恢复、归档、观察或诊断本地会话。
@@ -45,7 +45,7 @@ Kimi 当前只有 tmux 执行形态，所以 provider 集合保持单值 `tmux`�
 | 修改 config schema、legacy migration、runtime settings 和 setup wizard | `runtime.agent`、`runtime.<agent>`、发布 schema、旧配置迁移和 UI 配置写入必须同时支持新 agent；不能把新 agent 塞进 Codex 或 Claude 的 provider namespace。 |
 | 修改 routing provider、`/runtime`、`/provider`、`/current-runtime` 和 command-state tests | 命令分发必须按 active runtime 写入对应 agent 配置；provider 设置只作用于当前 agent，不能串写其它 runtime。 |
 | 修改 `/new`、channel chat binding、`runtimeBridgeSessionIds` 和 mock E2E | 会话生命周期命令必须保留每个 agent 的独立绑定；`/new` 还需要真实操作者身份，测试不能用缺失 operator 的假成功路径掩盖平台语义。 |
-| 修改 `/t`、session registry、thread display、archive 和 Operator UI session/binding routes | 新 agent 必须能被列出、materialize、绑定到聊天、归档、设为默认目标，并在前端展示正确的 runtime identity。 |
+| 修改 `/t`、session registry、thread display、archive 和 Operator UI session/binding routes | 新 agent 必须能被列出、materialize、绑定到一个身份明确的聊天、归档，并在前端展示正确的 runtime identity。 |
 | 新增 Kimi `MirrorJsonlSource`、mirror subscription state、transcript source 和 turn runtime 类型 | provider stream 只是入口；已有本地会话的外部更新、历史读取、健康追踪和 turn final/progress source 都要接入 mirror/transcript/turn 三条通道。 |
 | 修改 Feishu adapter card、streaming metadata 和 status note tests | agent 特有状态可以展示在状态区，例如 Kimi 的“当前思考”，但必须与最终回答正文分离，并有长度截断和不泄露内部内容的断言。 |
 | 修改 real Feishu harness、coverage matrix、isolated bridge env 和 docs/testing 页面 | 新 agent 应进入既有 Feishu E2E runtime/provider 矩阵；不要新增 agent 专用开关，也不要复用 live bridge 或宿主会话数据目录。必须读取宿主安全登录存储时，凭据边界要显式、只读，测试 config/data/session 仍落在 runRoot。 |
@@ -182,7 +182,7 @@ Kimi tmux provider 的当前行为来自实测：
 2. 实现 session index：枚举、按 id/cwd 查找、解析本地历史文件。
 3. 实现 provider，只负责启动和驱动对应 agent。
 4. 接 `/t`：列表、选择、绑定、archive 都支持该 agent。
-5. 接 Operator UI：session source、display summary、registry materialize/archive、binding/default target 和 session config。
+5. 接 Operator UI：session source、display summary、registry materialize/archive、具体 chat binding 和 session config。
 6. 接通用 mirror runtime 和 transcript source。
 7. 更新命令文案、产品文档和 focused tests。
 8. 把该 agent 放入真实 Feishu E2E 的现有 runtime/provider 矩阵，而不是新增 agent 专用开关。
@@ -239,7 +239,7 @@ Kimi tmux provider 的当前行为来自实测：
 
 ### Operator UI、CLI 与脚本
 
-- [ ] Operator UI：session source、session config 读写、binding/default target routes、runtime 下拉、identity 展示。
+- [ ] Operator UI：session source、session config 读写、具体 chat binding routes、runtime 下拉、identity 展示。
 - [ ] CLI help、`setup-wizard` 检测目录、推荐规则和选项。
 - [ ] `scripts/doctor.sh` 环境检查、`run-tests.js` 测试环境变量。
 

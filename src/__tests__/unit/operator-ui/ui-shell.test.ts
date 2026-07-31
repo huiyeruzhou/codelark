@@ -67,6 +67,14 @@ describe('operator UI shell', () => {
     assert.match(html, /const sessions = allSessions\.filter\(sessionMatchesFilter\)/);
   });
 
+  it('only offers bindings for chats that already have an explicit identity', () => {
+    const html = renderUiShellHtml();
+
+    assert.doesNotMatch(html, /下一条新聊天/);
+    assert.doesNotMatch(html, /channel-default-targets/);
+    assert.match(html, /请先从目标群聊或单聊给机器人发一条消息/);
+  });
+
   it('groups global settings into one common tab and runtime-owned tabs', () => {
     const html = renderUiShellHtml();
 

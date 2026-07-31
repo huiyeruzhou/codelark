@@ -72,16 +72,6 @@ export interface ChannelChat {
   lastActivityAt?: string;
 }
 
-export interface ChannelDefaultTarget {
-  id: string;
-  channelType: ChannelType;
-  channelProvider?: string;
-  channelAlias?: string;
-  bridgeSessionId: string;
-  createdAt: string;
-  updatedAt: string;
-}
-
 export interface BridgeStatus {
   running: boolean;
   startedAt: string | null;

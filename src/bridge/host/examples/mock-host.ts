@@ -44,7 +44,7 @@ import {
   materializeBridgeSessionRuntime,
   setSessionCodexThreadIdUpdate,
 } from '../../../domain/session-runtime.js';
-import type { ChannelChat, ChannelDefaultTarget, ChannelType } from '../../../domain/channel.js';
+import type { ChannelChat, ChannelType } from '../../../domain/channel.js';
 
 // ── In-memory Store ─────────────────────────────────────────
 
@@ -52,7 +52,6 @@ class InMemoryStore implements BridgeStore {
   private settings = new Map<string, string>();
   private sessions = new Map<string, BridgeSession>();
   private bindings = new Map<string, ChannelChat>();
-  private channelDefaultTargets = new Map<string, ChannelDefaultTarget>();
   private messages = new Map<string, BridgeMessage[]>();
   private nextId = 1;
 
@@ -104,24 +103,6 @@ class InMemoryStore implements BridgeStore {
   }
 
   listChannelChats(_channelType?: ChannelType) { return Array.from(this.bindings.values()); }
-  getChannelDefaultTarget(channelType: string) { return this.channelDefaultTargets.get(channelType) ?? null; }
-  upsertChannelDefaultTarget(data: { channelType: string; channelProvider?: string; channelAlias?: string; bridgeSessionId: string }) {
-    const existing = this.channelDefaultTargets.get(data.channelType);
-    const target: ChannelDefaultTarget = {
-      id: existing?.id || `channel-default-${this.nextId++}`,
-      channelType: data.channelType,
-      channelProvider: data.channelProvider ?? existing?.channelProvider,
-      channelAlias: data.channelAlias ?? existing?.channelAlias,
-      bridgeSessionId: data.bridgeSessionId,
-      createdAt: existing?.createdAt ?? new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-    };
-    this.channelDefaultTargets.set(data.channelType, target);
-    return target;
-  }
-  deleteChannelDefaultTarget(channelType: string) { this.channelDefaultTargets.delete(channelType); }
-  listChannelDefaultTargets() { return Array.from(this.channelDefaultTargets.values()); }
-
   getSession(id: string) { return this.sessions.get(id) ?? null; }
 
   listSessions() { return Array.from(this.sessions.values()); }

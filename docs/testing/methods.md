@@ -163,7 +163,7 @@ long-running 功能不能只测“成功派发 worker”。精炼用户故事至
 | 测试文件 | 关注点 |
 | --- | --- |
 | `feishu-adapter.test.ts`、`feishu-markdown.test.ts` | 飞书消息、mention 过滤、结构化 stream 区域和事件处理；覆盖一个 canonical tool_panel 以单个工具调用为 cursor 续卡，并断言两侧重新分组、patch 多行 fence、末尾 sentinel 和单卡 payload 安全线；同时冻结短用户输入内联、超过 800 字的输入用无边框 panel 折叠且展开内容完整，以及空 final text 时 history-only 工具不能被 footer 覆盖。 |
-| `channel-adapter.test.ts`、`channel-router.test.ts`、`adapter-sync-plan.test.ts` | 通道队列、默认目标路由和 adapter 实例同步计划。 |
+| `channel-adapter.test.ts`、`channel-router.test.ts`、`adapter-sync-plan.test.ts` | 通道队列、未知聊天独立建会话、旧通配入口升级清理和 adapter 实例同步计划。 |
 | `ui-auth-routes.test.ts`、`ui-binding-application.test.ts`、`ui-channel-routes.test.ts`、`ui-config-routes.test.ts`、`ui-service-routes.test.ts`、`ui-session-application.test.ts`、`ui-session-history.test.ts` | Web 工作台的鉴权、绑定、通道、配置、服务、会话和历史。 |
 
 ### 存储、配置、迁移、诊断和发布辅助

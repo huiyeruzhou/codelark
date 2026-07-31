@@ -202,16 +202,4 @@ describe('SessionRegistryService', () => {
     assert.deepEqual(result.deletedBridgeSessionIds, [materialized.id]);
   });
 
-  it('sets channel default targets by BridgeSession id', () => {
-    const store = new JsonFileStore(makeBridgeSettings());
-    const registry = new SessionRegistryService(store);
-    const session = store.createSession('Default target', 'test-model', undefined, '/tmp/default-target');
-
-    const defaultTarget = registry.setChannelDefaultBridgeSession('feishu', session.id);
-
-    assert.equal(defaultTarget.bridgeSessionId, session.id);
-    assert.equal(defaultTarget.targetSessionId, session.id);
-    registry.removeChannelDefaultTarget('feishu');
-    assert.equal(store.getChannelDefaultTarget('feishu'), null);
-  });
 });

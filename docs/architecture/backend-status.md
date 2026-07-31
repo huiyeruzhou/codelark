@@ -131,7 +131,7 @@ Codex thread 可以来自不同入口：
 
 - `sessions.json`：Bridge session 记录。
 - `channel-chats.json`：IM channel chat 与 session 的绑定关系。
-- `channel-default-targets.json`：通道默认目标。
+- `channel-routing-recovery.jsonl`：升级时清理旧通配入口和重复聊天绑定后的可恢复记录。
 - `permissions.json`：权限回调链接。
 - `offsets.json`：消费偏移量。
 - `dedup.json`：去重键。

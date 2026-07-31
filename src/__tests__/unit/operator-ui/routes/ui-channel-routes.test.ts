@@ -102,16 +102,9 @@ function baseConfigV2(overrides: Partial<ConfigV2> = {}): ConfigV2 {
 }
 
 function createMemoryStore(bindings: unknown[] = []) {
-  const deletedDefaults: string[] = [];
   return {
-    deletedDefaults,
     listChannelChats: () => bindings,
     updateChannelChat: () => undefined,
-    getChannelDefaultTarget: () => null,
-    upsertChannelDefaultTarget: () => undefined,
-    deleteChannelDefaultTarget: (channelId: string) => {
-      deletedDefaults.push(channelId);
-    },
   };
 }
 
@@ -143,7 +136,7 @@ describe('handleUiChannelRoute', () => {
       writeConfig: (next) => {
         config = next;
       },
-      buildBindingsPayload: async () => ({ bindings: [], options: [], channelDefaults: [] }),
+      buildBindingsPayload: async () => ({ bindings: [], options: [] }),
     });
 
     assert.equal(saveResponse.statusCodeWritten, 200);
@@ -163,7 +156,7 @@ describe('handleUiChannelRoute', () => {
       writeConfig: (next) => {
         config = next;
       },
-      buildBindingsPayload: async () => ({ bindings: [], options: [], channelDefaults: [] }),
+      buildBindingsPayload: async () => ({ bindings: [], options: [] }),
     });
 
     assert.equal(forgedResponse.statusCodeWritten, 400);
@@ -192,7 +185,7 @@ describe('handleUiChannelRoute', () => {
       writeConfig: (next) => {
         config = next;
       },
-      buildBindingsPayload: async () => ({ bindings: [], options: [], channelDefaults: [] }),
+      buildBindingsPayload: async () => ({ bindings: [], options: [] }),
     });
 
     assert.equal(handled, true);
@@ -235,7 +228,7 @@ describe('handleUiChannelRoute', () => {
       writeConfig: (next) => {
         config = next;
       },
-      buildBindingsPayload: async () => ({ bindings: [], options: [], channelDefaults: [] }),
+      buildBindingsPayload: async () => ({ bindings: [], options: [] }),
     });
 
     assert.equal(handled, true);
@@ -267,7 +260,7 @@ describe('handleUiChannelRoute', () => {
         writeConfig: (next) => {
           config = next;
         },
-        buildBindingsPayload: async () => ({ bindings: [], options: [], channelDefaults: [] }),
+        buildBindingsPayload: async () => ({ bindings: [], options: [] }),
       });
 
       assert.equal(handled, true);
@@ -313,7 +306,7 @@ describe('handleUiChannelRoute', () => {
         response,
         url: new URL('http://localhost/api/channels/save'),
         createStore: () => store,
-        buildBindingsPayload: async () => ({ bindings: [], options: [], channelDefaults: [] }),
+        buildBindingsPayload: async () => ({ bindings: [], options: [] }),
       });
 
       assert.equal(handled, true);
@@ -374,7 +367,7 @@ describe('handleUiChannelRoute', () => {
       createStore: () => store,
       readConfig: () => config,
       writeConfig: () => undefined,
-      buildBindingsPayload: async () => ({ bindings: [], options: [], channelDefaults: [] }),
+      buildBindingsPayload: async () => ({ bindings: [], options: [] }),
     });
 
     assert.equal(handled, true);
@@ -438,7 +431,7 @@ require_mention = false
         response,
         url: new URL('http://localhost/api/channels/delete'),
         createStore: () => store,
-        buildBindingsPayload: async () => ({ bindings: [], options: [], channelDefaults: [] }),
+        buildBindingsPayload: async () => ({ bindings: [], options: [] }),
       });
 
       assert.equal(handled, true);
@@ -446,7 +439,6 @@ require_mention = false
       const body = JSON.parse(response.body) as { ok?: boolean; config?: { channels?: Array<{ id?: string }> } };
       assert.equal(body.ok, true);
       assert.deepEqual(body.config?.channels?.map((channel) => channel.id), ['feishu-default']);
-      assert.equal(store.deletedDefaults.includes('feishu-ops'), true);
       const savedToml = fs.readFileSync(configTomlPath, 'utf-8');
       assert.match(savedToml, /feishu-default/);
       assert.doesNotMatch(savedToml, /feishu-ops/);
@@ -490,7 +482,7 @@ require_mention = false
         response,
         url: new URL('http://localhost/api/channels/test'),
         createStore: () => createMemoryStore(),
-        buildBindingsPayload: async () => ({ bindings: [], options: [], channelDefaults: [] }),
+        buildBindingsPayload: async () => ({ bindings: [], options: [] }),
       });
 
       assert.equal(handled, true);

@@ -81,7 +81,7 @@ describe('UiBindingApplication', () => {
     resetBridgeTestState();
   });
 
-  it('materializes Claude Code sessions when assigning a binding or channel default', () => {
+  it('materializes Claude Code sessions when assigning an existing chat binding', () => {
     withClaudeJsonl(({ cwd, sessionId }) => {
       const store = new JsonFileStore(makeBridgeSettings());
       createConfigService({ migrate: false, env: {} }).set({ kind: 'home' }, {
@@ -97,22 +97,6 @@ describe('UiBindingApplication', () => {
         bridgeSessionId: oldSession.id,
       });
       const app = new UiBindingApplication(store);
-
-      const defaultTarget = app.setChannelDefaultTarget({
-        channelType: 'feishu',
-        claudeSessionId: sessionId,
-        claudeCwd: cwd,
-      });
-      const defaultSession = store.getSession(defaultTarget.targetSessionId);
-      assert.ok(defaultSession);
-      assert.equal(defaultSession.runtime?.activeRuntime, 'claude');
-      assert.equal(defaultSession.runtime?.claude?.sessionId, sessionId);
-      assert.equal(defaultTarget.targetRuntime, 'claude');
-      assert.equal(defaultTarget.targetRuntimeThreadId, sessionId);
-      assert.equal(defaultTarget.targetClaudeCwd, cwd);
-      assert.equal(defaultTarget.mode, 'normal');
-      assert.equal(defaultTarget.executionProvider, 'tmux');
-      assert.equal(store.getChannelDefaultTarget('feishu')?.bridgeSessionId, defaultSession.id);
 
       const updated = app.switchBindingTarget({
         bindingId: binding.id,
@@ -131,11 +115,10 @@ describe('UiBindingApplication', () => {
       assert.equal(updated.model, 'claude-binding-model');
       assert.equal(getSessionWorkingDirectory(claudeSession), cwd);
       assert.equal(store.getChannelChat('feishu', 'chat-claude-binding')?.bridgeSessionId, claudeSession.id);
-      assert.equal(defaultTarget.targetSessionId, claudeSession.id);
     });
   });
 
-  it('materializes Kimi Code sessions when assigning a binding or channel default', () => {
+  it('materializes Kimi Code sessions when assigning an existing chat binding', () => {
     withKimiWire(({ cwd, sessionId }) => {
       const store = new JsonFileStore(makeBridgeSettings());
       createConfigService({ migrate: false, env: {} }).set({ kind: 'home' }, {
@@ -151,24 +134,6 @@ describe('UiBindingApplication', () => {
         bridgeSessionId: oldSession.id,
       });
       const app = new UiBindingApplication(store);
-
-      const defaultTarget = app.setChannelDefaultTarget({
-        channelType: 'feishu',
-        kimiSessionId: sessionId,
-        kimiCwd: cwd,
-      });
-      const defaultSession = store.getSession(defaultTarget.targetSessionId);
-      assert.ok(defaultSession);
-      assert.equal(defaultSession.runtime?.activeRuntime, 'kimi');
-      assert.equal(defaultSession.runtime?.kimi?.sessionId, sessionId);
-      assert.equal(defaultSession.runtime?.kimi?.provider, 'tmux');
-      assert.equal(defaultTarget.targetRuntime, 'kimi');
-      assert.equal(defaultTarget.targetRuntimeThreadId, sessionId);
-      assert.equal(defaultTarget.targetKimiCwd, cwd);
-      assert.equal(defaultTarget.mode, 'normal');
-      assert.equal(defaultTarget.codexProvider, 'default');
-      assert.equal(defaultTarget.executionProvider, 'tmux');
-      assert.equal(store.getChannelDefaultTarget('feishu')?.bridgeSessionId, defaultSession.id);
 
       const updated = app.switchBindingTarget({
         bindingId: binding.id,
@@ -188,7 +153,6 @@ describe('UiBindingApplication', () => {
       assert.equal(updated.model, 'kimi-binding-model');
       assert.equal(getSessionWorkingDirectory(kimiSession), cwd);
       assert.equal(store.getChannelChat('feishu', 'chat-kimi-binding')?.bridgeSessionId, kimiSession.id);
-      assert.equal(defaultTarget.targetSessionId, kimiSession.id);
     });
   });
 });

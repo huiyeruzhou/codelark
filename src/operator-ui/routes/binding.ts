@@ -72,45 +72,12 @@ export async function handleUiBindingRoute(options: {
   }
 
   if (request.method === 'POST' && url.pathname === '/api/channel-default-targets/update') {
-    const payload = await readJsonBody<Record<string, unknown>>(request);
-    const channelType = asString(payload.channelType);
-    const bridgeSessionId = asString(payload.bridgeSessionId);
-    const codexThreadId = asString(payload.codexThreadId);
-    const claudeSessionId = asString(payload.claudeSessionId);
-    const claudeCwd = asString(payload.claudeCwd);
-    const kimiSessionId = asString(payload.kimiSessionId);
-    const kimiCwd = asString(payload.kimiCwd);
-    const cursorSessionId = asString(payload.cursorSessionId);
-    const cursorCwd = asString(payload.cursorCwd);
-    if (!channelType || (!bridgeSessionId && !codexThreadId && !(claudeSessionId && claudeCwd) && !(kimiSessionId && kimiCwd) && !(cursorSessionId && cursorCwd))) {
-      json(response, 400, { error: 'channelType 以及 bridgeSessionId、codexThreadId 或本地 runtime sessionId+cwd 不能为空。' });
-      return true;
-    }
-
-    const { app, store } = createBindingApplication(createStore);
-    const updated = app.setChannelDefaultTarget({ channelType, bridgeSessionId, codexThreadId, claudeSessionId, claudeCwd, kimiSessionId, kimiCwd, cursorSessionId, cursorCwd });
-    json(response, 200, {
-      ok: true,
-      updated,
-      ...(await buildBindingsPayload(store, readConfig()) as Record<string, unknown>),
-    });
+    json(response, 410, { error: '通道级“下一条新聊天”入口已停用。请先让目标聊天建立独立会话，再修改该聊天的绑定。' });
     return true;
   }
 
   if (request.method === 'POST' && url.pathname === '/api/channel-default-targets/delete') {
-    const payload = await readJsonBody<Record<string, unknown>>(request);
-    const channelType = asString(payload.channelType);
-    if (!channelType) {
-      json(response, 400, { error: 'channelType 不能为空。' });
-      return true;
-    }
-
-    const { app, store } = createBindingApplication(createStore);
-    app.removeChannelDefaultTarget(channelType);
-    json(response, 200, {
-      ok: true,
-      ...(await buildBindingsPayload(store, readConfig()) as Record<string, unknown>),
-    });
+    json(response, 410, { error: '通道级“下一条新聊天”入口已停用，升级时会自动清理遗留入口。' });
     return true;
   }
 

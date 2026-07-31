@@ -9,12 +9,8 @@ import {
   bindStoreToCodexThread,
   bindStoreToSession,
   type BindingSummary,
-  type ChannelDefaultTargetSummary,
   removeBinding,
-  removeChannelDefaultTarget,
-  updateChannelDefaultCodexThread,
   updateBindingTarget,
-  updateChannelDefaultTarget,
 } from './registry/bindings.js';
 import { setSessionCodexTitleUpdate } from '../../domain/session-runtime.js';
 import {
@@ -30,11 +26,9 @@ import {
 export {
   type BindingSummary,
   type BindingTargetOption,
-  type ChannelDefaultTargetSummary,
   listBindingSummaries,
   listBindingsForChat,
   listBindingTargetOptions,
-  listChannelDefaultTargetSummaries,
   setActiveBindingForChat,
 } from './registry/bindings.js';
 
@@ -171,33 +165,6 @@ export class SessionRegistryService {
 
   removeBinding(bindingId: string): void {
     removeBinding(this.store, bindingId);
-  }
-
-  setChannelDefaultBridgeSession(channelType: string, bridgeSessionId: string): ChannelDefaultTargetSummary {
-    return updateChannelDefaultTarget(this.store, channelType, bridgeSessionId);
-  }
-
-  setChannelDefaultCodexThread(channelType: string, codexThreadId: string): ChannelDefaultTargetSummary {
-    return updateChannelDefaultCodexThread(this.store, channelType, codexThreadId);
-  }
-
-  setChannelDefaultClaudeThread(channelType: string, claudeSessionId: string, cwd: string): ChannelDefaultTargetSummary {
-    const session = this.materializeClaudeThread(claudeSessionId, cwd);
-    return updateChannelDefaultTarget(this.store, channelType, session.id);
-  }
-
-  setChannelDefaultKimiThread(channelType: string, kimiSessionId: string, cwd: string): ChannelDefaultTargetSummary {
-    const session = this.materializeKimiThread(kimiSessionId, cwd);
-    return updateChannelDefaultTarget(this.store, channelType, session.id);
-  }
-
-  setChannelDefaultCursorThread(channelType: string, cursorSessionId: string, cwd: string): ChannelDefaultTargetSummary {
-    const session = this.materializeCursorThread(cursorSessionId, cwd);
-    return updateChannelDefaultTarget(this.store, channelType, session.id);
-  }
-
-  removeChannelDefaultTarget(channelType: string): void {
-    removeChannelDefaultTarget(this.store, channelType);
   }
 
   getVisibleBridgeSession(bridgeSessionId: string): BridgeSession {

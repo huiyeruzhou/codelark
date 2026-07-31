@@ -55,7 +55,6 @@ function resolveChannelSessionDefaults(address: ChannelAddress): ChannelSessionD
  */
 export function resolve(address: ChannelAddress): ChannelChat {
   const { store } = getBridgeContext();
-  const registry = new SessionRegistryService(store);
   const existing = store.getChannelChat(address.channelType, address.chatId);
   if (existing) {
     // Verify the linked session still exists; if not, create a new one
@@ -85,42 +84,13 @@ export function resolve(address: ChannelAddress): ChannelChat {
     });
     return created;
   }
-  const defaultTargetChannelType = getConfiguredChannelInstance(address.channelType)?.id || address.channelType;
-  const channelDefaultTarget = store.getChannelDefaultTarget(defaultTargetChannelType);
-  if (channelDefaultTarget) {
-    try {
-      const created = registry.attachChatToBridgeSession(address, channelDefaultTarget.bridgeSessionId);
-      if (!created) {
-        throw new Error('Session not found.');
-      }
-      store.deleteChannelDefaultTarget(defaultTargetChannelType);
-      recordBindingChange(store, {
-        action: 'auto_create_prebound',
-        address,
-        fromBinding: null,
-        toBinding: created,
-        reason: `channel default bridge session ${channelDefaultTarget.bridgeSessionId}`,
-      });
-      return created;
-    } catch (error) {
-      store.deleteChannelDefaultTarget(defaultTargetChannelType);
-      console.warn(
-        `[channel-router] Failed to apply channel default target for ${address.channelType}: ${
-          error instanceof Error ? error.message : String(error)
-        }`,
-      );
-    }
-  }
-
   const created = createBinding(address);
   recordBindingChange(store, {
     action: 'auto_create_draft',
     address,
     fromBinding: null,
     toBinding: created,
-    reason: channelDefaultTarget
-      ? `channel default bridge session ${channelDefaultTarget.bridgeSessionId} was unavailable`
-      : 'no existing binding',
+    reason: 'no existing binding',
   });
   return created;
 }

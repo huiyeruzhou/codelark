@@ -558,10 +558,7 @@ export async function handleBridgeCommand(
   let postDeliveryUserMessages: InboundMessage[] = [];
   const backgroundEffects: SessionCommandBackgroundEffect[] = [];
   const currentBinding = deps.scopedBinding || store.getChannelChat(msg.address.channelType, msg.address.chatId);
-  const shouldApplyDefaultTargetForCommand = !new Set(['/status', '/threads', '/t', '/set']).has(command);
-  const commandBinding = !shouldApplyDefaultTargetForCommand
-    ? currentBinding
-    : currentBinding || (store.getChannelDefaultTarget(msg.address.channelType) ? router.resolve(msg.address) : null);
+  const commandBinding = currentBinding;
 
   switch (command) {
     case '/start':

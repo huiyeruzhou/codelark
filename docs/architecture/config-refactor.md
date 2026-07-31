@@ -246,7 +246,7 @@ Channel 有两类概念，不能混用：
 - 通道实例清单和通道连接/行为配置：保存在 defaults/home `channels`，例如 Feishu app id、secret、site、allowed users、streaming 行为。
 - 某个 Channel 的执行偏好：保存在 `${CODELARK_HOME}/config/channels/<channel-id>.toml`，例如 runtime、model、workspace。
 
-业务代码读取通道实例时应先调用 `ConfigService.snapshot().config.channels`，再在业务模块内按 channel id、provider 回退、UI 默认项或 default target 选择具体实例。配置层不把 `channels[]` 隐式解析成 `feishu-default`。
+业务代码读取通道实例时应先调用 `ConfigService.snapshot().config.channels`，再在业务模块内按明确的 channel id、provider 回退或 UI 默认项选择具体实例。配置层不把 `channels[]` 隐式解析成 `feishu-default`，也不允许用通道级状态替代具体 chat id。
 
 `CODELARK_FEISHU_*` 和 `CODELARK_ENABLED_CHANNELS` 这类 channel env key 只用于：
 

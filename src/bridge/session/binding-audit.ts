@@ -3,7 +3,6 @@ import type { ChannelAddress, ChannelChat } from '../../domain/channel.js';
 
 export type BindingChangeAction =
   | 'auto_create_draft'
-  | 'auto_create_prebound'
   | 'auto_recreate_missing_session'
   | 'switch_draft'
   | 'switch_codex'
@@ -11,8 +10,6 @@ export type BindingChangeAction =
   | 'switch_binding'
   | 'add_codex'
   | 'new_session'
-  | 'web_clear_default_target'
-  | 'web_set_default_target'
   | 'web_switch'
   | 'web_unbind';
 

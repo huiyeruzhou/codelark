@@ -4,7 +4,6 @@ import {
   type BindingSummary,
   listBindingSummaries,
   listBindingTargetOptions,
-  listChannelDefaultTargetSummaries,
 } from '../../bridge/session/registry.js';
 import type { JsonFileStore } from '../../storage/json-store.js';
 import { findUiChannelInstance, getFeishuDomain, type UiChannelConfigSource, type UiChannelInstance } from './channel.js';
@@ -205,6 +204,5 @@ export async function buildUiBindingsPayload(
   return {
     bindings: enriched,
     options: listBindingTargetOptions(store, 12),
-    channelDefaults: listChannelDefaultTargetSummaries(store),
   };
 }
