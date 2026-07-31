@@ -465,23 +465,7 @@ describe('bridge-manager mirror tmux selection probe scheduling', () => {
       lastDeliveredAt: null,
       activityTier: 'hot',
     });
-    const secondBinding = store.upsertChannelChat({
-      channelType: address.channelType,
-      chatId: 'chat-codex-model-mismatch-second',
-      bridgeSessionId: binding.bridgeSessionId,
-    });
-    const secondSubscription = createMirrorSubscription({
-      bindingId: secondBinding.id,
-      sessionId: binding.bridgeSessionId,
-      channelType: address.channelType,
-      chatId: secondBinding.chatId,
-      threadId,
-      filePath: '/tmp/codex-model-mismatch.jsonl',
-      lastDeliveredAt: null,
-      activityTier: 'hot',
-    });
     state.mirrorSubscriptions.set(binding.id, subscription);
-    state.mirrorSubscriptions.set(secondBinding.id, secondSubscription);
     const firstAdapter = new MirrorArtifactAdapter();
     state.adapters.set(address.channelType, firstAdapter);
     const warningScreen = [
@@ -503,15 +487,10 @@ describe('bridge-manager mirror tmux selection probe scheduling', () => {
     try {
       await _testOnly.probeMirrorTmuxSelectionPrompt(subscription, 10_000);
       await _testOnly.probeMirrorTmuxSelectionPrompt(subscription, 20_000);
-      await _testOnly.probeMirrorTmuxSelectionPrompt(secondSubscription, 10_000);
-      await _testOnly.probeMirrorTmuxSelectionPrompt(secondSubscription, 20_000);
       await _testOnlyWaitForDeliveryQueuesForTests(firstAdapter);
 
-      assert.equal(firstAdapter.sentMessages.length, 2);
-      assert.deepEqual(
-        firstAdapter.sentMessages.map((message) => message.address.chatId).sort(),
-        [address.chatId, secondBinding.chatId].sort(),
-      );
+      assert.equal(firstAdapter.sentMessages.length, 1);
+      assert.equal(firstAdapter.sentMessages[0]?.address.chatId, address.chatId);
       const notice = firstAdapter.sentMessages[0];
       assert.equal(notice.richCard?.title, 'Codex 恢复模型不一致');
       assert.equal(notice.richCard?.template, 'orange');
@@ -522,18 +501,11 @@ describe('bridge-manager mirror tmux selection probe scheduling', () => {
         store.getChannelChat(address.channelType, address.chatId)?.codexModelMismatchWarningKey,
         `${binding.bridgeSessionId}\u0000gpt-5.5-2026-04-24\u0000gpt-5.6-sol`,
       );
-      assert.equal(
-        store.getChannelChat(address.channelType, secondBinding.chatId)?.codexModelMismatchWarningKey,
-        `${binding.bridgeSessionId}\u0000gpt-5.5-2026-04-24\u0000gpt-5.6-sol`,
-      );
-
       _testOnly.resetStateForTests();
       const restartedAdapter = new MirrorArtifactAdapter();
       state.adapters.set(address.channelType, restartedAdapter);
       state.mirrorSubscriptions.set(binding.id, subscription);
-      state.mirrorSubscriptions.set(secondBinding.id, secondSubscription);
       await _testOnly.probeMirrorTmuxSelectionPrompt(subscription, 30_000);
-      await _testOnly.probeMirrorTmuxSelectionPrompt(secondSubscription, 30_000);
       await _testOnlyWaitForDeliveryQueuesForTests(restartedAdapter);
       assert.equal(restartedAdapter.sentMessages.length, 0);
     } finally {

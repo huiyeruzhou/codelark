@@ -107,9 +107,9 @@ Lane 可以理解成“等待关系的名字”。调度层会给每条消息一
 - `control:*`：控制通道。`/stop`、结构化权限 callback、screen stop callback 走这里。它们的价值是“马上生效”，所以不等普通对话和长任务。
 - `job:*`：长 I/O 通道。`/shell`、`/tmux-screen`、`/pty-screen`、`/provider tmux` 走这里。它们可能跑很久，所以不占住同一 session 的 prompt 队伍；其中 `/tmux-screen`、`/pty-screen` 是监控命令，不等待普通 conversation barrier，避免排在卡住的普通对话后面；`/provider tmux` 也不建立 conversation barrier，允许 `/clear` 抢占并废止尚未完成的旧启动，但会建立仅针对普通消息的 routing barrier，避免下一句话抢跑到旧 Provider。其他普通 job 仍会先等同一聊天前面的会话配置变更或普通 prompt barrier 完成。
 - `chat:<channel>:<chat>`：聊天通道。只读命令、普通 callback、状态查询这类不改 session 状态的交互走这里。`channel` 和 `chat` 的作用是把不同平台、不同群聊或私聊隔开：A 群的状态查询不会挡住 B 群，飞书群聊也不会和别的通道混在一起。
-- `session:<session_id>`：工作会话通道。普通 prompt、会话配置变更、会切换绑定的 callback 走这里。它按 `BridgeSession.id` 区分，而不是按群聊区分，因为多个入口可能绑定同一条本地工作会话；只要它们操作的是同一个 session，就必须保持同一份上下文和配置的顺序。
+- `session:<session_id>`：工作会话通道。普通 prompt、会话配置变更、会切换绑定的 callback 走这里。它按 `BridgeSession.id` 区分，而不是按群聊区分，因为聊天可以重新绑定，后台任务也可能在绑定切换后继续收尾；只要操作的是同一个 session，就必须保持同一份上下文和配置的顺序。
 
-`chat` 和 `session` 分开，是因为它们保护的东西不同。`chat` 保护的是“这一个聊天里的轻量交互不要互相打架”；`session` 保护的是“这条工作会话的上下文、provider、模型、cwd 和底层 runtime 身份不要乱序”。一个聊天可以重新绑定到别的 session；多个聊天也可能观察或接管同一个 session。用两个维度拆开，才能让只读交互快起来，同时保住真正需要一致性的工作会话。
+`chat` 和 `session` 分开，是因为它们保护的东西不同。`chat` 保护的是“这一个聊天里的轻量交互不要互相打架”；`session` 保护的是“这条工作会话的上下文、provider、模型、cwd 和底层 runtime 身份不要乱序”。一个聊天可以重新绑定到别的 session，但一个 `BridgeSession` 同一时间只能绑定一个聊天。存储写入和接管入口都必须执行这条唯一性约束，不能让建群半成功或旧数据污染变成多个聊天同时操作、镜像同一会话。
 
 ### Barrier 是什么
 
@@ -173,6 +173,8 @@ conversation barrier 是 lane 之上的保护规则，用来处理“这条命�
 ## Mirror 运行时
 
 Mirror 是对本地 runtime 输出文件的持续观察。它让 IM 能看到本地 Codex TUI、Codex Native、Claude Code、Kimi Code 或 Cursor Agent 在同一条会话里继续产生的输出；各自格式进入 CodeLark 后都转换成统一 `BridgeMirrorRecord`。
+
+Mirror 不支持把同一个 `BridgeSession` 同时投递到多个聊天。正常写入会在存储层拒绝第二个 binding；如果升级前的持久化数据已经包含重复 binding，订阅规划只保留创建时间最早的一项，移除其余 mirror 订阅并记录明确错误。它不会为重复目标拆分卡片 key，也不会把污染状态解释为合法的一对多功能。
 
 ```mermaid
 flowchart TD

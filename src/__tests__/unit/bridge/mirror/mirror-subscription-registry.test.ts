@@ -92,6 +92,38 @@ describe('mirror-subscription-registry', () => {
     assert.deepEqual(plan.removeBindingIds, ['binding-2', 'binding-3']);
   });
 
+  it('rejects a newer duplicate binding instead of mirroring one session to two chats', () => {
+    const plan = buildMirrorSubscriptionRegistryPlan(
+      [
+        {
+          id: 'binding-private',
+          channelType: 'feishu-default',
+          chatId: 'oc_private',
+          bridgeSessionId: 'session-shared',
+          createdAt: '2026-07-31T10:00:00.000Z',
+        },
+        {
+          id: 'binding-polluted-group',
+          channelType: 'feishu-default',
+          chatId: 'oc_group',
+          bridgeSessionId: 'session-shared',
+          createdAt: '2026-07-31T10:05:00.000Z',
+        },
+      ],
+      ['feishu-default'],
+      ['binding-private', 'binding-polluted-group'],
+      () => ({ runtime: { codex: { threadId: 'thread-shared' } } }),
+      hasCodexThreadMirrorSource,
+    );
+
+    assert.deepEqual(plan.upsertBindings.map((binding) => binding.id), ['binding-private']);
+    assert.deepEqual(plan.removeBindingIds, ['binding-polluted-group']);
+    assert.deepEqual(plan.rejectedDuplicateBindings.map(({ kept, rejected }) => ({
+      kept: kept.id,
+      rejected: rejected.id,
+    })), [{ kept: 'binding-private', rejected: 'binding-polluted-group' }]);
+  });
+
   it('delegates Codex SDK suppression to the caller policy', () => {
     const plan = buildMirrorSubscriptionRegistryPlan(
       [

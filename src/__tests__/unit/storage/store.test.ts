@@ -241,6 +241,22 @@ describe('JsonFileStore', () => {
     assert.equal(store.listChannelChats().filter((binding) => binding.chatId === 'multi').length, 1);
   });
 
+  it('rejects binding one bridge session to a second chat', () => {
+    const store = new JsonFileStore(makeSettings());
+    store.upsertChannelChat({
+      channelType: 'feishu-default',
+      chatId: 'chat-established',
+      bridgeSessionId: 'sess-shared',
+    });
+
+    assert.throws(() => store.upsertChannelChat({
+      channelType: 'feishu-default',
+      chatId: 'chat-polluted',
+      bridgeSessionId: 'sess-shared',
+    }), /一个会话只能绑定一个聊天/);
+    assert.equal(store.getChannelChat('feishu-default', 'chat-polluted'), null);
+  });
+
   it('upsertChannelChat stores only chat/session link metadata', () => {
     const settings = makeSettings();
     settings.set('bridge_default_mode', 'yolo');

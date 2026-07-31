@@ -3989,6 +3989,54 @@ enabled = true
     assert.equal(store.getChannelChat(address.channelType, address.chatId), null);
   });
 
+  it('does not persist a binding when group creation reports failure after an external group was allocated', async () => {
+    const store = initTestContext();
+    const sent: any[] = [];
+    const sourceAddress = {
+      channelType: 'feishu',
+      chatId: 'chat-partial-group-source',
+      userId: 'ou_user',
+    } as const;
+    const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-partial-group-'));
+    const sourceBinding = router.createBinding(sourceAddress, workDir);
+    const externallyAllocatedChatId = 'created-but-reported-failed';
+    const adapter: any = {
+      channelType: 'feishu',
+      provider: 'feishu',
+      send: async (message: any) => {
+        sent.push(message);
+        return { ok: true, messageId: `reply-${sent.length}` };
+      },
+      createGroupChat: async () => {
+        throw new Error(`post-create step failed for ${externallyAllocatedChatId}`);
+      },
+    };
+
+    await handleBridgeCommand(
+      adapter,
+      {
+        address: sourceAddress,
+        text: `/new partial ${workDir}`,
+        messageId: 'incoming-partial-group',
+      } as any,
+      `/new partial ${workDir}`,
+      {
+        getActiveTask: () => undefined,
+        diagnoseSessionHealth: async () => null,
+        diagnoseAllActiveSessions: async () => [],
+      },
+    );
+
+    assert.match(sent.at(-1)?.text || '', /创建群聊失败/);
+    assert.equal(store.getChannelChat('feishu', externallyAllocatedChatId), null);
+    assert.equal(store.getChannelChat(sourceAddress.channelType, sourceAddress.chatId)?.id, sourceBinding.id);
+    assert.deepEqual(
+      store.listChannelChats().filter((binding) => binding.bridgeSessionId === sourceBinding.bridgeSessionId)
+        .map((binding) => binding.chatId),
+      [sourceAddress.chatId],
+    );
+  });
+
   it('creates a group-backed cloud document chat from a document comment without user /new semantics', async () => {
     const store = initTestContext();
     const sent: any[] = [];

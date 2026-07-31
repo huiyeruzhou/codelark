@@ -32,6 +32,7 @@ export interface MirrorRegistrySession {
 export interface MirrorSubscriptionRegistryPlan<TBinding extends MirrorRegistryBinding> {
   upsertBindings: TBinding[];
   removeBindingIds: string[];
+  rejectedDuplicateBindings: Array<{ kept: TBinding; rejected: TBinding }>;
 }
 
 export interface MirrorSubscriptionRegistryOptions {
@@ -72,17 +73,42 @@ export function buildMirrorSubscriptionRegistryPlan<TBinding extends MirrorRegis
   options: MirrorSubscriptionRegistryOptions = {},
 ): MirrorSubscriptionRegistryPlan<TBinding> {
   const activeChannels = new Set(activeChannelTypes);
-  const upsertBindings = bindings.filter((binding) => {
+  const eligibleBindings = bindings.filter((binding) => {
     if (!activeChannels.has(binding.channelType)) return false;
     if (binding.chatId?.startsWith('doc:')) return false;
     const session = getSession(binding.bridgeSessionId);
     return hasSessionMirrorSource(session);
   });
+  const canonicalBindingBySessionId = new Map<string, TBinding>();
+  for (const binding of eligibleBindings) {
+    const selected = canonicalBindingBySessionId.get(binding.bridgeSessionId);
+    if (!selected) {
+      canonicalBindingBySessionId.set(binding.bridgeSessionId, binding);
+      continue;
+    }
+    const selectedCreatedAt = Date.parse(selected.createdAt || '');
+    const bindingCreatedAt = Date.parse(binding.createdAt || '');
+    const bindingIsOlder = Number.isFinite(bindingCreatedAt)
+      && (!Number.isFinite(selectedCreatedAt) || bindingCreatedAt < selectedCreatedAt);
+    if (bindingIsOlder) {
+      canonicalBindingBySessionId.set(binding.bridgeSessionId, binding);
+    }
+  }
+  const upsertBindings = eligibleBindings.filter((binding) => (
+    canonicalBindingBySessionId.get(binding.bridgeSessionId)?.id === binding.id
+  ));
+  const rejectedDuplicateBindings = eligibleBindings
+    .filter((binding) => canonicalBindingBySessionId.get(binding.bridgeSessionId)?.id !== binding.id)
+    .map((rejected) => ({
+      kept: canonicalBindingBySessionId.get(rejected.bridgeSessionId)!,
+      rejected,
+    }));
   const desiredIds = new Set(upsertBindings.map((binding) => binding.id));
   const removeBindingIds = Array.from(existingBindingIds).filter((bindingId) => !desiredIds.has(bindingId));
 
   return {
     upsertBindings,
     removeBindingIds,
+    rejectedDuplicateBindings,
   };
 }

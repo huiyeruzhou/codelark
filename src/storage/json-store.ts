@@ -510,6 +510,16 @@ export class JsonFileStore implements BridgeStore {
     ));
   }
 
+  private assertBridgeSessionBindingAvailable(bridgeSessionId: string, currentBindingId?: string): void {
+    const conflict = Array.from(this.bindings.values()).find((binding) => (
+      binding.id !== currentBindingId && binding.bridgeSessionId === bridgeSessionId
+    ));
+    if (!conflict) return;
+    throw new Error(
+      `该会话已绑定到聊天 ${conflict.chatId}。一个会话只能绑定一个聊天。`,
+    );
+  }
+
   private deleteUnboundTemporarySession(sessionId: string): boolean {
     const session = this.sessions.get(sessionId);
     if (
@@ -546,6 +556,7 @@ export class JsonFileStore implements BridgeStore {
     const activeSession = this.sessions.get(data.bridgeSessionId);
     const activeRuntime = getSessionActiveRuntime(activeSession) || 'codex';
     const existing = this.getBindingsForChat(data.channelType, data.chatId)[0];
+    this.assertBridgeSessionBindingAvailable(data.bridgeSessionId, existing?.id);
     if (existing) {
       const previousBridgeSessionId = existing.bridgeSessionId;
       const chatKind = normalizeChatKind(data.chatKind) ?? existing.chatKind;
@@ -611,6 +622,9 @@ export class JsonFileStore implements BridgeStore {
     this.reloadBindings();
     const binding = this.bindings.get(id);
     if (!binding) return;
+    if (updates.bridgeSessionId) {
+      this.assertBridgeSessionBindingAvailable(updates.bridgeSessionId, binding.id);
+    }
     const runtimeBridgeSessionIds = updates.runtimeBridgeSessionIds
       ? normalizeRuntimeBridgeSessionIds({
         ...binding.runtimeBridgeSessionIds,

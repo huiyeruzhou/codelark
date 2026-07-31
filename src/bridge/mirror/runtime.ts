@@ -352,6 +352,16 @@ export function createMirrorRuntime(
       },
     );
 
+    for (const conflict of plan.rejectedDuplicateBindings) {
+      console.error('[bridge-manager] Rejected duplicate mirror binding for one session:', {
+        sessionId: conflict.kept.bridgeSessionId,
+        keptBindingId: conflict.kept.id,
+        keptChatId: conflict.kept.chatId,
+        rejectedBindingId: conflict.rejected.id,
+        rejectedChatId: conflict.rejected.chatId,
+      });
+    }
+
     for (const binding of plan.upsertBindings) {
       try {
         upsertMirrorSubscription(binding);

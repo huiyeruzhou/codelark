@@ -2285,6 +2285,8 @@ export class FeishuAdapter extends BaseChannelAdapter {
   private activeCards = new Map<string, FeishuCardState>();
   /** In-flight card creation promises per stream key — prevents duplicate creation. */
   private cardCreatePromises = new Map<string, Promise<boolean>>();
+  /** In-flight card finalization promises per stream key — prevents sequence races. */
+  private cardFinalizePromises = new Map<string, Promise<boolean>>();
   /** Desired stream state that arrives while the first CardKit card is still being created. */
   private pendingCardCreateStates = new Map<string, PendingStreamingCardCreateState>();
   /** Scheduled card creation promises per stream key — coalesces retries while congested. */
@@ -4992,11 +4994,19 @@ export class FeishuAdapter extends BaseChannelAdapter {
       }
     }
 
-    if (!this.activeCards.has(cardKey)) {
-      return this.finalizeCard(chatId, status, responseText, cardKey);
+    let finalizePromise = this.cardFinalizePromises.get(cardKey);
+    if (!finalizePromise) {
+      let trackedPromise: Promise<boolean>;
+      trackedPromise = this.finalizeCard(chatId, status, responseText, cardKey)
+        .finally(() => {
+          if (this.cardFinalizePromises.get(cardKey) === trackedPromise) {
+            this.cardFinalizePromises.delete(cardKey);
+          }
+        });
+      this.cardFinalizePromises.set(cardKey, trackedPromise);
+      finalizePromise = trackedPromise;
     }
 
-    const finalizePromise = this.finalizeCard(chatId, status, responseText, cardKey);
     const timeoutMs = Math.max(1, this.cardFinalizeBlockingBudgetMs);
     let timeoutHandle: ReturnType<typeof setTimeout> | null = null;
     const timedOut = Symbol('card-finalize-timeout');

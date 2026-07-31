@@ -2590,6 +2590,70 @@ describe('feishu-adapter structured streaming regions', () => {
     assert.equal(Object.hasOwn(cardCreateRequest, 'card_id'), false);
   });
 
+  it('coalesces concurrent finalization calls for the same streaming card', async () => {
+    const settingsResult = createDeferred<Record<string, any>>();
+    const cardSettingsCalls: Array<Record<string, any>> = [];
+    const cardUpdateCalls: Array<Record<string, any>> = [];
+    const adapter = new FeishuAdapter({
+      id: 'feishu-default',
+      provider: 'feishu',
+      enabled: true,
+      alias: '飞书',
+      config: {
+        appId: 'app-id',
+        appSecret: 'app-secret',
+        streamingEnabled: true,
+      },
+    });
+
+    (adapter as any).cardFinalizeBlockingBudgetMs = 1_000;
+    (adapter as any).restClient = {
+      cardkit: {
+        v1: {
+          card: {
+            create: async () => ({ data: { card_id: 'card-1' } }),
+            settings: async (payload: Record<string, any>) => {
+              cardSettingsCalls.push(payload);
+              return settingsResult.promise;
+            },
+            update: async (payload: Record<string, any>) => {
+              cardUpdateCalls.push(payload);
+              return {};
+            },
+          },
+          cardElement: {
+            content: async () => ({}),
+          },
+        },
+      },
+      im: {
+        message: {
+          create: async () => ({ data: { message_id: 'card-message-1' } }),
+          reply: async () => ({ data: { message_id: 'card-message-1' } }),
+        },
+        messageReaction: {
+          create: async () => ({}),
+        },
+      },
+    };
+
+    await (adapter as any).createStreamingCard('chat-1', 'reply-1', 'stream-1');
+    const first = adapter.onStreamEnd('chat-1', 'completed', '最终回复', 'stream-1');
+    await waitForCondition(() => cardSettingsCalls.length === 1);
+    const second = adapter.onStreamEnd('chat-1', 'completed', '最终回复', 'stream-1');
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    try {
+      assert.equal(cardSettingsCalls.length, 1);
+    } finally {
+      settingsResult.resolve({});
+    }
+
+    assert.deepEqual(await Promise.all([first, second]), [true, true]);
+    assert.equal(cardSettingsCalls.length, 1);
+    assert.equal(cardUpdateCalls.length, 1);
+  });
+
   it('adds an error reaction to the finalized streaming card message on failure', async () => {
     const reactionCreateCalls: Array<Record<string, any>> = [];
     const adapter = new FeishuAdapter({
