@@ -421,6 +421,8 @@ test('documents Feishu setup permissions required by bridge and doc-to-chat', ()
   ]) {
     assert.ok(tenantScopes.includes(scope), `missing tenant scope ${scope}`);
   }
+  assert.equal(tenantScopes.includes('im:chat'), false);
+  assert.equal(tenantScopes.includes('im:chat.members:write_only'), false);
 
   assert.deepEqual(userScopes, [
     'docs:document.comment:create',

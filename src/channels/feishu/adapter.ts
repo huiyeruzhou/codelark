@@ -2840,37 +2840,6 @@ export class FeishuAdapter extends BaseChannelAdapter {
     if (!chatId) {
       throw new Error('Feishu create group returned no chat_id.');
     }
-    if (userIds.length > 0) {
-      const memberRes = await this.withFeishuRequestTimeout<{
-        code?: number;
-        msg?: string;
-        data?: {
-          invalid_id_list?: string[];
-          not_existed_id_list?: string[];
-          pending_approval_id_list?: string[];
-        };
-      }>(chatId, 'im.chatMembers.create', () => restClient.im.chatMembers.create({
-        path: { chat_id: chatId },
-        params: {
-          member_id_type: 'open_id',
-          succeed_type: 1,
-        },
-        data: {
-          id_list: userIds,
-        },
-      }));
-      if (memberRes?.code && memberRes.code !== 0) {
-        throw new Error(memberRes.msg || `Feishu add group members failed: code=${memberRes.code}`);
-      }
-      const rejectedIds = [
-        ...(memberRes?.data?.invalid_id_list || []),
-        ...(memberRes?.data?.not_existed_id_list || []),
-        ...(memberRes?.data?.pending_approval_id_list || []),
-      ];
-      if (rejectedIds.length > 0) {
-        throw new Error(`Feishu did not add requested group members: ${rejectedIds.join(', ')}`);
-      }
-    }
 
     return {
       chatId,

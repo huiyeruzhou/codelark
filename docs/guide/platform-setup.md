@@ -32,7 +32,6 @@
       "docs:document.comment:create",
       "docs:document.comment:read",
       "docs:document.comment:write_only",
-      "im:chat",
       "im:chat:create",
       "im:chat:create_by_user",
       "im:chat:read",
@@ -103,7 +102,7 @@
    - `im:message:update`：实时更新卡片内容。
    - `im:message.reactions:read`、`im:message.reactions:write_only`：tmux 输入的 Get 投递确认，以及云文档评论的 Typing 指示。
    - `im:message.pins:write_only`：Pin/Unpin 线程表消息。
-   - `im:chat`、`im:chat:create`、`im:chat:create_by_user`、`im:chat:read`、`im:chat:update`：创建、读取和重命名 bridge 群聊。
+   - `im:chat:create`、`im:chat:create_by_user`、`im:chat:read`、`im:chat:update`：创建、读取和重命名 bridge 群聊。创建请求会通过 `owner_id` 和 `user_id_list` 直接加入发起人，不需要 `im:chat` 或 `im:chat.members:write_only` 做二次邀请。
    - `docs:document.comment:read`、`docs:document.comment:create`、`docs:document.comment:write_only`：云文档评论读取、回复和 Typing reaction。
 2. **发布新版本**：权限变更只有在新版本审批通过后才会生效。
 3. **启动或重启 bridge**：从本地 `codelark` 工作台启动，让 WebSocket 连接处于活跃状态。

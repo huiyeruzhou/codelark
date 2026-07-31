@@ -244,9 +244,8 @@ describe('feishu-adapter structured streaming regions', () => {
     }
   });
 
-  it('creates cloud document groups through bot OpenAPI and invites the comment user', async () => {
+  it('includes the comment user in initial group creation without a follow-up member invite', async () => {
     const createdPayloads: Array<Record<string, any>> = [];
-    const memberPayloads: Array<Record<string, any>> = [];
     const adapter = new FeishuAdapter({
       id: 'feishu-default',
       provider: 'feishu',
@@ -267,12 +266,6 @@ describe('feishu-adapter structured streaming regions', () => {
             return { code: 0, msg: 'success', data: { chat_id: 'oc_user_created', name: '[BotName]doc review' } };
           },
         },
-        chatMembers: {
-          create: async (payload: Record<string, any>) => {
-            memberPayloads.push(payload);
-            return { code: 0, msg: 'success', data: {} };
-          },
-        },
       },
     };
 
@@ -289,12 +282,6 @@ describe('feishu-adapter structured streaming regions', () => {
     assert.equal(createdPayloads[0].data.owner_id, 'ou_app_scoped_user');
     assert.deepEqual(createdPayloads[0].data.user_id_list, ['ou_app_scoped_user']);
     assert.deepEqual(createdPayloads[0].data.bot_id_list, ['cli_bridge_bot']);
-    assert.equal(memberPayloads.length, 1);
-    assert.deepEqual(memberPayloads[0], {
-      path: { chat_id: 'oc_user_created' },
-      params: { member_id_type: 'open_id', succeed_type: 1 },
-      data: { id_list: ['ou_app_scoped_user'] },
-    });
   });
 
   it('falls back to the default group avatar when bot avatar upload fails', async () => {

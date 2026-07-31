@@ -26,7 +26,6 @@ export const FEISHU_BASE_TENANT_SCOPES: FeishuPermissionRequirement[] = [
   { scope: 'im:message.reactions:read', reason: 'Read message reaction state when available.' },
   { scope: 'im:message.reactions:write_only', reason: 'Add completion/error reactions to bridge messages.' },
   { scope: 'im:message.pins:write_only', reason: 'Pin and unpin thread table messages.' },
-  { scope: 'im:chat', reason: 'Create and manage bridge group chats.' },
   { scope: 'im:chat:read', reason: 'Read group metadata and receive group lifecycle events.' },
   { scope: 'im:chat:create', reason: 'Create group-backed bridge sessions as the bot.' },
   { scope: 'im:chat:create_by_user', reason: 'Allow bot OpenAPI chat creation with a designated user owner when required.' },

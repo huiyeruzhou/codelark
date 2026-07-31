@@ -137,7 +137,7 @@ codelark run
 - 新权限是否已经重新发布并审批。
 - bridge 是否在审批后重启。
 
-云文档转群聊使用机器人 IM 建群能力，并会把评论用户加入新群；如果建群失败，检查 `im:chat`、`im:chat:create`、`im:chat:read`、`im:chat:update` 等机器人权限和应用发布审批状态。
+云文档转群聊使用机器人 IM 建群能力，创建请求会通过 `owner_id` 和 `user_id_list` 直接把评论用户加入新群；如果建群失败，检查 `im:chat:create`、`im:chat:create_by_user`、`im:chat:read`、`im:chat:update` 等机器人权限和应用发布审批状态。该流程不需要 `im:chat` 或 `im:chat.members:write_only` 做二次邀请。
 
 ## 卸载和清理
 
