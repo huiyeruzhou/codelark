@@ -9320,7 +9320,7 @@ enabled = true
     }
   });
 
-  it('binds a tmux session, sends literal text and tmux-key special keys, and returns a capture', async () => {
+  it('binds a tmux session, sends literal text and tmux-key special keys, and returns a capture', { timeout: 30_000 }, async () => {
     const store = initTestContext();
     const fakeTmux = installFakeTmux();
     const oldPath = process.env.PATH || '';

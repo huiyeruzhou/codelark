@@ -34,7 +34,9 @@ describe('test runner tmux isolation', () => {
         'tmux',
         ['display-message', '-p', '-t', sessionName, '#{socket_path}'],
       )).stdout.trim();
-      assert.equal(path.relative(tmuxTempDir, socketPath).startsWith('..'), false);
+      const canonicalTmuxTempDir = fs.realpathSync.native(tmuxTempDir);
+      const canonicalSocketPath = fs.realpathSync.native(socketPath);
+      assert.equal(path.relative(canonicalTmuxTempDir, canonicalSocketPath).startsWith('..'), false);
     } finally {
       await execFileAsync('tmux', ['kill-session', '-t', sessionName]).catch(() => undefined);
     }
