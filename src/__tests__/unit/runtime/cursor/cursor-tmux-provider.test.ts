@@ -135,8 +135,9 @@ describe('Cursor tmux provider helpers', () => {
   it('uses the official cwd hash, workspace slug, and encoded transcript id', () => {
     const cwd = path.join(root, 'project with spaces');
     fs.mkdirSync(cwd, { recursive: true });
+    const canonicalCwd = fs.realpathSync.native(cwd);
     assert.match(cursorWorkspaceHash(cwd), /^[a-f0-9]{32}$/);
-    assert.equal(cursorWorkspaceSlug(cwd), path.resolve(cwd).replace(/[^a-zA-Z0-9]/g, '-').replace(/-+/g, '-').replace(/^-+|-+$/g, ''));
+    assert.equal(cursorWorkspaceSlug(cwd), canonicalCwd.replace(/[^a-zA-Z0-9]/g, '-').replace(/-+/g, '-').replace(/^-+|-+$/g, ''));
     assert.equal(encodeCursorConversationId('chat/id'), 'chat_2Fid');
   });
 

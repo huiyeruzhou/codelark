@@ -226,8 +226,9 @@ describe('real Kimi Code bridge e2e', () => {
         workingDirectory: workDir,
       }));
       assert.match(claudeSeedOutput, new RegExp(responseText));
+      const canonicalWorkDir = fs.realpathSync.native(workDir);
       const claudeSession = listClaudeSessionJsonlSummaries(claudeHome, 10)
-        .find((candidate) => candidate.cwd === workDir);
+        .find((candidate) => fs.realpathSync.native(candidate.cwd) === canonicalWorkDir);
       assert.match(claudeSession?.sessionId || '', /^[0-9a-f-]{36}$/i);
       await execFileAsync('tmux', ['kill-session', '-t', claudeSeedTmuxSessionName]);
 
