@@ -1,14 +1,20 @@
 # CodeLark 文档
 
-欢迎阅读 CodeLark 文档站。文档按维护主题组织成自然树结构，HTTP 路径和 `docs/` 下的源文件路径保持一致。
+欢迎阅读 CodeLark 文档站。内容分为面向使用者的用户文档，以及面向设计、开发和验证的维护文档。
 
 - 代码仓库：https://github.com/huiyeruzhou/codelark
 - 文档站：https://huiyeruzhou.github.io/site/codelark/
 
 ## 快速入口
 
-- [使用与配置](guide/)：安装、平台接入、凭据验证、本地工作台、云文档能力和排障。
-- [产品文档](product/)：功能说明、命令体系、运行时/提供方、通道和开发者源码地图。
+### 用户文档
+
+- [5 分钟上手](guide/daily-workflow.md)：从创建任务群到查看 tmux、继续追问和接回会话。
+- [安装与使用](guide/)：安装、平台接入、会话管理、云文档能力和排障。
+
+### 设计与维护文档
+
+- [产品与实现](product/)：能力边界、命令体系、运行时/提供方、通道和源码地图。
 - [架构与数据契约](architecture/)：核心架构、运行时边界、JSON Schema、安全模型和后端状态。
 - [测试与验证](testing/)：功能覆盖审计、真实飞书 E2E 和专项验证计划。
 

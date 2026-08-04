@@ -78,7 +78,7 @@ codelark run
 
 - 群聊如果太多，先尝试解散不再使用的群聊并重启 bridge。
 - 如果不是 `yolo` mode，可能是 agent 卡在权限确认上。可以先用 `/` 查看当前 mode，再按任务风险决定是否用 `/mode yolo` 或 `/m yolo` 切换。
-- 如果当前是 tmux/pty provider 路径，可以使用 `/tmux-screen` 或 `/pty-screen` 查看终端状态；Claude Code 默认 tmux 路径用 `/tmux-screen`。
+- 使用 `/tmux-screen` 查看本地 agent 的真实终端状态；如果当前 TUI 已退出，可发送 `/p tmux` 重启。
 - 如果卡片已经进入终态但没有追加新的纯文本消息，先看卡片上是否已有最终内容和终态 reaction；当前实现会在最终更新失败但已有卡片内容时保留卡片，避免重复发送 fallback 文本。
 
 ### tmux 更新后本地 agent 无法启动
@@ -127,7 +127,7 @@ tmux 服务端会长期驻留；更新磁盘上的客户端不会自动升级已
 `/t` 依赖本机 runtime 会话索引。排查顺序：
 
 1. 确认当前 runtime 是否正确：`/runtime codex`、`/runtime claude` 或 `/runtime kimi`。
-2. 确认 provider 是否符合预期：`/provider sdk`、`/provider pty` 或 `/provider tmux`。
+2. 发送 `/` 确认当前 agent 和工作目录是否符合预期。
 3. 在本机确认 Codex / Claude Code / Kimi Code 已经产生过会话。
 4. 在工作台查看本地会话列表和 bridge 日志。
 

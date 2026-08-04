@@ -30,7 +30,7 @@ Bridge 每个本地自然日最多检查一次 npm 最新版本。检查由当�
 
 ### Windows 的 tmux 支持
 
-Windows 推荐使用原生 psmux，不使用 WSL。psmux 基于 Windows ConPTY，并提供 `tmux.exe` 兼容命令；CodeLark 的 tmux provider、Kimi runtime、session 复用和输入状态机都走这条路径。Windows x64 是主要支持目标，psmux 同时提供 ARM64 构建。
+Windows 推荐使用原生 psmux，不使用 WSL。psmux 基于 Windows ConPTY，并提供 `tmux.exe` 兼容命令；CodeLark 的本地 TUI、Kimi runtime、session 复用和输入状态机都走这条路径。Windows x64 是主要支持目标，psmux 同时提供 ARM64 构建。
 
 `codelark setup` 检测不到 `tmux.exe` 时会直接调用 WinGet 安装 psmux，不再额外询问一次确认。安装成功后，向导会把 WinGet command links 加入当前进程 PATH 并立即复检，不要求为了完成本次 setup 重启终端。
 
@@ -79,7 +79,7 @@ codelark setup
 
 若机器人信息接口暂时不可用，向导仍会保存配置并完成，不会把私聊链接失败误报为安装失败；此时可直接在飞书/Lark 中搜索机器人名称进入私聊。
 
-在 macOS/Linux 上，如果用户拒绝向导安装 tmux，向导仍会继续保存配置，但会把默认 provider 改为 SDK：`runtime.codex.provider = "sdk"`，并把 Claude 默认 provider 写为 `runtime.claude.provider = "sdk"`。Kimi Code 当前只有 tmux provider，因此需要安装 tmux 后再使用 Kimi runtime。之后安装 tmux 后，可以在 IM 中使用 `/provider tmux` 切回 tmux provider。Windows 不显示这次额外确认，而是直接通过 WinGet 安装 psmux；任何平台安装失败时，向导都会保留错误和手动命令，不会伪装成已具备 tmux。
+在 macOS/Linux 上，如果用户拒绝向导安装 tmux，向导仍会保存配置，并为 Codex、Claude 选择无需 tmux 的后备运行方式。Kimi Code 需要 tmux，因此要在安装 tmux 后再使用。Windows 不显示这次额外确认，而是直接通过 WinGet 安装 psmux；任何平台安装失败时，向导都会保留错误和手动命令，不会伪装成已具备 tmux。
 
 机器人配置方式有三种：
 
@@ -204,15 +204,14 @@ curl -s -X POST "${DOMAIN}/open-apis/auth/v3/tenant_access_token/internal" \
 
 ## IM 中的基础使用
 
-把机器人拉进飞书会话或直接私聊机器人后，可以使用以下最小流程：
+把机器人拉进飞书会话或直接私聊机器人后，建议先完成一次最小工作流：
 
-1. 发送 `/status` 检查 bridge 和通道状态。
-2. 发送 `/t` 查看当前 runtime 最近 20 条本地会话。
-3. 在 `/t` 卡片里切换 runtime 或结果数量。
-4. 发送 `/t 1` 切换当前 IM 会话到第 1 条线程。
-5. 之后直接发送普通消息，即可继续该线程。
+1. 发送 `/new`，为任务创建独立群聊。
+2. 直接发送任务；需要确认运行状态时发送 `/tmux-screen`。
+3. 继续发送普通消息追问，或用 `/clear` 在当前群开始新对话。
+4. 已有本地会话则发送 `/t`，从卡片中选择并接管。
 
-会话 attach/detach、`/current` 和 `/set` 卡片、tmux pane 查看、agent/provider 切换以及 home/chat 配置层级，见 [会话、Provider 与配置工作流](session-workflows.md)。完整命令索引见 [命令体系](../product/commands.md)，provider 能力矩阵见 [运行时与提供方](../product/runtime-providers.md)。
+完整示例见 [5 分钟上手：日常工作流](daily-workflow.md)。会话 attach/detach、agent 切换和配置继承见 [会话与配置工作流](session-workflows.md)。
 
 ## 数据和日志
 
@@ -225,7 +224,7 @@ CodeLark 自有数据位于：
 常见文件：
 
 - `config.toml`：全局主配置。
-- `config/sessions/`：当前会话级持久化覆盖，例如工作目录、模型、provider、sandbox、reasoning、tmux 显式绑定。
+- `config/sessions/`：当前会话级持久化覆盖，例如工作目录、模型、权限设置和 tmux 显式绑定。
 - `config/channels/`：Channel 级持久化覆盖。
 - `data/sessions.json`：Bridge 会话。
 - `data/channel-chats.json`：IM chat 到 Bridge 会话的绑定。

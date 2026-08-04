@@ -1,6 +1,6 @@
-# 会话、Provider 与配置工作流
+# 会话与配置工作流
 
-这页从日常使用角度串起 IM 会话、agent/provider、tmux pane 查看和配置层级。完整命令索引见 [命令体系](../product/commands.md)，provider 设计说明见 [运行时与提供方](../product/runtime-providers.md)。
+这页深入解释 IM 会话、agent 切换、tmux 屏幕和配置层级。第一次使用请先看 [5 分钟上手：日常工作流](daily-workflow.md)；完整命令索引见 [命令体系](../product/commands.md)。
 
 ## 核心概念
 
@@ -9,37 +9,30 @@ CodeLark 的 IM 对话由三层组成：
 | 层级 | 含义 | 常用入口 |
 | --- | --- | --- |
 | Chat | 飞书私聊、群聊、话题或云文档评论入口。它只记录“这个聊天当前接到哪个 BridgeSession”。 | `/t`、`/t 1`、`/t unbind` |
-| BridgeSession | CodeLark 管理的一条工作会话，保存工作目录、当前 runtime、provider、模型和底层 runtime 身份。 | `/new`、`/clear`、`/current` |
+| BridgeSession | CodeLark 管理的一条工作会话，保存工作目录、当前 agent、模型和底层会话身份。 | `/new`、`/clear`、`/` |
 | Runtime session | Codex thread、Claude Code/Kimi Code session 或 Cursor chat，是底层 agent 自己的会话身份。 | `/t` 接管、`/his` 查看历史 |
 
-`/runtime` 选择当前会话使用 Codex、Claude Code、Kimi Code 还是 Cursor Agent。日常使用默认由 tmux 承载本地 agent；只有需要诊断或显式改变运行方式时才使用 `/provider`。同一个聊天可以记住各 runtime 的 BridgeSession，来回切换时会尽量回到之前那条会话。
+`/runtime` 选择当前会话使用 Codex、Claude Code、Kimi Code 还是 Cursor Agent。默认使用 tmux，日常使用无需再选择运行方式。同一个聊天可以记住各 agent 的 BridgeSession，来回切换时会尽量回到之前那条会话。
 
 ## 推荐日常流程
 
-新聊天里可以按这个顺序开始：
+大多数任务只需要下面这条主线：
 
 ```text
-/status
+/new "任务名" "~/work/project"
+直接发送任务
+/tmux-screen
+```
+
+之后直接发送普通消息继续追问。需要在同一个群切到新对话时使用 `/clear`；需要接回本地旧会话时使用 `/t`：
+
+```text
+/clear "下一阶段" "~/work/project"
 /t
 /t 1
-/current
 ```
 
-`/status` 看 bridge 和通道状态。`/t` 打开本地会话表；选择一条会话后发送 `/t 1` 或点击卡片中的选择项接管。`/current` 查看当前会话卡片；顶部“配置分栏”可分别编辑通用会话配置与 Codex、Claude Code、Kimi Code 配置。
-
-如果要从空白会话开始：
-
-```text
-/new my-task ~/work/project
-```
-
-如果当前聊天已经在一个长对话里，但你想在同一个聊天上下文切到新对话：
-
-```text
-/clear my-next-task ~/work/project
-```
-
-`/clear` 不会删除旧对话；之后仍可用 `/t` 找回并 attach。当前 Kimi 会话显式设置过的 model 会随 active runtime 继承到新 BridgeSession，卡片和下一次 Kimi 启动不会退回 `default`。
+`/clear` 不会删除旧对话。当前 Kimi 会话显式设置过的 model 会随 active runtime 继承到新 BridgeSession，卡片和下一次 Kimi 启动不会退回 `default`。
 
 ## 会话列表和下拉选框
 
@@ -82,7 +75,7 @@ runtime 和数量下拉只切换卡片里的候选列表，不会改变当前会
 
 `/t unbind` 是 detach 当前聊天，而不是删除会话。detach 后直接发普通文本会进入新的临时 BridgeSession；想接回旧会话时，发送 `/t` 找到它再 `/t <序号>`。
 
-## 切换 agent 和 provider
+## 切换 agent
 
 切换 agent：
 
@@ -93,16 +86,7 @@ runtime 和数量下拉只切换卡片里的候选列表，不会改变当前会
 /runtime cursor
 ```
 
-切换 provider：
-
-```text
-/provider
-/p tmux
-/p pty
-/p sdk
-```
-
-Codex、Claude Code、Kimi Code 和 Cursor Agent 的默认日常路径都是 `tmux`。Kimi Code 和 Cursor Agent 当前只支持这一路径；`/provider` 不带参数时可查看当前状态，出现终端故障时可用 `/p tmux` 重建。
+CodeLark 默认通过 tmux 运行本地 agent。只有当前 TUI 已退出或确实需要重启时，才发送 `/p tmux`；不需要在每次任务前设置。SDK、pty 等实现差异属于设计层内容，见 [运行时与提供方](../product/runtime-providers.md)。
 
 思考配置按 runtime 的真实能力提供：
 
@@ -115,25 +99,19 @@ Codex、Claude Code、Kimi Code 和 Cursor Agent 的默认日常路径都是 `tm
 
 `/reasoning default` 清除当前会话覆盖。全局默认可在 `/set` 对应 runtime 分栏修改；Cursor 会把 effort 合并进参数化模型，例如 `gpt-5.3-codex[effort=high]`，`force` 仍只表示跳过审批，不是思考级别。
 
-`/current` 卡片顶部有“通用配置、Codex、Claude Code、Kimi Code、Cursor”五个分栏：
+`/` 卡片顶部有“通用配置、Codex、Claude Code、Kimi Code、Cursor Agent”五个分栏：
 
 - 通用配置严格按“对话名称、工作目录、tmux 输出行数”显示；切到该分栏不会改变当前 agent。
-- 各 runtime 分栏只显示自己的 model、mode、reasoning/thinking 等配置，不重复显示通用字段。选择另一个 runtime 分栏会切换当前 agent 并刷新卡片。
+- 各 agent 分栏只显示自己的模型、权限和思考设置，不重复显示通用字段。选择另一个分栏会切换当前 agent 并刷新卡片。
 - 输入框留空或下拉选择“跟随上层配置”时，只删除当前分栏对应的 session-level 覆盖，立即恢复 home/local/channel 等上层配置的当前有效值；保存一个分栏不会串写其他分栏。飞书里继承状态会明确选中“跟随上层配置”，不会显示为空；CardKit 内部使用独立的 inherit value，后端只把该机器值解释为 unset，不能把中文文案交给 sandbox/provider 等枚举写校验。
 
-运行中不能随意切换 runtime/provider。遇到拒绝提示时，先等当前任务结束，或发送 `/stop` 停止当前任务，再切换。
+运行中不能随意切换 agent。遇到拒绝提示时，先等当前任务结束，或发送 `/stop` 停止当前任务，再切换。
 
 如果 Codex 恢复旧 session 时发现记录模型与当前模型不同，CodeLark 会显示“Codex 恢复模型不一致”提醒，列出两个模型并建议发送 `/clear` 新建 session。该提醒不会自动清空或切换当前 session；同一组模型只提示一次。
 
-## tmux 状态下输入和 pane 查看
+## tmux 输入和屏幕查看
 
-选择 tmux provider：
-
-```text
-/p tmux
-```
-
-之后普通文本会先进入同一个 BridgeSession 的 provider-owned tmux TUI。CodeLark 会等待 TUI ready；如果启动时出现 Codex update、trust、goal 或 permission 选择，会把选择卡片发到 IM，用户选择完成后再把原始输入转发进去。
+普通文本会进入当前 BridgeSession 的 tmux TUI。CodeLark 会等待 TUI ready；如果启动时出现 update、trust、goal 或 permission 选择，会把选择卡片发到 IM，用户选择完成后再把原始输入转发进去。
 
 查看当前 tmux pane：
 
@@ -144,7 +122,7 @@ Codex、Claude Code、Kimi Code 和 Cursor Agent 的默认日常路径都是 `tm
 /tmux-screen stop
 ```
 
-`/tmux-screen` 只查看当前绑定的 tmux session，不会自动恢复缺失的 provider session，也不会等待正在排队的普通对话。带 `5s` 会启动定时刷新，最低 3 秒；`stop` 停止当前聊天的刷新。
+`/tmux-screen` 只查看当前绑定的 tmux session，不会自动恢复已退出的 TUI，也不会等待正在排队的普通对话。带 `5s` 会启动定时刷新，最低 3 秒；`stop` 停止当前聊天的刷新。
 
 手动输入 tmux：
 
@@ -169,20 +147,25 @@ tmux 绑定和默认值：
 
 `/tmux-set` 写的是当前 BridgeSession 的 session-level 配置。想修改全局默认展示行数，用 `/set tmuxCaptureLines <1-500>`。
 
-## 配置层级：home level 和 chat level
+## `/` 与 `/set`：当前群和全局默认
 
-CodeLark 的配置分两类理解最清楚：
+每个 `/new` 创建的群都会收到初始化说明和“当前会话”卡片，因此不需要记入口：
+
+- `/`（等同 `/current`）打开当前群的会话卡片。
+- `/set` 打开全局默认配置卡片。
+
+两者的对应关系如下：
 
 | 层级 | 写入位置 | 典型入口 | 生效范围 |
 | --- | --- | --- | --- |
-| home level | `~/.codelark/config.toml` | `/set`、Web 工作台配置页 | 全局默认值和通道默认值。新会话会继承这些默认值。 |
-| chat/session level | `~/.codelark/config/sessions/<session-id>.toml` | `/runtime`、`/provider`、`/model`、`/cd`、`/tmux-set`、`/current` 卡片 | 当前聊天绑定的 BridgeSession。只影响这条会话。 |
+| 全局默认 | `~/.codelark/config.toml` | `/set`、Web 工作台配置页 | 新群默认继承；也影响没有单独覆盖该字段的已有群。 |
+| 当前群 | `~/.codelark/config/sessions/<session-id>.toml` | `/`、`/runtime`、`/model`、`/cd`、`/tmux-set` | 只影响当前群绑定的会话，并优先于全局默认。 |
 
-`/set` 打开的是 home level TOML 配置卡片，顶部下拉可切换：
+`/set` 卡片顶部可以切换：
 
 - 通用配置：默认 agent、默认工作目录、tmux 默认展示行数、tmux 输入回显。
-- Codex：默认模型、YOLO 模式、provider、skip git repo check、sandbox、network、reasoning。
-- Claude：默认模型、YOLO 模式、provider、Claude executable、reasoning、空闲超时。
+- Codex：默认模型、YOLO 模式、skip git repo check、sandbox、network、reasoning。
+- Claude：默认模型、YOLO 模式、Claude executable、reasoning、空闲超时。
 - Kimi：默认模型、Thinking 开关。
 - Cursor：默认模型、模型 effort 和 force 模式。
 - Bridge：UI 访问和流式状态提示。
@@ -194,15 +177,12 @@ CodeLark 的配置分两类理解最清楚：
 /set runtime codex
 /set runtime kimi
 /set defaultWorkspaceRoot ~/work
-/set defaultProvider tmux
-/set defaultProvider default  # 删除显式覆盖，跟随产品默认值
-/set claudeProvider tmux
 /set tmuxCaptureLines 80
 ```
 
-当前聊天的 runtime/provider/model/cwd 优先使用 session-level 覆盖。也就是说，`/set defaultProvider tmux` 会影响以后新建或没有覆盖的会话；已经在当前聊天里执行过 `/provider sdk` 的会话，会继续使用自己的 session-level provider，直到再次发送 `/provider ...` 或在 `/current` 卡片里保存新值。
+`/` 卡片只显示可以由当前群覆盖的字段：通用分栏包含对话名称、当前工作目录和 tmux 展示行数；agent 分栏包含模型和权限等会话设置。选择“跟随上层配置”会删除当前群的覆盖值，重新跟随 `/set`。
 
-`/current` 只呈现允许写入 session 的配置：通用分栏严格包含对话名称、当前工作目录、tmux 展示行数；三个 runtime 分栏分别包含各自的模型、provider、权限等会话级覆盖。默认工作目录、UI 访问、通道设置等只能写入 home 或其他上层作用域，不会伪装成会话配置；当前工作目录继续使用通用分栏里的“工作目录”或 `/cd` 修改。
+简单判断：**只改这个群，用 `/`；希望以后新建的群都采用同一默认值，用 `/set`。**
 
 ## 什么时候看哪张卡片
 
@@ -210,10 +190,9 @@ CodeLark 的配置分两类理解最清楚：
 | --- | --- |
 | 看 bridge、通道和当前绑定 | `/status` |
 | 找本地 Codex/Claude/Kimi/Cursor 会话并 attach | `/t` |
-| 改当前会话名、cwd、runtime 配置 | `/current` |
+| 改当前会话名、工作目录和 agent 设置 | `/` |
 | 改全局默认值和通道默认值 | `/set` |
-| 看 tmux provider 的当前屏幕 | `/tmux-screen` |
-| 看 pty provider 的当前屏幕 | `/pty-screen` |
+| 看本地 tmux TUI 的当前屏幕 | `/tmux-screen` |
 | 查看最近模型消息历史 | `/his` |
 
-排障时先发 `/current` 确认当前聊天绑到了哪条 BridgeSession，再发 `/provider` 和 `/tmux-status` 确认 runtime/provider 与 tmux 绑定是否符合预期。
+排障时先发 `/` 确认当前群的 agent 和工作目录，再发 `/tmux-status` 确认 tmux 绑定是否符合预期。

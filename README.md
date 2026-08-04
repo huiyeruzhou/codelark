@@ -21,7 +21,7 @@
 
 ## Showcase
 
-> 更完整的产品功能、使用场景、设计模块和源码入口说明见 [CodeLark 产品文档](https://huiyeruzhou.github.io/site/codelark/product/)。
+> 第一次使用请看 [5 分钟日常工作流](https://huiyeruzhou.github.io/site/codelark/guide/daily-workflow)；设计模块和源码入口见 [CodeLark 设计文档](https://huiyeruzhou.github.io/site/codelark/product/)。
 
 
 <table>
@@ -58,7 +58,7 @@
 
 ### 安装
 
-- 推荐使用 tmux provider 驱动本地 agent
+- CodeLark 默认使用 tmux 驱动本地 agent
   - macOS
   ```sh
   # 安装Homebrew
@@ -90,19 +90,18 @@ codelark run
 
 ## v0.1.1
 
-`0.1.1` 改进了 tmux provider 的启动恢复和输入透传：Codex 启动弹窗、update prompt、delayed ready 和 `Working` 输入行都会被端到端验证并正确处理。`/tmux-screen` 的行数配置现在表示最终希望看到的行数，而不是直接传给 tmux 的额外历史行数。
+`0.1.1` 改进了 tmux TUI 的启动恢复和输入透传：Codex 启动弹窗、update prompt、delayed ready 和 `Working` 输入行都会被端到端验证并正确处理。`/tmux-screen` 的行数配置现在表示最终希望看到的行数，而不是直接传给 tmux 的额外历史行数。
 
 完整发布说明见 [Release Notes](docs/guide/release-notes.md)。
 
 ## 常用命令
-- `/`：查看当前聊天/会话诊断；修改当前会话配置可用 `/provider`、`/model`、`/mode`、`/reasoning` 等。
-- `/set`：修改全局默认配置
+- `/`：查看或修改当前群的会话配置。
+- `/set`：修改全局默认配置；新建群会继承这些默认值。
 - `//...`：向模型发送以 `/` 开头的文本，例如 `//status` 会作为 `/status` 发给模型。
   - 特别常用：`//goal`！
 - `/tmux-screen`：显示本地 agent 的 TUI 界面，遇到卡住不动的问题排查用。
-- `<enter>`、`<C-c>`、`<esc>`：向 tmux Provider 发送控制键。
-- `/p tmux`：重启当前 runtime 的 tmux Provider 会话
-- `/p sdk`：Codex / Claude Code 改为使用 SDK provider；Kimi Code 与 Cursor Agent 当前只支持 `tmux`。
+- `<enter>`、`<C-c>`、`<esc>`：向当前 tmux 会话发送控制键。
+- `/p tmux`：当前本地 TUI 已退出时重新启动。
 - `/runtime cursor`：切换到 Cursor Agent；原生 Cursor slash 命令使用 `/tmux /<command>`，例如 `/tmux /mcp list`。
 - `/reasoning`：查看或修改当前 runtime 的思考设置；Codex 支持 `max/ultra`，Kimi 使用 `on/off`，Cursor 使用模型 effort。
 - `/stop`：停止当前任务
@@ -129,7 +128,7 @@ codelark run
 
 绑定成功后，直接发送普通消息即可继续当前线程。
 
-- tmux Provider 会解释 `<enter>`、`<C-c>`、`<esc>` 等控制键；卡权限或需要中断时很有用。
+- tmux 会解释 `<enter>`、`<C-c>`、`<esc>` 等控制键；卡权限或需要中断时很有用。
 - Codex CLI/Desktop、Claude Code、Kimi Code 或 Cursor Agent 继续操作这条共享会话时，结果也会通过对应 JSONL mirror 同步到 IM。
 
 > 也就是说，你可以回到电脑继续在 TUI 中和 Agent 协作，再回到飞书时依旧能看到完整对话记录。

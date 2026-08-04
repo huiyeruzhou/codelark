@@ -26,26 +26,27 @@ export default defineConfig({
   themeConfig: {
     logo: undefined,
     nav: [
-      { text: '使用配置', link: '/guide/' },
-      { text: '产品文档', link: '/product/' },
+      { text: '用户文档', link: '/guide/' },
+      { text: '设计文档', link: '/product/' },
       { text: '架构', link: '/architecture/' },
       { text: '测试验证', link: '/testing/' },
     ],
     sidebar: [
       {
-        text: '使用与配置',
+        text: '用户文档',
         items: [
           { text: '入口', link: '/guide/' },
           { text: '安装与使用指南', link: '/guide/install-and-usage' },
-          { text: 'Release Notes', link: '/guide/release-notes' },
-          { text: '会话、Provider 与配置工作流', link: '/guide/session-workflows' },
+          { text: '5 分钟日常工作流', link: '/guide/daily-workflow' },
+          { text: '会话与配置工作流', link: '/guide/session-workflows' },
           { text: '平台配置指南', link: '/guide/platform-setup' },
           { text: '云文档与交互卡片', link: '/guide/cloud-docs-and-cards' },
           { text: '排障指南', link: '/guide/troubleshooting' },
+          { text: 'Release Notes', link: '/guide/release-notes' },
         ],
       },
       {
-        text: '产品文档',
+        text: '设计文档：产品与实现',
         items: [
           { text: '入口', link: '/product/' },
           { text: '命令体系', link: '/product/commands' },

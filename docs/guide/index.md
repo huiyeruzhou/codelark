@@ -1,12 +1,18 @@
-# 使用与配置
+# 用户文档
 
-本模块收纳安装、平台接入、本地工作台、飞书能力和排障文档。
+这里从安装开始，带你完成一次真实任务，再按需了解会话管理、飞书能力和排障。已经完成配置的用户可以直接阅读 [5 分钟上手：日常工作流](daily-workflow.md)。
 
 ## 阅读路径
 
-1. [安装与使用指南](install-and-usage.md)：本地安装后的配置、启动、本地工作台、IM 基础使用、Windows bridge 自启动和凭据验证方式。
-2. [Release Notes](release-notes.md)：当前 npm 发布版本、用户可见变化和升级命令。
-3. [会话、Provider 与配置工作流](session-workflows.md)：IM 会话、`/t` attach/detach、tmux pane 查看、agent/provider 切换和 home/chat 配置层级。
-4. [平台配置指南](platform-setup.md)：飞书/Lark 通道权限、事件订阅和发布流程。
-5. [飞书功能：云文档与交互卡片](cloud-docs-and-cards.md)：云文档评论、doc-as-chat、表单和交互卡片协议。
-6. [排障指南](troubleshooting.md)：启动、消息收发、权限、卡片、常见问题和运行状态排查。
+### 第一次使用
+
+1. [安装与使用指南](install-and-usage.md)：安装、首次配置、启动 bridge 和本地工作台。
+2. [平台配置指南](platform-setup.md)：手动配置飞书/Lark 权限、事件订阅和应用发布。
+3. [5 分钟上手：日常工作流](daily-workflow.md)：创建任务群、发送任务、查看 tmux、追问和接回会话。
+
+### 日常使用与进阶
+
+1. [会话与配置工作流](session-workflows.md)：深入理解 `/t`、agent 切换和配置继承。
+2. [云文档与交互卡片](cloud-docs-and-cards.md)：从云文档评论创建任务群，以及使用问题表单。
+3. [排障指南](troubleshooting.md)：排查启动、消息、权限、卡片和本地会话问题。
+4. [Release Notes](release-notes.md)：查看版本变化和升级命令。

@@ -5,7 +5,7 @@ CodeLark 把“使用哪个 AI 工具”和“如何驱动它”拆成两层。
 - 运行时：当前会话使用 Codex、Claude Code、Kimi Code 还是 Cursor Agent。
 - 提供方：当前运行时通过 SDK、pty 或 tmux 运行。
 
-日常 IM 操作流程见 [会话、Provider 与配置工作流](../guide/session-workflows.md)。本文主要说明 provider 能力边界和实现模块。
+日常 IM 操作流程见 [会话与配置工作流](../guide/session-workflows.md)。本文主要说明 provider 能力边界和实现模块。
 
 ## 能力矩阵
 

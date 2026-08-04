@@ -2,7 +2,7 @@
 
 这是 CodeLark 的产品功能文档入口。文档按网页目录组织：每页聚焦一个主题，既面向用户理解功能，也为开发者提供源码入口。
 
-如果只想安装和启动，先看 [安装与使用指南](../guide/install-and-usage.md)。如果要理解底层身份链路，再看 [当前架构](../architecture/current.md)。
+如果要快速完成一次任务，先看 [5 分钟上手：日常工作流](../guide/daily-workflow.md)；安装配置见 [用户文档](../guide/)。如果要理解底层身份链路，再看 [当前架构](../architecture/current.md)。
 
 ## 阅读路径
 

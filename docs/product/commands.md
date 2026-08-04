@@ -10,7 +10,7 @@ IM 命令从用户视角分为五组。命令入口是 [src/bridge/command/dispa
 | 终端和文件 | `/shell`、`/tmux-*`、`/pty-screen`、`/cat`、`/file` | 执行命令、观察终端、发送文件 |
 | 自动化和管理 | `/every`、`/then`、`/require-at`、`/ui`、`/set`、`/hot-update` | 定时输入、后续输入、通道策略、显示和全局设置 |
 
-从本机 `audit.jsonl` 的实际使用看，高频命令集中在 `/provider`、`/clear`、`/t`、`/mode`、`/tmux-screen`、`/new`、`/runtime`、`/pty-screen`、`/set` 和 `/hot-update`。这说明新用户文档应优先讲清楚“接管会话、清理/新建会话、切 provider、观察终端屏幕、调整配置”这些路径，再补完整命令索引。
+从本机 `audit.jsonl` 的匿名聚合看，普通消息占绝大多数；命令使用主要集中在 `/tmux-screen`、`/p tmux`、`/new`，随后是 `/clear`、`/every`、`/runtime`、`/t` 和 `/set`。用户教程据此优先讲“新建任务—直接对话—观察 tmux—继续或切换会话”，详见 [5 分钟上手：日常工作流](../guide/daily-workflow.md)。
 
 ## 用户使用原则
 
