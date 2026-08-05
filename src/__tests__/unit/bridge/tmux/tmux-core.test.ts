@@ -35,15 +35,19 @@ function installExecutable(filePath: string, source: string): void {
   fs.chmodSync(filePath, 0o755);
 }
 
+function createScriptedTmuxCore(binDir: string, source: string): TmuxCore {
+  const scriptPath = path.join(binDir, 'fake-tmux.cjs');
+  fs.writeFileSync(scriptPath, source, 'utf-8');
+  return createTmuxCliCore({ executable: process.execPath, prefixArgs: [scriptPath] });
+}
+
 describe('TmuxCore', () => {
   it('treats a missing isolated tmux socket as no session', async () => {
     const binDir = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-unit-tmux-no-server-'));
-    const executablePath = path.join(binDir, 'tmux');
-    installExecutable(executablePath, `
+    const core = createScriptedTmuxCore(binDir, `
 process.stderr.write('error connecting to /tmp/codelark-test/tmux/default (No such file or directory)\\n');
 process.exit(1);
 `);
-    const core = createTmuxCliCore({ executable: executablePath });
 
     try {
       assert.deepEqual(await core.hasSession('alpha'), {
@@ -58,7 +62,9 @@ process.exit(1);
     }
   });
 
-  it('falls back when capture-pane reports a client/server mismatch with exit code 0', async () => {
+  it('falls back when capture-pane reports a client/server mismatch with exit code 0', {
+    skip: process.platform === 'win32' ? 'native tmux client/server fallback is Unix-only; Windows CI uses psmux' : false,
+  }, async () => {
     const binDir = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-unit-tmux-compat-'));
     const incompatiblePath = path.join(binDir, 'tmux-new');
     const compatiblePath = path.join(binDir, 'tmux-old');
@@ -109,12 +115,10 @@ if (args[0] === 'capture-pane' && args.includes('-t')) process.stdout.write('Ope
 
   it('continues when an older tmux does not support extended-keys', async () => {
     const binDir = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-unit-tmux-old-keys-'));
-    const executablePath = path.join(binDir, 'tmux');
-    installExecutable(executablePath, `
+    const core = createScriptedTmuxCore(binDir, `
 process.stderr.write('invalid option: extended-keys\\n');
 process.exit(1);
 `);
-    const core = createTmuxCliCore({ executable: executablePath });
 
     try {
       assert.equal(await core.ensureExtendedKeys?.(), '');
