@@ -11336,10 +11336,12 @@ enabled = true
       const log = fs.readFileSync(fakeTmux.logPath, 'utf-8');
       const firstHasSessionIndex = log.indexOf(`has-session -t ${tmuxSession}`);
       const captureIndex = log.indexOf(`capture-pane -t ${tmuxSession}:0.0`);
-      const literalIndex = log.indexOf(`send-keys -t ${tmuxSession} -l after bridge restart`);
+      const pasteIndex = log.indexOf(`paste-buffer -d -p -b clk-paste-`);
       assert.ok(firstHasSessionIndex >= 0, 'cold takeover must verify the persisted tmux process');
       assert.ok(captureIndex > firstHasSessionIndex, 'cold takeover must verify the persisted Kimi session before sending');
-      assert.ok(literalIndex > captureIndex, 'auto-forward input must wait for Kimi cold readiness');
+      assert.ok(pasteIndex > captureIndex, 'auto-forward input must wait for Kimi cold readiness');
+      assert.match(log, new RegExp(`paste-buffer -d -p -b clk-paste-[^ ]+ -t ${tmuxSession}`));
+      assert.doesNotMatch(log, new RegExp(`send-keys -t ${tmuxSession} -l after bridge restart`));
       assert.match(log, new RegExp(`send-keys -t ${tmuxSession} Enter`));
       assert.match(log, new RegExp(`send-keys -t ${tmuxSession} C-s`));
       assert.doesNotMatch(log, new RegExp(`new-session -d -s ${tmuxSession}`));

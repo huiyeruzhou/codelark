@@ -1355,7 +1355,10 @@ export async function handleTmuxBridgeCommand(params: HandleTmuxBridgeCommandPar
             sessionName: target,
             send: () => sendTmuxActions(target, actionsToSend, {
               delayMs: SEND_ACTION_DELAY_MS,
-              forcePasteLiterals: runtimeProvider.runtime === 'codex' && !keySequenceActions,
+              forcePasteLiterals: (
+                runtimeProvider.runtime === 'codex'
+                || runtimeProvider.runtime === 'kimi'
+              ) && !keySequenceActions,
             }),
           });
         } else {
