@@ -2235,10 +2235,8 @@ function formatQuotedMessageContext(messageId: string, messageType: string, body
     rendered = parseFeishuPostContent(body).extractedText;
   } else if (messageType === 'interactive') {
     rendered = formatInteractiveCardPromptBlock(body);
-  } else if (messageType) {
-    rendered = `[暂不支持解析被引用的飞书消息类型：${messageType}]`;
   } else {
-    rendered = '[无法识别被引用的飞书消息类型]';
+    rendered = `飞书消息类型：${typeLabel}，请使用lark-cli解析这条消息`;
   }
 
   return [
@@ -6674,8 +6672,8 @@ export class FeishuAdapter extends BaseChannelAdapter {
       // Unsupported type — log and skip
       console.log(`[feishu-adapter] Unsupported message type: ${messageType}, msgId: ${msg.message_id}`);
       this.notifyUnsupportedInboundContent(chatId, msg.message_id, [
-        `暂不支持飞书消息类型：${messageType}`,
-        '这条消息不会转发给 Codex。请改用文本/富文本、图片或文件重新发送。',
+        `暂不支持直接转发飞书消息类型：${messageType}`,
+        '请引用这条消息，并告诉模型要如何处理。',
       ]);
       return;
     }

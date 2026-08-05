@@ -69,6 +69,8 @@ SDK 提供方通常直接把结构化事件交给 IM turn。pty / tmux 提供方
 
 tmux Provider 的普通文本会先转发到 tmux 中的当前 runtime TUI。Codex tmux 如需自动预创建 `codex_thread_id` 或恢复缺失的 tmux session，启动进度会更新到同一张 Provider 卡片；Claude tmux 会启动或复用 Claude Code TUI，并通过 Claude JSONL mirror 同步输出；Kimi tmux 会启动或复用 Kimi Code TUI，通过 Kimi `wire.jsonl` mirror 同步输出：idle 时用 Enter 创建 turn，已有 active turn 时才额外补 `Ctrl-S` 触发 steer；Cursor tmux 直接运行官方 `agent`，通过 Cursor transcript JSONL 同步输出，内置默认模型为已做真实稳定性验证的 `gpt-5.3-codex`，可用 `/model` 覆盖。显式发送 `/p tmux` 时，Codex 和 Claude 通过 shared tmux runtime 生命周期入口创建或重建 provider-owned session；Kimi 与 Cursor 由各自 provider 负责启动、恢复 session id 和注入输入。shared runtime 会在 ready 检测和屏幕查看时报告 Codex/Claude selection prompt；`/clear` 和 `/t archive` 会 best-effort 清理记录在 runtime state 中的 tmux provider session。
 
+tmux Provider 不把飞书图片或文件的二进制内容直接注入 TUI。用户发送附件后，CodeLark 会提示其引用原附件并补充处理指令；引用的飞书消息 id 和类型会作为模型上下文传入。遇到 `merge_forward` 等 adapter 未直接解析的引用类型时，上下文会明确要求模型使用 `lark-cli` 按消息 id 读取原消息。SDK Provider 的附件-only turn 仍使用内部默认指令触发附件处理，但该合成指令不显示为用户输入。
+
 相关模块：
 
 - mirror 订阅：[src/bridge/mirror/subscription-registry.ts](https://github.com/huiyeruzhou/codelark/blob/main/src/bridge/mirror/subscription-registry.ts)

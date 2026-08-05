@@ -229,6 +229,55 @@ describe('bridge-manager model prompt context', () => {
     ].join('\n'));
   });
 
+  it('asks tmux users to quote the original attachment with an instruction', async () => {
+    fs.rmSync(DATA_DIR, { recursive: true, force: true });
+    fs.rmSync(CONFIG_TOML_PATH, { force: true });
+    const store = new JsonFileStore(makeSettings());
+    initBridgeContext({
+      store,
+      llm: noopLlm,
+      permissions: noopPermissions,
+      lifecycle: noopLifecycle,
+    });
+    _testOnly.resetStateForTests();
+
+    const address = { channelType: 'feishu-default', chatId: 'chat-tmux-attachment' } as const;
+    const binding = router.createBinding(address, '/tmp/tmux-attachment');
+    createConfigService({ migrate: false, env: {} }).set(
+      { kind: 'session', sessionId: binding.bridgeSessionId },
+      { runtime: { codex: { provider: 'tmux' } } },
+    );
+    const sent: OutboundMessage[] = [];
+    const adapter: any = {
+      channelType: 'feishu-default',
+      provider: 'feishu',
+      send: async (message: OutboundMessage) => {
+        sent.push(message);
+        return { ok: true, messageId: 'notice-tmux-attachment' };
+      },
+    };
+
+    await _testOnly.handleMessage(adapter, {
+      messageId: 'incoming-tmux-attachment',
+      address,
+      text: '',
+      timestamp: Date.now(),
+      attachments: [{
+        id: 'image-1',
+        name: 'diagram.png',
+        type: 'image/png',
+        size: 4,
+        data: Buffer.from('test').toString('base64'),
+      }],
+    });
+
+    assert.equal(sent.length, 1);
+    assert.equal(sent[0]?.replyToMessageId, 'incoming-tmux-attachment');
+    assert.match(sent[0]?.text || '', /请引用你刚发送的图片或文件消息/);
+    assert.match(sent[0]?.text || '', /告诉模型要如何处理/);
+    assert.doesNotMatch(sent[0]?.text || '', /provider sdk|TUI 内自行读取/);
+  });
+
 });
 
 describe('bridge-manager mirror tmux selection probe scheduling', () => {

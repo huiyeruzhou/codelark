@@ -1136,7 +1136,7 @@ stream_status_check_interval_seconds = 3
     assert.equal(adapter.sentMessages.length, 0);
   });
 
-  it('uses the Chinese file description prompt for attachment-only messages', async () => {
+  it('uses an internal file description prompt without showing it as user input', async () => {
     const adapter = new FakeFeishuStreamingAdapter();
     const address = {
       channelType: 'feishu-default',
@@ -1220,6 +1220,14 @@ stream_status_check_interval_seconds = 3
 
     assert.equal(capturedPrompt, '简单地描述文件');
     assert.equal(capturedFiles?.[0]?.name, 'report.pdf');
+    assert.equal(
+      adapter.streamedHistories
+        .flat()
+        .some((item) => item.type === 'markdown'
+          && item.role === 'user'
+          && item.content.includes('简单地描述文件')),
+      false,
+    );
     assert.equal(taskStateMap.size, 0);
   });
 

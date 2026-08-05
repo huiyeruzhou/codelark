@@ -601,8 +601,8 @@ export async function runInteractiveMessage(
 
   try {
     const promptText = text || (attachments && attachments.length > 0 ? DEFAULT_ATTACHMENT_PROMPT : '');
-    if (useInteractiveStreamUi && promptText.trim()) {
-      applyUnifiedTurnHistoryUserText(streamState, promptText);
+    if (useInteractiveStreamUi && text.trim()) {
+      applyUnifiedTurnHistoryUserText(streamState, text);
       streamUi.feedback.pushHistory(streamState.historyItems);
     }
 

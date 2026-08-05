@@ -4652,7 +4652,7 @@ async function handleMessage(
       return;
     }
     if (hasAttachments) {
-      enqueueBridgeNotice(adapter, msg.address, '当前处于 tmux Provider，普通附件不会自动转发到 TUI。请先发送 `/provider sdk`，或在 TUI 内自行读取本地文件。', {
+      enqueueBridgeNotice(adapter, msg.address, '当前处于 tmux Provider，图片或文件不会直接转发到 TUI。请引用你刚发送的图片或文件消息，并告诉模型要如何处理。', {
         replyToMessageId: msg.messageId,
       });
       ack();

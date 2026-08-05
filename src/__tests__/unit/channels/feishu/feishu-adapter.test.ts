@@ -1961,6 +1961,56 @@ describe('feishu-adapter structured streaming regions', () => {
     assert.match(inbound.contextText || '', /<\/quoted_message>/);
   });
 
+  it('guides the model to parse unsupported quoted Feishu messages with lark-cli', async () => {
+    initBridgeTestContext();
+    const adapter = new FeishuAdapter({
+      id: 'feishu-default',
+      provider: 'feishu',
+      enabled: true,
+      alias: '飞书',
+      config: {},
+    });
+    (adapter as any).restClient = {
+      im: {
+        message: {
+          get: async () => ({
+            data: {
+              items: [{
+                message_id: 'merge-forward-parent-1',
+                msg_type: 'merge_forward',
+                body: { content: '{}' },
+              }],
+            },
+          }),
+        },
+      },
+    };
+
+    await (adapter as any).processIncomingEvent({
+      sender: {
+        sender_type: 'user',
+        sender_id: { open_id: 'user-1' },
+      },
+      message: {
+        message_id: 'msg-reply-merge-forward-1',
+        parent_id: 'merge-forward-parent-1',
+        chat_id: 'oc_p2p_1',
+        chat_type: 'p2p',
+        message_type: 'text',
+        content: '{"text":"总结这条消息"}',
+        create_time: '1780209968114',
+      },
+    });
+
+    const inbound = await adapter.consumeOne();
+    assert.ok(inbound);
+    assert.equal(inbound.contextText, [
+      '<quoted_message platform="feishu" message_id="merge-forward-parent-1" message_type="merge_forward">',
+      '飞书消息类型：merge_forward，请使用lark-cli解析这条消息',
+      '</quoted_message>',
+    ].join('\n'));
+  });
+
   it('filters unmentioned group messages when the Feishu channel requires mentions', async () => {
     initBridgeTestContext();
     const adapter = new FeishuAdapter({
@@ -2255,7 +2305,7 @@ describe('feishu-adapter structured streaming regions', () => {
     }
   });
 
-  it('replies with a user-visible notice for unsupported Feishu message types', async () => {
+  it('asks users to quote unsupported Feishu message types with an instruction', async () => {
     const replies: Array<Record<string, any>> = [];
     const noticeAck = createDeferred<{ data: { message_id: string } }>();
     const adapter = new FeishuAdapter({
@@ -2282,11 +2332,11 @@ describe('feishu-adapter structured streaming regions', () => {
         sender_id: { open_id: 'user-1' },
       },
       message: {
-        message_id: 'msg-sticker-1',
+        message_id: 'msg-merge-forward-1',
         chat_id: 'chat-1',
         chat_type: 'p2p',
-        message_type: 'sticker',
-        content: '{"sticker_key":"sticker-1"}',
+        message_type: 'merge_forward',
+        content: '{}',
         create_time: '1780209968114',
       },
     });
@@ -2294,14 +2344,18 @@ describe('feishu-adapter structured streaming regions', () => {
     await resolvesWithin(processing);
 
     assert.equal(replies.length, 1);
-    assert.equal(replies[0].path.message_id, 'msg-sticker-1');
+    assert.equal(replies[0].path.message_id, 'msg-merge-forward-1');
     assert.equal(replies[0].data.msg_type, 'text');
     const content = JSON.parse(replies[0].data.content);
-    assert.match(content.text, /暂不支持飞书消息类型：sticker/);
-    assert.match(content.text, /不会转发给 Codex/);
-    assert.equal(await adapter.consumeOne(), null);
-    noticeAck.resolve({ data: { message_id: 'notice-1' } });
-    await _testOnlyWaitForDeliveryQueuesForTests(adapter);
+    try {
+      assert.match(content.text, /暂不支持直接转发飞书消息类型：merge_forward/);
+      assert.match(content.text, /请引用这条消息，并告诉模型要如何处理/);
+      assert.doesNotMatch(content.text, /不会转发给 Codex|重新发送/);
+      assert.equal(await adapter.consumeOne(), null);
+    } finally {
+      noticeAck.resolve({ data: { message_id: 'notice-1' } });
+      await _testOnlyWaitForDeliveryQueuesForTests(adapter);
+    }
   });
 
   it('does not add typing reactions while starting or ending a stream', async () => {
