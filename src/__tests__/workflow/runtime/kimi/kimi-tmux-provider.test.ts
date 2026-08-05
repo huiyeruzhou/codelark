@@ -107,6 +107,12 @@ function appendKimiTurn(wirePath: string, prompt: string): void {
       event: { type: 'step.begin', turnId: 'turn-1', stepUuid: 'step-1' },
     }),
     JSON.stringify({
+      type: 'llm.request',
+      kind: 'loop',
+      turnStep: '0.1',
+      time: 1782540000150,
+    }),
+    JSON.stringify({
       type: 'context.append_loop_event',
       time: 1782540000200,
       event: {
@@ -275,12 +281,16 @@ describe('kimi-tmux-provider workflow', () => {
       assert.equal(commandHasArg(ensureCalls[0]!, '-r'), false);
 
       assert.equal(sendCalls.some((call) => call.actions.join(',') === 'C-c,C-c'), false);
-      assert.equal(sendCalls.filter((call) => call.actions.join(',') === 'Enter').length, 1);
+      assert.equal(
+        sendCalls.filter((call) => call.actions.join(',') === 'Enter').length,
+        1,
+        'the only standalone Enter confirms workspace trust; idle prompt submission does not need a retry key',
+      );
       assert.deepEqual(injectCalls, [
         { target: 'clk-kimi-bridge-kimi-workflow:0.0', prompt: 'hello fresh kimi' },
         { target: 'clk-kimi-bridge-kimi-workflow:0.0', prompt: 'hello fresh kimi' },
       ], 'fresh lifecycle retries the complete prompt when its user turn is not recorded');
-      assert.ok(sendCalls.some((call) => call.actions.join(',') === 'C-s'));
+      assert.equal(sendCalls.some((call) => call.actions.join(',') === 'C-s'), false, 'fresh idle Kimi must not steer');
 
       assert.ok(events.some((event) => event.type === 'status'
         && typeof event.data === 'object'
@@ -389,7 +399,7 @@ describe('kimi-tmux-provider workflow', () => {
       assert.deepEqual(injectCalls, [
         { target: 'clk-kimi-bridge-kimi-resume-workflow:0.0', prompt: 'hello existing kimi' },
       ]);
-      assert.ok(sendCalls.some((call) => call.actions.join(',') === 'C-s'));
+      assert.equal(sendCalls.some((call) => call.actions.join(',') === 'C-s'), false, 'idle existing Kimi must not steer');
       assert.ok(sendCalls.some((call) => call.actions.join(',') === 'Enter'), 'accepted prompt without turn start retries submit keys');
       assert.equal(sendCalls.some((call) => call.actions.join(',') === 'C-c,C-c'), false);
 
@@ -660,6 +670,12 @@ describe('kimi-tmux-provider workflow', () => {
             type: 'context.append_loop_event',
             time: Date.now() + 1,
             event: { type: 'step.begin', turnId: 'turn-auth', stepUuid: 'step-auth' },
+          }),
+          JSON.stringify({
+            type: 'llm.request',
+            kind: 'loop',
+            turnStep: '1.1',
+            time: Date.now() + 2,
           }),
           '',
         ].join('\n'), 'utf8');

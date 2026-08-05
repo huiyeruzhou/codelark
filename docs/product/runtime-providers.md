@@ -17,7 +17,7 @@ CodeLark 把“使用哪个 AI 工具”和“如何驱动它”拆成两层。
 | Claude Code | `tmux` | 默认路径；需要可 attach 的 Claude Code TUI 长会话 | tmux screen + Claude JSONL mirror |
 | Claude Code | `pty` | 使用本机 `claude` 或 `ccr code` TUI | Claude JSONL mirror + pty screen |
 | Claude Code | `sdk` | 使用 Claude Agent SDK | SDK message stream |
-| Kimi Code | `tmux` | 使用本机 Kimi Code TUI 长会话；发送后自动补 `Ctrl-S` steer | tmux screen + Kimi `wire.jsonl` mirror |
+| Kimi Code | `tmux` | 使用本机 Kimi Code TUI 长会话；仅向 active turn 自动补 `Ctrl-S` steer | tmux screen + Kimi `wire.jsonl` mirror |
 | Cursor Agent | `tmux` | 直接运行官方 `agent` TUI，保留原生交互和 slash 命令 | tmux screen + Cursor transcript JSONL mirror |
 
 补充说明：
@@ -67,7 +67,7 @@ Claude 的 `executable` 影响 `tmux` 和 `pty` 提供方；Claude SDK 提供方
 
 SDK 提供方通常直接把结构化事件交给 IM turn。pty / tmux 提供方更接近真实终端使用，会依赖本地 JSONL mirror 把最终输出同步到 IM。
 
-tmux Provider 的普通文本会先转发到 tmux 中的当前 runtime TUI。Codex tmux 如需自动预创建 `codex_thread_id` 或恢复缺失的 tmux session，启动进度会更新到同一张 Provider 卡片；Claude tmux 会启动或复用 Claude Code TUI，并通过 Claude JSONL mirror 同步输出；Kimi tmux 会启动或复用 Kimi Code TUI，通过 Kimi `wire.jsonl` mirror 同步输出，并在普通文本发送后自动补 `Ctrl-S` 触发 steer；Cursor tmux 直接运行官方 `agent`，通过 Cursor transcript JSONL 同步输出，内置默认模型为已做真实稳定性验证的 `gpt-5.3-codex`，可用 `/model` 覆盖。显式发送 `/p tmux` 时，Codex 和 Claude 通过 shared tmux runtime 生命周期入口创建或重建 provider-owned session；Kimi 与 Cursor 由各自 provider 负责启动、恢复 session id 和注入输入。shared runtime 会在 ready 检测和屏幕查看时报告 Codex/Claude selection prompt；`/clear` 和 `/t archive` 会 best-effort 清理记录在 runtime state 中的 tmux provider session。
+tmux Provider 的普通文本会先转发到 tmux 中的当前 runtime TUI。Codex tmux 如需自动预创建 `codex_thread_id` 或恢复缺失的 tmux session，启动进度会更新到同一张 Provider 卡片；Claude tmux 会启动或复用 Claude Code TUI，并通过 Claude JSONL mirror 同步输出；Kimi tmux 会启动或复用 Kimi Code TUI，通过 Kimi `wire.jsonl` mirror 同步输出：idle 时用 Enter 创建 turn，已有 active turn 时才额外补 `Ctrl-S` 触发 steer；Cursor tmux 直接运行官方 `agent`，通过 Cursor transcript JSONL 同步输出，内置默认模型为已做真实稳定性验证的 `gpt-5.3-codex`，可用 `/model` 覆盖。显式发送 `/p tmux` 时，Codex 和 Claude 通过 shared tmux runtime 生命周期入口创建或重建 provider-owned session；Kimi 与 Cursor 由各自 provider 负责启动、恢复 session id 和注入输入。shared runtime 会在 ready 检测和屏幕查看时报告 Codex/Claude selection prompt；`/clear` 和 `/t archive` 会 best-effort 清理记录在 runtime state 中的 tmux provider session。
 
 相关模块：
 

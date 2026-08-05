@@ -9613,7 +9613,7 @@ enabled = true
       const kimiSteerLogDelta = fs.readFileSync(fakeTmux.logPath, 'utf-8').slice(beforeKimiSteerLog.length);
       assert.match(kimiSteerLogDelta, /send-keys -t alpha -l '?kimi steer'?/);
       assert.match(kimiSteerLogDelta, /send-keys -t alpha Enter/);
-      assert.match(kimiSteerLogDelta, /send-keys -t alpha C-s/);
+      assert.doesNotMatch(kimiSteerLogDelta, /send-keys -t alpha C-s/, 'unknown manual turn state must not force Kimi steer');
       store.updateSession(binding.bridgeSessionId, { runtime: { activeRuntime: 'codex' } });
 
       await handleBridgeCommand(
@@ -11336,6 +11336,12 @@ enabled = true
             time: Date.now() + 1,
             event: { type: 'step.begin', turnId: 'turn-forwarded', stepUuid: 'step-forwarded' },
           }),
+          JSON.stringify({
+            type: 'llm.request',
+            kind: 'loop',
+            turnStep: '1.1',
+            time: Date.now() + 2,
+          }),
           '',
         ].join('\n'), 'utf-8');
         clearInterval(wireTimer);
@@ -11373,7 +11379,7 @@ enabled = true
       );
       assert.doesNotMatch(log, new RegExp(`send-keys -t ${tmuxSession} -l after bridge restart`));
       assert.match(log, new RegExp(`send-keys -t ${tmuxSession} Enter`));
-      assert.match(log, new RegExp(`send-keys -t ${tmuxSession} C-s`));
+      assert.doesNotMatch(log, new RegExp(`send-keys -t ${tmuxSession} C-s`));
       assert.doesNotMatch(log, new RegExp(`new-session -d -s ${tmuxSession}`));
     } finally {
       restoreProcessEnv(oldEnv);

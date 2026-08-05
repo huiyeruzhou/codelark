@@ -1,5 +1,8 @@
 export type RuntimeTmuxInputRuntime = 'codex' | 'claude' | 'kimi' | 'cursor';
 
+export type RuntimeTmuxTurnState = 'unknown' | 'idle' | 'active';
+export type RuntimeTmuxSteerOperation = 'none' | 'explicit';
+
 export type RuntimeTmuxInputStateKind =
   | 'idle'
   | 'checking_tmux'
@@ -20,6 +23,10 @@ export interface RuntimeTmuxInputState {
   reason: string;
   changedAtMs: number;
   runningSinceMs?: number;
+  turnState: RuntimeTmuxTurnState;
+  turnStateReason: string;
+  turnStateChangedAtMs: number;
+  lastSteerOperation?: RuntimeTmuxSteerOperation;
   error?: string;
 }
 
@@ -67,6 +74,9 @@ function initialState(runtime: RuntimeTmuxInputRuntime, sessionName: string): Ru
     state: 'idle',
     reason: 'runtime tmux input lifecycle has not been inspected yet',
     changedAtMs: Date.now(),
+    turnState: 'unknown',
+    turnStateReason: 'runtime turn activity has not been inspected yet',
+    turnStateChangedAtMs: Date.now(),
   };
 }
 
@@ -84,6 +94,7 @@ export function transitionRuntimeTmuxInputState(
   reason: string,
   options: {
     error?: string;
+    lastSteerOperation?: RuntimeTmuxSteerOperation;
     onTransition?: (transition: RuntimeTmuxInputTransition) => void;
   } = {},
 ): RuntimeTmuxInputState {
@@ -106,7 +117,17 @@ export function transitionRuntimeTmuxInputState(
     previousState: current.state,
     reason,
     changedAtMs,
+    turnState: keepsEstablishedRuntime ? current.turnState : 'unknown',
+    turnStateReason: keepsEstablishedRuntime
+      ? current.turnStateReason
+      : 'runtime lifecycle is not established; turn activity is unknown',
+    turnStateChangedAtMs: keepsEstablishedRuntime ? current.turnStateChangedAtMs : changedAtMs,
     ...(runningSinceMs ? { runningSinceMs } : {}),
+    ...(options.lastSteerOperation
+      ? { lastSteerOperation: options.lastSteerOperation }
+      : current.lastSteerOperation
+        ? { lastSteerOperation: current.lastSteerOperation }
+        : {}),
     ...(options.error ? { error: options.error } : {}),
   };
   states.set(stateKey(runtime, sessionName), nextState);
@@ -122,6 +143,36 @@ export function transitionRuntimeTmuxInputState(
     });
   }
   return nextState;
+}
+
+export function setRuntimeTmuxTurnState(
+  runtime: RuntimeTmuxInputRuntime,
+  sessionName: string,
+  turnState: RuntimeTmuxTurnState,
+  reason: string,
+): RuntimeTmuxInputState {
+  const current = getRuntimeTmuxInputState(runtime, sessionName);
+  const nextState: RuntimeTmuxInputState = {
+    ...current,
+    turnState,
+    turnStateReason: reason,
+    turnStateChangedAtMs: Date.now(),
+  };
+  states.set(stateKey(runtime, sessionName), nextState);
+  return nextState;
+}
+
+/**
+ * Codex, Claude and Cursor accept a new prompt as their natural steering
+ * operation. Kimi needs an additional Ctrl-S only when a turn was already
+ * active before this input was submitted.
+ */
+export function resolveRuntimeTmuxSteerOperation(
+  runtime: RuntimeTmuxInputRuntime,
+  sessionName: string,
+): RuntimeTmuxSteerOperation {
+  const state = getRuntimeTmuxInputState(runtime, sessionName);
+  return runtime === 'kimi' && state.turnState === 'active' ? 'explicit' : 'none';
 }
 
 /**
@@ -188,6 +239,7 @@ export async function sendRuntimeTmuxInput<T>(params: {
   runtime: RuntimeTmuxInputRuntime;
   sessionName: string;
   send: () => Promise<T>;
+  steer?: () => Promise<void>;
 }): Promise<T> {
   const current = getRuntimeTmuxInputState(params.runtime, params.sessionName);
   if (current.state !== 'running') {
@@ -195,19 +247,30 @@ export async function sendRuntimeTmuxInput<T>(params: {
       `${params.runtime} tmux input lifecycle ${params.sessionName} is ${current.state}; expected running before send`,
     );
   }
+  const steerOperation = resolveRuntimeTmuxSteerOperation(params.runtime, params.sessionName);
   transitionRuntimeTmuxInputState(
     params.runtime,
     params.sessionName,
     'sending',
     'sending input to the established runtime tmux session',
+    { lastSteerOperation: steerOperation },
   );
   try {
     const result = await params.send();
+    if (steerOperation === 'explicit') {
+      if (!params.steer) {
+        throw new Error(`${params.runtime} tmux input requires an explicit steer operation`);
+      }
+      await params.steer();
+    }
     transitionRuntimeTmuxInputState(
       params.runtime,
       params.sessionName,
       'running',
-      'input was sent; runtime tmux session remains established',
+      steerOperation === 'explicit'
+        ? 'input and explicit steer were sent; runtime tmux session remains established'
+        : 'input was sent; runtime-native steering needs no extra operation',
+      { lastSteerOperation: steerOperation },
     );
     return result;
   } catch (error) {

@@ -7,7 +7,9 @@ import {
   getRuntimeTmuxInputState,
   inspectRuntimeTmuxInput,
   resetRuntimeTmuxInputStatesForTests,
+  resolveRuntimeTmuxSteerOperation,
   sendRuntimeTmuxInput,
+  setRuntimeTmuxTurnState,
   transitionRuntimeTmuxInputState,
 } from '../../../../bridge/tmux/input-state-machine.js';
 
@@ -92,6 +94,47 @@ describe('runtime tmux input state machine', () => {
     const failed = getRuntimeTmuxInputState('codex', 'codex_failed');
     assert.equal(failed.state, 'failed');
     assert.equal(failed.error, 'pane vanished');
+  });
+
+  it('runs explicit steer only for Kimi inputs submitted during an active turn', async () => {
+    transitionRuntimeTmuxInputState('kimi', 'clk-kimi-active', 'running', 'ready');
+    setRuntimeTmuxTurnState('kimi', 'clk-kimi-active', 'active', 'wire has step.begin without step.end');
+    const operations: string[] = [];
+
+    await sendRuntimeTmuxInput({
+      runtime: 'kimi',
+      sessionName: 'clk-kimi-active',
+      send: async () => { operations.push('send'); },
+      steer: async () => { operations.push('steer'); },
+    });
+
+    assert.deepEqual(operations, ['send', 'steer']);
+    assert.equal(resolveRuntimeTmuxSteerOperation('kimi', 'clk-kimi-active'), 'explicit');
+    assert.equal(getRuntimeTmuxInputState('kimi', 'clk-kimi-active').lastSteerOperation, 'explicit');
+  });
+
+  it('treats steer as a no-op for idle Kimi and runtimes with native steering', async () => {
+    const runtimes = ['codex', 'claude', 'cursor', 'kimi'] as const;
+    for (const runtime of runtimes) {
+      const sessionName = `${runtime}-native-steer`;
+      transitionRuntimeTmuxInputState(runtime, sessionName, 'running', 'ready');
+      setRuntimeTmuxTurnState(
+        runtime,
+        sessionName,
+        runtime === 'kimi' ? 'idle' : 'active',
+        runtime === 'kimi' ? 'idle editor' : 'runtime accepts prompts as native steering',
+      );
+      let explicitSteerCalls = 0;
+      await sendRuntimeTmuxInput({
+        runtime,
+        sessionName,
+        send: async () => undefined,
+        steer: async () => { explicitSteerCalls += 1; },
+      });
+      assert.equal(explicitSteerCalls, 0, `${runtime} should not require an extra steer operation`);
+      assert.equal(resolveRuntimeTmuxSteerOperation(runtime, sessionName), 'none');
+      assert.equal(getRuntimeTmuxInputState(runtime, sessionName).lastSteerOperation, 'none');
+    }
   });
 
   it('gives one owner to concurrent observers of the same selection lifecycle', async () => {

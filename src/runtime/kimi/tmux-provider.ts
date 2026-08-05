@@ -7,6 +7,7 @@ import { sseEvent } from '../sse.js';
 import { tmuxCore } from '../../bridge/tmux/core.js';
 import {
   inspectRuntimeTmuxInput,
+  setRuntimeTmuxTurnState,
   sendRuntimeTmuxInput,
   transitionRuntimeTmuxInputState,
 } from '../../bridge/tmux/input-state-machine.js';
@@ -244,6 +245,7 @@ function enqueueKimiRecordAsSse(
   switch (record.type) {
     case 'task_started':
       context.terminalSeen = false;
+      setRuntimeTmuxTurnState('kimi', context.sessionName, 'active', 'Kimi wire reported task_started');
       break;
 
     case 'reasoning':
@@ -305,6 +307,7 @@ function enqueueKimiRecordAsSse(
 
     case 'task_complete':
       context.terminalSeen = true;
+      setRuntimeTmuxTurnState('kimi', context.sessionName, 'idle', 'Kimi wire reported task_complete');
       controller.enqueue(sseEvent('result', {
         ...(context.sessionId ? { session_id: context.sessionId } : {}),
         ...(context.cwd ? { cwd: context.cwd } : {}),
@@ -314,6 +317,7 @@ function enqueueKimiRecordAsSse(
     case 'task_aborted':
       context.terminalSeen = true;
       context.hasError = true;
+      setRuntimeTmuxTurnState('kimi', context.sessionName, 'idle', 'Kimi wire reported task_aborted');
       controller.enqueue(sseEvent('error', record.content || 'Kimi task aborted.'));
       break;
 
@@ -554,27 +558,67 @@ function resolveKimiSessionFileBySessionId(
 
 type KimiSubmissionState = 'missing' | 'accepted' | 'started';
 
-function inspectKimiSubmissionState(
-  sessionFilePath: string,
-  startOffset: number,
-  expectedPrompt?: string,
-): KimiSubmissionState {
-  if (fs.statSync(sessionFilePath).size <= startOffset) return 'missing';
-  if (!expectedPrompt) return 'started';
+function inspectKimiTurnActive(sessionFilePath: string, endOffset?: number): boolean {
   const wire = fs.readFileSync(sessionFilePath);
-  const wireBeforeSubmission = wire.subarray(0, startOffset).toString('utf8');
-  const wireDelta = wire.subarray(startOffset).toString('utf8');
-  const encodedPrompt = JSON.stringify(expectedPrompt);
+  const wireText = wire.subarray(0, endOffset ?? wire.length).toString('utf8');
   let turnActive = false;
-  for (const line of wireBeforeSubmission.split(/\r?\n/u)) {
+  for (const line of wireText.split(/\r?\n/u)) {
     try {
       const entry = JSON.parse(line) as { event?: { type?: string } };
       if (entry.event?.type === 'step.begin') turnActive = true;
       if (entry.event?.type === 'step.end') turnActive = false;
     } catch {
-      // Ignore non-JSON and partial lines before the submission boundary.
+      // Ignore non-JSON and a partial final wire line.
     }
   }
+  return turnActive;
+}
+
+export function syncKimiTmuxTurnStateFromSession(params: {
+  sessionName: string;
+  sessionId?: string;
+  cwd?: string;
+  sessionFilePath?: string;
+  forceIdle?: boolean;
+}): {
+  sessionFilePath?: string;
+  startOffset: number;
+  turnActive: boolean;
+} {
+  const sessionFilePath = params.sessionFilePath
+    || (params.sessionId ? findKimiSessionFileById(params.sessionId, params.cwd)?.filePath : undefined);
+  const startOffset = sessionFilePath ? fs.statSync(sessionFilePath).size : 0;
+  const turnActive = params.forceIdle !== true
+    && Boolean(sessionFilePath)
+    && inspectKimiTurnActive(sessionFilePath!, startOffset);
+  setRuntimeTmuxTurnState(
+    'kimi',
+    params.sessionName,
+    turnActive ? 'active' : 'idle',
+    turnActive
+      ? 'Kimi wire has step.begin without a later step.end'
+      : params.forceIdle === true
+        ? 'new or resumed Kimi process starts from an idle editor'
+        : 'Kimi wire has no active turn',
+  );
+  return {
+    ...(sessionFilePath ? { sessionFilePath } : {}),
+    startOffset,
+    turnActive,
+  };
+}
+
+function inspectKimiSubmissionState(
+  sessionFilePath: string,
+  startOffset: number,
+  expectedPrompt?: string,
+): KimiSubmissionState {
+  if (!expectedPrompt) return 'started';
+  if (fs.statSync(sessionFilePath).size <= startOffset) return 'missing';
+  const wire = fs.readFileSync(sessionFilePath);
+  const wireDelta = wire.subarray(startOffset).toString('utf8');
+  const encodedPrompt = JSON.stringify(expectedPrompt);
+  let turnActive = inspectKimiTurnActive(sessionFilePath, startOffset);
   let promptAccepted = false;
   for (const line of wireDelta.split(/\r?\n/u)) {
     if (!line) continue;
@@ -587,7 +631,6 @@ function inspectKimiSubmissionState(
       if (entry.type === 'turn.steer' && promptAccepted && turnActive) return 'started';
       if (entry.event?.type === 'step.begin') {
         turnActive = true;
-        if (promptAccepted) return 'started';
       }
       if (entry.event?.type === 'step.end') turnActive = false;
       if (entry.type === 'llm.request' && promptAccepted) {
@@ -623,13 +666,27 @@ async function waitForKimiSubmissionState(
   return latestState;
 }
 
-async function retryKimiSubmitKeys(targetPane: string): Promise<void> {
-  await tmuxCore.sendActions(targetPane, [{ type: 'key', key: 'Enter' }]);
-  await sleep(DEFAULT_KIMI_STEER_DELAY_MS);
+export async function sendKimiTmuxExplicitSteer(targetPane: string): Promise<void> {
+  const steerDelayMs = parsePositiveIntEnv(
+    'CODELARK_KIMI_TMUX_STEER_DELAY_MS',
+    DEFAULT_KIMI_STEER_DELAY_MS,
+    0,
+  );
+  if (steerDelayMs > 0) await sleep(steerDelayMs);
   await tmuxCore.sendActions(targetPane, [{ type: 'key', key: 'C-s' }]);
 }
 
+async function retryKimiSubmitKeys(sessionName: string, targetPane: string): Promise<void> {
+  await sendRuntimeTmuxInput({
+    runtime: 'kimi',
+    sessionName,
+    send: () => tmuxCore.sendActions(targetPane, [{ type: 'key', key: 'Enter' }]),
+    steer: () => sendKimiTmuxExplicitSteer(targetPane),
+  });
+}
+
 export async function retryKimiSubmitIfNoActivity(params: {
+  sessionName: string;
   targetPane: string;
   sessionFilePath?: string;
   sessionId?: string;
@@ -664,7 +721,7 @@ export async function retryKimiSubmitIfNoActivity(params: {
   if (initialState === 'missing' && params.retrySubmit) {
     await params.retrySubmit();
   } else {
-    await retryKimiSubmitKeys(params.targetPane);
+    await retryKimiSubmitKeys(params.sessionName, params.targetPane);
   }
   let retryState = await waitForKimiSubmissionState(
     resolveSessionFilePath,
@@ -679,7 +736,7 @@ export async function retryKimiSubmitIfNoActivity(params: {
       session_id: params.sessionId || null,
       start_offset: params.startOffset,
     });
-    await retryKimiSubmitKeys(params.targetPane);
+    await retryKimiSubmitKeys(params.sessionName, params.targetPane);
     retryState = await waitForKimiSubmissionState(
       resolveSessionFilePath,
       params.startOffset,
@@ -912,6 +969,13 @@ export async function ensureKimiTmuxInputSession(
         ? 'existing Kimi tmux process and persisted runtime identity are reusable'
         : 'Kimi tmux process and runtime session are ready for input',
     );
+    syncKimiTmuxTurnStateFromSession({
+      sessionName,
+      sessionId: context.sessionId,
+      cwd: context.cwd,
+      sessionFilePath: context.sessionFilePath,
+      forceIdle: launched,
+    });
     return {
       sessionName,
       targetPane,
@@ -988,33 +1052,23 @@ export function streamKimiTmuxTui(params: StreamChatParams): ReadableStream<stri
 
           const promptDelayMs = parsePositiveIntEnv('CODELARK_KIMI_TMUX_PROMPT_DELAY_MS', DEFAULT_KIMI_PROMPT_DELAY_MS, 0);
           if (promptDelayMs > 0) await sleep(promptDelayMs);
-          const submitPrompt = async () => {
-            await tmuxCore.injectPromptIntoPane(targetPane, params.prompt);
-            const steerDelayMs = parsePositiveIntEnv(
-              'CODELARK_KIMI_TMUX_STEER_DELAY_MS',
-              DEFAULT_KIMI_STEER_DELAY_MS,
-              0,
-            );
-            if (steerDelayMs > 0) await sleep(steerDelayMs);
-            await tmuxCore.sendActions(targetPane, [{ type: 'key', key: 'C-s' }]);
-          };
-          await sendRuntimeTmuxInput({
+          const submitPrompt = () => sendRuntimeTmuxInput({
             runtime: 'kimi',
             sessionName,
-            // Enter queues or starts the prompt. Ctrl-S then upgrades a queued
-            // prompt to Kimi's mid-turn steer semantics; it is a no-op when
-            // the prompt already started from an idle editor.
-            send: submitPrompt,
+            send: () => tmuxCore.injectPromptIntoPane(targetPane, params.prompt),
+            steer: () => sendKimiTmuxExplicitSteer(targetPane),
           });
+          await submitPrompt();
 
           const accepted = await retryKimiSubmitIfNoActivity({
+            sessionName,
             targetPane,
             sessionFilePath: context.sessionFilePath,
             sessionId: context.sessionId,
             cwd: context.cwd,
             startOffset: context.nextOffset,
             expectedPrompt: params.prompt,
-            retrySubmit: submitPrompt,
+            retrySubmit: () => submitPrompt().then(() => undefined),
           });
           if (!accepted) {
             throw new Error('Kimi Code input was not recorded after retrying the full prompt.');

@@ -100,7 +100,7 @@ const appendWire = (entry) => fs.appendFileSync(wirePath, JSON.stringify(entry) 
 process.stdin.on('data', (chunk) => {
   fs.appendFileSync(keyLogPath, chunk.toString('hex') + '\\n');
   pendingPrompt += chunk.toString('utf8').replace(/[\\u0000-\\u001f\\u007f]/g, '');
-  if (chunk.includes(0x13)) {
+  if ((chunk.length === 1 && chunk[0] === 0x0d) || chunk.includes(0x13)) {
     answerCount += 1;
     const now = Date.now();
     const turnId = 'turn-' + answerCount;
@@ -108,9 +108,10 @@ process.stdin.on('data', (chunk) => {
     appendWire({ type: 'context.append_message', time: now, message: { role: 'user', content: pendingPrompt } });
     pendingPrompt = '';
     appendWire({ type: 'context.append_loop_event', time: now + 1, event: { type: 'step.begin', turnId, stepUuid: stepId } });
-    appendWire({ type: 'context.append_loop_event', time: now + 2, event: { type: 'content.part', turnId, part: { type: 'think', think: 'fake kimi thinking' } } });
-    appendWire({ type: 'context.append_loop_event', time: now + 3, event: { type: 'content.part', turnId, part: { type: 'text', text: answerCount === 1 ? 'fake kimi answer' : 'fake kimi answer ' + answerCount } } });
-    appendWire({ type: 'context.append_loop_event', time: now + 4, event: { type: 'step.end', turnId, stepUuid: stepId } });
+    appendWire({ type: 'llm.request', kind: 'loop', turnStep: answerCount + '.1', time: now + 2 });
+    appendWire({ type: 'context.append_loop_event', time: now + 3, event: { type: 'content.part', turnId, part: { type: 'think', think: 'fake kimi thinking' } } });
+    appendWire({ type: 'context.append_loop_event', time: now + 4, event: { type: 'content.part', turnId, part: { type: 'text', text: answerCount === 1 ? 'fake kimi answer' : 'fake kimi answer ' + answerCount } } });
+    appendWire({ type: 'context.append_loop_event', time: now + 5, event: { type: 'step.end', turnId, stepUuid: stepId } });
   }
   for (const byte of chunk) {
     if (byte !== 0x03) continue;
@@ -132,7 +133,7 @@ setInterval(() => {}, 1000);
 }
 
 describe('scripted Kimi-like tmux adapter fixture', () => {
-  it('drives and reuses a scripted wire producer through real tmux and Ctrl-S steer', { timeout: 30_000 }, async (t: TestContext) => {
+  it('drives and reuses idle scripted turns through real tmux', { timeout: 30_000 }, async (t: TestContext) => {
     if (!(await tmuxAvailable())) {
       t.skip('tmux is not available');
       return;
@@ -182,7 +183,7 @@ describe('scripted Kimi-like tmux adapter fixture', () => {
       assert.equal(events.some((event) => event.type === 'result' && (event.data as { session_id?: string }).session_id === sessionId), true);
 
       const keyLog = fs.readFileSync(keyLogPath, 'utf-8');
-      assert.match(keyLog, /13/, 'Kimi tmux provider should send Ctrl-S after the prompt');
+      assert.doesNotMatch(keyLog, /13/, 'idle Kimi turns should submit with Enter without explicit Ctrl-S');
       assert.equal(fs.existsSync(ctrlCPath), false, 'fresh Kimi startup must not terminate the first TUI just to discover its session id');
       assert.equal(findKimiSessionFileById(sessionId, workDir)?.sessionId, sessionId);
       const launches = fs.readFileSync(launchLogPath, 'utf-8')

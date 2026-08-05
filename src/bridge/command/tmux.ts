@@ -53,6 +53,8 @@ import {
   ensureKimiTmuxInputSession,
   kimiTmuxSessionName,
   retryKimiSubmitIfNoActivity,
+  sendKimiTmuxExplicitSteer,
+  syncKimiTmuxTurnStateFromSession,
 } from '../../runtime/kimi/tmux-provider.js';
 import {
   ensureCursorTmuxInputSession,
@@ -74,6 +76,7 @@ import {
 import type { CodexTuiSelectionPromptChoice } from '../../runtime/codex/tmux-provider.js';
 import {
   inspectRuntimeTmuxInput,
+  resolveRuntimeTmuxSteerOperation,
   sendRuntimeTmuxInput,
 } from '../tmux/input-state-machine.js';
 export {
@@ -473,19 +476,10 @@ function applyAutoEnter(actions: TmuxSendAction[]): TmuxSendAction[] {
     : actions;
 }
 
-function applyKimiSteer(actions: TmuxSendAction[], session: BridgeSession): TmuxSendAction[] {
-  if (getSessionActiveRuntime(session) !== 'kimi') return actions;
-  const lastAction = actions.at(-1);
-  return lastAction?.type === 'key' && lastAction.key === 'C-s'
-    ? actions
-    : [...actions, { type: 'key', key: 'C-s' }];
-}
-
 function applyPlainTextTmuxActions(
   actions: TmuxSendAction[],
-  session: BridgeSession,
 ): TmuxSendAction[] {
-  return applyKimiSteer(applyAutoEnter(actions), session);
+  return applyAutoEnter(actions);
 }
 
 function buildInputEchoBlock(input: string, markdown: boolean): string {
@@ -739,10 +733,25 @@ async function ensureRuntimeTmuxSessionForProvider(
           && inspected.needsReadiness
         )
       ) {
+        const kimiSubmission = syncKimiTmuxTurnStateFromSession({
+          sessionName: configuredTarget,
+          sessionId: session.runtime?.kimi?.sessionId,
+          cwd: getSessionWorkingDirectory(session),
+        });
         return {
           target: configuredTarget,
           commands: inspected.command ? [inspected.command] : [],
           recovered: false,
+          ...(session.runtime?.kimi?.sessionId ? {
+            kimiSubmission: {
+              ...(kimiSubmission.sessionFilePath
+                ? { sessionFilePath: kimiSubmission.sessionFilePath }
+                : {}),
+              sessionId: session.runtime.kimi.sessionId,
+              cwd: getSessionWorkingDirectory(session),
+              startOffset: kimiSubmission.startOffset,
+            },
+          } : {}),
         };
       }
       if (params.autoRecoverProviderSession !== true) {
@@ -1344,7 +1353,7 @@ export async function handleTmuxBridgeCommand(params: HandleTmuxBridgeCommandPar
       }
       const actions = parsed.actions || [];
       const pendingAutoForwardActions = params.tmuxProviderAutoForward === true && command === '/tmux'
-        ? (keySequenceActions ? actions : applyPlainTextTmuxActions(actions, session))
+        ? (keySequenceActions ? actions : applyPlainTextTmuxActions(actions))
         : undefined;
       const ensured = await ensureRuntimeTmuxSessionForProvider({
         ...params,
@@ -1367,12 +1376,12 @@ export async function handleTmuxBridgeCommand(params: HandleTmuxBridgeCommandPar
       }
       const effectiveSession = store.getSession(session.id) || session;
       const actionsToSend = command === '/tmux' && !keySequenceActions
-        ? applyPlainTextTmuxActions(actions, effectiveSession)
+        ? applyPlainTextTmuxActions(actions)
         : actions;
       if (params.suppressSuccessfulResponse === true) {
         const runtimeProvider = resolveEffectiveRuntimeProvider(effectiveSession, binding);
         if (runtimeProvider.provider === 'tmux') {
-          await sendRuntimeTmuxInput({
+          const submitProviderInput = () => sendRuntimeTmuxInput({
             runtime: runtimeProvider.runtime,
             sessionName: target,
             send: () => sendTmuxActions(target, actionsToSend, {
@@ -1382,9 +1391,14 @@ export async function handleTmuxBridgeCommand(params: HandleTmuxBridgeCommandPar
                 || runtimeProvider.runtime === 'kimi'
               ) && !keySequenceActions,
             }),
+            ...(runtimeProvider.runtime === 'kimi'
+              ? { steer: () => sendKimiTmuxExplicitSteer(`${target}:0.0`) }
+              : {}),
           });
+          await submitProviderInput();
           if (runtimeProvider.runtime === 'kimi' && ensured.kimiSubmission) {
             const accepted = await retryKimiSubmitIfNoActivity({
+              sessionName: target,
               targetPane: `${target}:0.0`,
               sessionFilePath: ensured.kimiSubmission.sessionFilePath,
               sessionId: ensured.kimiSubmission.sessionId,
@@ -1394,10 +1408,7 @@ export async function handleTmuxBridgeCommand(params: HandleTmuxBridgeCommandPar
                 .filter((action): action is Extract<TmuxSendAction, { type: 'literal' }> => action.type === 'literal')
                 .map((action) => action.text)
                 .join(''),
-              retrySubmit: () => sendTmuxActions(target, actionsToSend, {
-                delayMs: SEND_ACTION_DELAY_MS,
-                forcePasteLiterals: true,
-              }).then(() => undefined),
+              retrySubmit: () => submitProviderInput().then(() => undefined),
             });
             if (!accepted) {
               throw new Error('Kimi Code 输入未能启动 turn；已根据 wire 状态重发完整输入或提交键，仍未提交。');
@@ -1410,9 +1421,14 @@ export async function handleTmuxBridgeCommand(params: HandleTmuxBridgeCommandPar
         return '';
       }
       const lines = getCaptureLines(session);
+      const manualRuntime = getSessionActiveRuntime(effectiveSession);
+      const manualActions = manualRuntime
+        && resolveRuntimeTmuxSteerOperation(manualRuntime, target) === 'explicit'
+        ? [...actionsToSend, { type: 'key' as const, key: 'C-s' }]
+        : actionsToSend;
       const sent = await sendTmuxActionsAndCapture({
         target,
-        actions: actionsToSend,
+        actions: manualActions,
         lines,
         sendDelayMs: SEND_ACTION_DELAY_MS,
         captureDelayMs: CAPTURE_AFTER_SEND_DELAY_MS,
