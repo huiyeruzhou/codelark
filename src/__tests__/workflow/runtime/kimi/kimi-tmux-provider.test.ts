@@ -188,6 +188,7 @@ describe('kimi-tmux-provider workflow', () => {
     let resumedTuiReady = false;
     let workspaceTrustConfirmed = false;
     let wirePath: string | null = null;
+    let pendingPrompt = '';
     let tmuxExists = false;
 
     const restoreTmux = patchTmuxCore({
@@ -226,13 +227,17 @@ describe('kimi-tmux-provider workflow', () => {
           resumeHintReady = true;
         }
         if (names.join(',') === 'Enter') workspaceTrustConfirmed = true;
+        if (names.join(',') === 'Enter' && pendingPrompt) {
+          wirePath = createKimiSessionFile({ kimiHome, cwd, sessionId });
+          appendKimiTurn(wirePath, pendingPrompt);
+          pendingPrompt = '';
+        }
         return { commands: names.map((name) => `tmux send-keys -t ${target} ${name}`) };
       },
       async injectPromptIntoPane(target: string, prompt: string) {
         injectCalls.push({ target, prompt });
         assert.equal(wirePath, null, 'fresh Kimi may defer wire creation until its first prompt');
-        wirePath = createKimiSessionFile({ kimiHome, cwd, sessionId });
-        appendKimiTurn(wirePath, prompt);
+        pendingPrompt = prompt;
         return { commands: [`tmux paste-buffer -t ${target}`] };
       },
       async killSession(name: string) {
@@ -250,6 +255,7 @@ describe('kimi-tmux-provider workflow', () => {
         CODELARK_KIMI_TMUX_INPUT_STABILITY_MS: '0',
         CODELARK_KIMI_TMUX_PROMPT_DELAY_MS: '0',
         CODELARK_KIMI_TMUX_STEER_DELAY_MS: '0',
+        CODELARK_KIMI_TMUX_SUBMISSION_ACK_TIMEOUT_MS: '100',
       }, () => readSse(streamKimiTmuxTui({
         prompt: 'hello fresh kimi',
         sessionId: 'bridge-kimi-workflow',
@@ -263,7 +269,11 @@ describe('kimi-tmux-provider workflow', () => {
       assert.equal(commandHasArg(ensureCalls[0]!, '-r'), false);
 
       assert.equal(sendCalls.some((call) => call.actions.join(',') === 'C-c,C-c'), false);
-      assert.ok(sendCalls.some((call) => call.actions.join(',') === 'Enter'));
+      assert.equal(
+        sendCalls.filter((call) => call.actions.join(',') === 'Enter').length,
+        2,
+        'fresh lifecycle confirms trust, then retries Enter when wire creation is delayed',
+      );
       assert.deepEqual(injectCalls, [{
         target: 'clk-kimi-bridge-kimi-workflow:0.0',
         prompt: 'hello fresh kimi',

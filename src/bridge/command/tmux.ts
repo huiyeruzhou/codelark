@@ -611,7 +611,12 @@ async function ensureRuntimeTmuxSessionForProvider(
   commands: string[];
   recovered: boolean;
   error?: string;
-  kimiSubmission?: { sessionFilePath: string; startOffset: number };
+  kimiSubmission?: {
+    sessionFilePath?: string;
+    sessionId: string;
+    cwd?: string;
+    startOffset: number;
+  };
 }> {
   const { store, binding, session } = params;
   const runtimeTarget = getSessionRuntimeTmuxSessionName(session) || '';
@@ -770,12 +775,12 @@ async function ensureRuntimeTmuxSessionForProvider(
       target: prepared.sessionName,
       commands: [],
       recovered: !prepared.existed,
-      ...(prepared.sessionFilePath ? {
-        kimiSubmission: {
-          sessionFilePath: prepared.sessionFilePath,
-          startOffset: prepared.nextOffset,
-        },
-      } : {}),
+      kimiSubmission: {
+        ...(prepared.sessionFilePath ? { sessionFilePath: prepared.sessionFilePath } : {}),
+        sessionId: prepared.sessionId,
+        ...(prepared.cwd ? { cwd: prepared.cwd } : {}),
+        startOffset: prepared.nextOffset,
+      },
     };
   }
 
@@ -1382,6 +1387,8 @@ export async function handleTmuxBridgeCommand(params: HandleTmuxBridgeCommandPar
             const accepted = await retryKimiSubmitIfNoActivity({
               targetPane: `${target}:0.0`,
               sessionFilePath: ensured.kimiSubmission.sessionFilePath,
+              sessionId: ensured.kimiSubmission.sessionId,
+              cwd: ensured.kimiSubmission.cwd,
               startOffset: ensured.kimiSubmission.startOffset,
             });
             if (!accepted) {

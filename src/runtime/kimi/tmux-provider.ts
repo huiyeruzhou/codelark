@@ -553,14 +553,15 @@ function resolveKimiSessionFileBySessionId(
 }
 
 async function waitForKimiSessionFileGrowth(
-  sessionFilePath: string,
+  resolveSessionFilePath: () => string | undefined,
   startOffset: number,
   timeoutMs: number,
 ): Promise<boolean> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() <= deadline) {
     try {
-      if (fs.statSync(sessionFilePath).size > startOffset) return true;
+      const sessionFilePath = resolveSessionFilePath();
+      if (sessionFilePath && fs.statSync(sessionFilePath).size > startOffset) return true;
     } catch {
       // A fresh Kimi session may create wire.jsonl only after accepting input.
     }
@@ -572,34 +573,40 @@ async function waitForKimiSessionFileGrowth(
 export async function retryKimiSubmitIfNoActivity(params: {
   targetPane: string;
   sessionFilePath?: string;
+  sessionId?: string;
+  cwd?: string;
   startOffset: number;
 }): Promise<boolean> {
-  if (!params.sessionFilePath) return true;
+  if (!params.sessionFilePath && !params.sessionId) return true;
+  const resolveSessionFilePath = (): string | undefined => params.sessionFilePath
+    || (params.sessionId ? findKimiSessionFileById(params.sessionId, params.cwd)?.filePath : undefined);
   const timeoutMs = parsePositiveIntEnv(
     'CODELARK_KIMI_TMUX_SUBMISSION_ACK_TIMEOUT_MS',
     DEFAULT_KIMI_SUBMISSION_ACK_TIMEOUT_MS,
     100,
   );
-  if (await waitForKimiSessionFileGrowth(params.sessionFilePath, params.startOffset, timeoutMs)) {
+  if (await waitForKimiSessionFileGrowth(resolveSessionFilePath, params.startOffset, timeoutMs)) {
     return true;
   }
   console.warn('[kimi-tmux] Kimi input produced no session activity; retrying submit keys once:', {
     target_pane: params.targetPane,
-    session_file: params.sessionFilePath,
+    session_file: resolveSessionFilePath() || null,
+    session_id: params.sessionId || null,
     start_offset: params.startOffset,
   });
   await tmuxCore.sendActions(params.targetPane, [{ type: 'key', key: 'Enter' }]);
   await sleep(DEFAULT_KIMI_STEER_DELAY_MS);
   await tmuxCore.sendActions(params.targetPane, [{ type: 'key', key: 'C-s' }]);
   const accepted = await waitForKimiSessionFileGrowth(
-    params.sessionFilePath,
+    resolveSessionFilePath,
     params.startOffset,
     timeoutMs,
   );
   if (!accepted) {
     console.warn('[kimi-tmux] Kimi input still produced no session activity after submit retry:', {
       target_pane: params.targetPane,
-      session_file: params.sessionFilePath,
+      session_file: resolveSessionFilePath() || null,
+      session_id: params.sessionId || null,
       start_offset: params.startOffset,
     });
   }
@@ -917,6 +924,8 @@ export function streamKimiTmuxTui(params: StreamChatParams): ReadableStream<stri
           await retryKimiSubmitIfNoActivity({
             targetPane,
             sessionFilePath: context.sessionFilePath,
+            sessionId: context.sessionId,
+            cwd: context.cwd,
             startOffset: context.nextOffset,
           });
 
