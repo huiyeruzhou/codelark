@@ -42,6 +42,40 @@ function createScriptedTmuxCore(binDir: string, source: string): TmuxCore {
 }
 
 describe('TmuxCore', () => {
+  it('retries when new-session is lost while the previous tmux server shuts down', async () => {
+    const binDir = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-unit-tmux-start-race-'));
+    const statePath = path.join(binDir, 'launch-count');
+    const logPath = path.join(binDir, 'tmux.log');
+    const core = createScriptedTmuxCore(binDir, `
+const fs = require('node:fs');
+const args = process.argv.slice(2);
+const statePath = ${JSON.stringify(statePath)};
+fs.appendFileSync(${JSON.stringify(logPath)}, args.join(' ') + '\\n');
+if (args[0] === 'new-session') {
+  const count = fs.existsSync(statePath) ? Number(fs.readFileSync(statePath, 'utf8')) : 0;
+  fs.writeFileSync(statePath, String(count + 1));
+  process.exit(0);
+}
+if (args[0] === 'has-session') {
+  const count = fs.existsSync(statePath) ? Number(fs.readFileSync(statePath, 'utf8')) : 0;
+  if (count < 2) {
+    process.stderr.write('no server running on /tmp/clk-test/tmux/default\\n');
+    process.exit(1);
+  }
+}
+`);
+
+    try {
+      const result = await core.ensureDetachedSession({ name: 'race', command: 'kimi -r session_1' });
+      const log = fs.readFileSync(logPath, 'utf-8');
+      assert.equal(result.existed, false);
+      assert.equal((log.match(/new-session -d -s race/g) || []).length, 2);
+      assert.equal((log.match(/has-session -t race/g) || []).length, 3);
+    } finally {
+      fs.rmSync(binDir, { recursive: true, force: true });
+    }
+  });
+
   it('treats a missing isolated tmux socket as no session', async () => {
     const binDir = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-unit-tmux-no-server-'));
     const core = createScriptedTmuxCore(binDir, `

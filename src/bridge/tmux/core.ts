@@ -163,6 +163,8 @@ function sleep(ms: number): Promise<void> {
 const PASTE_LITERAL_THRESHOLD = 512;
 const PASTE_CHUNK_SIZE = 512;
 const PASTE_CHUNK_DELAY_MS = 75;
+const SESSION_START_SURVIVAL_DELAY_MS = 50;
+const SESSION_START_RETRY_DELAY_MS = 100;
 
 function splitTextChunks(text: string, chunkSize = PASTE_CHUNK_SIZE): string[] {
   if (!text) return [];
@@ -351,9 +353,19 @@ class TmuxCliCore implements TmuxCore {
     }
     if (!exists.exists || params.recreate) {
       const args = buildNewSessionArgs(params);
-      await this.runTmux(args);
       const command = this.command(args);
-      commands.push(command);
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        await this.runTmux(args);
+        commands.push(command);
+        await sleep(SESSION_START_SURVIVAL_DELAY_MS);
+        const survived = await this.hasSession(params.name);
+        commands.push(survived.command);
+        if (survived.exists) return { existed: exists.exists, command, commands };
+        if (attempt === 0) await sleep(SESSION_START_RETRY_DELAY_MS);
+      }
+      // Runtime-specific readiness checks own the final diagnostic when the
+      // launched process genuinely exits. Returning here preserves their
+      // detailed error cards while still repairing the server-shutdown race.
       return { existed: exists.exists, command, commands };
     }
     return { existed: exists.exists, commands };
