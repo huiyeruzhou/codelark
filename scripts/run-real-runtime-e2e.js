@@ -5,6 +5,8 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
+import { runRuntimeE2eShards } from './real-runtime-e2e-scheduler.js';
+
 const codexExecutable = process.env.CODELARK_REAL_CODEX_E2E_EXECUTABLE;
 const claudeExecutable = process.env.CODELARK_REAL_CLAUDE_E2E_EXECUTABLE;
 const kimiExecutable = process.env.CODELARK_REAL_KIMI_E2E_EXECUTABLE;
@@ -120,7 +122,7 @@ function runShard(shard) {
   });
 }
 
-const results = await Promise.all(shards.map(runShard));
+const results = await runRuntimeE2eShards(shards, runShard);
 let failed = false;
 for (const result of results) {
   const seconds = (result.durationMs / 1000).toFixed(1);
