@@ -6,6 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 
 import { createRuntimeShardIsolation } from './real-runtime-e2e-isolation.js';
+import { runRuntimeShardsSerially } from './real-runtime-e2e-scheduler.js';
 
 const codexExecutable = process.env.CODELARK_REAL_CODEX_E2E_EXECUTABLE;
 const claudeExecutable = process.env.CODELARK_REAL_CLAUDE_E2E_EXECUTABLE;
@@ -129,17 +130,10 @@ function runShard(shard) {
   });
 }
 
-const parallelShards = shards.filter((shard) => !shard.name.startsWith('kimi-'));
-const kimiShards = shards.filter((shard) => shard.name.startsWith('kimi-'));
-const [parallelResults, kimiResults] = await Promise.all([
-  Promise.all(parallelShards.map(runShard)),
-  (async () => {
-    const results = [];
-    for (const shard of kimiShards) results.push(await runShard(shard));
-    return results;
-  })(),
-]);
-const results = [...parallelResults, ...kimiResults];
+// Real TUI cold starts are CPU and I/O intensive. Running another CLI while
+// Kimi initializes can delay its editor long enough for otherwise-valid input
+// to be lost on constrained CI runners, so keep the lifecycle gate serial.
+const results = await runRuntimeShardsSerially(shards, runShard);
 let failed = false;
 for (const result of results) {
   const seconds = (result.durationMs / 1000).toFixed(1);
