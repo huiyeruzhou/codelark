@@ -129,7 +129,17 @@ function runShard(shard) {
   });
 }
 
-const results = await Promise.all(shards.map(runShard));
+const parallelShards = shards.filter((shard) => !shard.name.startsWith('kimi-'));
+const kimiShards = shards.filter((shard) => shard.name.startsWith('kimi-'));
+const [parallelResults, kimiResults] = await Promise.all([
+  Promise.all(parallelShards.map(runShard)),
+  (async () => {
+    const results = [];
+    for (const shard of kimiShards) results.push(await runShard(shard));
+    return results;
+  })(),
+]);
+const results = [...parallelResults, ...kimiResults];
 let failed = false;
 for (const result of results) {
   const seconds = (result.durationMs / 1000).toFixed(1);

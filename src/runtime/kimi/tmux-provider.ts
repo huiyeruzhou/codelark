@@ -630,11 +630,7 @@ export interface KimiTmuxInputSession {
   existed: boolean;
 }
 
-/**
- * Establishes the provider-owned Kimi process and runtime identity exactly
- * once. A known live process is reusable without probing for an input cursor;
- * cold takeover only revalidates the persisted Kimi session/wire identity.
- */
+/** Establishes the provider-owned Kimi process and validates input readiness. */
 export async function ensureKimiTmuxInputSession(
   params: StreamChatParams,
   options: { recreate?: boolean } = {},
@@ -687,15 +683,13 @@ export async function ensureKimiTmuxInputSession(
     }
 
     if (!context.sessionFilePath) resolveKimiSessionFileBySessionId(context, true);
-    if (launched || inspection.needsReadiness) {
-      await waitForKimiInputReady(context, {
-        requireSessionHeader: !hasPersistedResumeIdentity,
-      });
-    }
-    initializeKimiSessionLogCursor(context);
     if (!context.sessionId) {
       throw new Error('Kimi tmux input lifecycle did not resolve a session id.');
     }
+    await waitForKimiInputReady(context, {
+      requireSessionHeader: !hasPersistedResumeIdentity,
+    });
+    initializeKimiSessionLogCursor(context);
     transitionRuntimeTmuxInputState(
       'kimi',
       sessionName,
