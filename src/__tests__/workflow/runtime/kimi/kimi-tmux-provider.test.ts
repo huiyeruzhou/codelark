@@ -417,7 +417,7 @@ describe('kimi-tmux-provider workflow', () => {
     const restoreTmux = patchTmuxCore({
       async ensureExtendedKeys() {
         extendedKeysCalls += 1;
-        if (extendedKeysCalls === 1) throw new Error('no server running on /tmp/clk-test/tmux/default');
+        if (extendedKeysCalls <= 2) throw new Error('no server running on /tmp/clk-test/tmux/default');
         return 'tmux set-option -g extended-keys on';
       },
       async hasSession(name: string) {
@@ -477,8 +477,8 @@ describe('kimi-tmux-provider workflow', () => {
       assert.equal(prepared.sessionId, sessionId);
       assert.equal(captureCount, 2, 'known resume confirms workspace trust before waiting for the editor');
       assert.deepEqual(sendCalls, ['Enter']);
-      assert.equal(ensureCalls.length, 2, 'a server-shutdown race relaunches Kimi once');
-      assert.equal(extendedKeysCalls, 2);
+      assert.equal(ensureCalls.length, 3, 'repeated server-shutdown races relaunch Kimi with a fixed limit');
+      assert.equal(extendedKeysCalls, 3);
       assert.equal(commandHasArg(ensureCalls[0] || '', '-r'), true);
       assert.match(ensureCalls[0] || '', new RegExp(sessionId));
     } finally {

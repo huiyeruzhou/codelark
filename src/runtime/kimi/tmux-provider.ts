@@ -466,20 +466,24 @@ async function ensureKimiTmuxInputKeysWithRelaunch(
   sessionName: string,
   params: StreamChatParams,
 ): Promise<boolean> {
-  try {
-    await ensureKimiTmuxInputKeys();
-    return false;
-  } catch (error) {
-    if (!isMissingTmuxServerError(error)) throw error;
-    console.warn('[kimi-tmux] tmux server exited during Kimi startup; relaunching once:', {
-      tmux_session: sessionName,
-      error: error instanceof Error ? error.message : String(error),
-    });
-    await sleep(100);
-    await launchTmuxKimiSession(sessionName, params);
-    await ensureKimiTmuxInputKeys();
-    return true;
+  const maxChecks = 3;
+  for (let check = 1; check <= maxChecks; check += 1) {
+    try {
+      await ensureKimiTmuxInputKeys();
+      return check > 1;
+    } catch (error) {
+      if (!isMissingTmuxServerError(error) || check === maxChecks) throw error;
+      console.warn('[kimi-tmux] tmux server exited during Kimi startup; relaunching:', {
+        tmux_session: sessionName,
+        check,
+        max_checks: maxChecks,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      await sleep(100 * check);
+      await launchTmuxKimiSession(sessionName, params);
+    }
   }
+  return false;
 }
 
 async function waitForKimiSessionIdFromTmux(context: KimiTuiRunContext): Promise<string> {
