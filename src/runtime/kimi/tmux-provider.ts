@@ -586,22 +586,23 @@ async function waitForKimiInputReady(
       ? isKimiEditorReadyScreen(screen)
       : isKimiInputReadyScreen(screen, context.sessionId);
   };
-  if (isReady(lastScreen)) return;
+  if (!isKimiWorkspaceTrustPrompt(lastScreen) && isReady(lastScreen)) return;
   while (Date.now() <= deadline) {
     const capture = await tmuxCore.capturePane(context.targetPane, 160);
     lastScreen = capture.screen;
     context.lastScreen = lastScreen;
     assertKimiPaneAlive(lastScreen);
-    if (isReady(lastScreen)) return;
-    if (
-      isKimiWorkspaceTrustPrompt(lastScreen)
-      && Date.now() - lastTrustActionAt >= 250
-    ) {
-      await tmuxCore.sendActions(context.targetPane, [{ type: 'key', key: 'Enter' }]);
-      lastTrustActionAt = Date.now();
-      deadline = lastTrustActionAt + timeoutMs;
-      console.log('[kimi-tmux] Confirmed Kimi workspace trust prompt:', context.targetPane);
+    if (isKimiWorkspaceTrustPrompt(lastScreen)) {
+      if (Date.now() - lastTrustActionAt >= 250) {
+        await tmuxCore.sendActions(context.targetPane, [{ type: 'key', key: 'Enter' }]);
+        lastTrustActionAt = Date.now();
+        deadline = lastTrustActionAt + timeoutMs;
+        console.log('[kimi-tmux] Confirmed Kimi workspace trust prompt:', context.targetPane);
+      }
+      await sleep(pollIntervalMs);
+      continue;
     }
+    if (isReady(lastScreen)) return;
     await sleep(pollIntervalMs);
   }
   const visibleTail = normalizeKimiScreenText(lastScreen)

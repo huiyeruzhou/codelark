@@ -417,7 +417,17 @@ describe('kimi-tmux-provider workflow', () => {
         return {
           screen: trustConfirmed
             ? 'Kimi Code\nrestored conversation history\n│ > \ncontext: 42% (107k/256k)'
-            : 'MCP servers only run in trusted folders.\n❯ Trust this folder\n  Enable project MCP servers.\n  Don\'t trust',
+            : [
+              'Kimi Code',
+              `Session: ${sessionId}`,
+              'restored conversation history',
+              '│ > ',
+              'context: 42% (107k/256k)',
+              'MCP servers only run in trusted folders.',
+              '❯ Trust this folder',
+              '  Enable project MCP servers.',
+              '  Don\'t trust',
+            ].join('\n'),
           command: `tmux capture-pane -t ${target}`,
         };
       },
