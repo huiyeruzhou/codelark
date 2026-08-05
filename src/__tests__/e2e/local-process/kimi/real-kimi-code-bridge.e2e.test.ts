@@ -240,20 +240,36 @@ describe('real Kimi Code bridge e2e', () => {
       await execFileAsync('tmux', ['kill-session', '-t', claudeSeedTmuxSessionName]);
 
       await _testOnly.handleMessage(adapter, inboundMessage(address, `Reply exactly: ${responseText}`, 'incoming-real-kimi-first'));
-      const firstKimiRequestObserved = await waitForCondition(
-        () => proxy.requests.some((request) => request.url.includes('/chat/completions')),
-        45_000,
-        50,
-      );
-      assert.equal(firstKimiRequestObserved, true, JSON.stringify({
-        expectedBaseUrl: proxy.baseUrl,
-        observedUrls: proxy.requests.map((request) => request.url),
-      }));
       const initialized = store.getSession(session.id);
       const kimiSessionId = initialized?.runtime?.kimi?.sessionId;
       assert.match(kimiSessionId || '', /^session_[0-9a-f-]+$/i);
       const sessionFile = findKimiSessionFileById(kimiSessionId!, workDir);
       assert.ok(sessionFile?.filePath);
+      const firstKimiRequestObserved = await waitForCondition(
+        () => proxy.requests.some((request) => request.rawBody.includes(responseText)),
+        45_000,
+        50,
+      );
+      if (!firstKimiRequestObserved) {
+        const diagnosticScreen = (await execFileAsync(
+          'tmux',
+          ['capture-pane', '-p', '-t', `${tmuxSessionName}:0.0`, '-S', '-160'],
+        )).stdout;
+        const wireTail = fs.readFileSync(sessionFile.filePath, 'utf-8')
+          .split(/\r?\n/u)
+          .slice(-20)
+          .join('\n');
+        assert.fail(JSON.stringify({
+          expectedBaseUrl: proxy.baseUrl,
+          expectedPrompt: responseText,
+          observedRequests: proxy.requests.map((request) => ({
+            url: request.url,
+            containsExpectedPrompt: request.rawBody.includes(responseText),
+          })),
+          wireTail,
+          diagnosticScreen,
+        }));
+      }
 
       await _testOnly.handleMessage(adapter, inboundMessage(address, steerText, 'incoming-real-kimi-steer'));
       assert.equal(
@@ -287,7 +303,6 @@ describe('real Kimi Code bridge e2e', () => {
       assert.equal(binding.bridgeSessionId, session.id);
       assert.equal(store.getSession(session.id)?.runtime?.kimi?.sessionId, kimiSessionId);
 
-      const requestCountBeforeColdTakeover = proxy.requests.length;
       resetRuntimeTmuxInputStatesForTests();
       await _testOnly.handleMessage(
         adapter,
@@ -302,7 +317,7 @@ describe('real Kimi Code bridge e2e', () => {
       );
       assert.equal(
         await waitForCondition(
-          () => proxy.requests.length > requestCountBeforeColdTakeover,
+          () => proxy.requests.some((request) => request.rawBody.includes(coldTakeoverText)),
           10_000,
           50,
         ),
@@ -402,14 +417,13 @@ describe('real Kimi Code bridge e2e', () => {
       assert.equal(restoredKimiBinding?.bridgeSessionId, session.id);
       assert.equal(restoredKimiBinding?.runtimeBridgeSessionIds?.claude, claudeBinding.bridgeSessionId);
       assert.equal(restoredKimiBinding?.runtimeBridgeSessionIds?.kimi, session.id);
-      const kimiRequestCount = proxy.requests.filter((request) => request.url.includes('/chat/completions')).length;
       await _testOnly.handleMessage(
         adapter,
         inboundMessage(address, kimiReturnText, 'incoming-real-kimi-after-return'),
       );
       assert.equal(
         await waitForCondition(() => (
-          proxy.requests.filter((request) => request.url.includes('/chat/completions')).length > kimiRequestCount
+          proxy.requests.some((request) => request.rawBody.includes(kimiReturnText))
           && fs.readFileSync(sessionFile.filePath, 'utf-8').includes(kimiReturnText)
         ), 45_000, 100),
         true,
