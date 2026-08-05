@@ -394,6 +394,8 @@ describe('kimi-tmux-provider workflow', () => {
     const ensureCalls: string[] = [];
     let tmuxExists = true;
     let captureCount = 0;
+    let trustConfirmed = false;
+    const sendCalls: string[] = [];
 
     const restoreTmux = patchTmuxCore({
       async ensureExtendedKeys() {
@@ -410,9 +412,17 @@ describe('kimi-tmux-provider workflow', () => {
       async capturePane(target: string) {
         captureCount += 1;
         return {
-          screen: 'Kimi Code\nrestored conversation history\n│ > \ncontext: 42% (107k/256k)',
+          screen: trustConfirmed
+            ? 'Kimi Code\nrestored conversation history\n│ > \ncontext: 42% (107k/256k)'
+            : 'MCP servers only run in trusted folders.\n❯ Trust this folder\n  Enable project MCP servers.\n  Don\'t trust',
           command: `tmux capture-pane -t ${target}`,
         };
+      },
+      async sendActions(target: string, actions) {
+        const names = actionNames(actions);
+        sendCalls.push(...names);
+        if (names.join(',') === 'Enter') trustConfirmed = true;
+        return { commands: names.map((name) => `tmux send-keys -t ${target} ${name}`) };
       },
       async killSession(name: string) {
         tmuxExists = false;
@@ -435,7 +445,8 @@ describe('kimi-tmux-provider workflow', () => {
       }));
 
       assert.equal(prepared.sessionId, sessionId);
-      assert.equal(captureCount, 1, 'known resume waits for the editor, not a repeated session header');
+      assert.equal(captureCount, 2, 'known resume confirms workspace trust before waiting for the editor');
+      assert.deepEqual(sendCalls, ['Enter']);
       assert.equal(ensureCalls.length, 1);
       assert.equal(commandHasArg(ensureCalls[0] || '', '-r'), true);
       assert.match(ensureCalls[0] || '', new RegExp(sessionId));

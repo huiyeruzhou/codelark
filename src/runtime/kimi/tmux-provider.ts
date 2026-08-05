@@ -549,7 +549,8 @@ async function waitForKimiInputReady(
     DEFAULT_KIMI_POLL_INTERVAL_MS,
     50,
   );
-  const startedAtMs = Date.now();
+  let deadline = Date.now() + timeoutMs;
+  let lastTrustActionAt = 0;
   let lastScreen = context.lastScreen || '';
   const isReady = (screen: string): boolean => {
     const activeSessionId = parseKimiActiveSessionIdFromScreen(screen);
@@ -561,12 +562,21 @@ async function waitForKimiInputReady(
       : isKimiInputReadyScreen(screen, context.sessionId);
   };
   if (isReady(lastScreen)) return;
-  while (Date.now() - startedAtMs <= timeoutMs) {
+  while (Date.now() <= deadline) {
     const capture = await tmuxCore.capturePane(context.targetPane, 160);
     lastScreen = capture.screen;
     context.lastScreen = lastScreen;
     assertKimiPaneAlive(lastScreen);
     if (isReady(lastScreen)) return;
+    if (
+      isKimiWorkspaceTrustPrompt(lastScreen)
+      && Date.now() - lastTrustActionAt >= 250
+    ) {
+      await tmuxCore.sendActions(context.targetPane, [{ type: 'key', key: 'Enter' }]);
+      lastTrustActionAt = Date.now();
+      deadline = lastTrustActionAt + timeoutMs;
+      console.log('[kimi-tmux] Confirmed Kimi workspace trust prompt:', context.targetPane);
+    }
     await sleep(pollIntervalMs);
   }
   const visibleTail = normalizeKimiScreenText(lastScreen)
@@ -576,6 +586,13 @@ async function waitForKimiInputReady(
     .slice(-6)
     .join(' · ');
   throw new Error(`Timed out waiting for Kimi Code input readiness${visibleTail ? `: ${visibleTail}` : '.'}`);
+}
+
+export function isKimiWorkspaceTrustPrompt(screenText: string): boolean {
+  const normalized = normalizeKimiScreenText(screenText);
+  return /Trust this folder/i.test(normalized)
+    && /Enable project MCP servers/i.test(normalized)
+    && /Don't trust/i.test(normalized);
 }
 
 export interface KimiTmuxInputSession {
