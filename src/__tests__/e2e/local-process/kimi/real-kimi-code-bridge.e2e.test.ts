@@ -240,6 +240,14 @@ describe('real Kimi Code bridge e2e', () => {
       await execFileAsync('tmux', ['kill-session', '-t', claudeSeedTmuxSessionName]);
 
       await _testOnly.handleMessage(adapter, inboundMessage(address, `Reply exactly: ${responseText}`, 'incoming-real-kimi-first'));
+      assert.equal(
+        await waitForCondition(
+          () => /^session_[0-9a-f-]+$/i.test(store.getSession(session.id)?.runtime?.kimi?.sessionId || ''),
+          45_000,
+          50,
+        ),
+        true,
+      );
       const initialized = store.getSession(session.id);
       const kimiSessionId = initialized?.runtime?.kimi?.sessionId;
       assert.match(kimiSessionId || '', /^session_[0-9a-f-]+$/i);
