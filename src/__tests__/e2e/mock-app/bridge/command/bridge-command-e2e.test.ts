@@ -228,6 +228,7 @@ process.stdin.resume();
 
 let turnCount = 0;
 let ctrlCCount = 0;
+let pendingPrompt = '';
 const appendWire = (entry) => fs.appendFileSync(wirePath, JSON.stringify(entry) + '\\n');
 const recordCtrlC = () => {
   const previous = fs.existsSync(ctrlCPath) ? Number(fs.readFileSync(ctrlCPath, 'utf8')) || 0 : 0;
@@ -235,17 +236,24 @@ const recordCtrlC = () => {
 };
 process.stdin.on('data', (chunk) => {
   fs.appendFileSync(keyLogPath, JSON.stringify({ hex: chunk.toString('hex'), text: chunk.toString('utf8') }) + '\\n');
-  if (chunk.includes(0x13)) {
+  const inputText = chunk.toString('utf8');
+  const submitted = (chunk.length === 1 && chunk[0] === 0x0d) || chunk.includes(0x13);
+  if (!submitted && !inputText.startsWith('\\u001b[')) {
+    pendingPrompt += inputText;
+  }
+  if (submitted && pendingPrompt) {
     turnCount += 1;
     const now = Date.now();
     const turnId = 'turn-' + turnCount;
     const stepUuid = 'step-' + turnCount;
     const response = turnCount === 1 ? 'Kimi mock-app plain response' : 'Kimi mock-app continued response ' + turnCount;
-    appendWire({ type: 'context.append_loop_event', time: now, event: { type: 'step.begin', turnId, stepUuid } });
-    appendWire({ type: 'context.append_loop_event', time: now + 1, event: { type: 'content.part', turnId, part: { type: 'think', think: 'mock kimi thinking ' + turnCount } } });
-    appendWire({ type: 'context.append_loop_event', time: now + 2, event: { type: 'content.part', turnId, part: { type: 'text', text: response } } });
-    appendWire({ type: 'context.append_loop_event', time: now + 3, event: { type: 'step.end', turnId, stepUuid } });
-    appendWire({ type: 'usage.record', time: now + 4, usage: { inputOther: 7, inputCacheRead: 11, inputCacheCreation: 0, output: 3 } });
+    appendWire({ type: 'context.append_message', time: now, message: { role: 'user', content: pendingPrompt } });
+    pendingPrompt = '';
+    appendWire({ type: 'context.append_loop_event', time: now + 1, event: { type: 'step.begin', turnId, stepUuid } });
+    appendWire({ type: 'context.append_loop_event', time: now + 2, event: { type: 'content.part', turnId, part: { type: 'think', think: 'mock kimi thinking ' + turnCount } } });
+    appendWire({ type: 'context.append_loop_event', time: now + 3, event: { type: 'content.part', turnId, part: { type: 'text', text: response } } });
+    appendWire({ type: 'context.append_loop_event', time: now + 4, event: { type: 'step.end', turnId, stepUuid } });
+    appendWire({ type: 'usage.record', time: now + 5, usage: { inputOther: 7, inputCacheRead: 11, inputCacheCreation: 0, output: 3 } });
   }
   for (const byte of chunk) {
     if (byte !== 0x03) continue;
@@ -300,10 +308,16 @@ if (process.stdin.isTTY && process.stdin.setRawMode) process.stdin.setRawMode(tr
 process.stdin.resume();
 
 let turnCount = 0;
+let pendingPrompt = '';
 const appendWire = (entry) => fs.appendFileSync(wirePath, JSON.stringify(entry) + '\\n');
 process.stdin.on('data', (chunk) => {
   fs.appendFileSync(keyLogPath, JSON.stringify({ hex: chunk.toString('hex'), text: chunk.toString('utf8') }) + '\\n');
-  if (chunk.includes(0x13)) {
+  const inputText = chunk.toString('utf8');
+  const submitted = (chunk.length === 1 && chunk[0] === 0x0d) || chunk.includes(0x13);
+  if (!submitted && !inputText.startsWith('\\u001b[')) {
+    pendingPrompt += inputText;
+  }
+  if (submitted && pendingPrompt) {
     turnCount += 1;
     const now = Date.now();
     const turnId = 'turn-resume-' + turnCount;
@@ -311,11 +325,13 @@ process.stdin.on('data', (chunk) => {
     const currentResponse = turnCount === 1
       ? responseText
       : turnCount === 2 ? 'Kimi accepted card answer' : 'Kimi continued after follow-up';
-    appendWire({ type: 'context.append_loop_event', time: now, event: { type: 'step.begin', turnId, stepUuid } });
-    appendWire({ type: 'context.append_loop_event', time: now + 1, event: { type: 'content.part', turnId, part: { type: 'think', think: thinkText + ' ' + turnCount } } });
-    appendWire({ type: 'context.append_loop_event', time: now + 2, event: { type: 'content.part', turnId, part: { type: 'text', text: currentResponse } } });
-    appendWire({ type: 'context.append_loop_event', time: now + 3, event: { type: 'step.end', turnId, stepUuid } });
-    appendWire({ type: 'usage.record', time: now + 4, usage: { inputOther: 7, inputCacheRead: 11, inputCacheCreation: 0, output: 3 } });
+    appendWire({ type: 'context.append_message', time: now, message: { role: 'user', content: pendingPrompt } });
+    pendingPrompt = '';
+    appendWire({ type: 'context.append_loop_event', time: now + 1, event: { type: 'step.begin', turnId, stepUuid } });
+    appendWire({ type: 'context.append_loop_event', time: now + 2, event: { type: 'content.part', turnId, part: { type: 'think', think: thinkText + ' ' + turnCount } } });
+    appendWire({ type: 'context.append_loop_event', time: now + 3, event: { type: 'content.part', turnId, part: { type: 'text', text: currentResponse } } });
+    appendWire({ type: 'context.append_loop_event', time: now + 4, event: { type: 'step.end', turnId, stepUuid } });
+    appendWire({ type: 'usage.record', time: now + 5, usage: { inputOther: 7, inputCacheRead: 11, inputCacheCreation: 0, output: 3 } });
   }
   if (chunk.includes(0x03)) {
     setTimeout(() => process.exit(0), 20);
@@ -3050,7 +3066,8 @@ provider = "tmux"
 
       const keyLog = fs.readFileSync(keyLogPath, 'utf-8');
       assert.match(keyLog, /first kimi tmux/);
-      assert.match(keyLog, /"hex":"13"/, 'Kimi tmux provider should send Ctrl-S after the prompt');
+      assert.match(keyLog, /"hex":"0d"/, 'fresh Kimi input should submit with Enter');
+      assert.doesNotMatch(keyLog, /"hex":"13"/, 'fresh Kimi input must not become a steer without an active turn');
       assert.ok(adapter.streamEvents.some((event) => (
         event.kind === 'status'
         && /当前思考：mock kimi thinking/.test(event.text || '')
@@ -3382,7 +3399,8 @@ provider = "tmux"
 
       const keyLog = fs.readFileSync(keyLogPath, 'utf-8');
       assert.match(keyLog, /continue bound kimi/);
-      assert.match(keyLog, /"hex":"13"/, 'Kimi tmux provider should send Ctrl-S after a /t-bound prompt');
+      assert.match(keyLog, /"hex":"0d"/, 'a newly resumed idle Kimi session should submit with Enter');
+      assert.doesNotMatch(keyLog, /"hex":"13"/, 'a newly resumed idle Kimi session must not steer');
       assert.ok(adapter.streamEvents.some((event) => (
         event.kind === 'status'
         && event.streamKey?.startsWith('mirror:')
@@ -3531,7 +3549,8 @@ provider = "tmux"
 
       const keyLog = fs.readFileSync(keyLogPath, 'utf-8');
       assert.match(keyLog, /ask user from kimi/);
-      assert.match(keyLog, /"hex":"13"/, 'Kimi tmux provider should send Ctrl-S before the question form answer');
+      assert.match(keyLog, /"hex":"0d"/, 'the idle Kimi question turn should submit with Enter');
+      assert.doesNotMatch(keyLog, /"hex":"13"/, 'the idle Kimi question turn must not steer');
       assert.match(fs.readFileSync(wirePath, 'utf-8'), /<clk-ask>/);
 
       await _testOnly.handleMessage(adapter, {
@@ -3554,7 +3573,14 @@ provider = "tmux"
         && event.streamKey?.startsWith('mirror:')
         && event.status === 'completed'
         && /Kimi accepted card answer/.test(event.text || '')
-      )), 12_000);
+      )), 12_000).catch((error) => {
+        assert.fail([
+          error instanceof Error ? error.message : String(error),
+          `streamEvents=${JSON.stringify(adapter.streamEvents)}`,
+          `keyLog=${fs.readFileSync(keyLogPath, 'utf-8')}`,
+          `wire=${fs.readFileSync(wirePath, 'utf-8')}`,
+        ].join('\n'));
+      });
 
       await _testOnly.handleMessage(adapter, inboundMessage(address, '卡片回答之后继续聊', 'incoming-kimi-after-question-follow-up'));
       await waitForMirrorCondition(() => adapter.streamEvents.some((event) => (

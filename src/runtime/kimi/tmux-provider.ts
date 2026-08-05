@@ -561,19 +561,36 @@ function inspectKimiSubmissionState(
 ): KimiSubmissionState {
   if (fs.statSync(sessionFilePath).size <= startOffset) return 'missing';
   if (!expectedPrompt) return 'started';
-  const wireDelta = fs.readFileSync(sessionFilePath).subarray(startOffset).toString('utf8');
+  const wire = fs.readFileSync(sessionFilePath);
+  const wireBeforeSubmission = wire.subarray(0, startOffset).toString('utf8');
+  const wireDelta = wire.subarray(startOffset).toString('utf8');
   const encodedPrompt = JSON.stringify(expectedPrompt);
+  let turnActive = false;
+  for (const line of wireBeforeSubmission.split(/\r?\n/u)) {
+    try {
+      const entry = JSON.parse(line) as { event?: { type?: string } };
+      if (entry.event?.type === 'step.begin') turnActive = true;
+      if (entry.event?.type === 'step.end') turnActive = false;
+    } catch {
+      // Ignore non-JSON and partial lines before the submission boundary.
+    }
+  }
   let promptAccepted = false;
   for (const line of wireDelta.split(/\r?\n/u)) {
     if (!line) continue;
     if (line.includes(encodedPrompt)) promptAccepted = true;
-    if (!promptAccepted) continue;
     try {
       const entry = JSON.parse(line) as {
         type?: string;
         event?: { type?: string };
       };
-      if (entry.type === 'turn.steer' || entry.type === 'llm.request' || entry.event?.type === 'step.begin') {
+      if (entry.type === 'turn.steer' && promptAccepted && turnActive) return 'started';
+      if (entry.event?.type === 'step.begin') {
+        turnActive = true;
+        if (promptAccepted) return 'started';
+      }
+      if (entry.event?.type === 'step.end') turnActive = false;
+      if (entry.type === 'llm.request' && promptAccepted) {
         return 'started';
       }
     } catch {
