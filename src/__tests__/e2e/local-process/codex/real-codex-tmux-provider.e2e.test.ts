@@ -404,6 +404,7 @@ describe('real codex tmux provider e2e', () => {
       );
 
       let observedWarning: ReturnType<typeof parseCodexTuiModelMismatchWarning> = null;
+      const expectedWarningKey = `${binding.bridgeSessionId}\u0000${recordedModel}\u0000${resumingModel}`;
       const sawMismatchNotice = await waitForCondition(async () => {
         const capture = await execFileAsync(
           'tmux',
@@ -411,7 +412,8 @@ describe('real codex tmux provider e2e', () => {
         ).catch(() => ({ stdout: '', stderr: '' }));
         observedWarning = parseCodexTuiModelMismatchWarning(capture.stdout);
         await _testOnly.reconcileMirrorSubscriptions();
-        return adapter.sent.some((message) => message.richCard?.title === 'Codex 恢复模型不一致');
+        return adapter.sent.some((message) => message.richCard?.title === 'Codex 恢复模型不一致')
+          && store.getChannelChat(address.channelType, address.chatId)?.codexModelMismatchWarningKey === expectedWarningKey;
       }, 15_000, 100);
       assert.equal(sawMismatchNotice, true, 'real Codex resume warning should reach the bridge notice path');
       const parsedWarning = observedWarning as {
@@ -427,7 +429,7 @@ describe('real codex tmux provider e2e', () => {
       assert.equal(store.getSession(binding.bridgeSessionId)?.runtime?.codex?.threadId, threadId);
       assert.equal(
         store.getChannelChat(address.channelType, address.chatId)?.codexModelMismatchWarningKey,
-        `${binding.bridgeSessionId}\u0000${recordedModel}\u0000${resumingModel}`,
+        expectedWarningKey,
       );
       await _testOnly.reconcileMirrorSubscriptions();
       await _testOnly.reconcileMirrorSubscriptions();

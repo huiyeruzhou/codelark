@@ -5,7 +5,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-import { runRuntimeE2eShards } from './real-runtime-e2e-scheduler.js';
+import { createRuntimeShardIsolation } from './real-runtime-e2e-isolation.js';
 
 const codexExecutable = process.env.CODELARK_REAL_CODEX_E2E_EXECUTABLE;
 const claudeExecutable = process.env.CODELARK_REAL_CLAUDE_E2E_EXECUTABLE;
@@ -34,12 +34,15 @@ const shards = [
     env: { CODELARK_REAL_CLAUDE_E2E_EXECUTABLE: claudeExecutable },
   },
   {
-    name: 'kimi',
+    name: 'kimi-provider',
     timeoutMs: 120_000,
-    files: [
-      'src/__tests__/e2e/local-process/kimi/real-kimi-code-tmux-provider.e2e.test.ts',
-      'src/__tests__/e2e/local-process/kimi/real-kimi-code-bridge.e2e.test.ts',
-    ],
+    files: ['src/__tests__/e2e/local-process/kimi/real-kimi-code-tmux-provider.e2e.test.ts'],
+    env: { CODELARK_REAL_KIMI_E2E_EXECUTABLE: kimiExecutable },
+  },
+  {
+    name: 'kimi-bridge',
+    timeoutMs: 120_000,
+    files: ['src/__tests__/e2e/local-process/kimi/real-kimi-code-bridge.e2e.test.ts'],
     env: { CODELARK_REAL_KIMI_E2E_EXECUTABLE: kimiExecutable },
   },
 ];
@@ -68,6 +71,7 @@ function runShard(shard) {
     : shard.timeoutMs;
   const logPath = path.join(logDir, `${shard.name}.log`);
   const output = fs.createWriteStream(logPath, { flags: 'w' });
+  const isolation = createRuntimeShardIsolation(shard.name, shard.env);
   const startedAt = Date.now();
   const child = spawn(process.execPath, [
     '--import',
@@ -80,7 +84,7 @@ function runShard(shard) {
     detached: process.platform !== 'win32',
     stdio: ['ignore', 'pipe', 'pipe'],
     windowsHide: true,
-    env: { ...process.env, ...shard.env },
+    env: isolation.env,
   });
   child.stdout.pipe(output, { end: false });
   child.stderr.pipe(output, { end: false });
@@ -92,7 +96,10 @@ function runShard(shard) {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
-      output.end(() => resolve(result));
+      output.end(() => {
+        isolation.cleanup();
+        resolve(result);
+      });
     };
     const timer = setTimeout(() => {
       timedOut = true;
@@ -122,7 +129,7 @@ function runShard(shard) {
   });
 }
 
-const results = await runRuntimeE2eShards(shards, runShard);
+const results = await Promise.all(shards.map(runShard));
 let failed = false;
 for (const result of results) {
   const seconds = (result.durationMs / 1000).toFixed(1);
