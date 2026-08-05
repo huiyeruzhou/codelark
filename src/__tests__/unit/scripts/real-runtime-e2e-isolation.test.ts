@@ -8,7 +8,9 @@ import { describe, it } from 'node:test';
 import { createRuntimeShardIsolation } from '../../../../scripts/real-runtime-e2e-isolation.js';
 
 describe('real runtime E2E isolation', () => {
-  it('gives each Unix shard an independent tmux socket directory', () => {
+  it('gives each Unix shard an independent tmux socket directory', {
+    skip: process.platform === 'win32' ? 'Unix socket paths are not valid on Windows' : false,
+  }, () => {
     const baseEnv = { PATH: process.env.PATH, TMUX: '/tmp/shared,1,0', TMUX_TMPDIR: '/tmp/shared' };
     const codex = createRuntimeShardIsolation('codex', { RUNTIME: 'codex' }, baseEnv, 'linux');
     const kimi = createRuntimeShardIsolation('kimi-provider', { RUNTIME: 'kimi' }, baseEnv, 'darwin');
