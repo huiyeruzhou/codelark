@@ -454,6 +454,31 @@ async function ensureKimiTmuxInputKeys(): Promise<void> {
   }
 }
 
+function isMissingTmuxServerError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return /no server running|failed to connect to server|error connecting to .*\(no such file or directory\)/i.test(message);
+}
+
+async function ensureKimiTmuxInputKeysWithRelaunch(
+  sessionName: string,
+  params: StreamChatParams,
+): Promise<boolean> {
+  try {
+    await ensureKimiTmuxInputKeys();
+    return false;
+  } catch (error) {
+    if (!isMissingTmuxServerError(error)) throw error;
+    console.warn('[kimi-tmux] tmux server exited during Kimi startup; relaunching once:', {
+      tmux_session: sessionName,
+      error: error instanceof Error ? error.message : String(error),
+    });
+    await sleep(100);
+    await launchTmuxKimiSession(sessionName, params);
+    await ensureKimiTmuxInputKeys();
+    return true;
+  }
+}
+
 async function waitForKimiSessionIdFromTmux(context: KimiTuiRunContext): Promise<string> {
   const expectedSessionId = context.sessionId;
   transitionRuntimeTmuxInputState(
@@ -643,19 +668,19 @@ export async function ensureKimiTmuxInputSession(
     sessionName,
     hasSession: () => tmuxCore.hasSession(sessionName),
   });
-  const launched = !inspection.exists || options.recreate === true;
+  let launched = !inspection.exists || options.recreate === true;
   const hasPersistedResumeIdentity = Boolean(context.sessionId && context.sessionFilePath);
 
   try {
     if (launched) {
       assertKimiLaunchAuthentication(params.model);
       await launchTmuxKimiSession(sessionName, params);
-      await ensureKimiTmuxInputKeys();
+      launched = (await ensureKimiTmuxInputKeysWithRelaunch(sessionName, params)) || launched;
       if (!hasPersistedResumeIdentity) {
         await waitForKimiSessionIdFromTmux(context);
       }
     } else if (inspection.needsReadiness || !context.sessionId) {
-      await ensureKimiTmuxInputKeys();
+      launched = (await ensureKimiTmuxInputKeysWithRelaunch(sessionName, params)) || launched;
       if (!hasPersistedResumeIdentity) {
         await waitForKimiSessionIdFromTmux(context);
       }
