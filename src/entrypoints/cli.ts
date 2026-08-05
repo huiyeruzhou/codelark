@@ -24,6 +24,7 @@ import {
   installCodexIntegration,
   type UiServerStatus,
   installBridgeAutostart,
+  type ServiceConfigOverrideOptions,
   uninstallBridgeAutostart,
   loadStartupProjection,
   openBrowser,
@@ -310,7 +311,7 @@ export function formatRunSuccessMessage(options: {
   wasUiRunning: boolean;
   wasBridgeRunning: boolean;
 }): string {
-  const uiState = options.wasUiRunning ? '已在运行' : '本次已启动';
+  const uiState = options.wasUiRunning ? '本次已重启' : '本次已启动';
   const bridgeState = options.wasBridgeRunning ? '已在运行' : '本次已启动';
   const uiPid = options.ui.pid ? `，PID ${options.ui.pid}` : '';
   const bridgePid = options.bridge.pid ? `，PID ${options.bridge.pid}` : '';
@@ -332,6 +333,28 @@ export function formatRunSuccessMessage(options: {
 
 export const formatOpenSuccessMessage = formatRunSuccessMessage;
 
+interface UiServerRunLifecycle {
+  stop: typeof stopUiServer;
+  start: typeof ensureUiServerRunning;
+}
+
+export async function launchUiServerForRun(
+  current: UiServerStatus,
+  options: ServiceConfigOverrideOptions,
+  lifecycle: UiServerRunLifecycle = {
+    stop: stopUiServer,
+    start: ensureUiServerRunning,
+  },
+): Promise<UiServerStatus> {
+  if (current.running) {
+    const stopped = await lifecycle.stop();
+    if (stopped.running) {
+      throw new Error(`无法停止已有 UI server${current.pid ? `（PID ${current.pid}）` : ''}，已取消启动新实例。`);
+    }
+  }
+  return lifecycle.start(options);
+}
+
 async function runRunCommand(options: { firstRunSetup: boolean; configOverrides?: ParsedConfigCliOverrides }): Promise<void> {
   if (options.firstRunSetup) {
     await runFirstRunSetupIfNeeded(options.configOverrides?.patch);
@@ -345,10 +368,10 @@ async function runRunCommand(options: { firstRunSetup: boolean; configOverrides?
     status: bridgeBefore,
     interactive: isInteractiveTerminal(),
   });
+  const status = await launchUiServerForRun(uiBefore, { ...serviceOptions, startupProjection });
   if (bridgeAction === 'restart') {
     await stopBridge();
   }
-  const status = await ensureUiServerRunning({ ...serviceOptions, startupProjection });
   const url = getUiServerUrl(status.port);
   openBrowser(url);
   try {
@@ -366,7 +389,7 @@ async function runRunCommand(options: { firstRunSetup: boolean; configOverrides?
     process.stdout.write(
       [
         'CodeLark 工作台已打开，但 Bridge 启动失败。',
-        `UI：正在运行，已确认进程存活（${uiBefore.running ? '已在运行' : '本次已启动'}${status.pid ? `，PID ${status.pid}` : ''}）`,
+        `UI：正在运行，已确认进程存活（${uiBefore.running ? '本次已重启' : '本次已启动'}${status.pid ? `，PID ${status.pid}` : ''}）`,
         `工作台：${url}`,
       ].join('\n') + '\n',
     );

@@ -188,7 +188,7 @@ codelark autostart install
 codelark autostart uninstall
 ```
 
-`install` 和 `uninstall` 需要在管理员 PowerShell / 终端中执行。安装时会要求输入当前 Windows 登录密码，用于创建系统任务计划程序任务。自动启动只拉起 bridge，不会自动打开 Web 工作台；手动再次运行 `codelark` 只会补启动 UI，不会重复启动 bridge。
+`install` 和 `uninstall` 需要在管理员 PowerShell / 终端中执行。安装时会要求输入当前 Windows 登录密码，用于创建系统任务计划程序任务。自动启动只拉起 bridge，不会自动打开 Web 工作台；手动再次运行 `codelark` 会先停止已有 UI server，再从当前安装包启动新的 UI，bridge 仍按现有交互选择复用或重启。
 
 ## 凭据快速验证
 

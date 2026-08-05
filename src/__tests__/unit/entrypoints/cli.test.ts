@@ -13,6 +13,7 @@ import {
   formatRunSuccessMessage,
   formatRunningBridgePrompt,
   isDirectCliRun,
+  launchUiServerForRun,
   parseCliCommand,
   parseCliInvocation,
   resolveRunningBridgeStartAction,
@@ -132,6 +133,59 @@ describe('cli entrypoint', () => {
     assert.match(text, /Bridge：正在运行，已确认进程存活（已在运行，PID 222）/);
     assert.match(text, /工作台：http:\/\/127\.0\.0\.1:17373/);
     assert.match(text, /现在应该可以在飞书\/Lark 里给机器人发消息并看到回复/);
+  });
+
+  it('reports a restarted UI instead of claiming the old process was reused', () => {
+    const text = formatRunSuccessMessage({
+      url: 'http://127.0.0.1:4781',
+      ui: { running: true, pid: 222, port: 4781 },
+      bridge: { running: true, pid: 333 },
+      wasUiRunning: true,
+      wasBridgeRunning: true,
+    });
+
+    assert.match(text, /UI：正在运行，已确认进程存活（本次已重启，PID 222）/);
+    assert.doesNotMatch(text, /UI.*已在运行/);
+  });
+
+  it('restarts an already-running UI before launching the current bundle', async () => {
+    const events: string[] = [];
+    const status = await launchUiServerForRun(
+      { running: true, pid: 111, port: 4781 },
+      {},
+      {
+        stop: async () => {
+          events.push('stop:111');
+          return { running: false, pid: 111, port: 4781 };
+        },
+        start: async () => {
+          events.push('start');
+          return { running: true, pid: 222, port: 4781 };
+        },
+      },
+    );
+
+    assert.deepEqual(events, ['stop:111', 'start']);
+    assert.deepEqual(status, { running: true, pid: 222, port: 4781 });
+  });
+
+  it('does not start a second UI when the old process fails to stop', async () => {
+    let starts = 0;
+    await assert.rejects(
+      launchUiServerForRun(
+        { running: true, pid: 111, port: 4781 },
+        {},
+        {
+          stop: async () => ({ running: true, pid: 111, port: 4781 }),
+          start: async () => {
+            starts += 1;
+            return { running: true, pid: 222, port: 4781 };
+          },
+        },
+      ),
+      /无法停止已有 UI server.*PID 111/,
+    );
+    assert.equal(starts, 0);
   });
 
   it('asks interactive start/run callers whether to restart an already-running Bridge', async () => {

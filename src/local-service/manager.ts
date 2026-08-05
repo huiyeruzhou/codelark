@@ -1110,18 +1110,16 @@ export async function stopUiServer(): Promise<UiServerStatus> {
 
   const startedAt = Date.now();
   while (Date.now() - startedAt < 10_000) {
-    const next = getUiServerStatus();
-    if (!next.running) {
-      writeUiServerStatus({ ...next, running: false });
-      return { ...next, running: false };
+    if (!isProcessAlive(status.pid)) {
+      const next = { ...getUiServerStatus(), running: false };
+      writeUiServerStatus(next);
+      return next;
     }
     await sleep(300);
   }
 
-  const next = getUiServerStatus();
-  if (!next.running) {
-    writeUiServerStatus({ ...next, running: false });
-  }
+  const next = { ...getUiServerStatus(), running: isProcessAlive(status.pid) };
+  writeUiServerStatus(next);
   return next;
 }
 

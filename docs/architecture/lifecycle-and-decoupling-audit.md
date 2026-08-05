@@ -15,7 +15,7 @@ CodeLark 的常见稳态由几个进程或外部运行体组成。
 | 运行体 | 入口 | 生命周期 owner | 主要状态文件 | 职责 |
 | --- | --- | --- | --- | --- |
 | CLI 一次性进程 | `src/entrypoints/cli.ts` | 用户命令 `codelark ...` | 无长期状态 | 执行 `run`、`start`、`status`、`stop`、`setup` 等本地服务管理动作。 |
-| UI server | `src/operator-ui/server.ts` | `src/local-service/manager.ts` 的 `ensureUiServerRunning()` | `~/.codelark/runtime/ui-server.json` | 提供本地工作台页面和 API，默认监听 `4781`，端口被占用时向后探测。 |
+| UI server | `src/operator-ui/server.ts` | CLI 的 `launchUiServerForRun()` 编排 stop/start，manager 执行进程操作 | `~/.codelark/runtime/ui-server.json` | 提供本地工作台页面和 API，默认监听 `4781`；重复运行 `codelark` 时替换旧 UI 进程。 |
 | Bridge daemon | `src/entrypoints/daemon.ts` | `src/local-service/manager.ts` 或 `scripts/daemon.sh` | `~/.codelark/runtime/status.json`、`bridge.pid`、instance lock | 连接 IM 通道、运行消息主循环、协调命令、turn、mirror、权限和 delivery。 |
 | Feishu WebSocket 连接 | `src/channels/feishu/adapter.ts` | Bridge daemon 内的 adapter lifecycle | adapter 内存状态、audit log | 接收飞书事件，转换成 `InboundMessage`，并发送文本、文件、卡片和流式卡片更新。 |
 | Codex SDK/exec 子进程 | `src/runtime/codex/provider.ts` | Bridge daemon 内的 Codex SDK provider | Codex 自有 `~/.codex` 数据 | 通过 Codex SDK/exec 执行 prompt，产出 SSE 风格事件。 |
@@ -24,7 +24,7 @@ CodeLark 的常见稳态由几个进程或外部运行体组成。
 | Claude tmux session | `src/runtime/claude/tmux-provider.ts`、`src/bridge/tmux/*` | tmux server + Bridge daemon 编排 | tmux session、Claude JSONL | 默认 Claude Code provider；在 tmux 中运行 Claude Code TUI，Bridge 通过 tmux CLI 注入输入和捕获屏幕。 |
 | Claude pty child | `src/runtime/claude/pty-provider.ts` | Bridge daemon 内的 Claude pty provider | 内存中的 pty session map、Claude JSONL | 在 pty 中运行 Claude Code，注入 prompt，读取屏幕和 JSONL mirror。 |
 
-`codelark run` 会尝试启动 UI server 和 Bridge daemon；`codelark start` 只启动 Bridge daemon。启动 Bridge 前，`src/local-service/manager.ts` 不再初始化专属 lark-cli 运行环境，也不注入 `LARK_CHANNEL_CONFIG` / `LARKSUITE_CLI_CONFIG_DIR`；唯一的 lark-cli 动作是对全局 `~/.lark-cli` 做一次只读 `auth check` 诊断警告。Linux 下 `scripts/daemon.sh start` 使用 `setsid` 或 `nohup` 启动 `dist/daemon.mjs`，macOS 走 launchctl，Windows 走 PowerShell supervisor；这些入口可能绕过 manager，因此 daemon 自身会在 `main()` 最前面再次应用同一标准环境投影，确保所有启动方式都不会把旧私有 lark-cli 环境传给 runtime。
+`codelark run` 会启动 UI server 和 Bridge daemon；如果 UI 已经运行，则先等待旧 UI 进程退出，再从当前安装包启动新 UI，避免升级后继续复用内存中的旧 bundle。`codelark start` 只启动 Bridge daemon。启动 Bridge 前，`src/local-service/manager.ts` 不再初始化专属 lark-cli 运行环境，也不注入 `LARK_CHANNEL_CONFIG` / `LARKSUITE_CLI_CONFIG_DIR`；唯一的 lark-cli 动作是对全局 `~/.lark-cli` 做一次只读 `auth check` 诊断警告。Linux 下 `scripts/daemon.sh start` 使用 `setsid` 或 `nohup` 启动 `dist/daemon.mjs`，macOS 走 launchctl，Windows 走 PowerShell supervisor；这些入口可能绕过 manager，因此 daemon 自身会在 `main()` 最前面再次应用同一标准环境投影，确保所有启动方式都不会把旧私有 lark-cli 环境传给 runtime。
 
 ## Bridge Daemon 启动生命周期
 
