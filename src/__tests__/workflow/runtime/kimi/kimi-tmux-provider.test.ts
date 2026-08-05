@@ -461,6 +461,64 @@ describe('kimi-tmux-provider workflow', () => {
     }
   });
 
+  it('relaunches a known Kimi session when tmux exits while waiting for input readiness', async () => {
+    const kimiHome = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-kimi-ready-race-home-'));
+    const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-kimi-ready-race-cwd-'));
+    const sessionId = 'session_eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee';
+    createKimiSessionFile({ kimiHome, cwd, sessionId });
+    const ensureCalls: string[] = [];
+    let captureCount = 0;
+    let extendedKeysCalls = 0;
+
+    const restoreTmux = patchTmuxCore({
+      async ensureExtendedKeys() {
+        extendedKeysCalls += 1;
+        return 'tmux set-option -g extended-keys on';
+      },
+      async hasSession(name: string) {
+        return { exists: false, command: `tmux has-session -t ${name}` };
+      },
+      async ensureDetachedSession(params) {
+        ensureCalls.push(Array.isArray(params.command) ? params.command.join(' ') : params.command || '');
+        return { existed: false, command: `tmux new-session -d -s ${params.name}`, commands: [] };
+      },
+      async capturePane(target: string) {
+        captureCount += 1;
+        if (captureCount === 1) {
+          throw new Error('no server running on /tmp/clk-test/tmux/default');
+        }
+        return {
+          screen: 'Kimi Code\nrestored conversation history\n│ > \ncontext: 42% (107k/256k)',
+          command: `tmux capture-pane -t ${target}`,
+        };
+      },
+    });
+
+    try {
+      const prepared = await withEnv({
+        KIMI_CODE_HOME: kimiHome,
+        CODELARK_KIMI_TMUX_INPUT_READY_TIMEOUT_MS: '1000',
+        CODELARK_KIMI_TMUX_POLL_INTERVAL_MS: '50',
+      }, () => restartKimiTmuxInputSession({
+        prompt: '',
+        sessionId: 'bridge-kimi-ready-race-workflow',
+        runtime: 'kimi',
+        kimiSessionId: sessionId,
+        workingDirectory: cwd,
+      }));
+
+      assert.equal(prepared.sessionId, sessionId);
+      assert.equal(ensureCalls.length, 2, 'the vanished tmux server is relaunched once');
+      assert.equal(extendedKeysCalls, 2);
+      assert.equal(captureCount, 2);
+      assert.equal(commandHasArg(ensureCalls[1] || '', '-r'), true);
+    } finally {
+      restoreTmux();
+      fs.rmSync(kimiHome, { recursive: true, force: true });
+      fs.rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+
   it('marks a failed Kimi restart recoverable instead of leaving checking_session behind', async () => {
     const kimiHome = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-kimi-restart-fail-home-'));
     const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-kimi-restart-fail-cwd-'));

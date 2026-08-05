@@ -613,6 +613,36 @@ async function waitForKimiInputReady(
   throw new Error(`Timed out waiting for Kimi Code input readiness${visibleTail ? `: ${visibleTail}` : '.'}`);
 }
 
+async function waitForKimiInputReadyWithRelaunch(
+  context: KimiTuiRunContext,
+  params: StreamChatParams,
+  options: { requireSessionHeader?: boolean } = {},
+): Promise<boolean> {
+  try {
+    await waitForKimiInputReady(context, options);
+    return false;
+  } catch (error) {
+    if (!isMissingTmuxServerError(error)) throw error;
+    console.warn('[kimi-tmux] tmux server exited before Kimi input became ready; relaunching once:', {
+      tmux_session: context.sessionName,
+      error: error instanceof Error ? error.message : String(error),
+    });
+    await sleep(100);
+    await launchTmuxKimiSession(context.sessionName, params);
+    await ensureKimiTmuxInputKeys();
+    context.lastScreen = '';
+    if (!params.kimiSessionId) {
+      context.sessionId = undefined;
+      context.sessionFilePath = undefined;
+      context.nextOffset = 0;
+      await waitForKimiSessionIdFromTmux(context);
+      resolveKimiSessionFileBySessionId(context, true);
+    }
+    await waitForKimiInputReady(context, options);
+    return true;
+  }
+}
+
 export function isKimiWorkspaceTrustPrompt(screenText: string): boolean {
   const normalized = normalizeKimiScreenText(screenText);
   return /Trust this folder/i.test(normalized)
@@ -686,9 +716,9 @@ export async function ensureKimiTmuxInputSession(
     if (!context.sessionId) {
       throw new Error('Kimi tmux input lifecycle did not resolve a session id.');
     }
-    await waitForKimiInputReady(context, {
+    launched = (await waitForKimiInputReadyWithRelaunch(context, params, {
       requireSessionHeader: !hasPersistedResumeIdentity,
-    });
+    })) || launched;
     initializeKimiSessionLogCursor(context);
     transitionRuntimeTmuxInputState(
       'kimi',
