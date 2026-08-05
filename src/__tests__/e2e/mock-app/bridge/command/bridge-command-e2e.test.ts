@@ -19,6 +19,7 @@ import { CodexRoutingProvider } from '../../../../../runtime/codex/routing-provi
 import { findSessionFileByThreadId } from '../../../../../runtime/codex/tmux-provider.js';
 import { computeKimiWorkspaceDirName, isArchivedKimiSession } from '../../../../../runtime/kimi/session-index.js';
 import { _testOnly, registerAdapter } from '../../../../../bridge/host/manager.js';
+import { _testOnlyTmuxCore, createTmuxCliCore } from '../../../../../bridge/tmux/core.js';
 import * as router from '../../../../../bridge/session/channel-router.js';
 import { createMirrorSubscription } from '../../../../../bridge/mirror/subscription-state.js';
 import { listEveryTasks } from '../../../../../bridge/automation/every-tasks.js';
@@ -803,12 +804,14 @@ case "$1" in
 esac
 `, 'utf-8');
   fs.chmodSync(tmuxPath, 0o755);
+  _testOnlyTmuxCore.replace(createTmuxCliCore({ executable: tmuxPath }));
   return { binDir, logPath, statePath };
 }
 
 async function cleanupFakeTmux(fakeTmux: { binDir: string }): Promise<void> {
   await _testOnly.waitForPendingTmuxSelectionPromptProbes();
   _testOnly.resetStateForTests();
+  _testOnlyTmuxCore.reset();
   fs.rmSync(fakeTmux.binDir, { recursive: true, force: true });
 }
 
@@ -2555,13 +2558,13 @@ model = "test-model"
       assert.match(unknownCommandResponse, /未知命令：\/goal/);
       assert.match(unknownCommandResponse, /Agent.*\/\/goal.*\/goal/s);
       const routedLog = fs.readFileSync(fakeTmux.logPath, 'utf-8').slice(beforeRoutingLog.length);
-      assert.match(routedLog, new RegExp(`send-keys -t ${normalTmuxSession} -l 普通消息`));
+      assert.match(routedLog, new RegExp(`paste-buffer -d -p -b clk-paste-[^ ]+ -t ${normalTmuxSession}`));
       assert.doesNotMatch(routedLog, new RegExp(`send-keys -t ${normalTmuxSession} -l /goal 检查权限`));
-      assert.match(routedLog, new RegExp(`send-keys -t ${normalTmuxSession} -l /plan 下一步`));
+      assert.ok((routedLog.match(new RegExp(`paste-buffer -d -p -b clk-paste-[^ ]+ -t ${normalTmuxSession}`, 'g')) || []).length >= 2);
       assert.match(routedLog, new RegExp(`send-keys -t ${normalTmuxSession} -l /compact`));
       assert.ok((routedLog.match(new RegExp(`send-keys -t ${normalTmuxSession} Enter`, 'g')) || []).length >= 3);
       assert.ok(readAuditSummaries().some((summary) => (
-        summary.includes('terminal append input delivered')
+        summary.includes('terminal append tmux input actions completed')
           && summary.includes('runtime=codex')
           && summary.includes('provider=tmux')
       )));
@@ -2767,7 +2770,7 @@ provider = "tmux"
       assert.match(tmuxLog, new RegExp(`send-keys -t ${tmuxSessionName} -l hello claude tmux`));
       assert.match(tmuxLog, new RegExp(`send-keys -t ${tmuxSessionName} Enter`));
       assert.ok(readAuditSummaries().some((summary) => (
-        summary.includes('terminal append input delivered')
+        summary.includes('terminal append tmux input actions completed')
           && summary.includes('runtime=claude')
           && summary.includes('provider=tmux')
       )));
@@ -3847,7 +3850,7 @@ provider = "tmux"
       const newTmuxSession = `codex_${newThreadId}`;
       assert.match(newThreadId, CODEX_THREAD_ID_RE);
       assert.match(firstMessageLog, new RegExp(`new-session -d -s ${newTmuxSession}`));
-      assert.match(firstMessageLog, new RegExp(`send-keys -t ${newTmuxSession} -l 新线程第一条`));
+      assert.match(firstMessageLog, new RegExp(`paste-buffer -d -p -b clk-paste-[^ ]+ -t ${newTmuxSession}`));
       assert.match(firstMessageLog, new RegExp(`send-keys -t ${newTmuxSession} Enter`));
     } finally {
       process.env.PATH = oldPath;
@@ -3928,7 +3931,7 @@ provider = "tmux"
       assert.match(firstMessageLog, new RegExp(`has-session -t ${tmuxSession}`));
       assert.match(firstMessageLog, new RegExp(`new-session -d -s ${tmuxSession}`));
       assert.match(firstMessageLog, new RegExp(`resume ${actualThreadId}`));
-      assert.match(firstMessageLog, new RegExp(`send-keys -t ${tmuxSession} -l 第一条`));
+      assert.match(firstMessageLog, new RegExp(`paste-buffer -d -p -b clk-paste-[^ ]+ -t ${tmuxSession}`));
       assert.match(firstMessageLog, new RegExp(`send-keys -t ${tmuxSession} Enter`));
       assert.doesNotMatch(firstMessageSentText, /tmux Provider 缺少 codex_thread_id|正在后台重新启动 Codex TUI/);
       assert.deepEqual(streamingAdapter.streamEvents.filter((event) => /^provider-tmux:/.test(event.streamKey || '')), []);
@@ -3953,7 +3956,7 @@ provider = "tmux"
       await _testOnly.handleMessage(adapter, inboundMessage(newAddress, '复用中的第二条', 'incoming-tmux-default-reuse-second'));
       const reusableMessageLog = fs.readFileSync(fakeTmux.logPath, 'utf-8').slice(beforeReusableMessageLog.length);
       assert.match(reusableMessageLog, new RegExp(`has-session -t ${tmuxSession}`));
-      assert.match(reusableMessageLog, new RegExp(`send-keys -t ${tmuxSession} -l 复用中的第二条`));
+      assert.match(reusableMessageLog, new RegExp(`paste-buffer -d -p -b clk-paste-[^ ]+ -t ${tmuxSession}`));
       assert.doesNotMatch(reusableMessageLog, /new-session|\bresume\b/, 'a running follow-up must reuse the established Codex tmux');
       assert.deepEqual(
         streamingAdapter.reactions.slice(beforeReusableReactionCount).map((reaction) => reaction.action),
@@ -4006,7 +4009,7 @@ provider = "tmux"
       assert.match(recoveredMessageLog, new RegExp(`has-session -t ${tmuxSession}`));
       assert.match(recoveredMessageLog, new RegExp(`new-session -d -s ${tmuxSession}`));
       assert.match(recoveredMessageLog, new RegExp(`resume ${actualThreadId}`));
-      assert.match(recoveredMessageLog, new RegExp(`send-keys -t ${tmuxSession} -l 第二条`));
+      assert.match(recoveredMessageLog, new RegExp(`paste-buffer -d -p -b clk-paste-[^ ]+ -t ${tmuxSession}`));
       assert.match(recoveredMessageLog, new RegExp(`send-keys -t ${tmuxSession} Enter`));
       assert.deepEqual(streamingAdapter.reactions.slice(beforeSecondReactionCount).map((reaction) => reaction.action), ['add']);
       assert.equal(streamingAdapter.reactions.at(-1)?.emojiType, 'Get');
@@ -4156,11 +4159,11 @@ provider = "tmux"
       const beforePromptReactionCount = adapter.reactions.length;
       handlePromise = _testOnly.handleMessage(adapter, inboundMessage(newAddress, '慢表情不该挡住发送', 'incoming-tmux-slow-reaction-first'));
       await waitForCondition(() => adapter.addStarted, 15_000);
-      assert.match(adapter.tmuxLogAtAddStart.slice(beforeMessageLog.length), /send-keys -t .* -l 慢表情不该挡住发送/);
+      assert.match(adapter.tmuxLogAtAddStart.slice(beforeMessageLog.length), /paste-buffer -d -p -b clk-paste-.* -t /);
       assert.match(adapter.tmuxLogAtAddStart.slice(beforeMessageLog.length), /send-keys -t .* Enter/);
       assert.equal(adapter.requestedEmojiType, 'Get');
       const messageLog = fs.readFileSync(fakeTmux.logPath, 'utf-8').slice(beforeMessageLog.length);
-      assert.match(messageLog, /send-keys -t .* -l 慢表情不该挡住发送/);
+      assert.match(messageLog, /paste-buffer -d -p -b clk-paste-.* -t /);
       assert.match(messageLog, /send-keys -t .* Enter/);
       assert.equal(adapter.reactions.length, beforePromptReactionCount);
       await handlePromise;

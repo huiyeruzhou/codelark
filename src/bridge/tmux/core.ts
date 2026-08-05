@@ -39,6 +39,11 @@ export interface TmuxSendActionsResult {
   commands: string[];
 }
 
+export interface TmuxSendActionsOptions {
+  delayMs?: number;
+  forcePasteLiterals?: boolean;
+}
+
 export interface TmuxEnsureSessionResult {
   existed: boolean;
   command?: string;
@@ -58,7 +63,7 @@ export interface TmuxCore {
   listSessions(): Promise<TmuxListSessionsResult>;
   ensureDetachedSession(params: TmuxStartDetachedSessionParams): Promise<TmuxEnsureSessionResult>;
   capturePane(target: string, lines: number): Promise<TmuxCapturePaneResult>;
-  sendActions(target: string, actions: TmuxSendAction[], options?: { delayMs?: number }): Promise<TmuxSendActionsResult>;
+  sendActions(target: string, actions: TmuxSendAction[], options?: TmuxSendActionsOptions): Promise<TmuxSendActionsResult>;
   sendInterrupt(target: string): Promise<string>;
   injectPromptIntoPane(targetPane: string, prompt: string): Promise<TmuxSendActionsResult>;
   /** Enable tmux's extended key protocol for TUIs that distinguish Enter from newline. */
@@ -369,11 +374,14 @@ class TmuxCliCore implements TmuxCore {
   async sendActions(
     target: string,
     actions: TmuxSendAction[],
-    options: { delayMs?: number } = {},
+    options: TmuxSendActionsOptions = {},
   ): Promise<TmuxSendActionsResult> {
     const commands: string[] = [];
     for (const [index, action] of actions.entries()) {
-      if (action.type === 'literal' && Array.from(action.text).length > PASTE_LITERAL_THRESHOLD) {
+      if (
+        action.type === 'literal'
+        && (options.forcePasteLiterals === true || Array.from(action.text).length > PASTE_LITERAL_THRESHOLD)
+      ) {
         commands.push(...(await this.pasteLiteralChunks(target, action.text)));
       } else {
         const args = tmuxSendActionArgv(target, action);

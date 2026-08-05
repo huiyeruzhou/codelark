@@ -123,6 +123,36 @@ process.exit(1);
     }
   });
 
+  it('uses bracketed paste for a medium literal when the caller requires reliable TUI input', async () => {
+    const fakeTmux = installFakeTmux();
+    const oldFakeLog = process.env.TMUX_FAKE_LOG;
+    process.env.TMUX_FAKE_LOG = fakeTmux.logPath;
+    const prompt = [
+      '我想和你讨论庄子为什么在尧见四子之前插入宋人卖章甫的故事。',
+      '',
+      '请结合无用之用、真知视野和小大之辩分析这一段。'.repeat(6),
+    ].join('\n');
+
+    try {
+      assert.ok(Array.from(prompt).length < 512);
+      const result = await fakeTmux.core.sendActions(
+        'codex-medium-prompt',
+        [{ type: 'literal', text: prompt }, { type: 'key', key: 'Enter' }],
+        { delayMs: 0, forcePasteLiterals: true },
+      );
+
+      assert.match(result.commands.join('\n'), /tmux load-buffer -b clk-paste-/);
+      assert.match(result.commands.join('\n'), /tmux paste-buffer -d -p -b clk-paste-/);
+      assert.match(result.commands.join('\n'), /tmux send-keys -t codex-medium-prompt End/);
+      assert.match(result.commands.join('\n'), /tmux send-keys -t codex-medium-prompt Enter/);
+      assert.doesNotMatch(result.commands.join('\n'), /send-keys -t codex-medium-prompt -l/);
+    } finally {
+      if (oldFakeLog === undefined) delete process.env.TMUX_FAKE_LOG;
+      else process.env.TMUX_FAKE_LOG = oldFakeLog;
+      fs.rmSync(fakeTmux.binDir, { recursive: true, force: true });
+    }
+  });
+
   it('captures only the extra history needed for the requested final screen lines', async () => {
     const fakeTmux = installFakeTmux();
     const oldFakeLog = process.env.TMUX_FAKE_LOG;

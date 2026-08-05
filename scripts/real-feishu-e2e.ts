@@ -4456,7 +4456,7 @@ function basicDialogueAppendInputAuditIssues(report: ReturnType<typeof latestDum
     .map((providerKey) => {
       const { runtime, provider } = parseRuntimeProviderKey(providerKey);
       const required = [
-        'terminal append input delivered',
+        'terminal append tmux input actions completed',
         `runtime=${runtime}`,
         `provider=${provider}`,
       ];

@@ -369,7 +369,7 @@ function tmuxSelectionUpdateExitProbeDelayMs(): number {
 function addInboundGetReaction(
   adapter: BaseChannelAdapter,
   msg: InboundMessage,
-  reason: 'command_received' | 'tmux_prompt_delivered',
+  reason: 'command_received' | 'tmux_input_actions_completed',
 ): void {
   if (!msg.messageId || typeof adapter.addMessageReaction !== 'function') return;
   void adapter.addMessageReaction(msg.messageId, INBOUND_GET_REACTION).catch((error) => {
@@ -1301,7 +1301,10 @@ async function recoverTmuxProviderAutoForwardFromSelectionCallback(
     await sendRuntimeTmuxInput({
       runtime: 'codex',
       sessionName,
-      send: () => tmuxCore.sendActions(recovery.target, recovery.actions),
+      send: () => tmuxCore.sendActions(recovery.target, recovery.actions, {
+        delayMs: 500,
+        forcePasteLiterals: true,
+      }),
     });
     console.log('[bridge-manager] Recovered tmux provider auto-forward from Codex TUI selection callback:', {
       permission_request_id: claim.permissionRequestId,
@@ -4694,14 +4697,14 @@ async function handleMessage(
         await handleCommand(adapter, msg, `/tmux ${text}`, {
           tmuxProviderAutoForward: true,
           onTmuxProviderAutoForwarded: () => {
-            // Get means the prompt has been submitted to tmux. Adding it is a
-            // detached acknowledgement and never delays the message lane.
-            addInboundGetReaction(adapter, msg, 'tmux_prompt_delivered');
+            // Get means the tmux input actions completed. It does not claim the
+            // TUI has created a turn. Adding it is detached from the message lane.
+            addInboundGetReaction(adapter, msg, 'tmux_input_actions_completed');
           },
         });
         const tmuxProviderCommandDurationMs = Date.now() - tmuxProviderCommandStartedAtMs;
-        console.log('[bridge-manager] tmux provider auto-forward command delivered:', {
-          event: 'tmux.provider.auto_forward.delivered',
+        console.log('[bridge-manager] tmux provider auto-forward input actions completed:', {
+          event: 'tmux.provider.auto_forward.input_actions_completed',
           session_id: tmuxProviderBridgeSessionId,
           message_id: msg.messageId,
           duration_ms: tmuxProviderCommandDurationMs,
@@ -4742,7 +4745,7 @@ async function handleMessage(
           direction: 'inbound',
           messageId: msg.messageId,
           summary: [
-            'terminal append input delivered',
+            'terminal append tmux input actions completed',
             `runtime=${tmuxProviderRuntime.runtime}`,
             'provider=tmux',
             `session=${tmuxProviderBinding?.bridgeSessionId || ''}`,

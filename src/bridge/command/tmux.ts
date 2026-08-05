@@ -225,16 +225,19 @@ export const _testOnlyTmuxScreenMonitors = {
 function buildTmuxCommandPreview(commands: string[], markdown: boolean): string {
   const normalized = commands.map((command) => command.trim()).filter(Boolean);
   if (normalized.length === 0) return '';
-  const hasRealTmuxCommand = normalized.some((command) => command.startsWith('tmux '));
   if (markdown) {
     return [
       '**真实 tmux 底层命令**',
       '',
-      hasRealTmuxCommand ? buildFencedCodeBlock(normalized.join('\n'), 'sh') : normalized.join('\n'),
+      buildFencedCodeBlock(normalized.join('\n'), 'sh'),
     ].join('\n').trim();
   }
   return ['真实 tmux 底层命令', '', ...normalized].join('\n').trim();
 }
+
+export const _testOnlyTmuxCommandFormatting = {
+  buildCommandPreview: buildTmuxCommandPreview,
+};
 
 function appendTmuxCommandPreview(response: string, commands: string[], markdown: boolean): string {
   const preview = buildTmuxCommandPreview(commands, markdown);
@@ -1350,7 +1353,10 @@ export async function handleTmuxBridgeCommand(params: HandleTmuxBridgeCommandPar
           await sendRuntimeTmuxInput({
             runtime: runtimeProvider.runtime,
             sessionName: target,
-            send: () => sendTmuxActions(target, actionsToSend, { delayMs: SEND_ACTION_DELAY_MS }),
+            send: () => sendTmuxActions(target, actionsToSend, {
+              delayMs: SEND_ACTION_DELAY_MS,
+              forcePasteLiterals: runtimeProvider.runtime === 'codex' && !keySequenceActions,
+            }),
           });
         } else {
           await sendTmuxActions(target, actionsToSend, { delayMs: SEND_ACTION_DELAY_MS });

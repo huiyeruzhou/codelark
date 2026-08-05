@@ -32,7 +32,10 @@ import { processMessage } from '../../../../bridge/turn/interactive/sdk-conversa
 import { consumeSseEvents } from '../../../../runtime/sse-stream-decoder.js';
 import { CodexRoutingProvider } from '../../../../runtime/codex/routing-provider.js';
 import { _testOnlyCodexThreadBootstrap } from '../../../../runtime/codex/thread-bootstrap.js';
-import { _testOnlyTmuxScreenMonitors } from '../../../../bridge/command/tmux.js';
+import {
+  _testOnlyTmuxCommandFormatting,
+  _testOnlyTmuxScreenMonitors,
+} from '../../../../bridge/command/tmux.js';
 import { _testOnlyTmuxCore, createTmuxCliCore } from '../../../../bridge/tmux/core.js';
 import {
   getRuntimeTmuxInputState,
@@ -592,6 +595,45 @@ function installFakeTmux(): { binDir: string; logPath: string } {
 	    fi
 	    exit 0
 	    ;;
+  load-buffer)
+    buffer_name=''
+    previous=''
+    for arg in "$@"; do
+      if [[ "$previous" == "-b" ]]; then
+        buffer_name="$arg"
+        break
+      fi
+      previous="$arg"
+    done
+    safe_buffer="$(safe_name "$buffer_name")"
+    cat > "$TMUX_FAKE_LOG.buffer.$safe_buffer"
+    exit 0
+    ;;
+  paste-buffer)
+    buffer_name=''
+    target=''
+    delete_buffer=0
+    previous=''
+    for arg in "$@"; do
+      if [[ "$previous" == "-b" ]]; then
+        buffer_name="$arg"
+      elif [[ "$previous" == "-t" ]]; then
+        target="$arg"
+      elif [[ "$arg" == "-d" ]]; then
+        delete_buffer=1
+      fi
+      previous="$arg"
+    done
+    safe_buffer="$(safe_name "$buffer_name")"
+    buffer_file="$TMUX_FAKE_LOG.buffer.$safe_buffer"
+    if [[ -n "$fake_codex_control" && -f "$buffer_file" ]]; then
+      "$fake_codex_control" __codelark_fake_tui send-literal "$target" "$(cat "$buffer_file")" >/dev/null 2>&1 || true
+    fi
+    if [[ "$delete_buffer" == "1" ]]; then
+      rm -f "$buffer_file"
+    fi
+    exit 0
+    ;;
   send-keys)
     target=''
     previous=''
@@ -9279,6 +9321,18 @@ enabled = true
     assert.match(String(sent.at(-1)?.text || ''), /已发送确认卡片/);
   });
 
+  it('fences absolute tmux executable commands independently from the captured screen block', () => {
+    const preview = _testOnlyTmuxCommandFormatting.buildCommandPreview([
+      '/usr/bin/tmux has-session -t alpha',
+      "/usr/bin/tmux display-message -p -t alpha '#{pane_height}'",
+      '/usr/bin/tmux capture-pane -t alpha -p -S -20',
+    ], true);
+
+    assert.match(preview, /^\*\*真实 tmux 底层命令\*\*\n\n```sh\n/);
+    assert.match(preview, /\/usr\/bin\/tmux capture-pane -t alpha -p -S -20\n```$/);
+    assert.equal((preview.match(/```/g) || []).length, 2);
+  });
+
   it('reports tmux selection prompts through shared attach and screen inspection', async () => {
     initTestContext();
     const fakeTmux = installFakeTmux();
@@ -9529,10 +9583,10 @@ enabled = true
       assert.equal(sent.length, beforeProviderForwardSent);
       const providerForwardLogDelta = fs.readFileSync(fakeTmux.logPath, 'utf-8').slice(beforeProviderForwardLog.length);
       assert.match(providerForwardLogDelta, /capture-pane -t alpha -p -S -80/);
-      assert.match(providerForwardLogDelta, /send-keys -t alpha -l provider hidden/);
+      assert.match(providerForwardLogDelta, /paste-buffer -d -p -b clk-paste-.* -t alpha/);
       assert.match(providerForwardLogDelta, /send-keys -t alpha Enter/);
       assert.ok(
-        providerForwardLogDelta.indexOf('capture-pane -t alpha -p -S -80') < providerForwardLogDelta.indexOf('send-keys -t alpha -l provider hidden'),
+        providerForwardLogDelta.indexOf('capture-pane -t alpha -p -S -80') < providerForwardLogDelta.indexOf('paste-buffer -d -p -b clk-paste-'),
         'provider auto-forward should inspect readiness before sending literal input',
       );
 
@@ -9984,7 +10038,9 @@ enabled = true
       assert.equal(sent.length, beforeProviderForwardSent);
       assert.deepEqual(streamEvents.filter((event) => /^provider-tmux:/.test(event.streamKey || '')), []);
       const providerForwardLogDelta = fs.readFileSync(fakeTmux.logPath, 'utf-8').slice(beforeProviderForwardLog.length);
-      assert.match(providerForwardLogDelta, /send-keys -t alpha -l provider running/);
+      assert.match(providerForwardLogDelta, /load-buffer -b clk-paste-/);
+      assert.match(providerForwardLogDelta, /paste-buffer -d -p -b clk-paste-.* -t alpha/);
+      assert.doesNotMatch(providerForwardLogDelta, /send-keys -t alpha -l provider running/);
       assert.match(providerForwardLogDelta, /send-keys -t alpha Enter/);
       assert.doesNotMatch(providerForwardLogDelta, /capture-pane/);
     } finally {
@@ -10464,7 +10520,7 @@ enabled = true
       assert.match(log, new RegExp(`new-session -d -s ${tmuxSession}`));
       assert.equal((log.match(new RegExp(`send-keys -t ${tmuxSession} Down`, 'g')) || []).length, 2);
       assert.match(log, new RegExp(`send-keys -t ${tmuxSession} Enter`));
-      assert.match(log, new RegExp(`send-keys -t ${tmuxSession} -l first forwarded message`));
+      assert.match(log, new RegExp(`paste-buffer -d -p -b clk-paste-[^ ]+ -t ${tmuxSession}`));
     } finally {
       restoreProcessEnv(oldEnv);
       fs.rmSync(fakeTmux.binDir, { recursive: true, force: true });
@@ -10540,13 +10596,13 @@ enabled = true
       const captureIndexes = captureMatches.map((match) => match.index ?? -1);
       const firstCaptureIndex = captureIndexes[0] ?? -1;
       const readyCaptureIndex = captureIndexes.at(-1) ?? -1;
-      const literalIndex = log.indexOf(`send-keys -t ${tmuxSession} -l delayed startup message`);
-      const enterIndex = log.indexOf(`send-keys -t ${tmuxSession} Enter`, literalIndex);
+      const pasteIndex = log.indexOf('paste-buffer -d -p -b clk-paste-');
+      const enterIndex = log.indexOf(`send-keys -t ${tmuxSession} Enter`, pasteIndex);
       assert.ok(newSessionIndex >= 0, 'CodeLark should create a tmux session for the existing Codex thread');
       assert.equal(captureIndexes.length, 3, 'readiness should keep polling while fake Codex is starting');
       assert.ok(firstCaptureIndex > newSessionIndex, 'readiness should capture the fake Codex TUI screen after startup');
-      assert.ok(literalIndex > readyCaptureIndex, 'triggering input should not be forwarded until fake Codex becomes ready');
-      assert.ok(enterIndex > literalIndex, 'triggering input should keep the tmux provider auto-enter behavior');
+      assert.ok(pasteIndex > readyCaptureIndex, 'triggering input should not be forwarded until fake Codex becomes ready');
+      assert.ok(enterIndex > pasteIndex, 'triggering input should keep the tmux provider auto-enter behavior');
 
       const codexLog = fs.readFileSync(fakeCodex.logPath, 'utf-8');
       assert.match(codexLog, new RegExp(`resume ${threadId}`));
@@ -10660,10 +10716,10 @@ enabled = true
       assert.equal((log.match(new RegExp(`new-session -d -s ${tmuxSession}`, 'g')) || []).length, 2);
       const updateEnterIndex = log.indexOf(`send-keys -t ${tmuxSession} Enter`);
       const secondLaunchIndex = log.indexOf(`new-session -d -s ${tmuxSession}`, log.indexOf(`new-session -d -s ${tmuxSession}`) + 1);
-      const literalIndex = log.indexOf(`send-keys -t ${tmuxSession} -l forwarded after update now`);
+      const pasteIndex = log.indexOf('paste-buffer -d -p -b clk-paste-');
       assert.ok(updateEnterIndex >= 0, 'update_now should be confirmed with Enter');
       assert.ok(secondLaunchIndex > updateEnterIndex, 'CodeLark should relaunch Codex after update_now exits');
-      assert.ok(literalIndex > secondLaunchIndex, 'auto-forwarded literal should be sent only after relaunch readiness');
+      assert.ok(pasteIndex > secondLaunchIndex, 'auto-forwarded prompt should be pasted only after relaunch readiness');
       const codexLog = fs.readFileSync(fakeCodex.logPath, 'utf-8');
       assert.equal((codexLog.match(new RegExp(`resume ${threadId}`, 'g')) || []).length, 2);
       assert.match(codexLog, new RegExp(`__codelark_fake_tui send-key ${tmuxSession} Enter`));
@@ -10775,13 +10831,13 @@ enabled = true
       const firstDownIndex = log.indexOf(`send-keys -t ${tmuxSession} Down`);
       const enterIndex = log.indexOf(`send-keys -t ${tmuxSession} Enter`, firstDownIndex);
       const readyCaptureIndex = log.indexOf(`capture-pane -t ${tmuxSession} -p -S -80`, firstCaptureIndex + 1);
-      const literalIndex = log.indexOf(`send-keys -t ${tmuxSession} -l orphan recovered message`);
+      const pasteIndex = log.indexOf('paste-buffer -d -p -b clk-paste-');
       assert.ok(firstCaptureIndex >= 0, 'orphan callback recovery should inspect the current selection prompt');
       assert.equal((log.match(new RegExp(`send-keys -t ${tmuxSession} Down`, 'g')) || []).length, 2);
       assert.ok(firstDownIndex > firstCaptureIndex, 'selection choice should be sent after prompt capture');
       assert.ok(enterIndex > firstDownIndex, 'selection should be confirmed before readiness wait');
       assert.ok(readyCaptureIndex > enterIndex, 'recovery should wait for the TUI to become ready');
-      assert.ok(literalIndex > readyCaptureIndex, 'original auto-forward input should be sent after readiness returns');
+      assert.ok(pasteIndex > readyCaptureIndex, 'original auto-forward input should be sent after readiness returns');
       assert.match(sent.at(-1)?.text || '', /已继续转发原始消息/);
     } finally {
       restoreProcessEnv(oldEnv);
@@ -10966,11 +11022,11 @@ enabled = true
       const firstCaptureIndex = log.indexOf(`capture-pane -t ${tmuxSession} -p -S -80`);
       const downIndex = log.indexOf(`send-keys -t ${tmuxSession} Down`);
       const enterIndex = log.indexOf(`send-keys -t ${tmuxSession} Enter`, downIndex);
-      const literalIndex = log.indexOf(`send-keys -t ${tmuxSession} -l forwarded after permission`);
+      const pasteIndex = log.indexOf('paste-buffer -d -p -b clk-paste-');
       assert.ok(firstCaptureIndex >= 0, 'auto-forward startup should capture readiness before sending input');
       assert.ok(downIndex > firstCaptureIndex, 'permission choice should be sent after the readiness capture');
       assert.ok(enterIndex > downIndex, 'permission selection should be confirmed before forwarding input');
-      assert.ok(literalIndex > enterIndex, 'auto-forwarded literal should be sent after the permission selection is resolved');
+      assert.ok(pasteIndex > enterIndex, 'auto-forwarded prompt should be pasted after the permission selection is resolved');
 
       const codexLog = fs.readFileSync(fakeCodex.logPath, 'utf-8');
       const codexCaptureIndex = codexLog.indexOf(`__codelark_fake_tui capture ${tmuxSession}`);
@@ -11075,13 +11131,13 @@ enabled = true
       const firstCaptureIndex = log.indexOf(`capture-pane -t ${tmuxSession} -p -S -80`);
       const firstDownIndex = log.indexOf(`send-keys -t ${tmuxSession} Down`);
       const enterIndex = log.indexOf(`send-keys -t ${tmuxSession} Enter`, firstDownIndex);
-      const literalIndex = log.indexOf(`send-keys -t ${tmuxSession} -l existing forwarded message`);
+      const pasteIndex = log.indexOf('paste-buffer -d -p -b clk-paste-');
       assert.ok(hasSessionIndex >= 0, 'existing tmux session should be checked');
       assert.ok(firstCaptureIndex > hasSessionIndex, 'existing provider auto-forward should capture before sending input');
       assert.equal((log.match(new RegExp(`send-keys -t ${tmuxSession} Down`, 'g')) || []).length, 2);
       assert.ok(firstDownIndex > firstCaptureIndex, 'selection choice should be sent after the readiness capture');
       assert.ok(enterIndex > firstDownIndex, 'selection should be confirmed before forwarding input');
-      assert.ok(literalIndex > enterIndex, 'auto-forwarded literal should be sent after the selection is resolved');
+      assert.ok(pasteIndex > enterIndex, 'auto-forwarded prompt should be pasted after the selection is resolved');
     } finally {
       restoreProcessEnv(oldEnv);
       fs.rmSync(fakeTmux.binDir, { recursive: true, force: true });
@@ -11161,10 +11217,10 @@ enabled = true
       const log = fs.readFileSync(fakeTmux.logPath, 'utf-8');
       const hasSessionIndex = log.indexOf(`has-session -t ${tmuxSession}`);
       const captureIndex = log.indexOf(`capture-pane -t ${tmuxSession} -p -S -80`);
-      const literalIndex = log.indexOf(`send-keys -t ${tmuxSession} -l follow up while working`);
+      const pasteIndex = log.indexOf('paste-buffer -d -p -b clk-paste-');
       assert.ok(hasSessionIndex >= 0, 'existing tmux session should be checked');
       assert.ok(captureIndex > hasSessionIndex, 'readiness should inspect the existing Codex screen');
-      assert.ok(literalIndex > captureIndex, 'follow-up input should be forwarded after the working screen is accepted as ready');
+      assert.ok(pasteIndex > captureIndex, 'follow-up input should be forwarded after the working screen is accepted as ready');
       assert.doesNotMatch(log, new RegExp(`send-keys -t ${tmuxSession} Down`));
 
       await handleBridgeCommand(
@@ -11184,7 +11240,7 @@ enabled = true
         1,
         'running state should skip cursor/prompt readiness capture on subsequent input',
       );
-      assert.match(secondLog, new RegExp(`send-keys -t ${tmuxSession} -l second follow up`));
+      assert.match(secondLog, new RegExp(`paste-buffer -d -p -b clk-paste-[^ ]+ -t ${tmuxSession}`));
     } finally {
       restoreProcessEnv(oldEnv);
       fs.rmSync(fakeTmux.binDir, { recursive: true, force: true });
@@ -11384,7 +11440,7 @@ enabled = true
       assert.match(tmuxLog, new RegExp(`new-session -d -s ${tmuxSession}`));
       assert.equal((tmuxLog.match(new RegExp(`send-keys -t ${tmuxSession} Down`, 'g')) || []).length, 2);
       assert.match(tmuxLog, new RegExp(`send-keys -t ${tmuxSession} Enter`));
-      assert.match(tmuxLog, new RegExp(`send-keys -t ${tmuxSession} -l first message needs bootstrap`));
+      assert.match(tmuxLog, new RegExp(`paste-buffer -d -p -b clk-paste-[^ ]+ -t ${tmuxSession}`));
 
       const codexLog = fs.readFileSync(fakeCodex.logPath, 'utf-8');
       assert.match(codexLog, /exec --json/);

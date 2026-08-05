@@ -41,6 +41,29 @@ function createLongPrompt(): string {
   return `clk-long-prompt-start ${words.join(' ')} clk-long-prompt-end`;
 }
 
+function createMediumMultilinePrompt(): string {
+  return [
+    'clk-medium-cjk-start 我想和你讨论《庄子·逍遥游》中宋人卖章甫的故事。',
+    '',
+    '请结合无用之用、真知视野与小大之辩，说明它为什么出现在尧见四子之前。'.repeat(7),
+    'clk-medium-cjk-end',
+  ].join('\n');
+}
+
+function hasCompletedTurnForMarker(filePath: string, marker: string): boolean {
+  if (!filePath || !fs.existsSync(filePath)) return false;
+  const lines = fs.readFileSync(filePath, 'utf-8').split(/\r?\n/u).filter(Boolean);
+  const userMessageIndex = lines.findIndex((line) => line.includes('"type":"user_message"') && line.includes(marker));
+  return userMessageIndex >= 0 && lines.slice(userMessageIndex + 1).some((line) => line.includes('"type":"task_complete"'));
+}
+
+function requestBodyContainsText(value: unknown, expected: string): boolean {
+  if (typeof value === 'string') return value.includes(expected);
+  if (Array.isArray(value)) return value.some((item) => requestBodyContainsText(item, expected));
+  if (!value || typeof value !== 'object') return false;
+  return Object.values(value).some((item) => requestBodyContainsText(item, expected));
+}
+
 function responseRequestModels(requests: Array<{ body: unknown }>): string[] {
   return [...new Set(requests
     .map((request) => {
@@ -753,7 +776,7 @@ describe('real codex tmux provider e2e', () => {
     }
   });
 
-  it('submits a complete multi-thousand-character prompt through real tmux and Codex', { timeout: 120_000 }, async (t: TestContext) => {
+  it('submits complete medium multiline CJK and multi-thousand-character prompts through real tmux and Codex', { timeout: 120_000 }, async (t: TestContext) => {
     if (!(await commandAvailable('tmux', ['-V']))) {
       t.skip('tmux is not available');
       return;
@@ -803,20 +826,23 @@ describe('real codex tmux provider e2e', () => {
     registerAdapter(adapter);
     (globalThis as unknown as Record<string, any>).__bridge_manager__.running = true;
     const address = { channelType: 'feishu', chatId: `chat-real-tmux-long-${process.pid}-${Date.now()}` } as const;
+    const mediumPrompt = createMediumMultilinePrompt();
     const longPrompt = createLongPrompt();
     let tmuxSessionName = '';
     let generatedThreadId = '';
     let generatedThreadFilePath = '';
 
     try {
+      assert.ok(Array.from(mediumPrompt).length > 256, 'medium prompt should exercise paste-burst-sensitive input');
+      assert.ok(Array.from(mediumPrompt).length < 512, 'medium prompt should remain below the automatic large-paste threshold');
       assert.ok(longPrompt.length > 8_000, 'test prompt should be several thousand characters');
 
       await _testOnly.handleMessage(adapter, inboundMessage(address, `/clear real-tmux-long ${workDir}`, 'incoming-real-long-new'));
       await _testOnly.handleMessage(adapter, inboundMessage(address, '/provider tmux', 'incoming-real-long-provider'));
       await new Promise((resolve) => setTimeout(resolve, 1_500));
-      const longTurn = _testOnly.handleMessage(adapter, inboundMessage(address, longPrompt, 'incoming-real-long-prompt'));
+      const mediumTurn = _testOnly.handleMessage(adapter, inboundMessage(address, mediumPrompt, 'incoming-real-medium-prompt'));
       await approveTrustPermission(adapter, store, address, { required: false, timeoutMs: 3_000 });
-      await longTurn;
+      await mediumTurn;
 
       const binding = store.getChannelChat(address.channelType, address.chatId);
       assert.ok(binding);
@@ -826,6 +852,36 @@ describe('real codex tmux provider e2e', () => {
       assert.match(generatedThreadId, /^[0-9a-f-]{20,}$/i);
       assert.equal(tmuxSessionName, `codex_${generatedThreadId}`);
       generatedThreadFilePath = getCodexSessionByThreadIdSafe(generatedThreadId, 'real tmux long prompt cleanup lookup')?.filePath || '';
+
+      const sawCompleteMediumPrompt = await waitForCondition(
+        () => proxy.requests.some((request) => (
+          request.url.includes('/responses') && requestBodyContainsText(request.body, mediumPrompt)
+        )),
+        30_000,
+        250,
+      );
+      if (!sawCompleteMediumPrompt) {
+        const capture = tmuxSessionName
+          ? await execFileAsync('tmux', ['capture-pane', '-t', tmuxSessionName, '-p', '-S', '-80']).catch((error) => ({ stdout: String(error), stderr: '' }))
+          : { stdout: '', stderr: '' };
+        const responseBodies = proxy.requests
+          .filter((request) => request.url.includes('/responses'))
+          .map((request) => request.rawBody.slice(-2_000));
+        assert.fail([
+          'real Codex request should contain the complete medium multiline CJK prompt',
+          `responses requests: ${responseBodies.length}`,
+          `response bodies: ${responseBodies.join('\n---\n')}`,
+          `screen: ${capture.stdout.slice(-2_000)}`,
+        ].join('\n'));
+      }
+      const mediumTurnCompleted = await waitForCondition(
+        () => hasCompletedTurnForMarker(generatedThreadFilePath, 'clk-medium-cjk-start'),
+        30_000,
+        250,
+      );
+      assert.equal(mediumTurnCompleted, true, 'medium multiline CJK turn should complete before the long prompt is sent');
+
+      await _testOnly.handleMessage(adapter, inboundMessage(address, longPrompt, 'incoming-real-long-prompt'));
 
       const sawCompletePrompt = await waitForCondition(
         () => proxy.requests.some((request) => request.url.includes('/responses') && request.rawBody.includes(longPrompt)),

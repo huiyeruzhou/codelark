@@ -35,6 +35,7 @@ import {
   tmuxCore,
   type TmuxCore,
   type TmuxSendAction,
+  type TmuxSendActionsOptions,
 } from './core.js';
 import {
   coordinateRuntimeTmuxSelection,
@@ -1334,7 +1335,7 @@ export async function sendTmuxActionsAndCapture(
 export async function sendTmuxActions(
   target: string,
   actions: TmuxSendAction[],
-  options: { delayMs?: number } = {},
+  options: TmuxSendActionsOptions = {},
   core: TmuxCore = tmuxCore,
 ) {
   return core.sendActions(target, actions, options);
