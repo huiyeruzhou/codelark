@@ -34,6 +34,7 @@ const DEFAULT_KIMI_OUTPUT_IDLE_TIMEOUT_MS = 120_000;
 const DEFAULT_KIMI_PROMPT_DELAY_MS = 0;
 const DEFAULT_KIMI_SESSION_ID_TIMEOUT_MS = 30_000;
 const DEFAULT_KIMI_INPUT_READY_TIMEOUT_MS = 30_000;
+const DEFAULT_KIMI_STEER_DELAY_MS = 500;
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -497,11 +498,22 @@ async function waitForKimiSessionIdFromTmux(context: KimiTuiRunContext): Promise
     DEFAULT_KIMI_POLL_INTERVAL_MS,
     50,
   );
-  const startedAtMs = Date.now();
-  while (Date.now() - startedAtMs <= timeoutMs) {
+  let deadline = Date.now() + timeoutMs;
+  let lastTrustActionAt = 0;
+  while (Date.now() <= deadline) {
     const capture = await tmuxCore.capturePane(context.targetPane, 160);
     context.lastScreen = capture.screen;
     assertKimiPaneAlive(capture.screen);
+    if (isKimiWorkspaceTrustPrompt(capture.screen)) {
+      if (Date.now() - lastTrustActionAt >= 250) {
+        await tmuxCore.sendActions(context.targetPane, [{ type: 'key', key: 'Enter' }]);
+        lastTrustActionAt = Date.now();
+        deadline = lastTrustActionAt + timeoutMs;
+        console.log('[kimi-tmux] Confirmed Kimi workspace trust prompt before session id:', context.targetPane);
+      }
+      await sleep(pollIntervalMs);
+      continue;
+    }
     const parsed = parseKimiActiveSessionIdFromScreen(capture.screen);
     if (parsed) {
       if (expectedSessionId && parsed !== expectedSessionId) {
@@ -811,9 +823,16 @@ export function streamKimiTmuxTui(params: StreamChatParams): ReadableStream<stri
             send: async () => {
               // Enter queues or starts the prompt. Ctrl-S then upgrades a queued
               // prompt to Kimi's mid-turn steer semantics; it is a no-op when
-              // the prompt already started from an idle editor.
+              // the prompt already started from an idle editor. Leave enough
+              // time for slower TUI event loops to process Enter first.
               await tmuxCore.injectPromptIntoPane(targetPane, params.prompt);
-              await tmuxCore.sendActions(targetPane, [{ type: 'key', key: 'C-s' }], { delayMs: 100 });
+              const steerDelayMs = parsePositiveIntEnv(
+                'CODELARK_KIMI_TMUX_STEER_DELAY_MS',
+                DEFAULT_KIMI_STEER_DELAY_MS,
+                0,
+              );
+              if (steerDelayMs > 0) await sleep(steerDelayMs);
+              await tmuxCore.sendActions(targetPane, [{ type: 'key', key: 'C-s' }]);
             },
           });
 

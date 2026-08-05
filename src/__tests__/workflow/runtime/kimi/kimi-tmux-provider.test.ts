@@ -186,6 +186,7 @@ describe('kimi-tmux-provider workflow', () => {
     const injectCalls: Array<{ target: string; prompt: string }> = [];
     let resumeHintReady = false;
     let resumedTuiReady = false;
+    let workspaceTrustConfirmed = false;
     let wirePath: string | null = null;
     let tmuxExists = false;
 
@@ -208,7 +209,9 @@ describe('kimi-tmux-provider workflow', () => {
       },
       async capturePane(target: string) {
         return {
-          screen: resumedTuiReady
+          screen: !workspaceTrustConfirmed
+            ? 'MCP servers only run in trusted folders.\n❯ Trust this folder\n  Enable project MCP servers.\n  Don\'t trust'
+            : resumedTuiReady
             ? `Kimi Code\nSession: ${sessionId}\n│ > \ncontext: 0% (0/256k)`
             : resumeHintReady
               ? `To resume this session: kimi -r ${sessionId}`
@@ -222,6 +225,7 @@ describe('kimi-tmux-provider workflow', () => {
         if (names.join(',') === 'C-c,C-c') {
           resumeHintReady = true;
         }
+        if (names.join(',') === 'Enter') workspaceTrustConfirmed = true;
         return { commands: names.map((name) => `tmux send-keys -t ${target} ${name}`) };
       },
       async injectPromptIntoPane(target: string, prompt: string) {
@@ -244,6 +248,7 @@ describe('kimi-tmux-provider workflow', () => {
         CODELARK_KIMI_TMUX_SESSION_FILE_TIMEOUT_MS: '1000',
         CODELARK_KIMI_TMUX_POLL_INTERVAL_MS: '50',
         CODELARK_KIMI_TMUX_PROMPT_DELAY_MS: '0',
+        CODELARK_KIMI_TMUX_STEER_DELAY_MS: '0',
       }, () => readSse(streamKimiTmuxTui({
         prompt: 'hello fresh kimi',
         sessionId: 'bridge-kimi-workflow',
@@ -257,6 +262,7 @@ describe('kimi-tmux-provider workflow', () => {
       assert.equal(commandHasArg(ensureCalls[0]!, '-r'), false);
 
       assert.equal(sendCalls.some((call) => call.actions.join(',') === 'C-c,C-c'), false);
+      assert.ok(sendCalls.some((call) => call.actions.join(',') === 'Enter'));
       assert.deepEqual(injectCalls, [{
         target: 'clk-kimi-bridge-kimi-workflow:0.0',
         prompt: 'hello fresh kimi',
