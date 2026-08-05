@@ -1400,7 +1400,7 @@ export async function handleTmuxBridgeCommand(params: HandleTmuxBridgeCommandPar
               }).then(() => undefined),
             });
             if (!accepted) {
-              throw new Error('Kimi Code 输入已发送，但 session wire 未记录本次用户消息；已自动重发完整输入，仍未提交。');
+              throw new Error('Kimi Code 输入未能启动 turn；已根据 wire 状态重发完整输入或提交键，仍未提交。');
             }
           }
         } else {

@@ -552,27 +552,64 @@ function resolveKimiSessionFileBySessionId(
   return true;
 }
 
-async function waitForKimiSessionFileGrowth(
+type KimiSubmissionState = 'missing' | 'accepted' | 'started';
+
+function inspectKimiSubmissionState(
+  sessionFilePath: string,
+  startOffset: number,
+  expectedPrompt?: string,
+): KimiSubmissionState {
+  if (fs.statSync(sessionFilePath).size <= startOffset) return 'missing';
+  if (!expectedPrompt) return 'started';
+  const wireDelta = fs.readFileSync(sessionFilePath).subarray(startOffset).toString('utf8');
+  const encodedPrompt = JSON.stringify(expectedPrompt);
+  let promptAccepted = false;
+  for (const line of wireDelta.split(/\r?\n/u)) {
+    if (!line) continue;
+    if (line.includes(encodedPrompt)) promptAccepted = true;
+    if (!promptAccepted) continue;
+    try {
+      const entry = JSON.parse(line) as {
+        type?: string;
+        event?: { type?: string };
+      };
+      if (entry.type === 'turn.steer' || entry.type === 'llm.request' || entry.event?.type === 'step.begin') {
+        return 'started';
+      }
+    } catch {
+      // Ignore a partial final wire line until the next poll.
+    }
+  }
+  return promptAccepted ? 'accepted' : 'missing';
+}
+
+async function waitForKimiSubmissionState(
   resolveSessionFilePath: () => string | undefined,
   startOffset: number,
   timeoutMs: number,
   expectedPrompt?: string,
-): Promise<boolean> {
+): Promise<KimiSubmissionState> {
   const deadline = Date.now() + timeoutMs;
+  let latestState: KimiSubmissionState = 'missing';
   while (Date.now() <= deadline) {
     try {
       const sessionFilePath = resolveSessionFilePath();
-      if (sessionFilePath && fs.statSync(sessionFilePath).size > startOffset) {
-        if (!expectedPrompt) return true;
-        const wireDelta = fs.readFileSync(sessionFilePath).subarray(startOffset).toString('utf8');
-        if (wireDelta.includes(JSON.stringify(expectedPrompt))) return true;
+      if (sessionFilePath) {
+        latestState = inspectKimiSubmissionState(sessionFilePath, startOffset, expectedPrompt);
+        if (latestState === 'started') return latestState;
       }
     } catch {
       // A fresh Kimi session may create wire.jsonl only after accepting input.
     }
     await sleep(50);
   }
-  return false;
+  return latestState;
+}
+
+async function retryKimiSubmitKeys(targetPane: string): Promise<void> {
+  await tmuxCore.sendActions(targetPane, [{ type: 'key', key: 'Enter' }]);
+  await sleep(DEFAULT_KIMI_STEER_DELAY_MS);
+  await tmuxCore.sendActions(targetPane, [{ type: 'key', key: 'C-s' }]);
 }
 
 export async function retryKimiSubmitIfNoActivity(params: {
@@ -592,42 +629,57 @@ export async function retryKimiSubmitIfNoActivity(params: {
     DEFAULT_KIMI_SUBMISSION_ACK_TIMEOUT_MS,
     100,
   );
-  if (await waitForKimiSessionFileGrowth(
-    resolveSessionFilePath,
-    params.startOffset,
-    timeoutMs,
-    params.expectedPrompt,
-  )) {
-    return true;
-  }
-  console.warn('[kimi-tmux] Kimi input produced no matching user turn; retrying full input once:', {
-    target_pane: params.targetPane,
-    session_file: resolveSessionFilePath() || null,
-    session_id: params.sessionId || null,
-    start_offset: params.startOffset,
-  });
-  if (params.retrySubmit) {
-    await params.retrySubmit();
-  } else {
-    await tmuxCore.sendActions(params.targetPane, [{ type: 'key', key: 'Enter' }]);
-    await sleep(DEFAULT_KIMI_STEER_DELAY_MS);
-    await tmuxCore.sendActions(params.targetPane, [{ type: 'key', key: 'C-s' }]);
-  }
-  const accepted = await waitForKimiSessionFileGrowth(
+  const initialState = await waitForKimiSubmissionState(
     resolveSessionFilePath,
     params.startOffset,
     timeoutMs,
     params.expectedPrompt,
   );
-  if (!accepted) {
-    console.warn('[kimi-tmux] Kimi input still produced no matching user turn after full retry:', {
+  if (initialState === 'started') return true;
+  console.warn('[kimi-tmux] Kimi input did not start a turn; retrying once:', {
+    target_pane: params.targetPane,
+    session_file: resolveSessionFilePath() || null,
+    session_id: params.sessionId || null,
+    start_offset: params.startOffset,
+    submission_state: initialState,
+    retry: initialState === 'missing' && params.retrySubmit ? 'full_input' : 'submit_keys',
+  });
+  if (initialState === 'missing' && params.retrySubmit) {
+    await params.retrySubmit();
+  } else {
+    await retryKimiSubmitKeys(params.targetPane);
+  }
+  let retryState = await waitForKimiSubmissionState(
+    resolveSessionFilePath,
+    params.startOffset,
+    timeoutMs,
+    params.expectedPrompt,
+  );
+  if (initialState === 'missing' && retryState === 'accepted') {
+    console.warn('[kimi-tmux] Kimi prompt was recorded after full retry but the turn did not start; retrying submit keys:', {
       target_pane: params.targetPane,
       session_file: resolveSessionFilePath() || null,
       session_id: params.sessionId || null,
       start_offset: params.startOffset,
     });
+    await retryKimiSubmitKeys(params.targetPane);
+    retryState = await waitForKimiSubmissionState(
+      resolveSessionFilePath,
+      params.startOffset,
+      timeoutMs,
+      params.expectedPrompt,
+    );
   }
-  return accepted;
+  if (retryState !== 'started') {
+    console.warn('[kimi-tmux] Kimi input still did not start a turn after retry:', {
+      target_pane: params.targetPane,
+      session_file: resolveSessionFilePath() || null,
+      session_id: params.sessionId || null,
+      start_offset: params.startOffset,
+      submission_state: retryState,
+    });
+  }
+  return retryState === 'started';
 }
 
 async function waitForKimiSessionFileBySessionId(

@@ -97,14 +97,14 @@ function createKimiSessionFile(options: {
 function appendKimiTurn(wirePath: string, prompt: string): void {
   fs.appendFileSync(wirePath, [
     JSON.stringify({
-      type: 'context.append_loop_event',
+      type: 'context.append_message',
       time: 1782540000000,
-      event: { type: 'step.begin', turnId: 'turn-1', stepUuid: 'step-1' },
+      message: { role: 'user', content: [{ type: 'text', text: prompt }] },
     }),
     JSON.stringify({
-      type: 'context.append_message',
+      type: 'context.append_loop_event',
       time: 1782540000100,
-      message: { role: 'user', content: [{ type: 'text', text: prompt }] },
+      event: { type: 'step.begin', turnId: 'turn-1', stepUuid: 'step-1' },
     }),
     JSON.stringify({
       type: 'context.append_loop_event',
@@ -351,12 +351,12 @@ describe('kimi-tmux-provider workflow', () => {
       },
       async injectPromptIntoPane(target: string, prompt: string) {
         injectCalls.push({ target, prompt });
-        if (pendingPrompt === prompt) {
-          appendKimiTurn(wirePath, prompt);
-          pendingPrompt = '';
-        } else {
-          pendingPrompt = prompt;
-        }
+        fs.appendFileSync(wirePath, `${JSON.stringify({
+          type: 'context.append_message',
+          time: 1782540000000,
+          message: { role: 'user', content: [{ type: 'text', text: prompt }] },
+        })}\n`, 'utf-8');
+        pendingPrompt = prompt;
         return { commands: [`tmux paste-buffer -t ${target}`] };
       },
       async killSession(name: string) {
@@ -388,10 +388,9 @@ describe('kimi-tmux-provider workflow', () => {
       assert.equal(captureCount, 1, 'cold takeover must verify editor readiness exactly once');
       assert.deepEqual(injectCalls, [
         { target: 'clk-kimi-bridge-kimi-resume-workflow:0.0', prompt: 'hello existing kimi' },
-        { target: 'clk-kimi-bridge-kimi-resume-workflow:0.0', prompt: 'hello existing kimi' },
       ]);
       assert.ok(sendCalls.some((call) => call.actions.join(',') === 'C-s'));
-      assert.equal(sendCalls.some((call) => call.actions.join(',') === 'Enter'), false);
+      assert.ok(sendCalls.some((call) => call.actions.join(',') === 'Enter'), 'accepted prompt without turn start retries submit keys');
       assert.equal(sendCalls.some((call) => call.actions.join(',') === 'C-c,C-c'), false);
 
       assert.ok(events.some((event) => event.type === 'status'

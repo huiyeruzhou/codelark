@@ -11325,11 +11325,19 @@ enabled = true
       const wireTimer = setInterval(() => {
         const tmuxLog = fs.readFileSync(fakeTmux.logPath, 'utf-8');
         if ((tmuxLog.match(/paste-buffer -d -p -b clk-paste-/g) || []).length < 2) return;
-        fs.appendFileSync(wirePath, `${JSON.stringify({
-          type: 'context.append_message',
-          time: Date.now(),
-          message: { role: 'user', content: forwardedPrompt },
-        })}\n`, 'utf-8');
+        fs.appendFileSync(wirePath, [
+          JSON.stringify({
+            type: 'context.append_message',
+            time: Date.now(),
+            message: { role: 'user', content: forwardedPrompt },
+          }),
+          JSON.stringify({
+            type: 'context.append_loop_event',
+            time: Date.now() + 1,
+            event: { type: 'step.begin', turnId: 'turn-forwarded', stepUuid: 'step-forwarded' },
+          }),
+          '',
+        ].join('\n'), 'utf-8');
         clearInterval(wireTimer);
       }, 10);
 
