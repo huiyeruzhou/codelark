@@ -157,6 +157,13 @@ describe('real Kimi Code bridge e2e', () => {
       CODELARK_CLAUDE_TMUX_SESSION_FILE_TIMEOUT_MS: '30000',
       CODELARK_KIMI_EXECUTABLE: executable,
       KIMI_CODE_EXECUTABLE: undefined,
+      KIMI_MODEL_NAME: 'codelark-real-kimi-e2e',
+      KIMI_MODEL_API_KEY: 'codelark-local-mock-key',
+      KIMI_MODEL_PROVIDER_TYPE: 'openai',
+      KIMI_MODEL_BASE_URL: proxy.baseUrl,
+      KIMI_MODEL_MAX_CONTEXT_SIZE: '32768',
+      KIMI_MODEL_CAPABILITIES: '',
+      KIMI_DISABLE_TELEMETRY: '1',
       CODELARK_KIMI_TMUX_POLL_INTERVAL_MS: '50',
       CODELARK_KIMI_TMUX_SESSION_FILE_TIMEOUT_MS: '30000',
       CODELARK_KIMI_TMUX_SESSION_ID_TIMEOUT_MS: '30000',
@@ -233,14 +240,15 @@ describe('real Kimi Code bridge e2e', () => {
       await execFileAsync('tmux', ['kill-session', '-t', claudeSeedTmuxSessionName]);
 
       await _testOnly.handleMessage(adapter, inboundMessage(address, `Reply exactly: ${responseText}`, 'incoming-real-kimi-first'));
-      assert.equal(
-        await waitForCondition(
-          () => proxy.requests.some((request) => request.url.includes('/chat/completions')),
-          45_000,
-          50,
-        ),
-        true,
+      const firstKimiRequestObserved = await waitForCondition(
+        () => proxy.requests.some((request) => request.url.includes('/chat/completions')),
+        45_000,
+        50,
       );
+      assert.equal(firstKimiRequestObserved, true, JSON.stringify({
+        expectedBaseUrl: proxy.baseUrl,
+        observedUrls: proxy.requests.map((request) => request.url),
+      }));
       const initialized = store.getSession(session.id);
       const kimiSessionId = initialized?.runtime?.kimi?.sessionId;
       assert.match(kimiSessionId || '', /^session_[0-9a-f-]+$/i);
