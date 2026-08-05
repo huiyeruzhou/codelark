@@ -488,13 +488,6 @@ function applyPlainTextTmuxActions(
   return applyKimiSteer(applyAutoEnter(actions), session);
 }
 
-function withoutTrailingKimiSteer(actions: TmuxSendAction[]): TmuxSendAction[] {
-  const lastAction = actions.at(-1);
-  return lastAction?.type === 'key' && lastAction.key === 'C-s'
-    ? actions.slice(0, -1)
-    : actions;
-}
-
 function buildInputEchoBlock(input: string, markdown: boolean): string {
   const { text, truncated } = sanitizeInput(input, 12_000);
   const body = markdown ? buildFencedCodeBlock(text, 'text') : text;
@@ -1379,13 +1372,10 @@ export async function handleTmuxBridgeCommand(params: HandleTmuxBridgeCommandPar
       if (params.suppressSuccessfulResponse === true) {
         const runtimeProvider = resolveEffectiveRuntimeProvider(effectiveSession, binding);
         if (runtimeProvider.provider === 'tmux') {
-          const providerActions = runtimeProvider.runtime === 'kimi' && ensured.recovered
-            ? withoutTrailingKimiSteer(actionsToSend)
-            : actionsToSend;
           await sendRuntimeTmuxInput({
             runtime: runtimeProvider.runtime,
             sessionName: target,
-            send: () => sendTmuxActions(target, providerActions, {
+            send: () => sendTmuxActions(target, actionsToSend, {
               delayMs: SEND_ACTION_DELAY_MS,
               forcePasteLiterals: (
                 runtimeProvider.runtime === 'codex'
@@ -1400,11 +1390,11 @@ export async function handleTmuxBridgeCommand(params: HandleTmuxBridgeCommandPar
               sessionId: ensured.kimiSubmission.sessionId,
               cwd: ensured.kimiSubmission.cwd,
               startOffset: ensured.kimiSubmission.startOffset,
-              expectedPrompt: providerActions
+              expectedPrompt: actionsToSend
                 .filter((action): action is Extract<TmuxSendAction, { type: 'literal' }> => action.type === 'literal')
                 .map((action) => action.text)
                 .join(''),
-              retrySubmit: () => sendTmuxActions(target, providerActions, {
+              retrySubmit: () => sendTmuxActions(target, actionsToSend, {
                 delayMs: SEND_ACTION_DELAY_MS,
                 forcePasteLiterals: true,
               }).then(() => undefined),

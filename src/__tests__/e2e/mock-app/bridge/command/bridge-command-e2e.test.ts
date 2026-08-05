@@ -3067,7 +3067,7 @@ provider = "tmux"
       const keyLog = fs.readFileSync(keyLogPath, 'utf-8');
       assert.match(keyLog, /first kimi tmux/);
       assert.match(keyLog, /"hex":"0d"/, 'fresh Kimi input should submit with Enter');
-      assert.doesNotMatch(keyLog, /"hex":"13"/, 'fresh Kimi input must not become a steer without an active turn');
+      assert.match(keyLog, /"hex":"13"/, 'fresh Kimi input should immediately follow Enter with Ctrl-S');
       assert.ok(adapter.streamEvents.some((event) => (
         event.kind === 'status'
         && /当前思考：mock kimi thinking/.test(event.text || '')
@@ -3400,7 +3400,7 @@ provider = "tmux"
       const keyLog = fs.readFileSync(keyLogPath, 'utf-8');
       assert.match(keyLog, /continue bound kimi/);
       assert.match(keyLog, /"hex":"0d"/, 'a newly resumed idle Kimi session should submit with Enter');
-      assert.doesNotMatch(keyLog, /"hex":"13"/, 'a newly resumed idle Kimi session must not steer');
+      assert.match(keyLog, /"hex":"13"/, 'a newly resumed Kimi session should immediately steer with Ctrl-S');
       assert.ok(adapter.streamEvents.some((event) => (
         event.kind === 'status'
         && event.streamKey?.startsWith('mirror:')
@@ -3550,7 +3550,7 @@ provider = "tmux"
       const keyLog = fs.readFileSync(keyLogPath, 'utf-8');
       assert.match(keyLog, /ask user from kimi/);
       assert.match(keyLog, /"hex":"0d"/, 'the idle Kimi question turn should submit with Enter');
-      assert.doesNotMatch(keyLog, /"hex":"13"/, 'the idle Kimi question turn must not steer');
+      assert.match(keyLog, /"hex":"13"/, 'the Kimi question turn should immediately steer with Ctrl-S');
       assert.match(fs.readFileSync(wirePath, 'utf-8'), /<clk-ask>/);
 
       await _testOnly.handleMessage(adapter, {
