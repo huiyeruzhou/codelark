@@ -237,7 +237,13 @@ describe('kimi-tmux-provider workflow', () => {
       async injectPromptIntoPane(target: string, prompt: string) {
         injectCalls.push({ target, prompt });
         assert.equal(wirePath, null, 'fresh Kimi may defer wire creation until its first prompt');
-        pendingPrompt = prompt;
+        if (pendingPrompt === prompt) {
+          wirePath = createKimiSessionFile({ kimiHome, cwd, sessionId });
+          appendKimiTurn(wirePath, prompt);
+          pendingPrompt = '';
+        } else {
+          pendingPrompt = prompt;
+        }
         return { commands: [`tmux paste-buffer -t ${target}`] };
       },
       async killSession(name: string) {
@@ -269,15 +275,11 @@ describe('kimi-tmux-provider workflow', () => {
       assert.equal(commandHasArg(ensureCalls[0]!, '-r'), false);
 
       assert.equal(sendCalls.some((call) => call.actions.join(',') === 'C-c,C-c'), false);
-      assert.equal(
-        sendCalls.filter((call) => call.actions.join(',') === 'Enter').length,
-        2,
-        'fresh lifecycle confirms trust, then retries Enter when wire creation is delayed',
-      );
-      assert.deepEqual(injectCalls, [{
-        target: 'clk-kimi-bridge-kimi-workflow:0.0',
-        prompt: 'hello fresh kimi',
-      }]);
+      assert.equal(sendCalls.filter((call) => call.actions.join(',') === 'Enter').length, 1);
+      assert.deepEqual(injectCalls, [
+        { target: 'clk-kimi-bridge-kimi-workflow:0.0', prompt: 'hello fresh kimi' },
+        { target: 'clk-kimi-bridge-kimi-workflow:0.0', prompt: 'hello fresh kimi' },
+      ], 'fresh lifecycle retries the complete prompt when its user turn is not recorded');
       assert.ok(sendCalls.some((call) => call.actions.join(',') === 'C-s'));
 
       assert.ok(events.some((event) => event.type === 'status'
@@ -349,7 +351,12 @@ describe('kimi-tmux-provider workflow', () => {
       },
       async injectPromptIntoPane(target: string, prompt: string) {
         injectCalls.push({ target, prompt });
-        pendingPrompt = prompt;
+        if (pendingPrompt === prompt) {
+          appendKimiTurn(wirePath, prompt);
+          pendingPrompt = '';
+        } else {
+          pendingPrompt = prompt;
+        }
         return { commands: [`tmux paste-buffer -t ${target}`] };
       },
       async killSession(name: string) {
@@ -379,12 +386,12 @@ describe('kimi-tmux-provider workflow', () => {
       assert.equal(ensureCalls.length, 0, 'cold takeover must reuse the existing Kimi tmux process');
       assert.equal(extendedKeysCalls, 1, 'cold takeover enables Kimi-compatible Enter handling once');
       assert.equal(captureCount, 1, 'cold takeover must verify editor readiness exactly once');
-      assert.deepEqual(injectCalls, [{
-        target: 'clk-kimi-bridge-kimi-resume-workflow:0.0',
-        prompt: 'hello existing kimi',
-      }]);
+      assert.deepEqual(injectCalls, [
+        { target: 'clk-kimi-bridge-kimi-resume-workflow:0.0', prompt: 'hello existing kimi' },
+        { target: 'clk-kimi-bridge-kimi-resume-workflow:0.0', prompt: 'hello existing kimi' },
+      ]);
       assert.ok(sendCalls.some((call) => call.actions.join(',') === 'C-s'));
-      assert.ok(sendCalls.some((call) => call.actions.join(',') === 'Enter'), 'missing activity retries Enter once');
+      assert.equal(sendCalls.some((call) => call.actions.join(',') === 'Enter'), false);
       assert.equal(sendCalls.some((call) => call.actions.join(',') === 'C-c,C-c'), false);
 
       assert.ok(events.some((event) => event.type === 'status'
@@ -644,11 +651,19 @@ describe('kimi-tmux-provider workflow', () => {
         };
       },
       async injectPromptIntoPane(target: string, prompt: string) {
-        fs.appendFileSync(wirePath, `${JSON.stringify({
-          type: 'context.append_loop_event',
-          time: Date.now(),
-          event: { type: 'step.begin', turnId: 'turn-auth', stepUuid: 'step-auth' },
-        })}\n`, 'utf8');
+        fs.appendFileSync(wirePath, [
+          JSON.stringify({
+            type: 'context.append_message',
+            time: Date.now(),
+            message: { role: 'user', content: prompt },
+          }),
+          JSON.stringify({
+            type: 'context.append_loop_event',
+            time: Date.now() + 1,
+            event: { type: 'step.begin', turnId: 'turn-auth', stepUuid: 'step-auth' },
+          }),
+          '',
+        ].join('\n'), 'utf8');
         const logDir = path.join(sessionDir, 'logs');
         fs.mkdirSync(logDir, { recursive: true });
         const logPath = path.join(logDir, 'kimi-code.log');

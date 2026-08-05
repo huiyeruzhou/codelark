@@ -556,12 +556,17 @@ async function waitForKimiSessionFileGrowth(
   resolveSessionFilePath: () => string | undefined,
   startOffset: number,
   timeoutMs: number,
+  expectedPrompt?: string,
 ): Promise<boolean> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() <= deadline) {
     try {
       const sessionFilePath = resolveSessionFilePath();
-      if (sessionFilePath && fs.statSync(sessionFilePath).size > startOffset) return true;
+      if (sessionFilePath && fs.statSync(sessionFilePath).size > startOffset) {
+        if (!expectedPrompt) return true;
+        const wireDelta = fs.readFileSync(sessionFilePath).subarray(startOffset).toString('utf8');
+        if (wireDelta.includes(JSON.stringify(expectedPrompt))) return true;
+      }
     } catch {
       // A fresh Kimi session may create wire.jsonl only after accepting input.
     }
@@ -576,6 +581,8 @@ export async function retryKimiSubmitIfNoActivity(params: {
   sessionId?: string;
   cwd?: string;
   startOffset: number;
+  expectedPrompt?: string;
+  retrySubmit?: () => Promise<void>;
 }): Promise<boolean> {
   if (!params.sessionFilePath && !params.sessionId) return true;
   const resolveSessionFilePath = (): string | undefined => params.sessionFilePath
@@ -585,25 +592,35 @@ export async function retryKimiSubmitIfNoActivity(params: {
     DEFAULT_KIMI_SUBMISSION_ACK_TIMEOUT_MS,
     100,
   );
-  if (await waitForKimiSessionFileGrowth(resolveSessionFilePath, params.startOffset, timeoutMs)) {
+  if (await waitForKimiSessionFileGrowth(
+    resolveSessionFilePath,
+    params.startOffset,
+    timeoutMs,
+    params.expectedPrompt,
+  )) {
     return true;
   }
-  console.warn('[kimi-tmux] Kimi input produced no session activity; retrying submit keys once:', {
+  console.warn('[kimi-tmux] Kimi input produced no matching user turn; retrying full input once:', {
     target_pane: params.targetPane,
     session_file: resolveSessionFilePath() || null,
     session_id: params.sessionId || null,
     start_offset: params.startOffset,
   });
-  await tmuxCore.sendActions(params.targetPane, [{ type: 'key', key: 'Enter' }]);
-  await sleep(DEFAULT_KIMI_STEER_DELAY_MS);
-  await tmuxCore.sendActions(params.targetPane, [{ type: 'key', key: 'C-s' }]);
+  if (params.retrySubmit) {
+    await params.retrySubmit();
+  } else {
+    await tmuxCore.sendActions(params.targetPane, [{ type: 'key', key: 'Enter' }]);
+    await sleep(DEFAULT_KIMI_STEER_DELAY_MS);
+    await tmuxCore.sendActions(params.targetPane, [{ type: 'key', key: 'C-s' }]);
+  }
   const accepted = await waitForKimiSessionFileGrowth(
     resolveSessionFilePath,
     params.startOffset,
     timeoutMs,
+    params.expectedPrompt,
   );
   if (!accepted) {
-    console.warn('[kimi-tmux] Kimi input still produced no session activity after submit retry:', {
+    console.warn('[kimi-tmux] Kimi input still produced no matching user turn after full retry:', {
       target_pane: params.targetPane,
       session_file: resolveSessionFilePath() || null,
       session_id: params.sessionId || null,
@@ -902,32 +919,37 @@ export function streamKimiTmuxTui(params: StreamChatParams): ReadableStream<stri
 
           const promptDelayMs = parsePositiveIntEnv('CODELARK_KIMI_TMUX_PROMPT_DELAY_MS', DEFAULT_KIMI_PROMPT_DELAY_MS, 0);
           if (promptDelayMs > 0) await sleep(promptDelayMs);
+          const submitPrompt = async () => {
+            await tmuxCore.injectPromptIntoPane(targetPane, params.prompt);
+            const steerDelayMs = parsePositiveIntEnv(
+              'CODELARK_KIMI_TMUX_STEER_DELAY_MS',
+              DEFAULT_KIMI_STEER_DELAY_MS,
+              0,
+            );
+            if (steerDelayMs > 0) await sleep(steerDelayMs);
+            await tmuxCore.sendActions(targetPane, [{ type: 'key', key: 'C-s' }]);
+          };
           await sendRuntimeTmuxInput({
             runtime: 'kimi',
             sessionName,
-            send: async () => {
-              // Enter queues or starts the prompt. Ctrl-S then upgrades a queued
-              // prompt to Kimi's mid-turn steer semantics; it is a no-op when
-              // the prompt already started from an idle editor. Leave enough
-              // time for slower TUI event loops to process Enter first.
-              await tmuxCore.injectPromptIntoPane(targetPane, params.prompt);
-              const steerDelayMs = parsePositiveIntEnv(
-                'CODELARK_KIMI_TMUX_STEER_DELAY_MS',
-                DEFAULT_KIMI_STEER_DELAY_MS,
-                0,
-              );
-              if (steerDelayMs > 0) await sleep(steerDelayMs);
-              await tmuxCore.sendActions(targetPane, [{ type: 'key', key: 'C-s' }]);
-            },
+            // Enter queues or starts the prompt. Ctrl-S then upgrades a queued
+            // prompt to Kimi's mid-turn steer semantics; it is a no-op when
+            // the prompt already started from an idle editor.
+            send: submitPrompt,
           });
 
-          await retryKimiSubmitIfNoActivity({
+          const accepted = await retryKimiSubmitIfNoActivity({
             targetPane,
             sessionFilePath: context.sessionFilePath,
             sessionId: context.sessionId,
             cwd: context.cwd,
             startOffset: context.nextOffset,
+            expectedPrompt: params.prompt,
+            retrySubmit: submitPrompt,
           });
+          if (!accepted) {
+            throw new Error('Kimi Code input was not recorded after retrying the full prompt.');
+          }
 
           if (!context.sessionFilePath) {
             await waitForKimiSessionFileBySessionId(context, { startAtEnd: false });

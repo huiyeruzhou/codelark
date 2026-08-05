@@ -11267,12 +11267,13 @@ enabled = true
       'TMUX_FAKE_CAPTURE_TEXT',
       'KIMI_CODE_HOME',
       'CODELARK_KIMI_TMUX_POLL_INTERVAL_MS',
+      'CODELARK_KIMI_TMUX_SUBMISSION_ACK_TIMEOUT_MS',
     ]);
     const address = { channelType: 'feishu', chatId: 'chat-kimi-cold-auto-forward' } as const;
     const binding = router.createBinding(address, workDir);
     const sessionId = 'session_66666666-6666-4666-8666-666666666666';
     const tmuxSession = kimiTmuxSessionName(binding.bridgeSessionId);
-    writeKimiWireFixture({
+    const wirePath = writeKimiWireFixture({
       homeDir: kimiHome,
       cwd: workDir,
       sessionId,
@@ -11285,6 +11286,7 @@ enabled = true
     process.env.TMUX_FAKE_CAPTURE_TEXT = `Kimi Code\nSession: ${sessionId}\n│ > \ncontext: 0% (0/256k)`;
     process.env.KIMI_CODE_HOME = kimiHome;
     process.env.CODELARK_KIMI_TMUX_POLL_INTERVAL_MS = '10';
+    process.env.CODELARK_KIMI_TMUX_SUBMISSION_ACK_TIMEOUT_MS = '500';
 
     try {
       store.updateSession(binding.bridgeSessionId, {
@@ -11319,16 +11321,32 @@ enabled = true
         },
       };
 
-      await handleBridgeCommand(
-        adapter,
-        {
-          address,
-          text: '/tmux after bridge restart',
-          messageId: 'incoming-kimi-cold-auto-forward',
-        } as any,
-        '/tmux after bridge restart',
-        deps,
-      );
+      const forwardedPrompt = 'after bridge restart';
+      const wireTimer = setInterval(() => {
+        const tmuxLog = fs.readFileSync(fakeTmux.logPath, 'utf-8');
+        if ((tmuxLog.match(/paste-buffer -d -p -b clk-paste-/g) || []).length < 2) return;
+        fs.appendFileSync(wirePath, `${JSON.stringify({
+          type: 'context.append_message',
+          time: Date.now(),
+          message: { role: 'user', content: forwardedPrompt },
+        })}\n`, 'utf-8');
+        clearInterval(wireTimer);
+      }, 10);
+
+      try {
+        await handleBridgeCommand(
+          adapter,
+          {
+            address,
+            text: `/tmux ${forwardedPrompt}`,
+            messageId: 'incoming-kimi-cold-auto-forward',
+          } as any,
+          `/tmux ${forwardedPrompt}`,
+          deps,
+        );
+      } finally {
+        clearInterval(wireTimer);
+      }
 
       assert.equal(sent.length, 0, 'successful provider auto-forward must not send a /tmux response');
       assert.equal(autoForwarded, true, 'delivery callback must run only after the input reaches tmux');
@@ -11341,6 +11359,10 @@ enabled = true
       assert.ok(captureIndex > firstHasSessionIndex, 'cold takeover must verify the persisted Kimi session before sending');
       assert.ok(pasteIndex > captureIndex, 'auto-forward input must wait for Kimi cold readiness');
       assert.match(log, new RegExp(`paste-buffer -d -p -b clk-paste-[^ ]+ -t ${tmuxSession}`));
+      assert.ok(
+        (log.match(/paste-buffer -d -p -b clk-paste-/g) || []).length >= 2,
+        'missing Kimi user-turn acknowledgement must retry the complete input',
+      );
       assert.doesNotMatch(log, new RegExp(`send-keys -t ${tmuxSession} -l after bridge restart`));
       assert.match(log, new RegExp(`send-keys -t ${tmuxSession} Enter`));
       assert.match(log, new RegExp(`send-keys -t ${tmuxSession} C-s`));

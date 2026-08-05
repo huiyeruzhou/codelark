@@ -1390,9 +1390,17 @@ export async function handleTmuxBridgeCommand(params: HandleTmuxBridgeCommandPar
               sessionId: ensured.kimiSubmission.sessionId,
               cwd: ensured.kimiSubmission.cwd,
               startOffset: ensured.kimiSubmission.startOffset,
+              expectedPrompt: actionsToSend
+                .filter((action): action is Extract<TmuxSendAction, { type: 'literal' }> => action.type === 'literal')
+                .map((action) => action.text)
+                .join(''),
+              retrySubmit: () => sendTmuxActions(target, actionsToSend, {
+                delayMs: SEND_ACTION_DELAY_MS,
+                forcePasteLiterals: true,
+              }).then(() => undefined),
             });
             if (!accepted) {
-              throw new Error('Kimi Code 输入已发送，但 session wire 未记录新 turn；已自动补发 Enter，仍未提交。');
+              throw new Error('Kimi Code 输入已发送，但 session wire 未记录本次用户消息；已自动重发完整输入，仍未提交。');
             }
           }
         } else {

@@ -95,18 +95,22 @@ process.stdin.resume();
 
 let answerCount = 0;
 let ctrlCCount = 0;
+let pendingPrompt = '';
 const appendWire = (entry) => fs.appendFileSync(wirePath, JSON.stringify(entry) + '\\n');
 process.stdin.on('data', (chunk) => {
   fs.appendFileSync(keyLogPath, chunk.toString('hex') + '\\n');
+  pendingPrompt += chunk.toString('utf8').replace(/[\\u0000-\\u001f\\u007f]/g, '');
   if (chunk.includes(0x13)) {
     answerCount += 1;
     const now = Date.now();
     const turnId = 'turn-' + answerCount;
     const stepId = 'step-' + answerCount;
-    appendWire({ type: 'context.append_loop_event', time: now, event: { type: 'step.begin', turnId, stepUuid: stepId } });
-    appendWire({ type: 'context.append_loop_event', time: now + 1, event: { type: 'content.part', turnId, part: { type: 'think', think: 'fake kimi thinking' } } });
-    appendWire({ type: 'context.append_loop_event', time: now + 2, event: { type: 'content.part', turnId, part: { type: 'text', text: answerCount === 1 ? 'fake kimi answer' : 'fake kimi answer ' + answerCount } } });
-    appendWire({ type: 'context.append_loop_event', time: now + 3, event: { type: 'step.end', turnId, stepUuid: stepId } });
+    appendWire({ type: 'context.append_message', time: now, message: { role: 'user', content: pendingPrompt } });
+    pendingPrompt = '';
+    appendWire({ type: 'context.append_loop_event', time: now + 1, event: { type: 'step.begin', turnId, stepUuid: stepId } });
+    appendWire({ type: 'context.append_loop_event', time: now + 2, event: { type: 'content.part', turnId, part: { type: 'think', think: 'fake kimi thinking' } } });
+    appendWire({ type: 'context.append_loop_event', time: now + 3, event: { type: 'content.part', turnId, part: { type: 'text', text: answerCount === 1 ? 'fake kimi answer' : 'fake kimi answer ' + answerCount } } });
+    appendWire({ type: 'context.append_loop_event', time: now + 4, event: { type: 'step.end', turnId, stepUuid: stepId } });
   }
   for (const byte of chunk) {
     if (byte !== 0x03) continue;
