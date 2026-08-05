@@ -2,6 +2,7 @@ import '../../setup/test-setup.js';
 
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import path from 'node:path';
 import { describe, it } from 'node:test';
 
 import { createRuntimeShardIsolation } from '../../../../scripts/real-runtime-e2e-isolation.js';
@@ -20,6 +21,8 @@ describe('real runtime E2E isolation', () => {
       assert.equal(kimi.env.TMUX, undefined);
       assert.equal(codex.env.TMUX_TMPDIR, codex.tmuxTmpDir);
       assert.equal(kimi.env.TMUX_TMPDIR, kimi.tmuxTmpDir);
+      assert.match(kimi.tmuxTmpDir, /^\/tmp\/clk-tmux-kimi-provider-/u);
+      assert.ok(Buffer.byteLength(path.join(kimi.tmuxTmpDir, 'tmux-501', 'default')) < 104);
       assert.equal(codex.env.RUNTIME, 'codex');
       assert.equal(kimi.env.RUNTIME, 'kimi');
       assert.equal(fs.existsSync(codex.tmuxTmpDir), true);
