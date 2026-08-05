@@ -134,6 +134,8 @@ export function getSessionCodexReasoningEffort(session: SessionRuntimeLike | nul
     || reasoningEffort === 'medium'
     || reasoningEffort === 'high'
     || reasoningEffort === 'xhigh'
+    || reasoningEffort === 'max'
+    || reasoningEffort === 'ultra'
     ? reasoningEffort
     : undefined;
 }

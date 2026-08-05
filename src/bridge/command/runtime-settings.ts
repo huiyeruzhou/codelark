@@ -34,6 +34,7 @@ import {
   resolveSessionWorkingDirectoryPath,
 } from '../session/support.js';
 import type { BridgeSession, BridgeStore } from '../../domain/index.js';
+import type { CursorReasoningEffort, KimiThinkingMode } from '../../domain/session.js';
 import { parseMode } from '../../shared/security/validators.js';
 import {
   getSessionActiveRuntime,
@@ -74,8 +75,10 @@ export {
 
 const MODE_OPTIONS_TEXT = '可选：`normal`（普通执行，默认） `yolo`（YOLO模式：允许 agent 无需审批绕过沙箱）。';
 const RUNTIME_OPTIONS_TEXT = '可选：`codex`（OpenAI Codex，默认） `claude`（Claude Code） `kimi`（Kimi Code） `cursor`（Cursor Agent）。`/provider` 选择使用何种方式运行 agent，不切换 runtime。';
-const REASONING_OPTIONS_TEXT = '可选：`1=minimal` `2=low` `3=medium` `4=high` `5=xhigh`';
+const REASONING_OPTIONS_TEXT = '可选：`1=minimal` `2=low` `3=medium` `4=high` `5=xhigh` `6=max` `7=ultra`；`m=max`，`u=ultra`。';
 const CLAUDE_REASONING_OPTIONS_TEXT = '可选：`1=low` `2=medium` `3=high` `4=xhigh` `5=max`；`m` 等同于 `max`，`minimal` 会映射为 Claude Code `low`。';
+const KIMI_THINKING_OPTIONS_TEXT = 'Kimi Code 只支持 Thinking 开关：`on`、`off`、`default`；`high` 等同于 `on`。';
+const CURSOR_REASONING_OPTIONS_TEXT = 'Cursor 的 effort 是模型参数，可选：`low`、`medium`、`high`、`xhigh`、`max`；实际可用值由所选模型和账号决定。';
 const SANDBOX_OPTIONS_TEXT = '可选：`read-only` `workspace-write` `danger-full-access` `default`（回到全局默认）';
 const NETWORK_OPTIONS_TEXT = '可选：`on`/`true` 开启网络，`off`/`false` 关闭网络，`default` 回到全局默认。';
 const CLAUDE_PTY_RUNTIME_UPDATE_NOTE = '已保存为当前会话的 Claude Code 启动配置；如果 Claude Code pty 已经启动，不会向运行中的 TUI 注入切换命令，下一条普通消息会按新参数启动或重启 Claude Code pty。';
@@ -108,17 +111,24 @@ function codexRuntimeUpdateTitle(
   return `${baseTitle}，请输入/p ${provider}重启生效`;
 }
 
-function codexReasoningToClaudeEffort(
-  reasoning: CodexReasoningEffort,
-): ClaudeReasoningEffort {
-  if (reasoning === 'minimal') return 'low';
-  return reasoning;
-}
-
 function parseClaudeReasoningCommandArg(raw: string): ClaudeReasoningEffort | undefined {
   const normalized = raw.trim().toLowerCase();
   if (normalized === 'minimal') return 'low';
   return parseClaudeReasoningEffort(normalized);
+}
+
+function parseKimiThinkingCommandArg(raw: string): Exclude<KimiThinkingMode, 'default'> | undefined {
+  const normalized = raw.trim().toLowerCase();
+  if (normalized === 'on' || normalized === 'true' || normalized === '1' || normalized === 'high') return 'on';
+  if (normalized === 'off' || normalized === 'false' || normalized === '0') return 'off';
+  return undefined;
+}
+
+function parseCursorReasoningCommandArg(raw: string): CursorReasoningEffort | undefined {
+  const normalized = raw.trim().toLowerCase();
+  return ['low', 'medium', 'high', 'xhigh', 'max'].includes(normalized)
+    ? normalized as CursorReasoningEffort
+    : undefined;
 }
 
 function setSessionCodexReasoningToml(sessionId: string, reasoningEffort: CodexReasoningEffort): void {
@@ -149,6 +159,34 @@ function clearSessionClaudeReasoningToml(sessionId: string): void {
   createConfigService({ migrate: false }).unset(
     { kind: 'session', sessionId },
     'runtime.claude.reasoningEffort',
+  );
+}
+
+function setSessionKimiThinkingToml(sessionId: string, thinkingMode: Exclude<KimiThinkingMode, 'default'>): void {
+  createConfigService({ migrate: false }).set(
+    { kind: 'session', sessionId },
+    { runtime: { kimi: { thinkingMode } } },
+  );
+}
+
+function clearSessionKimiThinkingToml(sessionId: string): void {
+  createConfigService({ migrate: false }).unset(
+    { kind: 'session', sessionId },
+    'runtime.kimi.thinkingMode',
+  );
+}
+
+function setSessionCursorReasoningToml(sessionId: string, reasoningEffort: CursorReasoningEffort): void {
+  createConfigService({ migrate: false }).set(
+    { kind: 'session', sessionId },
+    { runtime: { cursor: { reasoningEffort } } },
+  );
+}
+
+function clearSessionCursorReasoningToml(sessionId: string): void {
+  createConfigService({ migrate: false }).unset(
+    { kind: 'session', sessionId },
+    'runtime.cursor.reasoningEffort',
   );
 }
 
@@ -296,12 +334,21 @@ export function handleReasoningCommand(options: {
   }
   const activeRuntime = getSessionActiveRuntime(session) || 'codex';
   if (!options.args) {
-    if (activeRuntime === 'kimi' || activeRuntime === 'cursor') {
-      const label = activeRuntime === 'cursor' ? 'Cursor Agent' : 'Kimi Code';
+    if (activeRuntime === 'cursor') {
+      const cursorConfig = resolveCursorRuntimeConfig(session, options.binding);
       return buildCommandFields(
-        `${label} 不支持 Bridge 思考级别设置`,
-        [['Runtime', activeRuntime]],
-        [`${label} 的思考内容来自 CLI 事件；\`/reasoning\` 只适用于 Codex 和 Claude Code runtime。`],
+        '当前 Cursor Agent 思考级别',
+        [['级别', cursorConfig.reasoningEffort || 'default'], ['模型', cursorConfig.model || 'default']],
+        [CURSOR_REASONING_OPTIONS_TEXT, 'CodeLark 会把设置合并为 Cursor 参数化模型的 `effort`，不会把 `force` 当作思考级别。'],
+        options.markdown,
+      );
+    }
+    if (activeRuntime === 'kimi') {
+      const kimiConfig = resolveKimiRuntimeConfig(session, options.binding);
+      return buildCommandFields(
+        '当前 Kimi Code Thinking 模式',
+        [['模式', kimiConfig.thinkingMode]],
+        [KIMI_THINKING_OPTIONS_TEXT, '发送 `/r on` 或 `/r off` 可覆盖 Kimi Code CLI 默认值。'],
         options.markdown,
       );
     }
@@ -317,16 +364,26 @@ export function handleReasoningCommand(options: {
     return buildCommandFields(
       '当前思考级别',
       [['级别', formatReasoningEffort(resolveEffectiveReasoningEffort(session, options.binding))]],
-      [REASONING_OPTIONS_TEXT, '发送 `/r 4` 或 `/r high` 可切换。'],
+      [REASONING_OPTIONS_TEXT, '发送 `/r 6`、`/r max` 或 `/r ultra` 可切换。'],
       options.markdown,
     );
   }
   if (options.args.trim().toLowerCase() === 'default' || options.args.trim().toLowerCase() === 'reset') {
-    if (activeRuntime === 'kimi' || activeRuntime === 'cursor') {
+    if (activeRuntime === 'cursor') {
+      clearSessionCursorReasoningToml(session.id);
       return buildCommandFields(
-        `${activeRuntime === 'cursor' ? 'Cursor Agent' : 'Kimi Code'} 不支持 Bridge 思考级别设置`,
-        [['Runtime', activeRuntime]],
-        ['没有写入 Codex 或 Claude Code reasoning 配置。'],
+        '已恢复默认 Cursor Agent 思考级别',
+        [['级别', resolveCursorRuntimeConfig(options.store.getSession(session.id), options.binding).reasoningEffort || 'default']],
+        ['当前会话已清除 Cursor effort 覆盖值，后续启动会跟随全局 CodeLark 默认值；如果全局也为 default，则不向模型字符串添加 `effort`。'],
+        options.markdown,
+      );
+    }
+    if (activeRuntime === 'kimi') {
+      clearSessionKimiThinkingToml(session.id);
+      return buildCommandFields(
+        '已恢复默认 Kimi Code Thinking 模式',
+        [['模式', resolveKimiRuntimeConfig(options.store.getSession(session.id), options.binding).thinkingMode]],
+        ['当前会话已清除 Kimi Thinking 覆盖值，后续启动会跟随全局 CodeLark 默认值；`default` 表示继续跟随 Kimi Code CLI 自身配置。'],
         options.markdown,
       );
     }
@@ -347,33 +404,72 @@ export function handleReasoningCommand(options: {
       options.markdown,
     );
   }
-  const reasoning = normalizeReasoningEffort(options.args);
-  const claudeReasoning = activeRuntime === 'claude'
-    ? parseClaudeReasoningCommandArg(options.args)
-    : undefined;
-  if (activeRuntime === 'kimi' || activeRuntime === 'cursor') {
+  if (activeRuntime === 'cursor') {
+    const cursorReasoning = parseCursorReasoningCommandArg(options.args);
+    if (!cursorReasoning) {
+      return buildCommandFields(
+        'Cursor Agent 思考级别用法',
+        [['命令', '`/reasoning low|medium|high|xhigh|max|default`']],
+        [CURSOR_REASONING_OPTIONS_TEXT],
+        options.markdown,
+      );
+    }
+    setSessionCursorReasoningToml(session.id, cursorReasoning);
     return buildCommandFields(
-      `${activeRuntime === 'cursor' ? 'Cursor Agent' : 'Kimi Code'} 不支持 Bridge 思考级别设置`,
-      [['Runtime', activeRuntime]],
-      ['没有写入 Codex 或 Claude Code reasoning 配置。'],
+      '已更新 Cursor Agent 思考级别',
+      [['级别', cursorReasoning]],
+      [
+        `后续 Cursor tmux 启动会把模型写成 \`model[effort=${cursorReasoning}]\`；具体模型不支持该值时 Cursor CLI 会明确报错。`,
+        '如果 Cursor TUI 已启动，请先 `/stop`，再发送 `/p tmux` 重启后生效。',
+      ],
       options.markdown,
     );
   }
-  if (!reasoning && !claudeReasoning) {
+  if (activeRuntime === 'kimi') {
+    const thinkingMode = parseKimiThinkingCommandArg(options.args);
+    if (!thinkingMode) {
+      return buildCommandFields(
+        'Kimi Code Thinking 模式用法',
+        [['命令', '`/reasoning on|off|default`']],
+        [KIMI_THINKING_OPTIONS_TEXT],
+        options.markdown,
+      );
+    }
+    setSessionKimiThinkingToml(session.id, thinkingMode);
     return buildCommandFields(
-      '思考级别用法',
-      [['命令', activeRuntime === 'claude' ? '`/reasoning low|medium|high|xhigh|max|m`' : '`/reasoning minimal|low|medium|high|xhigh`']],
-      ['Codex 也支持：`/reasoning 1|2|3|4|5`', activeRuntime === 'claude' ? CLAUDE_REASONING_OPTIONS_TEXT : REASONING_OPTIONS_TEXT],
+      '已更新 Kimi Code Thinking 模式',
+      [['模式', thinkingMode]],
+      [
+        `后续启动 Kimi Code 时会传入 \`--${thinkingMode === 'on' ? '' : 'no-'}thinking\`。`,
+        '如果 Kimi Code TUI 已启动，请先 `/stop`，再发送 `/p tmux` 重启后生效。',
+      ],
       options.markdown,
     );
   }
   if (activeRuntime === 'claude') {
-    const effort = claudeReasoning || codexReasoningToClaudeEffort(reasoning as CodexReasoningEffort);
-    setSessionClaudeReasoningToml(session.id, effort);
+    const claudeReasoning = parseClaudeReasoningCommandArg(options.args);
+    if (!claudeReasoning) {
+      return buildCommandFields(
+        'Claude Code 思考级别用法',
+        [['命令', '`/reasoning low|medium|high|xhigh|max|m`']],
+        [CLAUDE_REASONING_OPTIONS_TEXT],
+        options.markdown,
+      );
+    }
+    setSessionClaudeReasoningToml(session.id, claudeReasoning);
     return buildCommandFields(
       '已更新 Claude Code 思考级别',
-      [['级别', effort]],
-      [`后续启动 Claude Code pty 时会传入 \`--effort ${effort}\`。`, CLAUDE_PTY_RUNTIME_UPDATE_NOTE],
+      [['级别', claudeReasoning]],
+      [`后续启动 Claude Code pty 时会传入 \`--effort ${claudeReasoning}\`。`, CLAUDE_PTY_RUNTIME_UPDATE_NOTE],
+      options.markdown,
+    );
+  }
+  const reasoning = normalizeReasoningEffort(options.args);
+  if (!reasoning) {
+    return buildCommandFields(
+      '思考级别用法',
+      [['命令', '`/reasoning minimal|low|medium|high|xhigh|max|ultra`']],
+      ['Codex 也支持：`/reasoning 1|2|3|4|5|6|7`、`m=max`、`u=ultra`。', REASONING_OPTIONS_TEXT],
       options.markdown,
     );
   }

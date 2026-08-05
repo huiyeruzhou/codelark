@@ -73,7 +73,7 @@
 | --- | --- | --- | --- |
 | `/runtime` | `runtime.activeRuntime` | `codex` 时普通消息进入 Codex routing provider；`claude` 时普通消息默认进入 Claude Code tmux provider；`kimi` 时普通消息进入 Kimi tmux provider | 切换 runtime 不改变各 runtime 已记住的 `/provider` |
 | `/mode`、`/m` | `runtime.codex.mode` / `runtime.claude.yoloMode` | Codex `yolo` 强制 `danger-full-access` 与 `permissionMode=never` | Claude Code 只保留 YOLO 开关，运行时由 `yolo_mode` 推导 CLI/SDK permission 参数 |
-| `/reasoning`、`/r` | `runtime.codex.reasoningEffort` | `modelReasoningEffort` | Claude 不应 fallback 到 Codex reasoning；Kimi 的 think 来自 wire mirror 状态区，不写 bridge reasoning 配置 |
+| `/reasoning`、`/r` | 当前 runtime 的 `reasoningEffort`；Kimi 为 `thinkingMode` | Codex/Claude 启动 effort、Kimi thinking flag、Cursor 参数化模型 effort | 各 runtime 独立校验，不能 fallback 或串写；Kimi wire 中的 think 仍只用于状态展示 |
 | `/sandbox`、`/sb` | `runtime.codex.sandboxMode` | Codex sandbox mode | Claude Code 没有同名 sandbox；不能共用 |
 | `/network`、`/net` | `runtime.codex.networkAccess` | Codex network access | Claude Code 网络通常由工具权限/环境决定，不能共用 |
 | `/model` | `runtime.<agent>.model` | 当前 runtime 的模型；已有本地 Codex thread 时只允许查看 | Codex/Claude/Kimi 模型名空间分开，不能互相 fallback |

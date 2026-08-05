@@ -2186,7 +2186,7 @@ describe('unit::real-feishu-e2e-harness::session-management-command-plan', () =>
     assert.deepEqual(expectationByCommand.get('/provider')?.expectedTexts, ['当前 Kimi Provider']);
     assert.deepEqual(expectationByCommand.get('/sandbox')?.expectedTexts, ['Kimi Code 不支持 Bridge 沙箱设置']);
     assert.deepEqual(expectationByCommand.get('/network')?.expectedTexts, ['Kimi Code 不支持 Bridge 网络开关']);
-    assert.deepEqual(expectationByCommand.get('/reasoning')?.expectedTexts, ['Kimi Code 不支持 Bridge 思考级别设置']);
+    assert.deepEqual(expectationByCommand.get('/reasoning')?.expectedTexts, ['当前 Kimi Code Thinking 模式']);
     assert.deepEqual(expectationByCommand.get(fileCommand)?.expectedTexts, []);
     assert.deepEqual(expectationByCommand.get(fileCommand)?.expectedReplyMessageTypes, ['file']);
     assert.deepEqual(expectationByCommand.get(fileCommand)?.expectedReplyContentKeys, ['file_key']);

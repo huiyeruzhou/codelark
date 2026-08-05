@@ -19,6 +19,7 @@ IM 命令从用户视角分为五组。命令入口是 [src/bridge/command/dispa
 - 新聊天收到普通文本或 slash 命令时，都会先按当前默认 runtime 建立隐藏的临时 BridgeSession；正式接管用 `/t`。
 - 修改当前会话参数优先用 `/runtime`、`/provider`、`/model`、`/cd` 等会话级命令。
 - 修改全局默认值用 `/set`；卡片按 TOML section 写入 `~/.codelark/config.toml`。
+- `/reasoning` 会按当前 runtime 展示有效选项：Codex 到 `ultra`、Claude 到 `max`、Kimi 为 on/off、Cursor 为模型 effort。
 - `/every` 用于按固定间隔重复发送 prompt；`/then` 用于在当前会话 completed/interrupted 后发送一次后续 prompt。两者都支持列表卡片和卡片操作，`/then` 还支持通过卡片新建、修改和取消。
 - `/doctor` 可不带参数；也可使用 `/doctor bridge_id:d3c20e05 2026-06-04 17:48` 或 `/doctor d3c20e05 2026-06-04 17:48`，让当前会话读取结构化 JSONL `bridge.log` 时优先用目标 id 和时间点搜索，并优先检查 `level=ERROR/WARN`、`event`、`msg`、`chat`、`lane` 等字段。
 

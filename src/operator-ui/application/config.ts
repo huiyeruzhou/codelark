@@ -10,7 +10,9 @@ import {
   claudeReasoningEffortSchema,
   codexProviderSchema,
   kimiProviderSchema,
+  kimiThinkingModeSchema,
   cursorProviderSchema,
+  cursorReasoningEffortSchema,
   reasoningEffortSchema,
   runtimeAgentSchema,
   sandboxModeSchema,
@@ -95,8 +97,13 @@ const uiConfigPayloadSchema = z.object({
   claudeIdleTimeoutMinutes: optionalNonNegativeInteger(),
   kimiDefaultModel: optionalString(),
   kimiProvider: optionalEnum(kimiProviderSchema),
+  kimiThinkingMode: optionalEnum(kimiThinkingModeSchema),
   cursorDefaultModel: optionalString(),
   cursorProvider: optionalEnum(cursorProviderSchema),
+  cursorReasoningEffort: z.preprocess(
+    (value) => typeof value === 'string' ? value.trim().toLowerCase() : value,
+    z.union([cursorReasoningEffortSchema, z.literal('')]),
+  ).optional(),
   cursorForce: z.boolean().optional(),
   uiAllowLan: z.boolean().optional(),
   uiAccessToken: optionalString(),
@@ -154,8 +161,10 @@ export function configV2ToPayload(config: ConfigV2, presentation: UiConfigPresen
     claudeIdleTimeoutMinutes: config.runtime.claude.idleTimeoutMinutes ?? 0,
     kimiDefaultModel: config.runtime.kimi.model || '',
     kimiProvider: config.runtime.kimi.provider || 'tmux',
+    kimiThinkingMode: config.runtime.kimi.thinkingMode || 'default',
     cursorDefaultModel: config.runtime.cursor.model || '',
     cursorProvider: config.runtime.cursor.provider || 'tmux',
+    cursorReasoningEffort: config.runtime.cursor.reasoningEffort || '',
     cursorForce: config.runtime.cursor.force === true,
     uiAllowLan: config.bridge.uiAllowLan === true,
     uiAccessToken: config.bridge.uiAccessToken || '',
@@ -224,12 +233,14 @@ export function mergeConfigV2HomePatch(current: ConfigV2, payload: Record<string
           ? current.runtime.kimi.model
           : parsed.kimiDefaultModel || '',
         provider: parsed.kimiProvider ?? current.runtime.kimi.provider,
+        thinkingMode: parsed.kimiThinkingMode ?? current.runtime.kimi.thinkingMode,
       },
       cursor: {
         model: parsed.cursorDefaultModel === undefined
           ? current.runtime.cursor.model
           : parsed.cursorDefaultModel || '',
         provider: parsed.cursorProvider ?? current.runtime.cursor.provider,
+        reasoningEffort: parsed.cursorReasoningEffort ?? current.runtime.cursor.reasoningEffort,
         force: hasPayloadKey(payload, 'cursorForce')
           ? parsed.cursorForce === true
           : current.runtime.cursor.force,

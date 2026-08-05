@@ -56,8 +56,8 @@ function codexYoloMode(value: unknown): 'off' | 'on' | undefined {
   return undefined;
 }
 
-function reasoningEffort(value: unknown): 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | undefined {
-  if (value === 'minimal' || value === 'low' || value === 'medium' || value === 'high' || value === 'xhigh') return value;
+function reasoningEffort(value: unknown): 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra' | undefined {
+  if (value === 'minimal' || value === 'low' || value === 'medium' || value === 'high' || value === 'xhigh' || value === 'max' || value === 'ultra') return value;
   return undefined;
 }
 

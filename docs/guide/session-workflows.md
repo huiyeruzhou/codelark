@@ -10,9 +10,9 @@ CodeLark 的 IM 对话由三层组成：
 | --- | --- | --- |
 | Chat | 飞书私聊、群聊、话题或云文档评论入口。它只记录“这个聊天当前接到哪个 BridgeSession”。 | `/t`、`/t 1`、`/t unbind` |
 | BridgeSession | CodeLark 管理的一条工作会话，保存工作目录、当前 runtime、provider、模型和底层 runtime 身份。 | `/new`、`/clear`、`/current` |
-| Runtime session | Codex thread、Claude Code session 或 Kimi Code session，是底层 agent 自己的会话身份。 | `/t` 接管、`/his` 查看历史 |
+| Runtime session | Codex thread、Claude Code/Kimi Code session 或 Cursor chat，是底层 agent 自己的会话身份。 | `/t` 接管、`/his` 查看历史 |
 
-`/runtime` 选择当前会话使用 Codex、Claude Code 还是 Kimi Code。`/provider` 选择当前 runtime 的驱动方式，例如 SDK、pty 或 tmux。切换 runtime 不会清空另一个 runtime 已记住的 provider；同一个聊天可以记住 Codex、Claude 和 Kimi 各自的 BridgeSession，来回切换时会尽量回到之前那条会话。
+`/runtime` 选择当前会话使用 Codex、Claude Code、Kimi Code 还是 Cursor Agent。日常使用默认由 tmux 承载本地 agent；只有需要诊断或显式改变运行方式时才使用 `/provider`。同一个聊天可以记住各 runtime 的 BridgeSession，来回切换时会尽量回到之前那条会话。
 
 ## 推荐日常流程
 
@@ -90,6 +90,7 @@ runtime 和数量下拉只切换卡片里的候选列表，不会改变当前会
 /runtime codex
 /runtime claude
 /runtime kimi
+/runtime cursor
 ```
 
 切换 provider：
@@ -101,12 +102,23 @@ runtime 和数量下拉只切换卡片里的候选列表，不会改变当前会
 /p sdk
 ```
 
-Codex 支持 `sdk`、`pty`、`tmux`。Claude Code 支持 `tmux`、`pty`、`sdk`，默认是 `tmux`。Kimi Code 当前只支持 `tmux`，发送普通文本后 CodeLark 会自动补一次 `Ctrl-S` steer。显式发送 `/p tmux` 会重建当前 runtime 的同名 provider-owned tmux；Kimi 会恢复已有 Kimi session id，并在 TUI ready 后更新绑定。`/provider` 不带参数时会显示当前 runtime 的 provider 和可选值。
+Codex、Claude Code、Kimi Code 和 Cursor Agent 的默认日常路径都是 `tmux`。Kimi Code 和 Cursor Agent 当前只支持这一路径；`/provider` 不带参数时可查看当前状态，出现终端故障时可用 `/p tmux` 重建。
 
-`/current` 卡片顶部有“通用配置、Codex、Claude Code、Kimi Code”四个分栏：
+思考配置按 runtime 的真实能力提供：
+
+| Runtime | 当前会话命令 | 可选值 |
+| --- | --- | --- |
+| Codex | `/reasoning <值>` | `minimal`、`low`、`medium`、`high`、`xhigh`、`max`、`ultra` |
+| Claude Code | `/reasoning <值>` | `low`、`medium`、`high`、`xhigh`、`max` |
+| Kimi Code | `/reasoning <值>` | `on`、`off`、`default`；Kimi 没有多档 effort |
+| Cursor Agent | `/reasoning <值>` | `low`、`medium`、`high`、`xhigh`、`max`；具体可用值取决于所选模型和账号 |
+
+`/reasoning default` 清除当前会话覆盖。全局默认可在 `/set` 对应 runtime 分栏修改；Cursor 会把 effort 合并进参数化模型，例如 `gpt-5.3-codex[effort=high]`，`force` 仍只表示跳过审批，不是思考级别。
+
+`/current` 卡片顶部有“通用配置、Codex、Claude Code、Kimi Code、Cursor”五个分栏：
 
 - 通用配置严格按“对话名称、工作目录、tmux 输出行数”显示；切到该分栏不会改变当前 agent。
-- Codex、Claude Code、Kimi Code 分栏只显示各自的 model、provider、mode、reasoning 等配置，不重复显示通用字段。选择另一个 runtime 分栏会沿用既有行为，切换当前 agent 并刷新卡片。
+- 各 runtime 分栏只显示自己的 model、mode、reasoning/thinking 等配置，不重复显示通用字段。选择另一个 runtime 分栏会切换当前 agent 并刷新卡片。
 - 输入框留空或下拉选择“跟随上层配置”时，只删除当前分栏对应的 session-level 覆盖，立即恢复 home/local/channel 等上层配置的当前有效值；保存一个分栏不会串写其他分栏。飞书里继承状态会明确选中“跟随上层配置”，不会显示为空；CardKit 内部使用独立的 inherit value，后端只把该机器值解释为 unset，不能把中文文案交给 sandbox/provider 等枚举写校验。
 
 运行中不能随意切换 runtime/provider。遇到拒绝提示时，先等当前任务结束，或发送 `/stop` 停止当前任务，再切换。
@@ -171,7 +183,8 @@ CodeLark 的配置分两类理解最清楚：
 - 通用配置：默认 agent、默认工作目录、tmux 默认展示行数、tmux 输入回显。
 - Codex：默认模型、YOLO 模式、provider、skip git repo check、sandbox、network、reasoning。
 - Claude：默认模型、YOLO 模式、provider、Claude executable、reasoning、空闲超时。
-- Kimi：默认模型、provider。
+- Kimi：默认模型、Thinking 开关。
+- Cursor：默认模型、模型 effort 和 force 模式。
 - Bridge：UI 访问和流式状态提示。
 - 通道配置（feishu-default）：历史消息数量、流式反馈、Markdown 反馈、群聊是否需要 @bot 等。
 
@@ -196,7 +209,7 @@ CodeLark 的配置分两类理解最清楚：
 | 目标 | 入口 |
 | --- | --- |
 | 看 bridge、通道和当前绑定 | `/status` |
-| 找本地 Codex/Claude/Kimi 会话并 attach | `/t` |
+| 找本地 Codex/Claude/Kimi/Cursor 会话并 attach | `/t` |
 | 改当前会话名、cwd、runtime 配置 | `/current` |
 | 改全局默认值和通道默认值 | `/set` |
 | 看 tmux provider 的当前屏幕 | `/tmux-screen` |

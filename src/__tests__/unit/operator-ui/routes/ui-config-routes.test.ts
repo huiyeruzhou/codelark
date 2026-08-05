@@ -276,15 +276,18 @@ describe('Ui config application', () => {
     assert.equal(payload.runtime, 'kimi');
     assert.equal(payload.kimiDefaultModel, 'moonshot-v1-current');
     assert.equal(payload.kimiProvider, 'tmux');
+    assert.equal(payload.kimiThinkingMode, 'default');
 
     const patch = mergeConfigV2HomePatch(current, {
       runtime: 'kimi',
       kimiDefaultModel: 'moonshot-v1-next',
       kimiProvider: 'tmux',
+      kimiThinkingMode: 'on',
     });
     assert.equal(patch.runtime?.agent, 'kimi');
     assert.equal(patch.runtime?.kimi?.model, 'moonshot-v1-next');
     assert.equal(patch.runtime?.kimi?.provider, 'tmux');
+    assert.equal(patch.runtime?.kimi?.thinkingMode, 'on');
     assert.equal(patch.runtime?.codex?.provider, current.runtime.codex.provider);
     assert.equal(patch.runtime?.claude?.provider, current.runtime.claude.provider);
   });
@@ -301,23 +304,30 @@ describe('Ui config application', () => {
       runtime: {
         ...baseConfigV2().runtime,
         agent: 'cursor',
-        cursor: { model: 'cursor-current', provider: 'tmux', force: true },
+        cursor: { model: 'cursor-current', provider: 'tmux', force: true, reasoningEffort: 'high' },
       },
     });
     const payload = configV2ToPayload(current);
     assert.equal(payload.runtime, 'cursor');
     assert.equal(payload.cursorDefaultModel, 'cursor-current');
     assert.equal(payload.cursorProvider, 'tmux');
+    assert.equal(payload.cursorReasoningEffort, 'high');
     assert.equal(payload.cursorForce, true);
 
     const patch = mergeConfigV2HomePatch(current, {
       runtime: 'cursor',
       cursorDefaultModel: 'cursor-next',
       cursorProvider: 'tmux',
+      cursorReasoningEffort: 'max',
       cursorForce: false,
     });
     assert.equal(patch.runtime?.agent, 'cursor');
-    assert.deepEqual(patch.runtime?.cursor, { model: 'cursor-next', provider: 'tmux', force: false });
+    assert.deepEqual(patch.runtime?.cursor, {
+      model: 'cursor-next',
+      provider: 'tmux',
+      force: false,
+      reasoningEffort: 'max',
+    });
   });
 
   it('preserves an empty channel list when saving unrelated global config', () => {
@@ -349,6 +359,7 @@ describe('Ui config application', () => {
     assert.match(source, /Kimi 默认值/);
     assert.match(source, /id="kimiProvider"/);
     assert.match(source, /id="kimiDefaultModel"/);
+    assert.match(source, /id="kimiThinkingMode"/);
     assert.match(source, /<select id="defaultProvider">[\s\S]*<option value="sdk">sdk<\/option>[\s\S]*<option value="tmux">tmux<\/option>/);
     assert.match(source, /<option value="">跟随默认<\/option>/);
     assert.doesNotMatch(source, /<option value="">auto<\/option>/);
@@ -368,9 +379,12 @@ describe('Ui config application', () => {
     assert.match(source, /Cursor 默认值/);
     assert.match(source, /id="cursorProvider"/);
     assert.match(source, /id="cursorDefaultModel"/);
+    assert.match(source, /id="cursorReasoningEffort"/);
     assert.match(source, /id="cursorForce"/);
     assert.match(source, /id="sessionConfigCursorBlock"/);
+    assert.match(source, /id="sessionConfigCursorReasoning"/);
     assert.match(source, /cursorProvider: document\.getElementById\('cursorProvider'\)\.value/);
+    assert.match(source, /cursorReasoningEffort: document\.getElementById\('cursorReasoningEffort'\)\.value/);
     assert.match(source, /document\.getElementById\('cursorForce'\)\.checked = config\.cursorForce === true/);
   });
 

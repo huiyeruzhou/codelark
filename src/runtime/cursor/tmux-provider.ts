@@ -152,10 +152,24 @@ function assertCursorPaneAlive(screen: string): void {
   throw new Error(`Cursor Agent exited before becoming ready${status}.`);
 }
 
-function buildCursorArgs(params: StreamChatParams): string[] {
+export function withCursorReasoningEffort(model: string, effort?: string): string {
+  const normalizedEffort = effort?.trim();
+  if (!normalizedEffort) return model;
+  const parameterized = /^(.*)\[([^\]]*)\]$/.exec(model.trim());
+  if (!parameterized) return `${model}[effort=${normalizedEffort}]`;
+  const parameters = parameterized[2]
+    .split(',')
+    .map((entry) => entry.trim())
+    .filter(Boolean)
+    .filter((entry) => entry.split('=', 1)[0]?.trim().toLowerCase() !== 'effort');
+  parameters.push(`effort=${normalizedEffort}`);
+  return `${parameterized[1]}[${parameters.join(',')}]`;
+}
+
+export function buildCursorArgs(params: StreamChatParams): string[] {
   const args: string[] = [];
   if (params.cursorSessionId) args.push('--resume', params.cursorSessionId);
-  if (params.model) args.push('--model', params.model);
+  if (params.model) args.push('--model', withCursorReasoningEffort(params.model, params.cursorReasoningEffort));
   if (params.cursorForce) args.push('--force');
   args.push('--trust');
   return args;

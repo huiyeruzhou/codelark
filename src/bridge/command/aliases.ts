@@ -1,4 +1,4 @@
-export const REASONING_LEVELS = ['minimal', 'low', 'medium', 'high', 'xhigh'] as const;
+export const REASONING_LEVELS = ['minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'] as const;
 export const LOCAL_SESSION_LIST_LIMIT_OPTIONS = [20, 50, 100] as const;
 export const DEFAULT_LOCAL_SESSION_LIST_LIMIT = 20;
 export const MAX_LOCAL_SESSION_LIST_LIMIT = 100;
@@ -163,6 +163,12 @@ export function normalizeReasoningEffort(raw: string): typeof REASONING_LEVELS[n
       return 'high';
     case '5':
       return 'xhigh';
+    case '6':
+    case 'm':
+      return 'max';
+    case '7':
+    case 'u':
+      return 'ultra';
     default:
       return null;
   }

@@ -81,6 +81,12 @@ codelark run
 - 如果当前是 tmux/pty provider 路径，可以使用 `/tmux-screen` 或 `/pty-screen` 查看终端状态；Claude Code 默认 tmux 路径用 `/tmux-screen`。
 - 如果卡片已经进入终态但没有追加新的纯文本消息，先看卡片上是否已有最终内容和终态 reaction；当前实现会在最终更新失败但已有卡片内容时保留卡片，避免重复发送 fallback 文本。
 
+### tmux 更新后本地 agent 无法启动
+
+tmux 服务端会长期驻留；更新磁盘上的客户端不会自动升级已运行的服务端。CodeLark 会用 `capture-pane` 探测兼容性，并在新客户端无法读取旧服务端时自动选择本机兼容的 tmux 可执行文件，不会终止已有 sessions。
+
+如果本机没有兼容客户端，错误卡会明确显示 `tmux client/server version mismatch` 和实际 stderr，而不会误报 session 已退出。可用卡片中的诊断命令核对；需要手工确认时运行 `tmux -V` 和 `tmux display-message -p '#{version}'`，分别查看客户端与服务端版本。
+
 ## 飞书流式卡片不可用
 
 **现象**：飞书只收到最终普通消息，或者已经开启流式卡片但卡片没有出现。

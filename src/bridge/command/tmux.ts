@@ -274,7 +274,11 @@ function formatCodexTmuxLaunchFailure(error: CodexResumeTmuxLaunchError, markdow
       'Codex tmux 启动失败',
       [
         ['tmux session', details.sessionName],
-        ['tmux session 仍存在', details.sessionExists === undefined ? undefined : details.sessionExists ? 'yes' : 'no'],
+        ['启动探测结束时 session 存活', details.sessionExists === undefined
+          ? undefined
+          : details.sessionExists
+            ? details.killCommand ? 'yes（随后已清理）' : 'yes'
+            : 'no'],
         ['codex_thread_id', details.threadId],
         ['cwd', details.workingDirectory],
         ['失败原因', details.reason],

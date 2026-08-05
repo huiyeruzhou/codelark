@@ -19,6 +19,7 @@ import {
 } from '../../../../runtime/kimi/session-index.js';
 import { assertKimiLaunchAuthentication } from '../../../../runtime/kimi/auth.js';
 import {
+  buildKimiArgs,
   isKimiInputReadyScreen,
   parseKimiSessionIdFromScreen,
 } from '../../../../runtime/kimi/tmux-provider.js';
@@ -45,6 +46,21 @@ describe('Kimi tmux provider helpers', () => {
       process.env.KIMI_CODE_HOME = previousKimiCodeHome;
     }
     fs.rmSync(kimiHome, { recursive: true, force: true });
+  });
+
+  it('maps CodeLark Thinking tri-state to Kimi CLI flags', () => {
+    const base = { prompt: 'hello', sessionId: 'bridge-session' };
+    assert.deepEqual(buildKimiArgs(base), ['-y']);
+    assert.deepEqual(buildKimiArgs({ ...base, kimiThinking: true }), ['-y', '--thinking']);
+    assert.deepEqual(buildKimiArgs({ ...base, kimiThinking: false }), ['-y', '--no-thinking']);
+    assert.deepEqual(buildKimiArgs({ ...base, kimiSessionId: 'session_1', model: 'k3', kimiThinking: true }), [
+      '-r',
+      'session_1',
+      '-y',
+      '-m',
+      'k3',
+      '--thinking',
+    ]);
   });
 
   it('waits for Kimi turn failed details instead of treating a retryable request warning as terminal', () => {

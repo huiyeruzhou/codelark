@@ -2034,7 +2034,7 @@ describe('command-dispatch', () => {
     assert.match(card?.footer?.[0] || '', /当前 agent.*<text_tag color='orange'>Codex<\/text_tag>/);
     assert.deepEqual(
       card?.form?.selects?.find((select) => select.elementId === 'codexReasoningEffort')?.options.map((option) => option.text),
-      ['跟随上层配置', 'medium', 'minimal', 'low', 'high', 'xhigh'],
+      ['跟随上层配置', 'medium', 'minimal', 'low', 'high', 'xhigh', 'max', 'ultra'],
     );
     assert.equal(getThreadTableMessageRecord(address, 'current')?.messageId, 'reply-1');
     assert.deepEqual(pinned, ['reply-1']);
@@ -2267,11 +2267,15 @@ describe('command-dispatch', () => {
     const card = sent.at(-1)?.richCard as OutboundRichCard | undefined;
     assert.equal(card?.selects?.[0]?.selectedCallbackData, buildCommandCallbackData('/current-runtime kimi'));
     assert.match(card?.footer?.[0] || '', /当前 agent.*<text_tag color='orange'>Kimi Code<\/text_tag>/);
-    assert.deepEqual(card?.form?.selects?.map((select) => select.elementId), ['kimiProvider']);
-    assert.deepEqual(card?.form?.selects?.map((select) => select.formName), ['kimi_provider']);
+    assert.deepEqual(card?.form?.selects?.map((select) => select.elementId), ['kimiProvider', 'kimiThinkingMode']);
+    assert.deepEqual(card?.form?.selects?.map((select) => select.formName), ['kimi_provider', 'kimi_thinking']);
     assert.deepEqual(
       card?.form?.selects?.find((select) => select.elementId === 'kimiProvider')?.options.map((option) => option.text),
       ['跟随上层配置', 'tmux'],
+    );
+    assert.deepEqual(
+      card?.form?.selects?.find((select) => select.elementId === 'kimiThinkingMode')?.options.map((option) => option.text),
+      ['跟随上层配置', 'default', 'on', 'off'],
     );
     assert.equal(card?.form?.selects?.some((select) => select.elementId === 'defaultProvider'), false);
     assert.equal(card?.form?.selects?.some((select) => select.elementId === 'claudeProvider'), false);
@@ -2299,6 +2303,7 @@ describe('command-dispatch', () => {
                 clk_cwd: '/tmp/kimi-current-card',
                 kimi_model: 'moonshot-current-card',
                 kimi_provider: 'tmux',
+                kimi_thinking: 'on',
               },
             },
           },
@@ -2316,6 +2321,7 @@ describe('command-dispatch', () => {
     const config = createConfigService({ migrate: false, env: {} });
     assert.equal(config.get('runtime.kimi.model', { kind: 'session', sessionId: updatedBinding.bridgeSessionId }), 'moonshot-current-card');
     assert.equal(config.get('runtime.kimi.provider', { kind: 'session', sessionId: updatedBinding.bridgeSessionId }), 'tmux');
+    assert.equal(config.get('runtime.kimi.thinkingMode', { kind: 'session', sessionId: updatedBinding.bridgeSessionId }), 'on');
     assert.notEqual(config.resolve('runtime.codex.provider', { kind: 'session', sessionId: updatedBinding.bridgeSessionId }).source, 'session');
     assert.notEqual(config.resolve('runtime.claude.provider', { kind: 'session', sessionId: updatedBinding.bridgeSessionId }).source, 'session');
     assert.match(sent.at(-1)?.text || '', /已保存当前会话配置/);
@@ -5584,6 +5590,13 @@ enabled = true
       'tmux',
     );
     assert.equal(
+      createConfigService({ migrate: false, env: {} }).get('runtime.kimi.thinkingMode', {
+        kind: 'session',
+        sessionId: session.id,
+      }),
+      'on',
+    );
+    assert.equal(
       createConfigService({ migrate: false, env: {} }).get('runtime.codex.reasoningEffort', {
         kind: 'session',
         sessionId: session.id,
@@ -5607,7 +5620,8 @@ enabled = true
     assert.match(sent.at(-6)?.text || '', /Kimi Code 模式固定/);
     assert.match(sent.at(-5)?.text || '', /已更新 Kimi Code 模型/);
     assert.match(sent.at(-4)?.text || '', /已切换 Kimi Provider/);
-    assert.match(sent.at(-3)?.text || '', /Kimi Code 不支持 Bridge 思考级别设置/);
+    assert.match(sent.at(-3)?.text || '', /已更新 Kimi Code Thinking 模式/);
+    assert.match(sent.at(-3)?.text || '', /--thinking/);
     assert.match(sent.at(-2)?.text || '', /Kimi Code 不支持 Bridge 沙箱设置/);
     assert.match(sent.at(-1)?.text || '', /Kimi Code 不支持 Bridge 网络开关/);
   });
@@ -6396,11 +6410,11 @@ enabled = true
     assert.equal(sent.at(-1)?.richCard?.form?.submitCallbackData, buildCommandCallbackData('/set --group runtime.kimi'));
     assert.deepEqual(
       sent.at(-1)?.richCard?.form?.selects?.map((select: any) => select.elementId),
-      ['kimiProvider'],
+      ['kimiProvider', 'kimiThinkingMode'],
     );
     assert.deepEqual(
       sent.at(-1)?.richCard?.form?.selects?.map((select: any) => select.formName),
-      ['kimi_provider'],
+      ['kimi_provider', 'kimi_thinking'],
     );
     assert.deepEqual(
       sent.at(-1)?.richCard?.form?.extraInputs?.map((input: any) => input.elementId),
@@ -6427,6 +6441,7 @@ enabled = true
               form_value: {
                 kimi_model: 'moonshot-global-card',
                 kimi_provider: 'tmux',
+                kimi_thinking: 'off',
               },
             },
           },
@@ -6444,6 +6459,7 @@ enabled = true
     const configAfterKimiSave = createConfigService({ migrate: false, env: {} });
     assert.equal(configAfterKimiSave.get('runtime.kimi.model'), 'moonshot-global-card');
     assert.equal(configAfterKimiSave.get('runtime.kimi.provider'), 'tmux');
+    assert.equal(configAfterKimiSave.get('runtime.kimi.thinkingMode'), 'off');
 
     await handleBridgeCommand(
       adapter,
@@ -6694,6 +6710,19 @@ enabled = true
     assert.match(sent.at(-1)?.text || '', /runtime\.codex\.reasoning_effort.*minimal/s);
     assert.match(sent.at(-1)?.text || '', /禁用 web search/);
     assert.equal(createConfigService({ migrate: false, env: {} }).get('runtime.codex.reasoningEffort'), 'minimal');
+
+    await handleBridgeCommand(
+      adapter,
+      {
+        address,
+        text: '/set codexReasoningEffort ultra',
+        messageId: 'incoming-set-reasoning-ultra',
+      } as any,
+      '/set codexReasoningEffort ultra',
+      deps,
+    );
+    assert.match(sent.at(-1)?.text || '', /runtime\.codex\.reasoning_effort.*ultra/s);
+    assert.equal(createConfigService({ migrate: false, env: {} }).get('runtime.codex.reasoningEffort'), 'ultra');
 
     await handleBridgeCommand(
       adapter,

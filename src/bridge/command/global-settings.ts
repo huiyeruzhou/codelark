@@ -63,9 +63,11 @@ const SETTING_DISPLAY_LABELS: Record<string, string> = {
   claudeIdleTimeoutMinutes: '空闲超时（分钟）',
   kimiDefaultModel: '模型',
   kimiProvider: 'Provider（运行方式）',
+  kimiThinkingMode: 'Thinking 模式',
   cursorDefaultModel: '模型',
   cursorProvider: 'Provider（运行方式）',
   cursorForce: 'YOLO模式',
+  cursorReasoningEffort: '思考级别',
   defaultWorkspaceRoot: '默认工作目录',
   tmuxCaptureLines: 'tmux 输出行数',
   tmuxEchoInput: '回显 tmux 输入',
@@ -100,9 +102,11 @@ const SETTING_FORM_NAMES: Record<string, string> = {
   claudeIdleTimeoutMinutes: 'cld_idle_min',
   kimiDefaultModel: 'kimi_model',
   kimiProvider: 'kimi_provider',
+  kimiThinkingMode: 'kimi_thinking',
   cursorDefaultModel: 'cursor_model',
   cursorProvider: 'cursor_provider',
   cursorForce: 'cursor_force',
+  cursorReasoningEffort: 'cursor_reasoning',
   uiAllowLan: 'ui_lan',
   uiAccessToken: 'ui_token',
   historyMessageLimit: 'hist_limit',
@@ -409,13 +413,13 @@ const SETTING_DEFINITIONS: SettingDefinition[] = [
     group: 'runtime.codex',
     aliases: ['reasoning', 'reasoningEffort'],
     label: 'reasoning_effort',
-    usage: '/set codexReasoningEffort minimal|low|medium|high|xhigh',
+    usage: '/set codexReasoningEffort minimal|low|medium|high|xhigh|max|ultra',
     control: 'select',
-    options: [selectOption('medium'), selectOption('minimal'), selectOption('low'), selectOption('high'), selectOption('xhigh')],
+    options: [selectOption('medium'), selectOption('minimal'), selectOption('low'), selectOption('high'), selectOption('xhigh'), selectOption('max'), selectOption('ultra')],
     read: (config) => formatReasoningEffort(config.runtime.codex.reasoningEffort),
     write(rawValue) {
       const parsed = normalizeReasoningEffort(rawValue);
-      if (!parsed) return { ok: false, message: 'reasoning 必须是 minimal、low、medium、high、xhigh 或 1-5。' };
+      if (!parsed) return { ok: false, message: 'reasoning 必须是 minimal、low、medium、high、xhigh、max、ultra 或 1-7。' };
       return patch({ runtime: { codex: { reasoningEffort: parsed } } });
     },
   },
@@ -543,6 +547,24 @@ const SETTING_DEFINITIONS: SettingDefinition[] = [
     },
   },
   {
+    key: 'kimiThinkingMode',
+    tomlPath: 'runtime.kimi.thinking_mode',
+    group: 'runtime.kimi',
+    aliases: ['kimiThinking', 'kimiReasoning'],
+    label: 'thinking_mode',
+    usage: '/set kimiThinkingMode default|on|off',
+    control: 'select',
+    options: [selectOption('default'), selectOption('on'), selectOption('off')],
+    read: (config) => config.runtime.kimi.thinkingMode || 'default',
+    write(rawValue) {
+      const token = rawValue.trim().toLowerCase();
+      if (token === 'default' || token === 'on' || token === 'off') {
+        return patch({ runtime: { kimi: { thinkingMode: token } } });
+      }
+      return { ok: false, message: 'Kimi Thinking 模式必须是 default、on 或 off。' };
+    },
+  },
+  {
     key: 'cursorDefaultModel',
     tomlPath: 'runtime.cursor.model',
     group: 'runtime.cursor',
@@ -581,6 +603,25 @@ const SETTING_DEFINITIONS: SettingDefinition[] = [
     options: boolOptions(),
     read: (config) => formatBool(config.runtime.cursor.force),
     write: writeBooleanPatch((value) => ({ runtime: { cursor: { force: value } } })),
+  },
+  {
+    key: 'cursorReasoningEffort',
+    tomlPath: 'runtime.cursor.reasoning_effort',
+    group: 'runtime.cursor',
+    aliases: ['cursorReasoning', 'cursorEffort'],
+    label: 'reasoning_effort',
+    usage: '/set cursorReasoningEffort default|low|medium|high|xhigh|max',
+    control: 'select',
+    options: [selectOption('default'), selectOption('low'), selectOption('medium'), selectOption('high'), selectOption('xhigh'), selectOption('max')],
+    read: (config) => config.runtime.cursor.reasoningEffort || 'default',
+    write(rawValue) {
+      const token = rawValue.trim().toLowerCase();
+      if (token === 'default') return patch({ runtime: { cursor: { reasoningEffort: '' } } });
+      if (['low', 'medium', 'high', 'xhigh', 'max'].includes(token)) {
+        return patch({ runtime: { cursor: { reasoningEffort: token as 'low' | 'medium' | 'high' | 'xhigh' | 'max' } } });
+      }
+      return { ok: false, message: 'Cursor reasoning 必须是 default、low、medium、high、xhigh 或 max。' };
+    },
   },
   {
     key: 'uiAllowLan',
@@ -761,11 +802,13 @@ const CURRENT_RUNTIME_SETTING_KEYS: Record<'codex' | 'claude' | 'kimi' | 'cursor
   kimi: [
     'kimiDefaultModel',
     'kimiProvider',
+    'kimiThinkingMode',
   ],
   cursor: [
     'cursorDefaultModel',
     'cursorProvider',
     'cursorForce',
+    'cursorReasoningEffort',
   ],
 };
 
@@ -796,11 +839,13 @@ const SETTING_GROUP_ORDERS: Partial<Record<SettingGroupKey, string[]>> = {
   'runtime.kimi': [
     'kimiDefaultModel',
     'kimiProvider',
+    'kimiThinkingMode',
   ],
   'runtime.cursor': [
     'cursorDefaultModel',
     'cursorProvider',
     'cursorForce',
+    'cursorReasoningEffort',
   ],
 };
 

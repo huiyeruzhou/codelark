@@ -31,6 +31,7 @@ import {
 } from '../../runtime/codex/shell-snapshot.js';
 import type { StreamChatParams } from '../../runtime/contracts.js';
 import {
+  isTmuxVersionMismatchError,
   tmuxCore,
   type TmuxCore,
   type TmuxSendAction,
@@ -865,6 +866,21 @@ export async function waitForRuntimeTmuxReady(params: {
       } catch (existsError) {
         lastError = `${lastError}; session existence check failed: ${describeUnknownError(existsError)}`;
       }
+      if (isTmuxVersionMismatchError(lastError)) {
+        transitionRuntimeTmuxReadiness(machine, 'timeout', 'tmux client/server version mismatch detected', {
+          last_error: lastError,
+        });
+        return {
+          ready: false,
+          runtime: params.runtime,
+          commands,
+          lastScreen,
+          lastError,
+          sessionExists,
+          sessionExistsCommand,
+          ...(selectionPrompt ? { selectionPrompt } : {}),
+        };
+      }
     }
     await sleep(pollMs);
   }
@@ -1040,7 +1056,9 @@ export async function startCodexResumeTmuxSession(
         ? `Codex TUI is waiting at a ${startedCheck.selectionPromptKind} selection prompt during startup`
       : startedCheck.lastError
         ? `tmux launch check failed: ${startedCheck.lastError}`
-        : 'tmux session did not survive after new-session';
+        : startedCheck.sessionExists === true
+          ? 'Codex TUI did not become ready before the startup timeout; the tmux session remained alive but no recognized prompt was detected'
+          : 'Codex TUI did not become ready and tmux session status could not be confirmed';
     const details: CodexResumeTmuxLaunchFailureDetails = {
       sessionName: params.sessionName,
       threadId: params.threadId,

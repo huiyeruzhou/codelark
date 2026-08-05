@@ -11,8 +11,10 @@ export const cursorProviderSchema = z.enum(['tmux']);
 export const claudeExecutableSchema = z.enum(['claude', 'ccr']);
 export const yoloModeSchema = z.enum(['off', 'on', 'yolo']);
 export const sandboxModeSchema = z.enum(['read-only', 'workspace-write', 'danger-full-access']);
-export const reasoningEffortSchema = z.enum(['minimal', 'low', 'medium', 'high', 'xhigh']);
+export const reasoningEffortSchema = z.enum(['minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra']);
 export const claudeReasoningEffortSchema = z.enum(['low', 'medium', 'high', 'xhigh', 'max']);
+export const kimiThinkingModeSchema = z.enum(['default', 'on', 'off']);
+export const cursorReasoningEffortSchema = z.enum(['low', 'medium', 'high', 'xhigh', 'max']);
 export const feishuSiteSchema = z.enum(['feishu', 'lark']);
 
 const positiveIntegerSchema = z.number().int().positive();
@@ -47,12 +49,14 @@ export const claudeConfigSchema = z.object({
 export const kimiConfigSchema = z.object({
   model: z.string(),
   provider: kimiProviderSchema,
+  thinkingMode: kimiThinkingModeSchema.optional(),
 });
 
 export const cursorConfigSchema = z.object({
   model: z.string(),
   provider: cursorProviderSchema,
   force: z.boolean(),
+  reasoningEffort: z.union([cursorReasoningEffortSchema, z.literal('')]).optional(),
 });
 
 export const runtimeConfigSchema = z.object({
@@ -182,12 +186,14 @@ export function tomlToConfigPatch(raw: unknown): ConfigPatch {
   const kimiPatch = copyDefined<NonNullable<NonNullable<ConfigPatch['runtime']>['kimi']>>(kimi, [
     ['model', 'model'],
     ['provider', 'provider'],
+    ['thinkingMode', 'thinking_mode'],
   ]);
   if (Object.keys(kimiPatch).length > 0) runtimePatch.kimi = kimiPatch;
   const cursorPatch = copyDefined<NonNullable<NonNullable<ConfigPatch['runtime']>['cursor']>>(cursor, [
     ['model', 'model'],
     ['provider', 'provider'],
     ['force', 'force'],
+    ['reasoningEffort', 'reasoning_effort'],
   ]);
   if (Object.keys(cursorPatch).length > 0) runtimePatch.cursor = cursorPatch;
   if (Object.keys(runtimePatch).length > 0) patch.runtime = runtimePatch;
@@ -264,11 +270,13 @@ export function configToTomlShape(config: ConfigPatch): Record<string, unknown> 
       ...(config.runtime.kimi ? { kimi: {
         ...(config.runtime.kimi.model !== undefined ? { model: config.runtime.kimi.model } : {}),
         ...(config.runtime.kimi.provider !== undefined ? { provider: config.runtime.kimi.provider } : {}),
+        ...(config.runtime.kimi.thinkingMode !== undefined ? { thinking_mode: config.runtime.kimi.thinkingMode } : {}),
       } } : {}),
       ...(config.runtime.cursor ? { cursor: {
         ...(config.runtime.cursor.model !== undefined ? { model: config.runtime.cursor.model } : {}),
         ...(config.runtime.cursor.provider !== undefined ? { provider: config.runtime.cursor.provider } : {}),
         ...(config.runtime.cursor.force !== undefined ? { force: config.runtime.cursor.force } : {}),
+        ...(config.runtime.cursor.reasoningEffort !== undefined ? { reasoning_effort: config.runtime.cursor.reasoningEffort } : {}),
       } } : {}),
     };
   }

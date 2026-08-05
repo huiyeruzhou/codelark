@@ -1353,6 +1353,10 @@ describe('bridge-manager resolveCommandAlias', () => {
     assert.equal(normalizeReasoningEffort('3'), 'medium');
     assert.equal(normalizeReasoningEffort('4'), 'high');
     assert.equal(normalizeReasoningEffort('5'), 'xhigh');
+    assert.equal(normalizeReasoningEffort('6'), 'max');
+    assert.equal(normalizeReasoningEffort('m'), 'max');
+    assert.equal(normalizeReasoningEffort('7'), 'ultra');
+    assert.equal(normalizeReasoningEffort('u'), 'ultra');
     assert.equal(normalizeReasoningEffort('xhigh'), 'xhigh');
     assert.equal(normalizeReasoningEffort('9'), null);
   });

@@ -34,12 +34,15 @@ Cursor tmux 是生产支持的 runtime，不是 UI 占位。真实官方 `agent`
 - `/runtime codex|claude|kimi|cursor`：切换当前会话使用的运行时。
 - `/provider` 或 `/p`：查看或切换当前运行时的提供方。
 - `/model`：查看或切换当前会话模型。
+- `/reasoning`：按当前 runtime 设置 Codex/Claude effort、Kimi Thinking 开关或 Cursor 模型 effort。
 - `/cd <path>`：修改当前会话工作目录。
 - `/set`：查看或修改全局默认值。
 - Web 工作台配置页：编辑全局默认值。
 - Web 工作台会话配置弹窗：编辑单个会话的覆盖值。
 
 Claude 的 `executable` 影响 `tmux` 和 `pty` 提供方；Claude SDK 提供方不走本机 `claude` / `ccr code` TUI。
+
+思考能力不跨 runtime 硬映射：Codex 支持到 `ultra`；Claude Code 支持到 `max`；Kimi Code 只有 `--thinking/--no-thinking`；Cursor 通过 `--model 'model[effort=...]'` 传递模型级 effort，实际可选值由 Cursor 的模型目录和账号决定。Cursor `force` 与 `maxMode` 都不等同于 reasoning effort。
 
 ## 设计模块
 

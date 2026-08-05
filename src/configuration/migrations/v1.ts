@@ -17,7 +17,7 @@ type LegacyClaudeProvider = 'sdk' | 'pty' | 'tmux';
 type LegacyKimiProvider = 'tmux';
 type LegacyClaudeExecutable = 'claude' | 'ccr';
 type LegacyFeishuSite = 'feishu' | 'lark';
-type LegacyReasoningEffort = 'minimal' | 'low' | 'medium' | 'high' | 'xhigh';
+type LegacyReasoningEffort = 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra';
 type LegacyClaudeReasoningEffort = 'low' | 'medium' | 'high' | 'xhigh' | 'max';
 type LegacySandboxMode = 'read-only' | 'workspace-write' | 'danger-full-access';
 
@@ -137,7 +137,7 @@ function sandboxMode(value: unknown): LegacySandboxMode | undefined {
 }
 
 function reasoningEffort(value: unknown): LegacyReasoningEffort | undefined {
-  return value === 'minimal' || value === 'low' || value === 'medium' || value === 'high' || value === 'xhigh'
+  return value === 'minimal' || value === 'low' || value === 'medium' || value === 'high' || value === 'xhigh' || value === 'max' || value === 'ultra'
     ? value
     : undefined;
 }

@@ -211,6 +211,19 @@ function applySessionConfigToml(bridgeSessionId: string, payload: Record<string,
         (provider) => ({ runtime: { kimi: { provider } } }),
       );
     }
+    if (
+      payload.kimiThinkingMode === 'default'
+      || payload.kimiThinkingMode === 'on'
+      || payload.kimiThinkingMode === 'off'
+      || payload.kimiThinkingMode === ''
+    ) {
+      setOrUnsetSessionConfig(
+        bridgeSessionId,
+        'runtime.kimi.thinkingMode',
+        payload.kimiThinkingMode,
+        (thinkingMode) => ({ runtime: { kimi: { thinkingMode } } }),
+      );
+    }
     return;
   }
 
@@ -229,6 +242,21 @@ function applySessionConfigToml(bridgeSessionId: string, payload: Record<string,
         'runtime.cursor.provider',
         payload.cursorProvider,
         (provider) => ({ runtime: { cursor: { provider } } }),
+      );
+    }
+    if (
+      payload.cursorReasoningEffort === 'low'
+      || payload.cursorReasoningEffort === 'medium'
+      || payload.cursorReasoningEffort === 'high'
+      || payload.cursorReasoningEffort === 'xhigh'
+      || payload.cursorReasoningEffort === 'max'
+      || payload.cursorReasoningEffort === ''
+    ) {
+      setOrUnsetSessionConfig(
+        bridgeSessionId,
+        'runtime.cursor.reasoningEffort',
+        payload.cursorReasoningEffort,
+        (reasoningEffort) => ({ runtime: { cursor: { reasoningEffort } } }),
       );
     }
     if (typeof payload.cursorForce === 'boolean' || payload.cursorForce === '') {
@@ -269,6 +297,8 @@ function applySessionConfigToml(bridgeSessionId: string, payload: Record<string,
     || payload.reasoningEffort === 'medium'
     || payload.reasoningEffort === 'high'
     || payload.reasoningEffort === 'xhigh'
+    || payload.reasoningEffort === 'max'
+    || payload.reasoningEffort === 'ultra'
     || payload.reasoningEffort === ''
   ) {
     setOrUnsetSessionConfig(
@@ -375,8 +405,10 @@ function sessionConfigPayload(session: BridgeSession) {
     claudeReasoningEffort: getSessionConfigTomlOverride<string>(session, 'runtime.claude.reasoningEffort') || '',
     kimiModel: getSessionConfigTomlOverride<string>(session, 'runtime.kimi.model') || '',
     kimiProvider: getSessionConfigTomlOverride<string>(session, 'runtime.kimi.provider') || '',
+    kimiThinkingMode: getSessionConfigTomlOverride<string>(session, 'runtime.kimi.thinkingMode') || '',
     cursorModel: getSessionConfigTomlOverride<string>(session, 'runtime.cursor.model') || '',
     cursorProvider: getSessionConfigTomlOverride<string>(session, 'runtime.cursor.provider') || '',
+    cursorReasoningEffort: getSessionConfigTomlOverride<string>(session, 'runtime.cursor.reasoningEffort') || '',
     cursorForce: getSessionConfigTomlOverride<boolean>(session, 'runtime.cursor.force'),
   };
 }

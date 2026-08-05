@@ -307,6 +307,8 @@ export function renderUiShellHtml(): string {
                       <option value="low">low</option>
                       <option value="high">high</option>
                       <option value="xhigh">xhigh</option>
+                      <option value="max">max</option>
+                      <option value="ultra">ultra</option>
                     </select>
                   </label>
                   <label>
@@ -405,6 +407,10 @@ export function renderUiShellHtml(): string {
                     <span class="field-title">Kimi 默认模型 <span class="help-tip" tabindex="0" data-tip="只作为 Kimi Code runtime 的默认模型；留空则跟随 Kimi Code 默认。">?</span></span>
                     <input id="kimiDefaultModel" placeholder="留空则跟随 Kimi Code 默认" />
                   </label>
+                  <label>
+                    <span class="field-title">Kimi Thinking 模式 <span class="help-tip" tabindex="0" data-tip="default 跟随 Kimi Code 自身配置；on/off 分别传入 --thinking/--no-thinking。">?</span></span>
+                    <select id="kimiThinkingMode"><option value="default">default</option><option value="on">on</option><option value="off">off</option></select>
+                  </label>
                 </div>
               </div>
 
@@ -418,6 +424,10 @@ export function renderUiShellHtml(): string {
                   <label>
                     <span class="field-title">Cursor 默认模型 <span class="help-tip" tabindex="0" data-tip="留空则跟随 Cursor Agent 默认模型。">?</span></span>
                     <input id="cursorDefaultModel" placeholder="留空则跟随 Cursor Agent 默认" />
+                  </label>
+                  <label>
+                    <span class="field-title">Cursor 思考级别 <span class="help-tip" tabindex="0" data-tip="写入参数化模型的 effort 覆盖；实际可用等级取决于所选 Cursor 模型和账号。留空则跟随 Cursor。">?</span></span>
+                    <select id="cursorReasoningEffort"><option value="">跟随 Cursor</option><option value="low">low</option><option value="medium">medium</option><option value="high">high</option><option value="xhigh">xhigh</option><option value="max">max</option></select>
                   </label>
                   <label class="checkbox"><input id="cursorForce" type="checkbox" /> Cursor force 模式</label>
                 </div>
@@ -538,7 +548,7 @@ export function renderUiShellHtml(): string {
                   <div class="command-list-head"><div>命令</div><div>原始命令</div><div>说明</div></div>
                   <div class="command-item"><div class="command-col-command"><code>/m</code></div><div class="command-col-original"><code>/mode</code></div><div class="command-col-desc">查看当前模式；可选 <code>normal</code>、<code>yolo</code>。</div></div>
                   <div class="command-item"><div class="command-col-command"><code>/provider</code></div><div class="command-col-original"><code>/provider</code></div><div class="command-col-desc">查看或切换当前 IM 会话 active runtime 的 Provider；Codex 和 Claude 可选 <code>sdk</code>、<code>pty</code>、<code>tmux</code>，Kimi 与 Cursor 当前只支持 <code>tmux</code>。</div></div>
-                  <div class="command-item"><div class="command-col-command"><code>/r</code></div><div class="command-col-original"><code>/reasoning</code></div><div class="command-col-desc">查看当前思考级别；可选 <code>1=minimal</code>、<code>2=low</code>、<code>3=medium</code>、<code>4=high</code>、<code>5=xhigh</code>。</div></div>
+                  <div class="command-item"><div class="command-col-command"><code>/r</code></div><div class="command-col-original"><code>/reasoning</code></div><div class="command-col-desc">Codex 可选 <code>minimal</code> 到 <code>ultra</code>；Claude 可选 <code>low</code> 到 <code>max</code>；Kimi 使用 <code>on/off/default</code>；Cursor 使用模型 <code>effort</code>。</div></div>
                   <div class="command-item"><div class="command-col-command"><code>/sb</code></div><div class="command-col-original"><code>/sandbox</code></div><div class="command-col-desc">查看或切换当前 IM 会话的 Codex 沙箱；可选 <code>read-only</code>、<code>workspace-write</code>、<code>danger-full-access</code>、<code>default</code>。</div></div>
                   <div class="command-item"><div class="command-col-command"><code>/net</code></div><div class="command-col-original"><code>/network</code></div><div class="command-col-desc">查看或切换当前 IM 会话的网络访问；可选 <code>on</code>、<code>off</code>、<code>default</code>。</div></div>
                   <div class="command-item"><div class="command-col-command"><code>/ui</code></div><div class="command-col-original">—</div><div class="command-col-desc">查看 UI 显示策略；工具调用详情始终展示。</div></div>
@@ -685,7 +695,7 @@ export function renderUiShellHtml(): string {
             <label>Codex 模型<select id="sessionConfigModel"></select></label>
             <label>Codex 模式<select id="sessionConfigMode"><option value="normal">normal</option><option value="yolo">yolo</option></select></label>
             <label>Codex Provider<select id="sessionConfigProvider"><option value="">default</option><option value="sdk">sdk</option><option value="pty">pty</option><option value="tmux">tmux</option></select></label>
-            <label>Codex 思考级别<select id="sessionConfigReasoning"><option value="">跟随全局</option><option value="medium">medium</option><option value="minimal">minimal</option><option value="low">low</option><option value="high">high</option><option value="xhigh">xhigh</option></select></label>
+            <label>Codex 思考级别<select id="sessionConfigReasoning"><option value="">跟随全局</option><option value="medium">medium</option><option value="minimal">minimal</option><option value="low">low</option><option value="high">high</option><option value="xhigh">xhigh</option><option value="max">max</option><option value="ultra">ultra</option></select></label>
           </div>
           <div class="field-row" id="sessionConfigCodexSandboxBlock">
             <label>文件系统权限<select id="sessionConfigSandbox"><option value="">跟随全局</option><option value="workspace-write">workspace-write</option><option value="read-only">read-only</option><option value="danger-full-access">danger-full-access</option></select></label>
@@ -698,10 +708,12 @@ export function renderUiShellHtml(): string {
           <div class="field-row triple" id="sessionConfigKimiBlock" hidden>
             <label>Kimi 模型<input id="sessionConfigKimiModel" placeholder="留空跟随全局 Kimi 默认模型" /></label>
             <label>Kimi Provider<select id="sessionConfigKimiProvider"><option value="">跟随全局</option><option value="tmux">tmux</option></select></label>
+            <label>Kimi Thinking<select id="sessionConfigKimiThinking"><option value="">跟随全局</option><option value="default">跟随 Kimi CLI</option><option value="on">on</option><option value="off">off</option></select></label>
           </div>
           <div class="field-row triple" id="sessionConfigCursorBlock" hidden>
             <label>Cursor 模型<input id="sessionConfigCursorModel" placeholder="留空跟随全局 Cursor 默认模型" /></label>
             <label>Cursor Provider<select id="sessionConfigCursorProvider"><option value="">跟随全局</option><option value="tmux">tmux</option></select></label>
+            <label>Cursor 思考级别<select id="sessionConfigCursorReasoning"><option value="">跟随全局</option><option value="low">low</option><option value="medium">medium</option><option value="high">high</option><option value="xhigh">xhigh</option><option value="max">max</option></select></label>
             <label>Cursor force<select id="sessionConfigCursorForce"><option value="">跟随全局</option><option value="on">启用</option><option value="off">关闭</option></select></label>
           </div>
           <label>系统提示<textarea id="sessionConfigPrompt" placeholder="留空则不覆盖系统提示"></textarea></label>
@@ -1230,8 +1242,10 @@ export function renderUiShellHtml(): string {
           claudeIdleTimeoutMinutes: document.getElementById('claudeIdleTimeoutMinutes').value,
           kimiProvider: document.getElementById('kimiProvider').value,
           kimiDefaultModel: document.getElementById('kimiDefaultModel').value,
+          kimiThinkingMode: document.getElementById('kimiThinkingMode').value,
           cursorProvider: document.getElementById('cursorProvider').value,
           cursorDefaultModel: document.getElementById('cursorDefaultModel').value,
+          cursorReasoningEffort: document.getElementById('cursorReasoningEffort').value,
           cursorForce: document.getElementById('cursorForce').checked,
           uiAllowLan: document.getElementById('uiAllowLan').checked,
           uiAccessToken: document.getElementById('uiAccessToken').value,
@@ -1604,8 +1618,10 @@ export function renderUiShellHtml(): string {
         claudeIdleTimeoutMinutes: 'Claude 空闲超时',
         kimiProvider: '默认 Kimi Provider',
         kimiDefaultModel: 'Kimi 默认模型',
+        kimiThinkingMode: 'Kimi Thinking 模式',
         cursorProvider: '默认 Cursor Provider',
         cursorDefaultModel: 'Cursor 默认模型',
+        cursorReasoningEffort: 'Cursor 思考级别',
         cursorForce: 'Cursor force 模式',
         uiAllowLan: '允许局域网访问 Web 控制台',
         uiAccessToken: '局域网访问 token',
@@ -1636,8 +1652,10 @@ export function renderUiShellHtml(): string {
         'claudeIdleTimeoutMinutes',
         'kimiProvider',
         'kimiDefaultModel',
+        'kimiThinkingMode',
         'cursorProvider',
         'cursorDefaultModel',
+        'cursorReasoningEffort',
         'cursorForce',
         'uiAllowLan',
         'uiAccessToken',
@@ -2313,8 +2331,10 @@ export function renderUiShellHtml(): string {
         document.getElementById('claudeIdleTimeoutMinutes').value = String(config.claudeIdleTimeoutMinutes || 0);
         document.getElementById('kimiProvider').value = config.kimiProvider || 'tmux';
         document.getElementById('kimiDefaultModel').value = config.kimiDefaultModel || '';
+        document.getElementById('kimiThinkingMode').value = config.kimiThinkingMode || 'default';
         document.getElementById('cursorProvider').value = config.cursorProvider || 'tmux';
         document.getElementById('cursorDefaultModel').value = config.cursorDefaultModel || '';
+        document.getElementById('cursorReasoningEffort').value = config.cursorReasoningEffort || '';
         document.getElementById('cursorForce').checked = config.cursorForce === true;
         document.getElementById('uiAllowLan').checked = config.uiAllowLan === true;
         document.getElementById('uiAccessToken').value = config.uiAccessToken || '';
@@ -2731,8 +2751,10 @@ export function renderUiShellHtml(): string {
         document.getElementById('sessionConfigClaudeReasoning').value = config.claudeReasoningEffort || '';
         document.getElementById('sessionConfigKimiModel').value = config.kimiModel || '';
         document.getElementById('sessionConfigKimiProvider').value = config.kimiProvider || '';
+        document.getElementById('sessionConfigKimiThinking').value = config.kimiThinkingMode || '';
         document.getElementById('sessionConfigCursorModel').value = config.cursorModel || '';
         document.getElementById('sessionConfigCursorProvider').value = config.cursorProvider || '';
+        document.getElementById('sessionConfigCursorReasoning').value = config.cursorReasoningEffort || '';
         document.getElementById('sessionConfigCursorForce').value = config.cursorForce === undefined
           ? ''
           : config.cursorForce === true ? 'on' : 'off';
@@ -2757,8 +2779,10 @@ export function renderUiShellHtml(): string {
           claudeReasoningEffort: document.getElementById('sessionConfigClaudeReasoning').value,
           kimiModel: document.getElementById('sessionConfigKimiModel').value,
           kimiProvider: document.getElementById('sessionConfigKimiProvider').value,
+          kimiThinkingMode: document.getElementById('sessionConfigKimiThinking').value,
           cursorModel: document.getElementById('sessionConfigCursorModel').value,
           cursorProvider: document.getElementById('sessionConfigCursorProvider').value,
+          cursorReasoningEffort: document.getElementById('sessionConfigCursorReasoning').value,
           cursorForce: document.getElementById('sessionConfigCursorForce').value === ''
             ? ''
             : document.getElementById('sessionConfigCursorForce').value === 'on',

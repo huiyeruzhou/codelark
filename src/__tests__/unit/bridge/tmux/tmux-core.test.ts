@@ -30,7 +30,68 @@ if (args[0] === 'display-message') {
   };
 }
 
+function installExecutable(filePath: string, source: string): void {
+  fs.writeFileSync(filePath, `#!/usr/bin/env node\n${source}`, 'utf-8');
+  fs.chmodSync(filePath, 0o755);
+}
+
 describe('TmuxCore', () => {
+  it('treats a missing isolated tmux socket as no session', async () => {
+    const binDir = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-unit-tmux-no-server-'));
+    const executablePath = path.join(binDir, 'tmux');
+    installExecutable(executablePath, `
+process.stderr.write('error connecting to /tmp/codelark-test/tmux/default (No such file or directory)\\n');
+process.exit(1);
+`);
+    const core = createTmuxCliCore({ executable: executablePath });
+
+    try {
+      assert.deepEqual(await core.hasSession('alpha'), {
+        exists: false,
+        command: 'tmux has-session -t alpha',
+      });
+      const listed = await core.listSessions();
+      assert.deepEqual(listed.sessions, []);
+      assert.match(listed.command, /^tmux list-sessions -F /);
+    } finally {
+      fs.rmSync(binDir, { recursive: true, force: true });
+    }
+  });
+
+  it('falls back when capture-pane reports a client/server mismatch with exit code 0', async () => {
+    const binDir = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-unit-tmux-compat-'));
+    const incompatiblePath = path.join(binDir, 'tmux-new');
+    const compatiblePath = path.join(binDir, 'tmux-old');
+    const logPath = path.join(binDir, 'compatible.log');
+    installExecutable(incompatiblePath, `
+if (process.argv[2] === 'list-panes') {
+  process.stdout.write('%1\\n');
+} else if (process.argv[2] === 'capture-pane') {
+  process.stderr.write('server version is too old for client\\n');
+  process.exit(0);
+}
+`);
+    installExecutable(compatiblePath, `
+const fs = require('node:fs');
+const args = process.argv.slice(2);
+fs.appendFileSync(${JSON.stringify(logPath)}, args.join(' ') + '\\n');
+if (args[0] === 'list-panes') process.stdout.write('%1\\n');
+if (args[0] === 'display-message') process.stdout.write('10\\n');
+if (args[0] === 'capture-pane' && args.includes('-t')) process.stdout.write('OpenAI Codex\\n\\n› \\n');
+`);
+    const core = createTmuxCliCore({ candidateExecutables: [incompatiblePath, compatiblePath] });
+
+    try {
+      const capture = await core.capturePane('alpha', 20);
+
+      assert.match(capture.screen, /OpenAI Codex/);
+      assert.match(capture.command, new RegExp(compatiblePath.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+      assert.match(fs.readFileSync(logPath, 'utf-8'), /capture-pane -p -S 0 -t %1/);
+    } finally {
+      fs.rmSync(binDir, { recursive: true, force: true });
+    }
+  });
+
   it('enables extended keys for TUIs that distinguish Enter from newline', async () => {
     const fakeTmux = installFakeTmux();
     const oldFakeLog = process.env.TMUX_FAKE_LOG;
@@ -43,6 +104,22 @@ describe('TmuxCore', () => {
       if (oldFakeLog === undefined) delete process.env.TMUX_FAKE_LOG;
       else process.env.TMUX_FAKE_LOG = oldFakeLog;
       fs.rmSync(fakeTmux.binDir, { recursive: true, force: true });
+    }
+  });
+
+  it('continues when an older tmux does not support extended-keys', async () => {
+    const binDir = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-unit-tmux-old-keys-'));
+    const executablePath = path.join(binDir, 'tmux');
+    installExecutable(executablePath, `
+process.stderr.write('invalid option: extended-keys\\n');
+process.exit(1);
+`);
+    const core = createTmuxCliCore({ executable: executablePath });
+
+    try {
+      assert.equal(await core.ensureExtendedKeys?.(), '');
+    } finally {
+      fs.rmSync(binDir, { recursive: true, force: true });
     }
   });
 

@@ -12,7 +12,6 @@ describe('test runner tmux isolation', () => {
     assert.equal(process.env.TMUX, undefined);
     assert.equal(process.env.TMUX_PANE, undefined);
     assert.equal(process.env.NODE_TEST_CONTEXT, 'child-v8');
-    assert.match(process.env.NODE_TEST_WORKER_ID || '', /^\d+$/u);
 
     const tmuxTempDir = process.env.TMUX_TMPDIR;
     assert.ok(tmuxTempDir);

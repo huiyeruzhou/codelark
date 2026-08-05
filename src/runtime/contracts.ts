@@ -60,8 +60,10 @@ export interface StreamChatParams {
   codexThreadId?: string;
   claudeSessionId?: string;
   kimiSessionId?: string;
+  kimiThinking?: boolean;
   cursorSessionId?: string;
   cursorForce?: boolean;
+  cursorReasoningEffort?: string;
   claudeExecutable?: ClaudeExecutable;
   claudeProvider?: ClaudeProviderChoice;
   model?: string;

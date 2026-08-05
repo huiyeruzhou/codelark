@@ -23,6 +23,32 @@ import {
 import { parseCodexTuiSelectionPrompt } from '../../../../runtime/codex/tmux-provider.js';
 
 describe('codex tmux runtime', () => {
+  it('surfaces a tmux client/server mismatch immediately even when the session exists', async () => {
+    const core: TmuxCore = {
+      commandPreview: (args) => ['tmux', ...args].join(' '),
+      hasSession: async (name) => ({ exists: true, command: `tmux has-session -t ${name}` }),
+      killSession: async (name) => `tmux kill-session -t ${name}`,
+      listSessions: async () => ({ sessions: [], command: 'tmux list-sessions' }),
+      ensureDetachedSession: async () => ({ existed: true, commands: [] }),
+      capturePane: async () => { throw new Error('server version is too old for client'); },
+      sendActions: async () => ({ commands: [] }),
+      sendInterrupt: async () => 'tmux send-keys C-c',
+      injectPromptIntoPane: async () => ({ commands: [] }),
+    };
+    const startedAt = Date.now();
+
+    const result = await waitForRuntimeTmuxReady({
+      runtime: 'codex',
+      sessionName: 'codex_version_mismatch',
+      core,
+    });
+
+    assert.equal(result.ready, false);
+    assert.equal(result.sessionExists, true);
+    assert.match(result.lastError || '', /server version is too old for client/);
+    assert.ok(Date.now() - startedAt < 1_000, 'version mismatch should not wait for the readiness timeout');
+  });
+
   it('detects a resumed Codex TUI prompt that already contains suggested text', () => {
     const screen = [
       '╭─────────────────────────────────────────────╮',

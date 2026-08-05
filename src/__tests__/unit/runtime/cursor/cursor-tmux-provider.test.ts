@@ -18,6 +18,7 @@ import {
   readCursorSessionMirrorRecordDeltaByFilePath,
 } from '../../../../runtime/cursor/session-index.js';
 import {
+  buildCursorArgs,
   buildCursorTmuxLaunchCommand,
   cursorAuthenticationScreenError,
   cursorTmuxSessionName,
@@ -25,6 +26,7 @@ import {
   isCursorInputDraftScreen,
   isCursorInputReadyScreen,
   streamCursorTmuxTui,
+  withCursorReasoningEffort,
 } from '../../../../runtime/cursor/tmux-provider.js';
 import { tmuxCore } from '../../../../bridge/tmux/core.js';
 
@@ -89,6 +91,24 @@ describe('Cursor tmux provider helpers', () => {
         env: { CURSOR_CONFIG_DIR: '/tmp/cursor config' },
       }),
       "CURSOR_CONFIG_DIR='/tmp/cursor config' '/opt/cursor agent' --resume chat-id --trust",
+    );
+  });
+
+  it('merges model-specific reasoning effort into Cursor parameterized model syntax', () => {
+    assert.equal(
+      withCursorReasoningEffort('claude-opus-4-8[context=1m,fast=false]', 'high'),
+      'claude-opus-4-8[context=1m,fast=false,effort=high]',
+    );
+    assert.equal(
+      withCursorReasoningEffort('claude-opus-4-8[context=1m,effort=low]', 'max'),
+      'claude-opus-4-8[context=1m,effort=max]',
+    );
+    assert.deepEqual(
+      buildCursorArgs({
+        model: 'gpt-5.3-codex',
+        cursorReasoningEffort: 'xhigh',
+      } as Parameters<typeof buildCursorArgs>[0]),
+      ['--model', 'gpt-5.3-codex[effort=xhigh]', '--trust'],
     );
   });
 

@@ -34,11 +34,13 @@ idle_timeout_minutes = 0
 [runtime.kimi]
 model = ""
 provider = "tmux"
+thinking_mode = "default"
 
 [runtime.cursor]
 model = "gpt-5.3-codex"
 provider = "tmux"
 force = false
+reasoning_effort = ""
 
 [[channels]]
 id = "feishu-default"

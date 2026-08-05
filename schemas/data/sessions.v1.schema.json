@@ -171,7 +171,7 @@
               "type": "boolean"
             },
             "reasoningEffort": {
-              "enum": ["minimal", "low", "medium", "high", "xhigh"]
+              "enum": ["minimal", "low", "medium", "high", "xhigh", "max", "ultra"]
             }
           },
           "additionalProperties": true
@@ -262,6 +262,9 @@
             },
             "provider": {
               "enum": ["tmux"]
+            },
+            "thinkingMode": {
+              "enum": ["default", "on", "off"]
             }
           },
           "additionalProperties": true
@@ -302,6 +305,9 @@
             },
             "provider": {
               "const": "tmux"
+            },
+            "reasoningEffort": {
+              "enum": ["low", "medium", "high", "xhigh", "max"]
             },
             "force": {
               "type": "boolean"

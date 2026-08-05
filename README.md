@@ -104,6 +104,7 @@ codelark run
 - `/p tmux`：重启当前 runtime 的 tmux Provider 会话
 - `/p sdk`：Codex / Claude Code 改为使用 SDK provider；Kimi Code 与 Cursor Agent 当前只支持 `tmux`。
 - `/runtime cursor`：切换到 Cursor Agent；原生 Cursor slash 命令使用 `/tmux /<command>`，例如 `/tmux /mcp list`。
+- `/reasoning`：查看或修改当前 runtime 的思考设置；Codex 支持 `max/ultra`，Kimi 使用 `on/off`，Cursor 使用模型 effort。
 - `/stop`：停止当前任务
 - `/t`：查看最近本地 Codex / Claude Code / Kimi Code / Cursor Agent 会话。
 - `/t rename <名称>`：重命名当前线程；群聊通道会同步修改群聊名称，真实群名会自动带 `[botname]` 前缀。

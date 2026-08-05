@@ -6,7 +6,9 @@ import {
   codexProviderSchema,
   feishuSiteSchema,
   kimiProviderSchema,
+  kimiThinkingModeSchema,
   cursorProviderSchema,
+  cursorReasoningEffortSchema,
   reasoningEffortSchema,
   runtimeAgentSchema,
   sandboxModeSchema,
@@ -305,6 +307,15 @@ export const configFields = [
     parseEnv: enumFromEnv(kimiProviderSchema),
   },
   {
+    path: 'runtime.kimi.thinkingMode',
+    tomlPath: 'runtime.kimi.thinking_mode',
+    scopes: sessionScopes,
+    schema: kimiThinkingModeSchema,
+    envKey: 'CODELARK_KIMI_THINKING_MODE',
+    runtimeSettingsKey: 'bridge_kimi_thinking_mode',
+    parseEnv: enumFromEnv(kimiThinkingModeSchema),
+  },
+  {
     path: 'runtime.cursor.model',
     tomlPath: 'runtime.cursor.model',
     scopes: sessionScopes,
@@ -330,6 +341,22 @@ export const configFields = [
     envKey: 'CODELARK_CURSOR_FORCE',
     runtimeSettingsKey: 'bridge_cursor_force',
     parseEnv: boolFromEnv,
+  },
+  {
+    path: 'runtime.cursor.reasoningEffort',
+    tomlPath: 'runtime.cursor.reasoning_effort',
+    scopes: sessionScopes,
+    schema: z.union([cursorReasoningEffortSchema, z.literal('')]),
+    envKey: 'CODELARK_CURSOR_REASONING_EFFORT',
+    runtimeSettingsKey: 'bridge_cursor_reasoning_effort',
+    parseEnv: (value) => {
+      const normalized = value.trim();
+      if (normalized === '') return '';
+      const parsed = cursorReasoningEffortSchema.safeParse(normalized);
+      return parsed.success ? parsed.data : undefined;
+    },
+    commandAliases: ['/reasoning'],
+    defaultWriteScope: 'channel',
   },
   {
     path: 'channels[].enabled',

@@ -192,6 +192,10 @@ export function formatReasoningEffort(reasoning: string): string {
       return 'high (4)';
     case 'xhigh':
       return 'xhigh (5)';
+    case 'max':
+      return 'max (6)';
+    case 'ultra':
+      return 'ultra (7)';
     default:
       return reasoning;
   }

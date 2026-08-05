@@ -38,7 +38,9 @@ import type {
   BridgeSessionClaudeRuntimeState,
   BridgeSessionCodexRuntimeState,
   KimiProviderChoice,
+  KimiThinkingMode,
   CursorProviderChoice,
+  CursorReasoningEffort,
   RuntimeAgent,
   RuntimeProviderChoice,
   RuntimeProviderIdentity,
@@ -178,6 +180,8 @@ export interface KimiRuntimeConfig {
   runtime: 'kimi';
   provider: KimiProviderChoice;
   model?: string;
+  thinkingMode: KimiThinkingMode;
+  thinking?: boolean;
 }
 
 export interface CursorRuntimeConfig {
@@ -185,6 +189,7 @@ export interface CursorRuntimeConfig {
   provider: CursorProviderChoice;
   model?: string;
   force: boolean;
+  reasoningEffort?: CursorReasoningEffort;
 }
 
 export interface RuntimeMetadataConfig {
@@ -365,10 +370,13 @@ export function resolveClaudeRuntimeConfig(session?: BridgeSession | null, bindi
 
 export function resolveKimiRuntimeConfig(session?: BridgeSession | null, binding?: ChannelChat | null): KimiRuntimeConfig {
   const { config } = scopedConfigForRuntime(binding, session);
+  const thinkingMode = config.runtime.kimi.thinkingMode || 'default';
   return {
     runtime: 'kimi',
     provider: 'tmux',
     model: config.runtime.kimi.model || undefined,
+    thinkingMode,
+    ...(thinkingMode === 'on' ? { thinking: true } : thinkingMode === 'off' ? { thinking: false } : {}),
   };
 }
 
@@ -379,6 +387,7 @@ export function resolveCursorRuntimeConfig(session?: BridgeSession | null, bindi
     provider: 'tmux',
     model: config.runtime.cursor.model.trim() || DEFAULT_CURSOR_MODEL,
     force: config.runtime.cursor.force === true,
+    ...(config.runtime.cursor.reasoningEffort ? { reasoningEffort: config.runtime.cursor.reasoningEffort } : {}),
   };
 }
 
@@ -405,7 +414,7 @@ export function resolveRuntimeMetadataConfig(
     const kimiConfig = resolveKimiRuntimeConfig(session, binding);
     return {
       runtime: 'kimi',
-      reasoningEffort: 'default',
+      reasoningEffort: '',
       model: kimiConfig.model || 'default',
     };
   }
@@ -413,7 +422,7 @@ export function resolveRuntimeMetadataConfig(
     const cursorConfig = resolveCursorRuntimeConfig(session, binding);
     return {
       runtime: 'cursor',
-      reasoningEffort: cursorConfig.force ? 'force' : 'default',
+      reasoningEffort: cursorConfig.reasoningEffort || '',
       model: cursorConfig.model || 'default',
     };
   }

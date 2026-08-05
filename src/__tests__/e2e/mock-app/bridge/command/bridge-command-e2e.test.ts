@@ -1727,6 +1727,16 @@ describe('bridge command e2e', () => {
     const adapter = new RecordingAdapter();
     const address = { channelType: 'feishu-default', chatId: 'chat-kimi-command-state', chatKind: 'group' as const } as const;
     const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-kimi-command-state-'));
+    const binDir = path.join(workDir, 'bin');
+    fs.mkdirSync(binDir, { recursive: true });
+    const previousKimiExecutable = process.env.KIMI_CODE_EXECUTABLE;
+    process.env.KIMI_CODE_EXECUTABLE = writeFakeKimiExecutable(binDir, {
+      sessionId: 'session_kimi_command_state',
+      ctrlCPath: path.join(workDir, 'ctrl-c-count.txt'),
+      keyLogPath: path.join(workDir, 'key-log.jsonl'),
+      launchLogPath: path.join(workDir, 'launch-log.jsonl'),
+    });
+    let kimiTmuxSessionName: string | undefined;
     const smallFilePath = path.join(workDir, 'kimi-small.txt');
     const largeFilePath = path.join(workDir, 'kimi-large.bin');
     fs.writeFileSync(smallFilePath, 'kimi command-state file payload', 'utf-8');
@@ -1754,6 +1764,7 @@ describe('bridge command e2e', () => {
       assert.equal(kimiBinding.runtimeBridgeSessionIds?.codex, codexBinding.bridgeSessionId);
       assert.equal(kimiBinding.runtimeBridgeSessionIds?.kimi, kimiBinding.bridgeSessionId);
       const kimiSession = store.getSession(kimiBinding.bridgeSessionId);
+      kimiTmuxSessionName = `clk-kimi-${kimiBinding.bridgeSessionId}`;
       assert.equal(kimiSession?.runtime?.activeRuntime, 'kimi');
       assert.equal(getSessionWorkingDirectory(kimiSession), workDir);
       assert.match(adapter.sent.at(-1)?.text || '', /已创建并切换 Runtime/);
@@ -1784,7 +1795,8 @@ describe('bridge command e2e', () => {
       assert.equal(getSessionTomlSnapshot(kimiBinding.bridgeSessionId).runtime?.kimi?.model, 'moonshot-auto');
 
       await _testOnly.handleMessage(adapter, inboundMessage(address, '/r high', 'incoming-kimi-command-reasoning'));
-      assert.match(adapter.sent.at(-1)?.text || '', /Kimi Code 不支持 Bridge 思考级别设置/);
+      assert.match(adapter.sent.at(-1)?.text || '', /已更新 Kimi Code Thinking 模式/);
+      assert.equal(getSessionTomlSnapshot(kimiBinding.bridgeSessionId).runtime?.kimi?.thinkingMode, 'on');
       await _testOnly.handleMessage(adapter, inboundMessage(address, '/sandbox read-only', 'incoming-kimi-command-sandbox'));
       assert.match(adapter.sent.at(-1)?.text || '', /Kimi Code 不支持 Bridge 沙箱设置/);
       await _testOnly.handleMessage(adapter, inboundMessage(address, '/network off', 'incoming-kimi-command-network'));
@@ -1871,6 +1883,11 @@ describe('bridge command e2e', () => {
       assert.equal(store.getSession(restoredKimiBinding.bridgeSessionId)?.runtime?.activeRuntime, 'kimi');
       assert.equal(getSessionTomlSnapshot(restoredKimiBinding.bridgeSessionId).runtime?.kimi?.model, 'moonshot-auto');
     } finally {
+      if (kimiTmuxSessionName) {
+        await execFileAsync('tmux', ['kill-session', '-t', kimiTmuxSessionName]).catch(() => undefined);
+      }
+      if (previousKimiExecutable === undefined) delete process.env.KIMI_CODE_EXECUTABLE;
+      else process.env.KIMI_CODE_EXECUTABLE = previousKimiExecutable;
       fs.rmSync(workDir, { recursive: true, force: true });
     }
   });
@@ -2489,7 +2506,7 @@ model = "test-model"
       await _testOnly.handleMessage(adapter, inboundMessage(address, '/r minimal', 'incoming-runtime-reasoning-minimal'));
       assert.match(adapter.sent.at(-1)?.text || '', /已更新思考级别/);
       assert.match(adapter.sent.at(-1)?.text || '', /禁用 web search/);
-      await _testOnly.handleMessage(adapter, inboundMessage(address, '/r high', 'incoming-runtime-reasoning'));
+      await _testOnly.handleMessage(adapter, inboundMessage(address, '/r ultra', 'incoming-runtime-reasoning'));
       const beforeProviderSentCount = adapter.sent.length;
       await _testOnly.handleMessage(adapter, inboundMessage(address, '/p tmux', 'incoming-runtime-provider'));
       const providerMessages = adapter.sent.slice(beforeProviderSentCount).map((message) => message.text).join('\n\n');
@@ -2513,7 +2530,7 @@ model = "test-model"
       assert.doesNotMatch(startLog, / new-session .* -e /);
       assert.match(startLog, new RegExp(`--cd ${workDir.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`));
       assert.match(startLog, /--ask-for-approval on-request/);
-      assert.match(startLog, /model_reasoning_effort="high"/);
+      assert.match(startLog, /model_reasoning_effort="ultra"/);
       assert.match(startLog, /--config sandbox_workspace_write.network_access=true/);
       assert.match(startLog, new RegExp(`resume ${normalThreadId}`));
 

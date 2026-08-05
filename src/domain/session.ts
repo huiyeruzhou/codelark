@@ -1,7 +1,9 @@
 import type { ChannelChatMode } from './channel.js';
 
 export type CodexSandboxMode = 'read-only' | 'workspace-write' | 'danger-full-access';
-export type CodexReasoningEffort = 'minimal' | 'low' | 'medium' | 'high' | 'xhigh';
+export type CodexReasoningEffort = 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra';
+export type KimiThinkingMode = 'default' | 'on' | 'off';
+export type CursorReasoningEffort = 'low' | 'medium' | 'high' | 'xhigh' | 'max';
 export type RuntimeProviderChoice = 'sdk' | 'pty' | 'tmux';
 export type ClaudeProviderChoice = RuntimeProviderChoice;
 export type KimiProviderChoice = 'tmux';
@@ -124,6 +126,7 @@ export interface BridgeSessionKimiRuntimeState {
   cwd?: string;
   model?: string;
   provider?: KimiProviderChoice;
+  thinkingMode?: KimiThinkingMode;
 }
 
 export interface BridgeSessionCursorRuntimeState {
@@ -132,6 +135,7 @@ export interface BridgeSessionCursorRuntimeState {
   model?: string;
   provider?: CursorProviderChoice;
   force?: boolean;
+  reasoningEffort?: CursorReasoningEffort;
 }
 
 export interface BridgeSessionGeneralState {

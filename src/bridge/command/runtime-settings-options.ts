@@ -6,7 +6,7 @@ export const MODE_OPTIONS_TEXT = '可选：`normal`（普通执行，默认） `
 export const RUNTIME_OPTIONS_TEXT = '可选：`codex`（OpenAI Codex，默认） `claude`（Claude Code） `kimi`（Kimi Code） `cursor`（Cursor Agent）。`/provider` 选择使用何种方式运行 agent，不切换 runtime。';
 export const CODEX_PROVIDER_OPTIONS_TEXT = '可选：`sdk`（默认 SDK 路径） `pty`（跨平台 Codex TUI 路径） `tmux`（可 attach 的 Codex TUI/tmux 路径）';
 export const CLAUDE_PROVIDER_OPTIONS_TEXT = '可选：`tmux`（可 attach 的 Claude Code TUI/tmux 路径，默认） `pty`（Claude Code TUI/mirror 路径） `sdk`（Claude Agent SDK 原生事件路径）';
-export const REASONING_OPTIONS_TEXT = '可选：`1=minimal` `2=low` `3=medium` `4=high` `5=xhigh`';
+export const REASONING_OPTIONS_TEXT = '可选：`1=minimal` `2=low` `3=medium` `4=high` `5=xhigh` `6=max` `7=ultra`';
 export const SANDBOX_OPTIONS_TEXT = '可选：`read-only` `workspace-write` `danger-full-access` `default`（回到全局默认）';
 export const NETWORK_OPTIONS_TEXT = '可选：`on`/`true` 开启网络，`off`/`false` 关闭网络，`default` 回到全局默认。';
 export const UI_DETAIL_OPTIONS_TEXT = '可选：`on` 显示工具输入输出，`off` 只显示工具名、状态和正文；兼容 `/ui detail on|off`。';
@@ -32,6 +32,7 @@ export function codexReasoningToClaudeEffort(
   reasoning: CodexReasoningEffort,
 ): 'low' | 'medium' | 'high' | 'xhigh' | 'max' {
   if (reasoning === 'minimal') return 'low';
+  if (reasoning === 'ultra') return 'max';
   return reasoning;
 }
 

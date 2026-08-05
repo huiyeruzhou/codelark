@@ -4856,8 +4856,8 @@ function commandStateExpectedTexts(options: CliOptions, text: string): string[] 
   }
   if (command === '/reasoning') {
     if (options.runtime === 'claude') return ['当前 Claude Code 思考级别'];
-    if (options.runtime === 'kimi') return ['Kimi Code 不支持 Bridge 思考级别设置'];
-    if (options.runtime === 'cursor') return ['Cursor Agent 不支持 Bridge 思考级别设置'];
+    if (options.runtime === 'kimi') return ['当前 Kimi Code Thinking 模式'];
+    if (options.runtime === 'cursor') return ['当前 Cursor Agent 思考级别'];
     return ['当前思考级别'];
   }
   if (command === `/every 1h e2e seed ${options.runId}`) {

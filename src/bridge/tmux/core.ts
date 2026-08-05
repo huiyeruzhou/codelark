@@ -72,8 +72,23 @@ function quoteShellArg(value: string): string {
   return `'${value.replace(/'/g, `'\\''`)}'`;
 }
 
-function tmuxCommandPreview(args: readonly string[]): string {
-  return ['tmux', ...args].map(quoteShellArg).join(' ');
+function tmuxCommandPreview(
+  args: readonly string[],
+  executable = 'tmux',
+  prefixArgs: readonly string[] = [],
+): string {
+  return [executable, ...prefixArgs, ...args].map(quoteShellArg).join(' ');
+}
+
+const TMUX_VERSION_MISMATCH_PATTERN = /(?:server|client) version is too old for (?:client|server)/i;
+const TMUX_MISSING_SESSION_PATTERN = /can't find session|no server running|failed to connect to server|error connecting to .*\(no such file or directory\)/i;
+
+function commandErrorText(result: TmuxCommandResult, fallback: string): string {
+  return (result.stderr || result.stdout || fallback).trim();
+}
+
+export function isTmuxVersionMismatchError(value: string): boolean {
+  return TMUX_VERSION_MISMATCH_PATTERN.test(value);
 }
 
 function captureTmuxArgv(target: string, lines: number): TmuxArgv {
@@ -155,13 +170,93 @@ function splitTextChunks(text: string, chunkSize = PASTE_CHUNK_SIZE): string[] {
 }
 
 class TmuxCliCore implements TmuxCore {
-  constructor(
-    private readonly executable = 'tmux',
-    private readonly prefixArgs: string[] = [],
-  ) {}
+  private executable: string;
+  private readonly prefixArgs: string[];
+  private readonly autoSelectExecutable: boolean;
+  private readonly genericCommandPreview: boolean;
+  private readonly candidateExecutables: string[] | undefined;
+  private executableResolution: Promise<string> | undefined;
 
-  private runCommand(args: string[], stdin?: string): Promise<TmuxCommandResult> {
-    return runCommand(this.executable, [...this.prefixArgs, ...args], stdin);
+  constructor(
+    executable?: string,
+    prefixArgs: string[] = [],
+    candidateExecutables?: string[],
+  ) {
+    const configuredExecutable = process.env.CODELARK_TMUX_EXECUTABLE?.trim();
+    this.executable = executable || configuredExecutable || 'tmux';
+    this.prefixArgs = prefixArgs;
+    this.autoSelectExecutable = !executable && !configuredExecutable && prefixArgs.length === 0;
+    this.genericCommandPreview = Boolean(executable || prefixArgs.length > 0);
+    this.candidateExecutables = candidateExecutables;
+  }
+
+  private async resolveExecutable(): Promise<string> {
+    if (!this.autoSelectExecutable) return this.executable;
+    if (this.executableResolution) return this.executableResolution;
+    this.executableResolution = this.selectCompatibleExecutable();
+    return this.executableResolution;
+  }
+
+  private async selectCompatibleExecutable(): Promise<string> {
+    const candidates = [...new Set(this.candidateExecutables || [
+      this.executable,
+      '/usr/local/bin/tmux',
+      '/usr/bin/tmux',
+      '/bin/tmux',
+    ])];
+    const incompatibilities: Array<{ executable: string; error: string }> = [];
+    const unavailable: Array<{ executable: string; error: string }> = [];
+    for (const candidate of candidates) {
+      try {
+        const panes = await runCommand(candidate, ['list-panes', '-a', '-F', '#{pane_id}']);
+        const panesOutput = `${panes.stderr}\n${panes.stdout}`.trim();
+        if (isTmuxVersionMismatchError(panesOutput)) {
+          incompatibilities.push({ executable: candidate, error: panesOutput });
+          continue;
+        }
+        const paneTarget = panes.stdout.split(/\r?\n/).map((line) => line.trim()).find(Boolean);
+        if (paneTarget) {
+          // Some tmux client/server combinations return exit code 0 for capture-pane
+          // while reporting their version mismatch only on stderr. Probe the exact
+          // operation CodeLark relies on and inspect both streams regardless of code.
+          const capture = await runCommand(candidate, ['capture-pane', '-p', '-S', '0', '-t', paneTarget]);
+          const captureOutput = `${capture.stderr}\n${capture.stdout}`.trim();
+          if (isTmuxVersionMismatchError(captureOutput)) {
+            incompatibilities.push({ executable: candidate, error: captureOutput });
+            continue;
+          }
+        }
+        this.executable = candidate;
+        if (incompatibilities.length > 0) {
+          console.warn('[tmux-core] Selected a compatible tmux client for the existing server:', {
+            event: 'tmux.client.compatibility_fallback',
+            selected_executable: candidate,
+            incompatible_clients: incompatibilities,
+          });
+        }
+        return candidate;
+      } catch (error) {
+        unavailable.push({ executable: candidate, error: error instanceof Error ? error.message : String(error) });
+      }
+    }
+    if (incompatibilities.length > 0) {
+      const details = incompatibilities
+        .map((item) => `${item.executable}: ${item.error}`)
+        .join('; ');
+      throw new Error(
+        `tmux client/server version mismatch: no compatible tmux executable was found. Tried ${details}`,
+      );
+    }
+    const details = unavailable.map((item) => `${item.executable}: ${item.error}`).join('; ');
+    throw new Error(`tmux executable was not found or could not be started. Tried ${details}`);
+  }
+
+  private async runCommand(args: string[], stdin?: string): Promise<TmuxCommandResult> {
+    const executable = await this.resolveExecutable();
+    const result = await runCommand(executable, [...this.prefixArgs, ...args], stdin);
+    const output = `${result.stderr}\n${result.stdout}`.trim();
+    if (isTmuxVersionMismatchError(output)) throw new Error(output);
+    return result;
   }
 
   private async runTmux(args: string[], stdin?: string): Promise<TmuxCommandResult> {
@@ -173,19 +268,41 @@ class TmuxCliCore implements TmuxCore {
   }
 
   commandPreview(args: readonly string[]): string {
-    return tmuxCommandPreview(args);
+    return this.command(args);
+  }
+
+  private command(args: readonly string[]): string {
+    return this.genericCommandPreview
+      ? tmuxCommandPreview(args)
+      : tmuxCommandPreview(args, this.executable, this.prefixArgs);
   }
 
   async ensureExtendedKeys(): Promise<string> {
     const args: TmuxArgv = ['set-option', '-g', 'extended-keys', 'on'];
-    await this.runTmux(args);
-    return tmuxCommandPreview(args);
+    const result = await this.runCommand(args);
+    const command = this.command(args);
+    if (result.code === 0) return command;
+    const error = commandErrorText(result, 'tmux set-option failed');
+    if (/invalid option:\s*extended-keys/i.test(error)) {
+      console.warn('[tmux-core] tmux does not support extended-keys; continuing without it:', {
+        event: 'tmux.extended_keys.unsupported',
+        command,
+        error,
+      });
+      return '';
+    }
+    throw new Error(error);
   }
 
   async hasSession(name: string): Promise<TmuxSessionExistsResult> {
     const args: TmuxArgv = ['has-session', '-t', name];
     const result = await this.runCommand(args);
-    return { exists: result.code === 0, command: tmuxCommandPreview(args) };
+    const command = this.command(args);
+    if (result.code === 0) return { exists: true, command };
+    const error = commandErrorText(result, 'tmux has-session failed');
+    if (!result.stderr.trim() && !result.stdout.trim()) return { exists: false, command };
+    if (TMUX_MISSING_SESSION_PATTERN.test(error)) return { exists: false, command };
+    throw new Error(error);
   }
 
   async killSession(name: string, options: { ignoreMissing?: boolean } = {}): Promise<string> {
@@ -194,7 +311,7 @@ class TmuxCliCore implements TmuxCore {
     if (result.code !== 0 && !(options.ignoreMissing && /can't find session/i.test(result.stderr))) {
       throw new Error((result.stderr || result.stdout || 'tmux kill-session failed').trim());
     }
-    return tmuxCommandPreview(args);
+    return this.command(args);
   }
 
   async listSessions(): Promise<TmuxListSessionsResult> {
@@ -205,8 +322,8 @@ class TmuxCliCore implements TmuxCore {
     ];
     const result = await this.runCommand(args);
     if (result.code !== 0) {
-      if (/no server running|failed to connect/i.test(result.stderr || result.stdout)) {
-        return { sessions: [], command: tmuxCommandPreview(args) };
+      if (TMUX_MISSING_SESSION_PATTERN.test(result.stderr || result.stdout)) {
+        return { sessions: [], command: this.command(args) };
       }
       throw new Error((result.stderr || result.stdout || 'tmux list-sessions failed').trim());
     }
@@ -218,7 +335,7 @@ class TmuxCliCore implements TmuxCore {
         return { name, windows, attached, created, activity };
       })
       .filter((session) => session.name);
-    return { sessions, command: tmuxCommandPreview(args) };
+    return { sessions, command: this.command(args) };
   }
 
   async ensureDetachedSession(params: TmuxStartDetachedSessionParams): Promise<TmuxEnsureSessionResult> {
@@ -230,7 +347,7 @@ class TmuxCliCore implements TmuxCore {
     if (!exists.exists || params.recreate) {
       const args = buildNewSessionArgs(params);
       await this.runTmux(args);
-      const command = tmuxCommandPreview(args);
+      const command = this.command(args);
       commands.push(command);
       return { existed: exists.exists, command, commands };
     }
@@ -245,7 +362,7 @@ class TmuxCliCore implements TmuxCore {
     const result = await this.runTmux(args);
     return {
       screen: trimCapturedScreen(result.stdout, lines),
-      command: [tmuxCommandPreview(heightArgs), tmuxCommandPreview(args)].join('\n'),
+      command: [this.command(heightArgs), this.command(args)].join('\n'),
     };
   }
 
@@ -261,7 +378,7 @@ class TmuxCliCore implements TmuxCore {
       } else {
         const args = tmuxSendActionArgv(target, action);
         await this.runTmux(args);
-        commands.push(tmuxCommandPreview(args));
+        commands.push(this.command(args));
       }
       if (options.delayMs !== undefined && index < actions.length - 1) {
         await sleep(options.delayMs);
@@ -279,19 +396,19 @@ class TmuxCliCore implements TmuxCore {
       if (leadingWhitespace) {
         const leadingArgs: TmuxArgv = ['send-keys', '-t', target, '-l', leadingWhitespace];
         await this.runTmux(leadingArgs);
-        commands.push(tmuxCommandPreview(leadingArgs));
+        commands.push(this.command(leadingArgs));
       }
       if (chunk) {
         const loadArgs: TmuxArgv = ['load-buffer', '-b', name, '-'];
         await this.runTmux(loadArgs, chunk);
-        commands.push(tmuxCommandPreview(loadArgs));
+        commands.push(this.command(loadArgs));
         const pasteArgs: TmuxArgv = ['paste-buffer', '-d', '-p', '-b', name, '-t', target];
         await this.runTmux(pasteArgs);
-        commands.push(tmuxCommandPreview(pasteArgs));
+        commands.push(this.command(pasteArgs));
       }
       const endArgs: TmuxArgv = ['send-keys', '-t', target, 'End'];
       await this.runTmux(endArgs);
-      commands.push(tmuxCommandPreview(endArgs));
+      commands.push(this.command(endArgs));
       await sleep(PASTE_CHUNK_DELAY_MS);
     }
     return commands;
@@ -299,7 +416,7 @@ class TmuxCliCore implements TmuxCore {
 
   async sendInterrupt(target: string): Promise<string> {
     const result = await this.sendActions(target, [{ type: 'key', key: 'C-c' }]);
-    return result.commands[0] || tmuxCommandPreview(['send-keys', '-t', target, 'C-c']);
+    return result.commands[0] || this.command(['send-keys', '-t', target, 'C-c']);
   }
 
   async injectPromptIntoPane(targetPane: string, prompt: string): Promise<TmuxSendActionsResult> {
@@ -314,10 +431,10 @@ class TmuxCliCore implements TmuxCore {
         } else {
           const loadArgs: TmuxArgv = ['load-buffer', '-b', bufferName, '-'];
           await this.runTmux(loadArgs, line);
-          commands.push(tmuxCommandPreview(loadArgs));
+          commands.push(this.command(loadArgs));
           const pasteArgs: TmuxArgv = ['paste-buffer', '-d', '-p', '-b', bufferName, '-t', targetPane];
           await this.runTmux(pasteArgs);
-          commands.push(tmuxCommandPreview(pasteArgs));
+          commands.push(this.command(pasteArgs));
         }
       }
       if (i < lines.length - 1) {
@@ -331,8 +448,13 @@ class TmuxCliCore implements TmuxCore {
   }
 }
 
-export function createTmuxCliCore(options: { executable?: string; prefixArgs?: string[] } = {}): TmuxCore {
-  return new TmuxCliCore(options.executable, options.prefixArgs);
+export function createTmuxCliCore(options: {
+  executable?: string;
+  prefixArgs?: string[];
+  /** Test hook for exercising client/server compatibility fallback. */
+  candidateExecutables?: string[];
+} = {}): TmuxCore {
+  return new TmuxCliCore(options.executable, options.prefixArgs, options.candidateExecutables);
 }
 
 let activeTmuxCore: TmuxCore = createTmuxCliCore();

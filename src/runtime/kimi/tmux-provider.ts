@@ -398,7 +398,7 @@ async function pollKimiSessionFile(
   }
 }
 
-function buildKimiArgs(params: StreamChatParams): string[] {
+export function buildKimiArgs(params: StreamChatParams): string[] {
   const args: string[] = [];
   if (params.kimiSessionId) {
     args.push('-r', params.kimiSessionId);
@@ -406,6 +406,11 @@ function buildKimiArgs(params: StreamChatParams): string[] {
   args.push('-y');
   if (params.model) {
     args.push('-m', params.model);
+  }
+  if (params.kimiThinking === true) {
+    args.push('--thinking');
+  } else if (params.kimiThinking === false) {
+    args.push('--no-thinking');
   }
   return args;
 }
