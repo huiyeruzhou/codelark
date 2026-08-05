@@ -242,7 +242,7 @@ describe('real Kimi Code bridge e2e', () => {
       await _testOnly.handleMessage(adapter, inboundMessage(address, `Reply exactly: ${responseText}`, 'incoming-real-kimi-first'));
       assert.equal(
         await waitForCondition(
-          () => /^session_[0-9a-f-]+$/i.test(store.getSession(session.id)?.runtime?.kimi?.sessionId || ''),
+          () => /^session_[A-Za-z0-9-]+$/u.test(store.getSession(session.id)?.runtime?.kimi?.sessionId || ''),
           45_000,
           50,
         ),
@@ -250,7 +250,7 @@ describe('real Kimi Code bridge e2e', () => {
       );
       const initialized = store.getSession(session.id);
       const kimiSessionId = initialized?.runtime?.kimi?.sessionId;
-      assert.match(kimiSessionId || '', /^session_[0-9a-f-]+$/i);
+      assert.match(kimiSessionId || '', /^session_[A-Za-z0-9-]+$/u);
       const sessionFile = findKimiSessionFileById(kimiSessionId!, workDir);
       assert.ok(sessionFile?.filePath);
       const firstKimiRequestObserved = await waitForCondition(
