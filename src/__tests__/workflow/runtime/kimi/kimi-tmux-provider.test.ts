@@ -247,6 +247,7 @@ describe('kimi-tmux-provider workflow', () => {
         CODELARK_KIMI_TMUX_SESSION_ID_TIMEOUT_MS: '1000',
         CODELARK_KIMI_TMUX_SESSION_FILE_TIMEOUT_MS: '1000',
         CODELARK_KIMI_TMUX_POLL_INTERVAL_MS: '50',
+        CODELARK_KIMI_TMUX_INPUT_STABILITY_MS: '0',
         CODELARK_KIMI_TMUX_PROMPT_DELAY_MS: '0',
         CODELARK_KIMI_TMUX_STEER_DELAY_MS: '0',
       }, () => readSse(streamKimiTmuxTui({
@@ -348,6 +349,7 @@ describe('kimi-tmux-provider workflow', () => {
         CODELARK_KIMI_TMUX_SESSION_ID_TIMEOUT_MS: '1000',
         CODELARK_KIMI_TMUX_SESSION_FILE_TIMEOUT_MS: '1000',
         CODELARK_KIMI_TMUX_POLL_INTERVAL_MS: '50',
+        CODELARK_KIMI_TMUX_INPUT_STABILITY_MS: '0',
         CODELARK_KIMI_TMUX_PROMPT_DELAY_MS: '0',
       }, () => readSse(streamKimiTmuxTui({
         prompt: 'hello existing kimi',
@@ -455,6 +457,7 @@ describe('kimi-tmux-provider workflow', () => {
         CODELARK_KIMI_TMUX_SESSION_ID_TIMEOUT_MS: '1000',
         CODELARK_KIMI_TMUX_INPUT_READY_TIMEOUT_MS: '1000',
         CODELARK_KIMI_TMUX_POLL_INTERVAL_MS: '50',
+        CODELARK_KIMI_TMUX_INPUT_STABILITY_MS: '0',
       }, () => restartKimiTmuxInputSession({
         prompt: '',
         sessionId: 'bridge-kimi-restart-workflow',
@@ -515,6 +518,7 @@ describe('kimi-tmux-provider workflow', () => {
         KIMI_CODE_HOME: kimiHome,
         CODELARK_KIMI_TMUX_INPUT_READY_TIMEOUT_MS: '1000',
         CODELARK_KIMI_TMUX_POLL_INTERVAL_MS: '50',
+        CODELARK_KIMI_TMUX_INPUT_STABILITY_MS: '1',
       }, () => restartKimiTmuxInputSession({
         prompt: '',
         sessionId: 'bridge-kimi-ready-race-workflow',
@@ -526,7 +530,7 @@ describe('kimi-tmux-provider workflow', () => {
       assert.equal(prepared.sessionId, sessionId);
       assert.equal(ensureCalls.length, 2, 'the vanished tmux server is relaunched once');
       assert.equal(extendedKeysCalls, 2);
-      assert.equal(captureCount, 2);
+      assert.equal(captureCount, 3, 'readiness must remain stable across a second capture');
       assert.equal(commandHasArg(ensureCalls[1] || '', '-r'), true);
     } finally {
       restoreTmux();
@@ -573,6 +577,7 @@ describe('kimi-tmux-provider workflow', () => {
         KIMI_CODE_HOME: kimiHome,
         CODELARK_KIMI_TMUX_INPUT_READY_TIMEOUT_MS: '1000',
         CODELARK_KIMI_TMUX_POLL_INTERVAL_MS: '50',
+        CODELARK_KIMI_TMUX_INPUT_STABILITY_MS: '0',
       }, () => restartKimiTmuxInputSession({
         prompt: '',
         sessionId: bridgeSessionId,
@@ -659,6 +664,7 @@ describe('kimi-tmux-provider workflow', () => {
         CODELARK_KIMI_TMUX_SESSION_ID_TIMEOUT_MS: '1000',
         CODELARK_KIMI_TMUX_OUTPUT_IDLE_TIMEOUT_MS: '5000',
         CODELARK_KIMI_TMUX_POLL_INTERVAL_MS: '50',
+        CODELARK_KIMI_TMUX_INPUT_STABILITY_MS: '0',
         CODELARK_KIMI_TMUX_PROMPT_DELAY_MS: '0',
       }, () => readSse(streamKimiTmuxTui({
         prompt: 'hello auth failure',

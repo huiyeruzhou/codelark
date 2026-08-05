@@ -35,6 +35,7 @@ const DEFAULT_KIMI_PROMPT_DELAY_MS = 0;
 const DEFAULT_KIMI_SESSION_ID_TIMEOUT_MS = 30_000;
 const DEFAULT_KIMI_INPUT_READY_TIMEOUT_MS = 30_000;
 const DEFAULT_KIMI_STEER_DELAY_MS = 500;
+const DEFAULT_KIMI_INPUT_STABILITY_MS = 500;
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -586,6 +587,11 @@ async function waitForKimiInputReady(
     DEFAULT_KIMI_POLL_INTERVAL_MS,
     50,
   );
+  const stabilityMs = parsePositiveIntEnv(
+    'CODELARK_KIMI_TMUX_INPUT_STABILITY_MS',
+    DEFAULT_KIMI_INPUT_STABILITY_MS,
+    0,
+  );
   let deadline = Date.now() + timeoutMs;
   let lastTrustActionAt = 0;
   let lastScreen = context.lastScreen || '';
@@ -598,7 +604,20 @@ async function waitForKimiInputReady(
       ? isKimiEditorReadyScreen(screen)
       : isKimiInputReadyScreen(screen, context.sessionId);
   };
-  if (!isKimiWorkspaceTrustPrompt(lastScreen) && isReady(lastScreen)) return;
+  const remainsReady = async (): Promise<boolean> => {
+    if (stabilityMs <= 0) return true;
+    await sleep(stabilityMs);
+    const capture = await tmuxCore.capturePane(context.targetPane, 160);
+    lastScreen = capture.screen;
+    context.lastScreen = lastScreen;
+    assertKimiPaneAlive(lastScreen);
+    return !isKimiWorkspaceTrustPrompt(lastScreen) && isReady(lastScreen);
+  };
+  if (
+    !isKimiWorkspaceTrustPrompt(lastScreen)
+    && isReady(lastScreen)
+    && await remainsReady()
+  ) return;
   while (Date.now() <= deadline) {
     const capture = await tmuxCore.capturePane(context.targetPane, 160);
     lastScreen = capture.screen;
@@ -614,7 +633,7 @@ async function waitForKimiInputReady(
       await sleep(pollIntervalMs);
       continue;
     }
-    if (isReady(lastScreen)) return;
+    if (isReady(lastScreen) && await remainsReady()) return;
     await sleep(pollIntervalMs);
   }
   const visibleTail = normalizeKimiScreenText(lastScreen)
