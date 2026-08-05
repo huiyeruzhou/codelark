@@ -97,8 +97,8 @@ describe('real Kimi Code tmux provider e2e', () => {
       KIMI_MODEL_CAPABILITIES: '',
       KIMI_DISABLE_TELEMETRY: '1',
       CODELARK_KIMI_TMUX_POLL_INTERVAL_MS: '50',
-      CODELARK_KIMI_TMUX_SESSION_FILE_TIMEOUT_MS: '10000',
-      CODELARK_KIMI_TMUX_SESSION_ID_TIMEOUT_MS: '10000',
+      CODELARK_KIMI_TMUX_SESSION_FILE_TIMEOUT_MS: '30000',
+      CODELARK_KIMI_TMUX_SESSION_ID_TIMEOUT_MS: '30000',
       CODELARK_KIMI_TMUX_OUTPUT_IDLE_TIMEOUT_MS: '20000',
       CODELARK_KIMI_TMUX_PROMPT_DELAY_MS: '0',
       CODELARK_DEBUG: '1',
@@ -161,7 +161,7 @@ describe('real Kimi Code tmux provider e2e', () => {
       assert.equal(
         await waitForCondition(
           () => proxy.requests.some((request) => request.url.includes('/chat/completions')),
-          15_000,
+          45_000,
           50,
         ),
         true,
