@@ -306,6 +306,7 @@ describe('kimi-tmux-provider workflow', () => {
     const injectCalls: Array<{ target: string; prompt: string }> = [];
     let tmuxExists = true;
     let captureCount = 0;
+    let pendingPrompt = '';
 
     const restoreTmux = patchTmuxCore({
       async ensureExtendedKeys() {
@@ -330,11 +331,15 @@ describe('kimi-tmux-provider workflow', () => {
       async sendActions(target: string, actions) {
         const names = actionNames(actions);
         sendCalls.push({ target, actions: names });
+        if (names.join(',') === 'Enter' && pendingPrompt) {
+          appendKimiTurn(wirePath, pendingPrompt);
+          pendingPrompt = '';
+        }
         return { commands: names.map((name) => `tmux send-keys -t ${target} ${name}`) };
       },
       async injectPromptIntoPane(target: string, prompt: string) {
         injectCalls.push({ target, prompt });
-        appendKimiTurn(wirePath, prompt);
+        pendingPrompt = prompt;
         return { commands: [`tmux paste-buffer -t ${target}`] };
       },
       async killSession(name: string) {
@@ -351,6 +356,8 @@ describe('kimi-tmux-provider workflow', () => {
         CODELARK_KIMI_TMUX_POLL_INTERVAL_MS: '50',
         CODELARK_KIMI_TMUX_INPUT_STABILITY_MS: '0',
         CODELARK_KIMI_TMUX_PROMPT_DELAY_MS: '0',
+        CODELARK_KIMI_TMUX_STEER_DELAY_MS: '0',
+        CODELARK_KIMI_TMUX_SUBMISSION_ACK_TIMEOUT_MS: '100',
       }, () => readSse(streamKimiTmuxTui({
         prompt: 'hello existing kimi',
         sessionId: 'bridge-kimi-resume-workflow',
@@ -367,6 +374,7 @@ describe('kimi-tmux-provider workflow', () => {
         prompt: 'hello existing kimi',
       }]);
       assert.ok(sendCalls.some((call) => call.actions.join(',') === 'C-s'));
+      assert.ok(sendCalls.some((call) => call.actions.join(',') === 'Enter'), 'missing activity retries Enter once');
       assert.equal(sendCalls.some((call) => call.actions.join(',') === 'C-c,C-c'), false);
 
       assert.ok(events.some((event) => event.type === 'status'

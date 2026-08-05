@@ -52,6 +52,7 @@ import {
 import {
   ensureKimiTmuxInputSession,
   kimiTmuxSessionName,
+  retryKimiSubmitIfNoActivity,
 } from '../../runtime/kimi/tmux-provider.js';
 import {
   ensureCursorTmuxInputSession,
@@ -605,7 +606,13 @@ async function ensureRuntimeTmuxSessionForProvider(
   params: Pick<HandleTmuxBridgeCommandParams, 'store' | 'binding' | 'session' | 'autoRecoverProviderSession' | 'tmuxProviderAutoForward' | 'reconcileMirrorSubscriptions' | 'requestCodexTuiSelection' | 'notifyBackgroundOperation'> & {
     pendingAutoForwardActions?: TmuxSendAction[];
   },
-): Promise<{ target: string | undefined; commands: string[]; recovered: boolean; error?: string }> {
+): Promise<{
+  target: string | undefined;
+  commands: string[];
+  recovered: boolean;
+  error?: string;
+  kimiSubmission?: { sessionFilePath: string; startOffset: number };
+}> {
   const { store, binding, session } = params;
   const runtimeTarget = getSessionRuntimeTmuxSessionName(session) || '';
   const manualTarget = getSessionTmuxSessionName(session) || '';
@@ -759,7 +766,17 @@ async function ensureRuntimeTmuxSessionForProvider(
       },
     });
     scheduleTmuxMirrorReconcile(params.reconcileMirrorSubscriptions, 'initialized Kimi provider session');
-    return { target: prepared.sessionName, commands: [], recovered: !prepared.existed };
+    return {
+      target: prepared.sessionName,
+      commands: [],
+      recovered: !prepared.existed,
+      ...(prepared.sessionFilePath ? {
+        kimiSubmission: {
+          sessionFilePath: prepared.sessionFilePath,
+          startOffset: prepared.nextOffset,
+        },
+      } : {}),
+    };
   }
 
   if (runtimeProvider.runtime === 'cursor') {
@@ -1361,6 +1378,16 @@ export async function handleTmuxBridgeCommand(params: HandleTmuxBridgeCommandPar
               ) && !keySequenceActions,
             }),
           });
+          if (runtimeProvider.runtime === 'kimi' && ensured.kimiSubmission) {
+            const accepted = await retryKimiSubmitIfNoActivity({
+              targetPane: `${target}:0.0`,
+              sessionFilePath: ensured.kimiSubmission.sessionFilePath,
+              startOffset: ensured.kimiSubmission.startOffset,
+            });
+            if (!accepted) {
+              throw new Error('Kimi Code 输入已发送，但 session wire 未记录新 turn；已自动补发 Enter，仍未提交。');
+            }
+          }
         } else {
           await sendTmuxActions(target, actionsToSend, { delayMs: SEND_ACTION_DELAY_MS });
         }
