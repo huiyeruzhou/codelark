@@ -2076,7 +2076,7 @@ describe('command-dispatch', () => {
     assert.match(card?.footer?.[0] || '', /当前 agent.*<text_tag color='orange'>Codex<\/text_tag>/);
     assert.deepEqual(
       card?.form?.selects?.find((select) => select.elementId === 'codexReasoningEffort')?.options.map((option) => option.text),
-      ['跟随上层配置', 'medium', 'minimal', 'low', 'high', 'xhigh', 'max', 'ultra'],
+      ['跟随上层配置（当前：medium (3)）', 'medium', 'minimal', 'low', 'high', 'xhigh', 'max', 'ultra'],
     );
     assert.equal(getThreadTableMessageRecord(address, 'current')?.messageId, 'reply-1');
     assert.deepEqual(pinned, ['reply-1']);
@@ -2175,7 +2175,7 @@ describe('command-dispatch', () => {
     );
     assert.deepEqual(
       claudePreviewCard?.form?.selects?.find((select) => select.elementId === 'claudeReasoningEffort')?.options.map((option) => option.text),
-      ['跟随上层配置', 'medium', 'low', 'high', 'xhigh', 'max'],
+      ['跟随上层配置（当前：medium）', 'medium', 'low', 'high', 'xhigh', 'max'],
     );
     assert.deepEqual(
       parseCommandCallbackData(claudePreviewCard?.form?.submitCallbackData || '')?.commandText,
@@ -2313,11 +2313,11 @@ describe('command-dispatch', () => {
     assert.deepEqual(card?.form?.selects?.map((select) => select.formName), ['kimi_provider', 'kimi_thinking']);
     assert.deepEqual(
       card?.form?.selects?.find((select) => select.elementId === 'kimiProvider')?.options.map((option) => option.text),
-      ['跟随上层配置', 'tmux'],
+      ['跟随上层配置（当前：tmux）', 'tmux'],
     );
     assert.deepEqual(
       card?.form?.selects?.find((select) => select.elementId === 'kimiThinkingMode')?.options.map((option) => option.text),
-      ['跟随上层配置', 'default', 'on', 'off'],
+      ['跟随上层配置（当前：default）', 'default', 'on', 'off'],
     );
     assert.equal(card?.form?.selects?.some((select) => select.elementId === 'defaultProvider'), false);
     assert.equal(card?.form?.selects?.some((select) => select.elementId === 'claudeProvider'), false);
@@ -2489,8 +2489,9 @@ describe('command-dispatch', () => {
       element.tag === 'select_static' && element.name === 'cdx_sandbox'
     ));
     const selectedInheritOption = inheritedSandboxSelect.options.find((option: any) => (
-      option.text?.content === '跟随上层配置'
+      option.text?.content?.startsWith('跟随上层配置')
     ));
+    assert.equal(selectedInheritOption.text.content, '跟随上层配置（当前：workspace-write）');
     assert.equal(inheritedSandboxSelect.initial_option, selectedInheritOption.value);
   });
 
@@ -9002,7 +9003,7 @@ enabled = true
     assert.equal(listThenTasks({ bridgeSessionId: binding.bridgeSessionId, statuses: ['pending', 'running'] }).length, 0);
   });
 
-  it('maps /stop to C-c for a running tmux provider mirror turn', async () => {
+  it('maps /stop to C-c when a tmux mirror has an active tool despite stale idle health', async () => {
     const store = initTestContext();
     const fakeTmux = installFakeTmux();
     const oldPath = process.env.PATH || '';
@@ -9025,8 +9026,18 @@ enabled = true
         general: { tmuxSessionName: 'alpha' },
       },
       mirror_status: 'watching',
-      runtime_status: 'running',
-      health_status: 'running_active',
+      runtime_status: 'idle',
+      health_status: 'idle',
+      health_reason: '当前没有运行中的任务。',
+      last_progress_at: '2026-08-06T09:03:41.623Z',
+      last_progress_type: 'tool_running',
+      active_tools_json: JSON.stringify([{
+        id: 'call-stop-tmux-provider',
+        name: 'exec_command',
+        startedAt: '2026-08-06T09:03:41.623Z',
+      }]),
+      active_tool_name: 'exec_command',
+      active_tool_started_at: '2026-08-06T09:03:41.623Z',
     });
     createConfigService({ migrate: false, env: {} }).set(
       { kind: 'session', sessionId: binding.bridgeSessionId },

@@ -1,24 +1,22 @@
 import type { BridgeSession, BridgeStore, ChannelChat } from '../../../domain/index.js';
 import { buildCommandFields } from '../../command/presentation.js';
 import { CommandThreadDisplay } from '../../command/thread-display.js';
-
-const RUNNING_HEALTH_STATUSES = new Set([
-  'running_active',
-  'waiting_tool',
-  'slow_observed',
-  'suspected_stall',
-  'suspected_stream_ui_stall',
-  'suspected_detached',
-]);
+import {
+  hasActiveToolState,
+  isRunningHealthStatus,
+  isRunningRuntimeStatus,
+} from '../../health/reducer.js';
 
 export interface ActiveTaskLookupDeps {
   getActiveTask(sessionId: string): { abortController: AbortController } | undefined;
 }
 
 export function sessionLooksRunning(session: BridgeSession | null | undefined): boolean {
-  return session?.runtime_status === 'running'
-    || session?.runtime_status === 'queued'
-    || RUNNING_HEALTH_STATUSES.has(session?.health_status || '');
+  return Boolean(session && (
+    isRunningRuntimeStatus(session.runtime_status)
+    || isRunningHealthStatus(session.health_status)
+    || hasActiveToolState(session)
+  ));
 }
 
 function buildActiveTaskSwitchBlockedResponse(

@@ -207,9 +207,16 @@ export function isRunningHealthStatus(status: BridgeSession['health_status']): b
   return Boolean(status && RUNNING_HEALTH_STATUSES.has(status));
 }
 
+export function hasActiveToolState(session: BridgeSession | null | undefined): boolean {
+  if (!session) return false;
+  return parseActiveToolsJson(session.active_tools_json).length > 0
+    || Boolean(trimOrNull(session.active_tool_name));
+}
+
 export function shouldTrackSession(session: BridgeSession): boolean {
   return isRunningRuntimeStatus(session.runtime_status)
-    || isRunningHealthStatus(session.health_status);
+    || isRunningHealthStatus(session.health_status)
+    || hasActiveToolState(session);
 }
 
 export function computeBaseDiagnosis(
@@ -252,7 +259,11 @@ export function computeBaseDiagnosis(
   const lastProgressMs = parseIsoMs(lastProgressAt || undefined);
   const previousStatus = session.health_status || 'idle';
 
-  if (!isRunningRuntimeStatus(runtimeStatus) && isRunningHealthStatus(previousStatus)) {
+  if (
+    !isRunningRuntimeStatus(runtimeStatus)
+    && isRunningHealthStatus(previousStatus)
+    && !activeToolName
+  ) {
     return {
       sessionId: session.id,
       checkedAt: null,

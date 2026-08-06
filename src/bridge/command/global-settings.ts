@@ -975,16 +975,19 @@ export function settingSessionFormSelect(
   overridden: boolean,
 ): NonNullable<NonNullable<OutboundRichCard['form']>['selects']>[number] {
   const value = definition.read(config);
+  const inheritLabel = overridden
+    ? '跟随上层配置'
+    : `跟随上层配置（当前：${value}）`;
   return {
     elementId: definition.key,
     formName: settingFormName(definition),
     label: settingFormLabel(definition),
-    placeholder: overridden ? value : `跟随上层配置（当前：${value}）`,
+    placeholder: overridden ? value : inheritLabel,
     selectedCallbackData: overridden && value !== 'auto'
       ? value
       : SESSION_CONFIG_INHERIT_VALUE,
     options: [
-      { text: '跟随上层配置', callbackData: SESSION_CONFIG_INHERIT_VALUE },
+      { text: inheritLabel, callbackData: SESSION_CONFIG_INHERIT_VALUE },
       ...(definition.options || []),
     ],
   };

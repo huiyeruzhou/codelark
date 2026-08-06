@@ -555,6 +555,35 @@ describe('session-health-runtime', () => {
     assert.deepEqual(store.getSession(session.id), before);
   });
 
+  it('repairs stale idle health while a mirrored tool is still active', () => {
+    const store = new JsonFileStore(makeSettings());
+    const session = store.createSession('Health Mirrored Tool', 'test-model', undefined, 'D:\\workspace\\health-mirrored-tool', 'code');
+    const now = new Date().toISOString();
+    store.updateSession(session.id, {
+      runtime_status: 'idle',
+      health_status: 'idle',
+      health_reason: '当前没有运行中的任务。',
+      last_progress_at: now,
+      last_progress_type: 'tool_running',
+      active_tools_json: JSON.stringify([{
+        id: 'call-mirrored-tool',
+        name: 'exec_command',
+        startedAt: now,
+      }]),
+      active_tool_name: 'exec_command',
+    });
+    const runtime = createSessionHealthRuntime({
+      getStore: () => store,
+      nowIso: () => now,
+    });
+
+    runtime.reconcileSessionHealth();
+    const refreshed = store.getSession(session.id);
+
+    assert.equal(refreshed?.health_status, 'waiting_tool');
+    assert.equal(refreshed?.active_tool_name, 'exec_command');
+  });
+
   it('keeps waiting_tool while another active tool is still running', () => {
     const store = new JsonFileStore(makeSettings());
     const session = store.createSession('Health Multi Tool', 'test-model', undefined, 'D:\\workspace\\health-multi', 'code');
