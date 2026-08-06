@@ -284,6 +284,70 @@ describe('feishu-adapter structured streaming regions', () => {
     assert.deepEqual(createdPayloads[0].data.bot_id_list, ['cli_bridge_bot']);
   });
 
+  it('surfaces structured Feishu diagnostics when group creation fails', async () => {
+    const adapter = new FeishuAdapter({
+      id: 'feishu-default',
+      provider: 'feishu',
+      enabled: true,
+      alias: '飞书',
+      config: {
+        appId: 'cli_bridge_bot',
+        appSecret: 'app-secret',
+      },
+    });
+    const apiError = new Error('Request failed with status code 400') as Error & {
+      response?: {
+        status?: number;
+        data?: {
+          code?: number;
+          msg?: string;
+          error?: { log_id?: string; troubleshooter?: string };
+        };
+      };
+    };
+    apiError.response = {
+      status: 400,
+      data: {
+        code: 232032,
+        msg: 'The operator and designated chat owner must be in the same tenant.',
+        error: {
+          log_id: 'log-create-group-1',
+          troubleshooter: 'https://open.feishu.cn/search?code=232032&log_id=log-create-group-1',
+        },
+      },
+    };
+    (adapter as any).restClient = {
+      im: {
+        chat: {
+          create: async () => {
+            throw apiError;
+          },
+        },
+      },
+    };
+
+    await assert.rejects(
+      () => adapter.createGroupChat({
+        name: 'external owner',
+        ownerUserId: 'ou_external_owner',
+        userIds: ['ou_external_owner'],
+      }),
+      (error: unknown) => {
+        assert.ok(error instanceof Error);
+        assert.match(error.message, /HTTP 状态：400/);
+        assert.match(error.message, /飞书错误码：232032/);
+        assert.match(error.message, /原因：The operator and designated chat owner must be in the same tenant\./);
+        assert.match(error.message, /日志 ID：log-create-group-1/);
+        assert.match(
+          error.message,
+          /\[打开飞书排查建议\]\(https:\/\/open\.feishu\.cn\/search\?code=232032&log_id=log-create-group-1\)/,
+        );
+        assert.doesNotMatch(error.message, /ou_external_owner|app-secret/);
+        return true;
+      },
+    );
+  });
+
   it('falls back to the default group avatar when bot avatar upload fails', async () => {
     const originalFetch = globalThis.fetch;
     const createdPayloads: Array<Record<string, any>> = [];

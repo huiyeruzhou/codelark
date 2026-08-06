@@ -1966,6 +1966,7 @@ type FeishuErrorData = {
   code?: number;
   msg?: string;
   log_id?: string;
+  troubleshooter?: string;
   error?: {
     log_id?: string;
     troubleshooter?: string;
@@ -2014,6 +2015,47 @@ function feishuErrorSummary(err: unknown, fallback: string): string {
   if (data?.error?.troubleshooter) parts.push(`troubleshooter=${data.error.troubleshooter}`);
   if (parts.length > 0) return parts.join('; ');
   return err instanceof Error ? err.message : fallback;
+}
+
+function feishuTroubleshooterUrl(value: string | undefined): string | undefined {
+  const candidate = value?.match(/https:\/\/[^\s<>()]+/u)?.[0];
+  if (!candidate) return undefined;
+  try {
+    const url = new URL(candidate);
+    if (url.hostname !== 'open.feishu.cn' && url.hostname !== 'open.larksuite.com') return undefined;
+    return url.toString();
+  } catch {
+    return undefined;
+  }
+}
+
+function feishuUserFacingErrorMessage(err: unknown, fallback: string): string {
+  const data = findFeishuErrorData(err);
+  const httpStatus = feishuErrorHttpStatus(err);
+  const logId = data?.error?.log_id || data?.log_id;
+  const troubleshooter = data?.error?.troubleshooter || data?.troubleshooter;
+  const troubleshooterUrl = feishuTroubleshooterUrl(troubleshooter);
+  const hasStructuredDiagnostics = typeof httpStatus === 'number'
+    || typeof data?.code === 'number'
+    || Boolean(logId)
+    || Boolean(troubleshooterUrl);
+  if (!hasStructuredDiagnostics) {
+    return err instanceof Error ? err.message : fallback;
+  }
+
+  const lines: string[] = [];
+  if (typeof httpStatus === 'number') lines.push(`HTTP 状态：${httpStatus}`);
+  if (typeof data?.code === 'number') lines.push(`飞书错误码：${data.code}`);
+  if (data?.msg) {
+    lines.push(`原因：${data.msg}`);
+  } else if (err instanceof Error && err.message) {
+    lines.push(`原因：${err.message}`);
+  }
+  if (logId) lines.push(`日志 ID：${logId}`);
+  if (troubleshooterUrl) {
+    lines.push(`[打开飞书排查建议](${troubleshooterUrl})`);
+  }
+  return lines.join('\n');
 }
 
 function normalizePostCodeLanguage(value: unknown): string {
@@ -2822,21 +2864,35 @@ export class FeishuAdapter extends BaseChannelAdapter {
     if (userIds.length > 0) data.user_id_list = userIds;
     if (this.botId) data.bot_id_list = [this.botId];
 
-    const res = await this.withFeishuRequestTimeout<{
+    let res: {
       code?: number;
       msg?: string;
       data?: { chat_id?: string; name?: string };
-    }>('create-group', 'im.chat.create', () => restClient.im.chat.create({
-      params: {
-        user_id_type: 'open_id',
-        set_bot_manager: true,
-        uuid: crypto.randomUUID(),
-      },
-      data,
-    }));
+      log_id?: string;
+      troubleshooter?: string;
+      error?: { log_id?: string; troubleshooter?: string };
+    };
+    try {
+      res = await this.withFeishuRequestTimeout('create-group', 'im.chat.create', () => restClient.im.chat.create({
+        params: {
+          user_id_type: 'open_id',
+          set_bot_manager: true,
+          uuid: crypto.randomUUID(),
+        },
+        data,
+      }));
+    } catch (error) {
+      throw new Error(
+        feishuUserFacingErrorMessage(error, '飞书创建群聊请求失败'),
+        { cause: error },
+      );
+    }
 
     if (res?.code && res.code !== 0) {
-      throw new Error(res.msg || `Feishu create group failed: code=${res.code}`);
+      throw new Error(
+        feishuUserFacingErrorMessage(res, '飞书创建群聊失败'),
+        { cause: res },
+      );
     }
     const chatId = res?.data?.chat_id;
     if (!chatId) {
