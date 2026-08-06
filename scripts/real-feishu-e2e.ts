@@ -4823,7 +4823,12 @@ function commandStateExpectedTexts(options: CliOptions, text: string): string[] 
     ];
   }
   if (command === '/current') {
-    return ['当前会话', '对话名称', '工作目录', 'tmux 输出行数'];
+    return [
+      runtimeDisplayLabel(options.runtime),
+      'Provider',
+      '跟随上层配置（当前：',
+      '当前 agent',
+    ];
   }
   if (command === '/model') {
     if (options.runtime === 'claude') return ['当前 Claude Code 模型'];
