@@ -1765,7 +1765,7 @@ describe('feishu-adapter structured streaming regions', () => {
         chat_type: 'group',
         message_type: 'text',
         content: '{"text":"hello group"}',
-        create_time: '1780209968114',
+        create_time: String(Date.now()),
       },
     });
 
@@ -1797,13 +1797,71 @@ describe('feishu-adapter structured streaming regions', () => {
         chat_type: 'group',
         message_type: 'text',
         content: '{"text":"hello group"}',
-        create_time: '1780209968114',
+        create_time: String(Date.now()),
       },
     });
 
     const inbound = await adapter.consumeOne();
     assert.ok(inbound);
     assert.equal(inbound.text, 'hello group');
+  });
+
+  it('warns once and does not enqueue a Feishu message redelivered after five minutes', async () => {
+    initBridgeTestContext();
+    const replies: Array<Record<string, any>> = [];
+    const adapter = new FeishuAdapter({
+      id: 'feishu-default',
+      provider: 'feishu',
+      enabled: true,
+      alias: '飞书',
+      config: {},
+    });
+    (adapter as any).restClient = {
+      im: {
+        message: {
+          reply: async (payload: Record<string, any>) => {
+            replies.push(payload);
+            return { data: { message_id: 'redelivery-notice-1' } };
+          },
+        },
+      },
+    };
+    const event = {
+      sender: {
+        sender_type: 'user',
+        sender_id: { open_id: 'user-1' },
+      },
+      message: {
+        message_id: 'msg-stale-redelivery-1',
+        chat_id: 'oc_p2p_1',
+        chat_type: 'p2p',
+        message_type: 'text',
+        content: '{"text":"/new"}',
+        create_time: String(Date.now() - 5 * 60_000 - 1),
+      },
+    };
+
+    await (adapter as any).processIncomingEvent(event);
+    await (adapter as any).processIncomingEvent(event);
+
+    assert.equal(replies.length, 1);
+    assert.equal(replies[0]?.path?.message_id, 'msg-stale-redelivery-1');
+    assert.equal(replies[0]?.data?.msg_type, 'text');
+    const notice = JSON.parse(String(replies[0]?.data?.content || '{}')).text;
+    assert.match(notice, /重新投递/);
+    assert.match(notice, /5 分钟/);
+    assert.match(notice, /不会.*模型/);
+    assert.equal(await adapter.consumeOne(), null);
+  });
+
+  it('only classifies valid Feishu timestamps strictly older than five minutes as redeliveries', () => {
+    const now = 1_800_000_000_000;
+
+    assert.equal(_testOnly.isFeishuMessageRedelivery(String(now - 5 * 60_000 - 1), now), true);
+    assert.equal(_testOnly.isFeishuMessageRedelivery(String(now - 5 * 60_000), now), false);
+    assert.equal(_testOnly.isFeishuMessageRedelivery(String(now + 60_000), now), false);
+    assert.equal(_testOnly.isFeishuMessageRedelivery('invalid', now), false);
+    assert.equal(_testOnly.isFeishuMessageRedelivery('0', now), false);
   });
 
   it('turns chat removal events into internal lifecycle messages', async () => {
@@ -1873,7 +1931,7 @@ describe('feishu-adapter structured streaming regions', () => {
             ],
           },
         }),
-        create_time: '1780209968114',
+        create_time: String(Date.now()),
       },
     });
 
@@ -1944,7 +2002,7 @@ describe('feishu-adapter structured streaming regions', () => {
         chat_type: 'p2p',
         message_type: 'text',
         content: '{"text":"按这个窗口发"}',
-        create_time: '1780209968114',
+        create_time: String(Date.now()),
       },
     });
 
@@ -1998,7 +2056,7 @@ describe('feishu-adapter structured streaming regions', () => {
         chat_type: 'p2p',
         message_type: 'text',
         content: '{"text":"总结这条消息"}',
-        create_time: '1780209968114',
+        create_time: String(Date.now()),
       },
     });
 
@@ -2034,7 +2092,7 @@ describe('feishu-adapter structured streaming regions', () => {
         chat_type: 'group',
         message_type: 'text',
         content: '{"text":"hello group"}',
-        create_time: '1780209968114',
+        create_time: String(Date.now()),
       },
     });
 
@@ -2233,7 +2291,7 @@ describe('feishu-adapter structured streaming regions', () => {
             { tag: 'img', image_key: 'img-second' },
           ]],
         }),
-        create_time: '1780209968114',
+        create_time: String(Date.now()),
       },
     }) as Promise<void>;
 
@@ -2337,7 +2395,7 @@ describe('feishu-adapter structured streaming regions', () => {
         chat_type: 'p2p',
         message_type: 'merge_forward',
         content: '{}',
-        create_time: '1780209968114',
+        create_time: String(Date.now()),
       },
     });
     await waitForCondition(() => replies.length === 1);

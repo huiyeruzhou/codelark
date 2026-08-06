@@ -89,6 +89,16 @@ import {
 /** Max number of message_ids to keep for dedup. */
 const DEDUP_MAX = 1000;
 
+/** Messages older than this at arrival are treated as Feishu redeliveries. */
+const FEISHU_REDELIVERY_AGE_MS = 5 * 60_000;
+
+function isFeishuMessageRedelivery(createTime: string | undefined, now = Date.now()): boolean {
+  const sentAt = Number(createTime);
+  return Number.isFinite(sentAt)
+    && sentAt > 0
+    && now - sentAt > FEISHU_REDELIVERY_AGE_MS;
+}
+
 /** Max file download size (20 MB). */
 const MAX_FILE_SIZE = 20 * 1024 * 1024;
 
@@ -6582,6 +6592,32 @@ export class FeishuAdapter extends BaseChannelAdapter {
       }
     }
 
+    const receivedAt = Date.now();
+    if (isFeishuMessageRedelivery(msg.create_time, receivedAt)) {
+      const ageMs = receivedAt - Number(msg.create_time);
+      console.warn('[feishu-adapter] Suppressed stale redelivered message:', {
+        event: 'feishu.message.redelivery_suppressed',
+        messageId: msg.message_id,
+        chatId,
+        createTime: msg.create_time,
+        ageMs,
+        thresholdMs: FEISHU_REDELIVERY_AGE_MS,
+      });
+      try {
+        getBridgeContext().store.insertAuditLog({
+          channelType: this.channelType,
+          channelProvider: this.provider,
+          channelAlias: this.alias,
+          chatId,
+          direction: 'inbound',
+          messageId: msg.message_id,
+          summary: `[FILTERED] Feishu redelivery suppressed after ${ageMs}ms`,
+        });
+      } catch { /* best effort */ }
+      this.notifyRedeliveredInboundMessage(chatId, msg.message_id);
+      return;
+    }
+
     // Track last message ID per chat for typing indicator
     this.lastIncomingMessageId.set(chatId, msg.message_id);
 
@@ -7421,6 +7457,20 @@ export class FeishuAdapter extends BaseChannelAdapter {
     });
   }
 
+  private notifyRedeliveredInboundMessage(chatId: string, messageId: string): void {
+    const text = '检测到飞书重新投递了一条发送时间已超过 5 分钟的历史消息。为避免重复执行，本次不会交给模型处理。';
+    const delivery = enqueueDelivery(
+      this,
+      { channelType: this.channelType, chatId },
+      () => this.sendAsPlainText(chatId, text, messageId),
+    );
+    void delivery.completion.then((result) => {
+      if (!result.ok) {
+        console.warn('[feishu-adapter] Redelivery suppression notice failed:', result.error || 'unknown error');
+      }
+    });
+  }
+
   private parsePostContent(content: string): FeishuPostParseResult {
     return parseFeishuPostContent(content);
   }
@@ -7614,6 +7664,7 @@ export const _testOnly = {
   extractFeishuCardActionCallbackData,
   extractSelectStaticOptionValue,
   parseFeishuPostContent,
+  isFeishuMessageRedelivery,
   shouldBypassProxy,
   withHttpProxyOptions,
 };

@@ -211,6 +211,8 @@ curl -s -X POST "${DOMAIN}/open-apis/auth/v3/tenant_access_token/internal" \
 3. 继续发送普通消息追问，或用 `/clear` 在当前群开始新对话。
 4. 已有本地会话则发送 `/t`，从卡片中选择并接管。
 
+为避免飞书长连接恢复时重新投递历史指令，消息到达 Bridge 时如果距其飞书发送时间已超过 5 分钟，CodeLark 会引用原消息提示这是重新投递，但不再执行指令或交给模型。5 分钟以内的正常消息不受影响。
+
 完整示例见 [5 分钟上手：日常工作流](daily-workflow.md)。会话 attach/detach、agent 切换和配置继承见 [会话与配置工作流](session-workflows.md)。
 
 ## 数据和日志
