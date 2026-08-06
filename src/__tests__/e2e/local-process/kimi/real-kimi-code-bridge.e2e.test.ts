@@ -24,7 +24,7 @@ import {
 } from '../../../helpers/bridge/test-bridge-utils.js';
 import {
   commandAvailable,
-  removeRuntimeTestDirectory,
+  finalizeRuntimeTestDirectory,
   startLocalResponsesProxy,
   waitForCondition,
 } from '../../../helpers/runtime/real-codex-e2e-utils.js';
@@ -223,6 +223,7 @@ describe('real Kimi Code bridge e2e', () => {
     const claudeSeedBridgeSessionId = `claude-seed-${process.pid}-${Date.now()}`;
     const claudeSeedTmuxSessionName = claudeTmuxSessionName(claudeSeedBridgeSessionId);
     let attachedClaudeTmuxSessionName: string | undefined;
+    let completed = false;
 
     try {
       const claudeSeedOutput = await readTextStream(streamClaudeTmuxTui({
@@ -437,6 +438,7 @@ describe('real Kimi Code bridge e2e', () => {
         true,
       );
       assert.equal(store.getSession(session.id)?.runtime?.kimi?.sessionId, kimiSessionId);
+      completed = true;
     } finally {
       bridgeState.running = false;
       await execFileAsync('tmux', ['kill-session', '-t', tmuxSessionName]).catch(() => {});
@@ -449,7 +451,7 @@ describe('real Kimi Code bridge e2e', () => {
         if (value === undefined) delete process.env[key];
         else process.env[key] = value;
       }
-      removeRuntimeTestDirectory(tempDir);
+      finalizeRuntimeTestDirectory(tempDir, completed);
     }
   });
 });

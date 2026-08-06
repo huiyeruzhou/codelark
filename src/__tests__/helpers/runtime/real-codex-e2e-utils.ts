@@ -47,6 +47,14 @@ export function removeRuntimeTestDirectory(directory: string): void {
   });
 }
 
+export function finalizeRuntimeTestDirectory(directory: string, completed: boolean): void {
+  if (!completed && process.env.CODELARK_RUNTIME_E2E_PRESERVE_FAILURES === '1') {
+    process.stderr.write(`[real-runtime-e2e] preserved failure fixture: ${directory}\n`);
+    return;
+  }
+  removeRuntimeTestDirectory(directory);
+}
+
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }

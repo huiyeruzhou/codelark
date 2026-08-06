@@ -202,6 +202,14 @@ describe('Kimi tmux provider helpers', () => {
       true,
     );
     assert.equal(
+      isKimiInputReadyScreen(
+        `Session: ${sessionId}\n│ >                                                                          │\ncontext: 0% (0/32k)`,
+        sessionId,
+      ),
+      true,
+      'the real Kimi editor prompt includes a right box border',
+    );
+    assert.equal(
       isKimiInputReadyScreen(`Session: ${sessionId}\n│ > \ncontext: 0% (0/256k)`, 'session_other'),
       false,
     );

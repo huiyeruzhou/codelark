@@ -6,7 +6,11 @@ import os from 'node:os';
 import path from 'node:path';
 
 import { createRuntimeShardIsolation } from './real-runtime-e2e-isolation.js';
-import { runRuntimeShardsSerially } from './real-runtime-e2e-scheduler.js';
+import {
+  parseNodeTestSummary,
+  runtimeShardFailureReason,
+  runRuntimeShardsSerially,
+} from './real-runtime-e2e-scheduler.js';
 
 const codexExecutable = process.env.CODELARK_REAL_CODEX_E2E_EXECUTABLE;
 const claudeExecutable = process.env.CODELARK_REAL_CLAUDE_E2E_EXECUTABLE;
@@ -98,8 +102,9 @@ function runShard(shard) {
       settled = true;
       clearTimeout(timer);
       output.end(() => {
+        const summary = parseNodeTestSummary(fs.readFileSync(logPath, 'utf-8'));
         isolation.cleanup();
-        resolve(result);
+        resolve({ ...result, summary });
       });
     };
     const timer = setTimeout(() => {
@@ -137,15 +142,13 @@ const results = await runRuntimeShardsSerially(shards, runShard);
 let failed = false;
 for (const result of results) {
   const seconds = (result.durationMs / 1000).toFixed(1);
-  if (!result.timedOut && !result.error && result.code === 0) {
+  const reason = runtimeShardFailureReason(result);
+  if (!reason) {
     const status = result.durationMs > slowShardTargetMs ? 'PASS-SLOW' : 'PASS';
-    console.log(`${status} ${result.name} ${seconds}s ${result.logPath}`);
+    console.log(`${status} ${result.name} ${seconds}s tests=${result.summary.tests} ${result.logPath}`);
     continue;
   }
   failed = true;
-  const reason = result.timedOut
-    ? `timeout after ${result.timeoutMs}ms`
-    : result.error?.message || `exit=${result.code} signal=${result.signal || 'none'}`;
   console.error(`FAIL ${result.name} ${seconds}s ${reason} ${result.logPath}`);
   console.error(tailText(result.logPath));
 }

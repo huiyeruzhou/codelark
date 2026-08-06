@@ -17,7 +17,7 @@ import {
 import {
   commandAvailable,
   execRuntimeCommand,
-  removeRuntimeTestDirectory,
+  finalizeRuntimeTestDirectory,
   startLocalResponsesProxy,
   waitForCondition,
 } from '../../../helpers/runtime/real-codex-e2e-utils.js';
@@ -147,6 +147,7 @@ describe('real Kimi Code tmux provider e2e', () => {
       else process.env[key] = value;
     }
     await execFileAsync('tmux', ['kill-session', '-t', tmuxSessionName]).catch(() => {});
+    let completed = false;
 
     try {
       const version = (await execRuntimeCommand(executable, ['--version'])).stdout.trim();
@@ -245,6 +246,7 @@ describe('real Kimi Code tmux provider e2e', () => {
       const runtimeLog = fs.readFileSync(kimiSessionLogFilePath(sessionFile.filePath), 'utf8');
       assert.match(runtimeLog, /ERROR\s+turn failed/);
       assert.match(runtimeLog, new RegExp(fatalMarker));
+      completed = true;
     } finally {
       await execFileAsync('tmux', ['kill-session', '-t', tmuxSessionName]).catch(() => {});
       await proxy.close().catch(() => undefined);
@@ -252,7 +254,7 @@ describe('real Kimi Code tmux provider e2e', () => {
         if (value === undefined) delete process.env[key];
         else process.env[key] = value;
       }
-      removeRuntimeTestDirectory(tempDir);
+      finalizeRuntimeTestDirectory(tempDir, completed);
     }
   });
 });

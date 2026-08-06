@@ -192,7 +192,7 @@ describe('kimi-tmux-provider workflow', () => {
     const injectCalls: Array<{ target: string; prompt: string }> = [];
     let resumeHintReady = false;
     let resumedTuiReady = false;
-    let workspaceTrustConfirmed = false;
+    let workspaceTrustConfirmationStartedAtMs: number | undefined;
     let wirePath: string | null = null;
     let pendingPrompt = '';
     let tmuxExists = false;
@@ -215,6 +215,8 @@ describe('kimi-tmux-provider workflow', () => {
         return { existed: false, command: `tmux new-session -d -s ${params.name}`, commands: [] };
       },
       async capturePane(target: string) {
+        const workspaceTrustConfirmed = workspaceTrustConfirmationStartedAtMs !== undefined
+          && Date.now() - workspaceTrustConfirmationStartedAtMs >= 400;
         return {
           screen: !workspaceTrustConfirmed
             ? 'MCP servers only run in trusted folders.\n❯ Trust this folder\n  Enable project MCP servers.\n  Don\'t trust'
@@ -232,7 +234,9 @@ describe('kimi-tmux-provider workflow', () => {
         if (names.join(',') === 'C-c,C-c') {
           resumeHintReady = true;
         }
-        if (names.join(',') === 'Enter') workspaceTrustConfirmed = true;
+        if (names.join(',') === 'Enter' && workspaceTrustConfirmationStartedAtMs === undefined) {
+          workspaceTrustConfirmationStartedAtMs = Date.now();
+        }
         if (names.join(',') === 'Enter' && pendingPrompt) {
           wirePath = createKimiSessionFile({ kimiHome, cwd, sessionId });
           appendKimiTurn(wirePath, pendingPrompt);
@@ -428,7 +432,7 @@ describe('kimi-tmux-provider workflow', () => {
     }
   });
 
-  it('restarts a known Kimi session after restored history scrolls the session header away', async () => {
+  it('restarts a known Kimi session without repeating trust confirmation during a delayed redraw', async () => {
     const kimiHome = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-kimi-restart-home-'));
     const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-kimi-restart-cwd-'));
     const sessionId = 'session_bcbcbcbc-bcbc-4bcb-8bcb-bcbcbcbcbcbc';
@@ -436,7 +440,7 @@ describe('kimi-tmux-provider workflow', () => {
     const ensureCalls: string[] = [];
     let tmuxExists = true;
     let captureCount = 0;
-    let trustConfirmed = false;
+    let trustConfirmationStartedAtMs: number | undefined;
     const sendCalls: string[] = [];
     let extendedKeysCalls = 0;
 
@@ -456,6 +460,8 @@ describe('kimi-tmux-provider workflow', () => {
       },
       async capturePane(target: string) {
         captureCount += 1;
+        const trustConfirmed = trustConfirmationStartedAtMs !== undefined
+          && Date.now() - trustConfirmationStartedAtMs >= 400;
         return {
           screen: trustConfirmed
             ? 'Kimi Code\nrestored conversation history\n│ > \ncontext: 42% (107k/256k)'
@@ -476,7 +482,9 @@ describe('kimi-tmux-provider workflow', () => {
       async sendActions(target: string, actions) {
         const names = actionNames(actions);
         sendCalls.push(...names);
-        if (names.join(',') === 'Enter') trustConfirmed = true;
+        if (names.join(',') === 'Enter' && trustConfirmationStartedAtMs === undefined) {
+          trustConfirmationStartedAtMs = Date.now();
+        }
         return { commands: names.map((name) => `tmux send-keys -t ${target} ${name}`) };
       },
       async killSession(name: string) {
@@ -501,8 +509,8 @@ describe('kimi-tmux-provider workflow', () => {
       }));
 
       assert.equal(prepared.sessionId, sessionId);
-      assert.equal(captureCount, 2, 'known resume confirms workspace trust before waiting for the editor');
-      assert.deepEqual(sendCalls, ['Enter']);
+      assert.ok(captureCount >= 4, 'the trust screen remains visible while Kimi redraws');
+      assert.deepEqual(sendCalls, ['Enter'], 'one trust dialog receives exactly one confirmation key');
       assert.equal(ensureCalls.length, 3, 'repeated server-shutdown races relaunch Kimi with a fixed limit');
       assert.equal(extendedKeysCalls, 3);
       assert.equal(commandHasArg(ensureCalls[0] || '', '-r'), true);
