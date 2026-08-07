@@ -455,6 +455,11 @@ class TmuxCliCore implements TmuxCore {
           const pasteArgs: TmuxArgv = ['paste-buffer', '-d', '-p', '-b', bufferName, '-t', targetPane];
           await this.runTmux(pasteArgs);
           commands.push(this.command(pasteArgs));
+          // tmux returning only guarantees delivery to the pane, not that a
+          // slower TUI has consumed the bracketed-paste end marker. Reuse the
+          // long-prompt settle delay before a following Enter, especially for
+          // Windows psmux/ConPTY where an immediate submit can be swallowed.
+          await sleep(PASTE_CHUNK_DELAY_MS);
         }
       }
       if (i < lines.length - 1) {

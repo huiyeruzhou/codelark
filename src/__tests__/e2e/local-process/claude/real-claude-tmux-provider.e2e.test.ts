@@ -36,11 +36,12 @@ function writeClaudeOnboardingState(homeDir: string): void {
 
 describe('real Claude Code tmux provider e2e', () => {
   it('runs the real Claude executable through tmux against a fake Anthropic backend', { timeout: 180_000 }, async (t: TestContext) => {
+    const claudeExecutable = process.env.CODELARK_REAL_CLAUDE_E2E_EXECUTABLE || 'claude';
     if (!(await commandAvailable('tmux', ['-V']))) {
       t.skip('tmux is not available');
       return;
     }
-    if (!(await commandAvailable('claude', ['--version']))) {
+    if (!(await commandAvailable(claudeExecutable, ['--version']))) {
       t.skip('claude executable is not available');
       return;
     }

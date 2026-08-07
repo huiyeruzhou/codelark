@@ -74,10 +74,10 @@ CODELARK_SETUP_WIZARD_REAL_E2E=1 npm run real:setup-wizard:wizard-e2e -- \
 
 GitHub Actions 把“完整回归”和“真实平台依赖 smoke”分开：Linux job 运行完整测试、文档构建和打包检查；跨平台 matrix 验证用户实际会走到的原生终端路径，不用 Linux mock 代替操作系统行为。
 
-Linux、macOS 和 Windows job 都先安装固定版本的 Codex/Claude/Kimi CLI，再运行上述 real-runtime gate。Kimi 当前固定为 npm latest 对应的具体版本，而不是浮动 dist-tag；gate 会关闭 Kimi 自更新，保证该版本在完整 lifecycle 内不可变，否则 npm global 后台替换 executable 会与 kill/resume 竞态。Kimi 0.34.0 默认 v2 会延迟到首条消息后才创建 session，CodeLark 启动时使用其官方 legacy compatibility flag 保持可持久化的 eager session identity。Kimi workspace trust 确认每个对话只能注入一次 Enter；慢 runner 上画面延迟重绘不得导致第二个 Enter 落入刚出现的 editor。
+Linux、macOS 和 Windows job 都先安装固定版本的 Codex/Claude/Kimi CLI，再运行上述 real-runtime gate。gate 从安装 smoke 导出的绝对 executable 路径执行 availability probe，不能再用裸命令做第二套 PATH 判断；TUI 随后仍通过各 runtime 的正式 resolver 启动。Kimi 当前固定为 npm latest 对应的具体版本，而不是浮动 dist-tag；gate 会关闭 Kimi 自更新，保证该版本在完整 lifecycle 内不可变，否则 npm global 后台替换 executable 会与 kill/resume 竞态。Kimi 0.34.0 默认 v2 会延迟到首条消息后才创建 session，CodeLark 启动时使用其官方 legacy compatibility flag 保持可持久化的 eager session identity。Kimi workspace trust 确认每个对话只能注入一次 Enter；慢 runner 上画面延迟重绘不得导致第二个 Enter 落入刚出现的 editor。
 
 - macOS 26 arm64 安装 Homebrew tmux，验证 `tmux -V` 和 session 的创建、查询、名称读取、清理，再运行 typecheck、unit/workflow、build、pack 和 CLI smoke。
-- Windows x64 job 使用原生 Windows runner，通过 WinGet 安装 psmux，验证同一组 `tmux.exe` session 生命周期，再运行 typecheck、完整 unit、Windows runtime-sensitive workflow、build、pack 和 CLI smoke。runtime-sensitive 层覆盖真实 psmux/Codex、Claude、Kimi 和 service-manager；平台无关的 command workflow 已由 Linux/macOS 双重覆盖，不在 Windows 重复数百次 Bash fake 冷启动。psmux 走 ConPTY，不经过 WSL。
+- Windows x64 job 使用原生 Windows runner，通过 WinGet 安装 psmux，验证同一组 `tmux.exe` session 生命周期，再运行 typecheck、完整 unit、Windows runtime-sensitive workflow、build、pack 和 CLI smoke。runtime-sensitive 层覆盖真实 psmux/Codex、Claude、Kimi 和 service-manager；平台无关的 command workflow 已由 Linux/macOS 双重覆盖，不在 Windows 重复数百次 Bash fake 冷启动。psmux 走 ConPTY，不经过 WSL。real-runtime 的 `TEMP`/`TMP` 与日志统一落在 runner 临时目录，失败 fixture 才能由 artifact 上传；测试结束时 psmux 若仍短暂持有工作目录，Windows `EPERM`/`EBUSY` 只保留并报告 fixture，不能覆盖已经完成的功能断言。
 - matrix job 的 real-runtime gate 会启动真实 Codex/Claude/Kimi TUI，但模型端仍是本地 fake proxy，不等于官方远端 backend 或真实飞书 E2E；CardKit 客户端和用户可见行为仍按下文对应层级补验。
 
 Windows 托管 runner 的版本可以随 GitHub 支持范围升级；发布 gate 关注的是 x64 Node.js、WinGet、原生进程/PATH、ConPTY/psmux 这条用户路径，而不是把某个 runner 标签宣传成桌面 Windows 版本。

@@ -117,6 +117,7 @@ describe('real Kimi Code bridge e2e', () => {
   });
 
   it('cold-starts Kimi, survives a bridge restart, and /t round-trips through a real Claude session', { timeout: 120_000 }, async (t: TestContext) => {
+    const claudeExecutable = process.env.CODELARK_REAL_CLAUDE_E2E_EXECUTABLE || 'claude';
     if (!(await commandAvailable('tmux', ['-V']))) {
       t.skip('tmux is not available');
       return;
@@ -126,7 +127,7 @@ describe('real Kimi Code bridge e2e', () => {
       t.skip(`real Kimi Code executable is not available at ${executable}`);
       return;
     }
-    if (!(await commandAvailable('claude', ['--version']))) {
+    if (!(await commandAvailable(claudeExecutable, ['--version']))) {
       t.skip('real Claude executable is not available');
       return;
     }

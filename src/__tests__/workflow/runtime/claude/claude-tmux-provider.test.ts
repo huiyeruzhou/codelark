@@ -190,6 +190,10 @@ describe('claude-tmux-provider', () => {
     const sessionFile = path.join(projectDir, 'claude-tmux-session.jsonl');
     const calls: string[] = [];
     const restoreTmux = patchTmuxCore({
+      async ensureExtendedKeys() {
+        calls.push('extended-keys');
+        return 'tmux set-option -g extended-keys on';
+      },
       async hasSession(name: string) {
         calls.push(`has:${name}`);
         return { exists: true, command: `tmux has-session -t ${name}` };
@@ -261,6 +265,7 @@ describe('claude-tmux-provider', () => {
       })));
 
       assert.ok(calls.some((call) => call === `ensure:claude_bridge-session-1:${cwd}`));
+      assert.ok(calls.includes('extended-keys'));
       assert.ok(calls.some((call) => call === 'inject:claude_bridge-session-1:0.0:hello from tmux'));
       assert.ok(events.some((event) => event.type === 'status'
         && typeof event.data === 'object'

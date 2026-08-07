@@ -41,13 +41,30 @@ export async function execRuntimeCommand(command: string, args: string[]) {
   });
 }
 
+export function shouldPreserveRuntimeTestDirectoryAfterCleanupError(
+  error: unknown,
+  platform = process.platform,
+): boolean {
+  if (platform !== 'win32' || typeof error !== 'object' || error === null) return false;
+  const code = (error as NodeJS.ErrnoException).code;
+  return code === 'EPERM' || code === 'EBUSY' || code === 'ENOTEMPTY';
+}
+
 export function removeRuntimeTestDirectory(directory: string): void {
-  fs.rmSync(directory, {
-    recursive: true,
-    force: true,
-    maxRetries: 20,
-    retryDelay: 100,
-  });
+  try {
+    fs.rmSync(directory, {
+      recursive: true,
+      force: true,
+      maxRetries: 20,
+      retryDelay: 100,
+    });
+  } catch (error) {
+    if (!shouldPreserveRuntimeTestDirectoryAfterCleanupError(error)) throw error;
+    const code = (error as NodeJS.ErrnoException).code || 'unknown';
+    process.stderr.write(
+      `[real-runtime-e2e] preserved Windows fixture still held by tmux (${code}): ${directory}\n`,
+    );
+  }
 }
 
 export function finalizeRuntimeTestDirectory(directory: string, completed: boolean): void {

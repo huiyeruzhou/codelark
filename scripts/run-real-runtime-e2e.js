@@ -30,7 +30,10 @@ const shards = [
     name: 'codex',
     timeoutMs: 120_000,
     files: ['src/__tests__/e2e/local-process/codex/real-codex-tmux-provider.e2e.test.ts'],
-    env: { CODELARK_CODEX_CLI_PATH: codexExecutable },
+    env: {
+      CODELARK_CODEX_CLI_PATH: codexExecutable,
+      CODELARK_REAL_CODEX_E2E_EXECUTABLE: codexExecutable,
+    },
   },
   {
     name: 'claude',
@@ -48,7 +51,10 @@ const shards = [
     name: 'kimi-bridge',
     timeoutMs: 120_000,
     files: ['src/__tests__/e2e/local-process/kimi/real-kimi-code-bridge.e2e.test.ts'],
-    env: { CODELARK_REAL_KIMI_E2E_EXECUTABLE: kimiExecutable },
+    env: {
+      CODELARK_REAL_KIMI_E2E_EXECUTABLE: kimiExecutable,
+      CODELARK_REAL_CLAUDE_E2E_EXECUTABLE: claudeExecutable,
+    },
   },
 ];
 

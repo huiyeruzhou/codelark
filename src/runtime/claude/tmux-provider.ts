@@ -209,7 +209,14 @@ async function pollClaudeTmuxSessionFile(
           transcript_path: found.filePath,
         }));
       } else if (Date.now() > sessionFileDeadline) {
-        throw new Error('Timed out waiting for Claude tmux session jsonl file.');
+        let screen = '';
+        try {
+          screen = (await tmuxCore.capturePane(context.targetPane, 80)).screen;
+        } catch (error) {
+          screen = `[capture failed: ${error instanceof Error ? error.message : String(error)}]`;
+        }
+        const excerpt = screen.replace(/\s+$/gu, '').slice(-2_000) || '[empty pane]';
+        throw new Error(`Timed out waiting for Claude tmux session jsonl file. Final pane:\n${excerpt}`);
       }
     }
 
@@ -305,6 +312,10 @@ export function streamClaudeTmuxTui(params: StreamChatParams): ReadableStream<st
             controller,
             recreate: false,
           });
+          const extendedKeysCommand = await tmuxCore.ensureExtendedKeys?.();
+          if (extendedKeysCommand) {
+            console.log('[claude-tmux] tmux extended keys enabled for Claude input:', extendedKeysCommand);
+          }
           const promptDelayMs = parsePositiveIntEnv('CODELARK_CLAUDE_TMUX_PROMPT_DELAY_MS', DEFAULT_CLAUDE_TMUX_PROMPT_DELAY_MS, 0);
           if (promptDelayMs > 0) await sleep(promptDelayMs);
           await prepareClaudeTmuxForPrompt(sessionName, targetPane, controller);

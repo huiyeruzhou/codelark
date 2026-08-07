@@ -36,6 +36,12 @@ import {
 const execFileAsync = promisify(execFile);
 const REAL_CODEX_E2E_MODEL_ENV = 'CODELARK_REAL_CODEX_E2E_MODEL';
 
+function installedCodexExecutable(): string {
+  return process.env.CODELARK_REAL_CODEX_E2E_EXECUTABLE
+    || process.env.CODELARK_CODEX_CLI_PATH
+    || 'codex';
+}
+
 function createLongPrompt(): string {
   const words = Array.from({ length: 720 }, (_, index) => `ctiword${String(index).padStart(4, '0')}`);
   return `clk-long-prompt-start ${words.join(' ')} clk-long-prompt-end`;
@@ -269,7 +275,7 @@ describe('real codex tmux provider e2e', () => {
       t.skip('tmux is not available');
       return;
     }
-    if (!(await commandAvailable('codex', ['--version']))) {
+    if (!(await commandAvailable(installedCodexExecutable(), ['--version']))) {
       t.skip('codex CLI is not available');
       return;
     }
@@ -460,7 +466,7 @@ describe('real codex tmux provider e2e', () => {
       t.skip('tmux is not available');
       return;
     }
-    if (!(await commandAvailable('codex', ['--version']))) {
+    if (!(await commandAvailable(installedCodexExecutable(), ['--version']))) {
       t.skip('codex CLI is not available');
       return;
     }
@@ -605,7 +611,7 @@ describe('real codex tmux provider e2e', () => {
       t.skip('tmux is not available');
       return;
     }
-    if (!(await commandAvailable('codex', ['--version']))) {
+    if (!(await commandAvailable(installedCodexExecutable(), ['--version']))) {
       t.skip('codex CLI is not available');
       return;
     }
@@ -783,7 +789,7 @@ describe('real codex tmux provider e2e', () => {
       t.skip('tmux is not available');
       return;
     }
-    if (!(await commandAvailable('codex', ['--version']))) {
+    if (!(await commandAvailable(installedCodexExecutable(), ['--version']))) {
       t.skip('codex CLI is not available');
       return;
     }
@@ -923,7 +929,7 @@ describe('real codex tmux provider e2e', () => {
       t.skip('tmux is not available');
       return;
     }
-    if (!(await commandAvailable('codex', ['--version']))) {
+    if (!(await commandAvailable(installedCodexExecutable(), ['--version']))) {
       t.skip('codex CLI is not available');
       return;
     }
