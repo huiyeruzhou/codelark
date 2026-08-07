@@ -11303,7 +11303,7 @@ enabled = true
       store.updateSession(binding.bridgeSessionId, {
         runtime: {
           activeRuntime: 'kimi',
-          kimi: { sessionId, cwd: workDir },
+          kimi: { cwd: workDir },
           general: { tmuxSessionName: tmuxSession, workingDirectory: workDir },
         },
       });
@@ -11375,6 +11375,11 @@ enabled = true
 
       assert.equal(sent.length, 0, 'successful provider auto-forward must not send a /tmux response');
       assert.equal(autoForwarded, true, 'delivery callback must run only after the input reaches tmux');
+      assert.equal(
+        store.getSession(binding.bridgeSessionId)?.runtime?.kimi?.sessionId,
+        sessionId,
+        'cold takeover must recover the Kimi identity before acknowledging auto-forward input',
+      );
       assert.equal(getRuntimeTmuxInputState('kimi', tmuxSession).state, 'running');
       const log = fs.readFileSync(fakeTmux.logPath, 'utf-8');
       const firstHasSessionIndex = log.indexOf(`has-session -t ${tmuxSession}`);

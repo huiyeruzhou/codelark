@@ -122,25 +122,41 @@ function rewriteRecordedTurnContextModel(filePath: string, model: string): numbe
   return rewritten;
 }
 
-function findTrustPermission(adapter: RecordingAdapter): {
+function findStartupPermission(adapter: RecordingAdapter): {
+  kind: 'trust' | 'selection';
   callbackData: string;
   callbackMessageId: string;
   messageText: string;
   buttonTexts: string[];
-  permissionRequestId: string;
+  permissionRequestId?: string;
 } | null {
   for (const [index, message] of adapter.sent.entries()) {
     const button = message.inlineButtons
       ?.flat()
       .find((item) => item.callbackData.startsWith('perm:allow:codex-trust:'));
-    if (!button) continue;
-    return {
-      callbackData: button.callbackData,
-      callbackMessageId: `reply-${index + 1}`,
-      messageText: message.text,
-      buttonTexts: message.inlineButtons?.flat().map((item) => item.text) || [],
-      permissionRequestId: button.callbackData.slice('perm:allow:'.length),
-    };
+    if (button) {
+      return {
+        kind: 'trust',
+        callbackData: button.callbackData,
+        callbackMessageId: `reply-${index + 1}`,
+        messageText: message.text,
+        buttonTexts: message.inlineButtons?.flat().map((item) => item.text) || [],
+        permissionRequestId: button.callbackData.slice('perm:allow:'.length),
+      };
+    }
+    const selection = message.richCard?.selects
+      ?.flatMap((select) => select.options)
+      .find((option) => option.callbackData.endsWith(':yes_proceed'));
+    if (selection) {
+      return {
+        kind: 'selection',
+        callbackData: selection.callbackData,
+        callbackMessageId: `reply-${index + 1}`,
+        messageText: message.text,
+        buttonTexts: message.richCard?.selects
+          ?.flatMap((select) => select.options.map((option) => option.text)) || [],
+      };
+    }
   }
   return null;
 }
@@ -220,7 +236,7 @@ class RecordingStreamingAdapter extends RecordingAdapter {
   }
 }
 
-async function approveTrustPermission(
+async function approveStartupPermission(
   adapter: RecordingAdapter,
   store: BridgeStore,
   address: { channelType: string; chatId: string },
@@ -234,34 +250,39 @@ async function approveTrustPermission(
   } = {},
 ): Promise<boolean> {
   const sawPermission = await waitForCondition(
-    () => Boolean(findTrustPermission(adapter)) || options.turnSettled?.() === true,
+    () => Boolean(findStartupPermission(adapter)) || options.turnSettled?.() === true,
     options.timeoutMs ?? 15_000,
     250,
   );
-  const permission = findTrustPermission(adapter);
+  const permission = findStartupPermission(adapter);
   if (!sawPermission || !permission) {
     if (options.turnSettled?.() === true) return false;
     assert.equal(options.required === true, false, 'Codex trust prompt should be forwarded as an IM permission request');
     return false;
   }
-  assert.match(permission.messageText, /Codex Trust Confirmation/);
-  assert.deepEqual(permission.buttonTexts, ['Trust and continue', 'Deny']);
-  assert.doesNotMatch(permission.messageText, /Allow Session/i);
-  if (options.expectedProvider) {
-    assert.match(permission.messageText, new RegExp(`Provider: ${options.expectedProvider}`));
+  if (permission.kind === 'trust') {
+    assert.match(permission.messageText, /Codex Trust Confirmation/);
+    assert.deepEqual(permission.buttonTexts, ['Trust and continue', 'Deny']);
+    assert.doesNotMatch(permission.messageText, /Allow Session/i);
+    if (options.expectedProvider) {
+      assert.match(permission.messageText, new RegExp(`Provider: ${options.expectedProvider}`));
+    }
+    if (options.expectedWorkingDirectory) {
+      assert.match(permission.messageText, new RegExp(`Directory: ${options.expectedWorkingDirectory.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`));
+    }
+    if (options.expectedInspectCommand) {
+      assert.match(permission.messageText, new RegExp(`Inspect current screen: ${options.expectedInspectCommand.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`));
+    }
+    const sawLink = await waitForCondition(
+      () => Boolean(permission.permissionRequestId && store.getPermissionLink(permission.permissionRequestId)),
+      5_000,
+      100,
+    );
+    assert.equal(sawLink, true, 'permission link should be recorded before accepting callback');
+  } else {
+    assert.match(permission.messageText, /Codex TUI Selection/);
+    assert.equal(permission.buttonTexts.some((text) => /Yes, (?:continue|proceed)/i.test(text)), true);
   }
-  if (options.expectedWorkingDirectory) {
-    assert.match(permission.messageText, new RegExp(`Directory: ${options.expectedWorkingDirectory.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`));
-  }
-  if (options.expectedInspectCommand) {
-    assert.match(permission.messageText, new RegExp(`Inspect current screen: ${options.expectedInspectCommand.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`));
-  }
-  const sawLink = await waitForCondition(
-    () => Boolean(store.getPermissionLink(permission.permissionRequestId)),
-    5_000,
-    100,
-  );
-  assert.equal(sawLink, true, 'permission link should be recorded before accepting callback');
   await _testOnly.handleMessage(adapter, {
     ...inboundMessage(address, '', `incoming-trust-allow-${Date.now()}`),
     callbackData: permission.callbackData,
@@ -343,7 +364,7 @@ describe('real codex tmux provider e2e', () => {
         () => { firstTurnSettled = true; },
         () => { firstTurnSettled = true; },
       );
-      await approveTrustPermission(adapter, store, address, {
+      await approveStartupPermission(adapter, store, address, {
         required: true,
         timeoutMs: 30_000,
         turnSettled: () => firstTurnSettled,
@@ -560,7 +581,16 @@ describe('real codex tmux provider e2e', () => {
         adapter,
         inboundMessage(address, 'Create and send the requested artifact.', 'incoming-artifact-turn'),
       );
-      await approveTrustPermission(adapter, store, address, { required: false, timeoutMs: 3_000 });
+      let turnSettled = false;
+      void turnPromise.then(
+        () => { turnSettled = true; },
+        () => { turnSettled = true; },
+      );
+      await approveStartupPermission(adapter, store, address, {
+        required: true,
+        timeoutMs: 30_000,
+        turnSettled: () => turnSettled,
+      });
 
       assert.equal(await waitForCondition(
         () => proxy.requests.some((request) => request.url.includes('/responses')),
@@ -704,6 +734,7 @@ describe('real codex tmux provider e2e', () => {
     try {
       await _testOnly.handleMessage(adapter, inboundMessage(address, `/clear real-tmux-error ${workDir}`, 'incoming-error-new'));
       await _testOnly.handleMessage(adapter, inboundMessage(address, '/provider tmux', 'incoming-error-provider'));
+      await approveStartupPermission(adapter, store, address, { required: false, timeoutMs: 1_000 });
       const binding = store.getChannelChat(address.channelType, address.chatId);
       assert.ok(binding);
       const session = store.getSession(binding.bridgeSessionId);
@@ -868,7 +899,16 @@ describe('real codex tmux provider e2e', () => {
       await _testOnly.handleMessage(adapter, inboundMessage(address, '/provider tmux', 'incoming-real-long-provider'));
       await new Promise((resolve) => setTimeout(resolve, 1_500));
       const mediumTurn = _testOnly.handleMessage(adapter, inboundMessage(address, mediumPrompt, 'incoming-real-medium-prompt'));
-      await approveTrustPermission(adapter, store, address, { required: false, timeoutMs: 3_000 });
+      let mediumTurnSettled = false;
+      void mediumTurn.then(
+        () => { mediumTurnSettled = true; },
+        () => { mediumTurnSettled = true; },
+      );
+      await approveStartupPermission(adapter, store, address, {
+        required: true,
+        timeoutMs: 30_000,
+        turnSettled: () => mediumTurnSettled,
+      });
       await mediumTurn;
 
       const binding = store.getChannelChat(address.channelType, address.chatId);
@@ -1015,7 +1055,18 @@ describe('real codex tmux provider e2e', () => {
       await execFileAsync('tmux', ['has-session', '-t', tmuxSessionName]);
 
       const requestsBeforeFirstGoal = proxy.requests.length;
-      await _testOnly.handleMessage(adapter, inboundMessage(address, '//goal goala', 'incoming-goal-selection-a'));
+      const firstGoalTurn = _testOnly.handleMessage(adapter, inboundMessage(address, '//goal goala', 'incoming-goal-selection-a'));
+      let firstGoalTurnSettled = false;
+      void firstGoalTurn.then(
+        () => { firstGoalTurnSettled = true; },
+        () => { firstGoalTurnSettled = true; },
+      );
+      await approveStartupPermission(adapter, store, address, {
+        required: true,
+        timeoutMs: 30_000,
+        turnSettled: () => firstGoalTurnSettled,
+      });
+      await firstGoalTurn;
       const sawFirstGoalRequest = await waitForCondition(
         () => proxy.requests.length > requestsBeforeFirstGoal
           && proxy.requests.some((request) => request.url.includes('/responses')),

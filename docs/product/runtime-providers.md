@@ -24,7 +24,7 @@ CodeLark 把“使用哪个 AI 工具”和“如何驱动它”拆成两层。
 
 - Claude Code 运行时默认使用 `tmux` 提供方，便于从 IM 和本机终端同时观察/接管 Claude Code TUI；可通过 `/provider pty` 或 `/provider sdk` 为当前会话切换。
 - Codex 运行时的默认提供方由全局配置和平台探测共同决定；需要可 attach 的长期终端会话时，优先选择 `tmux`。
-- Kimi Code 当前只支持 `tmux` 提供方。fresh session 只启动一次 `kimi -y`，等待 TUI 同时出现真实 `Session:`、输入框与 context footer 后保存 CLI 生成的 session id；只有恢复已绑定 session 才使用 `kimi -r <session> -y`。首条输入不以 `wire.jsonl` 已存在为前置条件：文件较早出现时从尾部续读，较晚出现时先提交 prompt，再从头读取首轮事件。输出由 Kimi wire mirror 同步；状态区会展示截断后的「当前思考」。
+- Kimi Code 当前只支持 `tmux` 提供方。fresh session 只启动一次 `kimi -y`，等待 TUI 同时出现真实 `Session:`、输入框与 context footer 后保存 CLI 生成的 session id；只有恢复已绑定 session 才使用 `kimi -r <session> -y`。首条输入不以 `wire.jsonl` 已存在为前置条件：文件较早出现时从尾部续读，较晚出现时先提交 prompt，再从头读取首轮事件。已有 tmux 但 Bridge 身份缺失时，会先从 TUI 恢复 session id；普通消息只有在对应 prompt 已进入 `wire.jsonl` 并启动 turn 后才算转发成功，未确认时会重投一次并显式报错，不会静默显示成功。输出由 Kimi wire mirror 同步；状态区会展示截断后的「当前思考」。
 - Cursor Agent 当前只支持 `tmux` 提供方。fresh session 只启动一次 `agent --trust`，首轮提交后从 Cursor 后台创建的 `meta.json` 和 transcript JSONL 发现 chat UUID；恢复已绑定会话使用 `agent --resume <chatId>`。CodeLark 不解析 TUI ANSI 屏幕来取得回答。原生 Cursor slash 命令可用 `/tmux /<command>` 发送；首版假设 chat ID 固定，不自动跟随 `/new`、`/fork`、`/resume` 的身份变化。
 
 Cursor tmux 是生产支持的 runtime，不是 UI 占位。真实官方 `agent` 测试已覆盖冷启动、不中断接管和 tmux 丢失后恢复同一 chat UUID；该测试需要已登录的 Cursor backend，因此目前是 opt-in，不在普通 CI 中自动执行。真实飞书 runtime/provider 矩阵已包含 Cursor 场景，但发布验收仍应区分“场景已定义”和“本次已有真实飞书执行证据”，不能把 planned-only coverage 表述为已验收。

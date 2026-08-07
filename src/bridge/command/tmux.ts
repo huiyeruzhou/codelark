@@ -728,6 +728,7 @@ async function ensureRuntimeTmuxSessionForProvider(
       });
       if (
         inspected.exists
+        && Boolean(session.runtime?.kimi?.sessionId)
         && !(
           params.tmuxProviderAutoForward === true
           && inspected.needsReadiness
@@ -1396,7 +1397,17 @@ export async function handleTmuxBridgeCommand(params: HandleTmuxBridgeCommandPar
               : {}),
           });
           await submitProviderInput();
-          if (runtimeProvider.runtime === 'kimi' && ensured.kimiSubmission) {
+          if (runtimeProvider.runtime === 'kimi') {
+            if (!ensured.kimiSubmission) {
+              throw new Error('Kimi Code 输入确认信息缺失；已停止本次转发，避免把未提交的消息误报为成功。');
+            }
+            const expectedPrompt = actionsToSend
+              .filter((action): action is Extract<TmuxSendAction, { type: 'literal' }> => action.type === 'literal')
+              .map((action) => action.text)
+              .join('');
+            if (!expectedPrompt) {
+              throw new Error('Kimi Code 输入确认内容为空；已停止本次转发，避免把未提交的消息误报为成功。');
+            }
             const accepted = await retryKimiSubmitIfNoActivity({
               sessionName: target,
               targetPane: `${target}:0.0`,
@@ -1404,10 +1415,7 @@ export async function handleTmuxBridgeCommand(params: HandleTmuxBridgeCommandPar
               sessionId: ensured.kimiSubmission.sessionId,
               cwd: ensured.kimiSubmission.cwd,
               startOffset: ensured.kimiSubmission.startOffset,
-              expectedPrompt: actionsToSend
-                .filter((action): action is Extract<TmuxSendAction, { type: 'literal' }> => action.type === 'literal')
-                .map((action) => action.text)
-                .join(''),
+              expectedPrompt,
               retrySubmit: () => submitProviderInput().then(() => undefined),
             });
             if (!accepted) {
