@@ -167,8 +167,6 @@ const PASTE_BUFFER_RETRY_COUNT = 2;
 const PASTE_BUFFER_RETRY_DELAY_MS = 100;
 const WINDOWS_LITERAL_CHUNK_SIZE = 64;
 const WINDOWS_LITERAL_CHUNK_DELAY_MS = 25;
-const BRACKETED_PASTE_START_HEX = ['1b', '5b', '32', '30', '30', '7e'];
-const BRACKETED_PASTE_END_HEX = ['1b', '5b', '32', '30', '31', '7e'];
 const SESSION_START_SURVIVAL_DELAY_MS = 50;
 const SESSION_START_RETRY_DELAY_MS = 100;
 
@@ -424,19 +422,22 @@ class TmuxCliCore implements TmuxCore {
 
   private async sendChunkedLiteralInput(target: string, text: string): Promise<string[]> {
     const commands: string[] = [];
-    const bracketLeadingSlash = text.startsWith('/');
-    if (bracketLeadingSlash) {
-      const startArgs: TmuxArgv = ['send-keys', '-t', target, '-H', ...BRACKETED_PASTE_START_HEX];
-      await this.runTmux(startArgs);
-      commands.push(this.command(startArgs));
-    }
+    const hasLeadingSlash = text.startsWith('/');
     const lines = text.replace(/\r\n?/gu, '\n').split('\n');
     for (const [lineIndex, line] of lines.entries()) {
-      for (const chunk of splitTextChunks(line, WINDOWS_LITERAL_CHUNK_SIZE)) {
+      const inputLine = hasLeadingSlash && lineIndex === 0 ? `x${line}` : line;
+      for (const chunk of splitTextChunks(inputLine, WINDOWS_LITERAL_CHUNK_SIZE)) {
         const args = tmuxSendActionArgv(target, { type: 'literal', text: chunk });
         await this.runTmux(args);
         commands.push(this.command(args));
         await sleep(WINDOWS_LITERAL_CHUNK_DELAY_MS);
+      }
+      if (hasLeadingSlash && lineIndex === 0) {
+        for (const key of ['Home', 'Delete', 'End']) {
+          const editArgs: TmuxArgv = ['send-keys', '-t', target, key];
+          await this.runTmux(editArgs);
+          commands.push(this.command(editArgs));
+        }
       }
       if (lineIndex < lines.length - 1) {
         const newlineArgs: TmuxArgv = ['send-keys', '-t', target, 'M-Enter'];
@@ -444,11 +445,6 @@ class TmuxCliCore implements TmuxCore {
         commands.push(this.command(newlineArgs));
         await sleep(WINDOWS_LITERAL_CHUNK_DELAY_MS);
       }
-    }
-    if (bracketLeadingSlash) {
-      const endArgs: TmuxArgv = ['send-keys', '-t', target, '-H', ...BRACKETED_PASTE_END_HEX];
-      await this.runTmux(endArgs);
-      commands.push(this.command(endArgs));
     }
     return commands;
   }
