@@ -1397,10 +1397,9 @@ describe('command-dispatch', () => {
         },
       );
 
-      assert.equal(sent.length, 1);
       assert.equal(sent[0].richCard?.title, 'CodeLark 热更新日志');
 
-      await new Promise((resolve) => setTimeout(resolve, 35));
+      await waitForCondition(() => sent.some((message) => message.richCard?.title === 'CodeLark 热更新异常'));
 
       assert.equal(sent.length, 2);
       assert.equal(sent[1].richCardUpdateMessageId, 'reply-hot-update-exited-1');

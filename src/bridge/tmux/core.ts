@@ -1,8 +1,4 @@
 import { spawn } from 'node:child_process';
-import { randomUUID } from 'node:crypto';
-import fs from 'node:fs';
-import os from 'node:os';
-import path from 'node:path';
 
 export interface TmuxCommandResult {
   code: number;
@@ -169,10 +165,12 @@ const PASTE_CHUNK_SIZE = 512;
 const PASTE_CHUNK_DELAY_MS = 75;
 const PASTE_BUFFER_RETRY_COUNT = 2;
 const PASTE_BUFFER_RETRY_DELAY_MS = 100;
+const WINDOWS_LITERAL_CHUNK_SIZE = 64;
+const WINDOWS_LITERAL_CHUNK_DELAY_MS = 25;
 const SESSION_START_SURVIVAL_DELAY_MS = 50;
 const SESSION_START_RETRY_DELAY_MS = 100;
 
-export function usesFileBackedTmuxPasteBuffer(platform = process.platform): boolean {
+export function usesChunkedTmuxLiteralInput(platform = process.platform): boolean {
   return platform === 'win32';
 }
 
@@ -192,14 +190,14 @@ class TmuxCliCore implements TmuxCore {
   private readonly autoSelectExecutable: boolean;
   private readonly genericCommandPreview: boolean;
   private readonly candidateExecutables: string[] | undefined;
-  private readonly fileBackedPasteBuffer: boolean;
+  private readonly chunkedLiteralInput: boolean;
   private executableResolution: Promise<string> | undefined;
 
   constructor(
     executable?: string,
     prefixArgs: string[] = [],
     candidateExecutables?: string[],
-    fileBackedPasteBuffer = usesFileBackedTmuxPasteBuffer(),
+    chunkedLiteralInput = usesChunkedTmuxLiteralInput(),
   ) {
     const configuredExecutable = process.env.CODELARK_TMUX_EXECUTABLE?.trim();
     this.executable = executable || configuredExecutable || 'tmux';
@@ -207,7 +205,7 @@ class TmuxCliCore implements TmuxCore {
     this.autoSelectExecutable = !executable && !configuredExecutable && prefixArgs.length === 0;
     this.genericCommandPreview = Boolean(executable || prefixArgs.length > 0);
     this.candidateExecutables = candidateExecutables;
-    this.fileBackedPasteBuffer = fileBackedPasteBuffer;
+    this.chunkedLiteralInput = chunkedLiteralInput;
   }
 
   private async resolveExecutable(): Promise<string> {
@@ -407,7 +405,9 @@ class TmuxCliCore implements TmuxCore {
         action.type === 'literal'
         && (options.forcePasteLiterals === true || Array.from(action.text).length > PASTE_LITERAL_THRESHOLD)
       ) {
-        commands.push(...(await this.pasteLiteralChunks(target, action.text)));
+        commands.push(...(this.chunkedLiteralInput
+          ? await this.sendChunkedLiteralInput(target, action.text)
+          : await this.pasteLiteralChunks(target, action.text)));
       } else {
         const args = tmuxSendActionArgv(target, action);
         await this.runTmux(args);
@@ -418,6 +418,26 @@ class TmuxCliCore implements TmuxCore {
       }
     }
     return { commands };
+  }
+
+  private async sendChunkedLiteralInput(target: string, text: string): Promise<string[]> {
+    const commands: string[] = [];
+    const lines = text.replace(/\r\n?/gu, '\n').split('\n');
+    for (const [lineIndex, line] of lines.entries()) {
+      for (const chunk of splitTextChunks(line, WINDOWS_LITERAL_CHUNK_SIZE)) {
+        const args = tmuxSendActionArgv(target, { type: 'literal', text: chunk });
+        await this.runTmux(args);
+        commands.push(this.command(args));
+        await sleep(WINDOWS_LITERAL_CHUNK_DELAY_MS);
+      }
+      if (lineIndex < lines.length - 1) {
+        const newlineArgs: TmuxArgv = ['send-keys', '-t', target, 'M-Enter'];
+        await this.runTmux(newlineArgs);
+        commands.push(this.command(newlineArgs));
+        await sleep(WINDOWS_LITERAL_CHUNK_DELAY_MS);
+      }
+    }
+    return commands;
   }
 
   private async pasteLiteralChunks(target: string, text: string, bufferName?: string): Promise<string[]> {
@@ -432,38 +452,26 @@ class TmuxCliCore implements TmuxCore {
         commands.push(this.command(leadingArgs));
       }
       if (chunk) {
-        const bufferFilePath = this.fileBackedPasteBuffer
-          ? path.join(os.tmpdir(), `${name}-${randomUUID()}.txt`)
-          : undefined;
-        if (bufferFilePath) {
-          fs.writeFileSync(bufferFilePath, chunk, { encoding: 'utf-8', flag: 'wx', mode: 0o600 });
-        }
-        const loadArgs: TmuxArgv = bufferFilePath
-          ? ['load-buffer', '-b', name, bufferFilePath]
-          : ['load-buffer', '-b', name, '-'];
+        const loadArgs: TmuxArgv = ['load-buffer', '-b', name, '-'];
         const pasteArgs: TmuxArgv = ['paste-buffer', '-d', '-p', '-b', name, '-t', target];
-        try {
-          for (let attempt = 0; ; attempt += 1) {
-            await this.runTmux(loadArgs, bufferFilePath ? undefined : chunk);
-            commands.push(this.command(loadArgs));
-            if (bufferFilePath || attempt > 0) {
-              await sleep(PASTE_BUFFER_RETRY_DELAY_MS * (attempt + 1));
-            }
-            try {
-              await this.runTmux(pasteArgs);
-              commands.push(this.command(pasteArgs));
-              break;
-            } catch (error) {
-              if (
-                !/\bno buffer\b/i.test(String(error))
-                || attempt >= PASTE_BUFFER_RETRY_COUNT
-              ) {
-                throw error;
-              }
+        for (let attempt = 0; ; attempt += 1) {
+          await this.runTmux(loadArgs, chunk);
+          commands.push(this.command(loadArgs));
+          if (attempt > 0) {
+            await sleep(PASTE_BUFFER_RETRY_DELAY_MS * attempt);
+          }
+          try {
+            await this.runTmux(pasteArgs);
+            commands.push(this.command(pasteArgs));
+            break;
+          } catch (error) {
+            if (
+              !/\bno buffer\b/i.test(String(error))
+              || attempt >= PASTE_BUFFER_RETRY_COUNT
+            ) {
+              throw error;
             }
           }
-        } finally {
-          if (bufferFilePath) fs.rmSync(bufferFilePath, { force: true });
         }
       }
       const endArgs: TmuxArgv = ['send-keys', '-t', target, 'End'];
@@ -518,14 +526,14 @@ export function createTmuxCliCore(options: {
   prefixArgs?: string[];
   /** Test hook for exercising client/server compatibility fallback. */
   candidateExecutables?: string[];
-  /** Test hook for exercising Windows psmux file-backed paste buffers. */
-  fileBackedPasteBuffer?: boolean;
+  /** Test hook for exercising Windows psmux chunked literal input. */
+  chunkedLiteralInput?: boolean;
 } = {}): TmuxCore {
   return new TmuxCliCore(
     options.executable,
     options.prefixArgs,
     options.candidateExecutables,
-    options.fileBackedPasteBuffer,
+    options.chunkedLiteralInput,
   );
 }
 

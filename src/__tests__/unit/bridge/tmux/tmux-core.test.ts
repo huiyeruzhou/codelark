@@ -6,7 +6,7 @@ import path from 'node:path';
 
 import {
   createTmuxCliCore,
-  usesFileBackedTmuxPasteBuffer,
+  usesChunkedTmuxLiteralInput,
   type TmuxCore,
 } from '../../../../bridge/tmux/core.js';
 
@@ -46,44 +46,49 @@ function createScriptedTmuxCore(binDir: string, source: string): TmuxCore {
 }
 
 describe('TmuxCore', () => {
-  it('uses file-backed paste buffers for Windows psmux', () => {
-    assert.equal(usesFileBackedTmuxPasteBuffer('win32'), true);
-    assert.equal(usesFileBackedTmuxPasteBuffer('linux'), false);
-    assert.equal(usesFileBackedTmuxPasteBuffer('darwin'), false);
+  it('uses chunked literal input for Windows psmux', () => {
+    assert.equal(usesChunkedTmuxLiteralInput('win32'), true);
+    assert.equal(usesChunkedTmuxLiteralInput('linux'), false);
+    assert.equal(usesChunkedTmuxLiteralInput('darwin'), false);
   });
 
-  it('keeps a file-backed paste buffer until tmux loads it and then removes it', async () => {
-    const binDir = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-unit-tmux-file-buffer-'));
+  it('reconstructs multiline Unicode exactly through Windows psmux literal chunks', async () => {
+    const binDir = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-unit-tmux-literal-chunks-'));
     const logPath = path.join(binDir, 'tmux.log');
-    const contentPath = path.join(binDir, 'loaded-content.txt');
     const scriptPath = path.join(binDir, 'fake-tmux.cjs');
     fs.writeFileSync(scriptPath, `
 const fs = require('node:fs');
 const args = process.argv.slice(2);
-fs.appendFileSync(${JSON.stringify(logPath)}, args.join(' ') + '\\n');
-if (args[0] === 'load-buffer') {
-  fs.writeFileSync(${JSON.stringify(contentPath)}, fs.readFileSync(args[3], 'utf8'));
-}
+fs.appendFileSync(${JSON.stringify(logPath)}, JSON.stringify(args) + '\\n');
 `, 'utf-8');
     const core = createTmuxCliCore({
       executable: process.execPath,
       prefixArgs: [scriptPath],
-      fileBackedPasteBuffer: true,
+      chunkedLiteralInput: true,
     });
+    const prompt = `-第一行《庄子·逍遥游》${'长文本'.repeat(30)}\n\nsecond line`;
 
     try {
       await core.sendActions(
-        'windows-file-buffer',
-        [{ type: 'literal', text: '第一行\nsecond line' }],
+        'windows-literal-chunks',
+        [{ type: 'literal', text: prompt }],
         { forcePasteLiterals: true },
       );
-      assert.equal(fs.readFileSync(contentPath, 'utf-8'), '第一行\nsecond line');
-      const loadLine = fs.readFileSync(logPath, 'utf-8')
+      const calls = fs.readFileSync(logPath, 'utf-8')
         .split(/\r?\n/u)
-        .find((line) => line.startsWith('load-buffer '));
-      assert.ok(loadLine);
-      const bufferFilePath = loadLine.split(' ').at(-1) || '';
-      assert.equal(fs.existsSync(bufferFilePath), false);
+        .filter(Boolean)
+        .map((line) => JSON.parse(line) as string[]);
+      assert.equal(calls.some((args) => args[0] === 'load-buffer' || args[0] === 'paste-buffer'), false);
+      const literalChunks = calls
+        .filter((args) => args[0] === 'send-keys' && args.includes('-l'))
+        .map((args) => args.at(-1) || '');
+      assert.equal(literalChunks.every((chunk) => Array.from(chunk).length <= 64), true);
+      const reconstructed = calls.map((args) => {
+        if (args[0] !== 'send-keys') return '';
+        if (args.includes('-l')) return args.at(-1) || '';
+        return args.at(-1) === 'M-Enter' ? '\n' : '';
+      }).join('');
+      assert.equal(reconstructed, prompt);
     } finally {
       fs.rmSync(binDir, { recursive: true, force: true });
     }
