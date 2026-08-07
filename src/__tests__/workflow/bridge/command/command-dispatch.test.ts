@@ -128,6 +128,10 @@ async function waitForCondition(predicate: () => boolean, timeoutMs = 1000): Pro
 }
 
 describe('runtime settings internals', () => {
+  it('allows a loaded hosted runner enough time to start Codex bootstrap', () => {
+    assert.equal(_testOnlyCodexThreadBootstrap.LOCAL_BOOTSTRAP_TIMEOUT_MS, 15_000);
+  });
+
   it('returns the first Codex thread id from status without waiting for stream result', async () => {
     const threadId = '019e8600-0000-7000-9000-000000000001';
     const stream = new ReadableStream<string>({

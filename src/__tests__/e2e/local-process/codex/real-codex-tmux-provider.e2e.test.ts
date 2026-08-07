@@ -13,6 +13,7 @@ import {
   parseCodexTuiModelMismatchWarning,
 } from '../../../../runtime/codex/tui-runtime-signals.js';
 import { getCodexSessionByThreadIdSafe } from '../../../../bridge/session/support.js';
+import { tmuxCore } from '../../../../bridge/tmux/core.js';
 import type { BridgeStore } from '../../../../domain/index.js';
 import type { OutboundMessage } from '../../../../domain/index.js';
 import { _testOnly, registerAdapter } from '../../../../bridge/host/manager.js';
@@ -460,6 +461,15 @@ describe('real codex tmux provider e2e', () => {
         : 'gpt-5.5-2026-04-24';
       assert.equal(
         await waitForCondition(
+          () => hasCompletedTurnForMarker(generatedThreadFilePath, 'clk real tmux smoke'),
+          30_000,
+          100,
+        ),
+        true,
+        'the first real Codex turn should finish before its recorded model is rewritten',
+      );
+      assert.equal(
+        await waitForCondition(
           () => rewriteRecordedTurnContextModel(generatedThreadFilePath, recordedModel) > 0,
           10_000,
           100,
@@ -563,7 +573,7 @@ describe('real codex tmux provider e2e', () => {
     const sendBlock = `<clk-send>${JSON.stringify({ type: 'file', path: artifactPath })}</clk-send>`;
     const proxy = await startLocalResponsesProxy({
       responseText: `CODEX_STREAM_ARTIFACT_READY\n${sendBlock}`,
-      responsesFinishDelayMs: 10_000,
+      responsesFinishDelayMs: 20_000,
     });
     process.env.CODEX_HOME = codexHome;
     process.env.CODELARK_CODEX_BASE_URL = proxy.baseUrl;
@@ -640,14 +650,14 @@ describe('real codex tmux provider e2e', () => {
         const sent = adapter.sent.flatMap((message) => message.attachments || [])
           .some((attachment) => attachment.path === artifactPath);
         return sent && adapter.streamEnds.length === 0;
-      }, 7_000, 50);
+      }, 15_000, 50);
       assert.equal(deliveredBeforeCompletion, true, 'answer artifact should arrive while the mock response remains open');
 
       await turnPromise;
       assert.equal(await waitForCondition(async () => {
         await _testOnly.reconcileMirrorSubscriptions();
         return adapter.streamEnds.some((entry) => entry.status === 'completed');
-      }, 15_000, 50), true);
+      }, 30_000, 50), true);
 
       const attachmentPaths = adapter.sent
         .flatMap((message) => message.attachments || [])
@@ -772,9 +782,10 @@ describe('real codex tmux provider e2e', () => {
 
       await _testOnly.reconcileMirrorSubscriptions();
       await execFileAsync('tmux', ['resize-window', '-t', tmuxSessionName, '-x', '60', '-y', '42']);
-      await execFileAsync('tmux', ['send-keys', '-t', `${tmuxSessionName}:0.0`, '-l', fatalMarker]);
-      await new Promise((resolve) => setTimeout(resolve, 250));
-      await execFileAsync('tmux', ['send-keys', '-t', `${tmuxSessionName}:0.0`, 'Enter']);
+      await tmuxCore.sendActions(`${tmuxSessionName}:0.0`, [
+        { type: 'literal', text: fatalMarker },
+        { type: 'key', key: 'Enter' },
+      ], { delayMs: 250, forcePasteLiterals: true });
       await new Promise((resolve) => setTimeout(resolve, 250));
       const afterSubmit = await execFileAsync('tmux', ['capture-pane', '-p', '-t', `${tmuxSessionName}:0.0`, '-S', '-80']);
       if (afterSubmit.stdout.includes(`› ${fatalMarker}`)) {

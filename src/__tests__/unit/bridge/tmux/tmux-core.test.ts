@@ -4,7 +4,11 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-import { createTmuxCliCore, type TmuxCore } from '../../../../bridge/tmux/core.js';
+import {
+  createTmuxCliCore,
+  usesFileBackedTmuxPasteBuffer,
+  type TmuxCore,
+} from '../../../../bridge/tmux/core.js';
 
 function installFakeTmux(): { binDir: string; logPath: string; core: TmuxCore } {
   const binDir = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-unit-fake-tmux-core-'));
@@ -42,6 +46,49 @@ function createScriptedTmuxCore(binDir: string, source: string): TmuxCore {
 }
 
 describe('TmuxCore', () => {
+  it('uses file-backed paste buffers for Windows psmux', () => {
+    assert.equal(usesFileBackedTmuxPasteBuffer('win32'), true);
+    assert.equal(usesFileBackedTmuxPasteBuffer('linux'), false);
+    assert.equal(usesFileBackedTmuxPasteBuffer('darwin'), false);
+  });
+
+  it('keeps a file-backed paste buffer until tmux loads it and then removes it', async () => {
+    const binDir = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-unit-tmux-file-buffer-'));
+    const logPath = path.join(binDir, 'tmux.log');
+    const contentPath = path.join(binDir, 'loaded-content.txt');
+    const scriptPath = path.join(binDir, 'fake-tmux.cjs');
+    fs.writeFileSync(scriptPath, `
+const fs = require('node:fs');
+const args = process.argv.slice(2);
+fs.appendFileSync(${JSON.stringify(logPath)}, args.join(' ') + '\\n');
+if (args[0] === 'load-buffer') {
+  fs.writeFileSync(${JSON.stringify(contentPath)}, fs.readFileSync(args[3], 'utf8'));
+}
+`, 'utf-8');
+    const core = createTmuxCliCore({
+      executable: process.execPath,
+      prefixArgs: [scriptPath],
+      fileBackedPasteBuffer: true,
+    });
+
+    try {
+      await core.sendActions(
+        'windows-file-buffer',
+        [{ type: 'literal', text: '第一行\nsecond line' }],
+        { forcePasteLiterals: true },
+      );
+      assert.equal(fs.readFileSync(contentPath, 'utf-8'), '第一行\nsecond line');
+      const loadLine = fs.readFileSync(logPath, 'utf-8')
+        .split(/\r?\n/u)
+        .find((line) => line.startsWith('load-buffer '));
+      assert.ok(loadLine);
+      const bufferFilePath = loadLine.split(' ').at(-1) || '';
+      assert.equal(fs.existsSync(bufferFilePath), false);
+    } finally {
+      fs.rmSync(binDir, { recursive: true, force: true });
+    }
+  });
+
   it('retries when new-session is lost while the previous tmux server shuts down', async () => {
     const binDir = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-unit-tmux-start-race-'));
     const statePath = path.join(binDir, 'launch-count');
