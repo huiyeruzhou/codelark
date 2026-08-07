@@ -4778,7 +4778,7 @@ export class FeishuAdapter extends BaseChannelAdapter {
       try { await pending; } catch { /* creation failed — no card to finalize */ }
     }
 
-    const state = this.activeCards.get(cardKey);
+    let state = this.activeCards.get(cardKey);
     if (!state || !this.restClient) return false;
     const cardkit = (this.restClient as any).cardkit?.v1;
     if (!cardkit?.card?.settings || !cardkit?.card?.update) return false;
@@ -4789,7 +4789,22 @@ export class FeishuAdapter extends BaseChannelAdapter {
       state.throttleTimer = null;
     }
     const finalizeWaitStartedAt = Date.now();
+    const stateBeforeFlushWait = state;
     const flushed = await this.awaitCardFlushCompletion(cardKey);
+    const activeState = this.activeCards.get(cardKey);
+    if (!activeState) return false;
+    state = activeState;
+    if (state !== stateBeforeFlushWait) {
+      console.log('[feishu-adapter] Card finalization adopted continuation card after flush handoff:', {
+        stream_key: cardKey,
+        previous_card_id: stateBeforeFlushWait.cardId,
+        card_id: state.cardId,
+      });
+    }
+    if (state.throttleTimer) {
+      clearTimeout(state.throttleTimer);
+      state.throttleTimer = null;
+    }
     state.perf.finalizeWaitMs = Date.now() - finalizeWaitStartedAt;
     if (!flushed) {
       console.warn(`[feishu-adapter] Card finalize proceeding after flush wait timeout: streamKey=${cardKey}`);
