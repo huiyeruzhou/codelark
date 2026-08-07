@@ -5191,6 +5191,80 @@ describe('feishu-adapter structured streaming regions', () => {
     blocked.resolve({});
   });
 
+  it('finalizes the continuation card when rollover replaces the active card during flush wait', async () => {
+    const flushHandoff = createDeferred<void>();
+    const cardSettingsCalls: Array<Record<string, any>> = [];
+    const cardUpdateCalls: Array<Record<string, any>> = [];
+    const adapter = new FeishuAdapter({
+      id: 'feishu-default',
+      provider: 'feishu',
+      enabled: true,
+      alias: '飞书',
+      config: {
+        appId: 'app-id',
+        appSecret: 'app-secret',
+        streamingEnabled: true,
+      },
+    });
+
+    (adapter as any).cardFinalizeBlockingBudgetMs = 1_000;
+    (adapter as any).restClient = {
+      cardkit: {
+        v1: {
+          card: {
+            create: async () => ({ data: { card_id: 'card-1' } }),
+            settings: async (payload: Record<string, any>) => {
+              cardSettingsCalls.push(payload);
+              return {};
+            },
+            update: async (payload: Record<string, any>) => {
+              cardUpdateCalls.push(payload);
+              return {};
+            },
+          },
+          cardElement: {
+            content: async () => ({}),
+          },
+        },
+      },
+      im: {
+        message: {
+          create: async () => ({ data: { message_id: 'msg-1' } }),
+          reply: async () => ({ data: { message_id: 'msg-1' } }),
+        },
+      },
+    };
+
+    await (adapter as any).createStreamingCard('chat-1', 'reply-1', 'stream-1');
+    const sourceState = (adapter as any).activeCards.get('stream-1');
+    sourceState.pendingText = '同一份最终回复';
+    sourceState.flushInFlight = flushHandoff.promise;
+
+    const finalizePromise = adapter.onStreamEnd('chat-1', 'completed', '同一份最终回复', 'stream-1');
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const continuationState = {
+      ...sourceState,
+      cardId: 'card-2',
+      messageId: 'msg-2',
+      sequence: 0,
+      continuationIndex: sourceState.continuationIndex + 1,
+      flushInFlight: null,
+      flushQueued: false,
+      perf: { ...sourceState.perf },
+    };
+    (adapter as any).activeCards.set('stream-1', continuationState);
+    flushHandoff.resolve();
+
+    const finalized = await finalizePromise;
+
+    assert.equal(finalized, true);
+    assert.deepEqual(cardSettingsCalls.map((call) => call.path?.card_id), ['card-2']);
+    assert.deepEqual(cardUpdateCalls.map((call) => call.path?.card_id), ['card-2']);
+    assert.match(String(cardUpdateCalls[0]?.data?.card?.data || ''), /同一份最终回复/);
+    assert.equal((adapter as any).activeCards.has('stream-1'), false);
+  });
+
   it('caps stream finalization with a total blocking budget while a slow Feishu card update continues in the background', async () => {
     const blockedUpdate = createDeferred<Record<string, any>>();
     const cardUpdateCalls: Array<Record<string, any>> = [];
