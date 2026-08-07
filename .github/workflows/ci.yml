@@ -55,7 +55,7 @@ jobs:
 
       - name: Upload real runtime failure evidence
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: real-runtime-e2e-linux
           if-no-files-found: warn
@@ -171,7 +171,7 @@ jobs:
 
       - name: Upload real runtime failure evidence
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: real-runtime-e2e-${{ matrix.os }}
           if-no-files-found: warn
