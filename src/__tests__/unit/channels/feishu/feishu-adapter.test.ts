@@ -2064,7 +2064,7 @@ describe('feishu-adapter structured streaming regions', () => {
     assert.ok(inbound);
     assert.equal(inbound.contextText, [
       '<quoted_message platform="feishu" message_id="merge-forward-parent-1" message_type="merge_forward">',
-      '飞书消息类型：merge_forward，请使用lark-cli解析这条消息',
+      '请使用 lark-cli，以用户身份（--as user）或**当前群聊**中的机器人身份（--as bot）读取这条消息。',
       '</quoted_message>',
     ].join('\n'));
   });

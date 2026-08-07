@@ -2246,7 +2246,7 @@ function formatQuotedMessageContext(messageId: string, messageType: string, body
   } else if (messageType === 'interactive') {
     rendered = formatInteractiveCardPromptBlock(body);
   } else {
-    rendered = `飞书消息类型：${typeLabel}，请使用lark-cli解析这条消息`;
+    rendered = '请使用 lark-cli，以用户身份（--as user）或**当前群聊**中的机器人身份（--as bot）读取这条消息。';
   }
 
   return [
