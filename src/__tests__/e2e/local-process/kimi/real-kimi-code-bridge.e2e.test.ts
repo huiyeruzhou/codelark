@@ -433,13 +433,18 @@ describe('real Kimi Code bridge e2e', () => {
         adapter,
         inboundMessage(address, kimiReturnText, 'incoming-real-kimi-after-return'),
       );
-      assert.equal(
-        await waitForCondition(() => (
+      const kimiReturnObserved = await waitForCondition(() => (
           proxy.requests.some((request) => request.rawBody.includes(kimiReturnText))
           && fs.readFileSync(sessionFile.filePath, 'utf-8').includes(kimiReturnText)
-        ), 45_000, 100),
-        true,
-      );
+        ), 45_000, 100);
+      if (!kimiReturnObserved) {
+        assert.fail([
+          'Kimi return prompt should reach both the fake proxy and the original wire session',
+          `proxy observed: ${proxy.requests.some((request) => request.rawBody.includes(kimiReturnText))}`,
+          `wire observed: ${fs.readFileSync(sessionFile.filePath, 'utf-8').includes(kimiReturnText)}`,
+          `last adapter response: ${adapter.sent.at(-1)?.text || '(none)'}`,
+        ].join('\n'));
+      }
       assert.equal(store.getSession(session.id)?.runtime?.kimi?.sessionId, kimiSessionId);
       completed = true;
     } finally {

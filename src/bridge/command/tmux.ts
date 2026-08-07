@@ -1396,26 +1396,56 @@ export async function handleTmuxBridgeCommand(params: HandleTmuxBridgeCommandPar
               ? { steer: () => sendKimiTmuxExplicitSteer(`${target}:0.0`) }
               : {}),
           });
-          await submitProviderInput();
+          let kimiSubmission = ensured.kimiSubmission;
+          let expectedKimiPrompt = '';
           if (runtimeProvider.runtime === 'kimi') {
-            if (!ensured.kimiSubmission) {
-              throw new Error('Kimi Code 输入确认信息缺失；已停止本次转发，避免把未提交的消息误报为成功。');
-            }
-            const expectedPrompt = actionsToSend
+            expectedKimiPrompt = actionsToSend
               .filter((action): action is Extract<TmuxSendAction, { type: 'literal' }> => action.type === 'literal')
               .map((action) => action.text)
               .join('');
-            if (!expectedPrompt) {
-              throw new Error('Kimi Code 输入确认内容为空；已停止本次转发，避免把未提交的消息误报为成功。');
+            if (expectedKimiPrompt && !kimiSubmission) {
+              console.warn('[kimi-tmux] Kimi submission metadata missing after readiness; recovering identity before input:', {
+                bridge_session_id: effectiveSession.id,
+                tmux_session: target,
+                persisted_session_id: effectiveSession.runtime?.kimi?.sessionId || null,
+              });
+              const kimiConfig = resolveKimiRuntimeConfig(effectiveSession, binding);
+              const prepared = await ensureKimiTmuxInputSession({
+                prompt: '',
+                sessionId: effectiveSession.id,
+                runtime: 'kimi',
+                kimiSessionId: effectiveSession.runtime?.kimi?.sessionId,
+                workingDirectory: getSessionWorkingDirectory(effectiveSession),
+                model: kimiConfig.model || undefined,
+              });
+              store.updateSession(effectiveSession.id, {
+                ...setSessionKimiIdentityUpdate(prepared.sessionId, prepared.cwd),
+                runtime: {
+                  ...setSessionKimiIdentityUpdate(prepared.sessionId, prepared.cwd).runtime,
+                  general: { tmuxSessionName: prepared.sessionName },
+                },
+              });
+              kimiSubmission = {
+                ...(prepared.sessionFilePath ? { sessionFilePath: prepared.sessionFilePath } : {}),
+                sessionId: prepared.sessionId,
+                ...(prepared.cwd ? { cwd: prepared.cwd } : {}),
+                startOffset: prepared.nextOffset,
+              };
+            }
+          }
+          await submitProviderInput();
+          if (runtimeProvider.runtime === 'kimi' && expectedKimiPrompt) {
+            if (!kimiSubmission) {
+              throw new Error('Kimi Code 输入确认信息缺失；已停止本次转发，避免把未提交的消息误报为成功。');
             }
             const accepted = await retryKimiSubmitIfNoActivity({
               sessionName: target,
               targetPane: `${target}:0.0`,
-              sessionFilePath: ensured.kimiSubmission.sessionFilePath,
-              sessionId: ensured.kimiSubmission.sessionId,
-              cwd: ensured.kimiSubmission.cwd,
-              startOffset: ensured.kimiSubmission.startOffset,
-              expectedPrompt,
+              sessionFilePath: kimiSubmission.sessionFilePath,
+              sessionId: kimiSubmission.sessionId,
+              cwd: kimiSubmission.cwd,
+              startOffset: kimiSubmission.startOffset,
+              expectedPrompt: expectedKimiPrompt,
               retrySubmit: () => submitProviderInput().then(() => undefined),
             });
             if (!accepted) {

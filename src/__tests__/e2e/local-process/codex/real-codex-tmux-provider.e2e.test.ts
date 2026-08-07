@@ -291,6 +291,29 @@ async function approveStartupPermission(
   return true;
 }
 
+async function startTmuxProvider(
+  adapter: RecordingAdapter,
+  store: BridgeStore,
+  address: { channelType: string; chatId: string },
+  messageId: string,
+): Promise<void> {
+  const startup = _testOnly.handleMessage(
+    adapter,
+    inboundMessage(address, '/provider tmux', messageId),
+  );
+  let startupSettled = false;
+  void startup.then(
+    () => { startupSettled = true; },
+    () => { startupSettled = true; },
+  );
+  await approveStartupPermission(adapter, store, address, {
+    required: true,
+    timeoutMs: 30_000,
+    turnSettled: () => startupSettled,
+  });
+  await startup;
+}
+
 describe('real codex tmux provider e2e', () => {
   it('keeps a real Codex thread and warns once when resuming it with a different model', { timeout: 120_000 }, async (t: TestContext) => {
     if (!(await commandAvailable('tmux', ['-V']))) {
@@ -354,21 +377,11 @@ describe('real codex tmux provider e2e', () => {
 
     try {
       await _testOnly.handleMessage(adapter, inboundMessage(address, `/clear real-tmux-fresh ${workDir}`, 'incoming-real-new'));
-      await _testOnly.handleMessage(adapter, inboundMessage(address, '/provider tmux', 'incoming-real-provider-tmux'));
+      await startTmuxProvider(adapter, store, address, 'incoming-real-provider-tmux');
       const firstTurn = _testOnly.handleMessage(
         adapter,
         inboundMessage(address, 'Reply with exactly: clk real tmux smoke', 'incoming-real-first'),
       );
-      let firstTurnSettled = false;
-      void firstTurn.then(
-        () => { firstTurnSettled = true; },
-        () => { firstTurnSettled = true; },
-      );
-      await approveStartupPermission(adapter, store, address, {
-        required: true,
-        timeoutMs: 30_000,
-        turnSettled: () => firstTurnSettled,
-      });
       await firstTurn;
 
       const binding = store.getChannelChat(address.channelType, address.chatId);
@@ -576,21 +589,11 @@ describe('real codex tmux provider e2e', () => {
 
     try {
       await _testOnly.handleMessage(adapter, inboundMessage(address, `/clear real-codex-artifact ${workDir}`, 'incoming-artifact-new'));
-      await _testOnly.handleMessage(adapter, inboundMessage(address, '/provider tmux', 'incoming-artifact-provider'));
+      await startTmuxProvider(adapter, store, address, 'incoming-artifact-provider');
       const turnPromise = _testOnly.handleMessage(
         adapter,
         inboundMessage(address, 'Create and send the requested artifact.', 'incoming-artifact-turn'),
       );
-      let turnSettled = false;
-      void turnPromise.then(
-        () => { turnSettled = true; },
-        () => { turnSettled = true; },
-      );
-      await approveStartupPermission(adapter, store, address, {
-        required: true,
-        timeoutMs: 30_000,
-        turnSettled: () => turnSettled,
-      });
 
       assert.equal(await waitForCondition(
         () => proxy.requests.some((request) => request.url.includes('/responses')),
@@ -733,8 +736,7 @@ describe('real codex tmux provider e2e', () => {
 
     try {
       await _testOnly.handleMessage(adapter, inboundMessage(address, `/clear real-tmux-error ${workDir}`, 'incoming-error-new'));
-      await _testOnly.handleMessage(adapter, inboundMessage(address, '/provider tmux', 'incoming-error-provider'));
-      await approveStartupPermission(adapter, store, address, { required: false, timeoutMs: 1_000 });
+      await startTmuxProvider(adapter, store, address, 'incoming-error-provider');
       const binding = store.getChannelChat(address.channelType, address.chatId);
       assert.ok(binding);
       const session = store.getSession(binding.bridgeSessionId);
@@ -896,19 +898,9 @@ describe('real codex tmux provider e2e', () => {
       assert.ok(longPrompt.length > 8_000, 'test prompt should be several thousand characters');
 
       await _testOnly.handleMessage(adapter, inboundMessage(address, `/clear real-tmux-long ${workDir}`, 'incoming-real-long-new'));
-      await _testOnly.handleMessage(adapter, inboundMessage(address, '/provider tmux', 'incoming-real-long-provider'));
+      await startTmuxProvider(adapter, store, address, 'incoming-real-long-provider');
       await new Promise((resolve) => setTimeout(resolve, 1_500));
       const mediumTurn = _testOnly.handleMessage(adapter, inboundMessage(address, mediumPrompt, 'incoming-real-medium-prompt'));
-      let mediumTurnSettled = false;
-      void mediumTurn.then(
-        () => { mediumTurnSettled = true; },
-        () => { mediumTurnSettled = true; },
-      );
-      await approveStartupPermission(adapter, store, address, {
-        required: true,
-        timeoutMs: 30_000,
-        turnSettled: () => mediumTurnSettled,
-      });
       await mediumTurn;
 
       const binding = store.getChannelChat(address.channelType, address.chatId);
@@ -1042,7 +1034,7 @@ describe('real codex tmux provider e2e', () => {
 
     try {
       await _testOnly.handleMessage(adapter, inboundMessage(address, `/clear real-tmux-goal-selection ${workDir}`, 'incoming-goal-selection-new'));
-      await _testOnly.handleMessage(adapter, inboundMessage(address, '/provider tmux', 'incoming-goal-selection-provider'));
+      await startTmuxProvider(adapter, store, address, 'incoming-goal-selection-provider');
 
       const binding = store.getChannelChat(address.channelType, address.chatId);
       assert.ok(binding);
@@ -1055,18 +1047,7 @@ describe('real codex tmux provider e2e', () => {
       await execFileAsync('tmux', ['has-session', '-t', tmuxSessionName]);
 
       const requestsBeforeFirstGoal = proxy.requests.length;
-      const firstGoalTurn = _testOnly.handleMessage(adapter, inboundMessage(address, '//goal goala', 'incoming-goal-selection-a'));
-      let firstGoalTurnSettled = false;
-      void firstGoalTurn.then(
-        () => { firstGoalTurnSettled = true; },
-        () => { firstGoalTurnSettled = true; },
-      );
-      await approveStartupPermission(adapter, store, address, {
-        required: true,
-        timeoutMs: 30_000,
-        turnSettled: () => firstGoalTurnSettled,
-      });
-      await firstGoalTurn;
+      await _testOnly.handleMessage(adapter, inboundMessage(address, '//goal goala', 'incoming-goal-selection-a'));
       const sawFirstGoalRequest = await waitForCondition(
         () => proxy.requests.length > requestsBeforeFirstGoal
           && proxy.requests.some((request) => request.url.includes('/responses')),
