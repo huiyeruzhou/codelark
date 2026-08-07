@@ -46,6 +46,7 @@ jobs:
         timeout-minutes: 10
         env:
           CODELARK_RUNTIME_E2E_PRESERVE_FAILURES: '1'
+          CODELARK_RUNTIME_E2E_LOG_DIR: ${{ runner.temp }}/codelark-real-runtime-e2e
           KIMI_CODE_NO_AUTO_UPDATE: '1'
           KIMI_CODE_LEGACY_FLAG: '1'
         run: node scripts/run-real-runtime-e2e.js
@@ -161,6 +162,7 @@ jobs:
         timeout-minutes: 10
         env:
           CODELARK_RUNTIME_E2E_PRESERVE_FAILURES: '1'
+          CODELARK_RUNTIME_E2E_LOG_DIR: ${{ runner.temp }}/codelark-real-runtime-e2e
           KIMI_CODE_NO_AUTO_UPDATE: '1'
           KIMI_CODE_LEGACY_FLAG: '1'
         run: node scripts/run-real-runtime-e2e.js

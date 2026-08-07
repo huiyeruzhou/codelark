@@ -28,12 +28,16 @@ function quoteCmdArgument(value: string): string {
   return `"${value.replace(/(["^&|<>])/gu, '^$1')}"`;
 }
 
+export function buildWindowsRuntimeCommandArgs(command: string, args: string[]): string[] {
+  const commandLine = [command, ...args].map(quoteCmdArgument).join(' ');
+  return ['/d', '/s', '/c', `"${commandLine}"`];
+}
+
 export async function execRuntimeCommand(command: string, args: string[]) {
   if (process.platform !== 'win32') return execFileAsync(command, args);
-  const commandLine = [command, ...args].map(quoteCmdArgument).join(' ');
   return execFileAsync(
     process.env.ComSpec || process.env.COMSPEC || 'cmd.exe',
-    ['/d', '/s', '/c', commandLine],
+    buildWindowsRuntimeCommandArgs(command, args),
     { windowsHide: true },
   );
 }
