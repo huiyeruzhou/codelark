@@ -3,7 +3,7 @@ name: CI
 env:
   CODELARK_CI_CODEX_VERSION: 0.145.0
   CODELARK_CI_CLAUDE_VERSION: 2.1.220
-  CODELARK_CI_KIMI_VERSION: 0.29.1
+  CODELARK_CI_KIMI_VERSION: 0.34.0
 
 on:
   workflow_dispatch:
@@ -46,6 +46,8 @@ jobs:
         timeout-minutes: 10
         env:
           CODELARK_RUNTIME_E2E_PRESERVE_FAILURES: '1'
+          KIMI_CODE_NO_AUTO_UPDATE: '1'
+          KIMI_CODE_LEGACY_FLAG: '1'
         run: node scripts/run-real-runtime-e2e.js
 
       - name: Upload real runtime failure evidence
@@ -159,6 +161,8 @@ jobs:
         timeout-minutes: 10
         env:
           CODELARK_RUNTIME_E2E_PRESERVE_FAILURES: '1'
+          KIMI_CODE_NO_AUTO_UPDATE: '1'
+          KIMI_CODE_LEGACY_FLAG: '1'
         run: node scripts/run-real-runtime-e2e.js
 
       - name: Upload real runtime failure evidence

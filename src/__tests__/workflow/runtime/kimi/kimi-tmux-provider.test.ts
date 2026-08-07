@@ -159,6 +159,7 @@ describe('kimi-tmux-provider workflow', () => {
         env: {
           PATH: 'C:\\Program Files\\nodejs',
           KIMI_CODE_HOME: 'C:\\Users\\tester\\.kimi-code',
+          KIMI_CODE_NO_AUTO_UPDATE: '1',
         },
         shell: { type: 'cmd', path: 'cmd.exe' },
       },
@@ -180,6 +181,25 @@ describe('kimi-tmux-provider workflow', () => {
       fs.readFileSync(snapshotPath, 'utf-8'),
       /set "KIMI_CODE_HOME=C:\\Users\\tester\\\.kimi-code"/u,
     );
+    assert.match(fs.readFileSync(snapshotPath, 'utf-8'), /set "KIMI_CODE_LEGACY_FLAG=1"/u);
+    assert.match(fs.readFileSync(snapshotPath, 'utf-8'), /set "KIMI_CODE_NO_AUTO_UPDATE=1"/u);
+  });
+
+  it('pins the eager-session compatibility mode in Unix launch commands', () => {
+    const command = buildKimiTmuxLaunchCommand('/opt/kimi code/bin/kimi', ['-y'], {
+      platform: 'linux',
+      env: {
+        KIMI_CODE_HOME: '/tmp/kimi home',
+        KIMI_CODE_NO_AUTO_UPDATE: '1',
+      },
+    });
+
+    assert.equal(Array.isArray(command), false);
+    const commandText = Array.isArray(command) ? command.join(' ') : command;
+    assert.match(commandText, /KIMI_CODE_HOME='\/tmp\/kimi home'/u);
+    assert.match(commandText, /KIMI_CODE_LEGACY_FLAG=1/u);
+    assert.match(commandText, /KIMI_CODE_NO_AUTO_UPDATE=1/u);
+    assert.match(commandText, /'\/opt\/kimi code\/bin\/kimi' -y$/u);
   });
 
   it('submits the first prompt before a fresh Kimi session creates its wire file', async () => {

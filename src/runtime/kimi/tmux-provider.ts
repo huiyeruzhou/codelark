@@ -84,6 +84,8 @@ function commandPreview(command: string, args: string[]): string {
 function kimiCommandEnvironmentPrefix(env: NodeJS.ProcessEnv = process.env): string {
   const assignments = [
     ['KIMI_CODE_HOME', env.KIMI_CODE_HOME],
+    ['KIMI_CODE_LEGACY_FLAG', '1'],
+    ['KIMI_CODE_NO_AUTO_UPDATE', env.KIMI_CODE_NO_AUTO_UPDATE],
   ]
     .filter((entry): entry is [string, string] => Boolean(entry[1]))
     .map(([key, value]) => `${key}=${shellQuote(value)}`);
@@ -111,7 +113,10 @@ export function buildKimiTmuxLaunchCommand(
     return `${kimiCommandEnvironmentPrefix(env)}${commandPreview(executable, args)}`;
   }
   const shell = options.shell || resolveDefaultUserShell({ platform });
-  const snapshot = ensureShellSnapshot(definedEnvironment(env), shell);
+  const snapshot = ensureShellSnapshot(definedEnvironment({
+    ...env,
+    KIMI_CODE_LEGACY_FLAG: '1',
+  }), shell);
   return buildShellSnapshotLaunchArgs(executable, args, snapshot, { platform });
 }
 

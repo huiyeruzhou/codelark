@@ -23,7 +23,7 @@ nvm use 24
 | 本地 workflow | `npm test -- --workflow` | 只运行 `src/__tests__/workflow/`。 |
 | 本地 mock app E2E | `npm test -- --mock-e2e` | 只运行 `src/__tests__/e2e/mock-app/`。 |
 | 本地真实进程 E2E | `npm test -- --local-e2e` | 只运行 `src/__tests__/e2e/local-process/`。Codex/Claude 覆盖真实 CLI 或 tmux 进程；Kimi 用真实 executable + 真 tmux + 本地 fake model proxy。Cursor 的 `real-cursor-agent-bridge.e2e.test.ts` 必须显式设置 `CODELARK_REAL_CURSOR_E2E=1`，否则即使文件被选中也会 skip；它使用已登录官方 backend，并隔离 config/data/workspace 验证超过 30 秒的冷启动、可见进度、冷接管和 resume。默认使用 `gpt-5.3-codex`，可用 `CODELARK_REAL_CURSOR_E2E_MODEL` 覆盖。 |
-| CI 真实 runtime 生命周期 gate | `node scripts/run-real-runtime-e2e.js` | 使用 CI 导出的固定版本 Codex/Claude/Kimi executable，串行运行真实 TUI + 隔离 tmux + 本地 fake model proxy。每个 shard 必须 `tests > 0`、零 skip/零 fail 且 `pass = tests`；仅进程 exit 0 不算通过。CI 失败时保留 shard log 和 Kimi fixture 并上传 artifact，成功路径继续清理。 |
+| CI 真实 runtime 生命周期 gate | `node scripts/run-real-runtime-e2e.js` | 使用 CI 导出的固定版本 Codex/Claude/Kimi executable，串行运行真实 TUI + 隔离 tmux + 本地 fake model proxy。Kimi 设置 `KIMI_CODE_NO_AUTO_UPDATE=1`，避免固定 executable 在 kill/resume 期间被后台 npm 全局升级替换；同时使用官方 `KIMI_CODE_LEGACY_FLAG=1` 保持 eager session identity，与 CodeLark 的持久化 resume 合同一致。每个 shard 必须 `tests > 0`、零 skip/零 fail 且 `pass = tests`；仅进程 exit 0 不算通过。CI 失败时保留 shard log 和 Kimi fixture 并上传 artifact，成功路径继续清理。 |
 | Codex 旧版本真实升级门禁 | `CODELARK_REAL_CODEX_UPDATE_E2E=1 npm test -- --local-e2e` | 在临时 npm prefix 安装真实 `@openai/codex@0.145.0`，让真实 TUI 检测 npm 最新版并选择 Update now；验证安装期可超过普通 readiness、更新退出后只重启一次并进入 ready，最后确认临时 prefix 已是 registry 最新版。不会改动用户全局 Codex。 |
 | Harness 自测 | `npm test -- --harness` | 只运行 `src/__tests__/harness/`，包括真实飞书 harness 自测和测试环境隔离 guard。 |
 | 类型检查 | `npm run typecheck` | 验证 TypeScript 类型和公共导入边界。 |
@@ -74,7 +74,7 @@ CODELARK_SETUP_WIZARD_REAL_E2E=1 npm run real:setup-wizard:wizard-e2e -- \
 
 GitHub Actions 把“完整回归”和“真实平台依赖 smoke”分开：Linux job 运行完整测试、文档构建和打包检查；跨平台 matrix 验证用户实际会走到的原生终端路径，不用 Linux mock 代替操作系统行为。
 
-Linux、macOS 和 Windows job 都先安装固定版本的 Codex/Claude/Kimi CLI，再运行上述 real-runtime gate。Kimi workspace trust 确认每个对话只能注入一次 Enter；慢 runner 上画面延迟重绘不得导致第二个 Enter 落入刚出现的 editor。
+Linux、macOS 和 Windows job 都先安装固定版本的 Codex/Claude/Kimi CLI，再运行上述 real-runtime gate。Kimi 当前固定为 npm latest 对应的具体版本，而不是浮动 dist-tag；gate 会关闭 Kimi 自更新，保证该版本在完整 lifecycle 内不可变，否则 npm global 后台替换 executable 会与 kill/resume 竞态。Kimi 0.34.0 默认 v2 会延迟到首条消息后才创建 session，CodeLark 启动时使用其官方 legacy compatibility flag 保持可持久化的 eager session identity。Kimi workspace trust 确认每个对话只能注入一次 Enter；慢 runner 上画面延迟重绘不得导致第二个 Enter 落入刚出现的 editor。
 
 - macOS 26 arm64 安装 Homebrew tmux，验证 `tmux -V` 和 session 的创建、查询、名称读取、清理，再运行 typecheck、unit/workflow、build、pack 和 CLI smoke。
 - Windows x64 job 使用原生 Windows runner，通过 WinGet 安装 psmux，验证同一组 `tmux.exe` session 生命周期，再运行 typecheck、完整 unit、Windows runtime-sensitive workflow、build、pack 和 CLI smoke。runtime-sensitive 层覆盖真实 psmux/Codex、Claude、Kimi 和 service-manager；平台无关的 command workflow 已由 Linux/macOS 双重覆盖，不在 Windows 重复数百次 Bash fake 冷启动。psmux 走 ConPTY，不经过 WSL。
