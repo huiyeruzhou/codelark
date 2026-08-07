@@ -443,7 +443,9 @@ describe('codex tmux runtime', () => {
               '  3. Skip until next version',
               'Press enter to continue',
             ].join('\n')
-            : 'OpenAI Codex\n\n› ',
+            : captureCount === 3
+              ? 'OpenAI Codex\nSetting up sandbox...'
+              : 'OpenAI Codex\n\n› ',
         };
       },
       sendActions: async (target, actions) => ({
@@ -464,6 +466,7 @@ describe('codex tmux runtime', () => {
     });
 
     assert.equal(result.ready, true);
+    assert.equal(captureCount, 5, 'startup readiness should remain visible across two consecutive captures after a selection');
     assert.deepEqual(transitions.map((transition) => [transition.from, transition.to]), [
       ['starting', 'polling'],
       ['polling', 'waiting_selection'],
@@ -646,7 +649,7 @@ describe('codex tmux runtime', () => {
 
       assert.equal(result.ready, true);
       assert.equal(updateSelected, true);
-      assert.equal(captureCount, 3);
+      assert.equal(captureCount, 4, 'updated TUI readiness should remain visible across two captures');
       assert.equal(Date.now() - startedAt > 120, true, 'the update must cross the normal startup timeout');
       assert.equal(
         (transitions.find((transition) => transition.to === 'selection_resolved')?.timeoutMs || 0) > 120,

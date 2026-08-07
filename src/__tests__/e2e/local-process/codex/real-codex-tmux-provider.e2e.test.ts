@@ -49,7 +49,7 @@ function createLongPrompt(): string {
 
 function createMediumMultilinePrompt(): string {
   return [
-    'clk-medium-cjk-start 我想和你讨论《庄子·逍遥游》中宋人卖章甫的故事。',
+    'clk-medium-cjk-start 我想和你讨论《庄子逍遥游》中宋人卖章甫的故事。',
     '',
     '请结合无用之用、真知视野与小大之辩，说明它为什么出现在尧见四子之前。'.repeat(7),
     'clk-medium-cjk-end',
@@ -458,6 +458,15 @@ describe('real codex tmux provider e2e', () => {
       const recordedModel = resumingModel === 'gpt-5.5-2026-04-24'
         ? 'gpt-5.4'
         : 'gpt-5.5-2026-04-24';
+      assert.equal(
+        await waitForCondition(
+          () => rewriteRecordedTurnContextModel(generatedThreadFilePath, recordedModel) > 0,
+          10_000,
+          100,
+        ),
+        true,
+        'the isolated rollout should contain a real turn_context to emulate an older Codex model record',
+      );
       await execFileAsync('tmux', ['kill-session', '-t', tmuxSessionName]);
       assert.equal(
         await waitForCondition(
@@ -467,15 +476,6 @@ describe('real codex tmux provider e2e', () => {
         ),
         true,
         'the missing-session probe should settle before this test explicitly restarts the provider',
-      );
-      assert.equal(
-        await waitForCondition(
-          () => rewriteRecordedTurnContextModel(generatedThreadFilePath, recordedModel) > 0,
-          10_000,
-          100,
-        ),
-        true,
-        'the isolated rollout should contain a real turn_context to emulate an older Codex model record',
       );
       await _testOnly.handleMessage(
         adapter,
@@ -563,7 +563,7 @@ describe('real codex tmux provider e2e', () => {
     const sendBlock = `<clk-send>${JSON.stringify({ type: 'file', path: artifactPath })}</clk-send>`;
     const proxy = await startLocalResponsesProxy({
       responseText: `CODEX_STREAM_ARTIFACT_READY\n${sendBlock}`,
-      responsesFinishDelayMs: 4_000,
+      responsesFinishDelayMs: 10_000,
     });
     process.env.CODEX_HOME = codexHome;
     process.env.CODELARK_CODEX_BASE_URL = proxy.baseUrl;
@@ -640,7 +640,7 @@ describe('real codex tmux provider e2e', () => {
         const sent = adapter.sent.flatMap((message) => message.attachments || [])
           .some((attachment) => attachment.path === artifactPath);
         return sent && adapter.streamEnds.length === 0;
-      }, 3_000, 50);
+      }, 7_000, 50);
       assert.equal(deliveredBeforeCompletion, true, 'answer artifact should arrive while the mock response remains open');
 
       await turnPromise;

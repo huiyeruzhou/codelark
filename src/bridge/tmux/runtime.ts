@@ -614,6 +614,8 @@ export async function waitForRuntimeTmuxReady(params: {
   let selectionPrompt: RuntimeTmuxSelectionPrompt | undefined;
   const handledSelectionFingerprints = new Set<string>();
   const lastSelectionActionAt = new Map<string, number>();
+  let selectionActionsSent = false;
+  let readyObservedAfterSelection = false;
   const selectionActionRetryMs = 250;
   transitionRuntimeTmuxReadiness(machine, 'polling', 'readiness check started');
   while (Date.now() <= deadline) {
@@ -768,6 +770,8 @@ export async function waitForRuntimeTmuxReady(params: {
                 const sent = await core.sendActions(captureTarget, actions);
                 commands.push(...sent.commands);
                 sentCommands = sent.commands;
+                selectionActionsSent = true;
+                readyObservedAfterSelection = false;
                 lastSelectionActionAt.set(fingerprint, Date.now());
                 console.log('[tmux-runtime] Runtime tmux selection prompt actions sent:', {
                   event: 'tmux.runtime.selection.actions_sent',
@@ -833,6 +837,11 @@ export async function waitForRuntimeTmuxReady(params: {
         continue;
       }
       if (hasRuntimeTmuxReadyPrompt(params.runtime, capture.screen)) {
+        if (selectionActionsSent && !readyObservedAfterSelection) {
+          readyObservedAfterSelection = true;
+          await sleep(pollMs);
+          continue;
+        }
         transitionRuntimeTmuxReadiness(machine, 'ready', 'ready prompt detected');
         return {
           ready: true,
@@ -842,6 +851,7 @@ export async function waitForRuntimeTmuxReady(params: {
           ...(selectionPrompt ? { selectionPrompt } : {}),
         };
       }
+      if (selectionActionsSent) readyObservedAfterSelection = false;
     } catch (error) {
       lastError = describeUnknownError(error);
       try {

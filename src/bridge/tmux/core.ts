@@ -163,6 +163,8 @@ function sleep(ms: number): Promise<void> {
 const PASTE_LITERAL_THRESHOLD = 512;
 const PASTE_CHUNK_SIZE = 512;
 const PASTE_CHUNK_DELAY_MS = 75;
+const PASTE_BUFFER_RETRY_COUNT = 2;
+const PASTE_BUFFER_RETRY_DELAY_MS = 100;
 const SESSION_START_SURVIVAL_DELAY_MS = 50;
 const SESSION_START_RETRY_DELAY_MS = 100;
 
@@ -420,19 +422,26 @@ class TmuxCliCore implements TmuxCore {
       }
       if (chunk) {
         const loadArgs: TmuxArgv = ['load-buffer', '-b', name, '-'];
-        await this.runTmux(loadArgs, chunk);
-        commands.push(this.command(loadArgs));
         const pasteArgs: TmuxArgv = ['paste-buffer', '-d', '-p', '-b', name, '-t', target];
-        try {
-          await this.runTmux(pasteArgs);
-        } catch (error) {
-          if (!/\bno buffer\b/i.test(String(error))) throw error;
-          await sleep(50);
+        for (let attempt = 0; ; attempt += 1) {
           await this.runTmux(loadArgs, chunk);
           commands.push(this.command(loadArgs));
-          await this.runTmux(pasteArgs);
+          if (attempt > 0) {
+            await sleep(PASTE_BUFFER_RETRY_DELAY_MS * attempt);
+          }
+          try {
+            await this.runTmux(pasteArgs);
+            commands.push(this.command(pasteArgs));
+            break;
+          } catch (error) {
+            if (
+              !/\bno buffer\b/i.test(String(error))
+              || attempt >= PASTE_BUFFER_RETRY_COUNT
+            ) {
+              throw error;
+            }
+          }
         }
-        commands.push(this.command(pasteArgs));
       }
       const endArgs: TmuxArgv = ['send-keys', '-t', target, 'End'];
       await this.runTmux(endArgs);

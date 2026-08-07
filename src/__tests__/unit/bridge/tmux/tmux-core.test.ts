@@ -191,7 +191,7 @@ process.exit(1);
     }
   });
 
-  it('reloads and retries a psmux paste buffer that is briefly unavailable', async () => {
+  it('reloads and retries a psmux paste buffer until it becomes available', async () => {
     const binDir = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-unit-tmux-buffer-race-'));
     const statePath = path.join(binDir, 'paste-count');
     const logPath = path.join(binDir, 'tmux.log');
@@ -202,7 +202,7 @@ fs.appendFileSync(${JSON.stringify(logPath)}, args.join(' ') + '\\n');
 if (args[0] === 'paste-buffer') {
   const count = fs.existsSync(${JSON.stringify(statePath)}) ? Number(fs.readFileSync(${JSON.stringify(statePath)}, 'utf8')) : 0;
   fs.writeFileSync(${JSON.stringify(statePath)}, String(count + 1));
-  if (count === 0) {
+  if (count < 2) {
     process.stderr.write('psmux: no buffer clk-paste-test\\n');
     process.exit(1);
   }
@@ -216,8 +216,8 @@ if (args[0] === 'paste-buffer') {
         { delayMs: 0, forcePasteLiterals: true },
       );
       const log = fs.readFileSync(logPath, 'utf-8');
-      assert.equal((log.match(/load-buffer -b clk-paste-/g) || []).length, 2);
-      assert.equal((log.match(/paste-buffer -d -p -b clk-paste-/g) || []).length, 2);
+      assert.equal((log.match(/load-buffer -b clk-paste-/g) || []).length, 3);
+      assert.equal((log.match(/paste-buffer -d -p -b clk-paste-/g) || []).length, 3);
       assert.match(log, /send-keys -t kimi-buffer-race Enter/);
     } finally {
       fs.rmSync(binDir, { recursive: true, force: true });
