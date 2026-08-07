@@ -22,6 +22,7 @@ import {
   buildKimiArgs,
   isKimiInputReadyScreen,
   parseKimiSessionIdFromScreen,
+  syncKimiTmuxTurnStateFromSession,
 } from '../../../../runtime/kimi/tmux-provider.js';
 import { parseKimiTerminalErrorsFromLog } from '../../../../runtime/kimi/runtime-log.js';
 import {
@@ -61,6 +62,25 @@ describe('Kimi tmux provider helpers', () => {
       'k3',
       '--thinking',
     ]);
+  });
+
+  it('treats turn.cancel as an idle Kimi turn before the next input', () => {
+    const wirePath = path.join(kimiHome, 'cancelled-wire.jsonl');
+    fs.writeFileSync(wirePath, [
+      JSON.stringify({
+        type: 'context.append_loop_event',
+        event: { type: 'step.begin', turnId: 'turn-cancelled', stepUuid: 'step-cancelled' },
+      }),
+      JSON.stringify({ type: 'turn.cancel' }),
+      '',
+    ].join('\n'), 'utf-8');
+
+    const state = syncKimiTmuxTurnStateFromSession({
+      sessionName: 'clk-kimi-cancelled',
+      sessionFilePath: wirePath,
+    });
+
+    assert.equal(state.turnActive, false);
   });
 
   it('waits for Kimi turn failed details instead of treating a retryable request warning as terminal', () => {

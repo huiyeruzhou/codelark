@@ -28,7 +28,7 @@ fs.mkdirSync(logDir, { recursive: true });
 const shards = [
   {
     name: 'codex',
-    timeoutMs: 120_000,
+    timeoutMs: 300_000,
     files: ['src/__tests__/e2e/local-process/codex/real-codex-tmux-provider.e2e.test.ts'],
     env: {
       CODELARK_CODEX_CLI_PATH: codexExecutable,

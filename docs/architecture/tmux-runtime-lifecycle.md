@@ -151,7 +151,7 @@ host manager 不在消息入站时添加 `Typing` reaction。只有 tmux actions
 
 Kimi TUI 依赖 tmux extended key protocol 区分“提交 Enter”和输入框换行。Kimi 新建 lifecycle 或 Bridge 冷接管已有 Kimi tmux 时，在 readiness 阶段一次性执行 `tmux set-option -g extended-keys on`；Claude tmux 在发送首条输入前也启用该协议，保证原生 Windows psmux/ConPTY 能把提交键交给 TUI。共享 prompt 注入对短文本和长文本都在 bracketed paste 后保留同一段 settle delay，再发送 Enter；否则较慢的 TUI 可能把紧跟 paste 的 Enter 吞掉。进入 `running` 后每句话不再重复设置，也不通过抓屏/光标猜发送时机。
 
-Kimi 的停止按键合同也与 Codex/Claude 不同。共享 stop lifecycle 对 Codex/Claude 发送一次 `Ctrl-C`，对 Kimi 连续发送两次 `Ctrl-C`（中间短暂异步等待）：真实 Kimi 0.34.0 的官方 legacy compatibility mode 中，第一次产生 `turn.cancel` 并回到输入框，第二次显示 `Press Ctrl+C again to exit`，但仍保留可复用的 tmux TUI；第三次才可能退出。0.34.0 默认 v2 改为首条消息后才创建 session，而 CodeLark 需要在输入前持久化 identity 来保证 bridge 重启和冷接管指向同一 wire，因此启动 Kimi 子进程时显式设置 `KIMI_CODE_LEGACY_FLAG=1`。`/stop` 与 `/t` 运行中确认必须共用该实现。
+Kimi 的停止按键合同也与 Codex/Claude 不同。共享 stop lifecycle 对 Codex/Claude 发送一次 `Ctrl-C`，对 Kimi 连续发送两次 `Ctrl-C`（中间短暂异步等待）：真实 Kimi 0.34.0 的官方 legacy compatibility mode 中，第一次产生 `turn.cancel` 并回到输入框，第二次显示 `Press Ctrl+C again to exit`，但仍保留可复用的 tmux TUI；第三次才可能退出。`turn.cancel` 与 `step.end` 一样结束 active turn，下一条普通输入不得再追加 steer `C-s`。任何 runtime interrupt 都会使缓存的 input readiness 失效，下次复用现有 tmux 前必须重新确认 TUI 已回到可输入状态，避免 `/t` 切走再切回时把消息发进仍在处理取消的屏幕。0.34.0 默认 v2 改为首条消息后才创建 session，而 CodeLark 需要在输入前持久化 identity 来保证 bridge 重启和冷接管指向同一 wire，因此启动 Kimi 子进程时显式设置 `KIMI_CODE_LEGACY_FLAG=1`。`/stop` 与 `/t` 运行中确认必须共用该实现。
 
 Codex TUI 的输出不直接依赖屏幕文本作为最终答案，而是由 Codex session JSONL mirror 同步。
 

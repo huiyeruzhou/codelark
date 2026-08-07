@@ -3,6 +3,7 @@ import { getSessionRuntimeTmuxSessionName } from '../../domain/session-runtime.j
 import { kimiTmuxSessionName } from '../../runtime/kimi/tmux-provider.js';
 import { cursorTmuxSessionName } from '../../runtime/cursor/tmux-provider.js';
 import { sendTmuxInterrupt } from '../tmux/runtime.js';
+import { invalidateRuntimeTmuxInputReadiness } from '../tmux/input-state-machine.js';
 import { sessionLooksRunning } from './command-use-cases/status-guards.js';
 import { resolveEffectiveRuntimeProvider } from './support.js';
 
@@ -48,6 +49,11 @@ async function sendRuntimeInterrupts(
     await interruptDelay(150);
     commands.push(await sendTmuxInterrupt(target.sessionName));
   }
+  invalidateRuntimeTmuxInputReadiness(
+    target.runtime,
+    target.sessionName,
+    'runtime was interrupted; revalidate the TUI before the next input',
+  );
   return commands;
 }
 

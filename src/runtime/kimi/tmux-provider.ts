@@ -569,9 +569,9 @@ function inspectKimiTurnActive(sessionFilePath: string, endOffset?: number): boo
   let turnActive = false;
   for (const line of wireText.split(/\r?\n/u)) {
     try {
-      const entry = JSON.parse(line) as { event?: { type?: string } };
+      const entry = JSON.parse(line) as { type?: string; event?: { type?: string } };
       if (entry.event?.type === 'step.begin') turnActive = true;
-      if (entry.event?.type === 'step.end') turnActive = false;
+      if (entry.event?.type === 'step.end' || entry.type === 'turn.cancel') turnActive = false;
     } catch {
       // Ignore non-JSON and a partial final wire line.
     }
@@ -637,7 +637,7 @@ function inspectKimiSubmissionState(
       if (entry.event?.type === 'step.begin') {
         turnActive = true;
       }
-      if (entry.event?.type === 'step.end') turnActive = false;
+      if (entry.event?.type === 'step.end' || entry.type === 'turn.cancel') turnActive = false;
       if (entry.type === 'llm.request' && promptAccepted) {
         return 'started';
       }

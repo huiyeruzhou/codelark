@@ -230,19 +230,20 @@ async function approveTrustPermission(
     expectedProvider?: string;
     expectedWorkingDirectory?: string;
     expectedInspectCommand?: string;
+    turnSettled?: () => boolean;
   } = {},
 ): Promise<boolean> {
   const sawPermission = await waitForCondition(
-    () => Boolean(findTrustPermission(adapter)),
+    () => Boolean(findTrustPermission(adapter)) || options.turnSettled?.() === true,
     options.timeoutMs ?? 15_000,
     250,
   );
-  if (!sawPermission) {
+  const permission = findTrustPermission(adapter);
+  if (!sawPermission || !permission) {
+    if (options.turnSettled?.() === true) return false;
     assert.equal(options.required === true, false, 'Codex trust prompt should be forwarded as an IM permission request');
     return false;
   }
-  const permission = findTrustPermission(adapter);
-  assert.ok(permission);
   assert.match(permission.messageText, /Codex Trust Confirmation/);
   assert.deepEqual(permission.buttonTexts, ['Trust and continue', 'Deny']);
   assert.doesNotMatch(permission.messageText, /Allow Session/i);
@@ -337,7 +338,16 @@ describe('real codex tmux provider e2e', () => {
         adapter,
         inboundMessage(address, 'Reply with exactly: clk real tmux smoke', 'incoming-real-first'),
       );
-      await approveTrustPermission(adapter, store, address, { required: false, timeoutMs: 3_000 });
+      let firstTurnSettled = false;
+      void firstTurn.then(
+        () => { firstTurnSettled = true; },
+        () => { firstTurnSettled = true; },
+      );
+      await approveTrustPermission(adapter, store, address, {
+        required: true,
+        timeoutMs: 30_000,
+        turnSettled: () => firstTurnSettled,
+      });
       await firstTurn;
 
       const binding = store.getChannelChat(address.channelType, address.chatId);
@@ -396,6 +406,15 @@ describe('real codex tmux provider e2e', () => {
         ? 'gpt-5.4'
         : 'gpt-5.5-2026-04-24';
       await execFileAsync('tmux', ['kill-session', '-t', tmuxSessionName]);
+      assert.equal(
+        await waitForCondition(
+          () => !store.getSession(binding.bridgeSessionId)?.runtime?.general?.tmuxSessionName,
+          10_000,
+          100,
+        ),
+        true,
+        'the missing-session probe should settle before this test explicitly restarts the provider',
+      );
       assert.ok(
         rewriteRecordedTurnContextModel(generatedThreadFilePath, recordedModel) > 0,
         'the isolated rollout should contain a real turn_context to emulate an older Codex model record',

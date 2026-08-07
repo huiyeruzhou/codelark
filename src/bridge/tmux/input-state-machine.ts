@@ -162,6 +162,15 @@ export function setRuntimeTmuxTurnState(
   return nextState;
 }
 
+/** Require a fresh readiness pass after an interrupt may have changed the TUI screen. */
+export function invalidateRuntimeTmuxInputReadiness(
+  runtime: RuntimeTmuxInputRuntime,
+  sessionName: string,
+  reason: string,
+): RuntimeTmuxInputState {
+  return transitionRuntimeTmuxInputState(runtime, sessionName, 'checking_session', reason);
+}
+
 /**
  * Codex, Claude and Cursor accept a new prompt as their natural steering
  * operation. Kimi needs an additional Ctrl-S only when a turn was already

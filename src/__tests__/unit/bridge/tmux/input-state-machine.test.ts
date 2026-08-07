@@ -5,6 +5,7 @@ import assert from 'node:assert/strict';
 import {
   coordinateRuntimeTmuxSelection,
   getRuntimeTmuxInputState,
+  invalidateRuntimeTmuxInputReadiness,
   inspectRuntimeTmuxInput,
   resetRuntimeTmuxInputStatesForTests,
   resolveRuntimeTmuxSteerOperation,
@@ -54,6 +55,25 @@ describe('runtime tmux input state machine', () => {
     assert.equal(inspected.exists, false);
     assert.equal(inspected.needsReadiness, true);
     assert.equal(inspected.state.state, 'stopped');
+  });
+
+  it('requires readiness again after an interrupt changed an established TUI', async () => {
+    transitionRuntimeTmuxInputState('kimi', 'clk-kimi-interrupted', 'running', 'ready');
+    invalidateRuntimeTmuxInputReadiness(
+      'kimi',
+      'clk-kimi-interrupted',
+      'switching away from the runtime',
+    );
+
+    const inspected = await inspectRuntimeTmuxInput({
+      runtime: 'kimi',
+      sessionName: 'clk-kimi-interrupted',
+      hasSession: async () => ({ exists: true, command: 'tmux has-session -t clk-kimi-interrupted' }),
+    });
+
+    assert.equal(inspected.exists, true);
+    assert.equal(inspected.needsReadiness, true);
+    assert.equal(inspected.state.state, 'checking_session');
   });
 
   it('allows send only from running and returns to running after the input is delivered', async () => {
