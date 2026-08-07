@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { execFile } from 'node:child_process';
+import { exec, execFile } from 'node:child_process';
 import fs from 'node:fs';
 import http from 'node:http';
 import path from 'node:path';
@@ -9,6 +9,7 @@ import { WebSocketServer } from 'ws';
 import { getSessionIndexPath } from '../../../runtime/codex/session-index/paths.js';
 
 const execFileAsync = promisify(execFile);
+const execAsync = promisify(exec);
 
 export interface RecordedResponsesRequest {
   method: string;
@@ -28,18 +29,16 @@ function quoteCmdArgument(value: string): string {
   return `"${value.replace(/(["^&|<>])/gu, '^$1')}"`;
 }
 
-export function buildWindowsRuntimeCommandArgs(command: string, args: string[]): string[] {
-  const commandLine = [command, ...args].map(quoteCmdArgument).join(' ');
-  return ['/d', '/s', '/c', `"${commandLine}"`];
+export function buildWindowsRuntimeCommandLine(command: string, args: string[]): string {
+  return [command, ...args].map(quoteCmdArgument).join(' ');
 }
 
 export async function execRuntimeCommand(command: string, args: string[]) {
   if (process.platform !== 'win32') return execFileAsync(command, args);
-  return execFileAsync(
-    process.env.ComSpec || process.env.COMSPEC || 'cmd.exe',
-    buildWindowsRuntimeCommandArgs(command, args),
-    { windowsHide: true },
-  );
+  return execAsync(buildWindowsRuntimeCommandLine(command, args), {
+    shell: process.env.ComSpec || process.env.COMSPEC || 'cmd.exe',
+    windowsHide: true,
+  });
 }
 
 export function removeRuntimeTestDirectory(directory: string): void {

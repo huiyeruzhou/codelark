@@ -2,24 +2,14 @@ import '../../../setup/test-setup.js';
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { buildWindowsRuntimeCommandArgs } from '../../../helpers/runtime/real-codex-e2e-utils.js';
+import { buildWindowsRuntimeCommandLine } from '../../../helpers/runtime/real-codex-e2e-utils.js';
 
 describe('real runtime command helpers', () => {
-  it('wraps the full cmd /s /c command line outside individually quoted arguments', () => {
-    assert.deepEqual(buildWindowsRuntimeCommandArgs('tmux', ['-V']), [
-      '/d',
-      '/s',
-      '/c',
-      '""tmux" "-V""',
-    ]);
-    assert.deepEqual(
-      buildWindowsRuntimeCommandArgs('C:\\Program Files\\runtime\\kimi.cmd', ['--version']),
-      [
-        '/d',
-        '/s',
-        '/c',
-        '""C:\\Program Files\\runtime\\kimi.cmd" "--version""',
-      ],
+  it('quotes each Windows shell command argument without building a second cmd argv envelope', () => {
+    assert.equal(buildWindowsRuntimeCommandLine('tmux', ['-V']), '"tmux" "-V"');
+    assert.equal(
+      buildWindowsRuntimeCommandLine('C:\\Program Files\\runtime\\kimi.cmd', ['--version']),
+      '"C:\\Program Files\\runtime\\kimi.cmd" "--version"',
     );
   });
 });

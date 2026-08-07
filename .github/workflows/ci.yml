@@ -60,8 +60,6 @@ jobs:
           path: |
             ${{ runner.temp }}/codelark-real-runtime-e2e
             ${{ runner.temp }}/clk-real-kimi-*
-            /tmp/codelark-real-runtime-e2e
-            /tmp/clk-real-kimi-*
 
       - name: Typecheck
         run: npm run typecheck
@@ -176,8 +174,6 @@ jobs:
           path: |
             ${{ runner.temp }}/codelark-real-runtime-e2e
             ${{ runner.temp }}/clk-real-kimi-*
-            /tmp/codelark-real-runtime-e2e
-            /tmp/clk-real-kimi-*
 
       - name: Typecheck
         run: npm run typecheck
