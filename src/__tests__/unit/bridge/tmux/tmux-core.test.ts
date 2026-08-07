@@ -66,7 +66,7 @@ fs.appendFileSync(${JSON.stringify(logPath)}, JSON.stringify(args) + '\\n');
       prefixArgs: [scriptPath],
       chunkedLiteralInput: true,
     });
-    const prompt = `-第一行《庄子·逍遥游》${'长文本'.repeat(30)}\n\nsecond line`;
+    const prompt = `//goal 第一行《庄子·逍遥游》${'长文本'.repeat(30)}\n\nsecond line`;
 
     try {
       await core.sendActions(
@@ -83,9 +83,14 @@ fs.appendFileSync(${JSON.stringify(logPath)}, JSON.stringify(args) + '\\n');
         .filter((args) => args[0] === 'send-keys' && args.includes('-l'))
         .map((args) => args.at(-1) || '');
       assert.equal(literalChunks.every((chunk) => Array.from(chunk).length <= 64), true);
+      assert.equal(literalChunks.at(0), '\x1b[200~');
+      assert.equal(literalChunks.at(-1), '\x1b[201~');
       const reconstructed = calls.map((args) => {
         if (args[0] !== 'send-keys') return '';
-        if (args.includes('-l')) return args.at(-1) || '';
+        if (args.includes('-l')) {
+          const literal = args.at(-1) || '';
+          return literal === '\x1b[200~' || literal === '\x1b[201~' ? '' : literal;
+        }
         return args.at(-1) === 'M-Enter' ? '\n' : '';
       }).join('');
       assert.equal(reconstructed, prompt);

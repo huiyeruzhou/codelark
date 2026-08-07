@@ -167,6 +167,8 @@ const PASTE_BUFFER_RETRY_COUNT = 2;
 const PASTE_BUFFER_RETRY_DELAY_MS = 100;
 const WINDOWS_LITERAL_CHUNK_SIZE = 64;
 const WINDOWS_LITERAL_CHUNK_DELAY_MS = 25;
+const BRACKETED_PASTE_START = '\x1b[200~';
+const BRACKETED_PASTE_END = '\x1b[201~';
 const SESSION_START_SURVIVAL_DELAY_MS = 50;
 const SESSION_START_RETRY_DELAY_MS = 100;
 
@@ -422,6 +424,12 @@ class TmuxCliCore implements TmuxCore {
 
   private async sendChunkedLiteralInput(target: string, text: string): Promise<string[]> {
     const commands: string[] = [];
+    const bracketLeadingSlash = text.startsWith('/');
+    if (bracketLeadingSlash) {
+      const startArgs = tmuxSendActionArgv(target, { type: 'literal', text: BRACKETED_PASTE_START });
+      await this.runTmux(startArgs);
+      commands.push(this.command(startArgs));
+    }
     const lines = text.replace(/\r\n?/gu, '\n').split('\n');
     for (const [lineIndex, line] of lines.entries()) {
       for (const chunk of splitTextChunks(line, WINDOWS_LITERAL_CHUNK_SIZE)) {
@@ -436,6 +444,11 @@ class TmuxCliCore implements TmuxCore {
         commands.push(this.command(newlineArgs));
         await sleep(WINDOWS_LITERAL_CHUNK_DELAY_MS);
       }
+    }
+    if (bracketLeadingSlash) {
+      const endArgs = tmuxSendActionArgv(target, { type: 'literal', text: BRACKETED_PASTE_END });
+      await this.runTmux(endArgs);
+      commands.push(this.command(endArgs));
     }
     return commands;
   }
