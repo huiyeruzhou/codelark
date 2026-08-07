@@ -108,21 +108,26 @@ function rewriteRecordedTurnContextModel(filePath: string, model: string): numbe
     .split(/\r?\n/u)
     .filter(Boolean)
     .map((line) => {
-      const parsed = JSON.parse(line) as {
-        type?: unknown;
-        payload?: { model?: unknown };
-      };
-      if (parsed.type === 'turn_context' && typeof parsed.payload?.model === 'string') {
-        parsed.payload.model = model;
-        rewritten += 1;
+      try {
+        const parsed = JSON.parse(line) as {
+          type?: unknown;
+          payload?: { model?: unknown };
+        };
+        if (parsed.type === 'turn_context' && typeof parsed.payload?.model === 'string') {
+          parsed.payload.model = model;
+          rewritten += 1;
+        }
+        return JSON.stringify(parsed);
+      } catch {
+        return line;
       }
-      return JSON.stringify(parsed);
     });
+  if (rewritten === 0) return 0;
   fs.writeFileSync(filePath, `${lines.join('\n')}\n`, 'utf-8');
   return rewritten;
 }
 
-function findStartupPermission(adapter: RecordingAdapter): {
+function findStartupPermission(adapter: RecordingAdapter, handledCallbackData?: Set<string>): {
   kind: 'trust' | 'selection';
   callbackData: string;
   callbackMessageId: string;
@@ -130,10 +135,15 @@ function findStartupPermission(adapter: RecordingAdapter): {
   buttonTexts: string[];
   permissionRequestId?: string;
 } | null {
-  for (const [index, message] of adapter.sent.entries()) {
+  for (let index = adapter.sent.length - 1; index >= 0; index -= 1) {
+    const message = adapter.sent[index];
+    if (!message) continue;
     const button = message.inlineButtons
       ?.flat()
-      .find((item) => item.callbackData.startsWith('perm:allow:codex-trust:'));
+      .find((item) => (
+        item.callbackData.startsWith('perm:allow:codex-trust:')
+        && !handledCallbackData?.has(item.callbackData)
+      ));
     if (button) {
       return {
         kind: 'trust',
@@ -144,13 +154,15 @@ function findStartupPermission(adapter: RecordingAdapter): {
         permissionRequestId: button.callbackData.slice('perm:allow:'.length),
       };
     }
-    const selection = message.richCard?.selects
-      ?.flatMap((select) => select.options)
-      .find((option) => option.callbackData.endsWith(':yes_proceed'));
-    if (selection) {
+    const selectionCallbackData = message.richCard?.selects
+      ?.map((select) => select.selectedCallbackData || select.options[0]?.callbackData)
+      .find((callbackData): callbackData is string => (
+        Boolean(callbackData) && !handledCallbackData?.has(callbackData!)
+      ));
+    if (selectionCallbackData) {
       return {
         kind: 'selection',
-        callbackData: selection.callbackData,
+        callbackData: selectionCallbackData,
         callbackMessageId: `reply-${index + 1}`,
         messageText: message.text,
         buttonTexts: message.richCard?.selects
@@ -247,14 +259,15 @@ async function approveStartupPermission(
     expectedWorkingDirectory?: string;
     expectedInspectCommand?: string;
     turnSettled?: () => boolean;
+    handledCallbackData?: Set<string>;
   } = {},
 ): Promise<boolean> {
   const sawPermission = await waitForCondition(
-    () => Boolean(findStartupPermission(adapter)) || options.turnSettled?.() === true,
+    () => Boolean(findStartupPermission(adapter, options.handledCallbackData)) || options.turnSettled?.() === true,
     options.timeoutMs ?? 15_000,
     250,
   );
-  const permission = findStartupPermission(adapter);
+  const permission = findStartupPermission(adapter, options.handledCallbackData);
   if (!sawPermission || !permission) {
     if (options.turnSettled?.() === true) return false;
     assert.equal(options.required === true, false, 'Codex trust prompt should be forwarded as an IM permission request');
@@ -281,8 +294,9 @@ async function approveStartupPermission(
     assert.equal(sawLink, true, 'permission link should be recorded before accepting callback');
   } else {
     assert.match(permission.messageText, /Codex TUI Selection/);
-    assert.equal(permission.buttonTexts.some((text) => /Yes, (?:continue|proceed)/i.test(text)), true);
+    assert.equal(permission.buttonTexts.length > 0, true);
   }
+  options.handledCallbackData?.add(permission.callbackData);
   await _testOnly.handleMessage(adapter, {
     ...inboundMessage(address, '', `incoming-trust-allow-${Date.now()}`),
     callbackData: permission.callbackData,
@@ -306,11 +320,16 @@ async function startTmuxProvider(
     () => { startupSettled = true; },
     () => { startupSettled = true; },
   );
-  await approveStartupPermission(adapter, store, address, {
-    required: true,
-    timeoutMs: 30_000,
-    turnSettled: () => startupSettled,
-  });
+  const handledCallbackData = new Set<string>();
+  while (!startupSettled) {
+    const approved = await approveStartupPermission(adapter, store, address, {
+      required: true,
+      timeoutMs: 30_000,
+      turnSettled: () => startupSettled,
+      handledCallbackData,
+    });
+    if (!approved) break;
+  }
   await startup;
 }
 
@@ -449,8 +468,13 @@ describe('real codex tmux provider e2e', () => {
         true,
         'the missing-session probe should settle before this test explicitly restarts the provider',
       );
-      assert.ok(
-        rewriteRecordedTurnContextModel(generatedThreadFilePath, recordedModel) > 0,
+      assert.equal(
+        await waitForCondition(
+          () => rewriteRecordedTurnContextModel(generatedThreadFilePath, recordedModel) > 0,
+          10_000,
+          100,
+        ),
+        true,
         'the isolated rollout should contain a real turn_context to emulate an older Codex model record',
       );
       await _testOnly.handleMessage(

@@ -423,7 +423,15 @@ class TmuxCliCore implements TmuxCore {
         await this.runTmux(loadArgs, chunk);
         commands.push(this.command(loadArgs));
         const pasteArgs: TmuxArgv = ['paste-buffer', '-d', '-p', '-b', name, '-t', target];
-        await this.runTmux(pasteArgs);
+        try {
+          await this.runTmux(pasteArgs);
+        } catch (error) {
+          if (!/\bno buffer\b/i.test(String(error))) throw error;
+          await sleep(50);
+          await this.runTmux(loadArgs, chunk);
+          commands.push(this.command(loadArgs));
+          await this.runTmux(pasteArgs);
+        }
         commands.push(this.command(pasteArgs));
       }
       const endArgs: TmuxArgv = ['send-keys', '-t', target, 'End'];
