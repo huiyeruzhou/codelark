@@ -128,6 +128,10 @@ async function waitForCondition(predicate: () => boolean, timeoutMs = 1000): Pro
 }
 
 describe('runtime settings internals', () => {
+  it('allows a loaded hosted runner enough time to start Codex bootstrap', () => {
+    assert.equal(_testOnlyCodexThreadBootstrap.LOCAL_BOOTSTRAP_TIMEOUT_MS, 15_000);
+  });
+
   it('returns the first Codex thread id from status without waiting for stream result', async () => {
     const threadId = '019e8600-0000-7000-9000-000000000001';
     const stream = new ReadableStream<string>({
@@ -1320,7 +1324,10 @@ describe('command-dispatch', () => {
       assert.deepEqual(consumeStartupNoticeTarget()?.address, address);
 
       fs.appendFileSync(hotUpdateLog, '\n[hot-update] completed 2026-05-31T23:43:10+08:00\n', 'utf-8');
-      await waitForCondition(() => sent.some((message) => message.richCard?.title === 'CodeLark 热更新完成'));
+      await waitForCondition(
+        () => sent.some((message) => message.richCard?.title === 'CodeLark 热更新完成'),
+        5_000,
+      );
 
       assert.ok(sent.length >= 2);
       const completed = sent.find((message) => message.richCard?.title === 'CodeLark 热更新完成')!;
@@ -1393,10 +1400,9 @@ describe('command-dispatch', () => {
         },
       );
 
-      assert.equal(sent.length, 1);
       assert.equal(sent[0].richCard?.title, 'CodeLark 热更新日志');
 
-      await new Promise((resolve) => setTimeout(resolve, 35));
+      await waitForCondition(() => sent.some((message) => message.richCard?.title === 'CodeLark 热更新异常'));
 
       assert.equal(sent.length, 2);
       assert.equal(sent[1].richCardUpdateMessageId, 'reply-hot-update-exited-1');

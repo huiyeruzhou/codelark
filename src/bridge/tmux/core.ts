@@ -165,8 +165,17 @@ const PASTE_CHUNK_SIZE = 512;
 const PASTE_CHUNK_DELAY_MS = 75;
 const PASTE_BUFFER_RETRY_COUNT = 2;
 const PASTE_BUFFER_RETRY_DELAY_MS = 100;
+const PSMUX_PASTE_CHUNK_MAX_BYTES = 12_000;
+const PSMUX_PASTE_FIRST_ACK_TIMEOUT_MS = 1_500;
+const PSMUX_PASTE_RETRY_ACK_TIMEOUT_MS = 5_000;
+const PSMUX_PASTE_ACK_POLL_MS = 100;
+const PSMUX_PASTE_ACK_CAPTURE_LINES = 120;
 const SESSION_START_SURVIVAL_DELAY_MS = 50;
 const SESSION_START_RETRY_DELAY_MS = 100;
+
+export function usesPsmuxServerSidePaste(platform = process.platform): boolean {
+  return platform === 'win32';
+}
 
 function splitTextChunks(text: string, chunkSize = PASTE_CHUNK_SIZE): string[] {
   if (!text) return [];
@@ -178,18 +187,67 @@ function splitTextChunks(text: string, chunkSize = PASTE_CHUNK_SIZE): string[] {
   return chunks;
 }
 
+function splitTextByUtf8Bytes(text: string, maxBytes: number): string[] {
+  if (!text) return [];
+  const chunks: string[] = [];
+  let chunk = '';
+  let chunkBytes = 0;
+  for (const char of text) {
+    const charBytes = Buffer.byteLength(char, 'utf8');
+    if (chunk && chunkBytes + charBytes > maxBytes) {
+      chunks.push(chunk);
+      chunk = '';
+      chunkBytes = 0;
+    }
+    chunk += char;
+    chunkBytes += charBytes;
+  }
+  if (chunk) chunks.push(chunk);
+  return chunks;
+}
+
+function normalizePasteProbe(value: string): string {
+  // Terminal wrapping inserts visual whitespace that was not present in the
+  // original text. Ignore whitespace only for the visibility probe; the paste
+  // itself remains the exact base64-decoded byte sequence.
+  return value.replace(/\s+/gu, '');
+}
+
+function screenAcknowledgesPsmuxPaste(screen: string, text: string): boolean {
+  const normalizedText = normalizePasteProbe(text);
+  if (!normalizedText) return true;
+  const normalizedScreen = normalizePasteProbe(screen);
+  if (normalizedText.length <= 80) return normalizedScreen.includes(normalizedText);
+
+  // Long inputs may wrap across terminal rows or be collapsed by the TUI. A
+  // distinctive suffix survives ordinary wrapping, while Codex reports the
+  // pasted character count instead of rendering multi-thousand-char content.
+  const suffix = normalizedText.slice(-48);
+  if (normalizedScreen.includes(suffix)) return true;
+  const expectedCharacters = Array.from(text).length;
+  for (const match of screen.matchAll(/\[Pasted Content\s+(\d+)\s+chars?\]/giu)) {
+    const observedCharacters = Number.parseInt(match[1] || '', 10);
+    if (observedCharacters >= expectedCharacters && observedCharacters <= expectedCharacters + 2) {
+      return true;
+    }
+  }
+  return false;
+}
+
 class TmuxCliCore implements TmuxCore {
   private executable: string;
   private readonly prefixArgs: string[];
   private readonly autoSelectExecutable: boolean;
   private readonly genericCommandPreview: boolean;
   private readonly candidateExecutables: string[] | undefined;
+  private readonly psmuxServerSidePaste: boolean;
   private executableResolution: Promise<string> | undefined;
 
   constructor(
     executable?: string,
     prefixArgs: string[] = [],
     candidateExecutables?: string[],
+    psmuxServerSidePaste = usesPsmuxServerSidePaste(),
   ) {
     const configuredExecutable = process.env.CODELARK_TMUX_EXECUTABLE?.trim();
     this.executable = executable || configuredExecutable || 'tmux';
@@ -197,6 +255,7 @@ class TmuxCliCore implements TmuxCore {
     this.autoSelectExecutable = !executable && !configuredExecutable && prefixArgs.length === 0;
     this.genericCommandPreview = Boolean(executable || prefixArgs.length > 0);
     this.candidateExecutables = candidateExecutables;
+    this.psmuxServerSidePaste = psmuxServerSidePaste;
   }
 
   private async resolveExecutable(): Promise<string> {
@@ -396,7 +455,9 @@ class TmuxCliCore implements TmuxCore {
         action.type === 'literal'
         && (options.forcePasteLiterals === true || Array.from(action.text).length > PASTE_LITERAL_THRESHOLD)
       ) {
-        commands.push(...(await this.pasteLiteralChunks(target, action.text)));
+        commands.push(...(this.psmuxServerSidePaste
+          ? await this.sendPsmuxPasteInput(target, action.text)
+          : await this.pasteLiteralChunks(target, action.text)));
       } else {
         const args = tmuxSendActionArgv(target, action);
         await this.runTmux(args);
@@ -407,6 +468,73 @@ class TmuxCliCore implements TmuxCore {
       }
     }
     return { commands };
+  }
+
+  private async sendPsmuxPasteInput(target: string, text: string): Promise<string[]> {
+    const commands: string[] = [];
+    let pastedText = '';
+    for (const chunk of splitTextByUtf8Bytes(text, PSMUX_PASTE_CHUNK_MAX_BYTES)) {
+      const expectedText = pastedText + chunk;
+      let acknowledged = false;
+      for (let attempt = 0; attempt < 2 && !acknowledged; attempt += 1) {
+        if (attempt > 0) {
+          // A startup transition can erase the first paste after readiness was
+          // reported. Clear any invisible editor residue before the one bounded
+          // retry so recovery cannot concatenate a duplicate user message.
+          const clearArgs: TmuxArgv = ['send-keys', '-t', target, 'C-u'];
+          await this.runTmux(clearArgs);
+          commands.push(this.command(clearArgs));
+          console.warn('[tmux-core] Retrying an unacknowledged Windows psmux paste after clearing editor input:', {
+            event: 'tmux.psmux.paste.retry',
+            target,
+            chunk_bytes: Buffer.byteLength(chunk, 'utf8'),
+          });
+        }
+
+        const baseline = await this.capturePsmuxPasteScreen(target);
+        commands.push(baseline.command);
+        // psmux exposes a single-command paste path that base64-decodes server-side
+        // and emits a real bracketed paste. This avoids cross-process buffer races.
+        const pasteArgs: TmuxArgv = ['send-paste', '-t', target, Buffer.from(chunk, 'utf8').toString('base64')];
+        await this.runTmux(pasteArgs);
+        commands.push(this.command(pasteArgs));
+
+        // The one-shot psmux client exits after enqueueing SendPaste; that does
+        // not mean the TUI has consumed the bracketed paste. Wait for pane output
+        // to acknowledge the exact input (or Codex's collapsed paste count)
+        // before a later Enter can overtake or be ignored by the editor.
+        const ackTimeoutMs = attempt === 0
+          ? PSMUX_PASTE_FIRST_ACK_TIMEOUT_MS
+          : PSMUX_PASTE_RETRY_ACK_TIMEOUT_MS;
+        const deadline = Date.now() + ackTimeoutMs;
+        while (Date.now() <= deadline) {
+          const capture = await this.capturePsmuxPasteScreen(target);
+          commands.push(capture.command);
+          if (
+            capture.screen !== baseline.screen
+            && screenAcknowledgesPsmuxPaste(capture.screen, expectedText)
+          ) {
+            acknowledged = true;
+            break;
+          }
+          await sleep(PSMUX_PASTE_ACK_POLL_MS);
+        }
+      }
+      if (!acknowledged) {
+        throw new Error(`psmux paste was not acknowledged by pane ${target} before submit`);
+      }
+      pastedText = expectedText;
+    }
+    return commands;
+  }
+
+  private async capturePsmuxPasteScreen(target: string): Promise<TmuxCapturePaneResult> {
+    const args = captureTmuxArgv(target, PSMUX_PASTE_ACK_CAPTURE_LINES);
+    const result = await this.runTmux(args);
+    return {
+      screen: trimCapturedScreen(result.stdout, PSMUX_PASTE_ACK_CAPTURE_LINES),
+      command: this.command(args),
+    };
   }
 
   private async pasteLiteralChunks(target: string, text: string, bufferName?: string): Promise<string[]> {
@@ -458,6 +586,12 @@ class TmuxCliCore implements TmuxCore {
 
   async injectPromptIntoPane(targetPane: string, prompt: string): Promise<TmuxSendActionsResult> {
     const commands: string[] = [];
+    if (this.psmuxServerSidePaste) {
+      commands.push(...(await this.sendPsmuxPasteInput(targetPane, prompt)));
+      const submit = await this.sendActions(targetPane, [{ type: 'key', key: 'Enter' }]);
+      commands.push(...submit.commands);
+      return { commands };
+    }
     const bufferName = `clk-prompt-${process.pid}-${Date.now()}`;
     const lines = prompt.replace(/\r\n/g, '\n').replace(/\r/g, '\n').split('\n');
     for (let i = 0; i < lines.length; i += 1) {
@@ -495,8 +629,15 @@ export function createTmuxCliCore(options: {
   prefixArgs?: string[];
   /** Test hook for exercising client/server compatibility fallback. */
   candidateExecutables?: string[];
+  /** Test hook for exercising Windows psmux server-side paste input. */
+  psmuxServerSidePaste?: boolean;
 } = {}): TmuxCore {
-  return new TmuxCliCore(options.executable, options.prefixArgs, options.candidateExecutables);
+  return new TmuxCliCore(
+    options.executable,
+    options.prefixArgs,
+    options.candidateExecutables,
+    options.psmuxServerSidePaste,
+  );
 }
 
 let activeTmuxCore: TmuxCore = createTmuxCliCore();

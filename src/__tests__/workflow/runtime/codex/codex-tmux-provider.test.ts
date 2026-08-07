@@ -890,9 +890,9 @@ describe('codex-tmux-provider', () => {
     const outputPath = path.join(tempDir, 'output.hex');
     const scriptPath = path.join(tempDir, 'capture-stdin.cjs');
     const expectedBytes = process.platform === 'win32'
-      ? Buffer.from('hello\x1b[13;3~world\r')
+      ? Buffer.from('hello\rworld\r')
       : Buffer.from('hello\x1b\rworld\r');
-    const expectedNewlineCount = process.platform === 'win32' ? 1 : 2;
+    const expectedNewlineCount = 2;
 
     fs.writeFileSync(scriptPath, [
       "const fs = require('node:fs');",
@@ -904,9 +904,13 @@ describe('codex-tmux-provider', () => {
       'process.stdin.resume();',
       "fs.writeFileSync(readyPath, '1');",
       "process.stdin.on('data', (chunk) => {",
+      "  if (process.platform === 'win32') process.stdout.write(Buffer.from(chunk).toString('utf8').replace(/[\\r\\n]/g, ''));",
       '  chunks.push(...chunk);',
       '  const newlineCount = chunks.filter((byte) => byte === 10 || byte === 13).length;',
-      '  if (newlineCount >= expectedNewlineCount) {',
+      "  const submitted = process.platform === 'win32'",
+      "    ? Buffer.from(chunks).toString('utf8').endsWith('world\\r')",
+      '    : newlineCount >= expectedNewlineCount;',
+      '  if (submitted) {',
       "    fs.writeFileSync(outputPath, Buffer.from(chunks).toString('hex'));",
       '    process.exit(0);',
       '  }',
@@ -977,6 +981,7 @@ describe('codex-tmux-provider', () => {
       '',
       'process.stdin.on("data", (chunk) => {',
       '  const text = String(chunk);',
+      '  if (process.platform === "win32") process.stdout.write(text);',
       '  const newlineIndex = text.search(/[\\r\\n]/);',
       '  if (newlineIndex >= 0) {',
       '    received += text.slice(0, newlineIndex);',

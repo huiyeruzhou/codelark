@@ -4,7 +4,11 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-import { createTmuxCliCore, type TmuxCore } from '../../../../bridge/tmux/core.js';
+import {
+  createTmuxCliCore,
+  usesPsmuxServerSidePaste,
+  type TmuxCore,
+} from '../../../../bridge/tmux/core.js';
 
 function installFakeTmux(): { binDir: string; logPath: string; core: TmuxCore } {
   const binDir = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-unit-fake-tmux-core-'));
@@ -26,7 +30,11 @@ if (args[0] === 'display-message') {
   return {
     binDir,
     logPath,
-    core: createTmuxCliCore({ executable: process.execPath, prefixArgs: [scriptPath] }),
+    core: createTmuxCliCore({
+      executable: process.execPath,
+      prefixArgs: [scriptPath],
+      psmuxServerSidePaste: false,
+    }),
   };
 }
 
@@ -38,10 +46,183 @@ function installExecutable(filePath: string, source: string): void {
 function createScriptedTmuxCore(binDir: string, source: string): TmuxCore {
   const scriptPath = path.join(binDir, 'fake-tmux.cjs');
   fs.writeFileSync(scriptPath, source, 'utf-8');
-  return createTmuxCliCore({ executable: process.execPath, prefixArgs: [scriptPath] });
+  return createTmuxCliCore({
+    executable: process.execPath,
+    prefixArgs: [scriptPath],
+    psmuxServerSidePaste: false,
+  });
 }
 
 describe('TmuxCore', () => {
+  it('uses server-side paste for Windows psmux', () => {
+    assert.equal(usesPsmuxServerSidePaste('win32'), true);
+    assert.equal(usesPsmuxServerSidePaste('linux'), false);
+    assert.equal(usesPsmuxServerSidePaste('darwin'), false);
+  });
+
+  it('reconstructs multiline Unicode exactly through Windows psmux server-side paste chunks', async () => {
+    const binDir = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-unit-tmux-literal-chunks-'));
+    const logPath = path.join(binDir, 'tmux.log');
+    const statePath = path.join(binDir, 'pane.txt');
+    const scriptPath = path.join(binDir, 'fake-tmux.cjs');
+    fs.writeFileSync(scriptPath, `
+const fs = require('node:fs');
+const args = process.argv.slice(2);
+fs.appendFileSync(${JSON.stringify(logPath)}, JSON.stringify(args) + '\\n');
+if (args[0] === 'send-paste') {
+  fs.appendFileSync(${JSON.stringify(statePath)}, Buffer.from(args.at(-1), 'base64').toString('utf8'));
+} else if (args[0] === 'capture-pane') {
+  process.stdout.write(fs.existsSync(${JSON.stringify(statePath)}) ? fs.readFileSync(${JSON.stringify(statePath)}, 'utf8') : '');
+}
+`, 'utf-8');
+    const core = createTmuxCliCore({
+      executable: process.execPath,
+      prefixArgs: [scriptPath],
+      psmuxServerSidePaste: true,
+    });
+    const prompt = `第一行《庄子·逍遥游》${'长文本'.repeat(2_500)}\n\nsecond line`;
+
+    try {
+      await core.sendActions(
+        'windows-literal-chunks',
+        [{ type: 'literal', text: prompt }],
+        { forcePasteLiterals: true },
+      );
+      const calls = fs.readFileSync(logPath, 'utf-8')
+        .split(/\r?\n/u)
+        .filter(Boolean)
+        .map((line) => JSON.parse(line) as string[]);
+      const pasteCalls = calls.filter((args) => args[0] === 'send-paste');
+      assert.equal(pasteCalls.every((args) => args[1] === '-t' && args[2] === 'windows-literal-chunks'), true);
+      assert.equal(calls.some((args) => args[0] === 'capture-pane'), true);
+      const decodedChunks = pasteCalls.map((args) => Buffer.from(args.at(-1) || '', 'base64').toString('utf8'));
+      assert.equal(decodedChunks.length > 1, true);
+      assert.equal(decodedChunks.every((chunk) => Buffer.byteLength(chunk, 'utf8') <= 12_000), true);
+      const reconstructed = decodedChunks.join('');
+      assert.equal(reconstructed, prompt);
+    } finally {
+      fs.rmSync(binDir, { recursive: true, force: true });
+    }
+  });
+
+  it('uses the same server-side paste path for production prompt injection on Windows psmux', async () => {
+    const binDir = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-unit-tmux-slash-paste-'));
+    const logPath = path.join(binDir, 'tmux.log');
+    const statePath = path.join(binDir, 'pane.txt');
+    const scriptPath = path.join(binDir, 'fake-tmux.cjs');
+    fs.writeFileSync(scriptPath, `
+const fs = require('node:fs');
+const args = process.argv.slice(2);
+fs.appendFileSync(${JSON.stringify(logPath)}, JSON.stringify(args) + '\\n');
+if (args[0] === 'send-paste') {
+  fs.writeFileSync(${JSON.stringify(statePath)}, Buffer.from(args.at(-1), 'base64').toString('utf8'));
+} else if (args[0] === 'capture-pane') {
+  process.stdout.write(fs.existsSync(${JSON.stringify(statePath)}) ? fs.readFileSync(${JSON.stringify(statePath)}, 'utf8') : '');
+}
+`, 'utf-8');
+    const core = createTmuxCliCore({
+      executable: process.execPath,
+      prefixArgs: [scriptPath],
+      psmuxServerSidePaste: true,
+    });
+
+    try {
+      await core.injectPromptIntoPane(
+        'windows-leading-slash',
+        '//goal goala',
+      );
+      const calls = fs.readFileSync(logPath, 'utf-8')
+        .split(/\r?\n/u)
+        .filter(Boolean)
+        .map((line) => JSON.parse(line) as string[]);
+      assert.deepEqual(calls.map((args) => args[0]), ['capture-pane', 'send-paste', 'capture-pane', 'send-keys']);
+      assert.equal(Buffer.from(calls[1]?.at(-1) || '', 'base64').toString('utf8'), '//goal goala');
+      assert.deepEqual(calls[3]?.slice(-1), ['Enter']);
+    } finally {
+      fs.rmSync(binDir, { recursive: true, force: true });
+    }
+  });
+
+  it('submits a collapsed long Windows psmux paste only after the pane acknowledges its size', async () => {
+    const binDir = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-unit-tmux-collapsed-paste-'));
+    const logPath = path.join(binDir, 'tmux.log');
+    const statePath = path.join(binDir, 'paste-length');
+    const scriptPath = path.join(binDir, 'fake-tmux.cjs');
+    fs.writeFileSync(scriptPath, `
+const fs = require('node:fs');
+const args = process.argv.slice(2);
+fs.appendFileSync(${JSON.stringify(logPath)}, JSON.stringify(args) + '\\n');
+if (args[0] === 'send-paste') {
+  const text = Buffer.from(args.at(-1), 'base64').toString('utf8');
+  fs.writeFileSync(${JSON.stringify(statePath)}, String(Array.from(text).length));
+} else if (args[0] === 'capture-pane' && fs.existsSync(${JSON.stringify(statePath)})) {
+  process.stdout.write('[Pasted Content ' + (Number(fs.readFileSync(${JSON.stringify(statePath)}, 'utf8')) + 1) + ' chars]');
+}
+`, 'utf-8');
+    const core = createTmuxCliCore({
+      executable: process.execPath,
+      prefixArgs: [scriptPath],
+      psmuxServerSidePaste: true,
+    });
+    const prompt = `clk-long-start ${'x'.repeat(8_640)} clk-long-end`;
+
+    try {
+      await core.injectPromptIntoPane('windows-collapsed-paste', prompt);
+      const calls = fs.readFileSync(logPath, 'utf-8')
+        .split(/\r?\n/u)
+        .filter(Boolean)
+        .map((line) => JSON.parse(line) as string[]);
+      assert.deepEqual(calls.map((args) => args[0]), ['capture-pane', 'send-paste', 'capture-pane', 'send-keys']);
+      assert.deepEqual(calls.at(-1)?.slice(-1), ['Enter']);
+    } finally {
+      fs.rmSync(binDir, { recursive: true, force: true });
+    }
+  });
+
+  it('retries one Windows startup paste only after the first delivery remains unacknowledged', { timeout: 10_000 }, async () => {
+    const binDir = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-unit-tmux-startup-paste-retry-'));
+    const logPath = path.join(binDir, 'tmux.log');
+    const countPath = path.join(binDir, 'paste-count');
+    const statePath = path.join(binDir, 'pane.txt');
+    const scriptPath = path.join(binDir, 'fake-tmux.cjs');
+    fs.writeFileSync(statePath, 'OpenAI Codex\\n› Explain this codebase', 'utf8');
+    fs.writeFileSync(scriptPath, `
+const fs = require('node:fs');
+const args = process.argv.slice(2);
+fs.appendFileSync(${JSON.stringify(logPath)}, JSON.stringify(args) + '\\n');
+if (args[0] === 'send-paste') {
+  const count = fs.existsSync(${JSON.stringify(countPath)}) ? Number(fs.readFileSync(${JSON.stringify(countPath)}, 'utf8')) : 0;
+  fs.writeFileSync(${JSON.stringify(countPath)}, String(count + 1));
+  if (count > 0) {
+    const text = Buffer.from(args.at(-1), 'base64').toString('utf8');
+    fs.writeFileSync(${JSON.stringify(statePath)}, 'OpenAI Codex\\n› ' + text);
+  }
+} else if (args[0] === 'capture-pane') {
+  process.stdout.write(fs.readFileSync(${JSON.stringify(statePath)}, 'utf8'));
+}
+`, 'utf-8');
+    const core = createTmuxCliCore({
+      executable: process.execPath,
+      prefixArgs: [scriptPath],
+      psmuxServerSidePaste: true,
+    });
+    const startedAt = Date.now();
+
+    try {
+      await core.injectPromptIntoPane('windows-startup-paste-retry', 'clk startup retry');
+      const calls = fs.readFileSync(logPath, 'utf-8')
+        .split(/\r?\n/u)
+        .filter(Boolean)
+        .map((line) => JSON.parse(line) as string[]);
+      assert.equal(calls.filter((args) => args[0] === 'send-paste').length, 2);
+      assert.equal(calls.filter((args) => args[0] === 'send-keys' && args.at(-1) === 'C-u').length, 1);
+      assert.deepEqual(calls.at(-1)?.slice(-1), ['Enter']);
+      assert.equal(Date.now() - startedAt >= 1_500, true, 'retry should remain off the normal immediate path');
+    } finally {
+      fs.rmSync(binDir, { recursive: true, force: true });
+    }
+  });
+
   it('retries when new-session is lost while the previous tmux server shuts down', async () => {
     const binDir = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-unit-tmux-start-race-'));
     const statePath = path.join(binDir, 'launch-count');

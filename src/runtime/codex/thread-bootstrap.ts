@@ -10,7 +10,7 @@ import {
 import { findSessionFileByThreadId } from './tmux-provider.js';
 
 const LOCAL_BOOTSTRAP_BASE_URL = 'http://127.0.0.1:9/v1';
-const LOCAL_BOOTSTRAP_TIMEOUT_MS = 5_000;
+const LOCAL_BOOTSTRAP_TIMEOUT_MS = 15_000;
 const BOOTSTRAP_THREAD_VISIBILITY_TIMEOUT_MS = 2_000;
 const BOOTSTRAP_THREAD_VISIBILITY_POLL_MS = 50;
 const LOCAL_BOOTSTRAP_PROMPT = 'CodeLark local thread bootstrap. This request is expected to fail before reaching a model.';
@@ -302,4 +302,5 @@ export const _testOnlyCodexThreadBootstrap = {
   waitForSessionFileByThreadId,
   trimLocalBootstrapSessionToContextPrefix,
   LOCAL_BOOTSTRAP_PROMPT,
+  LOCAL_BOOTSTRAP_TIMEOUT_MS,
 };

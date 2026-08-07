@@ -529,7 +529,7 @@ describe('codex tmux runtime', () => {
     const oldTimeout = process.env.CODELARK_CODEX_RESUME_TMUX_READY_TIMEOUT_MS;
     const oldPoll = process.env.CODELARK_CODEX_RESUME_TMUX_READY_POLL_MS;
     try {
-      process.env.CODELARK_CODEX_RESUME_TMUX_READY_TIMEOUT_MS = '120';
+      process.env.CODELARK_CODEX_RESUME_TMUX_READY_TIMEOUT_MS = '500';
       process.env.CODELARK_CODEX_RESUME_TMUX_READY_POLL_MS = '50';
       let captureCount = 0;
       const sentActions: Array<{ target: string; actions: TmuxSendAction[] }> = [];
@@ -566,7 +566,7 @@ describe('codex tmux runtime', () => {
         sessionName: 'codex_slow_selection',
         core,
         onSelectionPrompt: async () => {
-          await new Promise((resolve) => setTimeout(resolve, 160));
+          await new Promise((resolve) => setTimeout(resolve, 650));
           return 'yes_proceed' as const;
         },
       });
