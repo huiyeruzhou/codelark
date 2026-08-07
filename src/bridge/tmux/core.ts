@@ -167,8 +167,8 @@ const PASTE_BUFFER_RETRY_COUNT = 2;
 const PASTE_BUFFER_RETRY_DELAY_MS = 100;
 const WINDOWS_LITERAL_CHUNK_SIZE = 64;
 const WINDOWS_LITERAL_CHUNK_DELAY_MS = 25;
-const BRACKETED_PASTE_START = '\x1b[200~';
-const BRACKETED_PASTE_END = '\x1b[201~';
+const BRACKETED_PASTE_START_HEX = ['1b', '5b', '32', '30', '30', '7e'];
+const BRACKETED_PASTE_END_HEX = ['1b', '5b', '32', '30', '31', '7e'];
 const SESSION_START_SURVIVAL_DELAY_MS = 50;
 const SESSION_START_RETRY_DELAY_MS = 100;
 
@@ -426,7 +426,7 @@ class TmuxCliCore implements TmuxCore {
     const commands: string[] = [];
     const bracketLeadingSlash = text.startsWith('/');
     if (bracketLeadingSlash) {
-      const startArgs = tmuxSendActionArgv(target, { type: 'literal', text: BRACKETED_PASTE_START });
+      const startArgs: TmuxArgv = ['send-keys', '-t', target, '-H', ...BRACKETED_PASTE_START_HEX];
       await this.runTmux(startArgs);
       commands.push(this.command(startArgs));
     }
@@ -446,7 +446,7 @@ class TmuxCliCore implements TmuxCore {
       }
     }
     if (bracketLeadingSlash) {
-      const endArgs = tmuxSendActionArgv(target, { type: 'literal', text: BRACKETED_PASTE_END });
+      const endArgs: TmuxArgv = ['send-keys', '-t', target, '-H', ...BRACKETED_PASTE_END_HEX];
       await this.runTmux(endArgs);
       commands.push(this.command(endArgs));
     }

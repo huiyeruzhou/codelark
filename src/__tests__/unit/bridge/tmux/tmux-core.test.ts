@@ -83,14 +83,11 @@ fs.appendFileSync(${JSON.stringify(logPath)}, JSON.stringify(args) + '\\n');
         .filter((args) => args[0] === 'send-keys' && args.includes('-l'))
         .map((args) => args.at(-1) || '');
       assert.equal(literalChunks.every((chunk) => Array.from(chunk).length <= 64), true);
-      assert.equal(literalChunks.at(0), '\x1b[200~');
-      assert.equal(literalChunks.at(-1), '\x1b[201~');
+      assert.deepEqual(calls.at(0), ['send-keys', '-t', 'windows-literal-chunks', '-H', '1b', '5b', '32', '30', '30', '7e']);
+      assert.deepEqual(calls.at(-1), ['send-keys', '-t', 'windows-literal-chunks', '-H', '1b', '5b', '32', '30', '31', '7e']);
       const reconstructed = calls.map((args) => {
         if (args[0] !== 'send-keys') return '';
-        if (args.includes('-l')) {
-          const literal = args.at(-1) || '';
-          return literal === '\x1b[200~' || literal === '\x1b[201~' ? '' : literal;
-        }
+        if (args.includes('-l')) return args.at(-1) || '';
         return args.at(-1) === 'M-Enter' ? '\n' : '';
       }).join('');
       assert.equal(reconstructed, prompt);
