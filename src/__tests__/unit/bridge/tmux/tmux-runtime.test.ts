@@ -200,6 +200,119 @@ describe('codex tmux runtime', () => {
     assert.equal(captureCount, 2);
   });
 
+  it('relaunches once when a successful startup update leaves a dead tmux pane', async () => {
+    let launchCount = 0;
+    let killCount = 0;
+    const statuses: string[] = [];
+    const sentActions: TmuxSendAction[][] = [];
+    const core: TmuxCore = {
+      commandPreview: (args) => ['tmux', ...args].join(' '),
+      hasSession: async (name) => ({ exists: true, command: `tmux has-session -t ${name}` }),
+      killSession: async (name) => {
+        killCount += 1;
+        return `tmux kill-session -t ${name}`;
+      },
+      listSessions: async () => ({ sessions: [], command: 'tmux list-sessions' }),
+      ensureDetachedSession: async () => {
+        launchCount += 1;
+        return {
+          existed: launchCount > 1,
+          command: 'tmux new-session -d -s codex_updated',
+          commands: [`tmux new-session -d -s codex_updated #${launchCount}`],
+        };
+      },
+      capturePane: async (name) => ({
+        command: `tmux capture-pane -t ${name} -p -S -80`,
+        screen: launchCount === 1
+          ? sentActions.length === 0
+            ? [
+              'Update available! 0.146.0 -> 0.147.0',
+              '› 1. Update now',
+              '  2. Skip',
+              '  3. Skip until next version',
+              'Press enter to continue',
+            ].join('\n')
+            : [
+              'Updating Codex via npm install -g @openai/codex...',
+              'changed 2 packages in 5s',
+              'Update ran successfully! Please restart Codex.',
+              'Pane is dead (status 0, Sat Aug  8 21:29:45 2026)',
+            ].join('\n')
+          : 'OpenAI Codex\n\n› ',
+      }),
+      sendActions: async (_target, actions) => {
+        sentActions.push(actions);
+        return { commands: ['tmux send-keys -t codex_updated Enter'] };
+      },
+      sendInterrupt: async () => 'tmux send-keys -t codex_updated C-c',
+      injectPromptIntoPane: async () => ({ commands: [] }),
+    };
+
+    const result = await startCodexResumeTmuxSession({
+      sessionName: 'codex_updated',
+      threadId: 'updated-thread',
+      bridgeSessionId: 'bridge-updated',
+      workingDirectory: '/tmp',
+      onSelectionPrompt: (prompt) => prompt.kind === 'update' ? 'update_now' : null,
+      onStatus: (message) => {
+        statuses.push(message);
+      },
+    }, core);
+
+    assert.equal(result.ready, true);
+    assert.equal(result.updateRestartCount, 1);
+    assert.equal(launchCount, 2);
+    assert.equal(killCount, 0, 'the next recreate launch owns cleanup of the dead pane session');
+    assert.deepEqual(sentActions, [[{ type: 'key', key: 'Enter' }]]);
+    assert.equal(statuses.some((message) => message.includes('正在重新启动 Codex tmux')), true);
+  });
+
+  it('does not relaunch a startup update after a nonzero pane exit', async () => {
+    let launchCount = 0;
+    let updateSelected = false;
+    const core: TmuxCore = {
+      commandPreview: (args) => ['tmux', ...args].join(' '),
+      hasSession: async (name) => ({ exists: true, command: `tmux has-session -t ${name}` }),
+      killSession: async (name) => `tmux kill-session -t ${name}`,
+      listSessions: async () => ({ sessions: [], command: 'tmux list-sessions' }),
+      ensureDetachedSession: async () => {
+        launchCount += 1;
+        return { existed: false, commands: [] };
+      },
+      capturePane: async () => ({
+        command: 'tmux capture-pane -t codex_update_failed -p -S -80',
+        screen: updateSelected
+          ? 'Update failed\nPane is dead (status 1, Sat Aug  8 21:29:45 2026)'
+          : [
+            'Update available! 0.146.0 -> 0.147.0',
+            '› 1. Update now',
+            '  2. Skip',
+            '  3. Skip until next version',
+            'Press enter to continue',
+          ].join('\n'),
+      }),
+      sendActions: async () => {
+        updateSelected = true;
+        return { commands: ['tmux send-keys -t codex_update_failed Enter'] };
+      },
+      sendInterrupt: async () => 'tmux send-keys C-c',
+      injectPromptIntoPane: async () => ({ commands: [] }),
+    };
+
+    await assert.rejects(() => startCodexResumeTmuxSession({
+      sessionName: 'codex_update_failed',
+      threadId: 'update-failed-thread',
+      bridgeSessionId: 'bridge-update-failed',
+      workingDirectory: '/tmp',
+      onSelectionPrompt: (prompt) => prompt.kind === 'update' ? 'update_now' : null,
+    }, core), (error) => {
+      assert.ok(error instanceof CodexResumeTmuxLaunchError);
+      assert.match(error.details.reason, /status 1/);
+      return true;
+    });
+    assert.equal(launchCount, 1);
+  });
+
   it('requires a selection handler instead of auto-cancelling a startup goal selection', async () => {
     let captureCount = 0;
     const sentActions: Array<{ target: string; actions: TmuxSendAction[] }> = [];

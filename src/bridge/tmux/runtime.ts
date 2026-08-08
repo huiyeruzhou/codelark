@@ -1037,14 +1037,19 @@ export async function startCodexResumeTmuxSession(
 
     if (
       selectedStartupUpdateNow
-      && startedCheck.sessionExists === false
+      && (
+        startedCheck.sessionExists === false
+        || startedCheck.paneDead?.status === 0
+      )
       && attempt === 0
     ) {
       updateRestartCount += 1;
-      console.log('[codex-tmux-runtime] Codex tmux exited after startup update selection; relaunching once:', {
+      console.log('[codex-tmux-runtime] Codex exited successfully after startup update selection; relaunching tmux once:', {
         tmux_session: params.sessionName,
         thread_id: params.threadId,
         bridge_session_id: params.bridgeSessionId,
+        session_exists: startedCheck.sessionExists,
+        pane_dead_status: startedCheck.paneDead?.status,
       });
       await params.onStatus?.('Codex CLI 更新流程已结束，正在重新启动 Codex tmux。', { force: true });
       continue;
@@ -1061,7 +1066,11 @@ export async function startCodexResumeTmuxSession(
     }
     const launchOutput = readRecentFile(launchLogPath);
     cleanupLaunchLog(launchLogPath);
-    const reason = startedCheck.sessionExists === false
+    const reason = startedCheck.paneDead
+      ? startedCheck.paneDead.status === undefined
+        ? 'Codex TUI process exited before becoming ready'
+        : `Codex TUI process exited with status ${startedCheck.paneDead.status} before becoming ready`
+      : startedCheck.sessionExists === false
       ? 'tmux session disappeared after new-session; the Codex TUI process likely exited immediately'
       : startedCheck.selectionPromptKind
         ? `Codex TUI is waiting at a ${startedCheck.selectionPromptKind} selection prompt during startup`
