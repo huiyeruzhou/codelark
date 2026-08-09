@@ -206,7 +206,7 @@ const noopPermissions: PermissionGateway = {
 const noopLifecycle: LifecycleHooks = {};
 
 describe('bridge-manager model prompt context', () => {
-  it('appends adapter-provided quote context after the user prompt', () => {
+  it('places adapter-provided quote context before the user prompt', () => {
     const prompt = _testOnly.appendModelContextText(
       '按这个窗口发',
       [
@@ -219,34 +219,34 @@ describe('bridge-manager model prompt context', () => {
     );
 
     assert.equal(prompt, [
-      '按这个窗口发',
-      '',
       '<quoted_message platform="feishu" message_id="card-parent-1" message_type="interactive">',
       '<interactive_card>',
       '{"schema":"2.0"}',
       '</interactive_card>',
       '</quoted_message>',
+      '',
+      '按这个窗口发',
     ].join('\n'));
   });
 
-  it('keeps readable manual-ingress metadata in the same multiline TUI submission', () => {
+  it('places readable manual-ingress metadata before the message in one TUI submission', () => {
     const prompt = _testOnly.appendModelContextText(
       '处理消息',
       [
         '<codelark_source>',
         '来源群聊："来源群"',
-        '回复目标："source-session"',
+        '来源会话 ID："source-session"',
         '</codelark_source>',
       ].join('\n'),
     );
 
     assert.equal(prompt, [
-      '处理消息',
-      '',
       '<codelark_source>',
       '来源群聊："来源群"',
-      '回复目标："source-session"',
+      '来源会话 ID："source-session"',
       '</codelark_source>',
+      '',
+      '处理消息',
     ].join('\n'));
   });
 

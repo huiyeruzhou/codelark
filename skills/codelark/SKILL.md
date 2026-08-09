@@ -93,7 +93,7 @@ Always copy `target` exactly from the one selected `codelark sessions --json` re
 
 If the user already supplied an existing binding UUID, Feishu `oc_...` chat ID, or Bridge/session UUID, pass it unchanged as the same string `target`; the resolver accepts all three. Discovery still displays only the canonical Bridge/session UUID.
 
-Incoming Agent messages include one `<codelark_source>` wrapper with readable source-chat, source-Bot, and one `回复目标`. To reply, copy that value directly into the string `target`. CodeLark submits the whole multiline message as one input and shows compact sent/received cards in both groups after the target Bridge accepts it.
+Incoming Agent messages include one `<codelark_source>` wrapper with readable source-chat, source-Bot, and one `来源会话 ID`. To reply, copy that ID directly into the string `target`. CodeLark submits the whole multiline message as one input and shows sent/received cards with the actual message in both groups after the target Bridge accepts it. Long messages are collapsed in the card and can be expanded without truncation.
 
 ## Rules
 

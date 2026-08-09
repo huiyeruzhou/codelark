@@ -70,7 +70,7 @@ export function formatAgentSourceXml(source: AgentMessageSource): string {
     '<codelark_source>',
     `来源群聊：${quoteContextValue(source.chatName)}`,
     `来源 Bot：${quoteContextValue(source.botName)}`,
-    `回复目标：${quoteContextValue(source.bridgeSessionId)}`,
+    `来源会话 ID：${quoteContextValue(source.bridgeSessionId)}`,
     '</codelark_source>',
   ].join('\n');
 }

@@ -55,6 +55,7 @@ import { cursorTmuxSessionName } from '../../runtime/cursor/tmux-provider.js';
 import {
   sanitizeInput,
 } from '../../shared/security/validators.js';
+import { buildFencedCodeBlock } from '../../shared/markdown/fence.js';
 import {
   normalizeReasoningEffort,
   normalizeSandboxMode,
@@ -1626,13 +1627,18 @@ function channelAddressFromBinding(binding: {
   };
 }
 
+const AGENT_MESSAGE_CARD_COLLAPSE_THRESHOLD = 800;
+
 function buildAgentExchangeCard(options: {
   direction: 'sent' | 'received' | 'failed';
   counterpartName: string;
+  messageText: string;
   detail?: string;
 }): OutboundRichCard {
   const sent = options.direction === 'sent';
   const failed = options.direction === 'failed';
+  const messageMarkdown = buildFencedCodeBlock(options.messageText, 'text');
+  const longMessage = options.messageText.length > AGENT_MESSAGE_CARD_COLLAPSE_THRESHOLD;
   return {
     title: failed ? 'Agent 消息发送失败' : sent ? 'Agent 消息已发送' : '收到 Agent 消息',
     template: failed ? 'red' : sent ? 'green' : 'blue',
@@ -1641,7 +1647,18 @@ function buildAgentExchangeCard(options: {
         [failed ? '目标' : sent ? '目标' : '来源', options.counterpartName],
         ...(options.detail ? [['错误', options.detail] as [string, string]] : []),
       ],
-    }],
+    }, ...(longMessage ? [] : [{
+      title: '消息内容',
+      markdown: messageMarkdown,
+    }])],
+    ...(longMessage ? {
+      panels: [{
+        title: '消息内容（点击展开）',
+        template: failed ? 'red' : sent ? 'green' : 'blue',
+        expanded: false,
+        sections: [{ markdown: messageMarkdown }],
+      }],
+    } : {}),
   };
 }
 
@@ -1682,6 +1699,7 @@ function enqueueManualInput(request: ManualInputRequest, notify: boolean): void 
       richCard: buildAgentExchangeCard({
         direction: 'received',
         counterpartName: request.source.botName || request.source.chatName,
+        messageText: request.text,
       }),
     });
   }
@@ -1733,6 +1751,7 @@ export async function sendAgentMessageFromBinding(
       richCard: buildAgentExchangeCard({
         direction: 'sent',
         counterpartName: target.agentName || target.chatName,
+        messageText: instruction.text,
       }),
     });
   } catch (error) {
@@ -1744,6 +1763,7 @@ export async function sendAgentMessageFromBinding(
         counterpartName: typeof instruction.target === 'string'
           ? instruction.target
           : instruction.target.chatName || instruction.target.botName || instruction.target.chatId || instruction.target.query || '目标群聊',
+        messageText: instruction.text,
         detail,
       }),
     });
@@ -4262,7 +4282,7 @@ function appendModelContextText(text: string, ...contextTexts: Array<string | un
   if (!trimmedContext) return text;
   const trimmedText = text.trim();
   if (!trimmedText) return trimmedContext;
-  return `${trimmedText}\n\n${trimmedContext}`;
+  return `${trimmedContext}\n\n${trimmedText}`;
 }
 
 function parseThreadSelectCallback(callbackData: string): string | null | undefined {

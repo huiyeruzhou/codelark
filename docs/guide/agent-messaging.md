@@ -75,7 +75,7 @@ codelark sessions --home /home/user/.codelark --chat-name "项目群" --bot-name
 <clk-input>{"target":"target-from-codelark-sessions","text":"请检查训练状态并回复我"}</clk-input>
 ```
 
-复合筛选只用于 CLI 发现阶段；发送阶段只使用唯一结果的 `target`，不再要求模型理解或拼接内部 binding、平台群 ID 和 CodeLark Home。目标 Bridge 明确接受后，源群出现“Agent 消息已发送”卡片，目标群出现“收到 Agent 消息”卡片；离线、无匹配或多匹配会在源群显示失败，不会假报成功。
+复合筛选只用于 CLI 发现阶段；发送阶段只使用唯一结果的 `target`，不再要求模型理解或拼接内部 binding、平台群 ID 和 CodeLark Home。目标 Bridge 明确接受后，源群出现“Agent 消息已发送”卡片，目标群出现“收到 Agent 消息”卡片；两张卡都展示实际发送的完整正文，长正文默认折叠、展开后可查看且不会截断。离线、无匹配或多匹配会在源群显示失败，不会假报成功。
 
 输出保持单一：discovery 只展示 canonical Bridge/session UUID。输入保持兼容：如果调用方已有 binding UUID、飞书 `oc_...` 群 ID 或 Bridge/session UUID，三者都可以原样作为同一个字符串 `target`；resolver 在内部统一收敛到当前 binding。
 
@@ -85,11 +85,11 @@ codelark sessions --home /home/user/.codelark --chat-name "项目群" --bot-name
 <codelark_source>
 来源群聊："来源群"
 来源 Bot："qaq"
-回复目标："opaque target"
+来源会话 ID："opaque target"
 </codelark_source>
 ```
 
-字段值使用 JSON 字符串转义，并保护 XML 外壳终止符。目标模型需要向来源发送消息时，把“回复目标”原样放入字符串 `target`；不会看到或使用 binding、platform 或 Home 辅助字段。
+字段值使用 JSON 字符串转义，并保护 XML 外壳终止符。这里的字段只描述消息来源；目标模型需要向来源发送消息时，把“来源会话 ID”原样放入字符串 `target`，不会看到或使用 binding、platform 或 Home 辅助字段。
 这里的“来源 Bot”是发送通道从飞书 Bot 身份接口解析出的真实名称，不是群名或 session 的 `bot_name` 筛选别名。
 
 ## 安全边界

@@ -7,6 +7,7 @@ import { afterEach, describe, it } from 'node:test';
 
 import { CODELARK_HOME } from '../../../../configuration/paths.js';
 import { BaseChannelAdapter, registerAdapterFactory } from '../../../../channels/contracts.js';
+import { buildRichCardContent } from '../../../../channels/feishu/markdown.js';
 import type { InboundMessage, OutboundMessage, PermissionGateway, SendResult } from '../../../../domain/index.js';
 import type { LifecycleHooks, LLMProvider, StreamChatParams } from '../../../../runtime/contracts.js';
 import { JsonFileStore } from '../../../../storage/json-store.js';
@@ -139,7 +140,7 @@ describe('agent message manual ingress', () => {
     assert.match(inbound?.contextText || '', /来源群聊："来源群"/u);
     assert.match(inbound?.contextText || '', /来源 Bot："qaq"/u);
     assert.doesNotMatch(inbound?.contextText || '', /来源 Bot："来源群"/u);
-    assert.match(inbound?.contextText || '', new RegExp(`回复目标："${source.bridgeSessionId}"`, 'u'));
+    assert.match(inbound?.contextText || '', new RegExp(`来源会话 ID："${source.bridgeSessionId}"`, 'u'));
     assert.deepEqual(adapter.sentMessages.map((message) => ({
       chatId: message.address.chatId,
       title: message.richCard?.title,
@@ -147,6 +148,10 @@ describe('agent message manual ingress', () => {
       { chatId: 'oc_target', title: '收到 Agent 消息' },
       { chatId: 'oc_source', title: 'Agent 消息已发送' },
     ]);
+    for (const message of adapter.sentMessages) {
+      assert.equal(message.richCard?.panels, undefined);
+      assert.match(message.richCard?.sections[1]?.markdown || '', /  \/stop\n/u);
+    }
 
     await sendAgentMessageFromBinding(source.id, { target: 'current', text: '/then-form' });
     const selfInput = await adapter.consumeOne();
@@ -154,6 +159,34 @@ describe('agent message manual ingress', () => {
     assert.equal(selfInput?.address.chatId, 'oc_source');
     assert.equal(selfInput?.text, '/then-form');
     assert.equal(adapter.sentMessages.length, 2);
+
+    const longText = [
+      '请核对下面的完整多行消息：',
+      '```json',
+      JSON.stringify({ value: '跨 Agent 原文' }),
+      '```',
+      '正文'.repeat(420),
+    ].join('\n');
+    await sendAgentMessageFromBinding(source.id, { target: target.id, text: longText });
+    const longInbound = await adapter.consumeOne();
+    await _testOnlyWaitForDeliveryQueuesForTests(adapter);
+    assert.equal(longInbound?.text, longText);
+    const longCards = adapter.sentMessages.slice(2, 4).map((message) => message.richCard);
+    assert.equal(longCards.length, 2);
+    for (const card of longCards) {
+      assert.equal(card?.sections.length, 1);
+      assert.equal(card?.panels?.length, 1);
+      assert.equal(card?.panels?.[0]?.expanded, false);
+      assert.equal(card?.panels?.[0]?.title, '消息内容（点击展开）');
+      assert.ok(card?.panels?.[0]?.sections?.[0]?.markdown?.includes(longText));
+    }
+    const renderedLongCard = JSON.parse(buildRichCardContent(longCards[0]!)) as any;
+    const renderedMessagePanel = renderedLongCard.body.elements.find(
+      (element: any) => element.tag === 'collapsible_panel',
+    );
+    assert.equal(renderedMessagePanel?.expanded, false);
+    const renderedMessageContent = renderedMessagePanel?.elements?.[0]?.columns?.[0]?.elements?.[0]?.content;
+    assert.ok(String(renderedMessageContent || '').replace(/\u200b/gu, '').includes(longText));
 
     await assert.rejects(
       sendAgentMessageFromBinding(source.id, { target: 'missing-target', text: 'hello' }),
@@ -163,5 +196,6 @@ describe('agent message manual ingress', () => {
     assert.equal(adapter.sentMessages.at(-1)?.address.chatId, 'oc_source');
     assert.equal(adapter.sentMessages.at(-1)?.richCard?.title, 'Agent 消息发送失败');
     assert.equal(adapter.sentMessages.at(-1)?.richCard?.template, 'red');
+    assert.match(adapter.sentMessages.at(-1)?.richCard?.sections[1]?.markdown || '', /hello/u);
   });
 });
