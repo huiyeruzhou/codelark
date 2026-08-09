@@ -206,6 +206,11 @@ run_worker() {
     run_logged npm test
   fi
 
+  # Keep the user-facing executable on PATH in lockstep with the daemon built
+  # from this checkout. Failure is safe here because the live bridge has not
+  # been stopped yet.
+  run_logged npm install --global --no-audit --no-fund "$PROJECT_DIR"
+
   local cli
   cli="$(bridge_cli_display)"
   if [ "$proxy_supported" = "1" ]; then
@@ -252,6 +257,7 @@ run_dry_run() {
   echo "[hot-update] git pull: $([ "$USE_PULL" = "1" ] && echo planned || echo skipped)"
   echo "[hot-update] npm run build: planned"
   echo "[hot-update] npm test: $([ "$SKIP_TESTS" = "1" ] && echo skipped || echo planned)"
+  echo "[hot-update] global CLI sync: npm install --global --no-audit --no-fund $PROJECT_DIR"
   echo "[hot-update] restart cli: $(bridge_cli_display)"
   echo "[hot-update] restart: planned"
 }

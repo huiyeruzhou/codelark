@@ -2390,6 +2390,10 @@ export class FeishuAdapter extends BaseChannelAdapter {
     return this.botName?.trim() || this.alias?.trim() || this.channelType;
   }
 
+  override getBotDisplayName(): string {
+    return this.displayBotName;
+  }
+
   private formatBotPrefixedGroupName(name: string): string {
     const requestedName = name.trim();
     const prefix = `[${this.displayBotName}]`;
@@ -5672,6 +5676,18 @@ export class FeishuAdapter extends BaseChannelAdapter {
       return this.sendAttachments(message.address, message.attachments, message.replyToMessageId);
     }
 
+    if (message.platformMessage) {
+      const content = typeof message.platformMessage.content === 'string'
+        ? message.platformMessage.content
+        : JSON.stringify(message.platformMessage.content);
+      return this.sendStructuredMessage(
+        message.address.chatId,
+        message.platformMessage.msgType,
+        content,
+        message.replyToMessageId,
+      );
+    }
+
     let text = message.text;
 
     // Convert HTML to markdown for Feishu rendering (e.g. command responses)
@@ -6163,7 +6179,7 @@ export class FeishuAdapter extends BaseChannelAdapter {
 
   private async sendStructuredMessage(
     chatId: string,
-    msgType: 'image' | 'file',
+    msgType: string,
     content: string,
     replyToMessageId?: string,
   ): Promise<SendResult> {
@@ -6182,12 +6198,15 @@ export class FeishuAdapter extends BaseChannelAdapter {
           },
         }));
 
+      const target = replyToMessageId ? `im.message.reply:${msgType}` : `im.message.create:${msgType}`;
+      const apiError = feishuApiErrorFromResponse(res, target);
+      if (apiError) return { ok: false, error: feishuErrorSummary(res, apiError.message) };
       if (res?.data?.message_id) {
         return { ok: true, messageId: res.data.message_id };
       }
       return { ok: false, error: res?.msg || `${msgType} send failed` };
     } catch (err) {
-      return { ok: false, error: err instanceof Error ? err.message : `${msgType} send failed` };
+      return { ok: false, error: feishuErrorSummary(err, `${msgType} send failed`) };
     }
   }
 

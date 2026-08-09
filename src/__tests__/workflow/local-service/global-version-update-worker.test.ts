@@ -37,7 +37,7 @@ describe('global CodeLark version update worker', () => {
     }
   });
 
-  it('checks latest, installs globally with --yes, then stops and starts only the new CLI', async () => {
+  it('checks latest, installs globally, refreshes the bundled skill, then restarts only the new CLI', async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-global-update-'));
     const logPath = path.join(root, 'commands.jsonl');
     const globalRoot = path.join(root, 'global');
@@ -61,6 +61,7 @@ describe('global CodeLark version update worker', () => {
         ['npm', 'view', 'codelark', 'version', '--json'],
         ['npm', 'install', '-g', '--yes', 'codelark@9.9.10'],
         ['npm', 'root', '-g'],
+        ['codelark', 'install-skills', 'codelark'],
         ['codelark', 'stop'],
         ['codelark', 'start'],
       ]);

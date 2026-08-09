@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import crypto from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
@@ -811,6 +812,11 @@ export async function startBridge(options: ServiceConfigOverrideOptions = {}): P
   // the already-running fast path so `codelark start` still upgrades legacy config.
   const startup = startupProjectionFor(options);
   const config = startup.config;
+  try {
+    refreshBundledCodeLarkSkill();
+  } catch (error) {
+    console.warn('[service-manager] Failed to refresh bundled CodeLark skill:', error instanceof Error ? error.message : error);
+  }
   const current = getBridgeStatus();
   const extraAlivePids = getTrackedBridgePids(current)
     .filter((pid) => pid !== current.pid && isProcessAlive(pid));
@@ -1128,7 +1134,7 @@ export function writeUiServerStatus(status: UiServerStatus): void {
   fs.writeFileSync(uiStatusFile, JSON.stringify(status, null, 2), 'utf-8');
 }
 
-export type CodexIntegrationInstallMethod = 'junction' | 'copy' | 'existing';
+export type CodexIntegrationInstallMethod = 'junction' | 'copy' | 'updated';
 export type ExternalSkillInstallMethod = 'npx';
 
 export interface CodexIntegrationSkillInstallResult {
@@ -1169,15 +1175,9 @@ export interface InstallCodexIntegrationOptions {
 export const BUNDLED_CODEX_SKILLS: BundledCodexSkill[] = [
   {
     name: PRIMARY_CODEX_SKILL_NAME,
-    label: '附件回传',
-    description: '让 Codex 在需要时把本地图片或文件发送回当前 IM 会话。',
+    label: 'CodeLark 统一能力',
+    description: '发送飞书消息与附件、问题卡片、自动化卡片，以及向其他 CodeLark Agent 输入消息。',
     sourceDir: path.join(packageRoot, 'skills', PRIMARY_CODEX_SKILL_NAME),
-  },
-  {
-    name: 'codelark-question',
-    label: '问题卡片',
-    description: '让 Codex 在需要用户确认或选择时显式输出 CodeLark 问题卡片。',
-    sourceDir: path.join(packageRoot, 'skills', 'codelark-question'),
   },
 ];
 
@@ -1210,8 +1210,9 @@ export const INSTALLABLE_SKILLS = [
 
 const REQUIRED_CODEX_SKILL_NAMES = [
   PRIMARY_CODEX_SKILL_NAME,
-  'codelark-question',
 ] as const;
+
+const LEGACY_CODELARK_SKILL_NAMES = ['codelark-question', 'codelark-auto'] as const;
 
 function codexHomeDir(): string {
   return process.env.CODEX_HOME || path.join(os.homedir(), '.codex');
@@ -1240,11 +1241,10 @@ function installBundledCodexSkill(skill: BundledCodexSkill): CodexIntegrationSki
   const targetDir = path.join(skillsDir, skill.name);
   fs.mkdirSync(skillsDir, { recursive: true });
 
-  if (fs.existsSync(path.join(targetDir, 'SKILL.md'))) {
-    return { name: skill.name, targetDir, method: 'existing' };
-  }
-
   if (skill.linkPackageRoot) {
+    if (fs.existsSync(path.join(targetDir, 'SKILL.md'))) {
+      return { name: skill.name, targetDir, method: 'junction' };
+    }
     try {
       fs.symlinkSync(skill.sourceDir, targetDir, process.platform === 'win32' ? 'junction' : 'dir');
       return { name: skill.name, targetDir, method: 'junction' };
@@ -1254,8 +1254,61 @@ function installBundledCodexSkill(skill: BundledCodexSkill): CodexIntegrationSki
     }
   }
 
-  copySkillSource(skill.sourceDir, targetDir);
-  return { name: skill.name, targetDir, method: 'copy' };
+  const lockDir = path.join(skillsDir, `.${skill.name}.install.lock`);
+  try {
+    fs.mkdirSync(lockDir);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+    let ownerPid = 0;
+    try {
+      ownerPid = Number(JSON.parse(fs.readFileSync(path.join(lockDir, 'owner.json'), 'utf8')).pid || 0);
+    } catch { /* incomplete or stale lock */ }
+    if (isProcessAlive(ownerPid)) throw new Error(`CodeLark skill installation is already running (PID: ${ownerPid})`);
+    fs.rmSync(lockDir, { recursive: true, force: true });
+    fs.mkdirSync(lockDir);
+  }
+  const token = crypto.randomUUID();
+  const temporaryDir = path.join(skillsDir, `.${skill.name}.install-${token}`);
+  const backupDir = path.join(skillsDir, `.${skill.name}.backup-${token}`);
+  try {
+    fs.writeFileSync(path.join(lockDir, 'owner.json'), JSON.stringify({ pid: process.pid, createdAt: new Date().toISOString() }));
+    if (!fs.existsSync(targetDir)) {
+      const recoverableBackup = fs.readdirSync(skillsDir)
+        .filter((name) => name.startsWith(`.${skill.name}.backup-`))
+        .map((name) => path.join(skillsDir, name))
+        .sort((a, b) => fs.statSync(b).mtimeMs - fs.statSync(a).mtimeMs)[0];
+      if (recoverableBackup) fs.renameSync(recoverableBackup, targetDir);
+    }
+    const existed = fs.existsSync(targetDir);
+    copySkillSource(skill.sourceDir, temporaryDir);
+    if (existed) fs.renameSync(targetDir, backupDir);
+    fs.renameSync(temporaryDir, targetDir);
+    if (existed) {
+      try { fs.rmSync(backupDir, { recursive: true, force: true }); }
+      catch { /* replacement succeeded; stale backup is recoverable cleanup debt */ }
+    }
+    return { name: skill.name, targetDir, method: existed ? 'updated' : 'copy' };
+  } catch (error) {
+    if (!fs.existsSync(targetDir) && fs.existsSync(backupDir)) fs.renameSync(backupDir, targetDir);
+    fs.rmSync(temporaryDir, { recursive: true, force: true });
+    throw error;
+  } finally {
+    fs.rmSync(lockDir, { recursive: true, force: true });
+  }
+}
+
+function removeLegacyCodeLarkSkills(): void {
+  const skillsDir = path.join(codexHomeDir(), 'skills');
+  for (const name of LEGACY_CODELARK_SKILL_NAMES) {
+    fs.rmSync(path.join(skillsDir, name), { recursive: true, force: true });
+  }
+}
+
+function refreshBundledCodeLarkSkill(): void {
+  const skill = BUNDLED_CODEX_SKILLS.find((candidate) => candidate.name === PRIMARY_CODEX_SKILL_NAME);
+  if (!skill) throw new Error('Bundled CodeLark skill is unavailable.');
+  installBundledCodexSkill(skill);
+  removeLegacyCodeLarkSkills();
 }
 
 function runExternalSkillInstall(command: string, args: string[]): Promise<ExternalSkillInstallResult> {
@@ -1305,6 +1358,7 @@ export async function installCodexIntegration(options: InstallCodexIntegrationOp
   const skills = BUNDLED_CODEX_SKILLS
     .filter((skill) => selectedNameSet.has(skill.name))
     .map(installBundledCodexSkill);
+  if (selectedNameSet.has(PRIMARY_CODEX_SKILL_NAME)) removeLegacyCodeLarkSkills();
   const externalSkills = selectedNameSet.has(OFFICIAL_LARK_DOC_SKILL.name) && !options.skipExternalSkills
     ? [await (options.externalSkillRunner || runExternalSkillInstall)(
       OFFICIAL_LARK_DOC_SKILL.command,
@@ -1315,7 +1369,7 @@ export async function installCodexIntegration(options: InstallCodexIntegrationOp
   return {
     name: primary?.name || externalSkills[0]?.name || OFFICIAL_LARK_DOC_SKILL.name,
     targetDir: primary?.targetDir || '',
-    method: primary?.method || 'existing',
+    method: primary?.method || 'copy',
     skills,
     externalSkills,
   };

@@ -24,6 +24,7 @@ import { setupLogger } from '../shared/logger.js';
 import { applyStandardLarkCliEnv } from '../shared/lark-cli-env.js';
 import { releaseBridgeInstanceLock, tryAcquireBridgeInstanceLock } from '../local-service/instance-lock.js';
 import { runStartupStorageMigrations } from '../storage/migrations.js';
+import { startBridgeControlService } from '../bridge/control/service-discovery.js';
 
 const RUNTIME_DIR = path.join(CODELARK_HOME, 'runtime');
 const STATUS_FILE = path.join(RUNTIME_DIR, 'status.json');
@@ -187,6 +188,15 @@ async function main(): Promise<void> {
   });
 
   await bridgeManager.start();
+  const controlService = await startBridgeControlService({
+    codelarkHome: CODELARK_HOME,
+    runId,
+    handlers: {
+      listSessions: bridgeManager.listActiveBridgeSessions,
+      receiveInput: bridgeManager.receiveManualInput,
+    },
+  });
+  console.log(`${LOG_PREFIX} Service discovery: ${controlService.discoveryDirectory}`);
 
   // Graceful shutdown
   let shuttingDown = false;
@@ -196,6 +206,7 @@ async function main(): Promise<void> {
     const reason = signal ? `signal: ${signal}` : 'shutdown requested';
     console.log(`${LOG_PREFIX} Shutting down (${reason})...`);
     pendingPerms.denyAll();
+    await controlService.close();
     await bridgeManager.stop();
     releaseInstanceLock();
     writeStatus({ running: false, lastExitReason: reason });

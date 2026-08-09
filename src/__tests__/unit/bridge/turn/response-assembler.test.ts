@@ -84,6 +84,18 @@ describe('response-assembler', () => {
     assert.deepEqual(merged.questions, []);
   });
 
+  it('deduplicates final-only platform and manual-input side effects across sources', () => {
+    const platformMessage = { msgType: 'text', content: { text: 'hello' } };
+    const manualInput = { target: 'target-chat', text: '/stop', codelarkHome: '/tmp/target' };
+    const sdk = assembleSdkFinalResponse({ platformMessages: [platformMessage], manualInputs: [manualInput] });
+    const codexFinal = assembleCodexFinalResponse({ platformMessages: [platformMessage], manualInputs: [manualInput] });
+
+    const merged = mergeFinalResponses(codexFinal, sdk);
+
+    assert.deepEqual(merged.platformMessages, [platformMessage]);
+    assert.deepEqual(merged.manualInputs, [manualInput]);
+  });
+
   it('strips complete and incomplete final-only blocks from streaming text', () => {
     assert.equal(
       stripFinalOnlyBlocksForStreaming([

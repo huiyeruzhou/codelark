@@ -1,0 +1,305 @@
+import '../../setup/test-setup.js';
+import assert from 'node:assert/strict';
+import crypto from 'node:crypto';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { afterEach, describe, it } from 'node:test';
+
+import {
+  deliverManualInput,
+  discoverBridgeSessions,
+  startBridgeControlService,
+  type BridgeControlService,
+} from '../../../bridge/control/service-discovery.js';
+import { formatAgentSourceXml } from '../../../bridge/control/session-catalog.js';
+
+describe('bridge control service', () => {
+  const roots: string[] = [];
+  const services: BridgeControlService[] = [];
+
+  afterEach(async () => {
+    await Promise.all(services.splice(0).map((service) => service.close()));
+    for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true });
+  });
+
+  it('registers multiple CodeLark homes globally and searches live sessions', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-discovery-test-'));
+    roots.push(root);
+    const directory = path.join(root, 'discovery');
+    for (const [index, name] of ['qaq', '八千代'].entries()) {
+      services.push(await startBridgeControlService({
+        codelarkHome: path.join(root, `home-${index}`),
+        runId: `run-${index}`,
+        discoveryDirectory: directory,
+        handlers: {
+          listSessions: (query) => {
+            const session = {
+              codelarkHome: path.join(root, `home-${index}`),
+              internalChatId: `chat-internal-${index}`,
+              platformChatId: `oc_${index}`,
+              bridgeSessionId: `bridge-${index}`,
+              chatName: `${name}群`,
+              agentName: name,
+              channelType: `feishu-${index}`,
+              runtime: 'codex',
+              runtimeStatus: 'idle',
+            };
+            return !query || JSON.stringify(session).includes(query) ? [session] : [];
+          },
+          receiveInput: () => {},
+        },
+      }));
+    }
+
+    assert.equal((await discoverBridgeSessions({ discoveryDirectory: directory })).length, 2);
+    const matched = await discoverBridgeSessions({ query: '八千代', discoveryDirectory: directory });
+    assert.deepEqual(matched.map((item) => item.internalChatId), ['chat-internal-1']);
+  });
+
+  it('rejects an empty structured target instead of selecting an arbitrary session', async () => {
+    await assert.rejects(
+      deliverManualInput({
+        target: {},
+        text: 'must not send',
+        source: {
+          codelarkHome: '/source',
+          internalChatId: 'source',
+          platformChatId: 'oc_source',
+          bridgeSessionId: 'source-session',
+          chatName: '来源',
+          botName: '来源',
+        },
+      }),
+      /目标筛选条件不能为空/u,
+    );
+  });
+
+  it('lets a restarted Bridge replace the descriptor for the same Home', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-discovery-restart-test-'));
+    roots.push(root);
+    const directory = path.join(root, 'discovery');
+    const home = path.join(root, 'same-home');
+    const first = await startBridgeControlService({
+      codelarkHome: home,
+      runId: 'old-run',
+      discoveryDirectory: directory,
+      handlers: {
+        listSessions: () => [],
+        receiveInput: () => {},
+      },
+    });
+    services.push(first);
+    const replacement = await startBridgeControlService({
+      codelarkHome: home,
+      runId: 'new-run',
+      discoveryDirectory: directory,
+      handlers: {
+        listSessions: () => [{
+          codelarkHome: home,
+          internalChatId: 'replacement-chat',
+          platformChatId: 'oc_replacement',
+          bridgeSessionId: 'replacement-session',
+          chatName: '新 Bridge',
+          agentName: '新 Bridge',
+          channelType: 'feishu-new',
+          runtime: 'codex',
+          runtimeStatus: 'idle',
+        }],
+        receiveInput: () => {},
+      },
+    });
+    services.push(replacement);
+
+    await first.close();
+    services.splice(services.indexOf(first), 1);
+    assert.deepEqual(
+      (await discoverBridgeSessions({ codelarkHome: home, discoveryDirectory: directory }))
+        .map((item) => item.internalChatId),
+      ['replacement-chat'],
+    );
+  });
+
+  it('delivers ordinary text and source metadata to one exact target', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-delivery-test-'));
+    roots.push(root);
+    const directory = path.join(root, 'discovery');
+    const received: unknown[] = [];
+    services.push(await startBridgeControlService({
+      codelarkHome: path.join(root, 'target-home'),
+      runId: 'target-run',
+      discoveryDirectory: directory,
+      handlers: {
+        listSessions: () => [{
+          codelarkHome: path.join(root, 'target-home'),
+          internalChatId: 'target-internal',
+          platformChatId: 'oc_target',
+          bridgeSessionId: 'target-bridge',
+          chatName: '目标群',
+          agentName: '目标群',
+          channelType: 'feishu-target',
+          runtime: 'codex',
+          runtimeStatus: 'idle',
+        }],
+        receiveInput: (request) => { received.push(request); },
+      },
+    }));
+    const source = {
+      codelarkHome: path.join(root, 'source-home'),
+      internalChatId: 'source-internal',
+      platformChatId: 'oc_source',
+      bridgeSessionId: 'source-bridge',
+      chatName: '来源<&群',
+      botName: 'qaq',
+    };
+
+    const target = await deliverManualInput({
+      target: {
+        chatId: 'target-internal',
+        codelarkHome: path.join(root, 'target-home'),
+      },
+      text: '  /stop\n',
+      source,
+      discoveryDirectory: directory,
+    });
+
+    assert.equal(target.chatName, '目标群');
+    assert.deepEqual(received, [{ targetInternalChatId: 'target-internal', text: '  /stop\n', source }]);
+    for (const nonCanonicalId of ['oc_target', 'target-bridge']) {
+      await assert.rejects(
+        deliverManualInput({
+          target: {
+            chatId: nonCanonicalId,
+            codelarkHome: path.join(root, 'target-home'),
+          },
+          text: '不得把非 canonical ID 当成 chat_id',
+          source,
+          discoveryDirectory: directory,
+        }),
+        /没有找到目标群聊/u,
+      );
+    }
+    assert.match(formatAgentSourceXml(source), /来源群聊："来源\\u003c&群"/u);
+    assert.match(formatAgentSourceXml(source), /来源地址：chat_id="source-internal"/u);
+    assert.equal(formatAgentSourceXml(source).split('\n').length, 5);
+    assert.doesNotMatch(formatAgentSourceXml(source), /bridge_id|platform_chat_id/u);
+  });
+
+  it('rejects an ambiguous name unless a CodeLark home disambiguates it', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-ambiguous-test-'));
+    roots.push(root);
+    const directory = path.join(root, 'discovery');
+    const received: string[] = [];
+    for (const index of [0, 1]) {
+      const home = path.join(root, `home-${index}`);
+      services.push(await startBridgeControlService({
+        codelarkHome: home,
+        runId: `run-${index}`,
+        discoveryDirectory: directory,
+        handlers: {
+          listSessions: () => [{
+            codelarkHome: home,
+            internalChatId: `internal-${index}`,
+            platformChatId: `oc_${index}`,
+            bridgeSessionId: `bridge-${index}`,
+            chatName: '同名群',
+            agentName: `agent-${index}`,
+            channelType: `feishu-${index}`,
+            runtime: 'codex',
+            runtimeStatus: 'idle',
+          }],
+          receiveInput: () => { received.push(home); },
+        },
+      }));
+    }
+    const source = {
+      codelarkHome: root,
+      internalChatId: 'source',
+      platformChatId: 'oc_source',
+      bridgeSessionId: 'source-session',
+      chatName: '来源',
+      botName: '来源',
+    };
+
+    await assert.rejects(
+      deliverManualInput({ target: '同名群', text: 'hello', source, discoveryDirectory: directory }),
+      /目标群聊不唯一/u,
+    );
+    const target = await deliverManualInput({
+      target: '同名群',
+      text: 'hello',
+      source,
+      codelarkHome: path.join(root, 'home-1'),
+      discoveryDirectory: directory,
+    });
+    assert.equal(target.internalChatId, 'internal-1');
+    assert.deepEqual(received, [path.join(root, 'home-1')]);
+
+    const compositeTarget = await deliverManualInput({
+      target: {
+        chatName: '同名群',
+        botName: 'agent-0',
+        runtime: 'codex',
+      },
+      text: 'composite',
+      source,
+      discoveryDirectory: directory,
+    });
+    assert.equal(compositeTarget.internalChatId, 'internal-0');
+    assert.deepEqual(received, [path.join(root, 'home-1'), path.join(root, 'home-0')]);
+  });
+
+  it('keeps a live descriptor after a transient endpoint failure and prunes a dead one', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-stale-test-'));
+    roots.push(root);
+    const directory = path.join(root, 'discovery');
+    fs.mkdirSync(directory, { recursive: true });
+    const base = {
+      version: 1,
+      endpoint: 'http://127.0.0.1:9',
+      token: 'test-token',
+      startedAt: new Date().toISOString(),
+    } as const;
+    const descriptorFile = (home: string) => path.join(
+      directory,
+      `${crypto.createHash('sha256').update(path.resolve(home)).digest('hex')}.json`,
+    );
+    const liveHome = path.join(root, 'live-home');
+    const deadHome = path.join(root, 'dead-home');
+    const livePath = descriptorFile(liveHome);
+    const deadPath = descriptorFile(deadHome);
+    fs.writeFileSync(livePath, JSON.stringify({
+      ...base,
+      codelarkHome: liveHome,
+      pid: process.pid,
+      runId: 'live-run',
+    }));
+    fs.writeFileSync(deadPath, JSON.stringify({
+      ...base,
+      codelarkHome: deadHome,
+      pid: 2_147_483_647,
+      runId: 'dead-run',
+    }));
+
+    assert.deepEqual(await discoverBridgeSessions({ discoveryDirectory: directory }), []);
+    assert.equal(fs.existsSync(livePath), true);
+    assert.equal(fs.existsSync(deadPath), false);
+    await assert.rejects(
+      deliverManualInput({
+        target: 'unknown-target',
+        text: 'hello',
+        source: {
+          codelarkHome: root,
+          internalChatId: 'source',
+          platformChatId: 'oc_source',
+          bridgeSessionId: 'source-session',
+          chatName: '来源',
+          botName: '来源',
+        },
+        codelarkHome: liveHome,
+        discoveryDirectory: directory,
+      }),
+      /目标 Bridge 暂时无法访问/u,
+    );
+  });
+});

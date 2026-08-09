@@ -14,5 +14,6 @@
 
 1. [会话与配置工作流](session-workflows.md)：深入理解 `/t`、agent 切换和配置继承。
 2. [云文档与交互卡片](cloud-docs-and-cards.md)：从云文档评论创建任务群，以及使用问题表单。
-3. [排障指南](troubleshooting.md)：排查启动、消息、权限、卡片和本地会话问题。
-4. [Release Notes](release-notes.md)：查看版本变化和升级命令。
+3. [Agent 消息与自动化](agent-messaging.md)：发送飞书消息、创建自动化卡片，以及让不同群聊的 Agent 通讯。
+4. [排障指南](troubleshooting.md)：排查启动、消息、权限、卡片和本地会话问题。
+5. [Release Notes](release-notes.md)：查看版本变化和升级命令。

@@ -5,6 +5,8 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 
 import { createAdapterRuntime } from '../../../../channels/adapter-runtime/runtime.js';
+import { BaseChannelAdapter } from '../../../../channels/contracts.js';
+import type { InboundMessage, OutboundMessage, SendResult } from '../../../../domain/index.js';
 import { CODELARK_HOME } from '../../../../configuration/paths.js';
 
 async function waitForCondition(fn: () => boolean, timeoutMs = 200): Promise<void> {
@@ -17,6 +19,58 @@ async function waitForCondition(fn: () => boolean, timeoutMs = 200): Promise<voi
 }
 
 describe('bridge-adapter-runtime', () => {
+  it('classifies manually injected text through the existing command and regular lanes', async () => {
+    class ManualAdapter extends BaseChannelAdapter {
+      readonly channelType = 'feishu-manual';
+      readonly provider = 'feishu';
+      running = true;
+      start(): Promise<void> { return Promise.resolve(); }
+      stop(): Promise<void> { this.running = false; this.rejectPendingInboundConsumers(); return Promise.resolve(); }
+      isRunning(): boolean { return this.running; }
+      consumeOne(): Promise<InboundMessage | null> { return this.consumeInboundMessage(this.running); }
+      send(_message: OutboundMessage): Promise<SendResult> { return Promise.resolve({ ok: true }); }
+      validateConfig(): string | null { return null; }
+      isAuthorized(): boolean { return true; }
+    }
+    const state = {
+      adapters: new Map(),
+      adapterMeta: new Map(),
+      invalidAdapters: new Map(),
+      loopAborts: new Map(),
+      running: true,
+    };
+    const handled: string[] = [];
+    const locked: string[] = [];
+    const runtime = createAdapterRuntime(() => state, {
+      notifyAdapterSetChanged: () => {},
+      handleMessage: async (_adapter, msg) => { handled.push(msg.text); },
+      processWithSessionLock: async (sessionId, fn) => { locked.push(sessionId); await fn(); },
+      isCommandMessage: (msg) => msg.text.startsWith('/'),
+      resolveSessionIdForMessage: () => 'target-session',
+    });
+    const adapter = new ManualAdapter();
+    runtime.runAdapterLoop(adapter);
+    adapter.enqueueManualInboundMessage({
+      messageId: 'manual-command',
+      address: { channelType: adapter.channelType, chatId: 'target-chat' },
+      text: '/stop',
+      contextText: '<codelark_source>\n来源地址：chat_id="source"\n</codelark_source>',
+      timestamp: Date.now(),
+    });
+    adapter.enqueueManualInboundMessage({
+      messageId: 'manual-regular',
+      address: { channelType: adapter.channelType, chatId: 'target-chat' },
+      text: 'hello',
+      timestamp: Date.now(),
+    });
+
+    await waitForCondition(() => handled.length === 2);
+    state.running = false;
+    await adapter.stop();
+    assert.deepEqual(handled, ['/stop', 'hello']);
+    assert.deepEqual(locked, ['target-session']);
+  });
+
   it('delays ordinary routing until a serialized chat attachment commits', async () => {
     const state = {
       adapters: new Map(),

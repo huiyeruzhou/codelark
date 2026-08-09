@@ -1,4 +1,4 @@
-import type { OutboundAttachment, OutboundQuestion, StreamingHistoryItem } from '../../domain/index.js';
+import type { OutboundAttachment, OutboundManualInput, OutboundPlatformMessage, OutboundQuestion, StreamingHistoryItem } from '../../domain/index.js';
 import {
   parseOutboundArtifacts,
   stripOutboundArtifactBlocksForStreaming,
@@ -12,6 +12,8 @@ export interface AssembleFinalResponseInput {
   text?: string | null;
   attachments?: OutboundAttachment[];
   questions?: OutboundQuestion[];
+  platformMessages?: OutboundPlatformMessage[];
+  manualInputs?: OutboundManualInput[];
   hasError?: boolean;
   errorMessage?: string;
 }
@@ -20,6 +22,8 @@ export interface FinalResponseArtifactParseResult {
   text: string;
   attachments: OutboundAttachment[];
   questions: OutboundQuestion[];
+  platformMessages: OutboundPlatformMessage[];
+  manualInputs: OutboundManualInput[];
 }
 
 export function outboundAttachmentKey(attachment: OutboundAttachment): string {
@@ -55,10 +59,30 @@ export function dedupeOutboundAttachments(
   return deduped;
 }
 
+function dedupeByKey<T>(values: T[], keyFor: (value: T) => string): T[] {
+  const seen = new Set<string>();
+  return values.filter((value) => {
+    const key = keyFor(value);
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+function platformMessageKey(message: OutboundPlatformMessage): string {
+  return `${message.msgType}\0${JSON.stringify(message.content)}`;
+}
+
+function manualInputKey(input: OutboundManualInput): string {
+  return [input.codelarkHome || '', JSON.stringify(input.target), input.text].join('\0');
+}
+
 export function collectFinalResponseArtifacts(
   text?: string | null,
   attachments: OutboundAttachment[] = [],
   questions: OutboundQuestion[] = [],
+  platformMessages: OutboundPlatformMessage[] = [],
+  manualInputs: OutboundManualInput[] = [],
 ): FinalResponseArtifactParseResult {
   const parsed = parseOutboundArtifacts(text || '');
   if (parsed.questions.length > 0 || questions.length > 0 || parsed.errors.some((error) => error.includes('ask'))) {
@@ -83,6 +107,14 @@ export function collectFinalResponseArtifacts(
       ...questions,
       ...parsed.questions,
     ],
+    platformMessages: [
+      ...platformMessages,
+      ...parsed.platformMessages,
+    ],
+    manualInputs: [
+      ...manualInputs,
+      ...parsed.manualInputs,
+    ],
   };
 }
 
@@ -90,11 +122,19 @@ function assembleFinalResponse(
   source: BridgeTurnFinalSource,
   input: AssembleFinalResponseInput,
 ): FinalizedBridgeResponse {
-  const parsed = collectFinalResponseArtifacts(input.text, input.attachments, input.questions);
+  const parsed = collectFinalResponseArtifacts(
+    input.text,
+    input.attachments,
+    input.questions,
+    input.platformMessages,
+    input.manualInputs,
+  );
   return {
     text: parsed.text,
     attachments: parsed.attachments,
     questions: parsed.questions,
+    platformMessages: parsed.platformMessages,
+    manualInputs: parsed.manualInputs,
     hasError: input.hasError,
     errorMessage: input.errorMessage,
     source,
@@ -114,7 +154,13 @@ export function assembleCodexFinalResponse(
 }
 
 export function hasFinalResponsePayload(response: FinalizedBridgeResponse): boolean {
-  return Boolean(response.text || response.attachments.length > 0 || response.questions.length > 0);
+  return Boolean(
+    response.text
+    || response.attachments.length > 0
+    || response.questions.length > 0
+    || response.platformMessages.length > 0
+    || response.manualInputs.length > 0,
+  );
 }
 
 export function mergeFinalResponses(
@@ -131,6 +177,14 @@ export function mergeFinalResponses(
       ...fallback.questions,
       ...primary.questions,
     ],
+    platformMessages: dedupeByKey([
+      ...fallback.platformMessages,
+      ...primary.platformMessages,
+    ], platformMessageKey),
+    manualInputs: dedupeByKey([
+      ...fallback.manualInputs,
+      ...primary.manualInputs,
+    ], manualInputKey),
     hasError: primary.hasError ?? fallback.hasError,
     errorMessage: primary.errorMessage || fallback.errorMessage,
     source: primary.source,

@@ -71,6 +71,19 @@ function cloudDocumentCommentEvent(eventId: string, event: Record<string, any>) 
 }
 
 describe('feishu-adapter structured streaming regions', () => {
+  it('exposes the resolved Feishu bot name as the adapter identity', () => {
+    const adapter = new FeishuAdapter({
+      id: 'feishu-default',
+      provider: 'feishu',
+      enabled: true,
+      alias: 'fallback-alias',
+      config: {},
+    });
+    (adapter as any).botName = 'qaq';
+
+    assert.equal(adapter.getBotDisplayName(), 'qaq');
+  });
+
   it('extracts selected callback data from select_static object options', () => {
     const callbackData = 'codex-tui-selection-choice:codex-selection%3Aupdate%3Atmux%3Asession%3A1:skip';
 
@@ -1699,6 +1712,97 @@ describe('feishu-adapter structured streaming regions', () => {
     assert.equal(result.ok, false);
     assert.match(result.error || '', /Refusing to send Feishu IM message/);
     assert.deepEqual(requests, []);
+  });
+
+  it('sends clk-send platform payloads with the official Feishu msg_type and content', async () => {
+    const requests: Array<Record<string, any>> = [];
+    const adapter = new FeishuAdapter({
+      id: 'feishu-default',
+      provider: 'feishu',
+      enabled: true,
+      alias: '飞书',
+      config: { appId: 'app-id', appSecret: 'app-secret' },
+    });
+    (adapter as any).restClient = {
+      im: {
+        message: {
+          create: async (payload: Record<string, any>) => {
+            requests.push(payload);
+            return { data: { message_id: 'msg-platform-1' } };
+          },
+        },
+      },
+    };
+    const content = { text: '<at user_id="ou_target">目标</at> 请查看' };
+
+    const result = await adapter.send({
+      address: { channelType: 'feishu-default', chatId: 'oc_group' },
+      text: '',
+      platformMessage: { msgType: 'text', content },
+    });
+
+    assert.deepEqual(result, { ok: true, messageId: 'msg-platform-1' });
+    assert.equal(requests[0]?.params?.receive_id_type, 'chat_id');
+    assert.equal(requests[0]?.data?.receive_id, 'oc_group');
+    assert.equal(requests[0]?.data?.msg_type, 'text');
+    assert.deepEqual(JSON.parse(requests[0]?.data?.content), content);
+  });
+
+  it('keeps the Feishu error code and message when a platform payload is rejected', async () => {
+    const adapter = new FeishuAdapter({
+      id: 'feishu-default',
+      provider: 'feishu',
+      enabled: true,
+      alias: '飞书',
+      config: { appId: 'app-id', appSecret: 'app-secret' },
+    });
+    (adapter as any).restClient = {
+      im: {
+        message: {
+          create: async () => ({ code: 230001, msg: 'bot is not in the chat' }),
+        },
+      },
+    };
+
+    const result = await adapter.send({
+      address: { channelType: 'feishu-default', chatId: 'oc_missing' },
+      text: '',
+      platformMessage: { msgType: 'text', content: { text: 'hello' } },
+    });
+
+    assert.equal(result.ok, false);
+    assert.match(result.error || '', /code=230001/u);
+    assert.match(result.error || '', /msg=bot is not in the chat/u);
+  });
+
+  it('keeps Feishu diagnostics when the SDK throws a non-Error response object', async () => {
+    const adapter = new FeishuAdapter({
+      id: 'feishu-default',
+      provider: 'feishu',
+      enabled: true,
+      alias: '飞书',
+      config: { appId: 'app-id', appSecret: 'app-secret' },
+    });
+    (adapter as any).restClient = {
+      im: {
+        message: {
+          create: async () => {
+            throw { response: { data: { code: 230002, msg: 'invalid content', error: { log_id: 'log-platform-2' } } } };
+          },
+        },
+      },
+    };
+
+    const result = await adapter.send({
+      address: { channelType: 'feishu-default', chatId: 'oc_invalid' },
+      text: '',
+      platformMessage: { msgType: 'post', content: { zh_cn: { title: 'x', content: [] } } },
+    });
+
+    assert.equal(result.ok, false);
+    assert.match(result.error || '', /code=230002/u);
+    assert.match(result.error || '', /msg=invalid content/u);
+    assert.match(result.error || '', /log_id=log-platform-2/u);
   });
 
   it('fails closed when a permission button card cannot be sent without legacy text fallbacks', async () => {

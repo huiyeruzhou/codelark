@@ -229,6 +229,27 @@ describe('bridge-manager model prompt context', () => {
     ].join('\n'));
   });
 
+  it('keeps readable manual-ingress metadata in the same multiline TUI submission', () => {
+    const prompt = _testOnly.appendModelContextText(
+      '处理消息',
+      [
+        '<codelark_source>',
+        '来源群聊："来源群"',
+        '来源地址：chat_id="source-chat"',
+        '</codelark_source>',
+      ].join('\n'),
+    );
+
+    assert.equal(prompt, [
+      '处理消息',
+      '',
+      '<codelark_source>',
+      '来源群聊："来源群"',
+      '来源地址：chat_id="source-chat"',
+      '</codelark_source>',
+    ].join('\n'));
+  });
+
   it('asks tmux users to quote the original attachment with an instruction', async () => {
     fs.rmSync(DATA_DIR, { recursive: true, force: true });
     fs.rmSync(CONFIG_TOML_PATH, { force: true });

@@ -1,4 +1,9 @@
-import type { OutboundAttachment, OutboundQuestion } from '../../../domain/index.js';
+import type {
+  OutboundAttachment,
+  OutboundManualInput,
+  OutboundPlatformMessage,
+  OutboundQuestion,
+} from '../../../domain/index.js';
 import type { FinalizedBridgeResponse } from '../turn-types.js';
 import {
   assembleCodexFinalResponse,
@@ -19,6 +24,8 @@ export interface InteractiveProcessFinalResult {
   responseText: string;
   outboundAttachments: OutboundAttachment[];
   outboundQuestions?: OutboundQuestion[];
+  outboundPlatformMessages?: OutboundPlatformMessage[];
+  outboundManualInputs?: OutboundManualInput[];
   hasError: boolean;
   errorMessage: string;
 }
@@ -81,6 +88,8 @@ export function buildProcessFinalResponsePlan(params: {
     text: params.result.responseText,
     attachments: params.result.outboundAttachments,
     questions: params.result.outboundQuestions || [],
+    platformMessages: params.result.outboundPlatformMessages || [],
+    manualInputs: params.result.outboundManualInputs || [],
     hasError: params.result.hasError,
     errorMessage: params.result.errorMessage,
   });

@@ -9,13 +9,17 @@ import { pathToFileURL } from 'node:url';
 
 import {
   buildCliHelpText,
+  buildSessionsHelpText,
   formatInstallSkillsRestartGuidance,
   formatRunSuccessMessage,
   formatRunningBridgePrompt,
+  formatSessionsJson,
+  formatSessionsTable,
   isDirectCliRun,
   launchUiServerForRun,
   parseCliCommand,
   parseCliInvocation,
+  parseSessionSelectorArgs,
   resolveRunningBridgeStartAction,
 } from '../../../entrypoints/cli.js';
 
@@ -33,7 +37,63 @@ describe('cli entrypoint', () => {
       args: ['install'],
     });
     assert.deepEqual(parseCliCommand(['run']), { command: 'run', args: [] });
+    assert.deepEqual(parseCliCommand(['sessions', '--query', 'diffusion']), {
+      command: 'sessions',
+      args: ['--query', 'diffusion'],
+    });
     assert.deepEqual(parseCliCommand(['open']), { command: 'run', args: [], rawCommand: 'open' });
+  });
+
+  it('parses one composite selector for listing and sending', () => {
+    assert.deepEqual(parseSessionSelectorArgs([
+      '--home', '/srv/qaq',
+      '--chat-name=[qaq]diffusion-gamma-rl',
+      '--bot-name', 'gamma',
+      '--runtime', 'codex',
+      '--status', 'idle',
+      '--query', 'diffusion',
+      '--json',
+    ]), {
+      help: false,
+      json: true,
+      selector: {
+        codelarkHome: '/srv/qaq',
+        chatName: '[qaq]diffusion-gamma-rl',
+        botName: 'gamma',
+        runtime: 'codex',
+        runtimeStatus: 'idle',
+        query: 'diffusion',
+      },
+    });
+    assert.throws(() => parseSessionSelectorArgs(['diffusion']), /未知 session 筛选选项/u);
+    assert.throws(() => parseSessionSelectorArgs(['--chat-name']), /需要参数/u);
+  });
+
+  it('renders compact human and JSON session results', () => {
+    const sessions = [{
+      codelarkHome: '/srv/qaq',
+      internalChatId: 'chat-1',
+      platformChatId: 'oc_1',
+      bridgeSessionId: 'bridge-1',
+      chatName: '[qaq]diffusion-gamma-rl',
+      agentName: 'gamma',
+      channelType: 'feishu',
+      runtime: 'codex',
+      runtimeStatus: 'idle',
+      cwd: '/workspace/gamma',
+    }];
+    assert.match(formatSessionsTable(sessions), /\[qaq\]diffusion-gamma-rl\tgamma\tcodex/u);
+    assert.deepEqual(JSON.parse(formatSessionsJson(sessions)), [{
+      chat_id: 'chat-1',
+      chat_name: '[qaq]diffusion-gamma-rl',
+      bot_name: 'gamma',
+      codelark_home: '/srv/qaq',
+      runtime: 'codex',
+      runtime_status: 'idle',
+      cwd: '/workspace/gamma',
+    }]);
+    assert.match(buildSessionsHelpText(), /--chat-name/u);
+    assert.match(buildSessionsHelpText(), /精确内部聊天 ID/u);
   });
 
   it('parses config overrides before dispatching the command', () => {
@@ -94,6 +154,7 @@ describe('cli entrypoint', () => {
     assert.doesNotMatch(help, /codelark open\s+显式打开工作台并启动 Bridge/);
     assert.match(help, /codelark setup\s+配置或重新配置飞书\/Lark 凭据/);
     assert.match(help, /autostart install\s+安装 Windows Bridge 开机启动任务/);
+    assert.match(help, /sessions \[筛选条件\]/u);
     assert.match(help, /--set path=value/);
     assert.match(help, /-v, --version\s+显示 CodeLark 版本/);
     assert.match(help, /~\/\.codelark\/config\.toml/);

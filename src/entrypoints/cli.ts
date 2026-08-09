@@ -7,6 +7,9 @@ import { createInterface } from 'node:readline/promises';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import { resolveInstalledCodelarkVersion } from '../bridge/update/installed-version.js';
+import { discoverBridgeSessions } from '../bridge/control/service-discovery.js';
+import type { DiscoveredBridgeSession } from '../bridge/control/contracts.js';
+import type { ManualInputTargetSelector } from '../domain/index.js';
 import { CODELARK_HOME } from '../configuration/paths.js';
 import { parseConfigCliOverrides, type ParsedConfigCliOverrides } from '../configuration/cli-overrides.js';
 import { createConfigService } from '../configuration/service.js';
@@ -47,6 +50,7 @@ type CliCommand =
   | 'url'
   | 'stop'
   | 'status'
+  | 'sessions'
   | 'autostart'
   | 'uninstall'
   | 'version'
@@ -225,6 +229,7 @@ export function buildCliHelpText(): string {
     '  run                                 打开本地工作台，并启动 Bridge',
     '  start                               只在后台启动 Bridge',
     '  status                              查看 UI、Bridge 和开机启动状态',
+    '  sessions [筛选条件]                列出或复合筛选活跃群聊',
     '  url                                 输出当前或上次记录的工作台地址',
     '  stop                                停止工作台 UI server 和 Bridge',
     '  autostart status                    查看 Windows Bridge 开机启动状态',
@@ -241,6 +246,7 @@ export function buildCliHelpText(): string {
     `  ${PRIMARY_CLI_NAME} install-skills          安装默认全套 CodeLark skills`,
     `  ${PRIMARY_CLI_NAME} start                   只运行后台 Bridge`,
     `  ${PRIMARY_CLI_NAME} status                  检查本地服务是否正在运行`,
+    `  ${PRIMARY_CLI_NAME} sessions --query diffusion --json`,
     '',
     '配置覆盖:',
     '  --set path=value                    单次覆盖 canonical 配置项，例如 --set runtime.agent=claude',
@@ -283,6 +289,7 @@ export function parseCliCommand(argv: string[]): ParsedCliCommand {
     case 'url':
     case 'stop':
     case 'status':
+    case 'sessions':
     case 'autostart':
     case 'uninstall':
       return { command: rawCommand, args };
@@ -291,6 +298,114 @@ export function parseCliCommand(argv: string[]): ParsedCliCommand {
     default:
       return { command: 'unknown', args, rawCommand };
   }
+}
+
+export interface ParsedSessionSelectorCommand {
+  help: boolean;
+  json: boolean;
+  selector: ManualInputTargetSelector;
+}
+
+const SESSION_SELECTOR_FLAGS: Record<string, keyof ManualInputTargetSelector> = {
+  '--query': 'query',
+  '--chat-id': 'chatId',
+  '--chat-name': 'chatName',
+  '--bot-name': 'botName',
+  '--home': 'codelarkHome',
+  '--runtime': 'runtime',
+  '--status': 'runtimeStatus',
+};
+
+export function parseSessionSelectorArgs(
+  args: string[],
+): ParsedSessionSelectorCommand {
+  let help = false;
+  let json = false;
+  const selector: ManualInputTargetSelector = {};
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index];
+    if (arg === '-h' || arg === '--help') {
+      help = true;
+      continue;
+    }
+    if (arg === '--json') {
+      json = true;
+      continue;
+    }
+    const equalIndex = arg.indexOf('=');
+    const flag = equalIndex >= 0 ? arg.slice(0, equalIndex) : arg;
+    const selectorKey = SESSION_SELECTOR_FLAGS[flag];
+    if (!selectorKey) {
+      throw new Error(`未知 session 筛选选项：${arg}`);
+    }
+    const inlineValue = equalIndex >= 0 ? arg.slice(equalIndex + 1) : '';
+    const value = inlineValue || args[index + 1];
+    if (!value || (!inlineValue && value.startsWith('--'))) throw new Error(`${flag} 需要参数。`);
+    if (!inlineValue) index += 1;
+    selector[selectorKey] = value.trim();
+  }
+  return {
+    help,
+    json,
+    selector,
+  };
+}
+
+export function buildSessionsHelpText(): string {
+  return [
+    `Usage: ${PRIMARY_CLI_NAME} sessions [筛选条件] [--json]`,
+    '',
+    '筛选条件使用 AND 组合：',
+    '  --chat-id <ID>       精确内部聊天 ID',
+    '  --chat-name <名称>   精确群聊名',
+    '  --bot-name <名称>    精确 Agent/Bot 名',
+    '  --home <路径>        精确 CodeLark Home',
+    '  --runtime <名称>     精确 runtime',
+    '  --status <状态>      精确 runtime 状态',
+    '  --query <关键词>     跨全部字段模糊匹配',
+    '默认输出可读表格；--json 输出适合 skill 和自动化的 JSON 数组。',
+  ].join('\n') + '\n';
+}
+
+export function formatSessionsJson(sessions: DiscoveredBridgeSession[]): string {
+  return JSON.stringify(sessions.map((session) => ({
+    chat_id: session.internalChatId,
+    chat_name: session.chatName,
+    bot_name: session.agentName,
+    codelark_home: session.codelarkHome,
+    runtime: session.runtime,
+    runtime_status: session.runtimeStatus,
+    ...(session.cwd ? { cwd: session.cwd } : {}),
+  })), null, 2) + '\n';
+}
+
+export function formatSessionsTable(sessions: DiscoveredBridgeSession[]): string {
+  if (sessions.length === 0) return '没有找到活跃群聊。\n';
+  const rows = sessions.map((session) => [
+    session.chatName,
+    session.agentName,
+    session.runtime,
+    session.runtimeStatus,
+    session.codelarkHome,
+    session.internalChatId,
+  ]);
+  return [
+    ['群聊', 'Agent', 'Runtime', '状态', 'CodeLark Home', 'Chat ID'],
+    ...rows,
+  ].map((row) => row.join('\t')).join('\n') + '\n';
+}
+
+export async function runSessionsCommand(
+  args: string[],
+  discover: typeof discoverBridgeSessions = discoverBridgeSessions,
+): Promise<void> {
+  const options = parseSessionSelectorArgs(args);
+  if (options.help) {
+    process.stdout.write(buildSessionsHelpText());
+    return;
+  }
+  const sessions = await discover(options.selector);
+  process.stdout.write(options.json ? formatSessionsJson(sessions) : formatSessionsTable(sessions));
 }
 
 export function parseCliInvocation(argv: string[]): ParsedCliInvocation {
@@ -417,6 +532,11 @@ async function main(argv = process.argv.slice(2)): Promise<void> {
 
     case 'version': {
       process.stdout.write(`${resolveInstalledCodelarkVersion() || 'unknown'}\n`);
+      return;
+    }
+
+    case 'sessions': {
+      await runSessionsCommand(parsed.args);
       return;
     }
 

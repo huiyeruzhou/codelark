@@ -1,0 +1,4 @@
+interface:
+  display_name: "CodeLark"
+  short_description: "Send Feishu messages, cards, files, automation, and Agent input"
+  default_prompt: "Use $codelark to complete this task through the current CodeLark chat."

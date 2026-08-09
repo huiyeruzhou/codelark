@@ -9,6 +9,8 @@
 import type {
   ChannelChat,
   OutboundAttachment,
+  OutboundManualInput,
+  OutboundPlatformMessage,
   OutboundQuestion,
   StreamingHistoryItem,
   TaskProgressInfo,
@@ -111,6 +113,8 @@ export interface ConversationResult {
   responseText: string;
   outboundAttachments: OutboundAttachment[];
   outboundQuestions?: OutboundQuestion[];
+  outboundPlatformMessages?: OutboundPlatformMessage[];
+  outboundManualInputs?: OutboundManualInput[];
   tokenUsage: TokenUsage | null;
   hasError: boolean;
   errorMessage: string;
@@ -176,6 +180,8 @@ export async function processMessage(
       responseText: '',
       outboundAttachments: [],
       outboundQuestions: [],
+      outboundPlatformMessages: [],
+      outboundManualInputs: [],
       tokenUsage: null,
       hasError: true,
       errorMessage: 'Session is busy processing another request',
@@ -347,6 +353,8 @@ async function consumeStream(
   let capturedCodexThreadId: string | null = null;
   const outboundAttachments: OutboundAttachment[] = [];
   const outboundQuestions: OutboundQuestion[] = [];
+  const outboundPlatformMessages: OutboundPlatformMessage[] = [];
+  const outboundManualInputs: OutboundManualInput[] = [];
   const toolPreview = new Map<string, { name: string; input: unknown }>();
   let lastReasoningNote: string | null = null;
   const expandToolCalls = options?.expandToolCalls !== false;
@@ -712,6 +720,8 @@ async function consumeStream(
         block.text = parsed.text;
         outboundAttachments.push(...parsed.attachments);
         outboundQuestions.push(...parsed.questions);
+        outboundPlatformMessages.push(...parsed.platformMessages);
+        outboundManualInputs.push(...parsed.manualInputs);
       }
 
       const hasToolBlocks = contentBlocks.some(
@@ -741,6 +751,8 @@ async function consumeStream(
       responseText,
       outboundAttachments: dedupeOutboundAttachments(outboundAttachments),
       outboundQuestions,
+      outboundPlatformMessages,
+      outboundManualInputs,
       tokenUsage,
       hasError,
       errorMessage,
@@ -775,6 +787,8 @@ async function consumeStream(
       responseText: '',
       outboundAttachments: [],
       outboundQuestions: [],
+      outboundPlatformMessages: [],
+      outboundManualInputs: [],
       tokenUsage,
       hasError: true,
       errorMessage: isAbort

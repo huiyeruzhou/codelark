@@ -1,17 +1,31 @@
 import path from 'node:path';
 
-import type { OutboundAttachment, OutboundQuestion } from '../../domain/index.js';
+import type {
+  ManualInputTargetSelector,
+  OutboundAttachment,
+  OutboundManualInput,
+  OutboundPlatformMessage,
+  OutboundQuestion,
+} from '../../domain/index.js';
 
-const SEND_BLOCK_REGEX = /<clk-send>\s*([\s\S]*?)\s*<\/clk-send>/gi;
-const SEND_BLOCK_OPEN_REGEX = /<clk-send>/i;
-const ASK_BLOCK_REGEX = /<clk-ask>\s*([\s\S]*?)\s*<\/clk-ask>/gi;
-const ASK_BLOCK_OPEN_REGEX = /<clk-ask>/i;
+// Protocol blocks must own their line and begin with JSON. This prevents an
+// inline literal such as `<clk-send>` in ordinary prose from pairing with a
+// later real block's closing tag and swallowing everything in between.
+const SEND_BLOCK_REGEX = /^[ \t]*<clk-send>[ \t]*(?:\r?\n[ \t]*)?([\[{][\s\S]*?)[ \t]*<\/clk-send>[ \t]*$/gim;
+const SEND_BLOCK_OPEN_REGEX = /^[ \t]*<clk-send>[ \t]*(?=$|[\[{])/im;
+const ASK_BLOCK_REGEX = /^[ \t]*<clk-ask>[ \t]*(?:\r?\n[ \t]*)?([\[{][\s\S]*?)[ \t]*<\/clk-ask>[ \t]*$/gim;
+const ASK_BLOCK_OPEN_REGEX = /^[ \t]*<clk-ask>[ \t]*(?=$|[\[{])/im;
+const INPUT_BLOCK_REGEX = /^[ \t]*<clk-input>[ \t]*(?:\r?\n[ \t]*)?([\[{][\s\S]*?)[ \t]*<\/clk-input>[ \t]*$/gim;
+const INPUT_BLOCK_OPEN_REGEX = /^[ \t]*<clk-input>[ \t]*(?=$|[\[{])/im;
 
 interface RawSendInstruction {
   type?: unknown;
   path?: unknown;
   caption?: unknown;
   name?: unknown;
+  msg_type?: unknown;
+  content?: unknown;
+  local_path?: unknown;
 }
 
 interface RawAskInstruction {
@@ -22,10 +36,43 @@ interface RawAskInstruction {
   submitText?: unknown;
 }
 
+interface RawInputInstruction {
+  target?: unknown;
+  text?: unknown;
+  codelark_home?: unknown;
+}
+
+function normalizeManualInputTarget(value: unknown): string | ManualInputTargetSelector | null {
+  if (typeof value === 'string') return value.trim() || null;
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const raw = value as Record<string, unknown>;
+  const fields: Array<[keyof ManualInputTargetSelector, string]> = [
+    ['query', 'query'],
+    ['chatId', 'chat_id'],
+    ['chatName', 'chat_name'],
+    ['botName', 'bot_name'],
+    ['codelarkHome', 'codelark_home'],
+    ['runtime', 'runtime'],
+    ['runtimeStatus', 'runtime_status'],
+  ];
+  const allowedKeys = new Set(fields.map(([, sourceKey]) => sourceKey));
+  if (Object.keys(raw).some((key) => !allowedKeys.has(key))) return null;
+  const selector: ManualInputTargetSelector = {};
+  for (const [targetKey, sourceKey] of fields) {
+    const field = raw[sourceKey];
+    if (field === undefined) continue;
+    if (typeof field !== 'string' || !field.trim()) return null;
+    selector[targetKey] = field.trim();
+  }
+  return Object.keys(selector).length > 0 ? selector : null;
+}
+
 export interface ParsedOutboundArtifacts {
   cleanText: string;
   attachments: OutboundAttachment[];
   questions: OutboundQuestion[];
+  platformMessages: OutboundPlatformMessage[];
+  manualInputs: OutboundManualInput[];
   errors: string[];
 }
 
@@ -46,9 +93,11 @@ function normalizeInstruction(raw: RawSendInstruction): OutboundAttachment | nul
 
 function normalizeInstructionPayload(payload: unknown): {
   attachments: OutboundAttachment[];
+  platformMessages: OutboundPlatformMessage[];
   errors: string[];
 } {
   const attachments: OutboundAttachment[] = [];
+  const platformMessages: OutboundPlatformMessage[] = [];
   const errors: string[] = [];
 
   const objects: RawSendInstruction[] = [];
@@ -72,6 +121,29 @@ function normalizeInstructionPayload(payload: unknown): {
   }
 
   for (const raw of objects) {
+    const msgType = typeof raw.msg_type === 'string' ? raw.msg_type.trim() : '';
+    if (msgType) {
+      const localPath = typeof raw.local_path === 'string' ? raw.local_path.trim() : '';
+      if (localPath) {
+        if ((msgType !== 'image' && msgType !== 'file') || !(path.isAbsolute(localPath) || path.win32.isAbsolute(localPath))) {
+          errors.push('invalid-local-upload-instruction');
+          continue;
+        }
+        attachments.push({
+          kind: msgType,
+          path: localPath,
+          caption: typeof raw.caption === 'string' && raw.caption.trim() ? raw.caption.trim() : undefined,
+          name: typeof raw.name === 'string' && raw.name.trim() ? raw.name.trim() : undefined,
+        });
+        continue;
+      }
+      if (raw.content === undefined || raw.content === null) {
+        errors.push('missing-feishu-message-content');
+        continue;
+      }
+      platformMessages.push({ msgType, content: raw.content });
+      continue;
+    }
     const normalized = normalizeInstruction(raw);
     if (normalized) {
       attachments.push(normalized);
@@ -80,7 +152,7 @@ function normalizeInstructionPayload(payload: unknown): {
     }
   }
 
-  return { attachments, errors };
+  return { attachments, platformMessages, errors };
 }
 
 function normalizeAskPayload(payload: unknown): {
@@ -151,9 +223,38 @@ function compactBlankLines(text: string): string {
     .trim();
 }
 
+function normalizeManualInputPayload(payload: unknown): { inputs: OutboundManualInput[]; errors: string[] } {
+  const records = Array.isArray(payload)
+    ? payload
+    : payload && typeof payload === 'object' && Array.isArray((payload as { items?: unknown }).items)
+      ? (payload as { items: unknown[] }).items
+      : [payload];
+  const inputs: OutboundManualInput[] = [];
+  const errors: string[] = [];
+  for (const value of records) {
+    const raw = value && typeof value === 'object' ? value as RawInputInstruction : {};
+    const target = normalizeManualInputTarget(raw.target);
+    const text = typeof raw.text === 'string' ? raw.text : '';
+    if (!target || !text.trim()) {
+      errors.push('invalid-manual-input-instruction');
+      continue;
+    }
+    inputs.push({
+      target,
+      text,
+      ...(typeof raw.codelark_home === 'string' && raw.codelark_home.trim()
+        ? { codelarkHome: raw.codelark_home.trim() }
+        : {}),
+    });
+  }
+  return { inputs, errors };
+}
+
 export function parseOutboundArtifacts(text: string): ParsedOutboundArtifacts {
   const attachments: OutboundAttachment[] = [];
   const questions: OutboundQuestion[] = [];
+  const platformMessages: OutboundPlatformMessage[] = [];
+  const manualInputs: OutboundManualInput[] = [];
   const errors: string[] = [];
   let mutated = text ?? '';
 
@@ -162,6 +263,7 @@ export function parseOutboundArtifacts(text: string): ParsedOutboundArtifacts {
       const payload = JSON.parse(payloadText);
       const normalized = normalizeInstructionPayload(payload);
       attachments.push(...normalized.attachments);
+      platformMessages.push(...normalized.platformMessages);
       errors.push(...normalized.errors);
     } catch {
       errors.push('invalid-send-json');
@@ -181,10 +283,23 @@ export function parseOutboundArtifacts(text: string): ParsedOutboundArtifacts {
     return '';
   });
 
+  mutated = mutated.replace(INPUT_BLOCK_REGEX, (_full, payloadText: string) => {
+    try {
+      const normalized = normalizeManualInputPayload(JSON.parse(payloadText));
+      manualInputs.push(...normalized.inputs);
+      errors.push(...normalized.errors);
+    } catch {
+      errors.push('invalid-manual-input-json');
+    }
+    return '';
+  });
+
   return {
     cleanText: compactBlankLines(mutated),
     attachments,
     questions,
+    platformMessages,
+    manualInputs,
     errors,
   };
 }
@@ -192,10 +307,11 @@ export function parseOutboundArtifacts(text: string): ParsedOutboundArtifacts {
 export function stripOutboundArtifactBlocksForStreaming(text: string): string {
   if (!text) return '';
 
-  let stripped = text.replace(SEND_BLOCK_REGEX, '').replace(ASK_BLOCK_REGEX, '');
+  let stripped = text.replace(SEND_BLOCK_REGEX, '').replace(ASK_BLOCK_REGEX, '').replace(INPUT_BLOCK_REGEX, '');
   const sendOpenMatch = SEND_BLOCK_OPEN_REGEX.exec(stripped);
   const askOpenMatch = ASK_BLOCK_OPEN_REGEX.exec(stripped);
-  const openMatch = [sendOpenMatch, askOpenMatch]
+  const inputOpenMatch = INPUT_BLOCK_OPEN_REGEX.exec(stripped);
+  const openMatch = [sendOpenMatch, askOpenMatch, inputOpenMatch]
     .filter((match): match is RegExpExecArray => Boolean(match))
     .sort((a, b) => a.index - b.index)[0];
   if (openMatch) {

@@ -78,6 +78,11 @@ export abstract class BaseChannelAdapter {
   abstract consumeOne(): Promise<InboundMessage | null>;
   abstract send(message: OutboundMessage): Promise<SendResult>;
 
+  /** Human-readable identity of the bot represented by this adapter instance. */
+  getBotDisplayName(): string {
+    return this.alias?.trim() || this.channelType;
+  }
+
   /** Move in-flight adapter-owned UI/resource state across a config-driven instance restart. */
   takeRuntimeHandoff?(): Promise<unknown>;
   /** Restore state returned by the previous instance's takeRuntimeHandoff(). */
@@ -147,6 +152,12 @@ export abstract class BaseChannelAdapter {
     } else {
       this.inboundQueue.push(message);
     }
+  }
+
+  /** Inject a trusted local message through the same queue as channel ingress. */
+  enqueueManualInboundMessage(message: InboundMessage): void {
+    if (!this.isRunning()) throw new Error(`Channel adapter is not running: ${this.channelType}`);
+    this.enqueueInboundMessage(message);
   }
 
   protected clearInboundQueue(): void {

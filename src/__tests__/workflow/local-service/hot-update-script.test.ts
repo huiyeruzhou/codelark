@@ -42,6 +42,7 @@ test('hot-update script dry-run validates cwd, node runtime, env paths, and safe
   assert.match(output, /\[hot-update\] git pull: planned/);
   assert.match(output, /\[hot-update\] npm run build: planned/);
   assert.match(output, /\[hot-update\] npm test: planned/);
+  assert.match(output, new RegExp(`\\[hot-update\\] global CLI sync: npm install --global --no-audit --no-fund ${projectRoot.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`));
   assert.match(output, /\[hot-update\] restart: planned/);
   assert.doesNotMatch(output, /Dispatched CodeLark hot update/);
   assert.doesNotMatch(output, /\[hot-update\] started /);

@@ -883,9 +883,9 @@ async function promptWorkspaceRoot(cwd: string): Promise<string> {
 async function promptCodexSkillInstallSelection(): Promise<string[]> {
   p.note(
     [
-      'CodeLark 内置 skills 会安装到 ~/.codex/skills，只有 Codex 在任务匹配时才会读取。',
+      '统一的 CodeLark skill 会安装到 ~/.codex/skills，覆盖消息、卡片、附件、自动化和 Agent 通讯。',
       '官方 lark-doc 使用 npx skills add larksuite/cli -s lark-doc -y -g -a claude-code 安装。',
-      '默认全选。可逐个关闭，不需要时也可以全部取消。',
+      '默认全选；CodeLark 升级时会自动刷新内置 skill。',
     ].join('\n'),
     '可选 Skills',
   );

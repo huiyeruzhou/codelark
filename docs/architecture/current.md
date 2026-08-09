@@ -57,6 +57,8 @@ flowchart LR
 
 版本更新也必须遵守 long-running 操作的统一反馈纪律，不能把“worker 已派发”当作完成：旧 bridge 每 3 秒读取任务日志，检测 running/completed/error、worker 提前退出和超时，并持续更新原卡；派发前还会持久化 operation receipt（原 chat、原 card、目标版本和 update key）。安装失败且 bridge 仍在线时，旧 bridge 把原卡收口为红色失败终态并清除 receipt；安装成功导致进程重启时，新 bridge 消费 receipt，用原 message id 恢复并把同一张卡收口为绿色“更新完成”。若平台不能恢复原卡，rich-card delivery 自己降级为发送新卡，仍必须让用户看到终态。
 
+全局服务发现不引入中心 broker。每个 daemon 在 Home 无关的当前用户临时目录写一份原子 descriptor，并监听随机 loopback 端口；descriptor 保存 Home、run id、端点和随机 token。查询方读取 descriptor 后直接向目标 Bridge 获取实时 session catalog 或提交手动输入。目标端把文本构造成 `InboundMessage` 放进 adapter queue，继续使用同一套分类与 lane；全局目录不复制 session 数据，也不承担消息队列。
+
 这条约束适用于所有可能跨秒、跨进程或跨重启的后台动作：入口要快速 ACK，进行态要可观察，恢复所需状态要先于破坏性动作持久化，最终必须只有一个明确的成功或失败终态。环境变量由 detached child 和后续启动命令正常继承；不能用无关的环境分支代替任务状态检测。
 
 ```mermaid

@@ -19,6 +19,7 @@ import type { BridgeSession, BridgeStore, PermissionLinkRecord } from '../../dom
 import type { FeishuChannelConfig } from '../../channels/types.js';
 import { feishuSiteToApiBaseUrl } from '../../channels/feishu/site.js';
 import { statSync } from 'node:fs';
+import crypto from 'node:crypto';
 import { inspect } from 'node:util';
 // Side-effect import: triggers self-registration of all adapter factories
 import '../../channels/feishu/adapter.js';
@@ -249,6 +250,14 @@ import {
   type DailyVersionUpdateRuntime,
 } from '../update/runtime.js';
 import type { StartupNoticeOperation } from '../startup-notice-target.js';
+import { CODELARK_HOME } from '../../configuration/paths.js';
+import type { AgentSendInstruction, ManualInputRequest } from '../control/contracts.js';
+import { deliverManualInput } from '../control/service-discovery.js';
+import {
+  formatAgentSourceXml,
+  listDiscoveredBridgeSessions,
+  sourceMetadataForBinding,
+} from '../control/session-catalog.js';
 
 const GLOBAL_KEY = '__bridge_manager__';
 const DANGLING_MIRROR_THREAD_RETRY_LIMIT = 3;
@@ -1617,6 +1626,131 @@ function channelAddressFromBinding(binding: {
   };
 }
 
+function buildAgentExchangeCard(options: {
+  direction: 'sent' | 'received' | 'failed';
+  counterpartName: string;
+  detail?: string;
+}): OutboundRichCard {
+  const sent = options.direction === 'sent';
+  const failed = options.direction === 'failed';
+  return {
+    title: failed ? 'Agent 消息发送失败' : sent ? 'Agent 消息已发送' : '收到 Agent 消息',
+    template: failed ? 'red' : sent ? 'green' : 'blue',
+    sections: [{
+      fields: [
+        [failed ? '目标' : sent ? '目标' : '来源', options.counterpartName],
+        ...(options.detail ? [['错误', options.detail] as [string, string]] : []),
+      ],
+    }],
+  };
+}
+
+export function listActiveBridgeSessions(query?: string) {
+  const { store } = getBridgeContext();
+  return listDiscoveredBridgeSessions({
+    store,
+    codelarkHome: CODELARK_HOME,
+    getAdapter: (channelType) => getState().adapters.get(channelType),
+    query,
+  });
+}
+
+function enqueueManualInput(request: ManualInputRequest, notify: boolean): void {
+  const { store } = getBridgeContext();
+  const binding = store.listChannelChats().find((candidate) => candidate.id === request.targetInternalChatId);
+  if (!binding) throw new Error(`目标群聊不存在：${request.targetInternalChatId}`);
+  const adapter = getState().adapters.get(binding.channelType);
+  if (!adapter?.isRunning()) throw new Error(`目标群聊通道未运行：${binding.channelType}`);
+  const targetSession = store.getSession(binding.bridgeSessionId);
+  if (!targetSession) throw new Error(`目标 session 不存在：${binding.bridgeSessionId}`);
+
+  const targetAddress = channelAddressFromBinding({
+    ...binding,
+    chatDisplayName: targetSession.name,
+  });
+  adapter.enqueueManualInboundMessage({
+    messageId: `manual:${crypto.randomUUID()}`,
+    address: targetAddress,
+    text: request.text,
+    contextText: formatAgentSourceXml(request.source),
+    timestamp: Date.now(),
+    raw: { manualIngress: true, source: request.source },
+  });
+  if (notify) {
+    enqueueBridgeNotice(adapter, targetAddress, '收到 Agent 消息', {
+      sessionId: binding.bridgeSessionId,
+      richCard: buildAgentExchangeCard({
+        direction: 'received',
+        counterpartName: request.source.botName || request.source.chatName,
+      }),
+    });
+  }
+}
+
+export function receiveManualInput(request: ManualInputRequest): void {
+  enqueueManualInput(request, true);
+}
+
+export async function sendAgentMessageFromBinding(
+  sourceBindingId: string,
+  instruction: AgentSendInstruction,
+): Promise<void> {
+  const { store } = getBridgeContext();
+  const sourceBinding = store.listChannelChats().find((candidate) => candidate.id === sourceBindingId);
+  if (!sourceBinding) throw new Error(`来源群聊不存在：${sourceBindingId}`);
+  const sourceAdapter = getState().adapters.get(sourceBinding.channelType);
+  if (!sourceAdapter?.isRunning()) throw new Error(`来源群聊通道未运行：${sourceBinding.channelType}`);
+  const source = sourceMetadataForBinding({
+    store,
+    codelarkHome: CODELARK_HOME,
+    binding: sourceBinding,
+    botName: sourceAdapter.getBotDisplayName(),
+  });
+  const sourceAddress = channelAddressFromBinding({
+    ...sourceBinding,
+    chatDisplayName: source.chatName,
+  });
+  const legacyTarget = typeof instruction.target === 'string'
+    ? instruction.target.trim().toLocaleLowerCase()
+    : '';
+  if (legacyTarget === 'current' || legacyTarget === 'self') {
+    enqueueManualInput({
+      targetInternalChatId: sourceBinding.id,
+      text: instruction.text,
+      source,
+    }, false);
+    return;
+  }
+  try {
+    const target = await deliverManualInput({
+      target: instruction.target,
+      text: instruction.text,
+      source,
+      codelarkHome: instruction.codelarkHome,
+    });
+    enqueueBridgeNotice(sourceAdapter, sourceAddress, 'Agent 消息已发送', {
+      sessionId: sourceBinding.bridgeSessionId,
+      richCard: buildAgentExchangeCard({
+        direction: 'sent',
+        counterpartName: target.agentName || target.chatName,
+      }),
+    });
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    enqueueBridgeNotice(sourceAdapter, sourceAddress, 'Agent 消息发送失败', {
+      sessionId: sourceBinding.bridgeSessionId,
+      richCard: buildAgentExchangeCard({
+        direction: 'failed',
+        counterpartName: typeof instruction.target === 'string'
+          ? instruction.target
+          : instruction.target.chatName || instruction.target.botName || instruction.target.chatId || instruction.target.query || '目标群聊',
+        detail,
+      }),
+    });
+    throw error;
+  }
+}
+
 interface StartupChannelChatCheckIssue {
   channelType: string;
   channelAlias?: string;
@@ -2156,6 +2290,7 @@ const MIRROR_FEEDBACK = createMirrorFeedbackController({
   nowIso,
   eventBatchLimit: MIRROR_EVENT_BATCH_LIMIT,
   deliverResponse,
+  deliverManualInput: sendAgentMessageFromBinding,
 });
 
 function refreshMirrorStreamingStatus(
@@ -3630,6 +3765,7 @@ async function sendAgentMessageToSession(options: {
     deliverResponse: (targetAdapter, targetAddress, responseText, sessionId, _replyToMessageId, attachments) => (
       deliverResponse(targetAdapter, targetAddress, responseText, sessionId, undefined, attachments)
     ),
+    deliverManualInput: sendAgentMessageFromBinding,
     persistCodexThreadUpdate,
     reconcileMirrorSubscriptions,
     resolveSdkConversationRuntime: () => ({
@@ -4886,6 +5022,7 @@ async function handleMessage(
       releaseInteractiveTask: (sessionId, taskId) => INTERACTIVE_RUNTIME.releaseInteractiveTask(sessionId, taskId),
       releaseBridgeTurn: (sessionId, taskId) => TURN_COORDINATOR.releaseSessionTurn(sessionId, taskId),
       deliverResponse,
+      deliverManualInput: sendAgentMessageFromBinding,
       persistCodexThreadUpdate,
       reconcileMirrorSubscriptions,
       resolveSdkConversationRuntime: () => ({

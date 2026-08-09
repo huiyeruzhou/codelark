@@ -11,7 +11,7 @@ import {
 } from '../../../../bridge/mirror/feedback-controller.js';
 import { createMirrorSubscription } from '../../../../bridge/mirror/subscription-state.js';
 import { consumeMirrorRecords } from '../../../../bridge/mirror/turns.js';
-import type { InboundMessage, OutboundMessage, SendResult, StreamingHistoryItem, TaskProgressInfo, ToolCallInfo } from '../../../../domain/index.js';
+import type { InboundMessage, OutboundManualInput, OutboundMessage, SendResult, StreamingHistoryItem, TaskProgressInfo, ToolCallInfo } from '../../../../domain/index.js';
 import { JsonFileStore } from '../../../../storage/json-store.js';
 import { formatFooterClockTime } from '../../../../shared/progress/footer.js';
 
@@ -266,7 +266,7 @@ describe('mirror-feedback-controller', () => {
       type: 'message',
       role: 'assistant',
       content: [
-        '附件现在发送。',
+        '普通说明中的 `<clk-send>` 只是协议名称，必须完整显示。',
         '<clk-send>{"type":"file","path":"/tmp/visible.txt"}</clk-send>',
         '终态不重复。',
       ].join('\n'),
@@ -278,9 +278,9 @@ describe('mirror-feedback-controller', () => {
     const renderedText = renderedHistory
       .flatMap((item) => item.type === 'markdown' ? [item.content] : [])
       .join('\n');
-    assert.match(renderedText, /附件现在发送。/);
+    assert.match(renderedText, /普通说明中的 `<clk-send>` 只是协议名称，必须完整显示。/);
     assert.match(renderedText, /终态不重复。/);
-    assert.doesNotMatch(renderedText, /clk-send|visible\.txt/);
+    assert.doesNotMatch(renderedText, /visible\.txt/);
     assert.match(subscription.pendingTurn?.streamedText || '', /clk-send/);
   });
 
@@ -687,6 +687,100 @@ describe('mirror-feedback-controller', () => {
     assert.equal(adapter.sent[0]?.richCard?.title, '需要确认');
     assert.equal(adapter.sent[0]?.richCard?.form?.optionElementId, 'clk_choice');
     assert.equal(adapter.sent[0]?.richCard?.form?.inputLabel, '补充说明');
+  });
+
+  it('delivers clk-send and clk-input side effects after mirror stream finalization', async () => {
+    initBridgeContext({
+      store: new JsonFileStore(new Map()),
+      llm: {} as never,
+      permissions: { resolvePendingPermission: () => false },
+      lifecycle: {},
+    });
+    const adapter = new FakeMirrorFeishuAdapter();
+    const manualInputs: Array<{ sourceBindingId: string; target: OutboundManualInput['target']; text: string }> = [];
+    const baseMs = Date.parse('2026-05-14T00:00:00.000Z');
+    const controller = createMirrorFeedbackController({
+      getAdapter: () => adapter,
+      getThreadTitle: () => '测试线程',
+      nowIso: () => new Date(baseMs).toISOString(),
+      eventBatchLimit: 10,
+      deliverResponse: async () => ({ ok: true }),
+      deliverManualInput: async (sourceBindingId, input) => {
+        manualInputs.push({ sourceBindingId, target: input.target, text: input.text });
+      },
+    });
+    const subscription = createMirrorSubscription({
+      bindingId: 'binding-source',
+      sessionId: 'session-1',
+      channelType: 'feishu-default',
+      chatId: 'chat-1',
+      threadId: 'thread-1',
+      filePath: 'rollout.jsonl',
+      lastDeliveredAt: null,
+    });
+    const finalized = consumeMirrorRecords(subscription, [{
+      signature: 'complete-side-effects',
+      type: 'task_complete',
+      content: [
+        '<clk-send>{"msg_type":"text","content":{"text":"mirror hello"}}</clk-send>',
+        '<clk-input>{"target":"target-chat","text":"/stop"}</clk-input>',
+      ].join('\n'),
+      timestamp: new Date(baseMs).toISOString(),
+      turnId: 'turn-1',
+    }], controller.hooks);
+
+    await controller.deliverMirrorTurns(subscription, finalized);
+
+    assert.equal(adapter.streamEnds[0]?.status, 'completed');
+    assert.doesNotMatch(adapter.streamEnds[0]?.text || '', /clk-send|clk-input/u);
+    assert.deepEqual(adapter.sent.map((message) => message.platformMessage).filter(Boolean), [{
+      msgType: 'text',
+      content: { text: 'mirror hello' },
+    }]);
+    assert.deepEqual(manualInputs, [{ sourceBindingId: 'binding-source', target: 'target-chat', text: '/stop' }]);
+  });
+
+  it('does not replay earlier mirror side effects when a later action fails', async () => {
+    initBridgeContext({
+      store: new JsonFileStore(new Map()),
+      llm: {} as never,
+      permissions: { resolvePendingPermission: () => false },
+      lifecycle: {},
+    });
+    const adapter = new FakeMirrorFeishuAdapter();
+    const baseMs = Date.parse('2026-05-14T00:00:00.000Z');
+    const controller = createMirrorFeedbackController({
+      getAdapter: () => adapter,
+      getThreadTitle: () => '测试线程',
+      nowIso: () => new Date(baseMs).toISOString(),
+      eventBatchLimit: 10,
+      deliverResponse: async () => ({ ok: true }),
+      deliverManualInput: async () => { throw new Error('target bridge offline'); },
+    });
+    const subscription = createMirrorSubscription({
+      bindingId: 'binding-source',
+      sessionId: 'session-1',
+      channelType: 'feishu-default',
+      chatId: 'chat-1',
+      threadId: 'thread-1',
+      filePath: 'rollout.jsonl',
+      lastDeliveredAt: null,
+    });
+    const finalized = consumeMirrorRecords(subscription, [{
+      signature: 'complete-partial-failure',
+      type: 'task_complete',
+      content: [
+        '<clk-send>{"msg_type":"text","content":{"text":"send once"}}</clk-send>',
+        '<clk-input>{"target":"offline-target","text":"hello"}</clk-input>',
+      ].join('\n'),
+      timestamp: new Date(baseMs).toISOString(),
+      turnId: 'turn-1',
+    }], controller.hooks);
+
+    await controller.deliverMirrorTurns(subscription, finalized);
+
+    assert.equal(adapter.sent.filter((message) => message.platformMessage).length, 1);
+    assert.equal(subscription.lastDeliveredAt, new Date(baseMs).toISOString());
   });
 
   it('preserves clk ask question cards when mirror falls back to message delivery', async () => {

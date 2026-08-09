@@ -1,4 +1,4 @@
-import type { OutboundAttachment, OutboundQuestion } from '../../domain/index.js';
+import type { OutboundAttachment, OutboundManualInput, OutboundPlatformMessage, OutboundQuestion } from '../../domain/index.js';
 
 export type BridgeTurnKind =
   | 'im_sdk'
@@ -44,6 +44,8 @@ export interface FinalizedBridgeResponse {
   text: string;
   attachments: OutboundAttachment[];
   questions: OutboundQuestion[];
+  platformMessages: OutboundPlatformMessage[];
+  manualInputs: OutboundManualInput[];
   hasError?: boolean;
   errorMessage?: string;
   source: BridgeTurnFinalSource;

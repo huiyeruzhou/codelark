@@ -412,10 +412,15 @@ describe('service-manager startup config and daemon env', () => {
     const body = managerSource.slice(start, managerSource.indexOf('export async function stopBridge', start));
 
     assert.ok(body.indexOf('const startup = startupProjectionFor(options)') >= 0);
+    assert.ok(body.indexOf('refreshBundledCodeLarkSkill()') >= 0);
     assert.ok(body.indexOf('const current = getBridgeStatus()') >= 0);
     assert.ok(
       body.indexOf('const startup = startupProjectionFor(options)') < body.indexOf('const current = getBridgeStatus()'),
       'expected config migration snapshot before current-running return path',
+    );
+    assert.ok(
+      body.indexOf('refreshBundledCodeLarkSkill()') < body.indexOf('const current = getBridgeStatus()'),
+      'expected bundled skill refresh before current-running return path',
     );
   });
 
@@ -530,7 +535,6 @@ describe('service-manager Codex skill integration', () => {
       const names = result.skills.map((skill) => skill.name).sort();
       assert.deepEqual(names, [
         'codelark',
-        'codelark-question',
       ]);
       assert.deepEqual(result.externalSkills.map((skill) => skill.name), ['lark-doc']);
       assert.deepEqual(result.externalSkills[0]?.args, ['skills', 'add', 'larksuite/cli', '-s', 'lark-doc', '-y', '-g', '-a', 'claude-code']);
@@ -541,7 +545,7 @@ describe('service-manager Codex skill integration', () => {
       assert.equal(isCodexIntegrationInstalled(), true);
 
       const second = await installCodexIntegration({ externalSkillRunner: fakeExternalSkillRunner });
-      assert.equal(second.skills.every((skill) => skill.method === 'existing'), true);
+      assert.equal(second.skills.every((skill) => skill.method === 'updated'), true);
     } finally {
       if (previousCodexHome === undefined) delete process.env.CODEX_HOME;
       else process.env.CODEX_HOME = previousCodexHome;
@@ -563,11 +567,70 @@ describe('service-manager Codex skill integration', () => {
       assert.deepEqual(result.externalSkills.map((skill) => skill.name), ['lark-doc']);
       assert.equal(fs.existsSync(path.join(codexHome, 'skills', 'codelark', 'SKILL.md')), true);
       assert.equal(fs.existsSync(path.join(codexHome, 'skills', 'codelark-question', 'SKILL.md')), false);
-      assert.equal(isCodexIntegrationInstalled(), false);
+      assert.equal(isCodexIntegrationInstalled(), true);
 
       await assert.rejects(
         installCodexIntegration({ skillNames: ['unknown-skill'] }),
         /Unknown CodeLark skill/,
+      );
+    } finally {
+      if (previousCodexHome === undefined) delete process.env.CODEX_HOME;
+      else process.env.CODEX_HOME = previousCodexHome;
+      fs.rmSync(codexHome, { recursive: true, force: true });
+    }
+  });
+
+  it('refreshes the unified CodeLark skill and removes legacy split skills', async () => {
+    const previousCodexHome = process.env.CODEX_HOME;
+    const codexHome = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-codex-skill-upgrade-'));
+    process.env.CODEX_HOME = codexHome;
+
+    try {
+      const skillsDir = path.join(codexHome, 'skills');
+      fs.mkdirSync(path.join(skillsDir, 'codelark'), { recursive: true });
+      fs.writeFileSync(path.join(skillsDir, 'codelark', 'SKILL.md'), 'stale skill', 'utf8');
+      for (const name of ['codelark-question', 'codelark-auto']) {
+        fs.mkdirSync(path.join(skillsDir, name), { recursive: true });
+        fs.writeFileSync(path.join(skillsDir, name, 'SKILL.md'), 'legacy', 'utf8');
+      }
+
+      const result = await installCodexIntegration({
+        skillNames: ['codelark'],
+        skipExternalSkills: true,
+      });
+
+      assert.equal(result.skills[0]?.method, 'updated');
+      assert.match(fs.readFileSync(path.join(skillsDir, 'codelark', 'SKILL.md'), 'utf8'), /<clk-input>/u);
+      assert.equal(fs.existsSync(path.join(skillsDir, 'codelark-question')), false);
+      assert.equal(fs.existsSync(path.join(skillsDir, 'codelark-auto')), false);
+    } finally {
+      if (previousCodexHome === undefined) delete process.env.CODEX_HOME;
+      else process.env.CODEX_HOME = previousCodexHome;
+      fs.rmSync(codexHome, { recursive: true, force: true });
+    }
+  });
+
+  it('recovers a crashed skill backup and rejects a live concurrent installer', async () => {
+    const previousCodexHome = process.env.CODEX_HOME;
+    const codexHome = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-codex-skill-recovery-'));
+    process.env.CODEX_HOME = codexHome;
+
+    try {
+      const skillsDir = path.join(codexHome, 'skills');
+      const backupDir = path.join(skillsDir, '.codelark.backup-crashed');
+      fs.mkdirSync(backupDir, { recursive: true });
+      fs.writeFileSync(path.join(backupDir, 'SKILL.md'), 'recoverable old skill', 'utf8');
+
+      const recovered = await installCodexIntegration({ skillNames: ['codelark'], skipExternalSkills: true });
+      assert.equal(recovered.skills[0]?.method, 'updated');
+      assert.match(fs.readFileSync(path.join(skillsDir, 'codelark', 'SKILL.md'), 'utf8'), /<clk-input>/u);
+
+      const lockDir = path.join(skillsDir, '.codelark.install.lock');
+      fs.mkdirSync(lockDir);
+      fs.writeFileSync(path.join(lockDir, 'owner.json'), JSON.stringify({ pid: process.pid }), 'utf8');
+      await assert.rejects(
+        installCodexIntegration({ skillNames: ['codelark'], skipExternalSkills: true }),
+        /installation is already running/u,
       );
     } finally {
       if (previousCodexHome === undefined) delete process.env.CODEX_HOME;

@@ -14,11 +14,9 @@
   "type": "module",
   "files": [
     "dist/",
-    "agents/",
     "schemas/",
     "skills/",
     "scripts/",
-    "SKILL.md",
     "LICENSE",
     "README.md",
     "SECURITY.md"

@@ -38,6 +38,28 @@ export interface OutboundMessage {
   richCard?: OutboundRichCard;
   richCardUpdateMessageId?: string;
   replyToMessageId?: string;
+  platformMessage?: OutboundPlatformMessage;
+}
+
+export interface OutboundPlatformMessage {
+  msgType: string;
+  content: unknown;
+}
+
+export interface ManualInputTargetSelector {
+  query?: string;
+  chatId?: string;
+  chatName?: string;
+  botName?: string;
+  codelarkHome?: string;
+  runtime?: string;
+  runtimeStatus?: string;
+}
+
+export interface OutboundManualInput {
+  target: string | ManualInputTargetSelector;
+  text: string;
+  codelarkHome?: string;
 }
 
 export interface OutboundAttachment {

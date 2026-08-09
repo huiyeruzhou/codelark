@@ -262,6 +262,7 @@ class ScriptedSessionSimulator {
   readonly forwardedPermissions: Array<PermissionRequestInfo & { replyToMessageId?: string }> = [];
   readonly registeredBridgeTurns: ActiveBridgeTurn[] = [];
   readonly mirrorResetSessionIds: string[] = [];
+  readonly processedTexts: string[] = [];
   reconcileMirrorCount = 0;
   readonly address: InboundMessage['address'];
   resolveDisplayInfo?: (binding: ChannelChat) => {
@@ -323,6 +324,7 @@ class ScriptedSessionSimulator {
   async send(turn: {
     messageId: string;
     text: string;
+    modelText?: string;
     preparedPrompt?: string;
     steps: ScriptedTurnStep[];
     finalText: string;
@@ -336,7 +338,7 @@ class ScriptedSessionSimulator {
         text: turn.text,
         timestamp: Date.now(),
       },
-      turn.text,
+      turn.modelText || turn.text,
       undefined,
       {
         registerInteractiveTask: (task) => {
@@ -422,6 +424,7 @@ class ScriptedSessionSimulator {
           onPromptPrepared,
           options,
         ) => {
+          this.processedTexts.push(_text);
           onPromptPrepared?.(turn.preparedPrompt || turn.text);
           const effectiveAbortSignal = abortSignal || new AbortController().signal;
           const callbacks: ScriptedTurnCallbacks = {
@@ -510,6 +513,29 @@ stream_status_check_interval_seconds = 3
       if (previous === null) fs.rmSync(CONFIG_TOML_PATH, { force: true });
       else fs.writeFileSync(CONFIG_TOML_PATH, previous, 'utf-8');
     }
+  });
+
+  it('keeps model-only relay metadata out of user-visible stream history', async () => {
+    const simulator = new ScriptedSessionSimulator('chat-model-context');
+    const sourceXml = [
+      '<codelark_source>',
+      '来源群聊："来源群"',
+      '来源地址：chat_id="source-chat"',
+      '</codelark_source>',
+    ].join('\n');
+
+    await simulator.send({
+      messageId: 'incoming-model-context-1',
+      text: '请处理这条内部消息',
+      modelText: `请处理这条内部消息\n\n${sourceXml}`,
+      finalText: '处理完成',
+      steps: [],
+    });
+
+    assert.match(simulator.processedTexts[0] || '', /<codelark_source>/u);
+    const userHistory = (simulator.adapter.streamedHistories.at(-1) || [])
+      .find((item) => item.type === 'markdown' && item.role === 'user');
+    assert.equal(userHistory?.type === 'markdown' ? userHistory.content : '', '请处理这条内部消息');
   });
 
   it('simulates a basic dialogue turn with controlled tool, context, and stream-card checkpoints', async () => {

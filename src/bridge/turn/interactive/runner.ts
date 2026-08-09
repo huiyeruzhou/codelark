@@ -1,6 +1,7 @@
 import type {
   InboundMessage,
   OutboundAttachment,
+  OutboundManualInput,
   StreamingPreviewState,
 } from '../../../domain/index.js';
 import type { BaseChannelAdapter, StructuredStreamingUiSnapshot } from '../../../channels/contracts.js';
@@ -206,6 +207,7 @@ export interface RunInteractiveMessageDeps {
     replyToMessageId?: string,
     attachments?: OutboundAttachment[],
   ): Promise<unknown>;
+  deliverManualInput?(sourceBindingId: string, input: OutboundManualInput): Promise<void>;
   persistCodexThreadUpdate(
     sessionId: string,
     codexThreadId: string | null | undefined,
@@ -549,6 +551,9 @@ export async function runInteractiveMessage(
         sessionId: binding.bridgeSessionId,
         replyToMessageId: msg.messageId,
         deliverResponse: deps.deliverResponse,
+        deliverManualInput: deps.deliverManualInput
+          ? (input) => deps.deliverManualInput!(binding.id, input)
+          : undefined,
       }, deliveryResponse, {
         ...deliveryOptions,
         skipText: Boolean(deliveryOptions?.skipText) || (
@@ -601,8 +606,8 @@ export async function runInteractiveMessage(
 
   try {
     const promptText = text || (attachments && attachments.length > 0 ? DEFAULT_ATTACHMENT_PROMPT : '');
-    if (useInteractiveStreamUi && text.trim()) {
-      applyUnifiedTurnHistoryUserText(streamState, text);
+    if (useInteractiveStreamUi && msg.text.trim()) {
+      applyUnifiedTurnHistoryUserText(streamState, msg.text);
       streamUi.feedback.pushHistory(streamState.historyItems);
     }
 

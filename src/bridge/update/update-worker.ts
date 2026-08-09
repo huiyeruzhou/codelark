@@ -123,6 +123,9 @@ export async function runGlobalUpdateWorker(options: {
   const cliPath = path.join(globalRoot, 'codelark', 'dist', 'cli.mjs');
   if (!fs.existsSync(cliPath)) throw new Error(`updated CodeLark CLI was not found at ${cliPath}`);
 
+  console.log('[version-update] updating bundled CodeLark skill');
+  await run(process.execPath, [cliPath, 'install-skills', 'codelark']);
+
   console.log('[version-update] restarting CodeLark');
   await run(process.execPath, [cliPath, 'stop'], { allowFailure: true });
   await run(process.execPath, [cliPath, 'start']);

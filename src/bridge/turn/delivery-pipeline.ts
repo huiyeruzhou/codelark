@@ -1,8 +1,9 @@
 import type { BaseChannelAdapter } from '../../channels/contracts.js';
-import type { ChannelAddress, OutboundAttachment, OutboundQuestion, OutboundRichCard, SendResult } from '../../domain/index.js';
+import type { ChannelAddress, OutboundAttachment, OutboundManualInput, OutboundQuestion, OutboundRichCard, SendResult } from '../../domain/index.js';
 import {
   deliverResponse as defaultDeliverResponse,
 } from '../../channels/delivery/feedback.js';
+import { deliver } from '../../channels/delivery/deliver.js';
 import type { FinalizedBridgeResponse } from './turn-types.js';
 import { buildAgentQuestionCallbackData } from '../callbacks/agent-question.js';
 
@@ -22,6 +23,7 @@ export interface FinalResponseDeliveryContext {
   replyToMessageId?: string;
   deliverResponse?: DeliverResponseImpl;
   deliverText?: (text: string) => Promise<SendResult>;
+  deliverManualInput?: (input: OutboundManualInput) => Promise<void>;
 }
 
 export interface FinalResponseDeliveryOptions {
@@ -192,6 +194,36 @@ export async function deliverFinalResponse(
       replyToMessageId: context.replyToMessageId,
     });
     if (!lastResult.ok) return lastResult;
+  }
+
+  for (const platformMessage of response.platformMessages) {
+    lastResult = await deliver(context.adapter, {
+      address: context.address,
+      text: '',
+      platformMessage,
+      replyToMessageId: context.replyToMessageId,
+    }, { sessionId: context.sessionId });
+    if (!lastResult.ok) {
+      const detail = lastResult.error || 'unknown Feishu API error';
+      await deliver(context.adapter, {
+        address: context.address,
+        text: `飞书消息发送失败：${detail}`,
+        parseMode: 'plain',
+        replyToMessageId: context.replyToMessageId,
+      }, { sessionId: context.sessionId });
+      return lastResult;
+    }
+  }
+
+  for (const input of response.manualInputs) {
+    if (!context.deliverManualInput) {
+      return { ok: false, error: 'manual input delivery is unavailable' };
+    }
+    try {
+      await context.deliverManualInput(input);
+    } catch (error) {
+      return { ok: false, error: error instanceof Error ? error.message : String(error) };
+    }
   }
 
   return lastResult;

@@ -373,6 +373,8 @@ permission_mode = "plan"
             controller.enqueue(sseEvent('text', [
               'kimi reply',
               '<clk-send>{"type":"file","path":"/tmp/public.txt"}</clk-send>',
+              '<clk-send>{"msg_type":"text","content":{"text":"SDK text message"}}</clk-send>',
+              '<clk-input>{"target":"target-chat","text":"check status"}</clk-input>',
             ].join('\n')));
             controller.enqueue(sseEvent('result', {
               session_id: 'session_kimi_sdk_status_1',
@@ -439,6 +441,8 @@ permission_mode = "plan"
     assert.deepEqual(answerSnapshots, [[
       'kimi reply',
       '<clk-send>{"type":"file","path":"/tmp/public.txt"}</clk-send>',
+      '<clk-send>{"msg_type":"text","content":{"text":"SDK text message"}}</clk-send>',
+      '<clk-input>{"target":"target-chat","text":"check status"}</clk-input>',
     ].join('\n')]);
     assert.equal(answerSnapshots.some((answer) => answer.includes('/tmp/private.txt')), false);
     assert.deepEqual(result.outboundAttachments, [{
@@ -446,6 +450,14 @@ permission_mode = "plan"
       path: '/tmp/public.txt',
       caption: undefined,
       name: undefined,
+    }]);
+    assert.deepEqual(result.outboundPlatformMessages, [{
+      msgType: 'text',
+      content: { text: 'SDK text message' },
+    }]);
+    assert.deepEqual(result.outboundManualInputs, [{
+      target: 'target-chat',
+      text: 'check status',
     }]);
     assert.deepEqual(identities, [
       { runtime: 'kimi', sessionId: 'session_kimi_sdk_status_1', cwd: '/tmp/kimi-sdk' },

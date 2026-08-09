@@ -33,6 +33,7 @@ import {
 import { buildStreamContextTags, formatStreamTagLabel } from '../../shared/streaming-metadata.js';
 import {
   assembleCodexFinalResponse,
+  hasFinalResponsePayload,
   stripFinalOnlyBlocksFromStreamingHistory,
 } from '../turn/response-assembler.js';
 import {
@@ -43,6 +44,7 @@ import {
   deliverFinalResponse,
   type DeliverResponseImpl,
 } from '../turn/delivery-pipeline.js';
+import type { OutboundManualInput } from '../../domain/index.js';
 import {
   formatStreamRuntimeStatus,
   getStreamLastActivityAgeMs,
@@ -71,6 +73,7 @@ export interface MirrorFeedbackControllerDeps {
   nowIso(): string;
   eventBatchLimit: number;
   deliverResponse: DeliverResponseImpl;
+  deliverManualInput?(sourceBindingId: string, input: OutboundManualInput): Promise<void>;
 }
 
 export interface MirrorFeedbackController {
@@ -481,10 +484,12 @@ export function createMirrorFeedbackController(
       ? streamedArtifactDelivery.withoutDelivered(rawFinalResponse.attachments)
       : rawFinalResponse.attachments;
     const questions = rawFinalResponse.questions;
+    const platformMessages = rawFinalResponse.platformMessages;
+    const manualInputs = rawFinalResponse.manualInputs;
     const cleanTurnText = terminalStatus === 'error'
       ? appendTerminalErrorText(rawFinalResponse.text, turn.errorText)
       : rawFinalResponse.text;
-    if (attachments.length > 0 || questions.length > 0) {
+    if (attachments.length > 0 || questions.length > 0 || platformMessages.length > 0 || manualInputs.length > 0) {
       console.log('[bridge-manager] Mirror final artifacts parsed:', {
         bindingId: subscription.bindingId,
         sessionId: subscription.sessionId,
@@ -492,6 +497,8 @@ export function createMirrorFeedbackController(
         turnSignature: turn.signature,
         attachmentCount: attachments.length,
         questionCount: questions.length,
+        platformMessageCount: platformMessages.length,
+        manualInputCount: manualInputs.length,
         inputQuestionCount: questions.filter((question) => Boolean(question.input)).length,
       });
     }
@@ -550,7 +557,7 @@ export function createMirrorFeedbackController(
           streamFinalizeText,
         );
         if (finalized) {
-          if (attachments.length > 0 || questions.length > 0) {
+          if (attachments.length > 0 || questions.length > 0 || platformMessages.length > 0 || manualInputs.length > 0) {
             console.log('[bridge-manager] Mirror final artifact delivery after stream finalize:', {
               bindingId: subscription.bindingId,
               sessionId: subscription.sessionId,
@@ -559,6 +566,8 @@ export function createMirrorFeedbackController(
               streamMessageId,
               attachmentCount: attachments.length,
               questionCount: questions.length,
+              platformMessageCount: platformMessages.length,
+              manualInputCount: manualInputs.length,
               inputQuestionCount: questions.filter((question) => Boolean(question.input)).length,
             });
             const artifactResult = await deliverFinalResponse(
@@ -568,12 +577,24 @@ export function createMirrorFeedbackController(
                 sessionId: subscription.sessionId,
                 replyToMessageId: streamMessageId,
                 deliverResponse: deps.deliverResponse,
+                deliverManualInput: deps.deliverManualInput
+                  ? (input) => deps.deliverManualInput!(subscription.bindingId, input)
+                  : undefined,
               },
-              assembleCodexFinalResponse({ attachments, questions }),
+              assembleCodexFinalResponse({ attachments, questions, platformMessages, manualInputs }),
               { skipText: true },
             );
             if (!artifactResult.ok) {
-              throw new Error(artifactResult.error || 'mirror artifact delivery failed');
+              console.warn('[bridge-manager] Mirror final artifact delivery failed after stream finalization:', {
+                bindingId: subscription.bindingId,
+                sessionId: subscription.sessionId,
+                chatId: subscription.chatId,
+                turnSignature: turn.signature,
+                error: artifactResult.error || 'mirror artifact delivery failed',
+              });
+              subscription.lastDeliveredAt = turn.timestamp || deps.nowIso();
+              streamingArtifacts.delete(turn.streamKey);
+              return;
             }
             console.log('[bridge-manager] Mirror final artifact delivery completed:', {
               bindingId: subscription.bindingId,
@@ -596,9 +617,11 @@ export function createMirrorFeedbackController(
       text,
       attachments,
       questions,
+      platformMessages,
+      manualInputs,
     });
 
-    if (!finalResponse.text && finalResponse.attachments.length === 0 && finalResponse.questions.length === 0) {
+    if (!hasFinalResponsePayload(finalResponse)) {
       streamingArtifacts.delete(turn.streamKey);
       return;
     }
@@ -608,6 +631,9 @@ export function createMirrorFeedbackController(
       address,
       sessionId: subscription.sessionId,
       deliverResponse: deps.deliverResponse,
+      deliverManualInput: deps.deliverManualInput
+        ? (input) => deps.deliverManualInput!(subscription.bindingId, input)
+        : undefined,
       deliverText: async (messageText) => deliver(adapter, {
         address,
         text: messageText,

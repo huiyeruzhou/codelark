@@ -6,8 +6,7 @@ set -euo pipefail
 #   bash scripts/install-codex-skills.sh [--link] [skill ...]
 #
 # If no skill name is provided, all default skills are installed. Supported names:
-#   codelark              IM attachment send-back skill
-#   codelark-question     explicit question-card skill
+#   codelark              unified CodeLark messaging and automation skill
 #   lark-doc              official Lark document skill from larksuite/cli
 #
 # --link only symlinks the primary package skill for local development.
@@ -33,7 +32,7 @@ for arg in "$@"; do
 done
 
 if [ "${#REQUESTED_SKILLS[@]}" -eq 0 ]; then
-  REQUESTED_SKILLS=(codelark codelark-question lark-doc)
+  REQUESTED_SKILLS=(codelark lark-doc)
 fi
 
 echo "Installing CodeLark skills..."
@@ -45,7 +44,7 @@ mkdir -p "$CODEX_SKILLS_DIR"
 
 skill_source_dir() {
   case "$1" in
-    codelark|codelark-question)
+    codelark)
       printf '%s\n' "$SOURCE_DIR/skills/$1"
       ;;
     lark-doc)
@@ -53,7 +52,7 @@ skill_source_dir() {
       ;;
     *)
       echo "Error: unknown skill '$1'" >&2
-      echo "Supported skills: codelark codelark-question lark-doc" >&2
+      echo "Supported skills: codelark lark-doc" >&2
       exit 1
       ;;
   esac
@@ -67,18 +66,19 @@ install_skill_dir() {
     echo "Error: SKILL.md not found in $source_dir"
     exit 1
   fi
-  if [ -e "$target_dir" ]; then
-    if [ -L "$target_dir" ]; then
-      local existing
-      existing=$(readlink "$target_dir")
-      echo "Already installed: $name -> $existing"
-    else
-      echo "Already installed: $target_dir"
-    fi
-    return
+  local temporary_dir="${target_dir}.install.$$"
+  local backup_dir="${target_dir}.backup.$$"
+  rm -rf "$temporary_dir" "$backup_dir"
+  cp -R "$source_dir" "$temporary_dir"
+  if [ -e "$target_dir" ] || [ -L "$target_dir" ]; then
+    mv "$target_dir" "$backup_dir"
+    mv "$temporary_dir" "$target_dir"
+    rm -rf "$backup_dir"
+    echo "Updated $name at: $target_dir"
+  else
+    mv "$temporary_dir" "$target_dir"
+    echo "Copied $name to: $target_dir"
   fi
-  cp -R "$source_dir" "$target_dir"
-  echo "Copied $name to: $target_dir"
 }
 
 for skill in "${REQUESTED_SKILLS[@]}"; do
@@ -101,22 +101,11 @@ for skill in "${REQUESTED_SKILLS[@]}"; do
   fi
 done
 
-TARGET_DIR="$CODEX_SKILLS_DIR/codelark"
-if [[ " ${REQUESTED_SKILLS[*]} " == *" codelark "* ]] && [ "$LINK_PRIMARY" -eq 0 ]; then
-  if [ ! -d "$TARGET_DIR/node_modules" ] || [ ! -d "$TARGET_DIR/node_modules/@openai/codex-sdk" ]; then
-    echo "Installing dependencies for codelark..."
-    (cd "$TARGET_DIR" && npm install)
-  fi
-
-  if [ ! -f "$TARGET_DIR/dist/daemon.mjs" ]; then
-    echo "Building daemon bundle for codelark..."
-    (cd "$TARGET_DIR" && npm run build)
-  fi
-
-  echo "Pruning dev dependencies for codelark..."
-  (cd "$TARGET_DIR" && npm prune --production)
+if [[ " ${REQUESTED_SKILLS[*]} " == *" codelark "* ]]; then
+  rm -rf "$CODEX_SKILLS_DIR/codelark-question" "$CODEX_SKILLS_DIR/codelark-auto"
 fi
 
+TARGET_DIR="$CODEX_SKILLS_DIR/codelark"
 if [ "$LINK_PRIMARY" -eq 1 ]; then
   echo ""
   echo "Development mode: no install/build/prune steps were run against the source repo."

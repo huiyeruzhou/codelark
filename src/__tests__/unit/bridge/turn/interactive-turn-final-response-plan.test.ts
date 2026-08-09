@@ -50,6 +50,28 @@ describe('interactive-turn final-response-plan', () => {
     ]);
   });
 
+  it('keeps SDK platform messages and manual inputs after their control blocks leave visible text', () => {
+    const platformMessage = { msgType: 'text', content: { text: 'hello' } };
+    const manualInput = { target: 'target-chat', text: 'check status' };
+    const plan = buildProcessFinalResponsePlan({
+      result: {
+        responseText: '',
+        outboundAttachments: [],
+        outboundPlatformMessages: [platformMessage],
+        outboundManualInputs: [manualInput],
+        hasError: false,
+        errorMessage: '',
+      },
+      terminal: null,
+      aborted: false,
+      formatErrorCard: (message) => `ERR:${message}`,
+    });
+
+    assert.equal(plan.cardText, '');
+    assert.deepEqual(plan.deliveryResponse?.platformMessages, [platformMessage]);
+    assert.deepEqual(plan.deliveryResponse?.manualInputs, [manualInput]);
+  });
+
   it('keeps fallback SDK errors deliverable even if a stream card finalizes', () => {
     const plan = buildProcessFinalResponsePlan({
       result: {

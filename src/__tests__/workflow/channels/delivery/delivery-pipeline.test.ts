@@ -121,6 +121,64 @@ describe('delivery-pipeline', () => {
     assert.deepEqual(calls, [{ text: '', attachmentCount: 1 }]);
   });
 
+  it('delivers official Feishu payloads and manual inputs as separate final actions', async () => {
+    const adapter = new FakeAdapter();
+    const sent: OutboundMessage[] = [];
+    const inputs: unknown[] = [];
+    adapter.send = async (message) => {
+      sent.push(message);
+      return { ok: true, messageId: `message-${sent.length}` };
+    };
+    const response = assembleSdkFinalResponse({
+      text: [
+        '<clk-send>{"msg_type":"text","content":{"text":"<at user_id=\\"ou_x\\">X</at> hello"}}</clk-send>',
+        '<clk-input>{"target":"target-chat","text":"/stop"}</clk-input>',
+      ].join('\n'),
+    });
+
+    const result = await deliverFinalResponse({
+      adapter,
+      address: { channelType: 'feishu-default', chatId: 'chat-source' },
+      sessionId: 'session-source',
+      deliverManualInput: async (input) => { inputs.push(input); },
+    }, response);
+
+    assert.equal(result.ok, true);
+    assert.deepEqual(sent.map((message) => message.platformMessage), [{
+      msgType: 'text',
+      content: { text: '<at user_id="ou_x">X</at> hello' },
+    }]);
+    assert.deepEqual(inputs, [{ target: 'target-chat', text: '/stop' }]);
+  });
+
+  it('reports a structured Feishu send failure back to the source chat', async () => {
+    const adapter = new FakeAdapter();
+    const sent: OutboundMessage[] = [];
+    adapter.send = async (message) => {
+      sent.push(message);
+      if (message.platformMessage) {
+        return { ok: false, error: 'code=230001; msg=invalid message; log_id=log-1' };
+      }
+      return { ok: true, messageId: 'diagnostic-message' };
+    };
+    const response = assembleSdkFinalResponse({
+      text: '<clk-send>{"msg_type":"text","content":{"text":"hello"}}</clk-send>',
+    });
+
+    const result = await deliverFinalResponse({
+      adapter,
+      address: { channelType: 'feishu-default', chatId: 'chat-source' },
+      sessionId: 'session-source',
+    }, response);
+
+    assert.equal(result.ok, false);
+    assert.match(result.error || '', /code=230001/u);
+    assert.equal(sent.length, 4);
+    assert.equal(sent.slice(0, 3).every((message) => message.platformMessage?.msgType === 'text'), true);
+    assert.deepEqual(sent[0]?.platformMessage, { msgType: 'text', content: { text: 'hello' } });
+    assert.match(sent[3]?.text || '', /飞书消息发送失败：code=230001; msg=invalid message; log_id=log-1/u);
+  });
+
   it('uses a custom text delivery path before sending attachments', async () => {
     const adapter = new FakeAdapter();
     const calls: string[] = [];

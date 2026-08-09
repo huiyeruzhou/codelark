@@ -10,7 +10,7 @@
 
 ## 表单
 
-通过 `codelark-question` skill，模型可以让 Bridge 生成飞书 CardKit 2.0 表单，而不只是按钮卡片。协议示例：
+通过统一的 `codelark` skill，模型可以让 Bridge 生成飞书 CardKit 2.0 表单，而不只是按钮卡片。协议示例：
 
 ```xml
 <clk-ask>{"question":"请选择发布策略","options":["灰度","全量"],"input":{"label":"补充说明","placeholder":"可留空"},"submitText":"提交","allowTextReply":true}</clk-ask>
