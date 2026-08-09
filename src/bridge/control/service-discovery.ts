@@ -282,7 +282,10 @@ async function discoverBridgeSessionsDetailed(options: {
     || (actual || '').toLocaleLowerCase() === expected.toLocaleLowerCase();
   return {
     sessions: results.flatMap((result) => result.sessions).filter((session) => (
-      exact(session.internalChatId, options.chatId)
+      (!options.chatId
+        || exact(session.bridgeSessionId, options.chatId)
+        || exact(session.internalChatId, options.chatId)
+        || exact(session.platformChatId, options.chatId))
       && exact(session.chatName, options.chatName)
       && exact(session.agentName, options.botName)
       && exact(session.runtime, options.runtime)
@@ -317,31 +320,37 @@ export async function deliverManualInput(options: {
   const candidates = discovery.sessions;
   const normalized = legacyTarget.toLocaleLowerCase();
   const legacyExact = legacyTarget
-    ? candidates.filter((item) => [item.internalChatId, item.bridgeSessionId, item.chatName, item.agentName]
+    ? candidates.filter((item) => [
+        item.bridgeSessionId,
+        item.internalChatId,
+        item.platformChatId,
+        item.chatName,
+        item.agentName,
+      ]
         .some((value) => value.toLocaleLowerCase() === normalized))
     : [];
   const matched = legacyExact.length > 0 ? legacyExact : candidates;
   const selectorLabel = typeof options.target === 'string'
     ? options.target
-    : JSON.stringify({
-        ...(options.target.chatId ? { chat_id: options.target.chatId } : {}),
-        ...(options.target.chatName ? { chat_name: options.target.chatName } : {}),
-        ...(options.target.botName ? { bot_name: options.target.botName } : {}),
-        ...(selector.codelarkHome ? { codelark_home: selector.codelarkHome } : {}),
-        ...(options.target.runtime ? { runtime: options.target.runtime } : {}),
-        ...(options.target.runtimeStatus ? { runtime_status: options.target.runtimeStatus } : {}),
-        ...(options.target.query ? { query: options.target.query } : {}),
-      });
+    : [
+        options.target.chatId ? `目标=${options.target.chatId}` : '',
+        options.target.chatName ? `群聊=${options.target.chatName}` : '',
+        options.target.botName ? `Bot=${options.target.botName}` : '',
+        selector.codelarkHome ? `Home=${selector.codelarkHome}` : '',
+        options.target.runtime ? `Runtime=${options.target.runtime}` : '',
+        options.target.runtimeStatus ? `状态=${options.target.runtimeStatus}` : '',
+        options.target.query ? `关键词=${options.target.query}` : '',
+      ].filter(Boolean).join('，');
   if (matched.length === 0 && discovery.failures.length > 0) {
     const detail = discovery.failures
       .map((failure) => `${failure.codelarkHome} (${failure.error})`)
       .join(', ');
     throw new Error(`目标 Bridge 暂时无法访问：${detail}`);
   }
-  if (matched.length === 0) throw new Error(`没有找到目标群聊：${selectorLabel}`);
+  if (matched.length === 0) throw new Error(`没有找到目标：${selectorLabel}`);
   if (matched.length > 1) {
     const candidatesLabel = matched
-      .map((item) => `${item.chatName} (${item.agentName}, ${item.codelarkHome}, ${item.internalChatId})`)
+      .map((item) => `${item.chatName} (${item.agentName}, target=${item.bridgeSessionId}, ${item.codelarkHome})`)
       .join('；');
     throw new Error(`目标群聊不唯一：${selectorLabel}。候选：${candidatesLabel}`);
   }

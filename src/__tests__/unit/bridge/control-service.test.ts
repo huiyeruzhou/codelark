@@ -154,10 +154,7 @@ describe('bridge control service', () => {
     };
 
     const target = await deliverManualInput({
-      target: {
-        chatId: 'target-internal',
-        codelarkHome: path.join(root, 'target-home'),
-      },
+      target: 'target-bridge',
       text: '  /stop\n',
       source,
       discoveryDirectory: directory,
@@ -165,24 +162,38 @@ describe('bridge control service', () => {
 
     assert.equal(target.chatName, '目标群');
     assert.deepEqual(received, [{ targetInternalChatId: 'target-internal', text: '  /stop\n', source }]);
-    for (const nonCanonicalId of ['oc_target', 'target-bridge']) {
-      await assert.rejects(
-        deliverManualInput({
-          target: {
-            chatId: nonCanonicalId,
-            codelarkHome: path.join(root, 'target-home'),
-          },
-          text: '不得把非 canonical ID 当成 chat_id',
-          source,
-          discoveryDirectory: directory,
-        }),
-        /没有找到目标群聊/u,
-      );
+    const targetByVisiblePrefix = await deliverManualInput({
+      target: 'target-bri',
+      text: '卡片显示的唯一前缀也可解析',
+      source,
+      discoveryDirectory: directory,
+    });
+    assert.equal(targetByVisiblePrefix.bridgeSessionId, 'target-bridge');
+    for (const compatibleTarget of ['target-internal', 'oc_target']) {
+      const resolved = await deliverManualInput({
+        target: compatibleTarget,
+        text: `字符串 target 兼容 ${compatibleTarget}`,
+        source,
+        discoveryDirectory: directory,
+      });
+      assert.equal(resolved.bridgeSessionId, 'target-bridge');
+    }
+    for (const compatibleId of ['target-bridge', 'target-internal', 'oc_target']) {
+      const compatibilityTarget = await deliverManualInput({
+        target: {
+          chatId: compatibleId,
+          codelarkHome: path.join(root, 'target-home'),
+        },
+        text: `兼容既有身份 ${compatibleId}`,
+        source,
+        discoveryDirectory: directory,
+      });
+      assert.equal(compatibilityTarget.bridgeSessionId, 'target-bridge');
     }
     assert.match(formatAgentSourceXml(source), /来源群聊："来源\\u003c&群"/u);
-    assert.match(formatAgentSourceXml(source), /来源地址：chat_id="source-internal"/u);
+    assert.match(formatAgentSourceXml(source), /回复目标："source-bridge"/u);
     assert.equal(formatAgentSourceXml(source).split('\n').length, 5);
-    assert.doesNotMatch(formatAgentSourceXml(source), /bridge_id|platform_chat_id/u);
+    assert.doesNotMatch(formatAgentSourceXml(source), /source-internal|codelark_home|platform_chat_id/u);
   });
 
   it('rejects an ambiguous name unless a CodeLark home disambiguates it', async () => {

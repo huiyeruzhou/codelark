@@ -520,7 +520,7 @@ stream_status_check_interval_seconds = 3
     const sourceXml = [
       '<codelark_source>',
       '来源群聊："来源群"',
-      '来源地址：chat_id="source-chat"',
+      '回复目标："source-session"',
       '</codelark_source>',
     ].join('\n');
 

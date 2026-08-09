@@ -139,7 +139,7 @@ describe('agent message manual ingress', () => {
     assert.match(inbound?.contextText || '', /来源群聊："来源群"/u);
     assert.match(inbound?.contextText || '', /来源 Bot："qaq"/u);
     assert.doesNotMatch(inbound?.contextText || '', /来源 Bot："来源群"/u);
-    assert.match(inbound?.contextText || '', new RegExp(`来源地址：chat_id="${source.id}"`, 'u'));
+    assert.match(inbound?.contextText || '', new RegExp(`回复目标："${source.bridgeSessionId}"`, 'u'));
     assert.deepEqual(adapter.sentMessages.map((message) => ({
       chatId: message.address.chatId,
       title: message.richCard?.title,
@@ -157,7 +157,7 @@ describe('agent message manual ingress', () => {
 
     await assert.rejects(
       sendAgentMessageFromBinding(source.id, { target: 'missing-target', text: 'hello' }),
-      /没有找到目标群聊/u,
+      /没有找到目标/u,
     );
     await _testOnlyWaitForDeliveryQueuesForTests(adapter);
     assert.equal(adapter.sentMessages.at(-1)?.address.chatId, 'oc_source');

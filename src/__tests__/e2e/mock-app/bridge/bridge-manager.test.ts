@@ -235,7 +235,7 @@ describe('bridge-manager model prompt context', () => {
       [
         '<codelark_source>',
         '来源群聊："来源群"',
-        '来源地址：chat_id="source-chat"',
+        '回复目标："source-session"',
         '</codelark_source>',
       ].join('\n'),
     );
@@ -245,7 +245,7 @@ describe('bridge-manager model prompt context', () => {
       '',
       '<codelark_source>',
       '来源群聊："来源群"',
-      '来源地址：chat_id="source-chat"',
+      '回复目标："source-session"',
       '</codelark_source>',
     ].join('\n'));
   });

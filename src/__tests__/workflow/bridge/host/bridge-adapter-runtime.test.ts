@@ -54,7 +54,7 @@ describe('bridge-adapter-runtime', () => {
       messageId: 'manual-command',
       address: { channelType: adapter.channelType, chatId: 'target-chat' },
       text: '/stop',
-      contextText: '<codelark_source>\n来源地址：chat_id="source"\n</codelark_source>',
+      contextText: '<codelark_source>\n回复目标："source-session"\n</codelark_source>',
       timestamp: Date.now(),
     });
     adapter.enqueueManualInboundMessage({

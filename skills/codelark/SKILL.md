@@ -81,19 +81,19 @@ codelark sessions --query diffusion --json
 codelark sessions --home /home/user/.codelark --chat-name "project" --bot-name "reviewer" --runtime codex --json
 ```
 
-Filters are combined with AND. `--query` is fuzzy across fields; `--chat-id`, `--chat-name`, `--bot-name`, `--home`, `--runtime`, and `--status` are exact. `chat_id` is always the internal UUID returned by CodeLark; do not substitute a platform or bridge ID. If zero sessions match, report that. If multiple sessions match, refine the filters instead of guessing.
+Filters are combined with AND. `--query` is fuzzy across fields; `--target`, `--chat-name`, `--bot-name`, `--home`, `--runtime`, and `--status` are exact. JSON results contain one opaque `target` for each live session. If zero sessions match, report that. If multiple sessions match, refine the filters instead of guessing.
 
 Send ordinary text to another session's existing lane:
 
 ```text
-<clk-input>
-{"target":{"chat_id":"internal-chat-id","codelark_home":"/absolute/home"},"text":"请检查训练状态并回复我"}
-</clk-input>
+<clk-input>{"target":"target-from-codelark-sessions","text":"请检查训练状态并回复我"}</clk-input>
 ```
 
-The target selector also accepts `chat_name`, `bot_name`, `runtime`, and `query`; all supplied fields are combined with AND. CodeLark sends only after the selector resolves to exactly one live session. The target receives the text unchanged, so `/stop`, `/model`, and other commands keep their normal CodeLark meaning.
+Always copy `target` exactly from the one selected `codelark sessions --json` result. Do not construct it from a platform chat ID, card ID, Home path, or list position. CodeLark sends only after the target resolves to exactly one live session. The target receives the text unchanged, so `/stop`, `/model`, and other commands keep their normal CodeLark meaning.
 
-Incoming Agent messages include one `<codelark_source>` wrapper with readable source-chat, source-Bot, and one reply target. To reply, copy its exact `chat_id` and `codelark_home` into the target; do not substitute another ID. CodeLark submits the whole multiline message as one input and shows compact sent/received cards in both groups after the target Bridge accepts it.
+If the user already supplied an existing binding UUID, Feishu `oc_...` chat ID, or Bridge/session UUID, pass it unchanged as the same string `target`; the resolver accepts all three. Discovery still displays only the canonical Bridge/session UUID.
+
+Incoming Agent messages include one `<codelark_source>` wrapper with readable source-chat, source-Bot, and one `回复目标`. To reply, copy that value directly into the string `target`. CodeLark submits the whole multiline message as one input and shows compact sent/received cards in both groups after the target Bridge accepts it.
 
 ## Rules
 

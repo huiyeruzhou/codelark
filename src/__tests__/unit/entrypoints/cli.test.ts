@@ -51,6 +51,7 @@ describe('cli entrypoint', () => {
       '--bot-name', 'gamma',
       '--runtime', 'codex',
       '--status', 'idle',
+      '--target', 'bridge-1',
       '--query', 'diffusion',
       '--json',
     ]), {
@@ -62,6 +63,7 @@ describe('cli entrypoint', () => {
         botName: 'gamma',
         runtime: 'codex',
         runtimeStatus: 'idle',
+        chatId: 'bridge-1',
         query: 'diffusion',
       },
     });
@@ -84,7 +86,7 @@ describe('cli entrypoint', () => {
     }];
     assert.match(formatSessionsTable(sessions), /\[qaq\]diffusion-gamma-rl\tgamma\tcodex/u);
     assert.deepEqual(JSON.parse(formatSessionsJson(sessions)), [{
-      chat_id: 'chat-1',
+      target: 'bridge-1',
       chat_name: '[qaq]diffusion-gamma-rl',
       bot_name: 'gamma',
       codelark_home: '/srv/qaq',
@@ -93,7 +95,7 @@ describe('cli entrypoint', () => {
       cwd: '/workspace/gamma',
     }]);
     assert.match(buildSessionsHelpText(), /--chat-name/u);
-    assert.match(buildSessionsHelpText(), /精确内部聊天 ID/u);
+    assert.match(buildSessionsHelpText(), /发现结果中的 target/u);
   });
 
   it('parses config overrides before dispatching the command', () => {

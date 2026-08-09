@@ -308,6 +308,7 @@ export interface ParsedSessionSelectorCommand {
 
 const SESSION_SELECTOR_FLAGS: Record<string, keyof ManualInputTargetSelector> = {
   '--query': 'query',
+  '--target': 'chatId',
   '--chat-id': 'chatId',
   '--chat-name': 'chatName',
   '--bot-name': 'botName',
@@ -356,7 +357,8 @@ export function buildSessionsHelpText(): string {
     `Usage: ${PRIMARY_CLI_NAME} sessions [筛选条件] [--json]`,
     '',
     '筛选条件使用 AND 组合：',
-    '  --chat-id <ID>       精确内部聊天 ID',
+    '  --target <ID>        精确匹配发现结果中的 target',
+    '  --chat-id <ID>       兼容旧版 --target',
     '  --chat-name <名称>   精确群聊名',
     '  --bot-name <名称>    精确 Agent/Bot 名',
     '  --home <路径>        精确 CodeLark Home',
@@ -369,7 +371,7 @@ export function buildSessionsHelpText(): string {
 
 export function formatSessionsJson(sessions: DiscoveredBridgeSession[]): string {
   return JSON.stringify(sessions.map((session) => ({
-    chat_id: session.internalChatId,
+    target: session.bridgeSessionId,
     chat_name: session.chatName,
     bot_name: session.agentName,
     codelark_home: session.codelarkHome,
@@ -387,10 +389,10 @@ export function formatSessionsTable(sessions: DiscoveredBridgeSession[]): string
     session.runtime,
     session.runtimeStatus,
     session.codelarkHome,
-    session.internalChatId,
+    session.bridgeSessionId,
   ]);
   return [
-    ['群聊', 'Agent', 'Runtime', '状态', 'CodeLark Home', 'Chat ID'],
+    ['群聊', 'Agent', 'Runtime', '状态', 'CodeLark Home', 'Target'],
     ...rows,
   ].map((row) => row.join('\t')).join('\n') + '\n';
 }

@@ -61,7 +61,7 @@ codelark sessions --query diffusion
 codelark sessions --home /home/user/.codelark --chat-name "项目群" --bot-name "reviewer" --runtime codex --json
 ```
 
-`--chat-id`、`--chat-name`、`--bot-name`、`--home`、`--runtime`、`--status` 是精确筛选，多个条件按 AND 组合；`--query` 才是跨字段模糊匹配。默认输出可读表格，`--json` 供 skill 和自动化消费。`chat_id` 始终是 CodeLark 返回的内部 UUID；列表顺序不是身份。
+`--target`、`--chat-name`、`--bot-name`、`--home`、`--runtime`、`--status` 是精确筛选，多个条件按 AND 组合；`--query` 才是跨字段模糊匹配。默认输出可读表格，`--json` 供 skill 和自动化消费。每项结果只给一个可回填的 opaque `target`；列表顺序不是身份。
 
 当前没有单独配置 Agent/Bot 名时，`bot_name` 默认等于群聊名；它仍可与其他字段组合筛选，但不应被当作必然独立的身份字段。
 
@@ -69,13 +69,15 @@ codelark sessions --home /home/user/.codelark --chat-name "项目群" --bot-name
 
 ## Agent 之间发送普通输入
 
-模型使用目标内部 ID：
+模型先用 `codelark sessions` 找到唯一结果，再把其中的 `target` 原样回填：
 
 ```xml
-<clk-input>{"target":{"chat_id":"internal-chat-id","codelark_home":"/absolute/home"},"text":"请检查训练状态并回复我"}</clk-input>
+<clk-input>{"target":"target-from-codelark-sessions","text":"请检查训练状态并回复我"}</clk-input>
 ```
 
-目标对象可复合指定 `chat_id`、`chat_name`、`bot_name`、`codelark_home`、`runtime` 和 `query`，语义与 CLI 相同。目标 Bridge 明确接受后，源群出现“Agent 消息已发送”卡片，目标群出现“收到 Agent 消息”卡片；离线、无匹配或多匹配会在源群显示失败，不会假报成功。
+复合筛选只用于 CLI 发现阶段；发送阶段只使用唯一结果的 `target`，不再要求模型理解或拼接内部 binding、平台群 ID 和 CodeLark Home。目标 Bridge 明确接受后，源群出现“Agent 消息已发送”卡片，目标群出现“收到 Agent 消息”卡片；离线、无匹配或多匹配会在源群显示失败，不会假报成功。
+
+输出保持单一：discovery 只展示 canonical Bridge/session UUID。输入保持兼容：如果调用方已有 binding UUID、飞书 `oc_...` 群 ID 或 Bridge/session UUID，三者都可以原样作为同一个字符串 `target`；resolver 在内部统一收敛到当前 binding。
 
 目标 lane 收到的正文完全不变，因此普通 prompt 和 `/stop`、`/model` 等命令继续使用原分类。来源信息只用单层 XML 外壳划定边界，内部是易读文字；整段与用户多行正文一样作为一次输入提交：
 
@@ -83,11 +85,11 @@ codelark sessions --home /home/user/.codelark --chat-name "项目群" --bot-name
 <codelark_source>
 来源群聊："来源群"
 来源 Bot："qaq"
-来源地址：chat_id="内部 UUID"；codelark_home="/absolute/home"
+回复目标："opaque target"
 </codelark_source>
 ```
 
-字段值使用 JSON 字符串转义，并保护 XML 外壳终止符。目标模型需要向来源发送消息时，把 `chat_id` 和 `codelark_home` 原样放入 target；不会看到或使用 bridge/platform 辅助 ID。
+字段值使用 JSON 字符串转义，并保护 XML 外壳终止符。目标模型需要向来源发送消息时，把“回复目标”原样放入字符串 `target`；不会看到或使用 binding、platform 或 Home 辅助字段。
 这里的“来源 Bot”是发送通道从飞书 Bot 身份接口解析出的真实名称，不是群名或 session 的 `bot_name` 筛选别名。
 
 ## 安全边界
