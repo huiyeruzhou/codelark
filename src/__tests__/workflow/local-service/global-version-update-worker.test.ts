@@ -61,7 +61,7 @@ describe('global CodeLark version update worker', () => {
         ['npm', 'view', 'codelark', 'version', '--json'],
         ['npm', 'install', '-g', '--yes', 'codelark@9.9.10'],
         ['npm', 'root', '-g'],
-        ['codelark', 'install-skills', 'codelark'],
+        ['codelark', 'install-skills', 'codelark', 'condition-monitor'],
         ['codelark', 'stop'],
         ['codelark', 'start'],
       ]);

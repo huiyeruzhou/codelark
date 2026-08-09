@@ -194,6 +194,13 @@ async function main(): Promise<void> {
     handlers: {
       listSessions: bridgeManager.listActiveBridgeSessions,
       receiveInput: bridgeManager.receiveManualInput,
+      sendAgentInput: bridgeManager.receiveAgentInput,
+      sendPlatformMessage: bridgeManager.sendPlatformMessage,
+      conditionMonitors: {
+        create: bridgeManager.createConditionMonitor,
+        list: bridgeManager.listConditionMonitors,
+        cancel: bridgeManager.cancelConditionMonitor,
+      },
     },
   });
   console.log(`${LOG_PREFIX} Service discovery: ${controlService.discoveryDirectory}`);

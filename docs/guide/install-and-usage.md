@@ -73,12 +73,12 @@ codelark setup
 4. 按本机环境推荐默认 runtime。
 5. 选择默认工作目录。
 6. 可选设置飞书用户 open_id 白名单。
-7. 可选安装统一的 `codelark` skill 和官方 `lark-doc` skill。`codelark` 覆盖飞书消息、附件、问题卡片、自动化卡片和 Agent 通讯；官方 `lark-doc` 通过 `npx skills add ...` 单独安装，失败时不会影响 `codelark` 可用。
+7. 可选安装 `codelark`、`condition-monitor` 和官方 `lark-doc` skills。`codelark` 覆盖飞书消息、附件、问题卡片、自动化卡片和 Agent 通讯；`condition-monitor` 用于在外部条件满足时向指定群聊或 Agent 只发送一次通知；官方 `lark-doc` 通过 `npx skills add ...` 单独安装。
 
-`codelark` 是 CodeLark npm 包的一部分。向导首次安装它；无论使用 CodeLark 内置更新还是手工升级 npm 包，新版本都会在下一次 Bridge 启动时带锁刷新该 skill、恢复可能中断的旧备份，并清理 `codelark-question`、`codelark-auto` 拆分目录。手动刷新可运行：
+两个 CodeLark 内置 skills 都随 npm 包发布。向导首次安装它们；无论使用内置更新还是手工升级 npm 包，新版本都会在下一次 Bridge 启动时带锁刷新、恢复可能中断的旧备份，并清理 `codelark-question`、`codelark-auto` 旧目录。手动刷新可运行：
 
 ```bash
-codelark install-skills codelark
+codelark install-skills codelark condition-monitor
 ```
 
 配置完成后，向导会通过机器人信息接口获取当前 bot 的 `open_id`，并在终端结束页输出一个直接打开机器人私聊的飞书/Lark AppLink。该链接只展示给当前运行向导的用户，不会主动向 allowed users 群发教程。进入私聊后发送 `/new` 新建聊天，普通消息会透传给 agent；特殊键使用 `/tmux <C-c>`、`/tmux <Esc>` 或 `/tmux <Enter>`，卡住时可用 `/tmux-screen` 查看终端屏幕，并可把卡片标题栏的 Bridge ID 交给本地 Codex 排查。

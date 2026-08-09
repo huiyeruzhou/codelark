@@ -5685,6 +5685,7 @@ export class FeishuAdapter extends BaseChannelAdapter {
         message.platformMessage.msgType,
         content,
         message.replyToMessageId,
+        message.platformMessage.uuid,
       );
     }
 
@@ -6182,6 +6183,7 @@ export class FeishuAdapter extends BaseChannelAdapter {
     msgType: string,
     content: string,
     replyToMessageId?: string,
+    uuid?: string,
   ): Promise<SendResult> {
     try {
       const res = replyToMessageId
@@ -6195,6 +6197,7 @@ export class FeishuAdapter extends BaseChannelAdapter {
             receive_id: chatId,
             msg_type: msgType,
             content,
+            ...(uuid ? { uuid } : {}),
           },
         }));
 

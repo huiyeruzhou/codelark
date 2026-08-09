@@ -7,8 +7,13 @@ import path from 'node:path';
 import { afterEach, describe, it } from 'node:test';
 
 import {
+  cancelRemoteConditionMonitor,
+  createRemoteConditionMonitor,
+  deliverAgentInputFromSession,
   deliverManualInput,
+  deliverPlatformMessageToSession,
   discoverBridgeSessions,
+  listRemoteConditionMonitors,
   startBridgeControlService,
   type BridgeControlService,
 } from '../../../bridge/control/service-discovery.js';
@@ -194,6 +199,105 @@ describe('bridge control service', () => {
     assert.match(formatAgentSourceXml(source), /来源会话 ID："source-bridge"/u);
     assert.equal(formatAgentSourceXml(source).split('\n').length, 5);
     assert.doesNotMatch(formatAgentSourceXml(source), /source-internal|codelark_home|platform_chat_id/u);
+  });
+
+  it('delivers Agent input, visible Feishu cards, and stable monitor control over one target', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-monitor-control-test-'));
+    roots.push(root);
+    const directory = path.join(root, 'discovery');
+    const agentRequests: unknown[] = [];
+    const platformRequests: unknown[] = [];
+    const tasks: any[] = [];
+    services.push(await startBridgeControlService({
+      codelarkHome: path.join(root, 'home'),
+      runId: 'monitor-run',
+      discoveryDirectory: directory,
+      handlers: {
+        listSessions: () => [{
+          codelarkHome: path.join(root, 'home'),
+          internalChatId: 'internal-1',
+          platformChatId: 'oc_1',
+          bridgeSessionId: 'bridge-1',
+          chatName: '监控群',
+          agentName: 'qaq',
+          channelType: 'feishu',
+          runtime: 'codex',
+          runtimeStatus: 'idle',
+        }],
+        receiveInput: () => {},
+        sendAgentInput: (request) => { agentRequests.push(request); },
+        sendPlatformMessage: (request) => { platformRequests.push(request); },
+        conditionMonitors: {
+          create: (request) => {
+            const task = {
+              id: 'stable-task-id',
+              ...request,
+              label: request.label || 'monitor',
+              status: 'running' as const,
+              createdAt: '2026-08-09T00:00:00.000Z',
+              updatedAt: '2026-08-09T00:00:00.000Z',
+              checkedCount: 0,
+            };
+            tasks.push(task);
+            return task;
+          },
+          list: () => tasks,
+          cancel: (taskId) => {
+            const task = tasks.find((candidate) => candidate.id === taskId);
+            if (!task) return null;
+            task.status = 'cancelled';
+            return task;
+          },
+        },
+      },
+    }));
+
+    await deliverAgentInputFromSession({
+      source: 'bridge-1',
+      target: 'bridge-1',
+      text: '检查完成',
+      discoveryDirectory: directory,
+    });
+    await deliverPlatformMessageToSession({
+      target: 'bridge-1',
+      platformMessage: {
+        msgType: 'interactive',
+        content: { header: { template: 'green' } },
+      },
+      discoveryDirectory: directory,
+    });
+    const created = await createRemoteConditionMonitor({
+      owner: 'bridge-1',
+      scriptPath: path.join(root, 'monitor.py'),
+      pythonExecutable: 'python3',
+      intervalSeconds: 300,
+      timeoutSeconds: 60,
+      discoveryDirectory: directory,
+    });
+    assert.equal(created.id, 'stable-task-id');
+    assert.deepEqual(agentRequests, [{
+      sourceInternalChatId: 'internal-1',
+      target: 'bridge-1',
+      codelarkHome: path.join(root, 'home'),
+      text: '检查完成',
+    }]);
+    assert.deepEqual(platformRequests, [{
+      targetInternalChatId: 'internal-1',
+      platformMessage: { msgType: 'interactive', content: { header: { template: 'green' } } },
+    }]);
+    assert.equal((await listRemoteConditionMonitors({
+      owner: 'bridge-1',
+      discoveryDirectory: directory,
+    })).length, 1);
+    assert.equal((await listRemoteConditionMonitors({
+      ownerHome: path.join(root, 'home'),
+      discoveryDirectory: directory,
+    })).length, 1);
+    assert.equal((await cancelRemoteConditionMonitor({
+      codelarkHome: path.join(root, 'home'),
+      taskId: 'stable-task-id',
+      discoveryDirectory: directory,
+    })).status, 'cancelled');
   });
 
   it('rejects an ambiguous name unless a CodeLark home disambiguates it', async () => {

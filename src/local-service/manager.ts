@@ -813,7 +813,7 @@ export async function startBridge(options: ServiceConfigOverrideOptions = {}): P
   const startup = startupProjectionFor(options);
   const config = startup.config;
   try {
-    refreshBundledCodeLarkSkill();
+    refreshBundledCodeLarkSkills();
   } catch (error) {
     console.warn('[service-manager] Failed to refresh bundled CodeLark skill:', error instanceof Error ? error.message : error);
   }
@@ -1179,6 +1179,12 @@ export const BUNDLED_CODEX_SKILLS: BundledCodexSkill[] = [
     description: '发送飞书消息与附件、问题卡片、自动化卡片，以及向其他 CodeLark Agent 输入消息。',
     sourceDir: path.join(packageRoot, 'skills', PRIMARY_CODEX_SKILL_NAME),
   },
+  {
+    name: 'condition-monitor',
+    label: 'Condition Monitor',
+    description: '外部条件满足时向指定 CodeLark 群聊或 Agent 只发送一次消息。',
+    sourceDir: path.join(packageRoot, 'skills', 'condition-monitor'),
+  },
 ];
 
 export interface ExternalSkillDefinition {
@@ -1210,6 +1216,7 @@ export const INSTALLABLE_SKILLS = [
 
 const REQUIRED_CODEX_SKILL_NAMES = [
   PRIMARY_CODEX_SKILL_NAME,
+  'condition-monitor',
 ] as const;
 
 const LEGACY_CODELARK_SKILL_NAMES = ['codelark-question', 'codelark-auto'] as const;
@@ -1304,10 +1311,12 @@ function removeLegacyCodeLarkSkills(): void {
   }
 }
 
-function refreshBundledCodeLarkSkill(): void {
-  const skill = BUNDLED_CODEX_SKILLS.find((candidate) => candidate.name === PRIMARY_CODEX_SKILL_NAME);
-  if (!skill) throw new Error('Bundled CodeLark skill is unavailable.');
-  installBundledCodexSkill(skill);
+function refreshBundledCodeLarkSkills(): void {
+  for (const name of REQUIRED_CODEX_SKILL_NAMES) {
+    const skill = BUNDLED_CODEX_SKILLS.find((candidate) => candidate.name === name);
+    if (!skill) throw new Error(`Bundled CodeLark skill is unavailable: ${name}`);
+    installBundledCodexSkill(skill);
+  }
   removeLegacyCodeLarkSkills();
 }
 

@@ -9,6 +9,8 @@ import { pathToFileURL } from 'node:url';
 
 import {
   buildCliHelpText,
+  buildMonitorHelpText,
+  buildSendHelpText,
   buildSessionsHelpText,
   formatInstallSkillsRestartGuidance,
   formatRunSuccessMessage,
@@ -19,6 +21,8 @@ import {
   launchUiServerForRun,
   parseCliCommand,
   parseCliInvocation,
+  parseMonitorArgs,
+  parseSendArgs,
   parseSessionSelectorArgs,
   resolveRunningBridgeStartAction,
 } from '../../../entrypoints/cli.js';
@@ -41,7 +45,50 @@ describe('cli entrypoint', () => {
       command: 'sessions',
       args: ['--query', 'diffusion'],
     });
+    assert.deepEqual(parseCliCommand(['send', 'message']), { command: 'send', args: ['message'] });
+    assert.deepEqual(parseCliCommand(['monitor', 'list']), { command: 'monitor', args: ['list'] });
     assert.deepEqual(parseCliCommand(['open']), { command: 'run', args: [], rawCommand: 'open' });
+  });
+
+  it('parses Agent input and official Feishu message delivery', () => {
+    assert.deepEqual(parseSendArgs([
+      'agent', '--source', 'source-session', '--source-home', '/source',
+      '--target', 'target-session', '--home', '/target', '--text', '  multi\nline  ',
+      '--idempotency-key', 'monitor-uuid',
+    ]), {
+      mode: 'agent', source: 'source-session', sourceHome: '/source',
+      target: 'target-session', targetHome: '/target', text: '  multi\nline  ',
+      idempotencyKey: 'monitor-uuid',
+    });
+    assert.deepEqual(parseSendArgs([
+      'message', '--target', 'target-session', '--msg-type', 'interactive',
+      '--content', '{"header":{"template":"green"}}',
+    ]), {
+      mode: 'message', target: 'target-session', targetHome: undefined,
+      msgType: 'interactive', content: { header: { template: 'green' } },
+    });
+    assert.match(buildSendHelpText(), /msg_type \+ content/u);
+  });
+
+  it('parses stable condition monitor create, list, and cancel commands', () => {
+    assert.deepEqual(parseMonitorArgs([
+      'create', '--owner', 'owner-session', '--home', '/owner',
+      '--script', '/tmp/check.py', '--python', 'python3', '--label', 'Ray ready',
+    ]), {
+      action: 'create', owner: 'owner-session', ownerHome: '/owner',
+      scriptPath: path.resolve('/tmp/check.py'), pythonExecutable: 'python3', label: 'Ray ready',
+    });
+    assert.deepEqual(parseMonitorArgs(['list', '--owner', 'owner-session', '--json']), {
+      action: 'list', owner: 'owner-session', ownerHome: undefined, json: true,
+    });
+    assert.deepEqual(parseMonitorArgs(['list', '--home', '/owner', '--json']), {
+      action: 'list', owner: undefined, ownerHome: '/owner', json: true,
+    });
+    assert.deepEqual(parseMonitorArgs(['cancel', 'stable-id', '--home', '/owner']), {
+      action: 'cancel', codelarkHome: '/owner', taskId: 'stable-id',
+    });
+    assert.throws(() => parseMonitorArgs(['cancel', 'stable-id', '--owner', 'owner-session']), /未知选项/u);
+    assert.match(buildMonitorHelpText(), /stable-task-id/u);
   });
 
   it('parses one composite selector for listing and sending', () => {

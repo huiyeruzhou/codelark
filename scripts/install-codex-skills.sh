@@ -7,6 +7,7 @@ set -euo pipefail
 #
 # If no skill name is provided, all default skills are installed. Supported names:
 #   codelark              unified CodeLark messaging and automation skill
+#   condition-monitor     persistent one-shot external condition monitors
 #   lark-doc              official Lark document skill from larksuite/cli
 #
 # --link only symlinks the primary package skill for local development.
@@ -32,7 +33,7 @@ for arg in "$@"; do
 done
 
 if [ "${#REQUESTED_SKILLS[@]}" -eq 0 ]; then
-  REQUESTED_SKILLS=(codelark lark-doc)
+  REQUESTED_SKILLS=(codelark condition-monitor lark-doc)
 fi
 
 echo "Installing CodeLark skills..."
@@ -44,7 +45,7 @@ mkdir -p "$CODEX_SKILLS_DIR"
 
 skill_source_dir() {
   case "$1" in
-    codelark)
+    codelark|condition-monitor)
       printf '%s\n' "$SOURCE_DIR/skills/$1"
       ;;
     lark-doc)
@@ -52,7 +53,7 @@ skill_source_dir() {
       ;;
     *)
       echo "Error: unknown skill '$1'" >&2
-      echo "Supported skills: codelark lark-doc" >&2
+      echo "Supported skills: codelark condition-monitor lark-doc" >&2
       exit 1
       ;;
   esac

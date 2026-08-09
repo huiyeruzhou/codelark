@@ -2,7 +2,8 @@
 
 ## Unreleased
 
-- CodeLark 自有能力合并为单一 `codelark` skill，覆盖飞书消息、附件、问题卡片、自动化卡片和 Agent 通讯；setup wizard 默认安装，内置更新或手工 npm 升级后的 Bridge 首次启动都会自动刷新。
+- 新增独立 `condition-monitor` skill：根据用户描述生成只读 Python 条件脚本，false 时静默，true 时可向 Agent lane 或飞书文本/卡片发送一次通知并自动停止；任务使用稳定 UUID、持久保存并在 Bridge 重启后恢复。稳定 UUID 同时作为发送幂等键：飞书使用官方消息 `uuid`，Agent 输入使用持久 receipt，避免 Bridge 在发送完成与任务落盘之间重启造成重复通知。`codelark send` 与 `codelark monitor` 提供对应的脚本接口。
+- CodeLark 通用消息能力合并在 `codelark` skill，覆盖飞书消息、附件、问题卡片、自动化卡片和 Agent 通讯；条件监控使用职责单一的 `condition-monitor` skill。setup wizard 默认安装两者，内置更新或手工 npm 升级后的 Bridge 首次启动都会自动刷新。
 - `<clk-send>` 兼容飞书官方 `msg_type + content`，不内置易过期的类型白名单；文本在 SDK 与 tmux/mirror 路径都会实际发送，不再解析后静默丢失；图片和文件可通过 `local_path` 先上传，旧 `type + path` 继续兼容。
 - 所有运行中的 Bridge 注册到 Home 无关的本机服务发现目录。`codelark sessions` 可按 Home、群名、Bot 名、runtime、状态和关键词复合筛选，`<clk-input>` 复用同一目标选择器；群聊目录不会自动注入 prompt。来源 metadata 使用紧凑 XML，源群和目标群各有发送/接收卡片。
 

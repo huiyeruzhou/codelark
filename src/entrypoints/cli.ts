@@ -7,7 +7,15 @@ import { createInterface } from 'node:readline/promises';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import { resolveInstalledCodelarkVersion } from '../bridge/update/installed-version.js';
-import { discoverBridgeSessions } from '../bridge/control/service-discovery.js';
+import {
+  cancelRemoteConditionMonitor,
+  createRemoteConditionMonitor,
+  deliverAgentInputFromSession,
+  deliverPlatformMessageToSession,
+  discoverBridgeSessions,
+  listRemoteConditionMonitors,
+} from '../bridge/control/service-discovery.js';
+import { describeConditionMonitorScript } from '../bridge/automation/condition-monitor-script.js';
 import type { DiscoveredBridgeSession } from '../bridge/control/contracts.js';
 import type { ManualInputTargetSelector } from '../domain/index.js';
 import { CODELARK_HOME } from '../configuration/paths.js';
@@ -51,6 +59,8 @@ type CliCommand =
   | 'stop'
   | 'status'
   | 'sessions'
+  | 'send'
+  | 'monitor'
   | 'autostart'
   | 'uninstall'
   | 'version'
@@ -230,6 +240,8 @@ export function buildCliHelpText(): string {
     '  start                               只在后台启动 Bridge',
     '  status                              查看 UI、Bridge 和开机启动状态',
     '  sessions [筛选条件]                列出或复合筛选活跃群聊',
+    '  send <agent|message> ...           向 Agent lane 或群聊发送消息',
+    '  monitor <create|list|cancel> ...   管理持久条件监控',
     '  url                                 输出当前或上次记录的工作台地址',
     '  stop                                停止工作台 UI server 和 Bridge',
     '  autostart status                    查看 Windows Bridge 开机启动状态',
@@ -290,6 +302,8 @@ export function parseCliCommand(argv: string[]): ParsedCliCommand {
     case 'stop':
     case 'status':
     case 'sessions':
+    case 'send':
+    case 'monitor':
     case 'autostart':
     case 'uninstall':
       return { command: rawCommand, args };
@@ -408,6 +422,239 @@ export async function runSessionsCommand(
   }
   const sessions = await discover(options.selector);
   process.stdout.write(options.json ? formatSessionsJson(sessions) : formatSessionsTable(sessions));
+}
+
+function parseNamedArgs(args: string[]): { positional: string[]; values: Map<string, string>; flags: Set<string> } {
+  const positional: string[] = [];
+  const values = new Map<string, string>();
+  const flags = new Set<string>();
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index];
+    if (!arg.startsWith('--')) {
+      positional.push(arg);
+      continue;
+    }
+    const equalIndex = arg.indexOf('=');
+    const name = equalIndex >= 0 ? arg.slice(0, equalIndex) : arg;
+    const inlineValue = equalIndex >= 0 ? arg.slice(equalIndex + 1) : '';
+    const next = args[index + 1];
+    if (inlineValue) {
+      values.set(name, inlineValue);
+    } else if (next && !next.startsWith('--')) {
+      values.set(name, next);
+      index += 1;
+    } else {
+      flags.add(name);
+    }
+  }
+  return { positional, values, flags };
+}
+
+function requiredArg(values: Map<string, string>, name: string): string {
+  const value = values.get(name)?.trim();
+  if (!value) throw new Error(`${name} 需要参数。`);
+  return value;
+}
+
+function requiredTextArg(values: Map<string, string>, name: string): string {
+  const value = values.get(name);
+  if (value === undefined || !value.trim()) throw new Error(`${name} 需要参数。`);
+  return value;
+}
+
+function rejectUnknownNamedArgs(
+  parsed: ReturnType<typeof parseNamedArgs>,
+  allowedValues: string[],
+  allowedFlags: string[] = [],
+): void {
+  const allowedValueSet = new Set(allowedValues);
+  const allowedFlagSet = new Set(allowedFlags);
+  for (const name of parsed.values.keys()) {
+    if (!allowedValueSet.has(name)) throw new Error(`未知选项：${name}`);
+  }
+  for (const name of parsed.flags) {
+    if (!allowedFlagSet.has(name)) throw new Error(`未知或缺少参数的选项：${name}`);
+  }
+}
+
+export function buildSendHelpText(): string {
+  return [
+    `Usage: ${PRIMARY_CLI_NAME} send agent --source <target> --target <target> --text <message> [--source-home <path>] [--home <path>] [--idempotency-key <key>]`,
+    `       ${PRIMARY_CLI_NAME} send message --target <target> --msg-type <type> --content <json> [--home <path>] [--idempotency-key <key>]`,
+    '',
+    'agent 会把普通输入送入目标 Agent lane，并在源群与目标群显示发送/接收卡片。',
+    'message 会按飞书官方 msg_type + content 直接发送用户可见消息；text、post、interactive 与 @ 均由 content 表达。',
+  ].join('\n') + '\n';
+}
+
+export interface ParsedSendCommand {
+  mode: 'agent' | 'message';
+  source?: string;
+  sourceHome?: string;
+  target: string;
+  targetHome?: string;
+  text?: string;
+  msgType?: string;
+  content?: unknown;
+  idempotencyKey?: string;
+}
+
+export function parseSendArgs(args: string[]): ParsedSendCommand {
+  const parsed = parseNamedArgs(args);
+  const mode = parsed.positional[0];
+  if (mode !== 'agent' && mode !== 'message') throw new Error(buildSendHelpText().trim());
+  if (parsed.positional.length !== 1) throw new Error(buildSendHelpText().trim());
+  const target = requiredArg(parsed.values, '--target');
+  const targetHome = parsed.values.get('--home')?.trim() || undefined;
+  if (mode === 'agent') {
+    rejectUnknownNamedArgs(parsed, [
+      '--source', '--source-home', '--target', '--home', '--text', '--idempotency-key',
+    ]);
+    const idempotencyKey = parsed.values.get('--idempotency-key')?.trim();
+    return {
+      mode,
+      source: requiredArg(parsed.values, '--source'),
+      sourceHome: parsed.values.get('--source-home')?.trim() || undefined,
+      target,
+      targetHome,
+      text: requiredTextArg(parsed.values, '--text'),
+      ...(idempotencyKey ? { idempotencyKey } : {}),
+    };
+  }
+  rejectUnknownNamedArgs(parsed, [
+    '--target', '--home', '--msg-type', '--content', '--idempotency-key',
+  ]);
+  const rawContent = requiredArg(parsed.values, '--content');
+  let content: unknown;
+  try { content = JSON.parse(rawContent); }
+  catch { throw new Error('--content 必须是合法 JSON。'); }
+  const idempotencyKey = parsed.values.get('--idempotency-key')?.trim();
+  return {
+    mode,
+    target,
+    targetHome,
+    msgType: requiredArg(parsed.values, '--msg-type'),
+    content,
+    ...(idempotencyKey ? { idempotencyKey } : {}),
+  };
+}
+
+async function runSendCommand(args: string[]): Promise<void> {
+  if (args.includes('-h') || args.includes('--help')) {
+    process.stdout.write(buildSendHelpText());
+    return;
+  }
+  const command = parseSendArgs(args);
+  const target = command.mode === 'agent'
+    ? await deliverAgentInputFromSession({
+        source: command.source!,
+        sourceHome: command.sourceHome,
+        target: command.target,
+        targetHome: command.targetHome,
+        text: command.text!,
+        idempotencyKey: command.idempotencyKey,
+      })
+    : await deliverPlatformMessageToSession({
+        target: command.target,
+        codelarkHome: command.targetHome,
+        platformMessage: { msgType: command.msgType!, content: command.content },
+        idempotencyKey: command.idempotencyKey,
+      });
+  process.stdout.write(JSON.stringify({
+    ok: true,
+    target: target.bridgeSessionId,
+    chat_name: target.chatName,
+    delivery: command.mode,
+  }) + '\n');
+}
+
+export function buildMonitorHelpText(): string {
+  return [
+    `Usage: ${PRIMARY_CLI_NAME} monitor create --owner <target> --script <absolute.py> [--home <path>] [--python <command>] [--label <text>]`,
+    `       ${PRIMARY_CLI_NAME} monitor list [--owner <target>] [--home <path>] [--json]`,
+    `       ${PRIMARY_CLI_NAME} monitor cancel <stable-task-id> [--home <path>]`,
+    '',
+    '脚本 --describe 输出 interval_seconds/timeout_seconds；--tick 返回 1 表示未满足、0 表示已发送通知。',
+  ].join('\n') + '\n';
+}
+
+export type ParsedMonitorCommand =
+  | { action: 'create'; owner: string; ownerHome?: string; scriptPath: string; pythonExecutable: string; label?: string }
+  | { action: 'list'; owner?: string; ownerHome?: string; json: boolean }
+  | { action: 'cancel'; codelarkHome?: string; taskId: string };
+
+export function parseMonitorArgs(args: string[]): ParsedMonitorCommand {
+  const parsed = parseNamedArgs(args);
+  const action = parsed.positional[0];
+  const ownerHome = parsed.values.get('--home')?.trim() || undefined;
+  if (action === 'create') {
+    rejectUnknownNamedArgs(parsed, ['--owner', '--home', '--script', '--python', '--label']);
+    if (parsed.positional.length !== 1 || parsed.flags.size > 0) throw new Error(buildMonitorHelpText().trim());
+    const scriptPath = path.resolve(requiredArg(parsed.values, '--script'));
+    return {
+      action,
+      owner: requiredArg(parsed.values, '--owner'),
+      ownerHome,
+      scriptPath,
+      pythonExecutable: parsed.values.get('--python')?.trim() || (process.platform === 'win32' ? 'python' : 'python3'),
+      label: parsed.values.get('--label')?.trim() || undefined,
+    };
+  }
+  if (action === 'list') {
+    rejectUnknownNamedArgs(parsed, ['--owner', '--home'], ['--json']);
+    if (parsed.positional.length !== 1) throw new Error(buildMonitorHelpText().trim());
+    return {
+      action,
+      owner: parsed.values.get('--owner')?.trim() || undefined,
+      ownerHome,
+      json: parsed.flags.has('--json'),
+    };
+  }
+  if (action === 'cancel') {
+    rejectUnknownNamedArgs(parsed, ['--home']);
+    if (parsed.positional.length !== 2 || parsed.flags.size > 0) throw new Error(buildMonitorHelpText().trim());
+    const taskId = parsed.positional[1]?.trim();
+    if (!taskId) throw new Error('monitor cancel 需要稳定 task ID。');
+    return { action, codelarkHome: ownerHome, taskId };
+  }
+  throw new Error(buildMonitorHelpText().trim());
+}
+
+async function runMonitorCommand(args: string[]): Promise<void> {
+  if (args.includes('-h') || args.includes('--help')) {
+    process.stdout.write(buildMonitorHelpText());
+    return;
+  }
+  const command = parseMonitorArgs(args);
+  if (command.action === 'create') {
+    const description = await describeConditionMonitorScript({
+      pythonExecutable: command.pythonExecutable,
+      scriptPath: command.scriptPath,
+    });
+    const task = await createRemoteConditionMonitor({
+      owner: command.owner,
+      ownerHome: command.ownerHome,
+      label: command.label,
+      scriptPath: command.scriptPath,
+      pythonExecutable: command.pythonExecutable,
+      ...description,
+    });
+    process.stdout.write(JSON.stringify({ ok: true, task }, null, 2) + '\n');
+    return;
+  }
+  if (command.action === 'list') {
+    const tasks = await listRemoteConditionMonitors({ owner: command.owner, ownerHome: command.ownerHome });
+    if (command.json) process.stdout.write(JSON.stringify(tasks, null, 2) + '\n');
+    else process.stdout.write(tasks.length > 0
+      ? tasks.map((task) => `${task.id}\t${task.status}\t${task.label}\t${task.intervalSeconds}s`).join('\n') + '\n'
+      : '没有 condition monitor。\n');
+    return;
+  }
+  const task = await cancelRemoteConditionMonitor({
+    codelarkHome: command.codelarkHome,
+    taskId: command.taskId,
+  });
+  process.stdout.write(JSON.stringify({ ok: true, task }, null, 2) + '\n');
 }
 
 export function parseCliInvocation(argv: string[]): ParsedCliInvocation {
@@ -539,6 +786,16 @@ async function main(argv = process.argv.slice(2)): Promise<void> {
 
     case 'sessions': {
       await runSessionsCommand(parsed.args);
+      return;
+    }
+
+    case 'send': {
+      await runSendCommand(parsed.args);
+      return;
+    }
+
+    case 'monitor': {
+      await runMonitorCommand(parsed.args);
       return;
     }
 

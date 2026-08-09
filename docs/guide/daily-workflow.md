@@ -123,6 +123,15 @@ tmux 屏幕是最常用的观察入口。任务长时间运行、等待选择或
 - `/every`：按固定间隔复用当前会话发送输入。
 - 不带参数发送 `/then` 或 `/every`，可以查看、修改或取消已有任务。
 
+如果需求是“某个外部条件满足时，再向指定群聊或 Agent 通知一次”，直接用自然语言说明条件、轮询间隔、目标、通知内容、文本或卡片形态，以及是否需要 @。`condition-monitor` skill 会生成只读 Python 检测脚本：条件未满足时不产生聊天消息，也不反复调用模型；满足后通过 CodeLark 发送一次并自动停止。任务使用稳定 UUID，可跨 Bridge 重启恢复，不依赖卡片序号。
+
+本机排查时可使用：
+
+```bash
+codelark monitor list --home <codelark-home> --json
+codelark monitor cancel <stable-task-id> --home <codelark-home>
+```
+
 ## 常用功能速查
 
 | 使用优先级 | 目标 | 入口 |
@@ -133,7 +142,7 @@ tmux 屏幕是最常用的观察入口。任务长时间运行、等待选择或
 | 高 | 当前群开始新对话 | `/clear` |
 | 常用 | 接管本地已有会话 | `/t` |
 | 常用 | 切换 Codex、Claude、Kimi、Cursor | `/runtime` |
-| 常用 | 定时执行或完成后继续 | `/every`、`/then` |
+| 常用 | 定时执行、完成后继续或条件满足后通知 | `/every`、`/then`、`condition-monitor` skill |
 | 按需 | 重启本地 TUI | `/p tmux` |
 | 按需 | 停止任务、查看当前状态 | `/stop`、`/`、`/status` |
 | 按需 | 发送本地文件、查看历史 | `/file <path>`、`/his` |

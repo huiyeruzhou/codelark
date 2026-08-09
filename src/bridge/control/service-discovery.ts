@@ -4,8 +4,18 @@ import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 
-import type { ManualInputTargetSelector } from '../../domain/index.js';
-import type { AgentMessageSource, DiscoveredBridgeSession, ManualInputRequest } from './contracts.js';
+import { CODELARK_HOME } from '../../configuration/paths.js';
+import type { ManualInputTargetSelector, OutboundPlatformMessage } from '../../domain/index.js';
+import type { ConditionMonitorTask } from '../automation/condition-monitors.js';
+import type {
+  AgentInputRequest,
+  AgentMessageSource,
+  ConditionMonitorControlHandlers,
+  CreateConditionMonitorRequest,
+  DiscoveredBridgeSession,
+  ManualInputRequest,
+  PlatformMessageRequest,
+} from './contracts.js';
 
 export interface BridgeServiceDescriptor {
   version: 1;
@@ -25,7 +35,10 @@ export interface BridgeControlService {
 
 export interface BridgeControlHandlers {
   listSessions(query?: string): DiscoveredBridgeSession[];
-  receiveInput(request: ManualInputRequest): Promise<void> | void;
+  receiveInput(request: ManualInputRequest): Promise<boolean | void> | boolean | void;
+  sendAgentInput?(request: AgentInputRequest): Promise<void> | void;
+  sendPlatformMessage?(request: PlatformMessageRequest): Promise<void> | void;
+  conditionMonitors?: ConditionMonitorControlHandlers;
 }
 
 function userKey(): string {
@@ -133,7 +146,50 @@ function isManualInputRequest(value: unknown): value is ManualInputRequest {
     && Boolean(request.text.trim())
     && Boolean(source)
     && ['codelarkHome', 'internalChatId', 'platformChatId', 'bridgeSessionId', 'chatName', 'botName']
-      .every((key) => typeof source?.[key as keyof AgentMessageSource] === 'string');
+      .every((key) => typeof source?.[key as keyof AgentMessageSource] === 'string')
+    && (request.idempotencyKey === undefined || typeof request.idempotencyKey === 'string');
+}
+
+function isAgentInputRequest(value: unknown): value is AgentInputRequest {
+  if (!value || typeof value !== 'object') return false;
+  const request = value as Partial<AgentInputRequest>;
+  return typeof request.sourceInternalChatId === 'string'
+    && Boolean(request.sourceInternalChatId.trim())
+    && typeof request.text === 'string'
+    && Boolean(request.text.trim())
+    && (typeof request.target === 'string'
+      ? Boolean(request.target.trim())
+      : Boolean(request.target && typeof request.target === 'object'))
+    && (request.idempotencyKey === undefined || typeof request.idempotencyKey === 'string');
+}
+
+function isPlatformMessageRequest(value: unknown): value is PlatformMessageRequest {
+  if (!value || typeof value !== 'object') return false;
+  const request = value as Partial<PlatformMessageRequest>;
+  const message = request.platformMessage as Partial<OutboundPlatformMessage> | undefined;
+  return typeof request.targetInternalChatId === 'string'
+    && Boolean(request.targetInternalChatId.trim())
+    && typeof message?.msgType === 'string'
+    && Boolean(message.msgType.trim())
+    && message.content !== undefined
+    && (request.idempotencyKey === undefined || typeof request.idempotencyKey === 'string');
+}
+
+function isCreateConditionMonitorRequest(value: unknown): value is CreateConditionMonitorRequest {
+  if (!value || typeof value !== 'object') return false;
+  const request = value as Partial<CreateConditionMonitorRequest>;
+  return typeof request.ownerInternalChatId === 'string'
+    && Boolean(request.ownerInternalChatId.trim())
+    && typeof request.ownerBridgeSessionId === 'string'
+    && Boolean(request.ownerBridgeSessionId.trim())
+    && typeof request.scriptPath === 'string'
+    && (path.isAbsolute(request.scriptPath) || path.win32.isAbsolute(request.scriptPath))
+    && typeof request.pythonExecutable === 'string'
+    && Boolean(request.pythonExecutable.trim())
+    && Number.isInteger(request.intervalSeconds)
+    && Number(request.intervalSeconds) > 0
+    && Number.isInteger(request.timeoutSeconds)
+    && Number(request.timeoutSeconds) > 0;
 }
 
 export async function startBridgeControlService(options: {
@@ -164,8 +220,74 @@ export async function startBridgeControlService(options: {
           respond(response, 400, { ok: false, error: 'invalid manual input request' });
           return;
         }
-        await options.handlers.receiveInput(body);
+        const accepted = await options.handlers.receiveInput(body);
+        respond(response, 202, { ok: true, accepted: accepted !== false });
+        return;
+      }
+      if (request.method === 'POST' && url.pathname === '/v1/agent-input') {
+        if (!options.handlers.sendAgentInput) {
+          respond(response, 404, { ok: false, error: 'agent input is unavailable' });
+          return;
+        }
+        const body = await readJsonBody(request);
+        if (!isAgentInputRequest(body)) {
+          respond(response, 400, { ok: false, error: 'invalid agent input request' });
+          return;
+        }
+        await options.handlers.sendAgentInput(body);
         respond(response, 202, { ok: true, accepted: true });
+        return;
+      }
+      if (request.method === 'POST' && url.pathname === '/v1/platform-message') {
+        if (!options.handlers.sendPlatformMessage) {
+          respond(response, 404, { ok: false, error: 'platform message delivery is unavailable' });
+          return;
+        }
+        const body = await readJsonBody(request);
+        if (!isPlatformMessageRequest(body)) {
+          respond(response, 400, { ok: false, error: 'invalid platform message request' });
+          return;
+        }
+        await options.handlers.sendPlatformMessage(body);
+        respond(response, 200, { ok: true, sent: true });
+        return;
+      }
+      if (request.method === 'POST' && url.pathname === '/v1/condition-monitors') {
+        if (!options.handlers.conditionMonitors) {
+          respond(response, 404, { ok: false, error: 'condition monitors are unavailable' });
+          return;
+        }
+        const body = await readJsonBody(request);
+        if (!isCreateConditionMonitorRequest(body)) {
+          respond(response, 400, { ok: false, error: 'invalid condition monitor request' });
+          return;
+        }
+        const task = options.handlers.conditionMonitors.create(body);
+        respond(response, 201, { ok: true, task });
+        return;
+      }
+      if (request.method === 'GET' && url.pathname === '/v1/condition-monitors') {
+        if (!options.handlers.conditionMonitors) {
+          respond(response, 404, { ok: false, error: 'condition monitors are unavailable' });
+          return;
+        }
+        const owner = url.searchParams.get('owner') || undefined;
+        respond(response, 200, { ok: true, tasks: options.handlers.conditionMonitors.list(owner) });
+        return;
+      }
+      const cancelMatch = url.pathname.match(/^\/v1\/condition-monitors\/([^/]+)\/cancel$/u);
+      if (request.method === 'POST' && cancelMatch) {
+        if (!options.handlers.conditionMonitors) {
+          respond(response, 404, { ok: false, error: 'condition monitors are unavailable' });
+          return;
+        }
+        const taskId = decodeURIComponent(cancelMatch[1]);
+        const task = options.handlers.conditionMonitors.cancel(taskId);
+        if (!task) {
+          respond(response, 404, { ok: false, error: `condition monitor not found: ${taskId}` });
+          return;
+        }
+        respond(response, 200, { ok: true, task });
         return;
       }
       respond(response, 404, { ok: false, error: 'not found' });
@@ -299,6 +421,31 @@ export async function deliverManualInput(options: {
   target: string | ManualInputTargetSelector;
   text: string;
   source: AgentMessageSource;
+  idempotencyKey?: string;
+  codelarkHome?: string;
+  discoveryDirectory?: string;
+}): Promise<DiscoveredBridgeSession & { accepted: boolean }> {
+  const target = await resolveBridgeSessionTarget({
+    target: options.target,
+    codelarkHome: options.codelarkHome,
+    discoveryDirectory: options.discoveryDirectory,
+  });
+  const descriptor = descriptorForSession(target, options.discoveryDirectory);
+  const response = await requestDescriptor<{ accepted: boolean }>(descriptor, '/v1/input', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      targetInternalChatId: target.internalChatId,
+      text: options.text,
+      source: options.source,
+      idempotencyKey: options.idempotencyKey,
+    }),
+  });
+  return { ...target, accepted: response.accepted !== false };
+}
+
+export async function resolveBridgeSessionTarget(options: {
+  target: string | ManualInputTargetSelector;
   codelarkHome?: string;
   discoveryDirectory?: string;
 }): Promise<DiscoveredBridgeSession> {
@@ -354,14 +501,153 @@ export async function deliverManualInput(options: {
       .join('；');
     throw new Error(`目标群聊不唯一：${selectorLabel}。候选：${candidatesLabel}`);
   }
-  const target = matched[0];
-  const descriptor = readBridgeServiceDescriptors(options.discoveryDirectory)
+  return matched[0];
+}
+
+function descriptorForSession(
+  target: DiscoveredBridgeSession,
+  discoveryDirectory?: string,
+): BridgeServiceDescriptor {
+  const descriptor = readBridgeServiceDescriptors(discoveryDirectory)
     .find((item) => canonicalHome(item.codelarkHome) === canonicalHome(target.codelarkHome));
   if (!descriptor) throw new Error(`目标 Bridge 已离线：${target.codelarkHome}`);
-  await requestDescriptor(descriptor, '/v1/input', {
+  return descriptor;
+}
+
+function descriptorForHome(
+  codelarkHome = CODELARK_HOME,
+  discoveryDirectory?: string,
+): BridgeServiceDescriptor {
+  const requestedHome = canonicalHome(codelarkHome);
+  const descriptor = readBridgeServiceDescriptors(discoveryDirectory)
+    .find((item) => canonicalHome(item.codelarkHome) === requestedHome);
+  if (!descriptor) throw new Error(`目标 Bridge 已离线：${codelarkHome}`);
+  return descriptor;
+}
+
+export async function deliverAgentInputFromSession(options: {
+  source: string | ManualInputTargetSelector;
+  sourceHome?: string;
+  target: string | ManualInputTargetSelector;
+  targetHome?: string;
+  text: string;
+  idempotencyKey?: string;
+  discoveryDirectory?: string;
+}): Promise<DiscoveredBridgeSession> {
+  const source = await resolveBridgeSessionTarget({
+    target: options.source,
+    codelarkHome: options.sourceHome,
+    discoveryDirectory: options.discoveryDirectory,
+  });
+  const target = await resolveBridgeSessionTarget({
+    target: options.target,
+    codelarkHome: options.targetHome,
+    discoveryDirectory: options.discoveryDirectory,
+  });
+  const descriptor = descriptorForSession(source, options.discoveryDirectory);
+  await requestDescriptor(descriptor, '/v1/agent-input', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ targetInternalChatId: target.internalChatId, text: options.text, source: options.source }),
+    body: JSON.stringify({
+      sourceInternalChatId: source.internalChatId,
+      target: target.bridgeSessionId,
+      codelarkHome: target.codelarkHome,
+      text: options.text,
+      idempotencyKey: options.idempotencyKey,
+    }),
   });
   return target;
+}
+
+export async function deliverPlatformMessageToSession(options: {
+  target: string | ManualInputTargetSelector;
+  codelarkHome?: string;
+  platformMessage: OutboundPlatformMessage;
+  idempotencyKey?: string;
+  discoveryDirectory?: string;
+}): Promise<DiscoveredBridgeSession> {
+  const target = await resolveBridgeSessionTarget(options);
+  const descriptor = descriptorForSession(target, options.discoveryDirectory);
+  await requestDescriptor(descriptor, '/v1/platform-message', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      targetInternalChatId: target.internalChatId,
+      platformMessage: options.platformMessage,
+      idempotencyKey: options.idempotencyKey,
+    }),
+  }, 15_000);
+  return target;
+}
+
+export async function createRemoteConditionMonitor(options: {
+  owner: string | ManualInputTargetSelector;
+  ownerHome?: string;
+  label?: string;
+  scriptPath: string;
+  pythonExecutable: string;
+  intervalSeconds: number;
+  timeoutSeconds: number;
+  discoveryDirectory?: string;
+}): Promise<ConditionMonitorTask> {
+  const owner = await resolveBridgeSessionTarget({
+    target: options.owner,
+    codelarkHome: options.ownerHome,
+    discoveryDirectory: options.discoveryDirectory,
+  });
+  const descriptor = descriptorForSession(owner, options.discoveryDirectory);
+  const payload = await requestDescriptor<{ task: ConditionMonitorTask }>(descriptor, '/v1/condition-monitors', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      ownerInternalChatId: owner.internalChatId,
+      ownerBridgeSessionId: owner.bridgeSessionId,
+      label: options.label,
+      scriptPath: options.scriptPath,
+      pythonExecutable: options.pythonExecutable,
+      intervalSeconds: options.intervalSeconds,
+      timeoutSeconds: options.timeoutSeconds,
+    }),
+  });
+  return payload.task;
+}
+
+export async function listRemoteConditionMonitors(options: {
+  owner?: string | ManualInputTargetSelector;
+  ownerHome?: string;
+  discoveryDirectory?: string;
+}): Promise<ConditionMonitorTask[]> {
+  const owner = options.owner === undefined ? null : await resolveBridgeSessionTarget({
+    target: options.owner,
+    codelarkHome: options.ownerHome,
+    discoveryDirectory: options.discoveryDirectory,
+  });
+  const descriptor = owner
+    ? descriptorForSession(owner, options.discoveryDirectory)
+    : descriptorForHome(options.ownerHome, options.discoveryDirectory);
+  const payload = await requestDescriptor<{ tasks: ConditionMonitorTask[] }>(
+    descriptor,
+    owner
+      ? `/v1/condition-monitors?owner=${encodeURIComponent(owner.internalChatId)}`
+      : '/v1/condition-monitors',
+  );
+  return payload.tasks;
+}
+
+export async function cancelRemoteConditionMonitor(options: {
+  codelarkHome?: string;
+  taskId: string;
+  discoveryDirectory?: string;
+}): Promise<ConditionMonitorTask> {
+  const descriptor = descriptorForHome(options.codelarkHome, options.discoveryDirectory);
+  const payload = await requestDescriptor<{ task: ConditionMonitorTask }>(
+    descriptor,
+    `/v1/condition-monitors/${encodeURIComponent(options.taskId)}/cancel`,
+    {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: '{}',
+    },
+  );
+  return payload.task;
 }

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Condition Monitor"
+  short_description: "满足外部条件时向指定 CodeLark 群聊或 Agent 发送一次消息"
+  default_prompt: "Create a persistent read-only condition monitor that stays silent until the condition is met, sends one CodeLark message to the selected target, and then stops."

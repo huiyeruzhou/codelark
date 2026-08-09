@@ -44,6 +44,8 @@ export interface OutboundMessage {
 export interface OutboundPlatformMessage {
   msgType: string;
   content: unknown;
+  /** Official Feishu create-message UUID used for idempotent delivery. */
+  uuid?: string;
 }
 
 export interface ManualInputTargetSelector {

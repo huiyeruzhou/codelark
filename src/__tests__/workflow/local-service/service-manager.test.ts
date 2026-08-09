@@ -412,14 +412,14 @@ describe('service-manager startup config and daemon env', () => {
     const body = managerSource.slice(start, managerSource.indexOf('export async function stopBridge', start));
 
     assert.ok(body.indexOf('const startup = startupProjectionFor(options)') >= 0);
-    assert.ok(body.indexOf('refreshBundledCodeLarkSkill()') >= 0);
+    assert.ok(body.indexOf('refreshBundledCodeLarkSkills()') >= 0);
     assert.ok(body.indexOf('const current = getBridgeStatus()') >= 0);
     assert.ok(
       body.indexOf('const startup = startupProjectionFor(options)') < body.indexOf('const current = getBridgeStatus()'),
       'expected config migration snapshot before current-running return path',
     );
     assert.ok(
-      body.indexOf('refreshBundledCodeLarkSkill()') < body.indexOf('const current = getBridgeStatus()'),
+      body.indexOf('refreshBundledCodeLarkSkills()') < body.indexOf('const current = getBridgeStatus()'),
       'expected bundled skill refresh before current-running return path',
     );
   });
@@ -535,6 +535,7 @@ describe('service-manager Codex skill integration', () => {
       const names = result.skills.map((skill) => skill.name).sort();
       assert.deepEqual(names, [
         'codelark',
+        'condition-monitor',
       ]);
       assert.deepEqual(result.externalSkills.map((skill) => skill.name), ['lark-doc']);
       assert.deepEqual(result.externalSkills[0]?.args, ['skills', 'add', 'larksuite/cli', '-s', 'lark-doc', '-y', '-g', '-a', 'claude-code']);
@@ -560,12 +561,13 @@ describe('service-manager Codex skill integration', () => {
 
     try {
       const result = await installCodexIntegration({
-        skillNames: ['codelark', 'lark-doc'],
+        skillNames: ['codelark', 'condition-monitor', 'lark-doc'],
         externalSkillRunner: fakeExternalSkillRunner,
       });
-      assert.deepEqual(result.skills.map((skill) => skill.name), ['codelark']);
+      assert.deepEqual(result.skills.map((skill) => skill.name), ['codelark', 'condition-monitor']);
       assert.deepEqual(result.externalSkills.map((skill) => skill.name), ['lark-doc']);
       assert.equal(fs.existsSync(path.join(codexHome, 'skills', 'codelark', 'SKILL.md')), true);
+      assert.equal(fs.existsSync(path.join(codexHome, 'skills', 'condition-monitor', 'SKILL.md')), true);
       assert.equal(fs.existsSync(path.join(codexHome, 'skills', 'codelark-question', 'SKILL.md')), false);
       assert.equal(isCodexIntegrationInstalled(), true);
 

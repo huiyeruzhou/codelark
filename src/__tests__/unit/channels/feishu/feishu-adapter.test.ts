@@ -1738,13 +1738,14 @@ describe('feishu-adapter structured streaming regions', () => {
     const result = await adapter.send({
       address: { channelType: 'feishu-default', chatId: 'oc_group' },
       text: '',
-      platformMessage: { msgType: 'text', content },
+      platformMessage: { msgType: 'text', content, uuid: 'condition-monitor-stable-id' },
     });
 
     assert.deepEqual(result, { ok: true, messageId: 'msg-platform-1' });
     assert.equal(requests[0]?.params?.receive_id_type, 'chat_id');
     assert.equal(requests[0]?.data?.receive_id, 'oc_group');
     assert.equal(requests[0]?.data?.msg_type, 'text');
+    assert.equal(requests[0]?.data?.uuid, 'condition-monitor-stable-id');
     assert.deepEqual(JSON.parse(requests[0]?.data?.content), content);
   });
 

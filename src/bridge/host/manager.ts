@@ -211,6 +211,15 @@ import {
   type EveryTask,
 } from '../automation/every-tasks.js';
 import {
+  cancelConditionMonitorTask,
+  createConditionMonitorTask,
+  getConditionMonitorTask,
+  listConditionMonitorTasks,
+  updateConditionMonitorTask,
+  type ConditionMonitorTask,
+} from '../automation/condition-monitors.js';
+import { runConditionMonitorTick } from '../automation/condition-monitor-runner.js';
+import {
   claimNextPendingThenTaskForSession,
   getThenTask,
   listThenTasks,
@@ -230,7 +239,7 @@ import {
 import { probeCodexThreadProcess } from '../health/process.js';
 import { createSessionHealthRuntime } from '../health/runtime.js';
 import { deliverBridgeNotice, deliverResponse, enqueueBridgeNotice } from '../../channels/delivery/feedback.js';
-import { _testOnlyWaitForDeliveryQueuesForTests } from '../../channels/delivery/deliver.js';
+import { deliver, _testOnlyWaitForDeliveryQueuesForTests } from '../../channels/delivery/deliver.js';
 import { routeCodexRecords, routeRuntimeRecords } from '../turn/local-codex-terminal-router.js';
 import { createTurnCoordinator } from '../turn/turn-coordinator.js';
 import type { BridgeTurnTerminalRecord } from '../turn/turn-types.js';
@@ -252,8 +261,15 @@ import {
 } from '../update/runtime.js';
 import type { StartupNoticeOperation } from '../startup-notice-target.js';
 import { CODELARK_HOME } from '../../configuration/paths.js';
-import type { AgentSendInstruction, ManualInputRequest } from '../control/contracts.js';
+import type {
+  AgentInputRequest,
+  AgentSendInstruction,
+  CreateConditionMonitorRequest,
+  ManualInputRequest,
+  PlatformMessageRequest,
+} from '../control/contracts.js';
 import { deliverManualInput } from '../control/service-discovery.js';
+import { claimAgentInputReceipt } from '../control/agent-input-receipts.js';
 import {
   formatAgentSourceXml,
   listDiscoveredBridgeSessions,
@@ -1672,7 +1688,7 @@ export function listActiveBridgeSessions(query?: string) {
   });
 }
 
-function enqueueManualInput(request: ManualInputRequest, notify: boolean): void {
+function enqueueManualInput(request: ManualInputRequest, notify: boolean): boolean {
   const { store } = getBridgeContext();
   const binding = store.listChannelChats().find((candidate) => candidate.id === request.targetInternalChatId);
   if (!binding) throw new Error(`目标群聊不存在：${request.targetInternalChatId}`);
@@ -1685,8 +1701,10 @@ function enqueueManualInput(request: ManualInputRequest, notify: boolean): void 
     ...binding,
     chatDisplayName: targetSession.name,
   });
+  const idempotencyKey = request.idempotencyKey?.trim();
+  if (idempotencyKey && !claimAgentInputReceipt(idempotencyKey)) return false;
   adapter.enqueueManualInboundMessage({
-    messageId: `manual:${crypto.randomUUID()}`,
+    messageId: idempotencyKey ? `manual:${idempotencyKey}` : `manual:${crypto.randomUUID()}`,
     address: targetAddress,
     text: request.text,
     contextText: formatAgentSourceXml(request.source),
@@ -1703,10 +1721,69 @@ function enqueueManualInput(request: ManualInputRequest, notify: boolean): void 
       }),
     });
   }
+  return true;
 }
 
-export function receiveManualInput(request: ManualInputRequest): void {
-  enqueueManualInput(request, true);
+export function receiveManualInput(request: ManualInputRequest): boolean {
+  return enqueueManualInput(request, true);
+}
+
+export async function receiveAgentInput(request: AgentInputRequest): Promise<void> {
+  await sendAgentMessageFromBinding(request.sourceInternalChatId, {
+    target: request.target,
+    text: request.text,
+    codelarkHome: request.codelarkHome,
+    idempotencyKey: request.idempotencyKey,
+  });
+}
+
+export async function sendPlatformMessage(request: PlatformMessageRequest): Promise<void> {
+  const { store } = getBridgeContext();
+  const binding = store.listChannelChats().find((candidate) => candidate.id === request.targetInternalChatId);
+  if (!binding) throw new Error(`目标群聊不存在：${request.targetInternalChatId}`);
+  const adapter = getState().adapters.get(binding.channelType);
+  if (!adapter?.isRunning()) throw new Error(`目标群聊通道未运行：${binding.channelType}`);
+  const session = store.getSession(binding.bridgeSessionId);
+  const address = channelAddressFromBinding({
+    ...binding,
+    chatDisplayName: session?.name,
+  });
+  const idempotencyKey = request.idempotencyKey?.trim();
+  const result = await deliver(adapter, {
+    address,
+    text: '',
+    platformMessage: idempotencyKey && !request.platformMessage.uuid
+      ? { ...request.platformMessage, uuid: idempotencyKey }
+      : request.platformMessage,
+  }, {
+    sessionId: binding.bridgeSessionId,
+    dedupKey: idempotencyKey ? `platform-message:${idempotencyKey}` : undefined,
+  });
+  if (!result.ok) throw new Error(result.error || '平台消息发送失败');
+}
+
+export function createConditionMonitor(request: CreateConditionMonitorRequest): ConditionMonitorTask {
+  const { store } = getBridgeContext();
+  const binding = store.listChannelChats().find((candidate) => candidate.id === request.ownerInternalChatId);
+  if (!binding || binding.bridgeSessionId !== request.ownerBridgeSessionId) {
+    throw new Error(`Condition monitor 所属会话不存在：${request.ownerBridgeSessionId}`);
+  }
+  statSync(request.scriptPath);
+  const task = createConditionMonitorTask(request);
+  startConditionMonitor(task.id);
+  return task;
+}
+
+export function listConditionMonitors(ownerInternalChatId?: string): ConditionMonitorTask[] {
+  return listConditionMonitorTasks({ ownerInternalChatId });
+}
+
+export function cancelConditionMonitor(taskId: string): ConditionMonitorTask | null {
+  const task = getConditionMonitorTask(taskId);
+  if (!task) return null;
+  const cancelled = cancelConditionMonitorTask(taskId);
+  stopConditionMonitor(taskId);
+  return cancelled;
 }
 
 export async function sendAgentMessageFromBinding(
@@ -1736,6 +1813,7 @@ export async function sendAgentMessageFromBinding(
       targetInternalChatId: sourceBinding.id,
       text: instruction.text,
       source,
+      idempotencyKey: instruction.idempotencyKey,
     }, false);
     return;
   }
@@ -1745,7 +1823,9 @@ export async function sendAgentMessageFromBinding(
       text: instruction.text,
       source,
       codelarkHome: instruction.codelarkHome,
+      idempotencyKey: instruction.idempotencyKey,
     });
+    if (!target.accepted) return;
     enqueueBridgeNotice(sourceAdapter, sourceAddress, 'Agent 消息已发送', {
       sessionId: sourceBinding.bridgeSessionId,
       richCard: buildAgentExchangeCard({
@@ -1917,6 +1997,7 @@ interface BridgeManagerState extends BridgeAdapterRuntimeState, BridgeInteractiv
   everyTaskSelections: Map<string, string>;
   thenTaskSelections: Map<string, string>;
   everyTaskRuntimes: Map<string, EveryTaskRuntimeState>;
+  conditionMonitorRuntimes: Map<string, AbortController>;
   thenTaskTimers: Map<string, NodeJS.Timeout>;
   thenSessionQueues: Set<string>;
   autoStartChecked: boolean;
@@ -1960,6 +2041,7 @@ function getState(): BridgeManagerState {
       everyTaskSelections: new Map(),
       thenTaskSelections: new Map(),
       everyTaskRuntimes: new Map(),
+      conditionMonitorRuntimes: new Map(),
       thenTaskTimers: new Map(),
       thenSessionQueues: new Set(),
       queuedCounts: new Map(),
@@ -2007,6 +2089,9 @@ function getState(): BridgeManagerState {
   }
   if (!g[GLOBAL_KEY].everyTaskRuntimes) {
     g[GLOBAL_KEY].everyTaskRuntimes = new Map();
+  }
+  if (!g[GLOBAL_KEY].conditionMonitorRuntimes) {
+    g[GLOBAL_KEY].conditionMonitorRuntimes = new Map();
   }
   if (!g[GLOBAL_KEY].thenTaskTimers) {
     g[GLOBAL_KEY].thenTaskTimers = new Map();
@@ -2929,6 +3014,7 @@ export async function start(): Promise<void> {
   });
   startPersistedEveryTasks();
   startPersistedThenTasks();
+  startPersistedConditionMonitors();
 
   console.log(`[bridge-manager] Bridge started with ${startedCount} adapter(s)`);
   void runStartupNotificationFlow().catch((err) => {
@@ -2977,6 +3063,7 @@ export async function stop(): Promise<void> {
   }
   state.activeTasks.clear();
   stopAllEveryTasks();
+  stopAllConditionMonitors();
   stopAllThenTasks();
   state.mirrorSuppressUntil.clear();
   state.mirrorIgnoredTurnIds.clear();
@@ -3436,6 +3523,33 @@ function startPersistedThenTasks(): void {
   }
 }
 
+function startPersistedConditionMonitors(): void {
+  for (const task of listConditionMonitorTasks({ statuses: ['running'] })) {
+    startConditionMonitor(task.id);
+  }
+}
+
+function startConditionMonitor(taskId: string): void {
+  const state = getState();
+  if (state.conditionMonitorRuntimes.has(taskId)) return;
+  const task = getConditionMonitorTask(taskId);
+  if (!task || task.status !== 'running') return;
+  const abortController = new AbortController();
+  state.conditionMonitorRuntimes.set(taskId, abortController);
+  void runConditionMonitorLoop(taskId, abortController).finally(() => {
+    state.conditionMonitorRuntimes.delete(taskId);
+  });
+}
+
+function stopConditionMonitor(taskId: string): void {
+  getState().conditionMonitorRuntimes.get(taskId)?.abort();
+}
+
+function stopAllConditionMonitors(): void {
+  for (const controller of getState().conditionMonitorRuntimes.values()) controller.abort();
+  getState().conditionMonitorRuntimes.clear();
+}
+
 function startEveryTask(taskId: string): void {
   const state = getState();
   if (state.everyTaskRuntimes.has(taskId)) return;
@@ -3673,6 +3787,38 @@ async function runEveryTaskLoop(taskId: string, abortController: AbortController
       const afterRuntime = getState().everyTaskRuntimes.get(taskId);
       if (afterRuntime) afterRuntime.activeTrigger = false;
     }
+  }
+}
+
+async function runConditionMonitorLoop(taskId: string, abortController: AbortController): Promise<void> {
+  while (!abortController.signal.aborted) {
+    const task = getConditionMonitorTask(taskId);
+    if (!task || task.status !== 'running') return;
+    await abortableDelay(Math.max(1, task.intervalSeconds) * 1000, abortController.signal);
+    if (abortController.signal.aborted) return;
+
+    const freshTask = getConditionMonitorTask(taskId);
+    if (!freshTask || freshTask.status !== 'running') return;
+    updateConditionMonitorTask(taskId, {
+      checkedCount: freshTask.checkedCount + 1,
+      lastCheckedAt: nowIso(),
+    });
+    const result = await runConditionMonitorTick(freshTask, { signal: abortController.signal });
+    if (abortController.signal.aborted) return;
+    if (result.outcome === 'pending') {
+      updateConditionMonitorTask(taskId, { lastError: undefined });
+      continue;
+    }
+    if (result.outcome === 'error') {
+      updateConditionMonitorTask(taskId, { lastError: result.error });
+      continue;
+    }
+    updateConditionMonitorTask(taskId, {
+      status: 'completed',
+      completedAt: nowIso(),
+      lastError: undefined,
+    });
+    return;
   }
 }
 
@@ -5189,6 +5335,7 @@ function resetStateForTests(): void {
   state.loopAborts.clear();
   state.activeTasks.clear();
   stopAllEveryTasks();
+  stopAllConditionMonitors();
   stopAllThenTasks();
   for (const timer of pendingTmuxProviderExitProbeTimers.values()) {
     clearTimeout(timer);
@@ -5299,5 +5446,8 @@ export const _testOnly = {
   runStartupNotificationFlow,
   deliverStartupNotifications,
   waitForPendingTmuxSelectionPromptProbes,
+  startConditionMonitor,
+  startPersistedConditionMonitors,
+  stopConditionMonitor,
   resetStateForTests,
 };

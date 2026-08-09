@@ -883,7 +883,7 @@ async function promptWorkspaceRoot(cwd: string): Promise<string> {
 async function promptCodexSkillInstallSelection(): Promise<string[]> {
   p.note(
     [
-      '统一的 CodeLark skill 会安装到 ~/.codex/skills，覆盖消息、卡片、附件、自动化和 Agent 通讯。',
+      'CodeLark 内置 skills 会安装到 ~/.codex/skills：codelark 覆盖消息、卡片、附件、自动化和 Agent 通讯；condition-monitor 负责条件满足后单次通知。',
       '官方 lark-doc 使用 npx skills add larksuite/cli -s lark-doc -y -g -a claude-code 安装。',
       '默认全选；CodeLark 升级时会自动刷新内置 skill。',
     ].join('\n'),

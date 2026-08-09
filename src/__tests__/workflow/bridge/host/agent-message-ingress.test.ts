@@ -18,6 +18,7 @@ import {
   listActiveBridgeSessions,
   receiveManualInput,
   sendAgentMessageFromBinding,
+  sendPlatformMessage,
   stop,
 } from '../../../../bridge/host/manager.js';
 import { startBridgeControlService, type BridgeControlService } from '../../../../bridge/control/service-discovery.js';
@@ -131,6 +132,7 @@ describe('agent message manual ingress', () => {
     await sendAgentMessageFromBinding(source.id, {
       target: target.id,
       text: '  /stop\n',
+      idempotencyKey: 'condition-monitor-stable-id',
     });
     const inbound = await adapter.consumeOne();
     await _testOnlyWaitForDeliveryQueuesForTests(adapter);
@@ -148,6 +150,14 @@ describe('agent message manual ingress', () => {
       { chatId: 'oc_target', title: '收到 Agent 消息' },
       { chatId: 'oc_source', title: 'Agent 消息已发送' },
     ]);
+
+    await sendAgentMessageFromBinding(source.id, {
+      target: target.id,
+      text: '  /stop\n',
+      idempotencyKey: 'condition-monitor-stable-id',
+    });
+    await _testOnlyWaitForDeliveryQueuesForTests(adapter);
+    assert.equal(adapter.sentMessages.length, 2, 'same persistent key must not enqueue input or cards twice');
     for (const message of adapter.sentMessages) {
       assert.equal(message.richCard?.panels, undefined);
       assert.match(message.richCard?.sections[1]?.markdown || '', /  \/stop\n/u);
@@ -187,6 +197,20 @@ describe('agent message manual ingress', () => {
     assert.equal(renderedMessagePanel?.expanded, false);
     const renderedMessageContent = renderedMessagePanel?.elements?.[0]?.columns?.[0]?.elements?.[0]?.content;
     assert.ok(String(renderedMessageContent || '').replace(/\u200b/gu, '').includes(longText));
+
+    const beforePlatformMessage = adapter.sentMessages.length;
+    const platformRequest = {
+      targetInternalChatId: target.id,
+      platformMessage: { msgType: 'interactive', content: { schema: '2.0', body: { elements: [] } } },
+      idempotencyKey: 'condition-monitor-platform-id',
+    };
+    await sendPlatformMessage(platformRequest);
+    await sendPlatformMessage(platformRequest);
+    assert.equal(adapter.sentMessages.length, beforePlatformMessage + 1);
+    assert.equal(
+      adapter.sentMessages.at(-1)?.platformMessage?.uuid,
+      'condition-monitor-platform-id',
+    );
 
     await assert.rejects(
       sendAgentMessageFromBinding(source.id, { target: 'missing-target', text: 'hello' }),
