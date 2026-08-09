@@ -6,7 +6,12 @@ import path from 'node:path';
 import { afterEach, describe, it } from 'node:test';
 
 import { CODELARK_HOME } from '../../../../configuration/paths.js';
-import { BaseChannelAdapter, registerAdapterFactory } from '../../../../channels/contracts.js';
+import {
+  BaseChannelAdapter,
+  registerAdapterFactory,
+  type CreateGroupChatOptions,
+  type CreatedGroupChat,
+} from '../../../../channels/contracts.js';
 import { buildRichCardContent } from '../../../../channels/feishu/markdown.js';
 import type { InboundMessage, OutboundMessage, PermissionGateway, SendResult } from '../../../../domain/index.js';
 import type { LifecycleHooks, LLMProvider, StreamChatParams } from '../../../../runtime/contracts.js';
@@ -38,6 +43,8 @@ class ManualIngressAdapter extends BaseChannelAdapter {
   readonly channelType: string;
   readonly provider = 'feishu';
   readonly sentMessages: OutboundMessage[] = [];
+  readonly createdGroups: CreatedGroupChat[] = [];
+  readonly createGroupRequests: CreateGroupChatOptions[] = [];
   private running = false;
 
   constructor(instance?: { id?: string }) {
@@ -55,6 +62,16 @@ class ManualIngressAdapter extends BaseChannelAdapter {
   async send(message: OutboundMessage): Promise<SendResult> {
     this.sentMessages.push(message);
     return { ok: true, messageId: `manual-${this.sentMessages.length}` };
+  }
+  async createGroupChat(options: CreateGroupChatOptions): Promise<CreatedGroupChat> {
+    this.createGroupRequests.push(options);
+    const group = {
+      chatId: `oc_created_${this.createdGroups.length + 1}`,
+      chatKind: 'group' as const,
+      name: options.name,
+    };
+    this.createdGroups.push(group);
+    return group;
   }
   override getBotDisplayName(): string { return 'qaq'; }
   validateConfig(): string | null { return null; }
@@ -108,6 +125,7 @@ describe('agent message manual ingress', () => {
       channelProvider: 'feishu',
       chatId: 'oc_source',
       chatKind: 'group',
+      userId: 'ou_agent_owner',
       displayName: '来源群',
     }, os.tmpdir(), '来源群');
     const target = router.createBinding({
@@ -231,6 +249,43 @@ describe('agent message manual ingress', () => {
       adapter.sentMessages.at(-1)?.platformMessage?.uuid,
       'condition-monitor-platform-id',
     );
+
+    const delegatedWorkDir = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-agent-delegate-'));
+    await sendAgentMessageFromBinding(source.id, {
+      target: 'current',
+      text: `/new agent-review ${delegatedWorkDir}`,
+    });
+    const newCommand = await adapter.consumeOne();
+    assert.ok(newCommand);
+    assert.equal(newCommand.text, `/new agent-review ${delegatedWorkDir}`);
+    assert.equal(newCommand.address.userId, 'ou_agent_owner');
+    await _testOnly.handleMessage(adapter, newCommand);
+
+    assert.deepEqual(adapter.createGroupRequests, [{
+      name: 'agent-review',
+      ownerUserId: 'ou_agent_owner',
+      userIds: ['ou_agent_owner'],
+    }]);
+    const createdGroup = adapter.createdGroups.at(-1);
+    assert.ok(createdGroup);
+    const delegatedBinding = router.resolve({
+      channelType: 'manual-ingress-main',
+      chatId: createdGroup.chatId,
+    });
+    assert.notEqual(delegatedBinding.id, source.id, 'new delegated work must have a dedicated chat');
+    const discoveredAgent = listActiveBridgeSessions()
+      .filter((session) => session.chatName === 'agent-review');
+    assert.equal(discoveredAgent.length, 1, 'the dedicated chat must be discoverable by exact name');
+    assert.equal(discoveredAgent[0]?.bridgeSessionId, delegatedBinding.bridgeSessionId);
+
+    const delegatedTask = '请独立审查当前改动，并把结论回复给来源群。';
+    await sendAgentMessageFromBinding(source.id, {
+      target: discoveredAgent[0]!.bridgeSessionId,
+      text: delegatedTask,
+    });
+    const delegatedInput = await adapter.consumeOne();
+    assert.equal(delegatedInput?.address.chatId, createdGroup.chatId);
+    assert.equal(delegatedInput?.text, delegatedTask);
 
     await assert.rejects(
       sendAgentMessageFromBinding(source.id, { target: 'missing-target', text: 'hello' }),
