@@ -63,7 +63,7 @@ codelark sessions --home /home/user/.codelark --chat-name "项目群" --bot-name
 
 `--target`、`--chat-name`、`--bot-name`、`--home`、`--runtime`、`--status` 是精确筛选，多个条件按 AND 组合；`--query` 才是跨字段模糊匹配。默认输出可读表格，`--json` 供 skill 和自动化消费。每项结果只给一个可回填的 opaque `target`；列表顺序不是身份。
 
-当前没有单独配置 Agent/Bot 名时，`bot_name` 默认等于群聊名；它仍可与其他字段组合筛选，但不应被当作必然独立的身份字段。
+`bot_name` 来自运行中通道解析出的真实 Bot 名称，可以与群聊名等条件组合筛选。
 
 发送由 Agent 的 `<clk-input>` 完成，因此 Bridge 能自动绑定真实来源群并在两端显示卡片。零匹配会报未找到；多匹配会列出候选并拒绝猜测；只有唯一匹配才发送。
 
@@ -75,7 +75,7 @@ codelark sessions --home /home/user/.codelark --chat-name "项目群" --bot-name
 <clk-input>{"target":"target-from-codelark-sessions","text":"请检查训练状态并回复我"}</clk-input>
 ```
 
-复合筛选只用于 CLI 发现阶段；发送阶段只使用唯一结果的 `target`，不再要求模型理解或拼接内部 binding、平台群 ID 和 CodeLark Home。目标 Bridge 明确接受后，源群出现“Agent 消息已发送”卡片，目标群出现“收到 Agent 消息”卡片；两张卡都展示实际发送的完整正文，长正文默认折叠、展开后可查看且不会截断。离线、无匹配或多匹配会在源群显示失败，不会假报成功。
+复合筛选只用于 CLI 发现阶段；发送阶段只使用唯一结果的 `target`，不再要求模型理解或拼接内部 binding、平台群 ID 和 CodeLark Home。目标 Bridge 明确接受后，源群出现“Agent 消息已发送”卡片，目标群出现“收到 Agent 消息”卡片；两张卡都展示来源群聊、来源 Bot、目标群聊、目标 Bot 和实际发送的完整正文，长正文默认折叠、展开后可查看且不会截断。离线、无匹配或多匹配会在源群显示失败，不会假报成功。
 
 输出保持单一：discovery 只展示 canonical Bridge/session UUID。输入保持兼容：如果调用方已有 binding UUID、飞书 `oc_...` 群 ID 或 Bridge/session UUID，三者都可以原样作为同一个字符串 `target`；resolver 在内部统一收敛到当前 binding。
 
@@ -90,7 +90,7 @@ codelark sessions --home /home/user/.codelark --chat-name "项目群" --bot-name
 ```
 
 字段值使用 JSON 字符串转义，并保护 XML 外壳终止符。这里的字段只描述消息来源；目标模型需要向来源发送消息时，把“来源会话 ID”原样放入字符串 `target`，不会看到或使用 binding、platform 或 Home 辅助字段。
-这里的“来源 Bot”是发送通道从飞书 Bot 身份接口解析出的真实名称，不是群名或 session 的 `bot_name` 筛选别名。
+这里的“来源 Bot”和 discovery 的 `bot_name` 都来自发送通道解析出的真实 Bot 名称，不会用群聊名冒充。
 
 ## 安全边界
 

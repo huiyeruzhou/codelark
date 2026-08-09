@@ -406,7 +406,7 @@ export function formatSessionsTable(sessions: DiscoveredBridgeSession[]): string
     session.bridgeSessionId,
   ]);
   return [
-    ['群聊', 'Agent', 'Runtime', '状态', 'CodeLark Home', 'Target'],
+    ['群聊', 'Bot', 'Runtime', '状态', 'CodeLark Home', 'Target'],
     ...rows,
   ].map((row) => row.join('\t')).join('\n') + '\n';
 }

@@ -28,7 +28,7 @@ export function listDiscoveredBridgeSessions(options: {
       platformChatId: binding.chatId,
       bridgeSessionId: binding.bridgeSessionId,
       chatName,
-      agentName: chatName,
+      agentName: adapter.getBotDisplayName(),
       channelType: binding.channelType,
       runtime: getSessionActiveRuntime(session) || 'codex',
       runtimeStatus: session.runtime_status || 'idle',

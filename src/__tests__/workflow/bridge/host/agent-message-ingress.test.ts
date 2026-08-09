@@ -150,6 +150,26 @@ describe('agent message manual ingress', () => {
       { chatId: 'oc_target', title: '收到 Agent 消息' },
       { chatId: 'oc_source', title: 'Agent 消息已发送' },
     ]);
+    assert.equal(
+      listActiveBridgeSessions().find((session) => session.internalChatId === target.id)?.agentName,
+      'qaq',
+      'discovery must expose the adapter Bot name instead of copying the chat name',
+    );
+    for (const message of adapter.sentMessages) {
+      assert.deepEqual(message.richCard?.sections[0]?.fields, [
+        ['来源群聊', '来源群'],
+        ['来源 Bot', 'qaq'],
+      ]);
+      assert.deepEqual(message.richCard?.sections[1]?.fields, [
+        ['目标群聊', '目标群'],
+        ['目标 Bot', 'qaq'],
+      ]);
+    }
+    const renderedShortCard = buildRichCardContent(adapter.sentMessages[0].richCard!);
+    for (const visibleText of ['来源群聊', '来源 Bot', '目标群聊', '目标 Bot', '来源群', '目标群']) {
+      assert.match(renderedShortCard, new RegExp(visibleText, 'u'));
+    }
+    assert.doesNotMatch(renderedShortCard, /已压缩/u, 'all four identity fields must remain visible');
 
     await sendAgentMessageFromBinding(source.id, {
       target: target.id,
@@ -160,7 +180,7 @@ describe('agent message manual ingress', () => {
     assert.equal(adapter.sentMessages.length, 2, 'same persistent key must not enqueue input or cards twice');
     for (const message of adapter.sentMessages) {
       assert.equal(message.richCard?.panels, undefined);
-      assert.match(message.richCard?.sections[1]?.markdown || '', /  \/stop\n/u);
+      assert.match(message.richCard?.sections[2]?.markdown || '', /  \/stop\n/u);
     }
 
     await sendAgentMessageFromBinding(source.id, { target: 'current', text: '/then-form' });
@@ -184,7 +204,7 @@ describe('agent message manual ingress', () => {
     const longCards = adapter.sentMessages.slice(2, 4).map((message) => message.richCard);
     assert.equal(longCards.length, 2);
     for (const card of longCards) {
-      assert.equal(card?.sections.length, 1);
+      assert.equal(card?.sections.length, 2);
       assert.equal(card?.panels?.length, 1);
       assert.equal(card?.panels?.[0]?.expanded, false);
       assert.equal(card?.panels?.[0]?.title, '消息内容（点击展开）');
@@ -220,6 +240,14 @@ describe('agent message manual ingress', () => {
     assert.equal(adapter.sentMessages.at(-1)?.address.chatId, 'oc_source');
     assert.equal(adapter.sentMessages.at(-1)?.richCard?.title, 'Agent 消息发送失败');
     assert.equal(adapter.sentMessages.at(-1)?.richCard?.template, 'red');
-    assert.match(adapter.sentMessages.at(-1)?.richCard?.sections[1]?.markdown || '', /hello/u);
+    assert.deepEqual(adapter.sentMessages.at(-1)?.richCard?.sections[0]?.fields, [
+      ['来源群聊', '来源群'],
+      ['来源 Bot', 'qaq'],
+    ]);
+    assert.deepEqual(adapter.sentMessages.at(-1)?.richCard?.sections[1]?.fields, [
+      ['目标', 'missing-target'],
+      ['错误', '没有找到目标：missing-target'],
+    ]);
+    assert.match(adapter.sentMessages.at(-1)?.richCard?.sections[2]?.markdown || '', /hello/u);
   });
 });

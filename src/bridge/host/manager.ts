@@ -1645,9 +1645,16 @@ function channelAddressFromBinding(binding: {
 
 const AGENT_MESSAGE_CARD_COLLAPSE_THRESHOLD = 800;
 
+interface AgentExchangeEndpoint {
+  chatName: string;
+  botName: string;
+}
+
 function buildAgentExchangeCard(options: {
   direction: 'sent' | 'received' | 'failed';
-  counterpartName: string;
+  source: AgentExchangeEndpoint;
+  target?: AgentExchangeEndpoint;
+  unresolvedTarget?: string;
   messageText: string;
   detail?: string;
 }): OutboundRichCard {
@@ -1655,15 +1662,24 @@ function buildAgentExchangeCard(options: {
   const failed = options.direction === 'failed';
   const messageMarkdown = buildFencedCodeBlock(options.messageText, 'text');
   const longMessage = options.messageText.length > AGENT_MESSAGE_CARD_COLLAPSE_THRESHOLD;
+  const identitySections: OutboundRichCard['sections'] = [{
+    fields: [
+      ['来源群聊', options.source.chatName],
+      ['来源 Bot', options.source.botName],
+    ],
+  }, {
+    fields: options.target ? [
+      ['目标群聊', options.target.chatName],
+      ['目标 Bot', options.target.botName],
+    ] : [
+      ['目标', options.unresolvedTarget || '未知目标'],
+      ...(options.detail ? [['错误', options.detail] as [string, string]] : []),
+    ],
+  }];
   return {
     title: failed ? 'Agent 消息发送失败' : sent ? 'Agent 消息已发送' : '收到 Agent 消息',
     template: failed ? 'red' : sent ? 'green' : 'blue',
-    sections: [{
-      fields: [
-        [failed ? '目标' : sent ? '目标' : '来源', options.counterpartName],
-        ...(options.detail ? [['错误', options.detail] as [string, string]] : []),
-      ],
-    }, ...(longMessage ? [] : [{
+    sections: [...identitySections, ...(longMessage ? [] : [{
       title: '消息内容',
       markdown: messageMarkdown,
     }])],
@@ -1696,10 +1712,16 @@ function enqueueManualInput(request: ManualInputRequest, notify: boolean): boole
   if (!adapter?.isRunning()) throw new Error(`目标群聊通道未运行：${binding.channelType}`);
   const targetSession = store.getSession(binding.bridgeSessionId);
   if (!targetSession) throw new Error(`目标 session 不存在：${binding.bridgeSessionId}`);
+  const target = sourceMetadataForBinding({
+    store,
+    codelarkHome: CODELARK_HOME,
+    binding,
+    botName: adapter.getBotDisplayName(),
+  });
 
   const targetAddress = channelAddressFromBinding({
     ...binding,
-    chatDisplayName: targetSession.name,
+    chatDisplayName: target.chatName,
   });
   const idempotencyKey = request.idempotencyKey?.trim();
   if (idempotencyKey && !claimAgentInputReceipt(idempotencyKey)) return false;
@@ -1716,7 +1738,8 @@ function enqueueManualInput(request: ManualInputRequest, notify: boolean): boole
       sessionId: binding.bridgeSessionId,
       richCard: buildAgentExchangeCard({
         direction: 'received',
-        counterpartName: request.source.botName || request.source.chatName,
+        source: request.source,
+        target,
         messageText: request.text,
       }),
     });
@@ -1830,7 +1853,11 @@ export async function sendAgentMessageFromBinding(
       sessionId: sourceBinding.bridgeSessionId,
       richCard: buildAgentExchangeCard({
         direction: 'sent',
-        counterpartName: target.agentName || target.chatName,
+        source,
+        target: {
+          chatName: target.chatName,
+          botName: target.agentName,
+        },
         messageText: instruction.text,
       }),
     });
@@ -1840,7 +1867,8 @@ export async function sendAgentMessageFromBinding(
       sessionId: sourceBinding.bridgeSessionId,
       richCard: buildAgentExchangeCard({
         direction: 'failed',
-        counterpartName: typeof instruction.target === 'string'
+        source,
+        unresolvedTarget: typeof instruction.target === 'string'
           ? instruction.target
           : instruction.target.chatName || instruction.target.botName || instruction.target.chatId || instruction.target.query || '目标群聊',
         messageText: instruction.text,
