@@ -95,6 +95,18 @@ If the user already supplied an existing binding UUID, Feishu `oc_...` chat ID, 
 
 Incoming Agent messages include one `<codelark_source>` wrapper with readable source-chat, source-Bot, and one `来源会话 ID`. To reply, copy that ID directly into the string `target`. CodeLark submits the whole multiline message as one input and shows sent/received cards with the actual message in both groups after the target Bridge accepts it. Long messages are collapsed in the card and can be expanded without truncation.
 
+### Preserve the current task boundary
+
+Treat cross-Agent messaging as side-channel collaboration by default, not as a handoff of the current task. Continue owning and executing the main task unless the user explicitly asks the other Agent to take it over or asks this Agent to stop.
+
+Before sending, resolve three boundaries from the user's latest request:
+
+1. **Target**: send only to the uniquely identified chat or Agent.
+2. **Payload**: forward only the referenced question or artifact. “转发这个 / 问一下” does not authorize forwarding the surrounding conversation, active plan, engineering context, or other open tasks.
+3. **Authority**: distinguish advice/review from permission to edit code, run jobs, message others, or otherwise act. State the restriction in the recipient message when needed.
+
+Interpret “顺便 / btw / 请另一个 Agent 看看” as parallel consultation while the main task continues. If the requested payload is ambiguous and choosing it would materially broaden the transfer, ask the user to identify the exact content. If a send exceeds the intended boundary, promptly send a correction telling the recipient what to ignore; do not treat that correction as a substitute for continuing the main task.
+
 ## Rules
 
 - Verify local files before sending them.
