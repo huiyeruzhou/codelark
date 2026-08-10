@@ -11,7 +11,7 @@ import {
 } from '../../../../bridge/mirror/feedback-controller.js';
 import { createMirrorSubscription } from '../../../../bridge/mirror/subscription-state.js';
 import { consumeMirrorRecords } from '../../../../bridge/mirror/turns.js';
-import type { InboundMessage, OutboundManualInput, OutboundMessage, SendResult, StreamingHistoryItem, TaskProgressInfo, ToolCallInfo } from '../../../../domain/index.js';
+import type { InboundMessage, OutboundManualInput, OutboundMessage, RuntimeNoticeInfo, SendResult, StreamingHistoryItem, TaskProgressInfo, ToolCallInfo } from '../../../../domain/index.js';
 import { JsonFileStore } from '../../../../storage/json-store.js';
 import { formatFooterClockTime } from '../../../../shared/progress/footer.js';
 
@@ -32,6 +32,7 @@ class FakeMirrorFeishuAdapter extends BaseChannelAdapter {
   readonly tools: ToolCallInfo[][] = [];
   readonly tasks: TaskProgressInfo[][] = [];
   readonly histories: StreamingHistoryItem[][] = [];
+  readonly notices: RuntimeNoticeInfo[] = [];
   readonly sent: OutboundMessage[] = [];
   readonly metadata: Array<{ chatId: string; streamKey?: string; metadata: StructuredStreamingUiMetadata }> = [];
   streamEndResult = true;
@@ -92,6 +93,10 @@ class FakeMirrorFeishuAdapter extends BaseChannelAdapter {
         ? { ...item, tools: item.tools.map((tool) => ({ ...tool })) }
         : { ...item }
     )));
+  }
+
+  onRuntimeNotice(_chatId: string, notice: RuntimeNoticeInfo): void {
+    this.notices.push({ ...notice });
   }
 
   onStreamEnd(_chatId: string, status: 'completed' | 'interrupted' | 'error', text: string): Promise<boolean> {
@@ -168,6 +173,104 @@ describe('mirror-feedback-controller', () => {
     assert.match(adapter.statuses.at(-1) || '', /已运行 2s/);
     assert.match(adapter.statuses.at(-1) || '', /125k\(63%\) · ↑125k ↓4\.6k/);
     assert.doesNotMatch(adapter.statuses.at(-1) || '', /处理中/);
+  });
+
+  it('pushes a recoverable runtime notice into card history without changing completed status', async () => {
+    const adapter = new FakeMirrorFeishuAdapter();
+    const controller = createMirrorFeedbackController({
+      getAdapter: () => adapter,
+      getThreadTitle: () => '测试线程',
+      resolveFinalizedTurnStatus: async (_subscription, turn) => {
+        turn.runtimeNotices = [
+          {
+            level: 'error',
+            title: '操作未完成',
+            message: 'goal 更新失败\n当前任务仍在继续。',
+            source: 'codex_tui',
+          },
+        ];
+        return turn.status;
+      },
+      nowIso: () => '2026-05-14T00:00:00.000Z',
+      eventBatchLimit: 10,
+      deliverResponse: async () => ({ ok: true }),
+    });
+    const subscription = createMirrorSubscription({
+      bindingId: 'binding-runtime-notice',
+      sessionId: 'session-runtime-notice',
+      channelType: 'feishu-default',
+      chatId: 'chat-runtime-notice',
+      threadId: 'thread-runtime-notice',
+      filePath: 'rollout.jsonl',
+      lastDeliveredAt: null,
+    });
+    const turn = {
+      streamKey: 'mirror:session-runtime-notice:turn',
+      userText: '继续任务',
+      text: '任务输出',
+      signature: 'runtime-notice-complete',
+      timestamp: '2026-05-14T00:00:01.000Z',
+      startedAt: '2026-05-14T00:00:00.000Z',
+      status: 'completed' as const,
+    };
+
+    const result = await controller.deliverMirrorTurns(subscription, [turn]);
+
+    assert.equal(result.deliveredCount, 1);
+    assert.equal(turn.status, 'completed');
+    assert.deepEqual(adapter.streamEnds.map((entry) => entry.status), ['completed']);
+    assert.deepEqual(adapter.notices, [{
+      level: 'error',
+      title: '操作未完成',
+      message: 'goal 更新失败\n当前任务仍在继续。',
+      source: 'codex_tui',
+    }]);
+  });
+
+  it('falls back to an inline quote when the channel has no runtime notice interface', async () => {
+    const adapter = new FakeMirrorFeishuAdapter();
+    (adapter as { onRuntimeNotice?: unknown }).onRuntimeNotice = undefined;
+    const controller = createMirrorFeedbackController({
+      getAdapter: () => adapter,
+      getThreadTitle: () => '测试线程',
+      resolveFinalizedTurnStatus: async (_subscription, turn) => {
+        turn.runtimeNotices = [{
+          level: 'error',
+          title: '操作未完成',
+          message: 'goal 更新失败\n当前任务仍在继续。',
+          source: 'codex_tui',
+        }];
+        return turn.status;
+      },
+      nowIso: () => '2026-05-14T00:00:00.000Z',
+      eventBatchLimit: 10,
+      deliverResponse: async () => ({ ok: true }),
+    });
+    const subscription = createMirrorSubscription({
+      bindingId: 'binding-runtime-notice-fallback',
+      sessionId: 'session-runtime-notice-fallback',
+      channelType: 'feishu-default',
+      chatId: 'chat-runtime-notice-fallback',
+      threadId: 'thread-runtime-notice-fallback',
+      filePath: 'rollout.jsonl',
+      lastDeliveredAt: null,
+    });
+
+    const result = await controller.deliverMirrorTurns(subscription, [{
+      streamKey: 'mirror:session-runtime-notice-fallback:turn',
+      userText: '继续任务',
+      text: '任务输出',
+      signature: 'runtime-notice-fallback',
+      timestamp: '2026-05-14T00:00:01.000Z',
+      startedAt: '2026-05-14T00:00:00.000Z',
+      status: 'completed',
+    }]);
+
+    assert.equal(result.deliveredCount, 1);
+    assert.equal(adapter.streamEnds[0]?.status, 'completed');
+    assert.match(adapter.streamEnds[0]?.text || '', /> ⚠️ \*\*操作未完成\*\*/u);
+    assert.match(adapter.streamEnds[0]?.text || '', /> goal 更新失败/u);
+    assert.match(adapter.streamEnds[0]?.text || '', /> 当前任务仍在继续。/u);
   });
 
   it('keeps terminal error status single-line and bounded', () => {

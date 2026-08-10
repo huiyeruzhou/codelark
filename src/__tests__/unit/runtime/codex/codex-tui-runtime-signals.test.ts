@@ -3,7 +3,10 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
 import {
+  classifyCodexTuiDiagnostic,
   extractCodexTuiErrorMessages,
+  findNewCodexTuiDiagnostic,
+  findNewCodexTuiDiagnostics,
   findNewCodexTuiErrorMessage,
   parseCodexTuiModelMismatchWarning,
   parseCodexTuiReconnectSignal,
@@ -113,6 +116,51 @@ describe('Codex TUI runtime signals', () => {
     assert.equal(
       findNewCodexTuiErrorMessage('■ repeated error', '■ repeated error\n■ repeated error'),
       'repeated error',
+    );
+  });
+
+  it('separates recoverable TUI operation errors from turn and session termination', () => {
+    assert.deepEqual(
+      classifyCodexTuiDiagnostic('Failed to update thread goal: thread/goal/set failed in TUI'),
+      {
+        message: 'Failed to update thread goal: thread/goal/set failed in TUI',
+        impact: 'operation',
+        terminal: false,
+      },
+    );
+    assert.deepEqual(
+      classifyCodexTuiDiagnostic('exceeded retry limit, last status: 429 Too Many Requests'),
+      {
+        message: 'exceeded retry limit, last status: 429 Too Many Requests',
+        impact: 'turn',
+        terminal: true,
+      },
+    );
+    assert.deepEqual(
+      classifyCodexTuiDiagnostic('app-server event stream disconnected: transport closed'),
+      {
+        message: 'app-server event stream disconnected: transport closed',
+        impact: 'session',
+        terminal: true,
+      },
+    );
+    assert.deepEqual(
+      findNewCodexTuiDiagnostic('', '■ Failed to save default model: config/batchWrite failed'),
+      {
+        message: 'Failed to save default model: config/batchWrite failed',
+        impact: 'operation',
+        terminal: false,
+      },
+    );
+    assert.deepEqual(
+      findNewCodexTuiDiagnostics('', [
+        '■ Failed to update thread goal: thread/goal/set failed in TUI',
+        '■ exceeded retry limit, last status: 429 Too Many Requests',
+      ].join('\n')).map(({ impact, terminal }) => ({ impact, terminal })),
+      [
+        { impact: 'operation', terminal: false },
+        { impact: 'turn', terminal: true },
+      ],
     );
   });
 });

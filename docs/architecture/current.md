@@ -313,7 +313,7 @@ Turn reducer 会按 record 类型更新同一个 `BridgeMirrorTurnState`：
 - `tool_started` / `tool_finished`：转换成 Codex turn event 后写入 `toolCalls`。
 - `context_usage`：写入 `contextUsage`。
 - `goal_status`：写入 `goalStatus`；如果当前 turn 已经有正文、用户文本、工具或任务进展，才触发正文区域刷新。只有 active goal 状态、没有可见进展的空 turn 不会启动 mirror stream。
-- `task_complete` / `task_aborted`：结束当前 pending turn，形成 `FinalizedBridgeMirrorTurn`；当 Codex 版本在 `task_complete.error` 中提供结构化错误时，必须保留为 runtime-neutral `errorText` 并把终态设为 `error`，不能因为事件名仍叫 complete 就画成成功。Codex CLI 0.144.3 的不可重试 HTTP 错误不会把原因写入 rollout，此时由 tmux TUI 的本回合新增 `■` 行补齐同一字段。如果 active turn 能 claim 这个终态，则交给 active IM turn，否则作为 mirror final delivery。连续 3 个只有 active goal 状态、没有可见进展的空 turn 会产生一次 goal loop warning，避免无限重启时刷出空镜像卡片。
+- `task_complete` / `task_aborted`：结束当前 pending turn，形成 `FinalizedBridgeMirrorTurn`；当 Codex 版本在 `task_complete.error` 中提供结构化错误时，必须保留为 runtime-neutral `errorText` 并把终态设为 `error`，不能因为事件名仍叫 complete 就画成成功。旧版 Codex 若只在 tmux TUI 输出 `■`，CodeLark 会先把屏幕诊断分成 operation / turn / session：只有明确的 turn/session 终止模式补齐 `errorText`，goal、配置等局部操作失败则通过 `RuntimeNoticeInfo` 放进正文且不改变 completed 终态。如果 active turn 能 claim 这个终态，则交给 active IM turn，否则作为 mirror final delivery。连续 3 个只有 active goal 状态、没有可见进展的空 turn 会产生一次 goal loop warning，避免无限重启时刷出空镜像卡片。
 
 Runtime source adapter 必须先把底层事件规范化，再交给上述 reducer。Kimi Code 会按 `step.end → usage.record` 写入终态统计；adapter 必须把这条 usage 归回刚结束的同一 turn（同一增量内排到 terminal 前，跨增量且 terminal 已消费时丢弃孤立 usage），不能让它创建一张没有后续 terminal 的 `Thinking...` 卡。Kimi `context.append_message` 中 `origin.kind=injection` 的内部 reminder 也必须在 source adapter 过滤，不能进入通用 history 或飞书卡片。这个约束属于 provider 解析层；统一 turn reducer 和 Feishu renderer 不应增加 Kimi 特判。
 

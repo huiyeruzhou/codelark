@@ -1339,6 +1339,16 @@ function formatHistoryMarkdownContent(item: Extract<StreamingHistoryItem, { type
   return `**用户**：${trimmed}`;
 }
 
+function formatRuntimeNoticeContent(
+  item: Extract<StreamingHistoryItem, { type: 'runtime_notice' }>,
+): string {
+  const icon = item.notice.level === 'info' ? 'ℹ️' : '⚠️';
+  return [
+    `${icon} **${item.notice.title}**`,
+    ...item.notice.message.split(/\r?\n/u),
+  ].map((line) => `> ${line}`).join('\n');
+}
+
 function userInputTitlePreview(content: string): string {
   const normalized = content.replace(/\s+/gu, ' ').trim();
   const chars = Array.from(normalized);
@@ -1407,6 +1417,13 @@ export function buildStreamingHistoryElementsFromItems(
       const rendered = buildToolProgressGroupPanel(item.tools, toolPanelCount, options);
       if (rendered) historyElements.push(rendered);
       toolPanelCount += 1;
+      continue;
+    }
+    if (item.type === 'runtime_notice') {
+      const resolvedElementId = item.elementId || `stream_notice_${markdownCount + 1}`;
+      const noticeElement = buildHistoryMarkdownElement(formatRuntimeNoticeContent(item), resolvedElementId);
+      markdownCount += 1;
+      if (noticeElement) historyElements.push(noticeElement);
       continue;
     }
     const resolvedElementId = item.elementId

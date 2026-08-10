@@ -24,6 +24,7 @@ import {
 import {
   finalizeStreamFeedback,
   pushStreamFeedbackHistory,
+  pushStreamFeedbackNotice,
   pushStreamFeedbackStatus,
   pushStreamFeedbackTasks,
   pushStreamFeedbackText,
@@ -44,7 +45,7 @@ import {
   deliverFinalResponse,
   type DeliverResponseImpl,
 } from '../turn/delivery-pipeline.js';
-import type { OutboundManualInput } from '../../domain/index.js';
+import type { OutboundManualInput, RuntimeNoticeInfo } from '../../domain/index.js';
 import {
   formatStreamRuntimeStatus,
   getStreamLastActivityAgeMs,
@@ -106,6 +107,18 @@ function appendTerminalErrorText(text: string, errorText: string | undefined): s
   const error = (errorText || '').trim();
   if (!error || text.includes(error)) return text;
   return [text.trim(), `❌ 错误原因：${error}`].filter(Boolean).join('\n\n');
+}
+
+function appendRuntimeNoticeText(
+  text: string,
+  notices: RuntimeNoticeInfo[],
+  markdown: boolean,
+): string {
+  if (notices.length === 0) return text;
+  const blocks = notices.map((notice) => markdown
+    ? [`> ⚠️ **${notice.title}**`, ...notice.message.split(/\r?\n/u).map((line) => `> ${line}`)].join('\n')
+    : [`⚠️ ${notice.title}`, notice.message].join('\n'));
+  return [text.trim(), ...blocks].filter(Boolean).join('\n\n');
 }
 
 export function formatMirrorTerminalErrorStatus(errorText: string | undefined): string {
@@ -457,6 +470,19 @@ export function createMirrorFeedbackController(
       streamingArtifacts.delete(turn.streamKey);
       return;
     }
+    const fallbackRuntimeNotices: RuntimeNoticeInfo[] = [];
+    for (const notice of turn.runtimeNotices || []) {
+      const delivered = pushStreamFeedbackNotice(
+        {
+          adapter,
+          channelType: subscription.channelType,
+          chatId: subscription.chatId,
+          streamKey: turn.streamKey,
+        },
+        notice,
+      );
+      if (!delivered) fallbackRuntimeNotices.push(notice);
+    }
     if (terminalStatus === 'error' && typeof adapter.onStreamStatus === 'function') {
       const startedAtMs = Date.parse(turn.startedAt || turn.timestamp);
       const nowMs = Date.now();
@@ -486,9 +512,10 @@ export function createMirrorFeedbackController(
     const questions = rawFinalResponse.questions;
     const platformMessages = rawFinalResponse.platformMessages;
     const manualInputs = rawFinalResponse.manualInputs;
-    const cleanTurnText = terminalStatus === 'error'
+    const terminalText = terminalStatus === 'error'
       ? appendTerminalErrorText(rawFinalResponse.text, turn.errorText)
       : rawFinalResponse.text;
+    const cleanTurnText = appendRuntimeNoticeText(terminalText, fallbackRuntimeNotices, markdown);
     if (attachments.length > 0 || questions.length > 0 || platformMessages.length > 0 || manualInputs.length > 0) {
       console.log('[bridge-manager] Mirror final artifacts parsed:', {
         bindingId: subscription.bindingId,

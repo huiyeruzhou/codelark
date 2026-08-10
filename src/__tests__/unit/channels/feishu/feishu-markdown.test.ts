@@ -619,6 +619,28 @@ describe('buildStreamingTextElements', () => {
 });
 
 describe('buildStreamingHistoryElements', () => {
+  it('renders recoverable runtime issues as body quote banners', () => {
+    const elements = buildStreamingHistoryElementsFromItems('', [
+      {
+        type: 'runtime_notice',
+        notice: {
+          level: 'error',
+          title: '操作未完成',
+          message: 'Failed to update thread goal: thread/goal/set failed in TUI\n当前任务仍在继续。',
+          source: 'codex_tui',
+        },
+      },
+      { type: 'markdown', role: 'assistant', content: '训练仍在推进。' },
+    ]);
+    const historyChildren = (elements[0] as any).elements as any[];
+
+    assert.equal(historyChildren[0]?.tag, 'markdown');
+    assert.equal(historyChildren[0]?.element_id, 'stream_notice_1');
+    assert.match(historyChildren[0]?.content, /^> ⚠️ \*\*操作未完成\*\*/u);
+    assert.match(historyChildren[0]?.content, /> 当前任务仍在继续。/u);
+    assert.equal(historyChildren[1]?.content, '训练仍在推进。');
+  });
+
   it('renders thinking summaries as understated Markdown quotes', () => {
     const elements = buildStreamingHistoryElementsFromItems('', [
       {

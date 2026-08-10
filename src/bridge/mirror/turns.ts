@@ -1,5 +1,5 @@
 import type { ContextUsageInfo } from '../../shared/progress/context-usage.js';
-import type { TaskProgressInfo, ToolCallInfo } from '../../domain/index.js';
+import type { RuntimeNoticeInfo, TaskProgressInfo, ToolCallInfo } from '../../domain/index.js';
 import { buildMirrorStreamKey, formatMirrorUserText } from './formatters.js';
 import { toolCallEventFromMirrorRecord } from '../../shared/progress/tool-events.js';
 import type { BridgeMirrorRecord } from '../../runtime/contracts.js';
@@ -62,6 +62,7 @@ export interface FinalizedBridgeMirrorTurn {
   startedAt?: string;
   status: 'completed' | 'interrupted' | 'error';
   errorText?: string;
+  runtimeNotices?: RuntimeNoticeInfo[];
   timedOut?: boolean;
 }
 

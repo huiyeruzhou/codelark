@@ -135,12 +135,24 @@ export type CodexToolDetail = ToolCallDetail;
 
 export type StreamingHistoryTextRole = 'assistant' | 'system' | 'user' | 'thinking';
 
+export interface RuntimeNoticeInfo {
+  level: 'info' | 'warning' | 'error';
+  title: string;
+  message: string;
+  source?: string;
+}
+
 export type StreamingHistoryItem =
   | {
       type: 'markdown';
       role: StreamingHistoryTextRole;
       content: string;
       variant?: 'thinking_summary';
+      elementId?: string;
+    }
+  | {
+      type: 'runtime_notice';
+      notice: RuntimeNoticeInfo;
       elementId?: string;
     }
   | {

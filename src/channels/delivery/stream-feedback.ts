@@ -1,6 +1,6 @@
 import type { BaseChannelAdapter } from '../contracts.js';
 import type { StructuredStreamingUiActionButton, StructuredStreamingUiMetadata } from '../contracts.js';
-import type { StreamingHistoryItem, TaskProgressInfo, ToolCallInfo } from '../../domain/index.js';
+import type { RuntimeNoticeInfo, StreamingHistoryItem, TaskProgressInfo, ToolCallInfo } from '../../domain/index.js';
 import { renderFeedbackTextForChannel } from '../adapter-runtime/channel-runtime.js';
 
 export interface StreamFeedbackTarget {
@@ -62,6 +62,21 @@ export function pushStreamFeedbackHistory(
     target.adapter.onStreamHistory(target.chatId, items, target.streamKey);
   } catch {
     // Streaming UI updates are best effort only.
+  }
+}
+
+export function pushStreamFeedbackNotice(
+  target: StreamFeedbackTarget,
+  notice: RuntimeNoticeInfo,
+): boolean {
+  if (typeof target.adapter.onRuntimeNotice !== 'function') return false;
+  target.ensureStarted?.();
+  try {
+    target.adapter.onRuntimeNotice(target.chatId, notice, target.streamKey);
+    return true;
+  } catch {
+    // Streaming UI updates are best effort only.
+    return false;
   }
 }
 

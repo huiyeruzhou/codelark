@@ -10,6 +10,14 @@ export interface CodexTuiModelMismatchWarning {
   resumingModel: string;
 }
 
+export type CodexTuiDiagnosticImpact = 'operation' | 'turn' | 'session';
+
+export interface CodexTuiDiagnostic {
+  message: string;
+  impact: CodexTuiDiagnosticImpact;
+  terminal: boolean;
+}
+
 function terminalLines(screenText: string): string[] {
   return screenText
     .replace(ANSI_ESCAPE, '')
@@ -96,14 +104,66 @@ export function findNewCodexTuiErrorMessage(
   beforeScreenText: string,
   afterScreenText: string,
 ): string | null {
+  return findNewCodexTuiErrorMessages(beforeScreenText, afterScreenText)[0] || null;
+}
+
+export function findNewCodexTuiErrorMessages(
+  beforeScreenText: string,
+  afterScreenText: string,
+): string[] {
   const remaining = new Map<string, number>();
   for (const message of extractCodexTuiErrorMessages(beforeScreenText)) {
     remaining.set(message, (remaining.get(message) || 0) + 1);
   }
+  const added: string[] = [];
   for (const message of extractCodexTuiErrorMessages(afterScreenText)) {
     const previousCount = remaining.get(message) || 0;
-    if (previousCount <= 0) return message;
-    remaining.set(message, previousCount - 1);
+    if (previousCount <= 0) {
+      added.push(message);
+    } else {
+      remaining.set(message, previousCount - 1);
+    }
   }
-  return null;
+  return added;
+}
+
+function isStructuredTerminalError(message: string): boolean {
+  if (!/^(?:\{|\[)/u.test(message)) return false;
+  try {
+    const parsed = JSON.parse(message) as unknown;
+    if (!parsed || typeof parsed !== 'object') return false;
+    return 'error' in parsed || 'message' in parsed;
+  } catch {
+    return false;
+  }
+}
+
+export function classifyCodexTuiDiagnostic(message: string): CodexTuiDiagnostic {
+  const normalized = message.replace(/\s+/gu, ' ').trim();
+  if (/app-server event stream disconnected|fatal exit|session (?:ended|terminated|is no longer available)/iu.test(normalized)) {
+    return { message: normalized, impact: 'session', terminal: true };
+  }
+  if (
+    isStructuredTerminalError(normalized)
+    || /conversation interrupted|goal budget reached - the turn was stopped|failed to start turn|exceeded retry limit|(?:usage limit|credits?) reached|out of credits/iu.test(normalized)
+  ) {
+    return { message: normalized, impact: 'turn', terminal: true };
+  }
+  return { message: normalized, impact: 'operation', terminal: false };
+}
+
+export function findNewCodexTuiDiagnostic(
+  beforeScreenText: string,
+  afterScreenText: string,
+): CodexTuiDiagnostic | null {
+  const message = findNewCodexTuiErrorMessage(beforeScreenText, afterScreenText);
+  return message ? classifyCodexTuiDiagnostic(message) : null;
+}
+
+export function findNewCodexTuiDiagnostics(
+  beforeScreenText: string,
+  afterScreenText: string,
+): CodexTuiDiagnostic[] {
+  return findNewCodexTuiErrorMessages(beforeScreenText, afterScreenText)
+    .map(classifyCodexTuiDiagnostic);
 }

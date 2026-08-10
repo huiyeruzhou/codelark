@@ -11,7 +11,7 @@ import type {
   PreviewCapabilities,
   SendResult,
 } from '../domain/message.js';
-import type { StreamingHistoryItem, TaskProgressInfo, ToolCallInfo } from '../domain/progress.js';
+import type { RuntimeNoticeInfo, StreamingHistoryItem, TaskProgressInfo, ToolCallInfo } from '../domain/progress.js';
 
 export interface AdapterRuntimeInstance {
   id: string;
@@ -127,6 +127,7 @@ export abstract class BaseChannelAdapter {
   waitForStructuredStreamingUiMessageId?(_chatId: string, _streamKey?: string): Promise<string | null>;
   onMirrorStreamStart?(_chatId: string, _streamKey?: string): void;
   onStreamHistory?(_chatId: string, _items: StreamingHistoryItem[], _streamKey?: string): void;
+  onRuntimeNotice?(_chatId: string, _notice: RuntimeNoticeInfo, _streamKey?: string): void;
   onToolEvent?(_chatId: string, _tools: ToolCallInfo[], _streamKey?: string): void;
   onTaskEvent?(_chatId: string, _tasks: TaskProgressInfo[], _streamKey?: string): void;
   onStreamEnd?(

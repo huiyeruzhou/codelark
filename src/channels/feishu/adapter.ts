@@ -27,6 +27,7 @@ import type {
   InboundMessage,
   OutboundAttachment,
   OutboundMessage,
+  RuntimeNoticeInfo,
   SendResult,
   StreamingHistoryItem,
   TaskProgressInfo,
@@ -1677,6 +1678,16 @@ function streamingHistorySignature(items: StreamingHistoryItem[]): string {
   return JSON.stringify(items.map((item) => {
     if (item.type === 'markdown') {
       return ['markdown', item.role, item.content, item.elementId || ''];
+    }
+    if (item.type === 'runtime_notice') {
+      return [
+        'runtime_notice',
+        item.notice.level,
+        item.notice.title,
+        item.notice.message,
+        item.notice.source || '',
+        item.elementId || '',
+      ];
     }
     return ['tool_panel', item.tools.map((tool) => [
       tool.id,
@@ -5595,6 +5606,31 @@ export class FeishuAdapter extends BaseChannelAdapter {
       return;
     }
     this.updateStreamingHistory(chatId, items, streamKey);
+  }
+
+  onRuntimeNotice(chatId: string, notice: RuntimeNoticeInfo, streamKey?: string): void {
+    if (!this.supportsStructuredStreamingUi(chatId)) return;
+    const cardKey = this.resolveStreamKey(chatId, streamKey);
+    const noticeItem: StreamingHistoryItem = { type: 'runtime_notice', notice };
+    const appendNotice = (items: StreamingHistoryItem[]): StreamingHistoryItem[] => (
+      items.some((item) => (
+        item.type === 'runtime_notice'
+        && item.notice.level === notice.level
+        && item.notice.title === notice.title
+        && item.notice.message === notice.message
+        && item.notice.source === notice.source
+      )) ? items : [...items, noticeItem]
+    );
+    const state = this.activeCards.get(cardKey);
+    if (!state) {
+      const pending = this.pendingCardCreateState(cardKey);
+      pending.historyItems = appendNotice(pending.historyItems || []);
+      pending.historyDriven = true;
+      const messageId = this.lastIncomingMessageId.get(chatId);
+      this.createStreamingCard(chatId, messageId, cardKey).catch(() => {});
+      return;
+    }
+    this.updateStreamingHistory(chatId, appendNotice(state.historyItems), streamKey);
   }
 
   onTaskEvent(chatId: string, tasks: TaskProgressInfo[], streamKey?: string): void {

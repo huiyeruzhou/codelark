@@ -822,7 +822,7 @@ describe('real codex tmux provider e2e', () => {
       assert.equal(sawSquare, true, 'real Codex TUI should render the HTTP 429 as a square error cell');
 
       const errorCapture = await execFileAsync('tmux', ['capture-pane', '-p', '-t', `${tmuxSessionName}:0.0`, '-S', '-80']);
-      _testOnly.observeCodexTuiPendingTurnError(subscription, errorCapture.stdout);
+      _testOnly.observeCodexTuiPendingTurnDiagnostic(subscription, errorCapture.stdout);
 
       const screenFiller = Array.from({ length: 1_200 }, (_, index) => `clkfill${index}`).join(' ');
       await execFileAsync('tmux', ['resize-window', '-t', tmuxSessionName, '-x', '60', '-y', '6']);

@@ -197,6 +197,7 @@ mirror 冷启动分为两种语义。新 attach 没有 `mirror_last_event_at` �
 | Header             | header title、`streaming_tag_*` | stream metadata、bridge 标签 | metadata 变化触发 `card.update` full refresh | 关闭流式后 final `card.update`          |
 | Metadata body tags | `runtime_meta_tags`            | runtime、model、effort tags；runtime 为无前缀 `codex`/`claude`/`kimi` 橙色 tag | full refresh                             | final `card.update`                |
 | History / 正文容器     | `stream_history`               | `historyItems` 或正文 + tools              | 追加 markdown/tool panel 子元素               | full refresh 或续接新卡片                |
+| Runtime notice       | `stream_notice_N`              | `RuntimeNoticeInfo`                       | 正文引用横幅，不改变 turn 终态                    | final full refresh                  |
 | 正文 markdown        | `streaming_content`            | `pendingText`                           | `cardElement.content`                    | full refresh                       |
 | 工具面板               | `stream_tool_N`                   | `toolCalls` 或 history tool panel        | create/append；工具结构变化倾向 full refresh      | full refresh 或续接新卡片                |
 | 任务区                | `streaming_tasks`              | task progress                           | `cardElement.content`                    | full refresh                       |
@@ -204,6 +205,15 @@ mirror 冷启动分为两种语义。新 attach 没有 `mirror_last_event_at` �
 | Actions            | action rows                    | stream actions                          | full refresh                             | 关闭流式后 final `card.update`          |
 
 这个分区不是 CardKit 原生概念，是 CodeLark adapter 的同步边界。`renderedHistoryElementJson`、`renderedToolSnapshots`、`renderedComponentCount` 等状态只表示“本地认为已经提交到飞书服务端的结构”，不能证明用户客户端已经完成重绘。
+
+### Runtime 诊断与任务终态
+
+错误的显示级别和生命周期影响是两个独立维度。runtime 可以报告一次局部操作失败，而当前 agent turn 仍正常完成；renderer 不得因为文本含 `Failed`、`error` 或终端使用红色符号就推导整轮失败。
+
+- `RuntimeNoticeInfo` 表示不终止当前 turn 的可见诊断；feedback controller 通过通道级 `onRuntimeNotice` 投递，支持结构化流式 UI 的 adapter 将其作为独立 `runtime_notice` history item 追加到现有正文，以 `> ⚠️ **操作未完成**` 引用横幅显示，并明确任务仍在继续。没有该接口或投递失败时，controller 把同一引用块降级写入最终正文，不能静默丢失。
+- turn 失败必须来自结构化 terminal event，或有明确生命周期语义的兼容诊断；它才改变 footer、任务状态和最终 reaction。
+- session 终止还必须同时进入 runtime/session lifecycle，不能只靠正文横幅表达。
+- runtime adapter 负责把原始事件分类；Feishu renderer 只消费公共 notice/terminal 合同，不包含 Codex、Claude、Kimi 专属字符串判断。
 
 ## 工具调用呈现契约
 

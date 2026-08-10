@@ -10136,6 +10136,39 @@ enabled = true
       assert.equal(status, 'error');
       assert.match(turn.errorText || '', /CODELARK_MOCK_FATAL/);
 
+      const recoverableTurnState = createMirrorTurnState(
+        binding.bridgeSessionId,
+        new Date(Date.now() + 10).toISOString(),
+        'recoverable-tui-operation-turn',
+      );
+      bridgeManagerTestOnly.assignCodexTuiTurnScreenBaseline(subscription, recoverableTurnState);
+      process.env.TMUX_FAKE_CAPTURE_TEXT += [
+        '',
+        '■ Failed to update thread goal: thread/goal/set failed in TUI',
+        '',
+      ].join('\n');
+      const recoverableTurn: FinalizedBridgeMirrorTurn = {
+        streamKey: recoverableTurnState.streamKey,
+        userText: 'continue training',
+        text: 'training continues',
+        signature: 'recoverable-operation-complete',
+        timestamp: new Date().toISOString(),
+        startedAt: recoverableTurnState.startedAt,
+        status: 'completed',
+      };
+      assert.equal(await bridgeManagerTestOnly.resolveCodexTuiFinalizedTurnStatus(
+        subscription,
+        recoverableTurn,
+        { batchSize: 1 },
+      ), 'completed');
+      assert.equal(recoverableTurn.errorText, undefined);
+      assert.deepEqual(recoverableTurn.runtimeNotices?.at(-1), {
+        level: 'error',
+        title: '操作未完成',
+        message: 'Failed to update thread goal: thread/goal/set failed in TUI\n当前任务仍在继续。',
+        source: 'codex_tui',
+      });
+
       const chainedTurnState = createMirrorTurnState(
         binding.bridgeSessionId,
         new Date(Date.now() - 50).toISOString(),
@@ -10189,11 +10222,16 @@ enabled = true
       );
       subscription.pendingTurn = longTurnState;
       bridgeManagerTestOnly.assignCodexTuiTurnScreenBaseline(subscription, longTurnState);
-      bridgeManagerTestOnly.observeCodexTuiPendingTurnError(subscription, [
+      bridgeManagerTestOnly.observeCodexTuiPendingTurnDiagnostic(subscription, [
         process.env.TMUX_FAKE_CAPTURE_TEXT || '',
+        '■ Failed to update thread goal: thread/goal/set failed in TUI during long turn',
+      ].join('\n'));
+      bridgeManagerTestOnly.observeCodexTuiPendingTurnDiagnostic(subscription, [
+        process.env.TMUX_FAKE_CAPTURE_TEXT || '',
+        '■ Failed to update thread goal: thread/goal/set failed in TUI during long turn',
         '■ exceeded retry limit, last status: 429 Too Many Requests during long turn',
       ].join('\n'));
-      bridgeManagerTestOnly.observeCodexTuiPendingTurnError(subscription, [
+      bridgeManagerTestOnly.observeCodexTuiPendingTurnDiagnostic(subscription, [
         '• many later tool calls pushed the error out of the visible pane',
         '› ',
       ].join('\n'));
@@ -10213,6 +10251,7 @@ enabled = true
         { batchSize: 1 },
       ), 'error');
       assert.match(longTurn.errorText || '', /429 Too Many Requests during long turn/);
+      assert.equal(longTurn.runtimeNotices?.at(-1)?.title, '操作未完成');
       subscription.pendingTurn = null;
 
       const overlappingTurnState = createMirrorTurnState(

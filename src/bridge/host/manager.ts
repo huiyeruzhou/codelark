@@ -13,6 +13,7 @@ import type {
   ChannelChat,
   InboundMessage,
   OutboundRichCard,
+  RuntimeNoticeInfo,
 } from '../../domain/index.js';
 import type { BaseChannelAdapter } from '../../channels/contracts.js';
 import type { BridgeSession, BridgeStore, PermissionLinkRecord } from '../../domain/index.js';
@@ -177,9 +178,10 @@ import {
   type CodexTuiSelectionPromptMonitor,
 } from '../../runtime/codex/tmux-provider.js';
 import {
-  findNewCodexTuiErrorMessage,
+  findNewCodexTuiDiagnostics,
   parseCodexTuiModelMismatchWarning,
   parseCodexTuiReconnectSignal,
+  type CodexTuiDiagnostic,
 } from '../../runtime/codex/tui-runtime-signals.js';
 import {
   cleanupRuntimeTmuxSession,
@@ -364,12 +366,12 @@ interface CodexTuiReconnectMonitor {
 const codexTuiReconnectMonitors = new Map<string, CodexTuiReconnectMonitor>();
 const codexTuiModelMismatchNoticesInFlight = new Map<string, string>();
 
-interface CodexTuiPendingTurnErrorMonitor {
+interface CodexTuiPendingTurnDiagnosticMonitor {
   screen: string;
-  errorMessage?: string;
+  diagnostics: CodexTuiDiagnostic[];
 }
 
-const codexTuiPendingTurnErrorMonitors = new Map<string, CodexTuiPendingTurnErrorMonitor>();
+const codexTuiPendingTurnDiagnosticMonitors = new Map<string, CodexTuiPendingTurnDiagnosticMonitor>();
 
 interface TmuxSelectionPromptTarget {
   channelType: string;
@@ -782,8 +784,8 @@ function assignCodexTuiChainedTurnScreenBaseline(
 
   checkpoint.claimedTurnKey = pendingTurn.turnId || pendingTurn.startedAt;
   codexTuiTurnScreenBaselines.set(pendingTurn.streamKey, checkpoint);
-  console.log('[bridge-manager] Codex TUI terminal screen handed to chained turn as error baseline:', {
-    event: 'codex.tui.error_baseline.handoff',
+  console.log('[bridge-manager] Codex TUI screen handed to chained turn as diagnostic baseline:', {
+    event: 'codex.tui.diagnostic_baseline.handoff',
     session_id: subscription.sessionId,
     thread_id: subscription.threadId,
     finalized_stream_key: finalizedStreamKey,
@@ -1035,32 +1037,88 @@ function observeCodexTuiModelMismatchWarning(
   }
 }
 
-function observeCodexTuiPendingTurnError(
+function observeCodexTuiPendingTurnDiagnostic(
   subscription: BridgeMirrorSubscription,
   screenText: string,
 ): void {
   const pendingTurn = subscription.pendingTurn;
   if (!pendingTurn) return;
-  const previous = codexTuiPendingTurnErrorMonitors.get(pendingTurn.streamKey);
+  const previous = codexTuiPendingTurnDiagnosticMonitors.get(pendingTurn.streamKey);
   const baseline = codexTuiTurnScreenBaselines.get(pendingTurn.streamKey);
   const previousScreen = previous?.screen || baseline?.screen;
   if (!previousScreen) return;
-  const errorMessage = previous?.errorMessage
-    || findNewCodexTuiErrorMessage(previousScreen, screenText)
-    || undefined;
-  codexTuiPendingTurnErrorMonitors.set(pendingTurn.streamKey, {
+  const newDiagnostics = findNewCodexTuiDiagnostics(previousScreen, screenText);
+  const diagnostics = [...(previous?.diagnostics || []), ...newDiagnostics];
+  codexTuiPendingTurnDiagnosticMonitors.set(pendingTurn.streamKey, {
     screen: screenText,
-    errorMessage,
+    diagnostics,
   });
-  if (errorMessage && !previous?.errorMessage) {
-    console.warn('[bridge-manager] Codex TUI error observed while turn is running:', {
-      event: 'codex.tui.error_observed',
+  for (const diagnostic of newDiagnostics) {
+    console.warn('[bridge-manager] Codex TUI diagnostic observed while turn is running:', {
+      event: 'codex.tui.diagnostic_observed',
       session_id: subscription.sessionId,
       thread_id: subscription.threadId,
       stream_key: pendingTurn.streamKey,
-      error: errorMessage,
+      impact: diagnostic.impact,
+      terminal: diagnostic.terminal,
+      error: diagnostic.message,
     });
   }
+}
+
+function applyCodexTuiDiagnosticToFinalizedTurn(
+  turn: FinalizedBridgeMirrorTurn,
+  diagnostic: CodexTuiDiagnostic,
+  source: 'running_turn_probe' | 'completed_turn_probe',
+): FinalizedBridgeMirrorTurn['status'] {
+  if (diagnostic.terminal) {
+    turn.errorText ||= diagnostic.message;
+    console.warn('[bridge-manager] Terminal Codex TUI diagnostic applied:', {
+      event: 'codex.tui.terminal_diagnostic_applied',
+      source,
+      stream_key: turn.streamKey,
+      impact: diagnostic.impact,
+      error: diagnostic.message,
+    });
+    return 'error';
+  }
+
+  const notice: RuntimeNoticeInfo = {
+    level: 'error',
+    title: '操作未完成',
+    message: `${diagnostic.message}\n当前任务仍在继续。`,
+    source: 'codex_tui',
+  };
+  turn.runtimeNotices ||= [];
+  if (!turn.runtimeNotices.some((existing) => (
+    existing.level === notice.level
+    && existing.title === notice.title
+    && existing.message === notice.message
+    && existing.source === notice.source
+  ))) {
+    turn.runtimeNotices.push(notice);
+  }
+  console.warn('[bridge-manager] Recoverable Codex TUI diagnostic retained as a body notice:', {
+    event: 'codex.tui.recoverable_diagnostic_applied',
+    source,
+    stream_key: turn.streamKey,
+    impact: diagnostic.impact,
+    error: diagnostic.message,
+  });
+  return turn.status;
+}
+
+function applyCodexTuiDiagnosticsToFinalizedTurn(
+  turn: FinalizedBridgeMirrorTurn,
+  diagnostics: CodexTuiDiagnostic[],
+  source: 'running_turn_probe' | 'completed_turn_probe',
+): FinalizedBridgeMirrorTurn['status'] {
+  let status = turn.status;
+  for (const diagnostic of diagnostics) {
+    const nextStatus = applyCodexTuiDiagnosticToFinalizedTurn(turn, diagnostic, source);
+    if (nextStatus === 'error') status = 'error';
+  }
+  return status;
 }
 
 async function resolveCodexTuiFinalizedTurnStatus(
@@ -1069,8 +1127,8 @@ async function resolveCodexTuiFinalizedTurnStatus(
   context: { batchSize: number },
 ): Promise<FinalizedBridgeMirrorTurn['status']> {
   const baseline = codexTuiTurnScreenBaselines.get(turn.streamKey);
-  const observedErrorMessage = codexTuiPendingTurnErrorMonitors.get(turn.streamKey)?.errorMessage;
-  codexTuiPendingTurnErrorMonitors.delete(turn.streamKey);
+  const observedDiagnostics = codexTuiPendingTurnDiagnosticMonitors.get(turn.streamKey)?.diagnostics || [];
+  codexTuiPendingTurnDiagnosticMonitors.delete(turn.streamKey);
   codexTuiReconnectMonitors.delete(subscription.sessionId);
 
   const session = getBridgeContext().store.getSession(subscription.sessionId);
@@ -1094,17 +1152,8 @@ async function resolveCodexTuiFinalizedTurnStatus(
     };
     codexTuiIdleScreenCheckpoints.set(subscription.sessionId, checkpoint);
     assignCodexTuiChainedTurnScreenBaseline(subscription, checkpoint, turn.streamKey);
-    if (turn.status === 'completed' && observedErrorMessage) {
-      turn.errorText ||= observedErrorMessage;
-      console.warn('[bridge-manager] Codex TUI running-turn error applied after task_complete:', {
-        event: 'codex.tui.error_applied',
-        source: 'running_turn_probe',
-        session_id: subscription.sessionId,
-        thread_id: subscription.threadId,
-        stream_key: turn.streamKey,
-        error: observedErrorMessage,
-      });
-      return 'error';
+    if (turn.status === 'completed' && observedDiagnostics.length > 0) {
+      return applyCodexTuiDiagnosticsToFinalizedTurn(turn, observedDiagnostics, 'running_turn_probe');
     }
     if (turn.status !== 'completed' || !baseline || context.batchSize !== 1) {
       if (turn.status === 'completed' && !baseline) {
@@ -1131,20 +1180,12 @@ async function resolveCodexTuiFinalizedTurnStatus(
     if (subscription.fileSize === null || currentFileSize !== subscription.fileSize) {
       return turn.status;
     }
-    const errorMessage = findNewCodexTuiErrorMessage(baseline.screen, capture.screen);
-    if (!errorMessage) return turn.status;
-    turn.errorText ||= errorMessage;
-    console.warn('[bridge-manager] Codex TUI error detected after task_complete:', {
-      session_id: subscription.sessionId,
-      thread_id: subscription.threadId,
-      stream_key: turn.streamKey,
-      error: errorMessage,
-    });
-    return 'error';
+    const diagnostics = findNewCodexTuiDiagnostics(baseline.screen, capture.screen);
+    if (diagnostics.length === 0) return turn.status;
+    return applyCodexTuiDiagnosticsToFinalizedTurn(turn, diagnostics, 'completed_turn_probe');
   } catch (error) {
-    if (turn.status === 'completed' && observedErrorMessage) {
-      turn.errorText ||= observedErrorMessage;
-      return 'error';
+    if (turn.status === 'completed' && observedDiagnostics.length > 0) {
+      return applyCodexTuiDiagnosticsToFinalizedTurn(turn, observedDiagnostics, 'running_turn_probe');
     }
     console.warn('[bridge-manager] Codex TUI completed-turn error probe failed:', {
       session_id: subscription.sessionId,
@@ -1414,7 +1455,7 @@ async function probeMirrorTmuxSelectionPrompt(subscription: BridgeMirrorSubscrip
   if (sessionSupportsCodexTuiRuntimeSignals(session)) {
     observeCodexTuiModelMismatchWarning(subscription, capture.screen);
     observeCodexTuiReconnectStatus(subscription, capture.screen, nowMs);
-    observeCodexTuiPendingTurnError(subscription, capture.screen);
+    observeCodexTuiPendingTurnDiagnostic(subscription, capture.screen);
   }
   const monitor = getTmuxSelectionPromptMonitor(subscription.sessionId);
   const prompt = observeStableCodexTuiSelectionPrompt(capture.screen, monitor);
@@ -5380,7 +5421,7 @@ function resetStateForTests(): void {
   codexTuiIdleScreenMissingCheckedAt.clear();
   codexTuiReconnectMonitors.clear();
   codexTuiModelMismatchNoticesInFlight.clear();
-  codexTuiPendingTurnErrorMonitors.clear();
+  codexTuiPendingTurnDiagnosticMonitors.clear();
   state.everyTaskSelections.clear();
   state.thenTaskSelections.clear();
   state.thenTaskTimers.clear();
@@ -5460,7 +5501,7 @@ export const _testOnly = {
   captureCodexTuiIdleScreenCheckpoint,
   ensureCodexTuiIdleScreenCheckpoints,
   assignCodexTuiTurnScreenBaseline,
-  observeCodexTuiPendingTurnError,
+  observeCodexTuiPendingTurnDiagnostic,
   resolveCodexTuiFinalizedTurnStatus,
   filterSuppressedMirrorRecords,
   isMirrorSuppressed,

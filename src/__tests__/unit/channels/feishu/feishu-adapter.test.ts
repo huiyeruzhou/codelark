@@ -11,7 +11,7 @@ import {
   _testOnly as largeFileUploadTestOnly,
   LARGE_FILE_UPLOAD_THRESHOLD_BYTES,
 } from '../../../../bridge/command/file-upload-confirmations.js';
-import type { FileAttachment } from '../../../../domain/index.js';
+import type { FileAttachment, StreamingHistoryItem } from '../../../../domain/index.js';
 import { initBridgeTestContext } from '../../../helpers/bridge/test-bridge-utils.js';
 
 function createDeferred<T = void>() {
@@ -71,6 +71,46 @@ function cloudDocumentCommentEvent(eventId: string, event: Record<string, any>) 
 }
 
 describe('feishu-adapter structured streaming regions', () => {
+  it('appends a runtime notice to existing history exactly once', () => {
+    const adapter = new FeishuAdapter({
+      id: 'feishu-default',
+      provider: 'feishu',
+      enabled: true,
+      alias: '飞书',
+      config: {
+        appId: 'app-id',
+        appSecret: 'app-secret',
+        streamingEnabled: true,
+      },
+    });
+    const state: { historyItems: StreamingHistoryItem[] } = {
+      historyItems: [
+        { type: 'markdown', role: 'assistant', content: '任务仍在运行' },
+      ],
+    };
+    (adapter as any).activeCards.set('stream-1', state);
+    (adapter as any).updateStreamingHistory = (
+      _chatId: string,
+      items: StreamingHistoryItem[],
+    ) => {
+      state.historyItems = items;
+    };
+    const notice = {
+      level: 'error' as const,
+      title: '操作未完成',
+      message: 'goal 更新失败\n当前任务仍在继续。',
+      source: 'codex_tui',
+    };
+
+    adapter.onRuntimeNotice('chat-1', notice, 'stream-1');
+    adapter.onRuntimeNotice('chat-1', notice, 'stream-1');
+
+    assert.deepEqual(state.historyItems, [
+      { type: 'markdown', role: 'assistant', content: '任务仍在运行' },
+      { type: 'runtime_notice', notice },
+    ]);
+  });
+
   it('exposes the resolved Feishu bot name as the adapter identity', () => {
     const adapter = new FeishuAdapter({
       id: 'feishu-default',
