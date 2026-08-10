@@ -226,10 +226,11 @@ describe('feishu-adapter structured streaming regions', () => {
     assert.equal(info, null);
   });
 
-  it('uploads the bot avatar URL as an avatar image key before creating Feishu groups', async () => {
+  it('reuses the uploaded group avatar image key until the bot avatar URL changes', async () => {
     const originalFetch = globalThis.fetch;
     const fetchCalls: Array<{ url: string; init?: RequestInit }> = [];
     const createdPayloads: Array<Record<string, any>> = [];
+    let imageUploadCount = 0;
     const adapter = new FeishuAdapter({
       id: 'feishu-default',
       provider: 'feishu',
@@ -246,13 +247,14 @@ describe('feishu-adapter structured streaming regions', () => {
       if (url.includes('/tenant_access_token/internal')) {
         return Response.json({ code: 0, tenant_access_token: 'tenant-token', expire: 7200 });
       }
-      if (url === 'https://example.test/avatar.png') {
+      if (url === 'https://example.test/avatar.png' || url === 'https://example.test/avatar-v2.png') {
         return new Response(new Uint8Array([137, 80, 78, 71]), {
           headers: { 'content-type': 'image/png' },
         });
       }
       if (url.includes('/open-apis/im/v1/images')) {
-        return Response.json({ code: 0, data: { image_key: 'avatar-image-key' } });
+        imageUploadCount += 1;
+        return Response.json({ code: 0, data: { image_key: `avatar-image-key-${imageUploadCount}` } });
       }
       throw new Error(`unexpected fetch: ${url}`);
     }) as typeof fetch;
@@ -279,12 +281,20 @@ describe('feishu-adapter structured streaming regions', () => {
         ownerUserId: 'ou_owner',
         userIds: ['ou_owner'],
       });
+      await adapter.createGroupChat({ name: 'smoke-2' });
+      (adapter as any).botAvatarUrl = 'https://example.test/avatar-v2.png';
+      await adapter.createGroupChat({ name: 'smoke-3' });
 
       assert.equal(created.chatId, 'oc_created');
       assert.equal(created.name, '[BotName]smoke');
-      assert.equal(createdPayloads.length, 1);
+      assert.equal(createdPayloads.length, 3);
       assert.equal(createdPayloads[0].data.name, '[BotName]smoke');
-      assert.equal(createdPayloads[0].data.avatar, 'avatar-image-key');
+      assert.equal(createdPayloads[0].data.avatar, 'avatar-image-key-1');
+      assert.equal(createdPayloads[1].data.avatar, 'avatar-image-key-1');
+      assert.equal(createdPayloads[2].data.avatar, 'avatar-image-key-2');
+      assert.equal(fetchCalls.filter((call) => call.url === 'https://example.test/avatar.png').length, 1);
+      assert.equal(fetchCalls.filter((call) => call.url === 'https://example.test/avatar-v2.png').length, 1);
+      assert.equal(imageUploadCount, 2);
       const imageUpload = fetchCalls.find((call) => call.url.includes('/open-apis/im/v1/images'));
       assert.ok(imageUpload);
       assert.equal(imageUpload.init?.method, 'POST');
@@ -292,6 +302,66 @@ describe('feishu-adapter structured streaming regions', () => {
       const form = imageUpload.init.body as FormData;
       assert.equal(form.get('image_type'), 'avatar');
       assert.ok(form.get('image') instanceof File);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it('coalesces concurrent group avatar uploads for the same URL', async () => {
+    const originalFetch = globalThis.fetch;
+    const uploadResponse = createDeferred<Response>();
+    const createdPayloads: Array<Record<string, any>> = [];
+    let imageUploadCount = 0;
+    const adapter = new FeishuAdapter({
+      id: 'feishu-default',
+      provider: 'feishu',
+      enabled: true,
+      alias: '飞书',
+      config: {
+        appId: 'app-id',
+        appSecret: 'app-secret',
+      },
+    });
+    globalThis.fetch = (async (input: string | URL | Request) => {
+      const url = String(input);
+      if (url.includes('/tenant_access_token/internal')) {
+        return Response.json({ code: 0, tenant_access_token: 'tenant-token', expire: 7200 });
+      }
+      if (url === 'https://example.test/avatar.png') {
+        return new Response(new Uint8Array([137, 80, 78, 71]), {
+          headers: { 'content-type': 'image/png' },
+        });
+      }
+      if (url.includes('/open-apis/im/v1/images')) {
+        imageUploadCount += 1;
+        return uploadResponse.promise;
+      }
+      throw new Error(`unexpected fetch: ${url}`);
+    }) as typeof fetch;
+    (adapter as any).botName = 'BotName';
+    (adapter as any).botAvatarUrl = 'https://example.test/avatar.png';
+    (adapter as any).restClient = {
+      im: {
+        chat: {
+          create: async (payload: Record<string, any>) => {
+            createdPayloads.push(payload);
+            return { code: 0, msg: 'success', data: { chat_id: `oc_created_${createdPayloads.length}` } };
+          },
+        },
+      },
+    };
+
+    try {
+      const first = adapter.createGroupChat({ name: 'first' });
+      const second = adapter.createGroupChat({ name: 'second' });
+      await waitForCondition(() => imageUploadCount === 1);
+      uploadResponse.resolve(Response.json({ code: 0, data: { image_key: 'shared-avatar-key' } }));
+      await Promise.all([first, second]);
+
+      assert.equal(imageUploadCount, 1);
+      assert.equal(createdPayloads.length, 2);
+      assert.equal(createdPayloads[0].data.avatar, 'shared-avatar-key');
+      assert.equal(createdPayloads[1].data.avatar, 'shared-avatar-key');
     } finally {
       globalThis.fetch = originalFetch;
     }
@@ -401,9 +471,10 @@ describe('feishu-adapter structured streaming regions', () => {
     );
   });
 
-  it('falls back to the default group avatar when bot avatar upload fails', async () => {
+  it('falls back to the default group avatar after an upload failure and retries next time', async () => {
     const originalFetch = globalThis.fetch;
     const createdPayloads: Array<Record<string, any>> = [];
+    let avatarDownloadCount = 0;
     const adapter = new FeishuAdapter({
       id: 'feishu-default',
       provider: 'feishu',
@@ -416,8 +487,18 @@ describe('feishu-adapter structured streaming regions', () => {
     });
     globalThis.fetch = (async (input: string | URL | Request) => {
       const url = String(input);
+      if (url.includes('/tenant_access_token/internal')) {
+        return Response.json({ code: 0, tenant_access_token: 'tenant-token', expire: 7200 });
+      }
       if (url === 'https://example.test/avatar.png') {
-        return new Response('', { status: 404 });
+        avatarDownloadCount += 1;
+        if (avatarDownloadCount === 1) return new Response('', { status: 404 });
+        return new Response(new Uint8Array([137, 80, 78, 71]), {
+          headers: { 'content-type': 'image/png' },
+        });
+      }
+      if (url.includes('/open-apis/im/v1/images')) {
+        return Response.json({ code: 0, data: { image_key: 'retried-avatar-key' } });
       }
       throw new Error(`unexpected fetch: ${url}`);
     }) as typeof fetch;
@@ -436,10 +517,13 @@ describe('feishu-adapter structured streaming regions', () => {
 
     try {
       const created = await adapter.createGroupChat({ name: 'smoke' });
+      await adapter.createGroupChat({ name: 'smoke-2' });
 
       assert.equal(created.chatId, 'oc_created');
-      assert.equal(createdPayloads.length, 1);
+      assert.equal(createdPayloads.length, 2);
       assert.equal('avatar' in createdPayloads[0].data, false);
+      assert.equal(createdPayloads[1].data.avatar, 'retried-avatar-key');
+      assert.equal(avatarDownloadCount, 2);
     } finally {
       globalThis.fetch = originalFetch;
     }

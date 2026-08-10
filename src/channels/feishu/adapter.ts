@@ -2362,6 +2362,9 @@ export class FeishuAdapter extends BaseChannelAdapter {
   /** Recently sent rich command cards that can be updated in-place. */
   private richCardUpdates = new Map<string, RichCardUpdateState>();
   private groupAuthorizationImageKeyPromise: Promise<string | null> | null = null;
+  /** Group avatar uploads are reusable for this adapter process; URL changes invalidate the cached key. */
+  private groupAvatarImageKeyCache: { avatarUrl: string; imageKey: string } | null = null;
+  private groupAvatarImageKeyRequest: { avatarUrl: string; promise: Promise<string | null> } | null = null;
   /** Cached tenant token for upload APIs. */
   private tenantTokenCache:
     | { token: string; expiresAt: number; appId: string; appSecret: string; domain: string }
@@ -5989,26 +5992,48 @@ export class FeishuAdapter extends BaseChannelAdapter {
     const avatarUrl = this.botAvatarUrl?.trim();
     if (!avatarUrl) return null;
 
+    if (this.groupAvatarImageKeyCache?.avatarUrl === avatarUrl) {
+      return this.groupAvatarImageKeyCache.imageKey;
+    }
+    if (this.groupAvatarImageKeyRequest?.avatarUrl === avatarUrl) {
+      return this.groupAvatarImageKeyRequest.promise;
+    }
+
+    const promise = (async (): Promise<string | null> => {
+      try {
+        const response = await fetch(avatarUrl, {
+          signal: AbortSignal.timeout(10_000),
+        });
+        if (!response.ok) {
+          throw new Error(`avatar download failed: HTTP ${response.status}`);
+        }
+        const contentType = response.headers.get('content-type') || 'image/png';
+        const image = new Blob([await response.arrayBuffer()], { type: contentType });
+        if (image.size === 0) {
+          throw new Error('avatar download returned an empty image');
+        }
+        const fileName = inferImageFileName(avatarUrl, contentType);
+        return await this.uploadImageBlob('avatar', image, fileName);
+      } catch (error) {
+        console.warn(
+          '[feishu-adapter] Failed to upload bot avatar as group avatar; creating group with default avatar:',
+          error instanceof Error ? error.message : error,
+        );
+        return null;
+      }
+    })();
+    this.groupAvatarImageKeyRequest = { avatarUrl, promise };
+
     try {
-      const response = await fetch(avatarUrl, {
-        signal: AbortSignal.timeout(10_000),
-      });
-      if (!response.ok) {
-        throw new Error(`avatar download failed: HTTP ${response.status}`);
+      const imageKey = await promise;
+      if (imageKey && this.botAvatarUrl?.trim() === avatarUrl) {
+        this.groupAvatarImageKeyCache = { avatarUrl, imageKey };
       }
-      const contentType = response.headers.get('content-type') || 'image/png';
-      const image = new Blob([await response.arrayBuffer()], { type: contentType });
-      if (image.size === 0) {
-        throw new Error('avatar download returned an empty image');
+      return imageKey;
+    } finally {
+      if (this.groupAvatarImageKeyRequest?.promise === promise) {
+        this.groupAvatarImageKeyRequest = null;
       }
-      const fileName = inferImageFileName(avatarUrl, contentType);
-      return await this.uploadImageBlob('avatar', image, fileName);
-    } catch (error) {
-      console.warn(
-        '[feishu-adapter] Failed to upload bot avatar as group avatar; creating group with default avatar:',
-        error instanceof Error ? error.message : error,
-      );
-      return null;
     }
   }
 
