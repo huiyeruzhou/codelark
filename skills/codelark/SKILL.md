@@ -7,6 +7,18 @@ description: Use when an agent runs through CodeLark and needs to send Feishu/La
 
 Use completed/final responses for CodeLark control blocks. Keep ordinary user-facing prose outside the blocks. Do not expose control-block implementation details unless the user asks.
 
+## Distinguish CodeLark agents from runtime subagents
+
+A CodeLark delegated agent is an independent IM group plus Bridge session. A runtime-native subagent is a private worker created by tools such as Codex `multi_agent`. They are different systems:
+
+- communicate with runtime-native subagents only through their native spawn/send/wait/close tools;
+- communicate with CodeLark agents only through CodeLark session discovery and relay;
+- never use `codelark send agent` to send a parent/subagent handoff between runtime-native subagents;
+- never treat a runtime subagent ID or nickname as a CodeLark target;
+- never modify a runtime's built-in subagent skill merely to configure a CodeLark delegated agent.
+
+If the user says only “subagent”, use the runtime-native mechanism. Use CodeLark delegation when the user explicitly asks for a new group/chat, a persistent independent Agent, or cross-chat communication. Do not create both for the same assignment unless the user explicitly requests both.
+
 ## Send Feishu messages
 
 Use `<clk-send>` with the official Feishu `msg_type + content` shape. Put JSON directly inside the block, without a Markdown fence.
@@ -90,6 +102,24 @@ Send ordinary text to another session's existing lane:
 ```
 
 Always copy `target` exactly from the one selected `codelark sessions --json` result. Do not construct it from a platform chat ID, card ID, Home path, or list position. CodeLark sends only after the target resolves to exactly one live session. The target receives the text unchanged, so `/stop`, `/model`, and other commands keep their normal CodeLark meaning.
+
+### Create a dedicated agent chat before delegating
+
+Manual input uses the same command pipeline as a user message, so an Agent may run a slash command in its own current chat:
+
+```text
+<clk-input>{"target":"current","text":"/new agent-review /absolute/project/path"}</clk-input>
+```
+
+For a multi-step delegation that must continue in the same Agent turn:
+
+1. Resolve the current source session to exactly one canonical `target`; do not guess an ID.
+2. Choose a unique, task-readable group name and verify that exact name currently returns zero sessions.
+3. Run `codelark send agent --source <current-target> --source-home <home> --target <current-target> --home <home> --text '/new <unique-task-name> <absolute-path>'`.
+4. Because command execution is asynchronous, poll `codelark sessions --chat-name '<unique-task-name>' --home <home> --json` until it returns exactly one new session.
+5. Send the complete task brief to that returned `target` with `codelark send agent` or `<clk-input>`.
+
+New delegated work gets a dedicated group/session by default. Never commandeer an arbitrary existing chat merely because discovery found it. Reuse an existing chat only when the user explicitly names that chat, or when the chat already owns the task being continued. If exact discovery returns multiple candidates, refine the filters; if it returns none, report the failure instead of falling back to another chat.
 
 If the user already supplied an existing binding UUID, Feishu `oc_...` chat ID, or Bridge/session UUID, pass it unchanged as the same string `target`; the resolver accepts all three. Discovery still displays only the canonical Bridge/session UUID.
 
