@@ -15,6 +15,7 @@ import {
   formatInstallSkillsRestartGuidance,
   formatRunSuccessMessage,
   formatRunningBridgePrompt,
+  formatSendResult,
   formatSessionsJson,
   formatSessionsTable,
   isDirectCliRun,
@@ -68,6 +69,16 @@ describe('cli entrypoint', () => {
       msgType: 'interactive', content: { header: { template: 'green' } },
     });
     assert.match(buildSendHelpText(), /msg_type \+ content/u);
+    assert.match(buildSendHelpText(), /ok=true.*非零状态.*检查结果/su);
+    assert.deepEqual(JSON.parse(formatSendResult({
+      bridgeSessionId: 'target-session',
+      chatName: '目标群',
+    }, 'agent')), {
+      ok: true,
+      target: 'target-session',
+      chat_name: '目标群',
+      delivery: 'agent',
+    });
   });
 
   it('parses stable condition monitor create, list, and cancel commands', () => {

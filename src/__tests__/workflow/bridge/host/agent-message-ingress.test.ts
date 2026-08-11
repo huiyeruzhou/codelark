@@ -21,12 +21,17 @@ import * as router from '../../../../bridge/host/channel-router.js';
 import {
   _testOnly,
   listActiveBridgeSessions,
+  receiveAgentInput,
   receiveManualInput,
   sendAgentMessageFromBinding,
   sendPlatformMessage,
   stop,
 } from '../../../../bridge/host/manager.js';
-import { startBridgeControlService, type BridgeControlService } from '../../../../bridge/control/service-discovery.js';
+import {
+  deliverAgentInputFromSession,
+  startBridgeControlService,
+  type BridgeControlService,
+} from '../../../../bridge/control/service-discovery.js';
 import { _testOnlyWaitForDeliveryQueuesForTests } from '../../../../channels/delivery/deliver.js';
 
 const CONFIG_PATH = path.join(CODELARK_HOME, 'config.toml');
@@ -45,6 +50,7 @@ class ManualIngressAdapter extends BaseChannelAdapter {
   readonly sentMessages: OutboundMessage[] = [];
   readonly createdGroups: CreatedGroupChat[] = [];
   readonly createGroupRequests: CreateGroupChatOptions[] = [];
+  readonly reactions: Array<{ messageId: string; emojiType: string }> = [];
   private running = false;
 
   constructor(instance?: { id?: string }) {
@@ -62,6 +68,10 @@ class ManualIngressAdapter extends BaseChannelAdapter {
   async send(message: OutboundMessage): Promise<SendResult> {
     this.sentMessages.push(message);
     return { ok: true, messageId: `manual-${this.sentMessages.length}` };
+  }
+  async addMessageReaction(messageId: string, emojiType: string): Promise<string> {
+    this.reactions.push({ messageId, emojiType });
+    return `reaction-${this.reactions.length}`;
   }
   async createGroupChat(options: CreateGroupChatOptions): Promise<CreatedGroupChat> {
     this.createGroupRequests.push(options);
@@ -144,14 +154,19 @@ describe('agent message manual ingress', () => {
       handlers: {
         listSessions: listActiveBridgeSessions,
         receiveInput: receiveManualInput,
+        sendAgentInput: receiveAgentInput,
       },
     });
 
-    await sendAgentMessageFromBinding(source.id, {
-      target: target.id,
+    const deliveredTarget = await deliverAgentInputFromSession({
+      source: source.bridgeSessionId,
+      sourceHome: CODELARK_HOME,
+      target: target.bridgeSessionId,
+      targetHome: CODELARK_HOME,
       text: '  /stop\n',
       idempotencyKey: 'condition-monitor-stable-id',
     });
+    assert.equal(deliveredTarget.bridgeSessionId, target.bridgeSessionId);
     const inbound = await adapter.consumeOne();
     await _testOnlyWaitForDeliveryQueuesForTests(adapter);
 
@@ -260,6 +275,11 @@ describe('agent message manual ingress', () => {
     assert.equal(newCommand.text, `/new agent-review ${delegatedWorkDir}`);
     assert.equal(newCommand.address.userId, 'ou_agent_owner');
     await _testOnly.handleMessage(adapter, newCommand);
+    assert.deepEqual(
+      adapter.reactions,
+      [],
+      'synthetic manual commands must not call the platform reaction API with a manual: message ID',
+    );
 
     assert.deepEqual(adapter.createGroupRequests, [{
       name: 'agent-review',

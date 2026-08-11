@@ -483,6 +483,7 @@ export function buildSendHelpText(): string {
     `       ${PRIMARY_CLI_NAME} send message --target <target> --msg-type <type> --content <json> [--home <path>] [--idempotency-key <key>]`,
     '',
     'agent 会把普通输入送入目标 Agent lane，并在源群与目标群显示发送/接收卡片。',
+    '发送成功时输出包含 ok=true、target 和 chat_name 的 JSON；失败时以非零状态退出。调用方必须检查结果后再宣称送达。',
     'message 会按飞书官方 msg_type + content 直接发送用户可见消息；text、post、interactive 与 @ 均由 content 表达。',
   ].join('\n') + '\n';
 }
@@ -560,12 +561,19 @@ async function runSendCommand(args: string[]): Promise<void> {
         platformMessage: { msgType: command.msgType!, content: command.content },
         idempotencyKey: command.idempotencyKey,
       });
-  process.stdout.write(JSON.stringify({
+  process.stdout.write(formatSendResult(target, command.mode));
+}
+
+export function formatSendResult(
+  target: Pick<DiscoveredBridgeSession, 'bridgeSessionId' | 'chatName'>,
+  delivery: ParsedSendCommand['mode'],
+): string {
+  return JSON.stringify({
     ok: true,
     target: target.bridgeSessionId,
     chat_name: target.chatName,
-    delivery: command.mode,
-  }) + '\n');
+    delivery,
+  }) + '\n';
 }
 
 export function buildMonitorHelpText(): string {

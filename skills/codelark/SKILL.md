@@ -99,13 +99,28 @@ codelark sessions --home /home/user/.codelark --chat-name "project" --bot-name "
 
 Filters are combined with AND. `--query` is fuzzy across fields; `--target`, `--chat-name`, `--bot-name`, `--home`, `--runtime`, and `--status` are exact. JSON results contain one opaque `target` for each live session. If zero sessions match, report that. If multiple sessions match, refine the filters instead of guessing.
 
-Send ordinary text to another session's existing lane:
+Resolve both the current source chat and the intended target to one live session, then send ordinary text with the public CLI so the result is observable:
 
-```text
-<clk-input>{"target":"target-from-codelark-sessions","text":"请检查训练状态并回复我"}</clk-input>
+```bash
+codelark send agent \
+  --source source-target-from-codelark-sessions \
+  --target target-from-codelark-sessions \
+  --text '请检查训练状态并回复我' \
+  --idempotency-key stable-unique-send-id
 ```
 
-Always copy `target` exactly from the one selected `codelark sessions --json` result. Do not construct it from a platform chat ID, card ID, Home path, or list position. CodeLark sends only after the target resolves to exactly one live session. The target receives the text unchanged, so `/stop`, `/model`, and other commands keep their normal CodeLark meaning.
+Copy both `--source` and `--target` exactly from their selected `codelark sessions --json` results. Do not construct either value from a platform chat ID, card ID, Home path, or list position. CodeLark sends only after the destination resolves to exactly one live session. The target receives the text unchanged, so `/stop`, `/model`, and other commands keep their normal CodeLark meaning.
+
+Use one fresh `--idempotency-key` for each logical message and preserve that same key if the identical send must be retried.
+
+Use only `codelark send agent` for cross-Agent delivery. Do not read service-discovery descriptors or tokens, call `/v1/input` or another private control endpoint, or run a CLI from an arbitrary source worktree. If the installed `codelark` executable is not on `PATH`, restore its documented runtime environment or report that the public CLI is unavailable; do not replace it with an internal request. Keep `<clk-input>` for commands sent to `target: current`, where CodeLark processes the control block after the response.
+
+Treat sending as complete only after checking the CLI result. Success requires exit status 0 and JSON with `ok: true`; verify that its returned `target` and `chat_name` are the session selected during discovery. On failure:
+
+1. Do not claim or imply that the message was delivered.
+2. For a missing or ambiguous target, run session discovery again and re-verify the real chat and Bot names; ask the user when more than one candidate remains.
+3. For a transient Bridge error, retry at most once with the same `--idempotency-key` so acceptance cannot duplicate the message.
+4. If the public CLI remains unavailable or the retry fails, show the relevant error and ask for the missing decision or service recovery while continuing any unaffected main task.
 
 ### Create a dedicated agent chat before delegating
 
@@ -121,7 +136,7 @@ For a multi-step delegation that must continue in the same Agent turn:
 2. Choose a unique, task-readable group name and verify that exact name currently returns zero sessions.
 3. Run `codelark send agent --source <current-target> --source-home <home> --target <current-target> --home <home> --text '/new <unique-task-name> <absolute-path>'`.
 4. Because command execution is asynchronous, poll `codelark sessions --chat-name '<unique-task-name>' --home <home> --json` until it returns exactly one new session.
-5. Send the complete task brief to that returned `target` with `codelark send agent` or `<clk-input>`.
+5. Send the complete task brief to that returned `target` with `codelark send agent`, then validate its exit status and success JSON as described above.
 
 New delegated work gets a dedicated group/session by default. Never commandeer an arbitrary existing chat merely because discovery found it. Reuse an existing chat only when the user explicitly names that chat, or when the chat already owns the task being continued. If exact discovery returns multiple candidates, refine the filters; if it returns none, report the failure instead of falling back to another chat.
 
@@ -160,5 +175,5 @@ Interpret “顺便 / btw / 请另一个 Agent 看看” as parallel consultatio
 - Put every CodeLark control block on its own line. Inline tag names in prose are ordinary text.
 - Use Feishu's official message schema; do not invent `msg_type` values.
 - Escape JSON correctly, especially quotes inside `<at user_id="...">`.
-- Do not claim a cross-Agent send succeeded; CodeLark owns acceptance and failure cards.
+- Do not claim a cross-Agent send succeeded from an attempted command alone; check the public CLI result and let CodeLark's acceptance/failure cards remain the user-visible record.
 - Use `target: current` only for commands intended for the current chat.

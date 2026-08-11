@@ -399,7 +399,9 @@ function addInboundGetReaction(
   msg: InboundMessage,
   reason: 'command_received' | 'tmux_input_actions_completed',
 ): void {
-  if (!msg.messageId || typeof adapter.addMessageReaction !== 'function') return;
+  const raw = msg.raw as { manualIngress?: unknown } | undefined;
+  const syntheticManualIngress = raw?.manualIngress === true || msg.messageId?.startsWith('manual:');
+  if (syntheticManualIngress || !msg.messageId || typeof adapter.addMessageReaction !== 'function') return;
   void adapter.addMessageReaction(msg.messageId, INBOUND_GET_REACTION).catch((error) => {
     console.warn('[bridge-manager] Failed to add inbound Get reaction:', {
       reason,
