@@ -364,7 +364,7 @@ describe('bridge control service', () => {
     assert.deepEqual(received, [path.join(root, 'home-1'), path.join(root, 'home-0')]);
   });
 
-  it('keeps a live descriptor after a transient endpoint failure and prunes a dead one', async () => {
+  it('keeps a live descriptor after a transient endpoint failure and prunes a dead one', async (t) => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-stale-test-'));
     roots.push(root);
     const directory = path.join(root, 'discovery');
@@ -375,14 +375,28 @@ describe('bridge control service', () => {
       token: 'test-token',
       startedAt: new Date().toISOString(),
     } as const;
-    const descriptorFile = (home: string) => path.join(
-      directory,
-      `${crypto.createHash('sha256').update(path.resolve(home)).digest('hex')}.json`,
-    );
+    const descriptorFile = (home: string) => {
+      const resolved = path.resolve(home);
+      const canonical = process.platform === 'win32' ? resolved.toLocaleLowerCase() : resolved;
+      return path.join(
+        directory,
+        `${crypto.createHash('sha256').update(canonical).digest('hex')}.json`,
+      );
+    };
     const liveHome = path.join(root, 'live-home');
     const deadHome = path.join(root, 'dead-home');
     const livePath = descriptorFile(liveHome);
     const deadPath = descriptorFile(deadHome);
+    const deadPid = process.pid === 424_242 ? 424_243 : 424_242;
+    t.mock.method(process, 'kill', (pid: number, signal?: NodeJS.Signals | number) => {
+      assert.equal(signal, 0);
+      if (pid === deadPid) {
+        const error = new Error('process not found') as NodeJS.ErrnoException;
+        error.code = 'ESRCH';
+        throw error;
+      }
+      return true;
+    });
     fs.writeFileSync(livePath, JSON.stringify({
       ...base,
       codelarkHome: liveHome,
@@ -392,7 +406,7 @@ describe('bridge control service', () => {
     fs.writeFileSync(deadPath, JSON.stringify({
       ...base,
       codelarkHome: deadHome,
-      pid: 2_147_483_647,
+      pid: deadPid,
       runId: 'dead-run',
     }));
 
