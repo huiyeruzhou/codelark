@@ -176,6 +176,7 @@ describe('agent message manual ingress', () => {
     assert.match(inbound?.contextText || '', /来源 Bot："qaq"/u);
     assert.doesNotMatch(inbound?.contextText || '', /来源 Bot："来源群"/u);
     assert.match(inbound?.contextText || '', new RegExp(`来源会话 ID："${source.bridgeSessionId}"`, 'u'));
+    assert.match(inbound?.contextText || '', new RegExp(`当前会话 ID："${target.bridgeSessionId}"`, 'u'));
     assert.deepEqual(adapter.sentMessages.map((message) => ({
       chatId: message.address.chatId,
       title: message.richCard?.title,

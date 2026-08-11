@@ -99,7 +99,7 @@ codelark sessions --home /home/user/.codelark --chat-name "project" --bot-name "
 
 Filters are combined with AND. `--query` is fuzzy across fields; `--target`, `--chat-name`, `--bot-name`, `--home`, `--runtime`, and `--status` are exact. JSON results contain one opaque `target` for each live session. If zero sessions match, report that. If multiple sessions match, refine the filters instead of guessing.
 
-Resolve both the current source chat and the intended target to one live session, then send ordinary text with the public CLI so the result is observable:
+Resolve both the current source chat and the intended target to one live session, then send ordinary text with the public CLI so the result is observable. If the current input is an Agent message, its `当前会话 ID` is already the canonical source session and may be used directly as `--source`:
 
 ```bash
 codelark send agent \
@@ -109,7 +109,7 @@ codelark send agent \
   --idempotency-key stable-unique-send-id
 ```
 
-Copy both `--source` and `--target` exactly from their selected `codelark sessions --json` results. Do not construct either value from a platform chat ID, card ID, Home path, or list position. CodeLark sends only after the destination resolves to exactly one live session. The target receives the text unchanged, so `/stop`, `/model`, and other commands keep their normal CodeLark meaning.
+Copy `--source` and `--target` exactly from their selected `codelark sessions --json` results, or copy `--source` from the incoming message's `当前会话 ID`. Do not construct either value from a platform chat ID, card ID, Home path, or list position. CodeLark sends only after the destination resolves to exactly one live session. The target receives the text unchanged, so `/stop`, `/model`, and other commands keep their normal CodeLark meaning.
 
 Use one fresh `--idempotency-key` for each logical message and preserve that same key if the identical send must be retried.
 
@@ -142,7 +142,7 @@ New delegated work gets a dedicated group/session by default. Never commandeer a
 
 If the user already supplied an existing binding UUID, Feishu `oc_...` chat ID, or Bridge/session UUID, pass it unchanged as the same string `target`; the resolver accepts all three. Discovery still displays only the canonical Bridge/session UUID.
 
-Incoming Agent messages include one `<codelark_source>` wrapper with readable source-chat, source-Bot, and one `来源会话 ID`. To reply, copy that ID directly into the string `target`. CodeLark submits the whole multiline message as one input and shows sent/received cards with the source chat/Bot, target chat/Bot, and actual message in both groups after the target Bridge accepts it. Long messages are collapsed in the card and can be expanded without truncation.
+Incoming Agent messages include one `<codelark_source>` wrapper with readable source-chat, source-Bot, `来源会话 ID`, and `当前会话 ID`. The source ID identifies the sender and can be copied directly into `target` when replying; the current ID identifies this receiving Agent and can be copied into `--source`. CodeLark submits the whole multiline message as one input and shows sent/received cards with the source chat/Bot, target chat/Bot, and actual message in both groups after the target Bridge accepts it. Long messages are collapsed in the card and can be expanded without truncation.
 
 ### Preserve the current task boundary
 

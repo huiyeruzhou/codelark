@@ -65,12 +65,13 @@ function quoteContextValue(value: string): string {
     .replace(/>/gu, '\\u003e');
 }
 
-export function formatAgentSourceXml(source: AgentMessageSource): string {
+export function formatAgentSourceXml(source: AgentMessageSource, currentBridgeSessionId: string): string {
   return [
     '<codelark_source>',
     `来源群聊：${quoteContextValue(source.chatName)}`,
     `来源 Bot：${quoteContextValue(source.botName)}`,
     `来源会话 ID：${quoteContextValue(source.bridgeSessionId)}`,
+    `当前会话 ID：${quoteContextValue(currentBridgeSessionId)}`,
     '</codelark_source>',
   ].join('\n');
 }

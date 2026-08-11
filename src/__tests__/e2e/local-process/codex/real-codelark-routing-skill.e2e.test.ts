@@ -310,6 +310,7 @@ describe('real CodeLark routing skill', { skip: !RUN_REAL_SKILL_E2E }, () => {
     assert.equal(targetInbound?.text, payload);
     assert.match(targetInbound?.contextText || '', /来源 Bot："qaq"/u);
     assert.match(targetInbound?.contextText || '', new RegExp(`来源会话 ID："${source.bridgeSessionId}"`, 'u'));
+    assert.match(targetInbound?.contextText || '', new RegExp(`当前会话 ID："${candidates[1]!.binding.bridgeSessionId}"`, 'u'));
     assert.equal(
       adapter.sent.some((message) => (
         message.address.chatId === candidates[1]!.binding.chatId
@@ -396,7 +397,7 @@ describe('real CodeLark routing skill', { skip: !RUN_REAL_SKILL_E2E }, () => {
         bridgeSessionId: candidates[3]!.binding.bridgeSessionId,
         chatName: candidates[3]!.chatName,
         botName: candidates[3]!.botName,
-      }),
+      }, source.bridgeSessionId),
     });
     await adapter.stop();
     assert.equal(await noUnexpectedDelivery, null);

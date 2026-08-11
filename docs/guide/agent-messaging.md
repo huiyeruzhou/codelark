@@ -87,11 +87,12 @@ codelark sessions --home /home/user/.codelark --chat-name "项目群" --bot-name
 <codelark_source>
 来源群聊："来源群"
 来源 Bot："qaq"
-来源会话 ID："opaque target"
+来源会话 ID："source-session"
+当前会话 ID："current-session"
 </codelark_source>
 ```
 
-字段值使用 JSON 字符串转义，并保护 XML 外壳终止符。这里的字段只描述消息来源；目标模型需要向来源发送消息时，把“来源会话 ID”原样放入字符串 `target`，不会看到或使用 binding、platform 或 Home 辅助字段。
+字段值使用 JSON 字符串转义，并保护 XML 外壳终止符。“来源会话 ID”标识发送方，目标模型向来源回复时把它原样放入字符串 `target`；“当前会话 ID”标识正在阅读消息的接收方，可直接作为后续 `codelark send agent --source`。模型不会看到或使用 binding、platform 或 Home 辅助字段。
 这里的“来源 Bot”和 discovery 的 `bot_name` 都来自发送通道解析出的真实 Bot 名称，不会用群聊名冒充。
 
 ## 安全边界

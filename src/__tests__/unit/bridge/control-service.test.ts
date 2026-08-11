@@ -195,10 +195,12 @@ describe('bridge control service', () => {
       });
       assert.equal(compatibilityTarget.bridgeSessionId, 'target-bridge');
     }
-    assert.match(formatAgentSourceXml(source), /来源群聊："来源\\u003c&群"/u);
-    assert.match(formatAgentSourceXml(source), /来源会话 ID："source-bridge"/u);
-    assert.equal(formatAgentSourceXml(source).split('\n').length, 5);
-    assert.doesNotMatch(formatAgentSourceXml(source), /source-internal|codelark_home|platform_chat_id/u);
+    const agentContext = formatAgentSourceXml(source, 'target-bridge');
+    assert.match(agentContext, /来源群聊："来源\\u003c&群"/u);
+    assert.match(agentContext, /来源会话 ID："source-bridge"/u);
+    assert.match(agentContext, /当前会话 ID："target-bridge"/u);
+    assert.equal(agentContext.split('\n').length, 6);
+    assert.doesNotMatch(agentContext, /source-internal|codelark_home|platform_chat_id/u);
   });
 
   it('delivers Agent input, visible Feishu cards, and stable monitor control over one target', async () => {

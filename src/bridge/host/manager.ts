@@ -1772,7 +1772,7 @@ function enqueueManualInput(request: ManualInputRequest, notify: boolean): boole
     messageId: idempotencyKey ? `manual:${idempotencyKey}` : `manual:${crypto.randomUUID()}`,
     address: targetAddress,
     text: request.text,
-    contextText: formatAgentSourceXml(request.source),
+    contextText: formatAgentSourceXml(request.source, target.bridgeSessionId),
     timestamp: Date.now(),
     raw: { manualIngress: true, source: request.source },
   });
