@@ -67,7 +67,8 @@ function isProcessAlive(pid: number): boolean {
     process.kill(pid, 0);
     return true;
   } catch (error) {
-    return (error as NodeJS.ErrnoException).code === 'EPERM';
+    return process.platform !== 'win32'
+      && (error as NodeJS.ErrnoException).code === 'EPERM';
   }
 }
 

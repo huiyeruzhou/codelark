@@ -92,8 +92,10 @@ describe('condition monitor lifecycle', () => {
       'print(json.dumps(module.build_codelark_command(["send", "agent", "--idempotency-key", "stable-id"], "nt")))',
     ].join('; '), scriptPath], { encoding: 'utf8', env: probeEnv });
     assert.equal(commandProbe.status, 0, commandProbe.stderr);
-    assert.deepEqual(JSON.parse(commandProbe.stdout), [
-      'cmd.exe', '/d', '/s', '/c', 'codelark.cmd send agent --idempotency-key stable-id',
+    const windowsCommand = JSON.parse(commandProbe.stdout) as string[];
+    assert.match(windowsCommand[0] || '', /(?:^|[\\/])cmd\.exe$/iu);
+    assert.deepEqual(windowsCommand.slice(1), [
+      '/d', '/s', '/c', 'codelark.cmd send agent --idempotency-key stable-id',
     ]);
   });
 
