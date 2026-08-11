@@ -2,10 +2,39 @@
 
 ## Unreleased
 
-- 新增独立 `condition-monitor` skill：根据用户描述生成只读 Python 条件脚本，false 时静默，true 时可向 Agent lane 或飞书文本/卡片发送一次通知并自动停止；任务使用稳定 UUID、持久保存并在 Bridge 重启后恢复。稳定 UUID 同时作为发送幂等键：飞书使用官方消息 `uuid`，Agent 输入使用持久 receipt，避免 Bridge 在发送完成与任务落盘之间重启造成重复通知。`codelark send` 与 `codelark monitor` 提供对应的脚本接口。
-- CodeLark 通用消息能力合并在 `codelark` skill，覆盖飞书消息、附件、问题卡片、自动化卡片和 Agent 通讯；条件监控使用职责单一的 `condition-monitor` skill。setup wizard 默认安装两者，内置更新或手工 npm 升级后的 Bridge 首次启动都会自动刷新。
-- `<clk-send>` 兼容飞书官方 `msg_type + content`，不内置易过期的类型白名单；文本在 SDK 与 tmux/mirror 路径都会实际发送，不再解析后静默丢失；图片和文件可通过 `local_path` 先上传，旧 `type + path` 继续兼容。
-- 所有运行中的 Bridge 注册到 Home 无关的本机服务发现目录。`codelark sessions` 可按 Home、群名、Bot 名、runtime、状态和关键词复合筛选，`<clk-input>` 复用同一目标选择器；群聊目录不会自动注入 prompt。来源 metadata 使用紧凑 XML，源群和目标群各有发送/接收卡片。
+## v0.3.0
+
+发布日期：2026-08-11
+
+`0.3.0` 的核心升级是 Multi-Agent 协作：CodeLark 不再只连接“一个群聊里的一个 Agent”，而是让多个独立任务群能够被发现、明确选择并通过内部 lane 互相委派工作。消息不会依赖飞书 Bot 回投，Agent 也不需要看到全量群聊目录。
+
+### Multi-Agent 协作
+
+- 所有运行中的 Bridge 注册到不随 `CODELARK_HOME` 改变的本机服务发现目录。`codelark sessions` 支持按 Home、真实群名、Bot 名、runtime、状态和关键词组合筛选；结果只暴露一个可直接用于发送的稳定 `target`。
+- Agent 可以向另一个 CodeLark session 发送普通输入或 `/stop`、`/model` 等 slash 命令，也可以先用 `/new` 创建专用任务群再委派。CodeLark skill 会区分跨群 Agent 与 runtime 自带 subagent，不会把两套机制混用，也不会擅自占用主题相近的旧群。
+- 目标选择严格核对真实 chat-name 与 bot-name。无法精确确定或存在多个候选时，使用选择卡让用户确认，并允许输入其他名称重新查询；不会因为单个 fuzzy result 匹配了错误字段就直接发送。
+- 源群显示“Agent 消息已发送”，目标群显示“收到 Agent 消息”。两张卡均包含来源/目标群聊、Bot 和真实消息正文；长内容可折叠但不会截断。binding UUID、飞书 `oc_...` 群 ID 和 Bridge/session UUID 均可作为兼容输入，展示仍统一为一个 canonical target。
+- 跨 Agent 消息默认是旁路协作，不自动移交当前主线，也不会携带未被用户指代的完整上下文或权限。收到其他群的来源 metadata 同样不会自动获得修改当前状态、索取上下文或打断主线的权限。
+
+### 消息、附件与自动化
+
+- CodeLark 通用消息能力合并到统一 `codelark` skill，覆盖飞书文本、富文本、卡片、图片、文件、问题卡片、自动化卡片和 Agent 通讯。setup wizard 默认安装它与职责单一的 `condition-monitor`，npm 升级后首次启动会自动刷新已安装 skill。
+- `<clk-send>` 使用飞书官方 `msg_type + content`，不维护易过期的消息类型白名单；SDK 与 tmux/mirror 路径都会真正发送文本。图片和文件支持通过 `local_path` 上传，旧 `type + path` 继续兼容；本地预览或路径展示不再被误认为已经交付。
+- 新增独立 `condition-monitor` skill：根据用户描述生成只读 Python 条件脚本，条件为 false 时保持静默，变为 true 时向指定群聊或 Agent 发送一次文本/卡片并自动停止。任务使用稳定 UUID、持久保存并在 Bridge 重启后恢复；飞书 UUID 与 Agent receipt 保证通知不会因发送后重启而重复。
+- 新增 `codelark send` 与 `codelark monitor` 脚本接口，便于后台程序复用同一服务发现、消息发送和持久监控能力。
+
+### 可靠性与体验
+
+- Codex TUI 中“目标更新失败”等非致命诊断以正文横幅展示，不再把仍然成功完成的 turn 误报为失败终态。
+- Codex 在启动时完成自更新并正常退出后，tmux provider 会重新启动新版 TUI，不再把成功更新识别成启动失败。
+- 群头像上传结果按内容缓存，减少 `/new` 重复等待；头像内容变化时缓存键也会变化，因此更新后的头像仍会重新上传。
+- 引用飞书特殊消息时，提示模型使用当前群 Bot 或用户身份通过 lark-cli 读取，避免误用无权限的测试身份。
+
+### 升级
+
+```bash
+npm install -g --yes codelark@0.3.0 && codelark
+```
 
 ## v0.2.2
 

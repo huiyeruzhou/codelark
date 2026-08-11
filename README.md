@@ -8,7 +8,7 @@
 
 - 代码仓库：https://github.com/huiyeruzhou/codelark
 - 文档站：https://huiyeruzhou.github.io/site/codelark/
-- 当前 npm 版本：`codelark@0.2.2`
+- 当前 npm 版本：`codelark@0.3.0`
 
 ## 核心能力
 
@@ -17,6 +17,7 @@
 | 共享本地 runtime 会话 | 在飞书上继续本地 Codex / Claude Code / Kimi Code / Cursor Agent 对话，用可视化面板选择要接管的线程。 | `/t` |
 | 流式卡片输出 | 将模型思考、工具调用、长任务进度和最终结果渲染成飞书卡片，对话留痕且可追踪。 | 普通消息 |
 | 群聊 = Session | 一个群聊对应一个 session，用群聊名称管理任务；多线并行时一键拉起新群。 | `/new`、`/t rename <名称>` |
+| Multi-Agent 协作 | Agent 可以发现其他 CodeLark 群聊、创建专用任务群，并把普通输入或 slash 命令交给另一个 Agent；两端都会显示可核对的收发卡片。 | 自然语言委派、`codelark sessions` |
 | 云文档驱动开发 | 模型可以生成云文档；在云文档评论中 `@bot` 会直接按文档创建长线群聊，后续评论转发到群内处理。 | 云文档评论 |
 
 ## Showcase
@@ -88,9 +89,9 @@ npm install -g codelark
 codelark run
 ```
 
-## v0.1.1
+## v0.3.0
 
-`0.1.1` 改进了 tmux TUI 的启动恢复和输入透传：Codex 启动弹窗、update prompt、delayed ready 和 `Working` 输入行都会被端到端验证并正确处理。`/tmux-screen` 的行数配置现在表示最终希望看到的行数，而不是直接传给 tmux 的额外历史行数。
+`0.3.0` 新增 Multi-Agent 协作：不同 CodeLark 群聊中的 Agent 可以按真实群名和 Bot 名发现彼此、创建专用任务群并传递普通输入或 slash 命令。源群和目标群都会显示包含路由与正文的收发卡片。这个版本还新增一次性条件监控、统一飞书消息与附件协议，并改进 Codex 非致命诊断、更新恢复和群头像缓存。
 
 完整发布说明见 [Release Notes](docs/guide/release-notes.md)。
 
