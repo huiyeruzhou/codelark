@@ -54,6 +54,10 @@ Upload a local image or file with CodeLark's `local_path` extension. The path mu
 <clk-send>{"msg_type":"file","local_path":"/absolute/report.pdf"}</clk-send>
 ```
 
+When the user asks to receive, see, or be sent a local image or file, complete the delivery with `<clk-send>` in the final response. Calling `view_image`, rendering a Markdown image, or showing a local path is only local inspection and does not deliver the artifact. Do not claim that the artifact was sent before CodeLark accepts the control block.
+
+Check that the local path exists before sending, but do not call `view_image` by default. If the user reports that an image is wrong, broken, stale, or visually incorrect, inspect that image and subsequent corrected images with `view_image` before sending them again during that task.
+
 The legacy `{"type":"image|file","path":"...","caption":"..."}` shape remains supported. Prefer the official shape for new output. Multiple instructions may use `{"items":[...]}`.
 
 ## Ask with a card
@@ -152,7 +156,7 @@ Interpret “顺便 / btw / 请另一个 Agent 看看” as parallel consultatio
 
 ## Rules
 
-- Verify local files before sending them.
+- Verify that local files exist before sending them; visual inspection follows the image-feedback rule above.
 - Put every CodeLark control block on its own line. Inline tag names in prose are ordinary text.
 - Use Feishu's official message schema; do not invent `msg_type` values.
 - Escape JSON correctly, especially quotes inside `<at user_id="...">`.
