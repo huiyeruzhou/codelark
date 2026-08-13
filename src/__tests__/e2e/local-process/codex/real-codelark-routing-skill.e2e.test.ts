@@ -8,7 +8,7 @@ import { afterEach, describe, it } from 'node:test';
 import { BaseChannelAdapter } from '../../../../channels/contracts.js';
 import { CODELARK_HOME } from '../../../../configuration/paths.js';
 import { createConfigService } from '../../../../configuration/service.js';
-import type { InboundMessage, OutboundMessage, SendResult } from '../../../../domain/index.js';
+import type { AgentMessageSentInfo, InboundMessage, OutboundMessage, SendResult } from '../../../../domain/index.js';
 import { startBridgeControlService, type BridgeControlService } from '../../../../bridge/control/service-discovery.js';
 import { formatAgentSourceXml } from '../../../../bridge/control/session-catalog.js';
 import {
@@ -34,6 +34,7 @@ class RoutingSkillAdapter extends BaseChannelAdapter {
   readonly channelType = 'routing-skill-e2e';
   readonly provider = 'feishu';
   readonly sent: OutboundMessage[] = [];
+  readonly agentMessageEvents: Array<{ chatId: string; event: AgentMessageSentInfo }> = [];
   private running = true;
 
   async start(): Promise<void> { this.running = true; }
@@ -46,6 +47,10 @@ class RoutingSkillAdapter extends BaseChannelAdapter {
   async send(message: OutboundMessage): Promise<SendResult> {
     this.sent.push(message);
     return { ok: true, messageId: `routing-skill-e2e-${this.sent.length}` };
+  }
+  onAgentMessageSent(chatId: string, event: AgentMessageSentInfo): boolean {
+    this.agentMessageEvents.push({ chatId, event });
+    return true;
   }
   override getBotDisplayName(): string { return 'qaq'; }
   validateConfig(): string | null { return null; }
@@ -276,6 +281,7 @@ describe('real CodeLark routing skill', { skip: !RUN_REAL_SKILL_E2E }, () => {
     assert.ok(eastOption);
     const beforeAlternate = adapter.sent.length;
     const beforeConfirmedSend = adapter.sent.length;
+    const beforeAlternateEvents = adapter.agentMessageEvents.length;
     await submitQuestionCard({
       adapter,
       sourceChatId,
@@ -292,8 +298,8 @@ describe('real CodeLark routing skill', { skip: !RUN_REAL_SKILL_E2E }, () => {
     assert.match(secondForm.options[0]!.text, new RegExp(candidates[1]!.chatName));
     assert.match(secondForm.options[0]!.text, new RegExp(candidates[1]!.botName));
     assert.equal(
-      adapter.sent.slice(beforeAlternate).some((message) => message.richCard?.title === 'Agent 消息已发送'),
-      false,
+      adapter.agentMessageEvents.length,
+      beforeAlternateEvents,
       'typing another name must re-query instead of sending to the preselected candidate',
     );
 
@@ -311,19 +317,14 @@ describe('real CodeLark routing skill', { skip: !RUN_REAL_SKILL_E2E }, () => {
     assert.match(targetInbound?.contextText || '', /来源 Bot："qaq"/u);
     assert.match(targetInbound?.contextText || '', new RegExp(`来源会话 ID："${source.bridgeSessionId}"`, 'u'));
     assert.match(targetInbound?.contextText || '', new RegExp(`当前会话 ID："${candidates[1]!.binding.bridgeSessionId}"`, 'u'));
+    assert.deepEqual(adapter.agentMessageEvents.at(-1), {
+      chatId: sourceChatId,
+      event: { targetChatName: candidates[1]!.chatName, messageText: payload },
+    });
     assert.equal(
-      adapter.sent.some((message) => (
-        message.address.chatId === candidates[1]!.binding.chatId
-        && message.richCard?.title === '收到 Agent 消息'
-      )),
-      true,
-    );
-    assert.equal(
-      adapter.sent.some((message) => (
-        message.address.chatId === sourceChatId
-        && message.richCard?.title === 'Agent 消息已发送'
-      )),
-      true,
+      adapter.sent.some((message) => ['收到 Agent 消息', 'Agent 消息已发送'].includes(message.richCard?.title || '')),
+      false,
+      'successful routing must not create standalone exchange cards',
     );
     assert.equal(
       adapter.sent.slice(beforeConfirmedSend).some((message) => (
@@ -358,7 +359,7 @@ describe('real CodeLark routing skill', { skip: !RUN_REAL_SKILL_E2E }, () => {
       'correcting a mistaken send must not replace the current mainline',
     );
 
-    const beforeRejectedInputs = adapter.sent.length;
+    const beforeRejectedEvents = adapter.agentMessageEvents.length;
     const noUnexpectedDelivery = adapter.consumeOne();
     const beforeBroadLookup = adapter.sent.length;
     await _testOnly.handleMessage(adapter, inboundMessage(
@@ -402,8 +403,8 @@ describe('real CodeLark routing skill', { skip: !RUN_REAL_SKILL_E2E }, () => {
     await adapter.stop();
     assert.equal(await noUnexpectedDelivery, null);
     assert.equal(
-      adapter.sent.slice(beforeRejectedInputs).some((message) => message.richCard?.title === 'Agent 消息已发送'),
-      false,
+      adapter.agentMessageEvents.length,
+      beforeRejectedEvents,
       'wrong-field fuzzy matches and unauthorized side-channel input must not send',
     );
     assert.equal(

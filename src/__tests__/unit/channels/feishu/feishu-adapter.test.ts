@@ -71,6 +71,64 @@ function cloudDocumentCommentEvent(eventId: string, event: Record<string, any>) 
 }
 
 describe('feishu-adapter structured streaming regions', () => {
+  it('keeps a sent-message event anchored across canonical history refreshes', () => {
+    const adapter = new FeishuAdapter({
+      id: 'feishu-default',
+      provider: 'feishu',
+      enabled: true,
+      alias: '飞书',
+      config: { streamingEnabled: true },
+    });
+    const initialItem: StreamingHistoryItem = {
+      type: 'markdown',
+      role: 'assistant',
+      content: '发送前内容',
+    };
+    const older = {
+      chatId: 'chat-1',
+      startTime: 10,
+      historyItems: [initialItem],
+      injectedHistoryItems: [],
+      historyDriven: true,
+      desiredRevision: 0,
+    };
+    const newer = {
+      chatId: 'chat-1',
+      startTime: 20,
+      historyItems: [initialItem],
+      injectedHistoryItems: [],
+      historyDriven: true,
+      desiredRevision: 0,
+    };
+    (adapter as any).activeCards.set('older-stream', older);
+    (adapter as any).activeCards.set('newer-stream', newer);
+    (adapter as any).scheduleCardFlush = () => {};
+
+    assert.equal(adapter.onAgentMessageSent('chat-1', {
+      targetChatName: '目标群',
+      messageText: '请检查当前状态',
+    }), true);
+    assert.deepEqual(older.historyItems, [initialItem]);
+    assert.equal(newer.historyItems[1]?.type, 'agent_message_sent');
+
+    const laterItem: StreamingHistoryItem = {
+      type: 'markdown',
+      role: 'assistant',
+      content: '发送后内容',
+    };
+    adapter.onStreamHistory('chat-1', [initialItem, laterItem], 'newer-stream');
+    assert.deepEqual(newer.historyItems.map((item) => item.type), [
+      'markdown',
+      'agent_message_sent',
+      'markdown',
+    ]);
+    assert.equal((newer.historyItems[1] as any).event.messageText, '请检查当前状态');
+    assert.equal(adapter.onAgentMessageSent('missing-chat', {
+      targetChatName: '目标群',
+      messageText: '不会静默吞掉',
+    }), false);
+  });
+
   it('appends a runtime notice to existing history exactly once', () => {
     const adapter = new FeishuAdapter({
       id: 'feishu-default',

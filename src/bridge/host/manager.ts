@@ -1694,18 +1694,17 @@ interface AgentExchangeEndpoint {
 }
 
 function buildAgentExchangeCard(options: {
-  direction: 'sent' | 'received' | 'failed';
+  direction: 'sent' | 'failed';
   source: AgentExchangeEndpoint;
   target?: AgentExchangeEndpoint;
   unresolvedTarget?: string;
   messageText: string;
   detail?: string;
 }): OutboundRichCard {
-  const sent = options.direction === 'sent';
   const failed = options.direction === 'failed';
   const messageMarkdown = buildFencedCodeBlock(options.messageText, 'text');
   const longMessage = options.messageText.length > AGENT_MESSAGE_CARD_COLLAPSE_THRESHOLD;
-  const identitySections: OutboundRichCard['sections'] = [{
+  const identitySections: OutboundRichCard['sections'] = failed ? [{
     fields: [
       ['来源群聊', options.source.chatName],
       ['来源 Bot', options.source.botName],
@@ -1718,10 +1717,10 @@ function buildAgentExchangeCard(options: {
       ['目标', options.unresolvedTarget || '未知目标'],
       ...(options.detail ? [['错误', options.detail] as [string, string]] : []),
     ],
-  }];
+  }] : [{ fields: [['目标群聊', options.target?.chatName || options.unresolvedTarget || '未知目标']] }];
   return {
-    title: failed ? 'Agent 消息发送失败' : sent ? 'Agent 消息已发送' : '收到 Agent 消息',
-    template: failed ? 'red' : sent ? 'green' : 'blue',
+    title: failed ? 'Agent 消息发送失败' : 'Agent 消息已发送',
+    template: failed ? 'red' : 'green',
     sections: [...identitySections, ...(longMessage ? [] : [{
       title: '消息内容',
       markdown: messageMarkdown,
@@ -1729,7 +1728,7 @@ function buildAgentExchangeCard(options: {
     ...(longMessage ? {
       panels: [{
         title: '消息内容（点击展开）',
-        template: failed ? 'red' : sent ? 'green' : 'blue',
+        template: failed ? 'red' : 'green',
         expanded: false,
         sections: [{ markdown: messageMarkdown }],
       }],
@@ -1747,7 +1746,7 @@ export function listActiveBridgeSessions(query?: string) {
   });
 }
 
-function enqueueManualInput(request: ManualInputRequest, notify: boolean): boolean {
+function enqueueManualInput(request: ManualInputRequest): boolean {
   const { store } = getBridgeContext();
   const binding = store.listChannelChats().find((candidate) => candidate.id === request.targetInternalChatId);
   if (!binding) throw new Error(`目标群聊不存在：${request.targetInternalChatId}`);
@@ -1776,22 +1775,11 @@ function enqueueManualInput(request: ManualInputRequest, notify: boolean): boole
     timestamp: Date.now(),
     raw: { manualIngress: true, source: request.source },
   });
-  if (notify) {
-    enqueueBridgeNotice(adapter, targetAddress, '收到 Agent 消息', {
-      sessionId: binding.bridgeSessionId,
-      richCard: buildAgentExchangeCard({
-        direction: 'received',
-        source: request.source,
-        target,
-        messageText: request.text,
-      }),
-    });
-  }
   return true;
 }
 
 export function receiveManualInput(request: ManualInputRequest): boolean {
-  return enqueueManualInput(request, true);
+  return enqueueManualInput(request);
 }
 
 export async function receiveAgentInput(request: AgentInputRequest): Promise<void> {
@@ -1880,7 +1868,7 @@ export async function sendAgentMessageFromBinding(
       text: instruction.text,
       source,
       idempotencyKey: instruction.idempotencyKey,
-    }, false);
+    });
     return;
   }
   try {
@@ -1892,18 +1880,25 @@ export async function sendAgentMessageFromBinding(
       idempotencyKey: instruction.idempotencyKey,
     });
     if (!target.accepted) return;
-    enqueueBridgeNotice(sourceAdapter, sourceAddress, 'Agent 消息已发送', {
-      sessionId: sourceBinding.bridgeSessionId,
-      richCard: buildAgentExchangeCard({
-        direction: 'sent',
-        source,
-        target: {
-          chatName: target.chatName,
-          botName: target.agentName,
-        },
-        messageText: instruction.text,
-      }),
-    });
+    const targetEndpoint = {
+      chatName: target.chatName,
+      botName: target.agentName,
+    };
+    const mergedIntoConversation = sourceAdapter.onAgentMessageSent?.(sourceAddress.chatId, {
+      targetChatName: targetEndpoint.chatName,
+      messageText: instruction.text,
+    }) === true;
+    if (!mergedIntoConversation) {
+      enqueueBridgeNotice(sourceAdapter, sourceAddress, 'Agent 消息已发送', {
+        sessionId: sourceBinding.bridgeSessionId,
+        richCard: buildAgentExchangeCard({
+          direction: 'sent',
+          source,
+          target: targetEndpoint,
+          messageText: instruction.text,
+        }),
+      });
+    }
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);
     enqueueBridgeNotice(sourceAdapter, sourceAddress, 'Agent 消息发送失败', {

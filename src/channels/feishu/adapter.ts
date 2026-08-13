@@ -27,6 +27,7 @@ import type {
   InboundMessage,
   OutboundAttachment,
   OutboundMessage,
+  AgentMessageSentInfo,
   RuntimeNoticeInfo,
   SendResult,
   StreamingHistoryItem,
@@ -125,6 +126,8 @@ interface FeishuCardState {
   taskItems: TaskProgressInfo[];
   toolCalls: ToolCallInfo[];
   historyItems: StreamingHistoryItem[];
+  /** Adapter-owned events retained when the provider replaces its canonical history snapshot. */
+  injectedHistoryItems: InjectedStreamingHistoryItem[];
   historyItemOffset: number;
   historyToolCallOffset: number;
   toolCallOffset: number;
@@ -343,6 +346,7 @@ interface StreamingCardInitialState {
   taskItems: TaskProgressInfo[];
   toolCalls: ToolCallInfo[];
   historyItems: StreamingHistoryItem[];
+  injectedHistoryItems: InjectedStreamingHistoryItem[];
   historyDriven: boolean;
   metadata: StructuredStreamingUiMetadata;
   actionRows: FeishuCardActionButton[][];
@@ -354,6 +358,11 @@ interface StreamingCardInitialState {
   toolCallOffset: number;
   continuationIndex: number;
   startTime: number;
+}
+
+interface InjectedStreamingHistoryItem {
+  item: Extract<StreamingHistoryItem, { type: 'agent_message_sent' }>;
+  afterCanonicalItemCount: number;
 }
 
 interface PendingStreamingCardCreateState {
@@ -1689,6 +1698,14 @@ function streamingHistorySignature(items: StreamingHistoryItem[]): string {
         item.elementId || '',
       ];
     }
+    if (item.type === 'agent_message_sent') {
+      return [
+        'agent_message_sent',
+        item.event.targetChatName,
+        item.event.messageText,
+        item.elementId || '',
+      ];
+    }
     return ['tool_panel', item.tools.map((tool) => [
       tool.id,
       tool.name,
@@ -1698,6 +1715,28 @@ function streamingHistorySignature(items: StreamingHistoryItem[]): string {
       JSON.stringify(tool.detail || null),
     ])];
   }));
+}
+
+function mergeInjectedStreamingHistoryItems(
+  canonicalItems: StreamingHistoryItem[],
+  injectedItems: InjectedStreamingHistoryItem[],
+): StreamingHistoryItem[] {
+  const canonical = canonicalItems.filter((item) => item.type !== 'agent_message_sent');
+  if (injectedItems.length === 0) return canonical;
+
+  const buckets = new Map<number, StreamingHistoryItem[]>();
+  for (const injected of injectedItems) {
+    const anchor = Math.max(0, Math.min(injected.afterCanonicalItemCount, canonical.length));
+    const bucket = buckets.get(anchor) || [];
+    bucket.push(injected.item);
+    buckets.set(anchor, bucket);
+  }
+
+  const merged: StreamingHistoryItem[] = [...(buckets.get(0) || [])];
+  canonical.forEach((item, index) => {
+    merged.push(item, ...(buckets.get(index + 1) || []));
+  });
+  return merged;
 }
 
 function renderedHistoryMatchesDesired(
@@ -2833,6 +2872,7 @@ export class FeishuAdapter extends BaseChannelAdapter {
     this.streamActionRows = state.streamActionRows;
     this.pendingStreamMetadata = state.pendingStreamMetadata;
     for (const [streamKey, card] of this.activeCards) {
+      card.injectedHistoryItems ||= [];
       card.shadowTrust = 'unknown';
       card.flushInFlight = null;
       card.backgroundFlushInFlight = null;
@@ -3531,6 +3571,7 @@ export class FeishuAdapter extends BaseChannelAdapter {
         taskItems: initialState?.taskItems ?? [],
         toolCalls: initialTools,
         historyItems: initialState?.historyItems ?? [],
+        injectedHistoryItems: initialState?.injectedHistoryItems ?? [],
         historyItemOffset: render.historyItemOffset,
         historyToolCallOffset: render.historyToolCallOffset,
         toolCallOffset: render.toolCallOffset,
@@ -3865,6 +3906,7 @@ export class FeishuAdapter extends BaseChannelAdapter {
       taskItems: state.taskItems,
       toolCalls: state.toolCalls,
       historyItems: state.historyItems,
+      injectedHistoryItems: state.injectedHistoryItems,
       historyDriven: state.historyDriven,
       metadata,
       actionRows,
@@ -5608,7 +5650,42 @@ export class FeishuAdapter extends BaseChannelAdapter {
       this.createStreamingCard(chatId, messageId, cardKey).catch(() => {});
       return;
     }
-    this.updateStreamingHistory(chatId, items, streamKey);
+    const state = this.activeCards.get(cardKey)!;
+    state.injectedHistoryItems ||= [];
+    this.updateStreamingHistory(
+      chatId,
+      mergeInjectedStreamingHistoryItems(items, state.injectedHistoryItems),
+      streamKey,
+    );
+  }
+
+  onAgentMessageSent(chatId: string, event: AgentMessageSentInfo): boolean {
+    if (!this.supportsStructuredStreamingUi(chatId)) return false;
+
+    let selected: { streamKey: string; state: FeishuCardState } | undefined;
+    for (const [streamKey, state] of this.activeCards) {
+      if (state.chatId !== chatId) continue;
+      if (!selected || state.startTime >= selected.state.startTime) selected = { streamKey, state };
+    }
+    if (!selected) return false;
+
+    const { streamKey, state } = selected;
+    state.injectedHistoryItems ||= [];
+    const canonicalItems = state.historyItems.filter((item) => item.type !== 'agent_message_sent');
+    const item: Extract<StreamingHistoryItem, { type: 'agent_message_sent' }> = {
+      type: 'agent_message_sent',
+      event,
+      elementId: `stream_agent_sent_${state.injectedHistoryItems.length + 1}`,
+    };
+    state.injectedHistoryItems.push({
+      item,
+      afterCanonicalItemCount: canonicalItems.length,
+    });
+    state.historyItems = mergeInjectedStreamingHistoryItems(canonicalItems, state.injectedHistoryItems);
+    state.historyDriven = true;
+    this.markStreamingDesiredDirty(state);
+    this.scheduleCardFlush(streamKey);
+    return true;
   }
 
   onRuntimeNotice(chatId: string, notice: RuntimeNoticeInfo, streamKey?: string): void {

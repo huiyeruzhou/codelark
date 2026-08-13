@@ -619,6 +619,30 @@ describe('buildStreamingTextElements', () => {
 });
 
 describe('buildStreamingHistoryElements', () => {
+  it('renders a successful Agent send as a compact collapsed mail event', () => {
+    const fullMessage = `第一行\n第二行 ${'很长的正文'.repeat(24)}\n完整结尾`;
+    const elements = buildStreamingHistoryElementsFromItems('', [
+      {
+        type: 'agent_message_sent',
+        event: {
+          targetChatName: '[qaq]工程实现',
+          messageText: fullMessage,
+        },
+      },
+    ]);
+    const event = ((elements[0] as any).elements as any[])[0];
+
+    assert.equal(event.tag, 'collapsible_panel');
+    assert.equal(event.expanded, false);
+    assert.deepEqual(event.border, { color: 'green', corner_radius: '5px' });
+    assert.match(event.header.title.content, /^✉️ \*\*已发送\*\* · \[qaq\]工程实现 — 第一行 第二行/u);
+    assert.match(event.header.title.content, /…$/u);
+    assert.doesNotMatch(event.header.title.content, /Bot/u);
+    assert.doesNotMatch(event.elements[0].content, /目标群聊|\[qaq\]工程实现/u);
+    assert.match(event.elements[0].content.replace(/\u200b/gu, ''), /完整结尾/u);
+    assertFeishuElementIdsAreValid(elements);
+  });
+
   it('renders recoverable runtime issues as body quote banners', () => {
     const elements = buildStreamingHistoryElementsFromItems('', [
       {

@@ -1349,6 +1349,42 @@ function formatRuntimeNoticeContent(
   ].map((line) => `> ${line}`).join('\n');
 }
 
+const AGENT_MESSAGE_SENT_PREVIEW_LIMIT = 80;
+
+function agentMessageSentPreview(messageText: string): string {
+  const normalized = messageText.replace(/\s+/gu, ' ').trim();
+  const chars = Array.from(normalized);
+  if (chars.length === 0) return '（空消息）';
+  return chars.length > AGENT_MESSAGE_SENT_PREVIEW_LIMIT
+    ? `${chars.slice(0, AGENT_MESSAGE_SENT_PREVIEW_LIMIT).join('')}…`
+    : normalized;
+}
+
+function buildAgentMessageSentElement(
+  item: Extract<StreamingHistoryItem, { type: 'agent_message_sent' }>,
+  elementId: string,
+): Record<string, unknown> {
+  const targetChatName = item.event.targetChatName.trim() || '未知群聊';
+  const fullMessage = item.event.messageText || '（空消息）';
+  const body = buildHistoryMarkdownElement(buildFencedCodeBlock(fullMessage, 'text'))!;
+  return {
+    tag: 'collapsible_panel',
+    expanded: false,
+    header: {
+      title: {
+        tag: 'markdown',
+        content: preprocessFeishuMarkdown(
+          `✉️ **已发送** · ${targetChatName} — ${agentMessageSentPreview(item.event.messageText)}`,
+        ),
+        text_size: 'normal',
+      },
+    },
+    border: { color: 'green', corner_radius: '5px' },
+    elements: [body],
+    element_id: elementId,
+  };
+}
+
 function userInputTitlePreview(content: string): string {
   const normalized = content.replace(/\s+/gu, ' ').trim();
   const chars = Array.from(normalized);
@@ -1424,6 +1460,12 @@ export function buildStreamingHistoryElementsFromItems(
       const noticeElement = buildHistoryMarkdownElement(formatRuntimeNoticeContent(item), resolvedElementId);
       markdownCount += 1;
       if (noticeElement) historyElements.push(noticeElement);
+      continue;
+    }
+    if (item.type === 'agent_message_sent') {
+      const resolvedElementId = item.elementId || `stream_agent_sent_${markdownCount + 1}`;
+      historyElements.push(buildAgentMessageSentElement(item, resolvedElementId));
+      markdownCount += 1;
       continue;
     }
     const resolvedElementId = item.elementId

@@ -11,7 +11,7 @@ import type {
   PreviewCapabilities,
   SendResult,
 } from '../domain/message.js';
-import type { RuntimeNoticeInfo, StreamingHistoryItem, TaskProgressInfo, ToolCallInfo } from '../domain/progress.js';
+import type { AgentMessageSentInfo, RuntimeNoticeInfo, StreamingHistoryItem, TaskProgressInfo, ToolCallInfo } from '../domain/progress.js';
 
 export interface AdapterRuntimeInstance {
   id: string;
@@ -128,6 +128,8 @@ export abstract class BaseChannelAdapter {
   onMirrorStreamStart?(_chatId: string, _streamKey?: string): void;
   onStreamHistory?(_chatId: string, _items: StreamingHistoryItem[], _streamKey?: string): void;
   onRuntimeNotice?(_chatId: string, _notice: RuntimeNoticeInfo, _streamKey?: string): void;
+  /** Merge a successful cross-Agent send into the latest active conversation card for this chat. */
+  onAgentMessageSent?(_chatId: string, _event: AgentMessageSentInfo): boolean;
   onToolEvent?(_chatId: string, _tools: ToolCallInfo[], _streamKey?: string): void;
   onTaskEvent?(_chatId: string, _tasks: TaskProgressInfo[], _streamKey?: string): void;
   onStreamEnd?(

@@ -67,7 +67,7 @@ codelark sessions --home /home/user/.codelark --chat-name "项目群" --bot-name
 
 `bot_name` 来自运行中通道解析出的真实 Bot 名称，可以与群聊名等条件组合筛选。
 
-发送由 Agent 的 `<clk-input>` 完成，因此 Bridge 能自动绑定真实来源群并在两端显示卡片。零匹配会报未找到；多匹配会列出候选并拒绝猜测；只有唯一匹配才发送。
+发送由 Agent 的 `<clk-input>` 完成，因此 Bridge 能自动绑定真实来源群。零匹配会报未找到；多匹配会列出候选并拒绝猜测；只有唯一匹配才发送。
 
 ## Agent 之间发送普通输入
 
@@ -77,7 +77,7 @@ codelark sessions --home /home/user/.codelark --chat-name "项目群" --bot-name
 <clk-input>{"target":"target-from-codelark-sessions","text":"请检查训练状态并回复我"}</clk-input>
 ```
 
-复合筛选只用于 CLI 发现阶段；发送阶段只使用唯一结果的 `target`，不再要求模型理解或拼接内部 binding、平台群 ID 和 CodeLark Home。目标 Bridge 明确接受后，源群出现“Agent 消息已发送”卡片，目标群出现“收到 Agent 消息”卡片；两张卡都展示来源群聊、来源 Bot、目标群聊、目标 Bot 和实际发送的完整正文，长正文默认折叠、展开后可查看且不会截断。离线、无匹配或多匹配会在源群显示失败，不会假报成功。
+复合筛选只用于 CLI 发现阶段；发送阶段只使用唯一结果的 `target`，不再要求模型理解或拼接内部 binding、平台群 ID 和 CodeLark Home。目标 Bridge 明确接受后，源群当前对话卡的历史区追加一条 `✉️ 已发送 · <目标群聊> — <正文摘要>` 事件；默认收起，展开后只显示未截断的完整正文，不重复目标群聊或 Bot 名。目标群直接在接收 Agent 的常规对话卡中看到输入，不再额外插入一张“收到 Agent 消息”卡。若源群没有可合并的活动对话卡，则发送紧凑的独立成功回执，避免后台发送静默无记录。离线、无匹配或多匹配仍在源群显示独立失败卡，不会假报成功。
 
 输出保持单一：discovery 只展示 canonical Bridge/session UUID。输入保持兼容：如果调用方已有 binding UUID、飞书 `oc_...` 群 ID 或 Bridge/session UUID，三者都可以原样作为同一个字符串 `target`；resolver 在内部统一收敛到当前 binding。
 

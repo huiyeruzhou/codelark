@@ -142,6 +142,11 @@ export interface RuntimeNoticeInfo {
   source?: string;
 }
 
+export interface AgentMessageSentInfo {
+  targetChatName: string;
+  messageText: string;
+}
+
 export type StreamingHistoryItem =
   | {
       type: 'markdown';
@@ -153,6 +158,11 @@ export type StreamingHistoryItem =
   | {
       type: 'runtime_notice';
       notice: RuntimeNoticeInfo;
+      elementId?: string;
+    }
+  | {
+      type: 'agent_message_sent';
+      event: AgentMessageSentInfo;
       elementId?: string;
     }
   | {

@@ -12,8 +12,13 @@ import {
   type CreateGroupChatOptions,
   type CreatedGroupChat,
 } from '../../../../channels/contracts.js';
-import { buildRichCardContent } from '../../../../channels/feishu/markdown.js';
-import type { InboundMessage, OutboundMessage, PermissionGateway, SendResult } from '../../../../domain/index.js';
+import type {
+  AgentMessageSentInfo,
+  InboundMessage,
+  OutboundMessage,
+  PermissionGateway,
+  SendResult,
+} from '../../../../domain/index.js';
 import type { LifecycleHooks, LLMProvider, StreamChatParams } from '../../../../runtime/contracts.js';
 import { JsonFileStore } from '../../../../storage/json-store.js';
 import { initBridgeContext } from '../../../../bridge/host/context.js';
@@ -51,6 +56,8 @@ class ManualIngressAdapter extends BaseChannelAdapter {
   readonly createdGroups: CreatedGroupChat[] = [];
   readonly createGroupRequests: CreateGroupChatOptions[] = [];
   readonly reactions: Array<{ messageId: string; emojiType: string }> = [];
+  readonly agentMessageEvents: Array<{ chatId: string; event: AgentMessageSentInfo }> = [];
+  mergeAgentMessageEvents = true;
   private running = false;
 
   constructor(instance?: { id?: string }) {
@@ -72,6 +79,11 @@ class ManualIngressAdapter extends BaseChannelAdapter {
   async addMessageReaction(messageId: string, emojiType: string): Promise<string> {
     this.reactions.push({ messageId, emojiType });
     return `reaction-${this.reactions.length}`;
+  }
+  onAgentMessageSent(chatId: string, event: AgentMessageSentInfo): boolean {
+    if (!this.mergeAgentMessageEvents) return false;
+    this.agentMessageEvents.push({ chatId, event });
+    return true;
   }
   async createGroupChat(options: CreateGroupChatOptions): Promise<CreatedGroupChat> {
     this.createGroupRequests.push(options);
@@ -99,7 +111,7 @@ describe('agent message manual ingress', () => {
     fs.rmSync(CONFIG_PATH, { force: true });
   });
 
-  it('accepts through discovery, preserves the ordinary input, and notifies both chats', async () => {
+  it('accepts through discovery, preserves ordinary input, and merges only the source receipt', async () => {
     fs.mkdirSync(CODELARK_HOME, { recursive: true });
     fs.writeFileSync(CONFIG_PATH, [
       'schema_version = 2',
@@ -177,52 +189,30 @@ describe('agent message manual ingress', () => {
     assert.doesNotMatch(inbound?.contextText || '', /来源 Bot："来源群"/u);
     assert.match(inbound?.contextText || '', new RegExp(`来源会话 ID："${source.bridgeSessionId}"`, 'u'));
     assert.match(inbound?.contextText || '', new RegExp(`当前会话 ID："${target.bridgeSessionId}"`, 'u'));
-    assert.deepEqual(adapter.sentMessages.map((message) => ({
-      chatId: message.address.chatId,
-      title: message.richCard?.title,
-    })), [
-      { chatId: 'oc_target', title: '收到 Agent 消息' },
-      { chatId: 'oc_source', title: 'Agent 消息已发送' },
-    ]);
+    assert.equal(adapter.sentMessages.length, 0, 'successful delivery must not create separate receive/send cards');
+    assert.deepEqual(adapter.agentMessageEvents, [{
+      chatId: 'oc_source',
+      event: { targetChatName: '目标群', messageText: '  /stop\n' },
+    }]);
     assert.equal(
       listActiveBridgeSessions().find((session) => session.internalChatId === target.id)?.agentName,
       'qaq',
       'discovery must expose the adapter Bot name instead of copying the chat name',
     );
-    for (const message of adapter.sentMessages) {
-      assert.deepEqual(message.richCard?.sections[0]?.fields, [
-        ['来源群聊', '来源群'],
-        ['来源 Bot', 'qaq'],
-      ]);
-      assert.deepEqual(message.richCard?.sections[1]?.fields, [
-        ['目标群聊', '目标群'],
-        ['目标 Bot', 'qaq'],
-      ]);
-    }
-    const renderedShortCard = buildRichCardContent(adapter.sentMessages[0].richCard!);
-    for (const visibleText of ['来源群聊', '来源 Bot', '目标群聊', '目标 Bot', '来源群', '目标群']) {
-      assert.match(renderedShortCard, new RegExp(visibleText, 'u'));
-    }
-    assert.doesNotMatch(renderedShortCard, /已压缩/u, 'all four identity fields must remain visible');
-
     await sendAgentMessageFromBinding(source.id, {
       target: target.id,
       text: '  /stop\n',
       idempotencyKey: 'condition-monitor-stable-id',
     });
     await _testOnlyWaitForDeliveryQueuesForTests(adapter);
-    assert.equal(adapter.sentMessages.length, 2, 'same persistent key must not enqueue input or cards twice');
-    for (const message of adapter.sentMessages) {
-      assert.equal(message.richCard?.panels, undefined);
-      assert.match(message.richCard?.sections[2]?.markdown || '', /  \/stop\n/u);
-    }
+    assert.equal(adapter.agentMessageEvents.length, 1, 'same persistent key must not enqueue input or events twice');
 
     await sendAgentMessageFromBinding(source.id, { target: 'current', text: '/then-form' });
     const selfInput = await adapter.consumeOne();
     await _testOnlyWaitForDeliveryQueuesForTests(adapter);
     assert.equal(selfInput?.address.chatId, 'oc_source');
     assert.equal(selfInput?.text, '/then-form');
-    assert.equal(adapter.sentMessages.length, 2);
+    assert.equal(adapter.agentMessageEvents.length, 1);
 
     const longText = [
       '请核对下面的完整多行消息：',
@@ -235,22 +225,10 @@ describe('agent message manual ingress', () => {
     const longInbound = await adapter.consumeOne();
     await _testOnlyWaitForDeliveryQueuesForTests(adapter);
     assert.equal(longInbound?.text, longText);
-    const longCards = adapter.sentMessages.slice(2, 4).map((message) => message.richCard);
-    assert.equal(longCards.length, 2);
-    for (const card of longCards) {
-      assert.equal(card?.sections.length, 2);
-      assert.equal(card?.panels?.length, 1);
-      assert.equal(card?.panels?.[0]?.expanded, false);
-      assert.equal(card?.panels?.[0]?.title, '消息内容（点击展开）');
-      assert.ok(card?.panels?.[0]?.sections?.[0]?.markdown?.includes(longText));
-    }
-    const renderedLongCard = JSON.parse(buildRichCardContent(longCards[0]!)) as any;
-    const renderedMessagePanel = renderedLongCard.body.elements.find(
-      (element: any) => element.tag === 'collapsible_panel',
-    );
-    assert.equal(renderedMessagePanel?.expanded, false);
-    const renderedMessageContent = renderedMessagePanel?.elements?.[0]?.columns?.[0]?.elements?.[0]?.content;
-    assert.ok(String(renderedMessageContent || '').replace(/\u200b/gu, '').includes(longText));
+    assert.deepEqual(adapter.agentMessageEvents.at(-1), {
+      chatId: 'oc_source',
+      event: { targetChatName: '目标群', messageText: longText },
+    });
 
     const beforePlatformMessage = adapter.sentMessages.length;
     const platformRequest = {
@@ -265,6 +243,17 @@ describe('agent message manual ingress', () => {
       adapter.sentMessages.at(-1)?.platformMessage?.uuid,
       'condition-monitor-platform-id',
     );
+
+    adapter.mergeAgentMessageEvents = false;
+    await sendAgentMessageFromBinding(source.id, { target: target.id, text: '无活动卡兜底' });
+    const fallbackInbound = await adapter.consumeOne();
+    await _testOnlyWaitForDeliveryQueuesForTests(adapter);
+    assert.equal(fallbackInbound?.text, '无活动卡兜底');
+    const fallbackCard = adapter.sentMessages.at(-1)?.richCard;
+    assert.equal(fallbackCard?.title, 'Agent 消息已发送');
+    assert.deepEqual(fallbackCard?.sections[0]?.fields, [['目标群聊', '目标群']]);
+    assert.doesNotMatch(JSON.stringify(fallbackCard), /Bot/u);
+    adapter.mergeAgentMessageEvents = true;
 
     const delegatedWorkDir = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-agent-delegate-'));
     await sendAgentMessageFromBinding(source.id, {
