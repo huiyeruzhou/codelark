@@ -2,7 +2,7 @@ export const REASONING_LEVELS = ['minimal', 'low', 'medium', 'high', 'xhigh', 'm
 export const LOCAL_SESSION_LIST_LIMIT_OPTIONS = [20, 50, 100] as const;
 export const DEFAULT_LOCAL_SESSION_LIST_LIMIT = 20;
 export const MAX_LOCAL_SESSION_LIST_LIMIT = 100;
-export type LocalSessionListRuntime = 'codex' | 'claude' | 'kimi' | 'cursor';
+export type LocalSessionListRuntime = 'codex' | 'claude' | 'kimi' | 'cursor' | 'zcode';
 
 export function parseListIndex(raw: string): number | null {
   const trimmed = raw.trim();
@@ -27,7 +27,7 @@ export function resolveCommandAlias(rawCommand: string, args: string): string {
         ? '/t'
         : !args
         ? '/threads'
-        : /^(all|n\b|codex\b|claude\b|kimi\b|cursor\b|runtime\b)/i.test(args.trim())
+        : /^(all|n\b|codex\b|claude\b|kimi\b|cursor\b|zcode\b|runtime\b)/i.test(args.trim())
           ? '/threads'
           : '/thread';
     case '/n':
@@ -128,7 +128,7 @@ export function parseLocalSessionListArgs(args: string): { showAll: boolean; lim
   const parts = args.trim().toLowerCase().split(/\s+/).filter(Boolean);
   let runtime: LocalSessionListRuntime | undefined;
   if (parts[0] === 'runtime') parts.shift();
-  if (parts[0] === 'codex' || parts[0] === 'claude' || parts[0] === 'kimi' || parts[0] === 'cursor') {
+  if (parts[0] === 'codex' || parts[0] === 'claude' || parts[0] === 'kimi' || parts[0] === 'cursor' || parts[0] === 'zcode') {
     runtime = parts.shift() as LocalSessionListRuntime;
   }
   if (parts.length === 0) {

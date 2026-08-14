@@ -283,11 +283,23 @@ export function createSessionHealthRuntime(
         continue;
       }
       if (record.type === 'task_complete') {
-        recordInteractiveEnd(sessionId, 'completed', '检测到本地会话已完成当前任务。');
+        recordInteractiveEnd(
+          sessionId,
+          record.isError ? 'failed' : 'completed',
+          record.isError
+            ? record.errorText || record.content || '检测到本地会话执行失败。'
+            : '检测到本地会话已完成当前任务。',
+        );
         continue;
       }
       if (record.type === 'task_aborted') {
-        recordInteractiveEnd(sessionId, 'aborted', '检测到本地会话已停止当前任务。');
+        recordInteractiveEnd(
+          sessionId,
+          record.isError ? 'failed' : 'aborted',
+          record.isError
+            ? record.errorText || record.content || '检测到本地会话执行失败。'
+            : '检测到本地会话已停止当前任务。',
+        );
         continue;
       }
       if (record.type === 'tool_started') {

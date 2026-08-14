@@ -169,6 +169,7 @@ export interface BridgeCommandDispatchDeps {
   bootstrapCodexThread?: import('./runtime-settings.js').RuntimeSettingsCommandDeps['bootstrapCodexThread'];
   restartKimiTmuxSession?: import('./runtime-settings.js').RuntimeSettingsCommandDeps['restartKimiTmuxSession'];
   restartCursorTmuxSession?: import('./runtime-settings.js').RuntimeSettingsCommandDeps['restartCursorTmuxSession'];
+  restartZcodeTmuxSession?: import('./runtime-settings.js').RuntimeSettingsCommandDeps['restartZcodeTmuxSession'];
   diagnoseSessionHealth(sessionId: string): Promise<import('../health/runtime.js').SessionHealthDiagnosis | null>;
   diagnoseAllActiveSessions(): Promise<import('../health/runtime.js').SessionHealthDiagnosis[]>;
   scopedBinding?: ChannelChat | null;
@@ -450,7 +451,7 @@ async function handleCurrentRuntimeCommand(options: {
   const binding = options.binding || router.resolve(options.msg.address);
   const section = parseCurrentConfigSectionArg(options.args);
   if (!section) {
-    return { response: '请选择有效配置分栏：common、codex、claude、kimi 或 cursor。' };
+    return { response: '请选择有效配置分栏：common、codex、claude、kimi、cursor 或 zcode。' };
   }
 
   const session = options.store.getSession(binding.bridgeSessionId);
@@ -495,12 +496,12 @@ async function handleCurrentRuntimeCommand(options: {
   };
 }
 
-function normalizeRuntimeFormValue(value: unknown): 'codex' | 'claude' | 'kimi' | 'cursor' | undefined {
+function normalizeRuntimeFormValue(value: unknown): 'codex' | 'claude' | 'kimi' | 'cursor' | 'zcode' | undefined {
   const runtime = normalizeFormString(value).toLowerCase();
-  return runtime === 'codex' || runtime === 'claude' || runtime === 'kimi' || runtime === 'cursor' ? runtime : undefined;
+  return runtime === 'codex' || runtime === 'claude' || runtime === 'kimi' || runtime === 'cursor' || runtime === 'zcode' ? runtime : undefined;
 }
 
-function parseCurrentRuntimeArg(args: string): 'codex' | 'claude' | 'kimi' | 'cursor' | undefined {
+function parseCurrentRuntimeArg(args: string): 'codex' | 'claude' | 'kimi' | 'cursor' | 'zcode' | undefined {
   const section = parseCurrentConfigSectionArg(args);
   return section === 'common' ? undefined : section;
 }
@@ -508,7 +509,7 @@ function parseCurrentRuntimeArg(args: string): 'codex' | 'claude' | 'kimi' | 'cu
 function parseCurrentConfigSectionArg(args: string): CurrentSessionConfigSection | undefined {
   const parts = args.trim().toLowerCase().split(/\s+/).filter(Boolean);
   const runtime = parts[0] === 'runtime' ? parts[1] : parts[0];
-  return runtime === 'common' || runtime === 'codex' || runtime === 'claude' || runtime === 'kimi' || runtime === 'cursor'
+  return runtime === 'common' || runtime === 'codex' || runtime === 'claude' || runtime === 'kimi' || runtime === 'cursor' || runtime === 'zcode'
     ? runtime
     : undefined;
 }

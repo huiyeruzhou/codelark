@@ -13,6 +13,7 @@ import {
 import type { LLMProvider, SSEEvent } from '../../runtime/contracts.js';
 import type { restartKimiTmuxInputSession } from '../../runtime/kimi/tmux-provider.js';
 import type { restartCursorTmuxInputSession } from '../../runtime/cursor/tmux-provider.js';
+import type { restartZcodeTmuxInputSession } from '../../runtime/zcode/tmux-provider.js';
 import {
   getCodexSessionByThreadIdSafe,
   resolveSessionRuntimeConfig,
@@ -38,6 +39,7 @@ export interface RuntimeSettingsCommandDeps {
   getActiveTask?(sessionId: string): { abortController: AbortController } | undefined;
   restartKimiTmuxSession?: typeof restartKimiTmuxInputSession;
   restartCursorTmuxSession?: typeof restartCursorTmuxInputSession;
+  restartZcodeTmuxSession?: typeof restartZcodeTmuxInputSession;
 }
 
 export interface BootstrapCodexThreadParams {

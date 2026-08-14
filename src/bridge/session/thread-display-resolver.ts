@@ -30,6 +30,8 @@ import {
   getSessionCursorSessionId,
   getSessionKimiCwd,
   getSessionKimiSessionId,
+  getSessionZcodeCwd,
+  getSessionZcodeSessionId,
   getSessionWorkingDirectory,
 } from '../../domain/session-runtime.js';
 import { getCodexThreadId } from '../turn/turn-classifier.js';
@@ -70,12 +72,14 @@ export class ThreadDisplayService {
 
   private runtimeMetadata(
     session: ReturnType<BridgeStore['getSession']>,
-    runtime: 'codex' | 'claude' | 'kimi' | 'cursor' = getSessionActiveRuntime(session) === 'claude'
+    runtime: 'codex' | 'claude' | 'kimi' | 'cursor' | 'zcode' = getSessionActiveRuntime(session) === 'claude'
       ? 'claude'
       : getSessionActiveRuntime(session) === 'kimi'
         ? 'kimi'
         : getSessionActiveRuntime(session) === 'cursor'
           ? 'cursor'
+          : getSessionActiveRuntime(session) === 'zcode'
+            ? 'zcode'
         : 'codex',
     binding?: ChannelChat | null,
   ): Pick<ThreadDisplayInfo, 'reasoningEffort' | 'model'> {
@@ -88,6 +92,7 @@ export class ThreadDisplayService {
     if (activeRuntime === 'claude') return getSessionClaudeSessionId(session) || '';
     if (activeRuntime === 'kimi') return getSessionKimiSessionId(session) || '';
     if (activeRuntime === 'cursor') return getSessionCursorSessionId(session) || '';
+    if (activeRuntime === 'zcode') return getSessionZcodeSessionId(session) || '';
     return getCodexThreadId(session, binding) || '';
   }
 
@@ -102,7 +107,8 @@ export class ThreadDisplayService {
     const isClaude = activeRuntime === 'claude';
     const isKimi = activeRuntime === 'kimi';
     const isCursor = activeRuntime === 'cursor';
-    const codexSession = !isClaude && !isKimi && !isCursor && threadId ? getCodexSessionByThreadIdSafe(threadId, 'thread display binding') : null;
+    const isZcode = activeRuntime === 'zcode';
+    const codexSession = !isClaude && !isKimi && !isCursor && !isZcode && threadId ? getCodexSessionByThreadIdSafe(threadId, 'thread display binding') : null;
     const sessionCodexTitle = getSessionCodexTitle(session);
     const sessionWorkingDirectory = getSessionWorkingDirectory(session);
     const title = this.resolveTitle({
@@ -113,15 +119,15 @@ export class ThreadDisplayService {
       fallback: getSessionDisplayName(session, sessionWorkingDirectory) || binding.bridgeSessionId.slice(0, 8),
     });
     const codexSource = codexSession ? codexSessionSource(codexSession) : undefined;
-    const runtimeMetadata = this.runtimeMetadata(session, isClaude ? 'claude' : isKimi ? 'kimi' : isCursor ? 'cursor' : 'codex', binding);
+    const runtimeMetadata = this.runtimeMetadata(session, isClaude ? 'claude' : isKimi ? 'kimi' : isCursor ? 'cursor' : isZcode ? 'zcode' : 'codex', binding);
     return {
       title: formatResolvedThreadTitle(title, options),
       threadId,
-      cwd: sessionWorkingDirectory || (isKimi ? getSessionKimiCwd(session) : isCursor ? getSessionCursorCwd(session) : undefined) || codexSession?.cwd || '',
+      cwd: sessionWorkingDirectory || (isKimi ? getSessionKimiCwd(session) : isCursor ? getSessionCursorCwd(session) : isZcode ? getSessionZcodeCwd(session) : undefined) || codexSession?.cwd || '',
       lastActiveAt: codexSession?.lastEventAt || session?.last_progress_at || session?.updated_at || binding.updatedAt,
-      originator: isClaude ? 'Claude Code' : isKimi ? 'Kimi Code' : isCursor ? 'Cursor Agent' : codexSession?.originator || '当前聊天',
+      originator: isClaude ? 'Claude Code' : isKimi ? 'Kimi Code' : isCursor ? 'Cursor Agent' : isZcode ? 'ZCode' : codexSession?.originator || '当前聊天',
       bridgeSessionId: session?.id || binding.bridgeSessionId,
-      creatorKind: isClaude || isKimi || isCursor ? 'tui_cli' : codexSession ? resolveCreatorKind(codexSource || {}) : 'bridge',
+      creatorKind: isClaude || isKimi || isCursor || isZcode ? 'tui_cli' : codexSession ? resolveCreatorKind(codexSource || {}) : 'bridge',
       codexSource,
       executionProvider: bridgeSessionExecutionProvider(session),
       ...runtimeMetadata,
@@ -205,6 +211,32 @@ export class ThreadDisplayService {
         creatorKind: 'tui_cli',
         executionProvider: bindingDisplay?.executionProvider || bridgeSessionExecutionProvider(linkedBridgeSession),
         ...this.runtimeMetadata(linkedBridgeSession || null, 'cursor'),
+      };
+    }
+    if (session.runtime === 'zcode') {
+      const bindingDisplay = binding ? this.binding(binding, options) : null;
+      const linkedBridgeSession = this.store.listSessions().find((candidate) => (
+        getSessionActiveRuntime(candidate) === 'zcode'
+        && getSessionZcodeSessionId(candidate) === session.threadId
+        && (!session.cwd || getSessionZcodeCwd(candidate) === session.cwd)
+      ));
+      const title = this.resolveTitle({
+        sessionName: linkedBridgeSession ? getBridgeSessionDisplayTitle(linkedBridgeSession) : undefined,
+        sessionId: linkedBridgeSession?.id || binding?.bridgeSessionId,
+        threadId: session.threadId,
+        codexTitle: session.title,
+        fallback: session.cwd || session.threadId.slice(0, 8),
+      });
+      return {
+        title: formatResolvedThreadTitle(title, options),
+        threadId: session.threadId,
+        cwd: session.cwd || bindingDisplay?.cwd || '',
+        lastActiveAt: session.lastEventAt || bindingDisplay?.lastActiveAt,
+        originator: session.originator || bindingDisplay?.originator || 'ZCode',
+        bridgeSessionId: bindingDisplay?.bridgeSessionId || linkedBridgeSession?.id,
+        creatorKind: 'tui_cli',
+        executionProvider: bindingDisplay?.executionProvider || bridgeSessionExecutionProvider(linkedBridgeSession),
+        ...this.runtimeMetadata(linkedBridgeSession || null, 'zcode'),
       };
     }
     const bindingDisplay = binding ? this.binding(binding, options) : null;

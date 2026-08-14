@@ -31,10 +31,11 @@ import {
   resolveEffectiveSandboxMode,
   resolveKimiRuntimeConfig,
   resolveCursorRuntimeConfig,
+  resolveZcodeRuntimeConfig,
   resolveSessionWorkingDirectoryPath,
 } from '../session/support.js';
 import type { BridgeSession, BridgeStore } from '../../domain/index.js';
-import type { CursorReasoningEffort, KimiThinkingMode } from '../../domain/session.js';
+import type { CursorReasoningEffort, KimiThinkingMode, ZcodeMode } from '../../domain/session.js';
 import { parseMode } from '../../shared/security/validators.js';
 import {
   getSessionActiveRuntime,
@@ -74,7 +75,7 @@ export {
 } from './runtime-session.js';
 
 const MODE_OPTIONS_TEXT = '可选：`normal`（普通执行，默认） `yolo`（YOLO模式：允许 agent 无需审批绕过沙箱）。';
-const RUNTIME_OPTIONS_TEXT = '可选：`codex`（OpenAI Codex，默认） `claude`（Claude Code） `kimi`（Kimi Code） `cursor`（Cursor Agent）。`/provider` 选择使用何种方式运行 agent，不切换 runtime。';
+const RUNTIME_OPTIONS_TEXT = '可选：`codex`（OpenAI Codex，默认） `claude`（Claude Code） `kimi`（Kimi Code） `cursor`（Cursor Agent） `zcode`（ZCode）。`/provider` 选择使用何种方式运行 agent，不切换 runtime。';
 const REASONING_OPTIONS_TEXT = '可选：`1=minimal` `2=low` `3=medium` `4=high` `5=xhigh` `6=max` `7=ultra`；`m=max`，`u=ultra`。';
 const CLAUDE_REASONING_OPTIONS_TEXT = '可选：`1=low` `2=medium` `3=high` `4=xhigh` `5=max`；`m` 等同于 `max`，`minimal` 会映射为 Claude Code `low`。';
 const KIMI_THINKING_OPTIONS_TEXT = 'Kimi Code 只支持 Thinking 开关：`on`、`off`、`default`；`high` 等同于 `on`。';
@@ -288,6 +289,27 @@ function setSessionCursorForceToml(sessionId: string, force: boolean): void {
   );
 }
 
+function setSessionZcodeModelToml(sessionId: string, model: string): void {
+  createConfigService({ migrate: false }).set(
+    { kind: 'session', sessionId },
+    { runtime: { zcode: { model } } },
+  );
+}
+
+function clearSessionZcodeModelToml(sessionId: string): void {
+  createConfigService({ migrate: false }).unset(
+    { kind: 'session', sessionId },
+    'runtime.zcode.model',
+  );
+}
+
+function setSessionZcodeModeToml(sessionId: string, mode: ZcodeMode): void {
+  createConfigService({ migrate: false }).set(
+    { kind: 'session', sessionId },
+    { runtime: { zcode: { mode } } },
+  );
+}
+
 function clearSessionKimiModelToml(sessionId: string): void {
   createConfigService({ migrate: false }).unset(
     { kind: 'session', sessionId },
@@ -333,6 +355,14 @@ export function handleReasoningCommand(options: {
     return '当前会话不存在。';
   }
   const activeRuntime = getSessionActiveRuntime(session) || 'codex';
+  if (activeRuntime === 'zcode') {
+    return buildCommandFields(
+      'ZCode 思考级别由模型管理',
+      [['Runtime', 'zcode']],
+      ['CodeLark 不映射 ZCode 的模型专属思考参数；可用 `//` 将 ZCode 原生 slash 命令原样发送到 TUI。'],
+      options.markdown,
+    );
+  }
   if (!options.args) {
     if (activeRuntime === 'cursor') {
       const cursorConfig = resolveCursorRuntimeConfig(session, options.binding);
@@ -498,6 +528,28 @@ export function handleModeCommand(options: {
   const session = options.store.getSession(binding.bridgeSessionId);
   const activeRuntime = getSessionActiveRuntime(session) || 'codex';
   const mode = formatSessionRuntimeMode(binding, session);
+  if (activeRuntime === 'zcode') {
+    const current = resolveZcodeRuntimeConfig(session, binding).mode;
+    if (!options.args) {
+      return buildCommandFields(
+        '当前 ZCode 模式',
+        [['Runtime', 'zcode'], ['模式', current], ['Provider', 'tmux']],
+        ['发送 `/mode build|edit|plan|yolo` 修改下次 ZCode TUI 启动模式。'],
+        options.markdown,
+      );
+    }
+    const requested = options.args.trim().toLowerCase();
+    if (requested !== 'build' && requested !== 'edit' && requested !== 'plan' && requested !== 'yolo') {
+      return buildCommandFields('ZCode 模式用法', [['命令', '`/mode build|edit|plan|yolo`']], [], options.markdown);
+    }
+    setSessionZcodeModeToml(session!.id, requested);
+    return buildCommandFields(
+      '已更新 ZCode 模式',
+      [['模式', requested], ['Provider', 'tmux']],
+      ['请先 `/stop`，再发送 `/p tmux` 重启 ZCode TUI 后生效。'],
+      options.markdown,
+    );
+  }
   if (activeRuntime === 'kimi') {
     return buildCommandFields(
       'Kimi Code 模式固定',
@@ -660,16 +712,16 @@ export function handleRuntimeCommand(options: {
       options.markdown,
     );
   }
-  if (requested !== 'codex' && requested !== 'claude' && requested !== 'kimi' && requested !== 'cursor') {
+  if (requested !== 'codex' && requested !== 'claude' && requested !== 'kimi' && requested !== 'cursor' && requested !== 'zcode') {
     return buildCommandFields(
       'Runtime 用法',
-      [['命令', '`/runtime codex|claude|kimi|cursor`']],
+      [['命令', '`/runtime codex|claude|kimi|cursor|zcode`']],
       [RUNTIME_OPTIONS_TEXT],
       options.markdown,
     );
   }
   if (requested === currentRuntime) {
-    const label = requested === 'claude' ? 'Claude Code' : requested === 'kimi' ? 'Kimi Code' : requested === 'cursor' ? 'Cursor Agent' : 'Codex';
+    const label = requested === 'claude' ? 'Claude Code' : requested === 'kimi' ? 'Kimi Code' : requested === 'cursor' ? 'Cursor Agent' : requested === 'zcode' ? 'ZCode' : 'Codex';
     return buildCommandFields(
       'Runtime 未变化',
       [['Runtime', currentRuntime]],
@@ -718,7 +770,7 @@ export function handleRuntimeCommand(options: {
       ['新 BridgeSession', nextSession.id],
       ['目录', getSessionWorkingDirectory(nextSession) || '-'],
     ],
-    [`当前聊天已切到独立 ${requested === 'claude' ? 'Claude Code' : requested === 'kimi' ? 'Kimi Code' : requested === 'cursor' ? 'Cursor Agent' : 'Codex'} BridgeSession；其它 runtime 会话不会参与后续 turn。再次使用 \`/runtime codex|claude|kimi|cursor\` 会切回本聊天记住的对应 BridgeSession。`],
+    [`当前聊天已切到独立 ${requested === 'claude' ? 'Claude Code' : requested === 'kimi' ? 'Kimi Code' : requested === 'cursor' ? 'Cursor Agent' : requested === 'zcode' ? 'ZCode' : 'Codex'} BridgeSession；其它 runtime 会话不会参与后续 turn。再次使用 \`/runtime codex|claude|kimi|cursor|zcode\` 会切回本聊天记住的对应 BridgeSession。`],
     options.markdown,
   );
 }
@@ -736,8 +788,8 @@ export function handleSandboxCommand(options: {
     return '当前会话不存在。';
   }
   const activeRuntime = getSessionActiveRuntime(session);
-  if (activeRuntime === 'claude' || activeRuntime === 'kimi' || activeRuntime === 'cursor') {
-    const label = activeRuntime === 'kimi' ? 'Kimi Code' : activeRuntime === 'cursor' ? 'Cursor Agent' : 'Claude Code';
+  if (activeRuntime === 'claude' || activeRuntime === 'kimi' || activeRuntime === 'cursor' || activeRuntime === 'zcode') {
+    const label = activeRuntime === 'kimi' ? 'Kimi Code' : activeRuntime === 'cursor' ? 'Cursor Agent' : activeRuntime === 'zcode' ? 'ZCode' : 'Claude Code';
     return buildCommandFields(
       `${label} 不支持 Bridge 沙箱设置`,
       [['Runtime', activeRuntime]],
@@ -797,8 +849,8 @@ export function handleNetworkCommand(options: {
     return '当前会话不存在。';
   }
   const activeRuntime = getSessionActiveRuntime(session);
-  if (activeRuntime === 'claude' || activeRuntime === 'kimi' || activeRuntime === 'cursor') {
-    const label = activeRuntime === 'kimi' ? 'Kimi Code' : activeRuntime === 'cursor' ? 'Cursor Agent' : 'Claude Code';
+  if (activeRuntime === 'claude' || activeRuntime === 'kimi' || activeRuntime === 'cursor' || activeRuntime === 'zcode') {
+    const label = activeRuntime === 'kimi' ? 'Kimi Code' : activeRuntime === 'cursor' ? 'Cursor Agent' : activeRuntime === 'zcode' ? 'ZCode' : 'Claude Code';
     return buildCommandFields(
       `${label} 不支持 Bridge 网络开关`,
       [['Runtime', activeRuntime]],
@@ -869,6 +921,34 @@ export function handleModelCommand(options: {
     return '当前会话不存在。';
   }
   const activeRuntime = getSessionActiveRuntime(session) || 'codex';
+  if (activeRuntime === 'zcode') {
+    const currentModel = resolveZcodeRuntimeConfig(session, binding).model || 'default';
+    if (!options.args) {
+      return buildCommandFields(
+        '当前 ZCode 模型',
+        [['模型', currentModel]],
+        ['发送 `/model <provider/model>` 可切换；发送 `/model default` 回到 ZCode 默认模型。'],
+        options.markdown,
+      );
+    }
+    const requestedModel = options.args.trim();
+    if (requestedModel === 'default') {
+      clearSessionZcodeModelToml(session.id);
+      return buildCommandFields(
+        '已恢复默认 ZCode 模型',
+        [['模型', resolveZcodeRuntimeConfig(options.store.getSession(session.id), binding).model || 'default']],
+        ['请先 `/stop`，再发送 `/p tmux` 重启 ZCode TUI 后生效。'],
+        options.markdown,
+      );
+    }
+    setSessionZcodeModelToml(session.id, requestedModel);
+    return buildCommandFields(
+      '已更新 ZCode 模型',
+      [['模型', requestedModel]],
+      [`后续 ZCode tmux 启动会传入 \`--model ${requestedModel}\`；请用 \`/p tmux\` 重启后生效。`],
+      options.markdown,
+    );
+  }
   if (activeRuntime === 'claude') {
     if (!options.args) {
       const currentModel = getSessionClaudeModel(session) || resolveClaudeRuntimeConfig(session, binding).model || 'default';

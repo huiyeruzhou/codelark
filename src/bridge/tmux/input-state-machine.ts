@@ -1,4 +1,4 @@
-export type RuntimeTmuxInputRuntime = 'codex' | 'claude' | 'kimi' | 'cursor';
+export type RuntimeTmuxInputRuntime = 'codex' | 'claude' | 'kimi' | 'cursor' | 'zcode';
 
 export type RuntimeTmuxTurnState = 'unknown' | 'idle' | 'active';
 export type RuntimeTmuxSteerOperation = 'none' | 'explicit';
@@ -172,7 +172,7 @@ export function invalidateRuntimeTmuxInputReadiness(
 }
 
 /**
- * Codex, Claude and Cursor accept a new prompt as their natural steering
+ * Codex, Claude, Cursor and ZCode accept a new prompt as their natural steering
  * operation. Kimi needs an additional Ctrl-S only when a turn was already
  * active before this input was submitted.
  */

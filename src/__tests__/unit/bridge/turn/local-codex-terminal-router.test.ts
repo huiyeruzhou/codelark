@@ -102,4 +102,20 @@ describe('local-codex-terminal-router', () => {
     assert.deepEqual(result.unclaimed.map((item) => item.signature), ['other-1']);
     assert.deepEqual(claims, ['kimi:session_kimi-1:final']);
   });
+
+  it('classifies an error-bearing aborted terminal as failed rather than user-aborted', async () => {
+    let outcome = '';
+    const failed = record('zcode-terminal-error', 'task_aborted', 'provider_not_configured', 'zcode-turn-1');
+    failed.isError = true;
+    const coordinator: Pick<TurnCoordinator, 'claimRuntimeTerminal'> = {
+      claimRuntimeTerminal: async (terminal) => {
+        outcome = terminal.outcome;
+        return { claimed: true };
+      },
+    };
+
+    await routeRuntimeRecords('session-zcode', 'zcode', 'sess_zcode', [failed], coordinator);
+
+    assert.equal(outcome, 'failed');
+  });
 });

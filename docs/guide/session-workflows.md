@@ -10,9 +10,9 @@ CodeLark 的 IM 对话由三层组成：
 | --- | --- | --- |
 | Chat | 飞书私聊、群聊、话题或云文档评论入口。它只记录“这个聊天当前接到哪个 BridgeSession”。 | `/t`、`/t 1`、`/t unbind` |
 | BridgeSession | CodeLark 管理的一条工作会话，保存工作目录、当前 agent、模型和底层会话身份。 | `/new`、`/clear`、`/` |
-| Runtime session | Codex thread、Claude Code/Kimi Code session 或 Cursor chat，是底层 agent 自己的会话身份。 | `/t` 接管、`/his` 查看历史 |
+| Runtime session | Codex thread、Claude Code/Kimi Code/ZCode session 或 Cursor chat，是底层 agent 自己的会话身份。 | `/t` 接管、`/his` 查看历史 |
 
-`/runtime` 选择当前会话使用 Codex、Claude Code、Kimi Code 还是 Cursor Agent。默认使用 tmux，日常使用无需再选择运行方式。同一个聊天可以记住各 agent 的 BridgeSession，来回切换时会尽量回到之前那条会话。
+`/runtime` 选择当前会话使用 Codex、Claude Code、Kimi Code、Cursor Agent 还是 ZCode。默认使用 tmux，日常使用无需再选择运行方式。同一个聊天可以记住各 agent 的 BridgeSession，来回切换时会回到之前那条会话。
 
 ## 推荐日常流程
 
@@ -40,7 +40,7 @@ CodeLark 的 IM 对话由三层组成：
 
 - 会话下拉：选择表格中的某条本地会话，效果等同 `/t <序号>`。
 - 数量下拉：切换显示 20、50 或 100 条，也可发送 `/t n 50`、`/t n 100`。
-- runtime 下拉：切换列表查看 Codex、Claude Code 或 Kimi Code 会话，也可发送 `/t codex n 100`、`/t claude n 100` 或 `/t kimi n 100`。
+- runtime 下拉：切换列表查看 Codex、Claude Code、Kimi Code、Cursor Agent 或 ZCode 会话，也可发送 `/t zcode n 100`。
 
 表格首列会标出当前聊天正在绑定的会话，以及其他聊天已经绑定的会话。接管其他聊天绑定的会话时，如果目标还在运行会被拒绝；如果目标空闲，CodeLark 会先发确认卡片，确认后解绑原聊天并把会话 attach 到当前聊天。
 
@@ -55,7 +55,7 @@ runtime 和数量下拉只切换卡片里的候选列表，不会改变当前会
 | 操作 | 命令 | 说明 |
 | --- | --- | --- |
 | attach 本地会话 | `/t 1` | 按当前 `/t` 表中的序号接管会话。 |
-| attach 指定会话 | `/t <thread_id|session_id>` 或 `/t <bridge_id>` | Codex 使用 thread_id；Claude/Kimi 使用 session_id；也可用名称匹配，冲突时先回到 `/t` 用序号。 |
+| attach 指定会话 | `/t <thread_id|session_id>` 或 `/t <bridge_id>` | Codex 使用 thread_id；Claude/Kimi/Cursor/ZCode 使用各自稳定 session/chat id；也可用名称匹配，冲突时先回到 `/t` 用序号。 |
 | detach 当前聊天 | `/t unbind` | 当前聊天脱离原会话，并立即绑定到新的临时 BridgeSession；原会话保留，可再次 `/t` 接回。 |
 | 临时会话 | `/t 0` | 切到隐藏的临时 BridgeSession。 |
 | 重置临时会话 | `/t 0 reset` | 丢弃当前临时上下文并生成新的临时 BridgeSession。 |
@@ -96,10 +96,11 @@ CodeLark 默认通过 tmux 运行本地 agent。只有当前 TUI 已退出或确
 | Claude Code | `/reasoning <值>` | `low`、`medium`、`high`、`xhigh`、`max` |
 | Kimi Code | `/reasoning <值>` | `on`、`off`、`default`；Kimi 没有多档 effort |
 | Cursor Agent | `/reasoning <值>` | `low`、`medium`、`high`、`xhigh`、`max`；具体可用值取决于所选模型和账号 |
+| ZCode | `//<原生命令>` | CodeLark 不映射思考级别；例如 `//goal` 原样进入 ZCode TUI |
 
 `/reasoning default` 清除当前会话覆盖。全局默认可在 `/set` 对应 runtime 分栏修改；Cursor 会把 effort 合并进参数化模型，例如 `gpt-5.3-codex[effort=high]`，`force` 仍只表示跳过审批，不是思考级别。
 
-`/` 卡片顶部有“通用配置、Codex、Claude Code、Kimi Code、Cursor Agent”五个分栏：
+`/` 卡片顶部有“通用配置、Codex、Claude Code、Kimi Code、Cursor Agent、ZCode”分栏：
 
 - 通用配置严格按“对话名称、工作目录、tmux 输出行数”显示；切到该分栏不会改变当前 agent。
 - 各 agent 分栏只显示自己的模型、权限和思考设置，不重复显示通用字段。选择另一个分栏会切换当前 agent 并刷新卡片。
@@ -168,6 +169,7 @@ tmux 绑定和默认值：
 - Claude：默认模型、YOLO 模式、Claude executable、reasoning、空闲超时。
 - Kimi：默认模型、Thinking 开关。
 - Cursor：默认模型、模型 effort 和 force 模式。
+- ZCode：默认模型、启动 mode 和固定 tmux provider。
 - Bridge：UI 访问和流式状态提示。
 - 通道配置（feishu-default）：历史消息数量、流式反馈、Markdown 反馈、群聊是否需要 @bot 等。
 
@@ -189,7 +191,7 @@ tmux 绑定和默认值：
 | 目标 | 入口 |
 | --- | --- |
 | 看 bridge、通道和当前绑定 | `/status` |
-| 找本地 Codex/Claude/Kimi/Cursor 会话并 attach | `/t` |
+| 找本地 Codex/Claude/Kimi/Cursor/ZCode 会话并 attach | `/t` |
 | 改当前会话名、工作目录和 agent 设置 | `/` |
 | 改全局默认值和通道默认值 | `/set` |
 | 看本地 tmux TUI 的当前屏幕 | `/tmux-screen` |

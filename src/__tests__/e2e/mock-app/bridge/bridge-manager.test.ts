@@ -1214,6 +1214,7 @@ describe('bridge-manager resolveCommandAlias', () => {
     assert.deepEqual(parseLocalSessionListArgs('all'), { showAll: true, limit: 100 });
     assert.deepEqual(parseLocalSessionListArgs('n 100'), { showAll: false, limit: 100 });
     assert.deepEqual(parseLocalSessionListArgs('n 500'), { showAll: false, limit: 100 });
+    assert.deepEqual(parseLocalSessionListArgs('zcode'), { showAll: false, limit: 20, runtime: 'zcode' });
   });
 
   it('renders local runtime session list titles with the actual displayed count', () => {

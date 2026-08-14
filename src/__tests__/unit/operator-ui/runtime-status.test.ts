@@ -34,7 +34,7 @@ describe('operator runtime status projection', () => {
   });
 
   it('uses the same missing-state semantics for every runtime', () => {
-    for (const runtime of ['codex', 'claude', 'kimi', 'cursor'] as const) {
+    for (const runtime of ['codex', 'claude', 'kimi', 'cursor', 'zcode'] as const) {
       const status = projectRuntimeStatus(runtime);
       assert.equal(status.tone, 'missing');
       assert.equal(status.state, '未发现会话');

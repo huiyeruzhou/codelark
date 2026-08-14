@@ -63,6 +63,7 @@ describe('operator UI shell', () => {
     assert.match(html, /<option value="claude">Claude Code<\/option>/);
     assert.match(html, /<option value="kimi">Kimi Code<\/option>/);
     assert.match(html, /<option value="cursor">Cursor Agent<\/option>/);
+    assert.match(html, /<option value="zcode">ZCode<\/option>/);
     assert.match(html, /function sessionMatchesFilter\(session\)/);
     assert.match(html, /const sessions = allSessions\.filter\(sessionMatchesFilter\)/);
   });
@@ -78,7 +79,7 @@ describe('operator UI shell', () => {
   it('groups global settings into one common tab and runtime-owned tabs', () => {
     const html = renderUiShellHtml();
 
-    for (const tab of ['common', 'codex', 'claude', 'kimi', 'cursor', 'web']) {
+    for (const tab of ['common', 'codex', 'claude', 'kimi', 'cursor', 'zcode', 'web']) {
       assert.match(html, new RegExp(`data-config-tab="${tab}"`));
       assert.match(html, new RegExp(`data-config-section="${tab}"`));
     }
@@ -91,7 +92,7 @@ describe('operator UI shell', () => {
     const html = renderUiShellHtml();
 
     assert.match(html, /aria-label="Runtime 当前状态"/);
-    for (const runtime of ['codex', 'claude', 'kimi', 'cursor']) {
+    for (const runtime of ['codex', 'claude', 'kimi', 'cursor', 'zcode']) {
       assert.match(html, new RegExp(`class="runtime-status-item" data-runtime="${runtime}"`));
       assert.match(html, new RegExp(`id="runtime-${runtime}-state"`));
       assert.match(html, new RegExp(`id="runtime-${runtime}-counts"`));

@@ -9,7 +9,7 @@ Web 工作台是 CodeLark 的本地管理面。它不复制 IM 聊天，也不�
 | 领域 | 当前网页 | 结论 | 主要缺口 |
 | --- | --- | --- | --- |
 | Bridge / UI 服务 | 启动、停止、重启、刷新状态；读取开机自启动状态 | 部分 | 没有长操作进度、失败阶段、更新状态和可执行的自启动管理 |
-| Runtime | 配置 Codex、Claude Code、Kimi Code、Cursor 默认值；平等展示本地会话、绑定入口、运行/排队/待恢复、默认 provider/model 和最近活动 | 部分 | 当前真实进程/tmux、最近错误和 reconnect 仍需接入统一 runtime health projection |
+| Runtime | 配置 Codex、Claude Code、Kimi Code、Cursor、ZCode 默认值；平等展示本地会话、绑定入口、运行/排队/待恢复、默认 provider/model 和最近活动 | 部分 | 当前真实进程/tmux、最近错误和 reconnect 仍需接入统一 runtime health projection |
 | Session | 四种 runtime 的本地发现、materialize、历史、重命名、可继承配置、绑定和归档 | 接近完整 | 大量 session 缺少搜索/过滤；运行中操作的风险提示不足 |
 | 全局配置 | 覆盖 runtime、tmux 默认值、Bridge 和 Web 访问配置 | 接近完整 | 单页过长；缺少配置来源/继承说明；保存反馈不能清楚指出需重启项 |
 | 通道与绑定 | 飞书多实例 CRUD、凭据检查、连接测试和具体聊天绑定 | 完整 | 编辑器与列表信息密度和移动端布局仍需整理 |
@@ -30,7 +30,7 @@ Web 工作台是 CodeLark 的本地管理面。它不复制 IM 聊天，也不�
 - `shell.ts`：文档骨架、导航和页面装配；
 - `overview-view.ts`：服务拓扑、版本、健康和更新；
 - `session-view.ts`：session ledger、历史、绑定和 session 配置；
-- `config-view.ts`：通用配置与四个 runtime 分栏；
+- `config-view.ts`：通用配置与五个 runtime 分栏；
 - `channel-view.ts`：通道实例、凭据测试和绑定；
 - `log-view.ts`：结构化日志、过滤和诊断；
 - `ui-api.ts`：唯一 fetch wrapper、错误模型和 payload 类型。
@@ -44,7 +44,7 @@ Web 工作台是 CodeLark 的本地管理面。它不复制 IM 聊天，也不�
 1. **运行**：Bridge/UI/通道/runtime 路径、版本、健康和需要处理的异常；
 2. **会话**：所有 BridgeSession 和本地 runtime session；
 3. **通道**：飞书实例和具体聊天绑定；
-4. **设置**：通用、Codex、Claude、Kimi、Cursor、Web 访问；
+4. **设置**：通用、Codex、Claude、Kimi、Cursor、ZCode、Web 访问；
 5. **日志**：结构化筛选、原始详情和诊断；
 6. **命令**：由共享命令目录生成的可搜索参考。
 

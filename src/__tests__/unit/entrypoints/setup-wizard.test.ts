@@ -110,7 +110,7 @@ test('real setup wizard e2e can load credentials from env file without npm secre
 
   assert.match(script, /--test-env-file/);
   assert.match(script, /--runtime/);
-  assert.match(script, /codex\|ccr\|claude\|kimi\|cursor/);
+  assert.match(script, /codex\|ccr\|claude\|kimi\|cursor\|zcode/);
   assert.match(script, /CODELARK_REAL_FEISHU_TEST_APP_ID/);
   assert.match(script, /CODELARK_REAL_FEISHU_TEST_APP_SECRET/);
   assert.match(script, /buildStandardLarkCliEnv/);
@@ -141,6 +141,7 @@ test('real setup wizard wizard e2e creates credentials in an isolated home and w
   assert.match(script, /runtime agent mismatch/);
   assert.match(script, /kimi provider mismatch/);
   assert.match(script, /cursor provider mismatch/);
+  assert.match(script, /zcode provider mismatch/);
   assert.doesNotMatch(script, /runtime\?: \{ provider\?: string \}/);
   assert.match(script, /defaultRealFeishuTestEnvFile/);
   assert.match(script, /writeDefaultRealFeishuTestEnvFile/);
@@ -199,6 +200,7 @@ test('recommends runtime from home directory markers', () => {
   const root = tempDir('clk-runtime-');
   const kimiRoot = tempDir('clk-runtime-kimi-');
   const cursorRoot = tempDir('clk-runtime-cursor-');
+  const zcodeRoot = tempDir('clk-runtime-zcode-');
 
   fs.mkdirSync(path.join(kimiRoot, '.kimi-code'), { recursive: true });
   assert.deepEqual(recommendRuntime(kimiRoot), {
@@ -210,6 +212,12 @@ test('recommends runtime from home directory markers', () => {
   assert.deepEqual(recommendRuntime(cursorRoot), {
     runtime: 'cursor',
     reason: '检测到 ~/.cursor，默认使用 Cursor Agent。',
+  });
+
+  fs.mkdirSync(path.join(zcodeRoot, '.zcode'), { recursive: true });
+  assert.deepEqual(recommendRuntime(zcodeRoot), {
+    runtime: 'zcode',
+    reason: '检测到 ~/.zcode，默认使用 ZCode。',
   });
 
   fs.mkdirSync(path.join(root, '.claude-code'), { recursive: true });
@@ -326,6 +334,19 @@ test('builds setup config for the Cursor tmux runtime', () => {
   assert.equal(next.runtime.agent, 'cursor');
   assert.equal(next.runtime.cursor.provider, 'tmux');
   assert.equal(next.bridge.defaultWorkspace, '/work/cursor');
+});
+
+test('builds setup config for the ZCode tmux runtime', () => {
+  const current = baseSetupConfig();
+  const next = buildSetupConfig(current, {
+    appId: 'cli_demo',
+    appSecret: 'secret_demo',
+    site: 'feishu',
+  }, 'zcode', '/work/zcode');
+
+  assert.equal(next.runtime.agent, 'zcode');
+  assert.equal(next.runtime.zcode.provider, 'tmux');
+  assert.equal(next.bridge.defaultWorkspace, '/work/zcode');
 });
 
 test('builds platform-specific tmux installation guidance', () => {

@@ -13,6 +13,8 @@ import {
   kimiThinkingModeSchema,
   cursorProviderSchema,
   cursorReasoningEffortSchema,
+  zcodeProviderSchema,
+  zcodeModeSchema,
   reasoningEffortSchema,
   runtimeAgentSchema,
   sandboxModeSchema,
@@ -105,6 +107,9 @@ const uiConfigPayloadSchema = z.object({
     z.union([cursorReasoningEffortSchema, z.literal('')]),
   ).optional(),
   cursorForce: z.boolean().optional(),
+  zcodeDefaultModel: optionalString(),
+  zcodeProvider: optionalEnum(zcodeProviderSchema),
+  zcodeMode: optionalEnum(zcodeModeSchema),
   uiAllowLan: z.boolean().optional(),
   uiAccessToken: optionalString(),
 }).strict();
@@ -166,6 +171,9 @@ export function configV2ToPayload(config: ConfigV2, presentation: UiConfigPresen
     cursorProvider: config.runtime.cursor.provider || 'tmux',
     cursorReasoningEffort: config.runtime.cursor.reasoningEffort || '',
     cursorForce: config.runtime.cursor.force === true,
+    zcodeDefaultModel: config.runtime.zcode.model || '',
+    zcodeProvider: config.runtime.zcode.provider || 'tmux',
+    zcodeMode: config.runtime.zcode.mode || 'build',
     uiAllowLan: config.bridge.uiAllowLan === true,
     uiAccessToken: config.bridge.uiAccessToken || '',
     channels: config.channels.map(v2ChannelToPayload),
@@ -244,6 +252,13 @@ export function mergeConfigV2HomePatch(current: ConfigV2, payload: Record<string
         force: hasPayloadKey(payload, 'cursorForce')
           ? parsed.cursorForce === true
           : current.runtime.cursor.force,
+      },
+      zcode: {
+        model: parsed.zcodeDefaultModel === undefined
+          ? current.runtime.zcode.model
+          : parsed.zcodeDefaultModel || '',
+        provider: parsed.zcodeProvider ?? current.runtime.zcode.provider,
+        mode: parsed.zcodeMode ?? current.runtime.zcode.mode,
       },
     },
     bridge: {

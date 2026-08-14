@@ -36,10 +36,12 @@ import {
   defaultUiSessionClaudeSource,
   defaultUiSessionKimiSource,
   defaultUiSessionCursorSource,
+  defaultUiSessionZcodeSource,
   type UiSessionCodexSource,
   type UiSessionClaudeSource,
   type UiSessionKimiSource,
   type UiSessionCursorSource,
+  type UiSessionZcodeSource,
   type UiSessionRuntimeSource,
 } from './session-source.js';
 
@@ -55,6 +57,8 @@ export interface UiSessionIdentity {
   kimiCwd?: string;
   cursorSessionId?: string;
   cursorCwd?: string;
+  zcodeSessionId?: string;
+  zcodeCwd?: string;
 }
 
 export interface UiSessionHistoryMessage {
@@ -109,7 +113,7 @@ function filterUiMessagesForRuntime(
   messages: UiSessionHistoryMessage[],
   runtime: RuntimeAgent | undefined,
 ): UiSessionHistoryMessage[] {
-  if (runtime !== 'claude' && runtime !== 'kimi' && runtime !== 'cursor') return messages;
+  if (runtime !== 'claude' && runtime !== 'kimi' && runtime !== 'cursor' && runtime !== 'zcode') return messages;
   return messages.filter((message) => message.role !== 'user');
 }
 
@@ -158,6 +162,8 @@ function applySessionConfigToml(bridgeSessionId: string, payload: Record<string,
       ? 'kimi'
       : payload.activeRuntime === 'cursor'
         ? 'cursor'
+        : payload.activeRuntime === 'zcode'
+          ? 'zcode'
         : 'codex';
   if (typeof payload.workingDirectory === 'string') {
     const workspace = payload.workingDirectory.trim() || process.cwd();
@@ -267,6 +273,40 @@ function applySessionConfigToml(bridgeSessionId: string, payload: Record<string,
     return;
   }
 
+  if (activeRuntime === 'zcode') {
+    if (typeof payload.zcodeModel === 'string') {
+      setOrUnsetSessionConfig(
+        bridgeSessionId,
+        'runtime.zcode.model',
+        payload.zcodeModel.trim(),
+        (model) => ({ runtime: { zcode: { model } } }),
+      );
+    }
+    if (payload.zcodeProvider === 'tmux' || payload.zcodeProvider === '') {
+      setOrUnsetSessionConfig(
+        bridgeSessionId,
+        'runtime.zcode.provider',
+        payload.zcodeProvider,
+        (provider) => ({ runtime: { zcode: { provider } } }),
+      );
+    }
+    if (
+      payload.zcodeMode === 'build'
+      || payload.zcodeMode === 'edit'
+      || payload.zcodeMode === 'plan'
+      || payload.zcodeMode === 'yolo'
+      || payload.zcodeMode === ''
+    ) {
+      setOrUnsetSessionConfig(
+        bridgeSessionId,
+        'runtime.zcode.mode',
+        payload.zcodeMode,
+        (mode) => ({ runtime: { zcode: { mode } } }),
+      );
+    }
+    return;
+  }
+
   if (typeof payload.model === 'string') {
     setOrUnsetSessionConfig(
       bridgeSessionId,
@@ -372,6 +412,8 @@ function sanitizeSessionConfig(payload: Record<string, unknown>): BridgeSessionU
       ? 'kimi'
       : payload.activeRuntime === 'cursor'
         ? 'cursor'
+        : payload.activeRuntime === 'zcode'
+          ? 'zcode'
         : 'codex';
   if (typeof payload.name === 'string') {
     updates.name = payload.name.trim() || undefined;
@@ -410,6 +452,9 @@ function sessionConfigPayload(session: BridgeSession) {
     cursorProvider: getSessionConfigTomlOverride<string>(session, 'runtime.cursor.provider') || '',
     cursorReasoningEffort: getSessionConfigTomlOverride<string>(session, 'runtime.cursor.reasoningEffort') || '',
     cursorForce: getSessionConfigTomlOverride<boolean>(session, 'runtime.cursor.force'),
+    zcodeModel: getSessionConfigTomlOverride<string>(session, 'runtime.zcode.model') || '',
+    zcodeProvider: getSessionConfigTomlOverride<string>(session, 'runtime.zcode.provider') || '',
+    zcodeMode: getSessionConfigTomlOverride<string>(session, 'runtime.zcode.mode') || '',
   };
 }
 
@@ -420,14 +465,15 @@ export class UiSessionApplication {
     private readonly claudeSource: UiSessionClaudeSource = defaultUiSessionClaudeSource,
     private readonly kimiSource: UiSessionKimiSource = defaultUiSessionKimiSource,
     private readonly cursorSource: UiSessionCursorSource = defaultUiSessionCursorSource,
+    private readonly zcodeSource: UiSessionZcodeSource = defaultUiSessionZcodeSource,
   ) {}
 
   private createRuntimeSource(): UiSessionRuntimeSource {
-    return createUiSessionRuntimeSource(this.codexSource, this.claudeSource, this.kimiSource, this.cursorSource);
+    return createUiSessionRuntimeSource(this.codexSource, this.claudeSource, this.kimiSource, this.cursorSource, this.zcodeSource);
   }
 
   private createSessionRegistry() {
-    return createUiSessionRegistry(this.store, this.codexSource, this.claudeSource, this.kimiSource, this.cursorSource);
+    return createUiSessionRegistry(this.store, this.codexSource, this.claudeSource, this.kimiSource, this.cursorSource, this.zcodeSource);
   }
 
   listSessions(limit?: number): UiSessionListPayload {
@@ -534,6 +580,17 @@ export class UiSessionApplication {
       };
     }
 
+    if (identity.zcodeSessionId && identity.zcodeCwd) {
+      const runtimeSource = this.createRuntimeSource();
+      const summary = runtimeSessionToSummary(runtimeSource, this.store, 'zcode', identity.zcodeSessionId, identity.zcodeCwd);
+      if (!summary) throw new Error('指定的 ZCode 会话不存在。');
+      return {
+        session: summary,
+        source: 'zcode',
+        messages: uiRuntimeHistoryMessages(runtimeSource, 'zcode', identity.zcodeSessionId, identity.zcodeCwd),
+      };
+    }
+
     throw new Error('不支持的会话目标。');
   }
 
@@ -578,6 +635,15 @@ export class UiSessionApplication {
     };
   }
 
+  importZcodeThread(zcodeSessionId: string, cwd: string) {
+    const session = this.createSessionRegistry().materializeZcodeThread(zcodeSessionId, cwd);
+    return {
+      bridgeSessionId: session.id,
+      session: bridgeSessionToSummary(session),
+      config: sessionConfigPayload(session),
+    };
+  }
+
   renameSession(identity: UiSessionIdentity, name: string | undefined) {
     const registry = this.createSessionRegistry();
     const updated = identity.bridgeSessionId
@@ -588,7 +654,9 @@ export class UiSessionApplication {
           ? registry.renameClaudeThread(identity.claudeSessionId, identity.claudeCwd, name)
           : identity.kimiSessionId && identity.kimiCwd
             ? registry.renameKimiThread(identity.kimiSessionId, identity.kimiCwd, name)
-            : registry.renameCursorThread(identity.cursorSessionId!, identity.cursorCwd!, name);
+            : identity.cursorSessionId && identity.cursorCwd
+              ? registry.renameCursorThread(identity.cursorSessionId, identity.cursorCwd, name)
+              : registry.renameZcodeThread(identity.zcodeSessionId!, identity.zcodeCwd!, name);
     return sessionConfigPayload(updated);
   }
 
@@ -647,6 +715,15 @@ export class UiSessionApplication {
       const summary = runtimeSessionToSummary(runtimeSource, this.store, 'cursor', identity.cursorSessionId, identity.cursorCwd);
       if (!summary) throw new Error('指定的 Cursor Agent 会话不存在。');
       const result = this.createSessionRegistry().archiveCursorThread(identity.cursorSessionId, identity.cursorCwd);
+      return { deleted: summary, deletedBridgeSessionIds: result.deletedBridgeSessionIds };
+    }
+
+
+    if (identity.zcodeSessionId && identity.zcodeCwd) {
+      const runtimeSource = this.createRuntimeSource();
+      const summary = runtimeSessionToSummary(runtimeSource, this.store, 'zcode', identity.zcodeSessionId, identity.zcodeCwd);
+      if (!summary) throw new Error('指定的 ZCode 会话不存在。');
+      const result = this.createSessionRegistry().archiveZcodeThread(identity.zcodeSessionId, identity.zcodeCwd);
       return { deleted: summary, deletedBridgeSessionIds: result.deletedBridgeSessionIds };
     }
 

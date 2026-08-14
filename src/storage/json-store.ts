@@ -32,7 +32,9 @@ import {
   getSessionActiveRuntime,
   getSessionClaudeSessionId,
   getSessionCodexThreadId,
+  getSessionCursorSessionId,
   getSessionKimiSessionId,
+  getSessionZcodeSessionId,
   materializeBridgeSessionRuntime,
   setSessionCodexThreadIdUpdate,
 } from '../domain/session-runtime.js';
@@ -115,12 +117,13 @@ function compareBindingUpdatedAtDesc(a: ChannelChat, b: ChannelChat): number {
 
 function normalizeRuntimeBridgeSessionIds(value: unknown): ChannelChat['runtimeBridgeSessionIds'] | undefined {
   if (!value || typeof value !== 'object') return undefined;
-  const raw = value as { codex?: unknown; claude?: unknown; kimi?: unknown; cursor?: unknown };
+  const raw = value as { codex?: unknown; claude?: unknown; kimi?: unknown; cursor?: unknown; zcode?: unknown };
   const normalized: NonNullable<ChannelChat['runtimeBridgeSessionIds']> = {};
   if (typeof raw.codex === 'string' && raw.codex.trim()) normalized.codex = raw.codex.trim();
   if (typeof raw.claude === 'string' && raw.claude.trim()) normalized.claude = raw.claude.trim();
   if (typeof raw.kimi === 'string' && raw.kimi.trim()) normalized.kimi = raw.kimi.trim();
   if (typeof raw.cursor === 'string' && raw.cursor.trim()) normalized.cursor = raw.cursor.trim();
+  if (typeof raw.zcode === 'string' && raw.zcode.trim()) normalized.zcode = raw.zcode.trim();
   return Object.keys(normalized).length > 0 ? normalized : undefined;
 }
 
@@ -131,19 +134,20 @@ function sameRuntimeBridgeSessionIds(
   return (left?.codex || '') === (right?.codex || '')
     && (left?.claude || '') === (right?.claude || '')
     && (left?.kimi || '') === (right?.kimi || '')
-    && (left?.cursor || '') === (right?.cursor || '');
+    && (left?.cursor || '') === (right?.cursor || '')
+    && (left?.zcode || '') === (right?.zcode || '');
 }
 
 function runtimeBridgeSessionIdsForActiveSession(
   value: ChannelChat['runtimeBridgeSessionIds'],
-  activeRuntime: 'codex' | 'claude' | 'kimi' | 'cursor',
+  activeRuntime: 'codex' | 'claude' | 'kimi' | 'cursor' | 'zcode',
   bridgeSessionId: string,
 ): ChannelChat['runtimeBridgeSessionIds'] {
   const normalized = {
     ...normalizeRuntimeBridgeSessionIds(value),
     [activeRuntime]: bridgeSessionId,
   };
-  for (const runtime of ['codex', 'claude', 'kimi', 'cursor'] as const) {
+  for (const runtime of ['codex', 'claude', 'kimi', 'cursor', 'zcode'] as const) {
     if (runtime !== activeRuntime && normalized[runtime] === bridgeSessionId) {
       delete normalized[runtime];
     }
@@ -155,7 +159,7 @@ function normalizeRuntimeBridgeSessionIdsForBinding(
   binding: ChannelChat,
   sessions: Map<string, BridgeSession>,
 ): ChannelChat['runtimeBridgeSessionIds'] {
-  const runtimeSlots = ['codex', 'claude', 'kimi', 'cursor'] as const;
+  const runtimeSlots = ['codex', 'claude', 'kimi', 'cursor', 'zcode'] as const;
   let normalized = normalizeRuntimeBridgeSessionIds(binding.runtimeBridgeSessionIds);
   if (!normalized) return undefined;
 
@@ -187,6 +191,8 @@ function mergeSessionRuntime(
       ? 'cursor'
       : updatesRuntime.activeRuntime === 'kimi'
       ? 'kimi'
+      : updatesRuntime.activeRuntime === 'zcode'
+        ? 'zcode'
       : updatesRuntime.activeRuntime === 'codex'
         ? 'codex'
         : sessionRuntime?.activeRuntime === 'claude'
@@ -195,6 +201,8 @@ function mergeSessionRuntime(
             ? 'cursor'
             : sessionRuntime?.activeRuntime === 'kimi'
             ? 'kimi'
+            : sessionRuntime?.activeRuntime === 'zcode'
+              ? 'zcode'
             : 'codex';
   const general = updatesRuntime.general
     ? { ...sessionRuntime?.general, ...updatesRuntime.general }
@@ -228,6 +236,17 @@ function mergeSessionRuntime(
         ? { ...(sessionRuntime?.activeRuntime === 'cursor' ? sessionRuntime.cursor : undefined), ...updatesRuntime.cursor }
         : sessionRuntime?.activeRuntime === 'cursor'
           ? sessionRuntime.cursor
+          : undefined,
+      ...(general ? { general } : {}),
+    };
+  }
+  if (targetRuntime === 'zcode') {
+    return {
+      activeRuntime: 'zcode',
+      zcode: updatesRuntime.zcode
+        ? { ...(sessionRuntime?.activeRuntime === 'zcode' ? sessionRuntime.zcode : undefined), ...updatesRuntime.zcode }
+        : sessionRuntime?.activeRuntime === 'zcode'
+          ? sessionRuntime.zcode
           : undefined,
       ...(general ? { general } : {}),
     };
@@ -464,6 +483,8 @@ export class JsonFileStore implements BridgeStore {
       || getSessionCodexThreadId(session)
       || getSessionClaudeSessionId(session)
       || getSessionKimiSessionId(session)
+      || getSessionCursorSessionId(session)
+      || getSessionZcodeSessionId(session)
     ) {
       return false;
     }
@@ -619,7 +640,7 @@ export class JsonFileStore implements BridgeStore {
     _mode?: string,
     options?: {
       reasoningEffort?: CodexReasoningEffort;
-      activeRuntime?: 'codex' | 'claude' | 'kimi' | 'cursor';
+      activeRuntime?: 'codex' | 'claude' | 'kimi' | 'cursor' | 'zcode';
       sessionType?: BridgeSession['session_type'];
       hidden?: boolean;
       parentSessionId?: string;
@@ -634,6 +655,8 @@ export class JsonFileStore implements BridgeStore {
         ? 'cursor'
         : options?.activeRuntime === 'kimi'
         ? 'kimi'
+        : options?.activeRuntime === 'zcode'
+          ? 'zcode'
         : options?.activeRuntime === 'codex'
           ? 'codex'
           : undefined;
@@ -654,6 +677,11 @@ export class JsonFileStore implements BridgeStore {
             activeRuntime: 'kimi',
             ...(systemPrompt ? { general: { systemPrompt } } : {}),
           }
+        : activeRuntime === 'zcode'
+          ? {
+              activeRuntime: 'zcode',
+              ...(systemPrompt ? { general: { systemPrompt } } : {}),
+            }
         : {
             ...(activeRuntime ? { activeRuntime } : {}),
             ...(systemPrompt ? { general: { systemPrompt } } : {}),
@@ -717,6 +745,7 @@ export class JsonFileStore implements BridgeStore {
         claude: binding.runtimeBridgeSessionIds?.claude === sessionId ? undefined : binding.runtimeBridgeSessionIds?.claude,
         kimi: binding.runtimeBridgeSessionIds?.kimi === sessionId ? undefined : binding.runtimeBridgeSessionIds?.kimi,
         cursor: binding.runtimeBridgeSessionIds?.cursor === sessionId ? undefined : binding.runtimeBridgeSessionIds?.cursor,
+        zcode: binding.runtimeBridgeSessionIds?.zcode === sessionId ? undefined : binding.runtimeBridgeSessionIds?.zcode,
       });
       if (!sameRuntimeBridgeSessionIds(runtimeBridgeSessionIds, binding.runtimeBridgeSessionIds)) {
         this.bindings.set(key, { ...binding, runtimeBridgeSessionIds, updatedAt: now() });

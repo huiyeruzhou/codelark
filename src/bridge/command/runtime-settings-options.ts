@@ -3,7 +3,7 @@ import type { RuntimeProviderChoice } from '../../domain/session.js';
 import { isRuntimeProviderChoice } from '../../domain/session-runtime.js';
 
 export const MODE_OPTIONS_TEXT = '可选：`normal`（普通执行，默认） `yolo`（YOLO模式：允许 agent 无需审批绕过沙箱）。';
-export const RUNTIME_OPTIONS_TEXT = '可选：`codex`（OpenAI Codex，默认） `claude`（Claude Code） `kimi`（Kimi Code） `cursor`（Cursor Agent）。`/provider` 选择使用何种方式运行 agent，不切换 runtime。';
+export const RUNTIME_OPTIONS_TEXT = '可选：`codex`（OpenAI Codex，默认） `claude`（Claude Code） `kimi`（Kimi Code） `cursor`（Cursor Agent） `zcode`（ZCode）。`/provider` 选择使用何种方式运行 agent，不切换 runtime。';
 export const CODEX_PROVIDER_OPTIONS_TEXT = '可选：`sdk`（默认 SDK 路径） `pty`（跨平台 Codex TUI 路径） `tmux`（可 attach 的 Codex TUI/tmux 路径）';
 export const CLAUDE_PROVIDER_OPTIONS_TEXT = '可选：`tmux`（可 attach 的 Claude Code TUI/tmux 路径，默认） `pty`（Claude Code TUI/mirror 路径） `sdk`（Claude Agent SDK 原生事件路径）';
 export const REASONING_OPTIONS_TEXT = '可选：`1=minimal` `2=low` `3=medium` `4=high` `5=xhigh` `6=max` `7=ultra`';

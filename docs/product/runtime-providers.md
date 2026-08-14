@@ -2,7 +2,7 @@
 
 CodeLark 把“使用哪个 AI 工具”和“如何驱动它”拆成两层。
 
-- 运行时：当前会话使用 Codex、Claude Code、Kimi Code 还是 Cursor Agent。
+- 运行时：当前会话使用 Codex、Claude Code、Kimi Code、Cursor Agent 还是 ZCode。
 - 提供方：当前运行时通过 SDK、pty 或 tmux 运行。
 
 日常 IM 操作流程见 [会话与配置工作流](../guide/session-workflows.md)。本文主要说明 provider 能力边界和实现模块。
@@ -19,6 +19,7 @@ CodeLark 把“使用哪个 AI 工具”和“如何驱动它”拆成两层。
 | Claude Code | `sdk` | 使用 Claude Agent SDK | SDK message stream |
 | Kimi Code | `tmux` | 使用本机 Kimi Code TUI 长会话；仅向 active turn 自动补 `Ctrl-S` steer | tmux screen + Kimi `wire.jsonl` mirror |
 | Cursor Agent | `tmux` | 直接运行官方 `agent` TUI，保留原生交互和 slash 命令 | tmux screen + Cursor transcript JSONL mirror |
+| ZCode | `tmux` | 运行本机 `zcode` TUI，保留原生 slash 命令和可 attach 会话 | ZCode SQLite/WAL direct stream + tmux screen；后台 mirror 同步外部变化 |
 
 补充说明：
 
@@ -26,15 +27,17 @@ CodeLark 把“使用哪个 AI 工具”和“如何驱动它”拆成两层。
 - Codex 运行时的默认提供方由全局配置和平台探测共同决定；需要可 attach 的长期终端会话时，优先选择 `tmux`。
 - Kimi Code 当前只支持 `tmux` 提供方。fresh session 只启动一次 `kimi -y`，等待 TUI 同时出现真实 `Session:`、输入框与 context footer 后保存 CLI 生成的 session id；只有恢复已绑定 session 才使用 `kimi -r <session> -y`。首条输入不以 `wire.jsonl` 已存在为前置条件：文件较早出现时从尾部续读，较晚出现时先提交 prompt，再从头读取首轮事件。已有 tmux 但 Bridge 身份缺失时，会先从 TUI 恢复 session id；普通消息只有在对应 prompt 已进入 `wire.jsonl` 并启动 turn 后才算转发成功，未确认时会重投一次并显式报错，不会静默显示成功。输出由 Kimi wire mirror 同步；状态区会展示截断后的「当前思考」。
 - Cursor Agent 当前只支持 `tmux` 提供方。fresh session 只启动一次 `agent --trust`，首轮提交后从 Cursor 后台创建的 `meta.json` 和 transcript JSONL 发现 chat UUID；恢复已绑定会话使用 `agent --resume <chatId>`。CodeLark 不解析 TUI ANSI 屏幕来取得回答。原生 Cursor slash 命令可用 `/tmux /<command>` 发送；首版假设 chat ID 固定，不自动跟随 `/new`、`/fork`、`/resume` 的身份变化。
+- ZCode 当前只支持 `tmux` 提供方，并要求 `zcode` 可执行文件位于 Bridge 的 PATH。CodeLark 启动 provider-owned tmux，当前普通回合由 Provider 从 ZCode SQLite 的 message/part/turn usage 直接读取正文、工具、usage 与成功/失败终态并更新同一张流式卡片；后台 mirror 对该交互 turn 做 suppression，只同步交互 turn 之外的本地变化。SQLite 使用 WAL 时同时监听主库和 WAL 的聚合快照。`//goal` 等转义后的原生 slash 由 ZCode TUI 自己解析；这类命令不产生 SQLite turn，因此结果从 TUI 屏幕回传到当前常规卡片。CodeLark 不逐条实现 ZCode slash 命令。
+- `/p tmux` 会销毁同名 provider-owned tmux 并以已保存的稳定 `sess_*` 执行 `zcode --resume`；Bridge 重启后 `/t zcode` 也按 `sess_* + cwd` 发现和接管会话。CodeLark 不安装 ZCode、不代理登录，也不会改写 ZCode 的账户配置。
 
 Cursor tmux 是生产支持的 runtime，不是 UI 占位。真实官方 `agent` 测试已覆盖冷启动、不中断接管和 tmux 丢失后恢复同一 chat UUID；该测试需要已登录的 Cursor backend，因此目前是 opt-in，不在普通 CI 中自动执行。真实飞书 runtime/provider 矩阵已包含 Cursor 场景，但发布验收仍应区分“场景已定义”和“本次已有真实飞书执行证据”，不能把 planned-only coverage 表述为已验收。
 
 ## 用户配置入口
 
-- `/runtime codex|claude|kimi|cursor`：切换当前会话使用的运行时。
+- `/runtime codex|claude|kimi|cursor|zcode`：切换当前会话使用的运行时。
 - `/provider` 或 `/p`：查看或切换当前运行时的提供方。
 - `/model`：查看或切换当前会话模型。
-- `/reasoning`：按当前 runtime 设置 Codex/Claude effort、Kimi Thinking 开关或 Cursor 模型 effort。
+- `/reasoning`：按当前 runtime 设置 Codex/Claude effort、Kimi Thinking 开关或 Cursor 模型 effort；ZCode 不做跨产品参数映射。
 - `/cd <path>`：修改当前会话工作目录。
 - `/set`：查看或修改全局默认值。
 - Web 工作台配置页：编辑全局默认值。
@@ -42,7 +45,7 @@ Cursor tmux 是生产支持的 runtime，不是 UI 占位。真实官方 `agent`
 
 Claude 的 `executable` 影响 `tmux` 和 `pty` 提供方；Claude SDK 提供方不走本机 `claude` / `ccr code` TUI。
 
-思考能力不跨 runtime 硬映射：Codex 支持到 `ultra`；Claude Code 支持到 `max`；Kimi Code 只有 `--thinking/--no-thinking`；Cursor 通过 `--model 'model[effort=...]'` 传递模型级 effort，实际可选值由 Cursor 的模型目录和账号决定。Cursor `force` 与 `maxMode` 都不等同于 reasoning effort。
+思考能力不跨 runtime 硬映射：Codex 支持到 `ultra`；Claude Code 支持到 `max`；Kimi Code 只有 `--thinking/--no-thinking`；Cursor 通过 `--model 'model[effort=...]'` 传递模型级 effort；ZCode 使用自己的模型与原生命令。Cursor `force` 与 `maxMode` 都不等同于 reasoning effort。
 
 ## 设计模块
 
@@ -56,6 +59,8 @@ Claude 的 `executable` 影响 `tmux` 和 `pty` 提供方；Claude SDK 提供方
 | Kimi tmux | [src/runtime/kimi/tmux-provider.ts](https://github.com/huiyeruzhou/codelark/blob/main/src/runtime/kimi/tmux-provider.ts) |
 | Cursor tmux | [src/runtime/cursor/tmux-provider.ts](https://github.com/huiyeruzhou/codelark/blob/main/src/runtime/cursor/tmux-provider.ts) |
 | Cursor session index | [src/runtime/cursor/session-index.ts](https://github.com/huiyeruzhou/codelark/blob/main/src/runtime/cursor/session-index.ts) |
+| ZCode tmux | [src/runtime/zcode/tmux-provider.ts](https://github.com/huiyeruzhou/codelark/blob/main/src/runtime/zcode/tmux-provider.ts) |
+| ZCode session index | [src/runtime/zcode/session-index.ts](https://github.com/huiyeruzhou/codelark/blob/main/src/runtime/zcode/session-index.ts) |
 | tmux session 生命周期 | [src/bridge/tmux/runtime.ts](https://github.com/huiyeruzhou/codelark/blob/main/src/bridge/tmux/runtime.ts) |
 | Claude pty | [src/runtime/claude/pty-provider.ts](https://github.com/huiyeruzhou/codelark/blob/main/src/runtime/claude/pty-provider.ts) |
 | Claude SDK | [src/runtime/claude/sdk-provider.ts](https://github.com/huiyeruzhou/codelark/blob/main/src/runtime/claude/sdk-provider.ts) |
@@ -67,7 +72,7 @@ Claude 的 `executable` 影响 `tmux` 和 `pty` 提供方；Claude SDK 提供方
 
 SDK 提供方通常直接把结构化事件交给 IM turn。pty / tmux 提供方更接近真实终端使用，会依赖本地 JSONL mirror 把最终输出同步到 IM。
 
-tmux Provider 的普通文本会先转发到 tmux 中的当前 runtime TUI。Codex tmux 如需自动预创建 `codex_thread_id` 或恢复缺失的 tmux session，启动进度会更新到同一张 Provider 卡片；Claude tmux 会启动或复用 Claude Code TUI，并通过 Claude JSONL mirror 同步输出；Kimi tmux 会启动或复用 Kimi Code TUI，通过 Kimi `wire.jsonl` mirror 同步输出：idle 时用 Enter 创建 turn，已有 active turn 时才额外补 `Ctrl-S` 触发 steer；Cursor tmux 直接运行官方 `agent`，通过 Cursor transcript JSONL 同步输出，内置默认模型为已做真实稳定性验证的 `gpt-5.3-codex`，可用 `/model` 覆盖。显式发送 `/p tmux` 时，Codex 和 Claude 通过 shared tmux runtime 生命周期入口创建或重建 provider-owned session；Kimi 与 Cursor 由各自 provider 负责启动、恢复 session id 和注入输入。shared runtime 会在 ready 检测和屏幕查看时报告 Codex/Claude selection prompt；`/clear` 和 `/t archive` 会 best-effort 清理记录在 runtime state 中的 tmux provider session。
+tmux Provider 的普通文本会先转发到 tmux 中的当前 runtime TUI。Codex tmux 如需自动预创建 `codex_thread_id` 或恢复缺失的 tmux session，启动进度会更新到同一张 Provider 卡片；Claude、Kimi、Cursor 和 ZCode 分别从自身 JSONL、transcript 或 SQLite 同步结构化输出。显式发送 `/p tmux` 时会重建 provider-owned session；Kimi、Cursor 与 ZCode 由各自 provider 负责恢复稳定 session id 和注入输入。`/clear` 和 `/t archive` 会 best-effort 清理记录在 runtime state 中的 tmux provider session。
 
 tmux Provider 不把飞书图片或文件的二进制内容直接注入 TUI。用户发送附件后，CodeLark 会提示其引用原附件并补充处理指令；引用的飞书消息 id 和类型会作为模型上下文传入。遇到 `merge_forward` 等 adapter 未直接解析的引用类型时，上下文会明确要求模型使用 `lark-cli` 按消息 id 读取原消息。SDK Provider 的附件-only turn 仍使用内部默认指令触发附件处理，但该合成指令不显示为用户输入。
 

@@ -14,7 +14,7 @@ Bridge 不硬编码一份容易过期的 `msg_type` 白名单：任意飞书官�
 <clk-send>{"msg_type":"text","content":{"text":"<at user_id=\"ou_xxx\">名字</at> 请查看结果"}}</clk-send>
 ```
 
-这条 text 会作为独立飞书消息发送；Codex、Claude、Kimi、Cursor 的 SDK 与 tmux/mirror 路径使用同一交付语义，不会在解析控制块后静默丢弃正文。
+这条 text 会作为独立飞书消息发送；Codex、Claude、Kimi、Cursor、ZCode 的 SDK 与 tmux/mirror 路径使用同一交付语义，不会在解析控制块后静默丢弃正文。
 
 富文本和卡片直接使用官方结构：
 

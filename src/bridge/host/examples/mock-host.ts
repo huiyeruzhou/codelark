@@ -132,7 +132,7 @@ class InMemoryStore implements BridgeStore {
     const session: BridgeSession = {
       id: `session-${this.nextId++}`,
       name,
-      runtime: options?.activeRuntime === 'claude' || options?.activeRuntime === 'kimi' || options?.activeRuntime === 'cursor' ? {
+      runtime: options?.activeRuntime === 'claude' || options?.activeRuntime === 'kimi' || options?.activeRuntime === 'cursor' || options?.activeRuntime === 'zcode' ? {
         activeRuntime: options.activeRuntime,
         general: {
           workingDirectory: cwd || '/tmp',

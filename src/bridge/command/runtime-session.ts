@@ -19,6 +19,7 @@ import {
   hasSessionCodexProviderOverride,
   hasSessionKimiProviderOverride,
   hasSessionCursorProviderOverride,
+  hasSessionZcodeProviderOverride,
 } from '../session/support.js';
 import { getGlobalStringConfig } from '../session/global-config.js';
 import { getCodexThreadId } from '../turn/turn-classifier.js';
@@ -37,7 +38,7 @@ export function formatSessionRuntimeMode(binding: ChannelChat | null | undefined
 
 export function sessionRuntimeName(session: BridgeSession | null | undefined): SupportedRuntimeName {
   const runtime = getSessionActiveRuntime(session);
-  return runtime === 'claude' || runtime === 'kimi' || runtime === 'cursor' ? runtime : 'codex';
+  return runtime === 'claude' || runtime === 'kimi' || runtime === 'cursor' || runtime === 'zcode' ? runtime : 'codex';
 }
 
 export function mappedRuntimeSessionId(
@@ -65,8 +66,8 @@ export function createRuntimeSessionForChat(options: {
   const workDir = getSessionWorkingDirectory(options.baseSession) || process.cwd();
   const systemPrompt = getSessionSystemPrompt(options.baseSession);
   const rawBaseName = options.baseSession.name?.trim() || `Bridge: ${options.chatId}`;
-  const baseName = rawBaseName.replace(/\s+\((?:Claude Code|Kimi Code|Cursor Agent|Codex)\)$/u, '');
-  const suffix = options.runtime === 'claude' ? 'Claude Code' : options.runtime === 'kimi' ? 'Kimi Code' : options.runtime === 'cursor' ? 'Cursor Agent' : 'Codex';
+  const baseName = rawBaseName.replace(/\s+\((?:Claude Code|Kimi Code|Cursor Agent|ZCode|Codex)\)$/u, '');
+  const suffix = options.runtime === 'claude' ? 'Claude Code' : options.runtime === 'kimi' ? 'Kimi Code' : options.runtime === 'cursor' ? 'Cursor Agent' : options.runtime === 'zcode' ? 'ZCode' : 'Codex';
   return options.store.createSession(
     `${baseName} (${suffix})`,
     options.runtime === 'codex' ? (getGlobalStringConfig('runtime.codex.model') || '') : '',
@@ -97,6 +98,8 @@ export function formatSessionRuntimeProvider(session?: BridgeSession | null, bin
     ? hasSessionClaudeProviderOverride(session)
     : effective.runtime === 'cursor'
       ? hasSessionCursorProviderOverride(session)
+      : effective.runtime === 'zcode'
+        ? hasSessionZcodeProviderOverride(session)
       : effective.runtime === 'kimi'
       ? hasSessionKimiProviderOverride(session)
     : hasSessionCodexProviderOverride(session);

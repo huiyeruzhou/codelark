@@ -12,8 +12,8 @@ import type { OutboundRichCard } from '../../domain/index.js';
 import type { ChannelAddress } from '../../domain/index.js';
 import { configFields, type ConfigPath } from '../../configuration/fields.js';
 
-export type SettingGroupKey = 'runtime' | 'runtime.codex' | 'runtime.claude' | 'runtime.kimi' | 'runtime.cursor' | 'bridge' | 'channels.feishu';
-export type CurrentSessionConfigSection = 'common' | 'codex' | 'claude' | 'kimi' | 'cursor';
+export type SettingGroupKey = 'runtime' | 'runtime.codex' | 'runtime.claude' | 'runtime.kimi' | 'runtime.cursor' | 'runtime.zcode' | 'bridge' | 'channels.feishu';
+export type CurrentSessionConfigSection = 'common' | 'codex' | 'claude' | 'kimi' | 'cursor' | 'zcode';
 export const SESSION_CONFIG_INHERIT_VALUE = 'clk:config:inherit';
 type SettingControl = 'select' | 'input';
 
@@ -68,6 +68,9 @@ const SETTING_DISPLAY_LABELS: Record<string, string> = {
   cursorProvider: 'Provider（运行方式）',
   cursorForce: 'YOLO模式',
   cursorReasoningEffort: '思考级别',
+  zcodeDefaultModel: '模型',
+  zcodeProvider: 'Provider（运行方式）',
+  zcodeMode: '模式',
   defaultWorkspaceRoot: '默认工作目录',
   tmuxCaptureLines: 'tmux 输出行数',
   tmuxEchoInput: '回显 tmux 输入',
@@ -107,6 +110,9 @@ const SETTING_FORM_NAMES: Record<string, string> = {
   cursorProvider: 'cursor_provider',
   cursorForce: 'cursor_force',
   cursorReasoningEffort: 'cursor_reasoning',
+  zcodeDefaultModel: 'zcode_model',
+  zcodeProvider: 'zcode_provider',
+  zcodeMode: 'zcode_mode',
   uiAllowLan: 'ui_lan',
   uiAccessToken: 'ui_token',
   historyMessageLimit: 'hist_limit',
@@ -148,6 +154,12 @@ const SETTING_GROUPS: SettingGroupDefinition[] = [
     title: 'Cursor',
     subtitle: 'Cursor Agent CLI runtime 的 TOML 默认值。',
     aliases: ['cursor', '[runtime.cursor]'],
+  },
+  {
+    key: 'runtime.zcode',
+    title: 'ZCode',
+    subtitle: 'ZCode TUI runtime 的 TOML 默认值。',
+    aliases: ['zcode', '[runtime.zcode]'],
   },
   {
     key: 'bridge',
@@ -274,14 +286,14 @@ const SETTING_DEFINITIONS: SettingDefinition[] = [
     group: 'runtime',
     aliases: ['defaultRuntime', 'agent'],
     label: 'agent',
-    usage: '/set runtime codex|claude|kimi|cursor',
+    usage: '/set runtime codex|claude|kimi|cursor|zcode',
     control: 'select',
-    options: [selectOption('codex'), selectOption('claude'), selectOption('kimi'), selectOption('cursor')],
+    options: [selectOption('codex'), selectOption('claude'), selectOption('kimi'), selectOption('cursor'), selectOption('zcode')],
     read: (config) => config.runtime.agent,
     write(rawValue) {
       const token = rawValue.trim().toLowerCase();
-      if (token === 'codex' || token === 'claude' || token === 'kimi' || token === 'cursor') return patch({ runtime: { agent: token } });
-      return { ok: false, message: 'Runtime 必须是 codex、claude、kimi 或 cursor。' };
+      if (token === 'codex' || token === 'claude' || token === 'kimi' || token === 'cursor' || token === 'zcode') return patch({ runtime: { agent: token } });
+      return { ok: false, message: 'Runtime 必须是 codex、claude、kimi、cursor 或 zcode。' };
     },
   },
   {
@@ -624,6 +636,51 @@ const SETTING_DEFINITIONS: SettingDefinition[] = [
     },
   },
   {
+    key: 'zcodeDefaultModel',
+    tomlPath: 'runtime.zcode.model',
+    group: 'runtime.zcode',
+    aliases: ['zcodeModel'],
+    label: 'model',
+    usage: '/set zcodeDefaultModel <model> 或 /set zcodeDefaultModel default',
+    control: 'input',
+    placeholder: '留空则跟随 ZCode 默认',
+    read: (config) => config.runtime.zcode.model || '-',
+    write: writeStringPatch((value) => ({ runtime: { zcode: { model: value } } })),
+  },
+  {
+    key: 'zcodeProvider',
+    tomlPath: 'runtime.zcode.provider',
+    group: 'runtime.zcode',
+    aliases: ['zcodeDefaultProvider'],
+    label: 'provider',
+    usage: '/set zcodeProvider tmux',
+    control: 'select',
+    options: [selectOption('tmux')],
+    read: (config) => config.runtime.zcode.provider || 'tmux',
+    write(rawValue) {
+      if (rawValue.trim().toLowerCase() === 'tmux') return patch({ runtime: { zcode: { provider: 'tmux' } } });
+      return { ok: false, message: 'ZCode Provider 当前只支持 tmux。' };
+    },
+  },
+  {
+    key: 'zcodeMode',
+    tomlPath: 'runtime.zcode.mode',
+    group: 'runtime.zcode',
+    aliases: ['zcodeDefaultMode'],
+    label: 'mode',
+    usage: '/set zcodeMode build|edit|plan|yolo',
+    control: 'select',
+    options: [selectOption('build'), selectOption('edit'), selectOption('plan'), selectOption('yolo')],
+    read: (config) => config.runtime.zcode.mode,
+    write(rawValue) {
+      const token = rawValue.trim().toLowerCase();
+      if (token === 'build' || token === 'edit' || token === 'plan' || token === 'yolo') {
+        return patch({ runtime: { zcode: { mode: token } } });
+      }
+      return { ok: false, message: 'ZCode 模式必须是 build、edit、plan 或 yolo。' };
+    },
+  },
+  {
     key: 'uiAllowLan',
     tomlPath: 'bridge.ui_allow_lan',
     group: 'bridge',
@@ -783,7 +840,7 @@ function findGroup(raw: string): SettingGroupDefinition | undefined {
   ));
 }
 
-const CURRENT_RUNTIME_SETTING_KEYS: Record<'codex' | 'claude' | 'kimi' | 'cursor', string[]> = {
+const CURRENT_RUNTIME_SETTING_KEYS: Record<'codex' | 'claude' | 'kimi' | 'cursor' | 'zcode', string[]> = {
   codex: [
     'defaultModel',
     'defaultMode',
@@ -810,6 +867,7 @@ const CURRENT_RUNTIME_SETTING_KEYS: Record<'codex' | 'claude' | 'kimi' | 'cursor
     'cursorForce',
     'cursorReasoningEffort',
   ],
+  zcode: ['zcodeDefaultModel', 'zcodeProvider', 'zcodeMode'],
 };
 
 const SETTING_GROUP_ORDERS: Partial<Record<SettingGroupKey, string[]>> = {
@@ -847,6 +905,7 @@ const SETTING_GROUP_ORDERS: Partial<Record<SettingGroupKey, string[]>> = {
     'cursorForce',
     'cursorReasoningEffort',
   ],
+  'runtime.zcode': ['zcodeDefaultModel', 'zcodeProvider', 'zcodeMode'],
 };
 
 function groupDefinitions(groupKey: SettingGroupKey): SettingDefinition[] {
@@ -858,10 +917,12 @@ function groupDefinitions(groupKey: SettingGroupKey): SettingDefinition[] {
 }
 
 export function runtimeSettingDefinitions(
-  runtime: 'codex' | 'claude' | 'kimi' | 'cursor',
+  runtime: 'codex' | 'claude' | 'kimi' | 'cursor' | 'zcode',
   options: { sessionWritableOnly?: boolean } = {},
 ): SettingDefinition[] {
-  const definitions = groupDefinitions(runtime === 'cursor'
+  const definitions = groupDefinitions(runtime === 'zcode'
+    ? 'runtime.zcode'
+    : runtime === 'cursor'
     ? 'runtime.cursor'
     : runtime === 'kimi'
     ? 'runtime.kimi'
@@ -878,7 +939,7 @@ export function settingConfigPath(definition: Pick<SettingDefinition, 'tomlPath'
 }
 
 export function currentSessionSettingDefinitions(
-  runtime: 'codex' | 'claude' | 'kimi' | 'cursor',
+  runtime: 'codex' | 'claude' | 'kimi' | 'cursor' | 'zcode',
 ): SettingDefinition[] {
   return runtimeSettingDefinitions(runtime, { sessionWritableOnly: true });
 }

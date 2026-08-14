@@ -81,6 +81,11 @@ function baseConfigV2(overrides: Partial<ConfigV2> = {}): ConfigV2 {
         provider: 'tmux',
         force: false,
       },
+      zcode: {
+        model: '',
+        provider: 'tmux',
+        mode: 'build',
+      },
     },
     bridge: {
       defaultWorkspace: '~',
@@ -330,6 +335,34 @@ describe('Ui config application', () => {
     });
   });
 
+  it('exposes and writes global ZCode tmux runtime defaults', () => {
+    const current = baseConfigV2({
+      runtime: {
+        ...baseConfigV2().runtime,
+        agent: 'zcode',
+        zcode: { model: 'zai/glm-current', provider: 'tmux', mode: 'plan' },
+      },
+    });
+    const payload = configV2ToPayload(current);
+    assert.equal(payload.runtime, 'zcode');
+    assert.equal(payload.zcodeDefaultModel, 'zai/glm-current');
+    assert.equal(payload.zcodeProvider, 'tmux');
+    assert.equal(payload.zcodeMode, 'plan');
+
+    const patch = mergeConfigV2HomePatch(current, {
+      runtime: 'zcode',
+      zcodeDefaultModel: 'zai/glm-next',
+      zcodeProvider: 'tmux',
+      zcodeMode: 'yolo',
+    });
+    assert.equal(patch.runtime?.agent, 'zcode');
+    assert.deepEqual(patch.runtime?.zcode, {
+      model: 'zai/glm-next',
+      provider: 'tmux',
+      mode: 'yolo',
+    });
+  });
+
   it('preserves an empty channel list when saving unrelated global config', () => {
     const patch = mergeConfigV2HomePatch(baseConfigV2({ channels: [] }), { runtime: 'claude' });
     assert.deepEqual(patch.channels, []);
@@ -386,6 +419,22 @@ describe('Ui config application', () => {
     assert.match(source, /cursorProvider: document\.getElementById\('cursorProvider'\)\.value/);
     assert.match(source, /cursorReasoningEffort: document\.getElementById\('cursorReasoningEffort'\)\.value/);
     assert.match(source, /document\.getElementById\('cursorForce'\)\.checked = config\.cursorForce === true/);
+  });
+
+  it('keeps the global and session config shell wired to ZCode tmux fields', () => {
+    const source = fs.readFileSync(path.join(process.cwd(), 'src/operator-ui/shell.ts'), 'utf-8');
+    assert.match(source, /<option value="zcode">zcode<\/option>/);
+    assert.match(source, /data-config-section="zcode"/);
+    assert.match(source, /ZCode 默认值/);
+    assert.match(source, /id="zcodeProvider"/);
+    assert.match(source, /id="zcodeDefaultModel"/);
+    assert.match(source, /id="zcodeMode"/);
+    assert.match(source, /id="sessionConfigZcodeBlock"/);
+    assert.match(source, /id="sessionConfigZcodeProvider"/);
+    assert.match(source, /id="sessionConfigZcodeMode"/);
+    assert.match(source, /zcodeProvider: document\.getElementById\('zcodeProvider'\)\.value/);
+    assert.match(source, /zcodeMode: document\.getElementById\('zcodeMode'\)\.value/);
+    assert.match(source, /document\.getElementById\('zcodeProvider'\)\.value = config\.zcodeProvider \|\| 'tmux'/);
   });
 
   it('describes /t runtime identities as thread or session ids', () => {

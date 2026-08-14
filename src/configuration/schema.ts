@@ -3,11 +3,13 @@ import { z } from 'zod';
 // 当前 v2 TOML shape 的运行时校验与 camelCase/snake_case 转换。
 // sources.ts 负责读写文件，service.ts 负责调用链路，这里只维护结构和类型。
 
-export const runtimeAgentSchema = z.enum(['codex', 'claude', 'kimi', 'cursor']);
+export const runtimeAgentSchema = z.enum(['codex', 'claude', 'kimi', 'cursor', 'zcode']);
 export const codexProviderSchema = z.enum(['sdk', 'tmux', 'pty']);
 export const claudeProviderSchema = z.enum(['sdk', 'pty', 'tmux']);
 export const kimiProviderSchema = z.enum(['tmux']);
 export const cursorProviderSchema = z.enum(['tmux']);
+export const zcodeProviderSchema = z.enum(['tmux']);
+export const zcodeModeSchema = z.enum(['build', 'edit', 'plan', 'yolo']);
 export const claudeExecutableSchema = z.enum(['claude', 'ccr']);
 export const yoloModeSchema = z.enum(['off', 'on', 'yolo']);
 export const sandboxModeSchema = z.enum(['read-only', 'workspace-write', 'danger-full-access']);
@@ -59,12 +61,19 @@ export const cursorConfigSchema = z.object({
   reasoningEffort: z.union([cursorReasoningEffortSchema, z.literal('')]).optional(),
 });
 
+export const zcodeConfigSchema = z.object({
+  model: z.string(),
+  provider: zcodeProviderSchema,
+  mode: zcodeModeSchema,
+});
+
 export const runtimeConfigSchema = z.object({
   agent: runtimeAgentSchema,
   codex: codexConfigSchema,
   claude: claudeConfigSchema,
   kimi: kimiConfigSchema,
   cursor: cursorConfigSchema,
+  zcode: zcodeConfigSchema,
 });
 
 export const bridgeConfigSchema = z.object({
@@ -120,6 +129,7 @@ export const configPatchSchema = z.object({
     claude: claudeConfigSchema.partial().optional(),
     kimi: kimiConfigSchema.partial().optional(),
     cursor: cursorConfigSchema.partial().optional(),
+    zcode: zcodeConfigSchema.partial().optional(),
   }).optional(),
   bridge: bridgeConfigSchema.partial().optional(),
   channels: z.array(channelConfigPatchSchema).optional(),
@@ -148,6 +158,7 @@ export function tomlToConfigPatch(raw: unknown): ConfigPatch {
   const claude = asRecord(runtime.claude);
   const kimi = asRecord(runtime.kimi);
   const cursor = asRecord(runtime.cursor);
+  const zcode = asRecord(runtime.zcode);
   const bridge = asRecord(root.bridge);
   const session = asRecord(root.session);
   const patch: ConfigPatch = {};
@@ -196,6 +207,12 @@ export function tomlToConfigPatch(raw: unknown): ConfigPatch {
     ['reasoningEffort', 'reasoning_effort'],
   ]);
   if (Object.keys(cursorPatch).length > 0) runtimePatch.cursor = cursorPatch;
+  const zcodePatch = copyDefined<NonNullable<NonNullable<ConfigPatch['runtime']>['zcode']>>(zcode, [
+    ['model', 'model'],
+    ['provider', 'provider'],
+    ['mode', 'mode'],
+  ]);
+  if (Object.keys(zcodePatch).length > 0) runtimePatch.zcode = zcodePatch;
   if (Object.keys(runtimePatch).length > 0) patch.runtime = runtimePatch;
 
   const bridgePatch = copyDefined<NonNullable<ConfigPatch['bridge']>>(bridge, [
@@ -277,6 +294,11 @@ export function configToTomlShape(config: ConfigPatch): Record<string, unknown> 
         ...(config.runtime.cursor.provider !== undefined ? { provider: config.runtime.cursor.provider } : {}),
         ...(config.runtime.cursor.force !== undefined ? { force: config.runtime.cursor.force } : {}),
         ...(config.runtime.cursor.reasoningEffort !== undefined ? { reasoning_effort: config.runtime.cursor.reasoningEffort } : {}),
+      } } : {}),
+      ...(config.runtime.zcode ? { zcode: {
+        ...(config.runtime.zcode.model !== undefined ? { model: config.runtime.zcode.model } : {}),
+        ...(config.runtime.zcode.provider !== undefined ? { provider: config.runtime.zcode.provider } : {}),
+        ...(config.runtime.zcode.mode !== undefined ? { mode: config.runtime.zcode.mode } : {}),
       } } : {}),
     };
   }

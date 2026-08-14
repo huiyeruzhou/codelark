@@ -14,7 +14,9 @@ import {
   getSessionSystemPrompt,
   getSessionWorkingDirectory,
   setSessionActiveRuntimeUpdate,
+  setSessionCursorIdentityUpdate,
   setSessionKimiIdentityUpdate,
+  setSessionZcodeIdentityUpdate,
 } from '../../../domain/session-runtime.js';
 
 const DATA_DIR = path.join(CODELARK_HOME, 'data');
@@ -356,6 +358,44 @@ describe('JsonFileStore', () => {
     assert.equal(store.getSession(draft.id)?.runtime?.kimi?.sessionId, 'session_kimi_hidden_draft');
     assert.equal(fs.existsSync(sessionConfigPath(draft.id)), true);
   });
+
+  for (const runtime of ['cursor', 'zcode'] as const) {
+    it(`keeps an unbound hidden temporary ${runtime} session after it has a runtime identity`, () => {
+      const store = new JsonFileStore(makeSettings());
+      const cwd = `/tmp/${runtime}-draft`;
+      const draft = store.createSession(`ou_${runtime}`, 'model', undefined, cwd, 'normal', {
+        hidden: true,
+        sessionType: 'normal',
+        activeRuntime: runtime,
+      });
+      store.updateSession(
+        draft.id,
+        runtime === 'cursor'
+          ? setSessionCursorIdentityUpdate('cursor-hidden-draft', cwd)
+          : setSessionZcodeIdentityUpdate('sess_zcode_hidden_draft', cwd),
+      );
+      const target = store.createSession('target', 'model', undefined, '/tmp/target');
+
+      store.upsertChannelChat({
+        channelType: 'feishu-default',
+        chatId: `draft-${runtime}-preserve`,
+        bridgeSessionId: draft.id,
+      });
+      store.upsertChannelChat({
+        channelType: 'feishu-default',
+        chatId: `draft-${runtime}-preserve`,
+        bridgeSessionId: target.id,
+      });
+
+      assert.equal(store.getSession(draft.id)?.runtime?.activeRuntime, runtime);
+      assert.equal(
+        runtime === 'cursor'
+          ? store.getSession(draft.id)?.runtime?.cursor?.sessionId
+          : store.getSession(draft.id)?.runtime?.zcode?.sessionId,
+        runtime === 'cursor' ? 'cursor-hidden-draft' : 'sess_zcode_hidden_draft',
+      );
+    });
+  }
 
   it('getChannelChat returns null for missing', () => {
     const store = new JsonFileStore(makeSettings());

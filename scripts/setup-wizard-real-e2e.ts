@@ -10,7 +10,7 @@ import { buildStandardLarkCliEnv } from '../src/shared/lark-cli-env.js';
 const require = createRequire(import.meta.url);
 
 type FeishuSite = 'feishu' | 'lark';
-type SetupRuntimeChoice = 'codex' | 'ccr' | 'claude' | 'kimi' | 'cursor';
+type SetupRuntimeChoice = 'codex' | 'ccr' | 'claude' | 'kimi' | 'cursor' | 'zcode';
 
 function valueArg(args: string[], name: string, fallback = ''): string {
   const index = args.indexOf(name);
@@ -33,7 +33,7 @@ function printUsage(): void {
     '  --app-id <cli_...>      App ID written to the isolated CodeLark test config',
     '  --app-secret <secret>   App Secret for the isolated smoke app; prefer env file/env vars to avoid npm echo',
     '  --site <feishu|lark>    Site brand; default feishu',
-    '  --runtime <name>        Runtime choice to write: codex|ccr|claude|kimi|cursor; default codex',
+    '  --runtime <name>        Runtime choice to write: codex|ccr|claude|kimi|cursor|zcode; default codex',
     '  --keep-temp             Keep temporary root for diagnosis; default cleans it in success and failure paths',
     '  --simulate-failure-after-sync  Test cleanup on a post-setup failure',
     '  --help                  Show this help',
@@ -42,11 +42,11 @@ function printUsage(): void {
 }
 
 function runtimeChoiceArg(value: string): SetupRuntimeChoice {
-  if (value === 'codex' || value === 'ccr' || value === 'claude' || value === 'kimi' || value === 'cursor') return value;
-  throw new Error(`Invalid --runtime "${value}". Expected codex, ccr, claude, kimi, or cursor.`);
+  if (value === 'codex' || value === 'ccr' || value === 'claude' || value === 'kimi' || value === 'cursor' || value === 'zcode') return value;
+  throw new Error(`Invalid --runtime "${value}". Expected codex, ccr, claude, kimi, cursor, or zcode.`);
 }
 
-function expectedRuntimeAgent(choice: SetupRuntimeChoice): 'codex' | 'claude' | 'kimi' | 'cursor' {
+function expectedRuntimeAgent(choice: SetupRuntimeChoice): 'codex' | 'claude' | 'kimi' | 'cursor' | 'zcode' {
   if (choice === 'ccr') return 'claude';
   return choice;
 }
@@ -243,6 +243,9 @@ async function main(): Promise<void> {
     if (runtimeChoice === 'cursor' && savedConfig.runtime.cursor.provider !== 'tmux') {
       throw new Error(`cursor provider mismatch: ${savedConfig.runtime.cursor.provider}`);
     }
+    if (runtimeChoice === 'zcode' && savedConfig.runtime.zcode.provider !== 'tmux') {
+      throw new Error(`zcode provider mismatch: ${savedConfig.runtime.zcode.provider}`);
+    }
     if (runtimeChoice === 'ccr' && savedConfig.runtime.claude.executable !== 'ccr') {
       throw new Error(`claude executable mismatch: ${savedConfig.runtime.claude.executable}`);
     }
@@ -301,6 +304,7 @@ async function main(): Promise<void> {
       runtimeChoice,
       runtimeAgent: savedConfig.runtime.agent,
       kimiProvider: savedConfig.runtime.kimi.provider,
+      zcodeProvider: savedConfig.runtime.zcode.provider,
       claudeExecutable: savedConfig.runtime.claude.executable,
       daemonLarkCliConfigDir: daemonEnv.LARKSUITE_CLI_CONFIG_DIR ?? null,
       daemonLarkChannelHome: daemonEnv.LARK_CHANNEL_HOME ?? null,

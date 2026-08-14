@@ -35,7 +35,9 @@ import {
   buildThreadCardRefresh,
   findVisibleBridgeSessionByToken,
   findBridgeSessionByClaudeIdentity,
+  findBridgeSessionByCursorIdentity,
   findBridgeSessionByKimiIdentity,
+  findBridgeSessionByZcodeIdentity,
   getRawCodexTitle,
   localRuntimeOf,
   selectDirectThreadTarget,
@@ -45,6 +47,8 @@ import type { SessionCommandDeps, SessionCommandResult } from './types.js';
 function localRuntimeDisplayName(runtime: ReturnType<typeof localRuntimeOf>): string {
   if (runtime === 'claude') return 'Claude Code';
   if (runtime === 'kimi') return 'Kimi Code';
+  if (runtime === 'cursor') return 'Cursor Agent';
+  if (runtime === 'zcode') return 'ZCode';
   return 'Codex';
 }
 
@@ -53,7 +57,10 @@ function localRuntimeIdentityFieldName(runtime: ReturnType<typeof localRuntimeOf
 }
 
 function bindingRuntimeIdentityFieldName(display: ReturnType<CommandThreadDisplay['binding']>): string {
-  return display.originator === 'Claude Code' || display.originator === 'Kimi Code'
+  return display.originator === 'Claude Code'
+    || display.originator === 'Kimi Code'
+    || display.originator === 'Cursor Agent'
+    || display.originator === 'ZCode'
     ? 'session_id'
     : 'thread_id';
 }
@@ -339,7 +346,7 @@ export async function handleThreadSwitchCommand(options: {
       return {
         response: displayedThreads.length > 0
           ? `当前只找到 ${displayedThreads.length} 条全局会话，没有第 ${selected.index} 条。先发送 \`/t\` 查看列表后再选择。`
-          : '没有找到本地 Codex、Claude Code、Kimi Code 或 Cursor Agent 会话。先创建一个会话，再回来试一次。',
+          : '没有找到本地 Codex、Claude Code、Kimi Code、Cursor Agent 或 ZCode 会话。先创建一个会话，再回来试一次。',
       };
     }
     const bridgeMatch = findVisibleBridgeSessionByToken(options.store, threadArgs);
@@ -394,7 +401,7 @@ export async function handleThreadSwitchCommand(options: {
         threadTableCardScope: richCard && options.deps.threadCardRefreshScope ? options.deps.threadCardRefreshScope : undefined,
       };
     }
-    return { response: `没有找到对应会话：${threadArgs}。/t 列表按“序号 > thread/session id > bridge_id > 名称”解析；先发送 \`/t\` 刷新列表后优先用序号接管，或用 \`/t codex\`、\`/t claude\`、\`/t kimi\`、\`/t cursor\` 切换 runtime 列表。` };
+    return { response: `没有找到对应会话：${threadArgs}。/t 列表按“序号 > thread/session id > bridge_id > 名称”解析；先发送 \`/t\` 刷新列表后优先用序号接管，或用 \`/t codex\`、\`/t claude\`、\`/t kimi\`、\`/t cursor\`、\`/t zcode\` 切换 runtime 列表。` };
   }
   if (!selected.thread) {
     const blocked = await prepareCurrentSessionForSwitch(
@@ -456,6 +463,10 @@ export async function handleThreadSwitchCommand(options: {
       ? findConflictBySessionId(findBridgeSessionByClaudeIdentity(options.store, selected.thread.threadId, selected.thread.cwd)?.id)
       : selectedRuntime === 'kimi'
         ? findConflictBySessionId(findBridgeSessionByKimiIdentity(options.store, selected.thread.threadId, selected.thread.cwd)?.id)
+        : selectedRuntime === 'cursor'
+          ? findConflictBySessionId(findBridgeSessionByCursorIdentity(options.store, selected.thread.threadId, selected.thread.cwd)?.id)
+          : selectedRuntime === 'zcode'
+            ? findConflictBySessionId(findBridgeSessionByZcodeIdentity(options.store, selected.thread.threadId, selected.thread.cwd)?.id)
         : findConflictByThreadId(selected.thread.threadId);
     const takeover = await prepareTakeover(conflict);
     if (takeover) return takeover;

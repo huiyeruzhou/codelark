@@ -10,6 +10,7 @@ import {
   getSessionActiveRuntime,
   getSessionKimiSessionId,
   getSessionCursorSessionId,
+  getSessionZcodeSessionId,
   getSessionWorkingDirectory,
   mergeSessionRuntimeUpdates,
   setSessionClaudeTmuxProviderUpdate,
@@ -17,12 +18,17 @@ import {
   setSessionCodexTmuxProviderUpdate,
   setSessionKimiIdentityUpdate,
   setSessionCursorIdentityUpdate,
+  setSessionZcodeIdentityUpdate,
 } from '../../domain/session-runtime.js';
 import { restartKimiTmuxInputSession } from '../../runtime/kimi/tmux-provider.js';
 import {
   cursorTmuxSessionName,
   restartCursorTmuxInputSession,
 } from '../../runtime/cursor/tmux-provider.js';
+import {
+  restartZcodeTmuxInputSession,
+  zcodeTmuxSessionName,
+} from '../../runtime/zcode/tmux-provider.js';
 import {
   CodexResumeTmuxLaunchError,
   claudeTmuxSessionName,
@@ -37,6 +43,7 @@ import {
   resolveClaudeRuntimeConfig,
   resolveKimiRuntimeConfig,
   resolveCursorRuntimeConfig,
+  resolveZcodeRuntimeConfig,
   resolveSessionRuntimeConfig,
 } from '../session/support.js';
 import { buildCommandFields } from './presentation.js';
@@ -102,6 +109,20 @@ function clearSessionCursorProviderToml(sessionId: string): void {
     'runtime.cursor.provider',
   );
 }
+
+function setSessionZcodeProviderToml(sessionId: string): void {
+  createConfigService({ migrate: false }).set(
+    { kind: 'session', sessionId },
+    { runtime: { zcode: { provider: 'tmux' } } },
+  );
+}
+
+function clearSessionZcodeProviderToml(sessionId: string): void {
+  createConfigService({ migrate: false }).unset(
+    { kind: 'session', sessionId },
+    'runtime.zcode.provider',
+  );
+}
 function claudeProviderSwitchNote(provider: RuntimeProviderChoice): string {
   switch (provider) {
     case 'sdk':
@@ -117,7 +138,7 @@ async function cancelStaleTmuxProviderStart(options: {
   store: BridgeStore;
   msg: InboundMessage;
   sessionId: string;
-  runtime: 'codex' | 'claude' | 'kimi' | 'cursor';
+  runtime: 'codex' | 'claude' | 'kimi' | 'cursor' | 'zcode';
   tmuxSessionName?: string;
   markdown: boolean;
 }): Promise<string | null> {
@@ -503,6 +524,84 @@ export async function handleProviderCommand(options: {
           ? '同名 tmux session 已存在，已先销毁并重新启动 Cursor Agent TUI。'
           : '已启动 Cursor Agent TUI。',
         '之后的普通消息会使用 Cursor Agent tmux/transcript 路径。',
+      ],
+      options.markdown,
+    );
+  }
+  if (getSessionActiveRuntime(session) === 'zcode') {
+    const requested = options.args.trim().toLowerCase();
+    if (!requested) {
+      return buildCommandFields(
+        '当前 ZCode Provider',
+        [['Runtime', 'zcode'], ['Provider', 'tmux']],
+        ['ZCode 只使用 tmux Provider；发送 `/p tmux` 会以稳定 session ID 重启 TUI，`/p default` 清除会话级覆盖。'],
+        options.markdown,
+      );
+    }
+    if (requested === 'default') {
+      clearSessionZcodeProviderToml(session.id);
+      scheduleMirrorSubscriptionsBestEffort(options.deps, 'zcode provider default');
+      return buildCommandFields('已恢复默认 ZCode Provider', [['Runtime', 'zcode'], ['Provider', 'tmux']], [], options.markdown);
+    }
+    if (requested !== 'tmux') {
+      return buildCommandFields(
+        'ZCode Provider 用法',
+        [['命令', '`/provider tmux|default` 或 `/p tmux|default`']],
+        ['ZCode 当前只支持 tmux Provider。'],
+        options.markdown,
+      );
+    }
+    const config = resolveZcodeRuntimeConfig(session, binding);
+    const tmuxSessionName = zcodeTmuxSessionName(session.id);
+    await options.deps.notifyBackgroundOperation?.(`正在重新启动 ZCode tmux 后台会话 \`${tmuxSessionName}\`。`, { force: true });
+    let prepared: Awaited<ReturnType<typeof restartZcodeTmuxInputSession>>;
+    try {
+      prepared = await (options.deps.restartZcodeTmuxSession || restartZcodeTmuxInputSession)({
+        prompt: '',
+        sessionId: session.id,
+        runtime: 'zcode',
+        zcodeSessionId: getSessionZcodeSessionId(session),
+        zcodeMode: config.mode,
+        workingDirectory: getSessionWorkingDirectory(session),
+        model: config.model,
+      });
+    } catch (error) {
+      const staleStart = await cancelStaleTmuxProviderStart({
+        store: options.store,
+        msg: options.msg,
+        sessionId: session.id,
+        runtime: 'zcode',
+        tmuxSessionName,
+        markdown: options.markdown,
+      });
+      if (staleStart) return staleStart;
+      throw error;
+    }
+    const staleStart = await cancelStaleTmuxProviderStart({
+      store: options.store,
+      msg: options.msg,
+      sessionId: session.id,
+      runtime: 'zcode',
+      tmuxSessionName: prepared.sessionName,
+      markdown: options.markdown,
+    });
+    if (staleStart) return staleStart;
+    const identityUpdate = setSessionZcodeIdentityUpdate(prepared.sessionId, prepared.cwd);
+    options.store.updateSession(session.id, {
+      ...identityUpdate,
+      runtime: {
+        ...identityUpdate.runtime,
+        general: { tmuxSessionName: prepared.sessionName, autoEnter: true },
+      },
+    });
+    setSessionZcodeProviderToml(session.id);
+    scheduleMirrorSubscriptionsBestEffort(options.deps, 'zcode provider tmux');
+    return buildCommandFields(
+      '已切换 ZCode Provider',
+      [['Runtime', 'zcode'], ['Provider', 'tmux'], ['tmux session', prepared.sessionName]],
+      [
+        prepared.existed ? '同名 tmux session 已先销毁并以原 ZCode session 重启。' : '已启动 ZCode TUI。',
+        '之后的普通消息与 `//` 转义后的原生命令都会进入该 ZCode TUI。',
       ],
       options.markdown,
     );

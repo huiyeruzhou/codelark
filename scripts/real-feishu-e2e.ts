@@ -50,7 +50,7 @@ import {
 
 const execFileAsync = promisify(execFile);
 
-type RuntimeName = 'codex' | 'claude' | 'kimi' | 'cursor';
+type RuntimeName = 'codex' | 'claude' | 'kimi' | 'cursor' | 'zcode';
 type ProviderName = 'sdk' | 'tmux';
 
 const COMMAND_RESPONSE_TIMEOUT_MS = 15_000;
@@ -91,6 +91,8 @@ interface CliOptions {
   kimiHome: string;
   cursorConfigDir: string;
   cursorDataDir: string;
+  zcodeStorageDir: string;
+  zcodeSessionDbPath: string;
   claudeExecutable: ClaudeExecutable;
   testFeishuAppId: string;
   testFeishuAppSecret: string;
@@ -132,6 +134,8 @@ interface RuntimeEnvironmentPlan {
   kimiHome: string;
   cursorConfigDir: string;
   cursorDataDir: string;
+  zcodeStorageDir: string;
+  zcodeSessionDbPath: string;
   claudeExecutable: ClaudeExecutable;
   larkCliConfigSource: 'test-env-app' | 'not-needed' | 'missing';
   codexAuthSource: 'env-api-key' | 'host-auth-copy' | 'missing';
@@ -521,6 +525,7 @@ const SCENARIOS: ScenarioDefinition[] = [
       '/sandbox',
       '/network',
       '/reasoning',
+      ...(options.runtime === 'zcode' ? ['//goal'] : []),
       `/file ${commandStateFixtureFilePath(options)}`,
       `/file ${commandStateLargeFixtureFilePath(options)}`,
       `/every 1h e2e seed ${options.runId}`,
@@ -896,6 +901,7 @@ function buildRuntimeProviderCommands(options: CliOptions): string[] {
 function sessionManagementProviderSettingCommand(options: CliOptions): string {
   if (options.runtime === 'kimi') return '/set kimiProvider tmux';
   if (options.runtime === 'cursor') return '/set cursorProvider tmux';
+  if (options.runtime === 'zcode') return '/set zcodeProvider tmux';
   return `/set claudeProvider ${options.runtime === 'claude' ? options.provider : 'tmux'}`;
 }
 
@@ -915,6 +921,7 @@ function runtimeProviderCommandTitle(runtime: RuntimeName): string {
   if (runtime === 'claude') return 'Claude Provider';
   if (runtime === 'kimi') return 'Kimi Provider';
   if (runtime === 'cursor') return 'Cursor Provider';
+  if (runtime === 'zcode') return 'ZCode Provider';
   return 'Codex Provider';
 }
 
@@ -922,6 +929,7 @@ function runtimeDisplayLabel(runtime: RuntimeName): string {
   if (runtime === 'claude') return 'Claude Code';
   if (runtime === 'kimi') return 'Kimi Code';
   if (runtime === 'cursor') return 'Cursor';
+  if (runtime === 'zcode') return 'ZCode';
   return 'Codex';
 }
 
@@ -929,6 +937,7 @@ function runtimeIdentityFieldName(runtime: RuntimeName): string {
   if (runtime === 'claude') return 'claude_session_id';
   if (runtime === 'kimi') return 'kimi_session_id';
   if (runtime === 'cursor') return 'cursor_session_id';
+  if (runtime === 'zcode') return 'zcode_session_id';
   return 'codex_thread_id';
 }
 
@@ -1154,8 +1163,8 @@ function validateCliArgs(argv: string[]): void {
 }
 
 function parseRuntimeName(raw: string): RuntimeName {
-  if (raw === 'codex' || raw === 'claude' || raw === 'kimi' || raw === 'cursor') return raw;
-  throw new Error(`Invalid runtime "${raw}". Expected codex, claude, kimi, or cursor.`);
+  if (raw === 'codex' || raw === 'claude' || raw === 'kimi' || raw === 'cursor' || raw === 'zcode') return raw;
+  throw new Error(`Invalid runtime "${raw}". Expected codex, claude, kimi, cursor, or zcode.`);
 }
 
 function parseClaudeExecutable(raw: string): ClaudeExecutable {
@@ -1260,6 +1269,8 @@ function parseOptions(argv: string[]): CliOptions {
   const kimiHome = path.join(runtimeHome, '.kimi-code');
   const cursorConfigDir = path.join(runRoot, 'cursor-config');
   const cursorDataDir = path.join(runRoot, 'cursor-data');
+  const zcodeStorageDir = path.join(runRoot, 'zcode-storage');
+  const zcodeSessionDbPath = path.join(zcodeStorageDir, 'sessions.sqlite');
   const claudeExecutableArg = valueArg(
     argv,
     '--claude-executable',
@@ -1295,6 +1306,8 @@ function parseOptions(argv: string[]): CliOptions {
     kimiHome,
     cursorConfigDir,
     cursorDataDir,
+    zcodeStorageDir,
+    zcodeSessionDbPath,
     claudeExecutable: parseClaudeExecutable(claudeExecutableArg),
     testFeishuAppId: valueArg(argv, '--test-feishu-app-id', process.env.CODELARK_REAL_FEISHU_TEST_APP_ID || ''),
     testFeishuAppSecret: valueArg(argv, '--test-feishu-app-secret', process.env.CODELARK_REAL_FEISHU_TEST_APP_SECRET || ''),
@@ -1334,6 +1347,10 @@ function normalizeProviderForRuntime(runtime: RuntimeName, raw: string): Provide
   if (runtime === 'cursor') {
     if (provider === 'tmux') return provider;
     throw new Error(`Invalid Cursor provider "${raw}". Expected tmux.`);
+  }
+  if (runtime === 'zcode') {
+    if (provider === 'tmux') return provider;
+    throw new Error(`Invalid ZCode provider "${raw}". Expected tmux.`);
   }
   if (provider === 'sdk' || provider === 'tmux') return provider;
   throw new Error(`Invalid Claude provider "${raw}". Expected sdk or tmux.`);
@@ -1379,9 +1396,9 @@ function printUsage(): void {
     '  --scenario <name>          runtime-message|basic-dialogue-suite|command-state|session-management|history-boundaries|history-attachments|history-empty-isolation|history-long-truncation|history-suite|card-forms|agent-question-forms|markdown-rendering|doc-as-chat-from-scratch|message-only|require-at-toggle',
     '  --commands <list>          Extra commands to run before the final message; JSON array or ;; separated',
     '  --chat-id <oc_>            Existing real test group; skips /new creation',
-    '  --runtime <claude|codex|kimi|cursor> Runtime to validate after group creation',
+    '  --runtime <claude|codex|kimi|cursor|zcode> Runtime to validate after group creation',
     '  --cursor-model <model>    Cursor model for the isolated bridge; default gpt-5.3-codex',
-    '  --provider <name>          Codex/Claude: sdk|tmux; Kimi/Cursor: tmux. Default tmux.',
+    '  --provider <name>          Codex/Claude: sdk|tmux; Kimi/Cursor/ZCode: tmux. Default tmux.',
     '  --channel-type <id>        Bridge channel type, default feishu-env',
     '  --workdir <path>           Working directory for /new',
     '  --message <text>           Test message to send as user',
@@ -1419,6 +1436,7 @@ function providerMatrixForScenario(scenario: ScenarioDefinition): string[] {
       `${scenario.testNamePrefix}::claude-tmux`,
       `${scenario.testNamePrefix}::kimi-tmux`,
       `${scenario.testNamePrefix}::cursor-tmux`,
+      `${scenario.testNamePrefix}::zcode-tmux`,
     ];
   }
   if (scenario.providerCoverage === 'representative-provider') {
@@ -1459,7 +1477,7 @@ function scenarioCoverage(options: CliOptions): Record<string, unknown> {
     e2eCoverage: scenario.e2eCoverage,
     coverageNotes: [
       scenario.providerCoverage === 'runtime-parameterized'
-        ? '该场景需要覆盖 codex-sdk、codex-tmux、claude-sdk、claude-tmux、kimi-tmux、cursor-tmux 六条路径，才能形成完整 runtime/provider 矩阵证据。'
+        ? '该场景需要覆盖 codex-sdk、codex-tmux、claude-sdk、claude-tmux、kimi-tmux、cursor-tmux、zcode-tmux 七条路径，才能形成完整 runtime/provider 矩阵证据。'
         : scenario.providerCoverage === 'representative-provider'
         ? '该功能簇场景默认只要求代表 provider 路径；provider smoke matrix 负责完整 runtime/provider 健康检查。'
         : scenario.providerCoverage === 'cross-provider-suite'
@@ -1472,7 +1490,7 @@ function scenarioCoverage(options: CliOptions): Record<string, unknown> {
         : scenario.coverageTier === 'legacy-transitional-evidence'
         ? 'legacy/transitional evidence：保留历史报告和局部回归价值，但不再作为后续补齐 full matrix 的主线。'
         : scenario.coverageTier === 'runtime-compressed-command-check'
-        ? 'runtime-compressed command check：后续命令类覆盖应按 Codex/Claude/Kimi/Cursor runtime 压缩，tmux 命令族额外覆盖各 tmux runtime。'
+        ? 'runtime-compressed command check：后续命令类覆盖应按 Codex/Claude/Kimi/Cursor/ZCode runtime 压缩，tmux 命令族额外覆盖各 tmux runtime。'
         : scenario.coverageTier === 'runtime-smoke-evidence'
         ? 'runtime-smoke evidence：用于 provider path 健康检查，不替代 high-value feature suite。'
         : 'runtime-neutral check：验证与 provider 无关的飞书可见行为。',
@@ -1504,7 +1522,7 @@ function listScenarioMetadata(): unknown[] {
 function parseRuntimeProviderFromTestName(testName: string): { runtime?: RuntimeName; provider?: ProviderName } {
   const suffix = testName.split('::').pop() || '';
   const [runtime, provider] = suffix.split('-');
-  if ((runtime === 'codex' || runtime === 'claude' || runtime === 'kimi' || runtime === 'cursor')
+  if ((runtime === 'codex' || runtime === 'claude' || runtime === 'kimi' || runtime === 'cursor' || runtime === 'zcode')
     && (provider === 'sdk' || provider === 'tmux')) {
     return { runtime, provider };
   }
@@ -1513,7 +1531,7 @@ function parseRuntimeProviderFromTestName(testName: string): { runtime?: Runtime
 
 function coverageEntriesForScenario(scenario: ScenarioDefinition): Omit<CoverageMatrixEntry, 'evidence'>[] {
   if (scenario.providerCoverage === 'runtime-neutral') {
-    const matchingTestNames = ['codex', 'claude', 'kimi', 'cursor'].map((runtime) => `${scenario.testNamePrefix}::${runtime}`);
+    const matchingTestNames = ['codex', 'claude', 'kimi', 'cursor', 'zcode'].map((runtime) => `${scenario.testNamePrefix}::${runtime}`);
     return [{
       scenario: scenario.name,
       testName: `${scenario.testNamePrefix}::runtime-neutral`,
@@ -1637,6 +1655,12 @@ function canonicalRequiredCheckNamesForParts(scenario: string, providerSuffix: s
     required.add('cursor_transcript_found');
     required.add('provider_output_path');
     if (scenario === 'runtime-message') required.add('cursor_stream_card_unified_ui');
+  }
+
+  if (providerSuffix === 'zcode-tmux') {
+    required.add('runtime_identity_bound');
+    required.add('zcode_sqlite_found');
+    required.add('provider_output_path');
   }
 
   if (
@@ -2384,12 +2408,12 @@ async function cleanupTestTmuxSessions(options: CliOptions): Promise<string[]> {
 }
 
 function isProviderOwnedTmuxSessionName(value: string): boolean {
-  return /^(?:codex_[0-9a-f-]{20,}|claude_[A-Za-z0-9_-]{8,}|clk-kimi-[A-Za-z0-9_-]{8,}|clk-cursor-[A-Za-z0-9_-]{8,})$/.test(value);
+  return /^(?:codex_[0-9a-f-]{20,}|claude_[A-Za-z0-9_-]{8,}|clk-kimi-[A-Za-z0-9_-]{8,}|clk-cursor-[A-Za-z0-9_-]{8,}|clk-zcode-[A-Za-z0-9_-]{8,})$/.test(value);
 }
 
 function findProviderOwnedTmuxSessionNames(content: string): string[] {
   const names = new Set<string>();
-  const pattern = /(?:^|[^A-Za-z0-9_-])((?:codex_[0-9a-f-]{20,}|claude_[A-Za-z0-9_-]{8,}|clk-kimi-[A-Za-z0-9_-]{8,}|clk-cursor-[A-Za-z0-9_-]{8,}))(?![A-Za-z0-9_-])/g;
+  const pattern = /(?:^|[^A-Za-z0-9_-])((?:codex_[0-9a-f-]{20,}|claude_[A-Za-z0-9_-]{8,}|clk-kimi-[A-Za-z0-9_-]{8,}|clk-cursor-[A-Za-z0-9_-]{8,}|clk-zcode-[A-Za-z0-9_-]{8,}))(?![A-Za-z0-9_-])/g;
   for (const match of content.matchAll(pattern)) {
     names.add(match[1]);
   }
@@ -2997,6 +3021,7 @@ function prepareRuntimeEnvironment(options: CliOptions): RuntimeEnvironmentPlan 
   fs.mkdirSync(options.kimiHome, { recursive: true, mode: 0o700 });
   fs.mkdirSync(options.cursorConfigDir, { recursive: true, mode: 0o700 });
   fs.mkdirSync(options.cursorDataDir, { recursive: true, mode: 0o700 });
+  fs.mkdirSync(options.zcodeStorageDir, { recursive: true, mode: 0o700 });
 
   const larkCliConfigSource = initializeIsolatedLarkCliConfig(options);
 
@@ -3072,6 +3097,8 @@ function prepareRuntimeEnvironment(options: CliOptions): RuntimeEnvironmentPlan 
     kimiHome: options.kimiHome,
     cursorConfigDir: options.cursorConfigDir,
     cursorDataDir: options.cursorDataDir,
+    zcodeStorageDir: options.zcodeStorageDir,
+    zcodeSessionDbPath: options.zcodeSessionDbPath,
     claudeExecutable: options.claudeExecutable,
     larkCliConfigSource,
     codexAuthSource,
@@ -3104,6 +3131,8 @@ function plannedRuntimeEnvironment(options: CliOptions): RuntimeEnvironmentPlan 
     kimiHome: options.kimiHome,
     cursorConfigDir: options.cursorConfigDir,
     cursorDataDir: options.cursorDataDir,
+    zcodeStorageDir: options.zcodeStorageDir,
+    zcodeSessionDbPath: options.zcodeSessionDbPath,
     claudeExecutable: options.claudeExecutable,
     larkCliConfigSource: options.launchBridge ? 'missing' : 'not-needed',
     codexAuthSource: 'missing',
@@ -4006,6 +4035,7 @@ function latestDump(options: CliOptions, chatId?: string) {
     kimiHome: options.kimiHome,
     cursorConfigDir: options.cursorConfigDir,
     cursorDataDir: options.cursorDataDir,
+    zcodeSessionDbPath: options.zcodeSessionDbPath,
     channelType: options.channelType,
     chatId: chatId || options.chatId || undefined,
     runId: options.runId,
@@ -4072,6 +4102,9 @@ function missingRequiredChecks(options: CliOptions, report: ReturnType<typeof la
   }
   if (options.runtime === 'cursor' && scenarioRequiresRuntimeOutput(options)) {
     required.add('cursor_transcript_found');
+  }
+  if (options.runtime === 'zcode' && scenarioRequiresRuntimeOutput(options)) {
+    required.add('zcode_sqlite_found');
   }
   required.add('unexpected_mirror_absent');
   if (scenarioRequiresRuntimeOutput(options)) {
@@ -4358,6 +4391,7 @@ function commandStateRuntimeSettingsTranscriptIssues(options: CliOptions, finalF
     '/sandbox',
     '/network',
     '/reasoning',
+    ...(options.runtime === 'zcode' ? ['//goal'] : []),
     `/every 1h e2e seed ${options.runId}`,
     '/every',
     '/every no 1',
@@ -4475,7 +4509,7 @@ function unexpectedMirrorIssues(options: CliOptions, report: ReturnType<typeof l
   const mirrorKeys = report.streamKeys.filter((key) => key.startsWith('mirror:'));
   const directKeys = report.streamKeys.filter((key) => key.startsWith('im:'));
   const issues: string[] = [];
-  const directProvider = options.provider === 'sdk' || options.runtime === 'cursor';
+  const directProvider = options.provider === 'sdk' || options.runtime === 'cursor' || options.runtime === 'zcode';
   if (directProvider && mirrorKeys.length > 0) {
     issues.push(`${options.runtime}-${options.provider} direct provider produced mirror streams: ${mirrorKeys.join(', ')}`);
   }
@@ -4501,7 +4535,7 @@ function providerOutputPathIssues(options: CliOptions, report: ReturnType<typeof
   if (options.scenario === 'require-at-toggle') return [];
 
   const issues: string[] = [];
-  if (options.provider === 'sdk' || options.runtime === 'cursor') {
+  if (options.provider === 'sdk' || options.runtime === 'cursor' || options.runtime === 'zcode') {
     if (directKeys.length === 0) {
       issues.push(`${options.runtime}-${options.provider} direct provider did not produce a direct IM stream; streamKeys=${report.streamKeys.join(', ') || '[none]'}`);
     }
@@ -4834,36 +4868,45 @@ function commandStateExpectedTexts(options: CliOptions, text: string): string[] 
     if (options.runtime === 'claude') return ['当前 Claude Code 模型'];
     if (options.runtime === 'kimi') return ['当前 Kimi Code 模型'];
     if (options.runtime === 'cursor') return ['当前 Cursor Agent 模型'];
+    if (options.runtime === 'zcode') return ['当前 ZCode 模型'];
     return ['当前模型'];
   }
   if (command === '/mode') {
     if (options.runtime === 'kimi') return ['Kimi Code 模式固定'];
     if (options.runtime === 'cursor') return ['当前 Cursor Agent 模式'];
+    if (options.runtime === 'zcode') return ['当前 ZCode 模式'];
     return ['当前模式', 'Runtime', options.runtime];
   }
   if (command === '/provider') {
     if (options.runtime === 'claude') return ['当前 Claude Provider'];
     if (options.runtime === 'kimi') return ['当前 Kimi Provider'];
     if (options.runtime === 'cursor') return ['当前 Cursor Provider'];
+    if (options.runtime === 'zcode') return ['当前 ZCode Provider'];
     return ['当前 Codex Provider'];
   }
   if (command === '/sandbox') {
     if (options.runtime === 'claude') return ['Claude Code 不支持 Bridge 沙箱设置'];
     if (options.runtime === 'kimi') return ['Kimi Code 不支持 Bridge 沙箱设置'];
     if (options.runtime === 'cursor') return ['Cursor Agent 不支持 Bridge 沙箱设置'];
+    if (options.runtime === 'zcode') return ['ZCode 不支持 Bridge 沙箱设置'];
     return ['当前 Codex 沙箱'];
   }
   if (command === '/network') {
     if (options.runtime === 'claude') return ['Claude Code 不支持 Bridge 网络开关'];
     if (options.runtime === 'kimi') return ['Kimi Code 不支持 Bridge 网络开关'];
     if (options.runtime === 'cursor') return ['Cursor Agent 不支持 Bridge 网络开关'];
+    if (options.runtime === 'zcode') return ['ZCode 不支持 Bridge 网络开关'];
     return ['当前 Codex 网络'];
   }
   if (command === '/reasoning') {
     if (options.runtime === 'claude') return ['当前 Claude Code 思考级别'];
     if (options.runtime === 'kimi') return ['当前 Kimi Code Thinking 模式'];
     if (options.runtime === 'cursor') return ['当前 Cursor Agent 思考级别'];
+    if (options.runtime === 'zcode') return ['ZCode 思考级别由模型管理'];
     return ['当前思考级别'];
+  }
+  if (command === '//goal' && options.runtime === 'zcode') {
+    return ['No goal is set'];
   }
   if (command === `/every 1h e2e seed ${options.runId}`) {
     return ['已创建 /every 定时输入', `e2e seed ${options.runId}`, 'session runtime-id'];
@@ -4926,6 +4969,7 @@ function sessionManagementExpectedTexts(options: CliOptions, text: string): stri
   if (command === sessionManagementProviderSettingCommand(options)) {
     if (options.runtime === 'kimi') return ['已更新全局配置', 'runtime.kimi.provider', 'tmux'];
     if (options.runtime === 'cursor') return ['已更新全局配置', 'runtime.cursor.provider', 'tmux'];
+    if (options.runtime === 'zcode') return ['已更新全局配置', 'runtime.zcode.provider', 'tmux'];
     return ['已更新全局配置', 'runtime.claude.provider', options.runtime === 'claude' ? options.provider : 'tmux'];
   }
   if (command === `/new mgmt-${options.runId} ${options.workDir}`) {
@@ -4962,7 +5006,7 @@ function sessionManagementExpectedTexts(options: CliOptions, text: string): stri
       'runtime',
       runtimeDisplayLabel(options.runtime),
       runtimeIdentityFieldName(options.runtime),
-      ...(options.runtime === 'claude' || options.runtime === 'kimi' || options.runtime === 'cursor' ? ['runtime_cwd'] : []),
+      ...(options.runtime === 'claude' || options.runtime === 'kimi' || options.runtime === 'cursor' || options.runtime === 'zcode' ? ['runtime_cwd'] : []),
     ];
   }
   if (command === '/t') return ['本地会话'];
@@ -4972,6 +5016,7 @@ function sessionManagementExpectedTexts(options: CliOptions, text: string): stri
     if (options.runtime === 'claude') return ['已归档本地 Claude Code 会话'];
     if (options.runtime === 'kimi') return ['已归档本地 Kimi Code 会话'];
     if (options.runtime === 'cursor') return ['已归档本地 Cursor Agent 会话'];
+    if (options.runtime === 'zcode') return ['已归档本地 ZCode 会话'];
     return ['已归档本地 Codex 会话'];
   }
   return [];
@@ -5455,7 +5500,7 @@ function plannedSuccessCheckNames(options: CliOptions): string[] {
   if (scenarioRequiresRuntimeOutput(options)) {
     names.push('provider_output_path');
   }
-  if (scenarioRequiresRuntimeOutput(options) && options.provider !== 'sdk' && options.runtime !== 'cursor') {
+  if (scenarioRequiresRuntimeOutput(options) && options.provider !== 'sdk' && options.runtime !== 'cursor' && options.runtime !== 'zcode') {
     names.push('mirror_final_not_duplicated_in_direct_reply');
   }
   if (options.scenario === 'doc-as-chat-from-scratch') {
@@ -5711,6 +5756,8 @@ function canonicalReportEligibility(
     ['kimiHome', runtimeEnvironment.kimiHome],
     ['cursorConfigDir', runtimeEnvironment.cursorConfigDir],
     ['cursorDataDir', runtimeEnvironment.cursorDataDir],
+    ['zcodeStorageDir', runtimeEnvironment.zcodeStorageDir],
+    ['zcodeSessionDbPath', runtimeEnvironment.zcodeSessionDbPath],
   ];
 
   if (!options.launchBridge) {
@@ -5854,7 +5901,7 @@ function automatedSuccessChecks(params: {
     },
   ];
 
-  if (scenarioRequiresRuntimeOutput(params.options) && params.options.provider !== 'sdk' && params.options.runtime !== 'cursor') {
+  if (scenarioRequiresRuntimeOutput(params.options) && params.options.provider !== 'sdk' && params.options.runtime !== 'cursor' && params.options.runtime !== 'zcode') {
     checks.push({
       name: 'mirror_final_not_duplicated_in_direct_reply',
       ok: !directMirrorDuplicate,
@@ -5986,6 +6033,7 @@ function shouldObserveFinalPromptByMirrorEvidence(options: CliOptions, label: st
   return label.includes('final message')
     && options.provider !== 'sdk'
     && options.runtime !== 'cursor'
+    && options.runtime !== 'zcode'
     && (isEmptyReplyExpectation(expectation) || scenarioCommandsIncludeFinalMessage(options));
 }
 
@@ -6004,7 +6052,7 @@ function providerStreamTerminalStateInDump(
 ) {
   const logText = dump.logWindow?.text || '';
   if (!logText) return undefined;
-  const streamPrefix = options.runtime === 'cursor' ? 'im:' : 'mirror:';
+  const streamPrefix = options.runtime === 'cursor' || options.runtime === 'zcode' ? 'im:' : 'mirror:';
   return findLatestProviderStreamTerminalState({
     streamKeys: dump.streamKeys,
     logText,
@@ -6169,6 +6217,13 @@ function writeIsolatedBridgeConfig(options: CliOptions): void {
         provider: 'tmux',
         model: options.cursorModel,
       },
+      zcode: {
+        provider: 'tmux',
+        mode: 'build',
+        ...(process.env.CODELARK_ZCODE_MODEL
+          ? { model: process.env.CODELARK_ZCODE_MODEL }
+          : {}),
+      },
     },
     channels: [{
       id: options.channelType,
@@ -6241,7 +6296,7 @@ async function launchBridgeChild(options: CliOptions, runtimeEnvironment: Runtim
   if (!options.launchBridge || options.dryRun) return null;
   writeIsolatedBridgeConfig(options);
   fs.mkdirSync(realFeishuTmuxTempDir(options), { recursive: true, mode: 0o700 });
-  process.stderr.write(`[real-feishu-e2e] Launching isolated bridge with CODELARK_HOME=${options.codelarkHome} CODEX_HOME=${options.codexHome} KIMI_CODE_HOME=${options.kimiHome} CURSOR_CONFIG_DIR=${options.cursorConfigDir} CURSOR_DATA_DIR=${options.cursorDataDir} HOME=${runtimeEnvironment.bridgeHome} claude=${options.claudeExecutable}\n`);
+  process.stderr.write(`[real-feishu-e2e] Launching isolated bridge with CODELARK_HOME=${options.codelarkHome} CODEX_HOME=${options.codexHome} KIMI_CODE_HOME=${options.kimiHome} CURSOR_CONFIG_DIR=${options.cursorConfigDir} CURSOR_DATA_DIR=${options.cursorDataDir} ZCODE_SESSION_DB_PATH=${options.zcodeSessionDbPath} HOME=${runtimeEnvironment.bridgeHome} claude=${options.claudeExecutable}\n`);
   const child = spawn(
     process.execPath,
     ['--import', 'tsx', 'src/entrypoints/daemon.ts'],
@@ -6259,6 +6314,9 @@ async function launchBridgeChild(options: CliOptions, runtimeEnvironment: Runtim
         KIMI_CODE_HOME: runtimeEnvironment.kimiHome,
         CURSOR_CONFIG_DIR: runtimeEnvironment.cursorConfigDir,
         CURSOR_DATA_DIR: runtimeEnvironment.cursorDataDir,
+        ZCODE_STORAGE_DIR: runtimeEnvironment.zcodeStorageDir,
+        ZCODE_SESSION_DB_PATH: runtimeEnvironment.zcodeSessionDbPath,
+        CODELARK_ZCODE_SESSION_DB_PATH: runtimeEnvironment.zcodeSessionDbPath,
         CODELARK_CURSOR_PROVIDER: 'tmux',
         CODELARK_CURSOR_MODEL: options.cursorModel,
         ...(runtimeEnvironment.cursorExecutablePath
@@ -6267,6 +6325,7 @@ async function launchBridgeChild(options: CliOptions, runtimeEnvironment: Runtim
         CODELARK_CLAUDE_EXECUTABLE: runtimeEnvironment.claudeExecutable,
         CODELARK_CLAUDE_PROVIDER: options.runtime === 'claude' ? options.provider : (process.env.CODELARK_CLAUDE_PROVIDER || 'tmux'),
         CODELARK_KIMI_PROVIDER: 'tmux',
+        CODELARK_ZCODE_PROVIDER: 'tmux',
         ...(usesFakeKimiBackend(options)
           ? {
             KIMI_MODEL_NAME: 'clk-fake-kimi',
@@ -7698,7 +7757,7 @@ async function main(): Promise<void> {
         ? {
           ...check,
           ok: true,
-          detail: `${check.detail}; not required for ${options.provider} mirror provider.`,
+          detail: `${check.detail}; not required for ${options.runtime}-${options.provider} provider output-path validation.`,
         }
         : check.name === 'claude_jsonl_found' && options.runtime === 'claude' && options.provider === 'sdk'
           ? {

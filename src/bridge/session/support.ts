@@ -44,6 +44,8 @@ import type {
   RuntimeAgent,
   RuntimeProviderChoice,
   RuntimeProviderIdentity,
+  ZcodeMode,
+  ZcodeProviderChoice,
 } from '../../domain/session.js';
 import { DEFAULT_CURSOR_MODEL } from '../../runtime/cursor/constants.js';
 import { validateWorkingDirectory } from '../../shared/security/validators.js';
@@ -192,6 +194,13 @@ export interface CursorRuntimeConfig {
   reasoningEffort?: CursorReasoningEffort;
 }
 
+export interface ZcodeRuntimeConfig {
+  runtime: 'zcode';
+  provider: ZcodeProviderChoice;
+  model?: string;
+  mode: ZcodeMode;
+}
+
 export interface RuntimeMetadataConfig {
   runtime: RuntimeAgent;
   reasoningEffort: string;
@@ -234,6 +243,14 @@ export function hasSessionCursorProviderOverride(session?: BridgeSession | null)
   return getSessionCursorProviderOverride(session) !== undefined;
 }
 
+export function getSessionZcodeProviderOverride(session?: BridgeSession | null): ZcodeProviderChoice | undefined {
+  return getSessionTomlOverride<ZcodeProviderChoice>(session, 'runtime.zcode.provider') === 'tmux' ? 'tmux' : undefined;
+}
+
+export function hasSessionZcodeProviderOverride(session?: BridgeSession | null): boolean {
+  return getSessionZcodeProviderOverride(session) !== undefined;
+}
+
 export function resolveEffectiveMode(
   binding?: ChannelChat | null,
   session?: BridgeSession | null,
@@ -255,6 +272,9 @@ export function resolveEffectiveRuntimeMode(
   }
   if (activeRuntime === 'cursor') {
     return resolveCursorRuntimeConfig(session, binding).force ? 'yolo' : 'normal';
+  }
+  if (activeRuntime === 'zcode') {
+    return resolveZcodeRuntimeConfig(session, binding).mode === 'yolo' ? 'yolo' : 'normal';
   }
   return resolveEffectiveMode(binding, session);
 }
@@ -279,7 +299,7 @@ export function hasSessionCodexProviderOverride(session?: BridgeSession | null):
 
 export interface EffectiveRuntimeProvider {
   runtime: RuntimeAgent;
-  provider: RuntimeProviderChoice | KimiProviderChoice | CursorProviderChoice;
+  provider: RuntimeProviderChoice | KimiProviderChoice | CursorProviderChoice | ZcodeProviderChoice;
   identity: RuntimeProviderIdentity;
 }
 
@@ -289,7 +309,9 @@ export function resolveEffectiveRuntimeProvider(
 ): EffectiveRuntimeProvider {
   const configuredRuntime = scopedConfigForRuntime(binding, session).config.runtime.agent;
   const runtime = getSessionActiveRuntime(session) || configuredRuntime;
-  const provider = runtime === 'cursor'
+  const provider = runtime === 'zcode'
+    ? resolveZcodeRuntimeConfig(session, binding).provider
+    : runtime === 'cursor'
     ? resolveCursorRuntimeConfig(session, binding).provider
     : runtime === 'kimi'
     ? resolveKimiRuntimeConfig(session, binding).provider
@@ -391,6 +413,16 @@ export function resolveCursorRuntimeConfig(session?: BridgeSession | null, bindi
   };
 }
 
+export function resolveZcodeRuntimeConfig(session?: BridgeSession | null, binding?: ChannelChat | null): ZcodeRuntimeConfig {
+  const { config } = scopedConfigForRuntime(binding, session);
+  return {
+    runtime: 'zcode',
+    provider: 'tmux',
+    model: config.runtime.zcode.model.trim() || undefined,
+    mode: config.runtime.zcode.mode,
+  };
+}
+
 export function resolveRuntimeMetadataConfig(
   session: BridgeSession | null | undefined,
   runtime: RuntimeAgent = session?.runtime?.activeRuntime === 'claude'
@@ -399,6 +431,8 @@ export function resolveRuntimeMetadataConfig(
       ? 'kimi'
       : session?.runtime?.activeRuntime === 'cursor'
         ? 'cursor'
+        : session?.runtime?.activeRuntime === 'zcode'
+          ? 'zcode'
         : 'codex',
   binding?: ChannelChat | null,
 ): RuntimeMetadataConfig {
@@ -424,6 +458,14 @@ export function resolveRuntimeMetadataConfig(
       runtime: 'cursor',
       reasoningEffort: cursorConfig.reasoningEffort || '',
       model: cursorConfig.model || 'default',
+    };
+  }
+  if (runtime === 'zcode') {
+    const zcodeConfig = resolveZcodeRuntimeConfig(session, binding);
+    return {
+      runtime: 'zcode',
+      reasoningEffort: '',
+      model: zcodeConfig.model || 'default',
     };
   }
   return {

@@ -20,6 +20,13 @@ import {
   readKimiSessionMirrorRecordStreamByFilePath,
   type KimiSessionFileSummary,
 } from '../../runtime/kimi/session-index.js';
+import {
+  archiveZcodeSession,
+  findZcodeSessionById,
+  listZcodeSessionSummaries,
+  readZcodeSessionMessages,
+  type ZcodeSessionSummary,
+} from '../../runtime/zcode/session-index.js';
 import type { LocalRuntimeSessionSummary } from '../../bridge/session/local-runtime-session.js';
 import type { RuntimeAgent } from '../../domain/session.js';
 import {
@@ -63,6 +70,13 @@ export interface UiSessionCursorSource {
   getThread(cursorSessionId: string, cwd: string): CursorSessionFileSummary | null;
   readJsonlHistory(cursorSessionId: string, cwd: string): CodexSessionJsonlHistoryEntry[];
   archiveThread(cursorSessionId: string, cwd: string): boolean;
+}
+
+export interface UiSessionZcodeSource {
+  listSessions(): ZcodeSessionSummary[];
+  getThread(zcodeSessionId: string, cwd: string): ZcodeSessionSummary | null;
+  readJsonlHistory(zcodeSessionId: string, cwd: string): CodexSessionJsonlHistoryEntry[];
+  archiveThread(zcodeSessionId: string, cwd: string): boolean;
 }
 
 export interface UiSessionRuntimeSource {
@@ -177,6 +191,33 @@ export const defaultUiSessionCursorSource: UiSessionCursorSource = {
   },
 };
 
+export const defaultUiSessionZcodeSource: UiSessionZcodeSource = {
+  listSessions: () => listZcodeSessionSummaries(),
+  getThread: (zcodeSessionId, cwd) => findZcodeSessionById(zcodeSessionId, cwd),
+  readJsonlHistory(zcodeSessionId, cwd) {
+    const session = findZcodeSessionById(zcodeSessionId, cwd);
+    if (!session) return [];
+    return readZcodeSessionMessages(session.dbPath, session.sessionId, Number.MAX_SAFE_INTEGER)
+      .map((message, index) => ({
+        signature: `zcode-history:${session.sessionId}:${index}`,
+        role: message.role,
+        kind: 'message',
+        content: message.content,
+        timestamp: '',
+        rawJsonl: JSON.stringify({
+          runtime: 'zcode',
+          type: 'message',
+          role: message.role,
+          content: message.content,
+        }),
+      }));
+  },
+  archiveThread(zcodeSessionId, cwd) {
+    const session = findZcodeSessionById(zcodeSessionId, cwd, { includeArchived: true });
+    return session ? archiveZcodeSession(session) : false;
+  },
+};
+
 function toRuntimeCodexSession(session: CodexSessionSummary): LocalRuntimeSessionSummary {
   return { ...session, runtime: 'codex' };
 }
@@ -226,11 +267,27 @@ function toRuntimeCursorSession(session: CursorSessionFileSummary): LocalRuntime
   };
 }
 
+function toRuntimeZcodeSession(session: ZcodeSessionSummary): LocalRuntimeSessionSummary {
+  return {
+    runtime: 'zcode',
+    threadId: session.sessionId,
+    filePath: session.dbPath,
+    cwd: session.cwd,
+    originator: 'ZCode',
+    source: 'zcode',
+    firstSeenAt: session.createdAt || session.updatedAt || '',
+    lastEventAt: session.updatedAt || session.createdAt || '',
+    title: session.title || session.sessionId.slice(0, 8),
+    activeEstimate: false,
+  };
+}
+
 export function createUiSessionRuntimeSource(
   codexSource: UiSessionCodexSource = defaultUiSessionCodexSource,
   claudeSource: UiSessionClaudeSource = defaultUiSessionClaudeSource,
   kimiSource: UiSessionKimiSource = defaultUiSessionKimiSource,
   cursorSource: UiSessionCursorSource = defaultUiSessionCursorSource,
+  zcodeSource: UiSessionZcodeSource = defaultUiSessionZcodeSource,
 ): UiSessionRuntimeSource {
   return {
     listSessions() {
@@ -239,6 +296,7 @@ export function createUiSessionRuntimeSource(
         ...claudeSource.listSessions().map(toRuntimeClaudeSession),
         ...kimiSource.listSessions().map(toRuntimeKimiSession),
         ...cursorSource.listSessions().map(toRuntimeCursorSession),
+        ...zcodeSource.listSessions().map(toRuntimeZcodeSession),
       ].sort((left, right) => right.lastEventAt.localeCompare(left.lastEventAt));
     },
     getThread(runtime, threadId, cwd) {
@@ -255,6 +313,10 @@ export function createUiSessionRuntimeSource(
         const session = cursorSource.getThread(threadId, cwd);
         return session ? toRuntimeCursorSession(session) : null;
       }
+      if (runtime === 'zcode') {
+        const session = zcodeSource.getThread(threadId, cwd);
+        return session ? toRuntimeZcodeSession(session) : null;
+      }
       const session = claudeSource.getThread(threadId, cwd);
       return session ? toRuntimeClaudeSession(session) : null;
     },
@@ -262,12 +324,14 @@ export function createUiSessionRuntimeSource(
       if (runtime === 'codex') return codexSource.readJsonlHistory(threadId);
       if (runtime === 'kimi') return cwd ? kimiSource.readJsonlHistory(threadId, cwd) : [];
       if (runtime === 'cursor') return cwd ? cursorSource.readJsonlHistory(threadId, cwd) : [];
+      if (runtime === 'zcode') return cwd ? zcodeSource.readJsonlHistory(threadId, cwd) : [];
       return cwd ? claudeSource.readJsonlHistory(threadId, cwd) : [];
     },
     archiveThread(runtime, threadId, cwd) {
       if (runtime === 'codex') return codexSource.archiveThread(threadId);
       if (runtime === 'kimi') return cwd ? kimiSource.archiveThread(threadId, cwd) : false;
       if (runtime === 'cursor') return cwd ? cursorSource.archiveThread(threadId, cwd) : false;
+      if (runtime === 'zcode') return cwd ? zcodeSource.archiveThread(threadId, cwd) : false;
       return cwd ? claudeSource.archiveThread(threadId, cwd) : false;
     },
     getSessionsRoot: codexSource.getSessionsRoot,
@@ -282,6 +346,7 @@ export function createUiSessionRegistry(
   claudeSource: UiSessionClaudeSource = defaultUiSessionClaudeSource,
   kimiSource: UiSessionKimiSource = defaultUiSessionKimiSource,
   cursorSource: UiSessionCursorSource = defaultUiSessionCursorSource,
+  zcodeSource: UiSessionZcodeSource = defaultUiSessionZcodeSource,
 ): SessionRegistryService {
   return new SessionRegistryService(store, {
     codexThreads: {
@@ -319,6 +384,15 @@ export function createUiSessionRegistry(
           : null;
       },
       archiveThread: (cursorSessionId, cwd) => cursorSource.archiveThread(cursorSessionId, cwd),
+    },
+    zcodeThreads: {
+      getThread(zcodeSessionId, cwd) {
+        const session = zcodeSource.getThread(zcodeSessionId, cwd);
+        return session
+          ? { zcodeSessionId: session.sessionId, title: session.title || session.sessionId.slice(0, 8), cwd: session.cwd || cwd }
+          : null;
+      },
+      archiveThread: (zcodeSessionId, cwd) => zcodeSource.archiveThread(zcodeSessionId, cwd),
     },
     readDefaultModel: () => codexSource.readDefaultModel(),
     defaultWorkingDirectory: () => codexSource.defaultWorkingDirectory(),

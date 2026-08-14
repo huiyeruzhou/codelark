@@ -2,7 +2,7 @@
 
 ## 安装
 
-CodeLark 不接管 `~/.codex`、`~/.claude-code`、`~/.claude-code-router`、`~/.kimi-code` 或 `~/.cursor` 的模型供应商配置。Codex CLI、Claude Code、CCR、Kimi Code、Cursor Agent 或 API 登录态仍按你的本机环境自行准备；CodeLark 只保存自己的配置和桥接状态。Cursor Agent 可通过 [Cursor 官方安装入口](https://cursor.com/install) 安装，并需先在本机终端完成登录。
+CodeLark 不接管 `~/.codex`、`~/.claude-code`、`~/.claude-code-router`、`~/.kimi-code`、`~/.cursor` 或 `~/.zcode` 的模型供应商配置。Codex CLI、Claude Code、CCR、Kimi Code、Cursor Agent、ZCode 或 API 登录态仍按你的本机环境自行准备；CodeLark 只保存自己的配置和桥接状态。Cursor Agent 可通过 [Cursor 官方安装入口](https://cursor.com/install) 安装，并需先在本机终端完成登录。
 
 ```bash
 # export OPENAI_API_KEY=sk-xxx
@@ -23,7 +23,7 @@ Bridge 每个本地自然日最多检查一次 npm 最新版本。检查由当�
 ## 前置条件
 
 - 本机已经可以运行 `codelark`。
-- 本机已有可用的 Codex、Claude Code、Kimi Code、Cursor Agent 登录态或对应 API 凭据。
+- 本机已有可用的 Codex、Claude Code、Kimi Code、Cursor Agent、ZCode 登录态或对应 API 凭据。
 - 本机 PATH 中已有 `tmux` 命令；如果没有，`codelark setup` 会按平台说明将执行的命令并帮助安装，具体行为见下方平台说明和首次配置步骤。
 - 已创建飞书/Lark 自建应用并拿到 `App ID` / `App Secret`，或允许向导通过开放平台扫码创建机器人配置。
 - 飞书应用已启用机器人、权限、事件订阅和长连接。详细步骤见 [平台配置指南](platform-setup.md)。

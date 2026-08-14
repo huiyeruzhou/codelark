@@ -16,7 +16,7 @@ CodeLark 为 `~/.codelark` 下的本地数据文件发布 JSON Schema。入口�
 | --- | --- | --- |
 | `config.toml` | `schemas/config.v2.schema.json` | 当前全局配置；schema 描述 TOML 解析后的 snake_case shape，版本字段是 `schema_version = 2`。缺失字段从 defaults 继承。 |
 | `version-check.json` | `schemas/version-check.v1.schema.json` | 每日 npm 版本检查状态：最新版本、忽略到的版本、最后检查日期；bridge 启动时读取一次并在进程内缓存。 |
-| `data/sessions.json` | `schemas/data/sessions.v1.schema.json` | 以 Bridge session id 为 key 的 map；保存当前 BridgeSession 的 runtime-local identity，例如 `runtime.codex.threadId`、`runtime.claude.sessionId/cwd`、`runtime.kimi.sessionId/cwd` 或 `runtime.cursor.sessionId/cwd`。 |
+| `data/sessions.json` | `schemas/data/sessions.v1.schema.json` | 以 Bridge session id 为 key 的 map；保存当前 BridgeSession 的 runtime-local identity，例如 `runtime.codex.threadId`、`runtime.claude.sessionId/cwd`、`runtime.kimi.sessionId/cwd`、`runtime.cursor.sessionId/cwd` 或 `runtime.zcode.sessionId/cwd`。 |
 | `data/channel-chats.json` | `schemas/data/channel-chats.v1.schema.json` | 以 ChannelChat id 为 key 的 map；使用 `bridgeSessionId` 指向 session，禁止保存底层 runtime identity 和旧 binding 运行时字段。 |
 | `data/messages/*.json` | `schemas/data/messages.v1.schema.json` | 单个 BridgeSession 的消息数组。 |
 | `data/permissions.json` | `schemas/data/permissions.v1.schema.json` | 权限请求链接。 |
@@ -84,7 +84,7 @@ data/sessions.json
 
 同一个 `BridgeSession.runtime` 只能表示一个 active runtime namespace。schema 对 Claude、Kimi 和 Cursor runtime 要求 `activeRuntime`，并禁止同一 runtime object 同时保存其他 agent 的 local identity。
 
-`data/channel-chats.json` 只能通过 `bridgeSessionId` 指向 session。它不应保存任何底层 runtime identity，因为 ChannelChat 的职责是“IM chat -> BridgeSession”，不是“IM chat -> Codex thread / Claude session / Kimi session / Cursor session”。
+`data/channel-chats.json` 只能通过 `bridgeSessionId` 指向 session。它不应保存任何底层 runtime identity，因为 ChannelChat 的职责是“IM chat -> BridgeSession”，不是“IM chat -> Codex thread / Claude session / Kimi session / Cursor session / ZCode session”。
 
 Schema 会拒绝这些已删除身份字段：
 
@@ -105,4 +105,4 @@ runtime-local identity
   -> channelType + chatId 对应的 IM chat
 ```
 
-如果 schema 允许 ChannelChat 保存底层 runtime identity，这条链路就会出现两个身份来源，history、mirror、reuse 和 `/t` 切换都会变得不一致。因此 schema 层必须把 Codex thread、Claude session、Kimi session 和 Cursor session 身份固定在 BridgeSession 上。
+如果 schema 允许 ChannelChat 保存底层 runtime identity，这条链路就会出现两个身份来源，history、mirror、reuse 和 `/t` 切换都会变得不一致。因此 schema 层必须把 Codex thread、Claude session、Kimi session、Cursor session 和 ZCode session 身份固定在 BridgeSession 上。

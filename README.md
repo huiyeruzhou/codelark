@@ -14,7 +14,7 @@
 
 | 能力 | 怎么用 | 入口 |
 | --- | --- | --- |
-| 共享本地 runtime 会话 | 在飞书上继续本地 Codex / Claude Code / Kimi Code / Cursor Agent 对话，用可视化面板选择要接管的线程。 | `/t` |
+| 共享本地 runtime 会话 | 在飞书上继续本地 Codex / Claude Code / Kimi Code / Cursor Agent / ZCode 对话，用可视化面板选择要接管的线程。 | `/t` |
 | 流式卡片输出 | 将模型思考、工具调用、长任务进度和最终结果渲染成飞书卡片，对话留痕且可追踪。 | 普通消息 |
 | 群聊 = Session | 一个群聊对应一个 session，用群聊名称管理任务；多线并行时一键拉起新群。 | `/new`、`/t rename <名称>` |
 | Multi-Agent 协作 | Agent 可以发现其他 CodeLark 群聊、创建专用任务群，并把普通输入或 slash 命令交给另一个 Agent；两端都会显示可核对的收发卡片。 | 自然语言委派、`codelark sessions` |
@@ -104,9 +104,10 @@ codelark run
 - `<enter>`、`<C-c>`、`<esc>`：向当前 tmux 会话发送控制键。
 - `/p tmux`：当前本地 TUI 已退出时重新启动。
 - `/runtime cursor`：切换到 Cursor Agent；原生 Cursor slash 命令使用 `/tmux /<command>`，例如 `/tmux /mcp list`。
-- `/reasoning`：查看或修改当前 runtime 的思考设置；Codex 支持 `max/ultra`，Kimi 使用 `on/off`，Cursor 使用模型 effort。
+- `/runtime zcode`：切换到 ZCode；普通消息进入受 CodeLark 管理的 ZCode tmux TUI，原生 slash 命令使用 `//`，例如 `//goal`。
+- `/reasoning`：查看或修改当前 runtime 的思考设置；Codex 支持 `max/ultra`，Kimi 使用 `on/off`，Cursor 使用模型 effort；ZCode 保留自身原生命令，不由 CodeLark 硬映射。
 - `/stop`：停止当前任务
-- `/t`：查看最近本地 Codex / Claude Code / Kimi Code / Cursor Agent 会话。
+- `/t`：查看最近本地 Codex / Claude Code / Kimi Code / Cursor Agent / ZCode 会话。
 - `/t rename <名称>`：重命名当前线程；群聊通道会同步修改群聊名称，真实群名会自动带 `[botname]` 前缀。
 - `/new`：发送创建表单，填写名称和工作目录后创建新的 IM 群聊会话。
 - `/clear [名称] [路径]`：在当前聊天上下文创建新的对话并绑定过去，之后仍可用 `/t` 找回旧对话。
@@ -130,7 +131,7 @@ codelark run
 绑定成功后，直接发送普通消息即可继续当前线程。
 
 - tmux 会解释 `<enter>`、`<C-c>`、`<esc>` 等控制键；卡权限或需要中断时很有用。
-- Codex CLI/Desktop、Claude Code、Kimi Code 或 Cursor Agent 继续操作这条共享会话时，结果也会通过对应 JSONL mirror 同步到 IM。
+- Codex CLI/Desktop、Claude Code、Kimi Code、Cursor Agent 或 ZCode 继续操作这条共享会话时，结果也会通过对应本地 transcript/SQLite mirror 同步到 IM。
 
 > 也就是说，你可以回到电脑继续在 TUI 中和 Agent 协作，再回到飞书时依旧能看到完整对话记录。
 

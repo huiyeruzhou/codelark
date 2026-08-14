@@ -33,6 +33,7 @@ import {
   resolveEffectiveRuntimeProvider,
   resolveKimiRuntimeConfig,
   resolveCursorRuntimeConfig,
+  resolveZcodeRuntimeConfig,
   resolveSessionRuntimeConfig,
 } from '../session/support.js';
 import { getCodexThreadId } from '../turn/turn-classifier.js';
@@ -46,6 +47,7 @@ import {
   getSessionWorkingDirectory,
   setSessionKimiIdentityUpdate,
   setSessionCursorIdentityUpdate,
+  setSessionZcodeIdentityUpdate,
   setSessionClaudeTmuxProviderUpdate,
   setSessionCodexTmuxProviderUpdate,
 } from '../../domain/session-runtime.js';
@@ -59,6 +61,9 @@ import {
 import {
   ensureCursorTmuxInputSession,
 } from '../../runtime/cursor/tmux-provider.js';
+import {
+  ensureZcodeTmuxInputSession,
+} from '../../runtime/zcode/tmux-provider.js';
 import {
   bootstrapCodexThreadLocally,
   type BootstrapCodexThreadParams,
@@ -836,6 +841,51 @@ async function ensureRuntimeTmuxSessionForProvider(
       },
     });
     scheduleTmuxMirrorReconcile(params.reconcileMirrorSubscriptions, 'initialized Cursor provider session');
+    return { target: prepared.sessionName, commands: [], recovered: !prepared.existed };
+  }
+
+  if (runtimeProvider.runtime === 'zcode') {
+    if (configuredTarget) {
+      const inspected = await inspectRuntimeTmuxInput({
+        runtime: 'zcode',
+        sessionName: configuredTarget,
+        hasSession: () => hasTmuxSession(configuredTarget),
+      });
+      if (inspected.exists) {
+        return {
+          target: configuredTarget,
+          commands: inspected.command ? [inspected.command] : [],
+          recovered: false,
+        };
+      }
+      if (params.autoRecoverProviderSession !== true) {
+        return {
+          target: configuredTarget,
+          commands: inspected.command ? [inspected.command] : [],
+          recovered: false,
+          error: `tmux session 不存在：${configuredTarget}。请先发送 \`/provider tmux\` 重新初始化 ZCode tmux。`,
+        };
+      }
+    }
+    const zcodeConfig = resolveZcodeRuntimeConfig(session, binding);
+    const prepared = await ensureZcodeTmuxInputSession({
+      prompt: '',
+      sessionId: session.id,
+      runtime: 'zcode',
+      zcodeSessionId: session.runtime?.zcode?.sessionId,
+      zcodeMode: zcodeConfig.mode,
+      workingDirectory: getSessionWorkingDirectory(session),
+      model: zcodeConfig.model || undefined,
+    });
+    const identityUpdate = setSessionZcodeIdentityUpdate(prepared.sessionId, prepared.cwd);
+    store.updateSession(session.id, {
+      ...identityUpdate,
+      runtime: {
+        ...identityUpdate.runtime,
+        general: { tmuxSessionName: prepared.sessionName },
+      },
+    });
+    scheduleTmuxMirrorReconcile(params.reconcileMirrorSubscriptions, 'initialized ZCode provider session');
     return { target: prepared.sessionName, commands: [], recovered: !prepared.existed };
   }
 

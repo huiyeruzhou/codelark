@@ -19,6 +19,11 @@ import {
   readCursorSessionMessagesByFilePath,
   readCursorSessionMirrorRecordStreamByFilePath,
 } from '../../runtime/cursor/session-index.js';
+import {
+  findZcodeSessionById,
+  readZcodeSessionMessages,
+  readZcodeSessionMirrorRecords,
+} from '../../runtime/zcode/session-index.js';
 import { getCodexSessionByThreadIdSafe } from './support.js';
 import type { ChannelChat } from '../../domain/channel.js';
 import type { BridgeSession } from '../../domain/session.js';
@@ -31,12 +36,14 @@ import {
   getSessionCursorSessionId,
   getSessionKimiCwd,
   getSessionKimiSessionId,
+  getSessionZcodeCwd,
+  getSessionZcodeSessionId,
   getSessionWorkingDirectory,
 } from '../../domain/session-runtime.js';
 import { getCodexThreadId } from '../turn/turn-classifier.js';
 
 export interface SessionTranscriptFile {
-  runtime: 'codex' | 'claude' | 'kimi' | 'cursor';
+  runtime: 'codex' | 'claude' | 'kimi' | 'cursor' | 'zcode';
   filePath: string;
   fileName: string;
   threadId: string;
@@ -59,7 +66,7 @@ export interface SessionTranscriptHistoryEntry {
 }
 
 export interface SessionTranscriptSource {
-  readonly runtime: 'codex' | 'claude' | 'kimi' | 'cursor';
+  readonly runtime: 'codex' | 'claude' | 'kimi' | 'cursor' | 'zcode';
   resolve(session: BridgeSession | null, binding: ChannelChat): SessionTranscriptFile | null;
   readMessages(transcript: SessionTranscriptFile, limit: number): SessionTranscriptMessage[];
   readHistory(transcript: SessionTranscriptFile): SessionTranscriptHistoryEntry[];
@@ -240,11 +247,54 @@ export class CursorSessionTranscriptSource implements SessionTranscriptSource {
   }
 }
 
+export class ZcodeSessionTranscriptSource implements SessionTranscriptSource {
+  readonly runtime = 'zcode' as const;
+
+  resolve(session: BridgeSession | null): SessionTranscriptFile | null {
+    const sessionId = getSessionZcodeSessionId(session);
+    const cwd = getSessionZcodeCwd(session) || getSessionWorkingDirectory(session);
+    if (!sessionId) return null;
+    const zcodeSession = findZcodeSessionById(sessionId, cwd || undefined, { includeArchived: true });
+    if (!zcodeSession || !isReadableFile(zcodeSession.dbPath)) return null;
+    return {
+      runtime: this.runtime,
+      filePath: zcodeSession.dbPath,
+      fileName: path.basename(zcodeSession.dbPath),
+      threadId: zcodeSession.sessionId,
+      title: session?.name || zcodeSession.title || zcodeSession.sessionId,
+      sourceLabel: 'ZCode session SQLite',
+    };
+  }
+
+  readMessages(transcript: SessionTranscriptFile, limit: number): SessionTranscriptMessage[] {
+    return readZcodeSessionMessages(transcript.filePath, transcript.threadId, limit);
+  }
+
+  readHistory(transcript: SessionTranscriptFile): SessionTranscriptHistoryEntry[] {
+    return readZcodeSessionMirrorRecords(transcript.filePath, transcript.threadId)
+      .filter((record) => record.type === 'message' && Boolean(record.content))
+      .map((record) => ({
+        role: record.role || 'assistant',
+        kind: 'message',
+        content: record.content,
+        timestamp: record.timestamp,
+        rawJsonl: JSON.stringify({
+          runtime: this.runtime,
+          type: record.type,
+          role: record.role || 'assistant',
+          content: record.content,
+          timestamp: record.timestamp,
+        }),
+      }));
+  }
+}
+
 export const defaultSessionTranscriptSources: readonly SessionTranscriptSource[] = [
   new CodexSessionTranscriptSource(),
   new ClaudeSessionTranscriptSource(),
   new KimiSessionTranscriptSource(),
   new CursorSessionTranscriptSource(),
+  new ZcodeSessionTranscriptSource(),
 ];
 
 export function resolveSessionTranscriptFile(

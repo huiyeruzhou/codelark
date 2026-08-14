@@ -10,7 +10,7 @@ export type RuntimeReasoningEffort = z.infer<typeof reasoningEffortSchema>;
 export type ClaudeReasoningEffort = z.infer<typeof claudeReasoningEffortSchema>;
 export type CodexSandboxMode = RuntimeSandboxMode;
 export type CodexReasoningEffort = RuntimeReasoningEffort;
-export type RuntimeProvider = 'codex' | 'claude' | 'kimi' | 'cursor';
+export type RuntimeProvider = 'codex' | 'claude' | 'kimi' | 'cursor' | 'zcode';
 export type CodexProviderChoice = 'sdk' | 'tmux' | 'pty';
 export type ClaudeProviderChoice = 'pty' | 'sdk' | 'tmux';
 export type ClaudeExecutable = 'claude' | 'ccr';
@@ -51,7 +51,7 @@ export function normalizeReasoningEffort(
 export function normalizeRuntimeProvider(value: unknown): RuntimeProvider {
   if (typeof value !== 'string') return 'codex';
   const normalized = value.trim().toLowerCase();
-  if (normalized === 'claude' || normalized === 'kimi') return normalized;
+  if (normalized === 'claude' || normalized === 'kimi' || normalized === 'cursor' || normalized === 'zcode') return normalized;
   return 'codex';
 }
 

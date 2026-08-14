@@ -88,6 +88,11 @@ function baseConfigV2(overrides: Partial<ConfigV2> = {}): ConfigV2 {
         provider: 'tmux',
         force: false,
       },
+      zcode: {
+        model: '',
+        provider: 'tmux',
+        mode: 'build',
+      },
     },
     bridge: {
       defaultWorkspace: '~',

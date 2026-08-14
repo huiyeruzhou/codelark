@@ -17,6 +17,8 @@ import {
   getSessionKimiSessionId,
   getSessionCursorCwd,
   getSessionCursorSessionId,
+  getSessionZcodeCwd,
+  getSessionZcodeSessionId,
   getSessionWorkingDirectory,
   mergeSessionRuntimeUpdates,
   setSessionActiveRuntimeUpdate,
@@ -42,6 +44,7 @@ import {
   archiveCommandCodexThread,
   archiveCommandKimiThread,
   archiveCommandCursorThread,
+  archiveCommandZcodeThread,
   getCommandLocalRuntimeThreadByIdSafe,
   getCommandCodexThreadByIdSafe,
   listCommandLocalRuntimeSessions,
@@ -203,6 +206,15 @@ export function createCommandSessionRegistry(store: BridgeStore): SessionRegistr
       },
       archiveThread: (cursorSessionId, cwd) => Boolean(archiveCommandCursorThread(cursorSessionId, cwd)),
     },
+    zcodeThreads: {
+      getThread: (zcodeSessionId, cwd) => {
+        const thread = getCommandLocalRuntimeThreadByIdSafe(zcodeSessionId, cwd, 'zcode registry lookup').thread;
+        return thread?.runtime === 'zcode'
+          ? { zcodeSessionId: thread.threadId, title: thread.title, cwd: thread.cwd }
+          : null;
+      },
+      archiveThread: (zcodeSessionId, cwd) => Boolean(archiveCommandZcodeThread(zcodeSessionId, cwd)),
+    },
     readDefaultModel: () => readConfiguredCodexModel(),
     defaultWorkingDirectory: () => DEFAULT_WORKSPACE_ROOT,
   });
@@ -275,6 +287,27 @@ export function findBridgeSessionByCursorIdentity(
   return findBridgeSessionByCursorThread(store, { threadId: sessionId, cwd });
 }
 
+function findBridgeSessionByZcodeThread(
+  store: BridgeStore,
+  thread: Pick<LocalRuntimeSessionSummary, 'threadId' | 'cwd'>,
+): BridgeSession | null {
+  return store.listSessions().find((session) => (
+    session.hidden !== true
+    && session.session_type !== 'draft'
+    && session.runtime?.activeRuntime === 'zcode'
+    && session.runtime?.zcode?.sessionId === thread.threadId
+    && session.runtime?.zcode?.cwd === thread.cwd
+  )) || null;
+}
+
+export function findBridgeSessionByZcodeIdentity(
+  store: BridgeStore,
+  sessionId: string,
+  cwd: string,
+): BridgeSession | null {
+  return findBridgeSessionByZcodeThread(store, { threadId: sessionId, cwd });
+}
+
 function materializeClaudeThread(store: BridgeStore, thread: LocalRuntimeSessionSummary): BridgeSession {
   const existing = findBridgeSessionByClaudeThread(store, thread);
   if (existing) return existing;
@@ -329,8 +362,28 @@ function materializeCursorThread(store: BridgeStore, thread: LocalRuntimeSession
   return store.getSession(session.id) || session;
 }
 
+function materializeZcodeThread(store: BridgeStore, thread: LocalRuntimeSessionSummary): BridgeSession {
+  const existing = findBridgeSessionByZcodeThread(store, thread);
+  if (existing) return existing;
+  const session = store.createSession(
+    thread.title || thread.threadId.slice(0, 8),
+    'default',
+    undefined,
+    thread.cwd || DEFAULT_WORKSPACE_ROOT,
+    'normal',
+  );
+  store.updateSession(session.id, mergeSessionRuntimeUpdates(
+    {},
+    setSessionActiveRuntimeUpdate('zcode'),
+    { runtime: { zcode: { sessionId: thread.threadId, cwd: thread.cwd, provider: 'tmux' } } },
+  ));
+  return store.getSession(session.id) || session;
+}
+
 export function localRuntimeOf(thread: LocalRuntimeSessionSummary | undefined): RuntimeAgent {
-  return thread?.runtime === 'claude' || thread?.runtime === 'kimi' || thread?.runtime === 'cursor' ? thread.runtime : 'codex';
+  return thread?.runtime === 'claude' || thread?.runtime === 'kimi' || thread?.runtime === 'cursor' || thread?.runtime === 'zcode'
+    ? thread.runtime
+    : 'codex';
 }
 
 export function bindToLocalRuntimeThread(
@@ -339,6 +392,12 @@ export function bindToLocalRuntimeThread(
   thread: LocalRuntimeSessionSummary,
   opts?: { codexTitle?: string },
 ): ChannelChat {
+  if (localRuntimeOf(thread) === 'zcode') {
+    const session = materializeZcodeThread(store, thread);
+    const binding = router.attachToSession(address, session.id);
+    if (!binding) throw new Error('指定的 ZCode 会话无法绑定。');
+    return binding;
+  }
   if (localRuntimeOf(thread) === 'cursor') {
     const session = materializeCursorThread(store, thread);
     const binding = router.attachToSession(address, session.id);
@@ -409,6 +468,19 @@ export function resolveCurrentCodexThreadTarget(
 
   const session = store.getSession(binding.bridgeSessionId);
   const activeRuntime = getSessionActiveRuntime(session) || 'codex';
+  if (activeRuntime === 'zcode') {
+    const sessionId = getSessionZcodeSessionId(session);
+    const cwd = getSessionZcodeCwd(session) || getSessionWorkingDirectory(session);
+    if (!sessionId) return { binding, bridgeSessionId: binding.bridgeSessionId };
+    return {
+      threadId: sessionId,
+      title: session ? getBridgeSessionDisplayTitle(session) : threadDisplay.binding(binding).title,
+      cwd,
+      binding,
+      bridgeSessionId: binding.bridgeSessionId,
+      runtime: 'zcode',
+    };
+  }
   if (activeRuntime === 'cursor') {
     const sessionId = getSessionCursorSessionId(session);
     const cwd = getSessionCursorCwd(session) || getSessionWorkingDirectory(session);

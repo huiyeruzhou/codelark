@@ -28,9 +28,9 @@ export function getGlobalWorkspaceRoot(): string {
   ) || DEFAULT_WORKSPACE_ROOT) || DEFAULT_WORKSPACE_ROOT;
 }
 
-export function getGlobalRuntimeAgent(): 'codex' | 'claude' | 'kimi' | 'cursor' {
+export function getGlobalRuntimeAgent(): 'codex' | 'claude' | 'kimi' | 'cursor' | 'zcode' {
   const agent = getGlobalStringConfig('runtime.agent');
-  return agent === 'claude' || agent === 'kimi' || agent === 'cursor' ? agent : 'codex';
+  return agent === 'claude' || agent === 'kimi' || agent === 'cursor' || agent === 'zcode' ? agent : 'codex';
 }
 
 export function getGlobalCodexModel(): string | undefined {

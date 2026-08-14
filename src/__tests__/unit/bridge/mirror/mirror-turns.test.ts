@@ -53,6 +53,28 @@ describe('mirror-turns pending delivery queue', () => {
     assert.equal(turns[0]?.startedAt, '2026-04-21T10:00:00.000Z');
   });
 
+  it('finalizes an error-bearing task_aborted as error rather than interruption', () => {
+    const subscription = {
+      sessionId: 'session-zcode-error',
+      threadId: 'sess_zcode_error',
+      pendingTurn: null,
+    } as any;
+
+    const turns = consumeMirrorRecords(subscription, [{
+      signature: 'zcode-error',
+      type: 'task_aborted',
+      role: 'assistant',
+      content: 'Model provider is missing an API key: zai',
+      timestamp: '2026-08-14T14:00:00.000Z',
+      turnId: 'turn-zcode-error',
+      isError: true,
+    }]);
+
+    assert.equal(turns.length, 1);
+    assert.equal(turns[0]?.status, 'error');
+    assert.equal(turns[0]?.errorText, 'Model provider is missing an API key: zai');
+  });
+
   it('deduplicates queued turns by signature and removes only delivered turns', () => {
     const completed = {
       streamKey: 'mirror:session-1:turn-1',

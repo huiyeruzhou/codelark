@@ -22,7 +22,7 @@ nvm use 24
 | 纯逻辑单测 | `npm test -- --unit` | 只运行 `src/__tests__/unit/`。 |
 | 本地 workflow | `npm test -- --workflow` | 只运行 `src/__tests__/workflow/`。 |
 | 本地 mock app E2E | `npm test -- --mock-e2e` | 只运行 `src/__tests__/e2e/mock-app/`。 |
-| 本地真实进程 E2E | `npm test -- --local-e2e` | 只运行 `src/__tests__/e2e/local-process/`。Codex/Claude 覆盖真实 CLI 或 tmux 进程；Kimi 用真实 executable + 真 tmux + 本地 fake model proxy。Cursor 的 `real-cursor-agent-bridge.e2e.test.ts` 必须显式设置 `CODELARK_REAL_CURSOR_E2E=1`，否则即使文件被选中也会 skip；它使用已登录官方 backend，并隔离 config/data/workspace 验证超过 30 秒的冷启动、可见进度、冷接管和 resume。默认使用 `gpt-5.3-codex`，可用 `CODELARK_REAL_CURSOR_E2E_MODEL` 覆盖。 |
+| 本地真实进程 E2E | `npm test -- --local-e2e` | 只运行 `src/__tests__/e2e/local-process/`。Codex/Claude 覆盖真实 CLI 或 tmux 进程；Kimi 用真实 executable + 真 tmux + 本地 fake model proxy。Cursor 的 `real-cursor-agent-bridge.e2e.test.ts` 必须显式设置 `CODELARK_REAL_CURSOR_E2E=1`；ZCode 的真实模型回合同样是凭据发布门禁，需隔离 storage/SQLite/log/workspace 并验证 tmux、稳定 `sess_*`、SQLite direct stream、后台 mirror suppression 与 resume。 |
 | CI 真实 runtime 生命周期 gate | `node scripts/run-real-runtime-e2e.js` | 使用 CI 导出的固定版本 Codex/Claude/Kimi executable，串行运行真实 TUI + 隔离 tmux + 本地 fake model proxy。Kimi 设置 `KIMI_CODE_NO_AUTO_UPDATE=1`，避免固定 executable 在 kill/resume 期间被后台 npm 全局升级替换；同时使用官方 `KIMI_CODE_LEGACY_FLAG=1` 保持 eager session identity，与 CodeLark 的持久化 resume 合同一致。每个 shard 必须 `tests > 0`、零 skip/零 fail 且 `pass = tests`；仅进程 exit 0 不算通过。CI 把 log dir 固定到 GitHub Actions runner 临时目录下，失败时保留 shard log 和 Kimi fixture 并上传 artifact，成功路径继续清理。 |
 | Codex 旧版本真实升级门禁 | `CODELARK_REAL_CODEX_UPDATE_E2E=1 npm test -- --local-e2e` | 在临时 npm prefix 安装真实 `@openai/codex@0.145.0`，让真实 TUI 检测 npm 最新版并选择 Update now；验证安装期可超过普通 readiness、更新退出后只重启一次并进入 ready，最后确认临时 prefix 已是 registry 最新版。不会改动用户全局 Codex。 |
 | Harness 自测 | `npm test -- --harness` | 只运行 `src/__tests__/harness/`，包括真实飞书 harness 自测和测试环境隔离 guard。 |
@@ -57,7 +57,7 @@ CODELARK_SETUP_WIZARD_REAL_E2E=1 npm run real:setup-wizard:e2e -- \
   --runtime kimi
 ```
 
-`--runtime` 支持 `codex`、`ccr`、`claude`、`kimi` 和 `cursor`，默认是 `codex`；Kimi/Cursor 路径分别验证 `runtime.agent` 与固定 `tmux` provider 写入。`--test-env-file` 只读取 `CODELARK_REAL_FEISHU_TEST_APP_ID` / `CODELARK_REAL_FEISHU_TEST_APP_SECRET` / `CODELARK_REAL_FEISHU_TEST_SITE`；旧 `CTI_REAL_FEISHU_*` 写法不是有效输入。不要把真实 App Secret 放在 npm 参数里，npm 会回显完整命令。
+`--runtime` 支持 `codex`、`ccr`、`claude`、`kimi`、`cursor` 和 `zcode`，默认是 `codex`；Kimi/Cursor/ZCode 路径分别验证 `runtime.agent` 与固定 `tmux` provider 写入。`--test-env-file` 只读取 `CODELARK_REAL_FEISHU_TEST_APP_ID` / `CODELARK_REAL_FEISHU_TEST_APP_SECRET` / `CODELARK_REAL_FEISHU_TEST_SITE`；旧 `CTI_REAL_FEISHU_*` 写法不是有效输入。不要把真实 App Secret 放在 npm 参数里，npm 会回显完整命令。
 
 默认会删除 `/tmp/clk-setup-wizard-real-e2e-*` 临时目录。需要排查时才加 `--keep-temp`，脚本输出 JSON 里的 `runRoot` 是保留现场路径。
 
@@ -95,7 +95,7 @@ tmux workflow 的 fake transport 必须通过 `TmuxCore` 的可执行命令注�
 | 纯逻辑测试 | 解析、格式化、状态 reducer、schema、配置转换是否正确。 | 位于 `src/__tests__/unit/<owner>/`，不启动真实 provider，不依赖网络，不触碰真实 home。 | 改命令解析、渲染、存储结构、schema、配置、权限状态时。 |
 | 本地 workflow 测试 | 一条 IM 命令或 runtime turn 经过 bridge 内部编排后，是否生成正确状态和交付动作。 | 位于 `src/__tests__/workflow/<slice>/`，使用 fake adapter/provider/store；可能覆盖多个内部组件。 | 改命令体系、会话绑定、delivery、mirror、turn runner、UI application 时。 |
 | 本地 mock app E2E | daemon 级入口、fake channel/provider、状态持久化和交付动作是否闭环。 | 位于 `src/__tests__/e2e/mock-app/`，仍不证明真实 provider 可执行文件或真实飞书客户端契约。 | 改 bridge host 集成、命令入口、card payload 或应用级编排时。 |
-| 本地真实进程 E2E | Codex/Claude 的真实 tmux/CLI，Kimi Code 真实 executable + fake model proxy，以及 opt-in Cursor 已登录官方 backend，在隔离 runtime 数据目录中是否能启动、产生事件、冷接管、恢复或完成清理。 | 位于 `src/__tests__/e2e/local-process/`；仍不等于真实飞书。Cursor 测试读取宿主安全凭据但不把测试 chat 写入真实 `~/.cursor`。当前 GitHub Actions 只持续运行 Codex/Claude/Kimi 三个真实 executable shard，Cursor 仍是本机显式发布门禁；在有无凭据的 Cursor fake Connect/protobuf backend 之前，不得把它描述为 CI gate。 | 改 provider 启动、tmux、JSONL/wire/transcript 发现、CLI bootstrap、真实进程清理时。 |
+| 本地真实进程 E2E | Codex/Claude 的真实 tmux/CLI，Kimi Code 真实 executable + fake model proxy，以及 opt-in Cursor/ZCode 已登录 backend，在隔离 runtime 数据目录中是否能启动、产生事件、冷接管、恢复或完成清理。 | 位于 `src/__tests__/e2e/local-process/`；仍不等于真实飞书。凭据测试不得写入宿主真实 runtime history。当前 GitHub Actions 只持续运行 Codex/Claude/Kimi 三个真实 executable shard，Cursor 与 ZCode 仍是本机显式发布门禁，不得把它们描述为 CI gate。 | 改 provider 启动、tmux、JSONL/wire/transcript/SQLite 发现、CLI bootstrap、真实进程清理时。 |
 
 真实飞书 E2E 是第四层，专门验证外部平台契约：飞书事件投递、bot 入群、`reply_to`、真实卡片/文件/表单消息、provider 输出路径和测试群清理。它不替代本地测试。
 

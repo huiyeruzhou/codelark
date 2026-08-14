@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
 
 import {
   basicDialogueStreamCardCheckpointIssues,
@@ -442,6 +443,78 @@ describe('unit::real-e2e-dump::live-log-scoping', () => {
       fs.rmSync(codelarkHome, { recursive: true, force: true });
       fs.rmSync(cursorConfigDir, { recursive: true, force: true });
       fs.rmSync(cursorDataDir, { recursive: true, force: true });
+    }
+  });
+
+  it('reports ZCode identity and SQLite transcript from the explicitly isolated database', () => {
+    const codelarkHome = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-real-e2e-dump-'));
+    const zcodeRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-real-e2e-zcode-'));
+    try {
+      const dataDir = path.join(codelarkHome, 'data');
+      fs.mkdirSync(path.join(dataDir, 'messages'), { recursive: true });
+      const chatId = 'oc_zcode_chat';
+      const bridgeSessionId = 'session-zcode-dump';
+      const zcodeSessionId = 'sess_zcode_dump';
+      const cwd = path.join(zcodeRoot, 'workspace');
+      const dbPath = path.join(zcodeRoot, 'db.sqlite');
+      fs.mkdirSync(cwd, { recursive: true });
+      const db = new DatabaseSync(dbPath);
+      db.exec(`
+        CREATE TABLE session (
+          id text primary key,
+          directory text not null,
+          path text,
+          title text not null,
+          time_created integer not null,
+          time_updated integer not null,
+          time_archived integer
+        );
+      `);
+      db.prepare(`
+        INSERT INTO session (id, directory, path, title, time_created, time_updated, time_archived)
+        VALUES (?, ?, ?, ?, ?, ?, NULL)
+      `).run(zcodeSessionId, cwd, cwd, 'ZCode dump', 1000, 2000);
+      db.close();
+      fs.writeFileSync(path.join(dataDir, 'channel-chats.json'), JSON.stringify({
+        binding: {
+          id: 'binding-zcode',
+          channelType: 'feishu-default',
+          chatId,
+          bridgeSessionId,
+          runtimeBridgeSessionIds: { zcode: bridgeSessionId },
+        },
+      }));
+      fs.writeFileSync(path.join(dataDir, 'sessions.json'), JSON.stringify({
+        [bridgeSessionId]: {
+          id: bridgeSessionId,
+          name: 'zcode session',
+          runtime: {
+            activeRuntime: 'zcode',
+            zcode: { sessionId: zcodeSessionId, cwd, provider: 'tmux' },
+          },
+        },
+      }));
+
+      const report = collectRealE2eDump({
+        codelarkHome,
+        zcodeSessionDbPath: dbPath,
+        channelType: 'feishu-default',
+        chatId,
+        bridgeSessionId,
+      });
+
+      assert.equal(report.runtime, 'zcode');
+      assert.equal(report.runtimeThreadId, zcodeSessionId);
+      assert.equal(report.zcodeSessionId, zcodeSessionId);
+      assert.equal(report.zcodeSessionDbPath, dbPath);
+      assert.equal(report.runtimeSlots[0]?.zcodeSessionId, zcodeSessionId);
+      assert.equal(report.runtimeSlots[0]?.zcodeCwd, cwd);
+      assert.equal(report.runtimeSlots[0]?.zcodeSessionDbPath, dbPath);
+      assert.equal(report.checks.find((check) => check.name === 'runtime_identity_bound')?.ok, true);
+      assert.equal(report.checks.find((check) => check.name === 'zcode_sqlite_found')?.ok, true);
+    } finally {
+      fs.rmSync(codelarkHome, { recursive: true, force: true });
+      fs.rmSync(zcodeRoot, { recursive: true, force: true });
     }
   });
 

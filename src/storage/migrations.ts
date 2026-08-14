@@ -56,7 +56,7 @@ const RETIRED_SESSION_FIELDS = [
   'threadId',
 ];
 
-const RUNTIME_KEYS = ['codex', 'claude', 'kimi', 'cursor'] as const;
+const RUNTIME_KEYS = ['codex', 'claude', 'kimi', 'cursor', 'zcode'] as const;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);

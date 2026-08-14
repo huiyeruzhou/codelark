@@ -56,7 +56,7 @@ export interface BridgeApiProvider {
 export interface StreamChatParams {
   prompt: string;
   sessionId: string;
-  runtime?: 'codex' | 'claude' | 'kimi' | 'cursor';
+  runtime?: 'codex' | 'claude' | 'kimi' | 'cursor' | 'zcode';
   codexThreadId?: string;
   claudeSessionId?: string;
   kimiSessionId?: string;
@@ -64,6 +64,8 @@ export interface StreamChatParams {
   cursorSessionId?: string;
   cursorForce?: boolean;
   cursorReasoningEffort?: string;
+  zcodeSessionId?: string;
+  zcodeMode?: 'build' | 'edit' | 'plan' | 'yolo';
   claudeExecutable?: ClaudeExecutable;
   claudeProvider?: ClaudeProviderChoice;
   model?: string;
@@ -137,7 +139,13 @@ export interface MirrorJsonlSourceSummary {
 }
 
 export interface MirrorJsonlSource {
-  readonly runtime: 'codex' | 'claude' | 'kimi' | 'cursor';
+  readonly runtime: 'codex' | 'claude' | 'kimi' | 'cursor' | 'zcode';
+  /** Append-only logs can be read by byte offset; mutable stores must be reconciled as snapshots. */
+  readonly readMode?: 'append' | 'snapshot';
+  /** Mutable stores may keep live writes beside the canonical file (for example SQLite WAL). */
+  statSnapshot?(filePath: string): { size: number; mtimeMs: number; identity: string } | null;
+  /** A stable directory watch can observe sidecar creation/removal without changing the read path. */
+  watchPath?(filePath: string): string;
   findByThreadId(threadId: string, cwd?: string): MirrorJsonlSourceSummary | null;
   readDelta(
     filePath: string,
@@ -146,6 +154,7 @@ export interface MirrorJsonlSource {
     trailingText: string,
     currentTurnId: string | null,
     currentSpecialCallIds: Iterable<string>,
+    threadId?: string,
   ): BridgeMirrorRecordDelta;
   readSupplementalDelta?(
     filePath: string,

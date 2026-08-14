@@ -413,14 +413,26 @@ export function consumeMirrorRecords<TSubscription extends MirrorTurnStateHolder
         record.isError ? 'error' : 'completed',
         record.content || record.errorText,
       );
-      if (completed && record.errorText) completed.errorText = record.errorText;
+      if (completed && record.isError) {
+        completed.errorText = record.errorText || record.content || undefined;
+      }
       if (completed) finalized.push(completed);
       continue;
     }
 
     if (record.type === 'task_aborted') {
       ensureMirrorTurnState(subscription, record);
-      const interrupted = finalizeMirrorTurn(subscription, record.signature, record.timestamp, 'interrupted');
+      const isError = record.isError === true;
+      const interrupted = finalizeMirrorTurn(
+        subscription,
+        record.signature,
+        record.timestamp,
+        isError ? 'error' : 'interrupted',
+        isError ? record.errorText || record.content : undefined,
+      );
+      if (interrupted && isError) {
+        interrupted.errorText = record.errorText || record.content || undefined;
+      }
       if (interrupted) finalized.push(interrupted);
       continue;
     }

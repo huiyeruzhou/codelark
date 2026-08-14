@@ -18,6 +18,7 @@ const RUNTIME_PROVIDER_MATRIX_SUFFIXES = [
   'claude-tmux',
   'kimi-tmux',
   'cursor-tmux',
+  'zcode-tmux',
 ];
 
 describe('unit::real-feishu-e2e-harness::reply-evidence', () => {
@@ -859,7 +860,7 @@ describe('unit::real-feishu-e2e-harness::auth-preflight', () => {
 });
 
 describe('unit::real-feishu-e2e-harness::scenario-coverage-metadata', () => {
-  it('keeps Kimi and Cursor coverage inside the real Feishu runtime/provider matrix', () => {
+  it('keeps Kimi, Cursor, and ZCode coverage inside the real Feishu runtime/provider matrix', () => {
     const output = runHarness(['--list-scenarios']);
     const parsed = JSON.parse(output) as {
       scenarios: Array<{
@@ -886,6 +887,11 @@ describe('unit::real-feishu-e2e-harness::scenario-coverage-metadata', () => {
         1,
         `${scenario.scenario} should include Cursor exactly once through the shared matrix`,
       );
+      assert.equal(
+        scenario.providerMatrix.filter((name) => name.endsWith('::zcode-tmux')).length,
+        1,
+        `${scenario.scenario} should include ZCode exactly once through the shared matrix`,
+      );
     }
 
     const basicDialogue = parsed.scenarios.find((item) => item.scenario === 'basic-dialogue-suite');
@@ -899,7 +905,7 @@ describe('unit::real-feishu-e2e-harness::scenario-coverage-metadata', () => {
     ]);
 
     const helpText = runHarness(['--help']);
-    assert.match(helpText, /--runtime <claude\|codex\|kimi\|cursor>/);
+    assert.match(helpText, /--runtime <claude\|codex\|kimi\|cursor\|zcode>/);
     assert.doesNotMatch(helpText, /--kimi[\w-]*/);
   });
 
@@ -1351,28 +1357,28 @@ describe('unit::real-feishu-e2e-harness::scenario-coverage-metadata', () => {
       executedPercent: 28.6,
     });
     assert.deepEqual(parsed.coverageRates.cardFrontend, {
-      total: 26,
+      total: 30,
       canonicalPass: 1,
       legacyPass: 0,
       diagnosticPass: 0,
       diagnosticFailure: 0,
       dryRun: 1,
-      plannedOnly: 24,
+      plannedOnly: 28,
       executed: 2,
-      canonicalPercent: 3.8,
-      executedPercent: 7.7,
+      canonicalPercent: 3.3,
+      executedPercent: 6.7,
     });
     assert.deepEqual(parsed.coverageRates.cardFrontendTmux, {
-      total: 17,
+      total: 21,
       canonicalPass: 1,
       legacyPass: 0,
       diagnosticPass: 0,
       diagnosticFailure: 0,
       dryRun: 0,
-      plannedOnly: 16,
+      plannedOnly: 20,
       executed: 1,
-      canonicalPercent: 5.9,
-      executedPercent: 5.9,
+      canonicalPercent: 4.8,
+      executedPercent: 4.8,
     });
     const commandStateKimi = parsed.entries.find((entry) => entry.testName === 'real-feishu::command-state::kimi-tmux');
     assert.equal(commandStateKimi?.includesKimi, true);
@@ -1632,6 +1638,71 @@ describe('unit::real-feishu-e2e-harness::session-management-command-plan', () =>
     assert.equal(parsed.plannedSuccessCheckNames.includes('mirror_final_not_duplicated_in_direct_reply'), false);
   });
 
+  it('dry-runs ZCode tmux through the shared runtime-message matrix as a direct SQLite stream provider', () => {
+    const output = runHarness([
+      '--dry-run',
+      '--scenario',
+      'runtime-message',
+      '--runtime',
+      'zcode',
+      '--provider',
+      'tmux',
+      '--run-id',
+      'unit-runtime-message-zcode-tmux',
+      '--chat-id',
+      'oc_unit',
+      '--message',
+      'CODELARK_UNIT_RUNTIME_MESSAGE_ZCODE_TMUX',
+    ]);
+    const parsed = JSON.parse(output) as {
+      coverage: { testName: string; dualProviderCompanion: string | null };
+      commands: string[];
+      commandReplyExpectations: Array<{ command: string; expectedTexts: string[]; replyTimeoutMs: number; reason: string }>;
+      waitsForMirrorFinalBeforeFollowup: boolean;
+      finalMessageObservationMode: string;
+      plannedSuccessCheckNames: string[];
+      runtimeEnvironment: { zcodeStorageDir: string; zcodeSessionDbPath: string };
+    };
+
+    assert.equal(parsed.coverage.testName, 'real-feishu::runtime-message::zcode-tmux');
+    assert.equal(parsed.coverage.dualProviderCompanion, 'real-feishu::runtime-message::codex-tmux');
+    assert.deepEqual(parsed.commands, ['/runtime zcode', '/p tmux']);
+    assert.equal(parsed.waitsForMirrorFinalBeforeFollowup, true);
+    assert.equal(parsed.finalMessageObservationMode, 'reply_to');
+    assert.deepEqual(expectationAt(parsed.commandReplyExpectations, '/runtime zcode').expectedTexts, ['Runtime', 'zcode']);
+    assert.deepEqual(expectationAt(parsed.commandReplyExpectations, '/p tmux').expectedTexts, ['ZCode Provider', 'tmux']);
+    assert.equal(expectationAt(parsed.commandReplyExpectations, '/p tmux').replyTimeoutMs, 120_000);
+    assert.ok(parsed.runtimeEnvironment.zcodeStorageDir.includes('zcode-storage'));
+    assert.ok(parsed.runtimeEnvironment.zcodeSessionDbPath.endsWith('sessions.sqlite'));
+    assert.ok(parsed.plannedSuccessCheckNames.includes('provider_output_path'));
+    assert.equal(parsed.plannedSuccessCheckNames.includes('mirror_final_not_duplicated_in_direct_reply'), false);
+  });
+
+  it('dry-runs a native ZCode slash command through the TUI without a CodeLark command adapter', () => {
+    const output = runHarness([
+      '--dry-run',
+      '--scenario',
+      'command-state',
+      '--runtime',
+      'zcode',
+      '--provider',
+      'tmux',
+      '--run-id',
+      'unit-zcode-native-slash',
+      '--chat-id',
+      'oc_unit',
+    ]);
+    const parsed = JSON.parse(output) as {
+      commands: string[];
+      commandReplyExpectations: Array<{ command: string; expectedTexts: string[] }>;
+    };
+
+    assert.ok(parsed.commands.includes('//goal'));
+    assert.deepEqual(expectationAt(parsed.commandReplyExpectations, '//goal').expectedTexts, [
+      'No goal is set',
+    ]);
+  });
+
   it('plans a deterministic Kimi wire producer without bypassing the real bridge or Feishu card path', () => {
     const runRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-real-feishu-scripted-kimi-'));
     const output = runHarness([
@@ -1779,12 +1850,16 @@ describe('unit::real-feishu-e2e-harness::session-management-command-plan', () =>
       cursor: {
         runtime: { general: { tmuxSessionName: 'clk-cursor-session-cursor-cleanup' } },
       },
+      zcode: {
+        runtime: { general: { tmuxSessionName: 'clk-zcode-session-zcode-cleanup' } },
+      },
     }, null, 2));
     fs.writeFileSync(
       path.join(logsDir, 'bridge.log'),
       [
         'leftover claude_session_from_log',
         'leftover clk-kimi-session-from-log',
+        'leftover clk-zcode-session-from-log',
       ].join('\n'),
     );
 
@@ -1817,6 +1892,8 @@ describe('unit::real-feishu-e2e-harness::session-management-command-plan', () =>
         'clk-cursor-session-cursor-cleanup',
         'clk-kimi-session-from-log',
         'clk-kimi-session-kimi-cleanup',
+        'clk-zcode-session-from-log',
+        'clk-zcode-session-zcode-cleanup',
         'codex_019e824e-10ef-7430-985d-4349ce6a15f9',
       ]);
       for (const sessionName of parsed.removedTmuxSessions) {

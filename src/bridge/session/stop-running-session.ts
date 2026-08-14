@@ -2,6 +2,7 @@ import type { BridgeSession, BridgeStore, ChannelChat } from '../../domain/index
 import { getSessionRuntimeTmuxSessionName } from '../../domain/session-runtime.js';
 import { kimiTmuxSessionName } from '../../runtime/kimi/tmux-provider.js';
 import { cursorTmuxSessionName } from '../../runtime/cursor/tmux-provider.js';
+import { zcodeTmuxSessionName } from '../../runtime/zcode/tmux-provider.js';
 import { sendTmuxInterrupt } from '../tmux/runtime.js';
 import { invalidateRuntimeTmuxInputReadiness } from '../tmux/input-state-machine.js';
 import { sessionLooksRunning } from './command-use-cases/status-guards.js';
@@ -24,7 +25,7 @@ export interface StopRunningSessionResult {
 function tmuxInterruptTarget(
   session: BridgeSession | null | undefined,
   binding: ChannelChat,
-): { sessionName: string; runtime: 'codex' | 'claude' | 'kimi' | 'cursor' } | undefined {
+): { sessionName: string; runtime: 'codex' | 'claude' | 'kimi' | 'cursor' | 'zcode' } | undefined {
   if (!session || !sessionLooksRunning(session)) return undefined;
   const provider = resolveEffectiveRuntimeProvider(session, binding);
   if (provider.provider !== 'tmux') return undefined;
@@ -33,6 +34,8 @@ function tmuxInterruptTarget(
       ? kimiTmuxSessionName(session.id)
       : provider.runtime === 'cursor'
         ? cursorTmuxSessionName(session.id)
+        : provider.runtime === 'zcode'
+          ? zcodeTmuxSessionName(session.id)
         : undefined);
   return sessionName ? { sessionName, runtime: provider.runtime } : undefined;
 }
@@ -42,7 +45,7 @@ function interruptDelay(ms: number): Promise<void> {
 }
 
 async function sendRuntimeInterrupts(
-  target: { sessionName: string; runtime: 'codex' | 'claude' | 'kimi' | 'cursor' },
+  target: { sessionName: string; runtime: 'codex' | 'claude' | 'kimi' | 'cursor' | 'zcode' },
 ): Promise<string[]> {
   const commands = [await sendTmuxInterrupt(target.sessionName)];
   if (target.runtime === 'kimi') {
@@ -72,7 +75,7 @@ export async function stopRunningSession(options: {
     } else {
       task.abortController.abort();
     }
-    const commands = target?.runtime === 'kimi'
+    const commands = target?.runtime === 'kimi' || target?.runtime === 'zcode'
       ? await sendRuntimeInterrupts(target)
       : [];
     options.deps.recordInteractiveHealthEnd?.(options.binding.bridgeSessionId, 'aborted', options.detail);
@@ -80,7 +83,7 @@ export async function stopRunningSession(options: {
       stopped: true,
       method: 'active_task',
       detail: options.detail,
-      ...(target?.runtime === 'kimi' ? {
+      ...(target?.runtime === 'kimi' || target?.runtime === 'zcode' ? {
         tmuxSessionName: target.sessionName,
         command: commands.join('\n'),
       } : {}),

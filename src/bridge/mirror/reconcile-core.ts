@@ -67,6 +67,7 @@ export function readMirrorDeliverableRecords(
   let unknownKinds: string[] = [];
 
   const requiresFullRecover = !subscription.cursor.initialized
+    || source.readMode === 'snapshot'
     || subscription.fileOffset === 0
     || (subscription.fileIdentity !== null && subscription.fileIdentity !== snapshot.identity)
     || (subscription.fileSize !== null && snapshot.size < subscription.fileOffset)
@@ -86,6 +87,7 @@ export function readMirrorDeliverableRecords(
       '',
       null,
       [],
+      subscription.threadId,
     );
     const delta = reconcileBridgeMirrorCursor(subscription.cursor, fullDelta.records);
     subscription.cursor = delta.nextCursor;
@@ -107,6 +109,7 @@ export function readMirrorDeliverableRecords(
       subscription.trailingText,
       subscription.activeMirrorTurnId,
       subscription.activeSpecialCallIds,
+      subscription.threadId,
     );
     deliverableRecords = filterDuplicateAssistantEvents(previousCursor, delta.records);
     subscription.cursor = advanceBridgeMirrorCursor(subscription.cursor, delta.records);

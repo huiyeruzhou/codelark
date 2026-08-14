@@ -6,12 +6,14 @@ import type {
   BridgeSessionGeneralState,
   BridgeSessionKimiRuntimeState,
   BridgeSessionCursorRuntimeState,
+  BridgeSessionZcodeRuntimeState,
   CursorProviderChoice,
   KimiProviderChoice,
   RuntimeAgent,
   BridgeSessionRuntimeState,
   RuntimeProviderChoice,
   RuntimeProviderIdentity,
+  ZcodeProviderChoice,
 } from './session.js';
 import { createConfigService } from '../configuration/service.js';
 import type { ConfigPath } from '../configuration/fields.js';
@@ -42,6 +44,11 @@ type SessionRuntimeLike = {
       cwd?: string | null;
       model?: string | null;
     };
+    zcode?: Omit<Partial<BridgeSessionZcodeRuntimeState>, 'sessionId' | 'cwd' | 'model'> & {
+      sessionId?: string | null;
+      cwd?: string | null;
+      model?: string | null;
+    };
     general?: Partial<BridgeSessionGeneralState>;
   };
 };
@@ -56,6 +63,10 @@ function isKimiRuntime(session: SessionRuntimeLike | null | undefined): boolean 
 
 function isCursorRuntime(session: SessionRuntimeLike | null | undefined): boolean {
   return session?.runtime?.activeRuntime === 'cursor';
+}
+
+function isZcodeRuntime(session: SessionRuntimeLike | null | undefined): boolean {
+  return session?.runtime?.activeRuntime === 'zcode';
 }
 
 function trimOrUndefined(value: string | null | undefined): string | undefined {
@@ -77,29 +88,29 @@ function getSessionTomlOverride<T>(session: SessionRuntimeLike | null | undefine
 }
 
 export function getSessionCodexThreadId(session: SessionRuntimeLike | null | undefined): string | undefined {
-  if (isClaudeRuntime(session) || isKimiRuntime(session) || isCursorRuntime(session)) return undefined;
+  if (isClaudeRuntime(session) || isKimiRuntime(session) || isCursorRuntime(session) || isZcodeRuntime(session)) return undefined;
   return trimOrUndefined(session?.runtime?.codex?.threadId);
 }
 
 export function getSessionActiveRuntime(session: SessionRuntimeLike | null | undefined): BridgeSessionRuntimeState['activeRuntime'] {
   const activeRuntime = session?.runtime?.activeRuntime;
-  return activeRuntime === 'claude' || activeRuntime === 'codex' || activeRuntime === 'kimi' || activeRuntime === 'cursor'
+  return activeRuntime === 'claude' || activeRuntime === 'codex' || activeRuntime === 'kimi' || activeRuntime === 'cursor' || activeRuntime === 'zcode'
     ? activeRuntime
     : undefined;
 }
 
 export function getSessionCodexTitle(session: SessionRuntimeLike | null | undefined): string | undefined {
-  if (isClaudeRuntime(session) || isKimiRuntime(session) || isCursorRuntime(session)) return undefined;
+  if (isClaudeRuntime(session) || isKimiRuntime(session) || isCursorRuntime(session) || isZcodeRuntime(session)) return undefined;
   return trimOrUndefined(session?.runtime?.codex?.title);
 }
 
 export function getSessionCodexModel(session: SessionRuntimeLike | null | undefined): string | undefined {
-  if (isClaudeRuntime(session) || isKimiRuntime(session) || isCursorRuntime(session)) return undefined;
+  if (isClaudeRuntime(session) || isKimiRuntime(session) || isCursorRuntime(session) || isZcodeRuntime(session)) return undefined;
   return trimOrUndefined(getSessionTomlOverride<string>(session, 'runtime.codex.model'));
 }
 
 export function getSessionCodexMode(session: SessionRuntimeLike | null | undefined): BridgeSessionCodexRuntimeState['mode'] | undefined {
-  if (isClaudeRuntime(session) || isKimiRuntime(session) || isCursorRuntime(session)) return undefined;
+  if (isClaudeRuntime(session) || isKimiRuntime(session) || isCursorRuntime(session) || isZcodeRuntime(session)) return undefined;
   const mode = getSessionTomlOverride<'off' | 'on' | 'yolo'>(session, 'runtime.codex.yoloMode');
   if (mode === 'on' || mode === 'yolo') return 'yolo';
   if (mode === 'off') return 'normal';
@@ -107,13 +118,13 @@ export function getSessionCodexMode(session: SessionRuntimeLike | null | undefin
 }
 
 export function getSessionCodexProvider(session: SessionRuntimeLike | null | undefined): BridgeSessionCodexRuntimeState['provider'] | undefined {
-  if (isClaudeRuntime(session) || isKimiRuntime(session) || isCursorRuntime(session)) return undefined;
+  if (isClaudeRuntime(session) || isKimiRuntime(session) || isCursorRuntime(session) || isZcodeRuntime(session)) return undefined;
   const provider = getSessionTomlOverride<string>(session, 'runtime.codex.provider');
   return isRuntimeProviderChoice(provider) ? provider : undefined;
 }
 
 export function getSessionCodexSandboxMode(session: SessionRuntimeLike | null | undefined): BridgeSessionCodexRuntimeState['sandboxMode'] | undefined {
-  if (isClaudeRuntime(session) || isKimiRuntime(session) || isCursorRuntime(session)) return undefined;
+  if (isClaudeRuntime(session) || isKimiRuntime(session) || isCursorRuntime(session) || isZcodeRuntime(session)) return undefined;
   const sandboxMode = getSessionTomlOverride<string>(session, 'runtime.codex.sandboxMode');
   return sandboxMode === 'read-only' || sandboxMode === 'workspace-write' || sandboxMode === 'danger-full-access'
     ? sandboxMode
@@ -121,13 +132,13 @@ export function getSessionCodexSandboxMode(session: SessionRuntimeLike | null | 
 }
 
 export function getSessionCodexNetworkAccess(session: SessionRuntimeLike | null | undefined): boolean | undefined {
-  if (isClaudeRuntime(session) || isKimiRuntime(session) || isCursorRuntime(session)) return undefined;
+  if (isClaudeRuntime(session) || isKimiRuntime(session) || isCursorRuntime(session) || isZcodeRuntime(session)) return undefined;
   const networkAccess = getSessionTomlOverride<boolean>(session, 'runtime.codex.networkAccess');
   return typeof networkAccess === 'boolean' ? networkAccess : undefined;
 }
 
 export function getSessionCodexReasoningEffort(session: SessionRuntimeLike | null | undefined): BridgeSessionCodexRuntimeState['reasoningEffort'] | undefined {
-  if (isClaudeRuntime(session) || isKimiRuntime(session) || isCursorRuntime(session)) return undefined;
+  if (isClaudeRuntime(session) || isKimiRuntime(session) || isCursorRuntime(session) || isZcodeRuntime(session)) return undefined;
   const reasoningEffort = getSessionTomlOverride<string>(session, 'runtime.codex.reasoningEffort');
   return reasoningEffort === 'minimal'
     || reasoningEffort === 'low'
@@ -202,7 +213,34 @@ export function getSessionCursorProvider(session: SessionRuntimeLike | null | un
   return getSessionTomlOverride<string>(session, 'runtime.cursor.provider') === 'tmux' ? 'tmux' : undefined;
 }
 
-export function getSessionRuntimeProvider(session: SessionRuntimeLike | null | undefined): RuntimeProviderChoice | KimiProviderChoice | CursorProviderChoice | undefined {
+export function getSessionZcodeSessionId(session: SessionRuntimeLike | null | undefined): string | undefined {
+  if (!isZcodeRuntime(session)) return undefined;
+  return trimOrUndefined(session?.runtime?.zcode?.sessionId);
+}
+
+export function getSessionZcodeCwd(session: SessionRuntimeLike | null | undefined): string | undefined {
+  if (!isZcodeRuntime(session)) return undefined;
+  return trimOrUndefined(session?.runtime?.zcode?.cwd);
+}
+
+export function getSessionZcodeModel(session: SessionRuntimeLike | null | undefined): string | undefined {
+  if (!isZcodeRuntime(session)) return undefined;
+  return trimOrUndefined(getSessionTomlOverride<string>(session, 'runtime.zcode.model'));
+}
+
+export function getSessionZcodeProvider(session: SessionRuntimeLike | null | undefined): ZcodeProviderChoice | undefined {
+  if (!isZcodeRuntime(session)) return undefined;
+  return getSessionTomlOverride<string>(session, 'runtime.zcode.provider') === 'tmux' ? 'tmux' : undefined;
+}
+
+export function getSessionZcodeMode(session: SessionRuntimeLike | null | undefined): BridgeSessionZcodeRuntimeState['mode'] | undefined {
+  if (!isZcodeRuntime(session)) return undefined;
+  const mode = getSessionTomlOverride<string>(session, 'runtime.zcode.mode');
+  return mode === 'build' || mode === 'edit' || mode === 'plan' || mode === 'yolo' ? mode : undefined;
+}
+
+export function getSessionRuntimeProvider(session: SessionRuntimeLike | null | undefined): RuntimeProviderChoice | KimiProviderChoice | CursorProviderChoice | ZcodeProviderChoice | undefined {
+  if (isZcodeRuntime(session)) return getSessionZcodeProvider(session);
   if (isCursorRuntime(session)) return getSessionCursorProvider(session);
   if (isKimiRuntime(session)) return getSessionKimiProvider(session);
   return isClaudeRuntime(session) ? getSessionClaudeProvider(session) : getSessionCodexProvider(session);
@@ -210,11 +248,14 @@ export function getSessionRuntimeProvider(session: SessionRuntimeLike | null | u
 
 export function getSessionRuntimeProviderIdentity(session: SessionRuntimeLike | null | undefined): RuntimeProviderIdentity | undefined {
   const provider = getSessionRuntimeProvider(session)
-    || (isCursorRuntime(session)
+    || (isZcodeRuntime(session)
+      ? session?.runtime?.zcode?.provider
+      : isCursorRuntime(session)
       ? session?.runtime?.cursor?.provider
       : isKimiRuntime(session)
       ? session?.runtime?.kimi?.provider
       : isClaudeRuntime(session) ? session?.runtime?.claude?.provider : session?.runtime?.codex?.provider);
+  if (isZcodeRuntime(session)) return provider === 'tmux' ? 'zcode:tmux' : undefined;
   if (isCursorRuntime(session)) return provider === 'tmux' ? 'cursor:tmux' : undefined;
   if (isKimiRuntime(session)) return provider === 'tmux' ? 'kimi:tmux' : undefined;
   if (!isRuntimeProviderChoice(provider)) return undefined;
@@ -224,8 +265,9 @@ export function getSessionRuntimeProviderIdentity(session: SessionRuntimeLike | 
 
 export function buildRuntimeProviderIdentity(
   runtime: RuntimeAgent,
-  provider: RuntimeProviderChoice | KimiProviderChoice | CursorProviderChoice,
+  provider: RuntimeProviderChoice | KimiProviderChoice | CursorProviderChoice | ZcodeProviderChoice,
 ): RuntimeProviderIdentity {
+  if (runtime === 'zcode') return 'zcode:tmux';
   if (runtime === 'cursor') return 'cursor:tmux';
   if (runtime === 'kimi') return 'kimi:tmux';
   return `${runtime}:${provider as RuntimeProviderChoice}`;
@@ -282,6 +324,8 @@ export function materializeBridgeSessionRuntime(rawSession: BridgeSession): Brid
       ? 'kimi'
       : rawSession.runtime?.activeRuntime === 'cursor'
         ? 'cursor'
+        : rawSession.runtime?.activeRuntime === 'zcode'
+          ? 'zcode'
         : 'codex';
   const codex = {
     ...rawSession.runtime?.codex,
@@ -291,6 +335,9 @@ export function materializeBridgeSessionRuntime(rawSession: BridgeSession): Brid
   };
   const cursor = {
     ...rawSession.runtime?.cursor,
+  };
+  const zcode = {
+    ...rawSession.runtime?.zcode,
   };
   const general = {
     ...rawSession.runtime?.general,
@@ -315,7 +362,13 @@ export function materializeBridgeSessionRuntime(rawSession: BridgeSession): Brid
               activeRuntime: 'cursor',
               ...(Object.keys(cursor).length > 0 ? { cursor } : {}),
               ...(Object.keys(general).length > 0 ? { general } : {}),
-            } satisfies BridgeSessionRuntimeState
+          } satisfies BridgeSessionRuntimeState
+          : activeRuntime === 'zcode'
+            ? {
+                activeRuntime: 'zcode',
+                ...(Object.keys(zcode).length > 0 ? { zcode } : {}),
+                ...(Object.keys(general).length > 0 ? { general } : {}),
+              } satisfies BridgeSessionRuntimeState
           : {
             ...(rawSession.runtime?.activeRuntime === 'codex' ? { activeRuntime: 'codex' as const } : {}),
             ...(Object.keys(codex).length > 0 ? { codex } : {}),
@@ -360,6 +413,13 @@ export function setSessionCursorIdentityUpdate(
   cwd: string | undefined,
 ): BridgeSessionRuntimeUpdate {
   return { runtime: { activeRuntime: 'cursor', cursor: { sessionId, cwd } } };
+}
+
+export function setSessionZcodeIdentityUpdate(
+  sessionId: string | undefined,
+  cwd: string | undefined,
+): BridgeSessionRuntimeUpdate {
+  return { runtime: { activeRuntime: 'zcode', zcode: { sessionId, cwd } } };
 }
 
 export function setSessionSystemPromptUpdate(systemPrompt: string | undefined): BridgeSessionRuntimeUpdate {
@@ -429,6 +489,9 @@ export function mergeSessionRuntimeUpdates(...updates: BridgeSessionRuntimeUpdat
         cursor: update.runtime.cursor
           ? { ...acc.runtime?.cursor, ...update.runtime.cursor }
           : acc.runtime?.cursor,
+        zcode: update.runtime.zcode
+          ? { ...acc.runtime?.zcode, ...update.runtime.zcode }
+          : acc.runtime?.zcode,
         general: update.runtime.general
           ? { ...acc.runtime?.general, ...update.runtime.general }
           : acc.runtime?.general,

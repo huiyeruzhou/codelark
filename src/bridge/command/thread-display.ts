@@ -10,6 +10,7 @@ import {
   getSessionClaudeSessionId,
   getSessionCursorSessionId,
   getSessionKimiSessionId,
+  getSessionZcodeSessionId,
   getSessionWorkingDirectory,
 } from '../../domain/session-runtime.js';
 import type { RuntimeAgent } from '../../domain/session.js';
@@ -140,6 +141,8 @@ export class CommandThreadDisplay {
           ? getSessionKimiSessionId(session)
           : activeRuntime === 'cursor'
             ? getSessionCursorSessionId(session)
+            : activeRuntime === 'zcode'
+              ? getSessionZcodeSessionId(session)
           : getBridgeSessionCodexThreadId(session);
       if (!threadId) continue;
       statesByThreadId.set(threadId, {
@@ -219,6 +222,8 @@ export class CommandThreadDisplay {
             ? getSessionKimiSessionId(session) || ''
             : activeRuntime === 'cursor'
               ? getSessionCursorSessionId(session) || ''
+              : activeRuntime === 'zcode'
+                ? getSessionZcodeSessionId(session) || ''
             : '';
         return {
           title: display.title,
@@ -229,7 +234,7 @@ export class CommandThreadDisplay {
           bindingId: anyBinding ? anyBinding.id : '',
           active: Boolean(binding),
           originator: runtimeSessionId
-            ? activeRuntime === 'kimi' ? 'Kimi Code' : activeRuntime === 'cursor' ? 'Cursor Agent' : 'Claude Code'
+            ? activeRuntime === 'kimi' ? 'Kimi Code' : activeRuntime === 'cursor' ? 'Cursor Agent' : activeRuntime === 'zcode' ? 'ZCode' : 'Claude Code'
             : binding ? display.originator : 'Bridge',
         };
       })

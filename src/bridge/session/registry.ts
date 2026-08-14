@@ -21,6 +21,8 @@ import {
   getSessionKimiSessionId,
   getSessionCursorCwd,
   getSessionCursorSessionId,
+  getSessionZcodeCwd,
+  getSessionZcodeSessionId,
 } from '../../domain/session-runtime.js';
 
 export {
@@ -76,11 +78,17 @@ export interface CursorThreadRegistryPort {
   archiveThread?(cursorSessionId: string, cwd: string): boolean;
 }
 
+export interface ZcodeThreadRegistryPort {
+  getThread(zcodeSessionId: string, cwd: string): { zcodeSessionId: string; title: string; cwd: string } | null;
+  archiveThread?(zcodeSessionId: string, cwd: string): boolean;
+}
+
 export interface SessionRegistryOptions {
   codexThreads?: CodexThreadRegistryPort;
   claudeThreads?: ClaudeThreadRegistryPort;
   kimiThreads?: KimiThreadRegistryPort;
   cursorThreads?: CursorThreadRegistryPort;
+  zcodeThreads?: ZcodeThreadRegistryPort;
   readDefaultModel?: () => string | null | undefined;
   defaultWorkingDirectory?: () => string;
 }
@@ -112,6 +120,13 @@ export interface ArchiveKimiThreadResult {
 
 export interface ArchiveCursorThreadResult {
   cursorSessionId: string;
+  cwd: string;
+  deletedBridgeSessions: BridgeSession[];
+  deletedBridgeSessionIds: string[];
+}
+
+export interface ArchiveZcodeThreadResult {
+  zcodeSessionId: string;
   cwd: string;
   deletedBridgeSessions: BridgeSession[];
   deletedBridgeSessionIds: string[];
@@ -209,6 +224,15 @@ export class SessionRegistryService {
       && getSessionActiveRuntime(session) === 'cursor'
       && getSessionCursorSessionId(session) === cursorSessionId
       && getSessionCursorCwd(session) === cwd
+    )) || null;
+  }
+
+  findVisibleBridgeSessionByZcodeThread(zcodeSessionId: string, cwd: string): BridgeSession | null {
+    return this.store.listSessions().find((session) => (
+      isVisibleBridgeSession(session)
+      && getSessionActiveRuntime(session) === 'zcode'
+      && getSessionZcodeSessionId(session) === zcodeSessionId
+      && getSessionZcodeCwd(session) === cwd
     )) || null;
   }
 
@@ -326,6 +350,34 @@ export class SessionRegistryService {
     return this.store.getSession(session.id) || session;
   }
 
+  materializeZcodeThread(zcodeSessionId: string, cwd: string): BridgeSession {
+    const existing = this.findVisibleBridgeSessionByZcodeThread(zcodeSessionId, cwd);
+    if (existing) return existing;
+    const localThread = this.options.zcodeThreads?.getThread(zcodeSessionId, cwd) || null;
+    if (!localThread) throw new Error('指定的 ZCode 会话不存在。');
+    const session = this.store.createSession(
+      localThread.title || '',
+      this.options.readDefaultModel?.() || 'default',
+      undefined,
+      localThread.cwd || this.options.defaultWorkingDirectory?.() || process.cwd(),
+      'normal',
+      { activeRuntime: 'zcode' },
+    );
+    this.store.updateSession(session.id, {
+      name: localThread.title || session.name,
+      runtime: {
+        activeRuntime: 'zcode',
+        zcode: {
+          sessionId: localThread.zcodeSessionId,
+          cwd: localThread.cwd,
+          provider: 'tmux',
+        },
+        general: { workingDirectory: localThread.cwd },
+      },
+    }, { touch: false });
+    return this.store.getSession(session.id) || session;
+  }
+
   renameBridgeSession(bridgeSessionId: string, name: string | undefined): BridgeSession {
     const session = this.getVisibleBridgeSession(bridgeSessionId);
     this.store.updateSession(session.id, { name });
@@ -349,6 +401,11 @@ export class SessionRegistryService {
 
   renameCursorThread(cursorSessionId: string, cwd: string, name: string | undefined): BridgeSession {
     const session = this.materializeCursorThread(cursorSessionId, cwd);
+    return this.renameBridgeSession(session.id, name);
+  }
+
+  renameZcodeThread(zcodeSessionId: string, cwd: string, name: string | undefined): BridgeSession {
+    const session = this.materializeZcodeThread(zcodeSessionId, cwd);
     return this.renameBridgeSession(session.id, name);
   }
 
@@ -459,6 +516,26 @@ export class SessionRegistryService {
     for (const session of linkedSessions) this.store.deleteSession(session.id);
     return {
       cursorSessionId,
+      cwd,
+      deletedBridgeSessions: linkedSessions,
+      deletedBridgeSessionIds: linkedSessions.map((session) => session.id),
+    };
+  }
+
+  archiveZcodeThread(zcodeSessionId: string, cwd: string): ArchiveZcodeThreadResult {
+    if (!this.options.zcodeThreads?.archiveThread) {
+      throw new Error('Local ZCode archive is not configured.');
+    }
+    const archived = this.options.zcodeThreads.archiveThread(zcodeSessionId, cwd);
+    if (!archived) throw new Error('指定的 ZCode 会话不存在。');
+    const linkedSessions = this.store.listSessions().filter((session) => (
+      getSessionActiveRuntime(session) === 'zcode'
+      && getSessionZcodeSessionId(session) === zcodeSessionId
+      && getSessionZcodeCwd(session) === cwd
+    ));
+    for (const session of linkedSessions) this.store.deleteSession(session.id);
+    return {
+      zcodeSessionId,
       cwd,
       deletedBridgeSessions: linkedSessions,
       deletedBridgeSessionIds: linkedSessions.map((session) => session.id),

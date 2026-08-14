@@ -57,7 +57,9 @@ export async function handleUiSessionRoute(options: {
     const kimiCwd = asString(url.searchParams.get('kimiCwd'));
     const cursorSessionId = asString(url.searchParams.get('cursorSessionId'));
     const cursorCwd = asString(url.searchParams.get('cursorCwd'));
-    if (!bridgeSessionId && !codexThreadId && !(claudeSessionId && claudeCwd) && !(kimiSessionId && kimiCwd) && !(cursorSessionId && cursorCwd)) {
+    const zcodeSessionId = asString(url.searchParams.get('zcodeSessionId'));
+    const zcodeCwd = asString(url.searchParams.get('zcodeCwd'));
+    if (!bridgeSessionId && !codexThreadId && !(claudeSessionId && claudeCwd) && !(kimiSessionId && kimiCwd) && !(cursorSessionId && cursorCwd) && !(zcodeSessionId && zcodeCwd)) {
       json(response, 400, { error: 'bridgeSessionId、codexThreadId 或本地 runtime sessionId+cwd 不能为空。' });
       return true;
     }
@@ -72,6 +74,8 @@ export async function handleUiSessionRoute(options: {
         kimiCwd,
         cursorSessionId,
         cursorCwd,
+        zcodeSessionId,
+        zcodeCwd,
       }));
     } catch (error) {
       json(response, 404, { error: error instanceof Error ? error.message : String(error) });
@@ -173,6 +177,25 @@ export async function handleUiSessionRoute(options: {
     return true;
   }
 
+  if (request.method === 'POST' && url.pathname === '/api/sessions/import-zcode-thread') {
+    const payload = await readJsonBody<Record<string, unknown>>(request);
+    const zcodeSessionId = asString(payload.zcodeSessionId);
+    const zcodeCwd = asString(payload.zcodeCwd);
+    if (!zcodeSessionId || !zcodeCwd) {
+      json(response, 400, { error: 'zcodeSessionId 和 zcodeCwd 不能为空。' });
+      return true;
+    }
+    try {
+      json(response, 200, {
+        ok: true,
+        ...createSessionApplication(createStore).importZcodeThread(zcodeSessionId, zcodeCwd),
+      });
+    } catch (error) {
+      json(response, 404, { error: error instanceof Error ? error.message : String(error) });
+    }
+    return true;
+  }
+
   if (request.method === 'POST' && url.pathname === '/api/sessions/rename') {
     const payload = await readJsonBody<Record<string, unknown>>(request);
     const bridgeSessionId = asString(payload.bridgeSessionId);
@@ -183,7 +206,9 @@ export async function handleUiSessionRoute(options: {
     const kimiCwd = asString(payload.kimiCwd);
     const cursorSessionId = asString(payload.cursorSessionId);
     const cursorCwd = asString(payload.cursorCwd);
-    if (!bridgeSessionId && !codexThreadId && !(claudeSessionId && claudeCwd) && !(kimiSessionId && kimiCwd) && !(cursorSessionId && cursorCwd)) {
+    const zcodeSessionId = asString(payload.zcodeSessionId);
+    const zcodeCwd = asString(payload.zcodeCwd);
+    if (!bridgeSessionId && !codexThreadId && !(claudeSessionId && claudeCwd) && !(kimiSessionId && kimiCwd) && !(cursorSessionId && cursorCwd) && !(zcodeSessionId && zcodeCwd)) {
       json(response, 400, { error: 'bridgeSessionId、codexThreadId 或本地 runtime sessionId+cwd 不能为空。' });
       return true;
     }
@@ -199,6 +224,8 @@ export async function handleUiSessionRoute(options: {
         kimiCwd,
         cursorSessionId,
         cursorCwd,
+        zcodeSessionId,
+        zcodeCwd,
       }, name);
       json(response, 200, { ok: true, config });
     } catch (error) {
@@ -234,7 +261,9 @@ export async function handleUiSessionRoute(options: {
     const kimiCwd = asString(payload.kimiCwd);
     const cursorSessionId = asString(payload.cursorSessionId);
     const cursorCwd = asString(payload.cursorCwd);
-    if (!bridgeSessionId && !codexThreadId && !(claudeSessionId && claudeCwd) && !(kimiSessionId && kimiCwd) && !(cursorSessionId && cursorCwd)) {
+    const zcodeSessionId = asString(payload.zcodeSessionId);
+    const zcodeCwd = asString(payload.zcodeCwd);
+    if (!bridgeSessionId && !codexThreadId && !(claudeSessionId && claudeCwd) && !(kimiSessionId && kimiCwd) && !(cursorSessionId && cursorCwd) && !(zcodeSessionId && zcodeCwd)) {
       json(response, 400, { error: 'bridgeSessionId、codexThreadId 或本地 runtime sessionId+cwd 不能为空。' });
       return true;
     }
@@ -251,6 +280,8 @@ export async function handleUiSessionRoute(options: {
           kimiCwd,
           cursorSessionId,
           cursorCwd,
+          zcodeSessionId,
+          zcodeCwd,
         }),
       });
     } catch (error) {

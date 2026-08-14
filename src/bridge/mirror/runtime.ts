@@ -57,7 +57,7 @@ export interface MirrorRuntimeBinding {
 
 export interface MirrorRuntimeSession {
   runtime?: {
-    activeRuntime?: 'codex' | 'claude' | 'kimi' | 'cursor';
+    activeRuntime?: 'codex' | 'claude' | 'kimi' | 'cursor' | 'zcode';
     codex?: {
       threadId?: string | null;
     };
@@ -70,6 +70,10 @@ export interface MirrorRuntimeSession {
       cwd?: string | null;
     };
     cursor?: {
+      sessionId?: string | null;
+      cwd?: string | null;
+    };
+    zcode?: {
       sessionId?: string | null;
       cwd?: string | null;
     };
@@ -171,6 +175,7 @@ export function createMirrorRuntime(
         : null;
     });
   const clearSessionMirrorThreadId = deps.clearSessionMirrorThreadId || deps.clearSessionCodexThreadId;
+  const statMirrorSource = (filePath: string) => mirrorSource.statSnapshot?.(filePath) || statMirrorFile(filePath);
 
   function logSlowMirrorSubscriptionStage(
     subscription: BridgeMirrorSubscription,
@@ -237,17 +242,18 @@ export function createMirrorRuntime(
       closeMirrorWatcher(subscription);
       return;
     }
-    if (subscription.watcherTarget === filePath && subscription.watcher) {
+    const watchPath = mirrorSource.watchPath?.(filePath) || filePath;
+    if (subscription.watcherTarget === watchPath && subscription.watcher) {
       return;
     }
 
     closeMirrorWatcher(subscription);
     try {
-      subscription.watcher = fs.watch(filePath, () => {
+      subscription.watcher = fs.watch(watchPath, () => {
         subscription.dirty = true;
         scheduleMirrorWake();
       });
-      subscription.watcherTarget = filePath;
+      subscription.watcherTarget = watchPath;
     } catch {
       subscription.watcher = null;
       subscription.watcherTarget = null;
@@ -395,7 +401,7 @@ export function createMirrorRuntime(
       subscription.suspendedUntil = null;
     }
 
-    let snapshot = subscription.filePath ? statMirrorFile(subscription.filePath) : null;
+    let snapshot = subscription.filePath ? statMirrorSource(subscription.filePath) : null;
     if (!snapshot) {
       const sourceSummary = getMirrorSourceSummary(
         mirrorSource,
@@ -419,7 +425,7 @@ export function createMirrorRuntime(
         deps.syncMirrorSessionStateSafe(subscription.sessionId, 'mirror reconcile without file');
         return 'processed';
       }
-      snapshot = statMirrorFile(subscription.filePath);
+      snapshot = statMirrorSource(subscription.filePath);
     } else {
       subscription.missingThreadPolls = 0;
       subscription.lastReconciledAt = deps.nowIso();

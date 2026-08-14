@@ -4,6 +4,7 @@ import type { BridgeStore, ChannelChat, InboundMessage } from '../../../domain/i
 import {
   getSessionActiveRuntime,
   getSessionCursorModel,
+  getSessionZcodeModel,
   getSessionKimiModel,
   getSessionRuntimeTmuxSessionName,
   getSessionWorkingDirectory,
@@ -19,6 +20,7 @@ import {
 } from '../support.js';
 import { kimiTmuxSessionName } from '../../../runtime/kimi/tmux-provider.js';
 import { cursorTmuxSessionName } from '../../../runtime/cursor/tmux-provider.js';
+import { zcodeTmuxSessionName } from '../../../runtime/zcode/tmux-provider.js';
 import { getSessionDisplayName } from '../display/session-title.js';
 import {
   buildCommandFields,
@@ -86,6 +88,12 @@ function setSessionCursorRuntimeToml(sessionId: string, model?: string): void {
     { runtime: { cursor: { provider: 'tmux', ...(model ? { model } : {}) } } },
   );
 }
+function setSessionZcodeRuntimeToml(sessionId: string, model?: string): void {
+  createConfigService({ migrate: false }).set(
+    { kind: 'session', sessionId },
+    { runtime: { zcode: { provider: 'tmux', ...(model ? { model } : {}) } } },
+  );
+}
 function preserveClearRuntimeBinding(options: {
   store: BridgeStore;
   previousBinding: ChannelChat | null;
@@ -120,6 +128,10 @@ function inheritClearRuntimeProvider(sessionId: string, previousSession: ReturnT
   }
   if (activeRuntime === 'cursor') {
     setSessionCursorRuntimeToml(sessionId, getSessionCursorModel(previousSession));
+    return;
+  }
+  if (activeRuntime === 'zcode') {
+    setSessionZcodeRuntimeToml(sessionId, getSessionZcodeModel(previousSession));
     return;
   }
   const inheritedProvider = getSessionCodexProviderOverride(previousSession);
@@ -189,6 +201,8 @@ export async function handleClearSessionCommand(options: {
       ? kimiTmuxSessionName(previousSession.id)
       : previousRuntime === 'cursor' && previousSession
         ? cursorTmuxSessionName(previousSession.id)
+        : previousRuntime === 'zcode' && previousSession
+          ? zcodeTmuxSessionName(previousSession.id)
         : undefined);
   let cleanedTmuxSessionName: string | null = null;
   if (previousRuntimeTmuxSessionName) {

@@ -106,6 +106,12 @@ export function renderUiShellHtml(): string {
                 <span class="runtime-status-config" id="runtime-cursor-config">默认配置检查中</span>
                 <span class="runtime-status-recent" id="runtime-cursor-recent">最近活动检查中</span>
               </button>
+              <button type="button" class="runtime-status-item" data-runtime="zcode" aria-label="查看 ZCode 会话">
+                <span class="runtime-status-head"><strong>ZCode</strong><span class="runtime-state" id="runtime-zcode-state">检查中</span></span>
+                <span class="runtime-status-counts" id="runtime-zcode-counts">正在读取会话与入口</span>
+                <span class="runtime-status-config" id="runtime-zcode-config">默认配置检查中</span>
+                <span class="runtime-status-recent" id="runtime-zcode-recent">最近活动检查中</span>
+              </button>
             </div>
           </section>
 
@@ -198,6 +204,7 @@ export function renderUiShellHtml(): string {
                 <option value="claude">Claude Code</option>
                 <option value="kimi">Kimi Code</option>
                 <option value="cursor">Cursor Agent</option>
+                <option value="zcode">ZCode</option>
               </select></label>
               <button type="button" id="clearSessionFiltersBtn">清除筛选</button>
             </div>
@@ -273,6 +280,7 @@ export function renderUiShellHtml(): string {
               <button type="button" class="config-tab" role="tab" aria-selected="false" data-config-tab="claude">Claude</button>
               <button type="button" class="config-tab" role="tab" aria-selected="false" data-config-tab="kimi">Kimi</button>
               <button type="button" class="config-tab" role="tab" aria-selected="false" data-config-tab="cursor">Cursor</button>
+              <button type="button" class="config-tab" role="tab" aria-selected="false" data-config-tab="zcode">ZCode</button>
               <button type="button" class="config-tab" role="tab" aria-selected="false" data-config-tab="web">Web 与 Bridge</button>
             </div>
 
@@ -389,6 +397,7 @@ export function renderUiShellHtml(): string {
                       <option value="claude">claude</option>
                       <option value="kimi">kimi</option>
                       <option value="cursor">cursor</option>
+                      <option value="zcode">zcode</option>
                     </select>
                   </label>
                 </div>
@@ -430,6 +439,24 @@ export function renderUiShellHtml(): string {
                     <select id="cursorReasoningEffort"><option value="">跟随 Cursor</option><option value="low">low</option><option value="medium">medium</option><option value="high">high</option><option value="xhigh">xhigh</option><option value="max">max</option></select>
                   </label>
                   <label class="checkbox"><input id="cursorForce" type="checkbox" /> Cursor force 模式</label>
+                </div>
+              </div>
+
+              <div class="panel-block" data-config-section="zcode" hidden>
+                <p class="panel-subtitle">ZCode 默认值</p>
+                <div class="field-row triple">
+                  <label>
+                    <span class="field-title">默认 ZCode Provider <span class="help-tip" tabindex="0" data-tip="ZCode 复用 CodeLark 的 tmux 生命周期与原生 TUI，只支持 tmux。">?</span></span>
+                    <select id="zcodeProvider"><option value="tmux">tmux</option></select>
+                  </label>
+                  <label>
+                    <span class="field-title">ZCode 默认模型 <span class="help-tip" tabindex="0" data-tip="格式由 ZCode 接受，例如 zai/glm-5.2；留空则跟随 ZCode。">?</span></span>
+                    <input id="zcodeDefaultModel" placeholder="留空则跟随 ZCode 默认" />
+                  </label>
+                  <label>
+                    <span class="field-title">ZCode 默认模式</span>
+                    <select id="zcodeMode"><option value="build">build</option><option value="edit">edit</option><option value="plan">plan</option><option value="yolo">yolo</option></select>
+                  </label>
                 </div>
               </div>
 
@@ -495,7 +522,7 @@ export function renderUiShellHtml(): string {
               </div>
             </div>
 
-            <div class="notice" style="margin-bottom: 16px;">最短使用路径：先发 <code>/t</code> 查看本地 Codex / Claude Code / Kimi Code / Cursor Agent 会话，再发 <code>/t 1</code> 接管；之后直接发送文本即可继续当前会话。</div>
+            <div class="notice" style="margin-bottom: 16px;">最短使用路径：先发 <code>/t</code> 查看本地 Codex / Claude Code / Kimi Code / Cursor Agent / ZCode 会话，再发 <code>/t 1</code> 接管；之后直接发送文本即可继续当前会话。</div>
 
             <div class="command-sections">
               <section class="command-section">
@@ -509,9 +536,9 @@ export function renderUiShellHtml(): string {
                   <div class="command-item"><div class="command-col-command"><code>/doctor [bridge_id|描述]</code></div><div class="command-col-original"><code>/doctor</code></div><div class="command-col-desc">把目标 id、故障描述和结构化 JSONL bridge.log 路径交给当前会话诊断，不会把整段日志贴进上下文。</div></div>
                   <div class="command-item"><div class="command-col-command"><code>//...</code></div><div class="command-col-original">—</div><div class="command-col-desc">向模型发送以 <code>/</code> 开头的文本，避免被当成桥接命令。</div></div>
                   <div class="command-item"><div class="command-col-command"><code>/h</code></div><div class="command-col-original"><code>/help</code></div><div class="command-col-desc">查看帮助。</div></div>
-          <div class="command-item"><div class="command-col-command"><code>/t</code></div><div class="command-col-original"><code>/threads</code></div><div class="command-col-desc">默认显示当前 runtime 最近 20 条；飞书卡片是一张表，可用数量下拉切换 20/50/100，也可用 runtime 下拉切换 Codex/Claude/Kimi/Cursor。</div></div>
+          <div class="command-item"><div class="command-col-command"><code>/t</code></div><div class="command-col-original"><code>/threads</code></div><div class="command-col-desc">默认显示当前 runtime 最近 20 条；飞书卡片是一张表，可用数量下拉切换 20/50/100，也可用 runtime 下拉切换 Codex/Claude/Kimi/Cursor/ZCode。</div></div>
           <div class="command-item"><div class="command-col-command"><code>/t all</code></div><div class="command-col-original"><code>/threads all</code></div><div class="command-col-desc">最多列出当前 runtime 最近 100 条本地会话。</div></div>
-          <div class="command-item"><div class="command-col-command"><code>/t n 100</code></div><div class="command-col-original"><code>/threads n 100</code></div><div class="command-col-desc">列出当前 runtime 最近 100 条本地会话；也可用 <code>/t codex n 100</code>、<code>/t claude n 100</code>、<code>/t kimi n 100</code> 或 <code>/t cursor n 100</code>。</div></div>
+          <div class="command-item"><div class="command-col-command"><code>/t n 100</code></div><div class="command-col-original"><code>/threads n 100</code></div><div class="command-col-desc">列出当前 runtime 最近 100 条本地会话；也可用 <code>/t codex n 100</code>、<code>/t claude n 100</code>、<code>/t kimi n 100</code>、<code>/t cursor n 100</code> 或 <code>/t zcode n 100</code>。</div></div>
               <div class="command-item"><div class="command-col-command"><code>/t &lt;序号|thread/session id|bridge id|名称&gt;</code></div><div class="command-col-original"><code>/thread &lt;序号|thread/session id|bridge id|名称&gt;</code></div><div class="command-col-desc">按当前 runtime 表序号、thread/session id、bridge_id 或唯一名称接管本地会话，并设为当前会话；接管其他聊天已绑定的会话需要确认，目标运行中会拒绝。</div></div>
               <div class="command-item"><div class="command-col-command"><code>/t 标记</code></div><div class="command-col-original"><code>/t</code></div><div class="command-col-desc">卡片首列会标出当前激活的对话和其他人激活的对话，bridge_id 存在表示曾经接入过 codelark。</div></div>
               <div class="command-item"><div class="command-col-command"><code>/t archive [序号|bridge id|thread/session id|名称]</code></div><div class="command-col-original"><code>/t archive [序号|bridge id|thread/session id|名称]</code></div><div class="command-col-desc">归档当前或指定本地会话，并解除相关绑定。</div></div>
@@ -521,10 +548,10 @@ export function renderUiShellHtml(): string {
                   <div class="command-item"><div class="command-col-command"><code>/n</code></div><div class="command-col-original"><code>/new</code></div><div class="command-col-desc">打开新建 IM 群聊会话表单；也可用 <code>/new &lt;name&gt; [path]</code> 直接创建，未指定路径时继承当前会话目录，未绑定时使用全局默认工作目录。</div></div>
                   <div class="command-item"><div class="command-col-command"><code>/clear [name] [path]</code></div><div class="command-col-original"><code>/clear [name] [path]</code></div><div class="command-col-desc">在当前聊天上下文创建新对话并绑定过去；名称或路径包含空格时，请使用英文双引号 <code>&quot;</code> 或英文单引号 <code>'</code>；可用 <code>/t</code> 附回旧对话，运行中会先确认是否终止。</div></div>
                   <div class="command-item"><div class="command-col-command"><code>直接发送文本</code></div><div class="command-col-original">—</div><div class="command-col-desc">继续当前已绑定会话；未绑定时会自动进入临时草稿线程，等同先使用 <code>/t 0</code>。</div></div>
-                  <div class="command-item"><div class="command-col-command"><code>/his [N]</code></div><div class="command-col-original"><code>/history</code></div><div class="command-col-desc">把最近 N 条消息渲染成卡片发送；优先读取 Codex / Claude Code / Kimi Code / Cursor Agent 本地 session 文件，找不到再退回 Bridge 缓存。</div></div>
+                  <div class="command-item"><div class="command-col-command"><code>/his [N]</code></div><div class="command-col-original"><code>/history</code></div><div class="command-col-desc">把最近 N 条消息渲染成卡片发送；优先读取 Codex / Claude Code / Kimi Code / Cursor Agent 本地 session 或 ZCode SQLite，找不到再退回 Bridge 缓存。</div></div>
                   <div class="command-item"><div class="command-col-command"><code>/his msg [N]</code></div><div class="command-col-original"><code>/history msg</code></div><div class="command-col-desc">把最近 N 条消息渲染成卡片发送，可临时指定本次条数。</div></div>
                   <div class="command-item"><div class="command-col-command"><code>/his raw [N]</code></div><div class="command-col-original"><code>/history raw</code></div><div class="command-col-desc">查看解析后的纯文本视图，可临时指定本次条数；不是原始 JSONL。</div></div>
-                  <div class="command-item"><div class="command-col-command"><code>/his json</code></div><div class="command-col-original"><code>/history json</code></div><div class="command-col-desc">直接发送原始 Codex / Claude Code / Kimi Code / Cursor Agent session 文件，不做二次包装。</div></div>
+                  <div class="command-item"><div class="command-col-command"><code>/his json</code></div><div class="command-col-original"><code>/history json</code></div><div class="command-col-desc">直接发送 Codex / Claude Code / Kimi Code / Cursor Agent 的原始 session 文件；ZCode 使用 SQLite，请改用 <code>/his</code> 查看解析结果。</div></div>
                   <div class="command-item"><div class="command-col-command"><code>/his limit 12</code></div><div class="command-col-original"><code>/history limit 12</code></div><div class="command-col-desc">修改 /his 默认返回条数限制（1-20）。</div></div>
                   <div class="command-item"><div class="command-col-command"><code>/shell [秒数] &lt;command&gt;</code></div><div class="command-col-original"><code>/shell</code></div><div class="command-col-desc">新特性：在当前会话目录通过 <code>codex sandbox</code> 流式执行命令；默认 workspace-write 且网络开启，支持 <code>--sandbox read-only</code>，卡片刷新最低 5 秒，高风险命令需 <code>--force</code>，不允许 danger-full-access，IM 自动链接按显示文本执行。</div></div>
                   <div class="command-item"><div class="command-col-command"><code>/every 10m 检查实验进度</code></div><div class="command-col-original"><code>/every &lt;时间&gt; &lt;prompt&gt;</code></div><div class="command-col-desc">创建定时输入；时间支持 s/m/h/d；每次触发都会复用当前会话。</div></div>
@@ -547,8 +574,8 @@ export function renderUiShellHtml(): string {
                 <div class="command-list">
                   <div class="command-list-head"><div>命令</div><div>原始命令</div><div>说明</div></div>
                   <div class="command-item"><div class="command-col-command"><code>/m</code></div><div class="command-col-original"><code>/mode</code></div><div class="command-col-desc">查看当前模式；可选 <code>normal</code>、<code>yolo</code>。</div></div>
-                  <div class="command-item"><div class="command-col-command"><code>/provider</code></div><div class="command-col-original"><code>/provider</code></div><div class="command-col-desc">查看或切换当前 IM 会话 active runtime 的 Provider；Codex 和 Claude 可选 <code>sdk</code>、<code>pty</code>、<code>tmux</code>，Kimi 与 Cursor 当前只支持 <code>tmux</code>。</div></div>
-                  <div class="command-item"><div class="command-col-command"><code>/r</code></div><div class="command-col-original"><code>/reasoning</code></div><div class="command-col-desc">Codex 可选 <code>minimal</code> 到 <code>ultra</code>；Claude 可选 <code>low</code> 到 <code>max</code>；Kimi 使用 <code>on/off/default</code>；Cursor 使用模型 <code>effort</code>。</div></div>
+                  <div class="command-item"><div class="command-col-command"><code>/provider</code></div><div class="command-col-original"><code>/provider</code></div><div class="command-col-desc">查看或切换当前 IM 会话 active runtime 的 Provider；Codex 和 Claude 可选 <code>sdk</code>、<code>pty</code>、<code>tmux</code>，Kimi、Cursor 与 ZCode 当前只支持 <code>tmux</code>。</div></div>
+                  <div class="command-item"><div class="command-col-command"><code>/r</code></div><div class="command-col-original"><code>/reasoning</code></div><div class="command-col-desc">Codex 可选 <code>minimal</code> 到 <code>ultra</code>；Claude 可选 <code>low</code> 到 <code>max</code>；Kimi 使用 <code>on/off/default</code>；Cursor 使用模型 <code>effort</code>；ZCode 不映射该命令。</div></div>
                   <div class="command-item"><div class="command-col-command"><code>/sb</code></div><div class="command-col-original"><code>/sandbox</code></div><div class="command-col-desc">查看或切换当前 IM 会话的 Codex 沙箱；可选 <code>read-only</code>、<code>workspace-write</code>、<code>danger-full-access</code>、<code>default</code>。</div></div>
                   <div class="command-item"><div class="command-col-command"><code>/net</code></div><div class="command-col-original"><code>/network</code></div><div class="command-col-desc">查看或切换当前 IM 会话的网络访问；可选 <code>on</code>、<code>off</code>、<code>default</code>。</div></div>
                   <div class="command-item"><div class="command-col-command"><code>/ui</code></div><div class="command-col-original">—</div><div class="command-col-desc">查看 UI 显示策略；工具调用详情始终展示。</div></div>
@@ -716,6 +743,11 @@ export function renderUiShellHtml(): string {
             <label>Cursor 思考级别<select id="sessionConfigCursorReasoning"><option value="">跟随全局</option><option value="low">low</option><option value="medium">medium</option><option value="high">high</option><option value="xhigh">xhigh</option><option value="max">max</option></select></label>
             <label>Cursor force<select id="sessionConfigCursorForce"><option value="">跟随全局</option><option value="on">启用</option><option value="off">关闭</option></select></label>
           </div>
+          <div class="field-row triple" id="sessionConfigZcodeBlock" hidden>
+            <label>ZCode 模型<input id="sessionConfigZcodeModel" placeholder="留空跟随全局 ZCode 默认模型" /></label>
+            <label>ZCode Provider<select id="sessionConfigZcodeProvider"><option value="">跟随全局</option><option value="tmux">tmux</option></select></label>
+            <label>ZCode 模式<select id="sessionConfigZcodeMode"><option value="">跟随全局</option><option value="build">build</option><option value="edit">edit</option><option value="plan">plan</option><option value="yolo">yolo</option></select></label>
+          </div>
           <label>系统提示<textarea id="sessionConfigPrompt" placeholder="留空则不覆盖系统提示"></textarea></label>
         </div>
         <div class="toolbar modal-actions">
@@ -878,7 +910,7 @@ export function renderUiShellHtml(): string {
       }
 
       function sessionCodexThreadId(session) {
-        if (!session || session.runtime === 'claude' || session.kind === 'claude' || session.runtime === 'kimi' || session.kind === 'kimi' || session.runtime === 'cursor' || session.kind === 'cursor') return '';
+        if (!session || session.runtime === 'claude' || session.kind === 'claude' || session.runtime === 'kimi' || session.kind === 'kimi' || session.runtime === 'cursor' || session.kind === 'cursor' || session.runtime === 'zcode' || session.kind === 'zcode') return '';
         return (session.codexThreadId || session.threadId) || '';
       }
 
@@ -912,8 +944,18 @@ export function renderUiShellHtml(): string {
         return session.cursorCwd || session.cwd || '';
       }
 
+      function sessionZcodeSessionId(session) {
+        if (!session || (session.runtime !== 'zcode' && session.kind !== 'zcode')) return '';
+        return session.zcodeSessionId || session.threadId || '';
+      }
+
+      function sessionZcodeCwd(session) {
+        if (!session || (session.runtime !== 'zcode' && session.kind !== 'zcode')) return '';
+        return session.zcodeCwd || session.cwd || '';
+      }
+
       function sessionRuntimeThreadId(session) {
-        return sessionClaudeSessionId(session) || sessionKimiSessionId(session) || sessionCursorSessionId(session) || sessionCodexThreadId(session);
+        return sessionClaudeSessionId(session) || sessionKimiSessionId(session) || sessionCursorSessionId(session) || sessionZcodeSessionId(session) || sessionCodexThreadId(session);
       }
 
       function sessionMatchesFilter(session) {
@@ -936,6 +978,7 @@ export function renderUiShellHtml(): string {
           session.claudeSessionId,
           session.kimiSessionId,
           session.cursorSessionId,
+          session.zcodeSessionId,
           session.executionProvider,
           session.codexProvider,
           session.creatorLabel,
@@ -953,6 +996,8 @@ export function renderUiShellHtml(): string {
         if (kimiSessionId) return 'kimi:' + encodeURIComponent(kimiSessionId) + ':' + encodeURIComponent(sessionKimiCwd(session));
         const cursorSessionId = sessionCursorSessionId(session);
         if (cursorSessionId) return 'cursor:' + encodeURIComponent(cursorSessionId) + ':' + encodeURIComponent(sessionCursorCwd(session));
+        const zcodeSessionId = sessionZcodeSessionId(session);
+        if (zcodeSessionId) return 'zcode:' + encodeURIComponent(zcodeSessionId) + ':' + encodeURIComponent(sessionZcodeCwd(session));
         const codexThreadId = sessionCodexThreadId(session);
         return codexThreadId ? 'codex:' + codexThreadId : '';
       }
@@ -966,6 +1011,8 @@ export function renderUiShellHtml(): string {
         const kimiCwd = sessionKimiCwd(session);
         const cursorSessionId = sessionCursorSessionId(session);
         const cursorCwd = sessionCursorCwd(session);
+        const zcodeSessionId = sessionZcodeSessionId(session);
+        const zcodeCwd = sessionZcodeCwd(session);
         return 'data-session-ref="' + escapeHtml(sessionRef(session)) + '"'
           + (bridgeSessionId ? ' data-bridge-session-id="' + escapeHtml(bridgeSessionId) + '"' : '')
           + (codexThreadId ? ' data-codex-thread-id="' + escapeHtml(codexThreadId) + '"' : '')
@@ -974,7 +1021,9 @@ export function renderUiShellHtml(): string {
           + (kimiSessionId ? ' data-kimi-session-id="' + escapeHtml(kimiSessionId) + '"' : '')
           + (kimiCwd ? ' data-kimi-cwd="' + escapeHtml(kimiCwd) + '"' : '')
           + (cursorSessionId ? ' data-cursor-session-id="' + escapeHtml(cursorSessionId) + '"' : '')
-          + (cursorCwd ? ' data-cursor-cwd="' + escapeHtml(cursorCwd) + '"' : '');
+          + (cursorCwd ? ' data-cursor-cwd="' + escapeHtml(cursorCwd) + '"' : '')
+          + (zcodeSessionId ? ' data-zcode-session-id="' + escapeHtml(zcodeSessionId) + '"' : '')
+          + (zcodeCwd ? ' data-zcode-cwd="' + escapeHtml(zcodeCwd) + '"' : '');
       }
 
       function sessionIdentityPayload(ref) {
@@ -1008,6 +1057,15 @@ export function renderUiShellHtml(): string {
             cursorCwd: decodeURIComponent(raw.slice(separator + 1)),
           };
         }
+        if (value.startsWith('zcode:')) {
+          const raw = value.slice('zcode:'.length);
+          const separator = raw.indexOf(':');
+          if (separator < 0) return {};
+          return {
+            zcodeSessionId: decodeURIComponent(raw.slice(0, separator)),
+            zcodeCwd: decodeURIComponent(raw.slice(separator + 1)),
+          };
+        }
         return {};
       }
 
@@ -1022,6 +1080,8 @@ export function renderUiShellHtml(): string {
         if (identity.kimiCwd) params.set('kimiCwd', identity.kimiCwd);
         if (identity.cursorSessionId) params.set('cursorSessionId', identity.cursorSessionId);
         if (identity.cursorCwd) params.set('cursorCwd', identity.cursorCwd);
+        if (identity.zcodeSessionId) params.set('zcodeSessionId', identity.zcodeSessionId);
+        if (identity.zcodeCwd) params.set('zcodeCwd', identity.zcodeCwd);
         return params.toString();
       }
 
@@ -1042,6 +1102,10 @@ export function renderUiShellHtml(): string {
             && binding.currentRuntime === 'cursor'
             && binding.currentRuntimeThreadId === identity.cursorSessionId
             && (!identity.cursorCwd || binding.currentCursorCwd === identity.cursorCwd))
+          || (identity.zcodeSessionId
+            && binding.currentRuntime === 'zcode'
+            && binding.currentRuntimeThreadId === identity.zcodeSessionId
+            && (!identity.zcodeCwd || binding.currentZcodeCwd === identity.zcodeCwd))
         );
       }
 
@@ -1125,23 +1189,26 @@ export function renderUiShellHtml(): string {
         const isClaude = option.runtime === 'claude' || option.kind === 'claude';
         const isKimi = option.runtime === 'kimi' || option.kind === 'kimi';
         const isCursor = option.runtime === 'cursor' || option.kind === 'cursor';
+        const isZcode = option.runtime === 'zcode' || option.kind === 'zcode';
         return {
-          kind: isBridge ? 'bridge' : (isKimi ? 'kimi' : isClaude ? 'claude' : isCursor ? 'cursor' : 'codex'),
-          runtime: option.runtime || (isKimi ? 'kimi' : isClaude ? 'claude' : isCursor ? 'cursor' : 'codex'),
+          kind: isBridge ? 'bridge' : (isKimi ? 'kimi' : isClaude ? 'claude' : isCursor ? 'cursor' : isZcode ? 'zcode' : 'codex'),
+          runtime: option.runtime || (isKimi ? 'kimi' : isClaude ? 'claude' : isCursor ? 'cursor' : isZcode ? 'zcode' : 'codex'),
           bridgeSessionId: option.bridgeSessionId || option.sessionId || (isBridge ? option.id : ''),
-          codexThreadId: isClaude || isKimi || isCursor ? '' : option.codexThreadId || option.threadId || (isBridge ? '' : option.id),
+          codexThreadId: isClaude || isKimi || isCursor || isZcode ? '' : option.codexThreadId || option.threadId || (isBridge ? '' : option.id),
           claudeSessionId: option.claudeSessionId || (isClaude ? option.threadId || option.id : ''),
           claudeCwd: option.claudeCwd || (isClaude ? option.cwd || '' : ''),
           kimiSessionId: option.kimiSessionId || (isKimi ? option.threadId || option.id : ''),
           kimiCwd: option.kimiCwd || (isKimi ? option.cwd || '' : ''),
           cursorSessionId: option.cursorSessionId || (isCursor ? option.threadId || option.id : ''),
           cursorCwd: option.cursorCwd || (isCursor ? option.cwd || '' : ''),
+          zcodeSessionId: option.zcodeSessionId || (isZcode ? option.threadId || option.id : ''),
+          zcodeCwd: option.zcodeCwd || (isZcode ? option.cwd || '' : ''),
           sessionId: option.sessionId || (isBridge ? option.id : ''),
           threadId: option.threadId || (isBridge ? '' : option.id),
           title: option.label,
           cwd: option.cwd || '',
-          originator: isBridge ? 'Bridge / IM' : isKimi ? 'Kimi Code' : isClaude ? 'Claude Code' : isCursor ? 'Cursor Agent' : 'Codex Native',
-          source: isBridge ? 'bridge' : isKimi ? 'kimi' : isClaude ? 'claude' : isCursor ? 'cursor' : 'codex',
+          originator: isBridge ? 'Bridge / IM' : isKimi ? 'Kimi Code' : isClaude ? 'Claude Code' : isCursor ? 'Cursor Agent' : isZcode ? 'ZCode' : 'Codex Native',
+          source: isBridge ? 'bridge' : isKimi ? 'kimi' : isClaude ? 'claude' : isCursor ? 'cursor' : isZcode ? 'zcode' : 'codex',
           creatorKind: isBridge ? 'bridge' : 'native',
           creatorLabel: isBridge ? 'Bridge' : 'Native',
           creatorClass: isBridge ? 'bridge' : 'native',
@@ -1247,6 +1314,9 @@ export function renderUiShellHtml(): string {
           cursorDefaultModel: document.getElementById('cursorDefaultModel').value,
           cursorReasoningEffort: document.getElementById('cursorReasoningEffort').value,
           cursorForce: document.getElementById('cursorForce').checked,
+          zcodeProvider: document.getElementById('zcodeProvider').value,
+          zcodeDefaultModel: document.getElementById('zcodeDefaultModel').value,
+          zcodeMode: document.getElementById('zcodeMode').value,
           uiAllowLan: document.getElementById('uiAllowLan').checked,
           uiAccessToken: document.getElementById('uiAccessToken').value,
         };
@@ -1374,7 +1444,7 @@ export function renderUiShellHtml(): string {
       }
 
       function setActiveConfigTab(tab) {
-        const nextTab = ['common', 'codex', 'claude', 'kimi', 'cursor', 'web'].includes(tab) ? tab : 'common';
+        const nextTab = ['common', 'codex', 'claude', 'kimi', 'cursor', 'zcode', 'web'].includes(tab) ? tab : 'common';
         state.activeConfigTab = nextTab;
         document.querySelectorAll('[data-config-tab]').forEach((element) => {
           const active = element.dataset.configTab === nextTab;
@@ -1575,7 +1645,7 @@ export function renderUiShellHtml(): string {
       }
 
       function renderRuntimeStatuses() {
-        for (const runtime of ['codex', 'claude', 'kimi', 'cursor']) {
+        for (const runtime of ['codex', 'claude', 'kimi', 'cursor', 'zcode']) {
           const projection = runtimeStatusProjection(runtime);
           const item = document.querySelector('.runtime-status-item[data-runtime="' + runtime + '"]');
           if (item) {
@@ -1623,6 +1693,9 @@ export function renderUiShellHtml(): string {
         cursorDefaultModel: 'Cursor 默认模型',
         cursorReasoningEffort: 'Cursor 思考级别',
         cursorForce: 'Cursor force 模式',
+        zcodeProvider: '默认 ZCode Provider',
+        zcodeDefaultModel: 'ZCode 默认模型',
+        zcodeMode: 'ZCode 默认模式',
         uiAllowLan: '允许局域网访问 Web 控制台',
         uiAccessToken: '局域网访问 token',
       };
@@ -1657,6 +1730,9 @@ export function renderUiShellHtml(): string {
         'cursorDefaultModel',
         'cursorReasoningEffort',
         'cursorForce',
+        'zcodeProvider',
+        'zcodeDefaultModel',
+        'zcodeMode',
         'uiAllowLan',
         'uiAccessToken',
       ]);
@@ -1986,6 +2062,9 @@ export function renderUiShellHtml(): string {
         const cursorPhysical = Number.isFinite(Number(counts.cursorPhysical))
           ? Number(counts.cursorPhysical)
           : allSessions.filter((session) => session.kind === 'cursor').length;
+        const zcodePhysical = Number.isFinite(Number(counts.zcodePhysical))
+          ? Number(counts.zcodePhysical)
+          : allSessions.filter((session) => session.kind === 'zcode').length;
         const bridgeStored = Number.isFinite(Number(counts.bridgeStored))
           ? Number(counts.bridgeStored)
           : allSessions.filter((session) => session.kind === 'bridge').length;
@@ -2002,8 +2081,9 @@ export function renderUiShellHtml(): string {
           + ' · Claude ' + claudePhysical + ' 条'
           + ' · Kimi ' + kimiPhysical + ' 条'
           + ' · Cursor ' + cursorPhysical + ' 条'
+          + ' · ZCode ' + zcodePhysical + ' 条'
           + ' · Bridge 存储 ' + bridgeStored + ' 条'
-          + (bridgeWithoutCodexThread > 0 ? '（' + bridgeWithoutCodexThread + ' 条没有 Codex thread；可能是 Claude、Kimi、Cursor 或纯 Bridge 会话）' : '')
+          + (bridgeWithoutCodexThread > 0 ? '（' + bridgeWithoutCodexThread + ' 条没有 Codex thread；可能是 Claude、Kimi、Cursor、ZCode 或纯 Bridge 会话）' : '')
           + (dedupedBridgeRows > 0 ? ' · 已按 runtime identity 合并 ' + dedupedBridgeRows + ' 条重复映射' : '');
         setText('runtimeSessionsRootStatus', state.codexRoot);
 
@@ -2027,7 +2107,7 @@ export function renderUiShellHtml(): string {
         }
 
         if (allSessions.length === 0) {
-          list.innerHTML = '<div class="notice ghost">当前没有发现本地会话。先从 IM 发一条消息，或在本机 Codex / Claude Code / Kimi Code / Cursor Agent 中打开一个会话，然后刷新。</div>';
+          list.innerHTML = '<div class="notice ghost">当前没有发现本地会话。先从 IM 发一条消息，或在本机 Codex / Claude Code / Kimi Code / Cursor Agent / ZCode 中打开一个会话，然后刷新。</div>';
           renderChannelsWorkspace();
           return;
         }
@@ -2336,6 +2416,9 @@ export function renderUiShellHtml(): string {
         document.getElementById('cursorDefaultModel').value = config.cursorDefaultModel || '';
         document.getElementById('cursorReasoningEffort').value = config.cursorReasoningEffort || '';
         document.getElementById('cursorForce').checked = config.cursorForce === true;
+        document.getElementById('zcodeProvider').value = config.zcodeProvider || 'tmux';
+        document.getElementById('zcodeDefaultModel').value = config.zcodeDefaultModel || '';
+        document.getElementById('zcodeMode').value = config.zcodeMode || 'build';
         document.getElementById('uiAllowLan').checked = config.uiAllowLan === true;
         document.getElementById('uiAccessToken').value = config.uiAccessToken || '';
         renderUiAccess();
@@ -2462,6 +2545,7 @@ export function renderUiShellHtml(): string {
         if (source === 'claude') return 'Claude Code';
         if (source === 'kimi') return 'Kimi Code';
         if (source === 'cursor') return 'Cursor Agent';
+        if (source === 'zcode') return 'ZCode';
         return source === 'bridge' ? 'Bridge / IM' : 'Codex Native';
       }
 
@@ -2727,16 +2811,20 @@ export function renderUiShellHtml(): string {
             ? 'kimi'
             : config.activeRuntime === 'cursor'
               ? 'cursor'
-            : 'codex';
+              : config.activeRuntime === 'zcode'
+                ? 'zcode'
+              : 'codex';
         state.activeSessionConfigRuntime = activeRuntime;
         const isClaude = activeRuntime === 'claude';
         const isKimi = activeRuntime === 'kimi';
         const isCursor = activeRuntime === 'cursor';
-        document.getElementById('sessionConfigCodexBlock').hidden = isClaude || isKimi || isCursor;
-        document.getElementById('sessionConfigCodexSandboxBlock').hidden = isClaude || isKimi || isCursor;
+        const isZcode = activeRuntime === 'zcode';
+        document.getElementById('sessionConfigCodexBlock').hidden = isClaude || isKimi || isCursor || isZcode;
+        document.getElementById('sessionConfigCodexSandboxBlock').hidden = isClaude || isKimi || isCursor || isZcode;
         document.getElementById('sessionConfigClaudeBlock').hidden = !isClaude;
         document.getElementById('sessionConfigKimiBlock').hidden = !isKimi;
         document.getElementById('sessionConfigCursorBlock').hidden = !isCursor;
+        document.getElementById('sessionConfigZcodeBlock').hidden = !isZcode;
         document.getElementById('sessionConfigName').value = config.name || config.title || '';
         document.getElementById('sessionConfigCwd').value = config.workingDirectory || '';
         renderModelOptionsForSelect(document.getElementById('sessionConfigModel'), config.model || '', '跟随全局 / Codex 默认模型');
@@ -2758,6 +2846,9 @@ export function renderUiShellHtml(): string {
         document.getElementById('sessionConfigCursorForce').value = config.cursorForce === undefined
           ? ''
           : config.cursorForce === true ? 'on' : 'off';
+        document.getElementById('sessionConfigZcodeModel').value = config.zcodeModel || '';
+        document.getElementById('sessionConfigZcodeProvider').value = config.zcodeProvider || '';
+        document.getElementById('sessionConfigZcodeMode').value = config.zcodeMode || '';
         document.getElementById('sessionConfigPrompt').value = config.systemPrompt || '';
       }
 
@@ -2786,6 +2877,9 @@ export function renderUiShellHtml(): string {
           cursorForce: document.getElementById('sessionConfigCursorForce').value === ''
             ? ''
             : document.getElementById('sessionConfigCursorForce').value === 'on',
+          zcodeModel: document.getElementById('sessionConfigZcodeModel').value,
+          zcodeProvider: document.getElementById('sessionConfigZcodeProvider').value,
+          zcodeMode: document.getElementById('sessionConfigZcodeMode').value,
           systemPrompt: document.getElementById('sessionConfigPrompt').value,
         };
       }

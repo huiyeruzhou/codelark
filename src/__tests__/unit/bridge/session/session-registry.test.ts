@@ -202,4 +202,34 @@ describe('SessionRegistryService', () => {
     assert.deepEqual(result.deletedBridgeSessionIds, [materialized.id]);
   });
 
+  it('materializes, renames, and archives ZCode sessions through the registry port', () => {
+    const store = new JsonFileStore(makeBridgeSettings());
+    const archived: Array<{ sessionId: string; cwd: string }> = [];
+    const registry = new SessionRegistryService(store, {
+      zcodeThreads: {
+        getThread: (zcodeSessionId, cwd) => zcodeSessionId === 'sess_zcode_registry'
+          ? { zcodeSessionId, title: 'Local ZCode Session', cwd }
+          : null,
+        archiveThread: (zcodeSessionId, cwd) => {
+          archived.push({ sessionId: zcodeSessionId, cwd });
+          return true;
+        },
+      },
+    });
+
+    const materialized = registry.materializeZcodeThread('sess_zcode_registry', '/tmp/zcode-registry');
+    assert.equal(materialized.runtime?.activeRuntime, 'zcode');
+    assert.equal(materialized.runtime?.zcode?.sessionId, 'sess_zcode_registry');
+    assert.equal(materialized.runtime?.zcode?.provider, 'tmux');
+    assert.equal(getSessionWorkingDirectory(materialized), '/tmp/zcode-registry');
+
+    const renamed = registry.renameZcodeThread('sess_zcode_registry', '/tmp/zcode-registry', 'Renamed ZCode Session');
+    assert.equal(renamed.name, 'Renamed ZCode Session');
+
+    const result = registry.archiveZcodeThread('sess_zcode_registry', '/tmp/zcode-registry');
+    assert.deepEqual(archived, [{ sessionId: 'sess_zcode_registry', cwd: '/tmp/zcode-registry' }]);
+    assert.deepEqual(result.deletedBridgeSessionIds, [materialized.id]);
+    assert.equal(store.getSession(materialized.id), null);
+  });
+
 });

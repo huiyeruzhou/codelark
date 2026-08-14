@@ -12,7 +12,7 @@ export function buildRuntimeStreamTags(context: {
   const reasoningEffort = context.reasoningEffort?.trim();
   const model = context.model?.trim();
   return [
-    runtime === 'codex' || runtime === 'claude' || runtime === 'kimi' || runtime === 'cursor' ? runtime : '',
+    runtime === 'codex' || runtime === 'claude' || runtime === 'kimi' || runtime === 'cursor' || runtime === 'zcode' ? runtime : '',
     reasoningEffort ? `effort:${reasoningEffort}` : '',
     model ? `model:${model}` : '',
   ].filter(Boolean);

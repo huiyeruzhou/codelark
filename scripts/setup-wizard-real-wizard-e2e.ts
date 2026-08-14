@@ -12,8 +12,8 @@ import { buildStandardLarkCliEnv } from '../src/shared/lark-cli-env.js';
 import { SetupWizardDefaultDriver } from '../src/testing/setup-wizard-default-driver.js';
 
 type FeishuSite = 'feishu' | 'lark';
-type RuntimeAgent = 'codex' | 'claude' | 'kimi' | 'cursor';
-type HomeMarker = 'codex' | 'ccr' | 'claude' | 'kimi' | 'cursor' | 'none';
+type RuntimeAgent = 'codex' | 'claude' | 'kimi' | 'cursor' | 'zcode';
+type HomeMarker = 'codex' | 'ccr' | 'claude' | 'kimi' | 'cursor' | 'zcode' | 'none';
 
 interface PtyProcess {
   write(data: string): void;
@@ -44,14 +44,15 @@ function hasFlag(args: string[], name: string): boolean {
 }
 
 function parseHomeMarker(value: string): HomeMarker {
-  if (value === 'codex' || value === 'ccr' || value === 'claude' || value === 'kimi' || value === 'cursor' || value === 'none') return value;
-  throw new Error(`Invalid --home-marker "${value}". Expected codex, ccr, claude, kimi, cursor, or none.`);
+  if (value === 'codex' || value === 'ccr' || value === 'claude' || value === 'kimi' || value === 'cursor' || value === 'zcode' || value === 'none') return value;
+  throw new Error(`Invalid --home-marker "${value}". Expected codex, ccr, claude, kimi, cursor, zcode, or none.`);
 }
 
 function expectedAgentForHomeMarker(marker: HomeMarker): RuntimeAgent {
   if (marker === 'codex') return 'codex';
   if (marker === 'kimi') return 'kimi';
   if (marker === 'cursor') return 'cursor';
+  if (marker === 'zcode') return 'zcode';
   return 'claude';
 }
 
@@ -69,7 +70,7 @@ function printUsage(): void {
     'Options:',
     '  --run-root <path>       Temporary root; default /tmp/clk-setup-wizard-wizard-e2e-<timestamp>',
     '  --lark-cli-test-env-file <path>  Existing test App credentials used only to prepare the isolated global ~/.lark-cli binding',
-    '  --home-marker <name>    Runtime marker for default answers: codex|ccr|claude|kimi|cursor|none; default codex',
+    '  --home-marker <name>    Runtime marker for default answers: codex|ccr|claude|kimi|cursor|zcode|none; default codex',
     '  --timeout-ms <number>   Overall wizard timeout; default 600000',
     '  --keep-temp             Keep temporary root for diagnosis; default cleans it after success',
     '  --help                  Show this help',
@@ -244,6 +245,8 @@ interface CreatedWizardCredentials {
   site: FeishuSite;
   runtimeAgent: RuntimeAgent;
   kimiProvider?: string;
+  cursorProvider?: string;
+  zcodeProvider?: string;
   claudeExecutable?: string;
 }
 
@@ -258,6 +261,8 @@ function createRuntimeHomeMarker(runtimeHome: string, marker: HomeMarker): void 
           ? '.kimi-code'
           : marker === 'cursor'
             ? '.cursor'
+            : marker === 'zcode'
+              ? '.zcode'
           : '';
   if (!markerDir) return;
   fs.mkdirSync(path.join(runtimeHome, markerDir), { recursive: true });
@@ -307,6 +312,7 @@ function assertCodeLarkConfig(options: {
       claude?: { executable?: string; provider?: string };
       kimi?: { provider?: string };
       cursor?: { provider?: string };
+      zcode?: { provider?: string };
     };
     bridge?: { default_workspace?: string };
     channels?: Array<{ provider?: string; enabled?: boolean; config?: { app_id?: string; app_secret?: string; site?: string } }>;
@@ -321,6 +327,9 @@ function assertCodeLarkConfig(options: {
   }
   if (options.expectedAgent === 'cursor' && parsed.runtime?.cursor?.provider !== 'tmux') {
     throw new Error(`cursor provider mismatch: ${parsed.runtime?.cursor?.provider}`);
+  }
+  if (options.expectedAgent === 'zcode' && parsed.runtime?.zcode?.provider !== 'tmux') {
+    throw new Error(`zcode provider mismatch: ${parsed.runtime?.zcode?.provider}`);
   }
   if (options.expectedClaudeExecutable && parsed.runtime?.claude?.executable !== options.expectedClaudeExecutable) {
     throw new Error(`claude executable mismatch: ${parsed.runtime?.claude?.executable}`);
@@ -345,6 +354,7 @@ function assertCodeLarkConfig(options: {
     runtimeAgent: parsed.runtime!.agent as RuntimeAgent,
     kimiProvider: parsed.runtime?.kimi?.provider,
     cursorProvider: parsed.runtime?.cursor?.provider,
+    zcodeProvider: parsed.runtime?.zcode?.provider,
     claudeExecutable: parsed.runtime?.claude?.executable,
   };
 }
@@ -462,6 +472,8 @@ async function main(): Promise<void> {
       homeMarker,
       runtimeAgent: credentials.runtimeAgent,
       kimiProvider: credentials.kimiProvider,
+      cursorProvider: credentials.cursorProvider,
+      zcodeProvider: credentials.zcodeProvider,
       claudeExecutable: credentials.claudeExecutable,
       testEnvFile: outputTestEnvFile,
       appId: credentials.appId,

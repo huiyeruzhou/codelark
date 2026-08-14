@@ -5,6 +5,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { Readable } from 'node:stream';
+import { DatabaseSync } from 'node:sqlite';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 
 import { handleUiSessionRoute } from '../../../../operator-ui/routes/session.js';
@@ -106,6 +107,26 @@ function writeCursorTranscriptFixture(params: { configDir: string; cwd: string; 
     JSON.stringify({ type: 'turn_ended', status: 'success' }),
   ].join('\n') + '\n', 'utf-8');
   assert.equal(path.basename(transcript), `${encodeCursorConversationId(params.sessionId)}.jsonl`);
+}
+
+function writeZcodeDatabaseFixture(params: { dbPath: string; cwd: string; sessionId: string }): void {
+  fs.mkdirSync(params.cwd, { recursive: true });
+  fs.mkdirSync(path.dirname(params.dbPath), { recursive: true });
+  const db = new DatabaseSync(params.dbPath);
+  db.exec(`
+    CREATE TABLE session (id text primary key, directory text not null, path text, title text not null, time_created integer not null, time_updated integer not null, time_archived integer);
+    CREATE TABLE message (id text primary key, session_id text not null, time_created integer not null, time_updated integer not null, data text not null, sequence integer);
+    CREATE TABLE part (id text primary key, message_id text not null, session_id text not null, time_created integer not null, time_updated integer not null, data text not null, sequence integer);
+    CREATE TABLE turn_usage (session_id text not null, turn_id text not null, status text not null, started_at integer not null, completed_at integer, input_tokens integer not null default 0, output_tokens integer not null default 0, reasoning_tokens integer not null default 0, cache_creation_input_tokens integer not null default 0, cache_read_input_tokens integer not null default 0, computed_total_tokens integer not null default 0, error_type text, error_code text);
+    CREATE TABLE model_usage (session_id text not null, turn_id text, error_message text, started_at integer not null, attempt_index integer not null default 0);
+  `);
+  db.prepare('INSERT INTO session VALUES (?, ?, ?, ?, ?, ?, NULL)').run(params.sessionId, params.cwd, params.cwd, 'ZCode UI route session', 1000, 3000);
+  db.prepare('INSERT INTO message VALUES (?, ?, ?, ?, ?, ?)').run('msg_zcode_user', params.sessionId, 1100, 1100, JSON.stringify({ role: 'user', anchor: { turnId: 'turn_zcode' } }), 0);
+  db.prepare('INSERT INTO message VALUES (?, ?, ?, ?, ?, ?)').run('msg_zcode_assistant', params.sessionId, 1200, 2200, JSON.stringify({ role: 'assistant', anchor: { turnId: 'turn_zcode' } }), 1);
+  db.prepare('INSERT INTO part VALUES (?, ?, ?, ?, ?, ?, ?)').run('part_zcode_user', 'msg_zcode_user', params.sessionId, 1100, 1100, JSON.stringify({ type: 'text', text: 'hello zcode ui route' }), 0);
+  db.prepare('INSERT INTO part VALUES (?, ?, ?, ?, ?, ?, ?)').run('part_zcode_assistant', 'msg_zcode_assistant', params.sessionId, 1300, 2100, JSON.stringify({ type: 'text', text: 'zcode route reply' }), 0);
+  db.prepare('INSERT INTO turn_usage VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL)').run(params.sessionId, 'turn_zcode', 'completed', 1000, 3000, 10, 5, 0, 0, 0, 15);
+  db.close();
 }
 
 async function dispatch(
@@ -231,6 +252,44 @@ describe('handleUiSessionRoute', () => {
       else process.env.CURSOR_CONFIG_DIR = previousConfig;
       if (previousData === undefined) delete process.env.CURSOR_DATA_DIR;
       else process.env.CURSOR_DATA_DIR = previousData;
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('imports, reads, renames, and archives ZCode sessions through HTTP routes', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-ui-session-route-zcode-'));
+    const cwd = path.join(root, 'workspace');
+    const dbPath = path.join(root, 'data', 'sessions.sqlite');
+    const sessionId = 'sess_zcode_ui_route';
+    const previousDbPath = process.env.CODELARK_ZCODE_SESSION_DB_PATH;
+    process.env.CODELARK_ZCODE_SESSION_DB_PATH = dbPath;
+    writeZcodeDatabaseFixture({ dbPath, cwd, sessionId });
+    const store = new JsonFileStore(makeBridgeSettings());
+
+    try {
+      const imported = await dispatch(store, createJsonRequest({ zcodeSessionId: sessionId, zcodeCwd: cwd }), 'http://localhost/api/sessions/import-zcode-thread');
+      assert.equal(imported.statusCode, 200);
+      assert.equal(imported.body.config.activeRuntime, 'zcode');
+      assert.equal(imported.body.session.zcodeSessionId, sessionId);
+      assert.equal(store.getSession(imported.body.bridgeSessionId)?.runtime?.zcode?.provider, 'tmux');
+
+      const history = await dispatch(store, createGetRequest(), `http://localhost/api/session-history?zcodeSessionId=${encodeURIComponent(sessionId)}&zcodeCwd=${encodeURIComponent(cwd)}`);
+      assert.equal(history.statusCode, 200);
+      assert.equal(history.body.source, 'zcode');
+      assert.equal(history.body.messages.some((message: { content?: string }) => message.content === 'hello zcode ui route'), true);
+      assert.equal(history.body.messages.some((message: { content?: string }) => message.content === 'zcode route reply'), true);
+
+      const renamed = await dispatch(store, createJsonRequest({ zcodeSessionId: sessionId, zcodeCwd: cwd, name: 'Renamed ZCode Route' }), 'http://localhost/api/sessions/rename');
+      assert.equal(renamed.statusCode, 200);
+      assert.equal(renamed.body.config.name, 'Renamed ZCode Route');
+
+      const deleted = await dispatch(store, createJsonRequest({ zcodeSessionId: sessionId, zcodeCwd: cwd }), 'http://localhost/api/sessions/delete');
+      assert.equal(deleted.statusCode, 200);
+      assert.deepEqual(deleted.body.deletedBridgeSessionIds, [imported.body.bridgeSessionId]);
+      assert.equal(store.getSession(imported.body.bridgeSessionId), null);
+    } finally {
+      if (previousDbPath === undefined) delete process.env.CODELARK_ZCODE_SESSION_DB_PATH;
+      else process.env.CODELARK_ZCODE_SESSION_DB_PATH = previousDbPath;
       fs.rmSync(root, { recursive: true, force: true });
     }
   });

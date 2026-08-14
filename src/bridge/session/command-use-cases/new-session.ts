@@ -39,7 +39,7 @@ import type { SessionCommandDeps, SessionCommandResult } from './types.js';
 
 type InheritedCodexProvider = ReturnType<typeof getSessionCodexProviderOverride>;
 type InheritedClaudeProvider = ReturnType<typeof getSessionClaudeProviderOverride>;
-type InheritedRuntime = 'codex' | 'claude' | 'kimi' | 'cursor';
+type InheritedRuntime = 'codex' | 'claude' | 'kimi' | 'cursor' | 'zcode';
 
 const CLOUD_DOCUMENT_GROUP_TITLE_CHARS = 8;
 
@@ -110,15 +110,22 @@ function setSessionCursorProviderToml(sessionId: string): void {
     { runtime: { cursor: { provider: 'tmux' } } },
   );
 }
+function setSessionZcodeProviderToml(sessionId: string): void {
+  createConfigService({ migrate: false }).set(
+    { kind: 'session', sessionId },
+    { runtime: { zcode: { provider: 'tmux' } } },
+  );
+}
 function activeRuntimeForNewSession(previousSession: BridgeSession | null): InheritedRuntime {
   const activeRuntime = getSessionActiveRuntime(previousSession);
-  return activeRuntime === 'claude' || activeRuntime === 'kimi' || activeRuntime === 'cursor' ? activeRuntime : 'codex';
+  return activeRuntime === 'claude' || activeRuntime === 'kimi' || activeRuntime === 'cursor' || activeRuntime === 'zcode' ? activeRuntime : 'codex';
 }
 
 function formatInheritedRuntimeLabel(runtime: InheritedRuntime): string {
   if (runtime === 'claude') return 'Claude Code';
   if (runtime === 'kimi') return 'Kimi Code';
   if (runtime === 'cursor') return 'Cursor Agent';
+  if (runtime === 'zcode') return 'ZCode';
   return 'Codex';
 }
 
@@ -156,6 +163,10 @@ function inheritNewSessionRuntimeProvider(
   }
   if (activeRuntime === 'cursor') {
     setSessionCursorProviderToml(sessionId);
+    return;
+  }
+  if (activeRuntime === 'zcode') {
+    setSessionZcodeProviderToml(sessionId);
     return;
   }
   const inheritedProvider = getSessionCodexProviderOverride(previousSession);

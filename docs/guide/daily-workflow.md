@@ -101,7 +101,7 @@ tmux 屏幕是最常用的观察入口。任务长时间运行、等待选择或
 
 ## 复用本地已有会话
 
-如果任务已经在本机 Codex、Claude Code、Kimi Code 或 Cursor Agent 中开始，不必重新创建：
+如果任务已经在本机 Codex、Claude Code、Kimi Code、Cursor Agent 或 ZCode 中开始，不必重新创建：
 
 ```text
 /t
@@ -159,7 +159,7 @@ codelark monitor cancel <stable-task-id> --home <codelark-home>
 | 高 | 为新任务创建独立群聊 | `/new` |
 | 高 | 当前群开始新对话 | `/clear` |
 | 常用 | 接管本地已有会话 | `/t` |
-| 常用 | 切换 Codex、Claude、Kimi、Cursor | `/runtime` |
+| 常用 | 切换 Codex、Claude、Kimi、Cursor、ZCode | `/runtime` |
 | 常用 | 定时执行、完成后继续或条件满足后通知 | `/every`、`/then`、`condition-monitor` skill |
 | 按需 | 重启本地 TUI | `/p tmux` |
 | 按需 | 停止任务、查看当前状态 | `/stop`、`/`、`/status` |

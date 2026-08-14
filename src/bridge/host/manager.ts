@@ -50,9 +50,15 @@ import {
   findCursorSessionFileById,
 } from '../../runtime/cursor/session-index.js';
 import {
+  archiveZcodeSession,
+  createZcodeMirrorSqliteSource,
+  findZcodeSessionById,
+} from '../../runtime/zcode/session-index.js';
+import {
   kimiTmuxSessionName,
 } from '../../runtime/kimi/tmux-provider.js';
 import { cursorTmuxSessionName } from '../../runtime/cursor/tmux-provider.js';
+import { zcodeTmuxSessionName } from '../../runtime/zcode/tmux-provider.js';
 import {
   sanitizeInput,
 } from '../../shared/security/validators.js';
@@ -159,6 +165,8 @@ import {
   getSessionKimiSessionId,
   getSessionCursorCwd,
   getSessionCursorSessionId,
+  getSessionZcodeCwd,
+  getSessionZcodeSessionId,
   getSessionActiveRuntime,
   getSessionSystemPrompt,
   getSessionWorkingDirectory,
@@ -167,6 +175,7 @@ import {
   setSessionCodexTitleUpdate,
   setSessionKimiIdentityUpdate,
   setSessionCursorIdentityUpdate,
+  setSessionZcodeIdentityUpdate,
 } from '../../domain/session-runtime.js';
 import {
   buildCodexTuiSelectionChoiceActions,
@@ -459,6 +468,8 @@ async function probeTmuxProviderExitAfterAutoForward(params: {
       ? 'Kimi'
       : runtimeProvider.runtime === 'cursor'
         ? 'Cursor'
+        : runtimeProvider.runtime === 'zcode'
+          ? 'ZCode'
         : 'Codex';
   const elapsedMs = Math.max(0, nowMs - params.startedAtMs);
   SESSION_HEALTH_RUNTIME.recordInteractiveEnd(
@@ -747,14 +758,14 @@ function parseMirrorCodexSelectionSessionId(permissionRequestId: string): string
 
 function sessionSupportsTmuxSelectionPromptProbe(session: BridgeSession): boolean {
   const activeRuntime = getSessionActiveRuntime(session);
-  if (activeRuntime === 'kimi' || activeRuntime === 'cursor') return false;
+  if (activeRuntime === 'kimi' || activeRuntime === 'cursor' || activeRuntime === 'zcode') return false;
   if (activeRuntime === 'claude') return resolveEffectiveClaudeProvider(session) === 'tmux';
   return resolveEffectiveCodexProvider(session) === 'tmux';
 }
 
 function sessionSupportsCodexTuiRuntimeSignals(session: BridgeSession): boolean {
   const activeRuntime = getSessionActiveRuntime(session);
-  if (activeRuntime === 'kimi' || activeRuntime === 'claude' || activeRuntime === 'cursor') return false;
+  if (activeRuntime === 'kimi' || activeRuntime === 'claude' || activeRuntime === 'cursor' || activeRuntime === 'zcode') return false;
   return resolveEffectiveCodexProvider(session) === 'tmux';
 }
 
@@ -2057,6 +2068,9 @@ interface BridgeManagerState extends BridgeAdapterRuntimeState, BridgeInteractiv
   cursorMirrorWakeTimer: NodeJS.Timeout | null;
   cursorMirrorSubscriptions: Map<string, BridgeMirrorSubscription>;
   cursorMirrorSyncInFlight: boolean;
+  zcodeMirrorWakeTimer: NodeJS.Timeout | null;
+  zcodeMirrorSubscriptions: Map<string, BridgeMirrorSubscription>;
+  zcodeMirrorSyncInFlight: boolean;
   mirrorSuppressUntil: Map<string, MirrorSuppressionState[]>;
   mirrorIgnoredTurnIds: Map<string, Map<string, number>>;
   threadCardSelections: Map<string, string>;
@@ -2101,6 +2115,9 @@ function getState(): BridgeManagerState {
       cursorMirrorWakeTimer: null,
       cursorMirrorSubscriptions: new Map(),
       cursorMirrorSyncInFlight: false,
+      zcodeMirrorWakeTimer: null,
+      zcodeMirrorSubscriptions: new Map(),
+      zcodeMirrorSyncInFlight: false,
       mirrorSuppressUntil: new Map(),
       mirrorIgnoredTurnIds: new Map(),
       threadCardSelections: new Map(),
@@ -2131,6 +2148,9 @@ function getState(): BridgeManagerState {
   }
   if (!g[GLOBAL_KEY].cursorMirrorSubscriptions) {
     g[GLOBAL_KEY].cursorMirrorSubscriptions = new Map();
+  }
+  if (!g[GLOBAL_KEY].zcodeMirrorSubscriptions) {
+    g[GLOBAL_KEY].zcodeMirrorSubscriptions = new Map();
   }
   if (!g[GLOBAL_KEY].invalidAdapters) {
     g[GLOBAL_KEY].invalidAdapters = new Map();
@@ -2182,6 +2202,12 @@ function getState(): BridgeManagerState {
   }
   if (!Object.prototype.hasOwnProperty.call(g[GLOBAL_KEY], 'cursorMirrorSyncInFlight')) {
     g[GLOBAL_KEY].cursorMirrorSyncInFlight = false;
+  }
+  if (!Object.prototype.hasOwnProperty.call(g[GLOBAL_KEY], 'zcodeMirrorWakeTimer')) {
+    g[GLOBAL_KEY].zcodeMirrorWakeTimer = null;
+  }
+  if (!Object.prototype.hasOwnProperty.call(g[GLOBAL_KEY], 'zcodeMirrorSyncInFlight')) {
+    g[GLOBAL_KEY].zcodeMirrorSyncInFlight = false;
   }
   return g[GLOBAL_KEY];
 }
@@ -2240,6 +2266,24 @@ function getCursorMirrorState(): BridgeMirrorRuntimeState {
   };
 }
 
+function getZcodeMirrorState(): BridgeMirrorRuntimeState {
+  const state = getState();
+  return {
+    get running() { return state.running; },
+    set running(value) { state.running = value; },
+    get adapters() { return state.adapters; },
+    set adapters(value) { state.adapters = value; },
+    get mirrorSubscriptions() { return state.zcodeMirrorSubscriptions; },
+    set mirrorSubscriptions(value) { state.zcodeMirrorSubscriptions = value; },
+    get mirrorWakeTimer() { return state.zcodeMirrorWakeTimer; },
+    set mirrorWakeTimer(value) { state.zcodeMirrorWakeTimer = value; },
+    get mirrorSyncInFlight() { return state.zcodeMirrorSyncInFlight; },
+    set mirrorSyncInFlight(value) { state.zcodeMirrorSyncInFlight = value; },
+    get activeTasks() { return state.activeTasks; },
+    set activeTasks(value) { state.activeTasks = value; },
+  };
+}
+
 const INTERACTIVE_RUNTIME = createInteractiveRuntime(getState, {
   getStore: () => getBridgeContext().store,
   nowIso,
@@ -2272,6 +2316,15 @@ function formatRuntimeTerminalDetail(terminal: BridgeTurnTerminalRecord): string
       return '检测到 Cursor Agent 会话当前任务执行失败。';
     }
     return '检测到 Cursor Agent 会话已完成当前任务。';
+  }
+  if (terminal.runtime === 'zcode') {
+    if (terminal.outcome === 'aborted') {
+      return '检测到 ZCode 会话已停止当前任务。';
+    }
+    if (terminal.outcome === 'failed') {
+      return '检测到 ZCode 会话当前任务执行失败。';
+    }
+    return '检测到 ZCode 会话已完成当前任务。';
   }
   if (terminal.outcome === 'aborted') {
     return '检测到 Codex thread已停止当前任务。';
@@ -2367,6 +2420,7 @@ function syncMirrorSessionState(sessionId: string): void {
     ...Array.from(state.claudeMirrorSubscriptions.values()),
     ...Array.from(state.kimiMirrorSubscriptions.values()),
     ...Array.from(state.cursorMirrorSubscriptions.values()),
+    ...Array.from(state.zcodeMirrorSubscriptions.values()),
   ]
     .filter((item) => item.sessionId === sessionId);
   const mirrorStatus: BridgeSession['mirror_status'] = subscriptions.length === 0
@@ -2479,6 +2533,7 @@ function refreshActiveMirrorStreamingStatuses(nowMs = Date.now()): void {
     ...Array.from(state.claudeMirrorSubscriptions.values()),
     ...Array.from(state.kimiMirrorSubscriptions.values()),
     ...Array.from(state.cursorMirrorSubscriptions.values()),
+    ...Array.from(state.zcodeMirrorSubscriptions.values()),
   ]) {
     refreshMirrorStreamingStatus(subscription, nowMs);
   }
@@ -2718,11 +2773,66 @@ const CURSOR_MIRROR_RUNTIME = createMirrorRuntime(getCursorMirrorState, {
   deliverMirrorTurns,
 });
 
+const ZCODE_MIRROR_RUNTIME = createMirrorRuntime(getZcodeMirrorState, {
+  watchDebounceMs: MIRROR_WATCH_DEBOUNCE_MS,
+  danglingThreadRetryLimit: DANGLING_MIRROR_THREAD_RETRY_LIMIT,
+  failureSuspendThreshold: MIRROR_FAILURE_SUSPEND_THRESHOLD,
+  failureSuspendMs: MIRROR_FAILURE_SUSPEND_MS,
+  reconcileConcurrency: MIRROR_RECONCILE_CONCURRENCY,
+  slowReconcileSubscriptionMs: MIRROR_SLOW_RECONCILE_SUBSCRIPTION_MS,
+  activeBindingWindowMs: MIRROR_ACTIVE_BINDING_WINDOW_MS,
+  coldReconcileIntervalMs: MIRROR_COLD_RECONCILE_INTERVAL_MS,
+}, {
+  mirrorSource: createZcodeMirrorSqliteSource(),
+  runtimeLabel: 'ZCode',
+  nowIso,
+  describeUnknownError,
+  listChannelChats: () => getBridgeContext().store.listChannelChats(),
+  getSession: (sessionId) => getBridgeContext().store.getSession(sessionId),
+  clearSessionMirrorThreadId: (sessionId) => {
+    getBridgeContext().store.updateSession(sessionId, setSessionZcodeIdentityUpdate(undefined, undefined));
+  },
+  clearSessionCodexThreadId: () => {},
+  getCodexSessionByThreadIdSafe: () => null,
+  hasSessionMirrorSource: (session) => {
+    if (getSessionActiveRuntime(session) !== 'zcode') return false;
+    const sessionId = getSessionZcodeSessionId(session);
+    const cwd = getSessionZcodeCwd(session) || getSessionWorkingDirectory(session);
+    return Boolean(
+      sessionId
+      && cwd
+      && findZcodeSessionById(sessionId, cwd, { includeArchived: true }),
+    );
+  },
+  getSessionMirrorThreadId: (session) => getSessionZcodeSessionId(session),
+  getSessionMirrorCwd: (session) => getSessionZcodeCwd(session) || getSessionWorkingDirectory(session),
+  getMirrorSourceSummary: (source, threadId, cwd) => source.findByThreadId(threadId, cwd || undefined),
+  syncMirrorSessionStateSafe,
+  filterSuppressedMirrorRecords,
+  observeSessionHealthRecords: (sessionId, threadId, records) => {
+    SESSION_HEALTH_RUNTIME.observeBridgeMirrorRecords(sessionId, threadId, records);
+  },
+  routeRuntimeRecords: (runtime, sessionId, threadId, records) => routeRuntimeRecords(
+    sessionId,
+    runtime,
+    threadId,
+    records,
+    TURN_COORDINATOR,
+  ),
+  consumeMirrorRecords,
+  flushTimedOutMirrorTurn: (subscription) => flushTimedOutMirrorTurn(subscription),
+  hasPendingMirrorWork,
+  consumeBufferedMirrorTurns: (subscription) => consumeBufferedMirrorTurns(subscription),
+  stopMirrorStreaming,
+  deliverMirrorTurns,
+});
+
 function resetMirrorSessionForInteractiveRun(sessionId: string): void {
   MIRROR_RUNTIME.resetMirrorSessionForInteractiveRun(sessionId);
   CLAUDE_MIRROR_RUNTIME.resetMirrorSessionForInteractiveRun(sessionId);
   KIMI_MIRROR_RUNTIME.resetMirrorSessionForInteractiveRun(sessionId);
   CURSOR_MIRROR_RUNTIME.resetMirrorSessionForInteractiveRun(sessionId);
+  ZCODE_MIRROR_RUNTIME.resetMirrorSessionForInteractiveRun(sessionId);
 }
 
 async function reconcileMirrorSubscriptions(): Promise<void> {
@@ -2730,6 +2840,7 @@ async function reconcileMirrorSubscriptions(): Promise<void> {
   await CLAUDE_MIRROR_RUNTIME.reconcileMirrorSubscriptions();
   await KIMI_MIRROR_RUNTIME.reconcileMirrorSubscriptions();
   await CURSOR_MIRROR_RUNTIME.reconcileMirrorSubscriptions();
+  await ZCODE_MIRROR_RUNTIME.reconcileMirrorSubscriptions();
   await ensureCodexTuiIdleScreenCheckpoints();
   const nowMs = Date.now();
   await Promise.allSettled(
@@ -2749,6 +2860,7 @@ function clearMirrorSubscriptions(): void {
   CLAUDE_MIRROR_RUNTIME.clearMirrorSubscriptions();
   KIMI_MIRROR_RUNTIME.clearMirrorSubscriptions();
   CURSOR_MIRROR_RUNTIME.clearMirrorSubscriptions();
+  ZCODE_MIRROR_RUNTIME.clearMirrorSubscriptions();
 }
 
 function shouldRouteTerminalAppendInline(msg: InboundMessage): boolean {
@@ -3565,6 +3677,10 @@ function formatLifecycleArchiveDetail(result: Awaited<ReturnType<typeof archiveL
       return result.cursorSessionId
         ? `archived Cursor session ${result.cursorSessionId.slice(0, 8)}`
         : 'archived Cursor session';
+    case 'zcode_archive':
+      return result.zcodeSessionId
+        ? `archived ZCode session ${result.zcodeSessionId.slice(0, 8)}`
+        : 'archived ZCode session';
     case 'bridge_delete':
       return 'deleted BridgeSession';
     case 'binding_delete':
@@ -4199,6 +4315,13 @@ function createLifecycleSessionRegistry(store: BridgeStore): SessionRegistryServ
         return session ? archiveCursorSessionFile(session) : false;
       },
     },
+    zcodeThreads: {
+      getThread: () => null,
+      archiveThread: (zcodeSessionId, cwd) => {
+        const session = findZcodeSessionById(zcodeSessionId, cwd, { includeArchived: true });
+        return session ? archiveZcodeSession(session) : false;
+      },
+    },
   });
 }
 
@@ -4206,7 +4329,7 @@ async function archiveLifecycleBindingSession(
   store: BridgeStore,
   binding: ChannelChat,
 ): Promise<{
-  action: 'codex_archive' | 'claude_archive' | 'kimi_archive' | 'cursor_archive' | 'bridge_delete' | 'delete_after_archive_failure' | 'binding_delete';
+  action: 'codex_archive' | 'claude_archive' | 'kimi_archive' | 'cursor_archive' | 'zcode_archive' | 'bridge_delete' | 'delete_after_archive_failure' | 'binding_delete';
   codexThreadId?: string;
   claudeSessionId?: string;
   claudeCwd?: string;
@@ -4214,6 +4337,8 @@ async function archiveLifecycleBindingSession(
   kimiCwd?: string;
   cursorSessionId?: string;
   cursorCwd?: string;
+  zcodeSessionId?: string;
+  zcodeCwd?: string;
   deletedBridgeSessionIds: string[];
   tmuxSessionNames: string[];
   tmuxCleanupCommands: string[];
@@ -4241,6 +4366,8 @@ async function archiveLifecycleBindingSession(
   const kimiCwd = activeRuntime === 'kimi' ? getSessionKimiCwd(session) || getSessionWorkingDirectory(session) || undefined : undefined;
   const cursorSessionId = activeRuntime === 'cursor' ? getSessionCursorSessionId(session) || undefined : undefined;
   const cursorCwd = activeRuntime === 'cursor' ? getSessionCursorCwd(session) || getSessionWorkingDirectory(session) || undefined : undefined;
+  const zcodeSessionId = activeRuntime === 'zcode' ? getSessionZcodeSessionId(session) || undefined : undefined;
+  const zcodeCwd = activeRuntime === 'zcode' ? getSessionZcodeCwd(session) || getSessionWorkingDirectory(session) || undefined : undefined;
   const tmuxCleanup = await cleanupLifecycleTmuxSessions(store, session, {
     codexThreadId,
     claudeSessionId,
@@ -4249,6 +4376,8 @@ async function archiveLifecycleBindingSession(
     kimiCwd,
     cursorSessionId,
     cursorCwd,
+    zcodeSessionId,
+    zcodeCwd,
   });
   try {
     if (codexThreadId) {
@@ -4290,6 +4419,16 @@ async function archiveLifecycleBindingSession(
         ...tmuxCleanup,
       };
     }
+    if (zcodeSessionId && zcodeCwd) {
+      const result = registry.archiveZcodeThread(zcodeSessionId, zcodeCwd);
+      return {
+        action: 'zcode_archive',
+        zcodeSessionId,
+        zcodeCwd,
+        deletedBridgeSessionIds: result.deletedBridgeSessionIds,
+        ...tmuxCleanup,
+      };
+    }
 
     const result = registry.deleteBridgeSession(session.id);
     return {
@@ -4309,6 +4448,8 @@ async function archiveLifecycleBindingSession(
       kimiCwd,
       cursorSessionId,
       cursorCwd,
+      zcodeSessionId,
+      zcodeCwd,
       deletedBridgeSessionIds: [session.id],
       ...tmuxCleanup,
       error,
@@ -4327,6 +4468,8 @@ async function cleanupLifecycleTmuxSessions(
     kimiCwd?: string;
     cursorSessionId?: string;
     cursorCwd?: string;
+    zcodeSessionId?: string;
+    zcodeCwd?: string;
   },
 ): Promise<{
   tmuxSessionNames: string[];
@@ -4353,6 +4496,11 @@ async function cleanupLifecycleTmuxSessions(
           && getSessionCursorSessionId(candidate) === identity.cursorSessionId
           && getSessionCursorCwd(candidate) === identity.cursorCwd;
       }
+      if (identity.zcodeSessionId && identity.zcodeCwd) {
+        return getSessionActiveRuntime(candidate) === 'zcode'
+          && getSessionZcodeSessionId(candidate) === identity.zcodeSessionId
+          && getSessionZcodeCwd(candidate) === identity.zcodeCwd;
+      }
       return candidate.id === session.id;
     });
   const targets = linkedSessions.length > 0 ? linkedSessions : [session];
@@ -4368,6 +4516,8 @@ async function cleanupLifecycleTmuxSessions(
         ? kimiTmuxSessionName(target.id)
         : activeRuntime === 'cursor'
           ? cursorTmuxSessionName(target.id)
+          : activeRuntime === 'zcode'
+            ? zcodeTmuxSessionName(target.id)
           : undefined);
     if (!tmuxSessionName || seen.has(tmuxSessionName)) continue;
     seen.add(tmuxSessionName);
@@ -4992,6 +5142,7 @@ async function handleMessage(
     tmuxProviderSession
     && tmuxProviderRuntime?.provider === 'tmux'
     && tmuxProviderRuntime.runtime !== 'cursor'
+    && tmuxProviderRuntime.runtime !== 'zcode'
   ) {
     const tmuxProviderChat = tmuxProviderBinding;
     if (!tmuxProviderChat) {
@@ -5431,6 +5582,8 @@ function resetStateForTests(): void {
   state.mirrorSyncInFlight = false;
   state.claudeMirrorSyncInFlight = false;
   state.kimiMirrorSyncInFlight = false;
+  state.cursorMirrorSyncInFlight = false;
+  state.zcodeMirrorSyncInFlight = false;
   state.dailyVersionUpdateRuntime = null;
   if (state.reconcileTimer) {
     clearInterval(state.reconcileTimer);
@@ -5451,6 +5604,14 @@ function resetStateForTests(): void {
   if (state.kimiMirrorWakeTimer) {
     clearTimeout(state.kimiMirrorWakeTimer);
     state.kimiMirrorWakeTimer = null;
+  }
+  if (state.cursorMirrorWakeTimer) {
+    clearTimeout(state.cursorMirrorWakeTimer);
+    state.cursorMirrorWakeTimer = null;
+  }
+  if (state.zcodeMirrorWakeTimer) {
+    clearTimeout(state.zcodeMirrorWakeTimer);
+    state.zcodeMirrorWakeTimer = null;
   }
 }
 

@@ -27,7 +27,11 @@ function toTerminalRecord(
     codexThreadId: runtime === 'codex' ? threadId : '',
     turnId: record.turnId,
     text: record.content,
-    outcome: record.type === 'task_aborted' ? 'aborted' : 'completed',
+    outcome: record.isError === true
+      ? 'failed'
+      : record.type === 'task_aborted'
+        ? 'aborted'
+        : 'completed',
     timestamp: record.timestamp,
   };
 }

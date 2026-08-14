@@ -92,6 +92,7 @@ import {
 import { getClaudeProjectDir, isArchivedClaudeSession } from '../../../../runtime/claude/session-jsonl.js';
 import { computeKimiWorkspaceDirName, isArchivedKimiSession } from '../../../../runtime/kimi/session-index.js';
 import { kimiTmuxSessionName } from '../../../../runtime/kimi/tmux-provider.js';
+import { zcodeTmuxSessionName } from '../../../../runtime/zcode/tmux-provider.js';
 import { normalizeReasoningEffort, normalizeSandboxMode } from '../../../../runtime/options.js';
 import { sseEvent } from '../../../../runtime/sse.js';
 import type { LLMProvider, StreamChatParams } from '../../../../runtime/contracts.js';
@@ -2052,7 +2053,7 @@ describe('command-dispatch', () => {
     assert.deepEqual(card?.tags, ['codex', '019e7d66...card01']);
     assert.match(card?.title || '', /Codex Card title/);
     assert.equal(card?.selects?.[0]?.id, 'cur_runtime');
-    assert.deepEqual(card?.selects?.[0]?.options.map((option) => option.text), ['通用配置', 'Codex', 'Claude Code', 'Kimi Code', 'Cursor Agent']);
+    assert.deepEqual(card?.selects?.[0]?.options.map((option) => option.text), ['通用配置', 'Codex', 'Claude Code', 'Kimi Code', 'Cursor Agent', 'ZCode']);
     assert.equal(parseCommandCallbackData(card?.selects?.[0]?.selectedCallbackData || '')?.commandText, '/current-runtime codex');
     assert.equal(card?.form?.layout, 'two_column');
     assert.equal(card?.form?.inputElementId, undefined);
@@ -4443,6 +4444,56 @@ enabled = true
     );
   });
 
+  it('switches to a dedicated ZCode BridgeSession and reuses it when switching back', async () => {
+    const store = initTestContext();
+    const sent: any[] = [];
+    const adapter = createGroupCapableAdapter({ sent });
+    const address = { channelType: 'feishu', chatId: 'chat-runtime-zcode-command' } as const;
+    const codexSession = store.createSession('Codex parent', 'test-model');
+    store.upsertChannelChat({
+      channelType: address.channelType,
+      chatId: address.chatId,
+      bridgeSessionId: codexSession.id,
+    });
+    const deps = {
+      getActiveTask: () => undefined,
+      diagnoseSessionHealth: async () => null,
+      diagnoseAllActiveSessions: async () => [],
+    };
+
+    await handleBridgeCommand(adapter, { address, text: '/runtime zcode', messageId: 'zcode-1' } as any, '/runtime zcode', deps);
+    const zcodeBinding = store.getChannelChat(address.channelType, address.chatId)!;
+    const zcodeSession = store.getSession(zcodeBinding.bridgeSessionId);
+    assert.notEqual(zcodeBinding.bridgeSessionId, codexSession.id);
+    assert.equal(getSessionActiveRuntime(zcodeSession), 'zcode');
+    assert.equal(zcodeBinding.runtimeBridgeSessionIds?.zcode, zcodeSession?.id);
+    assert.match(sent.at(-1)?.text || '', /Runtime.*zcode/s);
+
+    store.updateSession(zcodeSession!.id, {
+      runtime: {
+        zcode: {
+          sessionId: 'sess_current_zcode',
+          cwd: '/tmp/current-zcode',
+          provider: 'tmux',
+          mode: 'build',
+        },
+      },
+    });
+    await handleBridgeCommand(adapter, { address, text: '/current', messageId: 'zcode-current' } as any, '/current', deps);
+    const currentCard = sent.at(-1)?.richCard as OutboundRichCard | undefined;
+    assert.match(currentCard?.subtitle || '', /zcode_session_id: sess_current_zcode/);
+    assert.deepEqual(
+      currentCard?.selects?.[0]?.options.map((option) => option.text),
+      ['通用配置', 'Codex', 'Claude Code', 'Kimi Code', 'Cursor Agent', 'ZCode'],
+    );
+
+    await handleBridgeCommand(adapter, { address, text: '/runtime codex', messageId: 'zcode-2' } as any, '/runtime codex', deps);
+    assert.equal(store.getChannelChat(address.channelType, address.chatId)?.bridgeSessionId, codexSession.id);
+    await handleBridgeCommand(adapter, { address, text: '/runtime zcode', messageId: 'zcode-3' } as any, '/runtime zcode', deps);
+    assert.equal(store.getChannelChat(address.channelType, address.chatId)?.bridgeSessionId, zcodeSession?.id);
+    assert.equal(store.listSessions().filter((item) => getSessionActiveRuntime(item) === 'zcode').length, 1);
+  });
+
   it('creates /new group sessions in the current Kimi runtime without carrying old Codex mappings', async () => {
     const store = initTestContext();
     const sent: any[] = [];
@@ -4737,6 +4788,50 @@ enabled = true
     assert.equal(reconcileStarted, true);
     assert.match(sent.at(-1)?.text || '', /已切换 Kimi Provider/);
     reconcile.resolve();
+  });
+
+  it('forces a ZCode tmux restart and persists the stable session identity', async () => {
+    const store = initTestContext();
+    const sent: any[] = [];
+    const adapter = createGroupCapableAdapter({ sent });
+    const address = { channelType: 'feishu', chatId: 'chat-zcode-provider-restart' } as const;
+    const session = store.createSession('zcode-provider-restart', 'test-model');
+    store.updateSession(session.id, {
+      runtime: {
+        activeRuntime: 'zcode',
+        zcode: { sessionId: 'sess_existing', cwd: '/tmp/zcode-existing', provider: 'tmux', mode: 'build' },
+      },
+    });
+    store.upsertChannelChat({ channelType: address.channelType, chatId: address.chatId, bridgeSessionId: session.id });
+    let receivedSessionId = '';
+
+    await handleBridgeCommand(
+      adapter,
+      { address, text: '/p tmux', messageId: 'incoming-zcode-provider-restart' } as any,
+      '/p tmux',
+      {
+        getActiveTask: () => undefined,
+        diagnoseSessionHealth: async () => null,
+        diagnoseAllActiveSessions: async () => [],
+        reconcileMirrorSubscriptions: async () => {},
+        restartZcodeTmuxSession: async (params) => {
+          receivedSessionId = params.zcodeSessionId || '';
+          return {
+            sessionName: `clk-zcode-${session.id}`,
+            targetPane: `clk-zcode-${session.id}:0.0`,
+            sessionId: 'sess_existing',
+            cwd: '/tmp/zcode-existing',
+            dbPath: '/tmp/zcode-existing/sessions.db',
+            existed: false,
+          };
+        },
+      },
+    );
+
+    assert.equal(receivedSessionId, 'sess_existing');
+    assert.equal(store.getSession(session.id)?.runtime?.zcode?.sessionId, 'sess_existing');
+    assert.equal(store.getSession(session.id)?.runtime?.general?.tmuxSessionName, `clk-zcode-${session.id}`);
+    assert.match(sent.at(-1)?.text || '', /已切换 ZCode Provider/);
   });
 
   it('explains Cursor workspace indexing before /p tmux cold startup finishes', async () => {
@@ -6179,7 +6274,7 @@ enabled = true
     assert.match(sent.at(-1)?.richCard?.footer?.[1] || '', /Provider.*tmux.*sdk/);
     assert.deepEqual(
       sent.at(-1)?.richCard?.selects?.[0]?.options.map((option: any) => option.text),
-      ['通用配置', 'Codex', 'Claude', 'Kimi', 'Cursor', 'Bridge', '通道配置（feishu-default）'],
+      ['通用配置', 'Codex', 'Claude', 'Kimi', 'Cursor', 'ZCode', 'Bridge', '通道配置（feishu-default）'],
     );
     assert.deepEqual(sent.at(-1)?.richCard?.sections, []);
     assert.deepEqual(
@@ -7324,7 +7419,7 @@ enabled = true
     assert.equal(message?.richCard?.tableBlocks?.[0]?.table.rows.length, 20);
     assert.equal(message?.richCard?.tableBlocks?.[0]?.selects?.[0]?.options.length, 20);
     assert.deepEqual(message?.richCard?.tableBlocks?.[0]?.selects?.[1]?.options.map((option) => option.text), ['显示 20', '显示 50', '显示 100']);
-    assert.deepEqual(message?.richCard?.tableBlocks?.[0]?.selects?.[2]?.options.map((option) => option.text), ['Codex', 'Claude', 'Kimi', 'Cursor']);
+    assert.deepEqual(message?.richCard?.tableBlocks?.[0]?.selects?.[2]?.options.map((option) => option.text), ['Codex', 'Claude', 'Kimi', 'Cursor', 'ZCode']);
     assert.deepEqual(
       message?.richCard?.tableBlocks?.[0]?.actions?.map((row) => row.map((action) => action.text)),
       [['接管', '归档', '新建'], ['解绑', '刷新']],
@@ -9156,6 +9251,74 @@ enabled = true
       } else {
         process.env.TMUX_FAKE_LOG = oldFakeLog;
       }
+      fs.rmSync(fakeTmux.binDir, { recursive: true, force: true });
+    }
+  });
+
+  it('force-stops an active ZCode turn with one C-c and keeps the provider session reusable', async () => {
+    const store = initTestContext();
+    const fakeTmux = installFakeTmux();
+    const oldPath = process.env.PATH || '';
+    const oldFakeLog = process.env.TMUX_FAKE_LOG;
+    process.env.PATH = `${fakeTmux.binDir}${path.delimiter}${oldPath}`;
+    process.env.TMUX_FAKE_LOG = fakeTmux.logPath;
+    const sent: string[] = [];
+    const forcedStops: Array<{ sessionId: string; detail?: string }> = [];
+    const abortController = new AbortController();
+    const adapter: any = {
+      channelType: 'feishu',
+      send: async (message: { text: string }) => {
+        sent.push(message.text);
+        return { ok: true, messageId: 'reply-stop-zcode-tmux-provider' };
+      },
+    };
+    const address = { channelType: 'feishu', chatId: 'chat-stop-zcode-tmux-provider' } as const;
+    const binding = router.createBinding(address, '/tmp/stop-zcode-tmux-provider');
+    const target = zcodeTmuxSessionName(binding.bridgeSessionId);
+    store.updateSession(binding.bridgeSessionId, {
+      runtime: {
+        activeRuntime: 'zcode',
+        zcode: {
+          sessionId: 'sess_stop_zcode_tui',
+          cwd: '/tmp/stop-zcode-tmux-provider',
+          provider: 'tmux',
+        },
+        general: {
+          workingDirectory: '/tmp/stop-zcode-tmux-provider',
+          tmuxSessionName: target,
+        },
+      },
+      mirror_status: 'watching',
+      runtime_status: 'running',
+      health_status: 'running_active',
+    });
+
+    try {
+      await handleBridgeCommand(
+        adapter,
+        { address, text: '/stop', messageId: 'incoming-stop-zcode-tmux-provider' } as any,
+        '/stop',
+        {
+          getActiveTask: (sessionId) => sessionId === binding.bridgeSessionId ? { abortController } : undefined,
+          forceStopSession: async (sessionId, detail) => {
+            forcedStops.push({ sessionId, detail });
+            abortController.abort();
+            return true;
+          },
+          diagnoseSessionHealth: async () => null,
+          diagnoseAllActiveSessions: async () => [],
+        },
+      );
+
+      const log = fs.readFileSync(fakeTmux.logPath, 'utf-8');
+      assert.equal((log.match(new RegExp(`send-keys -t ${target} C-c`, 'g')) || []).length, 1);
+      assert.equal(abortController.signal.aborted, true);
+      assert.equal(forcedStops.length, 1);
+      assert.match(sent[0] || '', /任务已停止/);
+    } finally {
+      process.env.PATH = oldPath;
+      if (oldFakeLog === undefined) delete process.env.TMUX_FAKE_LOG;
+      else process.env.TMUX_FAKE_LOG = oldFakeLog;
       fs.rmSync(fakeTmux.binDir, { recursive: true, force: true });
     }
   });

@@ -137,6 +137,9 @@
         },
         {
           "$ref": "#/$defs/cursorSessionRuntime"
+        },
+        {
+          "$ref": "#/$defs/zcodeSessionRuntime"
         }
       ]
     },
@@ -180,6 +183,12 @@
           "not": {}
         },
         "kimi": {
+          "not": {}
+        },
+        "cursor": {
+          "not": {}
+        },
+        "zcode": {
           "not": {}
         },
         "general": {
@@ -229,6 +238,12 @@
         "kimi": {
           "not": {}
         },
+        "cursor": {
+          "not": {}
+        },
+        "zcode": {
+          "not": {}
+        },
         "general": {
           "$ref": "#/$defs/sessionRuntimeGeneral"
         }
@@ -268,6 +283,12 @@
             }
           },
           "additionalProperties": true
+        },
+        "cursor": {
+          "not": {}
+        },
+        "zcode": {
+          "not": {}
         },
         "general": {
           "$ref": "#/$defs/sessionRuntimeGeneral"
@@ -311,6 +332,55 @@
             },
             "force": {
               "type": "boolean"
+            }
+          },
+          "additionalProperties": true
+        },
+        "zcode": {
+          "not": {}
+        },
+        "general": {
+          "$ref": "#/$defs/sessionRuntimeGeneral"
+        }
+      },
+      "additionalProperties": true
+    },
+    "zcodeSessionRuntime": {
+      "type": "object",
+      "required": ["activeRuntime"],
+      "properties": {
+        "activeRuntime": {
+          "const": "zcode"
+        },
+        "codex": {
+          "not": {}
+        },
+        "claude": {
+          "not": {}
+        },
+        "kimi": {
+          "not": {}
+        },
+        "cursor": {
+          "not": {}
+        },
+        "zcode": {
+          "type": "object",
+          "properties": {
+            "sessionId": {
+              "type": "string"
+            },
+            "cwd": {
+              "type": "string"
+            },
+            "model": {
+              "type": "string"
+            },
+            "provider": {
+              "const": "tmux"
+            },
+            "mode": {
+              "enum": ["build", "edit", "plan", "yolo"]
             }
           },
           "additionalProperties": true

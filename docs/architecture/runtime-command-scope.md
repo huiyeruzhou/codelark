@@ -73,7 +73,7 @@
 | --- | --- | --- | --- |
 | `/runtime` | `runtime.activeRuntime` | `codex` 时普通消息进入 Codex routing provider；`claude` 时普通消息默认进入 Claude Code tmux provider；`kimi` 时普通消息进入 Kimi tmux provider | 切换 runtime 不改变各 runtime 已记住的 `/provider` |
 | `/mode`、`/m` | `runtime.codex.mode` / `runtime.claude.yoloMode` | Codex `yolo` 强制 `danger-full-access` 与 `permissionMode=never` | Claude Code 只保留 YOLO 开关，运行时由 `yolo_mode` 推导 CLI/SDK permission 参数 |
-| `/reasoning`、`/r` | 当前 runtime 的 `reasoningEffort`；Kimi 为 `thinkingMode` | Codex/Claude 启动 effort、Kimi thinking flag、Cursor 参数化模型 effort | 各 runtime 独立校验，不能 fallback 或串写；Kimi wire 中的 think 仍只用于状态展示 |
+| `/reasoning`、`/r` | 当前 runtime 的 `reasoningEffort`；Kimi 为 `thinkingMode`；ZCode 不映射 | Codex/Claude 启动 effort、Kimi thinking flag、Cursor 参数化模型 effort | 各 runtime 独立校验，不能 fallback 或串写；ZCode 使用自身原生命令 |
 | `/sandbox`、`/sb` | `runtime.codex.sandboxMode` | Codex sandbox mode | Claude Code 没有同名 sandbox；不能共用 |
 | `/network`、`/net` | `runtime.codex.networkAccess` | Codex network access | Claude Code 网络通常由工具权限/环境决定，不能共用 |
 | `/model` | `runtime.<agent>.model` | 当前 runtime 的模型；已有本地 Codex thread 时只允许查看 | Codex/Claude/Kimi 模型名空间分开，不能互相 fallback |
@@ -247,19 +247,21 @@ Accessor 边界：
 - `resolveCodexRuntimeConfig(session)` 只能读 scoped TOML / v2 ConfigService effective config，以及 Codex thread identity。
 - `resolveClaudeRuntimeConfig(session)` 只能读 scoped TOML / v2 ConfigService effective config，以及 Claude session identity。
 - `resolveKimiRuntimeConfig(session)` 只能读 scoped TOML / v2 ConfigService effective config，以及 Kimi session identity。
+- `resolveCursorRuntimeConfig(session)` 只能读 scoped TOML / v2 ConfigService effective config，以及 Cursor session identity。
+- `resolveZcodeRuntimeConfig(session)` 只能读 scoped TOML / v2 ConfigService effective config，以及 ZCode session identity。
 
 ## 当前优先调整点
 
-- `/provider`、`/p` 从 “CodexRuntime 参数” 移到 “Bridge 控制”，因为它选择 bridge 如何驱动当前 runtime，不是模型执行参数。Codex 和 Claude 都支持 `sdk|pty|tmux`，Claude 默认 `tmux`；Kimi 当前只支持 `tmux`。切换时只修改当前 active runtime 的 provider。
-- `/set` 展示与写入遵循 TOML section：顶部下拉切换 `[runtime]`、`[runtime.codex]`、`[runtime.claude]`、`[runtime.kimi]`、`[runtime.cursor]`、`[bridge]` 和默认 Feishu `[[channels]]`，表单只保存当前 section。
+- `/provider`、`/p` 从 “CodexRuntime 参数” 移到 “Bridge 控制”，因为它选择 bridge 如何驱动当前 runtime，不是模型执行参数。Codex 和 Claude 都支持 `sdk|pty|tmux`，Claude 默认 `tmux`；Kimi、Cursor、ZCode 当前只支持 `tmux`。切换时只修改当前 active runtime 的 provider。
+- `/set` 展示与写入遵循 TOML section：顶部下拉切换 `[runtime]`、`[runtime.codex]`、`[runtime.claude]`、`[runtime.kimi]`、`[runtime.cursor]`、`[runtime.zcode]`、`[bridge]` 和默认 Feishu `[[channels]]`，表单只保存当前 section。
 - `/set --group runtime` 中的 `session.tmux_capture_lines`、`session.tmux_echo_input` 是 home 级“新 session 默认值”。`session.tmux_auto_enter` 只保留为旧配置/内部迁移字段，所有用户入口都不得展示或写入，普通 tmux 文本固定补 Enter。
-- `/current` 顶部配置分栏必须把通用 session 设置与 runtime 设置分开：通用分栏严格按“对话名称、工作目录、tmux 输出行数”显示；Codex、Claude、Kimi、Cursor 分栏只拥有各自 runtime 字段。选择通用分栏不得切换 agent，保存任一分栏不得读取或串写其他分栏的表单键。
+- `/current` 顶部配置分栏必须把通用 session 设置与 runtime 设置分开：通用分栏严格按“对话名称、工作目录、tmux 输出行数”显示；Codex、Claude、Kimi、Cursor、ZCode 分栏只拥有各自 runtime 字段。选择通用分栏不得切换 agent，保存任一分栏不得读取或串写其他分栏的表单键。
 - Operator UI 与 `/set` 共享同一配置能力清单：Web 表单提交字段必须与后端 Zod input contract 全等；runtime 默认值和通用 tmux 默认值不得只接一端。Web 的通道页面负责 App ID/Secret、站点、允许用户和通道开关；`group_authorized` 正常由飞书“我已授权”回调写入，Web 编辑通道时只保留该状态，不把它作为普通表单字段；管理员仍可用 `/set groupAuthorized` 显式覆盖默认通道。此类敏感或状态型字段是受控例外，不能静默缺失，也不能用虚假的前端选项表示后端不存在的状态。
 - Web 的 Codex 模型下拉只允许新选择当前可用模型，但必须允许已经由 `/set` 或 TOML 写入的自定义模型原样保存；用户修改其他配置时，不能因为旧模型不在当前缓存列表而拒绝整次提交。新的未知模型仍应被后端拒绝。
 - Codex 全局 Provider 没有 home 覆盖时跟随 `defaults.toml` 的产品默认值。`/set` 卡片必须结合 effective value 和 provenance：来自 defaults 时不设 `initial_option`，用灰色 placeholder 显示“跟随默认（默认值：实际值）”；来自 home 时才显示显式选中值。Web 配置页使用同一来源语义：继承时选择框显示灰色“跟随默认（默认值：实际值）”，显式选择同值时仍是普通选中态。下拉的“跟随默认”使用机器值 `default`（Web 表单值为空），但保存时都必须删除 `runtime.codex.provider` 的 home key，不得写入空字符串伪装回退。文本命令 `/set defaultProvider default`、卡片保存与 Web 保存共享这一合同。
-- `schemas/config.v2.schema.json` 描述 `config.toml` 解析后的当前结构，以 `runtime.codex`、`runtime.claude`、`runtime.kimi`、`session`、`bridge` 和 `channels` 作为权威分组；旧扁平字段不再作为配置兼容输入。
+- `schemas/config.v2.schema.json` 描述 `config.toml` 解析后的当前结构，以 `runtime.codex`、`runtime.claude`、`runtime.kimi`、`runtime.cursor`、`runtime.zcode`、`session`、`bridge` 和 `channels` 作为权威分组；旧扁平字段不再作为配置兼容输入。
 - `BridgeStore` 接口中的 `findSessionByCodexThreadId()`、`updateSessionCodexThreadId()` 是 Codex 专属 API；接 Claude 前应新增 provider-neutral accessor 或 runtime-specific registry，避免加出 `findSessionByClaudeSessionId()` 这类平行顶层接口。
-- 不要把 `BridgeSession.runtime.codex.model` 当通用字段使用；应使用 `runtime.codex.model`、`runtime.claude.model` 与 `runtime.kimi.model` 三个 runtime-specific 字段。
+- 不要把 `BridgeSession.runtime.codex.model` 当通用字段使用；各 runtime 必须读写自己的 scoped model 字段。
 
 ## 真实 E2E 开关
 

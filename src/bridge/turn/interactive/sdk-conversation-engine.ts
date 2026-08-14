@@ -46,19 +46,21 @@ import {
   parseContextUsageInfo,
   type ContextUsageInfo,
 } from '../../../shared/progress/context-usage.js';
-import { resolveClaudeRuntimeConfig, resolveCursorRuntimeConfig, resolveKimiRuntimeConfig, resolveSessionRuntimeConfig } from '../../session/support.js';
+import { resolveClaudeRuntimeConfig, resolveCursorRuntimeConfig, resolveKimiRuntimeConfig, resolveSessionRuntimeConfig, resolveZcodeRuntimeConfig } from '../../session/support.js';
 import {
   getSessionActiveRuntime,
   getSessionClaudeSessionId,
   getSessionCodexThreadId,
   getSessionKimiSessionId,
   getSessionCursorSessionId,
+  getSessionZcodeSessionId,
   getSessionSystemPrompt,
   getSessionWorkingDirectory,
   setSessionClaudeSessionIdUpdate,
   setSessionClaudeIdentityUpdate,
   setSessionKimiIdentityUpdate,
   setSessionCursorIdentityUpdate,
+  setSessionZcodeIdentityUpdate,
 } from '../../../domain/session-runtime.js';
 import type { RuntimeAgent } from '../../../domain/session.js';
 
@@ -206,6 +208,7 @@ export async function processMessage(
     const claudeRuntimeConfig = activeRuntime === 'claude' ? resolveClaudeRuntimeConfig(session, binding) : null;
     const kimiRuntimeConfig = activeRuntime === 'kimi' ? resolveKimiRuntimeConfig(session, binding) : null;
     const cursorRuntimeConfig = activeRuntime === 'cursor' ? resolveCursorRuntimeConfig(session, binding) : null;
+    const zcodeRuntimeConfig = activeRuntime === 'zcode' ? resolveZcodeRuntimeConfig(session, binding) : null;
 
     const { savedContent, llmFiles, persistedFileMeta } = prepareSdkMessageAttachments({ text, files, workDir });
     store.addMessage(sessionId, 'user', savedContent);
@@ -224,7 +227,9 @@ export async function processMessage(
     }
 
     // Effective model
-    const effectiveModel = activeRuntime === 'cursor'
+    const effectiveModel = activeRuntime === 'zcode'
+      ? zcodeRuntimeConfig?.model
+      : activeRuntime === 'cursor'
       ? cursorRuntimeConfig?.model
       : activeRuntime === 'kimi'
       ? kimiRuntimeConfig?.model
@@ -235,6 +240,7 @@ export async function processMessage(
     const claudeSessionId = getSessionClaudeSessionId(session);
     const kimiSessionId = getSessionKimiSessionId(session);
     const cursorSessionId = getSessionCursorSessionId(session);
+    const zcodeSessionId = getSessionZcodeSessionId(session);
 
     const permissionMode = runtimeConfig.mode === 'yolo' ? 'never' : 'acceptEdits';
 
@@ -265,6 +271,8 @@ export async function processMessage(
       cursorSessionId,
       cursorForce: cursorRuntimeConfig?.force,
       cursorReasoningEffort: cursorRuntimeConfig?.reasoningEffort,
+      zcodeSessionId,
+      zcodeMode: zcodeRuntimeConfig?.mode,
       claudeExecutable: claudeRuntimeConfig?.executable,
       claudeProvider: claudeRuntimeConfig?.provider,
       model: effectiveModel,
@@ -523,7 +531,17 @@ async function consumeStream(
           try {
             const statusData = JSON.parse(event.data);
             if (statusData.session_id) {
-              if (activeRuntime === 'cursor') {
+              if (activeRuntime === 'zcode') {
+                store.updateSession(sessionId, setSessionZcodeIdentityUpdate(
+                  statusData.session_id,
+                  typeof statusData.cwd === 'string' ? statusData.cwd : undefined,
+                ));
+                await options?.onRuntimeIdentity?.({
+                  runtime: 'zcode',
+                  sessionId: statusData.session_id,
+                  ...(typeof statusData.cwd === 'string' ? { cwd: statusData.cwd } : {}),
+                });
+              } else if (activeRuntime === 'cursor') {
                 store.updateSession(sessionId, setSessionCursorIdentityUpdate(
                   statusData.session_id,
                   typeof statusData.cwd === 'string' ? statusData.cwd : undefined,
@@ -659,7 +677,17 @@ async function consumeStream(
             }
             if (resultData.is_error) hasError = true;
             if (resultData.session_id) {
-              if (activeRuntime === 'cursor') {
+              if (activeRuntime === 'zcode') {
+                store.updateSession(sessionId, setSessionZcodeIdentityUpdate(
+                  resultData.session_id,
+                  typeof resultData.cwd === 'string' ? resultData.cwd : undefined,
+                ));
+                await options?.onRuntimeIdentity?.({
+                  runtime: 'zcode',
+                  sessionId: resultData.session_id,
+                  ...(typeof resultData.cwd === 'string' ? { cwd: resultData.cwd } : {}),
+                });
+              } else if (activeRuntime === 'cursor') {
                 store.updateSession(sessionId, setSessionCursorIdentityUpdate(
                   resultData.session_id,
                   typeof resultData.cwd === 'string' ? resultData.cwd : undefined,

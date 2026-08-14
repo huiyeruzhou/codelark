@@ -30,6 +30,7 @@ import {
   getSessionCodexTitle,
   getSessionCursorSessionId,
   getSessionKimiSessionId,
+  getSessionZcodeSessionId,
   getSessionWorkingDirectory,
 } from '../../domain/session-runtime.js';
 import type { ChannelChat, InboundMessage, OutboundAttachment, OutboundRichCard } from '../../domain/index.js';
@@ -53,6 +54,7 @@ import {
   resolveEffectiveSandboxMode,
   resolveCursorRuntimeConfig,
   resolveKimiRuntimeConfig,
+  resolveZcodeRuntimeConfig,
 } from '../session/support.js';
 import type { RuntimeAgent } from '../../domain/session.js';
 import {
@@ -114,6 +116,7 @@ function runtimeLabel(runtime: RuntimeAgent): string {
   if (runtime === 'claude') return 'Claude Code';
   if (runtime === 'kimi') return 'Kimi Code';
   if (runtime === 'cursor') return 'Cursor Agent';
+  if (runtime === 'zcode') return 'ZCode';
   return 'Codex';
 }
 
@@ -121,11 +124,12 @@ function runtimeIdentityFieldName(runtime: RuntimeAgent): string {
   if (runtime === 'claude') return 'claude_session_id';
   if (runtime === 'kimi') return 'kimi_session_id';
   if (runtime === 'cursor') return 'cursor_session_id';
+  if (runtime === 'zcode') return 'zcode_session_id';
   return 'codex_thread_id';
 }
 
 function runtimeIdentityMissingLabel(runtime: RuntimeAgent): string {
-  if (runtime === 'claude' || runtime === 'kimi' || runtime === 'cursor') return `${runtimeLabel(runtime)} session id 未绑定`;
+  if (runtime === 'claude' || runtime === 'kimi' || runtime === 'cursor' || runtime === 'zcode') return `${runtimeLabel(runtime)} session id 未绑定`;
   return 'Codex thread id 未绑定';
 }
 
@@ -153,6 +157,14 @@ function currentRuntimeFields(
       [currentRuntimeFieldLabel('cursor', 'cursorDefaultModel'), cursorConfig.model || 'default'],
       [currentRuntimeFieldLabel('cursor', 'cursorProvider'), cursorConfig.provider],
       [currentRuntimeFieldLabel('cursor', 'cursorForce'), cursorConfig.force ? 'on' : 'off'],
+    ];
+  }
+  if (runtime === 'zcode') {
+    const zcodeConfig = resolveZcodeRuntimeConfig(session, binding);
+    return [
+      [currentRuntimeFieldLabel('zcode', 'zcodeDefaultModel'), zcodeConfig.model || 'default'],
+      [currentRuntimeFieldLabel('zcode', 'zcodeProvider'), zcodeConfig.provider],
+      [currentRuntimeFieldLabel('zcode', 'zcodeMode'), zcodeConfig.mode],
     ];
   }
   if (runtime === 'claude') {
@@ -259,7 +271,7 @@ function filterHistoryMessagesForRuntime(
   messages: Array<{ role: string; content: string }>,
   runtime: RuntimeAgent | undefined,
 ): Array<{ role: string; content: string }> {
-  if (runtime !== 'claude' && runtime !== 'kimi' && runtime !== 'cursor') return messages;
+  if (runtime !== 'claude' && runtime !== 'kimi' && runtime !== 'cursor' && runtime !== 'zcode') return messages;
   return messages.filter((message) => message.role !== 'user');
 }
 
@@ -332,12 +344,15 @@ export function handleCurrentCommand(options: {
   const localCodexThreadId = resolveLocalCodexThreadId(session, binding, 'current command');
   const kimiSessionId = getSessionKimiSessionId(session) || '';
   const cursorSessionId = getSessionCursorSessionId(session) || '';
+  const zcodeSessionId = getSessionZcodeSessionId(session) || '';
   const localRuntimeThreadId = activeRuntime === 'kimi'
     ? kimiSessionId
     : activeRuntime === 'claude'
       ? claudeSessionId
       : activeRuntime === 'cursor'
         ? cursorSessionId
+        : activeRuntime === 'zcode'
+          ? zcodeSessionId
         : localCodexThreadId;
   const threadInfo = options.threadDisplay.binding(displayBinding);
   const codexTitle = getSessionCodexTitle(session)
@@ -366,6 +381,10 @@ export function handleCurrentCommand(options: {
         : activeRuntime === 'cursor'
         ? [
           ['cursor_session_id', cursorSessionId || '-'] as [string, string],
+        ]
+        : activeRuntime === 'zcode'
+        ? [
+          ['zcode_session_id', zcodeSessionId || '-'] as [string, string],
         ]
         : [
           ['codex_title', codexTitle || '-'] as [string, string],
@@ -413,13 +432,16 @@ export function buildCurrentCommandRichCard(options: {
   const claudeSessionId = getSessionClaudeSessionId(session) || '';
   const kimiSessionId = getSessionKimiSessionId(session) || '';
   const cursorSessionId = getSessionCursorSessionId(session) || '';
+  const zcodeSessionId = getSessionZcodeSessionId(session) || '';
   const runtimeThreadId = activeRuntime === 'kimi'
     ? kimiSessionId
     : activeRuntime === 'claude'
       ? claudeSessionId
       : activeRuntime === 'cursor'
         ? cursorSessionId
-        : codexThreadId;
+        : activeRuntime === 'zcode'
+          ? zcodeSessionId
+          : codexThreadId;
   const threadInfo = options.threadDisplay.binding(displayBinding);
   const codexTitle = getSessionCodexTitle(session)
     || (codexThreadId ? getCodexSessionByThreadIdSafe(codexThreadId, 'current card codex title')?.title : '')
@@ -458,6 +480,7 @@ export function buildCurrentCommandRichCard(options: {
       { text: 'Claude Code', callbackData: buildCommandCallbackData('/current-runtime claude') },
       { text: 'Kimi Code', callbackData: buildCommandCallbackData('/current-runtime kimi') },
       { text: 'Cursor Agent', callbackData: buildCommandCallbackData('/current-runtime cursor') },
+      { text: 'ZCode', callbackData: buildCommandCallbackData('/current-runtime zcode') },
     ],
   };
   return {
@@ -598,7 +621,7 @@ export async function handleHistoryCommand(options: {
 
   if (historyView === 'json' || historyView === 'file') {
     if (!sessionTranscript) {
-      return '当前会话没有可直接发送的 session JSONL 文件。只有已落盘到 Codex、Claude Code、Kimi Code 或 Cursor Agent session 文件的线程才能使用 `/his json`。';
+      return '当前会话没有可直接发送的 session JSONL 文件。Codex、Claude Code、Kimi Code 或 Cursor Agent 的已落盘 session 文件可使用 `/his json`；ZCode 历史来自 SQLite，请使用 `/his` 查看解析结果。';
     }
     const attachment: OutboundAttachment = {
       kind: 'file',

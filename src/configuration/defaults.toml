@@ -42,6 +42,11 @@ provider = "tmux"
 force = false
 reasoning_effort = ""
 
+[runtime.zcode]
+model = ""
+provider = "tmux"
+mode = "build"
+
 [[channels]]
 id = "feishu-default"
 alias = "飞书"

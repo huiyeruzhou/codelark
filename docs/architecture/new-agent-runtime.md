@@ -248,7 +248,7 @@ Kimi tmux provider 的当前行为来自实测：
 - [ ] 单元：parser 终态/取消/中间事件、identity 解析、transcript 过滤。
 - [ ] 工具协议：用 scripted Mock 覆盖任意 start/result/error 顺序、长输出、Unicode、超长单行和多行 patch；用真实 agent fixture 覆盖原生工具参数 shape。
 - [ ] Workflow：provider 真实 CLI 生命周期。
-- [ ] P0 用户故事：同一聊天首轮冷启动、清空 bridge 输入状态后的存活 tmux 冷接管、tmux 丢失后的 resume；CLI/tmux launch 次数、runtime session id、pane pid、mirror source 和旧文本不重放都要断言。Codex、Claude、Kimi、Cursor 使用同一故事模板。
+- [ ] P0 用户故事：同一聊天首轮冷启动、清空 bridge 输入状态后的存活 tmux 冷接管、tmux 丢失后的 resume；CLI/tmux launch 次数、runtime session id、pane pid、mirror source 和旧文本不重放都要断言。Codex、Claude、Kimi、Cursor、ZCode 使用同一故事模板。
 - [ ] Mock bridge E2E：命令矩阵按 agent 全覆盖。
 - [ ] 真实 executable E2E：运行官方版本化 CLI 和真 tmux；必须明确哪些后端被 mock。只能使用真实账号后端时应 opt-in，并把会话 config/data 隔离到临时目录，不能污染宿主会话。
 - [ ] 真实 Feishu E2E：纳入既有 runtime/provider 矩阵；不新增 agent 专用场景开关，不复用 live bridge 或宿主会话数据目录。若官方 CLI 的安全凭据只能从宿主 HOME/keyring 读取，应保持该凭据边界只读，并用 agent 专属 config/data env 把测试会话隔离到 runRoot。测试必须创建/复用隔离群、邀请当前用户、由用户身份发送并回读最终消息；需要人工评价时保留群直到确认。

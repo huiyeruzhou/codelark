@@ -22,6 +22,11 @@ import {
   findCursorSessionFileById,
   listCursorSessionFileSummaries,
 } from '../../../runtime/cursor/session-index.js';
+import {
+  archiveZcodeSession,
+  findZcodeSessionById,
+  listZcodeSessionSummaries,
+} from '../../../runtime/zcode/session-index.js';
 import type { LocalRuntimeSessionSummary } from '../local-runtime-session.js';
 import { validateSessionId } from '../../../shared/security/validators.js';
 import { userInputTurnCountCache } from './user-input-turn-cache.js';
@@ -29,7 +34,7 @@ import { userInputTurnCountCache } from './user-input-turn-cache.js';
 export type { CodexSessionSummary };
 export type { LocalRuntimeSessionSummary };
 
-export type LocalRuntimeFilter = 'codex' | 'claude' | 'kimi' | 'cursor';
+export type LocalRuntimeFilter = 'codex' | 'claude' | 'kimi' | 'cursor' | 'zcode';
 
 function isSafeLocalRuntimeThreadId(id: string): boolean {
   const trimmed = id.trim();
@@ -198,6 +203,26 @@ function toCursorRuntimeSession(session: ReturnType<typeof listCursorSessionFile
   };
 }
 
+function listCommandZcodeThreads(limit?: number): LocalRuntimeSessionSummary[] {
+  const sessions = listZcodeSessionSummaries().map(toZcodeRuntimeSession);
+  return typeof limit === 'number' ? sessions.slice(0, Math.max(1, Math.floor(limit))) : sessions;
+}
+
+function toZcodeRuntimeSession(session: ReturnType<typeof listZcodeSessionSummaries>[number]): LocalRuntimeSessionSummary {
+  return {
+    runtime: 'zcode',
+    threadId: session.sessionId,
+    filePath: session.dbPath,
+    cwd: session.cwd,
+    originator: 'ZCode',
+    source: 'zcode',
+    firstSeenAt: session.createdAt || new Date(0).toISOString(),
+    lastEventAt: session.updatedAt || session.createdAt || new Date(0).toISOString(),
+    title: session.title || session.sessionId.slice(0, 8),
+    activeEstimate: false,
+  };
+}
+
 function sortRuntimeSessionsByActivity(sessions: LocalRuntimeSessionSummary[]): LocalRuntimeSessionSummary[] {
   return sessions.sort((left, right) => right.lastEventAt.localeCompare(left.lastEventAt));
 }
@@ -217,7 +242,8 @@ export function listCommandLocalRuntimeSessions(limit?: number, runtime?: LocalR
     const claude = runtime && runtime !== 'claude' ? [] : listCommandClaudeThreads(limit);
     const kimi = runtime && runtime !== 'kimi' ? [] : listCommandKimiThreads(limit);
     const cursor = runtime && runtime !== 'cursor' ? [] : listCommandCursorThreads(limit);
-    return sortRuntimeSessionsByActivity([...codex, ...claude, ...kimi, ...cursor])
+    const zcode = runtime && runtime !== 'zcode' ? [] : listCommandZcodeThreads(limit);
+    return sortRuntimeSessionsByActivity([...codex, ...claude, ...kimi, ...cursor, ...zcode])
       .slice(0, typeof limit === 'number' && Number.isFinite(limit) && limit > 0 ? Math.max(1, Math.floor(limit)) : undefined);
   } catch (error) {
     console.error('[command-session-source] Failed to list local runtime sessions:', error);
@@ -284,6 +310,18 @@ export function archiveCommandCursorThread(threadId: string, cwd: string | undef
   }
 }
 
+export function archiveCommandZcodeThread(threadId: string, cwd: string | undefined): LocalRuntimeSessionSummary | null {
+  if (!cwd) return null;
+  try {
+    const session = findZcodeSessionById(threadId, cwd, { includeArchived: true });
+    if (!session || !archiveZcodeSession(session)) return null;
+    return toZcodeRuntimeSession(session);
+  } catch (error) {
+    console.error(`[command-session-source] Failed to archive ZCode thread ${threadId}:`, error);
+    return null;
+  }
+}
+
 export function getCommandCodexThreadByIdSafe(
   rawThreadId: string,
   context: string,
@@ -329,6 +367,8 @@ export function getCommandLocalRuntimeThreadByIdSafe(
       if (cursor) {
         return { threadId, thread: toCursorRuntimeSession(cursor) };
       }
+      const zcode = findZcodeSessionById(threadId, cwd);
+      if (zcode) return { threadId, thread: toZcodeRuntimeSession(zcode) };
     }
     const claudeMatches = listClaudeSessionJsonlSummaries()
       .filter((session) => session.sessionId === threadId);
@@ -343,6 +383,8 @@ export function getCommandLocalRuntimeThreadByIdSafe(
     if (cursor) {
       return { threadId, thread: toCursorRuntimeSession(cursor) };
     }
+    const zcode = findZcodeSessionById(threadId);
+    if (zcode) return { threadId, thread: toZcodeRuntimeSession(zcode) };
     return { threadId };
   } catch (error) {
     console.error(

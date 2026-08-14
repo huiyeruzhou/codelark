@@ -240,7 +240,7 @@ type ScriptedTurnCallbacks = {
     totalTokenUsage?: { inputTokens?: number; outputTokens?: number };
   }) => void;
   onRuntimeIdentity?: (identity: {
-    runtime: 'codex' | 'claude' | 'kimi' | 'cursor';
+    runtime: 'codex' | 'claude' | 'kimi' | 'cursor' | 'zcode';
     sessionId: string;
     cwd?: string;
     transcriptPath?: string;
@@ -289,7 +289,7 @@ class ScriptedSessionSimulator {
     return router.resolve(this.address)?.bridgeSessionId || '';
   }
 
-  setRuntimeProvider(runtime: 'codex' | 'claude' | 'kimi' | 'cursor', provider: 'sdk' | 'tmux'): void {
+  setRuntimeProvider(runtime: 'codex' | 'claude' | 'kimi' | 'cursor' | 'zcode', provider: 'sdk' | 'tmux'): void {
     const sessionId = this.sessionId();
     assert.ok(sessionId, 'scripted simulator binding must have a session id');
     getBridgeContext().store.updateSession(sessionId, {
@@ -305,6 +305,10 @@ class ScriptedSessionSimulator {
             ? {
                 activeRuntime: 'cursor',
               }
+            : runtime === 'zcode'
+              ? {
+                  activeRuntime: 'zcode',
+                }
           : {
               activeRuntime: 'codex',
             },
@@ -317,6 +321,8 @@ class ScriptedSessionSimulator {
           ? { runtime: { kimi: { provider: 'tmux' } } }
           : runtime === 'cursor'
             ? { runtime: { cursor: { provider: 'tmux' } } }
+            : runtime === 'zcode'
+              ? { runtime: { zcode: { provider: 'tmux' } } }
           : { runtime: { codex: { provider: provider === 'tmux' ? 'tmux' : 'sdk' } } },
     );
   }
@@ -725,6 +731,73 @@ stream_status_check_interval_seconds = 3
     assert.match((metadata?.tags || []).join(' '), /\bcursor\b/);
     assert.match((metadata?.tags || []).join(' '), /\btmux\b/);
     assert.doesNotMatch((metadata?.tags || []).join(' '), /\bsdk\b/);
+  });
+
+  it('delivers ZCode native slash output directly because it has no SQLite turn', async () => {
+    const simulator = new ScriptedSessionSimulator('chat-zcode-native-command');
+    simulator.setRuntimeProvider('zcode', 'tmux');
+
+    await simulator.send({
+      messageId: 'incoming-zcode-native-command',
+      text: '/goal',
+      preparedPrompt: '/goal',
+      finalText: 'No goal is set. Use /goal <objective> to set one.',
+      steps: [async ({ onPartialText, onRuntimeIdentity }) => {
+        await onRuntimeIdentity?.({
+          runtime: 'zcode',
+          sessionId: 'sess_zcode_existing',
+          cwd: 'D:\\workspace\\zcode-direct',
+        });
+        onPartialText?.('No goal is set. Use /goal <objective> to set one.');
+      }],
+    });
+
+    assert.equal(simulator.adapter.streamEnds.at(-1)?.status, 'completed');
+    assert.match(simulator.adapter.streamEnds.at(-1)?.text || '', /No goal is set/);
+    assert.deepEqual(simulator.mirrorSuppressions, [{
+      sessionId: simulator.sessionId(),
+      prompt: '/goal',
+    }]);
+    assert.deepEqual(simulator.abortedMirrorSuppressions, [{
+      sessionId: simulator.sessionId(),
+      suppressionId: 'suppression-1',
+    }]);
+    const metadata = simulator.adapter.streamMetadata.at(-1);
+    assert.match((metadata?.tags || []).join(' '), /\bzcode\b/);
+    assert.match((metadata?.tags || []).join(' '), /\btmux\b/);
+  });
+
+  it('streams an ordinary ZCode SQLite turn directly and suppresses the background mirror duplicate', async () => {
+    const simulator = new ScriptedSessionSimulator('chat-zcode-sqlite-direct');
+    simulator.setRuntimeProvider('zcode', 'tmux');
+
+    await simulator.send({
+      messageId: 'incoming-zcode-sqlite-direct',
+      text: 'inspect the repository',
+      preparedPrompt: 'inspect the repository',
+      finalText: 'ZCODE_SQLITE_DIRECT_DONE',
+      steps: [async ({ onPartialText, onRuntimeIdentity }) => {
+        assert.deepEqual(simulator.mirrorSuppressions, [{
+          sessionId: simulator.sessionId(),
+          prompt: 'inspect the repository',
+        }]);
+        await onRuntimeIdentity?.({
+          runtime: 'zcode',
+          sessionId: 'sess_zcode_turn',
+          cwd: 'D:\\workspace\\zcode-mirror',
+        });
+        onPartialText?.('ZCODE_SQLITE_DIRECT_DONE');
+      }],
+    });
+
+    assert.equal(simulator.adapter.streamEnds.at(-1)?.status, 'completed');
+    assert.match(simulator.adapter.streamEnds.at(-1)?.text || '', /ZCODE_SQLITE_DIRECT_DONE/);
+    assert.equal(simulator.registeredBridgeTurns.at(-1)?.progressSource, 'zcode_sqlite');
+    assert.equal(simulator.registeredBridgeTurns.at(-1)?.finalSource, 'zcode_task_complete');
+    assert.deepEqual(simulator.abortedMirrorSuppressions, [{
+      sessionId: simulator.sessionId(),
+      suppressionId: 'suppression-1',
+    }]);
   });
 
   it('keeps one scripted session isolated across the basic dialogue provider sequence', async () => {
