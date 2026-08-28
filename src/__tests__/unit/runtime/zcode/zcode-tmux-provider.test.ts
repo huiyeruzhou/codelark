@@ -93,13 +93,19 @@ describe('ZCode tmux provider', () => {
     assert.equal(String(command).includes('secret-key'), false);
   });
 
-  it('passes ZCode API keys through a private launch file and discovers identity from isolated logs', () => {
+  it('passes ZCode API keys through a private POSIX launch file', {
+    skip: process.platform === 'win32' ? 'Windows launches through the existing private shell snapshot' : false,
+  }, () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'codelark-zcode-launch-'));
     const secretFile = createZcodeSecretEnvironmentFile({ ZCODE_API_KEY: "key-with-'quote" }, root);
     assert.ok(secretFile);
     assert.equal(fs.statSync(secretFile).mode & 0o777, 0o600);
     assert.equal(fs.readFileSync(secretFile, 'utf8'), "export ZCODE_API_KEY='key-with-'\\''quote'\n");
+    fs.rmSync(root, { recursive: true, force: true });
+  });
 
+  it('discovers ZCode identity from isolated logs', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'codelark-zcode-launch-'));
     const logDir = path.join(root, 'logs');
     fs.mkdirSync(logDir);
     fs.writeFileSync(path.join(logDir, 'zcode-2026-08-14.jsonl'), [

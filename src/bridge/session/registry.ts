@@ -228,11 +228,12 @@ export class SessionRegistryService {
   }
 
   findVisibleBridgeSessionByZcodeThread(zcodeSessionId: string, cwd: string): BridgeSession | null {
+    const resolvedCwd = this.options.zcodeThreads?.getThread(zcodeSessionId, cwd)?.cwd || cwd;
     return this.store.listSessions().find((session) => (
       isVisibleBridgeSession(session)
       && getSessionActiveRuntime(session) === 'zcode'
       && getSessionZcodeSessionId(session) === zcodeSessionId
-      && getSessionZcodeCwd(session) === cwd
+      && getSessionZcodeCwd(session) === resolvedCwd
     )) || null;
   }
 
@@ -526,17 +527,19 @@ export class SessionRegistryService {
     if (!this.options.zcodeThreads?.archiveThread) {
       throw new Error('Local ZCode archive is not configured.');
     }
-    const archived = this.options.zcodeThreads.archiveThread(zcodeSessionId, cwd);
+    const localThread = this.options.zcodeThreads.getThread(zcodeSessionId, cwd);
+    if (!localThread) throw new Error('指定的 ZCode 会话不存在。');
+    const archived = this.options.zcodeThreads.archiveThread(zcodeSessionId, localThread.cwd);
     if (!archived) throw new Error('指定的 ZCode 会话不存在。');
     const linkedSessions = this.store.listSessions().filter((session) => (
       getSessionActiveRuntime(session) === 'zcode'
       && getSessionZcodeSessionId(session) === zcodeSessionId
-      && getSessionZcodeCwd(session) === cwd
+      && getSessionZcodeCwd(session) === localThread.cwd
     ));
     for (const session of linkedSessions) this.store.deleteSession(session.id);
     return {
       zcodeSessionId,
-      cwd,
+      cwd: localThread.cwd,
       deletedBridgeSessions: linkedSessions,
       deletedBridgeSessionIds: linkedSessions.map((session) => session.id),
     };
