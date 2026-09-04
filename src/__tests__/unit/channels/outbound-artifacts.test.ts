@@ -9,6 +9,39 @@ import {
 } from '../../../channels/delivery/artifacts.js';
 
 describe('outbound-artifacts', () => {
+  it('treats local Markdown images as uploadable image attachments', () => {
+    const parsed = parseOutboundArtifacts([
+      '二维码如下：',
+      '![登录二维码](/tmp/lark_auth_run12_layers_qr_2.png)',
+      '![远程图片](https://example.com/image.png)',
+    ].join('\n'));
+
+    assert.equal(parsed.cleanText, [
+      '二维码如下：',
+      '',
+      '![远程图片](https://example.com/image.png)',
+    ].join('\n'));
+    assert.deepEqual(parsed.attachments, [{
+      kind: 'image',
+      path: '/tmp/lark_auth_run12_layers_qr_2.png',
+      caption: '登录二维码',
+      name: undefined,
+    }]);
+  });
+
+  it('leaves local Markdown image examples inside code blocks untouched', () => {
+    const markdown = [
+      '```markdown',
+      '![示例](/tmp/example.png)',
+      '```',
+      '    ![缩进示例](/tmp/indented.png)',
+    ].join('\n');
+
+    const parsed = parseOutboundArtifacts(markdown);
+    assert.equal(parsed.cleanText, markdown);
+    assert.deepEqual(parsed.attachments, []);
+  });
+
   it('extracts attachments and strips send blocks from final text', () => {
     const parsed = parseOutboundArtifacts([
       '这里是说明文字。',
@@ -227,6 +260,13 @@ describe('outbound-artifacts', () => {
     assert.equal(full, '先说明一下结果。\n\n补充说明');
     assert.equal(supportsOutboundArtifacts('feishu'), true);
     assert.equal(supportsOutboundArtifacts('unknown'), false);
+  });
+
+  it('hides local Markdown images from streaming text while they upload separately', () => {
+    assert.equal(
+      stripOutboundArtifactBlocksForStreaming('结果如下：\n\n![二维码](/tmp/qr.png)'),
+      '结果如下：',
+    );
   });
 
   it('keeps inline control-tag literals visible while streaming', () => {

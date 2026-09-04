@@ -499,7 +499,10 @@ export async function runInteractiveMessage(
             sessionId: binding.bridgeSessionId,
             replyToMessageId: streamMessageId || msg.messageId,
             deliverResponse: deps.deliverResponse,
-          }, assembleSdkFinalResponse({ attachments: outboundAttachments }), { skipText: true }), {
+          }, assembleSdkFinalResponse({ attachments: outboundAttachments }), {
+            skipText: true,
+            reportAttachmentErrors: false,
+          }), {
             queueClass: 'interactive',
           });
           return queued.completion;

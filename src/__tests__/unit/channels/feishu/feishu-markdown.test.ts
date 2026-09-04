@@ -48,6 +48,31 @@ function assertFeishuElementIdsAreValid(value: unknown): void {
 }
 
 describe('preprocessFeishuMarkdown', () => {
+  it('keeps Feishu image keys and degrades local or remote image targets to readable text', () => {
+    const rendered = preprocessFeishuMarkdown([
+      '![已上传](img_v2_abc-123)',
+      '![本地二维码](/tmp/lark_auth_qr.png)',
+      '![远程图片](https://example.com/image.png)',
+    ].join('\n'));
+
+    assert.equal(rendered, [
+      '![已上传](img_v2_abc-123)',
+      '🖼️ 本地二维码：/tmp/lark_auth_qr.png',
+      '🖼️ 远程图片：https://example.com/image.png',
+    ].join('\n'));
+  });
+
+  it('does not rewrite image syntax inside fenced or indented code', () => {
+    const markdown = [
+      '```markdown',
+      '![示例](/tmp/example.png)',
+      '```',
+      '    ![另一个示例](/tmp/indented.png)',
+    ].join('\n');
+
+    assert.equal(preprocessFeishuMarkdown(markdown), markdown);
+  });
+
   it('keeps ordinary fenced code and its language for syntax highlighting', () => {
     const markdown = buildFencedCodeBlock([
       'const plain = true;',

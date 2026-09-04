@@ -121,6 +121,53 @@ describe('delivery-pipeline', () => {
     assert.deepEqual(calls, [{ text: '', attachmentCount: 1 }]);
   });
 
+  it('reports an attachment upload failure to the source chat', async () => {
+    const adapter = new FakeAdapter();
+    const sent: OutboundMessage[] = [];
+    adapter.send = async (message: OutboundMessage): Promise<SendResult> => {
+      sent.push(message);
+      return { ok: true, messageId: 'error-notice-1' };
+    };
+    const response = assembleSdkFinalResponse({
+      attachments: [{ kind: 'image', path: '/tmp/missing-qr.png', caption: '登录二维码' }],
+    });
+
+    const result = await deliverFinalResponse({
+      adapter,
+      address: { channelType: 'feishu-default', chatId: 'chat-1' },
+      sessionId: 'session-1',
+      replyToMessageId: 'stream-card-1',
+      deliverResponse: async () => ({ ok: false, error: 'Attachment not found' }),
+    }, response, { skipText: true });
+
+    assert.equal(result.ok, false);
+    assert.equal(sent.length, 1);
+    assert.equal(sent[0]?.replyToMessageId, 'stream-card-1');
+    assert.match(sent[0]?.text || '', /附件发送失败（missing-qr\.png）：Attachment not found/u);
+  });
+
+  it('can suppress an intermediate attachment error before the final retry', async () => {
+    const adapter = new FakeAdapter();
+    const sent: OutboundMessage[] = [];
+    adapter.send = async (message: OutboundMessage): Promise<SendResult> => {
+      sent.push(message);
+      return { ok: true };
+    };
+    const response = assembleSdkFinalResponse({
+      attachments: [{ kind: 'image', path: '/tmp/retry-qr.png' }],
+    });
+
+    const result = await deliverFinalResponse({
+      adapter,
+      address: { channelType: 'feishu-default', chatId: 'chat-1' },
+      sessionId: 'session-1',
+      deliverResponse: async () => ({ ok: false, error: 'temporary upload failure' }),
+    }, response, { skipText: true, reportAttachmentErrors: false });
+
+    assert.equal(result.ok, false);
+    assert.deepEqual(sent, []);
+  });
+
   it('delivers official Feishu payloads and manual inputs as separate final actions', async () => {
     const adapter = new FakeAdapter();
     const sent: OutboundMessage[] = [];

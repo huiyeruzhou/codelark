@@ -189,7 +189,10 @@ export function createMirrorFeedbackController(
           sessionId: subscription.sessionId,
           replyToMessageId: replyToMessageId || undefined,
           deliverResponse: deps.deliverResponse,
-        }, assembleCodexFinalResponse({ attachments }), { skipText: true }), {
+        }, assembleCodexFinalResponse({ attachments }), {
+          skipText: true,
+          reportAttachmentErrors: false,
+        }), {
           queueClass: 'interactive',
         });
         return queued.completion;
@@ -392,7 +395,7 @@ export function createMirrorFeedbackController(
       stripFinalOnlyBlocksFromStreamingHistory(turnState.historyItems),
     );
     pushMirrorStreamingStatus(subscription, turnState);
-    if (/<clk-send>/iu.test(turnState.streamedText)) {
+    if (turnState.streamedText) {
       getStreamingArtifactController(subscription, turnState, adapter)
         ?.observeAnswerText(turnState.streamedText);
     }

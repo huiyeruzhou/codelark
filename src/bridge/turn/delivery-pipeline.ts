@@ -1,3 +1,4 @@
+import path from 'node:path';
 import type { BaseChannelAdapter } from '../../channels/contracts.js';
 import type { ChannelAddress, OutboundAttachment, OutboundManualInput, OutboundQuestion, OutboundRichCard, SendResult } from '../../domain/index.js';
 import {
@@ -28,6 +29,7 @@ export interface FinalResponseDeliveryContext {
 
 export interface FinalResponseDeliveryOptions {
   skipText?: boolean;
+  reportAttachmentErrors?: boolean;
 }
 
 function normalizeUnknownSendResult(result: unknown): SendResult {
@@ -172,7 +174,22 @@ export async function deliverFinalResponse(
       context.replyToMessageId,
       response.attachments,
     ));
-    if (!lastResult.ok) return lastResult;
+    if (!lastResult.ok) {
+      if (options.reportAttachmentErrors !== false) {
+        const names = response.attachments
+          .map((attachment) => attachment.name || path.basename(attachment.path))
+          .filter(Boolean)
+          .join('、');
+        const detail = lastResult.error || 'unknown upload error';
+        await deliver(context.adapter, {
+          address: context.address,
+          text: `附件发送失败${names ? `（${names}）` : ''}：${detail}`,
+          parseMode: 'plain',
+          replyToMessageId: context.replyToMessageId,
+        }, { sessionId: context.sessionId });
+      }
+      return lastResult;
+    }
   }
 
   for (const question of response.questions) {
