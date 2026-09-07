@@ -11,12 +11,23 @@ export interface ResolveCodexCliExecutableOptions {
   platform?: NodeJS.Platform;
   fileExists?: (filePath: string) => boolean;
   packageSearchRoots?: string[];
+  requireInstalled?: boolean;
 }
 
 export interface ResolveCliExecutableOptions extends ResolveCodexCliExecutableOptions {
   command: string;
   overrideEnvVar?: string;
   requireGlobal?: boolean;
+}
+
+export class CliExecutableNotFoundError extends Error {
+  readonly command: string;
+
+  constructor(command: string, message?: string) {
+    super(message || `CLI executable ${JSON.stringify(command)} was not found on PATH.`);
+    this.name = 'CliExecutableNotFoundError';
+    this.command = command;
+  }
 }
 
 function defaultExecutableExists(filePath: string): boolean {
@@ -172,7 +183,13 @@ function normalizeResolveOptions(
   options: ResolveCodexCliExecutableOptions | NodeJS.ProcessEnv,
 ): ResolveCodexCliExecutableOptions {
   if (Object.keys(options).length === 0) return {};
-  if ('env' in options || 'platform' in options || 'fileExists' in options) {
+  if (
+    'env' in options
+    || 'platform' in options
+    || 'fileExists' in options
+    || 'packageSearchRoots' in options
+    || 'requireInstalled' in options
+  ) {
     return options as ResolveCodexCliExecutableOptions;
   }
   return { env: options as NodeJS.ProcessEnv };
@@ -209,6 +226,9 @@ export function resolveCliExecutable(options: ResolveCliExecutableOptions): stri
   if (override) {
     if (options.requireGlobal && isNodeModulesBinPath(pathModule.dirname(override))) {
       throw buildGlobalExecutableRequiredError(options.command, [override]);
+    }
+    if (options.requireInstalled && !fileExists(override)) {
+      throw new CliExecutableNotFoundError(options.command);
     }
     return override;
   }
@@ -257,6 +277,10 @@ export function resolveCliExecutable(options: ResolveCliExecutableOptions): stri
   }
   if (packageLocal) return packageLocal;
 
+  if (options.requireInstalled) {
+    throw new CliExecutableNotFoundError(options.command);
+  }
+
   return names[0] || options.command;
 }
 
@@ -265,9 +289,17 @@ export function resolveClaudeCliExecutable(
   options: ResolveCodexCliExecutableOptions | NodeJS.ProcessEnv = {},
 ): string {
   const overrideEnvVar = command === 'ccr' ? 'CODELARK_CCR_CLI_PATH' : 'CODELARK_CLAUDE_CLI_PATH';
-  return resolveCliExecutable({
-    ...normalizeResolveOptions(options),
-    command,
-    overrideEnvVar,
-  });
+  try {
+    return resolveCliExecutable({
+      ...normalizeResolveOptions(options),
+      command,
+      overrideEnvVar,
+    });
+  } catch (error) {
+    if (!(error instanceof CliExecutableNotFoundError)) throw error;
+    const message = command === 'claude'
+      ? '未找到 Claude Code CLI 可执行文件 `claude`。请先安装 Claude Code 并确认 `claude` 在 PATH 中；如果使用 Claude Code Router，请先安装 `ccr`，再执行 `/set claudeExecutable ccr`。'
+      : '未找到 Claude Code Router CLI 可执行文件 `ccr`。请先安装 Claude Code Router 并确认 `ccr` 在 PATH 中；也可以执行 `/set claudeExecutable claude` 切回 Claude Code CLI。';
+    throw new CliExecutableNotFoundError(command, message);
+  }
 }

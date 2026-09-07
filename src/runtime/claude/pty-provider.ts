@@ -11,6 +11,7 @@ import {
 } from './code-router.js';
 import { resolveClaudeCliExecutable } from '../../runtime/codex/cli-executable.js';
 import {
+  getClaudeSessionJsonlById,
   listClaudeSessionJsonlFiles,
   summarizeClaudeSessionJsonl,
   type ClaudeSessionJsonlSummary,
@@ -62,6 +63,7 @@ interface PtyModule {
 interface ClaudePtySession {
   child: PtyProcess;
   executable: ClaudeExecutable;
+  claudeSessionId?: string;
   cwd: string;
   model?: string;
   permissionMode?: string;
@@ -101,6 +103,27 @@ export function hasClaudePtyTrustPrompt(text: string): boolean {
     || compact.includes('yes,itrustthisfolder')
     || compact.includes('claudecode\'llbeabletoread,edit,andexecutefileshere')
     || hasTuiEnterConfirmFooter(text);
+}
+
+export type ClaudeTrustPromptKey = 'Up' | 'Down' | 'Enter';
+
+export function buildClaudeTrustPromptKeys(text: string): ClaudeTrustPromptKey[] | null {
+  const normalized = normalizePtyOutput(text).replace(/\r/g, '');
+  const choices = normalized
+    .split('\n')
+    .map((line) => ({
+      line,
+      selected: /^\s*[❯›>]\s*/u.test(line),
+    }))
+    .filter(({ line }) => /yes,?\s+i trust this folder|no,?\s+(?:continue without these permissions|exit!?)/i.test(line));
+  const selectedIndex = choices.findIndex((choice) => choice.selected);
+  const trustIndex = choices.findIndex((choice) => /yes,?\s+i trust this folder/i.test(choice.line));
+  if (selectedIndex < 0 || trustIndex < 0) return null;
+  const direction: ClaudeTrustPromptKey = trustIndex < selectedIndex ? 'Up' : 'Down';
+  return [
+    ...Array.from({ length: Math.abs(trustIndex - selectedIndex) }, () => direction),
+    'Enter',
+  ];
 }
 
 export function hasClaudePtyOnboardingPrompt(text: string): boolean {
@@ -159,15 +182,21 @@ async function loadPtyModule(): Promise<PtyModule> {
 export function buildClaudePtyCommand(
   executable: ClaudeExecutable,
   options: {
+    claudeSessionId?: string;
     model?: string;
     permissionMode?: string;
     reasoningEffort?: string;
     env?: NodeJS.ProcessEnv;
     platform?: NodeJS.Platform;
     fileExists?: (filePath: string) => boolean;
+    requireInstalled?: boolean;
   } = {},
 ): { command: string; args: string[] } {
   const args = executable === 'ccr' ? ['code'] : [];
+  const claudeSessionId = options.claudeSessionId?.trim();
+  if (claudeSessionId) {
+    args.push('--resume', claudeSessionId);
+  }
   const model = options.model?.trim();
   if (model) {
     args.push('--model', model);
@@ -215,7 +244,20 @@ async function waitForClaudePtyBuffer(
   return predicate(session.buffer);
 }
 
-export function findLatestClaudeSessionJsonlUpdatedAfter(cwd: string, sinceMs: number): ClaudeSessionJsonlSummary | null {
+export function findLatestClaudeSessionJsonlUpdatedAfter(
+  cwd: string,
+  sinceMs: number,
+  expectedSessionId?: string,
+): ClaudeSessionJsonlSummary | null {
+  if (expectedSessionId) {
+    const expected = getClaudeSessionJsonlById(expectedSessionId, cwd);
+    if (!expected) return null;
+    try {
+      return fs.statSync(expected.filePath).mtimeMs + FILE_MTIME_SKEW_MS >= sinceMs ? expected : null;
+    } catch {
+      return null;
+    }
+  }
   const candidates: Array<{ mtimeMs: number; summary: ClaudeSessionJsonlSummary }> = [];
   for (const filePath of listClaudeSessionJsonlFiles(cwd)) {
     try {
@@ -231,7 +273,11 @@ export function findLatestClaudeSessionJsonlUpdatedAfter(cwd: string, sinceMs: n
   return candidates[0]?.summary || null;
 }
 
-export async function waitForClaudeSessionJsonlUpdatedAfter(cwd: string, sinceMs: number): Promise<ClaudeSessionJsonlSummary | null> {
+export async function waitForClaudeSessionJsonlUpdatedAfter(
+  cwd: string,
+  sinceMs: number,
+  expectedSessionId?: string,
+): Promise<ClaudeSessionJsonlSummary | null> {
   const timeoutMs = parsePositiveIntEnv(
     'CODELARK_CLAUDE_PTY_JSONL_DISCOVERY_TIMEOUT_MS',
     DEFAULT_JSONL_DISCOVERY_TIMEOUT_MS,
@@ -239,7 +285,7 @@ export async function waitForClaudeSessionJsonlUpdatedAfter(cwd: string, sinceMs
   );
   const deadline = Date.now() + timeoutMs;
   do {
-    const session = findLatestClaudeSessionJsonlUpdatedAfter(cwd, sinceMs);
+    const session = findLatestClaudeSessionJsonlUpdatedAfter(cwd, sinceMs, expectedSessionId);
     if (session) return session;
     if (timeoutMs <= 0) break;
     await sleep(100);
@@ -284,16 +330,22 @@ async function prepareClaudePtyForPrompt(session: ClaudePtySession): Promise<voi
       continue;
     }
     if (hasClaudePtyTrustPrompt(session.buffer)) {
-      console.log('[claude-pty] Claude Code trust prompt detected; confirming workspace before prompt injection');
+      const trustKeys = buildClaudeTrustPromptKeys(session.buffer);
+      if (!trustKeys) {
+        throw new Error('Claude Code trust prompt was detected, but the selected choice could not be identified safely.');
+      }
+      console.log('[claude-pty] Claude Code trust prompt detected; selecting trusted workspace before prompt injection');
       session.buffer = '';
-      session.child.write('\r');
+      for (const key of trustKeys) {
+        session.child.write(key === 'Up' ? '\x1b[A' : key === 'Down' ? '\x1b[B' : '\r');
+      }
       if (afterTrustDelayMs > 0) await sleep(afterTrustDelayMs);
       continue;
     }
     break;
   }
 
-  if (hasClaudePtyOnboardingPrompt(session.buffer) || hasClaudePtyTrustPrompt(session.buffer)) {
+  if (hasClaudePtyOnboardingPrompt(session.buffer)) {
     console.log('[claude-pty] Claude Code setup prompt remained after auto-confirm attempts; sending one final confirm before prompt injection');
     session.buffer = '';
     session.child.write('\r');
@@ -332,6 +384,7 @@ async function getOrCreateSession(
   controller?: ReadableStreamDefaultController<string>,
 ): Promise<ClaudePtySession> {
   const executable = params.claudeExecutable || 'claude';
+  const claudeSessionId = params.claudeSessionId?.trim() || undefined;
   const cwd = params.workingDirectory || process.cwd();
   const model = params.model?.trim() || undefined;
   const permissionMode = params.claudePermissionMode?.trim() || undefined;
@@ -341,6 +394,7 @@ async function getOrCreateSession(
     existing
     && !existing.exited
     && existing.executable === executable
+    && existing.claudeSessionId === claudeSessionId
     && existing.cwd === cwd
     && existing.model === model
     && existing.permissionMode === permissionMode
@@ -355,6 +409,7 @@ async function getOrCreateSession(
   const pty = await loadPtyModule();
   const baseEnv = buildClaudePtyEnv();
   const { command, args } = buildClaudePtyCommand(executable, {
+    claudeSessionId,
     model,
     permissionMode,
     reasoningEffort,
@@ -380,6 +435,7 @@ async function getOrCreateSession(
   const session: ClaudePtySession = {
     child,
     executable,
+    claudeSessionId,
     cwd,
     model,
     permissionMode,
@@ -473,8 +529,13 @@ export function streamClaudePtyTui(params: StreamChatParams): ReadableStream<str
           if (promptDelayMs > 0) await sleep(promptDelayMs);
           const promptStartedAtMs = Date.now();
           await writePrompt(session.child, params.prompt);
-          const startedClaudeJsonlSession = await waitForClaudeSessionJsonlUpdatedAfter(session.cwd, promptStartedAtMs);
+          const startedClaudeJsonlSession = await waitForClaudeSessionJsonlUpdatedAfter(
+            session.cwd,
+            promptStartedAtMs,
+            params.claudeSessionId,
+          );
           if (startedClaudeJsonlSession) {
+            session.claudeSessionId = startedClaudeJsonlSession.sessionId;
             controller.enqueue(sseEvent('status', {
               session_id: startedClaudeJsonlSession.sessionId,
               cwd: startedClaudeJsonlSession.cwd || session.cwd,
@@ -482,8 +543,16 @@ export function streamClaudePtyTui(params: StreamChatParams): ReadableStream<str
             }));
           }
           const screen = await waitForQuietScreen(session);
-          const claudeJsonlSession = findLatestClaudeSessionJsonlUpdatedAfter(session.cwd, promptStartedAtMs)
-            || await waitForClaudeSessionJsonlUpdatedAfter(session.cwd, promptStartedAtMs);
+          const claudeJsonlSession = findLatestClaudeSessionJsonlUpdatedAfter(
+            session.cwd,
+            promptStartedAtMs,
+            session.claudeSessionId,
+          ) || await waitForClaudeSessionJsonlUpdatedAfter(
+            session.cwd,
+            promptStartedAtMs,
+            session.claudeSessionId,
+          );
+          if (claudeJsonlSession) session.claudeSessionId = claudeJsonlSession.sessionId;
           controller.enqueue(sseEvent('text', screen || '(Claude Code TUI has not produced visible output yet.)'));
           controller.enqueue(sseEvent('result', {
             ...(claudeJsonlSession?.sessionId || params.claudeSessionId

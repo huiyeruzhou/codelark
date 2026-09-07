@@ -30,12 +30,14 @@ import {
   zcodeTmuxSessionName,
 } from '../../runtime/zcode/tmux-provider.js';
 import {
+  ClaudeTmuxLaunchError,
   CodexResumeTmuxLaunchError,
   claudeTmuxSessionName,
   cleanupRuntimeTmuxSession,
   codexTmuxSessionName,
   startRuntimeTmuxSession,
 } from '../tmux/runtime.js';
+import { CliExecutableNotFoundError } from '../../runtime/codex/cli-executable.js';
 import { getCodexThreadId } from '../turn/turn-classifier.js';
 import {
   resolveEffectiveClaudeProvider,
@@ -228,6 +230,49 @@ function formatCodexTmuxLaunchFailure(
   return sections.filter(Boolean).join('\n\n');
 }
 
+function formatClaudeTmuxLaunchFailure(
+  error: ClaudeTmuxLaunchError | CliExecutableNotFoundError,
+  currentProvider: RuntimeProviderChoice,
+  markdown: boolean,
+): string {
+  const details = error instanceof ClaudeTmuxLaunchError ? error.details : undefined;
+  const executable = error instanceof ClaudeTmuxLaunchError ? error.details.executable : error.command;
+  const diagnosticCommands = details?.commands
+    .filter((command) => command !== details.killCommand)
+    .slice(-6)
+    .join(' ; ');
+  const fields: Array<[string, string | null | undefined]> = [
+    ['Runtime', 'claude'],
+    ['Provider', `未切换（仍为 ${currentProvider}）`],
+    ['Claude executable', executable],
+    ['tmux session', details?.sessionName],
+    ['cwd', details?.workingDirectory],
+    ['失败原因', details?.reason || error.message],
+    ['最后错误', details?.lastError],
+    ['最后屏幕', truncateForCommandResponse(details?.lastScreen)],
+  ];
+  const sections = [buildCommandFields('Claude tmux 启动失败', fields, [], markdown)];
+  const launchOutput = fencedBlock(details?.launchOutput, 'text');
+  if (launchOutput) sections.push(markdown ? `**原进程输出**\n${launchOutput}` : `原进程输出\n${launchOutput}`);
+  const diagnosticCommand = fencedBlock(diagnosticCommands, 'bash');
+  if (diagnosticCommand) sections.push(markdown ? `**诊断命令**\n${diagnosticCommand}` : `诊断命令\n${diagnosticCommand}`);
+  const recovery = error instanceof CliExecutableNotFoundError
+    ? '安装或修复 Claude executable 后重新发送 `/p tmux`。'
+    : '请根据失败原因检查 Claude Code TUI；修复后重新发送 `/p tmux`。';
+  sections.push(markdown
+    ? [
+      '**说明**',
+      '- 没有写入 `runtime.claude.provider=tmux`，也没有把当前会话绑定到这个 tmux session。',
+      `- ${recovery}`,
+    ].join('\n')
+    : [
+      '说明',
+      '- 没有写入 runtime.claude.provider=tmux，也没有把当前会话绑定到这个 tmux session。',
+      `- ${recovery.replaceAll('`', '')}`,
+    ].join('\n'));
+  return sections.filter(Boolean).join('\n\n');
+}
+
 export async function handleProviderCommand(options: {
   msg: InboundMessage;
   args: string;
@@ -278,7 +323,8 @@ export async function handleProviderCommand(options: {
     }
     let claudeTmuxStartResult: { existed: boolean } | null = null;
     if (requestedProvider === 'tmux') {
-      const tmuxSessionName = claudeTmuxSessionName(getSessionClaudeSessionId(session) || session.id);
+      const claudeSessionId = getSessionClaudeSessionId(session) || undefined;
+      const tmuxSessionName = claudeTmuxSessionName(claudeSessionId || session.id);
       const claudeConfig = resolveClaudeRuntimeConfig(session, binding);
       try {
         await options.deps.notifyBackgroundOperation?.(`正在启动 tmux 后台会话 \`${tmuxSessionName}\` 并运行 Claude Code TUI。`);
@@ -286,6 +332,7 @@ export async function handleProviderCommand(options: {
           runtime: 'claude',
           sessionName: tmuxSessionName,
           bridgeSessionId: session.id,
+          claudeSessionId,
           workingDirectory: getSessionWorkingDirectory(session),
           executable: claudeConfig.executable,
           model: claudeConfig.model,
@@ -304,6 +351,13 @@ export async function handleProviderCommand(options: {
           markdown: options.markdown,
         });
         if (staleStart) return staleStart;
+        if (error instanceof ClaudeTmuxLaunchError || error instanceof CliExecutableNotFoundError) {
+          return formatClaudeTmuxLaunchFailure(
+            error,
+            resolveEffectiveClaudeProvider(session, binding),
+            options.markdown,
+          );
+        }
         const unavailable = formatTmuxProviderUnavailable(error);
         if (unavailable) return unavailable;
         throw error;

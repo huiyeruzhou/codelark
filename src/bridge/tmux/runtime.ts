@@ -19,6 +19,7 @@ import { resolveCodexCliExecutable } from '../../runtime/codex/cli-executable.js
 import {
   buildClaudePtyCommand,
   buildClaudePtyEnv,
+  buildClaudeTrustPromptKeys,
   hasClaudePtyInputPrompt,
   hasClaudePtyOnboardingPrompt,
   hasClaudePtyTrustPrompt,
@@ -174,6 +175,32 @@ export class CodexResumeTmuxLaunchError extends Error {
   }
 }
 
+export interface ClaudeTmuxLaunchFailureDetails {
+  sessionName: string;
+  bridgeSessionId: string;
+  workingDirectory?: string;
+  executable: StreamChatParams['claudeExecutable'];
+  reason: string;
+  commands: string[];
+  lastScreen?: string;
+  lastError?: string;
+  sessionExists?: boolean;
+  sessionExistsCommand?: string;
+  killCommand?: string;
+  launchLogPath?: string;
+  launchOutput?: string;
+}
+
+export class ClaudeTmuxLaunchError extends Error {
+  readonly details: ClaudeTmuxLaunchFailureDetails;
+
+  constructor(details: ClaudeTmuxLaunchFailureDetails) {
+    super(`Claude tmux session ${details.sessionName} did not become ready after launch: ${details.reason}`);
+    this.name = 'ClaudeTmuxLaunchError';
+    this.details = details;
+  }
+}
+
 export interface AttachTmuxSessionResult {
   exists: boolean;
   sessionName: string;
@@ -206,6 +233,7 @@ export interface SendTmuxActionsAndCaptureResult {
 export interface StartClaudeTmuxSessionParams {
   sessionName: string;
   bridgeSessionId: string;
+  claudeSessionId?: string;
   workingDirectory?: string;
   executable?: StreamChatParams['claudeExecutable'];
   model?: string;
@@ -234,7 +262,8 @@ export type StartRuntimeTmuxSessionResult =
   | ({ runtime: 'claude' } & StartClaudeTmuxSessionResult);
 
 // 这里统一的是 provider-owned tmux session 生命周期，而不是强行抽象 CLI 语义。
-// Codex 需要 resume thread，Claude 需要等待 JSONL 发现 session id；保留这些差异能让上层共享创建/查看/清理行为，同时避免 provider 暴露多余接口。
+// Codex 与已绑定的 Claude 会话都必须 resume 稳定 identity；fresh Claude 会话再从 JSONL 发现 session id。
+// 保留各 CLI 的参数差异能让上层共享创建/查看/清理行为，同时避免 provider 暴露多余接口。
 
 const DEFAULT_CODEX_RESUME_TMUX_READY_TIMEOUT_MS = 15_000;
 const DEFAULT_CODEX_RESUME_TMUX_READY_POLL_MS = 250;
@@ -251,6 +280,11 @@ function posixShellQuote(value: string): string {
 function codexLaunchLogPath(sessionName: string): string {
   const safeName = safeTmuxSessionId(sessionName, 'codex').slice(0, 120);
   return path.join(os.tmpdir(), `codelark-codex-tmux-${process.pid}-${safeName}.log`);
+}
+
+function claudeLaunchLogPath(sessionName: string): string {
+  const safeName = safeTmuxSessionId(sessionName, 'claude').slice(0, 120);
+  return path.join(os.tmpdir(), `codelark-claude-tmux-${process.pid}-${safeName}.log`);
 }
 
 function prepareLaunchLog(filePath: string): void {
@@ -341,6 +375,15 @@ function summarizeClaudeSelection(kind: 'onboarding' | 'trust'): string {
   return kind === 'onboarding'
     ? 'Claude Code is waiting at an onboarding prompt.'
     : 'Claude Code is waiting at a workspace trust prompt.';
+}
+
+function buildClaudeSelectionActions(
+  prompt: Extract<RuntimeTmuxSelectionPrompt, { runtime: 'claude' }>,
+  screen: string,
+): TmuxSendAction[] | null {
+  if (prompt.kind === 'onboarding') return [{ type: 'key', key: 'Enter' }];
+  const keys = buildClaudeTrustPromptKeys(screen);
+  return keys?.map((key) => ({ type: 'key' as const, key })) || null;
 }
 
 function detectRuntimeTmuxSelectionPrompt(
@@ -682,7 +725,22 @@ export async function waitForRuntimeTmuxReady(params: {
           && previousSelectionActionAt !== undefined
           && Date.now() - previousSelectionActionAt >= selectionActionRetryMs
         ) {
-          const retried = await core.sendActions(captureTarget, [{ type: 'key', key: 'Enter' }]);
+          const retryActions = buildClaudeSelectionActions(activeSelectionPrompt, capture.screen);
+          if (!retryActions) {
+            transitionRuntimeTmuxReadiness(machine, 'suspended', 'Claude trust selection could not be identified safely', {
+              prompt_runtime: activeSelectionPrompt.runtime,
+              prompt_kind: activeSelectionPrompt.kind,
+            });
+            return {
+              ready: false,
+              runtime: params.runtime,
+              commands,
+              lastScreen,
+              sessionExists: true,
+              selectionPrompt: activeSelectionPrompt,
+            };
+          }
+          const retried = await core.sendActions(captureTarget, retryActions);
           commands.push(...retried.commands);
           lastSelectionActionAt.set(fingerprint, Date.now());
           console.log('[tmux-runtime] Runtime tmux selection prompt remained after input; action retried:', {
@@ -692,7 +750,7 @@ export async function waitForRuntimeTmuxReady(params: {
             capture_target: captureTarget,
             prompt_runtime: activeSelectionPrompt.runtime,
             prompt_kind: activeSelectionPrompt.kind,
-            action_count: 1,
+            action_count: retryActions.length,
             commands: retried.commands,
           });
         }
@@ -725,8 +783,15 @@ export async function waitForRuntimeTmuxReady(params: {
                 }
                 actions = buildCodexTuiSelectionChoiceActions(activeSelectionPrompt.prompt, resolvedChoice);
               } else {
+                actions = buildClaudeSelectionActions(activeSelectionPrompt, capture.screen) || [];
+                if (actions.length === 0) {
+                  transitionRuntimeTmuxReadiness(machine, 'suspended', 'Claude trust selection could not be identified safely', {
+                    prompt_runtime: activeSelectionPrompt.runtime,
+                    prompt_kind: activeSelectionPrompt.kind,
+                  });
+                  return { choice: null, commands: [] };
+                }
                 resolvedChoice = 'confirm';
-                actions = [{ type: 'key' as const, key: 'Enter' }];
               }
               if (!params.onSelectionPrompt) {
                 console.warn('[tmux-runtime] Runtime tmux selection prompt has no IM handler; falling back to default choice:', {
@@ -1134,9 +1199,14 @@ function commandPreview(command: string, args: string[]): string {
   return [command, ...args].map(posixShellQuote).join(' ');
 }
 
-function buildClaudeTmuxShellCommand(command: string, args: string[], env: Record<string, string>): string | string[] {
+function buildClaudeTmuxShellCommand(
+  command: string,
+  args: string[],
+  env: Record<string, string>,
+  options: { stderrLogPath?: string } = {},
+): string | string[] {
   const snapshot = ensureShellSnapshot(env);
-  const launchArgs = buildShellSnapshotLaunchArgs(command, args, snapshot);
+  const launchArgs = buildShellSnapshotLaunchArgs(command, args, snapshot, options);
   return process.platform === 'win32'
     ? launchArgs
     : launchArgs.map((value) => quoteCommandLineArg(value)).join(' ');
@@ -1148,40 +1218,74 @@ export async function startClaudeTmuxSession(
   const core = params.core || tmuxCore;
   const executable = params.executable || 'claude';
   const cwd = params.workingDirectory || process.cwd();
-  const baseEnv = buildClaudePtyEnv();
-  const { command, args } = buildClaudePtyCommand(executable, {
-    model: params.model?.trim() || undefined,
-    permissionMode: params.permissionMode?.trim() || undefined,
-    reasoningEffort: params.reasoningEffort?.trim() || undefined,
-    env: baseEnv,
-  });
-  const env = executable === 'ccr'
-    ? await prepareClaudeCodeRouterEnv(command, baseEnv, {
-      controller: params.controller,
-      logPrefix: '[claude-tmux]',
-    })
-    : baseEnv;
-  const shellCommand = buildClaudeTmuxShellCommand(command, args, env);
-
-  console.log('[claude-tmux] Claude Code TUI start:', {
-    bridge_session_id: params.bridgeSessionId,
-    tmux_session: params.sessionName,
-    command: commandPreview(command, args),
-    cwd,
-    executable,
-  });
   transitionRuntimeTmuxInputState(
     'claude',
     params.sessionName,
     'starting_tmux',
     'starting or attaching the provider-owned Claude tmux session',
   );
-  const started = await core.ensureDetachedSession({
-    name: params.sessionName,
+  const baseEnv = buildClaudePtyEnv();
+  let command: string;
+  let args: string[];
+  let env: Record<string, string>;
+  try {
+    ({ command, args } = buildClaudePtyCommand(executable, {
+      claudeSessionId: params.claudeSessionId,
+      model: params.model?.trim() || undefined,
+      permissionMode: params.permissionMode?.trim() || undefined,
+      reasoningEffort: params.reasoningEffort?.trim() || undefined,
+      env: baseEnv,
+      requireInstalled: true,
+    }));
+    env = executable === 'ccr'
+      ? await prepareClaudeCodeRouterEnv(command, baseEnv, {
+        controller: params.controller,
+        logPrefix: '[claude-tmux]',
+      })
+      : baseEnv;
+  } catch (error) {
+    const message = describeUnknownError(error);
+    transitionRuntimeTmuxInputState(
+      'claude',
+      params.sessionName,
+      'failed',
+      'Claude tmux executable preflight failed',
+      { error: message },
+    );
+    throw error;
+  }
+
+  const launchLogPath = params.waitReady ? claudeLaunchLogPath(params.sessionName) : undefined;
+  if (launchLogPath) prepareLaunchLog(launchLogPath);
+  const shellCommand = buildClaudeTmuxShellCommand(command, args, env, { stderrLogPath: launchLogPath });
+
+  console.log('[claude-tmux] Claude Code TUI start:', {
+    bridge_session_id: params.bridgeSessionId,
+    resume_session_id: params.claudeSessionId || null,
+    tmux_session: params.sessionName,
+    command: commandPreview(command, args),
     cwd,
-    command: shellCommand,
-    recreate: params.recreate !== false,
+    executable,
   });
+  let started: Awaited<ReturnType<TmuxCore['ensureDetachedSession']>>;
+  try {
+    started = await core.ensureDetachedSession({
+      name: params.sessionName,
+      cwd,
+      command: shellCommand,
+      recreate: params.recreate !== false,
+    });
+  } catch (error) {
+    cleanupLaunchLog(launchLogPath);
+    transitionRuntimeTmuxInputState(
+      'claude',
+      params.sessionName,
+      'failed',
+      'Claude tmux process creation failed',
+      { error: describeUnknownError(error) },
+    );
+    throw error;
+  }
   const readiness = params.waitReady
     ? await waitForRuntimeTmuxReady({
       runtime: 'claude',
@@ -1189,6 +1293,67 @@ export async function startClaudeTmuxSession(
       core,
     })
     : null;
+  if (readiness && !readiness.ready) {
+    let killCommand: string | undefined;
+    try {
+      killCommand = await core.killSession(params.sessionName, { ignoreMissing: true });
+    } catch (error) {
+      console.warn('[claude-tmux] Failed to clean up unready Claude tmux session:', {
+        tmux_session: params.sessionName,
+        error: describeUnknownError(error),
+      });
+    }
+    const launchOutput = readRecentFile(launchLogPath);
+    cleanupLaunchLog(launchLogPath);
+    const reason = readiness.paneDead
+      ? readiness.paneDead.status === undefined
+        ? 'Claude Code TUI process exited before becoming ready'
+        : `Claude Code TUI process exited with status ${readiness.paneDead.status} before becoming ready`
+      : readiness.sessionExists === false
+        ? 'tmux session disappeared after new-session; the Claude Code TUI process likely exited immediately'
+        : readiness.selectionPrompt?.runtime === 'claude'
+          ? `Claude Code TUI is waiting at a ${readiness.selectionPrompt.kind} prompt that could not be resolved safely`
+          : readiness.lastError
+            ? `tmux launch check failed: ${readiness.lastError}`
+            : 'Claude Code TUI did not become ready before the startup timeout';
+    const details: ClaudeTmuxLaunchFailureDetails = {
+      sessionName: params.sessionName,
+      bridgeSessionId: params.bridgeSessionId,
+      workingDirectory: cwd,
+      executable,
+      reason,
+      commands: [...started.commands, ...readiness.commands, ...(killCommand ? [killCommand] : [])],
+      lastScreen: screenExcerpt(readiness.lastScreen),
+      lastError: readiness.lastError,
+      sessionExists: readiness.sessionExists,
+      sessionExistsCommand: readiness.sessionExistsCommand,
+      killCommand,
+      launchLogPath,
+      launchOutput: screenExcerpt(launchOutput),
+    };
+    transitionRuntimeTmuxInputState(
+      'claude',
+      params.sessionName,
+      'failed',
+      'Claude tmux process did not become ready',
+      { error: reason },
+    );
+    console.error('[claude-tmux] Claude tmux launch failed:', {
+      tmux_session: details.sessionName,
+      bridge_session_id: details.bridgeSessionId,
+      cwd: details.workingDirectory,
+      executable: details.executable,
+      reason: details.reason,
+      session_exists: details.sessionExists,
+      last_error: details.lastError,
+      last_screen_excerpt: details.lastScreen,
+      launch_output_excerpt: details.launchOutput,
+      commands: details.commands,
+      kill_command: details.killCommand,
+    });
+    throw new ClaudeTmuxLaunchError(details);
+  }
+  cleanupLaunchLog(launchLogPath);
   if (!params.waitReady) {
     transitionRuntimeTmuxInputState(
       'claude',

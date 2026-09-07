@@ -95,11 +95,16 @@ async function prepareClaudeTmuxForPrompt(sessionName: string, targetPane: strin
     afterSelectionDelayMs: afterSetupDelayMs,
     onSelectionPrompt: (selectionPrompt) => {
       controller.enqueue(sseEvent('status', {
-        reasoning: `Claude tmux 检测到 ${selectionPrompt.kind} 提示，正在发送 Enter 继续。`,
+        reasoning: selectionPrompt.kind === 'trust'
+          ? 'Claude tmux 检测到工作目录信任提示，正在选择信任并继续。'
+          : `Claude tmux 检测到 ${selectionPrompt.kind} 提示，正在发送 Enter 继续。`,
       }));
     },
   });
   if (!readiness.ready) {
+    if (readiness.selectionPrompt?.runtime === 'claude' && readiness.selectionPrompt.kind === 'trust') {
+      throw new Error('Claude tmux 停留在工作目录信任页，但无法安全识别当前选项；未发送消息。请在本机 tmux 中完成选择后重试。');
+    }
     throw new Error(readiness.lastError || 'Claude tmux did not become ready for input.');
   }
 }
@@ -196,7 +201,11 @@ async function pollClaudeTmuxSessionFile(
     if (params.abortController?.signal.aborted) break;
 
     if (!context.sessionFilePath) {
-      const found = await waitForClaudeSessionJsonlUpdatedAfter(context.cwd, startedAtMs);
+      const found = await waitForClaudeSessionJsonlUpdatedAfter(
+        context.cwd,
+        startedAtMs,
+        context.claudeSessionId,
+      );
       if (found) {
         context.sessionFilePath = found.filePath;
         context.claudeSessionId = found.sessionId;
@@ -304,6 +313,7 @@ export function streamClaudeTmuxTui(params: StreamChatParams): ReadableStream<st
             runtime: 'claude',
             sessionName,
             bridgeSessionId: params.sessionId,
+            claudeSessionId: params.claudeSessionId,
             workingDirectory: params.workingDirectory,
             executable: params.claudeExecutable,
             model: params.model,
@@ -325,7 +335,11 @@ export function streamClaudeTmuxTui(params: StreamChatParams): ReadableStream<st
             sessionName,
             send: () => tmuxCore.injectPromptIntoPane(targetPane, params.prompt),
           });
-          const startedClaudeJsonlSession = await waitForClaudeSessionJsonlUpdatedAfter(cwd, startedAtMs);
+          const startedClaudeJsonlSession = await waitForClaudeSessionJsonlUpdatedAfter(
+            cwd,
+            startedAtMs,
+            params.claudeSessionId,
+          );
           if (startedClaudeJsonlSession) {
             context.sessionFilePath = startedClaudeJsonlSession.filePath;
             context.claudeSessionId = startedClaudeJsonlSession.sessionId;

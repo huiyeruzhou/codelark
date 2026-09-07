@@ -5,10 +5,12 @@ import fs from 'node:fs';
 
 import {
   buildCodexResumeTmuxCommand,
+  ClaudeTmuxLaunchError,
   CodexResumeTmuxLaunchError,
   cleanupRuntimeTmuxSession,
   hasCodexResumeTmuxReadyPrompt,
   inspectRuntimeTmuxSession,
+  startClaudeTmuxSession,
   startCodexResumeTmuxSession,
   waitForRuntimeTmuxReady,
   waitForCodexResumeTmuxReady,
@@ -18,11 +20,120 @@ import {
 } from '../../../../bridge/tmux/runtime.js';
 import {
   coordinateRuntimeTmuxSelection,
+  getRuntimeTmuxInputState,
   resetRuntimeTmuxInputStatesForTests,
 } from '../../../../bridge/tmux/input-state-machine.js';
 import { parseCodexTuiSelectionPrompt } from '../../../../runtime/codex/tmux-provider.js';
 
 describe('codex tmux runtime', () => {
+  it('fails Claude startup before creating tmux when the configured executable is missing', async () => {
+    resetRuntimeTmuxInputStatesForTests();
+    const oldOverride = process.env.CODELARK_CLAUDE_CLI_PATH;
+    const calls: string[] = [];
+    process.env.CODELARK_CLAUDE_CLI_PATH = '/definitely/missing/claude';
+    const core: TmuxCore = {
+      commandPreview: (args) => ['tmux', ...args].join(' '),
+      hasSession: async (name) => ({ exists: false, command: `tmux has-session -t ${name}` }),
+      killSession: async (name) => `tmux kill-session -t ${name}`,
+      listSessions: async () => ({ sessions: [], command: 'tmux list-sessions' }),
+      ensureDetachedSession: async (params) => {
+        calls.push(`new-session:${params.name}`);
+        return { existed: false, commands: ['tmux new-session'] };
+      },
+      capturePane: async (target) => {
+        calls.push(`capture-pane:${target}`);
+        throw new Error(`can't find pane: ${target}`);
+      },
+      sendActions: async () => ({ commands: [] }),
+      sendInterrupt: async () => 'tmux send-keys C-c',
+      injectPromptIntoPane: async () => ({ commands: [] }),
+    };
+
+    try {
+      await assert.rejects(
+        () => startClaudeTmuxSession({
+          sessionName: 'claude_missing_cli',
+          bridgeSessionId: 'bridge-missing-cli',
+          executable: 'claude',
+          core,
+          waitReady: true,
+        }),
+        /未找到 Claude Code CLI.*claude.*PATH/s,
+      );
+      assert.deepEqual(calls, []);
+      const lifecycle = getRuntimeTmuxInputState('claude', 'claude_missing_cli');
+      assert.equal(lifecycle.state, 'failed');
+      assert.match(lifecycle.error || '', /claude/);
+    } finally {
+      if (oldOverride === undefined) delete process.env.CODELARK_CLAUDE_CLI_PATH;
+      else process.env.CODELARK_CLAUDE_CLI_PATH = oldOverride;
+      resetRuntimeTmuxInputStatesForTests();
+    }
+  });
+
+  it('cleans up and throws a structured error when Claude exits before readiness', async () => {
+    resetRuntimeTmuxInputStatesForTests();
+    const oldOverride = process.env.CODELARK_CLAUDE_CLI_PATH;
+    const oldTimeout = process.env.CODELARK_CLAUDE_TMUX_READY_TIMEOUT_MS;
+    const oldPoll = process.env.CODELARK_CLAUDE_TMUX_READY_POLL_MS;
+    const calls: string[] = [];
+    process.env.CODELARK_CLAUDE_CLI_PATH = process.execPath;
+    process.env.CODELARK_CLAUDE_TMUX_READY_TIMEOUT_MS = '100';
+    process.env.CODELARK_CLAUDE_TMUX_READY_POLL_MS = '50';
+    const core: TmuxCore = {
+      commandPreview: (args) => ['tmux', ...args].join(' '),
+      hasSession: async (name) => ({ exists: false, command: `tmux has-session -t ${name}` }),
+      killSession: async (name) => {
+        calls.push(`kill-session:${name}`);
+        return `tmux kill-session -t ${name}`;
+      },
+      listSessions: async () => ({ sessions: [], command: 'tmux list-sessions' }),
+      ensureDetachedSession: async (params) => {
+        calls.push(`new-session:${params.name}`);
+        return { existed: false, commands: ['tmux new-session'] };
+      },
+      capturePane: async (target) => {
+        calls.push(`capture-pane:${target}`);
+        throw new Error(`can't find pane: ${target}`);
+      },
+      sendActions: async () => ({ commands: [] }),
+      sendInterrupt: async () => 'tmux send-keys C-c',
+      injectPromptIntoPane: async () => ({ commands: [] }),
+    };
+
+    try {
+      await assert.rejects(
+        () => startClaudeTmuxSession({
+          sessionName: 'claude_exited_before_ready',
+          bridgeSessionId: 'bridge-exited-before-ready',
+          executable: 'claude',
+          core,
+          waitReady: true,
+        }),
+        (error) => {
+          assert.ok(error instanceof ClaudeTmuxLaunchError);
+          assert.match(error.details.reason, /session disappeared/);
+          assert.match(error.details.lastError || '', /can't find pane/);
+          return true;
+        },
+      );
+      assert.deepEqual(calls, [
+        'new-session:claude_exited_before_ready',
+        'capture-pane:claude_exited_before_ready',
+        'kill-session:claude_exited_before_ready',
+      ]);
+      assert.equal(getRuntimeTmuxInputState('claude', 'claude_exited_before_ready').state, 'failed');
+    } finally {
+      if (oldOverride === undefined) delete process.env.CODELARK_CLAUDE_CLI_PATH;
+      else process.env.CODELARK_CLAUDE_CLI_PATH = oldOverride;
+      if (oldTimeout === undefined) delete process.env.CODELARK_CLAUDE_TMUX_READY_TIMEOUT_MS;
+      else process.env.CODELARK_CLAUDE_TMUX_READY_TIMEOUT_MS = oldTimeout;
+      if (oldPoll === undefined) delete process.env.CODELARK_CLAUDE_TMUX_READY_POLL_MS;
+      else process.env.CODELARK_CLAUDE_TMUX_READY_POLL_MS = oldPoll;
+      resetRuntimeTmuxInputStatesForTests();
+    }
+  });
+
   it('surfaces a tmux client/server mismatch immediately even when the session exists', async () => {
     const core: TmuxCore = {
       commandPreview: (args) => ['tmux', ...args].join(' '),
@@ -848,7 +959,8 @@ describe('codex tmux runtime', () => {
             screen: captureCount === 1
               ? [
                 'Quick safety check',
-                'Yes, I trust this folder',
+                '❯ Yes, I trust this folder',
+                '  No, exit!',
                 'Enter to confirm',
               ].join('\n')
               : [
@@ -892,6 +1004,107 @@ describe('codex tmux runtime', () => {
     }
   });
 
+  it('moves from the default No choice to Yes before confirming a Claude trust prompt', async () => {
+    const oldTimeout = process.env.CODELARK_CLAUDE_TMUX_READY_TIMEOUT_MS;
+    const oldPoll = process.env.CODELARK_CLAUDE_TMUX_READY_POLL_MS;
+    try {
+      process.env.CODELARK_CLAUDE_TMUX_READY_TIMEOUT_MS = '500';
+      process.env.CODELARK_CLAUDE_TMUX_READY_POLL_MS = '50';
+      let sessionExists = true;
+      let trusted = false;
+      const sentActions: TmuxSendAction[][] = [];
+      const trustScreen = [
+        'Quick safety check: Is this a project you created or one you trust?',
+        '',
+        '  1. Yes, I trust this folder',
+        '  2. No, continue without these permissions',
+        '❯ 3. No, exit!',
+        '',
+        'Enter to confirm · Esc to cancel',
+      ].join('\n');
+      const core: TmuxCore = {
+        commandPreview: (args) => ['tmux', ...args].join(' '),
+        hasSession: async (name) => ({ exists: sessionExists, command: `tmux has-session -t ${name}` }),
+        killSession: async (name) => `tmux kill-session -t ${name}`,
+        listSessions: async () => ({ sessions: [], command: 'tmux list-sessions' }),
+        ensureDetachedSession: async () => ({ existed: false, commands: [] }),
+        capturePane: async () => {
+          if (!sessionExists) throw new Error("can't find pane: claude_default_no");
+          return {
+            command: 'tmux capture-pane -t claude_default_no',
+            screen: trusted ? 'Claude Code v2.1.220\n❯ \n? for shortcuts' : trustScreen,
+          };
+        },
+        sendActions: async (_target, actions) => {
+          sentActions.push(actions);
+          if (actions.some((action) => action.type === 'key' && action.key === 'Up')) {
+            trusted = true;
+          } else {
+            sessionExists = false;
+          }
+          return { commands: actions.map((action) => `tmux send-keys ${action.type === 'key' ? action.key : action.text}`) };
+        },
+        sendInterrupt: async () => '',
+        injectPromptIntoPane: async () => ({ commands: [] }),
+      };
+
+      const result = await waitForRuntimeTmuxReady({
+        runtime: 'claude',
+        sessionName: 'claude_default_no',
+        core,
+        afterSelectionDelayMs: 0,
+      });
+
+      assert.equal(result.ready, true);
+      assert.deepEqual(sentActions, [[
+        { type: 'key', key: 'Up' },
+        { type: 'key', key: 'Up' },
+        { type: 'key', key: 'Enter' },
+      ]]);
+    } finally {
+      if (oldTimeout === undefined) delete process.env.CODELARK_CLAUDE_TMUX_READY_TIMEOUT_MS;
+      else process.env.CODELARK_CLAUDE_TMUX_READY_TIMEOUT_MS = oldTimeout;
+      if (oldPoll === undefined) delete process.env.CODELARK_CLAUDE_TMUX_READY_POLL_MS;
+      else process.env.CODELARK_CLAUDE_TMUX_READY_POLL_MS = oldPoll;
+    }
+  });
+
+  it('does not press Enter when a Claude trust prompt has no identifiable selected option', async () => {
+    let sendCount = 0;
+    const core: TmuxCore = {
+      commandPreview: (args) => ['tmux', ...args].join(' '),
+      hasSession: async (name) => ({ exists: true, command: `tmux has-session -t ${name}` }),
+      killSession: async (name) => `tmux kill-session -t ${name}`,
+      listSessions: async () => ({ sessions: [], command: 'tmux list-sessions' }),
+      ensureDetachedSession: async () => ({ existed: false, commands: [] }),
+      capturePane: async () => ({
+        command: 'tmux capture-pane -t claude_unknown_trust',
+        screen: [
+          'Quick safety check',
+          '1. Yes, I trust this folder',
+          '2. No, exit!',
+          'Enter to confirm · Esc to cancel',
+        ].join('\n'),
+      }),
+      sendActions: async () => {
+        sendCount += 1;
+        return { commands: [] };
+      },
+      sendInterrupt: async () => '',
+      injectPromptIntoPane: async () => ({ commands: [] }),
+    };
+
+    const result = await waitForRuntimeTmuxReady({
+      runtime: 'claude',
+      sessionName: 'claude_unknown_trust',
+      core,
+    });
+
+    assert.equal(result.ready, false);
+    assert.equal(result.selectionPrompt?.kind, 'trust');
+    assert.equal(sendCount, 0);
+  });
+
   it('retries one swallowed Claude trust confirmation while the same prompt remains visible', async () => {
     const oldTimeout = process.env.CODELARK_CLAUDE_TMUX_READY_TIMEOUT_MS;
     const oldPoll = process.env.CODELARK_CLAUDE_TMUX_READY_POLL_MS;
@@ -900,7 +1113,8 @@ describe('codex tmux runtime', () => {
       process.env.CODELARK_CLAUDE_TMUX_READY_POLL_MS = '50';
       const trustScreen = [
         'Quick safety check',
-        'Yes, I trust this folder',
+        '❯ Yes, I trust this folder',
+        '  No, exit!',
         'Enter to confirm',
       ].join('\n');
       let sendCount = 0;

@@ -4,10 +4,29 @@ import assert from 'node:assert/strict';
 
 import {
   isNodeModulesBinPath,
+  resolveClaudeCliExecutable,
   resolveCodexCliExecutable,
 } from '../../../../runtime/codex/cli-executable.js';
 
 describe('codex-cli-executable', () => {
+  it('can require Claude executables to exist while retaining package-local support', () => {
+    assert.equal(resolveClaudeCliExecutable('claude', {
+      env: { PATH: '/usr/bin:/bin' },
+      platform: 'linux',
+      packageSearchRoots: ['/repo/apps/codelark/dist/runtime/claude'],
+      fileExists: (filePath) => filePath === '/repo/apps/codelark/node_modules/.bin/claude',
+      requireInstalled: true,
+    }), '/repo/apps/codelark/node_modules/.bin/claude');
+
+    assert.throws(() => resolveClaudeCliExecutable('ccr', {
+      env: { PATH: '/usr/bin:/bin' },
+      platform: 'linux',
+      packageSearchRoots: ['/repo/apps/codelark/dist/runtime/claude'],
+      fileExists: () => false,
+      requireInstalled: true,
+    }), /未找到 Claude Code Router CLI.*ccr.*PATH/s);
+  });
+
   it('prefers a global Codex CLI over project node_modules bins', () => {
     const existing = new Set([
       '/repo/node_modules/.bin/codex',

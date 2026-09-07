@@ -5491,15 +5491,20 @@ enabled = true
     }
   });
 
-  it('recreates an existing Claude tmux session on /p tmux', async () => {
+  it('recreates and resumes the selected Claude session on /p tmux', async () => {
     const previousEnv = {
       PATH: process.env.PATH,
+      CODELARK_CLAUDE_CLI_PATH: process.env.CODELARK_CLAUDE_CLI_PATH,
+      CODELARK_CLAUDE_HOME: process.env.CODELARK_CLAUDE_HOME,
       TMUX_FAKE_LOG: process.env.TMUX_FAKE_LOG,
       TMUX_FAKE_EXISTING_SESSIONS: process.env.TMUX_FAKE_EXISTING_SESSIONS,
     };
     const fakeTmux = installFakeTmux();
     const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-claude-provider-tmux-'));
     process.env.PATH = `${fakeTmux.binDir}${path.delimiter}${previousEnv.PATH || ''}`;
+    process.env.CODELARK_CLAUDE_CLI_PATH = process.execPath;
+    const claudeHome = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-claude-provider-tmux-home-'));
+    process.env.CODELARK_CLAUDE_HOME = claudeHome;
     process.env.TMUX_FAKE_LOG = fakeTmux.logPath;
 
     try {
@@ -5507,15 +5512,40 @@ enabled = true
       const sent: any[] = [];
       const adapter = createGroupCapableAdapter({ sent });
       const address = { channelType: 'feishu', chatId: 'chat-claude-provider-tmux' } as const;
-      const session = store.createSession('existing', 'test-model', undefined, workDir, 'normal');
-      store.updateSession(session.id, { runtime: { activeRuntime: 'claude' } });
-      const tmuxSessionName = `claude_${session.id}`;
+      const claudeSessionId = 'd6830000-1111-4222-8333-444444444444';
+      const projectDir = getClaudeProjectDir(workDir, claudeHome);
+      fs.mkdirSync(projectDir, { recursive: true });
+      fs.writeFileSync(path.join(projectDir, `${claudeSessionId}.jsonl`), `${JSON.stringify({
+        type: 'user',
+        uuid: 'user-provider-resume',
+        sessionId: claudeSessionId,
+        cwd: workDir,
+        timestamp: '2026-09-13T17:24:00.000Z',
+        message: { role: 'user', content: 'resume this Claude session' },
+      })}\n`, 'utf-8');
+
+      await handleBridgeCommand(
+        adapter,
+        {
+          address,
+          text: `/t ${claudeSessionId}`,
+          messageId: 'incoming-select-claude-session',
+        } as any,
+        `/t ${claudeSessionId}`,
+        {
+          getActiveTask: () => undefined,
+          diagnoseSessionHealth: async () => null,
+          diagnoseAllActiveSessions: async () => [],
+        },
+      );
+
+      const binding = store.getChannelChat(address.channelType, address.chatId);
+      assert.ok(binding);
+      const session = store.getSession(binding.bridgeSessionId);
+      assert.equal(session?.runtime?.claude?.sessionId, claudeSessionId);
+      assert.equal(session?.runtime?.claude?.cwd, workDir);
+      const tmuxSessionName = `claude_${claudeSessionId}`;
       process.env.TMUX_FAKE_EXISTING_SESSIONS = tmuxSessionName;
-      store.upsertChannelChat({
-        channelType: address.channelType,
-        chatId: address.chatId,
-        bridgeSessionId: session.id,
-      });
 
       await handleBridgeCommand(
         adapter,
@@ -5547,14 +5577,207 @@ enabled = true
       assert.match(tmuxLog, new RegExp(`has-session -t ${tmuxSessionName}`));
       assert.match(tmuxLog, new RegExp(`kill-session -t ${tmuxSessionName}`));
       assert.match(tmuxLog, new RegExp(`new-session -d -s ${tmuxSessionName}`));
+      assert.match(tmuxLog, new RegExp(`--resume ${claudeSessionId}`));
     } finally {
       process.env.PATH = previousEnv.PATH;
+      if (previousEnv.CODELARK_CLAUDE_CLI_PATH === undefined) delete process.env.CODELARK_CLAUDE_CLI_PATH;
+      else process.env.CODELARK_CLAUDE_CLI_PATH = previousEnv.CODELARK_CLAUDE_CLI_PATH;
+      if (previousEnv.CODELARK_CLAUDE_HOME === undefined) delete process.env.CODELARK_CLAUDE_HOME;
+      else process.env.CODELARK_CLAUDE_HOME = previousEnv.CODELARK_CLAUDE_HOME;
       if (previousEnv.TMUX_FAKE_LOG === undefined) delete process.env.TMUX_FAKE_LOG;
       else process.env.TMUX_FAKE_LOG = previousEnv.TMUX_FAKE_LOG;
       if (previousEnv.TMUX_FAKE_EXISTING_SESSIONS === undefined) delete process.env.TMUX_FAKE_EXISTING_SESSIONS;
       else process.env.TMUX_FAKE_EXISTING_SESSIONS = previousEnv.TMUX_FAKE_EXISTING_SESSIONS;
       fs.rmSync(fakeTmux.binDir, { recursive: true, force: true });
+      fs.rmSync(claudeHome, { recursive: true, force: true });
       fs.rmSync(workDir, { recursive: true, force: true });
+    }
+  });
+
+  it('resumes the persisted Claude identity when auto-recovering a missing tmux', async () => {
+    const previousEnv = {
+      PATH: process.env.PATH,
+      CODELARK_CLAUDE_CLI_PATH: process.env.CODELARK_CLAUDE_CLI_PATH,
+      TMUX_FAKE_LOG: process.env.TMUX_FAKE_LOG,
+    };
+    const fakeTmux = installFakeTmux();
+    const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-claude-provider-recover-'));
+    process.env.PATH = `${fakeTmux.binDir}${path.delimiter}${previousEnv.PATH || ''}`;
+    process.env.CODELARK_CLAUDE_CLI_PATH = process.execPath;
+    process.env.TMUX_FAKE_LOG = fakeTmux.logPath;
+
+    try {
+      const store = initTestContext({ settings: { bridge_claude_provider: 'tmux' } });
+      const sent: any[] = [];
+      const adapter = createGroupCapableAdapter({ sent });
+      const address = { channelType: 'feishu', chatId: 'chat-claude-provider-recover' } as const;
+      const session = store.createSession('recover', 'test-model', undefined, workDir, 'normal');
+      const claudeSessionId = 'd6830000-1111-4222-8333-555555555555';
+      store.updateSession(session.id, {
+        runtime: {
+          activeRuntime: 'claude',
+          claude: { sessionId: claudeSessionId, cwd: workDir },
+        },
+      });
+      store.upsertChannelChat({
+        channelType: address.channelType,
+        chatId: address.chatId,
+        bridgeSessionId: session.id,
+      });
+
+      await handleBridgeCommand(
+        adapter,
+        { address, text: '/tmux continue', messageId: 'incoming-claude-provider-recover' } as any,
+        '/tmux continue',
+        {
+          getActiveTask: () => undefined,
+          diagnoseSessionHealth: async () => null,
+          diagnoseAllActiveSessions: async () => [],
+          reconcileMirrorSubscriptions: async () => {},
+        },
+      );
+
+      const tmuxSessionName = `claude_${claudeSessionId}`;
+      const tmuxLog = fs.readFileSync(fakeTmux.logPath, 'utf-8');
+      assert.match(tmuxLog, new RegExp(`new-session -d -s ${tmuxSessionName}`));
+      assert.match(tmuxLog, new RegExp(`--resume ${claudeSessionId}`));
+      assert.match(tmuxLog, new RegExp(`send-keys -t ${tmuxSessionName} -l continue`));
+      assert.equal(getSessionRuntimeTmuxSessionName(store.getSession(session.id)), tmuxSessionName);
+    } finally {
+      restoreProcessEnv(previousEnv);
+      fs.rmSync(fakeTmux.binDir, { recursive: true, force: true });
+      fs.rmSync(workDir, { recursive: true, force: true });
+    }
+  });
+
+  it('reports a missing Claude executable before /p tmux creates or persists a session', async () => {
+    const previousEnv = {
+      PATH: process.env.PATH,
+      CODELARK_CLAUDE_CLI_PATH: process.env.CODELARK_CLAUDE_CLI_PATH,
+      TMUX_FAKE_LOG: process.env.TMUX_FAKE_LOG,
+    };
+    const fakeTmux = installFakeTmux();
+    process.env.PATH = `${fakeTmux.binDir}${path.delimiter}${previousEnv.PATH || ''}`;
+    process.env.CODELARK_CLAUDE_CLI_PATH = path.join(fakeTmux.binDir, 'missing-claude');
+    process.env.TMUX_FAKE_LOG = fakeTmux.logPath;
+
+    try {
+      const store = initTestContext({ settings: { bridge_claude_provider: 'sdk' } });
+      const sent: any[] = [];
+      const adapter = createGroupCapableAdapter({ sent });
+      const address = { channelType: 'feishu', chatId: 'chat-claude-provider-tmux-missing-cli' } as const;
+      const session = store.createSession('missing-cli', 'test-model', undefined, os.tmpdir(), 'normal');
+      store.updateSession(session.id, { runtime: { activeRuntime: 'claude' } });
+      createConfigService({ migrate: false }).set(
+        { kind: 'session', sessionId: session.id },
+        { runtime: { claude: { provider: 'sdk' } } },
+      );
+      store.upsertChannelChat({
+        channelType: address.channelType,
+        chatId: address.chatId,
+        bridgeSessionId: session.id,
+      });
+
+      await handleBridgeCommand(
+        adapter,
+        {
+          address,
+          text: '/p tmux',
+          messageId: 'incoming-claude-provider-tmux-missing-cli',
+        } as any,
+        '/p tmux',
+        {
+          getActiveTask: () => undefined,
+          diagnoseSessionHealth: async () => null,
+          diagnoseAllActiveSessions: async () => [],
+          reconcileMirrorSubscriptions: async () => {},
+        },
+      );
+
+      const responseText = sent.at(-1)?.text || '';
+      assert.match(responseText, /Claude tmux 启动失败/);
+      assert.match(responseText, /Claude executable.*claude/);
+      assert.match(responseText, /未找到 Claude Code CLI/);
+      assert.match(responseText, /PATH/);
+      assert.match(responseText, /\/set claudeExecutable ccr/);
+      assert.match(responseText, /Provider.*未切换（仍为 sdk）/);
+      assert.equal(
+        createConfigService({ migrate: false, env: {} }).get('runtime.claude.provider', {
+          kind: 'session',
+          sessionId: session.id,
+        }),
+        'sdk',
+      );
+      assert.equal(getSessionClaudeProvider(store.getSession(session.id)), 'sdk');
+      assert.equal(getSessionRuntimeTmuxSessionName(store.getSession(session.id)), undefined);
+      assert.equal(fs.readFileSync(fakeTmux.logPath, 'utf-8'), '');
+    } finally {
+      restoreProcessEnv(previousEnv);
+      fs.rmSync(fakeTmux.binDir, { recursive: true, force: true });
+    }
+  });
+
+  it('surfaces Claude launch output and does not persist /p tmux when the process exits immediately', async () => {
+    const previousEnv = {
+      PATH: process.env.PATH,
+      CODELARK_CLAUDE_CLI_PATH: process.env.CODELARK_CLAUDE_CLI_PATH,
+      TMUX_FAKE_LOG: process.env.TMUX_FAKE_LOG,
+      TMUX_FAKE_LAUNCH_STDERR: process.env.TMUX_FAKE_LAUNCH_STDERR,
+    };
+    const fakeTmux = installFakeTmux();
+    process.env.PATH = `${fakeTmux.binDir}${path.delimiter}${previousEnv.PATH || ''}`;
+    process.env.CODELARK_CLAUDE_CLI_PATH = process.execPath;
+    process.env.TMUX_FAKE_LOG = fakeTmux.logPath;
+    process.env.TMUX_FAKE_LAUNCH_STDERR = 'Claude Code refused startup\n[codelark] process exited with status 1\n';
+
+    try {
+      const store = initTestContext({ settings: { bridge_claude_provider: 'sdk' } });
+      const sent: any[] = [];
+      const adapter = createGroupCapableAdapter({ sent });
+      const address = { channelType: 'feishu', chatId: 'chat-claude-provider-tmux-launch-failure' } as const;
+      const session = store.createSession('launch-failure', 'test-model', undefined, os.tmpdir(), 'normal');
+      store.updateSession(session.id, { runtime: { activeRuntime: 'claude' } });
+      createConfigService({ migrate: false }).set(
+        { kind: 'session', sessionId: session.id },
+        { runtime: { claude: { provider: 'sdk' } } },
+      );
+      store.upsertChannelChat({
+        channelType: address.channelType,
+        chatId: address.chatId,
+        bridgeSessionId: session.id,
+      });
+
+      await handleBridgeCommand(
+        adapter,
+        { address, text: '/p tmux', messageId: 'incoming-claude-provider-tmux-launch-failure' } as any,
+        '/p tmux',
+        {
+          getActiveTask: () => undefined,
+          diagnoseSessionHealth: async () => null,
+          diagnoseAllActiveSessions: async () => [],
+          reconcileMirrorSubscriptions: async () => {},
+        },
+      );
+
+      const responseText = sent.at(-1)?.text || '';
+      assert.match(responseText, /Claude tmux 启动失败/);
+      assert.match(responseText, /Provider.*未切换（仍为 sdk）/);
+      assert.match(responseText, /原进程输出[\s\S]*Claude Code refused startup/);
+      assert.match(responseText, /原进程输出[\s\S]*status 1/);
+      assert.equal(
+        createConfigService({ migrate: false, env: {} }).get('runtime.claude.provider', {
+          kind: 'session',
+          sessionId: session.id,
+        }),
+        'sdk',
+      );
+      assert.equal(getSessionRuntimeTmuxSessionName(store.getSession(session.id)), undefined);
+      const tmuxLog = fs.readFileSync(fakeTmux.logPath, 'utf-8');
+      assert.match(tmuxLog, /new-session -d -s claude_/);
+      assert.match(tmuxLog, /kill-session -t claude_/);
+    } finally {
+      restoreProcessEnv(previousEnv);
+      fs.rmSync(fakeTmux.binDir, { recursive: true, force: true });
     }
   });
 

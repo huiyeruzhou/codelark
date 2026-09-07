@@ -15,6 +15,7 @@ import {
   startClaudeTmuxSession,
   streamClaudeTmuxTui,
 } from '../../../../runtime/claude/tmux-provider.js';
+import { buildClaudePtyCommand } from '../../../../runtime/claude/pty-provider.js';
 
 interface ParsedSse {
   type: string;
@@ -67,6 +68,70 @@ function patchTmuxCore(patch: Partial<TmuxCore>): () => void {
 describe('claude-tmux-provider', () => {
   it('uses symmetric Claude tmux session names', () => {
     assert.equal(_testOnlyClaudeTmux.tmuxSessionName('claude/session 1'), 'claude_claude-session-1');
+  });
+
+  it('passes a persisted Claude session identity to both CLI launchers', () => {
+    const claudeSessionId = 'd6830000-1111-4222-8333-444444444444';
+    assert.deepEqual(buildClaudePtyCommand('claude', {
+      claudeSessionId,
+      model: 'test-model',
+      env: { CODELARK_CLAUDE_CLI_PATH: process.execPath },
+    }), {
+      command: process.execPath,
+      args: ['--resume', claudeSessionId, '--model', 'test-model'],
+    });
+    assert.deepEqual(buildClaudePtyCommand('ccr', {
+      claudeSessionId,
+      env: { CODELARK_CCR_CLI_PATH: process.execPath },
+    }), {
+      command: process.execPath,
+      args: ['code', '--resume', claudeSessionId],
+    });
+  });
+
+  it('keeps JSONL discovery pinned to the resumed Claude session', () => {
+    const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-claude-resume-discovery-home-'));
+    const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-claude-resume-discovery-cwd-'));
+    const previousClaudeHome = process.env.CODELARK_CLAUDE_HOME;
+    process.env.CODELARK_CLAUDE_HOME = homeDir;
+    const projectDir = getClaudeProjectDir(cwd, homeDir);
+    fs.mkdirSync(projectDir, { recursive: true });
+    const expectedSessionId = 'd6830000-1111-4222-8333-444444444444';
+    const unrelatedSessionId = '1bf70000-1111-4222-8333-444444444444';
+    const writeSession = (sessionId: string, timestamp: string) => {
+      const filePath = path.join(projectDir, `${sessionId}.jsonl`);
+      fs.writeFileSync(filePath, `${JSON.stringify({
+        type: 'user',
+        uuid: `user-${sessionId}`,
+        sessionId,
+        cwd,
+        timestamp,
+        message: { role: 'user', content: sessionId },
+      })}\n`, 'utf-8');
+      return filePath;
+    };
+
+    try {
+      const sinceMs = Date.now() - 1_000;
+      const expectedPath = writeSession(expectedSessionId, '2026-09-13T17:24:00.000Z');
+      const unrelatedPath = writeSession(unrelatedSessionId, '2026-09-13T17:24:01.000Z');
+      fs.utimesSync(expectedPath, new Date(), new Date(sinceMs + 100));
+      fs.utimesSync(unrelatedPath, new Date(), new Date(sinceMs + 200));
+
+      assert.equal(
+        _testOnlyClaudeTmux.findLatestClaudeSessionJsonlUpdatedAfter(cwd, sinceMs)?.sessionId,
+        unrelatedSessionId,
+      );
+      assert.equal(
+        _testOnlyClaudeTmux.findLatestClaudeSessionJsonlUpdatedAfter(cwd, sinceMs, expectedSessionId)?.sessionId,
+        expectedSessionId,
+      );
+    } finally {
+      if (previousClaudeHome === undefined) delete process.env.CODELARK_CLAUDE_HOME;
+      else process.env.CODELARK_CLAUDE_HOME = previousClaudeHome;
+      fs.rmSync(homeDir, { recursive: true, force: true });
+      fs.rmSync(cwd, { recursive: true, force: true });
+    }
   });
 
   it('keeps a newer completion terminal when Claude JSONL lines arrive out of event-time order', () => {
@@ -127,6 +192,8 @@ describe('claude-tmux-provider', () => {
   });
 
   it('recreates an existing Claude tmux session when explicitly started', async () => {
+    const oldOverride = process.env.CODELARK_CLAUDE_CLI_PATH;
+    process.env.CODELARK_CLAUDE_CLI_PATH = process.execPath;
     const calls: Array<{ name: string; recreate?: boolean }> = [];
     const fakeCore: TmuxCore = {
       async hasSession(name: string) {
@@ -167,19 +234,24 @@ describe('claude-tmux-provider', () => {
       },
     };
 
-    const result = await startClaudeTmuxSession({
-      sessionName: 'claude_existing',
-      bridgeSessionId: 'bridge-session-existing',
-      core: fakeCore,
-    });
+    try {
+      const result = await startClaudeTmuxSession({
+        sessionName: 'claude_existing',
+        bridgeSessionId: 'bridge-session-existing',
+        core: fakeCore,
+      });
 
-    assert.deepEqual(calls, [{ name: 'claude_existing', recreate: true }]);
-    assert.equal(result.existed, true);
-    assert.deepEqual(result.commands, [
-      'tmux has-session -t claude_existing',
-      'tmux kill-session -t claude_existing',
-      'tmux new-session -d -s claude_existing',
-    ]);
+      assert.deepEqual(calls, [{ name: 'claude_existing', recreate: true }]);
+      assert.equal(result.existed, true);
+      assert.deepEqual(result.commands, [
+        'tmux has-session -t claude_existing',
+        'tmux kill-session -t claude_existing',
+        'tmux new-session -d -s claude_existing',
+      ]);
+    } finally {
+      if (oldOverride === undefined) delete process.env.CODELARK_CLAUDE_CLI_PATH;
+      else process.env.CODELARK_CLAUDE_CLI_PATH = oldOverride;
+    }
   });
 
   it('streams a Claude tmux turn through JSONL mirror records', async () => {
@@ -249,6 +321,7 @@ describe('claude-tmux-provider', () => {
     });
     try {
       const events = await withEnv({
+        CODELARK_CLAUDE_CLI_PATH: process.execPath,
         CODELARK_CLAUDE_HOME: homeDir,
         CODELARK_CLAUDE_TMUX_PROMPT_DELAY_MS: '0',
         CODELARK_CLAUDE_TMUX_AFTER_SETUP_DELAY_MS: '0',

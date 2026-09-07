@@ -627,7 +627,8 @@ async function ensureRuntimeTmuxSessionForProvider(
     return { target: configuredTarget || undefined, commands: [], recovered: false };
   }
   if (runtimeProvider.runtime === 'claude') {
-    const target = configuredTarget || claudeTmuxSessionName(getSessionClaudeSessionId(session) || session.id);
+    const claudeSessionId = getSessionClaudeSessionId(session) || undefined;
+    const target = configuredTarget || claudeTmuxSessionName(claudeSessionId || session.id);
     if (!configuredTarget && params.autoRecoverProviderSession !== true) {
       return {
         target: undefined,
@@ -695,6 +696,7 @@ async function ensureRuntimeTmuxSessionForProvider(
       runtime: 'claude',
       sessionName: target,
       bridgeSessionId: session.id,
+      claudeSessionId,
       workingDirectory: getSessionWorkingDirectory(session),
       executable: claudeConfig.executable,
       model: claudeConfig.model,

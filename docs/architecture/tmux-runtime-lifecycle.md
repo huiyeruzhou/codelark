@@ -46,8 +46,8 @@ flowchart TD
 | API | 职责 |
 | --- | --- |
 | `runtimeTmuxSessionName` / `codexTmuxSessionName` / `claudeTmuxSessionName` | 统一 provider-owned tmux session 命名。 |
-| `startRuntimeTmuxSession` | 以 `runtime=codex|claude` 创建或重建 tmux provider session；Codex 执行 `codex resume <threadId>`，Claude 执行 Claude Code TUI。Kimi 由 `KimiTmuxProvider` 直接启动 `kimi [-r session] -y`。 |
-| `waitForRuntimeTmuxReady` | 统一屏幕 ready 检测和 startup selection 处理；Codex 支持 update/goal/permission/generic selection 透传，Claude 支持 onboarding/trust 确认。 |
+| `startRuntimeTmuxSession` | 以 `runtime=codex|claude` 创建或重建 tmux provider session；Codex 执行 `codex resume <threadId>`，已有 identity 的 Claude 执行 `claude --resume <sessionId>`，fresh Claude 才直接启动 TUI。Kimi 由 `KimiTmuxProvider` 直接启动 `kimi [-r session] -y`。 |
+| `waitForRuntimeTmuxReady` | 统一屏幕 ready 检测和 startup selection 处理；Codex 支持 update/goal/permission/generic selection 透传，Claude 支持 onboarding，并在 trust prompt 中显式选择可信选项后确认。 |
 | `inspectRuntimeTmuxSession` | 统一检查 session 存在性、抓屏，并返回当前屏幕上的 selection prompt。 |
 | `cleanupRuntimeTmuxSession` | 统一 best-effort 清理 provider-owned tmux session，供 `/clear` 和 `/t archive` 等生命周期操作调用。 |
 
@@ -131,7 +131,7 @@ readiness gate 的 `ready` 会把共享输入状态推进到 `running`，随后�
 4. 只有 tmux 进程确实丢失、前一生命周期进入 `failed`、Bridge 冷接管，或用户明确切换/清理 session/provider 时，才允许重新进入 session/tmux/readiness 阶段。
 5. runtime-specific 代码只负责 CLI 参数、identity/wire 格式和必要的交互动作（例如 Kimi `Ctrl-S`）；它不能改变共享状态机的触发时机和 process 所有权。
 6. provider-owned tmux 的生命周期长于单个 turn。成功 turn 不得在 `finally` 中 kill；只有已经证明进程退出、认证失败或启动不可恢复的半初始化进程才能清理。像 Cursor workspace indexing 这样“pane 暂时空白但进程仍存活”的合法冷启动，在 readiness 窗口用尽后也必须保留 tmux，并让下一轮从 `failed -> checking_session -> running` 重新接管。显式 `/clear`、归档和 provider 切换负责最终释放。
-7. 选择动作必须经过验证。Codex 的用户选择仍由 session coordinator 单一执行，不能因两个观察者同时命中而重复发方向键；Claude 这类无需用户决策的确认提示如果在动作发送后仍以同一 prompt 持续可见，则由同一个 readiness owner 重试确认键，直到 prompt 消失或原 deadline 到期。`actions_sent` 只证明 tmux 接收了按键，不等于 TUI 已消费。
+7. 选择动作必须经过验证。Codex 的用户选择仍由 session coordinator 单一执行，不能因两个观察者同时命中而重复发方向键；Claude onboarding 可直接确认，但 workspace trust prompt 必须从屏幕中同时识别当前游标和 `Yes, I trust this folder`，先发送所需的 Up/Down，再发送 Enter。无法可靠识别选项时必须停止自动确认，绝不能把默认选中的 `No, exit!` 当成同意。动作发送后若同一 prompt 持续可见，则由同一个 readiness owner 重试同一组已验证动作，直到 prompt 消失或原 deadline 到期。`actions_sent` 只证明 tmux 接收了按键，不等于 TUI 已消费。
 8. 任何以 JSONL、wire 或 transcript 作为答案来源的 provider 都必须明确单一 terminal owner：可以由 provider 读取当前增量并完成 direct turn，也可以由独立 mirror 完成，但另一条路径必须 suppression/claim 清晰，不能让同一持久事件结束两张卡或丢失真实回答。
 9. `/p tmux` 的启动结果写回前必须重新校验聊天仍绑定原 session；`/stop`、`/clear`、`/t` attach/archive 和进程丢失恢复必须进入共享 lifecycle owner，不能在 runtime 命令里保留私有旧路径。
 
@@ -182,27 +182,27 @@ Claude Code 现在提供与 Codex tmux 对齐的 provider：
 
 | 阶段 | Claude tmux 实现 |
 | --- | --- |
-| provider 选择 | `/provider tmux` 写入 `BridgeSession.runtime.claude.provider=tmux`，并记录 `general.tmuxSessionName`。 |
+| provider 选择 | `/provider tmux` 仅在 Claude TUI 启动并通过 readiness 后写入 `BridgeSession.runtime.claude.provider=tmux`，并记录 `general.tmuxSessionName`。 |
 | 启动命令 | shared `startClaudeTmuxSession` 复用 Claude pty 的 CLI 参数构造，支持 `claude` / `ccr code`、model、permission mode 和 `--effort`。 |
 | tmux session | `claudeTmuxSessionName(session.id)` 生成稳定 session 名，`startRuntimeTmuxSession(runtime='claude')` 创建或重建 detached session。 |
 | prompt 注入 | `ClaudeTmuxProvider` 使用 `tmuxCore.injectPromptIntoPane` 注入普通消息。 |
-| 会话身份 | provider 通过 Claude JSONL discovery 获取 `session_id`、cwd 和 transcript path，并在 SSE `result` 中回传。 |
+| 会话身份 | fresh provider 通过 Claude JSONL discovery 获取 `session_id`、cwd 和 transcript path；已有 identity 的 provider 启动时传入 `--resume <session_id>`，并只读取该 identity 的 JSONL。 |
 | 输出同步 | Claude pty/tmux 都依赖 `src/runtime/claude/session-jsonl.ts` 读取 Claude Code JSONL；SDK provider 继续走原生事件。 |
 
-Claude tmux 与 Codex tmux 的差异是：Claude Code 本身决定 JSONL session id；CodeLark 不需要像 Codex 那样预创建 thread，也不会执行 `resume <threadId>`。因此 Claude tmux 的身份注入发生在 Claude Code 写出 JSONL 后，再把发现到的 `session_id` 保存回 `BridgeSession.runtime.claude.sessionId`。
+Claude tmux 与 Codex tmux 的差异是：fresh Claude session id 由 Claude Code 自己创建，CodeLark 不预造 identity；首轮从 JSONL 发现并保存到 `BridgeSession.runtime.claude.sessionId`。一旦 identity 已保存，显式 `/p tmux`、缺失 tmux 自动恢复和 provider 直接启动都必须把同一 ID 传给 `claude --resume`（CCR 为 `ccr code --resume`），并将 JSONL discovery 固定到该 ID，不能按 cwd 中“最近更新的文件”重新猜测。
 
-Claude tmux 也必须支持和 Codex 相同的普通消息隐式初始化/恢复语义：如果当前聊天的有效 Claude provider 是 `tmux`，但还没有 `runtime.general.tmuxSessionName`，第一条普通消息会生成 `claude_<BridgeSessionId>` 并启动 Claude Code TUI；如果已记录 tmux session 但进程不存在，普通消息会重建同名 tmux session。两种情况都会写回 `runtime.claude.provider=tmux`、`runtime.general.tmuxSessionName` 和 tmux auto-enter 配置，然后再把消息注入 TUI。之后 `reconcileClaudeTmuxMirrorAfterAutoForward` 等待 Claude JSONL 出现，发现 `session_id` 后写回 `runtime.claude.sessionId/cwd`，prime 首个 turn 的 mirror delivery，并触发 Claude mirror reconcile。
+Claude tmux 也必须支持和 Codex 相同的普通消息隐式初始化/恢复语义：如果当前聊天的有效 Claude provider 是 `tmux`，但还没有 `runtime.general.tmuxSessionName`，fresh 会话的第一条普通消息会生成 `claude_<BridgeSessionId>` 并启动 Claude Code TUI；已有 Claude identity 时则用该 identity 命名并执行 `--resume`。如果已记录 tmux session 但进程不存在，普通消息会用保存的 identity 重建同名 tmux session。两种情况都只在启动成功后写回 `runtime.claude.provider=tmux`、`runtime.general.tmuxSessionName` 和 tmux auto-enter 配置，然后再把消息注入 TUI。之后 `reconcileClaudeTmuxMirrorAfterAutoForward` 仅在 fresh 会话尚无 identity 时等待 Claude JSONL 出现，发现 `session_id` 后写回 `runtime.claude.sessionId/cwd`，prime 首个 turn 的 mirror delivery，并触发 Claude mirror reconcile。
 
-Claude tmux 使用同一个 `waitForRuntimeTmuxReady` 启动门控。新建、恢复或 Bridge 进程冷接管已有 Claude provider-owned tmux 时等待一次 Claude 输入提示，并处理 onboarding/trust prompt；进入共享 `running` 后，普通消息不再重复抓屏找输入提示。为兼容旧会话和测试 fake pane，Claude readiness 还接受“看起来是 TUI 且已出现输入提示、且没有任何 selection prompt”的通用 ready 兜底；这个兜底只用于冷启动/接管，不影响普通 `/tmux-screen` 查看。
+Claude tmux 使用同一个 `waitForRuntimeTmuxReady` 启动门控。启动前先解析并验证配置的 `claude` / `ccr` executable；缺失时直接进入 `failed`，不创建 tmux，也不把 provider/session 配置写成成功。新建、恢复或 Bridge 进程冷接管已有 Claude provider-owned tmux 时等待一次 Claude 输入提示，并处理 onboarding/trust prompt；trust prompt 会根据真实游标位置显式移动到 `Yes, I trust this folder` 后确认，而不是无条件发送 Enter。进入共享 `running` 后，普通消息不再重复抓屏找输入提示。为兼容旧会话和测试 fake pane，Claude readiness 还接受“看起来是 TUI 且已出现输入提示、且没有任何 selection prompt”的通用 ready 兜底；这个兜底只用于冷启动/接管，不影响普通 `/tmux-screen` 查看。显式 `/p tmux` 的 TUI 若在 ready 前退出或 session 消失，启动函数会保留 stderr、清理半初始化 session、进入 `failed` 并返回结构化错误；调用方不得持久化 provider/tmux binding。
 
 ## 链路对齐盘点
 
 | 链路点 | Codex tmux | Claude tmux | 当前对齐状态 |
 | --- | --- | --- | --- |
 | provider 选择 | `/provider tmux` 写 session TOML `runtime.codex.provider=tmux`。 | `/provider tmux` 写 session TOML `runtime.claude.provider=tmux`，并更新 runtime state。 | Kimi 只允许 `runtime.kimi.provider=tmux`；三者都只修改当前 active runtime 的 provider 配置，显式选择 tmux 后还会立即执行下一行的启动流程。 |
-| 本地身份 | 先有 Codex `thread_id`；没有时本地 bootstrap。 | Claude Code 写 JSONL 后才有 `session_id`；启动前用 BridgeSessionId 命名。 | Kimi fresh session 不预造 id；启动 `kimi -y` 后从 TUI 的 `Session:` 读取 CLI 生成的 id。已绑定 session 才使用持久化 id。状态落点都是 `BridgeSession.runtime.*`。 |
+| 本地身份 | 先有 Codex `thread_id`；没有时本地 bootstrap。 | fresh 时用 BridgeSessionId 命名并从 JSONL 发现 `session_id`；已绑定时 tmux 名、`--resume` 和 mirror 均使用保存的 Claude ID。 | Kimi fresh session 不预造 id；启动 `kimi -y` 后从 TUI 的 `Session:` 读取 CLI 生成的 id。已绑定 session 才使用持久化 id。状态落点都是 `BridgeSession.runtime.*`。 |
 | tmux session 命名 | `codex_<thread_id>`。 | `claude_<session_id>`；没有 Claude `session_id` 时用 `claude_<BridgeSessionId>`。 | Kimi 使用 `clk-kimi-<BridgeSessionId>` 作为 provider-owned tmux session，并把 Kimi 本地 session id 存到 `runtime.kimi.sessionId`。 |
-| `/provider tmux` 启动 | 启动或重建 detached tmux，执行 `codex resume <thread_id>`。 | 启动或重建 detached tmux，执行 Claude Code TUI。 | 每次显式执行都会重建同名 tmux；Kimi fresh 启动 `kimi -y`，已有 identity 执行 `kimi -r <session> -y`，输入框 ready 后才返回。 |
+| `/provider tmux` 启动 | 启动或重建 detached tmux，执行 `codex resume <thread_id>`。 | 启动或重建 detached tmux；已有 identity 时执行 `claude --resume <session_id>`。 | 每次显式执行都会重建同名 tmux；Kimi fresh 启动 `kimi -y`，已有 identity 执行 `kimi -r <session> -y`，输入框 ready 后才返回。 |
 | 普通消息隐式初始化 | auto-forward 触发 `/tmux <message>`；缺 thread/session 时自动 bootstrap + 启动 + ready/selection 后注入。 | auto-forward 触发 `/tmux <message>`；缺 tmux session 时自动启动 Claude TUI，session 缺失时用 BridgeSessionId 命名。 | auto-forward 进入同一 input lifecycle；首次读取 CLI 生成的随机 session id，后续复用同一 tmux/session。 |
 | 缺失 tmux 恢复 | `/provider tmux` 会强制重启；普通消息 auto-forward 和显式 `/tmux <...>` 可重建 provider session；`/tmux-screen` 只查看并提示 `/p tmux`。 | `/provider tmux` 会强制重启；普通消息 auto-forward 和显式 `/tmux <...>` 可重建 provider session；`/tmux-screen` 只查看并提示 `/p tmux`。 | 退出 probe 清除失效 binding；普通消息可按持久化 Kimi session id 自动恢复，显式 `/p tmux` 总是强制重启；只读屏幕不触发恢复。 |
 | prompt 注入 | provider 内部或 `/tmux` 命令都走 tmux core；普通消息自动追加 Enter。 | provider 内部或 `/tmux` 命令都走 tmux core；普通消息自动追加 Enter。 | Kimi provider 使用 tmux core paste/Enter；仅在提交前已有 active turn 时额外发送 `Ctrl-S`。 |

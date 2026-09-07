@@ -1179,9 +1179,11 @@ describe('bridge command e2e', () => {
     });
     const fakeTmux = installFakeTmux();
     const oldPath = process.env.PATH || '';
+    const oldClaudeCliPath = process.env.CODELARK_CLAUDE_CLI_PATH;
     const oldFakeLog = process.env.TMUX_FAKE_LOG;
     const oldFakeState = process.env.TMUX_FAKE_STATE;
     process.env.PATH = `${fakeTmux.binDir}${path.delimiter}${oldPath}`;
+    process.env.CODELARK_CLAUDE_CLI_PATH = process.execPath;
     process.env.TMUX_FAKE_LOG = fakeTmux.logPath;
     process.env.TMUX_FAKE_STATE = fakeTmux.statePath;
 
@@ -1230,6 +1232,8 @@ describe('bridge command e2e', () => {
         await _testOnly.handleMessage(adapter, inboundMessage(address, '/every no 1', 'incoming-every-tmux-cleanup'));
       }
       process.env.PATH = oldPath;
+      if (oldClaudeCliPath === undefined) delete process.env.CODELARK_CLAUDE_CLI_PATH;
+      else process.env.CODELARK_CLAUDE_CLI_PATH = oldClaudeCliPath;
       if (oldFakeLog === undefined) delete process.env.TMUX_FAKE_LOG;
       else process.env.TMUX_FAKE_LOG = oldFakeLog;
       if (oldFakeState === undefined) delete process.env.TMUX_FAKE_STATE;
@@ -2887,11 +2891,13 @@ provider = "tmux"
     const fakeTmux = installFakeTmux();
     const claudeHome = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-runtime-claude-tmux-auto-home-'));
     const oldPath = process.env.PATH || '';
+    const oldClaudeCliPath = process.env.CODELARK_CLAUDE_CLI_PATH;
     const oldFakeLog = process.env.TMUX_FAKE_LOG;
     const oldFakeState = process.env.TMUX_FAKE_STATE;
     const oldClaudeHome = process.env.CODELARK_CLAUDE_HOME;
     const oldDiscoveryTimeout = process.env.CODELARK_CLAUDE_PTY_JSONL_DISCOVERY_TIMEOUT_MS;
     process.env.PATH = `${fakeTmux.binDir}${path.delimiter}${oldPath}`;
+    process.env.CODELARK_CLAUDE_CLI_PATH = process.execPath;
     process.env.TMUX_FAKE_LOG = fakeTmux.logPath;
     process.env.TMUX_FAKE_STATE = fakeTmux.statePath;
     process.env.CODELARK_CLAUDE_HOME = claudeHome;
@@ -2955,6 +2961,8 @@ provider = "tmux"
       )));
     } finally {
       process.env.PATH = oldPath;
+      if (oldClaudeCliPath === undefined) delete process.env.CODELARK_CLAUDE_CLI_PATH;
+      else process.env.CODELARK_CLAUDE_CLI_PATH = oldClaudeCliPath;
       if (oldFakeLog === undefined) delete process.env.TMUX_FAKE_LOG;
       else process.env.TMUX_FAKE_LOG = oldFakeLog;
       if (oldFakeState === undefined) delete process.env.TMUX_FAKE_STATE;
