@@ -43,7 +43,9 @@ Cursor tmux 是生产支持的 runtime，不是 UI 占位。真实官方 `agent`
 - Web 工作台配置页：编辑全局默认值。
 - Web 工作台会话配置弹窗：编辑单个会话的覆盖值。
 
-Claude 的 `executable` 影响 `tmux` 和 `pty` 提供方；Claude SDK 提供方不走本机 `claude` / `ccr code` TUI。Claude tmux 启动会先确认所选 executable 确实存在；缺失时直接提示安装/PATH/`/set claudeExecutable` 修复方式，不创建 tmux 或保存失败的 provider binding。首次工作目录信任页会显式移动到 `Yes, I trust this folder` 再确认，不依赖 Claude Code 当前默认选项。已有 Claude session identity 时，`/p tmux`、tmux 自动恢复和 pty/tmux provider 启动都会执行 `--resume <session_id>`，且输出只绑定该 session 的 JSONL；fresh 会话才从新产生的 JSONL 发现 identity。
+Claude 的 `executable` 影响 `tmux` 和 `pty` 提供方；Claude SDK 提供方不走本机 `claude` / `ccr code` TUI。Claude tmux 启动会先确认所选 executable 确实存在；缺失时直接提示安装/PATH/`/set claudeExecutable` 修复方式，不创建 tmux 或保存失败的 provider binding。首次工作目录信任页会显式移动到 `Yes, I trust this folder` 再确认；YOLO 首启风险页会显式移动到 `Yes, I accept` 再确认，两者都不依赖 Claude Code 当前默认选项。已有 Claude session identity 时，`/p tmux`、tmux 自动恢复和 pty/tmux provider 启动都会执行 `--resume <session_id>`，且输出只绑定该 session 的 JSONL；fresh 会话才从新产生的 JSONL 发现 identity。
+
+Codex tmux 的 fresh 首消息会在 workspace trust 后继续处理模型迁移等启动选择，并等待输入框稳定后才注入文本与 Enter。全新聊天继承有效的全局 YOLO 和 reasoning 配置，不会再被 hidden draft 写死为 low。
 
 思考能力不跨 runtime 硬映射：Codex 支持到 `ultra`；Claude Code 支持到 `max`；Kimi Code 只有 `--thinking/--no-thinking`；Cursor 通过 `--model 'model[effort=...]'` 传递模型级 effort；ZCode 使用自己的模型与原生命令。Cursor `force` 与 `maxMode` 都不等同于 reasoning effort。
 

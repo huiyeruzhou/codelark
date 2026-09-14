@@ -97,13 +97,16 @@ async function prepareClaudeTmuxForPrompt(sessionName: string, targetPane: strin
       controller.enqueue(sseEvent('status', {
         reasoning: selectionPrompt.kind === 'trust'
           ? 'Claude tmux 检测到工作目录信任提示，正在选择信任并继续。'
+          : selectionPrompt.kind === 'bypass_permissions'
+            ? 'Claude tmux 检测到 YOLO 风险确认提示，正在选择接受并继续。'
           : `Claude tmux 检测到 ${selectionPrompt.kind} 提示，正在发送 Enter 继续。`,
       }));
     },
   });
   if (!readiness.ready) {
-    if (readiness.selectionPrompt?.runtime === 'claude' && readiness.selectionPrompt.kind === 'trust') {
-      throw new Error('Claude tmux 停留在工作目录信任页，但无法安全识别当前选项；未发送消息。请在本机 tmux 中完成选择后重试。');
+    if (readiness.selectionPrompt?.runtime === 'claude' && readiness.selectionPrompt.kind !== 'onboarding') {
+      const promptName = readiness.selectionPrompt.kind === 'trust' ? '工作目录信任页' : 'YOLO 风险确认页';
+      throw new Error(`Claude tmux 停留在${promptName}，但无法安全识别当前选项；未发送消息。请在本机 tmux 中完成选择后重试。`);
     }
     throw new Error(readiness.lastError || 'Claude tmux did not become ready for input.');
   }

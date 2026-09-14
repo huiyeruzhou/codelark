@@ -1069,6 +1069,69 @@ describe('codex tmux runtime', () => {
     }
   });
 
+  it('accepts the Claude bypass-permissions warning after workspace trust', async () => {
+    const oldTimeout = process.env.CODELARK_CLAUDE_TMUX_READY_TIMEOUT_MS;
+    const oldPoll = process.env.CODELARK_CLAUDE_TMUX_READY_POLL_MS;
+    try {
+      process.env.CODELARK_CLAUDE_TMUX_READY_TIMEOUT_MS = '500';
+      process.env.CODELARK_CLAUDE_TMUX_READY_POLL_MS = '50';
+      let accepted = false;
+      const sentActions: TmuxSendAction[][] = [];
+      const promptKinds: string[] = [];
+      const warningScreen = [
+        'WARNING: Claude Code running in Bypass Permissions mode',
+        '',
+        'In Bypass Permissions mode, Claude Code will not ask for your approval',
+        'before running potentially dangerous commands.',
+        '',
+        '❯ 1. No, exit',
+        '  2. Yes, I accept',
+        '',
+        'Enter to confirm · Esc to cancel',
+      ].join('\n');
+      const core: TmuxCore = {
+        commandPreview: (args) => ['tmux', ...args].join(' '),
+        hasSession: async (name) => ({ exists: true, command: `tmux has-session -t ${name}` }),
+        killSession: async (name) => `tmux kill-session -t ${name}`,
+        listSessions: async () => ({ sessions: [], command: 'tmux list-sessions' }),
+        ensureDetachedSession: async () => ({ existed: false, commands: [] }),
+        capturePane: async () => ({
+          command: 'tmux capture-pane -t claude_bypass_permissions',
+          screen: accepted ? 'Claude Code v2.1.220\n❯ \n? for shortcuts' : warningScreen,
+        }),
+        sendActions: async (_target, actions) => {
+          sentActions.push(actions);
+          accepted = actions.some((action) => action.type === 'key' && action.key === 'Down');
+          return { commands: actions.map((action) => `tmux send-keys ${action.type === 'key' ? action.key : action.text}`) };
+        },
+        sendInterrupt: async () => '',
+        injectPromptIntoPane: async () => ({ commands: [] }),
+      };
+
+      const result = await waitForRuntimeTmuxReady({
+        runtime: 'claude',
+        sessionName: 'claude_bypass_permissions',
+        core,
+        afterSelectionDelayMs: 0,
+        onSelectionPrompt: (selectionPrompt) => {
+          promptKinds.push(selectionPrompt.kind);
+        },
+      });
+
+      assert.equal(result.ready, true);
+      assert.deepEqual(promptKinds, ['bypass_permissions']);
+      assert.deepEqual(sentActions, [[
+        { type: 'key', key: 'Down' },
+        { type: 'key', key: 'Enter' },
+      ]]);
+    } finally {
+      if (oldTimeout === undefined) delete process.env.CODELARK_CLAUDE_TMUX_READY_TIMEOUT_MS;
+      else process.env.CODELARK_CLAUDE_TMUX_READY_TIMEOUT_MS = oldTimeout;
+      if (oldPoll === undefined) delete process.env.CODELARK_CLAUDE_TMUX_READY_POLL_MS;
+      else process.env.CODELARK_CLAUDE_TMUX_READY_POLL_MS = oldPoll;
+    }
+  });
+
   it('does not press Enter when a Claude trust prompt has no identifiable selected option', async () => {
     let sendCount = 0;
     const core: TmuxCore = {

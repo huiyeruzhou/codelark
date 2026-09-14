@@ -641,6 +641,8 @@ async function executeTmuxSelectionPromptForTarget(
         ? 'Codex TUI is waiting at a CLI update selection prompt.'
         : prompt.kind === 'goal'
           ? 'Codex TUI is waiting at a goal replacement selection prompt.'
+          : prompt.kind === 'model_migration'
+            ? 'Codex TUI is waiting for a model migration choice.'
           : prompt.kind === 'generic'
             ? 'Codex TUI may be waiting at an unrecognized numbered selection prompt.'
             : 'Codex TUI is waiting at an interactive selection prompt.',

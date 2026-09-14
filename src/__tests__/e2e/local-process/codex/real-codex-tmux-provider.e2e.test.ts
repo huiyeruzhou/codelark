@@ -12,12 +12,16 @@ import {
   extractCodexTuiErrorMessages,
   parseCodexTuiModelMismatchWarning,
 } from '../../../../runtime/codex/tui-runtime-signals.js';
-import { getCodexSessionByThreadIdSafe } from '../../../../bridge/session/support.js';
+import {
+  getCodexSessionByThreadIdSafe,
+  resolveSessionRuntimeConfig,
+} from '../../../../bridge/session/support.js';
 import { tmuxCore } from '../../../../bridge/tmux/core.js';
 import type { BridgeStore } from '../../../../domain/index.js';
 import type { OutboundMessage } from '../../../../domain/index.js';
 import { _testOnly, registerAdapter } from '../../../../bridge/host/manager.js';
 import { PendingPermissions } from '../../../../runtime/permission-gateway.js';
+import { createConfigService } from '../../../../configuration/service.js';
 import {
   initBridgeTestContext,
   inboundMessage,
@@ -872,6 +876,325 @@ describe('real codex tmux provider e2e', () => {
       }
       removeRuntimeTestDirectory(workDir);
       removeRuntimeTestDirectory(codexHome);
+      await proxy.close().catch(() => undefined);
+      for (const [key, value] of Object.entries(previousEnv)) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+      _testOnly.resetStateForTests();
+    }
+  });
+
+  it('submits the first plain message from a brand-new YOLO chat through real tmux and Codex', { timeout: 120_000 }, async (t: TestContext) => {
+    if (!(await commandAvailable('tmux', ['-V']))) {
+      t.skip('tmux is not available');
+      return;
+    }
+    if (!(await commandAvailable(installedCodexExecutable(), ['--version']))) {
+      t.skip('codex CLI is not available');
+      return;
+    }
+
+    const previousEnv = {
+      CODEX_HOME: process.env.CODEX_HOME,
+      CODELARK_CODEX_BASE_URL: process.env.CODELARK_CODEX_BASE_URL,
+      CODELARK_CODEX_API_KEY: process.env.CODELARK_CODEX_API_KEY,
+      CODEX_API_KEY: process.env.CODEX_API_KEY,
+      OPENAI_API_KEY: process.env.OPENAI_API_KEY,
+      CODELARK_CODEX_SKIP_GIT_REPO_CHECK: process.env.CODELARK_CODEX_SKIP_GIT_REPO_CHECK,
+      TMUX: process.env.TMUX,
+      TMUX_PANE: process.env.TMUX_PANE,
+      TMUX_TMPDIR: process.env.TMUX_TMPDIR,
+    };
+    const codexHome = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-real-codex-home-first-chat-'));
+    const tmuxTmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-real-codex-socket-first-chat-'));
+    const proxy = await startLocalResponsesProxy();
+    delete process.env.TMUX;
+    delete process.env.TMUX_PANE;
+    process.env.TMUX_TMPDIR = tmuxTmpDir;
+    process.env.CODEX_HOME = codexHome;
+    process.env.CODELARK_CODEX_BASE_URL = proxy.baseUrl;
+    process.env.CODELARK_CODEX_API_KEY = 'clk-local-proxy-key';
+    process.env.CODEX_API_KEY = 'clk-local-proxy-key';
+    process.env.OPENAI_API_KEY = 'clk-local-proxy-key';
+    process.env.CODELARK_CODEX_SKIP_GIT_REPO_CHECK = 'true';
+
+    resetBridgeTestState({ cleanCodexHome: true });
+    seedCodexApiKeyAuth(codexHome, 'clk-local-proxy-key');
+    _testOnly.resetStateForTests();
+
+    const model = process.env[REAL_CODEX_E2E_MODEL_ENV] || 'gpt-5.4';
+    createConfigService({ migrate: false, env: {} }).set(
+      { kind: 'home' },
+      {
+        runtime: {
+          codex: {
+            model,
+            provider: 'tmux',
+            yoloMode: 'on',
+            reasoningEffort: 'high',
+          },
+        },
+      },
+    );
+    const settings = makeBridgeSettings({
+      bridge_default_provider: 'tmux',
+      bridge_default_model: model,
+      bridge_default_mode: 'yolo',
+      bridge_codex_reasoning_effort: 'high',
+    });
+    const pendingPerms = new PendingPermissions();
+    const store = initBridgeTestContext({
+      settings,
+      llm: new CodexRoutingProvider(pendingPerms, 'tmux'),
+      permissions: {
+        resolvePendingPermission: (id, resolution) => pendingPerms.resolve(id, resolution),
+      },
+    });
+    const adapter = new RecordingAdapter();
+    registerAdapter(adapter);
+    (globalThis as unknown as Record<string, any>).__bridge_manager__.running = true;
+    const address = {
+      channelType: 'feishu',
+      chatId: `chat-real-tmux-first-${process.pid}-${Date.now()}`,
+    } as const;
+    const firstPrompt = `clk-first-chat-submit-${process.pid}-${Date.now()}`;
+    let tmuxSessionName = '';
+    let generatedThreadId = '';
+    let generatedThreadFilePath = '';
+
+    try {
+      assert.equal(store.getChannelChat(address.channelType, address.chatId), null);
+
+      const firstTurn = _testOnly.handleMessage(adapter, inboundMessage(
+        address,
+        firstPrompt,
+        'incoming-real-first-chat-prompt',
+      ));
+      let firstTurnSettled = false;
+      void firstTurn.then(
+        () => { firstTurnSettled = true; },
+        () => { firstTurnSettled = true; },
+      );
+      const handledCallbackData = new Set<string>();
+      while (!firstTurnSettled) {
+        const approved = await approveStartupPermission(adapter, store, address, {
+          required: true,
+          timeoutMs: 30_000,
+          turnSettled: () => firstTurnSettled,
+          handledCallbackData,
+        });
+        if (!approved) break;
+      }
+      await firstTurn;
+
+      const binding = store.getChannelChat(address.channelType, address.chatId);
+      assert.ok(binding, 'the first message should create the chat binding');
+      const session = store.getSession(binding.bridgeSessionId);
+      assert.equal(resolveSessionRuntimeConfig(binding, session).mode, 'yolo');
+      assert.equal(resolveSessionRuntimeConfig(binding, session).reasoningEffort, 'high');
+      generatedThreadId = session?.runtime?.codex?.threadId?.trim() || '';
+      tmuxSessionName = session?.runtime?.general?.tmuxSessionName || '';
+      assert.match(generatedThreadId, /^[0-9a-f-]{20,}$/i);
+      generatedThreadFilePath = getCodexSessionByThreadIdSafe(
+        generatedThreadId,
+        'brand-new chat first prompt cleanup lookup',
+      )?.filePath || '';
+
+      const firstPromptSubmitted = await waitForCondition(
+        () => proxy.requests.some((request) => (
+          request.url.includes('/responses') && requestBodyContainsText(request.body, firstPrompt)
+        )),
+        30_000,
+        250,
+      );
+      if (!firstPromptSubmitted) {
+        const capture = tmuxSessionName
+          ? await execFileAsync(
+            'tmux',
+            ['capture-pane', '-p', '-t', `${tmuxSessionName}:0.0`, '-S', '-80'],
+          ).catch((error) => ({ stdout: String(error), stderr: '' }))
+          : { stdout: '(one-turn tmux session was not persisted)', stderr: '' };
+        assert.fail([
+          'the first plain message in a brand-new chat should be submitted to Codex',
+          `responses requests: ${proxy.requests.filter((request) => request.url.includes('/responses')).length}`,
+          `screen: ${capture.stdout.slice(-2_000)}`,
+        ].join('\n'));
+      }
+    } finally {
+      if (tmuxSessionName) {
+        await execFileAsync('tmux', ['kill-session', '-t', tmuxSessionName]).catch(() => undefined);
+      }
+      if (generatedThreadId) {
+        cleanupCodexThreadArtifacts(generatedThreadId, generatedThreadFilePath);
+      }
+      removeRuntimeTestDirectory(codexHome);
+      removeRuntimeTestDirectory(tmuxTmpDir);
+      await proxy.close().catch(() => undefined);
+      for (const [key, value] of Object.entries(previousEnv)) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+      _testOnly.resetStateForTests();
+    }
+  });
+
+  it('submits the first plain message after /new creates a tmux-backed group', { timeout: 120_000 }, async (t: TestContext) => {
+    if (!(await commandAvailable('tmux', ['-V']))) {
+      t.skip('tmux is not available');
+      return;
+    }
+    if (!(await commandAvailable(installedCodexExecutable(), ['--version']))) {
+      t.skip('codex CLI is not available');
+      return;
+    }
+
+    const previousEnv = {
+      CODEX_HOME: process.env.CODEX_HOME,
+      CODELARK_CODEX_BASE_URL: process.env.CODELARK_CODEX_BASE_URL,
+      CODELARK_CODEX_API_KEY: process.env.CODELARK_CODEX_API_KEY,
+      CODEX_API_KEY: process.env.CODEX_API_KEY,
+      OPENAI_API_KEY: process.env.OPENAI_API_KEY,
+      CODELARK_CODEX_SKIP_GIT_REPO_CHECK: process.env.CODELARK_CODEX_SKIP_GIT_REPO_CHECK,
+      TMUX: process.env.TMUX,
+      TMUX_PANE: process.env.TMUX_PANE,
+      TMUX_TMPDIR: process.env.TMUX_TMPDIR,
+    };
+    const codexHome = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-real-codex-home-new-group-'));
+    const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-real-codex-new-group-'));
+    const tmuxTmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-real-codex-socket-new-group-'));
+    const proxy = await startLocalResponsesProxy();
+    delete process.env.TMUX;
+    delete process.env.TMUX_PANE;
+    process.env.TMUX_TMPDIR = tmuxTmpDir;
+    process.env.CODEX_HOME = codexHome;
+    process.env.CODELARK_CODEX_BASE_URL = proxy.baseUrl;
+    process.env.CODELARK_CODEX_API_KEY = 'clk-local-proxy-key';
+    process.env.CODEX_API_KEY = 'clk-local-proxy-key';
+    process.env.OPENAI_API_KEY = 'clk-local-proxy-key';
+    process.env.CODELARK_CODEX_SKIP_GIT_REPO_CHECK = 'true';
+
+    resetBridgeTestState({ cleanCodexHome: true });
+    seedCodexApiKeyAuth(codexHome, 'clk-local-proxy-key');
+    _testOnly.resetStateForTests();
+
+    const model = process.env[REAL_CODEX_E2E_MODEL_ENV] || 'gpt-5.4';
+    const settings = makeBridgeSettings({
+      bridge_default_provider: 'tmux',
+      bridge_default_model: model,
+      bridge_codex_reasoning_effort: 'low',
+    });
+    const pendingPerms = new PendingPermissions();
+    const store = initBridgeTestContext({
+      settings,
+      llm: new CodexRoutingProvider(pendingPerms, 'tmux'),
+      permissions: {
+        resolvePendingPermission: (id, resolution) => pendingPerms.resolve(id, resolution),
+      },
+    });
+    const adapter = new RecordingAdapter();
+    registerAdapter(adapter);
+    (globalThis as unknown as Record<string, any>).__bridge_manager__.running = true;
+    const sourceAddress = {
+      channelType: 'feishu',
+      chatId: `chat-real-tmux-new-source-${process.pid}-${Date.now()}`,
+      userId: 'ou-real-tmux-new-group-owner',
+    } as const;
+    const firstPrompt = `clk-new-group-first-submit-${process.pid}-${Date.now()}`;
+    let tmuxSessionName = '';
+    let generatedThreadId = '';
+    let generatedThreadFilePath = '';
+
+    try {
+      await _testOnly.handleMessage(adapter, inboundMessage(
+        sourceAddress,
+        `/new enter-repro ${workDir}`,
+        'incoming-real-new-group-command',
+      ));
+      const createdGroup = adapter.createdGroups.at(-1);
+      assert.ok(createdGroup, '/new should create a group');
+      const newAddress = { channelType: 'feishu', chatId: createdGroup.chatId } as const;
+      const binding = store.getChannelChat(newAddress.channelType, newAddress.chatId);
+      assert.ok(binding, '/new should persist the group binding before its first message');
+
+      await _testOnly.handleMessage(adapter, inboundMessage(
+        newAddress,
+        '/mode yolo',
+        'incoming-real-new-group-yolo',
+      ));
+      await _testOnly.handleMessage(adapter, inboundMessage(
+        newAddress,
+        '/r high',
+        'incoming-real-new-group-reasoning',
+      ));
+
+      const handledCallbackData = new Set(adapter.sent.flatMap((message) => [
+        ...(message.inlineButtons?.flat().map((button) => button.callbackData) || []),
+        ...(message.richCard?.selects?.flatMap((select) => [
+          select.selectedCallbackData,
+          ...select.options.map((option) => option.callbackData),
+        ].filter((value): value is string => Boolean(value))) || []),
+      ]));
+
+      const firstTurn = _testOnly.handleMessage(adapter, inboundMessage(
+        newAddress,
+        firstPrompt,
+        'incoming-real-new-group-first-prompt',
+      ));
+      let firstTurnSettled = false;
+      void firstTurn.then(
+        () => { firstTurnSettled = true; },
+        () => { firstTurnSettled = true; },
+      );
+      while (!firstTurnSettled) {
+        const approved = await approveStartupPermission(adapter, store, newAddress, {
+          required: true,
+          timeoutMs: 30_000,
+          turnSettled: () => firstTurnSettled,
+          handledCallbackData,
+        });
+        if (!approved) break;
+      }
+      await firstTurn;
+
+      const session = store.getSession(binding.bridgeSessionId);
+      generatedThreadId = session?.runtime?.codex?.threadId?.trim() || '';
+      tmuxSessionName = session?.runtime?.general?.tmuxSessionName || '';
+      assert.match(generatedThreadId, /^[0-9a-f-]{20,}$/i);
+      assert.equal(tmuxSessionName, `codex_${generatedThreadId}`);
+      generatedThreadFilePath = getCodexSessionByThreadIdSafe(
+        generatedThreadId,
+        '/new first prompt cleanup lookup',
+      )?.filePath || '';
+
+      const firstPromptSubmitted = await waitForCondition(
+        () => proxy.requests.some((request) => (
+          request.url.includes('/responses') && requestBodyContainsText(request.body, firstPrompt)
+        )),
+        30_000,
+        250,
+      );
+      if (!firstPromptSubmitted) {
+        const capture = await execFileAsync(
+          'tmux',
+          ['capture-pane', '-p', '-t', `${tmuxSessionName}:0.0`, '-S', '-80'],
+        ).catch((error) => ({ stdout: String(error), stderr: '' }));
+        assert.fail([
+          'the first plain message after /new should be submitted to Codex',
+          `responses requests: ${proxy.requests.filter((request) => request.url.includes('/responses')).length}`,
+          `screen: ${capture.stdout.slice(-2_000)}`,
+        ].join('\n'));
+      }
+    } finally {
+      if (tmuxSessionName) {
+        await execFileAsync('tmux', ['kill-session', '-t', tmuxSessionName]).catch(() => undefined);
+      }
+      if (generatedThreadId) {
+        cleanupCodexThreadArtifacts(generatedThreadId, generatedThreadFilePath);
+      }
+      removeRuntimeTestDirectory(workDir);
+      removeRuntimeTestDirectory(codexHome);
+      removeRuntimeTestDirectory(tmuxTmpDir);
       await proxy.close().catch(() => undefined);
       for (const [key, value] of Object.entries(previousEnv)) {
         if (value === undefined) delete process.env[key];

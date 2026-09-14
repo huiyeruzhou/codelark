@@ -9,6 +9,7 @@ import {
   buildCodexTuiShellCommand,
   buildCodexTuiTmuxCommand,
   getCodexTuiSelectionPromptUiDefaultChoice,
+  hasCodexTuiInputPrompt,
   parseCodexTuiSelectionPrompt,
   parsePositiveIntEnv,
   type CodexTuiSelectionPrompt,
@@ -17,10 +18,12 @@ import {
 } from '../../runtime/codex/tmux-provider.js';
 import { resolveCodexCliExecutable } from '../../runtime/codex/cli-executable.js';
 import {
+  buildClaudeBypassPermissionsPromptKeys,
   buildClaudePtyCommand,
   buildClaudePtyEnv,
   buildClaudeTrustPromptKeys,
   hasClaudePtyInputPrompt,
+  hasClaudePtyBypassPermissionsPrompt,
   hasClaudePtyOnboardingPrompt,
   hasClaudePtyTrustPrompt,
 } from '../../runtime/claude/pty-provider.js';
@@ -98,7 +101,7 @@ export type RuntimeTmuxSelectionPrompt =
     }
   | {
       runtime: 'claude';
-      kind: 'onboarding' | 'trust';
+      kind: 'onboarding' | 'trust' | 'bypass_permissions';
       defaultChoice: 'confirm';
       summary: string;
     };
@@ -371,10 +374,12 @@ function screenExcerpt(screen: string | undefined): string | undefined {
   return screen.replace(/\s+$/g, '').slice(-2_000);
 }
 
-function summarizeClaudeSelection(kind: 'onboarding' | 'trust'): string {
-  return kind === 'onboarding'
-    ? 'Claude Code is waiting at an onboarding prompt.'
-    : 'Claude Code is waiting at a workspace trust prompt.';
+function summarizeClaudeSelection(kind: 'onboarding' | 'trust' | 'bypass_permissions'): string {
+  if (kind === 'onboarding') return 'Claude Code is waiting at an onboarding prompt.';
+  if (kind === 'bypass_permissions') {
+    return 'Claude Code is waiting for acceptance of its bypass-permissions warning.';
+  }
+  return 'Claude Code is waiting at a workspace trust prompt.';
 }
 
 function buildClaudeSelectionActions(
@@ -382,7 +387,9 @@ function buildClaudeSelectionActions(
   screen: string,
 ): TmuxSendAction[] | null {
   if (prompt.kind === 'onboarding') return [{ type: 'key', key: 'Enter' }];
-  const keys = buildClaudeTrustPromptKeys(screen);
+  const keys = prompt.kind === 'bypass_permissions'
+    ? buildClaudeBypassPermissionsPromptKeys(screen)
+    : buildClaudeTrustPromptKeys(screen);
   return keys?.map((key) => ({ type: 'key' as const, key })) || null;
 }
 
@@ -410,6 +417,14 @@ function detectRuntimeTmuxSelectionPrompt(
       summary: summarizeClaudeSelection('onboarding'),
     };
   }
+  if (hasClaudePtyBypassPermissionsPrompt(screenText)) {
+    return {
+      runtime: 'claude',
+      kind: 'bypass_permissions',
+      defaultChoice: 'confirm',
+      summary: summarizeClaudeSelection('bypass_permissions'),
+    };
+  }
   if (hasClaudePtyTrustPrompt(screenText)) {
     return {
       runtime: 'claude',
@@ -427,10 +442,7 @@ function detectAnyRuntimeTmuxSelectionPrompt(screenText: string): RuntimeTmuxSel
 }
 
 export function hasCodexResumeTmuxReadyPrompt(screenText: string): boolean {
-  if (parseCodexTuiSelectionPrompt(screenText)) return false;
-  const normalized = normalizeRuntimeTmuxScreenText(screenText);
-  if (!normalized.trim()) return false;
-  return /(?:^|\n)\s*[›>]\s*(?:[^\n]*)?(?:$|\n)|\?\s+for\s+shortcuts|What\s+would\s+you\s+like/i.test(normalized);
+  return hasCodexTuiInputPrompt(screenText);
 }
 
 function normalizeRuntimeTmuxScreenText(screenText: string): string {

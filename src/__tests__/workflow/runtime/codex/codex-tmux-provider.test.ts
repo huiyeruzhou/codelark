@@ -16,6 +16,7 @@ import {
   compactCodexTuiUpdateProgress,
   createCodexTuiSelectionPromptMonitor,
   hasCodexTuiTrustPrompt,
+  hasCodexTuiInputPrompt,
   hasCodexTuiSelectionPrompt,
   injectPromptIntoTmuxPane,
   isTruthyEnv,
@@ -26,7 +27,9 @@ import {
   requestCodexTuiTrustConfirmation,
   requestCodexTuiUpdateConfirmation,
   shouldUseCodexTmuxTui,
+  waitForStableCodexTmuxInputPrompt,
 } from '../../../../runtime/codex/tmux-provider.js';
+import type { TmuxCore } from '../../../../bridge/tmux/core.js';
 import { PendingPermissions } from '../../../../runtime/permission-gateway.js';
 import {
   buildShellSnapshotLaunchCommand,
@@ -66,6 +69,101 @@ function tmuxLaunchCommandArgs(args: string[]): string[] {
 }
 
 describe('codex-tmux-provider', () => {
+  it('waits for the post-trust Codex input screen to stop redrawing before injection', async () => {
+    const envNames = [
+      'CODELARK_CODEX_TMUX_INPUT_READY_TIMEOUT_MS',
+      'CODELARK_CODEX_TMUX_INPUT_READY_STABLE_MS',
+      'CODELARK_CODEX_TMUX_INPUT_READY_POLL_MS',
+    ];
+    const previous = new Map(envNames.map((name) => [name, process.env[name]]));
+    process.env.CODELARK_CODEX_TMUX_INPUT_READY_TIMEOUT_MS = '1000';
+    process.env.CODELARK_CODEX_TMUX_INPUT_READY_STABLE_MS = '75';
+    process.env.CODELARK_CODEX_TMUX_INPUT_READY_POLL_MS = '25';
+    const screens = [
+      'Do you trust the contents of this directory?\n› 1. Yes, continue\nPress enter to continue',
+      'OpenAI Codex\n› Ask Codex to do anything\ngpt-5.4 low',
+      'Model changed to gpt-5.6 medium\nOpenAI Codex\n› Ask Codex to do anything\ngpt-5.6 medium',
+    ];
+    let captures = 0;
+    const core = {
+      capturePane: async () => {
+        const screen = screens[Math.min(captures, screens.length - 1)]!;
+        captures += 1;
+        return { command: `capture-${captures}`, screen };
+      },
+    } as Pick<TmuxCore, 'capturePane'>;
+
+    try {
+      assert.equal(hasCodexTuiInputPrompt(screens[0]!), false);
+      assert.equal(hasCodexTuiInputPrompt(screens[1]!), true);
+      assert.equal(hasCodexTuiInputPrompt([
+        '• Working (2m 54s • esc to interrupt)',
+        '',
+        '› Implement {feature}',
+        '',
+        '  model-name medium · /workspace/project',
+      ].join('\n')), true);
+      const result = await waitForStableCodexTmuxInputPrompt({
+        targetPane: 'codex_ready:0.0',
+        core,
+      });
+      assert.match(result.screen, /Model changed to gpt-5\.6 medium/);
+      assert.equal(captures >= 5, true);
+    } finally {
+      for (const [name, value] of previous) {
+        if (value === undefined) delete process.env[name];
+        else process.env[name] = value;
+      }
+    }
+  });
+
+  it('resolves a Codex startup selection before declaring the input prompt ready', async () => {
+    const envNames = [
+      'CODELARK_CODEX_TMUX_INPUT_READY_TIMEOUT_MS',
+      'CODELARK_CODEX_TMUX_INPUT_READY_STABLE_MS',
+      'CODELARK_CODEX_TMUX_INPUT_READY_POLL_MS',
+    ];
+    const previous = new Map(envNames.map((name) => [name, process.env[name]]));
+    process.env.CODELARK_CODEX_TMUX_INPUT_READY_TIMEOUT_MS = '1500';
+    process.env.CODELARK_CODEX_TMUX_INPUT_READY_STABLE_MS = '50';
+    process.env.CODELARK_CODEX_TMUX_INPUT_READY_POLL_MS = '25';
+    const modelSelection = [
+      'GPT-5.4 is no longer available',
+      "Choose how you'd like Codex to proceed.",
+      '› 1. Try new model',
+      '  2. Use existing model',
+      'Use ↑/↓ to move, press enter to confirm',
+    ].join('\n');
+    let resolved = false;
+    const promptKinds: string[] = [];
+    const core = {
+      capturePane: async () => ({
+        command: 'capture',
+        screen: resolved
+          ? 'OpenAI Codex\n› Ask Codex to do anything\ngpt-5.6 medium'
+          : modelSelection,
+      }),
+    } as Pick<TmuxCore, 'capturePane'>;
+
+    try {
+      const result = await waitForStableCodexTmuxInputPrompt({
+        targetPane: 'codex_model_migration:0.0',
+        core,
+        onSelectionPrompt: async (prompt) => {
+          promptKinds.push(prompt.kind);
+          resolved = true;
+        },
+      });
+      assert.deepEqual(promptKinds, ['model_migration']);
+      assert.match(result.screen, /Ask Codex to do anything/);
+    } finally {
+      for (const [name, value] of previous) {
+        if (value === undefined) delete process.env[name];
+        else process.env[name] = value;
+      }
+    }
+  });
+
   it('parses truthy env values for the tmux TUI switch', () => {
     assert.equal(isTruthyEnv('true'), true);
     assert.equal(isTruthyEnv('1'), true);
@@ -266,6 +364,26 @@ describe('codex-tmux-provider', () => {
       'no',
     ]);
     assert.match(prompt.summary, /Yes, proceed/);
+  });
+
+  it('parses the Codex model-migration selection that has no Esc footer', () => {
+    const screen = [
+      'GPT-5.4 is no longer available',
+      'Codex now uses GPT-5.6 Terra in place of GPT-5.4.',
+      "Choose how you'd like Codex to proceed.",
+      '› 1. Try new model',
+      '  2. Use existing model',
+      'Use ↑/↓ to move, press enter to confirm',
+    ].join('\n');
+
+    const prompt = parseCodexTuiSelectionPrompt(screen);
+    assert.ok(prompt);
+    assert.equal(hasCodexTuiTrustPrompt(screen), false);
+    assert.equal(prompt.kind, 'model_migration');
+    assert.deepEqual(prompt.options.map((option) => option.label), [
+      'Try new model',
+      'Use existing model',
+    ]);
   });
 
   it('parses Claude Code permission selections from a highlighted first row without a footer', () => {

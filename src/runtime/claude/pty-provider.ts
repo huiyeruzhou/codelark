@@ -98,6 +98,7 @@ function compactScreenText(text: string): string {
 }
 
 export function hasClaudePtyTrustPrompt(text: string): boolean {
+  if (hasClaudePtyBypassPermissionsPrompt(text)) return false;
   const compact = compactScreenText(text);
   return compact.includes('quicksafetycheck')
     || compact.includes('yes,itrustthisfolder')
@@ -107,7 +108,11 @@ export function hasClaudePtyTrustPrompt(text: string): boolean {
 
 export type ClaudeTrustPromptKey = 'Up' | 'Down' | 'Enter';
 
-export function buildClaudeTrustPromptKeys(text: string): ClaudeTrustPromptKey[] | null {
+function buildClaudeAffirmativePromptKeys(
+  text: string,
+  choicePattern: RegExp,
+  affirmativePattern: RegExp,
+): ClaudeTrustPromptKey[] | null {
   const normalized = normalizePtyOutput(text).replace(/\r/g, '');
   const choices = normalized
     .split('\n')
@@ -115,15 +120,38 @@ export function buildClaudeTrustPromptKeys(text: string): ClaudeTrustPromptKey[]
       line,
       selected: /^\s*[❯›>]\s*/u.test(line),
     }))
-    .filter(({ line }) => /yes,?\s+i trust this folder|no,?\s+(?:continue without these permissions|exit!?)/i.test(line));
+    .filter(({ line }) => choicePattern.test(line));
   const selectedIndex = choices.findIndex((choice) => choice.selected);
-  const trustIndex = choices.findIndex((choice) => /yes,?\s+i trust this folder/i.test(choice.line));
-  if (selectedIndex < 0 || trustIndex < 0) return null;
-  const direction: ClaudeTrustPromptKey = trustIndex < selectedIndex ? 'Up' : 'Down';
+  const affirmativeIndex = choices.findIndex((choice) => affirmativePattern.test(choice.line));
+  if (selectedIndex < 0 || affirmativeIndex < 0) return null;
+  const direction: ClaudeTrustPromptKey = affirmativeIndex < selectedIndex ? 'Up' : 'Down';
   return [
-    ...Array.from({ length: Math.abs(trustIndex - selectedIndex) }, () => direction),
+    ...Array.from({ length: Math.abs(affirmativeIndex - selectedIndex) }, () => direction),
     'Enter',
   ];
+}
+
+export function buildClaudeTrustPromptKeys(text: string): ClaudeTrustPromptKey[] | null {
+  return buildClaudeAffirmativePromptKeys(
+    text,
+    /yes,?\s+i trust this folder|no,?\s+(?:continue without these permissions|exit!?)/i,
+    /yes,?\s+i trust this folder/i,
+  );
+}
+
+export function hasClaudePtyBypassPermissionsPrompt(text: string): boolean {
+  const compact = compactScreenText(text);
+  return compact.includes('claudecoderunninginbypasspermissionsmode')
+    && compact.includes('yes,iaccept')
+    && hasTuiEnterConfirmFooter(text);
+}
+
+export function buildClaudeBypassPermissionsPromptKeys(text: string): ClaudeTrustPromptKey[] | null {
+  return buildClaudeAffirmativePromptKeys(
+    text,
+    /no,?\s+exit!?|yes,?\s+i accept/i,
+    /yes,?\s+i accept/i,
+  );
 }
 
 export function hasClaudePtyOnboardingPrompt(text: string): boolean {
@@ -141,7 +169,11 @@ export function hasClaudePtyOnboardingPrompt(text: string): boolean {
 }
 
 export function hasClaudePtyInputPrompt(text: string): boolean {
-  if (hasClaudePtyOnboardingPrompt(text) || hasClaudePtyTrustPrompt(text)) return false;
+  if (
+    hasClaudePtyOnboardingPrompt(text)
+    || hasClaudePtyBypassPermissionsPrompt(text)
+    || hasClaudePtyTrustPrompt(text)
+  ) return false;
   const compact = compactScreenText(text);
   return text.includes('❯') && (
     compact.includes('forshortcuts')
@@ -317,15 +349,33 @@ async function prepareClaudePtyForPrompt(session: ClaudePtySession): Promise<voi
     const sawSetupPrompt = remainingMs > 0
       ? await waitForClaudePtyBuffer(
         session,
-        (buffer) => hasClaudePtyInputPrompt(buffer) || hasClaudePtyTrustPrompt(buffer) || hasClaudePtyOnboardingPrompt(buffer),
+        (buffer) => hasClaudePtyInputPrompt(buffer)
+          || hasClaudePtyBypassPermissionsPrompt(buffer)
+          || hasClaudePtyTrustPrompt(buffer)
+          || hasClaudePtyOnboardingPrompt(buffer),
         remainingMs,
       )
-      : hasClaudePtyTrustPrompt(session.buffer) || hasClaudePtyOnboardingPrompt(session.buffer);
+      : hasClaudePtyBypassPermissionsPrompt(session.buffer)
+        || hasClaudePtyTrustPrompt(session.buffer)
+        || hasClaudePtyOnboardingPrompt(session.buffer);
     if (!sawSetupPrompt || hasClaudePtyInputPrompt(session.buffer)) break;
     if (hasClaudePtyOnboardingPrompt(session.buffer)) {
       console.log('[claude-pty] Claude Code first-run onboarding detected; continuing before prompt injection');
       session.buffer = '';
       session.child.write('\r');
+      if (afterTrustDelayMs > 0) await sleep(afterTrustDelayMs);
+      continue;
+    }
+    if (hasClaudePtyBypassPermissionsPrompt(session.buffer)) {
+      const bypassKeys = buildClaudeBypassPermissionsPromptKeys(session.buffer);
+      if (!bypassKeys) {
+        throw new Error('Claude Code bypass-permissions warning was detected, but the affirmative choice could not be identified safely.');
+      }
+      console.log('[claude-pty] Claude Code bypass-permissions warning detected; selecting acceptance before prompt injection');
+      session.buffer = '';
+      for (const key of bypassKeys) {
+        session.child.write(key === 'Up' ? '\x1b[A' : key === 'Down' ? '\x1b[B' : '\r');
+      }
       if (afterTrustDelayMs > 0) await sleep(afterTrustDelayMs);
       continue;
     }
@@ -605,6 +655,7 @@ export const _testOnlyClaudePty = {
     });
   },
   hasClaudePtyInputPrompt,
+  hasClaudePtyBypassPermissionsPrompt,
   hasClaudePtyOnboardingPrompt,
   hasClaudePtyTrustPrompt,
   prepareClaudePtyForPrompt,

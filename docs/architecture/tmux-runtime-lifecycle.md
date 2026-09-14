@@ -141,7 +141,7 @@ readiness gate 的 `ready` 会把共享输入状态推进到 `running`，随后�
 
 普通 IM 消息有两种进入 Codex tmux 的路径：
 
-- 已经在 interactive turn 中运行的 Codex 请求由 `CodexRoutingProvider` 根据 `codexProvider=tmux` 分发到 `CodexTmuxProvider`。provider 校验 tmux session，等待信任、更新或权限选择提示稳定后，通过 tmux core 注入 prompt。
+- 已经在 interactive turn 中运行的 Codex 请求由 `CodexRoutingProvider` 根据 `codexProvider=tmux` 分发到 `CodexTmuxProvider`。provider 校验 tmux session，依次处理工作目录信任与启动期选择（包括模型迁移），再等待输入框停止重绘后通过 tmux core 注入 prompt；不能用固定 sleep 代替 ready gate，否则首条 paste/Enter 可能被启动重绘吞掉。
 - 已经绑定到 tmux provider 的聊天会在 host manager 的普通消息分支中被直接 auto-forward 到 `/tmux <message>`。这条路径用于“把普通聊天文本当作 TUI 输入”，会自动追加 Enter，并在 tmux session 缺失时走上一节的 auto-recover；Codex 使用 bracketed paste 注入普通文本，显式特殊键序列仍按键发送。
 
 auto-forward 的输入必须在启动门控之后才写入 tmux：缺失 session 恢复、新建 provider session、冷接管已有 session 的路径都会先执行 shared ready/selection 检测。状态一旦成为 `running`，后续输入只执行 `has-session`，不再依赖屏幕光标或 prompt 文本决定发送时机。等待过程是异步 Promise，不会阻塞 Node 主事件循环；调度层会把 tmux provider 普通消息标记为 conversation barrier，阻塞同一 chat/session 的后续普通消息和 session 变更命令，直到当前 auto-forward 完成。`/stop`、selection callback 等控制路径仍可绕过 barrier，用于中断或完成启动选择。`/tmux-screen`、`/pty-screen` 保持 feature 前的 monitor job 行为：它们走 job lane 但不等待 conversation barrier，因此可在普通对话卡住时及时抓屏；`/shell` 等普通 job 仍等待 barrier。只查看或手动控制 pane 的命令不自动恢复 provider session，也不等待 startup ready。
@@ -193,7 +193,7 @@ Claude tmux 与 Codex tmux 的差异是：fresh Claude session id 由 Claude Cod
 
 Claude tmux 也必须支持和 Codex 相同的普通消息隐式初始化/恢复语义：如果当前聊天的有效 Claude provider 是 `tmux`，但还没有 `runtime.general.tmuxSessionName`，fresh 会话的第一条普通消息会生成 `claude_<BridgeSessionId>` 并启动 Claude Code TUI；已有 Claude identity 时则用该 identity 命名并执行 `--resume`。如果已记录 tmux session 但进程不存在，普通消息会用保存的 identity 重建同名 tmux session。两种情况都只在启动成功后写回 `runtime.claude.provider=tmux`、`runtime.general.tmuxSessionName` 和 tmux auto-enter 配置，然后再把消息注入 TUI。之后 `reconcileClaudeTmuxMirrorAfterAutoForward` 仅在 fresh 会话尚无 identity 时等待 Claude JSONL 出现，发现 `session_id` 后写回 `runtime.claude.sessionId/cwd`，prime 首个 turn 的 mirror delivery，并触发 Claude mirror reconcile。
 
-Claude tmux 使用同一个 `waitForRuntimeTmuxReady` 启动门控。启动前先解析并验证配置的 `claude` / `ccr` executable；缺失时直接进入 `failed`，不创建 tmux，也不把 provider/session 配置写成成功。新建、恢复或 Bridge 进程冷接管已有 Claude provider-owned tmux 时等待一次 Claude 输入提示，并处理 onboarding/trust prompt；trust prompt 会根据真实游标位置显式移动到 `Yes, I trust this folder` 后确认，而不是无条件发送 Enter。进入共享 `running` 后，普通消息不再重复抓屏找输入提示。为兼容旧会话和测试 fake pane，Claude readiness 还接受“看起来是 TUI 且已出现输入提示、且没有任何 selection prompt”的通用 ready 兜底；这个兜底只用于冷启动/接管，不影响普通 `/tmux-screen` 查看。显式 `/p tmux` 的 TUI 若在 ready 前退出或 session 消失，启动函数会保留 stderr、清理半初始化 session、进入 `failed` 并返回结构化错误；调用方不得持久化 provider/tmux binding。
+Claude tmux 使用同一个 `waitForRuntimeTmuxReady` 启动门控。启动前先解析并验证配置的 `claude` / `ccr` executable；缺失时直接进入 `failed`，不创建 tmux，也不把 provider/session 配置写成成功。新建、恢复或 Bridge 进程冷接管已有 Claude provider-owned tmux 时等待一次 Claude 输入提示，并依次处理 onboarding、workspace trust 和 bypass-permissions warning；后两者都根据真实游标位置显式移动到肯定项（`Yes, I trust this folder` / `Yes, I accept`）后确认，而不是无条件发送 Enter。进入共享 `running` 后，普通消息不再重复抓屏找输入提示。为兼容旧会话和测试 fake pane，Claude readiness 还接受“看起来是 TUI 且已出现输入提示、且没有任何 selection prompt”的通用 ready 兜底；这个兜底只用于冷启动/接管，不影响普通 `/tmux-screen` 查看。显式 `/p tmux` 的 TUI 若在 ready 前退出或 session 消失，启动函数会保留 stderr、清理半初始化 session、进入 `failed` 并返回结构化错误；调用方不得持久化 provider/tmux binding。
 
 ## 链路对齐盘点
 

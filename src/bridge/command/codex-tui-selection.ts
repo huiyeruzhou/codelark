@@ -41,6 +41,9 @@ function reasonForSelectionPrompt(
   if (selectionPrompt.kind === 'goal') {
     return `Codex TUI is waiting at a goal replacement selection prompt${suffix}.`;
   }
+  if (selectionPrompt.kind === 'model_migration') {
+    return `Codex TUI is waiting for a model migration choice${suffix}.`;
+  }
   if (selectionPrompt.kind === 'generic') {
     return `Codex TUI may be waiting at an unrecognized numbered selection prompt${suffix}.`;
   }

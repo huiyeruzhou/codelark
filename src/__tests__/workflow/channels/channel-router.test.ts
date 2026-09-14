@@ -129,6 +129,48 @@ describe('channel-router chat isolation', () => {
     assert.equal(fs.existsSync(path.join(DATA_DIR, 'channel-default-targets.json')), false);
   });
 
+  it('inherits Codex YOLO and reasoning defaults for a brand-new chat', () => {
+    fs.writeFileSync(CONFIG_TOML_PATH, [
+      'schema_version = 2',
+      '',
+      '[runtime]',
+      'agent = "codex"',
+      '',
+      '[runtime.codex]',
+      'yolo_mode = "on"',
+      'reasoning_effort = "high"',
+      'provider = "tmux"',
+      '',
+      '[[channels]]',
+      'id = "feishu-default"',
+      'alias = "飞书"',
+      'provider = "feishu"',
+      'enabled = true',
+      '',
+      '[channels.config]',
+      'history_message_limit = 8',
+      '',
+    ].join('\n'), 'utf-8');
+    const store = new JsonFileStore(makeSettings());
+    initBridgeContext({
+      store,
+      llm: noopLlm,
+      permissions: { resolvePendingPermission: () => false },
+      lifecycle: {},
+    });
+
+    const binding = resolve({
+      channelType: 'feishu-default',
+      chatId: 'oc_codex_yolo_draft',
+      userId: 'ou_123',
+    });
+    const session = store.getSession(binding.bridgeSessionId);
+    const runtime = resolveSessionRuntimeConfig(binding, session);
+
+    assert.equal(runtime.mode, 'yolo');
+    assert.equal(runtime.reasoningEffort, 'high');
+  });
+
   it('creates a Claude temporary session when default runtime is claude', () => {
     fs.writeFileSync(CONFIG_TOML_PATH, [
       'schema_version = 2',

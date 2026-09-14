@@ -569,7 +569,8 @@ function formatRuntimeTmuxSelectionPrompt(selectionPrompt: RuntimeTmuxSelectionP
       : '需要用户选择';
     return `Codex ${selectionPrompt.kind} selection prompt（${action}）`;
   }
-  return `Claude ${selectionPrompt.kind} prompt（默认动作：Enter）`;
+  const action = selectionPrompt.kind === 'onboarding' ? '默认动作：Enter' : '自动选择肯定项并确认';
+  return `Claude ${selectionPrompt.kind} prompt（${action}）`;
 }
 
 function formatRuntimeTmuxAutoForwardReadinessError(

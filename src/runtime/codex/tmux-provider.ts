@@ -35,11 +35,15 @@ import {
 } from '../../bridge/tmux/input-state-machine.js';
 import {
   hasTuiEnterActionFooter,
+  hasTuiEnterConfirmFooter,
   normalizeTerminalScreenText,
 } from '../tui-screen.js';
 
 const DEFAULT_TMUX_PROMPT_DELAY_MS = 1_200;
 const DEFAULT_TMUX_AFTER_TRUST_DELAY_MS = 1_000;
+const DEFAULT_TMUX_INPUT_READY_TIMEOUT_MS = 10_000;
+const DEFAULT_TMUX_INPUT_READY_STABLE_MS = 1_000;
+const DEFAULT_TMUX_INPUT_READY_POLL_MS = 100;
 const DEFAULT_TMUX_POLL_INTERVAL_MS = 500;
 const DEFAULT_TMUX_SESSION_FILE_TIMEOUT_MS = 30_000;
 const DEFAULT_CODEX_TUI_UPDATE_TIMEOUT_MS = 300_000;
@@ -78,7 +82,7 @@ export interface CodexTuiRunContext {
   hasError: boolean;
 }
 
-export type CodexTuiSelectionPromptKind = 'update' | 'permission' | 'goal' | 'generic';
+export type CodexTuiSelectionPromptKind = 'update' | 'permission' | 'goal' | 'model_migration' | 'generic';
 export type CodexTuiSelectionPromptChoice =
   | 'update_now'
   | 'skip'
@@ -168,8 +172,7 @@ function commandPreview(command: string, args: string[]): string {
 
 export function hasCodexTuiTrustPrompt(screenText: string): boolean {
   const tail = screenText.slice(-20_000);
-  return /Do\s+you\s+trust\s+the\s+contents\s+of\s+this\s+directory\?/i.test(tail)
-    || hasTuiEnterActionFooter(tail);
+  return /Do\s+you\s+trust\s+the\s+contents\s+of\s+this\s+directory\?/i.test(tail);
 }
 
 export function hasCodexTuiSelectionPrompt(screenText: string): boolean {
@@ -178,6 +181,98 @@ export function hasCodexTuiSelectionPrompt(screenText: string): boolean {
 
 export function hasCodexTuiUpdatePrompt(screenText: string): boolean {
   return parseCodexTuiSelectionPrompt(screenText)?.kind === 'update';
+}
+
+export function hasCodexTuiInputPrompt(screenText: string): boolean {
+  if (parseCodexTuiSelectionPrompt(screenText)) return false;
+  const normalized = normalizeTerminalScreenText(screenText).slice(-20_000);
+  return normalized.split('\n').some((line) => {
+    // Codex keeps the unicode input chevron on compact/working screens even
+    // after the title and shortcut hints scroll out of capture-pane history.
+    // Do not accept a plain ASCII shell prompt here.
+    const match = line.match(/^\s*›\s*(.*)$/u);
+    if (!match) return false;
+    const content = match[1].trimStart();
+    return !/^\d+[.)]\s/u.test(content);
+  });
+}
+
+export async function waitForStableCodexTmuxInputPrompt(
+  params: {
+    targetPane: string;
+    core?: Pick<TmuxCore, 'capturePane'>;
+    onSelectionPrompt?: (prompt: CodexTuiSelectionPrompt) => Promise<boolean | void>;
+  },
+): Promise<{ screen: string; commands: string[] }> {
+  const core = params.core || tmuxCore;
+  const timeoutMs = parsePositiveIntEnv(
+    'CODELARK_CODEX_TMUX_INPUT_READY_TIMEOUT_MS',
+    DEFAULT_TMUX_INPUT_READY_TIMEOUT_MS,
+    0,
+  );
+  const stableMs = parsePositiveIntEnv(
+    'CODELARK_CODEX_TMUX_INPUT_READY_STABLE_MS',
+    DEFAULT_TMUX_INPUT_READY_STABLE_MS,
+    0,
+  );
+  const pollMs = parsePositiveIntEnv(
+    'CODELARK_CODEX_TMUX_INPUT_READY_POLL_MS',
+    DEFAULT_TMUX_INPUT_READY_POLL_MS,
+    10,
+  );
+  let deadline = Date.now() + timeoutMs;
+  const commands: string[] = [];
+  const selectionPromptMonitor = createCodexTuiSelectionPromptMonitor();
+  let stableSince = 0;
+  let stableScreen = '';
+  let lastScreen = '';
+
+  do {
+    const capture = await core.capturePane(params.targetPane, 80);
+    commands.push(capture.command);
+    lastScreen = capture.screen;
+    const stableSelectionPrompt = observeStableCodexTuiSelectionPrompt(
+      capture.screen,
+      selectionPromptMonitor,
+    );
+    if (stableSelectionPrompt) {
+      if (!params.onSelectionPrompt) {
+        throw new Error(`Codex TUI is waiting at a ${stableSelectionPrompt.kind} selection prompt before message injection.`);
+      }
+      selectionPromptMonitor.pending = true;
+      try {
+        const shouldContinue = await params.onSelectionPrompt(stableSelectionPrompt);
+        if (shouldContinue === false) {
+          throw new Error('Codex TUI startup selection was dismissed as not being a selection; message was not injected.');
+        }
+      } finally {
+        markCodexTuiSelectionPromptActionSent(selectionPromptMonitor);
+      }
+      deadline = Date.now() + timeoutMs;
+      stableScreen = '';
+      stableSince = 0;
+      continue;
+    }
+    if (hasCodexTuiInputPrompt(capture.screen)) {
+      const normalized = normalizeTerminalScreenText(capture.screen).trim();
+      if (normalized !== stableScreen) {
+        stableScreen = normalized;
+        stableSince = Date.now();
+      } else if (Date.now() - stableSince >= stableMs) {
+        return { screen: capture.screen, commands };
+      }
+    } else {
+      stableScreen = '';
+      stableSince = 0;
+    }
+    if (timeoutMs <= 0) break;
+    await sleep(pollMs);
+  } while (Date.now() <= deadline);
+
+  throw new Error([
+    'Timed out waiting for the Codex TUI input prompt to become stable before message injection.',
+    lastScreen ? `Last screen:\n${lastScreen.slice(-2_000)}` : '',
+  ].filter(Boolean).join('\n'));
 }
 
 function normalizeSelectionChoice(label: string): CodexTuiSelectionPromptChoice | null {
@@ -230,6 +325,9 @@ function inferSelectionPromptKind(
   if (hasChoice('replace_current_goal') && hasChoice('cancel')) {
     return 'goal';
   }
+  if (hasCodexModelMigrationPrompt(tail)) {
+    return 'model_migration';
+  }
   if (options.some((option) => option.selected && option.index === 0 && option.choice === 'option_1')) {
     return 'generic';
   }
@@ -246,6 +344,13 @@ function hasClaudeCodeTuiSelectionPromptCursor(tail: string): boolean {
   return tail
     .split('\n')
     .some((line) => /^\s*❯\s*1\.\s+/u.test(line));
+}
+
+function hasCodexModelMigrationPrompt(tail: string): boolean {
+  return /\bis no longer available\b/i.test(tail)
+    && /Choose how you['’]d like Codex to proceed/i.test(tail)
+    && /\bTry new model\b/i.test(tail)
+    && /\bUse existing model\b/i.test(tail);
 }
 
 type ParsedSelectionLine = {
@@ -342,7 +447,9 @@ export function parseCodexTuiSelectionPrompt(screenText: string): CodexTuiSelect
   if (!hasCodexTuiSelectionPromptCursor(tail)) {
     return null;
   }
-  if (!hasTuiEnterActionFooter(tail, { requireEscapeForConfirm: true }) && !hasClaudeCodeTuiSelectionPromptCursor(tail)) {
+  const hasSafeFooter = hasTuiEnterActionFooter(tail, { requireEscapeForConfirm: true })
+    || (hasCodexModelMigrationPrompt(tail) && hasTuiEnterConfirmFooter(tail));
+  if (!hasSafeFooter && !hasClaudeCodeTuiSelectionPromptCursor(tail)) {
     return null;
   }
   const options: CodexTuiUpdatePromptOption[] = [];
@@ -388,7 +495,8 @@ export function parseCodexTuiSelectionPrompt(screenText: string): CodexTuiSelect
     .filter((line) => (
       /Update available|Release notes|^\s*(?:Allow|Do you want|Would you like|Codex wants)/i.test(line)
       || Boolean(line.match(/^\s*[›❯>▸➜→*•]?\s*(?:\d+[.)]\s*)?(?:Update now|Skip|Replace current goal|Cancel|Yes|No)\b/i))
-      || (kind === 'generic' && Boolean(line.match(/^\s*[›❯>▸➜→*•]?\s*\d+[.)]\s+/u)))
+      || ((kind === 'generic' || kind === 'model_migration')
+        && Boolean(line.match(/^\s*[›❯>▸➜→*•]?\s*\d+[.)]\s+/u)))
     ))
     .slice(-8);
   const summary = trimBlankSummaryEdges([...summaryContextLines, ...summaryLines]).join('\n')
@@ -534,6 +642,8 @@ export async function requestCodexTuiSelectionConfirmation(params: {
     ? params.prompt ? getCodexTuiSelectionPromptUiDefaultChoice(params.prompt) || 'skip' : 'skip'
     : kind === 'goal'
       ? params.prompt ? getCodexTuiSelectionPromptUiDefaultChoice(params.prompt) || 'replace_current_goal' : 'replace_current_goal'
+      : kind === 'model_migration'
+        ? params.prompt ? getCodexTuiSelectionPromptUiDefaultChoice(params.prompt) || 'option_1' : 'option_1'
       : kind === 'generic'
         ? 'not_selection'
         : 'yes_proceed');
@@ -547,6 +657,8 @@ export async function requestCodexTuiSelectionConfirmation(params: {
         ? 'Codex TUI is waiting at a CLI update selection prompt.'
         : kind === 'goal'
           ? 'Codex TUI is waiting at a goal replacement selection prompt.'
+          : kind === 'model_migration'
+            ? 'Codex TUI is waiting for a model migration choice.'
           : kind === 'generic'
             ? 'Codex TUI may be waiting at an unrecognized numbered selection prompt.'
             : 'Codex TUI is waiting at an interactive selection prompt.',
@@ -1391,6 +1503,27 @@ export function streamCodexTmuxTui(params: StreamChatParams, pendingPerms?: Pend
             );
             if (afterTrustDelayMs > 0) await sleep(afterTrustDelayMs);
           }
+          await waitForStableCodexTmuxInputPrompt({
+            targetPane,
+            onSelectionPrompt: async (prompt) => {
+              transitionRuntimeTmuxInputState(
+                'codex',
+                sessionName,
+                'waiting_selection',
+                'Codex startup selection requires a user decision before prompt injection',
+              );
+              const resolved = await resolveStableCodexTuiSelectionPrompt({
+                controller,
+                pendingPerms,
+                provider: 'tmux',
+                bridgeSessionId: params.sessionId,
+                targetPane,
+                prompt,
+                screenCommand: '/tmux-screen 80',
+              });
+              return resolved.choice !== 'not_selection';
+            },
+          });
           controller.enqueue(sseEvent('status', { reasoning: '正在把本次消息发送到 Codex tmux。' }));
           transitionRuntimeTmuxInputState(
             'codex',

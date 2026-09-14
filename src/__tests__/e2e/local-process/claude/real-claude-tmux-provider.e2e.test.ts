@@ -8,12 +8,18 @@ import path from 'node:path';
 import { promisify } from 'node:util';
 
 import { streamClaudeTmuxTui } from '../../../../runtime/claude/tmux-provider.js';
-import { claudeTmuxSessionName } from '../../../../bridge/tmux/runtime.js';
+import {
+  claudeTmuxSessionName,
+  sendTmuxActions,
+  startClaudeTmuxSession,
+} from '../../../../bridge/tmux/runtime.js';
 import { listClaudeSessionJsonlFiles } from '../../../../runtime/claude/session-jsonl.js';
+import type { ClaudeExecutable } from '../../../../runtime/options.js';
 import {
   commandAvailable,
   removeRuntimeTestDirectory,
   startLocalResponsesProxy,
+  waitForCondition,
 } from '../../../helpers/runtime/real-codex-e2e-utils.js';
 
 const execFileAsync = promisify(execFile);
@@ -51,6 +57,91 @@ function writeClaudeOnboardingState(homeDir: string): void {
 }
 
 describe('real Claude Code tmux provider e2e', () => {
+  it('submits provider auto-forward literal plus Enter into a freshly started real Claude TUI', { timeout: 120_000 }, async (t: TestContext) => {
+    const claudeExecutable = (process.env.CODELARK_REAL_CLAUDE_E2E_EXECUTABLE || 'claude') as ClaudeExecutable;
+    if (!(await commandAvailable('tmux', ['-V']))) {
+      t.skip('tmux is not available');
+      return;
+    }
+    if (!(await commandAvailable(claudeExecutable, ['--version']))) {
+      t.skip('claude executable is not available');
+      return;
+    }
+
+    const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-real-claude-auto-forward-home-'));
+    const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-real-claude-auto-forward-work-'));
+    const tmuxTmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-real-claude-auto-forward-socket-'));
+    const prompt = `CODELARK_CLAUDE_AUTO_FORWARD_${process.pid}_${Date.now()}`;
+    const proxy = await startLocalResponsesProxy({ responseText: 'ok' });
+    const sessionName = `claude_auto_forward_${process.pid}_${Date.now()}`;
+    const previousEnv = new Map<string, string | undefined>();
+    const env = {
+      HOME: homeDir,
+      USERPROFILE: homeDir,
+      CODELARK_CLAUDE_HOME: homeDir,
+      TMUX_TMPDIR: tmuxTmpDir,
+      ANTHROPIC_BASE_URL: proxy.baseUrl.replace(/\/v1$/u, ''),
+      ANTHROPIC_AUTH_TOKEN: 'codelark-local-mock-token',
+      ANTHROPIC_API_KEY: '',
+      CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1',
+      CODELARK_CLAUDE_TMUX_POLL_INTERVAL_MS: '100',
+    } satisfies Record<string, string>;
+    writeClaudeOnboardingState(homeDir);
+    for (const key of ['TMUX', 'TMUX_PANE']) {
+      previousEnv.set(key, process.env[key]);
+      delete process.env[key];
+    }
+    for (const [key, value] of Object.entries(env)) {
+      previousEnv.set(key, process.env[key]);
+      process.env[key] = value;
+    }
+
+    try {
+      const started = await startClaudeTmuxSession({
+        sessionName,
+        bridgeSessionId: `bridge-${sessionName}`,
+        workingDirectory: workDir,
+        executable: claudeExecutable,
+        permissionMode: 'bypassPermissions',
+        waitReady: true,
+      });
+      assert.equal(started.ready, true);
+
+      await sendTmuxActions(`${sessionName}:0.0`, [
+        { type: 'literal', text: prompt },
+        { type: 'key', key: 'Enter' },
+      ], { delayMs: 500 });
+
+      const submitted = await waitForCondition(
+        () => proxy.requests.some((request) => (
+          /\/messages(?:\?|$)/u.test(request.url) && request.rawBody.includes(prompt)
+        )),
+        15_000,
+        100,
+      );
+      if (!submitted) {
+        const screen = await execFileAsync('tmux', [
+          'capture-pane', '-p', '-t', `${sessionName}:0.0`, '-S', '-120',
+        ]).catch((error) => ({ stdout: String(error), stderr: '' }));
+        assert.fail([
+          'Claude provider auto-forward did not submit the prompt',
+          `messages requests: ${proxy.requests.filter((request) => /\/messages(?:\?|$)/u.test(request.url)).length}`,
+          `screen: ${screen.stdout.slice(-3_000)}`,
+        ].join('\n'));
+      }
+    } finally {
+      await execFileAsync('tmux', ['kill-session', '-t', sessionName]).catch(() => undefined);
+      await proxy.close().catch(() => undefined);
+      for (const [key, value] of previousEnv) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+      removeRuntimeTestDirectory(homeDir);
+      removeRuntimeTestDirectory(workDir);
+      removeRuntimeTestDirectory(tmuxTmpDir);
+    }
+  });
+
   it('runs and resumes the real Claude executable through tmux against a fake Anthropic backend', { timeout: 180_000 }, async (t: TestContext) => {
     const claudeExecutable = process.env.CODELARK_REAL_CLAUDE_E2E_EXECUTABLE || 'claude';
     if (!(await commandAvailable('tmux', ['-V']))) {
