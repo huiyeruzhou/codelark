@@ -1342,59 +1342,68 @@ async function recoverTmuxProviderAutoForwardFromSelectionCallback(
 ): Promise<{ ok: boolean; notice: string; attempted: boolean }> {
   const recovery = parseTmuxAutoForwardRecovery(claim.link);
   if (!recovery) return { ok: false, notice: '', attempted: false };
+  const runtime = claim.permissionRequestId.startsWith('claude-selection:') ? 'claude' : 'codex';
+  const runtimeName = runtime === 'claude' ? 'Claude' : 'Codex';
   if (claim.choice === 'not_selection') {
-    return { ok: true, notice: 'Codex TUI Selection 已记录为误判，未恢复 auto-forward 消息。', attempted: true };
+    return { ok: true, notice: `${runtimeName} TUI Selection 已记录为误判，未恢复 auto-forward 消息。`, attempted: true };
   }
 
   try {
     const sessionName = tmuxSessionNameFromTarget(recovery.target);
     let handledSelection = false;
     const ready = await waitForRuntimeTmuxReady({
-      runtime: 'codex',
+      runtime,
       sessionName,
       target: recovery.target,
       core: tmuxCore,
       onSelectionPrompt: (selectionPrompt) => {
-        if (selectionPrompt.runtime !== 'codex') return null;
+        if (selectionPrompt.runtime !== runtime) return null;
         handledSelection = true;
         return claim.choice;
       },
     });
+    if (runtime === 'claude' && claim.choice === 'no' && handledSelection) {
+      return {
+        ok: true,
+        attempted: true,
+        notice: '已按选择退出 Claude bypass-permissions 模式，未转发原始消息。',
+      };
+    }
     if (!ready.ready) {
-      const prompt = ready.selectionPrompt?.runtime === 'codex' ? ready.selectionPrompt : undefined;
+      const prompt = ready.selectionPrompt?.runtime === runtime ? ready.selectionPrompt : undefined;
       const reason = prompt
-        ? `Codex TUI 仍停在 ${prompt.kind} selection prompt`
-        : ready.lastError || 'Codex TUI 未在超时时间内进入可输入状态';
+        ? `${runtimeName} TUI 仍停在 ${prompt.kind} selection prompt`
+        : ready.lastError || `${runtimeName} TUI 未在超时时间内进入可输入状态`;
       return {
         ok: false,
         attempted: true,
         notice: handledSelection
-          ? `Codex TUI Selection 已发送到 tmux，但 ${reason}，未恢复 auto-forward 消息。`
-          : `Codex TUI Selection 已记录，但 ${reason}，未恢复 auto-forward 消息。`,
+          ? `${runtimeName} TUI Selection 已发送到 tmux，但 ${reason}，未恢复 auto-forward 消息。`
+          : `${runtimeName} TUI Selection 已记录，但 ${reason}，未恢复 auto-forward 消息。`,
       };
     }
     if (!handledSelection) {
       return {
         ok: false,
         attempted: true,
-        notice: `Codex TUI Selection 已记录，但 ${recovery.target} 当前屏幕没有可识别的 TUI 选择提示；未恢复 auto-forward 消息。`,
+        notice: `${runtimeName} TUI Selection 已记录，但 ${recovery.target} 当前屏幕没有可识别的 TUI 选择提示；未恢复 auto-forward 消息。`,
       };
     }
     await sendRuntimeTmuxInput({
-      runtime: 'codex',
+      runtime,
       sessionName,
       send: () => tmuxCore.sendActions(recovery.target, recovery.actions, {
         delayMs: 500,
         forcePasteLiterals: true,
       }),
     });
-    console.log('[bridge-manager] Recovered tmux provider auto-forward from Codex TUI selection callback:', {
+    console.log('[bridge-manager] Recovered tmux provider auto-forward from TUI selection callback:', {
       permission_request_id: claim.permissionRequestId,
       session_id: claim.link.sessionId,
       target: recovery.target,
       action_count: recovery.actions.length,
     });
-    return { ok: true, attempted: true, notice: 'Codex TUI Selection 已恢复，并已继续转发原始消息。' };
+    return { ok: true, attempted: true, notice: `${runtimeName} TUI Selection 已恢复，并已继续转发原始消息。` };
   } catch (error) {
     console.warn('[bridge-manager] Recovering tmux provider auto-forward failed:', {
       permission_request_id: claim.permissionRequestId,
@@ -1405,7 +1414,7 @@ async function recoverTmuxProviderAutoForwardFromSelectionCallback(
     return {
       ok: false,
       attempted: true,
-      notice: `Codex TUI Selection 已记录，但恢复 auto-forward 失败：${describeUnknownError(error)}`,
+      notice: `${runtimeName} TUI Selection 已记录，但恢复 auto-forward 失败：${describeUnknownError(error)}`,
     };
   }
 }
@@ -2899,6 +2908,7 @@ function isHighPriorityControlCommandText(rawText: string): boolean {
 function isHighPriorityControlCallback(callbackData: string): boolean {
   if (
     callbackData.startsWith('perm:')
+    || callbackData.startsWith('tui-selection-choice:')
     || callbackData.startsWith('codex-tui-selection-choice:')
     || callbackData.startsWith('codex-update-choice:')
     || callbackData.startsWith(TMUX_SCREEN_STOP_CALLBACK_PREFIX)

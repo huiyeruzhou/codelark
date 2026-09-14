@@ -13,8 +13,11 @@ import {
   sendTmuxActions,
   startClaudeTmuxSession,
 } from '../../../../bridge/tmux/runtime.js';
+import { requestRuntimeTuiSelectionViaPermissionBroker } from '../../../../bridge/command/codex-tui-selection.js';
+import { handlePermissionCallback } from '../../../../bridge/permission/broker.js';
 import { listClaudeSessionJsonlFiles } from '../../../../runtime/claude/session-jsonl.js';
 import type { ClaudeExecutable } from '../../../../runtime/options.js';
+import { initBridgeTestContext } from '../../../helpers/bridge/test-bridge-utils.js';
 import {
   commandAvailable,
   removeRuntimeTestDirectory,
@@ -57,7 +60,7 @@ function writeClaudeOnboardingState(homeDir: string): void {
 }
 
 describe('real Claude Code tmux provider e2e', () => {
-  it('submits provider auto-forward literal plus Enter into a freshly started real Claude TUI', { timeout: 120_000 }, async (t: TestContext) => {
+  it('continues provider auto-forward after accepting the Claude YOLO warning card', { timeout: 120_000 }, async (t: TestContext) => {
     const claudeExecutable = (process.env.CODELARK_REAL_CLAUDE_E2E_EXECUTABLE || 'claude') as ClaudeExecutable;
     if (!(await commandAvailable('tmux', ['-V']))) {
       t.skip('tmux is not available');
@@ -74,6 +77,32 @@ describe('real Claude Code tmux provider e2e', () => {
     const prompt = `CODELARK_CLAUDE_AUTO_FORWARD_${process.pid}_${Date.now()}`;
     const proxy = await startLocalResponsesProxy({ responseText: 'ok' });
     const sessionName = `claude_auto_forward_${process.pid}_${Date.now()}`;
+    const bridgeSessionId = `bridge-${sessionName}`;
+    const address = { channelType: 'feishu', chatId: `chat-${sessionName}` } as const;
+    const sent: any[] = [];
+    initBridgeTestContext();
+    const adapter: any = {
+      channelType: 'feishu',
+      send: async (message: any) => {
+        const messageId = `reply-${sent.length + 1}`;
+        sent.push({ ...message, messageId });
+        if (message.richCard?.title === 'Claude TUI Selection') {
+          assert.deepEqual(message.richCard.selects?.[0]?.options.map((option: any) => option.text), [
+            'No, exit',
+            'Yes, I accept',
+          ]);
+          assert.match(message.richCard.selects?.[0]?.selectedCallbackData || '', /:no$/u);
+          const callbackData = message.richCard.selects?.[0]?.options.find(
+            (option: { callbackData?: string }) => option.callbackData?.endsWith(':yes_proceed'),
+          )?.callbackData;
+          assert.ok(callbackData, 'Claude selection card should include the explicit acceptance callback');
+          setTimeout(() => {
+            assert.equal(handlePermissionCallback(callbackData, address.chatId, messageId), true);
+          }, 0);
+        }
+        return { ok: true, messageId };
+      },
+    };
     const previousEnv = new Map<string, string | undefined>();
     const env = {
       HOME: homeDir,
@@ -99,13 +128,27 @@ describe('real Claude Code tmux provider e2e', () => {
     try {
       const started = await startClaudeTmuxSession({
         sessionName,
-        bridgeSessionId: `bridge-${sessionName}`,
+        bridgeSessionId,
         workingDirectory: workDir,
         executable: claudeExecutable,
         permissionMode: 'bypassPermissions',
         waitReady: true,
+        onSelectionPrompt: (selectionPrompt) => requestRuntimeTuiSelectionViaPermissionBroker({
+          adapter,
+          msg: {
+            address,
+            text: prompt,
+            messageId: 'incoming-claude-yolo-card',
+            timestamp: Date.now(),
+          },
+          selectionPrompt,
+          sessionId: bridgeSessionId,
+          requestScope: 'real-claude-auto-forward',
+          reasonContext: 'before forwarding the original message',
+        }),
       });
       assert.equal(started.ready, true);
+      assert.equal(sent.filter((message) => message.richCard?.title === 'Claude TUI Selection').length, 1);
 
       await sendTmuxActions(`${sessionName}:0.0`, [
         { type: 'literal', text: prompt },

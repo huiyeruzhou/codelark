@@ -340,6 +340,13 @@ export async function handleProviderCommand(options: {
           reasoningEffort: claudeConfig.reasoningEffort,
           recreate: true,
           waitReady: true,
+          onSelectionPrompt: async (selectionPrompt) => {
+            if (selectionPrompt.runtime !== 'claude' || selectionPrompt.kind !== 'bypass_permissions') return undefined;
+            return options.deps.requestCodexTuiSelection?.(selectionPrompt, {
+              sessionId: session.id,
+              replyToMessageId: options.msg.messageId,
+            });
+          },
         });
       } catch (error) {
         const staleStart = await cancelStaleTmuxProviderStart({

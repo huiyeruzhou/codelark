@@ -34,9 +34,9 @@ export class CodexRoutingProvider implements LLMProvider {
     this.sdkProvider = new CodexProvider(pendingPerms);
     this.tmuxProvider = new CodexTmuxProvider(pendingPerms);
     this.ptyProvider = new CodexPtyProvider(pendingPerms);
-    this.claudePtyProvider = new ClaudePtyProvider();
+    this.claudePtyProvider = new ClaudePtyProvider(pendingPerms);
     this.claudeSdkProvider = new ClaudeSdkProvider();
-    this.claudeTmuxProvider = new ClaudeTmuxProvider();
+    this.claudeTmuxProvider = new ClaudeTmuxProvider(pendingPerms);
     this.kimiTmuxProvider = new KimiTmuxProvider();
     this.cursorTmuxProvider = new CursorTmuxProvider();
     this.zcodeTmuxProvider = new ZcodeTmuxProvider();

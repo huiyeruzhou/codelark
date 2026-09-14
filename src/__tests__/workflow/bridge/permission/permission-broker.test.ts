@@ -23,6 +23,46 @@ async function forwardPermissionRequest(
 }
 
 describe('permission-broker', () => {
+  it('renders a Claude bypass warning as an explicit accept-or-exit selection card', async () => {
+    initBridgeTestContext();
+    const adapter = new RecordingAdapter();
+    const address = { channelType: 'feishu', chatId: 'chat-claude-bypass-selection' } as const;
+
+    const permissionRequestId = 'claude-selection:bypass_permissions:pty:session-claude-bypass:1';
+    const selectedChoice = waitForCodexTuiSelectionPermission(permissionRequestId, 10_000);
+    await forwardPermissionRequest(
+      adapter,
+      address,
+      permissionRequestId,
+      'Claude TUI Selection Prompt',
+      {
+        runtime: 'claude',
+        provider: 'pty',
+        promptKind: 'bypass_permissions',
+        defaultChoice: 'no',
+        choices: [
+          { choice: 'no', label: 'No, exit', selected: true },
+          { choice: 'yes_proceed', label: 'Yes, I accept', selected: false },
+        ],
+      },
+      'session-claude-bypass',
+    );
+
+    assert.equal(adapter.sent.length, 1);
+    const card = adapter.sent[0]?.richCard;
+    assert.equal(card?.title, 'Claude TUI Selection');
+    assert.deepEqual(card?.selects?.[0]?.options.map((option) => option.text), [
+      'No, exit',
+      'Yes, I accept',
+    ]);
+    assert.match(card?.selects?.[0]?.selectedCallbackData || '', /^tui-selection-choice:.*:no$/u);
+    assert.equal(adapter.sent[0]?.inlineButtons, undefined);
+    const acceptCallback = card?.selects?.[0]?.options.find((option) => option.text === 'Yes, I accept')?.callbackData;
+    assert.match(acceptCallback || '', /^tui-selection-choice:/u);
+    assert.equal(handlePermissionCallback(acceptCallback!, address.chatId, 'reply-1'), true);
+    assert.equal(await selectedChoice, 'yes_proceed');
+  });
+
   it('cancels an outstanding Codex selection waiter when clear replaces its session', async () => {
     initBridgeTestContext();
     const adapter = new RecordingAdapter();

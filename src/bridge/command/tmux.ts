@@ -569,7 +569,11 @@ function formatRuntimeTmuxSelectionPrompt(selectionPrompt: RuntimeTmuxSelectionP
       : '需要用户选择';
     return `Codex ${selectionPrompt.kind} selection prompt（${action}）`;
   }
-  const action = selectionPrompt.kind === 'onboarding' ? '默认动作：Enter' : '自动选择肯定项并确认';
+  const action = selectionPrompt.kind === 'onboarding'
+    ? '默认动作：Enter'
+    : selectionPrompt.kind === 'bypass_permissions'
+      ? '等待用户选择是否接受风险'
+      : '自动选择肯定项并确认';
   return `Claude ${selectionPrompt.kind} prompt（${action}）`;
 }
 
@@ -666,6 +670,15 @@ async function ensureRuntimeTmuxSessionForProvider(
           runtime: 'claude',
           sessionName: target,
           target: `${target}:0.0`,
+          onSelectionPrompt: async (selectionPrompt) => {
+            if (selectionPrompt.runtime !== 'claude' || selectionPrompt.kind !== 'bypass_permissions') return undefined;
+            return params.requestCodexTuiSelection?.(selectionPrompt, {
+              sessionId: session.id,
+              ...(params.tmuxProviderAutoForward === true && params.pendingAutoForwardActions
+                ? { autoForwardRecovery: { target, actions: params.pendingAutoForwardActions } }
+                : {}),
+            });
+          },
         });
         if (!readiness.ready) {
           return {
@@ -705,6 +718,15 @@ async function ensureRuntimeTmuxSessionForProvider(
       reasoningEffort: claudeConfig.reasoningEffort,
       recreate: true,
       waitReady: true,
+      onSelectionPrompt: async (selectionPrompt) => {
+        if (selectionPrompt.runtime !== 'claude' || selectionPrompt.kind !== 'bypass_permissions') return undefined;
+        return params.requestCodexTuiSelection?.(selectionPrompt, {
+          sessionId: session.id,
+          ...(params.tmuxProviderAutoForward === true && params.pendingAutoForwardActions
+            ? { autoForwardRecovery: { target, actions: params.pendingAutoForwardActions } }
+            : {}),
+        });
+      },
     });
     if (!started.ready) {
       const readiness = started.runtime === 'claude' ? started.readiness : undefined;

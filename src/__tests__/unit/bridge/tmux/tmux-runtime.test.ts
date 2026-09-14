@@ -1069,7 +1069,48 @@ describe('codex tmux runtime', () => {
     }
   });
 
-  it('accepts the Claude bypass-permissions warning after workspace trust', async () => {
+  it('does not accept the Claude bypass-permissions warning without a user selection handler', async () => {
+    const oldTimeout = process.env.CODELARK_CLAUDE_TMUX_READY_TIMEOUT_MS;
+    const oldPoll = process.env.CODELARK_CLAUDE_TMUX_READY_POLL_MS;
+    try {
+      process.env.CODELARK_CLAUDE_TMUX_READY_TIMEOUT_MS = '100';
+      process.env.CODELARK_CLAUDE_TMUX_READY_POLL_MS = '25';
+      const sentActions: TmuxSendAction[][] = [];
+      const warningScreen = [
+        'WARNING: Claude Code running in Bypass Permissions mode',
+        '',
+        '❯ 1. No, exit',
+        '  2. Yes, I accept',
+        '',
+        'Enter to confirm · Esc to cancel',
+      ].join('\n');
+      const core = {
+        capturePane: async () => ({ command: 'capture', screen: warningScreen }),
+        sendActions: async (_target: string, actions: TmuxSendAction[]) => {
+          sentActions.push(actions);
+          return { commands: [] };
+        },
+      } as Pick<TmuxCore, 'capturePane' | 'sendActions'>;
+
+      const result = await waitForRuntimeTmuxReady({
+        runtime: 'claude',
+        sessionName: 'claude_bypass_no_handler',
+        core: core as TmuxCore,
+        afterSelectionDelayMs: 0,
+      });
+
+      assert.equal(result.ready, false);
+      assert.equal(result.selectionPrompt?.kind, 'bypass_permissions');
+      assert.deepEqual(sentActions, []);
+    } finally {
+      if (oldTimeout === undefined) delete process.env.CODELARK_CLAUDE_TMUX_READY_TIMEOUT_MS;
+      else process.env.CODELARK_CLAUDE_TMUX_READY_TIMEOUT_MS = oldTimeout;
+      if (oldPoll === undefined) delete process.env.CODELARK_CLAUDE_TMUX_READY_POLL_MS;
+      else process.env.CODELARK_CLAUDE_TMUX_READY_POLL_MS = oldPoll;
+    }
+  });
+
+  it('accepts the Claude bypass-permissions warning only after the user selects acceptance', async () => {
     const oldTimeout = process.env.CODELARK_CLAUDE_TMUX_READY_TIMEOUT_MS;
     const oldPoll = process.env.CODELARK_CLAUDE_TMUX_READY_POLL_MS;
     try {
@@ -1114,7 +1155,9 @@ describe('codex tmux runtime', () => {
         core,
         afterSelectionDelayMs: 0,
         onSelectionPrompt: (selectionPrompt) => {
+          assert.deepEqual(sentActions, []);
           promptKinds.push(selectionPrompt.kind);
+          return 'yes_proceed';
         },
       });
 
@@ -1124,6 +1167,59 @@ describe('codex tmux runtime', () => {
         { type: 'key', key: 'Down' },
         { type: 'key', key: 'Enter' },
       ]]);
+    } finally {
+      if (oldTimeout === undefined) delete process.env.CODELARK_CLAUDE_TMUX_READY_TIMEOUT_MS;
+      else process.env.CODELARK_CLAUDE_TMUX_READY_TIMEOUT_MS = oldTimeout;
+      if (oldPoll === undefined) delete process.env.CODELARK_CLAUDE_TMUX_READY_POLL_MS;
+      else process.env.CODELARK_CLAUDE_TMUX_READY_POLL_MS = oldPoll;
+    }
+  });
+
+  it('keeps the safe default when the user selects exit on the Claude bypass warning', async () => {
+    const oldTimeout = process.env.CODELARK_CLAUDE_TMUX_READY_TIMEOUT_MS;
+    const oldPoll = process.env.CODELARK_CLAUDE_TMUX_READY_POLL_MS;
+    try {
+      process.env.CODELARK_CLAUDE_TMUX_READY_TIMEOUT_MS = '200';
+      process.env.CODELARK_CLAUDE_TMUX_READY_POLL_MS = '25';
+      let sessionExists = true;
+      const sentActions: TmuxSendAction[][] = [];
+      const warningScreen = [
+        'WARNING: Claude Code running in Bypass Permissions mode',
+        '',
+        '❯ 1. No, exit',
+        '  2. Yes, I accept',
+        '',
+        'Enter to confirm · Esc to cancel',
+      ].join('\n');
+      const core: TmuxCore = {
+        commandPreview: (args) => ['tmux', ...args].join(' '),
+        hasSession: async (name) => ({ exists: sessionExists, command: `tmux has-session -t ${name}` }),
+        killSession: async (name) => `tmux kill-session -t ${name}`,
+        listSessions: async () => ({ sessions: [], command: 'tmux list-sessions' }),
+        ensureDetachedSession: async () => ({ existed: false, commands: [] }),
+        capturePane: async () => {
+          if (!sessionExists) throw new Error("can't find pane: claude_bypass_exit");
+          return { command: 'capture', screen: warningScreen };
+        },
+        sendActions: async (_target, actions) => {
+          sentActions.push(actions);
+          sessionExists = false;
+          return { commands: actions.map((action) => `tmux send-keys ${action.type === 'key' ? action.key : action.text}`) };
+        },
+        sendInterrupt: async () => '',
+        injectPromptIntoPane: async () => ({ commands: [] }),
+      };
+
+      const result = await waitForRuntimeTmuxReady({
+        runtime: 'claude',
+        sessionName: 'claude_bypass_exit',
+        core,
+        afterSelectionDelayMs: 0,
+        onSelectionPrompt: () => 'no',
+      });
+
+      assert.equal(result.ready, false);
+      assert.deepEqual(sentActions, [[{ type: 'key', key: 'Enter' }]]);
     } finally {
       if (oldTimeout === undefined) delete process.env.CODELARK_CLAUDE_TMUX_READY_TIMEOUT_MS;
       else process.env.CODELARK_CLAUDE_TMUX_READY_TIMEOUT_MS = oldTimeout;

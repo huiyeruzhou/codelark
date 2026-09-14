@@ -18,7 +18,7 @@ import {
 } from '../../runtime/codex/tmux-provider.js';
 import { resolveCodexCliExecutable } from '../../runtime/codex/cli-executable.js';
 import {
-  buildClaudeBypassPermissionsPromptKeys,
+  buildClaudeBypassPermissionsChoiceKeys,
   buildClaudePtyCommand,
   buildClaudePtyEnv,
   buildClaudeTrustPromptKeys,
@@ -27,6 +27,7 @@ import {
   hasClaudePtyOnboardingPrompt,
   hasClaudePtyTrustPrompt,
 } from '../../runtime/claude/pty-provider.js';
+import type { ClaudeBypassPermissionsChoice } from '../../runtime/claude/pty-provider.js';
 import { prepareClaudeCodeRouterEnv } from '../../runtime/claude/code-router.js';
 import {
   buildShellSnapshotLaunchArgs,
@@ -68,7 +69,7 @@ export interface StartCodexResumeTmuxSessionParams {
   permissionMode?: string;
   onSelectionPrompt?: (
     selectionPrompt: RuntimeTmuxSelectionPrompt,
-  ) => CodexTuiSelectionPromptChoice | null | void | Promise<CodexTuiSelectionPromptChoice | null | void>;
+  ) => RuntimeTmuxSelectionChoice | null | void | Promise<RuntimeTmuxSelectionChoice | null | void>;
   onStatus?: (message: string, options?: { force?: boolean }) => Promise<void> | void;
 }
 
@@ -85,6 +86,7 @@ export interface StartCodexResumeTmuxSessionResult {
 }
 
 export type RuntimeTmuxKind = 'codex' | 'claude' | 'kimi' | 'cursor' | 'zcode';
+export type RuntimeTmuxSelectionChoice = CodexTuiSelectionPromptChoice | ClaudeBypassPermissionsChoice | 'confirm';
 
 export interface RuntimeTmuxPaneDead {
   status?: number;
@@ -102,7 +104,7 @@ export type RuntimeTmuxSelectionPrompt =
   | {
       runtime: 'claude';
       kind: 'onboarding' | 'trust' | 'bypass_permissions';
-      defaultChoice: 'confirm';
+      defaultChoice: 'confirm' | 'no';
       summary: string;
     };
 
@@ -246,6 +248,9 @@ export interface StartClaudeTmuxSessionParams {
   core?: TmuxCore;
   recreate?: boolean;
   waitReady?: boolean;
+  onSelectionPrompt?: (
+    selectionPrompt: RuntimeTmuxSelectionPrompt,
+  ) => RuntimeTmuxSelectionChoice | null | void | Promise<RuntimeTmuxSelectionChoice | null | void>;
 }
 
 export interface StartClaudeTmuxSessionResult {
@@ -385,10 +390,14 @@ function summarizeClaudeSelection(kind: 'onboarding' | 'trust' | 'bypass_permiss
 function buildClaudeSelectionActions(
   prompt: Extract<RuntimeTmuxSelectionPrompt, { runtime: 'claude' }>,
   screen: string,
+  choice: RuntimeTmuxSelectionChoice = prompt.defaultChoice,
 ): TmuxSendAction[] | null {
   if (prompt.kind === 'onboarding') return [{ type: 'key', key: 'Enter' }];
   const keys = prompt.kind === 'bypass_permissions'
-    ? buildClaudeBypassPermissionsPromptKeys(screen)
+    ? buildClaudeBypassPermissionsChoiceKeys(
+        screen,
+        choice === 'yes_proceed' ? 'yes_proceed' : 'no',
+      )
     : buildClaudeTrustPromptKeys(screen);
   return keys?.map((key) => ({ type: 'key' as const, key })) || null;
 }
@@ -421,7 +430,7 @@ function detectRuntimeTmuxSelectionPrompt(
     return {
       runtime: 'claude',
       kind: 'bypass_permissions',
-      defaultChoice: 'confirm',
+      defaultChoice: 'no',
       summary: summarizeClaudeSelection('bypass_permissions'),
     };
   }
@@ -639,7 +648,7 @@ export async function waitForRuntimeTmuxReady(params: {
   afterSelectionDelayMs?: number;
   onSelectionPrompt?: (
     selectionPrompt: RuntimeTmuxSelectionPrompt,
-  ) => CodexTuiSelectionPromptChoice | null | void | Promise<CodexTuiSelectionPromptChoice | null | void>;
+  ) => RuntimeTmuxSelectionChoice | null | void | Promise<RuntimeTmuxSelectionChoice | null | void>;
   onStateTransition?: (transition: RuntimeTmuxReadinessTransition) => void;
 }): Promise<RuntimeTmuxReadinessResult> {
   const core = params.core || tmuxCore;
@@ -669,6 +678,7 @@ export async function waitForRuntimeTmuxReady(params: {
   let selectionPrompt: RuntimeTmuxSelectionPrompt | undefined;
   const handledSelectionFingerprints = new Set<string>();
   const lastSelectionActionAt = new Map<string, number>();
+  const resolvedClaudeSelectionChoices = new Map<string, RuntimeTmuxSelectionChoice>();
   let selectionActionsSent = false;
   let readyObservedAfterSelection = false;
   const selectionActionRetryMs = 250;
@@ -710,6 +720,9 @@ export async function waitForRuntimeTmuxReady(params: {
         if (
           params.autoResolveSelection === false
           || (selectionPrompt.runtime === 'codex' && typeof params.onSelectionPrompt !== 'function')
+          || (selectionPrompt.runtime === 'claude'
+            && selectionPrompt.kind === 'bypass_permissions'
+            && typeof params.onSelectionPrompt !== 'function')
           || (selectionPrompt.defaultChoice === null && typeof params.onSelectionPrompt !== 'function')
         ) {
           transitionRuntimeTmuxReadiness(machine, 'suspended', 'selection prompt requires external resolution', {
@@ -737,7 +750,11 @@ export async function waitForRuntimeTmuxReady(params: {
           && previousSelectionActionAt !== undefined
           && Date.now() - previousSelectionActionAt >= selectionActionRetryMs
         ) {
-          const retryActions = buildClaudeSelectionActions(activeSelectionPrompt, capture.screen);
+          const retryActions = buildClaudeSelectionActions(
+            activeSelectionPrompt,
+            capture.screen,
+            resolvedClaudeSelectionChoices.get(fingerprint),
+          );
           if (!retryActions) {
             transitionRuntimeTmuxReadiness(machine, 'suspended', 'Claude trust selection could not be identified safely', {
               prompt_runtime: activeSelectionPrompt.runtime,
@@ -781,11 +798,11 @@ export async function waitForRuntimeTmuxReady(params: {
               const selectionWaitStartedAt = Date.now();
               const requestedChoice = await params.onSelectionPrompt?.(activeSelectionPrompt);
               const selectionWaitMs = Math.max(0, Date.now() - selectionWaitStartedAt);
-              let resolvedChoice: CodexTuiSelectionPromptChoice | 'confirm' | null = null;
+              let resolvedChoice: RuntimeTmuxSelectionChoice | null = null;
               let actions: TmuxSendAction[] = [];
               let sentCommands: string[] = [];
               if (activeSelectionPrompt.runtime === 'codex') {
-                resolvedChoice = requestedChoice || null;
+                resolvedChoice = requestedChoice as CodexTuiSelectionPromptChoice || null;
                 if (!resolvedChoice) {
                   transitionRuntimeTmuxReadiness(machine, 'suspended', 'selection resolver returned no choice', {
                     prompt_runtime: activeSelectionPrompt.runtime,
@@ -793,9 +810,24 @@ export async function waitForRuntimeTmuxReady(params: {
                   });
                   return { choice: null, commands: [] };
                 }
-                actions = buildCodexTuiSelectionChoiceActions(activeSelectionPrompt.prompt, resolvedChoice);
+                actions = buildCodexTuiSelectionChoiceActions(
+                  activeSelectionPrompt.prompt,
+                  resolvedChoice as CodexTuiSelectionPromptChoice,
+                );
               } else {
-                actions = buildClaudeSelectionActions(activeSelectionPrompt, capture.screen) || [];
+                if (activeSelectionPrompt.kind === 'bypass_permissions'
+                  && requestedChoice !== 'yes_proceed'
+                  && requestedChoice !== 'no') {
+                  transitionRuntimeTmuxReadiness(machine, 'suspended', 'Claude bypass-permissions selection requires an explicit user choice', {
+                    prompt_runtime: activeSelectionPrompt.runtime,
+                    prompt_kind: activeSelectionPrompt.kind,
+                  });
+                  return { choice: null, commands: [] };
+                }
+                resolvedChoice = activeSelectionPrompt.kind === 'bypass_permissions'
+                  ? requestedChoice as ClaudeBypassPermissionsChoice
+                  : 'confirm';
+                actions = buildClaudeSelectionActions(activeSelectionPrompt, capture.screen, resolvedChoice) || [];
                 if (actions.length === 0) {
                   transitionRuntimeTmuxReadiness(machine, 'suspended', 'Claude trust selection could not be identified safely', {
                     prompt_runtime: activeSelectionPrompt.runtime,
@@ -803,7 +835,7 @@ export async function waitForRuntimeTmuxReady(params: {
                   });
                   return { choice: null, commands: [] };
                 }
-                resolvedChoice = 'confirm';
+                resolvedClaudeSelectionChoices.set(fingerprint, resolvedChoice);
               }
               if (!params.onSelectionPrompt) {
                 console.warn('[tmux-runtime] Runtime tmux selection prompt has no IM handler; falling back to default choice:', {
@@ -1025,7 +1057,7 @@ export async function waitForCodexResumeTmuxReady(
   options: {
     onSelectionPrompt?: (
       selectionPrompt: RuntimeTmuxSelectionPrompt,
-    ) => CodexTuiSelectionPromptChoice | null | void | Promise<CodexTuiSelectionPromptChoice | null | void>;
+    ) => RuntimeTmuxSelectionChoice | null | void | Promise<RuntimeTmuxSelectionChoice | null | void>;
     autoResolveSelection?: boolean;
     afterSelectionDelayMs?: number;
     onStateTransition?: (transition: RuntimeTmuxReadinessTransition) => void;
@@ -1303,6 +1335,7 @@ export async function startClaudeTmuxSession(
       runtime: 'claude',
       sessionName: params.sessionName,
       core,
+      onSelectionPrompt: params.onSelectionPrompt,
     })
     : null;
   if (readiness && !readiness.ready) {

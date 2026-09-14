@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import type { ClaudeExecutable } from '../options.js';
+import type { PendingPermissions } from '../permission-gateway.js';
 import { buildStandardLarkCliEnv } from '../../shared/lark-cli-env.js';
 import type { LLMProvider, StreamChatParams } from '../contracts.js';
 import { sseEvent } from '../sse.js';
@@ -107,6 +108,7 @@ export function hasClaudePtyTrustPrompt(text: string): boolean {
 }
 
 export type ClaudeTrustPromptKey = 'Up' | 'Down' | 'Enter';
+export type ClaudeBypassPermissionsChoice = 'yes_proceed' | 'no';
 
 function buildClaudeAffirmativePromptKeys(
   text: string,
@@ -147,11 +149,56 @@ export function hasClaudePtyBypassPermissionsPrompt(text: string): boolean {
 }
 
 export function buildClaudeBypassPermissionsPromptKeys(text: string): ClaudeTrustPromptKey[] | null {
+  return buildClaudeBypassPermissionsChoiceKeys(text, 'yes_proceed');
+}
+
+export function buildClaudeBypassPermissionsChoiceKeys(
+  text: string,
+  choice: ClaudeBypassPermissionsChoice,
+): ClaudeTrustPromptKey[] | null {
   return buildClaudeAffirmativePromptKeys(
     text,
     /no,?\s+exit!?|yes,?\s+i accept/i,
-    /yes,?\s+i accept/i,
+    choice === 'yes_proceed' ? /yes,?\s+i accept/i : /no,?\s+exit!?/i,
   );
+}
+
+export async function requestClaudeBypassPermissionsConfirmation(params: {
+  controller: ReadableStreamDefaultController<string>;
+  pendingPerms?: PendingPermissions;
+  provider: 'tmux' | 'pty';
+  bridgeSessionId: string;
+  screenCommand: string;
+}): Promise<ClaudeBypassPermissionsChoice> {
+  const permissionRequestId = `claude-selection:bypass_permissions:${params.provider}:${params.bridgeSessionId}:${Date.now()}`;
+  params.controller.enqueue(sseEvent('permission_request', {
+    permissionRequestId,
+    toolName: 'Claude TUI Selection Prompt',
+    toolInput: {
+      runtime: 'claude',
+      provider: params.provider,
+      reason: 'Claude Code is asking whether to enter bypass-permissions mode.',
+      inspect: params.screenCommand,
+      promptKind: 'bypass_permissions',
+      defaultChoice: 'no',
+      choices: [
+        { choice: 'no', label: 'No, exit', selected: true },
+        { choice: 'yes_proceed', label: 'Yes, I accept', selected: false },
+      ],
+    },
+    suggestions: [],
+  }));
+  if (!params.pendingPerms) {
+    throw new Error('Claude Code bypass-permissions warning requires an explicit user choice, but no permission channel is available.');
+  }
+  const resolution = await params.pendingPerms.waitFor(permissionRequestId);
+  if (resolution.behavior !== 'allow') {
+    throw new Error(resolution.message || 'Claude Code bypass-permissions choice was not confirmed.');
+  }
+  if (resolution.message === 'yes_proceed' || resolution.message === 'no') {
+    return resolution.message;
+  }
+  throw new Error('Claude Code bypass-permissions response did not contain a valid explicit choice.');
 }
 
 export function hasClaudePtyOnboardingPrompt(text: string): boolean {
@@ -325,7 +372,14 @@ export async function waitForClaudeSessionJsonlUpdatedAfter(
   return null;
 }
 
-async function prepareClaudePtyForPrompt(session: ClaudePtySession): Promise<void> {
+async function prepareClaudePtyForPrompt(
+  session: ClaudePtySession,
+  options?: {
+    controller: ReadableStreamDefaultController<string>;
+    pendingPerms?: PendingPermissions;
+    bridgeSessionId: string;
+  },
+): Promise<void> {
   const trustPromptTimeoutMs = parsePositiveIntEnv(
     'CODELARK_CLAUDE_PTY_TRUST_PROMPT_TIMEOUT_MS',
     DEFAULT_TRUST_PROMPT_TIMEOUT_MS,
@@ -367,14 +421,27 @@ async function prepareClaudePtyForPrompt(session: ClaudePtySession): Promise<voi
       continue;
     }
     if (hasClaudePtyBypassPermissionsPrompt(session.buffer)) {
-      const bypassKeys = buildClaudeBypassPermissionsPromptKeys(session.buffer);
-      if (!bypassKeys) {
-        throw new Error('Claude Code bypass-permissions warning was detected, but the affirmative choice could not be identified safely.');
+      if (!options) {
+        throw new Error('Claude Code bypass-permissions warning requires an explicit user choice before prompt injection.');
       }
-      console.log('[claude-pty] Claude Code bypass-permissions warning detected; selecting acceptance before prompt injection');
+      const choice = await requestClaudeBypassPermissionsConfirmation({
+        controller: options.controller,
+        pendingPerms: options.pendingPerms,
+        provider: 'pty',
+        bridgeSessionId: options.bridgeSessionId,
+        screenCommand: '/pty-screen 80',
+      });
+      const bypassKeys = buildClaudeBypassPermissionsChoiceKeys(session.buffer, choice);
+      if (!bypassKeys) {
+        throw new Error('Claude Code bypass-permissions warning was detected, but the selected choice could not be identified safely.');
+      }
+      console.log('[claude-pty] Claude Code bypass-permissions warning resolved by user before prompt injection', { choice });
       session.buffer = '';
       for (const key of bypassKeys) {
         session.child.write(key === 'Up' ? '\x1b[A' : key === 'Down' ? '\x1b[B' : '\r');
+      }
+      if (choice === 'no') {
+        throw new Error('用户选择退出 Claude Code bypass-permissions 模式，未发送消息。');
       }
       if (afterTrustDelayMs > 0) await sleep(afterTrustDelayMs);
       continue;
@@ -562,7 +629,7 @@ async function waitForQuietScreen(session: ClaudePtySession): Promise<string> {
   return tailScreen(session.buffer);
 }
 
-export function streamClaudePtyTui(params: StreamChatParams): ReadableStream<string> {
+export function streamClaudePtyTui(params: StreamChatParams, pendingPerms?: PendingPermissions): ReadableStream<string> {
   return new ReadableStream<string>({
     start(controller) {
       (async () => {
@@ -574,7 +641,11 @@ export function streamClaudePtyTui(params: StreamChatParams): ReadableStream<str
         try {
           session = await getOrCreateSession(params, controller);
           params.abortController?.signal.addEventListener('abort', abortListener, { once: true });
-          await prepareClaudePtyForPrompt(session);
+          await prepareClaudePtyForPrompt(session, {
+            controller,
+            pendingPerms,
+            bridgeSessionId: params.sessionId,
+          });
           const promptDelayMs = parsePositiveIntEnv('CODELARK_CLAUDE_PTY_PROMPT_DELAY_MS', DEFAULT_PROMPT_DELAY_MS, 0);
           if (promptDelayMs > 0) await sleep(promptDelayMs);
           const promptStartedAtMs = Date.now();
@@ -630,8 +701,10 @@ export function streamClaudePtyTui(params: StreamChatParams): ReadableStream<str
 }
 
 export class ClaudePtyProvider implements LLMProvider {
+  constructor(private readonly pendingPerms?: PendingPermissions) {}
+
   streamChat(params: StreamChatParams): ReadableStream<string> {
-    return streamClaudePtyTui(params);
+    return streamClaudePtyTui(params, this.pendingPerms);
   }
 }
 

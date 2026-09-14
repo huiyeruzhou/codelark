@@ -7,9 +7,11 @@ import { prepareClaudeCodeRouterEnv } from './code-router.js';
 import {
   findLatestClaudeSessionJsonlUpdatedAfter,
   parsePositiveIntEnv,
+  requestClaudeBypassPermissionsConfirmation,
   sleep,
   waitForClaudeSessionJsonlUpdatedAfter,
 } from './pty-provider.js';
+import type { PendingPermissions } from '../permission-gateway.js';
 import {
   listClaudeSessionJsonlFiles,
   readClaudeSessionMirrorRecordDeltaByFilePath,
@@ -82,7 +84,13 @@ function snapshotClaudeSessionFiles(cwd: string): SessionFileSnapshot {
   return snapshot;
 }
 
-async function prepareClaudeTmuxForPrompt(sessionName: string, targetPane: string, controller: ReadableStreamDefaultController<string>): Promise<void> {
+async function prepareClaudeTmuxForPrompt(
+  sessionName: string,
+  targetPane: string,
+  controller: ReadableStreamDefaultController<string>,
+  pendingPerms?: PendingPermissions,
+  bridgeSessionId = sessionName,
+): Promise<void> {
   const afterSetupDelayMs = parsePositiveIntEnv(
     'CODELARK_CLAUDE_TMUX_AFTER_SETUP_DELAY_MS',
     DEFAULT_CLAUDE_TMUX_AFTER_SETUP_DELAY_MS,
@@ -93,14 +101,22 @@ async function prepareClaudeTmuxForPrompt(sessionName: string, targetPane: strin
     sessionName,
     target: targetPane,
     afterSelectionDelayMs: afterSetupDelayMs,
-    onSelectionPrompt: (selectionPrompt) => {
+    onSelectionPrompt: async (selectionPrompt) => {
       controller.enqueue(sseEvent('status', {
         reasoning: selectionPrompt.kind === 'trust'
           ? 'Claude tmux 检测到工作目录信任提示，正在选择信任并继续。'
           : selectionPrompt.kind === 'bypass_permissions'
-            ? 'Claude tmux 检测到 YOLO 风险确认提示，正在选择接受并继续。'
+            ? 'Claude tmux 检测到 YOLO 风险确认提示，正在等待用户选择。'
           : `Claude tmux 检测到 ${selectionPrompt.kind} 提示，正在发送 Enter 继续。`,
       }));
+      if (selectionPrompt.kind !== 'bypass_permissions') return undefined;
+      return requestClaudeBypassPermissionsConfirmation({
+        controller,
+        pendingPerms,
+        provider: 'tmux',
+        bridgeSessionId,
+        screenCommand: '/tmux-screen 80',
+      });
     },
   });
   if (!readiness.ready) {
@@ -279,7 +295,7 @@ export async function injectPromptIntoClaudeTmuxSession(sessionName: string, pro
   await tmuxCore.injectPromptIntoPane(targetPane, prompt);
 }
 
-export function streamClaudeTmuxTui(params: StreamChatParams): ReadableStream<string> {
+export function streamClaudeTmuxTui(params: StreamChatParams, pendingPerms?: PendingPermissions): ReadableStream<string> {
   return new ReadableStream<string>({
     start(controller) {
       (async () => {
@@ -331,7 +347,7 @@ export function streamClaudeTmuxTui(params: StreamChatParams): ReadableStream<st
           }
           const promptDelayMs = parsePositiveIntEnv('CODELARK_CLAUDE_TMUX_PROMPT_DELAY_MS', DEFAULT_CLAUDE_TMUX_PROMPT_DELAY_MS, 0);
           if (promptDelayMs > 0) await sleep(promptDelayMs);
-          await prepareClaudeTmuxForPrompt(sessionName, targetPane, controller);
+          await prepareClaudeTmuxForPrompt(sessionName, targetPane, controller, pendingPerms, params.sessionId);
           controller.enqueue(sseEvent('status', { reasoning: '正在把本次消息发送到 Claude tmux。' }));
           await sendRuntimeTmuxInput({
             runtime: 'claude',
@@ -381,8 +397,10 @@ export function streamClaudeTmuxTui(params: StreamChatParams): ReadableStream<st
 }
 
 export class ClaudeTmuxProvider implements LLMProvider {
+  constructor(private readonly pendingPerms?: PendingPermissions) {}
+
   streamChat(params: StreamChatParams): ReadableStream<string> {
-    return streamClaudeTmuxTui(params);
+    return streamClaudeTmuxTui(params, this.pendingPerms);
   }
 }
 

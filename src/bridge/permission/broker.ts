@@ -31,8 +31,10 @@ type PermissionUpdate = Record<string, unknown>;
 const CODEX_TRUST_TOOL_NAME = 'Codex Trust Directory';
 const CODEX_UPDATE_TOOL_NAME = 'Codex Update Prompt';
 const CODEX_SELECTION_TOOL_NAME = 'Codex TUI Selection Prompt';
+const CLAUDE_SELECTION_TOOL_NAME = 'Claude TUI Selection Prompt';
 const CODEX_UPDATE_CALLBACK_PREFIX = 'codex-update-choice:';
 const CODEX_SELECTION_CALLBACK_PREFIX = 'codex-tui-selection-choice:';
+const TUI_SELECTION_CALLBACK_PREFIX = 'tui-selection-choice:';
 
 export type CodexSelectionChoice =
   | 'update_now'
@@ -83,8 +85,11 @@ function isCodexUpdatePermission(permissionRequestId: string, toolName: string):
   return toolName === CODEX_UPDATE_TOOL_NAME || permissionRequestId.startsWith('codex-update:');
 }
 
-function isCodexSelectionPermission(permissionRequestId: string, toolName: string): boolean {
-  return toolName === CODEX_SELECTION_TOOL_NAME || permissionRequestId.startsWith('codex-selection:');
+function isTuiSelectionPermission(permissionRequestId: string, toolName: string): boolean {
+  return toolName === CODEX_SELECTION_TOOL_NAME
+    || toolName === CLAUDE_SELECTION_TOOL_NAME
+    || permissionRequestId.startsWith('codex-selection:')
+    || permissionRequestId.startsWith('claude-selection:');
 }
 
 function formatCodexTrustSummary(toolInput: Record<string, unknown>): string {
@@ -142,8 +147,11 @@ function codexSelectionChoiceLabel(choice: CodexSelectionChoice): string {
   }
 }
 
-function buildCodexSelectionChoiceCallbackData(permissionRequestId: string, choice: CodexSelectionChoice): string {
-  return `${CODEX_SELECTION_CALLBACK_PREFIX}${encodeURIComponent(permissionRequestId)}:${choice}`;
+function buildTuiSelectionChoiceCallbackData(permissionRequestId: string, choice: CodexSelectionChoice): string {
+  const prefix = permissionRequestId.startsWith('claude-selection:')
+    ? TUI_SELECTION_CALLBACK_PREFIX
+    : CODEX_SELECTION_CALLBACK_PREFIX;
+  return `${prefix}${encodeURIComponent(permissionRequestId)}:${choice}`;
 }
 
 function codexSelectionActiveKey(
@@ -243,6 +251,8 @@ export function parseCodexSelectionChoiceCallbackData(callbackData: string): {
 } | null | undefined {
   const prefix = callbackData.startsWith(CODEX_SELECTION_CALLBACK_PREFIX)
     ? CODEX_SELECTION_CALLBACK_PREFIX
+    : callbackData.startsWith(TUI_SELECTION_CALLBACK_PREFIX)
+      ? TUI_SELECTION_CALLBACK_PREFIX
     : callbackData.startsWith(CODEX_UPDATE_CALLBACK_PREFIX)
       ? CODEX_UPDATE_CALLBACK_PREFIX
       : '';
@@ -323,17 +333,20 @@ function buildCodexSelectionPromptCard(
   fallbackKind: 'update' | 'permission' | 'goal' | 'generic',
 ): OutboundRichCard {
   const choices = extractCodexSelectionChoices(toolInput, fallbackKind);
+  const runtimeName = toolInput.runtime === 'claude' ? 'Claude' : 'Codex';
   const defaultChoice = typeof toolInput.defaultChoice === 'string'
     && choices.includes(toolInput.defaultChoice as CodexSelectionChoice)
     ? toolInput.defaultChoice as CodexSelectionChoice
     : choices[0];
   return {
-    title: 'Codex TUI Selection',
+    title: `${runtimeName} TUI Selection`,
     template: 'yellow',
     sections: [
       {
         markdown: [
-          'Codex tmux 可能停在 TUI 选择界面，请选择要执行的选项。',
+          runtimeName === 'Codex'
+            ? 'Codex tmux 可能停在 TUI 选择界面，请选择要执行的选项。'
+            : 'Claude TUI 正在等待风险确认，请选择是否进入 bypass-permissions 模式。',
           '可以用 `/tmux-screen 20`核实。',
           '',
           summary,
@@ -342,12 +355,12 @@ function buildCodexSelectionPromptCard(
     ],
     selects: [
       {
-        id: 'clk_codex_tui_selection',
-        placeholder: '选择 Codex TUI 操作',
-        selectedCallbackData: buildCodexSelectionChoiceCallbackData(permissionRequestId, defaultChoice),
+        id: runtimeName === 'Claude' ? 'clk_claude_tui_selection' : 'clk_codex_tui_selection',
+        placeholder: `选择 ${runtimeName} TUI 操作`,
+        selectedCallbackData: buildTuiSelectionChoiceCallbackData(permissionRequestId, defaultChoice),
         options: choices.map((choice) => ({
           text: extractCodexSelectionLabelByChoice(toolInput, choice),
-          callbackData: buildCodexSelectionChoiceCallbackData(permissionRequestId, choice),
+          callbackData: buildTuiSelectionChoiceCallbackData(permissionRequestId, choice),
         })),
       },
     ],
@@ -552,7 +565,7 @@ export function forwardPermissionRequest(
 
   const isTrustPrompt = isCodexTrustPermission(permissionRequestId, toolName);
   const isUpdatePrompt = isCodexUpdatePermission(permissionRequestId, toolName);
-  const isSelectionPrompt = isCodexSelectionPermission(permissionRequestId, toolName);
+  const isSelectionPrompt = isTuiSelectionPermission(permissionRequestId, toolName);
   if (isSelectionPrompt) {
     if (sessionId) codexSelectionSessionByRequestId.set(permissionRequestId, sessionId);
     const active = claimCodexSelectionActiveForward({
@@ -584,7 +597,7 @@ export function forwardPermissionRequest(
     message = {
       address,
       text: [
-        `<b>Codex TUI Selection</b>`,
+        `<b>${toolInput.runtime === 'claude' ? 'Claude' : 'Codex'} TUI Selection</b>`,
         ``,
         escapeHtml(truncatedInput),
         ``,

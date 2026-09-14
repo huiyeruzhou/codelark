@@ -20,8 +20,9 @@ export interface TmuxAutoForwardRecoveryPayload {
 }
 
 function defaultChoiceForSelectionPrompt(
-  selectionPrompt: Extract<RuntimeTmuxSelectionPrompt, { runtime: 'codex' }>,
+  selectionPrompt: RuntimeTmuxSelectionPrompt,
 ): CodexTuiSelectionPromptChoice {
+  if (selectionPrompt.runtime === 'claude') return 'no';
   const uiDefault = getCodexTuiSelectionPromptUiDefaultChoice(selectionPrompt.prompt);
   if (uiDefault) return uiDefault;
   if (selectionPrompt.kind === 'update') return 'update_now';
@@ -31,10 +32,13 @@ function defaultChoiceForSelectionPrompt(
 }
 
 function reasonForSelectionPrompt(
-  selectionPrompt: Extract<RuntimeTmuxSelectionPrompt, { runtime: 'codex' }>,
+  selectionPrompt: RuntimeTmuxSelectionPrompt,
   context: string,
 ): string {
   const suffix = context ? ` ${context}` : '';
+  if (selectionPrompt.runtime === 'claude') {
+    return `Claude Code is asking whether to enter bypass-permissions mode${suffix}.`;
+  }
   if (selectionPrompt.kind === 'update') {
     return `Codex TUI is waiting at a CLI update selection prompt${suffix}.`;
   }
@@ -50,7 +54,7 @@ function reasonForSelectionPrompt(
   return `Codex TUI is waiting at an interactive selection prompt${suffix}.`;
 }
 
-export async function requestCodexTuiSelectionViaPermissionBroker(params: {
+export async function requestRuntimeTuiSelectionViaPermissionBroker(params: {
   adapter: BaseChannelAdapter;
   msg: InboundMessage;
   selectionPrompt: RuntimeTmuxSelectionPrompt;
@@ -64,14 +68,15 @@ export async function requestCodexTuiSelectionViaPermissionBroker(params: {
     actions: TmuxSendAction[];
   };
 }): Promise<CodexTuiSelectionPromptChoice | null> {
-  if (params.selectionPrompt.runtime !== 'codex') return null;
   const selectionPrompt = params.selectionPrompt;
-  const permissionRequestId = `codex-selection:${selectionPrompt.kind}:${params.requestScope}:${params.sessionId}:${Date.now()}`;
+  if (selectionPrompt.runtime === 'claude' && selectionPrompt.kind !== 'bypass_permissions') return null;
+  const permissionRequestId = `${selectionPrompt.runtime}-selection:${selectionPrompt.kind}:${params.requestScope}:${params.sessionId}:${Date.now()}`;
   const defaultChoice = defaultChoiceForSelectionPrompt(selectionPrompt);
   const choicePromise = permissionBroker.waitForCodexTuiSelectionPermission(permissionRequestId);
   const replyToMessageId = params.replyToMessageId || params.msg.messageId;
   console.log('[bridge-command] Codex TUI selection prompt forwarding to IM:', {
     event: 'tmux.startup.selection.forward',
+    runtime: selectionPrompt.runtime,
     scope: params.requestScope,
     bridge_session_id: params.sessionId,
     chat_id: params.msg.address.chatId,
@@ -85,22 +90,28 @@ export async function requestCodexTuiSelectionViaPermissionBroker(params: {
     params.adapter,
     params.msg.address,
     permissionRequestId,
-    'Codex TUI Selection Prompt',
+    selectionPrompt.runtime === 'claude' ? 'Claude TUI Selection Prompt' : 'Codex TUI Selection Prompt',
     {
+      runtime: selectionPrompt.runtime,
       provider: 'tmux',
       reason: reasonForSelectionPrompt(selectionPrompt, params.reasonContext),
       inspect: params.inspectCommand || '/tmux-screen 80',
       promptKind: selectionPrompt.kind,
       defaultChoice,
       prompt: selectionPrompt.summary,
-      choices: [
-        ...selectionPrompt.prompt.options.map((option) => ({
-          choice: option.choice,
-          label: option.label,
-          selected: option.selected,
-        })),
-        ...(selectionPrompt.kind === 'generic' ? [{ choice: 'not_selection', label: '这不是TUI选择' }] : []),
-      ],
+      choices: selectionPrompt.runtime === 'claude'
+        ? [
+            { choice: 'no', label: 'No, exit', selected: true },
+            { choice: 'yes_proceed', label: 'Yes, I accept', selected: false },
+          ]
+        : [
+            ...selectionPrompt.prompt.options.map((option) => ({
+              choice: option.choice,
+              label: option.label,
+              selected: option.selected,
+            })),
+            ...(selectionPrompt.kind === 'generic' ? [{ choice: 'not_selection', label: '这不是TUI选择' }] : []),
+          ],
     },
     params.sessionId,
     params.autoForwardRecovery
@@ -134,3 +145,5 @@ export async function requestCodexTuiSelectionViaPermissionBroker(params: {
   });
   return choice;
 }
+
+export const requestCodexTuiSelectionViaPermissionBroker = requestRuntimeTuiSelectionViaPermissionBroker;
