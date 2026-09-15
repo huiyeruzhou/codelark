@@ -173,7 +173,7 @@ CardKit create/update/settings/element 与 interactive/rich-card message 请求�
 5. 调用 `card.update` 写最终卡。
 6. 成功后按 completed/error 添加终态 reaction。
 
-模型正文中的 CardKit Markdown 图片目标必须是飞书 `img_*` image key。本地路径、HTTP URL 等目标不能直接作为 image key 发送，否则飞书会以 `200570` 拒绝整张卡片。本地 Markdown 图片会按出站 artifact 处理：从卡片正文剥离、通过飞书图片接口上传并作为图片消息回复到当前流式卡；上传失败的项在终态重试，仍失败则回复包含文件名和原因的错误提示。`<clk-send>` 仍是模型主动发送附件的规范协议。renderer 还会将绕过 artifact pipeline 的非 image-key 图片语法降级为可读文本，作为最后的 payload 防线。
+模型正文中的 CardKit Markdown 图片目标必须是飞书 `img_*` image key。本地路径、HTTP URL 等目标不能直接作为 image key 发送，否则飞书会以 `200570` 拒绝整张卡片。本地 Markdown 图片和文件链接会按出站 artifact 处理：从卡片正文剥离、通过飞书图片或文件接口上传并作为附件消息回复到当前流式卡；上传失败的项在终态重试，仍失败则回复包含文件名和原因的错误提示。远程 URL 保持普通 Markdown。`<clk-send>` 仍是模型主动发送附件的规范协议。renderer 还会将绕过 artifact pipeline 的非 image-key 图片语法降级为可读文本，作为最后的 payload 防线。
 
 如果 final `card.update` 失败，history-driven 卡片必须先用 `cardElement.content` 将已有 `streaming_status` 原位改成最终 footer，保持整张卡只有一个结尾状态栏。仅当该元素更新也失败或接口不可用时，才追加 `stream_done` 作为最后兜底；card id 已失效则直接进入消息级 fallback，不再发送必然失败的元素请求。
 

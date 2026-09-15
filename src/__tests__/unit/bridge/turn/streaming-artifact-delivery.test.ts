@@ -27,6 +27,27 @@ describe('streaming artifact delivery', () => {
     }]]);
   });
 
+  it('uploads a completed local Markdown file link once', async () => {
+    const delivered: OutboundAttachment[][] = [];
+    const controller = createStreamingArtifactDeliveryController({
+      async deliver(attachments) {
+        delivered.push(attachments);
+        return { ok: true, messageId: 'file-1' };
+      },
+    });
+
+    controller.observeAnswerText('完整稿件：[打开报告](/opt/tiger/project/work/reports/report.html)');
+    controller.observeAnswerText('完整稿件：[打开报告](/opt/tiger/project/work/reports/report.html)');
+    await controller.close();
+
+    assert.deepEqual(delivered, [[{
+      kind: 'file',
+      path: '/opt/tiger/project/work/reports/report.html',
+      caption: undefined,
+      name: undefined,
+    }]]);
+  });
+
   it('delivers a completed answer block once and removes it from final delivery', async () => {
     const delivered: OutboundAttachment[][] = [];
     const controller = createStreamingArtifactDeliveryController({

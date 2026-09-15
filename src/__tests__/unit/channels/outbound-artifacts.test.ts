@@ -29,12 +29,34 @@ describe('outbound-artifacts', () => {
     }]);
   });
 
+  it('treats local Markdown links as uploadable file attachments', () => {
+    const parsed = parseOutboundArtifacts([
+      '完整稿件：',
+      '[打开报告](/opt/tiger/project/work/reports/report.html)',
+      '[远程报告](https://example.com/report.html)',
+    ].join('\n'));
+
+    assert.equal(parsed.cleanText, [
+      '完整稿件：',
+      '',
+      '[远程报告](https://example.com/report.html)',
+    ].join('\n'));
+    assert.deepEqual(parsed.attachments, [{
+      kind: 'file',
+      path: '/opt/tiger/project/work/reports/report.html',
+      caption: undefined,
+      name: undefined,
+    }]);
+  });
+
   it('leaves local Markdown image examples inside code blocks untouched', () => {
     const markdown = [
       '```markdown',
       '![示例](/tmp/example.png)',
+      '[示例文件](/tmp/example.html)',
       '```',
       '    ![缩进示例](/tmp/indented.png)',
+      '    [缩进文件](/tmp/indented.html)',
     ].join('\n');
 
     const parsed = parseOutboundArtifacts(markdown);
@@ -266,6 +288,13 @@ describe('outbound-artifacts', () => {
     assert.equal(
       stripOutboundArtifactBlocksForStreaming('结果如下：\n\n![二维码](/tmp/qr.png)'),
       '结果如下：',
+    );
+  });
+
+  it('hides local Markdown file links from streaming text while they upload separately', () => {
+    assert.equal(
+      stripOutboundArtifactBlocksForStreaming('报告如下：\n\n[打开报告](/tmp/report.html)'),
+      '报告如下：',
     );
   });
 
