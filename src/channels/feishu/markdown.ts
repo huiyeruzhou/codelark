@@ -277,6 +277,36 @@ function ensureCodeFenceStartsOnNewLine(text: string): string {
   }).join('\n');
 }
 
+function isFeishuMarkdownImageKey(value: string): boolean {
+  return /^img_(?:v\d+_)?[A-Za-z0-9_-]+$/u.test(value);
+}
+
+function rewriteUnsupportedFeishuMarkdownImages(text: string): string {
+  const lines = text.split('\n');
+  let fenceLength = 0;
+
+  return lines.map((line) => {
+    if (fenceLength > 0) {
+      if (isFenceLine(line, fenceLength)) fenceLength = 0;
+      return line;
+    }
+
+    const opener = /^( {0,3})(`{3,})([^`]*)$/.exec(line);
+    if (opener) {
+      fenceLength = opener[2].length;
+      return line;
+    }
+    if (/^(?: {4}|\t)/u.test(line)) return line;
+
+    return line.replace(/!\[([^\]\n]*)\]\(([^)\n]+)\)/gu, (match, altText: string, destination: string) => {
+      const normalizedDestination = destination.trim();
+      if (isFeishuMarkdownImageKey(normalizedDestination)) return match;
+      const label = altText.trim() || '图片';
+      return `🖼️ ${label}：${normalizedDestination}`;
+    });
+  }).join('\n');
+}
+
 /**
  * Preprocess markdown for Feishu rendering.
  * Keeps ordinary fenced blocks (and their language hint) unchanged. Feishu
@@ -284,7 +314,8 @@ function ensureCodeFenceStartsOnNewLine(text: string): string {
  * to CommonMark's four-space indented code form.
  */
 export function preprocessFeishuMarkdown(text: string): string {
-  const protectedText = protectCodeFenceContents(rewriteTemplateLiteralFencesAsIndentedCode(text));
+  const safeText = rewriteUnsupportedFeishuMarkdownImages(text);
+  const protectedText = protectCodeFenceContents(rewriteTemplateLiteralFencesAsIndentedCode(safeText));
   // Ensure ``` has newline before it (unless at start of text)
   return ensureCodeFenceStartsOnNewLine(protectedText);
 }

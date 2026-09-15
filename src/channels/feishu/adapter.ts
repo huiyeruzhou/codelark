@@ -4986,6 +4986,10 @@ export class FeishuAdapter extends BaseChannelAdapter {
       console.log(`[feishu-adapter] Card finalized: streamKey=${cardKey}, cardId=${state.cardId}, status=${status}, elapsed=${formatElapsed(elapsedMs)}`);
       return true;
     } catch (err) {
+      if (isFeishuCardInvalidError(err)) {
+        console.warn('[feishu-adapter] Final card update failed because the card id is invalid; allowing message fallback:', err instanceof Error ? err.message : err);
+        return false;
+      }
       if (state.historyDriven) {
         const fallbackFinalizedAtMs = Date.now();
         const footerText = joinFooterParts([
@@ -5000,21 +5004,18 @@ export class FeishuAdapter extends BaseChannelAdapter {
           resolveTerminalContextUsage(state),
           resolveTerminalLastIo(state),
         ]);
-        const appended = await this.appendFinalStatusElement(cardKey, state, footerText);
-        if (appended) {
+        const statusUpdated = await this.updateFinalStatusElement(cardKey, state, footerText);
+        const statusRecovered = statusUpdated || await this.appendFinalStatusElement(cardKey, state, footerText);
+        if (statusRecovered) {
           if (terminalReactionEmoji) {
             await this.addTerminalReaction(cardKey, state.messageId, terminalReactionEmoji);
           }
-          console.warn('[feishu-adapter] Final card update failed; appended terminal status instead:', err instanceof Error ? err.message : err);
-          console.log(`[feishu-adapter] Card finalized with appended status: streamKey=${cardKey}, cardId=${state.cardId}, status=${status}`);
+          console.warn(`[feishu-adapter] Final card update failed; ${statusUpdated ? 'updated existing' : 'appended'} terminal status instead:`, err instanceof Error ? err.message : err);
+          console.log(`[feishu-adapter] Card finalized with recovered status: streamKey=${cardKey}, cardId=${state.cardId}, status=${status}`);
           return true;
         }
       }
       console.warn('[feishu-adapter] Card finalize failed:', err instanceof Error ? err.message : err);
-      if (isFeishuCardInvalidError(err)) {
-        console.warn('[feishu-adapter] Final card update failed because the card id is invalid; allowing message fallback:', err instanceof Error ? err.message : err);
-        return false;
-      }
       if (streamingModeClosed && ((state.pendingText || '').trim() || state.historyItems.length > 0 || state.toolCalls.length > 0)) {
         if (terminalReactionEmoji) {
           await this.addTerminalReaction(cardKey, state.messageId, terminalReactionEmoji);
@@ -5031,6 +5032,40 @@ export class FeishuAdapter extends BaseChannelAdapter {
       this.clearCardCreateRetryTimer(cardKey);
       this.cardCreateNextEarliestAt.delete(cardKey);
       this.cardCreateConsecutiveFailures.delete(cardKey);
+    }
+  }
+
+  private async updateFinalStatusElement(
+    streamKey: string,
+    state: FeishuCardState,
+    footerText: string,
+  ): Promise<boolean> {
+    const cardElement = (this.restClient as any)?.cardkit?.v1?.cardElement;
+    if (typeof cardElement?.content !== 'function') return false;
+    state.sequence++;
+    try {
+      const content = preprocessFeishuMarkdown(footerText);
+      const result = await this.withFeishuRequestTimeout(streamKey, 'cardElement.content:streaming_status:final', () => cardElement.content({
+        path: { card_id: state.cardId, element_id: 'streaming_status' },
+        data: { content, sequence: state.sequence },
+      }));
+      assertFeishuApiOk(result, 'cardElement.content:streaming_status:final');
+      state.renderedStatusText = footerText;
+      emitRealE2eStreamCardCheckpoint({
+        kind: 'element',
+        streamKey,
+        cardId: state.cardId,
+        elementId: 'streaming_status',
+        status: 'completed',
+        sequence: state.sequence,
+        markdownTexts: [footerText],
+      });
+      this.markCardFlushSuccess(state);
+      return true;
+    } catch (error) {
+      this.markCardFlushFailure(state, error);
+      console.warn('[feishu-adapter] Final status update failed:', error instanceof Error ? error.message : error);
+      return false;
     }
   }
 

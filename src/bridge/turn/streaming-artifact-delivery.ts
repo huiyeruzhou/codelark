@@ -61,6 +61,7 @@ export function createStreamingArtifactDeliveryController(
       discovered.push(...parseOutboundArtifacts(pendingText.slice(0, blockEnd)).attachments);
       pendingText = pendingText.slice(blockEnd);
     }
+    discovered.push(...parseOutboundArtifacts(answerText).attachments);
 
     const pendingDelivery = dedupeOutboundAttachments(discovered)
       .filter((attachment) => !attemptedKeys.has(outboundAttachmentKey(attachment)));

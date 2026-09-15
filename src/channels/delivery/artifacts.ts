@@ -17,6 +17,7 @@ const ASK_BLOCK_REGEX = /^[ \t]*<clk-ask>[ \t]*(?:\r?\n[ \t]*)?([\[{][\s\S]*?)[ 
 const ASK_BLOCK_OPEN_REGEX = /^[ \t]*<clk-ask>[ \t]*(?=$|[\[{])/im;
 const INPUT_BLOCK_REGEX = /^[ \t]*<clk-input>[ \t]*(?:\r?\n[ \t]*)?([\[{][\s\S]*?)[ \t]*<\/clk-input>[ \t]*$/gim;
 const INPUT_BLOCK_OPEN_REGEX = /^[ \t]*<clk-input>[ \t]*(?=$|[\[{])/im;
+const LOCAL_MARKDOWN_IMAGE_REGEX = /!\[([^\]\n]*)\]\(([^)\n]+)\)/gu;
 
 interface RawSendInstruction {
   type?: unknown;
@@ -223,6 +224,41 @@ function compactBlankLines(text: string): string {
     .trim();
 }
 
+function extractLocalMarkdownImages(text: string): {
+  text: string;
+  attachments: OutboundAttachment[];
+} {
+  const attachments: OutboundAttachment[] = [];
+  const lines = text.split('\n');
+  let fenceLength = 0;
+  const rendered = lines.map((line) => {
+    if (fenceLength > 0) {
+      const closer = /^( {0,3})(`{3,})([^`]*)$/.exec(line);
+      if (closer && closer[2].length >= fenceLength) fenceLength = 0;
+      return line;
+    }
+    const opener = /^( {0,3})(`{3,})([^`]*)$/.exec(line);
+    if (opener) {
+      fenceLength = opener[2].length;
+      return line;
+    }
+    if (/^(?: {4}|\t)/u.test(line)) return line;
+
+    return line.replace(LOCAL_MARKDOWN_IMAGE_REGEX, (match, altText: string, destination: string) => {
+      const filePath = destination.trim();
+      if (!(path.isAbsolute(filePath) || path.win32.isAbsolute(filePath))) return match;
+      attachments.push({
+        kind: 'image',
+        path: filePath,
+        caption: altText.trim() || undefined,
+        name: undefined,
+      });
+      return '';
+    });
+  });
+  return { text: rendered.join('\n'), attachments };
+}
+
 function normalizeManualInputPayload(payload: unknown): { inputs: OutboundManualInput[]; errors: string[] } {
   const records = Array.isArray(payload)
     ? payload
@@ -294,6 +330,10 @@ export function parseOutboundArtifacts(text: string): ParsedOutboundArtifacts {
     return '';
   });
 
+  const localMarkdownImages = extractLocalMarkdownImages(mutated);
+  mutated = localMarkdownImages.text;
+  attachments.push(...localMarkdownImages.attachments);
+
   return {
     cleanText: compactBlankLines(mutated),
     attachments,
@@ -318,6 +358,7 @@ export function stripOutboundArtifactBlocksForStreaming(text: string): string {
     stripped = stripped.slice(0, openMatch.index);
   }
 
+  stripped = extractLocalMarkdownImages(stripped).text;
   return stripped.replace(/\n{3,}/g, '\n\n').trimEnd();
 }
 

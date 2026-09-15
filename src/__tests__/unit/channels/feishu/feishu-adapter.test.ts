@@ -4736,81 +4736,7 @@ describe('feishu-adapter structured streaming regions', () => {
       && String(create.data?.elements || '').includes('stream_tool_1_e2')), false);
   });
 
-  it('appends terminal status for history-driven cards when the final full-card update hits a Feishu API error code', async () => {
-    const cardUpdates: Array<Record<string, any>> = [];
-    const elementCreates: Array<Record<string, any>> = [];
-    const reactionCreates: Array<Record<string, any>> = [];
-    const adapter = new FeishuAdapter({
-      id: 'feishu-default',
-      provider: 'feishu',
-      enabled: true,
-      alias: '飞书',
-      config: {
-        appId: 'app-id',
-        appSecret: 'app-secret',
-        streamingEnabled: true,
-      },
-    });
-    (adapter as any).cardFlushBaseIntervalMs = 1;
-
-    (adapter as any).restClient = {
-      cardkit: {
-        v1: {
-          card: {
-            create: async () => ({ data: { card_id: 'card-1' } }),
-            settings: async () => ({}),
-            update: async (payload: Record<string, any>) => {
-              cardUpdates.push(payload);
-              return { code: 300305, msg: 'ErrMsg: element exceeds the limit;' };
-            },
-          },
-          cardElement: {
-            content: async () => ({}),
-            create: async (payload: Record<string, any>) => {
-              elementCreates.push(payload);
-              return {};
-            },
-          },
-        },
-      },
-      im: {
-        message: {
-          create: async () => ({ data: { message_id: 'msg-1' } }),
-          reply: async () => ({ data: { message_id: 'msg-1' } }),
-        },
-        messageReaction: {
-          create: async (payload: Record<string, any>) => {
-            reactionCreates.push(payload);
-            return {};
-          },
-        },
-      },
-    };
-
-    await (adapter as any).createStreamingCard('chat-1', 'reply-1', 'stream-1');
-    adapter.onStreamHistory('chat-1', [
-      { type: 'markdown' as const, role: 'assistant' as const, content: '模型输出' },
-      { type: 'tool_panel' as const, tools: [{ id: 'tool-1', name: 'exec_command', status: 'complete' as const }] },
-    ], 'stream-1');
-    adapter.onStreamStatus('chat-1', '已运行 3秒，125k(63%) · ↑125k ↓4.6k', 'stream-1');
-    adapter.onStreamStatus('chat-1', '✅ Completed · 3.0s', 'stream-1');
-    await waitForCondition(() => elementCreates.length >= 1);
-
-    const finalized = await adapter.onStreamEnd('chat-1', 'completed', '', 'stream-1');
-
-    assert.equal(finalized, true);
-    assert.ok(cardUpdates.length >= 1);
-    assert.equal(elementCreates.at(-1)?.data?.target_element_id, undefined);
-    assert.match(String(elementCreates.at(-1)?.data?.elements || ''), /stream_done/);
-    assert.doesNotMatch(String(elementCreates.at(-1)?.data?.elements || ''), /Completed|Success/);
-    assert.match(String(elementCreates.at(-1)?.data?.elements || ''), /125k\(63%\) · ↑125k ↓4\.6k/);
-    assert.deepEqual(reactionCreates, [{
-      path: { message_id: 'msg-1' },
-      data: { reaction_type: { emoji_type: 'DONE' } },
-    }]);
-  });
-
-  it('keeps a closed streaming card finalized when both final update and status append exceed Feishu limits', async () => {
+  it('updates the existing terminal status for history-driven cards when the final full-card update fails', async () => {
     const cardUpdates: Array<Record<string, any>> = [];
     const elementUpdates: Array<Record<string, any>> = [];
     const elementCreates: Array<Record<string, any>> = [];
@@ -4846,6 +4772,203 @@ describe('feishu-adapter structured streaming regions', () => {
             },
             create: async (payload: Record<string, any>) => {
               elementCreates.push(payload);
+              return {};
+            },
+          },
+        },
+      },
+      im: {
+        message: {
+          create: async () => ({ data: { message_id: 'msg-1' } }),
+          reply: async () => ({ data: { message_id: 'msg-1' } }),
+        },
+        messageReaction: {
+          create: async (payload: Record<string, any>) => {
+            reactionCreates.push(payload);
+            return {};
+          },
+        },
+      },
+    };
+
+    await (adapter as any).createStreamingCard('chat-1', 'reply-1', 'stream-1');
+    adapter.onStreamHistory('chat-1', [
+      { type: 'markdown' as const, role: 'assistant' as const, content: '模型输出' },
+      { type: 'tool_panel' as const, tools: [{ id: 'tool-1', name: 'exec_command', status: 'complete' as const }] },
+    ], 'stream-1');
+    adapter.onStreamStatus('chat-1', '已运行 3秒，125k(63%) · ↑125k ↓4.6k', 'stream-1');
+    adapter.onStreamStatus('chat-1', '✅ Completed · 3.0s', 'stream-1');
+    await waitForCondition(() => elementCreates.length >= 1);
+
+    const finalized = await adapter.onStreamEnd('chat-1', 'completed', '', 'stream-1');
+
+    assert.equal(finalized, true);
+    assert.ok(cardUpdates.length >= 1);
+    assert.equal(elementUpdates.at(-1)?.path?.element_id, 'streaming_status');
+    assert.doesNotMatch(String(elementUpdates.at(-1)?.data?.content || ''), /Completed|Success/);
+    assert.match(String(elementUpdates.at(-1)?.data?.content || ''), /125k\(63%\) · ↑125k ↓4\.6k/);
+    assert.equal(elementCreates.some((create) => String(create.data?.elements || '').includes('stream_done')), false);
+    assert.deepEqual(reactionCreates, [{
+      path: { message_id: 'msg-1' },
+      data: { reaction_type: { emoji_type: 'DONE' } },
+    }]);
+  });
+
+  it('appends terminal status only when updating the existing status element also fails', async () => {
+    const elementCreates: Array<Record<string, any>> = [];
+    const adapter = new FeishuAdapter({
+      id: 'feishu-default',
+      provider: 'feishu',
+      enabled: true,
+      alias: '飞书',
+      config: {
+        appId: 'app-id',
+        appSecret: 'app-secret',
+        streamingEnabled: true,
+      },
+    });
+    (adapter as any).cardFlushBaseIntervalMs = 1;
+
+    (adapter as any).restClient = {
+      cardkit: {
+        v1: {
+          card: {
+            create: async () => ({ data: { card_id: 'card-1' } }),
+            settings: async () => ({}),
+            update: async () => ({ code: 300305, msg: 'ErrMsg: element exceeds the limit;' }),
+          },
+          cardElement: {
+            content: async () => ({ code: 300305, msg: 'ErrMsg: element exceeds the limit;' }),
+            create: async (payload: Record<string, any>) => {
+              elementCreates.push(payload);
+              return {};
+            },
+          },
+        },
+      },
+      im: {
+        message: {
+          create: async () => ({ data: { message_id: 'msg-1' } }),
+          reply: async () => ({ data: { message_id: 'msg-1' } }),
+        },
+      },
+    };
+
+    await (adapter as any).createStreamingCard('chat-1', 'reply-1', 'stream-1');
+    adapter.onStreamHistory('chat-1', [
+      { type: 'markdown' as const, role: 'assistant' as const, content: '模型输出' },
+    ], 'stream-1');
+
+    const finalized = await adapter.onStreamEnd('chat-1', 'completed', '', 'stream-1');
+
+    assert.equal(finalized, true);
+    const terminalCreates = elementCreates.filter((create) => String(create.data?.elements || '').includes('stream_done'));
+    assert.equal(terminalCreates.length, 1);
+  });
+
+  it('degrades local markdown images before they can invalidate a final card update', async () => {
+    const cardUpdates: Array<Record<string, any>> = [];
+    const elementCreates: Array<Record<string, any>> = [];
+    const adapter = new FeishuAdapter({
+      id: 'feishu-default',
+      provider: 'feishu',
+      enabled: true,
+      alias: '飞书',
+      config: {
+        appId: 'app-id',
+        appSecret: 'app-secret',
+        streamingEnabled: true,
+      },
+    });
+    (adapter as any).cardFlushBaseIntervalMs = 1;
+
+    (adapter as any).restClient = {
+      cardkit: {
+        v1: {
+          card: {
+            create: async () => ({ data: { card_id: 'card-1' } }),
+            settings: async () => ({}),
+            update: async (payload: Record<string, any>) => {
+              cardUpdates.push(payload);
+              return String(payload.data?.card?.data || '').includes('](/tmp/')
+                ? { code: 200570, msg: 'card contains invalid image keys' }
+                : {};
+            },
+          },
+          cardElement: {
+            content: async () => ({}),
+            create: async (payload: Record<string, any>) => {
+              elementCreates.push(payload);
+              return {};
+            },
+          },
+        },
+      },
+      im: {
+        message: {
+          create: async () => ({ data: { message_id: 'msg-1' } }),
+          reply: async () => ({ data: { message_id: 'msg-1' } }),
+        },
+      },
+    };
+
+    await (adapter as any).createStreamingCard('chat-1', 'reply-1', 'stream-1');
+    adapter.onStreamHistory('chat-1', [
+      {
+        type: 'markdown' as const,
+        role: 'assistant' as const,
+        content: '请扫码\n\n![登录二维码](/tmp/lark_auth_run12_layers_qr_2.png)',
+      },
+    ], 'stream-1');
+
+    const finalized = await adapter.onStreamEnd('chat-1', 'completed', '', 'stream-1');
+
+    assert.equal(finalized, true);
+    assert.ok(cardUpdates.length >= 1);
+    assert.equal(cardUpdates.some((update) => String(update.data?.card?.data || '').includes('](/tmp/')), false);
+    assert.match(String(cardUpdates.at(-1)?.data?.card?.data || ''), /🖼️ 登录二维码：\/tmp\/lark_auth_run12_layers_qr_2\.png/u);
+    assert.equal(elementCreates.some((create) => String(create.data?.elements || '').includes('stream_done')), false);
+  });
+
+  it('keeps a closed streaming card finalized when final update and both status recovery paths exceed Feishu limits', async () => {
+    const cardUpdates: Array<Record<string, any>> = [];
+    const elementUpdates: Array<Record<string, any>> = [];
+    const elementCreates: Array<Record<string, any>> = [];
+    const reactionCreates: Array<Record<string, any>> = [];
+    const adapter = new FeishuAdapter({
+      id: 'feishu-default',
+      provider: 'feishu',
+      enabled: true,
+      alias: '飞书',
+      config: {
+        appId: 'app-id',
+        appSecret: 'app-secret',
+        streamingEnabled: true,
+      },
+    });
+    (adapter as any).cardFlushBaseIntervalMs = 1;
+
+    let rejectElementUpdates = false;
+    (adapter as any).restClient = {
+      cardkit: {
+        v1: {
+          card: {
+            create: async () => ({ data: { card_id: 'card-1' } }),
+            settings: async () => ({}),
+            update: async (payload: Record<string, any>) => {
+              cardUpdates.push(payload);
+              return { code: 300305, msg: 'ErrMsg: element exceeds the limit;' };
+            },
+          },
+          cardElement: {
+            content: async (payload: Record<string, any>) => {
+              elementUpdates.push(payload);
+              return rejectElementUpdates
+                ? { code: 300305, msg: 'ErrMsg: element exceeds the limit;' }
+                : {};
+            },
+            create: async (payload: Record<string, any>) => {
+              elementCreates.push(payload);
               return { code: 300315, msg: 'ErrMsg: msg: [element exceeds the limit], code: 300305;' };
             },
           },
@@ -4871,6 +4994,7 @@ describe('feishu-adapter structured streaming regions', () => {
     ], 'stream-1');
     adapter.onStreamText('chat-1', '模型输出', 'stream-1');
     await waitForCondition(() => elementUpdates.length >= 1);
+    rejectElementUpdates = true;
 
     const finalized = await adapter.onStreamEnd('chat-1', 'completed', '', 'stream-1');
 
@@ -4949,7 +5073,7 @@ describe('feishu-adapter structured streaming regions', () => {
 
     assert.equal(finalized, false);
     assert.ok(cardUpdates.length >= 1);
-    assert.ok(elementCreates.length >= 1);
+    assert.equal(elementCreates.length, 0);
     assert.equal(reactionCreates.length, 0);
     assert.equal((adapter as any).activeCards.has('stream-1'), false);
   });

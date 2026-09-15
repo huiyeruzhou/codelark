@@ -6,6 +6,27 @@ import { createStreamingArtifactDeliveryController } from '../../../../bridge/tu
 import type { OutboundAttachment } from '../../../../domain/index.js';
 
 describe('streaming artifact delivery', () => {
+  it('uploads a completed local Markdown image once', async () => {
+    const delivered: OutboundAttachment[][] = [];
+    const controller = createStreamingArtifactDeliveryController({
+      async deliver(attachments) {
+        delivered.push(attachments);
+        return { ok: true, messageId: 'image-1' };
+      },
+    });
+
+    controller.observeAnswerText('二维码：\n![登录二维码](/tmp/lark_auth_run12_layers_qr_2.png)');
+    controller.observeAnswerText('二维码：\n![登录二维码](/tmp/lark_auth_run12_layers_qr_2.png)');
+    await controller.close();
+
+    assert.deepEqual(delivered, [[{
+      kind: 'image',
+      path: '/tmp/lark_auth_run12_layers_qr_2.png',
+      caption: '登录二维码',
+      name: undefined,
+    }]]);
+  });
+
   it('delivers a completed answer block once and removes it from final delivery', async () => {
     const delivered: OutboundAttachment[][] = [];
     const controller = createStreamingArtifactDeliveryController({

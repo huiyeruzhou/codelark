@@ -653,19 +653,20 @@ stream_status_check_interval_seconds = 3
   it('delivers answer artifacts while the SDK turn is running, excludes thinking, and dedupes the final response', async () => {
     const simulator = new ScriptedSessionSimulator('chat-streaming-artifact-sdk');
     const publicBlock = '<clk-send>{"type":"file","path":"/tmp/public-sdk.txt"}</clk-send>';
+    const markdownImage = '![登录二维码](/tmp/public-sdk-qr.png)';
     const privateBlock = '<clk-send>{"type":"file","path":"/tmp/private-sdk-thinking.txt"}</clk-send>';
     let deliveredBeforeProcessCompleted = false;
 
     await simulator.send({
       messageId: 'incoming-streaming-artifact-sdk-1',
       text: '生成并发送文件',
-      finalText: `文件已生成。\n${publicBlock}`,
+      finalText: `文件已生成。\n${publicBlock}\n${markdownImage}`,
       steps: [
         async ({ onThinkingNote, onAnswerText }) => {
           onThinkingNote?.(`Kimi 私有思考 ${privateBlock}`);
-          onAnswerText?.(`文件已生成。\n${publicBlock}`);
+          onAnswerText?.(`文件已生成。\n${publicBlock}\n${markdownImage}`);
           await _testOnlyWaitForDeliveryQueuesForTests(simulator.adapter);
-          deliveredBeforeProcessCompleted = simulator.deliveredAttachments.length === 1;
+          deliveredBeforeProcessCompleted = simulator.deliveredAttachments.length === 2;
         },
       ],
     });
@@ -673,6 +674,7 @@ stream_status_check_interval_seconds = 3
     assert.equal(deliveredBeforeProcessCompleted, true);
     assert.deepEqual(simulator.deliveredAttachments.map((attachment) => attachment.path), [
       '/tmp/public-sdk.txt',
+      '/tmp/public-sdk-qr.png',
     ]);
     assert.equal(simulator.deliveredAttachments.some((attachment) => attachment.path.includes('private-sdk-thinking')), false);
     assert.equal(simulator.deliveredTexts.some((text) => text.includes('clk-send')), false);

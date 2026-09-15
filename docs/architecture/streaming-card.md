@@ -173,6 +173,10 @@ CardKit create/update/settings/element 与 interactive/rich-card message 请求�
 5. 调用 `card.update` 写最终卡。
 6. 成功后按 completed/error 添加终态 reaction。
 
+模型正文中的 CardKit Markdown 图片目标必须是飞书 `img_*` image key。本地路径、HTTP URL 等目标不能直接作为 image key 发送，否则飞书会以 `200570` 拒绝整张卡片。本地 Markdown 图片会按出站 artifact 处理：从卡片正文剥离、通过飞书图片接口上传并作为图片消息回复到当前流式卡；上传失败的项在终态重试，仍失败则回复包含文件名和原因的错误提示。`<clk-send>` 仍是模型主动发送附件的规范协议。renderer 还会将绕过 artifact pipeline 的非 image-key 图片语法降级为可读文本，作为最后的 payload 防线。
+
+如果 final `card.update` 失败，history-driven 卡片必须先用 `cardElement.content` 将已有 `streaming_status` 原位改成最终 footer，保持整张卡只有一个结尾状态栏。仅当该元素更新也失败或接口不可用时，才追加 `stream_done` 作为最后兜底；card id 已失效则直接进入消息级 fallback，不再发送必然失败的元素请求。
+
 final full update 必须以 desired history 为权威。`responseText` 为空不代表卡片没有正文：mirror 在流式卡已包含正文时会传空 text 防止重复，工具和消息仍可能全部存在于 `historyItems`。因此 final renderer 的 content gate 同时检查 text、legacy tools 和 history；history-only 的 apply_patch 也必须在关闭 streaming mode 后完整保留。
 
 error 终态不能只靠红色边框或泛化的 `Error` footer。runtime adapter 把真实错误写入 `FinalizedBridgeMirrorTurn.errorText`；feedback controller 从 JSON 中提取 type/message（非 JSON 则保留原文），压成最多 600 个 Unicode 字符的单行状态，先更新“当前步骤：❌ 原因 + 已运行时间 + context/token usage”，再关闭 streaming mode。final footer 复用同一条原因，并继续追加 adapter 计算的真实耗时和 context；错误、时间、token 信息不能互相覆盖。history 不再重复插入错误块。新版结构化 JSONL error 与旧版 TUI `■` fallback 共用这个字段，channel renderer 不识别 Codex 专属格式。
@@ -201,7 +205,7 @@ mirror 冷启动分为两种语义。新 attach 没有 `mirror_last_event_at` �
 | 正文 markdown        | `streaming_content`            | `pendingText`                           | `cardElement.content`                    | full refresh                       |
 | 工具面板               | `stream_tool_N`                   | `toolCalls` 或 history tool panel        | create/append；工具结构变化倾向 full refresh      | full refresh 或续接新卡片                |
 | 任务区                | `streaming_tasks`              | task progress                           | `cardElement.content`                    | full refresh                       |
-| 状态区                | `streaming_status`             | elapsed/status/context usage            | `cardElement.content`                    | final status append 或 full refresh |
+| 状态区                | `streaming_status`             | elapsed/status/context usage            | `cardElement.content`                    | final full refresh 失败时原位写终态；原位失败才 append `stream_done` |
 | Actions            | action rows                    | stream actions                          | full refresh                             | 关闭流式后 final `card.update`          |
 
 这个分区不是 CardKit 原生概念，是 CodeLark adapter 的同步边界。`renderedHistoryElementJson`、`renderedToolSnapshots`、`renderedComponentCount` 等状态只表示“本地认为已经提交到飞书服务端的结构”，不能证明用户客户端已经完成重绘。

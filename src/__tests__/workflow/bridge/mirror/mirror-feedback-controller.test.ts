@@ -371,6 +371,7 @@ describe('mirror-feedback-controller', () => {
       content: [
         '普通说明中的 `<clk-send>` 只是协议名称，必须完整显示。',
         '<clk-send>{"type":"file","path":"/tmp/visible.txt"}</clk-send>',
+        '![本地图片](/tmp/visible.png)',
         '终态不重复。',
       ].join('\n'),
       timestamp: '2026-05-14T00:00:00.000Z',
@@ -384,6 +385,7 @@ describe('mirror-feedback-controller', () => {
     assert.match(renderedText, /普通说明中的 `<clk-send>` 只是协议名称，必须完整显示。/);
     assert.match(renderedText, /终态不重复。/);
     assert.doesNotMatch(renderedText, /visible\.txt/);
+    assert.doesNotMatch(renderedText, /visible\.png/);
     assert.match(subscription.pendingTurn?.streamedText || '', /clk-send/);
   });
 
@@ -418,7 +420,7 @@ describe('mirror-feedback-controller', () => {
       signature: 'message-delayed-card',
       type: 'message',
       role: 'assistant',
-      content: '<clk-send>{"type":"file","path":"/tmp/delayed-card.txt"}</clk-send>',
+      content: '![延迟图片](/tmp/delayed-card.png)',
       timestamp: '2026-05-14T00:00:01.000Z',
       turnId: 'turn-delayed-card',
     }], controller.hooks);
@@ -430,7 +432,7 @@ describe('mirror-feedback-controller', () => {
 
     assert.equal(adapter.sent.length, 1);
     assert.equal(adapter.sent[0]?.replyToMessageId, 'delayed-mirror-card-message');
-    assert.equal(adapter.sent[0]?.attachments?.[0]?.path, '/tmp/delayed-card.txt');
+    assert.equal(adapter.sent[0]?.attachments?.[0]?.path, '/tmp/delayed-card.png');
   });
 
   it('replays stream metadata when a configured adapter is replaced mid-turn', () => {
