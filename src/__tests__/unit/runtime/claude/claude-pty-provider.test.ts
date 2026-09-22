@@ -18,6 +18,23 @@ const bypassPermissionsWarning = [
 ].join('\n');
 
 describe('Claude PTY startup prompts', () => {
+  it('treats the Claude 2.1.278 terminal setup page as onboarding rather than workspace trust', () => {
+    const terminalSetup = [
+      'Welcome to Claude Code v2.1.278',
+      '',
+      "Use Claude Code's terminal setup?",
+      '',
+      'For the optimal coding experience, enable the recommended settings',
+      '❯ 1. Yes, use recommended settings',
+      '  2. No, maybe later with /terminal-setup',
+      '',
+      'Enter to confirm · Esc to skip',
+    ].join('\n');
+
+    assert.equal(_testOnlyClaudePty.hasClaudePtyOnboardingPrompt(terminalSetup), true);
+    assert.equal(_testOnlyClaudePty.hasClaudePtyTrustPrompt(terminalSetup), false);
+  });
+
   it('does not accept the bypass-permissions warning without a user selection channel', async () => {
     const envNames = [
       'CODELARK_CLAUDE_PTY_TRUST_PROMPT_TIMEOUT_MS',

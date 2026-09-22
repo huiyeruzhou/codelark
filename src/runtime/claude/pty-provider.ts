@@ -101,10 +101,10 @@ function compactScreenText(text: string): string {
 export function hasClaudePtyTrustPrompt(text: string): boolean {
   if (hasClaudePtyBypassPermissionsPrompt(text)) return false;
   const compact = compactScreenText(text);
-  return compact.includes('quicksafetycheck')
+  const hasTrustCopy = compact.includes('quicksafetycheck')
     || compact.includes('yes,itrustthisfolder')
-    || compact.includes('claudecode\'llbeabletoread,edit,andexecutefileshere')
-    || hasTuiEnterConfirmFooter(text);
+    || compact.includes('claudecode\'llbeabletoread,edit,andexecutefileshere');
+  return hasTrustCopy && hasTuiEnterConfirmFooter(text);
 }
 
 export type ClaudeTrustPromptKey = 'Up' | 'Down' | 'Enter';
@@ -212,7 +212,10 @@ export function hasClaudePtyOnboardingPrompt(text: string): boolean {
   );
   const hasThemeSelection = compact.includes('syntaxtheme')
     && (compact.includes('darkmode') || compact.includes('lightmode') || compact.includes('colorblind'));
-  return hasWelcomeContinue || hasThemeSelection;
+  const hasTerminalSetup = compact.includes('useclaudecode\'sterminalsetup?')
+    && compact.includes('yes,userecommendedsettings')
+    && hasTuiEnterConfirmFooter(text);
+  return hasWelcomeContinue || hasThemeSelection || hasTerminalSetup;
 }
 
 export function hasClaudePtyInputPrompt(text: string): boolean {

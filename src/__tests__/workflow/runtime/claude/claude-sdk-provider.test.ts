@@ -290,4 +290,70 @@ process.exit(2);
       is_error: false,
     });
   });
+
+  it('does not misattribute a forwarded subagent tool result to its parent Agent call', () => {
+    const chunks: string[] = [];
+    const controller = {
+      enqueue(chunk: string) {
+        chunks.push(chunk);
+      },
+    } as ReadableStreamDefaultController<string>;
+
+    _testOnlyClaudeSdk.enqueueUserToolResults(controller, {
+      type: 'user',
+      parent_tool_use_id: 'agent-call-1',
+      tool_use_result: {
+        type: 'text',
+        file: { filePath: '/tmp/package.json', content: '{"name":"codelark"}' },
+      },
+      message: {
+        role: 'user',
+        content: [{
+          type: 'tool_result',
+          tool_use_id: 'read-call-1',
+          content: '1\\t{"name":"codelark"}',
+        }],
+      },
+      uuid: '22222222-2222-4222-8222-222222222222',
+      session_id: '11111111-2222-4333-8444-555555555555',
+    } as any);
+
+    const events = chunks
+      .join('')
+      .trim()
+      .split(/\n/)
+      .map((chunk) => JSON.parse(chunk.replace(/^data: /, '')));
+    assert.equal(events.length, 1);
+    assert.deepEqual(JSON.parse(events[0].data), {
+      tool_use_id: 'read-call-1',
+      content: '1\\t{"name":"codelark"}',
+      is_error: false,
+    });
+  });
+
+  it('uses top-level SDK tool output only for legacy messages without a result block', () => {
+    const chunks: string[] = [];
+    const controller = {
+      enqueue(chunk: string) {
+        chunks.push(chunk);
+      },
+    } as ReadableStreamDefaultController<string>;
+
+    _testOnlyClaudeSdk.enqueueUserToolResults(controller, {
+      type: 'user',
+      parent_tool_use_id: 'legacy-tool-1',
+      tool_use_result: { stdout: 'legacy output' },
+      message: { role: 'user', content: [] },
+      uuid: '22222222-2222-4222-8222-222222222222',
+      session_id: '11111111-2222-4333-8444-555555555555',
+    } as any);
+
+    const event = JSON.parse(chunks.join('').trim().replace(/^data: /, ''));
+    assert.equal(event.type, 'tool_result');
+    assert.deepEqual(JSON.parse(event.data), {
+      tool_use_id: 'legacy-tool-1',
+      content: '{"stdout":"legacy output"}',
+      is_error: false,
+    });
+  });
 });

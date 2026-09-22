@@ -153,16 +153,10 @@ function enqueueUserToolResults(
   if (message.type !== 'user') return;
   const record = message as unknown as Record<string, unknown>;
   const parentToolUseId = typeof record.parent_tool_use_id === 'string' ? record.parent_tool_use_id : '';
-  if (parentToolUseId && 'tool_use_result' in record) {
-    controller.enqueue(sseEvent('tool_result', {
-      tool_use_id: parentToolUseId,
-      content: stringifyToolResultContent(record.tool_use_result),
-      is_error: false,
-    }));
-  }
   const envelope = isRecord(record.message) ? record.message : null;
   const content = envelope?.content;
   const blocks = Array.isArray(content) ? content : [];
+  let emittedBlockResult = false;
   for (const block of blocks) {
     if (!isRecord(block) || block.type !== 'tool_result') continue;
     const toolUseId = typeof block.tool_use_id === 'string'
@@ -171,10 +165,23 @@ function enqueueUserToolResults(
         ? block.toolUseId
         : parentToolUseId;
     if (!toolUseId) continue;
+    emittedBlockResult = true;
     controller.enqueue(sseEvent('tool_result', {
       tool_use_id: toolUseId,
       content: stringifyToolResultContent(block.content),
       is_error: Boolean(block.is_error || block.isError),
+    }));
+  }
+  // Claude forwards subagent tool results with the parent Agent call id in
+  // parent_tool_use_id and the actual nested tool id in the content block.
+  // The top-level field is only a fallback for legacy messages without a
+  // structured tool_result block; otherwise it would complete the parent
+  // Agent early and then emit the same result for the nested tool.
+  if (!emittedBlockResult && parentToolUseId && 'tool_use_result' in record) {
+    controller.enqueue(sseEvent('tool_result', {
+      tool_use_id: parentToolUseId,
+      content: stringifyToolResultContent(record.tool_use_result),
+      is_error: false,
     }));
   }
 }

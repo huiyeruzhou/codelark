@@ -43,7 +43,7 @@ Cursor tmux 是生产支持的 runtime，不是 UI 占位。真实官方 `agent`
 - Web 工作台配置页：编辑全局默认值。
 - Web 工作台会话配置弹窗：编辑单个会话的覆盖值。
 
-Claude 的 `executable` 影响 `tmux` 和 `pty` 提供方；Claude SDK 提供方不走本机 `claude` / `ccr code` TUI。Claude tmux 启动会先确认所选 executable 确实存在；缺失时直接提示安装/PATH/`/set claudeExecutable` 修复方式，不创建 tmux 或保存失败的 provider binding。首次工作目录信任页会显式移动到 `Yes, I trust this folder` 再确认；YOLO 首启风险页不会自动接受，而是通过 IM 选择卡让用户选择 `No, exit` 或 `Yes, I accept`，选择前不会向 TUI 发送按键。已有 Claude session identity 时，`/p tmux`、tmux 自动恢复和 pty/tmux provider 启动都会执行 `--resume <session_id>`，且输出只绑定该 session 的 JSONL；fresh 会话才从新产生的 JSONL 发现 identity。
+Claude 的 `executable` 影响 `tmux` 和 `pty` 提供方；Claude SDK 提供方不走本机 `claude` / `ccr code` TUI。Claude tmux 启动会先确认所选 executable 确实存在；缺失时直接提示安装/PATH/`/set claudeExecutable` 修复方式，不创建 tmux 或保存失败的 provider binding。首次启动的 welcome、theme 和 terminal setup 页面会作为 onboarding 依次确认；工作目录信任页会显式移动到 `Yes, I trust this folder` 再确认。YOLO 首启风险页不会自动接受，而是通过 IM 选择卡让用户选择 `No, exit` 或 `Yes, I accept`，选择前不会向 TUI 发送按键。已有 Claude session identity 时，`/p tmux`、tmux 自动恢复和 pty/tmux provider 启动都会执行 `--resume <session_id>`，且输出只绑定该 session 的 JSONL；fresh 会话才从新产生的 JSONL 发现 identity。
 
 Codex tmux 的 fresh 首消息会在 workspace trust 后继续处理模型迁移等启动选择，并等待输入框稳定后才注入文本与 Enter。全新聊天继承有效的全局 YOLO 和 reasoning 配置，不会再被 hidden draft 写死为 low。
 
