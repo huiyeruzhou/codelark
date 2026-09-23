@@ -69,6 +69,7 @@ export interface FinalizedBridgeMirrorTurn {
 export interface MirrorTurnStateHolder {
   sessionId: string;
   threadId: string;
+  bindingId?: string;
   pendingTurn: BridgeMirrorTurnState | null;
 }
 
@@ -97,13 +98,14 @@ export function createMirrorTurnState(
   sessionId: string,
   timestamp: string,
   turnId?: string,
+  bindingId?: string,
 ): BridgeMirrorTurnState {
   const safeTimestamp = timestamp || nowIso();
   const startedAtMs = Date.parse(safeTimestamp);
   return {
     ...createUnifiedTurnProgressState(Number.isFinite(startedAtMs) ? startedAtMs : Date.now()),
     turnId: turnId || null,
-    streamKey: buildMirrorStreamKey(sessionId, turnId || null, safeTimestamp),
+    streamKey: buildMirrorStreamKey(sessionId, turnId || null, safeTimestamp, bindingId),
     startedAt: safeTimestamp,
     lastActivityAt: safeTimestamp,
     lastContentResponseAt: null,
@@ -151,7 +153,7 @@ export function ensureMirrorTurnState<TSubscription extends MirrorTurnStateHolde
   record: BridgeMirrorRecord,
 ): BridgeMirrorTurnState {
   if (!subscription.pendingTurn) {
-    subscription.pendingTurn = createMirrorTurnState(subscription.sessionId, record.timestamp, record.turnId);
+    subscription.pendingTurn = createMirrorTurnState(subscription.sessionId, record.timestamp, record.turnId, subscription.bindingId);
     return subscription.pendingTurn;
   }
 
@@ -389,7 +391,7 @@ export function consumeMirrorRecords<TSubscription extends MirrorTurnStateHolder
         if (superseded) finalized.push(superseded);
       }
       if (!subscription.pendingTurn) {
-        subscription.pendingTurn = createMirrorTurnState(subscription.sessionId, record.timestamp, record.turnId);
+        subscription.pendingTurn = createMirrorTurnState(subscription.sessionId, record.timestamp, record.turnId, subscription.bindingId);
       } else {
         if (!subscription.pendingTurn.turnId && record.turnId) {
           subscription.pendingTurn.turnId = record.turnId;

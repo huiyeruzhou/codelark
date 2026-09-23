@@ -3538,7 +3538,7 @@ describe('feishu-adapter structured streaming regions', () => {
     };
 
     await (adapter as any).createStreamingCard('chat-1', 'reply-1', 'stream-1');
-    const historyItemsBeforeRolloverAt160Components = 140;
+    const historyItemsBeforeRolloverAt160Components = 100;
     const firstBatch = Array.from({ length: historyItemsBeforeRolloverAt160Components }, (_, index) => ({
       type: 'markdown' as const,
       role: 'assistant' as const,
@@ -3547,7 +3547,7 @@ describe('feishu-adapter structured streaming regions', () => {
     adapter.onStreamHistory('chat-1', firstBatch, 'stream-1');
     await waitForCondition(() => batchUpdates.length >= 1);
 
-    const secondBatch = Array.from({ length: historyItemsBeforeRolloverAt160Components + 25 }, (_, index) => ({
+    const secondBatch = Array.from({ length: historyItemsBeforeRolloverAt160Components + 65 }, (_, index) => ({
       type: 'markdown' as const,
       role: 'assistant' as const,
       content: `模型输出 ${index + 1}`,
@@ -3574,6 +3574,8 @@ describe('feishu-adapter structured streaming regions', () => {
       && operation.kind === 'card.update'
       && operation.cardId === 'card-1');
     assert.ok(rolloverStatusIndex >= 0);
+    const continuationCreate = operations.findIndex((operation) => operation.kind === 'card.create' && operation.cardId === 'card-2');
+    assert.ok(continuationCreate >= 0 && continuationCreate < rolloverStatusIndex);
     assert.ok(rolloverFinalizeIndex > rolloverStatusIndex);
     assert.ok(rolloverStaticUpdateIndex > rolloverFinalizeIndex);
     const rolloverStaticCard = JSON.parse(cardUpdates[0]?.data?.card?.data || '{}');
@@ -3582,14 +3584,14 @@ describe('feishu-adapter structured streaming regions', () => {
     assert.ok(_testOnly.countFeishuCardComponents(rolloverStaticCard) <= 160);
     const rolloverStaticJson = JSON.stringify(rolloverStaticCard);
     assert.match(rolloverStaticJson, /模型输出 1/);
-    assert.match(rolloverStaticJson, /模型输出 140/);
-    assert.equal(rolloverStaticJson.includes('模型输出 141'), false);
+    assert.match(rolloverStaticJson, /模型输出 100/);
+    assert.equal(rolloverStaticJson.includes('模型输出 101'), false);
     const continuationCard = createdCards.at(-1) || {};
     assert.ok(_testOnly.countFeishuCardComponents(continuationCard) <= 160);
     const continuationJson = JSON.stringify(continuationCard);
     assert.match(continuationJson, /stream_history/);
     assert.equal(continuationJson.includes('"content":"模型输出 1"'), false);
-    assert.match(continuationJson, /模型输出 141/);
+    assert.match(continuationJson, /模型输出 101/);
     assert.match(continuationJson, /模型输出 165/);
     const activeState = (adapter as any).activeCards.get('stream-1');
     assert.equal(activeState.cardId, 'card-2');

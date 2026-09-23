@@ -404,7 +404,7 @@ Claude JSONL parser 曾经用局部 `activeTurnId` 推断当前 turn。整文件
 这通常能靠顺序凑对；增量读取时，parser 每次只拿到新增片段，局部状态会从空开始。
 如果新增片段刚好从 attachment、assistant 或 tool result 开始，parser 就可能把
 `uuid` / `parentUuid` 当成新的 turn root，导致同一轮 Claude 输出被拆成多个
-`mirror:<bridge-session-id>:<turn-id>` streamKey，用户会看到重复或碎片化 mirror 卡片。
+`mirror:<bridge-session-id>:<binding-id>:<turn-id>` streamKey，用户会看到重复或碎片化 mirror 卡片。
 
 Claude source 应维护 provider-specific parser state，并把所有相关记录映射到一个
 稳定的 `rootTurnId`：

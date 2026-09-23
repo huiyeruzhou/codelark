@@ -1,6 +1,7 @@
 import type { FSWatcher } from 'node:fs';
 import type { BridgeMirrorCursor } from './cursor.js';
 import type { BridgeMirrorRecord } from '../../runtime/contracts.js';
+import type { MirrorReadPosition } from '../../domain/session.js';
 import type { BridgeMirrorTurnState, FinalizedBridgeMirrorTurn } from './turns.js';
 
 export interface BridgeMirrorSubscription {
@@ -53,6 +54,7 @@ export interface CreateMirrorSubscriptionInput {
   threadId: string;
   filePath: string | null;
   lastDeliveredAt: string | null;
+  readPosition?: MirrorReadPosition;
   activityTier?: 'hot' | 'cold';
 }
 
@@ -63,6 +65,7 @@ export interface UpdateMirrorSubscriptionInput {
   threadId: string;
   filePath: string | null;
   lastDeliveredAt: string | null;
+  readPosition?: MirrorReadPosition;
   activityTier?: 'hot' | 'cold';
 }
 
@@ -95,7 +98,9 @@ export function createMirrorSubscription(
     chatId: input.chatId,
     threadId: input.threadId,
     filePath: input.filePath,
-    cursor: { initialized: false, lastEventCount: 0 },
+    cursor: input.readPosition?.threadId === input.threadId
+      ? { initialized: true, ...input.readPosition }
+      : { initialized: false, lastEventCount: 0 },
     dirty: input.activityTier === 'cold' ? false : true,
     status: input.filePath ? 'watching' : 'stale',
     activityTier: input.activityTier || 'hot',
@@ -172,6 +177,9 @@ export function updateMirrorSubscription(
 
   if (threadChanged) {
     resetMirrorSubscriptionForThreadChange(subscription, input.lastDeliveredAt);
+    if (input.readPosition?.threadId === input.threadId) {
+      subscription.cursor = { initialized: true, ...input.readPosition };
+    }
   } else if (filePathChanged) {
     resetMirrorSubscriptionForFilePathChange(subscription);
   }
@@ -181,6 +189,12 @@ export function updateMirrorSubscription(
     threadChanged,
     filePathChanged,
   };
+}
+
+export function mirrorReadPosition(subscription: BridgeMirrorSubscription): MirrorReadPosition | undefined {
+  if (!subscription.cursor.initialized) return undefined;
+  const { lastEventSignature, lastEventTimestamp, lastEventCount } = subscription.cursor;
+  return { threadId: subscription.threadId, lastEventSignature, lastEventTimestamp, lastEventCount };
 }
 
 export function clearMirrorSubscriptionFailure(subscription: BridgeMirrorSubscription): void {

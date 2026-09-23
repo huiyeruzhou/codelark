@@ -1429,6 +1429,13 @@ function buildHistoryItemElement(
   elementId: string,
 ): Record<string, unknown> | null {
   const formatted = formatHistoryMarkdownContent(item);
+  if (item.collapseTitle) {
+    return {
+      tag: 'collapsible_panel', expanded: false,
+      header: { title: { tag: 'markdown', content: item.collapseTitle } },
+      elements: [buildHistoryMarkdownElement(formatted)], element_id: elementId,
+    };
+  }
   if (
     item.role !== 'user'
     || Array.from(item.content.trim()).length <= FEISHU_LONG_USER_INPUT_COLLAPSE_THRESHOLD

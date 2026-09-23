@@ -337,7 +337,7 @@ describe('mirror-feedback-controller', () => {
 
     assert.equal(adapter.metadata.length, 1);
     assert.equal(adapter.metadata[0]?.chatId, 'chat-1');
-    assert.equal(adapter.metadata[0]?.streamKey, 'mirror:session-123456789:turn-1');
+    assert.equal(adapter.metadata[0]?.streamKey, 'mirror:session-123456789:binding-123456789:turn-1');
     assert.equal(adapter.metadata[0]?.metadata.title, 'Mirror Thread');
     assert.deepEqual(adapter.metadata[0]?.metadata.tags, [
       'bridge_id:session-',

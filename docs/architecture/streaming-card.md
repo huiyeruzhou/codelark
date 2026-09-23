@@ -183,7 +183,7 @@ error 终态不能只靠红色边框或泛化的 `Error` footer。runtime adapte
 
 mirror source 可以提供独立于主 JSONL 的补充增量事件源，但补充事件仍必须归一化成 `BridgeMirrorRecord`，由同一个 reconcile、turn 和 delivery 生命周期消费。Kimi 的 `wire.jsonl` 在 provider 失败时可能没有 terminal；此时 source 增量读取同 session 的 `kimi-code.log`，只在完整 `ERROR turn failed` 及错误详情出现后合成 `task_complete(isError=true)`。active provider stream 与 mirror 必须复用这一个终态 parser；可重试的 `WARN llm request failed` 不代表终态，不能由任一路径提前终止 turn。补充游标与主 wire 游标分离，主 wire 未变化也会检查补充源，channel renderer 不解析 Kimi 日志。
 
-mirror 冷启动分为两种语义。新 attach 没有 `mirror_last_event_at` 水位，首次 reconcile 只建立 cursor，不回放已有历史；Bridge 重启恢复已有 binding 时带有持久化水位，首次 reconcile 必须交付时间严格晚于该水位的记录，追回停机窗口内已经写入 source、但尚未投递的 turn。不能把两种情况统一成“首次全部忽略”或“首次全部回放”。
+Mirror首次接管一个没有任何读取或投递记录的会话时，只建立cursor，不回放已有历史。换群或Bridge重启恢复已有会话时，优先从持久化的 `mirror_read_position` 接续，读取最后事件签名之后的记录；旧数据没有该字段时先用 `last_progress_at`，再回退到 `mirror_last_event_at`。最后完整轮次的投递时间可能远早于当前进展，不能在已有读取位置时用它恢复整轮历史。
 
 需要观察：
 
@@ -301,18 +301,21 @@ CardKit 的 `streaming_mode` 只影响文本流式上屏的表现，不应成为
 
 飞书流式卡片有 200 个组件的限制，当前 adapter 使用 `STREAMING_CARD_COMPONENT_LIMIT=160` 作为组件软上限。组件数不是唯一风险，实际 CardKit 写入还会受 payload 大小、字符数和 markdown element 数影响；因此运行中还会用 `payload_bytes`、`payload_chars`、`markdown_count` 做提前续接判断。
 
-接近或超过任一安全线时，优先执行续接：
+历史驱动的卡片使用 `streaming-history-page.ts` 从原始历史的当前位置选择一个完整前缀。每页同时检查组件数和序列化后的UTF-8字节数，正文为最终footer预留1024 bytes；不会通过删除尚未送出的前部历史来满足容量限制。一个工具组可在工具之间分页，单条过长的Markdown或工具详情可在字符位置续接，分段保留Unicode字符和代码围栏；工具详情仍遵守既有预览长度/行数限制，不因此扩大或缩小预览。
 
-1. 尝试用 `cardElement.content` 把旧卡状态区改成“已续接到下一条”。
-2. 对旧卡调用 `card.settings` 关闭服务端 `streaming_mode`。
-3. 从 remote shadow 只重建旧卡最后一次成功渲染的内容，调用 `card.update` 写回不含 `streaming_mode:true` 的静态卡片 JSON。客户端只有收到这一步后，旧卡文本才会恢复为可选中状态。
-4. 用相同 stream key 创建 continuation card。
-5. continuation card 从 `historyItemOffset` 或 `toolCallOffset` 后继续渲染。
-6. 如果续接失败，再尝试运行中的 `card.update` full refresh。
+续接顺序：
 
-续接依赖 shadow 中记录的已渲染 history/tool offset。history offset 按 canonical `StreamingHistoryItem` 数计算，不能用 CardKit element 数代替：一个 `tool_panel` history item 可能扁平渲染成多个 `stream_tool_N`。旧卡静态定稿只能使用 shadow 中已经成功写入的范围，不能使用 desired/pending 的完整内容，否则会把下一张卡的开头重复写回旧卡。新卡从当前正在更新的 item 开始，避免因一对多渲染跳过内容。由于 shadow 不是客户端 ACK，慢 batch 或弱确认场景下要保守降级，避免 offset 跳过用户没看到的内容。
+1. 根据上一页成功投递的游标，构造大小合规的下一页。
+2. 创建下一张卡并确认IM消息发送成功。失败时原卡保持可用，沿现有退避机制重试续卡，不再把超大整卡刷新作为fallback。
+3. 用相同stream key接管新卡，保留创建期间到来的新历史、状态和metadata。
+4. 把旧卡标为“已续接到下一条”，关闭streaming，再用实际成功写入的shadow生成静态卡。旧卡收尾失败也不把消息输出回滚到旧卡。
+5. 若仍有待送历史，继续安排下一次flush；runtime没有新事件时也会把积压页送完。收到终态时先送完剩余页，再关闭最终卡。
 
-如果飞书返回 `code=200850`，adapter 会直接触发强制 continuation rollover，不再等待下一轮 full refresh。这个错误通常说明 payload 维度已触及飞书实际限制，即使 `componentCount` 仍低于组件软上限，也应该把当前 group 切到新卡。
+游标包含原始 `historyItemOffset`、组内 `historyToolCallOffset` 和必要时的 `historyTextOffset`，不能用卡片组件数代替。旧卡静态内容直接来自成功写入的元素shadow；因此大型详情拆页后，旧卡不会重新带回完整详情或后续页的内容。
+
+Mirror把最新读取位置保存在会话的 `mirror_read_position` 中，包含thread ID、最后一条事件的签名、时间和事件数；不保存消息正文。解绑前保存该位置，新群绑定及bridge重启后都从它继续，已经在旧群读过的内容不会从本轮开头重放，解绑期间新增的事件仍会进入新群。事件签名用于区分时间戳相同的不同事件。`mirror_last_event_at` 继续表示完整轮次的投递进度，不能代替读取位置；旧数据尚无读取位置时优先使用 `last_progress_at` 接续。绑定变更不停止runtime。Mirror的stream key包含binding ID，旧群卡片的异步收尾不会影响新群卡片。批量新事件超过单卡容量时才使用上述分页流程。
+
+`code=200850` 和 `code=200860` 都按payload限制处理。首次建立卡片成功不代表mirror可用；应同时检查后续flush、续卡创建和最终状态写入结果。由于shadow不是客户端视觉确认，真实端手测仍是发布验收的一部分。
 
 ## 底层飞书 API
 
@@ -329,7 +332,7 @@ CardKit 的 `streaming_mode` 只影响文本流式上屏的表现，不应成为
 | 关闭流式         | `cardkit.v1.card.settings`       | `settings={"streaming_mode":false}`、`sequence`                                                        | 定稿；续接状态写入后关闭 streaming mode             |
 | 终态 reaction  | `im.messageReaction.create`      | `message_id`、emoji type                                                                               | completed/error 结果提示                         |
 
-所有 CardKit 更新都依赖递增的 `sequence`。关闭 streaming mode 本身也占用一个 sequence；普通 finalize 会先关闭 streaming mode 再写最终普通卡，rollover 会依次写“已续接到下一条”状态、关闭 streaming mode、写静态旧卡，然后才创建下一张卡。禁止把 `card.settings` 当成客户端静态化的最后一步。
+所有 CardKit 更新都依赖递增的 `sequence`。关闭 streaming mode 本身也占用一个 sequence；普通 finalize 会先关闭 streaming mode 再写最终普通卡，rollover 先创建并发送下一张卡，再依次写旧卡“已续接到下一条”状态、关闭 streaming mode、写静态旧卡。禁止把 `card.settings` 当成客户端静态化的最后一步。
 
 ## 日志与性能观测
 

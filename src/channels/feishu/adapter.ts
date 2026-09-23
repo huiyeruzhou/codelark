@@ -75,6 +75,7 @@ import {
   formatElapsed,
   type FeishuCardActionButton,
 } from './markdown.js';
+import { buildHistoryPage, type HistoryPageCursor } from './streaming-history-page.js';
 import { buildFencedCodeBlock } from '../../shared/markdown/fence.js';
 import {
   formatFooterClockTime,
@@ -130,6 +131,7 @@ interface FeishuCardState {
   injectedHistoryItems: InjectedStreamingHistoryItem[];
   historyItemOffset: number;
   historyToolCallOffset: number;
+  historyTextOffset?: number;
   toolCallOffset: number;
   historyDriven: boolean;
   thinking: boolean;
@@ -155,6 +157,8 @@ interface FeishuCardState {
   metadata: StructuredStreamingUiMetadata;
   renderedMetadataSignature: string;
   renderedComponentCount: number;
+  renderedPageNext?: HistoryPageCursor;
+  renderedPageHasMore?: boolean;
   desiredRevision: number;
   shadowRevision: number;
   shadowTrust: StreamingRemoteShadowTrust;
@@ -319,9 +323,12 @@ interface StreamingCardRenderResult {
   componentCount: number;
   historyItemOffset: number;
   historyToolCallOffset: number;
+  historyTextOffset?: number;
   toolCallOffset: number;
   historyItems?: StreamingHistoryItem[];
   tools: ToolCallInfo[];
+  next?: HistoryPageCursor;
+  hasMore?: boolean;
 }
 
 interface StreamingCardPayloadStats {
@@ -333,6 +340,7 @@ interface StreamingCardPayloadStats {
 interface StreamingCardRolloverOffsets {
   historyItemOffset: number;
   historyToolCallOffset: number;
+  historyTextOffset?: number;
   toolCallOffset: number;
   reason: string;
   componentCount?: number;
@@ -355,6 +363,7 @@ interface StreamingCardInitialState {
   terminalLastIoText: string;
   historyItemOffset: number;
   historyToolCallOffset: number;
+  historyTextOffset?: number;
   toolCallOffset: number;
   continuationIndex: number;
   startTime: number;
@@ -1169,9 +1178,9 @@ function isFeishuCardPayloadLimitError(error: unknown): boolean {
   const code = error && typeof error === 'object'
     ? (error as Record<string, unknown>).code
     : undefined;
-  if (code === 200850 || code === '200850') return true;
+  if ([200850, 200860, '200850', '200860'].includes(code as number | string)) return true;
   const message = error instanceof Error ? error.message : String(error || '');
-  return /(?:code=|code:\s*)200850\b/.test(message);
+  return /(?:code=|code:\s*)2008(?:50|60)\b/.test(message);
 }
 
 function isFeishuCardInvalidError(error: unknown): boolean {
@@ -1287,62 +1296,44 @@ function buildStreamingCardRender(params: {
   historyItems?: StreamingHistoryItem[];
   historyItemOffset?: number;
   historyToolCallOffset?: number;
+  historyTextOffset?: number;
   toolCallOffset?: number;
   maxComponents?: number;
 }): StreamingCardRenderResult {
-  let historyItemOffset = Math.max(0, params.historyItemOffset || 0);
-  let historyToolCallOffset = Math.max(0, params.historyToolCallOffset || 0);
+  const historyItemOffset = Math.max(0, params.historyItemOffset || 0);
+  const historyToolCallOffset = Math.max(0, params.historyToolCallOffset || 0);
   let toolCallOffset = Math.max(0, params.toolCallOffset || 0);
   const maxComponents = Math.max(1, params.maxComponents || STREAMING_CARD_COMPONENT_LIMIT);
 
-  while (true) {
-    const visibleHistoryItems = params.historyItems
-      ? sliceStreamingHistoryItems(params.historyItems, historyItemOffset, historyToolCallOffset)
-      : undefined;
-    const visibleTools = params.tools.slice(toolCallOffset);
-    const body = buildStreamingCardBody(
-      params.content,
-      params.tasksText,
-      params.statusText,
-      visibleTools,
-      params.actionRows,
-      params.chatId,
-      params.metadata,
-      visibleHistoryItems,
-    );
-    const componentCount = countFeishuCardComponents(body);
-    if (componentCount <= maxComponents) {
-      return {
-        body,
-        componentCount,
-        historyItemOffset,
-        historyToolCallOffset,
-        toolCallOffset,
-        historyItems: visibleHistoryItems,
-        tools: visibleTools,
-      };
-    }
-
-    if (params.historyItems && historyItemOffset < Math.max(0, params.historyItems.length - 1)) {
-      historyItemOffset += 1;
-      historyToolCallOffset = 0;
-      continue;
-    }
-    if (!params.historyItems && toolCallOffset < params.tools.length) {
-      toolCallOffset += 1;
-      continue;
-    }
-
-    return {
-      body,
-      componentCount,
-      historyItemOffset,
-      historyToolCallOffset,
-      toolCallOffset,
-      historyItems: visibleHistoryItems,
-      tools: visibleTools,
-    };
+  const render = (historyItems: StreamingHistoryItem[] | undefined, tools = params.tools.slice(toolCallOffset)) => {
+    const body = buildStreamingCardBody(params.content, params.tasksText, params.statusText,
+      tools, params.actionRows, params.chatId, params.metadata, historyItems);
+    return { body, componentCount: countFeishuCardComponents(body), historyItems, tools };
+  };
+  if (params.historyItems && (maxComponents !== Number.MAX_SAFE_INTEGER || params.historyTextOffset)) {
+    const page = buildHistoryPage(params.historyItems, {
+      historyItemOffset, historyToolCallOffset, historyTextOffset: params.historyTextOffset,
+    }, (items) => {
+      if (maxComponents === Number.MAX_SAFE_INTEGER) return true;
+      const candidate = render(items);
+      // 为最终状态、任务标签和续接提示预留容量。
+      const payload = measureStreamingCardPayload(candidate.body);
+      return candidate.componentCount <= maxComponents
+        && payload.payloadBytes < STREAMING_CARD_PAYLOAD_BYTES_LIMIT - 1024
+        && payload.markdownCount < STREAMING_CARD_MARKDOWN_COUNT_LIMIT;
+    });
+    return { ...render(page.items), historyItemOffset, historyToolCallOffset,
+      historyTextOffset: params.historyTextOffset || 0, toolCallOffset, next: page.next, hasMore: page.hasMore };
   }
+  let result = render(params.historyItems
+    ? sliceStreamingHistoryItems(params.historyItems, historyItemOffset, historyToolCallOffset)
+    : undefined);
+  // 无结构化历史的旧调用方仍使用原有工具列表裁剪规则。
+  while (!params.historyItems && result.componentCount > maxComponents && toolCallOffset < params.tools.length) {
+    toolCallOffset += 1;
+    result = render(undefined);
+  }
+  return { ...result, historyItemOffset, historyToolCallOffset, toolCallOffset };
 }
 
 function extractTerminalContextUsage(statusText: string | null | undefined): string {
@@ -1437,15 +1428,11 @@ function sliceStreamingHistoryItems(
   return visible;
 }
 
-function visibleStreamingHistoryItems(state: FeishuCardState): StreamingHistoryItem[] | undefined {
-  return state.historyDriven
-    ? sliceStreamingHistoryItems(state.historyItems, state.historyItemOffset, state.historyToolCallOffset)
-    : undefined;
-}
-
 function renderedHistoryContinuationCursor(
   state: FeishuCardState,
-): { historyItemOffset: number; historyToolCallOffset: number } {
+): HistoryPageCursor {
+  if (state.renderedPageHasMore && state.renderedPageNext) return state.renderedPageNext;
+  if (state.renderedHistoryItemCount === 0) return { historyItemOffset: state.historyItemOffset, historyToolCallOffset: state.historyToolCallOffset };
   const lastItemOffset = Math.max(0, state.historyItems.length - 1);
   const renderedItemCount = Math.max(1, state.renderedHistoryItemCount);
   const lastRenderedItemOffset = Math.min(
@@ -1481,38 +1468,15 @@ function renderedHistoryContinuationCursor(
 
 function historyCursorAdvanced(
   state: FeishuCardState,
-  cursor: { historyItemOffset: number; historyToolCallOffset: number },
+  cursor: HistoryPageCursor,
 ): boolean {
   return cursor.historyItemOffset > state.historyItemOffset
     || (
       cursor.historyItemOffset === state.historyItemOffset
-      && cursor.historyToolCallOffset > state.historyToolCallOffset
+      && (cursor.historyToolCallOffset > state.historyToolCallOffset
+        || (cursor.historyToolCallOffset === state.historyToolCallOffset
+          && (cursor.historyTextOffset || 0) > (state.historyTextOffset || 0)))
     );
-}
-
-function streamingHistoryItemsBeforeCursor(
-  state: FeishuCardState,
-  cursor: { historyItemOffset: number; historyToolCallOffset: number },
-): StreamingHistoryItem[] {
-  const result: StreamingHistoryItem[] = [];
-  for (let index = state.historyItemOffset; index <= cursor.historyItemOffset; index += 1) {
-    const item = state.historyItems[index];
-    if (!item) break;
-    const startToolOffset = index === state.historyItemOffset ? state.historyToolCallOffset : 0;
-    if (index < cursor.historyItemOffset) {
-      result.push(item.type === 'tool_panel'
-        ? { ...item, tools: item.tools.slice(startToolOffset) }
-        : { ...item });
-      continue;
-    }
-    if (item.type === 'tool_panel' && cursor.historyToolCallOffset > startToolOffset) {
-      result.push({
-        ...item,
-        tools: item.tools.slice(startToolOffset, cursor.historyToolCallOffset),
-      });
-    }
-  }
-  return result;
 }
 
 function visibleStreamingToolCalls(state: FeishuCardState): ToolCallInfo[] {
@@ -1686,7 +1650,7 @@ function streamingUpdatesHaveBatchUpdateCandidate(updates: Array<Pick<StreamingU
 function streamingHistorySignature(items: StreamingHistoryItem[]): string {
   return JSON.stringify(items.map((item) => {
     if (item.type === 'markdown') {
-      return ['markdown', item.role, item.content, item.elementId || ''];
+      return ['markdown', item.role, item.content, item.elementId || '', item.collapseTitle || ''];
     }
     if (item.type === 'runtime_notice') {
       return [
@@ -3483,6 +3447,7 @@ export class FeishuAdapter extends BaseChannelAdapter {
         historyItems: initialHistoryItems,
         historyItemOffset: initialState?.historyItemOffset,
         historyToolCallOffset: initialState?.historyToolCallOffset,
+        historyTextOffset: initialState?.historyTextOffset,
         toolCallOffset: initialState?.toolCallOffset,
       });
       const cardBody = render.body;
@@ -3574,6 +3539,9 @@ export class FeishuAdapter extends BaseChannelAdapter {
         injectedHistoryItems: initialState?.injectedHistoryItems ?? [],
         historyItemOffset: render.historyItemOffset,
         historyToolCallOffset: render.historyToolCallOffset,
+        historyTextOffset: render.historyTextOffset,
+        renderedPageNext: render.next,
+        renderedPageHasMore: render.hasMore,
         toolCallOffset: render.toolCallOffset,
         historyDriven: initialState?.historyDriven ?? false,
         thinking: initialState ? false : true,
@@ -3609,7 +3577,7 @@ export class FeishuAdapter extends BaseChannelAdapter {
         throttleTimer: null,
         flushInFlight: flushCarry?.flushInFlight ?? null,
         backgroundFlushInFlight: flushCarry?.backgroundFlushInFlight ?? null,
-        flushQueued: flushCarry?.flushQueued ?? false,
+        flushQueued: Boolean(render.hasMore || flushCarry?.flushQueued),
         lastFlushStartedAt: flushCarry?.lastFlushStartedAt ?? null,
         nextFlushEarliestAt: null,
         lastSuccessfulFlushAt: null,
@@ -3791,6 +3759,7 @@ export class FeishuAdapter extends BaseChannelAdapter {
       historyItems: state.historyDriven ? state.historyItems : undefined,
       historyItemOffset: state.historyItemOffset,
       historyToolCallOffset: state.historyToolCallOffset,
+      historyTextOffset: state.historyTextOffset,
       toolCallOffset: state.toolCallOffset,
       maxComponents,
     });
@@ -3815,7 +3784,7 @@ export class FeishuAdapter extends BaseChannelAdapter {
     );
     const payload = measureStreamingCardPayload(fullRender.body);
     const payloadReason = describeStreamingCardPayloadPressure(payload);
-    if (fullRender.componentCount < STREAMING_CARD_COMPONENT_LIMIT && !payloadReason) return null;
+    if (!state.renderedPageHasMore && fullRender.componentCount < STREAMING_CARD_COMPONENT_LIMIT && !payloadReason) return null;
 
     const reason = fullRender.componentCount >= STREAMING_CARD_COMPONENT_LIMIT
       ? 'component_count'
@@ -3880,7 +3849,7 @@ export class FeishuAdapter extends BaseChannelAdapter {
   private async rolloverStreamingCard(
     streamKey: string,
     state: FeishuCardState,
-    offsets: { historyItemOffset: number; historyToolCallOffset: number; toolCallOffset: number },
+    offsets: HistoryPageCursor & { toolCallOffset: number },
     content: string,
     tasksText: string,
     statusText: string,
@@ -3891,14 +3860,7 @@ export class FeishuAdapter extends BaseChannelAdapter {
     const cardkit = (this.restClient as any)?.cardkit?.v1;
     if (!cardkit?.card?.settings) return false;
 
-    try {
-      await this.finalizeRolloverSourceCard(streamKey, state, offsets);
-    } catch (error) {
-      this.markCardFlushFailure(state, error);
-      console.warn('[feishu-adapter] Failed to close saturated streaming card before rollover:', error instanceof Error ? error.message : error);
-      return false;
-    }
-
+    const initialRevision = state.desiredRevision;
     const nextInitialState: StreamingCardInitialState = {
       content,
       tasksText,
@@ -3915,6 +3877,7 @@ export class FeishuAdapter extends BaseChannelAdapter {
       terminalLastIoText: state.terminalLastIoText,
       historyItemOffset: offsets.historyItemOffset,
       historyToolCallOffset: offsets.historyToolCallOffset,
+      historyTextOffset: offsets.historyTextOffset,
       toolCallOffset: offsets.toolCallOffset,
       continuationIndex: state.continuationIndex + 1,
       startTime: state.startTime,
@@ -3934,6 +3897,32 @@ export class FeishuAdapter extends BaseChannelAdapter {
       flushCarry,
     );
     if (created) {
+      const next = this.activeCards.get(streamKey)!;
+      // 创建请求期间仍可能接收新事件，不能用创建时的快照覆盖它们。
+      next.desiredRevision = initialRevision;
+      next.shadowRevision = initialRevision;
+      if (state.desiredRevision !== initialRevision) {
+        next.historyItems = state.historyItems;
+        next.toolCalls = state.toolCalls;
+        next.pendingText = state.pendingText;
+        next.pendingTasksText = state.pendingTasksText;
+        next.pendingStatusText = state.pendingStatusText;
+        next.taskItems = state.taskItems;
+        next.injectedHistoryItems = state.injectedHistoryItems;
+        next.actionRows = state.actionRows;
+        next.metadata = state.metadata;
+        next.terminalContextUsageText = state.terminalContextUsageText;
+        next.terminalLastResponseText = state.terminalLastResponseText;
+        next.terminalLastIoText = state.terminalLastIoText;
+        next.desiredRevision = state.desiredRevision;
+        next.flushQueued = true;
+      }
+      try {
+        await this.finalizeRolloverSourceCard(streamKey, state);
+      } catch (error) {
+        // 新卡已发送，不能回滚到旧卡继续输出。
+        console.warn('[feishu-adapter] Continuation sent but previous card finalization failed:', error);
+      }
       console.log('[feishu-adapter] Streaming card rolled over after threshold:', {
         streamKey,
         previousCardId: state.cardId,
@@ -3946,7 +3935,8 @@ export class FeishuAdapter extends BaseChannelAdapter {
       return true;
     }
 
-    this.activeCards.set(streamKey, state);
+    this.markCardFlushFailure(state, new Error('Continuation card creation or delivery failed'));
+    this.markCardFlushQueued(state);
     return false;
   }
 
@@ -3960,7 +3950,7 @@ export class FeishuAdapter extends BaseChannelAdapter {
     metadata: StructuredStreamingUiMetadata,
     reason: string,
   ): Promise<boolean> {
-    // 飞书 200850/payload 限制不是组件数问题；从“上一个已渲染 group”后续接，保留当前正在更新的 group。
+    // 飞书 200850/200860 payload 限制不是组件数问题；从“上一个已渲染 group”后续接，保留当前正在更新的 group。
     const offsets = this.streamingCardContinuationOffsets(state);
     console.log('[feishu-adapter] Streaming card forcing continuation rollover:', {
       streamKey,
@@ -3986,7 +3976,6 @@ export class FeishuAdapter extends BaseChannelAdapter {
   private async finalizeRolloverSourceCard(
     streamKey: string,
     state: FeishuCardState,
-    continuationOffsets: { historyItemOffset: number; historyToolCallOffset: number },
   ): Promise<void> {
     const cardkit = (this.restClient as any)?.cardkit?.v1;
     const nowMs = Date.now();
@@ -4033,9 +4022,7 @@ export class FeishuAdapter extends BaseChannelAdapter {
       // original streaming card non-selectable until it receives static card JSON.
       // Rebuild only the last successfully rendered shadow so pending continuation
       // content remains exclusively on the next card.
-      const renderedHistoryItems = state.historyDriven
-        ? streamingHistoryItemsBeforeCursor(state, continuationOffsets)
-        : undefined;
+      const renderedHistoryItems = state.historyDriven ? [] : undefined;
       const renderedToolCount = renderedStreamingToolCount(state);
       const renderedTools = state.historyDriven
         ? []
@@ -4050,8 +4037,17 @@ export class FeishuAdapter extends BaseChannelAdapter {
         state.metadata,
         renderedHistoryItems,
       );
+      if (state.historyDriven) {
+        const history = (staticCard.body as { elements: Array<Record<string, unknown>> }).elements
+          .find((element) => element.element_id === 'stream_history');
+        if (history) history.elements = state.renderedHistoryElementIds
+          .map((id) => JSON.parse(state.renderedHistoryElementJson[id]!));
+      }
       staticCard.config = { wide_screen_mode: true };
       const staticCardJson = JSON.stringify(staticCard);
+      if (describeStreamingCardPayloadPressure(measureStreamingCardPayload(staticCard))) {
+        throw new Error('Rollover source card exceeds payload budget');
+      }
 
       state.sequence += 1;
       const updateResult = await this.withFeishuRequestTimeout(streamKey, 'card.update:rollover_static', () => cardkit.card.update({
@@ -4202,7 +4198,9 @@ export class FeishuAdapter extends BaseChannelAdapter {
     });
 
     let fullRefreshReason: string | null = null;
-    if (state.shadowTrust !== 'trusted') {
+    if (desiredRender.render.hasMore || state.historyTextOffset) {
+      fullRefreshReason = 'history_page';
+    } else if (state.shadowTrust !== 'trusted') {
       fullRefreshReason = `shadow_${state.shadowTrust}`;
     } else if (snapshot.actionSignature !== state.renderedActionSignature) {
       fullRefreshReason = 'action_signature_changed';
@@ -4369,7 +4367,7 @@ export class FeishuAdapter extends BaseChannelAdapter {
         payload_chars_limit: STREAMING_CARD_PAYLOAD_CHARS_LIMIT,
         markdown_count_limit: STREAMING_CARD_MARKDOWN_COUNT_LIMIT,
       });
-      const rolled = await this.rolloverStreamingCard(
+      await this.rolloverStreamingCard(
         streamKey,
         state,
         rolloverOffsets,
@@ -4380,7 +4378,7 @@ export class FeishuAdapter extends BaseChannelAdapter {
         snapshot.metadata,
         rolloverOffsets.reason,
       );
-      if (rolled) return;
+      return;
     }
     const projectedRender = this.currentStreamingCardRender(
       state,
@@ -4622,7 +4620,7 @@ export class FeishuAdapter extends BaseChannelAdapter {
                     plan.snapshot.statusText,
                     plan.snapshot.actionRows,
                     plan.snapshot.metadata,
-                    'feishu_200850',
+                    'feishu_payload_limit',
                   ).then((rolled) => {
                     if (rolled) return;
                     const latest = this.activeCards.get(streamKey);
@@ -4715,7 +4713,7 @@ export class FeishuAdapter extends BaseChannelAdapter {
             plan.snapshot.statusText,
             plan.snapshot.actionRows,
             plan.snapshot.metadata,
-            'feishu_200850',
+            'feishu_payload_limit',
           );
           if (rolled) return;
         } else if (isFeishuCardElementLimitError(err)) {
@@ -4872,6 +4870,19 @@ export class FeishuAdapter extends BaseChannelAdapter {
       state.flushQueued = false;
     }
 
+    // 批量恢复可能仍有多页。逐页确认发送，最后才写终态；失败保留当前卡以供重试。
+    while (state.historyDriven) {
+      const remaining = this.currentStreamingCardRender(state, state.pendingText || '',
+        state.pendingTasksText || '', state.pendingStatusText || '', state.actionRows, state.metadata);
+      if (!remaining.hasMore && !state.renderedPageHasMore) break;
+      const previousCardId = state.cardId;
+      const previousRevision = state.shadowRevision;
+      await this.flushCardUpdate(cardKey);
+      state = this.activeCards.get(cardKey)!;
+      if (state.cardId === previousCardId && (state.consecutiveFlushFailures > 0
+        || (state.shadowRevision === previousRevision && !state.renderedPageHasMore))) return false;
+    }
+
     let terminalReactionEmoji: string | null = null;
     let streamingModeClosed = false;
     try {
@@ -4914,33 +4925,15 @@ export class FeishuAdapter extends BaseChannelAdapter {
         finalText = `${trimmedExisting}\n\n${trimmedResponse}`;
       }
 
-      let finalTools = visibleStreamingToolCalls(state);
-      let finalHistoryItems = visibleStreamingHistoryItems(state);
-      let finalCardJson = '';
-      let finalComponentCount = 0;
-      while (true) {
-        finalCardJson = buildFinalCardJson(
-          finalText,
-          state.taskItems,
-          finalTools,
-          footer,
-          status,
-          state.actionRows,
-          state.chatId,
-          state.metadata,
-          finalHistoryItems,
-        );
-        finalComponentCount = countFeishuCardComponents(JSON.parse(finalCardJson));
-        if (finalComponentCount <= STREAMING_CARD_COMPONENT_LIMIT) break;
-        if (finalHistoryItems && finalHistoryItems.length > 1) {
-          finalHistoryItems = finalHistoryItems.slice(1);
-          continue;
-        }
-        if (!finalHistoryItems && finalTools.length > 0) {
-          finalTools = finalTools.slice(1);
-          continue;
-        }
-        break;
+      const finalRender = this.currentStreamingCardRender(state, finalText,
+        state.pendingTasksText || '', state.pendingStatusText || '', state.actionRows, state.metadata);
+      const finalCardJson = buildFinalCardJson(finalText, state.taskItems, finalRender.tools,
+        footer, status, state.actionRows, state.chatId, state.metadata, finalRender.historyItems);
+      const finalBody = JSON.parse(finalCardJson);
+      const finalComponentCount = countFeishuCardComponents(finalBody);
+      if (finalComponentCount > STREAMING_CARD_COMPONENT_LIMIT
+        || describeStreamingCardPayloadPressure(measureStreamingCardPayload(finalBody))) {
+        throw new Error('Final card exceeds payload budget');
       }
       state.perf.finalPayloadBytes = Buffer.byteLength(finalCardJson, 'utf8');
       state.perf.finalComponentCount = finalComponentCount;
@@ -5438,6 +5431,10 @@ export class FeishuAdapter extends BaseChannelAdapter {
       state.renderedHistoryElementJson = renderedHistory.elementJson;
       state.historyItemOffset = render.historyItemOffset;
       state.historyToolCallOffset = render.historyToolCallOffset;
+      state.historyTextOffset = render.historyTextOffset;
+      state.renderedPageNext = render.next;
+      state.renderedPageHasMore = render.hasMore;
+      if (render.hasMore) this.markCardFlushQueued(state);
       state.toolCallOffset = render.toolCallOffset;
       state.renderedToolSnapshots = state.historyDriven
         ? buildRenderedHistoryToolSnapshots(render.historyItems)
@@ -5465,7 +5462,7 @@ export class FeishuAdapter extends BaseChannelAdapter {
           statusText,
           actionRows,
           metadata,
-          isFeishuCardPayloadLimitError(err) ? 'feishu_200850' : 'feishu_element_limit',
+          isFeishuCardPayloadLimitError(err) ? 'feishu_payload_limit' : 'feishu_element_limit',
         );
         if (rolled) return true;
       }

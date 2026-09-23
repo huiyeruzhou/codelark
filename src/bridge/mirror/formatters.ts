@@ -4,8 +4,8 @@ export function buildInteractiveStreamKey(sessionId: string, messageId: string):
   return `im:${sessionId}:${messageId}`;
 }
 
-export function buildMirrorStreamKey(sessionId: string, turnId: string | null | undefined, startedAt: string): string {
-  return `mirror:${sessionId}:${turnId || startedAt}`;
+export function buildMirrorStreamKey(sessionId: string, turnId: string | null | undefined, startedAt: string, bindingId?: string): string {
+  return `mirror:${sessionId}:${bindingId ? `${bindingId}:` : ''}${turnId || startedAt}`;
 }
 
 function getMirrorAssistantRuntimeLabel(): string {

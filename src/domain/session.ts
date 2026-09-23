@@ -30,6 +30,14 @@ export type BridgeSessionHealthStatus =
   | 'failed'
   | 'aborted';
 
+/** Mirror已读取的位置，独立于上一轮最终回复交付时间；不保存消息正文。 */
+export interface MirrorReadPosition {
+  threadId: string;
+  lastEventSignature?: string;
+  lastEventTimestamp?: string;
+  lastEventCount: number;
+}
+
 export interface BridgeSession {
   id: string;
   name?: string;
@@ -58,6 +66,7 @@ export interface BridgeSession {
   stream_ui_consecutive_failures?: number;
   mirror_status?: 'inactive' | 'watching' | 'stale';
   mirror_last_event_at?: string;
+  mirror_read_position?: MirrorReadPosition;
   created_at?: string;
   updated_at?: string;
 }

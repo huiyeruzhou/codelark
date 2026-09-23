@@ -153,6 +153,8 @@ export type StreamingHistoryItem =
       role: StreamingHistoryTextRole;
       content: string;
       variant?: 'thinking_summary';
+      /** 展示超长工具详情或消息分段时使用的折叠标题。 */
+      collapseTitle?: string;
       elementId?: string;
     }
   | {

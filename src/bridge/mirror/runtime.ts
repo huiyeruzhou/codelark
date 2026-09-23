@@ -35,6 +35,7 @@ import { runMirrorReconcileBatch, type MirrorReconcileStatus } from './reconcile
 import { getSessionCodexThreadId } from '../../domain/session-runtime.js';
 import type { MirrorJsonlSource, MirrorJsonlSourceSummary } from '../../runtime/contracts.js';
 import type { BridgeTurnRuntime } from '../turn/turn-types.js';
+import type { MirrorReadPosition } from '../../domain/session.js';
 
 export interface BridgeMirrorRuntimeState {
   running: boolean;
@@ -82,6 +83,8 @@ export interface MirrorRuntimeSession {
     };
   };
   mirror_last_event_at?: string | null;
+  mirror_read_position?: MirrorReadPosition;
+  last_progress_at?: string;
 }
 
 export interface CreateMirrorRuntimeOptions {
@@ -264,6 +267,8 @@ export function createMirrorRuntime(
     const state = getState();
     const existing = state.mirrorSubscriptions.get(bindingId);
     if (!existing) return;
+    // 删除按binding持有的订阅前，把读取位置留在会话上供下一个群接续。
+    deps.syncMirrorSessionStateSafe(existing.sessionId, 'mirror subscription detach checkpoint');
     deps.stopMirrorStreaming(existing);
     closeMirrorWatcher(existing);
     state.mirrorSubscriptions.delete(bindingId);
@@ -307,6 +312,11 @@ export function createMirrorRuntime(
       activeBindingWindowMs: options.activeBindingWindowMs,
       nowMs: Date.now(),
     });
+    const readPosition = session.mirror_read_position?.threadId === threadId
+      ? session.mirror_read_position
+      : !session.mirror_read_position && session.last_progress_at
+        ? { threadId, lastEventTimestamp: session.last_progress_at, lastEventCount: 0 }
+        : undefined;
 
     if (!existing) {
       const created = createMirrorSubscription({
@@ -317,6 +327,7 @@ export function createMirrorRuntime(
         threadId,
         filePath,
         lastDeliveredAt: session.mirror_last_event_at || null,
+        readPosition,
         activityTier,
       });
       watchMirrorFile(created, filePath);
@@ -332,6 +343,7 @@ export function createMirrorRuntime(
       threadId,
       filePath,
       lastDeliveredAt: session.mirror_last_event_at || null,
+      readPosition,
       activityTier,
     });
     if (threadChanged || filePathChanged) {
@@ -368,6 +380,10 @@ export function createMirrorRuntime(
       });
     }
 
+    // 同一轮同步可能同时看到旧绑定移除和新绑定建立，必须先保存旧读取位置。
+    for (const bindingId of plan.removeBindingIds) {
+      removeMirrorSubscription(bindingId);
+    }
     for (const binding of plan.upsertBindings) {
       try {
         upsertMirrorSubscription(binding);
@@ -377,10 +393,6 @@ export function createMirrorRuntime(
           error,
         );
       }
-    }
-
-    for (const bindingId of plan.removeBindingIds) {
-      removeMirrorSubscription(bindingId);
     }
   }
 

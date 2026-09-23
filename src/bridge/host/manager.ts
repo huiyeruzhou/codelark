@@ -121,7 +121,7 @@ import {
   type MirrorSuppressionState,
   type MirrorSuppressionStore,
 } from '../mirror/suppression.js';
-import { type BridgeMirrorSubscription } from '../mirror/subscription-state.js';
+import { mirrorReadPosition, type BridgeMirrorSubscription } from '../mirror/subscription-state.js';
 import { SessionRegistryService } from '../session/registry.js';
 import {
   buildAdapterConfigFingerprint,
@@ -2447,10 +2447,15 @@ function syncMirrorSessionState(sessionId: string): void {
     .filter((value): value is string => Boolean(value))
     .sort()
     .at(-1) || session.mirror_last_event_at;
+  const readPosition = subscriptions.map(mirrorReadPosition)
+    .filter((position): position is NonNullable<typeof position> => Boolean(position))
+    .sort((a, b) => (a.lastEventTimestamp || '').localeCompare(b.lastEventTimestamp || ''))
+    .at(-1) || session.mirror_read_position;
 
   if (
     session.mirror_status === mirrorStatus
     && session.mirror_last_event_at === deliveredAt
+    && JSON.stringify(session.mirror_read_position) === JSON.stringify(readPosition)
   ) {
     return;
   }
@@ -2458,6 +2463,7 @@ function syncMirrorSessionState(sessionId: string): void {
   store.updateSession(sessionId, {
     mirror_status: mirrorStatus,
     mirror_last_event_at: deliveredAt,
+    mirror_read_position: readPosition,
   });
 }
 
