@@ -11,6 +11,7 @@ import { prepareCodexDesktopRemote, disableCodexDesktopRemote } from '../src/run
 import { CodexAppServerLifecycle } from '../src/runtime/codex/app-server-lifecycle.js';
 import { fixtureEnvironment, fixtureModel, startFixtureModel, textInput } from './fixtures/codex-app-server-lifecycle.js';
 import { DesktopGui, until } from './fixtures/desktop-gui-cdp.js';
+import { connectDesktopGuiBackend } from './fixtures/desktop-gui-backend.js';
 import { desktopWindowQuerySource } from './fixtures/desktop-gui-window-query.js';
 
 const execute = promisify(execFile);
@@ -134,10 +135,10 @@ async function bootout() {
 }
 async function bootstrap(endpoint: string) {
   await run('/bin/launchctl', ['bootstrap', domain, plist]);
-  const client = await until(async () => {
-    try { return await CodexAppServerClient.connect(endpoint, 500); } catch { return false; }
-  }, '保存的 LaunchAgent 启动');
+  const client = await connectDesktopGuiBackend(endpoint);
   clients.push(client);
+  assert.equal(client.serverInfo.codexHome, process.env.CODEX_HOME);
+  client.onMessage((message: AppServerMessage) => protocol.push({ source: 'reloaded-backend-observer', message }));
   sequence('backend-bootstrap-ready', { pid: await backendPid() });
   return client;
 }
@@ -168,7 +169,7 @@ try {
   result.desktopAsarSha256 = createHash('sha256').update(fs.readFileSync(path.join(app, 'Contents/Resources/app.asar'))).digest('hex');
   result.cliVersion = await run(executable, ['--version']);
   result.revision = await run('/usr/bin/git', ['rev-parse', 'HEAD']);
-  result.sourceHashes = Object.fromEntries([script, ...['desktop-gui-cdp.ts', 'desktop-gui-onboarding.ts', 'desktop-gui-window-query.ts']
+  result.sourceHashes = Object.fromEntries([script, ...['desktop-gui-cdp.ts', 'desktop-gui-backend.ts', 'desktop-gui-onboarding.ts', 'desktop-gui-window-query.ts']
     .map((file) => fileURLToPath(new URL(`./fixtures/${file}`, import.meta.url)))]
     .map((file) => [path.basename(file), createHash('sha256').update(fs.readFileSync(file)).digest('hex')]));
   const windowQueryFile = path.join(evidence, 'desktop-gui-window-query.c');
@@ -324,7 +325,15 @@ try {
   await launch('03-persisted-service-before-desktop', threadId);
   await gui!.expectText('DESKTOP_REOPEN_SHARED_REPLY');
   await gui!.capture('restored-thread');
-  assert.equal((await restored.request<any>('thread/resume', { threadId })).thread.id, threadId);
+  const resumeStarted = Date.now();
+  sequence('backend-resume-start', { threadId, requestBudget: 'product-default' });
+  try {
+    assert.equal((await restored.request<any>('thread/resume', { threadId })).thread.id, threadId);
+  } catch (error) {
+    sequence('backend-resume-failed', { threadId, durationMs: Date.now() - resumeStarted, error: String(error) });
+    throw error;
+  }
+  sequence('backend-resume-complete', { threadId, durationMs: Date.now() - resumeStarted });
   result.persistedLaunchAgentRestarts = true;
   result.restoresEnvironmentWithoutBridge = true;
   result.resumesAfterBackendRestart = true;

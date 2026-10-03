@@ -2,7 +2,7 @@
 
 `scripts/verify-codex-desktop-macos.ts` 在一次性 macOS 26 runner 上启动官方 `~/Applications/Codex.app`，真实 Codex CLI 连接本地 mock 模型。GUI 是验收对象，只有模型响应被替换。不修改或执行解包后的 Desktop 通信模块，不创建假的 `.app`，不调用 renderer 内部状态或发消息接口。
 
-当前实际进度：`37142369652` 已通过真实向导、模型介绍关闭、共享 thread 双向收发和 GUI 命令审批。单题问答的 GUI 选择、原生答案回传与 turn 完成也已确认；旧脚本随后误等不存在的 `Submit` 按钮，导致整体仍为 `success=false`。移除多余等待后的完整 CI、后续重开与实际 OS 登录仍待验证。
+当前实际进度：`37142941126` 已通过真实向导、模型介绍关闭、共享 thread 双向收发、GUI 命令审批、精确问答断言和 Desktop 退出重开。重载服务后 GUI 显示原会话，但补充 Bridge `thread/resume` 因误用就绪探测期限而超时，整体仍为 `success=false`。修正后的完整重载、Desktop 先开后恢复、disable 默认 GUI 和实际 OS 登录仍待验证。
 
 ## 执行与判断
 
@@ -69,6 +69,12 @@ CI `37139317117`（`f5bda77`）已实际打开官方 `26.930.31730` 的窗口，
 该轮审批失败是配置不一致：通用 CLI fixture 写入 `approval_policy="never"`，但脚本只在 `thread/start` 指定 `on-request`。Desktop 发送时采用配置默认值，`thread/settings/updated` 明确将线程改为 `never`，随后真实 `exec_command` 返回 `approval policy is Never; reject command`。工具本身存在于 `body.tools`，不能用切换模型解释此失败。原生 verifier 的成功审批线程使用 `on-request`；因此修复是对齐 Desktop 独占配置，继续要求真实审批请求和 GUI 点击。Linux 真实 CLI `0.160.0` 已验证从修正后的配置读取 `on-request`、按该配置发送后再产生原生命令审批；该辅助检查明确 `guiTested=false`，本身不证明 GUI 审批已通过。
 
 `37142369652`（`5139e90`）已通过修正配置后的真实 GUI 审批：`Allow once` 点击后受控命令输出正确、退出码为 0、Bridge 原审批失效。该轮真实 Plan 请求包含 `request_user_input`；点击单选项 `GUI_BLUE` 后，原生 `serverRequest/resolved`、匹配本次 `itemId/call_id` 的答案 `{"answers":{"desktop_color":{"answers":["GUI_BLUE"]}}}` 和同一 turn 的完成事件均已出现。实际 Accessibility tree 没有 `Submit` 按钮；脚本等它 45 秒才失败。现已移除这一步，保留真实点击、请求失效、turn 完成和精确答案断言，继续执行尚未运行的重开故事。
+
+`37142941126`（`25d110b`）中，问答完整断言通过；Desktop 退出重开后，backend PID 仍为 `5367`，新窗口显示原问答以及新的 Bridge 回复 `DESKTOP_REOPEN_SHARED_REPLY`。随后重新加载保存的 LaunchAgent，backend PID 变为 `6930`，原版 Desktop 新 PID `6939` 的窗口显示同一 thread 历史，App 日志也记录自身 `thread/resume` 在 `13179ms` 后成功。
+
+该轮失败来自验收脚本继续使用 `connect(endpoint, 500)` 返回的就绪探测连接执行 Bridge `thread/resume`；此参数同时控制后续每次 RPC，而非仅控制握手。原生日志中该请求从 `18:09:17.266858Z` 处理到 `18:09:23.000026Z`，已超过 500ms 及普通连接默认的 5 秒。脚本现在关闭短探测连接，再用普通 `connect(endpoint)` 的产品默认连接保留原恢复断言，记录 `backend-resume-start/complete/failed` 和耗时，不重发 `thread/resume`。协议回归要求产品默认连接接受六秒响应、30 秒持续无响应仍失败；这不替代下一轮真实 GUI 验收。当前没有晚启动服务或关闭共享配置后的 GUI 结果。
+
+生产预算核对：`app-server-registry.ts` 和 `app-server-lifecycle.ts` 的连接均使用客户端默认 5000ms，`resume` 未单独指定期限；超时会丢弃该请求后来的响应。上述 5.73 秒服务端处理跨度超过产品默认预算，存在冷恢复时误判超时的实际风险；13.18 秒是官方 Desktop 自身请求的成功耗时，不能当成生产 Bridge 已失败的记录。本轮尚未使用默认 5 秒生产连接复现该故障，不能据此断言所有恢复都会失败。主线另行修复产品预算，分离默认握手 5 秒与请求 30 秒，并保留显式数字调用的兼容行为。GUI 夹具关闭显式 500ms 探测连接后使用普通默认连接，不设置验收专用期限；因此下一轮直接验证产品参数。生产变更由主线提交，本 GUI 修改不包含客户端代码。
 
 后续失败报告同时保存 `desktopConnectionUrl`、`desktopConnectionHostname` 和来自本次 App stderr 的 `desktopStartupDiagnostics.transportErrors`。CDP 不可用时，先结合这些字段和 `failure-macos-display.png` 检查原生对话框。
 

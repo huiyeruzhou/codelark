@@ -6,6 +6,7 @@ import path from 'node:path';
 import test from 'node:test';
 import { WebSocketServer } from 'ws';
 import { Cdp, DesktopGui } from './desktop-gui-cdp.js';
+import { connectDesktopGuiBackend } from './desktop-gui-backend.js';
 import { onboardingAction, type OnboardingScreen } from './desktop-gui-onboarding.js';
 
 // 根据 37139666898 的实际角色页和同版公开控件构造决策输入；这是驱动逻辑单测，不是 GUI 验收。
@@ -88,6 +89,59 @@ test('只读 CDP 等待启动期迟到响应，输入超时只发送一次并保
   } finally {
     t.mock.timers.reset();
     client.close();
+    await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+  }
+});
+
+test('重载 backend 关闭短探测连接，产品默认恢复 RPC 可等待六秒但三十秒无响应仍失败且不重发', async (t) => {
+  // 独占协议 mock 验证连接生命周期和期限，不作为原生 GUI 验收。
+  const server = new WebSocketServer({ host: '127.0.0.1', port: 0 });
+  await once(server, 'listening');
+  const address = server.address();
+  assert(address && typeof address !== 'string');
+  const sockets: import('ws').WebSocket[] = [];
+  let probeClosed: Promise<unknown[]> | undefined;
+  server.on('connection', (socket) => {
+    sockets.push(socket);
+    if (sockets.length === 1) probeClosed = once(socket, 'close');
+    socket.on('message', (data) => {
+      const message = JSON.parse(data.toString());
+      if (message.method === 'initialize') socket.send(JSON.stringify({ id: message.id, result: { codexHome: '/fixture' } }));
+      if (message.method === 'thread/resume') socket.emit('resume-request', message);
+    });
+  });
+  let client: Awaited<ReturnType<typeof connectDesktopGuiBackend>> | undefined;
+  try {
+    client = await connectDesktopGuiBackend(`ws://127.0.0.1:${address.port}`);
+    assert.equal(sockets.length, 2, '不得把短探测连接返回给恢复观察者');
+    await probeClosed;
+    const socket = sockets[1]!;
+    const received: any[] = [];
+    socket.on('message', (data) => received.push(JSON.parse(data.toString())));
+    t.mock.timers.enable({ apis: ['setTimeout', 'Date'] });
+    let settled = false;
+    const resumeMessage = once(socket, 'resume-request');
+    const resume = client.request<any>('thread/resume', { threadId: 'original-thread' })
+      .then((value) => { settled = true; return value; });
+    await resumeMessage;
+    t.mock.timers.tick(6_000);
+    await Promise.resolve();
+    assert.equal(settled, false);
+    const request = received.find((message) => message.method === 'thread/resume');
+    socket.send(JSON.stringify({ id: request.id, result: { thread: { id: 'original-thread' } } }));
+    assert.equal((await resume).thread.id, 'original-thread');
+
+    const stalledMessage = once(socket, 'resume-request');
+    const stalled = assert.rejects(client.request('thread/resume', { threadId: 'stalled-thread' }), /request timed out: thread\/resume/);
+    await stalledMessage;
+    t.mock.timers.tick(30_001);
+    await stalled;
+    assert.deepEqual(received.filter((message) => message.method === 'thread/resume').map((message) => message.params.threadId),
+      ['original-thread', 'stalled-thread'], '结果未知时不重发恢复请求');
+  } finally {
+    t.mock.timers.reset();
+    client?.close();
+    for (const socket of sockets) socket.terminate();
     await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
   }
 });
