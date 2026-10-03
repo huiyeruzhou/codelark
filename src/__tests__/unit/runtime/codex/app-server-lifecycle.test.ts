@@ -167,6 +167,35 @@ test('initial resume does not redeliver old history; detach never interrupts or 
   assert(!f.received.some((m) => m.method === 'turn/interrupt' || m.method === 'thread/archive'));
 });
 
+test('replayed usage of a completed turn cannot create a new output turn on attachment', async (t) => {
+  const f = await fixture(t);
+  f.thread.id = 'resumed-with-usage';
+  f.thread.turns = [{ id: 'old', status: 'completed', items: [] }];
+  const usage = { turnId: 'old', tokenUsage: { last: { totalTokens: 12 } } };
+  f.handle((message) => {
+    if (message.method !== 'thread/resume') return false;
+    // Exercise both arrival orders around the response, as WebSocket frames may share a read.
+    f.send('thread/tokenUsage/updated', usage);
+    f.respond(message, { thread: f.thread });
+    f.send('thread/tokenUsage/updated', usage);
+    return true;
+  });
+  await f.runtime.ensureThread({ threadId: f.thread.id });
+  await delay(20);
+  assert.equal(f.runtime.snapshot(f.thread.id).activity, 'idle');
+  assert.deepEqual(f.runtime.recordsAfter(f.thread.id).records, []);
+
+  const turnId = await f.runtime.submit(f.thread.id, text);
+  f.send('thread/tokenUsage/updated', { ...usage, turnId });
+  await until(() => f.runtime.recordsAfter(f.thread.id).records.some((r) => r.type === 'context_usage'));
+  f.send('turn/completed', { turn: { id: turnId, status: 'completed', items: [] } });
+  await until(() => f.runtime.snapshot(f.thread.id).activity === 'idle');
+  const cursor = f.runtime.recordsAfter(f.thread.id).cursor;
+  f.send('thread/tokenUsage/updated', { ...usage, turnId, tokenUsage: { last: { totalTokens: 99 } } });
+  await delay(20);
+  assert.deepEqual(f.runtime.recordsAfter(f.thread.id, cursor).records, []);
+});
+
 test('optional capability classification never treats an active writer or experimental field error as missing method', () => {
   assert(isUnsupportedAppServerMethod(new AppServerRpcError(-32600, 'Invalid request: unknown variant `thread/unsubscribe`, expected one of abc'), 'thread/unsubscribe'));
   assert(!isUnsupportedAppServerMethod(new AppServerRpcError(-32600, 'active writer'), 'thread/unsubscribe'));

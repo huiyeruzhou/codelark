@@ -106,6 +106,15 @@ export async function verifyLifecycle(executable: string, evidence: string, expe
       result.userMessageIdentity = { id: user.params.item.id, clientId: user.params.item.clientId };
       result.completionItemsView = ((completed(threadId, firstTurn)!.message as any).params.turn).itemsView;
 
+      const reattached = new CodexAppServerLifecycle(endpoint, { connect });
+      try {
+        await reattached.ensureThread({ threadId });
+        // A subsequent RPC also observes the usage replay queued after resume.
+        await reattached.refresh(threadId);
+        assert.deepEqual(reattached.recordsAfter(threadId).records, [], '已完成历史的 usage 重放不能创建空输出卡片');
+        result.completedThreadResumeNoOutput = true;
+      } finally { reattached.close(); }
+
       const beforeSteer = model.requests.length;
       const slow = model.enqueue({ text: 'BEFORE_STEER_RESPONSE' }, true);
       model.enqueue({ text: 'AFTER_STEER_RESPONSE' });

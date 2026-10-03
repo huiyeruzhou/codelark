@@ -434,6 +434,17 @@ export class CodexAppServerLifecycle {
     }
     if (!threadId || !this.threads.has(threadId)) return;
     const state = this.thread(threadId);
+    if (message.method === 'thread/tokenUsage/updated') {
+      // Resume replays persisted usage even for completed turns. Metadata neither
+      // invalidates an in-flight thread snapshot nor starts a new output turn.
+      if (state.turns.get(p.turnId)?.status === 'inProgress') {
+        this.append(threadId, protocolRecord(threadId, p.turnId, 'usage', { type: 'context_usage', content: '', contextUsage: {
+          modelContextWindow: p.tokenUsage?.modelContextWindow,
+          lastTokenUsage: p.tokenUsage?.last, totalTokenUsage: p.tokenUsage?.total,
+        } }));
+      }
+      return;
+    }
     state.revision += 1;
     if (message.id !== undefined && message.method) {
       const request: AppServerPendingRequest = { key: `${this.identity}:${this.generation}:${message.id}`, id: message.id, threadId, turnId: p.turnId, method: message.method, params: p };
@@ -461,11 +472,6 @@ export class CodexAppServerLifecycle {
         if (item) this.applyItem(threadId, p.turnId, { ...item, aggregatedOutput: (item.aggregatedOutput || '') + (p.delta || '') }, false);
         break;
       }
-      case 'thread/tokenUsage/updated':
-        this.append(threadId, protocolRecord(threadId, p.turnId, 'usage', { type: 'context_usage', content: '', contextUsage: {
-          modelContextWindow: p.tokenUsage?.modelContextWindow,
-          lastTokenUsage: p.tokenUsage?.last, totalTokenUsage: p.tokenUsage?.total,
-        } })); break;
       case 'thread/status/changed':
         if (p.status?.type === 'systemError' || p.status?.type === 'notLoaded') state.snapshot.activity = 'unknown';
         if (p.status?.type === 'active') state.snapshot.activity = state.snapshot.requests.length ? 'waiting' : state.snapshot.turnId ? 'active' : 'unknown';
