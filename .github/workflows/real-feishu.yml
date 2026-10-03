@@ -30,7 +30,8 @@ jobs:
           cache: npm
       - run: npm ci
       - run: sudo apt-get update && sudo apt-get install -y tmux
-      - run: npm install --global @openai/codex@0.160.0
+      # 完整故事依赖 gpt-5.4 原生工具 metadata；0.160 已删除该模型的工具目录。
+      - run: npm install --global @openai/codex@0.153.4
       - name: Restore the authorized test account
         id: auth-restore
         env:

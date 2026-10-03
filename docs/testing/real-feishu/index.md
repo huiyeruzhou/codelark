@@ -116,6 +116,8 @@ CODELARK_REAL_FEISHU_E2E=1 node --import tsx scripts/real-feishu-e2e.ts \
 
 完成后换 `--provider tmux` 与新的 run ID/root 串行执行。Codex 和飞书均为真实边界，只有模型使用不转发请求的 `startFixtureModel.enqueue`。隔离 Codex 配置开启原生 `default_mode_request_user_input` feature，以便普通模式提供问答工具；不修改用户的 Codex 配置。观察连接只订阅和读取线程，不提交输入或处理审批；Bridge 重启时观察连接也断开，避免替 Bridge 保持旧订阅。
 
+真实飞书 CI 固定 Codex `0.153.4`，与本地完整故事一致。隔离 `models_cache.json` 仅提供 `/model` 菜单，不提供原生工具 metadata；`0.160` 已删除 gpt-5.4 的工具目录，因此升级前需同时选择该版本实际支持工具的模型并重新验证完整故事。
+
 默认自动步骤会产生真实原生命令审批卡片并由用户身份回读，随后通过真实 `/stop` 取消；`approval.status=unverified`，`acceptanceComplete=false`。这表示自动部分通过，**不表示真实点击已验收**。报告中的 `approval.chatUrl` 可打开保留的测试群查看卡片。要验收点击，重新运行时增加 `--approval-wait-ms 300000 --require-approval`，在报告显示 `waiting` 时打开群并从真实飞书客户端点击允许；等待期间本次 Bridge 和原生后端保持存活，`approval.deadline` 给出截止时间；真实飞书 callback 入站日志、命令执行成功、原生轮次完成和最终用户回读均成立才算通过。等待超时会明确记录未验收，要求审批的运行返回非零。
 
 报告持续落盘，失败时保留阶段、用户消息 ID、线程/轮次、配置快照、原生事件和最终用户回读。`automaticPassed` 与 `acceptanceComplete` 分开：CI 默认先检查自动部分，真实点击是独立的人工验收项。此场景保留测试群供核对；没有执行任何伪造 callback、额外扫码或凭据发布。测试进程只停止自身 Bridge/fixture 和对应隔离 tmux socket。
