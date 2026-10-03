@@ -95,7 +95,7 @@ function getSessionTomlOverride<T>(session: BridgeSession | null | undefined, pa
   return resolved.source === 'session' ? resolved.value as T : undefined;
 }
 
-function scopedConfigForRuntime(
+export function scopedConfigForRuntime(
   binding?: ChannelChat | null,
   session?: BridgeSession | null,
 ): { effective: EffectiveConfig; config: ConfigV2; scope?: ConfigScope } {

@@ -1,14 +1,9 @@
 import type { BaseChannelAdapter } from '../../../channels/contracts.js';
-import { createConfigService } from '../../../configuration/service.js';
 import type { BridgeStore, ChannelChat, InboundMessage } from '../../../domain/index.js';
 import {
   getSessionActiveRuntime,
-  getSessionCursorModel,
-  getSessionZcodeModel,
-  getSessionKimiModel,
   getSessionRuntimeTmuxSessionName,
   getSessionWorkingDirectory,
-  setSessionActiveRuntimeUpdate,
 } from '../../../domain/session-runtime.js';
 import { cleanupRuntimeTmuxSession } from '../../tmux/runtime.js';
 import { getCodexAppServerSession, releaseCodexAppServerSession } from '../../../runtime/codex/app-server-registry.js';
@@ -17,8 +12,6 @@ import { stopRunningSession } from '../stop-running-session.js';
 import * as router from '../channel-router.js';
 import {
   ensureWorkingDirectoryExists,
-  getSessionClaudeProviderOverride,
-  getSessionCodexProviderOverride,
   resolveNewSessionWorkingDirectory,
 } from '../support.js';
 import { kimiTmuxSessionName } from '../../../runtime/kimi/tmux-provider.js';
@@ -46,6 +39,7 @@ import {
   parseClearSessionArgs,
   validateNewSessionName,
 } from './args.js';
+import { inheritSessionConfiguration } from './inherit-session-configuration.js';
 import { buildClearConfirmationCard } from './clear-confirmation.js';
 import { sessionLooksRunning } from './status-guards.js';
 import { auditCommandBindingChange } from './thread-targets.js';
@@ -56,90 +50,6 @@ import {
   type SessionCommandDeps,
   type SessionCommandResult,
 } from './types.js';
-
-function setSessionCodexProviderToml(sessionId: string, provider: 'sdk' | 'tmux' | 'pty'): void {
-  createConfigService({ migrate: false }).set(
-    { kind: 'session', sessionId },
-    { runtime: { codex: { provider } } },
-  );
-}
-
-function setSessionClaudeProviderToml(sessionId: string, provider: 'sdk' | 'tmux' | 'pty'): void {
-  createConfigService({ migrate: false }).set(
-    { kind: 'session', sessionId },
-    { runtime: { claude: { provider } } },
-  );
-}
-
-function setSessionKimiProviderToml(sessionId: string): void {
-  createConfigService({ migrate: false }).set(
-    { kind: 'session', sessionId },
-    { runtime: { kimi: { provider: 'tmux' } } },
-  );
-}
-
-function setSessionKimiModelToml(sessionId: string, model: string): void {
-  createConfigService({ migrate: false }).set(
-    { kind: 'session', sessionId },
-    { runtime: { kimi: { model } } },
-  );
-}
-
-function setSessionCursorRuntimeToml(sessionId: string, model?: string): void {
-  createConfigService({ migrate: false }).set(
-    { kind: 'session', sessionId },
-    { runtime: { cursor: { provider: 'tmux', ...(model ? { model } : {}) } } },
-  );
-}
-function setSessionZcodeRuntimeToml(sessionId: string, model?: string): void {
-  createConfigService({ migrate: false }).set(
-    { kind: 'session', sessionId },
-    { runtime: { zcode: { provider: 'tmux', ...(model ? { model } : {}) } } },
-  );
-}
-function preserveClearRuntimeBinding(options: {
-  store: BridgeStore;
-  previousBinding: ChannelChat | null;
-  previousSession: ReturnType<BridgeStore['getSession']>;
-  newBinding: ChannelChat;
-}): ChannelChat {
-  const activeRuntime = getSessionActiveRuntime(options.previousSession) || 'codex';
-  const newSession = options.store.getSession(options.newBinding.bridgeSessionId);
-  if (newSession && getSessionActiveRuntime(newSession) !== activeRuntime) {
-    options.store.updateSession(newSession.id, setSessionActiveRuntimeUpdate(activeRuntime), { touch: false });
-  }
-  const runtimeBridgeSessionIds = {
-    ...options.previousBinding?.runtimeBridgeSessionIds,
-    [activeRuntime]: options.newBinding.bridgeSessionId,
-  };
-  options.store.updateChannelChat(options.newBinding.id, { runtimeBridgeSessionIds });
-  return options.store.getChannelChat(options.newBinding.channelType, options.newBinding.chatId) || options.newBinding;
-}
-
-function inheritClearRuntimeProvider(sessionId: string, previousSession: ReturnType<BridgeStore['getSession']>): void {
-  const activeRuntime = getSessionActiveRuntime(previousSession) || 'codex';
-  if (activeRuntime === 'claude') {
-    const inheritedProvider = getSessionClaudeProviderOverride(previousSession);
-    if (inheritedProvider) setSessionClaudeProviderToml(sessionId, inheritedProvider);
-    return;
-  }
-  if (activeRuntime === 'kimi') {
-    const inheritedModel = getSessionKimiModel(previousSession);
-    if (inheritedModel) setSessionKimiModelToml(sessionId, inheritedModel);
-    setSessionKimiProviderToml(sessionId);
-    return;
-  }
-  if (activeRuntime === 'cursor') {
-    setSessionCursorRuntimeToml(sessionId, getSessionCursorModel(previousSession));
-    return;
-  }
-  if (activeRuntime === 'zcode') {
-    setSessionZcodeRuntimeToml(sessionId, getSessionZcodeModel(previousSession));
-    return;
-  }
-  const inheritedProvider = getSessionCodexProviderOverride(previousSession);
-  if (inheritedProvider) setSessionCodexProviderToml(sessionId, inheritedProvider);
-}
 
 export async function handleClearSessionCommand(options: {
   adapter: BaseChannelAdapter;
@@ -260,17 +170,15 @@ export async function handleClearSessionCommand(options: {
     workDir,
     sessionName,
   );
-  binding = preserveClearRuntimeBinding({
+  binding = inheritSessionConfiguration({
     store: options.store,
-    previousBinding,
-    previousSession,
+    sourceBinding: previousBinding,
+    sourceSession: previousSession,
     newBinding: binding,
+    workDir,
+    preserveOtherRuntimeBindings: true,
   });
-  let session = options.store.getSession(binding.bridgeSessionId);
-  if (session) {
-    inheritClearRuntimeProvider(session.id, previousSession);
-    session = options.store.getSession(binding.bridgeSessionId);
-  }
+  const session = options.store.getSession(binding.bridgeSessionId);
   let groupRenameStatus: string | null = null;
   const backgroundEffects: SessionCommandBackgroundEffect[] = [];
   const shouldRenameGroup = options.msg.address.chatKind === 'group' || previousBinding?.chatKind === 'group';

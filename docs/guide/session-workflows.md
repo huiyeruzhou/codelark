@@ -32,7 +32,9 @@ CodeLark 的 IM 对话由三层组成：
 /t 1
 ```
 
-`/clear` 不会删除旧对话。当前 Kimi 会话显式设置过的 model 会随 active runtime 继承到新 BridgeSession，卡片和下一次 Kimi 启动不会退回 `default`。
+`/clear` 不会删除旧对话。`/clear` 和 `/new` 都继承当前会话实际生效的配置，包括 agent、各 runtime 的 model/provider、权限模式、推理强度、网络设置、会话交互设置及系统提示。继承值写入新会话配置，重启后仍然保留；命令显式指定的目录优先，没有当前会话时才使用默认配置。
+
+使用共享 Codex app-server 时，新会话沿用同一个后端，但建立新的 thread；旧 thread、运行任务和 tmux 句柄不会复制。`/clear` 保留当前聊天里其他 runtime 的已有映射，`/new` 只为新群创建新的 runtime 映射。
 
 ## 会话列表和下拉选框
 

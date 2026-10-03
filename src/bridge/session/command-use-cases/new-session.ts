@@ -1,19 +1,15 @@
 import type { BaseChannelAdapter } from '../../../channels/contracts.js';
 import { enqueueBridgeNotice } from '../../../channels/delivery/feedback.js';
 import { DEFAULT_WORKSPACE_ROOT } from '../../../configuration/paths.js';
-import { createConfigService } from '../../../configuration/service.js';
 import type { BridgeSession, BridgeStore, ChannelChat, CloudDocumentAddress, InboundMessage } from '../../../domain/index.js';
 import {
   getSessionActiveRuntime,
   getSessionWorkingDirectory,
-  setSessionActiveRuntimeUpdate,
 } from '../../../domain/session-runtime.js';
 import { validateWorkingDirectory } from '../../../shared/security/validators.js';
 import * as router from '../channel-router.js';
 import {
   ensureWorkingDirectoryExists,
-  getSessionClaudeProviderOverride,
-  getSessionCodexProviderOverride,
   getWorkspaceRoot,
   resolveNewSessionWorkingDirectory,
 } from '../support.js';
@@ -33,12 +29,11 @@ import {
   parseNewSessionArgs,
   validateNewSessionName,
 } from './args.js';
+import { inheritSessionConfiguration } from './inherit-session-configuration.js';
 import { guardBindingChangeWhileRunning } from './status-guards.js';
 import { auditCommandBindingChange } from './thread-targets.js';
 import type { SessionCommandDeps, SessionCommandResult } from './types.js';
 
-type InheritedCodexProvider = ReturnType<typeof getSessionCodexProviderOverride>;
-type InheritedClaudeProvider = ReturnType<typeof getSessionClaudeProviderOverride>;
 type InheritedRuntime = 'codex' | 'claude' | 'kimi' | 'cursor' | 'zcode';
 
 const CLOUD_DOCUMENT_GROUP_TITLE_CHARS = 8;
@@ -83,39 +78,6 @@ function buildCloudDocumentBootstrapPrompt(cloudDocument: CloudDocumentAddress):
   ].filter(Boolean).join('\n');
 }
 
-function setSessionCodexProviderToml(sessionId: string, provider: Exclude<InheritedCodexProvider, undefined>): void {
-  createConfigService({ migrate: false }).set(
-    { kind: 'session', sessionId },
-    { runtime: { codex: { provider } } },
-  );
-}
-
-function setSessionClaudeProviderToml(sessionId: string, provider: Exclude<InheritedClaudeProvider, undefined>): void {
-  createConfigService({ migrate: false }).set(
-    { kind: 'session', sessionId },
-    { runtime: { claude: { provider } } },
-  );
-}
-
-function setSessionKimiProviderToml(sessionId: string): void {
-  createConfigService({ migrate: false }).set(
-    { kind: 'session', sessionId },
-    { runtime: { kimi: { provider: 'tmux' } } },
-  );
-}
-
-function setSessionCursorProviderToml(sessionId: string): void {
-  createConfigService({ migrate: false }).set(
-    { kind: 'session', sessionId },
-    { runtime: { cursor: { provider: 'tmux' } } },
-  );
-}
-function setSessionZcodeProviderToml(sessionId: string): void {
-  createConfigService({ migrate: false }).set(
-    { kind: 'session', sessionId },
-    { runtime: { zcode: { provider: 'tmux' } } },
-  );
-}
 function activeRuntimeForNewSession(previousSession: BridgeSession | null): InheritedRuntime {
   const activeRuntime = getSessionActiveRuntime(previousSession);
   return activeRuntime === 'claude' || activeRuntime === 'kimi' || activeRuntime === 'cursor' || activeRuntime === 'zcode' ? activeRuntime : 'codex';
@@ -127,52 +89,6 @@ function formatInheritedRuntimeLabel(runtime: InheritedRuntime): string {
   if (runtime === 'cursor') return 'Cursor Agent';
   if (runtime === 'zcode') return 'ZCode';
   return 'Codex';
-}
-
-function preserveNewSessionRuntimeBinding(options: {
-  store: BridgeStore;
-  previousSession: BridgeSession | null;
-  newBinding: ChannelChat;
-}): ChannelChat {
-  const activeRuntime = activeRuntimeForNewSession(options.previousSession);
-  const newSession = options.store.getSession(options.newBinding.bridgeSessionId);
-  if (newSession && getSessionActiveRuntime(newSession) !== activeRuntime) {
-    options.store.updateSession(newSession.id, setSessionActiveRuntimeUpdate(activeRuntime), { touch: false });
-  }
-  options.store.updateChannelChat(options.newBinding.id, {
-    runtimeBridgeSessionIds: {
-      [activeRuntime]: options.newBinding.bridgeSessionId,
-    },
-  });
-  return options.store.getChannelChat(options.newBinding.channelType, options.newBinding.chatId) || options.newBinding;
-}
-
-function inheritNewSessionRuntimeProvider(
-  sessionId: string,
-  previousSession: BridgeSession | null,
-): void {
-  const activeRuntime = activeRuntimeForNewSession(previousSession);
-  if (activeRuntime === 'claude') {
-    const inheritedProvider = getSessionClaudeProviderOverride(previousSession);
-    if (inheritedProvider) setSessionClaudeProviderToml(sessionId, inheritedProvider);
-    return;
-  }
-  if (activeRuntime === 'kimi') {
-    setSessionKimiProviderToml(sessionId);
-    return;
-  }
-  if (activeRuntime === 'cursor') {
-    setSessionCursorProviderToml(sessionId);
-    return;
-  }
-  if (activeRuntime === 'zcode') {
-    setSessionZcodeProviderToml(sessionId);
-    return;
-  }
-  const inheritedProvider = getSessionCodexProviderOverride(previousSession);
-  if (inheritedProvider === 'tmux' || inheritedProvider === 'pty') {
-    setSessionCodexProviderToml(sessionId, inheritedProvider);
-  }
 }
 
 const NEW_SESSION_KEY_COMMAND_NOTES = [
@@ -267,9 +183,11 @@ export async function handleNewSessionCommand(options: {
       cloudDocument: undefined,
     };
     let binding = router.createBinding(groupAddress, workDir, groupChat.name || documentChatName);
-    binding = preserveNewSessionRuntimeBinding({
+    binding = inheritSessionConfiguration({
       store: options.store,
-      previousSession: currentSession,
+      sourceSession: currentSession,
+      sourceBinding: options.commandBinding,
+      workDir,
       newBinding: binding,
     });
     options.store.updateChannelChat(binding.id, {
@@ -280,11 +198,7 @@ export async function handleNewSessionCommand(options: {
         ...(cloudDocument.commentId ? { commentId: cloudDocument.commentId } : {}),
       },
     });
-    let session = options.store.getSession(binding.bridgeSessionId);
-    if (session) {
-      inheritNewSessionRuntimeProvider(session.id, currentSession);
-      session = options.store.getSession(binding.bridgeSessionId);
-    }
+    const session = options.store.getSession(binding.bridgeSessionId);
 
     auditCommandBindingChange(
       options.store,
@@ -376,16 +290,14 @@ export async function handleNewSessionCommand(options: {
     displayName: groupChat.name || newSessionName,
   };
   let binding = router.createBinding(groupAddress, workDir, groupChat.name || newSessionName);
-  binding = preserveNewSessionRuntimeBinding({
+  binding = inheritSessionConfiguration({
     store: options.store,
-    previousSession: currentSession,
+    sourceSession: currentSession,
+    sourceBinding: options.commandBinding,
+    workDir,
     newBinding: binding,
   });
-  let session = options.store.getSession(binding.bridgeSessionId);
-  if (session) {
-    inheritNewSessionRuntimeProvider(session.id, currentSession);
-    session = options.store.getSession(binding.bridgeSessionId);
-  }
+  const session = options.store.getSession(binding.bridgeSessionId);
   auditCommandBindingChange(
     options.store,
     'new_session',

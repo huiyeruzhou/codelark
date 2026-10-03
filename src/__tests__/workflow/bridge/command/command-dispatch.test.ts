@@ -6365,7 +6365,8 @@ enabled = true
       assert.equal(config.get('runtime.kimi.model', { kind: 'session', sessionId: nextBinding.bridgeSessionId }), 'k3');
       assert.equal(resolveKimiRuntimeConfig(nextSession, nextBinding).model, 'k3');
       assert.equal(config.get('session.tmuxAutoEnter', { kind: 'session', sessionId: nextBinding.bridgeSessionId }), true);
-      assert.notEqual(
+      assert.equal(config.get('runtime.codex.provider', { kind: 'session', sessionId: nextBinding.bridgeSessionId }), 'tmux');
+      assert.equal(
         config.resolve('runtime.codex.provider', { kind: 'session', sessionId: nextBinding.bridgeSessionId }).source,
         'session',
       );

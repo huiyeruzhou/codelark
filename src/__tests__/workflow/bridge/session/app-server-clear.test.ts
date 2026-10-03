@@ -66,5 +66,6 @@ it('clear retains the original thread after an early interrupt ack and detaches 
   assert.equal(getCodexAppServerSession(binding.bridgeSessionId), undefined);
   const replacement = store.getChannelChat(address.channelType, address.chatId);
   assert.notEqual(replacement?.bridgeSessionId, binding.bridgeSessionId);
-  assert.equal(store.getSession(replacement!.bridgeSessionId)?.runtime?.codex?.appServerEndpoint, undefined);
+  assert.equal(store.getSession(replacement!.bridgeSessionId)?.runtime?.codex?.appServerEndpoint, endpoint);
+  assert.equal(store.getSession(replacement!.bridgeSessionId)?.runtime?.codex?.threadId, undefined);
 });
