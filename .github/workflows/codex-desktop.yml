@@ -13,6 +13,7 @@ on:
       - scripts/verify-codex-desktop-macos.ts
       - scripts/verify-codex-app-server-lifecycle.ts
       - scripts/fixtures/codex-app-server-*.ts
+      - scripts/fixtures/desktop-gui*.ts
       - .github/workflows/codex-desktop.yml
 
 permissions:
@@ -52,7 +53,7 @@ jobs:
           if-no-files-found: warn
           path: ${{ runner.temp }}/codex-protocol-evidence
   macos:
-    name: macOS · launchd + Desktop 同线程协议
+    name: macOS · 官方 Desktop GUI + launchd
     runs-on: macos-26
     timeout-minutes: 20
     steps:
@@ -88,10 +89,10 @@ jobs:
             fi
           done
           test "$installed" = 1
-      - name: Verify native service and shared sessions without a model account
+      - name: 操作官方 Desktop 窗口并验证共享线程、审批和问答
         env:
           CODELARK_DESKTOP_CI: '1'
-          CODELARK_DESKTOP_CI_EVIDENCE: ${{ runner.temp }}/codex-desktop-evidence
+          CODELARK_DESKTOP_CI_EVIDENCE: /tmp/codelark-desktop-gui-acceptance
         run: node --import tsx scripts/verify-codex-desktop-macos.ts
       - name: Upload verification evidence
         if: always()
@@ -99,4 +100,4 @@ jobs:
         with:
           name: codex-desktop-macos
           if-no-files-found: warn
-          path: ${{ runner.temp }}/codex-desktop-evidence
+          path: /tmp/codelark-desktop-gui-acceptance

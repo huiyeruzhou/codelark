@@ -103,7 +103,7 @@ CodeLark 先完成 `initialize` 和 `thread/loaded/list` 协议检查，再由�
 
 `CODEX_APP_SERVER_WS_URL` 的行为取证自 Desktop `26.930.31730` 发行包；它是实现细节，不能当作长期稳定的公开接口。Linux 已实测发行包原版通信模块与真实 Codex `0.153.4`、`0.160.0` 共享会话，另以 `0.160.0` 验证 Unix socket、CodeLark 新连接层和真实 remote TUI。GitHub macOS 26 runner 已验证真实 LaunchAgent、Bridge 准备进程退出后服务继续运行，以及通过 LaunchServices 启动的应用继承连接环境；完整 Desktop GUI 与真实 IM 提示仍需手测，不能用协议测试替代。
 
-专用工作流 `.github/workflows/codex-desktop.yml` 在独立分支 `ci/codex-desktop-remote` 上运行；`scripts/verify-codex-desktop-macos.ts` 使用真实 macOS 系统服务、官方 Desktop 通信模块和 Codex CLI，模型响应由隔离的本地 mock 提供，无需模型账号。测试用 `turn/completed` 确认 seed 回合已完成，再接入第二客户端；不能在 `turn/start` 刚返回时假设 rollout 文件已经写完。登录持久化通过重新加载保存的 LaunchAgent 验证，不能等同于实际注销/重新登录的完整操作。
+专用工作流 `.github/workflows/codex-desktop.yml` 在独立分支 `ci/codex-desktop-remote` 上运行；`scripts/verify-codex-desktop-macos.ts` 现通过 LaunchServices 启动官方 Desktop 原版 App，再用 CDP 鼠标/键盘操作真实窗口，验证共享线程收发、审批和问答；模型响应由隔离的本地 mock 提供。测试用 `turn/completed` 确认回合完成，保存截图、界面文本、线程协议及 App 身份；任何 GUI 失败都不能退回通信模块验收后报成功。受控启动顺序与实际 OS 注销/登录分别记录，后者仍未验证。执行方式、证据口径和专用 Mac 登录验收步骤见 [Desktop GUI 验收](../testing/codex-desktop.md)。
 
 Codex 0.160 的启动菜单有两种紧凑 footer：目录信任为 `enter continue · esc back`，模型介绍为 `enter/esc confirm · ctrl+c quit`。公共 footer 识别按完整行匹配，Codex 还必须同时存在选择游标和有效选项才会交给交互处理，不能将说明文字当作可操作菜单；生产不会自动信任目录或选择新模型。
 
