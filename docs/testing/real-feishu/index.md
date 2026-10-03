@@ -74,7 +74,7 @@ CODELARK_REAL_FEISHU_TEST_LARK_CLI_XDG_DATA_HOME=/home/me/.codelark/real-feishu-
 
 ## app-server 的本地与 CI 验证
 
-本地使用相同的真实飞书 harness，加 `--codex-app-server`。此选项为 `runtime-message` / `message-only` 启动独立的真实 Codex app-server 和确定性本地模型；Bridge 的 `CODEX_HOME` 与后端一致。用户消息仍经过飞书入站事件，最终内容仍以用户身份从飞书读取，新增 `app_server_backend_used` 检查绑定的 endpoint、真实 loaded thread 与模型请求。报告的 testName 带 `::app-server`，不计作旧 SDK/TUI 的运行证据。
+本地使用相同的真实飞书 harness，加 `--codex-app-server`。此选项为 `runtime-message` / `message-only` / `app-server-lifecycle` 启动独立的真实 Codex app-server 和确定性本地模型；Bridge 的 `CODEX_HOME` 与后端一致。用户消息仍经过飞书入站事件，最终内容仍以用户身份从飞书读取，新增 `app_server_backend_used` 检查绑定的 endpoint、真实 loaded thread 与模型请求。报告的 testName 带 `::app-server`，不计作旧 SDK/TUI 的运行证据。
 
 ```bash
 CODELARK_REAL_FEISHU_E2E=1 npm run real:feishu:e2e -- \
@@ -99,7 +99,26 @@ Runner 在临时目录恢复登录态，核验实际 App/用户后执行真实�
 
 协议路径的 `/p tmux` 验证“共享线程已就绪、可直接发送消息”，随后以真实模型执行和消息回读确认可用；旧路径仍验证原 Provider 切换结果。本地真实飞书验收已通过 tmux 18 项、sdk 17 项检查，模型依赖为隔离的确定性响应服务，Codex 与飞书边界均为真实执行。
 
-这里的真实飞书场景目前覆盖用户入站、协议执行、最终投递和消息回读。真实审批按钮点击、用户问答提交和完整 Desktop GUI 仍需补充验收，不能用 payload 或模拟 callback 冒充真实操作。
+这里的真实飞书场景目前覆盖用户入站、协议执行、最终投递和消息回读。完整生命周期使用下面的独立故事验收；真实审批按钮点击与 Desktop GUI 分别报告，不能用 payload 或模拟 callback 冒充真实操作。
+
+### 完整 app-server 生命周期故事
+
+`app-server-lifecycle` 在 SDK/direct 与 tmux/mirror 两个入口运行同一条故事：真实用户配置与输入、模型运行中追加到原 turn、`/stop` 的原生 `interrupted` 与飞书卡片终态、`/clear` 新 thread、`/new` 产品路径新群、配置继承、Bridge 重启续用原 thread 且不重复发送、原生 Codex 问答与真实用户文字回答，最后进入原生审批步骤。
+
+```bash
+CODELARK_REAL_FEISHU_E2E=1 node --import tsx scripts/real-feishu-e2e.ts \
+  --test-env-file ~/.codelark/real-feishu-e2e/test.env \
+  --launch-bridge --codex-app-server --runtime codex --provider sdk \
+  --scenario app-server-lifecycle --run-id lifecycle-sdk \
+  --run-root /tmp/clk-real-feishu-life-sdk \
+  --output /tmp/codelark-feishu-lifecycle-acceptance/sdk.json
+```
+
+完成后换 `--provider tmux` 与新的 run ID/root 串行执行。Codex 和飞书均为真实边界，只有模型使用不转发请求的 `startFixtureModel.enqueue`。隔离 Codex 配置开启原生 `default_mode_request_user_input` feature，以便普通模式提供问答工具；不修改用户的 Codex 配置。观察连接只订阅和读取线程，不提交输入或处理审批；Bridge 重启时观察连接也断开，避免替 Bridge 保持旧订阅。
+
+默认自动步骤会产生真实原生命令审批卡片并由用户身份回读，随后通过真实 `/stop` 取消；`approval.status=unverified`，`acceptanceComplete=false`。这表示自动部分通过，**不表示真实点击已验收**。报告中的 `approval.chatUrl` 可打开保留的测试群查看卡片。要验收点击，重新运行时增加 `--approval-wait-ms 300000 --require-approval`，在报告显示 `waiting` 时打开群并从真实飞书客户端点击允许；等待期间本次 Bridge 和原生后端保持存活，`approval.deadline` 给出截止时间；真实飞书 callback 入站日志、命令执行成功、原生轮次完成和最终用户回读均成立才算通过。等待超时会明确记录未验收，要求审批的运行返回非零。
+
+报告持续落盘，失败时保留阶段、用户消息 ID、线程/轮次、配置快照、原生事件和最终用户回读。`automaticPassed` 与 `acceptanceComplete` 分开：CI 默认先检查自动部分，真实点击是独立的人工验收项。此场景保留测试群供核对；没有执行任何伪造 callback、额外扫码或凭据发布。测试进程只停止自身 Bridge/fixture 和对应隔离 tmux socket。
 
 ## 覆盖原则
 

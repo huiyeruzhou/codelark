@@ -875,6 +875,10 @@ describe('unit::real-feishu-e2e-harness::scenario-coverage-metadata', () => {
 
     assert.ok(runtimeParameterized.length > 0);
     for (const scenario of runtimeParameterized) {
+      if (scenario.scenario === 'app-server-lifecycle') {
+        assert.deepEqual(scenario.providerMatrix, ['sdk', 'tmux'].map((provider) => `real-feishu::app-server-lifecycle::codex-${provider}`));
+        continue;
+      }
       assert.equal(scenario.testNamePattern, `real-feishu::${scenario.scenario}::<runtime>-<provider>`);
       assert.deepEqual(scenario.providerMatrix, expectedRuntimeProviderMatrix(`real-feishu::${scenario.scenario}`));
       assert.equal(
@@ -1318,7 +1322,7 @@ describe('unit::real-feishu-e2e-harness::scenario-coverage-metadata', () => {
       }>;
     };
 
-    assert.equal(parsed.scenarios, 15);
+    assert.equal(parsed.scenarios, 16);
     assert.equal(parsed.summary.matrixEntries, parsed.entries.length);
     assert.ok(parsed.entries.some((entry) => entry.testName === 'real-feishu::runtime-message::cursor-tmux'));
     assert.equal(parsed.summary.kimiEntries, 12);
@@ -1897,9 +1901,13 @@ describe('unit::real-feishu-e2e-harness::session-management-command-plan', () =>
         'codex_019e824e-10ef-7430-985d-4349ce6a15f9',
       ]);
       for (const sessionName of parsed.removedTmuxSessions) {
-        assert.ok(tmuxCalls.some((call) => call.args.join(' ') === `kill-session -t ${sessionName}`));
+        assert.ok(tmuxCalls.some((call) => call.args.slice(2).join(' ') === `kill-session -t ${sessionName}`));
       }
-      assert.ok(tmuxCalls.some((call) => call.args.join(' ') === 'kill-server'));
+      assert.ok(tmuxCalls.some((call) => call.args.slice(2).join(' ') === 'kill-server'));
+      for (const call of tmuxCalls) {
+        assert.equal(call.args[0], '-S');
+        assert.equal(call.args[1], path.join(runRoot, 'tmux', `tmux-${process.getuid?.() ?? 0}`, 'default'));
+      }
       assert.ok(tmuxCalls.every((call) => call.tmux === null && call.tmuxPane === null));
       assert.ok(tmuxCalls.every((call) => call.tmuxTmpdir === path.join(runRoot, 'tmux')));
       assert.equal(fs.existsSync(runRoot), false);
@@ -4413,6 +4421,19 @@ describe('unit::real-feishu-e2e-harness::session-management-command-plan', () =>
 
 
 describe('app-server real Feishu execution selection', () => {
+  it('keeps lifecycle approval opt-in and limits the story to the isolated native backend', () => {
+    for (const provider of ['sdk', 'tmux']) {
+      const report = JSON.parse(runHarness(['--dry-run', '--launch-bridge', '--codex-app-server', '--runtime', 'codex', '--provider', provider, '--scenario', 'app-server-lifecycle']));
+      assert.equal(report.scenario, 'app-server-lifecycle');
+      assert.equal(report.keepGroup, true, '审批卡片群保留供真实客户端核对');
+      assert.equal(report.coverage.matrix.length, 2);
+      assert.match(report.coverage.testName, /::app-server$/);
+    }
+    assert.match(runHarnessFailure(['--dry-run', '--scenario', 'app-server-lifecycle']), /requires --codex-app-server/);
+    assert.match(runHarnessFailure(['--dry-run', '--launch-bridge', '--codex-app-server', '--runtime', 'codex', '--scenario', 'app-server-lifecycle', '--require-approval']), /requires --approval-wait-ms/);
+    assert.match(runHarnessFailure(['--dry-run', '--approval-wait-ms', '1000']), /require app-server-lifecycle/);
+  });
+
   it('plans an isolated protocol backend without starting services or sending messages', () => {
     const report = JSON.parse(runHarness(['--dry-run', '--launch-bridge', '--codex-app-server', '--runtime', 'codex', '--provider', 'tmux', '--scenario', 'runtime-message']));
     assert.equal(report.dryRun, true);

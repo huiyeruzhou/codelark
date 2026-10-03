@@ -65,17 +65,19 @@ jobs:
           python3 scripts/ci/feishu-auth.py verify \
             --home "$CODELARK_REAL_FEISHU_AUTH_HOME" \
             --app-id "$CODELARK_REAL_FEISHU_TEST_APP_ID"
-      - name: Real Feishu input, app-server execution and user-side message readback
+      - name: 真实飞书生命周期（自动部分；审批点击另行验收）
         run: |
           mkdir -p "$RUNNER_TEMP/feishu-evidence"
+          failed=0
           for provider in sdk tmux; do
             node --import tsx scripts/real-feishu-e2e.ts \
               --test-env-file "$CODELARK_REAL_FEISHU_AUTH_HOME/test.env" \
               --launch-bridge --codex-app-server --runtime codex --provider "$provider" \
-              --scenario runtime-message --run-id "ci-${GITHUB_RUN_ID}-${provider}" \
-              --run-root "$RUNNER_TEMP/feishu-${provider}" \
-              --output "$RUNNER_TEMP/feishu-evidence/${provider}.json"
+              --scenario app-server-lifecycle --run-id "ci-${GITHUB_RUN_ID}-${provider}" \
+              --run-root "/tmp/clk-real-feishu-${GITHUB_RUN_ID}-${provider}" \
+              --output "$RUNNER_TEMP/feishu-evidence/${provider}.json" || failed=1
           done
+          exit "$failed"
       # Only the encrypted user token file is cached. Its master key stays in Secrets.
       # Persist refresh-token rotation even when a later test fails.
       - name: Save the refreshed encrypted authorization

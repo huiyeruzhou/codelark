@@ -9,7 +9,8 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 
-import { fixtureEnvironment, fixtureModel, startFixtureAppServer } from './fixtures/codex-app-server-lifecycle.js';
+import { fixtureEnvironment, fixtureModel, startFixtureAppServer, startFixtureModel } from './fixtures/codex-app-server-lifecycle.js';
+import { runAppServerLifecycle } from '../src/testing/real-feishu/app-server-lifecycle.js';
 import { CodexAppServerClient } from '../src/runtime/codex/app-server-client.js';
 
 import type { FeishuSite } from '../src/channels/types.js';
@@ -17,6 +18,7 @@ import {
   feishuSetupUserAuthScopeArgument,
 } from '../src/channels/feishu/permissions.js';
 import { feishuSiteToApiBaseUrl } from '../src/channels/feishu/site.js';
+import { configFields } from '../src/configuration/fields.js';
 import { createConfigService } from '../src/configuration/service.js';
 import { DEFAULT_WORKSPACE_ROOT } from '../src/configuration/paths.js';
 import type { ClaudeExecutable } from '../src/runtime/options.js';
@@ -75,6 +77,8 @@ interface CliOptions {
   stopTestBridge: boolean;
   launchBridge: boolean;
   codexAppServer: boolean;
+  approvalWaitMs: number;
+  requireApproval: boolean;
   codexAppServerEndpoint?: string;
   fakeCcr: boolean;
   fakeKimi: boolean;
@@ -420,6 +424,17 @@ const BASIC_DIALOGUE_APPEND_INPUT_PROVIDER_KEYS = [
 ];
 
 const SCENARIOS: ScenarioDefinition[] = [
+  {
+    name: 'app-server-lifecycle',
+    testNamePrefix: 'real-feishu::app-server-lifecycle',
+    description: '真实飞书输入、同轮追加、停止、clear/new 继承、Bridge 重启续用、原生问答与可选人工审批。',
+    unitCoverage: ['harness::app-server-lifecycle'],
+    e2eCoverage: ['e2e::real-feishu-app-server-lifecycle'],
+    providerCoverage: 'runtime-parameterized',
+    coverageTier: 'mandatory-suite',
+    requiresRuntimeOutput: true,
+    buildCommands: (options) => ['/runtime codex', `/p ${options.provider}`, `/model ${options.codexModel}`, '/reasoning low', '/sandbox read-only', '/network off'],
+  },
   {
     name: 'message-only',
     testNamePrefix: 'real-feishu::message-only',
@@ -1102,6 +1117,7 @@ const BOOLEAN_CLI_FLAGS = new Set([
   '--stop-test-bridge',
   '--launch-bridge',
   '--codex-app-server',
+  '--require-approval',
   '--fake-ccr',
   '--fake-kimi',
   '--scripted-basic-dialogue',
@@ -1114,6 +1130,7 @@ const BOOLEAN_CLI_FLAGS = new Set([
 
 const VALUE_CLI_OPTIONS = new Set([
   '--require-canonical',
+  '--approval-wait-ms',
   '--test-env-file',
   '--run-id',
   '--runtime',
@@ -1293,11 +1310,13 @@ function parseOptions(argv: string[]): CliOptions {
     stopTestBridge: hasFlag(argv, '--stop-test-bridge'),
     launchBridge,
     codexAppServer: hasFlag(argv, '--codex-app-server'),
+    approvalWaitMs: hasFlag(argv, '--approval-wait-ms') ? parsePositiveIntOption(argv, '--approval-wait-ms', 300_000) : 0,
+    requireApproval: hasFlag(argv, '--require-approval'),
     fakeCcr: hasFlag(argv, '--fake-ccr'),
     fakeKimi: hasFlag(argv, '--fake-kimi'),
     scriptedBasicDialogue: hasFlag(argv, '--scripted-basic-dialogue'),
     scriptedKimi: hasFlag(argv, '--scripted-kimi'),
-    keepGroup: hasFlag(argv, '--keep-group'),
+    keepGroup: hasFlag(argv, '--keep-group') || scenario === 'app-server-lifecycle',
     keepCodelarkHome: hasFlag(argv, '--keep-clk-home'),
     testEnvFile: valueArg(argv, '--test-env-file', defaultRealFeishuTestEnvFile()),
     runId,
@@ -1372,6 +1391,8 @@ function printUsage(): void {
     '  --dry-run                 Print planned lark-cli commands without sending messages',
     '  --dump-only               Only collect bridge dump state',
     '  --codex-app-server       Use a real isolated app-server with deterministic local model responses',
+    '  --approval-wait-ms N      Lifecycle only: wait for a real Feishu client approval click',
+    '  --require-approval        Fail unless the optional real-client approval finishes',
     '  --list-scenarios          Print scenario names and coverage metadata as JSON',
     '  --coverage-matrix         Print scenario/test-name coverage matrix and scan report evidence',
     '  --reports-dir <path>      Report directory for --coverage-matrix; default work/real-feishu',
@@ -1436,6 +1457,7 @@ function getScenarioDefinition(name: string): ScenarioDefinition {
 }
 
 function providerMatrixForScenario(scenario: ScenarioDefinition): string[] {
+  if (scenario.name === 'app-server-lifecycle') return ['sdk', 'tmux'].map((provider) => `${scenario.testNamePrefix}::codex-${provider}`);
   if (scenario.providerCoverage === 'runtime-parameterized') {
     return [
       `${scenario.testNamePrefix}::codex-sdk`,
@@ -1485,7 +1507,9 @@ function scenarioCoverage(options: CliOptions): Record<string, unknown> {
     unitCoverage: scenario.unitCoverage,
     e2eCoverage: scenario.e2eCoverage,
     coverageNotes: [
-      scenario.providerCoverage === 'runtime-parameterized'
+      scenario.name === 'app-server-lifecycle'
+        ? '同一生命周期故事只覆盖原生 Codex app-server 的 sdk/tmux 入口；approval 未通过时不代表完整验收。'
+        : scenario.providerCoverage === 'runtime-parameterized'
         ? '该场景需要覆盖 codex-sdk、codex-tmux、claude-sdk、claude-tmux、kimi-tmux、cursor-tmux、zcode-tmux 七条路径，才能形成完整 runtime/provider 矩阵证据。'
         : scenario.providerCoverage === 'representative-provider'
         ? '该功能簇场景默认只要求代表 provider 路径；provider smoke matrix 负责完整 runtime/provider 健康检查。'
@@ -1557,7 +1581,7 @@ function coverageEntriesForScenario(scenario: ScenarioDefinition): Omit<Coverage
     return {
       scenario: scenario.name,
       testName,
-      matchingTestNames: [testName],
+      matchingTestNames: scenario.name === 'app-server-lifecycle' ? [`${testName}::app-server`] : [testName],
       providerCoverage: scenario.providerCoverage,
       coverageTier: scenario.coverageTier,
       includesKimi: parsed.runtime === 'kimi' || Boolean(scenario.providerSequence?.includes('kimi-tmux')),
@@ -1758,6 +1782,9 @@ function reportEvidenceStatus(filePath: string, report: Record<string, unknown>)
   };
   if (isFailure) return { ...base, status: 'diagnostic-failure' };
   if (dryRun) return { ...base, status: 'dry-run' };
+  if (report.scenario === 'app-server-lifecycle') {
+    return { ...base, status: report.acceptanceComplete === true && report.automaticPassed === true ? 'canonical-pass' : 'diagnostic-pass' };
+  }
   if (canonicalEligible === false) return { ...base, status: 'diagnostic-pass' };
   if (canonicalEligible === true && missingCanonicalChecks.length === 0) return { ...base, status: 'canonical-pass' };
   if (canonicalEligible === true) return { ...base, status: 'diagnostic-pass' };
@@ -2093,7 +2120,7 @@ function isolatedTmuxChildEnv(
 async function stopIsolatedTmuxServer(options: Pick<CliOptions, 'runRoot'>): Promise<void> {
   if (!hasOwnedIsolatedTmuxRoot(options)) return;
   try {
-    await execFileAsync('tmux', ['kill-server'], {
+    await execFileAsync('tmux', ['-S', path.join(realFeishuTmuxTempDir(options), `tmux-${process.getuid?.() ?? 0}`, 'default'), 'kill-server'], {
       env: isolatedTmuxChildEnv(options),
       timeout: 5_000,
     });
@@ -2406,7 +2433,7 @@ async function cleanupTestTmuxSessions(options: CliOptions): Promise<string[]> {
   const removed: string[] = [];
   for (const sessionName of Array.from(tmuxSessionNames).sort()) {
     try {
-      await execFileAsync('tmux', ['kill-session', '-t', sessionName], {
+      await execFileAsync('tmux', ['-S', path.join(realFeishuTmuxTempDir(options), `tmux-${process.getuid?.() ?? 0}`, 'default'), 'kill-session', '-t', sessionName], {
         env: isolatedTmuxChildEnv(options),
         timeout: 5_000,
       });
@@ -3319,6 +3346,8 @@ async function listChatMessages(chatId: string, options: CliOptions, pageSize = 
       '+chat-messages-list',
       '--chat-id',
       chatId,
+      '--as',
+      'user',
       '--page-size',
       String(pageSize),
       '--format',
@@ -7337,7 +7366,10 @@ async function main(): Promise<void> {
   loadRealFeishuTestEnvFile(argv);
   const options = parseOptions(argv);
   getScenarioDefinition(options.scenario);
-  if (options.codexAppServer && (!options.launchBridge || options.runtime !== 'codex' || !['runtime-message', 'message-only'].includes(options.scenario))) throw new Error('--codex-app-server requires an isolated Codex bridge and a supported message/card scenario.');
+  if (options.codexAppServer && (!options.launchBridge || options.runtime !== 'codex' || !['runtime-message', 'message-only', 'app-server-lifecycle'].includes(options.scenario))) throw new Error('--codex-app-server requires an isolated Codex bridge and a supported message/card scenario.');
+  if (options.scenario === 'app-server-lifecycle' && !options.codexAppServer) throw new Error('app-server-lifecycle requires --codex-app-server.');
+  if ((options.approvalWaitMs || options.requireApproval) && options.scenario !== 'app-server-lifecycle') throw new Error('Approval options require app-server-lifecycle.');
+  if (options.requireApproval && !options.approvalWaitMs) throw new Error('--require-approval requires --approval-wait-ms.');
   validateScriptedBasicDialogueOptions(options);
   validateScriptedKimiOptions(options);
   validateFakeKimiOptions(options);
@@ -7385,6 +7417,7 @@ async function main(): Promise<void> {
   let fakeCcrBackend: LocalFakeChatCompletionsBackend | null = null;
   let fakeKimiBackend: LocalFakeChatCompletionsBackend | null = null;
   let codexResponsesProxy: LocalCodexResponsesProxy | null = null;
+  let lifecycleModel: Awaited<ReturnType<typeof startFixtureModel>> | undefined;
   let appServer: Awaited<ReturnType<typeof startFixtureAppServer>> | undefined;
   let protocolObserver: CodexAppServerClient | undefined;
   const messageObservations: MessageObservation[] = [];
@@ -7398,7 +7431,10 @@ async function main(): Promise<void> {
     const userAuthorization = await assertLarkCliUserAuthorizationPreflight(options);
     startupChatCleanup = await cleanupRegisteredTestChats(options);
     appLock = acquireAppLock(options);
-    if ((options.codexAppServer || usesProxyBackedBasicDialogue(options)) && !options.dryRun) {
+    if (options.scenario === 'app-server-lifecycle' && !options.dryRun) {
+      lifecycleModel = await startFixtureModel();
+      options.codexProxyBaseUrl = lifecycleModel.baseUrl;
+    } else if ((options.codexAppServer || usesProxyBackedBasicDialogue(options)) && !options.dryRun) {
       codexResponsesProxy = await startSharedLocalCodexResponsesProxy(options.codexAppServer ? `APP_SERVER_REPLY ${options.message}` : options.fakeCcrResponseText);
       options.codexProxyBaseUrl = codexResponsesProxy.baseUrl;
       process.stderr.write(`[real-feishu-e2e] Started local Codex Responses proxy at ${codexResponsesProxy.baseUrl}; Codex SDK/tmux will use isolated CODEX_HOME=${options.codexHome}\n`);
@@ -7427,6 +7463,11 @@ async function main(): Promise<void> {
       const backendRoot = path.join(options.runRoot, 'app-server');
       const env = fixtureEnvironment(backendRoot, options.codexProxyBaseUrl!);
       fs.copyFileSync(path.join(backendRoot, 'codex/config.toml'), path.join(options.codexHome, 'config.toml'));
+      if (lifecycleModel) {
+        fs.writeFileSync(path.join(options.codexHome, 'models_cache.json'), JSON.stringify({ models: [{ slug: options.codexModel, display_name: options.codexModel, visibility: 'list', supported_in_api: true }] }));
+        const configPath = path.join(options.codexHome, 'config.toml');
+        fs.writeFileSync(configPath, fs.readFileSync(configPath, 'utf8').replace('[features]', '[features]\ndefault_mode_request_user_input = true'));
+      }
       appServer = await startFixtureAppServer(process.env.CODELARK_CODEX_CLI_PATH || 'codex', backendRoot, {
         ...env, CODEX_HOME: options.codexHome, HOME: options.runtimeHome,
       });
@@ -7505,6 +7546,59 @@ async function main(): Promise<void> {
     }
 
     if (!chatId) throw new Error('No real Feishu chat_id available.');
+    if (lifecycleModel && protocolObserver) {
+      const sourceRevision = execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
+      const sourceDirty = Boolean(execFileSync('git', ['diff', '--name-only'], { encoding: 'utf8' }).trim());
+      const configuration = createConfigService({ codelarkHome: options.codelarkHome, env: {}, migrate: false });
+      const result = await runAppServerLifecycle({
+        runId: options.runId, provider: options.provider, chatId, modelName: options.codexModel,
+        endpoint: options.codexAppServerEndpoint!, timeoutMs: options.timeoutMs, pollMs: options.pollMs,
+        approvalWaitMs: options.approvalWaitMs, model: lifecycleModel, observer: protocolObserver,
+        botAppId: options.testFeishuAppId,
+        send: (id, text) => sendUserText(id, text, options),
+        read: (id) => listChatMessages(id, options, 50),
+        state: (id) => {
+          const dump = latestDump(options, id);
+          if (!dump.session) return undefined;
+          const scope = { kind: 'session' as const, sessionId: dump.session.id };
+          const fields = configFields.filter((field) => field.scopes.some((scope) => scope === 'session')).map((field) => field.path);
+          return { sessionId: dump.session.id, threadId: dump.runtimeThreadId,
+            endpoint: dump.session.runtime?.codex?.appServerEndpoint,
+            configuration: { ...Object.fromEntries(fields.map((field) => [field, configuration.get(field, scope)])),
+              systemPrompt: dump.session.runtime?.general?.systemPrompt || '' },
+            streamKeys: dump.streamKeys,
+            terminal: findLatestProviderStreamTerminalState({ streamKeys: dump.streamKeys, logText: dump.logWindow?.text || '', streamPrefix: options.provider === 'sdk' ? 'im:' : 'mirror:' }),
+          };
+        },
+        findCreatedChat: (name) => extractScenarioCreatedChatIdsFromBridgeState(options, [name], [chatId])[0],
+        callbackEvidence: (id, messageId) => {
+          for (const line of (latestDump(options, id).logWindow?.text || '').split('\n')) {
+            try {
+              const record = JSON.parse(line);
+              if (record.msg === 'Incoming card action event:' && record.chatId === id && record.messageId === messageId
+                && typeof record.callbackData === 'string' && record.callbackData.startsWith('app-server-request:') && record.callbackData.endsWith(':accept')) return record;
+            } catch { /* 只识别原始结构化事件。 */ }
+          }
+          return undefined;
+        },
+        restartBridge: async () => {
+          await stopBridgeChild(child); child = null;
+          child = await launchBridgeChild(options, runtimeEnvironment);
+        },
+        progress: (text) => process.stderr.write(`[app-server-lifecycle] ${text}\n`),
+        save: (report) => writeReport({ ...report,
+          sourceRevision, sourceDirty,
+          codexVersion: protocolObserver?.serverInfo.userAgent,
+          runRoot: options.runRoot, codelarkHome: options.codelarkHome,
+          coverage: scenarioCoverage(options),
+          canonicalEligibility: canonicalReportEligibility(options, runtimeEnvironment),
+          boundary: { backend: 'native-codex-app-server', model: 'isolated-fixture', feishuInput: 'real-user-cli', feishuReadback: 'real-user-cli', simulatedCallbacks: false },
+        }, options.outputPath),
+      });
+      completedSuccessfully = true;
+      if (options.requireApproval && !result.acceptanceComplete) throw new Error('真实客户端审批尚未验收，详见报告 approval 与 chatUrl。');
+      return;
+    }
     prepareScenarioWorkspaceFixtures(options);
     let validationChatId = chatId;
     let requiredCheckReport: ReturnType<typeof latestDump> | null = null;
@@ -7984,6 +8078,7 @@ async function main(): Promise<void> {
     await stopBridgeChild(child);
     protocolObserver?.close();
     await appServer?.close();
+    await lifecycleModel?.close();
     await stopFakeCcrRouter(options);
     if (fakeCcrBackend) {
       await fakeCcrBackend.close().catch(() => {});
