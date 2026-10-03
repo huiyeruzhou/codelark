@@ -1,7 +1,7 @@
 import '../../setup/test-setup.js';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { assertInherited, assertSameTurnInput, botReplyIds, userReadbackMessages, feishuChatUrl, readAllUserPages } from '../../../testing/real-feishu/app-server-lifecycle.js';
+import { assertInherited, assertSameTurnInput, botReplyIds, userReadbackMessages, feishuChatUrl, readAllUserPages, unexpectedRestartCards } from '../../../testing/real-feishu/app-server-lifecycle.js';
 
 const session = { sessionId: 'old', threadId: 'thread-old', endpoint: 'unix:///owned/rpc.sock', streamKeys: [],
   configuration: { provider: 'sdk', networkAccess: false, reasoningEffort: 'low' } };
@@ -40,4 +40,12 @@ test('扩展故事逐页用户回读，拒绝中途换身份、重复消息和�
   await assert.rejects(readAllUserPages(async (token) => token ? { ...page('older'), identity: 'bot' } : page('newer', 'next')));
   await assert.rejects(readAllUserPages(async (token) => page('same', token ? '' : 'next')));
   await assert.rejects(readAllUserPages(async () => page('same', 'next')));
+});
+test('重启去重拒绝没有结果标记的空镜像卡，允许本次current命令回复', () => {
+  const bot = (message_id: string, reply_to?: string) => ({ message_id, sender: { sender_type: 'app', id: 'app' }, content: '空卡', reply_to });
+  const payload = (messages: unknown[]) => ({ ok: true, identity: 'user', data: { messages } });
+  const before = payload([bot('old')]);
+  assert.deepEqual(unexpectedRestartCards(before, payload([bot('old'), bot('command-response', 'current')]), 'app', 'current'), []);
+  assert.deepEqual(unexpectedRestartCards(before, payload([bot('old'), bot('ghost')]), 'app', 'current').map((m) => m.message_id), ['ghost']);
+  assert.deepEqual(unexpectedRestartCards(before, payload([bot('ghost')]), 'app').map((m) => m.message_id), ['ghost']);
 });

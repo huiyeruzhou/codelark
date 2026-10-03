@@ -103,7 +103,7 @@ Runner 在临时目录恢复登录态，核验实际 App/用户后执行真实�
 
 ### 完整 app-server 生命周期故事
 
-`app-server-lifecycle` 在 SDK/direct 与 tmux/mirror 两个入口运行同一条故事：真实用户配置与输入、模型运行中追加到原 turn、`/stop` 的原生 `interrupted` 与飞书卡片终态、`/clear` 新 thread、`/new` 产品路径新群、配置继承、Bridge 重启续用原 thread 且不重复发送、原生 Codex 问答与真实用户文字回答，最后进入原生审批步骤。
+`app-server-lifecycle` 在 SDK/direct 与 tmux/mirror 两个入口运行同一条故事：真实用户配置与输入、模型运行中追加到原 turn、`/stop` 的原生 `interrupted` 与飞书卡片终态、`/clear` 新 thread、`/new` 产品路径新群、配置继承、Bridge 重启续用原 thread 且不重复发送（同时比对两个群的新增机器人消息，空 mirror 卡也算重复）、原生 Codex 问答与真实用户文字回答，最后进入原生审批步骤。
 
 ```bash
 CODELARK_REAL_FEISHU_E2E=1 node --import tsx scripts/real-feishu-e2e.ts \

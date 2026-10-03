@@ -95,6 +95,11 @@ export function botReplyIds(payload: unknown, appId: string, marker: string): st
     && m.sender.id === appId && JSON.stringify(m.content ?? m.body?.content ?? '').includes(marker))
     .map((m) => String(m.message_id));
 }
+export function unexpectedRestartCards(before: unknown, after: unknown, appId: string, commandId?: string): Array<Record<string, any>> {
+  const old = new Set(userReadbackMessages(before).map((m) => m.message_id));
+  return userReadbackMessages(after).filter((m) => m.sender?.sender_type === 'app' && m.sender.id === appId
+    && !old.has(m.message_id) && (!commandId || m.reply_to !== commandId));
+}
 export function assertSameTurnInput(thread: NativeThread, turnId: string, text: string): void {
   const matches = thread.turns.flatMap((turn) => turn.items.filter((item) => item.type === 'userMessage' && JSON.stringify(item).includes(text)).map(() => turn));
   assert.equal(matches.length, 1, '输入必须只进入一个原生轮次');
@@ -144,6 +149,7 @@ export async function runAppServerLifecycle(d: LifecycleDriver): Promise<Lifecyc
       return userReadbackMessages(await read(chat)).find((m) => m.sender?.sender_type === 'app' && m.sender.id === d.botAppId && m.reply_to === id
         && JSON.stringify(m.content ?? m.body?.content).includes(expected));
     });
+    return id;
   };
   const state = async (chat: string) => wait('持久化会话', () => d.state(chat));
   const thread = async (id: string): Promise<NativeThread> => {
@@ -256,19 +262,24 @@ export async function runAppServerLifecycle(d: LifecycleDriver): Promise<Lifecyc
 
     stage('Bridge 重启后原线程续用与去重');
     const messagesBefore = botReplyIds(await read(newChat), d.botAppId, newTurn.response);
+    const beforeRestart = new Map(await Promise.all(report.chats.map(async (chat) => [chat, await read(chat)] as const)));
     const requestsBefore = d.model.requests.length;
     // 观察连接也断开，避免它替重启中的 Bridge 保持线程订阅。
     unsubscribe(); d.observer.close();
     await d.restartBridge();
     d.observer = await CodexAppServerClient.connect(d.endpoint);
     unsubscribe = d.observer.onMessage((m) => { report.protocol.push(m); });
-    await command(newChat, '/current', 'Codex');
+    const currentCommand = await command(newChat, '/current', 'Codex');
     await sleep(Math.max(6_000, d.pollMs * 2));
     report.sessions.restarted = await state(newChat);
     assert.equal(report.sessions.restarted.threadId, newTurn.threadId);
     assert.deepEqual(report.sessions.restarted.configuration, report.sessions.new.configuration, '重启不能回落用户配置');
     assert.equal(d.model.requests.length, requestsBefore, '重启不能重发模型输入');
     assert.deepEqual(botReplyIds(await read(newChat), d.botAppId, newTurn.response), messagesBefore, '重启不能重复发送历史结果');
+    const extraCards = (await Promise.all(report.chats.map(async (chat) => unexpectedRestartCards(beforeRestart.get(chat),
+      await read(chat), d.botAppId, chat === newChat ? currentCommand : undefined)))).flat();
+    // 即使重复内容为空，也必须失败；继续独立故事以保留后续卡片验收证据。
+    report.checks.push({ name: 'bridge_restart_no_extra_cards', ok: extraCards.length === 0, detail: extraCards }); save();
     const resumed = await completedPrompt(newChat, 'RESUME');
     assert.equal(resumed.threadId, newTurn.threadId);
     assertSameTurnInput(await thread(resumed.threadId), resumed.turnId, marker('RESUME_INPUT'));
