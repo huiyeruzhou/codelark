@@ -87,6 +87,8 @@ CODELARK_REAL_FEISHU_E2E=1 npm run real:feishu:e2e -- \
 
 同一个测试 App 的本地与 CI 运行必须串行，不能与其余 Bridge 同时使用。CI concurrency 只约束 CI 内的运行，本地仍执行活跃 Bridge 冲突检查；进程环境扫描限制为 Node 进程。原生协议、审批回放及 macOS/Desktop 共享后端测试在 `codex-desktop.yml` 中独立运行。
 
+协议路径的 `/p tmux` 验证“共享线程已就绪、可直接发送消息”，随后以真实模型执行和消息回读确认可用；旧路径仍验证原 Provider 切换结果。CI 授权 artifact 包含二维码及仅有公开入口的 JSON，方便在授权步骤等待期间取回；其中不包含 device code 或 OAuth token。
+
 这里的真实飞书场景目前覆盖用户入站、协议执行、最终投递和消息回读。真实审批按钮点击、用户问答提交和完整 Desktop GUI 仍需补充验收，不能用 payload 或模拟 callback 冒充真实操作。
 
 ## 覆盖原则

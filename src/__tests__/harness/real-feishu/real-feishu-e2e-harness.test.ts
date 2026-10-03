@@ -4418,6 +4418,8 @@ describe('app-server real Feishu execution selection', () => {
     assert.equal(report.dryRun, true);
     assert.equal(report.coverage.executionBackend, 'app-server');
     assert.match(report.coverage.testName, /::app-server$/);
+    assert.deepEqual(report.commandReplyExpectations.find((item: { command: string }) => item.command === '/p tmux').expectedTexts,
+      ['共享 Codex 线程已就绪', '可直接发送消息']);
   });
   it('refuses an app-server test against a live bridge or a different runtime', () => {
     assert.match(runHarnessFailure(['--dry-run', '--codex-app-server', '--runtime', 'codex']), /requires an isolated Codex bridge/);

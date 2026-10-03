@@ -5057,6 +5057,9 @@ function runtimeProviderSeedExpectedTexts(options: CliOptions, text: string): st
   const command = text.trim();
   if (command === `/runtime ${options.runtime}`) return ['Runtime', options.runtime];
   if (command === `/p ${options.provider}`) {
+    if (options.codexAppServer && options.provider === 'tmux') {
+      return ['共享 Codex 线程已就绪', '可直接发送消息'];
+    }
     return [
       runtimeProviderCommandTitle(options.runtime),
       options.provider,

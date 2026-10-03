@@ -56,6 +56,9 @@ jobs:
           test_env.write_text('\n'.join(key + '=' + json.dumps(os.environ[key]) for key in required) + '\n')
           test_env.chmod(0o600)
           url = device['verification_url']
+          pathlib.Path('feishu-ci-authorization.json').write_text(json.dumps({
+              'verification_url': url, 'expires_in': device.get('expires_in'),
+          }))
           with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as summary:
               summary.write('### 飞书测试用户授权\n\n请在 10 分钟内打开：' + url + '\n\n只授权本次隔离测试；不会复制本机 OAuth token。\n')
           print('飞书测试授权入口：' + url)
@@ -64,7 +67,9 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: feishu-ci-authorization-qr
-          path: feishu-ci-auth.png
+          path: |
+            feishu-ci-auth.png
+            feishu-ci-authorization.json
           retention-days: 1
       - name: Complete user authorization
         timeout-minutes: 10
