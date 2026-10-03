@@ -146,7 +146,8 @@ try {
   result.desktopAsarSha256 = createHash('sha256').update(fs.readFileSync(path.join(app, 'Contents/Resources/app.asar'))).digest('hex');
   result.cliVersion = await run(executable, ['--version']);
   result.revision = await run('/usr/bin/git', ['rev-parse', 'HEAD']);
-  result.sourceHashes = Object.fromEntries([script, fileURLToPath(new URL('./fixtures/desktop-gui-cdp.ts', import.meta.url))]
+  result.sourceHashes = Object.fromEntries([script, ...['desktop-gui-cdp.ts', 'desktop-gui-onboarding.ts']
+    .map((file) => fileURLToPath(new URL(`./fixtures/${file}`, import.meta.url)))]
     .map((file) => [path.basename(file), createHash('sha256').update(fs.readFileSync(file)).digest('hex')]));
   const first = JSON.parse(await run(nodePath, ['--import', 'tsx', script, '--prepare']));
   const originalBackendPid = await backendPid();
@@ -183,6 +184,8 @@ try {
   };
   await bridgeTurn('DESKTOP_GUI_SEED', 'DESKTOP_GUI_SEED_RESPONSE');
   await launch('01-backend-before-desktop', threadId);
+  result.guiOnboardingCompleted = await gui!.finishOnboarding(threadId, 'DESKTOP_GUI_SEED_RESPONSE');
+  sequence('desktop-onboarding-ready', { completedThroughGui: result.guiOnboardingCompleted });
   await gui!.expectText('DESKTOP_GUI_SEED_RESPONSE');
   await gui!.capture('seed-shared-thread');
   // 由 Bridge 提交，必须在真实 GUI 中收到新内容。

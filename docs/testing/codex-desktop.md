@@ -16,6 +16,8 @@ node --import tsx scripts/verify-codex-desktop-macos.ts
 
 驱动通过 `/usr/bin/open -n -W` 启动 App，只传隔离目录与 Electron CDP 参数；不传 `CODEX_APP_SERVER_WS_URL`，该地址必须由 LaunchServices 从当前用户 launchd 环境继承。CDP 必须返回可见 renderer 和属于指定 App 的 Electron PID，macOS CoreGraphics 必须报告该 PID 的实际 onscreen 窗口。截图、DOM、Accessibility tree、CDP 操作日志、模型请求、Bridge 收到的协议、App 版本、签名检查和 `app.asar` SHA-256 一起保存。鼠标点击和键盘输入走 CDP Input 域，读取 DOM 只用于定位和断言。
 
+隔离 Electron profile 首次运行会显示向导。驱动在真实角色页选择 `Engineering`，取消 `Suggest personalized tasks` 并确认选中状态，然后点击 `Continue`；后续只使用公开的 `Not now`、`Skip` 或 `Get Started`，若出现跳过确认框则在框内点击 `Go to ChatGPT`（有奖励提示的版本为 `Skip`）。不会导入凭据、启用可选系统权限或写入应用内部状态。每次操作记录 `onboarding.jsonl` 并保存页面截图、DOM 和 Accessibility tree。向导消失且主界面输入框可见后，用系统 `open -a` 重新发送 `codex://threads/<id>?hostId=local`，断言原 thread 的 seed 回复可见；初始深链接可能已被向导消费。
+
 官方发行版不是固定 DOM 合同。发行版禁用 CDP、出现登录页或控件发生变化时，测试失败并保留证据；不能改成通信模块验收后宣布 GUI 通过。需要真实账号或 macOS 权限时，以失败截图和界面文本指出具体缺项，不自动打开登录浏览器、导入用户凭据或修改 TCC 数据库。若改用 Accessibility 驱动，需在专用测试 Mac 上给实际驱动进程授予辅助功能权限，再保留真实点击证据。
 
 ## 覆盖的用户故事
@@ -23,6 +25,7 @@ node --import tsx scripts/verify-codex-desktop-macos.ts
 | 场景 | 必须观察到的结果 |
 | --- | --- |
 | backend 先启动，准备 Bridge 的进程退出 | launchd 仍持有同一 backend；再次准备不创建第二个服务 |
+| 隔离 profile 的首次向导 | 真实点击完成必填角色并跳过可选设置；重新打开原 thread 后可见 seed 回复 |
 | Desktop 打开共享 thread | 官方 App 的窗口显示 Bridge 预先生成的回复 |
 | Bridge 提交新消息 | 同一 GUI 窗口出现新回复，不要求 TUI 存在 |
 | Desktop 输入框发送 | 模型只收到一次新请求；Bridge 在原 thread 收到用户消息和助手回复 |
@@ -41,7 +44,9 @@ CI `37139317117`（`f5bda77`）已实际打开官方 `26.930.31730` 的窗口，
 
 该版本完整 App 的 `O5 → sqe` 会用 URL 的 hostname 判断是否为本机；`ws+unix:///…` 的 hostname 为空，意外进入内置 SOCKS 路径。此前单独实例化通信模块 `E` 绕过了这层地址选择，不能覆盖完整 GUI 的行为。
 
-候选修法是 `ws+unix://localhost/…/app-server.sock:/`：ws 仍从 pathname 提取同一个 Unix socket，hostname 则命中完整 App 的本机分支。Linux 已用官方原版通信模块加真实 CLI `0.160.0` 验证该 URL 的 initialize 和 thread/loaded/list，**尚未重新通过完整 GUI**。生产实现需同步兼容新旧 URL 的逆转换/本机校验，并迁移已安装的服务脚本，避免下一次登录重新导出旧地址。生产修改归主 agent，本 GUI 分支没有修改 runtime。
+生产修复使用 `ws+unix://localhost/…/app-server.sock:/`：ws 仍从 pathname 提取同一个 Unix socket，hostname 则命中完整 App 的本机分支。生产实现已兼容新旧 URL 的逆转换/本机校验及已安装服务脚本迁移。CI `37139666898`（`9f665ae`）中官方同版 App 已报告 `hostId=local` 连接成功，CDP 和 CoreGraphics 确认真实可见窗口，`transportErrors=[]`；前轮原生连接错误消失。
+
+该轮在 `Which best describes your work?` 角色页等待 seed 回复失败，证明原验收器遗漏了首次向导。此处新增的向导操作尚待下一轮 macOS CI 验证；当前已证实完整 App 的本机连接和窗口，**尚未通过共享 thread 的 GUI 收发、审批、问答与重开故事**。向导驱动单测仅验证操作选择和未知弹窗边界，不能代替这些 GUI 结果。
 
 后续失败报告同时保存 `desktopConnectionUrl`、`desktopConnectionHostname` 和来自本次 App stderr 的 `desktopStartupDiagnostics.transportErrors`。CDP 不可用时，先结合这些字段和 `failure-macos-display.png` 检查原生对话框。
 
@@ -72,4 +77,4 @@ GitHub hosted macOS job 开始时已拥有可用 GUI 域，但 workflow 没有�
 4. 在会话外监督器已能持续写日志、且测试用户有可用登录方式后，由控制台真正注销并重新登录。保存登录前后会话标识、launchd 服务启动日志、首次 Desktop PID/窗口及线程证据；不能只记录一个新的 backend PID。
 5. 登录后不先运行 Bridge、不手工 `setenv`，在 Desktop 打开原 thread 并双向收发；记录首次启动是否成功、是否需要退出重开。再测试 Bridge 晚启动后是否复用同一服务。全部证据来自新登录会话才可改写实际登录结论。
 
-当前交付只包含自动化与 Linux 静态/协议夹具检查；官方 macOS GUI 与实际登录结果以主 agent 后续整合运行的 artifact 为准。独立分支提交不会自行触发 CI，也不涉及飞书测试账号。
+实际登录仍未测试；GUI 各故事以完整 artifact 为准。独立分支提交不会自行触发 CI，也不涉及飞书测试账号。

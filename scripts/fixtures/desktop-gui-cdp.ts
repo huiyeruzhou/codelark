@@ -1,9 +1,11 @@
 import assert from 'node:assert/strict';
-import { spawn, type ChildProcess } from 'node:child_process';
+import { execFile, spawn, type ChildProcess } from 'node:child_process';
 import fs from 'node:fs';
 import net from 'node:net';
 import path from 'node:path';
+import { promisify } from 'node:util';
 import WebSocket from 'ws';
+import { onboardingAction, type OnboardingScreen } from './desktop-gui-onboarding.js';
 
 const pause = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 export async function until<T>(read: () => Promise<T | false>, label: string, timeoutMs = 45_000): Promise<T> {
@@ -93,7 +95,7 @@ export class DesktopGui {
       '--env', `CODEX_HOME=${env.CODEX_HOME}`, '--env', `CODEX_ELECTRON_USER_DATA_PATH=${userData}`,
       '--env', 'OPENAI_API_KEY=isolated-fixture-key', app, '--args',
       `--remote-debugging-port=${port}`, '--remote-debugging-address=127.0.0.1', `--user-data-dir=${userData}`, '--lang=en-US',
-      ...(threadId ? [`codex://threads/${threadId}`] : [])];
+      ...(threadId ? [this.threadUrl(threadId)] : [])];
     this.identity.launch = { name, command: '/usr/bin/open', args, at: new Date().toISOString() };
     fs.writeFileSync(path.join(this.directory, 'identity.json'), JSON.stringify(this.identity, null, 2));
     this.opener = spawn('/usr/bin/open', args, { env, stdio: ['ignore', log, log] });
@@ -148,6 +150,63 @@ export class DesktopGui {
     return reply.result.value;
   }
   async text(): Promise<string> { return this.evaluate('document.body.innerText'); }
+  private threadUrl(threadId: string) { return `codex://threads/${encodeURIComponent(threadId)}?hostId=local`; }
+  private async onboardingScreen(): Promise<OnboardingScreen> {
+    return this.evaluate(`(() => {
+      const shown=${visible};
+      const dialogs=Array.from(document.querySelectorAll('[role="dialog"],[role="alertdialog"]')).filter(shown);
+      const dialog=dialogs.at(-1), scope=dialog || document;
+      const progress=Array.from(document.querySelectorAll('[data-testid="onboarding-progress-bar"]')).find(shown);
+      const role=Array.from(document.querySelectorAll('input[name="conversational-onboarding-inline-role"]'))
+        .find(e=>shown(e.closest('label') || e));
+      const engineering=document.querySelector('input[name="conversational-onboarding-inline-role"][value="engineering"]');
+      const personalized=document.getElementById('personalized-suggestions');
+      return {progress:progress ? progress.getAttribute('data-active-index') || 'unknown' : null,
+        role:!!role,engineering:!!engineering?.checked,
+        personalized:personalized && shown(personalized) ? personalized.getAttribute('aria-checked')==='true' : null,
+        dialog:dialog ? dialog.innerText : null,
+        buttons:Array.from(scope.querySelectorAll('button,[role="button"]')).filter(shown)
+          .filter(e=>!e.disabled && e.getAttribute('aria-disabled')!=='true')
+          .map(e=>(e.getAttribute('aria-label') || e.innerText || '').trim()),
+        composer:Array.from(document.querySelectorAll(${JSON.stringify(composer)})).some(shown)};
+    })()`);
+  }
+  async finishOnboarding(threadId: string, marker: string) {
+    // 已完成向导的 profile 不重复设置；初始深链接可能被向导消费，完成后再用系统入口打开。
+    if ((await this.text()).includes(marker)) return false;
+    let acted = false;
+    for (let step = 0; step < 10; step++) {
+      const { screen, action } = await until(async () => {
+        const screen = await this.onboardingScreen();
+        const action = onboardingAction(screen);
+        return action ? { screen, action } : false;
+      }, '首次向导的已知可见控件，或主界面输入框');
+      await this.capture(`onboarding-${String(step).padStart(2, '0')}`);
+      const entry = { at: new Date().toISOString(), step, screen, action };
+      fs.appendFileSync(path.join(this.directory, 'onboarding.jsonl'), JSON.stringify(entry) + '\n');
+      if (action === 'done') {
+        this.identity.onboarding = { completedThroughGui: acted, at: entry.at };
+        const url = this.threadUrl(threadId);
+        await promisify(execFile)('/usr/bin/open', ['-a', this.options.app, url], { env: this.options.env, timeout: 15_000 });
+        this.identity.threadReopened = { url, at: new Date().toISOString() };
+        await this.expectText(marker);
+        await this.capture('onboarding-thread-reopened');
+        return acted;
+      }
+      // 使用当前对话框的公开按钮；不按页面全局 Skip 名称穿过弹窗。
+      await this.button([action], screen.dialog !== null);
+      acted = true;
+      await until(async () => {
+        const next = await this.onboardingScreen();
+        // 选中角色、取消勾选和页面跳转都必须产生可读状态变化后才能继续点击。
+        return next.engineering !== screen.engineering || next.personalized !== screen.personalized
+          || next.role !== screen.role || next.progress !== screen.progress || next.dialog !== screen.dialog
+          || (onboardingAction(next) !== false && onboardingAction(next) !== action)
+          || (!!next.composer && next.progress === null);
+      }, `向导操作 ${action} 生效`);
+    }
+    throw new Error('首次向导超过 10 次已知操作；保留页面证据，不猜测点击未知控件');
+  }
   async expectText(marker: string) {
     try {
       await until(async () => (await this.text()).includes(marker), `界面显示 ${marker}`);
@@ -191,9 +250,10 @@ export class DesktopGui {
     await this.page!.call('Input.dispatchMouseEvent', { type: 'mousePressed', ...point, button: 'left', clickCount: 1 });
     await this.page!.call('Input.dispatchMouseEvent', { type: 'mouseReleased', ...point, button: 'left', clickCount: 1 });
   }
-  async button(labels: string[]) {
+  async button(labels: string[], inDialog = false) {
     const names = JSON.stringify(labels);
-    await this.clickExpression(`Array.from(document.querySelectorAll('button,[role="button"],[role="radio"],label')).filter(e =>
+    const scope = inDialog ? `Array.from(document.querySelectorAll('[role="dialog"],[role="alertdialog"]')).filter(${visible}).at(-1)` : 'document';
+    await this.clickExpression(`Array.from((${scope}).querySelectorAll('button,[role="button"],[role="radio"],label')).filter(e =>
       ${names}.includes((e.getAttribute('aria-label') || e.innerText || '').trim()) ||
       Array.from(e.querySelectorAll('span')).some(s => ${names}.includes(s.textContent.trim())))
       .filter((e,_,es) => !es.some(other => other!==e && e.contains(other)))`, `唯一可用按钮 ${labels.join('/')}`);
