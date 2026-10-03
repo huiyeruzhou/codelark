@@ -11,6 +11,7 @@ import { prepareCodexDesktopRemote, disableCodexDesktopRemote } from '../src/run
 import { CodexAppServerLifecycle } from '../src/runtime/codex/app-server-lifecycle.js';
 import { fixtureEnvironment, fixtureModel, startFixtureModel, textInput } from './fixtures/codex-app-server-lifecycle.js';
 import { DesktopGui, until } from './fixtures/desktop-gui-cdp.js';
+import { desktopWindowQuerySource } from './fixtures/desktop-gui-window-query.js';
 
 const execute = promisify(execFile);
 const script = fileURLToPath(import.meta.url);
@@ -34,6 +35,7 @@ const label = `${domain}/dev.codelark.codex-app-server`;
 const plist = path.join(home, 'Library/LaunchAgents/dev.codelark.codex-app-server.plist');
 assert(!fs.existsSync(plist), '拒绝覆盖既有 LaunchAgent。');
 const app = path.join(home, 'Applications/Codex.app');
+const windowQueryExecutable = path.join(root, 'desktop-gui-window-query');
 const result: Record<string, any> = {
   success: false, nativeMacOS: true, fullDesktopGuiTested: false, guiApprovalTested: false, guiQuestionTested: false,
   actualOsLoginTested: false, fixtureRoot: root, tuiRequiredForSubmission: false,
@@ -54,9 +56,24 @@ Object.assign(process.env, fixtureEnvironment(root, model.baseUrl), {
   HOME: home, PATH: originalPath, SHELL: '/bin/bash', TERM: 'xterm-256color', LANG: 'en_US.UTF-8',
   CODELARK_DESKTOP_CI: '1', CODELARK_CODEX_CLI_PATH: executable, GIT_TERMINAL_PROMPT: '0',
 });
-const run = async (command: string, args: string[]) => (await execute(command, args, {
-  env: process.env, timeout: 40_000, maxBuffer: 4 * 1024 * 1024,
-})).stdout.trim();
+const run = async (command: string, args: string[]) => {
+  const started = Date.now();
+  const entry: Record<string, unknown> = { command, args, at: new Date(started).toISOString() };
+  try {
+    const reply = await execute(command, args, { env: process.env, timeout: 40_000, maxBuffer: 4 * 1024 * 1024 });
+    entry.exitCode = 0;
+    if (reply.stderr) entry.stderr = reply.stderr.slice(-16_000);
+    return reply.stdout.trim();
+  } catch (error) {
+    const failure = error as Error & { code?: string | number; signal?: string; killed?: boolean; stdout?: string; stderr?: string };
+    Object.assign(entry, { error: failure.message, exitCode: failure.code, signal: failure.signal, killed: failure.killed,
+      stdout: failure.stdout?.slice(-16_000), stderr: failure.stderr?.slice(-16_000) });
+    throw error;
+  } finally {
+    entry.durationMs = Date.now() - started;
+    fs.appendFileSync(path.join(evidence, 'commands.jsonl'), JSON.stringify(entry) + '\n');
+  }
+};
 const sequence = (event: string, details: object = {}) => {
   const entry = { event, at: new Date().toISOString(), ...details };
   result.startupSequence.push(entry);
@@ -86,13 +103,10 @@ async function launch(name: string, threadId?: string) {
   gui.identity.binary = binary;
   // CoreGraphics 在 OS 层证明窗口属于本次 PID 且确实在屏幕上；不依赖 Chromium 的窗口管理扩展。
   assert(Number.isSafeInteger(pid));
-  const windowQuery = `import Foundation
-import CoreGraphics
-let windows = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] ?? []
-let own = windows.filter { ($0[kCGWindowOwnerPID as String] as? Int) == ${pid} && ($0[kCGWindowLayer as String] as? Int) == 0 }
-print(String(data: try JSONSerialization.data(withJSONObject: own), encoding: .utf8)!)`;
   gui.identity.windows = await until(async () => {
-    const windows = JSON.parse(await run('/usr/bin/swift', ['-e', windowQuery]));
+    const windows = JSON.parse(await run(windowQueryExecutable, [String(pid)]));
+    assert(Array.isArray(windows));
+    assert(windows.every((window: any) => window.kCGWindowOwnerPID === pid && window.kCGWindowLayer === 0));
     return windows.some((window: any) => window.kCGWindowBounds?.Width >= 500 && window.kCGWindowBounds?.Height >= 400)
       ? windows : false;
   }, 'CoreGraphics 确认官方 App 的可见窗口');
@@ -146,9 +160,15 @@ try {
   result.desktopAsarSha256 = createHash('sha256').update(fs.readFileSync(path.join(app, 'Contents/Resources/app.asar'))).digest('hex');
   result.cliVersion = await run(executable, ['--version']);
   result.revision = await run('/usr/bin/git', ['rev-parse', 'HEAD']);
-  result.sourceHashes = Object.fromEntries([script, ...['desktop-gui-cdp.ts', 'desktop-gui-onboarding.ts']
+  result.sourceHashes = Object.fromEntries([script, ...['desktop-gui-cdp.ts', 'desktop-gui-onboarding.ts', 'desktop-gui-window-query.ts']
     .map((file) => fileURLToPath(new URL(`./fixtures/${file}`, import.meta.url)))]
     .map((file) => [path.basename(file), createHash('sha256').update(fs.readFileSync(file)).digest('hex')]));
+  const windowQueryFile = path.join(evidence, 'desktop-gui-window-query.c');
+  fs.writeFileSync(windowQueryFile, desktopWindowQuerySource);
+  await run('/usr/bin/clang', ['-std=c11', '-Wall', '-Wextra', windowQueryFile,
+    '-framework', 'CoreGraphics', '-framework', 'CoreFoundation', '-o', windowQueryExecutable]);
+  result.windowQuerySha256 = createHash('sha256').update(fs.readFileSync(windowQueryExecutable)).digest('hex');
+  sequence('native-window-query-ready');
   const first = JSON.parse(await run(nodePath, ['--import', 'tsx', script, '--prepare']));
   const originalBackendPid = await backendPid();
   result.backendPid = originalBackendPid;

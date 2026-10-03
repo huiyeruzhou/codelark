@@ -4,7 +4,7 @@
 
 ## 执行与判断
 
-Node.js 24、`npm ci`、Codex CLI `0.160.0`、官方 App 和 Xcode Command Line Tools（使用 Swift 读取 CoreGraphics）安装完成后运行：
+Node.js 24、`npm ci`、Codex CLI `0.160.0`、官方 App 和 Xcode Command Line Tools（使用 clang 编译 CoreGraphics 查询器）安装完成后运行：
 
 ```bash
 CODELARK_DESKTOP_CI=1 \
@@ -15,6 +15,8 @@ node --import tsx scripts/verify-codex-desktop-macos.ts
 此命令只适用于一次性测试 macOS 用户。它要求没有既有 CodeLark Desktop LaunchAgent 或 Desktop 连接环境，创建自己的 backend 后在结束时禁用和清理。Desktop 使用独立 `CODEX_HOME` 和 Electron 用户目录，模型 key 是无效的 fixture 标记，模型请求只到本次 mock。不要在日常用户机器直接运行。
 
 驱动通过 `/usr/bin/open -n -W` 启动 App，只传隔离目录与 Electron CDP 参数；不传 `CODEX_APP_SERVER_WS_URL`，该地址必须由 LaunchServices 从当前用户 launchd 环境继承。CDP 必须返回可见 renderer 和属于指定 App 的 Electron PID，macOS CoreGraphics 必须报告该 PID 的实际 onscreen 窗口。截图、DOM、Accessibility tree、CDP 操作日志、模型请求、Bridge 收到的协议、App 版本、签名检查和 `app.asar` SHA-256 一起保存。鼠标点击和键盘输入走 CDP Input 域，读取 DOM 只用于定位和断言。
+
+CoreGraphics 查询器在启动 GUI 前用 clang 编译一次，之后每次重开都复用同一可执行文件，仅输出该次 Electron PID 的普通可见窗口；窗口至少为 500×400。源码保存为 `desktop-gui-window-query.c`，二进制摘要写入结果。`commands.jsonl` 保存命令耗时和失败时的退出码、signal、killed、stdout/stderr，便于区分查询工具失败和 App 未显示窗口。
 
 隔离 Electron profile 首次运行会显示向导。驱动在真实角色页选择 `Engineering`，取消 `Suggest personalized tasks` 并确认选中状态，然后点击 `Continue`；后续只使用公开的 `Not now`、`Skip` 或 `Get Started`，若出现跳过确认框则在框内点击 `Go to ChatGPT`（有奖励提示的版本为 `Skip`）。不会导入凭据、启用可选系统权限或写入应用内部状态。每次操作记录 `onboarding.jsonl` 并保存页面截图、DOM 和 Accessibility tree。向导消失且主界面输入框可见后，用系统 `open -a` 重新发送 `codex://threads/<id>?hostId=local`，断言原 thread 的 seed 回复可见；初始深链接可能已被向导消费。
 
@@ -47,6 +49,8 @@ CI `37139317117`（`f5bda77`）已实际打开官方 `26.930.31730` 的窗口，
 生产修复使用 `ws+unix://localhost/…/app-server.sock:/`：ws 仍从 pathname 提取同一个 Unix socket，hostname 则命中完整 App 的本机分支。生产实现已兼容新旧 URL 的逆转换/本机校验及已安装服务脚本迁移。CI `37139666898`（`9f665ae`）中官方同版 App 已报告 `hostId=local` 连接成功，CDP 和 CoreGraphics 确认真实可见窗口，`transportErrors=[]`；前轮原生连接错误消失。
 
 该轮在 `Which best describes your work?` 角色页等待 seed 回复失败，证明原验收器遗漏了首次向导。此处新增的向导操作尚待下一轮 macOS CI 验证；当前已证实完整 App 的本机连接和窗口，**尚未通过共享 thread 的 GUI 收发、审批、问答与重开故事**。向导驱动单测仅验证操作选择和未知弹窗边界，不能代替这些 GUI 结果。
+
+加入向导后的 `37140286597`（`be15652`）在进入向导操作前因 `swift -e` 窗口查询命令失败。可见 renderer、官方二进制和本机连接均正常；两次截图相隔约 42.5 秒，与原命令的 40 秒预算吻合，而前轮相同窗口检查约 29 秒完成。旧失败记录没有保存 signal/killed，因此只能判断时间线支持查询工具超时，不能声称已取得终止信号。查询现改为启动前一次编译的纯 C CoreGraphics 程序，避免每次窗口查询启动 Swift 编译器；保留相同 OS 断言，原始 App 与 UI 等待预算不变。此变更的 macOS 编译/运行和向导流程仍需后续 CI 验证。
 
 后续失败报告同时保存 `desktopConnectionUrl`、`desktopConnectionHostname` 和来自本次 App stderr 的 `desktopStartupDiagnostics.transportErrors`。CDP 不可用时，先结合这些字段和 `failure-macos-display.png` 检查原生对话框。
 
