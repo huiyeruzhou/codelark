@@ -139,8 +139,12 @@ export async function startFixtureAppServer(executable: string, root: string, en
   const log = fs.openSync(path.join(root, 'backend.log'), 'w');
   const child = spawn(executable, ['app-server', '--listen', endpoint], {
     env, cwd: path.join(root, 'workspace'), stdio: ['ignore', log, log],
+    // npm wrapper 和 Rust 后端必须属于本 fixture 独占的进程组。
+    detached: process.platform !== 'win32',
   });
   fs.closeSync(log);
+  let closing: Promise<void> | undefined;
+  const close = () => closing ??= stopFixtureChild(child);
   let spawnError: Error | undefined;
   child.once('error', (error) => { spawnError = error; });
   let lastConnectionError: unknown;
@@ -148,18 +152,34 @@ export async function startFixtureAppServer(executable: string, root: string, en
     await waitFor(async () => {
       if (spawnError) throw spawnError;
       assert.equal(child.exitCode, null, `app-server 提前退出，检查 ${root}/backend.log`);
+      assert.equal(child.signalCode, null, `app-server 被信号终止，检查 ${root}/backend.log`);
       try { const client = await CodexAppServerClient.connect(endpoint, 1_000); client.close(); return true; }
       catch (error) { lastConnectionError = error; return false; }
     }, '真实 app-server Unix socket');
-  } catch (error) { await stopFixtureChild(child); throw new Error(`${String(error)}; 最后连接错误：${String(lastConnectionError)}`); }
-  return { endpoint, child, close: () => stopFixtureChild(child) };
+  } catch (error) { await close(); throw new Error(`${String(error)}; 最后连接错误：${String(lastConnectionError)}`); }
+  return { endpoint, child, close };
 }
 
 async function stopFixtureChild(child: ChildProcess): Promise<void> {
-  if (!child.pid || child.exitCode !== null || child.signalCode !== null) return;
-  // 只停止本 fixture 持有的子进程，不查找或终止任何既有服务。
-  const exited = once(child, 'exit');
-  child.kill('SIGTERM');
-  const timer = setTimeout(() => child.kill('SIGKILL'), 3_000);
-  try { await exited; } finally { clearTimeout(timer); }
+  if (!child.pid) return;
+  const grouped = process.platform !== 'win32';
+  const target = grouped ? -child.pid : child.pid;
+  const signal = (value: NodeJS.Signals | 0): boolean => {
+    if (!grouped && (child.exitCode !== null || child.signalCode !== null)) return false;
+    try { process.kill(target, value); return true; }
+    catch (error) { if ((error as NodeJS.ErrnoException).code === 'ESRCH') return false; throw error; }
+  };
+  const waitForExit = async (timeoutMs: number): Promise<boolean> => {
+    const deadline = Date.now() + timeoutMs;
+    while (signal(0)) {
+      if (Date.now() >= deadline) return false;
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+    return true;
+  };
+  // wrapper 提前退出也继续等待同组后端；不扫描全机进程或其他 session。
+  if (!signal('SIGTERM')) return;
+  if (await waitForExit(3_000)) return;
+  signal('SIGKILL');
+  if (!await waitForExit(3_000)) throw new Error(`fixture ${grouped ? '进程组' : '进程'} ${child.pid} 在 SIGKILL 后仍未退出`);
 }

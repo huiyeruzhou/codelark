@@ -258,6 +258,8 @@ Claude/CCR 场景额外要求：
   ```
 - 失败运行默认保留 failure report 和日志，但不默认保留测试群；只有显式 `--keep-group` 才允许保留 harness 创建的群。
 - 测试群 registry 默认在系统临时目录 `codelark-real-feishu-e2e-chats.json`；不要放在真实 `~/.codelark` 下，避免污染 live bridge 工作目录。
+- 原生 app-server fixture 在 POSIX 上以 `detached` 创建独占进程组。关闭时向该组发 `SIGTERM`，最多等待 3 秒；仍未退出则向同组发 `SIGKILL`，再等待最多 3 秒，超时明确报错。npm wrapper 提前退出不代表 Rust 后端已退出，启动失败也必须清理整个自有组；重复调用 `close()` 共用同一次清理。关闭逻辑不扫描全机进程或 session，Windows 仍按直接子进程关闭。
+- 验证 fixture 退出时，同时对照正常完成和原生 MCP 尚在等待回答的失败路径。保留关闭前的自有 PID/进程组、关闭返回时及稍后的退出证据；不能只记录 wrapper 的 exit。Linux / Codex 0.153.4 实测中，MCP 虽有独立进程组，也随 Rust 退出而关闭，无需额外扫描或发送信号。这只证明隔离 fixture 的退出行为，不代表飞书按钮已由用户点击。
 
 ## 本地目录隔离
 
