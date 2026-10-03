@@ -17,10 +17,12 @@ jobs:
     timeout-minutes: 25
     env:
       CODELARK_REAL_FEISHU_E2E: '1'
-      CODELARK_REAL_FEISHU_AUTH_HOME: ${{ runner.temp }}/feishu-auth
-      CODELARK_REAL_FEISHU_TEST_LARK_CLI_CONFIG_DIR: ${{ runner.temp }}/feishu-auth/.lark-cli
-      CODELARK_REAL_FEISHU_TEST_LARK_CLI_XDG_DATA_HOME: ${{ runner.temp }}/feishu-auth/.local/share
     steps:
+      - name: Set isolated authorization paths
+        run: |
+          echo "CODELARK_REAL_FEISHU_AUTH_HOME=$RUNNER_TEMP/feishu-auth" >> "$GITHUB_ENV"
+          echo "CODELARK_REAL_FEISHU_TEST_LARK_CLI_CONFIG_DIR=$RUNNER_TEMP/feishu-auth/.lark-cli" >> "$GITHUB_ENV"
+          echo "CODELARK_REAL_FEISHU_TEST_LARK_CLI_XDG_DATA_HOME=$RUNNER_TEMP/feishu-auth/.local/share" >> "$GITHUB_ENV"
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
