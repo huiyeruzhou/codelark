@@ -20,6 +20,8 @@ CoreGraphics 查询器在启动 GUI 前用 clang 编译一次，之后每次重�
 
 隔离 Electron profile 首次运行会显示向导。驱动在真实角色页选择 `Engineering`，取消 `Suggest personalized tasks` 并确认选中状态，然后点击 `Continue`；后续只使用公开的 `Not now`、`Skip` 或 `Get Started`，若出现跳过确认框则在框内点击 `Go to ChatGPT`（有奖励提示的版本为 `Skip`）。不会导入凭据、启用可选系统权限或写入应用内部状态。每次操作记录 `onboarding.jsonl` 并保存页面截图、DOM 和 Accessibility tree。向导消失且主界面输入框可见后，用系统 `open -a` 重新发送 `codex://threads/<id>?hostId=local`，断言原 thread 的 seed 回复可见；初始深链接可能已被向导消费。
 
+该发行版在向导后还可能显示 `Introducing GPT-6.1 Sol` 模型介绍弹窗。驱动仅在匹配该标题和公开按钮时，点击 `Continue with current model` 保留当前模型；不会选择 `Try GPT-6.1 Sol now`，未知对话框仍按失败处理。被弹窗遮挡的输入框不能作为向导结束条件。
+
 官方发行版不是固定 DOM 合同。发行版禁用 CDP、出现登录页或控件发生变化时，测试失败并保留证据；不能改成通信模块验收后宣布 GUI 通过。需要真实账号或 macOS 权限时，以失败截图和界面文本指出具体缺项，不自动打开登录浏览器、导入用户凭据或修改 TCC 数据库。若改用 Accessibility 驱动，需在专用测试 Mac 上给实际驱动进程授予辅助功能权限，再保留真实点击证据。
 
 ## 覆盖的用户故事
@@ -55,6 +57,8 @@ CI `37139317117`（`f5bda77`）已实际打开官方 `26.930.31730` 的窗口，
 该轮的下一处失败发生在向导点击前：读取 `document.body.innerText` 的单次 CDP 请求达到硬编码的 10 秒期限；失败取证立即重新读取同一页面，在约 147ms 内成功，截图仍为角色页。期间主 frame/context 保持不变；出现的 context 销毁属于新建的可视化 iframe，不能解释成主页面跳转。启动期停顿的 App 内部原因尚未确认。
 
 驱动现在让 DOM 读取、Accessibility tree 和页面截图使用与 UI 等待相同的 45 秒预算，保留原请求等待响应；输入与退出操作仍为 10 秒且从不重发。每条 CDP 响应记录耗时，超时和迟到响应也落盘，以便区分暂时无响应与持续失败。协议 mock 的虚拟时间回归验证 11 秒后回复仍可接受、45 秒无回复必须失败、输入超时不重放；这不代表真实向导已通过。真实向导、共享收发及后续 GUI 故事仍待下一轮 CI。
+
+`37141337674`（`38aa060`）已经真实执行上述五次向导点击并进入主界面，侧栏出现 `DESKTOP_GUI_SEED`；每次选中/取消状态和跳过确认都有截图、DOM 与 CDP Input 记录。该轮一个截图请求耗时 11678ms 后成功，未出现 CDP 超时。下一处失败是主界面的模型介绍弹窗不在原有识别范围，等待可操作页面超时。新增的保留当前模型点击仍待下一轮验证；尚未打开共享 thread 正文，不能把侧栏标题或向导完成记为 GUI 收发通过。
 
 后续失败报告同时保存 `desktopConnectionUrl`、`desktopConnectionHostname` 和来自本次 App stderr 的 `desktopStartupDiagnostics.transportErrors`。CDP 不可用时，先结合这些字段和 `failure-macos-display.png` 检查原生对话框。
 

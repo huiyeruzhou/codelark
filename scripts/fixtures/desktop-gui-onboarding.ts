@@ -12,6 +12,10 @@ export interface OnboardingScreen {
 export function onboardingAction(screen: OnboardingScreen): string | false {
   const has = (label: string) => screen.buttons.includes(label);
   if (screen.dialog !== null) {
+    // 37141337674：首次向导后出现模型介绍；只保留现有模型，不接受新模型试用。
+    if (screen.dialog.split('\n').includes('Introducing GPT-6.1 Sol') && has('Continue with current model')) {
+      return 'Continue with current model';
+    }
     // 对话框出现时，不能点击其后面的 Skip，也不能接受未知权限或登录提示。
     if (!/Skip setup\?|Finish set up and get/.test(screen.dialog)) return false;
     return has('Go to ChatGPT') ? 'Go to ChatGPT' : has('Skip') ? 'Skip' : false;

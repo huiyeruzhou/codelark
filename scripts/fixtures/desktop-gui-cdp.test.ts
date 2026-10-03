@@ -34,6 +34,16 @@ test('未知对话框阻止向导点击，过渡空页不能当成成功', () =>
   assert.equal(onboardingAction({ ...roleScreen, role: false, buttons: ['Allow access', 'Continue'] }), false);
 });
 
+test('实际模型介绍弹窗必须保留当前模型，遮罩后的输入框不能作为向导完成', () => {
+  const screen = { ...roleScreen, role: false, progress: null, composer: true,
+    dialog: 'Introducing GPT-6.1 Sol\nMaximize usage with GPT-6.1 Sol.\nContinue with current model\nTry GPT-6.1 Sol now',
+    buttons: ['Continue with current model', 'Try GPT-6.1 Sol now', 'Close'] };
+  assert.equal(onboardingAction(screen), 'Continue with current model');
+  assert.equal(onboardingAction({ ...screen, buttons: ['Try GPT-6.1 Sol now'] }), false);
+  assert.equal(onboardingAction({ ...screen, dialog: 'Sign in to continue' }), false);
+  assert.equal(onboardingAction({ ...screen, dialog: null }), 'done');
+});
+
 test('只读 CDP 等待启动期迟到响应，输入超时只发送一次并保留证据', async (t) => {
   // 本次独占的协议 mock + 虚拟时间，只验证驱动期限与不重放操作，不代表 Desktop GUI。
   const server = new WebSocketServer({ host: '127.0.0.1', port: 0 });
