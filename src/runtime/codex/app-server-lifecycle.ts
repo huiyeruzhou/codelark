@@ -243,6 +243,26 @@ export class CodexAppServerLifecycle {
     return true;
   }
 
+  /** 中断回执不是终态；等待原生事件，超时后回读一次以兼容漏发通知的旧版本。 */
+  async waitForIdle(threadId: string, timeoutMs = 5_000): Promise<boolean> {
+    const idle = () => {
+      const state = this.snapshot(threadId);
+      return state.connection === 'ready' && state.activity === 'idle' && !state.submission;
+    };
+    await this.refresh(threadId);
+    if (idle()) return true;
+    await new Promise<void>((resolve) => {
+      const finish = () => { clearTimeout(timer); off(); resolve(); };
+      const timer = setTimeout(finish, timeoutMs);
+      const off = this.onChange((id) => {
+        if (id === threadId && (idle() || this.snapshot(id).attached === false)) finish();
+      });
+    });
+    if (idle()) return true;
+    await this.refresh(threadId);
+    return idle();
+  }
+
   reply(key: string, result: unknown): boolean {
     for (const [id, state] of this.threads) {
       const request = state.snapshot.requests.find((r) => r.key === key);

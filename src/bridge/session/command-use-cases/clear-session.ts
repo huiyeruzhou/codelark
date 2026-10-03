@@ -67,6 +67,13 @@ export async function handleClearSessionCommand(options: {
 
   const previousBinding = options.currentBinding || options.store.getChannelChat(options.msg.address.channelType, options.msg.address.chatId);
   const previousSession = previousBinding ? options.store.getSession(previousBinding.bridgeSessionId) : null;
+  // 参数错误不能先中断任务或解除旧线程订阅。
+  const resolved = resolveNewSessionWorkingDirectory(parsed.pathArgs, previousBinding, previousSession);
+  if (!resolved.ok) return { response: resolved.message };
+  const workDir = resolved.workDir;
+  const validatedName = validateNewSessionName(deriveNewGroupName(parsed.name, previousSession, workDir));
+  if (!validatedName.ok) return { response: validatedName.message };
+  const sessionName = validatedName.name;
   const protocol = previousSession ? getCodexAppServerSession(previousSession.id) : undefined;
   const usesProtocol = Boolean(protocol || previousSession?.runtime?.codex?.appServerEndpoint);
   const protocolState = protocol?.lifecycle.snapshot(protocol.threadId);
@@ -127,13 +134,14 @@ export async function handleClearSessionCommand(options: {
   if (usesProtocol && previousSession) {
     const current = getCodexAppServerSession(previousSession.id);
     try {
-      if (current) await current.lifecycle.refresh(current.threadId);
+      if (!current || !await current.lifecycle.waitForIdle(current.threadId)) {
+        return { response: 'Codex 尚未确认原轮次结束，当前绑定和订阅已保留。请等待中断完成后再次执行 /clear。' };
+      }
     } catch (error) {
       return { response: `Codex 轮次结束状态尚未确认，当前绑定和订阅已保留。请稍后再次执行 /clear。${error instanceof Error ? error.message : String(error)}` };
     }
-    const refreshed = current?.lifecycle.snapshot(current.threadId);
-    if (!refreshed || refreshed.connection !== 'ready' || refreshed.activity !== 'idle') {
-      return { response: 'Codex 尚未确认原轮次结束，当前绑定和订阅已保留。请等待中断完成后再次执行 /clear。' };
+    if (options.store.getChannelChat(options.msg.address.channelType, options.msg.address.chatId)?.bridgeSessionId !== previousSession.id) {
+      return { response: '等待 Codex 结束期间，当前聊天已切换会话；未覆盖新的绑定。' };
     }
     releaseAppServerRequestObserver(previousSession.id);
     await releaseCodexAppServerSession(previousSession.id);
@@ -152,14 +160,6 @@ export async function handleClearSessionCommand(options: {
       cleanedTmuxSessionName = previousRuntimeTmuxSessionName;
     }
   }
-
-  const resolved = resolveNewSessionWorkingDirectory(parsed.pathArgs, previousBinding, previousSession);
-  if (!resolved.ok) return { response: resolved.message };
-  const workDir = resolved.workDir;
-  let sessionName = deriveNewGroupName(parsed.name, previousSession, workDir);
-  const validatedName = validateNewSessionName(sessionName);
-  if (!validatedName.ok) return { response: validatedName.message };
-  sessionName = validatedName.name;
 
   ensureWorkingDirectoryExists(workDir);
   let binding = router.createBinding(

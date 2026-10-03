@@ -11,7 +11,7 @@ import { CommandThreadDisplay } from '../../../../bridge/command/thread-display.
 import { handleClearSessionCommand } from '../../../../bridge/session/command-use-cases/clear-session.js';
 import { prepareCodexAppServerSession, getCodexAppServerSession, closeCodexAppServerSessions } from '../../../../runtime/codex/app-server-registry.js';
 
-it('clear retains the original thread after an early interrupt ack and detaches only after refresh confirms idle', async (t) => {
+for (const completion of ['timeout', 'event', 'rebind'] as const) it(`clear waits for a native terminal and preserves binding ownership: ${completion}`, async (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'codelark-clear-protocol-'));
   const wss = new WebSocketServer({ port: 0, host: '127.0.0.1' });
   t.after(async () => {
@@ -26,6 +26,7 @@ it('clear retains the original thread after an early interrupt ack and detaches 
   const turn = { id: 'turn-1', status: 'inProgress', items: [] };
   const thread = { id: 'thread-clear', turns: [] as typeof turn[] };
   const calls: string[] = [];
+  let onInterrupt = () => {};
   wss.on('connection', (socket) => socket.on('message', (data) => {
     const message = JSON.parse(String(data)); calls.push(message.method);
     const reply = (result: unknown) => socket.send(JSON.stringify({ id: message.id, result }));
@@ -37,7 +38,7 @@ it('clear retains the original thread after an early interrupt ack and detaches 
       socket.send(JSON.stringify({ method: 'turn/started', params: { threadId: thread.id, turn } }));
       reply({ turn });
     }
-    else if (message.method === 'turn/interrupt') reply({}); // acknowledgement deliberately precedes completion
+    else if (message.method === 'turn/interrupt') { reply({}); onInterrupt(); } // acknowledgement deliberately precedes completion
     else if (message.method === 'thread/unsubscribe') reply({ status: 'unsubscribed' });
   }));
   const store = initBridgeTestContext();
@@ -54,7 +55,28 @@ it('clear retains the original thread after an early interrupt ack and detaches 
       recordInteractiveHealthEnd: () => assert.fail('clear must not synthesize terminal health'),
       cancelQueuedSessionMessages: () => { queueCancellations++; } },
   };
+  let reboundSessionId: string | undefined;
+  if (completion !== 'timeout') onInterrupt = () => {
+    setTimeout(() => {
+      if (completion === 'rebind') reboundSessionId = router.createBinding(address, root).bridgeSessionId;
+      turn.status = 'interrupted';
+      for (const socket of wss.clients) socket.send(JSON.stringify({ method: 'turn/completed', params: { threadId: thread.id, turn } }));
+    }, 30);
+  };
   const pending = await handleClearSessionCommand(options);
+  if (completion === 'rebind') {
+    assert.match(pending.response, /未覆盖新的绑定/);
+    assert.equal(store.getChannelChat(address.channelType, address.chatId)?.bridgeSessionId, reboundSessionId);
+    assert.equal(calls.includes('thread/unsubscribe'), false);
+    return;
+  }
+  if (completion === 'event') {
+    assert.match(pending.response, /已清空当前聊天上下文/);
+    assert.notEqual(store.getChannelChat(address.channelType, address.chatId)?.bridgeSessionId, binding.bridgeSessionId);
+    assert.equal(calls.filter((m) => m === 'turn/interrupt').length, 1);
+    assert.equal(calls.includes('thread/unsubscribe'), true);
+    return;
+  }
   assert.match(pending.response, /尚未确认原轮次结束/);
   assert.equal(queueCancellations, 1);
   assert.equal(store.getChannelChat(address.channelType, address.chatId)?.bridgeSessionId, binding.bridgeSessionId);

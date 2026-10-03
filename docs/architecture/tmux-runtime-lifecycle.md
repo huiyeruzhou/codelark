@@ -394,3 +394,7 @@ Kimi 入口补充：
 - tmux provider 普通消息的可见进度、selection 去重和 post-forward/update exit notice 属于 host manager/permission broker 职责，因为它们依赖 IM adapter reaction、mirror stream start、selection callback 和 session health 多方状态；provider 只应暴露底层 tmux readiness/selection 能力，否则 Claude tmux 无法共享同一行为。
 - JSONL mirror 是 pty/tmux provider 的权威输出来源；屏幕抓取主要用于 ready 检测、人工诊断和短期兜底。
 - 卡顿检测应继续消费统一的 `BridgeSession` 运行状态和 mirror 进度，而不是让 provider 自己决定最终健康状态。
+
+### 清空时等待真实终态
+
+`/clear` 先验证名称和目录，再处理运行中的确认。确认后通过 app-server 请求中断，等待 `turn/completed`；中断回执不算任务结束。默认最多等 5 秒，超时回读一次线程状态，仍无法确认结束则保留原绑定与订阅。结束确认后才切换新会话，等待期间如果聊天已被切换，则不覆盖新的绑定。
