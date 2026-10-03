@@ -273,7 +273,7 @@ Claude/CCR 场景额外要求：
 
 ### 原生文件、权限与 MCP 卡片
 
-在 `app-server-lifecycle` 上增加 `--native-request-cards`，使用同一保留群验证 Codex 0.153.4 的文件 diff、额外权限、MCP 表单和 URL。模型仍由共享 fixture 编排，MCP 使用独立的本地 stdio helper。全部输入均由真实用户 CLI 发送，全部卡片由用户身份回读，观察连接不提交消息或审批答复。
+真实飞书 CI 已启用此扩展；本地在 `app-server-lifecycle` 上增加 `--native-request-cards`，使用同一保留群验证 Codex 0.153.4 的文件 diff、额外权限、MCP 表单和 URL。模型仍由共享 fixture 编排，MCP 使用独立的本地 stdio helper。全部输入均由真实用户 CLI 发送，全部卡片由用户身份回读，观察连接不提交消息或审批答复。
 
 自动模式先完成原有生命周期和命令审批收卡，再执行这些检查：
 

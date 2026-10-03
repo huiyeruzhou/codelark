@@ -74,7 +74,7 @@ jobs:
             node --import tsx scripts/real-feishu-e2e.ts \
               --test-env-file "$CODELARK_REAL_FEISHU_AUTH_HOME/test.env" \
               --launch-bridge --codex-app-server --runtime codex --provider "$provider" \
-              --scenario app-server-lifecycle --run-id "ci-${GITHUB_RUN_ID}-${provider}" \
+              --scenario app-server-lifecycle --native-request-cards --run-id "ci-${GITHUB_RUN_ID}-${provider}" \
               --run-root "/tmp/clk-real-feishu-${GITHUB_RUN_ID}-${provider}" \
               --output "$RUNNER_TEMP/feishu-evidence/${provider}.json" || failed=1
           done
