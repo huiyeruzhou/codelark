@@ -1,9 +1,11 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import { once } from 'node:events';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import { DesktopGui } from './desktop-gui-cdp.js';
+import { WebSocketServer } from 'ws';
+import { Cdp, DesktopGui } from './desktop-gui-cdp.js';
 import { onboardingAction, type OnboardingScreen } from './desktop-gui-onboarding.js';
 
 // 根据 37139666898 的实际角色页和同版公开控件构造决策输入；这是驱动逻辑单测，不是 GUI 验收。
@@ -30,6 +32,54 @@ test('未知对话框阻止向导点击，过渡空页不能当成成功', () =>
   assert.equal(onboardingAction({ ...roleScreen, role: false, progress: null }), false);
   assert.equal(onboardingAction({ ...roleScreen, role: false, buttons: ['Allow access', 'Not now'] }), 'Not now');
   assert.equal(onboardingAction({ ...roleScreen, role: false, buttons: ['Allow access', 'Continue'] }), false);
+});
+
+test('只读 CDP 等待启动期迟到响应，输入超时只发送一次并保留证据', async (t) => {
+  // 本次独占的协议 mock + 虚拟时间，只验证驱动期限与不重放操作，不代表 Desktop GUI。
+  const server = new WebSocketServer({ host: '127.0.0.1', port: 0 });
+  await once(server, 'listening');
+  const address = server.address();
+  assert(address && typeof address !== 'string');
+  const connected = once(server, 'connection');
+  const records: any[] = [];
+  const client = await Cdp.connect(`ws://127.0.0.1:${address.port}`, (entry) => records.push(entry));
+  const [socket] = await connected;
+  const received: any[] = [];
+  socket.on('message', (data: Buffer) => received.push(JSON.parse(data.toString())));
+  try {
+    t.mock.timers.enable({ apis: ['setTimeout', 'Date'] });
+    let readSettled = false;
+    const readMessage = once(socket, 'message');
+    const read = client.call('Runtime.evaluate', { expression: 'document.body.innerText', returnByValue: true })
+      .then((value) => { readSettled = true; return value; });
+    await readMessage;
+    t.mock.timers.tick(11_000);
+    assert.equal(readSettled, false);
+    assert.equal(records.some((record) => record.timeout), false);
+    socket.send(JSON.stringify({ id: received[0].id, result: { result: { value: 'Which best describes your work?' } } }));
+    assert.equal((await read).result.value, 'Which best describes your work?');
+    assert.equal(records.find((record) => record.response)?.response.durationMs, 11_000);
+
+    const inputMessage = once(socket, 'message');
+    const input = client.call('Input.insertText', { text: 'one input' });
+    const failed = assert.rejects(input, /CDP 超时：Input.insertText \(10000ms\)/);
+    await inputMessage;
+    t.mock.timers.tick(10_001);
+    await failed;
+    assert.equal(received.filter((message) => message.method === 'Input.insertText').length, 1);
+    assert.equal(records.find((record) => record.timeout)?.timeout.method, 'Input.insertText');
+
+    const stalledMessage = once(socket, 'message');
+    const stalled = assert.rejects(client.call('Runtime.evaluate', { expression: 'document.body.innerText' }), /\(45000ms\)/);
+    await stalledMessage;
+    t.mock.timers.tick(45_001);
+    await stalled;
+    assert.equal(records.at(-1).timeout.method, 'Runtime.evaluate', '持续无响应的读取仍必须失败');
+  } finally {
+    t.mock.timers.reset();
+    client.close();
+    await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+  }
 });
 
 test('GUI 退出 RPC 失败也释放观察连接和本次 open 等待句柄', async () => {

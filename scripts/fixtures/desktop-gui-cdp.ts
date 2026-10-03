@@ -19,14 +19,16 @@ export async function until<T>(read: () => Promise<T | false>, label: string, ti
 }
 
 /** 只连接本次 open 启动的官方 Electron；不注入应用 API、不调用 renderer 内部函数。 */
-class Cdp {
+export class Cdp {
   private sequence = 0;
-  private pending = new Map<number, { resolve(value: any): void; reject(error: Error): void; timer: NodeJS.Timeout }>();
+  private pending = new Map<number, { resolve(value: any): void; reject(error: Error): void; timer: NodeJS.Timeout; method: string; started: number }>();
   private constructor(private socket: WebSocket, private record: (entry: unknown) => void) {
     socket.on('message', (data) => {
       const message = JSON.parse(data.toString());
       if (message.id === undefined) { record({ event: message }); return; }
       const request = this.pending.get(message.id);
+      record({ response: { id: message.id, method: request?.method, durationMs: request ? Date.now() - request.started : undefined,
+        lateOrUnknown: !request, error: message.error } });
       if (!request) return;
       clearTimeout(request.timer); this.pending.delete(message.id);
       if (message.error) request.reject(new Error(JSON.stringify(message.error)));
@@ -46,10 +48,18 @@ class Cdp {
   call<T = any>(method: string, params: object = {}): Promise<T> {
     assert.equal(this.socket.readyState, WebSocket.OPEN, 'CDP 连接必须已打开');
     const id = ++this.sequence;
-    this.record({ command: { id, method, params } });
+    // 启动期间主线程可能短暂停顿；只读观察沿用 UI 的 45 秒预算，不在 10 秒处提前失败。
+    // 每个操作只发送一次，尤其不能因未知执行结果而重发 Input 或 Browser.close。
+    const timeoutMs = ['Runtime.evaluate', 'Accessibility.getFullAXTree', 'Page.captureScreenshot'].includes(method) ? 45_000 : 10_000;
+    const started = Date.now();
+    this.record({ command: { id, method, params, timeoutMs } });
     return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => { this.pending.delete(id); reject(new Error(`CDP 超时：${method}`)); }, 10_000);
-      this.pending.set(id, { resolve, reject, timer });
+      const timer = setTimeout(() => {
+        this.pending.delete(id);
+        this.record({ timeout: { id, method, timeoutMs, durationMs: Date.now() - started } });
+        reject(new Error(`CDP 超时：${method} (${timeoutMs}ms)`));
+      }, timeoutMs);
+      this.pending.set(id, { resolve, reject, timer, method, started });
       this.socket.send(JSON.stringify({ id, method, params }), (error) => {
         if (error) { clearTimeout(timer); this.pending.delete(id); reject(error); }
       });
