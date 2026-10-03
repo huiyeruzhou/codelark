@@ -101,7 +101,7 @@ CodeLark 先完成 `initialize` 和 `thread/loaded/list` 协议检查，再由�
 
 关闭可执行 `codelark codex-desktop disable`：该命令会中断共享服务的活动轮次、移除自己的 LaunchAgent、只清除指向自己服务的 Desktop 环境变量，并写入 `~/.codelark/codex-desktop/disabled` 防止下一次 tmux 自动安装。之后重开 Desktop 恢复默认方式。若要重新启用，移除该 `disabled` 文件后创建新 tmux；已有环境快照继续复用。仅设置 `CODELARK_CODEX_DESKTOP_REMOTE=0` 只影响该 Bridge 后续启动，不停止已经安装的共享服务。卸载 CodeLark 前若要恢复 Desktop 默认方式，应先运行上述 disable 命令；普通 Bridge stop 不负责停止 Desktop 使用的后端。
 
-`CODEX_APP_SERVER_WS_URL` 的行为取证自 Desktop `26.930.31730` 发行包；它是实现细节，不能当作长期稳定的公开接口。Linux 已实测发行包原版通信模块与真实 Codex `0.153.4`、`0.160.0` 共享会话，另以 `0.160.0` 验证 Unix socket、CodeLark 新连接层和真实 remote TUI。GitHub macOS 26 runner 已验证真实 LaunchAgent、Bridge 准备进程退出后服务继续运行，以及通过 LaunchServices 启动的应用继承连接环境；完整 Desktop GUI 与真实 IM 提示仍需手测，不能用协议测试替代。
+`CODEX_APP_SERVER_WS_URL` 的行为取证自 Desktop `26.930.31730` 发行包；它是实现细节，不能当作长期稳定的公开接口。Linux 已实测发行包原版通信模块与真实 Codex `0.153.4`、`0.160.0` 共享会话，另以 `0.160.0` 验证 Unix socket、CodeLark 新连接层和真实 remote TUI。GitHub macOS 26 runner 已验证真实 LaunchAgent、Bridge 准备进程退出后服务继续运行，以及通过 LaunchServices 启动的应用继承连接环境；完整官方 Desktop GUI 的同线程收发、审批、问答和退出重开，以及真实飞书的新终端提示已有独立验收；服务恢复、晚启动和停用后的完整 GUI 结果见下方验收文档，不能用通信模块的成功代替。
 
 专用工作流 `.github/workflows/codex-desktop.yml` 在独立分支 `ci/codex-desktop-remote` 上运行；`scripts/verify-codex-desktop-macos.ts` 现通过 LaunchServices 启动官方 Desktop 原版 App，再用 CDP 鼠标/键盘操作真实窗口，验证共享线程收发、审批和问答；模型响应由隔离的本地 mock 提供。测试用 `turn/completed` 确认回合完成，保存截图、界面文本、线程协议及 App 身份；任何 GUI 失败都不能退回通信模块验收后报成功。受控启动顺序与实际 OS 注销/登录分别记录，后者仍未验证。执行方式、证据口径和专用 Mac 登录验收步骤见 [Desktop GUI 验收](../testing/codex-desktop.md)。
 

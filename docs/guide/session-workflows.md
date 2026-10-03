@@ -36,6 +36,22 @@ CodeLark 的 IM 对话由三层组成：
 
 使用共享 Codex app-server 时，新会话沿用同一个后端，但建立新的 thread；旧 thread、运行任务和 tmux 句柄不会复制。`/clear` 保留当前聊天里其他 runtime 的已有映射，`/new` 只为新群创建新的 runtime 映射。
 
+## 在 Codex Desktop 继续同一会话
+
+macOS 已安装官方 Codex Desktop、且 Codex CLI 支持远程连接时，新建 Codex 会话会自动使用共享 app-server。新的 tmux 查看窗口建立后，聊天中会提示已检测到 Desktop，并使用了 `--remote`。在 Desktop 打开同一条会话即可继续；共享服务负责保存上下文，关闭某个查看窗口或重启 CodeLark 不会停止它。
+
+第一次配置时，如果 Desktop 已经打开，按提示退出后重新打开一次，让它取得共享连接地址。服务在 Desktop 之后才启动时，也可能需要重开 Desktop。CodeLark 自动保存连接配置，无需每次手动设置环境变量。实际注销再登录、两个登录项同时启动的顺序仍待专用 Mac 验证；当前验收范围见 [Desktop GUI 验收](../testing/codex-desktop.md)。
+
+已有旧会话继续使用原运行方式；没有 Desktop、CLI 版本不支持或使用其他系统时，也保留原方式。已经由独立 Codex 进程占用的会话，需要先正常结束那个进程才能交给共享服务，不能通过删除锁文件解决。
+
+需要恢复 Desktop 默认运行方式时，在本机终端执行：
+
+```bash
+codelark codex-desktop disable
+```
+
+这会停止 CodeLark 管理的共享服务及其中正在执行的任务，移除自动启动配置；随后重开 Desktop。卸载 CodeLark 前也应先执行此命令。重新启用时，移除 `~/.codelark/codex-desktop/disabled`，再创建新的 Codex 会话；原来的服务环境快照会继续复用。`CODELARK_CODEX_DESKTOP_REMOTE=0` 只关闭当前 Bridge 的自动选择，不会停止已经运行的共享服务。
+
 ## 会话列表和下拉选框
 
 `/t` 默认显示当前 runtime 最近 20 条本地会话，并发送一张表格卡片：
@@ -50,7 +66,7 @@ CodeLark 的 IM 对话由三层组成：
 
 runtime 和数量下拉只切换卡片里的候选列表，不会改变当前会话。选择具体目标并点击“接管”后才会修改 binding。如果当前会话仍在运行，CodeLark 会先询问是否停止；取消时旧任务和 binding 都不变，确认后会先停止旧任务，再把后续消息切到所选 runtime。
 
-停止 Kimi Code 时，CodeLark 会按 Kimi TUI 约定连续发送两次 `Ctrl-C`；这会取消当前 turn 并保留可复用的 tmux 会话。Codex 和 Claude Code 仍只发送一次。
+停止 Kimi Code 时，CodeLark 会按 Kimi TUI 约定连续发送两次 `Ctrl-C`；这会取消当前 turn 并保留可复用的 tmux 会话。旧 Codex TUI 和 Claude Code 只发送一次。共享 Codex 会话通过协议中断当前任务，并等待后端确认结束。
 
 常用 session 管理命令：
 
@@ -114,7 +130,9 @@ CodeLark 默认通过 tmux 运行本地 agent。只有当前 TUI 已退出或确
 
 ## tmux 输入和屏幕查看
 
-普通文本会进入当前 BridgeSession 的 tmux TUI。CodeLark 会等待 TUI ready；如果启动时出现 update、trust、goal 或 permission 选择，会把选择卡片发到 IM，用户选择完成后再把原始输入转发进去。
+共享 Codex 会话的普通文本通过 app-server 提交，运行状态和完成结果也来自后端。tmux 用于查看和人工操作；终端里出现菜单不会阻挡飞书提交，查看屏幕也不是恢复任务的必要步骤。
+
+其他终端适配器的普通文本会进入当前 BridgeSession 的 tmux TUI。CodeLark 会等待 TUI ready；如果启动时出现 update、trust、goal 或 permission 选择，会把选择卡片发到 IM，用户选择完成后再把原始输入转发进去。
 
 查看当前 tmux pane：
 
@@ -135,7 +153,7 @@ CodeLark 默认通过 tmux 运行本地 agent。只有当前 TUI 已退出或确
 /tmux-key <C-c>
 ```
 
-`/tmux ...` 会把普通文本写入当前绑定的 tmux session，并固定补一个 Enter；如果输入已经显式以 `<Enter>` 结尾则不重复补。这个行为不提供配置开关。`/tmux-key ...` 用来发送控制键。发送后会自动截屏返回。
+终端适配器的 `/tmux ...` 会把普通文本写入当前绑定的 tmux session，并固定补一个 Enter；如果输入已经显式以 `<Enter>` 结尾则不重复补。这个行为不提供配置开关。共享 Codex 会话的 `/tmux ...` 通过协议提交任务，不依赖终端按键。`/tmux-key ...` 用来操作实际终端；停止共享任务请用 `/stop`。
 
 tmux 绑定和默认值：
 
@@ -161,7 +179,7 @@ tmux 绑定和默认值：
 
 | 层级 | 写入位置 | 典型入口 | 生效范围 |
 | --- | --- | --- | --- |
-| 全局默认 | `~/.codelark/config.toml` | `/set`、Web 工作台配置页 | 新群默认继承；也影响没有单独覆盖该字段的已有群。 |
+| 全局默认 | `~/.codelark/config.toml` | `/set`、Web 工作台配置页 | 没有来源会话的新群采用；也影响没有单独覆盖该字段的已有群。 |
 | 当前群 | `~/.codelark/config/sessions/<session-id>.toml` | `/`、`/runtime`、`/model`、`/cd`、`/tmux-set` | 只影响当前群绑定的会话，并优先于全局默认。 |
 
 `/set` 卡片顶部可以切换：
@@ -186,7 +204,7 @@ tmux 绑定和默认值：
 
 `/` 卡片只显示可以由当前群覆盖的字段：通用分栏包含对话名称、当前工作目录和 tmux 展示行数；agent 分栏包含模型和权限等会话设置。选择“跟随上层配置”会删除当前群的覆盖值，重新跟随 `/set`。
 
-简单判断：**只改这个群，用 `/`；希望以后新建的群都采用同一默认值，用 `/set`。**
+只改当前群，用 `/`；修改全局默认，用 `/set`。从已有群执行 `/new` 或 `/clear` 时，仍以该群当前实际生效的配置为准，不会丢弃它的设置而回退到全局默认。
 
 ## 什么时候看哪张卡片
 
