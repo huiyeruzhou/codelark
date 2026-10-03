@@ -604,3 +604,20 @@ permission_mode = "plan"
     assert.match(messages[1]?.content || '', /"type":"tool_result"/);
   });
 });
+
+it('preserves a runtime-confirmed interrupted outcome without treating it as an SDK error', async () => {
+  resetBridgeTestState();
+  const store = initBridgeTestContext();
+  const session = store.createSession('interrupted', 'test-model');
+  const binding = store.upsertChannelChat({ channelType: 'feishu', chatId: 'confirmed-interruption', bridgeSessionId: session.id });
+  const llm: LLMProvider = { streamChat() {
+    return new ReadableStream({ start(controller) {
+      controller.enqueue(sseEvent('result', { session_id: 'native-thread', outcome: 'aborted' }));
+      controller.enqueue(sseEvent('done', '')); controller.close();
+    } });
+  } };
+  const result = await processMessage(binding, 'work', undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, createTestSdkConversationRuntime(store, llm));
+  assert.equal(result.outcome, 'aborted');
+  assert.equal(result.hasError, false);
+  assert.equal(result.errorMessage, '');
+});

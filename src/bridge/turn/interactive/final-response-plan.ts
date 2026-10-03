@@ -5,6 +5,7 @@ import type {
   OutboundQuestion,
 } from '../../../domain/index.js';
 import type { FinalizedBridgeResponse } from '../turn-types.js';
+import type { RuntimeTurnOutcome } from '../../../runtime/contracts.js';
 import {
   assembleCodexFinalResponse,
   assembleSdkFinalResponse,
@@ -27,6 +28,7 @@ export interface InteractiveProcessFinalResult {
   outboundPlatformMessages?: OutboundPlatformMessage[];
   outboundManualInputs?: OutboundManualInput[];
   hasError: boolean;
+  outcome?: RuntimeTurnOutcome;
   errorMessage: string;
 }
 
@@ -105,7 +107,8 @@ export function buildProcessFinalResponsePlan(params: {
     : null;
   const streamEndStatus = params.terminal
     ? terminalStatus(params.terminal.outcome)
-    : params.aborted
+    : params.result.outcome ? terminalStatus(params.result.outcome)
+      : params.aborted
       ? 'interrupted'
       : params.result.hasError ? 'error' : 'completed';
   const baseCardText = staleResponse?.text || (streamEndStatus === 'interrupted' ? '' : effectiveResponse.text);

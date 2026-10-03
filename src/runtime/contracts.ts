@@ -15,6 +15,9 @@ export interface SSEEvent {
   data: string;
 }
 
+/** 运行时确认的轮次终态；用户发出停止请求本身不代表已经中断。 */
+export type RuntimeTurnOutcome = 'completed' | 'failed' | 'aborted';
+
 export type SSEEventType =
   | 'text'
   | 'text_snapshot'

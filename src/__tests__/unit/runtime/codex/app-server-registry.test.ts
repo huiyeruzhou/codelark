@@ -16,6 +16,7 @@ async function fixture(t: TestContext) {
   const received: any[] = [];
   const threads = new Map<string, any>();
   let finishImmediately = false;
+  let terminalStatus = 'completed';
   let disconnectOnStart = false;
   let loseReplyAfterCompletion = false;
   let releaseStart: (() => void) | undefined;
@@ -41,7 +42,7 @@ async function fixture(t: TestContext) {
         send('item/agentMessage/delta', { turnId: turn.id, itemId: 'two', delta: 'Sec' });
         send('item/agentMessage/delta', { turnId: turn.id, itemId: 'two', delta: 'ond' });
         send('item/completed', { turnId: turn.id, item: { type: 'agentMessage', id: 'two', text: 'Second' } });
-        turn.status = 'completed';
+        turn.status = terminalStatus;
         send('turn/completed', { turn: { ...turn, items: [] } });
       }
       if (loseReplyAfterCompletion) { socket.close(); return; }
@@ -53,7 +54,7 @@ async function fixture(t: TestContext) {
     for (const client of wss.clients) client.terminate();
     await new Promise<void>((resolve) => wss.close(() => resolve()));
   });
-  return { endpoint, received, holdStart: () => { holdThreadStart = true; }, releaseStart: () => releaseStart?.(), loseReply: () => { loseReplyAfterCompletion = true; }, finish: () => { finishImmediately = true; }, disconnect: () => { disconnectOnStart = true; } };
+  return { endpoint, received, holdStart: () => { holdThreadStart = true; }, releaseStart: () => releaseStart?.(), loseReply: () => { loseReplyAfterCompletion = true; }, finish: (status = 'completed') => { finishImmediately = true; terminalStatus = status; }, disconnect: () => { disconnectOnStart = true; } };
 }
 async function collect(stream: ReadableStream<string>) {
   const chunks: string[] = [];
@@ -168,4 +169,12 @@ test('cached direct session applies tightened permissions to the next turn', asy
   assert.equal(turns[0].params.approvalPolicy, 'never');
   assert.deepEqual(turns[1].params.sandboxPolicy, { type: 'readOnly' });
   assert.equal(turns[1].params.approvalPolicy, 'on-request');
+});
+
+test('a native interruption is an explicit result outcome, not an execution error', async (t) => {
+  const f = await fixture(t); f.finish('interrupted');
+  process.env.CODELARK_CODEX_APP_SERVER_URL = f.endpoint;
+  const events = await collect(streamCodexAppServer({ sessionId: 'direct-interrupt', prompt: 'hello' }, { streamChat() { throw new Error('no fallback'); } }));
+  assert.equal(events.some((event) => event.type === 'error'), false);
+  assert.equal(JSON.parse(events.find((event) => event.type === 'result').data).outcome, 'aborted');
 });

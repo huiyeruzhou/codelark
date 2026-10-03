@@ -27,6 +27,7 @@ import type {
   SSEEvent,
   StreamChatParams,
   TokenUsage,
+  RuntimeTurnOutcome,
 } from '../../../runtime/contracts.js';
 import crypto from 'crypto';
 import {
@@ -119,6 +120,7 @@ export interface ConversationResult {
   outboundManualInputs?: OutboundManualInput[];
   tokenUsage: TokenUsage | null;
   hasError: boolean;
+  outcome?: RuntimeTurnOutcome;
   errorMessage: string;
   /** Permission request events that were forwarded during streaming */
   permissionRequests: PermissionRequestInfo[];
@@ -356,6 +358,7 @@ async function consumeStream(
   let separateNextPreviewText = false;
   let tokenUsage: TokenUsage | null = null;
   let hasError = false;
+  let outcome: RuntimeTurnOutcome | undefined;
   let errorMessage = '';
   const seenToolResultIds = new Set<string>();
   const permissionRequests: PermissionRequestInfo[] = [];
@@ -669,6 +672,7 @@ async function consumeStream(
         case 'result': {
           try {
             const resultData = JSON.parse(event.data);
+            if (['completed', 'failed', 'aborted'].includes(resultData.outcome)) outcome = resultData.outcome;
             if (resultData.usage) tokenUsage = resultData.usage;
             if (resultData.model && activeRuntime === 'codex') {
               store.updateSessionModel(sessionId, resultData.model);
@@ -790,6 +794,7 @@ async function consumeStream(
       outboundManualInputs,
       tokenUsage,
       hasError,
+      ...(outcome ? { outcome } : {}),
       errorMessage,
       permissionRequests,
       codexThreadId: capturedCodexThreadId,

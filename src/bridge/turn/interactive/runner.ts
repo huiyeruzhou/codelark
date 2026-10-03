@@ -830,7 +830,7 @@ export async function runInteractiveMessage(
     } catch {
       // best effort
     }
-    finalOutcome = terminalAfterProcess?.outcome || (result.hasError ? 'failed' : 'completed');
+    finalOutcome = terminalAfterProcess?.outcome || result.outcome || (result.hasError ? 'failed' : 'completed');
     finalOutcomeDetail = terminalAfterProcess?.detail || (result.hasError
       ? (result.errorMessage?.trim() || undefined)
       : undefined);
@@ -838,7 +838,7 @@ export async function runInteractiveMessage(
     await streamingArtifacts?.close();
     if (useInteractiveStreamUi || (isRuntimeMirrorTurn && streamUi.shouldSkipTextDelivery())) {
       void enqueueFinalUiWork(
-        taskAbort.signal.aborted
+        taskAbort.signal.aborted || finalOutcome === 'aborted'
           ? 'interrupted'
           : finalOutcome === 'completed'
             ? 'completed'

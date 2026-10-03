@@ -75,8 +75,11 @@ export function streamCodexAppServer(params: StreamChatParams, legacy: LLMProvid
           } else if (record.type === 'context_usage') emit('context_usage', record.contextUsage);
           else if (record.type === 'plan_update') emit('task_update', { tasks: record.tasks || [], todos: record.tasks || [] });
           else if (record.type === 'task_complete' || record.type === 'task_aborted') {
-            if (record.isError || record.type === 'task_aborted') emit('error', record.errorText || 'Codex 轮次已中断。');
-            emit('result', { session_id: threadId, app_server_endpoint: session.endpoint });
+            if (record.isError) emit('error', record.errorText || 'Codex 执行失败。');
+            emit('result', {
+              session_id: threadId, app_server_endpoint: session.endpoint,
+              outcome: record.type === 'task_aborted' ? 'aborted' : record.isError ? 'failed' : 'completed',
+            });
             emit('done', ''); finish();
           }
         };

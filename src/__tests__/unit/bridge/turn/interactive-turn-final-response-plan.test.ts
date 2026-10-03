@@ -126,3 +126,12 @@ describe('interactive-turn final-response-plan', () => {
     assert.equal(plan.deliveryResponse, null);
   });
 });
+
+it('renders the native aborted outcome as interrupted even when the Bridge abort signal was never set', () => {
+  const plan = buildProcessFinalResponsePlan({
+    result: { responseText: '', outboundAttachments: [], hasError: false, errorMessage: '', outcome: 'aborted' },
+    terminal: null, aborted: false, formatErrorCard: () => { throw new Error('interruption must not format an error'); },
+  });
+  assert.equal(plan.streamEndStatus, 'interrupted');
+  assert.equal(plan.deliveryResponse, null);
+});
