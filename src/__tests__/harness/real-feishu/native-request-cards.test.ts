@@ -3,7 +3,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { assertCardContains, assertFormResult, assertPermissionResult, mcpTool } from '../../../testing/real-feishu/native-request-cards.js';
+import { assertCardContains, assertFormResult, assertPermissionResult, mcpTool, newAnswerFeedback } from '../../../testing/real-feishu/native-request-cards.js';
 
 test('原生 MCP 同时识别发现输出中的 namespace 与旧平面工具名', () => {
   assert.deepEqual(mcpTool({ input: [{ type: 'tool_search_output', tools: [{ type: 'namespace', name: 'mcp__codelark_cards', tools: [{ name: 'form' }] }] }] }, 'form'),
@@ -19,6 +19,13 @@ test('真实卡片内容校验保留多行 diff 的围栏、引号与中文，�
   assertCardContains({ body: { content: { elements: lines.map((text) => ({ text })) } } }, lines);
   assert.throws(() => assertCardContains({ content: lines.slice(0, 2).join('\n') }, lines));
   assert.throws(() => assertCardContains({ content: '只显示文件名' }, lines));
+});
+test('问答校验提示允许群内普通消息，只接受本次新增的机器人提示', () => {
+  const message = { message_id: 'new', sender: { id: 'app', sender_type: 'app' }, content: '回答不符合此项要求' };
+  const payload = { ok: true, identity: 'user', data: { messages: [message] } };
+  assert.equal(newAnswerFeedback(payload, new Set(['old']), 'app', '回答不符合'), message);
+  assert.equal(newAnswerFeedback(payload, new Set(['new']), 'app', '回答不符合'), undefined);
+  assert.equal(newAnswerFeedback(payload, new Set(), 'another', '回答不符合'), undefined);
 });
 
 test('原生工具结果拒绝布尔字符串、越界回答及扩大权限范围', () => {

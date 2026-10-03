@@ -46,6 +46,10 @@ export function assertCardContains(card: Record<string, any>, parts: string[]): 
   const content = text(card.content ?? card.body?.content);
   for (const part of parts) assert(content.includes(part), `真实用户回读卡片缺少 ${part}`);
 }
+export function newAnswerFeedback(payload: unknown, beforeIds: Set<unknown>, appId: string, text: string): Record<string, any> | undefined {
+  return userReadbackMessages(payload).find((m) => m.sender?.id === appId && m.sender.sender_type === 'app'
+    && !beforeIds.has(m.message_id) && String(m.content).includes(text));
+}
 
 /** CLI 把 MCP 输出放在 input_text 数组，权限工具则直接返回 JSON 字符串。 */
 export function decodedToolResults(value: unknown): Array<Record<string, any>> {
@@ -129,14 +133,16 @@ export async function runNativeRequestCards(c: Context): Promise<void> {
 
   const form = await start('mcp-form', 'mcpServer/elicitation/request', [mark('MCP_FORM'), 'count', 'enabled'], () => enqueueMcp('form'));
   const requestCount = d.model.requests.length;
-  const invalidId = await c.send(chatId, '0');
-  await c.wait('越界数字被产品拒绝', async () => userReadbackMessages(await c.read(chatId)).find((m) => m.reply_to === invalidId
-    && m.sender?.id === d.botAppId && JSON.stringify(m.content).includes('回答不符合此项要求')));
+  const answerFeedback = async (text: string, expected: string) => {
+    const beforeIds = new Set(userReadbackMessages(await c.read(chatId)).map((m) => m.message_id));
+    await c.send(chatId, text);
+    // 原生问答提示投递到群，不要求产品使用 reply_to；必须是本次输入后的新增机器人消息。
+    await c.wait(expected, async () => newAnswerFeedback(await c.read(chatId), beforeIds, d.botAppId, expected));
+  };
+  await answerFeedback('0', '回答不符合此项要求');
   assert.equal(d.model.requests.length, requestCount, '无效回答不能作为工具结果发给模型');
   assert.equal((await c.thread(threadId)).turns.find((t) => t.id === form.turn.id)?.status, 'inProgress');
-  const validId = await c.send(chatId, '3');
-  await c.wait('上界数字已记录', async () => userReadbackMessages(await c.read(chatId)).find((m) => m.reply_to === validId
-    && m.sender?.id === d.botAppId && JSON.stringify(m.content).includes('已记录此项')));
+  await answerFeedback('3', '已记录此项');
   d.model.enqueue({ text: mark('MCP_FORM_RESULT') });
   await c.send(chatId, 'false');
   await c.terminal(threadId, form.turn.id);
