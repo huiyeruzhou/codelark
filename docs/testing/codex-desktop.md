@@ -35,6 +35,16 @@ node --import tsx scripts/verify-codex-desktop-macos.ts
 
 `result.json` 的 `fullDesktopGuiTested` 只在双向 GUI 收发通过后置真；审批、问答分别记录 `guiApprovalTested`、`guiQuestionTested`。任一后续场景失败，整体 `success=false`，不得仅看某一个已通过的布尔值。`disabledDesktopDefaultGui` 只有在关闭共享配置后，真实 App 独立打开原 thread 并完成新一轮 GUI 收发才置真。
 
+## 完整 App 首次验收暴露的连接地址问题
+
+CI `37139317117`（`f5bda77`）已实际打开官方 `26.930.31730` 的窗口，但截图显示 `ChatGPT failed to start` 和 `connect ECONNREFUSED 127.0.0.1:1080`。App 自己的 stderr 同时记录 WebSocket 建连失败；随后原生对话框阻塞了 `Runtime.enable`、截图所需的 `Runtime.evaluate` 和 `Browser.close`。因此不能把首次失败只归因于 CDP 超时，也不能认为窗口打开就代表共享线程成功。
+
+该版本完整 App 的 `O5 → sqe` 会用 URL 的 hostname 判断是否为本机；`ws+unix:///…` 的 hostname 为空，意外进入内置 SOCKS 路径。此前单独实例化通信模块 `E` 绕过了这层地址选择，不能覆盖完整 GUI 的行为。
+
+候选修法是 `ws+unix://localhost/…/app-server.sock:/`：ws 仍从 pathname 提取同一个 Unix socket，hostname 则命中完整 App 的本机分支。Linux 已用官方原版通信模块加真实 CLI `0.160.0` 验证该 URL 的 initialize 和 thread/loaded/list，**尚未重新通过完整 GUI**。生产实现需同步兼容新旧 URL 的逆转换/本机校验，并迁移已安装的服务脚本，避免下一次登录重新导出旧地址。生产修改归主 agent，本 GUI 分支没有修改 runtime。
+
+后续失败报告同时保存 `desktopConnectionUrl`、`desktopConnectionHostname` 和来自本次 App stderr 的 `desktopStartupDiagnostics.transportErrors`。CDP 不可用时，先结合这些字段和 `failure-macos-display.png` 检查原生对话框。
+
 ## 实际 OS 登录尚未由 hosted CI 验证
 
 `actualOsLoginTested` 固定为 `false`。当前脚本记录 `who`、控制台用户、系统版本、GUI launchd 域摘要及启动事件时间，测试动作没有注销、重新登录或创建新的登录会话。`bootout/bootstrap` 只在当前会话重载自己的服务。

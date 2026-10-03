@@ -31,3 +31,17 @@ test('CDP 建连前失败不终止未知 App，但释放自己的 open 等待句
     assert.equal(released, true);
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
+
+test('CDP 被原生启动对话框阻塞时仍保留真实 App transport 错误', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-gui-diagnostics-'));
+  const gui = new DesktopGui({ app: '/unused/Codex.app', root, evidence: root, env: {}, name: 'startup' });
+  try {
+    const message = 'connect ECONNREFUSED 127.0.0.1:1080';
+    fs.writeFileSync(path.join(root, 'startup', 'app-stderr.log'), [
+      `[AppServerConnection] app_server_connection.websocket_error message=${JSON.stringify(message)}`,
+      `[AppServerConnection] app_server_connection.connection_failed_before_ready errorMessage=${JSON.stringify(message)} errorStack="irrelevant"`,
+      '[other-service] message="不应当成为 app-server 错误"',
+    ].join('\n'));
+    assert.deepEqual(gui.startupDiagnostics().transportErrors, [message]);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});

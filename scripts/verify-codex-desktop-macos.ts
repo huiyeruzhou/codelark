@@ -158,6 +158,8 @@ try {
   result.survivesBridgeProcessExit = true;
   result.reusesBackend = true;
   const wsUrl = appServerWebSocketUrl(first.endpoint);
+  result.desktopConnectionUrl = wsUrl;
+  result.desktopConnectionHostname = new URL(wsUrl).hostname;
   assert.equal(await run('/bin/launchctl', ['getenv', 'CODEX_APP_SERVER_WS_URL']), wsUrl);
 
   const connect = async () => {
@@ -325,6 +327,7 @@ try {
   result.success = true;
 } catch (error) {
   result.error = error instanceof Error ? error.stack : String(error);
+  result.desktopStartupDiagnostics = gui?.startupDiagnostics();
   process.exitCode = 1;
   saveEvidence(); // 首次失败立即落盘，不能等 GUI 退出或截图成功才保留根因。
   if (gui) await gui.capture('failure').catch((error) => { result.captureError = String(error); });

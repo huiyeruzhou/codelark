@@ -159,7 +159,20 @@ export class DesktopGui {
       throw error;
     }
   }
+  startupDiagnostics() {
+    // 原生启动错误对话框会阻塞 CDP；只能读取本次 open 显式指定的 App 日志。
+    const log = path.join(this.directory, 'app-stderr.log');
+    if (!fs.existsSync(log)) return { log, transportErrors: [] as string[] };
+    const transportErrors = new Set<string>();
+    for (const line of fs.readFileSync(log, 'utf8').split('\n')) {
+      if (!/\[AppServerConnection\].*(?:websocket_error|connection_failed_before_ready)/.test(line)) continue;
+      const encoded = line.match(/\b(?:errorMessage|message)=("(?:\\.|[^"\\])*")/)?.[1];
+      if (encoded) transportErrors.add(JSON.parse(encoded));
+    }
+    return { log, transportErrors: [...transportErrors] };
+  }
   async capture(name: string) {
+    this.identity.startupDiagnostics = this.startupDiagnostics();
     fs.writeFileSync(path.join(this.directory, 'identity.json'), JSON.stringify(this.identity, null, 2));
     if (!this.page) return;
     fs.writeFileSync(path.join(this.directory, `${name}.txt`), await this.text());
