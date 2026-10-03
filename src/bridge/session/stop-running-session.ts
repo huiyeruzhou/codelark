@@ -7,16 +7,19 @@ import { sendTmuxInterrupt } from '../tmux/runtime.js';
 import { invalidateRuntimeTmuxInputReadiness } from '../tmux/input-state-machine.js';
 import { sessionLooksRunning } from './command-use-cases/status-guards.js';
 import { resolveEffectiveRuntimeProvider } from './support.js';
+import { getCodexAppServerSession } from '../../runtime/codex/app-server-registry.js';
+import { prepareCodexAppServerForBinding } from '../command/tmux.js';
 
 export interface StopRunningSessionDeps {
   getActiveTask(sessionId: string): { abortController: AbortController } | undefined;
   forceStopSession?(sessionId: string, detail?: string): Promise<boolean>;
+  cancelQueuedSessionMessages?(sessionId: string): void;
   recordInteractiveHealthEnd?(sessionId: string, outcome: 'completed' | 'failed' | 'aborted', detail?: string): void;
 }
 
 export interface StopRunningSessionResult {
   stopped: boolean;
-  method: 'active_task' | 'tmux_interrupt' | 'observed_state' | 'idle';
+  method: 'active_task' | 'tmux_interrupt' | 'app_server_interrupt' | 'observed_state' | 'idle';
   detail: string;
   tmuxSessionName?: string;
   command?: string;
@@ -66,7 +69,19 @@ export async function stopRunningSession(options: {
   deps: StopRunningSessionDeps;
   detail: string;
 }): Promise<StopRunningSessionResult> {
+  options.deps.cancelQueuedSessionMessages?.(options.binding.bridgeSessionId);
   const session = options.store.getSession(options.binding.bridgeSessionId);
+  const registered = getCodexAppServerSession(options.binding.bridgeSessionId);
+  if (session && (registered || session.runtime?.codex?.appServerEndpoint)) {
+    const protocol = registered || await prepareCodexAppServerForBinding(options.store, options.binding, session);
+    if (!protocol) throw new Error('协议线程的后端尚未恢复，未向独立 TUI 发送停止指令。');
+    const interrupted = await protocol.lifecycle.interrupt(protocol.threadId);
+    return {
+      stopped: interrupted,
+      method: interrupted ? 'app_server_interrupt' : 'idle',
+      detail: interrupted ? '已请求中断，等待 Codex 确认轮次结束。' : '当前没有正在运行的协议轮次。',
+    };
+  }
   const task = options.deps.getActiveTask(options.binding.bridgeSessionId);
   const target = tmuxInterruptTarget(session, options.binding);
   if (task) {

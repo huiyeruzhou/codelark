@@ -14,7 +14,8 @@ async function server(t: TestContext) {
   assert(address && typeof address === 'object');
   const received: AppServerMessage[] = [];
   let socket: WebSocket;
-  wss.on('connection', (connection) => {
+  wss.on('connection', (connection, request) => {
+    assert.equal(request.headers['sec-websocket-extensions'], undefined, 'old Codex Unix transport requires no compression negotiation');
     socket = connection;
     connection.on('message', (data) => {
       const message = JSON.parse(String(data));

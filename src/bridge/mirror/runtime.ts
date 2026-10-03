@@ -36,6 +36,8 @@ import { getSessionCodexThreadId } from '../../domain/session-runtime.js';
 import type { MirrorJsonlSource, MirrorJsonlSourceSummary } from '../../runtime/contracts.js';
 import type { BridgeTurnRuntime } from '../turn/turn-types.js';
 import type { MirrorReadPosition } from '../../domain/session.js';
+import { getCodexAppServerSession } from '../../runtime/codex/app-server-registry.js';
+import type { CodexAppServerLifecycle } from '../../runtime/codex/app-server-lifecycle.js';
 
 export interface BridgeMirrorRuntimeState {
   running: boolean;
@@ -61,6 +63,7 @@ export interface MirrorRuntimeSession {
     activeRuntime?: 'codex' | 'claude' | 'kimi' | 'cursor' | 'zcode';
     codex?: {
       threadId?: string | null;
+      appServerEndpoint?: string;
     };
     claude?: {
       sessionId?: string | null;
@@ -99,6 +102,13 @@ export interface CreateMirrorRuntimeOptions {
 }
 
 export interface CreateMirrorRuntimeDeps {
+  getProtocolSession?(sessionId: string): {
+    threadId: string;
+    endpoint: string;
+    direct?: boolean;
+    directTurnIds?: Set<string>;
+    lifecycle: Pick<CodexAppServerLifecycle, 'recordsAfter' | 'onChange' | 'snapshot'>;
+  } | undefined;
   mirrorSource?: MirrorJsonlSource;
   runtimeLabel?: string;
   nowIso(): string;
@@ -159,6 +169,35 @@ export function createMirrorRuntime(
   const mirrorSource = deps.mirrorSource || createCodexMirrorJsonlSource();
   const runtimeLabel = deps.runtimeLabel || 'Codex';
   const runtimeName: BridgeTurnRuntime = mirrorSource.runtime;
+  const protocolSubscriptions = new Map<string, {
+    lifecycle: Pick<CodexAppServerLifecycle, 'recordsAfter' | 'onChange' | 'snapshot'>;
+    threadId: string;
+    cursor: number;
+    unsubscribe: () => void;
+  }>();
+  const getProtocolSession = (sessionId: string) => runtimeName === 'codex'
+    ? (deps.getProtocolSession || getCodexAppServerSession)(sessionId) : undefined;
+  const isProtocolSession = (sessionId: string, session: MirrorRuntimeSession) => runtimeName === 'codex'
+    && Boolean(session.runtime?.codex?.appServerEndpoint || getProtocolSession(sessionId));
+
+  function syncProtocolSubscription(subscription: BridgeMirrorSubscription): void {
+    const protocol = getProtocolSession(subscription.sessionId);
+    const existing = protocolSubscriptions.get(subscription.bindingId);
+    if (existing && protocol?.lifecycle === existing.lifecycle && subscription.threadId === existing.threadId) return;
+    existing?.unsubscribe();
+    protocolSubscriptions.delete(subscription.bindingId);
+    if (!protocol || protocol.threadId !== subscription.threadId) return;
+    protocolSubscriptions.set(subscription.bindingId, {
+      lifecycle: protocol.lifecycle,
+      threadId: protocol.threadId,
+      cursor: 0,
+      unsubscribe: protocol.lifecycle.onChange((threadId) => {
+        if (threadId !== subscription.threadId) return;
+        subscription.dirty = true;
+        scheduleMirrorWake();
+      }),
+    });
+  }
   const getSessionMirrorThreadId = deps.getSessionMirrorThreadId
     || ((session: MirrorRuntimeSession) => getSessionCodexThreadId(session));
   const hasSessionMirrorSource = deps.hasSessionMirrorSource
@@ -270,6 +309,8 @@ export function createMirrorRuntime(
     // 删除按binding持有的订阅前，把读取位置留在会话上供下一个群接续。
     deps.syncMirrorSessionStateSafe(existing.sessionId, 'mirror subscription detach checkpoint');
     deps.stopMirrorStreaming(existing);
+    protocolSubscriptions.get(bindingId)?.unsubscribe();
+    protocolSubscriptions.delete(bindingId);
     closeMirrorWatcher(existing);
     state.mirrorSubscriptions.delete(bindingId);
     deps.syncMirrorSessionStateSafe(existing.sessionId, 'mirror subscription removal');
@@ -300,7 +341,8 @@ export function createMirrorRuntime(
     }
 
     const existing = state.mirrorSubscriptions.get(binding.id);
-    const filePath = existing?.threadId === threadId && existing.filePath
+    const protocol = isProtocolSession(binding.bridgeSessionId, session);
+    const filePath = protocol ? null : existing?.threadId === threadId && existing.filePath
       ? existing.filePath
       : getMirrorSourceSummary(
           mirrorSource,
@@ -332,6 +374,7 @@ export function createMirrorRuntime(
       });
       watchMirrorFile(created, filePath);
       state.mirrorSubscriptions.set(binding.id, created);
+      syncProtocolSubscription(created);
       deps.syncMirrorSessionStateSafe(binding.bridgeSessionId, 'mirror subscription create');
       return;
     }
@@ -350,6 +393,7 @@ export function createMirrorRuntime(
       deps.stopMirrorStreaming(existing);
     }
     watchMirrorFile(existing, filePath);
+    syncProtocolSubscription(existing);
     if (previousSessionId !== binding.bridgeSessionId) {
       deps.syncMirrorSessionStateSafe(previousSessionId, 'mirror subscription rebind previous session');
     }
@@ -413,58 +457,77 @@ export function createMirrorRuntime(
       subscription.suspendedUntil = null;
     }
 
-    let snapshot = subscription.filePath ? statMirrorSource(subscription.filePath) : null;
-    if (!snapshot) {
-      const sourceSummary = getMirrorSourceSummary(
-        mirrorSource,
-        subscription.threadId,
-        getSessionMirrorCwd(session),
-        'mirror reconcile',
-      );
-      if (!sourceSummary) {
-        subscription.missingThreadPolls += 1;
-        if (subscription.missingThreadPolls >= options.danglingThreadRetryLimit) {
-          clearDanglingMirrorThread(subscription, `${runtimeLabel} thread no longer exists locally`);
-          return 'processed';
-        }
-      } else {
-        subscription.missingThreadPolls = 0;
-      }
-      refreshMirrorSubscriptionSource(subscription, sourceSummary?.filePath || null, deps.nowIso());
-      watchMirrorFile(subscription, subscription.filePath);
-
-      if (!subscription.filePath) {
-        deps.syncMirrorSessionStateSafe(subscription.sessionId, 'mirror reconcile without file');
+    const protocol = isProtocolSession(subscription.sessionId, session);
+    let deliverableRecords: BridgeMirrorRecord[];
+    if (protocol) {
+      syncProtocolSubscription(subscription);
+      const source = protocolSubscriptions.get(subscription.bindingId);
+      if (!source) {
+        subscription.status = 'stale';
+        deps.syncMirrorSessionStateSafe(subscription.sessionId, 'app-server connection unavailable');
         return 'processed';
       }
-      snapshot = statMirrorSource(subscription.filePath);
-    } else {
-      subscription.missingThreadPolls = 0;
+      const delta = source.lifecycle.recordsAfter(subscription.threadId, source.cursor);
+      source.cursor = delta.cursor;
+      const owner = getProtocolSession(subscription.sessionId);
+      deliverableRecords = delta.records.filter((record) => !owner?.direct && !(record.turnId && owner?.directTurnIds?.has(record.turnId)));
+      subscription.dirty = false;
+      subscription.status = source.lifecycle.snapshot(subscription.threadId).connection === 'ready' ? 'watching' : 'stale';
       subscription.lastReconciledAt = deps.nowIso();
-    }
+    } else {
+      let snapshot = subscription.filePath ? statMirrorSource(subscription.filePath) : null;
+      if (!snapshot) {
+        const sourceSummary = getMirrorSourceSummary(
+          mirrorSource,
+          subscription.threadId,
+          getSessionMirrorCwd(session),
+          'mirror reconcile',
+        );
+        if (!sourceSummary) {
+          subscription.missingThreadPolls += 1;
+          if (subscription.missingThreadPolls >= options.danglingThreadRetryLimit) {
+            clearDanglingMirrorThread(subscription, `${runtimeLabel} thread no longer exists locally`);
+            return 'processed';
+          }
+        } else {
+          subscription.missingThreadPolls = 0;
+        }
+        refreshMirrorSubscriptionSource(subscription, sourceSummary?.filePath || null, deps.nowIso());
+        watchMirrorFile(subscription, subscription.filePath);
 
-    if (!snapshot) {
-      markMirrorSnapshotMissing(subscription);
-      deps.syncMirrorSessionStateSafe(subscription.sessionId, 'mirror reconcile missing snapshot');
-      return 'processed';
-    }
+        if (!subscription.filePath) {
+          deps.syncMirrorSessionStateSafe(subscription.sessionId, 'mirror reconcile without file');
+          return 'processed';
+        }
+        snapshot = statMirrorSource(subscription.filePath);
+      } else {
+        subscription.missingThreadPolls = 0;
+        subscription.lastReconciledAt = deps.nowIso();
+      }
 
-    const unchanged = isMirrorSnapshotUnchanged(subscription, snapshot);
-    if (unchanged && !deps.hasPendingMirrorWork(subscription) && !mirrorSource.readSupplementalDelta) {
-      deps.syncMirrorSessionStateSafe(subscription.sessionId, 'mirror reconcile unchanged snapshot');
-      return 'processed';
-    }
+      if (!snapshot) {
+        markMirrorSnapshotMissing(subscription);
+        deps.syncMirrorSessionStateSafe(subscription.sessionId, 'mirror reconcile missing snapshot');
+        return 'processed';
+      }
 
-    const readResult = readMirrorDeliverableRecords(subscription, snapshot, mirrorSource);
-    const deliverableRecords = readResult.records;
-    for (const kind of readResult.unknownKinds) {
-      if (subscription.unknownMirrorKindsSeen.has(kind)) continue;
-      subscription.unknownMirrorKindsSeen.add(kind);
-      console.warn(
-        `[bridge-manager] Unhandled ${runtimeLabel} mirror event for thread ${subscription.threadId}: ${kind}`,
-      );
+      const unchanged = isMirrorSnapshotUnchanged(subscription, snapshot);
+      if (unchanged && !deps.hasPendingMirrorWork(subscription) && !mirrorSource.readSupplementalDelta) {
+        deps.syncMirrorSessionStateSafe(subscription.sessionId, 'mirror reconcile unchanged snapshot');
+        return 'processed';
+      }
+
+      const readResult = readMirrorDeliverableRecords(subscription, snapshot, mirrorSource);
+      deliverableRecords = readResult.records;
+      for (const kind of readResult.unknownKinds) {
+        if (subscription.unknownMirrorKindsSeen.has(kind)) continue;
+        subscription.unknownMirrorKindsSeen.add(kind);
+        console.warn(
+          `[bridge-manager] Unhandled ${runtimeLabel} mirror event for thread ${subscription.threadId}: ${kind}`,
+        );
+      }
     }
-    const unsuppressedRecords = deliverableRecords.length > 0
+    const unsuppressedRecords = !protocol && deliverableRecords.length > 0
       ? deps.filterSuppressedMirrorRecords(subscription.sessionId, deliverableRecords)
       : deliverableRecords;
     let routeResult: { claimed: BridgeMirrorRecord[]; unclaimed: BridgeMirrorRecord[]; terminalClaimed: boolean };
@@ -495,9 +558,11 @@ export function createMirrorRuntime(
     const blocked = getState().activeTasks.has(subscription.sessionId);
     const deliveryPlan = buildMirrorDeliveryPlan(subscription, mirrorRecords, {
       blocked,
-      filterSuppressedRecords: deps.filterSuppressedMirrorRecords,
-      flushTimedOutTurn: (currentSubscription) => deps.flushTimedOutMirrorTurn(currentSubscription),
-      consumeBufferedTurns: (currentSubscription) => deps.consumeBufferedMirrorTurns(currentSubscription),
+      filterSuppressedRecords: protocol ? (_sessionId, records) => records : deps.filterSuppressedMirrorRecords,
+      flushTimedOutTurn: (currentSubscription) => protocol ? null : deps.flushTimedOutMirrorTurn(currentSubscription),
+      consumeBufferedTurns: (currentSubscription) => protocol
+        ? deps.consumeMirrorRecords(currentSubscription, currentSubscription.bufferedRecords.splice(0))
+        : deps.consumeBufferedMirrorTurns(currentSubscription),
     });
 
     if (deliveryPlan.finalizedTurns.length > 0) {

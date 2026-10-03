@@ -5,6 +5,7 @@ import type { ThreadCardScope } from '../../command/thread-display.js';
 export interface SessionCommandDeps {
   getActiveTask(sessionId: string): { abortController: AbortController } | undefined;
   forceStopSession?(sessionId: string, detail?: string): Promise<boolean>;
+  cancelQueuedSessionMessages?(sessionId: string): void;
   recordInteractiveHealthEnd?(sessionId: string, outcome: 'completed' | 'failed' | 'aborted', detail?: string): void;
   cancelRuntimeWaits?(sessionId: string): void;
   reconcileMirrorSubscriptions?(): Promise<void>;

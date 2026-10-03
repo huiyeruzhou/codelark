@@ -291,7 +291,8 @@ export async function runInteractiveMessage(
   const activeRuntime = getSessionActiveRuntime(initialSession) || 'codex';
   const isClaudeMirrorTurn = activeRuntime === 'claude' && resolveEffectiveClaudeProvider(initialSession, binding) !== 'sdk';
   const codexProvider = resolveEffectiveCodexProvider(initialSession, binding);
-  const isCodexMirrorTurn = activeRuntime === 'codex' && (codexProvider === 'pty' || codexProvider === 'tmux');
+  const isProtocolTurn = activeRuntime === 'codex' && Boolean(initialSession?.runtime?.codex?.appServerEndpoint);
+  const isCodexMirrorTurn = !isProtocolTurn && activeRuntime === 'codex' && (codexProvider === 'pty' || codexProvider === 'tmux');
   const isKimiMirrorTurn = activeRuntime === 'kimi';
   const isCursorTranscriptTurn = activeRuntime === 'cursor';
   const isZcodeTranscriptTurn = activeRuntime === 'zcode';
@@ -358,7 +359,7 @@ export async function runInteractiveMessage(
     kind: turnClassification.kind,
     origin: 'im',
     progressSource: isCodexMirrorTurn ? 'codex_jsonl' : isClaudeMirrorTurn ? 'claude_jsonl' : isKimiMirrorTurn ? 'kimi_jsonl' : isCursorTranscriptTurn ? 'cursor_jsonl' : isZcodeTranscriptTurn ? 'zcode_sqlite' : 'sdk_stream',
-    finalSource: isCodexMirrorTurn || turnClassification.kind === 'im_codex_reuse'
+    finalSource: isCodexMirrorTurn || (!isProtocolTurn && turnClassification.kind === 'im_codex_reuse')
       ? 'codex_task_complete'
       : isClaudeMirrorTurn
         ? 'claude_task_complete'
@@ -596,7 +597,7 @@ export async function runInteractiveMessage(
   let preparedPromptText: string | null = null;
 
   const ensureMirrorSuppression = (promptText: string | null | undefined): void => {
-    if (isRuntimeMirrorTurn || taskState.mirrorSuppressionId) return;
+    if (isProtocolTurn || isRuntimeMirrorTurn || taskState.mirrorSuppressionId) return;
     const normalizedPrompt = (promptText || '').trim();
     if (!normalizedPrompt) return;
     taskState.mirrorSuppressionId = deps.beginMirrorSuppression(binding.bridgeSessionId, promptText || '');
@@ -652,7 +653,7 @@ export async function runInteractiveMessage(
       useStatusStreamUi ? sdkStreamEvents.onStatusNote : undefined,
       (preparedPrompt) => {
         preparedPromptText = preparedPrompt;
-        if (isCodexMirrorTurn || turnClassification.kind === 'im_codex_reuse') {
+        if (!isProtocolTurn && (isCodexMirrorTurn || turnClassification.kind === 'im_codex_reuse')) {
           externalTerminal.expectCodexTerminalFinal();
         }
         if (initialCodexThreadId || isCursorTranscriptTurn || isZcodeTranscriptTurn) {
@@ -681,7 +682,11 @@ export async function runInteractiveMessage(
             await deps.reconcileMirrorSubscriptions?.();
             return;
           }
-          if (identity.runtime === 'codex') observedCodexThreadId = identity.sessionId;
+          if (identity.runtime === 'codex') {
+            observedCodexThreadId = identity.sessionId;
+            // status persists the endpoint before this callback; the broker also scans pending requests.
+            await deps.reconcileMirrorSubscriptions?.();
+          }
           ensureMirrorSuppression(preparedPromptText);
         },
       },

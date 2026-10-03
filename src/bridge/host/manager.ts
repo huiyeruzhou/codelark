@@ -200,6 +200,13 @@ import {
   type TmuxSendAction,
 } from '../tmux/runtime.js';
 import type { TmuxAutoForwardRecoveryPayload } from '../command/codex-tui-selection.js';
+import { prepareCodexAppServerForBinding, codexAppServerTurnOptions, scheduleCodexAppServerView } from '../command/tmux.js';
+import { getCodexAppServerSession, closeCodexAppServerSessions, releaseCodexAppServerSession } from '../../runtime/codex/app-server-registry.js';
+import { stopRunningSession } from '../session/stop-running-session.js';
+import {
+  observeAppServerRequests, handleAppServerRequestCallback, answerAppServerQuestion,
+  closeAppServerRequestObservers, releaseAppServerRequestObserver, hasAppServerQuestion,
+} from '../permission/app-server.js';
 import {
   coordinateRuntimeTmuxSelection,
   sendRuntimeTmuxInput,
@@ -406,7 +413,7 @@ function tmuxSelectionUpdateExitProbeDelayMs(): number {
 function addInboundGetReaction(
   adapter: BaseChannelAdapter,
   msg: InboundMessage,
-  reason: 'command_received' | 'tmux_input_actions_completed',
+  reason: 'command_received' | 'tmux_input_actions_completed' | 'app_server_input_accepted',
 ): void {
   const raw = msg.raw as { manualIngress?: unknown } | undefined;
   const syntheticManualIngress = raw?.manualIngress === true || msg.messageId?.startsWith('manual:');
@@ -447,6 +454,7 @@ async function probeTmuxProviderExitAfterAutoForward(params: {
   if (!binding || binding.bridgeSessionId !== params.sessionId) return;
   const session = store.getSession(params.sessionId);
   if (!session) return;
+  if (session.runtime?.codex?.appServerEndpoint || getCodexAppServerSession(session.id)) return;
   const runtimeProvider = resolveEffectiveRuntimeProvider(session, binding);
   if (runtimeProvider.provider !== 'tmux') return;
   const tmuxSessionName = getSessionRuntimeTmuxSessionName(session);
@@ -759,6 +767,7 @@ function parseMirrorCodexSelectionSessionId(permissionRequestId: string): string
 }
 
 function sessionSupportsTmuxSelectionPromptProbe(session: BridgeSession): boolean {
+  if (session.runtime?.codex?.appServerEndpoint || getCodexAppServerSession(session.id)) return false;
   const activeRuntime = getSessionActiveRuntime(session);
   if (activeRuntime === 'kimi' || activeRuntime === 'cursor' || activeRuntime === 'zcode') return false;
   if (activeRuntime === 'claude') return resolveEffectiveClaudeProvider(session) === 'tmux';
@@ -766,6 +775,7 @@ function sessionSupportsTmuxSelectionPromptProbe(session: BridgeSession): boolea
 }
 
 function sessionSupportsCodexTuiRuntimeSignals(session: BridgeSession): boolean {
+  if (session.runtime?.codex?.appServerEndpoint || getCodexAppServerSession(session.id)) return false;
   const activeRuntime = getSessionActiveRuntime(session);
   if (activeRuntime === 'kimi' || activeRuntime === 'claude' || activeRuntime === 'cursor' || activeRuntime === 'zcode') return false;
   return resolveEffectiveCodexProvider(session) === 'tmux';
@@ -2298,6 +2308,12 @@ function getZcodeMirrorState(): BridgeMirrorRuntimeState {
 const INTERACTIVE_RUNTIME = createInteractiveRuntime(getState, {
   getStore: () => getBridgeContext().store,
   nowIso,
+  isExternalThreadActive: (session) => {
+    if (!session.runtime?.codex?.appServerEndpoint) return false;
+    const handle = getCodexAppServerSession(session.id);
+    const snapshot = handle?.lifecycle.snapshot(handle.threadId);
+    return !snapshot || snapshot.connection !== 'ready' || snapshot.activity !== 'idle';
+  },
 });
 
 function formatRuntimeTerminalDetail(terminal: BridgeTurnTerminalRecord): string {
@@ -2358,6 +2374,10 @@ const TURN_COORDINATOR = createTurnCoordinator({
 const SESSION_HEALTH_RUNTIME = createSessionHealthRuntime({
   getStore: () => getBridgeContext().store,
   nowIso,
+  getProtocolSnapshot: (sessionId) => {
+    const handle = getCodexAppServerSession(sessionId);
+    return handle?.lifecycle.snapshot(handle.threadId);
+  },
   probeThreadProcess: (threadId) => probeCodexThreadProcess(threadId),
 });
 
@@ -2625,7 +2645,7 @@ const MIRROR_RUNTIME = createMirrorRuntime(getState, {
     getSessionActiveRuntime(session) !== 'claude'
     && getSessionActiveRuntime(session) !== 'kimi'
     && getSessionCodexThreadId(session)
-    && getSessionCodexProviderOverride(session as BridgeSession | null | undefined) !== 'sdk',
+    && (session?.runtime?.codex?.appServerEndpoint || getSessionCodexProviderOverride(session as BridgeSession | null | undefined) !== 'sdk'),
   ),
   syncMirrorSessionStateSafe,
   filterSuppressedMirrorRecords,
@@ -2853,6 +2873,25 @@ function resetMirrorSessionForInteractiveRun(sessionId: string): void {
 }
 
 async function reconcileMirrorSubscriptions(): Promise<void> {
+  const store = getBridgeContext().store;
+  let protocolBindings: ChannelChat[] = [];
+  try { protocolBindings = store.listChannelChats(); }
+  catch (error) { console.warn('[bridge-manager] app-server binding scan:', describeUnknownError(error)); }
+  for (const binding of protocolBindings) {
+    try {
+      const session = store.getSession(binding.bridgeSessionId);
+      if (!session || (!session.runtime?.codex?.appServerEndpoint && !getCodexAppServerSession(session.id))) continue;
+      const adapter = getState().adapters.get(binding.channelType);
+      if (!adapter) continue;
+      const protocol = getCodexAppServerSession(session.id) || await prepareCodexAppServerForBinding(store, binding, session);
+      if (protocol) {
+        observeAppServerRequests(session.id, protocol, adapter, { channelType: binding.channelType, chatId: binding.chatId }, store);
+        INTERACTIVE_RUNTIME.syncSessionRuntimeState(session.id);
+      }
+    } catch (error) {
+      console.warn('[bridge-manager] app-server 订阅尚未恢复:', describeUnknownError(error));
+    }
+  }
   await MIRROR_RUNTIME.reconcileMirrorSubscriptions();
   await CLAUDE_MIRROR_RUNTIME.reconcileMirrorSubscriptions();
   await KIMI_MIRROR_RUNTIME.reconcileMirrorSubscriptions();
@@ -2884,11 +2923,14 @@ function shouldRouteTerminalAppendInline(msg: InboundMessage): boolean {
   const rawText = msg.text.trim();
   if (!rawText || msg.channelEvent || msg.callbackData || isBridgeCommandText(rawText)) return false;
   if (isPendingAttachmentConfirmationReply(msg.address, rawText)) return true;
+  const currentBinding = getBridgeContext().store.getChannelChat(msg.address.channelType, msg.address.chatId);
+  if (currentBinding && hasAppServerQuestion(currentBinding.bridgeSessionId)) return true;
   if (msg.attachments && msg.attachments.length > 0) return false;
   const binding = getBridgeContext().store.getChannelChat(msg.address.channelType, msg.address.chatId);
   if (!binding || !INTERACTIVE_RUNTIME.getActiveTask(binding.bridgeSessionId)) return false;
   const session = getBridgeContext().store.getSession(binding.bridgeSessionId);
   if (!session) return false;
+  if (session.runtime?.codex?.appServerEndpoint) return getCodexAppServerSession(session.id)?.direct === true;
   const runtimeProvider = resolveEffectiveRuntimeProvider(session, binding);
   return runtimeProvider.provider === 'tmux' || runtimeProvider.provider === 'pty';
 }
@@ -2913,6 +2955,8 @@ function isHighPriorityControlCommandText(rawText: string): boolean {
 
 function isHighPriorityControlCallback(callbackData: string): boolean {
   if (
+    callbackData.startsWith('app-server-request:')
+    ||
     callbackData.startsWith('perm:')
     || callbackData.startsWith('tui-selection-choice:')
     || callbackData.startsWith('codex-tui-selection-choice:')
@@ -3272,6 +3316,8 @@ export async function stop(): Promise<void> {
   clearMirrorSubscriptions();
 
   // Stop all adapters
+  closeCodexAppServerSessions();
+  closeAppServerRequestObservers();
   for (const type of Array.from(state.adapters.keys())) {
     await ADAPTER_RUNTIME.stopAdapterInstance(type);
   }
@@ -3767,12 +3813,29 @@ function startEveryTask(taskId: string): void {
   });
 }
 
+async function stopBridgeSessionTurn(sessionId: string, detail: string): Promise<boolean> {
+  const store = getBridgeContext().store;
+  const binding = store.listChannelChats().find((candidate) => candidate.bridgeSessionId === sessionId);
+  if (!binding) {
+    INTERACTIVE_RUNTIME.cancelQueuedSessionMessages(sessionId);
+    if (store.getSession(sessionId)?.runtime?.codex?.appServerEndpoint) return false;
+    return INTERACTIVE_RUNTIME.forceStopSession(sessionId, detail);
+  }
+  const result = await stopRunningSession({ store, binding, detail, deps: {
+    getActiveTask: (id) => INTERACTIVE_RUNTIME.getActiveTask(id),
+    forceStopSession: (id, reason) => INTERACTIVE_RUNTIME.forceStopSession(id, reason),
+    cancelQueuedSessionMessages: (id) => INTERACTIVE_RUNTIME.cancelQueuedSessionMessages(id),
+    recordInteractiveHealthEnd: recordInteractiveHealthEndAndScheduleThen,
+  } });
+  return result.stopped;
+}
+
 function stopEveryTask(taskId: string): void {
   const runtime = getState().everyTaskRuntimes.get(taskId);
   if (!runtime) return;
   runtime.abortController.abort();
   if (!runtime.activeTrigger) return;
-  void INTERACTIVE_RUNTIME.forceStopSession(
+  void stopBridgeSessionTurn(
     runtime.bridgeSessionId,
     '/every 定时输入已取消，正在中止后台触发。',
   ).catch((error) => {
@@ -3817,7 +3880,7 @@ function stopThenTask(taskId: string): void {
     lastError: '/then 后续输入已取消。',
   });
   if (task.status !== 'running') return;
-  void INTERACTIVE_RUNTIME.forceStopSession(
+  void stopBridgeSessionTurn(
     task.bridgeSessionId,
     '/then 后续输入已取消，正在中止当前发送。',
   ).catch((error) => {
@@ -3859,6 +3922,11 @@ function stopAllThenTasks(): void {
 function isThenSessionReadyForPrompt(sessionId: string): boolean {
   const session = getBridgeContext().store.getSession(sessionId);
   if (!session) return true;
+  if (session.runtime?.codex?.appServerEndpoint) {
+    const handle = getCodexAppServerSession(sessionId);
+    const snapshot = handle?.lifecycle.snapshot(handle.threadId);
+    if (!snapshot || snapshot.connection !== 'ready' || snapshot.activity !== 'idle') return false;
+  }
   if (INTERACTIVE_RUNTIME.getActiveTask(sessionId)) return false;
   if (INTERACTIVE_RUNTIME.getQueuedCount(sessionId) > 0) return false;
   if (session.runtime_status === 'running' || session.runtime_status === 'queued') return false;
@@ -3872,6 +3940,12 @@ function recordInteractiveHealthEndAndScheduleThen(
   outcome: 'completed' | 'failed' | 'aborted',
   detail?: string,
 ): void {
+  const session = getBridgeContext().store.getSession(sessionId);
+  if (session?.runtime?.codex?.appServerEndpoint) {
+    const handle = getCodexAppServerSession(sessionId);
+    const snapshot = handle?.lifecycle.snapshot(handle.threadId);
+    if (!snapshot || snapshot.connection !== 'ready' || snapshot.activity !== 'idle') return;
+  }
   SESSION_HEALTH_RUNTIME.recordInteractiveEnd(sessionId, outcome, detail);
   if (outcome !== 'completed' && outcome !== 'aborted') return;
   const timer = setTimeout(() => {
@@ -4052,7 +4126,7 @@ async function runEveryTaskPrompt(
   if (!result.ok) throw new Error(result.error);
 
   if (abortController.signal.aborted) {
-    await INTERACTIVE_RUNTIME.forceStopSession(
+    await stopBridgeSessionTurn(
       session.id,
       '/every 定时输入已中止。',
     );
@@ -4099,6 +4173,19 @@ async function sendAgentMessageToSession(options: {
     timestamp: Date.now(),
   };
   const effectiveRuntimeProvider = resolveEffectiveRuntimeProvider(options.session, syntheticBinding);
+  if (effectiveRuntimeProvider.runtime === 'codex') {
+    const protocol = await prepareCodexAppServerForBinding(getBridgeContext().store, syntheticBinding, options.session);
+    if (protocol) {
+      observeAppServerRequests(options.session.id, protocol, adapter, address, getBridgeContext().store);
+      if (effectiveRuntimeProvider.provider === 'tmux') {
+        void scheduleCodexAppServerView({ store: getBridgeContext().store, binding: syntheticBinding, session: options.session, handle: protocol,
+          notify: (text) => { enqueueBridgeNotice(adapter, address, text); } });
+        await protocol.lifecycle.submit(protocol.threadId, [{ type: 'text', text: options.prompt }], codexAppServerTurnOptions(syntheticBinding, options.session));
+        void reconcileMirrorSubscriptions().catch((error) => console.warn('[bridge-manager] app-server mirror:', error));
+        return { ok: true };
+      }
+    }
+  }
   if (effectiveRuntimeProvider?.provider === 'tmux') {
     await handleCommand(adapter, msg, `/tmux ${options.prompt}`, {
       scopedBinding: syntheticBinding,
@@ -4219,6 +4306,10 @@ function handleBindingRemovedForAutomationTasks(binding: ChannelChat): void {
   const thenPaused = pauseThenTasksForSession(binding.bridgeSessionId);
   for (const task of thenPaused) {
     clearThenTaskTimer(task.id);
+  }
+  releaseAppServerRequestObserver(binding.bridgeSessionId);
+  if (getCodexAppServerSession(binding.bridgeSessionId) || getBridgeContext().store.getSession(binding.bridgeSessionId)?.runtime?.codex?.appServerEndpoint) {
+    void releaseCodexAppServerSession(binding.bridgeSessionId).catch((error) => console.warn('[bridge-manager] app-server detach:', error));
   }
 }
 
@@ -4777,6 +4868,12 @@ async function handleMessage(
 
   // Handle callback queries (permission buttons and interactive command cards)
   if (msg.callbackData) {
+    const protocolReply = handleAppServerRequestCallback(msg, store);
+    if (protocolReply !== undefined) {
+      enqueueBridgeNotice(adapter, msg.address, protocolReply);
+      ack();
+      return;
+    }
     if (getState().dailyVersionUpdateRuntime?.handleCallback(adapter, msg)) {
       ack();
       return;
@@ -5148,7 +5245,52 @@ async function handleMessage(
     }
   }
 
-  const tmuxProviderBinding = store.getChannelChat(msg.address.channelType, msg.address.chatId);
+  // Selection may create a binding. Legacy first messages must still use their original startup path.
+  const bindingBeforeProtocolSelection = store.getChannelChat(msg.address.channelType, msg.address.chatId);
+  if (!isBridgeCommandText(rawText)) {
+    const binding = router.resolve(msg.address);
+    const session = store.getSession(binding.bridgeSessionId);
+    if (session) {
+      const questionReply = answerAppServerQuestion(msg, session.id, store);
+      if (questionReply !== undefined) {
+        enqueueBridgeNotice(adapter, msg.address, questionReply);
+        ack();
+        return;
+      }
+      const effective = resolveEffectiveRuntimeProvider(session, binding);
+      if (effective.runtime === 'codex') {
+        try {
+          const protocol = await prepareCodexAppServerForBinding(store, binding, session);
+          if (protocol) {
+            observeAppServerRequests(session.id, protocol, adapter, msg.address, store);
+            if (effective.provider === 'tmux') {
+              void scheduleCodexAppServerView({ store, binding, session, handle: protocol,
+                notify: (text) => { enqueueBridgeNotice(adapter, msg.address, text); } });
+            }
+            if (store.getChannelChat(msg.address.channelType, msg.address.chatId)?.bridgeSessionId !== session.id) {
+              throw new Error('准备期间聊天已切换会话，原消息尚未提交。');
+            }
+            if (!hasAttachments && (effective.provider === 'tmux' || protocol.direct)) {
+              const prompt = sanitizeInput(appendModelContextText(modelText, msg.contextText)).text;
+              if (prompt) {
+                await protocol.lifecycle.submit(protocol.threadId, [{ type: 'text', text: prompt }], codexAppServerTurnOptions(binding, session));
+                addInboundGetReaction(adapter, msg, 'app_server_input_accepted');
+              }
+              void reconcileMirrorSubscriptions().catch((error) => console.warn('[bridge-manager] app-server mirror:', error));
+              ack();
+              return;
+            }
+          }
+        } catch (error) {
+          enqueueBridgeNotice(adapter, msg.address, describeUnknownError(error), { replyToMessageId: msg.messageId });
+          ack();
+          return;
+        }
+      }
+    }
+  }
+
+  const tmuxProviderBinding = bindingBeforeProtocolSelection;
   const tmuxProviderSession = tmuxProviderBinding ? store.getSession(tmuxProviderBinding.bridgeSessionId) : null;
   const tmuxProviderRuntime = tmuxProviderSession
     ? resolveEffectiveRuntimeProvider(tmuxProviderSession, tmuxProviderBinding)
@@ -5161,6 +5303,7 @@ async function handleMessage(
     && tmuxProviderRuntime?.provider === 'tmux'
     && tmuxProviderRuntime.runtime !== 'cursor'
     && tmuxProviderRuntime.runtime !== 'zcode'
+    && !tmuxProviderSession.runtime?.codex?.appServerEndpoint
   ) {
     const tmuxProviderChat = tmuxProviderBinding;
     if (!tmuxProviderChat) {
@@ -5312,6 +5455,7 @@ async function handleMessage(
   if (
     terminalAppendBinding
     && terminalAppendSession
+    && !terminalAppendSession.runtime?.codex?.appServerEndpoint
     && INTERACTIVE_RUNTIME.getActiveTask(terminalAppendBinding.bridgeSessionId)
     && !hasAttachments
     && !isBridgeCommandText(rawText)
@@ -5477,6 +5621,7 @@ async function handleCommand(
   await handleBridgeCommand(adapter, msg, text, {
     getActiveTask: (sessionId) => INTERACTIVE_RUNTIME.getActiveTask(sessionId),
     forceStopSession: (sessionId, detail) => INTERACTIVE_RUNTIME.forceStopSession(sessionId, detail),
+    cancelQueuedSessionMessages: (sessionId) => INTERACTIVE_RUNTIME.cancelQueuedSessionMessages(sessionId),
     recordInteractiveHealthEnd: recordInteractiveHealthEndAndScheduleThen,
     cancelRuntimeWaits: (sessionId) => {
       broker.cancelCodexTuiSelectionWaitersForSession(sessionId);
@@ -5545,6 +5690,7 @@ function persistCodexThreadUpdate(
   hasError: boolean,
   errorMessage?: string | null,
 ): void {
+  if (hasError && getBridgeContext().store.getSession(sessionId)?.runtime?.codex?.appServerEndpoint) return;
   const update = computeCodexThreadUpdate(codexThreadId, hasError, errorMessage);
   if (update === null) {
     return;

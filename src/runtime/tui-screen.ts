@@ -20,7 +20,8 @@ export function hasTuiEnterConfirmFooter(text: string, options: { requireEscape?
   return normalizeTerminalScreenText(text)
     .split('\n')
     .some((line) => {
-      if (!/(?:^|\b)(?:Press\s+)?Enter\s+to\s+confirm\b/i.test(line)) return false;
+      if (!/(?:^|\b)(?:Press\s+)?Enter\s+to\s+confirm\b/i.test(line)
+        && !/^\s*enter\/esc\s+confirm\s*·\s*ctrl\+c\s+quit\s*$/i.test(line)) return false;
       return options.requireEscape === true ? /\bEsc\b/i.test(line) : true;
     });
 }
@@ -28,7 +29,8 @@ export function hasTuiEnterConfirmFooter(text: string, options: { requireEscape?
 export function hasTuiEnterContinueFooter(text: string): boolean {
   return normalizeTerminalScreenText(text)
     .split('\n')
-    .some((line) => /(?:^|\b)(?:Press\s+)?Enter\s+to\s+continue\b/i.test(line));
+    .some((line) => /(?:^|\b)(?:Press\s+)?Enter\s+to\s+continue\b/i.test(line)
+      || /^\s*enter\s+continue\s*·\s*esc\s+back\s*$/i.test(line));
 }
 
 export function hasTuiEnterActionFooter(text: string, options: { requireEscapeForConfirm?: boolean } = {}): boolean {

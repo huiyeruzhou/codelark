@@ -5,7 +5,20 @@ export interface AppServerMessage {
   method?: string;
   params?: unknown;
   result?: unknown;
-  error?: { code: number; message: string };
+  error?: { code: number; message: string; data?: unknown };
+}
+
+/** A server rejection is definitive; a lost reply or timeout is not. */
+export class AppServerRpcError extends Error {
+  constructor(readonly code: number, message: string, readonly data?: unknown) {
+    super(`app-server (${code}): ${message}`);
+  }
+}
+
+export function isUnsupportedAppServerMethod(error: unknown, method?: string): boolean {
+  return error instanceof AppServerRpcError && (error.code === -32601
+    || (error.code === -32600 && !!method
+      && error.message.startsWith(`app-server (-32600): Invalid request: unknown variant \`${method}\`, expected `)));
 }
 
 /** Local Unix sockets use ws's Unix transport; the CLI uses unix:// for the same endpoint. */
@@ -21,6 +34,7 @@ export function appServerCliUrl(endpoint: string): string {
 
 /** A connection owns subscriptions, never the server process or its thread writer locks. */
 export class CodexAppServerClient {
+  serverInfo: { codexHome?: string; userAgent?: string } = {};
   private sequence = 0;
   private pending = new Map<number, {
     resolve: (value: unknown) => void;
@@ -28,6 +42,8 @@ export class CodexAppServerClient {
     timer: ReturnType<typeof setTimeout>;
   }>();
   private listeners = new Set<(message: AppServerMessage) => void>();
+  private disconnectListeners = new Set<(error: Error) => void>();
+  private disconnected = false;
 
   private constructor(private socket: WebSocket, private timeoutMs: number) {
     socket.on('message', (data) => {
@@ -39,7 +55,7 @@ export class CodexAppServerClient {
         if (!request) return;
         this.pending.delete(message.id);
         clearTimeout(request.timer);
-        if (message.error) request.reject(new Error(`app-server (${message.error.code}): ${message.error.message}`));
+        if (message.error) request.reject(new AppServerRpcError(message.error.code, message.error.message, message.error.data));
         else request.resolve(message.result);
       } else {
         // Server requests (approval/input) retain their id. Consumers must explicitly reply;
@@ -47,12 +63,14 @@ export class CodexAppServerClient {
         for (const listener of this.listeners) listener(message);
       }
     });
-    socket.on('close', () => this.rejectPending(new Error('Codex app-server disconnected')));
-    socket.on('error', (error) => this.rejectPending(error));
+    socket.on('close', () => this.disconnect(new Error('Codex app-server disconnected')));
+    socket.on('error', (error) => this.disconnect(error));
   }
 
   static async connect(endpoint: string, timeoutMs = 5_000): Promise<CodexAppServerClient> {
-    const socket = new WebSocket(appServerWebSocketUrl(endpoint), { handshakeTimeout: timeoutMs });
+    // Older Codex Unix transports reject the permessage-deflate extension header.
+    // JSON-RPC does not require compression; the common uncompressed transport works across versions.
+    const socket = new WebSocket(appServerWebSocketUrl(endpoint), { handshakeTimeout: timeoutMs, perMessageDeflate: false });
     const client = new CodexAppServerClient(socket, timeoutMs);
     try {
       await new Promise<void>((resolve, reject) => {
@@ -60,7 +78,7 @@ export class CodexAppServerClient {
         socket.once('error', reject);
         socket.once('close', () => reject(new Error('Codex app-server closed before initialization')));
       });
-      await client.request('initialize', {
+      client.serverInfo = await client.request('initialize', {
         clientInfo: { name: 'codelark', version: '0.3.0' },
         capabilities: { experimentalApi: true },
       });
@@ -93,15 +111,28 @@ export class CodexAppServerClient {
     return () => this.listeners.delete(listener);
   }
 
+  onDisconnect(listener: (error: Error) => void): () => void {
+    this.disconnectListeners.add(listener);
+    return () => this.disconnectListeners.delete(listener);
+  }
+
   send(message: AppServerMessage): void {
     if (this.socket.readyState !== WebSocket.OPEN) throw new Error('Codex app-server is not connected');
     this.socket.send(JSON.stringify(message));
   }
 
   close(): void {
-    this.rejectPending(new Error('Codex app-server connection closed'));
+    this.disconnect(new Error('Codex app-server connection closed'));
     this.listeners.clear();
+    this.disconnectListeners.clear();
     this.socket.terminate();
+  }
+
+  private disconnect(error: Error): void {
+    this.rejectPending(error);
+    if (this.disconnected) return;
+    this.disconnected = true;
+    for (const listener of this.disconnectListeners) listener(error);
   }
 
   private rejectPending(error: Error): void {

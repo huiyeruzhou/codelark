@@ -14,6 +14,7 @@ export interface BridgeInteractiveRuntimeState {
 export interface CreateInteractiveRuntimeDeps {
   getStore(): Pick<BridgeStore, 'getSession' | 'listSessions' | 'updateSession'>;
   nowIso(): string;
+  isExternalThreadActive?(session: BridgeSession): boolean;
   sessionTurnCooldownMs?: number;
 }
 
@@ -32,6 +33,7 @@ export interface InteractiveRuntime {
     finalText?: string,
   ): Promise<boolean>;
   forceStopSession(sessionId: string, detail?: string): Promise<boolean>;
+  cancelQueuedSessionMessages(sessionId: string): void;
   reconcileTerminalSessionRuntimeState(): Promise<void>;
   resetPersistedInteractiveRuntimeState(): void;
   resetSessionExecutor(): void;
@@ -83,7 +85,7 @@ export function createInteractiveRuntime(
     if (!session) return;
 
     const queuedCount = getQueuedCount(sessionId);
-    const isRunning = getState().activeTasks.has(sessionId);
+    const isRunning = getState().activeTasks.has(sessionId) || deps.isExternalThreadActive?.(session);
     const runtimeStatus: BridgeSession['runtime_status'] = queuedCount > 0
       ? 'queued'
       : isRunning
@@ -157,6 +159,7 @@ export function createInteractiveRuntime(
   async function reconcileTerminalSessionRuntimeState(): Promise<void> {
     const store = deps.getStore();
     for (const session of store.listSessions()) {
+      if (deps.isExternalThreadActive?.(session)) continue;
       if (!isTerminalSessionHealthStatus(session.health_status)) continue;
 
       if (getState().activeTasks.has(session.id)) continue;
@@ -188,7 +191,7 @@ export function createInteractiveRuntime(
       }
       store.updateSession(session.id, {
         queued_count: 0,
-        runtime_status: 'idle',
+        runtime_status: deps.isExternalThreadActive?.(session) ? 'running' : 'idle',
         last_runtime_update_at: deps.nowIso(),
       });
     }
@@ -212,6 +215,7 @@ export function createInteractiveRuntime(
     syncSessionRuntimeState,
     finalizeTerminalActiveTask,
     forceStopSession,
+    cancelQueuedSessionMessages: (sessionId) => getSessionExecutor().cancelQueued(sessionId),
     reconcileTerminalSessionRuntimeState,
     resetPersistedInteractiveRuntimeState,
     resetSessionExecutor,

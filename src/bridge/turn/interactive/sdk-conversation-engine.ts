@@ -289,6 +289,7 @@ export async function processMessage(
       claudeReasoningEffort: claudeRuntimeConfig?.reasoningEffort,
       codexMode: runtimeConfig.mode,
       codexProvider: runtimeConfig.codexProvider,
+      codexAppServerEndpoint: session?.runtime?.codex?.appServerEndpoint,
       provider: resolvedProvider,
       conversationHistory: historyMsgs,
       files: llmFiles,
@@ -576,6 +577,9 @@ async function consumeStream(
               } else {
                 capturedCodexThreadId = statusData.session_id;
                 store.updateSessionCodexThreadId(sessionId, statusData.session_id);
+                if (typeof statusData.app_server_endpoint === 'string') {
+                  store.updateSession(sessionId, { runtime: { codex: { appServerEndpoint: statusData.app_server_endpoint } } });
+                }
                 await options?.onRuntimeIdentity?.({
                   runtime: 'codex',
                   sessionId: statusData.session_id,
@@ -721,6 +725,9 @@ async function consumeStream(
               } else {
                 capturedCodexThreadId = resultData.session_id;
                 store.updateSessionCodexThreadId(sessionId, resultData.session_id);
+                if (typeof resultData.app_server_endpoint === 'string') {
+                  store.updateSession(sessionId, { runtime: { codex: { appServerEndpoint: resultData.app_server_endpoint } } });
+                }
                 await options?.onRuntimeIdentity?.({
                   runtime: 'codex',
                   sessionId: resultData.session_id,

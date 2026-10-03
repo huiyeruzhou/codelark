@@ -4,19 +4,55 @@ on:
   workflow_dispatch:
   push:
     branches: [ci/codex-desktop-remote]
+    paths-ignore: ['docs/**', '**/*.md']
   pull_request:
     paths:
-      - src/runtime/codex/app-server-client.ts
+      - src/runtime/codex/app-server-*.ts
       - src/runtime/codex/desktop-remote.ts
+      - src/__tests__/unit/runtime/codex/app-server-*.test.ts
       - scripts/verify-codex-desktop-macos.ts
+      - scripts/verify-codex-app-server-lifecycle.ts
+      - scripts/fixtures/codex-app-server-*.ts
       - .github/workflows/codex-desktop.yml
 
 permissions:
   contents: read
 
 jobs:
+  protocol:
+    name: 协议生命周期 · Codex ${{ matrix.codex }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    strategy:
+      fail-fast: false
+      matrix:
+        codex: ['0.145.0', '0.153.4', '0.160.0']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm install --global @openai/codex@${{ matrix.codex }}
+      - name: 检查验收代码
+        run: |
+          npx tsc --noEmit --strict --module Node16 --moduleResolution Node16 --target ES2023 --esModuleInterop --skipLibCheck --resolveJsonModule scripts/verify-codex-app-server-lifecycle.ts scripts/verify-codex-desktop-macos.ts scripts/fixtures/codex-app-server-provider-client.ts
+      - name: 真实 CLI + 隔离 mock 模型验证 lifecycle
+        run: >-
+          node --import tsx scripts/verify-codex-app-server-lifecycle.ts
+          --cli "$(command -v codex)"
+          --expect-version '${{ matrix.codex }}'
+          --evidence '${{ runner.temp }}/codex-protocol-evidence'
+      - name: 保存原生协议证据
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: codex-protocol-${{ matrix.codex }}
+          if-no-files-found: warn
+          path: ${{ runner.temp }}/codex-protocol-evidence
   macos:
-    name: macOS · launchd + Desktop transport + remote TUI
+    name: macOS · launchd + Desktop 同线程协议
     runs-on: macos-26
     timeout-minutes: 20
     steps:
@@ -26,13 +62,12 @@ jobs:
           node-version: 24
           cache: npm
       - run: npm ci
-      - run: brew install tmux
       - run: npm install --global @openai/codex@0.160.0
       - name: Typecheck and test connection management
         run: |
           npm run typecheck
           npx tsc --noEmit --strict --module Node16 --moduleResolution Node16 --target ES2023 --esModuleInterop --skipLibCheck --resolveJsonModule scripts/verify-codex-desktop-macos.ts
-          node --import tsx --test src/__tests__/unit/runtime/codex/app-server-client.test.ts src/__tests__/unit/runtime/codex/desktop-remote.test.ts
+          node --import tsx --test src/__tests__/unit/runtime/codex/app-server-*.test.ts src/__tests__/unit/runtime/codex/desktop*.test.ts
       - name: Install official Desktop in this disposable runner
         shell: bash
         run: |

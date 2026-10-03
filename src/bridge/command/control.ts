@@ -7,10 +7,12 @@ import type { CommandThreadDisplay } from './thread-display.js';
 import type { ChannelChat, InboundMessage } from '../../domain/index.js';
 import { sessionLooksRunning } from '../session/command-use-cases/status-guards.js';
 import { stopRunningSession } from '../session/stop-running-session.js';
+import { getCodexAppServerSession } from '../../runtime/codex/app-server-registry.js';
 
 export interface StopCommandDeps {
   getActiveTask(sessionId: string): { abortController: AbortController } | undefined;
   forceStopSession?(sessionId: string, detail?: string): Promise<boolean>;
+  cancelQueuedSessionMessages?(sessionId: string): void;
   recordInteractiveHealthEnd?(sessionId: string, outcome: 'completed' | 'failed' | 'aborted', detail?: string): void;
 }
 
@@ -26,7 +28,7 @@ export async function handleStopCommand(options: {
   const session = options.store.getSession(binding.bridgeSessionId);
   const task = options.deps.getActiveTask(binding.bridgeSessionId);
   const looksRunning = sessionLooksRunning(session);
-  if (task || looksRunning) {
+  if (task || looksRunning || session?.runtime?.codex?.appServerEndpoint || getCodexAppServerSession(binding.bridgeSessionId)) {
     const taskName = options.threadDisplay.binding(binding).title;
     const detail = '用户执行 /stop，已停止当前任务。';
     const result = await stopRunningSession({
@@ -35,6 +37,7 @@ export async function handleStopCommand(options: {
       deps: options.deps,
       detail,
     });
+    if (result.method === 'app_server_interrupt' || result.method === 'idle') return result.detail;
     if (result.method !== 'tmux_interrupt') {
       return `旧会话「${taskName}」任务已停止，可继续发送消息恢复该线程。`;
     }

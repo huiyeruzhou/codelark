@@ -11,6 +11,7 @@ import { ZcodeTmuxProvider } from '../../runtime/zcode/tmux-provider.js';
 import { CodexProvider } from './provider.js';
 import { CodexPtyProvider, shouldUseCodexPtyTui } from './pty-provider.js';
 import { CodexTmuxProvider, shouldUseCodexTmuxTui } from './tmux-provider.js';
+import { streamCodexAppServer } from './app-server-provider.js';
 
 export type CodexProviderChoice = RuntimeProviderChoice;
 
@@ -89,8 +90,7 @@ export class CodexRoutingProvider implements LLMProvider {
       configured_provider: params.codexProvider || null,
       default_provider: this.defaultProvider,
     });
-    if (choice === 'tmux') return this.tmuxProvider.streamChat(params);
-    if (choice === 'pty') return this.ptyProvider.streamChat(params);
-    return this.sdkProvider.streamChat(params);
+    const legacy = choice === 'tmux' ? this.tmuxProvider : choice === 'pty' ? this.ptyProvider : this.sdkProvider;
+    return streamCodexAppServer(params, legacy);
   }
 }

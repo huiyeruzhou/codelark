@@ -7,11 +7,10 @@ import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 
-import { CodexAppServerClient, appServerWebSocketUrl } from '../src/runtime/codex/app-server-client.js';
+import { CodexAppServerClient, appServerWebSocketUrl, type AppServerMessage } from '../src/runtime/codex/app-server-client.js';
 import { prepareCodexDesktopRemote, disableCodexDesktopRemote } from '../src/runtime/codex/desktop-remote.js';
-import { createTmuxCliCore } from '../src/bridge/tmux/core.js';
-import { startCodexResumeTmuxSession } from '../src/bridge/tmux/runtime.js';
-import { startLocalResponsesProxy } from '../src/__tests__/helpers/runtime/real-codex-e2e-utils.js';
+import { CodexAppServerLifecycle } from '../src/runtime/codex/app-server-lifecycle.js';
+import { fixtureEnvironment, fixtureModel, startFixtureModel, textInput } from './fixtures/codex-app-server-lifecycle.js';
 
 const execute = promisify(execFile);
 const script = fileURLToPath(import.meta.url);
@@ -28,19 +27,20 @@ if (process.argv.includes('--prepare')) {
 
 const evidence = path.resolve(process.env.CODELARK_DESKTOP_CI_EVIDENCE!);
 fs.mkdirSync(evidence, { recursive: true });
-const root = fs.mkdtempSync('/tmp/clk-desktop-');
+const root = fs.realpathSync(fs.mkdtempSync('/tmp/clk-desktop-'));
 const serviceRoot = path.join(home, '.codelark/codex-desktop');
 assert(!fs.existsSync(serviceRoot), 'Refuse to replace an existing shared backend.');
 const label = `gui/${os.userInfo().uid}/dev.codelark.codex-app-server`;
 const plist = path.join(home, 'Library/LaunchAgents/dev.codelark.codex-app-server.plist');
 const app = path.join(home, 'Applications/Codex.app');
-const result: Record<string, unknown> = { nativeMacOS: true, fullDesktopGuiTested: false };
+const result: Record<string, unknown> = { nativeMacOS: true, fullDesktopGuiTested: false, tuiRequiredForSubmission: false };
 const protocol: unknown[] = [];
 const clients: Array<{ close(): void }> = [];
-const tmux = createTmuxCliCore({ prefixArgs: ['-S', path.join(root, 'tmux.sock')] });
+const deadline = AbortSignal.timeout(180_000);
 const pause = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 async function waitFor(check: () => unknown | Promise<unknown>, description: string) {
   for (let attempt = 0; attempt < 120; attempt += 1) {
+    deadline.throwIfAborted();
     const value = await check();
     if (value) return value;
     await pause(250);
@@ -48,39 +48,25 @@ async function waitFor(check: () => unknown | Promise<unknown>, description: str
   throw new Error(`Timed out: ${description}`);
 }
 const run = async (command: string, args: string[]) => (await execute(command, args, {
-  env: process.env, timeout: 40_000, maxBuffer: 4 * 1024 * 1024,
+  env: process.env, timeout: 40_000, signal: deadline, maxBuffer: 4 * 1024 * 1024,
 })).stdout.trim();
 
 // Keep CI credentials out of the backend snapshot and uploaded artifacts.
 const originalPath = process.env.PATH!;
-const executable = (await execute('/usr/bin/which', ['codex'])).stdout.trim();
+const executable = process.env.CODELARK_CODEX_CLI_PATH || (await execute('/usr/bin/which', ['codex'])).stdout.trim();
 const nodePath = process.execPath;
 for (const key of Object.keys(process.env)) delete process.env[key];
-Object.assign(process.env, {
+const model = await startFixtureModel();
+Object.assign(process.env, fixtureEnvironment(root, model.baseUrl), {
   HOME: home, PATH: originalPath, SHELL: '/bin/bash', TERM: 'xterm-256color', LANG: 'en_US.UTF-8',
-  CODEX_HOME: path.join(root, 'codex'), OPENAI_API_KEY: 'isolated-ci-mock-key',
   CODELARK_DESKTOP_CI: '1', CODELARK_CODEX_CLI_PATH: executable, GIT_TERMINAL_PROMPT: '0',
-  CODELARK_CODEX_RESUME_TMUX_READY_TIMEOUT_MS: '30000',
 });
-const model = await startLocalResponsesProxy({ responseText: 'DESKTOP_SHARED_RESPONSE' });
-fs.mkdirSync(process.env.CODEX_HOME!, { recursive: true });
-fs.mkdirSync(path.join(root, 'workspace'));
-fs.writeFileSync(path.join(process.env.CODEX_HOME!, 'config.toml'), `
-check_for_update_on_startup = false
-model_provider = "mock"
-model = "gpt-5.6-sol"
-[features]
-plugins = false
-[model_providers.mock]
-name = "mock"
-base_url = "${model.baseUrl}"
-env_key = "OPENAI_API_KEY"
-wire_api = "responses"
-requires_openai_auth = false
-supports_websockets = false
-request_max_retries = 0
-stream_max_retries = 0
-`);
+async function backendPid(): Promise<number> {
+  const description = await run('/bin/launchctl', ['print', label]);
+  const pid = description.match(/\bpid = (\d+)/)?.[1];
+  assert(pid, '隔离 LaunchAgent 未报告 backend PID');
+  return Number(pid);
+}
 
 function desktopTransport() {
   // Extract only the bundled main-process JS, without modifying the official code.
@@ -129,12 +115,18 @@ try {
   const first = JSON.parse(await run(nodePath, ['--import', 'tsx', script, '--prepare']));
   const client = await CodexAppServerClient.connect(first.endpoint);
   clients.push(client);
-  client.onMessage((message) => protocol.push({ source: 'codelark', message }));
-  const diagnostics = await client.request<any>('server/diagnostics');
-  result.backendPid = diagnostics.process.id;
+  const bridgeEvents: AppServerMessage[] = [];
+  client.onMessage((message) => {
+    bridgeEvents.push(message);
+    protocol.push({ source: 'codelark', message });
+  });
+  const originalBackendPid = await backendPid();
+  result.backendPid = originalBackendPid;
+  assert.equal(client.serverInfo.codexHome, process.env.CODEX_HOME);
   const second = JSON.parse(await run(nodePath, ['--import', 'tsx', script, '--prepare']));
   assert.equal(first.endpoint, second.endpoint);
-  assert.equal((await client.request<any>('server/diagnostics')).process.id, diagnostics.process.id);
+  assert.equal(await backendPid(), originalBackendPid);
+  await client.request('thread/loaded/list');
   result.survivesBridgeProcessExit = true;
   result.reusesBackend = true;
   const wsUrl = appServerWebSocketUrl(first.endpoint);
@@ -165,52 +157,64 @@ try {
   }
   await desktopRequest('initialize', { clientInfo: { name: 'codex_desktop_ci', version: '1' }, capabilities: { experimentalApi: true } });
   socket.send(JSON.stringify({ method: 'initialized' }));
-  const started = await client.request<any>('thread/start', {
-    cwd: path.join(root, 'workspace'), model: 'gpt-5.6-sol', approvalPolicy: 'never', sandbox: 'danger-full-access',
+  // 协议拥有执行权，Desktop/TUI 的 UI ready 不是提交前置条件。
+  const lifecycle = new CodexAppServerLifecycle(first.endpoint);
+  clients.push(lifecycle);
+  const threadId = await lifecycle.ensureThread({
+    cwd: path.join(root, 'workspace'), model: fixtureModel, approvalPolicy: 'never', sandbox: 'read-only',
   });
-  const threadId = started.thread.id;
-  await client.request('turn/start', { threadId, input: [{ type: 'text', text: 'DESKTOP_CI_SEED' }] });
-  await waitFor(async () => (await client.request<any>('thread/read', { threadId, includeTurns: true })).thread.turns.some((turn: any) => turn.status === 'completed'), 'seed turn completed');
-  await desktopRequest('thread/resume', { threadId, excludeTurns: true });
-  const notices: string[] = [];
-  const tui = await startCodexResumeTmuxSession({
-    sessionName: 'desktop_ci', bridgeSessionId: 'desktop-ci', threadId, workingDirectory: path.join(root, 'workspace'),
-    onStatus: (message) => { notices.push(message); },
-    onSelectionPrompt: (prompt) => {
-      if (prompt.runtime === 'codex' && prompt.prompt.options.some((option) => /Use existing model/i.test(option.label))) {
-        const choice = prompt.prompt.options.find((option) => /Use existing model/i.test(option.label));
-        assert(choice, 'Unexpected model migration choices');
-        return choice.choice;
-      }
-      throw new Error(`Unexpected startup selection: ${prompt.kind}`);
-    },
-  }, tmux);
-  assert(tui.ready);
-  assert.match(tui.codexCommand, /--remote/);
-  assert(notices.some((message) => message.includes('已检测到 Codex Desktop')));
-  fs.writeFileSync(path.join(evidence, 'tui-ready.txt'), (await tmux.capturePane('desktop_ci', 80)).screen);
-  const completedBefore = desktopEvents.filter((event) => event.method === 'turn/completed').length;
-  await tmux.injectPromptIntoPane('desktop_ci', 'DESKTOP_CI_TUI_MESSAGE');
-  await waitFor(() => desktopEvents.filter((event) => event.method === 'turn/completed').length > completedBefore, 'Desktop observes TUI completion');
-  assert(model.requests.some((request) => request.rawBody.includes('DESKTOP_CI_TUI_MESSAGE')));
-  result.realRemoteTuiSharesThread = true;
-  result.readyNotice = notices;
+  model.enqueue({ text: 'DESKTOP_SHARED_SEED_RESPONSE' });
+  const seedTurn = await lifecycle.submit(threadId, textInput('DESKTOP_CI_SEED'));
+  await waitFor(() => lifecycle.recordsAfter(threadId).records.some((record) =>
+    record.turnId === seedTurn && record.type === 'task_complete' && !record.isError,
+  ), '协议 seed turn 完成');
+  const resumed = await desktopRequest('thread/resume', { threadId });
+  assert.equal(resumed.thread.id, threadId);
+  assert(JSON.stringify(resumed.thread.turns).includes('DESKTOP_SHARED_SEED_RESPONSE'));
+  model.enqueue({ text: 'BRIDGE_PROTOCOL_RESPONSE' });
+  const bridgeTurn = await lifecycle.submit(threadId, textInput('BRIDGE_PROTOCOL_WITHOUT_TUI'));
+  const bridgeCompleted = await waitFor(() => desktopEvents.find((event) => event.method === 'turn/completed'
+    && event.params.threadId === threadId && event.params.turn.id === bridgeTurn), 'Desktop 观察同线程 Bridge 完成') as any;
+  assert.equal(bridgeCompleted.params.turn.status, 'completed');
+  model.enqueue({ text: 'DESKTOP_PROTOCOL_RESPONSE' });
+  const desktopTurn = await desktopRequest('turn/start', { threadId, input: textInput('DESKTOP_PROTOCOL_INPUT') });
+  await waitFor(() => lifecycle.recordsAfter(threadId).records.some((record) =>
+    record.turnId === desktopTurn.turn.id && record.type === 'task_complete' && !record.isError,
+  ), 'Bridge 观察同线程 Desktop 完成');
+  assert(model.requests.some((request) => JSON.stringify(request.body.input).includes('BRIDGE_PROTOCOL_WITHOUT_TUI')));
+  assert(model.requests.some((request) => JSON.stringify(request.body.input).includes('DESKTOP_PROTOCOL_INPUT')));
+  result.threadId = threadId;
+  result.protocolSubmissionWithoutTui = true;
+  result.officialDesktopTransportSharesThread = true;
   result.protocolLifecycle = desktopEvents.filter((event) => ['thread/status/changed', 'turn/started', 'turn/completed'].includes(event.method));
-  await tmux.killSession('desktop_ci');
+  lifecycle.close();
   client.close();
   socket.close();
+  const afterDetach = await CodexAppServerClient.connect(first.endpoint);
+  clients.push(afterDetach);
+  assert.equal(await backendPid(), originalBackendPid);
+  assert.equal((await afterDetach.request<any>('thread/read', { threadId })).thread.id, threadId);
+  result.backendSurvivesClientExit = true;
+  afterDetach.close();
 
   // Re-bootstrap the persisted login job without running any Bridge preparation code.
   await run('/bin/launchctl', ['bootout', label]);
+  // bootout acknowledges removal before the job and its process finish exiting.
+  await waitFor(async () => {
+    const registered = await run('/bin/launchctl', ['print', label]).then(() => true, () => false);
+    if (registered) return false;
+    try { process.kill(originalBackendPid, 0); return false; }
+    catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error; return true; }
+  }, 'previous LaunchAgent and owned backend process exit');
   await run('/bin/launchctl', ['unsetenv', 'CODEX_APP_SERVER_WS_URL']);
   await run('/bin/launchctl', ['bootstrap', `gui/${os.userInfo().uid}`, plist]);
   const restored = await waitFor(async () => {
     try { return await CodexAppServerClient.connect(first.endpoint, 500); } catch { return false; }
   }, 'persisted LaunchAgent restart') as CodexAppServerClient;
   clients.push(restored);
-  assert.notEqual((await restored.request<any>('server/diagnostics')).process.id, diagnostics.process.id);
+  assert.notEqual(await backendPid(), originalBackendPid);
   await checkLaunchServicesEnvironment(wsUrl, 2);
-  await restored.request('thread/resume', { threadId, excludeTurns: true });
+  assert.equal((await restored.request<any>('thread/resume', { threadId })).thread.id, threadId);
   result.persistedLaunchAgentRestarts = true;
   result.restoresEnvironmentWithoutBridge = true;
   result.resumesAfterBackendRestart = true;
@@ -219,18 +223,18 @@ try {
   assert.equal(await run('/bin/launchctl', ['getenv', 'CODEX_APP_SERVER_WS_URL']).catch(() => ''), '');
   assert.equal(await prepareCodexDesktopRemote({ executable, env: process.env }), undefined);
   result.disableRestoresDesktopDefault = true;
+  assert.deepEqual(model.unexpected, []);
   result.success = true;
 } catch (error) {
   result.error = error instanceof Error ? error.stack : String(error);
   process.exitCode = 1;
-  try { fs.writeFileSync(path.join(evidence, 'tui-failure.txt'), (await tmux.capturePane('desktop_ci', 80)).screen); } catch { /* no TUI */ }
 } finally {
   for (const client of clients) client.close();
-  await tmux.killSession('desktop_ci', { ignoreMissing: true }).catch(() => undefined);
   if (fs.existsSync(path.join(serviceRoot, 'installation.json'))) await disableCodexDesktopRemote().catch((error) => { result.cleanupError = String(error); process.exitCode = 1; });
   const log = path.join(serviceRoot, 'app-server.log');
   if (fs.existsSync(log)) fs.copyFileSync(log, path.join(evidence, 'backend.log'));
   await model.close();
+  fs.writeFileSync(path.join(evidence, 'model-requests.json'), JSON.stringify(model.requests, null, 2));
   fs.writeFileSync(path.join(evidence, 'protocol.jsonl'), protocol.map((entry) => JSON.stringify(entry)).join('\n'));
   fs.writeFileSync(path.join(evidence, 'result.json'), JSON.stringify(result, null, 2));
   console.log(JSON.stringify(result));

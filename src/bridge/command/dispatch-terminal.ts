@@ -13,6 +13,7 @@ import { handlePtyScreenCommand } from './pty.js';
 import { handleShellCommand, type ShellCommandRunner } from './shell.js';
 import { handleTmuxBridgeCommand } from './tmux.js';
 import { requestCodexTuiSelectionViaPermissionBroker } from './codex-tui-selection.js';
+import { observeAppServerRequests } from '../permission/app-server.js';
 
 const TMUX_SCREEN_STOP_CALLBACK_PREFIX = 'tmux-screen:stop:';
 const PTY_SCREEN_STOP_CALLBACK_PREFIX = 'pty-screen:stop:';
@@ -105,6 +106,7 @@ async function handleTmuxDispatchCommand(params: TerminalDispatchParams): Promis
     suppressSuccessfulResponse: deps.tmuxProviderAutoForward === true && command === '/tmux',
     tmuxProviderAutoForward: deps.tmuxProviderAutoForward,
     onTmuxProviderAutoForwarded: deps.onTmuxProviderAutoForwarded,
+    onAppServerPrepared: (handle) => observeAppServerRequests(session.id, handle, adapter, msg.address, store),
     reconcileMirrorSubscriptions: deps.reconcileMirrorSubscriptions,
     requestCodexTuiSelection: async (selectionPrompt, requestOptions) => {
       return requestCodexTuiSelectionViaPermissionBroker({

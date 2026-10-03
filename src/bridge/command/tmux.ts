@@ -7,6 +7,8 @@ import { buildCommandFields } from './presentation.js';
 import { buildFencedCodeBlock } from '../../shared/markdown/fence.js';
 import { formatLocalClockTime } from '../../shared/date-time.js';
 import { sanitizeInput } from '../../shared/security/validators.js';
+import { prepareCodexAppServerSession, type CodexAppServerSession } from '../../runtime/codex/app-server-registry.js';
+import { appServerTurnOptions } from '../../runtime/codex/app-server-provider.js';
 import {
   claudeTmuxSessionName,
   codexTmuxSessionName,
@@ -19,6 +21,7 @@ import {
   sendTmuxActions,
   sendTmuxActionsAndCapture,
   startRuntimeTmuxSession,
+  startCodexAppServerView,
   waitForRuntimeTmuxReady,
   waitForCodexResumeTmuxReady,
   type RuntimeTmuxKind,
@@ -45,6 +48,7 @@ import {
   getSessionRuntimeTmuxSessionName,
   getSessionTmuxSessionName,
   getSessionWorkingDirectory,
+  getSessionSystemPrompt,
   setSessionKimiIdentityUpdate,
   setSessionCursorIdentityUpdate,
   setSessionZcodeIdentityUpdate,
@@ -100,6 +104,91 @@ export {
 
 const SEND_ACTION_DELAY_MS = 500;
 const CAPTURE_AFTER_SEND_DELAY_MS = 250;
+
+export function codexAppServerTurnOptions(binding: ChannelChat, session: BridgeSession): Record<string, unknown> {
+  const config = resolveSessionRuntimeConfig(binding, session);
+  return appServerTurnOptions({ workingDirectory: getSessionWorkingDirectory(session) || undefined,
+    model: config.model, modelReasoningEffort: config.reasoningEffort,
+    codexMode: config.mode, sandboxMode: config.sandboxMode, networkAccessEnabled: config.networkAccessEnabled });
+}
+
+/** Ordinary input and explicit provider preparation must select the same backend. */
+export async function prepareCodexAppServerForBinding(
+  store: BridgeStore,
+  binding: ChannelChat,
+  session: BridgeSession,
+) {
+  if ((getSessionActiveRuntime(session) || 'codex') !== 'codex') return undefined;
+  const threadId = getCodexThreadId(session, binding);
+  const config = resolveSessionRuntimeConfig(binding, session);
+  const prepared = await prepareCodexAppServerSession({
+    sessionId: session.id,
+    threadId,
+    endpoint: session.runtime?.codex?.appServerEndpoint,
+    cwd: getSessionWorkingDirectory(session) || undefined,
+    model: config.model || undefined,
+    sandbox: config.mode === 'yolo' ? 'danger-full-access' : config.sandboxMode,
+    approvalPolicy: config.mode === 'yolo' ? 'never' : 'on-request',
+    developerInstructions: getSessionSystemPrompt(session),
+    config: {
+      ...(config.reasoningEffort ? { model_reasoning_effort: config.reasoningEffort } : {}),
+      ...(typeof config.networkAccessEnabled === 'boolean'
+        ? { 'sandbox_workspace_write.network_access': config.networkAccessEnabled } : {}),
+    },
+  });
+  if (prepared) {
+    store.updateSession(session.id, { runtime: { codex: {
+      threadId: prepared.threadId,
+      appServerEndpoint: prepared.endpoint,
+    } } });
+  }
+  return prepared;
+}
+
+const appServerViewsStarting = new Map<string, Promise<void>>();
+
+/** View readiness never gates protocol input. The suffix keeps legacy writer panes separate. */
+export function scheduleCodexAppServerView(options: {
+  store: BridgeStore;
+  binding: ChannelChat;
+  session: BridgeSession;
+  handle: CodexAppServerSession;
+  notify?: (message: string) => void | Promise<void>;
+}, deps = { hasTmuxSession, startCodexAppServerView }): Promise<void> {
+  const { store, binding, session, handle } = options;
+  const key = `${session.id}:${handle.endpoint}:${handle.threadId}`;
+  const pending = appServerViewsStarting.get(key);
+  if (pending) return pending;
+  const sessionName = `${codexTmuxSessionName(handle.threadId)}-view`;
+  const stillBound = () => {
+    const current = store.getSession(session.id);
+    return store.getChannelChat(binding.channelType, binding.chatId)?.bridgeSessionId === session.id
+      && current?.runtime?.codex?.threadId === handle.threadId
+      && current?.runtime?.codex?.appServerEndpoint === handle.endpoint;
+  };
+  const operation = (async () => {
+    if (!stillBound()) return;
+    const exists = await deps.hasTmuxSession(sessionName);
+    if (!stillBound()) return;
+    if (!exists.exists) {
+      await deps.startCodexAppServerView({ sessionName,
+        threadId: handle.threadId, bridgeSessionId: session.id,
+        remoteEndpoint: handle.endpoint, workingDirectory: getSessionWorkingDirectory(session) });
+    }
+    if (!stillBound()) return;
+    store.updateSession(session.id, setSessionCodexTmuxProviderUpdate({ tmuxSessionName: sessionName, autoEnter: true, threadId: handle.threadId }));
+    if (!exists.exists) await options.notify?.([
+      handle.remote ? '已检测到 Codex Desktop；新 tmux 已选用 --remote，连接当前共享 Codex 线程。'
+        : '已建立 tmux 查看入口，通过 --remote 连接当前共享 Codex 线程。',
+      ...(handle.remote?.desktopEnvironmentChanged ? ['已为 Codex Desktop 设置共享连接；如果 Desktop 已在运行，请完全退出后重新打开。'] : []),
+    ].join('\n'));
+  })().catch(async (error) => {
+    if (stillBound()) await options.notify?.(`共享 Codex 对话可继续使用；tmux 查看入口未就绪：${error instanceof Error ? error.message : String(error)}`);
+  }).catch((error) => console.warn('[app-server-view] 无法通知查看入口状态:', error))
+    .finally(() => { appServerViewsStarting.delete(key); });
+  appServerViewsStarting.set(key, operation);
+  return operation;
+}
 
 function scheduleTmuxMirrorReconcile(
   reconcile: (() => Promise<void>) | undefined,
@@ -182,6 +271,7 @@ export interface HandleTmuxBridgeCommandParams {
   suppressSuccessfulResponse?: boolean;
   tmuxProviderAutoForward?: boolean;
   onTmuxProviderAutoForwarded?: () => Promise<void> | void;
+  onAppServerPrepared?: (handle: CodexAppServerSession) => void;
   reconcileMirrorSubscriptions?: () => Promise<void>;
   requestCodexTuiSelection?: (
     selectionPrompt: RuntimeTmuxSelectionPrompt,
@@ -1207,6 +1297,7 @@ function startTmuxScreenMonitor(params: {
 
 export async function handleTmuxBridgeCommand(params: HandleTmuxBridgeCommandParams): Promise<string> {
   const { command, args, store, binding, session, markdown } = params;
+  let protocolSelected = Boolean(session.runtime?.codex?.appServerEndpoint);
 
   try {
     if (command === '/tmux-switch') {
@@ -1406,6 +1497,22 @@ export async function handleTmuxBridgeCommand(params: HandleTmuxBridgeCommandPar
       if (!args.trim()) {
         return buildTmuxOverviewResponse(session, markdown);
       }
+      if (command === '/tmux' || command === '/tmux-key') {
+        const protocol = await prepareCodexAppServerForBinding(store, binding, session);
+        if (protocol) {
+          protocolSelected = true;
+          if (command === '/tmux-key' || (!params.tmuxProviderAutoForward && isPureSpecialKeySyntax(args))) {
+            return '当前线程由共享 Codex 协议控制。请用 /stop 中断任务；界面按键请在 tmux 查看入口或 Desktop 中操作。';
+          }
+          params.onAppServerPrepared?.(protocol);
+          void scheduleCodexAppServerView({ store, binding, session, handle: protocol,
+            notify: (message) => params.notifyBackgroundOperation?.(message, { force: true }) });
+          await protocol.lifecycle.submit(protocol.threadId, [{ type: 'text', text: args }], codexAppServerTurnOptions(binding, session));
+          await params.onTmuxProviderAutoForwarded?.();
+          scheduleTmuxMirrorReconcile(params.reconcileMirrorSubscriptions, 'app-server input accepted');
+          return params.suppressSuccessfulResponse ? '' : '消息已提交给当前共享 Codex 线程。';
+        }
+      }
       const keySequenceActions = command === '/tmux' ? parseTmuxKeySequence(args) : null;
       if (command === '/tmux' && !keySequenceActions && isPureSpecialKeySyntax(args)) {
         const invalid = parseTmuxSendActions(args);
@@ -1557,6 +1664,7 @@ export async function handleTmuxBridgeCommand(params: HandleTmuxBridgeCommandPar
 
     return `未知 tmux 命令：${command}`;
   } catch (error) {
+    if (params.tmuxProviderAutoForward && protocolSelected) throw error;
     return formatTmuxError(error, markdown);
   }
 }

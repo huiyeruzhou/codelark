@@ -3,6 +3,8 @@ import type {
   CodexSandboxMode,
 } from '../../runtime/options.js';
 import { createConfigService } from '../../configuration/service.js';
+import { prepareCodexAppServerForBinding, scheduleCodexAppServerView } from './tmux.js';
+import { getCodexAppServerSession, releaseCodexAppServerSession } from '../../runtime/codex/app-server-registry.js';
 import type { RuntimeProviderChoice } from '../../domain/session.js';
 import type { BridgeStore, ChannelChat, InboundMessage } from '../../domain/index.js';
 import {
@@ -688,6 +690,24 @@ export async function handleProviderCommand(options: {
     );
   }
   const currentProvider = resolveEffectiveCodexProvider(session, binding);
+  if (requestedProvider !== 'tmux' && (session.runtime?.codex?.appServerEndpoint || getCodexAppServerSession(session.id))) {
+    return '当前线程固定使用共享 app-server，不能切换到独立 writer；可继续对话或使用 /clear 新建会话。';
+  }
+  if (requestedProvider === 'tmux') {
+    const protocol = await prepareCodexAppServerForBinding(options.store, binding, session);
+    if (protocol) {
+      const currentBinding = options.store.getChannelChat(options.msg.address.channelType, options.msg.address.chatId);
+      if (currentBinding?.bridgeSessionId !== session.id) {
+        await releaseCodexAppServerSession(session.id);
+        return '聊天已切换，已解除旧线程的本端订阅。';
+      }
+      setSessionCodexProviderToml(session.id, 'tmux');
+      scheduleMirrorSubscriptionsBestEffort(options.deps, 'app-server thread prepared');
+      void scheduleCodexAppServerView({ store: options.store, binding, session, handle: protocol,
+        notify: (message) => options.deps.notifyBackgroundOperation?.(message, { force: true }) });
+      return '共享 Codex 线程已就绪，可直接发送消息；正在后台准备 tmux 查看入口。';
+    }
+  }
   if ((requestedProvider !== currentProvider || requestedProvider === 'tmux') && sessionHasActiveRuntimeTurn(options.deps, session)) {
     return buildRuntimeSwitchWhileRunningResponse({
       commandLabel: '`/provider`',

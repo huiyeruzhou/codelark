@@ -130,6 +130,8 @@ export interface BridgeSessionZcodeRuntimeContainer {
 
 export interface BridgeSessionCodexRuntimeState {
   threadId?: string;
+  /** 固定此线程的共享后端，重连或 CLI 降级时不得切回独立 writer。 */
+  appServerEndpoint?: string;
   title?: string;
   model?: string;
   provider?: RuntimeProviderChoice;

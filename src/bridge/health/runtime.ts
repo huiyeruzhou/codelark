@@ -2,6 +2,7 @@ import type { BridgeStore } from '../../domain/audit.js';
 import type { BridgeSession } from '../../domain/session.js';
 import type { BridgeMirrorRecord } from '../../runtime/contracts.js';
 import type { StructuredStreamingUiSnapshot } from '../../channels/contracts.js';
+import type { CodexAppServerLifecycle } from '../../runtime/codex/app-server-lifecycle.js';
 import type { ThreadProcessProbeResult } from './process.js';
 import {
   applyStreamUiDiagnosis,
@@ -34,6 +35,7 @@ export type {
 export interface CreateSessionHealthRuntimeDeps {
   getStore(): Pick<BridgeStore, 'getSession' | 'listSessions' | 'updateSession'>;
   nowIso(): string;
+  getProtocolSnapshot?(sessionId: string): ReturnType<CodexAppServerLifecycle['snapshot']> | undefined;
   probeThreadProcess?(threadId: string): Promise<ThreadProcessProbeResult>;
 }
 
@@ -348,7 +350,7 @@ export function createSessionHealthRuntime(
     const store = deps.getStore();
     for (const session of store.listSessions()) {
       if (!shouldTrackSession(session)) continue;
-      const diagnosis = applyStreamUiDiagnosis(
+      const diagnosis = protocolDiagnosis(session) || applyStreamUiDiagnosis(
         { ...computeBaseDiagnosis(session, nowMs), processProbe: null },
         nowMs,
       );
@@ -360,6 +362,7 @@ export function createSessionHealthRuntime(
   }
 
   async function loadProcessProbe(session: BridgeSession): Promise<ThreadProcessProbeResult | null> {
+    if (session.runtime?.codex?.appServerEndpoint) return null;
     const threadId = getSessionCodexThreadId(session);
     if (!threadId || !deps.probeThreadProcess) return null;
     return deps.probeThreadProcess(threadId);
@@ -369,6 +372,8 @@ export function createSessionHealthRuntime(
     const store = deps.getStore();
     const session = store.getSession(sessionId);
     if (!session) return null;
+    const protocol = protocolDiagnosis(session);
+    if (protocol) return protocol;
 
     const base = computeBaseDiagnosis(session, Date.now());
     const processProbe = await loadProcessProbe(session);
@@ -376,6 +381,23 @@ export function createSessionHealthRuntime(
       applyProcessProbeDiagnosis(base, processProbe),
       Date.now(),
     );
+  }
+
+  function protocolDiagnosis(session: BridgeSession): SessionHealthDiagnosis | null {
+    if (!session.runtime?.codex?.appServerEndpoint) return null;
+    const snapshot = deps.getProtocolSnapshot?.(session.id);
+    const unknown = !snapshot || snapshot.connection !== 'ready' || snapshot.activity === 'unknown';
+    const waiting = snapshot?.activity === 'waiting';
+    const active = snapshot?.activity === 'active';
+    return {
+      ...computeBaseDiagnosis(session, Date.now()),
+      processProbe: null,
+      healthStatus: unknown ? 'suspected_detached' : waiting ? 'waiting_tool' : active ? 'running_active'
+        : isTerminalHealthStatus(session.health_status) ? session.health_status! : 'idle',
+      healthReason: unknown ? 'Codex 协议连接或轮次状态待确认，尚未确认任务结束。'
+        : waiting ? 'Codex 正在等待请求答复。' : active ? 'Codex 协议报告当前轮次正在执行。'
+        : isTerminalHealthStatus(session.health_status) ? session.health_reason || 'Codex 已确认轮次结束。' : 'Codex 协议报告当前线程空闲。',
+    };
   }
 
   async function diagnoseAllActiveSessions(): Promise<SessionHealthDiagnosis[]> {

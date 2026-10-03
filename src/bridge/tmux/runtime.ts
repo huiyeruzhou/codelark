@@ -2,7 +2,6 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-import { prepareCodexDesktopRemote, codexDesktopRemoteNotice, type CodexDesktopRemote } from '../../runtime/codex/desktop-remote.js';
 import {
   buildCodexTuiSelectionChoiceActions,
   buildCodexTuiArgs,
@@ -341,7 +340,9 @@ export function buildCodexResumeTmuxCommand(params: StartCodexResumeTmuxSessionP
   tmuxCommand: string | string[];
   launchLogPath: string;
 } {
-  const codexArgs = buildCodexTuiArgs({
+  const codexArgs = params.remoteEndpoint
+    ? ['--remote', params.remoteEndpoint, ...(params.threadId ? ['resume', params.threadId] : [])]
+    : buildCodexTuiArgs({
     prompt: '',
     sessionId: params.bridgeSessionId,
     codexThreadId: params.threadId,
@@ -355,7 +356,6 @@ export function buildCodexResumeTmuxCommand(params: StartCodexResumeTmuxSessionP
     permissionMode: params.permissionMode,
     codexMode: params.codexMode,
   }, []);
-  if (params.remoteEndpoint) codexArgs.unshift('--remote', params.remoteEndpoint);
   const env = buildCodexTuiEnv();
   const executable = resolveCodexCliExecutable({ env });
   const launchLogPath = codexLaunchLogPath(params.sessionName);
@@ -1091,19 +1091,8 @@ export async function startCodexResumeTmuxSession(
     'starting_tmux',
     'starting or replacing the provider-owned Codex tmux session',
   );
-  const env = buildCodexTuiEnv();
-  let remote: CodexDesktopRemote | undefined;
-  try {
-    remote = params.remoteEndpoint ? undefined : await prepareCodexDesktopRemote({
-      env, executable: resolveCodexCliExecutable({ env }),
-    });
-  } catch (error) {
-    transitionRuntimeTmuxInputState('codex', params.sessionName, 'failed', describeUnknownError(error));
-    throw error;
-  }
-  const { codexCommand, tmuxCommand, launchLogPath } = buildCodexResumeTmuxCommand({
-    ...params, remoteEndpoint: params.remoteEndpoint ?? remote?.endpoint,
-  });
+  // Backend selection belongs to the execution registry. This entry only opens a view.
+  const { codexCommand, tmuxCommand, launchLogPath } = buildCodexResumeTmuxCommand(params);
   prepareLaunchLog(launchLogPath);
   const commands: string[] = [];
   const selectionPrompts: RuntimeTmuxSelectionPrompt[] = [];
@@ -1146,11 +1135,6 @@ export async function startCodexResumeTmuxSession(
     if (startedCheck.selectionPrompts) selectionPrompts.push(...startedCheck.selectionPrompts);
     if (startedCheck.ready) {
       cleanupLaunchLog(launchLogPath);
-      if (remote) {
-        try { await params.onStatus?.(codexDesktopRemoteNotice(remote), { force: true }); } catch (error) {
-          console.warn('[codex-tmux-runtime] Failed to publish Desktop connection notice:', describeUnknownError(error));
-        }
-      }
       return {
         existed: started.existed,
         sessionName: params.sessionName,
@@ -1257,6 +1241,21 @@ export async function startCodexResumeTmuxSession(
     launchLogPath,
     ...(finalStarted?.command ? { lastError: finalStarted.command } : {}),
   });
+}
+
+/** A remote view is an optional client, not an execution/readiness gate. */
+export async function startCodexAppServerView(
+  params: StartCodexResumeTmuxSessionParams & { threadId: string; remoteEndpoint: string },
+  core: TmuxCore = tmuxCore,
+): Promise<StartCodexResumeTmuxSessionResult> {
+  const { codexCommand, tmuxCommand, launchLogPath } = buildCodexResumeTmuxCommand(params);
+  const started = await core.ensureDetachedSession({
+    name: params.sessionName, cwd: params.workingDirectory, command: tmuxCommand, recreate: false,
+  });
+  const exists = await core.hasSession(params.sessionName);
+  if (!exists.exists) throw new Error(`Codex 查看进程未能启动；日志：${launchLogPath}`);
+  return { existed: started.existed, sessionName: params.sessionName, codexCommand,
+    tmuxCommand: started.command || '', commands: [...started.commands, exists.command], ready: true, launchLogPath };
 }
 
 function commandPreview(command: string, args: string[]): string {

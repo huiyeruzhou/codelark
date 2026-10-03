@@ -23,7 +23,6 @@ import {
   quoteCommandLineArg,
 } from './shell-snapshot.js';
 import { resolveCodexCliExecutable } from './cli-executable.js';
-import { prepareCodexDesktopRemote, codexDesktopRemoteNotice, type CodexDesktopRemote } from './desktop-remote.js';
 import {
   tmuxCore,
   type TmuxCore,
@@ -1143,12 +1142,10 @@ async function launchTmuxCodexSession(
   sessionName: string,
   params: StreamChatParams,
   imagePaths: string[],
-): Promise<CodexDesktopRemote | undefined> {
+): Promise<void> {
   const env = buildCodexTuiEnv();
   const codexArgs = buildCodexTuiArgs(params, imagePaths);
   const executable = resolveCodexCliExecutable({ env });
-  const remote = await prepareCodexDesktopRemote({ env, executable });
-  if (remote) codexArgs.unshift('--remote', remote.endpoint);
   const command = buildCodexTuiTmuxCommand(executable, codexArgs, env);
 
   console.log('[codex-tmux] Codex TUI start:', {
@@ -1173,7 +1170,6 @@ async function launchTmuxCodexSession(
     command,
     recreate: true,
   });
-  return remote;
 }
 
 async function waitForTmuxCodexUpdateExit(params: {
@@ -1468,12 +1464,11 @@ export function streamCodexTmuxTui(params: StreamChatParams, pendingPerms?: Pend
         try {
           const imagePaths = buildTempImageFiles(params, tempFiles);
           let screen = { screen: '', command: '/tmux-screen 80' };
-          let remote: CodexDesktopRemote | undefined;
           for (let launchAttempt = 0; launchAttempt < 2; launchAttempt += 1) {
             controller.enqueue(sseEvent('status', { reasoning: params.codexThreadId
               ? '正在启动 Codex tmux，并 resume 当前 Codex thread。'
               : '正在启动 Codex tmux。' }));
-            remote = await launchTmuxCodexSession(sessionName, params, imagePaths);
+            await launchTmuxCodexSession(sessionName, params, imagePaths);
             const promptDelayMs = parsePositiveIntEnv('CODELARK_CODEX_TMUX_PROMPT_DELAY_MS', DEFAULT_TMUX_PROMPT_DELAY_MS, 0);
             if (promptDelayMs > 0) await sleep(promptDelayMs);
             controller.enqueue(sseEvent('status', { reasoning: 'Codex tmux 已启动，正在准备注入本次消息。' }));
@@ -1538,7 +1533,6 @@ export function streamCodexTmuxTui(params: StreamChatParams, pendingPerms?: Pend
               return resolved.choice !== 'not_selection';
             },
           });
-          if (remote) controller.enqueue(sseEvent('status', { reasoning: codexDesktopRemoteNotice(remote) }));
           controller.enqueue(sseEvent('status', { reasoning: '正在把本次消息发送到 Codex tmux。' }));
           transitionRuntimeTmuxInputState(
             'codex',

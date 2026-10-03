@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { test, describe, type TestContext } from 'node:test';
+import { WebSocketServer } from 'ws';
 
 import { prepareCodexDesktopRemote, codexDesktopRemoteNotice, disableCodexDesktopRemote } from '../../../../runtime/codex/desktop-remote.js';
 import { appServerWebSocketUrl, appServerCliUrl } from '../../../../runtime/codex/app-server-client.js';
@@ -118,6 +119,25 @@ test('an unavailable explicit backend fails instead of silently creating another
   assert.equal(fs.existsSync(f.root), false);
 });
 
+test('checks the actual backend home before adopting an existing Desktop endpoint', async (t) => {
+  const f = fixture(t);
+  const server = new WebSocketServer({ host: '127.0.0.1', port: 0 });
+  await new Promise<void>((resolve) => server.once('listening', resolve));
+  t.after(async () => {
+    for (const socket of server.clients) socket.terminate();
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  });
+  const address = server.address();
+  assert(address && typeof address === 'object');
+  f.launchEnv.set('CODEX_APP_SERVER_WS_URL', `ws://127.0.0.1:${address.port}`);
+  server.on('connection', (socket) => socket.on('message', (data) => {
+    const message = JSON.parse(String(data));
+    if (message.method === 'initialize') socket.send(JSON.stringify({ id: message.id, result: { codexHome: '/another/home' } }));
+  }));
+  await assert.rejects(prepareCodexDesktopRemote({ ...f.options, probe: undefined }), /CODEX_HOME.*不一致/);
+  assert.equal(fs.existsSync(f.root), false);
+});
+
 test('does not connect to an external host or override conflicting Desktop configuration', async (t) => {
   const f = fixture(t);
   f.launchEnv.set('CODEX_APP_SERVER_WS_URL', 'wss://example.invalid');
@@ -127,14 +147,14 @@ test('does not connect to an external host or override conflicting Desktop confi
   assert.deepEqual(f.probes, []);
 });
 
-test('respects Desktop force-CLI setting and rejects unsupported Codex before installing', async (t) => {
+test('respects Desktop force-CLI and leaves unsupported old CLI on the legacy adapter', async (t) => {
   const f = fixture(t);
   f.launchEnv.set('CODEX_APP_SERVER_FORCE_CLI', '1');
   assert.equal(await prepareCodexDesktopRemote(f.options), undefined);
   f.launchEnv.clear();
   const original = f.options.run;
   f.options.run = (file, args) => file === f.options.executable ? Promise.resolve('old CLI') : original(file, args);
-  await assert.rejects(prepareCodexDesktopRemote(f.options), /不支持 --remote/);
+  assert.equal(await prepareCodexDesktopRemote(f.options), undefined);
   assert.equal(fs.existsSync(f.root), false);
 });
 

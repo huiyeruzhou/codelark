@@ -13,6 +13,8 @@ import { kimiTmuxSessionName } from '../../../runtime/kimi/tmux-provider.js';
 import { cursorTmuxSessionName } from '../../../runtime/cursor/tmux-provider.js';
 import { zcodeTmuxSessionName } from '../../../runtime/zcode/tmux-provider.js';
 import * as router from '../channel-router.js';
+import { getCodexAppServerSession, releaseCodexAppServerSession } from '../../../runtime/codex/app-server-registry.js';
+import { releaseAppServerRequestObserver } from '../../permission/app-server.js';
 import { clearPendingAttachmentConfirmation } from '../../command/attachment-confirmations.js';
 import { clearPendingTakeoverConfirmation } from '../../command/takeover-confirmations.js';
 import {
@@ -53,6 +55,11 @@ import {
 } from './types.js';
 
 async function cleanupBridgeSessionRuntimeTmuxBestEffort(session: BridgeSession | null | undefined, reason: string): Promise<void> {
+  if (session && (session.runtime?.codex?.appServerEndpoint || getCodexAppServerSession(session.id))) {
+    releaseAppServerRequestObserver(session.id);
+    await releaseCodexAppServerSession(session.id);
+    return;
+  }
   const runtime = getSessionActiveRuntime(session) || 'codex';
   const sessionName = getSessionRuntimeTmuxSessionName(session)
     || (runtime === 'kimi' && session

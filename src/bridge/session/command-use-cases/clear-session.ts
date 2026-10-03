@@ -11,6 +11,9 @@ import {
   setSessionActiveRuntimeUpdate,
 } from '../../../domain/session-runtime.js';
 import { cleanupRuntimeTmuxSession } from '../../tmux/runtime.js';
+import { getCodexAppServerSession, releaseCodexAppServerSession } from '../../../runtime/codex/app-server-registry.js';
+import { releaseAppServerRequestObserver } from '../../permission/app-server.js';
+import { stopRunningSession } from '../stop-running-session.js';
 import * as router from '../channel-router.js';
 import {
   ensureWorkingDirectoryExists,
@@ -154,9 +157,13 @@ export async function handleClearSessionCommand(options: {
 
   const previousBinding = options.currentBinding || options.store.getChannelChat(options.msg.address.channelType, options.msg.address.chatId);
   const previousSession = previousBinding ? options.store.getSession(previousBinding.bridgeSessionId) : null;
+  const protocol = previousSession ? getCodexAppServerSession(previousSession.id) : undefined;
+  const usesProtocol = Boolean(protocol || previousSession?.runtime?.codex?.appServerEndpoint);
+  const protocolState = protocol?.lifecycle.snapshot(protocol.threadId);
   const sdkRunning = previousBinding ? Boolean(options.deps.getActiveTask(previousBinding.bridgeSessionId)) : false;
   const observedRunning = sessionLooksRunning(previousSession);
   const runningReasons = [
+    usesProtocol && (!protocolState || protocolState.activity !== 'idle') ? '共享 Codex 线程正在运行或状态待确认' : null,
     sdkRunning ? 'sdk 正在运行' : null,
     !sdkRunning && observedRunning ? 'mirror/健康状态显示仍在运行' : null,
   ].filter(Boolean) as string[];
@@ -188,12 +195,14 @@ export async function handleClearSessionCommand(options: {
   }
   if (previousBinding && runningReasons.length > 0) {
     const detail = '用户确认 /clear，终止当前任务并新建 BridgeSession。';
-    if (options.deps.forceStopSession) {
+    if (usesProtocol) {
+      await stopRunningSession({ store: options.store, binding: previousBinding, deps: options.deps, detail });
+    } else if (options.deps.forceStopSession) {
       await options.deps.forceStopSession(previousBinding.bridgeSessionId, detail);
     } else {
       options.deps.getActiveTask(previousBinding.bridgeSessionId)?.abortController.abort();
     }
-    options.deps.recordInteractiveHealthEnd?.(previousBinding.bridgeSessionId, 'aborted', detail);
+    if (!usesProtocol) options.deps.recordInteractiveHealthEnd?.(previousBinding.bridgeSessionId, 'aborted', detail);
   }
   const previousRuntime = getSessionActiveRuntime(previousSession) || 'codex';
   const previousRuntimeTmuxSessionName = getSessionRuntimeTmuxSessionName(previousSession)
@@ -205,7 +214,20 @@ export async function handleClearSessionCommand(options: {
           ? zcodeTmuxSessionName(previousSession.id)
         : undefined);
   let cleanedTmuxSessionName: string | null = null;
-  if (previousRuntimeTmuxSessionName) {
+  if (usesProtocol && previousSession) {
+    const current = getCodexAppServerSession(previousSession.id);
+    try {
+      if (current) await current.lifecycle.refresh(current.threadId);
+    } catch (error) {
+      return { response: `Codex 轮次结束状态尚未确认，当前绑定和订阅已保留。请稍后再次执行 /clear。${error instanceof Error ? error.message : String(error)}` };
+    }
+    const refreshed = current?.lifecycle.snapshot(current.threadId);
+    if (!refreshed || refreshed.connection !== 'ready' || refreshed.activity !== 'idle') {
+      return { response: 'Codex 尚未确认原轮次结束，当前绑定和订阅已保留。请等待中断完成后再次执行 /clear。' };
+    }
+    releaseAppServerRequestObserver(previousSession.id);
+    await releaseCodexAppServerSession(previousSession.id);
+  } else if (previousRuntimeTmuxSessionName) {
     const cleanup = await cleanupRuntimeTmuxSession({
       runtime: previousRuntime,
       sessionName: previousRuntimeTmuxSessionName,

@@ -23,7 +23,7 @@ export interface DesktopRemoteOptions {
   platform?: NodeJS.Platform;
   home?: string;
   run?: (file: string, args: string[]) => Promise<string>;
-  probe?: (endpoint: string) => Promise<void>;
+  probe?: (endpoint: string, codexHome: string) => Promise<void>;
 }
 
 interface Installation {
@@ -49,9 +49,16 @@ function locations(home: string) {
   };
 }
 
-async function probe(endpoint: string): Promise<void> {
+async function probe(endpoint: string, codexHome: string): Promise<void> {
   const client = await CodexAppServerClient.connect(endpoint, 2_000);
-  try { await client.request('thread/loaded/list'); } finally { client.close(); }
+  try {
+    const actualHome = client.serverInfo.codexHome;
+    const canonical = (value: string) => { try { return fs.realpathSync(value); } catch { return path.resolve(value); } };
+    if (!actualHome || canonical(actualHome) !== canonical(codexHome)) {
+      throw new Error('Desktop 后端的 CODEX_HOME 与当前 Bridge 不一致，无法共享本地会话记录。');
+    }
+    await client.request('thread/loaded/list');
+  } finally { client.close(); }
 }
 
 function runner(env: NodeJS.ProcessEnv) {
@@ -82,7 +89,7 @@ async function findDesktop(home: string, run: ReturnType<typeof runner>): Promis
   return false;
 }
 
-function validateLocalEndpoint(endpoint: string): void {
+export function validateLocalEndpoint(endpoint: string): void {
   if (endpoint.startsWith('ws+unix:///') || endpoint.startsWith('unix:///')) return;
   const url = new URL(endpoint);
   if (['ws:', 'wss:'].includes(url.protocol) && ['127.0.0.1', '[::1]', 'localhost'].includes(url.hostname)) return;
@@ -163,9 +170,10 @@ export async function prepareCodexDesktopRemote(options: DesktopRemoteOptions): 
   if (!await findDesktop(home, run)) return;
   if (options.env.CODEX_APP_SERVER_FORCE_CLI === '1' || await launchctlValue(run, 'CODEX_APP_SERVER_FORCE_CLI') === '1') return;
   const help = await run(options.executable, ['--help']);
-  if (!help.includes('--remote')) throw new Error('已检测到 Codex Desktop，但当前 Codex CLI 不支持 --remote，请先更新 CLI。');
+  if (!help.includes('--remote')) return; // old installations retain the legacy execution adapter
 
   const ownEndpoint = `unix://${files.socket}`;
+  const codexHome = path.resolve(options.env.CODEX_HOME || path.join(home, '.codex'));
   const desktopUrl = await launchctlValue(run, DESKTOP_URL_ENV);
   const inheritedUrl = options.env[DESKTOP_URL_ENV]?.trim();
   if (desktopUrl && inheritedUrl && appServerCliUrl(desktopUrl) !== appServerCliUrl(inheritedUrl)) {
@@ -174,7 +182,7 @@ export async function prepareCodexDesktopRemote(options: DesktopRemoteOptions): 
   const configuredUrl = desktopUrl || inheritedUrl;
   if (configuredUrl && appServerCliUrl(configuredUrl) !== ownEndpoint) {
     validateLocalEndpoint(configuredUrl);
-    await check(configuredUrl);
+    await check(configuredUrl, codexHome);
     return { endpoint: appServerCliUrl(configuredUrl), managed: false, desktopEnvironmentChanged: false };
   }
 
@@ -183,8 +191,7 @@ export async function prepareCodexDesktopRemote(options: DesktopRemoteOptions): 
     throw new Error('当前用户目录无法用于 Codex Desktop 的 Unix socket（路径过长或含 URL 特殊字符）。');
   }
   const serverHelp = await run(options.executable, ['app-server', '--help']);
-  if (!serverHelp.includes('unix://')) throw new Error('当前 Codex CLI 不支持 Unix app-server，请先更新 CLI。');
-  const codexHome = path.resolve(options.env.CODEX_HOME || path.join(home, '.codex'));
+  if (!serverHelp.includes('unix://')) return;
   const installation = installFiles(home, options, codexHome);
   if (installation.codexHome !== codexHome) {
     throw new Error('共享 app-server 使用另一份 CODEX_HOME；未覆盖已有 Desktop 会话环境。');
@@ -199,7 +206,7 @@ export async function prepareCodexDesktopRemote(options: DesktopRemoteOptions): 
   }
   let lastError: unknown;
   for (let attempt = 0; attempt < 20; attempt += 1) {
-    try { await check(ownEndpoint); lastError = undefined; break; } catch (error) { lastError = error; }
+    try { await check(ownEndpoint, codexHome); lastError = undefined; break; } catch (error) { lastError = error; }
     await new Promise((resolve) => setTimeout(resolve, 250));
   }
   if (lastError) throw new Error(`共享 Codex app-server 未就绪；请查看 ${path.join(files.root, 'app-server.log')}。`, { cause: lastError });

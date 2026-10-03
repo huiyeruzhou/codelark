@@ -58,6 +58,7 @@ export interface StreamChatParams {
   sessionId: string;
   runtime?: 'codex' | 'claude' | 'kimi' | 'cursor' | 'zcode';
   codexThreadId?: string;
+  codexAppServerEndpoint?: string;
   claudeSessionId?: string;
   kimiSessionId?: string;
   kimiThinking?: boolean;

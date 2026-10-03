@@ -1,6 +1,6 @@
 # tmux Runtime 生命周期
 
-本文描述 CodeLark 当前 tmux runtime 的完整链路。Codex、Claude Code、Kimi Code、Cursor Agent 和 ZCode 共用 `src/bridge/tmux/core.ts` 的 tmux API 和 `src/bridge/tmux/input-state-machine.ts` 的输入生命周期状态机，差异保留在各自 CLI 启动参数、会话身份和 JSONL/wire/transcript/SQLite 解析上。`src/bridge/tmux/runtime.ts` 承载 Codex/Claude 的 shared provider-owned 启动和 readiness；Kimi、Cursor 与 ZCode 分别在自己的 provider 中发现稳定 CLI identity 和持久输出，再把相同的 session/tmux/send 状态写入共享 machine。
+本文描述 CodeLark 的终端适配器与 Codex app-server 执行适配器。启用 app-server 的 Codex 由协议管理线程、输入、停止和状态；tmux 是可选查看入口。未启用设备及已有旧会话继续原流程。旧 Codex、Claude Code、Kimi Code、Cursor Agent 和 ZCode 共用 `src/bridge/tmux/core.ts` 的 tmux API 和 `src/bridge/tmux/input-state-machine.ts` 的输入生命周期状态机，差异保留在各自 CLI 启动参数、会话身份和 JSONL/wire/transcript/SQLite 解析上。`src/bridge/tmux/runtime.ts` 承载 Codex/Claude 的 shared provider-owned 启动和 readiness；Kimi、Cursor 与 ZCode 分别在自己的 provider 中发现稳定 CLI identity 和持久输出，再把相同的 session/tmux/send 状态写入共享 machine。
 
 ## 总览
 
@@ -20,7 +20,12 @@ flowchart TD
   msg --> binding
   binding --> config
   config --> thread
-  thread --> tmux
+  thread --> protocol{执行适配器}
+  protocol -->|已有旧会话 / 旧 CLI| tmux
+  protocol -->|共享后端| app[app-server thread / turn / request]
+  app --> events[协议事件与恢复快照]
+  events --> mirror
+  app -.查看和人工接管.-> view[remote tmux / Desktop]
   tmux --> inject
   inject --> jsonl
   jsonl --> mirror
@@ -62,7 +67,9 @@ flowchart TD
 
 Codex 保留 `startCodexResumeTmuxSession` 和 `waitForCodexResumeTmuxReady` 作为兼容包装；Claude 的 `startClaudeTmuxSession` 也由 `src/bridge/tmux/runtime.ts` 提供，`src/runtime/claude/tmux-provider.ts` 只负责 prompt 注入、JSONL discovery 和 SSE/mirror 转换。
 
-## Codex tmux 生命周期
+## Codex 执行路径与兼容
+
+下面的 bootstrap、键盘输入、JSONL 轮询和屏幕就绪检查仅用于旧执行适配器；启用协议的线程使用本章的 app-server 生命周期。已有旧 thread 不会因升级 CodeLark 或安装 Desktop 自动迁移。只有新会话自动选择共享后端，或用户明确配置 `CODELARK_CODEX_APP_SERVER_URL` / 已保存的 thread endpoint 后才走协议。
 
 ### 1. thread 获取和注入
 
@@ -82,32 +89,80 @@ TUI 启动和本地 thread bootstrap 共用 `buildCodexTuiEnv`，显式设置 `G
 
 ### Codex Desktop 与共享 app-server
 
-macOS 上创建新的 Codex tmux 时，CodeLark 会通过 `com.openai.codex` bundle id 检测 Desktop，并检查 CLI 是否支持 `--remote`。Linux、Windows、未安装 Desktop 或显式设置 `CODELARK_CODEX_DESKTOP_REMOTE=0` 时继续原有启动方式。Desktop 的 `CODEX_APP_SERVER_FORCE_CLI=1` 设置优先，不自动改写。
+macOS 上准备新 Codex 会话时，CodeLark 会通过 `com.openai.codex` bundle id 检测 Desktop，并检查 CLI 是否支持 `--remote`。Linux、Windows、未安装 Desktop 或显式设置 `CODELARK_CODEX_DESKTOP_REMOTE=0` 时继续原有启动方式。Desktop 的 `CODEX_APP_SERVER_FORCE_CLI=1` 设置优先，不自动改写。
 
 已配置且可连接的本机 `CODEX_APP_SERVER_WS_URL` 优先复用。Desktop 默认本地路径使用 stdio，不提供通用的可接入 socket；缺少明确地址时，CodeLark 为当前 macOS 用户安装 `dev.codelark.codex-app-server` LaunchAgent，通过私有 Unix socket 运行独立 app-server。新 TUI 使用 `--remote unix://… resume <thread>`，Desktop 使用同一 socket 对应的 `ws+unix://…:/` 地址。服务端仍持有 thread writer lock；两个客户端共享一个持锁后端，没有删除或关闭锁。
 
 LaunchAgent 保存在 `~/Library/LaunchAgents/dev.codelark.codex-app-server.plist`，服务脚本、日志和环境快照在 `~/.codelark/codex-desktop/`。登录时启动服务并重新设置用户级 Desktop 环境；不需要每次 export，也不要求先启动 Bridge。Bridge 停止、热更新或某个 TUI 退出都不会停止共享服务。服务异常退出后由 launchd 重启；客户端仍需重新连接，重启不保证中断中的轮次自动继续。登录时 Desktop 与 LaunchAgent 同时自动启动的先后顺序尚需 macOS 实机验证。
 
-CodeLark 先完成 `initialize` 和 `thread/loaded/list` 协议检查，再创建 remote tmux；终端真正 ready 后，使用现有状态通知通道提示检测结果。首次设置地址时，如果 Desktop 已在运行，需要用户退出后重开一次才能继承新环境；不会强制退出用户的 Desktop。地址已配置但后端不可达时明确报错，不另起一个独立 writer。原有 stdio Desktop 或独立 CLI 已占用的 thread，仍需先正常释放后才能迁入共享服务。
+CodeLark 先完成 `initialize` 和 `thread/loaded/list` 协议检查，再由协议建立线程。选择 tmux 的聊天会异步建立 remote 查看入口，创建成功后提示检测结果；输入不等待终端菜单或编辑框。首次设置地址时，如果 Desktop 已在运行，需要用户退出后重开一次才能继承新环境；不会强制退出用户的 Desktop。地址已配置但后端不可达时明确报错，不另起一个独立 writer。原有 stdio Desktop 或独立 CLI 已占用的 thread，仍需先正常释放后才能迁入共享服务。
 
 一个 macOS 用户共用一个后端。首次安装保存该实例的 `CODEX_HOME` 和环境快照，目录权限为 `0700`，快照为 `0600`；移除 Bridge/chat/turn/tmux 身份环境，不在 plist 中写凭据。后续启动复用这份环境，不用另一个实例的凭据覆盖它；不同 `CODEX_HOME` 会拒绝自动接入。修改当前终端环境不会改变已运行服务的环境。Unix socket 路径超过 macOS 长度限制或包含当前 Desktop 传输不能处理的 URL 特殊字符时，自动配置会报错。
 
 关闭可执行 `codelark codex-desktop disable`：该命令会中断共享服务的活动轮次、移除自己的 LaunchAgent、只清除指向自己服务的 Desktop 环境变量，并写入 `~/.codelark/codex-desktop/disabled` 防止下一次 tmux 自动安装。之后重开 Desktop 恢复默认方式。若要重新启用，移除该 `disabled` 文件后创建新 tmux；已有环境快照继续复用。仅设置 `CODELARK_CODEX_DESKTOP_REMOTE=0` 只影响该 Bridge 后续启动，不停止已经安装的共享服务。卸载 CodeLark 前若要恢复 Desktop 默认方式，应先运行上述 disable 命令；普通 Bridge stop 不负责停止 Desktop 使用的后端。
 
-`CODEX_APP_SERVER_WS_URL` 的行为取证自 Desktop `26.930.31730` 发行包；它是实现细节，不能当作长期稳定的公开接口。Linux 已实测发行包原版通信模块与真实 Codex `0.153.4`、`0.160.0` 共享会话，另以 `0.160.0` 验证 Unix socket、CodeLark 新连接层和真实 remote TUI。原生 macOS 的 launchd、Dock/Finder 启动和真实 IM 提示仍需实机验收，不能用协议测试替代。
+`CODEX_APP_SERVER_WS_URL` 的行为取证自 Desktop `26.930.31730` 发行包；它是实现细节，不能当作长期稳定的公开接口。Linux 已实测发行包原版通信模块与真实 Codex `0.153.4`、`0.160.0` 共享会话，另以 `0.160.0` 验证 Unix socket、CodeLark 新连接层和真实 remote TUI。GitHub macOS 26 runner 已验证真实 LaunchAgent、Bridge 准备进程退出后服务继续运行，以及通过 LaunchServices 启动的应用继承连接环境；完整 Desktop GUI 与真实 IM 提示仍需手测，不能用协议测试替代。
 
-### 用协议逐步接管生命周期
+专用工作流 `.github/workflows/codex-desktop.yml` 在独立分支 `ci/codex-desktop-remote` 上运行；`scripts/verify-codex-desktop-macos.ts` 使用真实 macOS 系统服务、官方 Desktop 通信模块和 Codex CLI，模型响应由隔离的本地 mock 提供，无需模型账号。测试用 `turn/completed` 确认 seed 回合已完成，再接入第二客户端；不能在 `turn/start` 刚返回时假设 rollout 文件已经写完。登录持久化通过重新加载保存的 LaunchAgent 验证，不能等同于实际注销/重新登录的完整操作。
 
-`runtime/codex/app-server-client.ts` 提供 JSON-RPC 请求、通知、带 id 的服务端请求、超时和断开处理。本阶段已用协议判断后端是否可用；现有发送、镜像和终端输入状态机仍保留。后续将 CodeLark 作为同一 app-server 的长期客户端订阅目标 thread，可以逐步采用以下信息：
+Codex 0.160 的启动菜单有两种紧凑 footer：目录信任为 `enter continue · esc back`，模型介绍为 `enter/esc confirm · ctrl+c quit`。公共 footer 识别按完整行匹配，Codex 还必须同时存在选择游标和有效选项才会交给交互处理，不能将说明文字当作可操作菜单；生产不会自动信任目录或选择新模型。
 
-| 需要知道的事情 | app-server 提供的依据 |
-| --- | --- |
-| 哪些 thread 已加载、目前是否空闲或执行中 | `thread/loaded/list`、`thread/read`、`thread/status/changed` |
-| 哪一轮开始、完成、失败或中断 | `turn/started`、`turn/completed` 中的 thread/turn id 和状态 |
-| 正在执行哪些工具、有哪些增量输出 | `item/started`、`item/*/delta`、`item/completed` |
-| 是否在等待审批或用户输入 | 带请求 id 的审批/input 请求及 `serverRequest/resolved` |
+### app-server 的执行生命周期
 
-事件连接断开时应先标记状态未知，重连后读取当前 thread/turn，再恢复订阅；不能把断线解释成轮次完成。Desktop 和 CodeLark 可能同时看到审批请求，必须按 request id 处理已解决通知，不能由后台探活连接自动批准。tmux 保留为查看和接管界面。只要输入仍通过键盘注入，更新、模型迁移等 TUI 菜单的启动检查仍有必要：服务端 thread 就绪不代表终端编辑框已经接受输入。
+用户要求以 app-server 重新划分完整生命周期，而非把协议探活接到旧的抓屏流程上。自动启用范围仍为 macOS + 已安装 Desktop；明确配置本机 app-server 地址的设备也可使用同一协议适配器。旧 CLI、其他 runtime 与未启用设备保留原有适配器。生产实现分别位于 `app-server-client.ts`（连接和错误）、`app-server-lifecycle.ts`（线程、轮次和请求）、`app-server-events.ts`（事件转换）、`app-server-registry.ts`（后端选择与持久记录）。Bridge 的普通输入、direct provider、停止和镜像复用这套服务；验收记录单独注明已验证范围。
+
+#### 对象与职责
+
+| 对象 | 唯一职责 | 生命周期结束的依据 |
+| --- | --- | --- |
+| 共享后端 | 持有 Codex 线程、配置、工具执行和 writer lock | 外部服务管理器或用户明确关闭；Bridge/TUI 退出不停止它 |
+| Bridge 连接 | 初始化协议、请求关联、订阅与重连 | socket 关闭只标记断连，不能结束轮次 |
+| 线程 | 固定 backend + threadId、当前轮次与待处理请求 | 用户解绑/归档使在途 prepare/read/resume 失效并解除本端订阅；不强杀其他客户端的工作 |
+| 轮次 | 接收输入、执行工具、提交最终结果 | 匹配 threadId/turnId 的 turn/completed 或恢复读取中的终态 |
+| 审批/问答请求 | 按服务端 request id 接收一次有效答复 | serverRequest/resolved、轮次结束或连接失效；旧回调失效 |
+| tmux 界面 | 查看和人工接管同一后端上的线程 | 界面关闭仅失去该查看入口；不影响消息提交和状态 |
+
+消息发给协议执行适配器，由 thread/start 或 thread/resume 确认线程，再用 turn/start 提交；活动轮次上的明确追加用 turn/steer 并携带 expectedTurnId。/stop 使用 turn/interrupt，目标必须为当前服务器确认的 turnId。普通消息与 direct provider 共用 turn 配置转换，后续修改模型、sandbox、approvalPolicy、工作目录会传给下一次 turn/start；remote resume 不能再传本地权限覆盖参数。
+
+通知转换为既有 BridgeMirrorRecord，复用现有卡片、投递重试和 TurnCoordinator。协议线程只允许这一份事件源决定进度和终态，不能再由 JSONL 与抓屏平行生成结束事件。其他 runtime 与旧 Codex 继续使用原记录来源。进程关闭、静默超时、编辑框出现、JSONL 暂无增量都不是协议轮次完成的证据。
+
+#### 连接与提交恢复
+
+连接从 connecting 进入 ready；断开后进入 disconnected，活动轮次状态为 unknown。重连只执行初始化、恢复订阅和读取线程，不重发用户输入。恢复时先安装事件监听，再 resume/read，并按稳定 item/turn id 合并通知与快照，避免读请求期间的新事件被旧快照覆盖。
+
+提交在发送前记录身份与“可能已发送”，收到明确回复或匹配 `userMessage.clientId` 的接受事件后记录真实 turnId；后者不必等待 RPC 回执，已经完成的正文仍正常投递。超时/断线发生在副作用请求之后时，保留结果未知；不能换 SDK/TUI 再发一次，也不能凭同一个 clientUserMessageId 假定重发幂等。无法从服务器状态证明是否接收时必须向用户如实说明；后续输入不得悄悄替代这条消息。
+
+审批监听不自动批准。Desktop 与 Bridge 可以同时看到请求，任一端答复后，另一个端通过 resolved/终态作废旧操作。连接断开使本端旧请求失效；重新 resume 重放的新请求重新注册。问答保留原始问题和选项，不把问答当作允许/拒绝审批。
+
+#### 兼容边界
+
+- 不把版本号作为唯一开关。初始化与无副作用查询决定最小协议能力；通知中可选字段缺省时使用共同字段。未知通知忽略并可诊断，不把它判成会话失败。
+- 首次选择执行适配器时，明确不支持协议才使用旧路径；认证、身份不符、锁冲突、后端不可达均为运行问题，不能解释成“版本老”并创建另一个 writer。
+- 已绑定协议线程必须保留后端身份，Bridge 重启或 CLI 降级后也不能静默切回独立 TUI。缺少 --remote 只表示终端不能作为该后端的查看客户端，不意味着线程已坏。
+- 缺少可选能力时关闭对应增强；旧版本已有的 thread/turn 与通知仍可工作。现有会话数据与 provider 配置保持可读，不要求用户重建会话或升级 CLI。
+
+#### 持久记录与边界
+
+`CODELARK_HOME/codex-app-server/` 保存 endpoint/thread 绑定、发送前的 submission 标识与活动 turn ID，使用私有目录和原子文件替换，不保存消息正文。Bridge 重启后恢复同一后端，并核对退出期间的原活动轮次；无法确认的提交继续保留，不换旧适配器重发。新建线程时，工具的 `CODELARK_HOME` 通过线程配置传递给子进程，防止共享后端把一个实例的工具操作送到另一个实例；后端自己的环境快照仍只保存首次安装实例的环境。恢复原线程保留其环境。已有订阅的 warm resume 可能忽略配置覆盖，因此不能把连接 Desktop 既有线程当作已经重新配置了该线程，也不会为注入实例身份强行卸载它。
+
+现有飞书投递重试和卡片状态不是持久化消息事务。本次保证输入不盲目重发及运行中单一终态来源，不承诺 Bridge 在卡片最终投递途中崩溃时仍能严格只显示一次。命令/文件审批与 requestUserInput 有独立请求通道；其他需要专用客户端处理的请求明确显示未支持，保留给 Desktop 处理，不伪造同意。
+
+#### 已核对的版本差异
+
+0.145、0.153、0.160 都提供共同 thread/turn 方法。0.145 的 start 在并发追加场景可能返回提交 ID，因此通过原生 turn 事件或 `userMessage.clientId` 关联实际轮次；`item.id` 不是客户端消息标识。`clientUserMessageId` 也不是幂等键。0.145 的 completed 通知 items 可以为空，不能用它覆盖已收集的输出。旧版缺少审批 kind / 问答 isBlocking 时采用共同基本语义，不自动授予权限。
+
+真实 Linux 隔离测试已经覆盖 0.145.0、0.153.4、0.160.0 的 Unix 连接、start/steer 并发、interrupt、断线恢复、审批/动态请求重放、线程工具环境及 provider/registry 跨进程复用。Desktop 26.930.31730 原版通信模块也已分别握手这三版后端，未修改模块或构造参数。macOS 原生服务、LaunchServices 环境与双客户端完整链路仍通过专用 GitHub 工作流单独验证；完整 Desktop GUI 与真实飞书卡片尚未手测。
+
+旧版 Unix WebSocket 拒绝 `sec-websocket-extensions` 压缩协商；CodeLark 客户端统一使用不压缩的 JSON-RPC 帧。这是传输兼容设置，不会切换后端或重试输入。已审计的未知方法错误按 code 和确切方法匹配；权限错误、writer lock、握手错误、历史暂不可读和内部错误不能混为“不支持接口”。
+
+#### 验收故事
+
+1. 新会话与连续消息：协议创建一次线程，多轮复用；普通消息提交不调用 capturePane/send-keys。
+2. Desktop 与 Bridge 同时附着：共享同一个后端和线程；任一端启动、追加或停止的轮次由同一组事件反映，卡片只结束一次。
+3. tmux 关闭、卡菜单或重建：协议仍能收发与停止；新 remote tmux 仅附着，进程建立后发已检测 Desktop 的提示；不使用旧输入 readiness gate。
+4. 请求已发送后断线：不重发、不 fallback、不误报完成；重连 resume/read 恢复可证明的当前状态。
+5. 审批在任一客户端处理后，另一个端的旧回调失效；未知请求类型不自动批准。
+6. 旧 CLI 无协议能力继续旧流程；0.145/0.153/0.160 共同协议与可选字段缺省分别测试；降级不造成重复提交或第二个 writer。
 
 启动命令在 shared tmux core 中保留两种等价表示：人类可读 command preview，以及实际传给 tmux 的 `string | argv[]`。POSIX tmux 的 `new-session --` 接收单一 shell command；Windows psmux 必须接收分开的 executable/args argv，不能把 `pwsh.exe ...` 或 `node.exe ...` 拼成一个字符串，否则 CreateProcessW 会把整串误当成 executable path。Codex 和 Kimi 都通过 shell snapshot 把当前 bridge 环境交给 Windows 子进程，因此 npm 的 `.cmd` wrapper 由系统 shell 执行，不能直接当成 `.exe` 交给 CreateProcess。
 
@@ -158,7 +213,7 @@ readiness gate 的 `ready` 会把共享输入状态推进到 `running`，随后�
 
 以下约束适用于 Codex、Claude Code、Kimi Code、Cursor Agent、ZCode 和以后新增的 runtime：
 
-1. host 消息路由不得按 runtime 名称开“只对某家生效”的旁路。普通消息统一进入 provider-owned input lifecycle。
+1. 同一执行适配器的所有输入必须经过唯一 lifecycle owner。旧终端适配器使用 provider-owned input lifecycle；Codex 协议适配器使用 app-server lifecycle，不能再注入按键或用屏幕决定提交。
 2. 首条输入可以依次创建或发现 runtime identity、启动 tmux、处理真实启动选择并进入 `running`；后续输入必须复用同一 identity 和 tmux process。
 3. `running` 状态发送前只允许做轻量 `has-session` 存活检查。不得再次创建 session、运行 resume discovery、抓取 pane 查光标，或等待 idle prompt。输入后为捕获新出现的 goal/permission/update 选择而做的短时事件 probe 仍然允许；它不是每轮发送前的 readiness gate。
 4. 只有 tmux 进程确实丢失、前一生命周期进入 `failed`、Bridge 冷接管，或用户明确切换/清理 session/provider 时，才允许重新进入 session/tmux/readiness 阶段。

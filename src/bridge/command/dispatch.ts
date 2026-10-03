@@ -163,6 +163,7 @@ function normalizeFormString(value: unknown): string {
 export interface BridgeCommandDispatchDeps {
   getActiveTask(sessionId: string): { abortController: AbortController } | undefined;
   forceStopSession?(sessionId: string, detail?: string): Promise<boolean>;
+  cancelQueuedSessionMessages?(sessionId: string): void;
   recordInteractiveHealthEnd?(sessionId: string, outcome: 'completed' | 'failed' | 'aborted', detail?: string): void;
   cancelRuntimeWaits?(sessionId: string): void;
   reconcileMirrorSubscriptions?(): Promise<void>;

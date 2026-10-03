@@ -20,6 +20,7 @@ export interface SessionExecutor {
   getActive(sessionId: string): boolean;
   getQueuedCount(sessionId: string): number;
   cancel(sessionId: string): void;
+  cancelQueued(sessionId: string): void;
   clear(): void;
 }
 
@@ -119,6 +120,7 @@ export function createSessionExecutor(
       }
       const startedAtMs = nowMs();
       const waitMs = startedAtMs - scheduledAtMs;
+      if (getSessionLockVersion(sessionId) !== lockVersion) return;
       if (hasActiveTail) {
         decrementQueuedCount(sessionId);
       }
@@ -190,6 +192,13 @@ export function createSessionExecutor(
     }, 'session queue cancelled');
   }
 
+  function cancelQueued(sessionId: string): void {
+    // Keep the active promise so newly submitted jobs still wait for its real terminal.
+    getState().queuedCounts.delete(sessionId);
+    invalidateSessionLockQueue(sessionId);
+    deps.onQueuedCountChanged(sessionId);
+  }
+
   function clear(): void {
     const state = getState();
     state.queuedCounts.clear();
@@ -203,6 +212,7 @@ export function createSessionExecutor(
     getActive: (sessionId) => getState().sessionLocks.has(sessionId),
     getQueuedCount,
     cancel,
+    cancelQueued,
     clear,
   };
 }

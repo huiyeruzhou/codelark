@@ -885,6 +885,19 @@ describe('bridge command e2e', () => {
     _testOnly.resetStateForTests();
   });
 
+  it('keeps a fresh legacy Codex chat on the direct startup path after app-server selection', { skip: process.platform !== 'linux' }, async () => {
+    const calls: RecordedLlmCall[] = [];
+    const store = initBridgeTestContext({ settings: makeBridgeSettings({ bridge_default_provider: 'tmux', bridge_default_mode: 'yolo' }), llm: createRecordingLlm(calls) });
+    const adapter = new RecordingAdapter();
+    registerAdapter(adapter);
+    const address = { channelType: 'feishu', chatId: 'fresh-legacy-after-protocol-selection' } as const;
+    assert.equal(store.getChannelChat(address.channelType, address.chatId), null);
+    await _testOnly.handleMessage(adapter, inboundMessage(address, 'legacy first input', 'legacy-first-input'));
+    assert.equal(calls.length, 1, 'first message must reach the original provider instead of bootstrapping a resumable thread');
+    assert.equal(calls[0]?.codexThreadId, '');
+    assert.equal(calls[0]?.prompt, 'legacy first input');
+  });
+
   it('acknowledges a direct slash command with Get without waiting for the reaction API', async () => {
     initBridgeTestContext({ dynamicSettings: true });
     const reactionAck = createDeferred<string | null>();
