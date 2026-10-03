@@ -143,6 +143,14 @@ async function bootstrap(endpoint: string) {
 }
 
 try {
+  // 通用 CLI fixture 禁止交互审批；Desktop 要验证真实审批，配置默认值必须与 thread/start 一致。
+  // 否则官方 GUI 发送时会采用配置中的 never，覆盖线程原先的 on-request。
+  const desktopConfigPath = path.join(process.env.CODEX_HOME!, 'config.toml');
+  const desktopConfig = fs.readFileSync(desktopConfigPath, 'utf8');
+  assert.match(desktopConfig, /^approval_policy = "never"$/m);
+  fs.writeFileSync(desktopConfigPath, desktopConfig.replace(/^approval_policy = "never"$/m, 'approval_policy = "on-request"'));
+  fs.copyFileSync(desktopConfigPath, path.join(evidence, 'desktop-fixture-config.toml'));
+  result.fixtureApprovalPolicy = 'on-request';
   const guiDomain = await run('/bin/launchctl', ['print', domain]);
   result.loginEvidence = {
     uid: os.userInfo().uid, consoleUser: await run('/usr/bin/stat', ['-f', '%Su', '/dev/console']),
@@ -197,6 +205,16 @@ try {
   result.threadId = threadId;
   const complete = async (turnId: string) => until(async () => lifecycle.recordsAfter(threadId).records.some((record) =>
     record.turnId === turnId && record.type === 'task_complete' && !record.isError), `共享线程轮次 ${turnId} 完成`);
+  const guiRequest = async (method: string, turnId: string) => until(async () => {
+    const pending = lifecycle.snapshot(threadId).requests.find((request) => request.method === method && request.turnId === turnId);
+    if (pending) return pending;
+    const terminal = lifecycle.recordsAfter(threadId).records.find((record) => record.turnId === turnId && record.type === 'task_complete');
+    if (terminal) {
+      const outputs = model.requests.at(-1)?.body.input?.filter((item: any) => item.type === 'function_call_output');
+      throw new Error(`GUI 工具轮次 ${turnId} 已结束，但没有收到 ${method}；不能宣称 GUI 审批/问答通过。实际工具输出：${JSON.stringify(outputs)}`);
+    }
+    return false;
+  }, `真实 ${method} 抵达 Bridge`);
   const bridgeTurn = async (input: string, output: string) => {
     model.enqueue({ text: output });
     const turn = await lifecycle.submit(threadId, textInput(input));
@@ -241,8 +259,7 @@ try {
   });
   model.enqueue({ text: 'DESKTOP_GUI_APPROVAL_FINISHED' });
   const approvalTurn = await lifecycle.submit(threadId, textInput('DESKTOP_GUI_APPROVAL'));
-  const approval = await until(async () => lifecycle.snapshot(threadId).requests.find((request) =>
-    request.method === 'item/commandExecution/requestApproval') || false, '真实命令审批抵达 Bridge');
+  const approval = await guiRequest('item/commandExecution/requestApproval', approvalTurn);
   await gui!.expectText('DESKTOP_GUI_APPROVAL_EXECUTED');
   await gui!.capture('approval-pending');
   await gui!.button(['Allow once']);
@@ -265,8 +282,7 @@ try {
   model.enqueue({ text: 'DESKTOP_GUI_QUESTION_FINISHED' });
   const questionStart = await controller.request<any>('turn/start', { threadId, input: textInput('DESKTOP_GUI_QUESTION_INPUT'),
     collaborationMode: { mode: 'plan', settings: { model: fixtureModel, reasoning_effort: null, developer_instructions: null } } });
-  const question = await until(async () => lifecycle.snapshot(threadId).requests.find((request) =>
-    request.method === 'item/tool/requestUserInput') || false, '真实问答抵达 Bridge');
+  const question = await guiRequest('item/tool/requestUserInput', questionStart.turn.id);
   await gui!.expectText('DESKTOP_GUI_QUESTION');
   await gui!.capture('question-pending');
   await gui!.button(['GUI_BLUE']);

@@ -2,6 +2,8 @@
 
 `scripts/verify-codex-desktop-macos.ts` 在一次性 macOS 26 runner 上启动官方 `~/Applications/Codex.app`，真实 Codex CLI 连接本地 mock 模型。GUI 是验收对象，只有模型响应被替换。不修改或执行解包后的 Desktop 通信模块，不创建假的 `.app`，不调用 renderer 内部状态或发消息接口。
 
+当前实际进度：`37141789810` 已通过真实向导、关闭模型介绍、系统深链接打开共享 thread、Bridge→GUI 和 GUI→Bridge 双向收发。命令审批、问答、后续重开与实际 OS 登录尚未通过；整体仍为 `success=false`。
+
 ## 执行与判断
 
 Node.js 24、`npm ci`、Codex CLI `0.160.0`、官方 App 和 Xcode Command Line Tools（使用 clang 编译 CoreGraphics 查询器）安装完成后运行：
@@ -13,6 +15,8 @@ node --import tsx scripts/verify-codex-desktop-macos.ts
 ```
 
 此命令只适用于一次性测试 macOS 用户。它要求没有既有 CodeLark Desktop LaunchAgent 或 Desktop 连接环境，创建自己的 backend 后在结束时禁用和清理。Desktop 使用独立 `CODEX_HOME` 和 Electron 用户目录，模型 key 是无效的 fixture 标记，模型请求只到本次 mock。不要在日常用户机器直接运行。
+
+Desktop 专用 `config.toml` 使用 `approval_policy="on-request"`、`sandbox_mode="read-only"` 和原 fixture 模型 `gpt-5.4`，与共享线程初始设置保持一致。通用 CLI fixture 的 `never` 默认值仅在本次独占目录中替换，其他原生验收和生产配置不受影响。配置副本保存在 `desktop-fixture-config.toml`。命令工具和 Plan 问答仍必须实际出现在 `body.tools`；等待审批/问答时若对应 turn 已结束却没有真实请求，立即记录实际工具输出并失败。
 
 驱动通过 `/usr/bin/open -n -W` 启动 App，只传隔离目录与 Electron CDP 参数；不传 `CODEX_APP_SERVER_WS_URL`，该地址必须由 LaunchServices 从当前用户 launchd 环境继承。CDP 必须返回可见 renderer 和属于指定 App 的 Electron PID，macOS CoreGraphics 必须报告该 PID 的实际 onscreen 窗口。截图、DOM、Accessibility tree、CDP 操作日志、模型请求、Bridge 收到的协议、App 版本、签名检查和 `app.asar` SHA-256 一起保存。鼠标点击和键盘输入走 CDP Input 域，读取 DOM 只用于定位和断言。
 
@@ -50,15 +54,19 @@ CI `37139317117`（`f5bda77`）已实际打开官方 `26.930.31730` 的窗口，
 
 生产修复使用 `ws+unix://localhost/…/app-server.sock:/`：ws 仍从 pathname 提取同一个 Unix socket，hostname 则命中完整 App 的本机分支。生产实现已兼容新旧 URL 的逆转换/本机校验及已安装服务脚本迁移。CI `37139666898`（`9f665ae`）中官方同版 App 已报告 `hostId=local` 连接成功，CDP 和 CoreGraphics 确认真实可见窗口，`transportErrors=[]`；前轮原生连接错误消失。
 
-该轮在 `Which best describes your work?` 角色页等待 seed 回复失败，证明原验收器遗漏了首次向导。此处新增的向导操作尚待下一轮 macOS CI 验证；当前已证实完整 App 的本机连接和窗口，**尚未通过共享 thread 的 GUI 收发、审批、问答与重开故事**。向导驱动单测仅验证操作选择和未知弹窗边界，不能代替这些 GUI 结果。
+该轮在 `Which best describes your work?` 角色页等待 seed 回复失败，证明原验收器遗漏了首次向导。该轮尚未执行向导操作；当时只证实完整 App 的本机连接和窗口，未通过共享 thread 的 GUI 收发、审批、问答与重开故事。向导驱动单测仅验证操作选择和未知弹窗边界，不能代替这些 GUI 结果。
 
 加入向导后的 `37140286597`（`be15652`）在进入向导操作前因 `swift -e` 窗口查询命令失败。可见 renderer、官方二进制和本机连接均正常；两次截图相隔约 42.5 秒，与原命令的 40 秒预算吻合，而前轮相同窗口检查约 29 秒完成。旧失败记录没有保存 signal/killed，因此只能判断时间线支持查询工具超时，不能声称已取得终止信号。查询已改为启动前一次编译的纯 C CoreGraphics 程序。`37140825456`（`073bc20`）中编译耗时 7008ms、原生窗口查询 335ms，原 onscreen/PID/layer/尺寸断言全部通过。
 
 该轮的下一处失败发生在向导点击前：读取 `document.body.innerText` 的单次 CDP 请求达到硬编码的 10 秒期限；失败取证立即重新读取同一页面，在约 147ms 内成功，截图仍为角色页。期间主 frame/context 保持不变；出现的 context 销毁属于新建的可视化 iframe，不能解释成主页面跳转。启动期停顿的 App 内部原因尚未确认。
 
-驱动现在让 DOM 读取、Accessibility tree 和页面截图使用与 UI 等待相同的 45 秒预算，保留原请求等待响应；输入与退出操作仍为 10 秒且从不重发。每条 CDP 响应记录耗时，超时和迟到响应也落盘，以便区分暂时无响应与持续失败。协议 mock 的虚拟时间回归验证 11 秒后回复仍可接受、45 秒无回复必须失败、输入超时不重放；这不代表真实向导已通过。真实向导、共享收发及后续 GUI 故事仍待下一轮 CI。
+驱动现在让 DOM 读取、Accessibility tree 和页面截图使用与 UI 等待相同的 45 秒预算，保留原请求等待响应；输入与退出操作仍为 10 秒且从不重发。每条 CDP 响应记录耗时，超时和迟到响应也落盘，以便区分暂时无响应与持续失败。协议 mock 的虚拟时间回归验证 11 秒后回复仍可接受、45 秒无回复必须失败、输入超时不重放；该回归不代表真实向导已通过；后续真实 GUI 结果见下文。
 
-`37141337674`（`38aa060`）已经真实执行上述五次向导点击并进入主界面，侧栏出现 `DESKTOP_GUI_SEED`；每次选中/取消状态和跳过确认都有截图、DOM 与 CDP Input 记录。该轮一个截图请求耗时 11678ms 后成功，未出现 CDP 超时。下一处失败是主界面的模型介绍弹窗不在原有识别范围，等待可操作页面超时。新增的保留当前模型点击仍待下一轮验证；尚未打开共享 thread 正文，不能把侧栏标题或向导完成记为 GUI 收发通过。
+`37141337674`（`38aa060`）已经真实执行上述五次向导点击并进入主界面，侧栏出现 `DESKTOP_GUI_SEED`；每次选中/取消状态和跳过确认都有截图、DOM 与 CDP Input 记录。该轮一个截图请求耗时 11678ms 后成功，未出现 CDP 超时。下一处失败是主界面的模型介绍弹窗不在原有识别范围，等待可操作页面超时。该轮尚未关闭模型介绍或打开共享 thread 正文，不能把侧栏标题或向导完成记为 GUI 收发通过。
+
+`37141789810`（`a320083`）已完成模型介绍关闭和共享线程双向收发，`gui-sent-and-received.png` 同时显示 `BRIDGE_VISIBLE_IN_DESKTOP_GUI`、真实输入 `DESKTOP_GUI_INPUT` 和回复 `DESKTOP_GUI_REPLY`；Bridge 协议记录同一 thread 的用户/助手消息及 turn 完成，GUI 发送只增加一次模型请求。
+
+该轮审批失败是配置不一致：通用 CLI fixture 写入 `approval_policy="never"`，但脚本只在 `thread/start` 指定 `on-request`。Desktop 发送时采用配置默认值，`thread/settings/updated` 明确将线程改为 `never`，随后真实 `exec_command` 返回 `approval policy is Never; reject command`。工具本身存在于 `body.tools`，不能用切换模型解释此失败。原生 verifier 的成功审批线程使用 `on-request`；因此修复是对齐 Desktop 独占配置，继续要求真实审批请求和 GUI 点击。Linux 真实 CLI `0.160.0` 已验证从修正后的配置读取 `on-request`、按该配置发送后再产生原生命令审批；该辅助检查明确 `guiTested=false`，修正后的 GUI 审批仍待 macOS CI。
 
 后续失败报告同时保存 `desktopConnectionUrl`、`desktopConnectionHostname` 和来自本次 App stderr 的 `desktopStartupDiagnostics.transportErrors`。CDP 不可用时，先结合这些字段和 `failure-macos-display.png` 检查原生对话框。
 
