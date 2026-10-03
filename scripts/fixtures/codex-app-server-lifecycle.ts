@@ -22,7 +22,7 @@ export async function waitFor<T>(read: () => T | undefined | false | Promise<T |
 }
 
 type ModelBody = { model?: string; input?: unknown[]; tools?: Array<Record<string, any>>; [key: string]: unknown };
-export type MockOutput = { text: string } | { tool: string; arguments: Record<string, unknown>; callId?: string };
+export type MockOutput = { text: string } | { search: string } | { tool: string; arguments: Record<string, unknown> | string; callId?: string; namespace?: string };
 interface Step {
   output: MockOutput | ((body: ModelBody) => MockOutput);
   gate: Promise<void>;
@@ -63,7 +63,10 @@ export async function startFixtureModel() {
         const itemId = `item_${randomUUID()}`;
         const item = 'text' in output
           ? { id: itemId, type: 'message', role: 'assistant', status: 'completed', content: [{ type: 'output_text', text: output.text }] }
-          : { id: itemId, type: 'function_call', name: output.tool, call_id: output.callId || `call_${randomUUID()}`, arguments: JSON.stringify(output.arguments), status: 'completed' };
+          : 'search' in output ? { id: itemId, type: 'tool_search_call', call_id: `search_${randomUUID()}`, execution: 'client', arguments: { query: output.search } }
+          : typeof output.arguments === 'string'
+            ? { id: itemId, type: 'custom_tool_call', name: output.tool, call_id: output.callId || `call_${randomUUID()}`, input: output.arguments, status: 'completed' }
+            : { id: itemId, type: 'function_call', name: output.tool, ...(output.namespace ? { namespace: output.namespace } : {}), call_id: output.callId || `call_${randomUUID()}`, arguments: JSON.stringify(output.arguments), status: 'completed' };
         emit('response.output_item.added', { output_index: 0, item: { ...item, status: 'in_progress' } });
         if ('text' in output) emit('response.output_text.delta', { item_id: itemId, output_index: 0, content_index: 0, delta: output.text });
         emit('response.output_item.done', { output_index: 0, item });

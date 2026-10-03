@@ -9,6 +9,7 @@ import { promisify } from 'node:util';
 import { CodexAppServerClient, AppServerRpcError, isUnsupportedAppServerMethod } from '../src/runtime/codex/app-server-client.js';
 import { CodexAppServerLifecycle, type AppServerSubmission } from '../src/runtime/codex/app-server-lifecycle.js';
 import { fixtureEnvironment, fixtureModel, startFixtureAppServer, startFixtureModel, textInput, waitFor } from './fixtures/codex-app-server-lifecycle.js';
+import { requestedPermissions, mcpSchema } from '../src/bridge/permission/app-server-request-types.js';
 
 const execute = promisify(execFile);
 
@@ -222,6 +223,68 @@ export async function verifyLifecycle(executable: string, evidence: string, expe
         .every((entry) => !(entry.message as any).params.config), 'warm resume 不重复覆盖线程环境');
       result.commandApprovalReplay = true;
       result.threadScopedToolEnvironment = true;
+
+      // 新版 CLI 已移除旧 fixture 模型的工具元数据；从该 CLI 的目录选一个实际支持工具的模型。
+      // 模型仍由本机确定性 fixture 回答，不访问任何远端模型服务。
+      const catalog = await clients.at(-1)!.request<{ data: Array<{ id: string }> }>('model/list', {});
+      const toolModel = catalog.data.find((model) => model.id === fixtureModel)?.id || catalog.data.find((model) => model.id === 'gpt-5.5')?.id;
+      assert(toolModel, 'CLI 必须提供 fixture 支持的普通 Responses 工具模型');
+      const patchThread = await lifecycle.ensureThread({ ...options, model: toolModel, approvalPolicy: 'on-request' });
+      const patchPath = path.join(root, 'workspace', 'approved-file.txt');
+      const patch = `*** Begin Patch\n*** Add File: ${patchPath}\n+NATIVE_FILE_APPROVAL\n*** End Patch`;
+      model.enqueue((body) => {
+        const tool = body.tools?.find((tool) => tool.name === 'apply_patch');
+        assert(tool, '真实 CLI 必须公开 apply_patch');
+        return { tool: 'apply_patch', callId: 'native_file_approval', arguments: tool.type === 'custom' ? patch : { input: patch } };
+      });
+      const patchTurn = await lifecycle.submit(patchThread, textInput('NATIVE_FILE_APPROVAL'));
+      const fileApproval = await waitFor(() => lifecycle!.snapshot(patchThread).requests.find((r) => r.method === 'item/fileChange/requestApproval'), '真实文件修改审批');
+      const fileItem = lifecycle.item(patchThread, patchTurn, String(fileApproval.params.itemId));
+      assert.equal(fileItem?.type, 'fileChange', '审批上下文必须来自对应的原生 item 事件');
+      assert(JSON.stringify(fileItem?.changes).includes('NATIVE_FILE_APPROVAL'), '审批前必须能读取真实文件 diff');
+      assert.equal(fs.existsSync(patchPath), false, '审批前不能写文件');
+      model.enqueue({ text: 'FILE_APPROVAL_FINISHED' });
+      assert.equal(lifecycle.reply(fileApproval.key, { decision: 'accept' }), true);
+      await waitFor(() => completed(patchThread, patchTurn), '真实文件审批完成');
+      assert.equal(fs.readFileSync(patchPath, 'utf8').trim(), 'NATIVE_FILE_APPROVAL');
+      result.fileApprovalContext = true;
+      result.requestFixtureModel = toolModel;
+
+      const permissionsThread = await lifecycle.ensureThread({ ...options, model: toolModel, approvalPolicy: 'on-request', config: { 'features.request_permissions_tool': true } });
+      model.enqueue((body) => {
+        assert(body.tools?.some((tool) => tool.name === 'request_permissions'), '原生权限请求工具必须可用');
+        return { tool: 'request_permissions', arguments: { reason: 'NATIVE_PERMISSIONS', permissions: { file_system: { write: [path.join(root, 'permission-output')] } } } };
+      });
+      const permissionsTurn = await lifecycle.submit(permissionsThread, textInput('NATIVE_PERMISSIONS'));
+      const permissionRequest = await waitFor(() => lifecycle!.snapshot(permissionsThread).requests.find((r) => r.method === 'item/permissions/requestApproval'), '原生额外权限审批');
+      const permissions = requestedPermissions(permissionRequest.params.permissions);
+      assert(permissions, 'CodeLark 必须能完整识别原生权限范围');
+      model.enqueue({ text: 'PERMISSIONS_FINISHED' });
+      assert.equal(lifecycle.reply(permissionRequest.key, { permissions, scope: 'turn' }), true);
+      await waitFor(() => completed(permissionsThread, permissionsTurn), '额外权限审批完成');
+      result.additionalPermissions = true;
+
+      const mcpThread = await lifecycle.ensureThread({ ...options, model: toolModel, approvalPolicy: 'on-request', config: {
+        'mcp_servers.codelark_fixture.command': process.execPath,
+        'mcp_servers.codelark_fixture.args': [fileURLToPath(new URL('./fixtures/codex-app-server-elicitation.mjs', import.meta.url))],
+      } });
+      model.enqueue({ search: 'codelark_fixture ask' });
+      model.enqueue((body) => {
+        const tools = [...(body.tools || []), ...(body.input || []).flatMap((item: any) => item.type === 'tool_search_output' ? item.tools || [] : [])];
+        const namespace = tools.find((tool) => tool.type === 'namespace' && tool.name.includes('codelark_fixture'));
+        const tool = namespace?.tools?.find((tool: any) => tool.name.includes('ask'))
+          || tools.find((tool) => tool.name?.includes('codelark_fixture') && tool.name.includes('ask'));
+        assert(tool, '原生 MCP 工具必须可见');
+        return { tool: tool.name, ...(namespace ? { namespace: namespace.name } : {}), arguments: {} };
+      });
+      const mcpTurn = await lifecycle.submit(mcpThread, textInput('NATIVE_MCP_FORM'));
+      const elicitation = await waitFor(() => lifecycle!.snapshot(mcpThread).requests.find((r) => r.method === 'mcpServer/elicitation/request'), '原生 MCP 表单');
+      const content = mcpSchema(elicitation)?.parse({ count: 2, enabled: false });
+      assert(content, 'CodeLark 必须识别原生 MCP 表单 schema');
+      model.enqueue({ text: 'MCP_FORM_FINISHED' });
+      assert.equal(lifecycle.reply(elicitation.key, { action: 'accept', content, _meta: null }), true);
+      await waitFor(() => completed(mcpThread, mcpTurn), 'MCP 表单完成');
+      result.mcpForm = true;
 
       const probe = clients.at(-1)!;
       const resumedBridgeHome = path.join(root, 'resumed-bridge-identity');

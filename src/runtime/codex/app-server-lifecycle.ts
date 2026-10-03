@@ -78,6 +78,10 @@ export class CodexAppServerLifecycle {
     if (!state) return { threadId, attached: false, connection: 'disconnected', activity: 'unknown', requests: [] };
     return { ...state, requests: [...state.requests] };
   }
+  item(threadId: string, turnId: string, itemId: string): AppServerItem | undefined {
+    const item = this.threads.get(threadId)?.items.get(`${turnId}:${itemId}`);
+    return item ? structuredClone(item) : undefined;
+  }
   recordsAfter(threadId: string, cursor = 0): { records: BridgeMirrorRecord[]; cursor: number } {
     const state = this.threads.get(threadId);
     if (!state) return { records: [], cursor };
