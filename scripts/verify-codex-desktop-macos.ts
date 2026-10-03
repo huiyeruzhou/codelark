@@ -285,12 +285,15 @@ try {
   const question = await guiRequest('item/tool/requestUserInput', questionStart.turn.id);
   await gui!.expectText('DESKTOP_GUI_QUESTION');
   await gui!.capture('question-pending');
+  // 官方单题单选界面点击即提交；37142369652 已确认没有额外 Submit 按钮。
   await gui!.button(['GUI_BLUE']);
-  await gui!.button(['Submit']);
   await complete(questionStart.turn.id);
   await until(async () => !lifecycle.snapshot(threadId).requests.some((request) => request.key === question.key), 'GUI 问答提交后 Bridge 请求失效');
-  const toolOutputs = model.requests.at(-1)!.body.input?.filter((item: any) => item.type === 'function_call_output');
-  assert(JSON.stringify(toolOutputs).includes('GUI_BLUE'), '模型必须收到 GUI 选择的实际工具结果');
+  assert.equal(typeof question.params.itemId, 'string');
+  const answer = model.requests.at(-1)!.body.input?.find((item: any) => item.type === 'function_call_output'
+    && item.call_id === question.params.itemId) as { output: string } | undefined;
+  assert(answer, '模型必须收到本次 GUI 问答的实际工具结果');
+  assert.deepEqual(JSON.parse(answer.output).answers?.desktop_color?.answers, ['GUI_BLUE']);
   await gui!.expectText('DESKTOP_GUI_QUESTION_FINISHED');
   await gui!.capture('question-completed');
   result.guiQuestionTested = true;

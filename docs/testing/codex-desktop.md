@@ -2,7 +2,7 @@
 
 `scripts/verify-codex-desktop-macos.ts` 在一次性 macOS 26 runner 上启动官方 `~/Applications/Codex.app`，真实 Codex CLI 连接本地 mock 模型。GUI 是验收对象，只有模型响应被替换。不修改或执行解包后的 Desktop 通信模块，不创建假的 `.app`，不调用 renderer 内部状态或发消息接口。
 
-当前实际进度：`37141789810` 已通过真实向导、关闭模型介绍、系统深链接打开共享 thread、Bridge→GUI 和 GUI→Bridge 双向收发。命令审批、问答、后续重开与实际 OS 登录尚未通过；整体仍为 `success=false`。
+当前实际进度：`37142369652` 已通过真实向导、模型介绍关闭、共享 thread 双向收发和 GUI 命令审批。单题问答的 GUI 选择、原生答案回传与 turn 完成也已确认；旧脚本随后误等不存在的 `Submit` 按钮，导致整体仍为 `success=false`。移除多余等待后的完整 CI、后续重开与实际 OS 登录仍待验证。
 
 ## 执行与判断
 
@@ -38,7 +38,7 @@ CoreGraphics 查询器在启动 GUI 前用 clang 编译一次，之后每次重�
 | Bridge 提交新消息 | 同一 GUI 窗口出现新回复，不要求 TUI 存在 |
 | Desktop 输入框发送 | 模型只收到一次新请求；Bridge 在原 thread 收到用户消息和助手回复 |
 | GUI 点击命令审批 | Bridge 先收到真实待审批请求；GUI 点 `Allow once` 后只运行受控 `printf`，Bridge 旧请求失效，GUI 显示完成 |
-| GUI 回答问题 | Plan 模式调用真实 `request_user_input`；GUI 选 `GUI_BLUE` 并提交，模型实际工具结果含该值，Bridge 旧请求失效 |
+| GUI 回答问题 | Plan 模式调用真实 `request_user_input`；单题 GUI 点击 `GUI_BLUE` 即提交，本次请求的实际工具结果严格匹配该答案，Bridge 旧请求失效 |
 | Desktop 退出重开 | backend PID 不变；原 thread 历史和后续 Bridge 回复可见 |
 | 保存的 LaunchAgent 重新加载后再开 Desktop | 不运行 Bridge prepare，新的 backend 恢复环境；真实 GUI 恢复原 thread |
 | Desktop 先开，后启动服务，再重开 Desktop | 记录启动时环境为空；服务启动后重开 GUI 能恢复原 thread。尚未证明不重开也可恢复 |
@@ -66,7 +66,9 @@ CI `37139317117`（`f5bda77`）已实际打开官方 `26.930.31730` 的窗口，
 
 `37141789810`（`a320083`）已完成模型介绍关闭和共享线程双向收发，`gui-sent-and-received.png` 同时显示 `BRIDGE_VISIBLE_IN_DESKTOP_GUI`、真实输入 `DESKTOP_GUI_INPUT` 和回复 `DESKTOP_GUI_REPLY`；Bridge 协议记录同一 thread 的用户/助手消息及 turn 完成，GUI 发送只增加一次模型请求。
 
-该轮审批失败是配置不一致：通用 CLI fixture 写入 `approval_policy="never"`，但脚本只在 `thread/start` 指定 `on-request`。Desktop 发送时采用配置默认值，`thread/settings/updated` 明确将线程改为 `never`，随后真实 `exec_command` 返回 `approval policy is Never; reject command`。工具本身存在于 `body.tools`，不能用切换模型解释此失败。原生 verifier 的成功审批线程使用 `on-request`；因此修复是对齐 Desktop 独占配置，继续要求真实审批请求和 GUI 点击。Linux 真实 CLI `0.160.0` 已验证从修正后的配置读取 `on-request`、按该配置发送后再产生原生命令审批；该辅助检查明确 `guiTested=false`，修正后的 GUI 审批仍待 macOS CI。
+该轮审批失败是配置不一致：通用 CLI fixture 写入 `approval_policy="never"`，但脚本只在 `thread/start` 指定 `on-request`。Desktop 发送时采用配置默认值，`thread/settings/updated` 明确将线程改为 `never`，随后真实 `exec_command` 返回 `approval policy is Never; reject command`。工具本身存在于 `body.tools`，不能用切换模型解释此失败。原生 verifier 的成功审批线程使用 `on-request`；因此修复是对齐 Desktop 独占配置，继续要求真实审批请求和 GUI 点击。Linux 真实 CLI `0.160.0` 已验证从修正后的配置读取 `on-request`、按该配置发送后再产生原生命令审批；该辅助检查明确 `guiTested=false`，本身不证明 GUI 审批已通过。
+
+`37142369652`（`5139e90`）已通过修正配置后的真实 GUI 审批：`Allow once` 点击后受控命令输出正确、退出码为 0、Bridge 原审批失效。该轮真实 Plan 请求包含 `request_user_input`；点击单选项 `GUI_BLUE` 后，原生 `serverRequest/resolved`、匹配本次 `itemId/call_id` 的答案 `{"answers":{"desktop_color":{"answers":["GUI_BLUE"]}}}` 和同一 turn 的完成事件均已出现。实际 Accessibility tree 没有 `Submit` 按钮；脚本等它 45 秒才失败。现已移除这一步，保留真实点击、请求失效、turn 完成和精确答案断言，继续执行尚未运行的重开故事。
 
 后续失败报告同时保存 `desktopConnectionUrl`、`desktopConnectionHostname` 和来自本次 App stderr 的 `desktopStartupDiagnostics.transportErrors`。CDP 不可用时，先结合这些字段和 `failure-macos-display.png` 检查原生对话框。
 
