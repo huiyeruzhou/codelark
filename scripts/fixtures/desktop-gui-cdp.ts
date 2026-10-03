@@ -36,7 +36,9 @@ class Cdp {
   static async connect(url: string, record: (entry: unknown) => void) {
     const socket = new WebSocket(url, { handshakeTimeout: 10_000 });
     const client = new Cdp(socket, record);
-    await new Promise<void>((resolve, reject) => { socket.once('open', resolve); socket.once('error', reject); });
+    try {
+      await new Promise<void>((resolve, reject) => { socket.once('open', resolve); socket.once('error', reject); });
+    } catch (error) { client.close(); throw error; }
     return client;
   }
   call<T = any>(method: string, params: object = {}): Promise<T> {
@@ -55,7 +57,7 @@ class Cdp {
     for (const request of this.pending.values()) { clearTimeout(request.timer); request.reject(error); }
     this.pending.clear();
   }
-  close() { this.socket.close(); this.fail(new Error('验收已关闭 CDP')); }
+  close() { this.socket.terminate(); this.fail(new Error('验收已关闭 CDP')); }
 }
 
 // DOM 查询只读；用户操作通过 Chromium Input 域产生真实鼠标/键盘事件。
@@ -93,6 +95,7 @@ export class DesktopGui {
       `--remote-debugging-port=${port}`, '--remote-debugging-address=127.0.0.1', `--user-data-dir=${userData}`, '--lang=en-US',
       ...(threadId ? [`codex://threads/${threadId}`] : [])];
     this.identity.launch = { name, command: '/usr/bin/open', args, at: new Date().toISOString() };
+    fs.writeFileSync(path.join(this.directory, 'identity.json'), JSON.stringify(this.identity, null, 2));
     this.opener = spawn('/usr/bin/open', args, { env, stdio: ['ignore', log, log] });
     fs.closeSync(log);
     this.opener.once('error', (error) => { this.openerError = error; });
@@ -117,16 +120,17 @@ export class DesktopGui {
         if (target.type !== 'page' || !target.webSocketDebuggerUrl || !/^(file:|app:|codex:)/.test(target.url)
           || target.url.includes('devtools')) continue;
         const candidate = await Cdp.connect(target.webSocketDebuggerUrl, record);
-        const viewport = await candidate.call('Runtime.evaluate', {
-          expression: '({visible:document.visibilityState === "visible",width:innerWidth,height:innerHeight})', returnByValue: true,
-        });
-        const size = viewport.result.value;
-        if (size?.visible && size.width >= 500 && size.height >= 400) {
-          this.page = candidate;
-          this.identity.viewport = size;
-          return target;
-        }
-        candidate.close();
+        try {
+          const viewport = await candidate.call('Runtime.evaluate', {
+            expression: '({visible:document.visibilityState === "visible",width:innerWidth,height:innerHeight})', returnByValue: true,
+          });
+          const size = viewport.result.value;
+          if (size?.visible && size.width >= 500 && size.height >= 400) {
+            this.page = candidate;
+            this.identity.viewport = size;
+            return target;
+          }
+        } finally { if (this.page !== candidate) candidate.close(); }
       }
       return false;
     }, '真实 Desktop renderer 页面');
@@ -189,14 +193,19 @@ export class DesktopGui {
   }
   async close() {
     // Browser.close 只关闭这次 CDP 连接对应的 App；不按全局进程名清理。
-    if (this.browser) {
-      await this.browser.call('Browser.close').catch((error) => {
-        if (!/CDP 已关闭/.test(String(error))) throw error;
-      });
-      await until(async () => this.opener?.exitCode !== null || this.opener?.signalCode !== null, '本次 Desktop 实例退出', 15_000);
-    } else if (this.opener && this.opener.exitCode === null) {
-      throw new Error('CDP 建连前失败，无法确认 Desktop PID；保留实例供 disposable runner 清理，不按进程名终止');
+    try {
+      if (this.browser) {
+        await this.browser.call('Browser.close').catch((error) => {
+          if (!/CDP 已关闭/.test(String(error))) throw error;
+        });
+        await until(async () => this.opener?.exitCode !== null || this.opener?.signalCode !== null, '本次 Desktop 实例退出', 15_000);
+      } else if (this.opener && this.opener.exitCode === null) {
+        throw new Error('CDP 建连前失败，无法确认 Desktop PID；保留实例供 disposable runner 清理，不按进程名终止');
+      }
+    } finally {
+      this.page?.close(); this.browser?.close();
+      // 放开本次 open 子进程对 Node 事件循环的引用，不停止归属未知的 Desktop。
+      this.opener?.unref();
     }
-    this.page?.close(); this.browser?.close();
   }
 }

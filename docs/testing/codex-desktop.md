@@ -41,6 +41,17 @@ node --import tsx scripts/verify-codex-desktop-macos.ts
 
 生产服务脚本在启动时运行 `launchctl setenv CODEX_APP_SERVER_WS_URL …`，plist 的 `RunAtLoad` 和 `KeepAlive` 负责启动/保活，未声明相对于 Desktop 登录项的顺序。Desktop 在变量设置前先启动，就可能继续走默认 stdio 后端。脚本中的“先开 Desktop，再启动服务，然后重开”验证已知恢复路径，不能证明登录竞态已解决，也不能证明两个登录项天然有序。
 
+发行包 `26.930.31730` 的源码把两种“Desktop 先启动”分开处理：
+
+- 启动时已有 `CODEX_APP_SERVER_WS_URL`，只有 socket 尚未可用：Desktop 构造 WebSocket transport，重连仍使用同一地址。这条路径具备等待后端的机制，但需要真实 GUI 验证。
+- 启动时没有地址：本机 host 固定为 `{id:"local", display_name:"Local", kind:"local"}`，没有持久的 `websocket_url` 字段；Desktop 选择 stdio transport。后续 `launchctl setenv` 不会更新已经运行的进程环境，WebSocket 重连逻辑也不会替它重新选择 transport。原版源码中尚未发现可用的运行中切换入口。
+
+对应源码在发行包 `.vite/build/application-network-startup-*.js` 的 `Jo`（选择地址）、`qo`（连接固定 WebSocket 地址）和 stdio `supportsReconnect`；`.vite/build/main-*.js` 的 `E5/O5` 构造 transport；`startup-requirements-*.js` 的 `Jr` 定义本机 host。标识仅用于该发行版取证，不是稳定 API。
+
+启动阶段还有一个候选入口：`startup-requirements` 的 `oa → Bi → Hi` 会先以 `-ilc` 加载用户 shell 环境，再执行 `Object.assign(process.env, userEnv)`。因此，受管理的 shell 启动配置有可能在 Finder 打开 App 时提供持久的连接地址。但它只有约 5 秒加载预算，且首次应用网络策略读取有独立的有限重试/原生错误对话框；不能仅凭后续 WebSocket 会重连就断言服务晚启动一定无感恢复。这个方案会涉及用户 shell 配置，当前没有修改或验证，需单独权衡侵入范围并做真实 GUI 冷启动测试。
+
+生产方案建议由主 agent 决定：提供由 CodeLark 管理的启动入口，先准备共享服务，再以 `open --env CODEX_APP_SERVER_WS_URL=…` 启动原版 App，建立明确的启动顺序。对于已经按 stdio 启动的 Desktop，继续提示用户退出重开；不要擅自终止用户 App。单独增加 launchd 重试或改启动优先级不能保证任意 Finder/系统登录项的顺序；修改原版 App 的 `Info.plist` 也会触及签名，不能作为保持原版的解决方式。当前交付不改生产行为。
+
 GitHub hosted macOS job 开始时已拥有可用 GUI 域，但 workflow 没有登录凭据、重连登录会话的控制通道或会话外监督器。直接注销可能终止 runner 及同会话 mock；job 断开并不构成“下一次登录正常”的证据。这里没有尝试注销，不能把上述风险写成“实测 GitHub 禁止重新登录”。
 
 实际登录验收的可执行路径是专用 Mac/持久 VM：

@@ -57,7 +57,16 @@ Object.assign(process.env, fixtureEnvironment(root, model.baseUrl), {
 const run = async (command: string, args: string[]) => (await execute(command, args, {
   env: process.env, timeout: 40_000, maxBuffer: 4 * 1024 * 1024,
 })).stdout.trim();
-const sequence = (event: string, details: object = {}) => result.startupSequence.push({ event, at: new Date().toISOString(), ...details });
+const sequence = (event: string, details: object = {}) => {
+  const entry = { event, at: new Date().toISOString(), ...details };
+  result.startupSequence.push(entry);
+  fs.appendFileSync(path.join(evidence, 'startup-sequence.jsonl'), JSON.stringify(entry) + '\n');
+};
+const saveEvidence = () => {
+  fs.writeFileSync(path.join(evidence, 'model-requests.json'), JSON.stringify(model.requests, null, 2));
+  fs.writeFileSync(path.join(evidence, 'protocol.jsonl'), protocol.map((entry) => JSON.stringify(entry)).join('\n'));
+  fs.writeFileSync(path.join(evidence, 'result.json'), JSON.stringify(result, null, 2));
+};
 async function backendPid(): Promise<number> {
   const description = await run('/bin/launchctl', ['print', label]);
   const pid = description.match(/\bpid = (\d+)/)?.[1];
@@ -317,6 +326,7 @@ try {
 } catch (error) {
   result.error = error instanceof Error ? error.stack : String(error);
   process.exitCode = 1;
+  saveEvidence(); // 首次失败立即落盘，不能等 GUI 退出或截图成功才保留根因。
   if (gui) await gui.capture('failure').catch((error) => { result.captureError = String(error); });
   await run('/usr/sbin/screencapture', ['-x', path.join(evidence, 'failure-macos-display.png')])
     .catch((error) => { result.osScreenshotError = String(error); });
@@ -328,8 +338,6 @@ try {
   if (fs.existsSync(log)) fs.copyFileSync(log, path.join(evidence, 'backend.log'));
   await model.close();
   if (process.exitCode) result.success = false;
-  fs.writeFileSync(path.join(evidence, 'model-requests.json'), JSON.stringify(model.requests, null, 2));
-  fs.writeFileSync(path.join(evidence, 'protocol.jsonl'), protocol.map((entry) => JSON.stringify(entry)).join('\n'));
-  fs.writeFileSync(path.join(evidence, 'result.json'), JSON.stringify(result, null, 2));
+  saveEvidence();
   console.log(JSON.stringify(result));
 }

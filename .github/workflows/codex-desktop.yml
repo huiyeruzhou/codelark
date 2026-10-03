@@ -10,9 +10,13 @@ on:
       - src/runtime/codex/app-server-*.ts
       - src/runtime/codex/desktop-remote.ts
       - src/__tests__/unit/runtime/codex/app-server-*.test.ts
+      - src/bridge/permission/app-server*.ts
+      - src/bridge/session/command-use-cases/*.ts
+      - src/__tests__/workflow/bridge/session/*.test.ts
+      - src/__tests__/workflow/bridge/permission/app-server.test.ts
       - scripts/verify-codex-desktop-macos.ts
       - scripts/verify-codex-app-server-lifecycle.ts
-      - scripts/fixtures/codex-app-server-*.ts
+      - scripts/fixtures/codex-app-server-*
       - scripts/fixtures/desktop-gui*.ts
       - .github/workflows/codex-desktop.yml
 
@@ -68,7 +72,8 @@ jobs:
         run: |
           npm run typecheck
           npx tsc --noEmit --strict --module Node16 --moduleResolution Node16 --target ES2023 --esModuleInterop --skipLibCheck --resolveJsonModule scripts/verify-codex-desktop-macos.ts
-          node --import tsx --test src/__tests__/unit/runtime/codex/app-server-*.test.ts src/__tests__/unit/runtime/codex/desktop*.test.ts
+          node --import tsx --test src/__tests__/unit/runtime/codex/app-server-*.test.ts src/__tests__/unit/runtime/codex/desktop*.test.ts src/__tests__/workflow/bridge/session/session-configuration-inheritance.test.ts src/__tests__/workflow/bridge/session/app-server-clear.test.ts src/__tests__/workflow/bridge/permission/app-server.test.ts src/__tests__/unit/bridge/turn/interactive-turn-final-response-plan.test.ts src/__tests__/unit/bridge/turn/interactive-turn-sdk-conversation-engine.test.ts
+          node --import tsx --test scripts/fixtures/desktop-gui-cdp.test.ts
       - name: Install official Desktop in this disposable runner
         shell: bash
         run: |
@@ -90,6 +95,7 @@ jobs:
           done
           test "$installed" = 1
       - name: 操作官方 Desktop 窗口并验证共享线程、审批和问答
+        timeout-minutes: 12
         env:
           CODELARK_DESKTOP_CI: '1'
           CODELARK_DESKTOP_CI_EVIDENCE: /tmp/codelark-desktop-gui-acceptance
