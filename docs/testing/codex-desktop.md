@@ -2,7 +2,7 @@
 
 `scripts/verify-codex-desktop-macos.ts` 在一次性 macOS 26 runner 上启动官方 `~/Applications/Codex.app`，真实 Codex CLI 连接本地 mock 模型。GUI 是验收对象，只有模型响应被替换。不修改或执行解包后的 Desktop 通信模块，不创建假的 `.app`，不调用 renderer 内部状态或发消息接口。
 
-当前实际进度：`37143837340`（`5451b1c`）整体 `success=true`。真实共享 thread 收发、审批、问答、退出重开，以及 disable 后默认 stdio GUI 新回合已通过；服务重载后默认 Bridge resume 耗时 6607ms，官方 GUI 自身 resume 耗时 16134ms。严格审计发现原重载/晚服务恢复门槛只要求历史可见及连接恢复，尚未证明恢复后可继续 GUI 对话；现已补两处新 GUI 回合断言，等待下一 CI。实际 OS 登录仍未验证。
+当前实际进度：[CI 37144640293](https://github.com/huiyeruzhou/codelark/actions/runs/37144640293)（`030eca6`）已通过全部当前 GUI 故事：共享 thread 收发、审批、问答、退出重开、重载服务后新 GUI 回合、晚服务启动后重开并完成新 GUI 回合，以及 disable 后默认 stdio GUI 新回合。官方 App 为 `26.930.31730`，CLI 为 `0.160.0`；两处新增恢复回合均经原始 CDP、模型请求与同 thread/turn 原生事件复核，非仅凭历史可见或 observer resume 判定。实际 OS 登录以及无需重开 Desktop 的恢复仍未验证。
 
 ## 执行与判断
 
@@ -49,6 +49,15 @@ CoreGraphics 查询器在启动 GUI 前用 clang 编译一次，之后每次重�
 
 两个恢复场景也必须完成新 GUI 回合，才设置原有恢复成功标记。`backendRestartGuiTurn` 与 `lateServiceGuiTurn` 保存对应 thread/turn ID、精确输入与回复、模型请求索引和数量；旧历史、不同 thread 或 turn、重复输入/回复、缺少完成事件和失败终态都不能通过。驱动输入文字后等待真实 `Send` 按钮可用，再点击一次；输入框可见不代表线程已完成恢复。每个新回合分别保存 `restored-gui-sent-and-received.*`、`late-service-gui-sent-and-received.*`。
 
+`37144640293` 的两个恢复回合都发生在原 thread `01a1030c-5bdc-77f3-a0d7-655dc2335b0e`。每个回合均恰好一次 CDP 输入、一次模型请求、一个原生用户完成项、一个助手完成项和一个无错误的成功终态：
+
+| 场景 | 实际 turn ID | 模型请求索引（从 0 开始） | artifact 中的截图 |
+| --- | --- | --- | --- |
+| 03 服务重载后新 GUI 回合 | `01a1030e-10c4-7a52-9256-2c3ba65fe2d4` | `8` | `03-persisted-service-before-desktop/restored-gui-sent-and-received.png` |
+| 05 晚服务启动、重开后新 GUI 回合 | `01a1030f-140f-72e0-9eb6-e605b7e23388` | `9` | `05-reopen-after-late-service/late-service-gui-sent-and-received.png` |
+
+同一 artifact 的 `result.json`、`protocol.jsonl`、`model-requests.json` 和各场景 `cdp.jsonl` 可交叉核对上述记录。`06-disabled-default-desktop/default-gui-after-disable.png` 同时显示最新晚服务回复、`DESKTOP_DEFAULT_GUI_INPUT` 和 `DESKTOP_DEFAULT_GUI_REPLY`，默认 stdio 新回合为模型请求索引 `10`。六次启动都通过官方二进制 PID 与 CoreGraphics 实窗检查，App 前后签名校验通过且 `app.asar` 摘要不变。
+
 ## 完整 App 首次验收暴露的连接地址问题
 
 CI `37139317117`（`f5bda77`）已实际打开官方 `26.930.31730` 的窗口，但截图显示 `ChatGPT failed to start` 和 `connect ECONNREFUSED 127.0.0.1:1080`。App 自己的 stderr 同时记录 WebSocket 建连失败；随后原生对话框阻塞了 `Runtime.enable`、截图所需的 `Runtime.evaluate` 和 `Browser.close`。因此不能把首次失败只归因于 CDP 超时，也不能认为窗口打开就代表共享线程成功。
@@ -82,6 +91,8 @@ CI `37139317117`（`f5bda77`）已实际打开官方 `26.930.31730` 的窗口，
 `37143837340` 首次全绿：`startup-sequence.jsonl` 记录 backend 从 PID `3555` 重载为 `4605`，默认连接 resume 成功耗时 `6607ms`；`03-persisted-service-before-desktop/app-stdout.log` 记录官方 GUI resume 成功耗时 `16134ms`，线程均为 `01a10301-1265-73f2-a25e-897a46ef7e28`。这直接验证了超过旧 5 秒的恢复请求可在新产品预算内完成，但该轮 03 还没有新的 GUI 回合。
 
 该轮 04 在空 launchd 地址下实际选择 `stdio`；服务 PID `5622` 后启动，05 重开选择 `websocket`，`thread/read` 在 `1816ms` 后成功并显示旧历史。然而 05 截图仍在恢复中，没有 `thread/resume` 成功记录便被脚本关闭，不能把读取历史写成“已经恢复完整对话”。因此追加上述两处 GUI 新回合门槛；这是验收覆盖缺口，尚无产品失败证据。06 则已有完整新回合：共享服务和环境清除后，官方 PID `5942` 使用 `stdio`，发送 `DESKTOP_DEFAULT_GUI_INPUT`、显示 `DESKTOP_DEFAULT_GUI_REPLY`，模型只增加一次请求，launchd 回读确认服务不存在。其补充 OS 全屏截图失败已记录；CDP 截图和 CoreGraphics 原版 PID/实窗断言通过，App 前后签名检查及 asar 摘要也保持一致。
+
+强化后的 `37144640293` 通过了两处真实 GUI 新回合，关闭了这项验收缺口。本轮普通默认连接的 Bridge resume 在 `21182ms` 后成功；03 与 05 官方 GUI 自身 resume 分别耗时 `21075ms`、`20587ms`，之后均实际发送并收到新的回复。生产请求使用默认 30 秒预算，GUI 未另设恢复 RPC 特例。04/05/06 的原 App 日志分别确认 `stdio`、`websocket`、`stdio`，但这个受控重开顺序仍不能证明 OS 登录竞态已解决。
 
 后续失败报告同时保存 `desktopConnectionUrl`、`desktopConnectionHostname` 和来自本次 App stderr 的 `desktopStartupDiagnostics.transportErrors`。CDP 不可用时，先结合这些字段和 `failure-macos-display.png` 检查原生对话框。
 
