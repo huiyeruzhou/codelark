@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
+import { prepareCodexDesktopRemote, codexDesktopRemoteNotice, type CodexDesktopRemote } from '../../runtime/codex/desktop-remote.js';
 import {
   buildCodexTuiSelectionChoiceActions,
   buildCodexTuiArgs,
@@ -67,6 +68,7 @@ export interface StartCodexResumeTmuxSessionParams {
   skipGitRepoCheck?: boolean;
   codexMode?: StreamChatParams['codexMode'];
   permissionMode?: string;
+  remoteEndpoint?: string;
   onSelectionPrompt?: (
     selectionPrompt: RuntimeTmuxSelectionPrompt,
   ) => RuntimeTmuxSelectionChoice | null | void | Promise<RuntimeTmuxSelectionChoice | null | void>;
@@ -353,6 +355,7 @@ export function buildCodexResumeTmuxCommand(params: StartCodexResumeTmuxSessionP
     permissionMode: params.permissionMode,
     codexMode: params.codexMode,
   }, []);
+  if (params.remoteEndpoint) codexArgs.unshift('--remote', params.remoteEndpoint);
   const env = buildCodexTuiEnv();
   const executable = resolveCodexCliExecutable({ env });
   const launchLogPath = codexLaunchLogPath(params.sessionName);
@@ -1088,7 +1091,19 @@ export async function startCodexResumeTmuxSession(
     'starting_tmux',
     'starting or replacing the provider-owned Codex tmux session',
   );
-  const { codexCommand, tmuxCommand, launchLogPath } = buildCodexResumeTmuxCommand(params);
+  const env = buildCodexTuiEnv();
+  let remote: CodexDesktopRemote | undefined;
+  try {
+    remote = params.remoteEndpoint ? undefined : await prepareCodexDesktopRemote({
+      env, executable: resolveCodexCliExecutable({ env }),
+    });
+  } catch (error) {
+    transitionRuntimeTmuxInputState('codex', params.sessionName, 'failed', describeUnknownError(error));
+    throw error;
+  }
+  const { codexCommand, tmuxCommand, launchLogPath } = buildCodexResumeTmuxCommand({
+    ...params, remoteEndpoint: params.remoteEndpoint ?? remote?.endpoint,
+  });
   prepareLaunchLog(launchLogPath);
   const commands: string[] = [];
   const selectionPrompts: RuntimeTmuxSelectionPrompt[] = [];
@@ -1131,6 +1146,11 @@ export async function startCodexResumeTmuxSession(
     if (startedCheck.selectionPrompts) selectionPrompts.push(...startedCheck.selectionPrompts);
     if (startedCheck.ready) {
       cleanupLaunchLog(launchLogPath);
+      if (remote) {
+        try { await params.onStatus?.(codexDesktopRemoteNotice(remote), { force: true }); } catch (error) {
+          console.warn('[codex-tmux-runtime] Failed to publish Desktop connection notice:', describeUnknownError(error));
+        }
+      }
       return {
         existed: started.existed,
         sessionName: params.sessionName,

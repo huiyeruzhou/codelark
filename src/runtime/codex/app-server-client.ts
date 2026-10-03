@@ -1,0 +1,114 @@
+import WebSocket from 'ws';
+
+export interface AppServerMessage {
+  id?: string | number;
+  method?: string;
+  params?: unknown;
+  result?: unknown;
+  error?: { code: number; message: string };
+}
+
+/** Local Unix sockets use ws's Unix transport; the CLI uses unix:// for the same endpoint. */
+export function appServerWebSocketUrl(endpoint: string): string {
+  if (endpoint.startsWith('unix:///')) return `ws+unix://${endpoint.slice(7)}:/`;
+  return endpoint;
+}
+
+export function appServerCliUrl(endpoint: string): string {
+  if (endpoint.startsWith('ws+unix:///')) return `unix://${endpoint.slice(10).split(':')[0]}`;
+  return endpoint;
+}
+
+/** A connection owns subscriptions, never the server process or its thread writer locks. */
+export class CodexAppServerClient {
+  private sequence = 0;
+  private pending = new Map<number, {
+    resolve: (value: unknown) => void;
+    reject: (error: Error) => void;
+    timer: ReturnType<typeof setTimeout>;
+  }>();
+  private listeners = new Set<(message: AppServerMessage) => void>();
+
+  private constructor(private socket: WebSocket, private timeoutMs: number) {
+    socket.on('message', (data) => {
+      let message: AppServerMessage;
+      try { message = JSON.parse(data.toString()); } catch { return; }
+      if (!message || typeof message !== 'object') return;
+      if (typeof message.id === 'number' && !message.method) {
+        const request = this.pending.get(message.id);
+        if (!request) return;
+        this.pending.delete(message.id);
+        clearTimeout(request.timer);
+        if (message.error) request.reject(new Error(`app-server (${message.error.code}): ${message.error.message}`));
+        else request.resolve(message.result);
+      } else {
+        // Server requests (approval/input) retain their id. Consumers must explicitly reply;
+        // a connection used only for readiness never accepts or denies another client's request.
+        for (const listener of this.listeners) listener(message);
+      }
+    });
+    socket.on('close', () => this.rejectPending(new Error('Codex app-server disconnected')));
+    socket.on('error', (error) => this.rejectPending(error));
+  }
+
+  static async connect(endpoint: string, timeoutMs = 5_000): Promise<CodexAppServerClient> {
+    const socket = new WebSocket(appServerWebSocketUrl(endpoint), { handshakeTimeout: timeoutMs });
+    const client = new CodexAppServerClient(socket, timeoutMs);
+    try {
+      await new Promise<void>((resolve, reject) => {
+        socket.once('open', resolve);
+        socket.once('error', reject);
+        socket.once('close', () => reject(new Error('Codex app-server closed before initialization')));
+      });
+      await client.request('initialize', {
+        clientInfo: { name: 'codelark', version: '0.3.0' },
+        capabilities: { experimentalApi: true },
+      });
+      client.send({ method: 'initialized' });
+      return client;
+    } catch (error) {
+      client.close();
+      throw error;
+    }
+  }
+
+  request<T = unknown>(method: string, params: unknown = {}): Promise<T> {
+    const id = ++this.sequence;
+    return new Promise<T>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        this.pending.delete(id);
+        reject(new Error(`Codex app-server request timed out: ${method}`));
+      }, this.timeoutMs);
+      this.pending.set(id, { resolve: (value) => resolve(value as T), reject, timer });
+      try { this.send({ id, method, params }); } catch (error) {
+        clearTimeout(timer);
+        this.pending.delete(id);
+        reject(error);
+      }
+    });
+  }
+
+  onMessage(listener: (message: AppServerMessage) => void): () => void {
+    this.listeners.add(listener);
+    return () => this.listeners.delete(listener);
+  }
+
+  send(message: AppServerMessage): void {
+    if (this.socket.readyState !== WebSocket.OPEN) throw new Error('Codex app-server is not connected');
+    this.socket.send(JSON.stringify(message));
+  }
+
+  close(): void {
+    this.rejectPending(new Error('Codex app-server connection closed'));
+    this.listeners.clear();
+    this.socket.terminate();
+  }
+
+  private rejectPending(error: Error): void {
+    for (const request of this.pending.values()) {
+      clearTimeout(request.timer);
+      request.reject(error);
+    }
+    this.pending.clear();
+  }
+}

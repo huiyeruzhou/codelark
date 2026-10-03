@@ -1,0 +1,67 @@
+name: Codex Desktop sharing
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ci/codex-desktop-remote]
+  pull_request:
+    paths:
+      - src/runtime/codex/app-server-client.ts
+      - src/runtime/codex/desktop-remote.ts
+      - scripts/verify-codex-desktop-macos.ts
+      - .github/workflows/codex-desktop.yml
+
+permissions:
+  contents: read
+
+jobs:
+  macos:
+    name: macOS · launchd + Desktop transport + remote TUI
+    runs-on: macos-26
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: brew install tmux
+      - run: npm install --global @openai/codex@0.160.0
+      - name: Typecheck and test connection management
+        run: |
+          npm run typecheck
+          npx tsc --noEmit --strict --module Node16 --moduleResolution Node16 --target ES2023 --esModuleInterop --skipLibCheck --resolveJsonModule scripts/verify-codex-desktop-macos.ts
+          node --import tsx --test src/__tests__/unit/runtime/codex/app-server-client.test.ts src/__tests__/unit/runtime/codex/desktop-remote.test.ts
+      - name: Install official Desktop in this disposable runner
+        shell: bash
+        run: |
+          set -euo pipefail
+          dmg="$RUNNER_TEMP/Codex.dmg"
+          mount="$RUNNER_TEMP/codex-desktop-image"
+          curl --fail --location --retry 3 https://persistent.oaistatic.com/codex-app-prod/Codex.dmg --output "$dmg"
+          shasum -a 256 "$dmg"
+          mkdir -p "$mount" "$HOME/Applications"
+          hdiutil attach -nobrowse -mountpoint "$mount" "$dmg"
+          trap 'hdiutil detach "$mount"' EXIT
+          installed=0
+          for app in "$mount"/*.app; do
+            if test "$(/usr/bin/plutil -extract CFBundleIdentifier raw -o - "$app/Contents/Info.plist")" = com.openai.codex; then
+              ditto "$app" "$HOME/Applications/Codex.app"
+              installed=1
+              break
+            fi
+          done
+          test "$installed" = 1
+      - name: Verify native service and shared sessions without a model account
+        env:
+          CODELARK_DESKTOP_CI: '1'
+          CODELARK_DESKTOP_CI_EVIDENCE: ${{ runner.temp }}/codex-desktop-evidence
+        run: node --import tsx scripts/verify-codex-desktop-macos.ts
+      - name: Upload verification evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: codex-desktop-macos
+          if-no-files-found: warn
+          path: ${{ runner.temp }}/codex-desktop-evidence

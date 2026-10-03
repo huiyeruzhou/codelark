@@ -45,6 +45,7 @@ import {
   uninstallCodelarkPackage,
 } from '../local-service/manager.js';
 import { runSetupWizard } from './setup-wizard.js';
+import { disableCodexDesktopRemote } from '../runtime/codex/desktop-remote.js';
 
 const PRIMARY_CLI_NAME = 'codelark';
 
@@ -62,6 +63,7 @@ type CliCommand =
   | 'send'
   | 'monitor'
   | 'autostart'
+  | 'codex-desktop'
   | 'uninstall'
   | 'version'
   | 'help'
@@ -247,6 +249,7 @@ export function buildCliHelpText(): string {
     '  autostart status                    查看 Windows Bridge 开机启动状态',
     '  autostart install                   安装 Windows Bridge 开机启动任务',
     '  autostart uninstall                 移除 Windows Bridge 开机启动任务',
+    '  codex-desktop disable               停止共享 Codex 后端并关闭 Desktop 自动接入（会中断其活动轮次）',
     '  uninstall                           停止服务并安排 npm uninstall -g codelark',
     '  -v, --version                       显示 CodeLark 版本',
     '  help, -h, --help                    显示本帮助',
@@ -305,6 +308,7 @@ export function parseCliCommand(argv: string[]): ParsedCliCommand {
     case 'send':
     case 'monitor':
     case 'autostart':
+    case 'codex-desktop':
     case 'uninstall':
       return { command: rawCommand, args };
     case 'open':
@@ -897,6 +901,15 @@ async function main(argv = process.argv.slice(2)): Promise<void> {
           `Bridge Autostart: ${autostart.installed ? (autostart.enabled ? 'enabled' : 'disabled') : 'not installed'}`,
         ].join('\n') + '\n'
       );
+      return;
+    }
+
+    case 'codex-desktop': {
+      if (parsed.args.length !== 1 || parsed.args[0] !== 'disable') {
+        throw new Error('用法: codelark codex-desktop disable');
+      }
+      await disableCodexDesktopRemote();
+      process.stdout.write('已停止 CodeLark 管理的共享后端并关闭自动接入。请退出并重新打开 Desktop，以恢复其默认启动方式。\n');
       return;
     }
 

@@ -80,6 +80,35 @@ TUI 启动和本地 thread bootstrap 共用 `buildCodexTuiEnv`，显式设置 `G
 
 热更新必须继承目标实例自己的 shell snapshot 环境。`scripts/hot-update-bridge.sh` 不覆盖实例凭据或 `NODE_OPTIONS`；更新 Bridge 仅影响之后启动的子进程，已卡住的旧 Git/Codex 进程需要另行核实并恢复。`/tmux-screen` 只抓屏，不会执行恢复。
 
+### Codex Desktop 与共享 app-server
+
+macOS 上创建新的 Codex tmux 时，CodeLark 会通过 `com.openai.codex` bundle id 检测 Desktop，并检查 CLI 是否支持 `--remote`。Linux、Windows、未安装 Desktop 或显式设置 `CODELARK_CODEX_DESKTOP_REMOTE=0` 时继续原有启动方式。Desktop 的 `CODEX_APP_SERVER_FORCE_CLI=1` 设置优先，不自动改写。
+
+已配置且可连接的本机 `CODEX_APP_SERVER_WS_URL` 优先复用。Desktop 默认本地路径使用 stdio，不提供通用的可接入 socket；缺少明确地址时，CodeLark 为当前 macOS 用户安装 `dev.codelark.codex-app-server` LaunchAgent，通过私有 Unix socket 运行独立 app-server。新 TUI 使用 `--remote unix://… resume <thread>`，Desktop 使用同一 socket 对应的 `ws+unix://…:/` 地址。服务端仍持有 thread writer lock；两个客户端共享一个持锁后端，没有删除或关闭锁。
+
+LaunchAgent 保存在 `~/Library/LaunchAgents/dev.codelark.codex-app-server.plist`，服务脚本、日志和环境快照在 `~/.codelark/codex-desktop/`。登录时启动服务并重新设置用户级 Desktop 环境；不需要每次 export，也不要求先启动 Bridge。Bridge 停止、热更新或某个 TUI 退出都不会停止共享服务。服务异常退出后由 launchd 重启；客户端仍需重新连接，重启不保证中断中的轮次自动继续。登录时 Desktop 与 LaunchAgent 同时自动启动的先后顺序尚需 macOS 实机验证。
+
+CodeLark 先完成 `initialize` 和 `thread/loaded/list` 协议检查，再创建 remote tmux；终端真正 ready 后，使用现有状态通知通道提示检测结果。首次设置地址时，如果 Desktop 已在运行，需要用户退出后重开一次才能继承新环境；不会强制退出用户的 Desktop。地址已配置但后端不可达时明确报错，不另起一个独立 writer。原有 stdio Desktop 或独立 CLI 已占用的 thread，仍需先正常释放后才能迁入共享服务。
+
+一个 macOS 用户共用一个后端。首次安装保存该实例的 `CODEX_HOME` 和环境快照，目录权限为 `0700`，快照为 `0600`；移除 Bridge/chat/turn/tmux 身份环境，不在 plist 中写凭据。后续启动复用这份环境，不用另一个实例的凭据覆盖它；不同 `CODEX_HOME` 会拒绝自动接入。修改当前终端环境不会改变已运行服务的环境。Unix socket 路径超过 macOS 长度限制或包含当前 Desktop 传输不能处理的 URL 特殊字符时，自动配置会报错。
+
+关闭可执行 `codelark codex-desktop disable`：该命令会中断共享服务的活动轮次、移除自己的 LaunchAgent、只清除指向自己服务的 Desktop 环境变量，并写入 `~/.codelark/codex-desktop/disabled` 防止下一次 tmux 自动安装。之后重开 Desktop 恢复默认方式。若要重新启用，移除该 `disabled` 文件后创建新 tmux；已有环境快照继续复用。仅设置 `CODELARK_CODEX_DESKTOP_REMOTE=0` 只影响该 Bridge 后续启动，不停止已经安装的共享服务。卸载 CodeLark 前若要恢复 Desktop 默认方式，应先运行上述 disable 命令；普通 Bridge stop 不负责停止 Desktop 使用的后端。
+
+`CODEX_APP_SERVER_WS_URL` 的行为取证自 Desktop `26.930.31730` 发行包；它是实现细节，不能当作长期稳定的公开接口。Linux 已实测发行包原版通信模块与真实 Codex `0.153.4`、`0.160.0` 共享会话，另以 `0.160.0` 验证 Unix socket、CodeLark 新连接层和真实 remote TUI。原生 macOS 的 launchd、Dock/Finder 启动和真实 IM 提示仍需实机验收，不能用协议测试替代。
+
+### 用协议逐步接管生命周期
+
+`runtime/codex/app-server-client.ts` 提供 JSON-RPC 请求、通知、带 id 的服务端请求、超时和断开处理。本阶段已用协议判断后端是否可用；现有发送、镜像和终端输入状态机仍保留。后续将 CodeLark 作为同一 app-server 的长期客户端订阅目标 thread，可以逐步采用以下信息：
+
+| 需要知道的事情 | app-server 提供的依据 |
+| --- | --- |
+| 哪些 thread 已加载、目前是否空闲或执行中 | `thread/loaded/list`、`thread/read`、`thread/status/changed` |
+| 哪一轮开始、完成、失败或中断 | `turn/started`、`turn/completed` 中的 thread/turn id 和状态 |
+| 正在执行哪些工具、有哪些增量输出 | `item/started`、`item/*/delta`、`item/completed` |
+| 是否在等待审批或用户输入 | 带请求 id 的审批/input 请求及 `serverRequest/resolved` |
+
+事件连接断开时应先标记状态未知，重连后读取当前 thread/turn，再恢复订阅；不能把断线解释成轮次完成。Desktop 和 CodeLark 可能同时看到审批请求，必须按 request id 处理已解决通知，不能由后台探活连接自动批准。tmux 保留为查看和接管界面。只要输入仍通过键盘注入，更新、模型迁移等 TUI 菜单的启动检查仍有必要：服务端 thread 就绪不代表终端编辑框已经接受输入。
+
 启动命令在 shared tmux core 中保留两种等价表示：人类可读 command preview，以及实际传给 tmux 的 `string | argv[]`。POSIX tmux 的 `new-session --` 接收单一 shell command；Windows psmux 必须接收分开的 executable/args argv，不能把 `pwsh.exe ...` 或 `node.exe ...` 拼成一个字符串，否则 CreateProcessW 会把整串误当成 executable path。Codex 和 Kimi 都通过 shell snapshot 把当前 bridge 环境交给 Windows 子进程，因此 npm 的 `.cmd` wrapper 由系统 shell 执行，不能直接当成 `.exe` 交给 CreateProcess。
 
 `waitForCodexResumeTmuxReady` 现在委托给 `waitForRuntimeTmuxReady(runtime='codex')` 周期性 `capturePane`，直到看到 Codex TUI ready prompt，或者达到 `CODELARK_CODEX_RESUME_TMUX_READY_TIMEOUT_MS`。如果启动时停在 update、goal、permission 或 generic selection，shared readiness 会把完整 selection prompt 发给 IM handler；没有 handler 时只返回未 ready，不自动按默认项。IM 下拉默认项来自 TUI 当前选择游标，若无法识别游标则使用 TUI 选项第一项；不会再把 update 固定成 `skip`，也不会把 goal 固定成 `cancel`。用户回调的 choice 会转换成 tmux 上的上下移动和 Enter，发送后继续 ready 检测，直到真正可输入才注入消息。

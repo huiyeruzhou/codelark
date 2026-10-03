@@ -26,6 +26,14 @@ import {
 import { parseCodexTuiSelectionPrompt } from '../../../../runtime/codex/tmux-provider.js';
 
 describe('codex tmux runtime', () => {
+  it('passes a shared backend endpoint to the remote TUI while preserving the resume thread', () => {
+    const command = buildCodexResumeTmuxCommand({
+      sessionName: 'codex_shared', bridgeSessionId: 'bridge-shared', threadId: 'thread-shared',
+      remoteEndpoint: 'unix:///tmp/codex-shared.sock',
+    });
+    assert.match(command.codexCommand, /--remote.*unix:\/\/\/tmp\/codex-shared\.sock/);
+    assert.match(command.codexCommand, /resume.*thread-shared/);
+  });
   it('fails Claude startup before creating tmux when the configured executable is missing', async () => {
     resetRuntimeTmuxInputStatesForTests();
     const oldOverride = process.env.CODELARK_CLAUDE_CLI_PATH;
