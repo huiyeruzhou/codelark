@@ -48,7 +48,7 @@ CODELARK_REAL_FEISHU_E2E=1 npm run real:feishu:e2e -- \
 
 脚本会在真正清理测试群、启动临时 bridge、创建群或发送消息前先运行 `lark-cli auth status --verify` 做用户授权 preflight。真实发送必须使用 `--launch-bridge` 启动隔离 bridge；触发消息、验证读取和测试群清理走当前测试账号的 `lark-cli --as user` 授权环境，不把 user token 复制到隔离 bridge HOME。未传 `--chat-id` 时，harness 会直接复用产品 `/new` 背后的 new-session use case 创建初始测试群，走同一套 adapter `createGroupChat`、ownerUserId、binding、审计和建群通知逻辑；不保留 `--create-chat`、`--source-chat-id` 或 lark-cli 直接建群兼容路径。生产 `/new` 和云文档 `/new` 也必须能确定当前操作者 open_id，否则直接拒绝建群，避免创建用户无法管理的 bot-owned 群。
 
-当 host 机器上的 `lark-cli` 已经对同一个 test app 完成用户授权时，harness 会直接使用该授权环境完成用户侧动作，让“当前账号作为测试、只换隔离 bridge”的路径不需要重复授权。bridge 侧不再维护任何私有 lark-cli runtime：隔离 bridge 不注入 `LARK_CHANNEL_CONFIG` / `LARKSUITE_CLI_CONFIG_DIR`，也不读写用户侧 lark-cli 授权；复制 user OAuth token 会造成 refresh token 失效风险，因此禁止作为默认路径。
+当 host 机器上的 `lark-cli` 已经对同一个 test app 完成用户授权时，harness 会直接使用该授权环境完成用户侧动作，让“当前账号作为测试、只换隔离 bridge”的路径不需要重复授权。bridge 侧不再维护任何私有 lark-cli runtime：隔离 bridge 不注入 `LARK_CHANNEL_CONFIG` / `LARKSUITE_CLI_CONFIG_DIR`，也不读写用户侧 lark-cli 授权；专用 CI 测试账号可以按下文迁移到 GitHub Secrets；本地与 CI 必须串行使用，避免同时刷新同一个登录态。
 
 启动隔离 bridge 时，测试 App 不能和任何正在运行的 CodeLark bridge 使用同一个 Feishu App。飞书长连接消息采用集群随机分流而不是广播；同一个 App 同时跑两个 bridge 时，一组用户消息可能被不同实例拆分消费。harness 会在发送前检查当前用户目录下所有 `.codelark*` 实例的运行状态和 App ID；Linux 还会从存活进程声明的 `CODELARK_HOME` 补充候选，因此 `/tmp` 下手动启动的隔离 bridge 也不能漏过。补 canonical 报告时应使用真正空闲的测试 App，或由实例所有者明确停止/切走冲突 bridge；不提供跳过同 App 检查、重发消息或增加等待的兼容开关。
 
@@ -83,11 +83,21 @@ CODELARK_REAL_FEISHU_E2E=1 npm run real:feishu:e2e -- \
   --scenario runtime-message --run-id app-server-local
 ```
 
-`.github/workflows/real-feishu.yml` 提供手动触发的 GitHub Actions 工作流，依次验证 direct（`sdk` 入口）和 mirror（`tmux` 入口）。需要专用测试 App 的 `FEISHU_E2E_APP_ID` / `FEISHU_E2E_APP_SECRET` Secrets；缺少时明确失败，不跳过后报绿。每次运行通过 CLI device flow 建立该 runner 独立的用户授权：运行摘要给出链接，artifact 给出二维码，授权后继续。不会上传或复制本机用户 OAuth；运行结束删除 runner 的授权目录，artifact 只保存测试报告。此流程仍需要测试用户完成当次授权，不宣称完全无人值守。
+`.github/workflows/real-feishu.yml` 提供手动触发的 GitHub Actions 工作流，依次验证 direct（`sdk` 入口）和 mirror（`tmux` 入口）。CI 复用已经在本地授权的专用测试账号，不再为每次运行要求扫码。仓库需要 `FEISHU_E2E_APP_ID`、`FEISHU_E2E_APP_SECRET` 和 `FEISHU_E2E_LARK_AUTH_B64` 三个 Secrets。
 
-同一个测试 App 的本地与 CI 运行必须串行，不能与其余 Bridge 同时使用。CI concurrency 只约束 CI 内的运行，本地仍执行活跃 Bridge 冲突检查；进程环境扫描限制为 Node 进程。原生协议、审批回放及 macOS/Desktop 共享后端测试在 `codex-desktop.yml` 中独立运行。
+在已授权的专用测试目录执行下面命令即可更新登录态 Secret。脚本先核验身份，只打包单一测试 App/用户的配置、加密凭据和对应密钥，通过 stdin 传给 `gh secret set`，不会把凭据打印到终端或写进仓库：
 
-协议路径的 `/p tmux` 验证“共享线程已就绪、可直接发送消息”，随后以真实模型执行和消息回读确认可用；旧路径仍验证原 Provider 切换结果。CI 授权 artifact 包含二维码及仅有公开入口的 JSON，方便在授权步骤等待期间取回；其中不包含 device code 或 OAuth token。
+```bash
+python3 scripts/ci/feishu-auth.py publish \
+  --home ~/.codelark/real-feishu-e2e/test-app-auth \
+  --app-id <测试AppID> --repo <owner/repo>
+```
+
+Runner 在临时目录恢复登录态，核验实际 App/用户后执行真实飞书测试。每轮结束缓存 CLI 刷新后的**加密用户凭据文件**，供后续运行续用；解密密钥只随 Secret 恢复，不进入缓存或 artifact。更新 Secret 会自动切换缓存代次，避免复用旧登录态。测试失败后仍保留已成功核验的刷新状态，并清理 runner 临时授权目录。授权被用户撤销或 refresh token 最终失效时，需要在专用测试目录重新登录并更新 Secret。
+
+同一个测试 App 的本地与 CI 运行必须串行，不能与其余 Bridge 同时使用。CI concurrency 约束 CI 内的运行，本地仍执行活跃 Bridge 冲突检查；进程环境扫描限制为 Node 进程。需要重新从本地发布授权时，先确认没有正在运行的 CI；迁移后以 CI 最新刷新状态为准，本地旧副本失效时不可覆盖 CI 的有效状态。原生协议、审批回放及 macOS/Desktop 共享后端测试在 `codex-desktop.yml` 中独立运行。
+
+协议路径的 `/p tmux` 验证“共享线程已就绪、可直接发送消息”，随后以真实模型执行和消息回读确认可用；旧路径仍验证原 Provider 切换结果。本地真实飞书验收已通过 tmux 18 项、sdk 17 项检查，模型依赖为隔离的确定性响应服务，Codex 与飞书边界均为真实执行。
 
 这里的真实飞书场景目前覆盖用户入站、协议执行、最终投递和消息回读。真实审批按钮点击、用户问答提交和完整 Desktop GUI 仍需补充验收，不能用 payload 或模拟 callback 冒充真实操作。
 

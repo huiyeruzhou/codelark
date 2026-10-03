@@ -31,56 +31,40 @@ jobs:
       - run: npm ci
       - run: sudo apt-get update && sudo apt-get install -y tmux
       - run: npm install --global @openai/codex@0.160.0
-      - name: Configure the dedicated test App and request this run's user authorization
+      - name: Restore the authorized test account
+        id: auth-restore
         env:
+          FEISHU_E2E_LARK_AUTH_B64: ${{ secrets.FEISHU_E2E_LARK_AUTH_B64 }}
           CODELARK_REAL_FEISHU_TEST_APP_ID: ${{ secrets.FEISHU_E2E_APP_ID }}
           CODELARK_REAL_FEISHU_TEST_APP_SECRET: ${{ secrets.FEISHU_E2E_APP_SECRET }}
         run: |
-          python3 - <<'PY'
-          import json, os, pathlib, subprocess
+          python3 scripts/ci/feishu-auth.py restore \
+            --home "$CODELARK_REAL_FEISHU_AUTH_HOME" \
+            --app-id "$CODELARK_REAL_FEISHU_TEST_APP_ID"
+          python3 - <<'PYENV'
+          import json, os, pathlib
           required = ['CODELARK_REAL_FEISHU_TEST_APP_ID', 'CODELARK_REAL_FEISHU_TEST_APP_SECRET']
           if any(not os.environ.get(key) for key in required):
-              raise SystemExit('Missing FEISHU_E2E_APP_ID / FEISHU_E2E_APP_SECRET; no real Feishu test has run.')
-          root = pathlib.Path(os.environ['CODELARK_REAL_FEISHU_AUTH_HOME'])
-          root.mkdir(mode=0o700, parents=True)
-          env = dict(os.environ, HOME=str(root), USERPROFILE=str(root),
-                     LARKSUITE_CLI_CONFIG_DIR=str(root / '.lark-cli'), XDG_DATA_HOME=str(root / '.local/share'))
-          subprocess.run(['npx', 'lark-cli', 'config', 'init', '--app-id', os.environ[required[0]], '--app-secret-stdin', '--brand', 'feishu'],
-                         input=os.environ[required[1]], text=True, env=env, check=True, stdout=subprocess.DEVNULL)
-          scopes = 'im:chat im:chat:read im:chat:delete im:message.send_as_user im:message.group_msg:get_as_user im:message.p2p_msg:get_as_user'
-          output = subprocess.check_output(['npx', 'lark-cli', 'auth', 'login', '--scope', scopes, '--no-wait', '--json'], env=env, text=True)
-          device = json.loads(output)
-          private = root / 'device.json'
-          private.write_text(output); private.chmod(0o600)
-          test_env = root / 'test.env'
-          test_env.write_text('\n'.join(key + '=' + json.dumps(os.environ[key]) for key in required) + '\n')
-          test_env.chmod(0o600)
-          url = device['verification_url']
-          pathlib.Path('feishu-ci-authorization.json').write_text(json.dumps({
-              'verification_url': url, 'expires_in': device.get('expires_in'),
-          }))
-          with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as summary:
-              summary.write('### 飞书测试用户授权\n\n请在 10 分钟内打开：' + url + '\n\n只授权本次隔离测试；不会复制本机 OAuth token。\n')
-          print('飞书测试授权入口：' + url)
-          subprocess.run(['npx', 'lark-cli', 'auth', 'qrcode', url, '--output', 'feishu-ci-auth.png'], env=env, check=True)
-          PY
-      - uses: actions/upload-artifact@v4
+              raise SystemExit('Missing test App credentials; no real Feishu test has run.')
+          target = pathlib.Path(os.environ['CODELARK_REAL_FEISHU_AUTH_HOME']) / 'test.env'
+          target.write_text('\n'.join(key + '=' + json.dumps(os.environ[key]) for key in required) + '\n')
+          target.chmod(0o600)
+          PYENV
+      - name: Restore the latest encrypted refresh state
+        uses: actions/cache/restore@v4
         with:
-          name: feishu-ci-authorization-qr
-          path: |
-            feishu-ci-auth.png
-            feishu-ci-authorization.json
-          retention-days: 1
-      - name: Complete user authorization
-        timeout-minutes: 10
+          path: ${{ steps.auth-restore.outputs.token-file }}
+          key: feishu-user-${{ steps.auth-restore.outputs.cache-generation }}-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: |
+            feishu-user-${{ steps.auth-restore.outputs.cache-generation }}-
+      - name: Verify the restored test identity
+        id: auth-check
+        env:
+          CODELARK_REAL_FEISHU_TEST_APP_ID: ${{ secrets.FEISHU_E2E_APP_ID }}
         run: |
-          python3 - <<'PY'
-          import json, os, pathlib, subprocess
-          root = pathlib.Path(os.environ['CODELARK_REAL_FEISHU_AUTH_HOME'])
-          env = dict(os.environ, HOME=str(root), USERPROFILE=str(root), LARKSUITE_CLI_CONFIG_DIR=str(root / '.lark-cli'), XDG_DATA_HOME=str(root / '.local/share'))
-          device = json.loads((root / 'device.json').read_text())
-          subprocess.run(['npx', 'lark-cli', 'auth', 'login', '--device-code', device['device_code']], env=env, check=True)
-          PY
+          python3 scripts/ci/feishu-auth.py verify \
+            --home "$CODELARK_REAL_FEISHU_AUTH_HOME" \
+            --app-id "$CODELARK_REAL_FEISHU_TEST_APP_ID"
       - name: Real Feishu input, app-server execution and user-side message readback
         run: |
           mkdir -p "$RUNNER_TEMP/feishu-evidence"
@@ -92,6 +76,14 @@ jobs:
               --run-root "$RUNNER_TEMP/feishu-${provider}" \
               --output "$RUNNER_TEMP/feishu-evidence/${provider}.json"
           done
+      # Only the encrypted user token file is cached. Its master key stays in Secrets.
+      # Persist refresh-token rotation even when a later test fails.
+      - name: Save the refreshed encrypted authorization
+        if: always() && steps.auth-check.outcome == 'success'
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ steps.auth-restore.outputs.token-file }}
+          key: feishu-user-${{ steps.auth-restore.outputs.cache-generation }}-${{ github.run_id }}-${{ github.run_attempt }}
       - name: Upload only test reports
         if: always()
         uses: actions/upload-artifact@v4
