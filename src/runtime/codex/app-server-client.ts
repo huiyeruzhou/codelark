@@ -8,6 +8,11 @@ export interface AppServerMessage {
   error?: { code: number; message: string; data?: unknown };
 }
 
+export interface AppServerClientTimeouts {
+  connectTimeoutMs?: number;
+  requestTimeoutMs?: number;
+}
+
 /** A server rejection is definitive; a lost reply or timeout is not. */
 export class AppServerRpcError extends Error {
   constructor(readonly code: number, message: string, readonly data?: unknown) {
@@ -57,7 +62,7 @@ export class CodexAppServerClient {
   private disconnectListeners = new Set<(error: Error) => void>();
   private disconnected = false;
 
-  private constructor(private socket: WebSocket, private timeoutMs: number) {
+  private constructor(private socket: WebSocket, private requestTimeoutMs: number) {
     socket.on('message', (data) => {
       let message: AppServerMessage;
       try { message = JSON.parse(data.toString()); } catch { return; }
@@ -79,11 +84,15 @@ export class CodexAppServerClient {
     socket.on('error', (error) => this.disconnect(error));
   }
 
-  static async connect(endpoint: string, timeoutMs = 5_000): Promise<CodexAppServerClient> {
+  static async connect(endpoint: string, timeouts: number | AppServerClientTimeouts = {}): Promise<CodexAppServerClient> {
+    // Preserve explicit numeric budgets used by short-lived readiness probes.
+    // Loading thread history and tools takes longer than establishing a connection.
+    const { connectTimeoutMs = 5_000, requestTimeoutMs = 30_000 } = typeof timeouts === 'number'
+      ? { connectTimeoutMs: timeouts, requestTimeoutMs: timeouts } : timeouts;
     // Older Codex Unix transports reject the permessage-deflate extension header.
     // JSON-RPC does not require compression; the common uncompressed transport works across versions.
-    const socket = new WebSocket(appServerWebSocketUrl(endpoint), { handshakeTimeout: timeoutMs, perMessageDeflate: false });
-    const client = new CodexAppServerClient(socket, timeoutMs);
+    const socket = new WebSocket(appServerWebSocketUrl(endpoint), { handshakeTimeout: connectTimeoutMs, perMessageDeflate: false });
+    const client = new CodexAppServerClient(socket, requestTimeoutMs);
     try {
       await new Promise<void>((resolve, reject) => {
         socket.once('open', resolve);
@@ -93,7 +102,7 @@ export class CodexAppServerClient {
       client.serverInfo = await client.request('initialize', {
         clientInfo: { name: 'codelark', version: '0.3.0' },
         capabilities: { experimentalApi: true },
-      });
+      }, connectTimeoutMs);
       client.send({ method: 'initialized' });
       return client;
     } catch (error) {
@@ -102,13 +111,13 @@ export class CodexAppServerClient {
     }
   }
 
-  request<T = unknown>(method: string, params: unknown = {}): Promise<T> {
+  request<T = unknown>(method: string, params: unknown = {}, timeoutMs = this.requestTimeoutMs): Promise<T> {
     const id = ++this.sequence;
     return new Promise<T>((resolve, reject) => {
       const timer = setTimeout(() => {
         this.pending.delete(id);
         reject(new Error(`Codex app-server request timed out: ${method}`));
-      }, this.timeoutMs);
+      }, timeoutMs);
       this.pending.set(id, { resolve: (value) => resolve(value as T), reject, timer });
       try { this.send({ id, method, params }); } catch (error) {
         clearTimeout(timer);
