@@ -74,8 +74,12 @@ test('fixed backend survives a Bridge client restart and session config has only
   await assert.rejects(prepareCodexAppServerSession({ sessionId: 'other', endpoint: 'ws://example.invalid:1234' }), /不是本机/);
   closeCodexAppServerSessions();
   await assert.rejects(prepareCodexAppServerSession({ sessionId, endpoint: 'ws://localhost:9' }), /绑定另一/);
-  for (const entry of fs.readdirSync(path.join(process.env.CODELARK_HOME!, 'codex-app-server'))) {
-    assert.equal(fs.statSync(path.join(process.env.CODELARK_HOME!, 'codex-app-server', entry)).mode & 0o777, 0o600);
+  // Windows stat.mode does not expose NTFS ACLs; Node reports 0666 for writable files.
+  // The restart and instance-isolation assertions above still run on Windows.
+  if (process.platform !== 'win32') {
+    for (const entry of fs.readdirSync(path.join(process.env.CODELARK_HOME!, 'codex-app-server'))) {
+      assert.equal(fs.statSync(path.join(process.env.CODELARK_HOME!, 'codex-app-server', entry)).mode & 0o777, 0o600);
+    }
   }
 });
 
