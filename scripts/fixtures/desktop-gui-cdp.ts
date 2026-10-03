@@ -271,8 +271,8 @@ export class DesktopGui {
   async send(text: string) {
     await this.clickExpression(`Array.from(document.querySelectorAll(${JSON.stringify(composer)}))`, '消息输入框');
     await this.page!.call('Input.insertText', { text });
-    await this.page!.call('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13, text: '\r' });
-    await this.page!.call('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13 });
+    // 历史已显示时恢复可能尚未完成；等待真实 Send 控件可用后只点击一次，不重放输入。
+    await this.button(['Send']);
   }
   async close() {
     // Browser.close 只关闭这次 CDP 连接对应的 App；不按全局进程名清理。

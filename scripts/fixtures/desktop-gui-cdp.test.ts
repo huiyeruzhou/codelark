@@ -7,6 +7,7 @@ import test from 'node:test';
 import { WebSocketServer } from 'ws';
 import { Cdp, DesktopGui } from './desktop-gui-cdp.js';
 import { connectDesktopGuiBackend } from './desktop-gui-backend.js';
+import { completedDesktopGuiTurn } from './desktop-gui-turn.js';
 import { onboardingAction, type OnboardingScreen } from './desktop-gui-onboarding.js';
 
 // 根据 37139666898 的实际角色页和同版公开控件构造决策输入；这是驱动逻辑单测，不是 GUI 验收。
@@ -144,6 +145,23 @@ test('重载 backend 关闭短探测连接，产品默认恢复 RPC 可等待六
     for (const socket of sockets) socket.terminate();
     await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
   }
+});
+
+test('恢复后的 GUI 轮次拒绝旧历史、其他thread、跨turn、重复提交和失败终态', () => {
+  const user = { method: 'item/completed', params: { threadId: 'original', turnId: 'new-turn',
+    item: { type: 'userMessage', content: [{ type: 'text', text: 'NEW_GUI_INPUT\n' }] } } };
+  const reply = { method: 'item/completed', params: { threadId: 'original', turnId: 'new-turn',
+    item: { type: 'agentMessage', text: 'NEW_GUI_REPLY' } } };
+  const done = { method: 'turn/completed', params: { threadId: 'original', turn: { id: 'new-turn', status: 'completed', error: null } } };
+  const check = (messages: any[]) => completedDesktopGuiTurn(messages, 'original', 'NEW_GUI_INPUT', 'NEW_GUI_REPLY');
+  assert.equal(check([{ method: 'thread/started', params: { thread: { id: 'original', turns: [user, reply, done] } } }]), false);
+  assert.equal(check([user, reply, done].map((message) => ({ ...message, params: { ...message.params, threadId: 'other' } }))), false);
+  assert.equal(check([user, reply]), false, '收到回复不等于轮次已完成');
+  assert.throws(() => check([user, { ...reply, params: { ...reply.params, turnId: 'other-turn' } }, done]), /同一个原生 turn/);
+  assert.throws(() => check([user, user, reply, done]), /输入必须只/);
+  assert.throws(() => check([user, reply, reply, done]), /回复必须只/);
+  assert.throws(() => check([user, reply, { ...done, params: { ...done.params, turn: { ...done.params.turn, status: 'failed' } } }]), /成功完成/);
+  assert.equal(check([user, reply, done]), 'new-turn');
 });
 
 test('GUI 退出 RPC 失败也释放观察连接和本次 open 等待句柄', async () => {

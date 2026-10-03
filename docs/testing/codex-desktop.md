@@ -2,7 +2,7 @@
 
 `scripts/verify-codex-desktop-macos.ts` 在一次性 macOS 26 runner 上启动官方 `~/Applications/Codex.app`，真实 Codex CLI 连接本地 mock 模型。GUI 是验收对象，只有模型响应被替换。不修改或执行解包后的 Desktop 通信模块，不创建假的 `.app`，不调用 renderer 内部状态或发消息接口。
 
-当前实际进度：`37142941126` 已通过真实向导、模型介绍关闭、共享 thread 双向收发、GUI 命令审批、精确问答断言和 Desktop 退出重开。重载服务后 GUI 显示原会话，但补充 Bridge `thread/resume` 因误用就绪探测期限而超时，整体仍为 `success=false`。修正后的完整重载、Desktop 先开后恢复、disable 默认 GUI 和实际 OS 登录仍待验证。
+当前实际进度：`37143837340`（`5451b1c`）整体 `success=true`。真实共享 thread 收发、审批、问答、退出重开，以及 disable 后默认 stdio GUI 新回合已通过；服务重载后默认 Bridge resume 耗时 6607ms，官方 GUI 自身 resume 耗时 16134ms。严格审计发现原重载/晚服务恢复门槛只要求历史可见及连接恢复，尚未证明恢复后可继续 GUI 对话；现已补两处新 GUI 回合断言，等待下一 CI。实际 OS 登录仍未验证。
 
 ## 执行与判断
 
@@ -41,10 +41,13 @@ CoreGraphics 查询器在启动 GUI 前用 clang 编译一次，之后每次重�
 | GUI 回答问题 | Plan 模式调用真实 `request_user_input`；单题 GUI 点击 `GUI_BLUE` 即提交，本次请求的实际工具结果严格匹配该答案，Bridge 旧请求失效 |
 | Desktop 退出重开 | backend PID 不变；原 thread 历史和后续 Bridge 回复可见 |
 | 保存的 LaunchAgent 重新加载后再开 Desktop | 不运行 Bridge prepare，新的 backend 恢复环境；真实 GUI 恢复原 thread |
-| Desktop 先开，后启动服务，再重开 Desktop | 记录启动时环境为空；服务启动后重开 GUI 能恢复原 thread。尚未证明不重开也可恢复 |
+| 重载后继续对话 | GUI 发送新的 `DESKTOP_RESTORED_GUI_INPUT` 并显示回复；默认连接在原 thread 观察同一 turn 的唯一输入、回复和成功终态，模型请求只增加一次 |
+| Desktop 先开，后启动服务，再重开 Desktop | 记录启动时环境为空；服务启动后重开 GUI 恢复原 thread，再发送新的 `DESKTOP_LATE_SERVICE_GUI_INPUT`，通过相同的唯一回合断言。尚未证明不重开也可恢复 |
 | 显式关闭共享配置 | LaunchAgent 与环境被清除；原版 Desktop 再次独立启动、恢复原 thread 并经输入框完成新的收发 |
 
 `result.json` 的 `fullDesktopGuiTested` 只在双向 GUI 收发通过后置真；审批、问答分别记录 `guiApprovalTested`、`guiQuestionTested`。任一后续场景失败，整体 `success=false`，不得仅看某一个已通过的布尔值。`disabledDesktopDefaultGui` 只有在关闭共享配置后，真实 App 独立打开原 thread 并完成新一轮 GUI 收发才置真。
+
+两个恢复场景也必须完成新 GUI 回合，才设置原有恢复成功标记。`backendRestartGuiTurn` 与 `lateServiceGuiTurn` 保存对应 thread/turn ID、精确输入与回复、模型请求索引和数量；旧历史、不同 thread 或 turn、重复输入/回复、缺少完成事件和失败终态都不能通过。驱动输入文字后等待真实 `Send` 按钮可用，再点击一次；输入框可见不代表线程已完成恢复。每个新回合分别保存 `restored-gui-sent-and-received.*`、`late-service-gui-sent-and-received.*`。
 
 ## 完整 App 首次验收暴露的连接地址问题
 
@@ -72,9 +75,13 @@ CI `37139317117`（`f5bda77`）已实际打开官方 `26.930.31730` 的窗口，
 
 `37142941126`（`25d110b`）中，问答完整断言通过；Desktop 退出重开后，backend PID 仍为 `5367`，新窗口显示原问答以及新的 Bridge 回复 `DESKTOP_REOPEN_SHARED_REPLY`。随后重新加载保存的 LaunchAgent，backend PID 变为 `6930`，原版 Desktop 新 PID `6939` 的窗口显示同一 thread 历史，App 日志也记录自身 `thread/resume` 在 `13179ms` 后成功。
 
-该轮失败来自验收脚本继续使用 `connect(endpoint, 500)` 返回的就绪探测连接执行 Bridge `thread/resume`；此参数同时控制后续每次 RPC，而非仅控制握手。原生日志中该请求从 `18:09:17.266858Z` 处理到 `18:09:23.000026Z`，已超过 500ms 及普通连接默认的 5 秒。脚本现在关闭短探测连接，再用普通 `connect(endpoint)` 的产品默认连接保留原恢复断言，记录 `backend-resume-start/complete/failed` 和耗时，不重发 `thread/resume`。协议回归要求产品默认连接接受六秒响应、30 秒持续无响应仍失败；这不替代下一轮真实 GUI 验收。当前没有晚启动服务或关闭共享配置后的 GUI 结果。
+该轮失败来自验收脚本继续使用 `connect(endpoint, 500)` 返回的就绪探测连接执行 Bridge `thread/resume`；此参数同时控制后续每次 RPC，而非仅控制握手。原生日志中该请求从 `18:09:17.266858Z` 处理到 `18:09:23.000026Z`，已超过 500ms 及当时普通连接默认的 5 秒。脚本现在关闭短探测连接，再用普通 `connect(endpoint)` 的产品默认连接保留原恢复断言，记录 `backend-resume-start/complete/failed` 和耗时，不重发 `thread/resume`。协议回归要求产品默认连接接受六秒响应、30 秒持续无响应仍失败；这不替代真实 GUI 验收。该轮没有晚启动服务或关闭共享配置后的 GUI 结果。
 
-生产预算核对：`app-server-registry.ts` 和 `app-server-lifecycle.ts` 的连接均使用客户端默认 5000ms，`resume` 未单独指定期限；超时会丢弃该请求后来的响应。上述 5.73 秒服务端处理跨度超过产品默认预算，存在冷恢复时误判超时的实际风险；13.18 秒是官方 Desktop 自身请求的成功耗时，不能当成生产 Bridge 已失败的记录。本轮尚未使用默认 5 秒生产连接复现该故障，不能据此断言所有恢复都会失败。主线另行修复产品预算，分离默认握手 5 秒与请求 30 秒，并保留显式数字调用的兼容行为。GUI 夹具关闭显式 500ms 探测连接后使用普通默认连接，不设置验收专用期限；因此下一轮直接验证产品参数。生产变更由主线提交，本 GUI 修改不包含客户端代码。
+生产预算核对：该轮 `app-server-registry.ts` 和 `app-server-lifecycle.ts` 的连接均使用客户端默认 5000ms，`resume` 未单独指定期限；超时会丢弃该请求后来的响应。上述 5.73 秒服务端处理跨度超过当时产品默认预算，存在冷恢复时误判超时的实际风险；13.18 秒是官方 Desktop 自身请求的成功耗时，不能当成生产 Bridge 已失败的记录。该轮没有用默认 5 秒生产连接复现该故障，不能据此断言所有恢复都会失败。主线提交 `33d18c2` 分离默认握手 5 秒与请求 30 秒，并保留显式数字调用的兼容行为。GUI 夹具关闭显式 500ms 探测连接后使用普通默认连接，不设置验收专用期限，后续直接验证产品参数。生产变更由主线提交，本 GUI 修改不包含客户端代码。
+
+`37143837340` 首次全绿：`startup-sequence.jsonl` 记录 backend 从 PID `3555` 重载为 `4605`，默认连接 resume 成功耗时 `6607ms`；`03-persisted-service-before-desktop/app-stdout.log` 记录官方 GUI resume 成功耗时 `16134ms`，线程均为 `01a10301-1265-73f2-a25e-897a46ef7e28`。这直接验证了超过旧 5 秒的恢复请求可在新产品预算内完成，但该轮 03 还没有新的 GUI 回合。
+
+该轮 04 在空 launchd 地址下实际选择 `stdio`；服务 PID `5622` 后启动，05 重开选择 `websocket`，`thread/read` 在 `1816ms` 后成功并显示旧历史。然而 05 截图仍在恢复中，没有 `thread/resume` 成功记录便被脚本关闭，不能把读取历史写成“已经恢复完整对话”。因此追加上述两处 GUI 新回合门槛；这是验收覆盖缺口，尚无产品失败证据。06 则已有完整新回合：共享服务和环境清除后，官方 PID `5942` 使用 `stdio`，发送 `DESKTOP_DEFAULT_GUI_INPUT`、显示 `DESKTOP_DEFAULT_GUI_REPLY`，模型只增加一次请求，launchd 回读确认服务不存在。其补充 OS 全屏截图失败已记录；CDP 截图和 CoreGraphics 原版 PID/实窗断言通过，App 前后签名检查及 asar 摘要也保持一致。
 
 后续失败报告同时保存 `desktopConnectionUrl`、`desktopConnectionHostname` 和来自本次 App stderr 的 `desktopStartupDiagnostics.transportErrors`。CDP 不可用时，先结合这些字段和 `failure-macos-display.png` 检查原生对话框。
 

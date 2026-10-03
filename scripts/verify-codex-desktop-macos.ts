@@ -12,6 +12,7 @@ import { CodexAppServerLifecycle } from '../src/runtime/codex/app-server-lifecyc
 import { fixtureEnvironment, fixtureModel, startFixtureModel, textInput } from './fixtures/codex-app-server-lifecycle.js';
 import { DesktopGui, until } from './fixtures/desktop-gui-cdp.js';
 import { connectDesktopGuiBackend } from './fixtures/desktop-gui-backend.js';
+import { completedDesktopGuiTurn } from './fixtures/desktop-gui-turn.js';
 import { desktopWindowQuerySource } from './fixtures/desktop-gui-window-query.js';
 
 const execute = promisify(execFile);
@@ -169,7 +170,7 @@ try {
   result.desktopAsarSha256 = createHash('sha256').update(fs.readFileSync(path.join(app, 'Contents/Resources/app.asar'))).digest('hex');
   result.cliVersion = await run(executable, ['--version']);
   result.revision = await run('/usr/bin/git', ['rev-parse', 'HEAD']);
-  result.sourceHashes = Object.fromEntries([script, ...['desktop-gui-cdp.ts', 'desktop-gui-backend.ts', 'desktop-gui-onboarding.ts', 'desktop-gui-window-query.ts']
+  result.sourceHashes = Object.fromEntries([script, ...['desktop-gui-cdp.ts', 'desktop-gui-backend.ts', 'desktop-gui-turn.ts', 'desktop-gui-onboarding.ts', 'desktop-gui-window-query.ts']
     .map((file) => fileURLToPath(new URL(`./fixtures/${file}`, import.meta.url)))]
     .map((file) => [path.basename(file), createHash('sha256').update(fs.readFileSync(file)).digest('hex')]));
   const windowQueryFile = path.join(evidence, 'desktop-gui-window-query.c');
@@ -204,6 +205,23 @@ try {
     cwd: path.join(root, 'workspace'), model: fixtureModel, approvalPolicy: 'on-request', sandbox: 'read-only',
   });
   result.threadId = threadId;
+  const recoveredGuiTurn = async (observer: CodexAppServerClient, name: string, input: string, output: string) => {
+    const messages: AppServerMessage[] = [];
+    const unsubscribe = observer.onMessage((message) => messages.push(message));
+    const before = model.requests.length;
+    try {
+      model.enqueue({ text: output });
+      await gui!.send(input);
+      await gui!.expectText(output);
+      const turnId = await until(async () => completedDesktopGuiTurn(messages, threadId, input, output), `${name} 同 thread 的唯一 GUI 轮次完成`);
+      assert.equal(model.requests.length, before + 1, '恢复后一次 GUI 发送只能发起一个模型请求');
+      assert(JSON.stringify(model.requests.at(-1)!.body.input).includes(input));
+      await gui!.capture(name);
+      const verified = { threadId, turnId, input, output, modelRequestIndex: before, modelRequestCount: 1 };
+      sequence('recovered-gui-turn-complete', { name, ...verified });
+      return verified;
+    } finally { unsubscribe(); }
+  };
   const complete = async (turnId: string) => until(async () => lifecycle.recordsAfter(threadId).records.some((record) =>
     record.turnId === turnId && record.type === 'task_complete' && !record.isError), `共享线程轮次 ${turnId} 完成`);
   const guiRequest = async (method: string, turnId: string) => until(async () => {
@@ -334,6 +352,8 @@ try {
     throw error;
   }
   sequence('backend-resume-complete', { threadId, durationMs: Date.now() - resumeStarted });
+  result.backendRestartGuiTurn = await recoveredGuiTurn(restored, 'restored-gui-sent-and-received',
+    'DESKTOP_RESTORED_GUI_INPUT', 'DESKTOP_RESTORED_GUI_REPLY');
   result.persistedLaunchAgentRestarts = true;
   result.restoresEnvironmentWithoutBridge = true;
   result.resumesAfterBackendRestart = true;
@@ -351,6 +371,9 @@ try {
   await launch('05-reopen-after-late-service', threadId);
   await gui!.expectText('DESKTOP_REOPEN_SHARED_REPLY');
   await gui!.capture('late-service-recovered');
+  assert.equal((await late.request<any>('thread/resume', { threadId })).thread.id, threadId);
+  result.lateServiceGuiTurn = await recoveredGuiTurn(late, 'late-service-gui-sent-and-received',
+    'DESKTOP_LATE_SERVICE_GUI_INPUT', 'DESKTOP_LATE_SERVICE_GUI_REPLY');
   result.desktopBeforeServiceRecoveredAfterReopen = true;
   result.desktopBeforeServiceWithoutReopen = 'not-verified';
   await closeGui(); late.close();
