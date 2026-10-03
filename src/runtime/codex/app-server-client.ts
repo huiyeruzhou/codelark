@@ -21,15 +21,27 @@ export function isUnsupportedAppServerMethod(error: unknown, method?: string): b
       && error.message.startsWith(`app-server (-32600): Invalid request: unknown variant \`${method}\`, expected `)));
 }
 
-/** Local Unix sockets use ws's Unix transport; the CLI uses unix:// for the same endpoint. */
+function unixSocketPath(endpoint: string): string | undefined {
+  if (!endpoint.startsWith('unix://') && !endpoint.startsWith('ws+unix://')) return undefined;
+  const url = new URL(endpoint);
+  if (!['', 'localhost', '127.0.0.1', '[::1]'].includes(url.hostname)
+    || url.username || url.password || url.port || url.search || url.hash) {
+    throw new Error('Codex Unix socket 地址不是本机地址或包含不支持的 URL 字段。');
+  }
+  const socket = url.pathname.split(':')[0]!;
+  if (!socket.startsWith('/') || socket === '/') throw new Error('Codex Unix socket 必须使用绝对文件路径。');
+  return socket;
+}
+
+/** Desktop's transport selector needs a local hostname even for ws's Unix transport. */
 export function appServerWebSocketUrl(endpoint: string): string {
-  if (endpoint.startsWith('unix:///')) return `ws+unix://${endpoint.slice(7)}:/`;
-  return endpoint;
+  const socket = unixSocketPath(endpoint);
+  return socket ? `ws+unix://localhost${socket}:/` : endpoint;
 }
 
 export function appServerCliUrl(endpoint: string): string {
-  if (endpoint.startsWith('ws+unix:///')) return `unix://${endpoint.slice(10).split(':')[0]}`;
-  return endpoint;
+  const socket = unixSocketPath(endpoint);
+  return socket ? `unix://${socket}` : endpoint;
 }
 
 /** A connection owns subscriptions, never the server process or its thread writer locks. */

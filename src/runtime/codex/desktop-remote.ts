@@ -90,7 +90,7 @@ async function findDesktop(home: string, run: ReturnType<typeof runner>): Promis
 }
 
 export function validateLocalEndpoint(endpoint: string): void {
-  if (endpoint.startsWith('ws+unix:///') || endpoint.startsWith('unix:///')) return;
+  if (appServerCliUrl(endpoint).startsWith('unix:///')) return;
   const url = new URL(endpoint);
   if (['ws:', 'wss:'].includes(url.protocol) && ['127.0.0.1', '[::1]', 'localhost'].includes(url.hostname)) return;
   throw new Error('Desktop 的 app-server 地址不是本机地址，未自动连接。');
@@ -196,6 +196,20 @@ export async function prepareCodexDesktopRemote(options: DesktopRemoteOptions): 
   if (installation.codexHome !== codexHome) {
     throw new Error('共享 app-server 使用另一份 CODEX_HOME；未覆盖已有 Desktop 会话环境。');
   }
+  // Upgrade only our old URL spelling; retain the original backend executable and snapshot.
+  const startup = fs.readFileSync(files.script, 'utf8');
+  const oldAddress = quote(`ws+unix://${files.socket}:/`);
+  const newAddress = quote(appServerWebSocketUrl(ownEndpoint));
+  const updated = startup.replace(`/bin/launchctl setenv ${DESKTOP_URL_ENV} ${oldAddress}`,
+    `/bin/launchctl setenv ${DESKTOP_URL_ENV} ${newAddress}`);
+  if (updated !== startup) {
+    const stage = fs.mkdtempSync(path.join(files.root, 'startup-upgrade-'));
+    try {
+      const script = path.join(stage, 'start.sh');
+      fs.writeFileSync(script, updated, { mode: 0o700 });
+      fs.renameSync(script, files.script);
+    } finally { fs.rmSync(stage, { recursive: true, force: true }); }
+  }
   installPlist(home);
   const domain = `gui/${os.userInfo().uid}`;
   try { await run('/bin/launchctl', ['print', `${domain}/${LABEL}`]); } catch {
@@ -236,7 +250,7 @@ export async function disableCodexDesktopRemote(options: Pick<DesktopRemoteOptio
   let loaded = false;
   try { await run('/bin/launchctl', ['print', target]); loaded = true; } catch { /* already stopped */ }
   if (loaded) await run('/bin/launchctl', ['bootout', target]);
-  if (await launchctlValue(run, DESKTOP_URL_ENV) === appServerWebSocketUrl(`unix://${files.socket}`)) {
+  if (appServerCliUrl(await launchctlValue(run, DESKTOP_URL_ENV)) === `unix://${files.socket}`) {
     await run('/bin/launchctl', ['unsetenv', DESKTOP_URL_ENV]);
   }
   fs.rmSync(files.plist, { force: true });

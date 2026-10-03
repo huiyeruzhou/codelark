@@ -1,7 +1,20 @@
 import assert from 'node:assert/strict';
 import { test, type TestContext } from 'node:test';
 import { WebSocketServer, type WebSocket } from 'ws';
-import { CodexAppServerClient, type AppServerMessage } from '../../../../runtime/codex/app-server-client.js';
+import { CodexAppServerClient, appServerWebSocketUrl, appServerCliUrl, type AppServerMessage } from '../../../../runtime/codex/app-server-client.js';
+
+test('Unix URLs use a local Desktop authority and preserve existing CLI/socket identities', () => {
+  for (const input of ['unix:///tmp/codex.sock', 'ws+unix:///tmp/codex.sock:/', 'ws+unix://localhost/tmp/codex.sock:/']) {
+    const desktop = appServerWebSocketUrl(input);
+    assert.equal(new URL(desktop).hostname, 'localhost');
+    assert.equal(desktop, 'ws+unix://localhost/tmp/codex.sock:/');
+    assert.equal(appServerCliUrl(input), 'unix:///tmp/codex.sock');
+  }
+  assert.equal(appServerWebSocketUrl('ws://127.0.0.1:9876'), 'ws://127.0.0.1:9876');
+  for (const url of ['ws+unix://example.invalid/tmp/c.sock:/', 'ws+unix://user@localhost/tmp/c.sock:/']) {
+    assert.throws(() => appServerCliUrl(url), /不是本机地址/);
+  }
+});
 
 async function server(t: TestContext) {
   const wss = new WebSocketServer({ port: 0, host: '127.0.0.1' });

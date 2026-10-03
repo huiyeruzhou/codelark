@@ -93,6 +93,28 @@ test('simultaneous Bridge startups publish one complete installation', async (t)
   assert.equal(JSON.parse(fs.readFileSync(path.join(f.root, 'installation.json'), 'utf8')).codexHome, f.options.env.CODEX_HOME);
 });
 
+test('upgrades the managed Desktop URL without replacing its original snapshot or restarting it', async (t) => {
+  const f = fixture(t);
+  const first = await prepareCodexDesktopRemote(f.options);
+  assert(first);
+  const script = path.join(f.root, 'start.sh');
+  const originalSnapshot = fs.readFileSync(path.join(f.root, 'environment.sh'), 'utf8');
+  const oldUrl = `ws+unix://${first.endpoint.slice(7)}:/`;
+  fs.writeFileSync(script, fs.readFileSync(script, 'utf8').replace(appServerWebSocketUrl(first.endpoint), oldUrl));
+  f.launchEnv.set('CODEX_APP_SERVER_WS_URL', oldUrl);
+  f.calls.length = 0;
+  const next = await prepareCodexDesktopRemote(f.options);
+  assert.equal(next?.endpoint, first.endpoint);
+  assert.equal(next?.desktopEnvironmentChanged, true);
+  assert(fs.readFileSync(script, 'utf8').includes(appServerWebSocketUrl(first.endpoint)));
+  assert.equal(fs.readFileSync(path.join(f.root, 'environment.sh'), 'utf8'), originalSnapshot);
+  assert(!f.calls.some(([, args]) => ['bootstrap', 'bootout', 'kickstart'].includes(args[0]!)));
+  // Older persisted launch environments must also be removable by disable.
+  f.launchEnv.set('CODEX_APP_SERVER_WS_URL', oldUrl);
+  await disableCodexDesktopRemote(f.options);
+  assert.equal(f.launchEnv.has('CODEX_APP_SERVER_WS_URL'), false);
+});
+
 test('different CODEX_HOME cannot replace the Desktop backend environment', async (t) => {
   const f = fixture(t);
   await prepareCodexDesktopRemote(f.options);
