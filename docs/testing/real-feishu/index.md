@@ -72,6 +72,23 @@ CODELARK_REAL_FEISHU_TEST_LARK_CLI_XDG_DATA_HOME=/home/me/.codelark/real-feishu-
 
 云文档 doc-as-chat 需要单独的 from-scratch 验证，不应复用只从 IM 里发 `/new` 的场景。自动化入口是 `--scenario doc-as-chat-from-scratch`，完整说明见 [云文档 doc-as-chat from-scratch E2E 示例](doc-as-chat-from-scratch.md)：它必须新建云文档、以用户身份评论并结构化 @ bot、等待 bot 创建群聊、用 user 身份读取新群信息，在群里继续对话、断言 bot 拿到云文档上下文，并清理群聊和云文档。
 
+## app-server 的本地与 CI 验证
+
+本地使用相同的真实飞书 harness，加 `--codex-app-server`。此选项为 `runtime-message` / `message-only` 启动独立的真实 Codex app-server 和确定性本地模型；Bridge 的 `CODEX_HOME` 与后端一致。用户消息仍经过飞书入站事件，最终内容仍以用户身份从飞书读取，新增 `app_server_backend_used` 检查绑定的 endpoint、真实 loaded thread 与模型请求。报告的 testName 带 `::app-server`，不计作旧 SDK/TUI 的运行证据。
+
+```bash
+CODELARK_REAL_FEISHU_E2E=1 npm run real:feishu:e2e -- \
+  --test-env-file ~/.codelark/real-feishu-e2e/test.env \
+  --launch-bridge --codex-app-server --runtime codex --provider tmux \
+  --scenario runtime-message --run-id app-server-local
+```
+
+`.github/workflows/real-feishu.yml` 提供手动触发的 GitHub Actions 工作流，依次验证 direct（`sdk` 入口）和 mirror（`tmux` 入口）。需要专用测试 App 的 `FEISHU_E2E_APP_ID` / `FEISHU_E2E_APP_SECRET` Secrets；缺少时明确失败，不跳过后报绿。每次运行通过 CLI device flow 建立该 runner 独立的用户授权：运行摘要给出链接，artifact 给出二维码，授权后继续。不会上传或复制本机用户 OAuth；运行结束删除 runner 的授权目录，artifact 只保存测试报告。此流程仍需要测试用户完成当次授权，不宣称完全无人值守。
+
+同一个测试 App 的本地与 CI 运行必须串行，不能与其余 Bridge 同时使用。CI concurrency 只约束 CI 内的运行，本地仍执行活跃 Bridge 冲突检查；进程环境扫描限制为 Node 进程。原生协议、审批回放及 macOS/Desktop 共享后端测试在 `codex-desktop.yml` 中独立运行。
+
+这里的真实飞书场景目前覆盖用户入站、协议执行、最终投递和消息回读。真实审批按钮点击、用户问答提交和完整 Desktop GUI 仍需补充验收，不能用 payload 或模拟 callback 冒充真实操作。
+
 ## 覆盖原则
 
 真实飞书 E2E 只覆盖高风险、用户可见边界：

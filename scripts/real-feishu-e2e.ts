@@ -9,6 +9,9 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 
+import { fixtureEnvironment, fixtureModel, startFixtureAppServer } from './fixtures/codex-app-server-lifecycle.js';
+import { CodexAppServerClient } from '../src/runtime/codex/app-server-client.js';
+
 import type { FeishuSite } from '../src/channels/types.js';
 import {
   feishuSetupUserAuthScopeArgument,
@@ -71,6 +74,8 @@ interface CliOptions {
   requireCanonicalCoverage: '' | 'kimi' | 'kimi-current';
   stopTestBridge: boolean;
   launchBridge: boolean;
+  codexAppServer: boolean;
+  codexAppServerEndpoint?: string;
   fakeCcr: boolean;
   fakeKimi: boolean;
   scriptedBasicDialogue: boolean;
@@ -1096,6 +1101,7 @@ const BOOLEAN_CLI_FLAGS = new Set([
   '--coverage-matrix',
   '--stop-test-bridge',
   '--launch-bridge',
+  '--codex-app-server',
   '--fake-ccr',
   '--fake-kimi',
   '--scripted-basic-dialogue',
@@ -1286,6 +1292,7 @@ function parseOptions(argv: string[]): CliOptions {
     requireCanonicalCoverage: parseRequireCanonicalCoverage(argv),
     stopTestBridge: hasFlag(argv, '--stop-test-bridge'),
     launchBridge,
+    codexAppServer: hasFlag(argv, '--codex-app-server'),
     fakeCcr: hasFlag(argv, '--fake-ccr'),
     fakeKimi: hasFlag(argv, '--fake-kimi'),
     scriptedBasicDialogue: hasFlag(argv, '--scripted-basic-dialogue'),
@@ -1320,9 +1327,9 @@ function parseOptions(argv: string[]): CliOptions {
     scenario,
     commands: parseCommandList(valueArg(argv, '--commands', '')),
     chatId: valueArg(argv, '--chat-id', ''),
-    workDir: valueArg(argv, '--workdir', DEFAULT_WORKSPACE_ROOT),
+    workDir: valueArg(argv, '--workdir', hasFlag(argv, '--codex-app-server') ? path.join(runRoot, 'workspace') : DEFAULT_WORKSPACE_ROOT),
     message: valueArg(argv, '--message', defaultMessage),
-    codexModel: valueArg(argv, '--codex-model', process.env.CODELARK_REAL_FEISHU_CODEX_MODEL || 'gpt-5.5'),
+    codexModel: valueArg(argv, '--codex-model', process.env.CODELARK_REAL_FEISHU_CODEX_MODEL || (hasFlag(argv, '--codex-app-server') ? fixtureModel : 'gpt-5.5')),
     cursorModel: valueArg(argv, '--cursor-model', process.env.CODELARK_REAL_FEISHU_CURSOR_MODEL || 'gpt-5.3-codex'),
     timeoutMs: parsePositiveIntOption(argv, '--timeout-ms', 120_000),
     pollMs: parsePositiveIntOption(argv, '--poll-ms', 2_000),
@@ -1364,6 +1371,7 @@ function printUsage(): void {
     'Options:',
     '  --dry-run                 Print planned lark-cli commands without sending messages',
     '  --dump-only               Only collect bridge dump state',
+    '  --codex-app-server       Use a real isolated app-server with deterministic local model responses',
     '  --list-scenarios          Print scenario names and coverage metadata as JSON',
     '  --coverage-matrix         Print scenario/test-name coverage matrix and scan report evidence',
     '  --reports-dir <path>      Report directory for --coverage-matrix; default work/real-feishu',
@@ -1459,7 +1467,8 @@ function scenarioCoverage(options: CliOptions): Record<string, unknown> {
   const matrix = providerMatrixForScenario(scenario);
   return {
     scenario: scenario.name,
-    testName: runtimeTestName,
+    testName: options.codexAppServer ? `${runtimeTestName}::app-server` : runtimeTestName,
+    executionBackend: options.codexAppServer ? 'app-server' : 'legacy',
     runtime: options.runtime,
     provider: options.provider,
     providerCoverage: scenario.providerCoverage,
@@ -2214,9 +2223,11 @@ function runningProcessCodelarkHomes(): string[] {
   if (process.platform !== 'linux') return [];
   let entries: string[];
   try {
-    entries = fs.readdirSync('/proc');
-  } catch {
-    return [];
+    // CodeLark is a Node process. Do not inspect unrelated process environments.
+    entries = execFileSync('pgrep', ['-f', '^([^[:space:]]*/)?node([[:space:]]|$)'], { encoding: 'utf8' }).trim().split(/\s+/);
+  } catch (error) {
+    if ((error as { status?: number }).status === 1) return [];
+    throw new Error(`Cannot enumerate Node processes for the test App conflict check: ${String(error)}`);
   }
   const homes = new Set<string>();
   for (const entry of entries) {
@@ -3017,6 +3028,7 @@ function prepareRuntimeEnvironment(options: CliOptions): RuntimeEnvironmentPlan 
   fs.mkdirSync(options.runRoot, { recursive: true, mode: 0o700 });
   fs.mkdirSync(options.runtimeHome, { recursive: true, mode: 0o700 });
   fs.mkdirSync(options.codexHome, { recursive: true, mode: 0o700 });
+  if (options.codexAppServer) fs.mkdirSync(options.workDir, { recursive: true, mode: 0o700 });
   fs.mkdirSync(options.claudeHome, { recursive: true, mode: 0o700 });
   fs.mkdirSync(options.kimiHome, { recursive: true, mode: 0o700 });
   fs.mkdirSync(options.cursorConfigDir, { recursive: true, mode: 0o700 });
@@ -3030,7 +3042,7 @@ function prepareRuntimeEnvironment(options: CliOptions): RuntimeEnvironmentPlan 
     || process.env.CODEX_API_KEY
     || process.env.OPENAI_API_KEY
     || '';
-  if (usesProxyBackedBasicDialogue(options)) {
+  if (options.codexAppServer || usesProxyBackedBasicDialogue(options)) {
     writeCodexApiKeyAuth(options.codexHome, 'clk-local-proxy-key');
     codexAuthSource = 'env-api-key';
   } else if (codexApiKey) {
@@ -6304,6 +6316,7 @@ async function launchBridgeChild(options: CliOptions, runtimeEnvironment: Runtim
       cwd: process.cwd(),
       env: isolatedTmuxChildEnv(options, {
         CODELARK_HOME: options.codelarkHome,
+        ...(options.codexAppServerEndpoint ? { CODELARK_CODEX_APP_SERVER_URL: options.codexAppServerEndpoint } : {}),
         HOME: runtimeEnvironment.bridgeHome,
         USERPROFILE: runtimeEnvironment.bridgeHome,
         XDG_DATA_HOME: path.join(runtimeEnvironment.runtimeHome, '.local', 'share'),
@@ -7321,6 +7334,7 @@ async function main(): Promise<void> {
   loadRealFeishuTestEnvFile(argv);
   const options = parseOptions(argv);
   getScenarioDefinition(options.scenario);
+  if (options.codexAppServer && (!options.launchBridge || options.runtime !== 'codex' || !['runtime-message', 'message-only'].includes(options.scenario))) throw new Error('--codex-app-server requires an isolated Codex bridge and a supported message/card scenario.');
   validateScriptedBasicDialogueOptions(options);
   validateScriptedKimiOptions(options);
   validateFakeKimiOptions(options);
@@ -7368,6 +7382,8 @@ async function main(): Promise<void> {
   let fakeCcrBackend: LocalFakeChatCompletionsBackend | null = null;
   let fakeKimiBackend: LocalFakeChatCompletionsBackend | null = null;
   let codexResponsesProxy: LocalCodexResponsesProxy | null = null;
+  let appServer: Awaited<ReturnType<typeof startFixtureAppServer>> | undefined;
+  let protocolObserver: CodexAppServerClient | undefined;
   const messageObservations: MessageObservation[] = [];
   try {
     if (options.launchBridge && !options.dryRun) {
@@ -7379,8 +7395,8 @@ async function main(): Promise<void> {
     const userAuthorization = await assertLarkCliUserAuthorizationPreflight(options);
     startupChatCleanup = await cleanupRegisteredTestChats(options);
     appLock = acquireAppLock(options);
-    if (usesProxyBackedBasicDialogue(options) && !options.dryRun) {
-      codexResponsesProxy = await startSharedLocalCodexResponsesProxy(options.fakeCcrResponseText);
+    if ((options.codexAppServer || usesProxyBackedBasicDialogue(options)) && !options.dryRun) {
+      codexResponsesProxy = await startSharedLocalCodexResponsesProxy(options.codexAppServer ? `APP_SERVER_REPLY ${options.message}` : options.fakeCcrResponseText);
       options.codexProxyBaseUrl = codexResponsesProxy.baseUrl;
       process.stderr.write(`[real-feishu-e2e] Started local Codex Responses proxy at ${codexResponsesProxy.baseUrl}; Codex SDK/tmux will use isolated CODEX_HOME=${options.codexHome}\n`);
     }
@@ -7403,6 +7419,16 @@ async function main(): Promise<void> {
       if (options.runtime === 'cursor' && runtimeEnvironment.cursorAuthSource !== 'verified-isolated-auth') {
         throw new Error(`Cursor authentication preflight failed for isolated real E2E environment (${runtimeEnvironment.cursorAuthSource}).`);
       }
+    }
+    if (options.codexAppServer && !options.dryRun) {
+      const backendRoot = path.join(options.runRoot, 'app-server');
+      const env = fixtureEnvironment(backendRoot, options.codexProxyBaseUrl!);
+      fs.copyFileSync(path.join(backendRoot, 'codex/config.toml'), path.join(options.codexHome, 'config.toml'));
+      appServer = await startFixtureAppServer(process.env.CODELARK_CODEX_CLI_PATH || 'codex', backendRoot, {
+        ...env, CODEX_HOME: options.codexHome, HOME: options.runtimeHome,
+      });
+      options.codexAppServerEndpoint = appServer.endpoint;
+      protocolObserver = await CodexAppServerClient.connect(appServer.endpoint);
     }
     child = await launchBridgeChild(options, runtimeEnvironment);
 
@@ -7720,6 +7746,7 @@ async function main(): Promise<void> {
         throw error;
       }
     }
+    const appServerThreads = protocolObserver ? (await protocolObserver.request<{ data: string[] }>('thread/loaded/list')).data : [];
     const finalFeishuMessages = await listFinalFeishuMessagesForObservations(messageObservations, options, validationChatId);
     scenarioCreatedChatInfo = await inspectScenarioCreatedChats(messageObservations, options, [
       chatId,
@@ -7770,6 +7797,8 @@ async function main(): Promise<void> {
     const codexModelAudit = codexProxyModelAudit(options, codexResponsesProxy);
     const checks = [
       ...effectiveReportChecks,
+      ...(options.codexAppServer ? [{ name: 'app_server_backend_used', ok: appServerThreads.includes(report.runtimeThreadId || '') && report.session?.runtime?.codex?.appServerEndpoint === options.codexAppServerEndpoint && (codexResponsesProxy?.requests.length || 0) > 0,
+        detail: `Real app-server loaded threads=${appServerThreads.length}; model requests=${codexResponsesProxy?.requests.length || 0}.` }] : []),
       ...scenarioSpecificChecks(options, report, finalFeishuMessages),
       ...(options.fakeCcr
         ? [{
@@ -7950,6 +7979,8 @@ async function main(): Promise<void> {
       updateTestChatRegistryCleanup(createdChatId, cleanup, false);
     }
     await stopBridgeChild(child);
+    protocolObserver?.close();
+    await appServer?.close();
     await stopFakeCcrRouter(options);
     if (fakeCcrBackend) {
       await fakeCcrBackend.close().catch(() => {});

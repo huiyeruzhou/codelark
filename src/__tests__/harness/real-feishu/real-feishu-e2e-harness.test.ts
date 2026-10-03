@@ -4410,3 +4410,17 @@ describe('unit::real-feishu-e2e-harness::session-management-command-plan', () =>
     assert.match(output, /Refusing to run real Feishu E2E without --launch-bridge/);
   });
 });
+
+
+describe('app-server real Feishu execution selection', () => {
+  it('plans an isolated protocol backend without starting services or sending messages', () => {
+    const report = JSON.parse(runHarness(['--dry-run', '--launch-bridge', '--codex-app-server', '--runtime', 'codex', '--provider', 'tmux', '--scenario', 'runtime-message']));
+    assert.equal(report.dryRun, true);
+    assert.equal(report.coverage.executionBackend, 'app-server');
+    assert.match(report.coverage.testName, /::app-server$/);
+  });
+  it('refuses an app-server test against a live bridge or a different runtime', () => {
+    assert.match(runHarnessFailure(['--dry-run', '--codex-app-server', '--runtime', 'codex']), /requires an isolated Codex bridge/);
+    assert.match(runHarnessFailure(['--dry-run', '--launch-bridge', '--codex-app-server', '--runtime', 'claude']), /requires an isolated Codex bridge/);
+  });
+});
