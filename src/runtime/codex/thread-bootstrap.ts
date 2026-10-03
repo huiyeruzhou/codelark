@@ -7,7 +7,7 @@ import {
   buildShellSnapshotLaunchArgs,
   ensureShellSnapshot,
 } from './shell-snapshot.js';
-import { findSessionFileByThreadId } from './tmux-provider.js';
+import { buildCodexTuiEnv, findSessionFileByThreadId } from './tmux-provider.js';
 
 const LOCAL_BOOTSTRAP_BASE_URL = 'http://127.0.0.1:9/v1';
 const LOCAL_BOOTSTRAP_TIMEOUT_MS = 15_000;
@@ -62,7 +62,7 @@ function buildLocalBootstrapArgs(options: LocalCodexThreadBootstrapOptions): str
 }
 
 function buildLocalBootstrapEnv(): NodeJS.ProcessEnv {
-  const env: NodeJS.ProcessEnv = { ...process.env };
+  const env: NodeJS.ProcessEnv = buildCodexTuiEnv();
   const apiKey = env.CODELARK_CODEX_API_KEY || env.CODEX_API_KEY || env.OPENAI_API_KEY || 'clk-local-bootstrap-dummy-key';
   env.CODEX_API_KEY = apiKey;
   env.OPENAI_API_KEY = apiKey;

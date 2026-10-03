@@ -184,6 +184,7 @@ describe('codex-tmux-provider', () => {
       LARK_CHANNEL_CONFIG: '/Users/tester/.codelark/runtime/lark-cli-source/config.json',
       LARKSUITE_CLI_CONFIG_DIR: '/Users/tester/.codelark/runtime/lark-cli',
       OPENAI_API_KEY: 'official-key',
+      GIT_TERMINAL_PROMPT: '1',
     });
 
     assert.equal(env.PATH, sourcePath);
@@ -195,6 +196,7 @@ describe('codex-tmux-provider', () => {
     assert.equal(env.LARK_CHANNEL_CONFIG, undefined);
     assert.equal(env.LARKSUITE_CLI_CONFIG_DIR, undefined);
     assert.equal(env.CODEX_API_KEY, undefined);
+    assert.equal(env.GIT_TERMINAL_PROMPT, '0');
   });
 
   it('removes the deprecated CodeLark lark-cli shim from inherited PATH', () => {

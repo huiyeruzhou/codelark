@@ -185,9 +185,7 @@ run_worker() {
   validate_project_dir
   echo "[hot-update] node: $(node -v)"
 
-  local proxy_supported=0
   if node_supports_env_proxy; then
-    proxy_supported=1
     echo "[hot-update] --use-env-proxy: supported"
   else
     echo "[hot-update] --use-env-proxy: not supported"
@@ -213,15 +211,11 @@ run_worker() {
 
   local cli
   cli="$(bridge_cli_display)"
-  if [ "$proxy_supported" = "1" ]; then
-    echo "[hot-update] restart command: NODE_OPTIONS=--use-env-proxy LITELLM_KEY=sk-local-dev $cli stop && NODE_OPTIONS=--use-env-proxy LITELLM_KEY=sk-local-dev $cli start"
-    NODE_OPTIONS=--use-env-proxy LITELLM_KEY="sk-local-dev" run_bridge_cli stop
-    NODE_OPTIONS=--use-env-proxy LITELLM_KEY="sk-local-dev" run_bridge_cli start
-  else
-    echo "[hot-update] restart command: LITELLM_KEY=sk-local-dev $cli stop && LITELLM_KEY=sk-local-dev $cli start"
-    LITELLM_KEY="sk-local-dev" run_bridge_cli stop
-    LITELLM_KEY="sk-local-dev" run_bridge_cli start
-  fi
+  # The caller supplies the target instance's environment. Never replace its
+  # credentials or NODE_OPTIONS with values from an unrelated installation.
+  echo "[hot-update] restart command: $cli stop && $cli start (inherited instance environment)"
+  run_bridge_cli stop
+  run_bridge_cli start
 
   echo "[hot-update] completed $(date -Is)"
 }

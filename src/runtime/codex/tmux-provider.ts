@@ -186,6 +186,12 @@ export function hasCodexTuiUpdatePrompt(screenText: string): boolean {
 export function hasCodexTuiInputPrompt(screenText: string): boolean {
   if (parseCodexTuiSelectionPrompt(screenText)) return false;
   const normalized = normalizeTerminalScreenText(screenText).slice(-20_000);
+  // A resume screen already renders a composer before the session is loaded.
+  // capture-pane includes scrollback, so only inspect the latest Codex screen.
+  const currentScreen = normalized.slice(Math.max(0, normalized.lastIndexOf('OpenAI Codex')));
+  if (/\bmodel:\s*loading\b|(?:^|\n)\s*Resuming session(?:…|\.{3})\s*(?:\n|$)/iu.test(currentScreen)) return false;
+  const inputStart = normalized.lastIndexOf('›');
+  if (/(?:Username|Password) for ['"][^'"\r\n]+['"]:\s*(?:\n|$)/u.test(normalized.slice(Math.max(0, inputStart)))) return false;
   return normalized.split('\n').some((line) => {
     // Codex keeps the unicode input chevron on compact/working screens even
     // after the title and shortcut hints scroll out of capture-pane history.
@@ -751,6 +757,9 @@ export function buildCodexTuiEnv(sourceEnv: NodeJS.ProcessEnv = process.env): Re
   for (const [key, value] of Object.entries(buildStandardLarkCliEnv(sourceEnv))) {
     if (value !== undefined) env[key] = value;
   }
+  // Codex's background plugin sync must not compete with the TUI for /dev/tty.
+  // Existing credential helpers can still authenticate without a terminal.
+  env.GIT_TERMINAL_PROMPT = '0';
   return env;
 }
 

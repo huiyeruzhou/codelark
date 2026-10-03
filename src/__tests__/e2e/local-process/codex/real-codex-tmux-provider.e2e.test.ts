@@ -64,7 +64,12 @@ function createMediumMultilinePrompt(): string {
 function hasCompletedTurnForMarker(filePath: string, marker: string): boolean {
   if (!filePath || !fs.existsSync(filePath)) return false;
   const lines = fs.readFileSync(filePath, 'utf-8').split(/\r?\n/u).filter(Boolean);
-  const userMessageIndex = lines.findIndex((line) => line.includes('"type":"user_message"') && line.includes(marker));
+  const userMessageIndex = lines.findIndex((line) => {
+    const entry = JSON.parse(line) as { type?: string; payload?: { type?: string; role?: string } };
+    const userMessage = (entry.type === 'event_msg' && entry.payload?.type === 'user_message')
+      || (entry.type === 'response_item' && entry.payload?.type === 'message' && entry.payload.role === 'user');
+    return userMessage && line.includes(marker);
+  });
   return userMessageIndex >= 0 && lines.slice(userMessageIndex + 1).some((line) => line.includes('"type":"task_complete"'));
 }
 
@@ -866,7 +871,14 @@ describe('real codex tmux provider e2e', () => {
           'Codex should preserve either the model rate-limit error or its structured retry-exhausted 429 wrapper',
         );
       }
-      assert.equal(proxy.requests.filter((request) => request.rawBody.includes(fatalMarker)).length, 1);
+      // Newer Codex also requests a thread title whose instructions quote the
+      // marker. Count the actual user turn, not that separate title request.
+      const directTurnRequests = proxy.requests.filter(({ body }) => {
+        const input = (body as { input?: Array<{ role?: string; content?: Array<{ text?: string }> }> }).input;
+        return input?.some((item) => item.role === 'user'
+          && item.content?.some((part) => part.text === fatalMarker));
+      });
+      assert.equal(directTurnRequests.length, 1);
     } finally {
       if (tmuxSessionName) {
         await execFileAsync('tmux', ['kill-session', '-t', tmuxSessionName]).catch(() => undefined);

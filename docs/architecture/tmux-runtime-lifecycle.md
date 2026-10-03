@@ -76,6 +76,10 @@ Codex tmux 还有一条隐式初始化路径：如果当前聊天的有效 Codex
 
 `buildCodexResumeTmuxCommand` 构造 Codex TUI shell command。Codex tmux 只允许使用全局 Codex CLI：resolver 不会回退到 `node_modules/.bin/codex` 或包内 `node_modules/.bin/codex`，显式 `CODELARK_CODEX_CLI_PATH` 也不能指向 `node_modules/.bin`，避免旧本地依赖反复弹更新提示。
 
+TUI 启动和本地 thread bootstrap 共用 `buildCodexTuiEnv`，显式设置 `GIT_TERMINAL_PROMPT=0`。Codex 启动时可能后台同步官方插件目录；无凭据时 Git 必须返回失败，不能读取 `/dev/tty` 与 TUI 抢占输入。已有 credential helper 仍可正常提供凭据。就绪检测还会排除当前 `model: loading`、`Resuming session…` 和 Git 用户名/密码提示；已滚入历史的加载画面不会挡住后续正常输入框。
+
+热更新必须继承目标实例自己的 shell snapshot 环境。`scripts/hot-update-bridge.sh` 不覆盖实例凭据或 `NODE_OPTIONS`；更新 Bridge 仅影响之后启动的子进程，已卡住的旧 Git/Codex 进程需要另行核实并恢复。`/tmux-screen` 只抓屏，不会执行恢复。
+
 启动命令在 shared tmux core 中保留两种等价表示：人类可读 command preview，以及实际传给 tmux 的 `string | argv[]`。POSIX tmux 的 `new-session --` 接收单一 shell command；Windows psmux 必须接收分开的 executable/args argv，不能把 `pwsh.exe ...` 或 `node.exe ...` 拼成一个字符串，否则 CreateProcessW 会把整串误当成 executable path。Codex 和 Kimi 都通过 shell snapshot 把当前 bridge 环境交给 Windows 子进程，因此 npm 的 `.cmd` wrapper 由系统 shell 执行，不能直接当成 `.exe` 交给 CreateProcess。
 
 `waitForCodexResumeTmuxReady` 现在委托给 `waitForRuntimeTmuxReady(runtime='codex')` 周期性 `capturePane`，直到看到 Codex TUI ready prompt，或者达到 `CODELARK_CODEX_RESUME_TMUX_READY_TIMEOUT_MS`。如果启动时停在 update、goal、permission 或 generic selection，shared readiness 会把完整 selection prompt 发给 IM handler；没有 handler 时只返回未 ready，不自动按默认项。IM 下拉默认项来自 TUI 当前选择游标，若无法识别游标则使用 TUI 选项第一项；不会再把 update 固定成 `skip`，也不会把 goal 固定成 `cancel`。用户回调的 choice 会转换成 tmux 上的上下移动和 Enter，发送后继续 ready 检测，直到真正可输入才注入消息。

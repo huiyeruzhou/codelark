@@ -177,6 +177,29 @@ describe('codex tmux runtime', () => {
     assert.equal(hasCodexResumeTmuxReadyPrompt(screen), true);
   });
 
+  it('waits through the loading composer and accepts the later ready screen in the same capture', () => {
+    const loading = [
+      '│ >_ OpenAI Codex (v0.153.4) │',
+      '│ model:     loading   /model to change │',
+      '  Resuming session…',
+      '› Ask Codex to do anything',
+      '  ? for shortcuts',
+    ].join('\n');
+    assert.equal(hasCodexResumeTmuxReadyPrompt(loading), false);
+    const ready = [
+      loading,
+      '│ >_ OpenAI Codex (v0.153.4) │',
+      '│ model:     gpt-5.6 medium   /model to change │',
+      '› Ask Codex to do anything',
+      '  gpt-5.6 medium · /workspace/project',
+    ].join('\n');
+    assert.equal(hasCodexResumeTmuxReadyPrompt(ready), true);
+    assert.equal(hasCodexResumeTmuxReadyPrompt(ready.replace(
+      '› Ask Codex to do anything\n  gpt-5.6',
+      "› user input Username for 'https://github.com':\n  gpt-5.6",
+    )), false);
+  });
+
   it('treats a working Codex TUI screen with an input line as ready for follow-up input', () => {
     const screen = [
       '└ (no output)',
