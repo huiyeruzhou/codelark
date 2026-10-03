@@ -10,7 +10,7 @@ import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 
 import { fixtureEnvironment, fixtureModel, startFixtureAppServer, startFixtureModel } from './fixtures/codex-app-server-lifecycle.js';
-import { runAppServerLifecycle } from '../src/testing/real-feishu/app-server-lifecycle.js';
+import { runAppServerLifecycle, readAllUserPages } from '../src/testing/real-feishu/app-server-lifecycle.js';
 import { CodexAppServerClient } from '../src/runtime/codex/app-server-client.js';
 
 import type { FeishuSite } from '../src/channels/types.js';
@@ -79,6 +79,7 @@ interface CliOptions {
   codexAppServer: boolean;
   approvalWaitMs: number;
   requireApproval: boolean;
+  nativeRequestCards: boolean;
   codexAppServerEndpoint?: string;
   fakeCcr: boolean;
   fakeKimi: boolean;
@@ -1118,6 +1119,7 @@ const BOOLEAN_CLI_FLAGS = new Set([
   '--launch-bridge',
   '--codex-app-server',
   '--require-approval',
+  '--native-request-cards',
   '--fake-ccr',
   '--fake-kimi',
   '--scripted-basic-dialogue',
@@ -1312,6 +1314,7 @@ function parseOptions(argv: string[]): CliOptions {
     codexAppServer: hasFlag(argv, '--codex-app-server'),
     approvalWaitMs: hasFlag(argv, '--approval-wait-ms') ? parsePositiveIntOption(argv, '--approval-wait-ms', 300_000) : 0,
     requireApproval: hasFlag(argv, '--require-approval'),
+    nativeRequestCards: hasFlag(argv, '--native-request-cards'),
     fakeCcr: hasFlag(argv, '--fake-ccr'),
     fakeKimi: hasFlag(argv, '--fake-kimi'),
     scriptedBasicDialogue: hasFlag(argv, '--scripted-basic-dialogue'),
@@ -1393,6 +1396,7 @@ function printUsage(): void {
     '  --codex-app-server       Use a real isolated app-server with deterministic local model responses',
     '  --approval-wait-ms N      Lifecycle only: wait for a real Feishu client approval click',
     '  --require-approval        Fail unless the optional real-client approval finishes',
+    '  --native-request-cards    Lifecycle: include file/permissions/MCP cards (Codex 0.153.4)',
     '  --list-scenarios          Print scenario names and coverage metadata as JSON',
     '  --coverage-matrix         Print scenario/test-name coverage matrix and scan report evidence',
     '  --reports-dir <path>      Report directory for --coverage-matrix; default work/real-feishu',
@@ -3339,7 +3343,7 @@ async function sendUserContent(chatId: string, content: unknown, msgType: string
   return messageId;
 }
 
-async function listChatMessages(chatId: string, options: CliOptions, pageSize = 20): Promise<unknown | null> {
+async function listChatMessages(chatId: string, options: CliOptions, pageSize = 20, pageToken?: string): Promise<unknown | null> {
   try {
     const stdout = await runLarkCli([
       'im',
@@ -3352,6 +3356,7 @@ async function listChatMessages(chatId: string, options: CliOptions, pageSize = 
       String(pageSize),
       '--format',
       'json',
+      ...(pageToken ? ['--page-token', pageToken] : []),
     ], options);
     return JSON.parse(stdout || '{}');
   } catch (error) {
@@ -7368,6 +7373,7 @@ async function main(): Promise<void> {
   getScenarioDefinition(options.scenario);
   if (options.codexAppServer && (!options.launchBridge || options.runtime !== 'codex' || !['runtime-message', 'message-only', 'app-server-lifecycle'].includes(options.scenario))) throw new Error('--codex-app-server requires an isolated Codex bridge and a supported message/card scenario.');
   if (options.scenario === 'app-server-lifecycle' && !options.codexAppServer) throw new Error('app-server-lifecycle requires --codex-app-server.');
+  if (options.nativeRequestCards && options.scenario !== 'app-server-lifecycle') throw new Error('--native-request-cards requires app-server-lifecycle.');
   if ((options.approvalWaitMs || options.requireApproval) && options.scenario !== 'app-server-lifecycle') throw new Error('Approval options require app-server-lifecycle.');
   if (options.requireApproval && !options.approvalWaitMs) throw new Error('--require-approval requires --approval-wait-ms.');
   validateScriptedBasicDialogueOptions(options);
@@ -7466,7 +7472,11 @@ async function main(): Promise<void> {
       if (lifecycleModel) {
         fs.writeFileSync(path.join(options.codexHome, 'models_cache.json'), JSON.stringify({ models: [{ slug: options.codexModel, display_name: options.codexModel, visibility: 'list', supported_in_api: true }] }));
         const configPath = path.join(options.codexHome, 'config.toml');
-        fs.writeFileSync(configPath, fs.readFileSync(configPath, 'utf8').replace('[features]', '[features]\ndefault_mode_request_user_input = true'));
+        fs.writeFileSync(configPath, fs.readFileSync(configPath, 'utf8').replace('[features]', '[features]\ndefault_mode_request_user_input = true' + (options.nativeRequestCards ? '\nrequest_permissions_tool = true' : '')));
+        if (options.nativeRequestCards) {
+          const mcpPath = fileURLToPath(new URL('../src/testing/real-feishu/native-card-mcp.mjs', import.meta.url));
+          fs.appendFileSync(configPath, `\n[mcp_servers.codelark_cards]\ncommand = ${JSON.stringify(process.execPath)}\nargs = ${JSON.stringify([mcpPath, options.runId])}\n`);
+        }
       }
       appServer = await startFixtureAppServer(process.env.CODELARK_CODEX_CLI_PATH || 'codex', backendRoot, {
         ...env, CODEX_HOME: options.codexHome, HOME: options.runtimeHome,
@@ -7518,6 +7528,7 @@ async function main(): Promise<void> {
         launchBridge: options.launchBridge,
         initialChatCreation: createsInitialProductNewSessionGroup(options) ? 'product-new-session-use-case' : 'provided-chat-id',
         scriptedBasicDialogue: options.scriptedBasicDialogue,
+        nativeRequestCards: options.nativeRequestCards,
         scriptedKimi: options.scriptedKimi,
         fakeKimi: options.fakeKimi,
         ...(options.fakeKimi ? { fakeKimiResponseText: options.fakeKimiResponseText } : {}),
@@ -7553,10 +7564,10 @@ async function main(): Promise<void> {
       const result = await runAppServerLifecycle({
         runId: options.runId, provider: options.provider, chatId, modelName: options.codexModel,
         endpoint: options.codexAppServerEndpoint!, timeoutMs: options.timeoutMs, pollMs: options.pollMs,
-        approvalWaitMs: options.approvalWaitMs, model: lifecycleModel, observer: protocolObserver,
+        approvalWaitMs: options.approvalWaitMs, nativeRequestCards: options.nativeRequestCards, workspace: options.workDir, model: lifecycleModel, observer: protocolObserver,
         botAppId: options.testFeishuAppId,
         send: (id, text) => sendUserText(id, text, options),
-        read: (id) => listChatMessages(id, options, 50),
+        read: (id) => options.nativeRequestCards ? readAllUserPages((token) => listChatMessages(id, options, 50, token)) : listChatMessages(id, options, 50),
         state: (id) => {
           const dump = latestDump(options, id);
           if (!dump.session) return undefined;
@@ -7571,12 +7582,12 @@ async function main(): Promise<void> {
           };
         },
         findCreatedChat: (name) => extractScenarioCreatedChatIdsFromBridgeState(options, [name], [chatId])[0],
-        callbackEvidence: (id, messageId) => {
+        callbackEvidence: (id, messageId, decision = 'accept') => {
           for (const line of (latestDump(options, id).logWindow?.text || '').split('\n')) {
             try {
               const record = JSON.parse(line);
               if (record.msg === 'Incoming card action event:' && record.chatId === id && record.messageId === messageId
-                && typeof record.callbackData === 'string' && record.callbackData.startsWith('app-server-request:') && record.callbackData.endsWith(':accept')) return record;
+                && typeof record.callbackData === 'string' && record.callbackData.startsWith('app-server-request:') && record.callbackData.endsWith(`:${decision}`)) return record;
             } catch { /* 只识别原始结构化事件。 */ }
           }
           return undefined;

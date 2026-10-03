@@ -4428,10 +4428,14 @@ describe('app-server real Feishu execution selection', () => {
       assert.equal(report.keepGroup, true, '审批卡片群保留供真实客户端核对');
       assert.equal(report.coverage.matrix.length, 2);
       assert.match(report.coverage.testName, /::app-server$/);
+      const extended = JSON.parse(runHarness(['--dry-run', '--launch-bridge', '--codex-app-server', '--native-request-cards', '--runtime', 'codex', '--provider', provider, '--scenario', 'app-server-lifecycle']));
+      assert.equal(extended.keepGroup, true);
+      assert.equal(extended.nativeRequestCards, true);
     }
     assert.match(runHarnessFailure(['--dry-run', '--scenario', 'app-server-lifecycle']), /requires --codex-app-server/);
     assert.match(runHarnessFailure(['--dry-run', '--launch-bridge', '--codex-app-server', '--runtime', 'codex', '--scenario', 'app-server-lifecycle', '--require-approval']), /requires --approval-wait-ms/);
     assert.match(runHarnessFailure(['--dry-run', '--approval-wait-ms', '1000']), /require app-server-lifecycle/);
+    assert.match(runHarnessFailure(['--dry-run', '--native-request-cards']), /requires app-server-lifecycle/);
   });
 
   it('plans an isolated protocol backend without starting services or sending messages', () => {

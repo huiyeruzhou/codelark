@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
+import { runNativeRequestCards, type NativeCardReport } from './native-request-cards.js';
 import { CodexAppServerClient, type AppServerMessage } from '../../runtime/codex/app-server-client.js';
-interface ModelBody { model?: string; input?: unknown[]; tools?: Array<Record<string, any>>; [key: string]: unknown }
-type ModelOutput = { text: string } | { tool: string; arguments: Record<string, unknown>; callId?: string };
+export interface ModelBody { model?: string; input?: unknown[]; tools?: Array<Record<string, any>>; [key: string]: unknown }
+export type ModelOutput = { text: string } | { search: string } | { tool: string; arguments: Record<string, unknown> | string; callId?: string; namespace?: string };
 interface FixtureModel {
   requests: Array<{ method: string; url: string; body: ModelBody }>;
   unexpected: string[];
@@ -18,6 +19,8 @@ export interface LifecycleDriver {
   timeoutMs: number;
   pollMs: number;
   approvalWaitMs: number;
+  nativeRequestCards?: boolean;
+  workspace?: string;
   model: FixtureModel;
   observer: CodexAppServerClient;
   send(chatId: string, text: string): Promise<string>;
@@ -25,7 +28,7 @@ export interface LifecycleDriver {
   state(chatId: string): LifecycleSession | undefined;
   findCreatedChat(name: string): string | undefined;
   restartBridge(): Promise<void>;
-  callbackEvidence(chatId: string, messageId: string): unknown | undefined;
+  callbackEvidence(chatId: string, messageId: string, decision?: 'accept' | 'cancel'): unknown | undefined;
   save(report: LifecycleReport): void;
   progress(text: string): void;
   botAppId: string;
@@ -38,8 +41,8 @@ export interface LifecycleSession {
   streamKeys: string[];
   terminal?: { streamKey: string; status: string } | null;
 }
-interface NativeTurn { id: string; status: string; items: Array<Record<string, unknown>> }
-interface NativeThread { id: string; turns: NativeTurn[] }
+export interface NativeTurn { id: string; status: string; items: Array<Record<string, unknown>> }
+export interface NativeThread { id: string; turns: NativeTurn[] }
 export interface LifecycleReport {
   scenario: 'app-server-lifecycle';
   runId: string;
@@ -56,6 +59,7 @@ export interface LifecycleReport {
   protocol: AppServerMessage[];
   threads: Record<string, NativeThread>;
   modelRequests: LifecycleDriver['model']['requests'];
+  nativeCards?: NativeCardReport[];
   error?: string;
 }
 
@@ -67,6 +71,24 @@ export function userReadbackMessages(payload: unknown): Array<Record<string, any
   assert(p?.ok === true && p.identity === 'user', '最终消息必须由真实用户身份成功回读');
   assert(Array.isArray(p.data?.messages), '用户回读缺少 messages');
   return p.data.messages as Array<Record<string, any>>;
+}
+export async function readAllUserPages(fetchPage: (token?: string) => Promise<unknown>): Promise<unknown> {
+  const pages: any[] = [];
+  const messages: Array<Record<string, any>> = [];
+  const tokens = new Set<string>();
+  let token: string | undefined;
+  do {
+    assert(pages.length < 5, '隔离故事消息超过 250 条，必须检查重复发送');
+    const page = await fetchPage(token) as any;
+    messages.push(...userReadbackMessages(page)); pages.push(page);
+    token = page.data.has_more ? page.data.page_token : undefined;
+    if (page.data.has_more) {
+      assert(typeof token === 'string' && token && !tokens.has(token), '真实用户回读分页游标缺失或重复');
+      tokens.add(token);
+    }
+  } while (token);
+  assert.equal(new Set(messages.map((m) => m.message_id)).size, messages.length, '分页之间不能重复消息');
+  return { ...pages[0], data: { ...pages[0].data, has_more: false, page_token: '', messages }, pages };
 }
 export function botReplyIds(payload: unknown, appId: string, marker: string): string[] {
   return userReadbackMessages(payload).filter((m) => m.sender?.sender_type === 'app'
@@ -322,6 +344,13 @@ export async function runAppServerLifecycle(d: LifecycleDriver): Promise<Lifecyc
       report.approval.detail = '自动部分已验证审批请求与卡片；未等待真实客户端点击，已通过真实 /stop 取消。群入口可查看卡片；补验收请重新运行并指定 --approval-wait-ms。';
       await send(newChat, '/stop'); await terminal(newTurn.threadId, approvalTurn, 'interrupted');
     }
+    if (d.nativeRequestCards) {
+      report.nativeCards = []; save();
+      if (!d.approvalWaitMs || report.approval.status === 'passed') {
+        await runNativeRequestCards({ driver: d, report, chatId: newChat, threadId: newTurn.threadId,
+          wait, read, send, thread, terminal, visible, stage, check, save });
+      }
+    }
     for (const chat of report.chats) {
       const messages = userReadbackMessages(await read(chat));
       for (const input of report.inputs.filter((i) => i.chatId === chat)) {
@@ -332,9 +361,11 @@ export async function runAppServerLifecycle(d: LifecycleDriver): Promise<Lifecyc
     assert.deepEqual(d.model.unexpected, [], '模型收到未编排调用');
     assert(d.model.requests.every((r) => r.body.model === d.modelName && (r.body.reasoning as { effort?: string })?.effort === 'low'), '实际模型请求必须使用继承后的模型和思考级别');
     check('fixture_model_only');
-    report.automaticPassed = report.checks.every((c) => c.ok);
-    if (!report.automaticPassed) throw new Error(`自动验收未通过：${report.checks.filter((c) => !c.ok).map((c) => c.name).join(', ')}`);
-    report.acceptanceComplete = report.automaticPassed && report.approval.status === 'passed';
+    report.automaticPassed = report.checks.every((c) => c.ok)
+      && (!d.nativeRequestCards || report.nativeCards?.length === 4);
+    if (!report.automaticPassed) throw new Error(`自动验收未通过：${report.checks.filter((c) => !c.ok).map((c) => c.name).join(', ') || '扩展卡片步骤未全部执行'}`);
+    report.acceptanceComplete = report.automaticPassed && report.approval.status === 'passed'
+      && (!d.nativeRequestCards || (report.nativeCards?.length === 4 && report.nativeCards.every((c) => c.status === 'passed')));
     stage('完成');
     return report;
   } catch (error) {

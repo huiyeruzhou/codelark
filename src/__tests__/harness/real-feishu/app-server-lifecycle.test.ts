@@ -1,7 +1,7 @@
 import '../../setup/test-setup.js';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { assertInherited, assertSameTurnInput, botReplyIds, userReadbackMessages, feishuChatUrl } from '../../../testing/real-feishu/app-server-lifecycle.js';
+import { assertInherited, assertSameTurnInput, botReplyIds, userReadbackMessages, feishuChatUrl, readAllUserPages } from '../../../testing/real-feishu/app-server-lifecycle.js';
 
 const session = { sessionId: 'old', threadId: 'thread-old', endpoint: 'unix:///owned/rpc.sock', streamKeys: [],
   configuration: { provider: 'sdk', networkAccess: false, reasoningEffort: 'low' } };
@@ -32,4 +32,12 @@ test('飞书证据拒绝失败与 bot 身份回读，忽略用户回显和其他
   assert.throws(() => userReadbackMessages({ ...payload, ok: false }));
   assert.throws(() => userReadbackMessages({ ok: true, identity: 'user' }));
   assert.equal(feishuChatUrl('oc_owned'), 'https://applink.feishu.cn/client/chat/open?openChatId=oc_owned');
+});
+test('扩展故事逐页用户回读，拒绝中途换身份、重复消息和失效游标', async () => {
+  const page = (id: string, token = '') => ({ ok: true, identity: 'user', data: { has_more: Boolean(token), page_token: token, messages: [{ message_id: id }] } });
+  const result = await readAllUserPages(async (token) => token ? page('older') : page('newer', 'next'));
+  assert.deepEqual(userReadbackMessages(result).map((m) => m.message_id), ['newer', 'older']);
+  await assert.rejects(readAllUserPages(async (token) => token ? { ...page('older'), identity: 'bot' } : page('newer', 'next')));
+  await assert.rejects(readAllUserPages(async (token) => page('same', token ? '' : 'next')));
+  await assert.rejects(readAllUserPages(async () => page('same', 'next')));
 });

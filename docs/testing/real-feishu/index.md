@@ -269,3 +269,17 @@ Claude/CCR 场景额外要求：
 3. 命令密集型 suite 保持按 runtime 压缩，不再扩张完整 provider 矩阵。
 4. 用 `history-suite` 的 runtime/provider 矩阵补齐 Kimi/Claude/Codex 的同层历史功能簇证据，旧拆分 history 场景只做定向回归。
 5. 继续补表单 submit callback、附件 ingestion、权限失败恢复、tool detail card 和更多跨群生命周期场景。
+
+
+### 原生文件、权限与 MCP 卡片
+
+在 `app-server-lifecycle` 上增加 `--native-request-cards`，使用同一保留群验证 Codex 0.153.4 的文件 diff、额外权限、MCP 表单和 URL。模型仍由共享 fixture 编排，MCP 使用独立的本地 stdio helper。全部输入均由真实用户 CLI 发送，全部卡片由用户身份回读，观察连接不提交消息或审批答复。
+
+自动模式先完成原有生命周期和命令审批收卡，再执行这些检查：
+
+- MCP 表单：真实用户发送越界数字 `0`，确认产品拒绝且原生请求继续等待；发送上界 `3` 与 `false`，确认原生工具结果保留数字和布尔类型，并回读最终结果。
+- 文件审批：真实 `apply_patch` 产生包含中文、尖括号、引号和嵌套代码围栏的多行 diff；对照对应的 `item/started` 与实际用户回读卡片，确认批准前和自动取消后文件均不存在。
+- 额外权限：真实 `request_permissions` 请求单一隔离写入路径，用户回读卡片必须包含精确范围及“仅本轮允许”。
+- MCP URL：真实服务端请求展示 `http://127.0.0.1:9/codelark-fixture` 本地测试链接与编码尖括号；不打开链接。自动模式用真实 `/stop` 取消原生轮次，真实“取消”按钮仍为未验收。
+
+`nativeCards` 保存每种请求、原始卡片、群链接和验收状态。结合 `--approval-wait-ms` 时，原生命令审批通过后，在同群依次提示文件“允许”、权限“仅本轮允许”、URL“取消”；每一步保留活 Bridge 并公布截止时间，只有真实 callback 与对应原生结果、最终用户回读都成立才标记通过。文件步骤还检查真实文件内容，权限步骤核验本轮范围，URL 步骤核验原生取消结果。任何人工步骤超时即停止后续人工序列并标记未验收；不把 `/stop`、直接 RPC 或合成 callback 当成点击。
