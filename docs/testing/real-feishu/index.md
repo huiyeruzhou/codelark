@@ -118,9 +118,9 @@ CODELARK_REAL_FEISHU_E2E=1 node --import tsx scripts/real-feishu-e2e.ts \
 
 真实飞书 CI 固定 Codex `0.153.4`，与本地完整故事一致。隔离 `models_cache.json` 仅提供 `/model` 菜单，不提供原生工具 metadata；`0.160` 已删除 gpt-5.4 的工具目录，因此升级前需同时选择该版本实际支持工具的模型并重新验证完整故事。
 
-默认自动步骤会产生真实原生命令审批卡片并由用户身份回读，随后通过真实 `/stop` 取消；`approval.status=unverified`，`acceptanceComplete=false`。这表示自动部分通过，**不表示真实点击已验收**。报告中的 `approval.chatUrl` 可打开保留的测试群查看卡片。要验收点击，重新运行时增加 `--approval-wait-ms 300000 --require-approval`，在报告显示 `waiting` 时打开群并从真实飞书客户端点击允许；等待期间本次 Bridge 和原生后端保持存活，`approval.deadline` 给出截止时间；真实飞书 callback 入站日志、命令执行成功、原生轮次完成和最终用户回读均成立才算通过。等待超时会明确记录未验收，要求审批的运行返回非零。
+默认自动步骤会产生真实原生命令审批卡片并由用户身份回读，随后通过真实 `/stop` 取消；`approval.status=unverified`，`acceptanceComplete=false`。这表示自动部分通过，**不表示真实点击已验收**。报告中的 `approval.chatUrl` 记录测试群入口；默认在全部用户回读结束后解散自建群，入口随之失效，`chatCleanup` 记录解散结果。只有共同查看明确需要保留时才加 `--keep-group`。要验收点击，重新运行时增加 `--approval-wait-ms 300000 --require-approval`，在报告显示 `waiting` 时打开群并从真实飞书客户端点击允许；等待期间本次 Bridge 和原生后端保持存活，`approval.deadline` 给出截止时间；真实飞书 callback 入站日志、命令执行成功、原生轮次完成和最终用户回读均成立才算通过。等待超时会明确记录未验收，要求审批的运行返回非零。
 
-报告持续落盘，失败时保留阶段、用户消息 ID、线程/轮次、配置快照、原生事件和最终用户回读。`automaticPassed` 与 `acceptanceComplete` 分开：CI 默认先检查自动部分，真实点击是独立的人工验收项。此场景保留测试群供核对；没有执行任何伪造 callback、额外扫码或凭据发布。测试进程只停止自身 Bridge/fixture 和对应隔离 tmux socket。
+报告持续落盘，失败时保留阶段、用户消息 ID、线程/轮次、配置快照、原生事件和最终用户回读。`automaticPassed` 与 `acceptanceComplete` 分开：CI 默认先检查自动部分，真实点击是独立的人工验收项。此场景默认在最终回读后解散自建群；没有执行任何伪造 callback、额外扫码或凭据发布。测试进程只停止自身 Bridge/fixture 和对应隔离 tmux socket。
 
 ## 覆盖原则
 
@@ -273,7 +273,7 @@ Claude/CCR 场景额外要求：
 
 ### 原生文件、权限与 MCP 卡片
 
-真实飞书 CI 已启用此扩展；本地在 `app-server-lifecycle` 上增加 `--native-request-cards`，使用同一保留群验证 Codex 0.153.4 的文件 diff、额外权限、MCP 表单和 URL。模型仍由共享 fixture 编排，MCP 使用独立的本地 stdio helper。全部输入均由真实用户 CLI 发送，全部卡片由用户身份回读，观察连接不提交消息或审批答复。
+真实飞书 CI 已启用此扩展；本地在 `app-server-lifecycle` 上增加 `--native-request-cards`，使用同一测试群（运行期间保持存活）验证 Codex 0.153.4 的文件 diff、额外权限、MCP 表单和 URL。模型仍由共享 fixture 编排，MCP 使用独立的本地 stdio helper。全部输入均由真实用户 CLI 发送，全部卡片由用户身份回读，观察连接不提交消息或审批答复。
 
 自动模式先完成原有生命周期和命令审批收卡，再执行这些检查：
 
@@ -282,4 +282,6 @@ Claude/CCR 场景额外要求：
 - 额外权限：真实 `request_permissions` 请求单一隔离写入路径，用户回读卡片必须包含精确范围及“仅本轮允许”。
 - MCP URL：真实服务端请求展示 `http://127.0.0.1:9/codelark-fixture` 本地测试链接与编码尖括号；不打开链接。自动模式用真实 `/stop` 取消原生轮次，真实“取消”按钮仍为未验收。
 
-`nativeCards` 保存每种请求、原始卡片、群链接和验收状态。结合 `--approval-wait-ms` 时，原生命令审批通过后，在同群依次提示文件“允许”、权限“仅本轮允许”、URL“取消”；每一步保留活 Bridge 并公布截止时间，只有真实 callback 与对应原生结果、最终用户回读都成立才标记通过。文件步骤还检查真实文件内容，权限步骤核验本轮范围，URL 步骤核验原生取消结果。任何人工步骤超时即停止后续人工序列并标记未验收；不把 `/stop`、直接 RPC 或合成 callback 当成点击。
+`nativeCards` 保存每种请求、原始卡片、群链接和验收状态。结合 `--approval-wait-ms` 时，原生命令审批通过后，在运行中的同群依次提示文件“允许”、权限“仅本轮允许”、URL“取消”；每一步保留活 Bridge 并公布截止时间，只有真实 callback 与对应原生结果、最终用户回读都成立才标记通过。文件步骤还检查真实文件内容，权限步骤核验本轮范围，URL 步骤核验原生取消结果。任何人工步骤超时即停止后续人工序列并标记未验收；不把 `/stop`、直接 RPC 或合成 callback 当成点击。
+
+扩展故事每页读取 25 条消息，确保完整故事实际经过分页；每页都必须是成功的用户身份回读，并检查游标推进和消息 ID 无重复。结束时先保留报告中的最终回读证据，再解散本轮自建的初始群与 `/new` 新群；不会删除调用者传入的已有 `--chat-id`。

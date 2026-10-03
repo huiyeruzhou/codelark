@@ -4425,11 +4425,11 @@ describe('app-server real Feishu execution selection', () => {
     for (const provider of ['sdk', 'tmux']) {
       const report = JSON.parse(runHarness(['--dry-run', '--launch-bridge', '--codex-app-server', '--runtime', 'codex', '--provider', provider, '--scenario', 'app-server-lifecycle']));
       assert.equal(report.scenario, 'app-server-lifecycle');
-      assert.equal(report.keepGroup, true, '审批卡片群保留供真实客户端核对');
+      assert.equal(report.keepGroup, false, '自动运行结束后默认解散测试群');
       assert.equal(report.coverage.matrix.length, 2);
       assert.match(report.coverage.testName, /::app-server$/);
       const extended = JSON.parse(runHarness(['--dry-run', '--launch-bridge', '--codex-app-server', '--native-request-cards', '--runtime', 'codex', '--provider', provider, '--scenario', 'app-server-lifecycle']));
-      assert.equal(extended.keepGroup, true);
+      assert.equal(extended.keepGroup, false);
       assert.equal(extended.nativeRequestCards, true);
     }
     assert.match(runHarnessFailure(['--dry-run', '--scenario', 'app-server-lifecycle']), /requires --codex-app-server/);

@@ -1319,7 +1319,7 @@ function parseOptions(argv: string[]): CliOptions {
     fakeKimi: hasFlag(argv, '--fake-kimi'),
     scriptedBasicDialogue: hasFlag(argv, '--scripted-basic-dialogue'),
     scriptedKimi: hasFlag(argv, '--scripted-kimi'),
-    keepGroup: hasFlag(argv, '--keep-group') || scenario === 'app-server-lifecycle',
+    keepGroup: hasFlag(argv, '--keep-group'),
     keepCodelarkHome: hasFlag(argv, '--keep-clk-home'),
     testEnvFile: valueArg(argv, '--test-env-file', defaultRealFeishuTestEnvFile()),
     runId,
@@ -7424,6 +7424,7 @@ async function main(): Promise<void> {
   let fakeKimiBackend: LocalFakeChatCompletionsBackend | null = null;
   let codexResponsesProxy: LocalCodexResponsesProxy | null = null;
   let lifecycleModel: Awaited<ReturnType<typeof startFixtureModel>> | undefined;
+  let lifecycleEvidence: Record<string, any> | undefined;
   let appServer: Awaited<ReturnType<typeof startFixtureAppServer>> | undefined;
   let protocolObserver: CodexAppServerClient | undefined;
   const messageObservations: MessageObservation[] = [];
@@ -7567,7 +7568,7 @@ async function main(): Promise<void> {
         approvalWaitMs: options.approvalWaitMs, nativeRequestCards: options.nativeRequestCards, workspace: options.workDir, model: lifecycleModel, observer: protocolObserver,
         botAppId: options.testFeishuAppId,
         send: (id, text) => sendUserText(id, text, options),
-        read: (id) => options.nativeRequestCards ? readAllUserPages((token) => listChatMessages(id, options, 50, token)) : listChatMessages(id, options, 50),
+        read: (id) => options.nativeRequestCards ? readAllUserPages((token) => listChatMessages(id, options, 25, token)) : listChatMessages(id, options, 50),
         state: (id) => {
           const dump = latestDump(options, id);
           if (!dump.session) return undefined;
@@ -7597,14 +7598,17 @@ async function main(): Promise<void> {
           child = await launchBridgeChild(options, runtimeEnvironment);
         },
         progress: (text) => process.stderr.write(`[app-server-lifecycle] ${text}\n`),
-        save: (report) => writeReport({ ...report,
+        save: (report) => {
+          lifecycleEvidence = { ...report,
           sourceRevision, sourceDirty,
           codexVersion: protocolObserver?.serverInfo.userAgent,
           runRoot: options.runRoot, codelarkHome: options.codelarkHome,
           coverage: scenarioCoverage(options),
           canonicalEligibility: canonicalReportEligibility(options, runtimeEnvironment),
           boundary: { backend: 'native-codex-app-server', model: 'isolated-fixture', feishuInput: 'real-user-cli', feishuReadback: 'real-user-cli', simulatedCallbacks: false },
-        }, options.outputPath),
+          };
+          writeReport(lifecycleEvidence, options.outputPath);
+        },
       });
       completedSuccessfully = true;
       if (options.requireApproval && !result.acceptanceComplete) throw new Error('真实客户端审批尚未验收，详见报告 approval 与 chatUrl。');
@@ -8050,41 +8054,60 @@ async function main(): Promise<void> {
     writeReport(finalReport, options.outputPath);
     completedSuccessfully = true;
   } finally {
-    if (!completedSuccessfully && scenarioCreatedChatCleanup.length === 0) {
-      scenarioCreatedChatCleanup = await cleanupScenarioCreatedChats(messageObservations, options, [
-        createdChatId,
-        options.chatId,
-      ]).catch((error) => {
-        process.stderr.write(`[real-feishu-e2e] Failed to cleanup scenario-created /new chats: ${error instanceof Error ? error.message : String(error)}\n`);
-        return [];
-      });
-      const cleanedChatIds = new Set(scenarioCreatedChatCleanup.map((cleanup) => cleanup.chatId));
-      const dumpSourceChatId = createdChatId || options.chatId;
-      if (dumpSourceChatId) {
-        const dumpCleanup = await cleanupScenarioCreatedChatsFromDump(options, dumpSourceChatId, [
+    if (lifecycleEvidence) {
+      const ownedChats = [...new Set<string>([
+        ...lifecycleEvidence.chats,
+        ...extractScenarioCreatedChatIdsFromBridgeState(options, [`life-${options.runId}`], [options.chatId]),
+      ])].filter((id) => id && id !== options.chatId);
+      const cleanup = [];
+      for (const id of ownedChats) {
+        const result = await deleteCreatedChat(id, options).catch((error) => ({
+          chatId: id, attempted: true, deleted: false, retained: true, reason: String(error),
+        }));
+        updateTestChatRegistryCleanup(id, result, options.keepGroup);
+        cleanup.push(result);
+      }
+      lifecycleEvidence.chatCleanup = cleanup;
+      lifecycleEvidence.cleanupPassed = options.keepGroup || cleanup.every((c) => c.deleted);
+      if (!lifecycleEvidence.cleanupPassed) process.exitCode = 1;
+      writeReport(lifecycleEvidence, options.outputPath);
+    } else {
+      if (!completedSuccessfully && scenarioCreatedChatCleanup.length === 0) {
+        scenarioCreatedChatCleanup = await cleanupScenarioCreatedChats(messageObservations, options, [
           createdChatId,
           options.chatId,
-          ...cleanedChatIds,
         ]).catch((error) => {
-          process.stderr.write(`[real-feishu-e2e] Failed to cleanup dump-discovered /new chats: ${error instanceof Error ? error.message : String(error)}\n`);
+          process.stderr.write(`[real-feishu-e2e] Failed to cleanup scenario-created /new chats: ${error instanceof Error ? error.message : String(error)}\n`);
           return [];
         });
-        scenarioCreatedChatCleanup.push(...dumpCleanup);
+        const cleanedChatIds = new Set(scenarioCreatedChatCleanup.map((cleanup) => cleanup.chatId));
+        const dumpSourceChatId = createdChatId || options.chatId;
+        if (dumpSourceChatId) {
+          const dumpCleanup = await cleanupScenarioCreatedChatsFromDump(options, dumpSourceChatId, [
+            createdChatId,
+            options.chatId,
+            ...cleanedChatIds,
+          ]).catch((error) => {
+            process.stderr.write(`[real-feishu-e2e] Failed to cleanup dump-discovered /new chats: ${error instanceof Error ? error.message : String(error)}\n`);
+            return [];
+          });
+          scenarioCreatedChatCleanup.push(...dumpCleanup);
+        }
       }
-    }
-    if (createdChatId && completedSuccessfully && !createdChatCleanup) {
-      const cleanup = await deleteCreatedChat(createdChatId, options);
-      updateTestChatRegistryCleanup(createdChatId, cleanup, options.keepGroup);
-    } else if (createdChatId && !completedSuccessfully && !options.keepGroup) {
-      const cleanup = await deleteCreatedChat(createdChatId, options).catch((error) => ({
-        chatId: createdChatId,
-        attempted: true,
-        deleted: false,
-        retained: true,
-        reason: 'failed-run-cleanup-failed',
-        error: error instanceof Error ? error.message : String(error),
-      }));
-      updateTestChatRegistryCleanup(createdChatId, cleanup, false);
+      if (createdChatId && completedSuccessfully && !createdChatCleanup) {
+        const cleanup = await deleteCreatedChat(createdChatId, options);
+        updateTestChatRegistryCleanup(createdChatId, cleanup, options.keepGroup);
+      } else if (createdChatId && !completedSuccessfully && !options.keepGroup) {
+        const cleanup = await deleteCreatedChat(createdChatId, options).catch((error) => ({
+          chatId: createdChatId,
+          attempted: true,
+          deleted: false,
+          retained: true,
+          reason: 'failed-run-cleanup-failed',
+          error: error instanceof Error ? error.message : String(error),
+        }));
+        updateTestChatRegistryCleanup(createdChatId, cleanup, false);
+      }
     }
     await stopBridgeChild(child);
     protocolObserver?.close();

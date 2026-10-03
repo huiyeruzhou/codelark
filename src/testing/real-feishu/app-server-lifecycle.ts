@@ -78,7 +78,7 @@ export async function readAllUserPages(fetchPage: (token?: string) => Promise<un
   const tokens = new Set<string>();
   let token: string | undefined;
   do {
-    assert(pages.length < 5, '隔离故事消息超过 250 条，必须检查重复发送');
+    assert(pages.length < 10, '隔离故事回读超过 10 页，必须检查重复发送');
     const page = await fetchPage(token) as any;
     messages.push(...userReadbackMessages(page)); pages.push(page);
     token = page.data.has_more ? page.data.page_token : undefined;
@@ -352,7 +352,7 @@ export async function runAppServerLifecycle(d: LifecycleDriver): Promise<Lifecyc
       }
     } else {
       report.approval.status = 'unverified';
-      report.approval.detail = '自动部分已验证审批请求与卡片；未等待真实客户端点击，已通过真实 /stop 取消。群入口可查看卡片；补验收请重新运行并指定 --approval-wait-ms。';
+      report.approval.detail = '自动部分已验证审批请求与卡片；未等待真实客户端点击，已通过真实 /stop 取消。群是否仍保留见 chatCleanup；默认结束后解散，补验收请重新运行并指定 --approval-wait-ms。';
       await send(newChat, '/stop'); await terminal(newTurn.threadId, approvalTurn, 'interrupted');
     }
     if (d.nativeRequestCards) {
