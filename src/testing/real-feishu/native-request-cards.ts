@@ -43,7 +43,8 @@ export function mcpTool(body: ModelBody, name: string): Extract<ModelOutput, { t
 export function assertCardContains(card: Record<string, any>, parts: string[]): void {
   const text = (value: unknown): string => typeof value === 'string' ? value
     : value && typeof value === 'object' ? Object.values(value).map(text).join('\n') : '';
-  const content = text(card.content ?? card.body?.content);
+  // Feishu renderer 用零宽分隔符保护代码块内部围栏；只还原这一个已知显示转义。
+  const content = text(card.content ?? card.body?.content).replaceAll('`\u200B``', '```');
   for (const part of parts) assert(content.includes(part), `真实用户回读卡片缺少 ${part}`);
 }
 export function newAnswerFeedback(payload: unknown, beforeIds: Set<unknown>, appId: string, text: string): Record<string, any> | undefined {
@@ -80,17 +81,20 @@ export async function runNativeRequestCards(c: Context): Promise<void> {
   const start = async (kind: NativeCardReport['kind'], method: string, parts: string[], enqueue: () => void) => {
     c.stage(`原生卡片 ${kind}`);
     const offset = report.protocol.length;
+    const beforeCards = new Set(userReadbackMessages(await c.read(chatId)).map((m) => m.message_id));
     enqueue();
     await c.send(chatId, mark(`${kind}_INPUT`));
     const request = await c.wait(`原生 ${kind} 请求`, () => report.protocol.slice(offset).find((m) => m.method === method));
     const turn = await c.wait('请求所属活动轮次', async () => (await c.thread(threadId)).turns.find((t) => t.status === 'inProgress'));
     const card = await c.wait(`真实用户可见 ${kind} 卡片`, async () => userReadbackMessages(await c.read(chatId)).find((m) => {
-      if (m.sender?.id !== d.botAppId) return false;
-      try { assertCardContains(m, parts); return true; } catch { return false; }
+      if (m.sender?.id !== d.botAppId || beforeCards.has(m.message_id)) return false;
+      try { assertCardContains(m, [parts[0]!]); return true; } catch { return false; }
     }));
     const evidence: NativeCardReport = { kind, status: 'unverified', chatUrl: feishuChatUrl(chatId), request, card,
       detail: '原生请求与用户回读卡片已确认；尚未验证真实客户端按钮。' };
     report.nativeCards!.push(evidence);
+    c.save();
+    assertCardContains(card, parts);
     c.check(`native_${kind}_card_user_readback`, { messageId: card.message_id, turnId: turn.id });
     return { evidence, turn };
   };

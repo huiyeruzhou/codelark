@@ -16,6 +16,7 @@ test('原生 MCP 同时识别发现输出中的 namespace 与旧平面工具名'
 test('真实卡片内容校验保留多行 diff 的围栏、引号与中文，拒绝截断', () => {
   const lines = ['中文 <tag> & markdown', '```typescript', 'const boundary = "three lines";', '```'];
   assertCardContains({ content: lines.join('\n') }, lines);
+  assertCardContains({ content: lines.join('\n').replaceAll('```', '`\u200B``') }, lines);
   assertCardContains({ body: { content: { elements: lines.map((text) => ({ text })) } } }, lines);
   assert.throws(() => assertCardContains({ content: lines.slice(0, 2).join('\n') }, lines));
   assert.throws(() => assertCardContains({ content: '只显示文件名' }, lines));
