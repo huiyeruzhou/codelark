@@ -127,6 +127,7 @@ interface ActiveClearEvidence {
   confirmationResponse?: Record<string, any>;
   messageIdsBeforeNewInput?: string[];
   newReplyMarker?: string;
+  viewNotice?: { messageId: string; sessionId: string; threadId: string };
   reboundAt?: string;
   oldTurnAfterNewInput?: NativeTurn;
   oldTurnReadError?: string;
@@ -145,8 +146,21 @@ export function assertNoOldClearDelivery(report: LifecycleReport, chatId: string
   const resultIds = botReplyIds(payload, appId, evidence.newReplyMarker);
   assert.equal(resultIds.length, 1, 'clear 后的新回复必须唯一');
   const before = new Set(evidence.messageIdsBeforeNewInput);
-  const extra = userReadbackMessages(payload).filter((m) => m.sender?.sender_type === 'app' && m.sender.id === appId
+  let extra = userReadbackMessages(payload).filter((m) => m.sender?.sender_type === 'app' && m.sender.id === appId
     && !before.has(m.message_id) && !allowedReplies.has(m.reply_to) && !resultIds.includes(m.message_id));
+  // 新 thread 的首次输入会建立新 view，生产在核对绑定后发送这条独立通知。
+  const cleared = report.sessions.cleared;
+  if (report.provider === 'tmux' && cleared?.threadId && cleared.threadId !== evidence.threadId) {
+    const notices = extra.filter((m) => m.msg_type === 'post'
+      && m.content === '已建立 tmux 查看入口，通过 --remote 连接当前共享 Codex 线程。');
+    assert(notices.length <= 1, '新 thread 的 tmux 查看入口通知不能重复');
+    if (notices.length === 1) {
+      const messageId = String(notices[0].message_id);
+      if (evidence.viewNotice) assert.equal(evidence.viewNotice.messageId, messageId, '不能用另一次 view 通知替换本次证据');
+      evidence.viewNotice = { messageId, sessionId: cleared.sessionId, threadId: cleared.threadId };
+      extra = extra.filter((m) => m.message_id !== messageId);
+    }
+  }
   assert.deepEqual(extra, [], 'clear 后出现未关联新输入的旧投递或空卡');
 }
 

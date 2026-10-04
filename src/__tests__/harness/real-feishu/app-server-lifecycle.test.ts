@@ -194,3 +194,26 @@ test('active clear 最终回读再次检查迟到投递，允许后续真实命�
   payload.data.messages.push({ ...bot, message_id: 'late-result', content: f.report.activeClear!.forbiddenResult });
   assert.throws(() => assertNoOldClearDelivery(f.report, 'chat', 'app', payload), /旧轮次结果不能投递/);
 });
+
+test('active clear 只允许新 tmux thread 的一条准确查看通知，其他 post/空卡/重复仍失败', async () => {
+  const f = activeClearFixture(undefined, 'tmux');
+  await runActiveClear(f.c);
+  const payload = await f.c.read('chat') as { data: { messages: Array<Record<string, any>> } };
+  const notice = { sender: { sender_type: 'app', id: 'app' }, message_id: 'view-notice', msg_type: 'post',
+    content: '已建立 tmux 查看入口，通过 --remote 连接当前共享 Codex 线程。' };
+  payload.data.messages.push(notice);
+  assertNoOldClearDelivery(f.report, 'chat', 'app', payload);
+  assert.deepEqual(f.report.activeClear?.viewNotice, { messageId: 'view-notice', sessionId: 'new', threadId: 'thread-new' });
+  payload.data.messages.push({ ...notice, message_id: 'duplicate' });
+  assert.throws(() => assertNoOldClearDelivery(f.report, 'chat', 'app', payload), /通知不能重复/);
+  payload.data.messages.pop();
+  for (const invalid of [{ ...notice, content: '' }, { ...notice, content: '其他通知' }, { ...notice, msg_type: 'interactive' }]) {
+    payload.data.messages[payload.data.messages.length - 1] = invalid;
+    assert.throws(() => assertNoOldClearDelivery(f.report, 'chat', 'app', payload), /旧投递或空卡/);
+  }
+  payload.data.messages[payload.data.messages.length - 1] = notice;
+  f.report.provider = 'sdk';
+  assert.throws(() => assertNoOldClearDelivery(f.report, 'chat', 'app', payload), /旧投递或空卡/);
+  f.report.provider = 'tmux'; f.report.sessions.cleared.threadId = session.threadId;
+  assert.throws(() => assertNoOldClearDelivery(f.report, 'chat', 'app', payload), /旧投递或空卡/);
+});
