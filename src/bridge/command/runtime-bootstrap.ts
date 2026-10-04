@@ -37,6 +37,9 @@ export interface RuntimeSettingsCommandDeps {
     },
   ): Promise<CodexTuiSelectionPromptChoice | null>;
   getActiveTask?(sessionId: string): { abortController: AbortController } | undefined;
+  forceStopSession?(sessionId: string, detail?: string): Promise<boolean>;
+  cancelQueuedSessionMessages?(sessionId: string): void;
+  cancelRuntimeWaits?(sessionId: string): void;
   restartKimiTmuxSession?: typeof restartKimiTmuxInputSession;
   restartCursorTmuxSession?: typeof restartCursorTmuxInputSession;
   restartZcodeTmuxSession?: typeof restartZcodeTmuxInputSession;

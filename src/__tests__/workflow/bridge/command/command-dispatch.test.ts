@@ -5092,7 +5092,7 @@ enabled = true
     callbackAck.resolve();
   });
 
-  it('rejects runtime and provider switches while the current conversation is running', async () => {
+  it('keeps runtime switching guarded but confirms tmux restart despite stale running state', async () => {
     const store = initTestContext();
     const sent: any[] = [];
     const adapter = createGroupCapableAdapter({ sent });
@@ -5151,8 +5151,77 @@ enabled = true
     );
 
     assert.equal(store.getSession(session.id)?.runtime?.codex?.provider, undefined);
-    assert.match(sent.at(-1)?.text || '', /请先停止当前对话/);
-    assert.match(sent.at(-1)?.text || '', /\/p tmux/);
+    assert.match(sent.at(-1)?.text || '', /结束并重启/);
+    const command = parseCommandCallbackData(sent.at(-1)?.richCard?.actions?.[0]?.[0]?.callbackData || '')!;
+    assert(command && command.scopeSessionId === session.id);
+    const previousPath = process.env.PATH;
+    const previousLog = process.env.TMUX_FAKE_LOG;
+    const fakeTmux = installFakeTmux();
+    process.env.PATH = `${fakeTmux.binDir}${path.delimiter}${previousPath || ''}`;
+    process.env.TMUX_FAKE_LOG = fakeTmux.logPath;
+    let stopped = 0;
+    try {
+      const deps = {
+        getActiveTask: () => undefined,
+        forceStopSession: async (id: string) => { assert.equal(id, session.id); stopped++; return true; },
+        diagnoseSessionHealth: async () => null,
+        diagnoseAllActiveSessions: async () => [],
+        reconcileMirrorSubscriptions: async () => {},
+        bootstrapCodexThread: async () => 'restart-stale-thread',
+      };
+      await handleBridgeCommand(adapter, { address, text: command.commandText, messageId: 'confirm-restart' } as any, command.commandText, deps);
+      assert.equal(stopped, 1);
+      assert.equal(resolveEffectiveCodexProvider(store.getSession(session.id)!, store.getChannelChat(address.channelType, address.chatId)), 'tmux');
+      const firstLog = fs.readFileSync(fakeTmux.logPath, 'utf8');
+      assert.match(firstLog, /new-session -d -s codex_restart-stale-thread/);
+      // The persistent health record remains stale: it must not veto the confirmed operation.
+      assert.equal(store.getSession(session.id)?.health_status, 'running_active');
+      await handleBridgeCommand(adapter, { address, text: command.commandText, messageId: 'repeat-restart' } as any, command.commandText, deps);
+      assert.match(sent.at(-1)?.text || '', /操作已失效/);
+      assert.equal(stopped, 1);
+      assert.equal(fs.readFileSync(fakeTmux.logPath, 'utf8'), firstLog);
+    } finally {
+      process.env.PATH = previousPath;
+      if (previousLog === undefined) delete process.env.TMUX_FAKE_LOG;
+      else process.env.TMUX_FAKE_LOG = previousLog;
+      fs.rmSync(fakeTmux.binDir, { recursive: true, force: true });
+    }
+
+  });
+
+  for (const action of ['cancel', 'rebind', 'runtime-change', 'new-task'] as const) it(`does not restart from an obsolete tmux confirmation: ${action}`, async () => {
+    const store = initTestContext();
+    const sent: any[] = [];
+    const adapter = createGroupCapableAdapter({ sent });
+    const address = { channelType: 'feishu', chatId: `restart-obsolete-${action}` } as const;
+    const session = store.createSession('old-task', 'test-model');
+    store.updateSession(session.id, { health_status: 'running_active' });
+    store.upsertChannelChat({ ...address, bridgeSessionId: session.id });
+    let activeTask: { abortController: AbortController } | undefined;
+    const deps = {
+      getActiveTask: () => activeTask,
+      forceStopSession: async () => assert.fail('obsolete confirmation must not stop current work'),
+      bootstrapCodexThread: async () => assert.fail('obsolete confirmation must not restart'),
+      diagnoseSessionHealth: async () => null,
+      diagnoseAllActiveSessions: async () => [],
+    };
+    const invoke = async (command: string) => handleBridgeCommand(adapter,
+      { address, text: command, messageId: `restart-${sent.length}` } as any, command, deps);
+    await invoke('/p tmux');
+    const actions = sent.at(-1).richCard.actions[0];
+    const confirm = parseCommandCallbackData(actions[0].callbackData)!.commandText;
+    if (action === 'cancel') {
+      await invoke(parseCommandCallbackData(actions[1].callbackData)!.commandText);
+      assert.match(sent.at(-1).text, /已取消重启/);
+    } else if (action === 'rebind') {
+      store.upsertChannelChat({ ...address, bridgeSessionId: store.createSession('new-task', 'test-model').id });
+    } else if (action === 'runtime-change') {
+      store.updateSession(session.id, { runtime: { activeRuntime: 'claude' } });
+    } else {
+      activeTask = { abortController: new AbortController() };
+    }
+    await invoke(confirm);
+    assert.match(sent.at(-1).text, /操作已失效/);
   });
 
   it('does not persist tmux provider state when the launched Codex tmux exits immediately', async () => {

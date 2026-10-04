@@ -6,7 +6,7 @@ export function buildClearConfirmationCard(commandText: string, scopeSessionId: 
     title: '确认清空当前对话',
     sections: [
       {
-        text: '当前对话仍在运行。确认后会先终止当前任务，然后把当前聊天绑定到一个新的 BridgeSession。',
+        text: '当前对话可能还有未结束的任务。点击“终止并新建”后会结束旧任务并新建对话，保留当前配置，无需等待状态检测或再次执行命令。',
       },
     ],
     actions: [[

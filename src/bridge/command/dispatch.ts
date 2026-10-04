@@ -781,8 +781,8 @@ export async function handleBridgeCommand(
     }
 
     case '/provider': {
-      const isTmuxProviderStart = args.trim().toLowerCase() === 'tmux';
-      response = await handleProviderCommand({
+      const isTmuxProviderStart = /^tmux(?:\s|$)/i.test(args.trim());
+      const result = await handleProviderCommand({
         msg,
         args,
         currentBinding,
@@ -813,6 +813,8 @@ export async function handleBridgeCommand(
         },
         markdown: responseParseMode === 'Markdown',
       });
+      response = result.response;
+      responseRichCard = result.richCard;
       break;
     }
 

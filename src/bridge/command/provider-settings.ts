@@ -64,6 +64,8 @@ import {
   sessionHasActiveRuntimeTurn,
 } from './runtime-session.js';
 import * as router from '../session/channel-router.js';
+import type { SessionCommandResult } from '../session/command-use-cases/types.js';
+import { consumeTmuxRestart, requestTmuxRestart } from './tmux-restart-confirmation.js';
 import {
   CODEX_PROVIDER_OPTIONS_TEXT,
   CLAUDE_PROVIDER_OPTIONS_TEXT,
@@ -275,14 +277,47 @@ function formatClaudeTmuxLaunchFailure(
   return sections.filter(Boolean).join('\n\n');
 }
 
-export async function handleProviderCommand(options: {
+interface ProviderCommandOptions {
   msg: InboundMessage;
   args: string;
   currentBinding: ChannelChat | null;
   store: BridgeStore;
   deps: RuntimeSettingsCommandDeps;
   markdown: boolean;
-}): Promise<string> {
+}
+
+export async function handleProviderCommand(options: ProviderCommandOptions): Promise<SessionCommandResult> {
+  const confirmation = /^tmux --(restart|cancel-restart)=([a-f0-9-]+)$/i.exec(options.args.trim());
+  const isTmux = options.args.trim().toLowerCase() === 'tmux' || !!confirmation;
+  if (!isTmux) return { response: await applyProviderCommand(options) };
+  const binding = options.currentBinding || router.resolve(options.msg.address);
+  const session = options.store.getSession(binding.bridgeSessionId);
+  if (!session) return { response: '当前会话不存在。' };
+  const task = options.deps.getActiveTask?.(session.id)?.abortController;
+  const runtime = getSessionActiveRuntime(session) || 'codex';
+  if (confirmation) {
+    if (!consumeTmuxRestart(confirmation[2]!, binding, session, task)) {
+      return { response: '这个重启操作已失效，当前任务未受影响。' };
+    }
+    if (confirmation[1]!.toLowerCase() === 'cancel-restart') return { response: '已取消重启，当前对话保持不变。' };
+    options.deps.cancelRuntimeWaits?.(session.id);
+    options.deps.cancelQueuedSessionMessages?.(session.id);
+    if (options.deps.forceStopSession) await options.deps.forceStopSession(session.id, '用户确认 /p tmux，结束旧任务并重启当前对话。');
+    else options.deps.getActiveTask?.(session.id)?.abortController.abort();
+    if (options.store.getChannelChat(options.msg.address.channelType, options.msg.address.chatId)?.bridgeSessionId !== session.id
+      || (getSessionActiveRuntime(options.store.getSession(session.id)) || 'codex') !== runtime) {
+      return { response: '当前聊天已切换会话，未重启旧对话。' };
+    }
+  } else {
+    // A remote terminal is only a view: attaching it does not stop the shared turn.
+    const shared = runtime === 'codex'
+      && (session.runtime?.codex?.appServerEndpoint || getCodexAppServerSession(session.id));
+    if (!shared && sessionHasActiveRuntimeTurn(options.deps, session)) return requestTmuxRestart(binding, session, task);
+  }
+  return { response: await applyProviderCommand({ ...options, args: 'tmux' }) };
+}
+
+async function applyProviderCommand(options: ProviderCommandOptions): Promise<string> {
   const binding = options.currentBinding || router.resolve(options.msg.address);
   const session = options.store.getSession(binding.bridgeSessionId);
   if (!session) {
@@ -314,7 +349,7 @@ export async function handleProviderCommand(options: {
         options.markdown,
       );
     }
-    if (requestedProvider !== resolveEffectiveClaudeProvider(session, binding)
+    if (requestedProvider !== 'tmux' && requestedProvider !== resolveEffectiveClaudeProvider(session, binding)
       && sessionHasActiveRuntimeTurn(options.deps, session)) {
       return buildRuntimeSwitchWhileRunningResponse({
         commandLabel: '`/provider`',
@@ -708,7 +743,7 @@ export async function handleProviderCommand(options: {
       return '共享 Codex 线程已就绪，可直接发送消息；正在后台准备 tmux 查看入口。';
     }
   }
-  if ((requestedProvider !== currentProvider || requestedProvider === 'tmux') && sessionHasActiveRuntimeTurn(options.deps, session)) {
+  if (requestedProvider !== 'tmux' && requestedProvider !== currentProvider && sessionHasActiveRuntimeTurn(options.deps, session)) {
     return buildRuntimeSwitchWhileRunningResponse({
       commandLabel: '`/provider`',
       runtime: 'codex',

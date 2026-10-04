@@ -262,7 +262,7 @@ import { routeCodexRecords, routeRuntimeRecords } from '../turn/local-codex-term
 import { createTurnCoordinator } from '../turn/turn-coordinator.js';
 import type { BridgeTurnTerminalRecord } from '../turn/turn-types.js';
 import { consumeSseEvents } from '../../runtime/sse-stream-decoder.js';
-import { consumePendingClearConfirmation } from '../command/clear-confirmations.js';
+import { consumePendingClearConfirmation, isPendingClearConfirmationReply } from '../command/clear-confirmations.js';
 import { consumePendingTakeoverConfirmation } from '../command/takeover-confirmations.js';
 import {
   consumePendingAttachmentConfirmation,
@@ -334,7 +334,6 @@ const STARTUP_NOTICE_TITLE = 'Bridge 已启动';
 const STARTUP_NOTICE_CARD_TEMPLATE = 'turquoise';
 const BACKGROUND_INPUT_LIMIT = 64_000;
 const SESSION_CONFIG_BARRIER_COMMANDS = new Set([
-  '/clear',
   '/current-config',
   '/provider',
   '/runtime',
@@ -3044,6 +3043,10 @@ function sessionMutatingCallbackLane(callbackData: string): { jobKind: string; s
   return null;
 }
 
+function shouldBypassSessionLock(msg: InboundMessage): boolean {
+  return isPendingClearConfirmationReply(msg.address, msg.text) || shouldRouteTerminalAppendInline(msg);
+}
+
 function adapterImmediateLane(msg: InboundMessage, category: 'channel-event' | 'callback' | 'command' | 'bypass' | 'regular'): AdapterImmediateLane | null {
   if (category === 'channel-event') {
     return {
@@ -3091,14 +3094,16 @@ function adapterImmediateLane(msg: InboundMessage, category: 'channel-event' | '
     ? msg.text
     : category === 'callback' && msg.callbackData
       ? parseCommandCallbackData(msg.callbackData)?.commandText
-      : undefined;
+      : isPendingClearConfirmationReply(msg.address, msg.text) ? '/clear' : undefined;
   if (immediateJobCommandText) {
     const { resolvedCommand, args } = splitInboundCommandText(immediateJobCommandText);
-    if (resolvedCommand === '/provider' && args.split(/\s+/)[0]?.toLowerCase() === 'tmux') {
+    const clear = resolvedCommand === '/clear' || resolvedCommand === '/clear-cancel';
+    if (clear || (resolvedCommand === '/provider' && args.split(/\s+/)[0]?.toLowerCase() === 'tmux')) {
+      const job = clear ? 'clear' : 'provider-tmux';
       return {
-        laneKey: `job:provider-tmux:${msg.address.channelType}:${msg.address.chatId}`,
+        laneKey: `job:${job}:${msg.address.channelType}:${msg.address.chatId}`,
         laneKind: 'job',
-        jobKind: 'command:provider-tmux',
+        jobKind: `command:${job}`,
         waitForConversationBarrier: false,
         blocksConversation: false,
         serialize: true,
@@ -3174,7 +3179,7 @@ const ADAPTER_RUNTIME = createAdapterRuntime(getState, {
   processWithSessionLock: (sessionId, fn, options) => INTERACTIVE_RUNTIME.processWithSessionLock(sessionId, fn, options),
   isCommandMessage: (msg) => isBridgeCommandText(msg.text),
   resolveSessionIdForMessage: (msg) => router.resolve(msg.address).bridgeSessionId,
-  shouldBypassSessionLock: shouldRouteTerminalAppendInline,
+  shouldBypassSessionLock,
   getImmediateLane: adapterImmediateLane,
   getSessionLane: adapterSessionLane,
 });
@@ -5188,6 +5193,12 @@ async function handleMessage(
 
     const clearConfirmation = consumePendingClearConfirmation(msg.address, rawText);
     if (clearConfirmation.reply === 'confirm' && clearConfirmation.commandText) {
+      if (clearConfirmation.sessionId
+        && getBridgeContext().store.getChannelChat(msg.address.channelType, msg.address.chatId)?.bridgeSessionId !== clearConfirmation.sessionId) {
+        enqueueBridgeNotice(adapter, msg.address, '这个确认对应的会话已切换，当前对话未受影响。', { replyToMessageId: msg.messageId });
+        ack();
+        return;
+      }
       await handleCommand(
         adapter,
         { ...msg, text: clearConfirmation.commandText, callbackData: undefined },
@@ -5796,6 +5807,7 @@ export const _testOnly = {
   resolveCommandAlias,
   adapterSessionLane,
   adapterImmediateLane,
+  shouldBypassSessionLock,
   shouldRouteTerminalAppendInline,
   isBridgeCommandText,
   toModelPromptText,

@@ -85,6 +85,20 @@ test('completion before start response never resurrects an active turn or drops 
   assert(f.runtime.recordsAfter('thread').records.some((r) => r.content === 'finished'));
 });
 
+test('delayed cancellation of an old delivery cannot interrupt a newer Desktop turn', async (t) => {
+  const f = await fixture(t);
+  const oldTurn = await f.runtime.submit('thread', text);
+  f.thread.turns![0]!.status = 'completed';
+  f.thread.turns!.push({ id: 'new-desktop-turn', status: 'inProgress', items: [] });
+  // The local snapshot is still old; interrupt must refresh before comparing its target.
+  assert.equal(f.runtime.snapshot('thread').turnId, oldTurn);
+  assert.equal(await f.runtime.interrupt('thread', oldTurn), false);
+  assert(!f.received.some((m) => m.method === 'turn/interrupt'));
+  assert.equal(f.runtime.snapshot('thread').turnId, 'new-desktop-turn');
+  assert.equal(await f.runtime.interrupt('thread', 'new-desktop-turn'), true);
+  assert.equal(f.received.find((m) => m.method === 'turn/interrupt').params.turnId, 'new-desktop-turn');
+});
+
 test('0.145 concurrent Desktop turn uses clientId to find actual turn, not returned submission ID', async (t) => {
   const f = await fixture(t);
   f.handle((m) => {

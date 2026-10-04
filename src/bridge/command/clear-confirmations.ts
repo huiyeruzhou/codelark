@@ -5,6 +5,7 @@ const CONFIRMATION_TTL_MS = 10 * 60 * 1000;
 interface PendingClearConfirmation {
   commandText: string;
   createdAt: number;
+  sessionId?: string;
 }
 
 export type ClearConfirmationReply = 'confirm' | 'cancel' | null;
@@ -31,11 +32,13 @@ export function registerPendingClearConfirmation(
   address: ChannelAddress,
   commandText: string,
   nowMs = Date.now(),
+  sessionId?: string,
 ): void {
   pruneExpired(nowMs);
   pendingClearConfirmations.set(clearConfirmationKey(address), {
     commandText,
     createdAt: nowMs,
+    sessionId,
   });
 }
 
@@ -55,7 +58,7 @@ export function consumePendingClearConfirmation(
   address: ChannelAddress,
   text: string,
   nowMs = Date.now(),
-): { reply: ClearConfirmationReply; commandText?: string } {
+): { reply: ClearConfirmationReply; commandText?: string; sessionId?: string } {
   pruneExpired(nowMs);
   const key = clearConfirmationKey(address);
   const pending = pendingClearConfirmations.get(key);
@@ -65,6 +68,11 @@ export function consumePendingClearConfirmation(
   if (!reply) return { reply: null };
   pendingClearConfirmations.delete(key);
   return reply === 'confirm'
-    ? { reply, commandText: pending.commandText }
+    ? { reply, commandText: pending.commandText, ...(pending.sessionId ? { sessionId: pending.sessionId } : {}) }
     : { reply };
+}
+
+export function isPendingClearConfirmationReply(address: ChannelAddress, text: string): boolean {
+  pruneExpired();
+  return pendingClearConfirmations.has(clearConfirmationKey(address)) && classifyClearConfirmationReply(text) !== null;
 }

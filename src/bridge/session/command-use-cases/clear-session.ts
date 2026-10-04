@@ -87,7 +87,7 @@ export async function handleClearSessionCommand(options: {
 
   if (previousBinding && runningReasons.length > 0 && !confirmation.confirmed) {
     const confirmedCommand = buildClearConfirmedCommand(confirmation.args);
-    registerPendingClearConfirmation(options.msg.address, confirmedCommand);
+    registerPendingClearConfirmation(options.msg.address, confirmedCommand, Date.now(), previousBinding.bridgeSessionId);
     return {
       response: buildCommandFields(
         '确认清空当前对话',
@@ -107,13 +107,21 @@ export async function handleClearSessionCommand(options: {
   }
 
   clearPendingClearConfirmation(options.msg.address);
+  const cleanupNotes: string[] = [];
   if (previousBinding) {
     options.deps.cancelRuntimeWaits?.(previousBinding.bridgeSessionId);
   }
   if (previousBinding && runningReasons.length > 0) {
     const detail = '用户确认 /clear，终止当前任务并新建 BridgeSession。';
     if (usesProtocol) {
-      await stopRunningSession({ store: options.store, binding: previousBinding, deps: options.deps, detail });
+      try {
+        await stopRunningSession({ store: options.store, binding: previousBinding, deps: options.deps, detail });
+      } catch (error) {
+        cleanupNotes.push(`旧任务未能停止，请在 Codex 中查看：${error instanceof Error ? error.message : String(error)}`);
+      }
+      // End this chat's delivery before detaching; a late backend reply must not enter the new conversation.
+      if (options.deps.forceStopSession) await options.deps.forceStopSession(previousBinding.bridgeSessionId, detail);
+      else options.deps.getActiveTask(previousBinding.bridgeSessionId)?.abortController.abort();
     } else if (options.deps.forceStopSession) {
       await options.deps.forceStopSession(previousBinding.bridgeSessionId, detail);
     } else {
@@ -131,20 +139,20 @@ export async function handleClearSessionCommand(options: {
           ? zcodeTmuxSessionName(previousSession.id)
         : undefined);
   let cleanedTmuxSessionName: string | null = null;
+  if (previousSession && options.store.getChannelChat(options.msg.address.channelType, options.msg.address.chatId)?.bridgeSessionId !== previousSession.id) {
+    return { response: '处理期间当前聊天已切换会话，未覆盖新的绑定。' };
+  }
   if (usesProtocol && previousSession) {
-    const current = getCodexAppServerSession(previousSession.id);
+    // Confirmation authorizes a new context. Old execution state is not an eligibility check.
+    releaseAppServerRequestObserver(previousSession.id);
     try {
-      if (!current || !await current.lifecycle.waitForIdle(current.threadId)) {
-        return { response: 'Codex 尚未确认原轮次结束，当前绑定和订阅已保留。请等待中断完成后再次执行 /clear。' };
-      }
+      await releaseCodexAppServerSession(previousSession.id);
     } catch (error) {
-      return { response: `Codex 轮次结束状态尚未确认，当前绑定和订阅已保留。请稍后再次执行 /clear。${error instanceof Error ? error.message : String(error)}` };
+      cleanupNotes.push(`旧对话已在本端解除订阅，后端清理未确认：${error instanceof Error ? error.message : String(error)}`);
     }
     if (options.store.getChannelChat(options.msg.address.channelType, options.msg.address.chatId)?.bridgeSessionId !== previousSession.id) {
-      return { response: '等待 Codex 结束期间，当前聊天已切换会话；未覆盖新的绑定。' };
+      return { response: '处理期间当前聊天已切换会话，未覆盖新的绑定。' };
     }
-    releaseAppServerRequestObserver(previousSession.id);
-    await releaseCodexAppServerSession(previousSession.id);
   } else if (previousRuntimeTmuxSessionName) {
     const cleanup = await cleanupRuntimeTmuxSession({
       runtime: previousRuntime,
@@ -214,8 +222,9 @@ export async function handleClearSessionCommand(options: {
       ],
       [
         previousBinding && runningReasons.length > 0
-          ? '旧任务已按确认请求终止；当前聊天已切到新的 BridgeSession。'
+          ? (usesProtocol ? '当前聊天已切到新对话，保留了原来的配置。' : '旧任务已按确认请求终止；当前聊天已切到新的 BridgeSession。')
           : '当前聊天已切到新的 BridgeSession。',
+        ...cleanupNotes,
         ...(cleanedTmuxSessionName ? [`已清理旧 tmux Provider session：${cleanedTmuxSessionName}`] : []),
         CLEAR_SESSION_ARG_RULE_NOTE,
       ],

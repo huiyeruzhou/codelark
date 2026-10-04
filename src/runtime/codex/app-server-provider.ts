@@ -61,7 +61,9 @@ export function streamCodexAppServer(params: StreamChatParams, legacy: LLMProvid
         let buffered: BridgeMirrorRecord[] = [];
         const startedTools = new Set<string>();
         const assistant = new Map<string, string>();
-        const abort = () => { void lifecycle.interrupt(threadId).catch((error) => { emit('status', { message: String(error) }); }); };
+        const abort = () => {
+          if (turnId) void lifecycle.interrupt(threadId, turnId).catch((error) => { emit('status', { message: String(error) }); });
+        };
         const consume = (record: BridgeMirrorRecord) => {
           if (record.turnId !== turnId) return;
           if (record.type === 'message' && record.role === 'assistant') {

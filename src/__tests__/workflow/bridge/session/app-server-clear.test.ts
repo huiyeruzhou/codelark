@@ -9,9 +9,12 @@ import { initBridgeTestContext, RecordingAdapter } from '../../../helpers/bridge
 import * as router from '../../../../bridge/session/channel-router.js';
 import { CommandThreadDisplay } from '../../../../bridge/command/thread-display.js';
 import { handleClearSessionCommand } from '../../../../bridge/session/command-use-cases/clear-session.js';
+import { handleProviderCommand } from '../../../../bridge/command/provider-settings.js';
+import { scheduleCodexAppServerView } from '../../../../bridge/command/tmux.js';
+import { _testOnlyTmuxCore } from '../../../../bridge/tmux/core.js';
 import { prepareCodexAppServerSession, getCodexAppServerSession, closeCodexAppServerSessions } from '../../../../runtime/codex/app-server-registry.js';
 
-for (const completion of ['timeout', 'event', 'rebind'] as const) it(`clear waits for a native terminal and preserves binding ownership: ${completion}`, async (t) => {
+for (const completion of ['missing-terminal', 'event', 'rebind', 'stop-failure', 'view'] as const) it(`active shared thread permits clear or terminal view: ${completion}`, async (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'codelark-clear-protocol-'));
   const wss = new WebSocketServer({ port: 0, host: '127.0.0.1' });
   t.after(async () => {
@@ -32,13 +35,14 @@ for (const completion of ['timeout', 'event', 'rebind'] as const) it(`clear wait
     const reply = (result: unknown) => socket.send(JSON.stringify({ id: message.id, result }));
     if (message.method === 'initialize') reply({ codexHome: process.env.CODEX_HOME });
     else if (message.method === 'thread/loaded/list') reply({ data: [] });
+    else if (message.method === 'thread/read' && completion === 'stop-failure') socket.send(JSON.stringify({ id: message.id, error: { code: -32603, message: 'state unavailable' } }));
     else if (['thread/start', 'thread/read', 'thread/resume'].includes(message.method)) reply({ thread });
     else if (message.method === 'turn/start') {
       thread.turns.push(turn);
       socket.send(JSON.stringify({ method: 'turn/started', params: { threadId: thread.id, turn } }));
       reply({ turn });
     }
-    else if (message.method === 'turn/interrupt') { reply({}); onInterrupt(); } // acknowledgement deliberately precedes completion
+    else if (message.method === 'turn/interrupt') { onInterrupt(); reply({}); } // no completion is needed to create a new context
     else if (message.method === 'thread/unsubscribe') reply({ status: 'unsubscribed' });
   }));
   const store = initBridgeTestContext();
@@ -48,21 +52,38 @@ for (const completion of ['timeout', 'event', 'rebind'] as const) it(`clear wait
   store.updateSession(binding.bridgeSessionId, { runtime: { codex: { threadId: handle.threadId, appServerEndpoint: endpoint } } });
   await handle.lifecycle.submit(handle.threadId, [{ type: 'text', text: 'work' }]);
   let queueCancellations = 0;
+  let localDeliveryStops = 0;
   const options = {
     adapter: new RecordingAdapter(), msg: { address, text: '/clear --yes', messageId: 'clear', timestamp: Date.now() },
     args: '--yes', currentBinding: binding, store, markdown: true, threadDisplay: new CommandThreadDisplay(store),
-    deps: { getActiveTask: () => undefined, forceStopSession: async () => assert.fail('clear must not force a protocol terminal'),
+    deps: { getActiveTask: () => undefined, forceStopSession: async () => { localDeliveryStops++; return true; },
       recordInteractiveHealthEnd: () => assert.fail('clear must not synthesize terminal health'),
       cancelQueuedSessionMessages: () => { queueCancellations++; } },
   };
+  if (completion === 'view') {
+    // Legacy persisted Codex sessions may omit activeRuntime. Attaching a view must still bypass restart confirmation.
+    store.updateSession(binding.bridgeSessionId, { health_status: 'running_active' });
+    _testOnlyTmuxCore.replace({ hasSession: async () => ({ exists: true, command: 'owned fixture' }) } as never);
+    t.after(() => _testOnlyTmuxCore.reset());
+    const result = await handleProviderCommand({ ...options, args: 'tmux' });
+    assert.equal(result.richCard, undefined);
+    assert.match(result.response, /共享 Codex 线程已就绪/);
+    await scheduleCodexAppServerView({ store, binding, session: store.getSession(binding.bridgeSessionId)!, handle });
+    assert.equal(localDeliveryStops, 0);
+    assert.equal(calls.includes('turn/interrupt'), false);
+    assert.equal(handle.lifecycle.snapshot(handle.threadId).activity, 'active');
+    return;
+  }
   let reboundSessionId: string | undefined;
-  if (completion !== 'timeout') onInterrupt = () => {
-    setTimeout(() => {
-      if (completion === 'rebind') reboundSessionId = router.createBinding(address, root).bridgeSessionId;
-      turn.status = 'interrupted';
-      for (const socket of wss.clients) socket.send(JSON.stringify({ method: 'turn/completed', params: { threadId: thread.id, turn } }));
-    }, 30);
+  if (completion === 'rebind') onInterrupt = () => { reboundSessionId = router.createBinding(address, root).bridgeSessionId; };
+  if (completion === 'event') onInterrupt = () => {
+    turn.status = 'interrupted';
+    for (const socket of wss.clients) socket.send(JSON.stringify({ method: 'turn/completed', params: { threadId: thread.id, turn } }));
   };
+  const prompt = await handleClearSessionCommand({ ...options, args: '' });
+  assert.match(prompt.richCard!.actions![0]![0]!.text, /终止并新建/);
+  assert.equal(store.getChannelChat(address.channelType, address.chatId)?.bridgeSessionId, binding.bridgeSessionId);
+  assert.equal(calls.includes('turn/interrupt'), false);
   const pending = await handleClearSessionCommand(options);
   if (completion === 'rebind') {
     assert.match(pending.response, /未覆盖新的绑定/);
@@ -70,24 +91,16 @@ for (const completion of ['timeout', 'event', 'rebind'] as const) it(`clear wait
     assert.equal(calls.includes('thread/unsubscribe'), false);
     return;
   }
-  if (completion === 'event') {
-    assert.match(pending.response, /已清空当前聊天上下文/);
-    assert.notEqual(store.getChannelChat(address.channelType, address.chatId)?.bridgeSessionId, binding.bridgeSessionId);
-    assert.equal(calls.filter((m) => m === 'turn/interrupt').length, 1);
-    assert.equal(calls.includes('thread/unsubscribe'), true);
-    return;
-  }
-  assert.match(pending.response, /尚未确认原轮次结束/);
+  assert.match(pending.response, /已清空当前聊天上下文/);
   assert.equal(queueCancellations, 1);
-  assert.equal(store.getChannelChat(address.channelType, address.chatId)?.bridgeSessionId, binding.bridgeSessionId);
-  assert.equal(getCodexAppServerSession(binding.bridgeSessionId), handle);
-  assert.equal(calls.includes('thread/unsubscribe'), false);
-  turn.status = 'completed';
-  await handleClearSessionCommand(options);
+  assert.equal(localDeliveryStops, 1);
+  assert.equal(calls.filter((m) => m === 'turn/interrupt').length, completion === 'stop-failure' ? 0 : 1);
   assert.equal(calls.includes('thread/unsubscribe'), true);
   assert.equal(getCodexAppServerSession(binding.bridgeSessionId), undefined);
   const replacement = store.getChannelChat(address.channelType, address.chatId);
   assert.notEqual(replacement?.bridgeSessionId, binding.bridgeSessionId);
   assert.equal(store.getSession(replacement!.bridgeSessionId)?.runtime?.codex?.appServerEndpoint, endpoint);
   assert.equal(store.getSession(replacement!.bridgeSessionId)?.runtime?.codex?.threadId, undefined);
+  if (completion === 'missing-terminal') assert.equal(turn.status, 'inProgress', 'new context must not fake a native terminal');
+  if (completion === 'stop-failure') assert.match(pending.response, /旧任务未能停止/);
 });
