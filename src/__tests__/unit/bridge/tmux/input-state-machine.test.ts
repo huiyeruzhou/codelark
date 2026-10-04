@@ -12,10 +12,32 @@ import {
   sendRuntimeTmuxInput,
   setRuntimeTmuxTurnState,
   transitionRuntimeTmuxInputState,
+  withRuntimeTmuxInputOwner,
 } from '../../../../bridge/tmux/input-state-machine.js';
 
 describe('runtime tmux input state machine', () => {
   beforeEach(() => resetRuntimeTmuxInputStatesForTests());
+
+  it('does not send a late steer or overwrite new state after restart during an old send', async () => {
+    let finishSend!: () => void;
+    const sent = new Promise<void>((resolve) => { finishSend = resolve; });
+    let steers = 0;
+    transitionRuntimeTmuxInputState('kimi', 'same-name', 'running', 'old ready');
+    setRuntimeTmuxTurnState('kimi', 'same-name', 'active', 'old turn');
+    const oldSend = withRuntimeTmuxInputOwner('kimi', 'same-name', () => sendRuntimeTmuxInput({
+      runtime: 'kimi', sessionName: 'same-name', send: () => sent,
+      steer: async () => { steers++; },
+    }));
+    withRuntimeTmuxInputOwner('kimi', 'same-name', () => {
+      transitionRuntimeTmuxInputState('kimi', 'same-name', 'running', 'new ready');
+      setRuntimeTmuxTurnState('kimi', 'same-name', 'active', 'new turn');
+    }, { restart: true });
+    const state = getRuntimeTmuxInputState('kimi', 'same-name');
+    finishSend();
+    await assert.rejects(oldSend, /replaced by an explicit restart/);
+    assert.equal(steers, 0);
+    assert.deepEqual(getRuntimeTmuxInputState('kimi', 'same-name'), state);
+  });
 
   it('requires one readiness pass for a cold existing tmux and skips prompt probing once running', async () => {
     let existenceChecks = 0;

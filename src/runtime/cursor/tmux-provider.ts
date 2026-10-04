@@ -6,6 +6,9 @@ import type { BridgeMirrorRecord, LLMProvider, StreamChatParams } from '../contr
 import { sseEvent } from '../sse.js';
 import { tmuxCore } from '../../bridge/tmux/core.js';
 import {
+  assertRuntimeTmuxInputOwner,
+  mutateRuntimeTmuxSession,
+  withRuntimeTmuxInputOwner,
   inspectRuntimeTmuxInput,
   sendRuntimeTmuxInput,
   transitionRuntimeTmuxInputState,
@@ -188,12 +191,12 @@ async function launchCursorTmuxSession(sessionName: string, params: StreamChatPa
     debug_keep_tmux: debugKeepsTmuxAlive(),
   });
   transitionRuntimeTmuxInputState('cursor', sessionName, 'starting_tmux', 'starting Cursor tmux session');
-  await tmuxCore.ensureDetachedSession({
+  await mutateRuntimeTmuxSession('cursor', sessionName, () => tmuxCore.ensureDetachedSession({
     name: sessionName,
     cwd: params.workingDirectory,
     command,
     recreate: true,
-  });
+  }));
 }
 
 async function waitForCursorInputReady(
@@ -345,7 +348,8 @@ export async function ensureCursorTmuxInputSession(
 }
 
 export async function restartCursorTmuxInputSession(params: StreamChatParams): Promise<CursorTmuxInputSession> {
-  return ensureCursorTmuxInputSession(params, { recreate: true });
+  return withRuntimeTmuxInputOwner('cursor', cursorTmuxSessionName(params.sessionId),
+    () => ensureCursorTmuxInputSession(params, { recreate: true }), { restart: true });
 }
 
 interface CursorTurnContext {
@@ -485,6 +489,7 @@ async function pollCursorTranscript(
   );
   let lastActivityAt = Date.now();
   while (!context.terminalSeen) {
+    assertRuntimeTmuxInputOwner('cursor', context.sessionName);
     if (abortSignal?.aborted) throw new Error('Cursor Agent request was aborted.');
     if (!context.sessionFilePath) throw new Error('Cursor transcript path was not resolved.');
     let endOffset = context.nextOffset;
@@ -528,8 +533,8 @@ async function pollCursorTranscript(
 export function streamCursorTmuxTui(params: StreamChatParams): ReadableStream<string> {
   return new ReadableStream<string>({
     start(controller) {
-      void (async () => {
-        const sessionName = cursorTmuxSessionName(params.sessionId);
+      const sessionName = cursorTmuxSessionName(params.sessionId);
+      void withRuntimeTmuxInputOwner('cursor', sessionName, async () => {
         const targetPane = `${sessionName}:0.0`;
         const baselineSessionIds = new Set(
           listCursorSessionFileSummaries(params.workingDirectory).map((summary) => summary.sessionId),
@@ -618,13 +623,14 @@ export function streamCursorTmuxTui(params: StreamChatParams): ReadableStream<st
             && !debugKeepsTmuxAlive()
           ) {
             try {
-              await tmuxCore.killSession(sessionName, { ignoreMissing: true });
+              await mutateRuntimeTmuxSession('cursor', sessionName,
+                () => tmuxCore.killSession(sessionName, { ignoreMissing: true }));
             } catch {
               // Best-effort cleanup; the next lifecycle probes tmux again.
             }
           }
         }
-      })();
+      });
     },
   });
 }

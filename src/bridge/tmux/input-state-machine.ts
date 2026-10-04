@@ -1,3 +1,5 @@
+import { AsyncLocalStorage } from 'node:async_hooks';
+
 export type RuntimeTmuxInputRuntime = 'codex' | 'claude' | 'kimi' | 'cursor' | 'zcode';
 
 export type RuntimeTmuxTurnState = 'unknown' | 'idle' | 'active';
@@ -53,6 +55,52 @@ export interface RuntimeTmuxInputInspection {
 }
 
 const states = new Map<string, RuntimeTmuxInputState>();
+const generations = new Map<string, number>();
+const inputOwner = new AsyncLocalStorage<{ key: string; generation: number }>();
+const mutations = new Map<string, Promise<unknown>>();
+
+/** Keep nested readiness, send and polling state writes owned by the same instance. */
+export function withRuntimeTmuxInputOwner<T>(
+  runtime: RuntimeTmuxInputRuntime,
+  sessionName: string,
+  run: () => T,
+  options: { restart?: boolean } = {},
+): T {
+  const key = stateKey(runtime, sessionName);
+  const generation = (generations.get(key) || 0) + (options.restart ? 1 : 0);
+  // Invalidate old streams synchronously, before restart's first asynchronous probe.
+  if (options.restart) generations.set(key, generation);
+  return inputOwner.run({ key, generation }, run);
+}
+
+function isCurrentInputOwner(runtime: RuntimeTmuxInputRuntime, sessionName: string): boolean {
+  const owner = inputOwner.getStore();
+  const key = stateKey(runtime, sessionName);
+  return !owner || owner.key !== key || owner.generation === (generations.get(key) || 0);
+}
+
+export function assertRuntimeTmuxInputOwner(runtime: RuntimeTmuxInputRuntime, sessionName: string): void {
+  if (!isCurrentInputOwner(runtime, sessionName)) throw new Error(`${runtime} tmux instance was replaced by an explicit restart`);
+}
+
+/** Serialize only process creation/deletion, never a turn or its terminal event. */
+export async function mutateRuntimeTmuxSession<T>(
+  runtime: RuntimeTmuxInputRuntime,
+  sessionName: string,
+  run: () => Promise<T>,
+): Promise<T> {
+  const key = stateKey(runtime, sessionName);
+  const previous = mutations.get(key);
+  const operation = (async () => {
+    await previous?.catch(() => {});
+    assertRuntimeTmuxInputOwner(runtime, sessionName);
+    return run();
+  })();
+  mutations.set(key, operation);
+  try { return await operation; }
+  finally { if (mutations.get(key) === operation) mutations.delete(key); }
+}
+
 export interface RuntimeTmuxSelectionLifecycleResult {
   choice: string | null;
   commands: string[];
@@ -99,6 +147,7 @@ export function transitionRuntimeTmuxInputState(
   } = {},
 ): RuntimeTmuxInputState {
   const current = getRuntimeTmuxInputState(runtime, sessionName);
+  if (!isCurrentInputOwner(runtime, sessionName)) return current;
   const changedAtMs = Date.now();
   const keepsEstablishedRuntime = next === 'checking_tmux'
     || next === 'checking_session'
@@ -152,6 +201,7 @@ export function setRuntimeTmuxTurnState(
   reason: string,
 ): RuntimeTmuxInputState {
   const current = getRuntimeTmuxInputState(runtime, sessionName);
+  if (!isCurrentInputOwner(runtime, sessionName)) return current;
   const nextState: RuntimeTmuxInputState = {
     ...current,
     turnState,
@@ -196,6 +246,7 @@ export async function inspectRuntimeTmuxInput(
     hasSession: () => Promise<RuntimeTmuxExistenceResult>;
   },
 ): Promise<RuntimeTmuxInputInspection> {
+  assertRuntimeTmuxInputOwner(params.runtime, params.sessionName);
   const before = getRuntimeTmuxInputState(params.runtime, params.sessionName);
   const reusable = before.state === 'running' || before.state === 'sending';
   transitionRuntimeTmuxInputState(
@@ -206,6 +257,7 @@ export async function inspectRuntimeTmuxInput(
   );
   try {
     const existence = await params.hasSession();
+    assertRuntimeTmuxInputOwner(params.runtime, params.sessionName);
     if (!existence.exists) {
       const state = transitionRuntimeTmuxInputState(
         params.runtime,
@@ -250,6 +302,7 @@ export async function sendRuntimeTmuxInput<T>(params: {
   send: () => Promise<T>;
   steer?: () => Promise<void>;
 }): Promise<T> {
+  assertRuntimeTmuxInputOwner(params.runtime, params.sessionName);
   const current = getRuntimeTmuxInputState(params.runtime, params.sessionName);
   if (current.state !== 'running') {
     throw new Error(
@@ -266,6 +319,7 @@ export async function sendRuntimeTmuxInput<T>(params: {
   );
   try {
     const result = await params.send();
+    assertRuntimeTmuxInputOwner(params.runtime, params.sessionName);
     if (steerOperation === 'explicit') {
       if (!params.steer) {
         throw new Error(`${params.runtime} tmux input requires an explicit steer operation`);
@@ -325,5 +379,7 @@ export async function coordinateRuntimeTmuxSelection(params: {
 
 export function resetRuntimeTmuxInputStatesForTests(): void {
   states.clear();
+  generations.clear();
+  mutations.clear();
   selectionLifecycles.clear();
 }

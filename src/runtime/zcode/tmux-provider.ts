@@ -7,6 +7,9 @@ import type { BridgeMirrorRecord, LLMProvider, StreamChatParams } from '../contr
 import { sseEvent } from '../sse.js';
 import { tmuxCore } from '../../bridge/tmux/core.js';
 import {
+  assertRuntimeTmuxInputOwner,
+  mutateRuntimeTmuxSession,
+  withRuntimeTmuxInputOwner,
   inspectRuntimeTmuxInput,
   sendRuntimeTmuxInput,
   setRuntimeTmuxTurnState,
@@ -261,12 +264,12 @@ async function launchZcodeTmuxSession(
   });
   transitionRuntimeTmuxInputState('zcode', sessionName, 'starting_tmux', 'starting ZCode tmux session');
   try {
-    await tmuxCore.ensureDetachedSession({
+    await mutateRuntimeTmuxSession('zcode', sessionName, () => tmuxCore.ensureDetachedSession({
       name: sessionName,
       cwd: params.workingDirectory,
       command,
       recreate: true,
-    });
+    }));
   } finally {
     if (secretEnvFile) {
       try { fs.unlinkSync(secretEnvFile); } catch { /* the launch shell normally removes it first */ }
@@ -519,7 +522,8 @@ export async function ensureZcodeTmuxInputSession(
 }
 
 export async function restartZcodeTmuxInputSession(params: StreamChatParams): Promise<ZcodeTmuxInputSession> {
-  return ensureZcodeTmuxInputSession(params, { recreate: true });
+  return withRuntimeTmuxInputOwner('zcode', zcodeTmuxSessionName(params.sessionId),
+    () => ensureZcodeTmuxInputSession(params, { recreate: true }), { restart: true });
 }
 
 interface ZcodeTurnContext {
@@ -639,6 +643,7 @@ async function pollZcodeTurn(
   );
   let lastActivityAt = Date.now();
   while (!context.terminalSeen) {
+    assertRuntimeTmuxInputOwner('zcode', context.sessionName);
     if (abortSignal?.aborted) throw new Error('ZCode request was aborted.');
     const before = context.emittedSignatures.size;
     const records = readZcodeSessionMirrorRecords(context.dbPath, context.sessionId, {
@@ -661,8 +666,8 @@ async function pollZcodeTurn(
 export function streamZcodeTmuxTui(params: StreamChatParams): ReadableStream<string> {
   return new ReadableStream<string>({
     start(controller) {
-      void (async () => {
-        const sessionName = zcodeTmuxSessionName(params.sessionId);
+      const sessionName = zcodeTmuxSessionName(params.sessionId);
+      void withRuntimeTmuxInputOwner('zcode', sessionName, async () => {
         const targetPane = `${sessionName}:0.0`;
         let failed = false;
         let preserveTmuxAfterFailure = false;
@@ -744,13 +749,14 @@ export function streamZcodeTmuxTui(params: StreamChatParams): ReadableStream<str
         } finally {
           if (failed && !preserveTmuxAfterFailure && !debugKeepsTmuxAlive()) {
             try {
-              await tmuxCore.killSession(sessionName, { ignoreMissing: true });
+              await mutateRuntimeTmuxSession('zcode', sessionName,
+                () => tmuxCore.killSession(sessionName, { ignoreMissing: true }));
             } catch {
               // Best-effort cleanup; the next lifecycle probes tmux again.
             }
           }
         }
-      })();
+      });
     },
   });
 }

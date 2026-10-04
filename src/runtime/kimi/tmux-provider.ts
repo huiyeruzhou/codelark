@@ -6,6 +6,9 @@ import type { LLMProvider, StreamChatParams, BridgeMirrorRecord } from '../contr
 import { sseEvent } from '../sse.js';
 import { tmuxCore } from '../../bridge/tmux/core.js';
 import {
+  assertRuntimeTmuxInputOwner,
+  mutateRuntimeTmuxSession,
+  withRuntimeTmuxInputOwner,
   inspectRuntimeTmuxInput,
   setRuntimeTmuxTurnState,
   sendRuntimeTmuxInput,
@@ -361,6 +364,7 @@ async function pollKimiSessionFile(
   let lastActivityAtMs = Date.now();
 
   while (true) {
+    assertRuntimeTmuxInputOwner('kimi', context.sessionName);
     if (!context.sessionFilePath) {
       throw new Error('Kimi session file was not resolved before polling.');
     }
@@ -451,12 +455,12 @@ async function launchTmuxKimiSession(
     'starting or replacing the provider-owned Kimi tmux session',
   );
 
-  await tmuxCore.ensureDetachedSession({
+  await mutateRuntimeTmuxSession('kimi', sessionName, () => tmuxCore.ensureDetachedSession({
     name: sessionName,
     cwd: params.workingDirectory,
     command: tmuxCommand,
     recreate: true,
-  });
+  }));
 }
 
 async function ensureKimiTmuxInputKeys(): Promise<void> {
@@ -1006,14 +1010,15 @@ export async function ensureKimiTmuxInputSession(
 export async function restartKimiTmuxInputSession(
   params: StreamChatParams,
 ): Promise<KimiTmuxInputSession> {
-  return ensureKimiTmuxInputSession(params, { recreate: true });
+  return withRuntimeTmuxInputOwner('kimi', kimiTmuxSessionName(params.sessionId),
+    () => ensureKimiTmuxInputSession(params, { recreate: true }), { restart: true });
 }
 
 export function streamKimiTmuxTui(params: StreamChatParams): ReadableStream<string> {
   return new ReadableStream<string>({
     start(controller) {
-      (async () => {
-        const sessionName = kimiTmuxSessionName(params.sessionId);
+      const sessionName = kimiTmuxSessionName(params.sessionId);
+      void withRuntimeTmuxInputOwner('kimi', sessionName, async () => {
         const targetPane = `${sessionName}:0.0`;
         const context: KimiTuiRunContext = {
           sessionName,
@@ -1110,7 +1115,8 @@ export function streamKimiTmuxTui(params: StreamChatParams): ReadableStream<stri
         } finally {
           if (lifecycleFailed && !isDebugTmuxKeepAlive()) {
             try {
-              await tmuxCore.killSession(sessionName, { ignoreMissing: true });
+              await mutateRuntimeTmuxSession('kimi', sessionName,
+                () => tmuxCore.killSession(sessionName, { ignoreMissing: true }));
               transitionRuntimeTmuxInputState(
                 'kimi',
                 sessionName,
@@ -1130,7 +1136,7 @@ export function streamKimiTmuxTui(params: StreamChatParams): ReadableStream<stri
             console.log(`[kimi-tmux] Provider-owned tmux session remains reusable: ${sessionName}`);
           }
         }
-      })();
+      });
     },
   });
 }
