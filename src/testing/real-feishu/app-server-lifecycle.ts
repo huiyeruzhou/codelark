@@ -59,6 +59,7 @@ export interface LifecycleReport {
   protocol: AppServerMessage[];
   threads: Record<string, NativeThread>;
   modelRequests: LifecycleDriver['model']['requests'];
+  activeClear?: ActiveClearEvidence;
   nativeCards?: NativeCardReport[];
   error?: string;
 }
@@ -110,6 +111,119 @@ export function assertInherited(before: LifecycleSession, after: LifecycleSessio
   assert.deepEqual(after.configuration, before.configuration, '新会话必须继承用户配置');
   assert.equal(after.endpoint, before.endpoint, '新会话必须继续选择原共享后端');
   if (after.threadId) assert.notEqual(after.threadId, before.threadId, 'clear/new 不能复制旧 thread');
+}
+
+interface ActiveClearEvidence {
+  threadId: string;
+  turnId: string;
+  inputMessageId: string;
+  forbiddenResult: string;
+  confirmationMethod: 'user-text';
+  callbackStatus: 'unverified';
+  chatUrl: string;
+  commandMessageId?: string;
+  confirmationCard?: Record<string, any>;
+  answerMessageId?: string;
+  confirmationResponse?: Record<string, any>;
+  messageIdsBeforeNewInput?: string[];
+  newReplyMarker?: string;
+  reboundAt?: string;
+  oldTurnAfterNewInput?: NativeTurn;
+  oldTurnReadError?: string;
+  modelReleasedAt?: string;
+}
+
+export function assertNoOldClearDelivery(report: LifecycleReport, chatId: string, appId: string, payload: unknown): void {
+  const evidence = report.activeClear;
+  assert(evidence?.messageIdsBeforeNewInput && evidence.newReplyMarker, '缺少 active clear 完成证据');
+  assert.equal(botReplyIds(payload, appId, evidence.forbiddenResult).length, 0, '旧轮次结果不能投递到 clear 后的聊天');
+  const answerIndex = report.inputs.findIndex((i) => i.messageId === evidence.answerMessageId && i.chatId === chatId);
+  assert(answerIndex >= 0, '缺少 clear 的真实文字确认证据');
+  const allowedReplies = new Set([evidence.commandMessageId, evidence.answerMessageId,
+    ...report.inputs.slice(answerIndex + 1).filter((i) => i.chatId === chatId).map((i) => i.messageId)]);
+  // mirror 的真实结果卡不带 reply_to；用本轮唯一结果标记关联，仍拒绝额外空卡。
+  const resultIds = botReplyIds(payload, appId, evidence.newReplyMarker);
+  assert.equal(resultIds.length, 1, 'clear 后的新回复必须唯一');
+  const before = new Set(evidence.messageIdsBeforeNewInput);
+  const extra = userReadbackMessages(payload).filter((m) => m.sender?.sender_type === 'app' && m.sender.id === appId
+    && !before.has(m.message_id) && !allowedReplies.has(m.reply_to) && !resultIds.includes(m.message_id));
+  assert.deepEqual(extra, [], 'clear 后出现未关联新输入的旧投递或空卡');
+}
+
+interface ActiveClearContext {
+  driver: Pick<LifecycleDriver, 'runId' | 'chatId' | 'botAppId' | 'model' | 'state'>;
+  report: LifecycleReport;
+  before: LifecycleSession;
+  wait<T>(label: string, read: () => T | undefined | false | Promise<T | undefined | false>): Promise<T>;
+  read(chat: string): Promise<unknown>;
+  send(chat: string, text: string): Promise<string>;
+  thread(id: string): Promise<NativeThread>;
+  completedPrompt(chat: string, name: string): Promise<{ threadId: string; turnId: string; response: string }>;
+  check(name: string, detail?: unknown): void;
+  save(): void;
+}
+
+/** 保持旧模型等待，走真实 /clear 和文字确认；不调用停止 RPC 或内部确认命令。 */
+export async function runActiveClear(c: ActiveClearContext): Promise<{ threadId: string; turnId: string; response: string }> {
+  const { driver: d, report, before } = c;
+  assert(before.threadId, 'active clear 必须已有真实线程');
+  const input = `LIFECYCLE_ACTIVE_CLEAR_INPUT_${d.runId}`;
+  const forbiddenResult = `LIFECYCLE_ACTIVE_CLEAR_OLD_RESULT_${d.runId}`;
+  const requestOffset = d.model.requests.length;
+  const held = d.model.enqueue({ text: forbiddenResult }, true);
+  const reply = (payload: unknown, id: string) => userReadbackMessages(payload).find((m) =>
+    m.sender?.sender_type === 'app' && m.sender.id === d.botAppId && m.reply_to === id);
+  try {
+    const inputMessageId = await c.send(d.chatId, input);
+    await c.wait('active clear 的模型已收到输入', () => d.model.requests.slice(requestOffset).some((r) => JSON.stringify(r.body.input).includes(input)));
+    const active = await c.wait('active clear 的原生运行中轮次', async () => (await c.thread(before.threadId!)).turns.find((t) =>
+      t.status === 'inProgress' && t.items.some((i) => i.type === 'userMessage' && JSON.stringify(i).includes(input))));
+    const evidence: ActiveClearEvidence = report.activeClear = {
+      threadId: before.threadId, turnId: active.id, inputMessageId, forbiddenResult,
+      confirmationMethod: 'user-text', callbackStatus: 'unverified', chatUrl: feishuChatUrl(d.chatId),
+    };
+    c.save();
+    evidence.commandMessageId = await c.send(d.chatId, `/clear clear-${d.runId}`); c.save();
+    const card = await c.wait('active clear 的真实确认卡', async () => reply(await c.read(d.chatId), evidence.commandMessageId!));
+    evidence.confirmationCard = card; c.save();
+    assert.equal(card.msg_type, 'interactive', 'active clear 必须返回真实交互卡');
+    const cardText = JSON.stringify(card.content ?? card.body?.content);
+    for (const text of ['确认清空当前对话', '终止并新建', '保留当前配置', '无需等待状态检测或再次执行命令', '取消']) {
+      assert(cardText.includes(text), `active clear 确认卡缺少新文案：${text}`);
+    }
+    const pending = d.state(d.chatId);
+    assert.equal(pending?.sessionId, before.sessionId, '确认前不能提前切换 BridgeSession');
+    assert.equal(pending?.threadId, before.threadId, '确认前不能提前切换 thread');
+    assert.equal((await c.thread(before.threadId)).turns.find((t) => t.id === active.id)?.status, 'inProgress', '确认前不能提前结束旧轮次');
+    c.check('active_clear_confirmation_user_readback', { messageId: card.message_id, threadId: before.threadId, turnId: active.id });
+
+    evidence.answerMessageId = await c.send(d.chatId, '是'); c.save();
+    const response = await c.wait('文字确认后一次完成新建', async () => reply(await c.read(d.chatId), evidence.answerMessageId!));
+    evidence.confirmationResponse = response; c.save();
+    assert(JSON.stringify(response.content ?? response.body?.content).includes('当前聊天已切到新对话，保留了原来的配置。'), '文字确认未返回新的 clear 完成文案');
+    const cleared = d.state(d.chatId);
+    assert(cleared, '文字确认完成后缺少新会话'); assertInherited(before, cleared);
+    evidence.reboundAt = new Date().toISOString(); c.save();
+    evidence.messageIdsBeforeNewInput = userReadbackMessages(await c.read(d.chatId)).map((m) => String(m.message_id)); c.save();
+    // 不等旧 turn/completed，也不释放旧模型；先证明新上下文可以正常执行。
+    const clearTurn = await c.completedPrompt(d.chatId, 'CLEAR');
+    evidence.newReplyMarker = clearTurn.response;
+    assert.notEqual(clearTurn.threadId, before.threadId);
+    const after = d.state(d.chatId);
+    assert(after, '新输入完成后缺少会话'); assertInherited(before, after);
+    assert.equal(after.threadId, clearTurn.threadId);
+    assert(!(await c.thread(clearTurn.threadId)).turns.some((t) => t.items.some((i) => i.type === 'userMessage' && JSON.stringify(i).includes(input))), '旧输入不能进入新 thread');
+    report.sessions.cleared = after;
+    c.check('clear_new_thread_inherits', { before: before.threadId, after: clearTurn.threadId, confirmation: 'user-text' });
+    // 单次只读快照保留实际时序；读取失败也不能变成等待旧线程结束的门槛。
+    try { evidence.oldTurnAfterNewInput = (await c.thread(before.threadId)).turns.find((t) => t.id === active.id); }
+    catch (error) { evidence.oldTurnReadError = String(error); }
+    held.release(); evidence.modelReleasedAt = new Date().toISOString(); c.save();
+    const freshInput = report.inputs.find((i) => i.chatId === d.chatId && i.text === `LIFECYCLE_CLEAR_INPUT_${d.runId}`);
+    assert(freshInput, '缺少 clear 后的真实用户输入证据');
+    assertNoOldClearDelivery(report, d.chatId, d.botAppId, await c.read(d.chatId));
+    return clearTurn;
+  } finally { held.release(); }
 }
 
 /** SDK 和 tmux 使用相同输入时序与终态断言；只允许真实飞书客户端处理审批。 */
@@ -240,13 +354,8 @@ export async function runAppServerLifecycle(d: LifecycleDriver): Promise<Lifecyc
     check('stop_native_interrupted', { threadId: first.threadId, turnId: stopTurn.id, stream: stoppedStream });
     report.checks.push({ name: 'stop_card_interrupted', ok: stoppedStream.status === 'interrupted', detail: stoppedStream }); save();
 
-    stage('/clear 新线程与配置继承');
-    await command(d.chatId, `/clear clear-${d.runId}`, '已清空当前聊天上下文');
-    const cleared = await state(d.chatId); assertInherited(original, cleared);
-    const clearTurn = await completedPrompt(d.chatId, 'CLEAR');
-    assert.notEqual(clearTurn.threadId, first.threadId);
-    report.sessions.cleared = await state(d.chatId);
-    check('clear_new_thread_inherits', { before: first.threadId, after: clearTurn.threadId });
+    stage('运行中 /clear 确认、新线程与配置继承');
+    const clearTurn = await runActiveClear({ driver: d, report, before: original, wait, read, send, thread, completedPrompt, check, save });
 
     stage('/new 产品路径新群与配置继承');
     const newName = `life-${d.runId}`;
@@ -368,6 +477,9 @@ export async function runAppServerLifecycle(d: LifecycleDriver): Promise<Lifecyc
         assert(messages.some((m) => m.message_id === input.messageId && m.sender?.sender_type === 'user'), `用户回读缺少真实用户输入 ${input.messageId}`);
       }
     }
+    assert(report.activeClear, '缺少 active clear 证据');
+    assertNoOldClearDelivery(report, d.chatId, d.botAppId, report.readbacks[d.chatId]);
+    check('active_clear_no_old_delivery', { threadId: report.activeClear.threadId, turnId: report.activeClear.turnId });
     check('all_inputs_user_readback');
     assert.deepEqual(d.model.unexpected, [], '模型收到未编排调用');
     assert(d.model.requests.every((r) => r.body.model === d.modelName && (r.body.reasoning as { effort?: string })?.effort === 'low'), '实际模型请求必须使用继承后的模型和思考级别');

@@ -1,7 +1,8 @@
 import '../../setup/test-setup.js';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { assertInherited, assertSameTurnInput, botReplyIds, userReadbackMessages, feishuChatUrl, readAllUserPages, unexpectedRestartCards } from '../../../testing/real-feishu/app-server-lifecycle.js';
+import { assertInherited, assertSameTurnInput, botReplyIds, userReadbackMessages, feishuChatUrl, readAllUserPages, unexpectedRestartCards, runActiveClear, assertNoOldClearDelivery,
+  type LifecycleReport, type NativeThread } from '../../../testing/real-feishu/app-server-lifecycle.js';
 
 const session = { sessionId: 'old', threadId: 'thread-old', endpoint: 'unix:///owned/rpc.sock', streamKeys: [],
   configuration: { provider: 'sdk', networkAccess: false, reasoningEffort: 'low' } };
@@ -48,4 +49,148 @@ test('重启去重拒绝没有结果标记的空镜像卡，允许本次current�
   assert.deepEqual(unexpectedRestartCards(before, payload([bot('old'), bot('command-response', 'current')]), 'app', 'current'), []);
   assert.deepEqual(unexpectedRestartCards(before, payload([bot('old'), bot('ghost')]), 'app', 'current').map((m) => m.message_id), ['ghost']);
   assert.deepEqual(unexpectedRestartCards(before, payload([bot('ghost')]), 'app').map((m) => m.message_id), ['ghost']);
+});
+
+// 只验证 harness 编排与证据判定；这些内存替身不计为真实飞书或原生后端验收。
+function activeClearFixture(fault?: 'old-card' | 'early-rebind' | 'early-stop' | 'no-confirmation' | 'old-response'
+  | 'configuration-loss' | 'same-thread' | 'old-input' | 'late-result' | 'empty-card', provider = 'sdk') {
+  type Context = Parameters<typeof runActiveClear>[0];
+  const messages: Array<Record<string, any>> = [];
+  const actions: string[] = [];
+  const oldInput = 'LIFECYCLE_ACTIVE_CLEAR_INPUT_owned';
+  let current = { ...session };
+  let released = false;
+  let newInputCompleted = false;
+  let modelOutput = '';
+  const oldThread: NativeThread = { id: session.threadId, turns: [{ id: 'active', status: 'inProgress', items: [] }] };
+  const newThread: NativeThread = { id: 'thread-new', turns: [] };
+  const report: LifecycleReport = {
+    scenario: 'app-server-lifecycle', runId: 'owned', provider, checks: [], automaticPassed: false, acceptanceComplete: false,
+    stage: 'active-clear', approval: { status: 'not-run', chatUrl: '', detail: '' }, chats: ['chat'], inputs: [], readbacks: {},
+    sessions: {}, protocol: [], threads: {}, modelRequests: [],
+  };
+  const bot = (reply_to: string | undefined, content: string, msg_type = 'interactive') => {
+    messages.push({ message_id: `bot-${messages.length}`, sender: { sender_type: 'app', id: 'app' }, reply_to, content, msg_type });
+  };
+  const recordInput = (text: string) => {
+    const messageId = `user-${report.inputs.length}`;
+    report.inputs.push({ chatId: 'chat', text, messageId });
+    messages.push({ message_id: messageId, sender: { sender_type: 'user', id: 'user' }, content: text });
+    return messageId;
+  };
+  const c: Context = {
+    driver: {
+      runId: 'owned', chatId: 'chat', botAppId: 'app', state: () => structuredClone(current),
+      model: {
+        requests: report.modelRequests, unexpected: [],
+        enqueue(output, hold) {
+          assert.equal(hold, true); assert.equal(typeof output, 'object');
+          assert('text' in output); modelOutput = output.text;
+          return { release() { released = true; actions.push('release'); } };
+        },
+      },
+    },
+    report, before: session,
+    async wait(label, read) {
+      const value = await read();
+      if (value === undefined || value === false) throw new Error(`等待超时：${label}`);
+      return value;
+    },
+    async read() { return { ok: true, identity: 'user', data: { messages: structuredClone(messages) } }; },
+    async send(_chat, text) {
+      actions.push(text);
+      const id = recordInput(text);
+      if (text === oldInput) {
+        report.modelRequests.push({ method: 'POST', url: '/v1/responses', body: { input: [{ text }] } });
+        oldThread.turns[0].items = [{ type: 'userMessage', content: [{ text }] }];
+      } else if (text === '/clear clear-owned') {
+        if (fault !== 'no-confirmation') bot(id, fault === 'old-card' ? '确认清空当前对话：请先停止并重新发送命令'
+          : '确认清空当前对话：终止并新建，保留当前配置，无需等待状态检测或再次执行命令。[终止并新建] [取消]');
+        if (fault === 'early-rebind') current = { ...current, sessionId: 'premature' };
+        if (fault === 'early-stop') oldThread.turns[0].status = 'interrupted';
+      } else if (text === '是') {
+        assert.equal(current.sessionId, 'old');
+        current = { ...session, sessionId: 'new', threadId: fault === 'same-thread' ? session.threadId : 'thread-new' };
+        if (fault === 'configuration-loss') current.configuration = { ...session.configuration, networkAccess: true };
+        bot(id, fault === 'old-response' ? '旧任务仍运行，请再次执行 /clear' : '当前聊天已切到新对话，保留了原来的配置。');
+      } else assert.fail(`harness 发送了非故事输入：${text}`);
+      return id;
+    },
+    async thread(id) {
+      actions.push(`read-thread:${id}`);
+      // 旧线程始终 inProgress；harness 若在确认后等待旧终态，本测试就不能完成。
+      return structuredClone(id === session.threadId ? oldThread : newThread);
+    },
+    async completedPrompt(_chat, name) {
+      assert.equal(released, false, '新输入成功之前不得释放旧模型');
+      assert.equal(current.sessionId, 'new'); assert.equal(name, 'CLEAR');
+      actions.push('new-input');
+      const id = recordInput('LIFECYCLE_CLEAR_INPUT_owned');
+      newThread.turns.push({ id: 'new-turn', status: 'completed', items: [{ type: 'userMessage', content: [{ text: 'LIFECYCLE_CLEAR_INPUT_owned' }] }] });
+      if (fault === 'old-input') newThread.turns[0].items.push({ type: 'userMessage', content: [{ text: oldInput }] });
+      bot(provider === 'tmux' ? undefined : id, 'LIFECYCLE_CLEAR_RESULT_owned');
+      if (fault === 'late-result') bot(report.inputs[0].messageId, modelOutput);
+      if (fault === 'empty-card') bot(undefined, '');
+      newInputCompleted = true;
+      return { threadId: 'thread-new', turnId: 'new-turn', response: 'LIFECYCLE_CLEAR_RESULT_owned' };
+    },
+    check(name, detail) { report.checks.push({ name, ok: true, detail }); },
+    save() {},
+  };
+  return { c, actions, report, released: () => released, newInputCompleted: () => newInputCompleted };
+}
+
+for (const provider of ['sdk', 'tmux']) test(`active clear ${provider} 编排：文字确认后不等旧终态，新输入成功前保持旧模型等待`, async () => {
+  const f = activeClearFixture(undefined, provider);
+  const result = await runActiveClear(f.c);
+  assert.equal(result.threadId, 'thread-new');
+  assert.deepEqual(f.report.inputs.map((i) => i.text), [
+    'LIFECYCLE_ACTIVE_CLEAR_INPUT_owned', '/clear clear-owned', '是', 'LIFECYCLE_CLEAR_INPUT_owned',
+  ]);
+  assert.equal(f.report.activeClear?.confirmationMethod, 'user-text');
+  assert.equal(f.report.activeClear?.callbackStatus, 'unverified');
+  assert.equal(f.report.activeClear?.oldTurnAfterNewInput?.status, 'inProgress');
+  assert.deepEqual(f.report.checks.map((v) => v.name), ['active_clear_confirmation_user_readback', 'clear_new_thread_inherits']);
+  assert(f.actions.indexOf('new-input') < f.actions.indexOf('release'));
+  assert(!f.actions.slice(f.actions.indexOf('是') + 1, f.actions.indexOf('new-input')).includes('read-thread:thread-old'));
+  assert(f.released());
+});
+
+test('active clear 拒绝旧交互、确认前切换/停止和入口阻塞，失败释放自有模型等待', async () => {
+  for (const [fault, expected] of [
+    ['old-card', /缺少新文案/], ['early-rebind', /确认前不能提前切换/],
+    ['early-stop', /确认前不能提前结束/], ['no-confirmation', /等待超时/], ['old-response', /新的 clear 完成文案/],
+  ] as const) {
+    const f = activeClearFixture(fault);
+    await assert.rejects(runActiveClear(f.c), expected);
+    assert.equal(f.newInputCompleted(), false, fault);
+    assert(f.released(), fault);
+    assert(!f.report.inputs.some((i) => i.text.includes('--confirm') || i.text === '/stop'), fault);
+  }
+});
+
+test('active clear 拒绝配置回落、旧 thread/输入继承、旧结果及没有标记的空卡', async () => {
+  for (const [fault, expected] of [
+    ['configuration-loss', /继承用户配置/], ['same-thread', /不能复制旧 thread/], ['old-input', /旧输入不能进入新 thread/],
+    ['late-result', /旧轮次结果不能投递/], ['empty-card', /旧投递或空卡/],
+  ] as const) {
+    const f = activeClearFixture(fault);
+    await assert.rejects(runActiveClear(f.c), expected);
+    assert(f.released(), fault);
+  }
+});
+
+test('active clear 最终回读再次检查迟到投递，允许后续真实命令回复', async () => {
+  const f = activeClearFixture(undefined, 'tmux');
+  await runActiveClear(f.c);
+  const payload = await f.c.read('chat') as { data: { messages: Array<Record<string, any>> } };
+  f.report.inputs.push({ chatId: 'chat', text: '/new owned', messageId: 'new-command' });
+  const bot = { sender: { sender_type: 'app', id: 'app' }, message_id: 'new-reply', content: '新群已创建', reply_to: 'new-command' };
+  payload.data.messages.push(bot);
+  assertNoOldClearDelivery(f.report, 'chat', 'app', payload);
+  payload.data.messages.push({ ...bot, message_id: 'late-empty', reply_to: undefined, content: '' });
+  assert.throws(() => assertNoOldClearDelivery(f.report, 'chat', 'app', payload), /旧投递或空卡/);
+  payload.data.messages.pop();
+  payload.data.messages.push({ ...bot, message_id: 'late-result', content: f.report.activeClear!.forbiddenResult });
+  assert.throws(() => assertNoOldClearDelivery(f.report, 'chat', 'app', payload), /旧轮次结果不能投递/);
 });
