@@ -251,7 +251,7 @@ run_dry_run() {
     echo "[hot-update] --use-env-proxy: not supported"
   fi
   echo "[hot-update] worker args: ${args[*]}"
-  echo "[hot-update] dispatch command: bash scripts/hot-update-bridge.sh ${args[*]}"
+  echo "[hot-update] dispatch command: bash $PROJECT_DIR/scripts/hot-update-bridge.sh ${args[*]}"
   echo "[hot-update] git pull: $([ "$USE_PULL" = "1" ] && echo planned || echo skipped)"
   echo "[hot-update] npm run build: planned"
   echo "[hot-update] npm test: $([ "$SKIP_TESTS" = "1" ] && echo skipped || echo planned)"
@@ -278,14 +278,22 @@ dispatch_worker() {
     args+=(--skip-tests)
   fi
 
-  if command -v setsid >/dev/null 2>&1; then
-    nohup setsid bash "$0" "${args[@]}" >"$log_file" 2>&1 </dev/null &
+  local worker_script="$PROJECT_DIR/scripts/hot-update-bridge.sh"
+  if [ "$(uname -s 2>/dev/null || true)" = "Darwin" ] && command -v launchctl >/dev/null 2>&1; then
+    local launch_label="com.codelark.hot-update.${log_stamp}.$$"
+    launchctl submit -l "$launch_label" -o "$log_file" -e "$log_file" -- /bin/bash "$worker_script" "${args[@]}"
+    echo "Dispatched CodeLark hot update."
+    echo "Launchd label: $launch_label"
+  elif command -v setsid >/dev/null 2>&1; then
+    nohup setsid bash "$worker_script" "${args[@]}" >"$log_file" 2>&1 </dev/null &
+    echo "Dispatched CodeLark hot update."
+    echo "PID: $!"
   else
-    nohup bash "$0" "${args[@]}" >"$log_file" 2>&1 </dev/null &
+    nohup bash "$worker_script" "${args[@]}" >"$log_file" 2>&1 </dev/null &
+    echo "Dispatched CodeLark hot update."
+    echo "PID: $!"
   fi
 
-  echo "Dispatched CodeLark hot update."
-  echo "PID: $!"
   echo "Hot update log: $log_file"
   echo "Bridge log: $BRIDGE_LOG"
   echo "Pull requested: $([ "$USE_PULL" = "1" ] && echo yes || echo no)"
