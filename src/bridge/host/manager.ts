@@ -1925,6 +1925,7 @@ export async function sendAgentMessageFromBinding(
       idempotencyKey: instruction.idempotencyKey,
     });
     if (!target.accepted) return;
+    if (target.internalChatId === sourceBinding.id) return;
     const targetEndpoint = {
       chatName: target.chatName,
       botName: target.agentName,
