@@ -2892,7 +2892,7 @@ async function reconcileMirrorSubscriptions(): Promise<void> {
       if (!session || (!session.runtime?.codex?.appServerEndpoint && !getCodexAppServerSession(session.id))) continue;
       const adapter = getState().adapters.get(binding.channelType);
       if (!adapter) continue;
-      const protocol = getCodexAppServerSession(session.id) || await prepareCodexAppServerForBinding(store, binding, session);
+      const protocol = getCodexAppServerSession(session.id) || await prepareCodexAppServerForBinding(store, binding, session, { createIfMissing: false });
       if (protocol) {
         observeAppServerRequests(session.id, protocol, adapter, { channelType: binding.channelType, chatId: binding.chatId }, store);
         INTERACTIVE_RUNTIME.syncSessionRuntimeState(session.id);

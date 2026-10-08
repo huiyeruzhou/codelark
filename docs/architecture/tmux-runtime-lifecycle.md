@@ -122,6 +122,8 @@ Codex 0.160 的启动菜单有两种紧凑 footer：目录信任为 `enter conti
 | 审批/问答请求 | 按服务端 request id 接收一次有效答复 | serverRequest/resolved、轮次结束或连接失效；旧回调失效 |
 | tmux 界面 | 查看和人工接管同一后端上的线程 | 界面关闭仅失去该查看入口；不影响消息提交和状态 |
 
+后台订阅只恢复已有的原生线程，包括 registry 已持久保存、但 BridgeSession 尚未写回 threadId 的绑定。`/clear` 和 `/new` 继承 endpoint 只表示选择了后端，不能因此创建空线程；第一条真实输入或显式 `/p tmux` 才负责创建。尚未创建线程的空会话不需要请求后端停止。原生 Codex 可能不持久保存零输入的预热线程，因此不能用后台创建空线程来代替订阅恢复。
+
 消息发给协议执行适配器，由 thread/start 或 thread/resume 确认线程，再用 turn/start 提交；活动轮次上的明确追加用 turn/steer 并携带 expectedTurnId。/stop 使用 turn/interrupt，目标必须为当前服务器确认的 turnId。普通消息与 direct provider 共用 turn 配置转换，后续修改模型、sandbox、approvalPolicy、工作目录会传给下一次 turn/start；remote resume 不能再传本地权限覆盖参数。
 
 通知转换为既有 BridgeMirrorRecord，复用现有卡片、投递重试和 TurnCoordinator。协议线程只允许这一份事件源决定进度和终态，不能再由 JSONL 与抓屏平行生成结束事件。其他 runtime 与旧 Codex 继续使用原记录来源。进程关闭、静默超时、编辑框出现、JSONL 暂无增量都不是协议轮次完成的证据。

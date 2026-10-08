@@ -117,12 +117,14 @@ export async function prepareCodexAppServerForBinding(
   store: BridgeStore,
   binding: ChannelChat,
   session: BridgeSession,
+  options: { createIfMissing?: boolean } = {},
 ) {
   if ((getSessionActiveRuntime(session) || 'codex') !== 'codex') return undefined;
   const threadId = getCodexThreadId(session, binding);
   const config = resolveSessionRuntimeConfig(binding, session);
   const prepared = await prepareCodexAppServerSession({
     sessionId: session.id,
+    createIfMissing: options.createIfMissing,
     threadId,
     endpoint: session.runtime?.codex?.appServerEndpoint,
     cwd: getSessionWorkingDirectory(session) || undefined,

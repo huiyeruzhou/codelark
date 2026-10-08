@@ -43,6 +43,8 @@ const canonical = (value: string) => { try { return fs.realpathSync(value); } ca
 export async function prepareCodexAppServerSession(options: AppServerThreadOptions & {
   sessionId: string;
   endpoint?: string;
+  /** Background observers restore known threads; they must not allocate an empty thread. */
+  createIfMissing?: boolean;
 }): Promise<CodexAppServerSession | undefined> {
   const cached = sessions.get(options.sessionId);
   if (cached && (!options.threadId || cached.threadId === options.threadId)) {
@@ -65,6 +67,7 @@ export async function prepareCodexAppServerSession(options: AppServerThreadOptio
     assertCurrent();
     const persisted = read<{ endpoint: string; threadId: string }>(`session:${options.sessionId}`);
     const pinned = persisted && (!options.threadId || persisted.threadId === options.threadId) ? persisted : undefined;
+    if (options.createIfMissing === false && !options.threadId && !pinned?.threadId) return;
     if (pinned && options.endpoint && appServerCliUrl(options.endpoint) !== pinned.endpoint) throw new Error('此线程已经绑定另一 app-server，未切换执行后端。');
     let endpoint = options.endpoint || pinned?.endpoint || process.env.CODELARK_CODEX_APP_SERVER_URL;
     // Existing legacy threads keep their writer and adapter across an upgrade.
@@ -103,7 +106,7 @@ export async function prepareCodexAppServerSession(options: AppServerThreadOptio
       });
       backends.set(endpoint, lifecycle);
     }
-    const { sessionId: _, endpoint: __, ...threadOptions } = options;
+    const { sessionId: _, endpoint: __, createIfMissing: ___, ...threadOptions } = options;
     const targetThread = options.threadId || pinned?.threadId;
     if (targetThread) preparingTargets.set(token, `${endpoint}:${targetThread}`);
     const threadId = await lifecycle.ensureThread({ ...threadOptions, threadId: options.threadId || pinned?.threadId,

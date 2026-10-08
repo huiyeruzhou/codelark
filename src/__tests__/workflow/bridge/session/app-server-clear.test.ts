@@ -12,7 +12,52 @@ import { handleClearSessionCommand } from '../../../../bridge/session/command-us
 import { handleProviderCommand } from '../../../../bridge/command/provider-settings.js';
 import { scheduleCodexAppServerView } from '../../../../bridge/command/tmux.js';
 import { _testOnlyTmuxCore } from '../../../../bridge/tmux/core.js';
+import { _testOnly } from '../../../../bridge/host/manager.js';
 import { prepareCodexAppServerSession, getCodexAppServerSession, closeCodexAppServerSessions } from '../../../../runtime/codex/app-server-registry.js';
+
+it('inherited endpoint without a thread stays unallocated through background reconciliation and clear', async (t) => {
+  _testOnly.resetStateForTests();
+  const store = initBridgeTestContext();
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'codelark-unallocated-'));
+  const wss = new WebSocketServer({ port: 0, host: '127.0.0.1' });
+  await new Promise<void>((resolve) => wss.once('listening', resolve));
+  const info = wss.address(); assert(info && typeof info === 'object');
+  let connections = 0;
+  wss.on('connection', (socket) => {
+    connections++;
+    socket.on('message', (data) => {
+      const message = JSON.parse(String(data));
+      if (!message.id) return;
+      socket.send(JSON.stringify({ id: message.id, result: message.method === 'initialize'
+        ? { codexHome: process.env.CODEX_HOME } : message.method === 'thread/loaded/list'
+          ? { data: [] } : { thread: { id: 'unexpected-empty-thread', turns: [] } } }));
+    });
+  });
+  t.after(async () => {
+    _testOnly.resetStateForTests();
+    await closeCodexAppServerSessions();
+    for (const socket of wss.clients) socket.terminate();
+    await new Promise<void>((resolve) => wss.close(() => resolve()));
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+  const address = { channelType: 'feishu', chatId: 'inherited-unallocated' };
+  const binding = router.createBinding(address, root);
+  store.updateSession(binding.bridgeSessionId, { runtime: { codex: { appServerEndpoint: `ws://127.0.0.1:${info.port}` } } });
+  const adapter = new RecordingAdapter();
+  const state = (globalThis as any).__bridge_manager__;
+  state.running = true;
+  state.adapters.set(address.channelType, adapter);
+  await _testOnly.reconcileMirrorSubscriptions();
+  await _testOnly.reconcileMirrorSubscriptions();
+  assert.equal(connections, 0);
+  assert.equal(store.getSession(binding.bridgeSessionId)?.runtime?.codex?.threadId, undefined);
+  const cleared = await handleClearSessionCommand({ adapter, store, currentBinding: binding, args: '', markdown: true,
+    msg: { address, text: '/clear', messageId: 'empty-clear', timestamp: Date.now() },
+    threadDisplay: new CommandThreadDisplay(store), deps: { getActiveTask: () => undefined },
+  });
+  assert.match(cleared.response, /已清空当前聊天上下文/);
+  assert.equal(connections, 0, '不存在的原生线程不需要停止确认或后端请求');
+});
 
 for (const completion of ['missing-terminal', 'event', 'rebind', 'stop-failure', 'view'] as const) it(`active shared thread permits clear or terminal view: ${completion}`, async (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'codelark-clear-protocol-'));

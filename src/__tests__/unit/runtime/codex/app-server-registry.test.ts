@@ -62,6 +62,19 @@ async function collect(stream: ReadableStream<string>) {
   return chunks.map((chunk) => JSON.parse(chunk.replace(/^data: /, '').trim()));
 }
 
+test('passive restoration does not allocate an empty thread but restores durable bindings', async (t) => {
+  const f = await fixture(t);
+  const sessionId = 'registry-passive';
+  assert.equal(await prepareCodexAppServerSession({ sessionId, endpoint: f.endpoint, createIfMissing: false }), undefined);
+  assert.equal(f.received.length, 0, '仅继承地址的会话不能因后台观察而连接或创建线程');
+  const first = await prepareCodexAppServerSession({ sessionId, endpoint: f.endpoint }); assert(first);
+  assert.equal('createIfMissing' in f.received.find((m) => m.method === 'thread/start').params, false);
+  await closeCodexAppServerSessions();
+  const restored = await prepareCodexAppServerSession({ sessionId, createIfMissing: false }); assert(restored);
+  assert.equal(restored.threadId, first.threadId, 'store 尚未写回 threadId 时也要恢复 registry 持久绑定');
+  assert.equal(f.received.filter((m) => m.method === 'thread/start').length, 1);
+});
+
 test('fixed backend survives a Bridge client restart and session config has only its own instance home', async (t) => {
   const f = await fixture(t);
   const sessionId = 'registry-restart';

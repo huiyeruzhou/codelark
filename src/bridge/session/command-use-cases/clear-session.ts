@@ -2,6 +2,7 @@ import type { BaseChannelAdapter } from '../../../channels/contracts.js';
 import type { BridgeStore, ChannelChat, InboundMessage } from '../../../domain/index.js';
 import {
   getSessionActiveRuntime,
+  getSessionCodexThreadId,
   getSessionRuntimeTmuxSessionName,
   getSessionWorkingDirectory,
 } from '../../../domain/session-runtime.js';
@@ -75,7 +76,7 @@ export async function handleClearSessionCommand(options: {
   if (!validatedName.ok) return { response: validatedName.message };
   const sessionName = validatedName.name;
   const protocol = previousSession ? getCodexAppServerSession(previousSession.id) : undefined;
-  const usesProtocol = Boolean(protocol || previousSession?.runtime?.codex?.appServerEndpoint);
+  const usesProtocol = Boolean(protocol || (previousSession?.runtime?.codex?.appServerEndpoint && getSessionCodexThreadId(previousSession)));
   const protocolState = protocol?.lifecycle.snapshot(protocol.threadId);
   const sdkRunning = previousBinding ? Boolean(options.deps.getActiveTask(previousBinding.bridgeSessionId)) : false;
   const observedRunning = sessionLooksRunning(previousSession);
