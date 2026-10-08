@@ -106,6 +106,39 @@ test('completion before start response never resurrects an active turn or drops 
   assert(f.runtime.recordsAfter('thread').records.some((r) => r.content === 'finished'));
 });
 
+test('late item and plan events cannot revive a terminal turn', async (t) => {
+  const f = await fixture(t);
+  const turnId = await f.runtime.submit('thread', text);
+  f.send('item/completed', {
+    turnId,
+    item: { id: 'answer', type: 'agentMessage', text: 'finished' },
+  });
+  f.send('turn/completed', { turn: { id: turnId, status: 'completed', items: [] } });
+  await until(() => f.runtime.snapshot('thread').activity === 'idle');
+  const cursor = f.runtime.recordsAfter('thread').cursor;
+
+  f.send('item/started', {
+    turnId,
+    item: { id: 'late-command', type: 'commandExecution', command: 'npm login' },
+  });
+  f.send('item/commandExecution/outputDelta', {
+    turnId,
+    itemId: 'late-command',
+    delta: 'Logged in',
+  });
+  f.send('item/completed', {
+    turnId,
+    item: { id: 'late-command', type: 'commandExecution', command: 'npm login', aggregatedOutput: 'Logged in', exitCode: 0 },
+  });
+  f.send('item/agentMessage/delta', { turnId, itemId: 'late-answer', delta: 'ghost reply' });
+  f.send('turn/plan/updated', { turnId, explanation: 'ghost plan', plan: [] });
+  await delay(20);
+
+  assert.equal(f.runtime.snapshot('thread').activity, 'idle');
+  assert.equal(f.runtime.item('thread', turnId, 'late-command'), undefined);
+  assert.deepEqual(f.runtime.recordsAfter('thread', cursor).records, []);
+});
+
 test('delayed cancellation of an old delivery cannot interrupt a newer Desktop turn', async (t) => {
   const f = await fixture(t);
   const oldTurn = await f.runtime.submit('thread', text);

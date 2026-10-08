@@ -428,6 +428,13 @@ export class CodexAppServerLifecycle {
 
   private applyItem(threadId: string, turnId: string, item: AppServerItem, completed: boolean): void {
     const state = this.thread(threadId);
+    // A terminal turn is immutable from the Bridge's point of view. Some
+    // app-server versions can emit a delayed item completion after
+    // turn/completed (for example when a yielded command process exits).
+    // Re-emitting that item would make the mirror create a second card for a
+    // turn it already finalized.
+    const turn = state.turns.get(turnId);
+    if (turn && turn.status !== 'inProgress') return;
     state.items.set(`${turnId}:${item.id}`, item);
     // The correlation id identifies a user message; it is not an idempotency guarantee.
     if (item.type === 'userMessage' && item.clientId) {
@@ -501,6 +508,7 @@ export class CodexAppServerLifecycle {
         if (p.status?.type === 'idle' && !state.snapshot.turnId) state.snapshot.activity = 'idle';
         this.changed(threadId); break;
       case 'turn/plan/updated':
+        if (state.turns.has(p.turnId) && state.turns.get(p.turnId)?.status !== 'inProgress') break;
         this.append(threadId, protocolRecord(threadId, p.turnId, 'plan', { type: 'plan_update', content: p.explanation || '', tasks: (p.plan || []).map((s: any) => ({ text: s.step, status: s.status === 'inProgress' ? 'in_progress' : s.status === 'completed' ? 'completed' : 'pending' })) })); break;
       // Unknown notifications are optional enhancements, not session failures.
     }

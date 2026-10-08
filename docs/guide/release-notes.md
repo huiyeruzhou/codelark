@@ -24,7 +24,7 @@
 - 新增 ZCode tmux runtime，支持创建、接管、恢复、SQLite 结果同步、工具与 usage 展示，以及 tmux 丢失后的恢复。
 - 修复 Claude Code 的首次启动、信任与 YOLO 确认流程，并适配当前 TUI 状态和嵌套工具输出；高风险启动必须经过明确确认。
 - `/clear`、`/new`、runtime 切换和配置继承使用更严格的 session owner 边界。旧任务的取消、停止、终态和 stale tmux 清理不会污染替换后的会话。
-- mirror 可从已保存进度和已绑定卡片页继续恢复；Bridge 重启只恢复当前最新 turn，不再重放历史 orphan 或把它错误显示为 interrupted；重放 usage 也不再把已完成 turn 误判为运行中。
+- mirror 可从已保存进度和已绑定卡片页继续恢复；Bridge 重启只恢复当前最新 turn，不再重放历史 orphan 或把它错误显示为 interrupted；已终结 turn 的迟到工具、消息、计划和 usage 事件也不会重新创建幽灵卡。
 - Windows Codex tmux 多行输入保留 Unicode、空行和尾随换行，并避免粘贴边界丢失导致的重复或截断。
 
 ### 飞书、跨 Agent 与可观测性
