@@ -1,6 +1,5 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { mergePatch } from '../merge.js';
 import { tomlToConfigPatch } from '../schema.js';
 import { materializeHomeChannelPatch, readDefaultsConfig, resolveConfigPaths, sessionTomlPath } from '../sources.js';
 import type { ConfigMigration } from './types.js';
@@ -23,10 +22,13 @@ export const sessionRequireMentionMigration: ConfigMigration = {
     const paths = resolveConfigPaths({ codelarkHome: context.codelarkHome });
     const defaults = readDefaultsConfig(paths.defaultsToml).patch;
     const home = tomlToConfigPatch(context.readToml(context.paths.homeToml));
-    const channels = mergePatch(defaults, materializeHomeChannelPatch(defaults, {}, home)).channels || [];
+    // home channels 整组替换 defaults；保留配置顺序，provider 别名应匹配第一项。
+    const channels = materializeHomeChannelPatch(defaults, {}, home).channels ?? defaults.channels ?? [];
     const candidates = new Map<string, Map<string, boolean>>();
     for (const binding of Object.values(bindings)) {
-      const channel = channels.find((item) => item.id === binding.channelType);
+      // 与 getConfiguredChannelInstance 一致：精确 id 优先，再按 provider 兼容旧标识。
+      const channel = channels.find((item) => item.id === binding.channelType)
+        || channels.find((item) => item.provider === binding.channelType);
       if (!channel || channel.provider !== 'feishu') continue;
       for (const id of new Set([binding.bridgeSessionId, ...Object.values(binding.runtimeBridgeSessionIds || {})])) {
         if (!id || !sessions[id]) continue;
