@@ -46,6 +46,12 @@ import {
 } from '../../domain/session-runtime.js';
 import { getGlobalCodexModel } from '../session/global-config.js';
 import type { ChannelChat, InboundMessage } from '../../domain/index.js';
+import type { OutboundRichCard } from '../../domain/index.js';
+import { listCursorAvailableModels, type CursorAvailableModel } from '../../runtime/cursor/models.js';
+import {
+  buildCursorModelPickerCard,
+  parseCursorModelPickerArgs,
+} from './cursor-model-picker.js';
 import {
   buildRuntimeSwitchWhileRunningResponse,
   createRuntimeSessionForChat,
@@ -1144,4 +1150,55 @@ export function handleModelCommand(options: {
     ],
     options.markdown,
   );
+}
+
+export async function handleModelCommandRequest(options: {
+  msg: InboundMessage;
+  args: string;
+  currentBinding: ChannelChat | null;
+  store: BridgeStore;
+  markdown: boolean;
+  listCursorModels?: () => Promise<CursorAvailableModel[]>;
+}): Promise<{ response: string; richCard?: OutboundRichCard }> {
+  const binding = options.currentBinding || router.resolve(options.msg.address);
+  const session = options.store.getSession(binding.bridgeSessionId);
+  const pickerRequest = parseCursorModelPickerArgs(options.args);
+  if (!session || (getSessionActiveRuntime(session) || 'codex') !== 'cursor') {
+    return { response: handleModelCommand(options) };
+  }
+  if (pickerRequest.invalid) {
+    return {
+      response: buildCommandFields(
+        'Cursor 模型列表用法',
+        [['命令', '`/model`、`/model list` 或 `/model list <页码>`']],
+        ['模型列表来自当前账号的 `cursor agent models`。'],
+        options.markdown,
+      ),
+    };
+  }
+  if (!pickerRequest.requested) {
+    return { response: handleModelCommand(options) };
+  }
+  try {
+    const models = await (options.listCursorModels || listCursorAvailableModels)();
+    const picker = buildCursorModelPickerCard({
+      session,
+      address: options.msg.address,
+      models,
+      requestedPage: pickerRequest.page,
+    });
+    return {
+      response: `Cursor Agent 返回 ${models.length} 个可用模型；当前显示第 ${picker.page}/${picker.pageCount} 页。`,
+      richCard: picker.card,
+    };
+  } catch (error) {
+    return {
+      response: buildCommandFields(
+        '无法读取 Cursor 模型列表',
+        [['命令', '`cursor agent models`']],
+        [(error instanceof Error ? error.message : String(error)).slice(0, 1_000)],
+        options.markdown,
+      ),
+    };
+  }
 }

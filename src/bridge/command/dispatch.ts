@@ -37,7 +37,7 @@ import {
   handleChangeDirectoryCommand,
   handleModeCommand,
   handleYoloCommand,
-  handleModelCommand,
+  handleModelCommandRequest,
   handleNetworkCommand,
   handleProviderCommand,
   handleReasoningCommand,
@@ -861,13 +861,15 @@ export async function handleBridgeCommand(
     }
 
     case '/model': {
-      response = handleModelCommand({
+      const result = await handleModelCommandRequest({
         msg,
         args,
         currentBinding,
         store,
         markdown: responseParseMode === 'Markdown',
       });
+      response = result.response;
+      responseRichCard = result.richCard;
       break;
     }
 
