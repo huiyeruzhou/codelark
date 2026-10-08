@@ -55,6 +55,12 @@ describe('CodexRoutingProvider', () => {
         return streamWithText('cursor-tmux-stream');
       },
     };
+    provider.cursorDesktopProvider = {
+      streamChat() {
+        routed.push('cursor-desktop');
+        return streamWithText('cursor-desktop-stream');
+      },
+    };
 
     const sdkOutput = await readStream(provider.streamChat({
       prompt: 'hello',
@@ -104,8 +110,15 @@ describe('CodexRoutingProvider', () => {
       runtime: 'cursor',
       cursorProvider: 'tmux',
     }));
+    const cursorDesktopOutput = await readStream(provider.streamChat({
+      prompt: 'hello',
+      sessionId: 'session-cursor-desktop',
+      runtime: 'cursor',
+      cursorProvider: 'desktop',
+      cursorSessionId: '11111111-1111-4111-8111-111111111111',
+    }));
 
-    assert.deepEqual(routed, ['tmux', 'tmux', 'tmux', 'claude-tmux', 'claude-sdk', 'claude-tmux', 'kimi-tmux', 'cursor-tmux']);
+    assert.deepEqual(routed, ['tmux', 'tmux', 'tmux', 'claude-tmux', 'claude-sdk', 'claude-tmux', 'kimi-tmux', 'cursor-tmux', 'cursor-desktop']);
     assert.equal(sdkOutput, 'tmux-stream');
     assert.equal(tmuxOutput, 'tmux-stream');
     assert.equal(defaultOutput, 'tmux-stream');
@@ -114,6 +127,7 @@ describe('CodexRoutingProvider', () => {
     assert.equal(claudeTmuxOutput, 'claude-tmux-stream');
     assert.equal(kimiOutput, 'kimi-tmux-stream');
     assert.equal(cursorOutput, 'cursor-tmux-stream');
+    assert.equal(cursorDesktopOutput, 'cursor-desktop-stream');
   });
 
 });

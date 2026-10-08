@@ -3,6 +3,7 @@ import { beforeEach, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 
 import { SessionRegistryService } from '../../../../bridge/session/registry.js';
+import { resolveCursorRuntimeConfig } from '../../../../bridge/session/support.js';
 import { getSessionWorkingDirectory } from '../../../../domain/session-runtime.js';
 import { JsonFileStore } from '../../../../storage/json-store.js';
 import { makeBridgeSettings, resetBridgeTestState } from '../../../helpers/bridge/test-bridge-utils.js';
@@ -200,6 +201,30 @@ describe('SessionRegistryService', () => {
     const result = registry.archiveCursorThread('cursor-registry-session', '/tmp/cursor-registry');
     assert.deepEqual(archived, [{ sessionId: 'cursor-registry-session', cwd: '/tmp/cursor-registry' }]);
     assert.deepEqual(result.deletedBridgeSessionIds, [materialized.id]);
+  });
+
+  it('preserves the desktop provider when materializing a Cursor Desktop thread', () => {
+    const store = new JsonFileStore(makeBridgeSettings());
+    const registry = new SessionRegistryService(store, {
+      cursorThreads: {
+        getThread: (cursorSessionId, cwd) => ({
+          cursorSessionId,
+          title: 'Desktop Cursor Session',
+          cwd,
+          provider: 'desktop',
+        }),
+      },
+    });
+
+    const materialized = registry.materializeCursorThread('cursor-desktop-session', '/tmp/cursor-desktop');
+    assert.equal(materialized.runtime?.activeRuntime, 'cursor');
+    assert.equal(materialized.runtime?.cursor?.provider, 'desktop');
+    assert.deepEqual(resolveCursorRuntimeConfig(materialized), {
+      runtime: 'cursor',
+      provider: 'desktop',
+      model: undefined,
+      force: false,
+    });
   });
 
   it('materializes, renames, and archives ZCode sessions through the registry port', () => {

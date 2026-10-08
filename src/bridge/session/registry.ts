@@ -74,7 +74,12 @@ export interface KimiThreadRegistryPort {
 }
 
 export interface CursorThreadRegistryPort {
-  getThread(cursorSessionId: string, cwd: string): { cursorSessionId: string; title: string; cwd: string } | null;
+  getThread(cursorSessionId: string, cwd: string): {
+    cursorSessionId: string;
+    title: string;
+    cwd: string;
+    provider?: 'tmux' | 'desktop';
+  } | null;
   archiveThread?(cursorSessionId: string, cwd: string): boolean;
 }
 
@@ -344,7 +349,11 @@ export class SessionRegistryService {
       name: localThread.title || session.name,
       runtime: {
         activeRuntime: 'cursor',
-        cursor: { sessionId: localThread.cursorSessionId, cwd: localThread.cwd, provider: 'tmux' },
+        cursor: {
+          sessionId: localThread.cursorSessionId,
+          cwd: localThread.cwd,
+          provider: localThread.provider === 'desktop' ? 'desktop' : 'tmux',
+        },
         general: { workingDirectory: localThread.cwd },
       },
     }, { touch: false });

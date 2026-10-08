@@ -7,6 +7,7 @@ import { ClaudeSdkProvider } from '../../runtime/claude/sdk-provider.js';
 import { ClaudeTmuxProvider } from '../../runtime/claude/tmux-provider.js';
 import { KimiTmuxProvider } from '../../runtime/kimi/tmux-provider.js';
 import { CursorTmuxProvider } from '../../runtime/cursor/tmux-provider.js';
+import { CursorDesktopProvider } from '../../runtime/cursor/desktop-provider.js';
 import { ZcodeTmuxProvider } from '../../runtime/zcode/tmux-provider.js';
 import { CodexTmuxProvider } from './tmux-provider.js';
 import { streamCodexAppServer } from './app-server-provider.js';
@@ -22,6 +23,7 @@ export class CodexRoutingProvider implements LLMProvider {
   private readonly claudeTmuxProvider: LLMProvider;
   private readonly kimiTmuxProvider: LLMProvider;
   private readonly cursorTmuxProvider: LLMProvider;
+  private readonly cursorDesktopProvider: LLMProvider;
   private readonly zcodeTmuxProvider: LLMProvider;
 
   constructor(pendingPerms?: PendingPermissions, _legacyDefaultProvider?: unknown) {
@@ -31,6 +33,7 @@ export class CodexRoutingProvider implements LLMProvider {
     this.claudeTmuxProvider = new ClaudeTmuxProvider(pendingPerms);
     this.kimiTmuxProvider = new KimiTmuxProvider();
     this.cursorTmuxProvider = new CursorTmuxProvider();
+    this.cursorDesktopProvider = new CursorDesktopProvider();
     this.zcodeTmuxProvider = new ZcodeTmuxProvider();
   }
 
@@ -44,12 +47,15 @@ export class CodexRoutingProvider implements LLMProvider {
       return this.zcodeTmuxProvider.streamChat(params);
     }
     if (params.runtime === 'cursor') {
+      const cursorProvider = params.cursorProvider === 'desktop' ? 'desktop' : 'tmux';
       console.log('[codex-routing-provider] Route Cursor Agent request:', {
         bridge_session_id: params.sessionId,
         runtime: params.runtime,
-        provider: 'tmux',
+        provider: cursorProvider,
       });
-      return this.cursorTmuxProvider.streamChat(params);
+      return cursorProvider === 'desktop'
+        ? this.cursorDesktopProvider.streamChat(params)
+        : this.cursorTmuxProvider.streamChat(params);
     }
     if (params.runtime === 'kimi') {
       console.log('[codex-routing-provider] Route Kimi Code request:', {

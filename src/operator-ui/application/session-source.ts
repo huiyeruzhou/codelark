@@ -380,7 +380,12 @@ export function createUiSessionRegistry(
       getThread(cursorSessionId, cwd) {
         const session = cursorSource.getThread(cursorSessionId, cwd);
         return session
-          ? { cursorSessionId: session.sessionId, title: session.title || session.sessionId.slice(0, 8), cwd: session.cwd || cwd }
+          ? {
+            cursorSessionId: session.sessionId,
+            title: session.title || session.sessionId.slice(0, 8),
+            cwd: session.cwd || cwd,
+            provider: session.provider,
+          }
           : null;
       },
       archiveThread: (cursorSessionId, cwd) => cursorSource.archiveThread(cursorSessionId, cwd),

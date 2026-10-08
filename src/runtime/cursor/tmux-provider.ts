@@ -353,7 +353,7 @@ export async function restartCursorTmuxInputSession(params: StreamChatParams): P
     () => ensureCursorTmuxInputSession(params, { recreate: true }), { restart: true });
 }
 
-interface CursorTurnContext {
+export interface CursorTurnContext {
   sessionName: string;
   sessionId?: string;
   cwd?: string;
@@ -368,7 +368,7 @@ interface CursorTurnContext {
   terminalSeen: boolean;
 }
 
-function enqueueCursorRecord(
+export function enqueueCursorRecord(
   controller: ReadableStreamDefaultController<string>,
   context: CursorTurnContext,
   record: BridgeMirrorRecord,

@@ -126,10 +126,12 @@ tmux 服务端会长期驻留；更新磁盘上的客户端不会自动升级已
 
 `/t` 依赖本机 runtime 会话索引。排查顺序：
 
-1. 确认当前 runtime 是否正确：`/runtime codex`、`/runtime claude` 或 `/runtime kimi`。
+1. 确认当前 runtime 是否正确：`/runtime codex`、`/runtime claude`、`/runtime kimi` 或 `/runtime cursor`。
 2. 发送 `/` 确认当前 agent 和工作目录是否符合预期。
 3. 在本机确认 Codex / Claude Code / Kimi Code 已经产生过会话。
 4. 在工作台查看本地会话列表和 bridge 日志。
+
+Cursor Desktop 对话能列出但发送失败时，在 Cursor 的 Beta 设置中确认已启用 `Allow CLI to access desktop agents`，并保持目标对话所在的 Cursor 窗口打开。CodeLark 不会把这类失败降级到 Cursor Agent tmux，因为那会产生另一条本地会话；重启 Cursor 后仍失败时，检查 `~/.cursor/desktop-bridge` 是否只有 live PID 对应的 discovery。
 
 如果本机路径是符号链接，CodeLark 会尽量同时识别原始路径和 realpath；仍找不到时，把 `/status` 和相关日志一起用于排查。
 
