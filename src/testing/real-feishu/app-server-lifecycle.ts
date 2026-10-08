@@ -115,19 +115,20 @@ export interface BackendStatusExpectation {
   threadId?: string;
 }
 
-/** CLI 用户回读保留 Markdown 字段；只能用本次命令的真实 bot 回复验收，不能匹配用户回显或旧卡。 */
+/** CLI 卡片回读保留 Markdown，post 回读可能去掉加粗；只接受本次命令的真实 bot 回复。 */
 export function assertBackendStatusReadback(payload: unknown, appId: string, commandId: string,
   expected: BackendStatusExpectation, requireCard = false): Record<string, any> | undefined {
+  const readField = (content: string, label: string) => {
+    const match = content.match(new RegExp(`(?:^|\\n)(?:-\\s*)?(?:\\*\\*${label}\\*\\*|${label})(?:[：:]\\s*|\\s*\\n+)([^\\n]+)`));
+    return match?.[1]?.trim().replace(/^「|」$/g, '');
+  };
   const replies = userReadbackMessages(payload).filter((m) => m.sender?.sender_type === 'app' && m.sender.id === appId
     && m.reply_to === commandId && (!requireCard || m.msg_type === 'interactive')
-    && typeof m.content === 'string' && m.content.includes('**当前后端**'));
+    && typeof m.content === 'string' && readField(m.content, '当前后端') !== undefined);
   assert(replies.length <= 1, '同一状态命令不能产生重复状态回复');
   const reply = replies[0];
   if (!reply) return undefined;
-  const field = (label: string) => {
-    const match = reply.content.match(new RegExp(`(?:^|\\n)(?:-\\s*)?\\*\\*${label}\\*\\*(?:[：:]\\s*|\\s*\\n+)([^\\n]+)`));
-    return match?.[1]?.trim().replace(/^「|」$/g, '');
-  };
+  const field = (label: string) => readField(reply.content, label);
   assert.equal(field('当前后端'), expected.backend === 'unstarted' ? '尚未建立' : 'app-server', '实际后端展示错误');
   if (expected.backend === 'unstarted') {
     assert.equal(field('连接状态'), undefined, '尚未建立的会话不能显示协议连接状态');

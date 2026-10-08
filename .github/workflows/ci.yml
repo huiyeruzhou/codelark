@@ -27,9 +27,11 @@ jobs:
       - run: npm ci
       - name: Install isolated browser tooling
         run: |
+          export PLAYWRIGHT_BROWSERS_PATH="$RUNNER_TEMP/operator-status-browsers"
           npm install --prefix "$RUNNER_TEMP/operator-status-tools" --no-save --ignore-scripts playwright@1.56.1
           node "$RUNNER_TEMP/operator-status-tools/node_modules/playwright/cli.js" install --with-deps chromium
           echo "PLAYWRIGHT_MODULE_PATH=$RUNNER_TEMP/operator-status-tools/node_modules/playwright" >> "$GITHUB_ENV"
+          echo "PLAYWRIGHT_BROWSERS_PATH=$PLAYWRIGHT_BROWSERS_PATH" >> "$GITHUB_ENV"
       - name: Verify the real status page and authenticated Bridge route
         run: node --import tsx scripts/verify-operator-status.ts --evidence "$RUNNER_TEMP/operator-status-evidence"
       - name: Upload browser checks and screenshots

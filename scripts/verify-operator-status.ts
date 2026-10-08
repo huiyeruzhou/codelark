@@ -76,7 +76,8 @@ const server = http.createServer(async (request, response) => {
 });
 await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
 const address = server.address() as { port: number };
-const browser = await chromium.launch({ headless: true, ...(process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE ? { executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE } : {}) }).catch(async (error) => {
+const browser = await chromium.launch({ channel: 'chromium', headless: true, ...(process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE ? { executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE } : {}) }).catch(async (error) => {
+  fs.writeFileSync(path.join(evidence, 'failure.json'), JSON.stringify({ error: String(error), phase: 'browser-launch' }, null, 2));
   await control.close(); server.close(); throw error;
 });
 const page = await browser.newPage({ viewport: { width: 1440, height: 1000 } });

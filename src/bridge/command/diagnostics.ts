@@ -430,6 +430,7 @@ export function buildCurrentCommandRichCard(options: {
   const activeRuntime = getSessionActiveRuntime(session) || 'codex';
   const configSection = options.configSection || options.previewRuntime || activeRuntime;
   const backendStatus = readSessionCodexBackendStatus(session);
+  const backendFields = formatCodexBackendStatusFields(backendStatus);
   const commonSection = configSection === 'common';
   const runtimeDisplayLabel = runtimeLabel(activeRuntime);
   const displayBinding = binding.bridgeSessionId === session.id ? binding : { ...binding, bridgeSessionId: session.id };
@@ -499,14 +500,19 @@ export function buildCurrentCommandRichCard(options: {
     tags: [activeRuntime, runtimeThreadId ? currentThreadTagValue(runtimeThreadId) : 'no-thread'],
     tagColor: 'green',
     selects: [runtimeSelect],
-    sections: [{
-      fields: [
-        ['类型', currentTag(sessionKind)],
-        ...formatCodexBackendStatusFields(backendStatus),
+    // 飞书每个 section 只直接显示三个字段；后端活动与终端用途分行，
+    // 保持所有状态可见，而不改变其他命令卡片的字段预算。
+    sections: [
+      { fields: [
+        ...backendFields.filter(([label]) => label !== '终端用途'),
         ...(backendStatus?.backend === 'app-server' ? [] : [['运行状态', currentTag(formatRuntimeStatus(session), statusColor)] as [string, string]]),
+      ] },
+      { fields: [
+        ...backendFields.filter(([label]) => label === '终端用途'),
+        ['类型', currentTag(sessionKind)],
         ['共享镜像', currentTag(formatMirrorStatus(session), mirrorColor)],
-      ],
-    }],
+      ] },
+    ],
     form: {
       optionElementId: 'clk_current_option',
       ...(commonSection ? {

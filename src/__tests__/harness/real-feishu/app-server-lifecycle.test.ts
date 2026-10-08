@@ -38,6 +38,22 @@ test('未启动状态不冒充连接；Markdown状态详情支持运行/等待/�
     assert(assertBackendStatusReadback(reply(text), 'app', 'command', { backend: 'app-server', activity, terminal: 'view' }));
   }
 });
+test('真实 /p post 回读移除加粗后仍逐字段验收，不接受说明文字或冒充配置卡', () => {
+  // status-sdk-1 的真实 CLI 用户回读；post 与 interactive 的格式不同。
+  const content = '当前 Codex Provider\n- 模式：normal\n- Provider 配置：sdk (全局默认)\n- 当前后端：尚未建立\n- 终端用途：未记录终端\n说明\n- 会话尚未启动，Provider 配置不代表后端已连接。';
+  const reply = (text: string) => ({ ok: true, identity: 'user', data: { messages: [{
+    message_id: 'reply', reply_to: 'command', sender: { sender_type: 'app', id: 'app' }, msg_type: 'post', content: text,
+  }] } });
+  assert(assertBackendStatusReadback(reply(content), 'app', 'command', { backend: 'unstarted', terminal: 'none' }));
+  assert.equal(assertBackendStatusReadback(reply(content), 'app', 'command', { backend: 'unstarted' }, true), undefined);
+  assert.equal(assertBackendStatusReadback(reply('说明当前后端：尚未建立'), 'app', 'command', { backend: 'unstarted' }), undefined);
+  assert.throws(() => assertBackendStatusReadback(reply(`${content}\n- 连接状态：已连接`), 'app', 'command', { backend: 'unstarted' }));
+  for (const [activity, label] of [['active', '运行中'], ['waiting', '等待答复'], ['idle', '空闲']] as const) {
+    const text = `当前 Codex Provider\n- 当前后端：app-server\n- 连接状态：已连接\n- 执行状态：${label}\n- 终端用途：tmux 查看入口`;
+    assert(assertBackendStatusReadback(reply(text), 'app', 'command', { backend: 'app-server', activity, terminal: 'view' }));
+    assert.throws(() => assertBackendStatusReadback(reply(text.replace('已连接', '连接未确认')), 'app', 'command', { backend: 'app-server', activity }));
+  }
+});
 test('clear/new 证据拒绝旧线程、配置回落和后端丢失', () => {
   const next = { ...session, sessionId: 'new', threadId: 'thread-new' };
   assertInherited(session, next);

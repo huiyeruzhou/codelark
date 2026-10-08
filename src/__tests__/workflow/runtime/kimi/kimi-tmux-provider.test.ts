@@ -668,6 +668,8 @@ describe('kimi-tmux-provider workflow', () => {
     let killed = false;
     let extendedKeysCalls = 0;
     let appendFatalTimer: NodeJS.Timeout | undefined;
+    let fatalWrittenAt: number | undefined;
+    const outputIdleTimeoutMs = 5_000;
 
     const restoreTmux = patchTmuxCore({
       async ensureExtendedKeys() {
@@ -720,6 +722,7 @@ describe('kimi-tmux-provider workflow', () => {
             '  KimiError: OAuth provider "managed:kimi-code" requires login before it can be used.',
             '',
           ].join('\n'), 'utf8');
+          fatalWrittenAt = Date.now();
         }, 150);
         return { commands: [`tmux paste-buffer -t ${target} # ${prompt}`] };
       },
@@ -734,11 +737,10 @@ describe('kimi-tmux-provider workflow', () => {
     });
 
     try {
-      const startedAt = Date.now();
       const events = await withEnv({
         KIMI_CODE_HOME: kimiHome,
         CODELARK_KIMI_TMUX_SESSION_ID_TIMEOUT_MS: '1000',
-        CODELARK_KIMI_TMUX_OUTPUT_IDLE_TIMEOUT_MS: '5000',
+        CODELARK_KIMI_TMUX_OUTPUT_IDLE_TIMEOUT_MS: String(outputIdleTimeoutMs),
         CODELARK_KIMI_TMUX_POLL_INTERVAL_MS: '50',
         CODELARK_KIMI_TMUX_INPUT_STABILITY_MS: '0',
         CODELARK_KIMI_TMUX_PROMPT_DELAY_MS: '0',
@@ -750,9 +752,10 @@ describe('kimi-tmux-provider workflow', () => {
         workingDirectory: cwd,
       })));
 
-      const elapsedMs = Date.now() - startedAt;
-      assert.ok(elapsedMs >= 100, `retryable WARN must not terminate before the fatal record; elapsed=${elapsedMs}ms`);
-      assert.ok(elapsedMs < 1_000, 'explicit authentication failures should not wait for idle timeout');
+      assert.notEqual(fatalWrittenAt, undefined, 'retryable WARN must not terminate before the fatal record');
+      const deliveryMs = Date.now() - fatalWrittenAt!;
+      assert.ok(deliveryMs < outputIdleTimeoutMs / 2,
+        `fatal authentication error must arrive before the idle timeout; delivery=${deliveryMs}ms`);
       assert.ok(events.some((event) => event.type === 'error'
         && String(event.data).includes('KimiError: OAuth provider "managed:kimi-code" requires login before it can be used.')));
       assert.equal(extendedKeysCalls, 1);

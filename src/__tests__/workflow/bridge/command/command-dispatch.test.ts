@@ -2060,7 +2060,8 @@ describe('command-dispatch', () => {
     assert.equal(card?.form?.controlBar?.selects, undefined);
     assert.deepEqual(card?.form?.controlBar?.actions?.map((action) => action.text), ['刷新']);
     assert.equal(card?.form?.submitText, '保存');
-    assert.deepEqual(card?.sections?.[0]?.fields?.map(([label]) => label), ['类型', '当前后端', '终端用途', '运行状态', '共享镜像']);
+    assert.deepEqual(card?.sections?.[0]?.fields?.map(([label]) => label), ['当前后端', '运行状态']);
+    assert.deepEqual(card?.sections?.[1]?.fields?.map(([label]) => label), ['终端用途', '类型', '共享镜像']);
     assert.equal(card?.sections?.[0]?.fields?.some(([label]) => label === '目录'), false);
     assert.deepEqual(card?.form?.selects?.map((select) => select.elementId), [
       'defaultMode',

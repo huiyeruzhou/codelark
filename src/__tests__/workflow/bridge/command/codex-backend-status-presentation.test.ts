@@ -14,6 +14,7 @@ import { closeCodexAppServerSessions, getCodexAppServerSession, prepareCodexAppS
 import { readCodexBackendStatus } from '../../../../bridge/session/display/codex-backend-status.js';
 import { codexTmuxSessionName } from '../../../../bridge/tmux/runtime.js';
 import { buildGlobalStatusResponse } from '../../../../bridge/command/status.js';
+import { buildRichCardContent } from '../../../../channels/feishu/markdown.js';
 import type { BridgeSession, OutboundRichCard } from '../../../../domain/index.js';
 
 beforeEach(() => resetBridgeTestState());
@@ -50,6 +51,17 @@ function backendFields(card: OutboundRichCard | undefined) {
     .filter(([label]) => ['当前后端', '连接状态', '执行状态', '终端用途'].includes(label));
 }
 
+// Traverse the actual Feishu payload, excluding folded panels: a DTO field is
+// insufficient evidence because the renderer limits each section to 3 fields.
+function visibleMarkdown(value: unknown): string[] {
+  if (Array.isArray(value)) return value.flatMap(visibleMarkdown);
+  if (!value || typeof value !== 'object') return [];
+  const node = value as Record<string, unknown>;
+  if (node.tag === 'collapsible_panel') return [];
+  return node.tag === 'markdown' && typeof node.content === 'string'
+    ? [node.content] : Object.values(node).flatMap(visibleMarkdown);
+}
+
 async function assertCommandsAgree(f: ReturnType<typeof fixture>) {
   const status = readCodexBackendStatus(f.current());
   const expected = status.backend === 'app-server'
@@ -67,6 +79,24 @@ async function assertCommandsAgree(f: ReturnType<typeof fixture>) {
     }
     if (text === '/' || text.startsWith('/current')) {
       assert.deepEqual(backendFields(response.richCard), expected);
+      assert(response.richCard);
+      const rendered = JSON.parse(buildRichCardContent(response.richCard, 'status-chat'));
+      const visible = visibleMarkdown(rendered.body.elements).join('\n');
+      assert.doesNotMatch(visible, /已压缩/, 'current card must not lose status fields during rendering');
+      for (const [label, value] of response.richCard.sections.flatMap((s) => s.fields || [])) {
+        assert(visible.includes(`**${label}**\n${value}`), `${text}: rendered card hides ${label}`);
+      }
+      const form = rendered.body.elements.find((element: { tag: string }) => element.tag === 'form');
+      assert(form, 'rendered current card must preserve editable configuration');
+      const formJson = JSON.stringify(form);
+      assert(formJson.includes(response.richCard.form!.submitCallbackData));
+      assert(formJson.includes(response.richCard.form!.controlBar!.actions![0]!.callbackData));
+      for (const control of [...(response.richCard.form!.selects || []), ...(response.richCard.form!.extraInputs || [])]) {
+        const name = control.formName || control.elementId;
+        assert(form.elements.some((element: { tag: string; name?: string; disabled?: boolean }) =>
+          ['input', 'select_static'].includes(element.tag) && element.name === name && !element.disabled),
+        `${text}: rendered card hides configuration control ${name}`);
+      }
       if (status.backend === 'app-server') {
         assert.equal(response.richCard?.sections.flatMap((s) => s.fields || []).some(([label]) => label === '运行状态'), false);
       }
