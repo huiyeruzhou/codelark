@@ -19,6 +19,7 @@ import {
   type TurnContextLine,
 } from './jsonl-types.js';
 import {
+  CONTEXT_COMPACTED_NOTICE,
   renderCodexInternalTextForDisplay,
   resolveCodexJsonlDisplayText,
   TURN_ABORTED_NOTICE,
@@ -58,8 +59,6 @@ const IGNORED_EVENT_MSG_TYPES = new Set([
   'thread_rolled_back',
   'thread_settings_applied',
 ]);
-
-const CONTEXT_COMPACTED_NOTICE = '> ⚙️ 上下文已压缩，后续回复会基于压缩后的上下文继续。';
 
 const IGNORED_RESPONSE_ITEM_TYPES = new Set([
   'web_search_call',

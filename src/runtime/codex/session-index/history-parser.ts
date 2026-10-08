@@ -31,6 +31,7 @@ import {
   type TurnContextLine,
 } from './jsonl-types.js';
 import {
+  CONTEXT_COMPACTED_NOTICE,
   renderCodexInternalTextForDisplay,
   resolveCodexJsonlDisplayText,
   TURN_ABORTED_NOTICE,
@@ -39,8 +40,6 @@ import {
   buildToolCallDetailFromNormalizedCodexCall,
   normalizeCodexToolCall,
 } from './tool-call-normalizer.js';
-
-const CONTEXT_COMPACTED_NOTICE = '> ⚙️ 上下文已压缩，后续回复会基于压缩后的上下文继续。';
 
 interface HistoryToolState {
   name: string;

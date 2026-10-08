@@ -1,4 +1,5 @@
 export const CODEX_ENVIRONMENT_CONTEXT_LOADED_NOTICE = '> ⚙️ 环境上下文已加载';
+export const CONTEXT_COMPACTED_NOTICE = '> ⚙️ 上下文已压缩，后续回复会基于压缩后的上下文继续。';
 export const TURN_ABORTED_NOTICE = '任务已中断。';
 
 export type CodexInternalControlEvent =
