@@ -661,6 +661,7 @@ export async function runInteractiveMessage(
         }
       },
       {
+        isCurrentTask: () => deps.isCurrentInteractiveTask(binding.bridgeSessionId, taskId),
         expandToolCalls: true,
         streamPreview: {
           includeToolSnippets: useInteractiveStreamUi && !streamUi.hasStreamingCards,
@@ -863,7 +864,7 @@ export async function runInteractiveMessage(
       }
       taskState.mirrorSuppressionId = null;
     }
-    if (shouldRecordHealthEnd) {
+    if (shouldRecordHealthEnd && deps.isCurrentInteractiveTask(binding.bridgeSessionId, taskId)) {
       if (taskAbort.signal.aborted && !externalTerminal.current) {
         finalOutcome = 'aborted';
         finalOutcomeDetail = finalOutcomeDetail || '任务已收到停止请求。';

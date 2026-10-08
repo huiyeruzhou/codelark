@@ -157,6 +157,7 @@ export async function processMessage(
   onStatusNote?: OnStatusNote,
   onPromptPrepared?: (promptText: string) => void,
   options?: {
+    isCurrentTask?: () => boolean;
     expandToolCalls?: boolean;
     streamPreview?: {
       includeToolSnippets?: boolean;
@@ -195,6 +196,15 @@ export async function processMessage(
   }
 
   store.setSessionRuntimeStatus(sessionId, 'running');
+  const isCurrentTask = () => !abortSignal?.aborted && options?.isCurrentTask?.() !== false;
+  // 这是 Bridge 内存里的请求锁，不是 Codex 的会话文件锁。取消后允许新任务接管，
+  // 旧流的终态与状态回调必须同时失效，不能再覆盖新任务。
+  const releaseAbortedLock = () => {
+    store.releaseSessionLock(sessionId, lockId);
+    if (options?.isCurrentTask?.() !== false) store.setSessionRuntimeStatus(sessionId, 'idle');
+  };
+  abortSignal?.addEventListener('abort', releaseAbortedLock, { once: true });
+  if (abortSignal?.aborted) releaseAbortedLock();
 
   // Lock renewal interval
   const renewalInterval = setInterval(() => {
@@ -296,6 +306,7 @@ export async function processMessage(
       conversationHistory: historyMsgs,
       files: llmFiles,
       onRuntimeStatusChange: (status: string) => {
+        if (!isCurrentTask()) return;
         try { store.setSessionRuntimeStatus(sessionId, status); } catch { /* best effort */ }
       },
     });
@@ -312,13 +323,14 @@ export async function processMessage(
       onToolEvent,
       onTaskEvent,
       onStatusNote,
-      options,
+      { ...options, isCurrentTask },
       activeRuntime,
     );
   } finally {
     clearInterval(renewalInterval);
+    abortSignal?.removeEventListener('abort', releaseAbortedLock);
     store.releaseSessionLock(sessionId, lockId);
-    store.setSessionRuntimeStatus(sessionId, 'idle');
+    if (isCurrentTask()) store.setSessionRuntimeStatus(sessionId, 'idle');
   }
 }
 
@@ -336,6 +348,7 @@ async function consumeStream(
   onTaskEvent?: OnTaskEvent,
   onStatusNote?: OnStatusNote,
   options?: {
+    isCurrentTask?: () => boolean;
     expandToolCalls?: boolean;
     streamPreview?: {
       includeToolSnippets?: boolean;
@@ -402,6 +415,7 @@ async function consumeStream(
 
   try {
     await runtime.consumeSseEvents(stream, async (event: SSEEvent) => {
+      if (options?.isCurrentTask?.() === false) return;
       switch (event.type) {
         case 'text':
           currentText += event.data;
@@ -746,6 +760,7 @@ async function consumeStream(
       }
     });
 
+    if (options?.isCurrentTask?.() === false) throw new DOMException('Task no longer owns this session', 'AbortError');
     // Flush remaining text
     if (currentText.trim()) {
       contentBlocks.push({ type: 'text', text: currentText });
@@ -815,7 +830,7 @@ async function consumeStream(
             .map((b) => b.text)
             .join('\n\n')
             .trim();
-      if (content) {
+      if (content && options?.isCurrentTask?.() !== false) {
         store.addMessage(sessionId, 'assistant', content);
       }
     }
@@ -831,6 +846,7 @@ async function consumeStream(
       outboundManualInputs: [],
       tokenUsage,
       hasError: true,
+      outcome: isAbort ? 'aborted' : 'failed',
       errorMessage: isAbort
         ? 'Task stopped by user'
         : (e instanceof Error ? (e.stack || e.message) : 'Stream consumption error'),

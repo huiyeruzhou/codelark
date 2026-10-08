@@ -8,7 +8,7 @@ import {
 import { cleanupRuntimeTmuxSession } from '../../tmux/runtime.js';
 import { getCodexAppServerSession, releaseCodexAppServerSession } from '../../../runtime/codex/app-server-registry.js';
 import { releaseAppServerRequestObserver } from '../../permission/app-server.js';
-import { stopRunningSession } from '../stop-running-session.js';
+import { getProviderOwnedRuntimeTmuxTarget, stopRunningSession } from '../stop-running-session.js';
 import * as router from '../channel-router.js';
 import {
   ensureWorkingDirectoryExists,
@@ -83,6 +83,8 @@ export async function handleClearSessionCommand(options: {
     usesProtocol && (!protocolState || protocolState.activity !== 'idle') ? '共享 Codex 线程正在运行或状态待确认' : null,
     sdkRunning ? 'sdk 正在运行' : null,
     !sdkRunning && observedRunning ? 'mirror/健康状态显示仍在运行' : null,
+    !usesProtocol && previousBinding && getProviderOwnedRuntimeTmuxTarget(previousSession, previousBinding)
+      ? '当前会话有旧版 runtime 终端，清空将结束该终端' : null,
   ].filter(Boolean) as string[];
 
   if (previousBinding && runningReasons.length > 0 && !confirmation.confirmed) {

@@ -65,7 +65,7 @@ function fixture(runtime: 'codex' | 'claude' | 'kimi' | 'cursor' | 'zcode' = 'co
 
 it('explicit /stop reaches its bound tmux runtime after health reconcile loses a manual turn', async () => {
   const f = fixture();
-  f.health.observeBridgeMirrorRecords(f.session.id, 'thread', [{
+  f.health.observeBridgeMirrorRecords(f.session.id, f.session.id, [{
     signature: 'manual-start', type: 'task_started', turnId: 'manual-turn', content: '', timestamp: new Date().toISOString(),
   }]);
   assert.equal(f.store.getSession(f.session.id)?.health_status, 'running_active');
@@ -88,7 +88,7 @@ it('tmux key delivery does not manufacture a terminal health event', async () =>
   assert.deepEqual(f.healthEnds, []);
   assert.equal(f.store.getSession(f.session.id)?.health_status, 'waiting_tool');
   assert.ok(f.store.getSession(f.session.id)?.active_tool_name);
-  f.health.observeBridgeMirrorRecords(f.session.id, 'thread', [{
+  f.health.observeBridgeMirrorRecords(f.session.id, f.session.id, [{
     signature: 'real-abort', type: 'task_aborted', content: '', timestamp: new Date().toISOString(),
   }]);
   await f.interactive.reconcileTerminalSessionRuntimeState();

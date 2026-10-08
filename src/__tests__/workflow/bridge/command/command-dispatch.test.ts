@@ -2182,7 +2182,7 @@ describe('command-dispatch', () => {
     );
     assert.deepEqual(
       claudePreviewCard?.form?.selects?.find((select) => select.elementId === 'claudeReasoningEffort')?.options.map((option) => option.text),
-      ['跟随上层配置', 'medium', 'low', 'high', 'xhigh', 'max'],
+      ['跟随上层配置（当前：medium）', 'medium', 'low', 'high', 'xhigh', 'max'],
     );
     assert.deepEqual(
       parseCommandCallbackData(claudePreviewCard?.form?.submitCallbackData || '')?.commandText,
@@ -2321,11 +2321,11 @@ describe('command-dispatch', () => {
     assert.deepEqual(card?.form?.selects?.map((select) => select.formName), ['kimi_provider', 'kimi_thinking']);
     assert.deepEqual(
       card?.form?.selects?.find((select) => select.elementId === 'kimiProvider')?.options.map((option) => option.text),
-      ['跟随上层配置', 'tmux'],
+      ['跟随上层配置（当前：tmux）', 'tmux'],
     );
     assert.deepEqual(
       card?.form?.selects?.find((select) => select.elementId === 'kimiThinkingMode')?.options.map((option) => option.text),
-      ['跟随上层配置', 'default', 'on', 'off'],
+      ['跟随上层配置（当前：default）', 'default', 'on', 'off'],
     );
     assert.equal(card?.form?.selects?.some((select) => select.elementId === 'defaultProvider'), false);
     assert.equal(card?.form?.selects?.some((select) => select.elementId === 'claudeProvider'), false);
@@ -7462,7 +7462,7 @@ enabled = true
     )));
   });
 
-  it('stops and settles the current runtime before committing a cross-runtime /t attachment', async () => {
+  it('requests stopping the current runtime before committing a cross-runtime /t attachment', async () => {
     const store = initTestContext();
     const sent: Array<{ text: string; richCard?: OutboundRichCard }> = [];
     const adapter: any = {
@@ -7541,12 +7541,11 @@ enabled = true
     assert.equal(attached?.runtimeBridgeSessionIds?.kimi, target.id);
     assert.deepEqual(order, [
       `stop:${currentBinding.bridgeSessionId}`,
-      `settled:${currentBinding.bridgeSessionId}`,
     ]);
     assert.match(sent.at(-1)?.text || '', /已切换到 Bridge 会话/);
   });
 
-  it('force-stops a stale running session even when no active task remains in memory', async () => {
+  it('does not report a stopped task based only on stale health labels', async () => {
     const store = initTestContext();
     const sent: string[] = [];
     const forcedStops: Array<{ sessionId: string; detail?: string }> = [];
@@ -7588,16 +7587,10 @@ enabled = true
       },
     );
 
-    assert.deepEqual(forcedStops, [{
-      sessionId: binding.bridgeSessionId,
-      detail: '用户执行 /stop，已停止当前任务。',
-    }]);
-    assert.deepEqual(healthEnds, [{
-      sessionId: binding.bridgeSessionId,
-      outcome: 'aborted',
-      detail: '用户执行 /stop，已停止当前任务。',
-    }]);
-    assert.match(sent[0] || '', /旧会话「Bridge: chat-stop-stale」任务已停止/);
+    assert.deepEqual(forcedStops, []);
+    assert.deepEqual(healthEnds, []);
+    assert.match(sent[0] || '', /当前没有可停止的活动任务/);
+    assert.doesNotMatch(sent[0] || '', /任务已停止/);
   });
 
   it('does not repin an already pinned thread table message after in-place refresh', async () => {
@@ -9415,9 +9408,11 @@ enabled = true
     };
     const address = { channelType: 'feishu', chatId: 'chat-stop-tmux-provider' } as const;
     const binding = router.createBinding(address, 'D:\\workspace\\stop-tmux-provider');
+    const target = `codex_${binding.bridgeSessionId}`;
     store.updateSession(binding.bridgeSessionId, {
       runtime: {
-        general: { tmuxSessionName: 'alpha' },
+        codex: { threadId: binding.bridgeSessionId },
+        general: { tmuxSessionName: target },
       },
       mirror_status: 'watching',
       runtime_status: 'idle',
@@ -9459,11 +9454,11 @@ enabled = true
       );
 
       const log = fs.readFileSync(fakeTmux.logPath, 'utf-8');
-      assert.match(log, /send-keys -t alpha C-c/);
-      assert.equal((log.match(/send-keys -t alpha C-c/g) || []).length, 1);
+      assert.match(log, new RegExp(`send-keys -t ${target} C-c`));
+      assert.equal((log.match(new RegExp(`send-keys -t ${target} C-c`, 'g')) || []).length, 1);
       assert.deepEqual(forcedStops, []);
       assert.match(sent[0] || '', /已发送停止按键/);
-      assert.match(sent[0] || '', /tmux send-keys -t alpha C-c/);
+      assert.match(sent[0] || '', new RegExp(`tmux send-keys -t ${target} C-c`));
     } finally {
       process.env.PATH = oldPath;
       if (oldFakeLog === undefined) {
@@ -9494,6 +9489,7 @@ enabled = true
     const address = { channelType: 'feishu', chatId: 'chat-stop-kimi-tmux-provider' } as const;
     const binding = router.createBinding(address, '/tmp/stop-kimi-tmux-provider');
     const target = kimiTmuxSessionName(binding.bridgeSessionId);
+    const abortController = new AbortController();
     store.updateSession(binding.bridgeSessionId, {
       runtime: {
         activeRuntime: 'kimi',
@@ -9520,7 +9516,7 @@ enabled = true
         '/stop',
         {
           getActiveTask: (sessionId) => sessionId === binding.bridgeSessionId
-            ? { abortController: new AbortController() }
+            ? { abortController }
             : undefined,
           forceStopSession: async (sessionId, detail) => {
             forcedStops.push({ sessionId, detail });
@@ -9536,7 +9532,8 @@ enabled = true
       assert.equal((log.match(new RegExp(`send-keys -t ${target} C-c`, 'g')) || []).length, 2);
       assert.equal(forcedStops.length, 1);
       assert.equal(forcedStops[0]?.sessionId, binding.bridgeSessionId);
-      assert.match(sent[0] || '', /任务已停止/);
+      assert.match(sent[0] || '', /已请求停止当前任务/);
+      assert.doesNotMatch(sent[0] || '', /任务已停止/);
     } finally {
       process.env.PATH = oldPath;
       if (oldFakeLog === undefined) {
@@ -9607,7 +9604,8 @@ enabled = true
       assert.equal((log.match(new RegExp(`send-keys -t ${target} C-c`, 'g')) || []).length, 1);
       assert.equal(abortController.signal.aborted, true);
       assert.equal(forcedStops.length, 1);
-      assert.match(sent[0] || '', /任务已停止/);
+      assert.match(sent[0] || '', /已请求停止当前任务/);
+      assert.doesNotMatch(sent[0] || '', /任务已停止/);
     } finally {
       process.env.PATH = oldPath;
       if (oldFakeLog === undefined) delete process.env.TMUX_FAKE_LOG;

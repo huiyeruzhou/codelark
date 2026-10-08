@@ -151,8 +151,11 @@ export function createInteractiveRuntime(
       handled = true;
     }
 
-    state.activeTasks.delete(sessionId);
-    getSessionExecutor().cancel(sessionId);
+    // forceStop 可能等待异步收尾；期间新任务已经取得此会话时，旧停止不能删除它。
+    if (state.activeTasks.get(sessionId) === task) {
+      state.activeTasks.delete(sessionId);
+      getSessionExecutor().cancel(sessionId);
+    }
     return handled;
   }
 

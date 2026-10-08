@@ -9,6 +9,9 @@ import { processMessage } from '../../../../bridge/turn/interactive/sdk-conversa
 import { CodexProvider } from '../../../../runtime/codex/provider.js';
 import { consumeSseEvents } from '../../../../runtime/sse-stream-decoder.js';
 import { normalizeReasoningEffort, normalizeSandboxMode } from '../../../../runtime/options.js';
+import { sseEvent } from '../../../../runtime/sse.js';
+import type { StreamChatParams } from '../../../../runtime/contracts.js';
+import { createInteractiveRuntime } from '../../../../bridge/host/interactive-runtime.js';
 
 it('legacy SDK resume uses changed model and permissions only on the next request', async (t) => {
   resetBridgeTestState();
@@ -67,4 +70,55 @@ it('legacy SDK resume uses changed model and permissions only on the next reques
   assert.equal(calls[2]!.options.model, 'gpt-5.4');
   assert.equal(calls[2]!.options.approvalPolicy, 'on-request');
   assert.equal(calls[2]!.options.sandboxMode, 'read-only');
+});
+
+it('an aborted SDK stream releases its Bridge lock and cannot clear or write into a replacement turn', async (t) => {
+  resetBridgeTestState();
+  const store = initBridgeTestContext();
+  const session = store.createSession('late SDK cleanup', '');
+  const binding = store.upsertChannelChat({ channelType: 'feishu', chatId: session.id, bridgeSessionId: session.id });
+  const streams: ReadableStreamDefaultController<string>[] = [];
+  const calls: StreamChatParams[] = [];
+  t.after(() => { for (const stream of streams) { try { stream.close(); } catch {} } });
+  const runtime = { store, consumeSseEvents, normalizeReasoningEffort, normalizeSandboxMode,
+    llm: { streamChat: (params: StreamChatParams) => {
+      calls.push(params);
+      return new ReadableStream<string>({ start: (controller) => { streams.push(controller); } });
+    } },
+  };
+  const firstAbort = new AbortController();
+  const first = processMessage(binding, 'old', undefined, firstAbort.signal, undefined, undefined, undefined, undefined, undefined, undefined, undefined, runtime);
+  assert.equal(streams.length, 1);
+  firstAbort.abort();
+  const second = processMessage(binding, 'new', undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, runtime);
+  assert.equal(streams.length, 2, '停止后旧流尚未结束，也必须释放Bridge请求锁');
+  calls[0]!.onRuntimeStatusChange?.('idle');
+  assert.equal(store.getSession(session.id)?.runtime_status, 'running');
+  streams[0]!.enqueue(sseEvent('text', 'late old reply'));
+  streams[0]!.close();
+  assert.equal((await first).outcome, 'aborted');
+  assert.equal(store.getSession(session.id)?.runtime_status, 'running');
+  assert.equal(store.getMessages(session.id, { limit: 20 }).messages.filter((message) => message.role === 'assistant').length, 0);
+  streams[1]!.enqueue(sseEvent('text', 'new reply'));
+  streams[1]!.close();
+  assert.equal((await second).responseText, 'new reply');
+  assert.equal(store.getSession(session.id)?.runtime_status, 'idle');
+});
+
+it('a delayed force-stop completion does not delete a new active task', async () => {
+  resetBridgeTestState();
+  const store = initBridgeTestContext();
+  const session = store.createSession('late force stop', '');
+  const state = { activeTasks: new Map(), queuedCounts: new Map(), sessionLocks: new Map() };
+  const runtime = createInteractiveRuntime(() => state, { getStore: () => store, nowIso: () => new Date().toISOString() });
+  let finish!: (value: boolean) => void;
+  const first = { sessionId: session.id, id: 'first', abortController: new AbortController(), forceStop: () => new Promise<boolean>((resolve) => { finish = resolve; }) };
+  const second = { sessionId: session.id, id: 'second', abortController: new AbortController() };
+  runtime.registerInteractiveTask(first as any);
+  const stopping = runtime.forceStopSession(session.id);
+  runtime.registerInteractiveTask(second as any);
+  finish(true);
+  await stopping;
+  assert.equal(runtime.getActiveTask(session.id), second);
+  assert.equal(store.getSession(session.id)?.runtime_status, 'running');
 });
