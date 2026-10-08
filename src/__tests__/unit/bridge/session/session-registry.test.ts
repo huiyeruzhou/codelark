@@ -3,7 +3,7 @@ import { beforeEach, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 
 import { SessionRegistryService } from '../../../../bridge/session/registry.js';
-import { resolveCursorRuntimeConfig } from '../../../../bridge/session/support.js';
+import { resolveCursorInvocationModel, resolveCursorRuntimeConfig } from '../../../../bridge/session/support.js';
 import { getSessionWorkingDirectory } from '../../../../domain/session-runtime.js';
 import { JsonFileStore } from '../../../../storage/json-store.js';
 import { makeBridgeSettings, resetBridgeTestState } from '../../../helpers/bridge/test-bridge-utils.js';
@@ -225,6 +225,26 @@ describe('SessionRegistryService', () => {
       model: undefined,
       force: false,
     });
+    assert.equal(resolveCursorInvocationModel(null, materialized, { resuming: true }), undefined);
+  });
+
+  it('does not inject the global Cursor model when resuming an existing tmux conversation', () => {
+    const store = new JsonFileStore(makeBridgeSettings());
+    const session = store.createSession('Existing Cursor conversation', 'default', undefined, '/tmp/cursor-existing');
+    store.updateSession(session.id, {
+      runtime: {
+        activeRuntime: 'cursor',
+        cursor: {
+          sessionId: 'cursor-existing-session',
+          cwd: '/tmp/cursor-existing',
+          provider: 'tmux',
+        },
+      },
+    });
+    const existing = store.getSession(session.id)!;
+
+    assert.equal(resolveCursorInvocationModel(null, existing, { resuming: true }), undefined);
+    assert.ok(resolveCursorInvocationModel(null, existing, { resuming: false }));
   });
 
   it('upgrades an existing legacy Cursor binding when its thread is now owned by Desktop', () => {

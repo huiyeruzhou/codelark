@@ -9,6 +9,7 @@ import { DatabaseSync } from 'node:sqlite';
 import {
   getCodexSessionByThreadId,
   listCodexSessions,
+  readCodexSessionModel,
   readCodexSessionJsonlHistoryStreamByFilePath,
   readCodexSessionMessagesByFilePath,
   readCodexSessionEventDeltaByFilePath,
@@ -28,6 +29,30 @@ afterEach(() => {
 });
 
 describe('listCodexSessions', () => {
+  it('reads the latest model from turn_context without exposing the resume sentinel', () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-codex-session-model-'));
+    process.env.CODEX_HOME = tempRoot;
+    const sessionsDir = path.join(tempRoot, 'sessions', '2026', '10', '09');
+    fs.mkdirSync(sessionsDir, { recursive: true });
+    const threadId = '019f9699-7f1a-7000-8000-000000000099';
+    const rolloutPath = path.join(sessionsDir, `rollout-2026-10-09T00-00-00-${threadId}.jsonl`);
+    fs.writeFileSync(rolloutPath, [
+      JSON.stringify({
+        timestamp: '2026-10-09T00:00:00.000Z',
+        type: 'session_meta',
+        payload: { id: threadId, timestamp: '2026-10-09T00:00:00.000Z', cwd: '/repo/model-test', originator: 'Codex CLI' },
+      }),
+      JSON.stringify({ timestamp: '2026-10-09T00:00:01.000Z', type: 'turn_context', payload: { model: 'gpt-5.3-codex' } }),
+      JSON.stringify({ timestamp: '2026-10-09T00:00:02.000Z', type: 'turn_context', payload: { model: 'gpt-5.6-sol' } }),
+    ].join('\n') + '\n');
+
+    try {
+      assert.equal(readCodexSessionModel(threadId), 'gpt-5.6-sol');
+    } finally {
+      fs.rmSync(tempRoot, { recursive: true, force: true });
+    }
+  });
+
   it('reuses the indexed file path for repeated thread lookup', () => {
     const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-codex-session-cache-'));
     process.env.CODEX_HOME = tempRoot;

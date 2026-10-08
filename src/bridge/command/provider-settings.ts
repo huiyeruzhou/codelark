@@ -48,6 +48,7 @@ import {
   resolveClaudeRuntimeConfig,
   resolveKimiRuntimeConfig,
   resolveCursorRuntimeConfig,
+  resolveCursorInvocationModel,
   resolveZcodeRuntimeConfig,
   resolveCodexInvocationModel,
   resolveSessionRuntimeConfig,
@@ -590,7 +591,9 @@ async function applyProviderCommand(options: ProviderCommandOptions): Promise<st
         cursorSessionId: getSessionCursorSessionId(session),
         cursorForce: cursorConfig.force,
         workingDirectory: getSessionWorkingDirectory(session),
-        model: cursorConfig.model,
+        model: resolveCursorInvocationModel(binding, session, {
+          resuming: Boolean(getSessionCursorSessionId(session)),
+        }),
       });
     } catch (error) {
       const staleStart = await cancelStaleTmuxProviderStart({

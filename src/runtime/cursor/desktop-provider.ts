@@ -2,11 +2,17 @@ import fs from 'node:fs';
 
 import type { LLMProvider, StreamChatParams } from '../contracts.js';
 import { sseEvent } from '../sse.js';
-import { sendCursorDesktopMessage } from './desktop-bridge-client.js';
+import {
+  listCursorDesktopThreads,
+  readCursorDesktopEvents,
+  sendCursorDesktopMessage,
+} from './desktop-bridge-client.js';
+import { inspectCursorDesktopHookActivity } from './desktop-diagnostics.js';
 import {
   findCursorSessionFileById,
   getCursorTranscriptCandidates,
   readCursorSessionMirrorRecordDeltaByFilePath,
+  readCursorSessionMirrorRecordStreamByFilePath,
 } from './session-index.js';
 import { enqueueCursorRecord, type CursorTurnContext } from './tmux-provider.js';
 
@@ -14,12 +20,18 @@ const DEFAULT_POLL_INTERVAL_MS = 500;
 const DEFAULT_TRANSCRIPT_TIMEOUT_MS = 30_000;
 const DEFAULT_OUTPUT_IDLE_TIMEOUT_MS = 120_000;
 const DEFAULT_QUEUED_IDLE_TIMEOUT_MS = 600_000;
+const DESKTOP_STATUS_POLL_INTERVAL_MS = 5_000;
+const DESKTOP_REALTIME_POLL_INTERVAL_MS = 1_000;
 
 interface TranscriptSnapshot {
   size: number;
   mtimeMs: number;
   identity: string;
+  anchorStart: number;
+  anchor: Buffer;
 }
+
+const TRANSCRIPT_REWRITE_ANCHOR_BYTES = 1024;
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -34,19 +46,55 @@ function transcriptSnapshot(filePath: string | undefined): TranscriptSnapshot | 
   if (!filePath) return null;
   try {
     const stat = fs.statSync(filePath);
-    return {
-      size: stat.size,
-      mtimeMs: stat.mtimeMs,
-      identity: `${stat.dev}:${stat.ino}`,
-    };
+    const anchorStart = Math.max(0, stat.size - TRANSCRIPT_REWRITE_ANCHOR_BYTES);
+    const anchor = Buffer.alloc(stat.size - anchorStart);
+    const fd = fs.openSync(filePath, 'r');
+    try {
+      const bytesRead = fs.readSync(fd, anchor, 0, anchor.length, anchorStart);
+      return {
+        size: stat.size,
+        mtimeMs: stat.mtimeMs,
+        identity: `${stat.dev}:${stat.ino}`,
+        anchorStart,
+        anchor: anchor.subarray(0, bytesRead),
+      };
+    } finally {
+      fs.closeSync(fd);
+    }
   } catch {
     return null;
   }
 }
 
-function promptAppearsInUserRecord(content: string, prompt: string): boolean {
-  const expected = prompt.trim();
-  return Boolean(expected && content.includes(expected));
+function transcriptPrefixWasRewritten(filePath: string, previous: TranscriptSnapshot): boolean {
+  if (previous.anchor.length === 0) return false;
+  try {
+    const actual = Buffer.alloc(previous.anchor.length);
+    const fd = fs.openSync(filePath, 'r');
+    try {
+      const bytesRead = fs.readSync(fd, actual, 0, actual.length, previous.anchorStart);
+      return bytesRead !== previous.anchor.length
+        || !actual.subarray(0, bytesRead).equals(previous.anchor);
+    } finally {
+      fs.closeSync(fd);
+    }
+  } catch {
+    return true;
+  }
+}
+
+function cursorHookStatus(step: string | undefined, toolName: string | undefined): string {
+  const detail = toolName ? ` · ${toolName}` : '';
+  switch (step) {
+    case 'beforeShellExecution': return `Cursor 正在执行命令${detail}`;
+    case 'afterShellExecution': return `Cursor 已完成命令${detail}`;
+    case 'preToolUse': return `Cursor 正在调用工具${detail}`;
+    case 'postToolUse': return `Cursor 已完成工具${detail}`;
+    case 'afterAgentThought': return 'Cursor 正在思考';
+    case 'stop':
+    case 'sessionEnd': return 'Cursor 正在结束当前 turn';
+    default: return step ? `Cursor 后端活动：${step}${detail}` : 'Cursor 后端仍在运行';
+  }
 }
 
 async function waitForTranscriptPath(
@@ -80,11 +128,13 @@ async function waitForTranscriptPath(
 async function pollDesktopTranscript(
   controller: ReadableStreamDefaultController<string>,
   context: CursorTurnContext,
-  prompt: string,
   abortSignal: AbortSignal | undefined,
   initialSnapshot: TranscriptSnapshot | null,
+  baselineTurnStarts: Set<string>,
   queued: boolean,
 ): Promise<void> {
+  const cursorSessionId = context.sessionId;
+  if (!cursorSessionId) throw new Error('Cursor Desktop session ID 缺失。');
   const pollIntervalMs = positiveIntEnv(
     'CODELARK_CURSOR_DESKTOP_POLL_INTERVAL_MS',
     DEFAULT_POLL_INTERVAL_MS,
@@ -98,8 +148,16 @@ async function pollDesktopTranscript(
     1_000,
   );
   let lastActivityAt = Date.now();
-  let targetTurnSeen = false;
+  let targetTurnId: string | null = null;
   let previousSnapshot = initialSnapshot;
+  let lastDesktopStatusProbeAt = 0;
+  let lastDesktopStatus: string | undefined;
+  let lastHookUpdatedAt = inspectCursorDesktopHookActivity(cursorSessionId)?.updatedAt;
+  let realtimeCursor = 0;
+  let realtimeAvailable: boolean | undefined;
+  let lastRealtimeProbeAt = 0;
+  let lastRealtimeStatus: string | undefined;
+  let lastRealtimeModel: string | undefined;
   while (!context.terminalSeen) {
     if (abortSignal?.aborted) throw new Error('已停止等待；Cursor Desktop 中已提交的 turn 仍可能继续运行。');
     if (!context.sessionFilePath) throw new Error('Cursor Desktop transcript 路径尚未解析。');
@@ -108,6 +166,7 @@ async function pollDesktopTranscript(
     const replaced = Boolean(snapshot && previousSnapshot && (
       snapshot.identity !== previousSnapshot.identity
       || snapshot.size < context.nextOffset
+      || transcriptPrefixWasRewritten(context.sessionFilePath, previousSnapshot)
       || (snapshot.size === context.nextOffset && snapshot.mtimeMs !== previousSnapshot.mtimeMs)
     ));
     if (replaced) {
@@ -115,7 +174,7 @@ async function pollDesktopTranscript(
       context.trailingText = '';
       context.nextTurnId = null;
       context.nextSpecialCallIds = [];
-      targetTurnSeen = false;
+      targetTurnId = null;
       lastActivityAt = Date.now();
     }
     if (snapshot) previousSnapshot = snapshot;
@@ -134,19 +193,97 @@ async function pollDesktopTranscript(
     context.nextTurnId = delta.nextTurnId;
     context.nextSpecialCallIds = delta.nextSpecialCallIds;
     for (const record of delta.records) {
-      if (!targetTurnSeen) {
-        if (record.type === 'message' && record.role === 'user' && promptAppearsInUserRecord(record.content, prompt)) {
-          targetTurnSeen = true;
+      if (!targetTurnId) {
+        if (record.type === 'task_started' && !baselineTurnStarts.has(record.signature)) {
+          targetTurnId = record.turnId || record.signature;
         }
         continue;
       }
+      if (record.turnId && record.turnId !== targetTurnId) continue;
+      if (record.type === 'message' && record.role === 'user') continue;
       enqueueCursorRecord(controller, context, record);
     }
     if (context.nextOffset > previousOffset) lastActivityAt = Date.now();
     if (context.terminalSeen) return;
+    if (realtimeAvailable !== false && Date.now() - lastRealtimeProbeAt >= DESKTOP_REALTIME_POLL_INTERVAL_MS) {
+      lastRealtimeProbeAt = Date.now();
+      try {
+        const batch = await readCursorDesktopEvents(cursorSessionId, realtimeCursor, { timeoutMs: 0 });
+        realtimeAvailable = true;
+        realtimeCursor = Math.max(realtimeCursor, batch.cursor);
+        for (const event of batch.events) {
+          lastActivityAt = Date.now();
+          if (event.status) lastDesktopStatus = event.status;
+          if (event.type === 'finished') {
+            controller.enqueue(sseEvent('status', {
+              reasoning: 'Cursor Desktop 已发出完成事件，正在收取最终 transcript。',
+              backend_status: event.status || 'completed',
+              ...(event.model ? { model: event.model } : {}),
+            }));
+          } else if (event.type === 'stopped') {
+            controller.enqueue(sseEvent('status', {
+              reasoning: 'Cursor Desktop 已停止生成，正在收取最终 transcript。',
+              backend_status: event.status || 'stopped',
+              ...(event.model ? { model: event.model } : {}),
+            }));
+          } else if (event.type === 'error') {
+            controller.enqueue(sseEvent('status', {
+              reasoning: `Cursor Desktop 实时事件异常：${event.message || 'unknown error'}`,
+              backend_status: event.status || 'error',
+            }));
+          } else if (event.status !== lastRealtimeStatus || event.model !== lastRealtimeModel) {
+            lastRealtimeStatus = event.status;
+            lastRealtimeModel = event.model;
+            controller.enqueue(sseEvent('status', {
+              reasoning: 'Cursor Desktop 实时事件已连接。',
+              backend_status: event.status || 'unknown',
+              ...(event.model ? { model: event.model } : {}),
+            }));
+          }
+        }
+      } catch (error) {
+        realtimeAvailable = false;
+        const message = error instanceof Error ? error.message : String(error);
+        if (!message.includes('realtime protocol 不可用')) {
+          controller.enqueue(sseEvent('status', {
+            reasoning: `Cursor Desktop 实时事件不可用，已回退到状态与 transcript：${message}`,
+            backend_status: lastDesktopStatus || 'unknown',
+          }));
+        }
+      }
+    }
+    if (Date.now() - lastDesktopStatusProbeAt >= DESKTOP_STATUS_POLL_INTERVAL_MS) {
+      lastDesktopStatusProbeAt = Date.now();
+      try {
+        lastDesktopStatus = (await listCursorDesktopThreads())
+          .find((thread) => thread.id === cursorSessionId)?.status;
+      } catch {
+        lastDesktopStatus = undefined;
+      }
+      const hook = inspectCursorDesktopHookActivity(cursorSessionId);
+      if (targetTurnId && hook?.updatedAt && hook.updatedAt !== lastHookUpdatedAt) {
+        lastHookUpdatedAt = hook.updatedAt;
+        lastActivityAt = Date.now();
+        controller.enqueue(sseEvent('status', {
+          reasoning: cursorHookStatus(hook.step, hook.toolName),
+          backend_status: lastDesktopStatus || 'unknown',
+          hook_updated_at: hook.updatedAt,
+          ...(hook.model ? { model: hook.model } : {}),
+        }));
+      }
+    }
     if (Date.now() - lastActivityAt > idleTimeoutMs) {
-      throw new Error(targetTurnSeen
-        ? `Cursor Desktop transcript 已 ${idleTimeoutMs}ms 没有活动。`
+      if (lastDesktopStatus === 'running') {
+        lastActivityAt = Date.now();
+        controller.enqueue(sseEvent('status', {
+          reasoning: 'Cursor Desktop 后端仍为 running；transcript 暂无新记录，继续等待。',
+          backend_status: 'running',
+        }));
+        await sleep(pollIntervalMs);
+        continue;
+      }
+      throw new Error(targetTurnId
+        ? `Cursor Desktop transcript 已 ${idleTimeoutMs}ms 没有活动，后端状态为 ${lastDesktopStatus || 'unknown'}。`
         : `Cursor Desktop 已接收消息，但 transcript 中未出现本次用户消息（等待 ${idleTimeoutMs}ms）。`);
     }
     await sleep(pollIntervalMs);
@@ -160,12 +297,23 @@ export function streamCursorDesktop(params: StreamChatParams): ReadableStream<st
         const sessionId = params.cursorSessionId?.trim();
         if (!sessionId) throw new Error('Cursor Desktop provider 只能用于已绑定的 Desktop thread。');
         const known = findCursorSessionFileById(sessionId, params.workingDirectory);
-        const baselineSnapshot = transcriptSnapshot(known?.filePath);
+        const initialFilePath = known?.filePath || (params.workingDirectory
+          ? getCursorTranscriptCandidates(sessionId, params.workingDirectory)
+            .find((candidate) => fs.existsSync(candidate))
+          : undefined);
+        const baselineSnapshot = transcriptSnapshot(initialFilePath);
+        const baselineTurnStarts = new Set(
+          initialFilePath
+            ? readCursorSessionMirrorRecordStreamByFilePath(initialFilePath, known?.storePath)
+              .filter((record) => record.type === 'task_started')
+              .map((record) => record.signature)
+            : [],
+        );
         const context: CursorTurnContext = {
           sessionName: `cursor-desktop:${sessionId}`,
           sessionId,
           cwd: known?.cwd || params.workingDirectory,
-          sessionFilePath: known?.filePath,
+          sessionFilePath: initialFilePath,
           sessionStorePath: known?.storePath,
           nextOffset: baselineSnapshot?.size || 0,
           trailingText: '',
@@ -180,11 +328,17 @@ export function streamCursorDesktop(params: StreamChatParams): ReadableStream<st
           session_id: sessionId,
           ...(context.cwd ? { cwd: context.cwd } : {}),
         }));
-        const sent = await sendCursorDesktopMessage(sessionId, params.prompt, { force: params.cursorForce });
+        const sent = await sendCursorDesktopMessage(sessionId, params.prompt, {
+          force: params.cursorForce,
+          delivery: params.cursorDelivery || (params.cursorForce ? 'force' : 'steer'),
+        });
         controller.enqueue(sseEvent('status', {
-          reasoning: sent.status === 'queued'
-            ? 'Cursor Desktop 当前 turn 尚未结束；消息已排队，将在同一对话继续。'
-            : 'Cursor Desktop 已接收消息，正在同一对话中运行。',
+          reasoning: sent.status === 'steered'
+            ? 'Cursor Desktop 已将消息 steer 到当前 turn。'
+            : sent.status === 'queued'
+              ? `Cursor Desktop 当前 turn 尚未结束；消息已排队，将在同一对话继续。${sent.warning ? ` ${sent.warning}` : ''}`
+              : `Cursor Desktop 已接收消息，正在同一对话中运行。${sent.warning ? ` ${sent.warning}` : ''}`,
+          delivery: sent.actualDelivery,
         }));
         if (!context.sessionFilePath) {
           const transcript = await waitForTranscriptPath(sessionId, context.cwd, params.abortController?.signal);
@@ -196,9 +350,9 @@ export function streamCursorDesktop(params: StreamChatParams): ReadableStream<st
         await pollDesktopTranscript(
           controller,
           context,
-          params.prompt,
           params.abortController?.signal,
-          context.sessionFilePath === known?.filePath ? baselineSnapshot : null,
+          context.sessionFilePath === initialFilePath ? baselineSnapshot : null,
+          baselineTurnStarts,
           sent.status === 'queued',
         );
         controller.close();

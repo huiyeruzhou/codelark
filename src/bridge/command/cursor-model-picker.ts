@@ -3,7 +3,8 @@ import type { BridgeSession, ChannelAddress, OutboundRichCard } from '../../doma
 import type { CursorAvailableModel } from '../../runtime/cursor/models.js';
 import { buildCommandCallbackData } from './callbacks.js';
 
-export const CURSOR_MODEL_PICKER_PAGE_SIZE = 50;
+export const CURSOR_MODEL_PICKER_PAGE_SIZE = 36;
+export const CURSOR_MODEL_PAGE_ARG = '--cursor-model-page';
 
 export interface CursorModelPickerPageRequest {
   requested: boolean;
@@ -11,20 +12,47 @@ export interface CursorModelPickerPageRequest {
   invalid: boolean;
 }
 
+export function extractCursorModelPageArg(args: string): {
+  args: string;
+  page?: number;
+  invalid: boolean;
+} {
+  const tokens = args.trim().split(/\s+/u).filter(Boolean);
+  let page: number | undefined;
+  let invalid = false;
+  const remaining: string[] = [];
+  for (let index = 0; index < tokens.length; index += 1) {
+    const token = tokens[index]!;
+    const inline = token.match(/^--cursor-model-page=(.*)$/u);
+    if (inline) {
+      const parsed = Number(inline[1]);
+      if (page !== undefined || !Number.isSafeInteger(parsed) || parsed < 1) invalid = true;
+      else page = parsed;
+      continue;
+    }
+    if (token === CURSOR_MODEL_PAGE_ARG) {
+      const parsed = Number(tokens[index + 1]);
+      if (page !== undefined || !Number.isSafeInteger(parsed) || parsed < 1) invalid = true;
+      else page = parsed;
+      index += 1;
+      continue;
+    }
+    remaining.push(token);
+  }
+  return { args: remaining.join(' '), ...(page ? { page } : {}), invalid };
+}
+
 export function parseCursorModelPickerArgs(args: string): CursorModelPickerPageRequest {
-  const trimmed = args.trim();
-  if (!trimmed) return { requested: true, invalid: false };
-  const match = /^list(?:\s+(\d+))?$/iu.exec(trimmed);
-  if (!match) return { requested: false, invalid: trimmed.toLowerCase().startsWith('list') };
-  const page = match[1] ? Number(match[1]) : undefined;
+  const parsed = extractCursorModelPageArg(args);
+  if (parsed.args) return { requested: false, invalid: parsed.invalid || parsed.page !== undefined };
   return {
     requested: true,
-    ...(page ? { page } : {}),
-    invalid: page !== undefined && (!Number.isSafeInteger(page) || page < 1),
+    ...(parsed.page ? { page: parsed.page } : {}),
+    invalid: parsed.invalid,
   };
 }
 
-function sessionCursorModelOverride(sessionId: string): string | undefined {
+export function sessionCursorModelOverride(sessionId: string): string | undefined {
   const resolved = createConfigService({ migrate: false }).resolve('runtime.cursor.model', {
     kind: 'session',
     sessionId,
@@ -34,27 +62,35 @@ function sessionCursorModelOverride(sessionId: string): string | undefined {
     : undefined;
 }
 
-function modelCallback(model: CursorAvailableModel, sessionId: string): string {
-  return buildCommandCallbackData(
-    model.default || model.slug === 'auto' ? '/model default' : `/model ${model.slug}`,
-    sessionId,
-  );
-}
-
 function modelOptionText(model: CursorAvailableModel): string {
   const markers = [model.current ? 'current' : '', model.default ? 'default' : ''].filter(Boolean);
   return `${model.name}${markers.length > 0 ? ` (${markers.join(', ')})` : ''} · ${model.slug}`;
 }
 
-export function buildCursorModelPickerCard(options: {
-  session: BridgeSession;
-  address: ChannelAddress;
+function selectionCommand(model: CursorAvailableModel, target: 'session' | 'global'): string {
+  const value = model.default || model.slug === 'auto' ? 'default' : model.slug;
+  return target === 'global' ? `/set cursorDefaultModel ${value}` : `/model ${value}`;
+}
+
+export function attachCursorModelPickerControls(options: {
+  card: OutboundRichCard;
   models: CursorAvailableModel[];
+  target: 'session' | 'global';
+  selectedSlug?: string;
   requestedPage?: number;
+  pageCommand: (page: number) => string;
+  scopeSessionId?: string;
+  configuredLabel: string;
+  controlIdPrefix: string;
 }): { card: OutboundRichCard; page: number; pageCount: number; selectedSlug?: string } {
   const currentModel = options.models.find((model) => model.current);
-  const override = sessionCursorModelOverride(options.session.id);
-  const selected = (override && options.models.find((model) => model.slug === override)) || currentModel;
+  const configuredModel = options.selectedSlug
+    ? options.models.find((model) => model.slug === options.selectedSlug)
+    : undefined;
+  const automaticModel = options.target === 'global'
+    ? options.models.find((model) => model.default || model.slug === 'auto') || currentModel
+    : configuredModel || currentModel;
+  const selected = configuredModel || automaticModel;
   const pageCount = Math.max(1, Math.ceil(options.models.length / CURSOR_MODEL_PICKER_PAGE_SIZE));
   const automaticPage = selected
     ? Math.floor(options.models.indexOf(selected) / CURSOR_MODEL_PICKER_PAGE_SIZE) + 1
@@ -64,53 +100,88 @@ export function buildCursorModelPickerCard(options: {
     (page - 1) * CURSOR_MODEL_PICKER_PAGE_SIZE,
     page * CURSOR_MODEL_PICKER_PAGE_SIZE,
   );
+  const callback = (command: string) => buildCommandCallbackData(command, options.scopeSessionId);
   const selectedCallbackData = selected && pageModels.includes(selected)
-    ? modelCallback(selected, options.session.id)
+    ? callback(selectionCommand(selected, options.target))
     : undefined;
-  const navigation = [
-    ...(page > 1 ? [{
-      text: '上一页',
-      callbackData: buildCommandCallbackData(`/model list ${page - 1}`, options.session.id),
-    }] : []),
-    {
-      text: '刷新列表',
-      callbackData: buildCommandCallbackData(`/model list ${page}`, options.session.id),
-    },
-    ...(page < pageCount ? [{
-      text: '下一页',
-      callbackData: buildCommandCallbackData(`/model list ${page + 1}`, options.session.id),
-    }] : []),
-  ];
-  const fields: Array<[string, string]> = [
-    ['Cursor current', currentModel ? `${currentModel.name} · ${currentModel.slug}` : '未标记'],
-    ['当前会话配置', override || '跟随 Cursor 默认'],
-  ];
-
+  const modelSelect = {
+    id: `${options.controlIdPrefix}_model`,
+    placeholder: `Cursor 模型（第 ${page}/${pageCount} 页）`,
+    selectedCallbackData,
+    options: pageModels.map((model) => ({
+      text: modelOptionText(model),
+      callbackData: callback(selectionCommand(model, options.target)),
+    })),
+  };
+  const pageSelect = {
+    id: `${options.controlIdPrefix}_page`,
+    placeholder: `模型页 ${page}/${pageCount}`,
+    selectedCallbackData: callback(options.pageCommand(page)),
+    options: Array.from({ length: pageCount }, (_, index) => ({
+      text: `第 ${index + 1} 页`,
+      callbackData: callback(options.pageCommand(index + 1)),
+    })),
+  };
+  const form = options.card.form
+    ? {
+        ...options.card.form,
+        extraInputs: options.card.form.extraInputs?.filter((input) => input.elementId !== 'cursorDefaultModel'),
+      }
+    : undefined;
   return {
     page,
     pageCount,
     selectedSlug: selected?.slug,
     card: {
-      title: 'Cursor 模型选择',
-      subtitle: `账号实时列表 · ${options.models.length} 个模型 · 第 ${page}/${pageCount} 页`,
-      template: 'blue',
-      sections: [{ fields }],
-      selects: [{
-        id: 'cursor_model',
-        placeholder: `选择模型（第 ${page}/${pageCount} 页）`,
-        selectedCallbackData,
-        options: pageModels.map((model) => ({
-          text: modelOptionText(model),
-          callbackData: modelCallback(model, options.session.id),
-        })),
-      }],
-      actions: [navigation],
-      footer: [
-        '选择后仍执行现有 `/model <slug>` 配置命令；`auto` 会执行 `/model default`。',
-        '列表中的 current 来自 Cursor Agent，当前会话配置来自 CodeLark session。',
+      ...options.card,
+      subtitle: `${options.card.subtitle || ''} · Cursor 账号实时列表 ${options.models.length} 个 · 第 ${page}/${pageCount} 页`.replace(/^ · /u, ''),
+      selects: [...(options.card.selects || []), modelSelect, pageSelect],
+      sections: [
+        ...options.card.sections,
+        { fields: [
+          ['Cursor current', currentModel ? `${currentModel.name} · ${currentModel.slug}` : '未标记'],
+          [options.configuredLabel, options.selectedSlug || (options.target === 'global' ? '跟随 Cursor 默认' : '跟随当前会话模型')],
+        ] },
       ],
-      updateKey: `cursor-model-picker:${options.address.channelType}:${options.address.chatId}`,
-      updateTtlMs: null,
+      ...(form ? { form } : {}),
+      footer: [
+        ...(options.card.footer || []),
+        '模型列表实时来自 `cursor agent models`；current 是 Cursor 当前值，选择后仍走原有配置命令。',
+      ],
     },
   };
+}
+
+export function buildCursorModelPickerCard(options: {
+  session: BridgeSession;
+  address: ChannelAddress;
+  models: CursorAvailableModel[];
+  requestedPage?: number;
+}): { card: OutboundRichCard; page: number; pageCount: number; selectedSlug?: string } {
+  const override = sessionCursorModelOverride(options.session.id);
+  const base: OutboundRichCard = {
+    title: 'Cursor 模型选择',
+    template: 'blue',
+    sections: [],
+    actions: [[{
+      text: '刷新列表',
+      callbackData: buildCommandCallbackData(
+        `/model ${CURSOR_MODEL_PAGE_ARG}=${options.requestedPage || 1}`,
+        options.session.id,
+      ),
+    }]],
+    updateKey: `cursor-model-picker:${options.address.channelType}:${options.address.chatId}`,
+    updateTtlMs: null,
+  };
+  return attachCursorModelPickerControls({
+    card: base,
+    models: options.models,
+    target: 'session',
+    selectedSlug: override,
+    requestedPage: options.requestedPage,
+    pageCommand: (page) => `/model ${CURSOR_MODEL_PAGE_ARG}=${page}`,
+    scopeSessionId: options.session.id,
+    configuredLabel: '当前会话配置',
+    controlIdPrefix: 'cursor_model_command',
+  });
 }

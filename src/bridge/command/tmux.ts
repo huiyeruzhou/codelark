@@ -37,6 +37,8 @@ import {
   resolveEffectiveRuntimeProvider,
   resolveKimiRuntimeConfig,
   resolveCursorRuntimeConfig,
+  resolveCursorInvocationModel,
+  resolveDisplayedCursorModel,
   resolveZcodeRuntimeConfig,
   resolveCodexInvocationModel,
   resolveSessionRuntimeConfig,
@@ -45,6 +47,7 @@ import { getCodexThreadId } from '../turn/turn-classifier.js';
 import {
   getSessionActiveRuntime,
   getSessionClaudeSessionId,
+  getSessionCursorSessionId,
   getSessionTmuxCaptureLines,
   getSessionTmuxEchoInput,
   getSessionRuntimeTmuxSessionName,
@@ -68,6 +71,12 @@ import {
 import {
   ensureCursorTmuxInputSession,
 } from '../../runtime/cursor/tmux-provider.js';
+import { listCursorDesktopThreads } from '../../runtime/cursor/desktop-bridge-client.js';
+import { inspectCursorDesktopHookActivity } from '../../runtime/cursor/desktop-diagnostics.js';
+import {
+  findCursorSessionFileById,
+  inspectCursorTranscriptTail,
+} from '../../runtime/cursor/session-index.js';
 import {
   ensureZcodeTmuxInputSession,
 } from '../../runtime/zcode/tmux-provider.js';
@@ -327,6 +336,7 @@ interface TmuxScreenMonitor {
   };
   busy: boolean;
   stopped: boolean;
+  refresh?: () => Promise<{ text: string; statusText: string }>;
 }
 
 const screenMonitors = new Map<string, TmuxScreenMonitor>();
@@ -677,6 +687,89 @@ function buildTmuxScreenResponse(
   return appendTmuxCommandPreview(response, options?.commands || [], markdown);
 }
 
+function describeCursorHookStep(step: string | undefined, toolName: string | undefined): string {
+  const tool = toolName ? ` · ${toolName}` : '';
+  switch (step) {
+    case 'beforeShellExecution': return `执行命令中${tool}`;
+    case 'afterShellExecution': return `命令已完成${tool}`;
+    case 'preToolUse': return `调用工具中${tool}`;
+    case 'postToolUse': return `工具已完成${tool}`;
+    case 'afterAgentThought': return '思考中';
+    case 'stop':
+    case 'sessionEnd': return '正在结束 turn';
+    default: return step ? `${step}${tool}` : '暂无 hook 活动';
+  }
+}
+
+async function buildCursorDesktopStatusResponse(
+  session: BridgeSession,
+  binding: ChannelChat,
+  markdown: boolean,
+  intervalSeconds?: number,
+): Promise<{ text: string; statusText: string }> {
+  const sessionId = getSessionCursorSessionId(session);
+  if (!sessionId) {
+    const text = buildCommandFields(
+      'Cursor Desktop 后端状态',
+      [['Provider', 'desktop'], ['Cursor session', '未绑定']],
+      ['当前会话尚未绑定 Cursor Desktop thread。'],
+      markdown,
+    );
+    return { text, statusText: 'Cursor Desktop · 未绑定' };
+  }
+
+  let bridgeError: string | undefined;
+  const normalizedSessionId = sessionId.toLowerCase();
+  const thread = await listCursorDesktopThreads()
+    .then((threads) => threads.find((candidate) => candidate.id.toLowerCase() === normalizedSessionId))
+    .catch((error: unknown) => {
+      bridgeError = error instanceof Error ? error.message : String(error);
+      return undefined;
+    });
+  const summary = findCursorSessionFileById(sessionId, getSessionWorkingDirectory(session) || undefined);
+  const transcript = summary?.filePath ? inspectCursorTranscriptTail(summary.filePath) : null;
+  const hook = inspectCursorDesktopHookActivity(sessionId);
+  const backendStatus = thread?.status || (bridgeError ? 'bridge-error' : 'not-found');
+  const actualModel = hook?.model || hook?.modelId || summary?.model || resolveDisplayedCursorModel(session, binding);
+  const refreshedAt = formatLocalClockTime(Date.now()) || '--:--:--';
+  const text = buildCommandFields(
+    'Cursor Desktop 后端状态',
+    [
+      ['Provider', 'desktop'],
+      ['Cursor session', sessionId],
+      ['后端状态', backendStatus],
+      ['标题', thread?.title || summary?.title],
+      ['模型', actualModel],
+      ['Generation', hook?.generationId],
+      ['最新活动', describeCursorHookStep(hook?.step, hook?.toolName)],
+      ['Hook 更新时间', hook?.updatedAt],
+      ['Transcript 末项', transcript ? [transcript.recordType, transcript.status].filter(Boolean).join(' · ') : '不可用'],
+      ['Transcript 更新时间', transcript?.updatedAt],
+      ['Transcript 大小', transcript ? `${transcript.size} bytes` : undefined],
+      ['工作目录', summary?.cwd || getSessionWorkingDirectory(session)],
+      ['Transcript', summary?.filePath],
+      ['Hook log', hook?.logPath],
+      ...(intervalSeconds ? [['定时刷新', `${intervalSeconds}s`] as [string, string]] : []),
+      ...(bridgeError ? [['Bridge 错误', bridgeError] as [string, string]] : []),
+    ],
+    [
+      backendStatus === 'running'
+        ? 'running 来自 Cursor 客户端内部 agent/composer store；即使 transcript 暂无增量，也表示后端仍在执行。'
+        : '后端状态来自 Cursor Desktop Bridge；hook 与 transcript 仅用于补充诊断。',
+      ...(intervalSeconds ? ['发送 `/tmux-screen stop` 停止刷新。'] : []),
+    ],
+    markdown,
+  );
+  return {
+    text,
+    statusText: `Cursor Desktop · ${backendStatus} · ${refreshedAt}`,
+  };
+}
+
+export const _testOnlyCursorDesktopStatus = {
+  build: buildCursorDesktopStatusResponse,
+};
+
 function formatRuntimeTmuxSelectionPrompt(selectionPrompt: RuntimeTmuxSelectionPrompt): string {
   if (selectionPrompt.runtime === 'codex') {
     const action = selectionPrompt.defaultChoice
@@ -963,14 +1056,15 @@ async function ensureRuntimeTmuxSessionForProvider(
       }
     }
     const cursorConfig = resolveCursorRuntimeConfig(session, binding);
+    const cursorSessionId = session.runtime?.cursor?.sessionId;
     const prepared = await ensureCursorTmuxInputSession({
       prompt: '',
       sessionId: session.id,
       runtime: 'cursor',
-      cursorSessionId: session.runtime?.cursor?.sessionId,
+      cursorSessionId,
       cursorForce: cursorConfig.force,
       workingDirectory: getSessionWorkingDirectory(session),
-      model: cursorConfig.model,
+      model: resolveCursorInvocationModel(binding, session, { resuming: Boolean(cursorSessionId) }),
     });
     const identityUpdate = setSessionCursorIdentityUpdate(prepared.sessionId, prepared.cwd);
     store.updateSession(session.id, {
@@ -1250,6 +1344,7 @@ function startTmuxScreenMonitor(params: {
     actions?: (actions: StructuredStreamingUiActionButton[][]) => void;
     finish: (status: 'completed' | 'interrupted' | 'error', text: string) => Promise<boolean>;
   };
+  refresh?: () => Promise<{ text: string; statusText: string }>;
 }): void {
   stopTmuxScreenMonitor(params.key);
   const monitor: TmuxScreenMonitor = {
@@ -1263,6 +1358,7 @@ function startTmuxScreenMonitor(params: {
     card: params.card,
     busy: false,
     stopped: false,
+    refresh: params.refresh,
   };
   const scheduleNext = () => {
     if (monitor.stopped) return;
@@ -1274,6 +1370,16 @@ function startTmuxScreenMonitor(params: {
       }
       monitor.busy = true;
       try {
+        if (monitor.refresh) {
+          const refreshed = await monitor.refresh();
+          if (monitor.stopped) return;
+          if (monitor.card) {
+            monitor.card.update(refreshed.text, refreshed.statusText);
+          } else {
+            await monitor.deliver(refreshed.text);
+          }
+          return;
+        }
         const inspected = await inspectRuntimeTmuxSession({
           sessionName: monitor.target,
           lines: monitor.lines,
@@ -1368,6 +1474,44 @@ export async function handleTmuxBridgeCommand(params: HandleTmuxBridgeCommandPar
         return '已停止 tmux 屏幕定时刷新。';
       }
 
+      const runtimeProvider = resolveEffectiveRuntimeProvider(session, binding);
+      if (runtimeProvider.runtime === 'cursor' && runtimeProvider.provider === 'desktop') {
+        const initial = await buildCursorDesktopStatusResponse(
+          session,
+          binding,
+          markdown,
+          parsed.intervalSeconds,
+        );
+        if (parsed.intervalSeconds) {
+          if (!params.screenMonitor) return '当前环境不支持 Cursor Desktop 状态定时刷新。';
+          const card = params.screenMonitor.card;
+          if (card) {
+            if (params.screenMonitor.stopCallbackData) {
+              card.actions?.(buildTmuxScreenStopActions(params.screenMonitor.stopCallbackData, false));
+            }
+            card.update(initial.text, initial.statusText);
+          }
+          startTmuxScreenMonitor({
+            key: params.screenMonitor.key,
+            target: getSessionCursorSessionId(session) || 'cursor-desktop',
+            lines: parsed.lines ?? getCaptureLines(session),
+            intervalSeconds: parsed.intervalSeconds,
+            markdown,
+            deliver: params.screenMonitor.deliver,
+            stopCallbackData: params.screenMonitor.stopCallbackData,
+            card,
+            refresh: () => buildCursorDesktopStatusResponse(
+              store.getSession(session.id) || session,
+              binding,
+              markdown,
+              parsed.intervalSeconds,
+            ),
+          });
+          if (card) return '';
+        }
+        return initial.text;
+      }
+
       const ensured = await ensureRuntimeTmuxSessionForProvider(params);
       if (ensured.error) return ensured.error;
       const captureTarget = ensured.target || getSessionTmuxSessionName(session);
@@ -1375,7 +1519,6 @@ export async function handleTmuxBridgeCommand(params: HandleTmuxBridgeCommandPar
         return 'tmux 未绑定。先发送 `/tmux-switch` 查看 session，或 `/tmux-attach <session>` / `/tmux-new <session>` 绑定。';
       }
       const lines = parsed.lines ?? getCaptureLines(session);
-      const runtimeProvider = resolveEffectiveRuntimeProvider(session, binding);
       const inspected = await inspectRuntimeTmuxSession({
         runtime: runtimeProvider.provider === 'tmux'
           ? runtimeProvider.runtime

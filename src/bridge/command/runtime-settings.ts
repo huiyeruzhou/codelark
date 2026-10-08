@@ -1169,9 +1169,9 @@ export async function handleModelCommandRequest(options: {
   if (pickerRequest.invalid) {
     return {
       response: buildCommandFields(
-        'Cursor 模型列表用法',
-        [['命令', '`/model`、`/model list` 或 `/model list <页码>`']],
-        ['模型列表来自当前账号的 `cursor agent models`。'],
+        'Cursor 模型选择器参数无效',
+        [['命令', '`/model`']],
+        ['请重新发送 `/model` 打开模型选择器。'],
         options.markdown,
       ),
     };

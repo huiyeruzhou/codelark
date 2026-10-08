@@ -5,6 +5,7 @@ import path from 'node:path';
 import {
   getCodexSessionByThreadId,
   listCodexSessions,
+  readCodexSessionModel,
   type CodexSessionSummary,
 } from '../../runtime/codex/session-index.js';
 import { normalizeClaudeExecutable, type ClaudeExecutable, type ClaudePermissionMode, type ClaudeProviderChoice } from '../../runtime/options.js';
@@ -29,6 +30,7 @@ import {
   buildRuntimeProviderIdentity,
   getSessionActiveRuntime,
   getSessionCodexThreadId,
+  getSessionCursorSessionId,
   getSessionWorkingDirectory,
 } from '../../domain/session-runtime.js';
 import type { ChannelChat } from '../../domain/channel.js';
@@ -47,6 +49,7 @@ import type {
   ZcodeProviderChoice,
 } from '../../domain/session.js';
 import { DEFAULT_CURSOR_MODEL } from '../../runtime/cursor/constants.js';
+import { findCursorSessionFileById } from '../../runtime/cursor/session-index.js';
 import { validateWorkingDirectory } from '../../shared/security/validators.js';
 import {
   getGlobalStringConfig,
@@ -432,6 +435,42 @@ export function resolveCursorRuntimeConfig(session?: BridgeSession | null, bindi
   };
 }
 
+/**
+ * A resumed Cursor conversation owns its model unless this bridge session has
+ * an explicit session-scoped override. Home defaults are only for new Cursor
+ * conversations; forwarding them to `agent --resume` silently changes the
+ * existing conversation's route.
+ */
+export function resolveCursorInvocationModel(
+  binding?: ChannelChat | null,
+  session?: BridgeSession | null,
+  options: { resuming: boolean } = { resuming: false },
+): string | undefined {
+  if (resolveCursorExecutionProvider(session) === 'desktop') return undefined;
+  const { effective, config } = scopedConfigForRuntime(binding, session);
+  const model = config.runtime.cursor.model.trim() || DEFAULT_CURSOR_MODEL;
+  if (!options.resuming) return model;
+  return effective.provenance.get('runtime.cursor.model')?.source === 'session'
+    ? model
+    : undefined;
+}
+
+export function resolveDisplayedCursorModel(
+  session?: BridgeSession | null,
+  binding?: ChannelChat | null,
+): string {
+  const { effective, config } = scopedConfigForRuntime(binding, session);
+  const configured = config.runtime.cursor.model.trim();
+  if (configured && effective.provenance.get('runtime.cursor.model')?.source === 'session') return configured;
+  const cursorSessionId = getSessionCursorSessionId(session);
+  if (cursorSessionId) {
+    const stored = findCursorSessionFileById(cursorSessionId, getSessionWorkingDirectory(session) || undefined)?.model?.trim();
+    if (stored) return stored;
+    return '跟随会话';
+  }
+  return configured || DEFAULT_CURSOR_MODEL;
+}
+
 export function resolveZcodeRuntimeConfig(session?: BridgeSession | null, binding?: ChannelChat | null): ZcodeRuntimeConfig {
   const { config } = scopedConfigForRuntime(binding, session);
   return {
@@ -476,7 +515,7 @@ export function resolveRuntimeMetadataConfig(
     return {
       runtime: 'cursor',
       reasoningEffort: cursorConfig.reasoningEffort || '',
-      model: cursorConfig.model || 'default',
+      model: resolveDisplayedCursorModel(session, binding),
     };
   }
   if (runtime === 'zcode') {
@@ -494,7 +533,7 @@ export function resolveRuntimeMetadataConfig(
   return {
     runtime: 'codex',
     reasoningEffort: normalizeStoredReasoningEffort(resolveEffectiveReasoningEffort(session, binding)),
-    model: invocationModel || (codexThreadId ? 'thread' : 'default'),
+    model: invocationModel || (codexThreadId ? readCodexSessionModel(codexThreadId) || '跟随线程' : 'default'),
   };
 }
 

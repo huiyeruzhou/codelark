@@ -190,7 +190,12 @@ export function createMirrorRuntime(
     protocolSubscriptions.set(subscription.bindingId, {
       lifecycle: protocol.lifecycle,
       threadId: protocol.threadId,
-      cursor: 0,
+      // App-server sequence numbers are process-local.  After a Bridge restart
+      // the lifecycle rebuilds its buffer from thread/resume history, so cursor
+      // zero means "replay the whole active turn", not "new since the last IM
+      // delivery".  Establish a fresh protocol baseline on attachment.  Live
+      // records arriving after this point are still observed by onChange.
+      cursor: protocol.lifecycle.recordsAfter(protocol.threadId).cursor,
       unsubscribe: protocol.lifecycle.onChange((threadId) => {
         if (threadId !== subscription.threadId) return;
         subscription.dirty = true;

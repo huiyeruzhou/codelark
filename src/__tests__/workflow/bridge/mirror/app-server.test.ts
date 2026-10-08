@@ -86,9 +86,25 @@ it('advances the protocol cursor while direct streaming and suppresses late reco
   s.append('direct-1', 'task_complete', 'direct reply');
   s.append('mirror-1', 'task_started'); s.append('mirror-1', 'message', 'Desktop reply'); s.append('mirror-1', 'task_complete', 'Desktop reply');
   await s.runtime.reconcileMirrorSubscriptions();
-  assert.deepEqual(s.cursors, [0, 2]);
+  assert.deepEqual(s.cursors, [0, 2, 2]);
   assert.equal(s.routed.length, 3);
   assert.ok(s.routed.every((record) => record.turnId === 'mirror-1'));
+  assert.equal(s.deliveries.length, 1);
+});
+
+it('establishes a fresh protocol baseline instead of replaying active-turn history after restart', async () => {
+  const s = setup();
+  s.append('already-running', 'task_started');
+  s.append('already-running', 'message', 'a very large historical snapshot');
+
+  await s.runtime.reconcileMirrorSubscriptions();
+  assert.equal(s.routed.length, 0);
+  assert.equal(s.deliveries.length, 0);
+
+  s.append('already-running', 'message', 'new output after the bridge attached');
+  s.append('already-running', 'task_complete', 'done');
+  await s.runtime.reconcileMirrorSubscriptions();
+  assert.deepEqual(s.routed.map((record) => record.content), ['new output after the bridge attached', 'done']);
   assert.equal(s.deliveries.length, 1);
 });
 

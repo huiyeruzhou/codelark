@@ -909,6 +909,29 @@ describe('buildFinalCardJson', () => {
     assert.match(body, /1\.2s/);
   });
 
+  it('keeps an explicit terminal error visible on history-driven final cards', () => {
+    const cardJson = buildFinalCardJson(
+      '处理中断。\n\n**Error**: Cursor Desktop transcript 已 120000ms 没有活动，后端状态为 unknown。',
+      [],
+      [],
+      { status: '❌ 异常', elapsed: '2m 0s' },
+      'error',
+      [],
+      'chat-cursor',
+      { tags: ['cursor', 'mirror'] },
+      [
+        { type: 'markdown', role: 'user', content: '继续处理' },
+        { type: 'markdown', role: 'assistant', content: '我正在检查。' },
+      ],
+    );
+
+    const parsed = JSON.parse(cardJson) as any;
+    const body = JSON.stringify(parsed.body.elements);
+    assert.match(body, /Cursor Desktop transcript 已 120000ms 没有活动/);
+    assert.match(body, /后端状态为 unknown/);
+    assert.match(body, /❌ 异常/);
+  });
+
   it('renders terminal task and tool states without active waiting labels', () => {
     const cardJson = buildFinalCardJson(
       '最终回复',

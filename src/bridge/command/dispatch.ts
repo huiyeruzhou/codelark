@@ -79,6 +79,12 @@ import type { ConfigPatch } from '../../configuration/schema.js';
 import type { ConfigPath } from '../../configuration/fields.js';
 import { resolveEffectiveRuntimeProvider, resolveSessionWorkingDirectoryPath } from '../session/support.js';
 import { getSessionActiveRuntime, getSessionWorkingDirectory } from '../../domain/session-runtime.js';
+import { listCursorAvailableModels } from '../../runtime/cursor/models.js';
+import {
+  attachCursorModelPickerControls,
+  extractCursorModelPageArg,
+  sessionCursorModelOverride,
+} from './cursor-model-picker.js';
 import {
   handleEveryCommand,
 } from './every.js';
@@ -225,7 +231,7 @@ async function deliverCurrentCommandAfterNewSession(options: {
     threadDisplay: options.threadDisplay,
     markdown: options.markdown,
   });
-  const richCard = buildCurrentCommandRichCard({
+  const richCard = await buildCurrentCommandRichCardWithCursorModels({
     msg,
     binding,
     store: options.store,
@@ -237,6 +243,67 @@ async function deliverCurrentCommandAfterNewSession(options: {
   });
   if (result.ok && result.messageId) {
     await persistAndPinLatestThreadTableMessage(options.adapter, options.address, 'current', result.messageId);
+  }
+}
+
+async function buildCurrentCommandRichCardWithCursorModels(
+  options: Parameters<typeof buildCurrentCommandRichCard>[0],
+  requestedPage?: number,
+): Promise<OutboundRichCard | undefined> {
+  const card = buildCurrentCommandRichCard(options);
+  if (!card || !options.binding) return card;
+  const session = options.store.getSession(options.binding.bridgeSessionId);
+  if (!session) return card;
+  const section = options.configSection || options.previewRuntime || getSessionActiveRuntime(session) || 'codex';
+  if (section !== 'cursor') return card;
+  try {
+    const models = await listCursorAvailableModels();
+    return attachCursorModelPickerControls({
+      card,
+      models,
+      target: 'session',
+      selectedSlug: sessionCursorModelOverride(session.id),
+      requestedPage,
+      pageCommand: (page) => `/current-runtime cursor --cursor-model-page=${page}`,
+      scopeSessionId: session.id,
+      configuredLabel: '当前会话配置',
+      controlIdPrefix: 'current_cursor',
+    }).card;
+  } catch (error) {
+    return {
+      ...card,
+      sections: [...card.sections, { fields: [['Cursor 模型列表', '读取失败；仍可在下方手工填写 model slug']] }],
+      footer: [...(card.footer || []), `Cursor 模型列表读取失败：${error instanceof Error ? error.message : String(error)}`],
+    };
+  }
+}
+
+async function buildSetCommandRichCardWithCursorModels(
+  selectedGroup: Parameters<typeof buildSetCommandRichCard>[0],
+  address: ChannelAddress,
+  requestedPage?: number,
+): Promise<OutboundRichCard> {
+  const card = buildSetCommandRichCard(selectedGroup, address);
+  if (selectedGroup !== 'runtime.cursor') return card;
+  try {
+    const models = await listCursorAvailableModels();
+    const configured = createConfigService({ migrate: false }).snapshot({ kind: 'global' }).config.runtime.cursor.model.trim() || undefined;
+    return attachCursorModelPickerControls({
+      card,
+      models,
+      target: 'global',
+      selectedSlug: configured,
+      requestedPage,
+      pageCommand: (page) => `/set --group runtime.cursor --cursor-model-page=${page}`,
+      configuredLabel: '全局默认配置',
+      controlIdPrefix: 'set_cursor',
+    }).card;
+  } catch (error) {
+    return {
+      ...card,
+      sections: [...card.sections, { fields: [['Cursor 模型列表', '读取失败；仍可在下方手工填写 model slug']] }],
+      footer: [...(card.footer || []), `Cursor 模型列表读取失败：${error instanceof Error ? error.message : String(error)}`],
+    };
   }
 }
 
@@ -402,7 +469,7 @@ async function handleCurrentConfigFormCommand(options: {
           ] : []),
         ].filter(Boolean).join('\n\n')
       : '没有检测到需要保存的配置变更。',
-    richCard: buildCurrentCommandRichCard({
+    richCard: await buildCurrentCommandRichCardWithCursorModels({
       msg: options.msg,
       binding: refreshedBinding,
       store: options.store,
@@ -423,7 +490,9 @@ async function handleCurrentRuntimeCommand(options: {
   markdown: boolean;
 }): Promise<{ response: string; richCard?: OutboundRichCard }> {
   const binding = options.binding || router.resolve(options.msg.address);
-  const section = parseCurrentConfigSectionArg(options.args);
+  const cursorPage = extractCursorModelPageArg(options.args);
+  if (cursorPage.invalid) return { response: 'Cursor 模型分页参数无效，请重新打开配置卡。' };
+  const section = parseCurrentConfigSectionArg(cursorPage.args);
   if (!section) {
     return { response: '请选择有效配置分栏：common、codex、claude、kimi、cursor 或 zcode。' };
   }
@@ -433,10 +502,10 @@ async function handleCurrentRuntimeCommand(options: {
 
   return {
     response: `已打开 ${section === 'common' ? '通用' : section} 配置。`,
-    richCard: buildCurrentCommandRichCard({
+    richCard: await buildCurrentCommandRichCardWithCursorModels({
       msg: options.msg, binding, store: options.store,
       threadDisplay: options.threadDisplay, configSection: section,
-    }),
+    }, cursorPage.page),
   };
 }
 
@@ -836,24 +905,36 @@ export async function handleBridgeCommand(
     }
 
     case '/set': {
+      const cursorPage = extractCursorModelPageArg(args);
+      if (cursorPage.invalid) {
+        response = 'Cursor 模型分页参数无效，请重新发送 `/set --group runtime.cursor`。';
+        break;
+      }
+      const setArgs = cursorPage.args;
       const formValue = extractCardActionFormValue(msg.raw);
       if (formValue) {
         const result = handleSetFormCommand({
-          args,
+          args: setArgs,
           formValue,
           markdown: responseParseMode === 'Markdown',
           address: msg.address,
         });
         response = result.response;
-        responseRichCard = result.richCard;
+        responseRichCard = result.richCard
+          ? await buildSetCommandRichCardWithCursorModels(setCommandSelectedGroup(setArgs), msg.address, cursorPage.page)
+          : undefined;
         setConfigCard = true;
       } else {
         response = handleSetCommand({
-          args,
+          args: setArgs,
           markdown: responseParseMode === 'Markdown',
         });
-        if (!args.trim() || args.trim().startsWith('--group')) {
-          responseRichCard = buildSetCommandRichCard(setCommandSelectedGroup(args), msg.address);
+        if (!setArgs.trim() || setArgs.trim().startsWith('--group')) {
+          responseRichCard = await buildSetCommandRichCardWithCursorModels(
+            setCommandSelectedGroup(setArgs),
+            msg.address,
+            cursorPage.page,
+          );
           setConfigCard = true;
         }
       }
@@ -937,7 +1018,12 @@ export async function handleBridgeCommand(
 
     case '/current': {
       auditResponse = false;
-      const configSection = parseCurrentConfigSectionArg(args);
+      const cursorPage = extractCursorModelPageArg(args);
+      if (cursorPage.invalid) {
+        response = 'Cursor 模型分页参数无效，请重新发送 `/current cursor`。';
+        break;
+      }
+      const configSection = parseCurrentConfigSectionArg(cursorPage.args);
       const previewRuntime = configSection === 'common' ? undefined : configSection;
       response = handleCurrentCommand({
         msg,
@@ -947,14 +1033,14 @@ export async function handleBridgeCommand(
         markdown: responseParseMode === 'Markdown',
         previewRuntime,
       });
-      responseRichCard = buildCurrentCommandRichCard({
+      responseRichCard = await buildCurrentCommandRichCardWithCursorModels({
         msg,
         binding: commandBinding,
         store,
         threadDisplay,
         previewRuntime,
         configSection,
-      });
+      }, cursorPage.page);
       threadTableCardScope = responseRichCard ? 'current' : undefined;
       break;
     }

@@ -68,6 +68,8 @@ export interface StreamChatParams {
   cursorSessionId?: string;
   cursorProvider?: 'tmux' | 'desktop';
   cursorForce?: boolean;
+  /** Desktop follow-up delivery. Defaults to steer; cursorForce remains a force compatibility override. */
+  cursorDelivery?: 'queue' | 'steer' | 'force';
   cursorReasoningEffort?: string;
   zcodeSessionId?: string;
   zcodeMode?: 'build' | 'edit' | 'plan' | 'yolo';
