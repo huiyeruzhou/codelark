@@ -126,6 +126,8 @@ Runner 在临时目录恢复登录态，核验实际 App/用户后执行真实�
 
 报告 `backendStatuses` 按阶段保存真实用户命令 ID、bot 回复 ID、当时的卡片回读与预期状态。回复必须属于本次命令和测试 bot；配置卡必须是 interactive，标题/线程仍指向实际 Codex 会话。current 卡将后端／连接／执行与终端／类型／镜像分成两组，每组不超过 renderer 的三个字段预算，所有状态直接可见；配置分栏、模型、YOLO、工作目录等原有控件继续可用。离线验收必须检查最终 Feishu payload，不能只检查渲染前的 OutboundRichCard。CLI 的 post 回读会去掉 Markdown 加粗，详情字段同时按真实纯文本格式校验。旧卡、其他 bot、用户回显、重复回复及错误字段不能通过。新增状态命令都进入原有 inputs 证据，只按确切 reply_to 放行；Bridge 重启去重窗口不增加额外命令，旧投递和空卡检查保持严格。
 
+状态回读的离线样本位于 `src/__tests__/harness/real-feishu/fixtures/backend-status-readbacks.json`，保留真实 SDK1–3 消息格式，仅替换身份标识和本地路径。interactive 摘要可能把下一个 `**说明**` 标题紧接在字段末尾；解析器识别完整标题边界，字段值仍精确匹配。样本同时保留被 renderer 压缩掉必要状态的旧卡作为负例，不能将它当成成功回读。
+
 CI 继续沿用 `real-feishu.yml` 的串行 SDK/tmux、隔离授权、同代次缓存恢复/保存及清理。旧的生命周期报告没有这些检查点，不能算新状态验收通过。断开状态目前只有离线命令/共享投影测试覆盖：现有 lifecycle driver 没有关闭 owned 后端的接口，本次三文件增量没有增加后台控制能力。真实断开显示、独立服务面板链接点击和客户端按钮点击均未由这些自动检查证明；不得用关闭观察连接冒充 Bridge 断开。
 
 ### 完整 app-server 生命周期故事

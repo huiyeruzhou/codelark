@@ -1,11 +1,35 @@
 import '../../setup/test-setup.js';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
 import { assertInherited, assertSameTurnInput, botReplyIds, userReadbackMessages, feishuChatUrl, readAllUserPages, unexpectedRestartCards, runActiveClear, assertNoOldClearDelivery, assertBackendStatusReadback,
-  type LifecycleReport, type NativeThread } from '../../../testing/real-feishu/app-server-lifecycle.js';
+  type BackendStatusExpectation, type LifecycleReport, type NativeThread } from '../../../testing/real-feishu/app-server-lifecycle.js';
 
 const session = { sessionId: 'old', threadId: 'thread-old', endpoint: 'unix:///owned/rpc.sock', streamKeys: [],
   configuration: { provider: 'sdk', networkAccess: false, reasoningEffort: 'low' } };
+
+test('SDK1–3真实回读样本覆盖全部已出现状态格式，压缩旧卡及错误回复仍拒绝', () => {
+  const fixture = JSON.parse(fs.readFileSync(new URL('./fixtures/backend-status-readbacks.json', import.meta.url), 'utf8')) as {
+    samples: Array<{ sourceRun: string; command: string; phase: string; expected: BackendStatusExpectation; reject: boolean;
+      response: { message_id: string; reply_to: string; sender: { sender_type: string; id: string }; msg_type: string; content: string } }>;
+  };
+  assert.deepEqual([...new Set(fixture.samples.map((s) => s.command))].sort(),
+    ['/', '/current-runtime codex', '/current-runtime common', '/current-runtime kimi', '/p', '/status']);
+  for (const sample of fixture.samples) {
+    const { response, expected } = sample;
+    const payload = (messages = [response]) => ({ ok: true, identity: 'user', data: { messages } });
+    const card = sample.command === '/' || sample.command.startsWith('/current-runtime');
+    const check = (messages = [response]) => assertBackendStatusReadback(payload(messages), 'test-app', response.reply_to, expected, card);
+    if (sample.reject) { assert.throws(() => check(), /协议活动状态展示错误/); continue; }
+    assert.equal(check()?.message_id, response.message_id, `${sample.sourceRun} ${sample.phase} ${sample.command}`);
+    assert.equal(check([{ ...response, reply_to: 'old-command' }]), undefined);
+    assert.equal(check([{ ...response, sender: { sender_type: 'user', id: 'test-app' } }]), undefined);
+    assert.equal(check([{ ...response, sender: { sender_type: 'app', id: 'other-app' } }]), undefined);
+    assert.equal(check([{ ...response, content: '' }]), undefined);
+    assert.throws(() => check([response, { ...response, message_id: 'duplicate' }]), /重复状态回复/);
+    assert.throws(() => check([{ ...response, content: response.content.replace('未记录终端', '未记录终端错误') }]), /终端用途/);
+  }
+});
 
 test('状态验收只接受本命令的真实用户回读卡，后端/连接/活动/终端分别校验', () => {
   const content = '<card title="Codex owned">\ncodex_thread_id: thread-current\n**当前后端**\napp-server\n**连接状态**\n已连接\n**执行状态**\n运行中\n**终端用途**\n未记录终端\n</card>';

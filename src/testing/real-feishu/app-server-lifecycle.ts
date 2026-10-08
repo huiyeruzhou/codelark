@@ -119,7 +119,9 @@ export interface BackendStatusExpectation {
 export function assertBackendStatusReadback(payload: unknown, appId: string, commandId: string,
   expected: BackendStatusExpectation, requireCard = false): Record<string, any> | undefined {
   const readField = (content: string, label: string) => {
-    const match = content.match(new RegExp(`(?:^|\\n)(?:-\\s*)?(?:\\*\\*${label}\\*\\*|${label})(?:[：:]\\s*|\\s*\\n+)([^\\n]+)`));
+    // CLI 的 interactive 摘要可能把下一 Markdown 标题接在字段末尾。
+    // 只认换行或完整标题边界；值本身仍必须与协议状态精确相等。
+    const match = content.match(new RegExp(`(?:^|\\n)(?:-\\s*)?(?:\\*\\*${label}\\*\\*|${label})(?:[：:]\\s*|\\s*\\n+)([^\\n]+?)(?=\\n|$|\\*\\*[^*\\n]+\\*\\*(?:\\n|$))`));
     return match?.[1]?.trim().replace(/^「|」$/g, '');
   };
   const replies = userReadbackMessages(payload).filter((m) => m.sender?.sender_type === 'app' && m.sender.id === appId
