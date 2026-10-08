@@ -517,3 +517,9 @@ export function applyStreamUiDiagnosis(
 
   return diagnosis;
 }
+
+/** 历史观察只用于诊断和提示，不决定配置能否保存或停止指令能否发送。 */
+export function sessionHasObservedActivity(session: BridgeSession | null | undefined): boolean {
+  return Boolean(session && (isRunningRuntimeStatus(session.runtime_status)
+    || isRunningHealthStatus(session.health_status) || hasActiveToolState(session)));
+}

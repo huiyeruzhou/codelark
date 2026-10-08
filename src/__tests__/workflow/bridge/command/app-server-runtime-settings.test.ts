@@ -100,14 +100,20 @@ for (const provider of ['sdk', 'tmux'] as const) {
     assert.deepEqual(f.turnOptions(), activeOptions);
   });
 
-  it(`legacy ${provider} indexed thread retains its model guard`, async () => {
+  it(`legacy ${provider} indexed thread saves settings without replacing the thread`, async () => {
     const f = fixture(provider, false);
-    assert.match(await f.command('/model'), /只支持查看模型/);
+    assert.doesNotMatch(await f.command('/model'), /只支持查看模型/);
     for (const model of ['gpt-5.4', 'default']) {
-      assert.match(await f.command(`/model ${model}`), /不支持直接切换模型/);
-      assert.equal(f.config.get('runtime.codex.model', f.scope), 'old-model');
+      assert.doesNotMatch(await f.command(`/model ${model}`), /不支持直接切换模型/);
+      assert.equal(f.config.get('runtime.codex.model', f.scope), 'gpt-5.4');
     }
-    const changed = await f.command('/mode yolo');
+    const changed = await f.command('/yolo');
+    assert.equal(f.config.get('runtime.codex.yoloMode', f.scope), 'on');
+    await f.command('/yolo on');
+    assert.equal(f.config.get('runtime.codex.yoloMode', f.scope), 'on');
+    await f.command('/yolo off');
+    assert.equal(f.config.get('runtime.codex.yoloMode', f.scope), 'off');
+    assert.match(await f.command('/yolo status'), /normal/);
     if (provider === 'tmux') assert.match(changed, /\/p tmux.*重启/s);
     else assert.match(changed, /下一轮 Codex 请求开始生效/);
   });

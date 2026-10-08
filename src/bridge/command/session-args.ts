@@ -6,14 +6,7 @@ const SESSION_ARG_QUOTE_NOTE = '名称或路径包含空格时，请使用英文
 export const NEW_SESSION_ARG_RULE_NOTE = `参数规则：\`/new [name] [path]\` 会创建一个新的群聊；${SESSION_ARG_QUOTE_NOTE}`;
 export const CLEAR_SESSION_ARG_RULE_NOTE = `参数规则：\`/clear [name] [path]\` 会在当前聊天上下文创建一个新的对话；${SESSION_ARG_QUOTE_NOTE}之后可用 \`/t\` 重新附加到之前的对话。`;
 
-const RUNNING_HEALTH_STATUSES = new Set([
-  'running_active',
-  'waiting_tool',
-  'slow_observed',
-  'suspected_stall',
-  'suspected_stream_ui_stall',
-  'suspected_detached',
-]);
+export { sessionHasObservedActivity as sessionLooksRunning } from '../health/reducer.js';
 
 export function parseForceFlag(args: string): { args: string; force: boolean } {
   const forcePattern = /(^|\s)--force(?=\s|$)/;
@@ -135,12 +128,6 @@ export function deriveNewGroupName(rawName: string | undefined, currentSession: 
     || getSessionCodexTitle(currentSession)
     || lastPathSegment(workDir)
     || 'new';
-}
-
-export function sessionLooksRunning(session: BridgeSession | null | undefined): boolean {
-  return session?.runtime_status === 'running'
-    || session?.runtime_status === 'queued'
-    || RUNNING_HEALTH_STATUSES.has(session?.health_status || '');
 }
 
 export function parseClearConfirmationFlag(args: string): { args: string; confirmed: boolean } {

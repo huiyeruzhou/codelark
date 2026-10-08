@@ -65,6 +65,7 @@ export function readMirrorDeliverableRecords(
 ) {
   let deliverableRecords: BridgeMirrorRecord[] = [];
   let unknownKinds: string[] = [];
+  let recoveredStateRecords: BridgeMirrorRecord[] = [];
 
   const requiresFullRecover = !subscription.cursor.initialized
     || source.readMode === 'snapshot'
@@ -98,6 +99,14 @@ export function readMirrorDeliverableRecords(
     subscription.trailingText = '';
     subscription.fileOffset = snapshot.size;
     subscription.activeMirrorTurnId = fullDelta.nextTurnId;
+    // 消息 cursor 只决定是否再次投递；恢复正在执行的轮次不能受它影响。
+    if (fullDelta.nextTurnId) {
+      recoveredStateRecords = fullDelta.records.filter((record) => record.turnId === fullDelta.nextTurnId);
+    } else {
+      const start = fullDelta.records.findLastIndex((record) => record.type === 'task_started');
+      const terminal = fullDelta.records.findLast((record) => record.type === 'task_complete' || record.type === 'task_aborted');
+      recoveredStateRecords = start >= 0 ? fullDelta.records.slice(start) : terminal ? [terminal] : [];
+    }
     subscription.activeSpecialCallIds = new Set(fullDelta.nextSpecialCallIds);
     unknownKinds = fullDelta.unknownKinds;
   } else if (snapshot.size > subscription.fileOffset || subscription.trailingText) {
@@ -140,6 +149,7 @@ export function readMirrorDeliverableRecords(
 
   return {
     records: deliverableRecords,
+    recoveredStateRecords,
     unknownKinds,
   };
 }

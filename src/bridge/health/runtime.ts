@@ -17,7 +17,7 @@ import {
   shouldTrackSession,
   summarizeActiveTools,
 } from './reducer.js';
-import { getSessionCodexThreadId } from '../../domain/session-runtime.js';
+import { getSessionActiveRuntime, getSessionCodexThreadId, getSessionClaudeSessionId, getSessionKimiSessionId, getSessionCursorSessionId, getSessionZcodeSessionId } from '../../domain/session-runtime.js';
 import type {
   SessionEndOutcome,
   SessionHealthDiagnosis,
@@ -278,11 +278,32 @@ export function createSessionHealthRuntime(
     updateSessionHealth(sessionId, updates);
   }
 
-  function observeBridgeMirrorRecords(sessionId: string, _threadId: string, records: BridgeMirrorRecord[]): void {
+  const mirrorTurns = new Map<string, { threadId: string; turnId?: string; startedAt: string; ended: boolean }>();
+
+  function observeBridgeMirrorRecords(sessionId: string, threadId: string, records: BridgeMirrorRecord[]): void {
+    const session = deps.getStore().getSession(sessionId);
+    if (!session) return;
+    const runtime = getSessionActiveRuntime(session) || 'codex';
+    const currentThread = runtime === 'claude' ? getSessionClaudeSessionId(session)
+      : runtime === 'kimi' ? getSessionKimiSessionId(session)
+      : runtime === 'cursor' ? getSessionCursorSessionId(session)
+      : runtime === 'zcode' ? getSessionZcodeSessionId(session) : getSessionCodexThreadId(session);
+    if (currentThread && currentThread !== threadId) return;
+    if (mirrorTurns.get(sessionId)?.threadId !== threadId) mirrorTurns.delete(sessionId);
     for (const record of records) {
+      const current = mirrorTurns.get(sessionId);
       if (record.type === 'task_started') {
+        if (current && record.turnId && record.turnId === current.turnId) continue;
+        if (current?.startedAt && record.timestamp && record.timestamp < current.startedAt) continue;
+        mirrorTurns.set(sessionId, { threadId, turnId: record.turnId || undefined, startedAt: record.timestamp, ended: false });
         recordInteractiveStart(sessionId, '检测到本地会话开始执行。');
         continue;
+      }
+      if (current?.turnId && record.turnId && current.turnId !== record.turnId) continue;
+      if (current?.ended) continue;
+      if (record.type === 'task_complete' || record.type === 'task_aborted') {
+        mirrorTurns.set(sessionId, { threadId, turnId: record.turnId || current?.turnId,
+          startedAt: current?.startedAt || record.timestamp, ended: true });
       }
       if (record.type === 'task_complete') {
         recordInteractiveEnd(

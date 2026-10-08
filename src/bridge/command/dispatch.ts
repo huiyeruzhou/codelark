@@ -1,3 +1,4 @@
+import fs from 'node:fs';
 import {
   resolveCommandAlias,
 } from './aliases.js';
@@ -35,6 +36,7 @@ import {
 import {
   handleChangeDirectoryCommand,
   handleModeCommand,
+  handleYoloCommand,
   handleModelCommand,
   handleNetworkCommand,
   handleProviderCommand,
@@ -72,6 +74,10 @@ import {
   saveThreadTableMessageRecord,
 } from './thread-table-message-pins.js';
 import { createConfigService } from '../../configuration/service.js';
+import { mergePatch } from '../../configuration/merge.js';
+import type { ConfigPatch } from '../../configuration/schema.js';
+import type { ConfigPath } from '../../configuration/fields.js';
+import { resolveEffectiveRuntimeProvider, resolveSessionWorkingDirectoryPath } from '../session/support.js';
 import { getSessionActiveRuntime, getSessionWorkingDirectory } from '../../domain/session-runtime.js';
 import {
   handleEveryCommand,
@@ -303,124 +309,88 @@ async function handleCurrentConfigFormCommand(options: {
   threadDisplay: CommandThreadDisplay;
   markdown: boolean;
 }): Promise<{ response: string; richCard?: OutboundRichCard; backgroundEffects?: SessionCommandBackgroundEffect[] }> {
-  let binding = options.binding || router.resolve(options.msg.address);
-  let session = options.store.getSession(binding.bridgeSessionId);
+  const binding = options.binding || router.resolve(options.msg.address);
+  const session = options.store.getSession(binding.bridgeSessionId);
   if (!session) return { response: '当前会话不存在，无法保存配置。' };
-
   const formValue = extractCardActionFormValue(options.msg.raw);
   if (!formValue) return { response: '没有读取到卡片表单内容，请刷新 `/current` 后重试。' };
 
-  let activeRuntime = getSessionActiveRuntime(session) || 'codex';
+  const activeRuntime = getSessionActiveRuntime(session) || 'codex';
   const submittedSection = parseCurrentConfigSectionArg(options.args) || activeRuntime;
-  const submittedRuntime = submittedSection === 'common' ? undefined : submittedSection
-    || normalizeRuntimeFormValue(formValue.clk_runtime || formValue.runtime);
   const responses: string[] = [];
   const backgroundEffects: SessionCommandBackgroundEffect[] = [];
-  if (submittedRuntime && submittedRuntime !== activeRuntime) {
-    responses.push(handleRuntimeCommand({
-      msg: options.msg,
-      args: submittedRuntime,
-      currentBinding: binding,
-      store: options.store,
-      deps: options.deps,
-      markdown: options.markdown,
-    }));
-    binding = options.store.getChannelChat(options.msg.address.channelType, options.msg.address.chatId) || binding;
-    session = options.store.getSession(binding.bridgeSessionId);
-    activeRuntime = session ? getSessionActiveRuntime(session) || 'codex' : activeRuntime;
-    if (!session) return { response: '当前会话不存在，无法继续保存配置。' };
-    if (activeRuntime !== submittedRuntime) {
-      return {
-        response: responses.join('\n\n'),
-        richCard: buildCurrentCommandRichCard({
-          msg: options.msg,
-          binding,
-          store: options.store,
-          threadDisplay: options.threadDisplay,
-          configSection: submittedSection,
-        }),
-      };
-    }
-  }
+  const service = createConfigService({ migrate: false });
+  const scope = { kind: 'session' as const, sessionId: session.id };
+  let currentConfig = service.snapshot(scope).config;
+  const patch: ConfigPatch = {};
+  const unsetPaths: ConfigPath[] = [];
+  const updatedSettings: SettingDefinition[] = [];
+  const fallbackSettings: SettingDefinition[] = [];
 
-  const sessionConfigService = createConfigService({ migrate: false });
-  const name = submittedSection === 'common'
-    ? normalizeFormString(formValue.clk_name || formValue.name)
-    : '';
+  const name = submittedSection === 'common' ? normalizeFormString(formValue.clk_name || formValue.name) : '';
   if (name && name !== (session.name || '').trim()) {
     const parsed = validateThreadName(name);
     if (!parsed.ok) return { response: parsed.message };
-    options.threadDisplay.renameBinding(binding, parsed.name);
-    if (binding.chatKind === 'group' && options.adapter.renameGroupChat) {
-      backgroundEffects.push({
-        context: `rename group chat ${binding.chatId}`,
-        failureNotice: `当前会话标题已保存，但群聊名称同步失败。可稍后重试 \`/t rename ${parsed.name}\`。`,
-        run: async () => {
-          await options.adapter.renameGroupChat!(binding.chatId, parsed.name);
-        },
-      });
-    }
-    responses.push(`name: ${parsed.name}`);
   }
-
-  const cwd = submittedSection === 'common'
-    ? normalizeFormString(formValue.clk_cwd || formValue.cwd)
-    : '';
+  const cwd = submittedSection === 'common' ? normalizeFormString(formValue.clk_cwd || formValue.cwd) : '';
   if (cwd && cwd !== getSessionWorkingDirectory(session)) {
-    responses.push(await handleChangeDirectoryCommand({
-      msg: options.msg,
-      args: cwd,
-      currentBinding: binding,
-      store: options.store,
-      markdown: options.markdown,
-    }));
+    const resolved = resolveSessionWorkingDirectoryPath(cwd, getSessionWorkingDirectory(session));
+    if (!resolved.ok) return { response: `配置未保存：${resolved.message}` };
+    try {
+      if (!fs.statSync(resolved.workDir).isDirectory()) return { response: '配置未保存：目标不是目录。' };
+    } catch (error) {
+      return { response: `配置未保存：${formatCurrentConfigWriteError(error)}` };
+    }
+    patch.session = { workspace: resolved.workDir };
+    responses.push(`工作目录: ${resolved.workDir}`);
   }
 
-  let currentConfig = sessionConfigService.snapshot({ kind: 'session', sessionId: session.id }).config;
-  const updatedSettings: SettingDefinition[] = [];
-  const fallbackSettings: SettingDefinition[] = [];
-  const configTarget = { kind: 'session' as const, sessionId: session.id };
-  const configScope = { kind: 'session' as const, sessionId: session.id };
-  const settingDefinitions = submittedSection === 'common'
-    ? currentSessionCommonSettingDefinitions()
-    : currentSessionSettingDefinitions(activeRuntime);
-  for (const definition of settingDefinitions) {
+  const definitions = submittedSection === 'common'
+    ? currentSessionCommonSettingDefinitions() : currentSessionSettingDefinitions(submittedSection);
+  for (const definition of definitions) {
     const rawValue = currentSettingFormValue(formValue, definition);
     if (rawValue === undefined) continue;
     const configPath = settingConfigPath(definition);
-    const source = sessionConfigService.resolve(configPath, configScope).source;
     if (!rawValue) {
-      if (source !== 'session') continue;
-      try {
-        sessionConfigService.unset(configTarget, configPath);
-        currentConfig = sessionConfigService.snapshot(configScope).config;
+      if (service.resolve(configPath, scope).source === 'session') {
+        unsetPaths.push(configPath);
         fallbackSettings.push(definition);
-      } catch (error) {
-        return { response: `${definition.tomlPath} 未回退：${formatCurrentConfigWriteError(error)}` };
       }
       continue;
     }
     const currentValue = definition.read(currentConfig);
-    const normalizedCurrent = currentValue === '-' || currentValue === 'auto' ? '' : currentValue;
-    if (rawValue === normalizedCurrent) continue;
+    if (rawValue === (currentValue === '-' || currentValue === 'auto' ? '' : currentValue)) continue;
     const written = definition.write(rawValue, currentConfig);
-    if (!written.ok) {
-      return { response: `${definition.tomlPath} 未更新：${written.message}\n\n用法：${definition.usage}` };
-    }
-    try {
-      sessionConfigService.set(configTarget, written.patch);
-      currentConfig = sessionConfigService.snapshot(configScope).config;
-      updatedSettings.push(definition);
-    } catch (error) {
-      return { response: `${definition.tomlPath} 未更新：${formatCurrentConfigWriteError(error)}` };
+    if (!written.ok) return { response: `配置未保存：${definition.tomlPath} ${written.message}\n\n用法：${definition.usage}` };
+    mergePatch(patch, written.patch);
+    mergePatch(currentConfig, written.patch);
+    updatedSettings.push(definition);
+  }
+  try {
+    if (Object.keys(patch).length || unsetPaths.length) service.update(scope, patch, unsetPaths);
+  } catch (error) {
+    return { response: `配置未保存：${formatCurrentConfigWriteError(error)}` };
+  }
+  currentConfig = service.snapshot(scope).config;
+  if (name && name !== (session.name || '').trim()) {
+    options.threadDisplay.renameBinding(binding, name);
+    responses.push(`name: ${name}`);
+    if (binding.chatKind === 'group' && options.adapter.renameGroupChat) {
+      backgroundEffects.push({
+        context: `rename group chat ${binding.chatId}`,
+        failureNotice: `当前会话标题已保存，但群聊名称同步失败。可稍后重试。`,
+        run: async () => { await options.adapter.renameGroupChat!(binding.chatId, name); },
+      });
     }
   }
-
   const refreshedBinding = options.store.getChannelChat(options.msg.address.channelType, options.msg.address.chatId) || binding;
   return {
     response: responses.length > 0 || updatedSettings.length > 0 || fallbackSettings.length > 0
       ? [
-          '已保存当前会话配置。',
+          '已保存当前会话配置；当前任务继续使用原配置。',
+          session.runtime?.codex?.appServerEndpoint ? '新配置从下一次由 IM 发起的新轮次开始生效。'
+            : resolveEffectiveRuntimeProvider(session, binding).provider === 'tmux'
+              ? '已启动的旧 TUI 需通过 `/p tmux` 确认结束并重启后采用新配置。' : '新配置从下一次执行开始生效。',
           ...responses,
           ...(updatedSettings.length > 0 ? [buildSettingsFields(currentConfig, updatedSettings).map(([label, value]) => `${label}: ${value}`).join('\n')] : []),
           ...(fallbackSettings.length > 0 ? [
@@ -458,48 +428,13 @@ async function handleCurrentRuntimeCommand(options: {
   const session = options.store.getSession(binding.bridgeSessionId);
   if (!session) return { response: '当前会话不存在，无法切换 runtime。' };
 
-  if (section === 'common') {
-    return {
-      response: '已打开通用配置，当前 agent 未改变。',
-      richCard: buildCurrentCommandRichCard({
-        msg: options.msg,
-        binding,
-        store: options.store,
-        threadDisplay: options.threadDisplay,
-        configSection: 'common',
-      }),
-    };
-  }
-
-  const runtime = section;
-
-  const activeRuntime = getSessionActiveRuntime(session) || 'codex';
-  const responses = runtime === activeRuntime
-    ? ['runtime 没有变化，已刷新当前会话卡片。']
-    : [handleRuntimeCommand({
-      msg: options.msg,
-      args: runtime,
-      currentBinding: binding,
-      store: options.store,
-      deps: options.deps,
-      markdown: options.markdown,
-    })];
-  const refreshedBinding = options.store.getChannelChat(options.msg.address.channelType, options.msg.address.chatId) || binding;
   return {
-    response: responses.join('\n\n'),
+    response: `已打开 ${section === 'common' ? '通用' : section} 配置。`,
     richCard: buildCurrentCommandRichCard({
-      msg: options.msg,
-      binding: refreshedBinding,
-      store: options.store,
-      threadDisplay: options.threadDisplay,
-      configSection: runtime,
+      msg: options.msg, binding, store: options.store,
+      threadDisplay: options.threadDisplay, configSection: section,
     }),
   };
-}
-
-function normalizeRuntimeFormValue(value: unknown): 'codex' | 'claude' | 'kimi' | 'cursor' | 'zcode' | undefined {
-  const runtime = normalizeFormString(value).toLowerCase();
-  return runtime === 'codex' || runtime === 'claude' || runtime === 'kimi' || runtime === 'cursor' || runtime === 'zcode' ? runtime : undefined;
 }
 
 function parseCurrentRuntimeArg(args: string): 'codex' | 'claude' | 'kimi' | 'cursor' | 'zcode' | undefined {
@@ -757,8 +692,9 @@ export async function handleBridgeCommand(
       break;
     }
 
+    case '/yolo':
     case '/mode': {
-      response = handleModeCommand({
+      response = (command === '/yolo' ? handleYoloCommand : handleModeCommand)({
         msg,
         args,
         currentBinding,

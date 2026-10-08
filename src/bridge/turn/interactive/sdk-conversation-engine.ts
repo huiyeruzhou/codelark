@@ -278,7 +278,7 @@ export async function processMessage(
       claudeExecutable: claudeRuntimeConfig?.executable,
       claudeProvider: claudeRuntimeConfig?.provider,
       model: effectiveModel,
-      forceModel: !codexThreadId && Boolean(effectiveModel),
+      forceModel: Boolean(effectiveModel),
       sandboxMode: runtimeConfig.sandboxMode as StreamChatParams['sandboxMode'],
       networkAccessEnabled: runtimeConfig.networkAccessEnabled,
       modelReasoningEffort: runtimeConfig.reasoningEffort as StreamChatParams['modelReasoningEffort'],

@@ -333,18 +333,14 @@ const MIRROR_TURN_BUFFER_TIMEOUT_MS = 10 * 60_000;
 const STARTUP_NOTICE_TITLE = 'Bridge 已启动';
 const STARTUP_NOTICE_CARD_TEMPLATE = 'turquoise';
 const BACKGROUND_INPUT_LIMIT = 64_000;
+// 保存下一次执行的配置不依赖当前任务结束；只有实际切换执行载体才进入执行队列。
+const SESSION_SETTINGS_COMMANDS = new Set([
+  '/current-config', '/current-runtime', '/cd', '/cwd', '/model', '/mode', '/yolo',
+  '/sandbox', '/network', '/reasoning', '/require-at', '/tmux-set',
+]);
 const SESSION_CONFIG_BARRIER_COMMANDS = new Set([
-  '/current-config',
   '/provider',
   '/runtime',
-  '/cd',
-  '/cwd',
-  '/model',
-  '/mode',
-  '/sandbox',
-  '/network',
-  '/reasoning',
-  '/tmux-set',
 ]);
 const SESSION_SERIAL_COMMANDS = new Set([
   '/tmux',
@@ -2308,10 +2304,23 @@ const INTERACTIVE_RUNTIME = createInteractiveRuntime(getState, {
   getStore: () => getBridgeContext().store,
   nowIso,
   isExternalThreadActive: (session) => {
-    if (!session.runtime?.codex?.appServerEndpoint) return false;
-    const handle = getCodexAppServerSession(session.id);
-    const snapshot = handle?.lifecycle.snapshot(handle.threadId);
-    return !snapshot || snapshot.connection !== 'ready' || snapshot.activity !== 'idle';
+    if (session.runtime?.codex?.appServerEndpoint) {
+      const handle = getCodexAppServerSession(session.id);
+      const snapshot = handle?.lifecycle.snapshot(handle.threadId);
+      return !snapshot || snapshot.connection !== 'ready' || snapshot.activity !== 'idle';
+    }
+    const state = getState();
+    const runtime = getSessionActiveRuntime(session) || 'codex';
+    const subscriptions = runtime === 'claude' ? state.claudeMirrorSubscriptions
+      : runtime === 'kimi' ? state.kimiMirrorSubscriptions
+      : runtime === 'cursor' ? state.cursorMirrorSubscriptions
+      : runtime === 'zcode' ? state.zcodeMirrorSubscriptions : state.mirrorSubscriptions;
+    const threadId = runtime === 'claude' ? getSessionClaudeSessionId(session)
+      : runtime === 'kimi' ? getSessionKimiSessionId(session)
+      : runtime === 'cursor' ? getSessionCursorSessionId(session)
+      : runtime === 'zcode' ? getSessionZcodeSessionId(session) : getSessionCodexThreadId(session);
+    return [...subscriptions.values()].some((subscription) => subscription.sessionId === session.id
+      && subscription.threadId === threadId && subscription.status === 'watching' && Boolean(subscription.activeMirrorTurnId));
   },
 });
 
@@ -2489,6 +2498,7 @@ function syncMirrorSessionState(sessionId: string): void {
 function syncMirrorSessionStateSafe(sessionId: string, context: string): void {
   try {
     syncMirrorSessionState(sessionId);
+    INTERACTIVE_RUNTIME.syncSessionRuntimeState(sessionId);
   } catch (error) {
     console.error(
       `[bridge-manager] Failed to sync mirror session state for ${sessionId} during ${context}:`,
@@ -3097,6 +3107,18 @@ function adapterImmediateLane(msg: InboundMessage, category: 'channel-event' | '
       : isPendingClearConfirmationReply(msg.address, msg.text) ? '/clear' : undefined;
   if (immediateJobCommandText) {
     const { resolvedCommand, args } = splitInboundCommandText(immediateJobCommandText);
+    if (SESSION_SETTINGS_COMMANDS.has(resolvedCommand)) {
+      const binding = getBridgeContext().store.getChannelChat(msg.address.channelType, msg.address.chatId);
+      return {
+        laneKey: `job:settings:${binding?.bridgeSessionId || `${msg.address.channelType}:${msg.address.chatId}`}`,
+        laneKind: 'job',
+        jobKind: `command:${resolvedCommand.slice(1)}`,
+        waitForConversationBarrier: false,
+        blocksConversation: false,
+        serialize: true,
+        blocksRouting: true,
+      };
+    }
     const clear = resolvedCommand === '/clear' || resolvedCommand === '/clear-cancel';
     if (clear || (resolvedCommand === '/provider' && args.split(/\s+/)[0]?.toLowerCase() === 'tmux')) {
       const job = clear ? 'clear' : 'provider-tmux';

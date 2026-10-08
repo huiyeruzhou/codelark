@@ -60,6 +60,7 @@ export function buildHelpCommandResponse(): string {
     '**SessionRuntime 配置**',
     '- `/runtime codex|claude|kimi|cursor|zcode` 切换当前会话使用 Codex、Claude Code、Kimi Code、Cursor Agent 或 ZCode；不会改变对应 runtime 已记住的 `/provider` 选择',
     '- `/m` 查看 YOLO模式；可用 `normal | yolo`，YOLO模式允许 agent 无需审批绕过沙箱',
+    '- `/yolo` 或 `/yolo on` 开启当前会话的 YOLO；`/yolo off` 关闭，`/yolo status` 查看；当前任务保留原配置',
     '- `/r` 查看 Codex 思考级别；可用 `1 | 2 | 3 | 4 | 5`',
     '- `/sb` 查看或切换 Codex 沙箱；可用 `read-only | workspace-write | danger-full-access | default`',
     '- `/net` 查看或切换 Codex 网络；可用 `on | off | default`',

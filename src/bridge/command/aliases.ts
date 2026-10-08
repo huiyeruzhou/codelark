@@ -84,6 +84,7 @@ const KNOWN_BRIDGE_COMMANDS = new Set([
   '/cd',
   '/cwd',
   '/mode',
+  '/yolo',
   '/provider',
   '/sandbox',
   '/network',

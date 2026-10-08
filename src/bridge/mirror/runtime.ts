@@ -518,6 +518,9 @@ export function createMirrorRuntime(
       }
 
       const readResult = readMirrorDeliverableRecords(subscription, snapshot, mirrorSource);
+      if (readResult.recoveredStateRecords.length > 0 && !getState().activeTasks.has(subscription.sessionId)) {
+        deps.observeSessionHealthRecords(subscription.sessionId, subscription.threadId, readResult.recoveredStateRecords);
+      }
       deliverableRecords = readResult.records;
       for (const kind of readResult.unknownKinds) {
         if (subscription.unknownMirrorKindsSeen.has(kind)) continue;

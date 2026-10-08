@@ -53,7 +53,6 @@ import {
   isTuiProviderSession,
   mappedRuntimeSessionId,
   scheduleMirrorSubscriptionsBestEffort,
-  resolveLocalCodexThreadId,
   sessionHasActiveRuntimeTurn,
   type RuntimeName,
 } from './runtime-session.js';
@@ -83,7 +82,7 @@ const CURSOR_REASONING_OPTIONS_TEXT = 'Cursor 的 effort 是模型参数，可�
 const SANDBOX_OPTIONS_TEXT = '可选：`read-only` `workspace-write` `danger-full-access` `default`（回到全局默认）';
 const NETWORK_OPTIONS_TEXT = '可选：`on`/`true` 开启网络，`off`/`false` 关闭网络，`default` 回到全局默认。';
 const CLAUDE_PTY_RUNTIME_UPDATE_NOTE = '已保存为当前会话的 Claude Code 启动配置；如果 Claude Code pty 已经启动，不会向运行中的 TUI 注入切换命令，下一条普通消息会按新参数启动或重启 Claude Code pty。';
-const CODEX_RUNTIME_UPDATE_NOTE = '修改从下一轮 Codex 请求开始生效；正在运行的任务请先 `/stop` 后重发。';
+const CODEX_RUNTIME_UPDATE_NOTE = '配置已保存；修改从下一轮 Codex 请求开始生效，当前任务继续使用原配置。';
 const CODEX_APP_SERVER_UPDATE_NOTE = '修改从下一次由 IM 发起的新轮次（turn）开始生效；当前活动轮次及其运行中追加保持原设置。';
 
 function hasBoundCodexAppServer(session: BridgeSession | null | undefined): boolean {
@@ -102,7 +101,7 @@ function codexRuntimeUpdateNotes(
   result.push(
     '当前是 Codex TUI Provider：配置已保存到当前会话，但不会影响已经启动的 Codex TUI 终端。',
     provider === 'tmux'
-      ? '请先 `/stop`，再发送 `/p tmux` 重启 Codex TUI；新设置会在重启后的后续请求中生效。'
+      ? '发送 `/p tmux`，确认“结束并重启”后，新设置会用于重启的 Codex TUI。'
       : '请先 `/stop`，再发送 `/provider pty` 重启 Codex pty Provider；新设置会在重启后的后续请求中生效。',
   );
   return result;
@@ -645,6 +644,23 @@ export function handleModeCommand(options: {
   );
 }
 
+export function handleYoloCommand(options: Parameters<typeof handleModeCommand>[0]): string {
+  const requested = options.args.trim().toLowerCase();
+  // 不做 toggle：重复投递或重试同一条命令不会意外关闭 YOLO。
+  const value = requested === '' || requested === 'on' ? 'yolo'
+    : requested === 'off' ? 'normal'
+      : requested === 'status' ? '' : undefined;
+  if (value === undefined) return '用法：`/yolo` 或 `/yolo on` 开启，`/yolo off` 关闭，`/yolo status` 查看当前会话的设置。';
+  const binding = options.currentBinding || router.resolve(options.msg.address);
+  const session = options.store.getSession(binding.bridgeSessionId);
+  const runtime = getSessionActiveRuntime(session) || 'codex';
+  if (runtime === 'kimi') {
+    return 'Kimi Code 当前固定使用 `kimi -y`；无法通过 `/yolo off` 关闭，未修改其他 runtime 的配置。';
+  }
+  return handleModeCommand({ ...options, currentBinding: binding,
+    args: runtime === 'zcode' && value === 'normal' ? 'build' : value });
+}
+
 export function handleChangeDirectoryCommand(options: {
   msg: InboundMessage;
   args: string;
@@ -1072,9 +1088,6 @@ export function handleModelCommand(options: {
     );
   }
 
-  // 本机索引也包含 app-server 的线程；只有 legacy 本地线程保留此修改限制。
-  const legacyThreadId = hasBoundCodexAppServer(session) ? undefined
-    : resolveLocalCodexThreadId(session, binding, options.args ? 'model command update' : 'model command');
   if (!options.args) {
     const currentModel = resolveDisplayedModel(
       binding,
@@ -1087,17 +1100,11 @@ export function handleModelCommand(options: {
       [['模型', formatDisplayedModel(currentModel)]],
       [
         getAvailableModelChoicesText(),
-        legacyThreadId
-          ? '当前是共享Codex thread，只支持查看模型；如需切换，请先用 `/new` 新建一个 IM 会话线程。'
-          : '发送 `/model gpt-5.4` 可切换；发送 `/model default` 可回退到默认模型。',
+        '发送 `/model gpt-5.4` 可切换；发送 `/model default` 可回退到默认模型。',
         hasBoundCodexAppServer(session) ? CODEX_APP_SERVER_UPDATE_NOTE : '模型切换只影响后续从 IM 发起的 Codex CLI 请求。',
       ],
       options.markdown,
     );
-  }
-
-  if (legacyThreadId) {
-    return '当前是共享Codex thread，不支持直接切换模型。请先用 `/new` 新建一个线程，再执行 `/model ...`。';
   }
 
   const requestedModel = options.args.trim();

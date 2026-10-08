@@ -2137,7 +2137,7 @@ describe('command-dispatch', () => {
 
     const claudeBinding = store.getChannelChat(address.channelType, address.chatId);
     assert.ok(claudeBinding);
-    assert.equal(getSessionActiveRuntime(store.getSession(claudeBinding.bridgeSessionId)), 'claude');
+    assert.equal(getSessionActiveRuntime(store.getSession(claudeBinding.bridgeSessionId)), 'codex');
     const claudeNameBeforeRuntimeSave = store.getSession(claudeBinding.bridgeSessionId)?.name;
     assert.equal(sent.at(-1)?.richCardUpdateMessageId, 'reply-3');
     assert.equal(sent.at(-1)?.richCard?.selects?.[0]?.selectedCallbackData, buildCommandCallbackData('/current-runtime claude'));
@@ -2172,7 +2172,7 @@ describe('command-dispatch', () => {
     assert.equal(sent.at(-1)?.richCardUpdateMessageId, undefined);
     assert.equal(getThreadTableMessageRecord(address, 'current')?.messageId, 'reply-5');
     assert.equal(claudePreviewCard?.tags?.[0], 'claude');
-    assert.match(claudePreviewCard?.footer?.[0] || '', /当前 agent.*<text_tag color='orange'>Claude Code<\/text_tag>/);
+    assert.match(claudePreviewCard?.footer?.[0] || '', /当前 agent.*<text_tag color='orange'>Codex<\/text_tag>/);
     assert.equal(claudePreviewCard?.selects?.[0]?.selectedCallbackData, buildCommandCallbackData('/current-runtime claude'));
     assert.equal(claudePreviewCard?.form?.selects?.some((select) => select.elementId === 'codexSandboxMode'), false);
     assert.equal(claudePreviewCard?.form?.selects?.some((select) => select.elementId === 'codexNetworkAccess'), false);
@@ -2214,7 +2214,7 @@ describe('command-dispatch', () => {
           },
         },
       } as any,
-      '/current-config',
+      '/current-config claude',
       deps,
     );
 
@@ -2311,11 +2311,11 @@ describe('command-dispatch', () => {
     const kimiBinding = store.getChannelChat(address.channelType, address.chatId);
     assert.ok(kimiBinding);
     const kimiSession = store.getSession(kimiBinding.bridgeSessionId);
-    assert.equal(getSessionActiveRuntime(kimiSession), 'kimi');
+    assert.equal(getSessionActiveRuntime(kimiSession), 'codex');
     const kimiNameBeforeRuntimeSave = kimiSession?.name;
     const card = sent.at(-1)?.richCard as OutboundRichCard | undefined;
     assert.equal(card?.selects?.[0]?.selectedCallbackData, buildCommandCallbackData('/current-runtime kimi'));
-    assert.match(card?.footer?.[0] || '', /当前 agent.*<text_tag color='orange'>Kimi Code<\/text_tag>/);
+    assert.match(card?.footer?.[0] || '', /当前 agent.*<text_tag color='orange'>Codex<\/text_tag>/);
     assert.deepEqual(card?.form?.selects?.map((select) => select.elementId), ['kimiProvider', 'kimiThinkingMode']);
     assert.deepEqual(card?.form?.selects?.map((select) => select.formName), ['kimi_provider', 'kimi_thinking']);
     assert.deepEqual(
@@ -2366,7 +2366,7 @@ describe('command-dispatch', () => {
     assert.ok(updatedBinding);
     const updated = store.getSession(updatedBinding.bridgeSessionId);
     assert.equal(updated?.name, kimiNameBeforeRuntimeSave);
-    assert.equal(getSessionActiveRuntime(updated), 'kimi');
+    assert.equal(getSessionActiveRuntime(updated), 'codex');
     const config = createConfigService({ migrate: false, env: {} });
     assert.equal(config.get('runtime.kimi.model', { kind: 'session', sessionId: updatedBinding.bridgeSessionId }), 'moonshot-current-card');
     assert.equal(config.get('runtime.kimi.provider', { kind: 'session', sessionId: updatedBinding.bridgeSessionId }), 'tmux');
@@ -6201,7 +6201,7 @@ enabled = true
       );
       assert.equal(resolveEffectiveNetworkAccess(store.getSession(session.id)), false);
       assert.match(sent.at(-1)?.text || '', /已更新 Codex 网络/);
-      assert.match(sent.at(-1)?.text || '', /重启后的后续请求中生效/);
+      assert.match(sent.at(-1)?.text || '', /确认“结束并重启”/);
 
       await handleBridgeCommand(adapter, { address, text: '/network reset', messageId: `incoming-${provider}-network-reset-invalid` } as any, '/network reset', deps);
       assert.match(sent.at(-1)?.text || '', /Codex 网络用法/);

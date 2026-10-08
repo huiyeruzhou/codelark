@@ -1754,7 +1754,7 @@ describe('bridge command e2e', () => {
     });
     assert.equal(adapter.sent.at(-1)?.richCardUpdateMessageId, 'reply-2');
     assert.equal(adapter.sent.at(-1)?.richCard?.selects?.[0]?.selectedCallbackData, 'clk-command::%2Fcurrent-runtime%20kimi');
-    assert.equal(store.getSession(store.getChannelChat(address.channelType, address.chatId)!.bridgeSessionId)?.runtime?.activeRuntime, 'kimi');
+    assert.equal(store.getSession(store.getChannelChat(address.channelType, address.chatId)!.bridgeSessionId)?.runtime?.activeRuntime || 'codex', 'codex');
   });
 
   it('keeps Kimi command state scoped to the Kimi runtime session', async () => {
@@ -1902,7 +1902,7 @@ describe('bridge command e2e', () => {
 
       await _testOnly.handleMessage(adapter, {
         ...inboundMessage(address, '', 'incoming-kimi-command-current-codex'),
-        callbackData: buildCommandCallbackData('/current-runtime codex'),
+        callbackData: buildCommandCallbackData('/runtime codex'),
         callbackMessageId: 'reply-current-kimi',
       });
       const restoredCodexBinding = store.getChannelChat(address.channelType, address.chatId);
@@ -1912,7 +1912,7 @@ describe('bridge command e2e', () => {
 
       await _testOnly.handleMessage(adapter, {
         ...inboundMessage(address, '', 'incoming-kimi-command-current-kimi'),
-        callbackData: buildCommandCallbackData('/current-runtime kimi'),
+        callbackData: buildCommandCallbackData('/runtime kimi'),
         callbackMessageId: 'reply-current-codex',
       });
       const restoredKimiBinding = store.getChannelChat(address.channelType, address.chatId);
@@ -2628,7 +2628,7 @@ model = "test-model"
 
       await _testOnly.handleMessage(adapter, inboundMessage(address, '/net off', 'incoming-runtime-defer-network'));
       assert.match(adapter.sent.at(-1)?.text || '', /已更新 Codex 网络/);
-      assert.match(adapter.sent.at(-1)?.text || '', /重启后的后续请求中生效/);
+      assert.match(adapter.sent.at(-1)?.text || '', /确认“结束并重启”/);
       assert.notEqual(store.getSession(binding.bridgeSessionId)?.runtime?.codex?.networkAccess, false);
       assert.equal(
         createConfigService({ migrate: false, env: {} }).get('runtime.codex.networkAccess', {

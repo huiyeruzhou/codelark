@@ -323,7 +323,7 @@ export function handleCurrentCommand(options: {
     );
   }
 
-  const session = resolveCurrentCardSession(options.store, binding, options.previewRuntime);
+  const session = options.store.getSession(binding.bridgeSessionId);
   if (!session) {
     return buildCommandFields(
       '当前会话',
@@ -420,7 +420,7 @@ export function buildCurrentCommandRichCard(options: {
 }): OutboundRichCard | undefined {
   const binding = options.binding;
   if (!binding) return undefined;
-  const session = resolveCurrentCardSession(options.store, binding, options.previewRuntime);
+  const session = options.store.getSession(binding.bridgeSessionId);
   if (!session) return undefined;
 
   const activeRuntime = options.previewRuntime || getSessionActiveRuntime(session) || 'codex';
@@ -452,7 +452,7 @@ export function buildCurrentCommandRichCard(options: {
   const runtimeConfig = configService.snapshot(configScope).config;
   const configDefinitions = commonSection
     ? currentSessionCommonSettingDefinitions()
-    : currentSessionSettingDefinitions(activeRuntime);
+    : currentSessionSettingDefinitions(configSection);
   const formSelects = configDefinitions
     .filter((definition) => definition.control === 'select')
     .map((definition) => settingSessionFormSelect(
@@ -526,29 +526,16 @@ export function buildCurrentCommandRichCard(options: {
           defaultValue: getSessionWorkingDirectory(session) || '',
         }, ...configInputs] : configInputs,
       submitText: '保存',
-      submitCallbackData: buildCommandCallbackData(`/current-config ${configSection}`),
+      submitCallbackData: buildCommandCallbackData(`/current-config ${configSection}`, session.id),
       options: [],
     },
     footer: [
-      `当前 agent：${currentTag(runtimeDisplayLabel, 'orange')}`,
+      `当前 agent：${currentTag(runtimeLabel(getSessionActiveRuntime(session) || 'codex'), 'orange')}`,
       commonSection
         ? '通用配置只修改当前会话的对话名称、工作目录和 tmux 展示行数，不会切换 agent。留空会删除当前会话覆盖。'
-        : `当前分栏只显示 ${runtimeDisplayLabel} 配置；选择其他 runtime 分栏会切换当前 agent。留空或选择“跟随上层配置”会删除当前会话覆盖。`,
+        : `当前分栏只显示 ${runtimeLabel(configSection as RuntimeAgent)} 配置；选择分栏只查看和编辑配置；切换执行 agent 请使用 /runtime。留空或选择“跟随上层配置”会删除当前会话覆盖。`,
     ],
   };
-}
-
-function resolveCurrentCardSession(
-  store: BridgeStore,
-  binding: ChannelChat,
-  previewRuntime?: RuntimeAgent,
-): BridgeSession | undefined {
-  const session = store.getSession(binding.bridgeSessionId);
-  if (!session || !previewRuntime) return session || undefined;
-  const currentRuntime = getSessionActiveRuntime(session) || 'codex';
-  if (previewRuntime === currentRuntime) return session;
-  const mappedSessionId = binding.runtimeBridgeSessionIds?.[previewRuntime];
-  return mappedSessionId ? store.getSession(mappedSessionId) || session || undefined : session || undefined;
 }
 
 export async function handleHistoryCommand(options: {

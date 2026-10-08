@@ -64,6 +64,7 @@ export interface ConfigService {
   resolve(path: ConfigPath, scope?: ConfigScope, request?: ConfigPatch): ConfigResolveResult;
   explain(path?: ConfigPath, scope?: ConfigScope): ConfigExplainEntry[];
   set(target: ConfigWriteTarget, patch: ConfigPatch): void;
+  update(target: ConfigWriteTarget, patch: ConfigPatch, unsetPaths?: ConfigPath[]): void;
   replace(target: ConfigWriteTarget, patch: ConfigPatch): void;
   unset(target: ConfigWriteTarget, path: ConfigPath): void;
   remove(target: Exclude<ConfigWriteTarget, { kind: 'home' }>): void;
@@ -288,6 +289,23 @@ export function createConfigService(options: ConfigServiceOptions = {}): ConfigS
     set(target: ConfigWriteTarget, patch: ConfigPatch): void {
       const writablePatch = validateWritablePatch(target, patch);
       writeTargetPatch(target, writablePatch);
+    },
+    update(target: ConfigWriteTarget, patch: ConfigPatch, unsetPaths: ConfigPath[] = []): void {
+      const writablePatch = validateWritablePatch(target, patch);
+      for (const path of unsetPaths) validateWritablePath(target, path);
+      const file = targetFile(target);
+      const current = readTomlConfig(file)?.patch || {};
+      for (const path of unsetPaths) {
+        if (path.startsWith('channels[].')) {
+          for (const channel of current.channels || []) {
+            unsetConfigPath(channel as Record<string, unknown>, path.replace('channels[].', ''));
+          }
+        } else {
+          unsetConfigPath(current as Record<string, unknown>, path);
+        }
+      }
+      // 整份表单先验证，再一次写回；无效字段不能留下半份已保存的配置。
+      writeTargetPatch(target, mergePatch(current, writablePatch), true);
     },
     replace(target: ConfigWriteTarget, patch: ConfigPatch): void {
       const writablePatch = validateWritablePatch(target, patch);
