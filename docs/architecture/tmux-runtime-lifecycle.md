@@ -96,7 +96,7 @@ macOS 上准备新 Codex 会话时，CodeLark 会通过 `com.openai.codex` bundl
 
 LaunchAgent 保存在 `~/Library/LaunchAgents/dev.codelark.codex-app-server.plist`，服务脚本、日志和环境快照在 `~/.codelark/codex-desktop/`。登录时启动服务并重新设置用户级 Desktop 环境；不需要每次 export，也不要求先启动 Bridge。Bridge 停止、热更新或某个 TUI 退出都不会停止共享服务。服务异常退出后由 launchd 重启；客户端仍需重新连接，重启不保证中断中的轮次自动继续。登录时 Desktop 与 LaunchAgent 同时自动启动的先后顺序尚需 macOS 实机验证。
 
-CodeLark 先完成 `initialize` 和 `thread/loaded/list` 协议检查，再由协议建立线程。选择 tmux 的聊天会异步建立 remote 查看入口，创建成功后提示检测结果；输入不等待终端菜单或编辑框。首次设置地址时，如果 Desktop 已在运行，需要用户退出后重开一次才能继承新环境；不会强制退出用户的 Desktop。地址已配置但后端不可达时明确报错，不另起一个独立 writer。原有 stdio Desktop 或独立 CLI 已占用的 thread，仍需先正常释放后才能迁入共享服务。
+CodeLark 先完成 `initialize` 和 `thread/loaded/list` 协议检查，再由协议建立线程。选择 tmux 的聊天会异步建立 remote 查看入口，创建成功后提示检测结果；输入不等待终端菜单或编辑框。首次设置地址时，如果 Desktop 已在运行，需要用户退出后重开一次才能继承新环境；不会强制退出用户的 Desktop。地址已配置但后端不可达时明确报错，不另起一个独立 writer。原有 stdio Desktop 或独立 CLI 已占用的 thread，仍需先正常释放后才能迁入共享服务；此时 Bridge 明确报告 writer 冲突、确认输入未发送且不回退 tmux，并移除失败的临时订阅，避免连接恢复把失败迁移当作已绑定线程重试。若冲突来自 CodeLark 管理的 macOS Desktop 共享方案，错误卡片提供一次性、绑定到原会话的重启按钮；按钮调用受控脚本验证 endpoint、正常退出并重开 Desktop，成功后才重新投递原纯文本输入。
 
 一个 macOS 用户共用一个后端。首次安装保存该实例的 `CODEX_HOME` 和环境快照，目录权限为 `0700`，快照为 `0600`；移除 Bridge/chat/turn/tmux 身份环境，不在 plist 中写凭据。后续启动复用这份环境，不用另一个实例的凭据覆盖它；不同 `CODEX_HOME` 会拒绝自动接入。修改当前终端环境不会改变已运行服务的环境。Unix socket 路径超过 macOS 长度限制或包含当前 Desktop 传输不能处理的 URL 特殊字符时，自动配置会报错。
 

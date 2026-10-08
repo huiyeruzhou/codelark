@@ -48,7 +48,7 @@ macOS 已安装官方 Codex Desktop、且 Codex CLI 支持远程连接时，自�
 
 独立共享服务使用自己的 Codex 登录状态；仅设置 `CODEX_API_KEY` 不能替代这个登录。私有后端支持把显式 API key 注入当前后端的内存认证，既不覆盖已有 `auth.json`，也不替 Desktop 登录。
 
-第一次配置时，如果 Desktop 已经打开，按提示退出后重新打开一次，让它取得共享连接地址。服务在 Desktop 之后才启动时，也可能需要重开 Desktop。CodeLark 自动保存连接配置，无需每次手动设置环境变量。实际注销再登录、两个登录项同时启动的顺序仍待专用 Mac 验证；当前验收范围见 [Desktop GUI 验收](../testing/codex-desktop.md)。
+第一次配置时，如果 Desktop 已经打开，按提示退出后重新打开一次，让它取得共享连接地址。服务在 Desktop 之后才启动时，也可能需要重开 Desktop。正在运行的 stdio Desktop 无法原地转移 writer lock；CodeLark 不会擅自终止应用，也不会把该条输入改投 tmux，而是在冲突卡片中提供“重启并重试”按钮。用户点击后，`scripts/restart-codex-desktop.sh` 先确认共享 endpoint 已就绪，再正常退出并重开 Desktop；退出失败时不会强制杀进程。纯文本输入会在重启成功后自动重试，含附件的输入需要重新发送。CodeLark 自动保存连接配置，无需每次手动设置环境变量。实际注销再登录、两个登录项同时启动的顺序仍待专用 Mac 验证；当前验收范围见 [Desktop GUI 验收](../testing/codex-desktop.md)。
 
 已有旧会话会在下一条输入前自动迁移：先确认 app-server 可连接，再精确结束 CodeLark 为该 thread 创建的旧 tmux writer，最后由协议恢复同一 thread；迁移失败会在发送输入前明确报错，不会偷偷回退或重复提交。普通 tmux 会话和 `-view` 查看窗口不会被迁移逻辑结束。CLI 明确不支持 app-server 监听时才保留旧适配器。`CODELARK_CODEX_APP_SERVER=0` 关闭自动选择，但已绑定的协议线程仍使用原后端；连接或认证失败不会偷偷切换执行进程。由其他独立 Codex 进程占用的会话不会被强行终止，需要先正常结束那个进程才能交给共享服务，不能通过删除锁文件解决。
 

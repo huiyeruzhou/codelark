@@ -98,6 +98,7 @@ import { sseEvent } from '../../../../runtime/sse.js';
 import type { LLMProvider, StreamChatParams } from '../../../../runtime/contracts.js';
 import { resolveConfigPaths } from '../../../../configuration/sources.js';
 import { LARGE_FILE_UPLOAD_THRESHOLD_BYTES } from '../../../../bridge/command/file-upload-confirmations.js';
+import { requestCodexDesktopRestart } from '../../../../bridge/command/codex-desktop-restart-confirmation.js';
 
 const DATA_DIR = path.join(CODELARK_HOME, 'data');
 const HOME_CONFIG_TOML_PATH = resolveConfigPaths({ codelarkHome: CODELARK_HOME }).homeToml;
@@ -1172,6 +1173,53 @@ describe('command-dispatch', () => {
     });
     assert.equal(parseCommandCallbackData('perm:allow:1'), undefined);
     assert.equal(parseCommandCallbackData('clk-command::not-a-command'), null);
+  });
+
+  it('restarts Codex Desktop from a scoped confirmation and retries the original input once', async () => {
+    const store = initTestContext();
+    const sent: string[] = [];
+    const retried: any[] = [];
+    const adapter: any = {
+      channelType: 'feishu',
+      provider: 'feishu',
+      send: async (message: { text: string }) => {
+        sent.push(message.text);
+        return { ok: true, messageId: `restart-reply-${sent.length}` };
+      },
+    };
+    const address = { channelType: 'feishu', chatId: 'chat-desktop-restart' } as const;
+    const binding = router.createBinding(address, '/tmp/desktop-restart');
+    store.updateSession(binding.bridgeSessionId, {
+      runtime: { codex: { threadId: 'thread-desktop-restart' } },
+    });
+    const session = store.getSession(binding.bridgeSessionId)!;
+    const requested = requestCodexDesktopRestart({
+      binding, session, threadId: 'thread-desktop-restart', retryText: 'original prompt', retryContextText: 'quoted context',
+    });
+    const parsed = parseCommandCallbackData(requested.richCard.actions![0]![0]!.callbackData)!;
+    assert(parsed);
+    let restartCalls = 0;
+    await handleBridgeCommand(adapter, {
+      address,
+      text: parsed.commandText,
+      callbackData: requested.richCard.actions![0]![0]!.callbackData,
+      messageId: 'desktop-restart-click',
+    } as any, parsed.commandText, {
+      getActiveTask: () => undefined,
+      diagnoseSessionHealth: async () => null,
+      diagnoseAllActiveSessions: async () => [],
+      scopedBinding: binding,
+      restartCodexDesktop: async () => {
+        restartCalls += 1;
+        return { scriptPath: '/fixture/restart.sh', output: 'restarted' };
+      },
+      dispatchPostCommandMessage: async (_adapter, retry) => { retried.push(retry); },
+    });
+    await waitForCondition(() => retried.length === 1);
+    assert.equal(restartCalls, 1);
+    assert.match(sent.join('\n'), /正在自动重试原输入/);
+    assert.equal(retried[0].text, 'original prompt');
+    assert.equal(retried[0].contextText, 'quoted context');
   });
 
   it('dispatches /hot-update through the project script dry-run without touching the live bridge', async () => {

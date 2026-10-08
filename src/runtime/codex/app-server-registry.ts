@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { CODELARK_HOME } from '../../configuration/paths.js';
-import { CodexAppServerClient, appServerCliUrl } from './app-server-client.js';
+import { CodexAppServerClient, appServerCliUrl, isCodexActiveWriterError } from './app-server-client.js';
 import { CodexAppServerLifecycle, type AppServerSubmission, type AppServerThreadOptions } from './app-server-lifecycle.js';
 import { prepareCodexDesktopRemote, validateLocalEndpoint, type CodexDesktopRemote } from './desktop-remote.js';
 import { resolveCodexCliExecutable } from './cli-executable.js';
@@ -42,6 +42,31 @@ const sessionVersions = new Map<string, number>();
 const preparingTargets = new Map<symbol, string>();
 let generation = 0;
 const root = path.join(CODELARK_HOME, 'codex-app-server');
+
+export class CodexWriterMigrationError extends Error {
+  constructor(
+    readonly threadId: string,
+    readonly desktopRestartRecommended: boolean,
+    message: string,
+    options?: ErrorOptions,
+  ) {
+    super(message, options);
+    this.name = 'CodexWriterMigrationError';
+  }
+}
+
+function describeWriterMigrationFailure(error: unknown, threadId: string, remote?: CodexDesktopRemote): Error {
+  if (!isCodexActiveWriterError(error)) return error instanceof Error ? error : new Error(String(error));
+  const desktopHint = remote?.managed
+    ? '如果该会话仍在 Codex Desktop 中打开，请完全退出并重新打开 Desktop，让它接入共享 app-server 后再重试。'
+    : '请先关闭仍持有该线程的 Codex Desktop、CLI 或其他 writer，再重试。';
+  return new CodexWriterMigrationError(
+    threadId,
+    remote?.managed === true,
+    `Codex thread ${threadId} 仍由另一个进程持有；app-server 迁移已停止，未发送输入，也未回退到 tmux。${desktopHint}`,
+    { cause: error },
+  );
+}
 function fileName(key: string): string { return path.join(root, `${createHash('sha256').update(key).digest('hex')}.json`); }
 function read<T>(key: string): T | undefined {
   try { return JSON.parse(fs.readFileSync(fileName(key), 'utf8')) as T; }
@@ -159,11 +184,16 @@ export async function prepareCodexAppServerSession(options: AppServerThreadOptio
     // ensureThread connects and authenticates first, then transfers ownership
     // immediately before resume. Two concurrent writers are rejected by Codex
     // and must never trigger fallback.
-    const threadId = await lifecycle.ensureThread({ ...threadOptions, threadId: options.threadId || pinned?.threadId,
-      config: { ...threadOptions.config, 'shell_environment_policy.set.CODELARK_HOME': CODELARK_HOME },
-    }, options.threadId && !pinned && options.beforeResumeLegacyThread
-      ? async () => { await options.beforeResumeLegacyThread?.(); assertCurrent(); }
-      : undefined);
+    let threadId: string;
+    try {
+      threadId = await lifecycle.ensureThread({ ...threadOptions, threadId: options.threadId || pinned?.threadId,
+        config: { ...threadOptions.config, 'shell_environment_policy.set.CODELARK_HOME': CODELARK_HOME },
+      }, options.threadId && !pinned && options.beforeResumeLegacyThread
+        ? async () => { await options.beforeResumeLegacyThread?.(); assertCurrent(); }
+        : undefined);
+    } catch (error) {
+      throw targetThread ? describeWriterMigrationFailure(error, targetThread, remote) : error;
+    }
     try { assertCurrent(); }
     catch (error) {
       preparingTargets.delete(token);

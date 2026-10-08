@@ -107,6 +107,8 @@ import {
 } from './dispatch-terminal.js';
 import { validateThreadName } from '../session/command-use-cases/args.js';
 import { requestCodexTuiSelectionViaPermissionBroker } from './codex-tui-selection.js';
+import { cancelCodexDesktopRestart, consumeCodexDesktopRestart } from './codex-desktop-restart-confirmation.js';
+import { restartCodexDesktop } from '../../runtime/codex/desktop-restart.js';
 
 function describeReactionError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -196,6 +198,7 @@ export interface BridgeCommandDispatchDeps {
   hotUpdateEnv?: NodeJS.ProcessEnv;
   hotUpdateLogRefreshIntervalMs?: number;
   shellRunner?: ShellCommandRunner;
+  restartCodexDesktop?: typeof restartCodexDesktop;
   tmuxProviderAutoForward?: boolean;
   onTmuxProviderAutoForwarded?: () => Promise<void> | void;
   dispatchPostCommandMessage?(adapter: BaseChannelAdapter, msg: InboundMessage): Promise<void>;
@@ -751,6 +754,45 @@ export async function handleBridgeCommand(
       });
       response = result.response;
       responseRichCard = result.richCard;
+      break;
+    }
+
+    case '/codex-desktop-restart': {
+      const cancelId = args.match(/^--cancel=([0-9a-f-]+)$/i)?.[1];
+      if (cancelId) {
+        response = cancelCodexDesktopRestart(cancelId)
+          ? '已取消重启，Codex Desktop 和当前会话均未改变。'
+          : '这个重启按钮已失效或已使用。';
+        break;
+      }
+      const confirmId = args.match(/^--confirm=([0-9a-f-]+)$/i)?.[1];
+      const session = currentBinding ? store.getSession(currentBinding.bridgeSessionId) : null;
+      const pending = confirmId && currentBinding && session
+        ? consumeCodexDesktopRestart(confirmId, currentBinding, session)
+        : undefined;
+      if (!pending) {
+        response = '这个重启按钮已失效、已使用，或当前聊天已切换会话。';
+        break;
+      }
+      let restarted: Awaited<ReturnType<typeof restartCodexDesktop>>;
+      try {
+        restarted = await (deps.restartCodexDesktop || restartCodexDesktop)();
+      } catch (error) {
+        response = `Codex Desktop 自动重启失败；未重试原输入。\n\n${describeReactionError(error)}`;
+        break;
+      }
+      response = pending.retryText
+        ? `Codex Desktop 已通过共享 app-server 环境重启。正在自动重试原输入。\n\n${restarted.output}`
+        : `Codex Desktop 已通过共享 app-server 环境重启。请重新发送含附件的输入。\n\n${restarted.output}`;
+      if (pending.retryText) {
+        postDeliveryUserMessages.push({
+          address: msg.address,
+          text: pending.retryText,
+          contextText: pending.retryContextText,
+          messageId: `codex-desktop-retry:${confirmId}`,
+          timestamp: Date.now(),
+        });
+      }
       break;
     }
 

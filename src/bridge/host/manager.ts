@@ -201,7 +201,8 @@ import {
 } from '../tmux/runtime.js';
 import type { TmuxAutoForwardRecoveryPayload } from '../command/codex-tui-selection.js';
 import { prepareCodexAppServerForBinding, codexAppServerTurnOptions, scheduleCodexAppServerView } from '../command/tmux.js';
-import { getCodexAppServerSession, closeCodexAppServerSessions, releaseCodexAppServerSession, getCodexAppServerServiceStatuses } from '../../runtime/codex/app-server-registry.js';
+import { CodexWriterMigrationError, getCodexAppServerSession, closeCodexAppServerSessions, releaseCodexAppServerSession, getCodexAppServerServiceStatuses } from '../../runtime/codex/app-server-registry.js';
+import { requestCodexDesktopRestart } from '../command/codex-desktop-restart-confirmation.js';
 import { readCodexBackendStatus, type BridgeRuntimeStatus } from '../session/display/codex-backend-status.js';
 import { stopRunningSession } from '../session/stop-running-session.js';
 import {
@@ -342,6 +343,7 @@ const SESSION_SETTINGS_COMMANDS = new Set([
 const SESSION_CONFIG_BARRIER_COMMANDS = new Set([
   '/provider',
   '/runtime',
+  '/codex-desktop-restart',
 ]);
 const SESSION_SERIAL_COMMANDS = new Set([
   '/tmux',
@@ -3172,9 +3174,14 @@ function adapterSessionLane(msg: InboundMessage, category: 'channel-event' | 'ca
     if (!session) return null;
     const runtimeProvider = resolveEffectiveRuntimeProvider(session, binding);
     if (runtimeProvider.provider !== 'tmux') return null;
+    const activeRuntime = getSessionActiveRuntime(session) || 'codex';
     return {
       sessionId: binding.bridgeSessionId,
-      jobKind: 'interactive-turn:tmux-provider-auto-forward',
+      jobKind: activeRuntime === 'codex'
+        ? (session.runtime?.codex?.appServerEndpoint
+          ? 'interactive-turn:app-server'
+          : 'interactive-turn:codex-routing')
+        : 'interactive-turn:tmux-provider-auto-forward',
       blocksConversation: true,
     };
   }
@@ -5331,7 +5338,23 @@ async function handleMessage(
             }
           }
         } catch (error) {
-          enqueueBridgeNotice(adapter, msg.address, describeUnknownError(error), { replyToMessageId: msg.messageId });
+          if (error instanceof CodexWriterMigrationError && error.desktopRestartRecommended) {
+            const recovery = requestCodexDesktopRestart({
+              binding,
+              session,
+              threadId: error.threadId,
+              retryText: hasAttachments ? undefined : rawText,
+              retryContextText: hasAttachments ? undefined : msg.contextText,
+            });
+            enqueueBridgeNotice(adapter, msg.address, recovery.response, {
+              sessionId: session.id,
+              replyToMessageId: msg.messageId,
+              audit: true,
+              richCard: recovery.richCard,
+            });
+          } else {
+            enqueueBridgeNotice(adapter, msg.address, describeUnknownError(error), { replyToMessageId: msg.messageId });
+          }
           ack();
           return;
         }

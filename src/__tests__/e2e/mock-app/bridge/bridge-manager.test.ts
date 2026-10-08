@@ -1115,6 +1115,11 @@ describe('bridge-manager resolveCommandAlias', () => {
       serialize: true,
       blocksRouting: true,
     });
+    assert.deepEqual(_testOnly.adapterSessionLane(inbound('/codex-desktop-restart --confirm=00000000-0000-0000-0000-000000000000') as any, 'command'), {
+      sessionId: binding.bridgeSessionId,
+      jobKind: 'command:codex-desktop-restart',
+      blocksConversation: true,
+    });
 
     assert.deepEqual(_testOnly.adapterSessionLane(inbound('/tmux hello') as any, 'command'), {
       sessionId: binding.bridgeSessionId,
@@ -1136,7 +1141,20 @@ describe('bridge-manager resolveCommandAlias', () => {
       timestamp: Date.now(),
     } as any, 'regular'), {
       sessionId: tmuxBinding.bridgeSessionId,
-      jobKind: 'interactive-turn:tmux-provider-auto-forward',
+      jobKind: 'interactive-turn:codex-routing',
+      blocksConversation: true,
+    });
+    store.updateSession(tmuxBinding.bridgeSessionId, {
+      runtime: { codex: { threadId: 'protocol-thread', appServerEndpoint: 'unix:///tmp/codelark.sock' } },
+    });
+    assert.deepEqual(_testOnly.adapterSessionLane({
+      address: tmuxAddress,
+      text: '协议输入',
+      messageId: 'msg-app-server-regular',
+      timestamp: Date.now(),
+    } as any, 'regular'), {
+      sessionId: tmuxBinding.bridgeSessionId,
+      jobKind: 'interactive-turn:app-server',
       blocksConversation: true,
     });
 

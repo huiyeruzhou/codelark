@@ -6,7 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
 import { CODELARK_HOME } from '../../configuration/paths.js';
-import { CodexAppServerClient } from './app-server-client.js';
+import { CodexAppServerClient, isCodexActiveWriterError } from './app-server-client.js';
 
 const execFileAsync = promisify(execFile);
 function canonical(value: string): string {
@@ -92,6 +92,7 @@ export function describeCodexAppServerError(error: unknown, phase = 'app-server 
   else if (/CODEX_HOME/.test(message)) reason = '服务的 CODEX_HOME 与当前 Bridge 不一致，未接管。';
   else if (code === 'EADDRINUSE' || code === 'ENOTSOCK' || /socket.*(?:已存在|已被占用)|地址已被/.test(message)) reason = '本机地址已被占用或不是 socket，未替换已有资源。';
   else if (code === 'EACCES' || code === 'EPERM' || /permission denied|access denied|不是当前用户的私有目录/i.test(message)) reason = '权限不足，请检查可执行文件及 socket 目录权限。';
+  else if (isCodexActiveWriterError(error)) reason = '线程仍由另一 Codex 进程持有；未发送输入，也未回退旧执行路径。';
   else if (code === -32601 || /unrecognized subcommand|不支持.*--listen|无法确认.*--listen|unknown variant/i.test(message)) reason = '当前 Codex CLI 或服务不支持所需 app-server 协议。';
   else if (code === 'ETIMEDOUT' || /timed?\s*out|timeout|超时/i.test(message)) reason = '连接或协议请求超时，请检查服务是否可用。';
   else if (/401|403|unauthori[sz]ed|authentication|login|认证|凭据/i.test(message)) reason = '认证失败，请检查此后端的 Codex 登录或 API key 配置。';

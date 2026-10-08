@@ -3,7 +3,7 @@ import { test, type TestContext } from 'node:test';
 import { setTimeout as delay } from 'node:timers/promises';
 import { WebSocketServer, type WebSocket } from 'ws';
 import { CodexAppServerLifecycle, type AppServerSubmission } from '../../../../runtime/codex/app-server-lifecycle.js';
-import { AppServerRpcError, CodexAppServerClient, isUnsupportedAppServerMethod } from '../../../../runtime/codex/app-server-client.js';
+import { AppServerRpcError, CodexAppServerClient, isCodexActiveWriterError, isUnsupportedAppServerMethod } from '../../../../runtime/codex/app-server-client.js';
 import type { AppServerThread, AppServerTurn } from '../../../../runtime/codex/app-server-events.js';
 
 async function until(check: () => boolean) {
@@ -234,8 +234,25 @@ test('replayed usage of a completed turn cannot create a new output turn on atta
 test('optional capability classification never treats an active writer or experimental field error as missing method', () => {
   assert(isUnsupportedAppServerMethod(new AppServerRpcError(-32600, 'Invalid request: unknown variant `thread/unsubscribe`, expected one of abc'), 'thread/unsubscribe'));
   assert(!isUnsupportedAppServerMethod(new AppServerRpcError(-32600, 'active writer'), 'thread/unsubscribe'));
+  assert(isCodexActiveWriterError(new AppServerRpcError(-32600, 'thread-store conflict: thread busy already has an active writer')));
+  assert(isCodexActiveWriterError(new Error('migration stopped', { cause: new AppServerRpcError(-32600, 'active writer') })));
+  assert(!isCodexActiveWriterError(new AppServerRpcError(-32600, 'invalid configuration')));
   assert(!isUnsupportedAppServerMethod(new AppServerRpcError(-32600, 'thread/resume.excludeTurns requires experimentalApi capability'), 'thread/resume'));
   assert(!isUnsupportedAppServerMethod(new AppServerRpcError(-32600, 'Invalid request: unknown variant `other`, expected thread/unsubscribe'), 'thread/unsubscribe'));
+});
+
+test('a rejected first resume is not retained as a reconnect subscription', async (t) => {
+  const f = await fixture(t);
+  f.handle((message) => {
+    if (message.method !== 'thread/resume' || message.params.threadId !== 'busy') return false;
+    f.socket().send(JSON.stringify({
+      id: message.id,
+      error: { code: -32600, message: 'thread busy already has an active writer' },
+    }));
+    return true;
+  });
+  await assert.rejects(f.runtime.ensureThread({ threadId: 'busy' }), /active writer/);
+  assert.equal(f.runtime.snapshot('busy').attached, false);
 });
 
 

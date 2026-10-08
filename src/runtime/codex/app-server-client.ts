@@ -26,6 +26,17 @@ export function isUnsupportedAppServerMethod(error: unknown, method?: string): b
       && error.message.startsWith(`app-server (-32600): Invalid request: unknown variant \`${method}\`, expected `)));
 }
 
+export function isCodexActiveWriterError(error: unknown): boolean {
+  let current: unknown = error;
+  for (let depth = 0; depth < 3 && current; depth += 1) {
+    if (current instanceof AppServerRpcError
+      && current.code === -32600
+      && /(?:thread-store conflict:.*)?active writer/i.test(current.message)) return true;
+    current = (current as { cause?: unknown }).cause;
+  }
+  return false;
+}
+
 function unixSocketPath(endpoint: string): string | undefined {
   if (!endpoint.startsWith('unix://') && !endpoint.startsWith('ws+unix://')) return undefined;
   const url = new URL(endpoint);

@@ -145,9 +145,21 @@ export class CodexAppServerLifecycle {
   ): Promise<string> {
     await this.connect();
     if (options.threadId) {
-      if (this.threads.get(options.threadId)?.snapshot.connection !== 'ready') {
-        await beforeResume?.();
-        await this.resume(options.threadId, options.config);
+      const existing = this.threads.get(options.threadId);
+      if (existing?.snapshot.connection !== 'ready') {
+        try {
+          await beforeResume?.();
+          await this.resume(options.threadId, options.config);
+        } catch (error) {
+          // A rejected first attachment is not a subscription. Keeping the
+          // provisional state would make reconnect treat it as one and retry
+          // thread/resume even though no Bridge session owns this thread.
+          if (!existing) {
+            this.threads.delete(options.threadId);
+            this.changed(options.threadId);
+          }
+          throw error;
+        }
       }
       return options.threadId;
     }

@@ -102,6 +102,7 @@ const KNOWN_BRIDGE_COMMANDS = new Set([
   '/doctor',
   '/history',
   '/hot-update',
+  '/codex-desktop-restart',
   '/shell',
   '/cat',
   '/file',

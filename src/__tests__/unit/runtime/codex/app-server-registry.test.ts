@@ -22,6 +22,7 @@ async function fixture(t: TestContext) {
   let releaseStart: (() => void) | undefined;
   let holdThreadStart = false;
   let rejectThreadStart = false;
+  let rejectThreadResume = false;
   wss.on('connection', (socket) => socket.on('message', (data) => {
     const m = JSON.parse(String(data)); received.push(m);
     const response = (result: unknown) => socket.send(JSON.stringify({ id: m.id, result }));
@@ -31,7 +32,13 @@ async function fixture(t: TestContext) {
       if (rejectThreadStart) { socket.send(JSON.stringify({ id: m.id, error: { code: -32000, message: 'secret-fixture-auth-text' } })); return; }
       const thread = { id: `thread-${threads.size}`, turns: [] }; threads.set(thread.id, thread); if (holdThreadStart) releaseStart = () => response({ thread }); else response({ thread });
     }
-    if (m.method === 'thread/read' || m.method === 'thread/resume') response({ thread: threads.get(m.params.threadId) });
+    if (m.method === 'thread/read') response({ thread: threads.get(m.params.threadId) });
+    if (m.method === 'thread/resume') {
+      if (rejectThreadResume) socket.send(JSON.stringify({ id: m.id, error: {
+        code: -32600, message: `thread ${m.params.threadId} already has an active writer`,
+      } }));
+      else response({ thread: threads.get(m.params.threadId) });
+    }
     if (m.method === 'thread/unsubscribe') response({ status: 'unsubscribed' });
     if (m.method === 'turn/start') {
       if (disconnectOnStart) { socket.close(); return; }
@@ -58,7 +65,7 @@ async function fixture(t: TestContext) {
     for (const client of wss.clients) client.terminate();
     await new Promise<void>((resolve) => wss.close(() => resolve()));
   });
-  return { endpoint, received, rejectStart: () => { rejectThreadStart = true; }, drop: () => { for (const socket of wss.clients) socket.terminate(); }, holdStart: () => { holdThreadStart = true; }, releaseStart: () => releaseStart?.(), loseReply: () => { loseReplyAfterCompletion = true; }, finish: (status = 'completed') => { finishImmediately = true; terminalStatus = status; }, disconnect: () => { disconnectOnStart = true; } };
+  return { endpoint, received, rejectStart: () => { rejectThreadStart = true; }, rejectResume: () => { rejectThreadResume = true; }, drop: () => { for (const socket of wss.clients) socket.terminate(); }, holdStart: () => { holdThreadStart = true; }, releaseStart: () => releaseStart?.(), loseReply: () => { loseReplyAfterCompletion = true; }, finish: (status = 'completed') => { finishImmediately = true; terminalStatus = status; }, disconnect: () => { disconnectOnStart = true; } };
 }
 
 test('service reads do not start the default backend or promote a saved address into process evidence', async () => {
@@ -206,6 +213,22 @@ test('an existing legacy thread transfers its writer before app-server resume', 
   assert.equal(released, 1);
   assert(f.received.some((message) => message.method === 'thread/resume'
     && message.params.threadId === seed.threadId));
+});
+
+test('an active external writer stops migration with an actionable error and no durable binding', async (t) => {
+  const f = await fixture(t);
+  const seed = await prepareCodexAppServerSession({ sessionId: 'busy-seed', endpoint: f.endpoint });
+  assert(seed);
+  await closeCodexAppServerSessions();
+  f.rejectResume();
+  await assert.rejects(prepareCodexAppServerSession({
+    sessionId: 'busy-migration', endpoint: f.endpoint, threadId: seed.threadId,
+    beforeResumeLegacyThread: async () => {},
+  }), /另一个进程持有.*未发送输入.*未回退到 tmux/);
+  assert.equal(getCodexAppServerSession('busy-migration'), undefined);
+  const status = getCodexAppServerServiceStatuses().find((entry) => entry.sessionIds.includes('busy-migration'));
+  assert.equal(status?.connection, 'ready');
+  assert.match(status?.error || '', /线程仍由另一 Codex 进程持有.*未发送输入/);
 });
 
 test('rebinding a Bridge session detaches the old thread and preserves other subscribers to the new thread', async (t) => {
