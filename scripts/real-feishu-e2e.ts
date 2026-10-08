@@ -10,6 +10,7 @@ import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 
 import { fixtureEnvironment, fixtureModel, startFixtureAppServer, startFixtureModel } from './fixtures/codex-app-server-lifecycle.js';
+import { readOwnedTurnSettings } from '../src/testing/real-feishu/session-configuration.js';
 import { runAppServerLifecycle, readAllUserPages } from '../src/testing/real-feishu/app-server-lifecycle.js';
 import { CodexAppServerClient } from '../src/runtime/codex/app-server-client.js';
 
@@ -7471,7 +7472,7 @@ async function main(): Promise<void> {
       const env = fixtureEnvironment(backendRoot, options.codexProxyBaseUrl!);
       fs.copyFileSync(path.join(backendRoot, 'codex/config.toml'), path.join(options.codexHome, 'config.toml'));
       if (lifecycleModel) {
-        fs.writeFileSync(path.join(options.codexHome, 'models_cache.json'), JSON.stringify({ models: [{ slug: options.codexModel, display_name: options.codexModel, visibility: 'list', supported_in_api: true }] }));
+        fs.writeFileSync(path.join(options.codexHome, 'models_cache.json'), JSON.stringify({ models: [options.codexModel, options.codexModel === 'gpt-5.5' ? 'gpt-5.4' : 'gpt-5.5'].map((slug) => ({ slug, display_name: slug, visibility: 'list', supported_in_api: true })) }));
         const configPath = path.join(options.codexHome, 'config.toml');
         fs.writeFileSync(configPath, fs.readFileSync(configPath, 'utf8').replace('[features]', '[features]\ndefault_mode_request_user_input = true' + (options.nativeRequestCards ? '\nrequest_permissions_tool = true' : '')));
         if (options.nativeRequestCards) {
@@ -7562,8 +7563,14 @@ async function main(): Promise<void> {
       const sourceRevision = execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
       const sourceDirty = Boolean(execFileSync('git', ['diff', '--name-only'], { encoding: 'utf8' }).trim());
       const configuration = createConfigService({ codelarkHome: options.codelarkHome, env: {}, migrate: false });
+      const configurationWorkspace = path.join(options.workDir, 'settings-next');
+      fs.mkdirSync(configurationWorkspace, { recursive: true });
       const result = await runAppServerLifecycle({
         runId: options.runId, provider: options.provider, chatId, modelName: options.codexModel,
+        alternateModelName: options.codexModel === 'gpt-5.5' ? 'gpt-5.4' : 'gpt-5.5', configurationWorkspace,
+        turnSettings: (threadId, turnId) => readOwnedTurnSettings(options.codexHome, threadId, turnId),
+        filteredMessage: (id, messageId) => latestDump(options, id).audit.find((entry) => entry.messageId === messageId && entry.summary.includes('[FILTERED]') && entry.summary.includes('session.require_mention=true')),
+        sendMentioned: (id, text) => sendMentionedUserText(id, text, options),
         endpoint: options.codexAppServerEndpoint!, timeoutMs: options.timeoutMs, pollMs: options.pollMs,
         approvalWaitMs: options.approvalWaitMs, nativeRequestCards: options.nativeRequestCards, workspace: options.workDir, model: lifecycleModel, observer: protocolObserver,
         botAppId: options.testFeishuAppId,

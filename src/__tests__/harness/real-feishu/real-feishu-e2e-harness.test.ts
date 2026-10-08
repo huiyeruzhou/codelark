@@ -2134,7 +2134,7 @@ describe('unit::real-feishu-e2e-harness::session-management-command-plan', () =>
     ]);
     assert.equal(parsed.commandReplyExpectations.length, parsed.commands.length);
     assert.deepEqual(expectationByCommand.get('/status')?.expectedTexts, ['全局状态', 'Bridge', '当前聊天']);
-    assert.deepEqual(expectationByCommand.get('/require-at off')?.expectedTexts, ['已更新群聊 @bot 设置', 'off']);
+    assert.deepEqual(expectationByCommand.get('/require-at off')?.expectedTexts, ['已更新当前会话群聊 @bot 设置', 'off']);
     assert.deepEqual(expectationByCommand.get('/runtime codex')?.expectedTexts, ['Runtime', 'codex']);
     assert.deepEqual(expectationByCommand.get('/p sdk')?.expectedTexts, ['Codex Provider', 'sdk']);
     assert.deepEqual(expectationByCommand.get('/current')?.expectedTexts, [

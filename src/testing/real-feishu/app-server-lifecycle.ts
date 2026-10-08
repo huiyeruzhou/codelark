@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { assertAppliedSettings, runActiveConfiguration, runMentionFilter, type NativeTurnSettings } from './session-configuration.js';
 import { runNativeRequestCards, type NativeCardReport } from './native-request-cards.js';
 import { CodexAppServerClient, type AppServerMessage } from '../../runtime/codex/app-server-client.js';
 export interface ModelBody { model?: string; input?: unknown[]; tools?: Array<Record<string, any>>; [key: string]: unknown }
@@ -15,6 +16,11 @@ export interface LifecycleDriver {
   provider: 'sdk' | 'tmux';
   chatId: string;
   modelName: string;
+  alternateModelName: string;
+  configurationWorkspace: string;
+  turnSettings(threadId: string, turnId: string): NativeTurnSettings | undefined;
+  filteredMessage(chatId: string, messageId: string): unknown | undefined;
+  sendMentioned(chatId: string, text: string): Promise<string>;
   endpoint: string;
   timeoutMs: number;
   pollMs: number;
@@ -61,6 +67,9 @@ export interface LifecycleReport {
   modelRequests: LifecycleDriver['model']['requests'];
   activeClear?: ActiveClearEvidence;
   nativeCards?: NativeCardReport[];
+  configurationChanges?: Array<Record<string, unknown>>;
+  appliedSettings?: Array<{ chatId: string; name: string; sessionId: string; threadId: string; turnId: string; response: string; native: NativeTurnSettings }>;
+
   error?: string;
 }
 
@@ -266,8 +275,8 @@ export async function runAppServerLifecycle(d: LifecycleDriver): Promise<Lifecyc
     const payload = await d.read(chat); userReadbackMessages(payload);
     report.readbacks[chat] = payload; save(); return payload;
   };
-  const send = async (chat: string, text: string) => {
-    const messageId = await d.send(chat, text);
+  const send = async (chat: string, text: string, mention = d.state(chat)?.configuration['session.requireMention'] === true) => {
+    const messageId = await (mention ? d.sendMentioned(chat, text) : d.send(chat, text));
     report.inputs.push({ chatId: chat, text, messageId }); save(); return messageId;
   };
   const command = async (chat: string, text: string, expected: string) => {
@@ -305,6 +314,8 @@ export async function runAppServerLifecycle(d: LifecycleDriver): Promise<Lifecyc
   const marker = (name: string) => `LIFECYCLE_${name}_${d.runId}`;
   const completedPrompt = async (chat: string, name: string) => {
     const response = marker(`${name}_RESULT`);
+    const expected = await state(chat);
+    const requestOffset = d.model.requests.length;
     d.model.enqueue({ text: response });
     await send(chat, marker(`${name}_INPUT`));
     await wait('真实模型收到本轮输入', () => d.model.requests.some((r) => JSON.stringify(r.body.input).includes(marker(`${name}_INPUT`))));
@@ -313,11 +324,18 @@ export async function runAppServerLifecycle(d: LifecycleDriver): Promise<Lifecyc
     const t = await wait('输入对应的原生轮次', async () => (await thread(id)).turns.find((t) =>
       t.items.some((i) => i.type === 'userMessage' && JSON.stringify(i).includes(marker(`${name}_INPUT`)))));
     await terminal(id, t.id);
+    const native = await wait('本轮原生配置已落盘', () => d.turnSettings(id, t.id));
+    const request = d.model.requests.slice(requestOffset).find((r) => JSON.stringify(r.body.input).includes(marker(`${name}_INPUT`)));
+    assert(request, '缺少本轮模型请求'); assertAppliedSettings(expected, native, request.body);
+    report.appliedSettings ??= [];
+    report.appliedSettings.push({ chatId: chat, name, sessionId: expected.sessionId, threadId: id, turnId: t.id, response, native }); save();
     return { threadId: id, turnId: t.id, response };
   };
   try {
     stage('用户配置与基本收发');
     await command(d.chatId, '/runtime codex', 'codex');
+    await command(d.chatId, '/require_at off', 'off');
+    await command(d.chatId, '/yolo off', 'normal');
     await command(d.chatId, `/p ${d.provider}`, d.provider === 'tmux' ? '共享 Codex 线程已就绪' : 'sdk');
     await command(d.chatId, `/model ${d.modelName}`, d.modelName);
     await command(d.chatId, '/reasoning low', 'low');
@@ -330,6 +348,11 @@ export async function runAppServerLifecycle(d: LifecycleDriver): Promise<Lifecyc
     assert.equal(original.configuration['runtime.codex.sandboxMode'], 'read-only');
     assert.equal(original.configuration['runtime.codex.networkAccess'], false);
     check('real_user_input_and_readback', first);
+
+    const configurationStory = { driver: d, report, wait, command, send, read, state, thread, completedPrompt, visible, check, save };
+    stage('活动轮次配置保存与下轮原生应用');
+    await runActiveConfiguration(configurationStory);
+    await runMentionFilter(configurationStory, d.chatId, 'original');
 
     stage('运行中追加进入原轮次');
     const before = d.model.requests.length;
@@ -369,7 +392,7 @@ export async function runAppServerLifecycle(d: LifecycleDriver): Promise<Lifecyc
     report.checks.push({ name: 'stop_card_interrupted', ok: stoppedStream.status === 'interrupted', detail: stoppedStream }); save();
 
     stage('运行中 /clear 确认、新线程与配置继承');
-    const clearTurn = await runActiveClear({ driver: d, report, before: original, wait, read, send, thread, completedPrompt, check, save });
+    const clearTurn = await runActiveClear({ driver: d, report, before: await state(d.chatId), wait, read, send, thread, completedPrompt, check, save });
 
     stage('/new 产品路径新群与配置继承');
     const newName = `life-${d.runId}`;
@@ -382,6 +405,22 @@ export async function runAppServerLifecycle(d: LifecycleDriver): Promise<Lifecyc
     assert.notEqual(newTurn.threadId, clearTurn.threadId);
     report.sessions.new = await state(newChat);
     check('new_product_chat_inherits', { chatId: newChat, threadId: newTurn.threadId });
+    report.sessions.newInherited = report.sessions.new;
+    stage('require-at 与 yolo 新群继承及会话隔离');
+    await runMentionFilter(configurationStory, newChat, 'new_inherited');
+    await command(newChat, '/require_at off', 'off');
+    await command(newChat, '/yolo off', 'normal');
+    await command(newChat, `/model ${d.modelName}`, d.modelName);
+    await command(newChat, '/reasoning low', 'low');
+    await command(newChat, '/sandbox read-only', 'read-only');
+    await command(newChat, '/network off', '网络');
+    const source = await state(d.chatId);
+    assert.equal(source.configuration['session.requireMention'], true);
+    assert(['on', 'yolo'].includes(String(source.configuration['runtime.codex.yoloMode'])));
+    await runMentionFilter(configurationStory, d.chatId, 'source_isolated');
+    await completedPrompt(newChat, 'NEW_OFF');
+    report.sessions.new = await state(newChat);
+    check('require_at_and_yolo_session_isolation');
 
     stage('Bridge 重启后原线程续用与去重');
     const messagesBefore = botReplyIds(await read(newChat), d.botAppId, newTurn.response);
@@ -496,7 +535,8 @@ export async function runAppServerLifecycle(d: LifecycleDriver): Promise<Lifecyc
     check('active_clear_no_old_delivery', { threadId: report.activeClear.threadId, turnId: report.activeClear.turnId });
     check('all_inputs_user_readback');
     assert.deepEqual(d.model.unexpected, [], '模型收到未编排调用');
-    assert(d.model.requests.every((r) => r.body.model === d.modelName && (r.body.reasoning as { effort?: string })?.effort === 'low'), '实际模型请求必须使用继承后的模型和思考级别');
+    assert(d.model.requests.every((r) => [d.modelName, d.alternateModelName].includes(String(r.body.model))
+      && ['low', 'high'].includes(String((r.body.reasoning as { effort?: string })?.effort))), '模型请求只能使用本次fixture的两种配置');
     check('fixture_model_only');
     report.automaticPassed = report.checks.every((c) => c.ok)
       && (!d.nativeRequestCards || report.nativeCards?.length === 4);
