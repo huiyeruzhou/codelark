@@ -35,8 +35,23 @@ export interface MirrorReadPosition {
   threadId: string;
   lastEventSignature?: string;
   lastEventTimestamp?: string;
+  lastEventType?: BridgeMirrorRecordType;
+  lastEventRole?: 'user' | 'assistant' | 'commentary' | 'system';
+  lastEventTurnId?: string;
   lastEventCount: number;
 }
+
+type BridgeMirrorRecordType =
+  | 'message'
+  | 'reasoning'
+  | 'plan_update'
+  | 'task_started'
+  | 'task_complete'
+  | 'task_aborted'
+  | 'tool_started'
+  | 'tool_finished'
+  | 'context_usage'
+  | 'goal_status';
 
 export interface BridgeSession {
   id: string;

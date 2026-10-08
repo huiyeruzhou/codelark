@@ -94,6 +94,46 @@ describe('reconcileBridgeMirrorCursor', () => {
     assert.equal(delta.nextCursor.lastEventSignature, 'y');
   });
 
+  it('recovers only records after the previous semantic turn when a snapshot moves records', () => {
+    const events = [
+      { ...makeEvent('historical', 'assistant', 'historical'), turnId: 'older-turn' },
+      { ...makeEvent('old-rewritten', 'assistant', 'old answer'), turnId: 'previous-turn' },
+      { ...makeEvent('new-start', 'user', 'new prompt'), turnId: 'new-turn' },
+      { ...makeEvent('new-answer', 'assistant', 'new answer'), turnId: 'new-turn' },
+    ];
+    const delta = reconcileBridgeMirrorCursor({
+      initialized: true,
+      lastEventSignature: 'missing-old-terminal',
+      lastEventTimestamp: '',
+      lastEventType: 'task_complete',
+      lastEventTurnId: 'previous-turn',
+      lastEventCount: 3,
+    }, events, true);
+
+    assert.deepEqual(delta.deliverableRecords.map((event) => event.signature), ['new-start', 'new-answer']);
+    assert.equal(delta.reset, true);
+  });
+
+  it('emits a rewritten assistant snapshot from the same semantic turn', () => {
+    const delta = reconcileBridgeMirrorCursor({
+      initialized: true,
+      lastEventSignature: 'old-answer',
+      lastEventTimestamp: '2026-03-25T00:00:02.000Z',
+      lastEventType: 'message',
+      lastEventRole: 'assistant',
+      lastEventTurnId: 'same-turn',
+      lastEventCount: 3,
+    }, [
+      { ...makeEvent('start', 'user', 'prompt', '2026-03-25T00:00:02.000Z'), turnId: 'same-turn' },
+      { ...makeEvent('new-answer', 'assistant', 'revised answer', '2026-03-25T00:00:02.000Z'), turnId: 'same-turn' },
+      { ...makeEvent('complete', 'assistant', '', '2026-03-25T00:00:02.000Z', 'task_complete'), turnId: 'same-turn' },
+      { ...makeEvent('next-start', 'user', 'next prompt', '2026-03-25T00:00:03.000Z'), turnId: 'next-turn' },
+    ], true);
+
+    assert.deepEqual(delta.deliverableRecords.map((event) => event.signature), ['new-answer', 'complete', 'next-start']);
+    assert.equal(delta.reset, true);
+  });
+
   it('still avoids replay when reset happens but there are no newer timestamps', () => {
     const events = [
       makeEvent('x', 'user', 'older', '2026-03-25T00:00:00.000Z'),
