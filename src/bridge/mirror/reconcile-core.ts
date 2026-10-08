@@ -96,9 +96,21 @@ export function readMirrorDeliverableRecords(
       source.runtime === 'cursor',
     );
     subscription.cursor = delta.nextCursor;
-    const initialRecoveryRecords = !previousCursor.initialized && subscription.lastDeliveredAt
-      ? fullDelta.records.filter((record) => record.timestamp > subscription.lastDeliveredAt!)
+    // Cursor rewrites its snapshot transcript in place.  Signatures for an
+    // already-delivered turn can therefore disappear or change across a
+    // Bridge restart, and turn-id recovery alone may return that old turn plus
+    // every later record.  The persisted delivery watermark is the durable
+    // lower bound: on every Cursor full recovery, never recreate cards for
+    // records at or before it.
+    const recoveryCandidates = !previousCursor.initialized && subscription.lastDeliveredAt
+      ? fullDelta.records
       : delta.deliverableRecords;
+    const initialRecoveryRecords = subscription.lastDeliveredAt
+      && (!previousCursor.initialized || source.runtime === 'cursor')
+      ? recoveryCandidates.filter((record) => (
+          Boolean(record.timestamp) && record.timestamp > subscription.lastDeliveredAt!
+        ))
+      : recoveryCandidates;
     deliverableRecords = filterDuplicateAssistantEvents(previousCursor, initialRecoveryRecords);
     subscription.trailingText = '';
     subscription.fileOffset = snapshot.size;
