@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import type { BridgeMirrorRecord } from '../contracts.js';
 import { buildToolCallDetailFromInput } from '../../shared/progress/tool-call-details.js';
 import { CONTEXT_COMPACTED_NOTICE } from './session-index/internal-control-events.js';
+import { parseMcpToolCallItem } from './mcp-tool-call.js';
 
 // Only the common v2 fields are required. New item kinds remain visible as tools.
 export interface AppServerItem {
@@ -131,6 +132,18 @@ export function protocolItemRecord(threadId: string, turnId: string, item: AppSe
   }
   if (itemType === 'plan') return make({ type: 'message', role: 'commentary', content: item.text || '' });
   if (itemType === 'contextcompaction') return completed ? make({ type: 'message', role: 'commentary', content: CONTEXT_COMPACTED_NOTICE }) : undefined;
+  const mcpCall = parseMcpToolCallItem(item);
+  if (mcpCall) {
+    return make({
+      type: completed ? 'tool_finished' : 'tool_started',
+      toolId: mcpCall.id || item.id,
+      toolName: mcpCall.toolName,
+      toolInput: mcpCall.input,
+      toolDetail: mcpCall.detail,
+      content: completed ? mcpCall.errorText || mcpCall.output : '',
+      isError: mcpCall.isError,
+    });
+  }
   const name = itemType === 'commandexecution' ? 'Bash' : itemType === 'filechange' ? 'apply_patch' : item.type;
   const patchText = itemType === 'filechange' ? appServerFileChangePatchText(item) : '';
   return make({

@@ -23,6 +23,7 @@ import {
   buildToolCallDetailFromNormalizedCodexCall,
   normalizeCodexToolCall,
 } from './tool-call-normalizer.js';
+import { parseMcpToolCallItem } from '../mcp-tool-call.js';
 
 export interface CodexSessionToolEvent {
   recordType: Extract<BridgeMirrorRecord['type'], 'tool_started' | 'tool_finished'>;
@@ -149,6 +150,33 @@ export function codexSessionToolEventFromEventMessage(
   activeTurnId: string | null,
 ): CodexSessionToolEvent | null {
   if (!payload) return null;
+
+  if (payload.type === 'item_started' || payload.type === 'item_updated' || payload.type === 'item_completed') {
+    const mcpCall = parseMcpToolCallItem(payload.item);
+    if (mcpCall) {
+      const finished = payload.type === 'item_completed'
+        || mcpCall.status.toLowerCase() === 'completed'
+        || mcpCall.status.toLowerCase() === 'failed';
+      const output = mcpCall.errorText || mcpCall.output;
+      return {
+        recordType: finished ? 'tool_finished' : 'tool_started',
+        event: toolCallEventFromSdk(
+          mcpCall.id || signature,
+          mcpCall.toolName,
+          finished ? mcpCall.isError ? 'error' : 'complete' : 'running',
+          {
+            input: mcpCall.input,
+            ...(finished && output ? { output } : {}),
+            structured: mcpCall.detail,
+          },
+        ),
+        content: finished ? output : '',
+        ...(payload.turn_id || activeTurnId ? { turnId: payload.turn_id || activeTurnId || undefined } : {}),
+        toolInput: mcpCall.input,
+        ...(finished ? { isError: mcpCall.isError } : {}),
+      };
+    }
+  }
 
   if (payload.type === 'web_search_end') {
     const toolId = extractNormalizedFreeText(payload.call_id) || signature;

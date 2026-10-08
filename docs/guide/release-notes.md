@@ -14,7 +14,7 @@
 
 - 新 Codex thread 默认由 CodeLark 管理的本地 app-server 执行；macOS Codex Desktop 可通过共享 endpoint 使用同一个 server，避免两个独立 writer 争抢同一 thread。
 - app-server 原生覆盖提交、流式事件、停止、清空、新建、恢复、问答、审批和 MCP 请求。只读状态查询不会隐式创建 thread，启动、连接和当前后端状态也会明确展示。
-- 补齐 app-server 事件兼容：原生 `fileChange` 复用旧链路已有的 patch 卡片，显示真实文件列表、分文件 diff 与语法高亮，不再暴露协议 JSON；上下文压缩也与旧版 `compacted` 使用相同提示与展示语义。
+- 补齐 app-server 事件兼容：原生 `fileChange` 复用旧链路已有的 patch 卡片，显示真实文件列表、分文件 diff 与语法高亮；`mcpToolCall` 优先使用调用方提供的可读标题，并在展开区按 server/tool、arguments、结果和错误展示；两者都不再暴露整段协议 JSON。上下文压缩也与旧版 `compacted` 使用相同提示与展示语义。
 - 升级前的 tmux 会话会在下一次输入前迁移到 app-server；只有确认 app-server 可连接后才释放 CodeLark 自己记录的旧 writer。迁移失败时不会发送输入、不会更新绑定，也不会静默回退。
 - 若旧 Codex Desktop 仍持有 writer，CodeLark 会停止重试并显示“重启并重试 / 取消”卡片。确认后使用脚本正常退出并重开 Desktop，再自动重试原文本；不会强制杀进程。
 - Codex `/provider`、全局配置和 Web UI 现在只支持 `tmux`。app-server 不再伪装成并列 provider；历史 `sdk/pty` 配置仍可读取，但统一归一为 `tmux`，不再进入对应执行路径。

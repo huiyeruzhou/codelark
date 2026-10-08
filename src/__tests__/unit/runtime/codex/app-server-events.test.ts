@@ -7,6 +7,7 @@ import {
 } from '../../../../runtime/codex/app-server-events.js';
 import { CONTEXT_COMPACTED_NOTICE } from '../../../../runtime/codex/session-index/internal-control-events.js';
 import { renderToolCallDetailMarkdown } from '../../../../shared/progress/tool-call-details.js';
+import { getToolPresentation } from '../../../../shared/progress/tool-presentation.js';
 
 describe('app-server protocol item records', () => {
   it('renders array-shaped fileChange items as a multi-file patch instead of raw JSON', () => {
@@ -89,6 +90,92 @@ describe('app-server protocol item records', () => {
       action: 'move',
       toPath: 'docs/new.md',
     }]);
+  });
+
+  it('normalizes mcpToolCall items from the app-server schema', () => {
+    const item = {
+      type: 'mcpToolCall',
+      id: 'call-mcp-1',
+      server: 'cua_repl',
+      tool: 'js',
+      status: 'completed',
+      arguments: { code: 'await cua.getState()', title: '读取状态' },
+      appContext: null,
+      pluginId: 'unified-computer-use@openai-bundled',
+      readOnlyHint: true,
+      result: {
+        content: [{ type: 'text', text: 'Window: Cursor' }],
+        structuredContent: null,
+        isError: false,
+      },
+      error: null,
+      durationMs: 42,
+    };
+
+    const started = protocolItemRecord('thread', 'turn', { ...item, status: 'inProgress', result: null }, false);
+    assert.equal(started?.type, 'tool_started');
+    assert.equal(started?.toolName, 'mcp__cua_repl__js');
+    assert.deepEqual(started?.toolInput, item.arguments);
+    assert.deepEqual(started?.toolDetail, {
+      kind: 'mcp',
+      server: 'cua_repl',
+      tool: 'js',
+      title: '读取状态',
+      input: item.arguments,
+    });
+
+    const completed = protocolItemRecord('thread', 'turn', item, true);
+    assert.equal(completed?.type, 'tool_finished');
+    assert.equal(completed?.toolName, 'mcp__cua_repl__js');
+    assert.equal(completed?.content, 'Window: Cursor');
+    assert.equal(completed?.isError, false);
+    assert.deepEqual(completed?.toolDetail, {
+      kind: 'mcp',
+      server: 'cua_repl',
+      tool: 'js',
+      title: '读取状态',
+      input: item.arguments,
+      output: 'Window: Cursor',
+    });
+    const presentation = getToolPresentation({
+      id: item.id,
+      name: completed?.toolName || '',
+      status: 'complete',
+      detail: completed?.toolDetail,
+    });
+    assert.equal(presentation.title, '🔧 读取状态');
+    const markdown = renderToolCallDetailMarkdown({
+      id: item.id,
+      name: completed?.toolName || '',
+      status: 'complete',
+      detail: completed?.toolDetail,
+    });
+    assert.match(markdown, /mcp: `cua_repl\/js`/u);
+    assert.match(markdown, /"code": "await cua\.getState\(\)"/u);
+    assert.match(markdown, /Window: Cursor/u);
+    assert.doesNotMatch(markdown, /"type":\s*"mcpToolCall"/u);
+  });
+
+  it('uses failed MCP result text as the error instead of rendering the raw item', () => {
+    const completed = protocolItemRecord('thread', 'turn', {
+      type: 'McpToolCall',
+      id: 'call-mcp-2',
+      server: 'cua_repl',
+      tool: 'js',
+      status: 'failed',
+      arguments: { code: 'await app.click(22)' },
+      result: {
+        content: [{ type: 'text', text: 'elementIndex must be an integer' }],
+        isError: true,
+      },
+      error: null,
+    }, true);
+
+    assert.equal(completed?.toolName, 'mcp__cua_repl__js');
+    assert.equal(completed?.content, 'elementIndex must be an integer');
+    assert.equal(completed?.isError, true);
+    assert.equal(completed?.toolDetail?.kind === 'mcp' ? completed.toolDetail.errorText : '', 'elementIndex must be an integer');
+    assert.doesNotMatch(completed?.content || '', /"type":\s*"McpToolCall"/u);
   });
 
   it('uses the same context-compaction notice as the rollout mirror', () => {

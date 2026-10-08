@@ -1955,6 +1955,95 @@ describe('readCodexSessionMirrorRecordStreamByFilePath', () => {
     fs.rmSync(tempRoot, { recursive: true, force: true });
   });
 
+  it('parses persisted item_completed McpToolCall events using the app-server schema', () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-codex-mirror-mcp-'));
+    const filePath = path.join(tempRoot, 'rollout.jsonl');
+    fs.writeFileSync(filePath, [
+      JSON.stringify({
+        timestamp: '2026-10-08T12:53:02.542Z',
+        type: 'response_item',
+        payload: {
+          type: 'function_call',
+          name: 'js',
+          namespace: 'mcp__cua_repl',
+          arguments: '{"code":"await cua.getState()"}',
+          call_id: 'call-mcp-1',
+        },
+      }),
+      JSON.stringify({
+        timestamp: '2026-10-08T12:53:03.000Z',
+        type: 'event_msg',
+        payload: {
+          type: 'item_completed',
+          turn_id: 'turn-mcp-1',
+          item: {
+            type: 'McpToolCall',
+            id: 'call-mcp-1',
+            server: 'cua_repl',
+            tool: 'js',
+            status: 'completed',
+            arguments: { code: 'await cua.getState()' },
+            result: {
+              content: [{ type: 'text', text: 'Window: Cursor' }],
+              isError: false,
+            },
+            error: null,
+          },
+        },
+      }),
+      '',
+    ].join('\n'), 'utf-8');
+
+    const delta = readCodexSessionMirrorRecordDeltaByFilePath(filePath, 0, fs.statSync(filePath).size);
+    assert.deepEqual(delta.records.map((record) => ({
+      type: record.type,
+      toolId: record.toolId,
+      toolName: record.toolName,
+      content: record.content,
+      isError: record.isError,
+      detail: record.toolDetail,
+    })), [
+      {
+        type: 'tool_started',
+        toolId: 'call-mcp-1',
+        toolName: 'mcp__cua_repl__js',
+        content: '',
+        isError: undefined,
+        detail: {
+          kind: 'mcp',
+          server: 'cua_repl',
+          tool: 'js',
+          input: { code: 'await cua.getState()' },
+        },
+      },
+      {
+        type: 'tool_finished',
+        toolId: 'call-mcp-1',
+        toolName: 'mcp__cua_repl__js',
+        content: 'Window: Cursor',
+        isError: false,
+        detail: {
+          kind: 'mcp',
+          server: 'cua_repl',
+          tool: 'js',
+          input: { code: 'await cua.getState()' },
+          output: 'Window: Cursor',
+        },
+      },
+    ]);
+    assert.deepEqual(delta.unknownKinds, []);
+
+    const history = readCodexSessionJsonlHistoryStreamByFilePath(filePath);
+    const completedHistory = history.find((entry) => entry.kind === 'event_msg:item_completed');
+    assert.equal(completedHistory?.role, 'tool');
+    assert.match(completedHistory?.content || '', /^mcp__cua_repl__js/u);
+    assert.match(completedHistory?.content || '', /mcp: `cua_repl\/js`/u);
+    assert.match(completedHistory?.content || '', /Window: Cursor/u);
+    assert.doesNotMatch(completedHistory?.content || '', /"type":\s*"McpToolCall"/u);
+
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  });
+
   it('surfaces Codex Codex context compaction as a commentary notice', () => {
     const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-codex-mirror-'));
     const filePath = path.join(tempRoot, 'rollout.jsonl');

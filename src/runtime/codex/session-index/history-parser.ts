@@ -40,6 +40,7 @@ import {
   buildToolCallDetailFromNormalizedCodexCall,
   normalizeCodexToolCall,
 } from './tool-call-normalizer.js';
+import { parseMcpToolCallItem } from '../mcp-tool-call.js';
 
 interface HistoryToolState {
   name: string;
@@ -97,6 +98,7 @@ function classifySessionJsonlRole(
       payloadType === 'exec_command_end'
       || payloadType === 'patch_apply_end'
       || payloadType === 'mcp_tool_call_end'
+      || (payloadType.startsWith('item_') && Boolean(parseMcpToolCallItem(evt.payload?.item)))
       || payloadType === 'web_search_end'
       || payloadType === 'dynamic_tool_call_request'
       || payloadType === 'dynamic_tool_call_response'
@@ -332,6 +334,26 @@ function extractSessionJsonlPrimaryText(
     }
     if (payloadType === 'agent_reasoning') {
       return extractNormalizedStructuredText(evt.payload?.text);
+    }
+    if (payloadType === 'item_started' || payloadType === 'item_updated' || payloadType === 'item_completed') {
+      const mcpCall = parseMcpToolCallItem(evt.payload?.item);
+      if (mcpCall) {
+        const previous = mcpCall.id ? toolStates?.get(mcpCall.id) : null;
+        const detail = mergeToolCallDetail(previous?.detail, mcpCall.detail);
+        if (mcpCall.id) toolStates?.set(mcpCall.id, { name: mcpCall.toolName, detail });
+        const finished = payloadType === 'item_completed'
+          || mcpCall.status.toLowerCase() === 'completed'
+          || mcpCall.status.toLowerCase() === 'failed';
+        const structured = renderToolCallDetailMarkdown({
+          id: mcpCall.id || createCodexEventSignature(JSON.stringify(evt.payload?.item)),
+          name: mcpCall.toolName,
+          status: finished ? mcpCall.isError ? 'error' : 'complete' : 'running',
+          input: null,
+          output: null,
+          detail,
+        });
+        return structured ? `${mcpCall.toolName}\n\n${structured}` : mcpCall.toolName;
+      }
     }
     if (payloadType === 'exec_command_end') {
       const exitCode = typeof (evt.payload as any)?.exit_code === 'number' ? (evt.payload as any).exit_code : null;

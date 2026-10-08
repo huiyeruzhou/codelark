@@ -95,6 +95,7 @@ export type ToolCallDetail =
       kind: 'mcp';
       server?: string;
       tool?: string;
+      title?: string;
       input?: unknown;
       output?: string;
       errorText?: string;

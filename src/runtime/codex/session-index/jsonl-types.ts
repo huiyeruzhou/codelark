@@ -111,6 +111,7 @@ export interface SessionEventLine {
       tool?: unknown;
       arguments?: unknown;
     };
+    item?: Record<string, unknown>;
   };
 }
 
