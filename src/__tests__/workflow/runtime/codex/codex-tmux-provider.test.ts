@@ -998,7 +998,7 @@ describe('codex-tmux-provider', () => {
     }
   });
 
-  it('injects prompt into a real tmux pane with Option+Enter newlines and Enter submit', async (t: TestContext) => {
+  it('injects prompt into a real tmux pane with explicit editor newlines and one Enter submit', async (t: TestContext) => {
     if (!(await tmuxAvailable())) {
       t.skip('tmux is not available');
       return;
@@ -1010,9 +1010,9 @@ describe('codex-tmux-provider', () => {
     const outputPath = path.join(tempDir, 'output.hex');
     const scriptPath = path.join(tempDir, 'capture-stdin.cjs');
     const expectedBytes = process.platform === 'win32'
-      ? Buffer.from('hello\rworld\r')
-      : Buffer.from('hello\x1b\rworld\r');
-    const expectedNewlineCount = 2;
+      ? Buffer.from('hello\n\nworld\n\r')
+      : Buffer.from('hello\x1b\r\x1b\rworld\x1b\r\r');
+    const expectedNewlineCount = 4;
 
     fs.writeFileSync(scriptPath, [
       "const fs = require('node:fs');",
@@ -1028,7 +1028,7 @@ describe('codex-tmux-provider', () => {
       '  chunks.push(...chunk);',
       '  const newlineCount = chunks.filter((byte) => byte === 10 || byte === 13).length;',
       "  const submitted = process.platform === 'win32'",
-      "    ? Buffer.from(chunks).toString('utf8').endsWith('world\\r')",
+      "    ? Buffer.from(chunks).toString('utf8').endsWith('world\\n\\r')",
       '    : newlineCount >= expectedNewlineCount;',
       '  if (submitted) {',
       "    fs.writeFileSync(outputPath, Buffer.from(chunks).toString('hex'));",
@@ -1053,7 +1053,7 @@ describe('codex-tmux-provider', () => {
       ]);
 
       assert.equal(await waitForFile(readyPath), true, 'capture process should become ready');
-      await injectPromptIntoTmuxPane(`${sessionName}:0.0`, 'hello\nworld');
+      await injectPromptIntoTmuxPane(`${sessionName}:0.0`, 'hello\n\nworld\n');
       assert.equal(await waitForFile(outputPath), true, 'capture process should write received bytes');
 
       const receivedBytes = Buffer.from(fs.readFileSync(outputPath, 'utf-8').trim(), 'hex');

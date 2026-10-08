@@ -139,7 +139,7 @@ long-running 功能不能只测“成功派发 worker”。精炼用户故事至
 | `codex-provider.test.ts` | Codex SDK/SSE 事件转换、图片输入、错误事件和 provider 主路径。 |
 | `codex-routing-provider.test.ts` | Codex/Claude/Kimi provider 选择和 fallback，包含 Claude 默认 tmux 与 Kimi tmux。 |
 | `codex-cli-executable.test.ts`、`codex-models.test.ts` | Codex CLI 定位和模型列表缓存。 |
-| `codex-tmux-provider.test.ts` | Codex tmux prompt 注入、启动参数、auto-enter、清理和事件输出。 |
+| `codex-tmux-provider.test.ts`、`windows-codex-input.test.ts` | Codex tmux prompt 注入、启动参数、auto-enter、清理和事件输出。Windows 多行输入按正文粘贴、`C-j` 换行、最后一次 Enter 提交；受控 transport 覆盖 ConPTY 丢失 paste 边界时仍保持完整 Unicode、空行及尾随换行，真实 tmux 字节测试另查平台按键编码。原生 medium CJK 故事必须同时核验完整 prompt、一次模型请求及一条完整 rollout 用户消息，并保留实际注入命令。 |
 | `codex-session-index.test.ts`、`codex-session-mirror.test.ts` | Codex JSONL/session 索引读取、mirror cursor 对齐和事件重放。 |
 | `claude-tmux-provider.test.ts`、`claude-sdk-provider.test.ts`、`claude-session-jsonl.test.ts` | Claude tmux 启动/注入/mirror SSE、Claude SDK helper、Claude JSONL session 读取。 |
 | `kimi-tmux-provider.test.ts`、真实 Kimi executable E2E、`kimi-tmux-provider-local-process.e2e.test.ts` | fresh 不带 `-r` 单次启动、从真实 TUI 发现 CLI session id、wire 在首条输入前或输入后创建、跨 turn 复用、慢模型 `Ctrl-S` steer、tmux 丢失恢复、think/status 和 terminal 归属；scripted fixture 继续穿过真实 tmux，但不冒充真实 executable gate。 |
@@ -148,6 +148,8 @@ long-running 功能不能只测“成功派发 worker”。精炼用户故事至
 | `interactive-turn-runner.test.ts` | 一次 runtime turn 的主编排，含 stream、tool、context、goal、stop、mirror suppression、基础对话 simulator，以及 answer 中间态附件立即发送、thinking 排除和终态去重。 |
 | `interactive-turn-sdk-conversation-engine.test.ts`、`interactive-turn-sdk-stream-events-controller.test.ts`、`interactive-turn-final-response-plan.test.ts`、`interactive-turn-terminal-finalization-controller.test.ts` | SDK conversation 内联附件/tool 展开、stream event 控制、最终回复计划和终端 provider finalization。 |
 | `real-codex-tmux-provider.e2e.test.ts`、`real-codex-startup-update.e2e.test.ts`、`real-claude-tmux-provider.e2e.test.ts`、`real-kimi-code-bridge.e2e.test.ts`、`real-kimi-code-tmux-provider.e2e.test.ts`、`kimi-tmux-provider-local-process.e2e.test.ts` | 隔离 home 中启动真实 provider 进程或 fake backend；Codex 以真实 CLI + tmux + Mock Responses 流验证 answer 附件在终止事件前发送、回复到异步就绪的流式卡片且 completed 不重复；Claude 在独立 tmux socket 中覆盖 fresh session、销毁测试 tmux 后用同一 identity `--resume`，并验证前后只写同一份 JSONL；opt-in 旧版升级门禁使用隔离 npm prefix 真实执行 Update now、更新和重启。Kimi 用真实 executable + 真 tmux + 本地 OpenAI-compatible proxy 覆盖 fresh/steer/resume，并让同一 proxy 返回确定性 402，证明真实 CLI 写出的 `ERROR turn failed` 会进入 SSE error 且不产生成功 result；thinking 排除和 fake CLI session/wire 生命周期继续用确定性 fixture 回归。 |
+
+Windows Codex 多行回归必须区分编辑器内容与模型请求。[官方 0.145 默认换行键](https://github.com/openai/codex/blob/rust-v0.145.0/codex-rs/tui/src/keymap.rs#L943)包含 `Ctrl+j`；CodeLark 保留空行及末尾换行，但 [Codex 提交准备](https://github.com/openai/codex/blob/rust-v0.145.0/codex-rs/tui/src/bottom_pane/chat_composer.rs#L2867)会自行去掉首尾空白。受控按键模型不替代 Windows 原生 CLI 验收。
 
 ### 交付、流式、mirror 和用户可见渲染
 

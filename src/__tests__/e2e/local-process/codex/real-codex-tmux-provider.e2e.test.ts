@@ -1273,6 +1273,13 @@ describe('real codex tmux provider e2e', () => {
     const address = { channelType: 'feishu', chatId: `chat-real-tmux-long-${process.pid}-${Date.now()}` } as const;
     const mediumPrompt = createMediumMultilinePrompt();
     const longPrompt = createLongPrompt();
+    const originalSendActions = tmuxCore.sendActions;
+    const inputTrace: Array<{ target: string; actions: unknown; options: unknown; commands: string[] }> = [];
+    tmuxCore.sendActions = async (target, actions, options) => {
+      const result = await originalSendActions(target, actions, options);
+      inputTrace.push({ target, actions, options, commands: result.commands });
+      return result;
+    };
     let tmuxSessionName = '';
     let generatedThreadId = '';
     let generatedThreadFilePath = '';
@@ -1285,8 +1292,11 @@ describe('real codex tmux provider e2e', () => {
       await _testOnly.handleMessage(adapter, inboundMessage(address, `/clear real-tmux-long ${workDir}`, 'incoming-real-long-new'));
       await startTmuxProvider(adapter, store, address, 'incoming-real-long-provider');
       await new Promise((resolve) => setTimeout(resolve, 1_500));
+      const mediumRequestsStart = proxy.requests.length;
+      inputTrace.length = 0;
       const mediumTurn = _testOnly.handleMessage(adapter, inboundMessage(address, mediumPrompt, 'incoming-real-medium-prompt'));
       await mediumTurn;
+      console.log('[codex-real-e2e] Medium prompt injection:', JSON.stringify(inputTrace));
 
       const binding = store.getChannelChat(address.channelType, address.chatId);
       assert.ok(binding);
@@ -1324,6 +1334,15 @@ describe('real codex tmux provider e2e', () => {
         250,
       );
       assert.equal(mediumTurnCompleted, true, 'medium multiline CJK turn should complete before the long prompt is sent');
+      const mediumRequests = proxy.requests.slice(mediumRequestsStart).filter((request) => request.url.includes('/responses'));
+      assert.equal(mediumRequests.length, 1, 'one medium input must produce exactly one model request');
+      const mediumMessages = fs.readFileSync(generatedThreadFilePath, 'utf8').split(/\r?\n/u)
+        .filter(Boolean)
+        .map((line) => JSON.parse(line))
+        .filter((entry) => entry.type === 'event_msg' && entry.payload?.type === 'user_message')
+        .map((entry) => entry.payload.message as string)
+        .filter((message) => message.includes('clk-medium-cjk-start') || message.includes('clk-medium-cjk-end'));
+      assert.deepEqual(mediumMessages, [mediumPrompt], 'rollout must contain exactly one complete medium user message');
 
       await _testOnly.handleMessage(adapter, inboundMessage(address, longPrompt, 'incoming-real-long-prompt'));
 
@@ -1343,6 +1362,7 @@ describe('real codex tmux provider e2e', () => {
         ].join('\n'));
       }
     } finally {
+      tmuxCore.sendActions = originalSendActions;
       if (tmuxSessionName) {
         await execFileAsync('tmux', ['kill-session', '-t', tmuxSessionName]).catch(() => undefined);
       }

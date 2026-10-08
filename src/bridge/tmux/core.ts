@@ -42,6 +42,8 @@ export interface TmuxSendActionsResult {
 export interface TmuxSendActionsOptions {
   delayMs?: number;
   forcePasteLiterals?: boolean;
+  /** Windows TUI editor key for newlines that ConPTY would otherwise turn into Enter. */
+  pasteNewlineKey?: string;
 }
 
 export interface TmuxEnsureSessionResult {
@@ -65,7 +67,7 @@ export interface TmuxCore {
   capturePane(target: string, lines: number): Promise<TmuxCapturePaneResult>;
   sendActions(target: string, actions: TmuxSendAction[], options?: TmuxSendActionsOptions): Promise<TmuxSendActionsResult>;
   sendInterrupt(target: string): Promise<string>;
-  injectPromptIntoPane(targetPane: string, prompt: string): Promise<TmuxSendActionsResult>;
+  injectPromptIntoPane(targetPane: string, prompt: string, options?: Pick<TmuxSendActionsOptions, 'pasteNewlineKey'>): Promise<TmuxSendActionsResult>;
   /** Enable tmux's extended key protocol for TUIs that distinguish Enter from newline. */
   ensureExtendedKeys?(): Promise<string>;
   commandPreview(args: readonly string[]): string;
@@ -456,7 +458,7 @@ class TmuxCliCore implements TmuxCore {
         && (options.forcePasteLiterals === true || Array.from(action.text).length > PASTE_LITERAL_THRESHOLD)
       ) {
         commands.push(...(this.psmuxServerSidePaste
-          ? await this.sendPsmuxPasteInput(target, action.text)
+          ? await this.sendPsmuxEditorInput(target, action.text, options.pasteNewlineKey)
           : await this.pasteLiteralChunks(target, action.text)));
       } else {
         const args = tmuxSendActionArgv(target, action);
@@ -468,6 +470,33 @@ class TmuxCliCore implements TmuxCore {
       }
     }
     return { commands };
+  }
+
+  private async sendPsmuxEditorInput(target: string, text: string, newlineKey?: string): Promise<string[]> {
+    if (!newlineKey || !/[\r\n]/u.test(text)) return this.sendPsmuxPasteInput(target, text);
+    // psmux converts pasted LF to CR. On Windows, Codex may receive those as
+    // individual Enter events instead of one paste, and submit partial input
+    // once its paste-burst window expires. Use the editor's explicit newline
+    // key, keeping CR out of pasted text regardless of delivery timing.
+    const commands: string[] = [];
+    const lines = text.replace(/\r\n?/gu, '\n').split('\n');
+    for (const [index, line] of lines.entries()) {
+      if (line.trim()) {
+        commands.push(...await this.sendPsmuxPasteInput(target, line));
+      } else if (line) {
+        // A whitespace-only line cannot be acknowledged by trimmed captures.
+        // It contains no Enter, so literal delivery is safe here.
+        const args = tmuxSendActionArgv(target, { type: 'literal', text: line });
+        await this.runTmux(args);
+        commands.push(this.command(args));
+      }
+      if (index < lines.length - 1) {
+        const args = tmuxSendActionArgv(target, { type: 'key', key: newlineKey });
+        await this.runTmux(args);
+        commands.push(this.command(args));
+      }
+    }
+    return commands;
   }
 
   private async sendPsmuxPasteInput(target: string, text: string): Promise<string[]> {
@@ -494,7 +523,8 @@ class TmuxCliCore implements TmuxCore {
         const baseline = await this.capturePsmuxPasteScreen(target);
         commands.push(baseline.command);
         // psmux exposes a single-command paste path that base64-decodes server-side
-        // and emits a real bracketed paste. This avoids cross-process buffer races.
+        // and writes bracket markers when requested. ConPTY may strip the markers;
+        // sendPsmuxEditorInput handles TUI-specific newlines separately.
         const pasteArgs: TmuxArgv = ['send-paste', '-t', target, Buffer.from(chunk, 'utf8').toString('base64')];
         await this.runTmux(pasteArgs);
         commands.push(this.command(pasteArgs));
@@ -584,10 +614,10 @@ class TmuxCliCore implements TmuxCore {
     return result.commands[0] || this.command(['send-keys', '-t', target, 'C-c']);
   }
 
-  async injectPromptIntoPane(targetPane: string, prompt: string): Promise<TmuxSendActionsResult> {
+  async injectPromptIntoPane(targetPane: string, prompt: string, options: Pick<TmuxSendActionsOptions, 'pasteNewlineKey'> = {}): Promise<TmuxSendActionsResult> {
     const commands: string[] = [];
     if (this.psmuxServerSidePaste) {
-      commands.push(...(await this.sendPsmuxPasteInput(targetPane, prompt)));
+      commands.push(...(await this.sendPsmuxEditorInput(targetPane, prompt, options.pasteNewlineKey)));
       const submit = await this.sendActions(targetPane, [{ type: 'key', key: 'Enter' }]);
       commands.push(...submit.commands);
       return { commands };
@@ -652,7 +682,7 @@ export const tmuxCore: TmuxCore = {
   capturePane: (target, lines) => activeTmuxCore.capturePane(target, lines),
   sendActions: (target, actions, options) => activeTmuxCore.sendActions(target, actions, options),
   sendInterrupt: (target) => activeTmuxCore.sendInterrupt(target),
-  injectPromptIntoPane: (targetPane, prompt) => activeTmuxCore.injectPromptIntoPane(targetPane, prompt),
+  injectPromptIntoPane: (targetPane, prompt, options) => activeTmuxCore.injectPromptIntoPane(targetPane, prompt, options),
 };
 
 export const _testOnlyTmuxCore = {

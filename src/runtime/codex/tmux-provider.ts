@@ -850,10 +850,10 @@ export async function injectPromptIntoTmuxPane(targetPane: string, prompt: strin
     target_pane: targetPane,
     prompt_chars: prompt.length,
     lines: lines.length,
-    newline_key: 'M-Enter',
+    newline_key: process.platform === 'win32' ? 'C-j' : 'M-Enter',
     submit_key: 'Enter',
   });
-  const result = await tmuxCore.injectPromptIntoPane(targetPane, prompt);
+  const result = await tmuxCore.injectPromptIntoPane(targetPane, prompt, { pasteNewlineKey: 'C-j' });
   console.log('[codex-tmux] Prompt inject tmux commands:', {
     target_pane: targetPane,
     commands: result.commands,

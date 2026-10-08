@@ -1575,6 +1575,9 @@ export async function handleTmuxBridgeCommand(params: HandleTmuxBridgeCommandPar
                 runtimeProvider.runtime === 'codex'
                 || runtimeProvider.runtime === 'kimi'
               ) && !keySequenceActions,
+              ...(runtimeProvider.runtime === 'codex' && !keySequenceActions
+                ? { pasteNewlineKey: 'C-j' }
+                : {}),
             }),
             ...(runtimeProvider.runtime === 'kimi'
               ? { steer: () => sendKimiTmuxExplicitSteer(`${target}:0.0`) }
