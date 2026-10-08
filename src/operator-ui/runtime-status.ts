@@ -7,20 +7,42 @@ export interface RuntimeStatusProjection {
   bindings: Array<Record<string, unknown>>;
   latest: string;
   config: { provider: string; model: string };
+  backendSummary?: string;
+  defaultBackendLabel?: string;
 }
 
 export const projectRuntimeStatusBrowserSource = String.raw`function projectRuntimeStatus(
   runtime,
   allSessions = [],
   allBindings = [],
-  globalConfig = {}
+  globalConfig = {},
+  runtimeStatus = null
 ) {
   const sessions = allSessions.filter((session) => session.runtime === runtime);
   const bindings = allBindings.filter((binding) => binding.currentRuntime === runtime);
   const uniqueSessionCount = (items) => new Set(
     items.map((binding) => binding.currentSessionId).filter(Boolean),
   ).size;
-  const running = uniqueSessionCount(bindings.filter((binding) => binding.runtimeStatus === 'running'));
+  const backendFor = (binding) => {
+    if (runtime !== 'codex') return undefined;
+    const live = runtimeStatus && runtimeStatus.sessions && runtimeStatus.sessions[binding.currentSessionId];
+    const threadId = binding.currentRuntimeThreadId || binding.currentThreadId || (binding.codexBackend && binding.codexBackend.threadId);
+    return live && (!threadId || !live.threadId || threadId === live.threadId) ? live : binding.codexBackend;
+  };
+  const running = uniqueSessionCount(bindings.filter((binding) => {
+    const backend = backendFor(binding);
+    return backend && backend.backend === 'app-server'
+      ? backend.connection === 'ready' && backend.activity === 'active'
+      : binding.runtimeStatus === 'running';
+  }));
+  const waiting = uniqueSessionCount(bindings.filter((binding) => {
+    const backend = backendFor(binding);
+    return backend && backend.backend === 'app-server' && backend.connection === 'ready' && backend.activity === 'waiting';
+  }));
+  const unconfirmed = uniqueSessionCount(bindings.filter((binding) => {
+    const backend = backendFor(binding);
+    return backend && backend.backend === 'app-server' && (backend.connection !== 'ready' || backend.activity === 'unknown');
+  }));
   const queued = uniqueSessionCount(bindings.filter((binding) => binding.runtimeStatus === 'queued'));
   const stale = uniqueSessionCount(bindings.filter((binding) => binding.mirrorStatus === 'stale'));
   const latest = sessions
@@ -62,7 +84,19 @@ export const projectRuntimeStatusBrowserSource = String.raw`function projectRunt
   }
 
   const common = { sessions, bindings, latest, config };
+  if (runtime === 'codex') {
+    const counts = ['app-server', 'legacy', 'unstarted'].map((kind) => uniqueSessionCount(bindings.filter((binding) => {
+      const backend = backendFor(binding);
+      return backend && backend.backend === kind;
+    })));
+    common.backendSummary = 'app-server ' + counts[0] + ' · 旧执行方式 ' + counts[1] + ' · 尚未启动 ' + counts[2];
+    common.defaultBackendLabel = runtimeStatus && runtimeStatus.codexDefault === 'app-server-auto'
+      ? '新会话优先 app-server'
+      : runtimeStatus && runtimeStatus.codexDefault === 'legacy' ? '新会话使用旧执行方式' : '新会话默认后端未确认';
+  }
   if (running > 0) return { ...common, tone: 'running', state: '运行中 ' + running };
+  if (waiting > 0) return { ...common, tone: 'attention', state: '等待确认或输入 ' + waiting };
+  if (unconfirmed > 0) return { ...common, tone: 'attention', state: '连接或执行状态未确认 ' + unconfirmed };
   if (queued > 0) return { ...common, tone: 'queued', state: '排队中 ' + queued };
   if (stale > 0) return { ...common, tone: 'attention', state: '待恢复 ' + stale };
   if (bindings.length > 0) return { ...common, tone: 'idle', state: '空闲' };
@@ -75,6 +109,7 @@ type ProjectRuntimeStatus = (
   allSessions?: Array<Record<string, unknown>>,
   allBindings?: Array<Record<string, unknown>>,
   globalConfig?: Record<string, unknown>,
+  runtimeStatus?: Record<string, unknown> | null,
 ) => RuntimeStatusProjection;
 
 export const projectRuntimeStatus = Function(

@@ -78,6 +78,7 @@ import {
   settingSessionFormSelect,
 } from './global-settings.js';
 import { readConfiguredCodexModel } from '../../runtime/codex/models.js';
+import { readSessionCodexBackendStatus, formatCodexBackendStatusFields } from './runtime-session.js';
 
 function parseHistoryLimitArg(raw: string): number | null {
   const token = raw.trim();
@@ -337,7 +338,9 @@ export function handleCurrentCommand(options: {
     );
   }
 
-  const activeRuntime = options.previewRuntime || getSessionActiveRuntime(session) || 'codex';
+  const activeRuntime = getSessionActiveRuntime(session) || 'codex';
+  const configRuntime = options.previewRuntime || activeRuntime;
+  const backendStatus = readSessionCodexBackendStatus(session);
   const displayBinding = binding.bridgeSessionId === session.id ? binding : { ...binding, bridgeSessionId: session.id };
   const codexThreadId = getCodexThreadId(session, binding);
   const claudeSessionId = getSessionClaudeSessionId(session) || '';
@@ -363,9 +366,9 @@ export function handleCurrentCommand(options: {
   const sessionKind = session?.session_type === 'draft'
     ? '临时草稿线程'
     : '普通会话';
-  const runtimeFields = currentRuntimeFields(activeRuntime, binding, session);
+  const runtimeFields = currentRuntimeFields(configRuntime, binding, session);
   return buildCommandFields(
-    options.previewRuntime ? `当前会话（配置 ${runtimeLabel(activeRuntime)}）` : '当前会话',
+    options.previewRuntime ? `当前会话（配置 ${runtimeLabel(configRuntime)}）` : '当前会话',
     [
       ['标题', threadInfo.title],
       ['name', sessionName || '-'],
@@ -395,7 +398,8 @@ export function handleCurrentCommand(options: {
       ['目录', formatCommandPath(getSessionWorkingDirectory(session))],
       ...runtimeFields,
       ['类型', sessionKind],
-      ['运行状态', formatRuntimeStatus(session)],
+      ...formatCodexBackendStatusFields(backendStatus),
+      ...(backendStatus?.backend === 'app-server' ? [] : [['运行状态', formatRuntimeStatus(session)] as [string, string]]),
       ['共享镜像', formatMirrorStatus(session)],
     ],
     [
@@ -423,8 +427,10 @@ export function buildCurrentCommandRichCard(options: {
   const session = options.store.getSession(binding.bridgeSessionId);
   if (!session) return undefined;
 
-  const activeRuntime = options.previewRuntime || getSessionActiveRuntime(session) || 'codex';
-  const configSection = options.configSection || activeRuntime;
+  const activeRuntime = getSessionActiveRuntime(session) || 'codex';
+  const configSection = options.configSection || options.previewRuntime || activeRuntime;
+  const backendStatus = readSessionCodexBackendStatus(session);
+  const backendFields = formatCodexBackendStatusFields(backendStatus);
   const commonSection = configSection === 'common';
   const runtimeDisplayLabel = runtimeLabel(activeRuntime);
   const displayBinding = binding.bridgeSessionId === session.id ? binding : { ...binding, bridgeSessionId: session.id };
@@ -494,13 +500,19 @@ export function buildCurrentCommandRichCard(options: {
     tags: [activeRuntime, runtimeThreadId ? currentThreadTagValue(runtimeThreadId) : 'no-thread'],
     tagColor: 'green',
     selects: [runtimeSelect],
-    sections: [{
-      fields: [
+    // 飞书每个 section 只直接显示三个字段；后端活动与终端用途分行，
+    // 保持所有状态可见，而不改变其他命令卡片的字段预算。
+    sections: [
+      { fields: [
+        ...backendFields.filter(([label]) => label !== '终端用途'),
+        ...(backendStatus?.backend === 'app-server' ? [] : [['运行状态', currentTag(formatRuntimeStatus(session), statusColor)] as [string, string]]),
+      ] },
+      { fields: [
+        ...backendFields.filter(([label]) => label === '终端用途'),
         ['类型', currentTag(sessionKind)],
-        ['运行状态', currentTag(formatRuntimeStatus(session), statusColor)],
         ['共享镜像', currentTag(formatMirrorStatus(session), mirrorColor)],
-      ],
-    }],
+      ] },
+    ],
     form: {
       optionElementId: 'clk_current_option',
       ...(commonSection ? {
@@ -514,7 +526,7 @@ export function buildCurrentCommandRichCard(options: {
         actions: [
           {
             text: '刷新',
-            callbackData: buildCommandCallbackData(commonSection ? '/current common' : `/current runtime ${activeRuntime}`),
+            callbackData: buildCommandCallbackData(commonSection ? '/current common' : `/current runtime ${configSection}`),
           },
         ],
       },

@@ -201,7 +201,8 @@ import {
 } from '../tmux/runtime.js';
 import type { TmuxAutoForwardRecoveryPayload } from '../command/codex-tui-selection.js';
 import { prepareCodexAppServerForBinding, codexAppServerTurnOptions, scheduleCodexAppServerView } from '../command/tmux.js';
-import { getCodexAppServerSession, closeCodexAppServerSessions, releaseCodexAppServerSession } from '../../runtime/codex/app-server-registry.js';
+import { getCodexAppServerSession, closeCodexAppServerSessions, releaseCodexAppServerSession, getCodexAppServerServiceStatuses } from '../../runtime/codex/app-server-registry.js';
+import { readCodexBackendStatus, type BridgeRuntimeStatus } from '../session/display/codex-backend-status.js';
 import { stopRunningSession } from '../session/stop-running-session.js';
 import {
   observeAppServerRequests, handleAppServerRequestCallback, answerAppServerQuestion,
@@ -1771,6 +1772,21 @@ export function listActiveBridgeSessions(query?: string) {
     getAdapter: (channelType) => getState().adapters.get(channelType),
     query,
   });
+}
+
+/** Current observations only; this control read must never restore a thread or start a backend. */
+export function getRuntimeStatus(): BridgeRuntimeStatus {
+  const { store } = getBridgeContext();
+  const sessions = store.listSessions().filter((session) => (getSessionActiveRuntime(session) || 'codex') === 'codex'
+    && session.hidden !== true && session.session_type !== 'draft');
+  return {
+    codexDefault: process.env.CODELARK_CODEX_APP_SERVER === '0' && !process.env.CODELARK_CODEX_APP_SERVER_URL
+      ? 'legacy' : 'app-server-auto',
+    sessions: Object.fromEntries(sessions.map((session) => [session.id, readCodexBackendStatus(session)])),
+    appServers: getCodexAppServerServiceStatuses(sessions.map((session) => ({
+      sessionId: session.id, endpoint: session.runtime?.codex?.appServerEndpoint,
+    }))),
+  };
 }
 
 function enqueueManualInput(request: ManualInputRequest): boolean {

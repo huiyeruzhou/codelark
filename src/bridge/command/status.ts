@@ -7,6 +7,7 @@ import {
 import type { BridgeStore } from '../../domain/index.js';
 import { buildFencedCodeBlock } from '../../shared/markdown/fence.js';
 import type { ChannelChat } from '../../domain/index.js';
+import { readSessionCodexBackendStatus, formatCodexBackendStatusFields } from './runtime-session.js';
 
 function formatGlobalRunning(running: boolean): string {
   return running ? 'running' : 'stopped';
@@ -31,6 +32,8 @@ export function buildGlobalStatusResponse(
   const adapters = bridgeStatus.adapters || [];
   const enabledChannels = channels.filter((channel) => channel.enabled !== false);
   const uiUrl = getCurrentUiServerUrl();
+  const appServerUrl = uiUrl ? `${uiUrl}#app-server` : undefined;
+  const backendStatus = readSessionCodexBackendStatus(currentBinding ? store.getSession(currentBinding.bridgeSessionId) : null);
   const currentChatBindingCount = currentBinding
     ? bindings.filter((binding) => binding.channelType === currentBinding.channelType && binding.chatId === currentBinding.chatId).length
     : 0;
@@ -68,11 +71,13 @@ export function buildGlobalStatusResponse(
       ['UI Server', formatGlobalRunning(uiStatus.running)],
       ['UI PID', formatPid(uiStatus.pid)],
       ['UI 地址', uiUrl || '-'],
+      ['app-server 面板', appServerUrl && (markdown ? `[打开 app-server 面板](${appServerUrl})` : appServerUrl)],
       ['通道', `${enabledChannels.length}/${channels.length} enabled`],
       ['Adapter', `${adapters.filter((adapter) => adapter.running).length}/${adapters.length} running`],
       ['聊天', `${activeBindings.length} bound`],
       ['会话', `${sessions.length} total, ${runningSessions.length} running/queued`],
       ['当前聊天', currentBinding ? `${currentBinding.channelType}:${currentBinding.chatId} -> ${currentBinding.bridgeSessionId.slice(0, 8)} (${currentChatBindingCount} chat record)` : '未绑定'],
+      ...formatCodexBackendStatusFields(backendStatus),
     ],
     [
       '发送 `/` 查看当前聊天/当前会话诊断；发送 `/check` 查看当前会话健康检查。',

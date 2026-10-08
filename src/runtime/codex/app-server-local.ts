@@ -60,11 +60,48 @@ export function localAppServerInvocation(executable: string, platform = process.
 
 interface OwnedBackend {
   child: ChildProcess;
+  status: CodexLocalAppServerStatus;
   exited: Promise<void>;
   stop?: Promise<void>;
   socket?: { path: string; dev: number; ino: number };
 }
 const owned = new Map<string, OwnedBackend>();
+export interface CodexLocalAppServerStatus {
+  endpoint: string;
+  owner: 'bridge' | 'external' | 'unknown';
+  state: 'not-started' | 'starting' | 'running' | 'stopped' | 'failed' | 'unsupported' | 'unknown';
+  pid?: number;
+  startedAt?: string;
+  updatedAt?: string;
+  error?: string;
+}
+// Observations survive child cleanup; they are not a PID registry or a liveness probe.
+const observations = new Map<string, CodexLocalAppServerStatus>();
+export function getCodexLocalAppServerStatuses(): CodexLocalAppServerStatus[] {
+  return [...observations.values()].map((status) => ({ ...status }));
+}
+
+/** Classify known failures without publishing raw stderr, URLs, arguments or credentials. */
+export function describeCodexAppServerError(error: unknown, phase = 'app-server 准备'): string {
+  const detail = error as { code?: string | number; syscall?: string; message?: string; stderr?: string; cause?: { message?: string; code?: string } } | undefined;
+  const code = detail?.code ?? detail?.cause?.code;
+  const message = [detail?.message, detail?.stderr, detail?.cause?.message].filter(Boolean).join('\n');
+  let reason: string;
+  if (code === 'ENOENT' && detail?.syscall === 'connect') reason = '本机服务尚未建立监听 socket。';
+  else if (code === 'ENOENT' || /executable .*not found|缺少原生.*可执行文件|无法解析.*包装命令/i.test(message)) reason = '找不到可用的 Codex CLI，请检查安装与可执行文件路径。';
+  else if (/CODEX_HOME/.test(message)) reason = '服务的 CODEX_HOME 与当前 Bridge 不一致，未接管。';
+  else if (code === 'EADDRINUSE' || code === 'ENOTSOCK' || /socket.*(?:已存在|已被占用)|地址已被/.test(message)) reason = '本机地址已被占用或不是 socket，未替换已有资源。';
+  else if (code === 'EACCES' || code === 'EPERM' || /permission denied|access denied|不是当前用户的私有目录/i.test(message)) reason = '权限不足，请检查可执行文件及 socket 目录权限。';
+  else if (code === -32601 || /unrecognized subcommand|不支持.*--listen|无法确认.*--listen|unknown variant/i.test(message)) reason = '当前 Codex CLI 或服务不支持所需 app-server 协议。';
+  else if (code === 'ETIMEDOUT' || /timed?\s*out|timeout|超时/i.test(message)) reason = '连接或协议请求超时，请检查服务是否可用。';
+  else if (/401|403|unauthori[sz]ed|authentication|login|认证|凭据/i.test(message)) reason = '认证失败，请检查此后端的 Codex 登录或 API key 配置。';
+  else if (code === 'ECONNREFUSED') reason = '本机服务拒绝连接，监听端点尚不可用。';
+  else if (/closed|disconnect|连接.*结束|客户端已关闭/i.test(message)) reason = '服务连接已断开。';
+  else if (/configuration|配置/i.test(message)) reason = 'Codex 配置无效或与当前服务不兼容。';
+  else if (typeof code === 'number' && code < 0) reason = 'Codex 服务拒绝了此协议请求。';
+  else reason = 'Codex 未能完成请求，请查看 Bridge 日志中的具体错误。';
+  return `${phase}失败：${reason}`;
+}
 const preparing = new Map<string, { codexHome: string; promise: Promise<string | undefined> }>();
 let generation = 0;
 
@@ -143,13 +180,27 @@ export function prepareCodexLocalAppServer(options: {
   if (pending) return pending.codexHome === codexHome ? pending.promise
     : Promise.reject(new Error('同一私有地址正在准备另一份 CODEX_HOME，未接管。'));
   const epoch = generation;
+  const status: CodexLocalAppServerStatus = owned.get(endpoint)?.status
+    ?? { endpoint, owner: 'unknown', state: 'starting' };
+  const previousState = status.state;
+  status.updatedAt = new Date().toISOString();
+  status.error = undefined;
+  observations.set(endpoint, status);
+  const reused = () => {
+    if (!owned.has(endpoint)) {
+      status.owner = 'external'; status.state = 'unknown';
+      delete status.pid; delete status.startedAt;
+    } else status.state = 'running';
+    status.updatedAt = new Date().toISOString();
+    return endpoint;
+  };
   const assertCurrent = () => { if (epoch !== generation) throw new Error('Bridge 已关闭，未继续启动私有 app-server。'); };
   const operation = (async () => {
     const previous = owned.get(endpoint);
     if (previous?.stop || (previous && (previous.child.exitCode !== null || previous.child.signalCode !== null))) await previous.exited;
     assertCurrent();
     const socket = privateSocketDirectory(endpoint);
-    try { await probe(endpoint, codexHome); assertCurrent(); return endpoint; }
+    try { await probe(endpoint, codexHome); assertCurrent(); return reused(); }
     catch (error) { if (!unavailable(error)) throw error; }
     if (previous) {
       // Socket close can arrive before ChildProcess.exit. Wait for that known
@@ -173,16 +224,16 @@ export function prepareCodexLocalAppServer(options: {
       help = result.stdout;
     } catch (error) {
       const stderr = String((error as { stderr?: string }).stderr || '');
-      if (/unrecognized subcommand ['`]app-server['`]/i.test(stderr)) return;
+      if (/unrecognized subcommand ['`]app-server['`]/i.test(stderr)) { status.state = 'unsupported'; return; }
       throw error;
     }
     assertCurrent();
     if (!/--listen\b/.test(help)) {
-      if (/Usage:[\s\S]*app-server\b/.test(help)) return;
+      if (/Usage:[\s\S]*app-server\b/.test(help)) { status.state = 'unsupported'; return; }
       throw new Error('无法确认 Codex app-server --listen 能力，未回退旧执行路径。');
     }
     // Check again after the CLI capability query; another owner may have started it.
-    try { await probe(endpoint, codexHome); assertCurrent(); return endpoint; }
+    try { await probe(endpoint, codexHome); assertCurrent(); return reused(); }
     catch (error) { if (!unavailable(error)) throw error; }
     assertCurrent();
     if (socket && socketExists(socket)) throw new Error(`app-server socket 已被占用，未替换：${socket}`);
@@ -198,16 +249,27 @@ export function prepareCodexLocalAppServer(options: {
     const child = spawn(invocation.command, args, {
       env, stdio: ['ignore', 'ignore', 'pipe'], windowsHide: true,
     });
+    status.owner = 'bridge'; status.state = 'starting';
+    delete status.pid; delete status.startedAt;
+    child.once('spawn', () => {
+      status.pid = child.pid; status.startedAt = new Date().toISOString(); status.updatedAt = status.startedAt;
+    });
     let failure: Error | undefined;
     let stderr = '';
     child.stderr!.on('data', (data: Buffer) => { stderr = (stderr + data.toString()).slice(-8_000); });
-    const backend: OwnedBackend = { child, exited: new Promise<void>((resolve) => {
-      child.once('exit', () => {
+    const backend: OwnedBackend = { child, status, exited: new Promise<void>((resolve) => {
+      child.once('exit', (code, signal) => {
+        status.state = backend.stop || code === 0 ? 'stopped' : 'failed';
+        status.updatedAt = new Date().toISOString();
+        status.error = status.state === 'failed' ? `私有 app-server 已退出（${code ?? signal}）。` : undefined;
         void releaseOwnedSocket(backend, endpoint, codexHome).catch((error) => {
           console.warn('[codex-app-server] 自有 socket 清理未完成:', error);
         }).finally(resolve);
       });
-      child.once('error', (error) => { failure = error; resolve(); });
+      child.once('error', (error) => {
+        failure = error; status.state = 'failed'; status.updatedAt = new Date().toISOString();
+        status.error = '私有 app-server 子进程启动失败。'; resolve();
+      });
     }) };
     owned.set(endpoint, backend);
     void backend.exited.then(() => { if (owned.get(endpoint) === backend) owned.delete(endpoint); });
@@ -235,6 +297,7 @@ export function prepareCodexLocalAppServer(options: {
             finally { client.close(); }
             assertCurrent();
           }
+          status.state = 'running'; status.updatedAt = new Date().toISOString(); status.error = undefined;
           return endpoint;
         }
         catch (error) { if (!unavailable(error) || Date.now() >= deadline) throw error; }
@@ -244,7 +307,17 @@ export function prepareCodexLocalAppServer(options: {
       await stopOwned(backend);
       throw error;
     }
-  })().finally(() => { if (preparing.get(endpoint)?.promise === operation) preparing.delete(endpoint); });
+  })().catch((error) => {
+    const child = owned.get(endpoint)?.child;
+    const stillRunning = child && child.exitCode === null && child.signalCode === null;
+    if (epoch === generation) {
+      // A failed connection attempt is not evidence that an already running child exited.
+      status.state = stillRunning ? previousState : 'failed';
+      status.error = describeCodexAppServerError(error, stillRunning ? '服务连接' : '私有 app-server 准备');
+    } else if (status.state === 'starting') status.state = 'stopped';
+    status.updatedAt = new Date().toISOString();
+    throw error;
+  }).finally(() => { if (preparing.get(endpoint)?.promise === operation) preparing.delete(endpoint); });
   preparing.set(endpoint, { codexHome, promise: operation });
   return operation;
 }

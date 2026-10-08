@@ -110,7 +110,7 @@ Codex 0.160 的启动菜单有两种紧凑 footer：目录信任为 `enter conti
 
 ### app-server 的执行生命周期
 
-用户要求以 app-server 重新划分完整生命周期，而非把协议探活接到旧的抓屏流程上。新线程默认启用 app-server；明确指定的地址、已保存的后端绑定和 `CODELARK_CODEX_APP_SERVER_URL` 优先。macOS 原有独立 Desktop 服务继续使用原管理方式，无 Desktop 或非 macOS 时由 Bridge 懒启动私有后端。既有 legacy 线程不自动迁移；其他 runtime 不受影响。生产实现分别位于 `app-server-client.ts`（连接和错误）、`app-server-lifecycle.ts`（线程、轮次和请求）、`app-server-events.ts`（事件转换）、`app-server-registry.ts`（后端选择与持久记录）。Bridge 的普通输入、direct provider、停止和镜像复用这套服务；验收记录单独注明已验证范围。
+用户要求以 app-server 重新划分完整生命周期，而非把协议探活接到旧的抓屏流程上。新线程默认启用 app-server；明确指定的地址、已保存的后端绑定和 `CODELARK_CODEX_APP_SERVER_URL` 优先。macOS 原有独立 Desktop 服务继续使用原管理方式，无 Desktop 或非 macOS 时由 Bridge 懒启动私有后端。既有 legacy Codex thread 在下一条输入前自动释放 CodeLark 自有的旧 writer，并恢复到 app-server；其他 runtime 不受影响。生产实现分别位于 `app-server-client.ts`（连接和错误）、`app-server-lifecycle.ts`（线程、轮次和请求）、`app-server-events.ts`（事件转换）、`app-server-registry.ts`（后端选择与持久记录）。Bridge 的普通输入、direct provider、停止和镜像复用这套服务；验收记录单独注明已验证范围。
 
 #### 默认私有后端的归属与兼容
 

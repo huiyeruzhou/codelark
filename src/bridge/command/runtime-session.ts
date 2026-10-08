@@ -26,6 +26,7 @@ import { createConfigService } from '../../configuration/service.js';
 import { projectSessionConfiguration } from '../session/command-use-cases/inherit-session-configuration.js';
 import { getCodexThreadId } from '../turn/turn-classifier.js';
 import { sessionLooksRunning } from './session-args.js';
+import { readCodexBackendStatus, type CodexBackendStatus } from '../session/display/codex-backend-status.js';
 
 export type RuntimeName = RuntimeAgent;
 export type SupportedRuntimeName = RuntimeName;
@@ -89,6 +90,22 @@ export function formatSessionCodexProvider(session?: BridgeSession | null, bindi
   return hasSessionCodexProviderOverride(session)
     ? effective
     : `${effective} (全局默认)`;
+}
+
+// Configuration previews must not change which session's execution state is shown.
+export function readSessionCodexBackendStatus(session?: BridgeSession | null): CodexBackendStatus | undefined {
+  if (!session || (getSessionActiveRuntime(session) || 'codex') !== 'codex') return undefined;
+  return readCodexBackendStatus(session);
+}
+
+export function formatCodexBackendStatusFields(status: CodexBackendStatus | undefined): Array<[string, string]> {
+  if (!status) return [];
+  const fields: Array<[string, string]> = [['当前后端', status.backendLabel]];
+  if (status.backend === 'app-server') {
+    fields.push(['连接状态', status.connectionLabel], ['执行状态', status.activityLabel]);
+  }
+  fields.push(['终端用途', status.terminalLabel]);
+  return fields;
 }
 
 export function formatSessionClaudeProvider(session?: BridgeSession | null, binding?: ChannelChat | null): string {

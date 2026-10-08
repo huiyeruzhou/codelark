@@ -61,6 +61,8 @@ import {
   formatSessionClaudeProvider,
   formatSessionCodexProvider,
   formatSessionMode,
+  readSessionCodexBackendStatus,
+  formatCodexBackendStatusFields,
   scheduleMirrorSubscriptionsBestEffort,
   sessionHasActiveRuntimeTurn,
 } from './runtime-session.js';
@@ -708,13 +710,23 @@ async function applyProviderCommand(options: ProviderCommandOptions): Promise<st
     );
   }
   if (!options.args) {
+    const backendStatus = readSessionCodexBackendStatus(session);
     return buildCommandFields(
       '当前 Codex Provider',
       [
         ['模式', formatSessionMode(binding, session)],
-        ['Provider', formatSessionCodexProvider(session, binding)],
+        ['Provider 配置', formatSessionCodexProvider(session, binding)],
+        ...formatCodexBackendStatusFields(backendStatus),
       ],
-      [CODEX_PROVIDER_OPTIONS_TEXT, '发送 `/provider sdk|pty|tmux` 或 `/p sdk|pty|tmux` 切换；修改从下一轮 Codex 请求开始生效。'],
+      backendStatus?.backend === 'app-server'
+        ? ['当前会话绑定 app-server；`/p tmux` 只建立或复用查看入口，不更换后端。',
+          '当前线程不支持切换到 sdk/pty 独立执行。']
+        : backendStatus?.backend === 'unstarted'
+          ? ['会话尚未启动，Provider 配置不代表后端已连接。',
+            '直接发送消息开始会话；实际后端以启动后的状态为准。']
+          : [CODEX_PROVIDER_OPTIONS_TEXT,
+            '当前会话保留旧版执行路径；`/p tmux` 启动或重建原线程的 TUI，不迁移到 app-server。',
+            '发送 `/provider sdk|pty|tmux` 或 `/p sdk|pty|tmux` 切换；修改从下一轮 Codex 请求开始生效。'],
       options.markdown,
     );
   }

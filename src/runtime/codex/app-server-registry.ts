@@ -8,7 +8,24 @@ import { CodexAppServerLifecycle, type AppServerSubmission, type AppServerThread
 import { prepareCodexDesktopRemote, validateLocalEndpoint, type CodexDesktopRemote } from './desktop-remote.js';
 import { resolveCodexCliExecutable } from './cli-executable.js';
 import { buildCodexTuiEnv } from './tmux-provider.js';
-import { codexLocalAppServerEndpoint, prepareCodexLocalAppServer, closeCodexLocalAppServers } from './app-server-local.js';
+import { codexLocalAppServerEndpoint, prepareCodexLocalAppServer, closeCodexLocalAppServers, getCodexLocalAppServerStatuses, describeCodexAppServerError, type CodexLocalAppServerStatus } from './app-server-local.js';
+
+export interface CodexAppServerServiceStatus extends Omit<CodexLocalAppServerStatus, 'endpoint' | 'owner'> {
+  id: string;
+  endpoint?: string;
+  owner: 'bridge' | 'launchd' | 'external' | 'unknown';
+  connection: 'connecting' | 'ready' | 'disconnected' | 'unknown';
+  logPath?: string;
+  sessionIds: string[];
+}
+interface ServiceRequest {
+  endpoint?: string;
+  state: 'starting' | 'failed' | 'unsupported' | 'unknown';
+  updatedAt: string;
+  error?: string;
+}
+const serviceRequests = new Map<string, ServiceRequest>();
+const backendOwners = new Map<string, { owner: 'launchd' | 'external'; logPath?: string }>();
 
 export interface CodexAppServerSession {
   lifecycle: CodexAppServerLifecycle;
@@ -68,6 +85,7 @@ export async function prepareCodexAppServerSession(options: AppServerThreadOptio
   const epoch = generation;
   const version = sessionVersions.get(options.sessionId) || 0;
   const token = Symbol();
+  let request: ServiceRequest | undefined;
   const assertCurrent = () => { if (epoch !== generation || version !== (sessionVersions.get(options.sessionId) || 0)) throw new Error('Bridge 连接或会话绑定已结束，未重新绑定旧准备请求。'); };
   const operation = (async () => {
     if (cached) await releaseBinding(options.sessionId);
@@ -76,6 +94,8 @@ export async function prepareCodexAppServerSession(options: AppServerThreadOptio
     if (pinned && options.endpoint && appServerCliUrl(options.endpoint) !== pinned.endpoint) throw new Error('此线程已经绑定另一 app-server，未切换执行后端。');
     let endpoint = options.endpoint || pinned?.endpoint || process.env.CODELARK_CODEX_APP_SERVER_URL;
     if (!endpoint && process.env.CODELARK_CODEX_APP_SERVER === '0') return;
+    request = { endpoint, state: 'starting', updatedAt: new Date().toISOString() };
+    serviceRequests.set(options.sessionId, request);
     let remote: CodexDesktopRemote | undefined;
     // /clear and /new inherit the endpoint before the new session has a registry
     // record. The instance's deterministic address retains its private ownership.
@@ -86,14 +106,20 @@ export async function prepareCodexAppServerSession(options: AppServerThreadOptio
       if (process.platform === 'darwin') remote = await prepareCodexDesktopRemote({ env, executable });
       endpoint = remote?.endpoint;
       if (!endpoint) {
+        request.endpoint = codexLocalAppServerEndpoint();
         endpoint = await prepareCodexLocalAppServer({ env, executable });
         local = !!endpoint;
       }
     }
     assertCurrent();
-    if (!endpoint) return;
+    if (!endpoint) { request.state = 'unsupported'; request.updatedAt = new Date().toISOString(); return; }
     validateLocalEndpoint(endpoint);
     endpoint = appServerCliUrl(endpoint);
+    request.endpoint = endpoint;
+    if (remote?.managed) backendOwners.set(endpoint, {
+      owner: 'launchd', logPath: path.join(os.homedir(), '.codelark', 'codex-desktop', 'app-server.log'),
+    });
+    else if (!backendOwners.has(endpoint)) backendOwners.set(endpoint, { owner: 'external' });
     if (local && endpoint !== codexLocalAppServerEndpoint()) throw new Error('私有后端的稳定地址发生变化，未替换已有线程后端。');
     let lifecycle = backends.get(endpoint);
     if (!lifecycle) {
@@ -130,18 +156,14 @@ export async function prepareCodexAppServerSession(options: AppServerThreadOptio
     } = options;
     const targetThread = options.threadId || pinned?.threadId;
     if (targetThread) preparingTargets.set(token, `${endpoint}:${targetThread}`);
-    // Do not stop a working legacy writer until an app-server has been selected,
-    // started and authenticated. Once selected, transfer ownership before resume:
-    // two concurrent writers are rejected by Codex and must never trigger fallback.
-    await lifecycle.connect();
-    assertCurrent();
-    if (options.threadId && !pinned && options.beforeResumeLegacyThread) {
-      await options.beforeResumeLegacyThread();
-      assertCurrent();
-    }
+    // ensureThread connects and authenticates first, then transfers ownership
+    // immediately before resume. Two concurrent writers are rejected by Codex
+    // and must never trigger fallback.
     const threadId = await lifecycle.ensureThread({ ...threadOptions, threadId: options.threadId || pinned?.threadId,
       config: { ...threadOptions.config, 'shell_environment_policy.set.CODELARK_HOME': CODELARK_HOME },
-    });
+    }, options.threadId && !pinned && options.beforeResumeLegacyThread
+      ? async () => { await options.beforeResumeLegacyThread?.(); assertCurrent(); }
+      : undefined);
     try { assertCurrent(); }
     catch (error) {
       preparingTargets.delete(token);
@@ -153,13 +175,89 @@ export async function prepareCodexAppServerSession(options: AppServerThreadOptio
     save(`session:${options.sessionId}`, { endpoint, threadId, ...(local ? { local: true } : {}) });
     const session = { lifecycle, threadId, endpoint, remote, direct: false, directTurnIds: new Set<string>() };
     sessions.set(options.sessionId, session);
+    request.state = 'unknown'; request.updatedAt = new Date().toISOString();
     return session;
-  })().finally(() => { preparingTargets.delete(token); if (preparing.get(options.sessionId) === operation) preparing.delete(options.sessionId); });
+  })().catch((error) => {
+    if (request && serviceRequests.get(options.sessionId) === request) {
+      request.state = 'failed'; request.updatedAt = new Date().toISOString();
+      const connected = request.endpoint && backends.get(request.endpoint)?.connectionSnapshot().connection === 'ready';
+      request.error = describeCodexAppServerError(error, connected ? '会话准备' : 'app-server 准备');
+    }
+    throw error;
+  }).finally(() => { preparingTargets.delete(token); if (preparing.get(options.sessionId) === operation) preparing.delete(options.sessionId); });
   preparing.set(options.sessionId, operation);
   return operation;
 }
 
 export function getCodexAppServerSession(sessionId: string): CodexAppServerSession | undefined { return sessions.get(sessionId); }
+
+/** Only local addresses without authentication fields are exposed to status consumers. */
+function safeEndpoint(endpoint: string): string | undefined {
+  try {
+    validateLocalEndpoint(endpoint);
+    const normalized = appServerCliUrl(endpoint);
+    if (normalized.startsWith('unix:///')) return normalized;
+    const url = new URL(normalized);
+    if (url.username || url.password || url.search || url.hash || !['', '/'].includes(url.pathname)) return;
+    return normalized;
+  } catch { return; }
+}
+
+/** Service observations include attempts that failed before a thread was created. No disk reads or I/O. */
+export function getCodexAppServerServiceStatuses(
+  currentSessions?: Array<{ sessionId: string; endpoint?: string }>,
+): CodexAppServerServiceStatus[] {
+  const result = new Map<string, CodexAppServerServiceStatus>();
+  const keyOf = (endpoint?: string) => {
+    try { return endpoint ? appServerCliUrl(endpoint) : 'default'; } catch { return endpoint!; }
+  };
+  const entry = (endpoint?: string) => {
+    const key = keyOf(endpoint);
+    let status = result.get(key);
+    if (!status) {
+      status = { id: createHash('sha256').update(key).digest('hex').slice(0, 24),
+        ...(endpoint ? { endpoint: safeEndpoint(endpoint) } : {}),
+        owner: 'unknown', state: 'unknown', connection: 'unknown', sessionIds: [] };
+      result.set(key, status);
+    }
+    return status;
+  };
+  const visible = currentSessions && new Set(currentSessions.map((session) => session.sessionId));
+  for (const [id, request] of serviceRequests) {
+    const status = entry(request.endpoint);
+    if (!status.updatedAt || request.updatedAt >= status.updatedAt) {
+      Object.assign(status, { state: request.state, updatedAt: request.updatedAt, error: request.error });
+    }
+    const current = currentSessions?.find((session) => session.sessionId === id);
+    if (!visible || (visible.has(id) && (!current?.endpoint || keyOf(current.endpoint) === keyOf(request.endpoint)))) status.sessionIds.push(id);
+  }
+  for (const local of getCodexLocalAppServerStatuses()) {
+    const status = entry(local.endpoint);
+    const error = local.error || status.error;
+    Object.assign(status, local, { error });
+  }
+  for (const [endpoint, lifecycle] of backends) {
+    const status = entry(endpoint);
+    const connection = lifecycle.connectionSnapshot();
+    status.connection = connection.connection;
+    if (connection.updatedAt && (!status.updatedAt || connection.updatedAt > status.updatedAt)) status.updatedAt = connection.updatedAt;
+    // A connected external service is available, but its process state/PID are unobserved.
+    if (status.owner !== 'bridge') {
+      Object.assign(status, backendOwners.get(endpoint));
+      if (connection.connection === 'ready') status.state = 'unknown';
+    }
+  }
+  const references = currentSessions ?? [...sessions].map(([sessionId, session]) => ({ sessionId, endpoint: session.endpoint }));
+  for (const { sessionId, endpoint } of references) {
+    if (endpoint) entry(endpoint).sessionIds.push(sessionId);
+  }
+  if (process.env.CODELARK_CODEX_APP_SERVER_URL) entry(process.env.CODELARK_CODEX_APP_SERVER_URL);
+  if (!result.size) entry().state = 'not-started';
+  return [...result.values()].map((status) => ({ ...status,
+    endpoint: status.endpoint ? safeEndpoint(status.endpoint) : undefined,
+    sessionIds: [...new Set(status.sessionIds)].sort(),
+  }));
+}
 export function getCodexAppServerSessionByThread(threadId: string): CodexAppServerSession | undefined {
   return [...sessions.values()].find((session) => session.threadId === threadId);
 }
@@ -169,6 +267,7 @@ export async function releaseCodexAppServerSession(sessionId: string): Promise<v
   await releaseBinding(sessionId);
 }
 async function releaseBinding(sessionId: string): Promise<void> {
+  serviceRequests.delete(sessionId);
   const session = sessions.get(sessionId);
   sessions.delete(sessionId);
   save(`session:${sessionId}`, undefined);
@@ -179,6 +278,7 @@ export function closeCodexAppServerSessions(): Promise<void> {
   generation += 1;
   for (const lifecycle of backends.values()) lifecycle.close();
   sessions.clear(); backends.clear(); preparing.clear(); preparingTargets.clear(); sessionVersions.clear();
+  serviceRequests.clear(); backendOwners.clear();
   // Persistent bindings and uncertain submissions intentionally survive Bridge shutdown.
   return closeCodexLocalAppServers();
 }

@@ -32,6 +32,7 @@ export function renderUiShellHtml(): string {
         </div>
         <nav class="nav">
           <button type="button" class="nav-link active" data-page="overview">概览</button>
+          <button type="button" class="nav-link" data-page="app-server">app-server</button>
           <button type="button" class="nav-link" data-page="sessions">会话</button>
           <button type="button" class="nav-link" data-page="config">配置</button>
           <button type="button" class="nav-link" data-page="channels">通道</button>
@@ -86,6 +87,7 @@ export function renderUiShellHtml(): string {
                 <span class="runtime-status-head"><strong>Codex</strong><span class="runtime-state" id="runtime-codex-state">检查中</span></span>
                 <span class="runtime-status-counts" id="runtime-codex-counts">正在读取会话与入口</span>
                 <span class="runtime-status-config" id="runtime-codex-config">默认配置检查中</span>
+                <span class="runtime-status-recent" id="runtime-codex-backend">执行后端检查中</span>
                 <span class="runtime-status-recent" id="runtime-codex-recent">最近活动检查中</span>
               </button>
               <button type="button" class="runtime-status-item" data-runtime="claude" aria-label="查看 Claude Code 会话">
@@ -181,6 +183,26 @@ export function renderUiShellHtml(): string {
               </div>
             </section>
           </div>
+        </section>
+
+        <section class="page" data-page="app-server">
+          <div class="page-header">
+            <div>
+              <h1 class="page-title">Codex app-server</h1>
+              <p class="page-copy">查看本实例使用的对话服务。tmux 是独立的终端入口，不决定服务是否启动。</p>
+            </div>
+            <button type="button" id="refreshAppServersBtn">刷新状态</button>
+          </div>
+          <section class="panel" aria-label="app-server 启动情况">
+            <div class="panel-header">
+              <div><h2>启动与连接</h2><p id="appServerPolicy">正在读取新会话默认策略</p></div>
+              <span class="inline-status" id="appServerSummary" role="status">检查中</span>
+            </div>
+            <p class="notice" id="appServerNotice">正在读取 Bridge 的服务状态。</p>
+            <div id="appServerList" class="info-list" aria-live="polite"></div>
+            <p class="small" id="appServerObservedAt"></p>
+          </section>
+          <p class="page-copy">服务通常在新会话第一次发送消息时启动。此页面每 5 秒读取一次状态；打开或刷新页面不会启动服务。Desktop 是否已连接需要在 Desktop 中确认。</p>
         </section>
 
         <section class="page" data-page="sessions">
@@ -464,7 +486,7 @@ export function renderUiShellHtml(): string {
                 <p class="panel-subtitle">Codex 连接方式</p>
                 <div class="field-row triple">
                   <label>
-                    <span class="field-title">默认 Codex Provider <span class="help-tip" tabindex="0" data-tip="控制 Bridge 默认用 SDK 还是 tmux 驱动 Codex；这不是模型运行参数。当前会话仍可用 /p 单独切换。">?</span></span>
+                    <span class="field-title">旧执行方式 / Codex Provider <span class="help-tip" tabindex="0" data-tip="设置旧会话的 SDK、PTY 或 tmux 适配器。新会话优先使用 app-server；协议会话的 tmux 只用于查看，/p tmux 不会迁移已有旧线程。">?</span></span>
                     <select id="defaultProvider">
                       <option value="">跟随默认</option>
                       <option value="sdk">sdk</option>
@@ -713,6 +735,7 @@ export function renderUiShellHtml(): string {
           </div>
           <button type="button" class="icon-btn ghost-icon" data-action="close-session-config-modal" aria-label="关闭" title="关闭"><span aria-hidden="true">×</span></button>
         </div>
+        <p id="sessionConfigBackendStatus" class="muted" hidden></p>
         <div class="fields">
           <div class="field-row">
             <label>会话名称<input id="sessionConfigName" /></label>
@@ -721,7 +744,7 @@ export function renderUiShellHtml(): string {
           <div class="field-row triple" id="sessionConfigCodexBlock">
             <label>Codex 模型<select id="sessionConfigModel"></select></label>
             <label>Codex 模式<select id="sessionConfigMode"><option value="normal">normal</option><option value="yolo">yolo</option></select></label>
-            <label>Codex Provider<select id="sessionConfigProvider"><option value="">default</option><option value="sdk">sdk</option><option value="pty">pty</option><option value="tmux">tmux</option></select></label>
+            <label>旧适配器配置<select id="sessionConfigProvider"><option value="">default</option><option value="sdk">sdk</option><option value="pty">pty</option><option value="tmux">tmux</option></select></label>
             <label>Codex 思考级别<select id="sessionConfigReasoning"><option value="">跟随全局</option><option value="medium">medium</option><option value="minimal">minimal</option><option value="low">low</option><option value="high">high</option><option value="xhigh">xhigh</option><option value="max">max</option><option value="ultra">ultra</option></select></label>
           </div>
           <div class="field-row" id="sessionConfigCodexSandboxBlock">
@@ -764,6 +787,7 @@ export function renderUiShellHtml(): string {
         availableModels: [],
         uiAccess: null,
         bridgeStatus: null,
+        runtimeStatus: null,
         autostartStatus: null,
         systemTimeZone: '',
         codexSessions: [],
@@ -1137,10 +1161,28 @@ export function renderUiShellHtml(): string {
         return '<button type="button" class="creator-toggle" data-action="toggle-creator-display" ' + sessionIdentityAttrs(session) + ' title="点击切换 Creator / CodexSource 显示">' + content + '</button>';
       }
 
-      function renderModeProviderValue(mode, provider) {
-        return ''
-          + '<div class="session-value">Mode: <code>' + escapeHtml(mode || 'normal') + '</code></div>'
-          + '<div class="session-value">Provider: <code>' + escapeHtml(provider || 'default') + '</code></div>';
+      function codexBackendStatus(item) {
+        if (!item || (item.currentRuntime || item.runtime) !== 'codex') return null;
+        const id = item.currentSessionId || item.bridgeSessionId || item.sessionId;
+        const live = state.runtimeStatus && state.runtimeStatus.sessions && state.runtimeStatus.sessions[id];
+        const threadId = item.codexThreadId || item.currentRuntimeThreadId || item.currentThreadId || item.threadId;
+        if (live && (!threadId || !live.threadId || threadId === live.threadId)) return live;
+        return item.codexBackend || null;
+      }
+
+      function renderModeProviderValue(mode, provider, item) {
+        const backend = codexBackendStatus(item);
+        let detail = '<div class="session-value">Provider: <code>' + escapeHtml(provider || 'default') + '</code></div>';
+        if (backend) {
+          detail = '<div class="session-value">执行后端：<strong>' + escapeHtml(backend.backendLabel) + '</strong></div>';
+          if (backend.backend === 'app-server') {
+            detail += '<div class="session-value">' + escapeHtml(backend.connectionLabel + ' · ' + backend.activityLabel) + '</div>';
+          } else if (backend.backend === 'legacy') {
+            detail += '<div class="session-value">旧适配器配置：<code>' + escapeHtml(provider || 'default') + '</code></div>';
+          }
+          detail += '<div class="session-value">终端：' + escapeHtml(backend.terminalLabel) + '</div>';
+        }
+        return '<div class="session-value">模式：<code>' + escapeHtml(mode || 'normal') + '</code></div>' + detail;
       }
 
       function bindingProviderValue(binding) {
@@ -1273,7 +1315,7 @@ export function renderUiShellHtml(): string {
           +   '<div class="binding-head">'
           +     '<div class="binding-title">' + escapeHtml(binding.chatDisplayName || binding.chatId) + '</div>'
           +     '<div class="actions">'
-          +       '<div class="small">' + escapeHtml((binding.mode || 'normal') + ' · ' + bindingProviderValue(binding)) + '</div>'
+          +       '<div class="small">' + escapeHtml(binding.mode || 'normal') + '</div>'
           +       '<button type="button" data-action="unbind-binding" data-binding-id="' + escapeHtml(binding.id) + '">解绑当前聊天</button>'
           +     '</div>'
           +   '</div>'
@@ -1281,7 +1323,7 @@ export function renderUiShellHtml(): string {
           +   '<div class="binding-detail">当前会话：<code>' + escapeHtml(binding.currentSessionId.slice(0, 8)) + '...</code> · ' + escapeHtml(binding.currentSessionName) + '</div>'
           +   '<div class="binding-detail">当前目标：' + escapeHtml(binding.currentTargetLabel || '未绑定') + '</div>'
           +   '<div class="binding-detail">当前 runtime：<code>' + escapeHtml(binding.currentRuntime || 'codex') + '</code> · <code>' + escapeHtml(bindingRuntimeIdentityText(binding)) + '</code></div>'
-          +   '<div class="binding-detail">Mode / Provider：<code>' + escapeHtml(binding.mode || 'normal') + '</code> · <code>' + escapeHtml(bindingProviderValue(binding)) + '</code></div>'
+          +   '<div class="binding-detail">' + renderModeProviderValue(binding.mode, bindingProviderValue(binding), binding) + '</div>'
           +   '<div class="binding-detail">运行状态：' + escapeHtml(bindingRuntimeText(binding)) + '</div>'
           +   '<div class="binding-detail">共享镜像：' + escapeHtml(bindingMirrorText(binding)) + '</div>'
           +   '<div class="binding-detail">目录：' + escapeHtml(binding.workingDirectory || '~') + '</div>'
@@ -1378,12 +1420,18 @@ export function renderUiShellHtml(): string {
             await loadCodexSessions();
             return;
           }
+          if (page === 'app-server') {
+            await loadRuntimeStatusOnly();
+            return;
+          }
           if (page === 'sessions') {
+            await loadRuntimeStatusOnly();
             await loadBindings();
             await loadCodexSessions();
             return;
           }
           if (page === 'session-history') {
+            await loadRuntimeStatusOnly();
             await refreshSessionHistoryData();
             return;
           }
@@ -1405,7 +1453,7 @@ export function renderUiShellHtml(): string {
 
       function startActivePageRefresh(page) {
         stopActivePageRefresh();
-        const refreshablePages = new Set(['overview', 'sessions', 'session-history', 'channels', 'logs']);
+        const refreshablePages = new Set(['overview', 'app-server', 'sessions', 'session-history', 'channels', 'logs']);
         if (!refreshablePages.has(page)) return;
         void refreshPageData(page);
         state.pageRefreshTimer = window.setInterval(() => {
@@ -1416,7 +1464,7 @@ export function renderUiShellHtml(): string {
       }
 
       function setActivePage(page, syncHash) {
-        const nextPage = ['overview', 'sessions', 'session-history', 'config', 'commands', 'channels', 'logs'].includes(page) ? page : 'overview';
+        const nextPage = ['overview', 'app-server', 'sessions', 'session-history', 'config', 'commands', 'channels', 'logs'].includes(page) ? page : 'overview';
         state.activePage = nextPage;
 
         document.querySelectorAll('.nav-link').forEach((element) => {
@@ -1609,8 +1657,13 @@ export function renderUiShellHtml(): string {
         const adapterErrors = adapters.filter((item) => item.error);
         const activeSessionIds = new Set(
           (state.bindings || [])
-            .filter((binding) => binding.runtimeStatus === 'running')
-            .map((binding) => binding.bridgeSessionId)
+            .filter((binding) => {
+              const backend = codexBackendStatus(binding);
+              return backend && backend.backend === 'app-server'
+                ? backend.connection === 'ready' && backend.activity === 'active'
+                : binding.runtimeStatus === 'running';
+            })
+            .map((binding) => binding.currentSessionId || binding.bridgeSessionId)
             .filter(Boolean),
         );
         const counts = state.codexSessionCounts || {};
@@ -1638,7 +1691,7 @@ export function renderUiShellHtml(): string {
       }
 
       function runtimeStatusProjection(runtime) {
-        return projectRuntimeStatus(runtime, state.codexSessions || [], state.bindings || [], state.config || {});
+        return projectRuntimeStatus(runtime, state.codexSessions || [], state.bindings || [], state.config || {}, state.runtimeStatus);
       }
 
       function renderRuntimeStatuses() {
@@ -1651,7 +1704,8 @@ export function renderUiShellHtml(): string {
           }
           setText('runtime-' + runtime + '-state', projection.state);
           setText('runtime-' + runtime + '-counts', '本地 ' + projection.sessions.length + ' · 入口 ' + projection.bindings.length);
-          setText('runtime-' + runtime + '-config', '默认 ' + projection.config.provider + ' · ' + projection.config.model);
+          setText('runtime-' + runtime + '-config', (projection.defaultBackendLabel || '默认 ' + projection.config.provider) + ' · ' + projection.config.model);
+          if (runtime === 'codex') setText('runtime-codex-backend', projection.backendSummary || '执行后端未确认');
           setText('runtime-' + runtime + '-recent', projection.latest ? '最近活动 ' + formatTime(projection.latest) : '暂无本地活动记录');
         }
       }
@@ -1909,6 +1963,9 @@ export function renderUiShellHtml(): string {
       }
 
       function bindingRuntimeText(binding) {
+        const backend = codexBackendStatus(binding);
+        if (backend && backend.backend === 'app-server') return backend.connection === 'ready'
+          ? backend.activityLabel : backend.connectionLabel + ' · ' + backend.activityLabel;
         const status = binding.runtimeStatus || 'idle';
         const queuedCount = Number(binding.queuedCount || 0);
         if (status === 'queued') {
@@ -1956,7 +2013,7 @@ export function renderUiShellHtml(): string {
           +     '</div>'
           +     '<div class="session-cell">'
           +       '<div class="session-label">状态</div>'
-          +       renderModeProviderValue(session.mode, sessionProviderValue(session))
+          +       renderModeProviderValue(session.mode, sessionProviderValue(session), session)
           +     '</div>'
           +     '<div class="session-cell">'
           +       '<div class="session-label">目录</div>'
@@ -2004,7 +2061,7 @@ export function renderUiShellHtml(): string {
           +     '</div>'
           +     '<div class="session-cell">'
           +       '<div class="session-label">状态</div>'
-          +       renderModeProviderValue(session.mode, sessionProviderValue(session))
+          +       renderModeProviderValue(session.mode, sessionProviderValue(session), session)
           +     '</div>'
           +     '<div class="session-cell">'
           +       '<div class="session-label">Creator</div>'
@@ -2030,7 +2087,7 @@ export function renderUiShellHtml(): string {
           + '<tr class="session-table-row" ' + sessionIdentityAttrs(session) + '>'
           +   '<td><div class="binding-table-title session-table-title">' + renderSessionTitle(session, markHtml) + '</div><div class="binding-table-thread">' + identityLabel + ': <code>' + escapeHtml(identityValue) + '</code></div></td>'
           +   '<td><div class="binding-table-path">' + escapeHtml(session.cwd || '(no cwd)') + '</div></td>'
-          +   '<td>' + renderModeProviderValue(session.mode, sessionProviderValue(session)) + '</td>'
+          +   '<td>' + renderModeProviderValue(session.mode, sessionProviderValue(session), session) + '</td>'
           +   '<td><div class="binding-table-source">' + renderCreatorToggle(session) + '</div></td>'
           +   '<td><div class="binding-table-thread session-date">' + escapeHtml(formatTime(session.lastEventAt || '')) + '</div></td>'
           +   '<td><div class="session-actions compact-actions">' + actionHtml + '</div></td>'
@@ -2436,8 +2493,53 @@ export function renderUiShellHtml(): string {
         return data;
       }
 
+      function renderAppServers() {
+        const status = state.runtimeStatus;
+        const services = status && Array.isArray(status.appServers) ? status.appServers : null;
+        const labels = { 'not-started': '尚未启动', starting: '正在启动', running: '已启动', stopped: '已停止', failed: '服务异常', unsupported: '当前 Codex 不支持', unknown: '启动状态未确认' };
+        const connections = { connecting: '连接中', ready: '已连接', disconnected: '连接已断开', unknown: '连接未确认' };
+        const owners = { bridge: '当前 CodeLark 实例', launchd: 'macOS launchd', external: '外部服务', unknown: '尚未确定' };
+        setText('appServerPolicy', status && status.codexDefault === 'app-server-auto' ? '新会话优先使用 app-server；旧会话保留原执行方式。' : status && status.codexDefault === 'legacy' ? '已关闭新会话自动启用 app-server。' : '新会话默认策略未确认。');
+        setText('appServerSummary', !services ? '状态不可用' : services.every((service) => service.state === 'not-started') ? '尚未启动' : services.length + ' 个服务');
+        setText('appServerNotice', !services
+          ? '未取得当前服务状态。Bridge 已停止、连接不可用或版本较旧时，无法判断 app-server 是否启动。'
+          : services.some((service) => service.state !== 'not-started') ? '启动状态和连接状态分别显示；连接断开不代表服务进程已经退出。'
+            : '本实例尚未记录 app-server 启动请求。新会话首次输入时会按默认策略准备服务。');
+        setText('appServerObservedAt', services ? '读取时间：' + formatTime(new Date().toISOString()) : '等待取得新的状态');
+        document.getElementById('appServerList').innerHTML = (services || []).filter((service) => service.state !== 'not-started').map((service) => {
+          const field = (name, value) => '<div class="binding-detail"><strong>' + escapeHtml(name) + '：</strong>' + escapeHtml(value || '未记录') + '</div>';
+          return '<article class="binding-item" data-app-server-id="' + escapeHtml(service.id) + '">'
+            + '<div class="binding-head"><strong>' + escapeHtml(owners[service.owner] || owners.unknown) + '</strong><span class="inline-status">' + escapeHtml(service.state === 'unknown' && service.connection === 'ready' ? '服务可用（进程状态未确认）' : labels[service.state] || labels.unknown) + '</span></div>'
+            + field('连接', connections[service.connection] || connections.unknown)
+            + field('地址', service.endpoint || '尚未确定')
+            + field(service.pid && !['running', 'starting'].includes(service.state) ? '最近进程 PID' : 'PID', service.pid ? String(service.pid) : '未确认')
+            + (service.startedAt ? field('本次启动', formatTime(service.startedAt)) : '')
+            + (service.updatedAt ? field('最近状态变化', formatTime(service.updatedAt)) : '')
+            + field('关联会话', String((service.sessionIds || []).length))
+            + (service.error ? '<div class="notice">最近错误：' + escapeHtml(service.error) + '</div>' : '')
+            + (service.logPath ? field('日志文件', service.logPath) : '')
+            + '</article>';
+        }).join('');
+      }
+
+      async function readRuntimeStatus() {
+        try {
+          const status = await api('/api/status');
+          state.runtimeStatus = status.runtimeStatus || null;
+          renderAppServers();
+          return status;
+        } catch (error) {
+          state.runtimeStatus = null;
+          renderAppServers();
+          renderRuntimeStatuses();
+          renderBindings({ bindings: state.bindings, options: state.bindingOptions });
+          renderCodexSessions({ sessions: state.codexSessions, counts: state.codexSessionCounts, root: state.codexRoot });
+          throw error;
+        }
+      }
+
       async function loadStatus() {
-        const status = await api('/api/status');
+        const status = await readRuntimeStatus();
         const config = await api('/api/config');
         state.uiAccess = status.uiAccess || null;
         state.bridgeStatus = status.bridge || null;
@@ -2527,7 +2629,7 @@ export function renderUiShellHtml(): string {
       }
 
       async function loadRuntimeStatusOnly() {
-        const status = await api('/api/status');
+        const status = await readRuntimeStatus();
         state.uiAccess = status.uiAccess || null;
         state.bridgeStatus = status.bridge || null;
         state.autostartStatus = status.autostart || null;
@@ -2892,6 +2994,11 @@ export function renderUiShellHtml(): string {
         state.activeSessionConfigBridgeSessionId = bridgeSessionId;
         document.getElementById('sessionConfigSubtitle').textContent = '当前会话：' + ((session && session.title) ? session.title : ref);
         fillSessionConfigForm(result.config || {});
+        const backend = codexBackendStatus(session);
+        const backendNotice = document.getElementById('sessionConfigBackendStatus');
+        backendNotice.hidden = !backend;
+        backendNotice.textContent = backend ? [backend.backendLabel, backend.connectionLabel, backend.activityLabel, backend.terminalLabel].filter(Boolean).join(' · ')
+          + (backend.backend === 'app-server' ? '。/p tmux 打开查看终端，模型等设置从下一轮应用。' : backend.backend === 'unstarted' ? '。首次输入时确定执行后端。' : '。/p tmux 重建旧终端，不会迁移到 app-server。') : '';
         modal.hidden = false;
       }
 
@@ -3099,6 +3206,8 @@ export function renderUiShellHtml(): string {
           showMessage('channelMessage', 'error', error.message);
         }
       }
+
+      document.getElementById('refreshAppServersBtn').addEventListener('click', () => { void refreshPageData('app-server'); });
 
       document.querySelectorAll('.nav-link').forEach((element) => {
         element.addEventListener('click', () => {

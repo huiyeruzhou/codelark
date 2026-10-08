@@ -57,3 +57,34 @@ describe('operator runtime status projection', () => {
     assert.equal(explicit.config.provider, 'tmux');
   });
 });
+
+
+describe('app-server status observations', () => {
+  const binding = {
+    currentRuntime: 'codex', currentSessionId: 's', currentThreadId: 'thread', runtimeStatus: 'running',
+    codexBackend: { backend: 'app-server', threadId: 'thread', connection: 'unknown', activity: 'unknown' },
+  };
+  const status = (connection: string, activity: string, threadId = 'thread') => ({
+    codexDefault: 'app-server-auto', sessions: { s: { backend: 'app-server', threadId, connection, activity } },
+  });
+  it('uses protocol activity instead of stale running flags and deduplicates shared bindings', () => {
+    const project = (connection: string, activity: string) => projectRuntimeStatus('codex', [], [binding, binding], {}, status(connection, activity));
+    assert.equal(project('ready', 'idle').state, '空闲');
+    assert.equal(project('ready', 'active').state, '运行中 1');
+    assert.equal(project('ready', 'waiting').state, '等待确认或输入 1');
+    assert.equal(project('disconnected', 'idle').state, '连接或执行状态未确认 1');
+    assert.equal(project('connecting', 'active').tone, 'attention');
+  });
+  it('does not retain a live observation from an old thread or an unavailable Bridge', () => {
+    for (const live of [null, status('ready', 'active', 'old-thread')]) {
+      assert.equal(projectRuntimeStatus('codex', [], [binding], {}, live).state, '连接或执行状态未确认 1');
+    }
+  });
+  it('separates default selection from actual sessions and preserves legacy behavior', () => {
+    const legacy = { ...binding, codexBackend: { backend: 'legacy' } };
+    const result = projectRuntimeStatus('codex', [], [legacy], {}, { codexDefault: 'app-server-auto', sessions: {} });
+    assert.equal(result.state, '运行中 1');
+    assert.equal(result.defaultBackendLabel, '新会话优先 app-server');
+    assert.equal(result.backendSummary, 'app-server 0 · 旧执行方式 1 · 尚未启动 0');
+  });
+});

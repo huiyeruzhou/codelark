@@ -8,8 +8,8 @@ import { createRequire } from 'node:module';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { test, type TestContext } from 'node:test';
-import { codexLocalAppServerEndpoint, prepareCodexLocalAppServer, closeCodexLocalAppServers, localAppServerInvocation } from '../../../../runtime/codex/app-server-local.js';
-import { prepareCodexAppServerSession, closeCodexAppServerSessions } from '../../../../runtime/codex/app-server-registry.js';
+import { codexLocalAppServerEndpoint, prepareCodexLocalAppServer, closeCodexLocalAppServers, localAppServerInvocation, getCodexLocalAppServerStatuses } from '../../../../runtime/codex/app-server-local.js';
+import { prepareCodexAppServerSession, closeCodexAppServerSessions, getCodexAppServerServiceStatuses } from '../../../../runtime/codex/app-server-registry.js';
 import { CodexAppServerClient } from '../../../../runtime/codex/app-server-client.js';
 
 const execFileAsync = promisify(execFile);
@@ -83,6 +83,11 @@ test('default registry selects one private backend without an endpoint and resto
   assert(a && b);
   assert.equal(a.endpoint, codexLocalAppServerEndpoint()); assert.equal(b.endpoint, a.endpoint);
   assert.notEqual(a.threadId, b.threadId);
+  const service = getCodexAppServerServiceStatuses().find((s) => s.endpoint === a.endpoint)!;
+  assert.equal(service.state, 'running'); assert.equal(service.owner, 'bridge'); assert.equal(service.connection, 'ready');
+  assert.equal(service.pid, f.records().find((m) => m.started).pid);
+  assert(service.startedAt); assert(service.updatedAt);
+  assert.deepEqual(service.sessionIds, ['default-a', 'default-b']);
   assert.equal(f.records().filter((m) => m.started).length, 1);
   const otherClient = await CodexAppServerClient.connect(a.endpoint); otherClient.close();
   await a.lifecycle.refresh(a.threadId);
@@ -90,10 +95,13 @@ test('default registry selects one private backend without an endpoint and resto
   const inherited = await prepareCodexAppServerSession({ sessionId: 'default-inherited', endpoint: a.endpoint });
   assert(inherited); assert.notEqual(inherited.threadId, a.threadId);
   await closeCodexAppServerSessions();
+  assert.equal(getCodexAppServerServiceStatuses().find((s) => s.endpoint === a.endpoint)?.state, 'stopped');
   process.env.CODELARK_CODEX_APP_SERVER = '0';
   const restored = await prepareCodexAppServerSession({ sessionId: 'default-a', threadId: a.threadId });
   assert(restored); assert.equal(restored.threadId, a.threadId); assert.equal(restored.endpoint, a.endpoint);
   assert.equal(f.records().filter((m) => m.started).length, 2);
+  const restarted = getCodexAppServerServiceStatuses().find((s) => s.endpoint === a.endpoint)!;
+  assert.equal(restarted.state, 'running'); assert.notEqual(restarted.pid, service.pid);
   assert.equal(f.records().filter((m) => m.method === 'thread/start').length, 3);
   const restoredInherited = await prepareCodexAppServerSession({ sessionId: 'default-inherited' });
   assert(restoredInherited); assert.equal(restoredInherited.endpoint, a.endpoint); assert.equal(restoredInherited.threadId, inherited.threadId);
@@ -113,11 +121,14 @@ test('concurrent prepares reuse one child; another process reuses the server and
   const f = fixture(t);
   assert.deepEqual(await Promise.all([f.prepare(), f.prepare(), f.prepare()]), [f.endpoint, f.endpoint, f.endpoint]);
   const module = new URL('../../../../runtime/codex/app-server-local.ts', import.meta.url).href;
-  const script = `import { prepareCodexLocalAppServer, closeCodexLocalAppServers } from ${JSON.stringify(module)};
+  const script = `import { prepareCodexLocalAppServer, closeCodexLocalAppServers, getCodexLocalAppServerStatuses } from ${JSON.stringify(module)};
 const endpoint = await prepareCodexLocalAppServer({ executable: 'must-not-execute', env: process.env, codelarkHome: ${JSON.stringify(f.root)} });
-await closeCodexLocalAppServers(); console.log(endpoint);`;
+await closeCodexLocalAppServers(); console.log(JSON.stringify({ endpoint, status: getCodexLocalAppServerStatuses()[0] }));`;
   const result = await execFileAsync(process.execPath, ['--import', 'tsx', '--input-type=module', '-e', script], { env: f.env });
-  assert.equal(result.stdout.trim(), f.endpoint);
+  const reused = JSON.parse(result.stdout.trim());
+  assert.equal(reused.endpoint, f.endpoint);
+  assert.equal(reused.status.owner, 'external'); assert.equal(reused.status.state, 'unknown');
+  assert.equal(reused.status.pid, undefined, 'another Bridge cannot claim ownership of the live process');
   const client = await CodexAppServerClient.connect(f.endpoint); client.close();
   assert.equal(f.records().filter((m) => m.started).length, 1);
   await closeCodexLocalAppServers();
@@ -127,10 +138,15 @@ await closeCodexLocalAppServers(); console.log(endpoint);`;
 for (const mode of ['no-app-server', 'no-listen'] as const) test(`only definite unsupported CLI falls back: ${mode}`, async (t) => {
   const f = fixture(t, mode); assert.equal(await f.prepare(), undefined);
   assert.equal(f.records().some((m) => m.started), false);
+  const status = getCodexLocalAppServerStatuses().find((s) => s.endpoint === f.endpoint)!;
+  assert.equal(status.state, 'unsupported'); assert.equal(status.pid, undefined);
 });
 
 for (const mode of ['broken-help', 'startup-failure', 'rpc-error', 'wrong-home'] as const) test(`does not disguise ${mode} as unsupported`, async (t) => {
   const f = fixture(t, mode); await assert.rejects(f.prepare());
+  const status = getCodexAppServerServiceStatuses().find((s) => s.endpoint === f.endpoint)!;
+  assert.equal(status.state, 'failed'); assert(status.error);
+  assert(!JSON.stringify(status).includes('mock invalid configuration'));
 });
 
 for (const mode of ['persistent-auth', 'login-error'] as const) test(`private key injection fails closed for ${mode}`, async (t) => {
@@ -163,6 +179,29 @@ test('a different CODEX_HOME is rejected while prepare is in flight and after it
   await assert.rejects(wrong(), /CODEX_HOME/); await pending;
   await assert.rejects(wrong(), /CODEX_HOME/);
   assert.equal(f.records().filter((m) => m.started).length, 1);
+  const status = getCodexLocalAppServerStatuses().find((s) => s.endpoint === f.endpoint)!;
+  assert.equal(status.state, 'running', 'a rejected probe must not claim the owned child failed');
+  assert.equal(status.pid, f.records().find((m) => m.started).pid);
+  assert.match(status.error!, /服务连接失败.*CODEX_HOME/);
+  await f.prepare();
+  assert.equal(getCodexLocalAppServerStatuses().find((s) => s.endpoint === f.endpoint)?.error, undefined);
+});
+
+for (const mode of ['no-listen', 'startup-failure'] as const) test(`default registry exposes ${mode} before any thread exists`, async (t) => {
+  const f = fixture(t, mode);
+  const keys = ['CODELARK_CODEX_CLI_PATH', 'CODELARK_CODEX_APP_SERVER', 'CODELARK_CODEX_DESKTOP_REMOTE', 'CODELARK_CODEX_APP_SERVER_URL'] as const;
+  const previous = Object.fromEntries(keys.map((key) => [key, process.env[key]]));
+  for (const key of keys) { if (f.env[key] === undefined) delete process.env[key]; else process.env[key] = f.env[key]; }
+  delete process.env.CODELARK_CODEX_APP_SERVER_URL;
+  t.after(() => { for (const key of keys) { if (previous[key] === undefined) delete process.env[key]; else process.env[key] = previous[key]; } });
+  const pending = prepareCodexAppServerSession({ sessionId: `service-${mode}` });
+  if (mode === 'no-listen') assert.equal(await pending, undefined);
+  else await assert.rejects(pending);
+  const status = getCodexAppServerServiceStatuses().find((s) => s.endpoint === codexLocalAppServerEndpoint())!;
+  assert.equal(status.state, mode === 'no-listen' ? 'unsupported' : 'failed');
+  assert.deepEqual(status.sessionIds, [`service-${mode}`]);
+  assert.equal(status.connection, 'unknown');
+  assert.equal(f.records().some((m) => m.method === 'thread/start'), false);
 });
 
 test('shutdown during delayed startup cancels preparation and does not leave a listener', async (t) => {
@@ -174,11 +213,29 @@ test('shutdown during delayed startup cancels preparation and does not leave a l
   await assert.rejects(CodexAppServerClient.connect(f.endpoint));
 });
 
+test('private startup status is observable before readiness and status reads do not spawn or issue RPCs', async (t) => {
+  const f = fixture(t, 'delayed-start');
+  const pending = f.prepare();
+  const status = () => getCodexLocalAppServerStatuses().find((s) => s.endpoint === f.endpoint)!;
+  assert.equal(status().state, 'starting');
+  await pending;
+  const before = f.records().length;
+  assert.equal(status().state, 'running'); assert(status().pid);
+  status().state = 'failed';
+  for (let i = 0; i < 10; i++) getCodexAppServerServiceStatuses();
+  assert.equal(status().state, 'running'); assert.equal(f.records().length, before);
+  await closeCodexLocalAppServers();
+  assert.equal(status().state, 'stopped');
+});
+
 test('unexpected owned child exit permits same-address reconnect without changing its threads', async (t) => {
   const f = fixture(t); await f.prepare();
   const client = await CodexAppServerClient.connect(f.endpoint);
   const before = await client.request<{ thread: { id: string } }>('thread/start');
   await assert.rejects(client.request('fixture/exit')); client.close();
+  for (let i = 0; i < 100 && getCodexLocalAppServerStatuses().find((s) => s.endpoint === f.endpoint)?.state !== 'failed'; i++) await new Promise((r) => setTimeout(r, 5));
+  const failed = getCodexLocalAppServerStatuses().find((s) => s.endpoint === f.endpoint)!;
+  assert.equal(failed.state, 'failed'); assert.match(failed.error!, /7/);
   assert.equal(await f.prepare(), f.endpoint);
   const resumed = await CodexAppServerClient.connect(f.endpoint);
   try {
@@ -186,6 +243,8 @@ test('unexpected owned child exit permits same-address reconnect without changin
     assert.equal(after.thread.id, before.thread.id);
   } finally { resumed.close(); }
   assert.equal(f.records().filter((m) => m.started).length, 2);
+  const restarted = getCodexLocalAppServerStatuses().find((s) => s.endpoint === f.endpoint)!;
+  assert.equal(restarted.state, 'running'); assert.notEqual(restarted.pid, failed.pid); assert.equal(restarted.error, undefined);
 });
 
 test('exited owner does not delete a replaced socket path', { skip: process.platform === 'win32' }, async (t) => {

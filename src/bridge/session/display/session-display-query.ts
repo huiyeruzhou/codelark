@@ -3,6 +3,7 @@ import type { LocalRuntimeSessionSummary } from '../local-runtime-session.js';
 import { stripLegacySessionPrefix } from './session-title.js';
 import type { BridgeStore } from '../../../domain/audit.js';
 import type { BridgeSession } from '../../../domain/session.js';
+import { projectCodexBackendStatus, type CodexBackendStatus } from './codex-backend-status.js';
 import {
   formatCreatorBadge,
   resolveCreatorKind,
@@ -56,6 +57,7 @@ export interface SessionDisplaySummary {
   mode: string;
   executionProvider: string;
   codexProvider: string;
+  codexBackend?: CodexBackendStatus;
   creatorKind: CreatorKind;
   creatorLabel: string;
   creatorClass: string;
@@ -243,6 +245,7 @@ export function buildBridgeSessionDisplaySummary(
     mode: bridgeSessionMode(session),
     executionProvider,
     codexProvider: executionProvider,
+    ...(!activeRuntime || activeRuntime === 'codex' ? { codexBackend: projectCodexBackendStatus(session) } : {}),
     creatorKind: 'bridge',
     creatorLabel: creatorBadge.label,
     creatorClass: creatorBadge.className,
@@ -282,6 +285,7 @@ export function buildCodexThreadDisplaySummary(
     mode: linkedBridgeSession ? bridgeSessionMode(linkedBridgeSession) : '-',
     executionProvider,
     codexProvider: linkedBridgeSession ? executionProvider : '-',
+    ...(linkedBridgeSession ? { codexBackend: projectCodexBackendStatus(linkedBridgeSession) } : {}),
     creatorKind,
     creatorLabel: creatorBadge.label,
     creatorClass: creatorBadge.className,

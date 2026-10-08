@@ -1,4 +1,5 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
+import { readBridgeRuntimeStatus } from '../../bridge/control/service-discovery.js';
 
 import {
   getBridgeAutostartStatus,
@@ -32,8 +33,13 @@ export async function handleUiServiceRoute(options: {
   const { request, response, url, statusContext } = options;
 
   if (request.method === 'GET' && url.pathname === '/api/status') {
+    const bridge = getBridgeStatus();
+    const runtimeStatus = bridge.running
+      ? await readBridgeRuntimeStatus({ codelarkHome: statusContext.home })
+      : undefined;
     json(response, 200, {
-      bridge: getBridgeStatus(),
+      bridge,
+      runtimeStatus: runtimeStatus || null,
       autostart: await getBridgeAutostartStatus(),
       ui: getUiServerStatus(),
       uiAccess: statusContext.getUiAccess(),

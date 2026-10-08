@@ -69,6 +69,8 @@ export interface LifecycleReport {
   nativeCards?: NativeCardReport[];
   configurationChanges?: Array<Record<string, unknown>>;
   appliedSettings?: Array<{ chatId: string; name: string; sessionId: string; threadId: string; turnId: string; response: string; native: NativeTurnSettings }>;
+  backendStatuses?: Array<{ phase: string; chatId: string; command: string; commandMessageId: string; sessionId: string;
+    threadId?: string; expected: BackendStatusExpectation; response: Record<string, any> }>;
 
   error?: string;
 }
@@ -104,6 +106,45 @@ export function botReplyIds(payload: unknown, appId: string, marker: string): st
   return userReadbackMessages(payload).filter((m) => m.sender?.sender_type === 'app'
     && m.sender.id === appId && JSON.stringify(m.content ?? m.body?.content ?? '').includes(marker))
     .map((m) => String(m.message_id));
+}
+
+export interface BackendStatusExpectation {
+  backend: 'unstarted' | 'app-server';
+  activity?: 'idle' | 'active' | 'waiting';
+  terminal?: 'none' | 'view';
+  threadId?: string;
+}
+
+/** CLI 卡片回读保留 Markdown，post 回读可能去掉加粗；只接受本次命令的真实 bot 回复。 */
+export function assertBackendStatusReadback(payload: unknown, appId: string, commandId: string,
+  expected: BackendStatusExpectation, requireCard = false): Record<string, any> | undefined {
+  const readField = (content: string, label: string) => {
+    // CLI 的 interactive 摘要可能把下一 Markdown 标题接在字段末尾。
+    // 只认换行或完整标题边界；值本身仍必须与协议状态精确相等。
+    const match = content.match(new RegExp(`(?:^|\\n)(?:-\\s*)?(?:\\*\\*${label}\\*\\*|${label})(?:[：:]\\s*|\\s*\\n+)([^\\n]+?)(?=\\n|$|\\*\\*[^*\\n]+\\*\\*(?:\\n|$))`));
+    return match?.[1]?.trim().replace(/^「|」$/g, '');
+  };
+  const replies = userReadbackMessages(payload).filter((m) => m.sender?.sender_type === 'app' && m.sender.id === appId
+    && m.reply_to === commandId && (!requireCard || m.msg_type === 'interactive')
+    && typeof m.content === 'string' && readField(m.content, '当前后端') !== undefined);
+  assert(replies.length <= 1, '同一状态命令不能产生重复状态回复');
+  const reply = replies[0];
+  if (!reply) return undefined;
+  const field = (label: string) => readField(reply.content, label);
+  assert.equal(field('当前后端'), expected.backend === 'unstarted' ? '尚未建立' : 'app-server', '实际后端展示错误');
+  if (expected.backend === 'unstarted') {
+    assert.equal(field('连接状态'), undefined, '尚未建立的会话不能显示协议连接状态');
+    assert.equal(field('执行状态'), undefined, '尚未建立的会话不能伪造协议活动状态');
+  } else {
+    assert.equal(field('连接状态'), '已连接', '真实已就绪线程应显示已连接');
+    if (expected.activity) assert.equal(field('执行状态'), { idle: '空闲', active: '运行中', waiting: '等待答复' }[expected.activity], '协议活动状态展示错误');
+  }
+  if (expected.terminal) assert.equal(field('终端用途'), expected.terminal === 'view' ? 'tmux 查看入口' : '未记录终端', '终端用途不能代替后端');
+  if (requireCard) {
+    assert.match(reply.content, /^<card title="Codex /, '配置预览必须显示实际 Codex 会话');
+    if (expected.threadId) assert(reply.content.includes(`codex_thread_id: ${expected.threadId}`), '状态卡必须显示当前真实线程');
+  }
+  return reply;
 }
 export function unexpectedRestartCards(before: unknown, after: unknown, appId: string, commandId?: string): Array<Record<string, any>> {
   const old = new Set(userReadbackMessages(before).map((m) => m.message_id));
@@ -312,9 +353,31 @@ export async function runAppServerLifecycle(d: LifecycleDriver): Promise<Lifecyc
     return ids.length === 1 ? ids : undefined;
   });
   const marker = (name: string) => `LIFECYCLE_${name}_${d.runId}`;
+  const backendStatus = async (chat: string, phase: string, expected: BackendStatusExpectation, commands: string[]) => {
+    const before = structuredClone(await state(chat));
+    const requestCount = d.model.requests.length;
+    for (const text of commands) {
+      const commandId = await send(chat, text);
+      const response = await wait(`${phase} ${text} 的状态卡用户回读`, async () =>
+        assertBackendStatusReadback(await read(chat), d.botAppId, commandId, expected, text === '/' || text.startsWith('/current')));
+      const after = await state(chat);
+      assert.equal(after.sessionId, before.sessionId, '状态查询不能切换会话');
+      assert.equal(after.threadId, before.threadId, '状态查询不能创建或切换原生线程');
+      assert.deepEqual(after.configuration, before.configuration, '配置分栏预览不能修改配置');
+      assert.equal(d.model.requests.length, requestCount, '状态查询不能触发模型请求');
+      report.backendStatuses ??= [];
+      report.backendStatuses.push({ phase, chatId: chat, command: text, commandMessageId: commandId,
+        sessionId: before.sessionId, threadId: before.threadId, expected, response }); save();
+    }
+    check(`backend_status_${phase}`, { commands, sessionId: before.sessionId, threadId: before.threadId });
+  };
   const completedPrompt = async (chat: string, name: string) => {
     const response = marker(`${name}_RESULT`);
     const expected = await state(chat);
+    if (name === 'CLEAR' || name === 'NEW') {
+      assert.equal(expected.threadId, undefined, '新会话首次输入前不能被状态查询预先分配线程');
+      await backendStatus(chat, `${name.toLowerCase()}_unstarted`, { backend: 'unstarted' }, ['/', '/p']);
+    }
     const requestOffset = d.model.requests.length;
     d.model.enqueue({ text: response });
     await send(chat, marker(`${name}_INPUT`));
@@ -336,6 +399,8 @@ export async function runAppServerLifecycle(d: LifecycleDriver): Promise<Lifecyc
     await command(d.chatId, '/runtime codex', 'codex');
     await command(d.chatId, '/require_at off', 'off');
     await command(d.chatId, '/yolo off', 'normal');
+    assert.equal((await state(d.chatId)).threadId, undefined, '首输入前应没有原生线程');
+    await backendStatus(d.chatId, 'initial_unstarted', { backend: 'unstarted' }, ['/', '/p', '/status']);
     await command(d.chatId, `/p ${d.provider}`, d.provider === 'tmux' ? '共享 Codex 线程已就绪' : 'sdk');
     await command(d.chatId, `/model ${d.modelName}`, d.modelName);
     await command(d.chatId, '/reasoning low', 'low');
@@ -348,6 +413,9 @@ export async function runAppServerLifecycle(d: LifecycleDriver): Promise<Lifecyc
     assert.equal(original.configuration['runtime.codex.sandboxMode'], 'read-only');
     assert.equal(original.configuration['runtime.codex.networkAccess'], false);
     check('real_user_input_and_readback', first);
+    await backendStatus(d.chatId, 'ready_idle', { backend: 'app-server', activity: 'idle',
+      terminal: d.provider === 'tmux' ? 'view' : 'none', threadId: first.threadId },
+    ['/', '/current-runtime codex', '/current-runtime kimi', '/current-runtime common', '/p', '/status']);
 
     const configurationStory = { driver: d, report, wait, command, send, read, state, thread, completedPrompt, visible, check, save };
     stage('活动轮次配置保存与下轮原生应用');
@@ -361,6 +429,7 @@ export async function runAppServerLifecycle(d: LifecycleDriver): Promise<Lifecyc
     await send(d.chatId, marker('SLOW_INPUT'));
     await wait('模型已收到暂停请求', () => d.model.requests.length > before);
     const active = await wait('原生运行中轮次', async () => (await thread(first.threadId)).turns.find((t) => t.status === 'inProgress'));
+    await backendStatus(d.chatId, 'active', { backend: 'app-server', activity: 'active', threadId: first.threadId }, ['/']);
     const steerMessage = await send(d.chatId, marker('STEER_INPUT'));
     // Bridge 审计输入已接收并不等于成功；释放后检查原生 userMessage 的 turn 身份。
     await wait('Bridge 已接受运行中追加', async () => userReadbackMessages(await read(d.chatId)).find((m) =>
@@ -461,12 +530,14 @@ export async function runAppServerLifecycle(d: LifecycleDriver): Promise<Lifecyc
     const pendingQuestion = await wait('原生 request_user_input 请求', () => report.protocol.slice(requestStart).find((m) => m.method === 'item/tool/requestUserInput'));
     await wait('真实用户可见原生问题卡', async () => userReadbackMessages(await read(newChat)).find((m) => m.sender?.id === d.botAppId
       && JSON.stringify(m.content).includes('Codex 需要你的回答') && JSON.stringify(m.content).includes(question)));
+    await backendStatus(newChat, 'waiting', { backend: 'app-server', activity: 'waiting', threadId: newTurn.threadId }, ['/current-runtime common', '/p']);
     await send(newChat, answer);
     const qTurn = (pendingQuestion.params as { turnId: string }).turnId;
     await terminal(newTurn.threadId, qTurn);
     assert(d.model.requests.some((r) => (r.body.input || []).some((i: any) => i.type === 'function_call_output' && JSON.stringify(i).includes(answer))), '用户回答必须进入原生工具结果');
     await visible(newChat, marker('QUESTION_RESULT'));
     check('native_question_real_user_answer', { turnId: qTurn });
+    await backendStatus(newChat, 'answered_idle', { backend: 'app-server', activity: 'idle', threadId: newTurn.threadId }, ['/']);
     save();
 
     stage('原生审批卡片与可选真实客户端点击');

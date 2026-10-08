@@ -1,0 +1,334 @@
+{
+  "description": "SDK1–3真实用户CLI回读；仅脱敏ID和本地路径，保留换行/Markdown格式。压缩旧卡为必须失败的负例。",
+  "samples": [
+    {
+      "sourceRun": "status-sdk-1",
+      "sourceRevision": "4b2106f3350c70d9be09afc8ac32e5d883c6adc7",
+      "command": "/",
+      "phase": "initial_unstarted",
+      "expected": {
+        "backend": "unstarted",
+        "terminal": "none"
+      },
+      "reject": false,
+      "response": {
+        "message_id": "reply-0",
+        "reply_to": "command-0",
+        "sender": {
+          "sender_type": "app",
+          "id": "test-app"
+        },
+        "msg_type": "interactive",
+        "content": "<card title=\"Codex [test1]clk-real-e2e-fixture\">\nCodex thread id 未绑定\n---\n{通用配置 / ✓Codex / Claude Code / Kimi Code / Cursor Agent / ZCode}\n---\n<form>\n**YOLO模式 (runtime.codex.yolo_mode)**\n{跟随上层配置 / ✓normal / yolo}\n**Provider（运行方式） (runtime.codex.provider)**\n{✓跟随上层配置（当前：sdk） / sdk / pty / tmux}\n**文件系统权限 (runtime.codex.sandbox_mode)**\n{✓跟随上层配置（当前：workspace-write） / workspace-write / read-only}\n**网络访问 (runtime.codex.network_access)**\n{✓跟随上层配置（当前：on） / on / off}\n**思考级别 (runtime.codex.reasoning_effort)**\n{✓跟随上层配置（当前：medium (3)） / medium / minimal / low / high / xhigh / max / ultra}\n**模型 (runtime.codex.model)**\n跟随上层配置（当前：-）_____\n[保存]\n[刷新]\n</form>\n---\n已压缩 2 项：运行状态、共享镜像\n\n**类型**\n「普通会话」\n\n**当前后端**\n尚未建立\n\n**终端用途**\n未记录终端\n---\n当前 agent：「Codex」\n当前分栏只显示 Codex 配置；选择分栏只查看和编辑配置；切换执行 agent 请使用 /runtime。留空或选择“跟随上层配置”会删除当前会话覆盖。\n</card>"
+      }
+    },
+    {
+      "sourceRun": "status-sdk-1",
+      "sourceRevision": "4b2106f3350c70d9be09afc8ac32e5d883c6adc7",
+      "command": "/p",
+      "phase": "initial_unstarted",
+      "expected": {
+        "backend": "unstarted",
+        "terminal": "none"
+      },
+      "reject": false,
+      "response": {
+        "message_id": "reply-1",
+        "reply_to": "command-1",
+        "sender": {
+          "sender_type": "app",
+          "id": "test-app"
+        },
+        "msg_type": "post",
+        "content": "当前 Codex Provider\n- 模式：normal\n- Provider 配置：sdk (全局默认)\n- 当前后端：尚未建立\n- 终端用途：未记录终端\n说明\n- 会话尚未启动，Provider 配置不代表后端已连接。\n- 直接发送消息开始会话；实际后端以启动后的状态为准。"
+      }
+    },
+    {
+      "sourceRun": "status-sdk-2",
+      "sourceRevision": "b5829e372322f80cbd68cea27b0cb52b4e767bf6",
+      "command": "/",
+      "phase": "initial_unstarted",
+      "expected": {
+        "backend": "unstarted",
+        "terminal": "none"
+      },
+      "reject": false,
+      "response": {
+        "message_id": "reply-2",
+        "reply_to": "command-2",
+        "sender": {
+          "sender_type": "app",
+          "id": "test-app"
+        },
+        "msg_type": "interactive",
+        "content": "<card title=\"Codex [test1]clk-real-e2e-fixture\">\nCodex thread id 未绑定\n---\n{通用配置 / ✓Codex / Claude Code / Kimi Code / Cursor Agent / ZCode}\n---\n<form>\n**YOLO模式 (runtime.codex.yolo_mode)**\n{跟随上层配置 / ✓normal / yolo}\n**Provider（运行方式） (runtime.codex.provider)**\n{✓跟随上层配置（当前：sdk） / sdk / pty / tmux}\n**文件系统权限 (runtime.codex.sandbox_mode)**\n{✓跟随上层配置（当前：workspace-write） / workspace-write / read-only}\n**网络访问 (runtime.codex.network_access)**\n{✓跟随上层配置（当前：on） / on / off}\n**思考级别 (runtime.codex.reasoning_effort)**\n{✓跟随上层配置（当前：medium (3)） / medium / minimal / low / high / xhigh / max / ultra}\n**模型 (runtime.codex.model)**\n跟随上层配置（当前：-）_____\n[保存]\n[刷新]\n</form>\n---\n已压缩 2 项：运行状态、共享镜像\n\n**类型**\n「普通会话」\n\n**当前后端**\n尚未建立\n\n**终端用途**\n未记录终端\n---\n当前 agent：「Codex」\n当前分栏只显示 Codex 配置；选择分栏只查看和编辑配置；切换执行 agent 请使用 /runtime。留空或选择“跟随上层配置”会删除当前会话覆盖。\n</card>"
+      }
+    },
+    {
+      "sourceRun": "status-sdk-2",
+      "sourceRevision": "b5829e372322f80cbd68cea27b0cb52b4e767bf6",
+      "command": "/p",
+      "phase": "initial_unstarted",
+      "expected": {
+        "backend": "unstarted",
+        "terminal": "none"
+      },
+      "reject": false,
+      "response": {
+        "message_id": "reply-3",
+        "reply_to": "command-3",
+        "sender": {
+          "sender_type": "app",
+          "id": "test-app"
+        },
+        "msg_type": "post",
+        "content": "当前 Codex Provider\n- 模式：normal\n- Provider 配置：sdk (全局默认)\n- 当前后端：尚未建立\n- 终端用途：未记录终端\n说明\n- 会话尚未启动，Provider 配置不代表后端已连接。\n- 直接发送消息开始会话；实际后端以启动后的状态为准。"
+      }
+    },
+    {
+      "sourceRun": "status-sdk-2",
+      "sourceRevision": "b5829e372322f80cbd68cea27b0cb52b4e767bf6",
+      "command": "/status",
+      "phase": "initial_unstarted",
+      "expected": {
+        "backend": "unstarted",
+        "terminal": "none"
+      },
+      "reject": false,
+      "response": {
+        "message_id": "reply-4",
+        "reply_to": "command-4",
+        "sender": {
+          "sender_type": "app",
+          "id": "test-app"
+        },
+        "msg_type": "interactive",
+        "content": "<card>\n**全局状态**\n- **Bridge**：running\n- **Bridge PID**：123\n- **Bridge Run ID**：test-thread\n- **Bridge 启动时间**：2026-10-08 14:37:46\n- **Bridge 上次退出**：-\n- **UI Server**：stopped\n- **UI PID**：-\n- **UI 地址**：-\n- **通道**：1/1 enabled\n- **Adapter**：1/1 running\n- **聊天**：1 bound\n- **会话**：1 total, 0 running/queued\n- **当前聊天**：feishu-env:oc_test -> d0ba4ae5 (1 chat record)\n- **当前后端**：尚未建立\n- **终端用途**：未记录终端**说明**\n- 发送 `/` 查看当前聊天/当前会话诊断；发送 `/check` 查看当前会话健康检查。**通道明细**```plain_text\nfeishu-env  alias=Real Feishu E2E  provider=feishu  enabled=yes  adapter=running\n```\n**绑定明细**```plain_text\nfeishu-env  chat=oc_test  session=d0ba4ae5\n```\n</card>"
+      }
+    },
+    {
+      "sourceRun": "status-sdk-2",
+      "sourceRevision": "b5829e372322f80cbd68cea27b0cb52b4e767bf6",
+      "command": "/",
+      "phase": "ready_idle",
+      "expected": {
+        "backend": "app-server",
+        "terminal": "none",
+        "activity": "idle",
+        "threadId": "test-thread"
+      },
+      "reject": true,
+      "response": {
+        "message_id": "reply-5",
+        "reply_to": "command-5",
+        "sender": {
+          "sender_type": "app",
+          "id": "test-app"
+        },
+        "msg_type": "interactive",
+        "content": "<card title=\"Codex workspace\">\ncodex_thread_id: test-thread\n---\n{通用配置 / ✓Codex / Claude Code / Kimi Code / Cursor Agent / ZCode}\n---\n<form>\n**YOLO模式 (runtime.codex.yolo_mode)**\n{跟随上层配置 / ✓normal / yolo}\n**Provider（运行方式） (runtime.codex.provider)**\n{跟随上层配置 / ✓sdk / pty / tmux}\n**文件系统权限 (runtime.codex.sandbox_mode)**\n{跟随上层配置 / workspace-write / ✓read-only}\n**网络访问 (runtime.codex.network_access)**\n{跟随上层配置 / on / ✓off}\n**思考级别 (runtime.codex.reasoning_effort)**\n{跟随上层配置 / medium / minimal / low / high / xhigh / max / ultra ▼}\n**模型 (runtime.codex.model)**\ngpt-5.4___\n[保存]\n[刷新]\n</form>\n---\n已压缩 3 项：执行状态、终端用途、共享镜像\n\n**类型**\n「普通会话」\n\n**当前后端**\napp-server\n\n**连接状态**\n已连接\n---\n当前 agent：「Codex」\n当前分栏只显示 Codex 配置；选择分栏只查看和编辑配置；切换执行 agent 请使用 /runtime。留空或选择“跟随上层配置”会删除当前会话覆盖。\n</card>"
+      }
+    },
+    {
+      "sourceRun": "status-sdk-3",
+      "sourceRevision": "b5829e372322f80cbd68cea27b0cb52b4e767bf6",
+      "command": "/",
+      "phase": "initial_unstarted",
+      "expected": {
+        "backend": "unstarted",
+        "terminal": "none"
+      },
+      "reject": false,
+      "response": {
+        "message_id": "reply-6",
+        "reply_to": "command-6",
+        "sender": {
+          "sender_type": "app",
+          "id": "test-app"
+        },
+        "msg_type": "interactive",
+        "content": "<card title=\"Codex [test1]clk-real-e2e-fixture\">\nCodex thread id 未绑定\n---\n{通用配置 / ✓Codex / Claude Code / Kimi Code / Cursor Agent / ZCode}\n---\n<form>\n**YOLO模式 (runtime.codex.yolo_mode)**\n{跟随上层配置 / ✓normal / yolo}\n**Provider（运行方式） (runtime.codex.provider)**\n{✓跟随上层配置（当前：sdk） / sdk / pty / tmux}\n**文件系统权限 (runtime.codex.sandbox_mode)**\n{✓跟随上层配置（当前：workspace-write） / workspace-write / read-only}\n**网络访问 (runtime.codex.network_access)**\n{✓跟随上层配置（当前：on） / on / off}\n**思考级别 (runtime.codex.reasoning_effort)**\n{✓跟随上层配置（当前：medium (3)） / medium / minimal / low / high / xhigh / max / ultra}\n**模型 (runtime.codex.model)**\n跟随上层配置（当前：-）_____\n[保存]\n[刷新]\n</form>\n---\n**当前后端**\n尚未建立\n\n**运行状态**\n「空闲」\n---\n**终端用途**\n未记录终端\n\n**类型**\n「普通会话」\n\n**共享镜像**\n「未监听」\n---\n当前 agent：「Codex」\n当前分栏只显示 Codex 配置；选择分栏只查看和编辑配置；切换执行 agent 请使用 /runtime。留空或选择“跟随上层配置”会删除当前会话覆盖。\n</card>"
+      }
+    },
+    {
+      "sourceRun": "status-sdk-3",
+      "sourceRevision": "b5829e372322f80cbd68cea27b0cb52b4e767bf6",
+      "command": "/p",
+      "phase": "initial_unstarted",
+      "expected": {
+        "backend": "unstarted",
+        "terminal": "none"
+      },
+      "reject": false,
+      "response": {
+        "message_id": "reply-7",
+        "reply_to": "command-7",
+        "sender": {
+          "sender_type": "app",
+          "id": "test-app"
+        },
+        "msg_type": "post",
+        "content": "当前 Codex Provider\n- 模式：normal\n- Provider 配置：sdk (全局默认)\n- 当前后端：尚未建立\n- 终端用途：未记录终端\n说明\n- 会话尚未启动，Provider 配置不代表后端已连接。\n- 直接发送消息开始会话；实际后端以启动后的状态为准。"
+      }
+    },
+    {
+      "sourceRun": "status-sdk-3",
+      "sourceRevision": "b5829e372322f80cbd68cea27b0cb52b4e767bf6",
+      "command": "/status",
+      "phase": "initial_unstarted",
+      "expected": {
+        "backend": "unstarted",
+        "terminal": "none"
+      },
+      "reject": false,
+      "response": {
+        "message_id": "reply-8",
+        "reply_to": "command-8",
+        "sender": {
+          "sender_type": "app",
+          "id": "test-app"
+        },
+        "msg_type": "interactive",
+        "content": "<card>\n**全局状态**\n- **Bridge**：running\n- **Bridge PID**：123\n- **Bridge Run ID**：test-thread\n- **Bridge 启动时间**：2026-10-08 14:45:14\n- **Bridge 上次退出**：-\n- **UI Server**：stopped\n- **UI PID**：-\n- **UI 地址**：-\n- **通道**：1/1 enabled\n- **Adapter**：1/1 running\n- **聊天**：1 bound\n- **会话**：1 total, 0 running/queued\n- **当前聊天**：feishu-env:oc_test -> 5f6815d5 (1 chat record)\n- **当前后端**：尚未建立\n- **终端用途**：未记录终端**说明**\n- 发送 `/` 查看当前聊天/当前会话诊断；发送 `/check` 查看当前会话健康检查。**通道明细**```plain_text\nfeishu-env  alias=Real Feishu E2E  provider=feishu  enabled=yes  adapter=running\n```\n**绑定明细**```plain_text\nfeishu-env  chat=oc_test  session=5f6815d5\n```\n</card>"
+      }
+    },
+    {
+      "sourceRun": "status-sdk-3",
+      "sourceRevision": "b5829e372322f80cbd68cea27b0cb52b4e767bf6",
+      "command": "/",
+      "phase": "ready_idle",
+      "expected": {
+        "backend": "app-server",
+        "terminal": "none",
+        "activity": "idle",
+        "threadId": "test-thread"
+      },
+      "reject": false,
+      "response": {
+        "message_id": "reply-9",
+        "reply_to": "command-9",
+        "sender": {
+          "sender_type": "app",
+          "id": "test-app"
+        },
+        "msg_type": "interactive",
+        "content": "<card title=\"Codex workspace\">\ncodex_thread_id: test-thread\n---\n{通用配置 / ✓Codex / Claude Code / Kimi Code / Cursor Agent / ZCode}\n---\n<form>\n**YOLO模式 (runtime.codex.yolo_mode)**\n{跟随上层配置 / ✓normal / yolo}\n**Provider（运行方式） (runtime.codex.provider)**\n{跟随上层配置 / ✓sdk / pty / tmux}\n**文件系统权限 (runtime.codex.sandbox_mode)**\n{跟随上层配置 / workspace-write / ✓read-only}\n**网络访问 (runtime.codex.network_access)**\n{跟随上层配置 / on / ✓off}\n**思考级别 (runtime.codex.reasoning_effort)**\n{跟随上层配置 / medium / minimal / low / high / xhigh / max / ultra ▼}\n**模型 (runtime.codex.model)**\ngpt-5.4___\n[保存]\n[刷新]\n</form>\n---\n**当前后端**\napp-server\n\n**连接状态**\n已连接\n\n**执行状态**\n空闲\n---\n**终端用途**\n未记录终端\n\n**类型**\n「普通会话」\n\n**共享镜像**\n「监听中」\n---\n当前 agent：「Codex」\n当前分栏只显示 Codex 配置；选择分栏只查看和编辑配置；切换执行 agent 请使用 /runtime。留空或选择“跟随上层配置”会删除当前会话覆盖。\n</card>"
+      }
+    },
+    {
+      "sourceRun": "status-sdk-3",
+      "sourceRevision": "b5829e372322f80cbd68cea27b0cb52b4e767bf6",
+      "command": "/current-runtime codex",
+      "phase": "ready_idle",
+      "expected": {
+        "backend": "app-server",
+        "terminal": "none",
+        "activity": "idle",
+        "threadId": "test-thread"
+      },
+      "reject": false,
+      "response": {
+        "message_id": "reply-10",
+        "reply_to": "command-10",
+        "sender": {
+          "sender_type": "app",
+          "id": "test-app"
+        },
+        "msg_type": "interactive",
+        "content": "<card title=\"Codex workspace\">\ncodex_thread_id: test-thread\n---\n{通用配置 / ✓Codex / Claude Code / Kimi Code / Cursor Agent / ZCode}\n---\n<form>\n**YOLO模式 (runtime.codex.yolo_mode)**\n{跟随上层配置 / ✓normal / yolo}\n**Provider（运行方式） (runtime.codex.provider)**\n{跟随上层配置 / ✓sdk / pty / tmux}\n**文件系统权限 (runtime.codex.sandbox_mode)**\n{跟随上层配置 / workspace-write / ✓read-only}\n**网络访问 (runtime.codex.network_access)**\n{跟随上层配置 / on / ✓off}\n**思考级别 (runtime.codex.reasoning_effort)**\n{跟随上层配置 / medium / minimal / low / high / xhigh / max / ultra ▼}\n**模型 (runtime.codex.model)**\ngpt-5.4___\n[保存]\n[刷新]\n</form>\n---\n**当前后端**\napp-server\n\n**连接状态**\n已连接\n\n**执行状态**\n空闲\n---\n**终端用途**\n未记录终端\n\n**类型**\n「普通会话」\n\n**共享镜像**\n「监听中」\n---\n当前 agent：「Codex」\n当前分栏只显示 Codex 配置；选择分栏只查看和编辑配置；切换执行 agent 请使用 /runtime。留空或选择“跟随上层配置”会删除当前会话覆盖。\n</card>"
+      }
+    },
+    {
+      "sourceRun": "status-sdk-3",
+      "sourceRevision": "b5829e372322f80cbd68cea27b0cb52b4e767bf6",
+      "command": "/current-runtime kimi",
+      "phase": "ready_idle",
+      "expected": {
+        "backend": "app-server",
+        "terminal": "none",
+        "activity": "idle",
+        "threadId": "test-thread"
+      },
+      "reject": false,
+      "response": {
+        "message_id": "reply-11",
+        "reply_to": "command-11",
+        "sender": {
+          "sender_type": "app",
+          "id": "test-app"
+        },
+        "msg_type": "interactive",
+        "content": "<card title=\"Codex workspace\">\ncodex_thread_id: test-thread\n---\n{通用配置 / Codex / Claude Code / ✓Kimi Code / Cursor Agent / ZCode}\n---\n<form>\n**Provider（运行方式） (runtime.kimi.provider)**\n{✓跟随上层配置（当前：tmux） / tmux}\n**Thinking 模式 (runtime.kimi.thinking_mode)**\n{✓跟随上层配置（当前：default） / default / on / off}\n**模型 (runtime.kimi.model)**\n跟随上层配置（当前：-）_____\n[保存]\n[刷新]\n</form>\n---\n**当前后端**\napp-server\n\n**连接状态**\n已连接\n\n**执行状态**\n空闲\n---\n**终端用途**\n未记录终端\n\n**类型**\n「普通会话」\n\n**共享镜像**\n「监听中」\n---\n当前 agent：「Codex」\n当前分栏只显示 Kimi Code 配置；选择分栏只查看和编辑配置；切换执行 agent 请使用 /runtime。留空或选择“跟随上层配置”会删除当前会话覆盖。\n</card>"
+      }
+    },
+    {
+      "sourceRun": "status-sdk-3",
+      "sourceRevision": "b5829e372322f80cbd68cea27b0cb52b4e767bf6",
+      "command": "/current-runtime common",
+      "phase": "ready_idle",
+      "expected": {
+        "backend": "app-server",
+        "terminal": "none",
+        "activity": "idle",
+        "threadId": "test-thread"
+      },
+      "reject": false,
+      "response": {
+        "message_id": "reply-12",
+        "reply_to": "command-12",
+        "sender": {
+          "sender_type": "app",
+          "id": "test-app"
+        },
+        "msg_type": "interactive",
+        "content": "<card title=\"Codex workspace\">\ncodex_thread_id: test-thread\n---\n{✓通用配置 / Codex / Claude Code / Kimi Code / Cursor Agent / ZCode}\n---\n<form>\n**群聊需要 @bot (session.require_mention)**\n{跟随上层配置 / on / ✓off}\n**对话名称**\n[test1]clk-real-e2e-fixture___\n**工作目录 (session.workspace)**\n/tmp/owned-feishu/workspace___\n**tmux 输出行数 (session.tmux_capture_lines)**\n跟随上层配置（当前：20）_____\n[保存]\n[刷新]\n</form>\n---\n**当前后端**\napp-server\n\n**连接状态**\n已连接\n\n**执行状态**\n空闲\n---\n**终端用途**\n未记录终端\n\n**类型**\n「普通会话」\n\n**共享镜像**\n「监听中」\n---\n当前 agent：「Codex」\n通用配置只修改当前会话的对话名称、工作目录、tmux 展示行数和群聊 @bot 要求，不会切换 agent。留空会删除当前会话覆盖。\n</card>"
+      }
+    },
+    {
+      "sourceRun": "status-sdk-3",
+      "sourceRevision": "b5829e372322f80cbd68cea27b0cb52b4e767bf6",
+      "command": "/p",
+      "phase": "ready_idle",
+      "expected": {
+        "backend": "app-server",
+        "terminal": "none",
+        "activity": "idle",
+        "threadId": "test-thread"
+      },
+      "reject": false,
+      "response": {
+        "message_id": "reply-13",
+        "reply_to": "command-13",
+        "sender": {
+          "sender_type": "app",
+          "id": "test-app"
+        },
+        "msg_type": "post",
+        "content": "当前 Codex Provider\n- 模式：normal\n- Provider 配置：sdk\n- 当前后端：app-server\n- 连接状态：已连接\n- 执行状态：空闲\n- 终端用途：未记录终端\n说明\n- 当前会话绑定 app-server；/p tmux 只建立或复用查看入口，不更换后端。\n- 当前线程不支持切换到 sdk/pty 独立执行。"
+      }
+    },
+    {
+      "sourceRun": "status-sdk-3",
+      "sourceRevision": "b5829e372322f80cbd68cea27b0cb52b4e767bf6",
+      "command": "/status",
+      "phase": "ready_idle",
+      "expected": {
+        "backend": "app-server",
+        "terminal": "none",
+        "activity": "idle",
+        "threadId": "test-thread"
+      },
+      "reject": false,
+      "response": {
+        "message_id": "reply-14",
+        "reply_to": "command-14",
+        "sender": {
+          "sender_type": "app",
+          "id": "test-app"
+        },
+        "msg_type": "interactive",
+        "content": "<card>\n**全局状态**\n- **Bridge**：running\n- **Bridge PID**：123\n- **Bridge Run ID**：test-thread\n- **Bridge 启动时间**：2026-10-08 14:45:14\n- **Bridge 上次退出**：-\n- **UI Server**：stopped\n- **UI PID**：-\n- **UI 地址**：-\n- **通道**：1/1 enabled\n- **Adapter**：1/1 running\n- **聊天**：1 bound\n- **会话**：1 total, 0 running/queued\n- **当前聊天**：feishu-env:oc_test -> 5f6815d5 (1 chat record)\n- **当前后端**：app-server\n- **连接状态**：已连接\n- **执行状态**：空闲\n- **终端用途**：未记录终端**说明**\n- 发送 `/` 查看当前聊天/当前会话诊断；发送 `/check` 查看当前会话健康检查。**通道明细**```plain_text\nfeishu-env  alias=Real Feishu E2E  provider=feishu  enabled=yes  adapter=running\n```\n**绑定明细**```plain_text\nfeishu-env  chat=oc_test  session=5f6815d5  runtime=idle\n```\n</card>"
+      }
+    }
+  ]
+}
