@@ -66,6 +66,7 @@ export interface StreamChatParams {
   kimiSessionId?: string;
   kimiThinking?: boolean;
   cursorSessionId?: string;
+  cursorProvider?: 'tmux' | 'desktop';
   cursorForce?: boolean;
   cursorReasoningEffort?: string;
   zcodeSessionId?: string;

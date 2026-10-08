@@ -210,6 +210,7 @@ export function getSessionCursorModel(session: SessionRuntimeLike | null | undef
 
 export function getSessionCursorProvider(session: SessionRuntimeLike | null | undefined): CursorProviderChoice | undefined {
   if (!isCursorRuntime(session)) return undefined;
+  if (session?.runtime?.cursor?.provider === 'desktop') return 'desktop';
   return getSessionTomlOverride<string>(session, 'runtime.cursor.provider') === 'tmux' ? 'tmux' : undefined;
 }
 
@@ -256,7 +257,7 @@ export function getSessionRuntimeProviderIdentity(session: SessionRuntimeLike | 
       ? session?.runtime?.kimi?.provider
       : isClaudeRuntime(session) ? session?.runtime?.claude?.provider : session?.runtime?.codex?.provider);
   if (isZcodeRuntime(session)) return provider === 'tmux' ? 'zcode:tmux' : undefined;
-  if (isCursorRuntime(session)) return provider === 'tmux' ? 'cursor:tmux' : undefined;
+  if (isCursorRuntime(session)) return provider === 'tmux' || provider === 'desktop' ? `cursor:${provider}` : undefined;
   if (isKimiRuntime(session)) return provider === 'tmux' ? 'kimi:tmux' : undefined;
   if (!isRuntimeProviderChoice(provider)) return undefined;
   if (!provider) return undefined;
@@ -268,7 +269,7 @@ export function buildRuntimeProviderIdentity(
   provider: RuntimeProviderChoice | KimiProviderChoice | CursorProviderChoice | ZcodeProviderChoice,
 ): RuntimeProviderIdentity {
   if (runtime === 'zcode') return 'zcode:tmux';
-  if (runtime === 'cursor') return 'cursor:tmux';
+  if (runtime === 'cursor') return `cursor:${provider as CursorProviderChoice}`;
   if (runtime === 'kimi') return 'kimi:tmux';
   return `${runtime}:${provider as RuntimeProviderChoice}`;
 }

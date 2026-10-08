@@ -340,8 +340,12 @@ export function buildLocalRuntimeSessionDisplaySummary(
     codexTitle: '',
     cwd: session.cwd,
     mode: '-',
-    executionProvider: runtime === 'kimi' || runtime === 'cursor' || runtime === 'zcode' ? 'tmux' : 'pty',
-    codexProvider: runtime === 'kimi' || runtime === 'cursor' || runtime === 'zcode' ? 'tmux' : '-',
+    executionProvider: runtime === 'cursor' && session.source === 'cursor-desktop'
+      ? 'desktop'
+      : runtime === 'kimi' || runtime === 'cursor' || runtime === 'zcode' ? 'tmux' : 'pty',
+    codexProvider: runtime === 'cursor' && session.source === 'cursor-desktop'
+      ? 'desktop'
+      : runtime === 'kimi' || runtime === 'cursor' || runtime === 'zcode' ? 'tmux' : '-',
     creatorKind: 'tui_cli',
     creatorLabel: creatorBadge.label,
     creatorClass: creatorBadge.className,

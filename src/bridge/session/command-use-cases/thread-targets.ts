@@ -201,7 +201,12 @@ export function createCommandSessionRegistry(store: BridgeStore): SessionRegistr
       getThread: (cursorSessionId, cwd) => {
         const thread = getCommandLocalRuntimeThreadByIdSafe(cursorSessionId, cwd, 'cursor registry lookup').thread;
         return thread?.runtime === 'cursor'
-          ? { cursorSessionId: thread.threadId, title: thread.title, cwd: thread.cwd }
+          ? {
+            cursorSessionId: thread.threadId,
+            title: thread.title,
+            cwd: thread.cwd,
+            provider: thread.source === 'cursor-desktop' ? 'desktop' : 'tmux',
+          }
           : null;
       },
       archiveThread: (cursorSessionId, cwd) => Boolean(archiveCommandCursorThread(cursorSessionId, cwd)),
@@ -357,7 +362,11 @@ function materializeCursorThread(store: BridgeStore, thread: LocalRuntimeSession
   store.updateSession(session.id, mergeSessionRuntimeUpdates(
     {},
     setSessionActiveRuntimeUpdate('cursor'),
-    { runtime: { cursor: { sessionId: thread.threadId, cwd: thread.cwd, provider: 'tmux' } } },
+    { runtime: { cursor: {
+      sessionId: thread.threadId,
+      cwd: thread.cwd,
+      provider: thread.source === 'cursor-desktop' ? 'desktop' : 'tmux',
+    } } },
   ));
   return store.getSession(session.id) || session;
 }

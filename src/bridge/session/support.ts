@@ -234,6 +234,7 @@ export function hasSessionKimiProviderOverride(session?: BridgeSession | null): 
 }
 
 export function getSessionCursorProviderOverride(session?: BridgeSession | null): CursorProviderChoice | undefined {
+  if (session?.runtime?.activeRuntime === 'cursor' && session.runtime.cursor?.provider === 'desktop') return 'desktop';
   const tomlProvider = getSessionTomlOverride<CursorProviderChoice>(session, 'runtime.cursor.provider');
   return tomlProvider === 'tmux' ? 'tmux' : undefined;
 }
@@ -417,12 +418,15 @@ export function resolveKimiRuntimeConfig(session?: BridgeSession | null, binding
 
 export function resolveCursorRuntimeConfig(session?: BridgeSession | null, binding?: ChannelChat | null): CursorRuntimeConfig {
   const { config } = scopedConfigForRuntime(binding, session);
+  const desktop = session?.runtime?.activeRuntime === 'cursor' && session.runtime.cursor?.provider === 'desktop';
   return {
     runtime: 'cursor',
-    provider: 'tmux',
-    model: config.runtime.cursor.model.trim() || DEFAULT_CURSOR_MODEL,
+    provider: desktop ? 'desktop' : 'tmux',
+    // Desktop owns its conversation model. The bridge protocol has no model
+    // override or model-query field, so do not claim or force the CLI default.
+    model: desktop ? undefined : config.runtime.cursor.model.trim() || DEFAULT_CURSOR_MODEL,
     force: config.runtime.cursor.force === true,
-    ...(config.runtime.cursor.reasoningEffort ? { reasoningEffort: config.runtime.cursor.reasoningEffort } : {}),
+    ...(!desktop && config.runtime.cursor.reasoningEffort ? { reasoningEffort: config.runtime.cursor.reasoningEffort } : {}),
   };
 }
 

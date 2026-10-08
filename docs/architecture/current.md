@@ -44,7 +44,7 @@ flowchart LR
 | Bridge host | 维护 daemon 生命周期，并把通道、命令、turn、mirror、权限和健康检查装配在一起。 |
 | BridgeSession | 表达“当前聊天对应哪条本地工作会话”，承载 runtime 身份、工作目录和会话级设置。 |
 | Lane 调度 | 表达“这条消息要和谁互相等待”，决定控制命令、长任务、普通命令和 prompt 的并发关系。 |
-| Runtime provider | 屏蔽 Codex app-server + tmux、Claude SDK/pty/tmux、Kimi tmux、Cursor tmux 与 ZCode tmux 的底层差异。 |
+| Runtime provider | 屏蔽 Codex app-server + tmux、Claude SDK/pty/tmux、Kimi tmux、Cursor tmux/Desktop 与 ZCode tmux 的底层差异。 |
 | Mirror 与 Stream UI | 把本地 JSONL 变化聚合为 turn progress，并用卡片 diff 推送到 IM。 |
 
 ## 消息投递到后端
@@ -161,12 +161,12 @@ conversation barrier 是 lane 之上的保护规则，用来处理“这条命�
 典型过程：
 
 1. 用户发送 `/t`。
-2. local session index 按 runtime 扫描本地历史：Codex 读 `~/.codex/sessions/**/*.jsonl`，Claude Code 读项目目录下的 Claude JSONL，Kimi Code 读 `~/.kimi-code/sessions/wd_*/session_*/agents/main/wire.jsonl`，Cursor 读 `~/.cursor/projects/*/agent-transcripts/**/*.jsonl`，ZCode 只读其 SQLite session store。
+2. local session index 按 runtime 扫描本地历史：Codex 读 `~/.codex/sessions/**/*.jsonl`，Claude Code 读项目目录下的 Claude JSONL，Kimi Code 读 `~/.kimi-code/sessions/wd_*/session_*/agents/main/wire.jsonl`，Cursor 合并 `~/.cursor/projects/*/agent-transcripts/**/*.jsonl` 与 Desktop conversation index，ZCode 只读其 SQLite session store。
 3. bridge 返回最近的本地 runtime 会话列表，并标出 runtime、底层 id、cwd 和当前绑定状态。
 4. 用户发送 `/t 1`。
 5. 被选中的本地 runtime 会话会被 materialized 成一个 `BridgeSession`，或复用已有同底层身份的 `BridgeSession`。
 6. 当前 IM chat 创建或更新 `ChannelChat`，让它指向这个 `BridgeSession.id`。
-7. 后续普通消息通过 ChannelChat 找到 session，再根据 `runtime.codex.threadId`、`runtime.claude.sessionId + cwd` 或 `runtime.kimi.sessionId + cwd` 继续同一条底层 runtime 会话。
+7. 后续普通消息通过 ChannelChat 找到 session，再根据底层 runtime identity 继续同一会话；Cursor Desktop identity 固定走 Desktop Bridge 单写入和 transcript mirror，禁止降级到 Cursor tmux 创建第二个 writer。
 
 会话索引热路径只能读取目录、文件元信息和小型持久缓存，禁止为了表格里的“用户输入轮数”同步整文件读取 JSONL。轮数缓存以 `runtime + path + size + mtime` 为键：冷缓存和新增后缀由单并发异步流统计，命令先返回；下一次刷新显示精确值。单次接管解析出的候选列表应复用于同 runtime 的卡片刷新，不能为同一个动作重复扫描。
 

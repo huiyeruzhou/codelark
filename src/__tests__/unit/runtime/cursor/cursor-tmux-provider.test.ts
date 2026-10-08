@@ -177,7 +177,9 @@ describe('Cursor tmux provider helpers', () => {
 
     assert.equal(listCursorSessionFileSummaries(cwd)[0]?.filePath, transcript);
     assert.equal(findCursorSessionFileById(sessionId, cwd)?.title, 'Cursor local session');
-    assert.equal(createCursorMirrorJsonlSource().findByThreadId(sessionId, cwd)?.filePath, transcript);
+    const source = createCursorMirrorJsonlSource();
+    assert.equal(source.findByThreadId(sessionId, cwd)?.filePath, transcript);
+    assert.equal(source.watchPath?.(transcript), path.dirname(transcript));
   });
 
   it('merges Cursor Desktop conversations with CLI chats and restores their workspaces', () => {
@@ -190,6 +192,7 @@ describe('Cursor tmux provider helpers', () => {
     const legacyId = '33333333-3333-4333-8333-333333333333';
     const missingWorkspaceId = '44444444-4444-4444-8444-444444444444';
     writeCursorSession({ sessionId: cliId, cwd: cliCwd, title: 'CLI chat' });
+    writeCursorSession({ sessionId: modernId, cwd: modernCwd, title: 'Stale CLI title' });
 
     const globalStorage = path.join(desktopUserRoot, 'globalStorage');
     fs.mkdirSync(globalStorage, { recursive: true });
@@ -273,8 +276,12 @@ describe('Cursor tmux provider helpers', () => {
 
     const sessions = listCursorSessionFileSummaries();
     assert.deepEqual(sessions.map((session) => session.sessionId), [legacyId, modernId, cliId]);
+    assert.equal(sessions.find((session) => session.sessionId === cliId)?.provider, 'tmux');
+    assert.equal(sessions.find((session) => session.sessionId === modernId)?.provider, 'desktop');
+    assert.equal(sessions.find((session) => session.sessionId === legacyId)?.provider, 'desktop');
     assert.equal(sessions.find((session) => session.sessionId === modernId)?.filePath, modernTranscript);
-    assert.equal(sessions.find((session) => session.sessionId === modernId)?.storePath, undefined);
+    assert.match(sessions.find((session) => session.sessionId === modernId)?.storePath || '', /store\.db$/);
+    assert.equal(sessions.find((session) => session.sessionId === modernId)?.title, 'Desktop modern chat');
     assert.equal(sessions.find((session) => session.sessionId === legacyId)?.cwd, fs.realpathSync.native(legacyCwd));
     assert.equal(findCursorSessionFileById(modernId, modernCwd)?.title, 'Desktop modern chat');
     assert.equal(findCursorSessionFileById(legacyId, legacyCwd)?.title, 'Desktop legacy chat');

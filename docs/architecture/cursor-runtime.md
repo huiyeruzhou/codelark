@@ -1,10 +1,10 @@
-# Cursor tmux runtime
+# Cursor runtime
 
 ## 目标
 
-CodeLark 直接在 provider-owned tmux session 中运行 Cursor 官方 `agent` TUI。tmux 负责进程生命周期和输入；Cursor 自己在后台写入 chat metadata 与 transcript JSONL，CodeLark 从 transcript 读取结构化输出，不解析终端屏幕的 ANSI/局部重绘。
+Cursor Agent CLI 会话由 CodeLark 在 provider-owned tmux session 中运行官方 `agent` TUI。tmux 负责进程生命周期和输入；Cursor 自己在后台写入 chat metadata 与 transcript JSONL，CodeLark 从 transcript 读取结构化输出，不解析终端屏幕的 ANSI/局部重绘。
 
-首版 provider 只有 `cursor:tmux`。一个 Bridge session 固定绑定一个 Cursor chat UUID 和 cwd；不处理 TUI 内 `/new`、`/fork`、`/resume` 导致的 chat ID 变化。
+Cursor Desktop 已有对话使用 `cursor:desktop`：CodeLark 只通过 Cursor 自带 Desktop Bridge 向同一条可见对话提交输入，并从同一 transcript 读取输出。一个 Bridge session 固定绑定一个 Cursor chat UUID、cwd 和来源 provider；不处理 TUI 内 `/new`、`/fork`、`/resume` 导致的 chat ID 变化。
 
 ## 官方证据
 
@@ -44,7 +44,7 @@ Cursor Desktop 的会话目录与 Cursor Agent CLI 并不完全重合。Desktop 
 - `globalStorage/state.vscdb` 的 `composerHeaders`：新版 Desktop 会话的 workspace；
 - `workspaceStorage/*/state.vscdb` 中的 `composer.composerData` 和同目录 `workspace.json`：旧版 composer 会话与 workspace 的映射。
 
-列表把 Desktop 与 `~/.cursor/chats` 的 CLI 会话按 conversation id 合并。无法可靠恢复 cwd，或原 workspace 已不存在的残留索引不会展示，避免 `agent --resume` 意外落到 home 目录。Desktop 会话可以先通过 `agent --resume <chatId>` 恢复；若此前没有 CLI transcript，CodeLark 会在首条新输入提交后等待同一 chat id 的 transcript 出现，再开始读取输出。
+列表把 Desktop 与 `~/.cursor/chats` 的 CLI 会话按 conversation id 合并；同一 id 同时存在时以 Desktop index 的 title/cwd/provider 身份为准，同时保留 CLI `store.db` 供结构化记录核验。无法可靠恢复 cwd，或原 workspace 已不存在的残留索引不会展示。Desktop 会话不会再通过 `agent --resume <chatId>` 恢复；这会建立第二个 writer。若此前没有 transcript，CodeLark 会在 Desktop Bridge 提交首条新输入后等待同一 chat id 的 transcript 出现，再开始读取输出。
 
 可读 transcript 位于：
 
@@ -59,11 +59,23 @@ Cursor Desktop 的会话目录与 Cursor Agent CLI 并不完全重合。Desktop 
 - `text` 与 `tool_use` content block；
 - `{type:"turn_ended", status:"success|error|aborted"}` 终态。
 
-CodeLark 把这些行归一化为公共 message/tool/task mirror record 和 SSE 事件。官方 writer 还会在 assistant 回答后写入仅包含 `<|eos|>` 的内部边界块，并可能在同一 turn 先写一份 assistant state、稍后再写内容不同的最终 revision；后一个 revision 不是新的回答。对 `2026.07.23-e383d2b` 真实样本的 `store.db` 取证表明，同一 assistant message 具有 `reasoning` 与 `text` 两个 block：前者的签名载荷明确是 OpenAI `summary_text`，后者标记为 `openaiPhase=final_answer`。transcript writer 会丢失 block 类型，把正文放在前面、加粗的 thinking summary 放在后面并用空行连接；正文与 summary 都可能在下一版 snapshot 中同时改写。parser 优先比较相邻 revision 的最后一个空行边界；如果只有一版带摘要，或下一版同时改写正文并移除摘要，则只在 `turn_ended` 前后用当前 chat 的 `store.db` 核验独立 text/reasoning blocks，并要求重新扁平化后与 transcript snapshot 精确相等。核验成功后恢复 `reasoningKind=summary`，同时给正文 revision 分配稳定 `replacementKey`；没有结构化证据时不把任意末尾粗体正文猜成摘要。direct provider 通过通用 `history_item` 交付 `thinking_summary`，mirror turn 使用同一中间语义；公共历史 renderer 把它作为弱化引用插在最终回答之前，不混入正文，也不占外层卡片标题。不能匹配 `Responding...` 等具体文案，也不能让 Feishu renderer 解析 Cursor 私有文本。真实 TUI 取样表明 Cursor 完成态不显示该 summary，等待期只显示淡化的 `Working`；CodeLark 保留摘要属于自身的可观察性设计，而不是复刻一个并不存在的 Cursor title。
+CodeLark 把这些行归一化为公共 message/tool/task mirror record 和 SSE 事件。Cursor 会用原子替换重写 transcript snapshot，因此 mirror watch transcript 所在目录而不是文件 inode；否则第一次 replace 后 watcher 可能失效，只能等 hot 2.5 秒或 cold 60 秒轮询兜底。官方 writer 还会在 assistant 回答后写入仅包含 `<|eos|>` 的内部边界块，并可能在同一 turn 先写一份 assistant state、稍后再写内容不同的最终 revision；后一个 revision 不是新的回答。对 `2026.07.23-e383d2b` 真实样本的 `store.db` 取证表明，同一 assistant message 具有 `reasoning` 与 `text` 两个 block：前者的签名载荷明确是 OpenAI `summary_text`，后者标记为 `openaiPhase=final_answer`。transcript writer 会丢失 block 类型，把正文放在前面、加粗的 thinking summary 放在后面并用空行连接；正文与 summary 都可能在下一版 snapshot 中同时改写。parser 优先比较相邻 revision 的最后一个空行边界；如果只有一版带摘要，或下一版同时改写正文并移除摘要，则只在 `turn_ended` 前后用当前 chat 的 `store.db` 核验独立 text/reasoning blocks，并要求重新扁平化后与 transcript snapshot 精确相等。核验成功后恢复 `reasoningKind=summary`，同时给正文 revision 分配稳定 `replacementKey`；没有结构化证据时不把任意末尾粗体正文猜成摘要。direct provider 通过通用 `history_item` 交付 `thinking_summary`，mirror turn 使用同一中间语义；公共历史 renderer 把它作为弱化引用插在最终回答之前，不混入正文，也不占外层卡片标题。不能匹配 `Responding...` 等具体文案，也不能让 Feishu renderer 解析 Cursor 私有文本。真实 TUI 取样表明 Cursor 完成态不显示该 summary，等待期只显示淡化的 `Working`；CodeLark 保留摘要属于自身的可观察性设计，而不是复刻一个并不存在的 Cursor title。
 
 Cursor 不调用名为 `completed` 的工具结束一轮。assistant message 后由客户端独立追加 `{"type":"turn_ended","status":"success"}`；失败或中断也由该 terminal record 的状态表达。CodeLark 必须以 `turn_ended` 驱动终态，不能用工具名、正文停止增长或 TUI 光标位置猜测完成。同一读取批次只保留最新版正文，跨增量批次则把后续 revision 作为替换事件继续交付。多轮时 Cursor 还会重写整份 transcript、删除上一轮位于 EOF 的 `turn_ended`；旧 byte offset 可能因此落入新 user JSON 中部。增量 parser 跳过残行后若先看到完整 assistant row，必须以它建立隐式 turn 并恢复正文，不能只交付后面的成功终态。多轮后的最终 transcript snapshot 可能只保留文件末尾一个 `turn_ended`；测试应以 user/归一化后的可见 assistant record 确认轮次，以文件末尾终态确认整体完成，不能把物理 assistant/终态行数当成轮数。
 
 ## 生命周期
+
+### Cursor Desktop
+
+1. `/t` 从 Desktop conversation index 识别出的会话写入 `cursor:desktop` identity；它不是全局默认 provider，也不能用于没有 Desktop thread id 的 fresh session。
+2. 发送前读取 `~/.cursor/desktop-bridge/*.json`，验证目录/文件仅当前用户可读、协议版本、live PID、Unix socket 和 64 位 hex token，再通过 Bearer 鉴权向 `/` 提交 `listThreads`。目标必须是 live 列表中的精确 thread id。
+3. 输入使用 `sendMessage` 单次提交。只接受 `submitted` 或 `queued`；无 discovery、stale PID、目标 thread 不存在、不可发送、HTTP 错误或超时都明确失败，绝不回退到 tmux/ACP。
+4. provider 从发送前 transcript EOF 续读。`queued` 时上一轮可能先产出 assistant 和 `turn_ended`，因此只有看到正文包含本次 prompt 的新 user row 后，才转发 assistant/tool/terminal；旧 turn 终态不能结束本轮。
+5. Desktop Bridge 没有 response event 或 stop endpoint。输出仍由 transcript direct stream 与后台 mirror 观察；用户停止等待时会明确说明 Desktop 中已提交的 turn 仍可能继续。
+
+Cursor 的 Beta 设置必须启用 `Allow CLI to access desktop agents`。该能力由 Cursor 自己的版本/账号 feature gate 控制；开关不存在时 CodeLark 不能代替 Cursor 开启，只能保持显式不可用。
+
+### Cursor Agent tmux
 
 当前内置默认模型固定为 `gpt-5.3-codex`，而不是省略 `--model` 交给官方 `auto`。在 Cursor Agent `2026.07.23-e383d2b` 的隔离 A/B 中，`auto` 会把同一 assistant state 写入四次后以 `WritableIterable is closed` 失败，显式 `gpt-5.3-codex` 则只写一次并成功；用户仍可通过 `/model` 覆盖。兼容 parser 会折叠同一 turn 的完全相同 assistant state，但真实 `turn_ended error` 仍按失败交付，不能伪装成功。
 
@@ -90,8 +102,8 @@ CodeLark 自己也使用 `/...` 命令，因此原生 Cursor 命令通过 `/tmux
 
 ## 兼容性边界
 
-- Cursor 是独立 `RuntimeAgent`，provider identity 为 `cursor:tmux`。
+- Cursor 是独立 `RuntimeAgent`，provider identity 为 `cursor:tmux` 或 `cursor:desktop`。
 - Cursor chat UUID、cwd、transcript 和 tmux 生命周期不复用 Codex/Kimi 的身份字段。
-- Cursor CLI 不存在、未登录、pane 提前退出、transcript 未出现或长时间无活动时返回明确错误，不回退到其他 runtime。
+- Cursor CLI 不存在、未登录、pane 提前退出、Desktop Bridge 不可用、transcript 未出现或长时间无活动时返回明确错误，不回退到其他 runtime/provider。
 - readiness 超时与 pane 退出不是同一种错误：前者保留仍存活的 provider-owned tmux 供观察和下一轮接管，后者按失败进程清理。
 - Codex、Claude Code 与 Kimi Code 既有 routing、session 和 mirror 行为保持不变。

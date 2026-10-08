@@ -22,6 +22,7 @@ export interface CursorSessionFileSummary {
   sessionDir: string;
   storePath?: string;
   filePath?: string;
+  provider: 'tmux' | 'desktop';
 }
 
 interface CursorSessionMeta {
@@ -368,6 +369,7 @@ function listCursorDesktopSessionSummaries(cwd?: string): CursorSessionFileSumma
       return [{
         sessionId: row.id,
         sessionDir: cursorDesktopGlobalStorageRoot(),
+        provider: 'desktop',
         cwd: sessionCwd,
         ...(title ? { title } : {}),
         ...(location.createdAt ? { createdAt: location.createdAt } : {}),
@@ -402,6 +404,7 @@ function summarizeCursorSessionDir(sessionDir: string, fallbackCwd?: string): Cu
     sessionId,
     sessionDir,
     storePath,
+    provider: 'tmux',
     ...(cwd ? { cwd } : {}),
     ...(meta?.title?.trim() ? { title: meta.title.trim() } : {}),
     ...(isoFromMs(meta?.createdAtMs) || stat ? {
@@ -436,17 +439,23 @@ export function listCursorSessionFileSummaries(cwd?: string, limit?: number): Cu
   const combined = new Map<string, CursorSessionFileSummary>();
   for (const session of [...sessions, ...listCursorDesktopSessionSummaries(cwd)]) {
     const previous = combined.get(session.sessionId);
-    combined.set(session.sessionId, previous
-      ? {
+    if (previous) {
+      const desktop = previous.provider === 'desktop'
+        ? previous
+        : session.provider === 'desktop' ? session : undefined;
+      combined.set(session.sessionId, {
           ...session,
           ...previous,
-          title: previous.title || session.title,
-          cwd: previous.cwd || session.cwd,
+          title: desktop?.title || previous.title || session.title,
+          cwd: desktop?.cwd || previous.cwd || session.cwd,
           createdAt: previous.createdAt || session.createdAt,
           updatedAt: [previous.updatedAt, session.updatedAt].filter(Boolean).sort().at(-1),
           filePath: previous.filePath || session.filePath,
-        }
-      : session);
+          provider: previous.provider === 'desktop' || session.provider === 'desktop' ? 'desktop' : 'tmux',
+        });
+    } else {
+      combined.set(session.sessionId, session);
+    }
   }
   const archived = new Set(readArchivedCursorSessions().map((entry) => cursorArchiveKey(entry.sessionId, entry.cwd)));
   const visible = [...combined.values()].filter((session) => !session.cwd || !archived.has(cursorArchiveKey(session.sessionId, session.cwd)));
@@ -461,9 +470,7 @@ export function findCursorSessionFileById(sessionId: string, cwd?: string): Curs
   if (!sessionId.trim()) return null;
   if (cwd) {
     if (isArchivedCursorSession(sessionId, cwd)) return null;
-    return summarizeCursorSessionDir(path.join(getCursorChatsRoot(cwd), sessionId), cwd)
-      || listCursorDesktopSessionSummaries(cwd).find((session) => session.sessionId === sessionId)
-      || null;
+    return listCursorSessionFileSummaries(cwd).find((session) => session.sessionId === sessionId) || null;
   }
   return listCursorSessionFileSummaries().find((session) => session.sessionId === sessionId) || null;
 }
@@ -1013,6 +1020,12 @@ export function createCursorMirrorJsonlSource(): MirrorJsonlSource {
   const storePathsByTranscript = new Map<string, string>();
   return {
     runtime: 'cursor' as MirrorJsonlSource['runtime'],
+    // Cursor rewrites transcript snapshots with atomic file replacement. A
+    // watcher attached to the old inode stops receiving later updates, while
+    // the containing directory remains stable across every replacement.
+    watchPath(filePath: string): string {
+      return path.dirname(filePath);
+    },
     findByThreadId(threadId: string, cwd?: string): MirrorJsonlSourceSummary | null {
       const summary = findCursorSessionFileById(threadId, cwd);
       if (summary?.filePath) {
