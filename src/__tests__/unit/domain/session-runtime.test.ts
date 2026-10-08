@@ -8,6 +8,7 @@ import {
   getHistoryMessageLimit,
   getWorkspaceRoot,
   resolveClaudeRuntimeConfig,
+  resolveCodexInvocationModel,
   resolveKimiRuntimeConfig,
   resolveDisplayedModel,
   resolveEffectiveCodexProvider,
@@ -440,6 +441,7 @@ provider = "tmux"
     assert.equal(codex.sandboxMode, 'read-only');
     assert.equal(codex.networkAccessEnabled, false);
     assert.equal(codex.reasoningEffort, 'low');
+    assert.equal(resolveCodexInvocationModel(binding, session, { resuming: true }), 'session-codex');
     assert.equal(resolveDisplayedModel(binding, session), 'session-codex');
     assert.equal(resolveEffectiveCodexProvider(session, binding), 'tmux');
     assert.equal(resolveEffectiveSandboxMode(session, binding), 'read-only');
@@ -460,6 +462,10 @@ provider = "tmux"
     assert.equal(resolveEffectiveSandboxMode(session, legacyProviderBinding), 'read-only');
     assert.equal(resolveClaudeRuntimeConfig(session, legacyProviderBinding).model, 'channel-claude');
     assert.equal(resolveKimiRuntimeConfig(session, legacyProviderBinding).model, 'session-kimi');
+
+    const channelOnlySession = { id: 'session-channel-only', runtime: { activeRuntime: 'codex' } } as BridgeSession;
+    assert.equal(resolveCodexInvocationModel(binding, channelOnlySession, { resuming: false }), 'channel-codex');
+    assert.equal(resolveCodexInvocationModel(binding, channelOnlySession, { resuming: true }), undefined);
   });
 
   it('honors explicit Codex activeRuntime over a Claude default runtime config', () => {

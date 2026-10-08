@@ -64,7 +64,7 @@ export function buildHelpCommandResponse(): string {
     '- `/r` 查看 Codex 思考级别；可用 `1 | 2 | 3 | 4 | 5`',
     '- `/sb` 查看或切换 Codex 沙箱；可用 `read-only | workspace-write | danger-full-access | default`',
     '- `/net` 查看或切换 Codex 网络；可用 `on | off | default`',
-    '- `/model` 查看当前模型；`/model gpt-5.4` 可切换，`/model default` 回退到默认模型',
+    '- `/model` 查看当前模型；`/model <slug>` 可直接指定（不依赖模型缓存），`/model default` 回退到线程默认模型',
     '- `/cd <path>` 替换当前会话工作目录；支持绝对路径、相对路径和 `~`',
     '',
     '**GlobalRuntime 配置**',

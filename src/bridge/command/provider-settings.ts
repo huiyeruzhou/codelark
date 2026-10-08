@@ -49,6 +49,7 @@ import {
   resolveKimiRuntimeConfig,
   resolveCursorRuntimeConfig,
   resolveZcodeRuntimeConfig,
+  resolveCodexInvocationModel,
   resolveSessionRuntimeConfig,
 } from '../session/support.js';
 import { buildCommandFields } from './presentation.js';
@@ -793,7 +794,7 @@ async function applyProviderCommand(options: ProviderCommandOptions): Promise<st
       threadId,
       bridgeSessionId: session.id,
       workingDirectory: getSessionWorkingDirectory(session),
-      model: runtimeConfig.model || undefined,
+      model: resolveCodexInvocationModel(binding, session, { resuming: true }),
       sandboxMode,
       networkAccessEnabled,
       modelReasoningEffort,
