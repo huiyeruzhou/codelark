@@ -89,7 +89,7 @@ npm install -g codelark
 codelark run
 ```
 
-使用 Node.js 24 和 Git，从 GitHub 安装当前 app-server 开发分支（适用于 Bash / Zsh）：
+使用 Node.js 24 和 Git，从 GitHub 安装最新 main（适用于 Bash / Zsh）：
 
 ```bash
 npx --yes --package=npm@11.6.2 -c 'codelark_pkg=$(npm pack "git+https://github.com/huiyeruzhou/codelark.git#main" --silent) && npm install -g "./$codelark_pkg"'
