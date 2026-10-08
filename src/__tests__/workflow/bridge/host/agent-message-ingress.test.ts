@@ -256,14 +256,20 @@ describe('agent message manual ingress', () => {
     adapter.mergeAgentMessageEvents = true;
 
     await sendAgentMessageFromBinding(source.id, {
-      target: 'current',
+      target: source.bridgeSessionId,
       text: '/help',
       idempotencyKey: 'manual-help-command',
     });
     const manualHelpCommand = await adapter.consumeOne();
     assert.ok(manualHelpCommand);
+    const sentBeforeManualHelp = adapter.sentMessages.length;
     await _testOnly.handleMessage(adapter, manualHelpCommand);
     await _testOnlyWaitForDeliveryQueuesForTests(adapter);
+    assert.equal(
+      adapter.sentMessages.length,
+      sentBeforeManualHelp + 1,
+      'an exact same-session target must not add a redundant Agent message receipt card',
+    );
     assert.match(adapter.sentMessages.at(-1)?.text || '', /命令速览/u);
     assert.equal(
       adapter.sentMessages.at(-1)?.replyToMessageId,
