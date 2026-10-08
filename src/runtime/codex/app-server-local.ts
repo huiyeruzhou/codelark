@@ -1,0 +1,250 @@
+import { spawn, execFile, type ChildProcess } from 'node:child_process';
+import { createHash } from 'node:crypto';
+import fs from 'node:fs';
+import { createRequire } from 'node:module';
+import os from 'node:os';
+import path from 'node:path';
+import { promisify } from 'node:util';
+import { CODELARK_HOME } from '../../configuration/paths.js';
+import { CodexAppServerClient } from './app-server-client.js';
+
+const execFileAsync = promisify(execFile);
+function canonical(value: string): string {
+  let existing = path.resolve(value);
+  const suffix: string[] = [];
+  for (;;) {
+    try { return path.join(fs.realpathSync(existing), ...suffix); }
+    catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+      const parent = path.dirname(existing);
+      if (parent === existing) throw error;
+      suffix.unshift(path.basename(existing)); existing = parent;
+    }
+  }
+}
+
+/** Stable across Bridge restarts; never publish this private address to Desktop. */
+export function codexLocalAppServerEndpoint(home = CODELARK_HOME, platform = process.platform): string {
+  const identity = canonical(home);
+  const hash = createHash('sha256').update(platform === 'win32' ? identity.toLowerCase() : identity).digest();
+  return platform === 'win32'
+    ? `ws://127.0.0.1:${40_000 + hash.readUInt32BE(0) % 20_000}`
+    : `unix:///tmp/codelark-codex-${hash.toString('hex').slice(0, 24)}/rpc.sock`;
+}
+
+/** Own the npm installation's native backend, not its command/Node wrapper. */
+export function localAppServerInvocation(executable: string, platform = process.platform): { command: string; args: string[] } {
+  const windowsShim = platform === 'win32' && /\.(cmd|bat)$/i.test(executable);
+  const entry = windowsShim ? path.join(path.dirname(executable), 'node_modules', '@openai', 'codex', 'bin', 'codex.js') : canonical(executable);
+  let npm = windowsShim && fs.existsSync(entry);
+  if (!npm && path.basename(entry) === 'codex.js') {
+    try { npm = JSON.parse(fs.readFileSync(path.resolve(path.dirname(entry), '..', 'package.json'), 'utf8')).name === '@openai/codex'; }
+    catch { /* User-provided scripts remain executable entrypoints. */ }
+  }
+  if (!npm) {
+    if (windowsShim) throw new Error('无法解析此 Codex Windows 包装命令；请指定安装中的 codex.exe。');
+    return /\.[cm]?js$/i.test(executable) ? { command: process.execPath, args: [executable] } : { command: executable, args: [] };
+  }
+  const target = platform === 'win32' ? 'pc-windows-msvc' : platform === 'darwin' ? 'apple-darwin' : 'unknown-linux-musl';
+  const triple = `${process.arch === 'arm64' ? 'aarch64' : 'x86_64'}-${target}`;
+  let vendor = path.resolve(path.dirname(entry), '..', 'vendor');
+  try {
+    vendor = path.join(path.dirname(createRequire(entry).resolve(`@openai/codex-${platform}-${process.arch}/package.json`)), 'vendor');
+  } catch { /* Older npm releases bundle vendor inside @openai/codex. */ }
+  for (const directory of ['bin', 'codex']) {
+    const binary = path.join(vendor, triple, directory, platform === 'win32' ? 'codex.exe' : 'codex');
+    if (fs.existsSync(binary)) return { command: binary, args: [] };
+  }
+  throw new Error('Codex npm 安装缺少原生 Codex 可执行文件；未启动其他后端。');
+}
+
+interface OwnedBackend {
+  child: ChildProcess;
+  exited: Promise<void>;
+  stop?: Promise<void>;
+  socket?: { path: string; dev: number; ino: number };
+}
+const owned = new Map<string, OwnedBackend>();
+const preparing = new Map<string, { codexHome: string; promise: Promise<string | undefined> }>();
+let generation = 0;
+
+function unavailable(error: unknown): boolean {
+  return ['ENOENT', 'ECONNREFUSED'].includes((error as NodeJS.ErrnoException)?.code || '');
+}
+
+async function probe(endpoint: string, codexHome: string): Promise<void> {
+  const client = await CodexAppServerClient.connect(endpoint, { connectTimeoutMs: 2_000 });
+  try {
+    if (!client.serverInfo.codexHome || canonical(client.serverInfo.codexHome) !== canonical(codexHome)) {
+      throw new Error('本地 app-server 地址已被另一份 CODEX_HOME 使用，未启动或接管后端。');
+    }
+    await client.request('thread/loaded/list');
+  } finally { client.close(); }
+}
+
+function privateSocketDirectory(endpoint: string): string | undefined {
+  if (!endpoint.startsWith('unix://')) return;
+  const socket = endpoint.slice('unix://'.length);
+  const directory = path.dirname(socket);
+  fs.mkdirSync(directory, { mode: 0o700, recursive: true });
+  const stat = fs.lstatSync(directory);
+  if (!stat.isDirectory() || stat.isSymbolicLink() || (stat.mode & 0o077) !== 0
+    || (process.getuid && stat.uid !== process.getuid())) throw new Error('app-server socket 目录不是当前用户的私有目录，未使用。');
+  return socket;
+}
+
+function socketExists(socket: string): boolean {
+  try { fs.lstatSync(socket); return true; }
+  catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false; throw error; }
+}
+
+async function releaseOwnedSocket(backend: OwnedBackend, endpoint: string, codexHome: string): Promise<void> {
+  const identity = backend.socket;
+  if (!identity) return;
+  const unchanged = () => {
+    try {
+      const stat = fs.lstatSync(identity.path);
+      return stat.isSocket() && stat.dev === identity.dev && stat.ino === identity.ino;
+    } catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false; throw error; }
+  };
+  if (!unchanged()) return;
+  // A concurrent owner may have won the bind race. A live listener is never ours
+  // to unlink after our own child exited, even if it passed the readiness probe.
+  try { await probe(endpoint, codexHome); return; }
+  catch (error) { if (!unavailable(error)) return; }
+  if (unchanged()) fs.unlinkSync(identity.path);
+}
+
+function stopOwned(backend: OwnedBackend): Promise<void> {
+  if (backend.stop) return backend.stop;
+  const running = () => backend.child.exitCode === null && backend.child.signalCode === null;
+  if (running()) backend.child.kill('SIGTERM');
+  const timer = setTimeout(() => { if (running()) backend.child.kill('SIGKILL'); }, 5_000);
+  timer.unref();
+  backend.stop = backend.exited.finally(() => clearTimeout(timer));
+  return backend.stop;
+}
+
+/** Close only children actually spawned by this Bridge, never a reused listener. */
+export function closeCodexLocalAppServers(): Promise<void> {
+  generation++;
+  const closing = [...owned.values()].map(stopOwned);
+  return Promise.all([...closing, ...[...preparing.values()].map((entry) => entry.promise.catch(() => undefined))]).then(() => undefined);
+}
+
+export function prepareCodexLocalAppServer(options: {
+  executable: string;
+  env: NodeJS.ProcessEnv;
+  codelarkHome?: string;
+}): Promise<string | undefined> {
+  const endpoint = codexLocalAppServerEndpoint(options.codelarkHome);
+  const codexHome = canonical(options.env.CODEX_HOME || path.join(options.env.HOME || options.env.USERPROFILE || os.homedir(), '.codex'));
+  const pending = preparing.get(endpoint);
+  if (pending) return pending.codexHome === codexHome ? pending.promise
+    : Promise.reject(new Error('同一私有地址正在准备另一份 CODEX_HOME，未接管。'));
+  const epoch = generation;
+  const assertCurrent = () => { if (epoch !== generation) throw new Error('Bridge 已关闭，未继续启动私有 app-server。'); };
+  const operation = (async () => {
+    const previous = owned.get(endpoint);
+    if (previous?.stop || (previous && (previous.child.exitCode !== null || previous.child.signalCode !== null))) await previous.exited;
+    assertCurrent();
+    const socket = privateSocketDirectory(endpoint);
+    try { await probe(endpoint, codexHome); assertCurrent(); return endpoint; }
+    catch (error) { if (!unavailable(error)) throw error; }
+    if (previous) {
+      // Socket close can arrive before ChildProcess.exit. Wait for that known
+      // child and its inode cleanup; never launch a second writer beside it.
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      try {
+        await Promise.race([previous.exited, new Promise<never>((_, reject) => {
+          timer = setTimeout(() => reject(new Error('自有 app-server 不可连接且尚未退出，未启动第二个后端。')), 5_000);
+        })]);
+      } finally { clearTimeout(timer); }
+    }
+    assertCurrent();
+    // A refused connection does not authorize deleting a stale socket or another file.
+    if (socket && socketExists(socket)) throw new Error(`app-server socket 已存在但不可连接，未删除或替换：${socket}`);
+    const invocation = localAppServerInvocation(options.executable);
+    let help: string;
+    try {
+      const result = await execFileAsync(invocation.command, [...invocation.args, 'app-server', '--help'], {
+        env: options.env, timeout: 15_000, maxBuffer: 1024 * 1024, windowsHide: true,
+      });
+      help = result.stdout;
+    } catch (error) {
+      const stderr = String((error as { stderr?: string }).stderr || '');
+      if (/unrecognized subcommand ['`]app-server['`]/i.test(stderr)) return;
+      throw error;
+    }
+    assertCurrent();
+    if (!/--listen\b/.test(help)) {
+      if (/Usage:[\s\S]*app-server\b/.test(help)) return;
+      throw new Error('无法确认 Codex app-server --listen 能力，未回退旧执行路径。');
+    }
+    // Check again after the CLI capability query; another owner may have started it.
+    try { await probe(endpoint, codexHome); assertCurrent(); return endpoint; }
+    catch (error) { if (!unavailable(error)) throw error; }
+    assertCurrent();
+    if (socket && socketExists(socket)) throw new Error(`app-server socket 已被占用，未替换：${socket}`);
+    const env: NodeJS.ProcessEnv = { ...options.env, CODEX_HOME: codexHome };
+    const apiKey = env.CODELARK_CODEX_API_KEY || env.CODEX_API_KEY || env.OPENAI_API_KEY;
+    if (apiKey) { env.CODEX_API_KEY = apiKey; env.OPENAI_API_KEY = apiKey; }
+    const args = [...invocation.args, '-c', 'features.code_mode_host=true'];
+    if (env.CODELARK_CODEX_BASE_URL) args.push('-c', `openai_base_url=${JSON.stringify(env.CODELARK_CODEX_BASE_URL)}`);
+    // app-server intentionally ignores environment login keys. Authenticate only
+    // this owned process through the public API, with a memory-only auth store.
+    if (apiKey) args.push('-c', 'preferred_auth_method="apikey"', '-c', 'cli_auth_credentials_store="ephemeral"');
+    args.push('app-server', '--listen', endpoint);
+    const child = spawn(invocation.command, args, {
+      env, stdio: ['ignore', 'ignore', 'pipe'], windowsHide: true,
+    });
+    let failure: Error | undefined;
+    let stderr = '';
+    child.stderr!.on('data', (data: Buffer) => { stderr = (stderr + data.toString()).slice(-8_000); });
+    const backend: OwnedBackend = { child, exited: new Promise<void>((resolve) => {
+      child.once('exit', () => {
+        void releaseOwnedSocket(backend, endpoint, codexHome).catch((error) => {
+          console.warn('[codex-app-server] 自有 socket 清理未完成:', error);
+        }).finally(resolve);
+      });
+      child.once('error', (error) => { failure = error; resolve(); });
+    }) };
+    owned.set(endpoint, backend);
+    void backend.exited.then(() => { if (owned.get(endpoint) === backend) owned.delete(endpoint); });
+    try {
+      const deadline = Date.now() + 15_000;
+      for (;;) {
+        assertCurrent();
+        if (failure) throw failure;
+        if (child.exitCode !== null || child.signalCode !== null) throw new Error(`Codex app-server 启动失败（${child.exitCode ?? child.signalCode}）：${stderr}`);
+        try {
+          await probe(endpoint, codexHome); assertCurrent();
+          if (child.exitCode !== null || child.signalCode !== null) throw new Error('私有 app-server 在准备期间退出，未认领监听地址。');
+          if (socket) {
+            const stat = fs.lstatSync(socket);
+            if (!stat.isSocket()) throw new Error('app-server 未创建预期的 Unix socket。');
+            backend.socket = { path: socket, dev: stat.dev, ino: stat.ino };
+          }
+          if (apiKey) {
+            const client = await CodexAppServerClient.connect(endpoint);
+            try {
+              const { config } = await client.request<{ config: { cli_auth_credentials_store?: string } }>('config/read');
+              if (config.cli_auth_credentials_store !== 'ephemeral') throw new Error('私有 app-server 未启用内存认证，未修改已有凭据。');
+              await client.request('account/login/start', { type: 'apiKey', apiKey });
+            }
+            finally { client.close(); }
+            assertCurrent();
+          }
+          return endpoint;
+        }
+        catch (error) { if (!unavailable(error) || Date.now() >= deadline) throw error; }
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      }
+    } catch (error) {
+      await stopOwned(backend);
+      throw error;
+    }
+  })().finally(() => { if (preparing.get(endpoint)?.promise === operation) preparing.delete(endpoint); });
+  preparing.set(endpoint, { codexHome, promise: operation });
+  return operation;
+}

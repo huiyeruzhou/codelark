@@ -8,6 +8,7 @@ import { CodexAppServerLifecycle, type AppServerSubmission, type AppServerThread
 import { prepareCodexDesktopRemote, validateLocalEndpoint, type CodexDesktopRemote } from './desktop-remote.js';
 import { resolveCodexCliExecutable } from './cli-executable.js';
 import { buildCodexTuiEnv } from './tmux-provider.js';
+import { codexLocalAppServerEndpoint, prepareCodexLocalAppServer, closeCodexLocalAppServers } from './app-server-local.js';
 
 export interface CodexAppServerSession {
   lifecycle: CodexAppServerLifecycle;
@@ -65,7 +66,7 @@ export async function prepareCodexAppServerSession(options: AppServerThreadOptio
   const operation = (async () => {
     if (cached) await releaseBinding(options.sessionId);
     assertCurrent();
-    const persisted = read<{ endpoint: string; threadId: string }>(`session:${options.sessionId}`);
+    const persisted = read<{ endpoint: string; threadId: string; local?: boolean }>(`session:${options.sessionId}`);
     const pinned = persisted && (!options.threadId || persisted.threadId === options.threadId) ? persisted : undefined;
     if (options.createIfMissing === false && !options.threadId && !pinned?.threadId) return;
     if (pinned && options.endpoint && appServerCliUrl(options.endpoint) !== pinned.endpoint) throw new Error('此线程已经绑定另一 app-server，未切换执行后端。');
@@ -73,24 +74,40 @@ export async function prepareCodexAppServerSession(options: AppServerThreadOptio
     // Existing legacy threads keep their writer and adapter across an upgrade.
     // Migration is explicit (endpoint) or starts with a new thread.
     if (!endpoint && options.threadId) return;
+    if (!endpoint && process.env.CODELARK_CODEX_APP_SERVER === '0') return;
     let remote: CodexDesktopRemote | undefined;
+    // /clear and /new inherit the endpoint before the new session has a registry
+    // record. The instance's deterministic address retains its private ownership.
+    let local = pinned?.local === true || (!!endpoint && appServerCliUrl(endpoint) === codexLocalAppServerEndpoint());
     if (!endpoint) {
-      // Avoid touching CLI resolution for old/non-macOS installations.
-      if (process.platform !== 'darwin') return;
       const env = buildCodexTuiEnv();
-      remote = await prepareCodexDesktopRemote({ env, executable: resolveCodexCliExecutable({ env }) });
+      const executable = resolveCodexCliExecutable({ env });
+      if (process.platform === 'darwin') remote = await prepareCodexDesktopRemote({ env, executable });
       endpoint = remote?.endpoint;
+      if (!endpoint) {
+        endpoint = await prepareCodexLocalAppServer({ env, executable });
+        local = !!endpoint;
+      }
     }
     assertCurrent();
     if (!endpoint) return;
     validateLocalEndpoint(endpoint);
     endpoint = appServerCliUrl(endpoint);
+    if (local && endpoint !== codexLocalAppServerEndpoint()) throw new Error('私有后端的稳定地址发生变化，未替换已有线程后端。');
     let lifecycle = backends.get(endpoint);
     if (!lifecycle) {
       const backendKey = endpoint;
       const expectedHome = canonical(process.env.CODEX_HOME || path.join(os.homedir(), '.codex'));
       lifecycle = new CodexAppServerLifecycle(endpoint, {
         connect: async () => {
+          // Restart only a previously selected private backend, at the same address.
+          // External/Desktop listeners remain owned by their service manager.
+          if (local) {
+            const env = buildCodexTuiEnv();
+            if (!await prepareCodexLocalAppServer({ env, executable: resolveCodexCliExecutable({ env }) })) {
+              throw new Error('此线程已绑定私有 app-server，但当前 CLI 不支持 --listen；未回退旧执行路径。');
+            }
+          }
           const client = await CodexAppServerClient.connect(backendKey);
           try {
             if (!client.serverInfo.codexHome || canonical(client.serverInfo.codexHome) !== expectedHome) throw new Error('app-server 的 CODEX_HOME 与此 Bridge 不一致，未接管线程。');
@@ -120,7 +137,7 @@ export async function prepareCodexAppServerSession(options: AppServerThreadOptio
       throw error;
     }
     // Durable binding precedes any user input. It also protects a Bridge restart before store.updateSession.
-    save(`session:${options.sessionId}`, { endpoint, threadId });
+    save(`session:${options.sessionId}`, { endpoint, threadId, ...(local ? { local: true } : {}) });
     const session = { lifecycle, threadId, endpoint, remote, direct: false, directTurnIds: new Set<string>() };
     sessions.set(options.sessionId, session);
     return session;
@@ -145,9 +162,10 @@ async function releaseBinding(sessionId: string): Promise<void> {
   if (session && ![...sessions.values()].some((s) => s.threadId === session.threadId && s.endpoint === session.endpoint)
     && ![...preparingTargets.values()].includes(`${session.endpoint}:${session.threadId}`)) await session.lifecycle.detach(session.threadId);
 }
-export function closeCodexAppServerSessions(): void {
+export function closeCodexAppServerSessions(): Promise<void> {
   generation += 1;
   for (const lifecycle of backends.values()) lifecycle.close();
   sessions.clear(); backends.clear(); preparing.clear(); preparingTargets.clear(); sessionVersions.clear();
   // Persistent bindings and uncertain submissions intentionally survive Bridge shutdown.
+  return closeCodexLocalAppServers();
 }

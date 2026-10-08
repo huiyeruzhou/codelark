@@ -42,9 +42,22 @@ jobs:
       - name: Smoke test real agent executables
         run: node scripts/verify-ci-runtime-clis.js
 
+      - name: Test native default app-server ownership
+        timeout-minutes: 4
+        run: node --import tsx scripts/verify-codex-default-app-server.ts --evidence "${{ runner.temp }}/codelark-default-app-server"
+
+      - name: Upload default app-server evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: default-app-server-linux
+          if-no-files-found: ignore
+          path: ${{ runner.temp }}/codelark-default-app-server
+
       - name: Test real agent tmux lifecycles with fake model proxies
         timeout-minutes: 10
         env:
+          CODELARK_CODEX_APP_SERVER: '0'
           CODELARK_RUNTIME_E2E_PRESERVE_FAILURES: '1'
           CODELARK_RUNTIME_E2E_LOG_DIR: ${{ runner.temp }}/codelark-real-runtime-e2e
           TEMP: ${{ runner.temp }}
@@ -158,9 +171,22 @@ jobs:
       - name: Smoke test real agent executables
         run: node scripts/verify-ci-runtime-clis.js
 
+      - name: Test native default app-server ownership
+        timeout-minutes: 4
+        run: node --import tsx scripts/verify-codex-default-app-server.ts --evidence "${{ runner.temp }}/codelark-default-app-server"
+
+      - name: Upload default app-server evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: default-app-server-${{ matrix.os }}
+          if-no-files-found: ignore
+          path: ${{ runner.temp }}/codelark-default-app-server
+
       - name: Test real agent tmux lifecycles with fake model proxies
         timeout-minutes: 10
         env:
+          CODELARK_CODEX_APP_SERVER: '0'
           CODELARK_RUNTIME_E2E_PRESERVE_FAILURES: '1'
           CODELARK_RUNTIME_E2E_LOG_DIR: ${{ runner.temp }}/codelark-real-runtime-e2e
           TEMP: ${{ runner.temp }}

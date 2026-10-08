@@ -26,6 +26,8 @@ const testEnv = {
   KIMI_CODE_HOME: kimiHome,
   TMUX_TMPDIR: tmuxTempDir,
   CODELARK_DISABLE_DAILY_VERSION_CHECK: '1',
+  // Legacy SDK/TUI stories stay explicit; default-backend tests opt in themselves.
+  CODELARK_CODEX_APP_SERVER: '0',
 };
 delete testEnv.TMUX;
 delete testEnv.TMUX_PANE;
@@ -61,6 +63,7 @@ const windowsRuntimeFiles = new Set([
   'src/__tests__/workflow/runtime/claude/claude-tmux-provider.test.ts',
   'src/__tests__/workflow/runtime/codex/codex-provider.test.ts',
   'src/__tests__/workflow/runtime/codex/codex-tmux-provider.test.ts',
+  'src/__tests__/workflow/runtime/codex/app-server-default.test.ts',
   'src/__tests__/workflow/runtime/kimi/kimi-tmux-provider.test.ts',
 ]);
 

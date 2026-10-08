@@ -30,9 +30,10 @@ interface Step {
 }
 
 /** 只返回预先编排的 SSE；不转发任何请求，也不读取模型凭证。 */
-export async function startFixtureModel() {
+export async function startFixtureModel(options: { authorization?: string; rejectWebSockets?: boolean } = {}) {
   const requests: Array<{ method: string; url: string; body: ModelBody }> = [];
   const unexpected: string[] = [];
+  let rejectedWebSockets = 0;
   const steps: Step[] = [];
   const allSteps: Step[] = [];
   const server = http.createServer((req, res) => {
@@ -40,6 +41,13 @@ export async function startFixtureModel() {
     req.setEncoding('utf8');
     req.on('data', (chunk) => { raw += chunk; });
     req.on('end', () => {
+      if (options.rejectWebSockets && req.method === 'GET' && req.url?.split('?')[0] === '/v1/responses'
+        && req.headers.upgrade?.toLowerCase() === 'websocket') {
+        rejectedWebSockets++; res.writeHead(404).end(); return;
+      }
+      if (options.authorization && req.headers.authorization !== options.authorization) {
+        unexpected.push('invalid mock authorization'); res.writeHead(401).end(); return;
+      }
       if (req.method !== 'POST' || req.url?.split('?')[0] !== '/v1/responses') {
         unexpected.push(`${req.method} ${req.url}`);
         res.writeHead(404).end(); return;
@@ -84,6 +92,7 @@ export async function startFixtureModel() {
   assert(address && typeof address !== 'string');
   return {
     baseUrl: `http://127.0.0.1:${address.port}/v1`, requests, unexpected,
+    get rejectedWebSockets() { return rejectedWebSockets; },
     enqueue(output: Step['output'], hold = false) {
       let release!: () => void;
       const gate = new Promise<void>((resolve) => { release = resolve; });

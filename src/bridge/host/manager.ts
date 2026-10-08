@@ -3343,7 +3343,7 @@ export async function stop(): Promise<void> {
   clearMirrorSubscriptions();
 
   // Stop all adapters
-  closeCodexAppServerSessions();
+  await closeCodexAppServerSessions();
   closeAppServerRequestObservers();
   for (const type of Array.from(state.adapters.keys())) {
     await ADAPTER_RUNTIME.stopAdapterInstance(type);

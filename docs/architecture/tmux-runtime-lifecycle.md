@@ -89,7 +89,7 @@ TUI 启动和本地 thread bootstrap 共用 `buildCodexTuiEnv`，显式设置 `G
 
 ### Codex Desktop 与共享 app-server
 
-macOS 上准备新 Codex 会话时，CodeLark 会通过 `com.openai.codex` bundle id 检测 Desktop，并检查 CLI 是否支持 `--remote`。Linux、Windows、未安装 Desktop 或显式设置 `CODELARK_CODEX_DESKTOP_REMOTE=0` 时继续原有启动方式。Desktop 的 `CODEX_APP_SERVER_FORCE_CLI=1` 设置优先，不自动改写。
+macOS 上准备新 Codex 会话时，CodeLark 会通过 `com.openai.codex` bundle id 检测 Desktop，并检查 CLI 是否支持 `--remote`。Linux、Windows、未安装 Desktop 或显式设置 `CODELARK_CODEX_DESKTOP_REMOTE=0` 时，新线程使用下文的 Bridge 私有 app-server；既有 legacy 线程不自动迁移。Desktop 的 `CODEX_APP_SERVER_FORCE_CLI=1` 设置优先，不自动改写。
 
 已配置且可连接的本机 `CODEX_APP_SERVER_WS_URL` 优先复用。Desktop 默认本地路径使用 stdio，不提供通用的可接入 socket；缺少明确地址时，CodeLark 为当前 macOS 用户安装 `dev.codelark.codex-app-server` LaunchAgent，通过私有 Unix socket 运行独立 app-server。新 TUI 使用 `--remote unix://… resume <thread>`，Desktop 使用同一 socket 对应的 `ws+unix://localhost/绝对路径:/` 地址。官方应用的连接选择器通过 hostname 判断是否为本机，空 hostname 会误选代理；旧版保存的空 hostname 地址仍能被 CodeLark 识别，受管理的启动脚本会更新地址写法，不替换原环境快照。服务端仍持有 thread writer lock；两个客户端共享一个持锁后端，没有删除或关闭锁。
 
@@ -109,13 +109,30 @@ Codex 0.160 的启动菜单有两种紧凑 footer：目录信任为 `enter conti
 
 ### app-server 的执行生命周期
 
-用户要求以 app-server 重新划分完整生命周期，而非把协议探活接到旧的抓屏流程上。自动启用范围仍为 macOS + 已安装 Desktop；明确配置本机 app-server 地址的设备也可使用同一协议适配器。旧 CLI、其他 runtime 与未启用设备保留原有适配器。生产实现分别位于 `app-server-client.ts`（连接和错误）、`app-server-lifecycle.ts`（线程、轮次和请求）、`app-server-events.ts`（事件转换）、`app-server-registry.ts`（后端选择与持久记录）。Bridge 的普通输入、direct provider、停止和镜像复用这套服务；验收记录单独注明已验证范围。
+用户要求以 app-server 重新划分完整生命周期，而非把协议探活接到旧的抓屏流程上。新线程默认启用 app-server；明确指定的地址、已保存的后端绑定和 `CODELARK_CODEX_APP_SERVER_URL` 优先。macOS 原有独立 Desktop 服务继续使用原管理方式，无 Desktop 或非 macOS 时由 Bridge 懒启动私有后端。既有 legacy 线程不自动迁移；其他 runtime 不受影响。生产实现分别位于 `app-server-client.ts`（连接和错误）、`app-server-lifecycle.ts`（线程、轮次和请求）、`app-server-events.ts`（事件转换）、`app-server-registry.ts`（后端选择与持久记录）。Bridge 的普通输入、direct provider、停止和镜像复用这套服务；验收记录单独注明已验证范围。
+
+#### 默认私有后端的归属与兼容
+
+`app-server-local.ts` 使用当前安装的普通 `codex app-server --listen`，不调用要求 managed standalone 安装的 `app-server daemon start`，不替用户安装或复制二进制。各平台的 npm 入口解析到同一安装自带的原生 Codex（包括 Windows 的 `codex.exe`），避免只持有命令或 Node 包装层的句柄。私有启动保留 `CODELARK_CODEX_BASE_URL` 与 `CODELARK_CODEX_API_KEY > CODEX_API_KEY > OPENAI_API_KEY` 的既有优先级。原生 app-server 不自动读取环境中的登录 key；有显式 key 时，私有子进程使用官方 `cli_auth_credentials_store="ephemeral"`，核对有效配置后通过 `account/login/start` 注入内存认证。密钥不放进命令参数，不写入或替换用户的 `auth.json`；已有服务复用不修改其认证。没有显式 key 时沿用原有 Codex 登录配置。
+
+地址由规范化的 `CODELARK_HOME` 哈希确定；目录尚不存在时先解析最近存在父路径的 realpath，再拼接未创建的后缀，确保 macOS `/tmp` 与 symlink 父目录不会使创建前后的地址改变。Unix 使用 `/tmp/codelark-codex-<hash>/rpc.sock`，目录属于当前用户且权限为 `0700`；Windows 使用确定的 `127.0.0.1` 高位端口。准备时先以 `initialize` 核对 `CODEX_HOME`，再查询 `thread/loaded/list`；同地址已有兼容后端就连接它。地址已被其他程序或不同 `CODEX_HOME` 使用、握手/鉴权/协议失败均直接报错。已有但不可连接、且没有本进程创建证据的 Unix socket 不会被删除或替换；确定的端口冲突也不会改选另一个地址。
+
+同一 Bridge 内的并发准备复用一个 Promise，多个聊天共用一个后端。没有新增 PID 文件、进程出生时间检查、磁盘锁或独立守护。只有真正启动进程的一方持有其 `ChildProcess`；`closeCodexAppServerSessions()` 会同步发出关闭请求，并返回可等待进程退出的 Promise。其他进程复用的后端、显式外部服务和 Desktop LaunchAgent 不归该关闭操作管理。manager.stop 等待该关闭 Promise，再结束 Bridge。私有后端跟随 Bridge；Bridge 意外退出可能遗留可用服务，下次只按同地址协议核对并复用，不扫描 PID 或猜测归属。若本进程持有的后端异常退出，仅允许清理本次成功启动后记录、dev/ino 未变、且已无监听者的自有 socket。若路径被替换，或是跨 Bridge 重启留下且无法确认归属的残留，保持原样并报错。
+
+`/clear`、`/new` 继承本实例的确定性 endpoint 时，新 session 即使尚无 registry 记录，也保留 private 归属。已保存的私有后端绑定保留相同 endpoint 与 threadId；服务正常关闭后可在原地址启动并 resume，不更换 writer 或重复提交旧输入。`CODELARK_CODEX_APP_SERVER=0` 关闭未绑定新线程的自动启用，供显式选择旧路径和 legacy 测试使用；已有 pinned 线程或显式 endpoint 不能借此退回旧适配器。只有 CLI 明确报告无 `app-server` 子命令，或有效 app-server 帮助明确不含 `--listen` 时，新线程才允许兼容回退；启动错误不能当作“不支持”。
+
+原生 0.153.4 对仅 `thread/start`、尚无输入的空线程，服务重启后会返回 `no rollout found`；已完成首轮的线程可以恢复。实现不会自动创建替代 thread 或偷偷发送输入。本阶段移除 `/clear`、`/new` 继承裸 endpoint 后由后台订阅自动创建空线程的行为：主线的 `reconcileMirrorSubscriptions()` 以 `createIfMissing=false` 仅恢复已有线程，首次真实输入才创建线程。`/p tmux` 仍允许显式预热；若预热后未发送首轮就重启服务，原生无 rollout 的恢复边界仍保留。本次不新增线程持久元数据或错误后重建逻辑。
+
+私有地址不写入 Desktop 环境，不修改 App。需要 Bridge 退出后仍独立使用的 Desktop 应连接已有独立 LaunchAgent；没有启用共享的 Desktop 保持原生启动行为。实际 OS 注销/登录的顺序边界仍见 Desktop 验收文档。
+
+独立 workflow 测试显式开启 `CODELARK_CODEX_APP_SERVER=1`，覆盖 registry 默认选择、并发聊天、跨进程复用、关闭归属、同地址恢复、明确回退和冲突拒绝。稳定套件入口 `scripts/run-tests.js` 显式关闭自动启用，保留旧 SDK/TUI 故事。`scripts/verify-codex-default-app-server.ts` 以独占 HOME/CODEX_HOME 和本地 mock 模型验证真实 CLI 首轮、其他进程退出、继承 endpoint 的新会话在关闭后恢复，以及实际子进程异常退出后同线程新回合；普通 CI 的 Linux/macOS/Windows 分别运行并保存证据，未运行的平台不能凭 mock 宣称通过。
 
 #### 对象与职责
 
 | 对象 | 唯一职责 | 生命周期结束的依据 |
 | --- | --- | --- |
-| 共享后端 | 持有 Codex 线程、配置、工具执行和 writer lock | 外部服务管理器或用户明确关闭；Bridge/TUI 退出不停止它 |
+| 独立共享后端 | 持有 Codex 线程、配置、工具执行和 writer lock | 外部服务管理器或用户明确关闭；Bridge/TUI 退出不停止它 |
+| Bridge 私有后端 | 为同一 Bridge 的聊天提供 app-server | 实际持有子进程句柄的 Bridge 关闭；复用连接没有终止服务的权限 |
 | Bridge 连接 | 初始化协议、请求关联、订阅与重连 | socket 关闭只标记断连，不能结束轮次 |
 | 线程 | 固定 backend + threadId、当前轮次与待处理请求 | 用户解绑/归档使在途 prepare/read/resume 失效并解除本端订阅；不强杀其他客户端的工作 |
 | 轮次 | 接收输入、执行工具、提交最终结果 | 匹配 threadId/turnId 的 turn/completed 或恢复读取中的终态 |
