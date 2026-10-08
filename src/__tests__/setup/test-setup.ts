@@ -37,6 +37,9 @@ if (
 
 process.env.CODELARK_DISABLE_OUTBOUND_RATE_LIMIT = process.env.CODELARK_DISABLE_OUTBOUND_RATE_LIMIT || '1';
 process.env.CODELARK_DISABLE_DAILY_VERSION_CHECK = process.env.CODELARK_DISABLE_DAILY_VERSION_CHECK || '1';
+// Direct node --test entrypoints need the same isolation as scripts/run-tests.js.
+// Tests for the new default opt in explicitly and install their controlled backend.
+process.env.CODELARK_CODEX_APP_SERVER ??= '0';
 process.env.CLK_TEST_DISABLE_LOCAL_CONFIG_CWD = process.env.CLK_TEST_DISABLE_LOCAL_CONFIG_CWD || process.cwd();
 
 if (

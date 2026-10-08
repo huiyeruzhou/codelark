@@ -14,7 +14,7 @@ import type { AppServerThread } from '../src/runtime/codex/app-server-events.js'
 const execFileAsync = promisify(execFile);
 const args = process.argv.slice(2);
 const option = (name: string) => args.includes(name) ? args[args.indexOf(name) + 1] : undefined;
-const executable = option('--cli') || resolveCodexCliExecutable({ env: process.env });
+const executable = option('--cli') || process.env.CODELARK_REAL_CODEX_E2E_EXECUTABLE || resolveCodexCliExecutable({ env: process.env });
 const root = path.resolve(option('--evidence') || fs.mkdtempSync(path.join(os.tmpdir(), 'codelark-default-native-')));
 fs.mkdirSync(root, { recursive: true });
 assert(!fs.existsSync(path.join(root, 'codex')), 'native fixture must use a fresh evidence directory');

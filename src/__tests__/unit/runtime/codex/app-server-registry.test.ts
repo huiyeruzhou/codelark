@@ -75,6 +75,19 @@ test('passive restoration does not allocate an empty thread but restores durable
   assert.equal(f.received.filter((m) => m.method === 'thread/start').length, 1);
 });
 
+test('passive observation cannot suppress a concurrent first real input', async (t) => {
+  const f = await fixture(t);
+  const options = { sessionId: 'registry-passive-concurrent', endpoint: f.endpoint };
+  const observation = prepareCodexAppServerSession({ ...options, createIfMissing: false });
+  const input = prepareCodexAppServerSession(options);
+  const laterObservation = prepareCodexAppServerSession({ ...options, createIfMissing: false });
+  assert.equal(await observation, undefined);
+  const [active, observing] = await Promise.all([input, laterObservation]);
+  assert(active, '第一条输入必须创建线程，不能复用后台观察的空结果');
+  assert.equal(observing?.threadId, active.threadId);
+  assert.equal(f.received.filter((m) => m.method === 'thread/start').length, 1);
+});
+
 test('fixed backend survives a Bridge client restart and session config has only its own instance home', async (t) => {
   const f = await fixture(t);
   const sessionId = 'registry-restart';
@@ -120,10 +133,10 @@ test('a lost submission cannot fall back to SDK, PTY or TUI', async (t) => {
   assert(getCodexAppServerSession('uncertain-provider')?.lifecycle.snapshot('thread-0').submission);
 });
 
-test('unchanged Linux legacy installation uses the existing provider', { skip: process.platform !== 'linux' }, async () => {
+test('an existing legacy thread keeps its provider after app-server becomes the default', async () => {
   let called = 0;
   const legacy: LLMProvider = { streamChat() { called++; return new ReadableStream({ start(controller) { controller.enqueue('data: {"type":"done","data":"legacy"}\n'); controller.close(); } }); } };
-  const events = await collect(streamCodexAppServer({ sessionId: 'legacy-no-endpoint', prompt: 'hello' }, legacy));
+  const events = await collect(streamCodexAppServer({ sessionId: 'legacy-no-endpoint', codexThreadId: 'existing-legacy-thread', prompt: 'hello' }, legacy));
   assert.equal(called, 1); assert.equal(events[0].data, 'legacy');
 });
 

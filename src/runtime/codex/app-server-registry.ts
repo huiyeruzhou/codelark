@@ -59,6 +59,10 @@ export async function prepareCodexAppServerSession(options: AppServerThreadOptio
       || (options.endpoint && appServerCliUrl(options.endpoint) !== prepared.endpoint))) throw new Error('此会话正在准备另一个线程，请完成切换后再发送。');
     return prepared;
   }
+  const persisted = read<{ endpoint: string; threadId: string; local?: boolean }>(`session:${options.sessionId}`);
+  // An empty observation is not a preparation: a real input in the same tick
+  // must still be able to create its thread instead of sharing an empty result.
+  if (options.createIfMissing === false && !options.threadId && !persisted?.threadId) return;
   const epoch = generation;
   const version = sessionVersions.get(options.sessionId) || 0;
   const token = Symbol();
@@ -66,9 +70,7 @@ export async function prepareCodexAppServerSession(options: AppServerThreadOptio
   const operation = (async () => {
     if (cached) await releaseBinding(options.sessionId);
     assertCurrent();
-    const persisted = read<{ endpoint: string; threadId: string; local?: boolean }>(`session:${options.sessionId}`);
     const pinned = persisted && (!options.threadId || persisted.threadId === options.threadId) ? persisted : undefined;
-    if (options.createIfMissing === false && !options.threadId && !pinned?.threadId) return;
     if (pinned && options.endpoint && appServerCliUrl(options.endpoint) !== pinned.endpoint) throw new Error('此线程已经绑定另一 app-server，未切换执行后端。');
     let endpoint = options.endpoint || pinned?.endpoint || process.env.CODELARK_CODEX_APP_SERVER_URL;
     // Existing legacy threads keep their writer and adapter across an upgrade.
