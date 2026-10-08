@@ -119,7 +119,7 @@ export function isTuiProviderSession(session?: BridgeSession | null, binding?: C
 
 export function buildTuiProviderRuntimeOptionBlockedResponse(commandLabel: string, provider: string, markdown: boolean): string {
   const restartNote = provider === 'tmux'
-    ? '当前是 tmux Provider；请先 `/stop`，再发送 `/p tmux` 重启 Codex TUI，让新设置从下一轮生效。若要退出 TUI Provider，可停止后发送 `/provider sdk`。'
+    ? '当前是 tmux Provider；发送 `/p tmux`，确认“结束并重启”后应用新设置。若要退出 TUI Provider，可停止后发送 `/provider sdk`。'
     : `请先 \`/stop\`，再发送 \`/provider ${provider}\` 重启 ${provider} Provider，让新设置从下一轮生效。`;
   return buildCommandFields(
     `当前是 ${provider} Provider`,

@@ -457,7 +457,7 @@ export function handleReasoningCommand(options: {
       [['级别', cursorReasoning]],
       [
         `后续 Cursor tmux 启动会把模型写成 \`model[effort=${cursorReasoning}]\`；具体模型不支持该值时 Cursor CLI 会明确报错。`,
-        '如果 Cursor TUI 已启动，请先 `/stop`，再发送 `/p tmux` 重启后生效。',
+        '如果 Cursor TUI 已启动，发送 `/p tmux`，确认“结束并重启”后生效。',
       ],
       options.markdown,
     );
@@ -478,7 +478,7 @@ export function handleReasoningCommand(options: {
       [['模式', thinkingMode]],
       [
         `后续启动 Kimi Code 时会传入 \`--${thinkingMode === 'on' ? '' : 'no-'}thinking\`。`,
-        '如果 Kimi Code TUI 已启动，请先 `/stop`，再发送 `/p tmux` 重启后生效。',
+        '如果 Kimi Code TUI 已启动，发送 `/p tmux`，确认“结束并重启”后生效。',
       ],
       options.markdown,
     );
@@ -553,7 +553,7 @@ export function handleModeCommand(options: {
     return buildCommandFields(
       '已更新 ZCode 模式',
       [['模式', requested], ['Provider', 'tmux']],
-      ['请先 `/stop`，再发送 `/p tmux` 重启 ZCode TUI 后生效。'],
+      ['发送 `/p tmux`，确认“结束并重启”后应用 ZCode TUI 配置。'],
       options.markdown,
     );
   }
@@ -963,7 +963,7 @@ export function handleModelCommand(options: {
       return buildCommandFields(
         '已恢复默认 ZCode 模型',
         [['模型', resolveZcodeRuntimeConfig(options.store.getSession(session.id), binding).model || 'default']],
-        ['请先 `/stop`，再发送 `/p tmux` 重启 ZCode TUI 后生效。'],
+        ['发送 `/p tmux`，确认“结束并重启”后应用 ZCode TUI 配置。'],
         options.markdown,
       );
     }

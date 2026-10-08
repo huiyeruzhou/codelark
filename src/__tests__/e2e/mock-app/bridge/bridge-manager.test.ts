@@ -1060,7 +1060,7 @@ describe('bridge-manager resolveCommandAlias', () => {
     assert.equal(_testOnly.toModelPromptText('//'), '/');
   });
 
-  it('classifies runtime config commands as session conversation barriers', () => {
+  it('keeps runtime switches behind conversation barriers and saves settings immediately', () => {
     const store = new JsonFileStore(makeSettings());
     initBridgeContext({
       store,
@@ -1084,12 +1084,6 @@ describe('bridge-manager resolveCommandAlias', () => {
 
     for (const [text, jobKind] of [
       ['/runtime claude', 'command:runtime'],
-      ['/m yolo', 'command:mode'],
-      ['/r 5', 'command:reasoning'],
-      ['/sb workspace-write', 'command:sandbox'],
-      ['/net on', 'command:network'],
-      ['/model gpt-5.4', 'command:model'],
-      ['/cd ~/work', 'command:cd'],
       ['/t rename 新标题', 'command:t:rename'],
       ['/t unbind', 'command:t:unbind'],
       ['/t 1', 'command:thread'],
@@ -1099,6 +1093,16 @@ describe('bridge-manager resolveCommandAlias', () => {
         jobKind,
         blocksConversation: true,
       });
+    }
+
+    for (const text of ['/m yolo', '/yolo', '/r 5', '/sb workspace-write', '/net on', '/model gpt-5.4', '/cd ~/work', '/require_at on']) {
+      assert.equal(_testOnly.adapterSessionLane(inbound(text) as any, 'command'), null);
+      const lane = _testOnly.adapterImmediateLane(inbound(text) as any, 'command');
+      assert.equal(lane?.laneKey, `job:settings:${binding.bridgeSessionId}`);
+      assert.equal(lane?.waitForConversationBarrier, false);
+      assert.equal(lane?.blocksConversation, false);
+      assert.equal(lane?.blocksRouting, true);
+      assert.equal(lane?.serialize, true);
     }
 
     assert.equal(_testOnly.adapterSessionLane(inbound('/provider tmux') as any, 'command'), null);
@@ -1149,14 +1153,10 @@ describe('bridge-manager resolveCommandAlias', () => {
       blocksRouting: true,
     });
 
-    assert.deepEqual(
-      _testOnly.adapterSessionLane(inbound('', buildCommandCallbackData('/current-config codex', binding.bridgeSessionId)) as any, 'callback'),
-      {
-        sessionId: binding.bridgeSessionId,
-        jobKind: 'command:current-config',
-        blocksConversation: true,
-      },
-    );
+    const configCallback = inbound('', buildCommandCallbackData('/current-config codex', binding.bridgeSessionId));
+    assert.equal(_testOnly.adapterSessionLane(configCallback as any, 'callback'), null);
+    assert.equal(_testOnly.adapterImmediateLane(configCallback as any, 'callback')?.waitForConversationBarrier, false);
+    assert.equal(_testOnly.adapterImmediateLane(configCallback as any, 'callback')?.laneKey, `job:settings:${binding.bridgeSessionId}`);
     assert.deepEqual(
       _testOnly.adapterSessionLane(inbound('', 'clk-thread-action:global:switch') as any, 'callback'),
       {
@@ -3454,7 +3454,7 @@ describe('bridge-manager stop handling', () => {
 
     assert.equal(abortController.signal.aborted, true);
     assert.equal(state.activeTasks.has(binding.bridgeSessionId), false);
-    assert.match(sent[0] || '', /旧会话「Bridge: chat-stop」任务已停止/);
+    assert.match(sent[0] || '', /已请求停止当前任务/);
   });
 
 });

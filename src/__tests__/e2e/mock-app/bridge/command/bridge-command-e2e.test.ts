@@ -2574,6 +2574,11 @@ model = "test-model"
 
       const beforeRestartLog = fs.readFileSync(fakeTmux.logPath, 'utf-8');
       await _testOnly.handleMessage(adapter, inboundMessage(address, '/provider tmux', 'incoming-runtime-provider-restart'));
+      assert.match(adapter.sent.at(-1)?.text || '', /结束并重启/);
+      assert.equal(fs.readFileSync(fakeTmux.logPath, 'utf-8'), beforeRestartLog, '确认前不能销毁或重建终端');
+      const restart = parseCommandCallbackData(adapter.sent.at(-1)?.richCard?.actions?.[0]?.[0]?.callbackData || '');
+      assert.equal(restart?.scopeSessionId, binding.bridgeSessionId);
+      await _testOnly.handleMessage(adapter, inboundMessage(address, restart!.commandText, 'incoming-runtime-provider-restart-confirm'));
       const restartResponse = adapter.sent.at(-1)?.text || '';
       const restartLog = fs.readFileSync(fakeTmux.logPath, 'utf-8').slice(beforeRestartLog.length);
       assert.match(restartResponse, /同名 tmux session 已存在/);
@@ -2668,7 +2673,9 @@ model = "test-model"
       const stopLog = fs.readFileSync(fakeTmux.logPath, 'utf-8').slice(beforeStopLog.length);
       assert.match(adapter.sent.at(-1)?.text || '', /已发送停止按键/);
       assert.match(stopLog, new RegExp(`send-keys -t ${normalTmuxSession} C-c`));
-      assert.equal(store.getSession(binding.bridgeSessionId)?.health_status, 'aborted');
+      assert.equal(store.getSession(binding.bridgeSessionId)?.health_status, 'running_active', '停止按键不能伪造执行终态');
+      // 此 fake terminal 不生成日志：显式模拟它随后报告终态，再验证真正的 provider 切换。
+      store.updateSession(binding.bridgeSessionId, { runtime_status: 'idle', health_status: 'aborted' });
 
       await _testOnly.handleMessage(adapter, inboundMessage(address, '/p sdk', 'incoming-runtime-provider-sdk'));
       assert.equal(store.getSession(binding.bridgeSessionId)?.runtime?.codex?.provider, undefined);

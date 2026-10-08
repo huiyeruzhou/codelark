@@ -903,7 +903,7 @@ async function applyProviderCommand(options: ProviderCommandOptions): Promise<st
         : []),
       '这是 `/p tmux` 的标准行为：每次都会强制重新加载同名 tmux session，确保和底层 Codex JSONL 会话一致。',
       '之后普通消息会发送到这个 tmux session；回复由 mirror 机制从 Codex session JSONL 自动同步。',
-      '可发送 `/tmux-screen` 查看当前 tmux 屏幕；如果需要应用新的 tmux/TUI 启动参数，请先 `/stop`，再重新发送 `/p tmux`。',
+      '可发送 `/tmux-screen` 查看当前 tmux 屏幕；如果需要应用新的 tmux/TUI 启动参数，发送 `/p tmux` 并确认“结束并重启”。',
     ],
     options.markdown,
   );
