@@ -225,4 +225,83 @@ describe('mirror-reconcile-core', () => {
     assert.deepEqual(result.records, []);
     assert.equal(subscription.cursor.lastEventSignature, 'existing-complete');
   });
+
+  it('uses the persisted delivery watermark when a Cursor snapshot rewrites old turn signatures', () => {
+    const deliveredAt = '2026-07-27T08:17:30.464Z';
+    const oldTurnId = 'cursor:old-turn';
+    const subscription = createMirrorSubscription({
+      bindingId: 'cursor-binding',
+      sessionId: 'cursor-session',
+      channelType: 'feishu-default',
+      chatId: 'cursor-chat',
+      threadId: 'cursor-thread',
+      filePath: '/tmp/cursor-session.jsonl',
+      lastDeliveredAt: deliveredAt,
+      readPosition: {
+        threadId: 'cursor-thread',
+        lastEventSignature: 'cursor:old-assistant-before-rewrite',
+        lastEventTimestamp: deliveredAt,
+        lastEventType: 'message',
+        lastEventRole: 'assistant',
+        lastEventTurnId: oldTurnId,
+        lastEventCount: 3,
+      },
+    });
+    const source = {
+      runtime: 'cursor' as const,
+      findByThreadId: () => null,
+      readDelta: () => ({
+        records: [
+          {
+            signature: 'cursor:old-user-rewritten',
+            type: 'message' as const,
+            role: 'user' as const,
+            content: 'old prompt',
+            timestamp: deliveredAt,
+            turnId: oldTurnId,
+          },
+          {
+            signature: 'cursor:old-assistant-rewritten',
+            type: 'message' as const,
+            role: 'assistant' as const,
+            content: 'old answer',
+            timestamp: deliveredAt,
+            turnId: oldTurnId,
+          },
+          {
+            signature: 'cursor:new-user',
+            type: 'message' as const,
+            role: 'user' as const,
+            content: 'new prompt',
+            timestamp: '2026-07-27T08:55:58.275Z',
+            turnId: 'cursor:new-turn',
+          },
+          {
+            signature: 'cursor:new-complete',
+            type: 'task_complete' as const,
+            content: 'new answer',
+            timestamp: '2026-07-27T08:57:24.000Z',
+            turnId: 'cursor:new-turn',
+          },
+        ],
+        nextOffset: 400,
+        trailingText: '',
+        nextTurnId: null,
+        nextSpecialCallIds: [],
+        unknownKinds: [],
+      }),
+    };
+
+    const result = readMirrorDeliverableRecords(subscription, {
+      size: 400,
+      mtimeMs: 2,
+      identity: 'cursor:rewritten',
+    }, source);
+
+    assert.deepEqual(result.records.map((record) => record.signature), [
+      'cursor:new-user',
+      'cursor:new-complete',
+    ]);
+    assert.equal(subscription.cursor.lastEventSignature, 'cursor:new-complete');
+  });
 });
