@@ -26,6 +26,7 @@
   },
   "scripts": {
     "postinstall": "node scripts/patch-codex-sdk-windows-hide.js",
+    "prepare": "node scripts/build.js",
     "build": "node scripts/build.js",
     "typecheck": "tsc --noEmit",
     "dev": "tsx src/entrypoints/daemon.ts",

@@ -54,4 +54,5 @@ await build('src/entrypoints/update-worker.ts', 'dist/update-global-codelark.mjs
 await mkdir('dist', { recursive: true });
 await copyFile('src/configuration/defaults.toml', 'dist/defaults.toml');
 
-console.log('Built dist/daemon.mjs, dist/ui-server.mjs, dist/cli.mjs, dist/update-global-codelark.mjs, dist/defaults.toml');
+// npm prepare also runs during `npm pack --json`; keep stdout machine-readable.
+console.error('Built dist/daemon.mjs, dist/ui-server.mjs, dist/cli.mjs, dist/update-global-codelark.mjs, dist/defaults.toml');

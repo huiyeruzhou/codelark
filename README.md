@@ -89,6 +89,12 @@ npm install -g codelark
 codelark run
 ```
 
+使用 Node.js 24 和 Git，从 GitHub 安装当前 app-server 开发分支（npm 会自动构建源码）：
+
+```bash
+npm install -g "git+https://github.com/huiyeruzhou/codelark.git#feat/codex-app-server-lifecycle-integration"
+```
+
 ## v0.3.0
 
 `0.3.0` 新增 Multi-Agent 协作：不同 CodeLark 群聊中的 Agent 可以按真实群名和 Bot 名发现彼此、创建专用任务群并传递普通输入或 slash 命令。源群和目标群都会显示包含路由与正文的收发卡片。这个版本还新增一次性条件监控、统一飞书消息与附件协议，并改进 Codex 非致命诊断、更新恢复和群头像缓存。
