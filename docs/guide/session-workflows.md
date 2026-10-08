@@ -12,7 +12,7 @@ CodeLark 的 IM 对话由三层组成：
 | BridgeSession | CodeLark 管理的一条工作会话，保存工作目录、当前 agent、模型和底层会话身份。 | `/new`、`/clear`、`/` |
 | Runtime session | Codex thread、Claude Code/Kimi Code/ZCode session 或 Cursor chat，是底层 agent 自己的会话身份。 | `/t` 接管、`/his` 查看历史 |
 
-`/runtime` 选择当前会话使用 Codex、Claude Code、Kimi Code、Cursor Agent 还是 ZCode。默认使用 tmux，日常使用无需再选择运行方式。同一个聊天可以记住各 agent 的 BridgeSession，来回切换时会回到之前那条会话。
+`/runtime` 选择当前会话使用 Codex、Claude Code、Kimi Code、Cursor Agent 还是 ZCode。新 Codex 会话优先使用 app-server，tmux 是可选的终端入口；其他 runtime 沿用各自的运行方式。同一个聊天可以记住各 agent 的 BridgeSession，来回切换时会回到之前那条会话。
 
 ## 推荐日常流程
 
@@ -61,6 +61,16 @@ codelark codex-desktop disable
 ```
 
 这会停止 CodeLark 管理的共享服务及其中正在执行的任务，移除自动启动配置；随后重开 Desktop。卸载 CodeLark 前也应先执行此命令。重新启用时，移除 `~/.codelark/codex-desktop/disabled`，再创建新的 Codex 会话；原来的服务环境快照会继续复用。`CODELARK_CODEX_DESKTOP_REMOTE=0` 只关闭当前 Bridge 的自动选择，不会停止已经运行的共享服务。
+
+## 查看 app-server 启动情况
+
+在 Web 工作台侧栏打开 **app-server**。这个页面显示当前 CodeLark 实例使用的服务，包括启动情况、托管方、地址、可确认的 PID、时间、最近错误和关联会话数；即使启动失败时还没有创建 Codex thread，也会显示这次准备结果。页面每 5 秒更新，打开或刷新页面不会启动后端或恢复会话。
+
+启动情况、连接状态和对话活动分别展示。CodeLark 自己创建的进程可以确认启动和退出；外部服务或 macOS launchd 管理的进程如果没有进程证据，会显示启动状态未确认，并单独显示协议是否已连接。连接已断开不等于进程已退出，Bridge 已连接也不代表 Desktop 已连接。
+
+概览、会话列表和会话配置同时显示当前会话实际使用的后端以及终端用途。app-server 与 tmux 可以同时存在：前者负责执行和协议事件，后者是查看或人工操作入口。“新会话优先 app-server”只表示默认策略，不能说明已有旧会话已经迁移。
+
+旧版 Bridge 没有提供状态接口，或当前 Bridge 不可用时，页面显示状态不可用；不会沿用上一次的“已连接”或“空闲”。启动记录来自当前 Bridge 已观察到的操作，历史失败仍可通过日志排查。
 
 ## 会话列表和下拉选框
 

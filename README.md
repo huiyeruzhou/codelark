@@ -92,7 +92,7 @@ codelark run
 使用 Node.js 24 和 Git，从 GitHub 安装当前 app-server 开发分支（适用于 Bash / Zsh）：
 
 ```bash
-npx --yes --package=npm@11.6.2 -c 'codelark_pkg=$(npm pack "git+https://github.com/huiyeruzhou/codelark.git#feat/codex-app-server-lifecycle-integration" --silent) && npm install -g "./$codelark_pkg"'
+npx --yes --package=npm@11.6.2 -c 'codelark_pkg=$(npm pack "git+https://github.com/huiyeruzhou/codelark.git#main" --silent) && npm install -g "./$codelark_pkg"'
 ```
 
 命令临时使用 npm 11.6.2，在当前目录生成源码构建包后全局安装；不会替换系统 npm。先打包可以避免 Git 依赖准备阶段继承全局安装配置的问题，也兼容系统 npm 12 默认禁止直接安装 Git 来源的行为。

@@ -14,6 +14,33 @@ on:
       - main
 
 jobs:
+  operator-status:
+    name: Web app-server status · Chromium
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      PLAYWRIGHT_MODULE_PATH: ${{ runner.temp }}/operator-status-tools/node_modules/playwright
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - name: Install isolated browser tooling
+        run: |
+          npm install --prefix "$RUNNER_TEMP/operator-status-tools" --no-save --ignore-scripts playwright@1.56.1
+          node "$PLAYWRIGHT_MODULE_PATH/cli.js" install --with-deps chromium
+      - name: Verify the real status page and authenticated Bridge route
+        run: node --import tsx scripts/verify-operator-status.ts --evidence "$RUNNER_TEMP/operator-status-evidence"
+      - name: Upload browser checks and screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: operator-status-browser
+          if-no-files-found: warn
+          path: ${{ runner.temp }}/operator-status-evidence
+
   node24:
     name: Linux · full suite · Node.js 24
     runs-on: ubuntu-latest

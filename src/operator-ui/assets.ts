@@ -689,6 +689,8 @@ export const mainStyles = `
     background: linear-gradient(145deg, #f9fafe, #f5f7fc);
   }
   .info-list { display: grid; gap: 12px; }
+  #appServerList { grid-template-columns: minmax(0, 1fr); min-width: 0; }
+  #appServerList .binding-item { min-width: 0; overflow-wrap: anywhere; }
   .info-item strong { margin-bottom: 5px; }
   .mono, .project-group-path, .session-path, .binding-detail code { font-family: "Cascadia Code", Consolas, "SF Mono", monospace; }
 

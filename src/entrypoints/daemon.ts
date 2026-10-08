@@ -193,6 +193,7 @@ async function main(): Promise<void> {
     runId,
     handlers: {
       listSessions: bridgeManager.listActiveBridgeSessions,
+      runtimeStatus: bridgeManager.getRuntimeStatus,
       receiveInput: bridgeManager.receiveManualInput,
       sendAgentInput: bridgeManager.receiveAgentInput,
       sendPlatformMessage: bridgeManager.sendPlatformMessage,

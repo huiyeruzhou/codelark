@@ -53,6 +53,27 @@ async function fixture(t: TestContext) {
 }
 const text = [{ type: 'text' as const, text: 'hello' }];
 
+test('connection snapshot is read-only before the first thread and exposes a failed handshake', async () => {
+  let calls = 0;
+  let rejectConnect!: (error: Error) => void;
+  const runtime = new CodexAppServerLifecycle('ws://127.0.0.1:1', {
+    connect: () => { calls++; return new Promise((_, reject) => { rejectConnect = reject; }); },
+  });
+  try {
+    assert.deepEqual(runtime.connectionSnapshot(), { connection: 'unknown', updatedAt: undefined });
+    assert.equal(calls, 0);
+    const pending = runtime.connect();
+    assert.equal(runtime.connectionSnapshot().connection, 'connecting');
+    assert(runtime.connectionSnapshot().updatedAt);
+    const rejection = assert.rejects(pending, /fixture rejected/);
+    rejectConnect(new Error('fixture rejected')); await rejection;
+    assert.equal(runtime.connectionSnapshot().connection, 'disconnected');
+    assert.equal(calls, 1);
+    assert.equal(runtime.snapshot('never-started').attached, false);
+  } finally { runtime.close(); }
+  assert.equal(runtime.connectionSnapshot().connection, 'disconnected');
+});
+
 test('old common protocol: start, steer, interrupt acknowledgements and exactly one terminal', async (t) => {
   const f = await fixture(t);
   const first = await f.runtime.submit('thread', text);

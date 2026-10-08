@@ -6,6 +6,7 @@ import {
   listBindingTargetOptions,
 } from '../../bridge/session/registry.js';
 import type { JsonFileStore } from '../../storage/json-store.js';
+import { projectCodexBackendStatus } from '../../bridge/session/display/codex-backend-status.js';
 import { findUiChannelInstance, getFeishuDomain, type UiChannelConfigSource, type UiChannelInstance } from './channel.js';
 
 const FEISHU_CHAT_LABEL_TTL_MS = 5 * 60 * 1000;
@@ -194,8 +195,12 @@ export async function buildUiBindingsPayload(
         store.updateSession(binding.currentSessionId, { name: resolved.chatDisplayName }, { touch: false });
       }
     }
+    const session = store.getSession(binding.currentSessionId);
     return {
       ...binding,
+      ...(binding.currentRuntime === 'codex' && session
+        ? { codexBackend: projectCodexBackendStatus(session) }
+        : {}),
       chatDisplayName: resolved.chatDisplayName || binding.chatDisplayName,
       chatUserId: resolved.chatUserId || binding.chatUserId,
     };

@@ -7,6 +7,7 @@ import path from 'node:path';
 import { CODELARK_HOME } from '../../configuration/paths.js';
 import type { ManualInputTargetSelector, OutboundPlatformMessage } from '../../domain/index.js';
 import type { ConditionMonitorTask } from '../automation/condition-monitors.js';
+import type { BridgeRuntimeStatus } from '../session/display/codex-backend-status.js';
 import type {
   AgentInputRequest,
   AgentMessageSource,
@@ -35,6 +36,7 @@ export interface BridgeControlService {
 
 export interface BridgeControlHandlers {
   listSessions(query?: string): DiscoveredBridgeSession[];
+  runtimeStatus?(): BridgeRuntimeStatus;
   receiveInput(request: ManualInputRequest): Promise<boolean | void> | boolean | void;
   sendAgentInput?(request: AgentInputRequest): Promise<void> | void;
   sendPlatformMessage?(request: PlatformMessageRequest): Promise<void> | void;
@@ -214,6 +216,14 @@ export async function startBridgeControlService(options: {
         respond(response, 200, { ok: true, sessions: options.handlers.listSessions(url.searchParams.get('query') || undefined) });
         return;
       }
+      if (request.method === 'GET' && url.pathname === '/v1/runtime-status') {
+        if (!options.handlers.runtimeStatus) {
+          respond(response, 404, { ok: false, error: 'runtime status is unavailable' });
+          return;
+        }
+        respond(response, 200, { ok: true, runtimeStatus: options.handlers.runtimeStatus() });
+        return;
+      }
       if (request.method === 'POST' && url.pathname === '/v1/input') {
         const body = await readJsonBody(request);
         if (!isManualInputRequest(body)) {
@@ -352,6 +362,30 @@ async function requestDescriptor<T>(
   const payload = await response.json() as T & { error?: string };
   if (!response.ok) throw new Error(payload.error || `bridge control request failed (${response.status})`);
   return payload;
+}
+
+/** One authenticated read for this Home, without discovery probes or descriptor cleanup. */
+export async function readBridgeRuntimeStatus(options: {
+  codelarkHome: string;
+  discoveryDirectory?: string;
+  timeoutMs?: number;
+}): Promise<BridgeRuntimeStatus | undefined> {
+  const requestedHome = canonicalHome(options.codelarkHome);
+  const descriptor = readBridgeServiceDescriptors(options.discoveryDirectory)
+    .find((candidate) => canonicalHome(candidate.codelarkHome) === requestedHome);
+  if (!descriptor) return undefined;
+  try {
+    const payload = await requestDescriptor<{ ok: boolean; runtimeStatus?: BridgeRuntimeStatus }>(
+      descriptor, '/v1/runtime-status', undefined, options.timeoutMs ?? 500,
+    );
+    const status = payload.runtimeStatus;
+    if (!payload.ok || !status || !['app-server-auto', 'legacy'].includes(status.codexDefault)
+      || !status.sessions || typeof status.sessions !== 'object' || Array.isArray(status.sessions)) return undefined;
+    return status;
+  } catch {
+    // Older Bridge versions and disconnected instances have no current observation.
+    return undefined;
+  }
 }
 
 export async function discoverBridgeSessions(options: {

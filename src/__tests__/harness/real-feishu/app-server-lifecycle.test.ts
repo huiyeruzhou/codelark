@@ -1,11 +1,43 @@
 import '../../setup/test-setup.js';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { assertInherited, assertSameTurnInput, botReplyIds, userReadbackMessages, feishuChatUrl, readAllUserPages, unexpectedRestartCards, runActiveClear, assertNoOldClearDelivery,
+import { assertInherited, assertSameTurnInput, botReplyIds, userReadbackMessages, feishuChatUrl, readAllUserPages, unexpectedRestartCards, runActiveClear, assertNoOldClearDelivery, assertBackendStatusReadback,
   type LifecycleReport, type NativeThread } from '../../../testing/real-feishu/app-server-lifecycle.js';
 
 const session = { sessionId: 'old', threadId: 'thread-old', endpoint: 'unix:///owned/rpc.sock', streamKeys: [],
   configuration: { provider: 'sdk', networkAccess: false, reasoningEffort: 'low' } };
+
+test('状态验收只接受本命令的真实用户回读卡，后端/连接/活动/终端分别校验', () => {
+  const content = '<card title="Codex owned">\ncodex_thread_id: thread-current\n**当前后端**\napp-server\n**连接状态**\n已连接\n**执行状态**\n运行中\n**终端用途**\n未记录终端\n</card>';
+  const card = { message_id: 'status-card', sender: { sender_type: 'app', id: 'app' }, reply_to: 'status-command', msg_type: 'interactive', content };
+  const payload = (messages = [card]) => ({ ok: true, identity: 'user', data: { messages } });
+  const expected = { backend: 'app-server', activity: 'active', terminal: 'none', threadId: 'thread-current' } as const;
+  assert.equal(assertBackendStatusReadback(payload(), 'app', 'status-command', expected, true)?.message_id, 'status-card');
+  for (const invalid of [
+    { ...card, reply_to: 'old-command' }, { ...card, sender: { sender_type: 'user', id: 'app' } },
+    { ...card, sender: { sender_type: 'app', id: 'another-app' } }, { ...card, msg_type: 'post' }, { ...card, content: '' },
+  ]) assert.equal(assertBackendStatusReadback(payload([invalid]), 'app', 'status-command', expected, true), undefined);
+  for (const [from, to] of [['app-server', 'tmux'], ['已连接', '连接未确认'], ['运行中', '空闲'],
+    ['未记录终端', 'tmux 查看入口'], ['Codex owned', 'Kimi owned'], ['thread-current', 'old-thread']]) {
+    assert.throws(() => assertBackendStatusReadback(payload([{ ...card, content: content.replace(from!, to!) }]), 'app', 'status-command', expected, true));
+  }
+  assert.throws(() => assertBackendStatusReadback({ ...payload(), identity: 'bot' }, 'app', 'status-command', expected, true));
+  assert.throws(() => assertBackendStatusReadback(payload([card, { ...card, message_id: 'duplicate' }]), 'app', 'status-command', expected, true));
+});
+
+test('未启动状态不冒充连接；Markdown状态详情支持运行/等待/空闲和独立tmux用途', () => {
+  const reply = (content: string) => ({ ok: true, identity: 'user', data: { messages: [{
+    message_id: 'reply', reply_to: 'command', sender: { sender_type: 'app', id: 'app' }, msg_type: 'post', content,
+  }] } });
+  const unstarted = '- **当前后端**：尚未建立\n- **终端用途**：未记录终端';
+  assert(assertBackendStatusReadback(reply(unstarted), 'app', 'command', { backend: 'unstarted' }));
+  assert.throws(() => assertBackendStatusReadback(reply(`${unstarted}\n- **连接状态**：已连接`), 'app', 'command', { backend: 'unstarted' }));
+  assert.throws(() => assertBackendStatusReadback(reply(`${unstarted}\n- **执行状态**：活动未确认`), 'app', 'command', { backend: 'unstarted' }));
+  for (const [activity, label] of [['active', '运行中'], ['waiting', '等待答复'], ['idle', '空闲']] as const) {
+    const text = `- **当前后端**：app-server\n- **连接状态**：已连接\n- **执行状态**：${label}\n- **终端用途**：tmux 查看入口`;
+    assert(assertBackendStatusReadback(reply(text), 'app', 'command', { backend: 'app-server', activity, terminal: 'view' }));
+  }
+});
 test('clear/new 证据拒绝旧线程、配置回落和后端丢失', () => {
   const next = { ...session, sessionId: 'new', threadId: 'thread-new' };
   assertInherited(session, next);

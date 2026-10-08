@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { test, type TestContext } from 'node:test';
 import { WebSocketServer } from 'ws';
-import { prepareCodexAppServerSession, getCodexAppServerSession, closeCodexAppServerSessions, releaseCodexAppServerSession } from '../../../../runtime/codex/app-server-registry.js';
+import { prepareCodexAppServerSession, getCodexAppServerSession, closeCodexAppServerSessions, releaseCodexAppServerSession, getCodexAppServerServiceStatuses } from '../../../../runtime/codex/app-server-registry.js';
 import { streamCodexAppServer } from '../../../../runtime/codex/app-server-provider.js';
 import type { LLMProvider } from '../../../../runtime/contracts.js';
 
@@ -21,12 +21,16 @@ async function fixture(t: TestContext) {
   let loseReplyAfterCompletion = false;
   let releaseStart: (() => void) | undefined;
   let holdThreadStart = false;
+  let rejectThreadStart = false;
   wss.on('connection', (socket) => socket.on('message', (data) => {
     const m = JSON.parse(String(data)); received.push(m);
     const response = (result: unknown) => socket.send(JSON.stringify({ id: m.id, result }));
     if (m.method === 'initialize') response({ codexHome: process.env.CODEX_HOME });
     if (m.method === 'thread/loaded/list') response({ data: [...threads.keys()] });
-    if (m.method === 'thread/start') { const thread = { id: `thread-${threads.size}`, turns: [] }; threads.set(thread.id, thread); if (holdThreadStart) releaseStart = () => response({ thread }); else response({ thread }); }
+    if (m.method === 'thread/start') {
+      if (rejectThreadStart) { socket.send(JSON.stringify({ id: m.id, error: { code: -32000, message: 'secret-fixture-auth-text' } })); return; }
+      const thread = { id: `thread-${threads.size}`, turns: [] }; threads.set(thread.id, thread); if (holdThreadStart) releaseStart = () => response({ thread }); else response({ thread });
+    }
     if (m.method === 'thread/read' || m.method === 'thread/resume') response({ thread: threads.get(m.params.threadId) });
     if (m.method === 'thread/unsubscribe') response({ status: 'unsubscribed' });
     if (m.method === 'turn/start') {
@@ -50,12 +54,64 @@ async function fixture(t: TestContext) {
     }
   }));
   t.after(async () => {
-    closeCodexAppServerSessions(); delete process.env.CODELARK_CODEX_APP_SERVER_URL;
+    await closeCodexAppServerSessions(); delete process.env.CODELARK_CODEX_APP_SERVER_URL;
     for (const client of wss.clients) client.terminate();
     await new Promise<void>((resolve) => wss.close(() => resolve()));
   });
-  return { endpoint, received, holdStart: () => { holdThreadStart = true; }, releaseStart: () => releaseStart?.(), loseReply: () => { loseReplyAfterCompletion = true; }, finish: (status = 'completed') => { finishImmediately = true; terminalStatus = status; }, disconnect: () => { disconnectOnStart = true; } };
+  return { endpoint, received, rejectStart: () => { rejectThreadStart = true; }, drop: () => { for (const socket of wss.clients) socket.terminate(); }, holdStart: () => { holdThreadStart = true; }, releaseStart: () => releaseStart?.(), loseReply: () => { loseReplyAfterCompletion = true; }, finish: (status = 'completed') => { finishImmediately = true; terminalStatus = status; }, disconnect: () => { disconnectOnStart = true; } };
 }
+
+test('service reads do not start the default backend or promote a saved address into process evidence', async () => {
+  await closeCodexAppServerSessions();
+  assert.deepEqual(getCodexAppServerServiceStatuses().map((s) => [s.state, s.connection, s.sessionIds]), [['not-started', 'unknown', []]]);
+  const statuses = getCodexAppServerServiceStatuses([
+    { sessionId: 'saved', endpoint: 'ws://127.0.0.1:9000' },
+    { sessionId: 'credentials', endpoint: 'ws://user:secret@localhost:9000/?token=secret' },
+    { sessionId: 'remote', endpoint: 'ws://example.invalid:9000' },
+  ]);
+  assert.equal(statuses.length, 3);
+  assert(statuses.every((s) => s.state === 'unknown' && s.connection === 'unknown' && s.pid === undefined));
+  assert.equal(statuses[0].endpoint, 'ws://127.0.0.1:9000');
+  assert.equal(statuses[1].endpoint, undefined); assert.equal(statuses[2].endpoint, undefined);
+  assert(!JSON.stringify(statuses).includes('secret'));
+});
+
+test('service connection exists before thread creation, is shared, and observes disconnect without claiming an external PID', async (t) => {
+  const f = await fixture(t); f.holdStart();
+  const preparing = prepareCodexAppServerSession({ sessionId: 'service-before-thread', endpoint: f.endpoint });
+  t.after(() => f.releaseStart());
+  for (let i = 0; i < 200 && !f.received.some((m) => m.method === 'thread/start'); i++) await new Promise((r) => setTimeout(r, 5));
+  assert.equal(getCodexAppServerSession('service-before-thread'), undefined);
+  const status = () => getCodexAppServerServiceStatuses().find((s) => s.endpoint === f.endpoint)!;
+  const count = f.received.length;
+  assert.equal(status().connection, 'ready'); assert.equal(status().state, 'unknown');
+  assert.equal(status().owner, 'external'); assert.equal(status().pid, undefined);
+  assert.deepEqual(status().sessionIds, ['service-before-thread']);
+  for (let i = 0; i < 10; i++) getCodexAppServerServiceStatuses();
+  assert.equal(f.received.length, count, 'reads must not issue RPCs');
+  status().sessionIds.push('mutated-copy');
+  assert.deepEqual(status().sessionIds, ['service-before-thread']);
+  f.releaseStart(); const first = await preparing; assert(first);
+  await prepareCodexAppServerSession({ sessionId: 'service-second', endpoint: f.endpoint, threadId: first.threadId });
+  assert.deepEqual(status().sessionIds, ['service-before-thread', 'service-second']);
+  f.drop();
+  for (let i = 0; i < 100 && status().connection === 'ready'; i++) await new Promise((r) => setTimeout(r, 2));
+  assert.equal(status().connection, 'disconnected'); assert.equal(status().state, 'unknown');
+  await releaseCodexAppServerSession('service-second');
+  assert.deepEqual(status().sessionIds, ['service-before-thread']);
+  assert.deepEqual(getCodexAppServerServiceStatuses([{ sessionId: 'service-before-thread', endpoint: 'ws://localhost:9001' }])
+    .find((s) => s.endpoint === f.endpoint)?.sessionIds, [], 'old endpoint cannot retain a new binding');
+});
+
+test('failed thread preparation remains visible without exposing server error text', async (t) => {
+  const f = await fixture(t); f.rejectStart();
+  await assert.rejects(prepareCodexAppServerSession({ sessionId: 'service-failed-thread', endpoint: f.endpoint }), /secret-fixture/);
+  assert.equal(getCodexAppServerSession('service-failed-thread'), undefined);
+  const status = getCodexAppServerServiceStatuses().find((s) => s.endpoint === f.endpoint)!;
+  assert.equal(status.connection, 'ready'); assert.equal(status.state, 'unknown');
+  assert.match(status.error!, /会话准备失败/); assert(!JSON.stringify(status).includes('secret-fixture'));
+  assert.deepEqual(status.sessionIds, ['service-failed-thread']);
+});
 async function collect(stream: ReadableStream<string>) {
   const chunks: string[] = [];
   for await (const chunk of stream) chunks.push(chunk);

@@ -64,8 +64,18 @@ export class CodexAppServerLifecycle {
   private requestListeners = new Set<(request: AppServerPendingRequest) => void>();
   private reconnectTimer?: ReturnType<typeof setTimeout>;
   private reconnectDelay = 250;
+  private connectionUpdatedAt?: string;
 
   constructor(readonly endpoint: string, private options: AppServerLifecycleOptions = {}) {}
+
+  /** Transport evidence, independent of whether thread/start or resume succeeded. No I/O. */
+  connectionSnapshot(): { connection: 'connecting' | 'ready' | 'disconnected' | 'unknown'; updatedAt?: string } {
+    return {
+      connection: this.disposed ? 'disconnected' : this.client ? 'ready' : this.connecting ? 'connecting'
+        : this.connectionUpdatedAt ? 'disconnected' : 'unknown',
+      updatedAt: this.connectionUpdatedAt,
+    };
+  }
 
   onChange(listener: (threadId: string) => void): () => void {
     this.listeners.add(listener); return () => this.listeners.delete(listener);
@@ -93,15 +103,18 @@ export class CodexAppServerLifecycle {
     if (this.disposed) throw new Error('app-server 客户端已关闭。');
     if (this.connecting) return this.connecting;
     if (this.client) return;
+    this.connectionUpdatedAt = new Date().toISOString();
     this.connecting = (async () => {
       const client = await (this.options.connect?.() ?? CodexAppServerClient.connect(this.endpoint));
       if (this.disposed) { client.close(); throw new Error('app-server 客户端已关闭。'); }
       this.client = client;
+      this.connectionUpdatedAt = new Date().toISOString();
       this.generation += 1;
       client.onMessage((message) => { if (this.client === client) this.receive(message); });
       client.onDisconnect(() => {
         if (this.client !== client) return;
         this.client = undefined;
+        this.connectionUpdatedAt = new Date().toISOString();
         for (const [id, state] of this.threads) {
           state.snapshot.connection = 'disconnected'; state.snapshot.activity = 'unknown';
           state.snapshot.requests = []; this.changed(id);
@@ -119,6 +132,7 @@ export class CodexAppServerLifecycle {
       }
       this.reconnectDelay = 250;
     })().catch((error) => {
+      this.connectionUpdatedAt = new Date().toISOString();
       const client = this.client; this.client = undefined; client?.close();
       this.scheduleReconnect(); throw error;
     }).finally(() => { this.connecting = undefined; });
@@ -270,6 +284,7 @@ export class CodexAppServerLifecycle {
 
   close(): void {
     this.disposed = true;
+    this.connectionUpdatedAt = new Date().toISOString();
     clearTimeout(this.reconnectTimer);
     this.client?.close(); this.client = undefined;
     this.listeners.clear(); this.requestListeners.clear();

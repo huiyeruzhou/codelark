@@ -2060,7 +2060,7 @@ describe('command-dispatch', () => {
     assert.equal(card?.form?.controlBar?.selects, undefined);
     assert.deepEqual(card?.form?.controlBar?.actions?.map((action) => action.text), ['刷新']);
     assert.equal(card?.form?.submitText, '保存');
-    assert.deepEqual(card?.sections?.[0]?.fields?.map(([label]) => label), ['类型', '运行状态', '共享镜像']);
+    assert.deepEqual(card?.sections?.[0]?.fields?.map(([label]) => label), ['类型', '当前后端', '终端用途', '运行状态', '共享镜像']);
     assert.equal(card?.sections?.[0]?.fields?.some(([label]) => label === '目录'), false);
     assert.deepEqual(card?.form?.selects?.map((select) => select.elementId), [
       'defaultMode',
@@ -2171,7 +2171,7 @@ describe('command-dispatch', () => {
     const claudePreviewCard = sent.at(-1)?.richCard as OutboundRichCard | undefined;
     assert.equal(sent.at(-1)?.richCardUpdateMessageId, undefined);
     assert.equal(getThreadTableMessageRecord(address, 'current')?.messageId, 'reply-5');
-    assert.equal(claudePreviewCard?.tags?.[0], 'claude');
+    assert.equal(claudePreviewCard?.tags?.[0], 'codex');
     assert.match(claudePreviewCard?.footer?.[0] || '', /当前 agent.*<text_tag color='orange'>Codex<\/text_tag>/);
     assert.equal(claudePreviewCard?.selects?.[0]?.selectedCallbackData, buildCommandCallbackData('/current-runtime claude'));
     assert.equal(claudePreviewCard?.form?.selects?.some((select) => select.elementId === 'codexSandboxMode'), false);
