@@ -24,6 +24,7 @@ const nonNegativeIntegerSchema = z.number().int().nonnegative();
 
 export const sessionConfigSchema = z.object({
   workspace: z.string(),
+  requireMention: z.boolean().optional(),
   tmuxCaptureLines: positiveIntegerSchema,
   tmuxAutoEnter: z.boolean(),
   tmuxEchoInput: z.boolean(),
@@ -167,6 +168,7 @@ export function tomlToConfigPatch(raw: unknown): ConfigPatch {
 
   const sessionPatch = copyDefined<NonNullable<ConfigPatch['session']>>(session, [
     ['workspace', 'workspace'],
+    ['requireMention', 'require_mention'],
     ['tmuxCaptureLines', 'tmux_capture_lines'],
     ['tmuxAutoEnter', 'tmux_auto_enter'],
     ['tmuxEchoInput', 'tmux_echo_input'],
@@ -259,6 +261,7 @@ export function configToTomlShape(config: ConfigPatch): Record<string, unknown> 
   if (config.session) {
     out.session = {
       ...(config.session.workspace !== undefined ? { workspace: config.session.workspace } : {}),
+      ...(config.session.requireMention !== undefined ? { require_mention: config.session.requireMention } : {}),
       ...(config.session.tmuxCaptureLines !== undefined ? { tmux_capture_lines: config.session.tmuxCaptureLines } : {}),
       ...(config.session.tmuxAutoEnter !== undefined ? { tmux_auto_enter: config.session.tmuxAutoEnter } : {}),
       ...(config.session.tmuxEchoInput !== undefined ? { tmux_echo_input: config.session.tmuxEchoInput } : {}),

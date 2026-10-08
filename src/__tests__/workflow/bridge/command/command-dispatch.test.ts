@@ -2107,7 +2107,7 @@ describe('command-dispatch', () => {
     assert.equal(commonCard?.selects?.[0]?.selectedCallbackData, buildCommandCallbackData('/current-runtime common'));
     assert.equal(commonCard?.form?.inputElementId, 'clk_name');
     assert.equal(commonCard?.form?.inputDefaultValue, 'Current Card');
-    assert.deepEqual(commonCard?.form?.selects?.map((select) => select.elementId), []);
+    assert.deepEqual(commonCard?.form?.selects?.map((select) => select.elementId), ['requireMention']);
     assert.deepEqual(commonCard?.form?.extraInputs?.map((input) => input.elementId), ['clk_cwd', 'tmuxCaptureLines']);
     assert.equal(commonCard?.form?.selects?.some((select) => select.elementId === 'defaultMode'), false);
     assert.equal(commonCard?.form?.extraInputs?.some((input) => input.elementId === 'defaultModel'), false);
@@ -2182,7 +2182,7 @@ describe('command-dispatch', () => {
     );
     assert.deepEqual(
       claudePreviewCard?.form?.selects?.find((select) => select.elementId === 'claudeReasoningEffort')?.options.map((option) => option.text),
-      ['跟随上层配置（当前：medium）', 'medium', 'low', 'high', 'xhigh', 'max'],
+      ['跟随上层配置', 'medium', 'low', 'high', 'xhigh', 'max'],
     );
     assert.deepEqual(
       parseCommandCallbackData(claudePreviewCard?.form?.submitCallbackData || '')?.commandText,
@@ -2313,6 +2313,7 @@ describe('command-dispatch', () => {
     const kimiSession = store.getSession(kimiBinding.bridgeSessionId);
     assert.equal(getSessionActiveRuntime(kimiSession), 'codex');
     const kimiNameBeforeRuntimeSave = kimiSession?.name;
+    const beforeKimiForm = createConfigService({ migrate: false, env: {} }).snapshot({ kind: 'session', sessionId: kimiBinding.bridgeSessionId }).config;
     const card = sent.at(-1)?.richCard as OutboundRichCard | undefined;
     assert.equal(card?.selects?.[0]?.selectedCallbackData, buildCommandCallbackData('/current-runtime kimi'));
     assert.match(card?.footer?.[0] || '', /当前 agent.*<text_tag color='orange'>Codex<\/text_tag>/);
@@ -2320,11 +2321,11 @@ describe('command-dispatch', () => {
     assert.deepEqual(card?.form?.selects?.map((select) => select.formName), ['kimi_provider', 'kimi_thinking']);
     assert.deepEqual(
       card?.form?.selects?.find((select) => select.elementId === 'kimiProvider')?.options.map((option) => option.text),
-      ['跟随上层配置（当前：tmux）', 'tmux'],
+      ['跟随上层配置', 'tmux'],
     );
     assert.deepEqual(
       card?.form?.selects?.find((select) => select.elementId === 'kimiThinkingMode')?.options.map((option) => option.text),
-      ['跟随上层配置（当前：default）', 'default', 'on', 'off'],
+      ['跟随上层配置', 'default', 'on', 'off'],
     );
     assert.equal(card?.form?.selects?.some((select) => select.elementId === 'defaultProvider'), false);
     assert.equal(card?.form?.selects?.some((select) => select.elementId === 'claudeProvider'), false);
@@ -2371,8 +2372,9 @@ describe('command-dispatch', () => {
     assert.equal(config.get('runtime.kimi.model', { kind: 'session', sessionId: updatedBinding.bridgeSessionId }), 'moonshot-current-card');
     assert.equal(config.get('runtime.kimi.provider', { kind: 'session', sessionId: updatedBinding.bridgeSessionId }), 'tmux');
     assert.equal(config.get('runtime.kimi.thinkingMode', { kind: 'session', sessionId: updatedBinding.bridgeSessionId }), 'on');
-    assert.notEqual(config.resolve('runtime.codex.provider', { kind: 'session', sessionId: updatedBinding.bridgeSessionId }).source, 'session');
-    assert.notEqual(config.resolve('runtime.claude.provider', { kind: 'session', sessionId: updatedBinding.bridgeSessionId }).source, 'session');
+    const afterKimiForm = config.snapshot({ kind: 'session', sessionId: updatedBinding.bridgeSessionId }).config;
+    assert.deepEqual(afterKimiForm.runtime.codex, beforeKimiForm.runtime.codex);
+    assert.deepEqual(afterKimiForm.runtime.claude, beforeKimiForm.runtime.claude);
     assert.match(sent.at(-1)?.text || '', /已保存当前会话配置/);
     assert.match(sent.at(-1)?.text || '', /runtime\.kimi\.model/);
     assert.match(sent.at(-1)?.text || '', /moonshot-current-card/);
@@ -2411,7 +2413,7 @@ describe('command-dispatch', () => {
     const card = sent.at(-1)?.richCard as OutboundRichCard | undefined;
     assert.equal(card?.form?.extraInputs?.find((input) => input.elementId === 'tmuxCaptureLines')?.defaultValue, '120');
     assert.equal(card?.form?.extraInputs?.some((input) => input.elementId === 'defaultModel'), false);
-    assert.deepEqual(card?.form?.selects, []);
+    assert.deepEqual(card?.form?.selects?.map((select) => select.elementId), ['requireMention']);
 
     await handleBridgeCommand(
       adapter,
@@ -7314,7 +7316,7 @@ enabled = true
     assert.equal('initial_option' in resetProviderFeishuSelect, false);
   });
 
-  it('views and updates current Feishu channel group mention requirement with /require-at', async () => {
+  it('views and updates current session group mention requirement with /require-at', async () => {
     initTestContext({ dynamicSettings: true });
     createConfigService({ migrate: false, env: {} }).set({ kind: 'home' }, {
       runtime: { agent: 'codex', codex: { yoloMode: 'off' } },
@@ -7369,15 +7371,14 @@ enabled = true
       '/require-at on',
       deps,
     );
-    assert.match(sent.at(-1) || '', /已更新群聊 @bot 设置/);
+    assert.match(sent.at(-1) || '', /已更新当前会话群聊 @bot 设置/);
     assert.match(sent.at(-1) || '', /on/);
-    assert.match(sent.at(-1) || '', /config\.toml/);
+    assert.match(sent.at(-1) || '', /无需重启通道/);
     assert.doesNotMatch(sent.at(-1) || '', /config\.env|config\.json/);
     assert.match(sent.at(-1) || '', /im\.message\.receive_v1/);
-    const requireOn = createConfigService({ migrate: false }).snapshot().config.channels
-      .find((channel) => channel.id === 'feishu')?.config.requireMention;
+    const requireOn = createConfigService({ migrate: false }).get('session.requireMention', { kind: 'session', sessionId: router.resolve(address).bridgeSessionId });
     assert.equal(requireOn, true);
-    assert.match(fs.readFileSync(HOME_CONFIG_TOML_PATH, 'utf-8'), /require_mention = true/);
+    assert.doesNotMatch(fs.readFileSync(HOME_CONFIG_TOML_PATH, 'utf-8'), /require_mention = true/);
     assert.equal(fs.existsSync(CONFIG_PATH), false);
     assert.equal(fs.existsSync(CONFIG_JSON_PATH), false);
 
@@ -7392,8 +7393,7 @@ enabled = true
       deps,
     );
     assert.match(sent.at(-1) || '', /off/);
-    const requireOff = createConfigService({ migrate: false }).snapshot().config.channels
-      .find((channel) => channel.id === 'feishu')?.config.requireMention;
+    const requireOff = createConfigService({ migrate: false }).get('session.requireMention', { kind: 'session', sessionId: router.resolve(address).bridgeSessionId });
     assert.equal(requireOff, false);
     assert.match(fs.readFileSync(HOME_CONFIG_TOML_PATH, 'utf-8'), /require_mention = false/);
     assert.equal(fs.existsSync(CONFIG_PATH), false);

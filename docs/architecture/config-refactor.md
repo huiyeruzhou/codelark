@@ -57,6 +57,8 @@ schema_version = 2
 workspace = "~"
 tmux_capture_lines = 80
 tmux_echo_input = false
+# 仅 session override 可写；默认 false，旧通道值升级时迁移到已绑定会话。
+require_mention = false
 
 [runtime]
 agent = "codex"
@@ -99,7 +101,6 @@ site = "feishu"
 allowed_users = []
 streaming_enabled = true
 feedback_markdown_enabled = true
-require_mention = false
 ```
 
 命名规则：

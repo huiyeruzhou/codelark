@@ -786,19 +786,15 @@ const SETTING_DEFINITIONS: SettingDefinition[] = [
   },
   {
     key: 'requireMention',
-    tomlPath: 'channels[].config.require_mention',
-    group: 'channels.feishu',
+    tomlPath: 'session.require_mention',
+    group: 'runtime',
     aliases: ['requireAt', 'mention'],
     label: 'require_mention',
-    usage: '/set requireMention on|off',
+    usage: '/require-at on|off',
     control: 'select',
     options: boolOptions(),
-    read: (config) => formatBool(defaultFeishuChannel(config)?.config.requireMention ?? false),
-    write(rawValue, current) {
-      const parsed = parseBoolean(rawValue);
-      if (parsed === null) return { ok: false, message: '值必须是 on/off、true/false 或 1/0。' };
-      return patchChannelConfig(current, { requireMention: parsed });
-    },
+    read: (config) => formatBool(config.session.requireMention === true),
+    write: writeBooleanPatch((value) => ({ session: { requireMention: value } })),
   },
   {
     key: 'groupAuthorized',
@@ -909,7 +905,7 @@ const SETTING_GROUP_ORDERS: Partial<Record<SettingGroupKey, string[]>> = {
 };
 
 function groupDefinitions(groupKey: SettingGroupKey): SettingDefinition[] {
-  const definitions = SETTING_DEFINITIONS.filter((definition) => definition.group === groupKey);
+  const definitions = SETTING_DEFINITIONS.filter((definition) => definition.group === groupKey && definition.key !== 'requireMention');
   const order = SETTING_GROUP_ORDERS[groupKey];
   if (!order) return definitions;
   const rank = new Map(order.map((key, index) => [key, index]));
@@ -945,7 +941,7 @@ export function currentSessionSettingDefinitions(
 }
 
 export function currentSessionCommonSettingDefinitions(): SettingDefinition[] {
-  return groupDefinitions('runtime').filter((definition) => definition.key === 'tmuxCaptureLines');
+  return [...groupDefinitions('runtime').filter((definition) => definition.key === 'tmuxCaptureLines'), findSetting('requireMention')!];
 }
 
 export function settingDisplayLabel(definition: Pick<SettingDefinition, 'key' | 'label'>): string {
@@ -1307,6 +1303,10 @@ export function handleSetCommand(options: {
       buildUsageNotes(),
       options.markdown,
     );
+  }
+
+  if (definition.key === 'requireMention') {
+    return '群聊 @bot 要求属于会话配置。请使用 `/require-at on|off` 或 `/current common` 修改当前会话。';
   }
 
   if (parsed.action === 'show-one') {

@@ -54,6 +54,7 @@ import {
 } from '../contracts.js';
 import { enqueueDelivery } from '../delivery/deliver.js';
 import { getBridgeContext } from '../../bridge/host/context.js';
+import { sessionRequiresMention } from '../../bridge/session/require-mention.js';
 import { createConfigService } from '../../configuration/service.js';
 import {
   htmlToFeishuMarkdown,
@@ -2421,8 +2422,8 @@ export class FeishuAdapter extends BaseChannelAdapter {
     return this.channelConfig.streamingEnabled !== false;
   }
 
-  private shouldRequireMentionForGroup(): boolean {
-    return this.channelConfig.requireMention === true;
+  private shouldRequireMentionForGroup(chatId: string): boolean {
+    return sessionRequiresMention(getBridgeContext().store, { channelType: this.channelType, chatId });
   }
 
   private isGroupAuthorized(): boolean {
@@ -6781,7 +6782,7 @@ export class FeishuAdapter extends BaseChannelAdapter {
       }
 
       // Require @mention check
-      const requireMention = this.shouldRequireMentionForGroup();
+      const requireMention = this.shouldRequireMentionForGroup(chatId);
       if (requireMention && !this.isBotMentioned(msg.mentions)) {
         console.log('[feishu-adapter] Group message ignored (bot not @mentioned), chatId:', chatId, 'msgId:', msg.message_id);
         try {
@@ -6792,7 +6793,7 @@ export class FeishuAdapter extends BaseChannelAdapter {
             chatId,
             direction: 'inbound',
             messageId: msg.message_id,
-            summary: '[FILTERED] Group message dropped: bot not @mentioned (require_mention=true)',
+            summary: '[FILTERED] Group message dropped: bot not @mentioned (session.require_mention=true)',
           });
         } catch { /* best effort */ }
         return;

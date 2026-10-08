@@ -65,7 +65,6 @@ const uiChannelPayloadSchema = z.object({
     .optional(),
   streamingEnabled: z.boolean().optional(),
   feedbackMarkdownEnabled: z.boolean().optional(),
-  requireMention: z.boolean().optional(),
   historyMessageLimit: optionalInteger({ min: 1, max: 20, message: '历史消息条数必须在 1 到 20 之间。' }),
   streamStatusIdleStartSeconds: optionalInteger({ min: 0, message: '响应计时显示延迟不能小于 0。' }),
   streamStatusCheckIntervalSeconds: optionalInteger({ min: 1, message: '运行状态刷新间隔必须大于 0。' }),
@@ -147,7 +146,8 @@ export function mergeChannelInstanceV2(
       feedbackMarkdownEnabled: parsed.feedbackMarkdownEnabled
         ?? existing?.config.feedbackMarkdownEnabled
         ?? template.feedbackMarkdownEnabled,
-      requireMention: parsed.requireMention ?? existing?.config.requireMention ?? template.requireMention,
+      // 旧持久字段只供升级迁移读取；通道编辑不再修改会话的 mention 策略。
+      requireMention: existing?.config.requireMention ?? false,
       historyMessageLimit: parsed.historyMessageLimit
         ?? existing?.config.historyMessageLimit
         ?? template.historyMessageLimit,

@@ -224,7 +224,6 @@ describe('handleUiChannelRoute', () => {
         allowedUsers: 'ou_1, ou_2',
         streamingEnabled: true,
         feedbackMarkdownEnabled: true,
-        requireMention: false,
       }),
       response,
       url: new URL('http://localhost/api/channels/check'),

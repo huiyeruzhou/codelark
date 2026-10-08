@@ -14,6 +14,8 @@ export function parseListIndex(raw: string): number | null {
 
 export function resolveCommandAlias(rawCommand: string, args: string): string {
   switch (rawCommand) {
+    case '/require_at':
+      return '/require-at';
     case '/check':
       return '/health';
     case '/':

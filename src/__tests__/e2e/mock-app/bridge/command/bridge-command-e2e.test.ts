@@ -1792,7 +1792,7 @@ describe('bridge command e2e', () => {
       assert.match(adapter.sent.at(-1)?.text || '', /当前聊天/s);
 
       await _testOnly.handleMessage(adapter, inboundMessage(address, '/require-at off', 'incoming-kimi-command-require-at-off'));
-      assert.match(adapter.sent.at(-1)?.text || '', /已更新群聊 @bot 设置/);
+      assert.match(adapter.sent.at(-1)?.text || '', /已更新当前会话群聊 @bot 设置/);
       assert.match(adapter.sent.at(-1)?.text || '', /off/);
 
       await _testOnly.handleMessage(adapter, inboundMessage(address, '/runtime kimi', 'incoming-kimi-command-runtime'));

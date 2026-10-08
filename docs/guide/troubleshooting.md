@@ -44,7 +44,7 @@ codelark status
 1. 查看 `~/.codelark/logs/bridge.log` 中最近的 JSONL 日志；优先筛选 `level` 为 `ERROR` 或 `WARN`，再看 `msg` 里是否有 `ws client` 或 WebSocket 连接错误。如果有，说明 bridge 没有连上飞书长连接服务器。
 2. 查看 `~/.codelark/logs/bridge.log` 中是否有 bot OpenID 相关日志；如果没有获取到，通常是 bot 配置有误，可以用 `codelark setup` 重新配置。
 3. 查看 `~/.codelark/logs/bridge.log` 中是否有消息事件日志；结构化日志可重点看 `event`、`channel`、`chat`、`message`、`msg` 字段。如果没有，很可能是飞书 bot 没有添加对应事件回调，或当前应用版本还未发布/审批生效。到飞书开发者后台添加事件与回调后重新发布应用。
-4. 如果是在群聊中，尝试 @bot 发送消息，确认是否可以正常回复。`@bot /require-at off` 之后就不必须 @bot。
+4. 如果是在群聊中，尝试 @bot 发送消息，确认是否可以正常回复。`@bot /require-at off`（也支持 `/require_at`）关闭当前绑定会话的 @bot 要求，其他会话不受影响。
 5. 检查配置中的 allowed user IDs。如果已设置，只有列表中的用户可以交互。
 
 ### 飞书配置检查清单

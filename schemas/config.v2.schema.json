@@ -29,6 +29,10 @@
     "session": {
       "type": "object",
       "properties": {
+        "require_mention": {
+          "type": "boolean",
+          "description": "当前会话群聊是否要求 @bot；仅 session 可写，默认 false。旧 channel 值在升级时迁移。"
+        },
         "workspace": {
           "type": "string"
         },

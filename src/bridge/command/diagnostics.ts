@@ -532,7 +532,7 @@ export function buildCurrentCommandRichCard(options: {
     footer: [
       `当前 agent：${currentTag(runtimeLabel(getSessionActiveRuntime(session) || 'codex'), 'orange')}`,
       commonSection
-        ? '通用配置只修改当前会话的对话名称、工作目录和 tmux 展示行数，不会切换 agent。留空会删除当前会话覆盖。'
+        ? '通用配置只修改当前会话的对话名称、工作目录、tmux 展示行数和群聊 @bot 要求，不会切换 agent。留空会删除当前会话覆盖。'
         : `当前分栏只显示 ${runtimeLabel(configSection as RuntimeAgent)} 配置；选择分栏只查看和编辑配置；切换执行 agent 请使用 /runtime。留空或选择“跟随上层配置”会删除当前会话覆盖。`,
     ],
   };

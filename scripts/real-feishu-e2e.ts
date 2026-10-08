@@ -4894,7 +4894,7 @@ function basicDialogueExpectedTexts(options: CliOptions, text: string, label: st
 function commandStateExpectedTexts(options: CliOptions, text: string): string[] {
   const command = text.trim();
   if (command === '/status') return ['全局状态', 'Bridge', '当前聊天'];
-  if (command === '/require-at off') return ['已更新群聊 @bot 设置', 'off'];
+  if (command === '/require-at off') return ['已更新当前会话群聊 @bot 设置', 'off'];
   if (command === `/runtime ${options.runtime}`) return ['Runtime', options.runtime];
   if (command === `/p ${options.provider}`) {
     return [

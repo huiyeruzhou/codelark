@@ -97,6 +97,14 @@ const sessionScopes = ['home', 'local', 'channel', 'session', 'env', 'cli'] as c
 
 export const configFields = [
   {
+    path: 'session.requireMention',
+    tomlPath: 'session.require_mention',
+    scopes: ['session'],
+    schema: z.boolean(),
+    commandAliases: ['/require-at', '/require_at'],
+    defaultWriteScope: 'session',
+  },
+  {
     path: 'session.workspace',
     tomlPath: 'session.workspace',
     scopes: ['local', 'channel', 'session', 'cli'],

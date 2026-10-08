@@ -9,6 +9,7 @@ import {
 } from '../../domain/session-runtime.js';
 import {
   getCodexSessionByThreadIdSafe,
+  scopedConfigForRuntime,
   resolveClaudeRuntimeConfig,
   resolveEffectiveClaudeProvider,
   resolveEffectiveCodexProvider,
@@ -21,7 +22,8 @@ import {
   hasSessionCursorProviderOverride,
   hasSessionZcodeProviderOverride,
 } from '../session/support.js';
-import { getGlobalStringConfig } from '../session/global-config.js';
+import { createConfigService } from '../../configuration/service.js';
+import { projectSessionConfiguration } from '../session/command-use-cases/inherit-session-configuration.js';
 import { getCodexThreadId } from '../turn/turn-classifier.js';
 import { sessionLooksRunning } from './session-args.js';
 
@@ -68,14 +70,18 @@ export function createRuntimeSessionForChat(options: {
   const rawBaseName = options.baseSession.name?.trim() || `Bridge: ${options.chatId}`;
   const baseName = rawBaseName.replace(/\s+\((?:Claude Code|Kimi Code|Cursor Agent|ZCode|Codex)\)$/u, '');
   const suffix = options.runtime === 'claude' ? 'Claude Code' : options.runtime === 'kimi' ? 'Kimi Code' : options.runtime === 'cursor' ? 'Cursor Agent' : options.runtime === 'zcode' ? 'ZCode' : 'Codex';
-  return options.store.createSession(
+  const { config } = scopedConfigForRuntime(options.binding, options.baseSession);
+  const patch = projectSessionConfiguration(config, workDir, options.runtime);
+  const created = options.store.createSession(
     `${baseName} (${suffix})`,
-    options.runtime === 'codex' ? (getGlobalStringConfig('runtime.codex.model') || '') : '',
+    options.runtime === 'codex' ? config.runtime.codex.model : '',
     systemPrompt,
     workDir,
     options.runtime === 'codex' ? resolveEffectiveMode(options.binding, options.baseSession) : undefined,
     { activeRuntime: options.runtime },
   );
+  createConfigService({ migrate: false }).set({ kind: 'session', sessionId: created.id }, patch);
+  return options.store.getSession(created.id) || created;
 }
 
 export function formatSessionCodexProvider(session?: BridgeSession | null, binding?: ChannelChat | null): string {

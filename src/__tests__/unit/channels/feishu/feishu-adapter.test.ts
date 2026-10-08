@@ -5,6 +5,8 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
+import { createConfigService } from '../../../../configuration/service.js';
+import * as router from '../../../../bridge/session/channel-router.js';
 import { FeishuAdapter, _testOnly } from '../../../../channels/feishu/adapter.js';
 import { _testOnlyWaitForDeliveryQueuesForTests } from '../../../../channels/delivery/deliver.js';
 import {
@@ -2029,7 +2031,7 @@ describe('feishu-adapter structured streaming regions', () => {
     assert.doesNotMatch(body, /Reply:|1\s*=|2\s*=|3\s*=/);
   });
 
-  it('accepts unmentioned group messages when the Feishu channel disables mention requirement', async () => {
+  it('accepts unmentioned group messages when the session does not require mentions', async () => {
     initBridgeTestContext();
     const adapter = new FeishuAdapter({
       id: 'feishu-default',
@@ -2356,8 +2358,10 @@ describe('feishu-adapter structured streaming regions', () => {
     ].join('\n'));
   });
 
-  it('filters unmentioned group messages when the Feishu channel requires mentions', async () => {
+  it('filters unmentioned group messages when the current session requires mentions', async () => {
     initBridgeTestContext();
+    const binding = router.resolve({ channelType: 'feishu-default', chatId: 'oc_group_1' });
+    createConfigService({ migrate: false }).set({ kind: 'session', sessionId: binding.bridgeSessionId }, { session: { requireMention: true } });
     const adapter = new FeishuAdapter({
       id: 'feishu-default',
       provider: 'feishu',

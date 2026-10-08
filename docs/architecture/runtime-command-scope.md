@@ -149,11 +149,15 @@ interface GlobalRuntimeConfig {
 | `/ui` | 固定显示策略 | 工具详情始终显示 |
 | `uiAllowLan`、`uiAccessToken` | `bridge.ui` | UI server |
 | Feishu / Weixin channel config | `channels[]` | 通道连接、访问控制、消息呈现 |
-| `/require-at` | 当前消息的 `channelType` 对应 `channels[]` 项 | 飞书群聊触发策略；精确修改当前 App/通道实例 |
+| `/require-at`、`/require_at` | 当前 binding 的 `session.require_mention` | 飞书群聊触发策略；只读写当前会话 |
 
-Web 全局配置接口不接受上述三个单通道字段，通道编辑接口只更新目标 `channels[]` 项。这一边界防止保存 runtime 或 Web 访问设置时把同一组展示参数批量写到所有 App。Session 级布尔配置的空值表示删除 session TOML override，重新继承 home 配置。
+Web 全局配置接口不接受上述三个单通道字段，通道编辑接口只更新目标 `channels[]` 项。这一边界防止保存 runtime 或 Web 访问设置时把同一组展示参数批量写到所有 App。Session 级布尔配置的空值表示删除 session TOML override，重新使用可继承的默认值；`require_mention` 只允许 session 写入，默认 `false`。
 
-`/require-at` 与 `/set requireMention` 最终都写 `~/.codelark/config.toml`，但目标选择不同：前者按当前消息的 `channelType` 找到对应 channel id，后者属于全局设置卡，修改默认 Feishu channel。单 App 默认通道中两者效果相同；多 App、隔离测试 App 或非默认 channel 中，使用 `/set requireMention` 可能改到另一项，看起来就像“没有生效”。因此当前聊天的 mention 策略优先使用 `/require-at`，全局默认模板才使用 `/set --group channels.feishu`。运行中的 Bridge 在下一次 channel config sync 后应用变更。
+`/require-at on|off|status`（也支持 `/require_at`）与 `/current common` 读写同一个 `config/sessions/<sessionId>.toml` 的 `[session] require_mention`。飞书群消息入站时按当前 binding 读取，不缓存到 channel；保存后的下一条入站消息立即生效，私聊不受影响。开启后需要 @bot 才能发送关闭命令。未绑定群默认不要求 @bot，过滤本身不会创建会话。
+
+`/clear`、`/new` 以及 `/runtime` 首次创建另一个 runtime 会话时继承该值和其他有效的 session 可写配置；`/runtime` 新会话指定目标 agent，不复制旧 thread、endpoint、健康状态或终端句柄。切回已经映射的会话时保留目标自己的配置。当前产品限制一个 session 只绑定一个聊天。全局 `/set requireMention` 只提示使用会话入口，通道编辑页不再提供开关。
+
+升级迁移将旧 `channels[].config.require_mention` 一次性复制到已绑定的会话及其保存的 runtime 会话映射。session 已显式设置的 `true` 或 `false` 均优先；多个旧 channel 对同一 session 有冲突时采用 `true` 并通过迁移结果返回告警，用户可再用 `/require-at off` 修改。迁移会备份来源与被修改文件并记录完成状态；即使首次升级没有旧绑定也记录完成，重复启动不再覆盖会话选择。旧 channel 字段保留用于兼容历史配置，但不再参与入站过滤，也不作为以后新建会话的默认值。
 
 ## BridgeSession 与 Codex/ClaudeCode/KimiCode 差异
 
