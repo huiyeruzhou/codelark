@@ -313,7 +313,7 @@ CardKit 的 `streaming_mode` 只影响文本流式上屏的表现，不应成为
 
 游标包含原始 `historyItemOffset`、组内 `historyToolCallOffset` 和必要时的 `historyTextOffset`，不能用卡片组件数代替。旧卡静态内容直接来自成功写入的元素shadow；因此大型详情拆页后，旧卡不会重新带回完整详情或后续页的内容。
 
-Mirror把最新读取位置保存在会话的 `mirror_read_position` 中，包含thread ID、最后一条事件的签名、时间和事件数；不保存消息正文。解绑前保存该位置，新群绑定及bridge重启后都从它继续，已经在旧群读过的内容不会从本轮开头重放，解绑期间新增的事件仍会进入新群。事件签名用于区分时间戳相同的不同事件。`mirror_last_event_at` 继续表示完整轮次的投递进度，不能代替读取位置；旧数据尚无读取位置时优先使用 `last_progress_at` 接续。绑定变更不停止runtime。Mirror的stream key包含binding ID，旧群卡片的异步收尾不会影响新群卡片。批量新事件超过单卡容量时才使用上述分页流程。
+Mirror把最新读取位置保存在会话的 `mirror_read_position` 中，包含thread ID、最后一条事件的签名、时间、类型、角色、语义turn ID和事件数；不保存消息正文。解绑前保存该位置，新群绑定及bridge重启后都从它继续，已经在旧群读过的内容不会从本轮开头重放，解绑期间新增的事件仍会进入新群。事件签名用于区分时间戳相同的不同事件。Cursor Desktop transcript 是会整体重写和重排的snapshot，Cursor事件签名和turn ID因此只使用稳定内容身份，不能包含byte offset；重写时优先从上一语义turn之后恢复，同turn assistant revision只替换该turn的后续内容。升级前的offset签名无法可靠映射时先静默建立新基线，不能猜测并回放历史。`mirror_last_event_at` 继续表示完整轮次的投递进度，不能代替读取位置；旧数据尚无读取位置时优先使用 `last_progress_at` 接续。绑定变更不停止runtime。Mirror的stream key包含binding ID，旧群卡片的异步收尾不会影响新群卡片。批量新事件超过单卡容量时才使用上述分页流程。
 
 `code=200850` 和 `code=200860` 都按payload限制处理。首次建立卡片成功不代表mirror可用；应同时检查后续flush、续卡创建和最终状态写入结果。由于shadow不是客户端视觉确认，真实端手测仍是发布验收的一部分。
 

@@ -7,6 +7,7 @@ export interface BridgeMirrorCursor {
   lastEventType?: BridgeMirrorRecord['type'];
   lastEventRole?: BridgeMirrorRecord['role'];
   lastEventContent?: string;
+  lastEventTurnId?: string;
   lastEventCount: number;
 }
 
@@ -25,6 +26,7 @@ function makeCursor(records: BridgeMirrorRecord[]): BridgeMirrorCursor {
     lastEventType: lastEvent?.type,
     lastEventRole: lastEvent?.role,
     lastEventContent: lastEvent?.content,
+    lastEventTurnId: lastEvent?.turnId,
     lastEventCount: records.length,
   };
 }
@@ -54,6 +56,7 @@ export function advanceBridgeMirrorCursor(
     lastEventType: lastEvent?.type,
     lastEventRole: lastEvent?.role,
     lastEventContent: lastEvent?.content,
+    lastEventTurnId: lastEvent?.turnId,
     lastEventCount: cursor.lastEventCount + appendedRecords.length,
   };
 }
@@ -96,9 +99,38 @@ function collectEventsAfterTimestamp(
   return records.filter((event) => Boolean(event.timestamp) && event.timestamp > timestamp);
 }
 
+function collectEventsAfterTurn(
+  records: BridgeMirrorRecord[],
+  turnId: string | undefined,
+): BridgeMirrorRecord[] | null {
+  if (!turnId) return null;
+  const lastTurnIndex = records.findLastIndex((event) => event.turnId === turnId);
+  return lastTurnIndex >= 0 ? records.slice(lastTurnIndex + 1) : null;
+}
+
+function collectSameTurnAssistantRevision(
+  cursor: BridgeMirrorCursor,
+  records: BridgeMirrorRecord[],
+): BridgeMirrorRecord[] {
+  if (
+    cursor.lastEventType !== 'message'
+    || cursor.lastEventRole !== 'assistant'
+    || !cursor.lastEventTurnId
+  ) return [];
+  const revisedAssistantIndex = records.findIndex((event) => (
+    event.turnId === cursor.lastEventTurnId
+    && event.type === 'message'
+    && event.role === 'assistant'
+    && event.signature !== cursor.lastEventSignature
+  ));
+  if (revisedAssistantIndex < 0) return [];
+  return records.slice(revisedAssistantIndex);
+}
+
 export function reconcileBridgeMirrorCursor(
   cursor: BridgeMirrorCursor | null | undefined,
   records: BridgeMirrorRecord[],
+  recoverByTurnId = false,
 ): BridgeMirrorDelta {
   const nextCursor = makeCursor(records);
 
@@ -121,6 +153,24 @@ export function reconcileBridgeMirrorCursor(
   if (cursor.lastEventSignature) {
     const lastSeenIndex = findLastEventIndex(records, cursor.lastEventSignature);
     if (lastSeenIndex === -1) {
+      if (recoverByTurnId) {
+        const sameTurnRevision = collectSameTurnAssistantRevision(cursor, records);
+        if (sameTurnRevision.length > 0) {
+          return {
+            nextCursor,
+            deliverableRecords: sameTurnRevision,
+            reset: true,
+          };
+        }
+        const eventsAfterTurn = collectEventsAfterTurn(records, cursor.lastEventTurnId);
+        if (eventsAfterTurn && eventsAfterTurn.length > 0) {
+          return {
+            nextCursor,
+            deliverableRecords: eventsAfterTurn,
+            reset: true,
+          };
+        }
+      }
       const recoveredEvents = collectEventsAfterTimestamp(records, cursor.lastEventTimestamp);
       return {
         nextCursor,

@@ -484,9 +484,49 @@ function parseTranscriptLine(line: string): CursorTranscriptLine | null {
   }
 }
 
-function stableLineSignature(line: string, absoluteOffset: number, suffix: string): string {
+function stableLineSignature(
+  line: string,
+  _absoluteOffset: number,
+  suffix: string,
+  turnId = '',
+  occurrence = 1,
+): string {
+  const digest = crypto.createHash('sha256')
+    .update(`${turnId}\0${line}\0${occurrence}\0${suffix}`)
+    .digest('hex')
+    .slice(0, 16);
+  return `cursor:${digest}:${suffix}`;
+}
+
+function cursorTurnId(line: string, occurrence: number, timestamp: string): string {
   const digest = crypto.createHash('sha256').update(line).digest('hex').slice(0, 16);
-  return `cursor:${absoluteOffset}:${digest}:${suffix}`;
+  return `cursor:${digest}:${occurrence}:turn-id${timestamp ? `:at:${timestamp}` : ''}`;
+}
+
+function cursorTurnTimestamp(turnId: string | null): string {
+  const marker = ':turn-id:at:';
+  const markerIndex = turnId?.indexOf(marker) ?? -1;
+  return markerIndex >= 0 ? turnId!.slice(markerIndex + marker.length) : '';
+}
+
+function parseCursorUserTimestamp(blocks: CursorTranscriptContentBlock[]): string {
+  const tagged = blocks
+    .filter((block) => block.type === 'text' && typeof block.text === 'string')
+    .map((block) => block.text || '')
+    .join('\n')
+    .match(/<timestamp>([^<]+)<\/timestamp>/u)?.[1]
+    ?.trim();
+  if (!tagged) return '';
+  const zone = tagged.match(/\s*\(UTC(?:(?<sign>[+-])(?<hours>\d{1,2})(?::?(?<minutes>\d{2}))?)?\)\s*$/u);
+  if (zone?.index === undefined) return '';
+  const wallClock = tagged.slice(0, zone.index).replace(/^[A-Za-z]+,\s*/u, '').trim();
+  const wallClockMs = Date.parse(`${wallClock} UTC`);
+  if (!Number.isFinite(wallClockMs)) return '';
+  const hours = Number(zone.groups?.hours || 0);
+  const minutes = Number(zone.groups?.minutes || 0);
+  const direction = zone.groups?.sign === '-' ? -1 : 1;
+  const offsetMs = direction * (hours * 60 + minutes) * 60_000;
+  return new Date(wallClockMs - offsetMs).toISOString();
 }
 
 function stableAssistantTextSignature(turnId: string, text: string): string {
@@ -499,6 +539,7 @@ function cursorAssistantReplacementKey(turnId: string): string {
 }
 
 const CURSOR_ASSISTANT_SNAPSHOT_STATE_PREFIX = 'cursor-assistant-snapshot:';
+const CURSOR_OCCURRENCE_STATE_PREFIX = 'cursor-occurrence:';
 
 interface CursorAssistantSnapshotState {
   lastContent: string;
@@ -540,6 +581,50 @@ function decodeCursorAssistantSnapshots(values: Iterable<string>): Map<string, C
     }
   }
   return snapshots;
+}
+
+function decodeCursorOccurrences(values: Iterable<string>): Map<string, number> {
+  for (const value of values) {
+    if (!value.startsWith(CURSOR_OCCURRENCE_STATE_PREFIX)) continue;
+    try {
+      const decoded = Buffer.from(
+        value.slice(CURSOR_OCCURRENCE_STATE_PREFIX.length),
+        'base64url',
+      ).toString('utf8');
+      const parsed = JSON.parse(decoded) as unknown;
+      if (!Array.isArray(parsed)) return new Map();
+      return new Map(parsed.filter((entry): entry is [string, number] => (
+        Array.isArray(entry)
+        && typeof entry[0] === 'string'
+        && typeof entry[1] === 'number'
+        && Number.isSafeInteger(entry[1])
+        && entry[1] > 0
+      )));
+    } catch {
+      return new Map();
+    }
+  }
+  return new Map();
+}
+
+function encodeCursorOccurrences(occurrences: Map<string, number>): string {
+  return `${CURSOR_OCCURRENCE_STATE_PREFIX}${Buffer.from(
+    JSON.stringify(Array.from(occurrences.entries())),
+  ).toString('base64url')}`;
+}
+
+function nextCursorOccurrence(occurrences: Map<string, number>, key: string): number {
+  const occurrence = (occurrences.get(key) || 0) + 1;
+  occurrences.set(key, occurrence);
+  return occurrence;
+}
+
+function clearCursorTurnOccurrences(occurrences: Map<string, number>, turnId: string | null): void {
+  if (!turnId) return;
+  const prefix = `event:${turnId}:`;
+  for (const key of occurrences.keys()) {
+    if (key.startsWith(prefix)) occurrences.delete(key);
+  }
 }
 
 function encodeCursorAssistantSnapshots(snapshots: Map<string, CursorAssistantSnapshotState>): string[] {
@@ -685,7 +770,10 @@ interface ParsedCursorTranscriptRecords {
 function decodePendingCursorTools(values: Iterable<string>): Map<string, string[]> {
   const pending = new Map<string, string[]>();
   for (const value of values) {
-    if (value.startsWith(CURSOR_ASSISTANT_SNAPSHOT_STATE_PREFIX)) continue;
+    if (
+      value.startsWith(CURSOR_ASSISTANT_SNAPSHOT_STATE_PREFIX)
+      || value.startsWith(CURSOR_OCCURRENCE_STATE_PREFIX)
+    ) continue;
     const separator = value.indexOf('\0');
     if (separator <= 0) continue;
     const name = value.slice(0, separator);
@@ -726,13 +814,19 @@ function parseCursorTranscriptRecordState(
   const encodedState = Array.from(options.currentSpecialCallIds || []);
   const pendingToolIdsByName = decodePendingCursorTools(encodedState);
   const assistantSnapshots = decodeCursorAssistantSnapshots(encodedState);
+  const occurrences = decodeCursorOccurrences(encodedState);
   let activeTurnId = options.currentTurnId || null;
+  let activeTurnTimestamp = cursorTurnTimestamp(activeTurnId);
   for (const entry of cursorTranscriptLines(rawText, options.baseOffset || 0)) {
     const line = entry.line.trim();
     if (!line) continue;
     const parsed = parseTranscriptLine(line);
     if (!parsed) continue;
-    const timestamp = '';
+    const lineDigest = crypto.createHash('sha256').update(line).digest('hex').slice(0, 16);
+    let lineOccurrence = activeTurnId
+      ? nextCursorOccurrence(occurrences, `event:${activeTurnId}:${lineDigest}`)
+      : 1;
+    let timestamp = activeTurnTimestamp;
     if (parsed.type === 'turn_ended') {
       if (activeTurnId) {
         const finalSnapshot = assistantSnapshots.get(activeTurnId);
@@ -773,14 +867,22 @@ function parseCursorTranscriptRecordState(
         }
       }
       records.push({
-        signature: stableLineSignature(line, entry.offset, 'turn-ended'),
+        signature: stableLineSignature(
+          line,
+          entry.offset,
+          'turn-ended',
+          activeTurnId || '',
+          lineOccurrence,
+        ),
         type: parsed.status === 'success' ? 'task_complete' : 'task_aborted',
         content: parsed.error || '',
         timestamp,
         ...(activeTurnId ? { turnId: activeTurnId } : {}),
       });
       if (activeTurnId) assistantSnapshots.delete(activeTurnId);
+      clearCursorTurnOccurrences(occurrences, activeTurnId);
       activeTurnId = null;
+      activeTurnTimestamp = '';
       continue;
     }
     const role = parsed.role;
@@ -791,9 +893,14 @@ function parseCursorTranscriptRecordState(
     // boundary; do not let the missing intermediate terminal merge turns.
     if (role === 'user') {
       assistantSnapshots.clear();
-      activeTurnId = stableLineSignature(line, entry.offset, 'turn-id');
+      clearCursorTurnOccurrences(occurrences, activeTurnId);
+      activeTurnTimestamp = parseCursorUserTimestamp(blocks);
+      timestamp = activeTurnTimestamp;
+      const userOccurrence = nextCursorOccurrence(occurrences, `user:${lineDigest}`);
+      activeTurnId = cursorTurnId(line, userOccurrence, activeTurnTimestamp);
+      lineOccurrence = nextCursorOccurrence(occurrences, `event:${activeTurnId}:${lineDigest}`);
       records.push({
-        signature: stableLineSignature(line, entry.offset, 'turn-started'),
+        signature: stableLineSignature(line, entry.offset, 'turn-started', activeTurnId, lineOccurrence),
         type: 'task_started',
         content: '',
         timestamp,
@@ -806,6 +913,8 @@ function parseCursorTranscriptRecordState(
     // Treat that first complete row as the recoverable boundary for this turn.
     if (role === 'assistant' && !activeTurnId) {
       activeTurnId = stableLineSignature(line, entry.offset, 'implicit-turn-id');
+      activeTurnTimestamp = '';
+      lineOccurrence = nextCursorOccurrence(occurrences, `event:${activeTurnId}:${lineDigest}`);
     }
     for (let blockIndex = 0; blockIndex < blocks.length; blockIndex += 1) {
       const block = blocks[blockIndex]!;
@@ -825,11 +934,23 @@ function parseCursorTranscriptRecordState(
               ? tool.tool_name.trim()
               : 'tool';
             const pendingIds = pendingToolIdsByName.get(toolName) || [];
-            const toolId = pendingIds.shift() || stableLineSignature(line, entry.offset, `tool-result-id:${blockIndex}`);
+            const toolId = pendingIds.shift() || stableLineSignature(
+              line,
+              entry.offset,
+              `tool-result-id:${blockIndex}`,
+              activeTurnId || '',
+              lineOccurrence,
+            );
             pendingToolIdsByName.set(toolName, pendingIds);
             const result = tool.tool_result;
             records.push({
-              signature: stableLineSignature(line, entry.offset, `tool-result:${blockIndex}`),
+              signature: stableLineSignature(
+                line,
+                entry.offset,
+                `tool-result:${blockIndex}`,
+                activeTurnId || '',
+                lineOccurrence,
+              ),
               type: 'tool_finished',
               content: typeof result === 'string' ? result : JSON.stringify(result ?? ''),
               timestamp,
@@ -844,7 +965,13 @@ function parseCursorTranscriptRecordState(
           }
         }
         records.push({
-          signature: stableLineSignature(line, entry.offset, `text:${blockIndex}`),
+          signature: stableLineSignature(
+            line,
+            entry.offset,
+            `text:${blockIndex}`,
+            activeTurnId || '',
+            lineOccurrence,
+          ),
           type: 'message',
           role: role === 'user' ? 'user' : 'commentary',
           content: block.text,
@@ -853,12 +980,24 @@ function parseCursorTranscriptRecordState(
         });
       } else if (block.type === 'tool_use') {
         const toolName = block.name || 'tool';
-        const toolId = stableLineSignature(line, entry.offset, `tool-id:${blockIndex}`);
+        const toolId = stableLineSignature(
+          line,
+          entry.offset,
+          `tool-id:${blockIndex}`,
+          activeTurnId || '',
+          lineOccurrence,
+        );
         const pendingIds = pendingToolIdsByName.get(toolName) || [];
         pendingIds.push(toolId);
         pendingToolIdsByName.set(toolName, pendingIds);
         records.push({
-          signature: stableLineSignature(line, entry.offset, `tool:${blockIndex}`),
+          signature: stableLineSignature(
+            line,
+            entry.offset,
+            `tool:${blockIndex}`,
+            activeTurnId || '',
+            lineOccurrence,
+          ),
           type: 'tool_started',
           content: '',
           timestamp,
@@ -917,6 +1056,7 @@ function parseCursorTranscriptRecordState(
     nextSpecialCallIds: [
       ...encodePendingCursorTools(pendingToolIdsByName),
       ...encodeCursorAssistantSnapshots(assistantSnapshots),
+      encodeCursorOccurrences(occurrences),
     ],
   };
 }

@@ -193,8 +193,23 @@ export function updateMirrorSubscription(
 
 export function mirrorReadPosition(subscription: BridgeMirrorSubscription): MirrorReadPosition | undefined {
   if (!subscription.cursor.initialized) return undefined;
-  const { lastEventSignature, lastEventTimestamp, lastEventCount } = subscription.cursor;
-  return { threadId: subscription.threadId, lastEventSignature, lastEventTimestamp, lastEventCount };
+  const {
+    lastEventSignature,
+    lastEventTimestamp,
+    lastEventType,
+    lastEventRole,
+    lastEventTurnId,
+    lastEventCount,
+  } = subscription.cursor;
+  return {
+    threadId: subscription.threadId,
+    lastEventSignature,
+    lastEventTimestamp,
+    lastEventType,
+    lastEventRole,
+    lastEventTurnId,
+    lastEventCount,
+  };
 }
 
 export function clearMirrorSubscriptionFailure(subscription: BridgeMirrorSubscription): void {

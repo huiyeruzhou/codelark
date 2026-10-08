@@ -30,6 +30,8 @@ import {
   withCursorReasoningEffort,
 } from '../../../../runtime/cursor/tmux-provider.js';
 import { tmuxCore } from '../../../../bridge/tmux/core.js';
+import { createMirrorSubscription } from '../../../../bridge/mirror/subscription-state.js';
+import { readMirrorDeliverableRecords } from '../../../../bridge/mirror/reconcile-core.js';
 
 describe('Cursor tmux provider helpers', () => {
   let root: string;
@@ -375,6 +377,120 @@ describe('Cursor tmux provider helpers', () => {
     assert.equal(assistantRecords.length, 2);
     assert.notEqual(assistantRecords[0]?.turnId, assistantRecords[1]?.turnId);
     assert.notEqual(assistantRecords[0]?.signature, assistantRecords[1]?.signature);
+  });
+
+  it('keeps semantic signatures stable when a Cursor snapshot rewrite shifts byte offsets', () => {
+    const targetTurn = [
+      { role: 'user', message: { content: [{
+        type: 'text',
+        text: '<timestamp>Thursday, Oct 8, 2026, 9:44 PM (UTC+8)</timestamp>\n<user_query>ship it</user_query>',
+      }] } },
+      { role: 'assistant', message: { content: [{ type: 'text', text: 'done' }] } },
+      { type: 'turn_ended', status: 'success' },
+    ];
+    const encode = (lines: unknown[]) => lines.map((line) => JSON.stringify(line)).join('\n') + '\n';
+    const original = parseCursorTranscriptRecords(encode(targetTurn));
+    const shifted = parseCursorTranscriptRecords(encode([
+      { role: 'user', message: { content: [{ type: 'text', text: 'historical prompt' }] } },
+      { role: 'assistant', message: { content: [{ type: 'text', text: 'historical answer' }] } },
+      ...targetTurn,
+    ])).slice(-original.length);
+
+    assert.deepEqual(shifted.map((record) => record.signature), original.map((record) => record.signature));
+    assert.deepEqual(shifted.map((record) => record.turnId), original.map((record) => record.turnId));
+    assert.ok(original.every((record) => record.timestamp === '2026-10-08T13:44:00.000Z'));
+  });
+
+  it('distinguishes repeated identical user rows while keeping their identities stable across rewrites', () => {
+    const repeatedUser = { role: 'user', message: { content: [{
+      type: 'text',
+      text: '<timestamp>Thursday, Oct 8, 2026, 8:04 PM (UTC+8)</timestamp>\n<user_query>retry</user_query>',
+    }] } };
+    const lines = [
+      repeatedUser,
+      { role: 'assistant', message: { content: [{ type: 'text', text: 'first attempt' }] } },
+      repeatedUser,
+      { role: 'assistant', message: { content: [{ type: 'text', text: 'second attempt' }] } },
+      { type: 'turn_ended', status: 'success' },
+    ];
+    const encode = (items: unknown[]) => items.map((line) => JSON.stringify(line)).join('\n') + '\n';
+    const original = parseCursorTranscriptRecords(encode(lines));
+    const shifted = parseCursorTranscriptRecords(encode([
+      { role: 'user', message: { content: [{ type: 'text', text: 'unrelated older prompt' }] } },
+      { role: 'assistant', message: { content: [{ type: 'text', text: 'unrelated older answer' }] } },
+      ...lines,
+    ])).slice(-original.length);
+    const starts = original.filter((record) => record.type === 'task_started');
+
+    assert.equal(starts.length, 2);
+    assert.notEqual(starts[0]?.turnId, starts[1]?.turnId);
+    assert.notEqual(starts[0]?.signature, starts[1]?.signature);
+    assert.deepEqual(shifted.map((record) => record.signature), original.map((record) => record.signature));
+    assert.deepEqual(shifted.map((record) => record.turnId), original.map((record) => record.turnId));
+  });
+
+  it('baselines an old offset cursor without replaying history, then emits only a future Cursor turn', () => {
+    const transcript = path.join(root, 'cursor-snapshot-replay-regression.jsonl');
+    const encode = (lines: unknown[]) => lines.map((line) => JSON.stringify(line)).join('\n') + '\n';
+    const user = (timestamp: string, prompt: string) => ({
+      role: 'user',
+      message: { content: [{ type: 'text', text: `<timestamp>${timestamp}</timestamp>\n<user_query>${prompt}</user_query>` }] },
+    });
+    const assistant = (answer: string) => ({
+      role: 'assistant',
+      message: { content: [{ type: 'text', text: answer }] },
+    });
+    const terminal = { type: 'turn_ended', status: 'success' };
+    const existing = [
+      user('Thursday, Oct 8, 2026, 8:01 PM (UTC+8)', 'old one'), assistant('old answer one'),
+      user('Thursday, Oct 8, 2026, 8:50 PM (UTC+8)', 'old two'), assistant('old answer two'), terminal,
+    ];
+    fs.writeFileSync(transcript, encode(existing));
+    const source = createCursorMirrorJsonlSource();
+    const subscription = createMirrorSubscription({
+      bindingId: 'cursor-binding',
+      sessionId: 'cursor-session',
+      channelType: 'feishu-default',
+      chatId: 'cursor-chat',
+      threadId: 'cursor-thread',
+      filePath: transcript,
+      lastDeliveredAt: '2026-10-08T13:00:00.000Z',
+      readPosition: {
+        threadId: 'cursor-thread',
+        lastEventSignature: 'cursor:123648:legacy-offset-signature:turn-ended',
+        lastEventTimestamp: '',
+        lastEventCount: 42,
+      },
+    });
+    const initial = readMirrorDeliverableRecords(subscription, {
+      size: fs.statSync(transcript).size,
+      mtimeMs: 1,
+      identity: 'snapshot:1',
+    }, source);
+    assert.deepEqual(initial.records, []);
+
+    const future = [
+      ...existing,
+      user('Thursday, Oct 8, 2026, 9:55 PM (UTC+8)', 'future prompt'),
+      assistant('future answer'),
+      terminal,
+    ];
+    fs.writeFileSync(transcript, encode(future));
+    const next = readMirrorDeliverableRecords(subscription, {
+      size: fs.statSync(transcript).size,
+      mtimeMs: 2,
+      identity: 'snapshot:2',
+    }, source);
+
+    assert.deepEqual(
+      next.records.filter((record) => record.type === 'message').map((record) => record.content),
+      [
+        '<timestamp>Thursday, Oct 8, 2026, 9:55 PM (UTC+8)</timestamp>\n<user_query>future prompt</user_query>',
+        'future answer',
+      ],
+    );
+    assert.equal(next.records.filter((record) => record.type === 'task_started').length, 1);
+    assert.equal(next.records.filter((record) => record.type === 'task_complete').length, 1);
   });
 
   it('supersedes an earlier same-turn assistant snapshot with the captured Cursor final revision', () => {

@@ -90,7 +90,11 @@ export function readMirrorDeliverableRecords(
       [],
       subscription.threadId,
     );
-    const delta = reconcileBridgeMirrorCursor(subscription.cursor, fullDelta.records);
+    const delta = reconcileBridgeMirrorCursor(
+      subscription.cursor,
+      fullDelta.records,
+      source.runtime === 'cursor',
+    );
     subscription.cursor = delta.nextCursor;
     const initialRecoveryRecords = !previousCursor.initialized && subscription.lastDeliveredAt
       ? fullDelta.records.filter((record) => record.timestamp > subscription.lastDeliveredAt!)
