@@ -67,7 +67,7 @@ it('legacy SDK resume uses changed model and permissions only on the next reques
   await command('/yolo off');
   await command('/model default');
   assert.equal((await run()).hasError, false);
-  assert.equal(calls[2]!.options.model, 'gpt-5.4');
+  assert.equal(calls[2]!.options.model, undefined);
   assert.equal(calls[2]!.options.approvalPolicy, 'on-request');
   assert.equal(calls[2]!.options.sandboxMode, 'read-only');
 });

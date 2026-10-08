@@ -23,6 +23,7 @@ import {
   getSelectableCodexModel,
   hasSessionCodexNetworkAccessOverride,
   hasSessionCodexSandboxOverride,
+  resolveCodexInvocationModel,
   resolveDisplayedModel,
   resolveClaudeRuntimeConfig,
   resolveEffectiveCodexProvider,
@@ -40,6 +41,7 @@ import { parseMode } from '../../shared/security/validators.js';
 import {
   getSessionActiveRuntime,
   getSessionClaudeModel,
+  getSessionCodexThreadId,
   getSessionWorkingDirectory,
 } from '../../domain/session-runtime.js';
 import { getGlobalCodexModel } from '../session/global-config.js';
@@ -112,6 +114,17 @@ function codexRuntimeUpdateTitle(
   if (hasBoundCodexAppServer(session) || !isTuiProviderSession(session, binding)) return baseTitle;
   const provider = resolveEffectiveCodexProvider(session, binding);
   return `${baseTitle}，请输入/p ${provider}重启生效`;
+}
+
+function resolveCommandCodexModel(
+  binding: ChannelChat | null | undefined,
+  session: BridgeSession | null | undefined,
+): string {
+  const threadId = getSessionCodexThreadId(session);
+  return resolveCodexInvocationModel(binding, session, { resuming: Boolean(threadId) })
+    || (threadId
+      ? 'thread'
+      : resolveDisplayedModel(binding, session, getGlobalCodexModel(), readConfiguredCodexModel()));
 }
 
 function parseClaudeReasoningCommandArg(raw: string): ClaudeReasoningEffort | undefined {
@@ -1086,18 +1099,13 @@ export function handleModelCommand(options: {
   }
 
   if (!options.args) {
-    const currentModel = resolveDisplayedModel(
-      binding,
-      session,
-      getGlobalCodexModel(),
-      readConfiguredCodexModel(),
-    );
+    const currentModel = resolveCommandCodexModel(binding, session);
     return buildCommandFields(
       '当前模型',
       [['模型', formatDisplayedModel(currentModel)]],
       [
         getAvailableModelChoicesText(),
-        '发送 `/model gpt-5.4` 可切换；发送 `/model default` 可回退到默认模型。',
+        '发送 `/model <slug>` 可显式切换；发送 `/model default` 可让已有 thread 恢复使用自己的模型。',
         hasBoundCodexAppServer(session) ? CODEX_APP_SERVER_UPDATE_NOTE : '模型切换只影响后续从 IM 发起的 Codex CLI 请求。',
       ],
       options.markdown,
@@ -1109,41 +1117,28 @@ export function handleModelCommand(options: {
     clearSessionCodexModelToml(session.id);
     const updatedBinding = router.resolve(options.msg.address);
     const updatedSession = options.store.getSession(updatedBinding.bridgeSessionId);
-    const currentModel = resolveDisplayedModel(
-      updatedBinding,
-      updatedSession,
-      getGlobalCodexModel(),
-      readConfiguredCodexModel(),
-    );
+    const currentModel = resolveCommandCodexModel(updatedBinding, updatedSession);
+    const hasExistingThread = Boolean(getSessionCodexThreadId(updatedSession));
     return buildCommandFields(
       '已恢复默认模型',
       [['模型', formatDisplayedModel(currentModel)]],
-      codexRuntimeUpdateNotes(updatedSession, updatedBinding, ['后续从 IM 发起的 Codex CLI 请求会跟随默认模型。']),
+      codexRuntimeUpdateNotes(updatedSession, updatedBinding, [hasExistingThread
+        ? '后续从 IM 发起的 Codex 请求不再覆盖模型，由已有 thread 恢复自己的模型。'
+        : '后续新建 Codex thread 会跟随默认模型。']),
       options.markdown,
     );
   }
 
   const selectedModel = getSelectableCodexModel(requestedModel);
-  if (!selectedModel) {
-    return buildCommandFields(
-      '模型用法',
-      [['命令', '`/model <slug>`']],
-      [
-        getAvailableModelChoicesText(),
-        '发送 `/model default` 可回退到默认模型。',
-      ],
-      options.markdown,
-    );
-  }
-
-  setSessionCodexModelToml(session.id, selectedModel.slug);
+  const selectedSlug = selectedModel?.slug || requestedModel;
+  setSessionCodexModelToml(session.id, selectedSlug);
   return buildCommandFields(
     '已更新模型',
-    [['模型', formatDisplayedModel(selectedModel.slug)]],
+    [['模型', formatDisplayedModel(selectedSlug)]],
     [
       '后续从 IM 发起的 Codex CLI 请求会使用这个模型。',
       ...codexRuntimeUpdateNotes(options.store.getSession(session.id), binding),
-      ...(isCliOnlyCodexModel(selectedModel)
+      ...(selectedModel && isCliOnlyCodexModel(selectedModel)
         ? ['这是仅 IM/CLI 模型，只能在 IM -> Codex CLI 调用中使用，Codex Native 不支持。']
         : []),
     ],

@@ -2523,7 +2523,8 @@ model = "test-model"
       const startLog = fs.readFileSync(fakeTmux.logPath, 'utf-8');
       assert.match(startLog, new RegExp(`has-session -t ${normalTmuxSession}`));
       assert.match(startLog, new RegExp(`new-session -d -s ${normalTmuxSession}`));
-      assert.match(startLog, /-- .*codelark-shell-snapshot-[^ \n]+\.sh.*(?:\S+\/)?(?:codex|codelark-codex-[a-f0-9]+\.sh) --model test-model --sandbox read-only/);
+      assert.match(startLog, /-- .*codelark-shell-snapshot-[^ \n]+\.sh.*(?:\S+\/)?(?:codex|codelark-codex-[a-f0-9]+\.sh) --sandbox read-only/);
+      assert.doesNotMatch(startLog, /--model test-model/);
       assert.match(startLog, /2> .*codelark-codex-tmux-.*\.log/);
       assert.doesNotMatch(startLog, /-- env .* codex/);
       assert.doesNotMatch(startLog, / new-session .* -e /);
@@ -2660,7 +2661,8 @@ model = "test-model"
       await _testOnly.handleMessage(adapter, inboundMessage(address, '/provider tmux', 'incoming-runtime-provider-tmux-yolo'));
       const yoloLog = fs.readFileSync(fakeTmux.logPath, 'utf-8').slice(beforeYoloLog.length);
       assert.match(yoloLog, new RegExp(`new-session -d -s ${yoloTmuxSession}`));
-      assert.match(yoloLog, /-- .*codelark-shell-snapshot-[^ \n]+\.sh.*(?:\S+\/)?(?:codex|codelark-codex-[a-f0-9]+\.sh) --model test-model --dangerously-bypass-approvals-and-sandbox/);
+      assert.match(yoloLog, /-- .*codelark-shell-snapshot-[^ \n]+\.sh.*(?:\S+\/)?(?:codex|codelark-codex-[a-f0-9]+\.sh) --dangerously-bypass-approvals-and-sandbox/);
+      assert.doesNotMatch(yoloLog, /--model test-model/);
       assert.doesNotMatch(yoloLog, /-- env .* codex/);
       assert.doesNotMatch(yoloLog, / new-session .* -e /);
       assert.doesNotMatch(yoloLog, /--sandbox/);

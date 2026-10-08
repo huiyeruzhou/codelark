@@ -28,6 +28,7 @@ import { getBridgeContext } from '../host/context.js';
 import {
   buildRuntimeProviderIdentity,
   getSessionActiveRuntime,
+  getSessionCodexThreadId,
   getSessionWorkingDirectory,
 } from '../../domain/session-runtime.js';
 import type { ChannelChat } from '../../domain/channel.js';
@@ -344,6 +345,26 @@ export function resolveSessionRuntimeConfig(
   };
 }
 
+/**
+ * A resumed Codex thread owns its model unless this bridge session explicitly
+ * overrides it. Passing a home/channel default while resuming can move the
+ * request onto another model route and make persisted encrypted content
+ * unreadable there.
+ */
+export function resolveCodexInvocationModel(
+  binding?: ChannelChat | null,
+  session?: BridgeSession | null,
+  options: { resuming: boolean } = { resuming: false },
+): string | undefined {
+  const { effective, config } = scopedConfigForRuntime(binding, session);
+  const model = config.runtime.codex.model.trim();
+  if (!model) return undefined;
+  if (!options.resuming) return model;
+  return effective.provenance.get('runtime.codex.model')?.source === 'session'
+    ? model
+    : undefined;
+}
+
 function parsePositiveSettingInt(value: string | null | undefined): number | undefined {
   if (!value) return undefined;
   const parsed = Number(value);
@@ -460,10 +481,14 @@ export function resolveRuntimeMetadataConfig(
       model: zcodeConfig.model || 'default',
     };
   }
+  const codexThreadId = getSessionCodexThreadId(session);
+  const invocationModel = resolveCodexInvocationModel(binding, session, {
+    resuming: Boolean(codexThreadId),
+  });
   return {
     runtime: 'codex',
     reasoningEffort: normalizeStoredReasoningEffort(resolveEffectiveReasoningEffort(session, binding)),
-    model: resolveDisplayedModel(binding, session),
+    model: invocationModel || (codexThreadId ? 'thread' : 'default'),
   };
 }
 
@@ -511,7 +536,7 @@ export function formatDisplayedModel(model: string): string {
 
 export function getAvailableModelChoicesText(): string {
   if (AVAILABLE_CODEX_MODELS.length === 0) {
-    return '当前没有可用模型缓存；请检查 `~/.codex/models_cache.json`，然后重启 Bridge。';
+    return '当前没有可用模型缓存，无法展示候选；仍可发送 `/model <slug>` 直接指定模型。';
   }
   return `可选模型：${AVAILABLE_CODEX_MODELS.map((model) => formatDisplayedModel(model.slug)).join('、')}`;
 }

@@ -38,6 +38,7 @@ import {
   resolveKimiRuntimeConfig,
   resolveCursorRuntimeConfig,
   resolveZcodeRuntimeConfig,
+  resolveCodexInvocationModel,
   resolveSessionRuntimeConfig,
 } from '../session/support.js';
 import { getCodexThreadId } from '../turn/turn-classifier.js';
@@ -110,7 +111,9 @@ const CAPTURE_AFTER_SEND_DELAY_MS = 250;
 export function codexAppServerTurnOptions(binding: ChannelChat, session: BridgeSession): Record<string, unknown> {
   const config = resolveSessionRuntimeConfig(binding, session);
   return appServerTurnOptions({ workingDirectory: getSessionWorkingDirectory(session) || undefined,
-    model: config.model, modelReasoningEffort: config.reasoningEffort,
+    model: resolveCodexInvocationModel(binding, session, {
+      resuming: Boolean(getCodexThreadId(session, binding)),
+    }), modelReasoningEffort: config.reasoningEffort,
     codexMode: config.mode, sandboxMode: config.sandboxMode, networkAccessEnabled: config.networkAccessEnabled });
 }
 
@@ -145,7 +148,7 @@ export async function prepareCodexAppServerForBinding(
     threadId,
     endpoint: session.runtime?.codex?.appServerEndpoint,
     cwd: getSessionWorkingDirectory(session) || undefined,
-    model: config.model || undefined,
+    model: resolveCodexInvocationModel(binding, session, { resuming: Boolean(threadId) }),
     sandbox: config.mode === 'yolo' ? 'danger-full-access' : config.sandboxMode,
     approvalPolicy: config.mode === 'yolo' ? 'never' : 'on-request',
     developerInstructions: getSessionSystemPrompt(session),
@@ -1151,7 +1154,7 @@ async function ensureRuntimeTmuxSessionForProvider(
     threadId,
     bridgeSessionId: session.id,
     workingDirectory: getSessionWorkingDirectory(session),
-    model: runtimeConfig.model || undefined,
+    model: resolveCodexInvocationModel(binding, session, { resuming: true }),
     sandboxMode: runtimeConfig.sandboxMode as StartCodexResumeTmuxSessionParams['sandboxMode'],
     networkAccessEnabled: runtimeConfig.networkAccessEnabled,
     modelReasoningEffort: runtimeConfig.reasoningEffort as StartCodexResumeTmuxSessionParams['modelReasoningEffort'],

@@ -69,11 +69,14 @@ for (const provider of ['sdk', 'tmux'] as const) {
     assert.equal(f.config.get('runtime.codex.model', f.scope), 'gpt-5.4');
     assert.equal(f.turnOptions().model, 'gpt-5.4');
     assert.equal(activeOptions.model, 'old-model');
-    assert.match(await f.command('/model not-an-available-model'), /模型用法/);
-    assert.equal(f.config.get('runtime.codex.model', f.scope), 'gpt-5.4');
-    nextImTurnNotice(await f.command('/model default'));
+    nextImTurnNotice(await f.command('/model not-an-available-model'));
+    assert.equal(f.config.get('runtime.codex.model', f.scope), 'not-an-available-model');
+    assert.equal(f.turnOptions().model, 'not-an-available-model');
+    const resetModel = await f.command('/model default');
+    nextImTurnNotice(resetModel);
+    assert.match(resetModel, /thread/);
     assert.notEqual(f.config.resolve('runtime.codex.model', f.scope).source, 'session');
-    assert.equal(f.turnOptions().model, 'gpt-5.4');
+    assert.equal(f.turnOptions().model, undefined);
   });
 
   it(`app-server ${provider} settings and resets describe the next IM turn without a TUI restart`, async () => {

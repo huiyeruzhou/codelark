@@ -47,7 +47,7 @@ import {
   parseContextUsageInfo,
   type ContextUsageInfo,
 } from '../../../shared/progress/context-usage.js';
-import { resolveClaudeRuntimeConfig, resolveCursorRuntimeConfig, resolveKimiRuntimeConfig, resolveSessionRuntimeConfig, resolveZcodeRuntimeConfig } from '../../session/support.js';
+import { resolveClaudeRuntimeConfig, resolveCodexInvocationModel, resolveCursorRuntimeConfig, resolveKimiRuntimeConfig, resolveSessionRuntimeConfig, resolveZcodeRuntimeConfig } from '../../session/support.js';
 import {
   getSessionActiveRuntime,
   getSessionClaudeSessionId,
@@ -238,6 +238,8 @@ export async function processMessage(
       if (defaultId) resolvedProvider = store.getProvider(defaultId);
     }
 
+    const codexThreadId = getSessionCodexThreadId(session);
+
     // Effective model
     const effectiveModel = activeRuntime === 'zcode'
       ? zcodeRuntimeConfig?.model
@@ -247,8 +249,7 @@ export async function processMessage(
       ? kimiRuntimeConfig?.model
       : activeRuntime === 'claude'
         ? claudeRuntimeConfig?.model
-        : runtimeConfig.model || undefined;
-    const codexThreadId = getSessionCodexThreadId(session);
+        : resolveCodexInvocationModel(binding, session, { resuming: Boolean(codexThreadId) });
     const claudeSessionId = getSessionClaudeSessionId(session);
     const kimiSessionId = getSessionKimiSessionId(session);
     const cursorSessionId = getSessionCursorSessionId(session);
