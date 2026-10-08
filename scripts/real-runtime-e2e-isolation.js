@@ -21,6 +21,9 @@ export function createRuntimeShardIsolation(
   // macOS has a 104-byte Unix-domain socket path limit, while its os.tmpdir()
   // is commonly a long /var/folders/... path. Keep the tmux socket root short.
   const tmpRoot = platform === 'darwin' ? '/tmp' : os.tmpdir();
+  // Individual Codex/Claude fixtures create their own TMUX_TMPDIR under os.tmpdir().
+  // They must not inherit macOS's long /var/folders path and undo the short shard root.
+  if (platform === 'darwin') env.TMPDIR = tmpRoot;
   const tmuxTmpDir = fs.mkdtempSync(path.join(tmpRoot, `clk-tmux-${safeName}-`));
   env.TMUX_TMPDIR = tmuxTmpDir;
   return {

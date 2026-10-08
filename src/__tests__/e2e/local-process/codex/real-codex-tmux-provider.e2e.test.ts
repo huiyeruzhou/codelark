@@ -312,6 +312,7 @@ async function approveStartupPermission(
     assert.match(permission.messageText, /Codex TUI Selection/);
     assert.equal(permission.buttonTexts.length > 0, true);
   }
+  console.info('[real-codex-tmux-provider.e2e] Startup permission callback:', permission);
   options.handledCallbackData?.add(permission.callbackData);
   await _testOnly.handleMessage(adapter, {
     ...inboundMessage(address, '', `incoming-trust-allow-${Date.now()}`),
@@ -1007,7 +1008,9 @@ describe('real codex tmux provider e2e', () => {
       assert.equal(resolveSessionRuntimeConfig(binding, session).reasoningEffort, 'high');
       generatedThreadId = session?.runtime?.codex?.threadId?.trim() || '';
       tmuxSessionName = session?.runtime?.general?.tmuxSessionName || '';
-      assert.match(generatedThreadId, /^[0-9a-f-]{20,}$/i);
+      assert.match(generatedThreadId, /^[0-9a-f-]{20,}$/i, JSON.stringify({
+        tmuxTmpDir, messages: adapter.sent, modelRequests: proxy.requests.length,
+      }, null, 2));
       generatedThreadFilePath = getCodexSessionByThreadIdSafe(
         generatedThreadId,
         'brand-new chat first prompt cleanup lookup',
@@ -1172,8 +1175,9 @@ describe('real codex tmux provider e2e', () => {
       const session = store.getSession(binding.bridgeSessionId);
       generatedThreadId = session?.runtime?.codex?.threadId?.trim() || '';
       tmuxSessionName = session?.runtime?.general?.tmuxSessionName || '';
-      assert.match(generatedThreadId, /^[0-9a-f-]{20,}$/i);
-      assert.equal(tmuxSessionName, `codex_${generatedThreadId}`);
+      const startupEvidence = JSON.stringify({ tmuxTmpDir, messages: adapter.sent, modelRequests: proxy.requests.length }, null, 2);
+      assert.match(generatedThreadId, /^[0-9a-f-]{20,}$/i, startupEvidence);
+      assert.equal(tmuxSessionName, `codex_${generatedThreadId}`, startupEvidence);
       generatedThreadFilePath = getCodexSessionByThreadIdSafe(
         generatedThreadId,
         '/new first prompt cleanup lookup',

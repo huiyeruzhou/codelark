@@ -72,6 +72,21 @@ test('只读 CDP 等待启动期迟到响应，输入超时只发送一次并保
     assert.equal((await read).result.value, 'Which best describes your work?');
     assert.equal(records.find((record) => record.response)?.response.durationMs, 11_000);
 
+    // 37729333679: Page.enable 的同一响应在 12.871 秒到达；enable 也属于启动观察。
+    for (const method of ['Runtime.enable', 'Page.enable']) {
+      const enabledMessage = once(socket, 'message');
+      const enabled = client.call(method);
+      // 立即观察 rejection，避免旧实现复现时产生未处理的 Promise。
+      const outcome = enabled.then(() => 'enabled', (error: Error) => error.message);
+      await enabledMessage;
+      t.mock.timers.tick(12_871);
+      assert.equal(records.some((record) => record.timeout?.method === method), false);
+      socket.send(JSON.stringify({ id: received.at(-1).id, result: {} }));
+      assert.equal(await outcome, 'enabled');
+      assert.equal(received.filter((message) => message.method === method).length, 1);
+      assert.equal(records.at(-1).response.durationMs, 12_871);
+    }
+
     const inputMessage = once(socket, 'message');
     const input = client.call('Input.insertText', { text: 'one input' });
     const failed = assert.rejects(input, /CDP 超时：Input.insertText \(10000ms\)/);
@@ -87,6 +102,13 @@ test('只读 CDP 等待启动期迟到响应，输入超时只发送一次并保
     t.mock.timers.tick(45_001);
     await stalled;
     assert.equal(records.at(-1).timeout.method, 'Runtime.evaluate', '持续无响应的读取仍必须失败');
+
+    const enableMessage = once(socket, 'message');
+    const enableStalled = assert.rejects(client.call('Page.enable'), /\(45000ms\)/);
+    await enableMessage;
+    t.mock.timers.tick(45_001);
+    await enableStalled;
+    assert.equal(records.at(-1).timeout.method, 'Page.enable', '观察域初始化持续无响应仍必须失败');
   } finally {
     t.mock.timers.reset();
     client.close();

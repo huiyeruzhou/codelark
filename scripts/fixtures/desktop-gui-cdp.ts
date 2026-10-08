@@ -48,9 +48,10 @@ export class Cdp {
   call<T = any>(method: string, params: object = {}): Promise<T> {
     assert.equal(this.socket.readyState, WebSocket.OPEN, 'CDP 连接必须已打开');
     const id = ++this.sequence;
-    // 启动期间主线程可能短暂停顿；只读观察沿用 UI 的 45 秒预算，不在 10 秒处提前失败。
+    // 观察域初始化和只读查询沿用 UI 的 45 秒预算：真实 Page.enable 曾在 12.871 秒响应。
     // 每个操作只发送一次，尤其不能因未知执行结果而重发 Input 或 Browser.close。
-    const timeoutMs = ['Runtime.evaluate', 'Accessibility.getFullAXTree', 'Page.captureScreenshot'].includes(method) ? 45_000 : 10_000;
+    const timeoutMs = ['Runtime.enable', 'Page.enable', 'Runtime.evaluate', 'Accessibility.getFullAXTree', 'Page.captureScreenshot']
+      .includes(method) ? 45_000 : 10_000;
     const started = Date.now();
     this.record({ command: { id, method, params, timeoutMs } });
     return new Promise((resolve, reject) => {
