@@ -192,10 +192,15 @@ test('exited owner does not delete a replaced socket path', { skip: process.plat
   const client = await CodexAppServerClient.connect(f.endpoint);
   const socket = f.endpoint.slice(7);
   fs.renameSync(socket, socket + '.original'); fs.writeFileSync(socket, 'replacement');
+  const replacement = fs.lstatSync(socket);
   await assert.rejects(client.request('fixture/exit')); client.close();
   await closeCodexLocalAppServers();
   assert.equal(fs.readFileSync(socket, 'utf8'), 'replacement');
-  await assert.rejects(f.prepare(), /未删除或替换/);
+  // macOS rejects a regular file during connect with ENOTSOCK; Linux reaches the explicit refusal.
+  await assert.rejects(f.prepare(), (error: NodeJS.ErrnoException) => error.code === 'ENOTSOCK' || /未删除或替换/.test(error.message));
+  assert.equal(fs.readFileSync(socket, 'utf8'), 'replacement');
+  assert.deepEqual([fs.lstatSync(socket).dev, fs.lstatSync(socket).ino], [replacement.dev, replacement.ino]);
+  assert.equal(f.records().filter((record) => record.started).length, 1, 'must not start a replacement backend');
 });
 
 test('private startup preserves the existing custom base URL and API key precedence', async (t) => {
@@ -216,8 +221,10 @@ test('an occupied Unix socket path is never removed or replaced', { skip: proces
   const f = fixture(t);
   const socket = f.endpoint.slice(7); fs.mkdirSync(path.dirname(socket), { mode: 0o700 });
   fs.writeFileSync(socket, 'belongs to someone else');
-  await assert.rejects(f.prepare(), /socket.*未删除或替换/);
+  const occupied = fs.lstatSync(socket);
+  await assert.rejects(f.prepare(), (error: NodeJS.ErrnoException) => error.code === 'ENOTSOCK' || /socket.*未删除或替换/.test(error.message));
   assert.equal(fs.readFileSync(socket, 'utf8'), 'belongs to someone else');
+  assert.deepEqual([fs.lstatSync(socket).dev, fs.lstatSync(socket).ino], [occupied.dev, occupied.ino]);
   assert.deepEqual(f.records(), []);
 });
 
