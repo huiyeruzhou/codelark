@@ -37,6 +37,7 @@ import {
   startLocalResponsesProxy,
   waitForCondition,
 } from '../../../helpers/runtime/real-codex-e2e-utils.js';
+import { codexFixtureStartupChoice } from '../../../helpers/runtime/codex-startup-selection.js';
 
 const execFileAsync = promisify(execFile);
 const REAL_CODEX_E2E_MODEL_ENV = 'CODELARK_REAL_CODEX_E2E_MODEL';
@@ -165,7 +166,7 @@ function findStartupPermission(adapter: RecordingAdapter, handledCallbackData?: 
       };
     }
     const selectionCallbackData = message.richCard?.selects
-      ?.map((select) => select.selectedCallbackData || select.options[0]?.callbackData)
+      ?.map((select) => codexFixtureStartupChoice(message.text, select))
       .find((callbackData): callbackData is string => (
         Boolean(callbackData) && !handledCallbackData?.has(callbackData!)
       ));
