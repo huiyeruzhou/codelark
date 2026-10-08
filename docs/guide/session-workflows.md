@@ -80,6 +80,8 @@ codelark codex-desktop disable
 - 数量下拉：切换显示 20、50 或 100 条，也可发送 `/t n 50`、`/t n 100`。
 - runtime 下拉：切换列表查看 Codex、Claude Code、Kimi Code、Cursor Agent 或 ZCode 会话，也可发送 `/t zcode n 100`。
 
+Cursor 列表会合并官方 `agent` CLI 会话和 Cursor Desktop 会话。Desktop 会话只有在能从 Cursor 的全局状态或 workspaceStorage 还原仍存在的项目目录时才显示；这样接管后 `agent --resume <chatId>` 会在原项目中启动，而不会静默落到 home 目录。
+
 表格首列会标出当前聊天正在绑定的会话，以及其他聊天已经绑定的会话。接管其他聊天绑定的会话时，如果目标还在运行会被拒绝；如果目标空闲，CodeLark 会先发确认卡片，确认后解绑原聊天并把会话 attach 到当前聊天。
 
 “用户输入轮数”来自后台增量缓存。bridge 首次看到大型历史文件时，该列可能暂时显示 `-`，但 `/t` 和接管不会等待整份 JSONL；后台统计完成后刷新 `/t` 即显示精确轮数，后续只统计新增后缀。

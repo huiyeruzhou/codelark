@@ -5,6 +5,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
+import { pathToFileURL } from 'node:url';
 
 import {
   createCursorMirrorJsonlSource,
@@ -34,17 +35,22 @@ describe('Cursor tmux provider helpers', () => {
   let root: string;
   let configRoot: string;
   let dataRoot: string;
+  let desktopUserRoot: string;
   let previousConfigRoot: string | undefined;
   let previousDataRoot: string | undefined;
+  let previousDesktopUserRoot: string | undefined;
 
   beforeEach(() => {
     root = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-cursor-'));
     configRoot = path.join(root, 'config');
     dataRoot = path.join(root, 'data');
+    desktopUserRoot = path.join(root, 'desktop-user');
     previousConfigRoot = process.env.CURSOR_CONFIG_DIR;
     previousDataRoot = process.env.CURSOR_DATA_DIR;
+    previousDesktopUserRoot = process.env.CURSOR_DESKTOP_USER_DIR;
     process.env.CURSOR_CONFIG_DIR = configRoot;
     process.env.CURSOR_DATA_DIR = dataRoot;
+    process.env.CURSOR_DESKTOP_USER_DIR = desktopUserRoot;
   });
 
   afterEach(() => {
@@ -52,6 +58,8 @@ describe('Cursor tmux provider helpers', () => {
     else process.env.CURSOR_CONFIG_DIR = previousConfigRoot;
     if (previousDataRoot === undefined) delete process.env.CURSOR_DATA_DIR;
     else process.env.CURSOR_DATA_DIR = previousDataRoot;
+    if (previousDesktopUserRoot === undefined) delete process.env.CURSOR_DESKTOP_USER_DIR;
+    else process.env.CURSOR_DESKTOP_USER_DIR = previousDesktopUserRoot;
     fs.rmSync(root, { recursive: true, force: true });
   });
 
@@ -170,6 +178,108 @@ describe('Cursor tmux provider helpers', () => {
     assert.equal(listCursorSessionFileSummaries(cwd)[0]?.filePath, transcript);
     assert.equal(findCursorSessionFileById(sessionId, cwd)?.title, 'Cursor local session');
     assert.equal(createCursorMirrorJsonlSource().findByThreadId(sessionId, cwd)?.filePath, transcript);
+  });
+
+  it('merges Cursor Desktop conversations with CLI chats and restores their workspaces', () => {
+    const cliCwd = path.join(root, 'cli-workspace');
+    const modernCwd = path.join(root, 'modern-workspace');
+    const legacyCwd = path.join(root, 'legacy-workspace');
+    for (const cwd of [cliCwd, modernCwd, legacyCwd]) fs.mkdirSync(cwd, { recursive: true });
+    const cliId = '11111111-1111-4111-8111-111111111111';
+    const modernId = '22222222-2222-4222-8222-222222222222';
+    const legacyId = '33333333-3333-4333-8333-333333333333';
+    const missingWorkspaceId = '44444444-4444-4444-8444-444444444444';
+    writeCursorSession({ sessionId: cliId, cwd: cliCwd, title: 'CLI chat' });
+
+    const globalStorage = path.join(desktopUserRoot, 'globalStorage');
+    fs.mkdirSync(globalStorage, { recursive: true });
+    const state = new DatabaseSync(path.join(globalStorage, 'state.vscdb'));
+    state.exec([
+      'CREATE TABLE composerHeaders (composerId TEXT PRIMARY KEY, workspaceId TEXT, createdAt INTEGER,',
+      'lastUpdatedAt INTEGER, isArchived INTEGER, isSubagent INTEGER, recency INTEGER, checkpointAt INTEGER,',
+      'value TEXT, subagentTypeName TEXT)',
+    ].join(' '));
+    state.prepare([
+      'INSERT INTO composerHeaders',
+      '(composerId, workspaceId, createdAt, lastUpdatedAt, isArchived, isSubagent, recency, value)',
+      'VALUES (?, ?, ?, ?, 0, 0, ?, ?)',
+    ].join(' ')).run(
+      modernId,
+      'modern-workspace-id',
+      1785030000000,
+      1785030060000,
+      1785030060000,
+      JSON.stringify({
+        name: 'Desktop modern chat',
+        workspaceIdentifier: { uri: { fsPath: modernCwd, scheme: 'file' } },
+      }),
+    );
+    state.prepare([
+      'INSERT INTO composerHeaders',
+      '(composerId, workspaceId, createdAt, lastUpdatedAt, isArchived, isSubagent, recency, value)',
+      'VALUES (?, ?, ?, ?, 0, 0, ?, ?)',
+    ].join(' ')).run(
+      missingWorkspaceId,
+      'missing-workspace-id',
+      1785050000000,
+      1785050060000,
+      1785050060000,
+      JSON.stringify({
+        name: 'Missing workspace',
+        workspaceIdentifier: { uri: { fsPath: path.join(root, 'missing-workspace'), scheme: 'file' } },
+      }),
+    );
+    state.close();
+
+    const workspaceDir = path.join(desktopUserRoot, 'workspaceStorage', 'legacy-workspace-id');
+    fs.mkdirSync(workspaceDir, { recursive: true });
+    fs.writeFileSync(path.join(workspaceDir, 'workspace.json'), JSON.stringify({
+      folder: pathToFileURL(legacyCwd).href,
+    }));
+    const workspaceState = new DatabaseSync(path.join(workspaceDir, 'state.vscdb'));
+    workspaceState.exec('CREATE TABLE ItemTable (key TEXT UNIQUE ON CONFLICT REPLACE, value BLOB)');
+    workspaceState.prepare('INSERT INTO ItemTable (key, value) VALUES (?, ?)').run(
+      'composer.composerData',
+      JSON.stringify({
+        allComposers: [{
+          composerId: legacyId,
+          name: 'Desktop legacy chat',
+          createdAt: 1785040000000,
+          isArchived: false,
+          isDraft: false,
+        }],
+      }),
+    );
+    workspaceState.close();
+
+    const index = new DatabaseSync(path.join(globalStorage, 'conversation-search.db'));
+    index.exec([
+      'CREATE TABLE conversations (source TEXT, scope TEXT, id TEXT, title TEXT, branches TEXT,',
+      'updated_at INTEGER, is_archived INTEGER, root_fingerprint TEXT, cache_fingerprint TEXT)',
+    ].join(' '));
+    const insert = index.prepare([
+      'INSERT INTO conversations',
+      '(source, scope, id, title, branches, updated_at, is_archived, root_fingerprint)',
+      "VALUES ('local', '', ?, ?, '', ?, 0, 'fingerprint')",
+    ].join(' '));
+    insert.run(modernId, 'Desktop modern chat', 1785030060000);
+    insert.run(legacyId, 'Desktop legacy chat', 1785040060000);
+    insert.run(missingWorkspaceId, 'Missing workspace', 1785050060000);
+    index.close();
+
+    const modernTranscript = getCursorTranscriptCandidates(modernId, modernCwd)[0]!;
+    fs.mkdirSync(path.dirname(modernTranscript), { recursive: true });
+    fs.writeFileSync(modernTranscript, `${JSON.stringify({ role: 'user', message: { content: [{ type: 'text', text: 'desktop' }] } })}\n`);
+
+    const sessions = listCursorSessionFileSummaries();
+    assert.deepEqual(sessions.map((session) => session.sessionId), [legacyId, modernId, cliId]);
+    assert.equal(sessions.find((session) => session.sessionId === modernId)?.filePath, modernTranscript);
+    assert.equal(sessions.find((session) => session.sessionId === modernId)?.storePath, undefined);
+    assert.equal(sessions.find((session) => session.sessionId === legacyId)?.cwd, fs.realpathSync.native(legacyCwd));
+    assert.equal(findCursorSessionFileById(modernId, modernCwd)?.title, 'Desktop modern chat');
+    assert.equal(findCursorSessionFileById(legacyId, legacyCwd)?.title, 'Desktop legacy chat');
+    assert.deepEqual(listCursorSessionFileSummaries(modernCwd).map((session) => session.sessionId), [modernId]);
+    assert.deepEqual(listCursorSessionFileSummaries(undefined, 2).map((session) => session.sessionId), [legacyId, modernId]);
   });
 
   it('parses transcript messages, tool calls, and the terminal event incrementally', () => {

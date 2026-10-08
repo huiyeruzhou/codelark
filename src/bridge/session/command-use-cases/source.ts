@@ -191,7 +191,7 @@ function toCursorRuntimeSession(session: ReturnType<typeof listCursorSessionFile
   return {
     runtime: 'cursor',
     threadId: session.sessionId,
-    filePath: session.filePath || session.storePath,
+    filePath: session.filePath || session.storePath || session.sessionDir,
     cwd: session.cwd || '',
     originator: 'Cursor Agent',
     source: 'cursor',

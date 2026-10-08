@@ -22,6 +22,7 @@ import {
 } from '../codex/shell-snapshot.js';
 import {
   findCursorSessionFileById,
+  getCursorTranscriptCandidates,
   listCursorSessionFileSummaries,
   readCursorSessionMirrorRecordDeltaByFilePath,
   type CursorSessionFileSummary,
@@ -453,8 +454,16 @@ async function waitForCursorTranscript(
   );
   const startedAt = Date.now();
   while (Date.now() - startedAt <= timeoutMs) {
+    if (context.sessionId && context.cwd) {
+      const filePath = getCursorTranscriptCandidates(context.sessionId, context.cwd)
+        .find((candidate) => fs.existsSync(candidate));
+      if (filePath) {
+        context.sessionFilePath = filePath;
+        return;
+      }
+    }
     const summary = context.sessionId
-      ? findCursorSessionFileById(context.sessionId, context.cwd)
+      ? context.cwd ? null : findCursorSessionFileById(context.sessionId)
       : listCursorSessionFileSummaries(context.cwd)
         .find((candidate) => Boolean(candidate.filePath) && !baselineSessionIds.has(candidate.sessionId));
     if (summary?.filePath) {

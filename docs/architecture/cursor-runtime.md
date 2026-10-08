@@ -8,7 +8,7 @@ CodeLark 直接在 provider-owned tmux session 中运行 Cursor 官方 `agent` T
 
 ## 官方证据
 
-调查使用 [Cursor 官方安装脚本](https://cursor.com/install) 安装的 `2026.07.23-e383d2b`。安装产物提供 `agent` 与 `cursor-agent` 两个命令名。
+调查使用 [Cursor 官方安装脚本](https://cursor.com/install) 安装的 `2026.07.23-e383d2b`，并在 `2026.10.01-e373342` 复核。安装产物在 `~/.local/bin` 提供 `agent` 与 `cursor-agent` 两个软链，二者指向同一版本目录中的 `cursor-agent` 启动脚本；CodeLark 优先使用 `~/.local/bin/agent`，因此不要求 Bridge 的 PATH 包含 `~/.local/bin`。
 
 官方 CLI 支持：
 
@@ -37,6 +37,14 @@ CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT);
 ```
 
 消息主体是 Cursor 私有序列化 blob，CodeLark 不解析。`meta.json` schema v1 提供 `title`、`createdAtMs`、`updatedAtMs`、`hasConversation`、`isSubagent` 与 `cwd`，用于会话发现和列表。
+
+Cursor Desktop 的会话目录与 Cursor Agent CLI 并不完全重合。Desktop 的可见会话索引位于用户数据目录：macOS 默认为 `~/Library/Application Support/Cursor/User`，Linux 默认为 `${XDG_CONFIG_HOME:-~/.config}/Cursor/User`，Windows 默认为 `%APPDATA%/Cursor/User`。CodeLark 的 `/t cursor` 会额外读取：
+
+- `globalStorage/conversation-search.db`：Desktop 可见、未归档的 conversation id、标题和活动时间；
+- `globalStorage/state.vscdb` 的 `composerHeaders`：新版 Desktop 会话的 workspace；
+- `workspaceStorage/*/state.vscdb` 中的 `composer.composerData` 和同目录 `workspace.json`：旧版 composer 会话与 workspace 的映射。
+
+列表把 Desktop 与 `~/.cursor/chats` 的 CLI 会话按 conversation id 合并。无法可靠恢复 cwd，或原 workspace 已不存在的残留索引不会展示，避免 `agent --resume` 意外落到 home 目录。Desktop 会话可以先通过 `agent --resume <chatId>` 恢复；若此前没有 CLI transcript，CodeLark 会在首条新输入提交后等待同一 chat id 的 transcript 出现，再开始读取输出。
 
 可读 transcript 位于：
 

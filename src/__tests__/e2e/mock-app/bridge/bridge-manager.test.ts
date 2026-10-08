@@ -1410,7 +1410,7 @@ describe('bridge-manager resolveCommandAlias', () => {
     }]);
     const activeTable = activeCard?.tableBlocks?.[0]?.table;
     assert.equal(activeTable?.columns[0]?.horizontalAlign, 'center');
-    assert.equal(activeTable?.rows?.[0]?.index, "**<number_tag background_color='green-350' font_color='white'>1</number_tag>**");
+    assert.equal(activeTable?.rows?.[0]?.index, "<number_tag background_color='green-350' font_color='white'>1</number_tag>");
     assert.equal(activeTable?.rows?.[0]?.title, '**Project 1**');
     assert.equal(activeTable?.rows?.[0]?.bridge_id, '**bridge-s**');
     assert.equal(activeTable?.rows?.[0]?.thread_id, '**thread-1**');

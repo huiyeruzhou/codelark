@@ -337,7 +337,9 @@ function buildThreadCommandTableCardRows(rows: ThreadCommandTableRow[]): Array<R
   return rows.map((row) => Object.fromEntries(THREAD_COMMAND_TABLE_COLUMNS.map((column) => [
     column.name,
     row.active
-      ? formatActiveThreadCardCellValue(formatActiveThreadCardCell(row, column.key))
+      ? column.key === 'index'
+        ? formatActiveThreadCardCell(row, column.key)
+        : formatActiveThreadCardCellValue(formatActiveThreadCardCell(row, column.key))
       : row.selected
         ? formatSelectedThreadCardCell(row, column.key)
         : formatInactiveThreadCardCell(threadCommandTableRowValue(row, column.key)),

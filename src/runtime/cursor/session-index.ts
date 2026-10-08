@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
+import { fileURLToPath } from 'node:url';
 import { CODELARK_HOME } from '../../configuration/paths.js';
 
 import type {
@@ -19,7 +20,7 @@ export interface CursorSessionFileSummary {
   createdAt?: string;
   updatedAt?: string;
   sessionDir: string;
-  storePath: string;
+  storePath?: string;
   filePath?: string;
 }
 
@@ -31,6 +32,27 @@ interface CursorSessionMeta {
   hasConversation?: boolean;
   isSubagent?: boolean;
   cwd?: string;
+}
+
+interface CursorDesktopConversationRow {
+  id?: unknown;
+  title?: unknown;
+  updated_at?: unknown;
+  is_archived?: unknown;
+}
+
+interface CursorDesktopComposerHeaderRow {
+  composerId?: unknown;
+  workspaceId?: unknown;
+  createdAt?: unknown;
+  lastUpdatedAt?: unknown;
+  value?: unknown;
+}
+
+interface CursorDesktopConversationLocation {
+  cwd: string;
+  createdAt?: string;
+  title?: string;
 }
 
 interface ArchivedCursorSessionEntry {
@@ -69,12 +91,40 @@ function cursorDataRoot(): string {
   return explicit ? path.resolve(explicit) : path.join(os.homedir(), '.cursor');
 }
 
+function cursorDesktopUserRoot(): string {
+  const explicit = process.env.CURSOR_DESKTOP_USER_DIR?.trim();
+  if (explicit) return path.resolve(explicit);
+  if (process.platform === 'darwin') {
+    return path.join(os.homedir(), 'Library', 'Application Support', 'Cursor', 'User');
+  }
+  if (process.platform === 'win32') {
+    return path.join(process.env.APPDATA || path.join(os.homedir(), 'AppData', 'Roaming'), 'Cursor', 'User');
+  }
+  return path.join(process.env.XDG_CONFIG_HOME || path.join(os.homedir(), '.config'), 'Cursor', 'User');
+}
+
+function cursorDesktopGlobalStorageRoot(): string {
+  return path.join(cursorDesktopUserRoot(), 'globalStorage');
+}
+
+function cursorDesktopWorkspaceStorageRoot(): string {
+  return path.join(cursorDesktopUserRoot(), 'workspaceStorage');
+}
+
 function canonicalExistingPath(value: string): string {
   const resolved = path.resolve(value);
   try {
     return fs.realpathSync.native(resolved);
   } catch {
     return resolved;
+  }
+}
+
+function isExistingDirectory(value: string): boolean {
+  try {
+    return fs.statSync(value).isDirectory();
+  } catch {
+    return false;
   }
 }
 
@@ -175,6 +225,163 @@ function isoFromMs(value: unknown): string | undefined {
     : undefined;
 }
 
+function readJsonObject(value: unknown): Record<string, any> | null {
+  if (typeof value !== 'string') return null;
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+      ? parsed as Record<string, any>
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+function cursorDesktopPathFromUri(value: unknown): string | undefined {
+  if (!value || typeof value !== 'object') return undefined;
+  const uri = value as Record<string, unknown>;
+  const direct = typeof uri.fsPath === 'string'
+    ? uri.fsPath
+    : typeof uri.path === 'string'
+      ? uri.path
+      : undefined;
+  if (direct?.trim()) return path.resolve(direct.trim());
+  if (typeof uri.external === 'string' && uri.external.startsWith('file:')) {
+    try {
+      return path.resolve(fileURLToPath(uri.external));
+    } catch {
+      return undefined;
+    }
+  }
+  return undefined;
+}
+
+function cursorDesktopCwdFromHeader(value: unknown): string | undefined {
+  const header = readJsonObject(value);
+  if (!header) return undefined;
+  const candidates = [
+    cursorDesktopPathFromUri(header.workspaceIdentifier?.uri),
+    cursorDesktopPathFromUri(header.agentLocation?.environment?.uri),
+    ...(Array.isArray(header.trackedGitRepos)
+      ? header.trackedGitRepos.map((repo: any) => typeof repo?.repoPath === 'string' ? path.resolve(repo.repoPath) : undefined)
+      : []),
+  ];
+  return candidates.find((candidate): candidate is string => Boolean(candidate));
+}
+
+function readCursorDesktopWorkspaceFolder(workspaceDir: string): string | undefined {
+  try {
+    const parsed = JSON.parse(fs.readFileSync(path.join(workspaceDir, 'workspace.json'), 'utf8')) as Record<string, unknown>;
+    const raw = typeof parsed.folder === 'string'
+      ? parsed.folder
+      : typeof parsed.workspace === 'string'
+        ? parsed.workspace
+        : undefined;
+    if (!raw) return undefined;
+    return raw.startsWith('file:') ? path.resolve(fileURLToPath(raw)) : path.resolve(raw);
+  } catch {
+    return undefined;
+  }
+}
+
+function readCursorDesktopComposerLocations(): Map<string, CursorDesktopConversationLocation> {
+  const locations = new Map<string, CursorDesktopConversationLocation>();
+  const statePath = path.join(cursorDesktopGlobalStorageRoot(), 'state.vscdb');
+  let state: DatabaseSync | null = null;
+  try {
+    state = new DatabaseSync(statePath, { readOnly: true });
+    const headers = state.prepare([
+      'SELECT composerId, workspaceId, createdAt, lastUpdatedAt, value',
+      'FROM composerHeaders',
+      'WHERE isArchived = 0 AND isSubagent = 0',
+    ].join(' ')).all() as CursorDesktopComposerHeaderRow[];
+    for (const row of headers) {
+      if (typeof row.composerId !== 'string') continue;
+      const cwd = cursorDesktopCwdFromHeader(row.value);
+      if (!cwd) continue;
+      const header = readJsonObject(row.value);
+      locations.set(row.composerId, {
+        cwd,
+        ...(isoFromMs(row.createdAt) ? { createdAt: isoFromMs(row.createdAt) } : {}),
+        ...(typeof header?.name === 'string' && header.name.trim() ? { title: header.name.trim() } : {}),
+      });
+    }
+  } catch {
+    // Older Cursor versions do not have composerHeaders; workspace storage below is authoritative there.
+  } finally {
+    state?.close();
+  }
+
+  for (const workspaceDir of listDirectories(cursorDesktopWorkspaceStorageRoot())) {
+    const cwd = readCursorDesktopWorkspaceFolder(workspaceDir);
+    if (!cwd) continue;
+    let database: DatabaseSync | null = null;
+    try {
+      database = new DatabaseSync(path.join(workspaceDir, 'state.vscdb'), { readOnly: true });
+      const row = database.prepare("SELECT value FROM ItemTable WHERE key = 'composer.composerData'").get() as { value?: unknown } | undefined;
+      const data = readJsonObject(row?.value);
+      const composers = Array.isArray(data?.allComposers) ? data.allComposers : [];
+      for (const composer of composers) {
+        if (!composer || typeof composer !== 'object' || typeof composer.composerId !== 'string') continue;
+        if (composer.isArchived === true || composer.isDraft === true || locations.has(composer.composerId)) continue;
+        locations.set(composer.composerId, {
+          cwd,
+          ...(isoFromMs(composer.createdAt) ? { createdAt: isoFromMs(composer.createdAt) } : {}),
+          ...(typeof composer.name === 'string' && composer.name.trim() ? { title: composer.name.trim() } : {}),
+        });
+      }
+    } catch {
+      // Workspace state can disappear while Cursor prunes old workspaces.
+    } finally {
+      database?.close();
+    }
+  }
+  return locations;
+}
+
+function listCursorDesktopSessionSummaries(cwd?: string): CursorSessionFileSummary[] {
+  const indexPath = path.join(cursorDesktopGlobalStorageRoot(), 'conversation-search.db');
+  if (!fs.existsSync(indexPath)) return [];
+  let database: DatabaseSync | null = null;
+  try {
+    const locations = readCursorDesktopComposerLocations();
+    database = new DatabaseSync(indexPath, { readOnly: true });
+    const rows = database.prepare([
+      'SELECT id, title, updated_at, is_archived',
+      'FROM conversations',
+      "WHERE source = 'local' AND is_archived = 0",
+      'ORDER BY updated_at DESC',
+    ].join(' ')).all() as CursorDesktopConversationRow[];
+    const requestedCwd = cwd ? canonicalExistingPath(cwd) : undefined;
+    return rows.flatMap((row): CursorSessionFileSummary[] => {
+      if (typeof row.id !== 'string' || !row.id.trim()) return [];
+      const location = locations.get(row.id);
+      if (!location || !isExistingDirectory(location.cwd)) return [];
+      const sessionCwd = canonicalExistingPath(location.cwd);
+      if (requestedCwd && sessionCwd !== requestedCwd) return [];
+      const filePath = getCursorTranscriptCandidates(row.id, sessionCwd)
+        .find((candidate) => fs.existsSync(candidate));
+      const updatedAt = isoFromMs(row.updated_at);
+      const title = typeof row.title === 'string' && row.title.trim()
+        ? row.title.trim()
+        : location.title;
+      return [{
+        sessionId: row.id,
+        sessionDir: cursorDesktopGlobalStorageRoot(),
+        cwd: sessionCwd,
+        ...(title ? { title } : {}),
+        ...(location.createdAt ? { createdAt: location.createdAt } : {}),
+        ...(updatedAt ? { updatedAt } : {}),
+        ...(filePath ? { filePath } : {}),
+      }];
+    });
+  } catch {
+    return [];
+  } finally {
+    database?.close();
+  }
+}
+
 function summarizeCursorSessionDir(sessionDir: string, fallbackCwd?: string): CursorSessionFileSummary | null {
   const sessionId = path.basename(sessionDir);
   const storePath = path.join(sessionDir, 'store.db');
@@ -226,8 +433,23 @@ export function listCursorSessionFileSummaries(cwd?: string, limit?: number): Cu
       if (summary) sessions.push(summary);
     }
   }
+  const combined = new Map<string, CursorSessionFileSummary>();
+  for (const session of [...sessions, ...listCursorDesktopSessionSummaries(cwd)]) {
+    const previous = combined.get(session.sessionId);
+    combined.set(session.sessionId, previous
+      ? {
+          ...session,
+          ...previous,
+          title: previous.title || session.title,
+          cwd: previous.cwd || session.cwd,
+          createdAt: previous.createdAt || session.createdAt,
+          updatedAt: [previous.updatedAt, session.updatedAt].filter(Boolean).sort().at(-1),
+          filePath: previous.filePath || session.filePath,
+        }
+      : session);
+  }
   const archived = new Set(readArchivedCursorSessions().map((entry) => cursorArchiveKey(entry.sessionId, entry.cwd)));
-  const visible = sessions.filter((session) => !session.cwd || !archived.has(cursorArchiveKey(session.sessionId, session.cwd)));
+  const visible = [...combined.values()].filter((session) => !session.cwd || !archived.has(cursorArchiveKey(session.sessionId, session.cwd)));
   visible.sort((left, right) => (right.updatedAt || '').localeCompare(left.updatedAt || ''));
   const bounded = typeof limit === 'number' && Number.isFinite(limit) && limit > 0
     ? Math.max(1, Math.floor(limit))
@@ -239,7 +461,9 @@ export function findCursorSessionFileById(sessionId: string, cwd?: string): Curs
   if (!sessionId.trim()) return null;
   if (cwd) {
     if (isArchivedCursorSession(sessionId, cwd)) return null;
-    return summarizeCursorSessionDir(path.join(getCursorChatsRoot(cwd), sessionId), cwd);
+    return summarizeCursorSessionDir(path.join(getCursorChatsRoot(cwd), sessionId), cwd)
+      || listCursorDesktopSessionSummaries(cwd).find((session) => session.sessionId === sessionId)
+      || null;
   }
   return listCursorSessionFileSummaries().find((session) => session.sessionId === sessionId) || null;
 }
@@ -792,7 +1016,7 @@ export function createCursorMirrorJsonlSource(): MirrorJsonlSource {
     findByThreadId(threadId: string, cwd?: string): MirrorJsonlSourceSummary | null {
       const summary = findCursorSessionFileById(threadId, cwd);
       if (summary?.filePath) {
-        storePathsByTranscript.set(summary.filePath, summary.storePath);
+        if (summary.storePath) storePathsByTranscript.set(summary.filePath, summary.storePath);
         return {
             threadId: summary.sessionId,
             filePath: summary.filePath,
