@@ -18,8 +18,7 @@ CodeLark 的常见稳态由几个进程或外部运行体组成。
 | UI server | `src/operator-ui/server.ts` | CLI 的 `launchUiServerForRun()` 编排 stop/start，manager 执行进程操作 | `~/.codelark/runtime/ui-server.json` | 提供本地工作台页面和 API，默认监听 `4781`；重复运行 `codelark` 时替换旧 UI 进程。 |
 | Bridge daemon | `src/entrypoints/daemon.ts` | `src/local-service/manager.ts` 或 `scripts/daemon.sh` | `~/.codelark/runtime/status.json`、`bridge.pid`、instance lock | 连接 IM 通道、运行消息主循环、协调命令、turn、mirror、权限和 delivery。 |
 | Feishu WebSocket 连接 | `src/channels/feishu/adapter.ts` | Bridge daemon 内的 adapter lifecycle | adapter 内存状态、audit log | 接收飞书事件，转换成 `InboundMessage`，并发送文本、文件、卡片和流式卡片更新。 |
-| Codex SDK/exec 子进程 | `src/runtime/codex/provider.ts` | Bridge daemon 内的 Codex SDK provider | Codex 自有 `~/.codex` 数据 | 通过 Codex SDK/exec 执行 prompt，产出 SSE 风格事件。 |
-| Codex pty child | `src/runtime/codex/pty-provider.ts` | Bridge daemon 内的 pty provider | 内存中的 pty screen map、Codex JSONL | 在 daemon 内创建 pty child，注入 prompt，读取屏幕和 JSONL mirror。 |
+| Codex app-server | `src/runtime/codex/app-server-provider.ts`、`src/runtime/codex/app-server/` | Bridge daemon 协调共享 app-server lifecycle | Codex thread、WebSocket endpoint、Codex 自有 `~/.codex` 数据 | Codex 的自动优先执行 writer；负责原生协议提交、状态、停止和恢复。 |
 | Codex tmux session | `src/runtime/codex/tmux-provider.ts`、`src/bridge/tmux/*` | tmux server + Bridge daemon 编排 | tmux session、Codex JSONL | 在 tmux 中运行 Codex TUI，Bridge 通过 tmux CLI 注入输入和捕获屏幕。 |
 | Claude tmux session | `src/runtime/claude/tmux-provider.ts`、`src/bridge/tmux/*` | tmux server + Bridge daemon 编排 | tmux session、Claude JSONL | 默认 Claude Code provider；在 tmux 中运行 Claude Code TUI，Bridge 通过 tmux CLI 注入输入和捕获屏幕。 |
 | Claude pty child | `src/runtime/claude/pty-provider.ts` | Bridge daemon 内的 Claude pty provider | 内存中的 pty session map、Claude JSONL | 在 pty 中运行 Claude Code，注入 prompt，读取屏幕和 JSONL mirror。 |
@@ -63,7 +62,7 @@ Bridge daemon 的启动路径集中在 `src/entrypoints/daemon.ts`：
 
 - `InboundMessage` / `OutboundMessage`：通道抽象明确，平台事件不会直接流入 bridge 业务层。
 - `ChannelChat -> BridgeSession`：IM chat 不直接绑定 runtime thread，便于切换和接管。
-- `CodexRoutingProvider`：Codex SDK、Codex pty、Codex tmux、Claude tmux、Claude pty、Claude sdk 有统一 `LLMProvider.streamChat()` 入口。
+- `CodexRoutingProvider`：Codex 请求先走 app-server，仅在协议不可用时落到 tmux；Claude 的 tmux、pty、sdk 与其他 runtime 仍共用 `LLMProvider.streamChat()` 入口。
 - `UnifiedTurnProgressState`：SDK stream 和 mirror record 的共同语义模型。
 - `MirrorJsonlSource`：Codex 和 Claude JSONL source 共享 mirror runtime。
 - `TurnCoordinator`：active IM turn 和外部 terminal/mirror 终态之间有显式 claim 机制。

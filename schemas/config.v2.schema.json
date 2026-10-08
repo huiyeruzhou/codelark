@@ -83,7 +83,7 @@
           "enum": ["off", "on", "yolo"]
         },
         "provider": {
-          "enum": ["", "sdk", "pty", "tmux"]
+          "enum": ["", "tmux"]
         },
         "skip_git_repo_check": {
           "type": "boolean"

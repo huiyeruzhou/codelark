@@ -97,8 +97,9 @@ it('tmux key delivery does not manufacture a terminal health event', async () =>
   assert.equal(f.store.getSession(f.session.id)?.runtime_status, 'idle');
 });
 
-it('SDK health residue without an active task is not evidence of a stopped task', async () => {
+it('non-terminal Codex health residue without an active task is not evidence of a stopped task', async () => {
   const f = fixture('codex', 'sdk');
+  f.store.updateSession(f.session.id, { runtime: { general: { tmuxSessionName: undefined } } });
   f.health.recordInteractiveStart(f.session.id);
   f.health.recordToolState(f.session.id, 'old-tool', 'shell', 'running');
   let forced = 0;

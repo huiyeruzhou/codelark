@@ -24,8 +24,6 @@ import {
   normalizeReasoningEffort as normalizeStoredReasoningEffort,
   normalizeSandboxMode,
 } from '../../runtime/options.js';
-import { shouldUseCodexPtyTui } from '../../runtime/codex/pty-provider.js';
-import { shouldUseCodexTmuxTui } from '../../runtime/codex/tmux-provider.js';
 import { getBridgeContext } from '../host/context.js';
 import {
   buildRuntimeProviderIdentity,
@@ -149,7 +147,7 @@ export function hasSessionCodexNetworkAccessOverride(session?: BridgeSession | n
 }
 
 export type SessionRuntimeProvider = RuntimeProviderChoice;
-export type SessionRuntimeCodexProvider = SessionRuntimeProvider;
+export type SessionRuntimeCodexProvider = 'tmux';
 
 export const sessionRuntimeConfigBrand: unique symbol = Symbol('SessionRuntimeConfig');
 
@@ -280,17 +278,15 @@ export function resolveEffectiveRuntimeMode(
 }
 
 export function resolveEffectiveCodexProvider(
-  session?: BridgeSession | null,
-  binding?: ChannelChat | null,
+  _session?: BridgeSession | null,
+  _binding?: ChannelChat | null,
 ): SessionRuntimeCodexProvider {
-  const configured = scopedConfigForRuntime(binding, session).config.runtime.codex.provider;
-  if (configured === 'sdk' || configured === 'tmux' || configured === 'pty') return configured;
-  return shouldUseCodexPtyTui() ? 'pty' : shouldUseCodexTmuxTui() ? 'tmux' : 'sdk';
+  return 'tmux';
 }
 
 export function getSessionCodexProviderOverride(session?: BridgeSession | null): SessionRuntimeCodexProvider | undefined {
-  const tomlProvider = getSessionTomlOverride<SessionRuntimeCodexProvider>(session, 'runtime.codex.provider');
-  return tomlProvider === 'sdk' || tomlProvider === 'tmux' || tomlProvider === 'pty' ? tomlProvider : undefined;
+  const tomlProvider = getSessionTomlOverride<string>(session, 'runtime.codex.provider');
+  return tomlProvider === 'tmux' ? 'tmux' : undefined;
 }
 
 export function hasSessionCodexProviderOverride(session?: BridgeSession | null): boolean {
@@ -336,15 +332,11 @@ export function resolveSessionRuntimeConfig(
   const { config } = scopedConfigForRuntime(binding, session);
   const yoloMode = config.runtime.codex.yoloMode;
   const mode: 'normal' | 'yolo' = yoloMode === 'on' || yoloMode === 'yolo' ? 'yolo' : 'normal';
-  const configuredProvider = config.runtime.codex.provider;
-  const codexProvider = configuredProvider === 'sdk' || configuredProvider === 'tmux' || configuredProvider === 'pty'
-    ? configuredProvider
-    : shouldUseCodexPtyTui() ? 'pty' : shouldUseCodexTmuxTui() ? 'tmux' : 'sdk';
   return {
     [sessionRuntimeConfigBrand]: true,
     mode,
     model: config.runtime.codex.model || '',
-    codexProvider,
+    codexProvider: 'tmux',
     sandboxMode: mode === 'yolo' ? 'danger-full-access' : normalizeSandboxMode(config.runtime.codex.sandboxMode),
     networkAccessEnabled: config.runtime.codex.networkAccess === true,
     reasoningEffort: normalizeStoredReasoningEffort(config.runtime.codex.reasoningEffort),

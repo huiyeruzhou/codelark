@@ -1128,7 +1128,11 @@ describe('bridge-manager resolveCommandAlias', () => {
       jobKind: 'command:tmux',
       blocksConversation: false,
     });
-    assert.equal(_testOnly.adapterSessionLane(inbound('普通消息') as any, 'regular'), null);
+    assert.deepEqual(_testOnly.adapterSessionLane(inbound('普通消息') as any, 'regular'), {
+      sessionId: binding.bridgeSessionId,
+      jobKind: 'interactive-turn:codex-routing',
+      blocksConversation: true,
+    });
 
     const tmuxAddress = { channelType: 'feishu', chatId: 'chat-tmux-regular-barrier' } as const;
     const tmuxBinding = router.createBinding(tmuxAddress, '/tmp/tmux-regular-barrier');

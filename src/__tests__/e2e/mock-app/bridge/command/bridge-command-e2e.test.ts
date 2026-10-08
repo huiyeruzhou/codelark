@@ -1065,45 +1065,6 @@ describe('bridge command e2e', () => {
     assert.equal(adapter.sent.at(-1)?.richCard?.title, '当前聊天 /every 定时输入（0）');
   });
 
-  it('runs /every interval prompts through the SDK provider on the current session', async () => {
-    const calls: RecordedLlmCall[] = [];
-    const store = initBridgeTestContext({ dynamicSettings: true, llm: createRecordingLlm(calls) });
-    const adapter = new RecordingAdapter();
-    registerAdapter(adapter);
-    const bridgeState = (globalThis as unknown as Record<string, any>).__bridge_manager__;
-    bridgeState.running = true;
-    const address = { channelType: 'feishu', chatId: 'chat-every-sdk-e2e' } as const;
-    const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-every-sdk-work-'));
-
-    const { sessionId: ownerSessionId } = createExistingChannelChat(store, address, {
-      workDir,
-      name: 'every-sdk',
-    });
-    setSessionCodexProviderToml(ownerSessionId, 'sdk');
-
-    try {
-      await _testOnly.handleMessage(adapter, inboundMessage(address, '/every 1s interval prompt', 'incoming-every-sdk-new'));
-      assert.match(adapter.sent.at(-1)?.text || '', /已创建 \/every 定时输入/);
-      await waitForCondition(() => calls.length >= 1, 2500);
-
-      assert.equal(calls[0].prompt, 'interval prompt');
-      assert.equal(calls[0].sessionId, ownerSessionId);
-
-      await _testOnly.handleMessage(adapter, inboundMessage(address, '/every', 'incoming-every-sdk-ls'));
-      const listText = adapter.sent.at(-1)?.text || '';
-      assert.match(listText, /1 s/);
-      assert.match(listText, /interval prompt/);
-
-      await _testOnly.handleMessage(adapter, inboundMessage(address, '/every no 1', 'incoming-every-sdk-rm'));
-      assert.equal(listEveryTasks({ bridgeSessionId: ownerSessionId }).length, 0);
-    } finally {
-      if (listEveryTasks({ bridgeSessionId: ownerSessionId }).length > 0) {
-        await _testOnly.handleMessage(adapter, inboundMessage(address, '/every no 1', 'incoming-every-sdk-cleanup'));
-      }
-      fs.rmSync(workDir, { recursive: true, force: true });
-    }
-  });
-
   it('runs the /every rich card chain with new form, select, remove, and refresh callbacks', async () => {
     const store = initBridgeTestContext({ dynamicSettings: true });
     const adapter = new RecordingAdapter();
@@ -2679,7 +2640,8 @@ model = "test-model"
 
       await _testOnly.handleMessage(adapter, inboundMessage(address, '/p sdk', 'incoming-runtime-provider-sdk'));
       assert.equal(store.getSession(binding.bridgeSessionId)?.runtime?.codex?.provider, undefined);
-      assert.equal(getSessionCodexProviderToml(binding.bridgeSessionId), 'sdk');
+      assert.equal(getSessionCodexProviderToml(binding.bridgeSessionId), 'tmux');
+      assert.match(adapter.sent.at(-1)?.text || '', /仅支持 `tmux`/);
 
       await _testOnly.handleMessage(adapter, inboundMessage(address, '/m yolo', 'incoming-runtime-mode-yolo'));
       assert.equal(store.getSession(binding.bridgeSessionId)?.runtime?.codex?.mode, undefined);

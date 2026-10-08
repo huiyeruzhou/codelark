@@ -1,10 +1,8 @@
 import type { BridgeSession, ChannelChat } from '../../domain/index.js';
 import type { StructuredStreamingUiActionButton } from '../../channels/contracts.js';
-import { resolveEffectiveCodexProvider } from '../session/support.js';
 import {
   getSessionActiveRuntime,
   getSessionClaudeSessionId,
-  getSessionCodexThreadId,
 } from '../../domain/session-runtime.js';
 import { buildCommandFields } from './presentation.js';
 import { buildFencedCodeBlock } from '../../shared/markdown/fence.js';
@@ -77,7 +75,7 @@ function buildPtyScreenResponse(
   markdown: boolean,
   options: { intervalSeconds?: number; monitorStarted?: boolean } = {},
 ): string {
-  const runtime = getSessionActiveRuntime(session) || 'codex';
+  const runtime = 'claude';
   const screen = capture?.screen || '';
   const notes = [
     screen ? undefined : '当前还没有 pty 输出。请确认 pty 任务正在运行，或稍后再试。',
@@ -91,9 +89,7 @@ function buildPtyScreenResponse(
       ['Bridge session', session.id],
       ['Runtime', runtime],
       ['Provider', 'pty'],
-      runtime === 'claude'
-        ? ['claude_session_id', getSessionClaudeSessionId(session) || capture?.claudeSessionId || '-']
-        : ['codex_thread_id', getSessionCodexThreadId(session) || capture?.codexThreadId || '-'],
+      ['claude_session_id', getSessionClaudeSessionId(session) || capture?.claudeSessionId || '-'],
       ['展示行数', `${lines}`],
       ['状态', capture?.exited ? 'exited' : 'running/latest'],
     ],
@@ -202,8 +198,10 @@ export async function handlePtyScreenCommand(params: HandlePtyScreenCommandParam
   if (runtime === 'kimi') {
     return '当前 Kimi 会话使用 tmux Provider。请使用 `/tmux-screen` 查看当前屏幕。';
   }
-  if (runtime !== 'claude' && resolveEffectiveCodexProvider(params.session, params.binding) !== 'pty') {
-    return '当前会话不是 pty Provider。请先发送 `/provider pty`，或继续使用 `/tmux-screen` 查看 tmux Provider。';
+  if (runtime !== 'claude') {
+    return runtime === 'codex'
+      ? 'Codex 不再支持 pty Provider；请使用 `/tmux-screen` 查看 tmux 入口。'
+      : '当前会话不是 pty Provider。请先发送 `/provider pty`。';
   }
 
   const lines = parsed.lines ?? DEFAULT_PTY_SCREEN_LINES;

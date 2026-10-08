@@ -145,13 +145,13 @@ active clear 保留前面的独立 stop 验证，然后用隔离模型暂缓一�
 ```bash
 CODELARK_REAL_FEISHU_E2E=1 node --import tsx scripts/real-feishu-e2e.ts \
   --test-env-file ~/.codelark/real-feishu-e2e/test.env \
-  --launch-bridge --codex-app-server --runtime codex --provider sdk \
-  --scenario app-server-lifecycle --run-id lifecycle-sdk \
-  --run-root /tmp/clk-real-feishu-life-sdk \
-  --output /tmp/codelark-feishu-lifecycle-acceptance/sdk.json
+  --launch-bridge --codex-app-server --runtime codex --provider tmux \
+  --scenario app-server-lifecycle --run-id lifecycle-tmux \
+  --run-root /tmp/clk-real-feishu-life-tmux \
+  --output /tmp/codelark-feishu-lifecycle-acceptance/tmux.json
 ```
 
-完成后换 `--provider tmux` 与新的 run ID/root 串行执行。Codex 和飞书均为真实边界，只有模型使用不转发请求的 `startFixtureModel.enqueue`。隔离 Codex 配置开启原生 `default_mode_request_user_input` feature，以便普通模式提供问答工具；不修改用户的 Codex 配置。观察连接只订阅和读取线程，不提交输入或处理审批；Bridge 重启时观察连接也断开，避免替 Bridge 保持旧订阅。
+Codex 和飞书均为真实边界，只有模型使用不转发请求的 `startFixtureModel.enqueue`。隔离 Codex 配置开启原生 `default_mode_request_user_input` feature，以便普通模式提供问答工具；不修改用户的 Codex 配置。观察连接只订阅和读取线程，不提交输入或处理审批；Bridge 重启时观察连接也断开，避免替 Bridge 保持旧订阅。
 
 真实飞书 CI 固定 Codex `0.153.4`，与本地完整故事一致。隔离 `models_cache.json` 仅提供 `/model` 菜单，不提供原生工具 metadata；`0.160` 已删除 gpt-5.4 的工具目录，因此升级前需同时选择该版本实际支持工具的模型并重新验证完整故事。
 

@@ -370,6 +370,11 @@ describe('UiSessionApplication', () => {
     const session = store.createSession('Codex Config Session', 'old-model', undefined, '/tmp/codex-config');
     const app = new UiSessionApplication(store);
 
+    assert.throws(
+      () => app.updateConfig(session.id, { activeRuntime: 'codex', codexProvider: 'sdk' }),
+      /Codex Provider 只支持 tmux/,
+    );
+
     const updated = app.updateConfig(session.id, {
       activeRuntime: 'codex',
       workingDirectory: '/tmp/codex-config-next',

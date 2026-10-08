@@ -303,7 +303,7 @@ test('setup wizard saves first-run config to home TOML instead of legacy env/jso
   }
 });
 
-test('builds setup config with sdk providers when tmux install is declined', () => {
+test('keeps Codex on tmux and uses Claude sdk when tmux install is declined', () => {
   const current = baseSetupConfig();
 
   const next = buildSetupConfig(
@@ -319,7 +319,7 @@ test('builds setup config with sdk providers when tmux install is declined', () 
   );
 
   assert.equal(next.runtime.agent, 'claude');
-  assert.equal(next.runtime.codex.provider, 'sdk');
+  assert.equal(next.runtime.codex.provider, 'tmux');
   assert.equal(next.runtime.claude.provider, 'sdk');
 });
 

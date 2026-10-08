@@ -62,7 +62,7 @@
 | `/clear` | 当前聊天切到新的 BridgeSession | 创建/切换 binding，必要时终止当前任务 |
 | `/t`、`/thread`、`/threads` | 列表、接管、切换、归档本地 Codex thread、Claude session、Kimi session 和 Bridge session | 写 `ChannelChat.bridgeSessionId`；接管本地 runtime 会话时写对应 `BridgeSession.runtime.codex.threadId/title`、`runtime.claude.sessionId/cwd` 或 `runtime.kimi.sessionId/cwd` |
 | `/t rename` | 重命名当前 BridgeSession，部分通道同步群名 | 写 `BridgeSession.name` |
-| `/provider`、`/p` | 在当前 runtime 的 provider 间切换；Codex/Claude 支持 `sdk|pty|tmux`，Kimi 当前只支持 `tmux` | 写 Session TOML 的 `runtime.codex.provider` / `runtime.claude.provider` / `runtime.kimi.provider`；tmux 时只把自动生成 tmux session name 和必要的 runtime identity 作为运行身份写 BridgeSession JSON |
+| `/provider`、`/p` | 查看或设置当前 runtime 的 provider；Codex 固定 `tmux`，Claude 支持 `sdk|pty|tmux`，Kimi 当前只支持 `tmux` | 写 Session TOML 的 `runtime.codex.provider` / `runtime.claude.provider` / `runtime.kimi.provider`；Codex app-server 是自动执行后端，不属于 provider 选项；tmux 时只把自动生成 tmux session name 和必要的 runtime identity 作为运行身份写 BridgeSession JSON |
 | `/stop` | 停止当前运行任务 | 触发 bridge 任务控制；tmux provider 下映射为 tmux interrupt |
 
 ### 会话运行时配置
@@ -84,7 +84,7 @@
 | --- | --- | --- |
 | `mode` | Session TOML `runtime.codex.yoloMode` -> v2 global `runtime.codex.yoloMode` | Codex 专属；旧 BridgeSession JSON 同名字段只作为迁移输入 |
 | `model` | Session TOML `runtime.codex.model` -> v2 global `runtime.codex.model` | Codex/Claude/Kimi 模型名空间分开，不能互相 fallback |
-| `codexProvider` | Session TOML `runtime.codex.provider` -> v2 global `runtime.codex.provider` -> tmux/pty 环境探测 -> `sdk` | 旧 BridgeSession JSON `runtime.codex.provider` 只作为迁移输入，不再作为运行时 fallback |
+| `codexProvider` | 固定 `tmux`；旧 TOML 中的 `sdk/pty` 兼容读取后也归一为 `tmux` | app-server 是优先执行后端；tmux 是查看入口及协议不可用时的唯一 legacy fallback |
 | `sandboxMode` | `mode=yolo` 强制；否则 Session TOML `runtime.codex.sandboxMode` -> v2 global `runtime.codex.sandboxMode` | Codex 专属 |
 | `networkAccessEnabled` | Session TOML `runtime.codex.networkAccess` -> v2 global `runtime.codex.networkAccess` | Codex 专属 |
 | `reasoningEffort` | Session TOML `runtime.codex.reasoningEffort` -> v2 global `runtime.codex.reasoningEffort` | Codex 专属 |
@@ -131,7 +131,7 @@ interface GlobalRuntimeConfig {
 | `codexSandboxMode` | `runtime.codex.sandbox_mode` | Codex 专属 |
 | `codexNetworkAccess` | `runtime.codex.network_access` | Codex 专属 |
 | `codexReasoningEffort` | `runtime.codex.reasoning_effort` | Codex 专属 |
-| `defaultProvider` | `runtime.codex.provider` | `sdk/pty/tmux` 是 Codex provider transport |
+| `defaultProvider` | `runtime.codex.provider` | Codex 仅支持 `tmux`；app-server 不作为 provider 暴露 |
 | `claudeExecutable` | `runtime.claude.executable` | 只允许 `claude` 或 `ccr`；这是 Claude Code 启动命令，不是 provider |
 | `kimiModel` | `runtime.kimi.model` | Kimi Code 专属模型名 |
 | `kimiProvider` | `runtime.kimi.provider` | 当前只允许 `tmux` |
@@ -214,7 +214,7 @@ Codex、ClaudeCode 与 KimiCode 可以共享：
 
 - `runtime.codex.threadId` 与 Claude `sessionId`。前者可跨 Codex native index 查找和归档，后者必须绑定 cwd 才可 resume。
 - `runtime.codex.model`、`runtime.claude.model` 与 `runtime.kimi.model`。Codex、Claude 和 Kimi 的模型名空间不同，只能 fallback 到各自 runtime 默认值。
-- `runtime.codex.provider`。它是 Codex SDK/pty/tmux transport 配置，运行时读取 scoped TOML，不再读取 BridgeSession JSON 同名字段。
+- `runtime.codex.provider`。新写入只接受 `tmux`；历史 `sdk/pty` 值在读取时兼容并归一为 `tmux`，不再选择对应执行路径。
 - `runtime.codex.sandboxMode/networkAccess/reasoningEffort`。Claude 只保留自己的 YOLO、thinking 和 idle timeout 配置；不再暴露独立 `permission_mode` 配置。
 
 当前 `BridgeSession` 权威存储结构：
@@ -256,7 +256,7 @@ Accessor 边界：
 
 ## 当前优先调整点
 
-- `/provider`、`/p` 从 “CodexRuntime 参数” 移到 “Bridge 控制”，因为它选择 bridge 如何驱动当前 runtime，不是模型执行参数。Codex 和 Claude 都支持 `sdk|pty|tmux`，Claude 默认 `tmux`；Kimi、Cursor、ZCode 当前只支持 `tmux`。切换时只修改当前 active runtime 的 provider。
+- `/provider`、`/p` 从 “CodexRuntime 参数” 移到 “Bridge 控制”，因为它选择 bridge 如何驱动当前 runtime，不是模型执行参数。Codex 固定 `tmux`，app-server 自动承担执行；Claude 支持 `sdk|pty|tmux` 且默认 `tmux`；Kimi、Cursor、ZCode 当前只支持 `tmux`。切换时只修改当前 active runtime 的 provider。
 - `/set` 展示与写入遵循 TOML section：顶部下拉切换 `[runtime]`、`[runtime.codex]`、`[runtime.claude]`、`[runtime.kimi]`、`[runtime.cursor]`、`[runtime.zcode]`、`[bridge]` 和默认 Feishu `[[channels]]`，表单只保存当前 section。
 - `/set --group runtime` 中的 `session.tmux_capture_lines`、`session.tmux_echo_input` 是 home 级“新 session 默认值”。`session.tmux_auto_enter` 只保留为旧配置/内部迁移字段，所有用户入口都不得展示或写入，普通 tmux 文本固定补 Enter。
 - `/current` 顶部配置分栏必须把通用 session 设置与 runtime 设置分开：通用分栏严格按“对话名称、工作目录、tmux 输出行数”显示；Codex、Claude、Kimi、Cursor、ZCode 分栏只拥有各自 runtime 字段。选择通用分栏不得切换 agent，保存任一分栏不得读取或串写其他分栏的表单键。

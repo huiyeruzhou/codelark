@@ -340,7 +340,7 @@ require_mention = false
 
       assert.equal(getWorkspaceRoot(), '/tmp/toml-workspace');
       assert.equal(codex.model, 'toml-codex');
-      assert.equal(codex.codexProvider, 'pty');
+      assert.equal(codex.codexProvider, 'tmux');
       assert.equal(codex.sandboxMode, 'read-only');
       assert.equal(codex.networkAccessEnabled, true);
       assert.equal(codex.reasoningEffort, 'high');
@@ -436,12 +436,12 @@ provider = "tmux"
     const kimi = resolveKimiRuntimeConfig(session, binding);
 
     assert.equal(codex.model, 'session-codex');
-    assert.equal(codex.codexProvider, 'pty');
+    assert.equal(codex.codexProvider, 'tmux');
     assert.equal(codex.sandboxMode, 'read-only');
     assert.equal(codex.networkAccessEnabled, false);
     assert.equal(codex.reasoningEffort, 'low');
     assert.equal(resolveDisplayedModel(binding, session), 'session-codex');
-    assert.equal(resolveEffectiveCodexProvider(session, binding), 'pty');
+    assert.equal(resolveEffectiveCodexProvider(session, binding), 'tmux');
     assert.equal(resolveEffectiveSandboxMode(session, binding), 'read-only');
     assert.equal(resolveEffectiveNetworkAccess(session, binding), false);
     assert.equal(resolveEffectiveReasoningEffort(session, binding), 'low');
@@ -456,7 +456,7 @@ provider = "tmux"
       ...binding,
       channelType: 'feishu',
     };
-    assert.equal(resolveEffectiveCodexProvider(session, legacyProviderBinding), 'pty');
+    assert.equal(resolveEffectiveCodexProvider(session, legacyProviderBinding), 'tmux');
     assert.equal(resolveEffectiveSandboxMode(session, legacyProviderBinding), 'read-only');
     assert.equal(resolveClaudeRuntimeConfig(session, legacyProviderBinding).model, 'channel-claude');
     assert.equal(resolveKimiRuntimeConfig(session, legacyProviderBinding).model, 'session-kimi');
@@ -488,7 +488,7 @@ provider = "tmux"
       const effective = resolveEffectiveRuntimeProvider(session);
 
       assert.equal(effective.runtime, 'codex');
-      assert.equal(effective.provider, 'pty');
+      assert.equal(effective.provider, 'tmux');
     } finally {
       if (previousToml === null) fs.rmSync(configTomlPath, { force: true });
       else fs.writeFileSync(configTomlPath, previousToml, 'utf-8');

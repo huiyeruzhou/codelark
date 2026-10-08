@@ -737,7 +737,7 @@ export async function requestCodexTuiTrustConfirmation(params: {
     throw new Error([
       'Codex TUI 需要用户确认是否信任当前目录，但当前运行时没有可用的权限确认通道。',
       `目录：${cwd}`,
-      `请先用 ${params.screenCommand} 查看屏幕并在本地 TUI 中确认，或切回 /provider sdk。`,
+      `请先用 ${params.screenCommand} 查看屏幕并在本地 TUI 中确认。`,
     ].join('\n'));
   }
 

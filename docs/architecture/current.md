@@ -44,7 +44,7 @@ flowchart LR
 | Bridge host | 维护 daemon 生命周期，并把通道、命令、turn、mirror、权限和健康检查装配在一起。 |
 | BridgeSession | 表达“当前聊天对应哪条本地工作会话”，承载 runtime 身份、工作目录和会话级设置。 |
 | Lane 调度 | 表达“这条消息要和谁互相等待”，决定控制命令、长任务、普通命令和 prompt 的并发关系。 |
-| Runtime provider | 屏蔽 Codex SDK/pty/tmux、Claude SDK/pty/tmux、Kimi tmux、Cursor tmux 与 ZCode tmux 的底层差异。 |
+| Runtime provider | 屏蔽 Codex app-server + tmux、Claude SDK/pty/tmux、Kimi tmux、Cursor tmux 与 ZCode tmux 的底层差异。 |
 | Mirror 与 Stream UI | 把本地 JSONL 变化聚合为 turn progress，并用卡片 diff 推送到 IM。 |
 
 ## 消息投递到后端
@@ -96,7 +96,7 @@ flowchart TD
 
 Lane 回答“这条消息要和谁互相等待”。同一条 lane 里的消息按顺序执行；不同 lane 里的消息，默认认为互不影响，可以同时执行。它解决的是并发边界：哪些事情必须排队，哪些事情不应该互相拖慢。
 
-`SessionExecutor` 回答“同一条工作会话里怎么保证一次只跑一个 prompt 或短配置变更”。普通 prompt 和 `/provider sdk`、`/model` 这类能在一个短处理周期内完成的会话变更进入 `session:<session_id>` 后，还要经过这个会话锁。不同 session 可以并行；同一 session 保持顺序，并维护 queued/running/idle 状态。`/provider tmux` 是例外：启动 TUI、readiness 轮询和等待用户选择都属于外部等待，走独立 job lifecycle，不能跨这些等待持有 session lock。
+`SessionExecutor` 回答“同一条工作会话里怎么保证一次只跑一个 prompt 或短配置变更”。普通 prompt 和 `/model` 这类能在一个短处理周期内完成的会话变更进入 `session:<session_id>` 后，还要经过这个会话锁。不同 session 可以并行；同一 session 保持顺序，并维护 queued/running/idle 状态。`/provider tmux` 是例外：准备 app-server 查看入口，或在兼容路径启动 TUI、轮询 readiness 和等待用户选择，都属于外部等待，走独立 job lifecycle，不能跨这些等待持有 session lock。
 
 ### Lane 是什么
 
@@ -120,7 +120,7 @@ conversation barrier 是 lane 之上的保护规则，用来处理“这条命�
 直观例子：
 
 ```text
-/provider sdk
+/provider tmux
 请继续刚才的任务
 ```
 

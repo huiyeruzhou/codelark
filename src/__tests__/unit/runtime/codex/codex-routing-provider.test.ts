@@ -22,15 +22,9 @@ async function readStream(stream: ReadableStream<string>): Promise<string> {
 }
 
 describe('CodexRoutingProvider', () => {
-  it('routes each request by the per-session provider choice', async () => {
-    const provider = new CodexRoutingProvider(undefined, 'sdk') as any;
+  it('routes Codex only through the tmux fallback while preserving other runtimes', async () => {
+    const provider = new CodexRoutingProvider(undefined, 'tmux') as any;
     const routed: string[] = [];
-    provider.sdkProvider = {
-      streamChat() {
-        routed.push('sdk');
-        return streamWithText('sdk-stream');
-      },
-    };
     provider.tmuxProvider = {
       streamChat() {
         routed.push('tmux');
@@ -111,10 +105,10 @@ describe('CodexRoutingProvider', () => {
       cursorProvider: 'tmux',
     }));
 
-    assert.deepEqual(routed, ['sdk', 'tmux', 'sdk', 'claude-tmux', 'claude-sdk', 'claude-tmux', 'kimi-tmux', 'cursor-tmux']);
-    assert.equal(sdkOutput, 'sdk-stream');
+    assert.deepEqual(routed, ['tmux', 'tmux', 'tmux', 'claude-tmux', 'claude-sdk', 'claude-tmux', 'kimi-tmux', 'cursor-tmux']);
+    assert.equal(sdkOutput, 'tmux-stream');
     assert.equal(tmuxOutput, 'tmux-stream');
-    assert.equal(defaultOutput, 'sdk-stream');
+    assert.equal(defaultOutput, 'tmux-stream');
     assert.equal(claudeOutput, 'claude-tmux-stream');
     assert.equal(claudeSdkOutput, 'claude-sdk-stream');
     assert.equal(claudeTmuxOutput, 'claude-tmux-stream');

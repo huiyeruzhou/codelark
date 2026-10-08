@@ -49,11 +49,13 @@ import {
   getSessionClaudeSessionId,
   getSessionCursorSessionId,
   getSessionZcodeSessionId,
+  getSessionRuntimeTmuxSessionName,
   getSessionWorkingDirectory,
 } from '../../../domain/session-runtime.js';
 import {
   resolveEffectiveClaudeProvider,
   resolveEffectiveCodexProvider,
+  getSessionCodexProviderOverride,
   resolveKimiRuntimeConfig,
   resolveCursorRuntimeConfig,
   resolveZcodeRuntimeConfig,
@@ -290,9 +292,11 @@ export async function runInteractiveMessage(
   const runtimeSettings = deps.resolveInteractiveTurnRuntimeSettings(adapter.provider);
   const activeRuntime = getSessionActiveRuntime(initialSession) || 'codex';
   const isClaudeMirrorTurn = activeRuntime === 'claude' && resolveEffectiveClaudeProvider(initialSession, binding) !== 'sdk';
-  const codexProvider = resolveEffectiveCodexProvider(initialSession, binding);
   const isProtocolTurn = activeRuntime === 'codex' && Boolean(initialSession?.runtime?.codex?.appServerEndpoint);
-  const isCodexMirrorTurn = !isProtocolTurn && activeRuntime === 'codex' && (codexProvider === 'pty' || codexProvider === 'tmux');
+  const isCodexMirrorTurn = !isProtocolTurn
+    && activeRuntime === 'codex'
+    && (getSessionCodexProviderOverride(initialSession) === 'tmux'
+      || Boolean(getSessionRuntimeTmuxSessionName(initialSession)));
   const isKimiMirrorTurn = activeRuntime === 'kimi';
   const isCursorTranscriptTurn = activeRuntime === 'cursor';
   const isZcodeTranscriptTurn = activeRuntime === 'zcode';

@@ -76,7 +76,7 @@ for (const command of ['clear', 'new'] as const) {
       assert.notEqual(target.runtime_status, 'running');
       assert.equal(target.health_status, undefined);
       assert.deepEqual(scopedConfigForRuntime(sourceBinding, reloaded.getSession(sourceSession.id)).config, sourceConfig);
-      if (runtime === 'codex') assert.equal(resolveSessionRuntimeConfig(targetBinding, target).codexProvider, 'sdk');
+      if (runtime === 'codex') assert.equal(resolveSessionRuntimeConfig(targetBinding, target).codexProvider, 'tmux');
     });
   }
 }

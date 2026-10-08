@@ -89,7 +89,7 @@ function delay(ms: number): Promise<void> {
 async function waitForCodexThreadVisible(threadId: string): Promise<void> {
   const startedAt = Date.now();
   while (Date.now() - startedAt < BOOTSTRAP_THREAD_VISIBILITY_TIMEOUT_MS) {
-    if (getCodexSessionByThreadIdSafe(threadId, 'SDK bootstrap visibility wait')) return;
+    if (getCodexSessionByThreadIdSafe(threadId, 'bootstrap visibility wait')) return;
     await delay(BOOTSTRAP_THREAD_VISIBILITY_POLL_MS);
   }
 }
@@ -135,7 +135,7 @@ async function readFirstCodexThreadId(
     const trailingError = trailingEvent ? readErrorFromEvent(trailingEvent) : null;
     if (trailingError) errors.push(trailingError);
     if (errors.length > 0) {
-      throw new Error(`无法通过 SDK 预创建 Codex thread：${errors.at(-1)}`);
+      throw new Error(`无法预创建 Codex thread：${errors.at(-1)}`);
     }
     if (threadId) return threadId;
     return '';
@@ -164,7 +164,7 @@ export async function bootstrapCodexThreadWithSdk(
     abortController,
     permissionMode: params.mode === 'yolo' ? 'never' : 'acceptEdits',
     codexMode: params.mode === 'yolo' ? 'yolo' : 'normal',
-    codexProvider: 'sdk',
+    codexProvider: 'tmux',
     conversationHistory: [],
   });
   threadId = await readFirstCodexThreadId(stream, async (foundThreadId) => {
@@ -173,7 +173,7 @@ export async function bootstrapCodexThreadWithSdk(
   });
   if (!abortController.signal.aborted) abortController.abort();
   if (!threadId) {
-    throw new Error('无法通过 SDK 预创建 Codex thread：未收到 codex_thread_id。');
+    throw new Error('无法预创建 Codex thread：未收到 codex_thread_id。');
   }
   return threadId;
 }

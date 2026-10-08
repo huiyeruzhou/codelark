@@ -486,11 +486,9 @@ export function renderUiShellHtml(): string {
                 <p class="panel-subtitle">Codex 连接方式</p>
                 <div class="field-row triple">
                   <label>
-                    <span class="field-title">旧执行方式 / Codex Provider <span class="help-tip" tabindex="0" data-tip="Provider 设置用于旧执行方式的 SDK、PTY 或 tmux 适配器。默认优先通过 app-server 执行；协议会话的 tmux 用于查看。">?</span></span>
+                    <span class="field-title">Codex Provider <span class="help-tip" tabindex="0" data-tip="Codex 固定使用 tmux Provider；app-server 是自动执行后端，协议会话中的 tmux 用于查看。">?</span></span>
                     <select id="defaultProvider">
                       <option value="">跟随默认</option>
-                      <option value="sdk">sdk</option>
-                      <option value="pty">pty</option>
                       <option value="tmux">tmux</option>
                     </select>
                   </label>
@@ -596,7 +594,7 @@ export function renderUiShellHtml(): string {
                 <div class="command-list">
                   <div class="command-list-head"><div>命令</div><div>原始命令</div><div>说明</div></div>
                   <div class="command-item"><div class="command-col-command"><code>/m</code></div><div class="command-col-original"><code>/mode</code></div><div class="command-col-desc">查看当前模式；可选 <code>normal</code>、<code>yolo</code>。</div></div>
-                  <div class="command-item"><div class="command-col-command"><code>/provider</code></div><div class="command-col-original"><code>/provider</code></div><div class="command-col-desc">查看或切换当前 IM 会话 active runtime 的 Provider；Codex 和 Claude 可选 <code>sdk</code>、<code>pty</code>、<code>tmux</code>，Kimi、Cursor 与 ZCode 当前只支持 <code>tmux</code>。</div></div>
+                  <div class="command-item"><div class="command-col-command"><code>/provider</code></div><div class="command-col-original"><code>/provider</code></div><div class="command-col-desc">查看或切换当前 IM 会话 active runtime 的 Provider；Codex 固定 <code>tmux</code>（app-server 自动执行），Claude 可选 <code>sdk</code>、<code>pty</code>、<code>tmux</code>，Kimi、Cursor 与 ZCode 当前只支持 <code>tmux</code>。</div></div>
                   <div class="command-item"><div class="command-col-command"><code>/r</code></div><div class="command-col-original"><code>/reasoning</code></div><div class="command-col-desc">Codex 可选 <code>minimal</code> 到 <code>ultra</code>；Claude 可选 <code>low</code> 到 <code>max</code>；Kimi 使用 <code>on/off/default</code>；Cursor 使用模型 <code>effort</code>；ZCode 不映射该命令。</div></div>
                   <div class="command-item"><div class="command-col-command"><code>/sb</code></div><div class="command-col-original"><code>/sandbox</code></div><div class="command-col-desc">查看或切换当前 IM 会话的 Codex 沙箱；可选 <code>read-only</code>、<code>workspace-write</code>、<code>danger-full-access</code>、<code>default</code>。</div></div>
                   <div class="command-item"><div class="command-col-command"><code>/net</code></div><div class="command-col-original"><code>/network</code></div><div class="command-col-desc">查看或切换当前 IM 会话的网络访问；可选 <code>on</code>、<code>off</code>、<code>default</code>。</div></div>
@@ -744,7 +742,7 @@ export function renderUiShellHtml(): string {
           <div class="field-row triple" id="sessionConfigCodexBlock">
             <label>Codex 模型<select id="sessionConfigModel"></select></label>
             <label>Codex 模式<select id="sessionConfigMode"><option value="normal">normal</option><option value="yolo">yolo</option></select></label>
-            <label>旧适配器配置<select id="sessionConfigProvider"><option value="">default</option><option value="sdk">sdk</option><option value="pty">pty</option><option value="tmux">tmux</option></select></label>
+            <label>Codex Provider<select id="sessionConfigProvider"><option value="">default</option><option value="tmux">tmux</option></select></label>
             <label>Codex 思考级别<select id="sessionConfigReasoning"><option value="">跟随全局</option><option value="medium">medium</option><option value="minimal">minimal</option><option value="low">low</option><option value="high">high</option><option value="xhigh">xhigh</option><option value="max">max</option><option value="ultra">ultra</option></select></label>
           </div>
           <div class="field-row" id="sessionConfigCodexSandboxBlock">

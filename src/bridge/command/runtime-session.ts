@@ -4,6 +4,7 @@ import type { BridgeSession, BridgeStore, ChannelChat } from '../../domain/index
 import type { RuntimeAgent } from '../../domain/session.js';
 import {
   getSessionActiveRuntime,
+  getSessionRuntimeTmuxSessionName,
   getSessionSystemPrompt,
   getSessionWorkingDirectory,
 } from '../../domain/session-runtime.js';
@@ -130,13 +131,16 @@ export function formatSessionRuntimeProvider(session?: BridgeSession | null, bin
 }
 
 export function isTuiProviderSession(session?: BridgeSession | null, binding?: ChannelChat | null): boolean {
-  const { provider } = resolveEffectiveRuntimeProvider(session, binding);
+  const { runtime, provider } = resolveEffectiveRuntimeProvider(session, binding);
+  if (runtime === 'codex') {
+    return hasSessionCodexProviderOverride(session) || Boolean(getSessionRuntimeTmuxSessionName(session));
+  }
   return provider === 'tmux' || provider === 'pty';
 }
 
 export function buildTuiProviderRuntimeOptionBlockedResponse(commandLabel: string, provider: string, markdown: boolean): string {
   const restartNote = provider === 'tmux'
-    ? '当前是 tmux Provider；发送 `/p tmux`，确认“结束并重启”后应用新设置。若要退出 TUI Provider，可停止后发送 `/provider sdk`。'
+    ? '当前是 tmux Provider；发送 `/p tmux`，确认“结束并重启”后应用新设置。'
     : `请先 \`/stop\`，再发送 \`/provider ${provider}\` 重启 ${provider} Provider，让新设置从下一轮生效。`;
   return buildCommandFields(
     `当前是 ${provider} Provider`,

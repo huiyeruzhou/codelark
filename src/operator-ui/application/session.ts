@@ -155,6 +155,14 @@ function setOrUnsetSessionConfig(
   service.set({ kind: 'session', sessionId }, patchForValue(value as never));
 }
 
+function assertSupportedCodexProviderPayload(payload: Record<string, unknown>): void {
+  if (Object.prototype.hasOwnProperty.call(payload, 'codexProvider')
+    && payload.codexProvider !== 'tmux'
+    && payload.codexProvider !== '') {
+    throw new Error('Codex Provider 只支持 tmux。');
+  }
+}
+
 function applySessionConfigToml(bridgeSessionId: string, payload: Record<string, unknown>): void {
   const activeRuntime = payload.activeRuntime === 'claude'
     ? 'claude'
@@ -323,7 +331,7 @@ function applySessionConfigToml(bridgeSessionId: string, payload: Record<string,
       (yoloMode) => ({ runtime: { codex: { yoloMode } } }),
     );
   }
-  if (payload.codexProvider === 'sdk' || payload.codexProvider === 'tmux' || payload.codexProvider === 'pty' || payload.codexProvider === '') {
+  if (payload.codexProvider === 'tmux' || payload.codexProvider === '') {
     setOrUnsetSessionConfig(
       bridgeSessionId,
       'runtime.codex.provider',
@@ -438,7 +446,7 @@ function sessionConfigPayload(session: BridgeSession) {
     workingDirectory: getSessionWorkingDirectory(session) || '',
     model: getSessionConfigTomlOverride<string>(session, 'runtime.codex.model') || '',
     preferredMode: (codexYoloMode === 'on' || codexYoloMode === 'yolo') ? 'yolo' : 'normal',
-    codexProvider: getSessionConfigTomlOverride<string>(session, 'runtime.codex.provider') || '',
+    codexProvider: getSessionConfigTomlOverride<string>(session, 'runtime.codex.provider') ? 'tmux' : '',
     systemPrompt: getSessionSystemPrompt(session) || '',
     reasoningEffort: getSessionConfigTomlOverride<string>(session, 'runtime.codex.reasoningEffort') || '',
     codexSandboxMode: getSessionConfigTomlOverride<string>(session, 'runtime.codex.sandboxMode') || '',
@@ -661,6 +669,7 @@ export class UiSessionApplication {
   }
 
   updateConfig(bridgeSessionId: string, payload: Record<string, unknown>) {
+    assertSupportedCodexProviderPayload(payload);
     const registry = this.createSessionRegistry();
     const updates = sanitizeSessionConfig(payload);
     const updated = registry.updateBridgeSessionConfig(bridgeSessionId, updates);

@@ -97,12 +97,9 @@ function codexRuntimeUpdateNotes(
   if (hasBoundCodexAppServer(session)) return [...notes, CODEX_APP_SERVER_UPDATE_NOTE];
   const result = [...notes, CODEX_RUNTIME_UPDATE_NOTE];
   if (!isTuiProviderSession(session, binding)) return result;
-  const provider = resolveEffectiveCodexProvider(session, binding);
   result.push(
     '当前是 Codex TUI Provider：配置已保存到当前会话，但不会影响已经启动的 Codex TUI 终端。',
-    provider === 'tmux'
-      ? '发送 `/p tmux`，确认“结束并重启”后，新设置会用于重启的 Codex TUI。'
-      : '请先 `/stop`，再发送 `/provider pty` 重启 Codex pty Provider；新设置会在重启后的后续请求中生效。',
+    '发送 `/p tmux`，确认“结束并重启”后，新设置会用于重启的 Codex TUI。',
   );
   return result;
 }

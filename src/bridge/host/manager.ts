@@ -29,7 +29,6 @@ import * as broker from '../permission/broker.js';
 import { getBridgeContext } from './context.js';
 import type { BridgeMirrorRecord } from '../../runtime/contracts.js';
 import { archiveCodexSession } from '../../runtime/codex/session-index.js';
-import { injectPromptIntoActivePty } from '../../runtime/codex/pty-provider.js';
 import {
   injectPromptIntoClaudePtySession,
   waitForClaudeSessionJsonlUpdatedAfter,
@@ -141,7 +140,6 @@ import {
 import {
   formatDisplayedModel,
   getCodexSessionByThreadIdSafe,
-  getSessionCodexProviderOverride,
   resolveDisplayedModel,
   resolveEffectiveClaudeProvider,
   resolveEffectiveCodexProvider,
@@ -149,6 +147,7 @@ import {
   resolveNewWorkingDirectory,
   resolveNewSessionWorkingDirectory,
   resolveRuntimeMetadataConfig,
+  scopedConfigForRuntime,
   sessionCodexRuntimeOverridePatch,
 } from '../session/support.js';
 import { createConfigService } from '../../configuration/service.js';
@@ -769,14 +768,14 @@ function sessionSupportsTmuxSelectionPromptProbe(session: BridgeSession): boolea
   const activeRuntime = getSessionActiveRuntime(session);
   if (activeRuntime === 'kimi' || activeRuntime === 'cursor' || activeRuntime === 'zcode') return false;
   if (activeRuntime === 'claude') return resolveEffectiveClaudeProvider(session) === 'tmux';
-  return resolveEffectiveCodexProvider(session) === 'tmux';
+  return true;
 }
 
 function sessionSupportsCodexTuiRuntimeSignals(session: BridgeSession): boolean {
   if (session.runtime?.codex?.appServerEndpoint || getCodexAppServerSession(session.id)) return false;
   const activeRuntime = getSessionActiveRuntime(session);
   if (activeRuntime === 'kimi' || activeRuntime === 'claude' || activeRuntime === 'cursor' || activeRuntime === 'zcode') return false;
-  return resolveEffectiveCodexProvider(session) === 'tmux';
+  return true;
 }
 
 function assignCodexTuiTurnScreenBaseline(
@@ -2671,8 +2670,7 @@ const MIRROR_RUNTIME = createMirrorRuntime(getState, {
   hasSessionMirrorSource: (session) => Boolean(
     getSessionActiveRuntime(session) !== 'claude'
     && getSessionActiveRuntime(session) !== 'kimi'
-    && getSessionCodexThreadId(session)
-    && (session?.runtime?.codex?.appServerEndpoint || getSessionCodexProviderOverride(session as BridgeSession | null | undefined) !== 'sdk'),
+    && getSessionCodexThreadId(session),
   ),
   syncMirrorSessionStateSafe,
   filterSuppressedMirrorRecords,
@@ -5373,9 +5371,13 @@ async function handleMessage(
   const tmuxProviderActiveTask = tmuxProviderBinding
     ? INTERACTIVE_RUNTIME.getActiveTask(tmuxProviderBinding.bridgeSessionId)
     : null;
+  const codexHasLegacyTmuxState = tmuxProviderRuntime?.runtime === 'codex'
+    && (scopedConfigForRuntime(tmuxProviderBinding, tmuxProviderSession).config.runtime.codex.provider === 'tmux'
+      || Boolean(getSessionRuntimeTmuxSessionName(tmuxProviderSession)));
   if (
     tmuxProviderSession
     && tmuxProviderRuntime?.provider === 'tmux'
+    && (tmuxProviderRuntime.runtime !== 'codex' || codexHasLegacyTmuxState)
     && tmuxProviderRuntime.runtime !== 'cursor'
     && tmuxProviderRuntime.runtime !== 'zcode'
     && !tmuxProviderSession.runtime?.codex?.appServerEndpoint
@@ -5521,9 +5523,6 @@ async function handleMessage(
   const terminalAppendBinding = store.getChannelChat(msg.address.channelType, msg.address.chatId);
   const terminalAppendSession = terminalAppendBinding ? store.getSession(terminalAppendBinding.bridgeSessionId) : null;
   const terminalAppendActiveRuntime = getSessionActiveRuntime(terminalAppendSession) || 'codex';
-  const terminalAppendCodexProvider = terminalAppendSession
-    ? resolveEffectiveCodexProvider(terminalAppendSession, terminalAppendBinding)
-    : null;
   const terminalAppendClaudeProvider = terminalAppendSession
     ? resolveEffectiveClaudeProvider(terminalAppendSession, terminalAppendBinding)
     : null;
@@ -5536,8 +5535,7 @@ async function handleMessage(
     && !isBridgeCommandText(rawText)
     && rawText.trim()
     && (
-      (terminalAppendActiveRuntime === 'codex' && terminalAppendCodexProvider === 'pty')
-      || (terminalAppendActiveRuntime === 'claude' && terminalAppendClaudeProvider === 'pty')
+      terminalAppendActiveRuntime === 'claude' && terminalAppendClaudeProvider === 'pty'
     )
   ) {
     const promptText = appendModelContextText(
@@ -5555,9 +5553,7 @@ async function handleMessage(
         summary: `[TRUNCATED] terminal provider append input truncated from ${promptText.length} chars`,
       });
     }
-    const appended = terminalAppendActiveRuntime === 'claude'
-      ? await injectPromptIntoClaudePtySession(terminalAppendBinding.bridgeSessionId, text)
-      : await injectPromptIntoActivePty(terminalAppendBinding.bridgeSessionId, text);
+    const appended = await injectPromptIntoClaudePtySession(terminalAppendBinding.bridgeSessionId, text);
     store.insertAuditLog({
       channelType: adapter.channelType,
       chatId: msg.address.chatId,
@@ -5566,7 +5562,7 @@ async function handleMessage(
       summary: [
         appended ? 'terminal append input delivered' : 'terminal append input receiver missing',
         `runtime=${terminalAppendActiveRuntime}`,
-        `provider=${terminalAppendActiveRuntime === 'claude' ? terminalAppendClaudeProvider : terminalAppendCodexProvider}`,
+        `provider=${terminalAppendClaudeProvider}`,
         `session=${terminalAppendBinding.bridgeSessionId}`,
         `chars=${text.length}`,
       ].join(' '),

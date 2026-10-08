@@ -201,7 +201,7 @@ export function buildSetupConfig(
       ...runtimeConfig,
       codex: {
         ...current.runtime.codex,
-        provider: tmuxAvailable ? (current.runtime.codex.provider || 'tmux') : 'sdk',
+        provider: 'tmux',
       },
       claude: {
         ...current.runtime.claude,
@@ -536,11 +536,11 @@ async function promptTmuxPrerequisite(): Promise<TmuxPrerequisiteResult> {
   if (!shouldInstall) {
     p.note(
       [
-        '本次向导将继续完成配置，但不会默认使用 tmux provider。',
-        '将写入 runtime.codex.provider=sdk，并把 Claude 默认 provider 写为 runtime.claude.provider=sdk。',
-        '之后安装 tmux 后，可通过 IM 命令 `/provider tmux` 或配置文件切回 tmux。',
+        '本次向导将继续完成配置；Codex 仍写入 runtime.codex.provider=tmux，app-server 可继续作为自动执行后端。',
+        'Claude 默认 provider 将写为 runtime.claude.provider=sdk。',
+        '安装 tmux 后，Codex 才能使用查看入口或兼容回退，Claude 也可通过 IM 命令 `/provider tmux` 切回 tmux。',
       ].join('\n'),
-      '改用 SDK provider',
+      '继续但暂不使用 tmux',
     );
     return 'sdk-fallback';
   }

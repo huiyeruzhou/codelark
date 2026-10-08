@@ -84,7 +84,7 @@ const uiConfigPayloadSchema = z.object({
   defaultModel: optionalString(),
   defaultProvider: z.preprocess(
     (value) => typeof value === 'string' ? value.trim().toLowerCase() : value,
-    z.union([codexProviderSchema, z.literal('')]),
+    z.union([z.literal('tmux'), z.literal('')]),
   ).optional(),
   defaultMode: z.enum(['normal', 'yolo']).optional(),
   codexSkipGitRepoCheck: z.boolean().optional(),
@@ -148,7 +148,7 @@ export function configV2ToPayload(config: ConfigV2, presentation: UiConfigPresen
     tmuxEchoInput: config.session.tmuxEchoInput,
     defaultWorkspaceRoot: config.bridge.defaultWorkspace === '~' ? os.homedir() : config.bridge.defaultWorkspace,
     defaultModel: config.runtime.codex.model || '',
-    defaultProvider: defaultProviderInherited ? '' : config.runtime.codex.provider || '',
+    defaultProvider: defaultProviderInherited ? '' : 'tmux',
     defaultProviderInherited,
     defaultProviderDefaultValue: presentation.defaultProviderDefaultValue || '',
     codexDefaultModel: readConfiguredCodexModel() || '',

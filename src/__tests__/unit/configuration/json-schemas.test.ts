@@ -96,7 +96,7 @@ describe('published JSON schemas', () => {
     const schema = readJson(path.join(schemasDir, 'config.v2.schema.json')) as any;
     assert.equal(schema.properties.schema_version.const, 2);
     assert.deepEqual(schema.$defs.runtime.properties.agent.enum, ['codex', 'claude', 'kimi', 'cursor', 'zcode']);
-    assert.deepEqual(schema.$defs.codex.properties.provider.enum, ['', 'sdk', 'pty', 'tmux']);
+    assert.deepEqual(schema.$defs.codex.properties.provider.enum, ['', 'tmux']);
     assert.deepEqual(schema.$defs.codex.properties.reasoning_effort.enum, ['minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra']);
     assert.deepEqual(schema.$defs.claude.properties.provider.enum, ['sdk', 'pty', 'tmux']);
     assert.deepEqual(schema.$defs.claude.properties.executable.enum, ['claude', 'ccr']);

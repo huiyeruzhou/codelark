@@ -4,7 +4,7 @@ import { isRuntimeProviderChoice } from '../../domain/session-runtime.js';
 
 export const MODE_OPTIONS_TEXT = '可选：`normal`（普通执行，默认） `yolo`（YOLO模式：允许 agent 无需审批绕过沙箱）。';
 export const RUNTIME_OPTIONS_TEXT = '可选：`codex`（OpenAI Codex，默认） `claude`（Claude Code） `kimi`（Kimi Code） `cursor`（Cursor Agent） `zcode`（ZCode）。`/provider` 选择使用何种方式运行 agent，不切换 runtime。';
-export const CODEX_PROVIDER_OPTIONS_TEXT = '可选：`sdk`（默认 SDK 路径） `pty`（跨平台 Codex TUI 路径） `tmux`（可 attach 的 Codex TUI/tmux 路径）';
+export const CODEX_PROVIDER_OPTIONS_TEXT = 'Codex Provider 仅支持 `tmux`；app-server 是自动执行后端，不是可切换的 Provider。';
 export const CLAUDE_PROVIDER_OPTIONS_TEXT = '可选：`tmux`（可 attach 的 Claude Code TUI/tmux 路径，默认） `pty`（Claude Code TUI/mirror 路径） `sdk`（Claude Agent SDK 原生事件路径）';
 export const REASONING_OPTIONS_TEXT = '可选：`1=minimal` `2=low` `3=medium` `4=high` `5=xhigh` `6=max` `7=ultra`';
 export const SANDBOX_OPTIONS_TEXT = '可选：`read-only` `workspace-write` `danger-full-access` `default`（回到全局默认）';
@@ -84,13 +84,15 @@ export function parseRuntimeProviderArg(raw: string): RuntimeProviderChoice | nu
   return isRuntimeProviderChoice(token) ? token : null;
 }
 
-export const parseCodexProviderArg = parseRuntimeProviderArg;
+export function parseCodexProviderArg(raw: string): 'tmux' | null {
+  return raw.trim().toLowerCase() === 'tmux' ? 'tmux' : null;
+}
 export const parseClaudeProviderArg = parseRuntimeProviderArg;
 
 export function formatTmuxProviderUnavailable(error: unknown): string | null {
   const message = error instanceof Error ? error.message : String(error);
   if (!/ENOENT|not found|cannot find|没有找到/i.test(message)) return null;
   return process.platform === 'win32'
-    ? '没有找到 tmux 兼容命令。Windows 上请安装 psmux 并确认兼容的 `tmux` 命令在 PATH 中；也可以先使用 `/provider pty`。'
-    : '没有找到 `tmux` 命令。请先安装 tmux 并确认它在 PATH 中；也可以先使用 `/provider pty`。';
+    ? '没有找到 tmux 兼容命令。Windows 上请安装 psmux 并确认兼容的 `tmux` 命令在 PATH 中。'
+    : '没有找到 `tmux` 命令。请先安装 tmux 并确认它在 PATH 中。';
 }

@@ -8,41 +8,30 @@ import { ClaudeTmuxProvider } from '../../runtime/claude/tmux-provider.js';
 import { KimiTmuxProvider } from '../../runtime/kimi/tmux-provider.js';
 import { CursorTmuxProvider } from '../../runtime/cursor/tmux-provider.js';
 import { ZcodeTmuxProvider } from '../../runtime/zcode/tmux-provider.js';
-import { CodexProvider } from './provider.js';
-import { CodexPtyProvider, shouldUseCodexPtyTui } from './pty-provider.js';
-import { CodexTmuxProvider, shouldUseCodexTmuxTui } from './tmux-provider.js';
+import { CodexTmuxProvider } from './tmux-provider.js';
 import { streamCodexAppServer } from './app-server-provider.js';
 
-export type CodexProviderChoice = RuntimeProviderChoice;
-
-function normalizeProviderChoice(value: unknown): CodexProviderChoice | null {
+function normalizeProviderChoice(value: unknown): RuntimeProviderChoice | null {
   return isRuntimeProviderChoice(value) ? value : null;
 }
 
 export class CodexRoutingProvider implements LLMProvider {
-  private readonly sdkProvider: LLMProvider;
   private readonly tmuxProvider: LLMProvider;
-  private readonly ptyProvider: LLMProvider;
   private readonly claudePtyProvider: LLMProvider;
   private readonly claudeSdkProvider: LLMProvider;
   private readonly claudeTmuxProvider: LLMProvider;
   private readonly kimiTmuxProvider: LLMProvider;
   private readonly cursorTmuxProvider: LLMProvider;
   private readonly zcodeTmuxProvider: LLMProvider;
-  private readonly defaultProvider: CodexProviderChoice;
 
-  constructor(pendingPerms?: PendingPermissions, defaultProvider?: CodexProviderChoice) {
-    this.sdkProvider = new CodexProvider(pendingPerms);
+  constructor(pendingPerms?: PendingPermissions, _legacyDefaultProvider?: unknown) {
     this.tmuxProvider = new CodexTmuxProvider(pendingPerms);
-    this.ptyProvider = new CodexPtyProvider(pendingPerms);
     this.claudePtyProvider = new ClaudePtyProvider(pendingPerms);
     this.claudeSdkProvider = new ClaudeSdkProvider();
     this.claudeTmuxProvider = new ClaudeTmuxProvider(pendingPerms);
     this.kimiTmuxProvider = new KimiTmuxProvider();
     this.cursorTmuxProvider = new CursorTmuxProvider();
     this.zcodeTmuxProvider = new ZcodeTmuxProvider();
-    this.defaultProvider = defaultProvider
-      || (shouldUseCodexPtyTui() ? 'pty' : shouldUseCodexTmuxTui() ? 'tmux' : 'sdk');
   }
 
   streamChat(params: StreamChatParams): ReadableStream<string> {
@@ -82,15 +71,12 @@ export class CodexRoutingProvider implements LLMProvider {
       if (claudeProvider === 'pty') return this.claudePtyProvider.streamChat(params);
       return this.claudeSdkProvider.streamChat(params);
     }
-    const choice = normalizeProviderChoice(params.codexProvider) || this.defaultProvider;
     console.log('[codex-routing-provider] Route Codex request:', {
       bridge_session_id: params.sessionId,
       runtime: params.runtime || null,
-      provider: choice,
+      provider: 'tmux',
       configured_provider: params.codexProvider || null,
-      default_provider: this.defaultProvider,
     });
-    const legacy = choice === 'tmux' ? this.tmuxProvider : choice === 'pty' ? this.ptyProvider : this.sdkProvider;
-    return streamCodexAppServer(params, legacy);
+    return streamCodexAppServer(params, this.tmuxProvider);
   }
 }

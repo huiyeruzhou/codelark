@@ -132,12 +132,12 @@ long-running 功能不能只测“成功派发 worker”。精炼用户故事至
 
 ### Runtime/provider 执行链路
 
-这些测试证明 bridge 与 Codex/Claude/Kimi provider 的协议边界稳定：事件流、session identity、tmux 生命周期、CLI 可执行文件、模型列表和错误事件。PTY provider 的专属测试已经移除，不再作为发布保证；配置迁移测试仍可保留旧 `pty` 值，防止读取历史配置时损坏数据。
+这些测试证明 bridge 与 Codex/Claude/Kimi provider 的协议边界稳定：事件流、session identity、tmux 生命周期、CLI 可执行文件、模型列表和错误事件。Codex 只发布 tmux provider，app-server 作为自动优先执行后端另行测试；旧 SDK/PTY 实现的隔离测试只保留兼容价值，不再代表可选运行路径。配置迁移测试仍可保留旧 `sdk/pty` 值，防止读取历史配置时损坏数据。
 
 | 测试文件 | 关注点 |
 | --- | --- |
-| `codex-provider.test.ts` | Codex SDK/SSE 事件转换、图片输入、错误事件和 provider 主路径。 |
-| `codex-routing-provider.test.ts` | Codex/Claude/Kimi provider 选择和 fallback，包含 Claude 默认 tmux 与 Kimi tmux。 |
+| `codex-provider.test.ts` | 已退出路由的 Codex SDK/SSE 适配层隔离兼容测试。 |
+| `codex-routing-provider.test.ts` | Codex app-server 优先、唯一 tmux fallback，以及 Claude/Kimi provider 选择。 |
 | `codex-cli-executable.test.ts`、`codex-models.test.ts` | Codex CLI 定位和模型列表缓存。 |
 | `codex-tmux-provider.test.ts`、`windows-codex-input.test.ts` | Codex tmux prompt 注入、启动参数、auto-enter、清理和事件输出。Windows 多行输入按正文粘贴、`C-j` 换行、最后一次 Enter 提交；受控 transport 覆盖 ConPTY 丢失 paste 边界时仍保持完整 Unicode、空行及尾随换行，真实 tmux 字节测试另查平台按键编码。原生 medium CJK 故事必须同时核验完整 prompt、一次模型请求及一条完整 rollout 用户消息，并保留实际注入命令。 |
 | `codex-session-index.test.ts`、`codex-session-mirror.test.ts` | Codex JSONL/session 索引读取、mirror cursor 对齐和事件重放。 |

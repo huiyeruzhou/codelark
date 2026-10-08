@@ -3,7 +3,7 @@
 CodeLark 把“使用哪个 AI 工具”和“如何驱动它”拆成两层。
 
 - 运行时：当前会话使用 Codex、Claude Code、Kimi Code、Cursor Agent 还是 ZCode。
-- 提供方：当前运行时通过 SDK、pty 或 tmux 运行。
+- 提供方：当前运行时通过哪个兼容层运行。Codex 固定为 tmux；app-server 是自动执行后端，不是并列提供方。
 
 日常 IM 操作流程见 [会话与配置工作流](../guide/session-workflows.md)。本文主要说明 provider 能力边界和实现模块。
 
@@ -11,9 +11,7 @@ CodeLark 把“使用哪个 AI 工具”和“如何驱动它”拆成两层。
 
 | 运行时 | 提供方 | 适用场景 | 输出路径 |
 | --- | --- | --- | --- |
-| Codex | `sdk` | 结构化事件、工具调用、直接 IM turn | 原生 SDK stream |
-| Codex | `pty` | 复用 Codex TUI 行为，观察真实终端 | JSONL mirror + pty screen |
-| Codex | `tmux` | 需要可 attach 的长会话 | tmux screen + JSONL mirror |
+| Codex | `tmux` | app-server 优先执行；tmux 提供可 attach 查看入口，并作为协议不可用时的唯一兼容回退 | app-server events；兼容回退时为 tmux screen + JSONL mirror |
 | Claude Code | `tmux` | 默认路径；需要可 attach 的 Claude Code TUI 长会话 | tmux screen + Claude JSONL mirror |
 | Claude Code | `pty` | 使用本机 `claude` 或 `ccr code` TUI | Claude JSONL mirror + pty screen |
 | Claude Code | `sdk` | 使用 Claude Agent SDK | SDK message stream |
@@ -24,7 +22,7 @@ CodeLark 把“使用哪个 AI 工具”和“如何驱动它”拆成两层。
 补充说明：
 
 - Claude Code 运行时默认使用 `tmux` 提供方，便于从 IM 和本机终端同时观察/接管 Claude Code TUI；可通过 `/provider pty` 或 `/provider sdk` 为当前会话切换。
-- Codex 运行时的默认提供方由全局配置和平台探测共同决定；需要可 attach 的长期终端会话时，优先选择 `tmux`。
+- Codex 运行时固定使用 `tmux` Provider。正常情况下 app-server 是唯一 writer，tmux 只是 `--remote` 查看入口；只有 app-server 明确不可用时才由 tmux 承担兼容执行。
 - Kimi Code 当前只支持 `tmux` 提供方。fresh session 只启动一次 `kimi -y`，等待 TUI 同时出现真实 `Session:`、输入框与 context footer 后保存 CLI 生成的 session id；只有恢复已绑定 session 才使用 `kimi -r <session> -y`。首条输入不以 `wire.jsonl` 已存在为前置条件：文件较早出现时从尾部续读，较晚出现时先提交 prompt，再从头读取首轮事件。已有 tmux 但 Bridge 身份缺失时，会先从 TUI 恢复 session id；普通消息只有在对应 prompt 已进入 `wire.jsonl` 并启动 turn 后才算转发成功，未确认时会重投一次并显式报错，不会静默显示成功。输出由 Kimi wire mirror 同步；状态区会展示截断后的「当前思考」。
 - Cursor Agent 当前只支持 `tmux` 提供方。fresh session 只启动一次 `agent --trust`，首轮提交后从 Cursor 后台创建的 `meta.json` 和 transcript JSONL 发现 chat UUID；恢复已绑定会话使用 `agent --resume <chatId>`。CodeLark 不解析 TUI ANSI 屏幕来取得回答。原生 Cursor slash 命令可用 `/tmux /<command>` 发送；首版假设 chat ID 固定，不自动跟随 `/new`、`/fork`、`/resume` 的身份变化。
 - ZCode 当前只支持 `tmux` 提供方，并要求 `zcode` 可执行文件位于 Bridge 的 PATH。CodeLark 启动 provider-owned tmux，当前普通回合由 Provider 从 ZCode SQLite 的 message/part/turn usage 直接读取正文、工具、usage 与成功/失败终态并更新同一张流式卡片；后台 mirror 对该交互 turn 做 suppression，只同步交互 turn 之外的本地变化。SQLite 使用 WAL 时同时监听主库和 WAL 的聚合快照。`//goal` 等转义后的原生 slash 由 ZCode TUI 自己解析；这类命令不产生 SQLite turn，因此结果从 TUI 屏幕回传到当前常规卡片。CodeLark 不逐条实现 ZCode slash 命令。
@@ -54,8 +52,6 @@ Codex tmux 的 fresh 首消息会在 workspace trust 后继续处理模型迁移
 | 主题 | 模块 |
 | --- | --- |
 | 提供方路由 | [src/runtime/codex/routing-provider.ts](https://github.com/huiyeruzhou/codelark/blob/main/src/runtime/codex/routing-provider.ts) |
-| Codex SDK | [src/runtime/codex/provider.ts](https://github.com/huiyeruzhou/codelark/blob/main/src/runtime/codex/provider.ts) |
-| Codex pty | [src/runtime/codex/pty-provider.ts](https://github.com/huiyeruzhou/codelark/blob/main/src/runtime/codex/pty-provider.ts) |
 | Codex tmux | [src/runtime/codex/tmux-provider.ts](https://github.com/huiyeruzhou/codelark/blob/main/src/runtime/codex/tmux-provider.ts) |
 | Claude tmux | [src/runtime/claude/tmux-provider.ts](https://github.com/huiyeruzhou/codelark/blob/main/src/runtime/claude/tmux-provider.ts) |
 | Kimi tmux | [src/runtime/kimi/tmux-provider.ts](https://github.com/huiyeruzhou/codelark/blob/main/src/runtime/kimi/tmux-provider.ts) |
@@ -70,13 +66,13 @@ Codex tmux 的 fresh 首消息会在 workspace trust 后继续处理模型迁移
 | 会话运行时设置 | [src/domain/session-runtime.ts](https://github.com/huiyeruzhou/codelark/blob/main/src/domain/session-runtime.ts) |
 | 交互 turn | [src/bridge/turn/interactive/runner.ts](https://github.com/huiyeruzhou/codelark/blob/main/src/bridge/turn/interactive/runner.ts) |
 
-## 镜像与 SDK 输出差异
+## app-server 与 tmux 输出差异
 
-SDK 提供方通常直接把结构化事件交给 IM turn。pty / tmux 提供方更接近真实终端使用，会依赖本地 JSONL mirror 把最终输出同步到 IM。
+app-server 直接把结构化事件交给 IM turn。协议不可用时的 tmux 兼容路径更接近真实终端使用，会依赖本地 JSONL mirror 把最终输出同步到 IM。
 
 tmux Provider 的普通文本会先转发到 tmux 中的当前 runtime TUI。Codex tmux 如需自动预创建 `codex_thread_id` 或恢复缺失的 tmux session，启动进度会更新到同一张 Provider 卡片；Claude、Kimi、Cursor 和 ZCode 分别从自身 JSONL、transcript 或 SQLite 同步结构化输出。显式发送 `/p tmux` 时会重建 provider-owned session；Kimi、Cursor 与 ZCode 由各自 provider 负责恢复稳定 session id 和注入输入。`/clear` 和 `/t archive` 会 best-effort 清理记录在 runtime state 中的 tmux provider session。
 
-tmux Provider 不把飞书图片或文件的二进制内容直接注入 TUI。用户发送附件后，CodeLark 会提示其引用原附件并补充处理指令；引用的飞书消息 id 和类型会作为模型上下文传入。遇到 `merge_forward` 等 adapter 未直接解析的引用类型时，上下文会明确要求模型使用 `lark-cli` 按消息 id 读取原消息。SDK Provider 的附件-only turn 仍使用内部默认指令触发附件处理，但该合成指令不显示为用户输入。
+tmux 兼容路径不把飞书图片或文件的二进制内容直接注入 TUI。用户发送附件后，CodeLark 会提示其引用原附件并补充处理指令；引用的飞书消息 id 和类型会作为模型上下文传入。遇到 `merge_forward` 等 adapter 未直接解析的引用类型时，上下文会明确要求模型使用 `lark-cli` 按消息 id 读取原消息。
 
 相关模块：
 

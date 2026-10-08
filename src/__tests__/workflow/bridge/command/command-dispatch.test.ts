@@ -6313,17 +6313,17 @@ enabled = true
         ...deps,
         reconcileMirrorSubscriptions: async () => {},
       });
-      assert.equal(getSessionCodexProvider(store.getSession(session.id)), 'sdk');
+      assert.equal(getSessionCodexProvider(store.getSession(session.id)), 'tmux');
       assert.equal(
         createConfigService({ migrate: false, env: {} }).get('runtime.codex.provider', {
           kind: 'session',
           sessionId: session.id,
         }),
-        'sdk',
+        'tmux',
       );
       assert.equal(store.getSession(session.id)?.runtime?.codex?.provider, undefined);
-      assert.equal(resolveEffectiveCodexProvider(store.getSession(session.id)), 'sdk');
-      assert.match(sent.at(-1)?.text || '', /已切换 Codex Provider/);
+      assert.equal(resolveEffectiveCodexProvider(store.getSession(session.id)), 'tmux');
+      assert.match(sent.at(-1)?.text || '', /仅支持 `tmux`/);
     }
   });
 
@@ -6679,8 +6679,7 @@ enabled = true
     );
     const initialProviderSelect = sent.at(-1)?.richCard?.form?.selects?.find((select: any) => select.elementId === 'defaultProvider');
     const providerOptions = initialProviderSelect?.options.map((option: any) => option.text) || [];
-    assert.ok(providerOptions.includes('sdk'));
-    assert.ok(providerOptions.includes('tmux'));
+    assert.deepEqual(providerOptions, ['跟随默认（默认值：tmux）', 'tmux']);
     assert.equal(initialProviderSelect?.selectedCallbackData, undefined);
     assert.equal(initialProviderSelect?.placeholder, '跟随默认（默认值：tmux）');
     assert.deepEqual(
@@ -7129,8 +7128,9 @@ enabled = true
       '/set defaultProvider sdk',
       deps,
     );
-    assert.match(sent.at(-1)?.text || '', /runtime\.codex\.provider.*sdk/s);
-    assert.equal(createConfigService({ migrate: false, env: {} }).get('runtime.codex.provider'), 'sdk');
+    assert.match(sent.at(-1)?.text || '', /配置未更新/s);
+    assert.match(sent.at(-1)?.text || '', /只支持 tmux/s);
+    assert.equal(createConfigService({ migrate: false, env: {} }).get('runtime.codex.provider'), 'tmux');
 
     await handleBridgeCommand(
       adapter,
@@ -7143,7 +7143,7 @@ enabled = true
       deps,
     );
     assert.match(sent.at(-1)?.text || '', /配置未更新/s);
-    assert.equal(createConfigService({ migrate: false, env: {} }).get('runtime.codex.provider'), 'sdk');
+    assert.equal(createConfigService({ migrate: false, env: {} }).get('runtime.codex.provider'), 'tmux');
 
     await handleBridgeCommand(
       adapter,
@@ -7316,11 +7316,9 @@ enabled = true
     );
     const providerSelect = sent.at(-1)?.richCard?.form?.selects?.find((select: any) => select.elementId === 'defaultProvider');
     const maintainedProviderOptions = providerSelect?.options
-      .filter((option: any) => option.callbackData !== 'pty')
       .map((option: any) => [option.text, option.callbackData]);
     assert.deepEqual(maintainedProviderOptions, [
       ['跟随默认（默认值：tmux）', 'default'],
-      ['sdk', 'sdk'],
       ['tmux', 'tmux'],
     ]);
     assert.equal(providerSelect?.selectedCallbackData, 'tmux');

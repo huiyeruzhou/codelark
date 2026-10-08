@@ -77,7 +77,7 @@ import {
   parseClaudeProviderArg,
 } from './runtime-settings-options.js';
 
-function setSessionCodexProviderToml(sessionId: string, provider: 'sdk' | 'tmux' | 'pty'): void {
+function setSessionCodexProviderToml(sessionId: string, provider: 'tmux'): void {
   createConfigService({ migrate: false }).set(
     { kind: 'session', sessionId },
     { runtime: { codex: { provider } } },
@@ -719,14 +719,12 @@ async function applyProviderCommand(options: ProviderCommandOptions): Promise<st
         ...formatCodexBackendStatusFields(backendStatus),
       ],
       backendStatus?.backend === 'app-server'
-        ? ['当前会话绑定 app-server；`/p tmux` 只建立或复用查看入口，不更换后端。',
-          '当前线程不支持切换到 sdk/pty 独立执行。']
+        ? ['当前会话绑定 app-server；`/p tmux` 只建立或复用查看入口，不更换后端。']
         : backendStatus?.backend === 'unstarted'
-          ? ['会话尚未启动，Provider 配置不代表后端已连接。',
-            '直接发送消息开始会话；实际后端以启动后的状态为准。']
+          ? [CODEX_PROVIDER_OPTIONS_TEXT,
+            '会话尚未启动；直接发送消息会优先连接 app-server，tmux 只用于查看或兼容回退。']
           : [CODEX_PROVIDER_OPTIONS_TEXT,
-            '当前会话还在使用旧版执行方式；启动或恢复时会按有效配置选择后端。',
-            '发送 `/provider sdk|pty|tmux` 或 `/p sdk|pty|tmux` 切换；修改从下一轮 Codex 请求开始生效。'],
+            '当前会话还在使用旧版 tmux 执行方式；启动或恢复时会优先迁移到 app-server。'],
       options.markdown,
     );
   }
@@ -734,50 +732,24 @@ async function applyProviderCommand(options: ProviderCommandOptions): Promise<st
   if (!requestedProvider) {
     return buildCommandFields(
       'Codex Provider 用法',
-      [['命令', '`/provider sdk|pty|tmux` 或 `/p sdk|pty|tmux`']],
+      [['命令', '`/provider tmux` 或 `/p tmux`']],
       [CODEX_PROVIDER_OPTIONS_TEXT],
       options.markdown,
     );
   }
   const currentProvider = resolveEffectiveCodexProvider(session, binding);
-  if (requestedProvider !== 'tmux' && (session.runtime?.codex?.appServerEndpoint || getCodexAppServerSession(session.id))) {
-    return '当前线程固定使用共享 app-server，不能切换到独立 writer；可继续对话或使用 /clear 新建会话。';
-  }
-  if (requestedProvider === 'tmux') {
-    const protocol = await prepareCodexAppServerForBinding(options.store, binding, session);
-    if (protocol) {
-      const currentBinding = options.store.getChannelChat(options.msg.address.channelType, options.msg.address.chatId);
-      if (currentBinding?.bridgeSessionId !== session.id) {
-        await releaseCodexAppServerSession(session.id);
-        return '聊天已切换，已解除旧线程的本端订阅。';
-      }
-      setSessionCodexProviderToml(session.id, 'tmux');
-      scheduleMirrorSubscriptionsBestEffort(options.deps, 'app-server thread prepared');
-      void scheduleCodexAppServerView({ store: options.store, binding, session, handle: protocol,
-        notify: (message) => options.deps.notifyBackgroundOperation?.(message, { force: true }) });
-      return '共享 Codex 线程已就绪，可直接发送消息；正在后台准备 tmux 查看入口。';
+  const protocol = await prepareCodexAppServerForBinding(options.store, binding, session);
+  if (protocol) {
+    const currentBinding = options.store.getChannelChat(options.msg.address.channelType, options.msg.address.chatId);
+    if (currentBinding?.bridgeSessionId !== session.id) {
+      await releaseCodexAppServerSession(session.id);
+      return '聊天已切换，已解除旧线程的本端订阅。';
     }
-  }
-  if (requestedProvider !== 'tmux' && requestedProvider !== currentProvider && sessionHasActiveRuntimeTurn(options.deps, session)) {
-    return buildRuntimeSwitchWhileRunningResponse({
-      commandLabel: '`/provider`',
-      runtime: 'codex',
-      provider: requestedProvider,
-      markdown: options.markdown,
-    });
-  }
-  if (requestedProvider === 'sdk') {
-    setSessionCodexProviderToml(session.id, 'sdk');
-    scheduleMirrorSubscriptionsBestEffort(options.deps, 'provider sdk switch');
-    return buildCommandFields(
-      '已切换 Codex Provider',
-      [
-        ['模式', formatSessionMode(binding, options.store.getSession(session.id))],
-        ['Provider', 'sdk'],
-      ],
-      ['之后的普通消息会回到 SDK Provider；tmux 会话不会自动关闭。'],
-      options.markdown,
-    );
+    setSessionCodexProviderToml(session.id, 'tmux');
+    scheduleMirrorSubscriptionsBestEffort(options.deps, 'app-server thread prepared');
+    void scheduleCodexAppServerView({ store: options.store, binding, session, handle: protocol,
+      notify: (message) => options.deps.notifyBackgroundOperation?.(message, { force: true }) });
+    return '共享 Codex 线程已就绪，可直接发送消息；正在后台准备 tmux 查看入口。';
   }
   const runtimeConfig = resolveSessionRuntimeConfig(binding, session);
   const mode = runtimeConfig.mode;
@@ -810,28 +782,6 @@ async function applyProviderCommand(options: ProviderCommandOptions): Promise<st
     if (staleStart) return staleStart;
     didBootstrapThread = true;
     options.store.updateSessionCodexThreadId(session.id, threadId);
-  }
-  if (requestedProvider === 'pty') {
-    options.store.updateSession(session.id, mergeSessionRuntimeUpdates(
-      setSessionCodexThreadIdUpdate(threadId),
-    ));
-    setSessionCodexProviderToml(session.id, 'pty');
-    scheduleMirrorSubscriptionsBestEffort(options.deps, 'provider pty switch');
-    return buildCommandFields(
-      '已切换 Codex Provider',
-      [
-        ['模式', mode],
-        ['Provider', 'pty'],
-        ['codex_thread_id', threadId],
-      ],
-      [
-        didBootstrapThread
-          ? '已在本地预创建 Codex thread；之后普通消息会通过 pty 启动 Codex TUI 并 resume 当前 thread。'
-          : '之后普通消息会通过 pty 启动 Codex TUI 并 resume 当前 thread。',
-        '`/tmux-*` 命令仍只控制真实 tmux session。',
-      ],
-      options.markdown,
-    );
   }
   const tmuxSessionName = codexTmuxSessionName(threadId);
   let startResult: { existed: boolean; selectionPrompts?: unknown[]; updateRestartCount?: number };

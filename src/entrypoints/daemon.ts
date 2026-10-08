@@ -19,7 +19,6 @@ import { createConfigService } from '../configuration/service.js';
 import { JsonFileStore } from '../storage/json-store.js';
 import { exportRuntimeSettings } from '../runtime/config-projections.js';
 import { PendingPermissions } from '../runtime/permission-gateway.js';
-import type { CodexProviderChoice } from '../runtime/codex/routing-provider.js';
 import { setupLogger } from '../shared/logger.js';
 import { applyStandardLarkCliEnv } from '../shared/lark-cli-env.js';
 import { releaseBridgeInstanceLock, tryAcquireBridgeInstanceLock } from '../local-service/instance-lock.js';
@@ -48,10 +47,9 @@ const PROXY_ENV_KEYS = [
 
 async function resolveProvider(
   pendingPerms: PendingPermissions,
-  defaultProvider?: CodexProviderChoice,
 ): Promise<LLMProvider> {
   const { CodexRoutingProvider } = await import('../runtime/codex/routing-provider.js');
-  return new CodexRoutingProvider(pendingPerms, defaultProvider);
+  return new CodexRoutingProvider(pendingPerms);
 }
 
 interface StatusInfo {
@@ -139,10 +137,9 @@ async function main(): Promise<void> {
 
   const store = new JsonFileStore(settings, { dynamicSettings: true });
   const pendingPerms = new PendingPermissions();
-  const defaultCodexProvider = config.runtime.codex.provider || undefined;
-  const llm = await resolveProvider(pendingPerms, defaultCodexProvider as CodexProviderChoice | undefined);
+  const llm = await resolveProvider(pendingPerms);
   console.log(`${LOG_PREFIX} Runtime: ${config.runtime.agent}`);
-  console.log(`${LOG_PREFIX} Default Codex provider: ${defaultCodexProvider || 'auto'}`);
+  console.log(`${LOG_PREFIX} Codex provider: tmux (app-server preferred)`);
 
   const gateway = {
     resolvePendingPermission: (id: string, resolution: { behavior: 'allow' | 'deny'; message?: string }) =>

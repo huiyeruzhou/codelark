@@ -120,7 +120,7 @@ export function getSessionCodexMode(session: SessionRuntimeLike | null | undefin
 export function getSessionCodexProvider(session: SessionRuntimeLike | null | undefined): BridgeSessionCodexRuntimeState['provider'] | undefined {
   if (isClaudeRuntime(session) || isKimiRuntime(session) || isCursorRuntime(session) || isZcodeRuntime(session)) return undefined;
   const provider = getSessionTomlOverride<string>(session, 'runtime.codex.provider');
-  return isRuntimeProviderChoice(provider) ? provider : undefined;
+  return isRuntimeProviderChoice(provider) ? 'tmux' : undefined;
 }
 
 export function getSessionCodexSandboxMode(session: SessionRuntimeLike | null | undefined): BridgeSessionCodexRuntimeState['sandboxMode'] | undefined {

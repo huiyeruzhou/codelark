@@ -6,7 +6,7 @@ import type {
   ClaudeExecutable,
   ClaudeProviderChoice,
   ClaudeReasoningEffort,
-  CodexProviderChoice,
+  LegacyCodexProviderChoice,
   CodexReasoningEffort,
   CodexSandboxMode,
   RuntimeProvider,
@@ -33,7 +33,7 @@ export interface ClaudeRuntimeDefaultsConfig {
 }
 
 export interface BridgeControlConfig {
-  defaultCodexProvider?: CodexProviderChoice;
+  defaultCodexProvider?: LegacyCodexProviderChoice;
 }
 
 export interface GlobalBridgeConfig {
@@ -67,7 +67,7 @@ export interface Config {
   runtime: RuntimeConfig['provider'];
   defaultWorkspaceRoot?: string;
   defaultModel?: string;
-  defaultProvider?: CodexProviderChoice;
+  defaultProvider?: LegacyCodexProviderChoice;
   defaultMode: string;
   historyMessageLimit?: number;
   streamStatusIdleStartSeconds?: number;

@@ -367,16 +367,16 @@ const SETTING_DEFINITIONS: SettingDefinition[] = [
     group: 'runtime.codex',
     aliases: ['provider', 'codexProvider'],
     label: 'provider',
-    usage: '/set defaultProvider sdk|pty|tmux|default',
+    usage: '/set defaultProvider tmux|default',
     control: 'select',
     homeDefaultOption: selectOption('跟随默认', 'default'),
-    options: [selectOption('sdk'), selectOption('pty'), selectOption('tmux')],
-    read: (config) => config.runtime.codex.provider || 'tmux',
+    options: [selectOption('tmux')],
+    read: () => 'tmux',
     write(rawValue) {
       const token = rawValue.trim().toLowerCase();
       if (token === 'default') return { ok: true, patch: {}, unsetPath: 'runtime.codex.provider' };
-      if (token === 'sdk' || token === 'tmux' || token === 'pty') return patch({ runtime: { codex: { provider: token } } });
-      return { ok: false, message: '默认 Codex Provider 运行方式必须是 sdk、pty 或 tmux，也可以用 default 跟随产品默认值。' };
+      if (token === 'tmux') return patch({ runtime: { codex: { provider: token } } });
+      return { ok: false, message: '默认 Codex Provider 运行方式只支持 tmux，也可以用 default 跟随产品默认值。' };
     },
   },
   {

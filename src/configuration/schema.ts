@@ -4,6 +4,9 @@ import { z } from 'zod';
 // sources.ts 负责读写文件，service.ts 负责调用链路，这里只维护结构和类型。
 
 export const runtimeAgentSchema = z.enum(['codex', 'claude', 'kimi', 'cursor', 'zcode']);
+// Keep historical values parseable so existing TOML files still load. Runtime
+// resolution normalizes every Codex value to tmux; new user-facing writes only
+// accept tmux.
 export const codexProviderSchema = z.enum(['sdk', 'tmux', 'pty']);
 export const claudeProviderSchema = z.enum(['sdk', 'pty', 'tmux']);
 export const kimiProviderSchema = z.enum(['tmux']);

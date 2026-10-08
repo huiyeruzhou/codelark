@@ -11,7 +11,9 @@ export type ClaudeReasoningEffort = z.infer<typeof claudeReasoningEffortSchema>;
 export type CodexSandboxMode = RuntimeSandboxMode;
 export type CodexReasoningEffort = RuntimeReasoningEffort;
 export type RuntimeProvider = 'codex' | 'claude' | 'kimi' | 'cursor' | 'zcode';
-export type CodexProviderChoice = 'sdk' | 'tmux' | 'pty';
+export type CodexProviderChoice = 'tmux';
+/** Read-only compatibility shape for configuration written before Codex became tmux-only. */
+export type LegacyCodexProviderChoice = 'sdk' | 'tmux' | 'pty';
 export type ClaudeProviderChoice = 'pty' | 'sdk' | 'tmux';
 export type ClaudeExecutable = 'claude' | 'ccr';
 export type ClaudePermissionMode = 'default' | 'acceptEdits' | 'bypassPermissions' | 'plan';
@@ -58,7 +60,7 @@ export function normalizeRuntimeProvider(value: unknown): RuntimeProvider {
 export function normalizeCodexProviderChoice(value: unknown): CodexProviderChoice | undefined {
   if (typeof value !== 'string') return undefined;
   const normalized = value.trim().toLowerCase();
-  if (normalized === 'sdk' || normalized === 'tmux' || normalized === 'pty') return normalized;
+  if (normalized === 'sdk' || normalized === 'tmux' || normalized === 'pty') return 'tmux';
   return 'tmux';
 }
 
