@@ -99,6 +99,26 @@ describe('delivery-pipeline', () => {
     assert.equal((await ordinary.completion).messageId, 'ordinary-message');
   });
 
+  it('creates a new chat message for synthetic manual-ingress replies', async () => {
+    const adapter = new FakeAdapter();
+    const sent: OutboundMessage[] = [];
+    adapter.send = async (message) => {
+      sent.push(message);
+      return { ok: true, messageId: 'manual-command-response' };
+    };
+
+    const result = await deliver(adapter, {
+      address: { channelType: 'feishu-default', chatId: 'chat-manual-command' },
+      text: '命令已完成',
+      replyToMessageId: 'manual:stable-command-id',
+    });
+
+    assert.equal(result.ok, true);
+    assert.equal(sent.length, 1);
+    assert.equal(sent[0]?.replyToMessageId, undefined);
+    assert.equal(sent[0]?.text, '命令已完成');
+  });
+
   it('skips text after card finalization but still delivers attachments', async () => {
     const adapter = new FakeAdapter();
     const calls: Array<{ text: string; attachmentCount: number }> = [];

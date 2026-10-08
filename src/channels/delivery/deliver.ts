@@ -401,6 +401,14 @@ export async function deliver(
 ): Promise<SendResult> {
   const { store } = getBridgeContext();
 
+  // Manual ingress is injected by the local control socket and therefore has
+  // no platform message that can be replied to. Keep its synthetic ID for
+  // tracing/idempotency, but always create command responses in the target
+  // chat instead of sending an invalid Feishu reply request.
+  if (message.replyToMessageId?.startsWith('manual:')) {
+    message = { ...message, replyToMessageId: undefined };
+  }
+
   // Dedup check
   if (opts?.dedupKey) {
     if (store.checkDedup(opts.dedupKey)) {

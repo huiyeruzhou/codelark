@@ -255,6 +255,22 @@ describe('agent message manual ingress', () => {
     assert.doesNotMatch(JSON.stringify(fallbackCard), /Bot/u);
     adapter.mergeAgentMessageEvents = true;
 
+    await sendAgentMessageFromBinding(source.id, {
+      target: 'current',
+      text: '/help',
+      idempotencyKey: 'manual-help-command',
+    });
+    const manualHelpCommand = await adapter.consumeOne();
+    assert.ok(manualHelpCommand);
+    await _testOnly.handleMessage(adapter, manualHelpCommand);
+    await _testOnlyWaitForDeliveryQueuesForTests(adapter);
+    assert.match(adapter.sentMessages.at(-1)?.text || '', /命令速览/u);
+    assert.equal(
+      adapter.sentMessages.at(-1)?.replyToMessageId,
+      undefined,
+      'manual slash-command responses must create a chat message instead of replying to a synthetic ID',
+    );
+
     const delegatedWorkDir = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-agent-delegate-'));
     await sendAgentMessageFromBinding(source.id, {
       target: 'current',
