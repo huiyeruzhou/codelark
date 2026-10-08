@@ -202,7 +202,7 @@ export function renderUiShellHtml(): string {
             <div id="appServerList" class="info-list" aria-live="polite"></div>
             <p class="small" id="appServerObservedAt"></p>
           </section>
-          <p class="page-copy">服务通常在新会话第一次发送消息时启动。此页面每 5 秒读取一次状态；打开或刷新页面不会启动服务。Desktop 是否已连接需要在 Desktop 中确认。</p>
+          <p class="page-copy">服务按需启动。此页面每 5 秒读取一次状态；打开或刷新页面不会启动服务。Desktop 是否已连接需要在 Desktop 中确认。</p>
         </section>
 
         <section class="page" data-page="sessions">
@@ -486,7 +486,7 @@ export function renderUiShellHtml(): string {
                 <p class="panel-subtitle">Codex 连接方式</p>
                 <div class="field-row triple">
                   <label>
-                    <span class="field-title">旧执行方式 / Codex Provider <span class="help-tip" tabindex="0" data-tip="设置旧会话的 SDK、PTY 或 tmux 适配器。新会话优先使用 app-server；协议会话的 tmux 只用于查看，/p tmux 不会迁移已有旧线程。">?</span></span>
+                    <span class="field-title">旧执行方式 / Codex Provider <span class="help-tip" tabindex="0" data-tip="Provider 设置用于旧执行方式的 SDK、PTY 或 tmux 适配器。默认优先通过 app-server 执行；协议会话的 tmux 用于查看。">?</span></span>
                     <select id="defaultProvider">
                       <option value="">跟随默认</option>
                       <option value="sdk">sdk</option>
@@ -2499,7 +2499,7 @@ export function renderUiShellHtml(): string {
         const labels = { 'not-started': '尚未启动', starting: '正在启动', running: '已启动', stopped: '已停止', failed: '服务异常', unsupported: '当前 Codex 不支持', unknown: '启动状态未确认' };
         const connections = { connecting: '连接中', ready: '已连接', disconnected: '连接已断开', unknown: '连接未确认' };
         const owners = { bridge: '当前 CodeLark 实例', launchd: 'macOS launchd', external: '外部服务', unknown: '尚未确定' };
-        setText('appServerPolicy', status && status.codexDefault === 'app-server-auto' ? '新会话优先使用 app-server；旧会话保留原执行方式。' : status && status.codexDefault === 'legacy' ? '已关闭新会话自动启用 app-server。' : '新会话默认策略未确认。');
+        setText('appServerPolicy', status && status.codexDefault === 'app-server-auto' ? '默认优先使用 app-server；实际后端以会话状态为准。' : status && status.codexDefault === 'legacy' ? '已关闭自动启用 app-server。' : '默认后端策略未确认。');
         setText('appServerSummary', !services ? '状态不可用' : services.every((service) => service.state === 'not-started') ? '尚未启动' : services.length + ' 个服务');
         setText('appServerNotice', !services
           ? '未取得当前服务状态。Bridge 已停止、连接不可用或版本较旧时，无法判断 app-server 是否启动。'
@@ -2998,7 +2998,7 @@ export function renderUiShellHtml(): string {
         const backendNotice = document.getElementById('sessionConfigBackendStatus');
         backendNotice.hidden = !backend;
         backendNotice.textContent = backend ? [backend.backendLabel, backend.connectionLabel, backend.activityLabel, backend.terminalLabel].filter(Boolean).join(' · ')
-          + (backend.backend === 'app-server' ? '。/p tmux 打开查看终端，模型等设置从下一轮应用。' : backend.backend === 'unstarted' ? '。首次输入时确定执行后端。' : '。/p tmux 重建旧终端，不会迁移到 app-server。') : '';
+          + (backend.backend === 'app-server' ? '。/p tmux 打开查看终端，模型等设置从下一轮应用。' : backend.backend === 'unstarted' ? '。首次输入时确定执行后端。' : '。启动或恢复时会按有效配置选择后端。') : '';
         modal.hidden = false;
       }
 

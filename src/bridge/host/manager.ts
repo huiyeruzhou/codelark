@@ -3018,6 +3018,8 @@ function splitInboundCommandText(rawText: string): { resolvedCommand: string; ar
 function sessionMutatingCommandLane(rawText: string): { jobKind: string; blocksConversation: boolean } | null {
   const { resolvedCommand, args } = splitInboundCommandText(rawText);
   if (SESSION_CONFIG_BARRIER_COMMANDS.has(resolvedCommand)) {
+    // 无参数只查询当前选择，不等待正在执行或等待用户答复的轮次。
+    if (!args) return null;
     return {
       jobKind: `command:${resolvedCommand.slice(1)}`,
       blocksConversation: true,
@@ -3123,7 +3125,8 @@ function adapterImmediateLane(msg: InboundMessage, category: 'channel-event' | '
       : isPendingClearConfirmationReply(msg.address, msg.text) ? '/clear' : undefined;
   if (immediateJobCommandText) {
     const { resolvedCommand, args } = splitInboundCommandText(immediateJobCommandText);
-    if (SESSION_SETTINGS_COMMANDS.has(resolvedCommand)) {
+    if (SESSION_SETTINGS_COMMANDS.has(resolvedCommand)
+      || (!args && SESSION_CONFIG_BARRIER_COMMANDS.has(resolvedCommand))) {
       const binding = getBridgeContext().store.getChannelChat(msg.address.channelType, msg.address.chatId);
       return {
         laneKey: `job:settings:${binding?.bridgeSessionId || `${msg.address.channelType}:${msg.address.chatId}`}`,

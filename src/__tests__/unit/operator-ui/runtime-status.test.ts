@@ -84,7 +84,7 @@ describe('app-server status observations', () => {
     const legacy = { ...binding, codexBackend: { backend: 'legacy' } };
     const result = projectRuntimeStatus('codex', [], [legacy], {}, { codexDefault: 'app-server-auto', sessions: {} });
     assert.equal(result.state, '运行中 1');
-    assert.equal(result.defaultBackendLabel, '新会话优先 app-server');
+    assert.equal(result.defaultBackendLabel, '默认优先 app-server');
     assert.equal(result.backendSummary, 'app-server 0 · 旧执行方式 1 · 尚未启动 0');
   });
 });

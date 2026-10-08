@@ -1344,16 +1344,22 @@ describe('real codex tmux provider e2e', () => {
         .map((line) => JSON.parse(line))
         .flatMap((entry) => {
           if (entry.type === 'event_msg' && entry.payload?.type === 'user_message') {
-            return typeof entry.payload.message === 'string' ? [entry.payload.message] : [];
+            return typeof entry.payload.message === 'string' ? [{ kind: entry.type, message: entry.payload.message as string }] : [];
           }
           if (entry.type === 'response_item' && entry.payload?.type === 'message' && entry.payload.role === 'user') {
-            return [entry.payload.content?.filter((part: { type?: string; text?: unknown }) => part.type === 'input_text')
-              .map((part: { text?: unknown }) => typeof part.text === 'string' ? part.text : '').join('') || ''];
+            return [{ kind: entry.type, message: entry.payload.content?.filter((part: { type?: string; text?: unknown }) => part.type === 'input_text')
+              .map((part: { text?: unknown }) => typeof part.text === 'string' ? part.text : '').join('') || '' }];
           }
           return [];
         })
-        .filter((message) => message.includes('clk-medium-cjk-start') || message.includes('clk-medium-cjk-end'));
-      assert.deepEqual(mediumMessages, [mediumPrompt], 'rollout must contain exactly one complete medium user message');
+        .filter(({ message }) => message.includes('clk-medium-cjk-start') || message.includes('clk-medium-cjk-end'));
+      assert(mediumMessages.length > 0, 'rollout must contain the medium user message');
+      // Codex may write both a user event and a response item for one input.
+      // Check each record type independently so duplicate inputs still fail.
+      for (const kind of ['event_msg', 'response_item']) {
+        const messages = mediumMessages.filter((entry) => entry.kind === kind).map((entry) => entry.message);
+        if (messages.length) assert.deepEqual(messages, [mediumPrompt], `${kind} must contain exactly one complete medium user message`);
+      }
 
       await _testOnly.handleMessage(adapter, inboundMessage(address, longPrompt, 'incoming-real-long-prompt'));
 

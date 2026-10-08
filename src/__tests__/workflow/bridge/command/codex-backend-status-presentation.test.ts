@@ -164,7 +164,7 @@ it('keeps legacy tmux visibly distinct from an app-server view', async (t) => {
   assert.equal(readCodexBackendStatus(f.current()).backend, 'legacy');
   assert.equal(readCodexBackendStatus(f.current()).terminal, 'execution');
   await assertCommandsAgree(f);
-  assert.match((await f.command('/p')).text, /原线程的 TUI，不迁移到 app-server/);
+  assert.match((await f.command('/p')).text, /当前会话还在使用旧版执行方式；启动或恢复时会按有效配置选择后端/);
   for (const [runtimeStatus, expected] of [['running', '运行中'], ['queued', '排队中（3）'], ['idle', '空闲']] as const) {
     f.store.updateSession(f.session.id, { runtime_status: runtimeStatus, queued_count: 3 });
     for (const command of ['/', '/current-runtime kimi']) {

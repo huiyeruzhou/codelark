@@ -91,8 +91,8 @@ export const projectRuntimeStatusBrowserSource = String.raw`function projectRunt
     })));
     common.backendSummary = 'app-server ' + counts[0] + ' · 旧执行方式 ' + counts[1] + ' · 尚未启动 ' + counts[2];
     common.defaultBackendLabel = runtimeStatus && runtimeStatus.codexDefault === 'app-server-auto'
-      ? '新会话优先 app-server'
-      : runtimeStatus && runtimeStatus.codexDefault === 'legacy' ? '新会话使用旧执行方式' : '新会话默认后端未确认';
+      ? '默认优先 app-server'
+      : runtimeStatus && runtimeStatus.codexDefault === 'legacy' ? '默认使用旧执行方式' : '默认后端未确认';
   }
   if (running > 0) return { ...common, tone: 'running', state: '运行中 ' + running };
   if (waiting > 0) return { ...common, tone: 'attention', state: '等待确认或输入 ' + waiting };

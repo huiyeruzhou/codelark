@@ -725,7 +725,7 @@ async function applyProviderCommand(options: ProviderCommandOptions): Promise<st
           ? ['会话尚未启动，Provider 配置不代表后端已连接。',
             '直接发送消息开始会话；实际后端以启动后的状态为准。']
           : [CODEX_PROVIDER_OPTIONS_TEXT,
-            '当前会话保留旧版执行路径；`/p tmux` 启动或重建原线程的 TUI，不迁移到 app-server。',
+            '当前会话还在使用旧版执行方式；启动或恢复时会按有效配置选择后端。',
             '发送 `/provider sdk|pty|tmux` 或 `/p sdk|pty|tmux` 切换；修改从下一轮 Codex 请求开始生效。'],
       options.markdown,
     );
