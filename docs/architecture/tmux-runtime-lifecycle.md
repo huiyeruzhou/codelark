@@ -126,6 +126,24 @@ Codex 0.160 的启动菜单有两种紧凑 footer：目录信任为 `enter conti
 
 通知转换为既有 BridgeMirrorRecord，复用现有卡片、投递重试和 TurnCoordinator。协议线程只允许这一份事件源决定进度和终态，不能再由 JSONL 与抓屏平行生成结束事件。其他 runtime 与旧 Codex 继续使用原记录来源。进程关闭、静默超时、编辑框出现、JSONL 暂无增量都不是协议轮次完成的证据。
 
+#### 配置的生效范围与尚未完成的迁移
+
+2026-10-08 对本机 Codex 0.153.4 实际生成的公开及实验 JSON schema 做了核对，并运行独立 app-server + 隔离模型实验：`thread/settings/update` 可以不发送用户消息地修改下一轮设置，`thread/settings/updated` 返回完整有效设置。同一进程和线程内更改 model、cwd、effort、approvalPolicy、sandboxPolicy 后，新请求采用新设置；活动轮次期间再次更改只影响后续新轮次，配置文件不变。该接口是实验能力，接入时必须按服务器是否支持判断，不能仅比较版本号。
+
+| 参数 | 适用范围 |
+| --- | --- |
+| model、cwd、effort、approvalPolicy、sandboxPolicy、serviceTier、personality、summary | 可用线程设置接口修改下一轮；旧接口也可在 `turn/start` 携带覆盖。YOLO 是审批与沙箱策略的组合，不是必须重启的开关。 |
+| modelProvider、baseInstructions、developerInstructions、创建线程时注册的 dynamicTools | 不在通用线程设置更新参数中；需按该参数的线程加载合同处理，不能以 warm resume 接受字段就宣称运行中已更新。 |
+| MCP 服务配置 | 使用专门的 `config/mcpServer/reload`；不等同于重启整个后端。 |
+| Codex 可执行文件、CODEX_HOME、监听地址、进程自身环境 | 进程启动配置；需要重启或选择另一后端，不允许悄悄迁移已有线程。 |
+| 已提交的模型请求、已启动的工具命令 | 不能追溯改变。实验 `turn/settings/update` 有消费者与模型指令限制，不作为普通配置命令的默认实现。 |
+
+`config/batchWrite` 保存磁盘配置，与当前线程设置不同。即使使用 `reloadUserConfig`，官方说明也排除了已有线程的 model、reasoning effort、service tier 等默认值重载，不能将“文件已保存”呈现成“当前线程已生效”。
+
+当前迁移尚未闭环：slash 命令、配置表单和 Web 设置共用存储但不共用校验与应用用例；表单存在逐字段写入，命令仍可能等待旧会话执行队列；每轮传完整 CodeLark 配置会覆盖其他客户端更改。下一阶段必须让这些入口共用一次完整校验与配置变更，以服务器有效设置、等待应用的变更、服务端拒绝结果为统一输出。`/model` 的局部限制修复不代表这套迁移已经完成。
+
+默认 app-server 与自动接入 Desktop 是两个决策。现有 macOS 共享服务由 launchd 管理；普通 CodeLark 退出不会结束它。Codex 原生 daemon 的官方当前合同要求 standalone 安装且仅支持 Unix，不能把 npm CLI 的存在等同于已具备可用的后台服务。通用默认后端尚未交付；2026-10-08 试写的自有 PID/启动锁方案已经撤回，没有部署到 kasumi。
+
 #### 连接与提交恢复
 
 连接从 connecting 进入 ready；断开后进入 disconnected，活动轮次状态为 unknown。重连只执行初始化、恢复订阅和读取线程，不重发用户输入。恢复时先安装事件监听，再 resume/read，并按稳定 item/turn id 合并通知与快照，避免读请求期间的新事件被旧快照覆盖。

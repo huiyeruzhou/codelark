@@ -84,12 +84,18 @@ const SANDBOX_OPTIONS_TEXT = '可选：`read-only` `workspace-write` `danger-ful
 const NETWORK_OPTIONS_TEXT = '可选：`on`/`true` 开启网络，`off`/`false` 关闭网络，`default` 回到全局默认。';
 const CLAUDE_PTY_RUNTIME_UPDATE_NOTE = '已保存为当前会话的 Claude Code 启动配置；如果 Claude Code pty 已经启动，不会向运行中的 TUI 注入切换命令，下一条普通消息会按新参数启动或重启 Claude Code pty。';
 const CODEX_RUNTIME_UPDATE_NOTE = '修改从下一轮 Codex 请求开始生效；正在运行的任务请先 `/stop` 后重发。';
+const CODEX_APP_SERVER_UPDATE_NOTE = '修改从下一次由 IM 发起的新轮次（turn）开始生效；当前活动轮次及其运行中追加保持原设置。';
+
+function hasBoundCodexAppServer(session: BridgeSession | null | undefined): boolean {
+  return Boolean(session?.runtime?.codex?.appServerEndpoint);
+}
 
 function codexRuntimeUpdateNotes(
   session: BridgeSession | null | undefined,
   binding?: ChannelChat | null,
   notes: string[] = [],
 ): string[] {
+  if (hasBoundCodexAppServer(session)) return [...notes, CODEX_APP_SERVER_UPDATE_NOTE];
   const result = [...notes, CODEX_RUNTIME_UPDATE_NOTE];
   if (!isTuiProviderSession(session, binding)) return result;
   const provider = resolveEffectiveCodexProvider(session, binding);
@@ -107,7 +113,7 @@ function codexRuntimeUpdateTitle(
   binding: ChannelChat | null | undefined,
   baseTitle: string,
 ): string {
-  if (!isTuiProviderSession(session, binding)) return baseTitle;
+  if (hasBoundCodexAppServer(session) || !isTuiProviderSession(session, binding)) return baseTitle;
   const provider = resolveEffectiveCodexProvider(session, binding);
   return `${baseTitle}，请输入/p ${provider}重启生效`;
 }
@@ -394,7 +400,8 @@ export function handleReasoningCommand(options: {
     return buildCommandFields(
       '当前思考级别',
       [['级别', formatReasoningEffort(resolveEffectiveReasoningEffort(session, options.binding))]],
-      [REASONING_OPTIONS_TEXT, '发送 `/r 6`、`/r max` 或 `/r ultra` 可切换。'],
+      [REASONING_OPTIONS_TEXT, '发送 `/r 6`、`/r max` 或 `/r ultra` 可切换。',
+        ...(hasBoundCodexAppServer(session) ? [CODEX_APP_SERVER_UPDATE_NOTE] : [])],
       options.markdown,
     );
   }
@@ -430,7 +437,8 @@ export function handleReasoningCommand(options: {
     return buildCommandFields(
       '已恢复默认思考级别',
       [['级别', formatReasoningEffort(resolveEffectiveReasoningEffort(options.store.getSession(session.id)))]],
-      ['当前 BridgeSession 已清除 Codex reasoning 覆盖值，后续请求会跟随全局 Codex 默认值。', CODEX_RUNTIME_UPDATE_NOTE],
+      ['当前 BridgeSession 已清除 Codex reasoning 覆盖值，后续请求会跟随全局 Codex 默认值。',
+        hasBoundCodexAppServer(session) ? CODEX_APP_SERVER_UPDATE_NOTE : CODEX_RUNTIME_UPDATE_NOTE],
       options.markdown,
     );
   }
@@ -590,7 +598,8 @@ export function handleModeCommand(options: {
           ? ['YOLO模式', mode]
           : ['Provider', formatSessionCodexProvider(session, binding)],
       ],
-      [MODE_OPTIONS_TEXT, '发送 `/m normal` 或 `/m yolo` 切换；完整命令是 `/mode normal|yolo`。'],
+      [MODE_OPTIONS_TEXT, '发送 `/m normal` 或 `/m yolo` 切换；完整命令是 `/mode normal|yolo`。',
+        ...(activeRuntime === 'codex' && hasBoundCodexAppServer(session) ? [CODEX_APP_SERVER_UPDATE_NOTE] : [])],
       options.markdown,
     );
   }
@@ -804,7 +813,8 @@ export function handleSandboxCommand(options: {
         ['沙箱', resolveEffectiveSandboxMode(session, binding)],
         ['来源', hasSessionCodexSandboxOverride(session) ? '当前会话' : '全局默认'],
       ],
-      [SANDBOX_OPTIONS_TEXT, '发送 `/sandbox workspace-write` 可切换；修改从下一轮 Codex 请求开始生效。'],
+      [SANDBOX_OPTIONS_TEXT, '发送 `/sandbox workspace-write` 可切换；修改从下一轮 Codex 请求开始生效。',
+        ...(hasBoundCodexAppServer(session) ? [CODEX_APP_SERVER_UPDATE_NOTE] : [])],
       options.markdown,
     );
   }
@@ -1062,8 +1072,10 @@ export function handleModelCommand(options: {
     );
   }
 
+  // 本机索引也包含 app-server 的线程；只有 legacy 本地线程保留此修改限制。
+  const legacyThreadId = hasBoundCodexAppServer(session) ? undefined
+    : resolveLocalCodexThreadId(session, binding, options.args ? 'model command update' : 'model command');
   if (!options.args) {
-    const codexThreadId = resolveLocalCodexThreadId(session, binding, 'model command');
     const currentModel = resolveDisplayedModel(
       binding,
       session,
@@ -1075,16 +1087,16 @@ export function handleModelCommand(options: {
       [['模型', formatDisplayedModel(currentModel)]],
       [
         getAvailableModelChoicesText(),
-        codexThreadId
+        legacyThreadId
           ? '当前是共享Codex thread，只支持查看模型；如需切换，请先用 `/new` 新建一个 IM 会话线程。'
           : '发送 `/model gpt-5.4` 可切换；发送 `/model default` 可回退到默认模型。',
-        '模型切换只影响后续从 IM 发起的 Codex CLI 请求。',
+        hasBoundCodexAppServer(session) ? CODEX_APP_SERVER_UPDATE_NOTE : '模型切换只影响后续从 IM 发起的 Codex CLI 请求。',
       ],
       options.markdown,
     );
   }
 
-  if (resolveLocalCodexThreadId(session, binding, 'model command update')) {
+  if (legacyThreadId) {
     return '当前是共享Codex thread，不支持直接切换模型。请先用 `/new` 新建一个线程，再执行 `/model ...`。';
   }
 
