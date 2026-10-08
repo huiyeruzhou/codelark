@@ -543,21 +543,27 @@ async function applyProviderCommand(options: ProviderCommandOptions): Promise<st
   }
   if (getSessionActiveRuntime(session) === 'cursor') {
     const requested = options.args.trim().toLowerCase();
+    const currentCursorConfig = resolveCursorRuntimeConfig(session, binding);
     if (!requested) {
       return buildCommandFields(
         '当前 Cursor Provider',
-        [['Runtime', 'cursor'], ['Provider', 'tmux']],
-        ['Cursor Agent 当前只支持 tmux Provider；发送 `/provider tmux` 可重新启动官方 TUI，或 `/provider default` 清除会话级覆盖。'],
+        [['Runtime', 'cursor'], ['Provider', currentCursorConfig.provider]],
+        [currentCursorConfig.provider === 'desktop'
+          ? '当前会话来自 Cursor Desktop；发送 `/provider tmux` 可显式改用 Cursor Agent TUI，或 `/provider default` 恢复 Desktop 来源身份。'
+          : '发送 `/provider tmux` 可重新启动官方 TUI，或 `/provider default` 清除会话级覆盖。'],
         options.markdown,
       );
     }
     if (requested === 'default') {
       clearSessionCursorProviderToml(session.id);
+      const defaultCursorConfig = resolveCursorRuntimeConfig(options.store.getSession(session.id), binding);
       scheduleMirrorSubscriptionsBestEffort(options.deps, 'cursor provider default');
       return buildCommandFields(
         '已恢复默认 Cursor Provider',
-        [['Runtime', 'cursor'], ['Provider', 'tmux']],
-        ['Cursor Agent 当前只支持 tmux Provider。'],
+        [['Runtime', 'cursor'], ['Provider', defaultCursorConfig.provider]],
+        [defaultCursorConfig.provider === 'desktop'
+          ? '已恢复该会话的 Cursor Desktop 来源身份。'
+          : '当前会话使用 Cursor Agent tmux。'],
         options.markdown,
       );
     }
@@ -569,7 +575,7 @@ async function applyProviderCommand(options: ProviderCommandOptions): Promise<st
         options.markdown,
       );
     }
-    const cursorConfig = resolveCursorRuntimeConfig(session, binding);
+    const cursorConfig = currentCursorConfig;
     const tmuxSessionName = cursorTmuxSessionName(session.id);
     await options.deps.notifyBackgroundOperation?.(
       `正在重新启动 Cursor Agent tmux 后台会话 \`${tmuxSessionName}\`；首次打开工作区时可能需要先建立索引。`,

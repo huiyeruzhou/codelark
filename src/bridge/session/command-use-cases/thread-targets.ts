@@ -27,6 +27,7 @@ import {
 import { readConfiguredCodexModel } from '../../../runtime/codex/models.js';
 import type { RuntimeAgent } from '../../../domain/session.js';
 import { recordBindingChange, type BindingChangeAction } from '../binding-audit.js';
+import { upgradeCursorDesktopSessionIdentity } from '../cursor-provider-identity.js';
 import {
   MAX_LOCAL_SESSION_LIST_LIMIT,
   parseListIndex,
@@ -351,7 +352,13 @@ function materializeKimiThread(store: BridgeStore, thread: LocalRuntimeSessionSu
 
 function materializeCursorThread(store: BridgeStore, thread: LocalRuntimeSessionSummary): BridgeSession {
   const existing = findBridgeSessionByCursorThread(store, thread);
-  if (existing) return existing;
+  if (existing) {
+    return upgradeCursorDesktopSessionIdentity(
+      store,
+      existing,
+      thread.source === 'cursor-desktop' ? 'desktop' : 'tmux',
+    );
+  }
   const session = store.createSession(
     thread.title || thread.threadId.slice(0, 8),
     'default',

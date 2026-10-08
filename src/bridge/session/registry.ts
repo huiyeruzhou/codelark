@@ -13,6 +13,7 @@ import {
   updateBindingTarget,
 } from './registry/bindings.js';
 import { setSessionCodexTitleUpdate } from '../../domain/session-runtime.js';
+import { upgradeCursorDesktopSessionIdentity } from './cursor-provider-identity.js';
 import {
   getSessionActiveRuntime,
   getSessionClaudeCwd,
@@ -334,8 +335,14 @@ export class SessionRegistryService {
 
   materializeCursorThread(cursorSessionId: string, cwd: string): BridgeSession {
     const existing = this.findVisibleBridgeSessionByCursorThread(cursorSessionId, cwd);
-    if (existing) return existing;
     const localThread = this.options.cursorThreads?.getThread(cursorSessionId, cwd) || null;
+    if (existing) {
+      return upgradeCursorDesktopSessionIdentity(
+        this.store,
+        existing,
+        localThread?.provider === 'desktop' ? 'desktop' : 'tmux',
+      );
+    }
     if (!localThread) throw new Error('指定的 Cursor Agent 会话不存在。');
     const session = this.store.createSession(
       localThread.title || '',
