@@ -70,7 +70,7 @@ Codex 保留 `startCodexResumeTmuxSession` 和 `waitForCodexResumeTmuxReady` 作
 
 ## Codex 执行路径与兼容
 
-下面的 bootstrap、键盘输入、JSONL 轮询和屏幕就绪检查仅用于旧执行适配器；启用协议的线程使用本章的 app-server 生命周期。已有旧 thread 不会因升级 CodeLark 或安装 Desktop 自动迁移。只有新会话自动选择共享后端，或用户明确配置 `CODELARK_CODEX_APP_SERVER_URL` / 已保存的 thread endpoint 后才走协议。
+下面的 bootstrap、键盘输入、JSONL 轮询和屏幕就绪检查仅用于旧执行适配器；启用协议的线程使用本章的 app-server 生命周期。升级本身不会改写已有 thread 的后端；下一次输入或显式准备会话时，默认优先连接 app-server，确认可用后交接 CodeLark 创建的旧 writer，并恢复同一 thread。显式关闭自动选择或 CLI 明确不支持监听时继续使用旧适配器。已有 thread endpoint 始终指向原协议后端。
 
 ### 1. thread 获取和注入
 
@@ -453,6 +453,8 @@ Kimi 入口补充：
 旧路径原先把三种不同事情合并为“运行中”：Bridge 内存里的执行任务、持久化的 runtime/health/tool 状态，以及 mirror 从运行日志观察到的活动。任务退出、Bridge 重启或手工操作 TUI 后，这些状态可能不同步。它们不能共同作为配置修改的资格检查，更不能把历史 idle 当作当前没有执行的证明。
 
 `/model`、`/mode`、`/yolo`、`/reasoning`、`/sandbox`、`/network`、`/cd`、会话设置卡使用独立的短命令队列。队列只序列化配置操作，不等待整轮模型任务结束；后续新消息等配置操作完成后再路由。保存配置不取消活动请求，不切换聊天绑定，也不改写原生会话日志。
+
+无参数的 `/p`、`/provider` 和 `/runtime` 只查询当前选择，也走这条短命令队列；模型运行中或等待用户答复时都能返回。命令别名和卡片回调采用相同分类，旧执行模式与 app-server 模式一致。带参数的 provider/runtime 切换保留执行调度规则，`/p tmux` 继续独立处理查看入口或“结束并重启”确认。
 
 - 旧 SDK 每次请求读取会话有效配置，包括已有 thread 的 model 参数；恢复 thread 不再丢弃模型覆盖。
 - 已启动的旧 tmux TUI 保持原参数；用户执行 `/p tmux` 并确认“结束并重启”后才采用新启动参数。

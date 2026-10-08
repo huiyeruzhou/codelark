@@ -1083,6 +1083,8 @@ describe('bridge-manager resolveCommandAlias', () => {
     });
 
     for (const [text, jobKind] of [
+      ['/provider sdk', 'command:provider'],
+      ['/p pty', 'command:provider'],
       ['/runtime claude', 'command:runtime'],
       ['/t rename 新标题', 'command:t:rename'],
       ['/t unbind', 'command:t:unbind'],
@@ -1095,7 +1097,7 @@ describe('bridge-manager resolveCommandAlias', () => {
       });
     }
 
-    for (const text of ['/m yolo', '/yolo', '/r 5', '/sb workspace-write', '/net on', '/model gpt-5.4', '/cd ~/work', '/require_at on']) {
+    for (const text of ['/p', '/provider@CodeLark ', '/runtime', '/m yolo', '/yolo', '/r 5', '/sb workspace-write', '/net on', '/model gpt-5.4', '/cd ~/work', '/require_at on']) {
       assert.equal(_testOnly.adapterSessionLane(inbound(text) as any, 'command'), null);
       const lane = _testOnly.adapterImmediateLane(inbound(text) as any, 'command');
       assert.equal(lane?.laneKey, `job:settings:${binding.bridgeSessionId}`);
