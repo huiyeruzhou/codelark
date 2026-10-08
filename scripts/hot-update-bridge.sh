@@ -173,11 +173,15 @@ run_logged() {
   "$@"
 }
 
+iso_timestamp() {
+  date '+%Y-%m-%dT%H:%M:%S%z'
+}
+
 run_worker() {
   cd "$PROJECT_DIR"
   mkdir -p "$LOG_DIR"
 
-  echo "[hot-update] started $(date -Is)"
+  echo "[hot-update] started $(iso_timestamp)"
   echo "[hot-update] project: $PROJECT_DIR"
   echo "[hot-update] bridge log: $BRIDGE_LOG"
 
@@ -217,7 +221,7 @@ run_worker() {
   run_bridge_cli stop
   run_bridge_cli start
 
-  echo "[hot-update] completed $(date -Is)"
+  echo "[hot-update] completed $(iso_timestamp)"
 }
 
 run_dry_run() {

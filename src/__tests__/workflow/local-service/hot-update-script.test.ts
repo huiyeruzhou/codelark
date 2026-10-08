@@ -81,6 +81,8 @@ test('hot-update worker preserves the supplied instance environment across stop 
       { action: 'stop', home, key: 'test-instance-secret', options: '--no-warnings' },
       { action: 'start', home, key: 'test-instance-secret', options: '--no-warnings' },
     ]);
+    assert.match(result.stdout, /\[hot-update\] started \d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}[+-]\d{4}/);
+    assert.match(result.stdout, /\[hot-update\] completed \d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}[+-]\d{4}/);
     assert.doesNotMatch(result.stdout + result.stderr, /test-instance-secret/);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });

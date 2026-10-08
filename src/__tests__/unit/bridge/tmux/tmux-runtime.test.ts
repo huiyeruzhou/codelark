@@ -304,6 +304,81 @@ describe('codex tmux runtime', () => {
     );
     assert.ok(commands.some((command) => /kill-session -t codex_fail/.test(command)));
   });
+
+  it('surfaces active-writer stderr instead of accepting the provisional resume composer', async () => {
+    resetRuntimeTmuxInputStatesForTests();
+    const oldTimeout = process.env.CODELARK_CODEX_RESUME_TMUX_READY_TIMEOUT_MS;
+    const oldPoll = process.env.CODELARK_CODEX_RESUME_TMUX_READY_POLL_MS;
+    process.env.CODELARK_CODEX_RESUME_TMUX_READY_TIMEOUT_MS = '200';
+    process.env.CODELARK_CODEX_RESUME_TMUX_READY_POLL_MS = '50';
+    let launchLogPath = '';
+    let captureCount = 0;
+    const core: TmuxCore = {
+      commandPreview: (args) => ['tmux', ...args].join(' '),
+      hasSession: async (name) => ({ exists: true, command: `tmux has-session -t ${name}` }),
+      killSession: async (name) => `tmux kill-session -t ${name}`,
+      listSessions: async () => ({ sessions: [], command: 'tmux list-sessions' }),
+      ensureDetachedSession: async ({ command }) => {
+        const commandText = Array.isArray(command) ? command.join(' ') : command || '';
+        const logMatch = commandText.match(/ 2> (?:'([^']+)'|"([^"]+)"|([^;]+))/);
+        launchLogPath = logMatch?.[1] || logMatch?.[2] || logMatch?.[3]?.trim() || '';
+        fs.writeFileSync(
+          launchLogPath,
+          'Error: thread resume failed: thread test-thread already has an active writer (code -32600)\n[codelark] process exited with status 1\n',
+          'utf-8',
+        );
+        return { existed: false, commands: ['tmux new-session -d -s codex_active_writer'] };
+      },
+      capturePane: async () => {
+        captureCount += 1;
+        return {
+          command: 'tmux capture-pane -t codex_active_writer -p -S -80',
+          screen: captureCount === 1
+            ? [
+              '│ >_ OpenAI Codex (v0.153.4) │',
+              '│ model:     loading   /model to change │',
+              '  Resuming session…',
+              '› Ask Codex to do anything',
+              '  ? for shortcuts',
+            ].join('\n')
+            : 'Pane is dead (status 1, Wed Oct  8 14:00:00 2026)',
+        };
+      },
+      sendActions: async () => ({ commands: [] }),
+      sendInterrupt: async () => 'tmux send-keys -t codex_active_writer C-c',
+      injectPromptIntoPane: async () => ({ commands: [] }),
+    };
+
+    try {
+      await assert.rejects(
+        () => startCodexResumeTmuxSession({
+          sessionName: 'codex_active_writer',
+          threadId: 'test-thread',
+          bridgeSessionId: 'bridge-active-writer',
+          workingDirectory: '/tmp',
+        }, core),
+        (error) => {
+          assert.ok(error instanceof CodexResumeTmuxLaunchError);
+          assert.match(error.details.reason, /status 1/);
+          assert.match(error.details.launchOutput || '', /already has an active writer/);
+          assert.match(error.details.launchOutput || '', /code -32600/);
+          assert.equal(error.details.launchLogPath, launchLogPath);
+          return true;
+        },
+      );
+      assert.equal(captureCount, 2, 'the provisional composer must not be accepted as ready');
+      assert.equal(fs.existsSync(launchLogPath), false);
+      assert.equal(getRuntimeTmuxInputState('codex', 'codex_active_writer').state, 'stopped');
+    } finally {
+      if (oldTimeout === undefined) delete process.env.CODELARK_CODEX_RESUME_TMUX_READY_TIMEOUT_MS;
+      else process.env.CODELARK_CODEX_RESUME_TMUX_READY_TIMEOUT_MS = oldTimeout;
+      if (oldPoll === undefined) delete process.env.CODELARK_CODEX_RESUME_TMUX_READY_POLL_MS;
+      else process.env.CODELARK_CODEX_RESUME_TMUX_READY_POLL_MS = oldPoll;
+      if (launchLogPath && fs.existsSync(launchLogPath)) fs.unlinkSync(launchLogPath);
+      resetRuntimeTmuxInputStatesForTests();
+    }
+  });
+
   it('waits for a resumed Codex TUI prompt before accepting a launched session', async () => {
     let captureCount = 0;
     const core: TmuxCore = {
