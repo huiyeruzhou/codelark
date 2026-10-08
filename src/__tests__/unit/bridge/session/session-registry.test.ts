@@ -227,6 +227,37 @@ describe('SessionRegistryService', () => {
     });
   });
 
+  it('upgrades an existing legacy Cursor binding when its thread is now owned by Desktop', () => {
+    const store = new JsonFileStore(makeBridgeSettings());
+    const legacy = store.createSession('Legacy Cursor binding', 'default', undefined, '/tmp/cursor-desktop');
+    store.updateSession(legacy.id, {
+      runtime: {
+        activeRuntime: 'cursor',
+        cursor: {
+          sessionId: 'cursor-desktop-session',
+          cwd: '/tmp/cursor-desktop',
+          provider: 'tmux',
+        },
+      },
+    });
+    const registry = new SessionRegistryService(store, {
+      cursorThreads: {
+        getThread: (cursorSessionId, cwd) => ({
+          cursorSessionId,
+          title: 'Desktop Cursor Session',
+          cwd,
+          provider: 'desktop',
+        }),
+      },
+    });
+
+    const materialized = registry.materializeCursorThread('cursor-desktop-session', '/tmp/cursor-desktop');
+
+    assert.equal(materialized.id, legacy.id);
+    assert.equal(materialized.runtime?.cursor?.provider, 'desktop');
+    assert.equal(store.getSession(legacy.id)?.runtime?.cursor?.provider, 'desktop');
+  });
+
   it('materializes, renames, and archives ZCode sessions through the registry port', () => {
     const store = new JsonFileStore(makeBridgeSettings());
     const archived: Array<{ sessionId: string; cwd: string }> = [];

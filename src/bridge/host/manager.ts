@@ -122,6 +122,7 @@ import {
 } from '../mirror/suppression.js';
 import { mirrorReadPosition, type BridgeMirrorSubscription } from '../mirror/subscription-state.js';
 import { SessionRegistryService } from '../session/registry.js';
+import { migrateCursorDesktopSessionIdentities } from '../session/cursor-provider-identity.js';
 import {
   buildAdapterConfigFingerprint,
 } from '../../channels/adapter-runtime/sync-plan.js';
@@ -3247,6 +3248,10 @@ export async function start(): Promise<void> {
   }
 
   INTERACTIVE_RUNTIME.resetPersistedInteractiveRuntimeState();
+  const migratedCursorDesktopSessions = migrateCursorDesktopSessionIdentities(store);
+  if (migratedCursorDesktopSessions > 0) {
+    console.log(`[bridge-manager] Migrated ${migratedCursorDesktopSessions} Cursor session(s) to Desktop source identity`);
+  }
   await ADAPTER_RUNTIME.syncConfiguredAdapters({ startLoops: false });
   const startedCount = state.adapters.size;
 

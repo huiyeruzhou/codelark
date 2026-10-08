@@ -52,6 +52,7 @@ import {
   getGlobalWorkspaceRoot,
 } from './global-config.js';
 import { getConfiguredChannelInstance } from '../../channels/adapter-runtime/channel-runtime.js';
+import { resolveCursorExecutionProvider } from './cursor-provider-identity.js';
 
 const AVAILABLE_CODEX_MODELS = listSelectableCodexModels();
 const AVAILABLE_CODEX_MODEL_MAP = new Map(AVAILABLE_CODEX_MODELS.map((model) => [model.slug, model]));
@@ -233,9 +234,10 @@ export function hasSessionKimiProviderOverride(session?: BridgeSession | null): 
 }
 
 export function getSessionCursorProviderOverride(session?: BridgeSession | null): CursorProviderChoice | undefined {
-  if (session?.runtime?.activeRuntime === 'cursor' && session.runtime.cursor?.provider === 'desktop') return 'desktop';
   const tomlProvider = getSessionTomlOverride<CursorProviderChoice>(session, 'runtime.cursor.provider');
-  return tomlProvider === 'tmux' ? 'tmux' : undefined;
+  if (tomlProvider === 'tmux') return 'tmux';
+  if (session?.runtime?.activeRuntime === 'cursor' && session.runtime.cursor?.provider === 'desktop') return 'desktop';
+  return undefined;
 }
 
 export function hasSessionCursorProviderOverride(session?: BridgeSession | null): boolean {
@@ -397,7 +399,7 @@ export function resolveKimiRuntimeConfig(session?: BridgeSession | null, binding
 
 export function resolveCursorRuntimeConfig(session?: BridgeSession | null, binding?: ChannelChat | null): CursorRuntimeConfig {
   const { config } = scopedConfigForRuntime(binding, session);
-  const desktop = session?.runtime?.activeRuntime === 'cursor' && session.runtime.cursor?.provider === 'desktop';
+  const desktop = resolveCursorExecutionProvider(session) === 'desktop';
   return {
     runtime: 'cursor',
     provider: desktop ? 'desktop' : 'tmux',
