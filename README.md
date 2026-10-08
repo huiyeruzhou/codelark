@@ -8,7 +8,7 @@
 
 - 代码仓库：https://github.com/huiyeruzhou/codelark
 - 文档站：https://huiyeruzhou.github.io/site/codelark/
-- 当前 npm 版本：`codelark@0.3.0`
+- 当前 npm 版本：`codelark@0.4.0`
 
 ## 核心能力
 
@@ -97,9 +97,9 @@ npx --yes --package=npm@11.6.2 -c 'codelark_pkg=$(npm pack "git+https://github.c
 
 命令临时使用 npm 11.6.2，在当前目录生成源码构建包后全局安装；不会替换系统 npm。先打包可以避免 Git 依赖准备阶段继承全局安装配置的问题，也兼容系统 npm 12 默认禁止直接安装 Git 来源的行为。
 
-## v0.3.0
+## v0.4.0
 
-`0.3.0` 新增 Multi-Agent 协作：不同 CodeLark 群聊中的 Agent 可以按真实群名和 Bot 名发现彼此、创建专用任务群并传递普通输入或 slash 命令。源群和目标群都会显示包含路由与正文的收发卡片。这个版本还新增一次性条件监控、统一飞书消息与附件协议，并改进 Codex 非致命诊断、更新恢复和群头像缓存。
+`0.4.0` 将 Codex 默认执行链路升级为共享 app-server，tmux 收敛为唯一公开 Provider、可 attach 查看入口和协议不可用时的兼容回退。旧会话会在下一次输入前安全迁移；若 Codex Desktop 仍持有 writer，飞书会提供“重启并重试”按钮，而不是静默失败或持续重试。本版本还新增 ZCode runtime，并强化跨 runtime 会话隔离、飞书本地文件交付与 Windows 多行输入。
 
 完整发布说明见 [Release Notes](docs/guide/release-notes.md)。
 

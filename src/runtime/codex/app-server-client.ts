@@ -111,7 +111,7 @@ export class CodexAppServerClient {
         socket.once('close', () => reject(new Error('Codex app-server closed before initialization')));
       });
       client.serverInfo = await client.request('initialize', {
-        clientInfo: { name: 'codelark', version: '0.3.0' },
+        clientInfo: { name: 'codelark', version: '0.4.0' },
         capabilities: { experimentalApi: true },
       }, connectTimeoutMs);
       client.send({ method: 'initialized' });

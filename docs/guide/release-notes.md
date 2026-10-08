@@ -2,7 +2,48 @@
 
 ## Unreleased
 
-- 跨 Agent 消息成功发送后，不再用源群、目标群两张独立通知卡打断阅读。目标 Agent 直接在常规对话卡中接收输入；源群当前对话卡追加一条默认收起的 `✉️ 已发送 · <目标群聊> — <正文摘要>` 事件，展开可查看完整正文。没有活动源卡时仍保留紧凑独立回执，发送失败继续使用独立错误卡。
+- 暂无。
+
+## v0.4.0
+
+发布日期：2026-10-08
+
+`0.4.0` 把 Codex 的默认执行链路升级为共享 app-server，并明确收敛 provider 边界：app-server 是自动优先的唯一协议 writer，`tmux` 是唯一公开 Codex Provider、可 attach 查看入口和协议不可用时的兼容回退。本版本同时补齐 ZCode、强化跨 runtime 会话隔离，并集中修复恢复、停止、配置和飞书投递中的静默失败。
+
+### Codex app-server 与 Desktop
+
+- 新 Codex thread 默认由 CodeLark 管理的本地 app-server 执行；macOS Codex Desktop 可通过共享 endpoint 使用同一个 server，避免两个独立 writer 争抢同一 thread。
+- app-server 原生覆盖提交、流式事件、停止、清空、新建、恢复、问答、审批和 MCP 请求。只读状态查询不会隐式创建 thread，启动、连接和当前后端状态也会明确展示。
+- 补齐 app-server 事件兼容：原生 `fileChange` 复用旧链路已有的 patch 卡片，显示真实文件列表、分文件 diff 与语法高亮，不再暴露协议 JSON；上下文压缩也与旧版 `compacted` 使用相同提示与展示语义。
+- 升级前的 tmux 会话会在下一次输入前迁移到 app-server；只有确认 app-server 可连接后才释放 CodeLark 自己记录的旧 writer。迁移失败时不会发送输入、不会更新绑定，也不会静默回退。
+- 若旧 Codex Desktop 仍持有 writer，CodeLark 会停止重试并显示“重启并重试 / 取消”卡片。确认后使用脚本正常退出并重开 Desktop，再自动重试原文本；不会强制杀进程。
+- Codex `/provider`、全局配置和 Web UI 现在只支持 `tmux`。app-server 不再伪装成并列 provider；历史 `sdk/pty` 配置仍可读取，但统一归一为 `tmux`，不再进入对应执行路径。
+
+### Runtime 与会话可靠性
+
+- 新增 ZCode tmux runtime，支持创建、接管、恢复、SQLite 结果同步、工具与 usage 展示，以及 tmux 丢失后的恢复。
+- 修复 Claude Code 的首次启动、信任与 YOLO 确认流程，并适配当前 TUI 状态和嵌套工具输出；高风险启动必须经过明确确认。
+- `/clear`、`/new`、runtime 切换和配置继承使用更严格的 session owner 边界。旧任务的取消、停止、终态和 stale tmux 清理不会污染替换后的会话。
+- mirror 可从已保存进度和已绑定卡片页继续恢复；Bridge 重启只恢复当前最新 turn，不再重放历史 orphan 或把它错误显示为 interrupted；重放 usage 也不再把已完成 turn 误判为运行中。
+- Windows Codex tmux 多行输入保留 Unicode、空行和尾随换行，并避免粘贴边界丢失导致的重复或截断。
+
+### 飞书、跨 Agent 与可观测性
+
+- 跨 Agent 消息成功发送后，目标 Agent 直接在常规对话卡中接收输入；源群当前卡追加默认收起的 `✉️ 已发送 · <目标群聊> — <正文摘要>` 事件。没有活动源卡时保留紧凑回执，失败继续独立报错。
+- 本地 Markdown 图片会上传为飞书图片，本地 Markdown 文件链接会作为真实文件交付，不再只显示无法访问的本机路径。
+- app-server 原生问题、权限与 MCP 交互使用飞书卡片呈现；状态查询走独立只读调度，不会被长 turn 阻塞。
+- 后端状态区分 app-server、tmux 查看入口和 legacy 路径；错误保留可执行原因，避免只暴露裸 RPC `-32600` 或把未提交输入显示为成功。
+
+### 安装与升级
+
+- 从 GitHub `main` 安装时会自动执行 build，CLI 与 daemon 不再因缺少 `dist` 无法启动；README 已给出经过验证的源码安装命令。
+- 测试中的 Claude CLI 与 lark-cli 使用隔离凭据路径，不再触发 macOS “找不到用于存储 master.key 的钥匙串”弹窗。
+
+```bash
+npm install -g --yes codelark@0.4.0 && codelark
+```
+
+已有 Codex Desktop 会话若首次迁移时提示 writer 冲突，请在对应群点击“重启并重试”。这会正常重启 Desktop 并中断其中正在运行的其他任务。
 
 ## v0.3.0
 
