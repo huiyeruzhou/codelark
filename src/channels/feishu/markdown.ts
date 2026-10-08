@@ -1721,9 +1721,30 @@ export function buildFinalCardJson(
   const finalContextLine = historyItems
     ? text.trim().split(/\n+/).reverse().find((line) => /^Context:\s+/.test(line.trim()))?.trim() || ''
     : '';
-  const renderedHistoryItems = historyItems
+  let renderedHistoryItems = historyItems
     ? withoutDuplicateTerminalContext(historyItems, finalContextLine)
     : undefined;
+
+  // History-driven cards normally render their structured items instead of
+  // `text`. Terminal diagnostics, however, are supplied via `text` and used
+  // to disappear whenever the history already contained the user prompt.
+  // Preserve the explicit stop reason/error as a final history row.
+  if (renderedHistoryItems && terminalStatus && terminalStatus !== 'completed') {
+    const trimmedText = text.trim();
+    const errorMarker = trimmedText.lastIndexOf('**Error**');
+    const terminalDetail = terminalStatus === 'error' && errorMarker >= 0
+      ? trimmedText.slice(errorMarker).trim()
+      : trimmedText;
+    const alreadyPresent = terminalDetail && renderedHistoryItems.some((item) => (
+      item.type === 'markdown' && item.content.trim().includes(terminalDetail)
+    ));
+    if (terminalDetail && !alreadyPresent) {
+      renderedHistoryItems = [
+        ...renderedHistoryItems,
+        { type: 'markdown', role: 'system', content: terminalDetail },
+      ];
+    }
+  }
 
   elements.push(...buildMetadataTagElements(metadata));
 

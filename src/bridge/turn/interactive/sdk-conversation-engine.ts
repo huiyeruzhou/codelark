@@ -47,7 +47,7 @@ import {
   parseContextUsageInfo,
   type ContextUsageInfo,
 } from '../../../shared/progress/context-usage.js';
-import { resolveClaudeRuntimeConfig, resolveCodexInvocationModel, resolveCursorRuntimeConfig, resolveKimiRuntimeConfig, resolveSessionRuntimeConfig, resolveZcodeRuntimeConfig } from '../../session/support.js';
+import { resolveClaudeRuntimeConfig, resolveCodexInvocationModel, resolveCursorInvocationModel, resolveCursorRuntimeConfig, resolveKimiRuntimeConfig, resolveSessionRuntimeConfig, resolveZcodeRuntimeConfig } from '../../session/support.js';
 import {
   getSessionActiveRuntime,
   getSessionClaudeSessionId,
@@ -110,6 +110,7 @@ export type OnRuntimeIdentity = (identity: {
   sessionId: string;
   cwd?: string;
   transcriptPath?: string;
+  model?: string;
 }) => void | Promise<void>;
 
 export interface ConversationResult {
@@ -239,22 +240,21 @@ export async function processMessage(
     }
 
     const codexThreadId = getSessionCodexThreadId(session);
-
-    // Effective model
-    const effectiveModel = activeRuntime === 'zcode'
-      ? zcodeRuntimeConfig?.model
-      : activeRuntime === 'cursor'
-      ? cursorRuntimeConfig?.model
-      : activeRuntime === 'kimi'
-      ? kimiRuntimeConfig?.model
-      : activeRuntime === 'claude'
-        ? claudeRuntimeConfig?.model
-        : resolveCodexInvocationModel(binding, session, { resuming: Boolean(codexThreadId) });
     const claudeSessionId = getSessionClaudeSessionId(session);
     const kimiSessionId = getSessionKimiSessionId(session);
     const cursorSessionId = getSessionCursorSessionId(session);
     const zcodeSessionId = getSessionZcodeSessionId(session);
 
+    // Effective model
+    const effectiveModel = activeRuntime === 'zcode'
+      ? zcodeRuntimeConfig?.model
+      : activeRuntime === 'cursor'
+      ? resolveCursorInvocationModel(binding, session, { resuming: Boolean(cursorSessionId) })
+      : activeRuntime === 'kimi'
+      ? kimiRuntimeConfig?.model
+      : activeRuntime === 'claude'
+        ? claudeRuntimeConfig?.model
+        : resolveCodexInvocationModel(binding, session, { resuming: Boolean(codexThreadId) });
     const permissionMode = runtimeConfig.mode === 'yolo' ? 'never' : 'acceptEdits';
 
     // Load conversation history for context
@@ -378,6 +378,7 @@ async function consumeStream(
   const seenToolResultIds = new Set<string>();
   const permissionRequests: PermissionRequestInfo[] = [];
   let capturedCodexThreadId: string | null = null;
+  let capturedCursorSessionId = getSessionCursorSessionId(store.getSession(sessionId)) || null;
   const outboundAttachments: OutboundAttachment[] = [];
   const outboundQuestions: OutboundQuestion[] = [];
   const outboundPlatformMessages: OutboundPlatformMessage[] = [];
@@ -562,6 +563,7 @@ async function consumeStream(
                   ...(typeof statusData.cwd === 'string' ? { cwd: statusData.cwd } : {}),
                 });
               } else if (activeRuntime === 'cursor') {
+                capturedCursorSessionId = statusData.session_id;
                 store.updateSession(sessionId, setSessionCursorIdentityUpdate(
                   statusData.session_id,
                   typeof statusData.cwd === 'string' ? statusData.cwd : undefined,
@@ -607,6 +609,13 @@ async function consumeStream(
             }
             if (statusData.model && activeRuntime === 'codex') {
               store.updateSessionModel(sessionId, statusData.model);
+            }
+            if (typeof statusData.model === 'string' && activeRuntime === 'cursor' && capturedCursorSessionId) {
+              await options?.onRuntimeIdentity?.({
+                runtime: 'cursor',
+                sessionId: capturedCursorSessionId,
+                model: statusData.model,
+              });
             }
             if (typeof statusData.reasoning === 'string' && onStatusNote) {
               try { onStatusNote(statusData.reasoning); } catch { /* non-critical */ }

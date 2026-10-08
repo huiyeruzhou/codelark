@@ -17,12 +17,22 @@ export interface CursorSessionFileSummary {
   sessionId: string;
   cwd?: string;
   title?: string;
+  model?: string;
   createdAt?: string;
   updatedAt?: string;
   sessionDir: string;
   storePath?: string;
   filePath?: string;
   provider: 'tmux' | 'desktop';
+}
+
+export interface CursorTranscriptTailStatus {
+  size: number;
+  updatedAt: string;
+  recordType: string;
+  role?: string;
+  status?: string;
+  error?: string;
 }
 
 interface CursorSessionMeta {
@@ -33,6 +43,10 @@ interface CursorSessionMeta {
   hasConversation?: boolean;
   isSubagent?: boolean;
   cwd?: string;
+}
+
+interface CursorStoreMeta {
+  lastUsedModel?: string;
 }
 
 interface CursorDesktopConversationRow {
@@ -220,6 +234,22 @@ function readCursorSessionMeta(sessionDir: string): CursorSessionMeta | null {
   }
 }
 
+function readCursorStoreMeta(storePath: string): CursorStoreMeta | null {
+  if (!fs.existsSync(storePath)) return null;
+  let database: DatabaseSync | null = null;
+  try {
+    database = new DatabaseSync(storePath, { readOnly: true });
+    const row = database.prepare("SELECT value FROM meta WHERE key = '0'").get() as { value?: unknown } | undefined;
+    if (typeof row?.value !== 'string' || !/^[0-9a-f]+$/iu.test(row.value) || row.value.length % 2 !== 0) return null;
+    const parsed = JSON.parse(Buffer.from(row.value, 'hex').toString('utf8')) as unknown;
+    return parsed && typeof parsed === 'object' ? parsed as CursorStoreMeta : null;
+  } catch {
+    return null;
+  } finally {
+    database?.close();
+  }
+}
+
 function isoFromMs(value: unknown): string | undefined {
   return typeof value === 'number' && Number.isFinite(value) && value > 0
     ? new Date(value).toISOString()
@@ -388,6 +418,7 @@ function summarizeCursorSessionDir(sessionDir: string, fallbackCwd?: string): Cu
   const sessionId = path.basename(sessionDir);
   const storePath = path.join(sessionDir, 'store.db');
   const meta = readCursorSessionMeta(sessionDir);
+  const storeMeta = readCursorStoreMeta(storePath);
   if (!fs.existsSync(storePath) && !meta) return null;
   if (meta?.isSubagent || meta?.hasConversation === false) return null;
   const cwd = meta?.cwd?.trim() || fallbackCwd?.trim() || undefined;
@@ -407,6 +438,7 @@ function summarizeCursorSessionDir(sessionDir: string, fallbackCwd?: string): Cu
     provider: 'tmux',
     ...(cwd ? { cwd } : {}),
     ...(meta?.title?.trim() ? { title: meta.title.trim() } : {}),
+    ...(storeMeta?.lastUsedModel?.trim() ? { model: storeMeta.lastUsedModel.trim() } : {}),
     ...(isoFromMs(meta?.createdAtMs) || stat ? {
       createdAt: isoFromMs(meta?.createdAtMs) || new Date(stat!.birthtimeMs || stat!.ctimeMs).toISOString(),
     } : {}),
@@ -451,6 +483,7 @@ export function listCursorSessionFileSummaries(cwd?: string, limit?: number): Cu
           createdAt: previous.createdAt || session.createdAt,
           updatedAt: [previous.updatedAt, session.updatedAt].filter(Boolean).sort().at(-1),
           filePath: previous.filePath || session.filePath,
+          model: previous.model || session.model,
           provider: previous.provider === 'desktop' || session.provider === 'desktop' ? 'desktop' : 'tmux',
         });
     } else {
@@ -473,6 +506,37 @@ export function findCursorSessionFileById(sessionId: string, cwd?: string): Curs
     return listCursorSessionFileSummaries(cwd).find((session) => session.sessionId === sessionId) || null;
   }
   return listCursorSessionFileSummaries().find((session) => session.sessionId === sessionId) || null;
+}
+
+export function inspectCursorTranscriptTail(filePath: string): CursorTranscriptTailStatus | null {
+  try {
+    const stat = fs.statSync(filePath);
+    const maxBytes = 256 * 1024;
+    const start = Math.max(0, stat.size - maxBytes);
+    const text = readFileRange(filePath, start, stat.size);
+    const lines = text.split(/\r?\n/u);
+    for (let index = lines.length - 1; index >= 0; index -= 1) {
+      const line = lines[index]?.trim();
+      if (!line) continue;
+      const parsed = parseTranscriptLine(line);
+      if (!parsed) continue;
+      return {
+        size: stat.size,
+        updatedAt: stat.mtime.toISOString(),
+        recordType: parsed.type || (parsed.role ? `${parsed.role}_message` : 'unknown'),
+        ...(parsed.role ? { role: parsed.role } : {}),
+        ...(parsed.status ? { status: parsed.status } : {}),
+        ...(parsed.error ? { error: parsed.error } : {}),
+      };
+    }
+    return {
+      size: stat.size,
+      updatedAt: stat.mtime.toISOString(),
+      recordType: 'empty',
+    };
+  } catch {
+    return null;
+  }
 }
 
 function parseTranscriptLine(line: string): CursorTranscriptLine | null {

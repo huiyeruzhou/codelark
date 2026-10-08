@@ -48,6 +48,10 @@ describe('cli entrypoint', () => {
     });
     assert.deepEqual(parseCliCommand(['send', 'message']), { command: 'send', args: ['message'] });
     assert.deepEqual(parseCliCommand(['monitor', 'list']), { command: 'monitor', args: ['list'] });
+    assert.deepEqual(parseCliCommand(['cursor-desktop-patch', 'install']), {
+      command: 'cursor-desktop-patch',
+      args: ['install'],
+    });
     assert.deepEqual(parseCliCommand(['open']), { command: 'run', args: [], rawCommand: 'open' });
   });
 
@@ -207,6 +211,7 @@ describe('cli entrypoint', () => {
 
   it('renders actionable help for common local service flows', () => {
     const help = buildCliHelpText();
+    assert.match(help, /cursor-desktop-patch install/u);
 
     assert.match(help, /CodeLark v\d+\.\d+\.\d+ 本地桥接服务/);
     assert.match(help, /codelark\s+打开本地工作台，并启动 Bridge/);

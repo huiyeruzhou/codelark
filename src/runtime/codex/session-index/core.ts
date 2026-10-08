@@ -80,6 +80,7 @@ interface ThreadIndexEntry {
 const ACTIVE_WINDOW_MS = 15 * 60 * 1000;
 const MAX_SESSION_META_BYTES = 4 * 1024 * 1024;
 const MAX_SESSION_TITLE_SCAN_BYTES = 512 * 1024;
+const MAX_SESSION_MODEL_SCAN_BYTES = 2 * 1024 * 1024;
 const TITLE_MAX_CHARS = 72;
 const sessionFileByThreadId = new Map<string, string>();
 
@@ -256,6 +257,37 @@ export function getCodexSessionByThreadId(threadId: string): CodexSessionSummary
 
   const sessions = listCodexSessions();
   return sessions.find((session) => session.threadId === threadId) || null;
+}
+
+export function readCodexSessionModel(threadId: string): string | undefined {
+  const session = getCodexSessionByThreadId(threadId);
+  if (!session) return undefined;
+  try {
+    const size = fs.statSync(session.filePath).size;
+    const start = Math.max(0, size - MAX_SESSION_MODEL_SCAN_BYTES);
+    const text = readFileUtf8Range(session.filePath, start, size);
+    const lines = text.split(/\r?\n/u);
+    // The first row can be partial when the bounded tail starts in a large
+    // event. Reverse scanning naturally skips that unparsable fragment.
+    for (let index = lines.length - 1; index >= 0; index -= 1) {
+      const line = lines[index]?.trim();
+      if (!line) continue;
+      try {
+        const parsed = JSON.parse(line) as {
+          type?: unknown;
+          payload?: { model?: unknown };
+        };
+        if (parsed.type !== 'turn_context') continue;
+        const model = typeof parsed.payload?.model === 'string' ? parsed.payload.model.trim() : '';
+        if (model) return model;
+      } catch {
+        // Continue past partial or unrelated rows.
+      }
+    }
+  } catch {
+    // Display probing is best effort and must never break a turn.
+  }
+  return undefined;
 }
 
 export function archiveCodexSession(threadId: string): CodexSessionSummary | null {

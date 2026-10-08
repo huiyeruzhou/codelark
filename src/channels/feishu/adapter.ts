@@ -4904,7 +4904,7 @@ export class FeishuAdapter extends BaseChannelAdapter {
       // Step 2: Build and apply final card
       const statusLabels: Record<string, string> = {
         completed: '',
-        interrupted: '⚠️ Interrupted',
+        interrupted: '⚠️ 已停止',
         error: extractTerminalErrorStatus(state.pendingStatusText) || '❌ 异常',
       };
       const finalizedAtMs = Date.now();
@@ -4991,7 +4991,7 @@ export class FeishuAdapter extends BaseChannelAdapter {
             ? ''
             : status === 'error'
               ? extractTerminalErrorStatus(state.pendingStatusText) || '❌ 异常'
-              : '⚠️ Interrupted',
+              : '⚠️ 已停止',
           formatFooterClockTime(fallbackFinalizedAtMs),
           `已运行 ${formatFooterDuration(fallbackFinalizedAtMs - state.startTime)}`,
           resolveTerminalLastResponse(state),

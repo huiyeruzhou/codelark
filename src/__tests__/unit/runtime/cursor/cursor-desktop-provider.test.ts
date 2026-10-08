@@ -23,11 +23,17 @@ describe('Cursor Desktop provider', () => {
   let previousBridgeDir: string | undefined;
   let previousDataDir: string | undefined;
   let previousConfigDir: string | undefined;
+  let previousPollInterval: string | undefined;
+  let previousOutputIdleTimeout: string | undefined;
+  let previousQueuedIdleTimeout: string | undefined;
 
   beforeEach(async () => {
     previousBridgeDir = process.env.CURSOR_DESKTOP_BRIDGE_DIR;
     previousDataDir = process.env.CURSOR_DATA_DIR;
     previousConfigDir = process.env.CURSOR_CONFIG_DIR;
+    previousPollInterval = process.env.CODELARK_CURSOR_DESKTOP_POLL_INTERVAL_MS;
+    previousOutputIdleTimeout = process.env.CODELARK_CURSOR_DESKTOP_OUTPUT_IDLE_TIMEOUT_MS;
+    previousQueuedIdleTimeout = process.env.CODELARK_CURSOR_DESKTOP_QUEUED_IDLE_TIMEOUT_MS;
     root = fs.mkdtempSync(path.join(os.tmpdir(), 'codelark-cursor-desktop-'));
     bridgeDir = path.join(root, 'desktop-bridge');
     socketPath = path.join(root, 'bridge.sock');
@@ -47,12 +53,21 @@ describe('Cursor Desktop provider', () => {
     else process.env.CURSOR_DATA_DIR = previousDataDir;
     if (previousConfigDir === undefined) delete process.env.CURSOR_CONFIG_DIR;
     else process.env.CURSOR_CONFIG_DIR = previousConfigDir;
+    if (previousPollInterval === undefined) delete process.env.CODELARK_CURSOR_DESKTOP_POLL_INTERVAL_MS;
+    else process.env.CODELARK_CURSOR_DESKTOP_POLL_INTERVAL_MS = previousPollInterval;
+    if (previousOutputIdleTimeout === undefined) delete process.env.CODELARK_CURSOR_DESKTOP_OUTPUT_IDLE_TIMEOUT_MS;
+    else process.env.CODELARK_CURSOR_DESKTOP_OUTPUT_IDLE_TIMEOUT_MS = previousOutputIdleTimeout;
+    if (previousQueuedIdleTimeout === undefined) delete process.env.CODELARK_CURSOR_DESKTOP_QUEUED_IDLE_TIMEOUT_MS;
+    else process.env.CODELARK_CURSOR_DESKTOP_QUEUED_IDLE_TIMEOUT_MS = previousQueuedIdleTimeout;
     fs.rmSync(root, { recursive: true, force: true });
   });
 
   async function startBridge(
     onSend?: (payload: Record<string, unknown>) => void,
     sendStatus: 'submitted' | 'queued' = 'submitted',
+    threadStatus: 'idle' | 'running' | 'completed' | 'error' | 'unknown' = 'completed',
+    protocolVersion = 1,
+    onReadEvents?: (payload: Record<string, unknown>) => Record<string, unknown>,
   ): Promise<void> {
     server = http.createServer((request, response) => {
       const chunks: Buffer[] = [];
@@ -66,10 +81,17 @@ describe('Cursor Desktop provider', () => {
             id: THREAD_ID,
             title: 'Existing Desktop thread',
             source: 'local',
-            status: 'completed',
+            status: threadStatus,
             lastUpdatedAt: Date.now(),
             windowId: 1,
           }] }));
+          return;
+        }
+        if (payload.type === 'readThreadEvents') {
+          response.end(JSON.stringify(onReadEvents?.(payload) || {
+            cursor: Number(payload.after) || 0,
+            events: [],
+          }));
           return;
         }
         onSend?.(payload);
@@ -86,7 +108,7 @@ describe('Cursor Desktop provider', () => {
       server!.listen(socketPath, () => resolve());
     });
     fs.writeFileSync(path.join(bridgeDir, 'instance.json'), JSON.stringify({
-      protocolVersion: 1,
+      protocolVersion,
       pid: process.pid,
       socketPath,
       token: 'a'.repeat(64),
@@ -116,6 +138,14 @@ describe('Cursor Desktop provider', () => {
     );
   });
 
+  it('treats submitted as queued when an older Desktop Bridge reports the thread already running', async () => {
+    await startBridge(undefined, 'submitted', 'running');
+
+    const result = await sendCursorDesktopMessage(THREAD_ID, 'queue behind current turn');
+
+    assert.equal(result.status, 'queued');
+  });
+
   it('ignores a queued old turn and streams only the submitted Desktop turn', async () => {
     const cwd = path.join(root, 'workspace');
     fs.mkdirSync(cwd, { recursive: true });
@@ -143,6 +173,39 @@ describe('Cursor Desktop provider', () => {
 
     assert.match(output, /NEW_TURN_OUTPUT/);
     assert.doesNotMatch(output, /OLD_TURN_OUTPUT/);
+    assert.match(output, /"type":"result"/);
+  });
+
+  it('tracks the first new Desktop turn even when Cursor normalizes the submitted user text', async () => {
+    const cwd = path.join(root, 'workspace-normalized');
+    fs.mkdirSync(cwd, { recursive: true });
+    const transcript = getCursorTranscriptCandidates(THREAD_ID, cwd)[0]!;
+    fs.mkdirSync(path.dirname(transcript), { recursive: true });
+    fs.writeFileSync(transcript, [
+      { role: 'user', message: { content: [{ type: 'text', text: 'old prompt' }] } },
+      { role: 'assistant', message: { content: [{ type: 'text', text: 'old answer' }] } },
+      { type: 'turn_ended', status: 'success' },
+    ].map((line) => JSON.stringify(line)).join('\n') + '\n');
+    await startBridge(() => {
+      fs.appendFileSync(transcript, [
+        { role: 'user', message: { content: [{ type: 'text', text: 'Cursor-normalized follow-up without the original wire prompt' }] } },
+        { role: 'assistant', message: { content: [{ type: 'text', text: 'NORMALIZED_PROMPT_OUTPUT' }] } },
+        { type: 'turn_ended', status: 'success' },
+      ].map((line) => JSON.stringify(line)).join('\n') + '\n');
+    });
+
+    let output = '';
+    for await (const chunk of streamCursorDesktop({
+      prompt: 'wire prompt that is not persisted verbatim',
+      sessionId: 'bridge-session-normalized',
+      runtime: 'cursor',
+      cursorProvider: 'desktop',
+      cursorSessionId: THREAD_ID,
+      workingDirectory: cwd,
+    })) output += chunk;
+
+    assert.match(output, /NORMALIZED_PROMPT_OUTPUT/);
+    assert.doesNotMatch(output, /old answer/);
     assert.match(output, /"type":"result"/);
   });
 
@@ -185,6 +248,121 @@ describe('Cursor Desktop provider', () => {
     })) output += chunk;
 
     assert.match(output, /REPLACED_TRANSCRIPT_OUTPUT/);
+    assert.match(output, /"type":"result"/);
+  });
+
+  it('recovers when Cursor rewrites and grows the same transcript inode', async () => {
+    const cwd = path.join(root, 'workspace-rewritten');
+    fs.mkdirSync(cwd, { recursive: true });
+    const transcript = getCursorTranscriptCandidates(THREAD_ID, cwd)[0]!;
+    fs.mkdirSync(path.dirname(transcript), { recursive: true });
+    fs.writeFileSync(transcript, `${JSON.stringify({ role: 'assistant', message: { content: [{ type: 'text', text: 'X'.repeat(2_000) }] } })}\n`);
+    const initialInode = fs.statSync(transcript).ino;
+    await startBridge((payload) => {
+      fs.writeFileSync(transcript, [
+        { role: 'user', message: { content: [{ type: 'text', text: `<user_query>\n${payload.text}\n</user_query>` }] } },
+        { role: 'assistant', message: { content: [{ type: 'text', text: `SAME_INODE_OUTPUT${'Y'.repeat(2_500)}` }] } },
+        { type: 'turn_ended', status: 'success' },
+      ].map((line) => JSON.stringify(line)).join('\n') + '\n');
+      assert.equal(fs.statSync(transcript).ino, initialInode);
+    });
+
+    let output = '';
+    for await (const chunk of streamCursorDesktop({
+      prompt: 'same inode rewrite prompt',
+      sessionId: 'bridge-session-rewritten',
+      runtime: 'cursor',
+      cursorProvider: 'desktop',
+      cursorSessionId: THREAD_ID,
+      workingDirectory: cwd,
+    })) output += chunk;
+
+    assert.match(output, /SAME_INODE_OUTPUT/);
+    assert.match(output, /"type":"result"/);
+  });
+
+  it('keeps waiting past transcript idle timeout while Desktop reports running', async () => {
+    const cwd = path.join(root, 'workspace-running');
+    fs.mkdirSync(cwd, { recursive: true });
+    const transcript = getCursorTranscriptCandidates(THREAD_ID, cwd)[0]!;
+    fs.mkdirSync(path.dirname(transcript), { recursive: true });
+    fs.writeFileSync(transcript, '');
+    process.env.CODELARK_CURSOR_DESKTOP_POLL_INTERVAL_MS = '50';
+    process.env.CODELARK_CURSOR_DESKTOP_OUTPUT_IDLE_TIMEOUT_MS = '1000';
+    await startBridge((payload) => {
+      setTimeout(() => {
+        fs.writeFileSync(transcript, [
+          { role: 'user', message: { content: [{ type: 'text', text: `<user_query>\n${payload.text}\n</user_query>` }] } },
+          { role: 'assistant', message: { content: [{ type: 'text', text: 'OUTPUT_AFTER_IDLE_WINDOW' }] } },
+          { type: 'turn_ended', status: 'success' },
+        ].map((line) => JSON.stringify(line)).join('\n') + '\n');
+      }, 1_250);
+    }, 'submitted', 'running');
+
+    let output = '';
+    for await (const chunk of streamCursorDesktop({
+      prompt: 'long running desktop prompt',
+      sessionId: 'bridge-session-running',
+      runtime: 'cursor',
+      cursorProvider: 'desktop',
+      cursorSessionId: THREAD_ID,
+      cursorForce: true,
+      workingDirectory: cwd,
+    })) output += chunk;
+
+    assert.match(output, /后端仍为 running/);
+    assert.match(output, /OUTPUT_AFTER_IDLE_WINDOW/);
+    assert.match(output, /"type":"result"/);
+  });
+
+  it('uses protocol v2 realtime events as liveness while collecting the final transcript', async () => {
+    const cwd = path.join(root, 'workspace-realtime');
+    fs.mkdirSync(cwd, { recursive: true });
+    const transcript = getCursorTranscriptCandidates(THREAD_ID, cwd)[0]!;
+    fs.mkdirSync(path.dirname(transcript), { recursive: true });
+    fs.writeFileSync(transcript, '');
+    process.env.CODELARK_CURSOR_DESKTOP_POLL_INTERVAL_MS = '50';
+    let eventsRead = 0;
+    await startBridge((payload) => {
+      if (payload.type !== 'sendMessage') return;
+      setTimeout(() => {
+        fs.writeFileSync(transcript, [
+          { role: 'user', message: { content: [{ type: 'text', text: 'normalized realtime input' }] } },
+          { role: 'assistant', message: { content: [{ type: 'text', text: 'REALTIME_FINAL_OUTPUT' }] } },
+          { type: 'turn_ended', status: 'success' },
+        ].map((line) => JSON.stringify(line)).join('\n') + '\n');
+      }, 350);
+    }, 'submitted', 'running', 2, () => {
+      eventsRead += 1;
+      return eventsRead === 1
+        ? {
+            cursor: 1,
+            events: [{
+              sequence: 1,
+              type: 'snapshot',
+              threadId: THREAD_ID,
+              status: 'generating',
+              model: 'claude-sonnet-test',
+              timestamp: Date.now(),
+              snapshot: {},
+            }],
+          }
+        : { cursor: 1, events: [] };
+    });
+
+    let output = '';
+    for await (const chunk of streamCursorDesktop({
+      prompt: 'realtime input',
+      sessionId: 'bridge-session-realtime',
+      runtime: 'cursor',
+      cursorProvider: 'desktop',
+      cursorSessionId: THREAD_ID,
+      workingDirectory: cwd,
+    })) output += chunk;
+
+    assert.match(output, /实时事件已连接/);
+    assert.match(output, /claude-sonnet-test/);
+    assert.match(output, /REALTIME_FINAL_OUTPUT/);
     assert.match(output, /"type":"result"/);
   });
 });

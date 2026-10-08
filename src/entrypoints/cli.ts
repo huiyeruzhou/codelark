@@ -46,6 +46,10 @@ import {
 } from '../local-service/manager.js';
 import { runSetupWizard } from './setup-wizard.js';
 import { disableCodexDesktopRemote } from '../runtime/codex/desktop-remote.js';
+import {
+  installCursorDesktopRealtimePatch,
+  restoreCursorDesktopRealtimePatch,
+} from '../runtime/cursor/desktop-realtime-patch.js';
 
 const PRIMARY_CLI_NAME = 'codelark';
 
@@ -64,6 +68,7 @@ type CliCommand =
   | 'monitor'
   | 'autostart'
   | 'codex-desktop'
+  | 'cursor-desktop-patch'
   | 'uninstall'
   | 'version'
   | 'help'
@@ -250,6 +255,8 @@ export function buildCliHelpText(): string {
     '  autostart install                   安装 Windows Bridge 开机启动任务',
     '  autostart uninstall                 移除 Windows Bridge 开机启动任务',
     '  codex-desktop disable               停止共享 Codex 后端并关闭 Desktop 自动接入（会中断其活动轮次）',
+    '  cursor-desktop-patch install        安装 Cursor Desktop realtime v2 补丁（需重启 Cursor）',
+    '  cursor-desktop-patch restore        从校验备份恢复 Cursor 安装文件',
     '  uninstall                           停止服务并安排 npm uninstall -g codelark',
     '  -v, --version                       显示 CodeLark 版本',
     '  help, -h, --help                    显示本帮助',
@@ -309,6 +316,7 @@ export function parseCliCommand(argv: string[]): ParsedCliCommand {
     case 'monitor':
     case 'autostart':
     case 'codex-desktop':
+    case 'cursor-desktop-patch':
     case 'uninstall':
       return { command: rawCommand, args };
     case 'open':
@@ -910,6 +918,26 @@ async function main(argv = process.argv.slice(2)): Promise<void> {
       }
       await disableCodexDesktopRemote();
       process.stdout.write('已停止 CodeLark 管理的共享后端并关闭自动接入。请退出并重新打开 Desktop，以恢复其默认启动方式。\n');
+      return;
+    }
+
+    case 'cursor-desktop-patch': {
+      const command = parseNamedArgs(parsed.args);
+      rejectUnknownNamedArgs(command, ['--app']);
+      if (command.flags.size > 0 || command.positional.length !== 1) {
+        throw new Error('用法: codelark cursor-desktop-patch <install|restore> [--app /Applications/Cursor.app]');
+      }
+      const action = command.positional[0];
+      const appPath = command.values.get('--app')?.trim() || undefined;
+      const result = action === 'install'
+        ? installCursorDesktopRealtimePatch(appPath)
+        : action === 'restore'
+          ? restoreCursorDesktopRealtimePatch(appPath)
+          : null;
+      if (!result) {
+        throw new Error('用法: codelark cursor-desktop-patch <install|restore> [--app /Applications/Cursor.app]');
+      }
+      process.stdout.write(`${JSON.stringify({ ok: true, ...result }, null, 2)}\n`);
       return;
     }
 

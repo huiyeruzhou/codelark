@@ -619,7 +619,6 @@ export async function runInteractiveMessage(
     } catch {
       // Force stop must release the session even if remote UI cleanup fails.
     }
-    endMessageUiOnce();
     return true;
   };
 
@@ -675,6 +674,11 @@ export async function runInteractiveMessage(
         onAnswerText: streamingArtifacts?.observeAnswerText,
         onContextUsage: useInteractiveStreamUi ? sdkStreamEvents.onContextUsage : undefined,
         onRuntimeIdentity: async (identity) => {
+          if (identity.model) {
+            const metadata = buildCardMetadata();
+            const tags = (metadata.tags || []).filter((tag) => !tag.toLowerCase().startsWith('model:'));
+            streamUi.pushMetadata({ ...metadata, tags: [...tags, `model:${identity.model}`] });
+          }
           if (identity.runtime === 'claude' || identity.runtime === 'kimi' || identity.runtime === 'cursor' || identity.runtime === 'zcode') {
             ensureMirrorSuppression(preparedPromptText);
             runtimeMirrorActivated = true;
