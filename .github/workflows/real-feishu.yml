@@ -14,7 +14,8 @@ concurrency:
 jobs:
   feishu:
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    # SDK/tmux 串行运行；加入活动配置、真实 mention、继承与隔离后，本地单入口约 10 分钟。
+    timeout-minutes: 45
     env:
       CODELARK_REAL_FEISHU_E2E: '1'
     steps:

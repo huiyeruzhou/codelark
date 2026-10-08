@@ -40,11 +40,19 @@ CodeLark 的 IM 对话由三层组成：
 
 ## 在 Codex Desktop 继续同一会话
 
-macOS 已安装官方 Codex Desktop、且 Codex CLI 支持远程连接时，新建 Codex 会话会自动使用共享 app-server。新的 tmux 查看窗口建立后，聊天中会提示已检测到 Desktop，并使用了 `--remote`。在 Desktop 打开同一条会话即可继续；共享服务负责保存上下文，关闭某个查看窗口或重启 CodeLark 不会停止它。
+新建 Codex 会话默认使用 app-server。普通消息、停止和运行状态由协议处理，tmux 是可选的查看入口。
+
+macOS 已安装官方 Codex Desktop、且 Codex CLI 支持远程连接时，自动复用或准备由 macOS 独立管理的共享服务。新的 tmux 查看窗口建立后，聊天中会提示已检测到 Desktop，并使用了 `--remote`。在 Desktop 打开同一条会话即可继续；关闭查看窗口或重启 CodeLark 不会停止这个独立服务。
+
+其他情况下，CodeLark 按需启动本实例的私有后端，多个聊天共用。私有后端随创建它的 Bridge 正常关闭；后续启动会在同一地址恢复已持久保存的线程，正在执行的任务不会自动重发。私有地址不会自动写入 Desktop 环境。如果要让 Desktop 在 Bridge 退出后继续执行，请使用独立共享服务。
+
+独立共享服务使用自己的 Codex 登录状态；仅设置 `CODEX_API_KEY` 不能替代这个登录。私有后端支持把显式 API key 注入当前后端的内存认证，既不覆盖已有 `auth.json`，也不替 Desktop 登录。
 
 第一次配置时，如果 Desktop 已经打开，按提示退出后重新打开一次，让它取得共享连接地址。服务在 Desktop 之后才启动时，也可能需要重开 Desktop。CodeLark 自动保存连接配置，无需每次手动设置环境变量。实际注销再登录、两个登录项同时启动的顺序仍待专用 Mac 验证；当前验收范围见 [Desktop GUI 验收](../testing/codex-desktop.md)。
 
-已有旧会话继续使用原运行方式；没有 Desktop、CLI 版本不支持或使用其他系统时，也保留原方式。已经由独立 Codex 进程占用的会话，需要先正常结束那个进程才能交给共享服务，不能通过删除锁文件解决。
+已有旧会话继续使用原运行方式；CLI 明确不支持 app-server 监听时，也保留旧适配器。`CODELARK_CODEX_APP_SERVER=0` 关闭新会话的自动选择，但已绑定的协议线程仍使用原后端；连接或认证失败不会偷偷切换执行进程。已经由独立 Codex 进程占用的会话，需要先正常结束那个进程才能交给共享服务，不能通过删除锁文件解决。
+
+`/clear`、`/new` 只继承后端选择，第一条真实输入才创建原生线程；后台订阅不会提前创建空线程。显式 `/p tmux` 会预热线程；若尚未发送过输入，Codex 可能还未保存其历史，后端退出后需要 `/clear` 新建。
 
 需要恢复 Desktop 默认运行方式时，在本机终端执行：
 
