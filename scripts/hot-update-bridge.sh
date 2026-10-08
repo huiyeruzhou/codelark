@@ -281,7 +281,9 @@ dispatch_worker() {
   local worker_script="$PROJECT_DIR/scripts/hot-update-bridge.sh"
   if [ "$(uname -s 2>/dev/null || true)" = "Darwin" ] && command -v launchctl >/dev/null 2>&1; then
     local launch_label="com.codelark.hot-update.${log_stamp}.$$"
-    launchctl submit -l "$launch_label" -o "$log_file" -e "$log_file" -- /bin/bash "$worker_script" "${args[@]}"
+    local launch_wrapper='label="$1"; shift; cleanup() { launchctl remove "$label" >/dev/null 2>&1 || true; }; trap cleanup EXIT; /bin/bash "$@"; worker_exit=$?; exit "$worker_exit"'
+    launchctl submit -l "$launch_label" -o "$log_file" -e "$log_file" -- \
+      /bin/bash -c "$launch_wrapper" -- "$launch_label" "$worker_script" "${args[@]}"
     echo "Dispatched CodeLark hot update."
     echo "Launchd label: $launch_label"
   elif command -v setsid >/dev/null 2>&1; then

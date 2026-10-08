@@ -80,7 +80,11 @@ test('hot-update dispatcher uses launchd with an absolute worker path on macOS',
     const args = fs.readFileSync(calls, 'utf8').trim().split('\n');
     assert.deepEqual(args.slice(0, 2), ['submit', '-l']);
     assert.match(args[2] ?? '', /^com\.codelark\.hot-update\.\d{8}-\d{6}\.\d+$/);
-    assert.equal(args.at(-4), '/bin/bash');
+    assert.equal(args[8], '/bin/bash');
+    assert.equal(args[9], '-c');
+    assert.match(args[10] ?? '', /trap cleanup EXIT/);
+    assert.equal(args[11], '--');
+    assert.equal(args[12], args[2]);
     assert.equal(args.at(-3), fs.realpathSync(path.join(root, 'scripts', 'hot-update-bridge.sh')));
     assert.deepEqual(args.slice(-2), ['--run', '--skip-tests']);
     assert.match(result.stdout, /Dispatched CodeLark hot update\./);
