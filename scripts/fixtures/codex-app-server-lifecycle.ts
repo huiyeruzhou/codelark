@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { spawn, type ChildProcess } from 'node:child_process';
+import { execFileSync, spawn, type ChildProcess } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import fs from 'node:fs';
 import http from 'node:http';
@@ -173,10 +173,35 @@ async function stopFixtureChild(child: ChildProcess): Promise<void> {
   if (!child.pid) return;
   const grouped = process.platform !== 'win32';
   const target = grouped ? -child.pid : child.pid;
+  const ownedPids = new Set([child.pid]);
+  if (grouped) {
+    try {
+      const output = execFileSync('/bin/ps', ['-o', 'pid=', '-g', String(child.pid)], { encoding: 'utf8' });
+      for (const value of output.match(/\d+/gu) || []) ownedPids.add(Number(value));
+    } catch { /* The group may already be gone. */ }
+  }
   const signal = (value: NodeJS.Signals | 0): boolean => {
     if (!grouped && (child.exitCode !== null || child.signalCode !== null)) return false;
     try { process.kill(target, value); return true; }
-    catch (error) { if ((error as NodeJS.ErrnoException).code === 'ESRCH') return false; throw error; }
+    catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code === 'ESRCH') return false;
+      if (code === 'EPERM' && grouped) {
+        // Darwin can reject a negative-PGID signal after the group leader has
+        // exited even while an owned child remains. Fall back only to the
+        // exact PIDs captured from this fixture's private process group.
+        let alive = false;
+        for (const pid of ownedPids) {
+          try { process.kill(pid, value); alive = true; }
+          catch (pidError) {
+            if (['ESRCH', 'EPERM'].includes((pidError as NodeJS.ErrnoException).code || '')) continue;
+            throw pidError;
+          }
+        }
+        return alive;
+      }
+      throw error;
+    }
   };
   const waitForExit = async (timeoutMs: number): Promise<boolean> => {
     const deadline = Date.now() + timeoutMs;

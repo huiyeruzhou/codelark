@@ -260,7 +260,10 @@ test('Bridge restart recovers a tracked turn that completed while disconnected',
   const f = await fixture(t);
   const turnId = await f.runtime.submit('thread', text);
   f.runtime.close();
-  f.thread.turns![0] = { id: turnId, status: 'completed', items: [{ id: 'recovered-answer', type: 'agentMessage', text: 'finished while Bridge was down' }] };
+  f.thread.turns = [
+    { id: 'orphaned-old-turn', status: 'inProgress', items: [{ id: 'old-answer', type: 'agentMessage', text: 'must not replay' }] },
+    { id: turnId, status: 'completed', items: [{ id: 'recovered-answer', type: 'agentMessage', text: 'finished while Bridge was down' }] },
+  ];
   let saved: string | undefined = turnId;
   const recovered = new CodexAppServerLifecycle(f.runtime.endpoint, {
     loadActiveTurn: () => saved, saveActiveTurn: (_, id) => { saved = id; },
@@ -270,7 +273,28 @@ test('Bridge restart recovers a tracked turn that completed while disconnected',
   assert.equal(saved, undefined);
   assert.equal(recovered.snapshot('thread').activity, 'idle');
   assert(recovered.recordsAfter('thread').records.some((r) => r.content === 'finished while Bridge was down'));
+  assert(!recovered.recordsAfter('thread').records.some((r) => r.turnId === 'orphaned-old-turn'));
   assert.equal(recovered.recordsAfter('thread').records.filter((r) => r.type === 'task_complete').length, 1);
+});
+
+test('Bridge restart follows only the latest in-progress turn and ignores historical orphans', async (t) => {
+  const f = await fixture(t);
+  f.runtime.close();
+  f.thread.turns = [
+    { id: 'orphaned-old-turn', status: 'inProgress', items: [{ id: 'old-answer', type: 'agentMessage', text: 'must not replay' }] },
+    { id: 'current-turn', status: 'inProgress', items: [{ id: 'current-answer', type: 'agentMessage', text: 'current progress' }] },
+  ];
+  let saved: string | undefined = 'orphaned-old-turn';
+  const recovered = new CodexAppServerLifecycle(f.runtime.endpoint, {
+    loadActiveTurn: () => saved,
+    saveActiveTurn: (_, id) => { saved = id; },
+  });
+  t.after(() => recovered.close());
+  await recovered.ensureThread({ threadId: 'thread' });
+  assert.equal(recovered.snapshot('thread').turnId, 'current-turn');
+  assert.equal(recovered.snapshot('thread').activity, 'active');
+  assert(recovered.recordsAfter('thread').records.some((r) => r.content === 'current progress'));
+  assert(!recovered.recordsAfter('thread').records.some((r) => r.turnId === 'orphaned-old-turn'));
 });
 
 test('definitive validation rejection permits a later corrected input without retrying the original', async (t) => {

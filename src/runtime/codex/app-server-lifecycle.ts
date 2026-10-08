@@ -378,11 +378,19 @@ export class CodexAppServerLifecycle {
       this.changed(thread.id); return;
     }
     if (!newerEvents) state.snapshot.activity = 'idle';
+    // Some app-server histories retain orphaned turns as inProgress after a
+    // newer turn has already started. Only the last turn can be the current
+    // server-side turn; replaying every orphan after a Bridge restart creates
+    // duplicate cards and eventually finalizes them as interrupted.
+    const lastTurn = thread.turns.at(-1);
+    const activeHistoryTurnId = lastTurn?.status === 'inProgress' ? lastTurn.id : undefined;
     for (const turn of thread.turns || []) {
       // Initial attachment must not re-deliver the entire history as new IM messages.
-      // On reconnect, reconcile only turns already observed or the active turn.
+      // On reconnect, reconcile only turns already observed or the one current turn.
       const confirmsSubmission = state.snapshot.submission && turn.items?.some((item) => item.type === 'userMessage' && item.clientId === state.snapshot.submission?.id);
-      if (history && !state.turns.has(turn.id) && turn.status !== 'inProgress' && !confirmsSubmission) continue;
+      const knownTurn = state.turns.has(turn.id);
+      if (history && !knownTurn && turn.id !== activeHistoryTurnId && !confirmsSubmission) continue;
+      if (history && turn.status === 'inProgress' && turn.id !== activeHistoryTurnId && !confirmsSubmission) continue;
       const current = state.turns.get(turn.id);
       if (newerEvents && current) continue;
       if (!current) this.applyTurn(thread.id, { ...turn, status: 'inProgress' });
