@@ -9,12 +9,12 @@ const runtimeHome = path.join(tempHome, 'runtime-home');
 const codexHome = path.join(tempHome, 'codex-home');
 const claudeHome = path.join(tempHome, 'claude-home');
 const kimiHome = path.join(tempHome, 'kimi-home');
-const tmuxTempDir = path.join(tempHome, 'tmux');
+const tmuxTempRoot = process.platform === 'win32' ? os.tmpdir() : '/tmp';
+const tmuxTempDir = fs.mkdtempSync(path.join(tmuxTempRoot, 'clk-tmux-'));
 fs.mkdirSync(runtimeHome, { recursive: true });
 fs.mkdirSync(codexHome, { recursive: true });
 fs.mkdirSync(claudeHome, { recursive: true });
 fs.mkdirSync(kimiHome, { recursive: true });
-fs.mkdirSync(tmuxTempDir, { recursive: true });
 
 const testEnv = {
   ...process.env,
@@ -111,6 +111,11 @@ function cleanup() {
   }
   try {
     fs.rmSync(tempHome, { recursive: true, force: true });
+  } catch {
+    // ignore
+  }
+  try {
+    fs.rmSync(tmuxTempDir, { recursive: true, force: true });
   } catch {
     // ignore
   }

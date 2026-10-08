@@ -32,6 +32,7 @@ import {
 import {
   cleanupCodexThreadArtifacts,
   commandAvailable,
+  createShortTmuxTempDirectory,
   removeRuntimeTestDirectory,
   seedCodexApiKeyAuth,
   startLocalResponsesProxy,
@@ -921,7 +922,7 @@ describe('real codex tmux provider e2e', () => {
       TMUX_TMPDIR: process.env.TMUX_TMPDIR,
     };
     const codexHome = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-real-codex-home-first-chat-'));
-    const tmuxTmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-real-codex-socket-first-chat-'));
+    const tmuxTmpDir = createShortTmuxTempDirectory();
     const proxy = await startLocalResponsesProxy();
     delete process.env.TMUX;
     delete process.env.TMUX_PANE;
@@ -1078,7 +1079,7 @@ describe('real codex tmux provider e2e', () => {
     };
     const codexHome = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-real-codex-home-new-group-'));
     const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-real-codex-new-group-'));
-    const tmuxTmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-real-codex-socket-new-group-'));
+    const tmuxTmpDir = createShortTmuxTempDirectory();
     const proxy = await startLocalResponsesProxy();
     delete process.env.TMUX;
     delete process.env.TMUX_PANE;
@@ -1334,13 +1335,23 @@ describe('real codex tmux provider e2e', () => {
         250,
       );
       assert.equal(mediumTurnCompleted, true, 'medium multiline CJK turn should complete before the long prompt is sent');
-      const mediumRequests = proxy.requests.slice(mediumRequestsStart).filter((request) => request.url.includes('/responses'));
+      const mediumRequests = proxy.requests.slice(mediumRequestsStart).filter((request) => (
+        request.url.includes('/responses') && requestBodyContainsText(request.body, mediumPrompt)
+      ));
       assert.equal(mediumRequests.length, 1, 'one medium input must produce exactly one model request');
       const mediumMessages = fs.readFileSync(generatedThreadFilePath, 'utf8').split(/\r?\n/u)
         .filter(Boolean)
         .map((line) => JSON.parse(line))
-        .filter((entry) => entry.type === 'event_msg' && entry.payload?.type === 'user_message')
-        .map((entry) => entry.payload.message as string)
+        .flatMap((entry) => {
+          if (entry.type === 'event_msg' && entry.payload?.type === 'user_message') {
+            return typeof entry.payload.message === 'string' ? [entry.payload.message] : [];
+          }
+          if (entry.type === 'response_item' && entry.payload?.type === 'message' && entry.payload.role === 'user') {
+            return [entry.payload.content?.filter((part: { type?: string; text?: unknown }) => part.type === 'input_text')
+              .map((part: { text?: unknown }) => typeof part.text === 'string' ? part.text : '').join('') || ''];
+          }
+          return [];
+        })
         .filter((message) => message.includes('clk-medium-cjk-start') || message.includes('clk-medium-cjk-end'));
       assert.deepEqual(mediumMessages, [mediumPrompt], 'rollout must contain exactly one complete medium user message');
 

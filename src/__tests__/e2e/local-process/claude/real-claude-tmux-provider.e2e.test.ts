@@ -20,6 +20,7 @@ import type { ClaudeExecutable } from '../../../../runtime/options.js';
 import { initBridgeTestContext } from '../../../helpers/bridge/test-bridge-utils.js';
 import {
   commandAvailable,
+  createShortTmuxTempDirectory,
   removeRuntimeTestDirectory,
   startLocalResponsesProxy,
   waitForCondition,
@@ -62,18 +63,19 @@ function writeClaudeOnboardingState(homeDir: string): void {
 describe('real Claude Code tmux provider e2e', () => {
   it('continues provider auto-forward after accepting the Claude YOLO warning card', { timeout: 120_000 }, async (t: TestContext) => {
     const claudeExecutable = (process.env.CODELARK_REAL_CLAUDE_E2E_EXECUTABLE || 'claude') as ClaudeExecutable;
+    const keychainFreeEnv = { ...process.env, CLAUDE_CODE_SIMPLE: '1' };
     if (!(await commandAvailable('tmux', ['-V']))) {
       t.skip('tmux is not available');
       return;
     }
-    if (!(await commandAvailable(claudeExecutable, ['--version']))) {
+    if (!(await commandAvailable(claudeExecutable, ['--version'], keychainFreeEnv))) {
       t.skip('claude executable is not available');
       return;
     }
 
     const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-real-claude-auto-forward-home-'));
     const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-real-claude-auto-forward-work-'));
-    const tmuxTmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-real-claude-auto-forward-socket-'));
+    const tmuxTmpDir = createShortTmuxTempDirectory();
     const prompt = `CODELARK_CLAUDE_AUTO_FORWARD_${process.pid}_${Date.now()}`;
     const proxy = await startLocalResponsesProxy({ responseText: 'ok' });
     const sessionName = `claude_auto_forward_${process.pid}_${Date.now()}`;
@@ -113,6 +115,7 @@ describe('real Claude Code tmux provider e2e', () => {
       ANTHROPIC_AUTH_TOKEN: 'codelark-local-mock-token',
       ANTHROPIC_API_KEY: '',
       CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1',
+      CLAUDE_CODE_SIMPLE: '1',
       CODELARK_CLAUDE_TMUX_POLL_INTERVAL_MS: '100',
     } satisfies Record<string, string>;
     writeClaudeOnboardingState(homeDir);
@@ -186,19 +189,20 @@ describe('real Claude Code tmux provider e2e', () => {
   });
 
   it('runs and resumes the real Claude executable through tmux against a fake Anthropic backend', { timeout: 180_000 }, async (t: TestContext) => {
+    const keychainFreeEnv = { ...process.env, CLAUDE_CODE_SIMPLE: '1' };
     const claudeExecutable = process.env.CODELARK_REAL_CLAUDE_E2E_EXECUTABLE || 'claude';
     if (!(await commandAvailable('tmux', ['-V']))) {
       t.skip('tmux is not available');
       return;
     }
-    if (!(await commandAvailable(claudeExecutable, ['--version']))) {
+    if (!(await commandAvailable(claudeExecutable, ['--version'], keychainFreeEnv))) {
       t.skip('claude executable is not available');
       return;
     }
 
     const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-real-claude-tmux-home-'));
     const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-real-claude-tmux-work-'));
-    const tmuxTmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-real-claude-tmux-socket-'));
+    const tmuxTmpDir = createShortTmuxTempDirectory();
     const expected = `CODELARK_REAL_CLAUDE_TMUX_${process.pid}_${Date.now()}`;
     const proxy = await startLocalResponsesProxy({ responseText: expected });
     const sessionId = `real-claude-tmux-${process.pid}-${Date.now()}`;
@@ -214,6 +218,7 @@ describe('real Claude Code tmux provider e2e', () => {
       ANTHROPIC_AUTH_TOKEN: 'codelark-local-mock-token',
       ANTHROPIC_API_KEY: '',
       CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1',
+      CLAUDE_CODE_SIMPLE: '1',
       CODELARK_CLAUDE_TMUX_PROMPT_DELAY_MS: '0',
       CODELARK_CLAUDE_TMUX_POLL_INTERVAL_MS: '100',
       CODELARK_CLAUDE_TMUX_SESSION_FILE_TIMEOUT_MS: '30000',

@@ -100,7 +100,8 @@ test('default registry selects one private backend without an endpoint and resto
   assert(f.records().some((m) => m.method === 'thread/resume' && m.params.threadId === a.threadId));
   assert.equal(await prepareCodexAppServerSession({ sessionId: 'opt-out-new' }), undefined);
   process.env.CODELARK_CODEX_APP_SERVER = '1';
-  assert.equal(await prepareCodexAppServerSession({ sessionId: 'legacy-id', threadId: 'legacy-thread' }), undefined);
+  const migrated = await prepareCodexAppServerSession({ sessionId: 'legacy-id', threadId: b.threadId });
+  assert(migrated); assert.equal(migrated.threadId, b.threadId);
   await closeCodexAppServerSessions();
   fs.writeFileSync(f.executable, f.source.replace("const mode = \"ok\"", "const mode = \"no-listen\""));
   await assert.rejects(prepareCodexAppServerSession({ sessionId: 'default-a' }), /未回退/);

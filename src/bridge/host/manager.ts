@@ -5278,7 +5278,7 @@ async function handleMessage(
     }
   }
 
-  // Selection may create a binding. Legacy first messages must still use their original startup path.
+  // Protocol selection may create or migrate a binding. Keep the prior binding only for a true legacy fallback.
   const bindingBeforeProtocolSelection = store.getChannelChat(msg.address.channelType, msg.address.chatId);
   if (!isBridgeCommandText(rawText)) {
     const binding = router.resolve(msg.address);

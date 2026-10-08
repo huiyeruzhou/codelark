@@ -46,6 +46,8 @@ export async function prepareCodexAppServerSession(options: AppServerThreadOptio
   endpoint?: string;
   /** Background observers restore known threads; they must not allocate an empty thread. */
   createIfMissing?: boolean;
+  /** Release a CodeLark-owned legacy writer only after the protocol backend is reachable. */
+  beforeResumeLegacyThread?: () => Promise<void>;
 }): Promise<CodexAppServerSession | undefined> {
   const cached = sessions.get(options.sessionId);
   if (cached && (!options.threadId || cached.threadId === options.threadId)) {
@@ -73,9 +75,6 @@ export async function prepareCodexAppServerSession(options: AppServerThreadOptio
     const pinned = persisted && (!options.threadId || persisted.threadId === options.threadId) ? persisted : undefined;
     if (pinned && options.endpoint && appServerCliUrl(options.endpoint) !== pinned.endpoint) throw new Error('此线程已经绑定另一 app-server，未切换执行后端。');
     let endpoint = options.endpoint || pinned?.endpoint || process.env.CODELARK_CODEX_APP_SERVER_URL;
-    // Existing legacy threads keep their writer and adapter across an upgrade.
-    // Migration is explicit (endpoint) or starts with a new thread.
-    if (!endpoint && options.threadId) return;
     if (!endpoint && process.env.CODELARK_CODEX_APP_SERVER === '0') return;
     let remote: CodexDesktopRemote | undefined;
     // /clear and /new inherit the endpoint before the new session has a registry
@@ -125,9 +124,21 @@ export async function prepareCodexAppServerSession(options: AppServerThreadOptio
       });
       backends.set(endpoint, lifecycle);
     }
-    const { sessionId: _, endpoint: __, createIfMissing: ___, ...threadOptions } = options;
+    const {
+      sessionId: _, endpoint: __, createIfMissing: ___,
+      beforeResumeLegacyThread: ____, ...threadOptions
+    } = options;
     const targetThread = options.threadId || pinned?.threadId;
     if (targetThread) preparingTargets.set(token, `${endpoint}:${targetThread}`);
+    // Do not stop a working legacy writer until an app-server has been selected,
+    // started and authenticated. Once selected, transfer ownership before resume:
+    // two concurrent writers are rejected by Codex and must never trigger fallback.
+    await lifecycle.connect();
+    assertCurrent();
+    if (options.threadId && !pinned && options.beforeResumeLegacyThread) {
+      await options.beforeResumeLegacyThread();
+      assertCurrent();
+    }
     const threadId = await lifecycle.ensureThread({ ...threadOptions, threadId: options.threadId || pinned?.threadId,
       config: { ...threadOptions.config, 'shell_environment_policy.set.CODELARK_HOME': CODELARK_HOME },
     });

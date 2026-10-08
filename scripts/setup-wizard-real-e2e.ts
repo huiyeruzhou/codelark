@@ -168,6 +168,13 @@ async function main(): Promise<void> {
   const larkSourceConfigPath = path.join(codelarkHome, 'runtime', 'lark-cli-source', 'config.json');
   const larkRuntimeConfigPath = path.join(codelarkHome, 'runtime', 'lark-cli', 'lark-channel', 'config.json');
   const globalLarkCliConfigPath = path.join(runtimeHome, '.lark-cli', 'config.json');
+  const larkCliFileMasterKeyPath = path.join(
+    runtimeHome,
+    'Library',
+    'Application Support',
+    'lark-cli',
+    'master.key.file',
+  );
   const existingGlobalAppId = 'cli_existing_global_binding';
   const configEnvPath = path.join(codelarkHome, 'config.env');
   const configJsonPath = path.join(codelarkHome, 'config.json');
@@ -178,6 +185,10 @@ async function main(): Promise<void> {
     fs.mkdirSync(runtimeHome, { recursive: true });
     fs.mkdirSync(codelarkHome, { recursive: true });
     fs.mkdirSync(workspaceRoot, { recursive: true });
+    if (process.platform === 'darwin') {
+      fs.mkdirSync(path.dirname(larkCliFileMasterKeyPath), { recursive: true });
+      fs.writeFileSync(larkCliFileMasterKeyPath, Buffer.alloc(32, 0x63), { mode: 0o600 });
+    }
 
     const standardLarkCliEnv = buildStandardLarkCliEnv({
       ...process.env,
@@ -297,6 +308,7 @@ async function main(): Promise<void> {
       globalLarkCliConfigPath,
       globalLarkCliConfigUnchanged: true,
       realLarkCliConfigInit: true,
+      larkCliFileMasterKeyPrepared: process.platform === 'darwin',
       existingGlobalAppId,
       configEnvPath,
       configJsonPath,

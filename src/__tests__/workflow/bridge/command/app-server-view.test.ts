@@ -1,7 +1,7 @@
 import '../../../setup/test-setup.js';
 import { it } from 'node:test';
 import assert from 'node:assert/strict';
-import { prepareCodexAppServerForBinding, scheduleCodexAppServerView } from '../../../../bridge/command/tmux.js';
+import { releaseLegacyCodexTmuxWriter, scheduleCodexAppServerView } from '../../../../bridge/command/tmux.js';
 import type { CodexAppServerSession } from '../../../../runtime/codex/app-server-registry.js';
 import type { BridgeSession, BridgeStore, ChannelChat } from '../../../../domain/index.js';
 import { startCodexAppServerView } from '../../../../bridge/tmux/runtime.js';
@@ -50,13 +50,33 @@ it('reports view failure independently and ignores a stale binding after readine
   assert.equal(s.getSession().runtime?.general?.tmuxSessionName, undefined);
 });
 
-it('keeps an existing legacy thread on its current writer without an explicit endpoint', async () => {
+it('releases only the exact provider-owned legacy writer before protocol migration', async () => {
   const s = setup();
   delete s.options.session.runtime!.codex!.appServerEndpoint;
-  const saved = process.env.CODELARK_CODEX_APP_SERVER_URL;
-  delete process.env.CODELARK_CODEX_APP_SERVER_URL;
-  try { assert.equal(await prepareCodexAppServerForBinding(s.options.store, s.options.binding, s.options.session), undefined); }
-  finally { if (saved === undefined) delete process.env.CODELARK_CODEX_APP_SERVER_URL; else process.env.CODELARK_CODEX_APP_SERVER_URL = saved; }
+  s.options.session.runtime!.general = { tmuxSessionName: 'codex_thread' };
+  const calls: string[] = [];
+  await releaseLegacyCodexTmuxWriter(s.options.store, s.options.session, 'thread', async (options) => {
+    calls.push(options.sessionName || '');
+    return { sessionName: options.sessionName, commands: ['kill'], killed: true };
+  });
+  assert.deepEqual(calls, ['codex_thread']);
+  assert.equal(s.getSession().runtime?.general?.tmuxSessionName, undefined);
+
+  s.options.session.runtime!.general = { tmuxSessionName: 'codex_thread-view' };
+  await releaseLegacyCodexTmuxWriter(s.options.store, s.options.session, 'thread', async () => {
+    assert.fail('an app-server view is not a legacy writer');
+  });
+
+  const failed = setup();
+  delete failed.options.session.runtime!.codex!.appServerEndpoint;
+  failed.options.session.runtime!.general = { tmuxSessionName: 'codex_thread' };
+  await assert.rejects(
+    releaseLegacyCodexTmuxWriter(failed.options.store, failed.options.session, 'thread', async () => ({
+      sessionName: 'codex_thread', commands: [], killed: false, error: 'permission denied',
+    })),
+    /无法结束旧 Codex tmux writer.*未恢复线程、未发送输入.*permission denied/,
+  );
+  assert.equal(failed.getSession().runtime?.general?.tmuxSessionName, 'codex_thread');
 });
 
 it('creates a remote view without reading screens, sending keys or killing a pane awaiting manual trust', async () => {

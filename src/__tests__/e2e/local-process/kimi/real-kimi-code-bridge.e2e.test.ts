@@ -127,7 +127,10 @@ describe('real Kimi Code bridge e2e', () => {
       t.skip(`real Kimi Code executable is not available at ${executable}`);
       return;
     }
-    if (!(await commandAvailable(claudeExecutable, ['--version']))) {
+    if (!(await commandAvailable(claudeExecutable, ['--version'], {
+      ...process.env,
+      CLAUDE_CODE_SIMPLE: '1',
+    }))) {
       t.skip('real Claude executable is not available');
       return;
     }
@@ -153,6 +156,7 @@ describe('real Kimi Code bridge e2e', () => {
       ANTHROPIC_AUTH_TOKEN: 'codelark-local-mock-token',
       ANTHROPIC_API_KEY: '',
       CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1',
+      CLAUDE_CODE_SIMPLE: '1',
       CODELARK_CLAUDE_TMUX_PROMPT_DELAY_MS: '0',
       CODELARK_CLAUDE_TMUX_POLL_INTERVAL_MS: '100',
       CODELARK_CLAUDE_TMUX_SESSION_FILE_TIMEOUT_MS: '30000',

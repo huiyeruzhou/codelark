@@ -3090,7 +3090,7 @@ provider = "tmux"
       assert.equal(session?.runtime?.activeRuntime, 'kimi');
       assert.equal(session?.runtime?.kimi?.provider, 'tmux');
       assert.equal(session?.runtime?.kimi?.sessionId, expectedKimiSessionId);
-      assert.equal(session?.runtime?.kimi?.cwd, workDir);
+      assert.equal(fs.realpathSync(session?.runtime?.kimi?.cwd || ''), fs.realpathSync(workDir));
       assert.equal(session?.mirror_status, 'watching');
       assert.equal(fs.existsSync(ctrlCPath), false, 'fresh Kimi startup must not kill the initial TUI to discover its session id');
 
@@ -3109,7 +3109,7 @@ provider = "tmux"
         .map((line) => JSON.parse(line) as { argv: string[]; resumed: boolean; cwd: string });
       assert.deepEqual(launches[0]?.argv, ['-y']);
       assert.equal(launches[0]?.resumed, false);
-      assert.equal(launches[0]?.cwd, workDir);
+      assert.equal(fs.realpathSync(launches[0]?.cwd || ''), fs.realpathSync(workDir));
 
       await _testOnly.handleMessage(adapter, inboundMessage(address, '<C-c>', 'incoming-kimi-first-ctrl-c'));
       await _testOnly.handleMessage(adapter, inboundMessage(address, '<C-c>', 'incoming-kimi-second-ctrl-c'));
@@ -3274,7 +3274,7 @@ provider = "tmux"
       assert.equal(updatedSession?.runtime?.activeRuntime, 'kimi');
       assert.equal(getSessionKimiProviderToml(activeBinding.bridgeSessionId), 'tmux');
       assert.equal(updatedSession?.runtime?.kimi?.sessionId, expectedKimiSessionId);
-      assert.equal(updatedSession?.runtime?.kimi?.cwd, workDir);
+      assert.equal(fs.realpathSync(updatedSession?.runtime?.kimi?.cwd || ''), fs.realpathSync(workDir));
       assert.equal(updatedSession?.mirror_status, 'watching');
       await _testOnly.reconcileMirrorSubscriptions();
       assert.equal(bridgeState.kimiMirrorSubscriptions.get(currentBinding.id)?.pendingTurn, null);
@@ -3298,7 +3298,7 @@ provider = "tmux"
         .map((line) => JSON.parse(line) as { argv: string[]; resumed: boolean; cwd: string });
       assert.deepEqual(launches[0]?.argv, ['-y']);
       assert.equal(launches[0]?.resumed, false);
-      assert.equal(launches[0]?.cwd, workDir);
+      assert.equal(fs.realpathSync(launches[0]?.cwd || ''), fs.realpathSync(workDir));
     } finally {
       const activeBinding = store.getChannelChat(address.channelType, address.chatId);
       if (activeBinding) {
@@ -3385,7 +3385,7 @@ provider = "tmux"
       assert.equal(session?.runtime?.activeRuntime, 'kimi');
       assert.equal(session?.runtime?.kimi?.provider, 'tmux');
       assert.equal(session?.runtime?.kimi?.sessionId, kimiSessionId);
-      assert.equal(session?.runtime?.kimi?.cwd, workDir);
+      assert.equal(fs.realpathSync(session?.runtime?.kimi?.cwd || ''), fs.realpathSync(workDir));
       assert.match(adapter.sent.at(-1)?.text || '', /已切换到本地 Kimi Code 会话/);
 
       await _testOnly.handleMessage(adapter, inboundMessage(address, 'continue bound kimi', 'incoming-kimi-bound-plain'));
@@ -3409,7 +3409,7 @@ provider = "tmux"
       const updatedSession = store.getSession(binding.bridgeSessionId);
       assert.equal(updatedSession?.runtime?.activeRuntime, 'kimi');
       assert.equal(updatedSession?.runtime?.kimi?.sessionId, kimiSessionId);
-      assert.equal(updatedSession?.runtime?.kimi?.cwd, workDir);
+      assert.equal(fs.realpathSync(updatedSession?.runtime?.kimi?.cwd || ''), fs.realpathSync(workDir));
       assert.equal(updatedSession?.mirror_status, 'watching');
       await _testOnly.reconcileMirrorSubscriptions();
       assert.equal(bridgeState.kimiMirrorSubscriptions.get(binding.id)?.pendingTurn, null);
@@ -3425,7 +3425,7 @@ provider = "tmux"
       assert.equal(launches.length, 1);
       assert.deepEqual(launches[0]?.argv.slice(0, 2), ['-r', kimiSessionId]);
       assert.equal(launches[0]?.resumed, true);
-      assert.equal(launches[0]?.cwd, workDir);
+      assert.equal(fs.realpathSync(launches[0]?.cwd || ''), fs.realpathSync(workDir));
 
       const keyLog = fs.readFileSync(keyLogPath, 'utf-8');
       assert.match(keyLog, /continue bound kimi/);

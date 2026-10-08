@@ -152,6 +152,7 @@ test('setup wizard real script runs in an isolated local e2e home and cleans its
     globalLarkCliConfigPath?: string;
     globalLarkCliConfigUnchanged?: boolean;
     realLarkCliConfigInit?: boolean;
+    larkCliFileMasterKeyPrepared?: boolean;
     existingGlobalAppId?: string;
     daemonLarkCliConfigDir?: string | null;
     daemonLarkChannelHome?: string | null;
@@ -164,6 +165,7 @@ test('setup wizard real script runs in an isolated local e2e home and cleans its
   assert.match(parsed.globalLarkCliConfigPath || '', /\.lark-cli[\\/]config\.json$/);
   assert.equal(parsed.globalLarkCliConfigUnchanged, true);
   assert.equal(parsed.realLarkCliConfigInit, true);
+  assert.equal(parsed.larkCliFileMasterKeyPrepared, process.platform === 'darwin');
   assert.equal(parsed.existingGlobalAppId, 'cli_existing_global_binding');
   assert.equal(parsed.daemonLarkCliConfigDir, null);
   assert.equal(parsed.daemonLarkChannelHome, null);

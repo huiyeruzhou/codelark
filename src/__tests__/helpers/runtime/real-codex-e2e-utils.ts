@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { exec, execFile } from 'node:child_process';
 import fs from 'node:fs';
 import http from 'node:http';
+import os from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
 import { WebSocketServer } from 'ws';
@@ -33,11 +34,12 @@ export function buildWindowsRuntimeCommandLine(command: string, args: string[]):
   return [command, ...args].map(quoteCmdArgument).join(' ');
 }
 
-export async function execRuntimeCommand(command: string, args: string[]) {
-  if (process.platform !== 'win32') return execFileAsync(command, args);
+export async function execRuntimeCommand(command: string, args: string[], env: NodeJS.ProcessEnv = process.env) {
+  if (process.platform !== 'win32') return execFileAsync(command, args, { env });
   return execAsync(buildWindowsRuntimeCommandLine(command, args), {
     shell: process.env.ComSpec || process.env.COMSPEC || 'cmd.exe',
     windowsHide: true,
+    env,
   });
 }
 
@@ -67,6 +69,11 @@ export function removeRuntimeTestDirectory(directory: string): void {
   }
 }
 
+export function createShortTmuxTempDirectory(): string {
+  const root = process.platform === 'win32' ? os.tmpdir() : '/tmp';
+  return fs.mkdtempSync(path.join(root, 'clk-tmux-'));
+}
+
 export function finalizeRuntimeTestDirectory(directory: string, completed: boolean): void {
   if (!completed && process.env.CODELARK_RUNTIME_E2E_PRESERVE_FAILURES === '1') {
     process.stderr.write(`[real-runtime-e2e] preserved failure fixture: ${directory}\n`);
@@ -79,9 +86,13 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-export async function commandAvailable(command: string, args: string[]): Promise<boolean> {
+export async function commandAvailable(
+  command: string,
+  args: string[],
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<boolean> {
   try {
-    await execRuntimeCommand(command, args);
+    await execRuntimeCommand(command, args, env);
     return true;
   } catch {
     return false;

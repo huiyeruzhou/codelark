@@ -11,6 +11,7 @@ import { prepareCodexAppServerSession, type CodexAppServerSession } from '../../
 import { appServerTurnOptions } from '../../runtime/codex/app-server-provider.js';
 import {
   claudeTmuxSessionName,
+  cleanupRuntimeTmuxSession,
   codexTmuxSessionName,
   attachTmuxSession,
   CodexResumeTmuxLaunchError,
@@ -49,6 +50,7 @@ import {
   getSessionTmuxSessionName,
   getSessionWorkingDirectory,
   getSessionSystemPrompt,
+  clearSessionTmuxBindingUpdate,
   setSessionKimiIdentityUpdate,
   setSessionCursorIdentityUpdate,
   setSessionZcodeIdentityUpdate,
@@ -112,6 +114,21 @@ export function codexAppServerTurnOptions(binding: ChannelChat, session: BridgeS
     codexMode: config.mode, sandboxMode: config.sandboxMode, networkAccessEnabled: config.networkAccessEnabled });
 }
 
+export async function releaseLegacyCodexTmuxWriter(
+  store: BridgeStore,
+  session: BridgeSession,
+  threadId: string,
+  cleanup = cleanupRuntimeTmuxSession,
+): Promise<void> {
+  const sessionName = getSessionRuntimeTmuxSessionName(session);
+  if (!sessionName || sessionName !== codexTmuxSessionName(threadId)) return;
+  const result = await cleanup({ sessionName, runtime: 'codex', ignoreMissing: true });
+  if (result.error) {
+    throw new Error(`app-server 已就绪，但无法结束旧 Codex tmux writer；未恢复线程、未发送输入：${result.error}`);
+  }
+  store.updateSession(session.id, clearSessionTmuxBindingUpdate());
+}
+
 /** Ordinary input and explicit provider preparation must select the same backend. */
 export async function prepareCodexAppServerForBinding(
   store: BridgeStore,
@@ -132,6 +149,9 @@ export async function prepareCodexAppServerForBinding(
     sandbox: config.mode === 'yolo' ? 'danger-full-access' : config.sandboxMode,
     approvalPolicy: config.mode === 'yolo' ? 'never' : 'on-request',
     developerInstructions: getSessionSystemPrompt(session),
+    beforeResumeLegacyThread: threadId && !session.runtime?.codex?.appServerEndpoint
+      ? () => releaseLegacyCodexTmuxWriter(store, session, threadId)
+      : undefined,
     config: {
       ...(config.reasoningEffort ? { model_reasoning_effort: config.reasoningEffort } : {}),
       ...(typeof config.networkAccessEnabled === 'boolean'

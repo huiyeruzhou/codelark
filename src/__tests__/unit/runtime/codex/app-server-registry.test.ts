@@ -133,11 +133,23 @@ test('a lost submission cannot fall back to SDK, PTY or TUI', async (t) => {
   assert(getCodexAppServerSession('uncertain-provider')?.lifecycle.snapshot('thread-0').submission);
 });
 
-test('an existing legacy thread keeps its provider after app-server becomes the default', async () => {
-  let called = 0;
-  const legacy: LLMProvider = { streamChat() { called++; return new ReadableStream({ start(controller) { controller.enqueue('data: {"type":"done","data":"legacy"}\n'); controller.close(); } }); } };
-  const events = await collect(streamCodexAppServer({ sessionId: 'legacy-no-endpoint', codexThreadId: 'existing-legacy-thread', prompt: 'hello' }, legacy));
-  assert.equal(called, 1); assert.equal(events[0].data, 'legacy');
+test('an existing legacy thread transfers its writer before app-server resume', async (t) => {
+  const f = await fixture(t);
+  const seed = await prepareCodexAppServerSession({ sessionId: 'legacy-seed', endpoint: f.endpoint });
+  assert(seed);
+  await closeCodexAppServerSessions();
+  let released = 0;
+  const migrated = await prepareCodexAppServerSession({
+    sessionId: 'legacy-no-endpoint',
+    endpoint: f.endpoint,
+    threadId: seed.threadId,
+    beforeResumeLegacyThread: async () => { released += 1; },
+  });
+  assert(migrated);
+  assert.equal(migrated.threadId, seed.threadId);
+  assert.equal(released, 1);
+  assert(f.received.some((message) => message.method === 'thread/resume'
+    && message.params.threadId === seed.threadId));
 });
 
 test('rebinding a Bridge session detaches the old thread and preserves other subscribers to the new thread', async (t) => {

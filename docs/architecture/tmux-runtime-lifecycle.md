@@ -1,6 +1,6 @@
 # tmux Runtime 生命周期
 
-本文描述 CodeLark 的终端适配器与 Codex app-server 执行适配器。启用 app-server 的 Codex 由协议管理线程、输入、停止和状态；tmux 是可选查看入口。未启用设备及已有旧会话继续原流程。旧 Codex、Claude Code、Kimi Code、Cursor Agent 和 ZCode 共用 `src/bridge/tmux/core.ts` 的 tmux API 和 `src/bridge/tmux/input-state-machine.ts` 的输入生命周期状态机，差异保留在各自 CLI 启动参数、会话身份和 JSONL/wire/transcript/SQLite 解析上。`src/bridge/tmux/runtime.ts` 承载 Codex/Claude 的 shared provider-owned 启动和 readiness；Kimi、Cursor 与 ZCode 分别在自己的 provider 中发现稳定 CLI identity 和持久输出，再把相同的 session/tmux/send 状态写入共享 machine。
+本文描述 CodeLark 的终端适配器与 Codex app-server 执行适配器。启用 app-server 的 Codex 由协议管理线程、输入、停止和状态；tmux 是可选查看入口，不是并列 writer。升级前已绑定的 Codex thread 会在下一条输入前迁移到 app-server；只有显式关闭 app-server 或 CLI 明确不支持时才继续旧流程。legacy Codex、Claude Code、Kimi Code、Cursor Agent 和 ZCode 共用 `src/bridge/tmux/core.ts` 的 tmux API 和 `src/bridge/tmux/input-state-machine.ts` 的输入生命周期状态机，差异保留在各自 CLI 启动参数、会话身份和 JSONL/wire/transcript/SQLite 解析上。`src/bridge/tmux/runtime.ts` 承载 Codex/Claude 的 shared provider-owned 启动和 readiness；Kimi、Cursor 与 ZCode 分别在自己的 provider 中发现稳定 CLI identity 和持久输出，再把相同的 session/tmux/send 状态写入共享 machine。
 
 ## 总览
 
@@ -21,8 +21,9 @@ flowchart TD
   binding --> config
   config --> thread
   thread --> protocol{执行适配器}
-  protocol -->|已有旧会话 / 旧 CLI| tmux
+  protocol -->|显式关闭 / CLI 不支持| tmux
   protocol -->|共享后端| app[app-server thread / turn / request]
+  thread -.旧 writer 精确释放后恢复同一 thread.-> app
   app --> events[协议事件与恢复快照]
   events --> mirror
   app -.查看和人工接管.-> view[remote tmux / Desktop]
