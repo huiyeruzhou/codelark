@@ -317,12 +317,13 @@ function pushCodexMirrorEventRecord(
   }
 
   if (parsed.payload?.type === 'turn_aborted') {
+    const abortedTurnId = parsed.payload.turn_id || activeTurnId;
     records.push({
       signature,
       type: 'task_aborted',
       content: TURN_ABORTED_NOTICE,
       timestamp,
-      ...(activeTurnId ? { turnId: activeTurnId } : {}),
+      ...(abortedTurnId ? { turnId: abortedTurnId } : {}),
     });
     return true;
   }
