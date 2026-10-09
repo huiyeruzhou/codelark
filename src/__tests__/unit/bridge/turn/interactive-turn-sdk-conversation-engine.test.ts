@@ -185,7 +185,7 @@ describe('interactive-turn sdk-conversation-engine tool expansion', () => {
         sessionId: 'bound-cursor-thread', provider: 'tmux', transport,
       } } });
       createConfigService({ migrate: false }).set({ kind: 'session', sessionId: session.id }, {
-        runtime: { cursor: { provider: 'tmux', model: 'configured-model', reasoningEffort: 'high' } },
+        runtime: { cursor: { provider: 'tmux', model: 'configured-model', reasoningEffort: 'high', force: true } },
       });
       const binding = store.upsertChannelChat({ channelType: 'feishu', chatId: `cursor-${transport}`, bridgeSessionId: session.id });
       await processMessage(binding, 'hello', undefined, undefined, undefined, undefined,
@@ -193,6 +193,8 @@ describe('interactive-turn sdk-conversation-engine tool expansion', () => {
       assert.equal(calls.length, 1);
       assert.equal(calls[0]?.cursorProvider, 'tmux');
       assert.equal(calls[0]?.cursorTransport, transport);
+      assert.equal(calls[0]?.cursorForce, transport === 'cli' ? true : undefined);
+      assert.equal(calls[0]?.cursorDelivery, transport === 'desktop' ? 'steer' : undefined);
       assert.equal(calls[0]?.cursorSessionId, 'bound-cursor-thread');
       assert.equal(calls[0]?.model, transport === 'cli' ? 'configured-model' : undefined);
       assert.equal(calls[0]?.cursorReasoningEffort, transport === 'cli' ? 'high' : undefined);

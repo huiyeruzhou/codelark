@@ -452,8 +452,7 @@ export function streamCursorDesktop(params: StreamChatParams): ReadableStream<st
             ...(context.cwd ? { cwd: context.cwd } : {}),
           }));
           const sent = await sendCursorDesktopMessage(sessionId, params.prompt, {
-            force: params.cursorForce,
-            delivery: params.cursorDelivery || (params.cursorForce ? 'force' : 'steer'),
+            delivery: params.cursorDelivery || 'steer',
           });
           controller.enqueue(sseEvent('status', {
             reasoning: sent.status === 'steered'

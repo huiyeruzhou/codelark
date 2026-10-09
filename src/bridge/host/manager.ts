@@ -7,6 +7,7 @@
  * Uses globalThis to survive Next.js HMR in development.
  */
 
+import { sendCursorDesktopMessage } from '../../runtime/cursor/desktop-bridge-client.js';
 import type {
   ChannelAddress,
   BridgeStatus,
@@ -411,7 +412,7 @@ function tmuxSelectionUpdateExitProbeDelayMs(): number {
 function addInboundGetReaction(
   adapter: BaseChannelAdapter,
   msg: InboundMessage,
-  reason: 'command_received' | 'tmux_input_actions_completed' | 'app_server_input_accepted',
+  reason: 'command_received' | 'tmux_input_actions_completed' | 'app_server_input_accepted' | 'cursor_desktop_input_accepted',
 ): void {
   const raw = msg.raw as { manualIngress?: unknown } | undefined;
   const syntheticManualIngress = raw?.manualIngress === true || msg.messageId?.startsWith('manual:');
@@ -2959,8 +2960,7 @@ function shouldRouteTerminalAppendInline(msg: InboundMessage): boolean {
   if (!session) return false;
   if (session.runtime?.codex?.appServerEndpoint) return getCodexAppServerSession(session.id)?.direct === true;
   const runtimeProvider = resolveEffectiveRuntimeProvider(session, binding);
-  return resolveCursorTransport(session) !== 'desktop'
-    && (runtimeProvider.provider === 'tmux' || runtimeProvider.provider === 'pty');
+  return runtimeProvider.provider === 'tmux' || runtimeProvider.provider === 'pty';
 }
 
 function resolveInboundCommandText(rawText: string): string {
@@ -5522,6 +5522,38 @@ async function handleMessage(
           replyToMessageId: msg.messageId,
         });
       }
+    }
+    ack();
+    return;
+  }
+
+  // A live Desktop observer already owns the output stream. Deliver follow-ups
+  // immediately to its native thread instead of queueing another local turn.
+  if (tmuxProviderBinding && tmuxProviderSession && tmuxProviderActiveTask
+    && resolveCursorTransport(tmuxProviderSession) === 'desktop'
+    && !hasAttachments && !isBridgeCommandText(rawText) && rawText.trim()) {
+    const threadId = getSessionCursorSessionId(tmuxProviderSession);
+    try {
+      if (!threadId) throw new Error('当前 Cursor Desktop 会话没有绑定 thread，消息未发送。');
+      const { text } = sanitizeInput(appendModelContextText(modelText, msg.contextText));
+      const sent = await sendCursorDesktopMessage(threadId, text, {
+        delivery: 'steer',
+        isCurrentTarget: () => {
+          const currentBinding = store.getChannelChat(msg.address.channelType, msg.address.chatId);
+          const current = store.getSession(tmuxProviderSession.id);
+          return currentBinding?.bridgeSessionId === tmuxProviderSession.id
+            && resolveCursorTransport(current) === 'desktop' && getSessionCursorSessionId(current) === threadId;
+        },
+      });
+      addInboundGetReaction(adapter, msg, 'cursor_desktop_input_accepted');
+      if (sent.status === 'queued' || sent.warning) {
+        enqueueBridgeNotice(adapter, msg.address, sent.warning || 'Cursor 未完成 steer，消息已在同一对话排队。', { replyToMessageId: msg.messageId });
+      }
+      store.insertAuditLog({ channelType: adapter.channelType, chatId: msg.address.chatId,
+        direction: 'inbound', messageId: msg.messageId,
+        summary: `Cursor Desktop append provider=tmux delivery=${sent.actualDelivery} thread=${threadId}` });
+    } catch (error) {
+      enqueueBridgeNotice(adapter, msg.address, describeUnknownError(error), { replyToMessageId: msg.messageId });
     }
     ack();
     return;

@@ -6,7 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, it } from 'node:test';
 
-import { sendCursorDesktopMessage } from '../../../../runtime/cursor/desktop-bridge-client.js';
+import { sendCursorDesktopMessage, stopCursorDesktopThread } from '../../../../runtime/cursor/desktop-bridge-client.js';
 import { streamCursorDesktop } from '../../../../runtime/cursor/desktop-provider.js';
 import {
   cursorWorkspaceHash,
@@ -73,9 +73,9 @@ describe('Cursor Desktop provider', () => {
 
   async function startBridge(
     onSend?: (payload: Record<string, unknown>) => void,
-    sendStatus: 'submitted' | 'queued' = 'submitted',
+    sendStatus: 'submitted' | 'queued' | 'steered' | 'interrupt-requested' | 'idle' | 'error' = 'submitted',
     threadStatus: 'idle' | 'running' | 'completed' | 'error' | 'unknown' = 'completed',
-    protocolVersion = 1,
+    protocolVersion = 3,
     onReadEvents?: (payload: Record<string, unknown>) => Record<string, unknown>,
   ): Promise<void> {
     server = http.createServer((request, response) => {
@@ -130,9 +130,9 @@ describe('Cursor Desktop provider', () => {
 
   it('sends only to an exact live Desktop thread over the authenticated socket', async () => {
     let sent: Record<string, unknown> | undefined;
-    await startBridge((payload) => { sent = payload; });
+    await startBridge((payload) => { sent = payload; }, 'submitted', 'completed', 1);
 
-    const result = await sendCursorDesktopMessage(THREAD_ID, 'hello desktop', { force: true });
+    const result = await sendCursorDesktopMessage(THREAD_ID, 'hello desktop', { delivery: 'force' });
 
     assert.equal(result.status, 'submitted');
     assert.deepEqual(sent, {
@@ -143,16 +143,64 @@ describe('Cursor Desktop provider', () => {
     });
     await assert.rejects(
       () => sendCursorDesktopMessage('22222222-2222-4222-8222-222222222222', 'do not fallback'),
-      /不会降级到 tmux/,
+      /不会改用 CLI/,
     );
   });
 
   it('treats submitted as queued when an older Desktop Bridge reports the thread already running', async () => {
-    await startBridge(undefined, 'submitted', 'running');
+    await startBridge(undefined, 'submitted', 'running', 1);
 
-    const result = await sendCursorDesktopMessage(THREAD_ID, 'queue behind current turn');
+    const result = await sendCursorDesktopMessage(THREAD_ID, 'queue behind current turn', { delivery: 'queue' });
 
     assert.equal(result.status, 'queued');
+  });
+
+  it('sends explicit steer without force to the bound running thread', async () => {
+    const requests: Record<string, unknown>[] = [];
+    await startBridge((payload) => { requests.push(payload); }, 'steered', 'running');
+    const result = await sendCursorDesktopMessage(THREAD_ID, 'correct course');
+    assert.deepEqual(requests, [{ type: 'sendMessage', threadId: THREAD_ID, text: 'correct course', delivery: 'steer' }]);
+    assert.equal(result.actualDelivery, 'steer');
+    assert.equal(result.status, 'steered');
+  });
+
+  it('rejects v1 steer before sending rather than enqueueing behind the active turn', async () => {
+    const requests: unknown[] = [];
+    await startBridge((payload) => { requests.push(payload); }, 'submitted', 'running', 1);
+    await assert.rejects(sendCursorDesktopMessage(THREAD_ID, 'must steer'), /不支持 steer；消息未发送/);
+    assert.deepEqual(requests, []);
+  });
+
+  it('accepts v2 submitted when the turn finished between discovery and send', async () => {
+    await startBridge(undefined, 'submitted', 'running', 2);
+    const result = await sendCursorDesktopMessage(THREAD_ID, 'new turn');
+    assert.equal(result.status, 'submitted');
+    assert.equal(result.actualDelivery, 'submitted');
+  });
+
+  it('sends Stop to the exact Desktop thread, independent of a local active task', async () => {
+    const requests: unknown[] = [];
+    await startBridge((payload) => { requests.push(payload); }, 'interrupt-requested', 'running');
+    assert.deepEqual(await stopCursorDesktopThread(THREAD_ID), { status: 'interrupt-requested', threadId: THREAD_ID });
+    assert.deepEqual(requests, [{ type: 'stopThread', threadId: THREAD_ID }]);
+    await assert.rejects(stopCursorDesktopThread('missing-thread'), /不会改用 CLI/);
+    assert.equal(requests.length, 1);
+  });
+
+  it('rejects unsupported Stop without sending or claiming the backend stopped', async () => {
+    const requests: unknown[] = [];
+    await startBridge((payload) => { requests.push(payload); }, 'submitted', 'running', 2);
+    await assert.rejects(stopCursorDesktopThread(THREAD_ID), /未停止后端任务/);
+    assert.deepEqual(requests, []);
+  });
+
+  it('rechecks the binding before sending Stop and propagates failed acknowledgement', async () => {
+    const requests: unknown[] = [];
+    await startBridge((payload) => { requests.push(payload); }, 'error', 'running');
+    await assert.rejects(stopCursorDesktopThread(THREAD_ID, () => false), /绑定已变化/);
+    assert.equal(requests.length, 0);
+    await assert.rejects(stopCursorDesktopThread(THREAD_ID), /未确认停止请求/);
+    assert.equal(requests.length, 1);
   });
 
   it('ignores a queued old turn and streams only the submitted Desktop turn', async () => {
@@ -160,6 +208,8 @@ describe('Cursor Desktop provider', () => {
     fs.mkdirSync(cwd, { recursive: true });
     const transcript = getCursorTranscriptCandidates(THREAD_ID, cwd)[0]!;
     await startBridge((payload) => {
+      assert.equal(payload.delivery, 'steer');
+      assert.equal(payload.force, undefined);
       fs.mkdirSync(path.dirname(transcript), { recursive: true });
       fs.writeFileSync(transcript, [
         { role: 'assistant', message: { content: [{ type: 'text', text: 'OLD_TURN_OUTPUT' }] } },
@@ -173,6 +223,7 @@ describe('Cursor Desktop provider', () => {
     let output = '';
     for await (const chunk of streamCursorDesktop({
       prompt: 'continue in desktop',
+      cursorForce: true,
       sessionId: 'bridge-session',
       runtime: 'cursor',
       cursorProvider: 'tmux',

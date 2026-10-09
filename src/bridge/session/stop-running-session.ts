@@ -1,6 +1,7 @@
+import { stopCursorDesktopThread } from '../../runtime/cursor/desktop-bridge-client.js';
 import { resolveCursorTransport } from './cursor-transport.js';
 import type { BridgeSession, BridgeStore, ChannelChat } from '../../domain/index.js';
-import { getSessionClaudeSessionId, getSessionCodexThreadId, getSessionRuntimeTmuxSessionName } from '../../domain/session-runtime.js';
+import { getSessionCursorSessionId, getSessionClaudeSessionId, getSessionCodexThreadId, getSessionRuntimeTmuxSessionName } from '../../domain/session-runtime.js';
 import { kimiTmuxSessionName } from '../../runtime/kimi/tmux-provider.js';
 import { cursorTmuxSessionName } from '../../runtime/cursor/tmux-provider.js';
 import { zcodeTmuxSessionName } from '../../runtime/zcode/tmux-provider.js';
@@ -12,6 +13,7 @@ import { prepareCodexAppServerForBinding } from '../command/tmux.js';
 
 export interface StopRunningSessionDeps {
   getActiveTask(sessionId: string): { abortController: AbortController } | undefined;
+  stopCursorDesktopThread?: typeof stopCursorDesktopThread;
   forceStopSession?(sessionId: string, detail?: string): Promise<boolean>;
   cancelQueuedSessionMessages?(sessionId: string): void;
   recordInteractiveHealthEnd?(sessionId: string, outcome: 'completed' | 'failed' | 'aborted', detail?: string): void;
@@ -20,7 +22,7 @@ export interface StopRunningSessionDeps {
 export interface StopRunningSessionResult {
   /** A stop action was requested, not proof that the runtime reached a terminal state. */
   stopped: boolean;
-  method: 'active_task' | 'tmux_interrupt' | 'app_server_interrupt' | 'idle';
+  method: 'active_task' | 'tmux_interrupt' | 'app_server_interrupt' | 'desktop_interrupt' | 'idle';
   detail: string;
   tmuxSessionName?: string;
   command?: string;
@@ -100,6 +102,23 @@ export async function stopRunningSession(options: {
   }
   options.deps.cancelQueuedSessionMessages?.(options.binding.bridgeSessionId);
   const session = options.store.getSession(options.binding.bridgeSessionId);
+  if (session && resolveCursorTransport(session) === 'desktop') {
+    const threadId = getSessionCursorSessionId(session);
+    if (!threadId) throw new Error('当前 Cursor Desktop 会话没有绑定 thread，未发送停止请求。');
+    const result = await (options.deps.stopCursorDesktopThread || stopCursorDesktopThread)(threadId, () => {
+      const current = options.store.getSession(session.id);
+      return isCurrentBinding() && resolveCursorTransport(current) === 'desktop'
+        && getSessionCursorSessionId(current) === threadId;
+    });
+    // Keep the observer alive: only native lifecycle evidence can finish the task.
+    return {
+      stopped: result.status === 'interrupt-requested',
+      method: result.status === 'interrupt-requested' ? 'desktop_interrupt' : 'idle',
+      detail: result.status === 'interrupt-requested'
+        ? '已向 Cursor Desktop 请求中断，等待后端确认轮次结束。'
+        : 'Cursor Desktop 当前没有正在运行的轮次。',
+    };
+  }
   const registered = getCodexAppServerSession(options.binding.bridgeSessionId);
   if (session && resolveEffectiveRuntimeProvider(session, options.binding).runtime === 'codex'
     && (registered || session.runtime?.codex?.appServerEndpoint)) {
