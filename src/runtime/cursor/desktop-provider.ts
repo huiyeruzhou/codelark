@@ -7,14 +7,23 @@ import {
   readCursorDesktopEvents,
   sendCursorDesktopMessage,
 } from './desktop-bridge-client.js';
-import { inspectCursorDesktopHookActivity } from './desktop-diagnostics.js';
+import {
+  captureCursorDesktopHookCursor,
+  readCursorDesktopHookActivityDelta,
+  type CursorDesktopHookActivity,
+  type CursorDesktopHookCursor,
+} from './desktop-diagnostics.js';
 import {
   findCursorSessionFileById,
   getCursorTranscriptCandidates,
   readCursorSessionMirrorRecordDeltaByFilePath,
   readCursorSessionMirrorRecordStreamByFilePath,
 } from './session-index.js';
-import { enqueueCursorRecord, type CursorTurnContext } from './tmux-provider.js';
+import {
+  cursorToolFingerprint,
+  enqueueCursorRecord,
+  type CursorTurnContext,
+} from './tmux-provider.js';
 
 const DEFAULT_POLL_INTERVAL_MS = 500;
 const DEFAULT_TRANSCRIPT_TIMEOUT_MS = 30_000;
@@ -22,6 +31,8 @@ const DEFAULT_OUTPUT_IDLE_TIMEOUT_MS = 120_000;
 const DEFAULT_QUEUED_IDLE_TIMEOUT_MS = 600_000;
 const DESKTOP_STATUS_POLL_INTERVAL_MS = 5_000;
 const DESKTOP_REALTIME_POLL_INTERVAL_MS = 1_000;
+const DEFAULT_DESKTOP_HOOK_POLL_INTERVAL_MS = 500;
+const HOOK_REALTIME_OUTPUT_MAX_CHARS = 32_000;
 
 interface TranscriptSnapshot {
   size: number;
@@ -97,6 +108,97 @@ function cursorHookStatus(step: string | undefined, toolName: string | undefined
   }
 }
 
+function cursorHookToolOutput(value: string | undefined): string {
+  if (!value) return 'Done';
+  let output = value;
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    if (typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)) {
+      const record = parsed as Record<string, unknown>;
+      if (typeof record.output === 'string') output = record.output;
+    }
+  } catch {
+    // Cursor tool hooks may return plain text rather than encoded JSON.
+  }
+  return output.length > HOOK_REALTIME_OUTPUT_MAX_CHARS
+    ? `${output.slice(0, HOOK_REALTIME_OUTPUT_MAX_CHARS)}\n…（实时输出已截断，最终 transcript 会继续收取）`
+    : output;
+}
+
+function enqueueCursorHookActivity(
+  controller: ReadableStreamDefaultController<string>,
+  context: CursorTurnContext,
+  hook: CursorDesktopHookActivity,
+  backendStatus: string | undefined,
+): void {
+  const metadata = {
+    backend_status: backendStatus || 'running',
+    hook_updated_at: hook.updatedAt,
+    ...(hook.model ? { model: hook.model } : {}),
+  };
+  if (hook.step === 'afterAgentThought' && hook.text?.trim()) {
+    controller.enqueue(sseEvent('status', {
+      ...metadata,
+      reasoning: 'Cursor 正在思考',
+      thinking: hook.text.trim(),
+    }));
+    return;
+  }
+  if (hook.step === 'preToolUse' && hook.toolUseId) {
+    if (!context.emittedToolStarts.has(hook.toolUseId)) {
+      const fingerprint = cursorToolFingerprint(hook.toolName || 'tool', hook.toolInput || {});
+      const transcriptIds = context.transcriptToolIdsByFingerprint?.get(fingerprint);
+      const transcriptId = transcriptIds?.shift();
+      if (transcriptIds && transcriptIds.length === 0) {
+        context.transcriptToolIdsByFingerprint?.delete(fingerprint);
+      }
+      context.emittedToolStarts.add(hook.toolUseId);
+      if (transcriptId) {
+        context.liveHookToolIdAliases?.set(hook.toolUseId, transcriptId);
+      } else {
+        const hookIds = context.liveHookToolIdsByFingerprint?.get(fingerprint) || [];
+        hookIds.push(hook.toolUseId);
+        context.liveHookToolIdsByFingerprint?.set(fingerprint, hookIds);
+        controller.enqueue(sseEvent('tool_use', {
+          id: hook.toolUseId,
+          name: hook.toolName || 'tool',
+          input: hook.toolInput || {},
+        }));
+      }
+    }
+    controller.enqueue(sseEvent('status', {
+      ...metadata,
+      reasoning: cursorHookStatus(hook.step, hook.toolName),
+    }));
+    return;
+  }
+  if (hook.step === 'postToolUse' && hook.toolUseId) {
+    const displayToolId = context.liveHookToolIdAliases?.get(hook.toolUseId) || hook.toolUseId;
+    if (!context.emittedToolStarts.has(hook.toolUseId)) {
+      context.emittedToolStarts.add(hook.toolUseId);
+      controller.enqueue(sseEvent('tool_use', {
+        id: displayToolId,
+        name: hook.toolName || 'tool',
+        input: hook.toolInput || {},
+      }));
+    }
+    controller.enqueue(sseEvent('tool_result', {
+      tool_use_id: displayToolId,
+      content: cursorHookToolOutput(hook.toolOutput),
+      is_error: false,
+    }));
+    controller.enqueue(sseEvent('status', {
+      ...metadata,
+      reasoning: cursorHookStatus(hook.step, hook.toolName),
+    }));
+    return;
+  }
+  controller.enqueue(sseEvent('status', {
+    ...metadata,
+    reasoning: cursorHookStatus(hook.step, hook.toolName),
+  }));
+}
+
 async function waitForTranscriptPath(
   sessionId: string,
   cwd: string | undefined,
@@ -132,6 +234,7 @@ async function pollDesktopTranscript(
   initialSnapshot: TranscriptSnapshot | null,
   baselineTurnStarts: Set<string>,
   queued: boolean,
+  initialHookCursor: CursorDesktopHookCursor,
 ): Promise<void> {
   const cursorSessionId = context.sessionId;
   if (!cursorSessionId) throw new Error('Cursor Desktop session ID 缺失。');
@@ -152,7 +255,9 @@ async function pollDesktopTranscript(
   let previousSnapshot = initialSnapshot;
   let lastDesktopStatusProbeAt = 0;
   let lastDesktopStatus: string | undefined;
-  let lastHookUpdatedAt = inspectCursorDesktopHookActivity(cursorSessionId)?.updatedAt;
+  let hookCursor = initialHookCursor;
+  let hookGenerationId: string | undefined;
+  let lastHookProbeAt = 0;
   let realtimeCursor = 0;
   let realtimeAvailable: boolean | undefined;
   let lastRealtimeProbeAt = 0;
@@ -205,6 +310,24 @@ async function pollDesktopTranscript(
     }
     if (context.nextOffset > previousOffset) lastActivityAt = Date.now();
     if (context.terminalSeen) return;
+    const now = Date.now();
+    const hookPollIntervalMs = positiveIntEnv(
+      'CODELARK_CURSOR_DESKTOP_HOOK_POLL_INTERVAL_MS',
+      DEFAULT_DESKTOP_HOOK_POLL_INTERVAL_MS,
+      50,
+    );
+    if (now - lastHookProbeAt >= hookPollIntervalMs) {
+      lastHookProbeAt = now;
+      const hookDelta = readCursorDesktopHookActivityDelta(cursorSessionId, hookCursor);
+      hookCursor = hookDelta.cursor;
+      for (const hook of hookDelta.activities) {
+        if (queued && !targetTurnId) continue;
+        if (hookGenerationId && hook.generationId && hook.generationId !== hookGenerationId) continue;
+        if (!hookGenerationId && hook.generationId) hookGenerationId = hook.generationId;
+        lastActivityAt = Date.now();
+        enqueueCursorHookActivity(controller, context, hook, lastDesktopStatus);
+      }
+    }
     if (realtimeAvailable !== false && Date.now() - lastRealtimeProbeAt >= DESKTOP_REALTIME_POLL_INTERVAL_MS) {
       lastRealtimeProbeAt = Date.now();
       try {
@@ -260,17 +383,6 @@ async function pollDesktopTranscript(
       } catch {
         lastDesktopStatus = undefined;
       }
-      const hook = inspectCursorDesktopHookActivity(cursorSessionId);
-      if (targetTurnId && hook?.updatedAt && hook.updatedAt !== lastHookUpdatedAt) {
-        lastHookUpdatedAt = hook.updatedAt;
-        lastActivityAt = Date.now();
-        controller.enqueue(sseEvent('status', {
-          reasoning: cursorHookStatus(hook.step, hook.toolName),
-          backend_status: lastDesktopStatus || 'unknown',
-          hook_updated_at: hook.updatedAt,
-          ...(hook.model ? { model: hook.model } : {}),
-        }));
-      }
     }
     if (Date.now() - lastActivityAt > idleTimeoutMs) {
       if (lastDesktopStatus === 'running') {
@@ -302,6 +414,7 @@ export function streamCursorDesktop(params: StreamChatParams): ReadableStream<st
             .find((candidate) => fs.existsSync(candidate))
           : undefined);
         const baselineSnapshot = transcriptSnapshot(initialFilePath);
+        const initialHookCursor = captureCursorDesktopHookCursor();
         const baselineTurnStarts = new Set(
           initialFilePath
             ? readCursorSessionMirrorRecordStreamByFilePath(initialFilePath, known?.storePath)
@@ -321,6 +434,10 @@ export function streamCursorDesktop(params: StreamChatParams): ReadableStream<st
           nextSpecialCallIds: [],
           emittedSignatures: new Set(),
           emittedToolStarts: new Set(),
+          liveHookToolIdsByFingerprint: new Map(),
+          transcriptToolIdsByFingerprint: new Map(),
+          transcriptToolIdAliases: new Map(),
+          liveHookToolIdAliases: new Map(),
           terminalSeen: false,
         };
         controller.enqueue(sseEvent('status', {
@@ -354,6 +471,7 @@ export function streamCursorDesktop(params: StreamChatParams): ReadableStream<st
           context.sessionFilePath === initialFilePath ? baselineSnapshot : null,
           baselineTurnStarts,
           sent.status === 'queued',
+          initialHookCursor,
         );
         controller.close();
       })().catch((error) => {
