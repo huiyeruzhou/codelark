@@ -71,8 +71,8 @@ export interface StreamChatParams {
   /** Internal connection selected from the bound conversation, not a provider preference. */
   cursorTransport?: CursorTransport;
   cursorForce?: boolean;
-  /** Desktop follow-up delivery. Defaults to steer; independent of the CLI permission flag cursorForce. */
-  cursorDelivery?: 'queue' | 'steer' | 'force';
+  /** Desktop follow-up delivery. Auto uses native queue or optional steer; independent of the CLI permission flag cursorForce. */
+  cursorDelivery?: 'auto' | 'queue' | 'steer' | 'force';
   cursorReasoningEffort?: string;
   zcodeSessionId?: string;
   zcodeMode?: 'build' | 'edit' | 'plan' | 'yolo';

@@ -5,6 +5,9 @@ import path from 'node:path';
 
 const MIN_DESKTOP_BRIDGE_PROTOCOL_VERSION = 1;
 const REALTIME_DESKTOP_BRIDGE_PROTOCOL_VERSION = 2;
+// v2/v3 event actions retain an invalid ServicesAccessor across await and their
+// main process hides the exception as an empty batch, causing repeated UI errors.
+const SAFE_EVENT_PROTOCOL_VERSION = 4;
 const MAX_DISCOVERY_BYTES = 256 * 1024;
 const REQUEST_TIMEOUT_MS = 10_000;
 const EVENT_REQUEST_TIMEOUT_MS = 35_000;
@@ -186,7 +189,7 @@ function postBridge(
       });
     });
     request.setTimeout(timeoutMs, () => {
-      request.destroy(new Error(`${instance.label} Desktop Bridge 请求超时；消息可能已提交，请先检查 Cursor，避免重复发送。`));
+      request.destroy(new Error(`${instance.label} Desktop Bridge 请求超时；操作可能已执行，请先检查 Cursor，避免重复操作。`));
     });
     request.on('error', reject);
     request.end(body);
@@ -287,7 +290,7 @@ export async function stopCursorDesktopThread(
   const target = await findDesktopTarget(threadId);
   if (!isCurrentTarget()) throw new Error('当前 Desktop 绑定已变化，未发送停止请求。');
   if (target.instance.discovery.protocolVersion < 3) {
-    throw new Error('Cursor Desktop Bridge 不支持停止请求；未停止后端任务。请安装最新 CodeLark Desktop patch 并重启 Cursor。');
+    throw new Error('Cursor Desktop Bridge 不支持停止请求；未停止后端任务。可在 Cursor 内操作；增强补丁是另行选择的实验性功能。');
   }
   const response = await postBridge(target.instance, { type: 'stopThread', threadId: target.thread.id });
   if (isRecord(response) && response.threadId === target.thread.id
@@ -298,18 +301,70 @@ export async function stopCursorDesktopThread(
   throw new Error(`Cursor Desktop 未确认停止请求${detail}；请检查目标对话状态。`);
 }
 
+export interface CursorDesktopModels {
+  threadId: string;
+  models: Array<{ id: string; name: string }>;
+  selectedModels: string[];
+  running: boolean;
+}
+
+export class CursorDesktopModelControlUnavailable extends Error {}
+
+async function requestCursorDesktopModels(
+  threadId: string,
+  model: string | undefined,
+  isCurrentTarget: () => boolean,
+): Promise<CursorDesktopModels> {
+  if (model !== undefined && (!model.trim() || model.length > 256)) throw new Error('模型 ID 无效。');
+  const target = await findDesktopTarget(threadId);
+  if (!isCurrentTarget()) throw new Error('当前 Desktop 绑定已变化，未发送模型请求。');
+  if (target.instance.discovery.protocolVersion < 4) {
+    throw new CursorDesktopModelControlUnavailable('当前 Cursor 未加载支持模型切换的可选增强协议 v4。');
+  }
+  const response = await postBridge(target.instance, {
+    type: model === undefined ? 'getThreadModels' : 'setThreadModel',
+    threadId: target.thread.id,
+    ...(model === undefined ? {} : { model: model.trim() }),
+  });
+  if (!isCurrentTarget()) throw new Error('模型请求后绑定已变化；请检查原 Desktop 对话，本次结果不作为当前会话的切换确认。');
+  if (isRecord(response) && response.status === 'models' && response.threadId === target.thread.id
+    && typeof response.running === 'boolean'
+    && Array.isArray(response.selectedModels) && response.selectedModels.every(isNonEmptyString)
+    && (model === undefined || response.selectedModels.length === 1)
+    && Array.isArray(response.models) && response.models.every((entry) => isRecord(entry)
+      && isNonEmptyString(entry.id) && isNonEmptyString(entry.name))) {
+    return {
+      threadId: response.threadId,
+      models: response.models as CursorDesktopModels['models'],
+      selectedModels: response.selectedModels as string[],
+      running: response.running,
+    };
+  }
+  const detail = isRecord(response) && typeof response.message === 'string' ? `：${response.message}` : '';
+  throw new Error(`Cursor Desktop 未确认模型请求${detail}；请在目标对话检查当前选择。`);
+}
+
+export function getCursorDesktopModels(threadId: string, isCurrentTarget: () => boolean = () => true) {
+  return requestCursorDesktopModels(threadId, undefined, isCurrentTarget);
+}
+
+export function setCursorDesktopModel(threadId: string, model: string, isCurrentTarget: () => boolean = () => true) {
+  return requestCursorDesktopModels(threadId, model, isCurrentTarget);
+}
+
 export async function sendCursorDesktopMessage(
   threadId: string,
   text: string,
-  options: { delivery?: CursorDesktopDelivery; isCurrentTarget?: () => boolean } = {},
+  options: { delivery?: CursorDesktopDelivery | 'auto'; isCurrentTarget?: () => boolean } = {},
 ): Promise<CursorDesktopSendResult> {
   if (!text) throw new Error('Cursor Desktop 消息正文不能为空。');
   const target = await findDesktopTarget(threadId);
   if (options.isCurrentTarget && !options.isCurrentTarget()) throw new Error('当前 Desktop 绑定已变化，消息未发送。');
-  const requestedDelivery: CursorDesktopDelivery = options.delivery || 'steer';
   const supportsDelivery = target.instance.discovery.protocolVersion >= REALTIME_DESKTOP_BRIDGE_PROTOCOL_VERSION;
+  const requestedDelivery: CursorDesktopDelivery = !options.delivery || options.delivery === 'auto'
+    ? supportsDelivery ? 'steer' : 'queue' : options.delivery;
   if (!supportsDelivery && requestedDelivery === 'steer') {
-    throw new Error('Cursor Desktop Bridge v1 不支持 steer；消息未发送。请安装最新 CodeLark Desktop patch 并重启 Cursor。');
+    throw new Error('Cursor Desktop Bridge v1 不支持 steer；消息未发送。可在 Cursor 内操作；增强补丁是另行选择的实验性功能。');
   }
   const response = parseSendResult(await postBridge(target.instance, {
     type: 'sendMessage',
@@ -329,7 +384,7 @@ export async function sendCursorDesktopMessage(
         status: 'queued',
         requestedDelivery,
         actualDelivery: 'queue',
-        warning: response.warning,
+        warning: response.warning || '当前使用 Cursor 原生接口，追加消息按队列处理（不是 steer）。',
       };
     }
     return {
@@ -337,7 +392,7 @@ export async function sendCursorDesktopMessage(
       requestedDelivery,
       ...(supportsDelivery ? {} : {
         actualDelivery: response.status === 'queued' ? 'queue' : 'submitted',
-        warning: response.warning,
+        warning: response.warning || (response.status === 'queued' ? '当前使用 Cursor 原生接口，追加消息按队列处理（不是 steer）。' : undefined),
       }),
     };
   }
@@ -347,7 +402,7 @@ export async function sendCursorDesktopMessage(
   if (response.status === 'unknown-thread') throw new Error('Cursor Desktop 在发送前丢失了目标 thread；请重新打开对话后重试。');
   if (response.status === 'not-sendable') throw new Error(`Cursor Desktop 当前不能接收该消息：${response.reason}`);
   if (response.status === 'error') throw new Error(`Cursor Desktop 发送失败：${response.message}`);
-  if (response.status === 'unsupported') throw new Error('Cursor Desktop Bridge 不支持该投递方式；请安装 CodeLark realtime patch 并重启 Cursor。');
+  if (response.status === 'unsupported') throw new Error('Cursor Desktop Bridge 不支持该投递方式；可在 Cursor 内操作，或另行选择实验性增强。');
   throw new Error('Cursor Desktop 返回了无法识别的发送状态。');
 }
 
@@ -375,9 +430,9 @@ export async function readCursorDesktopEvents(
   if (!normalizedThreadId) throw new Error('Cursor Desktop thread ID 不能为空。');
   const timeoutMs = Math.min(30_000, Math.max(0, Math.floor(options.timeoutMs ?? 25_000)));
   const instances = readLiveDesktopInstances()
-    .filter((instance) => instance.discovery.protocolVersion >= REALTIME_DESKTOP_BRIDGE_PROTOCOL_VERSION);
+    .filter((instance) => instance.discovery.protocolVersion >= SAFE_EVENT_PROTOCOL_VERSION);
   if (instances.length === 0) {
-    throw new Error('Cursor Desktop realtime protocol 不可用；请安装 CodeLark realtime patch 并重启 Cursor。');
+    throw new Error('Cursor Desktop realtime protocol 不可用；旧 v2/v3 事件接口存在生命周期缺陷，已停用；继续使用原生 hooks 和 transcript。');
   }
   let lastError: unknown;
   for (const instance of instances) {
@@ -389,7 +444,7 @@ export async function readCursorDesktopEvents(
         timeoutMs,
       }, Math.max(EVENT_REQUEST_TIMEOUT_MS, timeoutMs + 5_000));
       if (!isRecord(response) || !Array.isArray(response.events) || !Number.isInteger(response.cursor)) {
-        throw new Error(`${instance.label} Desktop Bridge 返回了无效事件批次。`);
+        throw new Error(`${instance.label} Desktop Bridge 事件读取失败：${isRecord(response) && typeof response.message === 'string' ? response.message : '无效事件批次'}`);
       }
       const events = response.events
         .map((event) => parseBridgeEvent(event, threadId))

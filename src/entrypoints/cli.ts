@@ -49,6 +49,8 @@ import { disableCodexDesktopRemote } from '../runtime/codex/desktop-remote.js';
 import {
   installCursorDesktopRealtimePatch,
   restoreCursorDesktopRealtimePatch,
+  inspectCursorDesktopPatch,
+  planCursorDesktopPatchInstall,
 } from '../runtime/cursor/desktop-realtime-patch.js';
 
 const PRIMARY_CLI_NAME = 'codelark';
@@ -255,8 +257,9 @@ export function buildCliHelpText(): string {
     '  autostart install                   安装 Windows Bridge 开机启动任务',
     '  autostart uninstall                 移除 Windows Bridge 开机启动任务',
     '  codex-desktop disable               停止共享 Codex 后端并关闭 Desktop 自动接入（会中断其活动轮次）',
-    '  cursor-desktop-patch install        安装 Cursor Desktop v3 控制补丁（steer/Stop）（需重启 Cursor）',
-    '  cursor-desktop-patch restore        从校验备份恢复 Cursor 安装文件',
+    '  cursor-desktop-patch status         查看可选实验补丁状态（只读，不修改 Cursor.app）',
+    '  cursor-desktop-patch install        查看安装计划；--allow-app-modification 才会修改 Cursor.app',
+    '  cursor-desktop-patch uninstall      完整恢复原始文件（--dry-run 仅预览；restore 为别名）',
     '  uninstall                           停止服务并安排 npm uninstall -g codelark',
     '  -v, --version                       显示 CodeLark 版本',
     '  help, -h, --help                    显示本帮助',
@@ -923,20 +926,24 @@ async function main(argv = process.argv.slice(2)): Promise<void> {
 
     case 'cursor-desktop-patch': {
       const command = parseNamedArgs(parsed.args);
-      rejectUnknownNamedArgs(command, ['--app']);
-      if (command.flags.size > 0 || command.positional.length !== 1) {
-        throw new Error('用法: codelark cursor-desktop-patch <install|restore> [--app /Applications/Cursor.app]');
-      }
-      const action = command.positional[0];
+      rejectUnknownNamedArgs(command, ['--app'], ['--allow-app-modification', '--dry-run']);
+      const action = command.positional[0] || 'status';
+      const usage = '用法: codelark cursor-desktop-patch <status|install|uninstall|restore> [--app <Cursor.app>] [--allow-app-modification | --dry-run]';
+      if (command.positional.length > 1
+        || [...command.flags].some((flag) => !['--allow-app-modification', '--dry-run'].includes(flag))
+        || [...command.values.keys()].some((flag) => flag !== '--app')
+        || (command.flags.has('--allow-app-modification') && action !== 'install')
+        || (command.flags.has('--dry-run') && !['install', 'uninstall', 'restore'].includes(action))) throw new Error(usage);
       const appPath = command.values.get('--app')?.trim() || undefined;
-      const result = action === 'install'
-        ? installCursorDesktopRealtimePatch(appPath)
-        : action === 'restore'
-          ? restoreCursorDesktopRealtimePatch(appPath)
-          : null;
-      if (!result) {
-        throw new Error('用法: codelark cursor-desktop-patch <install|restore> [--app /Applications/Cursor.app]');
-      }
+      const result = action === 'status' ? inspectCursorDesktopPatch(appPath)
+        : action === 'install'
+          ? command.flags.has('--allow-app-modification') && !command.flags.has('--dry-run')
+            ? installCursorDesktopRealtimePatch(appPath, { allowAppModification: true })
+            : planCursorDesktopPatchInstall(appPath)
+          : action === 'uninstall' || action === 'restore'
+            ? restoreCursorDesktopRealtimePatch(appPath, { dryRun: command.flags.has('--dry-run') })
+            : undefined;
+      if (!result) throw new Error(usage);
       process.stdout.write(`${JSON.stringify({ ok: true, ...result }, null, 2)}\n`);
       return;
     }

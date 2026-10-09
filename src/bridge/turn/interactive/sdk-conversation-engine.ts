@@ -285,7 +285,7 @@ export async function processMessage(
       cursorProvider: cursorRuntimeConfig?.provider,
       cursorTransport: cursorRuntimeConfig?.transport,
       cursorForce: cursorRuntimeConfig?.transport === 'cli' ? cursorRuntimeConfig.force : undefined,
-      cursorDelivery: cursorRuntimeConfig?.transport === 'desktop' ? 'steer' : undefined,
+      cursorDelivery: cursorRuntimeConfig?.transport === 'desktop' ? 'auto' : undefined,
       cursorReasoningEffort: cursorRuntimeConfig?.reasoningEffort,
       zcodeSessionId,
       zcodeMode: zcodeRuntimeConfig?.mode,

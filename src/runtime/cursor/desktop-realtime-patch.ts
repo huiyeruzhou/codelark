@@ -3,8 +3,10 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-import { parse } from 'acorn';
+import { parse, tokenizer } from 'acorn';
 
+const MAIN_CONTROL_DECLARATIONS = 'var sB,iB,aB,oB,cB,CL2readAction,CL3stopAction,mI,lB,oFe=';
+const MODEL_MARKER = '__CODELARK_CURSOR_DESKTOP_MODELS_V4__';
 const CONTROL_MARKER = '__CODELARK_CURSOR_DESKTOP_CONTROL_V3__';
 const PATCH_MARKER = '__CODELARK_CURSOR_DESKTOP_REALTIME_V2__';
 const DEFAULT_CURSOR_APP = '/Applications/Cursor.app';
@@ -13,11 +15,13 @@ export interface CursorDesktopPatchPaths {
   appPath: string;
   mainBundlePath: string;
   rendererBundlePath: string;
+  glassBundlePath: string;
   productPath: string;
 }
 
 export interface CursorDesktopPatchResult {
-  action: 'installed' | 'already-installed' | 'restored' | 'not-installed';
+  action: 'installed' | 'already-installed' | 'uninstalled' | 'not-installed';
+  restartRequired?: boolean;
   appPath: string;
   appVersion: string;
   backupDirectory?: string;
@@ -61,6 +65,7 @@ export function resolveCursorDesktopPatchPaths(appPath = process.env.CURSOR_APP_
     appPath: resolved,
     mainBundlePath: path.join(appRoot, 'out', 'main.js'),
     rendererBundlePath: path.join(appRoot, 'out', 'vs', 'workbench', 'workbench.desktop.main.js'),
+    glassBundlePath: path.join(appRoot, 'out', 'vs', 'workbench', 'workbench.glass.main.js'),
     productPath: path.join(appRoot, 'product.json'),
   };
 }
@@ -68,7 +73,7 @@ export function resolveCursorDesktopPatchPaths(appPath = process.env.CURSOR_APP_
 function readAppVersion(paths: CursorDesktopPatchPaths): string {
   try {
     const product = JSON.parse(fs.readFileSync(paths.productPath, 'utf8')) as { version?: unknown };
-    if (typeof product.version === 'string' && product.version.trim()) return product.version.trim();
+    if (typeof product.version === 'string' && /^[\w.-]+$/.test(product.version)) return product.version;
   } catch {
     // A missing product version is still safe because every bundle anchor is verified.
   }
@@ -145,9 +150,14 @@ function patchCursorRendererRealtimeBundle(source: string): string {
 
 // Layer the control protocol on top of v2 so existing patched installations can
 // upgrade without discarding their original backup or silently skipping Stop.
-export function patchCursorMainBundle(source: string): string {
-  if (source.includes(CONTROL_MARKER)) return source;
+function patchCursorMainControlBundle(source: string): string {
+  if (source.includes(CONTROL_MARKER)) {
+    return source.includes(MAIN_CONTROL_DECLARATIONS) ? source : replaceExactly(source,
+      'var sB,iB,aB,oB,cB,mI,lB,oFe=', MAIN_CONTROL_DECLARATIONS, 'main control declarations repair');
+  }
   let patched = patchCursorMainRealtimeBundle(source);
+  patched = replaceExactly(patched, 'var sB,iB,aB,oB,cB,mI,lB,oFe=',
+    MAIN_CONTROL_DECLARATIONS, 'main control declarations');
   patched = replaceExactly(patched, 'oW=2,HC=', 'oW=3,HC=', 'control protocol version');
   patched = replaceExactly(patched, 'if(e.type==="readThreadEvents"',
     'if(e.type==="stopThread"&&iW(e.threadId))return{type:"stopThread",threadId:e.threadId};if(e.type==="readThreadEvents"', 'stop parser');
@@ -180,7 +190,7 @@ const RENDERER_STOP_ACTION = String.raw`var CL3StopAction=class extends at {
   }
 };`;
 
-export function patchCursorRendererBundle(source: string): string {
+function patchCursorRendererControlBundle(source: string): string {
   if (source.includes(CONTROL_MARKER)) return source;
   let patched = patchCursorRendererRealtimeBundle(source);
   patched = replaceExactly(patched, 'CL2readAction="composer.desktopBridge.readThreadEvents",',
@@ -190,6 +200,146 @@ export function patchCursorRendererBundle(source: string): string {
   patched = replaceExactly(patched, 'var CL2ReadAction=', `${RENDERER_STOP_ACTION}\nvar CL2ReadAction=`, 'renderer stop handler');
   patched = replaceExactly(patched, 'We(CL2ReadAction),', 'We(CL2ReadAction),We(CL3StopAction),', 'renderer stop registration');
   return `${patched}\n/* ${CONTROL_MARKER} */\n`;
+}
+
+// Glass and Desktop ship separate bundles with different minified service IDs.
+// Reuse the control implementation; translate identifier tokens, never strings.
+const GLASS_IDENTIFIERS: Record<string, string> = {
+  Q6b: 'DwC', at: 'en', $6b: 'SwC', er: 'Ss', Rr: 'gr', Cn: 'fi',
+  uip: 'KNv', E_: 'Ha', Hs: 'no', NR: 'Mw', Fn: 'Ii', q6b: 'xwC',
+  J7t: '_Re', HUo: 'Eoc', uo: 'Go', Ty: 'Gb', dip: 'YNv', $Uo: 'Toc',
+  wS: 'Gm', ow: 'q_', Z2: 'OR',
+};
+function glassIdentifiers(source: string): string {
+  const replacements: Array<{ start: number; end: number; value: string }> = [];
+  for (const token of tokenizer(source, { ecmaVersion: 'latest' })) {
+    const identifier = source.slice(token.start, token.end);
+    if (token.type.label === 'name' && Object.hasOwn(GLASS_IDENTIFIERS, identifier)) {
+      replacements.push({ start: token.start, end: token.end, value: GLASS_IDENTIFIERS[identifier] });
+    }
+  }
+  for (const token of replacements.reverse()) source = source.slice(0, token.start) + token.value + source.slice(token.end);
+  return source;
+}
+
+function patchCursorGlassControlBundle(source: string): string {
+  if (source.includes(CONTROL_MARKER)) return source;
+  let patched = replaceExactly(source, 'SwC="composer.desktopBridge.sendMessage",',
+    'SwC="composer.desktopBridge.sendMessage",CL2readAction="composer.desktopBridge.readThreadEvents",CL3stopAction="composer.desktopBridge.stopThread",', 'glass control constants');
+  patched = replaceExactly(patched,
+    'const i=En_({type:"sendMessage",threadId:t.threadId,text:t.text,force:t.force});if(i?.type==="sendMessage")return{...n,...i}}',
+    'const i=En_({type:"sendMessage",threadId:t.threadId,text:t.text,force:t.force});if(i?.type==="sendMessage")return{...n,...i,delivery:t.delivery==="queue"||t.delivery==="steer"||t.delivery==="force"?t.delivery:t.force===!0?"force":"steer"}}', 'glass delivery parser');
+  const startAnchor = glassIdentifiers(RENDERER_CLASS_START);
+  const start = patched.indexOf(startAnchor);
+  const end = patched.indexOf(',xoc=class extends rt{', start);
+  if (start < 0 || end < 0 || patched.indexOf(startAnchor, start + 1) >= 0) throw new Error('Cursor Glass control class anchors do not match; no files were modified.');
+  patched = patched.slice(0, start) + glassIdentifiers(RENDERER_REPLACEMENT)
+    + ';' + glassIdentifiers(RENDERER_STOP_ACTION).replace(/;$/, '') + patched.slice(end);
+  patched = replaceExactly(patched, 'Lt(MwC),Lt(DwC),', 'Lt(MwC),Lt(DwC),Lt(CL2ReadAction),Lt(CL3StopAction),', 'glass control registration');
+  patched = replaceExactly(patched, 'abortChat(){this._withLiveAgentSync("abortChat",t=>t.abortChat())}',
+    'abortChat(){this._withLiveAgentSync("abortChat",t=>t.abortChat())}async desktopBridgeAbortChat(){return this._withLiveAgent("desktopBridgeAbortChat",async e=>{if(typeof e.abortChatAndWait!=="function")throw new Error("Native agent does not support awaited Stop");await e.abortChatAndWait()})}', 'glass awaited stop');
+  return `${patched}\n/* ${CONTROL_MARKER} */\n`;
+}
+
+
+// Model control shares Cursor's own UI catalogue, policy checks and composer
+// setter. No global preferences, CLI config, or prompt submission is involved.
+const RENDERER_MODEL_ACTION = String.raw`var CL4ModelAction=class extends at {
+  constructor(){super({id:"composer.desktopBridge.model",title:{value:"Desktop Bridge Models",original:"Desktop Bridge Models"}})}
+  async run(e,t){
+    const env=e.get(er),flags=e.get(Rr),storage=e.get(Cn),repository=e.get(E_),modelConfig=e.get(wS),settings=e.get(Z2),admin=e.get(ow);
+    if(!uip(env,flags,storage)||!await dip(t,storage)||!$Uo(t)||typeof t.threadId!=="string"
+      ||!["getThreadModels","setThreadModel"].includes(t.type)
+      ||t.type==="setThreadModel"&&(typeof t.model!=="string"||!t.model.trim()||t.model.length>256))return{outcome:"error",message:"Invalid model control arguments."};
+    const header=repository.getAgentHeader(t.threadId);
+    if(!header)return{outcome:"not-found"};
+    if(header.source==="draft"||header.source==="claude-code")return{outcome:"error",message:"This thread does not support Desktop model control."};
+    let agent,owned=false;
+    try{
+      await admin.forceRefresh();
+      agent=repository.getAgent(t.threadId);if(!agent){agent=await repository.loadAgent(t.threadId);owned=true}
+      const handle=agent.composerDataHandle,surface=handle.data.unifiedMode==="background"?"background-composer":"composer";
+      const available=settings.getAvailableModelsWithStatus({specificModelField:surface,filterBlockedModels:true});
+      const models=available.filter(m=>typeof m.name==="string"&&!admin.isModelBlocked(m.name)).map(m=>({id:m.name,name:m.clientDisplayName||m.name}));
+      const selection=()=>modelConfig.getSelectedModelsForComposer(handle).map(m=>m.modelId);
+      if(t.type==="setThreadModel"){
+        const canonical=modelConfig.resolveModelNameToCatalog(t.model);
+        if(admin.isModelBlocked(t.model)||!models.some(m=>m.id===canonical))return{outcome:"error",message:"Model is unavailable in Cursor's model picker or disabled by your administrator: "+t.model};
+        modelConfig.setModelConfigForComposer(handle,{modelName:t.model});
+        const selected=selection();
+        if(selected.length!==1||selected[0]!==canonical)return{outcome:"error",message:"Cursor did not confirm the requested model; current selection: "+selected.join(", ")};
+      }
+      return{outcome:"models",threadId:t.threadId,models,selectedModels:selection(),running:header.status.value==="in_progress"||handle.data.status==="generating"};
+    }catch(error){return{outcome:"error",message:error instanceof Error?error.message:String(error)}}finally{if(owned)agent?.dispose()}
+  }
+};`;
+
+export function patchCursorMainBundle(source: string): string {
+  let patched = patchCursorMainControlBundle(source);
+  if (patched.includes(MODEL_MARKER)) return patched;
+  patched = replaceExactly(patched, 'oW=3,HC=', 'oW=4,HC=', 'model protocol version');
+  patched = replaceExactly(patched, 'if(e.type==="stopThread"',
+    'if(e.type==="getThreadModels"&&iW(e.threadId))return{type:e.type,threadId:e.threadId};if(e.type==="setThreadModel"&&iW(e.threadId)&&typeof e.model==="string"&&e.model.trim().length>0&&e.model.length<=256)return{type:e.type,threadId:e.threadId,model:e.model.trim()};if(e.type==="stopThread"', 'model parser');
+  patched = replaceExactly(patched, 'case"stopThread":return this.stopThread(e);',
+    'case"getThreadModels":case"setThreadModel":return this.threadModels(e);case"stopThread":return this.stopThread(e);', 'model dispatch');
+  patched = replaceExactly(patched, 'async stopThread(e){', String.raw`async threadModels(e){for(const window of this.orderedWindows()){try{const result=await this.nativeHostMainService.runActionInWindow(void 0,{windowId:window.id,actionId:"composer.desktopBridge.model",args:this.bridgeActionArgs(window.id,e),waitForResult:!0});if(result===void 0||result?.outcome==="not-found")continue;if(result?.outcome==="models"&&result.threadId===e.threadId&&Array.isArray(result.models)&&Array.isArray(result.selectedModels))return{status:"models",threadId:e.threadId,windowId:window.id,models:result.models,selectedModels:result.selectedModels,running:result.running};return{status:"error",message:result?.message??"Invalid model acknowledgement"}}catch(error){return{status:"error",message:error instanceof Error?error.message:String(error)}}}return{status:"unknown-thread"}}async stopThread(e){`, 'model method');
+  patched = replaceExactly(patched, 'catch(n){return{status:"error",message:gc(n)}}',
+    'catch(n){return{status:"error",message:n instanceof Error?n.message:String(n)}}', 'native Stop error detail');
+  const eventFailure = 'catch(n){this.logService.warn(`[desktop bridge] Failed to read events through window ${t.id}:`,gc(n))}';
+  if (patched.includes(eventFailure)) patched = replaceExactly(patched, eventFailure,
+    'catch(n){return{status:"error",message:n instanceof Error?n.message:String(n)}}', 'event error propagation');
+  return `${patched}\n/* ${MODEL_MARKER} */\n`;
+}
+
+function repairRendererNativeContracts(source: string, glass = false): string {
+  const changes: Array<[string, string]> = [
+  [
+    "const n=e.get(er),i=e.get(Rr),r=e.get(Cn);if(!uip(n,i,r))return{cursor:t?.after??0,events:[]};",
+    "const n=e.get(er),i=e.get(Rr),r=e.get(Cn),o=e.get(E_),a=e.get(Hs),c=e.get(uo),l=e.get(Ty);if(!uip(n,i,r))return{cursor:t?.after??0,events:[]};"
+  ],
+  [
+    "const o=e.get(E_),a=e.get(Hs),c=e.get(uo),l=e.get(Ty);let u=o.getAgent",
+    "let u=o.getAgent"
+  ],
+  [
+    "const n=e.get(er),i=e.get(Rr),r=e.get(Cn);\n    if(!uip(n,i,r))return{outcome:\"error\",message:\"Desktop bridge is disabled.\"};",
+    "const n=e.get(er),i=e.get(Rr),r=e.get(Cn),repository=e.get(E_);\n    if(!uip(n,i,r))return{outcome:\"error\",message:\"Desktop bridge is disabled.\"};"
+  ],
+  [
+    "const repository=e.get(E_),header=repository.getAgentHeader(t.threadId);",
+    "const header=repository.getAgentHeader(t.threadId);"
+  ],
+  [
+    "const h=await s.promoteQueueItemToSteer(u.id);return h?{outcome:\"steered\",threadTitle:c,requestedDelivery:\"steer\",actualDelivery:\"steer\"}:{outcome:\"queued\",threadTitle:c,requestedDelivery:\"steer\",actualDelivery:\"queue\",warning:\"Cursor rejected steer promotion; the message remains queued.\"}",
+    "const result=(item)=>item?.delivery?.kind===\"steer\"?{outcome:\"steered\",threadTitle:c,requestedDelivery:\"steer\",actualDelivery:\"steer\"}:item?.delivery?{outcome:\"submitted\",threadTitle:c,requestedDelivery:\"steer\",actualDelivery:\"submitted\",warning:\"Cursor 已接收追加消息，正在确认原生投递状态；请勿重复发送。\"}:void 0;const existing=result(u);if(existing)return existing;const h=await s.promoteQueueItemToSteer(u.id),current=s.getQueueItems().find(v=>v.id===u.id),observed=result(current);if(observed)return observed;if(!current&&h)return{outcome:\"steered\",threadTitle:c,requestedDelivery:\"steer\",actualDelivery:\"steer\"};return current?{outcome:\"queued\",threadTitle:c,requestedDelivery:\"steer\",actualDelivery:\"queue\",warning:\"Cursor 当前仍将该消息列为普通排队消息。\"}:{outcome:\"submitted\",threadTitle:c,requestedDelivery:\"steer\",actualDelivery:\"submitted\",warning:\"Cursor 已接收消息，队列条目已消失；无法确认投递方式，请查看目标对话，勿重发。\"}"
+  ],
+  [
+    "if(!u)return{outcome:\"queued\",threadTitle:c,requestedDelivery:\"steer\",actualDelivery:\"queue\",warning:\"Cursor accepted the follow-up but did not expose its queue item for steering.\"};",
+    "if(!u)return{outcome:\"submitted\",threadTitle:c,requestedDelivery:\"steer\",actualDelivery:\"submitted\",warning:\"Cursor 已接收消息，未返回对应队列条目；无法确认投递方式，请查看目标对话，勿重发。\"};"
+  ]
+];
+  for (const [before, after] of changes) {
+    const needle = glass ? glassIdentifiers(before) : before;
+    // Minimal test fixtures and future already-repaired bundles can omit old actions.
+    if (source.includes(needle)) source = replaceExactly(source, needle, glass ? glassIdentifiers(after) : after, "native action contract");
+  }
+  return source;
+}
+
+export function patchCursorRendererBundle(source: string): string {
+  let patched = repairRendererNativeContracts(patchCursorRendererControlBundle(source));
+  if (patched.includes(MODEL_MARKER)) return patched;
+  patched = replaceExactly(patched, 'var CL3StopAction=', `${RENDERER_MODEL_ACTION}\nvar CL3StopAction=`, 'renderer model action');
+  patched = replaceExactly(patched, 'We(CL3StopAction),', 'We(CL3StopAction),We(CL4ModelAction),', 'renderer model registration');
+  return `${patched}\n/* ${MODEL_MARKER} */\n`;
+}
+
+export function patchCursorGlassRendererBundle(source: string): string {
+  let patched = repairRendererNativeContracts(patchCursorGlassControlBundle(source), true);
+  if (patched.includes(MODEL_MARKER)) return patched;
+  patched = replaceExactly(patched, 'var CL3StopAction=', `${glassIdentifiers(RENDERER_MODEL_ACTION)}\nvar CL3StopAction=`, 'glass model action');
+  patched = replaceExactly(patched, 'Lt(CL3StopAction),', 'Lt(CL3StopAction),Lt(CL4ModelAction),', 'glass model registration');
+  return `${patched}\n/* ${MODEL_MARKER} */\n`;
 }
 
 function backupRoot(appVersion: string): string {
@@ -210,33 +360,54 @@ function writeAtomic(filePath: string, content: string, mode: number): void {
   }
 }
 
-export function installCursorDesktopRealtimePatch(appPath?: string): CursorDesktopPatchResult {
+export function installCursorDesktopRealtimePatch(
+  appPath?: string,
+  options: { allowAppModification?: boolean } = {},
+): CursorDesktopPatchResult {
+  if (!options.allowAppModification) {
+    throw new Error('这是修改 Cursor.app 安装文件的实验性可选补丁。普通消息收发不依赖它；明确选择后使用 install --allow-app-modification。');
+  }
   const paths = resolveCursorDesktopPatchPaths(appPath);
   const appVersion = readAppVersion(paths);
+  for (const file of patchFiles(paths)) {
+    if (!fs.lstatSync(file).isFile()) throw new Error(`拒绝修改非普通文件：${file}`);
+  }
   const originalMain = fs.readFileSync(paths.mainBundlePath, 'utf8');
   const originalRenderer = fs.readFileSync(paths.rendererBundlePath, 'utf8');
-  if (originalMain.includes(CONTROL_MARKER) && originalRenderer.includes(CONTROL_MARKER)) {
-    return { action: 'already-installed', appPath: paths.appPath, appVersion, files: [paths.mainBundlePath, paths.rendererBundlePath] };
+  const originalGlass = fs.readFileSync(paths.glassBundlePath, 'utf8');
+  if (originalMain.includes(MODEL_MARKER) && originalRenderer.includes(MODEL_MARKER)
+    && originalMain.includes(MAIN_CONTROL_DECLARATIONS) && originalGlass.includes(MODEL_MARKER)) {
+    return { action: 'already-installed', appPath: paths.appPath, appVersion, files: [paths.mainBundlePath, paths.rendererBundlePath, paths.glassBundlePath] };
   }
   if (originalMain.includes(PATCH_MARKER) !== originalRenderer.includes(PATCH_MARKER)
     || originalMain.includes(CONTROL_MARKER) !== originalRenderer.includes(CONTROL_MARKER)) {
     throw new Error('Cursor realtime patch 处于半安装状态；请先 restore，再重新安装。');
   }
+  // Never stack an upgrade on an installation we cannot fully uninstall.
+  restorePlan(paths, appVersion);
   const patchedMain = patchCursorMainBundle(originalMain);
   const patchedRenderer = patchCursorRendererBundle(originalRenderer);
+  const patchedGlass = patchCursorGlassRendererBundle(originalGlass);
   assertJavaScript(patchedMain, 'main');
   assertJavaScript(patchedRenderer, 'renderer');
+  assertJavaScript(patchedGlass, 'glass');
 
   const backupDirectory = path.join(backupRoot(appVersion), `${Date.now()}-${sha256(originalMain).slice(0, 12)}`);
   fs.mkdirSync(backupDirectory, { recursive: true, mode: 0o700 });
   const entries = [
     { path: paths.mainBundlePath, original: originalMain, patched: patchedMain, backup: path.join(backupDirectory, 'main.js') },
     { path: paths.rendererBundlePath, original: originalRenderer, patched: patchedRenderer, backup: path.join(backupDirectory, 'workbench.desktop.main.js') },
+    { path: paths.glassBundlePath, original: originalGlass, patched: patchedGlass, backup: path.join(backupDirectory, 'workbench.glass.main.js') },
   ];
-  for (const entry of entries) fs.copyFileSync(entry.path, entry.backup, fs.constants.COPYFILE_EXCL);
+  for (const entry of entries) {
+    fs.copyFileSync(entry.path, entry.backup, fs.constants.COPYFILE_EXCL);
+    if (sha256(fs.readFileSync(entry.backup)) !== sha256(entry.original)) {
+      throw new Error('备份期间 Cursor 文件发生变化；未修改应用，请重新检查。');
+    }
+  }
   const manifest: PatchManifest = {
     schemaVersion: 1,
-    marker: CONTROL_MARKER,
+    marker: MODEL_MARKER,
     appPath: paths.appPath,
     appVersion,
     installedAt: new Date().toISOString(),
@@ -256,57 +427,148 @@ export function installCursorDesktopRealtimePatch(appPath?: string): CursorDeskt
     }
     throw error;
   }
-  return { action: 'installed', appPath: paths.appPath, appVersion, backupDirectory, files: entries.map((entry) => entry.path) };
+  return { action: 'installed', restartRequired: true, appPath: paths.appPath, appVersion, backupDirectory, files: entries.map((entry) => entry.path) };
 }
 
-function latestManifest(appVersion: string, appPath: string): { directory: string; manifest: PatchManifest } | null {
+interface VerifiedManifest {
+  directory: string;
+  manifest: PatchManifest;
+}
+
+function patchFiles(paths: CursorDesktopPatchPaths): string[] {
+  return [paths.mainBundlePath, paths.rendererBundlePath, paths.glassBundlePath];
+}
+
+function hasPatch(source: string): boolean {
+  return source.includes(MODEL_MARKER) || source.includes(CONTROL_MARKER) || source.includes(PATCH_MARKER);
+}
+
+function readManifests(paths: CursorDesktopPatchPaths, appVersion: string): VerifiedManifest[] {
   const root = backupRoot(appVersion);
-  if (!fs.existsSync(root)) return null;
-  const directories = fs.readdirSync(root, { withFileTypes: true })
-    .filter((entry) => entry.isDirectory())
-    .map((entry) => path.join(root, entry.name))
-    .sort()
-    .reverse();
-  for (const directory of directories) {
+  if (!fs.existsSync(root)) return [];
+  const targets = new Set(patchFiles(paths));
+  const results: VerifiedManifest[] = [];
+  for (const entry of fs.readdirSync(root, { withFileTypes: true }).filter((item) => item.isDirectory())) {
+    const directory = path.join(root, entry.name);
     try {
       const manifest = JSON.parse(fs.readFileSync(path.join(directory, 'manifest.json'), 'utf8')) as PatchManifest;
-      if (
-        (manifest.marker === CONTROL_MARKER || manifest.marker === PATCH_MARKER)
-        && manifest.schemaVersion === 1
-        && path.resolve(manifest.appPath) === path.resolve(appPath)
-      ) return { directory, manifest };
-    } catch {
-      // Ignore incomplete backup directories and try the previous complete one.
-    }
+      if (manifest.schemaVersion !== 1 || ![MODEL_MARKER, CONTROL_MARKER, PATCH_MARKER].includes(manifest.marker)
+        || manifest.appPath !== paths.appPath || manifest.appVersion !== appVersion || !Array.isArray(manifest.files)) continue;
+      if (!manifest.files.every((file) => targets.has(file.path) && typeof file.backup === 'string'
+        && path.dirname(path.resolve(file.backup)) === path.resolve(directory)
+        && /^[a-f0-9]{64}$/.test(file.sha256) && /^[a-f0-9]{64}$/.test(file.patchedSha256))) continue;
+      results.push({ directory, manifest });
+    } catch { /* Ignore incomplete manifests; no unverified entry can authorize a write. */ }
   }
-  return null;
+  return results;
 }
 
-export function restoreCursorDesktopRealtimePatch(appPath?: string): CursorDesktopPatchResult {
-  const paths = resolveCursorDesktopPatchPaths(appPath);
-  const appVersion = readAppVersion(paths);
-  const found = latestManifest(appVersion, paths.appPath);
-  if (!found) return { action: 'not-installed', appPath: paths.appPath, appVersion, files: [] };
-  const currentHashes = new Map(found.manifest.files.map((entry) => [entry.path, sha256(fs.readFileSync(entry.path))]));
-  if (found.manifest.files.every((entry) => currentHashes.get(entry.path) === entry.sha256)) {
-    return { action: 'not-installed', appPath: paths.appPath, appVersion, backupDirectory: found.directory, files: [] };
-  }
-  for (const entry of found.manifest.files) {
-    if (currentHashes.get(entry.path) !== entry.patchedSha256) {
-      throw new Error(`Cursor 文件已被其他更新替换，拒绝覆盖：${entry.path}`);
+interface RestoreEntry {
+  path: string;
+  source: string;
+  content: string;
+  current: string;
+  mode: number;
+}
+
+function findOriginal(target: string, currentHash: string, manifests: VerifiedManifest[]): { source: string; content: string } | undefined {
+  const pending = [currentHash];
+  const visited = new Set<string>();
+  while (pending.length) {
+    const hash = pending.shift()!;
+    if (visited.has(hash)) continue;
+    visited.add(hash);
+    for (const { manifest } of manifests) {
+      for (const file of manifest.files) {
+        if (file.path !== target || file.patchedSha256 !== hash || file.sha256 === hash) continue;
+        try {
+          if (!fs.lstatSync(file.backup).isFile()) continue;
+          const content = fs.readFileSync(file.backup, 'utf8');
+          if (sha256(content) !== file.sha256) continue;
+          if (!hasPatch(content)) return { source: file.backup, content };
+          pending.push(file.sha256);
+        } catch { /* A different verified chain may still reach the original. */ }
+      }
     }
   }
-  for (const entry of found.manifest.files) {
-    const backup = fs.readFileSync(entry.backup);
-    if (sha256(backup) !== entry.sha256) throw new Error(`Cursor patch 备份校验失败：${entry.backup}`);
-    const mode = fs.statSync(entry.path).mode & 0o777;
-    writeAtomic(entry.path, backup.toString('utf8'), mode);
+  return undefined;
+}
+
+function restorePlan(paths: CursorDesktopPatchPaths, appVersion: string): RestoreEntry[] {
+  const manifests = readManifests(paths, appVersion);
+  const entries: RestoreEntry[] = [];
+  for (const target of patchFiles(paths)) {
+    if (!fs.existsSync(target)) continue;
+    const current = fs.readFileSync(target, 'utf8');
+    if (!hasPatch(current)) continue;
+    if (!fs.lstatSync(target).isFile()) throw new Error(`拒绝修改非普通文件：${target}`);
+    const original = findOriginal(target, sha256(current), manifests);
+    if (!original) throw new Error(`无法校验 ${target} 到原始文件的备份链（文件可能被外部修改或备份损坏）；未修改任何文件。`);
+    entries.push({ path: target, ...original, current, mode: fs.statSync(target).mode & 0o777 });
   }
+  return entries;
+}
+
+export function inspectCursorDesktopPatch(appPath?: string) {
+  const paths = resolveCursorDesktopPatchPaths(appPath);
+  const appVersion = readAppVersion(paths);
+  const files = patchFiles(paths).map((target) => {
+    try {
+      const content = fs.readFileSync(target, 'utf8');
+      const patchVersion = content.includes(MODEL_MARKER) ? 4 : content.includes(CONTROL_MARKER) ? 3 : content.includes(PATCH_MARKER) ? 2 : 0;
+      return { path: target, state: hasPatch(content) ? 'patched' as const : 'native' as const, patchVersion };
+    } catch { return { path: target, state: 'missing' as const }; }
+  });
+  const patched = files.filter((file) => file.state === 'patched').length;
+  let uninstallError: string | undefined;
+  let restoreFiles: Array<{ path: string; backup: string }> = [];
+  try { restoreFiles = restorePlan(paths, appVersion).map((entry) => ({ path: entry.path, backup: entry.source })); }
+  catch (error) { uninstallError = error instanceof Error ? error.message : String(error); }
   return {
-    action: 'restored',
-    appPath: paths.appPath,
-    appVersion,
-    backupDirectory: found.directory,
-    files: found.manifest.files.map((entry) => entry.path),
+    action: 'status' as const, appPath: paths.appPath, appVersion, scope: 'files-on-disk' as const,
+    state: patched === 0 ? 'not-installed' : patched === files.length ? 'installed' : 'partial',
+    latestPatchVersion: 4, upgradeAvailable: patched > 0 && files.some((file) => file.patchVersion !== 4),
+    optional: true, experimental: true, modifiesApplication: true,
+    runtimeVerified: false,
+    note: '仅检查磁盘文件；不代表运行中的 Cursor 已加载补丁或 steer/Stop/模型切换已验证。安装、卸载均不会自动重启 Cursor。',
+    files, canUninstall: patched > 0 && !uninstallError, restoreFiles,
+    ...(uninstallError ? { uninstallError } : {}),
   };
 }
+
+export function planCursorDesktopPatchInstall(appPath?: string) {
+  return {
+    ...inspectCursorDesktopPatch(appPath), action: 'install-plan' as const,
+    warning: '实验性可选功能：直接修改 Cursor.app 的 main、Desktop、Glass JavaScript bundle，非官方扩展或公开 API。默认不安装；普通消息收发不依赖补丁。',
+    requiredFlag: '--allow-app-modification',
+    uninstallCommand: 'codelark cursor-desktop-patch uninstall',
+  };
+}
+
+export function uninstallCursorDesktopRealtimePatch(appPath?: string, options: { dryRun?: boolean } = {}) {
+  const paths = resolveCursorDesktopPatchPaths(appPath);
+  const appVersion = readAppVersion(paths);
+  // Validate every file and every backup before touching any application file.
+  const entries = restorePlan(paths, appVersion);
+  if (options.dryRun) return {
+    action: 'uninstall-plan' as const, appPath: paths.appPath, appVersion,
+    files: entries.map((entry) => entry.path), backups: entries.map((entry) => entry.source),
+    restartRequired: entries.length > 0,
+  };
+  try {
+    for (const entry of entries) writeAtomic(entry.path, entry.content, entry.mode);
+  } catch (error) {
+    for (const entry of entries) {
+      try { writeAtomic(entry.path, entry.current, entry.mode); } catch { /* Keep all original backups for recovery. */ }
+    }
+    throw error;
+  }
+  return {
+    action: entries.length ? 'uninstalled' as const : 'not-installed' as const,
+    appPath: paths.appPath, appVersion, files: entries.map((entry) => entry.path),
+    restartRequired: entries.length > 0,
+  };
+}
+
+/** Legacy command alias; restore now removes all patch layers, not just the latest one. */
+export const restoreCursorDesktopRealtimePatch = uninstallCursorDesktopRealtimePatch;

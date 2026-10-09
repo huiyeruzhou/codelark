@@ -1,6 +1,7 @@
 import type { CursorTransport } from '../../domain/session.js';
 
-/** Capabilities of CodeLark's integration, not everything the native Cursor UI can do. */
+/** Standard transport capabilities. Optional Desktop model control is probed per instance
+ * by desktop-bridge-client; it never changes this provider or enables TOML writes. */
 export interface CursorCapabilities {
   readonly provider: 'tmux';
   readonly transport: CursorTransport;
