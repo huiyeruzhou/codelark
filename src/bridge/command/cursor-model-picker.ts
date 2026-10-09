@@ -1,16 +1,18 @@
 import { createConfigService } from '../../configuration/service.js';
 import type { BridgeSession, ChannelAddress, OutboundRichCard } from '../../domain/index.js';
 import type { CursorAvailableModel } from '../../runtime/cursor/models.js';
+import type { CursorDesktopModels } from '../../runtime/cursor/desktop-bridge-client.js';
 import { buildCommandCallbackData } from './callbacks.js';
 
 export const CURSOR_MODEL_PICKER_PAGE_SIZE = 36;
 export const CURSOR_MODEL_PAGE_ARG = '--cursor-model-page';
-export const CURSOR_DESKTOP_MODEL_CONTROL_NOTICE = 'Cursor Desktop 支持在桌面端切换模型，但当前 Desktop Bridge 接口尚未接入模型和思考级别切换。请在 Cursor 中切换；CodeLark 不会把未应用的配置报告为切换成功。';
+export const CURSOR_DESKTOP_MODEL_CONTROL_NOTICE = 'Cursor Desktop 模型由目标对话管理。发送 `/model` 可通过已启用的可选增强切换模型；标准接口不支持此操作。思考级别请在 Cursor 中调整。CodeLark 不会把未应用的配置报告为切换成功。';
 
-export function attachCursorDesktopModelNotice(card: OutboundRichCard): OutboundRichCard {
+export function attachCursorDesktopModelNotice(card: OutboundRichCard, sessionId?: string): OutboundRichCard {
   return {
     ...card,
     sections: [...card.sections, { fields: [['模型和思考级别', '由 Cursor Desktop 对话管理']] }],
+    ...(sessionId ? { actions: [...(card.actions || []), [{ text: '读取 / 切换 Desktop 模型', callbackData: buildCommandCallbackData('/model', sessionId) }]] } : {}),
     ...(card.form ? { form: {
       ...card.form,
       extraInputs: card.form.extraInputs?.filter((input) => input.elementId !== 'cursorDefaultModel'),
@@ -80,8 +82,8 @@ function modelOptionText(model: CursorAvailableModel): string {
   return `${model.name} · ${model.slug}`;
 }
 
-function selectionCommand(model: CursorAvailableModel, target: 'session' | 'global'): string {
-  const value = model.default || model.slug === 'auto' ? 'default' : model.slug;
+function selectionCommand(model: CursorAvailableModel, target: 'session' | 'global', nativeDesktop = false): string {
+  const value = !nativeDesktop && (model.default || model.slug === 'auto') ? 'default' : model.slug;
   return target === 'global' ? `/set cursorDefaultModel ${value}` : `/model ${value}`;
 }
 
@@ -95,6 +97,7 @@ export function attachCursorModelPickerControls(options: {
   scopeSessionId?: string;
   configuredLabel: string;
   controlIdPrefix: string;
+  nativeDesktop?: boolean;
 }): { card: OutboundRichCard; page: number; pageCount: number; selectedSlug?: string } {
   const configuredModel = options.selectedSlug
     ? options.models.find((model) => model.slug === options.selectedSlug)
@@ -113,7 +116,7 @@ export function attachCursorModelPickerControls(options: {
   );
   const callback = (command: string) => buildCommandCallbackData(command, options.scopeSessionId);
   const selectedCallbackData = selected && pageModels.includes(selected)
-    ? callback(selectionCommand(selected, options.target))
+    ? callback(selectionCommand(selected, options.target, options.nativeDesktop))
     : undefined;
   const modelSelect = {
     id: `${options.controlIdPrefix}_model`,
@@ -121,7 +124,7 @@ export function attachCursorModelPickerControls(options: {
     selectedCallbackData,
     options: pageModels.map((model) => ({
       text: modelOptionText(model),
-      callbackData: callback(selectionCommand(model, options.target)),
+      callbackData: callback(selectionCommand(model, options.target, options.nativeDesktop)),
     })),
   };
   const pageSelect = {
@@ -146,7 +149,7 @@ export function attachCursorModelPickerControls(options: {
     card: {
       ...options.card,
       subtitle: `${options.card.subtitle || ''} · Cursor 模型目录 ${options.models.length} 项 · 第 ${page}/${pageCount} 页`.replace(/^ · /u, ''),
-      selects: [...(options.card.selects || []), modelSelect, pageSelect],
+      selects: [...(options.card.selects || []), ...(pageModels.length ? [modelSelect, pageSelect] : [])],
       sections: [
         ...options.card.sections,
         { fields: [
@@ -156,7 +159,9 @@ export function attachCursorModelPickerControls(options: {
       ...(form ? { form } : {}),
       footer: [
         ...(options.card.footer || []),
-        '模型目录可能包含管理员禁用的模型，实际使用受账号权限限制；已保存配置不代表运行中的会话已切换。',
+        options.nativeDesktop
+          ? '列表来自目标 Desktop 的原生模型选择器；切换时会重新检查管理员限制。这里显示的是对话模型选择，正在生成的轮次仍以实际回报为准。'
+          : '模型目录可能包含管理员禁用的模型，实际使用受账号权限限制；已保存配置不代表运行中的会话已切换。',
       ],
     },
   };
@@ -167,10 +172,11 @@ export function buildCursorModelPickerCard(options: {
   address: ChannelAddress;
   models: CursorAvailableModel[];
   requestedPage?: number;
+  desktop?: CursorDesktopModels;
 }): { card: OutboundRichCard; page: number; pageCount: number; selectedSlug?: string } {
-  const override = sessionCursorModelOverride(options.session.id);
+  const override = options.desktop ? options.desktop.selectedModels.join(', ') : sessionCursorModelOverride(options.session.id);
   const base: OutboundRichCard = {
-    title: 'Cursor 模型选择',
+    title: options.desktop ? 'Cursor Desktop 模型选择' : 'Cursor 模型选择',
     template: 'blue',
     sections: [],
     actions: [[{
@@ -191,7 +197,8 @@ export function buildCursorModelPickerCard(options: {
     requestedPage: options.requestedPage,
     pageCommand: (page) => `/model ${CURSOR_MODEL_PAGE_ARG}=${page}`,
     scopeSessionId: options.session.id,
-    configuredLabel: '当前会话配置',
+    configuredLabel: options.desktop ? 'Desktop 当前选择' : '当前会话配置',
     controlIdPrefix: 'cursor_model_command',
+    nativeDesktop: Boolean(options.desktop),
   });
 }

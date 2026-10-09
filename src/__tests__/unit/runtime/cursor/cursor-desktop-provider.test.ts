@@ -6,7 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, it } from 'node:test';
 
-import { sendCursorDesktopMessage, stopCursorDesktopThread } from '../../../../runtime/cursor/desktop-bridge-client.js';
+import { sendCursorDesktopMessage, stopCursorDesktopThread, getCursorDesktopModels, setCursorDesktopModel } from '../../../../runtime/cursor/desktop-bridge-client.js';
 import { streamCursorDesktop } from '../../../../runtime/cursor/desktop-provider.js';
 import {
   cursorWorkspaceHash,
@@ -72,7 +72,7 @@ describe('Cursor Desktop provider', () => {
   });
 
   async function startBridge(
-    onSend?: (payload: Record<string, unknown>) => void,
+    onSend?: (payload: Record<string, unknown>) => void | Record<string, unknown>,
     sendStatus: 'submitted' | 'queued' | 'steered' | 'interrupt-requested' | 'idle' | 'error' = 'submitted',
     threadStatus: 'idle' | 'running' | 'completed' | 'error' | 'unknown' = 'completed',
     protocolVersion = 3,
@@ -103,8 +103,8 @@ describe('Cursor Desktop provider', () => {
           }));
           return;
         }
-        onSend?.(payload);
-        response.end(JSON.stringify({
+        const custom = onSend?.(payload);
+        response.end(JSON.stringify(custom || {
           status: sendStatus,
           threadId: THREAD_ID,
           threadTitle: 'Existing Desktop thread',
@@ -127,6 +127,37 @@ describe('Cursor Desktop provider', () => {
       createdAt: Date.now(),
     }), { mode: 0o600 });
   }
+
+  it('reads and switches only the exact Desktop thread with native acknowledgement, guarding rebinding and old protocols', async () => {
+    const requests: Record<string, unknown>[] = [];
+    let rejected = false, wrongThread = false, selected = 'old';
+    await startBridge((payload) => {
+      requests.push(payload);
+      if (rejected) return { status: 'error', message: 'disabled by administrator' };
+      if (payload.type === 'setThreadModel') selected = String(payload.model);
+      return { status: 'models', threadId: wrongThread ? 'other' : THREAD_ID,
+        models: [{ id: 'old', name: 'Old' }, { id: 'new', name: 'New' }], selectedModels: [selected], running: true };
+    }, 'submitted', 'running', 4);
+    assert.equal((await getCursorDesktopModels(THREAD_ID)).selectedModels[0], 'old');
+    assert.equal((await setCursorDesktopModel(THREAD_ID, 'new')).selectedModels[0], 'new');
+    assert.deepEqual(requests.map(request => request.type), ['getThreadModels', 'setThreadModel']);
+    assert.ok(requests.every(request => request.threadId === THREAD_ID && !('text' in request)));
+    rejected = true;
+    await assert.rejects(setCursorDesktopModel(THREAD_ID, 'fable'), /disabled by administrator/);
+    rejected = false; wrongThread = true;
+    await assert.rejects(setCursorDesktopModel(THREAD_ID, 'new'), /未确认模型请求/);
+    const count = requests.length;
+    await assert.rejects(setCursorDesktopModel(THREAD_ID, 'new', () => false), /未发送模型请求/);
+    assert.equal(requests.length, count);
+    let checks = 0; wrongThread = false;
+    await assert.rejects(setCursorDesktopModel(THREAD_ID, 'new', () => ++checks === 1), /结果不作为当前会话/);
+    const discoveryFile = path.join(bridgeDir, 'instance.json');
+    const discovery = JSON.parse(fs.readFileSync(discoveryFile, 'utf8'));
+    discovery.protocolVersion = 3; fs.writeFileSync(discoveryFile, JSON.stringify(discovery));
+    const before = requests.length;
+    await assert.rejects(setCursorDesktopModel(THREAD_ID, 'new'), /可选增强协议 v4/);
+    assert.equal(requests.length, before);
+  });
 
   it('sends only to an exact live Desktop thread over the authenticated socket', async () => {
     let sent: Record<string, unknown> | undefined;
@@ -167,8 +198,17 @@ describe('Cursor Desktop provider', () => {
   it('rejects v1 steer before sending rather than enqueueing behind the active turn', async () => {
     const requests: unknown[] = [];
     await startBridge((payload) => { requests.push(payload); }, 'submitted', 'running', 1);
-    await assert.rejects(sendCursorDesktopMessage(THREAD_ID, 'must steer'), /不支持 steer；消息未发送/);
+    await assert.rejects(sendCursorDesktopMessage(THREAD_ID, 'must steer', { delivery: 'steer' }), /不支持 steer；消息未发送/);
     assert.deepEqual(requests, []);
+  });
+
+  it('ordinary messages work with unmodified v1 and report native queuing honestly', async () => {
+    const requests: unknown[] = [];
+    await startBridge((payload) => { requests.push(payload); }, 'submitted', 'running', 1);
+    const result = await sendCursorDesktopMessage(THREAD_ID, 'native followup');
+    assert.deepEqual(requests, [{ type: 'sendMessage', threadId: THREAD_ID, text: 'native followup', force: false }]);
+    assert.equal(result.actualDelivery, 'queue');
+    assert.match(result.warning || '', /不是 steer/);
   });
 
   it('accepts v2 submitted when the turn finished between discovery and send', async () => {
@@ -380,7 +420,7 @@ describe('Cursor Desktop provider', () => {
     assert.match(output, /"type":"result"/);
   });
 
-  it('uses protocol v2 realtime events as liveness while collecting the final transcript', async () => {
+  for (const protocolVersion of [3, 4]) it(`disables broken v3 events and uses fixed v4 events while collecting the final transcript (v${protocolVersion})`, async () => {
     const cwd = path.join(root, 'workspace-realtime');
     fs.mkdirSync(cwd, { recursive: true });
     const transcript = getCursorTranscriptCandidates(THREAD_ID, cwd)[0]!;
@@ -397,7 +437,7 @@ describe('Cursor Desktop provider', () => {
           { type: 'turn_ended', status: 'success' },
         ].map((line) => JSON.stringify(line)).join('\n') + '\n');
       }, 350);
-    }, 'submitted', 'running', 2, () => {
+    }, 'submitted', 'running', protocolVersion, () => {
       eventsRead += 1;
       return eventsRead === 1
         ? {
@@ -426,8 +466,14 @@ describe('Cursor Desktop provider', () => {
       workingDirectory: cwd,
     })) output += chunk;
 
-    assert.match(output, /实时事件已连接/);
-    assert.match(output, /claude-sonnet-test/);
+    if (protocolVersion === 4) {
+      assert.match(output, /实时事件已连接/);
+      assert.match(output, /claude-sonnet-test/);
+      assert.ok(eventsRead > 0);
+    } else {
+      assert.equal(eventsRead, 0, 'never invoke the broken renderer action');
+      assert.doesNotMatch(output, /实时事件已连接/);
+    }
     assert.match(output, /REALTIME_FINAL_OUTPUT/);
     assert.match(output, /"type":"result"/);
   });

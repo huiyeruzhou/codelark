@@ -77,10 +77,10 @@ Cursor 对外只有一个 provider：`tmux`，identity 固定为 `cursor:tmux`�
 
 | 内部 transport（provider 均为 `tmux`） | `modelCatalog` | `modelConfiguration` |
 | --- | --- | --- |
-| `desktop` | `unavailable`：没有会话级模型目录接口 | `external`：模型和 effort 由 Desktop 管理，CodeLark 不写假应用配置 |
+| `desktop` | `unavailable`：标准接口无目录；可选 v4 单独探测原生目录 | `external`：模型和 effort 由 Desktop 管理，CodeLark 不写假应用配置 |
 | `cli` | `cli`：读取独立 CLI 模型目录 | `process-launch`：模型和 effort 在启动进程时传入，复用 TUI 不会重新应用 |
 
-契约表达的是 **CodeLark 已接入的能力**，不是 Cursor 原生 UI 的全部能力，也不是账号授权。目录、保存的配置和本轮运行回报是三个不同的数据来源；管理员是否允许某个模型必须由权限证据确认。未来接入 Desktop 模型控制或运行中 TUI 切换时，需要同时实现对应 transport 操作及同一 thread 的应用结果确认，再扩展能力契约；不能只打开前端控件或新增可选 provider。
+契约表达的是 **CodeLark 已接入的能力**，不是 Cursor 原生 UI 的全部能力，也不是账号授权。目录、保存的配置和本轮运行回报是三个不同的数据来源；管理员是否允许某个模型必须由权限证据确认。静态契约描述标准 transport 的能力，不代表已安装实验补丁。Desktop 模型控制在异步请求时检查目标实例协议 v4，并调用专用原生操作；不能因全局存在补丁就打开所有会话的配置写入。
 
 | 执行场景 | CodeLark 如何传 model | 生效模型由谁控制 |
 | --- | --- | --- |
@@ -93,7 +93,7 @@ Cursor 对外只有一个 provider：`tmux`，identity 固定为 `cursor:tmux`�
 
 - `/provider` 始终报告 `tmux`。Desktop 会话的 `/p tmux` 保持原对话，不重启、不弹 CLI 重启确认、不修改 transport；`/p default` 只清除无关覆盖。CLI 会话保留既有 `/p tmux` 重启行为。`/tmux-screen` 按 transport 读取 Desktop 状态或 CLI 屏幕，provider 字段统一为 `tmux`。
 - `/model <slug>` 和 `/current` 的 CLI 模型选择器保存 session scope 的 `runtime.cursor.model`；保存不会给已有 TUI 注入切换命令。Cursor 原生 TUI 支持 `/model` 选择器，这是 Cursor 的能力，不能与 CodeLark 尚未接入运行中切换混为一谈。`/model <文字>` 会筛选原生选择器，不保证立即应用一个 slug。
-- Desktop 的 `/model`、`/reasoning` 明确说明当前 Bridge 尚未接入模型控制，不保存未应用的覆盖；`/current` 不展示 CLI 模型目录和无效的 model/effort 控件，旧卡片提交相关变更时整份表单不写入。Cursor Desktop UI 本身可以切模型；当前原生 Desktop Bridge v1 仅接受 `listThreads`、`sendMessage`，发送 parser 只保留 threadId/text/force，单纯附加 model 字段不会生效。项目可选 Desktop v3 控制协议也没有模型切换请求。
+- Desktop 的 `/model` 通过可选 v4 协议读取目标对话的原生模型选择器和当前选择；`/model <id>` 调用同一 thread 的原生 setter，回读匹配后才确认成功。模型列表采用 Cursor 自身的账号/管理员过滤，切换前再次校验，不借用 CLI 目录。`/current` 隐藏独立 model/effort 表单，提供进入同一 `/model` 入口的按钮，旧表单的相关修改仍整体拒绝。Desktop 不再另存一份未应用的 TOML 模型覆盖；原生 composer 保存选择，是唯一配置来源。标准 v1 及旧增强 v2/v3 没有模型操作，明确提示可选能力未启用；`/reasoning` 仍须在 Cursor 中调整。
 - `/set cursorDefaultModel` 和管理 UI 保存默认配置，遵守上述新建/恢复边界。`/model default` 在 CLI 路径只删除 session override；新建 CLI 会话仍可能使用上层默认或内置 `gpt-5.3-codex`，不能笼统理解为所有启动都省略 `--model`。
 - CLI 路径的 `/model`、`/current` 及全局 `/set` 共用 `agent models` 返回的目录，但不展示其 `current/default` 标记，也不根据它们预选模型或定位页码。配置 slug 在目录中时才预选；无覆盖或自定义 slug 不在目录中时不伪造已选值。
 - **模型目录不等于账号可用权限。** 2026-10-09 实测目录包含用户确认被管理员禁用的 Fable；原生 TUI 选择器没有该选项，但用启动参数仍可显示该名称。启动成功和名称显示都不是生成请求获准的证明，未发起生成请求的实验不能称为“模型可用”。当前 CLI 目录文本不提供管理员禁用标记，因此 CodeLark 明确提示实际使用受账号权限限制，不根据目录推断权限，也不硬编码某个模型的禁用状态。
@@ -101,11 +101,11 @@ Cursor 对外只有一个 provider：`tmux`，identity 固定为 `cursor:tmux`�
 
 ### 尚未接入或仍需改善的行为
 
-- Desktop 模型控制需要扩展 Bridge 的请求解析、主进程路由及 renderer 模型服务，并在切换后读取同一 thread 的状态确认应用；本次修正没有新增该控制接口，也没有修改 Cursor.app。
+- v4 的 `getThreadModels` / `setThreadModel` 经已认证的 main → renderer action 调用 AISettingsService、管理员策略和 modelConfigService。仅更新目标 composer，不更新全局偏好、不提交 prompt、不修改正在生成轮次的模型标签。原生回读只证明模型选择成功，实际生成及模型权限仍须用后续原生执行回报确认。
 - Cursor hook 可以同时给出 `model=<模型>-high` 与 `model_id=<基础模型>`，另一些 hook 只有基础模型的 `model`。当前 Desktop transport 从 `afterAgentThought` 更新模型，不再让工具 hook 的基础模型覆盖思考 variant；仅凭不同原始 hook 的后缀差异不能断言切换了模型或思考级别。
 - `/tmux-screen` 的 Desktop 状态优先读取最近 hook，其次是持久化 summary，最后回退到显示策略。最近记录不能证明一个新轮次的模型；审计时应关联 conversation ID、generation ID 和时间，优先核对 `beforeSubmitPrompt` 等原始运行记录。
 
-2026-10-09 对生产版本的取证发现：session 保存模型 A 后，下一轮仍通过 Desktop 的 `sendMessage` 提交且没有 model 参数；同一 generation 的 `beforeSubmitPrompt` 回报模型 B，旧卡片从 A 更新成 B。管理员禁用模型 A 与 CodeLark 未下发模型参数是两项事实，不能推断为 Desktop 收到 A 后自动回退到 B。本次修正消除了无关 CLI current 展示及 Desktop 假成功，尚未实现 Desktop 模型切换或 CLI 运行中模型同步。
+2026-10-09 对生产版本的取证发现：session 保存模型 A 后，下一轮仍通过 Desktop 的 `sendMessage` 提交且没有 model 参数；同一 generation 的 `beforeSubmitPrompt` 回报模型 B，旧卡片从 A 更新成 B。管理员禁用模型 A 与 CodeLark 未下发模型参数是两项事实，不能推断为 Desktop 收到 A 后自动回退到 B。本次修正消除了无关 CLI current 展示及 Desktop 假成功，Desktop 模型切换现由可选 v4 另行接入，CLI 运行中模型同步尚未接入。
 
 ## 生命周期
 
@@ -113,10 +113,10 @@ Cursor 对外只有一个 provider：`tmux`，identity 固定为 `cursor:tmux`�
 
 1. `/t` 从 Desktop conversation index 识别出的会话写入 `provider=tmux, transport=desktop`，保留原 thread UUID。读取旧 `provider=desktop` 时按 Desktop transport 兼容，启动或再次选择时迁移为新结构；没有 Desktop thread id 的 fresh session 使用 CLI transport。
 2. 发送前读取 `~/.cursor/desktop-bridge/*.json`，验证目录/文件仅当前用户可读、协议版本、live PID、Unix socket 和 64 位 hex token，再通过 Bearer 鉴权向 `/` 提交 `listThreads`。目标必须是 live 列表中的精确 thread id。
-3. 输入使用 `sendMessage` 单次提交，显式 `delivery=steer`，不受 CLI 的 `--force` 权限设置影响。运行中追加绕过本地轮次排队、复用原输出 observer；Desktop 原生将该消息的 queue item 提升为 steer。v1 不支持 steer，因此发送前报错，不悄悄改为排队；v2/v3 返回 `submitted`、`queued` 或 `steered`，实际降为 queued 必须展示原生 warning，不重发。无 discovery、stale PID、目标 thread 不存在、不可发送、HTTP 错误或超时都明确失败，绝不改走 CLI/ACP。
+3. 输入使用 `sendMessage` 单次提交，不受 CLI 的 `--force` 权限设置影响。默认 `auto` 在无补丁 v1 使用原生 queue，在增强 v2+ 请求 `delivery=steer`；因此普通消息无需修改 Cursor.app。显式 steer 遇到 v1 在发送前报错。运行中追加绕过本地轮次排队、复用原输出 observer；增强尝试将该消息的 queue item 提升为 steer。返回 `submitted`、`queued` 或 `steered` 时按实际语义处理，steer 降为 queued 必须显示原因，不重发。无 discovery、stale PID、目标 thread 不存在、不可发送、HTTP 错误或超时都明确失败，绝不改走 CLI/ACP。
 4. provider 在提交前同时记录 transcript EOF，并订阅按 Cursor logs root 共享的异步 hook tailer。tailer 用递归 `fs.watch` 唤醒一次串行异步 reconcile，并保留低频异步 fallback 防止平台漏报、合并事件或 log rotation；它只维护一份文件 offset、半包尾部和内存事件 ring，不随并发 turn 重复扫描。`afterAgentThought.text` 作为弱化引用逐条进入正文历史；超过 2000 字符时完整放入默认收起的思考面板，不截断内容。footer 只保留简短的“正在思考”，并用 thought hook 的真实 reasoning model variant 更新模型；`preToolUse` / `postToolUse` 以 Cursor 原生 `tool_use_id` 更新同一个工具块的开始与结果。工具 hook 的 base model 不回退卡片模型，`beforeShellExecution` / `afterShellExecution` 也不生成会抢在工具块前面的泛化 footer。其他 conversation 和 baseline 之前的历史都不会发出。
 5. provider 同时从发送前 transcript EOF 续读回答正文与终态。`queued` 时上一轮可能先产出 hooks、assistant 和 `turn_ended`，因此在本次新 turn 被 transcript 识别前丢弃这些旧 hook；旧 turn 终态不能结束本轮。hook 工具以名称和输入关联 transcript 的合成 ID，最终 transcript 结果只更新已有工具，不新建重复项。
-6. Desktop Bridge status 负责后端生命周期，hooks 负责实时思考/工具过程，transcript 负责正文与 `turn_ended`。`/stop` 及 Stop 按钮通过 v3 `stopThread` 调用已绑定 agent 的原生 `abortChatAndWait()`，并持有引用直到请求完成，不依赖本地 active task，也不向物理 tmux 发按键。确认只表示 `interrupt-requested`；observer 保持读取，终态仍以原生事件/transcript 为准。v1/v2 不支持 Stop 时明确报错，不能将本地 abort 描述为后端停止。v2+ 事件提供 snapshot/finish/stop/error 信号。
+6. Desktop Bridge status 负责后端生命周期，hooks 负责实时思考/工具过程，transcript 负责正文与 `turn_ended`。`/stop` 及 Stop 按钮通过 v3 `stopThread` 调用已绑定 agent 的原生 `abortChatAndWait()`，并持有引用直到请求完成，不依赖本地 active task，也不向物理 tmux 发按键。确认只表示 `interrupt-requested`；observer 保持读取，终态仍以原生事件/transcript 为准。v1/v2 不支持 Stop 时明确报错，不能将本地 abort 描述为后端停止。修正后的 v4 事件提供 snapshot/finish/stop/error 信号；v2/v3 的事件 action 跨 await 使用失效访问器，默认不再调用，仍由 hooks/transcript 收取输出。
 
 Cursor 的 Beta 设置必须启用 `Allow CLI to access desktop agents`。该能力由 Cursor 自己的版本/账号 feature gate 控制；开关不存在时 CodeLark 不能代替 Cursor 开启，只能保持显式不可用。
 
@@ -156,6 +156,25 @@ CodeLark 自己也使用 `/...` 命令，因此原生 Cursor 命令通过 `/tmux
 共享 hook tailer 按实际读取字节推进游标，单次异步读取最多 256 KiB，剩余增量继续异步调度。每个文件保留未完成的 hook 标题、JSON 和 UTF-8 解码状态，避免跨次写入丢失中文或思考内容；文件轮转时重置解析状态。
 
 
-### Desktop 控制协议安装
+### 可选 Desktop 增强的安装与完整卸载
 
-原生 Cursor 3.22.12 的 discovery 是 v1，不具备 steer/Stop。`codelark cursor-desktop-patch install` 在校验两个 bundle 锚点和语法后备份并安装 v3；已装 v2 可以直接升级，restore 恢复上一次安装前的文件。必须重启 Cursor，直到 discovery 公告 v3，控制能力才生效；也必须部署包含对应请求逻辑的 CodeLark bridge。安装文件成功不代表正在运行的进程已升级。普通断开输出订阅或 bridge 退出不应自动终止用户的 Desktop 任务，明确的 Stop 才调用原生取消服务。
+**实验性、默认不安装。** 这是直接修改 Cursor.app 中 main、Desktop、Glass 三个 JavaScript bundle 的兼容补丁，非官方扩展或公开 API，可能影响应用签名。普通收发使用标准 v1，不依赖补丁；增强提供 steer（v2+）、原生 Stop（v3+）和会话模型切换（v4）。同一 provider 仍叫 `tmux`。
+
+```bash
+# 只读状态和安装计划，不修改应用
+codelark cursor-desktop-patch status
+codelark cursor-desktop-patch install
+# 明确选择修改应用后，才使用此参数安装 / 升级
+codelark cursor-desktop-patch install --allow-app-modification
+# 查看将恢复的原始文件，再按需完整卸载
+codelark cursor-desktop-patch uninstall --dry-run
+codelark cursor-desktop-patch uninstall
+```
+
+所有命令可传 `--app <Cursor.app>`。`restore` 是完整卸载的兼容别名。安装器验证三个 bundle 的锚点和语法后生成私有备份与 SHA-256 清单，原子替换；升级前必须能验证已有安装的原始备份链。卸载先校验全部文件，沿多轮升级链恢复最初没有 CodeLark 标记的版本，不只是撤销最近一次升级。文件遭外部修改、备份损坏或与当前 Cursor 版本不匹配时拒绝覆写，保留备份以供恢复。重复卸载不产生改动。
+
+安装、卸载不会自动重启 Cursor，也不会由 bridge 启动、hot update 或升级自动执行。手动重启后新进程才加载变更；磁盘 `status` 会明确显示 `runtimeVerified=false`，不能用 discovery 公告版本替代实际窗口的功能验证。Glass 与 Desktop 使用各自的服务标识，增强实现共用。
+
+2026-10-09 的真实 v3 部署虽可启动并列举 thread，但 Stop/事件 action 在 await 后取 ServicesAccessor 导致 Illegal state。事件失败又被吞为空结果，使每秒轮询反复弹错。v4 在首次 await 前同步取得全部服务，向客户端返回事件错误；新 bridge 也不调用已知有缺陷的 v2/v3 事件 action。v4 模型切换仅完成隔离协议、原生服务模拟和安装包副本检查，尚未安装验证；不能将测试或安装成功表述为生产功能已可用。普通断开输出订阅或 bridge 退出不应自动终止用户的 Desktop 任务。
+
+用户另反馈实际已 steer 却报告 queued：投递现在先检查 queue item 的 delivery，已有 steer 不重复提升；提升后重新读取状态，避免将重复调用的 false 当作仍排队。进行中和条目消失只报告尚不能确认；只有明确的普通队列状态才报 queued。相应测试模拟原生访问器同步失效、自动 steer 和提升返回 false 的竞态。

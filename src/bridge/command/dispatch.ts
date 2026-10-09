@@ -259,7 +259,7 @@ async function buildCurrentCommandRichCardWithCursorModels(
   if (!session) return card;
   const section = options.configSection || options.previewRuntime || getSessionActiveRuntime(session) || 'codex';
   if (section !== 'cursor') return card;
-  if (resolveCursorCapabilities(session).modelCatalog === 'unavailable') return attachCursorDesktopModelNotice(card);
+  if (resolveCursorCapabilities(session).modelCatalog === 'unavailable') return attachCursorDesktopModelNotice(card, session.id);
   try {
     const models = await listCursorAvailableModels();
     return attachCursorModelPickerControls({

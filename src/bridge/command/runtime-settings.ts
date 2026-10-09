@@ -42,12 +42,14 @@ import {
   getSessionActiveRuntime,
   getSessionClaudeModel,
   getSessionCodexThreadId,
+  getSessionCursorSessionId,
   getSessionWorkingDirectory,
 } from '../../domain/session-runtime.js';
 import { getGlobalCodexModel } from '../session/global-config.js';
 import type { ChannelChat, InboundMessage } from '../../domain/index.js';
 import type { OutboundRichCard } from '../../domain/index.js';
 import { listCursorAvailableModels, type CursorAvailableModel } from '../../runtime/cursor/models.js';
+import { getCursorDesktopModels, setCursorDesktopModel, CursorDesktopModelControlUnavailable } from '../../runtime/cursor/desktop-bridge-client.js';
 import {
   attachCursorDesktopModelNotice,
   buildCursorModelPickerCard,
@@ -1168,6 +1170,7 @@ export async function handleModelCommandRequest(options: {
   store: BridgeStore;
   markdown: boolean;
   listCursorModels?: () => Promise<CursorAvailableModel[]>;
+  desktopModels?: { get: typeof getCursorDesktopModels; set: typeof setCursorDesktopModel };
 }): Promise<{ response: string; richCard?: OutboundRichCard }> {
   const binding = options.currentBinding || router.resolve(options.msg.address);
   const session = options.store.getSession(binding.bridgeSessionId);
@@ -1186,13 +1189,43 @@ export async function handleModelCommandRequest(options: {
     };
   }
   if (resolveCursorCapabilities(session).modelConfiguration === 'external') {
-    return {
-      response: CURSOR_DESKTOP_MODEL_CONTROL_NOTICE,
-      ...(pickerRequest.requested ? { richCard: attachCursorDesktopModelNotice({
-        title: 'Cursor Desktop 模型',
-        sections: [],
-      }) } : {}),
+    const threadId = getSessionCursorSessionId(session);
+    const originalRoute = options.store.getChannelChat(options.msg.address.channelType, options.msg.address.chatId)?.bridgeSessionId;
+    const isCurrentTarget = () => {
+      const latest = options.store.getSession(session.id);
+      return options.store.getChannelChat(options.msg.address.channelType, options.msg.address.chatId)?.bridgeSessionId === originalRoute
+        && getSessionActiveRuntime(latest) === 'cursor'
+        && getSessionCursorSessionId(latest) === threadId
+        && resolveCursorCapabilities(latest).transport === 'desktop';
     };
+    try {
+      if (!threadId) throw new CursorDesktopModelControlUnavailable('当前没有绑定 Desktop 对话。');
+      const api = options.desktopModels || { get: getCursorDesktopModels, set: setCursorDesktopModel };
+      const desktop = pickerRequest.requested
+        ? await api.get(threadId, isCurrentTarget)
+        : await api.set(threadId, options.args.trim(), isCurrentTarget);
+      if (!isCurrentTarget()) throw new Error('Desktop 绑定已变化，请重新读取目标对话模型。');
+      const picker = buildCursorModelPickerCard({
+        session, address: options.msg.address, desktop,
+        models: desktop.models.map((model) => ({ slug: model.id, name: model.name, current: false, default: false })),
+        requestedPage: pickerRequest.page,
+      });
+      return {
+        response: pickerRequest.requested
+          ? `Desktop 当前选择：${desktop.selectedModels.join(', ') || '未返回'}。列表来自目标对话的原生模型选择器。`
+          : `Cursor Desktop 已确认模型选择：${desktop.selectedModels.join(', ')}。用于后续新轮次；正在生成的轮次不会据此标记为已切换。`,
+        richCard: pickerRequest.requested ? picker.card : { ...picker.card, title: 'Cursor Desktop 已确认模型选择' },
+      };
+    } catch (error) {
+      return {
+        response: error instanceof CursorDesktopModelControlUnavailable
+          ? `${error.message}\n${CURSOR_DESKTOP_MODEL_CONTROL_NOTICE}`
+          : `Desktop 模型请求未获确认：${(error instanceof Error ? error.message : String(error)).slice(0, 1_000)}`,
+        ...(pickerRequest.requested ? { richCard: attachCursorDesktopModelNotice({ title: 'Cursor Desktop 模型', sections: [
+          { fields: [['读取状态', (error instanceof Error ? error.message : String(error)).slice(0, 1_000)]] },
+        ] }) } : {}),
+      };
+    }
   }
   if (!pickerRequest.requested) {
     return { response: handleModelCommand(options) };

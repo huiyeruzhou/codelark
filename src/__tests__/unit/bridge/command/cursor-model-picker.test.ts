@@ -15,6 +15,8 @@ import { createConfigService } from '../../../../configuration/service.js';
 import { resolveCursorCapabilities } from '../../../../bridge/session/cursor-transport.js';
 import { resolveCursorInvocationModel, resolveCursorRuntimeConfig } from '../../../../bridge/session/support.js';
 import type { CursorAvailableModel } from '../../../../runtime/cursor/models.js';
+import { CursorDesktopModelControlUnavailable } from '../../../../runtime/cursor/desktop-bridge-client.js';
+const unavailableDesktopModels = { get: async () => { throw new CursorDesktopModelControlUnavailable('可选增强未启用'); }, set: async () => { throw new CursorDesktopModelControlUnavailable('可选增强未启用'); } };
 import { JsonFileStore } from '../../../../storage/json-store.js';
 import { makeBridgeSettings, resetBridgeTestState } from '../../../helpers/bridge/test-bridge-utils.js';
 
@@ -110,11 +112,11 @@ describe('Cursor model picker', () => {
         msg: { address: { channelType: 'feishu', chatId: binding.chatId }, text: '/model', messageId: `desktop-${args}`, timestamp: Date.now() },
         args, currentBinding: binding, store, markdown: true,
       };
-      const result = await handleModelCommandRequest({ ...options, listCursorModels: async () => { throw new Error('must not query CLI'); } });
-      assert.match(result.response, /Desktop Bridge 接口尚未接入/u);
+      const result = await handleModelCommandRequest({ ...options, desktopModels: unavailableDesktopModels, listCursorModels: async () => { throw new Error('must not query CLI'); } });
+      assert.match(result.response, /标准接口不支持/u);
       assert.equal(result.richCard?.selects, undefined);
-      assert.match(handleModelCommand(options), /Desktop Bridge 接口尚未接入/u);
-      assert.match(handleReasoningCommand({ args, binding, store, markdown: true }), /Desktop Bridge 接口尚未接入/u);
+      assert.match(handleModelCommand(options), /标准接口不支持/u);
+      assert.match(handleReasoningCommand({ args, binding, store, markdown: true }), /标准接口不支持/u);
       assert.deepEqual(service.snapshot(scope).config, before);
     }
   });
@@ -134,13 +136,46 @@ describe('Cursor model picker', () => {
     assert.equal(resolveCursorCapabilities(persisted).transport, 'desktop');
     const result = await handleModelCommandRequest({
       msg: { address: { channelType: 'feishu', chatId: binding.chatId }, text: '/model', messageId: 'model', timestamp: Date.now() },
-      args: '', currentBinding: binding, store, markdown: true,
+      args: '', currentBinding: binding, store, markdown: true, desktopModels: unavailableDesktopModels,
       listCursorModels: async () => { throw new Error('must not query CLI'); },
     });
-    assert.match(result.response, /Desktop Bridge 接口尚未接入/u);
+    assert.match(result.response, /标准接口不支持/u);
     assert.equal(resolveCursorInvocationModel(binding, persisted, { resuming: true }), undefined);
     assert.equal(resolveCursorRuntimeConfig(persisted, binding).reasoningEffort, undefined);
     assert.equal(service.get('runtime.cursor.model', scope), 'stored-cli-model');
+  });
+
+  it('uses native Desktop selection and confirms the reply without saving a second model authority', async () => {
+    const store = new JsonFileStore(makeBridgeSettings());
+    const session = store.createSession('Desktop', 'default', undefined, '/tmp/cursor-desktop');
+    store.updateSession(session.id, { runtime: { activeRuntime: 'cursor', cursor: { provider: 'tmux', transport: 'desktop', sessionId: 'target' } } });
+    const binding = store.upsertChannelChat({ channelType: 'feishu', chatId: 'native-model', bridgeSessionId: session.id });
+    const config = createConfigService({ migrate: false });
+    const scope = { kind: 'session' as const, sessionId: session.id };
+    config.set(scope, { runtime: { cursor: { model: 'stale-cli-model' } } });
+    const before = config.snapshot(scope).config;
+    let selected = 'native', fail = false;
+    const state = () => ({ threadId: 'target', models: [{ id: 'native', name: 'Native' }, { id: 'auto', name: 'Auto' }], selectedModels: [selected], running: true });
+    const desktopModels = {
+      get: async (id: string) => { assert.equal(id, 'target'); return state(); },
+      set: async (id: string, model: string, guard?: () => boolean) => {
+        assert.equal(id, 'target'); assert.equal(guard?.(), true);
+        if (fail) throw new Error('administrator disabled this model');
+        selected = model; return state();
+      },
+    };
+    const options = { msg: { address: { channelType: 'feishu', chatId: binding.chatId }, text: '/model', messageId: 'model', timestamp: Date.now() },
+      currentBinding: binding, store, markdown: true, desktopModels, listCursorModels: async () => { throw new Error('must not query CLI'); } };
+    const listed = await handleModelCommandRequest({ ...options, args: '' });
+    assert.match(listed.response, /Desktop 当前选择：native/);
+    assert.equal(parseCommandCallbackData(listed.richCard!.selects![0]!.selectedCallbackData!)?.commandText, '/model native');
+    assert.equal(parseCommandCallbackData(listed.richCard!.selects![0]!.options[1]!.callbackData)?.commandText, '/model auto');
+    assert.doesNotMatch(JSON.stringify(listed.richCard), /stale-cli-model|当前会话配置/);
+    assert.match((await handleModelCommandRequest({ ...options, args: 'auto' })).response, /已确认模型选择：auto/);
+    fail = true;
+    assert.match((await handleModelCommandRequest({ ...options, args: 'fable' })).response, /未获确认.*administrator/);
+    assert.deepEqual(config.snapshot(scope).config, before);
+    assert.equal(store.getSession(session.id)!.runtime!.cursor!.provider, 'tmux');
   });
 
   it('uses the existing scoped /model command callbacks from bare /model', async () => {

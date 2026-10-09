@@ -5537,7 +5537,7 @@ async function handleMessage(
       if (!threadId) throw new Error('当前 Cursor Desktop 会话没有绑定 thread，消息未发送。');
       const { text } = sanitizeInput(appendModelContextText(modelText, msg.contextText));
       const sent = await sendCursorDesktopMessage(threadId, text, {
-        delivery: 'steer',
+        delivery: 'auto',
         isCurrentTarget: () => {
           const currentBinding = store.getChannelChat(msg.address.channelType, msg.address.chatId);
           const current = store.getSession(tmuxProviderSession.id);

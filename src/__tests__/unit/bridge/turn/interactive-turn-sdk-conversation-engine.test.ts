@@ -194,7 +194,7 @@ describe('interactive-turn sdk-conversation-engine tool expansion', () => {
       assert.equal(calls[0]?.cursorProvider, 'tmux');
       assert.equal(calls[0]?.cursorTransport, transport);
       assert.equal(calls[0]?.cursorForce, transport === 'cli' ? true : undefined);
-      assert.equal(calls[0]?.cursorDelivery, transport === 'desktop' ? 'steer' : undefined);
+      assert.equal(calls[0]?.cursorDelivery, transport === 'desktop' ? 'auto' : undefined);
       assert.equal(calls[0]?.cursorSessionId, 'bound-cursor-thread');
       assert.equal(calls[0]?.model, transport === 'cli' ? 'configured-model' : undefined);
       assert.equal(calls[0]?.cursorReasoningEffort, transport === 'cli' ? 'high' : undefined);

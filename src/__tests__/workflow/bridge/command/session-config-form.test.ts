@@ -69,7 +69,7 @@ it('Desktop Cursor cards omit unsupported model controls and stale forms cannot 
   const before = f.service.snapshot(f.scope).config;
   const forms: Array<Record<string, string>> = [{ cursor_model: 'new-model', cursor_force: 'true' }, { cursor_reasoning: 'high', cursor_force: 'true' }];
   for (const form of forms) {
-    assert.match((await f.command('/current-config cursor', form)).text, /配置未保存.*Desktop Bridge 接口尚未接入/u);
+    assert.match((await f.command('/current-config cursor', form)).text, /配置未保存.*标准接口不支持/u);
     assert.deepEqual(f.service.snapshot(f.scope).config, before, 'reject the entire stale form before saving any field');
   }
 });
