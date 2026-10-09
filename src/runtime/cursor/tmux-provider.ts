@@ -365,7 +365,20 @@ export interface CursorTurnContext {
   nextSpecialCallIds: string[];
   emittedSignatures: Set<string>;
   emittedToolStarts: Set<string>;
+  /** Desktop hooks expose Cursor's real tool ID before transcript rows assign a synthetic one. */
+  liveHookToolIdsByFingerprint?: Map<string, string[]>;
+  transcriptToolIdsByFingerprint?: Map<string, string[]>;
+  transcriptToolIdAliases?: Map<string, string>;
+  liveHookToolIdAliases?: Map<string, string>;
   terminalSeen: boolean;
+}
+
+export function cursorToolFingerprint(name: string, input: unknown): string {
+  try {
+    return JSON.stringify([name, input ?? {}]);
+  } catch {
+    return JSON.stringify([name, String(input)]);
+  }
 }
 
 export function enqueueCursorRecord(
@@ -402,7 +415,20 @@ export function enqueueCursorRecord(
   }
   if (record.type === 'tool_started') {
     const id = record.toolId || record.signature;
+    const fingerprint = cursorToolFingerprint(record.toolName || 'tool', record.toolInput || {});
+    const hookIds = context.liveHookToolIdsByFingerprint?.get(fingerprint);
+    const hookId = hookIds?.shift();
+    if (hookIds && hookIds.length === 0) context.liveHookToolIdsByFingerprint?.delete(fingerprint);
+    if (hookId) {
+      context.transcriptToolIdAliases?.set(id, hookId);
+      context.emittedToolStarts.add(id);
+      return;
+    }
+    if (context.emittedToolStarts.has(id)) return;
     context.emittedToolStarts.add(id);
+    const transcriptIds = context.transcriptToolIdsByFingerprint?.get(fingerprint) || [];
+    transcriptIds.push(id);
+    context.transcriptToolIdsByFingerprint?.set(fingerprint, transcriptIds);
     controller.enqueue(sseEvent('tool_use', {
       id,
       name: record.toolName || 'tool',
@@ -411,7 +437,8 @@ export function enqueueCursorRecord(
     return;
   }
   if (record.type === 'tool_finished') {
-    const id = record.toolId || record.signature;
+    const transcriptId = record.toolId || record.signature;
+    const id = context.transcriptToolIdAliases?.get(transcriptId) || transcriptId;
     if (!context.emittedToolStarts.has(id)) {
       context.emittedToolStarts.add(id);
       controller.enqueue(sseEvent('tool_use', { id, name: record.toolName || 'tool', input: {} }));

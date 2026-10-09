@@ -24,6 +24,8 @@ describe('Cursor Desktop provider', () => {
   let previousDataDir: string | undefined;
   let previousConfigDir: string | undefined;
   let previousPollInterval: string | undefined;
+  let previousHookPollInterval: string | undefined;
+  let previousLogsDir: string | undefined;
   let previousOutputIdleTimeout: string | undefined;
   let previousQueuedIdleTimeout: string | undefined;
 
@@ -32,6 +34,8 @@ describe('Cursor Desktop provider', () => {
     previousDataDir = process.env.CURSOR_DATA_DIR;
     previousConfigDir = process.env.CURSOR_CONFIG_DIR;
     previousPollInterval = process.env.CODELARK_CURSOR_DESKTOP_POLL_INTERVAL_MS;
+    previousHookPollInterval = process.env.CODELARK_CURSOR_DESKTOP_HOOK_POLL_INTERVAL_MS;
+    previousLogsDir = process.env.CURSOR_LOGS_DIR;
     previousOutputIdleTimeout = process.env.CODELARK_CURSOR_DESKTOP_OUTPUT_IDLE_TIMEOUT_MS;
     previousQueuedIdleTimeout = process.env.CODELARK_CURSOR_DESKTOP_QUEUED_IDLE_TIMEOUT_MS;
     root = fs.mkdtempSync(path.join(os.tmpdir(), 'codelark-cursor-desktop-'));
@@ -42,6 +46,7 @@ describe('Cursor Desktop provider', () => {
     process.env.CURSOR_DESKTOP_BRIDGE_DIR = bridgeDir;
     process.env.CURSOR_DATA_DIR = path.join(root, 'cursor-data');
     process.env.CURSOR_CONFIG_DIR = path.join(root, 'cursor-config');
+    process.env.CURSOR_LOGS_DIR = path.join(root, 'cursor-logs');
   });
 
   afterEach(async () => {
@@ -55,6 +60,10 @@ describe('Cursor Desktop provider', () => {
     else process.env.CURSOR_CONFIG_DIR = previousConfigDir;
     if (previousPollInterval === undefined) delete process.env.CODELARK_CURSOR_DESKTOP_POLL_INTERVAL_MS;
     else process.env.CODELARK_CURSOR_DESKTOP_POLL_INTERVAL_MS = previousPollInterval;
+    if (previousHookPollInterval === undefined) delete process.env.CODELARK_CURSOR_DESKTOP_HOOK_POLL_INTERVAL_MS;
+    else process.env.CODELARK_CURSOR_DESKTOP_HOOK_POLL_INTERVAL_MS = previousHookPollInterval;
+    if (previousLogsDir === undefined) delete process.env.CURSOR_LOGS_DIR;
+    else process.env.CURSOR_LOGS_DIR = previousLogsDir;
     if (previousOutputIdleTimeout === undefined) delete process.env.CODELARK_CURSOR_DESKTOP_OUTPUT_IDLE_TIMEOUT_MS;
     else process.env.CODELARK_CURSOR_DESKTOP_OUTPUT_IDLE_TIMEOUT_MS = previousOutputIdleTimeout;
     if (previousQueuedIdleTimeout === undefined) delete process.env.CODELARK_CURSOR_DESKTOP_QUEUED_IDLE_TIMEOUT_MS;
@@ -364,5 +373,89 @@ describe('Cursor Desktop provider', () => {
     assert.match(output, /claude-sonnet-test/);
     assert.match(output, /REALTIME_FINAL_OUTPUT/);
     assert.match(output, /"type":"result"/);
+  });
+
+  it('streams Cursor hook thoughts and tool lifecycle before the final transcript', async () => {
+    const cwd = path.join(root, 'workspace-hooks');
+    fs.mkdirSync(cwd, { recursive: true });
+    const transcript = getCursorTranscriptCandidates(THREAD_ID, cwd)[0]!;
+    fs.mkdirSync(path.dirname(transcript), { recursive: true });
+    fs.writeFileSync(transcript, '');
+    const hookDir = path.join(process.env.CURSOR_LOGS_DIR!, '20261009T030000', 'window1', 'output');
+    fs.mkdirSync(hookDir, { recursive: true });
+    const hookLog = path.join(hookDir, 'cursor.hooks.workspace.log');
+    fs.writeFileSync(hookLog, '');
+    process.env.CODELARK_CURSOR_DESKTOP_POLL_INTERVAL_MS = '50';
+    process.env.CODELARK_CURSOR_DESKTOP_HOOK_POLL_INTERVAL_MS = '50';
+    const hookBlock = (timestamp: string, step: string, input: Record<string, unknown>) => [
+      `[${timestamp}] Hook step requested: ${step}`,
+      'INPUT:',
+      JSON.stringify(input, null, 2),
+      '',
+    ].join('\n');
+    await startBridge((payload) => {
+      if (payload.type !== 'sendMessage') return;
+      setTimeout(() => {
+        fs.writeFileSync(transcript, [
+          { role: 'user', message: { content: [{ type: 'text', text: String(payload.text) }] } },
+          { role: 'assistant', message: { content: [{ type: 'tool_use', name: 'Shell', input: { command: 'pwd' } }] } },
+        ].map((line) => JSON.stringify(line)).join('\n') + '\n');
+      }, 50);
+      setTimeout(() => {
+        fs.appendFileSync(hookLog, [
+          hookBlock('2026-10-09T03:00:01.000Z', 'afterAgentThought', {
+            conversation_id: THREAD_ID,
+            generation_id: 'generation-live',
+            model: 'claude-opus-live-high',
+            text: 'I am checking the workspace now.',
+          }),
+          hookBlock('2026-10-09T03:00:02.000Z', 'preToolUse', {
+            conversation_id: THREAD_ID,
+            generation_id: 'generation-live',
+            model: 'claude-opus-live-high',
+            tool_name: 'Shell',
+            tool_use_id: 'tool-live-1',
+            tool_input: { command: 'pwd' },
+          }),
+          hookBlock('2026-10-09T03:00:03.000Z', 'postToolUse', {
+            conversation_id: THREAD_ID,
+            generation_id: 'generation-live',
+            model: 'claude-opus-live-high',
+            tool_name: 'Shell',
+            tool_use_id: 'tool-live-1',
+            tool_output: JSON.stringify({ output: '/workspace-hooks' }),
+          }),
+        ].join(''));
+      }, 100);
+      setTimeout(() => {
+        fs.appendFileSync(transcript, [
+          { role: 'tool', message: { content: [{
+            type: 'text',
+            text: JSON.stringify({ tool_name: 'Shell', tool_result: '/workspace-hooks-final' }),
+          }] } },
+          { role: 'assistant', message: { content: [{ type: 'text', text: 'HOOK_FINAL_OUTPUT' }] } },
+          { type: 'turn_ended', status: 'success' },
+        ].map((line) => JSON.stringify(line)).join('\n') + '\n');
+      }, 250);
+    }, 'submitted', 'completed');
+
+    let output = '';
+    for await (const chunk of streamCursorDesktop({
+      prompt: 'show hooks live',
+      sessionId: 'bridge-session-hooks',
+      runtime: 'cursor',
+      cursorProvider: 'desktop',
+      cursorSessionId: THREAD_ID,
+      workingDirectory: cwd,
+    })) output += chunk;
+
+    assert.match(output, /I am checking the workspace now/);
+    assert.match(output, /claude-opus-live-high/);
+    assert.match(output, /"type":"tool_use"/);
+    assert.doesNotMatch(output, /tool-live-1/);
+    assert.match(output, /"type":"tool_result"/);
+    assert.match(output, /\/workspace-hooks/);
+    assert.match(output, /HOOK_FINAL_OUTPUT/);
+    assert.equal(output.match(/"type":"tool_use"/g)?.length, 1);
   });
 });

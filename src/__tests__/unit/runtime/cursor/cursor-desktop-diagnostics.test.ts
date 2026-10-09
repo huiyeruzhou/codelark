@@ -5,7 +5,20 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, it } from 'node:test';
 
-import { inspectCursorDesktopHookActivity } from '../../../../runtime/cursor/desktop-diagnostics.js';
+import {
+  captureCursorDesktopHookCursor,
+  inspectCursorDesktopHookActivity,
+  readCursorDesktopHookActivityDelta,
+} from '../../../../runtime/cursor/desktop-diagnostics.js';
+
+function hookBlock(timestamp: string, step: string, input: Record<string, unknown>): string {
+  return [
+    `[${timestamp}] Hook step requested: ${step}`,
+    'INPUT:',
+    JSON.stringify(input, null, 2),
+    '',
+  ].join('\n');
+}
 
 describe('Cursor Desktop hook diagnostics', () => {
   let root = '';
@@ -56,5 +69,73 @@ describe('Cursor Desktop hook diagnostics', () => {
     assert.equal(activity?.toolName, 'Shell');
     assert.equal(activity?.command, 'npm test');
     assert.equal(activity?.logPath, logPath);
+  });
+
+  it('reads every appended hook after a byte baseline and retains a partial final JSON object', () => {
+    const logDir = path.join(root, '20261009T010000', 'window1', 'output');
+    fs.mkdirSync(logDir, { recursive: true });
+    const logPath = path.join(logDir, 'cursor.hooks.workspace.log');
+    fs.writeFileSync(logPath, hookBlock('2026-10-09T01:00:00.000Z', 'afterAgentThought', {
+      conversation_id: 'target-conversation',
+      generation_id: 'old-generation',
+      text: 'old thought',
+    }));
+    let cursor = captureCursorDesktopHookCursor();
+    const appended = [
+      hookBlock('2026-10-09T01:00:01.000Z', 'afterAgentThought', {
+        conversation_id: 'target-conversation',
+        generation_id: 'new-generation',
+        model: 'claude-test-high',
+        text: 'new thought',
+      }),
+      hookBlock('2026-10-09T01:00:02.000Z', 'preToolUse', {
+        conversation_id: 'target-conversation',
+        generation_id: 'new-generation',
+        tool_name: 'Shell',
+        tool_use_id: 'tool-1',
+        tool_input: { command: 'pwd' },
+      }),
+      hookBlock('2026-10-09T01:00:03.000Z', 'postToolUse', {
+        conversation_id: 'target-conversation',
+        generation_id: 'new-generation',
+        tool_name: 'Shell',
+        tool_use_id: 'tool-1',
+        tool_output: JSON.stringify({ output: '/workspace' }),
+      }),
+    ].join('');
+    const split = appended.lastIndexOf('"tool_output"') + 20;
+    fs.appendFileSync(logPath, appended.slice(0, split));
+
+    const first = readCursorDesktopHookActivityDelta('target-conversation', cursor);
+    cursor = first.cursor;
+    assert.deepEqual(first.activities.map((activity) => activity.step), ['afterAgentThought', 'preToolUse']);
+    assert.equal(first.activities[0]?.text, 'new thought');
+    assert.deepEqual(first.activities[1]?.toolInput, { command: 'pwd' });
+
+    fs.appendFileSync(logPath, appended.slice(split));
+    const second = readCursorDesktopHookActivityDelta('target-conversation', cursor);
+    assert.deepEqual(second.activities.map((activity) => activity.step), ['postToolUse']);
+    assert.equal(second.activities[0]?.toolUseId, 'tool-1');
+    assert.equal(second.activities[0]?.toolOutput, JSON.stringify({ output: '/workspace' }));
+    assert.doesNotMatch(JSON.stringify([...first.activities, ...second.activities]), /old thought/);
+  });
+
+  it('filters interleaved hook records by exact conversation id', () => {
+    const logDir = path.join(root, '20261009T020000', 'window1', 'output');
+    fs.mkdirSync(logDir, { recursive: true });
+    const logPath = path.join(logDir, 'cursor.hooks.workspace.log');
+    fs.writeFileSync(logPath, '');
+    const cursor = captureCursorDesktopHookCursor();
+    fs.appendFileSync(logPath, [
+      hookBlock('2026-10-09T02:00:01.000Z', 'afterAgentThought', {
+        conversation_id: 'target-conversation', text: 'target thought',
+      }),
+      hookBlock('2026-10-09T02:00:02.000Z', 'afterAgentThought', {
+        conversation_id: 'other-conversation', text: 'other thought',
+      }),
+    ].join(''));
+
+    const delta = readCursorDesktopHookActivityDelta('target-conversation', cursor);
+    assert.deepEqual(delta.activities.map((activity) => activity.text), ['target thought']);
   });
 });
