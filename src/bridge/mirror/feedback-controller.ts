@@ -1,5 +1,6 @@
 import type { BaseChannelAdapter } from '../../channels/contracts.js';
 import { deliver, enqueueDelivery } from '../../channels/delivery/deliver.js';
+import { StructuredStreamDeliveryError } from '../../channels/delivery/stream-feedback-error.js';
 import { supportsOutboundArtifacts } from '../../channels/delivery/artifacts.js';
 import {
   getChannelProviderKey,
@@ -640,6 +641,7 @@ export function createMirrorFeedbackController(
         }
       } catch (error) {
         console.warn('[bridge-manager] Mirror stream finalize failed:', error instanceof Error ? error.message : error);
+        if (error instanceof StructuredStreamDeliveryError) throw error;
       }
     }
 

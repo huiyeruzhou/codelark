@@ -2,6 +2,7 @@ import type { BaseChannelAdapter } from '../contracts.js';
 import type { StructuredStreamingUiActionButton, StructuredStreamingUiMetadata } from '../contracts.js';
 import type { RuntimeNoticeInfo, StreamingHistoryItem, TaskProgressInfo, ToolCallInfo } from '../../domain/index.js';
 import { renderFeedbackTextForChannel } from '../adapter-runtime/channel-runtime.js';
+import { StructuredStreamDeliveryError } from './stream-feedback-error.js';
 
 export interface StreamFeedbackTarget {
   adapter: BaseChannelAdapter;
@@ -147,7 +148,8 @@ export async function finalizeStreamFeedback(
   const rendered = renderFeedbackTextForChannel(target.channelType, text);
   try {
     return await target.adapter.onStreamEnd(target.chatId, status, rendered, target.streamKey);
-  } catch {
+  } catch (error) {
+    if (error instanceof StructuredStreamDeliveryError) throw error;
     return false;
   }
 }

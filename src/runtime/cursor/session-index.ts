@@ -5,6 +5,7 @@ import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { fileURLToPath } from 'node:url';
 import { CODELARK_HOME } from '../../configuration/paths.js';
+import { CursorDesktopSessionSource, statCursorDesktopStore } from './desktop-session-source.js';
 
 import type {
   BridgeMirrorRecord,
@@ -118,7 +119,7 @@ function cursorDesktopUserRoot(): string {
   return path.join(process.env.XDG_CONFIG_HOME || path.join(os.homedir(), '.config'), 'Cursor', 'User');
 }
 
-function cursorDesktopGlobalStorageRoot(): string {
+export function cursorDesktopGlobalStorageRoot(): string {
   return path.join(cursorDesktopUserRoot(), 'globalStorage');
 }
 
@@ -1234,8 +1235,18 @@ export function readCursorSessionMirrorRecordDeltaByFilePath(
 
 export function createCursorMirrorJsonlSource(): MirrorJsonlSource {
   const storePathsByTranscript = new Map<string, string>();
+  const desktopPath = path.join(cursorDesktopGlobalStorageRoot(), 'state.vscdb');
+  const desktop = new CursorDesktopSessionSource(desktopPath);
   return {
     runtime: 'cursor' as MirrorJsonlSource['runtime'],
+    readModeForPath: (filePath) => filePath === desktopPath ? 'snapshot' : 'append',
+    statSnapshot(filePath) {
+      if (filePath === desktopPath) return statCursorDesktopStore(filePath);
+      try {
+        const stat = fs.statSync(filePath);
+        return { size: stat.size, mtimeMs: stat.mtimeMs, identity: `${stat.dev}:${stat.ino}` };
+      } catch { return null; }
+    },
     // Cursor rewrites transcript snapshots with atomic file replacement. A
     // watcher attached to the old inode stops receiving later updates, while
     // the containing directory remains stable across every replacement.
@@ -1244,6 +1255,15 @@ export function createCursorMirrorJsonlSource(): MirrorJsonlSource {
     },
     findByThreadId(threadId: string, cwd?: string): MirrorJsonlSourceSummary | null {
       const summary = findCursorSessionFileById(threadId, cwd);
+      if (summary?.transport === 'desktop') {
+        // A native store is authoritative for Desktop tools. CLI transcripts
+        // remain append logs and retain their existing parser and identity.
+        try {
+          if (desktop.read(threadId)) return {
+            threadId, filePath: desktopPath, cwd: summary.cwd, updatedAt: summary.updatedAt,
+          };
+        } catch { /* Older Cursor builds may only expose transcript export. */ }
+      }
       if (summary?.filePath) {
         if (summary.storePath) storePathsByTranscript.set(summary.filePath, summary.storePath);
         return {
@@ -1255,7 +1275,14 @@ export function createCursorMirrorJsonlSource(): MirrorJsonlSource {
       }
       return null;
     },
-    readDelta(filePath, startOffset, endOffset, trailingText, currentTurnId, currentSpecialCallIds) {
+    readDelta(filePath, startOffset, endOffset, trailingText, currentTurnId, currentSpecialCallIds, threadId) {
+      if (filePath === desktopPath) {
+        if (!threadId) throw new Error('Cursor Desktop mirror requires a thread ID');
+        const snapshot = desktop.read(threadId);
+        if (!snapshot) throw new Error('Cursor Desktop conversation is unavailable in its native store');
+        return { records: snapshot.records, nextOffset: endOffset, trailingText: '',
+          nextTurnId: snapshot.nextTurnId, nextSpecialCallIds: [], unknownKinds: [] };
+      }
       return readCursorSessionMirrorRecordDeltaByFilePath(
         filePath,
         startOffset,

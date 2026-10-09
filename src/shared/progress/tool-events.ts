@@ -15,6 +15,7 @@ export type ToolCallEvent = {
   input?: unknown;
   output?: unknown;
   detail?: ToolCallDetail | null;
+  showOutput?: boolean;
 };
 
 export function applyToolCallEventToTools(
@@ -47,6 +48,8 @@ export function applyToolCallEventToTools(
     input: existing?.input ?? null,
     output: existing?.output ?? null,
     detail: existing?.detail ?? null,
+    ...(event.showOutput !== undefined || existing?.showOutput !== undefined
+      ? { showOutput: event.showOutput ?? existing?.showOutput } : {}),
   };
 
   if (event.detail) next.detail = mergeToolCallDetail(next.detail, event.detail);
@@ -59,8 +62,8 @@ export function applyToolCallEventToTools(
       next.detail,
       buildToolCallDetailFromOutput(toolName, event.output, next.detail),
     );
-    const output = summarizeToolDetailValue(event.output, 32_000);
-    next.output = output.trim() ? output : existing?.output ?? null;
+    const output = summarizeToolDetailValue(event.output, next.showOutput ? Number.MAX_SAFE_INTEGER : 32_000);
+    next.output = next.showOutput ? output : output.trim() ? output : existing?.output ?? null;
   }
 
   tools.set(resolvedToolId, next);
@@ -71,13 +74,14 @@ export function toolCallEventFromSdk(
   toolId: string,
   toolName: string,
   status: ToolCallInfo['status'],
-  detail?: { input?: unknown; output?: string; structured?: ToolCallDetail | null },
+  detail?: { input?: unknown; output?: string; structured?: ToolCallDetail | null; showOutput?: boolean },
 ): ToolCallEvent {
   return {
     type: 'tool',
     toolId,
     ...(toolName ? { toolName } : {}),
     status,
+    ...(detail?.showOutput !== undefined ? { showOutput: detail.showOutput } : {}),
     ...(detail?.structured ? { detail: detail.structured } : {}),
     ...(detail && typeof detail.input !== 'undefined' ? { input: detail.input } : {}),
     ...(detail && typeof detail.output === 'string' ? { output: detail.output } : {}),
@@ -101,9 +105,10 @@ export function toolCallEventFromMirrorRecord(record: BridgeMirrorRecord): ToolC
       toolId: record.toolId || record.signature,
       toolName: record.toolName,
       status: record.isError ? 'error' : 'complete',
+      ...(record.showToolOutput ? { showOutput: true } : {}),
       ...(record.toolDetail ? { detail: record.toolDetail } : {}),
       ...(typeof record.toolInput !== 'undefined' ? { input: record.toolInput } : {}),
-      ...(record.content.trim() ? { output: record.content } : {}),
+      ...(record.content.trim() || record.showToolOutput ? { output: record.content } : {}),
     };
   }
   return null;

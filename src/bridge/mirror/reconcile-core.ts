@@ -69,6 +69,7 @@ export function readMirrorDeliverableRecords(
 
   const requiresFullRecover = !subscription.cursor.initialized
     || source.readMode === 'snapshot'
+    || source.readModeForPath?.(subscription.filePath!) === 'snapshot'
     || subscription.fileOffset === 0
     || (subscription.fileIdentity !== null && subscription.fileIdentity !== snapshot.identity)
     || (subscription.fileSize !== null && snapshot.size < subscription.fileOffset)

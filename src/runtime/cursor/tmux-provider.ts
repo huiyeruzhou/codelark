@@ -454,8 +454,9 @@ export function enqueueCursorRecord(
     }
     controller.enqueue(sseEvent('tool_result', {
       tool_use_id: id,
-      content: record.content || 'Done',
+      content: record.showToolOutput ? record.content : record.content || 'Done',
       is_error: record.isError === true,
+      ...(record.showToolOutput ? { show_output: true } : {}),
     }));
     return;
   }
