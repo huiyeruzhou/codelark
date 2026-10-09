@@ -374,6 +374,15 @@ export interface CursorTurnContext {
 }
 
 export function cursorToolFingerprint(name: string, input: unknown): string {
+  if (typeof input === 'object' && input !== null && !Array.isArray(input)) {
+    const record = input as Record<string, unknown>;
+    for (const key of ['command', 'path', 'file_path', 'query', 'url']) {
+      const value = record[key];
+      if (typeof value === 'string' && value.length > 0) {
+        return JSON.stringify([name, key, value]);
+      }
+    }
+  }
   try {
     return JSON.stringify([name, input ?? {}]);
   } catch {

@@ -398,7 +398,11 @@ describe('Cursor Desktop provider', () => {
       setTimeout(() => {
         fs.writeFileSync(transcript, [
           { role: 'user', message: { content: [{ type: 'text', text: String(payload.text) }] } },
-          { role: 'assistant', message: { content: [{ type: 'tool_use', name: 'Shell', input: { command: 'pwd' } }] } },
+          { role: 'assistant', message: { content: [{
+            type: 'tool_use',
+            name: 'Shell',
+            input: { command: 'pwd', description: 'Print working directory' },
+          }] } },
         ].map((line) => JSON.stringify(line)).join('\n') + '\n');
       }, 50);
       setTimeout(() => {
@@ -415,7 +419,7 @@ describe('Cursor Desktop provider', () => {
             model: 'claude-opus-live-high',
             tool_name: 'Shell',
             tool_use_id: 'tool-live-1',
-            tool_input: { command: 'pwd' },
+            tool_input: { command: 'pwd', cwd: '', timeout: 30_000 },
           }),
           hookBlock('2026-10-09T03:00:03.000Z', 'postToolUse', {
             conversation_id: THREAD_ID,
