@@ -67,6 +67,19 @@ Cursor 不调用名为 `completed` 的工具结束一轮。assistant message 后
 
 模型由执行 provider 决定，不能仅凭 CodeLark 保存成功或卡片上的 `model:` 判断已经切换。
 
+### 执行入口与能力契约
+
+Cursor Desktop 和 CLI 是同一 runtime 下的两个执行 adapter，具有各自的传输协议和会话生命周期。Bridge 先通过 `resolveCursorExecutionProvider` 区分来源与执行入口：来源为 Desktop 的 thread 仍可显式选择 CLI 执行，不能只读持久化的来源标签。
+
+`runtime/cursor/capabilities.ts` 定义当前集成的 `CursorProviderCapabilities`；`resolveCursorCapabilities` 在解析实际执行入口后返回该契约。`/model`、`/reasoning`、`/current` 表单和执行参数构造共享它，不再各自维护“Desktop 是否支持配置”的判断。
+
+| 执行入口 | `modelCatalog` | `modelConfiguration` |
+| --- | --- | --- |
+| Desktop | `unavailable`：没有会话级模型目录接口 | `external`：模型和 effort 由 Desktop 管理，CodeLark 不写假应用配置 |
+| CLI/tmux | `cli`：读取独立 CLI 模型目录 | `process-launch`：模型和 effort 在启动进程时传入，复用 TUI 不会重新应用 |
+
+契约表达的是 **CodeLark 已接入的能力**，不是 Cursor 原生 UI 的全部能力，也不是账号授权。目录、保存的配置和本轮运行回报是三个不同的数据来源；管理员是否允许某个模型必须由权限证据确认。未来接入 Desktop 模型控制或运行中 TUI 切换时，需要同时实现对应 adapter 操作及同一 thread 的应用结果确认，再扩展能力契约；不能只打开前端控件或增加一个 provider 分支。
+
 | 执行场景 | CodeLark 如何传 model | 生效模型由谁控制 |
 | --- | --- | --- |
 | 已绑定 Cursor Desktop 对话 | `resolveCursorInvocationModel` 返回 `undefined`；`sendMessage` 仅发送 threadId、text 和 delivery/force，没有 model 字段 | Cursor Desktop 对话自己的模型选择 |
@@ -86,7 +99,7 @@ Cursor 不调用名为 `completed` 的工具结束一轮。assistant message 后
 ### 尚未接入或仍需改善的行为
 
 - Desktop 模型控制需要扩展 Bridge 的请求解析、主进程路由及 renderer 模型服务，并在切换后读取同一 thread 的状态确认应用；本次修正没有新增该控制接口，也没有修改 Cursor.app。
-- Cursor hook 可以同时给出 `model=<模型>-high` 与 `model_id=<基础模型>`，另一些 hook 只有基础模型的 `model`。当前 renderer 使用逐事件上报的 `model`，所以同一 generation 的 `high` 后缀可能来回变化；仅凭后缀消失不能断言已切换模型或思考级别。
+- Cursor hook 可以同时给出 `model=<模型>-high` 与 `model_id=<基础模型>`，另一些 hook 只有基础模型的 `model`。当前 Desktop provider 从 `afterAgentThought` 更新模型，不再让工具 hook 的基础模型覆盖思考 variant；仅凭不同原始 hook 的后缀差异不能断言切换了模型或思考级别。
 - `/tmux-screen` 的 Desktop 状态优先读取最近 hook，其次是持久化 summary，最后回退到显示策略。最近记录不能证明一个新轮次的模型；审计时应关联 conversation ID、generation ID 和时间，优先核对 `beforeSubmitPrompt` 等原始运行记录。
 
 2026-10-09 对生产版本的取证发现：session 保存模型 A 后，下一轮仍通过 Desktop 的 `sendMessage` 提交且没有 model 参数；同一 generation 的 `beforeSubmitPrompt` 回报模型 B，旧卡片从 A 更新成 B。管理员禁用模型 A 与 CodeLark 未下发模型参数是两项事实，不能推断为 Desktop 收到 A 后自动回退到 B。本次修正消除了无关 CLI current 展示及 Desktop 假成功，尚未实现 Desktop 模型切换或 CLI 运行中模型同步。

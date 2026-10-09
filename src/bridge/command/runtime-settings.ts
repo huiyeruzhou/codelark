@@ -54,7 +54,7 @@ import {
   CURSOR_DESKTOP_MODEL_CONTROL_NOTICE,
   parseCursorModelPickerArgs,
 } from './cursor-model-picker.js';
-import { resolveCursorExecutionProvider } from '../session/cursor-provider-identity.js';
+import { resolveCursorCapabilities } from '../session/cursor-provider-identity.js';
 import {
   buildRuntimeSwitchWhileRunningResponse,
   createRuntimeSessionForChat,
@@ -387,7 +387,7 @@ export function handleReasoningCommand(options: {
       options.markdown,
     );
   }
-  if (activeRuntime === 'cursor' && resolveCursorExecutionProvider(session) === 'desktop') {
+  if (activeRuntime === 'cursor' && resolveCursorCapabilities(session).modelConfiguration === 'external') {
     return CURSOR_DESKTOP_MODEL_CONTROL_NOTICE;
   }
   if (!options.args) {
@@ -1082,7 +1082,7 @@ export function handleModelCommand(options: {
     );
   }
   if (activeRuntime === 'cursor') {
-    if (resolveCursorExecutionProvider(session) === 'desktop') {
+    if (resolveCursorCapabilities(session).modelConfiguration === 'external') {
       return CURSOR_DESKTOP_MODEL_CONTROL_NOTICE;
     }
     if (!options.args) {
@@ -1185,7 +1185,7 @@ export async function handleModelCommandRequest(options: {
       ),
     };
   }
-  if (resolveCursorExecutionProvider(session) === 'desktop') {
+  if (resolveCursorCapabilities(session).modelConfiguration === 'external') {
     return {
       response: CURSOR_DESKTOP_MODEL_CONTROL_NOTICE,
       ...(pickerRequest.requested ? { richCard: attachCursorDesktopModelNotice({

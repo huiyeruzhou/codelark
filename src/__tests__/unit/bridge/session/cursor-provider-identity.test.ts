@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 
 import {
   migrateCursorDesktopSessionIdentities,
+  resolveCursorCapabilities,
   resolveCursorExecutionProvider,
 } from '../../../../bridge/session/cursor-provider-identity.js';
 import { JsonFileStore } from '../../../../storage/json-store.js';
@@ -60,5 +61,18 @@ describe('Cursor provider identity compatibility', () => {
       findThread: findDesktop,
       readSessionOverride: () => 'tmux',
     }), 'tmux');
+
+    assert.deepEqual(resolveCursorCapabilities(persisted, {
+      findThread: findDesktop,
+      readSessionOverride: () => undefined,
+    }), {
+      provider: 'desktop', modelCatalog: 'unavailable', modelConfiguration: 'external',
+    });
+    assert.deepEqual(resolveCursorCapabilities(persisted, {
+      findThread: findDesktop,
+      readSessionOverride: () => 'tmux',
+    }), {
+      provider: 'tmux', modelCatalog: 'cli', modelConfiguration: 'process-launch',
+    });
   });
 });

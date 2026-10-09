@@ -1,4 +1,5 @@
 import { createConfigService } from '../../configuration/service.js';
+import { getCursorProviderCapabilities, type CursorProviderCapabilities } from '../../runtime/cursor/capabilities.js';
 import type { BridgeStore } from '../../domain/audit.js';
 import type { BridgeSession, CursorProviderChoice } from '../../domain/session.js';
 import {
@@ -52,6 +53,14 @@ export function resolveCursorExecutionProvider(
     if (override === 'tmux') return 'tmux';
   }
   return resolveCursorSourceProvider(session, options.findThread);
+}
+
+/** Resolve from the execution route, including an explicit CLI override of a Desktop thread. */
+export function resolveCursorCapabilities(
+  session: BridgeSession | null | undefined,
+  options: Parameters<typeof resolveCursorExecutionProvider>[1] = {},
+): CursorProviderCapabilities {
+  return getCursorProviderCapabilities(resolveCursorExecutionProvider(session, options));
 }
 
 export function upgradeCursorDesktopSessionIdentity(
