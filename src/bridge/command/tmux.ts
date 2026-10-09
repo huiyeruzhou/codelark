@@ -728,7 +728,7 @@ async function buildCursorDesktopStatusResponse(
     });
   const summary = findCursorSessionFileById(sessionId, getSessionWorkingDirectory(session) || undefined);
   const transcript = summary?.filePath ? inspectCursorTranscriptTail(summary.filePath) : null;
-  const hook = inspectCursorDesktopHookActivity(sessionId);
+  const hook = await inspectCursorDesktopHookActivity(sessionId);
   const backendStatus = thread?.status || (bridgeError ? 'bridge-error' : 'not-found');
   const actualModel = hook?.model || hook?.modelId || summary?.model || resolveDisplayedCursorModel(session, binding);
   const refreshedAt = formatLocalClockTime(Date.now()) || '--:--:--';

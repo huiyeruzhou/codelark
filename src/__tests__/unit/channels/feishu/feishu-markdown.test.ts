@@ -271,6 +271,35 @@ describe('buildToolProgressMarkdown', () => {
     assert.doesNotMatch(rendered, /Chunk ID|Original token count|Wall time|Process exited/);
   });
 
+  it('routes Cursor Shell and browser MCP aliases through the shared pretty tool renderer', () => {
+    const shellInput = buildToolCallDetailFromInput('Shell', {
+      command: 'pwd && git status --short',
+      cwd: '/workspace',
+      timeout: 30_000,
+    });
+    const shellOutput = buildToolCallDetailFromOutput('Shell', '/workspace\n', shellInput);
+    const shell = buildToolProgressMarkdown([{
+      id: 'cursor-shell',
+      name: 'Shell',
+      status: 'complete',
+      detail: mergeToolCallDetail(shellInput, shellOutput),
+    }]);
+    assert.match(shell, /#### 💻 运行 `pwd && git status --short` · 输出 1 行/);
+    assert.match(shell, /```bash\npwd && git status --short\n```/);
+    assert.doesNotMatch(shell, /"command"|"cwd"|"timeout"/);
+
+    const browser = buildToolProgressMarkdown([{
+      id: 'cursor-browser',
+      name: 'MCP:browser_click',
+      status: 'running',
+      detail: buildToolCallDetailFromInput('MCP:browser_click', {
+        element: '只看未读',
+        ref: 'e16',
+      }),
+    }]);
+    assert.match(browser, /🔄 调用 `browser\/click`/);
+  });
+
   it('puts a yielded Codex cell id in the title without repeating it in details', () => {
     const input = buildToolCallDetailFromInput('exec_command', { cmd: 'npm test' });
     const output = buildToolCallDetailFromOutput('exec_command', [
@@ -705,6 +734,23 @@ describe('buildStreamingHistoryElements', () => {
     assert.equal(historyChildren[0]?.tag, 'markdown');
     assert.equal(historyChildren[0]?.content, '> Preparing concise comparative analysis');
     assert.equal(historyChildren[1]?.content, '最终回答');
+  });
+
+  it('keeps long Cursor thought content intact inside a collapsed history panel', () => {
+    const longThought = `> ${'完整思考内容 '.repeat(350)}\n> FULL_END`;
+    const elements = buildStreamingHistoryElementsFromItems('', [{
+      type: 'markdown',
+      role: 'thinking',
+      content: longThought,
+      collapseTitle: '💭 Cursor 思考 · 展开查看',
+    }]);
+    const thought = ((elements[0] as any).elements as any[])[0];
+
+    assert.equal(thought.tag, 'collapsible_panel');
+    assert.equal(thought.expanded, false);
+    assert.equal(thought.header.title.content, '💭 Cursor 思考 · 展开查看');
+    assert.match(thought.elements[0].content, /FULL_END$/);
+    assertFeishuElementIdsAreValid(elements);
   });
 
   it('keeps ordinary user input inline and folds only long input into a borderless panel', () => {

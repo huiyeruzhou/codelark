@@ -179,6 +179,17 @@ export function usesPsmuxServerSidePaste(platform = process.platform): boolean {
   return platform === 'win32';
 }
 
+export function defaultTmuxExecutableCandidates(executable = 'tmux'): string[] {
+  return [...new Set([
+    executable,
+    '/opt/homebrew/bin/tmux',
+    '/usr/local/bin/tmux',
+    '/home/linuxbrew/.linuxbrew/bin/tmux',
+    '/usr/bin/tmux',
+    '/bin/tmux',
+  ])];
+}
+
 function splitTextChunks(text: string, chunkSize = PASTE_CHUNK_SIZE): string[] {
   if (!text) return [];
   const chars = Array.from(text);
@@ -268,12 +279,7 @@ class TmuxCliCore implements TmuxCore {
   }
 
   private async selectCompatibleExecutable(): Promise<string> {
-    const candidates = [...new Set(this.candidateExecutables || [
-      this.executable,
-      '/usr/local/bin/tmux',
-      '/usr/bin/tmux',
-      '/bin/tmux',
-    ])];
+    const candidates = this.candidateExecutables || defaultTmuxExecutableCandidates(this.executable);
     const incompatibilities: Array<{ executable: string; error: string }> = [];
     const unavailable: Array<{ executable: string; error: string }> = [];
     for (const candidate of candidates) {

@@ -657,6 +657,9 @@ async function consumeStream(
                 role: item.role,
                 content: item.content,
                 ...(item.variant === 'thinking_summary' ? { variant: item.variant } : {}),
+                ...(typeof item.collapseTitle === 'string' && item.collapseTitle.trim()
+                  ? { collapseTitle: item.collapseTitle.trim() }
+                  : {}),
               });
             }
           } catch { /* skip */ }
