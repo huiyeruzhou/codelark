@@ -81,10 +81,13 @@ import { resolveEffectiveRuntimeProvider, resolveSessionWorkingDirectoryPath } f
 import { getSessionActiveRuntime, getSessionWorkingDirectory } from '../../domain/session-runtime.js';
 import { listCursorAvailableModels } from '../../runtime/cursor/models.js';
 import {
+  attachCursorDesktopModelNotice,
   attachCursorModelPickerControls,
+  CURSOR_DESKTOP_MODEL_CONTROL_NOTICE,
   extractCursorModelPageArg,
   sessionCursorModelOverride,
 } from './cursor-model-picker.js';
+import { resolveCursorExecutionProvider } from '../session/cursor-provider-identity.js';
 import {
   handleEveryCommand,
 } from './every.js';
@@ -256,6 +259,7 @@ async function buildCurrentCommandRichCardWithCursorModels(
   if (!session) return card;
   const section = options.configSection || options.previewRuntime || getSessionActiveRuntime(session) || 'codex';
   if (section !== 'cursor') return card;
+  if (resolveCursorExecutionProvider(session) === 'desktop') return attachCursorDesktopModelNotice(card);
   try {
     const models = await listCursorAvailableModels();
     return attachCursorModelPickerControls({
@@ -421,6 +425,14 @@ async function handleCurrentConfigFormCommand(options: {
     const rawValue = currentSettingFormValue(formValue, definition);
     if (rawValue === undefined) continue;
     const configPath = settingConfigPath(definition);
+    if (submittedSection === 'cursor' && resolveCursorExecutionProvider(session) === 'desktop'
+      && (configPath === 'runtime.cursor.model' || configPath === 'runtime.cursor.reasoningEffort')) {
+      const currentValue = definition.read(currentConfig);
+      const changesValue = rawValue
+        ? rawValue !== (currentValue === '-' || currentValue === 'auto' ? '' : currentValue)
+        : service.resolve(configPath, scope).source === 'session';
+      if (changesValue) return { response: `配置未保存：${CURSOR_DESKTOP_MODEL_CONTROL_NOTICE}` };
+    }
     if (!rawValue) {
       if (service.resolve(configPath, scope).source === 'session') {
         unsetPaths.push(configPath);

@@ -10,7 +10,8 @@ import {
   parseCursorModelPickerArgs,
 } from '../../../../bridge/command/cursor-model-picker.js';
 import { parseCommandCallbackData } from '../../../../bridge/command/callbacks.js';
-import { handleModelCommandRequest } from '../../../../bridge/command/runtime-settings.js';
+import { handleModelCommand, handleModelCommandRequest, handleReasoningCommand } from '../../../../bridge/command/runtime-settings.js';
+import { createConfigService } from '../../../../configuration/service.js';
 import type { CursorAvailableModel } from '../../../../runtime/cursor/models.js';
 import { JsonFileStore } from '../../../../storage/json-store.js';
 import { makeBridgeSettings, resetBridgeTestState } from '../../../helpers/bridge/test-bridge-utils.js';
@@ -38,13 +39,17 @@ describe('Cursor model picker', () => {
     assert.deepEqual(parseCursorModelPickerArgs('gpt-5.3 --cursor-model-page=2'), { requested: false, invalid: true });
   });
 
-  it('opens the current model page, preselects current, and renders bounded Feishu options', () => {
+  it('selects the configured model page regardless of CLI current and renders bounded Feishu options', () => {
     const store = new JsonFileStore(makeBridgeSettings());
     const session = store.createSession('Cursor', 'default', undefined, '/tmp/cursor');
     store.updateSession(session.id, { runtime: { activeRuntime: 'cursor', cursor: { provider: 'tmux' } } });
     const models = Array.from({ length: 121 }, (_, index) => model(index));
     models[0] = model(0, { slug: 'auto', name: 'Auto', default: true });
-    models[90] = model(90, { slug: 'current-model', name: 'Current Model', current: true });
+    models[1] = model(1, { slug: 'unrelated-cli-current', current: true });
+    models[90] = model(90, { slug: 'configured-model', name: 'Configured Model' });
+    createConfigService({ migrate: false }).set({ kind: 'session', sessionId: session.id }, {
+      runtime: { cursor: { model: 'configured-model' } },
+    });
 
     const picker = buildCursorModelPickerCard({
       session: store.getSession(session.id)!,
@@ -54,10 +59,10 @@ describe('Cursor model picker', () => {
 
     assert.equal(picker.page, 3);
     assert.equal(picker.pageCount, 4);
-    assert.equal(picker.selectedSlug, 'current-model');
+    assert.equal(picker.selectedSlug, 'configured-model');
     assert.equal(picker.card.selects?.[0]?.options.length, CURSOR_MODEL_PICKER_PAGE_SIZE);
     const selected = parseCommandCallbackData(picker.card.selects?.[0]?.selectedCallbackData || '');
-    assert.equal(selected?.commandText, '/model current-model');
+    assert.equal(selected?.commandText, '/model configured-model');
     assert.equal(selected?.scopeSessionId, session.id);
 
     const payload = JSON.parse(buildRichCardContent(picker.card, 'chat-cursor-models')) as any;
@@ -65,6 +70,51 @@ describe('Cursor model picker', () => {
     assert.equal(select.options.length, CURSOR_MODEL_PICKER_PAGE_SIZE);
     assert.equal(select.initial_option, picker.card.selects?.[0]?.selectedCallbackData);
     assert.ok(Buffer.byteLength(JSON.stringify(payload), 'utf8') < 18_000);
+    assert.doesNotMatch(JSON.stringify(payload), /Cursor current|\(current\)/u);
+  });
+
+  it('never falls back to CLI current/default for unset or unlisted configuration', () => {
+    const models = Array.from({ length: 121 }, (_, index) => model(index));
+    models[0] = model(0, { slug: 'auto', default: true });
+    models[90] = model(90, { current: true });
+    for (const target of ['session', 'global'] as const) {
+      for (const selectedSlug of [undefined, 'custom-unlisted']) {
+        const picker = attachCursorModelPickerControls({
+          card: { title: '模型', sections: [] }, models, target, selectedSlug,
+          pageCommand: (page) => `/model --cursor-model-page=${page}`,
+          configuredLabel: '已保存配置', controlIdPrefix: 'model',
+        });
+        assert.equal(picker.page, 1);
+        assert.equal(picker.selectedSlug, undefined);
+        assert.equal(picker.card.selects?.[0]?.selectedCallbackData, undefined);
+        assert.doesNotMatch(JSON.stringify(picker.card), /Cursor current|\(current\)|\(default\)/u);
+      }
+    }
+  });
+
+  it('rejects Desktop model and effort changes without saving or querying the unrelated CLI', async () => {
+    const store = new JsonFileStore(makeBridgeSettings());
+    const session = store.createSession('Desktop', 'default', undefined, '/tmp/cursor-desktop');
+    store.updateSession(session.id, {
+      runtime: { activeRuntime: 'cursor', cursor: { sessionId: 'desktop-thread', provider: 'desktop' } },
+    });
+    const binding = store.upsertChannelChat({ channelType: 'feishu', chatId: 'desktop-models', bridgeSessionId: session.id });
+    const service = createConfigService({ migrate: false });
+    const scope = { kind: 'session' as const, sessionId: session.id };
+    service.set(scope, { runtime: { cursor: { model: 'previous-unapplied', reasoningEffort: 'high' } } });
+    const before = service.snapshot(scope).config;
+    for (const args of ['', 'new-model', 'default']) {
+      const options = {
+        msg: { address: { channelType: 'feishu', chatId: binding.chatId }, text: '/model', messageId: `desktop-${args}`, timestamp: Date.now() },
+        args, currentBinding: binding, store, markdown: true,
+      };
+      const result = await handleModelCommandRequest({ ...options, listCursorModels: async () => { throw new Error('must not query CLI'); } });
+      assert.match(result.response, /Desktop Bridge 接口尚未接入/u);
+      assert.equal(result.richCard?.selects, undefined);
+      assert.match(handleModelCommand(options), /Desktop Bridge 接口尚未接入/u);
+      assert.match(handleReasoningCommand({ args, binding, store, markdown: true }), /Desktop Bridge 接口尚未接入/u);
+      assert.deepEqual(service.snapshot(scope).config, before);
+    }
   });
 
   it('uses the existing scoped /model command callbacks from bare /model', async () => {

@@ -49,9 +49,12 @@ import type { ChannelChat, InboundMessage } from '../../domain/index.js';
 import type { OutboundRichCard } from '../../domain/index.js';
 import { listCursorAvailableModels, type CursorAvailableModel } from '../../runtime/cursor/models.js';
 import {
+  attachCursorDesktopModelNotice,
   buildCursorModelPickerCard,
+  CURSOR_DESKTOP_MODEL_CONTROL_NOTICE,
   parseCursorModelPickerArgs,
 } from './cursor-model-picker.js';
+import { resolveCursorExecutionProvider } from '../session/cursor-provider-identity.js';
 import {
   buildRuntimeSwitchWhileRunningResponse,
   createRuntimeSessionForChat,
@@ -383,6 +386,9 @@ export function handleReasoningCommand(options: {
       ['CodeLark 不映射 ZCode 的模型专属思考参数；可用 `//` 将 ZCode 原生 slash 命令原样发送到 TUI。'],
       options.markdown,
     );
+  }
+  if (activeRuntime === 'cursor' && resolveCursorExecutionProvider(session) === 'desktop') {
+    return CURSOR_DESKTOP_MODEL_CONTROL_NOTICE;
   }
   if (!options.args) {
     if (activeRuntime === 'cursor') {
@@ -1076,6 +1082,9 @@ export function handleModelCommand(options: {
     );
   }
   if (activeRuntime === 'cursor') {
+    if (resolveCursorExecutionProvider(session) === 'desktop') {
+      return CURSOR_DESKTOP_MODEL_CONTROL_NOTICE;
+    }
     if (!options.args) {
       const currentModel = resolveCursorRuntimeConfig(session, binding).model || 'default';
       return buildCommandFields(
@@ -1176,6 +1185,15 @@ export async function handleModelCommandRequest(options: {
       ),
     };
   }
+  if (resolveCursorExecutionProvider(session) === 'desktop') {
+    return {
+      response: CURSOR_DESKTOP_MODEL_CONTROL_NOTICE,
+      ...(pickerRequest.requested ? { richCard: attachCursorDesktopModelNotice({
+        title: 'Cursor Desktop 模型',
+        sections: [],
+      }) } : {}),
+    };
+  }
   if (!pickerRequest.requested) {
     return { response: handleModelCommand(options) };
   }
@@ -1188,7 +1206,7 @@ export async function handleModelCommandRequest(options: {
       requestedPage: pickerRequest.page,
     });
     return {
-      response: `Cursor Agent 返回 ${models.length} 个可用模型；当前显示第 ${picker.page}/${picker.pageCount} 页。`,
+      response: `Cursor Agent 模型目录包含 ${models.length} 项；当前显示第 ${picker.page}/${picker.pageCount} 页。目录不代表管理员已允许使用。`,
       richCard: picker.card,
     };
   } catch (error) {

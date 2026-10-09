@@ -63,6 +63,34 @@ CodeLark 把这些行归一化为公共 message/tool/task mirror record 和 SSE 
 
 Cursor 不调用名为 `completed` 的工具结束一轮。assistant message 后由客户端独立追加 `{"type":"turn_ended","status":"success"}`；失败或中断也由该 terminal record 的状态表达。CodeLark 必须以 `turn_ended` 驱动终态，不能用工具名、正文停止增长或 TUI 光标位置猜测完成。同一读取批次只保留最新版正文，跨增量批次则把后续 revision 作为替换事件继续交付。多轮时 Cursor 还会重写整份 transcript、删除上一轮位于 EOF 的 `turn_ended`；旧 byte offset 可能因此落入新 user JSON 中部。增量 parser 跳过残行后若先看到完整 assistant row，必须以它建立隐式 turn 并恢复正文，不能只交付后面的成功终态。多轮后的最终 transcript snapshot 可能只保留文件末尾一个 `turn_ended`；测试应以 user/归一化后的可见 assistant record 确认轮次，以文件末尾终态确认整体完成，不能把物理 assistant/终态行数当成轮数。
 
+## 模型配置与实际生效边界
+
+模型由执行 provider 决定，不能仅凭 CodeLark 保存成功或卡片上的 `model:` 判断已经切换。
+
+| 执行场景 | CodeLark 如何传 model | 生效模型由谁控制 |
+| --- | --- | --- |
+| 已绑定 Cursor Desktop 对话 | `resolveCursorInvocationModel` 返回 `undefined`；`sendMessage` 仅发送 threadId、text 和 delivery/force，没有 model 字段 | Cursor Desktop 对话自己的模型选择 |
+| 新建 Cursor Agent tmux 进程、无已有 chat UUID | 启动参数包含解析后的 `--model`，空配置回退到 `gpt-5.3-codex` | CLI 根据启动参数选择模型 |
+| 冷恢复已有 Cursor Agent chat UUID | 仅 session scope 的 model override 转成 `--model`；不把 home/channel 默认值传给已有会话 | 有覆盖时使用启动参数，否则跟随 Cursor 已有会话 |
+| 复用仍在运行的 Cursor Agent TUI | 不重新启动，也不因配置变化注入模型切换命令 | 运行中 TUI 自己的模型状态 |
+
+### 配置入口与模型目录
+
+- `/model <slug>` 和 `/current` 的 CLI 模型选择器保存 session scope 的 `runtime.cursor.model`；保存不会给已有 TUI 注入切换命令。Cursor 原生 TUI 支持 `/model` 选择器，这是 Cursor 的能力，不能与 CodeLark 尚未接入运行中切换混为一谈。`/model <文字>` 会筛选原生选择器，不保证立即应用一个 slug。
+- Desktop 的 `/model`、`/reasoning` 明确说明当前 Bridge 尚未接入模型控制，不保存未应用的覆盖；`/current` 不展示 CLI 模型目录和无效的 model/effort 控件，旧卡片提交相关变更时整份表单不写入。Cursor Desktop UI 本身可以切模型；当前原生 Desktop Bridge v1 仅接受 `listThreads`、`sendMessage`，发送 parser 只保留 threadId/text/force，单纯附加 model 字段不会生效。项目可选 realtime v2 协议也没有模型切换请求。
+- `/set cursorDefaultModel` 和管理 UI 保存默认配置，遵守上述新建/恢复边界。`/model default` 在 CLI 路径只删除 session override；新建 CLI 会话仍可能使用上层默认或内置 `gpt-5.3-codex`，不能笼统理解为所有启动都省略 `--model`。
+- CLI 路径的 `/model`、`/current` 及全局 `/set` 共用 `agent models` 返回的目录，但不展示其 `current/default` 标记，也不根据它们预选模型或定位页码。配置 slug 在目录中时才预选；无覆盖或自定义 slug 不在目录中时不伪造已选值。
+- **模型目录不等于账号可用权限。** 2026-10-09 实测目录包含用户确认被管理员禁用的 Fable；原生 TUI 选择器没有该选项，但用启动参数仍可显示该名称。启动成功和名称显示都不是生成请求获准的证明，未发起生成请求的实验不能称为“模型可用”。当前 CLI 目录文本不提供管理员禁用标记，因此 CodeLark 明确提示实际使用受账号权限限制，不根据目录推断权限，也不硬编码某个模型的禁用状态。
+- 对话卡片初始化时，Desktop 显示“跟随 Cursor Desktop”，不再把 CodeLark 保存的覆盖值标为运行模型。随后由本轮 hook/event 更新运行回报。
+
+### 尚未接入或仍需改善的行为
+
+- Desktop 模型控制需要扩展 Bridge 的请求解析、主进程路由及 renderer 模型服务，并在切换后读取同一 thread 的状态确认应用；本次修正没有新增该控制接口，也没有修改 Cursor.app。
+- Cursor hook 可以同时给出 `model=<模型>-high` 与 `model_id=<基础模型>`，另一些 hook 只有基础模型的 `model`。当前 renderer 使用逐事件上报的 `model`，所以同一 generation 的 `high` 后缀可能来回变化；仅凭后缀消失不能断言已切换模型或思考级别。
+- `/tmux-screen` 的 Desktop 状态优先读取最近 hook，其次是持久化 summary，最后回退到显示策略。最近记录不能证明一个新轮次的模型；审计时应关联 conversation ID、generation ID 和时间，优先核对 `beforeSubmitPrompt` 等原始运行记录。
+
+2026-10-09 对生产版本的取证发现：session 保存模型 A 后，下一轮仍通过 Desktop 的 `sendMessage` 提交且没有 model 参数；同一 generation 的 `beforeSubmitPrompt` 回报模型 B，旧卡片从 A 更新成 B。管理员禁用模型 A 与 CodeLark 未下发模型参数是两项事实，不能推断为 Desktop 收到 A 后自动回退到 B。本次修正消除了无关 CLI current 展示及 Desktop 假成功，尚未实现 Desktop 模型切换或 CLI 运行中模型同步。
+
 ## 生命周期
 
 ### Cursor Desktop

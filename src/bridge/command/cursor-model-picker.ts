@@ -5,6 +5,20 @@ import { buildCommandCallbackData } from './callbacks.js';
 
 export const CURSOR_MODEL_PICKER_PAGE_SIZE = 36;
 export const CURSOR_MODEL_PAGE_ARG = '--cursor-model-page';
+export const CURSOR_DESKTOP_MODEL_CONTROL_NOTICE = 'Cursor Desktop 支持在桌面端切换模型，但当前 Desktop Bridge 接口尚未接入模型和思考级别切换。请在 Cursor 中切换；CodeLark 不会把未应用的配置报告为切换成功。';
+
+export function attachCursorDesktopModelNotice(card: OutboundRichCard): OutboundRichCard {
+  return {
+    ...card,
+    sections: [...card.sections, { fields: [['模型和思考级别', '由 Cursor Desktop 对话管理']] }],
+    ...(card.form ? { form: {
+      ...card.form,
+      extraInputs: card.form.extraInputs?.filter((input) => input.elementId !== 'cursorDefaultModel'),
+      selects: card.form.selects?.filter((select) => select.elementId !== 'cursorReasoningEffort'),
+    } } : {}),
+    footer: [...(card.footer || []), CURSOR_DESKTOP_MODEL_CONTROL_NOTICE],
+  };
+}
 
 export interface CursorModelPickerPageRequest {
   requested: boolean;
@@ -63,8 +77,7 @@ export function sessionCursorModelOverride(sessionId: string): string | undefine
 }
 
 function modelOptionText(model: CursorAvailableModel): string {
-  const markers = [model.current ? 'current' : '', model.default ? 'default' : ''].filter(Boolean);
-  return `${model.name}${markers.length > 0 ? ` (${markers.join(', ')})` : ''} · ${model.slug}`;
+  return `${model.name} · ${model.slug}`;
 }
 
 function selectionCommand(model: CursorAvailableModel, target: 'session' | 'global'): string {
@@ -83,14 +96,12 @@ export function attachCursorModelPickerControls(options: {
   configuredLabel: string;
   controlIdPrefix: string;
 }): { card: OutboundRichCard; page: number; pageCount: number; selectedSlug?: string } {
-  const currentModel = options.models.find((model) => model.current);
   const configuredModel = options.selectedSlug
     ? options.models.find((model) => model.slug === options.selectedSlug)
     : undefined;
-  const automaticModel = options.target === 'global'
-    ? options.models.find((model) => model.default || model.slug === 'auto') || currentModel
-    : configuredModel || currentModel;
-  const selected = configuredModel || automaticModel;
+  // `agent models` is a separate process, not the target conversation. Its
+  // current/default markers must not decide this card's selection or page.
+  const selected = configuredModel;
   const pageCount = Math.max(1, Math.ceil(options.models.length / CURSOR_MODEL_PICKER_PAGE_SIZE));
   const automaticPage = selected
     ? Math.floor(options.models.indexOf(selected) / CURSOR_MODEL_PICKER_PAGE_SIZE) + 1
@@ -134,19 +145,18 @@ export function attachCursorModelPickerControls(options: {
     selectedSlug: selected?.slug,
     card: {
       ...options.card,
-      subtitle: `${options.card.subtitle || ''} · Cursor 账号实时列表 ${options.models.length} 个 · 第 ${page}/${pageCount} 页`.replace(/^ · /u, ''),
+      subtitle: `${options.card.subtitle || ''} · Cursor 模型目录 ${options.models.length} 项 · 第 ${page}/${pageCount} 页`.replace(/^ · /u, ''),
       selects: [...(options.card.selects || []), modelSelect, pageSelect],
       sections: [
         ...options.card.sections,
         { fields: [
-          ['Cursor current', currentModel ? `${currentModel.name} · ${currentModel.slug}` : '未标记'],
-          [options.configuredLabel, options.selectedSlug || (options.target === 'global' ? '跟随 Cursor 默认' : '跟随当前会话模型')],
+          [options.configuredLabel, options.selectedSlug || '未设置覆盖'],
         ] },
       ],
       ...(form ? { form } : {}),
       footer: [
         ...(options.card.footer || []),
-        '模型列表实时来自 `cursor agent models`；current 是 Cursor 当前值，选择后仍走原有配置命令。',
+        '模型目录可能包含管理员禁用的模型，实际使用受账号权限限制；已保存配置不代表运行中的会话已切换。',
       ],
     },
   };
