@@ -143,15 +143,15 @@ describe('app-server protocol item records', () => {
       status: 'complete',
       detail: completed?.toolDetail,
     });
-    assert.equal(presentation.title, '🔧 读取状态');
+    assert.equal(presentation.title, '🔧 调用 `cua_repl/js` · 读取状态');
     const markdown = renderToolCallDetailMarkdown({
       id: item.id,
       name: completed?.toolName || '',
       status: 'complete',
       detail: completed?.toolDetail,
     });
-    assert.match(markdown, /mcp: `cua_repl\/js`/u);
-    assert.match(markdown, /"code": "await cua\.getState\(\)"/u);
+    assert.match(markdown, /```javascript\nawait cua\.getState\(\)\n```/u);
+    assert.doesNotMatch(markdown, /mcp:|"code":|"title":|读取状态/u);
     assert.match(markdown, /Window: Cursor/u);
     assert.doesNotMatch(markdown, /"type":\s*"mcpToolCall"/u);
   });

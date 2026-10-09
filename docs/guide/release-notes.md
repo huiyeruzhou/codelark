@@ -26,6 +26,7 @@
 - 旧版本已绑定的 Cursor Desktop 对话会按 Desktop conversation index 自动升级来源身份，无需重新执行 `/t`；显式设置过的会话级 `/provider tmux` 仍会保留。
 - Cursor runtime 的 `/model` 无参数调用现在直接读取 `cursor agent models` 的账号实时列表，并以带 current 初始值的分页下拉卡展示；Cursor 的 `/current` 与 `/set` 配置卡也使用同一动态列表，选项继续复用原有 session/global 配置命令，不新增额外 slash command。
 - Cursor Desktop 回合不再把 transcript 暂时无增量误判为失败：只要 Desktop Bridge 的真实 thread 状态仍为 `running` 就继续等待。无需修改 Cursor.app，CodeLark 用一个共享异步 hook tailer（`fs.watch` 即时唤醒 + 低频异步 reconcile 兜底）接收本轮 Cursor hooks，不再让每个 turn 每 500ms 同步扫描日志目录；实时 thought 会作为弱化引用进入正文历史，超过阈值时完整放入默认收起的思考面板而不截断，footer 只留简短状态。工具开始和结果按原生工具 ID 更新同一张飞书卡并复用 Codex 的公共 Shell、文件与 MCP 工具展示，泛化 shell 步骤不会抢在工具块前显示“已完成”，base model 也不会让模型标签来回跳变。transcript 继续收取正文与终态并按工具身份去重。`/tmux-screen [seconds]s` 在 Desktop provider 下会显示并刷新后端状态、generation、模型、hook 与 transcript 诊断；异常终态卡会保留具体错误正文。
+- MCP 工具卡标题同时显示 `server/tool` 和操作说明；`code` 参数直接呈现为代码块，其余参数保留，详情不再重复标题与 MCP 名称。
 - tmux 自动发现补齐 Apple Silicon Homebrew `/opt/homebrew/bin/tmux` 与 Linuxbrew 路径；即使 launchd 的 PATH 不包含 Homebrew，也不会把已安装的 tmux 误报为 ENOENT。
 - Cursor Desktop direct turn 以“提交前已有 turn”的签名建立边界，不再要求 Cursor 持久化的 user row 与原始 wire prompt 逐字一致；兼容输入包装、归一化和 transcript 原子重写。可选 realtime v2 补丁提供显式 steer 与客户端事件；旧 v1 自动回退且明确显示实际为 queue。Codex app-server 在 Bridge 重启后也从当前协议 sequence 建立新基线，不再把整段在途历史拆成多张 continuation 卡重放。
 - 修复 Claude Code 的首次启动、信任与 YOLO 确认流程，并适配当前 TUI 状态和嵌套工具输出；高风险启动必须经过明确确认。

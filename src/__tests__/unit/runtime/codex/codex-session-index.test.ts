@@ -2062,7 +2062,7 @@ describe('readCodexSessionMirrorRecordStreamByFilePath', () => {
     const completedHistory = history.find((entry) => entry.kind === 'event_msg:item_completed');
     assert.equal(completedHistory?.role, 'tool');
     assert.match(completedHistory?.content || '', /^mcp__cua_repl__js/u);
-    assert.match(completedHistory?.content || '', /mcp: `cua_repl\/js`/u);
+    assert.match(completedHistory?.content || '', /```javascript/u);
     assert.match(completedHistory?.content || '', /Window: Cursor/u);
     assert.doesNotMatch(completedHistory?.content || '', /"type":\s*"McpToolCall"/u);
 
