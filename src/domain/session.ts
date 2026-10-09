@@ -42,6 +42,21 @@ export interface MirrorReadPosition {
   lastEventCount: number;
 }
 
+/** A bounded, durable choice about missed mirror output; never the full transcript. */
+export interface MirrorHistorySyncState {
+  id: string;
+  bindingId: string;
+  threadId: string;
+  channelType: string;
+  chatId: string;
+  status: 'pending' | 'resolved';
+  createdAt: string;
+  noticeAttempted: boolean;
+  ignoreBefore?: string;
+  selectedCount?: number;
+  previews: Array<{ key: string; text: string; timestamp: string }>;
+}
+
 type BridgeMirrorRecordType =
   | 'message'
   | 'reasoning'
@@ -83,6 +98,7 @@ export interface BridgeSession {
   mirror_status?: 'inactive' | 'watching' | 'stale';
   mirror_last_event_at?: string;
   mirror_read_position?: MirrorReadPosition;
+  mirror_history_sync?: MirrorHistorySyncState;
   created_at?: string;
   updated_at?: string;
 }

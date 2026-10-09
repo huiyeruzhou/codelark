@@ -118,6 +118,7 @@ import { validateThreadName } from '../session/command-use-cases/args.js';
 import { requestCodexTuiSelectionViaPermissionBroker } from './codex-tui-selection.js';
 import { cancelCodexDesktopRestart, consumeCodexDesktopRestart } from './codex-desktop-restart-confirmation.js';
 import { restartCodexDesktop } from '../../runtime/codex/desktop-restart.js';
+import { handleMirrorHistorySyncCommand } from '../mirror/history-sync.js';
 
 function describeReactionError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -1103,6 +1104,14 @@ export async function handleBridgeCommand(
         deps,
         markdown: responseParseMode === 'Markdown',
       });
+      break;
+    }
+
+    case '/sync-history': {
+      auditResponse = false;
+      const result = handleMirrorHistorySyncCommand({ args, binding: commandBinding, store });
+      response = result.response;
+      responseRichCard = result.richCard;
       break;
     }
 

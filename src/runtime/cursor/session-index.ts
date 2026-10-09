@@ -1233,13 +1233,26 @@ export function readCursorSessionMirrorRecordDeltaByFilePath(
   }
 }
 
-export function createCursorMirrorJsonlSource(): MirrorJsonlSource {
+export interface CursorMirrorJsonlSource extends MirrorJsonlSource {
+  findByThreadId(threadId: string, cwd?: string, transport?: 'cli' | 'desktop'): MirrorJsonlSourceSummary | null;
+}
+
+export function createCursorMirrorJsonlSource(): CursorMirrorJsonlSource {
   const storePathsByTranscript = new Map<string, string>();
   const desktopPath = path.join(cursorDesktopGlobalStorageRoot(), 'state.vscdb');
   const desktop = new CursorDesktopSessionSource(desktopPath);
+  const desktopBindings = new Map<string, { cwd?: string; nextProbeAt: number }>();
   return {
     runtime: 'cursor' as MirrorJsonlSource['runtime'],
     refresh: (threadId, filePath) => filePath === desktopPath ? desktop.refresh(threadId) : Promise.resolve(false),
+    refreshSource(threadId, filePath) {
+      const binding = desktopBindings.get(threadId);
+      if (!binding || filePath === desktopPath || Date.now() < binding.nextProbeAt) return null;
+      binding.nextProbeAt = Date.now() + 30_000;
+      try {
+        return desktop.read(threadId) ? { threadId, filePath: desktopPath, cwd: binding.cwd } : null;
+      } catch { return null; }
+    },
     readModeForPath: (filePath) => filePath === desktopPath ? 'snapshot' : 'append',
     statSnapshot(filePath) {
       if (filePath === desktopPath) return statCursorDesktopStore(filePath);
@@ -1254,16 +1267,19 @@ export function createCursorMirrorJsonlSource(): MirrorJsonlSource {
     watchPath(filePath: string): string {
       return path.dirname(filePath);
     },
-    findByThreadId(threadId: string, cwd?: string): MirrorJsonlSourceSummary | null {
+    findByThreadId(threadId: string, cwd?: string, transport?: 'cli' | 'desktop'): MirrorJsonlSourceSummary | null {
       const summary = findCursorSessionFileById(threadId, cwd);
-      if (summary?.transport === 'desktop') {
+      if ((transport || summary?.transport) === 'desktop') {
+        desktopBindings.set(threadId, { cwd: cwd || summary?.cwd, nextProbeAt: Date.now() + 30_000 });
         // A native store is authoritative for Desktop tools. CLI transcripts
         // remain append logs and retain their existing parser and identity.
         try {
           if (desktop.read(threadId)) return {
-            threadId, filePath: desktopPath, cwd: summary.cwd, updatedAt: summary.updatedAt,
+            threadId, filePath: desktopPath, cwd: cwd || summary?.cwd, updatedAt: summary?.updatedAt,
           };
         } catch { /* Older Cursor builds may only expose transcript export. */ }
+      } else {
+        desktopBindings.delete(threadId);
       }
       if (summary?.filePath) {
         if (summary.storePath) storePathsByTranscript.set(summary.filePath, summary.storePath);
