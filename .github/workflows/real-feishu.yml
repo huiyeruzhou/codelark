@@ -90,7 +90,7 @@ jobs:
           key: feishu-user-${{ steps.auth-restore.outputs.cache-generation }}-${{ github.run_id }}-${{ github.run_attempt }}
       - name: Upload only test reports
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: real-feishu-app-server-results
           path: ${{ runner.temp }}/feishu-evidence/*.json

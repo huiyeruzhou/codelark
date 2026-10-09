@@ -51,7 +51,7 @@ jobs:
           --evidence '${{ runner.temp }}/codex-protocol-evidence'
       - name: 保存原生协议证据
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: codex-protocol-${{ matrix.codex }}
           if-no-files-found: warn
@@ -102,7 +102,7 @@ jobs:
         run: node --import tsx scripts/verify-codex-desktop-macos.ts
       - name: Upload verification evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: codex-desktop-macos
           if-no-files-found: warn
