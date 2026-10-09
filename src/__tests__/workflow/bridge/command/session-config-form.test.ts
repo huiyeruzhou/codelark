@@ -55,3 +55,20 @@ it('invalid directory prevents the name and other form values from being saved',
   assert.equal(f.service.get('session.workspace', f.scope), os.tmpdir());
   assert.notEqual(f.service.get('session.tmuxCaptureLines', f.scope), 123);
 });
+
+it('Desktop Cursor cards omit unsupported model controls and stale forms cannot save model overrides', async () => {
+  const f = fixture();
+  f.store.updateSession(f.session.id, {
+    runtime: { activeRuntime: 'cursor', cursor: { sessionId: 'desktop-form-thread', provider: 'desktop' } },
+  });
+  const card = (await f.command('/current-runtime cursor')).richCard!;
+  assert.ok(card);
+  assert.doesNotMatch(JSON.stringify(card), /Cursor current|current_cursor_model|cursorDefaultModel|cursorReasoningEffort/u);
+  assert.match(JSON.stringify(card), /由 Cursor Desktop 对话管理/u);
+  const before = f.service.snapshot(f.scope).config;
+  const forms: Array<Record<string, string>> = [{ cursor_model: 'new-model', cursor_force: 'true' }, { cursor_reasoning: 'high', cursor_force: 'true' }];
+  for (const form of forms) {
+    assert.match((await f.command('/current-config cursor', form)).text, /配置未保存.*Desktop Bridge 接口尚未接入/u);
+    assert.deepEqual(f.service.snapshot(f.scope).config, before, 'reject the entire stale form before saving any field');
+  }
+});

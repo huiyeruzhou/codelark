@@ -459,6 +459,7 @@ export function resolveDisplayedCursorModel(
   session?: BridgeSession | null,
   binding?: ChannelChat | null,
 ): string {
+  if (resolveCursorExecutionProvider(session) === 'desktop') return '跟随 Cursor Desktop';
   const { effective, config } = scopedConfigForRuntime(binding, session);
   const configured = config.runtime.cursor.model.trim();
   if (configured && effective.provenance.get('runtime.cursor.model')?.source === 'session') return configured;
