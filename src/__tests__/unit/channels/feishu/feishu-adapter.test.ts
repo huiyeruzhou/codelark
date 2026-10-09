@@ -4505,7 +4505,7 @@ describe('feishu-adapter structured streaming regions', () => {
     assert.ok(refreshed.indexOf('模型输出二') < refreshed.indexOf('apply_patch'));
   });
 
-  it('refreshes the full card for history-driven tool status changes', async () => {
+  it('refreshes the full card for tool status changes when element patch is unavailable', async () => {
     const cardUpdates: Array<Record<string, any>> = [];
     const elementUpdates: Array<Record<string, any>> = [];
     const elementCreates: Array<Record<string, any>> = [];

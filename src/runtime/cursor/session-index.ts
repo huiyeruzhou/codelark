@@ -1239,6 +1239,7 @@ export function createCursorMirrorJsonlSource(): MirrorJsonlSource {
   const desktop = new CursorDesktopSessionSource(desktopPath);
   return {
     runtime: 'cursor' as MirrorJsonlSource['runtime'],
+    refresh: (threadId, filePath) => filePath === desktopPath ? desktop.refresh(threadId) : Promise.resolve(false),
     readModeForPath: (filePath) => filePath === desktopPath ? 'snapshot' : 'append',
     statSnapshot(filePath) {
       if (filePath === desktopPath) return statCursorDesktopStore(filePath);
@@ -1280,7 +1281,7 @@ export function createCursorMirrorJsonlSource(): MirrorJsonlSource {
         if (!threadId) throw new Error('Cursor Desktop mirror requires a thread ID');
         const snapshot = desktop.read(threadId);
         if (!snapshot) throw new Error('Cursor Desktop conversation is unavailable in its native store');
-        return { records: snapshot.records, nextOffset: endOffset, trailingText: '',
+        return { revisionLedger: true, records: snapshot.records, nextOffset: endOffset, trailingText: '',
           nextTurnId: snapshot.nextTurnId, nextSpecialCallIds: [], unknownKinds: [] };
       }
       return readCursorSessionMirrorRecordDeltaByFilePath(

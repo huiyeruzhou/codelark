@@ -516,8 +516,9 @@ export function createMirrorRuntime(
         return 'processed';
       }
 
+      const sourceChanged = await mirrorSource.refresh?.(subscription.threadId, subscription.filePath!);
       const unchanged = isMirrorSnapshotUnchanged(subscription, snapshot);
-      if (unchanged && !deps.hasPendingMirrorWork(subscription) && !mirrorSource.readSupplementalDelta) {
+      if (unchanged && !sourceChanged && !deps.hasPendingMirrorWork(subscription) && !mirrorSource.readSupplementalDelta) {
         deps.syncMirrorSessionStateSafe(subscription.sessionId, 'mirror reconcile unchanged snapshot');
         return 'processed';
       }

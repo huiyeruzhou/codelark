@@ -2,6 +2,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
 import type { BridgeMirrorRecord } from '../contracts.js';
+import { listCursorDesktopThreads } from './desktop-bridge-client.js';
 
 type ObjectValue = Record<string, any>;
 
@@ -80,6 +81,7 @@ interface ConversationState {
   signatures: Set<string>;
   records: BridgeMirrorRecord[];
   storeVersion?: string;
+  contentVersion?: string;
   nextTurnId?: string | null;
 }
 
@@ -94,13 +96,43 @@ export interface CursorDesktopSnapshot {
  */
 export class CursorDesktopSessionSource {
   private conversations = new Map<string, ConversationState>();
+  private lifecycle = new Map<string, { status?: string; contentVersion?: string; probedAt: number; confirmed: boolean }>();
 
-  constructor(readonly filePath: string) {}
+  constructor(readonly filePath: string, private readonly options: {
+    readStatus?: (threadId: string) => Promise<string | undefined>;
+    pollIntervalMs?: number;
+  } = {}) {}
+
+  /** Persisted composer.status can belong to an earlier generation. Only a
+   * fresh Desktop observation may end the current turn; failures leave it open.
+   * Bind the observation to the thread revision BEFORE the request, so a new
+   * prompt/tool written during or after that request invalidates its terminal.
+   */
+  async refresh(threadId: string): Promise<boolean> {
+    const previous = this.lifecycle.get(threadId);
+    if (previous && Date.now() - previous.probedAt < (this.options.pollIntervalMs ?? 1000)) return false;
+    this.read(threadId);
+    const contentVersion = this.conversations.get(threadId)?.contentVersion;
+    let status: string | undefined;
+    try {
+      status = this.options.readStatus
+        ? await this.options.readStatus(threadId)
+        : (await listCursorDesktopThreads()).find((thread) => thread.id === threadId)?.status;
+    } catch { /* Unavailable live state must never fall back to stale root.status. */ }
+    // Let Cursor persist the final bubbles before closing the card. A terminal
+    // must survive two probes with unchanged thread content, not just one UI
+    // event. Other threads writing the shared SQLite store must not delay it.
+    const confirmed = previous?.status === status && previous?.contentVersion === contentVersion;
+    this.lifecycle.set(threadId, { status, contentVersion, probedAt: Date.now(), confirmed });
+    return previous?.status !== status || previous?.contentVersion !== contentVersion || previous?.confirmed !== confirmed;
+  }
 
   read(threadId: string): CursorDesktopSnapshot | null {
     let db: DatabaseSync | undefined;
     try {
-      const storeVersion = JSON.stringify(statCursorDesktopStore(this.filePath));
+      const diskVersion = JSON.stringify(statCursorDesktopStore(this.filePath));
+      const observation = this.lifecycle.get(threadId);
+      const storeVersion = `${diskVersion}:${observation?.status}:${observation?.confirmed}:${observation?.contentVersion}`;
       const previous = this.conversations.get(threadId);
       if (previous?.storeVersion === storeVersion) return { records: previous.records, nextTurnId: previous.nextTurnId ?? null };
       db = new DatabaseSync(this.filePath, { readOnly: true });
@@ -129,7 +161,9 @@ export class CursorDesktopSessionSource {
       };
       const finish = (timestamp: string, aborted = false) => {
         if (!turnId) return;
-        push({ type: aborted ? 'task_aborted' : 'task_complete', content: '', timestamp, turnId }, `${turnId}:end`);
+        // One terminal per turn, even if late persisted output changes its time.
+        next.push({ type: aborted ? 'task_aborted' : 'task_complete', content: '', timestamp, turnId,
+          signature: `${turnId}:end` });
       };
       const headers = root.fullConversationHeadersOnly as ObjectValue[];
       const liveIds = new Set<string>();
@@ -193,8 +227,12 @@ export class CursorDesktopSessionSource {
         }
         lastTimestamp = [lastTimestamp, completedAt, timestamp].sort().at(-1) || '';
       }
-      if (['completed', 'error', 'aborted', 'stopped'].includes(root.status)) {
-        finish(lastTimestamp, root.status !== 'completed');
+      state.contentVersion = digest(next.map((record) => record.signature));
+      const liveStatus = observation?.confirmed && observation.contentVersion === state.contentVersion ? observation.status : undefined;
+      if (liveStatus === 'completed' || liveStatus === 'error') {
+        finish(lastTimestamp, liveStatus === 'error');
+        turnId = null;
+      } else if (turnId && state.signatures.has(`${turnId}:end`)) {
         turnId = null;
       }
       for (const id of state.bubbles.keys()) if (!liveIds.has(id)) {
@@ -203,6 +241,9 @@ export class CursorDesktopSessionSource {
       }
       for (const record of next) {
         if (state.signatures.has(record.signature)) continue;
+        // Historical revisions after a confirmed terminal must not reopen the
+        // same IM stream. New user bubbles get their own distinct turn ID.
+        if (record.turnId && state.signatures.has(`${record.turnId}:end`)) continue;
         state.signatures.add(record.signature);
         state.records.push(record);
       }

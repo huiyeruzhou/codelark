@@ -1286,7 +1286,9 @@ function buildToolProgressPanelDetailElements(block: ToolProgressBlock): Array<R
 function buildToolProgressPanel(block: ToolProgressBlock, index: number, elementIdPrefix = 'stream_tool'): Record<string, unknown> {
   const elementId = `${elementIdPrefix}_${index + 1}`;
   const title = buildToolProgressPanelTitle(block);
-  const elements = buildToolProgressPanelDetailElements(block);
+  const elements = buildToolProgressPanelDetailElements(block).map((element, detailIndex) => ({
+    ...element, element_id: `${elementId}_body_${detailIndex + 1}`,
+  }));
   return {
     tag: 'collapsible_panel',
     expanded: false,

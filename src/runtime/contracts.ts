@@ -128,6 +128,9 @@ export interface BridgeMirrorRecord {
 }
 
 export interface BridgeMirrorRecordDelta {
+  /** Stable in-memory revision ledger: late records remain after the previous cursor,
+   * even when their native timestamps predate the persisted delivery watermark. */
+  revisionLedger?: boolean;
   records: BridgeMirrorRecord[];
   nextOffset: number;
   trailingText: string;
@@ -160,6 +163,8 @@ export interface MirrorJsonlSource {
   /** A stable directory watch can observe sidecar creation/removal without changing the read path. */
   watchPath?(filePath: string): string;
   findByThreadId(threadId: string, cwd?: string): MirrorJsonlSourceSummary | null;
+  /** Refresh live metadata; true requires reconciliation even without file writes. */
+  refresh?(threadId: string, filePath: string): Promise<boolean>;
   readDelta(
     filePath: string,
     startOffset: number,
