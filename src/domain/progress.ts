@@ -123,6 +123,8 @@ export type ToolCallDetail =
     };
 
 export interface ToolCallInfo {
+  /** Keep the complete retained output inside the expanded tool panel. */
+  showOutput?: boolean;
   id: string;
   name: string;
   status: 'running' | 'complete' | 'error';

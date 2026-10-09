@@ -19,6 +19,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import * as lark from '@larksuiteoapi/node-sdk';
 import { HttpsProxyAgent } from 'https-proxy-agent';
+import { StructuredStreamDeliveryError } from '../delivery/stream-feedback-error.js';
 import type {
   ChannelAddress,
   ChannelChatKind,
@@ -383,6 +384,9 @@ interface PendingStreamingCardCreateState {
   historyItems?: StreamingHistoryItem[];
   historyDriven?: boolean;
   metadata?: StructuredStreamingUiMetadata;
+  historyItemOffset?: number;
+  historyToolCallOffset?: number;
+  historyTextOffset?: number;
 }
 
 interface RichCardUpdateState {
@@ -3395,7 +3399,6 @@ export class FeishuAdapter extends BaseChannelAdapter {
       this.cardCreateNextEarliestAt.set(cardKey, now + this.getCongestedCardIntervalMs(0));
       return;
     }
-    this.pendingCardCreateStates.delete(cardKey);
     const failures = (this.cardCreateConsecutiveFailures.get(cardKey) || 0) + 1;
     this.cardCreateConsecutiveFailures.set(cardKey, failures);
     this.cardCreateNextEarliestAt.set(cardKey, now + this.getCongestedCardIntervalMs(failures));
@@ -5787,7 +5790,80 @@ export class FeishuAdapter extends BaseChannelAdapter {
     streamKey?: string,
   ): Promise<boolean> {
     if (!this.supportsStructuredStreamingUi(chatId)) return false;
-    return this.finalizeActiveCardWithoutBlocking(chatId, status, responseText, streamKey);
+    const cardKey = this.resolveStreamKey(chatId, streamKey);
+    const active = this.activeCards.get(cardKey);
+    if (active) {
+      // Keep a recovery snapshot before finalizeCard releases its live state.
+      Object.assign(this.pendingCardCreateState(cardKey), {
+        text: active.pendingText || responseText, tools: active.toolCalls,
+        historyItems: active.historyItems, historyDriven: active.historyDriven,
+        tasks: active.taskItems, metadata: active.metadata,
+        historyItemOffset: active.historyItemOffset,
+        historyToolCallOffset: active.historyToolCallOffset,
+        historyTextOffset: active.historyTextOffset,
+      });
+    }
+    if (await this.finalizeActiveCardWithoutBlocking(chatId, status, responseText, cardKey)) {
+      this.pendingCardCreateStates.delete(cardKey);
+      return true;
+    }
+    return this.recoverStructuredStream(chatId, cardKey, status, responseText);
+  }
+
+  private readonly staticStreamRecoveries = new Map<string, {
+    history: StreamingHistoryItem[];
+    cursor: { historyItemOffset: number; historyToolCallOffset: number; historyTextOffset?: number };
+    page: number;
+    pending: PendingStreamingCardCreateState;
+  }>();
+
+  /** CardKit outages can still use IM schema-2 cards. Preserve the same history
+   * panels and pagination; never silently convert a structured turn to post/md.
+   */
+  private async recoverStructuredStream(
+    chatId: string, cardKey: string, status: 'completed' | 'interrupted' | 'error', responseText: string,
+  ): Promise<boolean> {
+    let recovery = this.staticStreamRecoveries.get(cardKey);
+    if (!recovery) {
+      const pending = this.pendingCardCreateStates.get(cardKey) || {};
+      const text = responseText || pending.text || '';
+      const history: StreamingHistoryItem[] = pending.historyDriven && pending.historyItems?.length
+        ? pending.historyItems
+        : [
+          ...(pending.tools?.length ? [{ type: 'tool_panel' as const, tools: pending.tools }] : []),
+          ...(text ? [{ type: 'markdown' as const, role: 'assistant' as const, content: text }] : []),
+        ];
+      if (!history.length) return false;
+      recovery = { history, pending, page: 0, cursor: {
+        historyItemOffset: pending.historyItemOffset || 0,
+        historyToolCallOffset: pending.historyToolCallOffset || 0,
+        historyTextOffset: pending.historyTextOffset || 0,
+      } };
+      this.staticStreamRecoveries.set(cardKey, recovery);
+    }
+    try {
+      do {
+        const render = buildStreamingCardRender({
+          content: '', tasksText: buildStreamingTaskContent(recovery.pending.tasks || []) || EMPTY_STREAMING_TASKS,
+          statusText: status === 'completed' ? '已完成' : status === 'error' ? '❌ 异常' : '⚠️ 已停止',
+          tools: [], actionRows: [], chatId, metadata: recovery.pending.metadata,
+          historyItems: recovery.history, ...recovery.cursor,
+        });
+        render.body.config = { wide_screen_mode: true };
+        const result = await this.sendStructuredMessage(chatId, 'interactive', JSON.stringify(render.body), undefined,
+          crypto.createHash('sha256').update(`stream-recovery:${cardKey}:${recovery.page}`).digest('hex').slice(0, 32));
+        if (!result.ok) throw new Error(result.error || 'Structured stream recovery failed');
+        recovery.page += 1;
+        if (!render.hasMore || !render.next) break;
+        recovery.cursor = render.next;
+      } while (true);
+      this.staticStreamRecoveries.delete(cardKey);
+      this.pendingCardCreateStates.delete(cardKey);
+      this.cleanupCard(chatId, cardKey);
+      return true;
+    } catch (error) {
+      throw new StructuredStreamDeliveryError(error instanceof Error ? error.message : String(error));
+    }
   }
 
   // ── Send ────────────────────────────────────────────────────

@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import path from 'node:path';
 
 import type { LLMProvider, StreamChatParams } from '../contracts.js';
 import { sseEvent } from '../sse.js';
@@ -14,10 +15,12 @@ import {
 } from './desktop-diagnostics.js';
 import {
   findCursorSessionFileById,
+  cursorDesktopGlobalStorageRoot,
   getCursorTranscriptCandidates,
   readCursorSessionMirrorRecordDeltaByFilePath,
   readCursorSessionMirrorRecordStreamByFilePath,
 } from './session-index.js';
+import { CursorDesktopSessionSource } from './desktop-session-source.js';
 import {
   cursorToolFingerprint,
   enqueueCursorRecord,
@@ -253,6 +256,7 @@ async function pollDesktopTranscript(
   baselineTurnStarts: Set<string>,
   queued: boolean,
   hookSubscription: CursorDesktopHookSubscription,
+  nativeSource?: CursorDesktopSessionSource,
 ): Promise<void> {
   const cursorSessionId = context.sessionId;
   if (!cursorSessionId) throw new Error('Cursor Desktop session ID 缺失。');
@@ -282,7 +286,7 @@ async function pollDesktopTranscript(
   while (!context.terminalSeen) {
     if (abortSignal?.aborted) throw new Error('已停止等待；Cursor Desktop 中已提交的 turn 仍可能继续运行。');
     if (!context.sessionFilePath) throw new Error('Cursor Desktop transcript 路径尚未解析。');
-    const snapshot = transcriptSnapshot(context.sessionFilePath);
+    const snapshot = nativeSource ? null : transcriptSnapshot(context.sessionFilePath);
     const endOffset = snapshot?.size ?? context.nextOffset;
     const replaced = Boolean(snapshot && previousSnapshot && (
       snapshot.identity !== previousSnapshot.identity
@@ -300,7 +304,12 @@ async function pollDesktopTranscript(
     }
     if (snapshot) previousSnapshot = snapshot;
     const previousOffset = context.nextOffset;
-    const delta = readCursorSessionMirrorRecordDeltaByFilePath(
+    const nativeSnapshot = nativeSource?.read(cursorSessionId);
+    if (nativeSource && !nativeSnapshot) throw new Error('Cursor Desktop 原生会话暂不可读；保留现有工具结果，等待重试。');
+    const delta = nativeSnapshot ? {
+      records: nativeSnapshot.records, nextOffset: nativeSnapshot.records.length,
+      trailingText: '', nextTurnId: nativeSnapshot.nextTurnId, nextSpecialCallIds: [],
+    } : readCursorSessionMirrorRecordDeltaByFilePath(
       context.sessionFilePath,
       context.nextOffset,
       endOffset,
@@ -327,6 +336,9 @@ async function pollDesktopTranscript(
     if (context.nextOffset > previousOffset) lastActivityAt = Date.now();
     if (context.terminalSeen) return;
     for (const hook of hookSubscription.drain()) {
+      // Native bubbles already carry thought, tool IDs and actual results.
+      // Mixing hook summaries here would duplicate tools or overwrite output.
+      if (nativeSource) continue;
       if (queued && !targetTurnId) continue;
       if (hookGenerationId && hook.generationId && hook.generationId !== hookGenerationId) continue;
       if (!hookGenerationId && hook.generationId) hookGenerationId = hook.generationId;
@@ -414,14 +426,23 @@ export function streamCursorDesktop(params: StreamChatParams): ReadableStream<st
         const sessionId = params.cursorSessionId?.trim();
         if (!sessionId) throw new Error('Cursor Desktop 连接需要已绑定的桌面对话。');
         const known = findCursorSessionFileById(sessionId, params.workingDirectory);
-        const initialFilePath = known?.filePath || (params.workingDirectory
+        let initialFilePath = known?.filePath || (params.workingDirectory
           ? getCursorTranscriptCandidates(sessionId, params.workingDirectory)
             .find((candidate) => fs.existsSync(candidate))
           : undefined);
-        const baselineSnapshot = transcriptSnapshot(initialFilePath);
+        let nativeSource: CursorDesktopSessionSource | undefined;
+        let nativeBaseline;
+        try {
+          const candidate = new CursorDesktopSessionSource(path.join(cursorDesktopGlobalStorageRoot(), 'state.vscdb'));
+          nativeBaseline = candidate.read(sessionId);
+          if (nativeBaseline) nativeSource = candidate;
+        } catch { /* Compatibility with Desktop builds without persisted bubbles. */ }
+        if (!initialFilePath && nativeSource) initialFilePath = nativeSource.filePath;
+        const baselineSnapshot = nativeSource ? null : transcriptSnapshot(initialFilePath);
         const hookSubscription = await subscribeCursorDesktopHookActivities(sessionId);
         const baselineTurnStarts = new Set(
-          initialFilePath
+          nativeBaseline ? nativeBaseline.records.filter((record) => record.type === 'task_started').map((record) => record.signature)
+            : initialFilePath
             ? readCursorSessionMirrorRecordStreamByFilePath(initialFilePath, known?.storePath)
               .filter((record) => record.type === 'task_started')
               .map((record) => record.signature)
@@ -433,7 +454,7 @@ export function streamCursorDesktop(params: StreamChatParams): ReadableStream<st
           cwd: known?.cwd || params.workingDirectory,
           sessionFilePath: initialFilePath,
           sessionStorePath: known?.storePath,
-          nextOffset: baselineSnapshot?.size || 0,
+          nextOffset: nativeBaseline?.records.length || baselineSnapshot?.size || 0,
           trailingText: '',
           nextTurnId: null,
           nextSpecialCallIds: [],
@@ -477,6 +498,7 @@ export function streamCursorDesktop(params: StreamChatParams): ReadableStream<st
             baselineTurnStarts,
             sent.status === 'queued',
             hookSubscription,
+            nativeSource,
           );
           controller.close();
         } finally {

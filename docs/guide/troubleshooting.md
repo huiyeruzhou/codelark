@@ -133,6 +133,10 @@ tmux 服务端会长期驻留；更新磁盘上的客户端不会自动升级已
 
 Cursor Desktop 对话能列出但发送失败时，在 Cursor 的 Beta 设置中确认已启用 `Allow CLI to access desktop agents`，并保持目标对话所在的 Cursor 窗口打开。CodeLark 不会把这类失败降级到 Cursor Agent tmux，因为那会产生另一条本地会话；重启 Cursor 后仍失败时，检查 `~/.cursor/desktop-bridge` 是否只有 live PID 对应的 discovery。
 
+Cursor Desktop 的 transcript 导出可能只有工具调用，没有结果。CodeLark 的直接执行和镜像现在共用原生会话数据库的只读读取器，按 bubble 身份关联输入、完成状态与保留的输出，并观察 SQLite WAL 更新；不需要安装 Desktop 增强补丁。CLI 继续读取自己的 transcript，公开 provider 仍为 `tmux`。展开 Cursor 工具卡可查看保留的完整输出，超长内容按卡片容量分页。Cursor 已裁剪的 Read/Grep 等历史结果只显示保留的摘要，并注明“未保留完整原始输出”；不会把当前文件内容当成历史结果。旧版 Cursor 没有该数据库结构时仍兼容 transcript，结果完整性取决于其导出。
+
+飞书流式卡片创建失败时，待发工具历史会保留，终态改由 IM 接口发送同样带折叠工具块的静态卡片，而不是普通 Markdown 富文本。分页恢复只推进已确认的页，重试复用页级 UUID；若静态卡片也失败，镜像投递保持待重试并记录错误。
+
 如果本机路径是符号链接，CodeLark 会尽量同时识别原始路径和 realpath；仍找不到时，把 `/status` 和相关日志一起用于排查。
 
 ## 云文档评论无法回复

@@ -78,6 +78,9 @@ function buildFallbackToolDetailMarkdown(tool: ToolCallInfo): string {
       details.push(`输入：\n${buildFencedCodeBlock(tool.input.trim(), language)}`);
     }
   }
+  if (tool.showOutput && typeof tool.output === 'string') {
+    details.push(`输出：\n${tool.output ? buildFencedCodeBlock(tool.output, 'text') : '（无文本输出）'}`);
+  }
   return details.join('\n\n');
 }
 

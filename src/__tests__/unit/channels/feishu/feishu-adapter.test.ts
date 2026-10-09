@@ -5018,7 +5018,7 @@ describe('feishu-adapter structured streaming regions', () => {
     }]);
   });
 
-  it('returns false for invalid card id finalization so mirror delivery can fall back', async () => {
+  it('recovers invalid card id finalization with a structured card', async () => {
     const cardUpdates: Array<Record<string, any>> = [];
     const elementCreates: Array<Record<string, any>> = [];
     const reactionCreates: Array<Record<string, any>> = [];
@@ -5077,7 +5077,7 @@ describe('feishu-adapter structured streaming regions', () => {
 
     const finalized = await adapter.onStreamEnd('chat-1', 'completed', '', 'stream-1');
 
-    assert.equal(finalized, false);
+    assert.equal(finalized, true);
     assert.ok(cardUpdates.length >= 1);
     assert.equal(elementCreates.length, 0);
     assert.equal(reactionCreates.length, 0);

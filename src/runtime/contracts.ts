@@ -118,6 +118,7 @@ export interface BridgeMirrorRecord {
   toolName?: string;
   toolInput?: unknown;
   toolDetail?: ToolCallDetail;
+  showToolOutput?: boolean;
   isError?: boolean;
   errorText?: string;
   tasks?: TaskProgressInfo[];
@@ -152,6 +153,8 @@ export interface MirrorJsonlSource {
   readonly runtime: 'codex' | 'claude' | 'kimi' | 'cursor' | 'zcode';
   /** Append-only logs can be read by byte offset; mutable stores must be reconciled as snapshots. */
   readonly readMode?: 'append' | 'snapshot';
+  /** A runtime may mix CLI logs and Desktop mutable stores. */
+  readModeForPath?(filePath: string): 'append' | 'snapshot';
   /** Mutable stores may keep live writes beside the canonical file (for example SQLite WAL). */
   statSnapshot?(filePath: string): { size: number; mtimeMs: number; identity: string } | null;
   /** A stable directory watch can observe sidecar creation/removal without changing the read path. */

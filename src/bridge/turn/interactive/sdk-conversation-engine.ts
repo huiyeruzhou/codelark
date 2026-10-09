@@ -98,6 +98,7 @@ export type OnToolEvent = (
     input?: unknown;
     output?: string;
     isError?: boolean;
+    showOutput?: boolean;
   },
 ) => void;
 export type OnTaskEvent = (tasks: TaskProgressInfo[]) => void;
@@ -509,7 +510,8 @@ async function consumeStream(
                   resultData.tool_use_id,
                   '',
                   resultData.is_error ? 'error' : 'complete',
-                  { output: resultData.content, isError: resultData.is_error || false },
+                  { output: resultData.content, isError: resultData.is_error || false,
+                    ...(resultData.show_output === true ? { showOutput: true } : {}) },
                 );
               } catch { /* non-critical */ }
             }

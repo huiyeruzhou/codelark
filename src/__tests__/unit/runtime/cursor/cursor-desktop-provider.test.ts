@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
 import { afterEach, beforeEach, describe, it } from 'node:test';
 
 import { sendCursorDesktopMessage, stopCursorDesktopThread, getCursorDesktopModels, setCursorDesktopModel } from '../../../../runtime/cursor/desktop-bridge-client.js';
@@ -176,6 +177,36 @@ describe('Cursor Desktop provider', () => {
       () => sendCursorDesktopMessage('22222222-2222-4222-8222-222222222222', 'do not fallback'),
       /不会改用 CLI/,
     );
+  });
+
+  it('collects native results before terminal even when the transcript exports no results', async () => {
+    const previousUserDir = process.env.CURSOR_DESKTOP_USER_DIR;
+    process.env.CURSOR_DESKTOP_USER_DIR = path.join(root, 'desktop-user');
+    const directory = path.join(process.env.CURSOR_DESKTOP_USER_DIR, 'globalStorage');
+    fs.mkdirSync(directory, { recursive: true });
+    const db = new DatabaseSync(path.join(directory, 'state.vscdb'));
+    try {
+      db.exec('CREATE TABLE cursorDiskKV (key TEXT PRIMARY KEY, value TEXT)');
+      const put = (key: string, value: unknown) => db.prepare('INSERT OR REPLACE INTO cursorDiskKV VALUES (?,?)').run(key, JSON.stringify(value));
+      put(`composerData:${THREAD_ID}`, { status: 'completed', fullConversationHeadersOnly: [] });
+      const at = new Date().toISOString();
+      await startBridge(() => {
+        put(`bubbleId:${THREAD_ID}:user`, { type: 1, text: 'new prompt', createdAt: at });
+        put(`bubbleId:${THREAD_ID}:tool`, { type: 2, createdAt: at, toolFormerData: {
+          name: 'run_terminal_command_v2', status: 'completed', params: '{"command":"echo result"}', result: '{"output":"real native output"}',
+        } });
+        put(`composerData:${THREAD_ID}`, { status: 'completed', fullConversationHeadersOnly: [{ bubbleId: 'user' }, { bubbleId: 'tool' }] });
+      });
+      let output = '';
+      for await (const chunk of streamCursorDesktop({ prompt: 'new prompt', sessionId: 'bridge', cursorSessionId: THREAD_ID })) output += chunk;
+      assert.match(output, /real native output/);
+      assert.ok(output.indexOf('tool_result') < output.indexOf('"type":"result"'));
+      assert.equal((output.match(/"type":"tool_use"/g) || []).length, 1);
+    } finally {
+      db.close();
+      if (previousUserDir === undefined) delete process.env.CURSOR_DESKTOP_USER_DIR;
+      else process.env.CURSOR_DESKTOP_USER_DIR = previousUserDir;
+    }
   });
 
   it('treats submitted as queued when an older Desktop Bridge reports the thread already running', async () => {
