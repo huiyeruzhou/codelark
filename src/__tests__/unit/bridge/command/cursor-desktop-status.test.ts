@@ -91,6 +91,8 @@ describe('Cursor Desktop /tmux-screen status', () => {
     const result = await _testOnlyCursorDesktopStatus.build(store.getSession(session.id)!, binding, true, 5);
 
     assert.match(result.text, /Cursor Desktop 后端状态/);
+    assert.match(result.text, /Provider[\s\S]*tmux/);
+    assert.doesNotMatch(result.text, /Provider[^\n]*desktop/);
     assert.match(result.text, /后端状态[\s\S]*running/);
     assert.match(result.text, /Visible Desktop thread/);
     assert.match(result.text, /running 来自 Cursor 客户端内部 agent\/composer store/);

@@ -23,7 +23,7 @@ export interface CursorSessionFileSummary {
   sessionDir: string;
   storePath?: string;
   filePath?: string;
-  provider: 'tmux' | 'desktop';
+  transport: 'cli' | 'desktop';
 }
 
 export interface CursorTranscriptTailStatus {
@@ -399,7 +399,7 @@ function listCursorDesktopSessionSummaries(cwd?: string): CursorSessionFileSumma
       return [{
         sessionId: row.id,
         sessionDir: cursorDesktopGlobalStorageRoot(),
-        provider: 'desktop',
+        transport: 'desktop',
         cwd: sessionCwd,
         ...(title ? { title } : {}),
         ...(location.createdAt ? { createdAt: location.createdAt } : {}),
@@ -435,7 +435,7 @@ function summarizeCursorSessionDir(sessionDir: string, fallbackCwd?: string): Cu
     sessionId,
     sessionDir,
     storePath,
-    provider: 'tmux',
+    transport: 'cli',
     ...(cwd ? { cwd } : {}),
     ...(meta?.title?.trim() ? { title: meta.title.trim() } : {}),
     ...(storeMeta?.lastUsedModel?.trim() ? { model: storeMeta.lastUsedModel.trim() } : {}),
@@ -472,9 +472,9 @@ export function listCursorSessionFileSummaries(cwd?: string, limit?: number): Cu
   for (const session of [...sessions, ...listCursorDesktopSessionSummaries(cwd)]) {
     const previous = combined.get(session.sessionId);
     if (previous) {
-      const desktop = previous.provider === 'desktop'
+      const desktop = previous.transport === 'desktop'
         ? previous
-        : session.provider === 'desktop' ? session : undefined;
+        : session.transport === 'desktop' ? session : undefined;
       combined.set(session.sessionId, {
           ...session,
           ...previous,
@@ -484,7 +484,7 @@ export function listCursorSessionFileSummaries(cwd?: string, limit?: number): Cu
           updatedAt: [previous.updatedAt, session.updatedAt].filter(Boolean).sort().at(-1),
           filePath: previous.filePath || session.filePath,
           model: previous.model || session.model,
-          provider: previous.provider === 'desktop' || session.provider === 'desktop' ? 'desktop' : 'tmux',
+          transport: previous.transport === 'desktop' || session.transport === 'desktop' ? 'desktop' : 'cli',
         });
     } else {
       combined.set(session.sessionId, session);

@@ -12,7 +12,7 @@ import {
 import { parseCommandCallbackData } from '../../../../bridge/command/callbacks.js';
 import { handleModelCommand, handleModelCommandRequest, handleReasoningCommand } from '../../../../bridge/command/runtime-settings.js';
 import { createConfigService } from '../../../../configuration/service.js';
-import { resolveCursorCapabilities } from '../../../../bridge/session/cursor-provider-identity.js';
+import { resolveCursorCapabilities } from '../../../../bridge/session/cursor-transport.js';
 import { resolveCursorInvocationModel, resolveCursorRuntimeConfig } from '../../../../bridge/session/support.js';
 import type { CursorAvailableModel } from '../../../../runtime/cursor/models.js';
 import { JsonFileStore } from '../../../../storage/json-store.js';
@@ -119,41 +119,28 @@ describe('Cursor model picker', () => {
     }
   });
 
-  it('keeps model commands, catalog and launch parameters aligned when a Desktop thread explicitly uses CLI', async () => {
+  it('keeps Desktop model control external even with an explicit tmux provider setting', async () => {
     const store = new JsonFileStore(makeBridgeSettings());
-    const session = store.createSession('Desktop with CLI override', 'default', undefined, '/tmp/cursor-override');
-    store.updateSession(session.id, {
-      runtime: { activeRuntime: 'cursor', cursor: { sessionId: 'desktop-cli-thread', provider: 'desktop' } },
-    });
-    const binding = store.upsertChannelChat({ channelType: 'feishu', chatId: 'cursor-override', bridgeSessionId: session.id });
+    const session = store.createSession('Desktop', 'default', undefined, '/tmp/cursor-desktop');
+    store.updateSession(session.id, { runtime: {
+      activeRuntime: 'cursor', cursor: { sessionId: 'desktop-thread', provider: 'tmux', transport: 'desktop' },
+    } });
+    const binding = store.upsertChannelChat({ channelType: 'feishu', chatId: 'cursor-tmux-setting', bridgeSessionId: session.id });
     const service = createConfigService({ migrate: false });
     const scope = { kind: 'session' as const, sessionId: session.id };
+    service.set(scope, { runtime: { cursor: { provider: 'tmux', model: 'stored-cli-model', reasoningEffort: 'high' } } });
     const persisted = store.getSession(session.id)!;
-    const options = {
-      msg: { address: { channelType: 'feishu', chatId: binding.chatId }, text: '/model', messageId: 'override-model', timestamp: Date.now() },
-      currentBinding: binding, store, markdown: true,
-    };
-    assert.match(handleModelCommand({ ...options, args: 'chosen-model' }), /Desktop Bridge 接口尚未接入/u);
-    service.set(scope, { runtime: { cursor: { provider: 'tmux' } } });
-    assert.equal(persisted.runtime?.cursor?.provider, 'desktop', 'source identity stays Desktop');
-    assert.equal(resolveCursorCapabilities(persisted).modelConfiguration, 'process-launch');
-    assert.match(handleModelCommand({ ...options, args: 'chosen-model' }), /后续 Cursor tmux 启动/u);
-    handleReasoningCommand({ args: 'high', binding, store, markdown: true });
-    assert.equal(resolveCursorInvocationModel(binding, persisted, { resuming: true }), 'chosen-model');
-    assert.equal(resolveCursorRuntimeConfig(persisted, binding).reasoningEffort, 'high');
-    let catalogReads = 0;
-    const listCursorModels = async () => { catalogReads += 1; return [model(0, { slug: 'chosen-model' })]; };
-    const cliResult = await handleModelCommandRequest({ ...options, args: '', listCursorModels });
-    assert.equal(catalogReads, 1);
-    assert.equal(parseCommandCallbackData(cliResult.richCard?.selects?.[0]?.selectedCallbackData || '')?.commandText, '/model chosen-model');
-
-    service.unset(scope, 'runtime.cursor.provider');
-    const desktopResult = await handleModelCommandRequest({ ...options, args: '', listCursorModels });
-    assert.equal(catalogReads, 1, 'returning to Desktop must not read the CLI catalog');
-    assert.match(desktopResult.response, /Desktop Bridge 接口尚未接入/u);
+    assert.equal(resolveCursorCapabilities(persisted).provider, 'tmux');
+    assert.equal(resolveCursorCapabilities(persisted).transport, 'desktop');
+    const result = await handleModelCommandRequest({
+      msg: { address: { channelType: 'feishu', chatId: binding.chatId }, text: '/model', messageId: 'model', timestamp: Date.now() },
+      args: '', currentBinding: binding, store, markdown: true,
+      listCursorModels: async () => { throw new Error('must not query CLI'); },
+    });
+    assert.match(result.response, /Desktop Bridge 接口尚未接入/u);
     assert.equal(resolveCursorInvocationModel(binding, persisted, { resuming: true }), undefined);
     assert.equal(resolveCursorRuntimeConfig(persisted, binding).reasoningEffort, undefined);
-    assert.equal(service.get('runtime.cursor.model', scope), 'chosen-model', 'stored intent is not a Desktop applied model');
+    assert.equal(service.get('runtime.cursor.model', scope), 'stored-cli-model');
   });
 
   it('uses the existing scoped /model command callbacks from bare /model', async () => {

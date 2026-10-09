@@ -6,6 +6,7 @@ import type {
   ClaudeProviderChoice,
   CodexReasoningEffort,
   CodexSandboxMode,
+  CursorTransport,
   RuntimeProviderChoice,
 } from '../domain/session.js';
 import type { ClaudePermissionMode } from './options.js';
@@ -66,7 +67,9 @@ export interface StreamChatParams {
   kimiSessionId?: string;
   kimiThinking?: boolean;
   cursorSessionId?: string;
-  cursorProvider?: 'tmux' | 'desktop';
+  cursorProvider?: 'tmux';
+  /** Internal connection selected from the bound conversation, not a provider preference. */
+  cursorTransport?: CursorTransport;
   cursorForce?: boolean;
   /** Desktop follow-up delivery. Defaults to steer; cursorForce remains a force compatibility override. */
   cursorDelivery?: 'queue' | 'steer' | 'force';

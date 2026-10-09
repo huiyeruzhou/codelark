@@ -1,27 +1,30 @@
-import type { CursorProviderChoice } from '../../domain/session.js';
+import type { CursorTransport } from '../../domain/session.js';
 
 /** Capabilities of CodeLark's integration, not everything the native Cursor UI can do. */
-export interface CursorProviderCapabilities {
-  readonly provider: CursorProviderChoice;
+export interface CursorCapabilities {
+  readonly provider: 'tmux';
+  readonly transport: CursorTransport;
   /** A CLI catalog is neither the target conversation's selection nor an authorization result. */
   readonly modelCatalog: 'cli' | 'unavailable';
   /** Applies to both model and reasoning effort. Process launch does not include TUI reuse. */
   readonly modelConfiguration: 'process-launch' | 'external';
 }
 
-const CAPABILITIES: Record<CursorProviderChoice, CursorProviderCapabilities> = {
+const CAPABILITIES: Record<CursorTransport, CursorCapabilities> = {
   desktop: Object.freeze({
-    provider: 'desktop',
+    provider: 'tmux',
+    transport: 'desktop',
     modelCatalog: 'unavailable',
     modelConfiguration: 'external',
   }),
-  tmux: Object.freeze({
+  cli: Object.freeze({
     provider: 'tmux',
+    transport: 'cli',
     modelCatalog: 'cli',
     modelConfiguration: 'process-launch',
   }),
 };
 
-export function getCursorProviderCapabilities(provider: CursorProviderChoice): CursorProviderCapabilities {
-  return CAPABILITIES[provider];
+export function getCursorCapabilities(transport: CursorTransport): CursorCapabilities {
+  return CAPABILITIES[transport];
 }

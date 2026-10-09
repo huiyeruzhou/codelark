@@ -680,7 +680,7 @@ export function streamCursorTmuxTui(params: StreamChatParams): ReadableStream<st
   });
 }
 
-export class CursorTmuxProvider implements LLMProvider {
+export class CursorCliTransport implements LLMProvider {
   streamChat(params: StreamChatParams): ReadableStream<string> {
     return streamCursorTmuxTui(params);
   }

@@ -283,6 +283,7 @@ export async function processMessage(
       kimiThinking: kimiRuntimeConfig?.thinking,
       cursorSessionId,
       cursorProvider: cursorRuntimeConfig?.provider,
+      cursorTransport: cursorRuntimeConfig?.transport,
       cursorForce: cursorRuntimeConfig?.force,
       cursorReasoningEffort: cursorRuntimeConfig?.reasoningEffort,
       zcodeSessionId,

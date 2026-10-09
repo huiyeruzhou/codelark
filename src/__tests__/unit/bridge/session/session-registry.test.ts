@@ -211,17 +211,19 @@ describe('SessionRegistryService', () => {
           cursorSessionId,
           title: 'Desktop Cursor Session',
           cwd,
-          provider: 'desktop',
+          transport: 'desktop',
         }),
       },
     });
 
     const materialized = registry.materializeCursorThread('cursor-desktop-session', '/tmp/cursor-desktop');
     assert.equal(materialized.runtime?.activeRuntime, 'cursor');
-    assert.equal(materialized.runtime?.cursor?.provider, 'desktop');
+    assert.equal(materialized.runtime?.cursor?.provider, 'tmux');
+    assert.equal(materialized.runtime?.cursor?.transport, 'desktop');
     assert.deepEqual(resolveCursorRuntimeConfig(materialized), {
       runtime: 'cursor',
-      provider: 'desktop',
+      provider: 'tmux',
+      transport: 'desktop',
       model: undefined,
       force: false,
     });
@@ -266,7 +268,7 @@ describe('SessionRegistryService', () => {
           cursorSessionId,
           title: 'Desktop Cursor Session',
           cwd,
-          provider: 'desktop',
+          transport: 'desktop',
         }),
       },
     });
@@ -274,8 +276,8 @@ describe('SessionRegistryService', () => {
     const materialized = registry.materializeCursorThread('cursor-desktop-session', '/tmp/cursor-desktop');
 
     assert.equal(materialized.id, legacy.id);
-    assert.equal(materialized.runtime?.cursor?.provider, 'desktop');
-    assert.equal(store.getSession(legacy.id)?.runtime?.cursor?.provider, 'desktop');
+    assert.equal(materialized.runtime?.cursor?.provider, 'tmux');
+    assert.equal(store.getSession(legacy.id)?.runtime?.cursor?.provider, 'tmux');
   });
 
   it('materializes, renames, and archives ZCode sessions through the registry port', () => {

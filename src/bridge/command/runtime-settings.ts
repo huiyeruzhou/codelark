@@ -54,7 +54,7 @@ import {
   CURSOR_DESKTOP_MODEL_CONTROL_NOTICE,
   parseCursorModelPickerArgs,
 } from './cursor-model-picker.js';
-import { resolveCursorCapabilities } from '../session/cursor-provider-identity.js';
+import { resolveCursorCapabilities } from '../session/cursor-transport.js';
 import {
   buildRuntimeSwitchWhileRunningResponse,
   createRuntimeSessionForChat,

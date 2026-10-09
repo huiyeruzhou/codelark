@@ -384,7 +384,7 @@ export function createUiSessionRegistry(
             cursorSessionId: session.sessionId,
             title: session.title || session.sessionId.slice(0, 8),
             cwd: session.cwd || cwd,
-            provider: session.provider,
+            transport: session.transport,
           }
           : null;
       },

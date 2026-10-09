@@ -13,7 +13,7 @@ import {
   updateBindingTarget,
 } from './registry/bindings.js';
 import { setSessionCodexTitleUpdate } from '../../domain/session-runtime.js';
-import { upgradeCursorDesktopSessionIdentity } from './cursor-provider-identity.js';
+import { upgradeCursorDesktopSessionIdentity } from './cursor-transport.js';
 import {
   getSessionActiveRuntime,
   getSessionClaudeCwd,
@@ -79,7 +79,7 @@ export interface CursorThreadRegistryPort {
     cursorSessionId: string;
     title: string;
     cwd: string;
-    provider?: 'tmux' | 'desktop';
+    transport?: 'cli' | 'desktop';
   } | null;
   archiveThread?(cursorSessionId: string, cwd: string): boolean;
 }
@@ -340,7 +340,7 @@ export class SessionRegistryService {
       return upgradeCursorDesktopSessionIdentity(
         this.store,
         existing,
-        localThread?.provider === 'desktop' ? 'desktop' : 'tmux',
+        localThread?.transport === 'desktop' ? 'desktop' : 'cli',
       );
     }
     if (!localThread) throw new Error('指定的 Cursor Agent 会话不存在。');
@@ -359,7 +359,8 @@ export class SessionRegistryService {
         cursor: {
           sessionId: localThread.cursorSessionId,
           cwd: localThread.cwd,
-          provider: localThread.provider === 'desktop' ? 'desktop' : 'tmux',
+          provider: 'tmux',
+          transport: localThread.transport === 'desktop' ? 'desktop' : 'cli',
         },
         general: { workingDirectory: localThread.cwd },
       },

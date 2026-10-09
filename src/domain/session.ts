@@ -8,7 +8,8 @@ export type ZcodeMode = 'build' | 'edit' | 'plan' | 'yolo';
 export type RuntimeProviderChoice = 'sdk' | 'pty' | 'tmux';
 export type ClaudeProviderChoice = RuntimeProviderChoice;
 export type KimiProviderChoice = 'tmux';
-export type CursorProviderChoice = 'tmux' | 'desktop';
+export type CursorProviderChoice = 'tmux';
+export type CursorTransport = 'cli' | 'desktop';
 export type ZcodeProviderChoice = 'tmux';
 export type RuntimeAgent = 'codex' | 'claude' | 'kimi' | 'cursor' | 'zcode';
 export type RuntimeProviderIdentity =
@@ -177,7 +178,9 @@ export interface BridgeSessionCursorRuntimeState {
   sessionId?: string;
   cwd?: string;
   model?: string;
-  provider?: CursorProviderChoice;
+  /** `desktop` is accepted only when reading legacy session state. */
+  provider?: CursorProviderChoice | 'desktop';
+  transport?: CursorTransport;
   force?: boolean;
   reasoningEffort?: CursorReasoningEffort;
 }

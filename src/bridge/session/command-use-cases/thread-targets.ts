@@ -27,7 +27,7 @@ import {
 import { readConfiguredCodexModel } from '../../../runtime/codex/models.js';
 import type { RuntimeAgent } from '../../../domain/session.js';
 import { recordBindingChange, type BindingChangeAction } from '../binding-audit.js';
-import { upgradeCursorDesktopSessionIdentity } from '../cursor-provider-identity.js';
+import { upgradeCursorDesktopSessionIdentity } from '../cursor-transport.js';
 import {
   MAX_LOCAL_SESSION_LIST_LIMIT,
   parseListIndex,
@@ -206,7 +206,7 @@ export function createCommandSessionRegistry(store: BridgeStore): SessionRegistr
             cursorSessionId: thread.threadId,
             title: thread.title,
             cwd: thread.cwd,
-            provider: thread.source === 'cursor-desktop' ? 'desktop' : 'tmux',
+            transport: thread.source === 'cursor-desktop' ? 'desktop' : 'cli',
           }
           : null;
       },
@@ -356,7 +356,7 @@ function materializeCursorThread(store: BridgeStore, thread: LocalRuntimeSession
     return upgradeCursorDesktopSessionIdentity(
       store,
       existing,
-      thread.source === 'cursor-desktop' ? 'desktop' : 'tmux',
+      thread.source === 'cursor-desktop' ? 'desktop' : 'cli',
     );
   }
   const session = store.createSession(
@@ -372,7 +372,8 @@ function materializeCursorThread(store: BridgeStore, thread: LocalRuntimeSession
     { runtime: { cursor: {
       sessionId: thread.threadId,
       cwd: thread.cwd,
-      provider: thread.source === 'cursor-desktop' ? 'desktop' : 'tmux',
+      provider: 'tmux',
+      transport: thread.source === 'cursor-desktop' ? 'desktop' : 'cli',
     } } },
   ));
   return store.getSession(session.id) || session;
