@@ -101,13 +101,14 @@ export function readMirrorDeliverableRecords(
     // already-delivered turn can therefore disappear or change across a
     // Bridge restart, and turn-id recovery alone may return that old turn plus
     // every later record.  The persisted delivery watermark is the durable
-    // lower bound: on every Cursor full recovery, never recreate cards for
-    // records at or before it.
+    // lower bound on recovery. A stable native revision ledger with a matching
+    // cursor already deduplicates by identity: its late results/terminal may
+    // legitimately predate the last IM delivery and must not be discarded.
     const recoveryCandidates = !previousCursor.initialized && subscription.lastDeliveredAt
       ? fullDelta.records
       : delta.deliverableRecords;
     const initialRecoveryRecords = subscription.lastDeliveredAt
-      && (!previousCursor.initialized || source.runtime === 'cursor')
+      && (!previousCursor.initialized || (source.runtime === 'cursor' && (!fullDelta.revisionLedger || delta.reset)))
       ? recoveryCandidates.filter((record) => (
           Boolean(record.timestamp) && record.timestamp > subscription.lastDeliveredAt!
         ))

@@ -4,7 +4,7 @@
 
 Cursor Agent CLI 会话由 CodeLark 在 provider-owned tmux session 中运行官方 `agent` TUI。tmux 负责进程生命周期和输入；Cursor 自己在后台写入 chat metadata 与 transcript JSONL，CodeLark 从 transcript 读取结构化输出，不解析终端屏幕的 ANSI/局部重绘。
 
-Cursor Desktop 已有对话同样使用 `cursor:tmux`，内部传输方式为 `desktop`：CodeLark 只通过 Cursor 自带 Desktop Bridge 向同一条可见对话提交输入，并从同一 transcript 读取输出。一个 Bridge session 固定绑定一个 Cursor chat UUID、cwd 和来源 transport；不处理 TUI 内 `/new`、`/fork`、`/resume` 导致的 chat ID 变化。
+Cursor Desktop 已有对话同样使用 `cursor:tmux`，内部传输方式为 `desktop`：CodeLark 只通过 Cursor 自带 Desktop Bridge 向同一条可见对话提交输入，从同一对话的原生 SQLite bubbles 读取输出，并通过 Desktop Bridge 实时状态确认终态；旧版本原生库不可读时才使用 transcript。一个 Bridge session 固定绑定一个 Cursor chat UUID、cwd 和来源 transport；不处理 TUI 内 `/new`、`/fork`、`/resume` 导致的 chat ID 变化。
 
 ## 官方证据
 
@@ -61,9 +61,17 @@ Cursor Desktop 的会话目录与 Cursor Agent CLI 并不完全重合。Desktop 
 
 CodeLark 把这些行归一化为公共 message/tool/task mirror record 和 SSE 事件。Cursor 会用原子替换重写 transcript snapshot，因此 mirror watch transcript 所在目录而不是文件 inode；否则第一次 replace 后 watcher 可能失效，只能等 hot 2.5 秒或 cold 60 秒轮询兜底。官方 writer 还会在 assistant 回答后写入仅包含 `<|eos|>` 的内部边界块，并可能在同一 turn 先写一份 assistant state、稍后再写内容不同的最终 revision；后一个 revision 不是新的回答。对 `2026.07.23-e383d2b` 真实样本的 `store.db` 取证表明，同一 assistant message 具有 `reasoning` 与 `text` 两个 block：前者的签名载荷明确是 OpenAI `summary_text`，后者标记为 `openaiPhase=final_answer`。transcript writer 会丢失 block 类型，把正文放在前面、加粗的 thinking summary 放在后面并用空行连接；正文与 summary 都可能在下一版 snapshot 中同时改写。parser 优先比较相邻 revision 的最后一个空行边界；如果只有一版带摘要，或下一版同时改写正文并移除摘要，则只在 `turn_ended` 前后用当前 chat 的 `store.db` 核验独立 text/reasoning blocks，并要求重新扁平化后与 transcript snapshot 精确相等。核验成功后恢复 `reasoningKind=summary`，同时给正文 revision 分配稳定 `replacementKey`；没有结构化证据时不把任意末尾粗体正文猜成摘要。direct provider 通过通用 `history_item` 交付 `thinking_summary`，mirror turn 使用同一中间语义；公共历史 renderer 把它作为弱化引用插在最终回答之前，不混入正文，也不占外层卡片标题。不能匹配 `Responding...` 等具体文案，也不能让 Feishu renderer 解析 Cursor 私有文本。真实 TUI 取样表明 Cursor 完成态不显示该 summary，等待期只显示淡化的 `Working`；CodeLark 保留摘要属于自身的可观察性设计，而不是复刻一个并不存在的 Cursor title。
 
-Cursor 不调用名为 `completed` 的工具结束一轮。assistant message 后由客户端独立追加 `{"type":"turn_ended","status":"success"}`；失败或中断也由该 terminal record 的状态表达。CodeLark 必须以 `turn_ended` 驱动终态，不能用工具名、正文停止增长或 TUI 光标位置猜测完成。同一读取批次只保留最新版正文，跨增量批次则把后续 revision 作为替换事件继续交付。多轮时 Cursor 还会重写整份 transcript、删除上一轮位于 EOF 的 `turn_ended`；旧 byte offset 可能因此落入新 user JSON 中部。增量 parser 跳过残行后若先看到完整 assistant row，必须以它建立隐式 turn 并恢复正文，不能只交付后面的成功终态。多轮后的最终 transcript snapshot 可能只保留文件末尾一个 `turn_ended`；测试应以 user/归一化后的可见 assistant record 确认轮次，以文件末尾终态确认整体完成，不能把物理 assistant/终态行数当成轮数。
+Cursor 不调用名为 `completed` 的工具结束一轮。assistant message 后由客户端独立追加 `{"type":"turn_ended","status":"success"}`；失败或中断也由该 terminal record 的状态表达。CLI 与旧版 transcript 路径必须以 `turn_ended` 驱动终态，不能用工具名、正文停止增长或 TUI 光标位置猜测完成。同一读取批次只保留最新版正文，跨增量批次则把后续 revision 作为替换事件继续交付。多轮时 Cursor 还会重写整份 transcript、删除上一轮位于 EOF 的 `turn_ended`；旧 byte offset 可能因此落入新 user JSON 中部。增量 parser 跳过残行后若先看到完整 assistant row，必须以它建立隐式 turn 并恢复正文，不能只交付后面的成功终态。多轮后的最终 transcript snapshot 可能只保留文件末尾一个 `turn_ended`；测试应以 user/归一化后的可见 assistant record 确认轮次，以文件末尾终态确认整体完成，不能把物理 assistant/终态行数当成轮数。
 
 Cursor 后台活动还可能连续写入只有 `<timestamp>…</timestamp>` 的 `user` 行。只有时间戳、空白或 `<|eos|>` 的纯文本行不代表新的用户输入，parser 在改动回合及 occurrence 状态之前忽略它们，避免空卡泛洪及打断当前工具/回答；同一规则用于完整 snapshot 和增量读取。含真实正文、`user_query`、图片或其他非文本 block 的 user 行仍建立新回合，相同的真实提问也仍保留各自的 occurrence。
+
+### Desktop 原生输出与实时生命周期
+
+Desktop direct 与 mirror 共用 `CursorDesktopSessionSource`：读取 `globalStorage/state.vscdb` 的 `cursorDiskKV`，以 user bubble 建立 turn，以 tool bubble ID 关联开始和真实结果。SQLite 主文件和 WAL 均参与变更检测；内存 revision ledger 将原地更新的迟到结果追加到上次读取位置之后，已初始化且签名仍可匹配时不再用消息发送时间水位过滤它。进程重启仍用持久化水位抑制历史重放。Read/Grep 已被 Cursor 清理的正文只说明“未保留完整原始输出”，不重读现在的文件伪造历史结果。
+
+**持久化 `composer.status` 不能决定当前回合结束。** 2026-10-09 真实取证中，root 仍为旧 `aborted`、时间停在用户提交时，但工具持续新增，标准 v1 `listThreads` 返回 `running`。direct 与 mirror 在读取前刷新同一 thread 的实时状态，只有 `completed` / `error` 连续两次且该对话内容不变时才收尾；`running`、等待输入的 `idle`、`unknown` 或查询失败都保留当前回合。状态观察绑定查询前的对话内容，查询中新增用户/工具使旧终态失效；其他对话写同一库不会阻塞本线程收尾。mirror 即使文件字节未变化也检查实时状态。每个 turn 的终态签名固定，已确认关闭的历史修订不重开卡片。
+
+同一 turn 反复创建消息与同一卡片整卡重绘是两个独立问题。Feishu history renderer 现在为工具详情提供稳定 element ID；工具完成只更新标题、边框和正文，新工具追加到已有组，局部请求不写 `expanded` 或替换已有 children。正常连续工具调用不再触发整卡更新；组件能力缺失、结构不兼容、失败或超预算仍沿用既有整卡恢复/continuation。
 
 ## 模型配置与实际生效边界
 
@@ -114,9 +122,9 @@ Cursor 对外只有一个 provider：`tmux`，identity 固定为 `cursor:tmux`�
 1. `/t` 从 Desktop conversation index 识别出的会话写入 `provider=tmux, transport=desktop`，保留原 thread UUID。读取旧 `provider=desktop` 时按 Desktop transport 兼容，启动或再次选择时迁移为新结构；没有 Desktop thread id 的 fresh session 使用 CLI transport。
 2. 发送前读取 `~/.cursor/desktop-bridge/*.json`，验证目录/文件仅当前用户可读、协议版本、live PID、Unix socket 和 64 位 hex token，再通过 Bearer 鉴权向 `/` 提交 `listThreads`。目标必须是 live 列表中的精确 thread id。
 3. 输入使用 `sendMessage` 单次提交，不受 CLI 的 `--force` 权限设置影响。默认 `auto` 在无补丁 v1 使用原生 queue，在增强 v2+ 请求 `delivery=steer`；因此普通消息无需修改 Cursor.app。显式 steer 遇到 v1 在发送前报错。运行中追加绕过本地轮次排队、复用原输出 observer；增强尝试将该消息的 queue item 提升为 steer。返回 `submitted`、`queued` 或 `steered` 时按实际语义处理，steer 降为 queued 必须显示原因，不重发。无 discovery、stale PID、目标 thread 不存在、不可发送、HTTP 错误或超时都明确失败，绝不改走 CLI/ACP。
-4. provider 在提交前同时记录 transcript EOF，并订阅按 Cursor logs root 共享的异步 hook tailer。tailer 用递归 `fs.watch` 唤醒一次串行异步 reconcile，并保留低频异步 fallback 防止平台漏报、合并事件或 log rotation；它只维护一份文件 offset、半包尾部和内存事件 ring，不随并发 turn 重复扫描。`afterAgentThought.text` 作为弱化引用逐条进入正文历史；超过 2000 字符时完整放入默认收起的思考面板，不截断内容。footer 只保留简短的“正在思考”，并用 thought hook 的真实 reasoning model variant 更新模型；`preToolUse` / `postToolUse` 以 Cursor 原生 `tool_use_id` 更新同一个工具块的开始与结果。工具 hook 的 base model 不回退卡片模型，`beforeShellExecution` / `afterShellExecution` 也不生成会抢在工具块前面的泛化 footer。其他 conversation 和 baseline 之前的历史都不会发出。
+4. 原生库可读时采用上述共享 source；以下 hooks/transcript 行为仅为旧版兼容路径。provider 在提交前同时记录 transcript EOF，并订阅按 Cursor logs root 共享的异步 hook tailer。tailer 用递归 `fs.watch` 唤醒一次串行异步 reconcile，并保留低频异步 fallback 防止平台漏报、合并事件或 log rotation；它只维护一份文件 offset、半包尾部和内存事件 ring，不随并发 turn 重复扫描。`afterAgentThought.text` 作为弱化引用逐条进入正文历史；超过 2000 字符时完整放入默认收起的思考面板，不截断内容。footer 只保留简短的“正在思考”，并用 thought hook 的真实 reasoning model variant 更新模型；`preToolUse` / `postToolUse` 以 Cursor 原生 `tool_use_id` 更新同一个工具块的开始与结果。工具 hook 的 base model 不回退卡片模型，`beforeShellExecution` / `afterShellExecution` 也不生成会抢在工具块前面的泛化 footer。其他 conversation 和 baseline 之前的历史都不会发出。
 5. provider 同时从发送前 transcript EOF 续读回答正文与终态。`queued` 时上一轮可能先产出 hooks、assistant 和 `turn_ended`，因此在本次新 turn 被 transcript 识别前丢弃这些旧 hook；旧 turn 终态不能结束本轮。hook 工具以名称和输入关联 transcript 的合成 ID，最终 transcript 结果只更新已有工具，不新建重复项。
-6. Desktop Bridge status 负责后端生命周期，hooks 负责实时思考/工具过程，transcript 负责正文与 `turn_ended`。`/stop` 及 Stop 按钮通过 v3 `stopThread` 调用已绑定 agent 的原生 `abortChatAndWait()`，并持有引用直到请求完成，不依赖本地 active task，也不向物理 tmux 发按键。确认只表示 `interrupt-requested`；observer 保持读取，终态仍以原生事件/transcript 为准。v1/v2 不支持 Stop 时明确报错，不能将本地 abort 描述为后端停止。修正后的 v4 事件提供 snapshot/finish/stop/error 信号；v2/v3 的事件 action 跨 await 使用失效访问器，默认不再调用，仍由 hooks/transcript 收取输出。
+6. 原生路径由 Desktop Bridge status 负责后端生命周期，SQLite bubbles 负责思考、正文与工具结果；兼容路径由 hooks 负责实时过程、transcript 负责正文与 `turn_ended`。`/stop` 及 Stop 按钮通过 v3 `stopThread` 调用已绑定 agent 的原生 `abortChatAndWait()`，并持有引用直到请求完成，不依赖本地 active task，也不向物理 tmux 发按键。确认只表示 `interrupt-requested`；observer 保持读取，终态仍以原生事件/transcript 为准。v1/v2 不支持 Stop 时明确报错，不能将本地 abort 描述为后端停止。修正后的 v4 事件提供 snapshot/finish/stop/error 信号；v2/v3 的事件 action 跨 await 使用失效访问器，默认不再调用，仍由 hooks/transcript 收取输出。
 
 Cursor 的 Beta 设置必须启用 `Allow CLI to access desktop agents`。该能力由 Cursor 自己的版本/账号 feature gate 控制；开关不存在时 CodeLark 不能代替 Cursor 开启，只能保持显式不可用。
 

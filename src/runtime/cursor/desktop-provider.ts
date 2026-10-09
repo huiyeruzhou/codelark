@@ -304,6 +304,7 @@ async function pollDesktopTranscript(
     }
     if (snapshot) previousSnapshot = snapshot;
     const previousOffset = context.nextOffset;
+    await nativeSource?.refresh(cursorSessionId);
     const nativeSnapshot = nativeSource?.read(cursorSessionId);
     if (nativeSource && !nativeSnapshot) throw new Error('Cursor Desktop 原生会话暂不可读；保留现有工具结果，等待重试。');
     const delta = nativeSnapshot ? {

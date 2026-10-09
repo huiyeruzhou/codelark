@@ -112,6 +112,10 @@ snapshotStreamingDesiredState(state)
 - `cardElement.patch`：局部 patch 元素。
 - `cardElement.content`：更新单个元素内容，常见目标是 `streaming_content`、`streaming_tasks`、`streaming_status`。
 
+工具组支持稳定的子元素更新：工具详情使用独立 ID，结果变化通过 `cardElement.content` 更新；标题和边框通过仅含 `header` / `border` 的 patch 更新，新工具追加到原有组。此类 patch 不写 `expanded`、不替换 `elements`，且每个成功操作提交对应的中间 shadow，避免部分成功后重复追加。正常工具变化不走小卡整卡刷新规则；不兼容结构或缺少 element patch 能力时仍回退 full refresh。
+
+工具组的追加和 patch 使用独立 `cardElement.create` / `cardElement.patch` 顺序执行，不合入 batch。2026-10-09 隔离群实测 batch 返回成功后，新工具正文的后续 content 请求仍报 `300313 not find elementID`；不能把 batch 成功当成新子元素已可更新的证据。
+
 需要观察：
 
 - 按 target 分组的耗时：`streaming_content`、`streaming_tasks`、`streaming_status`、tool/history element。
@@ -247,7 +251,7 @@ Remote shadow 不是从飞书客户端反查出来的真实 DOM，而是 CodeLar
 - `cardElement.content` 成功后，只更新对应 element 的 rendered 内容。
 - `cardElement.create` / `patch` / `card.batchUpdate` 成功后，更新对应 history/tool element 的快照。
 - `card.update` full refresh 成功后，用完整 desired render 覆盖 shadow。
-- 慢 batch 或 patch 成功后，`shadowTrust` 会降级为 `weak`，下一轮优先整卡校正。
+- 慢 batch 或一般 patch 成功后，`shadowTrust` 会降级为 `weak`，下一轮优先整卡校正。上述不改动子元素及展开状态的工具标题/边框 patch 保持可信；失败和超时仍使 shadow 失效。
 - 失败或 timeout 会把 shadow 视为不可信，后续投递倾向 full refresh。
 
 这层 shadow 的价值是抑制重复投递：如果 desired snapshot 和 shadow 已一致，planner 直接返回 `noop`。

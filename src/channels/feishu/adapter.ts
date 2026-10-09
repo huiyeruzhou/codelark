@@ -241,6 +241,8 @@ interface StreamingHistoryAppendOperation {
   partialElement?: Record<string, unknown>;
   snapshot?: string;
   eventCount?: number;
+  historyElementId?: string;
+  preservesPanelState?: boolean;
 }
 
 interface StreamingHistoryAppendPlan {
@@ -280,6 +282,7 @@ interface StreamingUpdateOperation {
   partialElement?: Record<string, unknown>;
   snapshot?: string;
   eventCount?: number;
+  preservesPanelState?: boolean;
   onSuccess: () => void;
 }
 
@@ -1563,9 +1566,75 @@ function isToolPanelElementId(elementId: string): boolean {
   return /^stream_tool(?:_panel)?_\d+$/.test(elementId);
 }
 
+/** Only patch panel decoration and markdown contents. Never send `expanded`
+ * or replace an existing panel's children, so an open tool stays open. Each
+ * operation records its own intermediate shadow for retries after partial success.
+ */
+function buildToolPanelUpdateOperations(
+  previousJson: string,
+  desired: Record<string, any>,
+  snapshot?: string,
+): StreamingHistoryAppendOperation[] | null {
+  const current = JSON.parse(previousJson) as Record<string, any>;
+  const operations: StreamingHistoryAppendOperation[] = [];
+  const same = (left: unknown, right: unknown) => JSON.stringify(left) === JSON.stringify(right);
+  const omit = (element: Record<string, any>, keys: string[]) => Object.fromEntries(Object.entries(element).filter(([key]) => !keys.includes(key)));
+  const groupId = desired.element_id as string;
+  const push = (operation: Omit<StreamingHistoryAppendOperation, 'elementJson'>) => {
+    operations.push({ ...operation, historyElementId: groupId, preservesPanelState: true,
+      elementJson: JSON.stringify(current), eventCount: current.elements.length });
+  };
+  const patchDecoration = (before: Record<string, any>, after: Record<string, any>) => {
+    if (!same(omit(before, ['header', 'border', 'elements']), omit(after, ['header', 'border', 'elements']))) return false;
+    const partialElement: Record<string, unknown> = {};
+    for (const key of ['header', 'border']) {
+      if (same(before[key], after[key])) continue;
+      if (!(key in after)) return false; // Deletion needs an explicit schema-aware operation.
+      partialElement[key] = after[key];
+    }
+    if (Object.keys(partialElement).length) {
+      Object.assign(before, partialElement);
+      push({ kind: 'patch', elementId: before.element_id, targetElementId: before.element_id,
+        element: after, partialElement });
+    }
+    return true;
+  };
+  if (current.tag !== 'collapsible_panel' || desired.tag !== current.tag
+    || !Array.isArray(current.elements) || !Array.isArray(desired.elements)
+    || current.elements.length > desired.elements.length) return null;
+  if (!patchDecoration(current, desired)) return null;
+  for (let i = 0; i < desired.elements.length; i++) {
+    const after = desired.elements[i];
+    const before = current.elements[i];
+    if (!after?.element_id || after.tag !== 'collapsible_panel') return null;
+    if (!before) {
+      current.elements.push(after);
+      push({ kind: 'create', elementId: after.element_id, targetElementId: groupId, element: after });
+      continue;
+    }
+    if (before.element_id !== after.element_id || !Array.isArray(before.elements)
+      || !Array.isArray(after.elements) || before.elements.length !== after.elements.length) return null;
+    if (!patchDecoration(before, after)) return null;
+    for (let j = 0; j < after.elements.length; j++) {
+      const previousDetail = before.elements[j];
+      const detail = after.elements[j];
+      if (!detail?.element_id || detail.tag !== 'markdown'
+        || !same(omit(previousDetail, ['content']), omit(detail, ['content']))) return null;
+      if (same(previousDetail, detail)) continue;
+      before.elements[j] = detail;
+      push({ kind: 'content', elementId: detail.element_id, targetElementId: detail.element_id,
+        element: detail, content: detail.content });
+    }
+  }
+  if (!same(current, desired)) return null;
+  if (operations.length && snapshot) operations.at(-1)!.snapshot = snapshot;
+  return operations;
+}
+
 function buildStreamingHistoryAppendOperations(
   state: FeishuCardState,
   desired: StreamingHistoryRenderState,
+  canPatchPanels: boolean,
 ): StreamingHistoryAppendPlan {
   const operations: StreamingHistoryAppendOperation[] = [];
   const existingIds = state.renderedHistoryElementIds;
@@ -1592,6 +1661,7 @@ function buildStreamingHistoryAppendOperations(
         elementJson,
         ...(snapshot ? { snapshot } : {}),
         ...(eventCount ? { eventCount } : {}),
+        ...(isToolPanelElementId(elementId) ? { preservesPanelState: true } : {}),
       });
       continue;
     }
@@ -1614,7 +1684,11 @@ function buildStreamingHistoryAppendOperations(
       return { operations: [], requiresFullRefresh: true };
     }
 
-    return { operations: [], requiresFullRefresh: true };
+    const panelUpdates = canPatchPanels
+      ? buildToolPanelUpdateOperations(state.renderedHistoryElementJson[elementId]!, element, desired.toolSnapshots[elementId])
+      : null;
+    if (!panelUpdates) return { operations: [], requiresFullRefresh: true };
+    operations.push(...panelUpdates);
   }
   return { operations, requiresFullRefresh: false };
 }
@@ -4183,7 +4257,7 @@ export class FeishuAdapter extends BaseChannelAdapter {
     const desiredHistory = desiredRender.history;
     const historySignature = desiredRender.historySignature;
     const historyAppendPlan = state.historyDriven
-      ? buildStreamingHistoryAppendOperations(state, desiredHistory)
+      ? buildStreamingHistoryAppendOperations(state, desiredHistory, typeof (this.restClient as any)?.cardkit?.v1?.cardElement?.patch === 'function')
       : { operations: [], requiresFullRefresh: false };
     const toolAppendPlan = state.historyDriven
       ? { operations: [], requiresFullRefresh: false }
@@ -4255,21 +4329,22 @@ export class FeishuAdapter extends BaseChannelAdapter {
         partialElement: operation.partialElement,
         snapshot: operation.snapshot,
         eventCount: operation.eventCount,
+        preservesPanelState: operation.preservesPanelState,
         onSuccess: () => {
           if (!state.renderedHistoryElementIds.includes(operation.elementId) && operation.targetElementId === 'stream_history') {
             state.renderedHistoryElementIds.push(operation.elementId);
           }
-          const historyElementId = operation.targetElementId === 'stream_history'
+          const historyElementId = operation.historyElementId || (operation.targetElementId === 'stream_history'
             ? operation.elementId
             : operation.kind === 'content'
               ? operation.elementId
               : operation.kind === 'patch'
                 ? operation.elementId
-                : operation.targetElementId;
+                : operation.targetElementId);
           if (historyElementId) {
             state.renderedHistoryElementJson[historyElementId] = operation.elementJson;
           }
-          const toolElementId = operation.targetElementId === 'stream_history' ? operation.elementId : operation.targetElementId;
+          const toolElementId = operation.historyElementId || (operation.targetElementId === 'stream_history' ? operation.elementId : operation.targetElementId);
           if (toolElementId && operation.snapshot) {
             state.renderedToolSnapshots[toolElementId] = operation.snapshot;
           }
@@ -4313,7 +4388,8 @@ export class FeishuAdapter extends BaseChannelAdapter {
     const hasBatchUpdateCandidate = streamingUpdatesHaveBatchUpdateCandidate(updates);
     const directRefreshRule = containsUserTextUpdate
       ? 'user_text'
-      : hasBatchUpdateCandidate && desiredRender.render.componentCount <= STREAMING_CARD_DIRECT_REFRESH_COMPONENT_THRESHOLD
+      : hasBatchUpdateCandidate && !updates.some((update) => update.preservesPanelState)
+        && desiredRender.render.componentCount <= STREAMING_CARD_DIRECT_REFRESH_COMPONENT_THRESHOLD
         ? 'small_card'
         : null;
     if (directRefreshRule) {
@@ -4334,7 +4410,7 @@ export class FeishuAdapter extends BaseChannelAdapter {
       actions: updates,
       desiredHistory,
       historySignature,
-      trustAfterSuccess: updates.some((update) => update.kind === 'patch') ? 'weak' : 'trusted',
+      trustAfterSuccess: updates.some((update) => update.kind === 'patch' && !update.preservesPanelState) ? 'weak' : 'trusted',
       diagnostics: diagnosticsFor(updates),
     };
   }
@@ -4497,10 +4573,13 @@ export class FeishuAdapter extends BaseChannelAdapter {
       state.sequence++;
       try {
         const batchableUpdates: typeof updates = [];
-        if (update.kind === 'create' || update.kind === 'patch') {
+        // CardKit batch add_elements can acknowledge a nested panel before its
+        // children are addressable (real API: 300313 on the following content
+        // update). Tool operations use the explicit element endpoints in order.
+        if (!update.preservesPanelState && (update.kind === 'create' || update.kind === 'patch')) {
           for (let batchIndex = index; batchIndex < updates.length; batchIndex += 1) {
             const item = updates[batchIndex]!;
-            if (item.kind !== 'create' && item.kind !== 'patch') break;
+            if (item.preservesPanelState || (item.kind !== 'create' && item.kind !== 'patch')) break;
             batchableUpdates.push(item);
           }
         }
@@ -4551,7 +4630,7 @@ export class FeishuAdapter extends BaseChannelAdapter {
             state.renderedComponentCount += countStreamingUpdateComponentDelta(item);
           }
           this.markCardFlushSuccess(state);
-          const hasHighRiskAction = batchableUpdates.some((item) => item.kind === 'patch');
+          const hasHighRiskAction = batchableUpdates.some((item) => item.kind === 'patch' && !item.preservesPanelState);
           state.shadowTrust = batchDurationMs >= CARD_SLOW_BATCH_REFRESH_THRESHOLD_MS || hasHighRiskAction
             ? 'weak'
             : plan.trustAfterSuccess;
@@ -4695,7 +4774,7 @@ export class FeishuAdapter extends BaseChannelAdapter {
         update.onSuccess();
         state.renderedComponentCount += countStreamingUpdateComponentDelta(update);
         this.markCardFlushSuccess(state);
-        state.shadowTrust = update.kind === 'patch' ? 'weak' : 'trusted';
+        state.shadowTrust = update.kind === 'patch' && !update.preservesPanelState ? 'weak' : 'trusted';
         if (index >= updates.length - 1) {
           state.shadowRevision = plan.snapshot.revision;
         }
