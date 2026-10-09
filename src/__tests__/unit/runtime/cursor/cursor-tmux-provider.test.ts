@@ -32,6 +32,7 @@ import {
 import { tmuxCore } from '../../../../bridge/tmux/core.js';
 import { createMirrorSubscription } from '../../../../bridge/mirror/subscription-state.js';
 import { readMirrorDeliverableRecords } from '../../../../bridge/mirror/reconcile-core.js';
+import { consumeMirrorRecords } from '../../../../bridge/mirror/turns.js';
 
 describe('Cursor tmux provider helpers', () => {
   let root: string;
@@ -361,6 +362,86 @@ describe('Cursor tmux provider helpers', () => {
       'tool identity must survive transcript chunk boundaries',
     );
     assert.equal(second.nextTurnId, null);
+  });
+
+  it('ignores timestamp-only Cursor user rows between completed turns without dropping task results', () => {
+    const timestamp = '<timestamp>Friday, Oct 9, 2026, 1:44 PM (UTC+8)</timestamp>';
+    const user = (text: string) => ({ role: 'user', message: { content: [{ type: 'text', text }] } });
+    const assistant = (text: string) => ({ role: 'assistant', message: { content: [{ type: 'text', text }] } });
+    const terminal = { type: 'turn_ended', status: 'success' };
+    const meaningful = [
+      user('run a background task'), assistant('task started'), terminal,
+      user(`${timestamp}\n<user_query>Briefly inform the user about the task result.</user_query>`),
+      assistant('Background task completed successfully.'), terminal,
+    ];
+    const encode = (lines: unknown[]) => lines.map((line) => JSON.stringify(line)).join('\n') + '\n';
+    const noisy = [...meaningful.slice(0, 3), ...Array.from({ length: 6 }, () => user(timestamp)), ...meaningful.slice(3)];
+
+    assert.deepEqual(parseCursorTranscriptRecords(encode(noisy)), parseCursorTranscriptRecords(encode(meaningful)));
+    assert.deepEqual(parseCursorTranscriptRecords(encode(noisy.slice(3, 9))), []);
+    const subscription = { sessionId: 'metadata-flood', threadId: 'cursor-thread', pendingTurn: null };
+    let started = 0;
+    const turns = consumeMirrorRecords(subscription, parseCursorTranscriptRecords(encode(noisy)), {
+      onTurnStarted: () => { started += 1; },
+    });
+    assert.equal(started, 2, 'only meaningful turns may open streaming cards');
+    assert.deepEqual(turns.map((turn) => [turn.status, turn.text]), [
+      ['completed', 'task started'], ['completed', 'Background task completed successfully.'],
+    ]);
+  });
+
+  it('preserves an active Cursor turn, tool identity and assistant snapshot across metadata-only deltas', () => {
+    const transcript = path.join(root, 'cursor-metadata-only-deltas.jsonl');
+    const encode = (lines: unknown[]) => lines.map((line) => JSON.stringify(line)).join('\n') + '\n';
+    const firstText = encode([
+      { role: 'user', message: { content: [{ type: 'text', text: 'inspect' }] } },
+      { role: 'assistant', message: { content: [
+        { type: 'tool_use', name: 'Read', input: { path: 'README.md' } },
+        { type: 'text', text: 'reading' },
+      ] } },
+    ]);
+    const metadataText = encode(Array.from({ length: 6 }, () => ({
+      role: 'user', message: { content: [
+        { type: 'text', text: ' \n<timestamp>Friday, Oct 9, 2026, 1:44 PM (UTC+8)</timestamp>\n ' },
+        { type: 'text', text: '<|eos|>' },
+      ] },
+    })));
+    const finalText = encode([
+      { role: 'tool', message: { content: [{ type: 'text', text: JSON.stringify({ tool_name: 'Read', tool_result: 'file contents' }) }] } },
+      { role: 'assistant', message: { content: [{ type: 'text', text: 'reading complete' }] } },
+      { type: 'turn_ended', status: 'success' },
+    ]);
+    fs.writeFileSync(transcript, firstText + metadataText + finalText);
+    const first = readCursorSessionMirrorRecordDeltaByFilePath(transcript, 0, Buffer.byteLength(firstText), '', null, []);
+    const metadata = readCursorSessionMirrorRecordDeltaByFilePath(
+      transcript, first.nextOffset, Buffer.byteLength(firstText + metadataText),
+      first.trailingText, first.nextTurnId, first.nextSpecialCallIds,
+    );
+    assert.deepEqual(metadata.records, []);
+    assert.equal(metadata.nextTurnId, first.nextTurnId);
+    assert.deepEqual(metadata.nextSpecialCallIds, first.nextSpecialCallIds);
+    const final = readCursorSessionMirrorRecordDeltaByFilePath(
+      transcript, metadata.nextOffset, fs.statSync(transcript).size,
+      metadata.trailingText, metadata.nextTurnId, metadata.nextSpecialCallIds,
+    );
+    assert.equal(first.records.find((record) => record.type === 'tool_started')?.toolId,
+      final.records.find((record) => record.type === 'tool_finished')?.toolId);
+    assert.ok(final.records.every((record) => record.turnId === first.nextTurnId));
+    assert.equal(final.nextTurnId, null);
+    assert.deepEqual(parseCursorTranscriptRecords(firstText + metadataText + finalText),
+      parseCursorTranscriptRecords(firstText + finalText));
+  });
+
+  it('keeps mixed timestamp text and image-only user input as real Cursor turn boundaries', () => {
+    const timestamp = '<timestamp>Friday, Oct 9, 2026, 1:44 PM (UTC+8)</timestamp>';
+    const rows = [
+      [{ type: 'text', text: `${timestamp}\nExplain this result` }],
+      [{ type: 'text', text: timestamp }, { type: 'text', text: '<user_query>retry</user_query>' }],
+      [{ type: 'text', text: timestamp }, { type: 'image', source: { type: 'base64', data: 'fixture' } }],
+      [{ type: 'image', source: { type: 'base64', data: 'fixture' } }],
+    ];
+    const raw = rows.map((content) => JSON.stringify({ role: 'user', message: { content } })).join('\n') + '\n';
+    assert.equal(parseCursorTranscriptRecords(raw).filter((record) => record.type === 'task_started').length, rows.length);
   });
 
   it('keeps identical assistant text from separate user turns without intermediate terminals', () => {
