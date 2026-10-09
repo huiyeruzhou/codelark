@@ -228,6 +228,7 @@ describe('interactive-turn sdk-conversation-engine tool expansion', () => {
               role: 'thinking',
               variant: 'thinking_summary',
               content: 'Responding with concise greeting',
+              collapseTitle: '💭 Cursor 思考 · 展开查看',
             }));
             controller.enqueue(sseEvent(
               'text_snapshot',
@@ -274,6 +275,7 @@ describe('interactive-turn sdk-conversation-engine tool expansion', () => {
       role: 'thinking',
       variant: 'thinking_summary',
       content: 'Responding with concise greeting',
+      collapseTitle: '💭 Cursor 思考 · 展开查看',
     }]);
     assert.equal(result.responseText, 'Hey! What would you like to work on in this repo?');
     assert.doesNotMatch(result.responseText, /Responding with concise greeting/);

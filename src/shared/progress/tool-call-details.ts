@@ -44,7 +44,25 @@ function normalizeToolName(name: string | undefined): string {
 }
 
 function isExecTool(name: string | undefined): boolean {
-  return /^(bash|shell_command|exec_command)$/.test(normalizeToolName(name));
+  return /^(bash|shell|shell_command|exec_command)$/.test(normalizeToolName(name));
+}
+
+function mcpToolParts(name: string | undefined): { server?: string; tool: string } | null {
+  const raw = (name || '').trim();
+  const normalized = raw.toLowerCase();
+  if (normalized.startsWith('mcp__')) {
+    const parts = raw.split('__');
+    return { server: parts[1], tool: parts.slice(2).join('__') || raw };
+  }
+  const cursorMcp = raw.match(/^mcp:(.+)$/iu)?.[1]?.trim();
+  const browserTool = cursorMcp || (/^browser_/iu.test(raw) ? raw : '');
+  if (browserTool) {
+    return {
+      server: 'browser',
+      tool: browserTool.replace(/^browser_/iu, '') || browserTool,
+    };
+  }
+  return null;
 }
 
 function isWriteStdinTool(name: string | undefined): boolean {
@@ -411,12 +429,11 @@ export function buildToolCallDetailFromInput(toolName: string | undefined, input
     const query = typeof record?.query === 'string' ? record.query : '';
     return { kind: 'web_search', ...(query.trim() ? { query: sanitizeToolText(query) } : {}) };
   }
-  if (normalizeToolName(toolName).startsWith('mcp__')) {
-    const parts = String(toolName || '').split('__');
+  const mcp = mcpToolParts(toolName);
+  if (mcp) {
     return {
       kind: 'mcp',
-      server: parts[1],
-      tool: parts.slice(2).join('__'),
+      ...mcp,
       input: parsed,
     };
   }
@@ -510,7 +527,7 @@ export function buildToolCallDetailFromOutput(
   if (existing?.kind === 'web_search' || normalizeToolName(toolName) === 'web search') {
     return { kind: 'web_search', ...(raw.trim() ? { query: sanitizeToolText(raw) } : {}) };
   }
-  if (existing?.kind === 'mcp' || normalizeToolName(toolName).startsWith('mcp__')) {
+  if (existing?.kind === 'mcp' || mcpToolParts(toolName)) {
     return { kind: 'mcp', output: sanitizeToolText(raw) };
   }
   return { kind: 'generic', output: sanitizeToolText(raw) };

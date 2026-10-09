@@ -6,6 +6,7 @@ import path from 'node:path';
 
 import {
   createTmuxCliCore,
+  defaultTmuxExecutableCandidates,
   usesPsmuxServerSidePaste,
   type TmuxCore,
 } from '../../../../bridge/tmux/core.js';
@@ -58,6 +59,13 @@ describe('TmuxCore', () => {
     assert.equal(usesPsmuxServerSidePaste('win32'), true);
     assert.equal(usesPsmuxServerSidePaste('linux'), false);
     assert.equal(usesPsmuxServerSidePaste('darwin'), false);
+  });
+
+  it('discovers Homebrew tmux even when the service PATH cannot resolve tmux', () => {
+    const candidates = defaultTmuxExecutableCandidates();
+    assert.equal(candidates[0], 'tmux');
+    assert.ok(candidates.includes('/opt/homebrew/bin/tmux'));
+    assert.ok(candidates.includes('/home/linuxbrew/.linuxbrew/bin/tmux'));
   });
 
   it('reconstructs multiline Unicode exactly through Windows psmux server-side paste chunks', async () => {

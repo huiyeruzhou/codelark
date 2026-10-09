@@ -169,6 +169,24 @@ describe('interactive-turn sdk-stream-events-controller', () => {
     ]);
   });
 
+  it('preserves an explicit history collapse title for the Feishu renderer', () => {
+    const harness = makeHarness();
+
+    harness.controller.onHistoryItem({
+      type: 'markdown',
+      role: 'thinking',
+      content: '> 完整长思考',
+      collapseTitle: '💭 Cursor 思考 · 展开查看',
+    });
+
+    assert.deepEqual(harness.historySnapshots.at(-1), [{
+      type: 'markdown',
+      role: 'thinking',
+      content: '> 完整长思考',
+      collapseTitle: '💭 Cursor 思考 · 展开查看',
+    }]);
+  });
+
   it('ignores stale task events before mutating stream state or UI', () => {
     const harness = makeHarness({ current: false });
 

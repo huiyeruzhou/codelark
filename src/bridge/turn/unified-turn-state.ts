@@ -64,11 +64,17 @@ function appendHistoryMarkdown(
   state: Pick<UnifiedTurnProgressState, 'historyItems'>,
   role: StreamingHistoryTextRole,
   content: string,
+  presentation: Pick<Extract<StreamingHistoryItem, { type: 'markdown' }>, 'collapseTitle'> = {},
 ): void {
   const normalized = content.trim();
   if (!normalized) return;
   const items = historyItemsForAppend(state);
-  items.push({ type: 'markdown', role, content: normalized });
+  items.push({
+    type: 'markdown',
+    role,
+    content: normalized,
+    ...(presentation.collapseTitle ? { collapseTitle: presentation.collapseTitle } : {}),
+  });
 }
 
 function currentHistoryToolPanel(items: StreamingHistoryItem[]): Extract<StreamingHistoryItem, { type: 'tool_panel' }> {
@@ -137,8 +143,9 @@ export function applyUnifiedTurnHistoryMarkdown(
   state: Pick<UnifiedTurnProgressState, 'historyItems'>,
   role: StreamingHistoryTextRole,
   content: string,
+  presentation: Pick<Extract<StreamingHistoryItem, { type: 'markdown' }>, 'collapseTitle'> = {},
 ): void {
-  appendHistoryMarkdown(state, role, content);
+  appendHistoryMarkdown(state, role, content, presentation);
 }
 
 export function applyUnifiedTurnHistoryModelText(

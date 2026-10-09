@@ -64,7 +64,7 @@ function withoutToolOutput(detail: ToolCallDetail): ToolCallDetail {
 function buildFallbackToolDetailMarkdown(tool: ToolCallInfo): string {
   const details: string[] = [];
   const isEditTool = /^edit$/i.test(tool.name || '');
-  const isBashTool = /^(bash|shell_command|exec_command)$/i.test(tool.name || '');
+  const isBashTool = /^(bash|shell|shell_command|exec_command)$/i.test(tool.name || '');
   const isPatchTool = /^apply_patch$/i.test(tool.name || '');
   const displayTool = !isPatchTool && tool.detail
     ? { ...tool, detail: withoutToolOutput(tool.detail) }

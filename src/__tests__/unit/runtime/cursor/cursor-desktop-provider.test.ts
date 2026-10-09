@@ -24,7 +24,7 @@ describe('Cursor Desktop provider', () => {
   let previousDataDir: string | undefined;
   let previousConfigDir: string | undefined;
   let previousPollInterval: string | undefined;
-  let previousHookPollInterval: string | undefined;
+  let previousHookReconcileInterval: string | undefined;
   let previousLogsDir: string | undefined;
   let previousOutputIdleTimeout: string | undefined;
   let previousQueuedIdleTimeout: string | undefined;
@@ -34,7 +34,7 @@ describe('Cursor Desktop provider', () => {
     previousDataDir = process.env.CURSOR_DATA_DIR;
     previousConfigDir = process.env.CURSOR_CONFIG_DIR;
     previousPollInterval = process.env.CODELARK_CURSOR_DESKTOP_POLL_INTERVAL_MS;
-    previousHookPollInterval = process.env.CODELARK_CURSOR_DESKTOP_HOOK_POLL_INTERVAL_MS;
+    previousHookReconcileInterval = process.env.CODELARK_CURSOR_DESKTOP_HOOK_RECONCILE_INTERVAL_MS;
     previousLogsDir = process.env.CURSOR_LOGS_DIR;
     previousOutputIdleTimeout = process.env.CODELARK_CURSOR_DESKTOP_OUTPUT_IDLE_TIMEOUT_MS;
     previousQueuedIdleTimeout = process.env.CODELARK_CURSOR_DESKTOP_QUEUED_IDLE_TIMEOUT_MS;
@@ -60,8 +60,8 @@ describe('Cursor Desktop provider', () => {
     else process.env.CURSOR_CONFIG_DIR = previousConfigDir;
     if (previousPollInterval === undefined) delete process.env.CODELARK_CURSOR_DESKTOP_POLL_INTERVAL_MS;
     else process.env.CODELARK_CURSOR_DESKTOP_POLL_INTERVAL_MS = previousPollInterval;
-    if (previousHookPollInterval === undefined) delete process.env.CODELARK_CURSOR_DESKTOP_HOOK_POLL_INTERVAL_MS;
-    else process.env.CODELARK_CURSOR_DESKTOP_HOOK_POLL_INTERVAL_MS = previousHookPollInterval;
+    if (previousHookReconcileInterval === undefined) delete process.env.CODELARK_CURSOR_DESKTOP_HOOK_RECONCILE_INTERVAL_MS;
+    else process.env.CODELARK_CURSOR_DESKTOP_HOOK_RECONCILE_INTERVAL_MS = previousHookReconcileInterval;
     if (previousLogsDir === undefined) delete process.env.CURSOR_LOGS_DIR;
     else process.env.CURSOR_LOGS_DIR = previousLogsDir;
     if (previousOutputIdleTimeout === undefined) delete process.env.CODELARK_CURSOR_DESKTOP_OUTPUT_IDLE_TIMEOUT_MS;
@@ -385,8 +385,10 @@ describe('Cursor Desktop provider', () => {
     fs.mkdirSync(hookDir, { recursive: true });
     const hookLog = path.join(hookDir, 'cursor.hooks.workspace.log');
     fs.writeFileSync(hookLog, '');
+    const longThought = `${'Detailed reasoning that remains available after folding. '.repeat(45)}FULL_END`;
+    assert.ok(Array.from(longThought).length > 2_000);
     process.env.CODELARK_CURSOR_DESKTOP_POLL_INTERVAL_MS = '50';
-    process.env.CODELARK_CURSOR_DESKTOP_HOOK_POLL_INTERVAL_MS = '50';
+    process.env.CODELARK_CURSOR_DESKTOP_HOOK_RECONCILE_INTERVAL_MS = '50';
     const hookBlock = (timestamp: string, step: string, input: Record<string, unknown>) => [
       `[${timestamp}] Hook step requested: ${step}`,
       'INPUT:',
@@ -412,6 +414,12 @@ describe('Cursor Desktop provider', () => {
             generation_id: 'generation-live',
             model: 'claude-opus-live-high',
             text: 'I am checking the workspace now.',
+          }),
+          hookBlock('2026-10-09T03:00:01.500Z', 'afterAgentThought', {
+            conversation_id: THREAD_ID,
+            generation_id: 'generation-live',
+            model: 'claude-opus-live-high',
+            text: longThought,
           }),
           hookBlock('2026-10-09T03:00:02.000Z', 'preToolUse', {
             conversation_id: THREAD_ID,
@@ -453,12 +461,32 @@ describe('Cursor Desktop provider', () => {
       workingDirectory: cwd,
     })) output += chunk;
 
-    assert.match(output, /I am checking the workspace now/);
+    const events = output.trim().split('\n')
+      .filter((line) => line.startsWith('data: '))
+      .map((line) => JSON.parse(line.slice('data: '.length)) as { type: string; data: string });
+    const historyItems = events
+      .filter((event) => event.type === 'history_item')
+      .map((event) => JSON.parse(event.data) as Record<string, unknown>);
+    const statuses = events
+      .filter((event) => event.type === 'status')
+      .map((event) => JSON.parse(event.data) as Record<string, unknown>);
+
+    assert.deepEqual(historyItems.find((item) => String(item.content).includes('checking the workspace')), {
+      type: 'markdown',
+      role: 'thinking',
+      content: '> I am checking the workspace now.',
+    });
+    const foldedThought = historyItems.find((item) => item.collapseTitle === '💭 Cursor 思考 · 展开查看');
+    assert.equal(String(foldedThought?.content).endsWith('FULL_END'), true);
+    assert.equal(String(foldedThought?.content).includes('实时思考已截断'), false);
+    assert.equal(statuses.some((status) => 'thinking' in status), false);
+    assert.equal(statuses.some((status) => status.reasoning === 'Cursor 正在思考'), true);
     assert.match(output, /claude-opus-live-high/);
     assert.match(output, /"type":"tool_use"/);
     assert.doesNotMatch(output, /tool-live-1/);
     assert.match(output, /"type":"tool_result"/);
     assert.match(output, /\/workspace-hooks/);
+    assert.doesNotMatch(output, /Cursor 已完成工具/);
     assert.match(output, /HOOK_FINAL_OUTPUT/);
     assert.equal(output.match(/"type":"tool_use"/g)?.length, 1);
   });

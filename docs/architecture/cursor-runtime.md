@@ -70,7 +70,7 @@ Cursor 不调用名为 `completed` 的工具结束一轮。assistant message 后
 1. `/t` 从 Desktop conversation index 识别出的会话写入 `cursor:desktop` identity；它不是全局默认 provider，也不能用于没有 Desktop thread id 的 fresh session。
 2. 发送前读取 `~/.cursor/desktop-bridge/*.json`，验证目录/文件仅当前用户可读、协议版本、live PID、Unix socket 和 64 位 hex token，再通过 Bearer 鉴权向 `/` 提交 `listThreads`。目标必须是 live 列表中的精确 thread id。
 3. 输入使用 `sendMessage` 单次提交。v1 接受 `submitted` 或 `queued`，v2 还可返回 `steered`；无 discovery、stale PID、目标 thread 不存在、不可发送、HTTP 错误或超时都明确失败，绝不回退到 tmux/ACP。
-4. provider 在提交前同时记录 transcript EOF 和所有 live Cursor hook log 的 byte baseline。提交后独立增量读取完整的 hook `INPUT` JSON：`afterAgentThought.text` 更新 thinking，`preToolUse` / `postToolUse` 以 Cursor 原生 `tool_use_id` 更新工具开始与结果，模型字段更新卡片 metadata。半写入 JSON 保留到下一批，其他 conversation 和 baseline 之前的历史都不会发出。
+4. provider 在提交前同时记录 transcript EOF，并订阅按 Cursor logs root 共享的异步 hook tailer。tailer 用递归 `fs.watch` 唤醒一次串行异步 reconcile，并保留低频异步 fallback 防止平台漏报、合并事件或 log rotation；它只维护一份文件 offset、半包尾部和内存事件 ring，不随并发 turn 重复扫描。`afterAgentThought.text` 作为弱化引用逐条进入正文历史；超过 2000 字符时完整放入默认收起的思考面板，不截断内容。footer 只保留简短的“正在思考”，并用 thought hook 的真实 reasoning model variant 更新模型；`preToolUse` / `postToolUse` 以 Cursor 原生 `tool_use_id` 更新同一个工具块的开始与结果。工具 hook 的 base model 不回退卡片模型，`beforeShellExecution` / `afterShellExecution` 也不生成会抢在工具块前面的泛化 footer。其他 conversation 和 baseline 之前的历史都不会发出。
 5. provider 同时从发送前 transcript EOF 续读回答正文与终态。`queued` 时上一轮可能先产出 hooks、assistant 和 `turn_ended`，因此在本次新 turn 被 transcript 识别前丢弃这些旧 hook；旧 turn 终态不能结束本轮。hook 工具以名称和输入关联 transcript 的合成 ID，最终 transcript 结果只更新已有工具，不新建重复项。
 6. Desktop Bridge status 负责后端生命周期，hooks 负责实时思考/工具过程，transcript 负责正文与 `turn_ended`。用户停止等待时会明确说明 Desktop 中已提交的 turn 仍可能继续。可选 v2 事件提供更直接的 snapshot/finish/stop/error 信号，但 v1 无需修改 Cursor.app 也具备上述实时卡片能力。
 
@@ -108,3 +108,5 @@ CodeLark 自己也使用 `/...` 命令，因此原生 Cursor 命令通过 `/tmux
 - Cursor CLI 不存在、未登录、pane 提前退出、Desktop Bridge 不可用、transcript 未出现或长时间无活动时返回明确错误，不回退到其他 runtime/provider。
 - readiness 超时与 pane 退出不是同一种错误：前者保留仍存活的 provider-owned tmux 供观察和下一轮接管，后者按失败进程清理。
 - Codex、Claude Code 与 Kimi Code 既有 routing、session 和 mirror 行为保持不变。
+
+共享 hook tailer 按实际读取字节推进游标，单次异步读取最多 256 KiB，剩余增量继续异步调度。每个文件保留未完成的 hook 标题、JSON 和 UTF-8 解码状态，避免跨次写入丢失中文或思考内容；文件轮转时重置解析状态。

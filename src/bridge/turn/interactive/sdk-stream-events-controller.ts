@@ -157,7 +157,9 @@ export function createInteractiveSdkStreamEventsController(
       if (item.variant === 'thinking_summary') {
         applyUnifiedTurnThinkingSummary(params.streamState, normalized);
       } else {
-        applyUnifiedTurnHistoryMarkdown(params.streamState, item.role, normalized);
+        applyUnifiedTurnHistoryMarkdown(params.streamState, item.role, normalized, {
+          collapseTitle: item.collapseTitle,
+        });
       }
       markActivity();
       if (params.streamUi.hasStreamingCards) {

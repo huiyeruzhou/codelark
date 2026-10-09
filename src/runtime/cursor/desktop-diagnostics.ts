@@ -1,18 +1,31 @@
-import fs from 'node:fs';
+import fs, { promises as fsp, type FSWatcher, type Stats } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { StringDecoder } from 'node:string_decoder';
 
 const HOOK_LOG_TAIL_BYTES = 1024 * 1024;
 const MAX_LOG_SESSIONS = 4;
+const DEFAULT_RECONCILE_INTERVAL_MS = 2_000;
+const WATCH_DEBOUNCE_MS = 20;
+const MAX_BUFFERED_ACTIVITIES = 4_096;
+const MAX_READ_BYTES = 256 * 1024;
 
-interface CursorDesktopHookFileCursor {
+interface CursorDesktopHookFileState {
   identity: string;
   offset: number;
   trailing: string;
+  decoder: StringDecoder;
 }
 
-export interface CursorDesktopHookCursor {
-  files: Record<string, CursorDesktopHookFileCursor>;
+interface SequencedHookActivity {
+  sequence: number;
+  activity: CursorDesktopHookActivity;
+}
+
+interface ActivityWaiter {
+  afterSequence: number;
+  resolve: () => void;
+  timer: NodeJS.Timeout;
 }
 
 export interface CursorDesktopHookActivity {
@@ -32,6 +45,17 @@ export interface CursorDesktopHookActivity {
   status?: string;
 }
 
+export interface CursorDesktopHookSubscription {
+  drain(): CursorDesktopHookActivity[];
+  waitForActivity(timeoutMs: number): Promise<void>;
+  close(): void;
+}
+
+function positiveIntEnv(name: string, fallback: number, min: number): number {
+  const parsed = Number.parseInt(process.env[name] || '', 10);
+  return Number.isFinite(parsed) && parsed >= min ? parsed : fallback;
+}
+
 function cursorLogsRoot(): string {
   const configured = process.env.CURSOR_LOGS_DIR?.trim();
   return configured
@@ -39,29 +63,28 @@ function cursorLogsRoot(): string {
     : path.join(os.homedir(), 'Library', 'Application Support', 'Cursor', 'logs');
 }
 
-function collectHookLogs(directory: string, result: string[], depth = 0): void {
+async function collectHookLogs(directory: string, result: string[], depth = 0): Promise<void> {
   if (depth > 6) return;
   let entries: fs.Dirent[];
   try {
-    entries = fs.readdirSync(directory, { withFileTypes: true });
+    entries = await fsp.readdir(directory, { withFileTypes: true });
   } catch {
     return;
   }
-  for (const entry of entries) {
+  await Promise.all(entries.map(async (entry) => {
     const target = path.join(directory, entry.name);
     if (entry.isDirectory()) {
-      collectHookLogs(target, result, depth + 1);
-      continue;
+      await collectHookLogs(target, result, depth + 1);
+    } else if (entry.isFile() && /^cursor\.hooks.*\.log$/iu.test(entry.name)) {
+      result.push(target);
     }
-    if (entry.isFile() && /^cursor\.hooks.*\.log$/iu.test(entry.name)) result.push(target);
-  }
+  }));
 }
 
-function recentHookLogs(): string[] {
-  const root = cursorLogsRoot();
-  let sessions: string[] = [];
+async function recentHookLogs(root = cursorLogsRoot()): Promise<string[]> {
+  let sessions: string[];
   try {
-    sessions = fs.readdirSync(root, { withFileTypes: true })
+    sessions = (await fsp.readdir(root, { withFileTypes: true }))
       .filter((entry) => entry.isDirectory())
       .map((entry) => entry.name)
       .sort()
@@ -71,45 +94,40 @@ function recentHookLogs(): string[] {
     return [];
   }
   const logs: string[] = [];
-  for (const session of sessions) collectHookLogs(path.join(root, session), logs);
-  return logs.sort((left, right) => {
+  await Promise.all(sessions.map((session) => collectHookLogs(path.join(root, session), logs)));
+  const dated = await Promise.all(logs.map(async (logPath) => {
     try {
-      return fs.statSync(right).mtimeMs - fs.statSync(left).mtimeMs;
+      return { logPath, mtimeMs: (await fsp.stat(logPath)).mtimeMs };
     } catch {
-      return 0;
+      return null;
     }
-  });
+  }));
+  return dated
+    .filter((item): item is { logPath: string; mtimeMs: number } => item !== null)
+    .sort((left, right) => right.mtimeMs - left.mtimeMs)
+    .map((item) => item.logPath);
 }
 
-function readTail(filePath: string, maxBytes: number): string {
-  const stat = fs.statSync(filePath);
-  const start = Math.max(0, stat.size - maxBytes);
-  const length = stat.size - start;
-  const buffer = Buffer.alloc(length);
-  const fd = fs.openSync(filePath, 'r');
-  try {
-    const bytesRead = fs.readSync(fd, buffer, 0, length, start);
-    return buffer.subarray(0, bytesRead).toString('utf8');
-  } finally {
-    fs.closeSync(fd);
-  }
-}
-
-function fileIdentity(stat: fs.Stats): string {
-  return `${stat.dev}:${stat.ino}`;
-}
-
-function readRange(filePath: string, start: number, end: number): string {
+async function readRange(filePath: string, start: number, end: number): Promise<Buffer> {
   const length = Math.max(0, end - start);
-  if (length === 0) return '';
-  const buffer = Buffer.alloc(length);
-  const fd = fs.openSync(filePath, 'r');
+  if (length === 0) return Buffer.alloc(0);
+  const buffer = Buffer.allocUnsafe(length);
+  const handle = await fsp.open(filePath, 'r');
   try {
-    const bytesRead = fs.readSync(fd, buffer, 0, length, start);
-    return buffer.subarray(0, bytesRead).toString('utf8');
+    const { bytesRead } = await handle.read(buffer, 0, length, start);
+    return buffer.subarray(0, bytesRead);
   } finally {
-    fs.closeSync(fd);
+    await handle.close();
   }
+}
+
+async function readTail(filePath: string, maxBytes: number): Promise<string> {
+  const stat = await fsp.stat(filePath);
+  return (await readRange(filePath, Math.max(0, stat.size - maxBytes), stat.size)).toString('utf8');
+}
+
+function fileIdentity(stat: Stats): string {
+  return `${stat.dev}:${stat.ino}`;
 }
 
 function jsonObjectEnd(text: string, start: number): number | null {
@@ -173,6 +191,7 @@ function parseHookActivityChunk(
   const matches = [...text.matchAll(marker)];
   const activities: CursorDesktopHookActivity[] = [];
   let trailing = '';
+  let consumedThrough = 0;
   for (let index = 0; index < matches.length; index += 1) {
     const match = matches[index]!;
     const start = match.index ?? 0;
@@ -198,51 +217,205 @@ function parseHookActivityChunk(
         match[2]?.trim() || 'unknown',
         input as Record<string, unknown>,
       ));
+      consumedThrough = start + jsonEnd;
     } catch {
-      // A malformed/incomplete hook entry is retained only while it is the tail.
       if (index === matches.length - 1) trailing = text.slice(start);
     }
+  }
+  if (!trailing) {
+    // A watch notification can arrive midway through the next header, before
+    // the complete marker regex matches. Keep that unfinished line, including
+    // when it follows an otherwise complete INPUT block in the same read.
+    const remainder = text.slice(consumedThrough);
+    const finalLine = remainder.slice(remainder.lastIndexOf('\n') + 1);
+    if (finalLine.startsWith('[')) trailing = finalLine;
   }
   return { activities, trailing };
 }
 
-export function captureCursorDesktopHookCursor(): CursorDesktopHookCursor {
-  const files: Record<string, CursorDesktopHookFileCursor> = {};
-  for (const logPath of recentHookLogs()) {
+class CursorDesktopHookTailer {
+  private readonly files = new Map<string, CursorDesktopHookFileState>();
+  private readonly activities: SequencedHookActivity[] = [];
+  private readonly waiters = new Set<ActivityWaiter>();
+  private watcher: FSWatcher | undefined;
+  private reconcileTimer: NodeJS.Timeout | undefined;
+  private debounceTimer: NodeJS.Timeout | undefined;
+  private reconcileChain: Promise<void> = Promise.resolve();
+  private startPromise: Promise<void> | undefined;
+  private sequence = 0;
+  private references = 0;
+  private closed = false;
+
+  constructor(readonly root: string) {}
+
+  async acquire(): Promise<void> {
+    this.references += 1;
     try {
-      const stat = fs.statSync(logPath);
-      files[logPath] = { identity: fileIdentity(stat), offset: stat.size, trailing: '' };
-    } catch {
-      // A log may rotate while the baseline is captured.
+      if (!this.startPromise) this.startPromise = this.start();
+      await this.startPromise;
+    } catch (error) {
+      this.release();
+      throw error;
     }
   }
-  return { files };
+
+  release(): void {
+    this.references = Math.max(0, this.references - 1);
+    if (this.references > 0) return;
+    this.closed = true;
+    this.watcher?.close();
+    if (this.reconcileTimer) clearInterval(this.reconcileTimer);
+    if (this.debounceTimer) clearTimeout(this.debounceTimer);
+    for (const waiter of [...this.waiters]) waiter.resolve();
+    hookTailers.delete(this.root);
+  }
+
+  currentSequence(): number {
+    return this.sequence;
+  }
+
+  drain(afterSequence: number, conversationId: string): { sequence: number; activities: CursorDesktopHookActivity[] } {
+    return {
+      sequence: this.sequence,
+      activities: this.activities
+        .filter((item) => item.sequence > afterSequence && item.activity.conversationId === conversationId)
+        .map((item) => item.activity),
+    };
+  }
+
+  waitAfter(afterSequence: number, timeoutMs: number): Promise<void> {
+    if (this.closed || this.sequence > afterSequence || timeoutMs <= 0) return Promise.resolve();
+    return new Promise((resolve) => {
+      const waiter = {} as ActivityWaiter;
+      waiter.afterSequence = afterSequence;
+      waiter.resolve = () => {
+        clearTimeout(waiter.timer);
+        this.waiters.delete(waiter);
+        resolve();
+      };
+      waiter.timer = setTimeout(waiter.resolve, timeoutMs);
+      waiter.timer.unref?.();
+      this.waiters.add(waiter);
+      if (this.sequence > afterSequence) waiter.resolve();
+    });
+  }
+
+  private async start(): Promise<void> {
+    this.installWatcher();
+    await this.enqueueReconcile(true);
+    const intervalMs = positiveIntEnv(
+      'CODELARK_CURSOR_DESKTOP_HOOK_RECONCILE_INTERVAL_MS',
+      DEFAULT_RECONCILE_INTERVAL_MS,
+      50,
+    );
+    this.reconcileTimer = setInterval(() => {
+      void this.enqueueReconcile(false);
+      if (!this.watcher) this.installWatcher();
+    }, intervalMs);
+    this.reconcileTimer.unref?.();
+  }
+
+  private installWatcher(): void {
+    if (this.closed || this.watcher || process.env.CODELARK_CURSOR_DESKTOP_HOOK_DISABLE_WATCH === '1') return;
+    try {
+      this.watcher = fs.watch(this.root, { recursive: true }, () => this.scheduleReconcile());
+      this.watcher.on('error', () => {
+        this.watcher?.close();
+        this.watcher = undefined;
+      });
+    } catch {
+      this.watcher = undefined;
+    }
+  }
+
+  private scheduleReconcile(): void {
+    if (this.closed || this.debounceTimer) return;
+    this.debounceTimer = setTimeout(() => {
+      this.debounceTimer = undefined;
+      void this.enqueueReconcile(false);
+    }, WATCH_DEBOUNCE_MS);
+    this.debounceTimer.unref?.();
+  }
+
+  private enqueueReconcile(baseline: boolean): Promise<void> {
+    this.reconcileChain = this.reconcileChain
+      .then(() => this.reconcile(baseline))
+      .catch((error) => {
+        console.warn('[cursor-desktop] Hook tailer reconcile failed:', error instanceof Error ? error.message : error);
+      });
+    return this.reconcileChain;
+  }
+
+  private async reconcile(baseline: boolean): Promise<void> {
+    if (this.closed) return;
+    const logPaths = await recentHookLogs(this.root);
+    for (const logPath of logPaths.reverse()) {
+      try {
+        const stat = await fsp.stat(logPath);
+        const identity = fileIdentity(stat);
+        const previous = this.files.get(logPath);
+        if (baseline && !previous) {
+          this.files.set(logPath, { identity, offset: stat.size, trailing: '', decoder: new StringDecoder('utf8') });
+          continue;
+        }
+        const reset = !previous || previous.identity !== identity || stat.size < previous.offset;
+        const offset = reset ? 0 : previous.offset;
+        const prefix = reset ? '' : previous.trailing;
+        const decoder = reset ? new StringDecoder('utf8') : previous.decoder;
+        if (stat.size === offset) continue;
+        const bytes = await readRange(logPath, offset, Math.min(stat.size, offset + MAX_READ_BYTES));
+        const parsed = parseHookActivityChunk(logPath, prefix + decoder.write(bytes));
+        const nextOffset = offset + bytes.length;
+        this.files.set(logPath, { identity, offset: nextOffset, trailing: parsed.trailing, decoder });
+        for (const activity of parsed.activities) this.publish(activity);
+        if (nextOffset < stat.size) this.scheduleReconcile();
+      } catch {
+        // A log may rotate while the shared tailer is reconciling it.
+      }
+    }
+  }
+
+  private publish(activity: CursorDesktopHookActivity): void {
+    this.sequence += 1;
+    this.activities.push({ sequence: this.sequence, activity });
+    if (this.activities.length > MAX_BUFFERED_ACTIVITIES) {
+      this.activities.splice(0, this.activities.length - MAX_BUFFERED_ACTIVITIES);
+    }
+    for (const waiter of [...this.waiters]) {
+      if (this.sequence > waiter.afterSequence) waiter.resolve();
+    }
+  }
 }
 
-export function readCursorDesktopHookActivityDelta(
+const hookTailers = new Map<string, CursorDesktopHookTailer>();
+
+export async function subscribeCursorDesktopHookActivities(
   conversationId: string,
-  cursor: CursorDesktopHookCursor,
-): { cursor: CursorDesktopHookCursor; activities: CursorDesktopHookActivity[] } {
-  const files: Record<string, CursorDesktopHookFileCursor> = { ...cursor.files };
-  const activities: CursorDesktopHookActivity[] = [];
-  for (const logPath of recentHookLogs().reverse()) {
-    try {
-      const stat = fs.statSync(logPath);
-      const identity = fileIdentity(stat);
-      const previous = files[logPath];
-      const reset = !previous || previous.identity !== identity || stat.size < previous.offset;
-      const offset = reset ? 0 : previous.offset;
-      const prefix = reset ? '' : previous.trailing;
-      const parsed = parseHookActivityChunk(logPath, prefix + readRange(logPath, offset, stat.size));
-      files[logPath] = { identity, offset: stat.size, trailing: parsed.trailing };
-      activities.push(...parsed.activities.filter((activity) => activity.conversationId === conversationId));
-    } catch {
-      // Try other active Cursor window logs.
-    }
+): Promise<CursorDesktopHookSubscription> {
+  const root = cursorLogsRoot();
+  let tailer = hookTailers.get(root);
+  if (!tailer) {
+    tailer = new CursorDesktopHookTailer(root);
+    hookTailers.set(root, tailer);
   }
+  await tailer.acquire();
+  let sequence = tailer.currentSequence();
+  let closed = false;
   return {
-    cursor: { files },
-    activities: activities.sort((left, right) => left.updatedAt.localeCompare(right.updatedAt)),
+    drain() {
+      if (closed) return [];
+      const delta = tailer!.drain(sequence, conversationId);
+      sequence = delta.sequence;
+      return delta.activities;
+    },
+    waitForActivity(timeoutMs) {
+      return closed ? Promise.resolve() : tailer!.waitAfter(sequence, timeoutMs);
+    },
+    close() {
+      if (closed) return;
+      closed = true;
+      tailer!.release();
+    },
   };
 }
 
@@ -252,13 +425,13 @@ function lastCaptured(window: string, pattern: RegExp): string | undefined {
   return value || undefined;
 }
 
-export function inspectCursorDesktopHookActivity(
+export async function inspectCursorDesktopHookActivity(
   conversationId: string,
-): CursorDesktopHookActivity | null {
+): Promise<CursorDesktopHookActivity | null> {
   const needle = `"conversation_id": "${conversationId}"`;
-  for (const logPath of recentHookLogs()) {
+  for (const logPath of await recentHookLogs()) {
     try {
-      const text = readTail(logPath, HOOK_LOG_TAIL_BYTES);
+      const text = await readTail(logPath, HOOK_LOG_TAIL_BYTES);
       const occurrence = text.lastIndexOf(needle);
       if (occurrence < 0) continue;
       const hookMarker = 'Hook step requested:';
@@ -267,11 +440,11 @@ export function inspectCursorDesktopHookActivity(
       const nextMarker = text.indexOf(hookMarker, occurrence + needle.length);
       const windowEnd = nextMarker >= 0 ? nextMarker : Math.min(text.length, occurrence + 24_000);
       const window = text.slice(windowStart, windowEnd);
-      const parsed = parseHookActivityChunk(logPath, window).activities
-        .filter((activity) => activity.conversationId === conversationId);
-      const activity = parsed.at(-1);
+      const activity = parseHookActivityChunk(logPath, window).activities
+        .filter((item) => item.conversationId === conversationId)
+        .at(-1);
       if (activity) return activity;
-      const stat = fs.statSync(logPath);
+      const stat = await fsp.stat(logPath);
       return {
         logPath,
         updatedAt: stat.mtime.toISOString(),

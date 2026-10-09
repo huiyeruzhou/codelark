@@ -8,10 +8,9 @@ import {
   sendCursorDesktopMessage,
 } from './desktop-bridge-client.js';
 import {
-  captureCursorDesktopHookCursor,
-  readCursorDesktopHookActivityDelta,
+  subscribeCursorDesktopHookActivities,
   type CursorDesktopHookActivity,
-  type CursorDesktopHookCursor,
+  type CursorDesktopHookSubscription,
 } from './desktop-diagnostics.js';
 import {
   findCursorSessionFileById,
@@ -31,8 +30,8 @@ const DEFAULT_OUTPUT_IDLE_TIMEOUT_MS = 120_000;
 const DEFAULT_QUEUED_IDLE_TIMEOUT_MS = 600_000;
 const DESKTOP_STATUS_POLL_INTERVAL_MS = 5_000;
 const DESKTOP_REALTIME_POLL_INTERVAL_MS = 1_000;
-const DEFAULT_DESKTOP_HOOK_POLL_INTERVAL_MS = 500;
 const HOOK_REALTIME_OUTPUT_MAX_CHARS = 32_000;
+const HOOK_REALTIME_THOUGHT_COLLAPSE_THRESHOLD = 2_000;
 
 interface TranscriptSnapshot {
   size: number;
@@ -125,6 +124,20 @@ function cursorHookToolOutput(value: string | undefined): string {
     : output;
 }
 
+function cursorHookThoughtHistory(value: string): { content: string; collapseTitle?: string } {
+  const trimmed = value.trim();
+  const content = trimmed
+    .split(/\r?\n/)
+    .map((line) => line ? `> ${line}` : '>')
+    .join('\n');
+  return {
+    content,
+    ...(Array.from(trimmed).length > HOOK_REALTIME_THOUGHT_COLLAPSE_THRESHOLD
+      ? { collapseTitle: '💭 Cursor 思考 · 展开查看' }
+      : {}),
+  };
+}
+
 function enqueueCursorHookActivity(
   controller: ReadableStreamDefaultController<string>,
   context: CursorTurnContext,
@@ -134,13 +147,21 @@ function enqueueCursorHookActivity(
   const metadata = {
     backend_status: backendStatus || 'running',
     hook_updated_at: hook.updatedAt,
-    ...(hook.model ? { model: hook.model } : {}),
+    // afterAgentThought carries the selected reasoning variant (for example
+    // `*-high`). Tool hooks often carry only the base model and would make the
+    // card metadata oscillate, forcing full refreshes ahead of tool panels.
+    ...(hook.step === 'afterAgentThought' && hook.model ? { model: hook.model } : {}),
   };
   if (hook.step === 'afterAgentThought' && hook.text?.trim()) {
+    const thought = cursorHookThoughtHistory(hook.text);
+    controller.enqueue(sseEvent('history_item', {
+      type: 'markdown',
+      role: 'thinking',
+      ...thought,
+    }));
     controller.enqueue(sseEvent('status', {
       ...metadata,
       reasoning: 'Cursor 正在思考',
-      thinking: hook.text.trim(),
     }));
     return;
   }
@@ -187,12 +208,9 @@ function enqueueCursorHookActivity(
       content: cursorHookToolOutput(hook.toolOutput),
       is_error: false,
     }));
-    controller.enqueue(sseEvent('status', {
-      ...metadata,
-      reasoning: cursorHookStatus(hook.step, hook.toolName),
-    }));
     return;
   }
+  if (hook.step === 'beforeShellExecution' || hook.step === 'afterShellExecution') return;
   controller.enqueue(sseEvent('status', {
     ...metadata,
     reasoning: cursorHookStatus(hook.step, hook.toolName),
@@ -234,7 +252,7 @@ async function pollDesktopTranscript(
   initialSnapshot: TranscriptSnapshot | null,
   baselineTurnStarts: Set<string>,
   queued: boolean,
-  initialHookCursor: CursorDesktopHookCursor,
+  hookSubscription: CursorDesktopHookSubscription,
 ): Promise<void> {
   const cursorSessionId = context.sessionId;
   if (!cursorSessionId) throw new Error('Cursor Desktop session ID 缺失。');
@@ -255,9 +273,7 @@ async function pollDesktopTranscript(
   let previousSnapshot = initialSnapshot;
   let lastDesktopStatusProbeAt = 0;
   let lastDesktopStatus: string | undefined;
-  let hookCursor = initialHookCursor;
   let hookGenerationId: string | undefined;
-  let lastHookProbeAt = 0;
   let realtimeCursor = 0;
   let realtimeAvailable: boolean | undefined;
   let lastRealtimeProbeAt = 0;
@@ -310,23 +326,12 @@ async function pollDesktopTranscript(
     }
     if (context.nextOffset > previousOffset) lastActivityAt = Date.now();
     if (context.terminalSeen) return;
-    const now = Date.now();
-    const hookPollIntervalMs = positiveIntEnv(
-      'CODELARK_CURSOR_DESKTOP_HOOK_POLL_INTERVAL_MS',
-      DEFAULT_DESKTOP_HOOK_POLL_INTERVAL_MS,
-      50,
-    );
-    if (now - lastHookProbeAt >= hookPollIntervalMs) {
-      lastHookProbeAt = now;
-      const hookDelta = readCursorDesktopHookActivityDelta(cursorSessionId, hookCursor);
-      hookCursor = hookDelta.cursor;
-      for (const hook of hookDelta.activities) {
-        if (queued && !targetTurnId) continue;
-        if (hookGenerationId && hook.generationId && hook.generationId !== hookGenerationId) continue;
-        if (!hookGenerationId && hook.generationId) hookGenerationId = hook.generationId;
-        lastActivityAt = Date.now();
-        enqueueCursorHookActivity(controller, context, hook, lastDesktopStatus);
-      }
+    for (const hook of hookSubscription.drain()) {
+      if (queued && !targetTurnId) continue;
+      if (hookGenerationId && hook.generationId && hook.generationId !== hookGenerationId) continue;
+      if (!hookGenerationId && hook.generationId) hookGenerationId = hook.generationId;
+      lastActivityAt = Date.now();
+      enqueueCursorHookActivity(controller, context, hook, lastDesktopStatus);
     }
     if (realtimeAvailable !== false && Date.now() - lastRealtimeProbeAt >= DESKTOP_REALTIME_POLL_INTERVAL_MS) {
       lastRealtimeProbeAt = Date.now();
@@ -391,14 +396,14 @@ async function pollDesktopTranscript(
           reasoning: 'Cursor Desktop 后端仍为 running；transcript 暂无新记录，继续等待。',
           backend_status: 'running',
         }));
-        await sleep(pollIntervalMs);
+        await hookSubscription.waitForActivity(pollIntervalMs);
         continue;
       }
       throw new Error(targetTurnId
         ? `Cursor Desktop transcript 已 ${idleTimeoutMs}ms 没有活动，后端状态为 ${lastDesktopStatus || 'unknown'}。`
         : `Cursor Desktop 已接收消息，但 transcript 中未出现本次用户消息（等待 ${idleTimeoutMs}ms）。`);
     }
-    await sleep(pollIntervalMs);
+    await hookSubscription.waitForActivity(pollIntervalMs);
   }
 }
 
@@ -414,7 +419,7 @@ export function streamCursorDesktop(params: StreamChatParams): ReadableStream<st
             .find((candidate) => fs.existsSync(candidate))
           : undefined);
         const baselineSnapshot = transcriptSnapshot(initialFilePath);
-        const initialHookCursor = captureCursorDesktopHookCursor();
+        const hookSubscription = await subscribeCursorDesktopHookActivities(sessionId);
         const baselineTurnStarts = new Set(
           initialFilePath
             ? readCursorSessionMirrorRecordStreamByFilePath(initialFilePath, known?.storePath)
@@ -440,40 +445,44 @@ export function streamCursorDesktop(params: StreamChatParams): ReadableStream<st
           liveHookToolIdAliases: new Map(),
           terminalSeen: false,
         };
-        controller.enqueue(sseEvent('status', {
-          reasoning: '正在向已绑定的 Cursor Desktop 对话提交消息。',
-          session_id: sessionId,
-          ...(context.cwd ? { cwd: context.cwd } : {}),
-        }));
-        const sent = await sendCursorDesktopMessage(sessionId, params.prompt, {
-          force: params.cursorForce,
-          delivery: params.cursorDelivery || (params.cursorForce ? 'force' : 'steer'),
-        });
-        controller.enqueue(sseEvent('status', {
-          reasoning: sent.status === 'steered'
-            ? 'Cursor Desktop 已将消息 steer 到当前 turn。'
-            : sent.status === 'queued'
-              ? `Cursor Desktop 当前 turn 尚未结束；消息已排队，将在同一对话继续。${sent.warning ? ` ${sent.warning}` : ''}`
-              : `Cursor Desktop 已接收消息，正在同一对话中运行。${sent.warning ? ` ${sent.warning}` : ''}`,
-          delivery: sent.actualDelivery,
-        }));
-        if (!context.sessionFilePath) {
-          const transcript = await waitForTranscriptPath(sessionId, context.cwd, params.abortController?.signal);
-          context.sessionFilePath = transcript.filePath;
-          context.sessionStorePath = transcript.storePath;
-          context.cwd = transcript.cwd || context.cwd;
-          context.nextOffset = 0;
+        try {
+          controller.enqueue(sseEvent('status', {
+            reasoning: '正在向已绑定的 Cursor Desktop 对话提交消息。',
+            session_id: sessionId,
+            ...(context.cwd ? { cwd: context.cwd } : {}),
+          }));
+          const sent = await sendCursorDesktopMessage(sessionId, params.prompt, {
+            force: params.cursorForce,
+            delivery: params.cursorDelivery || (params.cursorForce ? 'force' : 'steer'),
+          });
+          controller.enqueue(sseEvent('status', {
+            reasoning: sent.status === 'steered'
+              ? 'Cursor Desktop 已将消息 steer 到当前 turn。'
+              : sent.status === 'queued'
+                ? `Cursor Desktop 当前 turn 尚未结束；消息已排队，将在同一对话继续。${sent.warning ? ` ${sent.warning}` : ''}`
+                : `Cursor Desktop 已接收消息，正在同一对话中运行。${sent.warning ? ` ${sent.warning}` : ''}`,
+            delivery: sent.actualDelivery,
+          }));
+          if (!context.sessionFilePath) {
+            const transcript = await waitForTranscriptPath(sessionId, context.cwd, params.abortController?.signal);
+            context.sessionFilePath = transcript.filePath;
+            context.sessionStorePath = transcript.storePath;
+            context.cwd = transcript.cwd || context.cwd;
+            context.nextOffset = 0;
+          }
+          await pollDesktopTranscript(
+            controller,
+            context,
+            params.abortController?.signal,
+            context.sessionFilePath === initialFilePath ? baselineSnapshot : null,
+            baselineTurnStarts,
+            sent.status === 'queued',
+            hookSubscription,
+          );
+          controller.close();
+        } finally {
+          hookSubscription.close();
         }
-        await pollDesktopTranscript(
-          controller,
-          context,
-          params.abortController?.signal,
-          context.sessionFilePath === initialFilePath ? baselineSnapshot : null,
-          baselineTurnStarts,
-          sent.status === 'queued',
-          initialHookCursor,
-        );
-        controller.close();
       })().catch((error) => {
         const message = error instanceof Error ? error.message : String(error);
         console.error('[cursor-desktop] Error:', error instanceof Error ? error.stack || error.message : error);
