@@ -69,9 +69,10 @@ Cursor 不调用名为 `completed` 的工具结束一轮。assistant message 后
 
 1. `/t` 从 Desktop conversation index 识别出的会话写入 `cursor:desktop` identity；它不是全局默认 provider，也不能用于没有 Desktop thread id 的 fresh session。
 2. 发送前读取 `~/.cursor/desktop-bridge/*.json`，验证目录/文件仅当前用户可读、协议版本、live PID、Unix socket 和 64 位 hex token，再通过 Bearer 鉴权向 `/` 提交 `listThreads`。目标必须是 live 列表中的精确 thread id。
-3. 输入使用 `sendMessage` 单次提交。只接受 `submitted` 或 `queued`；无 discovery、stale PID、目标 thread 不存在、不可发送、HTTP 错误或超时都明确失败，绝不回退到 tmux/ACP。
-4. provider 从发送前 transcript EOF 续读。`queued` 时上一轮可能先产出 assistant 和 `turn_ended`，因此只有看到正文包含本次 prompt 的新 user row 后，才转发 assistant/tool/terminal；旧 turn 终态不能结束本轮。
-5. Desktop Bridge 没有 response event 或 stop endpoint。输出仍由 transcript direct stream 与后台 mirror 观察；用户停止等待时会明确说明 Desktop 中已提交的 turn 仍可能继续。
+3. 输入使用 `sendMessage` 单次提交。v1 接受 `submitted` 或 `queued`，v2 还可返回 `steered`；无 discovery、stale PID、目标 thread 不存在、不可发送、HTTP 错误或超时都明确失败，绝不回退到 tmux/ACP。
+4. provider 在提交前同时记录 transcript EOF 和所有 live Cursor hook log 的 byte baseline。提交后独立增量读取完整的 hook `INPUT` JSON：`afterAgentThought.text` 更新 thinking，`preToolUse` / `postToolUse` 以 Cursor 原生 `tool_use_id` 更新工具开始与结果，模型字段更新卡片 metadata。半写入 JSON 保留到下一批，其他 conversation 和 baseline 之前的历史都不会发出。
+5. provider 同时从发送前 transcript EOF 续读回答正文与终态。`queued` 时上一轮可能先产出 hooks、assistant 和 `turn_ended`，因此在本次新 turn 被 transcript 识别前丢弃这些旧 hook；旧 turn 终态不能结束本轮。hook 工具以名称和输入关联 transcript 的合成 ID，最终 transcript 结果只更新已有工具，不新建重复项。
+6. Desktop Bridge status 负责后端生命周期，hooks 负责实时思考/工具过程，transcript 负责正文与 `turn_ended`。用户停止等待时会明确说明 Desktop 中已提交的 turn 仍可能继续。可选 v2 事件提供更直接的 snapshot/finish/stop/error 信号，但 v1 无需修改 Cursor.app 也具备上述实时卡片能力。
 
 Cursor 的 Beta 设置必须启用 `Allow CLI to access desktop agents`。该能力由 Cursor 自己的版本/账号 feature gate 控制；开关不存在时 CodeLark 不能代替 Cursor 开启，只能保持显式不可用。
 

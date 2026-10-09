@@ -5,15 +5,31 @@ import path from 'node:path';
 const HOOK_LOG_TAIL_BYTES = 1024 * 1024;
 const MAX_LOG_SESSIONS = 4;
 
+interface CursorDesktopHookFileCursor {
+  identity: string;
+  offset: number;
+  trailing: string;
+}
+
+export interface CursorDesktopHookCursor {
+  files: Record<string, CursorDesktopHookFileCursor>;
+}
+
 export interface CursorDesktopHookActivity {
   logPath: string;
   updatedAt: string;
+  conversationId?: string;
   step?: string;
   generationId?: string;
   model?: string;
   modelId?: string;
   toolName?: string;
   command?: string;
+  toolUseId?: string;
+  toolInput?: unknown;
+  toolOutput?: string;
+  text?: string;
+  status?: string;
 }
 
 function cursorLogsRoot(): string {
@@ -79,6 +95,157 @@ function readTail(filePath: string, maxBytes: number): string {
   }
 }
 
+function fileIdentity(stat: fs.Stats): string {
+  return `${stat.dev}:${stat.ino}`;
+}
+
+function readRange(filePath: string, start: number, end: number): string {
+  const length = Math.max(0, end - start);
+  if (length === 0) return '';
+  const buffer = Buffer.alloc(length);
+  const fd = fs.openSync(filePath, 'r');
+  try {
+    const bytesRead = fs.readSync(fd, buffer, 0, length, start);
+    return buffer.subarray(0, bytesRead).toString('utf8');
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
+function jsonObjectEnd(text: string, start: number): number | null {
+  let depth = 0;
+  let quoted = false;
+  let escaped = false;
+  for (let index = start; index < text.length; index += 1) {
+    const character = text[index];
+    if (quoted) {
+      if (escaped) escaped = false;
+      else if (character === '\\') escaped = true;
+      else if (character === '"') quoted = false;
+      continue;
+    }
+    if (character === '"') {
+      quoted = true;
+      continue;
+    }
+    if (character === '{') depth += 1;
+    else if (character === '}') {
+      depth -= 1;
+      if (depth === 0) return index + 1;
+    }
+  }
+  return null;
+}
+
+function optionalString(value: unknown): string | undefined {
+  return typeof value === 'string' && value.length > 0 ? value : undefined;
+}
+
+function parseHookActivity(
+  logPath: string,
+  timestamp: string,
+  step: string,
+  input: Record<string, unknown>,
+): CursorDesktopHookActivity {
+  return {
+    logPath,
+    updatedAt: timestamp,
+    step,
+    conversationId: optionalString(input.conversation_id),
+    generationId: optionalString(input.generation_id),
+    model: optionalString(input.model),
+    modelId: optionalString(input.model_id),
+    toolName: optionalString(input.tool_name),
+    command: optionalString(input.command),
+    toolUseId: optionalString(input.tool_use_id),
+    ...(input.tool_input !== undefined ? { toolInput: input.tool_input } : {}),
+    toolOutput: optionalString(input.tool_output) || optionalString(input.output),
+    text: optionalString(input.text),
+    status: optionalString(input.status),
+  };
+}
+
+function parseHookActivityChunk(
+  logPath: string,
+  text: string,
+): { activities: CursorDesktopHookActivity[]; trailing: string } {
+  const marker = /^\[([^\]]+)\]\s+Hook step requested:\s*([^\r\n]+)/gmu;
+  const matches = [...text.matchAll(marker)];
+  const activities: CursorDesktopHookActivity[] = [];
+  let trailing = '';
+  for (let index = 0; index < matches.length; index += 1) {
+    const match = matches[index]!;
+    const start = match.index ?? 0;
+    const end = matches[index + 1]?.index ?? text.length;
+    const window = text.slice(start, end);
+    const inputMarker = /(?:^|\r?\n)INPUT:\s*\r?\n/gu.exec(window);
+    if (!inputMarker) {
+      if (index === matches.length - 1) trailing = text.slice(start);
+      continue;
+    }
+    const jsonStart = window.indexOf('{', inputMarker.index + inputMarker[0].length);
+    const jsonEnd = jsonStart >= 0 ? jsonObjectEnd(window, jsonStart) : null;
+    if (jsonStart < 0 || jsonEnd === null) {
+      if (index === matches.length - 1) trailing = text.slice(start);
+      continue;
+    }
+    try {
+      const input = JSON.parse(window.slice(jsonStart, jsonEnd)) as unknown;
+      if (typeof input !== 'object' || input === null || Array.isArray(input)) continue;
+      activities.push(parseHookActivity(
+        logPath,
+        match[1]?.trim() || new Date().toISOString(),
+        match[2]?.trim() || 'unknown',
+        input as Record<string, unknown>,
+      ));
+    } catch {
+      // A malformed/incomplete hook entry is retained only while it is the tail.
+      if (index === matches.length - 1) trailing = text.slice(start);
+    }
+  }
+  return { activities, trailing };
+}
+
+export function captureCursorDesktopHookCursor(): CursorDesktopHookCursor {
+  const files: Record<string, CursorDesktopHookFileCursor> = {};
+  for (const logPath of recentHookLogs()) {
+    try {
+      const stat = fs.statSync(logPath);
+      files[logPath] = { identity: fileIdentity(stat), offset: stat.size, trailing: '' };
+    } catch {
+      // A log may rotate while the baseline is captured.
+    }
+  }
+  return { files };
+}
+
+export function readCursorDesktopHookActivityDelta(
+  conversationId: string,
+  cursor: CursorDesktopHookCursor,
+): { cursor: CursorDesktopHookCursor; activities: CursorDesktopHookActivity[] } {
+  const files: Record<string, CursorDesktopHookFileCursor> = { ...cursor.files };
+  const activities: CursorDesktopHookActivity[] = [];
+  for (const logPath of recentHookLogs().reverse()) {
+    try {
+      const stat = fs.statSync(logPath);
+      const identity = fileIdentity(stat);
+      const previous = files[logPath];
+      const reset = !previous || previous.identity !== identity || stat.size < previous.offset;
+      const offset = reset ? 0 : previous.offset;
+      const prefix = reset ? '' : previous.trailing;
+      const parsed = parseHookActivityChunk(logPath, prefix + readRange(logPath, offset, stat.size));
+      files[logPath] = { identity, offset: stat.size, trailing: parsed.trailing };
+      activities.push(...parsed.activities.filter((activity) => activity.conversationId === conversationId));
+    } catch {
+      // Try other active Cursor window logs.
+    }
+  }
+  return {
+    cursor: { files },
+    activities: activities.sort((left, right) => left.updatedAt.localeCompare(right.updatedAt)),
+  };
+}
+
 function lastCaptured(window: string, pattern: RegExp): string | undefined {
   const matches = [...window.matchAll(pattern)];
   const value = matches.at(-1)?.[1]?.trim();
@@ -100,6 +267,10 @@ export function inspectCursorDesktopHookActivity(
       const nextMarker = text.indexOf(hookMarker, occurrence + needle.length);
       const windowEnd = nextMarker >= 0 ? nextMarker : Math.min(text.length, occurrence + 24_000);
       const window = text.slice(windowStart, windowEnd);
+      const parsed = parseHookActivityChunk(logPath, window).activities
+        .filter((activity) => activity.conversationId === conversationId);
+      const activity = parsed.at(-1);
+      if (activity) return activity;
       const stat = fs.statSync(logPath);
       return {
         logPath,

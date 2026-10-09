@@ -25,7 +25,7 @@
 - `/t` 接管 Cursor Desktop 对话后，飞书输入会通过 Cursor 官方 Desktop Bridge 写入同一条可见对话，回复再由该对话的 transcript 只读镜像回来；不会再用 Cursor Agent tmux 另开一条同 ID 会话。Desktop Bridge 未启用、discovery 已过期或目标对话未打开时会明确失败，不会静默降级。
 - 旧版本已绑定的 Cursor Desktop 对话会按 Desktop conversation index 自动升级来源身份，无需重新执行 `/t`；显式设置过的会话级 `/provider tmux` 仍会保留。
 - Cursor runtime 的 `/model` 无参数调用现在直接读取 `cursor agent models` 的账号实时列表，并以带 current 初始值的分页下拉卡展示；Cursor 的 `/current` 与 `/set` 配置卡也使用同一动态列表，选项继续复用原有 session/global 配置命令，不新增额外 slash command。
-- Cursor Desktop 回合不再把 transcript 暂时无增量误判为失败：只要 Desktop Bridge 的真实 thread 状态仍为 `running` 就继续等待，并用 Cursor hooks 补充当前模型和活动阶段。`/tmux-screen [seconds]s` 在 Desktop provider 下会显示并刷新后端状态、generation、模型、hook 与 transcript 诊断；异常终态卡会保留具体错误正文。
+- Cursor Desktop 回合不再把 transcript 暂时无增量误判为失败：只要 Desktop Bridge 的真实 thread 状态仍为 `running` 就继续等待。无需修改 Cursor.app，CodeLark 会从发送前 byte baseline 增量读取本轮 Cursor hooks，把实时思考、工具开始、输入、结果和实际模型更新到同一张飞书卡；再由 transcript 收取正文与终态，并按工具身份去重。`/tmux-screen [seconds]s` 在 Desktop provider 下会显示并刷新后端状态、generation、模型、hook 与 transcript 诊断；异常终态卡会保留具体错误正文。
 - Cursor Desktop direct turn 以“提交前已有 turn”的签名建立边界，不再要求 Cursor 持久化的 user row 与原始 wire prompt 逐字一致；兼容输入包装、归一化和 transcript 原子重写。可选 realtime v2 补丁提供显式 steer 与客户端事件；旧 v1 自动回退且明确显示实际为 queue。Codex app-server 在 Bridge 重启后也从当前协议 sequence 建立新基线，不再把整段在途历史拆成多张 continuation 卡重放。
 - 修复 Claude Code 的首次启动、信任与 YOLO 确认流程，并适配当前 TUI 状态和嵌套工具输出；高风险启动必须经过明确确认。
 - `/clear`、`/new`、runtime 切换和配置继承使用更严格的 session owner 边界。旧任务的取消、停止、终态和 stale tmux 清理不会污染替换后的会话。
