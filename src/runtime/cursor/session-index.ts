@@ -593,6 +593,14 @@ function parseCursorUserTimestamp(blocks: CursorTranscriptContentBlock[]): strin
   return new Date(wallClockMs - offsetMs).toISOString();
 }
 
+function isCursorMetadataOnlyUserRow(blocks: CursorTranscriptContentBlock[]): boolean {
+  return blocks.length > 0 && blocks.every((block) => (
+    block.type === 'text'
+    && typeof block.text === 'string'
+    && !block.text.replace(/<timestamp>[^<]*<\/timestamp>/gu, '').replace(/<\|eos\|>/gu, '').trim()
+  ));
+}
+
 function stableAssistantTextSignature(turnId: string, text: string): string {
   const digest = crypto.createHash('sha256').update(`${turnId}\0${text}`).digest('hex').slice(0, 16);
   return `cursor:${digest}:assistant-text`;
@@ -886,6 +894,12 @@ function parseCursorTranscriptRecordState(
     if (!line) continue;
     const parsed = parseTranscriptLine(line);
     if (!parsed) continue;
+    const role = parsed.role;
+    const blocks = Array.isArray(parsed.message?.content) ? parsed.message!.content! : [];
+    // Cursor can emit repeated timestamp-only user rows around background
+    // activity. They carry no input and must not open cards or reset the
+    // active turn's tool/snapshot/occurrence state. Keep non-text inputs.
+    if (role === 'user' && isCursorMetadataOnlyUserRow(blocks)) continue;
     const lineDigest = crypto.createHash('sha256').update(line).digest('hex').slice(0, 16);
     let lineOccurrence = activeTurnId
       ? nextCursorOccurrence(occurrences, `event:${activeTurnId}:${lineDigest}`)
@@ -949,8 +963,6 @@ function parseCursorTranscriptRecordState(
       activeTurnTimestamp = '';
       continue;
     }
-    const role = parsed.role;
-    const blocks = Array.isArray(parsed.message?.content) ? parsed.message!.content! : [];
     const assistantTextBlocks: string[] = [];
     // Cursor may compact a multi-turn transcript down to one final
     // turn_ended record. A new user row is therefore the reliable turn

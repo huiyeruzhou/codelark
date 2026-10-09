@@ -63,6 +63,8 @@ CodeLark 把这些行归一化为公共 message/tool/task mirror record 和 SSE 
 
 Cursor 不调用名为 `completed` 的工具结束一轮。assistant message 后由客户端独立追加 `{"type":"turn_ended","status":"success"}`；失败或中断也由该 terminal record 的状态表达。CodeLark 必须以 `turn_ended` 驱动终态，不能用工具名、正文停止增长或 TUI 光标位置猜测完成。同一读取批次只保留最新版正文，跨增量批次则把后续 revision 作为替换事件继续交付。多轮时 Cursor 还会重写整份 transcript、删除上一轮位于 EOF 的 `turn_ended`；旧 byte offset 可能因此落入新 user JSON 中部。增量 parser 跳过残行后若先看到完整 assistant row，必须以它建立隐式 turn 并恢复正文，不能只交付后面的成功终态。多轮后的最终 transcript snapshot 可能只保留文件末尾一个 `turn_ended`；测试应以 user/归一化后的可见 assistant record 确认轮次，以文件末尾终态确认整体完成，不能把物理 assistant/终态行数当成轮数。
 
+Cursor 后台活动还可能连续写入只有 `<timestamp>…</timestamp>` 的 `user` 行。只有时间戳、空白或 `<|eos|>` 的纯文本行不代表新的用户输入，parser 在改动回合及 occurrence 状态之前忽略它们，避免空卡泛洪及打断当前工具/回答；同一规则用于完整 snapshot 和增量读取。含真实正文、`user_query`、图片或其他非文本 block 的 user 行仍建立新回合，相同的真实提问也仍保留各自的 occurrence。
+
 ## 模型配置与实际生效边界
 
 模型由执行 provider 决定，不能仅凭 CodeLark 保存成功或卡片上的 `model:` 判断已经切换。
